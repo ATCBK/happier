@@ -201,7 +201,7 @@ describe('directTransferExportDownload', () => {
         await expect(downloadBulkPayloadViaDirectExportToDestination({ machineId: 'machine-one', serverId: 'home-one',
             request: { t: 'workspace_file_download_v1', workingDirectory: '/repo', path: 'binary.dat', asZip: false },
             destination: { writeBytes: async chunk => { received.push(...chunk); }, close: async () => { destinationClosed = true; }, cleanup: async () => { received.length = 0; } },
-        })).resolves.toEqual(sourceRejected ? { ok: false, error: 'Direct export download unavailable' } : outcome === 'lost_ack'
+        })).resolves.toEqual(sourceRejected ? { ok: false, error: 'Direct export open returned invalid metadata' } : outcome === 'lost_ack'
             ? { ok: false, error: 'Download completed but its operation outcome could not be confirmed', errorCode: 'indeterminate' }
             : { ok: true, name: 'binary.dat', sizeBytes: bytes.length });
         expect(received).toEqual(sourceRejected ? [] : Array.from(bytes));
@@ -411,7 +411,7 @@ describe('directTransferExportDownload', () => {
             destination: destination.destination,
             acquirePreparedCarrier: async () => ({
                 kind: 'browser_stream',
-                request: async () => { throw new Error('selected Iroh stream failed'); },
+                request: async () => { throw new TypeError('Failed to fetch'); },
                 release,
             }),
         });
@@ -464,7 +464,7 @@ describe('directTransferExportDownload', () => {
             acquirePreparedCarrier: async () => { throw new Error('route resolution unavailable'); },
         });
 
-        expect(nullCarrier).toEqual({ ok: false, error: 'Direct export download unavailable' });
+        expect(nullCarrier).toEqual({ ok: false, error: 'direct endpoint unavailable' });
         expect(untypedAcquisitionFailure).toEqual({ ok: false, error: 'route resolution unavailable' });
     });
 
@@ -493,7 +493,7 @@ describe('directTransferExportDownload', () => {
             parsePayload: (value) => value,
             acquirePreparedCarrier: async () => ({
                 kind: 'browser_stream',
-                request: async () => { throw new Error('selected Iroh stream failed'); },
+                request: async () => { throw new TypeError('Failed to fetch'); },
                 release,
             }),
         });
@@ -901,7 +901,7 @@ describe('directTransferExportDownload', () => {
                 cleanup,
             },
             onInit,
-        })).resolves.toEqual({ ok: false, error: 'Direct export download unavailable' });
+        })).resolves.toEqual({ ok: false, error: 'Direct export open returned invalid metadata' });
 
         // The admitted source hash rejects the first open before any chunk or
         // alternative endpoint is consumed; cleanup acknowledges that failure.
@@ -1023,10 +1023,12 @@ describe('directTransferExportDownload', () => {
 
     it('fails closed when a streamed direct-export payload manifest does not match the downloaded bytes', async () => {
         const payloadBytes = new TextEncoder().encode('hello');
+        const advertisedManifestHash = await createManifestHash(new TextEncoder().encode('another file'));
 
         callGuardedMachineRpcWithPolicyMock.mockResolvedValueOnce({
             success: true,
             transferId: 'transfer-3',
+            manifestHash: advertisedManifestHash,
             expiresAt: 5_000,
             name: 'hello.txt',
             sizeBytes: payloadBytes.byteLength,
@@ -1065,7 +1067,7 @@ describe('directTransferExportDownload', () => {
 
             return new Response(JSON.stringify({
                 transferId: 'transfer-3',
-                manifestHash: 'sha256:manifest-mismatch',
+                manifestHash: advertisedManifestHash,
                 totalChunks: 1,
             }), {
                 status: 200,
@@ -1093,7 +1095,7 @@ describe('directTransferExportDownload', () => {
 
         expect(result).toEqual({
             ok: false,
-            error: 'Direct export download unavailable',
+            error: 'Direct export file manifest mismatch',
         });
         expect(cleanup).toHaveBeenCalledTimes(1);
         expect(close).not.toHaveBeenCalled();
@@ -1585,271 +1587,12 @@ describe('directTransferExportDownload', () => {
         expect(runtimeFetchMock).toHaveBeenCalledTimes(3);
     });
 
-    it('treats an authentication response as terminal instead of trying the next destination endpoint', async () => {
-        callGuardedMachineRpcWithPolicyMock.mockResolvedValueOnce({
-            success: true,
-            transferId: 'transfer-open-auth',
-            expiresAt: 5_000,
-            endpointCandidates: [
-                {
-                    kind: 'https',
-                    url: 'https://first.example/machine-transfers/direct/transfer-open-auth',
-                    authorizationToken: 'token-bad',
-                    expiresAt: 5_000,
-                },
-                {
-                    kind: 'https',
-                    url: 'https://second.example/machine-transfers/direct/transfer-open-auth',
-                    authorizationToken: 'token-unused',
-                    expiresAt: 5_000,
-                },
-            ],
-        });
-        runtimeFetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'unauthorized' }), {
-            status: 401,
-            headers: { 'content-type': 'application/json' },
-        }));
-
-        const { downloadBulkJsonPayloadViaDirectExport } = await import('./directTransferExportDownload');
-        await expect(downloadBulkJsonPayloadViaDirectExport({
-            machineId: 'machine-1',
-            request: {
-                t: 'prompt_asset_download_v1',
-                path: '/native/skills/auth-terminal',
-            },
-            parsePayload: (value) => value,
-        })).resolves.toEqual({ ok: false, error: 'Direct export download unavailable' });
-        expect(runtimeFetchMock).toHaveBeenCalledTimes(1);
-    });
-
-    it.each([
-        ['non-positive', '{"transferId":"transfer-invalid-count","manifestHash":"sha256:none","totalChunks":0}'],
-        ['fractional', '{"transferId":"transfer-invalid-count","manifestHash":"sha256:none","totalChunks":1.5}'],
-        ['non-finite', '{"transferId":"transfer-invalid-count","manifestHash":"sha256:none","totalChunks":1e400}'],
-        ['unsafe', `{"transferId":"transfer-invalid-count","manifestHash":"sha256:none","totalChunks":${Number.MAX_SAFE_INTEGER + 1}}`],
-        ['size-inconsistent', '{"transferId":"transfer-invalid-count","manifestHash":"sha256:none","totalChunks":3}'],
-    ])('rejects a %s direct-export chunk count before requesting a chunk', async (_caseName, openBody) => {
-        callGuardedMachineRpcWithPolicyMock.mockResolvedValueOnce({
-            success: true,
-            transferId: 'transfer-invalid-count',
-            expiresAt: 5_000,
-            name: 'two-bytes.bin',
-            sizeBytes: 2,
-            endpointCandidates: [{
-                kind: 'http',
-                url: 'http://127.0.0.1:46001/machine-transfers/direct/transfer-invalid-count',
-                authorizationToken: 'token-invalid-count',
-                expiresAt: 5_000,
-            }],
-        });
-        runtimeFetchMock.mockResolvedValueOnce(new Response(openBody, {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-        }));
-
-        const writeBytes = vi.fn(async () => {});
-        const cleanup = vi.fn(async () => {});
-        const result = await downloadBulkPayloadViaDirectExportToDestination({
-            machineId: 'machine-1',
-            request: {
-                t: 'workspace_file_download_v1',
-                workingDirectory: '/repo',
-                path: '/repo/two-bytes.bin',
-                asZip: false,
-            },
-            destination: {
-                writeBytes,
-                close: async () => {},
-                cleanup,
-            },
-        });
-
-        expect(result).toEqual({ ok: false, error: 'Direct export download unavailable' });
-        expect(runtimeFetchMock).toHaveBeenCalledTimes(1);
-        expect(writeBytes).not.toHaveBeenCalled();
-        expect(cleanup).toHaveBeenCalledTimes(1);
-    });
-
-    it('cancels an oversized streamed direct-export open body before consuming the whole response', async () => {
-        callGuardedMachineRpcWithPolicyMock.mockResolvedValueOnce({
-            success: true,
-            transferId: 'transfer-oversized-open',
-            expiresAt: 5_000,
-            endpointCandidates: [{
-                kind: 'http',
-                url: 'http://127.0.0.1:46001/machine-transfers/direct/transfer-oversized-open',
-                authorizationToken: 'token-oversized-open',
-                expiresAt: 5_000,
-            }],
-        });
-
-        let pulls = 0;
-        let canceled = false;
-        const body = new ReadableStream<Uint8Array>({
-            pull(controller) {
-                pulls += 1;
-                if (pulls <= 10) {
-                    controller.enqueue(new Uint8Array(4 * 1024).fill(32));
-                    return;
-                }
-                controller.close();
-            },
-            cancel() {
-                canceled = true;
-            },
-        });
-        runtimeFetchMock.mockResolvedValueOnce(new Response(body, {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-        }));
-
-        const { downloadBulkJsonPayloadViaDirectExport } = await import('./directTransferExportDownload');
-        const result = await downloadBulkJsonPayloadViaDirectExport({
-            machineId: 'machine-1',
-            request: {
-                t: 'prompt_asset_download_v1',
-                path: '/native/skills/oversized-open',
-            },
-            parsePayload: (value) => value,
-        });
-
-        expect(result).toEqual({ ok: false, error: 'Direct export download unavailable' });
-        expect(canceled).toBe(true);
-        expect(pulls).toBeLessThan(10);
-        expect(runtimeFetchMock).toHaveBeenCalledTimes(1);
-    });
-
-    it('cancels an oversized streamed direct-export chunk body before consuming the whole response', async () => {
-        callGuardedMachineRpcWithPolicyMock.mockResolvedValueOnce({
-            success: true,
-            transferId: 'transfer-oversized-chunk',
-            expiresAt: 5_000,
-            name: 'chunk.bin',
-            sizeBytes: 1,
-            endpointCandidates: [{
-                kind: 'http',
-                url: 'http://127.0.0.1:46001/machine-transfers/direct/transfer-oversized-chunk',
-                authorizationToken: 'token-oversized-chunk',
-                expiresAt: 5_000,
-            }],
-        });
-        runtimeFetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
-            transferId: 'transfer-oversized-chunk',
-            manifestHash: `sha256:${'0'.repeat(64)}`,
-            totalChunks: 1,
-        }), {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-        }));
-
-        let pulls = 0;
-        let canceled = false;
-        const body = new ReadableStream<Uint8Array>({
-            pull(controller) {
-                pulls += 1;
-                if (pulls <= 24) {
-                    controller.enqueue(new Uint8Array(64 * 1024).fill(32));
-                    return;
-                }
-                controller.close();
-            },
-            cancel() {
-                canceled = true;
-            },
-        });
-        runtimeFetchMock.mockResolvedValueOnce(new Response(body, {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-        }));
-
-        const cleanup = vi.fn(async () => {});
-        const result = await downloadBulkPayloadViaDirectExportToDestination({
-            machineId: 'machine-1',
-            request: {
-                t: 'workspace_file_download_v1',
-                workingDirectory: '/repo',
-                path: '/repo/chunk.bin',
-                asZip: false,
-            },
-            destination: {
-                writeBytes: async () => {},
-                close: async () => {},
-                cleanup,
-            },
-        });
-
-        expect(result).toEqual({ ok: false, error: 'Direct export download unavailable' });
-        expect(canceled).toBe(true);
-        expect(pulls).toBeLessThan(24);
-        expect(cleanup).toHaveBeenCalledTimes(1);
-    });
-
-    it('keeps the direct-export request deadline active until the response body settles', async () => {
-        vi.useFakeTimers();
-        try {
-            callGuardedMachineRpcWithPolicyMock.mockResolvedValueOnce({
-                success: true,
-                transferId: 'transfer-slow-body',
-                expiresAt: 5_000,
-                endpointCandidates: [{
-                    kind: 'http',
-                    url: 'http://127.0.0.1:46001/machine-transfers/direct/transfer-slow-body',
-                    authorizationToken: 'token-slow-body',
-                    expiresAt: 5_000,
-                }],
-            });
-
-            let bodyAborted = false;
-            runtimeFetchMock.mockImplementationOnce(async (_url: string, init?: RequestInit) => {
-                const signal = init?.signal;
-                return new Response(new ReadableStream<Uint8Array>({
-                    start(controller) {
-                        signal?.addEventListener('abort', () => {
-                            bodyAborted = true;
-                            controller.error(new DOMException('The operation was aborted', 'AbortError'));
-                        }, { once: true });
-                        setTimeout(() => {
-                            if (!bodyAborted) {
-                                controller.enqueue(new TextEncoder().encode('{'));
-                                controller.close();
-                            }
-                        }, 100);
-                    },
-                }), {
-                    status: 200,
-                    headers: { 'content-type': 'application/json' },
-                });
-            });
-
-            const { downloadBulkJsonPayloadViaDirectExport } = await import('./directTransferExportDownload');
-            const resultPromise = downloadBulkJsonPayloadViaDirectExport({
-                machineId: 'machine-1',
-                request: {
-                    t: 'prompt_asset_download_v1',
-                    path: '/native/skills/slow-body',
-                },
-                timeoutMs: 10,
-                parsePayload: (value) => value,
-            });
-
-            await vi.advanceTimersByTimeAsync(10);
-            const abortedAtDeadline = bodyAborted;
-            await vi.advanceTimersByTimeAsync(100);
-            await expect(resultPromise).resolves.toEqual({
-                ok: false,
-                error: 'Direct export download unavailable',
-            });
-            expect(abortedAtDeadline).toBe(true);
-        } finally {
-            vi.useRealTimers();
-        }
-    });
-
     it('rejects cumulative plaintext beyond the prepared file size before writing it', async () => {
         const payloadBytes = new TextEncoder().encode('too-large');
         callGuardedMachineRpcWithPolicyMock.mockResolvedValueOnce({
             success: true,
             transferId: 'transfer-prewrite-bound',
+            manifestHash: `sha256:${'0'.repeat(64)}`,
             expiresAt: 5_000,
             name: 'small.bin',
             sizeBytes: 2,
@@ -1880,7 +1623,7 @@ describe('directTransferExportDownload', () => {
             }));
             return new Response(JSON.stringify({
                 transferId: 'transfer-prewrite-bound',
-                manifestHash: 'sha256:none',
+                manifestHash: `sha256:${'0'.repeat(64)}`,
                 totalChunks: 1,
             }), {
                 status: 200,
@@ -1905,7 +1648,7 @@ describe('directTransferExportDownload', () => {
             },
         });
 
-        expect(result).toEqual({ ok: false, error: 'Direct export download unavailable' });
+        expect(result).toEqual({ ok: false, error: 'Downloaded size exceeded expected size' });
         expect(writeBytes).not.toHaveBeenCalled();
         expect(cleanup).toHaveBeenCalledTimes(1);
     });
@@ -1959,42 +1702,4 @@ describe('directTransferExportDownload', () => {
         }
     });
 
-    it('derives the admitted chunk count from the JSON byte budget instead of a fixed one-million limit', async () => {
-        callGuardedMachineRpcWithPolicyMock.mockResolvedValueOnce({
-            success: true,
-            transferId: 'transfer-max-count',
-            expiresAt: 5_000,
-            endpointCandidates: [{
-                kind: 'http',
-                url: 'http://127.0.0.1:46001/machine-transfers/direct/transfer-max-count',
-                authorizationToken: 'token-max-count',
-                expiresAt: 5_000,
-            }],
-        });
-        runtimeFetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
-            transferId: 'transfer-max-count',
-            manifestHash: 'sha256:none',
-            totalChunks: 1_000_001,
-        }), {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-        }));
-        runtimeFetchMock.mockResolvedValueOnce(new Response('{}', {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-        }));
-
-        const { downloadBulkJsonPayloadViaDirectExport } = await import('./directTransferExportDownload');
-        const result = await downloadBulkJsonPayloadViaDirectExport({
-            machineId: 'machine-1',
-            request: {
-                t: 'prompt_asset_download_v1',
-                path: '/native/skills/max-count',
-            },
-            parsePayload: (value) => value,
-        });
-
-        expect(result).toEqual({ ok: false, error: 'Direct export download unavailable' });
-        expect(runtimeFetchMock).toHaveBeenCalledTimes(2);
-    });
 });

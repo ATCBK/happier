@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
+import { MMKV } from 'react-native-mmkv';
 import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import { createDeferred, renderScreen, standardCleanup } from '@/dev/testkit';
@@ -11,17 +12,119 @@ import {
     createAccountTokenForTests,
     createHomeGovernanceHarness,
     installHomeGovernanceBoundaries,
+    waitForHomeGovernance,
 } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
-import { setActiveServerId, setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
+import { AuthEntryProjectionV1Schema } from '@happier-dev/protocol/auth/entry';
+import { resolveServerProfileScopeIdForIdentifier, setActiveServerId, setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
 import { subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
 
 installTokenStorageWebPlatformMocks();
 const browserStorage = await vi.hoisted(async () => {
     const { installLocalStorageMock } = await import('@/auth/storage/tokenStorage.web.testHelpers');
     return { ...installLocalStorageMock(), backend: globalThis.localStorage };
+});
+
+function answerSavedAccountInvitation(serverId: string, identity: string, accountId: string) {
+    home.answer(serverId, '/v1/account/profile', { body: AccountProfileSchema.parse({ id: accountId }) });
+    home.answer(serverId, '/v1/team-invitations/preview', { body: {
+        outcome: 'ok', preview: {
+            home: { serverId: identity, displayName: 'Acme', storageMode: null },
+            team: { teamId: 'team-1', name: 'Acme Team', logo: null, accentSeed: 'team-1' },
+            role: 'member', historyAccess: 'from_membership', state: 'active',
+            expiresAt: Date.UTC(2030, 0, 1), recipientEmailMask: null,
+        },
+    } });
+    home.answer(serverId, '/v1/auth/entry', { body: AuthEntryProjectionV1Schema.parse({
+        v: 1, state: 'admission_required', scope: { kind: 'invitation' },
+        home: { serverId: identity, displayName: 'Acme', storageMode: null },
+        team: { teamId: 'team-1', name: 'Acme Team', logo: null },
+        account: { firstName: null, lastName: null, username: null, avatarUrl: null },
+        invitationEmailVerificationRequired: false, actions: [], autoRedirect: null,
+    }) });
+    home.answer(serverId, '/v1/team-invitations/accept', { body: { outcome: 'joined', teamId: 'team-1' } });
+}
+
+it.each(['none', 'retry', 'new_invitation'] as const)('reaches the admitted profile before offering a name after an off-Home saved Account joins (focus recovery: %s)', async recovery => {
+    const identity = 'srv_saved_account_join';
+    const origin = 'https://saved-account-join.test';
+    const credentials = { token: createAccountTokenForTests('admitted-account', { currentAccount: true }) };
+    const serverId = await home.addHome({ name: 'Acme', serverUrl: origin,
+        serverIdentityId: identity, accountId: 'admitted-account', credentials, teamsEnabled: true });
+    const otherCredentials = { token: createAccountTokenForTests('other-account', { currentAccount: true }) };
+    const otherIdentity = 'srv_other_account_join';
+    const otherServerId = await home.addHome({ name: 'Other Home', serverUrl: 'https://other-home.test',
+        serverIdentityId: otherIdentity, accountId: 'other-account', credentials: otherCredentials, teamsEnabled: true });
+    answerSavedAccountInvitation(serverId, identity, 'admitted-account');
+    // The saved target uses a device-local profile reference; authenticated
+    // Account scope uses the Home's stable identity, as the real join host does.
+    const renderEntry = (targetServerId: string, accountId: string, token: string) => <AuthProvider initialCredentials={otherCredentials}>
+        <TeamAuthEntrySurface target={{ kind: 'saved_profile', profileRef: targetServerId }}
+            invitation={{ token, accountScope: { serverId: resolveServerProfileScopeIdForIdentifier(targetServerId), accountId } }}
+            onSelectAction={() => { throw new Error('The saved Account must join without authentication'); }}
+            onAdmissionComplete={() => {}} />
+    </AuthProvider>;
+    const screen = await renderScreen(renderEntry(serverId, 'admitted-account', 'a'.repeat(43)));
+    await waitForHomeGovernance(() => expect(screen.findByTestId('team-auth-entry-join'), screen.getTextContent()).not.toBeNull());
+    expect(home.requestsFor('/v1/auth/entry').map(request => ({
+        serverId: request.serverId,
+        authenticatedAsAdmittedAccount: request.token === credentials.token,
+    }))).toEqual([{ serverId, authenticatedAsAdmittedAccount: true }]);
+    const identityHeading = screen.findByTestId('team-auth-entry-team-name');
+    const writeStorage = MMKV.prototype.set;
+    // Profile selection uses the native SDK boundary in this Node renderer,
+    // independently of the credential store's explicit web platform fixture.
+    const focusStorage = recovery !== 'none' ? vi.spyOn(MMKV.prototype, 'set').mockImplementation(function (this: MMKV, key, value) {
+        const state: unknown = key === 'server-state-v1' && typeof value === 'string' ? JSON.parse(value) : null;
+        if (state && typeof state === 'object' && 'activeServerId' in state && state.activeServerId === serverId) {
+            throw new Error('Device storage is temporarily unavailable');
+        }
+        writeStorage.call(this, key, value);
+    }) : null;
+    try {
+        await screen.pressByTestIdAsync('team-auth-entry-join');
+        if (recovery !== 'none') {
+            expect(home.requestsFor('/v1/team-invitations/accept')).toHaveLength(1);
+            await waitForHomeGovernance(() => expect(screen.findByTestId('team-auth-entry-destination-home-retry'), screen.getTextContent()).not.toBeNull());
+            expect(screen.findByTestId('team-auth-entry-team-name')).toBe(identityHeading);
+            expect(screen.findByTestId('team-auth-entry-admission-complete-name-field')).toBeNull();
+            expect(home.requestsFor('/v1/team-invitations/accept')).toHaveLength(1);
+            focusStorage?.mockRestore();
+            if (recovery === 'new_invitation') {
+                answerSavedAccountInvitation(otherServerId, otherIdentity, 'other-account');
+                await act(async () => { await switchConnectionToActiveServer(); });
+                await screen.update(renderEntry(otherServerId, 'other-account', 'b'.repeat(43)));
+                await waitForHomeGovernance(() => expect(screen.findByTestId('team-auth-entry-join'), screen.getTextContent()).not.toBeNull());
+                await screen.pressByTestIdAsync('team-auth-entry-join');
+                expect(home.requestsFor('/v1/team-invitations/accept')).toHaveLength(2);
+                expect(home.requestsFor('/v1/team-invitations/accept').map(request => ({
+                    serverId: request.serverId,
+                    authenticatedAsExpectedAccount: request.token === (request.serverId === serverId ? credentials.token : otherCredentials.token),
+                }))).toEqual([
+                    { serverId, authenticatedAsExpectedAccount: true },
+                    { serverId: otherServerId, authenticatedAsExpectedAccount: true },
+                ]);
+                expect(screen.findByTestId('team-auth-entry-destination-home-retry')).toBeNull();
+                expect(screen.findByTestId('team-auth-entry-admission-complete-name-field'), screen.getTextContent()).not.toBeNull();
+                return;
+            }
+            await screen.pressByTestIdAsync('team-auth-entry-destination-home-retry');
+        }
+        await waitForHomeGovernance(() => expect(screen.findByTestId('team-auth-entry-admission-complete-action'), screen.getTextContent()).not.toBeNull());
+        expect(screen.findByTestId('team-auth-entry-admission-complete-name-field'), screen.getTextContent()).not.toBeNull();
+        expect(screen.findByTestId('team-auth-entry-team-name')).toBe(identityHeading);
+        expect(home.requestsFor('/v1/team-invitations/accept')).toEqual([
+            expect.objectContaining({ serverId, token: credentials.token }),
+        ]);
+        expect(home.requestsFor('/v1/account/profile')).toEqual(expect.arrayContaining([
+            expect.objectContaining({ serverId, token: credentials.token }),
+        ]));
+    } finally {
+        focusStorage?.mockRestore();
+    }
 });
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
@@ -33,21 +136,20 @@ vi.mock('socket.io-client', async (importOriginal) => (
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
-// This regression is about the real credential writer and its subscribers,
-// rather than the governance harness's read-only Account fixture.
-vi.mocked(TokenStorage.getCredentialsForServerUrl).mockRestore();
 const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
 setRuntimeFetch(home.request);
 // Match the app entry so credential adoption publishes the real Account scope
 // instead of stopping at an unloaded Sync singleton in this composed journey.
 await import('@/sync/syncEngine');
-const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+const { disconnectActiveServerConnection, switchConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
 const { AuthProvider } = await import('@/auth/context/AuthContext');
 const { TeamJoinScreen } = await import('./TeamJoinScreen');
+const { TeamAuthEntrySurface } = await import('../entry/TeamAuthEntrySurface');
 
 let restoreLocks: () => void;
 let stopCredentialObservation: (() => void) | undefined;
 beforeEach(() => {
+    installHomeGovernanceBoundaries(home);
     vi.stubGlobal('localStorage', browserStorage.backend);
     browserStorage.store.clear();
     restoreLocks = installWebLockManagerMock().restore;
@@ -62,7 +164,11 @@ afterEach(async () => {
 });
 afterAll(() => browserStorage.restore());
 
-it.each(['key_challenge', 'email_password'] as const)('retains the invitation authentication host through credential adoption and offers Open Team after atomic %s provisioning', async method => {
+it.each([
+    { method: 'key_challenge', offHome: false },
+    { method: 'email_password', offHome: false },
+    { method: 'email_password', offHome: true },
+] as const)('retains the invitation authentication host through credential adoption and offers Open Team after atomic $method provisioning (off-Home: $offHome)', async ({ method, offHome }) => {
     const identity = `srv_${method}_join`;
     const origin = `https://${method.replaceAll('_', '-')}-join.test`;
     const mode = method === 'key_challenge' ? 'keyed' : 'keyless';
@@ -70,6 +176,11 @@ it.each(['key_challenge', 'email_password'] as const)('retains the invitation au
         serverIdentityId: identity, accountId: null, teamsEnabled: true });
     await setServerProfileIdentityForUrl(origin, identity);
     await setActiveServerId(identity, { scope: 'device' });
+    const initialCredentials = offHome ? { token: createAccountTokenForTests('other-account', { currentAccount: true }) } : null;
+    if (initialCredentials) {
+        await home.addHome({ name: 'Other Home', serverUrl: 'https://other-home.test', accountId: 'other-account', credentials: initialCredentials });
+        home.answer(serverId, '/v1/account/profile', { body: AccountProfileSchema.parse({ id: 'new-account' }) });
+    }
     const features = createRootLayoutFeaturesResponse({ capabilities: {
         serverIdentity: { serverIdentityId: identity }, server: { canonicalServerUrl: origin },
     } });
@@ -98,29 +209,15 @@ it.each(['key_challenge', 'email_password'] as const)('retains the invitation au
     home.answer(serverId, authPath, { body: method === 'key_challenge' ? credentials : {
         ...credentials, accountId: 'new-account', teamId: 'team-1',
     } });
-    const screen = await renderScreen(<AuthProvider initialCredentials={null}>
+    const screen = await renderScreen(<AuthProvider initialCredentials={initialCredentials}>
         <TeamJoinScreen token={token} homeTarget={identity} />
     </AuthProvider>);
     for (let attempt = 0; attempt < 10; attempt += 1) {
         await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
     }
     expect(screen.findByTestId(`team-auth-entry-action:${method}`), screen.getTextContent()).not.toBeNull();
-    await screen.pressByTestIdAsync(`team-auth-entry-action:${method}`);
-    // The chosen method continues inside the same split shell, under the Team's
-    // identity, instead of replacing the page with a bare full-width form.
-    expect(screen.findByTestId('team-auth-step-shell'), screen.getTextContent()).not.toBeNull();
-    expect(screen.findByTestId('team-auth-step-team-name')?.props.children).toBe('Acme Team');
     const actionId = `home-auth-${method}-provision-${mode}`;
     const submitId = method === 'key_challenge' ? actionId : 'email-password-create';
-    if (method === 'email_password') {
-        // The entry card already chose this form; the step does not ask again.
-        expect(screen.findByTestId(actionId)).toBeNull();
-        await act(async () => {
-            screen.changeTextByTestId('email-password-email', 'person@example.test');
-            screen.changeTextByTestId('email-password-password', 'a calm sixteen plus password');
-            screen.changeTextByTestId('email-password-confirm', 'a calm sixteen plus password');
-        });
-    }
     const credentialWritten = createDeferred<void>();
     const releaseStorage = createDeferred<void>();
     let credentialChanged = false;
@@ -146,7 +243,23 @@ it.each(['key_challenge', 'email_password'] as const)('retains the invitation au
         });
     });
     try {
-        act(() => { screen.pressByTestId(submitId); });
+        // One-tap authentication starts on selection, so observe adoption and
+        // retain the storage lock before that first user action.
+        act(() => { screen.pressByTestId(`team-auth-entry-action:${method}`); });
+        // The chosen method continues inside the same split shell, under the
+        // Team's identity, instead of replacing the page with a bare form.
+        expect(screen.findByTestId('team-auth-step-shell'), screen.getTextContent()).not.toBeNull();
+        expect(screen.findByTestId('team-auth-step-team-name')?.props.children).toBe('Acme Team');
+        if (method === 'email_password') {
+            // The entry card already chose this form; the step does not ask again.
+            expect(screen.findByTestId(actionId)).toBeNull();
+            await act(async () => {
+                screen.changeTextByTestId('email-password-email', 'person@example.test');
+                screen.changeTextByTestId('email-password-password', 'a calm sixteen plus password');
+                screen.changeTextByTestId('email-password-confirm', 'a calm sixteen plus password');
+            });
+            act(() => { screen.pressByTestId(submitId); });
+        }
         await credentialWritten.promise;
         await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
         expect(screen.findByTestId(submitId), screen.getTextContent()).not.toBeNull();
@@ -158,6 +271,13 @@ it.each(['key_challenge', 'email_password'] as const)('retains the invitation au
         await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
     }
     expect(screen.findByTestId('team-auth-entry-admission-complete-action'), screen.getTextContent()).not.toBeNull();
+    if (offHome) {
+        expect(screen.findByTestId('team-auth-entry-admission-complete-name-field'), screen.getTextContent()).not.toBeNull();
+        expect(home.requestsFor('/v1/account/profile')).toEqual(expect.arrayContaining([
+            expect.objectContaining({ serverId, token: credentials.token }),
+        ]));
+        expect(home.requestsFor('/v1/team-invitations/accept')).toHaveLength(0);
+    }
     expect(await TokenStorage.getCredentialsForServerUrl(origin, { serverId: identity })).toEqual(credentials);
     expect(home.requestsFor(authPath).map(request => request.input)).toEqual([
         expect.objectContaining({ admission: { kind: 'team_invitation', token } }),

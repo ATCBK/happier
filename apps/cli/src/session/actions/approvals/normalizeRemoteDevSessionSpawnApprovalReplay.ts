@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { AcpConfigOptionOverridesV1Schema } from '@happier-dev/protocol/sessions/metadata/overrides';
 import { BackendTargetKeySchema, BackendTargetRefSchema, buildBackendTargetKey } from '@happier-dev/protocol/backends/targets/backendTargetRef';
@@ -23,14 +23,14 @@ type LocalMachineIdentity = Readonly<{
   host: string | null;
 }>;
 
-const LegacySpawnTerminalSchema = z.object({
-  mode: z.enum(['plain', 'tmux', 'windows_terminal', 'windows_console']).optional(),
-  tmux: z.object({
-    sessionName: z.string().optional(),
-    isolated: z.boolean().optional(),
-    tmpDir: z.string().nullable().optional(),
-  }).strict().optional(),
-}).strict();
+const LegacySpawnTerminalSchema = z.strictObject({
+  mode: z.optional(z.enum(['plain', 'tmux', 'windows_terminal', 'windows_console'])),
+  tmux: z.optional(z.strictObject({
+    sessionName: z.optional(z.string()),
+    isolated: z.optional(z.boolean()),
+    tmpDir: z.optional(z.nullable(z.string())),
+  })),
+});
 
 /**
  * Exact Session-spawn Action artifact grammar written by remote-dev before
@@ -42,40 +42,40 @@ const LegacySpawnTerminalSchema = z.object({
  * Remove when pre-V2 Session-spawn approval artifacts are no longer a
  * supported/reachable persistence input.
  */
-const RemoteDevSessionSpawnApprovalArgsSchema = z.object({
-  tag: z.string().min(1).optional(),
-  tags: z.array(z.string().min(1)).optional(),
-  agentId: z.string().trim().min(1).optional(),
-  backend: z.string().trim().min(1).optional(),
-  target: z.string().trim().min(1).optional(),
-  modelId: z.string().min(1).optional(),
-  backendTargetKey: BackendTargetKeySchema.optional(),
-  backendTarget: BackendTargetRefSchema.optional(),
-  title: z.string().min(1).optional(),
-  path: z.string().min(1).optional(),
-  directory: z.string().min(1).optional(),
-  host: z.string().min(1).optional(),
-  machineId: z.string().min(1).optional(),
-  prompt: z.string().min(1).optional(),
-  initialPrompt: z.string().min(1).optional(),
-  initialMessage: z.string().min(1).optional(),
-  permissionMode: SessionPermissionModeSchema.optional(),
-  agentModeId: z.string().min(1).optional(),
-  sessionConfigOptionOverrides: AcpConfigOptionOverridesV1Schema.optional(),
-  configOptions: z.record(z.string().min(1), SpawnConfigOptionValueSchema).optional(),
-  profileId: z.string().min(1).optional(),
-  environmentVariables: z.record(z.string().min(1), z.string()).optional(),
-  connectedServices: ConnectedServiceBindingsV2IngressSchema.optional(),
-  connectedServicesUpdatedAt: z.number().int().optional(),
-  mcpSelection: SessionMcpSelectionV1Schema.optional(),
-  transcriptStorage: z.enum(['persisted', 'direct']).optional(),
-  terminal: LegacySpawnTerminalSchema.optional(),
-  windowsRemoteSessionLaunchMode: z.enum(['hidden', 'windows_terminal', 'console']).optional(),
-  windowsRemoteSessionConsole: z.enum(['hidden', 'visible']).optional(),
-  windowsTerminalWindowName: z.string().min(1).optional(),
-  codexBackendMode: z.enum(['mcp', 'acp', 'appServer']).optional(),
-  agentRuntimeDescriptorV1: z.unknown().optional(),
-}).strict();
+const RemoteDevSessionSpawnApprovalArgsSchema = z.strictObject({
+  tag: z.optional(z.string().check(z.minLength(1))),
+  tags: z.optional(z.array(z.string().check(z.minLength(1)))),
+  agentId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  backend: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  target: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  modelId: z.optional(z.string().check(z.minLength(1))),
+  backendTargetKey: z.optional(BackendTargetKeySchema),
+  backendTarget: z.optional(BackendTargetRefSchema),
+  title: z.optional(z.string().check(z.minLength(1))),
+  path: z.optional(z.string().check(z.minLength(1))),
+  directory: z.optional(z.string().check(z.minLength(1))),
+  host: z.optional(z.string().check(z.minLength(1))),
+  machineId: z.optional(z.string().check(z.minLength(1))),
+  prompt: z.optional(z.string().check(z.minLength(1))),
+  initialPrompt: z.optional(z.string().check(z.minLength(1))),
+  initialMessage: z.optional(z.string().check(z.minLength(1))),
+  permissionMode: z.optional(SessionPermissionModeSchema),
+  agentModeId: z.optional(z.string().check(z.minLength(1))),
+  sessionConfigOptionOverrides: z.optional(AcpConfigOptionOverridesV1Schema),
+  configOptions: z.optional(z.record(z.string().check(z.minLength(1)), SpawnConfigOptionValueSchema)),
+  profileId: z.optional(z.string().check(z.minLength(1))),
+  environmentVariables: z.optional(z.record(z.string().check(z.minLength(1)), z.string())),
+  connectedServices: z.optional(ConnectedServiceBindingsV2IngressSchema),
+  connectedServicesUpdatedAt: z.optional(z.number().check(z.int())),
+  mcpSelection: z.optional(SessionMcpSelectionV1Schema),
+  transcriptStorage: z.optional(z.enum(['persisted', 'direct'])),
+  terminal: z.optional(LegacySpawnTerminalSchema),
+  windowsRemoteSessionLaunchMode: z.optional(z.enum(['hidden', 'windows_terminal', 'console'])),
+  windowsRemoteSessionConsole: z.optional(z.enum(['hidden', 'visible'])),
+  windowsTerminalWindowName: z.optional(z.string().check(z.minLength(1))),
+  codexBackendMode: z.optional(z.enum(['mcp', 'acp', 'appServer'])),
+  agentRuntimeDescriptorV1: z.optional(z.unknown()),
+});
 
 type RemoteDevSessionSpawnApprovalArgs = z.infer<
   typeof RemoteDevSessionSpawnApprovalArgsSchema

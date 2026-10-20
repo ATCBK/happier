@@ -11,6 +11,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { resolveHappyHomeDirFromEnvironment } from '@happier-dev/cli-common/agents';
 import { observeServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { resolveAuthenticatedExactHomeConnectionDescriptorObservation } from '@/auth/terminalAuthEnrollmentClient';
+import { areServerProfileIdentifiersEquivalent } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
 
 function normalizeServerUrlForEnvId(url: string): string {
   return String(url ?? '').trim().replace(/\/+$/, '');
@@ -259,20 +260,26 @@ function findProfilesByHomeServerIdentityId(
 export async function isServerProfileHomeIdentity(profileId: string, homeServerIdentityId: string): Promise<boolean> {
   // Preserve the existing local-profile target contract for in-process callers.
   if (profileId === homeServerIdentityId) return profileId.length > 0;
-  return await resolveServerProfileHomeIdentityId(profileId) === homeServerIdentityId;
+  const [profileHomeId, targetHomeId] = await Promise.all([
+    resolveServerProfileHomeIdentityId(profileId), resolveServerProfileHomeIdentityId(homeServerIdentityId),
+  ]);
+  return areServerProfileIdentifiersEquivalent(profileId, homeServerIdentityId,
+    identifier => identifier === profileId ? profileHomeId : identifier === homeServerIdentityId ? targetHomeId : null);
 }
 
-/** Canonical portable identity of one exactly admitted saved Home profile. */
+/** Canonical portable identity of one exactly admitted saved profile or Home id. */
 export async function resolveServerProfileHomeIdentityId(profileId: string): Promise<string | null> {
   try {
     const settings = await readSettings();
     const servers = settings.servers ?? {};
-    const profile = coerceProfile(servers[profileId]);
+    const savedProfileId = Object.prototype.hasOwnProperty.call(servers, profileId) ? profileId
+      : findProfilesByHomeServerIdentityId(servers, profileId)[0]?.[0];
+    const profile = savedProfileId ? coerceProfile(servers[savedProfileId]) : null;
     const homeServerIdentityId = profile?.homeConnectionDescriptor?.homeServerIdentityId;
-    return homeServerIdentityId && profile?.id === profileId
+    return homeServerIdentityId && profile?.id === savedProfileId
       && profile.homeConnectionDescriptorAuthority === 'exact'
       && findProfilesByHomeServerIdentityId(servers, homeServerIdentityId).length === 1
-      && findProfileIdByIdentifier(servers, homeServerIdentityId) === profileId
+      && findProfileIdByIdentifier(servers, homeServerIdentityId) === savedProfileId
       ? homeServerIdentityId : null;
   } catch {
     return null;

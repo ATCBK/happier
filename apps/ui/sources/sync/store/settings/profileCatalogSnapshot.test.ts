@@ -3,6 +3,23 @@ import { ProfileRecordV1Schema } from '@happier-dev/protocol/profiles/profileRec
 import * as owner from './profileCatalogSnapshot';
 
 describe('scoped Profile publication', () => {
+    it('keeps a cold checked answer display-only and never replaces retained acknowledgements with a stale read', () => {
+        const scope = { serverId: 'cold-display', accountId: 'account' };
+        const record = ProfileRecordV1Schema.parse({ v: 1, id: 'p', definition: { kind: 'artifact', artifactId: 'a' }, enabled: true,
+            promptStack: [], secretBindings: {} });
+        const ready = { status: 'ready' as const, authority: 'inactive' as const, source: 'destination' as const,
+            control: null, controlRevision: 'absent' as const, records: [{ record, revision: 2 }], diagnostics: [], referenceGuardRevision: 1 };
+        owner.beginProfileCatalogLoad(scope);
+        owner.applyProfileCatalogSnapshot(scope, ready, true, new Map(), {}, false);
+        expect(owner.getProfileCatalogSnapshot(scope)).toMatchObject({ stale: true, dataComplete: true,
+            catalog: { status: 'loading' }, data: [{ revision: 2 }] });
+        owner.applyAcknowledgedProfileRecord(scope, { id: 'p', record: { ...record, enabled: false }, revision: 3 }, true);
+        const acknowledged = owner.getProfileCatalogSnapshot(scope);
+        owner.applyProfileCatalogSnapshot(scope, ready, true, new Map(), {}, false);
+        expect(owner.getProfileCatalogSnapshot(scope)).toBe(acknowledged);
+        owner.applyProfileCatalogSnapshot(scope, ready, false, new Map(), {}, false);
+        expect(owner.getProfileCatalogSnapshot(scope)).toBe(acknowledged);
+    });
     it('publishes a higher acknowledged row after transient revalidation failure without certifying the inventory', () => {
         const scope = { serverId: 'failed-revalidation-ack', accountId: 'account' };
         const record = ProfileRecordV1Schema.parse({ v: 1, id: 'p', definition: { kind: 'artifact', artifactId: 'a' }, enabled: true, promptStack: [], secretBindings: {} });

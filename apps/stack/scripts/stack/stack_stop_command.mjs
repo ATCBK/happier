@@ -2,6 +2,7 @@ import { parseArgs } from '../utils/cli/args.mjs';
 import { printResult } from '../utils/cli/cli.mjs';
 import { resolveStackEnvPath } from '../utils/paths/paths.mjs';
 import { stopStackWithEnv } from '../utils/stack/stop.mjs';
+import { redactFailureDiagnostic } from '../utils/proc/proc.mjs';
 
 import { withStackEnv } from './stack_environment.mjs';
 
@@ -22,7 +23,7 @@ export async function runStackStopCommand({ rootDir, stackName, passthrough, jso
   const out = await withStackEnv({
     stackName,
     fn: async ({ env }) => {
-      return await stopStackWithEnv({
+      const result = await stopStackWithEnv({
         rootDir,
         stackName,
         baseDir,
@@ -33,6 +34,10 @@ export async function runStackStopCommand({ rootDir, stackName, passthrough, jso
         sweepOwned,
         preserveDaemon,
       });
+      for (const failure of result.errors ?? []) {
+        failure.error = redactFailureDiagnostic(failure.error, env);
+      }
+      return result;
     },
   });
 
@@ -40,7 +45,12 @@ export async function runStackStopCommand({ rootDir, stackName, passthrough, jso
     printResult({ json, data: { ok: out.finalization?.finalized !== false, stopped: out } });
   }
   if (out.finalization?.finalized === false) {
-    if (!json) console.error(`[stack] ${stackName} stop incomplete: ${out.finalization.reason}`);
+    if (!json) {
+      console.error(`[stack] ${stackName} stop incomplete: ${out.finalization.reason}`);
+      for (const failure of out.errors ?? []) {
+        console.error(`[stack] ${failure.step}${failure.target ? ` (${failure.target})` : ''}: ${redactFailureDiagnostic(failure.error, process.env)}`);
+      }
+    }
     process.exitCode = 1;
   }
 }

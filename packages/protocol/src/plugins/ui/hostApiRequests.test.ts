@@ -1,5 +1,7 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
+import { z } from 'zod/mini';
 import { zodSchemaToJsonSchemaObject } from '../../actions/actionInputJsonSchema.js';
+import { compilePluginJsonSchema, isValidPluginJsonSchemaValue } from '../actions/jsonSchemaValidation.js';
 import { PluginUiHostMethodV1Schema } from './hostApiDefinition.js';
 import { PluginUiNewSessionSeedOriginV1Schema, StoredPluginUiNewSessionSeedOriginV1Schema } from './newSessionSeedOrigin.js';
 
@@ -20,6 +22,7 @@ import {
   PluginUiHostApiResponseEnvelopeV1Schema,
   PluginUiHostApiRequestEnvelopeV1Schema,
   PluginUiHostApiDiagnosticV1Schema,
+  PluginUiJsonObjectV1Schema,
   PluginUiLaunchInputV1Schema,
   PluginUiOpenConnectedAccountsRequestV1Schema,
   PluginUiOpenSurfaceRequestV1Schema,
@@ -35,6 +38,7 @@ import {
 } from './hostApiRequests.js';
 import type {
   PluginUiNewSessionSeedAttachmentV1,
+  PluginUiJsonObjectV1,
   PluginUiNewSessionSeedV1,
   PluginUiSessionPlacementCandidateV1,
 } from './hostApiRequests.js';
@@ -327,9 +331,23 @@ describe('plugin UI launch input bounds', () => {
 });
 
 describe('plugin UI open and Action components', () => {
+  it('projects bounded Action input objects without widening their parsed type to arbitrary JSON', () => {
+    const input = { nested: { items: [null, true, 'selection'] } };
+    const parsed = PluginUiJsonObjectV1Schema.parse(input);
+    expectTypeOf(parsed).toEqualTypeOf<PluginUiJsonObjectV1>();
+    expect(parsed).toEqual(input);
+    for (const invalid of [null, true, 7, 'selection', ['selection']]) {
+      expect(PluginUiJsonObjectV1Schema.safeParse(invalid).success).toBe(false);
+    }
+    expect(PluginUiJsonObjectV1Schema.safeParse({
+      blob: 'a'.repeat(PLUGIN_UI_LAUNCH_INPUT_MAX_UTF8_BYTES_V1),
+    }).success).toBe(false);
+  });
+
   it('keeps the serialized input bound inline in selected Action settlements', () => {
     for (const target of ['draft-7', 'draft-2020-12'] as const) {
-      expect(zodSchemaToJsonSchemaObject(PluginUiSelectActionInputResultV1Schema, { target })).toMatchObject({
+      const projection = zodSchemaToJsonSchemaObject(PluginUiSelectActionInputResultV1Schema, { target });
+      expect(projection).toMatchObject({
         oneOf: expect.arrayContaining([expect.objectContaining({
           properties: expect.objectContaining({
             input: expect.objectContaining({
@@ -338,7 +356,17 @@ describe('plugin UI open and Action components', () => {
           }),
         })]),
       });
+      const objectProjection = z.toJSONSchema(PluginUiJsonObjectV1Schema, { target });
+      expect(objectProjection).toMatchObject({
+        'x-happier-max-serialized-utf8-bytes': PLUGIN_UI_LAUNCH_INPUT_MAX_UTF8_BYTES_V1,
+      });
     }
+    const portable = zodSchemaToJsonSchemaObject(PluginUiJsonObjectV1Schema, { target: 'draft-7' });
+    const validate = compilePluginJsonSchema(JSON.parse(JSON.stringify(portable)));
+    expect(isValidPluginJsonSchemaValue(validate, { repository: 'happier-dev/happier' })).toBe(true);
+    expect(isValidPluginJsonSchemaValue(validate, {
+      blob: 'a'.repeat(PLUGIN_UI_LAUNCH_INPUT_MAX_UTF8_BYTES_V1),
+    })).toBe(false);
   });
     it('accepts only one exact mounted admitted operation and keeps its result closed', () => {
     expect(PluginUiSelectActionInputRequestV1Schema.parse({
@@ -786,6 +814,11 @@ describe('plugin UI open and Action components', () => {
       service: { pluginId: 'com.acme.github', localId: 'account' },
       route: '/settings/connected-services',
     }).success).toBe(false);
+    const sourceSetup = {
+      service: { pluginId: 'acme.source', localId: 'account' },
+      purpose: { consumer: { pluginId: 'acme.source', localId: 'discover' }, purpose: 'source-api' },
+    };
+    expect(PluginUiOpenConnectedAccountsRequestV1Schema.parse(sourceSetup)).toEqual(sourceSetup);
   });
 
   it('keeps declarative selectors and mounted concrete requests distinct', () => {

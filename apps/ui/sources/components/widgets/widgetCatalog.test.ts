@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BUILTIN_WIDGET_DESCRIPTORS_V1, WIDGET_SIZE_POLICY_V1 } from '@happier-dev/protocol/widgets';
+import { BUILTIN_WIDGET_DESCRIPTORS_V1, WIDGET_SIZE_POLICY_V1, type WidgetInstanceV1 } from '@happier-dev/protocol/widgets';
 
 import {
     widgetInstalledPackage as installedPackage,
@@ -11,8 +11,10 @@ import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projecti
 
 import type { SessionPluginRuntimeState } from '@/components/sessions/plugins/useSessionPluginRuntime';
 import {
+    describeBuiltinWidgetInstance,
     describeWidgetDefinitionSummaryV1,
     isBuiltinWidgetSwitchedOff,
+    readWidgetSourcePluginName,
     selectBuiltinWidgetCandidates,
     selectCurrentSessionWidgetCandidates,
     selectWidgetCandidates as selectUniversalWidgetCandidates,
@@ -48,6 +50,11 @@ describe('Widget Add candidates', () => {
         expect(candidate).toMatchObject({ definition: { kind: 'artifact', artifactId: 'checks' }, title: 'Checks on main',
             inputs: { fields: [{ path: 'repo' }] }, target: 'app' });
         expect(candidate.authoredDefinition).toBeUndefined();
+    });
+    it('gives a built-in with no purpose of its own no description, instead of its title repeated', () => {
+        const checkouts = selectBuiltinWidgetCandidates().find(candidate => candidate.definition?.kind === 'builtin' && candidate.definition.id === 'project_checkouts');
+        expect(checkouts?.title).toBeTruthy();
+        expect(checkouts?.description).toBeUndefined();
     });
     it('offers native glances through the universal catalog without a plugin occurrence or a fake plugin identity', () => {
         const candidates = selectUniversalWidgetCandidates(null);
@@ -93,6 +100,20 @@ describe('Widget Add candidates', () => {
             pluginName: 'Review Assistant',
             sharedPluginName: false,
         });
+    });
+
+    it('names a saved copy of an installed widget by that widget\u2019s plugin, not by its own name (already its title)', () => {
+        const projection = projectionOf(
+            [inlineEntry({ pluginId: 'acme.review', localId: 'review-status-widget', title: 'Review status' })],
+            { 'acme.review': installedPackage('acme.review', 'Review Assistant') },
+        );
+        const saved = describeWidgetDefinitionSummaryV1({ artifactId: 'copy', name: 'Review status', sizeDeclaration: { sizes: [...WIDGET_SIZE_POLICY_V1.home.sizes], defaultSize: WIDGET_SIZE_POLICY_V1.home.defaultSize },
+            bodyKind: 'installed', resources: [],
+            sourceDefinition: { kind: 'installed', surface: { pluginId: 'acme.review', localId: 'review-status-widget' } } } as unknown as Parameters<typeof describeWidgetDefinitionSummaryV1>[0]);
+        expect(readWidgetSourcePluginName(projection, saved)).toBe('Review Assistant');
+        const plain = describeWidgetDefinitionSummaryV1({ artifactId: 'plain', name: 'Checks', sizeDeclaration: { sizes: [...WIDGET_SIZE_POLICY_V1.home.sizes], defaultSize: WIDGET_SIZE_POLICY_V1.home.defaultSize },
+            inputs: { fields: [] }, inputSchema: { type: 'object', properties: {} }, bodyKind: 'declarative', resources: [] });
+        expect(readWidgetSourcePluginName(projection, plain)).toBe('Checks');
     });
 
     it('never offers a role that merely shares the local id', () => {
@@ -268,5 +289,20 @@ describe('Your Home, the atmosphere widget', () => {
         expect(isBuiltinWidgetSwitchedOff({ kind: 'builtin', id: 'your_home' }, { yourHome: false })).toBe(true);
         expect(isBuiltinWidgetSwitchedOff({ kind: 'builtin', id: 'your_home' }, { yourHome: true })).toBe(false);
         expect(isBuiltinWidgetSwitchedOff({ kind: 'builtin', id: 'usage_daily' }, { yourHome: false })).toBe(false);
+    });
+});
+
+describe('A built-in called by what its inputs make it show', () => {
+    const breakdowns = selectBuiltinWidgetCandidates({}).find(candidate => candidate.key === 'builtin:usage_breakdowns')!;
+    const placed = (breakdown?: readonly string[]): WidgetInstanceV1 => ({ v: 1, id: 'w', definition: { kind: 'builtin', id: 'usage_breakdowns' },
+        bindings: breakdown ? { breakdown: { kind: 'value', value: [...breakdown] } } : {} });
+
+    it('tells two Usage Breakdowns widgets apart by the one dimension each ranks, and leaves the default pair as Breakdowns', () => {
+        const titles = [['model'], ['machine'], ['agent'], ['model', 'machine'], undefined]
+            .map(breakdown => describeBuiltinWidgetInstance(breakdowns, placed(breakdown)).title);
+        expect(titles[0]).not.toBe(breakdowns.title);
+        expect(titles[1]).not.toBe(titles[0]);
+        expect(new Set(titles.slice(0, 3)).size).toBe(3);
+        expect(titles.slice(3)).toEqual([breakdowns.title, breakdowns.title]);
     });
 });

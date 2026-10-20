@@ -115,6 +115,19 @@ describe('DaemonVoiceAgentClient', () => {
     } });
   });
 
+  it('carries a custom native commit choice as an exact explicit model tuple', async () => {
+    daemonRpc.mockResolvedValueOnce({ ok: true, runId: 'run_native_commit', created: true });
+    const { DaemonVoiceAgentClient } = await import('./daemonVoiceAgentClient');
+    await new DaemonVoiceAgentClient({ serverId: home.id, accountId: 'account-a' }).start({
+      sessionId: 's1', agentSource: 'agent', agentId: 'codex', chatModelId: 'custom-chat', commitModelId: 'custom-commit',
+      permissionIntent: 'read-only', idleTtlSeconds: 300, initialContext: 'ctx',
+    });
+    const start = ExecutionRunEnsureOrStartRequestSchema.parse(daemonRpc.mock.calls[0]?.[0].payload).start;
+    expect(start).toMatchObject({ intentInput: {
+      commitModelSelection: { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'custom-commit' },
+    } });
+  });
+
   beforeEach(async () => {
     network.resetRequests();
     home = await network.addHome('https://voice-client.example.test', 'account-a');
@@ -866,6 +879,9 @@ describe('DaemonVoiceAgentClient', () => {
       signal: controller.signal,
     });
 
+    await vi.waitFor(() => expect(daemonRpc.mock.calls.some(([request]) =>
+      request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_READ)).toBe(true));
+
     const halfway = await settleWithin(sendPromise, 40);
     expect(halfway.state).toBe('pending');
 
@@ -874,7 +890,7 @@ describe('DaemonVoiceAgentClient', () => {
     const outcome = await settleWithin(sendPromise, 300);
     expect(outcome.state).toBe('rejected');
     expect(String(outcome.state === 'rejected' ? (outcome.reason as any)?.name ?? '' : '')).toBe('AbortError');
-    expect(cancelCalled).toBe(true);
+    await vi.waitFor(() => expect(cancelCalled).toBe(true));
   });
 
   it('sendTurn does not fall back to networkTimeoutMs when turnStreamTimeoutMs is null', async () => {
@@ -925,7 +941,7 @@ describe('DaemonVoiceAgentClient', () => {
     const sendPromise = client.sendTurn({ sessionId: 'session-1', voiceAgentId: 'm1', userText: 'hello' });
 
     const halfway = await settleWithin(sendPromise, 40);
-    expect(halfway.state).toBe('pending');
+    expect(halfway.state, halfway.state === 'rejected' ? String(halfway.reason) : undefined).toBe('pending');
 
     const outcome = await settleWithin(sendPromise, 300);
     expect(outcome.state).toBe('resolved');

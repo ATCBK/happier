@@ -46,6 +46,8 @@ export type SessionListFilterPanelProps = Readonly<{
     labels: SessionListFilterPanelCopy;
     /** Sessions the list shows for the current choices (the list's own count). */
     resultCount?: number;
+    /** A host whose result isn't a plain count (a live preview that can be partial) words it itself. */
+    resultSummary?: string;
     maxHeight?: number;
     /** Hands one model option id back to the editor's single writer. */
     onSelect(optionId: string): void;
@@ -54,6 +56,8 @@ export type SessionListFilterPanelProps = Readonly<{
     audiencesAvailable?: boolean;
     onReset(): void;
     onDone?: () => void;
+    /** Done waits until the host's result can be used (a preview still checking, or nothing to use). */
+    doneDisabled?: boolean;
 }>;
 
 /**
@@ -271,6 +275,7 @@ export const SessionListFilterPanel = React.memo(function SessionListFilterPanel
     }, [onSelect]);
 
     const attentionOptions = staticOptions(rootStep, 'attention');
+    const coordinatorOption = staticOptions(rootStep, 'coordinator')?.[0];
     const showOptions = staticOptions(rootStep, 'work-kind');
     const starterOptions = staticOptions(rootStep, 'started-by');
     const showTabs = React.useMemo(() => (showOptions ?? []).map((option) => ({ id: option.id, label: option.label })), [showOptions]);
@@ -285,6 +290,10 @@ export const SessionListFilterPanel = React.memo(function SessionListFilterPanel
     const handleNeedsMeChange = React.useCallback((value: boolean) => {
         onSelect(value ? 'attention:needs_my_attention' : 'attention:any');
     }, [onSelect]);
+    const coordinatorsOnly = coordinatorOption ? selectedIds.has(coordinatorOption.id) : false;
+    const handleCoordinatorsOnlyChange = React.useCallback((value: boolean) => {
+        if (coordinatorOption && value !== coordinatorsOnly) onSelect(coordinatorOption.id);
+    }, [coordinatorOption, coordinatorsOnly, onSelect]);
 
     const inactiveTabs = React.useMemo(() => (inactiveOptions ?? []).map((option) => ({
         id: option.id,
@@ -379,6 +388,21 @@ export const SessionListFilterPanel = React.memo(function SessionListFilterPanel
                             accessibilityLabel={labels.needsMeOnly}
                             value={needsMe}
                             onValueChange={handleNeedsMeChange}
+                        />
+                    </View>
+                ) : null}
+
+                {coordinatorOption ? (
+                    <View style={styles.row}>
+                        <View style={styles.rowText}>
+                            <Text style={styles.rowTitle}>{coordinatorOption.label}</Text>
+                            {coordinatorOption.subtitle ? <Text style={styles.rowSubtitle}>{coordinatorOption.subtitle}</Text> : null}
+                        </View>
+                        <Switch
+                            testID="session-list-filter-coordinators"
+                            accessibilityLabel={coordinatorOption.label}
+                            value={coordinatorsOnly}
+                            onValueChange={handleCoordinatorsOnlyChange}
                         />
                     </View>
                 ) : null}
@@ -489,7 +513,7 @@ export const SessionListFilterPanel = React.memo(function SessionListFilterPanel
                     numberOfLines={1}
                     accessibilityLiveRegion="polite"
                 >
-                    {props.resultCount === undefined ? '' : labels.resultCount(props.resultCount)}
+                    {props.resultSummary ?? (props.resultCount === undefined ? '' : labels.resultCount(props.resultCount))}
                 </Text>
                 <IconButton
                     testID="session-list-filter-clear"
@@ -506,6 +530,7 @@ export const SessionListFilterPanel = React.memo(function SessionListFilterPanel
                         label={labels.done}
                         tone="primary"
                         onPress={props.onDone}
+                        disabled={props.doneDisabled}
                         testID="session-list-filter-done"
                         style={styles.footerButton}
                     />

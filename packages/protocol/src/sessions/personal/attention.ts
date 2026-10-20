@@ -3,6 +3,7 @@ import { z } from 'zod/mini';
 
 import type { ViewerReadStateV1 } from './readState.js';
 import { isSessionActionConfirmationRequest } from '../metadata/sessionActionConfirmationsV1.js';
+import { resolvePersonalFollowOnceAttentionV1, type PersonalFollowOnceOccurrenceV1 } from '../follow/accountFollow.js';
 
 export function resolvePendingRequestAttentionReasonV1(
   request: Readonly<{ kind: 'permission' | 'user_action'; source?: string }>,
@@ -25,7 +26,7 @@ export function isPendingRequestAnswerableV1(
  * is the canonical priority ladder: `reasons` keeps every concurrent fact and
  * `primary` only says which one wins one row of compact space.
  */
-export const SessionPersonalAttentionReasonV1Schema = lazyZodSchema(() => z.enum([
+const SESSION_PERSONAL_ATTENTION_REASONS_V1 = [
   'failed',
   'permission_required',
   'user_action_required',
@@ -36,7 +37,8 @@ export const SessionPersonalAttentionReasonV1Schema = lazyZodSchema(() => z.enum
   'ready_after_read',
   'reminder_due',
   'manual',
-]));
+] as const;
+export const SessionPersonalAttentionReasonV1Schema = lazyZodSchema(() => z.enum(SESSION_PERSONAL_ATTENTION_REASONS_V1));
 export type SessionPersonalAttentionReasonV1 = z.infer<
   typeof SessionPersonalAttentionReasonV1Schema
 >;
@@ -62,6 +64,16 @@ export const QUIET_SESSION_PERSONAL_ATTENTION_V1: SessionPersonalAttentionProjec
     primary: null,
     presentation: 'full',
   });
+
+/** Add exact client-readable request evidence without replacing Home-owned facts. */
+export function addSessionPersonalAttentionReasonV1(
+  current: SessionPersonalAttentionProjectionV1,
+  reason: SessionPersonalAttentionReasonV1,
+): SessionPersonalAttentionProjectionV1 {
+  if (current.reasons.includes(reason)) return current;
+  const reasons = SESSION_PERSONAL_ATTENTION_REASONS_V1.filter(value => value === reason || current.reasons.includes(value));
+  return { ...current, needsAttention: true, reasons, primary: reasons[0] ?? null };
+}
 
 /**
  * Content-free attention inputs.
@@ -91,6 +103,9 @@ export type SessionPersonalAttentionInputV1 = Readonly<{
   discussion: Readonly<{ hasUnread: boolean; hasMention: boolean }>;
   attentionStanding: 'none' | 'positive' | 'negative';
   reminderDue: boolean;
+  onceDelivery?: PersonalFollowOnceOccurrenceV1;
+  /** Exact live request identities supplied by the canonical request owner. */
+  currentRequestIds?: readonly string[];
 }>;
 
 function count(value: number): number {
@@ -112,11 +127,15 @@ export function resolveSessionPersonalAttentionV1(
   if (!input.accessible || input.accountSuspended) {
     return QUIET_SESSION_PERSONAL_ATTENTION_V1;
   }
+  const onceReason = resolvePersonalFollowOnceAttentionV1({ delivery: input.onceDelivery, currentRequestIds: input.currentRequestIds });
   // A due reminder is the sole exception to owner-or-Follow tracking. It may
   // return an unfollowed Session to personal attention, but it must not make
   // unrelated operational, discussion, unread, or manual facts actionable.
   if (!input.tracked) {
-    return input.reminderDue
+    return onceReason ? {
+      needsAttention: true, reasons: [onceReason], primary: onceReason,
+      presentation: input.contentAvailable ? 'full' : 'status_only',
+    } : input.reminderDue
       ? {
           needsAttention: true,
           reasons: ['reminder_due'],
@@ -151,12 +170,12 @@ export function resolveSessionPersonalAttentionV1(
   }
   if (input.reminderDue) reasons.push('reminder_due');
   if (input.attentionStanding === 'positive') reasons.push('manual');
-
-  if (reasons.length === 0) return QUIET_SESSION_PERSONAL_ATTENTION_V1;
-  return {
+  if (reasons.length === 0 && !onceReason) return QUIET_SESSION_PERSONAL_ATTENTION_V1;
+  const projection: SessionPersonalAttentionProjectionV1 = {
     needsAttention: true,
     reasons,
     primary: reasons[0] ?? null,
     presentation: input.contentAvailable ? 'full' : 'status_only',
   };
+  return onceReason ? addSessionPersonalAttentionReasonV1(projection, onceReason) : projection;
 }

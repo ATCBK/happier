@@ -5,7 +5,7 @@ import { resolveEffectiveAccountEncryptionModeFromAccountRow } from "@/app/encry
 import { writeSessionDataKeyEnvelopeInTx } from "@/app/session/encryption/sessionDataKeyEnvelopePersistence";
 import { SessionOwnerEnvelopeError } from "./layout1SessionRowWrite";
 import { publishSessionCreationInTx } from "./publishSessionCreationInTx";
-import type { ExternalActionExecutionAuthorizationBindingV1 } from '@happier-dev/protocol/actions/externalActionApi';
+import type { SessionCreationExecutionAuthorization } from './apiTokenSessionCreationAuthorization';
 import { readSessionCreationApiTokenIdInTx } from "./apiTokenSessionCreationAuthorization";
 
 /**
@@ -26,7 +26,7 @@ export async function createLegacyLayout0SessionInTx(
         encryptionMode: "e2ee" | "plain";
         requestedStorageState: "machine_only" | undefined;
         dataEncryptionKey: Uint8Array<ArrayBuffer> | null;
-        sessionCreationAuthorization?: ExternalActionExecutionAuthorizationBindingV1;
+        sessionCreationAuthorization?: SessionCreationExecutionAuthorization;
     }>,
 ) {
     const account = await tx.account.findUniqueOrThrow({

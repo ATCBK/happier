@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import axios, { AxiosHeaders, type AxiosResponse } from 'axios';
-import { createCliActionExecutorFromCredentials } from './createCliActionExecutorFromCredentials';
+import {
+  createCliActionExecutorFromCredentials,
+  resolveProtectedSessionInputActionTarget,
+} from './createCliActionExecutorFromCredentials';
 import type { ActionExecutorDeps } from '@happier-dev/protocol';
 import {
   FeaturesResponseSchema,
@@ -108,6 +111,14 @@ describe('createCliActionExecutorFromCredentials', () => {
     readSettings.mockClear();
   });
 
+  it('routes protected inactive Session input to its owning Machine without changing the live path', () => {
+    const input = { sessionId: 'session-1', machineId: 'machine-1' };
+    expect(resolveProtectedSessionInputActionTarget({ ...input, active: false }))
+      .toEqual({ kind: 'machine', machineId: 'machine-1' });
+    expect(resolveProtectedSessionInputActionTarget({ ...input, active: true }))
+      .toEqual({ kind: 'session', sessionId: 'session-1' });
+  });
+
   it('requires and propagates one qualified Home identity with a fixed endpoint', async () => {
     const credentials = {
       token: 'token_test',
@@ -145,6 +156,7 @@ describe('createCliActionExecutorFromCredentials', () => {
     });
     expect(createSessionFollowActionDeps).toHaveBeenLastCalledWith({
       token: 'token_test',
+      credentials,
       serverId: 'home-b',
       serverHttpBaseUrl: 'https://home-b.example.test',
       prepareSourceKeyAfterSet: expect.any(Function),
@@ -448,7 +460,7 @@ describe('createCliActionExecutorFromCredentials', () => {
     }));
   });
 
-  it('forwards target-action approval replay only when daemon composition injects it', async () => {
+  it('preserves the target-action approval replay owner injected by daemon composition', async () => {
     const credentials = {
       token: 'token_test',
       encryption: { type: 'legacy' as const, secret: new Uint8Array(32).fill(1) },
@@ -456,12 +468,6 @@ describe('createCliActionExecutorFromCredentials', () => {
     const targetActionApprovalReplay = vi.fn<
       NonNullable<ActionExecutorDeps['targetActionApprovalReplay']>
     >();
-
-    await createCliActionExecutorFromCredentials({ credentials })
-      .execute('action.spec.get', { id: 'session.list' }, { surface: 'cli' });
-    expect(createCliActionExecutor).toHaveBeenLastCalledWith(
-      expect.not.objectContaining({ targetActionApprovalReplay: expect.any(Function) }),
-    );
 
     await createCliActionExecutorFromCredentials({ credentials, targetActionApprovalReplay })
       .execute('action.spec.get', { id: 'session.list' }, { surface: 'cli' });

@@ -1,4 +1,4 @@
-import type { RuntimeActionExecute, RuntimeActionExecuteArgs } from '@happier-dev/protocol/actions/executor/types';
+import type { RuntimeActionExecuteArgs } from '@happier-dev/protocol/actions/executor/types';
 import * as React from 'react';
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
@@ -7,6 +7,16 @@ import { readProjectSetupConsentFailureV1, type ProjectSetupConsentFailureDetail
 import { awaitActionApprovalResult, createActionApprovalContinuation, type ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
 import type { UiActionExecutorContext } from '@/sync/ops/actions/defaultActionExecutor';
 import type { LocalServiceLaunchTarget } from '@/sync/domains/local/services/launch';
+import type { FrontDoorRuntimeActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+
+/** Native presentation only; admission and approval custody remain with this mounted owner. */
+export type LocalServiceActionInvocationOptions = Readonly<{
+    confirmation?: NonNullable<NonNullable<Parameters<FrontDoorRuntimeActionExecute>[1]>['presentUserActionConfirmation']>;
+}>;
+
+type LocalServiceActionExecute = (request: RuntimeActionExecuteArgs, options?: LocalServiceActionInvocationOptions) => Promise<unknown>;
+type LocalServiceRuntimeActionExecute = (request: RuntimeActionExecuteArgs,
+    options?: Parameters<FrontDoorRuntimeActionExecute>[1]) => Promise<unknown>;
 
 export type LocalServiceEffectReview = Readonly<{
     actionId: 'localServices.launcher.start' | 'localServices.actions.restartManaged';
@@ -56,18 +66,19 @@ export function isLocalServiceActionAdmissionCurrent(admission: LocalServiceActi
 const cancelled = () => ({ ok: false as const, errorCode: 'cancelled', error: 'cancelled' });
 
 export function useLocalServiceActionExecutor(context: LocalServiceActionAdmission & Readonly<{
-    runtimeActionExecute?: RuntimeActionExecute | null;
-}>): RuntimeActionExecute | undefined {
+    runtimeActionExecute?: LocalServiceRuntimeActionExecute | null;
+}>): LocalServiceActionExecute | undefined {
     return React.useMemo(() => context.runtimeActionExecute
-        ? request => executeLocalServiceActionWithAdmission({ execute: context.runtimeActionExecute!, request, admission: context })
+        ? (request, options) => executeLocalServiceActionWithAdmission({ execute: context.runtimeActionExecute!, request, admission: context, ...options })
         : undefined, [context.runtimeActionExecute, context.expectedAccountId, context.signal, context.isCurrent, context.onApprovalPending]);
 }
 
 /** Join immediate and durable Ask-first results through the existing Artifact continuation. */
 export async function executeLocalServiceActionWithAdmission(input: Readonly<{
-    execute: RuntimeActionExecute;
+    execute: LocalServiceRuntimeActionExecute;
     request: RuntimeActionExecuteArgs;
     admission: LocalServiceActionAdmission;
+    confirmation?: LocalServiceActionInvocationOptions['confirmation'];
 }>): Promise<unknown> {
     const { admission, request } = input;
     if (!isLocalServiceActionAdmissionCurrent(admission)) return cancelled();
@@ -77,7 +88,10 @@ export async function executeLocalServiceActionWithAdmission(input: Readonly<{
     };
     const outcome = await awaitActionApprovalResult<unknown, Readonly<{ value: unknown }>>({
         async execute(callbacks) {
-            const value = await input.execute({ ...request, context });
+            const args = { ...request, context };
+            const value = await (input.confirmation
+                ? input.execute(args, { presentUserActionConfirmation: input.confirmation })
+                : input.execute(args));
             if (!isLocalServiceActionAdmissionCurrent(admission)) return { value: cancelled() };
             const approval = ActionApprovalRequestCreatedResultSchema.safeParse(value);
             if (!approval.success) return { value };

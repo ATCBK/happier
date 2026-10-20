@@ -4,6 +4,7 @@ import { normalizeWorkspaceRootPathV1, resolveWorkspaceRefV1, type WorkspaceRefR
 import { isManagedDevcontainerChildProjectionCurrentV1,
   type DevcontainerChildProjectionV1 } from '../machines/managed/devcontainerV1.js';
 import type { ManagedMachineV1 } from '../machines/managed/managedMachineV1.js';
+import { RpcError } from '../rpc/errors.js';
 
 /** Current reads of the existing managed row and ordinary Machine projection, never stored mapping state. */
 export type WorkspaceSyncChildMachineFacts = Readonly<{
@@ -238,6 +239,52 @@ function componentRelationships(
     components.push(component);
   }
   return components;
+}
+
+/** Resolve read placement from the same topology on every Action host. */
+export function resolveWorkspaceSyncReadControllerV1(input: Readonly<{
+  serverId: string;
+  workspaceRefs: readonly WorkspaceRefV1[];
+  relationships: readonly WorkspaceSyncRelationshipV1[];
+  controllerMachineId?: string;
+  workspaceRefId?: string;
+  relationshipId?: string;
+  context?: WorkspaceRefResolutionContextV1;
+}>): string {
+  const fail = (code: string): never => { throw Object.assign(new RpcError(code, code), { code }); };
+  const hasRef = (id: string) => resolveWorkspaceRefV1(input.workspaceRefs,
+    { id, serverId: input.serverId }, input.context).kind === 'resolved';
+  let resolvedController: string | undefined;
+  if (input.workspaceRefId) {
+    const memberId = input.workspaceRefId;
+    const member = resolveWorkspaceRefV1(input.workspaceRefs, { id: memberId, serverId: input.serverId }, input.context);
+    if (member.kind !== 'resolved') return fail('workspace_ref_not_ready');
+    const topology = deriveWorkspaceSyncTopology(input);
+    const matching = topology.sets.filter(set => set.relationships.some(relationship =>
+      relationship.alphaWorkspaceRefId === memberId || relationship.betaWorkspaceRefId === memberId));
+    if (matching.length > 1 || topology.issues.some(issue => issue.workspaceRefIds.includes(memberId))) {
+      return fail('workspace_sync_topology_invalid');
+    }
+    const set = matching[0];
+    if (set?.relationships.some(relationship => !hasRef(relationship.alphaWorkspaceRefId) || !hasRef(relationship.betaWorkspaceRefId))) {
+      return fail('workspace_ref_not_ready');
+    }
+    // An enrolled checkout with no links still has a valid empty list. Its
+    // Machine answers membership; it does not create a relationship or route.
+    resolvedController = set?.controllerMachineId ?? member.ref.machineId;
+  }
+  if (input.relationshipId) {
+    const relationship = input.relationships.find(entry => entry.relationshipId === input.relationshipId);
+    if (!relationship || !hasRef(relationship.alphaWorkspaceRefId) || !hasRef(relationship.betaWorkspaceRefId)) {
+      return fail('relationship_not_ready');
+    }
+    if (resolvedController && resolvedController !== relationship.controllerMachineId) return fail('relationship_changed');
+    resolvedController = relationship.controllerMachineId;
+  }
+  if (input.controllerMachineId && resolvedController && input.controllerMachineId !== resolvedController) {
+    return fail('relationship_changed');
+  }
+  return resolvedController ?? input.controllerMachineId ?? fail('relationship_not_ready');
 }
 
 export function deriveWorkspaceSyncTopology(input: Readonly<{

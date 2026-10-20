@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Message } from '@happier-dev/session-core/messages';
 import type { VoiceRoleReadiness } from '@/voice/registry/readiness';
 import { deriveVoiceSetupFacts } from './voiceSetupFacts';
+import { VoiceAgentTurnV1Schema } from '@happier-dev/protocol/messages/structured/voiceAgentTurnV1';
 
 const ready: VoiceRoleReadiness = {
     role: 'realtime_conversation', providerId: 'test.service', status: 'ready', code: 'ready',
@@ -13,6 +14,24 @@ const user: Message = { kind: 'user-text', id: 'input', localId: null, seq: 1, c
 const reply: Message = { kind: 'agent-text', id: 'reply', localId: null, seq: 2, createdAt: 20, text: 'Hi', meta };
 
 describe('Voice setup facts', () => {
+    it('pairs the retained local capture input with its daemon Voice Agent reply', () => {
+        // Real producer shapes from voice-ship-journey/ordinary-marked-transcript-and-setup.json:
+        // capture commits conversation_turn.v1; the daemon commits voice_agent_turn.v1.
+        const input = { ...user, localId: 'dcd23cfe-a312-4d10-be68-483d19851b1d', seq: 87 };
+        const output = { ...reply, localId: 'stream-reply:assistant', seq: 89, meta: { happier: {
+            kind: 'voice_agent_turn.v1', payload: VoiceAgentTurnV1Schema.parse({
+                v: 1, epoch: 0, role: 'assistant', voiceAgentId: 'run-reply', runId: 'run-reply',
+                streamId: 'stream-reply', ts: 1792196469106,
+            }),
+        } } };
+        const facts = (messages: Message[]) => deriveVoiceSetupFacts({ providerId: 'test.service', readiness: ready,
+            microphonePermission: 'granted', messages }).firstTurnComplete;
+        expect(facts([input, output])).toBe(true);
+        expect(facts([output, input])).toBe(true); // Storage iteration order is not acknowledgement order.
+        expect(facts([input, { ...output, seq: 86 }])).toBe(false);
+        expect(facts([{ ...input, localId: 'voice-realtime:other:user:input' }, output])).toBe(false);
+        expect(facts([{ ...input, meta: undefined }, output])).toBe(false);
+    });
     it('projects only observed step progress and the readiness owner’s blocked or installing state', () => {
         const base = { providerId: 'test.service', microphonePermission: 'unknown' as const, messages: [] };
         expect(deriveVoiceSetupFacts({ ...base, readiness: null }).steps.map((step) => step.state)).toEqual(['done', 'current', 'upcoming', 'upcoming']);

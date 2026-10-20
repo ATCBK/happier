@@ -103,7 +103,7 @@ describe('rpcHandlers (session runner restarts)', () => {
       mode: 'force_current_cli',
       dryRun: true,
       reason: 'daemon_restart_session_runners_command',
-    });
+    }, { signal: undefined });
   });
 
   it('fails closed for public V1 mutation requests without a process-birth witness', async () => {
@@ -142,7 +142,7 @@ describe('rpcHandlers (session runner restarts)', () => {
       sessionId: 'sess-1',
       mode: 'force_current_cli',
       reason: 'daemon_restart_session_runners_command',
-    });
+    }, { signal: undefined });
   });
 
   it('validates and forwards process-attested Provider recovery only on restart V2', async () => {
@@ -169,7 +169,7 @@ describe('rpcHandlers (session runner restarts)', () => {
     } as const;
 
     await expect(handler!(request)).resolves.toMatchObject({ status: 'restarted' });
-    expect(requestDaemonSessionRunnerRestartV2Mock).toHaveBeenCalledWith(request);
+    expect(requestDaemonSessionRunnerRestartV2Mock).toHaveBeenCalledWith(request, { signal: undefined });
     expect(requestDaemonSessionRunnerRestartMock).not.toHaveBeenCalled();
   });
 
@@ -218,7 +218,7 @@ describe('rpcHandlers (session runner restarts)', () => {
       mode: 'if_stale',
       dryRun: true,
       reason: 'daemon_restart_session_runners_command',
-    });
+    }, { signal: undefined });
   });
 
   it('fails a public bulk rollout restart closed because it has no per-session pending owner', async () => {

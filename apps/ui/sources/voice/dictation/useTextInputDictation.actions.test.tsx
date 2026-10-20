@@ -3,7 +3,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { createMachineFixture, createPlainMachineRowFixture, createRootLayoutFeaturesResponse, renderHook, standardCleanup } from '@/dev/testkit';
+import { createMachineFixture, createPlainMachineRowFixture, createRootLayoutFeaturesResponse, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createTransferRecipientKeyPair } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption';
 import { ApprovalRequestSchema } from '@happier-dev/protocol';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
@@ -12,11 +12,16 @@ import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionAc
 import { MachineLiveStreamRelayCapsV1Schema } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { findAllHostTestInstances, pressTestInstanceAsync } from '@/dev/testkit/render/renderScreen';
+import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 
 const recording = vi.hoisted(() => ({ starts: 0, stops: 0 }));
 const machineRpc = vi.hoisted(() => vi.fn());
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+// Only the external portal renderer is replaced; confirmation and approval stay real.
+vi.mock('@/utils/web/radixCjs', async () => (await import('@/dev/testkit/mocks/radixCjs')).createRadixCjsModuleMock());
+vi.mock('@/utils/web/reactDomCjs', () => ({ requireReactDOM: () => ({ createPortal: (children: React.ReactNode) => children }) }));
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
     pathname: '/session/words', segments: ['(app)', 'session', '[id]'], params: { id: 'words' },
 }).module);
@@ -57,12 +62,14 @@ const { CurrentUiContextProvider, useOptionalCurrentUiContextReader } = await im
 const { createCurrentUiContextVoiceToolPort } = await import('@/components/appShell/currentUiContext/currentUiContextVoiceToolPort');
 const { registerCurrentUiContextActionPort } = await import('@/components/appShell/currentUiContext/currentUiContextActionRuntime');
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+const { ModalProvider } = await import('@/modal');
 const { TokenStorage } = await import('@/auth/storage/tokenStorage');
 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
 const { useTextInputDictation } = await import('./useTextInputDictation');
 const { voiceDictationController } = await import('./useVoiceDictation');
 let unregister: (() => void) | undefined;
 let restoredConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+let restorePopoverGlobals: (() => void) | undefined;
 
 function ActionPort() {
     const reader = useOptionalCurrentUiContextReader();
@@ -81,11 +88,13 @@ afterEach(async () => {
     await restoredConnection?.dispose(); restoredConnection = undefined;
     unregister?.(); unregister = undefined;
     await standardCleanup(); resetRuntimeFetch(); resetServerFeaturesClientForTests(); vi.unstubAllGlobals();
+    restorePopoverGlobals?.(); restorePopoverGlobals = undefined;
     machineRpc.mockReset(); recording.starts = 0; recording.stops = 0;
 });
 
 describe('mounted field Dictation Actions', () => {
     it('captures only after approval, inserts editable words without Send, and refuses an unmounted field', async () => {
+        restorePopoverGlobals = withPopoverWebGlobals();
         await home.reset();
         const serverUrl = 'https://dictation-action.test';
         const serverId = await home.addHome({ name: 'Dictation Home', serverUrl, serverIdentityId: 'dictation-home', accountId: 'alice', currentAccount: true });
@@ -147,6 +156,8 @@ describe('mounted field Dictation Actions', () => {
         const wrapper = ({ children }: React.PropsWithChildren) => <InjectedAuthProvider credentials={credentials}>
             <MainAppTabStateProvider><AppPaneProvider><CurrentUiContextProvider><ActionPort />{children}</CurrentUiContextProvider></AppPaneProvider></MainAppTabStateProvider>
         </InjectedAuthProvider>;
+        // The AppShell modal host outlives the individual field registration.
+        const modalScreen = await renderScreen(<ModalProvider>{null}</ModalProvider>);
         let words = 'draft';
         const field = await renderHook(() => useTextInputDictation({ controlId: 'mounted-field', enabled: true,
             presented: true, editable: true, transcriptionSessionId: null, onTranscription: text => { words += ` ${text}`; } }), { wrapper });
@@ -160,6 +171,21 @@ describe('mounted field Dictation Actions', () => {
             if (!result) throw new Error('Action did not settle');
             return result;
         };
+        const executeConfirmed = async (...args: Parameters<typeof executor.execute>) => {
+            const startsBeforeConfirmation = recording.starts;
+            let pending: ReturnType<typeof executor.execute> | undefined;
+            await act(async () => { pending = executor.execute(...args); });
+            const confirm = await vi.waitFor(() => {
+                const button = findAllHostTestInstances(modalScreen.tree.root, node => node.props.testID === 'web-modal-confirm'
+                    && node.props.visible !== false).at(-1);
+                expect(button).toBeDefined();
+                return button!;
+            });
+            expect(recording.starts).toBe(startsBeforeConfirmation);
+            await pressTestInstanceAsync(confirm);
+            if (!pending) throw new Error('Confirmed Action did not start');
+            return await pending;
+        };
         const ui = { surface: 'ui' as const, authority: 'present_user' as const, serverId, expectedAccountId: 'alice' };
         const agent = { ...ui, surface: 'agent' as const, authority: 'account_automation' as const,
             actionRequestId: 'dictation-start-request', defaultSessionMachineId: 'speech-machine' } satisfies ActionExecutorContext;
@@ -171,7 +197,7 @@ describe('mounted field Dictation Actions', () => {
         const start = commands[0]!.id;
         const finish = commands[1]!.id;
         const cancel = commands[2]!.id;
-        const consent = await execute('ui.voice_global.dictation.start', { commandId: start }, ui);
+        const consent = await executeConfirmed('ui.voice_global.dictation.start', { commandId: start }, ui);
         expect(consent, JSON.stringify(consent))
             .toMatchObject({ ok: true, result: { status: 'unavailable', code: 'dictation_consent_required' } });
         expect(recording.starts).toBe(0);
@@ -212,7 +238,7 @@ describe('mounted field Dictation Actions', () => {
             .toMatchObject({ ok: true, result: { status: 'completed', dictationStatus: 'idle', inserted: true } });
         expect(words).toBe('draft editable words');
         expect(home.requests.some(request => request.path.includes('/pending') || request.path.includes('/messages'))).toBe(false);
-        expect(await execute('ui.voice_global.dictation.start', { commandId: start }, ui))
+        expect(await executeConfirmed('ui.voice_global.dictation.start', { commandId: start }, ui))
             .toMatchObject({ ok: true, result: { status: 'completed', dictationStatus: 'listening' } });
         expect(await execute('ui.current_context.command.invoke', { commandId: cancel }, agent))
             .toMatchObject({ ok: true, result: { status: 'completed', dictationStatus: 'idle', inserted: false } });
@@ -221,12 +247,12 @@ describe('mounted field Dictation Actions', () => {
         // Action even while the same focused field/controller are still mounted.
         unregister?.(); unregister = undefined;
         const startsBeforeUnregister = recording.starts;
-        expect(await execute('ui.voice_global.dictation.start', { commandId: start }, ui))
+        expect(await executeConfirmed('ui.voice_global.dictation.start', { commandId: start }, ui))
             .toMatchObject({ ok: true, result: { status: 'unavailable', code: 'dictation_field_unmounted' } });
         expect(recording.starts).toBe(startsBeforeUnregister);
         expect(voiceDictationController.getSnapshot().status).toBe('idle');
         await field.unmount();
-        expect(await execute('ui.voice_global.dictation.start', { commandId: start }, ui))
+        expect(await executeConfirmed('ui.voice_global.dictation.start', { commandId: start }, ui))
             .toMatchObject({ ok: true, result: { status: 'unavailable', code: 'dictation_field_unmounted' } });
         expect(home.requests.some(request => request.path.includes('/pending') || request.path.includes('/messages'))).toBe(false);
     });

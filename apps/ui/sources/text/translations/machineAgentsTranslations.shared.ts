@@ -12,6 +12,7 @@ export type MachineAgentsTranslation = Readonly<{
     installYourself: string;
     unsupportedOs: string;
     unsupportedArch: string;
+    unsupported: string;
     installing: string;
     progress: (params: Readonly<{ done: string; total: string }>) => string;
     checking: string;
@@ -28,6 +29,11 @@ export type MachineAgentsTranslation = Readonly<{
     actionCancel: string;
     actionShowTerminal: string;
     actionGuide: string;
+    actionRemove: string;
+    setupSignInTitle: string;
+    setupChangeSignIn: string;
+    setupCliTitle: string;
+    cliByHappier: string;
 
     installLeadManaged: (params: Readonly<{ agent: string; machine: string }>) => string;
     installLeadVendor: (params: Readonly<{ agent: string; machine: string }>) => string;
@@ -104,6 +110,7 @@ export type MachineAgentsTranslation = Readonly<{
     blockSetUpToStart: string;
     blockSignedOut: (params: Readonly<{ agent: string; machine: string }>) => string;
     blockSignedOutShort: (params: Readonly<{ agent: string }>) => string;
+    useConnectedAccount: (params: Readonly<{ account: string }>) => string;
     spawnCliMissing: (params: Readonly<{ agent: string; machine: string }>) => string;
     spawnSignedOut: (params: Readonly<{ agent: string; machine: string }>) => string;
     draftKept: string;
@@ -126,6 +133,7 @@ export const en: MachineAgentsTranslation = {
     installYourself: 'Install it yourself',
     unsupportedOs: 'Doesn’t run on this system',
     unsupportedArch: 'No build for this processor',
+    unsupported: 'Can’t run here',
     installing: 'Installing…',
     progress: ({ done, total }) => `${done} of ${total}`,
     checking: 'Checking…',
@@ -142,6 +150,11 @@ export const en: MachineAgentsTranslation = {
     actionCancel: 'Cancel',
     actionShowTerminal: 'Show terminal',
     actionGuide: 'Setup guide',
+    actionRemove: 'Remove',
+    setupSignInTitle: 'Sign-in',
+    setupChangeSignIn: 'Change',
+    setupCliTitle: 'Command line',
+    cliByHappier: 'Installed by Happier',
 
     installLeadManaged: ({ agent, machine }) => `Happier installs ${agent} on ${machine} for Happier only. Your own terminal setup isn’t changed.`,
     installLeadVendor: ({ agent, machine }) => `Happier runs ${agent}’s own installer on ${machine}.`,
@@ -218,6 +231,7 @@ export const en: MachineAgentsTranslation = {
     blockSetUpToStart: 'Set it up to start.',
     blockSignedOut: ({ agent, machine }) => `${agent} needs sign-in on ${machine}.`,
     blockSignedOutShort: ({ agent }) => `${agent} needs sign-in.`,
+    useConnectedAccount: ({ account }) => `Use ${account}`,
     spawnCliMissing: ({ agent, machine }) => `${agent} isn’t installed on ${machine}.`,
     spawnSignedOut: ({ agent, machine }) => `${agent} is signed out on ${machine}.`,
     draftKept: 'Your message is kept.',

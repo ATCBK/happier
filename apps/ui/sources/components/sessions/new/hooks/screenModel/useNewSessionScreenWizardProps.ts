@@ -18,6 +18,7 @@ type AcpConfigOptionsProbeState = Readonly<{
 }>;
 
 export function useNewSessionScreenWizardProps(params: Readonly<{
+    focused?: boolean;
     layout: Pick<
         NewSessionWizardParams,
         | 'theme'
@@ -60,7 +61,7 @@ export function useNewSessionScreenWizardProps(params: Readonly<{
         | 'selectedSecretIdByProfileIdByEnvVarName'
         | 'sessionOnlySecretValueByProfileIdByEnvVarName'
     >;
-    installables: Pick<NewSessionWizardParams, 'wizardInstallableDeps' | 'selectedMachineCapabilities'>;
+    installables: Pick<NewSessionWizardParams, 'wizardInstallableDeps' | 'selectedMachineCapabilities' | 'capabilitiesCacheKeySalt'>;
     agent: Pick<
         NewSessionWizardParams,
         | 'cliAvailability'
@@ -152,6 +153,7 @@ export function useNewSessionScreenWizardProps(params: Readonly<{
         | 'launchPendingPreviewVisible'
         | 'providerLaunchError'
         | 'retryProviderLaunch'
+        | 'launchApproval'
         | 'submitAccessibilityLabel'
         | 'emptyAutocompleteKinds'
         | 'emptyAutocompleteSuggestions'
@@ -169,6 +171,7 @@ export function useNewSessionScreenWizardProps(params: Readonly<{
         | 'attachmentFlowId'
         | 'statusBadges'
         | 'composerTopContent'
+        | 'composerBottomContent'
         | 'statusTrailingActions'
     >;
 }>): ReturnType<typeof useNewSessionWizardProps> {
@@ -183,6 +186,7 @@ export function useNewSessionScreenWizardProps(params: Readonly<{
     } = params.agent;
 
     return useNewSessionWizardProps({
+        focused: params.focused,
         ...params.layout,
         ...params.profiles,
         ...params.profileSecrets,

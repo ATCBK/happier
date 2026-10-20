@@ -8,8 +8,8 @@ import type { SessionListRenderableSession } from '@/sync/domains/session/listin
 import { createSessionActionTarget } from './sessionActionContext';
 import {
     SESSION_ACTION_ARCHIVE_ID,
+    SESSION_ACTION_DELETE_ID,
     SESSION_ACTION_EDIT_TAGS_ID,
-    SESSION_ACTION_MAKE_ORCHESTRATOR_ID,
     SESSION_ACTION_MARK_READ_ID,
     SESSION_ACTION_MOVE_TO_FOLDER_ID,
     SESSION_ACTION_PIN_ID,
@@ -53,6 +53,33 @@ function createTarget(overrides: Partial<SessionListRenderableSession> = {}) {
 }
 
 describe('executeSessionAction', () => {
+    it('forwards the direct-report choice in the one archive request', async () => {
+        const requests: unknown[] = [];
+        await executeSessionAction({ actionId: SESSION_ACTION_ARCHIVE_ID, target: createTarget(),
+            input: { alsoArchiveReports: true }, context: { operations: {
+                archiveSession: async (sessionId, options) => { requests.push({ sessionId, options }); return { success: true }; },
+                clearSessionVisibleWhenInactive: () => {},
+            } } });
+        expect(requests).toEqual([{ sessionId: 'session_1', options: { serverId: 'server_1', alsoArchiveReports: true } }]);
+    });
+    it('forwards the exact completed host confirmation to Delete only', async () => {
+        const deleteSession = vi.fn(async () => ({ success: true as const }));
+
+        await executeSessionAction({
+            actionId: SESSION_ACTION_DELETE_ID,
+            target: createTarget({ archivedAt: 42 }),
+            context: {
+                presentUserConfirmation: { actionId: 'session.delete' },
+                operations: { deleteSession },
+            },
+        });
+
+        expect(deleteSession).toHaveBeenCalledWith('session_1', {
+            serverId: 'server_1',
+            presentUserConfirmation: { actionId: 'session.delete' },
+        });
+    });
+
     it.each([true, false] as const)('announces Stop success only after a confirmed outcome (%s)', async confirmed => {
         retirePresentationNotice();
         await executeSessionAction({ actionId: SESSION_ACTION_STOP_ID, target: createTarget({ active: true }),
@@ -78,6 +105,17 @@ describe('executeSessionAction', () => {
         await executeSessionAction({ actionId: 'ui.session.work.open', target: { ...target, serverId: null } });
         await executeSessionAction({ actionId: 'ui.session.work.open', target: { ...target, session: { ...target.session, access: null } } });
         expect(push.mock.calls.map(([href]) => String(href))).toEqual([route.pathname + route.search]);
+    });
+    it('opens People on the Following section for "Edit what it follows"', async () => {
+        const { router } = await import('expo-router');
+        const push = vi.mocked(router.push);
+        push.mockClear();
+        await executeSessionAction({ actionId: 'ui.session.coordinator.edit', target: createTarget() });
+        const route = new URL(String(push.mock.calls[0]?.[0]), 'https://happier.test');
+        expect(route.pathname).toBe('/session/session_1');
+        expect(route.searchParams.get('serverId')).toBe('server_1');
+        expect(route.searchParams.get('right')).toBe('collaboration');
+        expect(route.searchParams.get('collaborationFocus')).toBe('following');
     });
     it('opens Follow for the captured Home and preserves archived state without permitting unqualified or disabled targets', async () => {
         const opened: Array<{ address: { serverId: string; sessionId: string }; archived: boolean }> = [];
@@ -257,20 +295,14 @@ describe('executeSessionAction', () => {
         expect(renameSession).toHaveBeenCalledWith('session_1', 'New title', { serverId: 'server_1' });
     });
 
-    it('makes the Session an orchestrator through the role Action and reports a refusal', async () => {
-        const setSessionRole = vi.fn(async () => ({ ok: true }));
+    it("flips a coordinator's \"Answers its workers' questions\" through the session role Action", async () => {
+        const setSessionAnswersWorkerQuestions = vi.fn(async () => ({ ok: true }));
         await executeSessionAction({
-            actionId: SESSION_ACTION_MAKE_ORCHESTRATOR_ID,
+            actionId: 'ui.session.coordinator.answers',
             target: createTarget(),
-            context: { operations: { setSessionRole } },
+            context: { operations: { setSessionAnswersWorkerQuestions } },
         });
-        expect(setSessionRole).toHaveBeenCalledWith('session_1', 'orchestrator', { serverId: 'server_1' });
-
-        await expect(executeSessionAction({
-            actionId: SESSION_ACTION_MAKE_ORCHESTRATOR_ID,
-            target: createTarget(),
-            context: { operations: { setSessionRole: async () => ({ ok: false, error: 'role_target_unavailable' }) } },
-        })).rejects.toBeInstanceOf(HappyError);
+        expect(setSessionAnswersWorkerQuestions).toHaveBeenCalledWith('session_1', false, { serverId: 'server_1' });
     });
 
     it('throws HappyError when a single-target operation reports failure', async () => {

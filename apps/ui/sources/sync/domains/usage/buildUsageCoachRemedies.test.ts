@@ -19,8 +19,21 @@ const session = createSessionFixture({ id: 'session', serverId: 'home', metadata
     machineId: 'machine', agent: 'codex', agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } } });
 
 describe('Coach repository remedy preparation', () => {
+    it('opens metadata and resolves an Agent target only for the finding\'s admitted Session', () => {
+        let unrelatedReads = 0;
+        const unrelated = Array.from({ length: 100 }, (_, index) => {
+            const value = { ...session, id: `unrelated-${index}` };
+            Object.defineProperty(value, 'metadata', { enumerable: true, get() { unrelatedReads++; return session.metadata; } });
+            return value;
+        });
+        const proposals = buildUsageCoachRemedies({ findings, composition: [composition], sessions: [...unrelated, session], serverId: 'home' });
+        expect(proposals).toMatchObject([{ remedy: { kind: 'prepared_session', input: { executionTarget: { machineId: 'machine' } } } }]);
+        expect(unrelatedReads, 'unrelated Sessions cannot repeat stored-metadata schema admission').toBe(0);
+        expect(buildUsageCoachRemedies({ findings: [], composition: [], sessions: unrelated, serverId: 'home' })).toEqual([]);
+        expect(unrelatedReads).toBe(0);
+    });
     it('proposes disabling only the current witnessed enabled binding with the actual catalog row revision', () => {
-        const usage = UsageMcpBindingUsageSchema.parse({ v: 1, evidenceId: 'mcp-window', sessionId: 'session', turnId: 'turn',
+        const usage = UsageMcpBindingUsageSchema.parse({ v: 2, evidenceId: 'mcp-window', sessionId: 'session', turnId: 'turn',
             observedAtMs: 150, window: { startMs: 100, endMs: 150 }, coverage: 'complete', bindings: [{ serverId: 'server',
                 bindingId: 'binding', serverRevision: 10, bindingRevision: 20, catalogRevision: 40, toolCallCount: 0, schemaBytes: null }] });
         const current: McpServerCatalogSnapshotV1 = { status: 'ready', authority: 'active', revision: 40, diagnostics: [],
@@ -42,9 +55,9 @@ describe('Coach repository remedy preparation', () => {
         expect(read({ ...current, authority: 'inactive' })).toEqual([]);
         expect(read({ ...current, status: 'partial' })).toEqual([]);
         expect(read({ ...current, catalog: { ...current.catalog, bindings: [{ ...current.catalog.bindings[0]!, updatedAt: 21 }] } })).toEqual([]);
-        expect(read({ ...current, revision: 41 })).toEqual([]);
+        expect(read({ ...current, revision: 41 })).toMatchObject([{ remedy: { expectedRevision: 41 } }]);
         const stale = { ...usage, evidenceId: 'old-window', observedAtMs: 140, window: { startMs: 100, endMs: 140 },
-            bindings: [{ ...usage.bindings[0]!, catalogRevision: 39, toolCallCount: 1 }] };
+            bindings: [{ ...usage.bindings[0]!, bindingRevision: 19, catalogRevision: 39, toolCallCount: 1 }] };
         const readWindows = (mcpUsage: typeof usage[]) => buildUsageCoachRemedies({
             findings: evaluateUsageCoach({ queryKey: 'q', period: { startMs: 100, endMs: 200 }, asOfMs: 200,
                 currentness: 'current', detail: { coverage: 'partial', mcpUsage } }).findings,

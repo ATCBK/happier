@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, type RenderScreenResult } from '@/dev/testkit';
@@ -123,6 +124,32 @@ describe('VoiceGlance', () => {
         expect(voice.onToggleMute).toHaveBeenCalledTimes(1);
     });
 
+    it('keeps Mute named and pressable, icon-only only where the measured row is too narrow for labelled pills', async () => {
+        const voice = attempt();
+        const mutedLabel = t('voicePresence.mute');
+        const measure = (width: number) => act(async () => {
+            screen?.findByTestId('voice-glance-controls')?.props.onLayout({ nativeEvent: { layout: { width, height: 26 } } });
+        });
+        screen = await renderScreen(<VoiceGlance model={surface(voice, { canBargeIn: false })} presentation="companion" />);
+        // The Companion assumes its narrow column before it has been measured.
+        expect(screen.getTextContent()).not.toContain(mutedLabel);
+        expect(screen.findByTestId('voice-glance-mute')?.props.accessibilityLabel).toBeTruthy();
+        expect(screen.getTextContent()).toContain(t('voicePresence.end'));
+        screen.pressByTestId('voice-glance-mute');
+        expect(voice.onToggleMute).toHaveBeenCalledTimes(1);
+        // The same row at phone width has room for the labelled pill; narrowed again, it steps back down.
+        await measure(282);
+        expect(screen.getTextContent()).toContain(mutedLabel);
+        await measure(232);
+        expect(screen.getTextContent()).not.toContain(mutedLabel);
+        await screen.unmount();
+
+        screen = await renderScreen(<VoiceGlance model={surface(voice, { canBargeIn: false })} presentation="popover" />);
+        expect(screen.getTextContent()).toContain(mutedLabel);
+        await measure(232);
+        expect(screen.getTextContent()).not.toContain(mutedLabel);
+    });
+
     it('offers the admitted recovery in Mute’s place while End stays reachable', async () => {
         const voice = attempt({ reconnecting: true });
         screen = await renderScreen(<VoiceGlance model={surface(voice, { canBargeIn: false })} presentation="popover" />);
@@ -132,6 +159,18 @@ describe('VoiceGlance', () => {
         expect(voice.onRecover).toHaveBeenCalledTimes(1);
         screen.pressByTestId('voice-glance-end');
         expect(voice.onToggle).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(['companion', 'popover', 'sheet'] as const)('submits admitted buffered input separately from Mute and End in %s', async (presentation) => {
+        const voice = { ...attempt(), canCommitInput: true, commitInputLabel: t('common.send'), onCommitInput: vi.fn(), muted: true };
+        screen = await renderScreen(<VoiceGlance model={surface(voice, { canBargeIn: false })} presentation={presentation} />);
+        screen.pressByTestId('voice-glance-send');
+        expect(voice.onCommitInput).toHaveBeenCalledTimes(1);
+        expect(voice.onToggleMute).not.toHaveBeenCalled();
+        expect(voice.onToggle).not.toHaveBeenCalled();
+        await screen.unmount();
+        screen = await renderScreen(<VoiceGlance model={surface({ ...voice, canCommitInput: false }, { canBargeIn: false })} presentation={presentation} />);
+        expect(screen.findByTestId('voice-glance-send')).toBeNull();
     });
 
     it('keeps delegated work on its own line rather than as the status caption', async () => {

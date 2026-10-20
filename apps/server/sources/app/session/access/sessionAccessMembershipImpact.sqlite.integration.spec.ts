@@ -40,7 +40,7 @@ describe("Membership Session access effects (SQLite integration)", () => {
     it("preserves a readable draft and responsibility on role downgrade, then clears them after final Group loss", async () => {
         const f = await fixture();
         await inTx(async tx => {
-            const impacts = await captureSessionAccessMembershipImpactsInTx(tx, { accountIds: [f.member.id], changes: [{ kind: "teamRole", teamId: f.team.id }], origin: "relationship_change" });
+            const impacts = await captureSessionAccessMembershipImpactsInTx(tx, { accountIds: [f.member.id], changes: [{ kind: "teamRole", teamId: f.team.id }] });
             await tx.teamMembership.update({ where: { id: f.membership.id }, data: { role: "guest" } });
             await applySessionAccessMembershipImpactsInTx(tx, { impacts: impacts.values() });
         });
@@ -50,7 +50,7 @@ describe("Membership Session access effects (SQLite integration)", () => {
         expect(await db.accountChange.count({ where: { entityId: f.session.id, kind: "share" } })).toBe(0);
 
         await inTx(async tx => {
-            const impacts = await captureSessionAccessMembershipImpactsInTx(tx, { accountIds: [f.member.id], changes: [{ kind: "teamGroupMembership", teamId: f.team.id, teamGroupIds: [f.group.id] }], origin: "relationship_change" });
+            const impacts = await captureSessionAccessMembershipImpactsInTx(tx, { accountIds: [f.member.id], changes: [{ kind: "teamGroupMembership", teamId: f.team.id, teamGroupIds: [f.group.id] }] });
             await tx.teamGroupMembership.deleteMany({ where: { teamGroupId: f.group.id, teamMembershipId: f.membership.id } });
             await applySessionAccessMembershipImpactsInTx(tx, { impacts: impacts.values() });
         });
@@ -63,7 +63,7 @@ describe("Membership Session access effects (SQLite integration)", () => {
         const f = await fixture();
         await db.sessionShare.create({ data: { sessionId: f.session.id, sharedByUserId: f.owner.id, sharedWithUserId: f.member.id, accessLevel: "admin" } });
         await inTx(async tx => {
-            const impacts = await captureSessionAccessMembershipImpactsInTx(tx, { accountIds: [f.member.id], changes: [{ kind: "teamMembership", teamId: f.team.id }], origin: "relationship_change" });
+            const impacts = await captureSessionAccessMembershipImpactsInTx(tx, { accountIds: [f.member.id], changes: [{ kind: "teamMembership", teamId: f.team.id }] });
             await tx.teamMembership.delete({ where: { id: f.membership.id } });
             await applySessionAccessMembershipImpactsInTx(tx, { impacts: impacts.values() });
         });
@@ -74,19 +74,22 @@ describe("Membership Session access effects (SQLite integration)", () => {
         expect(await db.userKVStore.findUnique({ where: { accountId_key: { accountId: f.member.id, key: f.key } }, select: { value: true } })).toEqual({ value: new Uint8Array([1]) });
     });
 
-    it("applies a weaker applicable Group opt-in once on access gain and preserves explicit unfollow", async () => {
+    it("restores Group access without enrolling Follow and preserves explicit unfollow", async () => {
         const f = await fixture();
         await db.account.update({ where: { id: f.member.id }, data: { sessionAutoFollowTeam: false, sessionAutoFollowGroup: true } });
         await db.teamMembership.update({ where: { id: f.membership.id }, data: { status: "suspended" } });
         const reactivate = () => inTx(async tx => {
-            const impacts = await captureSessionAccessMembershipImpactsInTx(tx, { accountIds: [f.member.id], changes: [{ kind: "teamMembership", teamId: f.team.id }], origin: "relationship_change" });
+            const impacts = await captureSessionAccessMembershipImpactsInTx(tx, { accountIds: [f.member.id], changes: [{ kind: "teamMembership", teamId: f.team.id }] });
             await tx.teamMembership.update({ where: { id: f.membership.id }, data: { status: "active" } });
             await applySessionAccessMembershipImpactsInTx(tx, { impacts: impacts.values() });
         });
         await reactivate();
         const where = { accountId_sessionId: { accountId: f.member.id, sessionId: f.session.id } };
-        expect(await db.accountSessionFollow.findUnique({ where })).toMatchObject({ following: true, notificationLevel: "important" });
-        await db.accountSessionFollow.update({ where, data: { following: false, notificationLevel: "none" } });
+        expect(await db.accountSessionFollow.findUnique({ where })).toBeNull();
+        expect(await db.accountSessionReadState.findUnique({ where })).toBeNull();
+        await db.accountSessionFollow.create({ data: {
+            accountId: f.member.id, sessionId: f.session.id, following: false, notificationLevel: "none",
+        } });
         await db.teamMembership.update({ where: { id: f.membership.id }, data: { status: "suspended" } });
         await reactivate();
         expect(await db.accountSessionFollow.findUnique({ where })).toMatchObject({ following: false, notificationLevel: "none" });
@@ -95,7 +98,7 @@ describe("Membership Session access effects (SQLite integration)", () => {
     it("rolls back access effects with the native mutation", async () => {
         const f = await fixture();
         await expect(inTx(async tx => {
-            const impacts = await captureSessionAccessMembershipImpactsInTx(tx, { accountIds: [f.member.id], changes: [{ kind: "teamMembership", teamId: f.team.id }], origin: "relationship_change" });
+            const impacts = await captureSessionAccessMembershipImpactsInTx(tx, { accountIds: [f.member.id], changes: [{ kind: "teamMembership", teamId: f.team.id }] });
             await tx.teamMembership.delete({ where: { id: f.membership.id } });
             await applySessionAccessMembershipImpactsInTx(tx, { impacts: impacts.values() });
             throw new Error("native transition aborted");

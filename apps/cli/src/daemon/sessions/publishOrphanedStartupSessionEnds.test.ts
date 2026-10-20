@@ -330,6 +330,70 @@ describe('publishOrphanedStartupSessionEnds', () => {
     expect(removeSessionMarkerFn).toHaveBeenCalledWith(6485);
   });
 
+  it.each(['not_found', 'archived'] as const)(
+    'releases orphan evidence when terminal capture definitively reports %s',
+    async reason => {
+      const enqueueDaemonTerminalExactTurnEnd = vi.fn(async () => undefined);
+      const finalizeMachineSessionTerminal = vi.fn(async () => ({
+        v: 1 as const,
+        status: 'closed' as const,
+        sessionId: 'sess-definitively-gone',
+      }));
+      const retireTerminalControlServiceability = vi.fn(async () => undefined);
+      const removeSessionMarkerFn = vi.fn(async () => undefined);
+
+      await expect(publishOrphanedStartupSessionEnds({
+        apiMachine: {
+          enqueueDaemonTerminalExactTurnEnd,
+          captureMachineSessionTerminal: vi.fn(async () => ({
+            v: 1 as const,
+            status: 'rejected' as const,
+            sessionId: 'sess-definitively-gone',
+            reason,
+          })),
+          finalizeMachineSessionTerminal,
+        },
+        orphanedDeadDaemonSessions: [{
+          sessionId: 'sess-definitively-gone',
+          pid: 6489,
+          activeTurnId: 'turn-no-longer-addressable',
+        }],
+        retireTerminalControlServiceability,
+        removeSessionMarkerFn,
+      })).resolves.toEqual([]);
+
+      expect(enqueueDaemonTerminalExactTurnEnd).not.toHaveBeenCalled();
+      expect(finalizeMachineSessionTerminal).not.toHaveBeenCalled();
+      expect(retireTerminalControlServiceability).not.toHaveBeenCalled();
+      expect(removeSessionMarkerFn).toHaveBeenCalledWith(6489);
+    },
+  );
+
+  it.each(['unauthorized', 'internal_error'] as const)(
+    'retains orphan evidence when terminal capture is inconclusive: %s',
+    async reason => {
+      const removeSessionMarkerFn = vi.fn(async () => undefined);
+      const orphan = { sessionId: 'sess-unsettled', pid: 6489 };
+
+      await expect(publishOrphanedStartupSessionEnds({
+        apiMachine: {
+          enqueueDaemonTerminalExactTurnEnd: vi.fn(async () => undefined),
+          captureMachineSessionTerminal: vi.fn(async () => ({
+            v: 1 as const,
+            status: 'rejected' as const,
+            sessionId: orphan.sessionId,
+            reason,
+          })),
+          finalizeMachineSessionTerminal: vi.fn(),
+        },
+        orphanedDeadDaemonSessions: [orphan],
+        removeSessionMarkerFn,
+      })).resolves.toEqual([orphan]);
+
+      expect(removeSessionMarkerFn).not.toHaveBeenCalled();
+    },
+  );
+
   it('does not serialize later orphan recovery behind an unsupported capture', async () => {
     let rejectFirst!: (error: Error) => void;
     const firstCapture = new Promise<never>((_resolve, reject) => { rejectFirst = reject; });

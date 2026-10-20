@@ -2,6 +2,7 @@ import { readSessionViewerAttentionSignature } from '@/sync/domains/session/read
 import type { AccountSettings } from '@happier-dev/protocol';
 
 import { buildActivityOverviewSummaryFromSource } from '@/activity/source/buildActivityOverviewFromSource';
+import { createActivityAttentionStoreSourceSelector } from '@/activity/source/createActivityAttentionStoreSourceSelector';
 import type { ActivityAttentionSource } from '@/activity/source/activityAttentionSourceTypes';
 import type { LocalSettings } from '@/sync/domains/settings/localSettings';
 import { localSettingsParse } from '@/sync/domains/settings/localSettings';
@@ -27,8 +28,7 @@ import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { readExternalSessionLink } from '@/sync/domains/session/external/readExternalSessionLink';
 import type { ActivityAttentionDeliveryEventKind } from '@/activity/delivery/activityAttentionDeliveryPlanTypes';
-import { resolveActivityAttentionDeliveryPlan } from '@/activity/delivery/resolveActivityAttentionDeliveryPlan';
-import { AttentionDeviceOverridesV1Schema } from '@/sync/domains/settings/attentionDeviceOverridesV1';
+import { readNextActivityAttentionDeliveryBoundaryMs, resolveActivityAttentionDeliveryPlan } from '@/activity/delivery/resolveActivityAttentionDeliveryPlan';
 import type { StorageState } from '@/sync/store/types';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 
@@ -40,6 +40,7 @@ import {
 } from '../source/recordIteration';
 
 export type LocalActivityBadgeSnapshot = Readonly<{
+    nextRefreshAtMs: number | null;
     channelDisabled: boolean;
     /**
      * Whether any Home's exact Account badge policy is known yet.
@@ -77,6 +78,7 @@ export type LocalActivityBadgeSnapshotSelectorParams = Readonly<{
     personalSessionListCoverageComplete?: ActivityAttentionSource['personalSessionListCoverageComplete'];
     personalSessionListMembershipByServerId?: Readonly<Record<string, readonly string[]>>;
     personalSessionListQueryStatesByServerId?: ActivityAttentionSource['personalSessionListQueryStatesByServerId'];
+    personalFollowRulesByServerId?: ActivityAttentionSource['personalFollowRulesByServerId'];
 }>;
 
 type SignatureCacheEntry<T> = Readonly<{
@@ -425,9 +427,12 @@ function buildActivitySourceFromState(
         | 'personalSessionListCoverageComplete'
         | 'personalSessionListMembershipByServerId'
         | 'personalSessionListQueryStatesByServerId'
+        | 'personalFollowRulesByServerId'
     >,
+    ruleSource?: Partial<ActivityAttentionSource>,
 ): ActivityAttentionSource {
     return {
+        ...ruleSource,
         isDataReady: state.isDataReady,
         sessionsById: state.sessions,
         sessionListRowsByServerId: state.sessionListRowsByServerId,
@@ -489,10 +494,10 @@ function resolveBadgeHomeModel(
 
 function resolveBadgeModel(
     params: LocalActivityBadgeSnapshotSelectorParams,
+    parsedLocalSettings: ReturnType<typeof localSettingsParse>,
     now: Date,
     activeServerId: string | null,
 ) {
-    const parsedLocalSettings = localSettingsParse(params.localSettings);
     const homeServerIds = Object.keys(params.accountSettingsByServerId).sort();
     const homeModels = new Map<string, BadgeHomeModel>(homeServerIds.map((serverId) => [
         serverId,
@@ -507,7 +512,7 @@ function resolveBadgeModel(
     const policyReady = homeModels.size > 0;
     const channelDisabled = policyReady
         && [...homeModels.values()].every((model) => model.channelDisabled);
-    const deviceOverrides = AttentionDeviceOverridesV1Schema.parse(parsedLocalSettings.attentionDeviceOverridesV1);
+    const deviceOverrides = parsedLocalSettings.attentionDeviceOverridesV1;
 
     return {
         channelDisabled,
@@ -586,6 +591,13 @@ function isSameBadgeSnapshotSourceIdentity(
 export function createLocalActivityBadgeSnapshotSelector(
     params: LocalActivityBadgeSnapshotSelectorParams,
 ): (state: StorageState) => LocalActivityBadgeSnapshot {
+    const parsedLocalSettings = localSettingsParse(params.localSettings);
+    const includesRuleFacts = Object.values(params.personalFollowRulesByServerId ?? {}).some(snapshot =>
+        snapshot.status === 'ready' && snapshot.rules.some(rule => rule.receiver.kind === 'account' && rule.definition.enabled));
+    const selectRuleSource = includesRuleFacts ? createActivityAttentionStoreSourceSelector(
+        params.personalSessionListMembershipByServerId, { includeSessionMessages: false, includeFollowRuleFacts: true },
+    ) : null;
+    let previousRuleSource: ReturnType<NonNullable<typeof selectRuleSource>> | null = null;
     const sessionSignatureCache = new Map<string, SignatureCacheEntry<Session>>();
     const renderableSignatureCache = new Map<string, SignatureCacheEntry<SessionListRenderableSession>>();
     const sessionMessagesSignatureCache = new Map<string, SignatureCacheEntry<StorageState['sessionMessages'][string]>>();
@@ -595,28 +607,47 @@ export function createLocalActivityBadgeSnapshotSelector(
     let previousDeltaRevision: number | null = null;
     let previousNowMs: number | null = null;
     let previousSourceIdentity: BadgeSnapshotSourceIdentity | null = null;
+    let nextPolicyBoundaryMs: number | null = null;
+    let policyBoundaryReadAtMs: number | null = null;
 
     return (state) => {
+        const ruleSource = selectRuleSource?.(state) ?? null;
+        const ruleSourceChanged = ruleSource !== previousRuleSource;
+        previousRuleSource = ruleSource;
+        const nowMs = Date.now();
+        const clockMovedBackwards = previousNowMs !== null && nowMs < previousNowMs;
+        const boundaryReached = previousSnapshot?.nextRefreshAtMs != null && nowMs >= previousSnapshot.nextRefreshAtMs;
         const personalSessionListMembershipByServerId = params.personalSessionListMembershipByServerId ?? {};
         const renderableDelta = state.sessionListRenderableDelta;
         const profileScopeChanged = previousSourceIdentity?.profileScope?.serverId !== state.profileScope?.serverId
             || previousSourceIdentity?.profileScope?.accountId !== state.profileScope?.accountId;
-        // A store commit that moved none of this badge's sources cannot change its snapshot, so it
-        // must cost O(1) rather than the full O(sessions) signature pass below. Every store slice the
-        // derivation reads is listed here; narrowing the set would let a real change be skipped.
+        // Source identity is sufficient only until the retained policy/freshness
+        // deadline. Unrelated commits before it still cost O(1), even as time moves.
         if (
             previousSnapshot !== null
             && previousSourceIdentity !== null
+            && !clockMovedBackwards
+            && !boundaryReached
+            && !ruleSourceChanged
             && isSameBadgeSnapshotSourceIdentity(previousSourceIdentity, state)
         ) {
             return previousSnapshot;
         }
         previousSourceIdentity = readBadgeSnapshotSourceIdentity(state);
 
-        const now = new Date();
-        const nowMs = now.getTime();
+        const now = new Date(nowMs);
+        if (policyBoundaryReadAtMs === null || nowMs < policyBoundaryReadAtMs
+            || (nextPolicyBoundaryMs !== null && nowMs >= nextPolicyBoundaryMs)) {
+            nextPolicyBoundaryMs = null;
+            for (const accountSettings of Object.values(params.accountSettingsByServerId)) {
+                const boundary = readNextActivityAttentionDeliveryBoundaryMs({ accountSettings, localSettings: parsedLocalSettings, now });
+                if (boundary !== null && (nextPolicyBoundaryMs === null || boundary < nextPolicyBoundaryMs)) nextPolicyBoundaryMs = boundary;
+            }
+            policyBoundaryReadAtMs = nowMs;
+        }
         if (
             previousSnapshot
+            && !ruleSourceChanged
             && !profileScopeChanged
             && renderableDelta
             && previousDeltaRevision !== null
@@ -630,7 +661,7 @@ export function createLocalActivityBadgeSnapshotSelector(
             previousDeltaRevision = renderableDelta.revision;
             return previousSnapshot;
         }
-        const badgeModel = resolveBadgeModel(params, now, state.profileScope?.serverId ?? null);
+        const badgeModel = resolveBadgeModel(params, parsedLocalSettings, now, state.profileScope?.serverId ?? null);
         const localSourceAvailable = hasLocalActivitySource(state, personalSessionListMembershipByServerId)
             || params.friendRequestCount > 0
             || params.hasNonNumericInboxAttention;
@@ -677,7 +708,7 @@ export function createLocalActivityBadgeSnapshotSelector(
                 ),
             ]);
 
-        if (previousSignature === snapshotSignature && previousSnapshot) {
+        if (previousSignature === snapshotSignature && previousSnapshot && !boundaryReached && !clockMovedBackwards && !ruleSourceChanged) {
             previousDeltaRevision = renderableDelta?.revision ?? null;
             previousNowMs = nowMs;
             return previousSnapshot;
@@ -688,6 +719,7 @@ export function createLocalActivityBadgeSnapshotSelector(
         previousNowMs = nowMs;
         if (badgeModel.channelDisabled || !badgeModel.policyReady) {
             previousSnapshot = {
+                nextRefreshAtMs: nextPolicyBoundaryMs,
                 channelDisabled: badgeModel.channelDisabled,
                 policyReady: badgeModel.policyReady,
                 hasLocalActivitySource: localSourceAvailable,
@@ -703,7 +735,8 @@ export function createLocalActivityBadgeSnapshotSelector(
                 personalSessionListCoverageComplete: params.personalSessionListCoverageComplete,
                 personalSessionListMembershipByServerId,
                 personalSessionListQueryStatesByServerId: params.personalSessionListQueryStatesByServerId,
-            }),
+                personalFollowRulesByServerId: params.personalFollowRulesByServerId,
+            }, ruleSource ?? undefined),
             nowMs,
             resolveSessionOptionsForServerId: badgeModel.resolveSessionOptionsForServerId,
             includeHydratedMessages: true,
@@ -711,6 +744,11 @@ export function createLocalActivityBadgeSnapshotSelector(
         });
 
         previousSnapshot = {
+            nextRefreshAtMs: summary.nextAttentionBoundaryMs === null
+                ? nextPolicyBoundaryMs
+                : nextPolicyBoundaryMs === null
+                    ? summary.nextAttentionBoundaryMs
+                    : Math.min(summary.nextAttentionBoundaryMs, nextPolicyBoundaryMs),
             channelDisabled: false,
             policyReady: true,
             hasLocalActivitySource: localSourceAvailable,

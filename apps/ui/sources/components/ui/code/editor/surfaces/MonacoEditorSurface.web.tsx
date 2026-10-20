@@ -8,7 +8,7 @@ import type { CodeEditorFindHandle, CodeEditorFindSnapshot, CodeEditorHandle } f
 import type { CodeEditorFindSet } from '../bridge/codeEditorFindBridge';
 import type { editor as MonacoEditorApi } from 'monaco-editor';
 import { TextInput } from '@/components/ui/text/Text';
-import { useLocalSetting } from '@/sync/store/hooks';
+import { useLocalSetting } from '@/sync/store/settingsReadHooks';
 import { resolveCodeEditorFontMetrics } from '../codeEditorFontMetrics';
 import { buildMonacoEditorThemeData, resolveCodeEditorTheme } from '../editorTheme';
 import type { CodeEditorTheme } from '../editorTheme';

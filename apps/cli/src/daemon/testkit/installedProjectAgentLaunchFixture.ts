@@ -1,0 +1,144 @@
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import axios from 'axios';
+import { onTestFinished, vi } from 'vitest';
+import { ProjectTrustMutationRequestV1Schema, ProjectTrustReadRequestV1Schema, type ProjectTrustContentV1 } from '@happier-dev/protocol/workspaces/projectSetup/projectTrustRowV1';
+import { ApiMachineClient } from '@/api/apiMachine';
+import { createDaemonAdmissionDrain } from '@/daemon/lifecycle/admissionDrain';
+import { createProjectSessionRuntimeFixture } from '@/daemon/testkit/projectSessionRuntimeFixture';
+import { createProjectWorkerAdmission } from '@/workspaces/execution/projectWorkerAdmission';
+import { projectRuntimeAccountRowsInput } from '@/workspaces/projectAccountRows';
+import { prepareProjectAgentLaunch } from '@/workspaces/projectSetup/projectAgentLaunch';
+import { createProjectSetupTrustClient } from '@/workspaces/projectSetup/projectSetupTrust';
+import type { ProjectNativeEnvironmentIoForHost } from '@/plugins/runtime/invocation/services/exec';
+import { createInstalledProjectFiniteRuntime } from '@/daemon/startup/createInstalledProjectFiniteRuntime';
+import { readStoredCredentialsForServerId, sameStoredCredentials, writeCredentialsTokenOnly, writeStoredCredentialsForServerId, type StoredCredentials } from '@/persistence';
+import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
+import { verifyMachineInstallationProof, RequesterSessionCurrentnessPurposeV1Schema } from '@happier-dev/protocol/machines/identity/installationIdentity';
+import { SocketRpcMachineAdmissionContextV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
+import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { setActionApprovalOverride } from '@happier-dev/protocol/actions/actionSettings';
+import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
+import { EXTERNAL_ACTION_EFFECT_ACTION_HEADER } from '@happier-dev/protocol/actions/externalActionApi';
+
+/** Installed Project/Account/Trust and native IO composition for cold launch seam tests. */
+export async function createInstalledProjectAgentLaunchFixture(options: Readonly<{
+  accountActionCredentials?: StoredCredentials;
+}> = {}) {
+  const f = await createProjectSessionRuntimeFixture(options.accountActionCredentials
+    ? { serverId: 'session-home', serverUrl: 'https://session-home.test',
+      // Account decision ingress may proceed directly over RPC. Original
+      // CLI Run ingress remains unwaived and must retain setup review.
+      accountSettings: { actionsSettingsV1: setActionApprovalOverride({ settings: { v: 1, actions: {} },
+        actionId: 'projects.prepare', surface: 'rpc', approvalRequired: false }) } } : {});
+  let accountActionCredentials: StoredCredentials | undefined;
+  let accountActionSettings: Awaited<ReturnType<typeof bootstrapAccountSettingsContext>> | undefined;
+  if (options.accountActionCredentials) {
+    await writeCredentialsTokenOnly(options.accountActionCredentials);
+    await writeStoredCredentialsForServerId('session-home', options.accountActionCredentials);
+    accountActionCredentials = await readStoredCredentialsForServerId('session-home') ?? undefined;
+    if (!accountActionCredentials) throw new Error('Missing canonical Account Action credentials');
+    // Account decisions have their own admitted policy lifetime; retiring a
+    // Session requester must not withdraw this separately authenticated ingress.
+    accountActionSettings = await bootstrapAccountSettingsContext({ credentials: accountActionCredentials,
+      mode: 'blocking', refresh: 'force', publication: 'invocation', expectedAccountEncryptionMode: 'plain' });
+  }
+  const cwd = join(f.directory, 'accepted-project');
+  await mkdir(join(cwd, '.happier'), { recursive: true });
+  await writeFile(join(cwd, '.happier/project.json'), JSON.stringify({ version: 1,
+    environment: { kind: 'toolchain', tool: 'mise', configPath: 'mise.toml' } }));
+  await writeFile(join(cwd, 'mise.toml'), '[env]\nNATIVE = "active"\n');
+  let trust: ProjectTrustContentV1 | null = null;
+  let trustWrites = 0;
+  const accountReads: unknown[] = [];
+  vi.spyOn(axios, 'post').mockImplementation(async (url, body, options) => {
+    if (String(url).endsWith('/v1/machines/machine/admission/verify')) {
+      if (!body || typeof body !== 'object' || !('context' in body) || !('purpose' in body) || !('proof' in body)) throw new Error('Missing requester admission proof');
+      // Home HTTP is the boundary; custody uses the real signer and proof verifier.
+      const valid = verifyMachineInstallationProof({ publicKey: f.installation.publicKey,
+        proof: body.proof as Parameters<typeof verifyMachineInstallationProof>[0]['proof'], payload: {
+          version: 1, accountId: 'requester', machineId: 'machine', installationId: f.installation.installationId,
+          rpcAdmission: { context: SocketRpcMachineAdmissionContextV1Schema.parse(body.context),
+            purpose: RequesterSessionCurrentnessPurposeV1Schema.parse(body.purpose) } } });
+      return { status: valid && f.isHomeCurrent() ? 200 : 403, data: valid && f.isHomeCurrent() ? { v: 1, ok: true } : { error: 'access_denied' } };
+    }
+    accountReads.push(options?.headers?.Authorization);
+    if (String(url).endsWith('/project-trust/read')) {
+      if (String(options?.headers?.[EXTERNAL_ACTION_EFFECT_ACTION_HEADER] ?? '').startsWith('execution.run.')) {
+        return { status: 403, data: { error: 'forbidden' } };
+      }
+      const project = ProjectTrustReadRequestV1Schema.parse(body).project;
+      return { status: 200, data: trust?.t === 'plain' && trust.v.project.projectId === project.projectId
+        ? { status: 'present', revision: 1, content: trust } : { status: 'absent' } };
+    }
+    if (String(url).endsWith('/project-trust/mutate')) {
+      trustWrites++;
+      trust = ProjectTrustMutationRequestV1Schema.parse(body).content;
+      return { status: 200, data: { status: 'updated', revision: 1, cursor: 1 } };
+    }
+    if (String(url).endsWith('/project-rows/list')) {
+      // Account topology is read with the admitted requester's bearer. A signed
+      // execution root alone does not authorize this Account-private endpoint.
+      if (options?.headers?.Authorization !== `Bearer ${f.bootstrap.credentials.token}`
+        && (!accountActionCredentials || options?.headers?.Authorization !== `Bearer ${accountActionCredentials.token}`)) {
+        return { status: 403, data: { error: 'forbidden' } };
+      }
+      const key = { kind: 'workspace-ref', serverId: 'session-home', id: 'workspace' };
+      return { status: 200, data: { status: 'listed', coverage: 'complete', rows: [{ key, revision: 1,
+        content: { t: 'plain', v: { key, value: { id: 'workspace', serverId: 'session-home', machineId: 'machine',
+          rootPath: cwd, projectKey: 'project', createdAtMs: 1 } } } }] } };
+    }
+    throw new Error(`Unexpected Home write: ${new URL(String(url)).pathname}`);
+  });
+  let nativeEffects = 0;
+  // Installed-tool discovery and evaluation are OS boundaries; this fixture
+  // does not characterize a real Mise distribution. Account and launch owners stay real.
+  const resolveTool = async () => ({ executablePath: '/tools/mise', version: '2026.10.4' });
+  const environmentIo: ProjectNativeEnvironmentIoForHost = {
+    resolveTool,
+    async run() { nativeEffects++; return { exitCode: 0, stdout: 'PATH=/native/bin\0NATIVE=active\0' }; },
+    createInvocation: () => environmentIo,
+  };
+  const admission = createProjectWorkerAdmission({ machineId: 'machine', admissionDrain: createDaemonAdmissionDrain(),
+    readPolicy: async () => ({ status: 'ready', policy: { accepting: true, runAtMost: 1 }, source: 'default', metadataVersion: 1 }) });
+  const finite = createInstalledProjectFiniteRuntime({ api: { getMachine: async () => null },
+    credentials: accountActionCredentials ?? { token: 'custodian-token', encryption: null },
+    externalActionAccountId: options.accountActionCredentials ? 'requester' : 'custodian',
+    finiteServerId: 'session-home', finiteServerHttpBaseUrl: 'https://session-home.test', registeredMachineId: 'machine',
+    admission,
+    nativeIo: { commandIo: { resolveTool }, environmentIo },
+    successHomeDir: join(f.directory, 'success'), isCurrent: async () => !accountActionCredentials
+      || sameStoredCredentials(accountActionCredentials, await readStoredCredentialsForServerId('session-home')),
+    prepareBetween: async () => { throw new Error('No worker routing expected'); }, resolveCurrentMachineExecutionOriginContext: async () => null });
+  const machine = new ApiMachineClient(accountActionCredentials?.token ?? 'custodian-token', { id: 'machine', encryptionMode: 'plain',
+    dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 },
+    undefined, { createProjectFiniteRuntime: finite });
+  machine.setRPCHandlers({ spawnSession: async () => { throw new Error('No replacement Session expected'); },
+    stopSession: async () => true, requestShutdown() {} }, options.accountActionCredentials ? {
+      actionsSettingsProvider: createActionSettingsProvider({ allowEnvironmentOverride: false,
+        scopeKey: accountActionSettings?.scopeKey,
+        getAccountSettings: () => accountActionSettings?.settings ?? null }),
+    } : undefined);
+  onTestFinished(() => machine.shutdown());
+  const signal: AbortSignal = new AbortController().signal;
+  const runtime = await machine.resolveProjectFiniteRuntime({ signal, requesterSessionBootstrap: f.bootstrap });
+  if (!runtime) throw new Error('Missing installed requester Project runtime');
+  const reviewed = await prepareProjectAgentLaunch({ cwd, machineId: 'machine', serverId: 'session-home', serverHttpBaseUrl: 'https://session-home.test',
+    account: projectRuntimeAccountRowsInput(runtime), nativeIo: runtime.nativeIo, successHomeDir: runtime.successHomeDir,
+    platform: { os: 'linux', arch: 'x64' }, signal });
+  if (reviewed.kind !== 'prepared') throw new Error(`Project review failed: ${JSON.stringify(reviewed)}`);
+  await createProjectSetupTrustClient({ credentials: f.bootstrap.credentials, serverHttpBaseUrl: 'https://session-home.test' })
+    .approveReviewedEffect({ project: reviewed.outcome.plan.project, expectedRevision: 'absent', authority: 'present_user',
+      reviewedEffectDigest: reviewed.outcome.plan.reviewedEffectDigest, currentEffectDigest: reviewed.outcome.plan.reviewedEffectDigest, approvedAtMs: 1 });
+  return { f, cwd, machine, finite, signal, admission, installedCredentials: accountActionCredentials,
+    nativeEffects: () => nativeEffects, accountReads: () => [...accountReads],
+    trustWrites: () => trustWrites,
+    async requireSetup(command = 'printf setup') {
+      trust = null;
+      await writeFile(join(cwd, '.happier/project.json'), JSON.stringify({ version: 1,
+        environment: { kind: 'toolchain', tool: 'mise', configPath: 'mise.toml' },
+        workspace: { setup: [{ kind: 'command', command }] } }));
+    },
+  };
+}
+

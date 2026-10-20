@@ -85,7 +85,7 @@ The UI uses the same effects an agent or CLI can request:
 | Task | Action |
 | --- | --- |
 | List sessions under a lead | `session.list` with `underSessionId` |
-| Put under, detach or reparent | `session.reports_to.set` |
+| Put under, detach or reparent | `session.manager.set` |
 | Start conversations and runs | `session.spawn_new`, `execution.run.start`, `subagents.delegate.start` |
 | Review, Plan or Second opinion | `review.start`, `subagents.plan.start`, `execution.run.start` with `roleId: "second_opinion"` |
 | Change the selected role or session choices | `session.role.set`, `session.roles.override.set` / `.clear`, `session.roles.add` / `.remove` |

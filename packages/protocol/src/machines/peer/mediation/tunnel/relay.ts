@@ -38,7 +38,7 @@ export const PeerTcpTunnelRelayEnvelopeV1Schema = lazyZodSchema(() => z
   })));
 export type PeerTcpTunnelRelayEnvelopeV1 = z.infer<typeof PeerTcpTunnelRelayEnvelopeV1Schema>;
 
-const Uint8ArrayPayloadSchema = lazyZodSchema(() => z.pipe(z.transform((value) => value instanceof ArrayBuffer ? new Uint8Array(value) : value), z.custom<Uint8Array>(
+const Uint8ArrayPayloadSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => value instanceof ArrayBuffer ? new Uint8Array(value) : value), z.custom<Uint8Array>(
     (value) => value instanceof Uint8Array,
     'Expected a binary tunnel frame payload',
   )));

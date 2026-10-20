@@ -17,6 +17,8 @@ import {
   createApiSessionSocketStub,
 } from '@/testkit/backends/apiSessionSocketHarness';
 import { SocketAckError } from '@/session/transport/shared/socketAck';
+import { createSessionProviderInputOutcomeBinding } from '@/agent/runtime/session/input/providerInputOutcome';
+import { PendingDeliveryBlockedReasonSchema } from '@happier-dev/protocol/sessions/messages/pendingDeliveryBlockedReason';
 import { PendingQueueAcceptedSettlementError } from './pendingQueueV2Transport';
 import {
   ApiSessionClient,
@@ -63,6 +65,7 @@ vi.mock('./connection/createSessionSocketTransport', () => ({
 vi.mock('@happier-dev/connection-supervisor', () => ({
   DEFAULT_MANAGED_CONNECTION_POLICY: {},
   createManagedConnectionSupervisor: (params: { createTransport: () => unknown; onConnected?: () => Promise<void> | void }) => ({
+    getState: () => ({ phase: 'online' }),
     start: async () => {
       params.createTransport();
       await params.onConnected?.();
@@ -137,6 +140,54 @@ describe('ApiSessionClient provider-input settlement', () => {
     blockDeliveryMock.mockReset();
     listDeliveryStatusesMock.mockReset();
     sendSessionMessageMock.mockReset();
+  });
+
+  it('preserves a claimed initial prompt as pre-effect custody when the host closes before native dispatch', async () => {
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    blockDeliveryMock.mockResolvedValue({ didUpdate: true });
+    const client = createTestApiSessionClient(ApiSessionClient, 'tok', createPlainSessionFixture({ id: 's1' }));
+    markMaterializedProviderInput(client, 'initial-prompt-before-capability-restart');
+    markMaterializedProviderInput(client, 'native-send-started-without-receipt');
+    client.markPendingProviderInputDispatched(['native-send-started-without-receipt']);
+    markMaterializedProviderInput(client, 'possibly-delivered');
+    await client.observeProviderInputSettlement({ kind: 'effect_may_have_occurred', localId: 'possibly-delivered',
+      userMessageSeq: null, issue: { code: 'native_send_outcome_unknown', severity: 'error' } });
+    blockDeliveryMock.mockClear();
+
+    client.prepareForClose();
+    expect(() => client.markPendingProviderInputDispatched(['initial-prompt-before-capability-restart']))
+      .toThrow('retired before native dispatch');
+    await client.close();
+
+    expect(blockDeliveryMock.mock.calls.map(([request]) => ({ localId: request.localId, reason: request.reason })))
+      .toEqual([{ localId: 'initial-prompt-before-capability-restart', reason: 'host_retired_before_dispatch' }]);
+    expect(resolveAcceptedMock).not.toHaveBeenCalled();
+  });
+
+  it('fences claimed inputs at the start of retirement so a slow runtime disposal cannot cross the effect boundary', async () => {
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    blockDeliveryMock.mockResolvedValue({ didUpdate: true });
+    const client = createTestApiSessionClient(ApiSessionClient, 'tok', createPlainSessionFixture({ id: 's1' }));
+    markMaterializedProviderInput(client, 'claimed-in-preparation');
+    markMaterializedProviderInput(client, 'already-dispatched');
+    client.markPendingProviderInputDispatched(['already-dispatched']);
+
+    // Planned replacement: the runner is signalled, then spends time disposing its native runtime
+    // before it closes the Session. The claim must be fenced and handed back at the signal.
+    client.retireUndispatchedProviderInput();
+    expect(() => client.markPendingProviderInputDispatched(['claimed-in-preparation']))
+      .toThrow('retired before native dispatch');
+    await vi.waitFor(() => expect(blockDeliveryMock).toHaveBeenCalledTimes(1));
+    expect(blockDeliveryMock.mock.calls.map(([request]) => ({ localId: request.localId, reason: request.reason })))
+      .toEqual([{ localId: 'claimed-in-preparation', reason: 'host_retired_before_dispatch' }]);
+
+    // Close later repeats neither the fence nor the hand-back.
+    client.prepareForClose();
+    await client.close();
+    expect(blockDeliveryMock).toHaveBeenCalledTimes(1);
+    expect(resolveAcceptedMock).not.toHaveBeenCalled();
   });
 
   it('branches on the exact protected admission result instead of a generic send code', async () => {
@@ -1185,8 +1236,15 @@ describe('ApiSessionClient provider-input settlement', () => {
       kind: 'accepted',
       localId,
       userMessageSeq: 9,
+      providerTurnId: 'native-target-turn',
+      providerDeliveryKind: 'followUp',
+      acceptedAtMs: 100,
     });
 
+    expect(resolveAcceptedExecutionRunMock).toHaveBeenCalledWith(expect.objectContaining({
+      recipient: { kind: 'execution_run', runId: 'run-a' }, sidechainId: 'sidechain-a', localId,
+      acceptedTurn: { kind: 'followUp', turnId: 'native-target-turn' },
+    }));
     expect(client.hasPendingProviderInput(localId)).toBe(false);
     expect((client as any).executionRunPendingCustody.has(localId)).toBe(false);
     binding.dispose();
@@ -1251,6 +1309,90 @@ describe('ApiSessionClient provider-input settlement', () => {
     expect(listDeliveryStatusesMock).not.toHaveBeenCalled();
 
     await client.close();
+  });
+
+  it('cancels a pending terminal refusal write through the existing Session close lifetime', async () => {
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    const client = createTestApiSessionClient(ApiSessionClient, 'tok', createPlainSessionFixture({ id: 's1' }));
+    let entered!: () => void;
+    const blockEntered = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void;
+    let writeSignal: AbortSignal | undefined;
+    blockDeliveryMock.mockImplementation((request: { signal?: AbortSignal }) => new Promise((_resolve, reject) => {
+      writeSignal = request.signal;
+      release = () => reject(new Error('Cancelled pending transport fixture'));
+      request.signal?.addEventListener('abort', release, { once: true });
+      entered();
+    }));
+    markMaterializedProviderInput(client, 'refusal-being-written');
+    const settlement = client.observeProviderInputSettlement({ kind: 'rejected_before_effect',
+      localId: 'refusal-being-written', userMessageSeq: null, reason: 'provider_rejected_before_acceptance',
+      diagnostic: { code: 'native_agent_session_mode_unavailable', severity: 'error' }, retryable: false });
+    try {
+      await blockEntered;
+      expect(writeSignal).toBeInstanceOf(AbortSignal);
+      await client.close();
+      expect(writeSignal?.aborted).toBe(true);
+      await settlement;
+    } finally {
+      release();
+      await settlement;
+      await client.close();
+    }
+  });
+
+  it.each([false, true])('durably blocks an exact startup-refused original across reconstruction (transient failure=%s)', async transientFailure => {
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    const localId = 'startup-refused-original';
+    const pendingState = { known: true as const, pendingCount: 1, pendingBlockedCount: 1, pendingVersion: 2 };
+    const blocked = new Map<string, ReturnType<typeof PendingDeliveryBlockedReasonSchema.parse>>();
+    // Home transport is the boundary. The real client, host normalizer and
+    // restart reader retain ownership of settlement and replay eligibility.
+    blockDeliveryMock.mockImplementation(async (request: { localId: string; reason: unknown }) => {
+      blocked.set(request.localId, PendingDeliveryBlockedReasonSchema.parse(request.reason));
+      return { pendingQueueState: pendingState };
+    });
+    if (transientFailure) blockDeliveryMock.mockRejectedValueOnce(new Error('Home temporarily unavailable'));
+    listDeliveryStatusesMock.mockImplementation(async () => [{ localId,
+      status: blocked.has(localId) ? 'blocked' : 'delivering',
+      deliveryStatus: blocked.has(localId)
+        ? { status: 'blocked', reason: blocked.get(localId) }
+        : { status: 'delivering' },
+    }]);
+    const client = createTestApiSessionClient(ApiSessionClient, 'tok', createPlainSessionFixture({ id: 's1' }));
+    try {
+      markMaterializedProviderInput(client, localId);
+      const binding = createSessionProviderInputOutcomeBinding({ getTarget: () => client });
+      const refusal = { type: 'input-rejected' as const, userMessageSeq: null, retryable: false,
+        diagnostic: { code: 'native_agent_session_mode_unavailable', severity: 'error' as const } };
+      binding.observeProviderInputOutcome({ ...refusal, localInputId: 'foreign-original' });
+      expect(blocked.size).toBe(0);
+      expect(client.hasPendingProviderInput(localId)).toBe(true);
+      binding.observeProviderInputOutcome({ ...refusal, localInputId: localId });
+      await client.flush();
+      if (transientFailure) {
+        expect(blocked.size).toBe(0);
+        expect(client.hasPendingProviderInput(localId)).toBe(true);
+        // A normal Pending wake rejoins the existing retained settlement owner;
+        // no second native outcome, local-id offer or independent retry is used.
+        await client.reconcilePendingProviderInputCustodyBeforeMaterialization();
+      }
+      expect(blocked.get(localId)).toBe('provider_rejected_before_acceptance');
+      expect(client.hasPendingProviderInput(localId)).toBe(false);
+      expect(resolveAcceptedMock).not.toHaveBeenCalled();
+    } finally { await client.close(); }
+    sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
+    const replacement = createTestApiSessionClient(ApiSessionClient, 'tok', createPlainSessionFixture({
+      id: 's1', pendingCount: 1, pendingBlockedCount: 1, pendingVersion: 2,
+    }));
+    try {
+      await expect(replacement.readDurableProviderInputAcceptanceV1(localId)).resolves.toBe('not_accepted');
+      await expect(replacement.materializeNextPendingMessageSafely()).resolves.toMatchObject({ type: 'no_pending' });
+      expect([...blocked.keys()]).toEqual([localId]);
+    } finally { await replacement.close(); }
   });
 
   it('routes normalized accepted, pre-effect, and ambiguous outcomes through the canonical Pending actions', async () => {
@@ -1569,15 +1711,18 @@ describe('ApiSessionClient provider-input settlement', () => {
     expect(client.getCommittedUserMessageSeq('accepted-local')).toBe(43);
     expect(resolveAcceptedMock.mock.calls[0][0].acceptedDelivery).toBeUndefined();
     expect(resolveAcceptedMock.mock.calls[1][0].acceptedDelivery).toBeUndefined();
-    expect(infoFileSpy).not.toHaveBeenCalled();
+    expect(infoFileSpy).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ localId: 'accepted-local', retryAfterMs: 1_250 }),
+    );
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it('records a final accepted-settlement failure in the default file log without terminal output', async () => {
+  it('records a permanent accepted-settlement conflict in the default file log without terminal output', async () => {
     const infoFileSpy = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
     const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {});
     resolveAcceptedMock.mockRejectedValueOnce(
-      new PendingQueueAcceptedSettlementError('internal', undefined, 'accepted-settlement-final'),
+      new PendingQueueAcceptedSettlementError('transcript-conflict', undefined, 'accepted-settlement-final'),
     );
     sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
     userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
@@ -1593,7 +1738,7 @@ describe('ApiSessionClient provider-input settlement', () => {
 
     expect(infoFileSpy).toHaveBeenCalledOnce();
     expect(infoFileSpy).toHaveBeenCalledWith(
-      '[pendingQueue] accepted provider-input settlement remains unresolved',
+      expect.any(String),
       expect.objectContaining({
         sessionId: 's1',
         localId,
@@ -1601,7 +1746,7 @@ describe('ApiSessionClient provider-input settlement', () => {
         attempt: 1,
         error: expect.objectContaining({
           code: 'pending_queue_accepted_settlement_failed',
-          settlementError: 'internal',
+          settlementError: 'transcript-conflict',
           correlationId: 'accepted-settlement-final',
         }),
       }),
@@ -1632,7 +1777,7 @@ describe('ApiSessionClient provider-input settlement', () => {
 
     expect(infoFileSpy).toHaveBeenCalledOnce();
     expect(infoFileSpy).toHaveBeenCalledWith(
-      '[pendingQueue] accepted provider-input settlement resolution crashed',
+      expect.any(String),
       expect.objectContaining({
         sessionId: 's1',
         localId,
@@ -1673,6 +1818,8 @@ describe('ApiSessionClient provider-input settlement', () => {
     await vi.waitFor(() => expect(resolveAcceptedMock).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(client.hasPendingProviderInput('accepted-first-local')).toBe(false));
     expect(client.getCommittedUserMessageSeq('accepted-first-local')).toBe(44);
+    expect(resolveAcceptedMock.mock.calls[0][0].acceptedTurn)
+      .toEqual({ kind: 'steer', turnId: 'turn-observed' });
     const acceptedDelivery = resolveAcceptedMock.mock.calls[0][0].acceptedDelivery;
     const facts = { v: 1, acceptedAtMs: 1234, delivery: { kind: 'steer', turnId: 'turn-observed' } };
     if (mode === 'plain') expect(acceptedDelivery).toEqual({ t: 'plain', v: facts });
@@ -1682,7 +1829,7 @@ describe('ApiSessionClient provider-input settlement', () => {
     }
   });
 
-  it('rejoins once after socket ACK response loss, then stops after a second failure and ignores later wakes', async () => {
+  it('retries repeated transient settlement failures without requiring an explicit wake', async () => {
     vi.useFakeTimers();
     const ackResponseLoss = new SocketAckError({
       code: 'socket_ack_timeout',
@@ -1691,12 +1838,15 @@ describe('ApiSessionClient provider-input settlement', () => {
     });
     resolveAcceptedMock
       .mockRejectedValueOnce(ackResponseLoss)
-      .mockRejectedValueOnce(new PendingQueueAcceptedSettlementError('transaction-unavailable', 1_250));
+      .mockRejectedValueOnce(new PendingQueueAcceptedSettlementError('transaction-unavailable', 1_250))
+      .mockResolvedValueOnce({
+        didResolve: false,
+        message: { localId: 'response-lost-local', seq: 43 },
+      });
     sessionSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
     userSocketStub = createApiSessionSocketStub({ connected: true, emitWithAckResult: { ok: true } });
     const client = createTestApiSessionClient(ApiSessionClient, 'tok', createPlainSessionFixture({ id: 's1' }));
-    const materializationRuntime = (client as any).materializationRuntime;
-    materializationRuntime.markPendingQueueMaterializedLocalId('response-lost-local');
+    markMaterializedProviderInput(client, 'response-lost-local');
 
     client.observeProviderInputSettlement({
       kind: 'accepted',
@@ -1708,12 +1858,72 @@ describe('ApiSessionClient provider-input settlement', () => {
     expect(resolveAcceptedMock).toHaveBeenCalledTimes(2);
     expect(client.hasPendingProviderInput('response-lost-local')).toBe(true);
 
-    client.wakePendingMaterialization();
     sessionSocketStub.trigger('session-turn-updated', { status: 'completed' });
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(resolveAcceptedMock).toHaveBeenCalledTimes(2);
-    expect(client.hasPendingProviderInput('response-lost-local')).toBe(true);
+    expect(resolveAcceptedMock).toHaveBeenCalledTimes(3);
+    expect(client.hasPendingProviderInput('response-lost-local')).toBe(false);
+    client.wakePendingMaterialization();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(resolveAcceptedMock).toHaveBeenCalledTimes(3);
+    expect(resolveAcceptedMock).toHaveBeenLastCalledWith(expect.objectContaining({
+      sessionId: 's1', localId: 'response-lost-local',
+    }));
+    expect(client.hasPendingProviderInput('response-lost-local')).toBe(false);
+    expect(client.getCommittedUserMessageSeq('response-lost-local')).toBe(43);
+
+    client.wakePendingMaterialization();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(resolveAcceptedMock).toHaveBeenCalledTimes(3);
+    await client.close();
+  });
+
+  it.each([false, true])('settles internal ACK failures without replaying input and cancels on close=%s', async (closeDuringRetry) => {
+    const actualTransport = await vi.importActual<typeof import('./pendingQueueV2Transport')>('./pendingQueueV2Transport');
+    resolveAcceptedMock.mockImplementation(actualTransport.resolveAcceptedPendingQueueV2Delivery);
+    let settlementRequests = 0;
+    sessionSocketStub = createApiSessionSocketStub({
+      connected: true,
+      emitWithAck: (event) => {
+        if (event !== 'pending-delivery-accepted-v1') return { ok: true };
+        settlementRequests += 1;
+        if (settlementRequests <= 2) return { ok: false, error: 'internal' };
+        return {
+          ok: true, didResolve: false,
+          pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 4,
+          message: {
+            id: 'committed-first', seq: 43, localId: 'accepted-before-internal',
+            messageRole: 'user', content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'first prompt' } } },
+            createdAt: 1000, updatedAt: 1000,
+          },
+        };
+      },
+    });
+    userSocketStub = createApiSessionSocketStub({ connected: true });
+    const client = createTestApiSessionClient(ApiSessionClient, 'tok', createPlainSessionFixture({ id: 's1' }));
+    markMaterializedProviderInput(client, 'accepted-before-internal');
+    vi.useFakeTimers();
+    const settlement = client.observeProviderInputSettlement({ kind: 'accepted', localId: 'accepted-before-internal', userMessageSeq: null });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(client.hasPendingProviderInput('accepted-before-internal')).toBe(true);
+    if (closeDuringRetry) {
+      await client.close();
+      await expect(settlement).resolves.toBe(false);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(settlementRequests).toBe(1);
+      expect(sendSessionMessageMock).not.toHaveBeenCalled();
+      return;
+    }
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(settlementRequests).toBe(3);
+    // The boolean reports pre-provider rejection retirement, not accepted settlement.
+    await expect(settlement).resolves.toBe(false);
+    expect(client.hasPendingProviderInput('accepted-before-internal')).toBe(false);
+    expect(client.getCommittedUserMessageSeq('accepted-before-internal')).toBe(43);
+    expect(sendSessionMessageMock).not.toHaveBeenCalled();
+    expect(sessionSocketStub.disconnect).not.toHaveBeenCalled();
+    await client.close();
   });
 
   it('abandons the accepted settlement retry when the session connection epoch changes', async () => {
@@ -1799,7 +2009,6 @@ describe('ApiSessionClient provider-input settlement', () => {
 
     expect(resolveAcceptedMock).not.toHaveBeenCalled();
     expect(client.hasPendingProviderInput('accepted-while-disconnected')).toBe(true);
-    expect((client as any).acceptedPendingSettlementLocalIds.has('accepted-while-disconnected')).toBe(true);
 
     sessionSocketStub.connected = true;
     (client as any).sessionConnectionEpoch += 1;

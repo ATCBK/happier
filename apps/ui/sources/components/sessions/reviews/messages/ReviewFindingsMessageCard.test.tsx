@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import type { ReviewCommentV1 } from '@happier-dev/protocol';
 import { REVIEW_FINDINGS_VERIFY_AND_FIX_INSTRUCTIONS_V1 } from '@happier-dev/protocol';
 
@@ -19,6 +19,11 @@ import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/act
 import { resetSessionDraftRepositoryForTests } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { TranscriptFindProvider } from '@/components/sessions/transcript/find/TranscriptFindContext';
 import { createTranscriptFindRowStore } from '@/components/sessions/transcript/find/transcriptFindRowStore';
+import { initializeRealAppRuntimeForTests } from '@/dev/testkit/harness/realAppRuntimeHarness';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { currentPendingEnqueueAck } from '@/sync/engine/pending/pendingQueueV2.testHelpers';
+import { sync } from '@/sync/sync';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -30,7 +35,7 @@ import { createTranscriptFindRowStore } from '@/components/sessions/transcript/f
 const sessionExecutionRunActionSpy = vi.fn(async (..._args: any[]): Promise<any> => ({ ok: true }));
 const sessionExecutionRunListSpy = vi.fn(async (..._args: any[]): Promise<any> => ({ runs: [] }));
 const sessionExecutionRunGetSpy = vi.fn(async (..._args: any[]): Promise<any> => ({ ok: false, error: 'not found' }));
-const submitMessageSpy = vi.fn(async (..._args: any[]) => undefined);
+let submitMessageSpy: MockInstance<typeof sync.submitMessage>;
 const homeRoute = vi.hoisted(() => ({ current: null as null | ((request: any) => Response | undefined) }));
 const home = vi.hoisted(() => ({ serverId: '', otherServerId: '' }));
 
@@ -42,6 +47,8 @@ function renderWithSessionTranscriptSource(element: React.ReactElement, source =
 }
 
 installToolShellCommonModuleMocks();
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 vi.mock('@/sync/ops/sessionExecutionRuns', () => ({
     sessionExecutionRunAction: (...args: any[]) => sessionExecutionRunActionSpy(...args),
@@ -54,9 +61,6 @@ vi.mock('@/sync/domains/state/browserRecordStorage', async () => {
     const { createBrowserRecordStorageModuleMock } = await import('@/dev/testkit/mocks/browserRecordStorage');
     return createBrowserRecordStorageModuleMock();
 });
-vi.mock('@/sync/sync', () => ({
-    sync: { submitMessage: (...args: any[]) => submitMessageSpy(...args) },
-}));
 
 const WORKSPACE = { machineId: 'machine-1', path: '/repo' };
 
@@ -195,11 +199,27 @@ beforeEach(async () => {
                 actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'execution.run.action': ['ui'] } },
             } },
         ],
-        route: (request) => homeRoute.current?.(request),
+        route: (request) => {
+            if (request.path === '/v1/features' || request.path === '/v1/features/authenticated') {
+                return Response.json(createRootLayoutFeaturesResponse());
+            }
+            if (request.path === '/v2/sessions/sess_1/pending') {
+                return request.method === 'POST'
+                    ? currentPendingEnqueueAck({ body: JSON.stringify(request.body) })
+                    : Response.json({ pending: [], discarded: [] });
+            }
+            return homeRoute.current?.(request);
+        },
     });
     home.serverId = served.homes.home!.id;
     home.otherServerId = served.homes.other!.id;
     disposeHome = served.dispose;
+    getStorage().setState({ sessions: { sess_1: createSessionFixture({
+        id: 'sess_1', serverId: home.serverId, active: true, activeAt: Date.now(), pendingVersion: 2,
+        metadata: { path: '/repo', host: 'test', machineId: 'machine-1' },
+    }) } });
+    // Observe the public call without replacing Sync's submission/admission logic.
+    submitMessageSpy = vi.spyOn(sync, 'submitMessage');
 });
 
 afterEach(async () => {
@@ -220,7 +240,7 @@ afterEach(async () => {
     sessionExecutionRunListSpy.mockResolvedValue({ runs: [] });
     sessionExecutionRunGetSpy.mockReset();
     sessionExecutionRunGetSpy.mockResolvedValue({ ok: false, error: 'not found' });
-    submitMessageSpy.mockClear();
+    submitMessageSpy?.mockRestore();
     getStorage().setState(previousStorageState);
 });
 
@@ -230,6 +250,7 @@ let ReviewFindingsMessageCard!: typeof import('./ReviewFindingsMessageCard').Rev
 let StructuredFindMessageProvider!: typeof import('@/components/sessions/transcript/structured/structuredFindText').StructuredFindMessageProvider;
 let renderExecutionRunStructuredMeta!: typeof import('@/components/sessions/runs/renderExecutionRunStructuredMeta').renderExecutionRunStructuredMeta;
 beforeAll(async () => {
+    await initializeRealAppRuntimeForTests();
     ({ StructuredFindMessageProvider } = await import('@/components/sessions/transcript/structured/structuredFindText'));
     ({ ReviewFindingsMessageCard } = await import('./ReviewFindingsMessageCard'));
     ({ renderExecutionRunStructuredMeta } = await import('@/components/sessions/runs/renderExecutionRunStructuredMeta'));
@@ -343,6 +364,7 @@ describe('ReviewFindingsMessageCard', () => {
         expect(text).toContain('comment-f1');
         expect(text).toContain('"expectedServerRevision": 7');
         expect(text).not.toContain('comment-f2');
+        await expect(submitMessageSpy.mock.results[0]?.value).resolves.toMatchObject({ persistence: 'pending' });
     });
 
     it('leaves out of Implement a fix that was switched to Ignore while the decisions were being re-read', async () => {

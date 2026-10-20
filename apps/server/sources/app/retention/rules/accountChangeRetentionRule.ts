@@ -51,6 +51,7 @@ async function deleteAgedAccountChangesAndAdvanceFloor(params: {
             await acquireAccountSessionOwnerMetadataFenceInTx(
                 tx,
                 params.accountId,
+                "exclusive",
             );
         } catch (error) {
             // A concurrent Account deletion cascades this candidate. That was

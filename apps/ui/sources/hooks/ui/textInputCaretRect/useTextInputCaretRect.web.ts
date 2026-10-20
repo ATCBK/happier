@@ -61,20 +61,29 @@ export function useTextInputCaretRect(input: UseTextInputCaretRectInput): CaretR
             const caretCoords = getCaretCoordinates(el, selectionStart);
             const elRect = el.getBoundingClientRect();
 
-            setRect(computeWebCaretRect(
+            const next = computeWebCaretRect(
                 { left: elRect.left, top: elRect.top },
                 { left: el.scrollLeft, top: el.scrollTop },
                 caretCoords,
-            ));
+            );
+            // Unchanged geometry keeps the same rect, so a layout notification re-places nothing.
+            setRect((prev) => prev && prev.left === next.left && prev.top === next.top && prev.height === next.height ? prev : next);
         };
 
         measure();
 
         // Subscribe to scroll for live tracking (D18).
         el.addEventListener('scroll', measure);
+        // A reflow (window resize settling, a pane resizing) moves the textarea without a selection
+        // change; its ancestors' resizes say so, as they do for an anchored popover.
+        const layoutObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
+        for (let node: Element | null = el; node && layoutObserver; node = node.parentElement) {
+            layoutObserver.observe(node);
+        }
 
         return () => {
             el.removeEventListener('scroll', measure);
+            layoutObserver?.disconnect();
         };
     }, [inputRef, selection?.start, selection?.end, enabled]);
 

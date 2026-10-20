@@ -127,6 +127,7 @@ export async function materializeGitRepositoryCheckpoint(input: Readonly<{
                         data = data.subarray(1);
                     }
                 }
+                return 'continue';
             } });
         if (!batch.success || index !== files.length || pending.length || descriptor !== undefined) throw new Error(batch.stderr || 'The captured checkpoint contents are incomplete');
     } finally { if (descriptor !== undefined) closeSync(descriptor); }

@@ -3,7 +3,7 @@ import {
   randomUUID,
 } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ConnectedConfigurationCatalogV1Schema, openConnectedAccountCatalogContentV1,
   type ConnectedAccountCatalogRecordV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
@@ -47,8 +47,8 @@ import {
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { readActiveConnectedAccountCatalog } from '@/settings/connectedAccounts/hydrateConnectedAccountCatalog';
 import { createCliConnectedAccountCatalogStore } from '@/settings/connectedAccounts/connectedAccountCatalogStore';
-import { promoteSavedSecretsWithConnectedAccountCatalog, refreshSavedSecretCatalogForOperation,
-  type SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { promoteSavedSecretsWithConnectedAccountCatalog, refreshSavedSecretCatalogForOperation } from "@/settings/secrets/hydrateSavedSecretCatalog";
+import { type SavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import {
   createSavedSecretMaterializerFromSnapshotV1,
 } from '@/settings/secrets/savedSecretCatalog';
@@ -227,7 +227,7 @@ export function createAccountSettingsConnectedAccountSecrets(input: Readonly<{
   const readSnapshot = input.operationContext ? () => input.operationContext!.readSnapshot() : getActiveAccountSettingsSnapshot;
   const readMaterial: NonNullable<ConnectedAccountDaemonPersistence['configuration']['secrets']['readMaterial']> = async (secretId, options) => {
     options?.signal?.throwIfAborted();
-    if (input.operationContext && !await input.operationContext.isCurrent()) return null;
+    if (input.operationContext && !await input.operationContext.isCurrent(options?.signal)) return null;
     const snapshot = readSnapshot();
     if (!snapshot || snapshot.scopeKey !== input.expectedScopeKey) return null;
     const resolved = createSavedSecretMaterializerFromSnapshotV1(snapshot, { isCurrent: () => readSnapshot() === snapshot }).resolve(secretId);

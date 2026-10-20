@@ -2,6 +2,7 @@
 // Type-only projection of Protocol-owned Action DTO declarations.
 
 import type { JsonValue } from '../../identity.js';
+import type { SessionTargetV1 } from './pluginActionDtoSupport.generated.js';
 
 export type SessionPermissionsActionInputById = {
     readonly "session.permission.respond": {
@@ -65,9 +66,44 @@ export type SessionPermissionsActionInputById = {
         requestId: string;
         grantId: string;
     };
+    readonly "session.needs_you.raise": {
+        mode: 'wait' | 'continue';
+        type: 'decision' | 'blocked';
+        questions: ({
+            id: string;
+            prompt: string;
+            type: 'text';
+            description?: string | undefined;
+            initialValue?: string | undefined;
+            required?: boolean | undefined;
+        } | {
+            id: string;
+            prompt: string;
+            type: 'singleChoice' | 'multipleChoice';
+            choices: {
+                id: string;
+                label?: string | undefined;
+                description?: string | undefined;
+            }[];
+            description?: string | undefined;
+            required?: boolean | undefined;
+            allowCustom?: boolean | undefined;
+        })[];
+        sessionId?: string | undefined;
+        assumption?: string | undefined;
+        lasting?: boolean | undefined;
+        reason?: string | undefined;
+        title?: string | undefined;
+    } | {
+        requestId: string;
+        withdraw: string;
+        sessionId?: string | undefined;
+    };
     readonly "session.user_action.answer": {
         requestId: string;
+        sessionId?: SessionTargetV1<true> | undefined;
         decision?: 'approve' | 'reject' | 'request_changes' | undefined;
+        disposition?: 'pass_up' | undefined;
         reason?: string | undefined;
         answers?: {
             question: string;
@@ -120,6 +156,10 @@ export type SessionPermissionsActionResultById = {
                     allowCustom: boolean;
                     choices: string[];
                 }[];
+                fullForm?: {
+                    questionCount: number;
+                    url: string;
+                } | undefined;
             };
         })[];
         truncated: boolean;
@@ -198,6 +238,15 @@ export type SessionPermissionsActionResultById = {
     } | {
         status: 'rejected';
         code: 'mediationStateUnavailable' | 'sessionUnavailable' | 'ownerMachineUnavailable' | 'canceled' | 'notFound';
+    };
+    readonly "session.needs_you.raise": {
+        ok: true;
+        requestId: string;
+        mode: 'wait' | 'continue';
+    } | {
+        ok: true;
+        requestId: string;
+        withdrawn: true;
     };
     readonly "session.user_action.answer": {
         ok: true;

@@ -94,7 +94,7 @@ test('invokes the public Coach Resource and Action and refuses denied or retired
     assert.ok(resource);
     const controller = new AbortController();
     assert.deepEqual(JSON.parse(await resource.read({ signal: controller.signal })), example.finding);
-    assert.deepEqual(await testkit.invokeAction(example.inspectAction.localId, {}), example.finding);
+    assert.deepEqual(JSON.parse(JSON.stringify(await testkit.invokeAction(example.inspectAction.localId, {}))), example.finding);
     await assert.rejects(deniedCaller.invokeAction('inspect', {}), { code: 'plugin_action_unavailable' });
     controller.abort();
     assert.throws(() => resource.read({ signal: controller.signal }), { name: 'AbortError' });
@@ -302,7 +302,7 @@ test('retains the portable production reference package contract', async () => {
     { surfaces: reviewSummaryTool.surfaces, action: reviewSummaryTool.action },
     { surfaces: ['agent', 'mcp'], action: 'review-summary' },
   );
-  const nativeSurface = await readFile(new URL('../ui/reviewPanel.native.tsx', import.meta.url), 'utf8');
+  const nativeSurface = await readFile(new URL('../ui/reviewPanelPortable.tsx', import.meta.url), 'utf8');
   assert.match(nativeSurface, /readSessionWidgetMount/u);
   assert.match(nativeSurface, /readReviewWidgetView\(context\.launchInput\)/u);
   assert.match(nativeSurface, /useLivePluginResource\('review-session-status'\)/u);

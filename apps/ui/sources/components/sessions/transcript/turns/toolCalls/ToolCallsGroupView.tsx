@@ -29,12 +29,15 @@ import { resolveToolRowPinAction } from '@/components/sessions/transcript/toolCa
 import {
     ToolCallsGroupExpandMoreChrome,
     ToolCallsGroupHeaderChrome,
+    groupTrailingColumnPx,
     type ToolCallsGroupStatus,
+    type ToolCallsGroupSummary,
 } from '@/components/sessions/transcript/toolCalls/units/toolCallsGroupChrome';
 
 type ToolCallsGroupViewProps = Readonly<{
     id: string;
     status: ToolCallsGroupStatus;
+    outcomes?: ToolCallsGroupSummary;
     toolMessages: ToolCallMessage[];
     metadata: Metadata | null;
     sessionId: string;
@@ -181,6 +184,7 @@ export const ToolCallsGroupViewWithSessionCommon = React.memo((props: ToolCallsG
             <ToolCallsGroupHeaderChrome
                 chromeMode={normalizedChromeMode}
                 status={props.status}
+                outcomes={props.outcomes}
                 count={count}
                 expanded={expanded}
                 onToggleExpanded={onToggleExpanded}
@@ -320,6 +324,7 @@ const styles = StyleSheet.create((theme) => ({
         flex: 1,
         minWidth: 0,
         paddingLeft: theme.space.s6,
+        paddingRight: groupTrailingColumnPx(theme.space),
     },
     preview: {
         paddingBottom: theme.space.s6,

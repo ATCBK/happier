@@ -12,6 +12,12 @@ const initial = { id: 'everywhere', target: { t: 'allMachines' as const }, enabl
 const source: ReachRulesSource = { key: 'account/server', kind: 'mcp_server', itemId: 'server', rules: [initial], revision: 1, status: 'ready', valueAvailable: true };
 
 describe('reach rule optimistic state', () => {
+    it('refuses Undo when no acknowledged write has a previous rule set', async () => {
+        const execute = vi.fn<ExecuteReachRules>();
+        const hook = await renderHook(() => useReachRulesState(source, execute));
+        expect(await hook.getCurrent().undoLast()).toEqual({ ok: false, message: 'nothing_to_undo' });
+        expect(execute).not.toHaveBeenCalled();
+    });
     it('writes skill rules through the skill Action and Undo restores its previous value', async () => {
         const off = { ...initial, enabled: false, updatedAt: 2 };
         const execute = vi.fn<ExecuteReachRules>().mockResolvedValueOnce({ ok: true,

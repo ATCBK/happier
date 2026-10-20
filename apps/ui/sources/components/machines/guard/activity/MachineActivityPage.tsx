@@ -1,28 +1,29 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { HappierDataMetric, HappierPressable, HappierSkeletonBlock, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { HappierSkeletonBlock, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import type { MachineGuardActivityListV1 } from '@happier-dev/protocol/machines/guard/activityV1';
 
 import { useMachineTabCompactLayout } from '@/components/machines/page/useMachineTabCompactLayout';
 import { PolicyValueSelect } from '@/components/machines/policy/PolicyValueSelect';
-import { formatMachineBytes } from '@/components/machines/vitals/machineVitalsPresentation';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { formatMachineBytes, machineBytesParts } from '@/components/machines/vitals/machineVitalsPresentation';
+import { VitalsSheet, VitalsSubLine, VitalsTile, VitalsValue } from '@/components/machines/vitals/VitalsSheet';
 import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
-import { Icon } from '@/components/ui/icons/Icon';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import type { MachineGuardActivityQuery } from '@/sync/domains/machines/guard/machineGuardRpc';
+import { DEFAULT_MACHINE_GUARD_ACTIVITY_QUERY, type MachineGuardActivityQuery } from '@/sync/domains/machines/guard/machineGuardRpc';
 import { useMachineGuardActivity } from '@/sync/domains/machines/guard/useMachineGuardView';
 import { getPreferredLanguage, t } from '@/text';
 import { usePreferredLanguage } from '@/text/usePreferredLanguage';
 
+import { MachineTabSubHead } from '@/components/machines/page/MachineTabSubHead';
 import { MachineFreshnessChip } from '@/components/machines/page/MachineFreshnessChip';
 import { useGuardActivityFreshness } from '../useGuardFreshness';
-import { groupGuardActivityByDay } from './guardActivityPresentation';
+import { groupGuardActivityByDay, summarizeGuardActivity } from './guardActivityPresentation';
 import { MachineActivityRow } from './MachineActivityRow';
 import { useGuardWayBack } from './useGuardWayBack';
 
@@ -46,8 +47,8 @@ export const MachineActivityPage = React.memo(function MachineActivityPage(props
     barAccessoryShown: boolean;
 }>) {
     const language = usePreferredLanguage();
-    const [filter, setFilter] = React.useState<Filter>('all');
-    const [range, setRange] = React.useState<Range>('7d');
+    const [filter, setFilter] = React.useState<Filter>(DEFAULT_MACHINE_GUARD_ACTIVITY_QUERY.filter);
+    const [range, setRange] = React.useState<Range>(DEFAULT_MACHINE_GUARD_ACTIVITY_QUERY.range);
     const layout = useMachineTabCompactLayout();
     // The summary and the filter counts always describe the whole range; the list follows the filter.
     const all = useMachineGuardActivity({ machineId: props.machineId, serverId: props.serverId, range, filter: 'all' });
@@ -63,16 +64,13 @@ export const MachineActivityPage = React.memo(function MachineActivityPage(props
 
     return (
         <View testID="machine-activity-page" onLayout={layout.onLayout}>
-            <ItemGroup surface="none" header="none">
-                <View style={styles.titleBlock}>
-                    <View style={styles.titleRow}>
-                        <BackLink onPress={props.onBack} />
-                        <Text accessibilityRole="header" style={styles.title}>{t('machineGuard.activity.title')}</Text>
-                        {layout.compact ? null : <Text style={styles.accessory}>{t('machineGuard.activity.pageAccessory', { machine: props.machineName })}</Text>}
-                    </View>
+            <MachineTabSubHead title={t('machineGuard.activity.title')}
+                back={{ label: t('machineGuard.activity.back'), onPress: props.onBack, testID: 'machine-activity-back' }}
+                aside={layout.compact ? null : t('machineGuard.activity.pageAccessory', { machine: props.machineName })}>
+                <View style={styles.freshness}>
                     <MachineFreshnessChip testID={`machine-activity-${freshness.kind}`} freshness={freshness} />
                 </View>
-            </ItemGroup>
+            </MachineTabSubHead>
             {all.list ? <ActivitySummary list={all.list} /> : null}
             <ItemGroup surface="none" header="none">
                 <View style={[styles.controls, layout.compact ? styles.controlsCompact : null]}>
@@ -102,7 +100,8 @@ export const MachineActivityPage = React.memo(function MachineActivityPage(props
                 ) : all.offline ? (
                     <ItemGroup>
                         <SurfaceStateCard testID="machine-activity-offline" kind="unavailable" size="line"
-                            title={t('machineGuard.states.offlineEmpty', { machine: props.machineName })} />
+                            title={t('machineGuard.states.offlineTitle', { machine: props.machineName })}
+              reason={t('machineGuard.states.offlineReason')} />
                     </ItemGroup>
                 ) : <ActivityLoading />
             ) : groups.length === 0 ? (
@@ -145,55 +144,37 @@ function formatActivityDay(dayStart: number): string {
     return new Intl.DateTimeFormat(getPreferredLanguage(), { weekday: 'long', month: 'long', day: 'numeric' }).format(dayStart);
 }
 
-/** Memory freed · In Trash · Needs a look, over the whole range (plan 10's stat tiles). */
+/**
+ * Memory freed · In Trash · Needs a look, over the whole range (lab `rg` G7), drawn by the machine page's one stat
+ * tile owner (`VitalsSheet`): label, value with its unit, one quiet line. Needs a look takes amber only above zero.
+ */
 function ActivitySummary(props: Readonly<{ list: MachineGuardActivityListV1 }>) {
     const { theme } = useUnistyles();
-    const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
-    const live = props.list.entries.filter(entry => entry.undoneAt === undefined);
-    const freed = live.reduce((sum, entry) => sum + (entry.kind !== 'trash_emptied' ? entry.freedBytes ?? 0 : 0), 0);
-    const inTrash = live.filter(entry => entry.kind === 'trash_moved').reduce((sum, entry) => sum + (entry.inTrashBytes ?? 0), 0);
-    const trashItems = live.filter(entry => entry.kind === 'trash_moved').reduce((sum, entry) => sum + (entry.subject?.kind === 'trash' ? entry.subject.items : 0), 0);
-    const freedParts = formatMachineBytes(freed, 'memory');
-    const trashParts = formatMachineBytes(inTrash, 'storage');
+    const { freedBytes: freed, inTrashBytes: inTrash, trashItems } = summarizeGuardActivity(props.list.entries);
+    const freedParts = machineBytesParts(freed, 'memory');
+    const trashParts = machineBytesParts(inTrash, 'storage');
+    const needsLook = props.list.counts.needsLook;
     return (
-        <ItemGroup>
-            <View style={styles.tiles} testID="machine-activity-summary">
-                <View style={styles.tile}>
-                    <HappierDataMetric theme={pluginTheme} size="stat" label={t('machineGuard.activity.tiles.memoryFreed')} value={freedParts}
-                        caption={t('machineGuard.activity.tiles.stops', { count: props.list.counts.stopped })} />
-                </View>
-                <View style={[styles.tile, styles.tileDivider]}>
-                    <HappierDataMetric theme={pluginTheme} size="stat" label={t('machineGuard.activity.tiles.inTrash')} value={trashParts}
-                        caption={trashItems > 0 ? t('machineGuard.activity.kinds.trashMoved', { count: trashItems }) : undefined} />
-                </View>
-                <View style={[styles.tile, styles.tileDivider]}>
-                    <HappierDataMetric theme={pluginTheme} size="stat" label={t('machineGuard.activity.tiles.needsLook')}
-                        value={String(props.list.counts.needsLook)}
-                        caption={props.list.counts.needsLook === 0 ? t('machineGuard.activity.tiles.needsLookNone') : undefined} />
-                </View>
-            </View>
-        </ItemGroup>
-    );
-}
-
-function BackLink(props: Readonly<{ onPress: () => void }>) {
-    const { theme } = useUnistyles();
-    return (
-        <HappierPressable testID="machine-activity-back" accessibilityRole="link" accessibilityLabel={t('machineGuard.activity.back')}
-            onPress={props.onPress} style={styles.back}>
-            {(state) => (
-                <>
-                    <Icon name="caret-left" size={14} color={state.hovered ? theme.colors.text.primary : theme.colors.text.secondary} />
-                    <Text style={[styles.backText, state.hovered ? { color: theme.colors.text.primary } : null]}>{t('machineGuard.activity.back')}</Text>
-                </>
-            )}
-        </HappierPressable>
+        <VitalsSheet testID="machine-activity-summary" columns={3}>
+            {[
+                <VitalsTile key="freed" label={t('machineGuard.activity.tiles.memoryFreed')}
+                    value={<VitalsValue value={freedParts.value} unit={freedParts.unit} />}
+                    sub={<VitalsSubLine>{t('machineGuard.activity.tiles.stops', { count: props.list.counts.stopped })}</VitalsSubLine>} />,
+                <VitalsTile key="trash" label={t('machineGuard.activity.tiles.inTrash')}
+                    value={<VitalsValue value={trashParts.value} unit={trashParts.unit} />}
+                    sub={trashItems > 0 ? <VitalsSubLine>{t('machineGuard.activity.kinds.trashMoved', { count: trashItems })}</VitalsSubLine> : undefined} />,
+                <VitalsTile key="look" label={t('machineGuard.activity.tiles.needsLook')}
+                    value={<VitalsValue value={needsLook.toLocaleString(getPreferredLanguage())}
+                        color={needsLook > 0 ? theme.colors.state.attention.textForeground : undefined} />}
+                    sub={needsLook === 0 ? <VitalsSubLine>{t('machineGuard.activity.tiles.needsLookNone')}</VitalsSubLine> : undefined} />,
+            ]}
+        </VitalsSheet>
     );
 }
 
 function ActivityLoading() {
     const { theme } = useUnistyles();
-    const color = theme.colors.border.default;
+    const color = theme.colors.surface.skeleton;
     return (
         <ItemGroup>
             <View testID="machine-activity-loading" accessibilityLabel={t('machineGuard.activity.loading')} accessibilityRole="progressbar">
@@ -209,52 +190,13 @@ function ActivityLoading() {
 }
 
 const styles = StyleSheet.create((theme) => ({
-    titleBlock: {
-        gap: theme.space.s8,
-    },
-    titleRow: {
-        flexDirection: 'row',
-        alignItems: 'baseline',
-        flexWrap: 'wrap',
-        columnGap: 14,
-        rowGap: theme.space.s4,
-    },
-    back: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: theme.space.s2,
-        minHeight: 28,
-    },
-    backText: {
-        ...Typography.default('medium'),
-        ...happierPageTextMetrics('meta'),
-        color: theme.colors.text.secondary,
-    },
-    title: {
-        ...Typography.default('semiBold'),
-        ...happierPageTextMetrics('pageTitle'),
-        color: theme.colors.text.primary,
-    },
-    accessory: {
-        ...Typography.default(),
-        ...happierPageTextMetrics('pageDescription'),
-        color: theme.colors.text.secondary,
-    },
-    tiles: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-    },
-    tile: {
-        flexGrow: 1,
-        flexBasis: 180,
-        paddingHorizontal: theme.space.s16,
-        paddingVertical: 14,
-    },
-    tileDivider: {
-        borderLeftWidth: StyleSheet.hairlineWidth,
-        borderLeftColor: theme.colors.border.subtle,
+    freshness: {
+        marginTop: theme.space.s8,
+        alignItems: 'flex-start',
     },
     controls: {
+        // One toolbar gap under the summary sheet (lab `rg` G7).
+        marginTop: theme.space.s12,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
@@ -270,6 +212,8 @@ const styles = StyleSheet.create((theme) => ({
         fontVariant: ['tabular-nums'],
     },
     footer: {
+        // The footer is its own block: one section gap under the day sheets, as every page block has.
+        marginTop: PAGE_LIST_METRICS.sectionGapPx,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 14,

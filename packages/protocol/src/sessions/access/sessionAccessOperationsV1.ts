@@ -181,7 +181,11 @@ export const SessionAccessGrantRowV1Schema = lazyZodSchema(() => z.strictObject(
 }));
 export type SessionAccessGrantRowV1 = z.infer<typeof SessionAccessGrantRowV1Schema>;
 
-export const SessionAccessGrantsListRequestV1Schema = lazyZodSchema(() => z.strictObject({ sessionId: z.string().check(z.minLength(1)) }));
+export const SessionAccessGrantsListRequestV1Schema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.string().check(z.minLength(1)),
+  /** Manager-only exact recipient inspection; absent response evidence is not access. */
+  recipientAccountId: z.optional(z.string().check(z.minLength(1))),
+}));
 export type SessionAccessGrantsListRequestV1 = z.infer<typeof SessionAccessGrantsListRequestV1Schema>;
 
 /**
@@ -216,6 +220,11 @@ export const SessionAccessGrantsListResponseV1Schema = lazyZodSchema(() => z.dis
     ...listFields,
     visibility: z.literal('complete'),
     grants: z.array(SessionAccessGrantRowV1Schema),
+    /** Current access without recipient credential evidence, never the manager's credential context. */
+    recipientAccess: z.optional(z.strictObject({
+      accountId: z.string().check(z.minLength(1)),
+      effectiveAccess: z.nullable(SessionEffectiveAccessV1Schema),
+    })),
     // Manager-only, and absent on a Home that publishes no consequence preview.
     // A viewer who cannot manage access can neither remove a grant nor change
     // the context, so the `self` projection carries nothing to preview.

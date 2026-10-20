@@ -19,7 +19,7 @@ import {
 import { Typography } from '@/constants/Typography';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
-import { formatResetCountdown } from '@/sync/domains/connectedServices/formatResetCountdown';
+import { formatResetCountdown, formatResetCountdownPhrase } from '@/sync/domains/connectedServices/formatResetCountdown';
 import { getPreferredLanguage, t } from '@/text';
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
 import type { UsageQueryResultSlice } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
@@ -33,6 +33,7 @@ import {
   UsageBodyReading,
 } from '../usageBodyKit';
 import { useUsageWidgetPageHasCoverageDetail } from '../usageWidgetBatch';
+import { useUsageDisclosureCommand } from '../usageMountedControls';
 import type { UsagePlanAccount, UsagePlanWindow } from './usagePlansModel';
 import type { UsagePlanAccountName } from './useUsagePlans';
 
@@ -116,6 +117,11 @@ export function planAccountStatesMode(
  * account whose read is not current, else the body's source coverage. Columns keep their data or a calm
  * placeholder; none repeats the state.
  */
+/** An account never read and not being read now: one collapsed "not read yet" line, never a row or segment (R1). */
+export function isUsagePlanAccountSettledUnread(account: UsagePlanAccount): boolean {
+  return account.observedAtMs === null && account.state.status !== 'pending';
+}
+
 export function UsagePlanAccountStates(props: Readonly<{
   accounts: readonly UsagePlanAccount[];
   nameOf(account: UsagePlanAccount): UsagePlanAccountName;
@@ -180,6 +186,12 @@ export function formatPlanCountdown(
   nowMs: number,
 ): string | null {
   return formatResetCountdown(nowMs, atMs, ACCOUNT_BLOCK_GAUGE_LABEL_FORMATTER);
+}
+
+/** "resets in 2h 15m" while the reset is ahead; a passed one reads as the bare word. */
+export function formatPlanResetPhrase(atMs: number | null, nowMs: number): string | null {
+  return formatResetCountdownPhrase(nowMs, atMs, ACCOUNT_BLOCK_GAUGE_LABEL_FORMATTER,
+    (time) => t('connectedServicesCollection.meterResetsIn', { time }));
 }
 
 const PACE_REASON_KEYS = {
@@ -500,6 +512,8 @@ export function UsagePlanDisclosure(
   const text = usePlanText();
   const reducedMotion = useReducedMotionPreference();
   const [expanded, setExpanded] = React.useState(false);
+  const toggle = () => setExpanded(value => !value);
+  useUsageDisclosureCommand(props.title, expanded, toggle);
   return (
     <ExpandableItem
       testID={props.testID}

@@ -37,11 +37,6 @@ export function requireRouteActionAuthority(actionId: ActionId) {
         ) {
             return reply.code(403).send({ error: PRESENT_USER_REQUIRED_ERROR });
         }
-        // Authentication has already bound the Runner to this route's Session.
-        // Posting is the Runner's sole discussion mutation surface.
-        if (request.authTokenKind === "ephemeral_session_runner" && actionId === "session.discussion.post") {
-            return undefined;
-        }
         const sessionId = typeof request.params === "object" && request.params !== null
             ? Reflect.get(request.params, "sessionId")
             : undefined;

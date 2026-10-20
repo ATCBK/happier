@@ -1,7 +1,7 @@
 import { SessionTurnFactsV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnMutationV1';
 import type { SessionMessageProvenance, SessionTurnFactsV1 } from '@happier-dev/protocol';
 
-/** Host input facts, never inferred from prompt prose or mutable reportsTo edges. */
+/** Host input facts, never inferred from prompt prose or mutable manager edges. */
 export function stampTurnFacts(input: Readonly<{
     sessionWorkDepth: number;
     provenance?: SessionMessageProvenance;

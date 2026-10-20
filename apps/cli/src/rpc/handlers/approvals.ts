@@ -12,8 +12,11 @@ import type { RpcHandlerContext } from '@/api/rpc/types';
 import { PrivateSecretContinuationV1Schema } from '@happier-dev/protocol/approvals/privateSecretContinuationV1';
 import { SecretFillSettlementV1Schema } from '@happier-dev/protocol/computer/v1';
 import type { ActionExecutorContext, ActionExecuteResult } from '@happier-dev/protocol';
+import { ACTION_ID_FAMILIES_V1 } from '@happier-dev/protocol/actions/actionIds';
 
-type ApprovalRpcActionExecutor = RpcActionExecutor & Readonly<{
+type ApprovalActionId = typeof ACTION_ID_FAMILIES_V1.approvals[number];
+
+type ApprovalRpcActionExecutor = RpcActionExecutor<ApprovalActionId> & Readonly<{
   continueConfidentialApprovalRequest?: (input: unknown, context?: ActionExecutorContext) => Promise<ActionExecuteResult>;
   replayApprovedApprovalRequest?: (args: Readonly<{
     artifactId: string;
@@ -65,10 +68,11 @@ export function registerApprovalRpcHandlers(params: Readonly<{
   rpcHandlerManager: RpcRegistrar;
   actionExecutor?: ApprovalRpcActionExecutor;
 }>): void {
-  registerActionSpecRpcHandlers({
+  registerActionSpecRpcHandlers<ApprovalActionId>({
     rpcHandlerManager: params.rpcHandlerManager,
     actionExecutor: params.actionExecutor,
     resolveActionExecutor: resolveProductionActionExecutor,
+    actionIds: ACTION_ID_FAMILIES_V1.approvals,
     scopes: APPROVAL_RPC_SCOPES,
   });
 
@@ -82,6 +86,9 @@ export function registerApprovalRpcHandlers(params: Readonly<{
       if (!artifactId) {
         return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
       }
+      // The admitted requester executor is produced by this same daemon's
+      // ingress owner. It supplies Account custody; replay still loads and
+      // validates the Artifact's immutable original execution origin.
       const executor = context?.callerInputAuthorization?.requesterAccountExecutor
         ?? params.actionExecutor ?? await resolveProductionActionExecutor();
       if (!executor.replayApprovedApprovalRequest) {

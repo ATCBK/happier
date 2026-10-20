@@ -1,8 +1,12 @@
 import { createHash } from 'node:crypto';
-import { createPluginActionPresentUserGate, projectPluginActionFailureCode, type PluginActionInputParserIssue } from '@happier-dev/protocol/plugins/actions/invocation';
-import type { ApprovalExecutionOriginV1, PluginSourceCustodyV1, TargetActionApprovalReplayPlacementV1, PluginActionPresentUserGatePolicy } from '@happier-dev/protocol';
+import { createPluginActionPresentUserGate, projectPluginActionFailureCode, projectPluginActionUnavailableOutcomeCode, type PluginActionInputParserIssue } from '@happier-dev/protocol/plugins/actions/invocation';
+import { ActionOperationCredentialUseV1Schema, type ActionOperationCredentialUseV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
+import type { ApprovalExecutionV2 } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import type { ApprovalExecutionOriginV1, ApprovalRequesterConfirmationV1, PluginSourceCustodyV1, TargetActionApprovalReplayPlacementV1, PluginActionPresentUserGatePolicy } from '@happier-dev/protocol';
 import { isPluginError, type JsonValue } from '@happier-dev/plugin-sdk';
 import type { PluginActionHandlerInvocation } from '@happier-dev/plugin-sdk/actions';
+import type { ActionRequiredAuthority } from '@happier-dev/protocol/actions/metadata';
 
 import {
   projectTargetActionPresentUserAuthorizationFacts,
@@ -67,6 +71,7 @@ export function resolveCatalogTargetActionPolicy(params: Readonly<{
   hostAccessRequests: readonly TargetActionHostAccessRequest[];
   availability?: ResolvedTargetAction['availability'];
   confirmation?: ResolvedTargetAction['confirmation'];
+  confirmationWhen?: ResolvedTargetAction['confirmationWhen'];
   resolveHostPolicy: ResolveTargetActionHostPolicy;
 }>): ResolvedTargetAction {
   const action = Object.freeze({
@@ -87,6 +92,7 @@ export function resolveCatalogTargetActionPolicy(params: Readonly<{
     })),
     ...(params.availability === undefined ? {} : { availability: params.availability }),
     ...(params.confirmation === undefined ? {} : { confirmation: params.confirmation }),
+    ...(params.confirmationWhen === undefined ? {} : { confirmationWhen: params.confirmationWhen }),
     input: null,
     policyFingerprint: '',
   });
@@ -95,6 +101,12 @@ export function resolveCatalogTargetActionPolicy(params: Readonly<{
     surface: 'catalog',
   }).action;
 }
+
+/** Host-private, content-free diagnosis; never approval operands or exception text. */
+export type TargetActionCurrentIntentUnavailableReason =
+  | 'installed_account_unavailable' | 'installed_account_retired' | 'approval_factory_unavailable'
+  | 'approval_not_required' | 'approval_input_unrepresentable' | 'approval_subject_invalid'
+  | 'approval_presentation_unavailable' | 'approval_artifact_create_failed' | 'approval_artifact_id_unavailable';
 
 export type TargetActionCurrentIntentRequest = Readonly<{
   action: ResolvedTargetAction;
@@ -107,7 +119,9 @@ export type TargetActionCurrentIntentRequest = Readonly<{
   replayPlacement?: TargetActionApprovalReplayPlacementV1;
   /** Immutable outer Action authority captured before a deferred decision. */
   executionOriginV1?: ApprovalExecutionOriginV1;
+  requesterConfirmation?: ApprovalRequesterConfirmationV1;
   signal?: AbortSignal;
+  reportUnavailable?: (reason: TargetActionCurrentIntentUnavailableReason) => void;
 }>;
 
 export type TargetActionCurrentIntentResult = Readonly<
@@ -116,6 +130,13 @@ export type TargetActionCurrentIntentResult = Readonly<
     fingerprint: string;
     /** Durable identity when approval is Artifact-owned. */
     artifactId?: string;
+    /** Live ingress proof retained only by the original invocation. */
+    revalidateRequesterDecision?: () => Promise<boolean>;
+    /** Captured host writer; raw input and handler output never enter this receipt. */
+    settleExecution?: (args: Readonly<{
+      artifactId: string;
+      execution: Pick<ApprovalExecutionV2, 'ok' | 'effectAttempted' | 'errorCode' | 'operationCredentialUses'>;
+    }>) => Promise<void>;
   }
   | { status: 'deferred'; artifactId: string }
   | { status: 'rejected' | 'unavailable'; code: string }
@@ -143,6 +164,7 @@ export function fingerprintTargetActionPolicy(action: NormalizedTargetActionPoli
     hostAccess: action.hostAccess,
     availability: action.availability,
     confirmation: action.confirmation,
+    ...(action.confirmationWhen === undefined ? {} : { confirmationWhen: action.confirmationWhen }),
     approvalRequiredByActionSettings: action.approvalRequiredByActionSettings,
     secretInputPaths: action.secretInputPaths ?? [],
     ...(action.secretInputLabels === undefined ? {} : { secretInputLabels: action.secretInputLabels }),
@@ -357,6 +379,7 @@ export function resolvePresentUserGatePolicy(
     scopes: action.scopes,
     surfaces: action.surfaces,
     ...(action.confirmation === undefined ? {} : { confirmation: action.confirmation }),
+    ...(action.confirmationWhen === undefined ? {} : { confirmationWhen: action.confirmationWhen }),
     ...(action.approvalRequiredByActionSettings === undefined
       ? {}
       : { approvalRequiredByActionSettings: action.approvalRequiredByActionSettings }),
@@ -395,7 +418,9 @@ export function createTargetActionExecutor(deps: Readonly<{
     serviceBinding: PluginInvocationServiceBinding;
   }> | null>;
   requestCurrentIntent?: (request: TargetActionCurrentIntentRequest) => Promise<TargetActionCurrentIntentResult>;
-  invoke: (action: ResolvedTargetAction, args: Readonly<{ surface: string; sessionId?: string; signal?: AbortSignal }>, serviceBinding: PluginInvocationServiceBinding) => Promise<TargetActionExecutionResult>;
+  invoke: (action: ResolvedTargetAction, args: Readonly<{ surface: string; sessionId?: string; signal?: AbortSignal;
+    recordOperationCredentialUse?: (use: ActionOperationCredentialUseV1) => void;
+  }>, serviceBinding: PluginInvocationServiceBinding) => Promise<TargetActionExecutionResult>;
   redactFailureText?: (action: ResolvedTargetAction, value: string) => string;
   /** Captured before executable normalization can consume confidential operands. */
   rawDiagnosticConfidentiality?: ReturnType<typeof readTargetActionDiagnosticConfidentiality>;
@@ -407,6 +432,7 @@ export function createTargetActionExecutor(deps: Readonly<{
     input: unknown;
     surface: string;
     invocationSurface?: string;
+    invocationAuthority?: ActionRequiredAuthority;
     sessionId?: string;
     signal?: AbortSignal;
     /** Immutable replay subject injected only by the host dispatcher. */
@@ -421,6 +447,17 @@ export function createTargetActionExecutor(deps: Readonly<{
     | { kind: 'ready'; run: () => Promise<TargetActionExecutionResult> }
   >> => {
       let action: ResolvedTargetAction | null = null;
+      let approvalArtifactId: string | undefined;
+      let settleExecution: Extract<TargetActionCurrentIntentResult, { status: 'approved' }>['settleExecution'];
+      const operationCredentialUses: ActionOperationCredentialUseV1[] = [];
+      let observingCredentialUse = true;
+      const recordOperationCredentialUse = (use: ActionOperationCredentialUseV1) => {
+        if (!observingCredentialUse) return;
+        const parsed = ActionOperationCredentialUseV1Schema.safeParse(use);
+        if (parsed.success && !operationCredentialUses.some(existing => sameStrictJsonValue(existing, parsed.data))) {
+          operationCredentialUses.push(parsed.data);
+        }
+      };
       const invocationSurface = args.invocationSurface ?? args.surface;
       const finish = async (result: TargetActionExecutionResult): Promise<TargetActionExecutionResult> => {
         const redactedAction = action;
@@ -439,6 +476,25 @@ export function createTargetActionExecutor(deps: Readonly<{
             surface: args.surface, status: publicResult.status, ...('code' in publicResult ? { code: publicResult.code } : {}),
           });
         } catch { /* Diagnostics are failure-isolated from authorization and execution. */ }
+        observingCredentialUse = false;
+        if (settleExecution && approvalArtifactId && publicResult.status !== 'deferred') {
+          const errorCode = publicResult.status === 'executed' ? undefined
+            : publicResult.status === 'unavailable'
+              ? projectPluginActionUnavailableOutcomeCode(publicResult.code, publicResult.actionHandlerInvocation)
+              : publicResult.code;
+          try {
+            await settleExecution({ artifactId: approvalArtifactId, execution: {
+              ok: publicResult.status === 'executed',
+              effectAttempted: publicResult.status === 'executed' || publicResult.actionHandlerInvocation !== 'notStarted',
+              ...(errorCode === undefined ? {} : { errorCode }),
+              ...(operationCredentialUses.length ? { operationCredentialUses } : {}),
+            } });
+          } catch {
+            // The effect may have finished before its receipt acknowledgement
+            // was lost. Never retry the live operands or claim nonexecution.
+            return Object.freeze({ status: 'failed', code: 'approval_execution_outcome_unknown', message: 'approval_execution_outcome_unknown' });
+          }
+        }
         return publicResult;
       };
       const gate = createPluginActionPresentUserGate<Readonly<{
@@ -502,16 +558,23 @@ export function createTargetActionExecutor(deps: Readonly<{
         },
         ...(args.requestCurrentIntent || deps.requestCurrentIntent
           ? {
-            requestCurrentIntent: async (request) => await (args.requestCurrentIntent ?? deps.requestCurrentIntent)!({
-              action: request.action.action,
-              fingerprint: request.fingerprint,
-              surface: request.surface,
-              invocationSurface: request.invocationSurface,
-              ...(args.replayPlacement === undefined
-                ? {}
-                : { replayPlacement: args.replayPlacement }),
-              ...(request.signal === undefined ? {} : { signal: request.signal }),
-            }),
+            requestCurrentIntent: async (request) => {
+              const intent = await (args.requestCurrentIntent ?? deps.requestCurrentIntent)!({
+                action: request.action.action,
+                fingerprint: request.fingerprint,
+                surface: request.surface,
+                invocationSurface: request.invocationSurface,
+                ...(args.replayPlacement === undefined
+                  ? {}
+                  : { replayPlacement: args.replayPlacement }),
+                ...(request.signal === undefined ? {} : { signal: request.signal }),
+              });
+              if (intent.status === 'approved' && intent.fingerprint === request.fingerprint) {
+                approvalArtifactId = intent.artifactId;
+                settleExecution = intent.settleExecution;
+              }
+              return intent;
+            },
           }
           : {}),
       });
@@ -519,6 +582,7 @@ export function createTargetActionExecutor(deps: Readonly<{
         input: args.input,
         surface: args.surface,
         invocationSurface,
+        ...(args.invocationAuthority === undefined ? {} : { invocationAuthority: args.invocationAuthority }),
         ...(args.sessionId === undefined ? {} : { sessionId: args.sessionId }),
         ...(args.signal === undefined ? {} : { signal: args.signal }),
         ...(args.requireCurrentIntent === true ? { requireCurrentIntent: true as const } : {}),
@@ -543,6 +607,10 @@ export function createTargetActionExecutor(deps: Readonly<{
       }
       const { action: admittedAction, serviceBinding } = admission.action;
       action = admittedAction;
+      if (settleExecution && admission.artifactId !== approvalArtifactId) {
+        return Object.freeze({ kind: 'settled' as const, result: await finish(unavailable('plugin_action_current_intent_mismatch')) });
+      }
+      approvalArtifactId = admission.artifactId;
       let runPromise: Promise<TargetActionExecutionResult> | null = null;
       const run = (): Promise<TargetActionExecutionResult> => {
         if (runPromise) return runPromise;
@@ -554,6 +622,7 @@ export function createTargetActionExecutor(deps: Readonly<{
               surface: args.surface,
               ...(args.sessionId ? { sessionId: args.sessionId } : {}),
               ...(args.signal ? { signal: args.signal } : {}),
+              ...(settleExecution ? { recordOperationCredentialUse } : {}),
             }, serviceBinding);
           } catch (error) {
             result = failed('plugin_action_execution_failed', error);

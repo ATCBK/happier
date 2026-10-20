@@ -33,13 +33,16 @@ export function installChatListHarnessCommonModuleMocks(
         unistyles: options.unistyles,
     };
 
-    vi.mock('@legendapp/list/react-native', async () => {
+    vi.mock('@legendapp/list/react-native', async (importOriginal) => {
+        // Legend's section-list entry consumes exports from this same module.
+        // Replace only the recycler and retain its real module dependencies.
+        const original = await importOriginal<typeof import('@legendapp/list/react-native')>();
         const activeOptions = chatListHarnessModuleState.options;
         if (activeOptions.legendList) {
-            return await activeOptions.legendList();
+            return Object.assign({}, original, await activeOptions.legendList());
         }
         const { createLegendChatListModuleMock } = await import('@/dev/testkit/harness/chatListHarness');
-        return createLegendChatListModuleMock();
+        return { ...original, ...createLegendChatListModuleMock() };
     });
 
     vi.mock('react-native', async () => {

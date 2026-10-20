@@ -33,4 +33,12 @@ describe('describeWorkPaneLine (lab convo-W1 header sub)', () => {
         ]);
         expect(describeWorkPaneLine(summary({}))).toEqual([]);
     });
+
+    it('adds what was archived to a settled count, and stays out of the live line', () => {
+        expect(describeWorkPaneLine(summary({ sessions: 1 }), 2)).toEqual([
+            t('sessionWork.subtitle.sessions', { count: 1 }), t('sessionWork.subtitle.archived', { count: 2 }),
+        ]);
+        expect(describeWorkPaneLine(summary({}), 1)).toEqual([t('sessionWork.subtitle.archived', { count: 1 })]);
+        expect(describeWorkPaneLine(summary({ outstanding: 1, sessions: 1 }), 3)).toEqual([t('sessionWork.list.reportsWorking', { count: 1 })]);
+    });
 });

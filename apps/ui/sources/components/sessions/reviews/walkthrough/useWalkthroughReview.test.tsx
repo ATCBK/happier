@@ -1,13 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { ExecutionRunGetRequestSchema, ExecutionRunGetResponseSchema, ReviewFindingsV2Schema, ScmComparisonSchema } from '@happier-dev/protocol';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { createDeferred, renderHook, standardCleanup } from '@/dev/testkit';
+import { ScmDiffSummaryResultSchema } from '@happier-dev/protocol/scm';
+import { createDeferred, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
+import type { ToolCallMessage } from '@happier-dev/session-core/messages';
 import { createReducer } from '@happier-dev/session-core/reducer';
+import { buildReviewCommentFixture, storePlainReviewCommentFixture } from '@/dev/testkit/fixtures/reviewComments';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installSessionActionFixture, installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 
 const boundary = vi.hoisted(() => ({ read: async (): Promise<unknown> => null }));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 // Leave scoped authority, Session transport, schemas, effective findings and
 // overlays real; install only the canonical Home HTTP and Socket.IO boundaries.
 const harness = createHomeGovernanceHarness();
@@ -21,11 +28,21 @@ const sessionRequests = installSessionActionRpcBoundary((request) => {
 });
 
 const { storage } = await import('@/sync/domains/state/storageStore');
+// The mounted app publishes its sync runtime before any presentation subscribes to it.
+await import('@/sync/syncEngine');
 const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
 const { useWalkthroughReview } = await import('./useWalkthroughReview');
+const { useSessionWalkthroughReviewPresentation } = await import('./SessionWalkthroughReview');
+const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
 const { notifyExecutionRunActivity } = await import('@/sync/runtime/executionRuns/executionRunActivityBus');
 const { resetReviewRunCommentsForTests } = await import('@/sync/domains/reviews/comments/reviewRunComments');
-afterEach(() => { standardCleanup(); resetReviewRunCommentsForTests(); });
+const { getScmDiffSummaryState, loadSavedScmDiffSummaryResult, retireScmDiffSummaryScope } = await import('@/sync/ops/scmDiffSummary/generate');
+afterEach(() => {
+    standardCleanup();
+    storage.getState().evictSessionMessages(params.host.sessionId);
+    resetReviewRunCommentsForTests();
+    retireScmDiffSummaryScope(scope);
+});
 
 const scope = { serverId: 'review-home', accountId: 'review-account' };
 const comparison = ScmComparisonSchema.parse({ id: 'comparison', source: { kind: 'commit', commit: 'oid' },
@@ -41,6 +58,7 @@ beforeEach(async () => {
     // Scoped Socket acquisition probes Home readiness through runtimeFetch,
     // separately from the Session HTTP reader. Both use the same network leaf.
     harness.answer(scope.serverId, '/v1/auth/ping', { body: {} });
+    harness.answer(scope.serverId, '/v1/reviews/comments', { body: { items: [], cursor: null } });
     setRuntimeFetch(harness.request);
     sessionRequests.length = 0;
     installSessionActionFixture({ homes: harness, storage, serverId: scope.serverId, session: { id: params.host.sessionId } });
@@ -61,6 +79,151 @@ async function refresh() {
 }
 
 describe('a walkthrough reads findings before declaring a review complete', () => {
+    it('opens a Review child startup question from its needs-you notice and clears it after an answer', async () => {
+        const requestId = 'execution-run:review-run:occurrence:folder%3Aquestion';
+        const request = { tool: 'AskUserQuestion', kind: 'user_action' as const, createdAt: 1,
+            arguments: { questions: [{ header: 'Folder trust', question: 'Trust the selected workspace?', multiSelect: false,
+                options: [{ label: 'Trust', description: 'Use this workspace' }, { label: 'Reject', description: 'Stop here' }] }] } };
+        const sessionId = params.host.sessionId;
+        const session = installSessionActionFixture({ homes: harness, storage, serverId: scope.serverId,
+            session: { id: sessionId, agentState: { requests: { [requestId]: request } } } });
+        const message: ToolCallMessage = { kind: 'tool-call', id: 'review-launch', localId: null, createdAt: 1,
+            tool: { id: 'review-tool', name: 'SubAgentRun', state: 'running', createdAt: 1, startedAt: 1, completedAt: null,
+                description: null, input: { runId: 'review-run', intent: 'review', backendId: 'codex' } }, children: [] };
+        const reducerState = createReducer();
+        reducerState.permissions.set(requestId, { ...request, status: 'pending' });
+        storage.setState(state => ({ sessionMessages: { ...state.sessionMessages, [sessionId]: {
+            messageIdsOldestFirst: [message.id], messagesById: { [message.id]: message }, messagesMap: { [message.id]: message },
+            reducerState, latestThinkingMessageId: null, latestThinkingMessageActivityAtMs: null, messagesVersion: 1, isLoaded: true,
+        } } }));
+        boundary.read = async () => ({ run: { ...response(false).run, status: 'running' } });
+        function Review() {
+            const review = useWalkthroughReview(params);
+            const presentation = useSessionWalkthroughReviewPresentation({ review, phase: 'inventory', phone: true, scope, sessionId });
+            return <>{presentation?.slots.notice}</>;
+        }
+        const screen = await renderScreen(<AppPaneProvider><Review /></AppPaneProvider>);
+        expect(screen.findAll(node => node.props.testID === 'walkthrough-review-needs-you:review-run').length).toBeGreaterThan(0);
+        expect(screen.findAll(node => node.props.testID === 'user-action-prompt-card')).toHaveLength(0);
+        const open = screen.findAll(node => node.props.testID === 'walkthrough-review-open-question:review-run' && typeof node.props.onPress === 'function')[0];
+        await act(async () => { open!.props.onPress(); });
+        expect(screen.findAll(node => node.props.testID === 'user-action-prompt-card').length).toBeGreaterThan(0);
+        const strings = screen.findAll(node => typeof node.type === 'string').flatMap(node => node.children.filter(child => typeof child === 'string'));
+        expect(strings).toContain('Trust the selected workspace?');
+        const settled = createReducer();
+        await act(async () => storage.setState(state => ({ sessions: { ...state.sessions,
+            [sessionId]: { ...session, agentState: { requests: {} } } }, sessionMessages: { ...state.sessionMessages,
+            [sessionId]: { ...state.sessionMessages[sessionId]!, reducerState: settled, messagesVersion: 2 } } })));
+        expect(screen.findAll(node => node.props.testID === 'walkthrough-review-needs-you:review-run')).toHaveLength(0);
+        storage.getState().evictSessionMessages(sessionId);
+    });
+
+    it.each([
+        { commentIds: [], state: 'complete', finishedEngines: 1, total: 0, readFails: false },
+        { commentIds: ['saved-finding'], state: 'complete', finishedEngines: 1, total: 1, readFails: false },
+        { commentIds: ['saved-finding'], state: 'unavailable', finishedEngines: 0, total: 0, readFails: true },
+    ] as const)('retains saved review truth when the public Run read is unavailable ($state, $total)', async ({ commentIds, state, finishedEngines, total, readFails }) => {
+        const comments = commentIds.map(id => ({ ...buildReviewCommentFixture({ id, accountId: scope.accountId,
+            sessionId: params.host.sessionId, runId: 'review-run', body: 'Saved finding\n\nA durable finding body.' }),
+            findingId: 'saved-finding-id', findingSeverity: 'high' as const }));
+        harness.answer(scope.serverId, '/v1/reviews/comments', readFails ? { status: 503, body: { error: 'unavailable' } }
+            : { body: { items: comments.map(storePlainReviewCommentFixture), cursor: null } });
+        // Same saved publication shape as a completed review whose retained host was lost.
+        const result = ScmDiffSummaryResultSchema.parse({ resultId: 'saved-review', revision: 4, canUndo: true,
+            output: { success: true, resultId: 'saved-review', revision: 4, sourceKey: comparison.id,
+                metadata: { sourceKey: comparison.id, source: comparison.source }, comparison,
+                requestedOutputs: ['walkthrough'], outputs: { walkthrough: { state: 'complete',
+                    value: { title: 'Saved review', intro: '', stops: [], otherChangeRefs: [] } } },
+                analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] },
+                producer: { ...params.producer, reviewedRuns: [{ ...params.producer.reviewedRuns[0],
+                    reviewedFingerprint: 'saved-fingerprint', commentIds, materialization: { kind: 'complete' } }] },
+            } });
+        const key = loadSavedScmDiffSummaryResult({ sessionId: params.host.sessionId, scope, result });
+        const saved = key ? getScmDiffSummaryState().entriesByKey[key]?.latestOutput : null;
+        if (!saved?.success) throw new Error('Saved review was not restored');
+        boundary.read = async () => ({ ok: false, error: 'RPC method not available', errorCode: 'RPC_METHOD_NOT_AVAILABLE' });
+        const hook = await renderHook(() => useWalkthroughReview({ ...params, comparison: saved.comparison ?? null,
+            walkthrough: saved.outputs?.walkthrough ?? null, producer: saved.producer }));
+        await waitForHomeGovernance(() => expect(hook.getCurrent()?.readStateByRunId['review-run']).toBe('failed'));
+        await waitForHomeGovernance(() => expect(hook.getCurrent()?.overlay.summary).toMatchObject({ state, total, finishedEngines, runningEngines: 0 }));
+        expect(hook.getCurrent()?.progress.review.state).toBe(state === 'complete' ? 'done' : 'waiting');
+        if (total) expect(hook.getCurrent()?.overlay.tail[0]?.finding).toMatchObject({ title: 'Saved finding', summary: 'A durable finding body.' });
+        if (readFails) {
+            harness.answer(scope.serverId, '/v1/reviews/comments', { body: { items: comments.map(storePlainReviewCommentFixture), cursor: null } });
+            await act(async () => { await hook.getCurrent()?.retry(); });
+            await waitForHomeGovernance(() => expect(hook.getCurrent()?.overlay.summary).toMatchObject({ state: 'complete', total: 1 }));
+        }
+    });
+
+    it('keeps a complete zero-finding review clean after its retained Run publishes narration', async () => {
+        const got = response(false);
+        boundary.read = async () => ({ ...got,
+            run: { ...got.run, status: 'running', runClass: 'long_lived', retentionPolicy: 'resumable', turnInFlight: false },
+            structuredMeta: { kind: 'scm_diff_summary.v1', payload: {} },
+            reviewFindings: got.structuredMeta?.payload,
+        });
+        const hook = await renderHook(() => useWalkthroughReview(params));
+        await waitForHomeGovernance(() => expect(hook.getCurrent()?.readStateByRunId['review-run']).toMatch(/^(readable|unread|failed)$/));
+        expect(hook.getCurrent()?.readStateByRunId['review-run']).toBe('readable');
+        expect(hook.getCurrent()?.overlay.summary).toMatchObject({ state: 'complete', total: 0,
+            finishedEngines: 1, runningEngines: 0, failedEngineLabels: [] });
+    });
+
+    it.each(['complete', 'partial'] as const)('finishes a retained reviewer from %s findings while its Run remains available for narration', async (reviewOutcome) => {
+        const got = response(true);
+        const payload = ReviewFindingsV2Schema.parse(got.structuredMeta?.payload);
+        boundary.read = async () => ({ ...got, run: { ...got.run, status: 'running', runClass: 'long_lived',
+            retentionPolicy: 'resumable', turnInFlight: true, finishedAtMs: undefined },
+            structuredMeta: { kind: 'review_findings.v2', payload: { ...payload, reviewOutcome } } });
+        const hook = await renderHook(() => useWalkthroughReview({ ...params, producer: null, startedReviewRunIds: ['review-run'] }));
+        await waitForHomeGovernance(() => expect(hook.getCurrent()?.readStateByRunId['review-run']).toBe('readable'));
+        expect(hook.getCurrent()?.overlay.summary).toMatchObject({ state: reviewOutcome === 'complete' ? 'complete' : 'partial',
+            runningEngines: 0, finishedEngines: reviewOutcome === 'complete' ? 1 : 0 });
+        expect(hook.getCurrent()?.reviewedAtMs).toBe(2);
+    });
+
+    it('shows a recorded failed findings turn as partial even though its retained Run stays running', async () => {
+        const got = response(false);
+        boundary.read = async () => ({ run: { ...got.run, status: 'running', runClass: 'long_lived',
+            retentionPolicy: 'resumable', turnInFlight: false,
+            inputTurns: { occurrenceId: 'occurrence', last: { turnId: 'turn-1', inputIds: ['input-1'], state: 'completed' } } } });
+        const hook = await renderHook(() => useWalkthroughReview({ ...params, producer: { kind: 'review', reviewedRuns: [
+            { ...params.producer.reviewedRuns[0]!, status: 'failed', hasOutput: false, reviewOutcome: 'unavailable' },
+        ] } }));
+        await waitForHomeGovernance(() => expect(hook.getCurrent()?.readStateByRunId['review-run']).toBe('unread'));
+        expect(hook.getCurrent()?.overlay.summary).toMatchObject({ state: 'partial', runningEngines: 0, failedEngineIds: ['codex'] });
+    });
+
+    it('uses idle turn completion for a retained reviewer without a recorded producer and keeps active work running', async () => {
+        const got = response(false);
+        boundary.read = async () => ({ run: { ...got.run, status: 'running', runClass: 'long_lived', retentionPolicy: 'resumable',
+            turnInFlight: false, inputTurns: { occurrenceId: 'occurrence', last: { turnId: 'turn-1', inputIds: ['input-1'], state: 'completed' } } } });
+        const hook = await renderHook(() => useWalkthroughReview({ ...params, producer: null, startedReviewRunIds: ['review-run'] }));
+        await waitForHomeGovernance(() => expect(hook.getCurrent()?.readStateByRunId['review-run']).toBe('unread'));
+        expect(hook.getCurrent()?.overlay.summary).toMatchObject({ state: 'partial', runningEngines: 0 });
+        boundary.read = async () => ({ run: { ...got.run, status: 'running', runClass: 'long_lived', turnInFlight: true } });
+        await refresh();
+        await waitForHomeGovernance(() => expect(hook.getCurrent()?.overlay.summary.runningEngines).toBe(1));
+    });
+
+    it('shows an admitted review before narration publishes its captured comparison and retains findings until capture arrives', async () => {
+        const got = response(true);
+        const pending = createDeferred<unknown>();
+        boundary.read = () => pending.promise;
+        let captured: typeof comparison | null = null;
+        const hook = await renderHook(() => useWalkthroughReview({ ...params, comparison: captured,
+            producer: null, startedReviewRunIds: ['review-run'] }));
+        expect(hook.getCurrent()?.progress.review).toEqual({ state: 'running', kind: 'reviewing' });
+        expect(hook.getCurrent()?.reviewRunIds).toEqual(['review-run']);
+        await act(async () => pending.resolve(got));
+        await waitForHomeGovernance(() => expect(hook.getCurrent()?.readStateByRunId['review-run']).toBe('readable'));
+        expect(hook.getCurrent()?.overlay.tail.map((entry) => entry.findingId)).toEqual(['finding']);
+        expect(hook.getCurrent()?.overlay.summary.runningEngines).toBe(0);
+        captured = comparison;
+        await hook.rerender();
+        expect(hook.getCurrent()?.overlay.summary).toMatchObject({ state: 'complete', total: 1 });
+    });
+
     it('does not rerender a walkthrough without reviews when its session transcript streams', async () => {
         const sessionId = 'walkthrough-without-review';
         storage.setState((state) => ({ sessionMessages: { ...state.sessionMessages, [sessionId]: {
@@ -124,7 +287,7 @@ describe('a walkthrough reads findings before declaring a review complete', () =
         await refresh();
         await waitForHomeGovernance(() => expect(hook.getCurrent()?.readStateByRunId['review-run']).toBe('failed'));
         expect(hook.getCurrent()?.overlay.tail.map((entry) => entry.findingId)).toEqual(['finding']);
-        expect(hook.getCurrent()?.overlay.summary.state).toBe('partial');
+        expect(hook.getCurrent()?.overlay.summary.state).toBe('complete');
         boundary.read = async () => response(false);
         await refresh();
         await waitForHomeGovernance(() => expect(hook.getCurrent()?.overlay.summary).toMatchObject({ state: 'complete', total: 0 }));

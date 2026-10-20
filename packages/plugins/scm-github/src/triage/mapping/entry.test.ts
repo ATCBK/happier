@@ -3,6 +3,7 @@ import {
   MAX_TRIAGE_TEXT_UTF8_BYTES_V1,
   TRIAGE_SINGLE_LINE_STRING_PATTERN_V1,
   TriageSourceEntrySnapshotV1Schema,
+  TriageSourceFailureV1Schema,
 } from '@happier-dev/triage-protocol/v1';
 import { describe, expect, it } from 'vitest';
 
@@ -25,7 +26,7 @@ import {
   readGithubRepositoryRouteFromApiUrl,
 } from './entry.js';
 import { buildGithubRowFacts, formatGithubLabelSummary } from './facts.js';
-import { toTriageSnapshot } from './protocol.js';
+import { toTriageFailure, toTriageSnapshot } from './protocol.js';
 
 const SINGLE_LINE_V1 = new RegExp(TRIAGE_SINGLE_LINE_STRING_PATTERN_V1, 'u');
 
@@ -35,6 +36,13 @@ function requireProjection(value: ReturnType<typeof projectGithubEntry>) {
 }
 
 describe('GitHub triage entry mapping', () => {
+  it('preserves classified non-secret failure detail through the public source schema', () => {
+    const failure = { class: 'rateLimit' as const, code: 'github_rate_limit',
+      detail: 'GitHub asked us to wait.', retryNotBeforeMs: 1234 };
+    expect(TriageSourceFailureV1Schema.parse(toTriageFailure(failure))).toEqual(failure);
+    expect(TriageSourceFailureV1Schema.parse(toTriageFailure({ class: 'unknown', code: 'unknown' })))
+      .toEqual({ class: 'unknown', code: 'unknown' });
+  });
   it('accepts repository_url only from the fixed GitHub API origin without query or fragment', () => {
     expect(readGithubRepositoryRouteFromApiUrl(
       'https://api.github.com/repos/octo-org/example-app',
@@ -121,11 +129,11 @@ describe('GitHub triage entry mapping', () => {
     expect(
       requireProjection(projectGithubEntry(completed!, GITHUB_FIXTURE_OTHER_REPOSITORY_ID))
         .snapshot.state,
-    ).toEqual({ presentation: 'resolved', nativeLabel: 'Closed as completed' });
+    ).toEqual({ presentation: 'resolved', nativeLabel: 'Closed as completed', completionReason: 'completed' });
     expect(
       requireProjection(projectGithubEntry(notPlanned!, GITHUB_FIXTURE_OTHER_REPOSITORY_ID))
         .snapshot.state,
-    ).toEqual({ presentation: 'closed', nativeLabel: 'Closed as not planned' });
+    ).toEqual({ presentation: 'closed', nativeLabel: 'Closed as not planned', completionReason: 'canceled' });
     expect(
       requireProjection(projectGithubEntry(bare!, GITHUB_FIXTURE_OTHER_REPOSITORY_ID))
         .snapshot.state,
@@ -233,6 +241,44 @@ describe('GitHub triage entry mapping', () => {
       'github/checks',
     ]);
     expect(projection.snapshot.projectionTruncated).toBe(true);
+  });
+
+  it('retains issue labels as Signal before metadata already carried by the snapshot', () => {
+    const view = decodeGithubSearchItem({
+      ...GITHUB_SEARCH_ISSUE_ITEM,
+      labels: [{ name: 'type: bug' }, { name: 'needs:reporter' }],
+    })!;
+    const projection = requireProjection(projectGithubEntry(view, GITHUB_FIXTURE_REPOSITORY_ID));
+    const snapshot = TriageSourceEntrySnapshotV1Schema.parse(
+      toTriageSnapshot(projection.snapshot, projection.locator, projection.localRef.entryId),
+    );
+
+    expect(snapshot.facts).toContainEqual(expect.objectContaining({
+      id: 'github/labels',
+      importance: 'supplementary',
+      value: { kind: 'text', value: 'type: bug, needs:reporter' },
+    }));
+    expect(snapshot.authorLabel).toBe(view.authorLogin);
+    expect(projection.snapshot.sourceUpdatedAtMs).toBe(view.updatedAtMs);
+    expect(snapshot.facts.length).toBeLessThanOrEqual(MAX_TRIAGE_ROW_FACTS_V1);
+  });
+
+  it('keeps PR mergeability ahead of labels when review facts fill the row budget', () => {
+    const view = decodeGithubSearchItem({
+      ...GITHUB_SEARCH_PULL_REQUEST_ITEM,
+      labels: [{ name: 'type: bug' }],
+    })!;
+    const projection = requireProjection(projectGithubEntry(view, GITHUB_FIXTURE_REPOSITORY_ID, {
+      reviewDecision: 'changes-requested',
+      mergeability: 'conflicts',
+    }));
+
+    expect(projection.snapshot.rowFacts.map((fact) => fact.id)).toEqual([
+      'github/number',
+      'github/repository',
+      'github/review-decision',
+      'github/mergeability',
+    ]);
   });
 
   it('never carries a body excerpt onto a list row', () => {

@@ -1,417 +1,216 @@
-import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderHook, renderScreen } from '@/dev/testkit';
-import { installSessionFilesHookCommonModuleMocks } from './sessionFilesHookTestHelpers';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
-const uploadDaemonWorkspaceFileFromReaderMock = vi.hoisted(() => vi.fn());
-const callDaemonWorkspaceStatFileRpcMock = vi.hoisted(() => vi.fn());
-const openLocalUploadSourceReaderMock = vi.hoisted(() => vi.fn());
-const uploadReaderCloseSpy = vi.hoisted(() => vi.fn());
-const runTransferFinalizeRecoveryMock = vi.hoisted(() => vi.fn());
+import { createDeferred, renderHook } from '@/dev/testkit';
+import { createWorkspaceFileDownloadHarness } from '@/dev/testkit/harness/workspaceFileDownloadHarness';
+import type { TransferFinalizeRecoveryAction } from '@/sync/domains/transfers/runtime/transferRuntime';
 
-installSessionFilesHookCommonModuleMocks();
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({ Platform: { OS: 'web' } }));
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
 
-vi.mock('@/sync/domains/transfers/runtime/transferRuntime', () => ({
-    uploadDaemonWorkspaceFileFromReader: (...args: unknown[]) => uploadDaemonWorkspaceFileFromReaderMock(...args),
-    callDaemonWorkspaceStatFileRpc: (...args: unknown[]) => callDaemonWorkspaceStatFileRpcMock(...args),
-}));
-
-vi.mock('@/sync/runtime/files/localUploadSourceReader', () => ({
-    openLocalUploadSourceReader: (...args: unknown[]) => openLocalUploadSourceReaderMock(...args),
-    resolveLocalUploadSourceSizeBytes: async (source: { kind: 'web'; file: File }) => source.file.size,
-}));
-
-vi.mock('@/components/transfers/recovery/runTransferFinalizeRecovery', () => ({
-    runTransferFinalizeRecovery: (...args: unknown[]) => runTransferFinalizeRecoveryMock(...args),
-}));
+const { useWorkspaceFileTransfers } = await import('@/hooks/workspaces/transfers/useWorkspaceFileTransfers');
+const { TransferFinalizeRecoveryModal } = await import('@/components/transfers/recovery/TransferFinalizeRecoveryModal');
+const { Modal } = await import('@/modal');
+const originalModalShow = vi.mocked(Modal.show).getMockImplementation();
 
 describe('useWorkspaceFileTransfers upload pipeline', () => {
-    type WorkspaceFileTransfersApi = Readonly<{
-        uploadState:
-            | Readonly<{ status: 'idle' }>
-            | Readonly<{ status: 'preflighting' | 'uploading'; totalFiles: number; completedFiles: number; uploadedBytes: number; totalBytes: number }>
-            | Readonly<{ status: 'done'; totalFiles: number; totalBytes: number }>
-            | Readonly<{ status: 'canceled' }>
-            | Readonly<{ status: 'error'; error: string }>;
-        startUploads: (input: Readonly<{
-            entries: readonly Readonly<{ kind: 'web'; file: File; relativePath: string }>[];
-            destinationDir: string;
-        }>) => Promise<{ ok: boolean; error?: string }>;
-    }>;
+    let harness: Awaited<ReturnType<typeof createWorkspaceFileDownloadHarness>>;
 
-    beforeEach(() => {
-        uploadDaemonWorkspaceFileFromReaderMock.mockReset();
-        callDaemonWorkspaceStatFileRpcMock.mockReset();
-        openLocalUploadSourceReaderMock.mockReset();
-        uploadReaderCloseSpy.mockReset();
-        runTransferFinalizeRecoveryMock.mockReset();
-        openLocalUploadSourceReaderMock.mockImplementation(async (source: { kind: 'web'; file: File }) => ({
-            sizeBytes: source.file.size,
-            readBytes: async (offset: number, length: number) => {
-                const nextEnd = Math.min(source.file.size, offset + length);
-                const chunkBlob = source.file.slice(offset, nextEnd);
-                return new Uint8Array(await chunkBlob.arrayBuffer());
+    beforeEach(async () => {
+        vi.clearAllMocks();
+        harness = await createWorkspaceFileDownloadHarness();
+        harness.setStatResponse({ success: true, exists: false });
+    });
+
+    afterEach(async () => {
+        await act(async () => { await harness?.reset(); });
+        vi.restoreAllMocks();
+        if (originalModalShow) vi.mocked(Modal.show).mockImplementation(originalModalShow);
+    });
+
+    function uploadInput(file = new File(['hello'], 'hello.txt', { type: 'text/plain' })) {
+        return {
+            destinationDir: 'workspace/files',
+            entries: [{ kind: 'web' as const, file, relativePath: 'hello.txt' }],
+        };
+    }
+
+    async function renderTransfers(options: Omit<Parameters<typeof useWorkspaceFileTransfers>[0], 'workspaceScope'> = {}) {
+        return await renderHook(() => useWorkspaceFileTransfers({ workspaceScope: harness.scope, ...options }));
+    }
+
+    function observeRecoveryPrompt() {
+        const prompt = createDeferred<(action: TransferFinalizeRecoveryAction) => void>();
+        vi.mocked(Modal.show).mockImplementation(config => {
+            if (config.component === TransferFinalizeRecoveryModal) {
+                // Modal presentation is the UI boundary; the continuation and its retry stay real.
+                const onResolve: unknown = Reflect.get(config.props ?? {}, 'onResolve');
+                if (typeof onResolve !== 'function') throw new Error('Recovery prompt has no public choice handler');
+                prompt.resolve(action => onResolve(action));
+                return 'workspace-upload-recovery';
+            }
+            if (!originalModalShow) throw new Error('Missing canonical Modal presentation fixture');
+            return originalModalShow(config);
+        });
+        return prompt.promise;
+    }
+
+    it('uploads the actual browser file through the admitted encrypted bulk pipeline', async () => {
+        const hook = await renderTransfers();
+
+        await act(async () => {
+            await expect(hook.getCurrent().startUploads(uploadInput())).resolves.toEqual({ ok: true });
+        });
+
+        expect(harness.uploads).toHaveLength(1);
+        expect(harness.uploads[0]).toEqual(expect.objectContaining({
+            input: {
+                rootPath: '/repo', path: '/repo/workspace/files/hello.txt', overwrite: false,
+                source: { sourceId: expect.any(String), sizeBytes: 5 },
             },
-            close: uploadReaderCloseSpy,
+            bytes: new TextEncoder().encode('hello'), finalized: true, aborted: false, finalizeAttempts: 1,
+        }));
+        expect(hook.getCurrent().uploadState).toEqual({ status: 'done', totalFiles: 1, totalBytes: 5 });
+        expect(harness.rpcRequests).toContainEqual(expect.objectContaining({
+            machineId: harness.scope.machineId, method: RPC_METHODS.STAT_FILE,
+            payload: { path: '/repo/workspace/files/hello.txt' },
         }));
     });
 
-    afterEach(() => {
-        vi.unstubAllGlobals();
-    });
-
-    it('uploads files through the canonical bulk pipeline helper', async () => {
-        callDaemonWorkspaceStatFileRpcMock.mockResolvedValue({ success: true, exists: false });
-
-        uploadDaemonWorkspaceFileFromReaderMock.mockImplementation(async (params: {
-            machineId: string;
-            serverId?: string | null;
-            rootPath: string;
-            fileReader: {
-                sizeBytes: number;
-                readBytes: (offset: number, length: number) => Promise<Uint8Array>;
-                close: () => Promise<void>;
-            };
-            request: {
-                path: string;
-                sizeBytes: number;
-                overwrite?: boolean;
-                sha256?: string;
-            };
-            onProgress?: ((progress: { uploadedBytes: number; totalBytes: number }) => void) | null;
-            signal?: AbortSignal | null;
-        }) => {
-            expect(params.machineId).toBe('m1');
-            expect(params.serverId).toBe('server-1');
-            expect(params.rootPath).toBe('/repo');
-            expect(params.fileReader.sizeBytes).toBe(5);
-            expect(params.request).toEqual({
-                path: 'workspace/files/hello.txt',
-                sizeBytes: 5,
-                overwrite: false,
-            });
-            await params.fileReader.readBytes(0, 5);
-            params.onProgress?.({ uploadedBytes: 5, totalBytes: 5 });
-            await params.fileReader.close();
-            return {
-                success: true,
-                path: 'workspace/files/hello.txt',
-                sizeBytes: 5,
-                sha256: 'sha256',
-            };
-        });
-
-        const { useWorkspaceFileTransfers } = await import('@/hooks/workspaces/transfers/useWorkspaceFileTransfers');
-
-        let api: WorkspaceFileTransfersApi | null = null;
-        function Test() {
-            api = useWorkspaceFileTransfers({
-                workspaceScope: {
-                    serverId: 'server-1',
-                    machineId: 'm1',
-                    rootPath: '/repo',
-                },
-            }) as unknown as WorkspaceFileTransfersApi;
-            return null;
-        }
-
-        await renderScreen(<Test />);
-
-        if (!api) throw new Error('expected hook api');
-
-        const file = new File([new TextEncoder().encode('hello')], 'hello.txt', { type: 'text/plain' });
-
-        await act(async () => {
-            await (api as WorkspaceFileTransfersApi).startUploads({
-                destinationDir: 'workspace/files',
-                entries: [
-                    {
-                        kind: 'web',
-                        file,
-                        relativePath: 'hello.txt',
-                    },
-                ],
-            });
-        });
-
-        expect(uploadDaemonWorkspaceFileFromReaderMock).toHaveBeenCalledTimes(1);
-        expect(uploadReaderCloseSpy).toHaveBeenCalledTimes(1);
-    });
-
     it('keeps the idle transfer API stable when the same workspace scope is passed again', async () => {
-        const { useWorkspaceFileTransfers } = await import('@/hooks/workspaces/transfers/useWorkspaceFileTransfers');
-
         const hook = await renderHook(
             (props: Parameters<typeof useWorkspaceFileTransfers>[0]) => useWorkspaceFileTransfers(props),
-            {
-                initialProps: {
-                    workspaceScope: {
-                        serverId: 'server-1',
-                        machineId: 'm1',
-                        rootPath: '/repo',
-                    },
-                },
-            },
+            { initialProps: { workspaceScope: harness.scope } },
         );
-
         const initialApi = hook.getCurrent();
 
-        await hook.rerender({
-            workspaceScope: {
-                serverId: 'server-1',
-                machineId: 'm1',
-                rootPath: '/repo',
-            },
-        });
+        await hook.rerender({ workspaceScope: { ...harness.scope } });
 
         expect(hook.getCurrent()).toBe(initialApi);
     });
 
-    it('surfaces upload helper failures as errors instead of canceled states', async () => {
-        callDaemonWorkspaceStatFileRpcMock.mockResolvedValue({ success: true, exists: false });
+    it('surfaces a rejected finalize as an error instead of a canceled state', async () => {
+        harness.failNextUploadFinalize();
+        const hook = await renderTransfers();
 
-        uploadDaemonWorkspaceFileFromReaderMock.mockResolvedValue({
-            success: false,
-            error: 'Upload finalize failed',
-        });
-
-        const { useWorkspaceFileTransfers } = await import('@/hooks/workspaces/transfers/useWorkspaceFileTransfers');
-
-        let api: WorkspaceFileTransfersApi | null = null;
-        function Test() {
-            api = useWorkspaceFileTransfers({
-                workspaceScope: {
-                    serverId: 'server-1',
-                    machineId: 'm1',
-                    rootPath: '/repo',
-                },
-            }) as unknown as WorkspaceFileTransfersApi;
-            return null;
-        }
-
-        await renderScreen(<Test />);
-
-        if (!api) throw new Error('expected hook api');
-        const currentApi = api as WorkspaceFileTransfersApi;
-
-        const file = new File([new TextEncoder().encode('hello')], 'hello.txt', { type: 'text/plain' });
-
-        let result: { ok: boolean; error?: string } | null = null;
         await act(async () => {
-            result = await api!.startUploads({
-                destinationDir: 'workspace/files',
-                entries: [
-                    {
-                        kind: 'web',
-                        file,
-                        relativePath: 'hello.txt',
-                    },
-                ],
+            await expect(hook.getCurrent().startUploads(uploadInput())).resolves.toEqual({
+                ok: false, error: 'Direct import request failed with status 409',
             });
         });
 
-        expect(result).toEqual({ ok: false, error: 'Upload finalize failed' });
-        expect(uploadDaemonWorkspaceFileFromReaderMock).toHaveBeenCalledTimes(1);
+        expect(hook.getCurrent().uploadState).toEqual({ status: 'error', error: 'Direct import request failed with status 409' });
+        expect(harness.uploads).toHaveLength(1);
+        expect(harness.uploads[0]).toEqual(expect.objectContaining({ finalized: false, aborted: true, finalizeAttempts: 1 }));
     });
 
-    it('surfaces thrown upload helper failures as errors instead of rejecting the batch', async () => {
-        callDaemonWorkspaceStatFileRpcMock.mockResolvedValue({ success: true, exists: false });
+    it('surfaces a thrown browser source failure instead of rejecting the batch', async () => {
+        const file = new File(['hello'], 'hello.txt', { type: 'text/plain' });
+        vi.spyOn(file, 'slice').mockImplementation(() => { throw new Error('Upload source reader exploded'); });
+        const hook = await renderTransfers();
 
-        uploadDaemonWorkspaceFileFromReaderMock.mockImplementation(async () => {
-            throw new Error('Upload source reader exploded');
-        });
-
-        const { useWorkspaceFileTransfers } = await import('@/hooks/workspaces/transfers/useWorkspaceFileTransfers');
-
-        let api: ReturnType<typeof useWorkspaceFileTransfers> | null = null;
-        function Test() {
-            api = useWorkspaceFileTransfers({
-                workspaceScope: {
-                    serverId: 'server-1',
-                    machineId: 'm1',
-                    rootPath: '/repo',
-                },
-            });
-            return null;
-        }
-
-        await renderScreen(<Test />);
-
-        if (!api) throw new Error('expected hook api');
-
-        const file = new File([new TextEncoder().encode('hello')], 'hello.txt', { type: 'text/plain' });
-
-        let result: { ok: boolean; error?: string } | null = null;
         await act(async () => {
-            result = await api!.startUploads({
-                destinationDir: 'workspace/files',
-                entries: [
-                    {
-                        kind: 'web',
-                        file,
-                        relativePath: 'hello.txt',
-                    },
-                ],
+            await expect(hook.getCurrent().startUploads(uploadInput(file))).resolves.toEqual({
+                ok: false, error: 'Upload source reader exploded',
             });
         });
 
-        expect(result).toEqual({ ok: false, error: 'Upload source reader exploded' });
-        expect(uploadDaemonWorkspaceFileFromReaderMock).toHaveBeenCalledTimes(1);
-        expect(uploadReaderCloseSpy).toHaveBeenCalledTimes(1);
+        expect(hook.getCurrent().uploadState).toEqual({ status: 'error', error: 'Upload source reader exploded' });
+        expect(harness.uploads).toHaveLength(1);
+        expect(harness.uploads[0]).toEqual(expect.objectContaining({ bytes: new Uint8Array(), finalized: false, aborted: true }));
     });
 
     it('finishes the exact staged file without starting a second upload', async () => {
-        callDaemonWorkspaceStatFileRpcMock.mockResolvedValue({ success: true, exists: false });
-        const recovery = {
-            kind: 'transfer_finalize_recovery' as const,
-            expiresAt: Date.now() + 60_000,
-            actions: ['retry_finalize', 'discard_staged'] as const,
-            isActionable: () => true,
-            invoke: vi.fn(),
-        };
-        uploadDaemonWorkspaceFileFromReaderMock.mockResolvedValueOnce({
-            success: false,
-            error: 'Finalize recovery is required',
-            errorCode: 'TRANSFER_FINALIZE_RECOVERY_REQUIRED',
-            recovery,
-        });
-        runTransferFinalizeRecoveryMock.mockResolvedValueOnce({
-            status: 'finalized',
-            response: {
-                success: true,
-                path: 'workspace/files/hello.txt',
-                sizeBytes: 5,
-                sha256: 'sha256',
-            },
-        });
-        const { useWorkspaceFileTransfers } = await import('@/hooks/workspaces/transfers/useWorkspaceFileTransfers');
+        harness.requireNextUploadFinalizeRecovery();
+        const prompt = observeRecoveryPrompt();
+        const hook = await renderTransfers();
+        let pending!: ReturnType<ReturnType<typeof useWorkspaceFileTransfers>['startUploads']>;
 
-        let api: WorkspaceFileTransfersApi | null = null;
-        function Test() {
-            api = useWorkspaceFileTransfers({
-                workspaceScope: {
-                    serverId: 'server-1',
-                    machineId: 'm1',
-                    rootPath: '/repo',
-                },
-            }) as unknown as WorkspaceFileTransfersApi;
-            return null;
-        }
-        await renderScreen(<Test />);
-        const file = new File([new TextEncoder().encode('hello')], 'hello.txt', { type: 'text/plain' });
-
-        let result: { ok: boolean; error?: string } | null = null;
         await act(async () => {
-            result = await api!.startUploads({
-                destinationDir: 'workspace/files',
-                entries: [{ kind: 'web', file, relativePath: 'hello.txt' }],
-            });
+            pending = hook.getCurrent().startUploads(uploadInput());
+            const choose = await prompt;
+            choose('retry_finalize');
+            await expect(pending).resolves.toEqual({ ok: true });
         });
 
-        expect(result).toEqual({ ok: true });
-        expect(uploadDaemonWorkspaceFileFromReaderMock).toHaveBeenCalledTimes(1);
-        expect(runTransferFinalizeRecoveryMock).toHaveBeenCalledWith(expect.objectContaining({ recovery }));
+        expect(harness.uploads).toHaveLength(1);
+        expect(harness.uploads[0]).toEqual(expect.objectContaining({
+            bytes: new TextEncoder().encode('hello'), finalized: true, aborted: false, finalizeAttempts: 2,
+        }));
+        expect(hook.getCurrent().uploadState).toEqual({ status: 'done', totalFiles: 1, totalBytes: 5 });
     });
 
     it('blocks a fresh upload while finalize recovery is in flight', async () => {
-        callDaemonWorkspaceStatFileRpcMock.mockResolvedValue({ success: true, exists: false });
-        const recovery = {
-            kind: 'transfer_finalize_recovery' as const,
-            expiresAt: Date.now() + 60_000,
-            actions: ['retry_finalize', 'discard_staged'] as const,
-            isActionable: () => true,
-            invoke: vi.fn(),
-        };
-        uploadDaemonWorkspaceFileFromReaderMock.mockResolvedValueOnce({
-            success: false,
-            error: 'Finalize recovery is required',
-            errorCode: 'TRANSFER_FINALIZE_RECOVERY_REQUIRED',
-            recovery,
+        harness.requireNextUploadFinalizeRecovery();
+        const prompt = observeRecoveryPrompt();
+        const hook = await renderTransfers();
+        let pending!: ReturnType<ReturnType<typeof useWorkspaceFileTransfers>['startUploads']>;
+        let choose!: Awaited<typeof prompt>;
+
+        await act(async () => {
+            pending = hook.getCurrent().startUploads(uploadInput());
+            choose = await prompt;
         });
-        let finishRecovery!: (value: unknown) => void;
-        runTransferFinalizeRecoveryMock.mockImplementationOnce(async () => await new Promise((resolve) => {
-            finishRecovery = resolve;
-        }));
-        const { useWorkspaceFileTransfers } = await import('@/hooks/workspaces/transfers/useWorkspaceFileTransfers');
-        let api: WorkspaceFileTransfersApi | null = null;
-        function Test() {
-            api = useWorkspaceFileTransfers({
-                workspaceScope: { serverId: 'server-1', machineId: 'm1', rootPath: '/repo' },
-            }) as unknown as WorkspaceFileTransfersApi;
-            return null;
+        await expect(hook.getCurrent().startUploads(uploadInput())).resolves.toEqual({
+            ok: false, error: 'Uploads already in progress',
+        });
+        expect(harness.uploads).toHaveLength(1);
+
+        await act(async () => {
+            choose('retry_finalize');
+            await expect(pending).resolves.toEqual({ ok: true });
+        });
+
+        expect(harness.uploads).toHaveLength(1);
+        expect(harness.uploads[0]).toEqual(expect.objectContaining({ finalized: true, finalizeAttempts: 2 }));
+    });
+
+    it.each(['cancel', 'unmount', 'scope change'] as const)('retires unanswered recovery on %s without stranding the next upload', async (retire) => {
+        harness.requireNextUploadFinalizeRecovery();
+        const prompt = observeRecoveryPrompt();
+        const hook = await renderHook(
+            (props: Parameters<typeof useWorkspaceFileTransfers>[0]) => useWorkspaceFileTransfers(props),
+            { initialProps: { workspaceScope: harness.scope } },
+        );
+        let settled = false;
+        let pending!: ReturnType<ReturnType<typeof useWorkspaceFileTransfers>['startUploads']>;
+        await act(async () => {
+            pending = hook.getCurrent().startUploads(uploadInput()).then(result => { settled = true; return result; });
+            await prompt;
+        });
+        if (retire === 'unmount') await hook.unmount();
+        else if (retire === 'scope change') await hook.rerender({ workspaceScope: { ...harness.scope, rootPath: '/another-repo' } });
+        else await act(async () => hook.getCurrent().cancelUploads());
+        await vi.waitFor(() => expect(settled).toBe(true));
+        await expect(pending).resolves.toEqual({ ok: false, error: 'Upload canceled' });
+        expect(harness.uploads[0]).toMatchObject({ finalized: false, aborted: false, finalizeAttempts: 1 });
+        if (retire !== 'unmount') {
+            if (retire === 'scope change') await hook.rerender({ workspaceScope: harness.scope });
+            if (originalModalShow) vi.mocked(Modal.show).mockImplementation(originalModalShow);
+            await act(async () => {
+                await expect(hook.getCurrent().startUploads(uploadInput())).resolves.toEqual({ ok: true });
+            });
+            expect(hook.getCurrent().uploadState.status).toBe('done');
         }
-        await renderScreen(<Test />);
-        const file = new File([new TextEncoder().encode('hello')], 'hello.txt', { type: 'text/plain' });
-        const input = {
-            destinationDir: 'workspace/files',
-            entries: [{ kind: 'web' as const, file, relativePath: 'hello.txt' }],
-        };
-
-        let firstUpload!: Promise<{ ok: boolean; error?: string }>;
-        await act(async () => {
-            firstUpload = api!.startUploads(input);
-            await vi.waitFor(() => expect(runTransferFinalizeRecoveryMock).toHaveBeenCalledTimes(1));
-        });
-        await expect(api!.startUploads(input)).resolves.toEqual({
-            ok: false,
-            error: 'Uploads already in progress',
-        });
-        expect(uploadDaemonWorkspaceFileFromReaderMock).toHaveBeenCalledTimes(1);
-
-        finishRecovery({
-            status: 'finalized',
-            response: {
-                success: true,
-                path: 'workspace/files/hello.txt',
-                sizeBytes: 5,
-                sha256: 'sha256',
-            },
-        });
-        await act(async () => {
-            await expect(firstUpload).resolves.toEqual({ ok: true });
-        });
-        expect(uploadDaemonWorkspaceFileFromReaderMock).toHaveBeenCalledTimes(1);
     });
 
     it('aborts an in-flight upload on true unmount and keeps late completion inert', async () => {
-        callDaemonWorkspaceStatFileRpcMock.mockResolvedValue({ success: true, exists: false });
-        const transfer: { signal: AbortSignal | null } = { signal: null };
-        uploadDaemonWorkspaceFileFromReaderMock.mockImplementation(async (params: Readonly<{
-            signal?: AbortSignal | null;
-        }>) => await new Promise((resolve) => {
-            transfer.signal = params.signal ?? null;
-            params.signal?.addEventListener('abort', () => resolve({
-                success: false,
-                error: 'Upload canceled',
-            }), { once: true });
-        }));
+        const chunk = harness.deferNextUploadChunk();
         const onAfterUploadSuccess = vi.fn();
-        const { useWorkspaceFileTransfers } = await import('@/hooks/workspaces/transfers/useWorkspaceFileTransfers');
-        const hook = await renderHook(
-            (props: Parameters<typeof useWorkspaceFileTransfers>[0]) => useWorkspaceFileTransfers(props),
-            {
-                initialProps: {
-                    workspaceScope: { serverId: 'server-1', machineId: 'm1', rootPath: '/repo' },
-                    onAfterUploadSuccess,
-                },
-            },
-        );
-        const file = new File([new TextEncoder().encode('hello')], 'hello.txt', { type: 'text/plain' });
-        let pending!: Promise<{ ok: boolean; error?: string }>;
+        const hook = await renderTransfers({ onAfterUploadSuccess });
+        let pending!: ReturnType<ReturnType<typeof useWorkspaceFileTransfers>['startUploads']>;
         await act(async () => {
-            pending = hook.getCurrent().startUploads({
-                destinationDir: 'workspace/files',
-                entries: [{ kind: 'web', file, relativePath: 'hello.txt' }],
-            });
-            await Promise.resolve();
+            pending = hook.getCurrent().startUploads(uploadInput());
+            await chunk.entered;
         });
-        await vi.waitFor(() => expect(uploadDaemonWorkspaceFileFromReaderMock).toHaveBeenCalledTimes(1));
 
         await hook.unmount();
-
-        expect(transfer.signal?.aborted).toBe(true);
         await expect(pending).resolves.toEqual({ ok: false, error: 'Upload canceled' });
+        await act(async () => { chunk.release(); await chunk.settled; });
+
+        expect(harness.uploads).toHaveLength(1);
+        expect(harness.uploads[0]).toEqual(expect.objectContaining({ bytes: new Uint8Array(), finalized: false, aborted: true }));
         expect(onAfterUploadSuccess).not.toHaveBeenCalled();
     });
 });

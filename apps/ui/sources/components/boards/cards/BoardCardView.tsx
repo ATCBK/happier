@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { HAPPIER_DRAG_GRIP_METRICS, HappierSkeletonBlock } from '@happier-dev/plugin-ui/presentation';
 
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
@@ -12,8 +13,11 @@ import { Typography } from '@/constants/Typography';
 import { shadowLevelStyle } from '@/shadowElevation';
 import { getStorage } from '@/sync/domains/state/storage';
 import { readSessionListRowForServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
+import { normalizeSessionAddress, type SessionAddress } from '@/sync/domains/session/sessionAddress';
+import { useSessionContentDemand } from '@/sync/domains/session/useSessionContentDemand';
 import { getSessionWorkContext } from '@/utils/sessions/sessionUtils';
 import { t } from '@/text';
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { formatNextScheduledRun, readNextScheduledRunRefreshAtMs } from '@/components/workflows/triggers/formatTriggerSummary';
 import { describeWorkflowRunProgress } from '@/components/workflows/presentation/workflowRunProgress';
 
@@ -28,6 +32,7 @@ import type { BoardCardAction } from '../model/boardCardOpenTarget';
  */
 
 const KIND_ICON: Readonly<Record<BoardCard['ref']['kind'], IconName>> = {
+    task: 'check-square',
     session: 'chat-circle',
     workflow_run: 'tree-structure',
     workflow: 'clock',
@@ -49,6 +54,8 @@ function readBodyRefreshAtMs(body: BoardCardBody, nowMs: number): number | null 
         .filter((at): at is number => at !== null);
     return deadlines.length === 0 ? null : Math.min(...deadlines);
 }
+
+const NO_SESSION_ADDRESSES: readonly SessionAddress[] = [];
 
 /** The session's context line, read from its own row by this card only. */
 const SessionContext = React.memo(function SessionContext(props: Readonly<{ serverId: string; sessionId: string }>) {
@@ -73,6 +80,8 @@ function runAttentionLine(body: Extract<BoardCardBody, { kind: 'workflow_run' }>
 /** `shownWord`: the state word on screen, which the body never says again. */
 function describeBody(body: BoardCardBody, nowMs: number, shownWord: string | null): string | null {
     switch (body.kind) {
+        case 'task':
+            return null;
         case 'workflow_run': {
             const age = ageOf(body.startedAt, nowMs);
             const state = runAttentionLine(body) ?? (age ? t('boards.card.run.started', { age }) : null);
@@ -126,10 +135,18 @@ export const BoardCardContent = React.memo(function BoardCardContent(props: Read
     card: BoardCard;
     /** The enclosing status group already states this fact; accessibility keeps the exact word. */
     showStatusWord?: boolean;
+    /** The card carries its grip in its top corner: the title row ends before it. */
+    gripped?: boolean;
 }>) {
     const { theme } = useUnistyles();
     const { card } = props;
+    // A Session card names itself from encrypted content: it demands that content like a visible list row.
+    const sessionAddress = card.body.kind === 'session' ? normalizeSessionAddress(card.body.serverId, card.body.sessionId) : null;
+    useSessionContentDemand(sessionAddress ? [sessionAddress] : NO_SESSION_ADDRESSES, { tag: 'board.hydrateSessionCard', hydrate: 'unsettled' });
     const unavailable = card.availability !== 'ready';
+    // The item is still arriving: the card holds its title's line with a skeleton rather than naming it unavailable.
+    const loading = card.availability === 'not_loaded';
+    const reducedMotion = useReducedMotionPreference();
     // In a status group the column names the bucket, so the title row drops the word. A card that needs
     // the person or is in trouble still says what it is waiting for ("Permission required") on its own
     // line; a healthy word ("Idle") would only repeat the column.
@@ -142,13 +159,18 @@ export const BoardCardContent = React.memo(function BoardCardContent(props: Read
     const body = unavailable
         ? (card.unavailableReason ?? (card.availability === 'home_unavailable' ? t('boards.card.unavailableBody') : null))
         : describeBody(card.body, nowMs, shownWord);
+    const kindLabel = t(`boards.kinds.${card.ref.kind}`);
     return (
         <View style={[styles.content, resolveBoardCardAction(card) ? styles.contentAboveAction : null]}>
-            <View style={styles.titleRow}>
+            <View style={[styles.titleRow, props.gripped ? styles.titleRowGripped : null]}>
                 <View style={styles.mark}><Icon name={KIND_ICON[card.ref.kind]} size={16} color={theme.colors.text.secondary} /></View>
                 {/* A grouped card sits in a narrow column: its name may take a second line rather than truncate. */}
-                <Text numberOfLines={grouped ? 2 : 1} style={[styles.title, unavailable ? styles.quiet : null]}>{card.title}</Text>
-                {grouped ? null : <Text
+                {loading
+                    ? <View testID={`board-card:${card.key}:loading`} accessible accessibilityLabel={card.title} style={styles.titleSkeleton}>
+                        <HappierSkeletonBlock width="55%" height={10} radius={5} color={theme.colors.surface.skeleton} reducedMotion={reducedMotion} />
+                    </View>
+                    : <Text numberOfLines={grouped ? 2 : 1} style={[styles.title, unavailable ? styles.quiet : null]}>{card.title}</Text>}
+                {grouped || loading ? null : <Text
                     testID={`board-card:${card.key}:word`}
                     numberOfLines={1}
                     style={[styles.word, workStatusWordStyle(card.status.tone)]}
@@ -156,11 +178,15 @@ export const BoardCardContent = React.memo(function BoardCardContent(props: Read
                     {card.status.word}
                 </Text>}
             </View>
-            <View style={styles.metaRow}>
+            {/* A settled unavailable card, and an unreadable Session (its detail is the reason it cannot be named),
+                is already titled by its kind; the line would only repeat it. */}
+            {/* An untitled item whose title already reads as its kind (a Run with no name) skips the line too. */}
+            {(unavailable && !loading) || (card.body.kind === 'session' && card.body.statusDetail !== undefined)
+                || (card.body.kind !== 'session' && card.title === kindLabel) ? null : <View style={styles.metaRow}>
                 {card.body.kind === 'session'
                     ? <SessionContext serverId={card.body.serverId} sessionId={card.body.sessionId} />
-                    : <Text numberOfLines={1} style={styles.kind}>{t(`boards.kinds.${card.ref.kind}`)}</Text>}
-            </View>
+                    : <Text numberOfLines={1} style={styles.kind}>{kindLabel}</Text>}
+            </View>}
             {body ? <Text style={[styles.body, unavailable ? styles.quiet : null]}>{body}</Text> : null}
             {groupedWord ? <Text testID={`board-card:${card.key}:needs`} style={[styles.body, workStatusWordStyle(card.status.tone)]}>{groupedWord}</Text> : null}
         </View>
@@ -199,11 +225,18 @@ export const BoardCardView = React.memo(function BoardCardView(props: Readonly<{
     /** A carry owns interaction without changing the card's measured footprint. */
     actionsDisabled?: boolean;
     renderTarget?: (content: React.ReactNode) => React.ReactNode;
+    /**
+     * The Canvas grip. It sits inside the card's top corner, level with the title, as a widget card keeps
+     * its grip in its header: a sibling of the open target, never a control inside the card's button.
+     */
+    grip?: React.ReactNode;
 }>) {
-    const content = <BoardCardContent card={props.card} showStatusWord={props.showStatusWord} />;
+    const gripped = props.grip !== undefined && props.grip !== null;
+    const content = <BoardCardContent card={props.card} showStatusWord={props.showStatusWord} gripped={gripped} />;
     return <BoardCardFrame card={props.card} lifted={props.lifted}>
         {props.renderTarget ? props.renderTarget(content) : content}
         <BoardCardActionButton card={props.card} onAction={props.onAction} disabled={props.actionsDisabled} />
+        {gripped ? <View style={styles.grip}>{props.grip}</View> : null}
     </BoardCardFrame>;
 });
 
@@ -231,6 +264,14 @@ const styles = StyleSheet.create((theme) => ({
         alignItems: 'flex-start',
         gap: theme.space.s8,
     },
+    // Clears the grip (its box, a small gap, at the grip's inset rather than the content's).
+    titleRowGripped: { paddingRight: HAPPIER_DRAG_GRIP_METRICS.pointer.box + theme.space.s4 + theme.space.s8 - theme.space.s16 },
+    // Level with the title's first line, a little inside the card's corner.
+    grip: {
+        position: 'absolute',
+        top: theme.space.s12 + (Typography.variant('label', 'semiBold').lineHeight - HAPPIER_DRAG_GRIP_METRICS.pointer.box) / 2,
+        right: theme.space.s8,
+    },
     mark: {
         height: Typography.variant('label', 'semiBold').lineHeight,
         justifyContent: 'center',
@@ -240,6 +281,13 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.primary,
         flex: 1,
         minWidth: 0,
+    },
+    // The skeleton bar is centred in the title's own line, so the loaded title lands without a jump.
+    titleSkeleton: {
+        flex: 1,
+        minWidth: 0,
+        height: Typography.variant('label', 'semiBold').lineHeight,
+        justifyContent: 'center',
     },
     word: {
         ...Typography.variant('meta'),

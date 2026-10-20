@@ -1,6 +1,7 @@
 import type { SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 import type { SkillFoundListResultV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 import { resolveSkillCatalogItemIdentityV1, type SkillCatalogItemIdentityV1 } from '@happier-dev/protocol/runtime/catalog/skills';
+import type { CapabilityApplyTimingV1 } from '@happier-dev/protocol/reach/capabilityApplyTimingV1';
 import { buildMentionRefForKindV1, MENTION_KIND_V1, MentionRefV1Schema, type MentionRefV1 } from '@happier-dev/protocol/runtime/input/mentionRefV1';
 import { formatComposerSuggestionToken } from '../../../components/autocomplete/composerSuggestionGrammar';
 
@@ -34,7 +35,13 @@ export function buildSkillComposerGroups(input: SkillComposerGroupsInput): reado
     const sessionRows = rows(input.sessionItems.flatMap(value => {
         if (!value || typeof value !== 'object') return [];
         const item = value as Readonly<Record<string, unknown>>;
-        if (item.enabled === false || item.userInvocable === false) return [];
+        if (item.userInvocable === false) {
+            // A weaker Found observation cannot override the Session's invocation eligibility.
+            const identity = resolveSkillCatalogItemIdentityV1(value);
+            if (identity) seen.add(identity.id);
+            return [];
+        }
+        if (item.enabled === false) return [];
         return [{ value, source: 'session' as const, skillId: null, description: typeof item.description === 'string' ? item.description : null }];
     }));
     const libraryRows = rows(input.libraryItems.filter(item => item.userInvocable).map(item => ({
@@ -42,7 +49,7 @@ export function buildSkillComposerGroups(input: SkillComposerGroupsInput): reado
         skillId: item.skillId, description: item.description,
     })));
     const foundRows = rows(input.machineId && input.found?.machineId === input.machineId
-        ? input.found.result.items.filter(item => item.agents.includes(input.agentId)).map(item => ({
+        ? input.found.result.items.filter(item => item.userInvocable !== false && item.agents.includes(input.agentId)).map(item => ({
             value: { name: item.name, origin: 'vendor', backendId: input.agentId }, source: 'found' as const, skillId: null, description: item.description,
         })) : []);
     return [
@@ -68,3 +75,31 @@ export async function pickSkillComposerRow(row: SkillComposerRow, owner: SkillCo
     }
     return { ok: true, mention };
 }
+
+/** The library and Found facts the `$` kind groups the session's own catalog with. */
+export type SkillComposerSourceFacts = Readonly<{
+    libraryItems: readonly SkillListItemV1[];
+    found: SkillComposerGroupsInput['found'];
+}>;
+
+/**
+ * What a composer host hands the `$` suggestion kind (P6 U6.8 through the composer registry): the Agent
+ * and Machine the groups are for, last-known facts for an immediate first paint, a current read once
+ * the picker asks, and the selection owner a library pick turns the skill on through (P8's Session
+ * controller or P2's draft). The kind applies `buildSkillComposerGroups` and `pickSkillComposerRow`;
+ * the host decides nothing about groups or selection.
+ */
+export type SkillComposerSource = Readonly<{
+    agentId: string;
+    machineId: string | null;
+    machineName: string | null;
+    peek(): SkillComposerSourceFacts;
+    read(): Promise<SkillComposerSourceFacts>;
+    owner: SkillComposerSelectionOwner;
+    /**
+     * The Session controller's own apply timing for skills, read when the picker builds its rows (the
+     * source keeps its identity). `new_sessions_only` means a library skill cannot join this running
+     * Session; a draft has no timing.
+     */
+    applyTiming(): CapabilityApplyTimingV1 | null;
+}>;

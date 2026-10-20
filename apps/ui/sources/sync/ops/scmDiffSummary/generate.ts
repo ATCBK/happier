@@ -1,3 +1,4 @@
+import { EXECUTION_RUN_KIND_BY_INTENT } from '@happier-dev/protocol/execution/runs/startRequest';
 import type {
     BackendTargetRefV2,
     ExecutionRunGetRequest,
@@ -85,7 +86,8 @@ export type GenerateScmDiffSummaryParams = ScmDiffSummaryHost & Readonly<{
     scope?: ServerAccountScope;
     signal?: AbortSignal;
     shouldContinue?: () => boolean;
-    backendTarget: BackendTargetRefV2;
+    /** Omitted lets host admission resolve the applied Session or executable default model. */
+    backendTarget?: BackendTargetRefV2;
     input: ScmDiffSummaryGenerateInput;
     turnChangeSet?: TurnChangeSet;
     intent?: Exclude<ScmDiffSummaryOperationIntent, 'copy'>;
@@ -140,7 +142,7 @@ function readRunResponse(value: unknown): ExecutionRunGetResponse | null {
 function readStructuredOutput(response: ExecutionRunGetResponse): ScmDiffSummaryGenerateOutput | null {
     const latestToolResult = ScmDiffSummaryGenerateOutputSchema.safeParse(response.latestToolResult);
     if (latestToolResult.success) return latestToolResult.data;
-    if (response.structuredMeta?.kind === 'scm_diff_summary.v1') {
+    if (response.structuredMeta?.kind === EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary) {
         const payload = response.structuredMeta.payload;
         const parsed = ScmDiffSummaryGenerateOutputSchema.safeParse(payload);
         if (parsed.success) return parsed.data;
@@ -162,7 +164,7 @@ function resolveSelectorCatalogId(params: GenerateScmDiffSummaryParams): string 
     const explicit = readNonEmptyString(params.resolvedSelector?.catalogId);
     if (explicit) return explicit;
 
-    return buildBackendTargetKeyV2(params.backendTarget);
+    return params.backendTarget ? buildBackendTargetKeyV2(params.backendTarget) : 'default';
 }
 
 function buildResolvedSelector(params: GenerateScmDiffSummaryParams): Readonly<{ catalogId: string }> {
@@ -243,7 +245,7 @@ function buildGenerateRequest(params: GenerateScmDiffSummaryParams): ScmDiffSumm
         // An unset preference belongs to the host's executable default owner.
         // A static picker target must not narrow its native sign-in evidence.
         ...(!followsAccountDefault ? { modelSelector: {
-            backendTargetKey: buildBackendTargetKeyV2(params.backendTarget),
+            ...(params.backendTarget ? { backendTargetKey: buildBackendTargetKeyV2(params.backendTarget) } : {}),
             ...requestedSelector,
             ...(settings.modelOverride?.modelSelector ?? (override?.startsWith('profile:') ? { profileId: override.slice('profile:'.length) } : override ? { backendTargetKey: override } : {})),
         } } : {}),
@@ -519,28 +521,8 @@ export function createScmDiffSummaryOperations(deps: ScmDiffSummaryOperationsDep
         if (!current()) return retired();
         const error = readOperationError(response);
         if (error) {
-            const entry = state.entriesByKey[params.key];
-            if (!entry) {
-                return {
-                    ok: false,
-                    key: params.key,
-                    error: error.error,
-                    ...(error.errorCode ? { errorCode: error.errorCode } : {}),
-                    state,
-                    viewModel: selectScmDiffSummaryViewModel(state, params.key),
-                };
-            }
-            setState(applyScmDiffSummaryEvent(state, {
-                type: 'request_failed',
-                key: params.key,
-                sessionId: entry.sessionId,
-                actionId: SCM_DIFF_SUMMARY_GENERATE_ACTION_ID,
-                input: entry.input,
-                error: error.error,
-                ...(error.errorCode ? { errorCode: error.errorCode } : {}),
-                failedAtMs: nowMs(),
-                intent: 'regenerate',
-            }));
+            // An observation refusal says nothing about generation or publication. In particular an
+            // ended Session may no longer serve Run RPCs while its machine's saved result remains readable.
             return {
                 ok: false,
                 key: params.key,
@@ -612,7 +594,9 @@ export function createScmDiffSummaryOperations(deps: ScmDiffSummaryOperationsDep
         generateFromUserAction,
         prefetch,
         refreshRun,
-        loadSavedResult: (params: ScmDiffSummaryHost & Readonly<{ scope: ServerAccountScope; result: ScmDiffSummaryResult }>): string | null => {
+        loadSavedResult: (params: ScmDiffSummaryHost & Readonly<{ scope: ServerAccountScope; result: ScmDiffSummaryResult;
+            /** Inventory recency, so independent output readers cannot reorder saved results by load time. */
+            savedAtMs?: number }>): string | null => {
             const output = params.result.output;
             if (!output.success || !output.comparison) return null;
             const scopeKey = serverAccountScopeKeySuffix(params.scope);
@@ -623,7 +607,7 @@ export function createScmDiffSummaryOperations(deps: ScmDiffSummaryOperationsDep
             if (!existing) next = applyScmDiffSummaryEvent(next, { type: 'request_started', key, scopeKey,
                 sessionId: params.sessionId ?? null, ...(params.machineId ? { machineId: params.machineId } : {}), actionId: SCM_DIFF_SUMMARY_GENERATE_ACTION_ID,
                 input: { cwd: output.comparison.repository.rootPath, source: output.comparison.source, outputs: output.requestedOutputs ?? ['walkthrough'] },
-                runId: output.runId ?? null, structuredOutput: output, requestedAtMs: nowMs(), intent: 'generate' });
+                runId: output.runId ?? null, structuredOutput: output, requestedAtMs: params.savedAtMs ?? nowMs(), intent: 'generate' });
             setState(applyScmDiffSummaryEvent(next, { type: 'saved_result', key, result: params.result, observedAtMs: nowMs() }));
             return key;
         },
@@ -668,6 +652,6 @@ export const recordScmDiffSummaryCopyIntent = defaultOperations.recordCopyIntent
 export const getScmDiffSummaryState = defaultOperations.getState;
 export const subscribeScmDiffSummaryState = defaultOperations.subscribe;
 
-export function getScmDiffSummaryOperationState(state: ScmDiffSummaryState, key: string): ScmDiffSummaryViewModel {
-    return selectScmDiffSummaryViewModel(state, key);
+export function getScmDiffSummaryOperationState(state: ScmDiffSummaryState, key: string, output?: ScmDiffSummaryOutputKind): ScmDiffSummaryViewModel {
+    return selectScmDiffSummaryViewModel(state, key, output);
 }

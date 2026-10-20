@@ -1,13 +1,12 @@
 ---
 title: Plugin quickstart
-description: Create, develop, test, build, pack, and install a minimal Happier plugin.
+description: Create a visible plugin page with one Action, develop it, test it, and pack it.
 ---
 
-The default scaffold contains one code-defined plugin module, one action, one
-declarative UI surface, one focused test, and the package metadata needed by the
-current author tools. The default surface is declarative: Happier renders the
-nodes the manifest declares, so the plugin has a visible surface on every client
-without a bundler, a UI dependency tree, or a build step.
+Create a plugin, open its page in Happier, and invoke its first Action. The
+default scaffold includes a declarative page and a **Save note** Action:
+Happier renders the declared nodes without a bundler, a UI dependency tree, or
+a build step before the page appears.
 
 For every authoring command and the exact review-decision lifecycle, see the
 [Plugin authoring CLI](/plugins/packaging/authoring-cli) reference.
@@ -24,74 +23,78 @@ exists on the published `happier` CLI: use that lane to validate an installed
 plugin against a published release, and expect published copies of the
 examples to name `happier` instead.
 
-## Create and develop
+## Create → dev → test → pack
 
 ```bash
 hdev plugins create my-plugin
 cd my-plugin
 hdev plugins dev
+
+# If dev stays attached, run the remaining commands in a second terminal
+# rooted at my-plugin.
+hdev plugins test .
+hdev plugins pack .
 ```
 
 `plugins create` derives the display name and a local plugin id from the
 directory name. Use `--id com.example.my-plugin` when you need a durable
 publisher-owned id.
 
-For an **executable** UI — one whose code you write and Happier builds — keep the
-same journey and choose one mode:
+If `plugins dev` returns an approval Artifact ID, review it in the Happier Inbox,
+then run `plugins dev` again to continue watching. See
+[pending reviews](/plugins/packaging/authoring-cli#review-a-pending-change).
 
-```bash
-hdev plugins create my-native-plugin --ui reactNative
-hdev plugins create my-hosted-plugin --ui hostedWeb
-```
+After `plugins dev` registers the source, open the plugin's app page in Happier
+and choose **Save note**. The page invokes the declared Action with
+`{ note: 'hello' }`; its handler returns that note. Edit the greeting in
+`src/ui/surfaces.ts` to see the development loop replace the page.
 
-The React Native scaffold declares web, iOS, and Android artifacts through the
-public build contract. The hosted scaffold emits its isolated artifact and
-bootstrap client. Its packaged runtime availability is not one global claim:
-each host reports the single frame adapter it can construct, so the browser,
-iOS, Android, and structurally supported packaged-desktop hosts can admit the
-artifact today. macOS, Windows, and Linux/X11 have direct Wry adapters; Wayland
-and display-less Linux report their exact typed unavailable reasons. Runtime
-availability is not loaded-platform proof, and the desktop rows still require
-current packaged QA before a Preview support claim. Read the per-host state from
-[Hosted web UI](/plugins/ui/hosted-web#build-and-runtime-availability) rather
-than assuming either answer.
+`plugins test .` runs the generated daemon-independent suite through Happier's
+managed JavaScript runtime. It builds the module, loads its exported `manifest`
+and `activate` through the public testkit, and invokes **Save note**. Start with
+that passing contract and add your own behavior. `plugins pack .` writes an
+npm-compatible `.tgz` and SHA-256 sidecar outside the plugin root; use the path
+it prints. [Pack plugins](/plugins/packaging/pack) and
+[Install and trust](/plugins/packaging/install-trust) cover distribution and
+the separate authority decisions for installation.
 
-For a custom persistent Session Agent, use the dedicated scaffold instead:
+### What to import from where
 
-```bash
-hdev plugins create my-agent --template session-agent
-```
+These are the imports used by the generated page, Action, and test. Check the
+[generated public API inventory](/plugins/api/surface) for exact exports and the
+[generated availability page](/plugins/manifest/availability) before adding a
+contribution or service family. A `deferred` family is not supported for ordinary
+author use; follow its recorded unblock condition.
 
-It emits the same public `definePlugin(...)` shape as the maintained
-[`session-agent`](https://github.com/happier-dev/happier/tree/v0.3/packages/plugin-sdk/examples/session-agent)
-repository example — one Agent declaration plus a distinct, import-safe
-Session-runner leaf — with a smaller behavior body to replace. The template
-takes no `--ui`.
+| File you edit | Public import | Purpose |
+| --- | --- | --- |
+| `src/index.ts` | `definePlugin` from `@happier-dev/plugin-sdk` | Declare the plugin and its Action handler. |
+| `src/ui/surfaces.ts` | `defineUiSurfaceDefinition` from `@happier-dev/plugin-sdk` | Declare the page and its Action button. |
+| `src/index.ts` | `defineProtocolObject`, `defineProtocolString` from `@happier-dev/plugin-sdk/protocol` | Describe the closed Action input and result. |
+| `test/index.test.mjs` | `createPluginTestkit`, `createPluginUiTestkit`, `createSurfaceContextFixture` from `@happier-dev/plugin-sdk/testing` | Invoke the Action and check the page declaration without a daemon. |
+
+Use the [SDK entrypoint map](/plugins/api/sdk-entrypoints) when the plugin grows.
+For an executable page, choose the [React Native scaffold](/plugins/ui/react-native)
+or [hosted-web scaffold](/plugins/ui/hosted-web); hosted runtime availability is
+reported per host. The [authoring CLI reference](/plugins/packaging/authoring-cli#create-and-develop)
+also covers the `session-agent` template, which emits a distinct, import-safe
+Session-runner leaf and takes no `--ui`.
 
 `plugins dev` registers the exact trusted source with the daemon and may remain
 attached for status output. The daemon owns observation, dependency
 preparation, artifact compilation, candidate validation, and the per-plugin
 swap. It imports the development module only as the activation entry and calls
 its generated `activate(api)` export. The CLI does not keep a second watcher or
-currentness model. Use `hdev plugins status [--json]` to read the daemon's
-canonical phase, occurrence, UI digest, and bounded diagnostic projection.
+currentness model.
 
-This normal create-to-dev loop prepares dependencies automatically; do not run
-`hdev plugins dev install .` first. That command prepares an
-external-author fixture. If the SDK must resolve through an approved registry
-origin, use `hdev plugins dev --sdk-registry <origin>`. The copyable public
-patterns live in the maintained repository examples under
+This normal create-to-dev loop prepares dependencies automatically. For package
+aliases, dependency repair, registry selection, status, or manual reload, use
+the [authoring CLI reference](/plugins/packaging/authoring-cli).
+Copyable public patterns live in the maintained repository examples under
 [`packages/plugin-sdk/examples/`](https://github.com/happier-dev/happier/tree/v0.3/packages/plugin-sdk/examples);
-choose the smallest matching example and verify imports against the maintained
-[SDK entrypoint map](/plugins/api/sdk-entrypoints). Any copy an installed SDK
+choose the smallest matching example. Any copy an installed SDK
 may carry under `node_modules/` is a release-owned snapshot, not the maintained
-source. Before selecting a
-contribution or service family, check the generated
-[availability page](/plugins/manifest/availability), rendered from the SDK's
-`capability-matrix.json`: it is the sole
-availability authority. A `deferred` row is not supported or advertised for
-ordinary author use; do not rely on it; consult its unblock condition. This
-does not change the current prepublication hold.
+source. This does not change the current prepublication hold.
 
 For a custom Session Agent, that activation entry is not the runner entry. The
 runner imports only the exact named factory leaf in the Agent's
@@ -155,11 +158,7 @@ export const { manifest, activate } = definePlugin({
     'save-note': {
       title: 'Save note',
       description: 'Returns the supplied note from one minimal plugin action.',
-      scopes: ['global'],
       surfaces: ['agent', 'cli', 'mcp', 'ui'],
-      execution: { target: 'daemon' },
-      placementBindings: ['commandPalette'],
-      dangerLevel: 'safe',
       inputSchema: defineProtocolObject({
         note: defineProtocolString(),
       }, { policy: 'closed' }),
@@ -204,64 +203,7 @@ The action id is local to the plugin. Happier owns its structured global
 identity and renders it as `com.example.my-plugin/actions/save-note` only where
 a global CLI, wire, or display boundary needs qualification.
 
-## Test, build, and pack
-
-The normal test command runs the generated daemon-independent suite. The
-lower-level author commands remain available for focused checks:
-
-```bash
-hdev plugins dev typecheck .
-hdev plugins dev build .
-hdev plugins test .
-hdev plugins pack .
-```
-
-You can also use `npm run typecheck`, `npm test`, `npm run build`, and
-`npm run pack:plugin` from the scaffold. `plugins test .` runs the generated
-`test/index.test.mjs` suite through Happier's managed JavaScript runtime. The
-generated `save-note` contract already passes and gives you the pattern for the
-first behavior your plugin must preserve; the adjacent example loads
-`dist/index.js`, passes its exported `manifest` and `activate` through the public
-testkit, and invokes the declared `save-note` Action without starting a daemon
-or mutating installed plugin state. The reserved
-`hdev plugins test . --packed` mode packs the project, installs and trusts
-it through an authenticated disposable daemon home, invokes a safe CLI action
-that accepts empty input when one is declared, restarts the daemon, and invokes
-the action again. It never reads or mutates the user's installed plugin state.
-
-`plugins pack` writes an npm-compatible `.tgz` and a SHA-256 sidecar. Install
-the archive path printed by `plugins pack` through the same reviewed daemon
-path used by other plugin sources:
-
-```bash
-hdev plugins install <printed-archive-path> --kind archive
-```
-
-The explicit install command trusts code from the exact printed archive path.
-If the package declares new authority or credential access, Happier shows that
-delta for a separate decision. `plugins pack` writes its default archive outside
-the plugin root; use the printed path rather than constructing one.
-
-## Development without a watcher
-
-`plugins dev` is the normal automatic edit loop. For an intentional
-watcher-free update, install the package-root development source and reload
-from that root:
-
-```bash
-hdev plugins install . --dev
-hdev plugins reload
-```
-
-The `--dev` installation and reload use the same daemon-owned trust,
-validation, occurrence replacement, and cleanup path as automatic observation. When the
-current directory has more than one development plugin, or when you reload from
-another directory, select one explicitly: `hdev plugins reload
-com.example.my-plugin`. An invalid reload leaves the last accepted occurrence
-serving while that daemon remains alive. A daemon restart rebuilds current
-source and does not revive an older copied source tree.
-
-## Next steps
+## Related
 
 - Add declarations and their handlers or runtimes to the matching
   `definePlugin(...)` family.

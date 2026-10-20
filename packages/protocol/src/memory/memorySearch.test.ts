@@ -136,6 +136,56 @@ describe('negotiateMemorySearchV1', () => {
     summary: 'Retained transcript', score: 0.5,
   };
 
+  it('refuses Project queries before dispatch unless the exact peer advertises support', async () => {
+    const projectQuery = MemorySearchQueryV1Schema.parse({ ...query,
+      corpora: ['sessions'],
+      scope: { type: 'project', projectRef: { serverId: 'home', projectKey: 'payments' } } });
+    const search = vi.fn(async () => ({ v: 1, ok: true, hits: [] }));
+    for (const readProjectSearchSupport of [undefined, async () => false, async () => {
+      throw Object.assign(new Error('Old peer'), { rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND });
+    }]) {
+      expect(await negotiateMemorySearchV1({ query: projectQuery, search,
+        readDocumentSearchSupport: async () => true, readProjectSearchSupport })).toMatchObject({
+        ok: false, errorCode: 'memory_project_scope_unsupported',
+      });
+    }
+    expect(search).not.toHaveBeenCalled();
+    const result = await negotiateMemorySearchV1({ query: projectQuery,
+      readDocumentSearchSupport: async () => true, readProjectSearchSupport: async () => true,
+      search: async request => {
+        expect(request).toEqual(projectQuery);
+        return { v: 1, ok: true, hits: [], project: { state: 'partial' } };
+      } });
+    expect(result).toEqual({ v: 1, ok: true, hits: [], project: { state: 'partial' } });
+    expect(await negotiateMemorySearchV1({ query: projectQuery,
+      readDocumentSearchSupport: async () => true, readProjectSearchSupport: async () => true, search }))
+      .toEqual({ v: 1, ok: true, hits: [], project: { state: 'unavailable' } });
+  });
+
+  it('defaults new Project queries to Sessions and documents while preserving the legacy omitted corpus', async () => {
+    const projectQuery = MemorySearchQueryV1Schema.parse({ ...query,
+      scope: { type: 'project', projectRef: { serverId: 'home', projectKey: 'payments' } } });
+    const requests: MemorySearchQueryV1[] = [];
+    const readDocumentSearchSupport = vi.fn(async () => true);
+    const result = await negotiateMemorySearchV1({ query: projectQuery,
+      readDocumentSearchSupport, readProjectSearchSupport: async () => true,
+      search: async request => {
+        requests.push(request);
+        return { v: 1, ok: true, hits: [], documents: { state: 'ready' }, project: { state: 'ready' } };
+      } });
+    expect(requests).toEqual([{ ...projectQuery, corpora: ['sessions', 'documents'] }]);
+    expect(readDocumentSearchSupport).toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: true, documents: { state: 'ready' }, project: { state: 'ready' } });
+    requests.length = 0;
+    expect(await negotiateMemorySearchV1({ query: projectQuery,
+      readDocumentSearchSupport: async () => false, readProjectSearchSupport: async () => true,
+      search: async request => {
+        requests.push(request);
+        return { v: 1, ok: true, hits: [], project: { state: 'ready' } };
+      } })).toMatchObject({ ok: true, documents: { state: 'unavailable' } });
+    expect(requests).toEqual([{ ...projectQuery, corpora: ['sessions'] }]);
+  });
+
   it('degrades an old-peer mixed request without sending an ignorable document corpus', async () => {
     const search = vi.fn(async (_query: MemorySearchQueryV1) => ({ v: 1, ok: true, hits: [transcript] }));
     const result = await negotiateMemorySearchV1({
@@ -181,10 +231,12 @@ describe('negotiateMemorySearchV1', () => {
 
   it('requires document coverage even from an advertised peer and leaves legacy requests unprobed', async () => {
     const readDocumentSearchSupport = vi.fn(async () => true);
+    const readProjectSearchSupport = vi.fn(async () => true);
     const search = vi.fn(async (_query: MemorySearchQueryV1) => ({ v: 1, ok: true, hits: [transcript] }));
-    expect(await negotiateMemorySearchV1({ query, readDocumentSearchSupport, search }))
+    expect(await negotiateMemorySearchV1({ query, readDocumentSearchSupport, readProjectSearchSupport, search }))
       .toEqual({ v: 1, ok: true, hits: [transcript] });
     expect(readDocumentSearchSupport).not.toHaveBeenCalled();
+    expect(readProjectSearchSupport).not.toHaveBeenCalled();
     expect(await negotiateMemorySearchV1({
       query: { ...query, corpora: ['sessions', 'documents'] }, readDocumentSearchSupport, search,
     })).toEqual({ v: 1, ok: true, hits: [transcript], documents: { state: 'unavailable' } });
@@ -211,6 +263,22 @@ describe('negotiateMemorySearchV1', () => {
 });
 
 describe('MemorySearchQueryV1Schema', () => {
+  it('requires a closed qualified Project scope and admits honest partial coverage', () => {
+    const query = { v: 1, query: 'decision', mode: 'auto',
+      scope: { type: 'project', projectRef: { serverId: 'home', projectKey: 'payments' } } };
+    expect(MemorySearchQueryV1Schema.parse(query)).toEqual(query);
+    for (const scope of [
+      { type: 'project', projectRef: { projectKey: 'payments' } },
+      { ...query.scope, sessionId: 'other' },
+      { type: 'project', projectRef: { ...query.scope.projectRef, rootPath: '/payments' } },
+    ]) expect(MemorySearchQueryV1Schema.safeParse({ ...query, scope }).success).toBe(false);
+    expect(MemorySearchResultV1Schema.parse({ v: 1, ok: true, hits: [],
+      project: { state: 'partial' }, documents: { state: 'partial' } })).toMatchObject({
+      project: { state: 'partial' }, documents: { state: 'partial' },
+    });
+    expect(MemorySearchResultV1Schema.safeParse({ v: 1, ok: true, hits: [],
+      project: { state: 'ready', projectKey: 'other' } }).success).toBe(false);
+  });
   it('validates paging and date filters rather than treating malformed filters as annotations', () => {
     const query = { v: 1, query: 'handoff', scope: { type: 'global' }, mode: 'deep' };
     expect(MemorySearchQueryV1Schema.safeParse({ ...query, cursor: '', createdAfterMs: -1 }).success).toBe(false);

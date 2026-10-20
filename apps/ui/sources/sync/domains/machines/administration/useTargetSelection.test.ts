@@ -1,88 +1,44 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { adoptHomeProfile, type ServerProfile } from '@/sync/domains/server/serverProfiles';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { adoptHomeProfile, removeServerProfile, setActiveServerId, upsertServerProfile, type ServerProfile } from '@/sync/domains/server/serverProfiles';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { storage } from '@/sync/domains/state/storageStore';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
-type TestMachine = {
-    id: string;
-    createdAt: number;
-    updatedAt: number;
-    active: boolean;
-    activeAt: number;
-    revokedAt: number | null;
-    replacedByMachineId?: string | null;
-    metadataVersion: number;
-    metadata: null;
-};
+type TestMachine = ReturnType<typeof createMachineFixture>;
 
-type TestStoreState = {
-    isDataReady: boolean;
-    machines: Record<string, TestMachine>;
-    machineListByServerId: Record<string, TestMachine[]>;
-    machineListStatusByServerId: Record<string, 'idle' | 'loading' | 'signedOut' | 'error'>;
-    settings: {
-        machineAdministrationTargetsLocalV1: Record<string, { serverIdentityId: string; machineId: string }>;
-    };
-};
-
-const runtime = vi.hoisted(() => ({
-    activeServerId: 'local-a',
-    state: {} as unknown as TestStoreState,
-}));
-
-vi.mock('@/sync/domains/state/storageStore', () => ({
-    storage: { getState: () => runtime.state },
-}));
-
-vi.mock('@/sync/domains/state/warmCachePersistence', () => ({
-    loadMachineDisplayWarmCacheEntries: () => ({}),
-}));
-
-vi.mock('@/sync/domains/machines/useMachineInventorySnapshots', () => ({
-    useAllProfileMachineInventorySnapshots: () => [],
-}));
-
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot: () => ({ serverId: runtime.activeServerId, serverUrl: '', generation: 1 }),
-}));
-
+let profileA: ServerProfile;
 let profileB: ServerProfile;
+let previousState: ReturnType<typeof storage.getState>;
+let previousServerId: string;
 beforeEach(async () => {
+    previousState = storage.getState();
+    previousServerId = getActiveServerSnapshot().serverId;
+    profileA = await upsertServerProfile({ serverUrl: 'https://administration-inventory-other.example.test' });
     const url = 'https://administration-inventory-owner.example.test';
     profileB = await adoptHomeProfile({ descriptor: {
         v: 1, homeServerIdentityId: 'srv_server_b', canonicalServerUrl: url,
         revision: 1, endpoints: [{ kind: 'https', url }],
     }, source: 'manual' });
     expect(profileB.id).not.toBe('srv_server_b');
+    await setActiveServerId(profileA.id);
 });
 
-vi.mock('@/sync/store/hooks', () => ({
-    useIsDataReady: () => false,
-    useMachineListStatusByServerId: () => ({}),
-    useMachineRecordListsByServerId: () => ({}),
-    useMachineRecordValues: () => [],
-    useProfile: () => ({ id: 'account-1' }),
-    useActiveServerAccountScope: () => ({ serverId: runtime.activeServerId, accountId: 'account-1' }),
-    useSetting: () => ({}),
-}));
-
-vi.mock('@/hooks/server/useActiveServerSnapshot', () => ({
-    useActiveServerSnapshot: () => ({ serverId: runtime.activeServerId, serverUrl: '', generation: 1 }),
-}));
-
-vi.mock('@/hooks/server/useServerProfilesGeneration', () => ({
-    useServerProfilesGeneration: () => 1,
-}));
+afterEach(async () => {
+    storage.setState(previousState, true);
+    await setActiveServerId(previousServerId);
+    await removeServerProfile(profileA.id);
+    await removeServerProfile(profileB.id);
+});
 
 function machine(id: string, active: boolean): TestMachine {
-    return {
+    return createMachineFixture({
         id,
         createdAt: 1,
         updatedAt: 100,
         active,
         activeAt: active ? Date.now() : 0,
         revokedAt: null,
-        metadataVersion: 1,
-        metadata: null,
-    };
+    });
 }
 
 describe('machine administration selection revision', () => {
@@ -101,8 +57,7 @@ describe('machine administration selection revision', () => {
 
 describe('resolveFreshMachineAdministrationExecutionTarget', () => {
     beforeEach(() => {
-        runtime.activeServerId = 'local-a';
-        runtime.state = {
+        storage.setState({
             isDataReady: true,
             machines: { duplicate: machine('machine-b', true) },
             machineListByServerId: {
@@ -110,9 +65,10 @@ describe('resolveFreshMachineAdministrationExecutionTarget', () => {
             },
             machineListStatusByServerId: { 'srv_server_b': 'idle' },
             settings: {
+                ...storage.getState().settings,
                 machineAdministrationTargetsLocalV1: {},
             },
-        };
+        });
     });
 
     it('resolves only the exact fresh non-active server row', async () => {
@@ -126,7 +82,7 @@ describe('resolveFreshMachineAdministrationExecutionTarget', () => {
         expect(result).toEqual(expect.objectContaining({
             kind: 'resolved',
             serverId: profileB.id,
-            machine: runtime.state.machineListByServerId['srv_server_b'][0],
+            machine: storage.getState().machineListByServerId['srv_server_b']![0],
         }));
     });
 
@@ -134,27 +90,51 @@ describe('resolveFreshMachineAdministrationExecutionTarget', () => {
         const { resolveFreshMachineAdministrationExecutionTarget } = await import('./useTargetSelection');
         const target = { serverIdentityId: 'srv_server_b', machineId: 'machine-b' };
 
-        runtime.state.machineListStatusByServerId['srv_server_b'] = 'error';
+        storage.setState({ machineListStatusByServerId: { 'srv_server_b': 'error' } });
         expect(resolveFreshMachineAdministrationExecutionTarget(target, { accountScope: { serverId: profileB.id, accountId: 'account-b' } })).toBeNull();
 
-        runtime.state.machineListStatusByServerId['srv_server_b'] = 'idle';
-        runtime.state.machineListByServerId['srv_server_b'][0].active = false;
-        runtime.state.machineListByServerId['srv_server_b'][0].activeAt = 0;
+        storage.setState({
+            machineListStatusByServerId: { 'srv_server_b': 'idle' },
+            machineListByServerId: { 'srv_server_b': [machine('machine-b', false)] },
+        });
         expect(resolveFreshMachineAdministrationExecutionTarget(target, { accountScope: { serverId: profileB.id, accountId: 'account-b' } })).toBeNull();
 
-        runtime.state.machineListByServerId['srv_server_b'][0] = {
-            ...machine('machine-b', true),
-            replacedByMachineId: 'machine-c',
-        };
+        storage.setState({ machineListByServerId: { 'srv_server_b': [{
+            ...machine('machine-b', true), replacedByMachineId: 'machine-c',
+        }] } });
         expect(resolveFreshMachineAdministrationExecutionTarget(target, { accountScope: { serverId: profileB.id, accountId: 'account-b' } })).toBeNull();
+    });
+
+    it('uses the admitted Home row during refresh instead of the active display copy', async () => {
+        const { resolveFreshMachineAdministrationExecutionTarget } = await import('./useTargetSelection');
+        await setActiveServerId(profileB.id);
+        const admitted = machine('machine-b', true);
+        storage.setState({
+            machines: { [admitted.id]: { ...admitted } },
+            machineListByServerId: { 'srv_server_b': [admitted] },
+            machineListStatusByServerId: { 'srv_server_b': 'loading' },
+        });
+        const target = { serverIdentityId: 'srv_server_b', machineId: admitted.id };
+        const accountScope = { serverId: profileB.id, accountId: 'account-b' };
+        expect(resolveFreshMachineAdministrationExecutionTarget(target, { accountScope })?.machine).toBe(admitted);
+        expect(resolveFreshMachineAdministrationExecutionTarget(target, {
+            accountScope: { ...accountScope, serverId: profileA.id },
+        })).toBeNull();
+        // The display copy cannot confer membership or override content admission.
+        for (const rows of [[], [{ ...admitted, metadata: null }], [{ ...admitted, active: false, activeAt: 0 }]]) {
+            storage.setState({ machineListByServerId: { 'srv_server_b': rows } });
+            expect(resolveFreshMachineAdministrationExecutionTarget(target, { accountScope })).toBeNull();
+        }
     });
 
     it('does not revive a stale scoped row when the active inventory is authoritatively empty', async () => {
         const { resolveFreshMachineAdministrationExecutionTarget } = await import('./useTargetSelection');
-        runtime.activeServerId = profileB.id;
-        runtime.state.machines = {};
-        runtime.state.machineListByServerId['srv_server_b'] = [machine('machine-b', true)];
-        runtime.state.machineListStatusByServerId['srv_server_b'] = 'error';
+        await setActiveServerId(profileB.id);
+        storage.setState({
+            machines: {},
+            machineListByServerId: { 'srv_server_b': [machine('machine-b', true)] },
+            machineListStatusByServerId: { 'srv_server_b': 'error' },
+        });
 
         expect(resolveFreshMachineAdministrationExecutionTarget({
             serverIdentityId: 'srv_server_b',

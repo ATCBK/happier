@@ -11,7 +11,61 @@ import { resolveInvocationContributionPolicyFacts } from '@/plugins/runtime/poli
 import type { ExecutionRunRpcHandlerContext } from '@/rpc/handlers/executionRuns/registerExecutionRunRpcHandlers';
 import { createRunnerAgentSessionRuntimeSource } from './runnerAgentSessionRuntimeSource';
 import { dispatchCurrentAgentRuntimeDaemonServiceRequest } from './agentRuntimeDaemonServiceAuthorityClient';
-import type { AgentRuntimeDaemonServiceRequestV1 } from './agentRuntimeDaemonServiceProtocol';
+import type { AgentRuntimeDaemonServiceRequestV1, AgentRuntimeDaemonServiceResponseV1 } from './agentRuntimeDaemonServiceProtocol';
+import type { RunnerExecutionRunSnapshotV1 } from './executionRunSnapshotProtocol';
+import { ExecutionRunScmCommitMessageScopeV1Schema } from '@happier-dev/protocol/execution/runs/startRequest';
+import { ProviderErrorCodeV1Schema, type ProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
+import { createProviderRedactionLease } from '@/providers/spawn/redaction';
+import { createExecutionRunCodedError } from '@/agent/runtime/bridges/executionRun/errors';
+import type { ExecutionRunProviderLaunchServices } from '@/agent/runtime/bridges/executionRun/runtime/providerLaunch';
+import type { ExecutionRunNativeOfferedModelReader } from '@/agent/runtime/bridges/executionRun/executionRunTypes';
+
+type SnapshotServiceDispatch = (operation: AgentRuntimeDaemonServiceRequestV1['operation']) =>
+  Promise<Extract<AgentRuntimeDaemonServiceResponseV1, { ok: true }>['result']>;
+
+/** The runner's profile lifecycle stays local; preparation reads retain daemon custody. */
+export function createRunnerExecutionRunProfileCatalog(input: Readonly<{
+  snapshot: RunnerExecutionRunSnapshotV1;
+  sessionId: string;
+  machineId?: string;
+  engineRegistry: Awaited<ReturnType<typeof resolveCliEngineRegistry>>;
+  dispatch: SnapshotServiceDispatch;
+}>) {
+  return buildExecutionRunProfileCatalog(input.snapshot.profiles, {
+    resolveAgentIdentity: agentId => input.engineRegistry.contributions.agentDefinitionsById.get(agentId)?.identity ?? null,
+    resolvePolicyFacts: ({ agentId }) => resolveInvocationContributionPolicyFacts({ sessionId: input.sessionId,
+      facts: { 'session.agentId': agentId, ...(input.machineId ? { 'machine.id': input.machineId } : {}) } }),
+    resolveReviewScmScope: async params => {
+      const result = await input.dispatch({ kind: 'execution_run.review_scm_scope.resolve_v1', ...params });
+      if (result.kind !== 'execution_run.review_scm_scope') throw new PluginError({
+        code: 'execution_run_contribution_snapshot_unavailable', message: 'Execution Run SCM preparation is unavailable' });
+      return result.scope;
+    },
+    loadScmCommitMessageContext: async params => {
+      const { scope, ...limits } = params;
+      const result = await input.dispatch({ ...limits, kind: 'execution_run.commit_message_context.resolve_v1',
+        ...(scope === undefined ? {} : { scope: ExecutionRunScmCommitMessageScopeV1Schema.parse(scope) }),
+      });
+      if (result.kind !== 'execution_run.commit_message_context') throw new PluginError({
+        code: 'execution_run_contribution_snapshot_unavailable', message: 'Execution Run SCM preparation is unavailable' });
+      return result.context;
+    },
+    captureScmCommitTarget: async cwd => {
+      const result = await input.dispatch({ kind: 'execution_run.scm_commit_target.capture_v1', cwd });
+      if (result.kind !== 'execution_run.scm_commit_target') throw new PluginError({
+        code: 'execution_run_contribution_snapshot_unavailable', message: 'Execution Run SCM preparation is unavailable' });
+      return result.capture;
+    },
+    resolvePromptAssetBlocks: async ({ promptAsset }) => {
+      const result = await input.dispatch({ kind: 'turn_contributions.resolve', requestId: input.snapshot.snapshotId,
+        request: { kind: 'prompt', selectedAsset: promptAsset,
+          ...(input.machineId ? { machineId: input.machineId } : {}) } });
+      if (result.kind !== 'turn_contributions' || result.contributions.kind !== 'prompt') throw new PluginError({
+        code: 'execution_run_contribution_snapshot_unavailable', message: 'Execution Run prompt preparation is unavailable' });
+      return result.contributions.promptAssetBlocks;
+    },
+  });
+}
 
 export function createRunnerExecutionRunSnapshotResolver(input: Readonly<{ sessionId: string; machineId?: string }>):
   NonNullable<ExecutionRunRpcHandlerContext['resolveExecutionRunProfileCatalog']> {
@@ -28,11 +82,17 @@ export function createRunnerExecutionRunSnapshotResolver(input: Readonly<{ sessi
       happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing,
       path, sessionId: input.sessionId, runner: current.runner, retainedAgent: current.retainedAgent,
     };
-    const dispatch = async (operation: AgentRuntimeDaemonServiceRequestV1['operation'], executionRunSnapshotId?: string) => {
-      const response = await dispatchCurrentAgentRuntimeDaemonServiceRequest({ authority, timeoutMs: null,
+    const dispatch = async (operation: AgentRuntimeDaemonServiceRequestV1['operation'], executionRunSnapshotId?: string, signal?: AbortSignal) => {
+      const response = await dispatchCurrentAgentRuntimeDaemonServiceRequest({ authority, timeoutMs: null, signal,
         createRequest: token => ({ v: 1, context: { token, sessionId: input.sessionId,
           ...(executionRunSnapshotId ? { executionRunSnapshotId } : {}) }, operation }) });
-      if (!response.ok) return unavailable();
+      if (!response.ok) {
+        const code = ProviderErrorCodeV1Schema.safeParse(response.error.code);
+        if (code.success || response.error.code === 'execution_run_child_choice_required') {
+          throw Object.assign(createExecutionRunCodedError(response.error.code, response.error.code), { code: response.error.code });
+        }
+        return unavailable();
+      }
       return response.result;
     };
     const snapshot = await dispatch({ kind: 'execution_run.snapshot.acquire_v1',
@@ -63,24 +123,65 @@ export function createRunnerExecutionRunSnapshotResolver(input: Readonly<{ sessi
         ...(source ? { backendId: source.identity.backendId, runnerAgentSessionRuntimeSource: source,
           requireRunnerAgentSessionRuntimeSource: true } : {}),
       });
-      const profileCatalog = buildExecutionRunProfileCatalog(snapshot.profiles, {
-        resolveAgentIdentity: agentId => engineRegistry.contributions.agentDefinitionsById.get(agentId)?.identity ?? null,
-        resolvePolicyFacts: ({ agentId }) => resolveInvocationContributionPolicyFacts({ sessionId: input.sessionId,
-          facts: { 'session.agentId': agentId, ...(input.machineId ? { 'machine.id': input.machineId } : {}) } }),
-        resolvePromptAssetBlocks: async ({ promptAsset }) => {
-          const result = await dispatch({ kind: 'turn_contributions.resolve', requestId: snapshot.snapshotId,
-            request: { kind: 'prompt', selectedAsset: promptAsset,
-              ...(input.machineId ? { machineId: input.machineId } : {}) } }, snapshot.snapshotId);
-          if (result.kind !== 'turn_contributions' || result.contributions.kind !== 'prompt') return unavailable();
-          return result.contributions.promptAssetBlocks;
+      const profileCatalog = createRunnerExecutionRunProfileCatalog({ snapshot, engineRegistry, ...input,
+        dispatch: operation => dispatch(operation, snapshot.snapshotId) });
+      const providerRefusal = (refusal: Readonly<{ providerError: ProviderErrorV1; childChoiceRequired: boolean }>): never => {
+        const code = refusal.childChoiceRequired ? 'execution_run_child_choice_required' : refusal.providerError.code;
+        throw Object.assign(createExecutionRunCodedError(code, code), { code, details: { providerError: refusal.providerError } });
+      };
+      const providerLaunch: ExecutionRunProviderLaunchServices = {
+        async admitInheritedSelection(request, signal) {
+          const result = await dispatch({ kind: 'execution_run.provider.admit_v1', ...request,
+            backendTarget: readBackendTargetRefV2(request.backendTarget) }, snapshot.snapshotId, signal);
+          if (result.kind !== 'execution_run.provider.admitted') return unavailable();
+          if (!result.ok) return providerRefusal(result);
         },
-      });
+        async prepareLaunch(request, signal) {
+          const result = await dispatch({ kind: 'execution_run.provider.prepare_v1', ...request,
+            backendTarget: readBackendTargetRefV2(request.backendTarget) }, snapshot.snapshotId, signal);
+          if (result.kind !== 'execution_run.provider.prepared') return unavailable();
+          if (!result.ok) return providerRefusal(result);
+          const environment: Record<string, string> = {};
+          const unsetEnvKeys: string[] = [];
+          for (const entry of result.environmentOverlay) {
+            if (entry.value === null) unsetEnvKeys.push(entry.name);
+            else environment[entry.name] = entry.value;
+          }
+          const redaction = createProviderRedactionLease({ values: result.additionalRedactionValues });
+          let closed = false;
+          return Object.freeze({ environment: Object.freeze(environment), unsetEnvKeys: Object.freeze(unsetEnvKeys),
+            ...(result.connectedServices !== undefined ? { connectedServices: result.connectedServices } : {}),
+            providerBinding: result.providerBinding, additionalRedactionValues: result.additionalRedactionValues,
+            sanitizeDiagnosticText: redaction.snapshotRedactor(),
+            revalidateBeforeCommit: async (commitSignal?: AbortSignal) => {
+              const current = await dispatch({ kind: 'execution_run.provider.revalidate_v1' }, snapshot.snapshotId,
+                commitSignal && signal ? AbortSignal.any([signal, commitSignal]) : commitSignal ?? signal);
+              if (current.kind !== 'execution_run.provider.revalidated') return unavailable();
+              return current.result;
+            },
+            cleanupOnExit: async () => {
+              if (closed) return;
+              const result = await dispatch({ kind: 'execution_run.provider.release_v1' }, snapshot.snapshotId);
+              if (result.kind !== 'execution_run.provider.released') return unavailable();
+              closed = true;
+              redaction.close();
+            },
+          });
+        },
+      };
       const ready = await readCurrentRunnerAgentRuntimeDaemonServiceAuthority({
         happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing,
         path, expectedSessionId: input.sessionId });
       if (!ready || ready.capability !== current.capability || ready.httpPort !== current.httpPort) return unavailable();
       let released = false;
-      return { profileCatalog, engineRegistry, release: async () => {
+      const readNativeOfferedModel: ExecutionRunNativeOfferedModelReader = async request => {
+        const result = await dispatch({ kind: 'execution_run.native_offered_model.read_v1', ...request,
+          backendTarget: readBackendTargetRefV2(request.backendTarget) }, snapshot.snapshotId);
+        if (result.kind !== 'execution_run.native_offered_model') return unavailable();
+        return result.model ?? undefined;
+      };
+      return { profileCatalog, engineRegistry, providerLaunch, readNativeOfferedModel,
+        nativeModelRegistry: engineRegistry.contributions, release: async () => {
         if (released) return;
         try { await source?.retire?.(); } finally { await releaseDaemon(); }
         released = true;

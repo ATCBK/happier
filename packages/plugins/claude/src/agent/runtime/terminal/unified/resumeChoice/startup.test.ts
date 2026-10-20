@@ -7,6 +7,7 @@ import {
   createEventsFixture,
   createPluginContextFixture,
   createTerminalHostFixture,
+  withPermissionDecisionApplication,
 } from '../../../engine.testkit.js';
 import { parseClaudeScreenState } from '../screenState.js';
 import { CLAUDE_UNIFIED_TERMINAL_DIALOG_CHOICE_REQUEST_SOURCE } from '../constants.js';
@@ -100,11 +101,7 @@ function createContext(requestDecision = vi.fn(async () => ({ decision: 'approve
   const events = createEventsFixture();
   return createPluginContextFixture(terminalHost.service, events.service, {
     sessionPermissions: {
-      requestDecision: async (request, options) => {
-        const result = await requestDecision(request, options);
-        await options?.acknowledgeDecisionApplication?.(result);
-        return result;
-      },
+      requestDecision: withPermissionDecisionApplication(requestDecision),
       getMode: () => 'default',
     },
   });
@@ -117,6 +114,58 @@ function pendingDecisionUntilAbort<T>(signal: AbortSignal | undefined): Promise<
 }
 
 describe('createClaudeUnifiedResumeChoiceStartupHandler', () => {
+  it('does not apply a settled answer that skipped native application acknowledgement', async () => {
+    const terminalHost = createTerminalHostFixture();
+    const events = createEventsFixture();
+    const ctx = createPluginContextFixture(terminalHost.service, events.service, {
+      sessionPermissions: {
+        requestDecision: async () => ({ decision: 'approved',
+          answers: { claudeUnifiedTerminalTrustFolder: 'trust_once' } }),
+        getMode: () => 'default',
+      },
+    });
+    const port = createFakeControlPort({ captures: [TRUST_FOLDER_DIALOG, IDLE_COMPOSER] });
+    const handler = createClaudeUnifiedResumeChoiceStartupHandler({ ctx, sessionId: 'session-1', port,
+      settleMs: 0, wait: async () => undefined,
+    });
+    try {
+      await handler.handle(parseClaudeScreenState(TRUST_FOLDER_DIALOG));
+      await vi.waitFor(() => expect(handler.hasPendingUserAction()).toBe(false));
+      expect(port.sentLiteral).toEqual([]);
+      expect(port.sentKeys).toEqual([]);
+    } finally {
+      await handler.dispose();
+    }
+  });
+
+  it.each(['dispose', 'replacement'] as const)('refuses a retired native application ACK after %s', async (retirement) => {
+    type RequestOptions = Parameters<NonNullable<ReturnType<typeof createContext>['sessions']['current']>['permissions']['requestDecision']>[1];
+    const options: RequestOptions[] = [];
+    const requestDecision = vi.fn((_request: unknown, requestOptions?: RequestOptions) => {
+      options.push(requestOptions);
+      return pendingDecisionUntilAbort<Readonly<{ decision: 'approved' }>>(requestOptions?.signal);
+    });
+    const port = createFakeControlPort({ captures: [TRUST_FOLDER_DIALOG, IDLE_COMPOSER] });
+    const handler = createClaudeUnifiedResumeChoiceStartupHandler({ ctx: createContext(requestDecision),
+      sessionId: 'session-1', port, settleMs: 0, wait: async () => undefined,
+    });
+    try {
+      await handler.handle(parseClaudeScreenState(TRUST_FOLDER_DIALOG));
+      const retired = options[0];
+      expect(retired?.acknowledgeDecisionApplication).toBeTypeOf('function');
+      if (retirement === 'dispose') await handler.dispose();
+      else await handler.handle(parseClaudeScreenState(HIDDEN_UNKNOWN_DIALOG));
+      expect(retired?.signal?.aborted).toBe(true);
+      await expect(retired!.acknowledgeDecisionApplication!({ decision: 'approved',
+        answers: { claudeUnifiedTerminalTrustFolder: 'trust_once' },
+      })).rejects.toThrow('claude_unified_dialog_request_retired');
+      expect(port.sentLiteral).toEqual([]);
+      expect(port.sentKeys).toEqual([]);
+    } finally {
+      await handler.dispose();
+    }
+  });
+
   it('surfaces native security notes and continues only after the selected user decision', async () => {
     // Own Claude Code 2.1.296 first-run capture on nl1; no composer or selectable rows.
     const securityNotes = [
@@ -605,6 +654,38 @@ describe('createClaudeUnifiedResumeChoiceStartupHandler', () => {
         })],
       }),
     }), expect.anything());
+  });
+
+  it.each([
+    ['composer', { x: 2, y: 8 }, 'unhandled'],
+    ['chooser', { x: 2, y: 2 }, 'waiting_for_user'],
+  ] as const)('respects the %s cursor with a focused chooser above a separate composer', async (_owner, cursor, expected) => {
+    const screen = `${HIDDEN_UNKNOWN_DIALOG}\n\n${IDLE_COMPOSER}`;
+    const requestDecision = vi.fn((_request: unknown, options?: Readonly<{ signal?: AbortSignal }>) =>
+      pendingDecisionUntilAbort<Readonly<{ decision: 'approved' }>>(options?.signal));
+    const port = createFakeControlPort({ captures: [screen] });
+    const handler = createClaudeUnifiedResumeChoiceStartupHandler({
+      ctx: createContext(requestDecision), sessionId: 'session-1', port,
+      settleMs: 0, wait: async () => undefined,
+    });
+    try {
+      expect(await handler.handle(parseClaudeScreenState(screen, { cursor }))).toBe(expected);
+      expect(handler.hasPendingUserAction()).toBe(expected === 'waiting_for_user');
+      if (expected === 'unhandled') expect(requestDecision).not.toHaveBeenCalled();
+      else expect(requestDecision).toHaveBeenCalledWith(expect.objectContaining({
+        toolName: 'AskUserQuestion',
+        input: expect.objectContaining({ questions: [expect.objectContaining({
+          options: [
+            expect.objectContaining({ label: 'No, disable external imports' }),
+            expect.objectContaining({ label: 'Yes, allow external imports' }),
+          ],
+        })] }),
+      }), expect.anything());
+      expect(port.sentLiteral).toEqual([]);
+      expect(port.sentKeys).toEqual([]);
+    } finally {
+      await handler.dispose();
+    }
   });
 
   it('publishes and applies a future hidden-index generic dialog through verified focus navigation', async () => {

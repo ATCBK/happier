@@ -25,26 +25,13 @@ import { createResolvedContributionRegistry } from '../createResolvedContributio
 import { projectLoadedPluginContributes } from '../resolvePluginContributions';
 import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 import { projectManifestAgentContribution } from '../projectManifestAgentContribution';
+import { projectPluginCatalogEntryIntrospection } from '@/plugins/projection/introspection/catalogEntry';
+import type { PluginCatalogEntry } from '@/plugins/projection/catalog/installed';
 import { parseDaemonContributionRegistryProjectionDescribeResponse } from '../../../../../../ui/sources/sync/api/daemon/daemonContributionRegistryProjectionProtocol';
+import { PluginUiArtifactsManifestV2Schema } from '@happier-dev/protocol/plugins/ui';
 
 function createEmptyResolvedContributionRegistry(): ResolvedContributionRegistry {
-    return {
-        agents: [],
-                providers: [],
-        actions: [],
-        tools: [],
-        commands: [],
-        resources: [],
-        activationTargets: [],
-        actionsById: new Map(),
-        toolsById: new Map(),
-        commandsById: new Map(),
-        resourcesById: new Map(),
-                catalogEntriesById: {},
-        agentDefinitionsById: new Map(),
-                providersByContributionKey: new Map(),
-        pluginDiagnosticsByPluginId: {},
-    };
+    return createResolvedContributionRegistry({});
 }
 
 function admitPluginRuntime(
@@ -61,6 +48,88 @@ function admitPluginRuntime(
 }
 
 describe('buildPluginProjectionV2', () => {
+    it('carries the authored scoped confirmation default through normalization and the strict UI projection', async () => {
+        const { createCollectionDetailPlugin } = await import('../../../../../../../packages/plugin-sdk/fixtures/qa-plugin-authoring/qa-collection-detail/index');
+        const { manifest } = createCollectionDetailPlugin();
+        const loaded: LoadedPlugin = {
+            pluginId: manifest.id, pluginRootPath: '/plugins/reviews', manifestPath: '/plugins/reviews/.happier-plugin/plugin.json',
+            daemonEntryPath: '/plugins/reviews/dist/index.js', devDaemonEntryPath: null,
+            sourceSpec: { kind: 'path', locator: '/plugins/reviews', trustPolicy: 'local_trusted', installPolicy: 'link' },
+            manifest: normalizePluginManifestV2(manifest),
+        };
+        const registry = admitPluginRuntime(createResolvedContributionRegistry(projectLoadedPluginContributes({
+            loadResult: { loadedPlugins: [loaded], diagnosticsByPluginId: {} }, provenance: 'external',
+        })), manifest.id);
+        const projection = PluginProjectionV2Schema.parse(buildPluginProjectionV2({ registry, generation: 1 }));
+        expect(projection.actionsById[`${manifest.id}/set-complete`]).toMatchObject({
+            dangerLevel: 'writesLocal', confirmationWhen: { presentUserUi: false },
+        });
+        expect(projection.actionsById[`${manifest.id}/clear`]).not.toHaveProperty('confirmationWhen');
+        expect(projection.actionsById[`${manifest.id}/restore`]).not.toHaveProperty('confirmationWhen');
+    });
+
+    it('carries generated UI refusals through the real plugin details projection and clears them after repair', async () => {
+        const pluginId = 'qa.collection-detail';
+        const loaded: LoadedPlugin = {
+            pluginId, pluginRootPath: '/plugins/reviews', manifestPath: '/plugins/reviews/.happier-plugin/plugin.json',
+            daemonEntryPath: null, devDaemonEntryPath: null,
+            sourceSpec: { kind: 'path', locator: '/plugins/reviews', trustPolicy: 'local_trusted', installPolicy: 'link' },
+            manifest: normalizePluginManifestV2({
+                schemaVersion: 2, id: pluginId, version: '0.1.0', displayName: 'Reviews', runtime: { apiVersion: 1 },
+                contributes: { ui: {
+                    renderers: [{ id: 'reviews', kind: 'reactNative', artifact: 'reviews-ui', requiredHostMethods: [] }],
+                    views: [{ id: 'reviews', container: 'appPage', target: { kind: 'app' }, renderer: 'reviews', title: 'Reviews' }],
+                } },
+            }),
+        };
+        const registry = admitPluginRuntime(createResolvedContributionRegistry(projectLoadedPluginContributes({
+            loadResult: { loadedPlugins: [loaded], diagnosticsByPluginId: {} }, provenance: 'external',
+        })), pluginId);
+        const installedPackages: readonly PluginCatalogEntry[] = [{
+            pluginId, desiredGeneration: null, appliedGeneration: null, admittedIntegrity: null,
+            title: 'Reviews', description: null, version: '0.1.0', enabled: true,
+            source: { ...loaded.sourceSpec, resolvedPath: loaded.pluginRootPath, manifestPath: loaded.manifestPath },
+            install: { mode: 'link', manifestVersion: '0.1.0' },
+            compatibility: { status: 'compatible', diagnostics: [] },
+            manifestPath: loaded.manifestPath, manifest: loaded.manifest, diagnostics: [],
+            contributionIntrospection: projectPluginCatalogEntryIntrospection({
+                pluginId, pluginVersion: '0.1.0', source: loaded.sourceSpec, manifest: loaded.manifest,
+                generation: 1, host: 'daemon', platform: 'linux', occurredAtMs: 0, diagnostics: [],
+            }),
+        }];
+        const hostRuntime = { reactNativeBundles: { hostRuntime: { hostUiApiVersion: '1.0.0' } } };
+        const projection = PluginProjectionV2Schema.parse(buildPluginProjectionV2({ registry, generation: 1, installedPackages, pluginUiHostRuntime: hostRuntime }));
+        const { adaptDaemonContributionRegistryProjectionToMergedProjectionInputs }: Readonly<{
+            adaptDaemonContributionRegistryProjectionToMergedProjectionInputs(projection: ReturnType<typeof PluginProjectionV2Schema.parse>): Readonly<{
+                pluginProjectionById: Readonly<Record<string, Readonly<{ diagnostics: readonly unknown[] }>>>;
+            }>;
+        }> = await import(
+            new URL('../../../../../../ui/sources/agents/backendCatalog/daemonContributionRegistryProjectionAdapters.ts', import.meta.url).href
+        );
+        const detail = adaptDaemonContributionRegistryProjectionToMergedProjectionInputs(projection).pluginProjectionById[pluginId];
+        expect(detail.diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({
+            code: 'generated_react_native_artifact_missing', severity: 'error',
+            contribution: { pluginId, localId: 'reviews' },
+        })]));
+
+        const digest = `sha256:${'a'.repeat(64)}`;
+        const artifactEntry = 'react-native/reviews-ui/entry.cjs.bundle';
+        const repairedArtifacts = PluginUiArtifactsManifestV2Schema.parse({ version: 2, entries: [{
+            artifactId: 'reviews-ui', tier: 'reactNative',
+            entry: artifactEntry, files: [{ relativePath: artifactEntry, digest, byteSize: 1 }], digest,
+            builtWith: { bundler: 'esbuild', version: '0.25.0' },
+            executable: { exports: ['renderSurface'] }, hostUiApiRange: '^1.0.0',
+        }] });
+        const repaired = {
+            ...registry,
+            uiRenderersV2: registry.uiRenderersV2?.map((renderer) => ({ ...renderer,
+                generatedUiArtifactsManifest: repairedArtifacts,
+            })),
+        };
+        const repairedProjection = PluginProjectionV2Schema.parse(buildPluginProjectionV2({ registry: repaired, generation: 2, installedPackages, pluginUiHostRuntime: hostRuntime }));
+        expect(adaptDaemonContributionRegistryProjectionToMergedProjectionInputs(repairedProjection).pluginProjectionById[pluginId].diagnostics).toEqual([]);
+    });
+
     it('carries an admitted installation default hint into the supplying source package row', () => {
         const pluginId = 'acme.execution-default';
         const loaded: LoadedPlugin = {
@@ -72,7 +141,7 @@ describe('buildPluginProjectionV2', () => {
             sourceSpec: { kind: 'path', locator: `/plugins/${pluginId}`, trustPolicy: 'local_trusted', installPolicy: 'link' },
             manifest: normalizePluginManifestV2({
                 schemaVersion: 2, id: pluginId, version: '1.0.0', displayName: 'Default target', runtime: { apiVersion: 1 },
-                executionTarget: { default: 'installation' },
+                executionTarget: { default: 'installation', autoPick: false },
                 contributes: { resources: [{ id: 'config', kind: 'config', path: 'config.json', contentType: 'application/json' }] },
             }),
         };
@@ -81,9 +150,9 @@ describe('buildPluginProjectionV2', () => {
             provenance: 'external',
         }));
         const projection = buildPluginProjectionV2({ registry, generation: 1 });
-        expect(projection.installedPackagesById[pluginId]?.executionTarget).toEqual({ default: 'installation' });
+        expect(projection.installedPackagesById[pluginId]?.executionTarget).toEqual({ default: 'installation', autoPick: false });
         const admitted = PluginProjectionV2Schema.parse(projection);
-        expect(admitted.installedPackagesById[pluginId]?.executionTarget).toEqual({ default: 'installation' });
+        expect(admitted.installedPackagesById[pluginId]?.executionTarget).toEqual({ default: 'installation', autoPick: false });
     });
 
     it('projects installed Agent output capabilities without inferring them for undeclared Agents', () => {
@@ -486,6 +555,7 @@ describe('buildPluginProjectionV2', () => {
                             fields: [{
                                 path: 'note',
                                 widget: 'textarea',
+                                defaultValue: 'Keep the supplied note',
                                 title: { key: 'actions.refresh.note.title', fallback: 'Note' },
                                 placeholder: { key: 'actions.refresh.note.placeholder', fallback: 'Optional note' },
                             }],
@@ -499,8 +569,8 @@ describe('buildPluginProjectionV2', () => {
             provenance: 'external',
         })), pluginId);
 
-        const projected = buildPluginProjectionV2({ registry, generation: 1 })
-            .actionsById[`${pluginId}/refresh`];
+        const projection = PluginProjectionV2Schema.parse(buildPluginProjectionV2({ registry, generation: 1 }));
+        const projected = projection.actionsById[`${pluginId}/refresh`];
 
         expect(projected).toMatchObject({
             title: { key: 'actions.refresh.title', fallback: 'Refresh preview' },
@@ -511,6 +581,7 @@ describe('buildPluginProjectionV2', () => {
                 submitLabel: { key: 'actions.refresh.form.submit', fallback: 'Refresh' },
                 fields: [{
                     path: 'note',
+                    defaultValue: 'Keep the supplied note',
                     title: { key: 'actions.refresh.note.title', fallback: 'Note' },
                     placeholder: { key: 'actions.refresh.note.placeholder', fallback: 'Optional note' },
                 }],
@@ -1687,7 +1758,7 @@ describe('buildPluginProjectionV2', () => {
     });
 
     it("projects built-in contributes as bundled sources so first-party plugins don't look like external installs", () => {
-        const registry: ResolvedContributionRegistry = {
+        const registry = createResolvedContributionRegistry({
             agents: [{
                 id: 'happier.bundled',
                 identity: { pluginId: 'happier.bundled', localId: 'happier.bundled' },
@@ -1702,19 +1773,7 @@ describe('buildPluginProjectionV2', () => {
                 // be projected as if they were installed from a path/archive.
                 pluginId: 'happier.bundled',
             }],
-                        actions: [],
-            tools: [],
-            commands: [],
-            resources: [],
-            activationTargets: [],
-            actionsById: new Map(),
-            toolsById: new Map(),
-            commandsById: new Map(),
-            resourcesById: new Map(),
-                        catalogEntriesById: {},
-            agentDefinitionsById: new Map(),
-                        pluginDiagnosticsByPluginId: {},
-        };
+        });
 
         const projection = buildPluginProjectionV2({
             registry,

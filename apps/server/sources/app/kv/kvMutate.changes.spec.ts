@@ -1,193 +1,64 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { installDbModuleMock } from "../api/testkit/dbMocks";
-import { createInTxHarness } from "../api/testkit/txHarness";
-
-const emitUpdate = vi.fn();
-const buildKVBatchUpdateUpdate = vi.fn((_changes: any, updSeq: number, updId: string) => ({
-    id: updId,
-    seq: updSeq,
-    body: { t: "kv-batch-update" },
-}));
-
-vi.mock("@/app/events/eventRouter", () => ({
-    eventRouter: { emitUpdate },
-    buildKVBatchUpdateUpdate,
-}));
-
-const randomKeyNaked = vi.fn(() => "upd-id");
-vi.mock("@/utils/keys/randomKeyNaked", () => ({ randomKeyNaked }));
-
-const markAccountChanged = vi.fn(async () => 888);
-vi.mock("@/app/changes/markAccountChanged", () => ({ markAccountChanged }));
-
-let txFindUnique: any;
-let txCreate: any;
-let txUpdate: any;
-let txAccountFindUnique: any;
-let txExecuteRawUnsafe: any;
-let txQueryRawUnsafe: any;
-
-vi.mock("@/storage/inTx", () => {
-    const { inTx, afterTx } = createInTxHarness(() => ({
-            $executeRawUnsafe: (...args: any[]) => txExecuteRawUnsafe(...args),
-            $queryRawUnsafe: (...args: any[]) => txQueryRawUnsafe(...args),
-            account: {
-                findUnique: (...args: any[]) => txAccountFindUnique(...args),
-            },
-            userKVStore: {
-                findUnique: (...args: any[]) => txFindUnique(...args),
-                create: (...args: any[]) => txCreate(...args),
-                update: (...args: any[]) => txUpdate(...args),
-            },
-    }));
-
-    return { afterTx, inTx };
-});
-
-installDbModuleMock({ db: {} });
+import { eventRouter } from "@/app/events/eventRouter";
+import { db } from "@/storage/db";
+import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
+import { AccountJsonKvStoredContentModeMismatchError } from "./accountJsonKvStoredContent";
+import { kvMutate } from "./kvMutate";
 
 describe("kvMutate (AccountChange integration)", () => {
+    let harness: LightSqliteHarness;
+    const socketEmit = vi.fn<(event: string, payload: unknown) => void>();
+
+    beforeAll(async () => {
+        harness = await createLightSqliteHarness({ tempDirPrefix: "happier-kv-publication-", initAuth: false });
+    }, 120_000);
+    afterAll(async () => { eventRouter.clearIo(); await harness.close(); });
     beforeEach(() => {
-        vi.clearAllMocks();
-        txFindUnique = vi.fn();
-        txCreate = vi.fn();
-        txUpdate = vi.fn();
-        txAccountFindUnique = vi.fn(async () => ({
-            encryptionMode: "plain",
-            publicKey: null,
-            contentPublicKey: null,
-            contentPublicKeySig: null,
-        }));
-        txExecuteRawUnsafe = vi.fn(async () => 1);
-        txQueryRawUnsafe = vi.fn(async () => [{ id: "u1" }]);
+        harness.resetEnv();
+        socketEmit.mockClear();
+        // Socket.IO is the system boundary; CAS, fences and publication are real.
+        eventRouter.setIo({ to: () => ({ emit: socketEmit }) } as unknown as Parameters<typeof eventRouter.setIo>[0]);
+    });
+    afterEach(async () => {
+        eventRouter.clearIo();
+        await harness.resetDbTables([
+            () => db.accountChange.deleteMany(), () => db.userKVStore.deleteMany(), () => db.account.deleteMany(),
+        ]);
     });
 
-    it("marks kv change with keys hint (<= 50) and emits update using returned cursor", async () => {
-        txFindUnique.mockImplementation(async (args: any) => {
-            const key = args?.where?.accountId_key?.key;
-            if (key === "k2") {
-                return { version: 0, value: Buffer.from("v") };
-            }
-            return null;
-        });
-        txCreate.mockImplementation(async (args: any) => ({ key: args.data.key, version: 0 }));
-        txUpdate.mockImplementation(async (args: any) => ({ key: args.where.accountId_key.key, version: 1 }));
-
-        const { kvMutate } = await import("./kvMutate");
-        const result = await kvMutate(
-            { uid: "u1" },
-            [
-                { key: "k1", value: "dmFsdWUx", version: -1 },
-                { key: "k2", value: null, version: 0 },
-            ],
-        );
-
-        expect(result.success).toBe(true);
-
-        expect(markAccountChanged).toHaveBeenCalledWith(
-            expect.anything(),
-            expect.objectContaining({
-                accountId: "u1",
-                kind: "kv",
-                entityId: "self",
-                hint: { keys: ["k1", "k2"] },
-            }),
-        );
-
-        expect(buildKVBatchUpdateUpdate).toHaveBeenCalledWith(expect.any(Array), 888, expect.any(String));
-        expect(emitUpdate).toHaveBeenCalledTimes(1);
-        expect(emitUpdate).toHaveBeenCalledWith(
-            expect.objectContaining({
-                userId: "u1",
-                payload: expect.objectContaining({ seq: 888 }),
-            }),
-        );
+    it.each([2, 51])("publishes the committed row versions, cursor and bounded hint for %i keys", async keyCount => {
+        const account = await db.account.create({ data: { encryptionMode: "plain" } });
+        const mutations = Array.from({ length: keyCount }, (_, index) => ({ key: `k${index}`, value: "dmFs", version: -1 }));
+        expect(await kvMutate({ uid: account.id }, mutations)).toMatchObject({ success: true });
+        const accountRow = await db.account.findUniqueOrThrow({ where: { id: account.id } });
+        const change = await db.accountChange.findFirstOrThrow({ where: { accountId: account.id, kind: "kv" } });
+        expect(change.cursor).toBe(accountRow.seq);
+        expect(change.hint).toEqual(keyCount <= 50 ? { keys: mutations.map(mutation => mutation.key) } : { full: true });
+        const expectedChanges = mutations.map(mutation => ({ key: mutation.key, value: mutation.value, version: 0 }));
+        expect(await db.userKVStore.count({ where: { accountId: account.id, version: 0 } })).toBe(keyCount);
+        expect(socketEmit.mock.calls).toContainEqual(["update", expect.objectContaining({ seq: accountRow.seq,
+            body: { t: "kv-batch-update", changes: expectedChanges } })]);
     });
 
-    it("marks kv change with full hint when too many keys (> 50)", async () => {
-        txFindUnique.mockResolvedValue(null);
-        txCreate.mockImplementation(async (args: any) => ({ key: args.data.key, version: 0 }));
-        txUpdate.mockResolvedValue({ version: 1 });
-
-        const { kvMutate } = await import("./kvMutate");
-        const mutations = Array.from({ length: 51 }, (_, i) => ({
-            key: `k${i}`,
-            value: "dmFs",
-            version: -1,
-        }));
-
-        const result = await kvMutate({ uid: "u1" }, mutations);
-        expect(result.success).toBe(true);
-
-        expect(markAccountChanged).toHaveBeenCalledWith(
-            expect.anything(),
-            expect.objectContaining({
-                accountId: "u1",
-                kind: "kv",
-                entityId: "self",
-                hint: { full: true },
-            }),
-        );
+    it("keeps a stale Todo revision and its Account cursor unchanged", async () => {
+        const account = await db.account.create({ data: { encryptionMode: "plain" } });
+        const marker = Buffer.from(JSON.stringify({ t: "plain", v: { undoneOrder: [], completedOrder: [] } }));
+        await db.userKVStore.create({ data: { accountId: account.id, key: "todo.index", version: 1, value: marker } });
+        expect(await kvMutate({ uid: account.id }, [{ key: "todo.index", value: marker.toString("base64"), version: 0 }],
+            { supportsCurrentProtocol: true })).toEqual({ success: false, errors: [{ key: "todo.index", error: "version-mismatch",
+                version: 1, value: marker.toString("base64") }] });
+        expect(await db.accountChange.count({ where: { accountId: account.id } })).toBe(0);
+        expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).seq).toBe(0);
+        expect(socketEmit).not.toHaveBeenCalled();
     });
 
-    it("acquires Account transition admission before reading a mode-bound Todo row", async () => {
-        const marker = Buffer.from(JSON.stringify({
-            t: "plain",
-            v: { undoneOrder: [], completedOrder: [] },
-        }), "utf8");
-        txFindUnique.mockResolvedValue({ version: 1, value: marker });
-
-        const { kvMutate } = await import("./kvMutate");
-        const result = await kvMutate(
-            { uid: "u1" },
-            [{
-                key: "todo.index",
-                value: marker.toString("base64"),
-                version: 0,
-            }],
-            { supportsCurrentProtocol: true },
-        );
-
-        expect(result).toEqual({
-            success: false,
-            errors: [{
-                key: "todo.index",
-                error: "version-mismatch",
-                version: 1,
-                value: marker.toString("base64"),
-            }],
-        });
-        const admissionCallOrder = [
-            ...txExecuteRawUnsafe.mock.invocationCallOrder,
-            ...txQueryRawUnsafe.mock.invocationCallOrder,
-        ];
-        expect(admissionCallOrder).toHaveLength(1);
-        expect(admissionCallOrder[0]).toBeLessThan(
-            txFindUnique.mock.invocationCallOrder[0],
-        );
+    it("refuses a Todo tombstone when Account encryption admission is inconsistent", async () => {
+        const account = await db.account.create({ data: { encryptionMode: "e2ee" } });
+        await expect(kvMutate({ uid: account.id }, [{ key: "todo.index", value: null, version: -1 }],
+            { supportsCurrentProtocol: true })).rejects.toBeInstanceOf(AccountJsonKvStoredContentModeMismatchError);
+        expect(await db.userKVStore.count({ where: { accountId: account.id } })).toBe(0);
+        expect(await db.accountChange.count({ where: { accountId: account.id } })).toBe(0);
+        expect(socketEmit).not.toHaveBeenCalled();
     });
-
-    it("fails closed without reading or tombstoning a Todo row when Account admission is unavailable", async () => {
-        txAccountFindUnique.mockResolvedValue({
-            encryptionMode: "e2ee",
-            publicKey: null,
-            contentPublicKey: null,
-            contentPublicKeySig: null,
-        });
-        txCreate.mockResolvedValue({ key: "todo.index", version: 0 });
-        const { AccountJsonKvStoredContentModeMismatchError } = await import("./accountJsonKvStoredContent");
-        const { kvMutate } = await import("./kvMutate");
-
-        await expect(kvMutate(
-            { uid: "u1" },
-            [{ key: "todo.index", value: null, version: -1 }],
-            { supportsCurrentProtocol: true },
-        )).rejects.toBeInstanceOf(AccountJsonKvStoredContentModeMismatchError);
-
-        expect(txFindUnique).not.toHaveBeenCalled();
-        expect(txCreate).not.toHaveBeenCalled();
-        expect(txUpdate).not.toHaveBeenCalled();
-    });
-
 });

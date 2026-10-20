@@ -10,16 +10,20 @@ installHomeGovernanceBoundaries(homes);
 installDisconnectedServerSocketBoundary();
 const filesystem = vi.hoisted(() => ({ response: {} as unknown }));
 
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/guardedMachineRpc', () => ({
-    callGuardedMachineRpcWithPolicy: async () => filesystem.response,
+// The daemon transport is the boundary; filesystem admission and its guarded
+// RPC owner remain real so the error travels through the public Action path.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
+    machineRpcWithServerScope: async () => filesystem.response,
 }));
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
+const { workspaceWriteFile } = await import('./fileReadWrite');
 
 describe('workspaceWriteFile (workspaceFileSystem)', () => {
     let serverId: string;
     beforeEach(async () => {
         await homes.reset();
         await loadSyncSingletonForTests();
-        serverId = await homes.addHome({ name: 'Write Home', serverUrl: 'https://write-error.test', accountId: 'account-a' });
+        serverId = await homes.addHome({ name: 'Write Home', serverUrl: 'https://write-error.test', accountId: 'account-a', currentAccount: true });
         const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
         await restoreConnectionToActiveServer({ token: homes.findByServerUrl('https://write-error.test')!.token! });
     });
@@ -31,8 +35,6 @@ describe('workspaceWriteFile (workspaceFileSystem)', () => {
     });
 
     it('preserves METHOD_NOT_FOUND so callers can treat it as unsupported', async () => {
-        const { workspaceWriteFile } = await import('./fileReadWrite');
-
         filesystem.response = {
             success: false,
             error: 'Method not found',

@@ -118,6 +118,21 @@ export function TriageFixPullRequests(props: Readonly<{
     />
   );
   const others = state.candidates.filter((candidate) => candidate !== lead);
+  const linkMenu = (
+    <Menu
+      open={menuOpen}
+      onOpenChange={setMenuOpen}
+      trigger={linkLabel}
+      triggerAccessibilityLabel={linkLabel}
+      triggerAppearance="control"
+      items={offers.map((offer) => ({ id: refKey(offer.entryRef), label: offer.title }))}
+      onSelect={(id) => {
+        const offer = offers.find((candidate) => refKey(candidate.entryRef) === id);
+        if (offer === undefined || state.busy) return;
+        state.link({ entryRef: offer.entryRef, display: { title: offer.title, scopeLabel: offer.scopeLabel } });
+      }}
+    />
+  );
 
   return (
     <Stack gap="small">
@@ -157,21 +172,22 @@ export function TriageFixPullRequests(props: Readonly<{
           )}
         </Step>
       )}
-      {offers.length > 0 ? (
-        <Menu
-          open={menuOpen}
-          onOpenChange={setMenuOpen}
-          trigger={linkLabel}
-          triggerAccessibilityLabel={linkLabel}
-          triggerAppearance="control"
-          items={offers.map((offer) => ({ id: refKey(offer.entryRef), label: offer.title }))}
-          onSelect={(id) => {
-            const offer = offers.find((candidate) => refKey(candidate.entryRef) === id);
-            if (offer === undefined || state.busy) return;
-            state.link({ entryRef: offer.entryRef, display: { title: offer.title, scopeLabel: offer.scopeLabel } });
-          }}
-        />
-      ) : null}
+      {offers.length === 0 ? null : lead === null ? (
+        // No fix yet: the story's second step still stands in its place (report, fix, agent work), naming what
+        // belongs here and offering the link, rather than a bare control between two numbered steps.
+        <Step
+          marker={{ kind: 'number', value: 2 }}
+          title={heading}
+          trailing={linkMenu}
+          testID="triage-story-fix-pr"
+        >
+          <Text
+            variant="micro"
+            tone="secondary"
+            value={text('plugins.triage.surface.detail.fixPr.none', 'No pull request is linked as the fix yet.')}
+          />
+        </Step>
+      ) : linkMenu}
       {state.refusal === 'conflict' ? (
         <Status
           tone="warning"

@@ -1,12 +1,61 @@
 import { describe, expect, it } from 'vitest';
 
 import * as selectionOwner from './workflowStepSelectionV1.js';
+import { AgentExecutionTargetV1Schema, CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '../agents/executionTargetV1.js';
+import { buildBackendTargetKeyV2 } from '../backends/targets/backendTargetRefV2.js';
 
 const agent = { kind: 'agent' as const, identity: { pluginId: 'happier.agent.claude', localId: 'claude' } };
 const otherAgent = { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } };
 const model = { v: 1 as const, ref: { agentTargetKey: 'happier.agent.claude/claude', providerConnectionId: null, modelId: 'model' }, updatedAt: 0 };
 
 describe('workflow step selection', () => {
+  it('resolves a strict input-bound engine without mutating the supplied input', () => {
+    const inputs = { choice: { engine: { agentTarget: otherAgent, modelSelection: null } } };
+    const before = structuredClone(inputs);
+    const defaults = { engine: { agentTarget: agent, modelSelection: model }, permissionMode: 'read-only' as const };
+    const step = { engine: { kind: 'input' as const, name: 'choice', path: ['engine'] } };
+    expect(selectionOwner.resolveWorkflowStepSelectionV1({ defaults, step, inputs }).selection)
+      .toEqual({ agentTarget: otherAgent, modelSelection: null, permissionMode: 'read-only' });
+    expect(inputs).toEqual(before);
+    expect(() => selectionOwner.resolveWorkflowStepSelectionV1({ defaults, step, inputs: {} }))
+      .toThrow(expect.objectContaining({ code: 'invalid_input' }));
+  });
+  it('inherits the origin binding only for its default role engine and preserves authored binding overrides', () => {
+    const connectedServices = { v: 2 as const, bindingsByServiceId: {
+      'external.auth/subscription': { source: 'connected' as const, selection: 'profile' as const, profileId: 'origin-profile' },
+    } };
+    const roleSelection = { defaultEngine: { agentTargetKey: buildBackendTargetKeyV2(agent) },
+      defaultConnectedServices: connectedServices,
+      availableAgentTargetKeys: [buildBackendTargetKeyV2(agent), buildBackendTargetKeyV2(otherAgent)] };
+    const defaults = { engine: { role: 'judge' } };
+    expect(selectionOwner.resolveWorkflowStepSelectionV1({ defaults, roleSelection }).selection.connectedServices)
+      .toEqual(connectedServices);
+    expect(selectionOwner.resolveWorkflowStepSelectionV1({ defaults, roleSelection, step: { connectedServices: null } }).selection.connectedServices)
+      .toBeNull();
+    const explicit = { v: 2 as const, bindingsByServiceId: { 'external.auth/subscription': { source: 'native' as const } } };
+    expect(selectionOwner.resolveWorkflowStepSelectionV1({ defaults, roleSelection, step: { connectedServices: explicit } }).selection.connectedServices)
+      .toEqual(explicit);
+    expect(selectionOwner.resolveWorkflowStepSelectionV1({ defaults: { engine: { role: 'second_opinion' } }, roleSelection }).selection.connectedServices)
+      .toBeUndefined();
+    expect(selectionOwner.resolveWorkflowStepSelectionV1({ defaults: { engine: { agentTarget: agent } }, roleSelection }).selection.connectedServices)
+      .toBeUndefined();
+  });
+  it.each([
+    { kind: 'agent' as const, identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, definitionId: 'review-bot' },
+    { kind: 'agent' as const, identity: { pluginId: 'external.review', localId: 'assistant' } },
+  ])('preserves the full explicit role engine target $identity.pluginId', (target) => {
+    const agentTargetKey = buildBackendTargetKeyV2(target);
+    const resolved = selectionOwner.resolveWorkflowStepSelectionV1({ defaults: { engine: { role: 'workflow-reviewer' } },
+      roleSelection: { settingsRoles: { 'workflow-reviewer': {
+        roleId: 'workflow-reviewer', name: 'Reviewer', instructions: 'Review the work.',
+        engine: { agentTargetKey, modelId: 'review-model' }, enabled: true,
+        runsAs: { kind: 'background_run', intent: 'review' }, workspaceWrites: 'deny', secondOpinion: 'off',
+      } } } });
+    expect(resolved.selection.agentTarget).toEqual(target);
+    expect(AgentExecutionTargetV1Schema.parse(resolved.selection.agentTarget)).toEqual(target);
+    expect(resolved.selection.modelSelection?.ref.agentTargetKey).toBe(agentTargetKey);
+  });
+
   it('projects unresolved role fields for authoring without weakening admission or inventing an Agent', () => {
     const defaults = { agentTarget: agent, modelSelection: model, permissionMode: 'read-only' as const,
       executionTarget: { kind: 'session' as const } };

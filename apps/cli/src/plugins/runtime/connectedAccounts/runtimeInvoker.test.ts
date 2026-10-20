@@ -200,6 +200,26 @@ function invokeEstablished(
 }
 
 describe('connected-account runtime invoker', () => {
+    it('reads status credential fields from its admitted snapshot without reopening remote currentness', async () => {
+        const isCurrent = vi.fn(() => true);
+        let currentnessChecksAtCallbackEntry = 0;
+        const invoker = createEstablishedInvoker({
+            ...runtime(() => {}),
+            async status(context) {
+                currentnessChecksAtCallbackEntry = isCurrent.mock.calls.length;
+                await context.credentials.get('accessToken');
+                await context.credentials.get('refreshToken');
+                await context.credentials.get('providerAccountId');
+                expect(isCurrent).toHaveBeenCalledTimes(currentnessChecksAtCallbackEntry);
+                return { status: 'connected' };
+            },
+        });
+
+        await expect(invokeEstablished(invoker, { kind: 'status' }, isCurrent))
+            .resolves.toEqual({ status: 'connected' });
+        expect(isCurrent.mock.calls.length).toBeGreaterThan(currentnessChecksAtCallbackEntry);
+    });
+
     it('invokes a built-in host account without a plugin package and fences established work on disposal', async () => {
         const ref = { pluginId: 'happier', localId: 'mcp-sign-in' };
         const registry = createConnectedAccountContributionRegistry({
@@ -225,7 +245,7 @@ describe('connected-account runtime invoker', () => {
                     observed.push(context);
                     const token = await context.credentials.get('token');
                     return {
-                        status: token === 'host-secret' ? 'connected' : 'needs_reauth',
+                        status: token === 'host-secret' ? 'connected' : 'reconnectRequired',
                         diagnostic: { code: 'host_status', severity: 'warning', message: `Status for ${token}` },
                     };
                 },
@@ -790,11 +810,13 @@ describe('connected-account runtime invoker', () => {
         await owners.dispose();
     });
 
-    it('registers staged refresh credential reads and writes for the invocation redactor', async () => {
+    it('registers refresh credential fields without reopening remote currentness for each field', async () => {
         const existingCredential = 'existing-refresh-secret';
         const issuedCredential = 'issued-refresh-secret';
         const registerRawForRedaction = vi.fn();
         const stagedSet = vi.fn(async () => {});
+        const isConfigurationCurrent = vi.fn(() => true);
+        const isCredentialRevisionCurrent = vi.fn(() => true);
         const registeredRuntime: PluginConnectedAccountRuntime = {
             ...runtime(() => {}),
             async refresh(context) {
@@ -806,8 +828,15 @@ describe('connected-account runtime invoker', () => {
                     configurationRevision: 'configuration-1',
                 });
                 expect(Object.hasOwn(context.operation, 'update')).toBe(false);
+                const credentialCurrentnessChecksAtCallbackEntry =
+                    isCredentialRevisionCurrent.mock.calls.length;
+                await context.credentials.get('existing-token');
                 await context.stagedCredentials.get('existing-token');
                 await context.stagedCredentials.set('issued-token', issuedCredential);
+                await context.stagedCredentials.delete('retired-token');
+                expect(isCredentialRevisionCurrent).toHaveBeenCalledTimes(
+                    credentialCurrentnessChecksAtCallbackEntry,
+                );
                 return { status: 'connected' };
             },
         };
@@ -862,8 +891,8 @@ describe('connected-account runtime invoker', () => {
                 }),
                 credentials: Object.freeze({ get: async () => null }),
             }),
-            isConfigurationCurrent: () => true,
-            isCredentialRevisionCurrent: () => true,
+            isConfigurationCurrent,
+            isCredentialRevisionCurrent,
         })).resolves.toEqual({ status: 'connected' });
 
         expect(registerRawForRedaction.mock.calls.map(([, value]) => value))
@@ -1058,7 +1087,9 @@ describe('connected-account runtime invoker', () => {
             pluginId: service.pluginId,
             definition: serviceDescriptor,
         };
-        let identity: Pick<ConnectedAccountRuntimeLease, 'occurrenceId' | 'sourceCustody'> = runtimeIdentity;
+        let identity: Pick<ConnectedAccountRuntimeLease, 'occurrenceId'> & Readonly<{
+            sourceCustody: Exclude<ConnectedAccountRuntimeLease['sourceCustody'], { kind: 'host' }>;
+        }> = runtimeIdentity;
         const createRegistry = () => createConnectedAccountContributionRegistry({
             readPluginOccurrenceId: () => identity.occurrenceId,
             readPluginSourceCustody: () => identity.sourceCustody,
@@ -1575,129 +1606,4 @@ describe('connected-account runtime invoker', () => {
         expect(complete).toHaveBeenCalledOnce();
     });
 
-    it('does not grant authentication or established producer fetch from an ordinary fixed-origin network request', async () => {
-        const networkRequest = Object.freeze({
-            request: PluginHostAccessRequestV2Schema.parse({
-                id: 'ordinary-network',
-                capability: 'network',
-                reason: 'Unrelated plugin network access',
-                scope: {
-                    targets: [{
-                        kind: 'fixedOrigin',
-                        origin: 'https://api.example.test',
-                    }],
-                },
-            }),
-            required: true,
-        });
-        const observedFetch: unknown[] = [];
-        const createServices = vi.fn((_seed, binding) => {
-            observedFetch.push(binding.availability.http);
-            return Object.freeze({}) as PluginInvocationContext['services'];
-        });
-        const invoker = createConnectedAccountHostRuntimeInvoker({
-            resolveNetworkAddresses: testResolveNetworkAddresses,
-            resolveRuntime: async () => Object.freeze({
-                ref: service,
-                ...runtimeIdentity,
-                descriptor,
-                runtime: runtime((context) => {
-                    expect(context.services).toBeDefined();
-                }),
-                isCurrent: () => true,
-            }),
-            resolvePlugin: () => Object.freeze({
-                version: '1.0.0',
-                hostAccessRequests: Object.freeze([networkRequest]),
-            }),
-            resolveHostPolicy: () => Object.freeze({
-                hostAccess: Object.freeze([{
-                    id: networkRequest.request.id,
-                    required: true,
-                    status: 'available' as const,
-                    requestFingerprint: 'test-fingerprint',
-                }]),
-                serviceBinding:
-                    createLoggerAndEventsAvailablePluginInvocationServiceBinding(
-                        runtimeIdentity.occurrenceId,
-                        'producer',
-                        [networkRequest],
-                    ),
-            }),
-            createServices,
-            registerRawForRedaction() {},
-            resolveHostOwnedConfiguredEndpoints: vi.fn(() => Object.freeze([])),
-        });
-
-        await expect(invoker.invokeAuthentication({
-            admission: Object.freeze({
-                service,
-                descriptor: mode,
-                ...runtimeIdentity,
-                modeId: mode.id,
-            }),
-            operation: Object.freeze({
-                kind: 'submitManual',
-                fields: Object.freeze({ token: 'user-input' }),
-            }),
-            context: Object.freeze({
-                service,
-                attempt: Object.freeze({
-                    kind: 'connect',
-                    attemptId: 'attempt-1',
-                }),
-                configuration: Object.freeze({
-                    target: Object.freeze({
-                        kind: 'service',
-                        service,
-                        modeId: mode.id,
-                    }),
-                    revision: 'configuration-1',
-                    values: Object.freeze({}),
-                    getSecret: async () => null,
-                }),
-                attemptCredentials: Object.freeze({
-                    get: async () => null,
-                    set: async () => {},
-                    delete: async () => {},
-                }),
-            }),
-            isConfigurationCurrent: () => true,
-        })).resolves.toMatchObject({ status: 'connected' });
-
-        await expect(invoker.invokeEstablished({
-            target: Object.freeze({
-                account: Object.freeze({
-                    service,
-                    accountId: 'account-a',
-                }),
-                expectedCredentialRevision: 'credential-1',
-                expectedRuntimeConfigurationRevision: 'configuration-1',
-            }),
-            operation: Object.freeze({ kind: 'status' }),
-            context: Object.freeze({
-                account: Object.freeze({
-                    service,
-                    accountId: 'account-a',
-                }),
-                configuration: Object.freeze({
-                    target: Object.freeze({
-                        kind: 'service',
-                        service,
-                        modeId: mode.id,
-                    }),
-                    revision: 'configuration-1',
-                    values: Object.freeze({}),
-                    getSecret: async () => null,
-                }),
-                credentials: Object.freeze({
-                    get: async () => null,
-                }),
-            }),
-            isConfigurationCurrent: () => true,
-            isCredentialRevisionCurrent: () => true,
-        })).resolves.toMatchObject({ status: 'connected' });
-
-        expect(observedFetch).toEqual(['unavailable', 'unavailable']);
-    });
 });

@@ -54,12 +54,16 @@ describe('ordinary managed child Machine registration', () => {
       throw new axios.AxiosError('not found', undefined, undefined, undefined,
         { status: 404, statusText: 'Not Found', data: {}, headers: {}, config: { headers: new axios.AxiosHeaders() } });
     });
-    const post = vi.spyOn(axios, 'post').mockImplementation(async (_url: string, body) => ({ status: 200, data: { machine: {
+    const post = vi.spyOn(axios, 'post').mockImplementation(async (_url: string, body) => {
+      if (!body || typeof body !== 'object' || !('id' in body) || typeof body.id !== 'string'
+        || !('metadata' in body) || typeof body.metadata !== 'string') throw new Error('Invalid Machine registration carrier');
+      return { status: 200, data: { machine: {
       id: body.id, metadata: body.metadata, metadataVersion: 1, daemonState: null,
       daemonStateVersion: 0, storageMode: 'plain', dataEncryptionKey: null,
       devcontainerChild: { relation: { managedMachineId: managedEnrollment.managedId, managedMachineKind: 'devcontainer',
         parentMachineId: managedEnrollment.controller.machineId }, observation: devcontainerObservation },
-    } } }));
+    } } };
+    });
     onTestFinished(() => { get.mockRestore(); post.mockRestore(); });
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`;
     const api = await ApiClient.create({ token, encryption: null });
@@ -71,6 +75,8 @@ describe('ordinary managed child Machine registration', () => {
       parentMachineId: managedEnrollment.controller.machineId }, observation: devcontainerObservation };
     expect(registered).toMatchObject({ id: machineId, encryptionMode: 'plain', metadata: { devcontainerChild: expected } });
     const body = post.mock.calls[0]?.[1];
+    if (!body || typeof body !== 'object' || !('metadata' in body) || typeof body.metadata !== 'string'
+      || !('installationId' in body)) throw new Error('Missing registered Machine carrier');
     expect(decodePlainMachineStoredContent(body.metadata)).toMatchObject({ devcontainerChild: expected });
     expect(body).toMatchObject({ id: machineId, installationId, managedEnrollment });
     expect(body.installationId).not.toBe(managedEnrollment.controller.installationId);

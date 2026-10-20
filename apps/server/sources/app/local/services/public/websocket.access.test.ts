@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { createLocalServicePublicRuntime } from './runtime';
 import { createLocalServicePublicRateLimitChecker } from './rateLimits';
 import { handleLocalServicePublicWebSocketUpgrade } from './websocket';
+import { resolveApiTrustProxy } from '@/app/api/utils/apiRateLimitPolicy';
 import type { OpenLocalServicePreviewTunnel } from '../preview/httpAdapter';
 
 const preview: LocalServicePreviewResourceV1 = {
@@ -82,9 +83,22 @@ describe('public WS access lifecycle', () => {
         for (const ip of ['203.0.113.1', '203.0.113.2']) {
             const boundary = socketBoundary();
             await handleLocalServicePublicWebSocketUpgrade(upgradeRequest(ip), boundary.socket, new Uint8Array(), {
-                validateAccess: runtime.validateAccess, resolveExposure: runtime.resolveExposure, trustProxy: true, openTunnel: boundary.openTunnel,
+                validateAccess: runtime.validateAccess, resolveExposure: runtime.resolveExposure, trustProxy: resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: '127.0.0.1' }), openTunnel: boundary.openTunnel,
             });
             expect(boundary.output.join('')).toContain('101 Switching Protocols');
+        }
+    });
+
+    it('keeps forged forwarded IPs from splitting one untrusted upgrade peer into separate rate-limit buckets', async () => {
+        const runtime = createRuntime();
+        for (const [index, ip] of ['203.0.113.1', '203.0.113.2'].entries()) {
+            const boundary = socketBoundary();
+            boundary.socket.remoteAddress = '127.0.0.2';
+            await handleLocalServicePublicWebSocketUpgrade(upgradeRequest(ip), boundary.socket, new Uint8Array(), {
+                validateAccess: runtime.validateAccess, resolveExposure: runtime.resolveExposure,
+                trustProxy: resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: '127.0.0.1' }), openTunnel: boundary.openTunnel,
+            });
+            expect(boundary.output.join('')).toContain(index === 0 ? '101 Switching Protocols' : '403 Forbidden');
         }
     });
 

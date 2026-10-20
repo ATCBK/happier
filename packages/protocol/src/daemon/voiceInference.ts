@@ -188,11 +188,24 @@ export const DaemonVoiceInferenceErrorCodeSchema = lazyZodSchema(() => z.enum([
 ]));
 export type DaemonVoiceInferenceErrorCode = z.infer<typeof DaemonVoiceInferenceErrorCodeSchema>;
 
+/** Native failure metadata only; never exception text, stacks, paths or audio. */
+export const DaemonVoiceInferenceSttAppendDiagnosticSchema = lazyZodSchema(() => z.strictObject({
+  operation: z.literal('appendPcm16'),
+  streamId: DaemonVoiceInferenceStreamIdSchema,
+  exceptionClass: z.enum(['Error', 'TypeError', 'RangeError', 'SyntaxError', 'ReferenceError', 'URIError', 'EvalError', 'AggregateError', 'Unknown']),
+  // Match the runner's identifier-only diagnostic convention; native APIs may also use numeric codes.
+  code: z.nullable(z.union([
+    z.string().check(z.regex(/^[a-zA-Z][a-zA-Z0-9_]{0,127}$/u)),
+    z.number().check(z.int(), z.minimum(Number.MIN_SAFE_INTEGER), z.maximum(Number.MAX_SAFE_INTEGER)),
+  ])),
+}));
+
 export const DaemonVoiceInferenceErrorSchema = lazyZodSchema(() => z.object({
   ok: z.literal(false),
   errorCode: DaemonVoiceInferenceErrorCodeSchema,
   error: z.string().check(z.minLength(1)),
   retryable: z.optional(z.boolean()),
+  diagnostic: z.optional(DaemonVoiceInferenceSttAppendDiagnosticSchema),
 }));
 export type DaemonVoiceInferenceError = z.infer<typeof DaemonVoiceInferenceErrorSchema>;
 

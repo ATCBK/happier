@@ -1,24 +1,31 @@
 import * as React from 'react';
+import { LaunchProfileArtifactReferenceV1Schema, readLaunchProfileArtifactV1 } from '@happier-dev/protocol/launchProfiles/launchProfileArtifactV1';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machines/administration/selectionPreferences';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { storage } from '@/sync/domains/state/storageStore';
+import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
+import { refreshProfileCatalog, resetProfileCatalogEngineForTests } from '@/sync/engine/settings/profileCatalogEngine';
+import { resetProfileCatalogSnapshotsForTests } from '@/sync/store/settings/profileCatalogSnapshot';
+import type { ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
+import { PROFILE_ROWS_ROUTE_V1, PROFILE_RECORDS_ROUTE_V1, PROFILE_RECORD_READ_ROUTE_V1, PROFILE_REFERENCE_GUARD_ROUTE_V1, ProfileRecordV1Schema, ProfileRowsListResponseV1Schema, ProfileRowMutationV1Schema, ProfileRowMutationResponseV1Schema, ProfileRowReadRequestV1Schema, ProfileRowReadResponseV1Schema } from '@happier-dev/protocol/profiles/profileRecordV1';
+import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
+import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AiLaunchProfile } from '@happier-dev/protocol';
 
-import {
-    createDeferred,
-    createExpoRouterMock,
-    createReactNavigationNativeMock,
-    createReactNativeWebMock,
-    flushHookEffects,
-    renderScreen,
-    standardCleanup,
-    type RenderScreenResult,
-} from '@/dev/testkit';
-import {
-    createStorageModuleStub } from '@/dev/testkit/mocks/storage';
-import { createCapturingComponent, createPassThroughComponent } from '@/dev/testkit/mocks/components';
+import { createDeferred, flushHookEffects, renderScreen, standardCleanup, type RenderScreenResult } from '@/dev/testkit';
+
+
 import { installProfilesCommonModuleMocks } from '@/components/profiles/profilesTestHelpers';
 import type { AIBackendProfile } from '@/sync/domains/profiles/profileCompatibility';
+import { settingsParse } from '@/sync/domains/settings/settings';
 import type { UnsavedChangesDecision } from '@/utils/ui/promptUnsavedChangesAlert';
 
 type BeforeRemoveEvent = {
@@ -26,26 +33,32 @@ type BeforeRemoveEvent = {
     preventDefault: () => void;
 };
 
-type CapturedProfilesListProps = {
-    onAddProfilePress?: () => void;
-    onEditProfile?: (profile: AIBackendProfile) => void;
-    machineId: string | null;
-    serverId?: string | null;
-    header?: React.ReactNode;
-};
+
 
 type CapturedEditFormProps = {
     profile: AiLaunchProfile;
     machineId: string | null;
     serverId?: string | null;
-    onSave: (profile: AiLaunchProfile) => boolean;
+    onSave: (profile: AiLaunchProfile) => Promise<boolean>;
     onCancel: () => void;
     onDirtyChange: (isDirty: boolean) => void;
-    saveRef: React.MutableRefObject<(() => boolean) | null>;
+    saveRef: React.MutableRefObject<(() => boolean | Promise<boolean>) | null>;
     header?: React.ReactNode;
 };
 
-const promptUnsavedChangesAlertSpy = vi.hoisted(() => vi.fn());
+const promptUnsavedChangesAlertModule = await import('@/utils/ui/promptUnsavedChangesAlert');
+const promptUnsavedChangesAlertSpy = vi.spyOn(promptUnsavedChangesAlertModule, 'promptUnsavedChangesAlert');
+const modalDecisions: Array<UnsavedChangesDecision | Promise<UnsavedChangesDecision>> = [];
+let defaultModalDecision: UnsavedChangesDecision = 'keepEditing';
+function answerModalAlert(...args: Parameters<typeof import('@/modal')['Modal']['alert']>) {
+    shareState.alerts.push(args);
+    const buttons = args[2];
+    if (!buttons?.some(button => button.style === 'destructive') || !buttons.some(button => button.style === 'cancel')) return;
+    void Promise.resolve(modalDecisions.shift() ?? defaultModalDecision).then(decision => {
+        const style = decision === 'discard' ? 'destructive' : decision === 'save' ? 'default' : 'cancel';
+        buttons.find(button => button.style === style)?.onPress?.();
+    });
+}
 const navigationState = vi.hoisted(() => ({
     legacyBeforeRemove: null as null | ((event: BeforeRemoveEvent) => void),
     preventRemoveEnabled: false,
@@ -55,7 +68,6 @@ const navigationState = vi.hoisted(() => ({
 const settingsState = vi.hoisted(() => ({
     values: {
         useProfiles: true,
-        profiles: [],
         lastUsedProfile: null,
         favoriteProfiles: [],
         profileEnabledById: {},
@@ -63,70 +75,56 @@ const settingsState = vi.hoisted(() => ({
         secretBindingsByProfileId: {},
     } as Record<string, unknown>,
 }));
-const administrationTargetState = vi.hoisted(() => ({
-    selectedTarget: {
-        serverIdentityId: 'server-identity-b',
-        machineId: 'machine-b',
-    } as { serverIdentityId: string; machineId: string } | null,
-    executionTarget: {
-        target: {
-            serverIdentityId: 'server-identity-b',
-            machineId: 'machine-b',
-        },
-        machine: { id: 'machine-b' },
-        serverId: 'server-profile-b',
-    } as {
-        target: { serverIdentityId: string; machineId: string };
-        machine: { id: string };
-        serverId: string;
-    } | null,
-}));
+const machineFixtureState = { available: true };
 
 const shareState = vi.hoisted(() => ({
     shown: [] as Array<{ chrome?: { testID?: string }; props?: Record<string, unknown> }>,
     alerts: [] as unknown[][],
     calls: [] as Array<{ actionId: string; input: unknown; context: unknown }>,
-    publishResult: { ok: true, result: { artifactId: 'artifact-new' } } as unknown,
+
     savedFiles: [] as Array<{ fileName: string; json: string }>,
 }));
 
 installProfilesCommonModuleMocks({
-    reactNative: () => createReactNativeWebMock({
+    reactNative: async () => {
+        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+        return createReactNativeWebMock({
         Platform: { OS: 'web' },
-    }),
+    });
+    },
     // The modal host is the presentation boundary: the test reads what the page asked it to show.
     modal: async () => {
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock({ spies: {
-            show: (config) => { shareState.shown.push(config as never); return 'modal-id'; },
-            alert: (...args) => { shareState.alerts.push(args); },
-        } }).module;
+        const mock = createModalModuleMock({ confirmResult: true, spies: { alert: answerModalAlert } });
+        const present = mock.spies.show.getMockImplementation();
+        if (!present) throw new Error('Expected the canonical modal presentation boundary');
+        mock.spies.show.mockImplementation(config => {
+            if (config.chrome?.testID === 'document-share-modal') shareState.shown.push(config as never);
+            return present(config);
+        });
+        return mock.module;
     },
-    storage: () => createStorageModuleStub({
-        useActiveServerAccountScope: () => ({ serverId: 'server-1', accountId: 'account-1' }),
-        useAllMachines: () => [],
-        useSetting: (key: string) => settingsState.values[key],
-        useSettingMutable: (key: string) => [
-            settingsState.values[key],
-            vi.fn((value: unknown) => {
-                settingsState.values[key] = value;
-            }),
-        ],
-    }),
-});
 
-vi.mock('@react-navigation/native', () => createReactNavigationNativeMock({
+});
+// Keep deterministic internal settings and scoped Profile readers real.
+vi.doUnmock('@/sync/domains/state/storage');
+
+vi.mock('@react-navigation/native', async () => {
+    const { createReactNavigationNativeMock } = await import('@/dev/testkit/mocks/reactNavigation');
+    return createReactNavigationNativeMock({
     usePreventRemove: (enabled, callback) => {
         navigationState.preventRemoveEnabled = enabled;
         navigationState.preventRemoveCallback = callback;
     },
-}));
+});
+});
 
 const routerSpies = vi.hoisted(() => ({
     replace: null as unknown as ReturnType<typeof vi.fn>,
 }));
 
-vi.mock('expo-router', () => {
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
     const mock = createExpoRouterMock({
         navigation: {
             addListener: (event: string, callback: (event: BeforeRemoveEvent) => void) => {
@@ -143,20 +141,9 @@ vi.mock('expo-router', () => {
 });
 
 const applyProfileSaveSpy = vi.hoisted(() => vi.fn());
-// The account settings writer is the persistence boundary (it syncs to the server).
-vi.mock('@/sync/store/settingsWriters', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/sync/store/settingsWriters')>()),
-    useApplyProfileSave: () => applyProfileSaveSpy,
-}));
 
-// The Action front door is the boundary of publication: the Settings CAS and Artifact store are the host's.
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>()),
-    createFrontDoorActionExecute: () => async (actionId: string, input: unknown, context: unknown) => {
-        shareState.calls.push({ actionId, input, context });
-        return shareState.publishResult;
-    },
-}));
+
+
 
 // The document file boundary (web download / native share sheet) is the platform edge of "Send a copy".
 vi.mock('@/sync/domains/workflows/workflowDocumentFile', async (importOriginal) => ({
@@ -164,60 +151,27 @@ vi.mock('@/sync/domains/workflows/workflowDocumentFile', async (importOriginal) 
     saveWorkflowDocument: async (file: { fileName: string; json: string }) => { shareState.savedFiles.push(file); },
 }));
 
-vi.mock('@/utils/ui/promptUnsavedChangesAlert', () => ({
-    promptUnsavedChangesAlert: (...args: unknown[]) => promptUnsavedChangesAlertSpy(...args),
-}));
 
-vi.mock('@/components/secrets/useSavedSecretsMutable', () => ({
-    useSavedSecretsMutable: () => [[], vi.fn()],
-}));
 
-vi.mock('@/sync/domains/machines/administration/useTargetSelection', () => ({
-    useMachineAdministrationTargetSelection: () => ({
-        selectedTarget: administrationTargetState.selectedTarget,
-        resolveExecutionTarget: () => administrationTargetState.executionTarget,
-    }),
-}));
 
-vi.mock('@/components/settings/machines/MachineAdministrationTargetSelector', () => ({
-    MachineAdministrationTargetSelector: createPassThroughComponent('MachineAdministrationTargetSelector'),
-}));
 
-let capturedProfilesListProps: CapturedProfilesListProps | null = null;
-vi.mock('@/components/profiles/ProfilesList', () => ({
-    ProfilesList: createCapturingComponent('ProfilesList', (props) => {
-        capturedProfilesListProps = props as CapturedProfilesListProps;
-    }),
-}));
+
+
+
+
+
+
 
 let capturedEditFormProps: CapturedEditFormProps | null = null;
-vi.mock('@/components/profiles/edit', () => ({
-    LaunchProfileEditForm: createCapturingComponent('LaunchProfileEditForm', (props) => {
-        capturedEditFormProps = props as CapturedEditFormProps;
-    }),
-}));
 
-vi.mock('@/components/ui/lists/ItemList', () => ({
-    ItemList: createPassThroughComponent('ItemList'),
-}));
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: createPassThroughComponent('ItemGroup'),
-}));
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: createPassThroughComponent('Item'),
-}));
-vi.mock('@/components/ui/forms/Switch', () => ({
-    Switch: createPassThroughComponent('Switch'),
-}));
-vi.mock('@/components/secrets/requirements', () => ({
-    SecretRequirementModal: createPassThroughComponent('SecretRequirementModal'),
-}));
-vi.mock('@/components/profiles/migration/LegacyProfileMigrationFlow', () => ({
-    LegacyProfileMigrationFlow: createPassThroughComponent('LegacyProfileMigrationFlow'),
-}));
-vi.mock('@/components/profiles/migration/LegacyProfileMigrationConflictFlow', () => ({
-    LegacyProfileMigrationConflictFlow: createPassThroughComponent('LegacyProfileMigrationConflictFlow'),
-}));
+
+
+
+
+
+
+
+
 
 function currentBeforeRemoveCallback(): (event: BeforeRemoveEvent) => void {
     if (navigationState.preventRemoveEnabled && navigationState.preventRemoveCallback) {
@@ -229,38 +183,95 @@ function currentBeforeRemoveCallback(): (event: BeforeRemoveEvent) => void {
     throw new Error('The profile detail did not register an unsaved-navigation guard');
 }
 
-const savedV2Profile = {
-    v: 2 as const,
-    id: 'profile-v2',
-    name: 'Saved profile',
-    extraEnvironmentVariables: [],
-    defaultPermissionModeByTargetKey: {},
-    defaultPersistenceModeByTargetKey: {},
-    compatibilityByTargetKey: {},
-    createdAt: 1,
-    updatedAt: 1,
-};
+const { createEmptyCustomProfile } = await import('@/sync/domains/profiles/profileMutations');
+const savedV2Profile = { ...createEmptyCustomProfile(), id: 'profile-v2', name: 'Saved profile', createdAt: 1, updatedAt: 1 };
+
+const profileFixture = { profiles: [] as Array<AiLaunchProfile | ReturnType<typeof LaunchProfileArtifactReferenceV1Schema.parse>> };
+const profileRows = new Map<string, Readonly<{ record: ProfileRecordV1; revision: number }>>();
+let profileRevision = 1;
+let publishedArtifactId: string | null = null;
+const runtime = installSessionPaneRuntimeTestHarness({ request: async (url, init) => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/v1/artifacts' || path.startsWith('/v1/artifacts/')) {
+        const response = await artifactStore.handle(path, init ?? {});
+        if (response?.ok && path === '/v1/artifacts' && init?.method === 'POST') publishedArtifactId = artifactStore.list().at(-1)?.id ?? null;
+        if (response) return response;
+    }
+    if (path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json(AcpCatalogRowReadResponseV1Schema.parse({
+        status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: [] } },
+    }));
+    if (path === PROFILE_RECORDS_ROUTE_V1 && init?.method === 'POST') {
+        const mutation = ProfileRowMutationV1Schema.parse(JSON.parse(String(init.body)));
+        applyProfileSaveSpy(mutation);
+        if (mutation.content?.t !== 'plain') throw new Error('Expected plain Profile authoring');
+        const record = ProfileRecordV1Schema.parse(mutation.content.v);
+        profileRows.set(record.id, { record, revision: ++profileRevision });
+        return Response.json(ProfileRowMutationResponseV1Schema.parse({ status: 'updated', revision: profileRevision,
+            cursor: profileRevision, referenceGuardRevision: profileRevision }));
+    }
+    if (path === PROFILE_RECORD_READ_ROUTE_V1 && init?.method === 'POST') {
+        const { id } = ProfileRowReadRequestV1Schema.parse(JSON.parse(String(init.body)));
+        const row = profileRows.get(id);
+        return Response.json(ProfileRowReadResponseV1Schema.parse(row
+            ? { status: 'present', revision: row.revision, content: { t: 'plain', v: row.record } }
+            : { status: 'absent' }));
+    }
+    if (path === PROFILE_ROWS_ROUTE_V1) return Response.json(ProfileRowsListResponseV1Schema.parse({
+        status: 'listed', rows: [...profileRows.values()].map(row => ({ id: row.record.id,
+            revision: row.revision, content: { t: 'plain', v: row.record } })),
+        nextCursor: null, complete: true, diagnostics: [], referenceGuardRevision: profileRevision,
+        transferControl: { status: 'absent' },
+    }));
+    if (path === PROFILE_REFERENCE_GUARD_ROUTE_V1) return Response.json({ status: 'ready', revision: profileRevision });
+    if (path === PROFILE_TRANSFER_ROUTE_V1) return Response.json({ status: 'absent' });
+    return null;
+} });
+const artifactStore = createArtifactStoreBoundary({ ownerAccountId: () => storage.getState().settingsScope?.accountId ?? null, encryptionMode: 'plain' });
+const actionRuntime = await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
+const createFrontDoorActionExecute = actionRuntime.createFrontDoorActionExecute;
+vi.spyOn(actionRuntime, 'createFrontDoorActionExecute').mockImplementation((...factoryArgs) => {
+    const execute = createFrontDoorActionExecute(...factoryArgs);
+    return Object.assign((...args: Parameters<typeof execute>) => {
+        const [actionId, input, context] = args;
+        shareState.calls.push({ actionId, input, context });
+        return execute(...args);
+    }, { prepare: execute.prepare });
+});
+const profileEditModule = await import('@/components/profiles/edit');
+const realLaunchProfileEditForm = profileEditModule.LaunchProfileEditForm;
+vi.spyOn(profileEditModule, 'LaunchProfileEditForm').mockImplementation((props) => {
+    capturedEditFormProps = props as CapturedEditFormProps;
+    return React.createElement(realLaunchProfileEditForm, props);
+});
+async function editProfileName(screen: RenderScreenResult, name = 'Edited profile') {
+    await waitForHomeGovernance(() => expect(screen.findHostByTestId('profile-slim-name') ?? screen.findHostByTestId('profile-legacy-name')).not.toBeNull());
+    const field = screen.findHostByTestId('profile-slim-name') ?? screen.findHostByTestId('profile-legacy-name');
+    if (!field || typeof field.props.onChangeText !== 'function') throw new Error('Expected actual profile name input');
+    await act(async () => field.props.onChangeText(name));
+
+}
+
+
 
 type DetailTarget =
     | { kind: 'profile'; profileId: string }
     | { kind: 'draft'; cloneFrom: string | null };
 
 async function renderDetail(target: DetailTarget) {
+    await seedFocusedAccount();
     const { ProfileDetailScreen } = await import('@/components/settings/profiles/ProfileDetailScreen');
-    return renderScreen(React.createElement(ProfileDetailScreen, { target }));
+    return renderScreen(React.createElement(ProfileDetailScreen, { target }), { wrapper: runtime.Wrapper });
 }
 
 async function renderDirtyEditor(target: DetailTarget = { kind: 'profile', profileId: savedV2Profile.id }) {
     const screen = await renderDetail(target);
     expect(capturedEditFormProps).not.toBeNull();
-    await act(async () => {
-        capturedEditFormProps?.onDirtyChange(true);
-    });
+    await editProfileName(screen, 'Edited Profile');
     return screen;
 }
 
 function hasEditor(screen: RenderScreenResult): boolean {
-    return screen.findAll((node) => String(node.type) === 'LaunchProfileEditForm').length > 0;
+    return screen.findAllByType(realLaunchProfileEditForm).length > 0;
 }
 
 function goBack(key: string) {
@@ -281,51 +292,50 @@ describe('Settings › Profiles detail: machine scope and unsaved navigation', (
     beforeEach(async () => {
         // Profile readers resolve Settings rows for the focused Account only (U13 hydration).
         await seedFocusedAccount();
-        capturedProfilesListProps = null;
+
         capturedEditFormProps = null;
         navigationState.legacyBeforeRemove = null;
         navigationState.preventRemoveEnabled = false;
         navigationState.preventRemoveCallback = null;
         navigationState.dispatch.mockReset();
-        promptUnsavedChangesAlertSpy.mockReset();
+        promptUnsavedChangesAlertSpy.mockClear();
         settingsState.values.useProfiles = true;
-        settingsState.values.profiles = [savedV2Profile];
+        profileFixture.profiles = [savedV2Profile];
+    profileRows.clear();
+    profileRevision = 1;
         applyProfileSaveSpy.mockReset();
         routerSpies.replace?.mockClear();
-        administrationTargetState.selectedTarget = {
-            serverIdentityId: 'server-identity-b',
-            machineId: 'machine-b',
-        };
-        administrationTargetState.executionTarget = {
-            target: {
-                serverIdentityId: 'server-identity-b',
-                machineId: 'machine-b',
-            },
-            machine: { id: 'machine-b' },
-            serverId: 'server-profile-b',
-        };
+
+        machineFixtureState.available = true;
     });
 
     afterEach(() => {
         standardCleanup();
-    });
+        resetProfileCatalogEngineForTests();
+    resetProfileCatalogSnapshotsForTests();
+});
 
     it('uses the exact Administration target for V2 profile reads instead of an active or first machine', async () => {
-        await renderDirtyEditor();
+        const screen = await renderDirtyEditor();
+        const { getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
+        const { MachineAdministrationTargetSelector } = await import('@/components/settings/machines/MachineAdministrationTargetSelector');
+        const selectedHome = getServerProfileById(runtime.serverId);
+        if (!selectedHome) throw new Error('Expected the Administration target Home');
 
         expect(capturedEditFormProps).toMatchObject({
             machineId: 'machine-b',
-            serverId: 'server-profile-b',
+            serverId: selectedHome.id,
         });
-        const header = capturedEditFormProps?.header;
-        expect(React.isValidElement(header)).toBe(true);
-        if (!React.isValidElement(header)) throw new Error('Expected the profile header');
         // The machine chip rides on the header of a machine-scoped (V2) profile.
-        expect(header.props).toMatchObject({ showMachineChip: true });
+        const chips = screen.findAllByType(MachineAdministrationTargetSelector);
+        expect(chips).toHaveLength(1);
+        expect(chips[0]?.props).toMatchObject({ presentation: 'chip', selection: { selectedTarget: {
+            machineId: 'machine-b', serverIdentityId: runtime.serverIdentityId,
+        } } });
     });
 
     it('does not substitute another machine when the selected Administration target is no longer executable', async () => {
-        administrationTargetState.executionTarget = null;
+        machineFixtureState.available = false;
 
         await renderDirtyEditor();
 
@@ -353,7 +363,7 @@ describe('Settings › Profiles detail: machine scope and unsaved navigation', (
 
     it('serializes repeated navigator exits while the first decision is pending', async () => {
         const decision = createDeferred<UnsavedChangesDecision>();
-        promptUnsavedChangesAlertSpy.mockReturnValue(decision.promise);
+        modalDecisions.push(decision.promise);
         await renderDirtyEditor();
         const beforeRemove = currentBeforeRemoveCallback();
 
@@ -399,11 +409,11 @@ describe('Settings › Profiles detail: machine scope and unsaved navigation', (
     });
 
     it('keeps the dirty editor and navigation blocked on save failure, then continues after save succeeds', async () => {
-        promptUnsavedChangesAlertSpy.mockResolvedValue('save');
+        defaultModalDecision = 'save';
         const screen = await renderDirtyEditor();
         const firstEditForm = capturedEditFormProps;
         if (!firstEditForm) throw new Error('Expected the profile editor');
-        firstEditForm.saveRef.current = () => false;
+        await editProfileName(screen, '');
 
         await invokeAndFlush(goBack('save-fails'));
 
@@ -412,18 +422,17 @@ describe('Settings › Profiles detail: machine scope and unsaved navigation', (
 
         const currentEditForm = capturedEditFormProps;
         if (!currentEditForm) throw new Error('Expected the profile editor after save failure');
-        currentEditForm.saveRef.current = () => currentEditForm.onSave({
-            ...currentEditForm.profile,
-            name: 'Renamed profile',
-        });
+        await editProfileName(screen, 'Renamed profile');
 
         await invokeAndFlush(goBack('save-succeeds'));
 
-        expect(applyProfileSaveSpy).toHaveBeenCalledWith(expect.objectContaining({ profileId: savedV2Profile.id }));
+        await waitForHomeGovernance(() => {
+            expect(applyProfileSaveSpy).toHaveBeenCalledWith(expect.objectContaining({ id: savedV2Profile.id }));
         expect(navigationState.dispatch).toHaveBeenCalledOnce();
         expect(navigationState.dispatch).toHaveBeenCalledWith({
             type: 'GO_BACK',
             key: 'save-succeeds',
+        });
         });
     });
 
@@ -434,31 +443,33 @@ describe('Settings › Profiles detail: machine scope and unsaved navigation', (
 
         let saved = false;
         await act(async () => {
-            saved = draftForm.onSave({ ...draftForm.profile, name: 'Fresh profile' });
+            saved = await draftForm.onSave({ ...draftForm.profile, name: 'Fresh profile' });
         });
 
         expect(saved).toBe(true);
-        expect(applyProfileSaveSpy).toHaveBeenCalledWith(expect.objectContaining({ profileId: draftForm.profile.id }));
+        expect(applyProfileSaveSpy).toHaveBeenCalledWith(expect.objectContaining({ id: draftForm.profile.id }));
         expect(routerSpies.replace).toHaveBeenCalledWith(`/settings/profiles/${encodeURIComponent(draftForm.profile.id)}`);
 
         routerSpies.replace.mockClear();
-        promptUnsavedChangesAlertSpy.mockResolvedValue('save');
-        await renderDirtyEditor({ kind: 'draft', cloneFrom: null });
+        defaultModalDecision = 'save';
+        const exitingScreen = await renderDirtyEditor({ kind: 'draft', cloneFrom: null });
         const exitingForm = capturedEditFormProps;
         if (!exitingForm) throw new Error('Expected the second draft editor');
-        exitingForm.saveRef.current = () => exitingForm.onSave({ ...exitingForm.profile, name: 'Saved on exit' });
+        await editProfileName(exitingScreen, 'Saved on exit');
 
         await invokeAndFlush(goBack('save-on-exit'));
 
         expect(routerSpies.replace).not.toHaveBeenCalled();
-        expect(navigationState.dispatch).toHaveBeenCalledWith({ type: 'GO_BACK', key: 'save-on-exit' });
+        await waitForHomeGovernance(() => {
+            expect(navigationState.dispatch).toHaveBeenCalledWith({ type: 'GO_BACK', key: 'save-on-exit' });
+        });
     });
 
     it('keeps built-in Save As prompt semantics', async () => {
         const { DEFAULT_PROFILES } = await import('@/sync/domains/profiles/profileUtils');
         const builtInDefinition = DEFAULT_PROFILES[0];
         if (!builtInDefinition) throw new Error('Expected at least one built-in Profile fixture');
-        promptUnsavedChangesAlertSpy.mockResolvedValue('keepEditing');
+        defaultModalDecision = 'keepEditing';
 
         await renderDirtyEditor({ kind: 'profile', profileId: builtInDefinition.id });
         await invokeAndFlush(goBack('built-in'));
@@ -493,7 +504,7 @@ describe('Settings › Profiles detail: machine scope and unsaved navigation', (
         });
 
         try {
-            await renderDirtyEditor();
+            const screen = await renderDirtyEditor();
 
             expect(addEventListener).toHaveBeenCalledWith('beforeunload', expect.any(Function));
             const preventDefault = vi.fn();
@@ -502,9 +513,7 @@ describe('Settings › Profiles detail: machine scope and unsaved navigation', (
             expect(preventDefault).toHaveBeenCalledOnce();
             expect(event.returnValue).toBe('');
 
-            await act(async () => {
-                capturedEditFormProps?.onDirtyChange(false);
-            });
+            await editProfileName(screen, savedV2Profile.name);
 
             expect(removeEventListener).toHaveBeenCalledWith('beforeunload', expect.any(Function));
             expect(beforeUnloadHandlerRef.current).toBeNull();
@@ -520,33 +529,77 @@ describe('Settings › Profiles detail: machine scope and unsaved navigation', (
 
 const publishedProfileContent = {
     kind: 'launch-profile.v1' as const,
-    profile: { ...savedV2Profile, id: 'team-v2', name: 'Team profile' },
+    profile: { ...savedV2Profile, ...savedV2Profile, id: 'team-v2', name: 'Team profile' },
     secretBindings: {},
 };
 
-async function seedFocusedAccount(artifacts: Record<string, unknown> = {}) {
-    // The real store: profile readers hydrate references from its Artifact documents for the focused Account.
-    const { storage } = await import('@/sync/domains/state/storageStore');
-    storage.setState({ settingsScope: { serverId: 'server-1', accountId: 'account-1' }, artifacts } as never);
+async function seedFocusedAccount(artifacts: Record<string, DecryptedArtifact> = storage.getState().artifacts) {
+    const scope = storage.getState().settingsScope;
+    if (!scope) throw new Error('Expected the real fixture Home Account scope');
+    storage.setState({ settings: settingsParse({ ...storage.getState().settings, ...settingsState.values }), artifacts });
+    const previewTarget = { serverIdentityId: runtime.serverIdentityId, machineId: 'machine-b' };
+    storage.setState(state => ({ settings: { ...state.settings, machineAdministrationTargetsLocalV1: {
+        ...state.settings.machineAdministrationTargetsLocalV1, [MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.agents]: previewTarget,
+    } } }));
+    const machines = [createMachineFixture({ id: 'machine-first', active: true, activeAt: Date.now() })];
+    if (machineFixtureState.available) machines.push(createMachineFixture({ id: previewTarget.machineId, active: true, activeAt: Date.now() }));
+    storage.getState().applyMachines(machines, true, { sourceServerId: runtime.serverId, sourceAccountId: scope.accountId });
+    artifactStore.clear();
+    for (const artifact of Object.values(artifacts)) {
+        if (!artifact.isDecrypted || !artifact.header) throw new Error('Expected readable plain fixture Artifact');
+        artifactStore.replaceStoredRow({
+            id: artifact.id, ownerAccountId: scope.accountId, access: 'owner', encryptionMode: 'plain',
+            header: encodePlainArtifactStoredContent(artifact.rawHeader ?? artifact.header),
+            body: encodePlainArtifactStoredContent({ body: artifact.body ?? null }),
+            dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+            headerVersion: artifact.headerVersion, bodyVersion: artifact.bodyVersion,
+            seq: artifact.seq, createdAt: artifact.createdAt, updatedAt: artifact.updatedAt,
+        });
+    }
+    profileRows.clear();
+    for (const source of profileFixture.profiles) {
+        const artifactId = source.artifactId;
+        let profileId: string;
+        if (artifactId) {
+            const artifact = artifacts[artifactId];
+            const content = artifact?.isDecrypted && artifact.header && typeof artifact.body === 'string'
+                ? readLaunchProfileArtifactV1({ artifactId, header: artifact.header, body: artifact.body }) : null;
+            if (!content) throw new Error('Expected readable canonical Profile Artifact content');
+            profileId = content.profile.id;
+            if ('id' in source && source.id !== profileId) throw new Error('Profile row identity must match its Artifact');
+        } else {
+            if (!('id' in source)) throw new Error('Expected an inline Profile definition');
+            profileId = source.id;
+        }
+        const record = ProfileRecordV1Schema.parse({ v: 1, id: profileId,
+            definition: artifactId ? { kind: 'artifact', artifactId } : { kind: 'inline', profile: source },
+            enabled: true, secretBindings: {}, promptStack: [], skillSeeds: [] });
+        profileRows.set(record.id, { record, revision: profileRevision });
+    }
+    await refreshProfileCatalog(scope);
 }
 
-function headerMenuActions(): Array<{ id: string; onSelect: () => unknown }> {
-    const header = capturedEditFormProps?.header;
-    if (!React.isValidElement(header)) throw new Error('Expected the profile header');
-    return (header.props as { menuActions: Array<{ id: string; onSelect: () => unknown }> }).menuActions;
+function headerMenuActions(screen: RenderScreenResult): ReadonlyArray<{ id: string; onSelect: () => unknown }> {
+    const menu = screen.findAllByTestId("settings.profiles.detail.menu").find(node => Array.isArray(node.props.actions));
+    if (!menu) throw new Error('Expected the rendered Profile action menu');
+    return menu.props.actions;
 }
 
 describe('Settings › Profiles detail: Share…', () => {
     beforeEach(async () => {
+    modalDecisions.length = 0;
+    defaultModalDecision = 'keepEditing';
+    publishedArtifactId = null;
+    artifactStore.clear();
+    storage.setState({ artifacts: {} });
         capturedEditFormProps = null;
         shareState.shown = [];
         shareState.alerts = [];
         shareState.calls = [];
         shareState.savedFiles = [];
-        shareState.publishResult = { ok: true, result: { artifactId: 'artifact-new' } };
         promptUnsavedChangesAlertSpy.mockReset();
-        settingsState.values.profiles = [savedV2Profile];
-        await seedFocusedAccount();
+        profileFixture.profiles = [savedV2Profile];
+
     });
 
     afterEach(() => {
@@ -554,7 +607,7 @@ describe('Settings › Profiles detail: Share…', () => {
     });
 
     it('opens the one document share sheet on a published profile without publishing it again', async () => {
-        settingsState.values.profiles = [{ artifactId: 'artifact-team' }];
+        profileFixture.profiles = [{ artifactId: 'artifact-team' }];
         await seedFocusedAccount({
             'artifact-team': {
                 id: 'artifact-team', isDecrypted: true, title: 'Team profile',
@@ -563,8 +616,8 @@ describe('Settings › Profiles detail: Share…', () => {
                 headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
             },
         });
-        await renderDetail({ kind: 'profile', profileId: 'team-v2' });
-        const share = headerMenuActions().find((action) => action.id === 'share');
+        const screen = await renderDetail({ kind: 'profile', profileId: 'team-v2' });
+        const share = headerMenuActions(screen).find((action) => action.id === 'share');
         expect(share).toBeDefined();
         await act(async () => { await share!.onSelect(); });
 
@@ -584,36 +637,41 @@ describe('Settings › Profiles detail: Share…', () => {
     });
 
     it('publishes a saved inline profile once, as the person on this Home, then shares the new Artifact', async () => {
-        await renderDetail({ kind: 'profile', profileId: savedV2Profile.id });
-        await act(async () => { await headerMenuActions().find((action) => action.id === 'share')!.onSelect(); });
+        const screen = await renderDetail({ kind: 'profile', profileId: savedV2Profile.id });
+        await act(async () => { await headerMenuActions(screen).find((action) => action.id === 'share')!.onSelect(); });
 
-        expect(shareState.calls).toEqual([{
+        await waitForHomeGovernance(() => {
+            expect(shareState.calls).toEqual([{
             actionId: 'launch_profiles.publish',
             input: { profileId: savedV2Profile.id },
-            context: expect.objectContaining({ surface: 'ui', authority: 'present_user', serverId: 'server-1' }),
+            context: expect.objectContaining({ surface: 'ui', authority: 'present_user', serverId: runtime.serverId }),
         }]);
         expect(shareState.shown[0]).toMatchObject({
             chrome: { testID: 'document-share-modal' },
-            props: { kind: 'launch-profile.v1', artifactId: 'artifact-new' },
+            props: { kind: 'launch-profile.v1', artifactId: publishedArtifactId },
+        });
         });
     });
 
     it('explains a secret-value refusal and opens no sheet', async () => {
-        shareState.publishResult = { ok: false, errorCode: 'action_failed', error: 'profile_contains_secret_values' };
-        await renderDetail({ kind: 'profile', profileId: savedV2Profile.id });
-        await act(async () => { await headerMenuActions().find((action) => action.id === 'share')!.onSelect(); });
+        profileFixture.profiles = [{ ...savedV2Profile,
+            extraEnvironmentVariables: [{ name: 'PROJECT_REGION', value: 'example-region' }] }];
+        const screen = await renderDetail({ kind: 'profile', profileId: savedV2Profile.id });
+        await act(async () => { await headerMenuActions(screen).find((action) => action.id === 'share')!.onSelect(); });
 
-        expect(shareState.shown).toEqual([]);
+        await waitForHomeGovernance(() => {
+            expect(shareState.shown).toEqual([]);
         expect(shareState.alerts).toEqual([[
             'roles.profiles.shareFailedTitle',
             'roles.profiles.shareNeedsSavedSecrets',
         ]]);
+        });
     });
 
     it('does not publish over unsaved edits the person chose to keep editing', async () => {
-        promptUnsavedChangesAlertSpy.mockResolvedValue('keepEditing');
-        await renderDirtyEditor();
-        await act(async () => { await headerMenuActions().find((action) => action.id === 'share')!.onSelect(); });
+        defaultModalDecision = 'keepEditing';
+        const screen = await renderDirtyEditor();
+        await act(async () => { await headerMenuActions(screen).find((action) => action.id === 'share')!.onSelect(); });
 
         expect(promptUnsavedChangesAlertSpy).toHaveBeenCalledOnce();
         expect(shareState.calls).toEqual([]);
@@ -622,9 +680,9 @@ describe('Settings › Profiles detail: Share…', () => {
 
     it('offers no Share on a built-in profile or a draft', async () => {
         const { DEFAULT_PROFILES } = await import('@/sync/domains/profiles/profileUtils');
-        await renderDetail({ kind: 'profile', profileId: DEFAULT_PROFILES[0]!.id });
-        expect(headerMenuActions().map((action) => action.id)).not.toContain('share');
-        await renderDetail({ kind: 'draft', cloneFrom: null });
-        expect(headerMenuActions().map((action) => action.id)).not.toContain('share');
+        let screen = await renderDetail({ kind: 'profile', profileId: DEFAULT_PROFILES[0]!.id });
+        expect(headerMenuActions(screen).map((action) => action.id)).not.toContain('share');
+        screen = await renderDetail({ kind: 'draft', cloneFrom: null });
+        expect(headerMenuActions(screen).map((action) => action.id)).not.toContain('share');
     });
 });

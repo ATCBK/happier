@@ -7,9 +7,27 @@ import { renderWithAppProviders } from '@/dev/testkit/render/renderWithAppProvid
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createAccountNoticeArtifactFixture } from '@/dev/testkit/fixtures/usageNoticeFixtures';
 
 const packaged = vi.hoisted(() => ({
-    bytes: new TextEncoder().encode('const React = require("react"); module.exports.renderSurface = () => React.createElement("Text", { testID: "host-bundled-account-page" }, "Account page");'),
+    bytes: new TextEncoder().encode(`
+const React = require("react");
+const { defineUiSurface } = require("@happier-dev/plugin-ui");
+const { usePluginUiEphemeralSharedScope } = require("@happier-dev/plugin-ui/hostApi");
+function AccountPage() {
+    const scope = usePluginUiEphemeralSharedScope();
+    const [sharedValue, setSharedValue] = React.useState(null);
+    React.useEffect(() => {
+        if (!scope) return;
+        const lease = scope.acquire("account-page", () => ({ value: "Account page", dispose() {} }));
+        setSharedValue(lease ? lease.value : null);
+        return () => lease?.release();
+    }, [scope]);
+    return React.createElement("Text", { testID: "host-bundled-account-page" }, sharedValue
+        ? React.createElement("Text", { testID: "host-bundled-shared-scope-ready" }, sharedValue)
+        : "Account page");
+}
+module.exports.renderSurface = defineUiSurface(AccountPage);`),
     machineRpc: vi.fn(),
 }));
 
@@ -21,7 +39,7 @@ vi.mock('./generatedBundledPluginUiArtifacts', async () => {
     const { projectPluginPortableUiDeclarationsV1 } = await import('@happier-dev/protocol/plugins/contributions/ui');
     const manifest = PluginPortableReleaseManifestV1Schema.parse({
         schemaVersion: 2, id: 'happier.fixture', version: '1.0.0', displayName: 'Fixture', runtime: { apiVersion: 1 },
-        contributes: { ui: { renderers: [{ id: 'account', kind: 'reactNative', artifact: 'account', requiredHostMethods: [] }],
+        contributes: { ui: { renderers: [{ id: 'account', kind: 'reactNative', artifact: 'account', requiredHostMethods: ['readStoredImage'] }],
             views: [{ id: 'account-page', container: 'appPage', target: { kind: 'app' }, renderer: 'account', title: 'Account page' }] } },
     });
     const relativePath = 'react-native/account/entry.cjs.bundle';
@@ -54,10 +72,15 @@ const account = createProviderSettingsAccountHarness();
 const { storage } = await import('@/sync/domains/state/storage');
 const { AppShellPluginUiProjectionProvider, useAppShellPluginUiProjection } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
 const { PluginSurfacePlacementHost } = await import('@/components/plugins/surfaces/PluginSurfaceHost');
+const { NavigationTitleChromeProvider } = await import('@/components/ui/layout/navigationTitleChrome');
+const { PluginAppPageScreen } = await import('@/components/appShell/plugins/PluginAppPageScreen');
+const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
 const { replacePluginAccountAvailabilityProjection, clearPluginAccountAvailabilityProjection } = await import('./projection');
 const { BUNDLED_PLUGIN_UI_APP_ARTIFACTS } = await import('./generatedBundledPluginUiArtifacts');
 const { PluginMachineMaterializationV1Schema } = await import('@happier-dev/protocol/plugins/availability');
 const { normalizePluginInstalledUiDeclarations } = await import('@/sync/domains/plugins/ui/projection');
+const { normalizePluginUiProjection } = await import('@/sync/domains/plugins/ui/projection');
+const { mergeInstalledPluginUiProjections, unionPluginUiProjections } = await import('@/sync/domains/plugins/ui/projectionUnion');
 const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
 const { createInstalledPluginUiReactNativeRuntimeProjectionSource } = await import('@/components/plugins/reactNative/projectionInvalidation');
 const enabledPluginFeatures = createRootLayoutFeaturesResponse({ features: { plugins: {
@@ -69,6 +92,63 @@ afterEach(async () => {
     await account.reset();
     storage.setState(storage.getInitialState(), true);
     vi.restoreAllMocks();
+});
+
+it('recovers an already-open page as Account binding and Availability hydrate without remounting the route', async () => {
+    clearPluginAccountAvailabilityProjection();
+    const screen = await renderWithAppProviders(<AppPaneProvider><AppShellPluginUiProjectionProvider>
+        <PluginAppPageScreen pluginId="happier.fixture" localId="account-page" subPath="" />
+    </AppShellPluginUiProjectionProvider></AppPaneProvider>);
+    try {
+        expect(screen.tree.root.findAllByProps({ testID: 'host-bundled-account-page' })).toHaveLength(0);
+        await act(async () => {
+            await account.restore({ machines: [], features: enabledPluginFeatures, serverIdentityId: 'srv_bundled_account_page' });
+        });
+        const scope = storage.getState().profileScope!;
+        await act(async () => {
+            replacePluginAccountAvailabilityProjection({ scope, snapshot: {
+                availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [],
+            } });
+        });
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(screen.tree.root.findAllByProps({ testID: 'host-bundled-account-page' }), JSON.stringify(screen.tree.toJSON())).toHaveLength(1);
+        });
+        await act(async () => {
+            replacePluginAccountAvailabilityProjection({ scope, snapshot: { availabilityCursor: 2,
+                materializations: [], snapshots: [], intentReads: [{ pluginId: 'happier.fixture', response: {
+                    availabilityCursor: 2, hostingCapability: { enabled: false }, release: null, packageAssets: [], uiArtifacts: [],
+                    intent: { pluginId: 'happier.fixture', enabled: false, desiredVersion: null, revision: 'disabled',
+                        offlineUiHosting: 'disabled', writableCollections: [] },
+                } }] } });
+        });
+        expect(screen.tree.root.findAllByProps({ testID: 'host-bundled-account-page' })).toHaveLength(0);
+        expect(screen.tree.root.findAllByProps({ testID: 'plugin-app-page-unavailable' }).length).toBeGreaterThan(0);
+    } finally { await screen.unmount(); }
+});
+
+it('opens a private plugin Inbox notice through the existing admitted plugin page host', async () => {
+    await account.restore({ machines: [], features: enabledPluginFeatures, serverIdentityId: 'srv_bundled_account_page' });
+    const scope = storage.getState().profileScope!;
+    replacePluginAccountAvailabilityProjection({ scope, snapshot: {
+        availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [],
+    } });
+    const notice = createAccountNoticeArtifactFixture({ ownerAccountId: scope.accountId,
+        header: { source: { kind: 'plugin', pluginId: 'happier.fixture', itemId: 'review' }, page: { pageId: 'account-page' } },
+    });
+    storage.setState({ artifacts: { [notice.id]: notice }, isDataReady: true });
+    const { InboxModelProvider } = await import('@/hooks/inbox/useInboxModel');
+    const { InboxItemDetail } = await import('@/components/inbox/detail/InboxItemDetail');
+    const screen = await renderWithAppProviders(<AppPaneProvider><AppShellPluginUiProjectionProvider>
+        <InboxModelProvider><InboxItemDetail focus={{ kind: 'notice', serverId: scope.serverId, id: notice.id }} onClose={() => {}} /></InboxModelProvider>
+    </AppShellPluginUiProjectionProvider></AppPaneProvider>);
+    try {
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(screen.tree.root.findAllByProps({ testID: 'host-bundled-account-page' }), JSON.stringify(screen.tree.toJSON())).toHaveLength(1);
+        });
+        expect(screen.tree.root.findAllByProps({ testID: 'inbox.detail' })).toHaveLength(1);
+    } finally { await screen.unmount(); }
 });
 
 it('admits a direct RN surface from its target Home while the active Account Home disables Plugin UI', async () => {
@@ -111,7 +191,7 @@ it('admits a direct RN surface from its target Home while the active Account Hom
     } finally { await screen.unmount(); source.dispose(); }
 });
 
-it('renders a cold bundled Account page through AppShell and the real Artifact loader with no daemon calls', async () => {
+it('renders a cold bundled Account page with shared state across navigation chrome changes and no daemon calls', async () => {
     await account.restore({ machines: [], features: enabledPluginFeatures, serverIdentityId: 'srv_bundled_account_page' });
     packaged.machineRpc.mockClear();
     const scope = storage.getState().profileScope!;
@@ -124,12 +204,25 @@ it('renders a cold bundled Account page through AppShell and the real Artifact l
         return placement ? <PluginSurfacePlacementHost placement={placement} pluginUiProjection={shell.pluginUiProjection}
             machineId={null} serverId={null} platform="web" projectionInteractionEnabled={shell.interactionEnabled} /> : null;
     }
-    const screen = await renderWithAppProviders(<AppShellPluginUiProjectionProvider><Page /></AppShellPluginUiProjectionProvider>);
+    const renderPage = (showsBack: boolean) => <NavigationTitleChromeProvider showsTitle={showsBack} showsBack={showsBack}>
+        <AppShellPluginUiProjectionProvider><Page /></AppShellPluginUiProjectionProvider>
+    </NavigationTitleChromeProvider>;
+    const reactErrors = vi.spyOn(console, 'error');
+    const screen = await renderWithAppProviders(renderPage(false));
     try {
         await waitForHomeGovernance(async () => {
             await flushHookEffects();
             expect(screen.tree.root.findAllByProps({ testID: 'host-bundled-account-page' }), JSON.stringify(screen.tree.toJSON())).toHaveLength(1);
+            expect(screen.tree.root.findAllByProps({ testID: 'host-bundled-shared-scope-ready' })).toHaveLength(1);
         });
+        expect(screen.tree.root.findByType(PluginSurfacePlacementHost).props.placement.occurrenceId).toBeUndefined();
+        const mountedContent = screen.tree.root.findByProps({ testID: 'host-bundled-shared-scope-ready' });
+        for (const showsBack of [true, false]) {
+            await expect(screen.update(renderPage(showsBack))).resolves.toBeUndefined();
+            expect(screen.tree.root.findByProps({ testID: 'host-bundled-shared-scope-ready' })).toBe(mountedContent);
+        }
+        expect(reactErrors.mock.calls.filter(args => args.some(value => typeof value === 'string'
+            && /change in the order of Hooks|Rendered (?:more|fewer) hooks|Should have a queue/i.test(value)))).toEqual([]);
         expect(packaged.machineRpc).not.toHaveBeenCalled();
         await act(async () => {
             await account.publishMachines(account.serverId, [createMachineFixture({ id: 'machine-asleep', active: false, activeAt: 0 })]);
@@ -173,5 +266,49 @@ it('renders a cold bundled Account page through AppShell and the real Artifact l
         });
         expect(screen.tree.root.findAllByProps({ testID: 'host-bundled-account-page' })).toHaveLength(0);
         expect(packaged.machineRpc).not.toHaveBeenCalled();
+    } finally { await screen.unmount(); }
+});
+
+it('keeps the Account page usable when its optional contribution points belong to an unavailable Machine', async () => {
+    const machineId = 'machine-asleep';
+    await account.restore({ machines: [createMachineFixture({ id: machineId, active: false, activeAt: 0 })],
+        features: enabledPluginFeatures, serverIdentityId: 'srv_bundled_account_page' });
+    const scope = storage.getState().profileScope!;
+    replacePluginAccountAvailabilityProjection({ scope, snapshot: {
+        availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [],
+    } });
+    // The same canonical wire normalizer and union used by the shell retain
+    // the daemon's point declaration. Neither grants executable authority.
+    const sourceCustody = { kind: 'development' as const, registeredRootId: 'fixture-source' };
+    const executionOrigin = { serverIdentityId: 'srv_bundled_account_page',
+        sourceRef: { machineId, pluginId: 'happier.fixture', sourceCustody } };
+    const runtime = normalizePluginUiProjection({ v: 2, generation: 1, agentsById: {}, actionsById: {},
+        toolsById: {}, commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [],
+        installedPackagesById: { 'happier.fixture': { id: 'happier.fixture', displayName: 'Fixture', version: '1.0.0',
+            enabled: true, source: { kind: 'localPath', locator: 'fixture-source' }, occurrenceId: 'fixture-occurrence',
+            sourceCustody, executionOrigin,
+            declaresContributionPoints: true } },
+        familiesById: { pluginUi: { family: 'pluginUi',
+            entriesById: Object.fromEntries(Object.entries(BUNDLED_PLUGIN_UI_APP_ARTIFACTS[0]!.uiDeclaration!.entriesById)
+                .map(([id, entry]) => [id, { ...entry, occurrenceId: 'fixture-occurrence', executionOrigin }])) } },
+    });
+    const offline = unionPluginUiProjections([{ machineId, serverId: account.serverId,
+        serverIdentityId: 'srv_bundled_account_page', projection: runtime, phase: 'retainedOffline', interactionEnabled: false }]);
+    function Page() {
+        const shell = useAppShellPluginUiProjection();
+        const projection = mergeInstalledPluginUiProjections(shell.pluginUiProjection ? [shell.pluginUiProjection] : [], offline.pluginUiProjection);
+        const placement = projection?.surfacePlacementsById['surfacePlacement:happier.fixture:account-page'];
+        if (placement) expect(projection?.installedPackagesById['happier.fixture']?.declaresContributionPoints).toBe(true);
+        return placement ? <PluginSurfacePlacementHost placement={placement} pluginUiProjection={projection}
+            machineId={null} serverId={null} platform="web" projectionInteractionEnabled /> : null;
+    }
+    const screen = await renderWithAppProviders(<AppShellPluginUiProjectionProvider><Page /></AppShellPluginUiProjectionProvider>);
+    try {
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(screen.tree.root.findAllByProps({ testID: 'host-bundled-account-page' }), JSON.stringify(screen.tree.toJSON())).toHaveLength(1);
+        });
+        expect(screen.tree.root.findAllByProps({ 'data-plugin-interaction-state': 'enabled' })).toHaveLength(1);
+        expect(screen.tree.root.findAllByProps({ 'data-plugin-interaction-state': 'offline-snapshot' })).toHaveLength(0);
     } finally { await screen.unmount(); }
 });

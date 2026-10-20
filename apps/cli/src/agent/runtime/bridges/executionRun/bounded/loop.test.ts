@@ -7,6 +7,13 @@ import type { ExecutionRunState } from '../executionRunTypes';
 import { finishExecutionRun } from '../finishExecutionRun';
 import { ExecutionBudgetRegistry } from '@/daemon/executionBudget/ExecutionBudgetRegistry';
 import { executeBoundedBackendRun } from './loop';
+import type { AgentRuntime, AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
+import { createNativeAgentSessionExecutionRunHostRuntime, createNativeAgentSessionInteractionHostRuntime } from '../nativeAgentExecutionRun';
+import { createVoiceSessionContextLease } from '../testkit/nativeSessionContext';
+import { projectRetainedExecutionRunState, RetainedExecutionRunRecordSchema } from '../retainedState';
+import { ExecutionRunErrorSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { projectExecutionRunPublicState } from '../publicState';
+import { createExecutionRunDiagnosticError, projectExecutionRunError } from '../errors';
 
 function createController(backend: ExecutionRunHostRuntime, runtimeId: string): ExecutionRunBackendController {
   let resolveTerminal!: () => void;
@@ -57,6 +64,78 @@ function createRuntime(params: Partial<ExecutionRunHostRuntime>): ExecutionRunHo
 }
 
 describe('executeBoundedBackendRun', () => {
+    it.each(['succeeded', 'cancelled'] as const)('clears an inherited typed failure when terminal commit is %s', async status => {
+      const state: ExecutionRunState = { runId: 'run-stale-issue', callId: 'call', sidechainId: 'side', sessionId: null,
+        depth: 0, intent: 'agent', backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, backendId: 'codex',
+        instructions: 'work', permissionMode: 'read_only', retentionPolicy: 'ephemeral', runClass: 'bounded',
+        ioMode: 'request_response', status: 'running', startedAtMs: 0,
+        // Exact-input observers may publish a failed turn before Run terminalization; Stop can win the commit.
+        error: projectExecutionRunError(createExecutionRunDiagnosticError({ code: 'provider_usage_exhausted', severity: 'error',
+          details: { runtimeAuthClassification: { kind: 'usage_limit', serviceId: 'openai-codex',
+            source: 'structured_provider_error', resetsAtMs: 42_000 } } }, 20)),
+      };
+      const runs = new Map([[state.runId, state]]);
+      await finishExecutionRun({ runId: state.runId, next: { status, finishedAtMs: 30 }, toolResult: { output: status },
+        runs, controllers: new Map(), budgetRegistry: null, parentProvider: 'codex', sendAcp: async () => {},
+        terminalMarkerWritePromises: new Map(), enqueueMarkerWrite: async () => {} });
+      expect(runs.get(state.runId)?.status).toBe(status);
+      expect(projectExecutionRunPublicState(runs.get(state.runId)!).error).toBeUndefined();
+      expect(projectRetainedExecutionRunState(runs.get(state.runId)!).error).toBeUndefined();
+    });
+
+    it.each([
+      ['finite', 42_000], ['finite', null], ['retained', 42_000], ['retained', null],
+    ] as const)('retains the native %s usage-limit failure with reported reset %s', async (adapter, resetAtMs) => {
+      let emit: ((event: AgentSessionRuntimeEvent) => void) | undefined;
+      // Installed Agent execution is the external boundary; admission, terminalization and readers stay real.
+      const runtime: AgentRuntime = { sessions: { async open(sessionRequest) { return {
+        async send(request) {
+          emit!({ sessionId: sessionRequest.sessionId, sequence: 1, emittedAtMs: 10, kind: 'input-accepted',
+            inputIds: request.inputIds, delivery: request.delivery });
+          emit!({ sessionId: sessionRequest.sessionId, sequence: 2, emittedAtMs: 10, kind: 'turn-start',
+            turnId: request.delivery.turnId, startedBy: 'host' });
+          emit!({ sessionId: sessionRequest.sessionId, sequence: 3, emittedAtMs: 20, kind: 'turn-failed',
+            turnId: request.delivery.turnId, diagnostic: { code: 'provider_usage_exhausted', severity: 'error',
+              details: { runtimeAuthClassification: { kind: 'usage_limit', serviceId: 'openai-codex',
+                quotaScope: 'account', source: 'structured_provider_error',
+                ...(resetAtMs === null ? {} : { resetsAtMs: resetAtMs }) } } } });
+          return { status: 'admitted' as const };
+        },
+        watch(listener) { emit = listener; return { dispose() {} }; }, async dispose() {},
+      }; } } };
+      const createHost = adapter === 'finite' ? createNativeAgentSessionExecutionRunHostRuntime : createNativeAgentSessionInteractionHostRuntime;
+      const host = createHost({ runtime,
+        lease: { pluginId: 'acme.limit', pluginVersion: '1.0.0', agentId: 'acme.limit/default',
+          localAgentId: 'default', occurrenceId: 'limit-fixture', isCurrent: () => true },
+        options: { cwd: '/repo', runId: 'run-limit', scope: 'session_owned', backendId: 'acme.limit/default',
+          permissionMode: 'read_only', start: { intent: 'agent', runClass: 'bounded', retentionPolicy: 'ephemeral' } },
+        supportsResume: false, sessionCapabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
+        createSessionContext: ({ services, signal }) => createVoiceSessionContextLease({ services, signal, async dispose() {} }),
+      });
+      const state: ExecutionRunState = { runId: 'run-limit', callId: 'call-limit', sidechainId: 'side-limit', sessionId: null,
+        depth: 0, intent: 'agent', backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, backendId: 'codex',
+        instructions: 'work', permissionMode: 'read_only', retentionPolicy: 'ephemeral', runClass: 'bounded',
+        ioMode: 'request_response', status: 'running', startedAtMs: 0 };
+      const provisioned = await host.provisionRuntime();
+      const controllers = new Map([[state.runId, createController(host, provisioned.runtimeId)]]);
+      const runs = new Map([[state.runId, state]]);
+      await executeBoundedBackendRun({ ...state, params: state, runs, controllers, parentProvider: 'codex',
+        sendAcp: async () => {}, getNowMs: () => 30, boundedTimeoutMs: null,
+        finishRun: async (runId, next, toolResult, structuredMeta) => {
+          await finishExecutionRun({ runId, next, toolResult, structuredMeta, runs, controllers, budgetRegistry: null,
+            parentProvider: 'codex', sendAcp: async () => {}, terminalMarkerWritePromises: new Map(),
+            enqueueMarkerWrite: async () => {} });
+        },
+      });
+      const finished = runs.get(state.runId)!;
+      expect(finished, JSON.stringify(finished.error)).toMatchObject({ status: 'failed', error: { code: 'provider_usage_exhausted',
+        runtimeIssueV1: { source: 'usage_limit', usageLimit: { resetAtMs } } } });
+      const recovered = RetainedExecutionRunRecordSchema.parse(JSON.parse(JSON.stringify({ ownerPid: 1,
+        terminalEventId: 'terminal-limit', state: projectRetainedExecutionRunState(finished) })));
+      expect(recovered.state.error).toEqual(finished.error);
+      expect(ExecutionRunErrorSchema.parse(projectExecutionRunPublicState(finished).error)).toEqual(finished.error);
+    });
+
     it('retains the exact initial Agent result after bounded controller settlement', async () => {
       const runId = 'run-agent-result';
       let ctrl!: ExecutionRunBackendController;

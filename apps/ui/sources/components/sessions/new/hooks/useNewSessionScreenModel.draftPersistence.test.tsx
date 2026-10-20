@@ -1,7 +1,7 @@
 import { authoringMemoryDefaults, projectAuthoringMemory } from '@/sync/store/domains/authoringMemory';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FlushHookEffectsOptions } from '@/dev/testkit/hooks/flushHookEffects';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
@@ -9,7 +9,7 @@ import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { installNewSessionScreenModelCommonModuleMocks } from './newSessionScreenModelTestHelpers';
+import { createProfileCatalogHttpResponse, installNewSessionScreenModelCommonModuleMocks } from './newSessionScreenModelTestHelpers';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
 import {
@@ -19,10 +19,11 @@ import {
     readRetainedFavoriteModelSelectionsV1,
 } from '@/sync/domains/settings/sessionAuthoringSelectionPersistence';
 import { buildRememberedEngineSelectionScopeKey } from '@/sync/domains/session/authoring/rememberedEngineSelections';
-import { ProviderConnectionIdSchema, SessionModelSelectionV1Schema } from '@happier-dev/protocol';
+import { PluginProjectionV2Schema, ProviderConnectionIdSchema, SessionModelSelectionV1Schema } from '@happier-dev/protocol';
+import { DaemonProviderModelProjectionResponseV1Schema, RPC_METHODS, RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
+import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import type { PluginUiSessionPlacementCandidateV1 } from '@happier-dev/protocol/plugins/ui';
 import type { SessionModelProjectionGroup } from '@/components/sessions/modelPicker/buildSessionModelPickerSections';
-import { clearDaemonMergedProjectionCacheForTests } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { ModalPortalTargetProvider } from '@/modal/portal/ModalPortalTarget';
 import type { NewSessionAutomationDraft } from '@/sync/domains/automations/automationDraft';
 import {
@@ -32,6 +33,13 @@ import {
     getCheckoutChipQuickActionIds,
 } from './__tests__/checkoutChipSelectors';
 import { resetSessionDraftRepositoryForTests } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
+import 'fake-indexeddb/auto';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { activateStorageAccountScope } from '@/dev/testkit/runtime/storageRuntime';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 
 // This screen-model graph never renders Markdown. Its AgentInput leaf imports
 // the patched third-party streaming utility, which can be absent before the UI
@@ -43,10 +51,6 @@ vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () =
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const machineContributionRegistryProjectionDescribeMock = vi.hoisted(() => vi.fn());
-const builtInProfileMockState = vi.hoisted(() => ({
-    defaultProfiles: [] as Array<{ id: string; name: string; isBuiltIn?: boolean }>,
-    profilesById: new Map<string, any>(),
-}));
 
 type TestWorkspace = {
     id: string;
@@ -136,12 +140,7 @@ const persistedDraft = vi.hoisted(() => ({
     selectedPath: string;
     selectedProfileId: null;
     selectedSecretId: null;
-    capabilitySelection: {
-        v: number;
-        managedServersEnabled: boolean;
-        forceIncludeServerIds: string[];
-        forceExcludeServerIds: string[];
-    };
+    capabilitySelection: import('@happier-dev/protocol/reach/sessionCapabilitySelectionV1').SessionCapabilitySelectionV1;
     selectedWorkspaceId: string;
     selectedWorkspaceLocationId: string;
     selectedWorkspaceCheckoutId: string;
@@ -187,13 +186,6 @@ const openExternalSessionsResumeIdPickerModalMock = vi.hoisted(() => vi.fn<(args
 const fireAndForgetState = vi.hoisted(() => ({
     promises: [] as Promise<unknown>[],
 }));
-const activeAccountLifetime = vi.hoisted(() => ({
-    value: Object.freeze({
-        scope: Object.freeze({ serverId: 'server-a', accountId: 'account-a' }),
-        isCurrent: () => true,
-        onRetire: (_cancel: () => void) => Object.freeze({ dispose: () => {} }),
-    }),
-}));
 const tryShowDaemonUnavailableAlertForRpcErrorMock = vi.hoisted(() => vi.fn((_args: unknown) => false));
 const routerPushMock = vi.hoisted(() => vi.fn());
 const routerSetParamsMock = vi.hoisted(() => vi.fn());
@@ -208,6 +200,40 @@ const automationActionChipsState = vi.hoisted(() => ({
     enabled: false,
 }));
 const describeProviderModelsMock = vi.hoisted(() => vi.fn());
+
+function daemonAgentProjection(input: Readonly<{
+    title: string;
+    identity?: Readonly<{ pluginId: string; localId: string }>;
+    catalogAgentId?: string;
+}>) {
+    const identity = input.identity ?? { pluginId: 'happier.agent.codex', localId: 'codex' };
+    const id = identity.pluginId === `happier.agent.${identity.localId}`
+        ? identity.localId : `${identity.pluginId}/${identity.localId}`;
+    return PluginProjectionV2Schema.parse({
+        v: 2,
+        generation: 1,
+        agentsById: {
+            [id]: {
+                id, identity, title: input.title, channel: input.identity ? 'plugin' : 'stable',
+                catalogAgentId: input.catalogAgentId ?? (input.identity ? undefined : 'codex'),
+                capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+            },
+        },
+        familiesById: {},
+    });
+}
+
+function agentTarget(agentId: string) {
+    return { kind: 'agent' as const, identity: { pluginId: `happier.agent.${agentId}`, localId: agentId } };
+}
+
+const reviewAgentTarget = { kind: 'agent' as const, identity: { pluginId: 'acme.review', localId: 'review' } };
+const projectedCodexIdentity = { pluginId: 'acme.projected', localId: 'codex' };
+const configuredReviewAgentTarget = {
+    kind: 'agent' as const,
+    identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' },
+    definitionId: 'review-bot',
+};
 
 function retainedProviderProjectionGroup(): SessionModelProjectionGroup {
     const connectionId = ProviderConnectionIdSchema.parse('pc_stale');
@@ -225,7 +251,7 @@ function retainedProviderProjectionGroup(): SessionModelProjectionGroup {
         modelLoadAction: 'descriptor_absent',
         rows: [{
             ref: {
-                agentTargetKey: 'agent:claude',
+                agentTargetKey: 'agent:happier.agent.claude/claude',
                 providerConnectionId: connectionId,
                 modelId: 'stale-provider-model',
             },
@@ -390,66 +416,27 @@ const machineListByServerIdState = vi.hoisted(() => ({
 const interactionQueueState = vi.hoisted(() => ({
     callbacks: [] as Array<() => void>,
 }));
-const storageSubscriptionState = vi.hoisted(() => ({
-    listeners: new Set<() => void>(),
-}));
-const createSessionActionDraftMock = vi.hoisted(() => vi.fn());
 const activeServerAccountScopeState = vi.hoisted(() => ({
     value: { serverId: 'server-a', accountId: 'account-a' } as import('@/sync/domains/scope/serverAccountScope').ServerAccountScope | null,
 }));
 
-const mockEmptySessions: Record<string, never> = {};
-
-function buildMockStorageState() {
-    return {
-        settings: attachCurrentSessionAuthoringSelectionsRuntimeProjection({
-            ...settingsDefaults,
-            ...settingsState,
-        }),
-        authoringMemory: projectAuthoringMemory(authoringMemoryState),
-        profileScope: activeServerAccountScopeState.value,
-        profile: profileDefaults,
-        createSessionActionDraft: createSessionActionDraftMock,
-        sessions: mockEmptySessions,
-        workspaceLocations: workspaceGraphState.workspaceLocations,
-        workspaceCheckouts: workspaceGraphState.workspaceCheckouts,
-        machineListByServerId: machineListByServerIdState.value,
-    };
-}
-
-// The mocked store must reproduce the real zustand contract: one snapshot identity per
-// generation, replaced only when a writer changes state. Rebuilding the snapshot inside
-// every `getSnapshot` call makes `useSyncExternalStore(storage.subscribe, ...)` treat
-// every commit as a store change and re-render forever instead of settling (the exact
-// fixture contract `createStableStorageReader` in `@/dev/testkit/runtime/storageRuntime`
-// documents). `setMockSettingValue`/`notifyMockStorageSubscribers` invalidate it.
-let mockStorageSnapshot: ReturnType<typeof buildMockStorageState> | null = null;
-
 function getMockStorageState() {
-    if (mockStorageSnapshot === null) {
-        mockStorageSnapshot = buildMockStorageState();
-    }
-    return mockStorageSnapshot;
+    return fixtureStorage.getState();
 }
 
 function invalidateMockStorageSnapshot() {
-    mockStorageSnapshot = null;
+    fixtureStorage.setState({
+        settings: attachCurrentSessionAuthoringSelectionsRuntimeProjection({ ...settingsDefaults, ...settingsState }),
+        authoringMemory: projectAuthoringMemory(authoringMemoryState),
+        profileScope: activeServerAccountScopeState.value,
+        settingsScope: activeServerAccountScopeState.value,
+        profile: profileDefaults,
+    });
+    publishFixtureMachines();
 }
-
-vi.mock('@/sync/store/hooks', async (importOriginal) => {
-    const actual = await importOriginal<any>();
-    return {
-        ...actual,
-        useActiveServerAccountScope: () => activeServerAccountScopeState.value,
-        useAccountSettingsScope: () => activeServerAccountScopeState.value,
-    };
-});
 
 function notifyMockStorageSubscribers() {
     invalidateMockStorageSnapshot();
-    for (const listener of Array.from(storageSubscriptionState.listeners)) {
-        listener();
-    }
 }
 
 function setMockSettingValue(key: string, valueOrUpdater: unknown): void {
@@ -470,14 +457,15 @@ const machineFixturesByInputArray = new WeakMap<object, Array<ReturnType<typeof 
 function materializeStorageMachines(inputs: ReadonlyArray<{ id: string; metadata: Record<string, unknown> }>): Array<ReturnType<typeof createMachineFixture>> {
     const cached = machineFixturesByInputArray.get(inputs);
     if (cached) return cached;
-    const fixtures = inputs.map((input) => createMachineFixture({ id: input.id, metadata: input.metadata as any }));
+    const fixtures = inputs.map((input) => createMachineFixture({ id: input.id, metadata: input.metadata as any, activeAt: Date.now() }));
     machineFixturesByInputArray.set(inputs, fixtures);
     return fixtures;
 }
 
-const machineListByServerIdFixturesByState = new WeakMap<object, Record<string, unknown>>();
+type FixtureMachineLists = Record<string, Array<ReturnType<typeof createMachineFixture>> | null>;
+const machineListByServerIdFixturesByState = new WeakMap<object, FixtureMachineLists>();
 
-function readMockMachineListByServerId(): Record<string, unknown> {
+function readMockMachineListByServerId(): FixtureMachineLists {
     const state = machineListByServerIdState.value;
     const cached = machineListByServerIdFixturesByState.get(state);
     if (cached) return cached;
@@ -489,6 +477,22 @@ function readMockMachineListByServerId(): Record<string, unknown> {
     return next;
 }
 
+function publishFixtureMachines() {
+    const scope = activeServerAccountScopeState.value;
+    if (!scope) return;
+    fixtureStorage.getState().applyMachines(materializeStorageMachines(activeMachinesState.value), true, {
+        sourceServerId: scope.serverId,
+        sourceAccountId: scope.accountId,
+    });
+    for (const [serverId, machines] of Object.entries(readMockMachineListByServerId())) {
+        if (machines) fixtureStorage.getState().applyMachines(machines, true, {
+            sourceServerId: serverId,
+            sourceAccountId: serverId === scope.serverId ? scope.accountId : 'account-b',
+        });
+    }
+}
+
+const profileEnabledById: Record<string, boolean> = {};
 const settingsState = {
     ...settingsDefaults,
     lastUsedAgent: 'codex',
@@ -499,13 +503,13 @@ const settingsState = {
     actionsSettingsV1: settingsDefaults.actionsSettingsV1,
     experiments: false,
     featureToggles: {},
-    dismissedCLIWarnings: settingsDefaults.dismissedCLIWarnings,
     sessionUseTmux: false,
     sessionTmuxByMachineId: {},
     favoriteDirectories: [],
     favoriteMachines: [],
-    favoriteProfiles: [],
+    favoriteProfiles: [] as string[],
     profiles: [] as any[],
+    profileEnabledById,
     secrets: [],
     secretBindingsByProfileId: {},
     serverSelectionGroups: [],
@@ -518,6 +522,7 @@ const settingsState = {
 };
 
 const authoringMemoryState = { ...authoringMemoryDefaults };
+const initialSettingsState = structuredClone(settingsState);
 
 installNewSessionScreenModelCommonModuleMocks({
     reactNative: async () => {
@@ -551,28 +556,6 @@ installNewSessionScreenModelCommonModuleMocks({
     unistyles: async () => {
         const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
         return createUnistylesMock({
-            theme: {
-                dark: false,
-                colors: {
-                    accent: { blue: '#00f' },
-                    input: { placeholder: '#999' },
-                    text: '#000',
-                    textSecondary: '#666',
-                    button: { primary: { background: '#00f', tint: '#fff' } },
-                    groupped: { sectionTitle: '#999', background: '#fff' },
-                    divider: '#ddd',
-                    surface: '#fff',
-                    surfaceHigh: '#f5f5f5',
-                    surfaceHighest: '#f0f0f0',
-                    surfaceSelected: '#eef4ff',
-                    surfacePressed: '#eee',
-                    surfacePressedOverlay: '#eee',
-                    modal: { border: '#ddd' },
-                    radio: { active: '#00f' },
-                    shadow: { color: '#000', opacity: 0.2 },
-                    textDestructive: '#c00',
-                },
-            },
             rt: { themeName: 'light' },
         });
     },
@@ -630,28 +613,7 @@ function installNewSessionScreenModelStorageMock() {
     vi.doMock('@/sync/domains/state/storage', async (importOriginal) => {
         const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
         return createPartialStorageModuleMock(importOriginal, {
-            useAllMachines: () => materializeStorageMachines(activeMachinesState.value),
-            useLaunchSelectionMachines: () => materializeStorageMachines(activeMachinesState.value),
-            useMachineListByServerId: () => readMockMachineListByServerId(),
-            useMachineListStatusByServerId: () => ({}),
-            storage: Object.assign((selector: (state: ReturnType<typeof getMockStorageState>) => unknown) => React.useSyncExternalStore(
-                (listener: () => void) => {
-                    storageSubscriptionState.listeners.add(listener);
-                    return () => {
-                        storageSubscriptionState.listeners.delete(listener);
-                    };
-                },
-                () => selector(getMockStorageState()),
-                () => selector(getMockStorageState()),
-            ), {
-                getState: () => getMockStorageState(),
-                subscribe: (listener: () => void) => {
-                    storageSubscriptionState.listeners.add(listener);
-                    return () => {
-                        storageSubscriptionState.listeners.delete(listener);
-                    };
-                },
-            }) as unknown as typeof import('@/sync/domains/state/storage').storage,
+            storage: fixtureStorage,
             useSetting: (key: string) => ({ ...settingsDefaults, ...settingsState } as any)[key],
             useSettingMutable: (key: string) => [
                 ({ ...settingsDefaults, ...settingsState } as any)[key],
@@ -713,19 +675,6 @@ vi.mock('@/sync/ops/teams/teamActionClient', () => ({
     runTeamAction: runTeamActionMock,
 }));
 
-vi.mock('@/sync/ops/machineContributionRegistryProjection', () => ({
-    getMachineContributionRegistryProjectionRevision: () => 0,
-    subscribeMachineContributionRegistryProjectionInvalidation: () => () => {},
-    machineContributionRegistryProjectionDescribe: (...args: unknown[]) =>
-        machineContributionRegistryProjectionDescribeMock(...args),
-    machinePluginSettingsGet: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-    machinePluginSettingsSet: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-    machinePluginActionFormConnectedAccountOptionsResolve: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-    machinePluginSecretStatus: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-    machinePluginSecretSet: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-    machinePluginSecretDelete: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-}));
-
 vi.mock('@/scm/scmRepositoryService', () => ({
     scmRepositoryService: {
         readCachedSnapshotForMachinePath: readCachedSnapshotForMachinePathMock,
@@ -743,18 +692,19 @@ vi.mock('@/agents/catalog/catalog', async (importOriginal) => {
     const actual = await importOriginal<any>();
     return {
         ...actual,
-        DEFAULT_AGENT_ID: 'codex',
-        isBundledAgentId: (value: unknown) => value === 'codex' || value === 'claude',
-        resolveAgentIdFromCliDetectKey: () => 'codex',
-        getAgentCore: (agentId: string) => ({
+        getAgentCore: (agentId: string) => {
+            const core = actual.getAgentCore(agentId);
+            if (!core) return core;
+            return {
             // Keep the real bundled core facts (displayNameKey etc.) so catalog
             // presentation keeps its AgentCoreConfig contract under the mock.
-            ...(actual.getAgentCore(agentId) ?? {}),
+            ...core,
             model: { defaultMode: 'default', allowedModes: ['default', 'gpt-5'], supportsFreeform: true },
             resume: { supportsVendorResume: agentResumeSupportState.supportsVendorResume, experimental: false },
             sessionStorage: { direct: true, persisted: true },
             cli: { detectKey: String(agentId) },
-        }),
+            };
+        },
         buildResumeCapabilityOptionsFromUiState: ({ settings }: any) => ({ accountSettings: settings }),
         getAgentResumeExperimentsFromSettings: () => ({}),
         buildNewSessionOptionsFromUiState: () => ({}),
@@ -787,36 +737,6 @@ vi.mock('@/sync/domains/permissions/permissionDefaults', () => ({
     resolveNewSessionDefaultPermissionMode: () => 'default',
 }));
 
-vi.mock('@/sync/domains/profiles/profileCompatibility', async (importOriginal) => {
-    const actual = await importOriginal<any>();
-    return {
-        ...actual,
-        isProfileCompatibleWithBackendTarget: (profile: any, target: any) => {
-            const targetKey = target?.kind === 'configuredAcpBackend'
-                ? `acpBackend:${String(target.backendId ?? '')}`
-                : target?.kind === 'builtInAgent'
-                    ? `agent:${String(target.agentId ?? '')}`
-                    : target?.kind === 'backend'
-                        ? (target.configuredBackendId
-                            ? `backend:${String(target.backendId ?? '')}:configured:${String(target.configuredBackendId ?? '')}`
-                            : `backend:${String(target.backendId ?? '')}`)
-                        : 'unknown:unknown';
-            const explicitCompatibility = profile?.compatibilityByTargetKey?.[targetKey];
-            if (typeof explicitCompatibility === 'boolean') {
-                return explicitCompatibility;
-            }
-            const legacyCompatibility = target?.kind === 'builtInAgent'
-                ? profile?.compatibility?.[String(target.agentId ?? '')]
-                : target?.kind === 'backend' && !target.configuredBackendId
-                    ? profile?.compatibility?.[String(target.backendId ?? '')]
-                    : undefined;
-            if (typeof legacyCompatibility === 'boolean') {
-                return legacyCompatibility;
-            }
-            return profile?.isBuiltIn === true;
-        },
-    };
-});
 
 vi.mock('@/sync/domains/permissions/permissionModeOptions', () => ({
     normalizePermissionModeForAgentType: (mode: string) => mode,
@@ -831,25 +751,6 @@ vi.mock('@/utils/system/fireAndForget', () => ({
     },
 }));
 
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        applySettings: () => {},
-        refreshMachinesThrottled: async () => {},
-        encryptSecretValue: (v: string) => v,
-    },
-}));
-
-vi.mock('@/sync/domains/scope/activeServerAccountScope', async (importOriginal) => ({
-    ...await importOriginal<any>(),
-    captureActiveServerAccountScopeLifetime: () => {
-        const scope = activeServerAccountScopeState.value;
-        return scope?.serverId === activeAccountLifetime.value.scope.serverId
-            && scope.accountId === activeAccountLifetime.value.scope.accountId
-            ? activeAccountLifetime.value
-            : null;
-    },
-}));
-
 vi.mock('@/utils/sessions/recentPaths', () => ({
     getRecentPathsForMachine: () => [],
 }));
@@ -859,12 +760,6 @@ vi.mock('@/hooks/machine/useMachineEnvPresence', () => ({
     useMachineEnvPresence: () => ({ isPreviewEnvSupported: true, isLoading: false, meta: {}, refresh: vi.fn() }),
 }));
 
-vi.mock('@/hooks/server/useMachineCapabilitiesCache', () => ({
-    useMachineCapabilitiesCache: () => ({ state: { status: 'idle' }, refresh: vi.fn() }),
-    prefetchMachineCapabilities: async () => {},
-    prefetchMachineCapabilitiesIfStale: async () => {},
-    getMachineCapabilitiesSnapshot: () => null,
-}));
 
 vi.mock('@/components/sessions/new/hooks/useNewSessionCapabilitiesPrefetch', () => ({
     useNewSessionCapabilitiesPrefetch: () => {},
@@ -880,42 +775,9 @@ vi.mock('@/components/sessions/new/hooks/useCreateNewSession', () => ({
     useCreateNewSession: (args: Record<string, unknown>) => {
         useCreateNewSessionArgsRef.current = args;
         return {
-        canCreate: true,
-        connectionStatus: 'ok',
-        handleCreateSession: vi.fn(),
+            handleCreateSession: vi.fn(),
         };
     },
-}));
-
-vi.mock('@/components/sessions/new/hooks/useNewSessionWizardProps', () => ({
-    useNewSessionWizardProps: (params: any) => ({
-        layout: {},
-        profiles: {
-            selectedProfileId: params.selectedProfileId,
-            getProfileSubtitleExtra: params.getProfileSubtitleExtra,
-            onPressDefaultEnvironment: params.onPressDefaultEnvironment,
-            onPressProfile: params.onPressProfile,
-            handleAddProfile: params.handleAddProfile,
-            openProfileEdit: params.openProfileEdit,
-            handleDuplicateProfile: params.handleDuplicateProfile,
-        },
-        agent: {
-            setAgentType: params.setAgentType,
-            onAgentPickerSelect: params.onAgentPickerSelect,
-            agentPickerOptions: params.agentPickerOptions,
-            modelSelection: params.modelSelection,
-            setModelSelection: params.setModelSelection,
-            providerModelGroups: params.providerModelGroups,
-            providerModelProjectionAuthoritative: params.providerModelProjectionAuthoritative,
-            providerModelProjectionError: params.providerModelProjectionError,
-            retryProviderModelProjection: params.retryProviderModelProjection,
-            experimentalModelConfirmation: params.experimentalModelConfirmation,
-        },
-        machine: {},
-        footer: {
-            canCreate: params.canCreate,
-        },
-    }),
 }));
 
 vi.mock('@/components/sessions/new/hooks/screenModel/useNewSessionPreflightModelsState', () => ({
@@ -924,14 +786,6 @@ vi.mock('@/components/sessions/new/hooks/screenModel/useNewSessionPreflightModel
 
 vi.mock('@/components/sessions/new/hooks/screenModel/useNewSessionPreflightSessionModesState', () => ({
     useNewSessionPreflightSessionModesState: () => ({ preflightModes: null, modeOptions: [], probe: { phase: 'idle', refresh: vi.fn() } }),
-}));
-
-vi.mock('@/components/sessions/new/modules/canCreateNewSession', () => ({
-    canCreateNewSession: () => true,
-}));
-
-vi.mock('@/components/sessions/new/modules/resolveNewSessionCapabilityServerId', () => ({
-    resolveNewSessionCapabilityServerId: () => null,
 }));
 
 vi.mock('@/components/sessions/new/hooks/serverTarget/useNewSessionServerTargetState', () => ({
@@ -962,18 +816,9 @@ vi.mock('@/hooks/server/useFeatureEnabled', () => ({
     },
 }));
 
-vi.mock('@/providers/rpc/client', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/providers/rpc/client')>(),
-    describeProviderModels: (...args: unknown[]) => describeProviderModelsMock(...args),
-}));
-
 vi.mock('@/components/sessions/new/modules/automationFeatureGate', () => ({
     resolveEffectiveAutomationDraft: ({ draft }: any) => draft,
     shouldShowAutomationActionChips: () => automationActionChipsState.enabled,
-}));
-
-vi.mock('@/components/sessions/new/modules/useNewSessionConnectedServices', () => ({
-    useNewSessionConnectedServices: () => ({ connectedServicesAuthChip: null }),
 }));
 
 vi.mock('@/utils/errors/daemonUnavailableAlert', () => ({
@@ -984,47 +829,9 @@ vi.mock('@/components/sessions/new/hooks/useSecretRequirementFlow', () => ({
     useSecretRequirementFlow: () => ({ openSecretRequirementModal: vi.fn() }),
 }));
 
-vi.mock('@/components/sessions/new/modules/profileHelpers', () => ({
-    useProfileMap: (profiles: Array<{ id: string }>) => new Map(profiles.map((profile) => [profile.id, profile])),
-    transformProfileToEnvironmentVars: () => [],
-}));
 
-vi.mock('@/components/sessions/new/hooks/newSessionModelModePolicy', async (importOriginal) => {
-    const actual = await importOriginal<any>();
-    return actual;
-});
 
-vi.mock('@/sync/domains/settings/settings', async (importOriginal) => {
-    const actual = await importOriginal<any>();
-    return {
-        ...actual,
-        // Ensure non-enumerable exports used by persistence helpers are available on the mock.
-        settingsDefaults: actual.settingsDefaults,
-        isProfileCompatibleWithAnyAgent: () => true,
-    };
-});
 
-vi.mock('@/sync/domains/profiles/profileCompatibility', async (importOriginal) => {
-    const actual = await importOriginal<any>();
-    return {
-        ...actual,
-        getProfileEnvironmentVariables: () => [],
-        isProfileCompatibleWithAgent: () => true,
-    };
-});
-
-vi.mock('@/sync/domains/profiles/profileUtils', () => ({
-    getBuiltInProfile: (id: string) => builtInProfileMockState.profilesById.get(id) ?? null,
-    DEFAULT_PROFILES: builtInProfileMockState.defaultProfiles,
-    getProfilePrimaryCli: () => null,
-    isProfileEnabled: (profile: { id: string; defaultEnabled?: boolean }, profileEnabledById?: Record<string, boolean> | null) => {
-        const override = profileEnabledById?.[profile.id];
-        if (typeof override === 'boolean') return override;
-        return profile.defaultEnabled !== false;
-    },
-    getProfileSupportedAgentIds: () => [],
-    isProfileCompatibleWithAnyAgent: () => true,
-}));
 
 vi.mock('@/utils/secrets/secretSatisfaction', () => ({
     getSecretSatisfaction: () => ({ missingRequired: [], missingOptional: [] }),
@@ -1050,30 +857,23 @@ vi.mock('@/components/sessions/agentInput/sessionActions/listAgentInputActionChi
     listAgentInputActionChipActionIds: () => [],
 }));
 
-vi.mock('@happier-dev/protocol', async (importOriginal) => {
-    const actual = await importOriginal<any>();
-    return {
-        ...actual,
-        getActionSpec: () => ({ title: 'Action' }),
-    };
-});
-
-vi.mock('@/sync/domains/actions/buildActionDraftInput', () => ({
-    buildActionDraftInput: () => ({}),
-}));
-
-vi.mock('@happier-dev/agents', async (importOriginal) => {
-    const actual = await importOriginal<any>();
-    return {
-        ...actual,
-        AGENTS_CORE: actual.AGENTS_CORE ?? {},
-    };
-});
 
 vi.mock('@/utils/sessions/tempDataStore', () => ({
     getTempData: () => tempSessionDataState.value,
 }));
 
+const network = await installSessionOpsNetworkBoundary();
+afterAll(() => network.dispose());
+await loadSyncSingletonForTests();
+const { storage: fixtureStorage } = await import('@/sync/domains/state/storageStore');
+const fixtureStorageInitialState = fixtureStorage.getState();
+const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+const { resetAcpCatalogEngineForTests } = await import('@/sync/engine/settings/acpCatalogEngine');
+const { resetAcpCatalogSnapshotsForTests } = await import('@/sync/store/settings/acpCatalogSnapshot');
+const { resetProfileCatalogEngineForTests } = await import('@/sync/engine/settings/profileCatalogEngine');
+const { resetProfileCatalogSnapshotsForTests } = await import('@/sync/store/settings/profileCatalogSnapshot');
+const { resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
+let activeStorageScope: Awaited<ReturnType<typeof activateStorageAccountScope>> | null = null;
 installNewSessionScreenModelStorageMock();
 
 const { useNewSessionScreenModel } = await import('./useNewSessionScreenModel');
@@ -1086,13 +886,93 @@ async function runFocusEffects(): Promise<Array<void | (() => void)>> {
 describe('useNewSessionScreenModel (draft hydration)', () => {
     afterEach(() => {
         standardCleanup();
+        activeStorageScope?.dispose();
+        activeStorageScope = null;
         resetSessionDraftRepositoryForTests();
     });
 
-    beforeEach(() => {
+    beforeEach(async () => {
+        resetAcpCatalogEngineForTests();
+        resetAcpCatalogSnapshotsForTests();
+        resetProfileCatalogEngineForTests();
+        resetProfileCatalogSnapshotsForTests();
+        resetServerFeaturesClientForTests();
+        for (const key of Object.keys(settingsState)) Reflect.deleteProperty(settingsState, key);
+        Object.assign(settingsState, structuredClone(initialSettingsState));
+        network.resetRequests();
+        const home = await network.addHome('https://server-a', 'account-a');
+        await network.addHome('https://server-b', 'account-b');
+        const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
+        await setActiveServerId(home.id);
+        fixtureStorage.setState(fixtureStorageInitialState, true);
+        activeStorageScope = await activateStorageAccountScope({ serverId: home.id, accountId: home.accountId });
+        const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
+        await prepareSessionDraftPersistenceStorage();
         clearDaemonMergedProjectionCacheForTests();
         machineContributionRegistryProjectionDescribeMock.mockReset();
-        machineContributionRegistryProjectionDescribeMock.mockResolvedValue({ supported: false, reason: 'not-supported' });
+        const defaultProjection = daemonAgentProjection({ title: 'Codex' });
+        const claudeProjection = daemonAgentProjection({ title: 'Claude', identity: agentTarget('claude').identity, catalogAgentId: 'claude' });
+        machineContributionRegistryProjectionDescribeMock.mockResolvedValue({ supported: true, projection: {
+            ...defaultProjection,
+            agentsById: { ...defaultProjection.agentsById, ...claudeProjection.agentsById },
+        } });
+        network.setRpcAckResponder(async (request) => {
+            if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
+                const serverId = request.serverUrl === home.serverUrl ? home.id : 'server-b';
+                const answer = await machineContributionRegistryProjectionDescribeMock(request.targetId, { serverId });
+                if (answer.supported) return { ok: true, result: { protocolVersion: 1, projection: answer.projection } };
+            }
+            if (request.method === RPC_METHODS.CAPABILITIES_DETECT) {
+                const payload = request.payload;
+                const requests = payload && typeof payload === 'object' && 'requests' in payload && Array.isArray(payload.requests)
+                    ? payload.requests : [];
+                return { ok: true, result: { protocolVersion: 1, results: Object.fromEntries(requests.flatMap((capability: unknown) => {
+                    if (!capability || typeof capability !== 'object' || !('id' in capability) || typeof capability.id !== 'string'
+                        || !capability.id.startsWith('cli.')) return [];
+                    return [[capability.id, { ok: true, checkedAt: Date.now(), data: {
+                        installed: true, version: '1', latestVersion: '1',
+                        update: { supported: false, command: null },
+                        signIn: { status: 'signedIn', loginSupport: 'status_only' },
+                        platform: { supported: true },
+                        install: { available: false, mode: 'manual', sizeBytes: null, guideUrl: null },
+                        dependencies: [],
+                    } }]];
+                })) } };
+            }
+            if (request.method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION) {
+                const answer = await describeProviderModelsMock(request.payload);
+                return { ok: true, result: DaemonProviderModelProjectionResponseV1Schema.parse({
+                    ...answer, currentSelectionRecovery: null,
+                }) };
+            }
+            return { ok: false, error: 'RPC method not found', errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
+        });
+        const artifactBoundary = createArtifactStoreBoundary({
+            ownerAccountId: () => activeServerAccountScopeState.value?.accountId ?? null,
+            encryptionMode: 'plain',
+        });
+        network.setHttpResponder(async (input, init) => {
+            const url = new URL(String(input));
+            const path = url.pathname;
+            const artifactResponse = artifactBoundary.handle(`${path}${url.search}`, init);
+            if (artifactResponse) return artifactResponse;
+            if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse({
+                features: { providers: { enabled: featureFlags.providersEnabled } },
+            }));
+            if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            if (path === '/v2/account/settings') {
+                const { profiles: _profiles, acpCatalogSettingsV1: _acp, ...settings } = settingsState;
+                return Response.json({ content: { t: 'plain', v: settings }, version: 1 });
+            }
+            if (path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json({ status: 'present', revision: 1,
+                content: { t: 'plain', v: AcpCatalogRecordV1Schema.parse({
+                    v: 1, definitions: settingsState.acpCatalogSettingsV1.backends,
+                }) },
+            });
+            const profileResponse = createProfileCatalogHttpResponse(path, settingsState);
+            if (profileResponse) return profileResponse;
+            return null;
+        });
 
         platformOsState.value = 'web';
         modalShowMock.mockReset();
@@ -1110,8 +990,6 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         delete persistedDraft.placementCandidates;
         delete persistedDraft.access;
         delete persistedDraft.primaryTeamId;
-        builtInProfileMockState.defaultProfiles.splice(0);
-        builtInProfileMockState.profilesById.clear();
         routerPushMock.mockClear();
         routerSetParamsMock.mockClear();
         featureFlags.automationsEnabled = false;
@@ -1123,7 +1001,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         describeProviderModelsMock.mockReset();
         describeProviderModelsMock.mockResolvedValue({
             status: 'success',
-            agentTargetKey: 'agent:claude',
+            agentTargetKey: 'agent:happier.agent.claude/claude',
             groups: [],
         });
         persistDraftNowRef.current = null;
@@ -1141,15 +1019,15 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         fetchWorktreesEnrichmentMock.mockImplementation(async () => []);
         searchParamsState.value = {};
         tempSessionDataState.value = null;
-        targetServerState.allowedTargetServerIds = [];
-        targetServerState.targetServerId = null;
-        targetServerState.targetServerName = null;
+        targetServerState.allowedTargetServerIds = [home.id];
+        targetServerState.targetServerId = home.id;
+        targetServerState.targetServerName = 'Server A';
         targetServerRequestState.requests = [];
         activeMachinesState.value = [
             { id: 'machine-1', metadata: { displayName: 'Machine One', host: 'one', homeDir: '/home/one' } },
             { id: 'machine-2', metadata: { displayName: 'Machine Two', host: 'two', homeDir: '/home/two' } },
         ];
-        machineListByServerIdState.value = {};
+        machineListByServerIdState.value = { 'server-b': activeMachinesState.value };
         delete (persistedDraft as any).backendTarget;
         delete (persistedDraft as any).composerAttachments;
         delete persistedDraft.targetServerId;
@@ -1161,6 +1039,9 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         delete persistedDraft.resumeSessionId;
         persistedDraft.selectedMachineId = 'machine-2';
         persistedDraft.selectedPath = '/repo/custom';
+        persistedDraft.selectedWorkspaceId = 'ws_payments';
+        persistedDraft.selectedWorkspaceLocationId = 'loc_local';
+        persistedDraft.selectedWorkspaceCheckoutId = 'checkout_feature_auth';
         persistedDraft.updatedAt = 123;
         persistedDraft.automationDraft = {
             pendingAutomationId: null,
@@ -1294,8 +1175,6 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             },
         } as any;
         invalidateMockStorageSnapshot();
-        storageSubscriptionState.listeners.clear();
-        createSessionActionDraftMock.mockClear();
     });
 
     function getCheckoutChipLabel(model: any): React.ReactNode {
@@ -1362,6 +1241,13 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         });
     }
 
+    async function waitForModelAssertion(assertion: () => void) {
+        await vi.waitFor(async () => {
+            await settleNewSessionScreenModel();
+            assertion();
+        });
+    }
+
     async function runFocusEffectsAndSettle() {
         let cleanups: Array<void | (() => void)> = [];
 
@@ -1377,7 +1263,8 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         assignModel: (nextModel: unknown) => void,
         input?: Readonly<{ draftId: string }>,
     ) {
-        return renderHook(() => {
+        invalidateMockStorageSnapshot();
+        const hook = await renderHook(() => {
             const nextModel = useNewSessionScreenModel(input);
             assignModel(nextModel);
             return nextModel;
@@ -1387,10 +1274,21 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
                 turns: 2,
             },
         });
+        return {
+            ...hook,
+            rerender: async () => {
+                await act(async () => { publishFixtureMachines(); });
+                await hook.rerender();
+            },
+        };
     }
 
-    it('keeps blocked Agent setup disabled until the spawn Home resolves, then opens that scoped machine', async () => {
-        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    async function renderNewSessionProbe(Probe: React.ComponentType) {
+        invalidateMockStorageSnapshot();
+        return renderScreen(React.createElement(Probe));
+    }
+
+    it('keeps machine recovery inert until the spawn Home resolves, then opens scoped Agent sign-in', async () => {
         const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
         const { serverAccountScopedResourceKey } = await import('@/sync/domains/scope/serverAccountScope');
         const { machineAgentInventoryStore } = await import('@/agents/machineAgents/machineAgentInventoryStore');
@@ -1400,15 +1298,16 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         const accountId = 'new-session-blocker-account';
         const machineId = 'machine-2';
         const inventoryKey = serverAccountScopedResourceKey({ serverId: profile.id, accountId }, 'machine-agents', machineId);
-        // Secure credential storage is the boundary. Scope binding, inventory,
-        // blocker presentation, and the screen model's route callback stay real.
-        const credentialsRead = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({
-            token: `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64')}.signature`, secret: 's',
-        });
+        await network.addHome('https://server-a', accountId);
+        activeStorageScope?.dispose();
+        activeStorageScope = await activateStorageAccountScope({ serverId: profile.id, accountId });
         let hook: Awaited<ReturnType<typeof renderNewSessionScreenModel>> | null = null;
         let unmountAgent: (() => Promise<void>) | null = null;
         try {
             activeServerAccountScopeState.value = { serverId: profile.id, accountId };
+            // Retain the exact authored machine while the Home resolver is pending.
+            // A legacy unqualified machine id cannot select a machine without a Home.
+            persistedDraft.targetServerId = profile.id;
             invalidateMockStorageSnapshot();
             targetServerState.targetServerId = null;
             hook = await renderNewSessionScreenModel(() => {});
@@ -1426,26 +1325,42 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             expect(agent.getCurrent()).toMatchObject({
                 agentId: 'claude', stale: false, state: 'needsSignIn', signIn: { status: 'signedOut' },
             });
-            const model = hook.getCurrent();
-            expect(model.variant).toBe('simple');
-            if (model.variant !== 'simple') throw new Error('Expected the simple composer');
-            // The blocker is the composer's status line; Sign in is its action (no connected account here).
-            expect(model.simpleProps.connectionStatus?.action).toMatchObject({ testID: 'new-session-agent-blocker.action', disabled: true });
-            await act(async () => { model.simpleProps.connectionStatus?.action?.onPress(); });
+            await waitForModelAssertion(() => {
+                const model = hook!.getCurrent();
+                expect(model.variant).toBe('simple');
+                if (model.variant !== 'simple') throw new Error('Expected the simple composer');
+                expect(useCreateNewSessionArgsRef.current).toEqual(expect.objectContaining({
+                    selectedMachineId: machineId,
+                    authoringDraft: expect.objectContaining({
+                        executionTarget: { kind: 'machine', target: { serverId: profile.id, machineId } },
+                        agentTarget: agentTarget('claude'),
+                    }),
+                }));
+                expect(model.simpleProps.connectionStatus).toMatchObject({
+                    text: 'newSession.machineUnavailableStatus', recovery: 'machine', isPulsing: false,
+                });
+                expect(model.simpleProps.connectionStatus?.action).toBeUndefined();
+                expect(model.simpleProps.canCreate).toBe(false);
+            });
             expect(routerPushMock).not.toHaveBeenCalled();
             targetServerState.targetServerId = profile.id;
             machineListByServerIdState.value = { [profile.id]: activeMachinesState.value };
             await hook.rerender();
+            await waitForModelAssertion(() => {
+                const model = hook!.getCurrent();
+                if (model.variant !== 'simple') throw new Error('Expected the simple composer');
+                expect(model.simpleProps.connectionStatus?.action).toMatchObject({
+                    testID: 'new-session-agent-blocker.action', disabled: false,
+                });
+            });
             const resolvedModel = hook.getCurrent();
             if (resolvedModel.variant !== 'simple') throw new Error('Expected the simple composer');
-            expect(resolvedModel.simpleProps.connectionStatus?.action?.disabled).not.toBe(true);
             await act(async () => { resolvedModel.simpleProps.connectionStatus?.action?.onPress(); });
             expect(routerPushMock).toHaveBeenLastCalledWith(machineCollectionHref({ machineId, serverId: profile.id }));
         } finally {
             await unmountAgent?.();
             await hook?.unmount();
             machineAgentInventoryStore.publish(inventoryKey, { status: 'ready', items: [], descriptors: [], lastCheckedAt: null });
-            credentialsRead.mockRestore();
         }
     });
 
@@ -1546,32 +1461,22 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalled();
 
         const initialLabels = (model?.simpleProps?.agentPickerOptions ?? []).map((o: any) => o?.label);
+        expect(initialLabels).toContain('agentInput.agent.codex');
         expect(initialLabels).not.toContain('Codex (Projected)');
 
         await act(async () => {
             resolveProjection?.({
                 supported: true,
-                projection: {
-                    v: 1,
-                    providersById: {},
-                    backendsById: {
-                        codex: {
-                            id: 'codex',
-                            providerId: 'codex',
-                            title: 'Codex (Projected)',
-                            subtitle: null,
-                            catalogAgentId: null,
-                            iconAgentId: null,
-                        },
-                    },
-                },
+                projection: daemonAgentProjection({ title: 'Codex (Projected)', identity: projectedCodexIdentity, catalogAgentId: 'codex' }),
             });
         });
 
         await settleNewSessionScreenModel();
 
-        const nextLabels = (model?.simpleProps?.agentPickerOptions ?? []).map((o: any) => o?.label);
-        expect(nextLabels).toContain('Codex (Projected)');
+        await waitForModelAssertion(() => {
+            const nextLabels = (model?.simpleProps?.agentPickerOptions ?? []).map((o: any) => o?.label);
+            expect(nextLabels).toContain('Codex (Projected)');
+        });
     });
 
     it('keeps daemon contribution projections cached per server scope for the same machine id', async () => {
@@ -1580,20 +1485,8 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         targetServerState.targetServerName = 'Server A';
         machineContributionRegistryProjectionDescribeMock.mockImplementation(async (_machineId: string, options?: { serverId?: string | null }) => ({
             supported: true,
-            projection: {
-                v: 1,
-                providersById: {},
-                backendsById: {
-                    codex: {
-                        id: 'codex',
-                        providerId: 'codex',
-                        title: options?.serverId === 'server-b' ? 'Codex (Projected B)' : 'Codex (Projected A)',
-                        subtitle: null,
-                        catalogAgentId: null,
-                        iconAgentId: null,
-                    },
-                },
-            },
+            projection: daemonAgentProjection({ title: options?.serverId === 'server-b' ? 'Codex (Projected B)' : 'Codex (Projected A)',
+                identity: projectedCodexIdentity, catalogAgentId: 'codex' }),
         }));
 
         let model: any = null;
@@ -1602,7 +1495,9 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         });
         await settleNewSessionScreenModel();
 
-        expect((model?.simpleProps?.agentPickerOptions ?? []).map((o: any) => o?.label)).toContain('Codex (Projected A)');
+        await waitForModelAssertion(() => {
+            expect((model?.simpleProps?.agentPickerOptions ?? []).map((o: any) => o?.label)).toContain('Codex (Projected A)');
+        });
 
         targetServerState.targetServerId = 'server-b';
         targetServerState.targetServerName = 'Server B';
@@ -1610,9 +1505,11 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         await hook.rerender();
         await settleNewSessionScreenModel();
 
-        expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledWith('machine-2', expect.objectContaining({ serverId: 'server-a' }));
-        expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledWith('machine-2', expect.objectContaining({ serverId: 'server-b' }));
-        expect((model?.simpleProps?.agentPickerOptions ?? []).map((o: any) => o?.label)).toContain('Codex (Projected B)');
+        await waitForModelAssertion(() => {
+            expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledWith('machine-2', expect.objectContaining({ serverId: 'server-a' }));
+            expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledWith('machine-2', expect.objectContaining({ serverId: 'server-b' }));
+            expect((model?.simpleProps?.agentPickerOptions ?? []).map((o: any) => o?.label)).toContain('Codex (Projected B)');
+        });
     });
 
     it('keeps a routed plugin backend identity separate from optional bundled behavior metadata', async () => {
@@ -1621,11 +1518,8 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             | null = null;
 
         searchParamsState.value = {
-            backendTargetKey: 'backend:acme.review.backend',
-            backendTarget: JSON.stringify({
-                kind: 'backend',
-                backendId: 'acme.review.backend',
-            }),
+            backendTargetKey: 'agent:acme.review/review',
+            backendTarget: JSON.stringify(reviewAgentTarget),
         };
         machineContributionRegistryProjectionDescribeMock.mockImplementation(() => {
             return new Promise((resolve) => {
@@ -1639,71 +1533,39 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         });
 
         expect(useCreateNewSessionArgsRef.current).toEqual(expect.objectContaining({
-            agentType: 'acme.review.backend',
-            staticAgentId: null,
-            backendTarget: expect.objectContaining({ kind: 'backend', backendId: 'acme.review.backend' }),
-            spawnBackendTarget: expect.objectContaining({ kind: 'backend', backendId: 'acme.review.backend' }),
+            backendTarget: reviewAgentTarget,
+            authoringDraft: expect.objectContaining({ agentTarget: null }),
         }));
-        expect(model?.simpleProps?.agentType).toBe('acme.review.backend');
+        expect(model?.simpleProps?.agentType).toBe('acme.review/review');
 
         await act(async () => {
             resolveProjection?.({
                 supported: true,
-                projection: {
-                    v: 1,
-                    providersById: {
-                        'plugin:acme.review': {
-                            providerId: 'plugin:acme.review',
-                            title: 'Acme Review',
-                            subtitle: null,
-                            channel: 'plugin',
-                            isBuiltIn: false,
-                            catalogAgentId: 'claude',
-                            iconAgentId: 'claude',
-                        },
-                    },
-                    backendsById: {
-                        'acme.review.backend': {
-                            id: 'acme.review.backend',
-                            providerId: 'plugin:acme.review',
-                            title: 'Acme Review Backend',
-                            subtitle: null,
-                            catalogAgentId: 'claude',
-                            iconAgentId: 'claude',
-                        },
-                    },
-                },
+                projection: daemonAgentProjection({ title: 'Acme Review Agent', identity: reviewAgentTarget.identity, catalogAgentId: 'claude' }),
             });
         });
 
         await settleNewSessionScreenModel();
 
-        expect(useCreateNewSessionArgsRef.current).toEqual(expect.objectContaining({
-            agentType: 'acme.review.backend',
-            staticAgentId: 'claude',
-            backendTarget: expect.objectContaining({ kind: 'backend', backendId: 'acme.review.backend' }),
-            spawnBackendTarget: expect.objectContaining({ kind: 'backend', backendId: 'acme.review.backend' }),
-        }));
-        expect(model?.simpleProps?.agentType).toBe('acme.review.backend');
+        await waitForModelAssertion(() => {
+            expect(useCreateNewSessionArgsRef.current).toEqual(expect.objectContaining({
+                authoringDraft: expect.objectContaining({ agentTarget: reviewAgentTarget }),
+            }));
+            expect(model?.simpleProps?.agentType).toBe('acme.review/review');
+            expect(model?.simpleProps?.agentLabel).toBe('Acme Review Agent');
+        });
     });
 
-    it('clears stale daemon contribution projections when the selected machine becomes unavailable', async () => {
+    it('retains an authored absent machine and its Agent display until the machine is explicitly cleared', async () => {
+        settingsState.useEnhancedSessionWizard = true;
+        const projectedTarget = { kind: 'agent' as const, identity: projectedCodexIdentity };
+        searchParamsState.value = {
+            backendTargetKey: 'agent:acme.projected/codex',
+            backendTarget: JSON.stringify(projectedTarget),
+        };
         machineContributionRegistryProjectionDescribeMock.mockResolvedValue({
             supported: true,
-            projection: {
-                v: 1,
-                providersById: {},
-                backendsById: {
-                    codex: {
-                        id: 'codex',
-                        providerId: 'codex',
-                        title: 'Codex (Projected)',
-                        subtitle: null,
-                        catalogAgentId: null,
-                        iconAgentId: null,
-                    },
-                },
-            },
+            projection: daemonAgentProjection({ title: 'Codex (Projected)', identity: projectedCodexIdentity, catalogAgentId: 'codex' }),
         });
 
         let model: any = null;
@@ -1712,21 +1574,44 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         });
         await settleNewSessionScreenModel();
 
-        expect((model?.simpleProps?.agentPickerOptions ?? []).map((o: any) => o?.label)).toContain('Codex (Projected)');
+        await waitForModelAssertion(() => {
+            expect(model?.wizardProps?.agent?.agentPickerOptions).toEqual(expect.arrayContaining([
+                expect.objectContaining({ id: 'agent:acme.projected/codex', label: 'Codex (Projected)' }),
+            ]));
+            expect(model?.wizardProps?.agent?.agentLabel).toBe('Codex (Projected)');
+        });
 
         activeMachinesState.value = [];
         await hook.rerender();
         await settleNewSessionScreenModel();
 
-        expect((model?.simpleProps?.agentPickerOptions ?? []).map((o: any) => o?.label)).not.toContain('Codex (Projected)');
+        expect(model?.wizardProps?.machine?.selectedMachine).toBeNull();
+        expect(model?.wizardProps?.machine?.selectedPath).toBe('/repo/custom');
+        expect(model?.wizardProps?.agent?.agentPickerOptions).toEqual(expect.arrayContaining([
+            expect.objectContaining({ id: 'agent:acme.projected/codex', label: 'Codex (Projected)' }),
+        ]));
+        expect(model?.wizardProps?.agent?.agentLabel).toBe('Codex (Projected)');
+        expect(useCreateNewSessionArgsRef.current).toEqual(expect.objectContaining({
+            authoringDraft: expect.objectContaining({
+                executionTarget: { kind: 'machine', target: { serverId: 'server-a', machineId: 'machine-2' } },
+                agentTarget: projectedTarget,
+            }),
+        }));
+        // Retained authored identity is display continuity, not permission to spawn.
+        expect(model?.wizardProps?.footer?.canCreate).toBe(false);
+
+        await act(async () => { model?.wizardProps?.machine?.setSelectedMachineId(null); });
+        await settleNewSessionScreenModel();
+
+        expect((model?.wizardProps?.agent?.agentPickerOptions ?? []).map((o: any) => o?.label)).not.toContain('Codex (Projected)');
+        expect(useCreateNewSessionArgsRef.current).toEqual(expect.objectContaining({
+            authoringDraft: expect.objectContaining({ executionTarget: null, agentTarget: null }),
+        }));
+        expect(model?.wizardProps?.footer?.canCreate).toBe(false);
     });
 
     it('ignores stale built-in profile catalog entries that no longer resolve', async () => {
-        builtInProfileMockState.defaultProfiles.push({
-            id: 'missing-built-in-profile',
-            name: 'Missing built-in profile',
-            isBuiltIn: true,
-        });
+        settingsState.favoriteProfiles = ['missing-built-in-profile'];
 
         let model: any = null;
         await expect(renderNewSessionScreenModel((nextModel) => {
@@ -1739,7 +1624,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
     it('clears remembered Claude plan mode when the user switches the new-session mode back to build', async () => {
         const backendTarget = { kind: 'backend' as const, backendId: 'claude' as const };
         const scopeKey = buildRememberedEngineSelectionScopeKey({
-            serverId: null,
+            serverId: 'server-a',
             backendTarget,
         });
         (settingsState as any).rememberLastEngineSelectionsV1 = true;
@@ -1801,15 +1686,18 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             renderedModels.push(nextModel as CapturedWizardModel);
         });
         expect(renderedModels.at(-1)?.wizardProps?.agent?.providerModelProjectionAuthoritative).toBe(false);
+        await waitForModelAssertion(() => { expect(describeProviderModelsMock).toHaveBeenCalled(); });
 
         providerProjection.resolve({
             status: 'success',
-            agentTargetKey: 'agent:claude',
+            agentTargetKey: 'agent:happier.agent.claude/claude',
             groups: [retainedGroup],
         });
         await settleNewSessionScreenModel();
-        expect(renderedModels.at(-1)?.wizardProps?.agent?.providerModelGroups).toEqual([retainedGroup]);
-        expect(renderedModels.at(-1)?.wizardProps?.agent?.providerModelProjectionAuthoritative).toBe(true);
+        await waitForModelAssertion(() => {
+            expect(renderedModels.at(-1)?.wizardProps?.agent?.providerModelGroups).toEqual([retainedGroup]);
+            expect(renderedModels.at(-1)?.wizardProps?.agent?.providerModelProjectionAuthoritative).toBe(true);
+        });
 
         const exactSelection = SessionModelSelectionV1Schema.parse({
             v: 1,
@@ -1899,7 +1787,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
 
     it('remembers the exact Provider-bound model selection chosen in the enhanced wizard', async () => {
         const backendTarget = { kind: 'backend' as const, backendId: 'codex' as const };
-        const scopeKey = buildRememberedEngineSelectionScopeKey({ serverId: null, backendTarget });
+        const scopeKey = buildRememberedEngineSelectionScopeKey({ serverId: 'server-a', backendTarget });
         (settingsState as any).rememberLastEngineSelectionsV1 = true;
         (settingsState as any).useEnhancedSessionWizard = true;
         persistedDraft.agentType = 'codex';
@@ -1931,11 +1819,11 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         const codexTarget = { kind: 'backend' as const, backendId: 'codex' as const };
         const opencodeTarget = { kind: 'backend' as const, backendId: 'opencode' as const };
         const codexScopeKey = buildRememberedEngineSelectionScopeKey({
-            serverId: null,
+            serverId: 'server-a',
             backendTarget: codexTarget,
         });
         const opencodeScopeKey = buildRememberedEngineSelectionScopeKey({
-            serverId: null,
+            serverId: 'server-a',
             backendTarget: opencodeTarget,
         });
         (settingsState as any).rememberLastEngineSelectionsV1 = true;
@@ -2104,7 +1992,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         }));
 
         await act(async () => {
-            model?.wizardProps?.setSessionPrompt('unrelated wizard prompt edit');
+            model?.wizardProps?.footer?.setSessionPrompt('unrelated wizard prompt edit');
         });
         saveNewSessionDraftMock.mockClear();
         await act(async () => { persistDraftNowRef.current?.(); });
@@ -2180,11 +2068,12 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         }));
     });
 
-    it('keeps the default attachment flow id stable across new-session route remounts', async () => {
+    it('keeps the attachment flow id stable when the route remounts the same draft', async () => {
+        const draftId = 'draft-attachment-remount';
         let firstModel: any = null;
         const firstHook = await renderNewSessionScreenModel((nextModel) => {
             firstModel = nextModel;
-        });
+        }, { draftId });
         const firstAttachmentFlowId = firstModel?.simpleProps?.attachmentFlowId;
         expect(typeof firstAttachmentFlowId).toBe('string');
         expect(firstAttachmentFlowId.length).toBeGreaterThan(0);
@@ -2194,7 +2083,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         let secondModel: any = null;
         const secondHook = await renderNewSessionScreenModel((nextModel) => {
             secondModel = nextModel;
-        });
+        }, { draftId });
 
         expect(secondModel?.simpleProps?.attachmentFlowId).toBe(firstAttachmentFlowId);
 
@@ -2253,7 +2142,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             targetServerId: 'server-web',
             selectedMachineId: 'machine-web',
             selectedPath: '/worktrees/web',
-            executionTarget: { serverId: 'server-web', machineId: 'machine-web' },
+            executionTarget: { kind: 'machine', target: { serverId: 'server-web', machineId: 'machine-web' } },
         }));
         await settleNewSessionScreenModel();
         expect(model?.simpleProps?.agentInputExtraActionChips?.find(
@@ -2409,8 +2298,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             authoringDraft: expect.objectContaining({
                 prompt: 'Persisted prompt',
                 displayText: 'Persisted prompt',
-                agentId: 'codex',
-                backendTarget: { kind: 'backend', backendId: 'codex' },
+                agentTarget: agentTarget('codex'),
                 permissionMode: 'acceptEdits',
                 modelSelection: expect.objectContaining({
                     ref: expect.objectContaining({ modelId: 'gpt-5' }),
@@ -2440,8 +2328,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         expect(model?.simpleProps?.modelMode).toBe('default');
         expect(useCreateNewSessionArgsRef.current).toEqual(expect.objectContaining({
             authoringDraft: expect.objectContaining({
-                agentId: 'codex',
-                backendTarget: { kind: 'backend', backendId: 'codex' },
+                agentTarget: agentTarget('codex'),
                 modelSelection: null,
             }),
         }));
@@ -2458,7 +2345,6 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
                     title: 'Review Bot',
                     launch: { kind: 'command' as const, command: 'custom-acp', args: ['serve'] },
                     env: {},
-                    transportProfile: 'generic',
                     capabilities: {
                         supportsLoadSession: false,
                         supportsModes: 'unknown',
@@ -2479,13 +2365,14 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             model = nextModel;
         });
 
-        expect(model?.simpleProps?.agentType).toBe('codex');
-        expect(model?.simpleProps?.agentLabel).toBe('Review Bot');
+        await waitForModelAssertion(() => {
+            expect(model?.simpleProps?.agentType).toBe('custom-acp');
+            expect(model?.simpleProps?.agentLabel).toBe('Review Bot');
+        });
         await settleNewSessionScreenModel();
         expect(useCreateNewSessionArgsRef.current).toEqual(expect.objectContaining({
             authoringDraft: expect.objectContaining({
-                agentId: 'codex',
-                backendTarget: { kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot' },
+                agentTarget: configuredReviewAgentTarget,
             }),
         }));
 
@@ -2494,8 +2381,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         });
 
         expect(saveNewSessionDraftMock.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({
-            agentType: 'codex',
-            backendTarget: { kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot' },
+            agentTarget: configuredReviewAgentTarget,
         }));
     });
 
@@ -2510,7 +2396,6 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
                     title: 'Review Bot',
                     launch: { kind: 'command' as const, command: 'custom-acp', args: ['serve'] },
                     env: {},
-                    transportProfile: 'generic',
                     capabilities: {
                         supportsLoadSession: false,
                         supportsModes: 'unknown',
@@ -2534,8 +2419,13 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             model = nextModel;
         });
 
-        expect(model?.simpleProps?.agentType).toBe('claude');
-        expect(model?.simpleProps?.agentLabel).toBe('Review Bot');
+        await waitForModelAssertion(() => {
+            expect(model?.simpleProps?.agentType).toBe('custom-acp');
+            expect(model?.simpleProps?.agentLabel).toBe('Review Bot');
+            expect(useCreateNewSessionArgsRef.current).toEqual(expect.objectContaining({
+                authoringDraft: expect.objectContaining({ agentTarget: configuredReviewAgentTarget }),
+            }));
+        });
     });
 
     it('re-hydrates the worktree checkout selection when a newer draft is loaded on focus', async () => {
@@ -2642,7 +2532,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
 
         expect(Array.isArray(model?.simpleProps?.agentInputExtraActionChips)).toBe(true);
         expect(model?.simpleProps?.agentInputExtraActionChips).toContainEqual(expect.objectContaining({
@@ -2655,7 +2545,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         });
 
         expect(saveNewSessionDraftMock).toHaveBeenCalledWith(expect.objectContaining({
-            backendTarget: expect.objectContaining({ kind: 'backend', backendId: 'claude' }),
+            agentTarget: agentTarget('claude'),
             capabilitySelection: { mcp: {
                 v: 1,
                 managedServersEnabled: false,
@@ -2674,7 +2564,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
 
         await act(async () => {
             persistDraftNowRef.current?.();
@@ -2703,7 +2593,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
 
         expect(model?.variant).toBe('wizard');
         expect(typeof model?.wizardProps?.profiles?.openProfileEdit).toBe('function');
@@ -2720,7 +2610,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             }),
         }));
         expect(saveNewSessionDraftMock.mock.calls.at(-1)?.[0]).toEqual(expect.objectContaining({
-            backendTarget: expect.objectContaining({ kind: 'backend', backendId: 'claude' }),
+            agentTarget: agentTarget('claude'),
             selectedMachineId: 'machine-2',
             selectedPath: '/repo/custom',
         }));
@@ -2743,7 +2633,6 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
                     title: 'Review Bot',
                     launch: { kind: 'command' as const, command: 'custom-acp', args: ['serve'] },
                     env: {},
-                    transportProfile: 'generic',
                     capabilities: {
                         supportsLoadSession: false,
                         supportsModes: 'unknown',
@@ -2767,7 +2656,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
 
         expect(model?.variant).toBe('wizard');
         expect(typeof model?.wizardProps?.profiles?.openProfileEdit).toBe('function');
@@ -2781,10 +2670,10 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             pathname: '/new/pick/profile-edit',
             params: expect.objectContaining({
                 machineId: 'machine-2',
-                backendTargetKey: 'backend:review-bot:configured:review-bot',
+                backendTargetKey: 'agent:happier.agent.custom-acp/custom-acp:definition:review-bot',
             }),
         }));
-        expect(routerPushMock.mock.calls.at(-1)?.[0]?.params?.backendTarget).toContain('"configuredBackendId":"review-bot"');
+        expect(JSON.parse(routerPushMock.mock.calls.at(-1)?.[0]?.params?.backendTarget)).toEqual(configuredReviewAgentTarget);
     });
 
     it('drops stale configured backend route params after switching to a built-in backend before opening profile edit', async () => {
@@ -2806,7 +2695,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
 
         expect(model?.variant).toBe('wizard');
         expect(typeof model?.wizardProps?.profiles?.openProfileEdit).toBe('function');
@@ -2825,11 +2714,11 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         expect(pushPayload).toEqual(expect.objectContaining({
             pathname: '/new/pick/profile-edit',
             params: expect.objectContaining({
-                agentType: 'codex',
+                backendTargetKey: 'agent:happier.agent.codex/codex',
                 machineId: 'machine-2',
             }),
         }));
-        expect(pushPayload?.params?.backendTarget).toContain('"backendId":"codex"');
+        expect(JSON.parse(pushPayload?.params?.backendTarget)).toEqual(agentTarget('codex'));
         expect(pushPayload?.params?.backendTarget).not.toContain('stale-review-bot');
         expect(pushPayload?.params?.backendTargetKey).toBe('agent:happier.agent.codex/codex');
     });
@@ -2852,7 +2741,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         expect(claudeOption).toBeTruthy();
 
         await act(async () => {
-            claudeOption?.onSelectImmediate?.();
+            model?.simpleProps?.onAgentPickerSelect?.(claudeOption.id);
             await settleNewSessionScreenModel({ cycles: 1, turns: 2 });
         });
 
@@ -2875,7 +2764,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
 
         expect(model?.simpleProps?.handlePathClick).toBeUndefined();
         expect(typeof model?.simpleProps?.pathPopover?.renderContent).toBe('function');
@@ -2892,7 +2781,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
 
         expect(model?.simpleProps?.pathPopover?.scrollEnabled).toBe(false);
         expect(model?.simpleProps?.pathPopover?.edgeFades).toBeUndefined();
@@ -2909,7 +2798,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
 
         const requestClose = vi.fn();
         const element = model?.simpleProps?.pathPopover?.renderContent?.({ requestClose });
@@ -2931,7 +2820,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
 
         expect(model?.simpleProps?.showResumePicker).toBe(true);
         expect(typeof model?.simpleProps?.resumePopover?.renderContent).toBe('function');
@@ -2995,7 +2884,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
 
         const requestClose = vi.fn();
         const rendered = model?.simpleProps?.resumePopover?.renderContent?.({ requestClose });
@@ -3021,7 +2910,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
 
         expect(typeof model?.simpleProps?.profilePopover?.renderContent).toBe('function');
         expect(routerSetParamsMock).not.toHaveBeenCalled();
@@ -3040,10 +2929,14 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
 
         await act(async () => {
-            model?.wizardProps?.profiles?.openProfileEdit?.({});
+            // Hold the native interaction queue at the platform boundary so cancellation
+            // precedes delivery; the web zero-delay fallback would already have fired.
+            platformOsState.value = 'ios';
+            try { model?.wizardProps?.profiles?.openProfileEdit?.({}); }
+            finally { platformOsState.value = 'web'; }
             await flushHookEffects({ cycles: 1, turns: 1 });
         });
 
@@ -3115,7 +3008,12 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
         });
 
         expect(model?.variant).toBe('wizard');
-        expect(model?.wizardProps?.profiles?.selectedProfileId).toBeNull();
+        await waitForModelAssertion(() => {
+            expect(model?.wizardProps?.profiles?.profiles).toEqual(expect.arrayContaining([
+                expect.objectContaining({ id: 'profile_disabled' }),
+            ]));
+            expect(model?.wizardProps?.profiles?.selectedProfileId).toBeNull();
+        });
     });
 
     it('keeps the default environment selected even when a workspace graph still carries a legacy default profile', async () => {
@@ -3145,7 +3043,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
 
         expect(model?.variant).toBe('wizard');
         expect(model?.wizardProps?.profiles?.selectedProfileId).toBeNull();
@@ -3305,7 +3203,13 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             model = nextModel;
         });
 
-        expect(model?.wizardProps?.profiles?.selectedProfileId).toBe('profile_previous');
+        await waitForModelAssertion(() => {
+            expect(model?.wizardProps?.profiles?.profiles).toEqual(expect.arrayContaining([
+                expect.objectContaining({ id: 'profile_previous' }),
+                expect.objectContaining({ id: 'profile_new' }),
+            ]));
+            expect(model?.wizardProps?.profiles?.selectedProfileId).toBe('profile_previous');
+        });
 
         await act(async () => {
             model?.wizardProps?.profiles?.onPressDefaultEnvironment?.();
@@ -3328,7 +3232,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
 
         await act(async () => {
             model?.simpleProps?.setCheckoutCreationDraft?.({
@@ -3361,7 +3265,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
 
         expect(model?.simpleProps?.setSelectedWorkspaceId).toBeUndefined();
         expect(model?.simpleProps?.setSelectedWorkspaceLocationId).toBeUndefined();
@@ -3492,7 +3396,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
 
         expect(model?.simpleProps?.selectedPath).toBe('/repo/unlinked');
         const checkoutChip = model?.simpleProps?.agentInputExtraActionChips?.find((chip: any) => chip?.key === 'new-session-checkout');
@@ -3525,7 +3429,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
 
         expect(model?.simpleProps?.selectedPath).toBe('/repo/from-directory');
     });
@@ -3543,7 +3447,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
         await flushHookEffects({ cycles: 3, turns: 4 });
 
         try {
@@ -3642,7 +3546,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
         await flushHookEffects({ cycles: 3, turns: 4 });
 
         try {
@@ -3799,7 +3703,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
 
         try {
             const checkoutChip = model?.simpleProps?.agentInputExtraActionChips?.find((chip: any) => chip?.key === 'new-session-checkout');
@@ -3894,7 +3798,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
 
         try {
             const checkoutChip = model?.simpleProps?.agentInputExtraActionChips?.find((chip: any) => chip?.key === 'new-session-checkout');
@@ -4002,7 +3906,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
 
         try {
             const checkoutChip = findSelectionListCheckoutChip(model);
@@ -4085,7 +3989,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
 
         expect(getCheckoutChipLabel(model)).toBe('newSession.checkout.noWorktree');
         const getCheckoutChip = () => findSelectionListCheckoutChip(model);
@@ -4171,7 +4075,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
 
         const getCheckoutChip = () => findSelectionListCheckoutChip(model);
         const checkoutChip = getCheckoutChip();
@@ -4224,7 +4128,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        await renderNewSessionProbe(Probe);
 
         const getCheckoutChip = () => findSelectionListCheckoutChip(model);
         expect(getCheckoutChip()?.controlId).toBe('checkout');
@@ -4287,7 +4191,7 @@ describe('useNewSessionScreenModel (draft hydration)', () => {
             model = nextModel;
         });
 
-        expect(model?.simpleProps?.machineName).toBe('Remote Builder');
+        expect(model?.simpleProps?.machineName).toBe('account-b · Remote Builder');
         expect(model?.simpleProps?.selectedPath).toBe('/srv/remote/project');
     });
 

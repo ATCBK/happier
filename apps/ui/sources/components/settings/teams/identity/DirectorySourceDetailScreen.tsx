@@ -23,7 +23,6 @@ import { identityAdministrationFailureMessage } from '@/components/settings/iden
 import { announceAccessibilityMessage } from '@/components/ui/accessibility/announceAccessibilityMessage';
 import { getPreferredLanguage, t } from '@/text';
 import { fireAndForget } from '@/utils/system/fireAndForget';
-import { Modal } from '@/modal';
 import { formatWithCachedDateTimeFormatter } from '@/utils/datetime/cachedIntlFormatters';
 import { openExternalUrl } from '@/utils/url/openExternalUrl';
 import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
@@ -32,7 +31,7 @@ import type { ActionApprovalRegistration } from '@/components/approvals/actionAp
 import { TeamSection } from '../TeamSection';
 import { teamMemberDetailPath } from '../teamsRoutes';
 import { DirectoryListFailure, useDirectoryPeopleList } from './DirectoryPeopleList';
-import { directoryGroupMappingTargetLabel, directorySourcePresentationState, directorySourceRemovalBody, directorySourceStateLabel } from './directoryAdministrationPresentation';
+import { directoryGroupMappingTargetLabel, directorySourcePresentationState, directorySourceStateLabel } from './directoryAdministrationPresentation';
 import { runDirectoryGroupMappingChange } from './directoryGroupMapping';
 import { runDirectorySourceRemoval } from './directorySourceRemoval';
 import {
@@ -135,41 +134,12 @@ const DirectoryGroupMappings = React.memo(function DirectoryGroupMappings(props:
         archived: 'active',
         enabled: props.groupMappingsAvailable,
     });
-    const nativeGroupNames = React.useMemo(
-        () => new Map(nativeGroups.rows.map((group) => [group.id, group.name] as const)),
-        [nativeGroups.rows],
-    );
     const mappingAvailable = props.mutationsAvailable && directoryGroups.status === 'ready' && !directoryGroups.error;
 
     const changeMapping = React.useCallback(async (
         group: (typeof directoryGroups.rows)[number],
         target: Parameters<typeof runDirectoryGroupMappingChange>[0]['target'],
     ) => {
-        // Roster binding counts describe the people behind this mapping. They
-        // are not a promise of exact grants/removals: native ownership survives.
-        const teamGroupName = (teamGroupId: string) =>
-            nativeGroupNames.get(teamGroupId) ?? t('identityAdministration.mappedGroupNotVisible');
-        const mappedTo = (name: string) => `${t('identityAdministration.mappedTo')}: ${name}`;
-        const destination = target === null
-            ? (group.mapping.state === 'bound' ? mappedTo(directoryGroupMappingTargetLabel(group.mapping)) : null)
-            : target.kind === 'native_target'
-                ? mappedTo(teamGroupName(target.teamGroupId))
-                : t('identityAdministration.mapCreate');
-        const confirmed = await Modal.confirm(
-            target === null ? t('identityAdministration.removeMapping') : t('identityAdministration.chooseGroup'),
-            [
-                group.displayName,
-                destination,
-                t('teams.authentication.directory.people.boundAccountCount', { count: group.boundAccountCount === null ? t('teams.authentication.directory.unknown') : group.boundAccountCount }),
-                t('teams.authentication.directory.people.unboundPeopleCount', { count: group.unboundPeopleCount === null ? t('teams.authentication.directory.unknown') : group.unboundPeopleCount }),
-            ].filter((line): line is string => line !== null).join('\n'),
-            {
-                cancelText: t('common.cancel'),
-                confirmText: target === null ? t('identityAdministration.removeMapping') : t('common.continue'),
-                ...(target === null ? { destructive: true } : {}),
-            },
-        );
-        if (!confirmed) return;
         setPendingGroupId(group.id);
         setFailure(null);
         const finishMapping = () => {
@@ -213,7 +183,7 @@ const DirectoryGroupMappings = React.memo(function DirectoryGroupMappings(props:
         } finally {
             setPendingGroupId(null);
         }
-    }, [client, closeChooser, directoryGroups, nativeGroupNames, props.address.teamId, props.sourceId, reportMappingFailure]);
+    }, [client, closeChooser, directoryGroups, props.address.teamId, props.sourceId, reportMappingFailure]);
 
     const selectedGroup = choosingFor === null
         ? null
@@ -285,7 +255,7 @@ const DirectoryGroupMappings = React.memo(function DirectoryGroupMappings(props:
         if (directoryGroups.hasMore && directoryGroups.status !== 'loading' && !directoryGroups.error) result.push({ key: 'groups-more', element: <ItemGroup><Item testID="directory-groups-load-more" title={t('identityAdministration.loadMore')} loading={directoryGroups.status === 'loading_more'} disabled={directoryGroups.status === 'loading_more'} onPress={() => void directoryGroups.loadMore()} showChevron={false} /></ItemGroup> });
         if (failure) result.push({ key: 'groups-failure', element: <ItemGroup><SurfaceStateCard testID="directory-group-mapping-failure" kind="error" size="line" title={failure} accessibilitySemantics="alert" /></ItemGroup> });
         return [...result, ...(props.afterRows ?? [])];
-    }, [props.afterRows, changeMapping, choosingFor, closeChooser, focusChooser, onChooserKeyDown, directoryGroups.error, directoryGroups.hasMore, directoryGroups.loadMore, directoryGroups.reload, directoryGroups.rows, directoryGroups.status, failure, mappingAvailable, nativeGroupNames, nativeGroups.error, nativeGroups.hasMore, nativeGroups.isCurrent, nativeGroups.loadMore, nativeGroups.reload, nativeGroups.rows, nativeGroups.status, pendingGroupId, props.beforeRows, props.groupMappingsAvailable, query, selectedGroup]);
+    }, [props.afterRows, changeMapping, choosingFor, closeChooser, focusChooser, onChooserKeyDown, directoryGroups.error, directoryGroups.hasMore, directoryGroups.loadMore, directoryGroups.reload, directoryGroups.rows, directoryGroups.status, failure, mappingAvailable, nativeGroups.error, nativeGroups.hasMore, nativeGroups.isCurrent, nativeGroups.loadMore, nativeGroups.reload, nativeGroups.rows, nativeGroups.status, pendingGroupId, props.beforeRows, props.groupMappingsAvailable, query, selectedGroup]);
 
     const chooserIndex = rows.findIndex((row) => row.key === `groups-choice:${choosingFor}`);
     React.useEffect(() => {
@@ -316,7 +286,6 @@ const DirectoryGroupMappings = React.memo(function DirectoryGroupMappings(props:
         renderItem={renderRow}
         ListHeaderComponent={props.header}
         style={{ flex: 1 }}
-        backendPreference="auto"
         initialNumToRender={8}
         maxToRenderPerBatch={6}
         windowSize={7}
@@ -394,21 +363,11 @@ const AuthorizedDirectorySourceDetail = React.memo(function AuthorizedDirectoryS
     }, [reportActionFailure, runAction]);
     const pause = React.useCallback(async () => {
         if (!source) return;
-        if (!await Modal.confirm(
-            t('teams.authentication.directory.actions.pauseTitle', { source: source.displayName }),
-            t('teams.authentication.directory.actions.pauseBody'),
-            { cancelText: t('common.cancel'), confirmText: t('teams.authentication.directory.actions.pause') },
-        )) return;
         await run('teams.directory.sources.pause');
     }, [run, source]);
     const openWorkosSetup = React.useCallback(async () => {
         const connectionId = source?.workosAdminPortalConnectionId;
         if (!connectionId || source.kind !== 'workos_directory' || !props.mutationsAvailable) return;
-        if (!await Modal.confirm(
-            t('identityAdministration.workosSetupDirectory'),
-            t('identityAdministration.workosDirectoryPortalConfirmBody'),
-            { cancelText: t('common.cancel'), confirmText: t('common.continue') },
-        )) return;
         setWorkosPortalPending(true);
         setActionFailure(null);
         try {
@@ -454,15 +413,6 @@ const AuthorizedDirectorySourceDetail = React.memo(function AuthorizedDirectoryS
         const outcome = await runDirectorySourceRemoval({
             sourceId: source.id,
             readImpact: readRemovalImpact,
-            confirm: async (preflight) => await Modal.confirm(
-                t('teams.authentication.directory.actions.removeTitle', { source: preflight.sourceLabel }),
-                directorySourceRemovalBody(preflight.impact),
-                {
-                    cancelText: t('common.cancel'),
-                    confirmText: t('teams.authentication.directory.actions.remove'),
-                    destructive: true,
-                },
-            ),
             remove: removeSource,
             onApprovalSucceeded: async () => router.back(),
             onApprovalFailed: reportActionFailure,

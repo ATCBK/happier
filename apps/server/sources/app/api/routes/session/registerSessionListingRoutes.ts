@@ -1,4 +1,5 @@
-import { z } from "zod";
+import { buildAccountStoredContentUpgradeRequired, type AccountStoredContentCompatibilityEvaluation } from '@/app/clientCompatibility/accountStoredContentCompatibility';
+import { z } from "zod/mini";
 
 import { AnyClientUpgradeRequiredV1Schema } from '@happier-dev/protocol/clientCompatibility/upgradeRequiredV1';
 import { OperationUpdateRequiredV1Schema } from '@happier-dev/protocol/compat/operationUpdateRequiredV1';
@@ -42,40 +43,36 @@ import { readSessionAccessAuthenticationFromRequest, type SessionAccessAuthentic
 import { listQueuedExecutionRunPendingTargetsForSessions } from "@/app/session/pending/pendingMessageService";
 import { loadPendingActivationPublicationInTx } from '@/app/session/pending/publishPendingMutation';
 import { PRESENT_USER_REQUIRED_ERROR } from "@/app/api/utils/apiTokenRouteAdmission";
-import { projectSessionReportsForRowsInTx, readmitCapturedSessionReportReferencesInTx, type SessionReportContribution } from "@/app/session/awareness/sessionReportsProjection";
+import { projectSessionManagerForRowsInTx, readmitCapturedSessionManagerReferencesInTx, type SessionManagerContribution } from "@/app/session/awareness/sessionManagerProjection";
+import { projectSessionTurnWaitingHttpResponse } from '@/app/clientCompatibility/sessionTurnWaitingCompatibility';
 
-const SESSION_METADATA_PRIVACY_UPGRADE_REQUIRED_RESPONSE_SCHEMA = z.object({
+const SESSION_METADATA_PRIVACY_UPGRADE_REQUIRED_RESPONSE_SCHEMA = z.strictObject({
     error: z.literal("Session metadata privacy upgrade required"),
     code: z.literal("metadata_privacy_upgrade_required"),
-}).strict();
+});
 
-const V2_ACTIVE_SESSION_LIST_QUERYSTRING_SCHEMA = z.object({
-    limit: z.coerce.number().int().min(1)
-        .max(V2_ACTIVE_SESSION_LIST_ROW_LIMIT)
-        .default(V2_ACTIVE_SESSION_LIST_ROW_LIMIT),
-}).optional();
+const V2_ACTIVE_SESSION_LIST_QUERYSTRING_SCHEMA = z.optional(z.object({
+    limit: z._default(z.coerce.number().check(z.int(), z.minimum(1), z.maximum(V2_ACTIVE_SESSION_LIST_ROW_LIMIT)), V2_ACTIVE_SESSION_LIST_ROW_LIMIT),
+}));
 
-const OPTIONAL_BOOLEAN_QUERY_PARAM_SCHEMA = z.preprocess((value) => {
+const OPTIONAL_BOOLEAN_QUERY_PARAM_SCHEMA = z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
     if (value === true || value === "true" || value === "1") return true;
     if (value === false || value === "false" || value === "0") return false;
     return value;
-}, z.boolean()).optional();
+}), z.boolean()));
 
-const V2_PAGED_SESSION_LIST_QUERYSTRING_SCHEMA = z.object({
-    cursor: z.string().optional(),
-    limit: z.coerce.number().int().min(1).max(SESSION_LIST_PAGE_MAX_LIMIT).default(SESSION_LIST_PAGE_DEFAULT_LIMIT),
-}).optional();
+const V2_PAGED_SESSION_LIST_QUERYSTRING_SCHEMA = z.optional(z.object({
+    cursor: z.optional(z.string()),
+    limit: z._default(z.coerce.number().check(z.int(), z.minimum(1), z.maximum(SESSION_LIST_PAGE_MAX_LIMIT)), SESSION_LIST_PAGE_DEFAULT_LIMIT),
+}));
 
-const V2_SESSION_LIST_QUERYSTRING_SCHEMA = z.object({
-    cursor: z.string().optional(),
-    attentionCursor: z.string().optional(),
-    limit: z.coerce.number().int().min(1).max(SESSION_LIST_PAGE_MAX_LIMIT).default(SESSION_LIST_PAGE_DEFAULT_LIMIT),
+const V2_SESSION_LIST_QUERYSTRING_SCHEMA = z.optional(z.object({
+    cursor: z.optional(z.string()),
+    attentionCursor: z.optional(z.string()),
+    limit: z._default(z.coerce.number().check(z.int(), z.minimum(1), z.maximum(SESSION_LIST_PAGE_MAX_LIMIT)), SESSION_LIST_PAGE_DEFAULT_LIMIT),
     includeAttention: OPTIONAL_BOOLEAN_QUERY_PARAM_SCHEMA,
     includeActive: OPTIONAL_BOOLEAN_QUERY_PARAM_SCHEMA,
-}).refine(
-    (value) => !(value.cursor && value.attentionCursor),
-    { message: "cursor and attentionCursor cannot be combined" },
-).optional();
+}).check(z.refine((value) => !(value.cursor && value.attentionCursor), { message: "cursor and attentionCursor cannot be combined" })));
 
 async function findV2SessionByIdRowInTx(tx: Tx, params: Readonly<{
     userId: string;
@@ -126,19 +123,152 @@ async function findV2SessionByIdRowInTx(tx: Tx, params: Readonly<{
     return { admission, row };
 }
 
+
+/** Shared single/batch read; admission, publication and storage policy stay at this owner. */
+export async function readSessionDetail(input: Readonly<{ userId: string; sessionId: string; authentication: SessionAccessAuthentication; accessProjectionVersion?: number; storedContentCompatibility: AccountStoredContentCompatibilityEvaluation }>): Promise<
+    | { status: 200; body: z.infer<typeof V2SessionByIdResponseSchema> }
+    | { status: 403; body: { error: 'team_authentication_required' } }
+    | { status: 404; body: { error: 'Session not found' } }
+    | { status: 409; body: ReturnType<typeof createSessionMetadataPrivacyUpgradeRequiredResponse> }
+    | { status: 426; body: z.infer<typeof OperationUpdateRequiredV1Schema> | z.infer<typeof AnyClientUpgradeRequiredV1Schema> }
+    | { status: 503; body: { error: 'team_authentication_unavailable' } }
+> {
+    const { userId, sessionId, authentication } = input;
+
+    if (
+        input.accessProjectionVersion !== undefined
+        && input.accessProjectionVersion !== 1
+    ) {
+        return { status: 426, body: {
+            kind: "update_required",
+            operation: "session.detail",
+            component: "client",
+            reason: "access_projection_version_unsupported",
+        } };
+    }
+
+    const supportsCurrentStoredContent = input.storedContentCompatibility.supportsCurrentProtocol;
+    let contributions: readonly SessionManagerContribution[] = [];
+    const result = await readSnapshotWithCurrentAdmission(async (tx) => {
+        const { admission, row: session } = await findV2SessionByIdRowInTx(tx, {
+            userId,
+            sessionId,
+            authentication,
+            accessProjectionVersion: input.accessProjectionVersion,
+        });
+        if (admission.status !== "allowed") return { kind: admission.status } as const;
+        if (!session) return { kind: "unavailable" } as const;
+        if (
+            session.metadataLayoutVersion === SESSION_METADATA_LAYOUT_VERSION_V1
+            && !supportsCurrentStoredContent
+        ) {
+            return { kind: "client_update_required" } as const;
+        }
+        try {
+            // The access owner has already verified this exact runtime
+            // principal. Do not load or project its hosting Account's
+            // private Follow/read/attention/authorship state.
+            const verifiedSessionRuntimePrincipal = authentication.sessionRuntimePrincipal !== undefined;
+            const ownerAccountMode = requiresSessionMetadataOwnerAccountMode({ session })
+                ? await readSessionMetadataOwnerAccountMode(tx, session.accountId)
+                : undefined;
+            const mappedSessionBase = mapV2SessionListRow({
+                row: session,
+                userId,
+                ownerAccountMode,
+                ...(verifiedSessionRuntimePrincipal
+                    ? {}
+                    : { discussionFacts: await readSessionListViewerDiscussionFacts([session], userId, tx) }),
+                hasOtherNamedCollaborator: (await readSessionListOtherNamedCollaboratorFacts([session], userId, tx)).get(session.id),
+                effectiveAccess: admission.access,
+                verifiedSessionRuntimePrincipal,
+            });
+            const [mappedSession] = await projectSessionManagerForRowsInTx(tx, {
+                accountId: userId,
+                authentication,
+                sessions: [mappedSessionBase],
+                accessMode: input.accessProjectionVersion === 1
+                    ? "effective_access_v1" : "legacy_owner_or_direct",
+                nowMs: Date.now(),
+                captureContributions: rows => { contributions = rows; },
+            });
+            if (admission.access.level !== "owner") {
+                return {
+                    kind: "found",
+                    payload: V2SessionByIdResponseSchema.parse({ session: mappedSession }),
+                } as const;
+            }
+            const targets = await listQueuedExecutionRunPendingTargetsForSessions({
+                accountId: userId,
+                sessionIds: [session.id],
+                reader: tx,
+            });
+            return {
+                kind: "found",
+                payload: V2SessionByIdResponseSchema.parse({
+                    session: {
+                        ...mappedSession,
+                        pendingActivationAuthorization: await loadPendingActivationPublicationInTx(tx, session.id) ?? undefined,
+                        pendingExecutionRunIds: targets.map((target) => target.runId),
+                    },
+                }),
+            } as const;
+        } catch (error) {
+            if (isSessionMetadataPrivacyUpgradeRequiredError(error)) {
+                return { kind: "metadata_privacy_upgrade_required" } as const;
+            }
+            throw error;
+        }
+    }, async (tx, captured) => {
+        if (captured.kind !== "found") return captured;
+        try {
+            const admissions = await readmitSessionRowsWithAdmissionInTx(tx, { accountId: userId, authentication,
+                accessMode: input.accessProjectionVersion === 1 ? "effective_access_v1" : "legacy_owner_or_direct" }, [captured.payload.session]);
+            const admission = admissions.get(sessionId);
+            if (!admission) return { kind: "unavailable" } as const;
+            if (admission.status !== "allowed") return { kind: admission.status } as const;
+            const [session] = await readmitCapturedSessionManagerReferencesInTx(tx, { accountId: userId, authentication,
+                accessMode: input.accessProjectionVersion === 1 ? "effective_access_v1" : "legacy_owner_or_direct", sessions: [admission.row], contributions });
+            return { ...captured, payload: { session } };
+        } catch (error) {
+            if (isSessionMetadataPrivacyUpgradeRequiredError(error)) return { kind: "metadata_privacy_upgrade_required" } as const;
+            throw error;
+        }
+    });
+    if (result.kind === "authentication_required") {
+        return { status: 403, body: { error: "team_authentication_required" } };
+    }
+    if (result.kind === "authentication_unavailable") {
+        return { status: 503, body: { error: "team_authentication_unavailable" } };
+    }
+    if (result.kind === "unavailable") {
+        return { status: 404, body: { error: "Session not found" } };
+    }
+    if (result.kind === "client_update_required") {
+        return { status: 426, body: input.storedContentCompatibility.upgradeRequired ?? buildAccountStoredContentUpgradeRequired() };
+    }
+    if (result.kind === "metadata_privacy_upgrade_required") {
+        return { status: 409, body: createSessionMetadataPrivacyUpgradeRequiredResponse() };
+    }
+    if (result.kind === "found") {
+        return { status: 200, body: result.payload };
+    }
+    throw new Error(`Unexpected Session detail result: ${result.kind}`);
+}
 export function registerSessionListingRoutes(app: Fastify) {
     registerSessionFilteredListingRoute(app);
 
     app.get('/v2/sessions/metadata-upgrades', {
         preHandler: app.authenticate,
         config: { rateLimit: resolveApiHotEndpointRateLimit(process.env, "sessions.list") },
-        schema: { response: { 200: z.object({ sessionIds: z.array(z.string()) }).strict() } },
+        schema: { response: { 200: z.strictObject({ sessionIds: z.array(z.string()) }) } },
     }, async (request, reply) => {
         const sessionIds = await inTx(tx => listSessionMetadataPrivacyUpgradeIdsInTx(tx, request.userId), { isolationLevel: "Serializable" /* Metadata privacy upgrade census must observe storage tuple and access from one snapshot. */, readOnly: true });
         return reply.header("Cache-Control", "no-store").send({ sessionIds });
     });
 
     app.get('/v1/sessions', {
+        preSerialization: projectSessionTurnWaitingHttpResponse,
         preHandler: app.authenticate,
         config: {
             rateLimit: resolveApiHotEndpointRateLimit(process.env, "sessions.list"),
@@ -161,6 +291,7 @@ export function registerSessionListingRoutes(app: Fastify) {
     });
 
     app.get('/v2/sessions/active', {
+        preSerialization: projectSessionTurnWaitingHttpResponse,
         preHandler: app.authenticate,
         config: {
             rateLimit: resolveApiHotEndpointRateLimit(process.env, "sessions.list"),
@@ -201,6 +332,7 @@ export function registerSessionListingRoutes(app: Fastify) {
     });
 
     app.get('/v2/sessions', {
+        preSerialization: projectSessionTurnWaitingHttpResponse,
         preHandler: app.authenticate,
         schema: {
             response: {
@@ -240,6 +372,7 @@ export function registerSessionListingRoutes(app: Fastify) {
     });
 
     app.get('/v2/sessions/archived', {
+        preSerialization: projectSessionTurnWaitingHttpResponse,
         preHandler: app.authenticate,
         config: {
             rateLimit: resolveApiHotEndpointRateLimit(process.env, "sessions.list"),
@@ -279,6 +412,7 @@ export function registerSessionListingRoutes(app: Fastify) {
     });
 
     app.get('/v2/sessions/:sessionId', {
+        preSerialization: projectSessionTurnWaitingHttpResponse,
         preHandler: app.authenticate,
         config: {
             restrictedCredentialBinding: { scope: "session", session: "params.sessionId" },
@@ -289,15 +423,15 @@ export function registerSessionListingRoutes(app: Fastify) {
             params: z.object({
                 sessionId: z.string(),
             }),
-            querystring: z.object({
-                accessProjectionVersion: z.coerce.number().int().positive().optional(),
-            }).optional(),
+            querystring: z.optional(z.object({
+                accessProjectionVersion: z.optional(z.coerce.number().check(z.int(), z.positive())),
+            })),
             response: {
                 200: V2SessionByIdResponseSchema,
                 403: z.union([
-                    z.object({ error: z.literal("team_authentication_required") }).strict(),
-                    z.object({ error: z.literal(PRESENT_USER_REQUIRED_ERROR) }).strict(),
-                    z.object({ error: z.literal("credential_scope_denied") }).strict(),
+                    z.strictObject({ error: z.literal("team_authentication_required") }),
+                    z.strictObject({ error: z.literal(PRESENT_USER_REQUIRED_ERROR) }),
+                    z.strictObject({ error: z.literal("credential_scope_denied") }),
                 ]),
                 404: V2SessionByIdNotFoundSchema,
                 409: SESSION_METADATA_PRIVACY_UPGRADE_REQUIRED_RESPONSE_SCHEMA,
@@ -305,137 +439,11 @@ export function registerSessionListingRoutes(app: Fastify) {
                     OperationUpdateRequiredV1Schema,
                     AnyClientUpgradeRequiredV1Schema,
                 ]),
-                503: z.object({ error: z.literal("team_authentication_unavailable") }).strict(),
+                503: z.strictObject({ error: z.literal("team_authentication_unavailable") }),
             },
         },
     }, async (request, reply) => {
-        const userId = request.userId;
-        const { sessionId } = request.params;
-
-        if (
-            request.query?.accessProjectionVersion !== undefined
-            && request.query.accessProjectionVersion !== 1
-        ) {
-            return reply.code(426).send({
-                kind: "update_required",
-                operation: "session.detail",
-                component: "client",
-                reason: "access_projection_version_unsupported",
-            });
-        }
-
-        const authentication = readSessionAccessAuthenticationFromRequest(request);
-        const supportsCurrentStoredContent = readAccountStoredContentCompatibilityForHttpRequest(request)
-            .supportsCurrentProtocol;
-        let contributions: readonly SessionReportContribution[] = [];
-        const result = await readSnapshotWithCurrentAdmission(async (tx) => {
-            const { admission, row: session } = await findV2SessionByIdRowInTx(tx, {
-                userId,
-                sessionId,
-                authentication,
-                accessProjectionVersion: request.query?.accessProjectionVersion,
-            });
-            if (admission.status !== "allowed") return { kind: admission.status } as const;
-            if (!session) return { kind: "unavailable" } as const;
-            if (
-                session.metadataLayoutVersion === SESSION_METADATA_LAYOUT_VERSION_V1
-                && !supportsCurrentStoredContent
-            ) {
-                return { kind: "client_update_required" } as const;
-            }
-            try {
-                // The access owner has already verified this exact runtime
-                // principal. Do not load or project its hosting Account's
-                // private Follow/read/attention/authorship state.
-                const verifiedSessionRuntimePrincipal = authentication.sessionRuntimePrincipal !== undefined;
-                const ownerAccountMode = requiresSessionMetadataOwnerAccountMode({ session })
-                    ? await readSessionMetadataOwnerAccountMode(tx, session.accountId)
-                    : undefined;
-                const mappedSessionBase = mapV2SessionListRow({
-                    row: session,
-                    userId,
-                    ownerAccountMode,
-                    ...(verifiedSessionRuntimePrincipal
-                        ? {}
-                        : { discussionFacts: await readSessionListViewerDiscussionFacts([session], userId, tx) }),
-                    hasOtherNamedCollaborator: (await readSessionListOtherNamedCollaboratorFacts([session], userId, tx)).get(session.id),
-                    effectiveAccess: admission.access,
-                    verifiedSessionRuntimePrincipal,
-                });
-                const [mappedSession] = await projectSessionReportsForRowsInTx(tx, {
-                    accountId: userId,
-                    authentication,
-                    sessions: [mappedSessionBase],
-                    accessMode: request.query?.accessProjectionVersion === 1
-                        ? "effective_access_v1" : "legacy_owner_or_direct",
-                    nowMs: Date.now(),
-                    captureContributions: rows => { contributions = rows; },
-                });
-                if (admission.access.level !== "owner") {
-                    return {
-                        kind: "found",
-                        payload: V2SessionByIdResponseSchema.parse({ session: mappedSession }),
-                    } as const;
-                }
-                const targets = await listQueuedExecutionRunPendingTargetsForSessions({
-                    accountId: userId,
-                    sessionIds: [session.id],
-                    reader: tx,
-                });
-                return {
-                    kind: "found",
-                    payload: V2SessionByIdResponseSchema.parse({
-                        session: {
-                            ...mappedSession,
-                            pendingActivationAuthorization: await loadPendingActivationPublicationInTx(tx, session.id) ?? undefined,
-                            pendingExecutionRunIds: targets.map((target) => target.runId),
-                        },
-                    }),
-                } as const;
-            } catch (error) {
-                if (isSessionMetadataPrivacyUpgradeRequiredError(error)) {
-                    return { kind: "metadata_privacy_upgrade_required" } as const;
-                }
-                throw error;
-            }
-        }, async (tx, captured) => {
-            if (captured.kind !== "found") return captured;
-            try {
-                const admissions = await readmitSessionRowsWithAdmissionInTx(tx, { accountId: userId, authentication,
-                    accessMode: request.query?.accessProjectionVersion === 1 ? "effective_access_v1" : "legacy_owner_or_direct" }, [captured.payload.session]);
-                const admission = admissions.get(sessionId);
-                if (!admission) return { kind: "unavailable" } as const;
-                if (admission.status !== "allowed") return { kind: admission.status } as const;
-                const [session] = await readmitCapturedSessionReportReferencesInTx(tx, { accountId: userId, authentication,
-                    accessMode: request.query?.accessProjectionVersion === 1 ? "effective_access_v1" : "legacy_owner_or_direct", sessions: [admission.row], contributions });
-                return { ...captured, payload: { session } };
-            } catch (error) {
-                if (isSessionMetadataPrivacyUpgradeRequiredError(error)) return { kind: "metadata_privacy_upgrade_required" } as const;
-                throw error;
-            }
-        });
-        if (result.kind === "authentication_required") {
-            return reply.code(403).send({ error: "team_authentication_required" });
-        }
-        if (result.kind === "authentication_unavailable") {
-            return reply.code(503).send({ error: "team_authentication_unavailable" });
-        }
-        if (result.kind === "unavailable") {
-            return reply.code(404).send({ error: "Session not found" });
-        }
-        if (result.kind === "client_update_required") {
-            await enforceCurrentAccountStoredContentCompatibilityForHttpRequest(
-                request,
-                reply,
-            );
-            return;
-        }
-        if (result.kind === "metadata_privacy_upgrade_required") {
-            return reply.code(409).send(createSessionMetadataPrivacyUpgradeRequiredResponse());
-        }
-        if (result.kind === "found") {
-            return reply.send(result.payload);
-        }
-        throw new Error(`Unexpected Session detail result: ${result.kind}`);
+        const result = await readSessionDetail({ userId: request.userId, sessionId: request.params.sessionId, authentication: readSessionAccessAuthenticationFromRequest(request), accessProjectionVersion: request.query?.accessProjectionVersion, storedContentCompatibility: readAccountStoredContentCompatibilityForHttpRequest(request) });
+        return reply.code(result.status).send(result.body);
     });
 }

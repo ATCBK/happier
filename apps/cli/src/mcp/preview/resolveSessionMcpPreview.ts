@@ -15,10 +15,11 @@ import type { McpPluginItemV1 } from '@happier-dev/protocol/mcp/servers/settings
 import type { SkillRuleV1 } from '@happier-dev/protocol/reach/reachRuleV1';
 import type { AccountArtifactHeader } from '@/api/artifacts/accountArtifactStore';
 import type { SkillArtifactStore } from '@/prompts/skills/library/readSkillLibraryContent';
-import { resolveAgentSkillsCapability } from '@/agent/skills/resolveAgentSkillsCapability';
+import { resolveAgentSkillsCapability, resolveAgentNativeSkillDirectories } from '@/agent/skills/resolveAgentSkillsCapability';
 import { resolveCapabilityApplyAgentFacts } from '@/session/runtime/capabilityApplyFacts';
 import { prepareSessionSkillPlan } from '@/prompts/skills/runtime/prepareSessionSkillPlan';
-import { FIRST_PARTY_SKILLS_V1 } from '@happier-dev/protocol/prompts/library/skills/firstPartySkillsV1';
+import { FIRST_PARTY_SKILLS_V1, type ReadOnlySkillV1 } from '@happier-dev/protocol/prompts/library/skills/firstPartySkillsV1';
+import { readReadOnlySkillContentV1 } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
 import { resolveCapabilityApplyTimingV1, readCapabilityLaunchRestartFromMetadataV1 } from '@happier-dev/protocol/reach/capabilityApplyTimingV1';
 import type { SpawnCapabilitiesPreviewOutputV1 } from '@happier-dev/protocol/actions/specs/sessionCapabilities';
 import { readLoadedMcpNativeServerNames } from '../runtime/assignMcpWireNames';
@@ -57,11 +58,12 @@ export async function resolveSessionMcpPreview(params: Readonly<{
   detectedServers: ReadonlyArray<DetectedMcpServerV1>;
   mcpPluginItems?: readonly McpPluginItemV1[];
   detectedWarnings?: ReadonlyArray<DaemonMcpServersDetectWarningV1>;
-  skillLibrary?: Readonly<{ inventory: readonly AccountArtifactHeader[]; artifacts: SkillArtifactStore; rules: readonly SkillRuleV1[] }>;
+  skillLibrary?: Readonly<{ inventory: readonly AccountArtifactHeader[]; artifacts: SkillArtifactStore; rules: readonly SkillRuleV1[]; pluginSkills?: readonly ReadOnlySkillV1[] }>;
   agentSkills?: ReturnType<typeof resolveAgentSkillsCapability>;
   sessionRunning?: boolean;
   sessionMetadata?: unknown;
   home?: string;
+  signal?: AbortSignal;
   assertCurrent?: () => Promise<void>;
 }>): Promise<Extract<DaemonMcpServersPreviewResponse, { ok: true }> & Extract<SpawnCapabilitiesPreviewOutputV1, { ok: true }>> {
   const machinePlatform = process.platform === 'win32' ? 'win32' as const : 'posix' as const;
@@ -76,7 +78,9 @@ export async function resolveSessionMcpPreview(params: Readonly<{
     mcpPluginItems: params.mcpPluginItems,
     machinePlatform,
     skills: params.skillLibrary ? { rules: params.skillLibrary.rules,
-      items: [...params.skillLibrary.inventory.map(item => ({ skillId: item.artifactId, name: String(item.header.title) })), ...FIRST_PARTY_SKILLS_V1] } : null,
+      items: [...params.skillLibrary.inventory.map(item => ({ skillId: item.artifactId, name: String(item.header.title) })),
+        ...[...FIRST_PARTY_SKILLS_V1, ...params.skillLibrary.pluginSkills ?? []].map(skill => ({ skillId: skill.skillId,
+          name: readReadOnlySkillContentV1(skill.skillId, params.skillLibrary?.pluginSkills)!.frontmatter.name }))] } : null,
     nativeServerNames: readLoadedMcpNativeServerNames({ servers: params.detectedServers, agentId: params.agentId }),
     ...(params.projectKey !== undefined ? { projectKey: params.projectKey } : params.directory === null ? { projectKey: null } : {}),
     agentAcceptsUserMcp: agentReceivesUserMcpServersV1(resolveAgentToolsDelivery(params.agentId)),
@@ -95,7 +99,8 @@ export async function resolveSessionMcpPreview(params: Readonly<{
   const warnings = (params.detectedWarnings ?? []).map(formatWarning).filter((value) => value.length > 0);
   const prepared = params.skillLibrary ? await prepareSessionSkillPlan({ ...params.skillLibrary, selected: managedSelection.skills,
     agentSkills, agentHasActionChannel: resolveAgentToolsDelivery(params.agentId) !== 'unsupported',
-    directory: params.directory, home: params.home, assertCurrent }) : null;
+    additionalProjectDirectories: await resolveAgentNativeSkillDirectories(params.agentId, { sessionMetadata: params.sessionMetadata, signal: params.signal }),
+    directory: params.directory, home: params.home, signal: params.signal, assertCurrent }) : null;
   const plan = prepared?.plan ?? { plan: 'none' as const, items: [], nativeDisables: [], diagnostics: [] };
   const planItems = new Map(plan.items.map(item => [item.skillId, item]));
   const timing = { sessionRunning: params.sessionRunning ?? false,

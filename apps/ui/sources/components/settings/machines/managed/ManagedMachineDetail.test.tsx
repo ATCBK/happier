@@ -22,9 +22,11 @@ import { t } from '@/text';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { ManagedCreationProgress } from './ManagedCreationProgress';
 import { ManagedMachineSections, ManagedEnrolledMachineSections, useManagedMachineHeaderIdentity, type ManagedMachineHeaderIdentity } from './ManagedMachineSections';
+import { ManagedReceiptPageLayout } from './ManagedReceiptPageLayout';
 import { ManagedMachinePolicySection, ManagedMachineControllerSection, ManagedControllerMoveList, ManagedMachineRecipeSection } from './ManagedMachineDetailSections';
 import { MachineConfigurationReceipt } from './MachineConfigurationReceipt';
 import { ManagedMachineV1Schema, type ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
+import { PluginJsonValueV2Schema } from '@happier-dev/protocol/plugins/contributions/public-types';
 import { ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema,
     ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema,
     bindExternalActionExecutionAuthorizationHttpPathV1 } from '@happier-dev/protocol/actions/externalActionApi';
@@ -37,6 +39,7 @@ import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccoun
 import sodium from 'libsodium-wrappers';
 import { ACTION_OPERATION_RPC_METHODS_V2, type ActionOperationSnapshotV1 } from '@happier-dev/protocol/actions/operations/v1';
 import { actionOperationStore } from '@/sync/domains/actionOperations/actionOperationStore';
+import { resetMachineProjectionReadsForTests } from '@/sync/ops/machineContributionRegistryProjection';
 import { readMachineInstallationPublicKey } from '@/sync/domains/machines/machineInstallationPublicKey';
 import { readOriginalAccountActionMachine, readOriginalAccountActionAuthentication } from '@/sync/api/externalActionAccountTransport';
 import { Modal, ModalProvider } from '@/modal';
@@ -53,6 +56,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ManagedMachineStateRow } from './ManagedMachineStateRow';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 import { Item } from '@/components/ui/lists/Item';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { MachineProvisionersListResultV1Schema, MachineProvisionerOptionsResultV1Schema } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
 import { AutomationDefinitionDetailSchema, AutomationDefinitionListItemSchema } from '@happier-dev/protocol/automations/automationApiV3';
 import { createPlainSessionOwnerMetadataEnvelopeV1, createSessionOwnerMetadataV1, projectSessionSharedMetadataV1, V2SessionRecordSchema, encodeV2SessionListCursorV1 } from '@happier-dev/protocol';
@@ -109,6 +113,7 @@ afterEach(() => {
     retireActiveServerAccountScopeLifetime(); resetRuntimeFetch(); invalidateAccountEncryptionModeCache(); vi.restoreAllMocks();
     vi.unstubAllGlobals();
     operationRpcBoundary.answer = null; operationRpcBoundary.registryAnswer = null; operationRpcBoundary.schemaAnswer = null;
+    resetMachineProjectionReadsForTests();
     operationRpcBoundary.requests = []; actionOperationStore.reset();
 });
 
@@ -343,6 +348,33 @@ describe('managed Machine detail', () => {
             await connection.dispose();
         }
     });
+    it('offers Remove only where Delete cannot end the resource (UIR5)', async () => {
+        const target = await upsertAndActivateServer({ serverUrl: 'https://managed-remove-gate.test', scope: 'tab' });
+        await setServerProfileIdentityForUrl(target.serverUrl, 'srv_managed_remove_gate');
+        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token: createAccountTokenForTests('owner', { currentAccount: true }) });
+        const provider = { pluginId: 'custom.provisioner', localId: 'native' };
+        let machine: ManagedMachineV1 = { id: 'healthy-bound', homeId: 'srv_managed_remove_gate', custodianAccountId: 'owner',
+            launch: { provider, schemaVersion: 1, name: 'Studio', choices: {} },
+            controller: { machineId: 'controller', installationId: 'installation' }, allocation: 'bound', creationState: 'active',
+            resource: { contributionRef: provider, schemaVersion: 1, value: { resourceId: 'native-id' } },
+            desired: 'start', desiredWhen: 'now', intentRevision: 1, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false };
+        machine = { ...machine, reviewedFacts: { launch: machine.launch, controller: machine.controller,
+            optionStatus: 'current', billing: { location: 'local', stoppedBilling: 'not-billed' }, prerequisites: [],
+            retentionCapabilities: { supportedIntents: ['start', 'stop', 'delete'] },
+            retention: machine.retention, wakeOnAcceptedMessage: machine.wakeOnAcceptedMessage } };
+        setRuntimeFetch(async input => {
+            const url = new URL(String(input));
+            if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+            if (url.pathname === '/v1/machines/managed/actions/get') return Response.json(machine);
+            return Response.json({ error: 'not_found' }, { status: 404 });
+        });
+        const screen = await renderScreen(<ManagedMachineDetail managedId={machine.id} serverId={target.id}
+            executeAction={createDefaultActionExecutor().execute} />);
+        await act(async () => { await flushHookEffects(); });
+        expect(screen.findByTestId('managed-machine.delete')).not.toBeNull();
+        expect(screen.findByTestId('managed-machine.remove')).toBeNull();
+    });
     it('keeps an archived enrolled resource at its retained recovery destination', async () => {
         const target = await upsertAndActivateServer({ serverUrl: 'https://managed-archived-detail.test', scope: 'tab' });
         await setServerProfileIdentityForUrl(target.serverUrl, 'srv_managed_archived_detail');
@@ -455,7 +487,7 @@ describe('managed Machine detail', () => {
         await screen.pressByTestIdAsync('managed-machine.policy-sheet.keep:deadline:effect:delete');
         expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.policy-sheet.keep:deadline-date-input'
             && typeof node.props.onChangeText === 'function')[0]?.props.value).toBe('2099-01-02');
-        await screen.pressByTestIdAsync('managed-machine.refresh');
+        await act(async () => screen.tree.findByType(ManagedMachineSections).props.onChanged());
         await flushHookEffects({ cycles: 25 });
         expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.policy-sheet.keep:deadline-date-input'
             && typeof node.props.onChangeText === 'function')[0]?.props.value).toBe('2099-01-02');
@@ -699,7 +731,7 @@ describe('managed Machine detail', () => {
             const mintAction = actionIds.find(actionId => url.pathname === bindExternalActionExecutionAuthorizationHttpPathV1(actionId));
             if (mintAction) {
                 const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(JSON.parse(String(init?.body)));
-                if (request.envelope.target.kind !== 'machine') throw new Error('Expected a native controller');
+                if (request.envelope.target?.kind !== 'machine') throw new Error('Expected a native controller');
                 const machineId = request.envelope.target.machineId;
                 const row = rows.find(row => row.id === machineId)!;
                 return Response.json(ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'shared-native-authorization', binding: {
@@ -713,7 +745,7 @@ describe('managed Machine detail', () => {
             if (actionId) {
                 const body: unknown = JSON.parse(String(init?.body));
                 const carrier = ExternalActionExecutionAuthorizationRequestV1Schema.safeParse(body);
-                const request = carrier.success ? carrier.data.envelope : ExternalActionRequestEnvelopeV1Schema.parse(body);
+                const request = carrier.success ? ExternalActionRequestEnvelopeV1Schema.parse(carrier.data.envelope) : ExternalActionRequestEnvelopeV1Schema.parse(body);
                 if (actionId === 'machines.provisioners.check') checked.push(request.input);
                 if (actionId === 'machines.managed.controller.update') moves.push(request.input);
                 const result = actionId === 'machines.provisioners.list' ? { provisioners: [provisioner] }
@@ -852,6 +884,7 @@ describe('managed Machine detail', () => {
             actions: { check: 'check', options: 'options', acquire: 'acquire', bootstrap: 'bootstrap', inspect: 'inspect', power: 'power', destroy: 'destroy' } } };
         const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'owner', encryptionMode: 'plain' });
         const reads: string[] = [];
+        const parentCatalogInputs: unknown[] = [];
         let currentMachine = machine;
         setRuntimeFetch(async (input, init) => {
             const url = new URL(String(input));
@@ -866,6 +899,7 @@ describe('managed Machine detail', () => {
                 if (envelope.target?.kind !== 'machine') throw new Error('Expected the captured native controller target');
                 reads.push(actionId);
                 if (actionId === 'machines.provisioners.list') {
+                    parentCatalogInputs.push(envelope.input);
                     // This genuine daemon HTTP boundary publishes the current ordinary UI origin.
                     // Admission and Home-token verification stay outside the mounted UI process.
                     const authorization = { v: 1 as const, token: 'native-daemon-authorization', binding: {
@@ -910,6 +944,7 @@ describe('managed Machine detail', () => {
                 externalActionExecutionAuthorization: { binding: { machineId: controller.machineId, installationId: controller.installationId } } },
         });
         expect(reads.filter(id => id === 'machines.provisioners.list')).toHaveLength(1);
+        expect(parentCatalogInputs).toEqual([{ homeId: machine.homeId, controller, contribution: provider }]);
         expect(screen.tree.findByType(ManagedMachinePolicySection).props.keep.defaultPolicy).toBeDefined();
         await act(async () => screen.tree.findByType(ManagedMachinePolicySection).props.keep.onChange({
             retention: { kind: 'unused', afterMs: 3_600_000, effect: 'stop' }, wakeOnAcceptedMessage: true,
@@ -933,10 +968,11 @@ describe('managed Machine detail', () => {
         const finite = variant === 'modal' || variant === 'unavailable' || variant === 'different-launch' || variant === 'refresh-unavailable';
         const cloud = variant === 'aws' || variant === 'gcp' ? variant : 'modal';
         const provider = { pluginId: 'happier.machine.cua', localId: 'byoc' };
-        const choices = {
+        const choices = PluginJsonValueV2Schema.parse({
             cloud, region: 'native-region', nativeImageId: 'native-image', nativeSizeId: 'native-size',
             nativeLifetime: cloud === 'modal' ? { kind: 'finite' as const, durationSeconds: 7200 } : { kind: 'no-native-ttl' as const },
-        };
+        });
+        if (!choices || typeof choices !== 'object' || Array.isArray(choices)) throw new Error('Expected native BYOC launch choices');
         const launch: ManagedMachineV1['launch'] = { provider, schemaVersion: 1, name: 'Retained BYOC', choices };
         const machine: ManagedMachineV1 = { id: 'variant-resource', homeId, custodianAccountId: 'owner', launch, controller,
             allocation: 'bound', creationState: 'active', desired: 'start', desiredWhen: 'now', intentRevision: 2,
@@ -1008,7 +1044,7 @@ describe('managed Machine detail', () => {
         if (variant === 'refresh-unavailable') {
             expect(screen.tree.findByType(ManagedMachinePolicySection).props.keep.defaultPolicy).toBeDefined();
             refreshFailed = true;
-            await screen.pressByTestIdAsync('managed-machine.refresh');
+            await act(async () => screen.tree.findByType(ManagedMachineSections).props.onChanged());
             await flushHookEffects({ cycles: 35 });
         }
         const keep = screen.tree.findByType(ManagedMachinePolicySection).props.keep;
@@ -1154,6 +1190,9 @@ describe('managed Machine detail', () => {
         const screen = await renderScreen(<ManagedMachineDetail managedId={machine.id} serverId={target.id}
             executeAction={createDefaultActionExecutor().execute} />);
         await flushHookEffects({ cycles: 25 });
+        // A current read has no header Retry; a resource confirmed gone has no Keep or When unused left to set (UIR5c).
+        expect(screen.findByTestId('managed-machine.refresh')).toBeNull();
+        expect(screen.tree.findAllByType(ManagedMachinePolicySection)).toHaveLength(allocation === 'confirmed-absent' ? 0 : 1);
         const consoleAction = screen.findByTestId('managed-machine.progress:openProvider');
         if (machine.recovery) expect(screen.getTextContent()).toContain(machine.recovery.reference);
         if (consoleUrl) {
@@ -1232,7 +1271,7 @@ describe('managed Machine detail', () => {
                 if (actionId === 'machines.provisioners.check') checked.push(request.input);
                 if (actionId === 'machines.managed.controller.update') { moves.push(request.input); moveTargets.push(request.target); }
                 const result = actionId === 'machines.provisioners.list' ? { provisioners: [provisioner] }
-                    : actionId === 'machines.provisioners.check' ? { available: request.target.kind === 'machine' && request.target.machineId !== blocked.machineId }
+                    : actionId === 'machines.provisioners.check' ? { available: request.target?.kind === 'machine' && request.target.machineId !== blocked.machineId }
                         : actionId === 'machines.provisioners.options' ? { choices: [{ id: 'retained', title: 'Current native launch', launch: machine.launch.choices }] }
                         : { kind: 'approval_request_created', artifactId: 'move-approval', actionId };
                 return Response.json({ v: 1, requestId: request.requestId, actionId, execution: { ok: true, result } });
@@ -1462,32 +1501,46 @@ describe('managed Machine detail', () => {
         expect(screen.tree.findByType(ManagedMachinePolicySection).props.keep.policy.retention).toEqual(outcome === 'saved'
             ? { kind: 'unused', effect: 'stop', afterMs } : authored.retention);
     });
-    it('reads a failed native bootstrap from the current controller after enrollment and retries only that retained resource during Ask', async () => {
-        const target = await upsertAndActivateServer({ serverUrl: 'https://managed-enrolled-bootstrap.test', scope: 'tab' });
-        await setServerProfileIdentityForUrl(target.serverUrl, 'srv_enrolled_bootstrap');
+    it.each(['enrolled-failure', 'enrolled-activation-failure', 'controller-restart', 'enrolled-observation-unavailable'] as const)('keeps one native Check now and same-resource recovery through Ask with %s operation history', async basis => {
+        const homeId = `srv_bootstrap_${basis}`;
+        const target = await upsertAndActivateServer({ serverUrl: `https://managed-bootstrap-${basis}.test`, scope: 'tab' });
+        await setServerProfileIdentityForUrl(target.serverUrl, homeId);
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token: createAccountTokenForTests('owner', { currentAccount: true }) });
         const controller = { machineId: 'boot-controller', installationId: 'boot-installation' };
         const serverId = resolveServerProfileScopeIdForIdentifier(target.id) || target.id;
         storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({
             id: controller.machineId, installationId: controller.installationId, updatedAt: Date.now(),
             access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
-        })] } });
+        }), ...(basis === 'enrolled-activation-failure' ? [createMachineFixture({ id: 'enrolled-guest', installationId: 'guest-installation',
+            active: false, activeAt: 1, updatedAt: Date.now(),
+            daemonState: { status: 'running', startupSource: 'background-service', serviceManaged: true },
+            access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
+        })] : [])] } });
         const provider = { pluginId: 'custom.native', localId: 'guest' };
-        const machine: ManagedMachineV1 = { id: 'boot-managed', homeId: 'srv_enrolled_bootstrap', custodianAccountId: 'owner',
+        const machine: ManagedMachineV1 = { id: 'boot-managed', homeId, custodianAccountId: 'owner',
             launch: { provider, schemaVersion: 1, name: 'Enrolled guest', choices: {} }, controller,
-            enrolledMachineId: 'enrolled-guest', allocation: 'bound', creationState: 'active',
+            observation: basis === 'enrolled-observation-unavailable'
+                ? { availability: 'unavailable', observedAt: 1 }
+                : { availability: 'present', power: 'running', observedAt: 1 },
+            ...(basis !== 'controller-restart' ? { enrolledMachineId: 'enrolled-guest' } : {
+                preset: { id: 'admitted-preset', revision: 1 },
+                environmentSetup: { environment: { setupScript: 'echo setup' }, state: 'pending' as const },
+            }), allocation: 'bound', creationState: 'active',
             resource: { contributionRef: provider, schemaVersion: 1, value: { nativeId: 'same-paid-resource' } },
             desired: 'start', desiredWhen: 'now', intentRevision: 4, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false };
         const failed: ActionOperationSnapshotV1 = { version: 1, operationId: 'boot-failure', revision: 2,
             actionId: 'machines.managed.bootstrap.retry', state: 'failed', scope: { accountId: 'owner', machineId: controller.machineId },
             title: 'Create managed machine', createdAt: 1, startedAt: 2, settledAt: 3, cancellation: 'unsupported',
-            error: { errorCode: 'native_boot_unconfirmed', error: 'Native boot configuration was not confirmed' },
+            error: basis === 'enrolled-activation-failure' ? { errorCode: 'action_failed',
+                error: 'Background service install completed, but the expected background service did not become the active daemon for the selected Home within 30000ms. Run `happier service status` to inspect the active owner and system service state.' }
+                : { errorCode: 'native_boot_unconfirmed', error: 'Native boot configuration was not confirmed' },
             domainRef: { kind: 'managedMachine', id: machine.id, resource: machine.resource, controller } };
-        operationRpcBoundary.answer = { items: [failed], nextCursor: null };
+        operationRpcBoundary.answer = { items: basis === 'enrolled-failure' || basis === 'enrolled-activation-failure' ? [failed] : [], nextCursor: null };
         const retries: unknown[] = [];
+        const inspections: unknown[] = [];
         setRuntimeFetch(async (input, init) => {
             const url = new URL(String(input));
-            expect(url.origin).toBe('https://managed-enrolled-bootstrap.test');
+            expect(url.origin).toBe(target.serverUrl);
             if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
             if (url.pathname === '/v1/machines/managed/actions/list') return Response.json({ machines: [machine] });
@@ -1496,19 +1549,53 @@ describe('managed Machine detail', () => {
                 const actionId = url.pathname.slice('/v1/actions/'.length);
                 const request = ExternalActionRequestEnvelopeV1Schema.parse(JSON.parse(String(init?.body)));
                 if (actionId === 'machines.managed.bootstrap.retry') retries.push(request.input);
+                if (actionId === 'machines.managed.inspect') inspections.push(request.input);
                 return Response.json({ v: 1, requestId: request.requestId, actionId, execution: { ok: true,
                     result: actionId === 'machines.provisioners.list' ? { provisioners: [] }
+                        : actionId === 'machines.managed.get' ? machine
+                        : actionId === 'machines.managed.list' ? { machines: [machine] }
+                        : actionId === 'machines.managed.inspect' ? { machine }
                         : { kind: 'approval_request_created', artifactId: 'boot-retry-approval', actionId } } });
             }
             return Response.json({ error: 'not_found' }, { status: 404 });
         });
-        const screen = await renderScreen(<ManagedEnrolledMachineSections enrolledMachineId="enrolled-guest" serverId={target.id}
-            executeAction={createDefaultActionExecutor().execute} />);
+        const screen = await renderScreen(basis !== 'controller-restart'
+            ? <ManagedEnrolledMachineSections enrolledMachineId="enrolled-guest" serverId={target.id}
+                executeAction={createDefaultActionExecutor().execute} />
+            : <ManagedMachineDetail managedId={machine.id} serverId={target.id}
+                executeAction={createDefaultActionExecutor().execute} />);
         await flushHookEffects({ cycles: 30 });
+        expect(screen.tree.findAllByType(ManagedCreationProgress), screen.getTextContent()).toHaveLength(1);
         expect(operationRpcBoundary.requests).toContainEqual({ serverId, accountId: 'owner', machineId: controller.machineId,
             method: ACTION_OPERATION_RPC_METHODS_V2.list });
-        expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.installation-error'
-            && node.props.diagnosticCode === 'native_boot_unconfirmed').length).toBeGreaterThan(0);
+        if (basis === 'enrolled-activation-failure') {
+            expect(screen.findByTestId('managed-machine.installation-error')).not.toBeNull();
+            const guest = storage.getState().machineListByServerId[serverId]!.find(candidate => candidate.id === 'enrolled-guest')!;
+            await act(async () => storage.getState().applyMachines([{ ...guest, active: true, activeAt: Date.now(), updatedAt: Date.now() }], false,
+                { sourceServerId: serverId }));
+            await flushHookEffects({ cycles: 10 });
+            expect(screen.findByTestId('managed-machine.installation-error')).toBeNull();
+            expect(screen.findByTestId('managed-machine.installation-retry')).toBeNull();
+            expect([...actionOperationStore.getSnapshot().operationsByKey.values()]
+                .find(candidate => candidate.snapshot.operationId === failed.operationId)?.snapshot.state).toBe('failed');
+            await screen.unmount();
+            return;
+        }
+        const errors = screen.tree.findAll(node => node.props?.testID === 'managed-machine.installation-error'
+            && node.props.diagnosticCode === 'native_boot_unconfirmed');
+        if (basis === 'enrolled-failure') expect(errors.length).toBeGreaterThan(0);
+        else expect(errors).toHaveLength(0);
+        const checks = screen.tree.findAllByType(RoundButton).filter(button =>
+            button.props.testID === 'managed-machine.progress:checkNow' || button.props.testID === 'managed-machine.observation-check');
+        expect(checks).toHaveLength(1);
+        await act(async () => checks[0]!.props.onPress());
+        await flushHookEffects({ cycles: 20 });
+        expect(inspections).toEqual([{ homeId: machine.homeId, managedId: machine.id }]);
+        if (basis === 'enrolled-observation-unavailable') {
+            expect(screen.findByTestId('managed-machine.installation-retry')).toBeNull();
+            await screen.unmount();
+            return;
+        }
         const retry = screen.tree.findAll(node => node.props?.testID === 'managed-machine.installation-retry'
             && typeof node.props.onPress === 'function')[0];
         expect(retry).toBeDefined();
@@ -1516,8 +1603,120 @@ describe('managed Machine detail', () => {
         await flushHookEffects({ cycles: 20 });
         expect(retries).toEqual([{ homeId: machine.homeId, managedId: machine.id, expectedIntentRevision: 4 }]);
         expect(screen.tree.findByType(ManagedCreationProgress).props.machine).toMatchObject({
-            enrolledMachineId: 'enrolled-guest', intentRevision: 4, resource: machine.resource, controller });
+            intentRevision: 4, resource: machine.resource, controller });
+        expect(screen.tree.findByType(ManagedCreationProgress).props.machine.enrolledMachineId).toBe(machine.enrolledMachineId);
         expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.approval').length).toBeGreaterThan(0);
+    });
+    it.each(['saved', 'enrolled'] as const)('says a failed re-read once, withdraws the native Check now it cannot dispatch, and restores it when Retry reads again (%s)', async surface => {
+        const homeId = `srv_stale_${surface}`;
+        const target = await upsertAndActivateServer({ serverUrl: `https://managed-stale-${surface}.test`, scope: 'tab' });
+        await setServerProfileIdentityForUrl(target.serverUrl, homeId);
+        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token: createAccountTokenForTests('owner', { currentAccount: true }) });
+        const launch: ManagedMachineV1['launch'] = { provider: { pluginId: 'custom.provisioner', localId: 'native' },
+            schemaVersion: 1, name: 'Stopped resource', choices: {} };
+        const machine: ManagedMachineV1 = { id: 'stale-existing', homeId, custodianAccountId: 'owner', launch,
+            controller: { machineId: 'controller', installationId: 'installation' }, allocation: 'bound', creationState: 'active',
+            ...(surface === 'enrolled' ? { enrolledMachineId: 'stale-guest' } : {}),
+            resource: { contributionRef: launch.provider, schemaVersion: 1, value: { resourceId: 'same-native' } },
+            desired: 'stop', desiredWhen: 'now', intentRevision: 4, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false,
+            observation: { availability: 'present', observedAt: 2, power: 'stopped', storage: 'retained' },
+            reviewedFacts: { launch, controller: { machineId: 'controller', installationId: 'installation' }, optionStatus: 'current',
+                billing: { location: 'cloud', stoppedBilling: 'not-billed' }, prerequisites: [],
+                retentionCapabilities: { supportedIntents: ['start', 'stop'] }, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false } };
+        const serverId = resolveServerProfileScopeIdForIdentifier(target.id) || target.id;
+        storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({
+            id: 'controller', installationId: 'installation', updatedAt: Date.now(),
+            access: { custodian: { accountId: 'owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' },
+        })] } });
+        const gate = { rereadFails: false, failAfterInspect: false };
+        const inspections: unknown[] = [];
+        setRuntimeFetch(async (input, init) => {
+            const url = new URL(String(input));
+            if (url.pathname === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+            if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (url.pathname === '/v1/machines/managed/actions/list' || url.pathname === '/v1/machines/managed/actions/get') {
+                if (gate.rereadFails) return Response.json({ error: 'unavailable' }, { status: 503 });
+                return Response.json(url.pathname.endsWith('/list') ? { machines: [machine] } : machine);
+            }
+            if (url.pathname.startsWith('/v1/actions/')) {
+                const actionId = url.pathname.slice('/v1/actions/'.length);
+                const request = ExternalActionRequestEnvelopeV1Schema.parse(JSON.parse(String(init?.body)));
+                if (actionId === 'machines.managed.inspect') { inspections.push(request.input); gate.rereadFails = gate.failAfterInspect; }
+                return Response.json({ v: 1, requestId: request.requestId, actionId, execution: { ok: true,
+                    result: actionId === 'machines.provisioners.list' ? { provisioners: [] } : { machine } } });
+            }
+            return Response.json({ error: 'not_found' }, { status: 404 });
+        });
+        const screen = await renderScreen(surface === 'enrolled'
+            ? <ManagedEnrolledMachineSections enrolledMachineId="stale-guest" serverId={target.id}
+                executeAction={createDefaultActionExecutor().execute} />
+            : <ManagedMachineDetail managedId={machine.id} serverId={target.id}
+                executeAction={createDefaultActionExecutor().execute} />);
+        await flushHookEffects({ cycles: 30 });
+        const checkIds = ['managed-machine.progress:checkNow', 'managed-machine.observation-check'];
+        const checks = () => screen.tree.findAllByType(RoundButton).filter(button => checkIds.includes(button.props.testID));
+        const retries = () => screen.tree.findAllByType(RoundButton).filter(button => button.props.testID === 'managed-machine.observation-retry');
+        expect(checks(), screen.getTextContent()).toHaveLength(1);
+        expect(retries()).toHaveLength(0);
+        gate.failAfterInspect = true;
+        await act(async () => checks()[0]!.props.onPress());
+        await flushHookEffects({ cycles: 30 });
+        expect(inspections).toHaveLength(1);
+        // The last answer stays; its one freshness carries Retry, and nothing offers a Check now that would silently refuse.
+        expect(checks()).toHaveLength(0);
+        expect(retries()).toHaveLength(1);
+        expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.freshness')).toHaveLength(0);
+        expect(screen.getTextContent().split(t('managedMachines.detail.loadFailed')).length - 1).toBe(1);
+        gate.failAfterInspect = false; gate.rereadFails = false;
+        await act(async () => retries()[0]!.props.onPress());
+        await flushHookEffects({ cycles: 30 });
+        expect(retries()).toHaveLength(0);
+        expect(checks()).toHaveLength(1);
+        await act(async () => checks()[0]!.props.onPress());
+        await flushHookEffects({ cycles: 20 });
+        expect(inspections).toHaveLength(2);
+        await screen.unmount();
+    });
+    it('asks the installer task\'s pending sign-in consent on the waiting row and answers only through the user', async () => {
+        const machine: ManagedMachineV1 = { id: 'consent-managed', homeId: 'consent-home', custodianAccountId: 'owner',
+            launch: { provider: { pluginId: 'custom.provisioner', localId: 'native' }, schemaVersion: 1, name: 'Design sandbox', choices: {} },
+            controller: { machineId: 'controller', installationId: 'installation' }, allocation: 'bound', creationState: 'active',
+            resource: { contributionRef: { pluginId: 'custom.provisioner', localId: 'native' }, schemaVersion: 1, value: { resourceId: 'existing' } },
+            desired: 'start', desiredWhen: 'now', intentRevision: 1, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false };
+        const consent = { kind: 'auth.approveRemoteProvisioning', message: 'Sign this managed machine into your Account for Account-wide automation?' };
+        const domainRef = { kind: 'managedMachine' as const, id: machine.id, resource: machine.resource, controller: machine.controller,
+            bootstrapTask: { id: 'bootstrap', taskKind: 'remote.ssh.bootstrapMachine.v1' as const } };
+        const snapshot: ActionOperationSnapshotV1 = {
+            version: 1, operationId: 'consent-operation', revision: 1, actionId: 'machines.managed.bootstrap.retry', state: 'running',
+            scope: { accountId: 'owner', machineId: 'controller' }, title: 'Retry installation', createdAt: 1, startedAt: 2,
+            progress: { kind: 'phase', phase: 'ssh.auth.wait', label: 'Waiting for pairing' }, cancellation: 'supported', domainRef,
+        };
+        const operation = { serverId: machine.homeId, snapshot, observation: 'available' as const, isUnavailableProjection: false };
+        const answers: boolean[] = [];
+        const answerPrompt = (approved: boolean) => { answers.push(approved); };
+        const screen = await renderScreen(<ManagedCreationProgress {...{ machine, operation, answerPrompt }} />);
+        // No open question: the row keeps reporting the task's stage and offers nothing to answer.
+        expect(screen.findByTestId('managed-machine.installation-prompt-approve')).toBeNull();
+        const asking = { ...operation, snapshot: { ...snapshot, revision: 2, domainRef: { ...domainRef,
+            bootstrapTask: { ...domainRef.bootstrapTask, prompt: consent } } } };
+        await act(async () => screen.tree.update(<ManagedCreationProgress {...{ machine, operation: asking, answerPrompt }} />));
+        expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.installation'
+            && node.props.subtitle === consent.message).length).toBeGreaterThan(0);
+        expect(answers).toEqual([]);
+        const press = async (testID: string) => {
+            const button = screen.tree.findAll(node => node.props?.testID === testID && typeof node.props.onPress === 'function')[0];
+            expect(button).toBeDefined();
+            await act(async () => button!.props.onPress());
+        };
+        await press('managed-machine.installation-prompt-approve');
+        await press('managed-machine.installation-prompt-decline');
+        expect(answers).toEqual([true, false]);
+        // A settled task cannot be answered, even if its last projection still names the question.
+        await act(async () => screen.tree.update(<ManagedCreationProgress {...{ machine, answerPrompt, operation: { ...asking,
+            snapshot: { ...asking.snapshot, revision: 3, state: 'failed' as const, settledAt: 3,
+                error: { errorCode: 'approval_declined', error: 'Remote machine pairing was not approved' } } } }} />));
+        expect(screen.findByTestId('managed-machine.installation-prompt-approve')).toBeNull();
+        await screen.unmount();
     });
     it('shows only the observed installer stage and offers retry only for an explicit failed installation task', async () => {
         const machine: ManagedMachineV1 = { id: 'installer-managed', homeId: 'installer-home', custodianAccountId: 'owner',
@@ -1534,6 +1733,11 @@ describe('managed Machine detail', () => {
         };
         const retried: unknown[] = [];
         const operation = { serverId: machine.homeId, snapshot, observation: 'available' as const, isUnavailableProjection: false };
+        const recovered = await renderScreen(<ManagedCreationProgress machine={machine}
+            handlers={{ reinstall: () => retried.push(machine.resource?.value) }} />);
+        expect(recovered.findByTestId('managed-machine.installation-retry')).not.toBeNull();
+        expect(recovered.findByTestId('managed-machine.installation-error')).toBeNull();
+        await recovered.unmount();
         const screen = await renderScreen(<ManagedCreationProgress {...{ machine, operation,
             handlers: { reinstall: () => retried.push(machine.resource?.value) } }} />);
         const installing = screen.tree.findAll(node => node.props?.testID === 'managed-machine.installation' && node.props.subtitle)[0];
@@ -1550,6 +1754,11 @@ describe('managed Machine detail', () => {
         const failed = { ...operation, snapshot: { ...snapshot, revision: 2, state: 'failed' as const, settledAt: 3,
             error: { errorCode: 'bootstrap_failed', error: 'Installer exited without completing' } } };
         const enrolled = { ...machine, enrolledMachineId: 'installed-guest' };
+        await act(async () => screen.tree.update(<ManagedCreationProgress {...{ machine,
+            operation: { ...failed, snapshot: { ...failed.snapshot,
+                error: { errorCode: 'remote_cli_update_required', error: 'legacy daemon diagnostic' } } } }} />));
+        expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.installation-error'
+            && node.props.title === t('setupOnboarding.remoteSshChecklist.remoteCliUpdateRequired')).length).toBeGreaterThan(0);
         await act(async () => screen.tree.update(<ManagedCreationProgress {...{ machine: enrolled,
             operation: { ...failed, snapshot: { ...failed.snapshot,
                 error: { errorCode: 'native_boot_unconfirmed', error: 'Native boot configuration failed after enrollment' } } },
@@ -1602,7 +1811,8 @@ describe('managed Machine detail', () => {
             handlers: { reinstall: () => retried.push('wrong') } }} />));
         expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.installation-retry').length).toBe(0);
     });
-    it('reviews a supported Start on the same stopped resource in the saved Home before native dispatch', async () => {
+    it.each(['stop', 'start'] as const)('reviews power on the same stopped resource with desired %s in the saved Home before native dispatch', async desired => {
+        const intent = desired === 'start' ? 'stop' : 'start';
         const target = await upsertAndActivateServer({ serverUrl: 'https://managed-start-approval.test', scope: 'tab' });
         await setServerProfileIdentityForUrl(target.serverUrl, 'srv_managed_start');
         await upsertAndActivateServer({ serverUrl: 'https://other-managed-start.test', scope: 'tab' });
@@ -1612,7 +1822,7 @@ describe('managed Machine detail', () => {
         const machine: ManagedMachineV1 = { id: 'start-existing', homeId: 'srv_managed_start', custodianAccountId: 'owner', launch,
             controller: { machineId: 'controller', installationId: 'installation' }, allocation: 'bound', creationState: 'active',
             resource: { contributionRef: launch.provider, schemaVersion: 1, value: { resourceId: 'same-native' } },
-            desired: 'stop', desiredWhen: 'now', intentRevision: 4, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false,
+            desired, desiredWhen: 'now', intentRevision: 4, retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false,
             observation: { availability: 'present', observedAt: 2, power: 'stopped', storage: 'retained' },
             reviewedFacts: { launch, controller: { machineId: 'controller', installationId: 'installation' }, optionStatus: 'current',
                 billing: { location: 'cloud', stoppedBilling: 'not-billed' }, prerequisites: [],
@@ -1639,18 +1849,18 @@ describe('managed Machine detail', () => {
         const screen = await renderScreen(<ManagedMachineDetail managedId={machine.id} serverId={target.id}
             executeAction={createDefaultActionExecutor().execute} />);
         await flushHookEffects({ cycles: 20 });
-        const start = screen.tree.findAll(node => node.props?.testID === 'managed-machine.start' && typeof node.props.onPress === 'function')[0];
+        const start = screen.tree.findAll(node => node.props?.testID === `managed-machine.${intent}` && typeof node.props.onPress === 'function')[0];
         expect(start).toBeDefined();
         await act(async () => start!.props.onPress());
         await flushHookEffects({ cycles: 20 });
         expect(nativeRequests).toEqual([expect.objectContaining({ target: { kind: 'machine', machineId: 'controller' },
-            input: { homeId: machine.homeId, managedId: machine.id, when: 'now', expectedRevision: 4, intent: 'start' } })]);
+            input: { homeId: machine.homeId, managedId: machine.id, when: 'now', expectedRevision: 4, intent } })]);
         expect(artifacts.list()).toHaveLength(0);
         expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.approval').length).toBeGreaterThan(0);
-        expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.start' && node.props.disabled === true).length).toBeGreaterThan(0);
+        expect(screen.tree.findAll(node => node.props?.testID === `managed-machine.${intent}` && node.props.disabled === true).length).toBeGreaterThan(0);
         expect(screen.tree.findByType(ManagedCreationProgress).props.machine.observation.power).toBe('stopped');
     });
-    it.each(['online', 'offline', 'replaced'] as const)('reviews fresh Devcontainer effects only on the same reachable controller (%s)', async controllerState => {
+    it.each(['online', 'offline', 'replaced', 'missing-schema'] as const)('reviews fresh Devcontainer effects only on the same reachable controller (%s)', async controllerState => {
         const target = await upsertAndActivateServer({ serverUrl: 'https://managed-rebuild.test', scope: 'tab' });
         await setServerProfileIdentityForUrl(target.serverUrl, 'srv_managed_rebuild');
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token: createAccountTokenForTests('owner', { currentAccount: true }) });
@@ -1674,7 +1884,7 @@ describe('managed Machine detail', () => {
             retention: { supportedIntents: ['start', 'stop', 'delete', 'rebuild'] },
             actions: { check: 'check', options: 'options', acquire: 'acquire', bootstrap: 'bootstrap', inspect: 'inspect',
                 power: 'power', destroy: 'destroy', rebuild: 'rebuild' } };
-        operationRpcBoundary.schemaAnswer = { ok: true, inputSchema: { type: 'object', properties: {
+        operationRpcBoundary.schemaAnswer = controllerState === 'missing-schema' ? { ok: true } : { ok: true, inputSchema: { type: 'object', properties: {
             workspaceFolder: { type: 'string' }, configPath: { type: 'string' } },
             required: ['workspaceFolder', 'configPath'], additionalProperties: false } };
         const serverId = resolveServerProfileScopeIdForIdentifier(target.id) || target.id;
@@ -1717,7 +1927,7 @@ describe('managed Machine detail', () => {
         await flushHookEffects({ cycles: 25 });
         const rebuild = screen.tree.findAll(node => node.props?.testID === 'managed-machine.rebuild' && typeof node.props.onPress === 'function')[0];
         expect(rebuild).toBeDefined();
-        if (controllerState !== 'online') {
+        if (controllerState === 'offline' || controllerState === 'replaced') {
             expect(rebuild!.props.disabled).toBe(true);
             await act(async () => rebuild!.props.onPress());
             await flushHookEffects({ cycles: 10 });
@@ -1729,6 +1939,12 @@ describe('managed Machine detail', () => {
         await act(async () => rebuild!.props.onPress());
         await flushHookEffects({ cycles: 25 });
         expect(rebuilds).toEqual([]);
+        if (controllerState === 'missing-schema') {
+            expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.control-error')
+                .map(node => node.props.diagnosticCode)).toContain('managed_parent_unavailable');
+            expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.rebuild-confirm')).toEqual([]);
+            return;
+        }
         expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.rebuild-effect.host:0').length,
             JSON.stringify(screen.tree.findAll(node => node.props?.testID === 'managed-machine.control-error').map(node => node.props.diagnosticCode))).toBeGreaterThan(0);
         expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.rebuild-effect.child:1').length).toBeGreaterThan(0);
@@ -1838,12 +2054,12 @@ describe('managed Machine detail', () => {
         expect(receipt.props.model.facts.map((fact: { id: string }) => fact.id)).not.toContain('retention');
         expect(receipt.props.model.keep).toBeUndefined();
         // The size and its labelled native dimensions are the receipt's spec line (RV-C F13).
-        expect(receipt.props.model.spec).toBe(`Four-core guest · ${t('managedMachines.receipt.cores', { count: 4 })}`);
+        expect(receipt.props.model.spec).toBe(`Four-core guest · ${t('managedMachines.receipt.cores', { count: 4 }).replace(/ /g, '\u00a0')}`);
         // Stop and Delete sit at the receipt's foot, beside the cost they change.
         expect(receipt.props.model.secondary?.map((action: { testID?: string }) => action.testID))
             .toEqual(['managed-machine.start', 'managed-machine.stop', 'managed-machine.delete']);
         expect(screen.tree.findByType(ManagedMachineRecipeSection).props.rows).toEqual([
-            expect.objectContaining({ id: 'size', title: 'Four-core guest', subtitle: t('managedMachines.receipt.cores', { count: 4 }) }),
+            expect.objectContaining({ id: 'size', title: 'Four-core guest', subtitle: t('managedMachines.receipt.cores', { count: 4 }).replace(/ /g, '\u00a0') }),
             // Each value's own fact, never the category word ("Image", "Location") again.
             expect.objectContaining({ id: 'image', title: 'Original Linux image', subtitle: 'Long-term support' }),
             expect.objectContaining({ id: 'location', title: 'Original region', subtitle: expect.stringMatching(/ · captured-location$/) }),
@@ -1968,7 +2184,8 @@ describe('managed Machine detail', () => {
             observation: { observedAt: 5, availability: 'present', power: 'running', storage: 'retained', daemon: 'connected' } };
         const screen = await renderScreen(<ManagedCreationProgress machine={machine} />);
         expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.progress')).toHaveLength(0);
-        expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.recovery').length).toBeGreaterThan(0);
+        // A healthy created machine is named by its size and image; native identity is only for recovery.
+        expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.recovery')).toHaveLength(0);
         const stopped = await renderScreen(<ManagedCreationProgress machine={{ ...machine,
             observation: { ...machine.observation!, power: 'stopped' } }} />);
         expect(stopped.tree.findAll(node => node.props?.testID === 'managed-machine.progress').length).toBeGreaterThan(0);
@@ -2007,6 +2224,8 @@ describe('managed Machine detail', () => {
         await flushHookEffects({ cycles: 20 });
         expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.progress')).toHaveLength(0);
         expect(screen.tree.findAll(node => node.props?.testID === 'managed-machine.cancel')).toHaveLength(0);
+        // The unread page names what it is about (a created machine), not the Machines list it came from.
+        expect(screen.tree.findByType(ManagedReceiptPageLayout).props.header.title).toBe(t('managedMachines.detail.unreadTitle'));
         state = 'enrolled';
         await act(async () => publishHomeAccountChange(target.id));
         await flushHookEffects({ cycles: 20 });

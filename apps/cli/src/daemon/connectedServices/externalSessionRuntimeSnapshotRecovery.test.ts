@@ -48,7 +48,12 @@ describe('resolveConnectedServiceRuntimeSnapshotForExternalSession', () => {
       agentId: 'codex',
       remoteSessionId: 'thread_1',
     })).resolves.toEqual({
-      connectedServices,
+      connectedServices: {
+        v: 2,
+        bindingsByServiceId: {
+          'happier.agent.codex/openai-codex': connectedServices.bindingsByServiceId['openai-codex'],
+        },
+      },
       connectedServicesUpdatedAt: 10,
     });
   });

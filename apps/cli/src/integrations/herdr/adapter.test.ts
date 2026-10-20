@@ -54,12 +54,14 @@ describe('Herdr terminal host creation', () => {
         const layout = api.requests.find(request => request.method === 'layout.apply');
         const root = layout?.params.root as { command: string[] };
         // A Herdr process boundary executes the actual submitted pane command.
-        const child = spawn(root.command[0]!, root.command.slice(1), { stdio: 'ignore' });
+        const child = spawn(root.command[0]!, root.command.slice(1), { stdio: ['ignore', 'ignore', 'pipe'] });
+        let stderr = '';
+        child.stderr.on('data', data => { stderr += String(data); });
         await new Promise<void>((resolve, reject) => {
           child.once('error', reject);
           child.once('exit', () => resolve());
         });
-        expect(await preparedLaunch.awaitNativeSpawnResult!(Date.now(), 1)).toBe(outcome);
+        expect(await preparedLaunch.awaitNativeSpawnResult!(Date.now(), 1), stderr).toBe(outcome);
         expect(root.command).toEqual(preparedLaunch.argv);
       } finally {
         await preparedLaunch.discard();

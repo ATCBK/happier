@@ -59,6 +59,7 @@ import { useKeyboardCommand } from '@/keyboard/KeyboardShortcutProvider';
 import { DetailsPaneHost } from '@/components/appShell/panes/details/DetailsPaneHost';
 import { PaneHeader } from '@/components/appShell/panes/PaneHeader';
 import { DetailsTabHeader } from '@/components/appShell/panes/details/header/DetailsTabHeader';
+import { useNavigationBackControl } from '@/components/ui/layout/NavigationBackChrome';
 import { useDetailsPaneAvailable } from '@/components/appShell/panes/details/detailsPaneAvailability';
 import { SessionInPane } from '@/components/sessions/panes/SessionInPane';
 import { useSessionInteractionSource } from '@/sync/domains/state/storage';
@@ -74,6 +75,7 @@ import { WorkflowRunSteps } from './WorkflowRunSteps';
 import {
     compareWorkflowOccurrences,
     projectWorkflowFlowRunStates,
+    formatWorkflowOccurrenceLabel,
     projectWorkflowInvocationStructure,
     type WorkflowInvocationStructureEntry,
     type WorkflowOccurrenceCoordinate,
@@ -88,8 +90,12 @@ import {
     formatWorkflowWorkspaceSourceLabel,
     describeWorkflowInvocationCause,
     projectWorkflowInvocationRecovery,
+    projectWorkflowRunFailure,
+    selectWorkflowRunFailureInvocation,
+    type WorkflowRunFailurePresentation,
     type WorkflowRecoveryContinuation,
 } from './workflowRunDetailPresentation';
+import { formatWorkflowRunFailureCauseLine } from './workflowRunDetailPresentation';
 
 /**
  * One managed Run's detail body, shared by the exact Run route, the Automation
@@ -217,6 +223,8 @@ export type WorkflowRunContentProps = Readonly<{
     firstFailedInvocationId: string | null;
     /** Whether the authoritative lifecycle-indexed failure query has settled. */
     firstFailedInvocationResolution: 'loading' | 'resolved' | 'error';
+    /** Same exact cause, step identity and recovery facts consumed by See failures. */
+    failurePresentation?: WorkflowRunFailurePresentation | null;
     selectedInvocationProgress?: WorkflowProgressEnvelopeV1 | null;
     selectedInvocationRecoveryAvailability?: WorkflowInvocationRecoveryAvailabilityV1 | null;
     invocationProgressById?: ReadonlyMap<string, WorkflowProgressEnvelopeV1>;
@@ -267,6 +275,8 @@ export type WorkflowRunContentProps = Readonly<{
     onRestoreWorkspace?: () => void;
     onDelete?: () => void;
     onRunAgain?: () => void;
+    /** Starts the next round with the same participants and this round's results as context. */
+    onAnotherRound?: () => void;
     /** Where the Run again composer anchors on wide layouts: the button itself, as Run now does. */
     runAgainAnchorRef?: React.RefObject<View | null>;
     onSaveAsWorkflow?: () => void;
@@ -331,6 +341,9 @@ function WorkflowSelectedDetail(props: Readonly<{
     const source = useSessionInteractionSource(props.sessionId ?? '', props.serverId);
     const interaction = deriveTranscriptInteractionFromSession(source ?? {});
     const executeCommand = useKeyboardCommand();
+    // A step shown on its own inside a host pane goes back to its run on the title line, when the host
+    // hands one over (a Work peek); a page's own chrome otherwise owns Back.
+    const BackControl = useNavigationBackControl();
     const layoutActive = useLayoutPresentationActive();
     const active = props.active && layoutActive;
     const [reviewDismissed, setReviewDismissed] = React.useState(false);
@@ -369,6 +382,7 @@ function WorkflowSelectedDetail(props: Readonly<{
             title={props.title} subtitle={props.subtitle} size="large" onClose={props.onClose} /> : null}
         {!props.phone && props.inlineHeader ? <DetailsTabHeader
             testID={`${props.detail.testIDPrefix}-selected-header`} title={props.title}
+            leading={BackControl ? <BackControl style={null} /> : undefined}
             meta={props.subtitle ? [{ key: 'invocation', text: props.subtitle }] : undefined} /> : null}
         {!props.phone ? card : null}
         {reopenReview}
@@ -605,24 +619,7 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
         occurrence: readonly WorkflowOccurrenceCoordinate[],
         scope: 'full' | 'repetition' = 'full',
     ): string | undefined => {
-        if (occurrence.length === 0) return undefined;
-        const workflowPath: string[] = [];
-        const parts = occurrence.map((coordinate) => {
-            if (coordinate.kind === 'branch') {
-                return flowProjection?.nodesById.get(resolveWorkflowFlowScopedNodeId(`${coordinate.blockId}#${coordinate.branchId}`, workflowPath))?.label
-                    ?? coordinate.branchId;
-            }
-            if (coordinate.kind === 'workflow') {
-                const label = flowProjection?.nodesById.get(resolveWorkflowFlowScopedNodeId(coordinate.blockId, workflowPath))?.label;
-                workflowPath.push(coordinate.blockId);
-                return label ?? t('workflows.page.blocks.menuRun');
-            }
-            const number = String(coordinate.index + 1);
-            return coordinate.kind === 'item'
-                ? coordinate.displayLabel ?? t('workflows.run.occurrenceItem', { number })
-                : t('workflows.run.occurrenceRound', { number });
-        }).filter((_, index) => scope === 'full' || occurrence[index]?.kind === 'item' || occurrence[index]?.kind === 'iteration');
-        return parts.length === 0 ? undefined : parts.join(' \u00b7 ');
+        return formatWorkflowOccurrenceLabel(occurrence, flowProjection, scope);
     }, [flowProjection]);
     const formatMapOccurrence = React.useCallback((occurrence: readonly WorkflowOccurrenceCoordinate[]) => (
         formatOccurrence(occurrence, 'repetition')
@@ -715,7 +712,9 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
         if (stopPending) return null;
         if (props.firstFailedInvocationResolution !== 'resolved') return null;
         if (props.firstFailedInvocationId !== null) {
-            return { kind: 'see_failures', invocationId: props.firstFailedInvocationId };
+            return { kind: 'see_failures', invocationId: props.failurePresentation?.invocationId
+                ?? selectWorkflowRunFailureInvocation({ invocations: props.invocations, structure: derivedStructure,
+                    firstFailedInvocationId: props.firstFailedInvocationId })?.id ?? props.firstFailedInvocationId };
         }
         if (props.run.state === 'failed') return null;
         const producerBlockId = props.definition?.finalOutput?.producer.blockId ?? null;
@@ -730,7 +729,7 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
         return props.finalOutputInvocationId === undefined || props.finalOutputInvocationId === null
             ? null
             : { kind: 'open_result', invocationId: props.finalOutputInvocationId };
-    }, [props.definition, props.finalOutputInvocationId, props.firstFailedInvocationId, props.firstFailedInvocationResolution, props.resultLabel, props.run.state, stopPending]);
+    }, [derivedStructure, props.definition, props.failurePresentation, props.finalOutputInvocationId, props.firstFailedInvocationId, props.firstFailedInvocationResolution, props.invocations, props.resultLabel, props.run.state, stopPending]);
 
     /**
      * One dominant action per state (UX §1, §3.3).
@@ -764,13 +763,32 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
     // so the index's Review stays bordered; with nothing open, the first hold is the page's next step.
     const primaryReviewId = props.selectedInvocationId === null ? attentionIndexRows[0]?.invocation.id : undefined;
     const firstAttentionLabel = firstAttention === undefined ? null : invocationLabel(firstAttention);
-    const failedInvocation = props.run.state === 'failed' && props.firstFailedInvocationResolution === 'resolved'
-        ? props.invocations.find(invocation => invocation.id === props.firstFailedInvocationId && invocation.lifecycle === 'failed')
-        : undefined;
-    const failedStepLabel = failedInvocation === undefined || derivedStructure.get(failedInvocation.id)?.isFrame === true
-        ? null : invocationLabel(failedInvocation);
-    const failureReason = failedInvocation === undefined ? null
-        : structureProgressById?.get(failedInvocation.id)?.reason?.message ?? null;
+    const failureInvocation = props.firstFailedInvocationResolution === 'resolved'
+        ? selectWorkflowRunFailureInvocation({ invocations: props.invocations, structure: derivedStructure,
+            firstFailedInvocationId: props.firstFailedInvocationId }) ?? firstAttention ?? null
+        : null;
+    const failurePresentation = React.useMemo(() => props.failurePresentation !== undefined ? props.failurePresentation
+        : projectWorkflowRunFailure({
+            run: props.run, invocation: failureInvocation,
+            progress: failureInvocation === null ? null : structureProgressById?.get(failureInvocation.id) ?? null,
+            recoveryAvailability: failureInvocation?.id === props.selectedInvocationId ? props.selectedInvocationRecoveryAvailability : null,
+            structure: derivedStructure, projection: flowProjection,
+            machineHomeDirectory: props.workspaceHomeDirectory ?? null,
+            ...(props.machineReachable === undefined ? {} : { machine: { name: props.machineName ?? props.run.machineId,
+                reachable: props.machineReachable, lastSeenAt: props.machineLastSeenAt ?? null } }),
+            invocations: props.invocations, invocationHistoryComplete: props.invocationHistoryComplete,
+        }), [props.failurePresentation, props.run, failureInvocation, structureProgressById, props.selectedInvocationId,
+            props.selectedInvocationRecoveryAvailability, derivedStructure, flowProjection, props.workspaceHomeDirectory,
+            props.machineReachable, props.machineName, props.machineLastSeenAt, props.invocations, props.invocationHistoryComplete]);
+    const failedStepLabel = props.run.state === 'failed' ? failurePresentation?.step?.name ?? null : null;
+    // Why the Run failed is said once: here, unless the inspector beside the header is open on that step and its
+    // recovery card already heads with it. A phone pushes the step to its own page, so its header keeps the line.
+    // The line names the failed step's number, what the attempt recorded
+    // and a usage limit's reset, so the page says why without opening See failures (FIN-DESIGN-C4 R5).
+    // An interrupted Run parked on a failed step says the same retained cause under its status.
+    const failureReason = (props.run.state !== 'failed' && props.run.state !== 'interrupted') || failurePresentation == null
+        || (!phone && props.selectedInvocationId === failurePresentation.invocationId) ? null
+        : formatWorkflowRunFailureCauseLine(failurePresentation);
     const outcomeWord = formatWorkflowRunOutcomeLabel({
         state: props.run.state,
         workflowCustodyState: props.run.workflowCustodyState,
@@ -820,20 +838,29 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
     // later custody and delivery bookkeeping, so it never stands in for a finish.
     const finishedAtMs = props.run.finishedAt == null ? Number.NaN : Date.parse(props.run.finishedAt);
     const originLabel = formatWorkflowRunOriginLabel(props.run.origin);
+    const sourceSessionId = props.run.origin.kind === 'direct'
+        ? props.run.origin.originSessionId ?? null
+        : null;
+    const onOpenSession = props.onOpenSession;
+    // "From a session" is itself the way back to that session; the page never repeats it as a second line.
+    const openOrigin = React.useMemo(() => sourceSessionId === null || onOpenSession === undefined ? undefined
+        : () => onOpenSession(sourceSessionId), [onOpenSession, sourceSessionId]);
     const headerMeta = React.useMemo((): PageHeaderMetaFact[] => [
         // A Run you started yourself is the default and says nothing; a schedule or a session is
         // the distinguishing fact. "Started directly · … · Started 12:00" said "started" twice.
         ...(props.run.origin.kind === 'direct' && !props.run.origin.originSessionId ? []
-            : [{ key: 'origin', text: originLabel, icon: 'tree-structure' as const, testID: `${testIDPrefix}-origin` }]),
+            : [{ key: 'origin', text: originLabel, icon: 'tree-structure' as const, testID: `${testIDPrefix}-origin`,
+                ...(openOrigin === undefined ? {} : { onPress: openOrigin, accessibilityLabel: t('workflows.run.openSourceSession') }) }]),
         ...(props.machineName ? [{ key: 'machine', text: props.machineName, icon: 'desktop' as const }] : []),
         ...(!Number.isFinite(startedAtMs) ? [] : Number.isFinite(finishedAtMs)
             // The end is read against the start: a same-day range names its day once ("Oct 11, 17:56 – 18:54").
             ? [{ key: 'time', text: t('workflows.run.timeRange', { start: formatAsOfTime(startedAtMs), end: formatAsOfTime(finishedAtMs, startedAtMs) }) }]
             : [{ key: 'time', text: t('workflows.run.startedAt', { time: formatAsOfTime(startedAtMs) }) }]),
-    ], [finishedAtMs, originLabel, props.machineName, startedAtMs, testIDPrefix]);
-    const sourceSessionId = props.run.origin.kind === 'direct'
-        ? props.run.origin.originSessionId ?? null
-        : null;
+    ], [finishedAtMs, openOrigin, originLabel, props.machineName, startedAtMs, testIDPrefix]);
+    const embeddedHeaderMeta = React.useMemo(
+        () => headerMeta.map((fact) => ({ key: fact.key, text: fact.text, ...(fact.testID === undefined ? {} : { testID: fact.testID }) })),
+        [headerMeta],
+    );
     const selectedInvocation = props.selectedInvocationId === null
         ? null
         : props.invocations.find((invocation) => invocation.id === props.selectedInvocationId) ?? null;
@@ -845,7 +872,8 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
             ?? null;
     }, [derivedStructure, props.invocations, props.run.state, props.cancelRequested]);
     const recovery = React.useMemo(() => {
-        const projected = projectWorkflowInvocationRecovery({
+        const projected = selectedInvocation !== null && selectedInvocation.id === failurePresentation?.invocationId
+            ? failurePresentation.recovery : projectWorkflowInvocationRecovery({
             run: props.run,
             invocation: selectedInvocation,
             progress: props.selectedInvocationProgress ?? null,
@@ -858,10 +886,10 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
             invocations: props.invocations,
             invocationHistoryComplete: props.invocationHistoryComplete,
         });
-        return props.preparedRecovery === undefined
+        return props.preparedRecovery === undefined || props.preparedRecovery === projected.preparedRecovery
             ? projected
             : { ...projected, preparedRecovery: props.preparedRecovery };
-    }, [props.invocationHistoryComplete, props.invocations, props.machineLastSeenAt, props.machineName, props.machineReachable, props.preparedRecovery, props.run, selectedInvocation, props.selectedInvocationProgress, props.selectedInvocationRecoveryAvailability, props.workspaceHomeDirectory]);
+    }, [failurePresentation, props.invocationHistoryComplete, props.invocations, props.machineLastSeenAt, props.machineName, props.machineReachable, props.preparedRecovery, props.run, selectedInvocation, props.selectedInvocationProgress, props.selectedInvocationRecoveryAvailability, props.workspaceHomeDirectory]);
     const selectedWorkspace = recovery.workspace;
     const workspaceSourceBlockLabel = selectedWorkspace?.sourceBlockId === null
         || selectedWorkspace?.sourceBlockId === undefined
@@ -874,6 +902,7 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
         reasonCode: props.selectedInvocationProgress?.reason?.code ?? null,
         reasonDetails: props.selectedInvocationProgress?.reason?.details,
         blockLabel: selectedNodeId === null ? null : flowProjection?.nodesById.get(selectedNodeId)?.label ?? null,
+        blockKind: props.selectedInvocationProgress?.blockKind,
     });
     const workspaceSourceLabel = workspaceSourceBlockLabel === null
         ? null
@@ -884,65 +913,83 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
 
     /**
      * The state's actions sit in the header beside the Run's own controls (lab run-A): secondary
-     * ones first, the one primary last before `⋯`. Inspect steps is withdrawn while Steps is open,
-     * since it would only point at the view already showing.
+     * ones first, the one primary last before `⋯`. On a phone page they wrap under the outcome, so
+     * the primary leads there instead of landing alone on the second line. Inspect steps is withdrawn
+     * while Steps is open, since it would only point at the view already showing.
      */
+    const resumeAction = props.run.availability.resumeBoundary && props.onResume !== undefined ? (
+        <ToolbarButton
+            key="resume"
+            testID={`${testIDPrefix}-resume`}
+            disabled={operationPending}
+            busy={operationPending}
+            onPress={props.onResume}
+            label={t('workflows.run.resume')}
+            {...(primaryAction === 'resume' ? { tone: 'primary' as const } : {})}
+            size="md"
+        />
+    ) : null;
+    const runAgainAction = props.onRunAgain !== undefined ? (
+        <View key="run-again" ref={props.runAgainAnchorRef} collapsable={false}>
+            <ToolbarButton
+                testID={`${testIDPrefix}-run-again`}
+                onPress={props.onRunAgain}
+                label={t('workflows.run.runAgain')}
+                {...(primaryAction === 'run_again' ? { tone: 'primary' as const } : {})}
+                size="md"
+            />
+        </View>
+    ) : null;
+    const anotherRoundAction = props.onAnotherRound !== undefined ? (
+        <ToolbarButton
+            key="another-round"
+            testID={`${testIDPrefix}-another-round`}
+            disabled={operationPending}
+            onPress={props.onAnotherRound}
+            label={t('workflows.start.anotherRound')}
+            size="md"
+        />
+    ) : null;
+    const outcomeAction = terminalOutcome?.kind === 'result_absent' && props.view !== 'steps' ? (
+        <ToolbarButton
+            key="inspect-steps"
+            testID={`${testIDPrefix}-inspect-steps`}
+            onPress={() => props.onChangeView('steps')}
+            label={t('workflows.run.inspectSteps')}
+            tone="primary"
+            size="md"
+        />
+    ) : terminalOutcome?.kind === 'open_result' ? (
+        <ToolbarButton
+            key="open-result"
+            testID={`${testIDPrefix}-open-result`}
+            onPress={(event) => selectInvocation(terminalOutcome.invocationId, event)}
+            label={t('workflows.run.openResult')}
+            tone="primary"
+            size="md"
+        />
+    ) : terminalOutcome?.kind === 'see_failures' ? (
+        <ToolbarButton
+            key="see-failures"
+            testID={`${testIDPrefix}-see-failures`}
+            onPress={(event) => selectInvocation(terminalOutcome.invocationId, event)}
+            label={t('workflows.run.seeFailures')}
+            tone="primary"
+            size="md"
+        />
+    ) : null;
+    const primaryElement = primaryAction === 'outcome' ? outcomeAction
+        : primaryAction === 'resume' ? resumeAction
+            : primaryAction === 'run_again' ? runAgainAction : null;
+    const secondaryElements = [resumeAction, runAgainAction, anotherRoundAction, outcomeAction]
+        .filter((element) => element !== null && element !== primaryElement);
+    const phonePage = phone && props.embedded !== true;
     const outcomeActions = (
-        <>
-            {props.run.availability.resumeBoundary && props.onResume !== undefined ? (
-                <ToolbarButton
-                    testID={`${testIDPrefix}-resume`}
-                    disabled={operationPending}
-                    busy={operationPending}
-                    onPress={props.onResume}
-                    label={t('workflows.run.resume')}
-                    {...(primaryAction === 'resume' ? { tone: 'primary' as const } : {})}
-                    size="md"
-                />
-            ) : null}
-            {props.onRunAgain !== undefined ? (
-                <View ref={props.runAgainAnchorRef} collapsable={false}>
-                    <ToolbarButton
-                        testID={`${testIDPrefix}-run-again`}
-                        onPress={props.onRunAgain}
-                        label={t('workflows.run.runAgain')}
-                        {...(primaryAction === 'run_again' ? { tone: 'primary' as const } : {})}
-                        size="md"
-                    />
-                </View>
-            ) : null}
-            {terminalOutcome?.kind === 'result_absent' && props.view !== 'steps' ? (
-                <ToolbarButton
-                    testID={`${testIDPrefix}-inspect-steps`}
-                    onPress={() => props.onChangeView('steps')}
-                    label={t('workflows.run.inspectSteps')}
-                    tone="primary"
-                    size="md"
-                />
-            ) : null}
-            {terminalOutcome?.kind === 'open_result' ? (
-                <ToolbarButton
-                    testID={`${testIDPrefix}-open-result`}
-                    onPress={(event) => selectInvocation(terminalOutcome.invocationId, event)}
-                    label={t('workflows.run.openResult')}
-                    tone="primary"
-                    size="md"
-                />
-            ) : null}
-            {terminalOutcome?.kind === 'see_failures' ? (
-                <ToolbarButton
-                    testID={`${testIDPrefix}-see-failures`}
-                    onPress={(event) => selectInvocation(terminalOutcome.invocationId, event)}
-                    label={t('workflows.run.seeFailures')}
-                    tone="primary"
-                    size="md"
-                />
-            ) : null}
-        </>
+        <>{phonePage ? [primaryElement, ...secondaryElements] : [...secondaryElements, primaryElement]}</>
     );
 
-    const runControls = (
-        <View style={styles.headerControls}>
+    const stateControls = (
+        <>
             {outcomeActions}
             {props.run.availability.pause && props.onPause !== undefined ? (
                 // Pause is the quiet one beside the bordered Stop (lab run-A): two outlines side by side would
@@ -974,36 +1021,60 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
                     size="md"
                 />
             ) : null}
-            {overflowActions.length === 0 ? null : (
-                <ItemRowActions
-                    title={t('common.moreActions')}
-                    actions={overflowActions}
-                    compactThreshold={Number.POSITIVE_INFINITY}
-                    compactActionIds={[]}
-                    overflowTriggerTestID={`${testIDPrefix}-overflow`}
-                />
-            )}
+        </>
+    );
+    const overflowControl = overflowActions.length === 0 ? null : (
+        <ItemRowActions
+            title={t('common.moreActions')}
+            actions={overflowActions}
+            compactThreshold={Number.POSITIVE_INFINITY}
+            compactActionIds={[]}
+            overflowTriggerTestID={`${testIDPrefix}-overflow`}
+        />
+    );
+    // A phone's navigation bar keeps only `⋯`; the state's own actions (Run again, See failures, Stop) stay
+    // in the page under the outcome they answer, so the failed page's next step is never behind a menu (lab P1).
+    const hasStateControls = (props.run.availability.resumeBoundary && props.onResume !== undefined)
+        || props.onRunAgain !== undefined || props.onAnotherRound !== undefined
+        || (terminalOutcome !== null && (terminalOutcome.kind !== 'result_absent' || props.view !== 'steps'))
+        || (props.run.availability.pause && props.onPause !== undefined)
+        || (props.run.availability.cancel && props.onCancel !== undefined);
+    const pageStateControls = phone && props.embedded !== true && hasStateControls;
+    const runControls = (
+        <View style={styles.headerControls}>
+            {pageStateControls ? null : stateControls}
+            {overflowControl}
         </View>
     );
 
     const header = (
         <View style={styles.root}>
-            <PageHeader
-                testID={`${testIDPrefix}-header`}
-                title={props.title ?? t('workflows.contentUnavailable')}
-                alwaysShowTitle
-                // A phone gives the title the full width; the origin fact keeps the workflow glyph (lab P1).
-                leading={phone || props.embedded === true ? undefined : (
-                    <PageHeaderMarkSlot>
-                        <Icon name="tree-structure" size={22} color={theme.colors.text.secondary} />
-                    </PageHeaderMarkSlot>
-                )}
-                meta={headerMeta}
-                actions={props.embedded === true ? undefined : runControls}
-            />
             {props.embedded === true ? (
-                <View testID={`${testIDPrefix}-controls`} style={styles.pageSection}>{runControls}</View>
-            ) : null}
+                // Inside a host pane (a Work peek, the Inbox's detail) the Run wears the pane's band
+                // header, as a peeked Session does (lab session-D): mark, name and facts on the band,
+                // the pane's own controls at its end, and the Run's controls on the row beneath.
+                <DetailsTabHeader
+                    testID={`${testIDPrefix}-header`}
+                    title={props.title ?? t('workflows.contentUnavailable')}
+                    leading={<Icon name="tree-structure" size={ICON_SIZE.md} color={theme.colors.text.secondary} />}
+                    meta={embeddedHeaderMeta}
+                    controls={<View testID={`${testIDPrefix}-controls`}>{runControls}</View>}
+                />
+            ) : (
+                <PageHeader
+                    testID={`${testIDPrefix}-header`}
+                    title={props.title ?? t('workflows.contentUnavailable')}
+                    alwaysShowTitle
+                    // A phone gives the title the full width; the origin fact keeps the workflow glyph (lab P1).
+                    leading={phone ? undefined : (
+                        <PageHeaderMarkSlot>
+                            <Icon name="tree-structure" size={22} color={theme.colors.text.secondary} />
+                        </PageHeaderMarkSlot>
+                    )}
+                    meta={headerMeta}
+                    actions={runControls}
+                />
+            )}
             <View
                 testID={`${testIDPrefix}-outcome-region`}
                 style={[styles.outcome, props.completionEmphasis === true ? styles.outcomeCompleted : null]}
@@ -1030,10 +1101,10 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
                     </Text>
                 </View>
                 {/* The quiet second line: what keeps going and what waits on it (lab run-A). */}
-                {consequence === null ? null : <Text testID={`${testIDPrefix}-consequence`} style={styles.provenance}>
+                {consequence === null ? null : <Text testID={`${testIDPrefix}-consequence`} style={[styles.provenance, styles.outcomeDetail]}>
                     {consequence}
                 </Text>}
-                {failureReason ? <Text testID={`${testIDPrefix}-failure-reason`} style={styles.provenance}>
+                {failureReason ? <Text testID={`${testIDPrefix}-failure-reason`} style={[styles.provenance, styles.outcomeDetail]}>
                     {failureReason}
                 </Text> : null}
                 {/* Contact loss is all that is known; resume choices come from
@@ -1055,17 +1126,8 @@ export function WorkflowRunContent(props: WorkflowRunContentProps): React.ReactE
                     <Text testID={`${testIDPrefix}-result`} style={styles.metric}>{props.resultLabel}</Text>
                 )}
 
-                {sourceSessionId !== null && props.onOpenSession !== undefined ? (
-                    <View style={styles.actions}>
-                        <HappierPressable
-                            testID={`${testIDPrefix}-open-origin-session`}
-                            accessibilityRole="button"
-                            onPress={() => props.onOpenSession?.(sourceSessionId)}
-                            style={({ pressed }) => [styles.actionTarget, pressed ? styles.pressed : null]}
-                        >
-                            <Text style={styles.action}>{t('workflows.run.openSourceSession')}</Text>
-                        </HappierPressable>
-                    </View>
+                {pageStateControls ? (
+                    <View testID={`${testIDPrefix}-page-controls`} style={styles.headerControls}>{stateControls}</View>
                 ) : null}
                 {props.runAgainStatus}
                 {/* The durable receipt, so the request survives its own

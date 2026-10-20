@@ -195,7 +195,7 @@ Email omits this field. GitHub declares `{ maximum: 65536, unit:
 'unicodeCodePoints' }` for its native comment limit. Both use the same setup
 schema; absence does not authorize a caller to invent a default ceiling.
 
-The `setup` Action's input is contributor-defined; all other role inputs and
+The `setup` and optional `setupRemediation` Action inputs are contributor-defined; other role inputs and
 all role results use the final Channels role contract. Setup returns either
 that result or the bounded Channels `requiresRemediation` outcome. Setup input is
 transient and may collect provider-specific choices or one-time handoffs. It
@@ -206,6 +206,16 @@ request remains authoritative. The setup result must echo that exact reference
 (or `null` for a credentialless provider); Channels compares it before testing
 or persistence. Setup input must never claim host identity, machine identity,
 execution origin, or carry long-lived credential material.
+
+In 0.3 development source, UI, CLI, Agent and MCP callers request a setup repair
+through Channels' `connection/setup-remediate-v1` Action. Its closed input carries
+the current `providerSelection`, opaque `providerRemediationInput`, and outer
+`credentialRef`. Channels resolves that selection's current `setupRemediation`
+role and invokes the same provider handler with the exact selected account.
+The UI passes the remediation form's fresh selection carrier through this intent;
+it then re-runs prepare after a confirmed repair. Off, Ask and Allowed remain
+the user's per-Action policy. An unknown repair outcome requires a safe prepare
+recheck before another mutation.
 
 When `supportedTransports` includes `durablePush`, the setup result must carry
 exactly one same-provider `webhookContributionRef`. That reference is
@@ -255,6 +265,27 @@ uses the same qualified Action reference. Router and binding editing use the
 existing binding management Actions; their editor composition is owned by the
 Channels UI.
 
+Binding create and update drafts can accumulate principals from several exact
+provider searches. `principalSelection.query` remains the default search; each
+`selected` entry may supply its own `query`, alongside its `id` and `kind`.
+For example, two exact-address searches can produce:
+
+```json
+{
+  "query": "owner@example.com",
+  "selected": [
+    { "id": "owner@example.com", "kind": "human" },
+    { "id": "sales@example.com", "kind": "human", "query": "sales@example.com" }
+  ]
+}
+```
+
+Both management Actions re-resolve every selected identity against its query
+on the current connection and endpoint before saving. Router group members must
+belong to that verified union; selecting an address is not a recipient override.
+The queries stay in the draft, while the binding stores the existing principal
+ids and groups. Providers keep their single-query `principalResolve` contract.
+
 Provider `messageDeliver` inputs now carry `content: { text, html? }`. A reply
 continues to use `replyContext`. An optional `newThread: { recipients, subject }`
 asks the provider to start a thread; `recipients` are core-resolved principal
@@ -284,7 +315,7 @@ as with every other role. Providers fetch and parse the message once for the
 consuming batch and retain no staged files. Channels owns secure temporary
 files only until each Session transfer settles, including cancellation.
 V1 places files in the Session only when its machine matches the connection's
-captured provider origin. On that machine, the resolver extracts text and PDF
+retained Home/Machine placement. On that machine, the resolver extracts text and PDF
 text-layer content from the same live bytes it materializes and includes it
 once in the attachment's untrusted context. For a remote Session, the Channels
 input owner includes text/PDF content in ordinary message text before
@@ -299,7 +330,7 @@ without promising cross-machine file delivery or storing bytes in Collections.
 | Role | Cardinality | Input | Result | Action facts |
 | --- | --- | --- | --- | --- |
 | `setup` | required | contributor-defined | Channels setup result/remediation | `surface: plugin`, `danger: safe` |
-| `setupRemediation` | optional; usable only after `setup` returns `requiresRemediation` | contributor-defined | Channels remediation effect evidence | `surface: plugin`, `danger: writesRemote`, host confirmation required |
+| `setupRemediation` | optional; setup repair after `setup` returns `requiresRemediation` | contributor-defined | Channels remediation effect evidence | `surfaces: plugin, ui`, `danger: writesRemote`, approval follows Action policy |
 | `connectionTest` | required | Channels | Channels | `surface: plugin`, `danger: safe` |
 | `endpointResolve` | optional | Channels | Channels | `surface: plugin`, `danger: safe` |
 | `principalResolve` | optional | Channels | Channels | `surface: plugin`, `danger: safe` |
@@ -317,8 +348,9 @@ delivery and calls the Channels observation-ingest Action.
 
 The setup Action's ordinary static metadata is the setup presentation: title,
 description, icon/brand projection, and transient Action input hints. The
-optional `setupRemediation` Action owns the equivalent remediation presentation
-and its required host-rendered confirmation. Channels does not add a provider
+optional `setupRemediation` Action owns the equivalent remediation form presentation
+and consequence copy. Channels' public repair intent and the provider Action use
+the shared approval policy. Channels does not add a provider
 descriptor, picker registry, setup-specific metadata bag, or Action search. A
 provider that needs a second independently selectable offering needs a
 separately approved protocol/cardinality amendment.
@@ -433,6 +465,12 @@ Retest re-observes readiness only and does not refresh this setup fact.
 Known-no-effect delivery failures retain `retryDue` custody and attention,
 with growing exponential backoff; a positive provider `retryAfterMs` takes
 precedence, while a zero wait uses the growing fallback rather than hot retry.
+In current 0.3 development source, an unavailable Account/currentness read before
+any provider call settles as `notDelivered` with `retry: 'safe'` through this same
+backoff owner. The next attempt rechecks currentness. Proven route mismatches or
+invalid authority still suppress delivery without calling the provider; historical
+suppressed rows stay terminal. Unavailable currentness after an effect was
+attempted retains `outcomeUnknown` custody and never authorizes a resend.
 Accepted, partial, or unknown effects never auto-resend. A correlated Session
 reply freezes its exact external message/thread relation in existing outward
 custody; unrelated mirror output has no reply relation. Mirror mode suppresses
@@ -520,6 +558,36 @@ facts, execution origin, Session/Automation provenance, and permission facts.
 Mutable Action input cannot provide or override those identities. `machineId`
 alone is not a stable cross-server identity.
 
+In 0.3 development source, a retained connection stores Home/Machine placement
+separately from its provider plugin and stable contribution. It follows the
+currently admitted implementation of that same provider there, including
+same-ID reinstall or source substitution. Bundled, development and managed
+custody changes alone require no transfer, setup rerun or authority-epoch bump.
+The generic Action executor enforces the closed `expectedExecutionRouting`
+precondition before provider handlers; Channels uses the same host-stamped
+routing projection/equality for callbacks. Host currentness, credential/config
+validation and connection/binding authority checks still apply. The existing
+full `expectedExecutionOrigin` contract is unchanged.
+
+Connection management `revision` is the logical configuration revision.
+Bindings, pairing, Test, Retry, transfer and recovery guard that subject, so
+poll/readiness bookkeeping does not invalidate an approved action or an open
+setup form. Configuration edits and changes to history-gap or pending-stop
+custody advance it, including observation-age edits that keep `authorityEpoch`
+unchanged. Storage CAS and captured poll/stop invocation witnesses still use
+physical Collection revisions. The V8→V9 Collection migration seeds each retained
+connection from its source row revision; fresh connections start at 1. This is
+0.3 development behavior and requires the updated host and plugin to be loaded.
+
+An actual placement, transport, credential or config replacement still uses
+the canonical transfer Action and its checkpoint/predecessor-stop recovery.
+Generic durable webhook endpoints keep exact materialization targets and
+their existing endpoint-convergence recovery; following a current provider does
+not automatically repair an endpoint after reinstall. Retained V7 connection,
+Event-target and predecessor placements evolve through Data's V7→V8 migration,
+which also compacts endpoint-only pending intent while preserving IDs, config,
+cursors, epochs and unresolved effects.
+
 ## Cancellation, currentness, and lifecycle
 
 Use the invocation `AbortSignal` for every network, credential, and provider
@@ -535,8 +603,10 @@ contribution dormant while the contributor's unrelated Actions remain usable.
 Installing or updating the target recomputes the admitted snapshot. Updating
 or replacing a contributor invalidates its old handles; uninstall/disable
 cancels reachable work and makes retained connections unavailable. Channels
-does not silently select another provider, reconstruct a local Action id, or
-recreate a connection around unfinished cleanup.
+uses the current admitted same-ID contribution at the retained Home/Machine
+when it becomes available again, including after reinstall. It does not select
+another provider or machine, reconstruct a local Action id, or recreate a
+connection around unfinished cleanup.
 
 Provider protocol reconnect/resume, polling backoff, and provider-specific
 checkpoint mechanics stay in the provider or the Channels core owner named by
@@ -564,6 +634,13 @@ failure. Rich `retryable`, remediation, raw-cause, or provider-error-text
 metadata is invocation-local and is not a Channels result authority. Do not
 invent a second error classifier. Channels owns retry/custody policy and
 turns provider evidence into the user-visible status.
+
+In 0.3 development source, poll Action failures retain the known sentence only
+after the SDK's canonical `projectPluginFailureText` projection removes
+credentials and local paths. Management re-applies that projection to retained
+messages before returning optional `evidence.message`; raw provider diagnostics
+remain private. The existing attention description shows this sentence, with
+the code-based recovery description as the fallback when no sentence exists.
 
 ## Protocol evolution
 

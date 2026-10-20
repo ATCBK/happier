@@ -99,10 +99,12 @@ export type SessionBoardTranslation = Readonly<{
             chart: string;
             table: string;
             interactiveView: string;
+            /** A posted snapshot of a widget's values. */
+            snapshot: string;
+            snapshotByYou: string;
+            snapshotBy: (params: Readonly<{ name: string }>) => string;
             /** The plugin is absent from this device's projection; its id beats "a plugin". */
             pluginMissing: (params: Readonly<{ pluginId: string }>) => string;
-            /** The contribution's own title beside the installed plugin's display name. */
-            pluginSurface: (params: Readonly<{ plugin: string; surface: string }>) => string;
             /** Assistive disambiguation when two installed plugins share a display name. */
             pluginQualified: (params: Readonly<{ label: string; pluginId: string }>) => string;
         }>;
@@ -190,6 +192,8 @@ export type SessionBoardTranslation = Readonly<{
      */
     inline: Readonly<{
         openPanel: string;
+        /** Brings the live body of a visual that runs elsewhere to this reply. */
+        showHere: string;
         openPanelA11y: (params: Readonly<{ title: string }>) => string;
     }>;
     /** Viewer-local Companion copy. Product says "Companion"; persistence says item. */
@@ -260,6 +264,7 @@ export type SessionBoardTranslation = Readonly<{
             returnedToChat: string;
             boardViewSelected: string;
             boardItemRevealed: string;
+            shownInChat: string;
             fullOpened: string;
         }>;
     }>;
@@ -371,8 +376,10 @@ export const sessionBoardTranslationsEnglish = { en: {
                 chart: 'Chart',
                 table: 'Table',
                 interactiveView: 'Interactive view',
+                snapshot: 'Snapshot',
+                snapshotByYou: 'Snapshot by you',
+                snapshotBy: ({ name }) => `Snapshot by ${name}`,
                 pluginMissing: ({ pluginId }) => `From ${pluginId} · not installed`,
-                pluginSurface: ({ plugin, surface }) => `${surface} · ${plugin}`,
                 pluginQualified: ({ label, pluginId }) => `${label} (${pluginId})`,
             },
             actions: {
@@ -459,6 +466,7 @@ export const sessionBoardTranslationsEnglish = { en: {
         mobile: { searchPlaceholder: 'Search this board' },
         inline: {
             openPanel: 'Open in panel',
+            showHere: 'Show here',
             openPanelA11y: ({ title }) => `Open “${title}” in a panel`,
         },
         companion: {
@@ -524,6 +532,7 @@ export const sessionBoardTranslationsEnglish = { en: {
                 returnedToChat: 'Returned to Chat by the agent',
                 boardViewSelected: 'Board view selected by the agent',
                 boardItemRevealed: 'Board item opened by the agent',
+                shownInChat: 'Shown in the chat by the agent',
                 fullOpened: 'Companion opened by the agent',
             },
         },

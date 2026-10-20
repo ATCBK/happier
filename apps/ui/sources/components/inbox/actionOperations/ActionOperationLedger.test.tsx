@@ -9,6 +9,7 @@ import { removeServerProfile, upsertServerProfile } from '@/sync/domains/server/
 import { ActionOperationLedgerView, ActionOperationRows } from './ActionOperationLedger';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroupRowPositionProvider } from '@/components/ui/lists/ItemGroupRowPosition';
+import { ActionOperationSnapshotV1Schema } from '@happier-dev/protocol/actions/operations/v1';
 
 const initialState = storage.getState();
 let homeA = '';
@@ -32,6 +33,27 @@ afterEach(async () => {
 });
 
 describe('ActionOperationLedgerView', () => {
+    it('names the execution worker when operation custody stays on the Source Machine', async () => {
+        const machines = [
+            createMachineFixture({ id: 'source', metadata: { ...createMachineFixture().metadata!, host: 'Source computer' } }),
+            createMachineFixture({ id: 'worker', metadata: { ...createMachineFixture().metadata!, host: 'Build worker' } }),
+        ];
+        storage.setState({ machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
+            machineListByServerId: { [homeA]: machines }, machineListStatusByServerId: { [homeA]: 'idle' } });
+        const snapshot = ActionOperationSnapshotV1Schema.parse({
+            version: 1, operationId: 'worker-operation', revision: 1, actionId: 'projects.script.run',
+            state: 'accepted', scope: { accountId: 'account', machineId: 'source' },
+            title: 'Build', createdAt: 1, cancellation: 'supported',
+            domainRef: { kind: 'projectCommand', purpose: 'script', serverId: homeA,
+                machineId: 'worker', workspaceRefId: 'worker-checkout', cwd: '/worker/repo' },
+        });
+        const screen = await renderScreen(<ActionOperationRows operations={[{
+            serverId: homeA, snapshot, observation: 'available', isUnavailableProjection: false,
+        }]} presentation="inbox" onOpenOperation={() => {}} />);
+        expect(screen.getTextContent()).toContain('Build worker');
+        expect(screen.getTextContent()).not.toContain('Source computer');
+    });
+
     it('distributes a parent ItemGroup row across every rendered operation row', async () => {
         const operation = {
             serverId: 'server-1',

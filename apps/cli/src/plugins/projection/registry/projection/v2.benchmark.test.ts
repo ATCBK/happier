@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { expect, it } from 'vitest';
+import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 
 // Opt-in offline measurement: no executable plugin activation, native probes or Account reads.
 it.skipIf(process.env.HAPPIER_PROJECTION_BENCHMARK !== '1')('profiles the real bundled contribution projection', async () => {
@@ -29,7 +30,7 @@ it.skipIf(process.env.HAPPIER_PROJECTION_BENCHMARK !== '1')('profiles the real b
         const registry = createResolvedContributionRegistry({
             ...contributions,
             immutableGenerationIdsByPluginId: Object.fromEntries(BUNDLED_FIRST_PARTY_PLUGIN_METADATA.map(({ pluginId }) => [pluginId, `generation:${pluginId}`])),
-            occurrenceIdsByPluginId: Object.fromEntries(BUNDLED_FIRST_PARTY_PLUGIN_METADATA.map(({ pluginId }) => [pluginId, `occurrence:${pluginId}`])),
+            occurrenceIdsByPluginId: Object.fromEntries(BUNDLED_FIRST_PARTY_PLUGIN_METADATA.map(({ pluginId }) => [pluginId, createPluginRuntimeOccurrenceId(pluginId)])),
         });
         const registryMs = performance.now() - registryStarted;
         const setupMs = performance.now() - setupStarted;
@@ -54,6 +55,9 @@ it.skipIf(process.env.HAPPIER_PROJECTION_BENCHMARK !== '1')('profiles the real b
         const uiKinds: Record<string, number> = {};
         const uiPlugins: Record<string, number> = {};
         for (const entry of Object.values(projection.familiesById.pluginUi?.entriesById ?? {})) {
+            if (typeof entry.contributionKind !== 'string' || typeof entry.pluginId !== 'string') {
+                throw new Error('Expected plugin UI family kind and plugin identity');
+            }
             uiKinds[entry.contributionKind] = (uiKinds[entry.contributionKind] ?? 0) + bytes(entry);
             uiPlugins[entry.pluginId] = (uiPlugins[entry.pluginId] ?? 0) + bytes(entry);
         }
@@ -115,7 +119,10 @@ it.skipIf(process.env.HAPPIER_PROJECTION_BENCHMARK !== 'handler')('profiles the 
         }, {
             resolveRuntimeRegistry: async () => currentRuntime,
             resolveRegistry: async () => currentRuntime.contributes,
-            resolveGeneration: async () => currentRuntime.generation,
+            resolveGeneration: async () => {
+                if (currentRuntime.generation === undefined) throw new Error('Expected runtime generation');
+                return currentRuntime.generation;
+            },
             // This isolated home has no installed packages; bundled entries remain registry-owned.
             resolveInstalledPackages: async () => [],
         });

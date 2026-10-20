@@ -1,6 +1,7 @@
 import type {
     AgentSessionHostServices,
 } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { ExecService } from '@happier-dev/plugin-sdk/exec';
 import { PluginTerminalHostError } from './errors';
 export { PluginTerminalHostError, type PluginTerminalHostErrorCode } from './errors';
 import type {
@@ -18,6 +19,12 @@ import type { CatalogAgentLookupId } from '@/agent/catalog/ids';
 import { resolveTerminalHost } from '@/integrations/terminal/host/resolveTerminalHost';
 import type { TerminalHostResolution } from '@/integrations/terminal/host/_types';
 import type { TerminalHostAdapter } from '@/integrations/terminal/host/_types';
+import type { TerminalHostNativeLaunch } from '@/integrations/terminal/host/_types';
+import {
+    authorizeResolvedAgentNativeExecLaunchForHost,
+    type HostAuthorizedPluginExecLaunch,
+} from '@/plugins/runtime/invocation/services/exec';
+import { readHostProcessOwnerTag, withHostProcessOwnerEnvironment } from '@/processes/ownerTag';
 import { createTerminalLaunchSpec, type TerminalLaunchSpec } from '@/terminal/host/launchSpec';
 import { resolveTerminalHostCreationFailure } from '@/integrations/terminal/host/errors';
 import { createDefaultTerminalHostAdapterInventory } from '@/integrations/terminal/host/defaultAdapters';
@@ -60,37 +67,44 @@ type AgentTerminalHostCreateOrAttachRequest =
 type AgentTerminalHostDisposeIntent = Parameters<AgentTerminalHostService['dispose']>[1];
 type AgentTerminalHostLaunchInput = AgentTerminalHostCreateOrAttachRequest['launch'];
 type AgentTerminalHostResolveResult = Awaited<ReturnType<AgentTerminalHostService['resolve']>>;
-const AGENT_CHILD_LAUNCH_ENVIRONMENT_TRANSFORMERS = new WeakMap<
-    AgentTerminalHostService,
-    (environment: Readonly<Record<string, string>>) =>
-        Readonly<Record<string, string>>
->();
+type AgentNativeLaunchQualifier = NonNullable<NonNullable<Parameters<ExecService['spawn']>[1]>['nativeLaunch']>;
+type AgentTerminalLaunchBinding = Readonly<{
+    transform(environment: Readonly<Record<string, string>>): Readonly<Record<string, string>>;
+    exec?: ExecService;
+    nativeLaunch?: AgentNativeLaunchQualifier;
+    signal?: AbortSignal;
+}>;
+const AGENT_CHILD_LAUNCH_BINDINGS = new WeakMap<AgentTerminalHostService, AgentTerminalLaunchBinding>();
 
 export function installAgentChildLaunchEnvironmentTransformerForTerminalHost(
     service: AgentTerminalHostService,
     transform: (
         environment: Readonly<Record<string, string>>,
     ) => Readonly<Record<string, string>>,
+    options?: Readonly<{ exec: ExecService; nativeLaunch?: AgentNativeLaunchQualifier; signal?: AbortSignal }>,
 ): Readonly<{ dispose(): void }> {
-    if (AGENT_CHILD_LAUNCH_ENVIRONMENT_TRANSFORMERS.has(service)) {
+    if (AGENT_CHILD_LAUNCH_BINDINGS.has(service)) {
         throw new Error(
             'Agent child launch environment transformer is already installed',
         );
     }
-    AGENT_CHILD_LAUNCH_ENVIRONMENT_TRANSFORMERS.set(service, transform);
+    const binding = { transform, ...options };
+    AGENT_CHILD_LAUNCH_BINDINGS.set(service, binding);
     return Object.freeze({
         dispose() {
             if (
-                AGENT_CHILD_LAUNCH_ENVIRONMENT_TRANSFORMERS.get(service)
-                === transform
+                AGENT_CHILD_LAUNCH_BINDINGS.get(service)
+                === binding
             ) {
-                AGENT_CHILD_LAUNCH_ENVIRONMENT_TRANSFORMERS.delete(service);
+                AGENT_CHILD_LAUNCH_BINDINGS.delete(service);
             }
         },
     });
 }
 
 export type CreatePluginTerminalHostServiceParams = Readonly<{
+    /** Host-owned child invocation identity; never a Happier Session identity. */
+    executionRunId?: string;
     hasCapability: (capability: string) => boolean;
     resolveTerminalHost: (preference: TerminalHostPreference) => TerminalHostResolution | Promise<TerminalHostResolution>;
     resolveAgentCliLaunch: (launch: AgentTerminalHostLaunchInput) => Pick<AgentCliLaunchSpec, 'command' | 'args' | 'providerExitOwnership'> & Readonly<{
@@ -120,6 +134,7 @@ export type CreatePluginTerminalHostServiceParams = Readonly<{
 
 export type CreateDefaultPluginTerminalHostServiceParams = Readonly<{
     happyHomeDir: string;
+    executionRunId?: string;
     hasCapability: (capability: string) => boolean;
     readSessionId?: () => string | null;
     readSessionMetadata?: () => Readonly<Pick<Metadata, 'terminal' | 'startedBy'>> | null;
@@ -141,6 +156,7 @@ type ActiveTerminalHost = Readonly<{
     launch?: TerminalLaunchSpec;
     physicalDisposition?: Promise<void>;
     rollbackCreation?(): Promise<void>;
+    releaseNativeLaunch?: HostAuthorizedPluginExecLaunch['release'];
 }>;
 
 export type PreparedTerminalHostRequest = Readonly<{
@@ -297,6 +313,7 @@ function createPluginTerminalHostOwner(params: CreatePluginTerminalHostServicePa
 }> {
     const activeHosts = new Map<TerminalHostHandle, ActiveTerminalHost>();
     let retainedLaunch: TerminalLaunchSpec | null = null;
+    const uncertainNativeLaunches = new Set<HostAuthorizedPluginExecLaunch>();
     // Public plugin launches and host-private native presentations share the exact
     // adapter, binding, rollback and disposition owner, not a second launch path.
     const createHost = async (request: Readonly<{
@@ -310,9 +327,12 @@ function createPluginTerminalHostOwner(params: CreatePluginTerminalHostServicePa
         unsetEnvKeys?: readonly string[];
         isolatedEnv: boolean;
         preparedLaunch?: TerminalLaunchSpec;
+        finalizeNativeLaunch?(): Promise<HostAuthorizedPluginExecLaunch>;
         beforeSpawn?(): void;
         signal?: AbortSignal;
     }>): Promise<TerminalHostHandle> => {
+        if (uncertainNativeLaunches.size > 0) throw new PluginTerminalHostError('PLUGIN_TERMINAL_HOST_HANDLE_NOT_ACTIVE',
+            'An uncertain native terminal launch requires exact retirement before another can start');
         const current = await params.resolveCurrentHost?.() ?? null;
         const resolution = await requireResolvedHost(params, current?.handle.kind ?? request.preference);
         const currentHandle = current?.handle ?? null;
@@ -327,25 +347,72 @@ function createPluginTerminalHostOwner(params: CreatePluginTerminalHostServicePa
         const lifecycle = current?.lifecycle ?? 'owned';
         if (currentHandle) await resolution.adapter.validateExistingHostAdmission?.(currentHandle);
         request.signal?.throwIfAborted();
-        request.beforeSpawn?.();
-        const currentHostProcess = currentHandle
-            ? await (params.launchCurrentHostProcess ?? launchBorrowedTerminalProcess)({
-                spawnArgv: request.spawnArgv, workingDirectory: request.workingDirectory, spawnEnv: request.spawnEnv,
-            }) : undefined;
-        const createdHandle = currentHandle ?? await resolution.adapter.createOrAttachHost({
-            sessionName: request.sessionName,
-            ...(request.label !== undefined ? { label: request.label } : {}),
-            workingDirectory: request.workingDirectory, spawnArgv: request.spawnArgv, spawnEnv: request.spawnEnv,
-            ...(request.unsetEnvKeys ? { unsetEnvKeys: request.unsetEnvKeys } : {}),
-            isolatedEnv: request.isolatedEnv,
-            ...(request.preparedLaunch ? { preparedLaunch: request.preparedLaunch } : {}),
-        });
+        let nativeLaunch: HostAuthorizedPluginExecLaunch | undefined;
+        let finalLaunchPromise: Promise<TerminalHostNativeLaunch> | undefined;
+        const prepareLaunch = request.finalizeNativeLaunch ? () => finalLaunchPromise ??= (async () => {
+            nativeLaunch = await request.finalizeNativeLaunch!();
+            try { request.signal?.throwIfAborted(); }
+            catch (error) {
+                await nativeLaunch.release();
+                nativeLaunch = undefined;
+                throw error;
+            }
+            return {
+                spawnArgv: [nativeLaunch.command, ...nativeLaunch.args],
+                workingDirectory: nativeLaunch.cwd ?? request.workingDirectory,
+                spawnEnv: withHostProcessOwnerEnvironment(nativeLaunch.env, nativeLaunch.processOwnerTag ?? readHostProcessOwnerTag()),
+                // The complete native export already applied removals. Neither a
+                // terminal server nor the runner's ambient env may revive them.
+                unsetEnvKeys: [], isolatedEnv: true,
+                ...(nativeLaunch.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+            };
+        })() : undefined;
+        let submitted = false;
+        let currentHostProcess: BorrowedTerminalProcess | undefined;
+        let createdHandle: TerminalHostHandle;
+        try {
+            const currentLaunch = currentHandle ? await prepareLaunch?.() : undefined;
+            request.signal?.throwIfAborted();
+            request.beforeSpawn?.();
+            submitted = true;
+            currentHostProcess = currentHandle
+                ? await (params.launchCurrentHostProcess ?? launchBorrowedTerminalProcess)({
+                    spawnArgv: request.spawnArgv, workingDirectory: request.workingDirectory, spawnEnv: request.spawnEnv,
+                    ...currentLaunch,
+                    ...(request.signal ? { signal: request.signal } : {}),
+                }) : undefined;
+            createdHandle = currentHandle ?? await resolution.adapter.createOrAttachHost({
+                sessionName: params.executionRunId && resolution.adapter.kind !== 'herdr'
+                    ? `${params.executionRunId}-${request.sessionName}` : request.sessionName,
+                ...(request.label !== undefined ? { label: params.executionRunId ? `${params.executionRunId}-${request.label}` : request.label } : {}),
+                workingDirectory: request.workingDirectory, spawnArgv: request.spawnArgv, spawnEnv: request.spawnEnv,
+                ...(request.unsetEnvKeys ? { unsetEnvKeys: request.unsetEnvKeys } : {}),
+                isolatedEnv: request.isolatedEnv,
+                ...(request.preparedLaunch ? { preparedLaunch: request.preparedLaunch } : {}),
+                ...(prepareLaunch ? { prepareLaunch } : {}),
+            });
+        } catch (error) {
+            if (nativeLaunch) {
+                if (!submitted || resolveTerminalHostCreationFailure(error).creationDisposition !== 'created_or_uncertain') {
+                    await nativeLaunch.release();
+                } else uncertainNativeLaunches.add(nativeLaunch);
+            }
+            throw error;
+        }
+        // The adapter's cold callback is the disposition evidence. Warm reuse
+        // keeps the incumbent handle and its final-launch release custody.
+        if (prepareLaunch && !finalLaunchPromise && !currentHostProcess) {
+            const incumbent = [...activeHosts.values()].find(active => active.adapter === resolution.adapter
+                && active.handle.sessionName === createdHandle.sessionName);
+            if (incumbent) return incumbent.handle;
+        }
         const currentHostState: ActiveTerminalHost['currentHostState'] = currentHostProcess
             ? { exited: false, listeners: new Set() } : undefined;
         const active = {
             adapter: resolution.adapter, handle: createdHandle, lifecycle,
             ...(currentHostProcess ? { currentHostProcess, currentHostState } : {}),
             ...(request.preparedLaunch ? { launch: request.preparedLaunch } : {}),
+            ...(nativeLaunch ? { releaseNativeLaunch: nativeLaunch.release } : {}),
             rollbackCreation: async () => {
                 if (currentHostProcess) await currentHostProcess.terminate();
                 else await resolution.adapter.dispose(createdHandle);
@@ -369,12 +436,16 @@ function createPluginTerminalHostOwner(params: CreatePluginTerminalHostServicePa
             throw error;
         }
         if (currentHostProcess && currentHostState) {
+            const installedAgentIsDirectChild = request.providerExitOwnership === 'direct'
+                && (!nativeLaunch || (nativeLaunch.command === request.spawnArgv[0]
+                    && nativeLaunch.args.length === request.spawnArgv.length - 1
+                    && nativeLaunch.args.every((argument, index) => argument === request.spawnArgv[index + 1])));
             const notifyExit = (result: TerminalHostExit) => {
                 // The launcher reports its immediate child's exit. A shell shim's
                 // closure does not prove that the selected Agent process stopped.
                 const qualifiedResult: TerminalHostExit = {
                     code: result.code, signal: result.signal,
-                    ...(result.nativeExited === true && request.providerExitOwnership === 'direct'
+                    ...(result.nativeExited === true && installedAgentIsDirectChild
                         ? { nativeExited: true as const } : {}),
                 };
                 currentHostState.exited = true;
@@ -428,12 +499,17 @@ function createPluginTerminalHostOwner(params: CreatePluginTerminalHostServicePa
                 request.launch.env,
                 request.launch.unsetEnvKeys,
             );
-            const transform =
-                AGENT_CHILD_LAUNCH_ENVIRONMENT_TRANSFORMERS.get(service);
+            const binding = AGENT_CHILD_LAUNCH_BINDINGS.get(service);
             const spawnArgv = [launch.command, ...launch.args, ...(request.launch.args ?? [])];
-            const spawnEnv = transform ? transform(mergedSpawnEnvironment) : mergedSpawnEnvironment;
+            const spawnEnv = binding ? binding.transform(mergedSpawnEnvironment) : mergedSpawnEnvironment;
             return await createHost({ ...request, spawnArgv, spawnEnv,
                 providerExitOwnership: launch.providerExitOwnership,
+                ...(binding?.exec ? {
+                    finalizeNativeLaunch: () => authorizeResolvedAgentNativeExecLaunchForHost(binding.exec!, {
+                        command: launch.command, args: spawnArgv.slice(1), cwd: request.workingDirectory, env: spawnEnv,
+                    }, binding.signal, binding.nativeLaunch),
+                    ...(binding.signal ? { signal: binding.signal } : {}),
+                } : {}),
                 ...(request.launch.unsetEnvKeys ? { unsetEnvKeys: request.launch.unsetEnvKeys } : {}) });
         },
         async injectUserPrompt(
@@ -507,6 +583,7 @@ function createPluginTerminalHostOwner(params: CreatePluginTerminalHostServicePa
                 throw error;
             }
             await active.launch?.discard();
+            await active.releaseNativeLaunch?.();
             activeHosts.delete(handle);
             if (active.launch === retainedLaunch) retainedLaunch = null;
         },
@@ -544,6 +621,8 @@ function createPluginTerminalHostOwner(params: CreatePluginTerminalHostServicePa
         dispose: service.dispose,
         async disposePending() {
             for (const handle of activeHosts.keys()) await service.dispose(handle, { kind: 'destroy_owned_host', reason: 'session_closed' });
+            if (uncertainNativeLaunches.size > 0) throw new PluginTerminalHostError('PLUGIN_TERMINAL_HOST_HANDLE_NOT_ACTIVE',
+                'An uncertain native terminal launch still requires exact physical retirement before launch resources can be released');
             if (retainedLaunch) throw new PluginTerminalHostError('PLUGIN_TERMINAL_HOST_HANDLE_NOT_ACTIVE',
                 'An uncertain terminal launch still requires exact physical retirement before private inputs can be removed');
         },
@@ -556,7 +635,7 @@ async function resolveDefaultTerminalHost(
 ): Promise<TerminalHostResolution> {
     const platform = params.platform ?? process.platform;
     const promptSubmitVerification = await params.resolvePromptSubmitVerification?.() ?? null;
-    const sessionId = params.readSessionId?.()?.trim() ?? '';
+    const sessionId = params.executionRunId ? '' : params.readSessionId?.()?.trim() ?? '';
     const herdrContext = preference === 'herdr'
         ? await resolveHerdrTerminalContext({ happyHomeDir: params.happyHomeDir, existingSessionId: sessionId,
             sessionName: params.herdrRuntime?.herdrSessionName ?? 'default', socketPath: params.herdrRuntime?.herdrSocketPath })
@@ -608,12 +687,14 @@ export function createDefaultPreparedTerminalHostOwner(
 
 function createDefaultTerminalHostOwner(params: CreateDefaultPluginTerminalHostServiceParams) {
     return createPluginTerminalHostOwner({
+        ...(params.executionRunId ? { executionRunId: params.executionRunId } : {}),
         hasCapability: params.hasCapability,
         resolveTerminalHost: (preference) => resolveDefaultTerminalHost(params, preference),
         resolveAgentCliLaunch: (launch) => requireAgentCliLaunchSpec(launch.agentId as CatalogAgentLookupId, {
             processEnv: buildProviderCliProcessEnv(launch),
         }),
         resolveCurrentHost: async () => {
+            if (params.executionRunId) return null;
             const metadata = params.currentTerminalMetadata;
             const handle = metadata?.terminal
                 ? buildActiveTerminalHostHandleFromMetadata(metadata.terminal)
@@ -629,6 +710,7 @@ function createDefaultTerminalHostOwner(params: CreateDefaultPluginTerminalHostS
             };
         },
         resolveExistingHostForAdoption: async () => {
+            if (params.executionRunId) return null;
             // A foreground launch in a user's current terminal takes the existing
             // borrowing path, never historical owned-host adoption.
             if (params.currentTerminalMetadata?.terminal
@@ -669,6 +751,7 @@ function createDefaultTerminalHostOwner(params: CreateDefaultPluginTerminalHostS
             return { handle: attachment.handle, adapter: resolution.adapter, lifecycle: 'owned' };
         },
         onHostCreated: async (handle, lifecycle) => {
+            if (params.executionRunId) return;
             const sessionId = params.readSessionId?.()?.trim() ?? '';
             if (!sessionId) return;
             const attachmentInfo = await writeTerminalHostAttachmentInfo({
@@ -680,6 +763,11 @@ function createDefaultTerminalHostOwner(params: CreateDefaultPluginTerminalHostS
             return attachmentInfo.handle;
         },
         disposeHost: async ({ handle, adapter, intent, lifecycle }) => {
+            if (params.executionRunId) {
+                // Invocation hosts have no retained Session attachment to recover.
+                await adapter.dispose(handle);
+                return;
+            }
             const sessionId = params.readSessionId?.()?.trim() ?? '';
             const attachmentId = handle.attachmentId;
             const mustDestroyExactHost = intent.kind === 'destroy_owned_host';

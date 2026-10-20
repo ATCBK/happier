@@ -25,7 +25,7 @@ export function useSessionWorkMap(params: Readonly<{
     const { sessionId, projection, active = true } = params;
     const openers = useSessionWorkOpeners(params);
     const map = React.useMemo(() => active && projection
-        ? projectSessionWorkMap({ leadSessionId: sessionId, leadTitle, leadAgentId, projection })
+        ? projectSessionWorkMap({ managerSessionId: sessionId, leadTitle, leadAgentId, projection })
         : null, [active, leadAgentId, leadTitle, projection, sessionId]);
     return { map, ...openers };
 }

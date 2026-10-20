@@ -73,10 +73,15 @@ describe('Provider Detail addressed Account custody', () => {
         await waitForHomeGovernance(() => expect(peerCatalog.getCurrent()).toMatchObject({ status: 'ready', revision: 1 }));
         await account.selectMachine(change === 'Home selection' ? account.serverId : peerServerId, 'missing-draft-machine');
         const { ProviderConnectionDetailScreen } = await import('./ProviderConnectionDetailScreen');
+        const { ProviderConnectionModelsScreen } = await import('./models/ProviderConnectionModelsScreen');
         const screen = await renderScreen(<NavigationBoundary>
-            <ProviderConnectionDetailScreen connectionId="pc_colliding" startAddingModels />
+            <ProviderConnectionDetailScreen connectionId="pc_colliding" />
         </NavigationBoundary>);
-        const field = (id: string) => screen.findAllByTestId(id).find(node => typeof node.props.onChangeText === 'function');
+        const modelsScreen = await renderScreen(<NavigationBoundary>
+            <ProviderConnectionModelsScreen connectionId="pc_colliding" startAdding />
+        </NavigationBoundary>);
+        const field = (id: string) => [screen, modelsScreen].flatMap(view => view.findAllByTestId(id))
+            .find(node => typeof node.props.onChangeText === 'function');
         await waitForHomeGovernance(() => expect(field('provider-manual-model-ids')).toBeDefined());
         await React.act(async () => {
             field('provider-connection-name')!.props.onChangeText('Private draft name');

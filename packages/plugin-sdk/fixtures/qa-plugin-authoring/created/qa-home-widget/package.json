@@ -1,0 +1,43 @@
+{
+  "name": "@happier-qa/created-home-widget",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "QA-only external author fixture for a Home-placeable widget and companion page.",
+  "happier": {
+    "manifest": ".happier-plugin/plugin.json"
+  },
+  "keywords": [
+    "happier-plugin",
+    "qa-only"
+  ],
+  "files": [
+    ".agents/skills/happier-plugin-authoring",
+    "dist"
+  ],
+  "exports": {
+    "./happier-plugin-ui/summary-native": "./src/ui/summary-native.tsx",
+    "./happier-plugin-ui/overview-native": "./src/ui/overview-native.tsx"
+  },
+  "scripts": {
+    "build": "hdev plugins dev build .",
+    "typecheck": "hdev plugins dev typecheck .",
+    "test": "hdev plugins test .",
+    "pack:plugin": "hdev plugins pack .",
+    "build:ui": "happier-plugin-build-ui --project-root ."
+  },
+  "dependencies": {
+    "@happier-dev/plugin-sdk": "0.0.0",
+    "@happier-dev/plugin-ui": "0.0.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "react-native": "0.83.5",
+    "react-native-web": "0.21.2"
+  },
+  "devDependencies": {
+    "@types/node": "25.0.10",
+    "@typescript/native": "npm:typescript@7.0.2",
+    "typescript": "5.9.3",
+    "@types/react": "19.2.0"
+  },
+  "private": true
+}

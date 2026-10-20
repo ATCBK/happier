@@ -1,9 +1,25 @@
 import Fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
-import { deleteAutomationDefinition } from './automations';
+import { deleteAutomationDefinition, runAutomationNowReceipt } from './automations';
+import { normalizeWorkflowActionThrownError } from '@happier-dev/protocol/actions/executor/workflowAccountActions';
 import { runWithServerHttpBaseUrl } from './client/serverHttpBaseUrl';
 
 describe('Automation HTTP transport', () => {
+  it('retains an unresolved receipt after a real HTTP handler admits an occurrence then fails its response', async () => {
+    const server = Fastify();
+    const admitted = new Set<string>();
+    server.post('/v3/automations/:id/run-now', async request => {
+      admitted.add(String(request.headers['idempotency-key']));
+      throw new Error('receipt projection failed');
+    });
+    const address = await server.listen({ host: '127.0.0.1', port: 0 });
+    try {
+      const result = await runWithServerHttpBaseUrl(address, () => runAutomationNowReceipt({ token: 'test-token',
+        automationId: 'trigger-set', idempotencyKey: 'same-occurrence' })).catch(normalizeWorkflowActionThrownError);
+      expect(result).toMatchObject({ ok: false, errorCode: 'workflow_outcome_unresolved' });
+      expect([...admitted]).toEqual(['same-occurrence']);
+    } finally { await server.close(); }
+  });
   it('deletes through a real JSON-parsing HTTP boundary without an empty JSON body', async () => {
     const server = Fastify();
     let deleted = false;

@@ -6,6 +6,7 @@ import { SignedDirectRouteGrantV2Schema, type SignedDirectRouteGrantV2 } from '@
 import { createEphemeralPeerRouteProofHandleV2 } from '@happier-dev/protocol/machines/peer/mediation/ephemeralPeerRouteProofV2';
 import type { PeerMachineRpcDirectFallbackReasonCodeV1 } from '@happier-dev/protocol/machines/peer/mediation/rpc/directV1';
 import { markRpcRequestDisposition } from '@happier-dev/sync-client';
+import { RPC_ERROR_CODES, RpcError } from '@happier-dev/protocol/rpcErrors';
 
 import { TokenStorage, type AuthCredentials } from '@/auth/storage/tokenStorage';
 import { getRandomBytes } from '@/platform/cryptoRandom';
@@ -37,6 +38,33 @@ type TargetServer = Readonly<{
 type OperationResult<T> =
     | Readonly<{ ok: true; value: T }>
     | Readonly<{ ok: false; reasonCode: string }>;
+
+type DirectJsonResponse = Readonly<{
+    ok: boolean;
+    status: number;
+    contentType: string | null;
+    bodyWasJson: boolean;
+    body: unknown;
+}>;
+
+function createDirectResponseError(
+    response: DirectJsonResponse,
+    schemaIssues: ReadonlyArray<Readonly<{ code: string; path: readonly PropertyKey[] }>> = [],
+) {
+    // Keep only structural diagnostics: schema messages and response data can
+    // contain private method results, credentials or gateway body excerpts.
+    const diagnostics = {
+        httpStatus: response.status,
+        contentType: response.contentType,
+        bodyWasJson: response.bodyWasJson,
+        schemaIssues: schemaIssues.map(issue => ({ code: issue.code, path: issue.path })),
+    };
+    const reason = !response.ok ? 'Machine RPC direct HTTP response failed'
+        : !response.bodyWasJson ? 'Machine RPC direct response is not JSON'
+            : 'Machine RPC direct response is invalid';
+    return Object.assign(new RpcError(`${reason}: ${JSON.stringify(diagnostics)}`,
+        response.ok ? 'MACHINE_RPC_INVALID_RESPONSE' : RPC_ERROR_CODES.OUTCOME_UNKNOWN), diagnostics);
+}
 
 function normalizeId(raw: unknown): string {
     return String(raw ?? '').trim();
@@ -91,7 +119,7 @@ async function fetchJson(params: Readonly<{
     signal?: AbortSignal;
     onDispatched?: () => void;
     onResponse?: () => void;
-}>): Promise<Readonly<{ ok: boolean; status: number; body: unknown }>> {
+}>): Promise<DirectJsonResponse> {
     const timeoutMs = typeof params.timeoutMs === 'number' && params.timeoutMs > 0
         ? params.timeoutMs
         : MACHINE_RPC_DIRECT_FETCH_TIMEOUT_MS;
@@ -114,10 +142,27 @@ async function fetchJson(params: Readonly<{
         params.onDispatched?.();
         const response = await pending;
         params.onResponse?.();
+        const contentType = response.headers.get('content-type');
+        let body: unknown = null;
+        let bodyWasJson = false;
+        try {
+            body = await response.json();
+            bodyWasJson = true;
+        } catch (error) {
+            // SyntaxError means JSON decoding failed. A lost/aborted body stream
+            // is still a transport failure; preserve its original type and code.
+            if (!(error instanceof SyntaxError)) {
+                throw error instanceof Error ? Object.assign(error, {
+                    httpStatus: response.status, contentType, bodyWasJson: false,
+                }) : error;
+            }
+        }
         return {
             ok: response.ok,
             status: response.status,
-            body: await response.json().catch(() => null),
+            contentType,
+            bodyWasJson,
+            body,
         };
     } finally {
         if (timeoutId) clearTimeout(timeoutId);
@@ -280,6 +325,23 @@ export async function resolveProductionMachineRpcDirectRoute(input: Readonly<{
         return fallback('topology_unavailable');
     }
 
+    // Prove the advertised endpoint is reachable before asking Home for a
+    // grant. A remote browser's loopback may be unavailable; grant latency for
+    // that unusable route must not consume the relay's entire setup budget.
+    // This existing harmless probe also distinguishes an unsent request from
+    // a lost POST reply, which browsers expose as the same network TypeError.
+    const readinessTimeoutMs = input.resolveRemainingTimeoutMs?.() ?? input.timeoutMs;
+    if (readinessTimeoutMs !== undefined && readinessTimeoutMs <= 0) return fallback('topology_unavailable');
+    try {
+        await fetchJson({ url: resolveDirectRpcUrl(endpoint.url), init: { method: 'OPTIONS' },
+            timeoutMs: readinessTimeoutMs, signal: input.signal });
+    } catch (error) {
+        if (input.signal?.aborted) throw error;
+        recordMachineRequestFailed(routeScope);
+        return fallback('topology_unavailable');
+    }
+    recordMachineRequestSucceeded(routeScope);
+
     {
         const proofHandle = createEphemeralPeerRouteProofHandleV2({ randomBytes: getRandomBytes });
         try {
@@ -295,20 +357,6 @@ export async function resolveProductionMachineRpcDirectRoute(input: Readonly<{
                 timeoutMs: grantTimeoutMs,
             });
             if (!grant.ok) return fallback(grant.reasonCode);
-            // Browsers expose the same network TypeError for a refused connection
-            // and a lost POST reply. Test the existing harmless OPTIONS ingress
-            // before issuing the RPC, so only a proven unsent call may use relay.
-            const readinessTimeoutMs = input.resolveRemainingTimeoutMs?.() ?? input.timeoutMs;
-            if (readinessTimeoutMs !== undefined && readinessTimeoutMs <= 0) return fallback('topology_unavailable');
-            try {
-                await fetchJson({ url: resolveDirectRpcUrl(endpoint.url), init: { method: 'OPTIONS' },
-                    timeoutMs: readinessTimeoutMs, signal: input.signal });
-            } catch (error) {
-                if (input.signal?.aborted) throw error;
-                recordMachineRequestFailed(routeScope);
-                return fallback('topology_unavailable');
-            }
-            recordMachineRequestSucceeded(routeScope);
             const proof = proofHandle.sign(grant.value);
             return {
                 kind: 'selected',
@@ -354,11 +402,11 @@ export async function postProductionMachineRpcDirect(input: Readonly<{
                 body: JSON.stringify(input.request),
             },
         });
-        if (!response.ok) {
-            throw new Error('Machine RPC direct HTTP response failed');
+        if (!response.ok || !response.bodyWasJson) {
+            throw createDirectResponseError(response);
         }
         const parsed = PeerMachineRpcDirectResponseV2Schema.safeParse(response.body);
-        if (!parsed.success) throw new Error('Machine RPC direct response is invalid');
+        if (!parsed.success) throw createDirectResponseError(response, parsed.error.issues);
         return parsed.data;
     } catch (error) {
         // HTTP loss/status/decoding failure is not a daemon refusal. Once fetch

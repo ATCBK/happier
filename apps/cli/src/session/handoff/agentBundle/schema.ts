@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 // Internal (CLI-only) contract for the agent bundle file transferred during session handoff.
 // This is intentionally not part of the shared protocol surface.
@@ -23,14 +23,9 @@ function normalizeLegacyAgentBundleIdentity(value: unknown): unknown {
   return { ...rest, agentId: agentId ?? providerId };
 }
 
-export const SessionHandoffAgentBundleSchema = z.preprocess(
-  normalizeLegacyAgentBundleIdentity,
-  z
-    .object({
-      agentId: z.string().min(1),
-    })
-    .passthrough(),
-);
+export const SessionHandoffAgentBundleSchema = (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeLegacyAgentBundleIdentity), z.looseObject({
+      agentId: z.string().check(z.minLength(1)),
+    }));
 
 /**
  * Project the canonical Agent-owned bundle onto the strict predecessor archive wire shape.

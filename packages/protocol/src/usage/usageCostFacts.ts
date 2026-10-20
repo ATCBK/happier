@@ -2,6 +2,7 @@ import type { UsageAnalyticsContribution, UsageAnalyticsCostFactKind, UsageAnaly
 import { reprojectUsageLeaders } from './usageLeaderProjection.js';
 import { aggregateUsageContributionCosts, resolveUsageContributionCosts, usageCostAggregationBasis, type AggregatedUsageCost } from './usageAggregation.js';
 import { canonicalUsageModelPriceId } from './usageModelPriceSchemas.js';
+import type { UsageModelPriceCatalog, UsageModelPriceOverridesV1 } from './usageModelPriceCatalog.js';
 
 export type UsageCostMode = NonNullable<UsageAnalyticsQueryRequest['costMode']> | 'auto';
 export interface UsageCostBasis {
@@ -40,6 +41,33 @@ export type UsagePageCostProjection = Readonly<{
   accounting: UsageAnalyticsQueryResponse;
 }>;
 
+// In-process provenance of a completed projection, not serialized money or a
+// second cache. A copied response with a different population must recompute.
+export const usagePageCostProjectionBasis = Symbol('usagePageCostProjectionBasis');
+export type UsagePageCostProjectionBasis = {
+  readonly response: UsageAnalyticsQueryResponse;
+  readonly mode: UsageCostMode;
+  readonly catalog: UsageModelPriceCatalog;
+  readonly overrides: UsageModelPriceOverridesV1;
+  pageInput?: UsageAnalyticsQueryResponse;
+  pageProjection?: UsagePageCostProjection;
+};
+
+export function readUsagePageCostProjectionBasis(response: UsageAnalyticsQueryResponse): UsagePageCostProjectionBasis | undefined {
+  const completed = (response.totals.cost as UsageObservationCost & {
+    [usagePageCostProjectionBasis]?: UsagePageCostProjectionBasis;
+  })[usagePageCostProjectionBasis];
+  if (!completed) return undefined;
+  const input = completed.response;
+  // The page's authorized source labels decorate coverage without changing
+  // any accounting/pricing input. Other changed members invalidate the work.
+  const fields = ['contributions', 'totals', 'series', 'breakdowns', 'leaders', 'modelTimeline', 'engineTimeline', 'insights', 'priceCatalog'] as const;
+  return fields.every(field => input[field] === response[field])
+    && input.coverage?.status === response.coverage?.status
+    && input.coverage?.reasons === response.coverage?.reasons
+    && input.coverage?.ranked === response.coverage?.ranked ? completed : undefined;
+}
+
 function selectionMode(selection: UsagePageCostSelection): UsageCostMode {
   return selection.mode ?? (selection.kind === 'invoice' || selection.kind === 'mixed' ? 'auto' : selection.kind);
 }
@@ -57,6 +85,13 @@ export function resolveUsageCostForSelection(cost: UsageObservationCost, selecti
   return resolveUsageCostBasisForSelection(cost, selection)?.amountUsd ?? null;
 }
 
+/** Selection remains named even when an unpriced row makes the total unavailable. */
+export function resolveUsagePageCostSelection(costs: readonly UsageObservationCost[], mode: UsageCostMode): UsagePageCostSelection | null {
+  const facts = costs.flatMap(cost => { const fact = resolveUsageCostBasis(cost, mode); return fact ? [fact] : []; });
+  const first = facts[0];
+  return first ? { kind: facts.every(fact => fact.kind === first.kind) ? first.kind : 'mixed', currency: first.currency, mode } : null;
+}
+
 /**
  * Best available resolves reported -> API-priced -> estimated for every contribution and keeps
  * a mixed aggregate labelled. Explicit modes and unknown money remain unavailable. Raw facts
@@ -65,6 +100,25 @@ export function resolveUsageCostForSelection(cost: UsageObservationCost, selecti
 export function projectUsagePageCost(response: UsageAnalyticsQueryResponse, mode: UsageCostMode,
   selected?: UsagePageCostSelection | null): UsagePageCostProjection {
   const rows = response.contributions;
+  const completed = readUsagePageCostProjectionBasis(response);
+  const retain = (projection: UsagePageCostProjection) => {
+    if (selected === undefined && completed?.mode === mode) {
+      completed.pageInput = response;
+      completed.pageProjection = projection;
+    }
+    return projection;
+  };
+  if (selected === undefined && completed?.mode === mode && completed.pageProjection) {
+    const previous = completed.pageProjection;
+    if (completed.pageInput === response) return previous;
+    const projected = previous.accounting;
+    return retain({ ...previous, accounting: { ...response, totals: projected.totals,
+      series: projected.series, breakdowns: projected.breakdowns, leaders: projected.leaders,
+      modelTimeline: projected.modelTimeline, engineTimeline: projected.engineTimeline,
+      coverage: projected.coverage && { ...response.coverage!, status: projected.coverage.status,
+        reasons: projected.coverage.reasons, ranked: projected.coverage.ranked },
+    } });
+  }
   // Raw aggregate facts cannot reconstruct per-row selection after JSON transport.
   // Responses without contribution detail already carry the selected presentation.
   const presentation = response.costPresentation;
@@ -78,15 +132,11 @@ export function projectUsagePageCost(response: UsageAnalyticsQueryResponse, mode
   }
   const costs = (rows ? resolveUsageContributionCosts(rows, mode) : [response.totals.cost])
     .filter(cost => !(cost as AggregatedUsageCost)[usageCostAggregationBasis]?.covered);
-  const facts = costs.flatMap(cost => { const fact = resolveUsageCostBasis(cost, mode); return fact ? [fact] : []; });
-  const first = facts[0];
-  const selection: UsagePageCostSelection | null = selected === undefined ? first ? {
-    kind: facts.every(fact => fact.kind === first.kind) ? first.kind : 'mixed', currency: first.currency, mode,
-  } : null : selected;
+  const selection = selected === undefined ? resolveUsagePageCostSelection(costs, mode) : selected;
   const amounts = costs.map(cost => resolveUsageCostForSelection(cost, selection));
   const amountUsd = selection && amounts.length > 0 && amounts.every(amount => amount !== null)
     ? amounts.reduce<number>((sum, amount) => sum + amount!, 0) : null;
-  if (!rows || !selection) return { selection, amountUsd, accounting: response };
+  if (!rows || !selection) return retain({ selection, amountUsd, accounting: response });
   const selectedMode = selectionMode(selection);
   const projectCost = (raw: UsageObservationCost, contributions: readonly UsageAnalyticsContribution[]): UsageObservationCost => {
     const selectedCosts = resolveUsageContributionCosts(contributions, selectedMode)
@@ -101,11 +151,10 @@ export function projectUsagePageCost(response: UsageAnalyticsQueryResponse, mode
     return aggregateUsageContributionCosts(contributions, selectedMode);
   };
   const ranking = reprojectUsageLeaders(response, rows, selectedMode, projectCost);
-  return { selection, amountUsd, accounting: { ...response, ...ranking,
+  const projection = { selection, amountUsd, accounting: { ...response, ...ranking,
     totals: { ...response.totals, cost: projectCost(response.totals.cost, rows) },
-    series: response.series?.map(bucket => ({ ...bucket, cost: projectCost(bucket.cost,
-      rows.filter(row => row.observedAtMs >= bucket.bucketStartMs && row.observedAtMs < bucket.bucketEndMs)) })),
   } };
+  return retain(projection);
 }
 
 /** All observed monetary kinds remain separate, including simultaneous facts. */

@@ -81,7 +81,7 @@ describe('experimental model approval on its original composer', () => {
             href: `/inbox/approvals/${artifactId}?serverId=${encodeURIComponent(serverId)}` });
         expect(commit).not.toHaveBeenCalled();
         expect(row.writes).toBe(0);
-        await expect(decideApprovalAsInbox(serverId, artifactId, 'approve')).resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
+        await expect(decideApprovalAsInbox(serverId, artifactId, 'approve')).resolves.toMatchObject({ ok: true, result: { status: 'approved' } });
         await waitForHomeGovernance(() => expect(settled).toBe(true));
         expect(commit).toHaveBeenCalledOnce();
         expect(hook.getCurrent().pendingModelName).toBeNull();
@@ -106,7 +106,8 @@ describe('experimental model approval on its original composer', () => {
         const reader = await renderHook(() => useApprovalArtifact({ artifactId, serverId }));
         await waitForHomeGovernance(() => expect(reader.getCurrent().artifact?.body).toBeTruthy());
         const artifact = reader.getCurrent().artifact!;
-        const parsed = approvalArtifactBodyMatchesHeaderV1(artifact.header ?? {}, artifact.body!);
+        if (typeof artifact.body !== 'string') throw new Error('Expected the decoded approval body');
+        const parsed = approvalArtifactBodyMatchesHeaderV1(artifact.header ?? {}, artifact.body);
         expect(parsed?.family).toBe('built_in');
         if (parsed?.family !== 'built_in') throw new Error('Expected built-in approval');
         expect(isApprovalReplayRouteUnavailable(parsed.request)).toBe(false);

@@ -1,6 +1,4 @@
-import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unexpectedProjectNativeAdapterResolution";
-import { unexpectedCaptureSourceResolution } from "@/plugins/testkit/unexpectedCaptureSourceResolution";
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import axios from 'axios';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -24,8 +22,9 @@ import { SPAWN_SESSION_ERROR_CODES } from '@/session/shared/spawnSessionContract
 import { prepareDaemonSpawnChildEnvironment } from './prepareDaemonSpawnChildEnvironment';
 import { commitDaemonLaunchSession } from './commitDaemonLaunchSession';
 import { createAccountEncryptionCurrentnessFixture, createPlainSessionFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 
-function createPinnedSpawnAgentRegistry(): ResolvedExecutablePluginRuntimeRegistry {
+async function createPinnedSpawnAgentRegistry(): Promise<ResolvedExecutablePluginRuntimeRegistry> {
   const manifests = [CODEX_MANIFEST, ANTIGRAVITY_MANIFEST].map((manifest) => PluginManifestV2Schema.parse(manifest));
   const agents = projectBuiltInAgents({
     manifestAgents: manifests.flatMap((manifest) => manifest.contributes.agents.map((definition) => ({
@@ -59,17 +58,11 @@ function createPinnedSpawnAgentRegistry(): ResolvedExecutablePluginRuntimeRegist
       }),
     } };
   });
-  return {
-    claimReleaseLessDeclarations: async () => undefined,
-    contributes: createResolvedContributionRegistry({ agents, activationTargets: [] }),
-    hookHandlersByHookId: new Map(), agentRuntimesByAgentId: new Map(), scmHostingProvidersById: new Map(),
-    pluginDiagnosticsByPluginId: {}, activatedPluginIds: new Set<string>(),
-    resolveCaptureSource: unexpectedCaptureSourceResolution,
-    resolveProjectNativeAdapter: unexpectedProjectNativeAdapterResolution,
-    activateContributionsOnDemand: async () => [], resolvePromptAssetBlocks: async () => [],
-    createAgentInvocationServices: async () => { throw new Error('No plugin invocation in this spawn fixture'); },
-    retireConsumers: () => {}, dispose: async () => {},
-  } satisfies ResolvedExecutablePluginRuntimeRegistry;
+  const fixture = await createAdmittedPluginRuntimeFixture({ runtimeOptions: {
+    contributes: createResolvedContributionRegistry({ agents, activationTargets: [] }), pluginIds: [],
+  } });
+  onTestFinished(async () => await fixture.dispose());
+  return fixture.registry;
 }
 
 describe('daemon Agent preconditions', () => {
@@ -137,15 +130,18 @@ process.exit(auth.tokens.access_token === 'fixture-access' ? 0 : 1); } catch { p
           ? `@echo off\r\n"${process.execPath}" "${probe}" %*\r\n`
           : `#!/bin/sh\nexec ${runtime} ${script} "$@"\n`,
       });
-      const params: Parameters<typeof resolveSpawnChildEnvironment>[0] = {
+      const params = {
         happyHomeDir: fixture.happyHomeDir,
         pluginRuntimeRegistry: fixture.registry,
         options: { directory: home, backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' } },
         profileEnvironmentVariables: {}, daemonSpawnHooks: null,
         processEnv: { PATH: '', HOME: home, USERPROFILE: home, CODEX_HOME: join(home, 'signed-out'),
           HAPPIER_HOME_DIR: fixture.happyHomeDir, HAPPIER_CODEX_PATH: cli, HAPPIER_JS_RUNTIME_PATH: process.execPath },
-        connectedServiceAuth: { env: { CODEX_HOME: connectedHome }, cleanupOnFailure: null, cleanupOnExit: null },
+        connectedServiceAuth: { env: { CODEX_HOME: connectedHome }, cleanupOnFailure: null, cleanupOnExit: null,
+          connectedServicesBindings: { v: 2, bindingsByServiceId: {} }, qualifiedPurposeBindingSnapshot: null },
         logDebug: () => {}, logInfo: () => {}, logWarn: () => {},
+      } satisfies Parameters<typeof resolveSpawnChildEnvironment>[0] & {
+        connectedServiceAuth: NonNullable<Parameters<typeof prepareDaemonSpawnChildEnvironment>[0]['connectedServiceAuth']>;
       };
       await mkdir(join(home, 'custodian-home'));
       await writeFile(join(home, 'custodian-home', 'auth.json'), JSON.stringify({
@@ -189,10 +185,11 @@ process.exit(auth.tokens.access_token === 'fixture-access' ? 0 : 1); } catch { p
         // launch and child-environment owners carry the requester identity.
         const committed = await commitDaemonLaunchSession({
           api: { getOrCreateSession: async input => {
-            createdSession = createPlainSessionFixture({ id: sessionId, metadata: input.metadata,
-              sessionCreationOutcome: { disposition: 'created', organizationPlacement: { folderId: null, tagIds: [] } },
-            });
-            return createdSession;
+            const session = { ...createPlainSessionFixture({ id: sessionId, metadata: createTestMetadata(input.metadata) }),
+              sessionCreationOutcome: { disposition: 'created' as const, organizationPlacement: { folderId: null, tagIds: [] } },
+            };
+            createdSession = session;
+            return session;
           } },
           credentials: requesterCredentials, directory: home, options: params.options, accountSettings: {},
         });
@@ -235,7 +232,7 @@ process.exit(auth.tokens.access_token === 'fixture-access' ? 0 : 1); } catch { p
     const providerDiagnosticRedactionLease = createProviderRedactionLease({ values: [] });
     try {
       const result = await prepareDaemonSpawnChildEnvironment({
-        pluginRuntimeRegistry: createPinnedSpawnAgentRegistry(),
+        pluginRuntimeRegistry: await createPinnedSpawnAgentRegistry(),
         options: { directory: home, backendTarget: { kind: 'backend', backendId: 'antigravity', sourceKind: 'built_in' } },
         effectiveModelSelection: undefined,
         terminal: undefined,
@@ -261,7 +258,7 @@ process.exit(auth.tokens.access_token === 'fixture-access' ? 0 : 1); } catch { p
     const home = await createTempDir('happier-spawn-preconditions-', tmpdir());
     try {
       const result = await resolveSpawnChildEnvironment({
-        pluginRuntimeRegistry: createPinnedSpawnAgentRegistry(),
+        pluginRuntimeRegistry: await createPinnedSpawnAgentRegistry(),
         options: { directory: home, backendTarget: { kind: 'backend', backendId: 'antigravity', sourceKind: 'built_in' } },
         profileEnvironmentVariables: {},
         // An external plugin's prerequisite callback is the boundary; CLI resolution stays real.
@@ -282,7 +279,7 @@ process.exit(auth.tokens.access_token === 'fixture-access' ? 0 : 1); } catch { p
     let acquired = false;
     try {
       const result = await resolveSpawnChildEnvironment({
-        pluginRuntimeRegistry: createPinnedSpawnAgentRegistry(),
+        pluginRuntimeRegistry: await createPinnedSpawnAgentRegistry(),
         options: { directory: home, backendTarget: { kind: 'backend', backendId: 'antigravity', sourceKind: 'built_in' } },
         profileEnvironmentVariables: {},
         daemonSpawnHooks: { resolveRuntimePrerequisites: async () => { acquired = true; return { ok: true }; } },
@@ -308,7 +305,7 @@ process.exit(auth.tokens.access_token === 'fixture-access' ? 0 : 1); } catch { p
       });
       const cleanup = async () => {};
       const result = await resolveSpawnChildEnvironment({
-        pluginRuntimeRegistry: createPinnedSpawnAgentRegistry(),
+        pluginRuntimeRegistry: await createPinnedSpawnAgentRegistry(),
         options: { directory: home, backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' } },
         profileEnvironmentVariables: {},
         daemonSpawnHooks: { resolveRuntimePrerequisites: async () => ({ ok: true }) },
@@ -331,7 +328,7 @@ process.exit(auth.tokens.access_token === 'fixture-access' ? 0 : 1); } catch { p
         contents: process.platform === 'win32' ? '@echo off\r\nexit /b 1\r\n' : '#!/bin/sh\nexit 1\n',
       });
       const result = await resolveSpawnChildEnvironment({
-        pluginRuntimeRegistry: createPinnedSpawnAgentRegistry(),
+        pluginRuntimeRegistry: await createPinnedSpawnAgentRegistry(),
         options: { directory: home, backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' } },
         profileEnvironmentVariables: source === 'profile' ? { CODEX_API_KEY: 'fixture-key' } : {},
         daemonSpawnHooks: { resolveRuntimePrerequisites: async () => ({ ok: true }) },
@@ -360,7 +357,7 @@ process.exit(auth.tokens.access_token === 'fixture-access' ? 0 : 1); } catch { p
       });
       const connectionId = ProviderConnectionIdSchema.parse('pc_fixture');
       const result = await resolveSpawnChildEnvironment({
-        pluginRuntimeRegistry: createPinnedSpawnAgentRegistry(),
+        pluginRuntimeRegistry: await createPinnedSpawnAgentRegistry(),
         options: { directory: home, backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' } },
         profileEnvironmentVariables: {}, daemonSpawnHooks: null,
         processEnv: { PATH: '', HOME: home, USERPROFILE: home, CODEX_HOME: home, HAPPIER_HOME_DIR: home, HAPPIER_CODEX_PATH: cli, HAPPIER_JS_RUNTIME_PATH: process.execPath },

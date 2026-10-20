@@ -6,6 +6,7 @@ import { expect, it, vi } from 'vitest';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
 import { createPluginWidgetAreaHostPortV1 } from '@happier-dev/protocol/plugins/ui';
 import { createWidgetAreaActionPortV1, createWidgetSurfaceArtifactPortV1, createWidgetActionInputResolverV1 } from '@happier-dev/protocol/widgets';
+import { InputOptionSchema } from '@happier-dev/protocol/inputs';
 import { createPluginTestkit, createPluginUiTestkit, createSurfaceContextFixture } from '@happier-dev/plugin-sdk/testing';
 import type { RenderSurface } from '@happier-dev/plugin-sdk/ui';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
@@ -41,6 +42,9 @@ it('mounts the registered page area, changes followed context and reloads config
     const nativeWidget = await loadRenderer(widgetRenderer.artifact);
     const resource = plugin.registration('resources', 'count');
     if (!resource) throw new Error('Missing registered Resource');
+    const inputType = widgetAreasPlugin.manifest.contributes.inputTypes?.find(type => type.id === 'count-kind');
+    const optionsResource = plugin.registration('resources', 'count-kinds');
+    if (!inputType || !optionsResource) throw new Error('Missing declared count input type or options Resource');
     const scope = { serverId: 'home', accountId: 'viewer' };
     const boundary = createWorkBoardArtifactBoundary();
     const transport = boundary.forAccount(scope.accountId);
@@ -52,7 +56,18 @@ it('mounts the registered page area, changes followed context and reloads config
         readDescriptor: async () => widget,
         readContext: async request => request.context.widgetAreaContext?.values ?? {},
         readViewerValues: async () => ({ values: {} }),
-        validateValue: async () => ({ status: 'valid' }), resolveOptions: async () => [],
+        validateValue: async () => ({ status: 'valid' }),
+        // The installed declaration and Resource are the host lookup boundary;
+        // the resolver still validates their real schema and option values.
+        readInputType: async field => field.inputType && 'pluginId' in field.inputType
+          && field.inputType.pluginId === widgetAreasPlugin.manifest.id && field.inputType.localId === inputType.id
+          ? { identity: field.inputType, occurrenceId: 'widget-areas-count-kind', definition: inputType } : null,
+        resolveOptions: async () => {
+          const bytes = await optionsResource.read({ context: { kind: 'global' }, signal: new AbortController().signal });
+          const options: unknown = JSON.parse(typeof bytes === 'string' ? bytes : new TextDecoder().decode(bytes));
+          if (!Array.isArray(options)) throw new Error('Invalid count options Resource');
+          return options.map(option => InputOptionSchema.parse(option));
+        },
       }),
     } satisfies Pick<ActionExecutorDeps, 'widgetAccountScope' | 'widgetSurfaceActions' | 'widgetInputs'>;
     // Only external Artifact/descriptor ports are supplied; admission and semantic mutation stay real.
@@ -104,7 +119,8 @@ it('mounts the registered page area, changes followed context and reloads config
       expect(presented?.context).toEqual({ directory: '.', filter: 'files' });
       await pageMount.press(await pageMount.getByRole('button', { name: 'Use directory' }));
       expect(presented?.context).toEqual({ directory, filter: 'files' });
-      expect(await execute({ actionId: 'widgets.item.add', instance: instance('following') })).toMatchObject({ ok: true });
+      const following = await execute({ actionId: 'widgets.item.add', instance: instance('following') });
+      expect(following, JSON.stringify(following)).toMatchObject({ ok: true });
       expect(await execute({ actionId: 'widgets.item.add', instance: instance('pinned', true) })).toMatchObject({ ok: true });
       expect(await execute({ actionId: 'widgets.item.size.set', instanceId: 'following', size: 'full' })).toMatchObject({ ok: true });
       expect(await execute({ actionId: 'widgets.item.move', instanceId: 'pinned', toIndex: 0 })).toMatchObject({ ok: true });

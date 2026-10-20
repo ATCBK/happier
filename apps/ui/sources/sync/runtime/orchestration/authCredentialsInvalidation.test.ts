@@ -60,7 +60,7 @@ describe('authCredentialsInvalidation', () => {
 
     it('reports async subscriber failures instead of silently swallowing them', async () => {
         const error = new Error('listener-failed');
-        const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const consoleInfoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
         const unsubscribe = subscribeAuthCredentialsInvalidation(async () => {
             throw error;
         });
@@ -73,9 +73,7 @@ describe('authCredentialsInvalidation', () => {
             await new Promise<void>((resolve) => {
                 setTimeout(resolve, 0);
             });
-            expect(consoleErrorSpy.mock.calls.some(([value]) => {
-                return String(value).includes('[fireAndForget] authCredentialsInvalidation.listener');
-            })).toBe(true);
+            expect(consoleInfoSpy).toHaveBeenCalledWith('[fireAndForget] authCredentialsInvalidation.listener', error);
         } finally {
             unsubscribe();
         }

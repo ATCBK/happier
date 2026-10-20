@@ -3,6 +3,7 @@ import { z } from 'zod/mini';
 import { RuntimeActionIdV1Schema, type RuntimeActionIdV1 } from '../actionIds.js';
 import type { PreNormalizedActionSpec, PreNormalizedActionSurfaces } from '../actionSpecs.js';
 import { RPC_METHODS } from '../../rpc/methods.js';
+import { MOUNTED_BROWSER_DIAGNOSTICS_ACTION_IDS } from '../../browser/automation/reverseDispatchV1.js';
 import { RUNTIME_DANGER_ACTION_IDS } from '../danger.js';
 import { runtimeActionSideEffectClass } from '../safety.js';
 import { isRuntimeActionExecutorReal, resolveRuntimeActionSurfaces } from '../surfaces.js';
@@ -11,7 +12,7 @@ import {
   BROWSER_RUNTIME_ACTION_OUTPUT_SCHEMAS,
   BROWSER_RUNTIME_ACTION_SPEC_FAMILY,
 } from './browser.js';
-import { type RuntimeActionSpecFamily, type RuntimeActionSpecTextMap } from './common.js';
+import type { RuntimeActionSpecFamily, RuntimeActionSpecTextMap } from './common.js';
 import {
   COMPUTER_RUNTIME_ACTION_INPUT_SCHEMAS,
   COMPUTER_RUNTIME_ACTION_OUTPUT_SCHEMAS,
@@ -57,6 +58,9 @@ const RUNTIME_ACTION_TITLES = mergeRuntimeActionTextMaps((family) => family.titl
 const RUNTIME_ACTION_DESCRIPTIONS = mergeRuntimeActionTextMaps((family) => family.descriptions);
 const RUNTIME_ACTION_APPROVAL_POLICIES: NonNullable<RuntimeActionSpecFamily['approvalPolicies']> = Object.freeze(
   Object.assign({}, ...RUNTIME_ACTION_SPEC_FAMILIES.map((family: RuntimeActionSpecFamily) => family.approvalPolicies ?? {})),
+);
+const RUNTIME_ACTION_APPROVAL_TECHNICAL_INPUT_PATHS: NonNullable<RuntimeActionSpecFamily['approvalTechnicalInputPaths']> = Object.freeze(
+  Object.assign({}, ...RUNTIME_ACTION_SPEC_FAMILIES.map((family: RuntimeActionSpecFamily) => family.approvalTechnicalInputPaths ?? {})),
 );
 
 /**
@@ -132,7 +136,7 @@ function createRuntimeActionSpecFor<
   const controlRpcMethod = Object.hasOwn(LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS, actionId)
     ? LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS[actionId as keyof typeof LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS] : undefined;
   const controlKind = resolveLocalServiceActionKindForRuntimeActionId(actionId);
-  const requiresAnsweringClient = controlKind === 'copy_url' || controlKind === 'open_preview'
+  const requiresAnsweringClient = controlKind === 'copy_url'
     || actionId === 'localServices.launcher.openPreview' || actionId === 'localServices.publicPreview.copyUrl';
   const domainRpc = resolveLocalServiceDomainActionRpcBinding(actionId);
   const serviceCli = createLocalServiceActionCliProjection(actionId);
@@ -153,6 +157,17 @@ function createRuntimeActionSpecFor<
     sideEffectClass,
     outputSchema: params.outputSchema,
     inputSchema: params.inputSchema,
+    ...((MOUNTED_BROWSER_DIAGNOSTICS_ACTION_IDS as readonly string[]).includes(actionId) ? {
+      executionPlacements: ['client', 'machine'] as const,
+      executionPlacementForInput: (input: unknown) => typeof input === 'object' && input !== null
+        && 'tier' in input && input.tier === 'injectedPage' ? 'client' as const : 'machine' as const,
+    } : {}),
+    ...(actionId === 'browser.view.open' ? {
+      operation: { version: 1 as const, visibility: 'activity' as const, progress: 'reported' as const,
+        presentation: { onStart: 'current' as const } },
+    } : {}),
+    ...(RUNTIME_ACTION_APPROVAL_TECHNICAL_INPUT_PATHS[actionId] ? { approvalPresentation: {
+      summary: () => null, technicalInputPaths: RUNTIME_ACTION_APPROVAL_TECHNICAL_INPUT_PATHS[actionId] } } : {}),
     ...(actionId === 'computer.target.select' ? { approvalNarrowing: computerTargetSelectionNarrowing } : {}),
     ...(serviceCli ? { cli: serviceCli } : {}),
     ...(domainRpc ? { executionPlacement: 'machine' as const, bindings: { rpcMethod: domainRpc.rpcMethod,

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { restoreProcessEnv, snapshotProcessEnv } from '@/testkit/env/envSnapshot';
 import { createTempDirSync, removeTempDirSync } from '@/testkit/fs/tempDir';
+import { HAPPIER_REPLAY_MIN_SEED_CHARS } from '@happier-dev/protocol/sessions/replay-seed-budget';
 
 describe('configuration replay', () => {
   const envBackup = snapshotProcessEnv();
@@ -48,7 +49,7 @@ describe('configuration replay', () => {
     expect(configMod.configuration.replaySeedMaxChars).toBe(120_000);
   });
 
-  it.each([500, 300_000])('retains the explicit machine total %s beyond the old Replay bounds', async (budget) => {
+  it.each([HAPPIER_REPLAY_MIN_SEED_CHARS, 300_000])('retains a writable explicit machine total of %s', async (budget) => {
     const homeDir = createTempDirSync('happier-cli-config-');
     tempDirs.push(homeDir);
     process.env.HAPPIER_HOME_DIR = homeDir;
@@ -57,5 +58,16 @@ describe('configuration replay', () => {
     process.env.HAPPIER_REPLAY_MAX_SEED_CHARS = String(budget);
     configMod.reloadConfiguration();
     expect(configMod.configuration.replaySeedMaxChars).toBe(budget);
+  });
+
+  it('uses the default when the explicit total cannot fit the structural Replay frame', async () => {
+    const homeDir = createTempDirSync('happier-cli-config-');
+    tempDirs.push(homeDir);
+    process.env.HAPPIER_HOME_DIR = homeDir;
+    process.env.HAPPIER_REPLAY_MAX_SEED_CHARS = String(HAPPIER_REPLAY_MIN_SEED_CHARS - 1);
+
+    const configMod = await import('./configuration');
+    configMod.reloadConfiguration();
+    expect(configMod.configuration.replaySeedMaxChars).toBe(120_000);
   });
 });

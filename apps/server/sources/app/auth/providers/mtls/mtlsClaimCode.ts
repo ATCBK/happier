@@ -4,7 +4,7 @@ import { AccountEncryptionMigrateExternalAuthBindingDigestV1Schema, type Account
 import { PasswordCredentialMutationDigestV1Schema } from '@happier-dev/protocol/auth/passwordMutationChallenge';
 
 import { db } from "@/storage/db";
-import type { Tx } from "@/storage/inTx";
+import { inTx, type Tx } from "@/storage/inTx";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import { readAuthMtlsFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 
@@ -219,7 +219,7 @@ export async function createMtlsTeamHandoff(params: MtlsTeamHandoff & { ttlMs: n
 
 export async function beginMtlsTeamHandoff(params: { admissionReference: string; returnTo: string }): Promise<boolean> {
     const key = `${MTLS_CLAIM_CODE_PREFIX}${params.admissionReference.trim()}`;
-    return await db.$transaction(async (tx) => {
+    return await inTx(async (tx) => {
         const row = await tx.repeatKey.findUnique({ where: { key }, select: { value: true, expiresAt: true } });
         if (!row || row.expiresAt.getTime() <= Date.now()) return false;
         const parsed = (() => {

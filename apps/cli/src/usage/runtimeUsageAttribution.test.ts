@@ -83,7 +83,7 @@ describe('runtime usage attribution producer → host → ingest', () => {
         const bridge = createNativeAgentSessionOperations(session, 'usage-session', undefined, undefined, {
             provider: 'claude', publish: input => publisher.publish({ sessionId: 'usage-session', ...input }),
         }, undefined, undefined, {
-            context, cwd: '/private/repository', connectedAccounts: [], capabilities: { open: ['create'], delivery: ['newTurn'] },
+            context, cwd: '/private/repository', connectedAccounts: [], capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
             cancellation: { declared: false }, configuration: { declared: false }, manualCompaction: { declared: false },
         });
         const unsubscribe = bridge.subscribeRuntimeEvents(() => undefined);

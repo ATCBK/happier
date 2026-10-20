@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-const connectedServiceProfileIdSchema = z.string().min(1);
-const connectedServiceAuthGroupIdSchema = z.string().trim().min(1);
+const connectedServiceProfileIdSchema = z.string().check(z.minLength(1));
+const connectedServiceAuthGroupIdSchema = z.string().check(z.trim(), z.minLength(1));
 
 /**
  * Daemon access-token bridge schema for the OpenCode Claude broker plugin. Sibling of the Codex
@@ -23,7 +23,7 @@ export const ClaudeSubscriptionAuthTokensRefreshSelectionSchema = z.discriminate
     groupId: connectedServiceAuthGroupIdSchema,
     activeProfileId: connectedServiceProfileIdSchema,
     fallbackProfileId: connectedServiceProfileIdSchema,
-    generation: z.number().int().nonnegative(),
+    generation: z.number().check(z.int(), z.nonnegative()),
   }),
 ]);
 
@@ -31,9 +31,9 @@ export type ClaudeSubscriptionAuthTokensRefreshSelection =
   z.infer<typeof ClaudeSubscriptionAuthTokensRefreshSelectionSchema>;
 
 export const ClaudeSubscriptionAuthTokensRefreshResponseSchema = z.object({
-  accessToken: z.string().min(1),
-  anthropicAccountId: z.string().nullable(),
-  expiresAt: z.number().nullable(),
+  accessToken: z.string().check(z.minLength(1)),
+  anthropicAccountId: z.nullable(z.string()),
+  expiresAt: z.nullable(z.number()),
 });
 
 export type ClaudeSubscriptionAuthTokensRefreshResponse =

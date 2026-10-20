@@ -1211,8 +1211,12 @@ export function createManagedServiceProcessSupervisorHost(params: Readonly<{
             const collision = /\b(?:EADDRINUSE|WSAEADDRINUSE)\b|address already in use|Only one usage of each socket address/iu.test(stderr);
             const parsedPort = collision ? Number(/\bport\s*:\s*(\d+)\b/iu.exec(stderr)?.[1]
                 ?? /(?:listen|bind)[^\r\n]*:(\d+)\b/iu.exec(stderr)?.[1]) : NaN;
-            const port = Number.isSafeInteger(parsedPort) && parsedPort > 0 && parsedPort <= 65_535
-                ? parsedPort : declaredPort;
+            // A Unix socket or named pipe can fail before the declared HTTP bind.
+            // Its path/negative port contradicts attribution to a TCP listener.
+            const nonTcpBind = /\bport\s*:\s*-\d+\b|\b(?:listen|bind)[^\r\n]*(?:\s|['"])(?:\/|\\)[^\s'"]+|\baddress\s*:\s*['"]?(?:\/|\\)/iu.test(stderr);
+            const port = nonTcpBind ? undefined
+                : Number.isSafeInteger(parsedPort) && parsedPort > 0 && parsedPort <= 65_535
+                    ? parsedPort : declaredPort;
             let sameProject: boolean | undefined;
             if (port !== undefined && (collision || !result)) {
                 try {

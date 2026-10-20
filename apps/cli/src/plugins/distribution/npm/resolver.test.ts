@@ -406,7 +406,7 @@ describe('resolveNpmArtifactMetadata', () => {
 
   it.each([
     [{ ...packument, name: 'other' }, /package identity/i],
-    [{ ...packument, versions: { '2.0.0': { name: '@scope/plugin', version: '2.0.0', dist: { tarball: 'https://registry.example.test/x.tgz' } } } }, /integrity/i],
+    [{ ...packument, versions: { '2.0.0': { name: '@scope/plugin', version: '2.0.0', dist: { tarball: 'https://registry.example.test/x.tgz' } } } }, /dist metadata/i],
     [{ ...packument, versions: { '2.0.0': { name: '@scope/plugin', version: '2.0.0', dist: { integrity, tarball: 'https://evil.example.test/x.tgz' } } } }, /tarball origin/i],
   ])('rejects malformed or rebound metadata', async (value, expected) => {
     await expect(resolveNpmArtifactMetadata({

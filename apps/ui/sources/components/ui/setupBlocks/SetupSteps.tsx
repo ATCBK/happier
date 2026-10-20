@@ -14,7 +14,7 @@ import {
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 
 export type SetupStep = HappierSetupStep;
 export type SetupStepState = HappierSetupStepState;
@@ -61,10 +61,7 @@ export function SetupSteps(
   }>,
 ) {
   const { theme } = useUnistyles();
-  const presentationTheme = React.useMemo(
-    () => projectPluginUiTheme(theme),
-    [theme],
-  );
+  const presentationTheme = usePluginUiTheme(theme);
   return (
     <HappierSetupSteps
       {...props}

@@ -57,7 +57,11 @@ function admissionHarness(prepareWorkspace: typeof prepareWorkflowAcceptedWorksp
     execution: execution(), onCommittedTransition: () => {},
     prepareAcceptedWorkspaceTarget: prepareWorkspace,
     resolveMaterializationHost: async ({ runId: id, workDepth, directory }) => ({
-      effects: { resolveTargetAvailability: async () => true },
+      effects: { resolveTargetAvailability: async () => true,
+        resolveSessionTarget: async (value) => typeof value === 'string'
+          ? { address: { serverId: 'server-1', sessionId: value }, machineId }
+          : value && typeof value === 'object' && !Array.isArray(value) && typeof value.sessionId === 'string' && value.serverId === 'server-1'
+            ? { address: { serverId: value.serverId, sessionId: value.sessionId }, machineId } : null },
       admitLeaf: async (leaf, facts) => admitAgentStartV1(DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, { kind: 'workflow_run_leaf', leaf }, {
         caller: { kind: 'originless', runId: id, runDepth: workDepth }, baseline: { machineId, directory },
         ledSubtreeSessionIds: [], roles: {}, workDepthLimit: 4, callerPermissionCeiling: facts.permissionCeiling,
@@ -113,6 +117,29 @@ describe('scoped workflow claim admission', () => {
     await expect(harness.coordinate(claim({ ...definition, defaults: { ...definition.defaults,
       conversation: { kind: 'origin_session' } } }))).rejects.toBe(captured);
     expect(harness.snapshots[0]).toMatchObject({ origin: { originSessionId: 'origin-session' } });
+  });
+
+  it('freezes an exact source Session context input for lifecycle review without treating it as an independent self-target', async () => {
+    const harness = admissionHarness();
+    const source: WorkflowDefinitionV1 = { ...definition,
+      inputs: [{ name: 'reviewSession', valueType: 'json', required: true, defaultFrom: 'origin_session',
+        inputType: { hostType: 'session' } }],
+      defaults: { ...definition.defaults, conversation: { kind: 'input', name: 'reviewSession' } } };
+    const triggerId = AutomationTriggerIdSchema.parse('review-trigger');
+    const evidence = { v: 1 as const, kind: 'sessionLifecycle' as const, event: 'parentTurnCompleted' as const,
+      sourceSessionId: 'origin-session', sourceTurnId: 'turn-1', occurredAt: 1 };
+    const automationCause = { kind: 'trigger' as const, triggerKind: 'sessionLifecycle' as const,
+      triggerId, triggerRevision: 0, occurredAt: 1, occurrenceKey: deriveAutomationOccurrenceKeyV1({ triggerId, evidence }),
+      evidence: { event: evidence.event, sourceSessionId: evidence.sourceSessionId, sourceTurnId: evidence.sourceTurnId,
+        policy: { kind: 'currentTurn' as const } } };
+    await expect(harness.coordinate({ ...claim(source), automationCause })).rejects.toBe(captured);
+    expect(harness.snapshots[0]).toMatchObject({ inputs: { reviewSession: { serverId: 'server-1', sessionId: 'origin-session' } },
+      materializedLeaves: [{ selection: { conversation: { kind: 'existing_session', sessionId: 'origin-session', machineId } } }] });
+    const independent = admissionHarness();
+    await expect(independent.coordinate({ ...claim({ ...source, inputs: [{ name: 'reviewSession', valueType: 'json', required: false,
+      inputType: { hostType: 'session' }, default: { serverId: 'server-1', sessionId: 'origin-session' } }] }), automationCause }))
+      .resolves.toMatchObject({ state: 'failed', reason: 'self_target', admission: 'refused' });
+    expect(independent.effects).toEqual([]);
   });
 
   it('skips an unchanged claimed tree without freezing a snapshot or starting work', async () => {

@@ -1,6 +1,6 @@
 import { Fastify } from "../../types";
 import { persistentMachineWhere } from '@/app/machines/machineSelection';
-import { z } from "zod";
+import { z } from "zod/mini";
 import { db, isPrismaErrorCode } from "@/storage/db";
 import { log } from "@/utils/logging/log";
 import { inTx, type Tx } from "@/storage/inTx";
@@ -23,7 +23,10 @@ import {
     type VerifiedMachineInstallationIdentity,
 } from "@/app/machines/installationProof";
 import {
+    acquireMachineRegistrationAccountsInTx,
     createMachineWithInstallationIdentityInTx,
+    resolveMachineContentPublicKeyFingerprintForStorage,
+    MachineStorageModeMismatchError,
     revokeMachineInTx,
 } from "@/app/machines/machineMutations";
 import {
@@ -43,6 +46,7 @@ import {
 } from "@/app/clientCompatibility/accountStoredContentCompatibility";
 import { registerMachineReplacementRoutes } from "./registerMachineReplacementRoutes";
 import { registerMachineAdmissionRoutes } from "./registerMachineAdmissionRoutes";
+import { registerMachineSessionMessageReplyRoutes } from './registerMachineSessionMessageReplyRoutes';
 import { registerMachinePoolRoutes } from "./pools/registerMachinePoolRoutes";
 import { registerMachinePresetRoutes } from "./managed/registerMachinePresetRoutes";
 import { readRequestHomeEnv } from "@/app/home/settings/requestHomeEnv";
@@ -50,8 +54,8 @@ import { ManagedEnrollmentCorrelationV1Schema } from '@happier-dev/protocol/mach
 import { registerManagedMachineRoutes } from "@/app/machines/managed/managedRoutes";
 import { requireManagedMachineRegistrationInTx, linkManagedEnrollmentInTx } from "@/app/machines/managed/managedMutations";
 import { ManagedMachineError, readMachineDevcontainerChildInTx } from "@/app/machines/managed/managedRows";
-import { MachineContentKeyTransitionInputV1Schema, MachineContentKeyTransitionResultV1Schema } from "@happier-dev/protocol/machines/machineContentKeyTransitionV1";
-import { transitionMachineContentKeyInTx } from "@/app/machines/transitionMachineContentKeyInTx";
+import { MachineContentKeyTransitionInputV1Schema, MachineContentKeyTransitionResultV1Schema, MachinePublishedRowV1Schema } from "@happier-dev/protocol/machines/machineContentKeyTransitionV1";
+import { transitionMachineContentKeyInTx, readMachineContentKeySnapshotInTx } from "@/app/machines/transitionMachineContentKeyInTx";
 import { readCurrentManagedGuestActivityInTx } from '@/app/auth/externalActionExecutionAuthorization';
 import { registerMachineAccessRoutes } from './machineAccessRoutes';
 import {
@@ -116,6 +120,7 @@ async function serializeMachineRowForRequest(
 }
 
 type ExistingMachineInstallationIdentity = Readonly<{
+    dataEncryptionKey: Uint8Array | null;
     installationId?: string | null;
     installationPublicKey?: Uint8Array | null;
     contentPublicKeyFingerprint?: string | null;
@@ -146,10 +151,18 @@ function resolveInstallationIdentityUpdate(
     if (machine.installationPublicKey && !bytesEqual(machine.installationPublicKey, identity.installationPublicKey)) {
         return { ok: false, reason: "installation_public_key_mismatch" };
     }
+    const currentFingerprint = resolveMachineContentPublicKeyFingerprintForStorage({
+        dataEncryptionKey: machine.dataEncryptionKey,
+        contentPublicKeyFingerprint: machine.contentPublicKeyFingerprint ?? null,
+    });
+    const incomingFingerprint = resolveMachineContentPublicKeyFingerprintForStorage({
+        dataEncryptionKey: machine.dataEncryptionKey,
+        contentPublicKeyFingerprint: identity.contentPublicKeyFingerprint,
+    });
     if (
-        machine.contentPublicKeyFingerprint
-        && identity.contentPublicKeyFingerprint
-        && machine.contentPublicKeyFingerprint !== identity.contentPublicKeyFingerprint
+        currentFingerprint
+        && incomingFingerprint
+        && currentFingerprint !== incomingFingerprint
     ) {
         return { ok: false, reason: "content_public_key_fingerprint_mismatch" };
     }
@@ -159,8 +172,8 @@ function resolveInstallationIdentityUpdate(
         data: {
             ...(!machine.installationId ? { installationId: identity.installationId } : {}),
             ...(!machine.installationPublicKey ? { installationPublicKey: identity.installationPublicKey } : {}),
-            ...(!machine.contentPublicKeyFingerprint && identity.contentPublicKeyFingerprint
-                ? { contentPublicKeyFingerprint: identity.contentPublicKeyFingerprint }
+            ...((machine.contentPublicKeyFingerprint ?? null) !== (currentFingerprint ?? incomingFingerprint)
+                ? { contentPublicKeyFingerprint: currentFingerprint ?? incomingFingerprint }
                 : {}),
         },
     };
@@ -183,16 +196,31 @@ function describeUnknownError(error: unknown): { code?: string; message: string 
 
 export function machinesRoutes(app: Fastify) {
     registerMachineAdmissionRoutes(app);
+    registerMachineSessionMessageReplyRoutes(app);
     registerMachineAccessRoutes(app);
     registerMachineReplacementRoutes(app);
     registerMachinePoolRoutes(app, { io: app.machineDaemonPresence });
     registerMachinePresetRoutes(app);
     registerManagedMachineRoutes(app);
 
+    app.get('/v1/machines/:id/content-key/transition', {
+        preHandler: app.authenticate,
+        schema: {
+            params: z.strictObject({ id: z.string().check(z.minLength(1)) }),
+            response: { 200: z.strictObject({ machine: MachinePublishedRowV1Schema }),
+                404: z.strictObject({ error: z.literal("machine_unavailable") }) },
+        },
+    }, async (request, reply) => {
+        const machine = await inTx(tx => readMachineContentKeySnapshotInTx({
+            tx, accountId: request.userId, machineId: request.params.id,
+        }), { readOnly: true, isolationLevel: "Serializable" /* Recovery captures one exact owned content basis. */ });
+        return machine ? reply.send({ machine }) : reply.code(404).send({ error: "machine_unavailable" });
+    });
+
     app.post('/v1/machines/:id/content-key/transition', {
         preHandler: app.authenticate,
         schema: {
-            params: z.object({ id: z.string().min(1) }).strict(),
+            params: z.strictObject({ id: z.string().check(z.minLength(1)) }),
             body: z.unknown(),
             response: { 200: MachineContentKeyTransitionResultV1Schema, 400: z.object({ error: z.literal("invalid-params") }) },
         },
@@ -215,23 +243,23 @@ export function machinesRoutes(app: Fastify) {
             body: z.object({
                 id: z.string(),
                 metadata: z.string(), // Encrypted metadata
-                daemonState: z.string().optional(), // Encrypted daemon state
-                dataEncryptionKey: z.string().nullish(),
+                daemonState: z.optional(z.string()), // Encrypted daemon state
+                dataEncryptionKey: z.nullish(z.string()),
                 /**
                  * When an E2EE `dataEncryptionKey` is provided, the client must also provide its account content public key.
                  * This allows the server to reject token/key mismatches that would otherwise create "poisoned" machine rows.
                  */
-                contentPublicKey: z.string().optional(),
+                contentPublicKey: z.optional(z.string()),
                 // Optional signature binding `contentPublicKey` to the account's signing key (recommended).
                 // When the account has not yet stored its `contentPublicKey`, providing this signature allows the
                 // server to persist the key safely without requiring a full /v1/auth key-proof flow.
-                contentPublicKeySig: z.string().optional(),
-                installationId: z.string().optional(),
-                installationPublicKey: z.string().optional(),
-                installationProof: z.unknown().optional(),
-                replacesMachineId: z.string().optional(),
-                replacementReason: z.string().optional(),
-                contentPublicKeyFingerprint: z.string().optional(),
+                contentPublicKeySig: z.optional(z.string()),
+                installationId: z.optional(z.string()),
+                installationPublicKey: z.optional(z.string()),
+                installationProof: z.optional(z.unknown()),
+                replacesMachineId: z.optional(z.string()),
+                replacementReason: z.optional(z.string()),
+                contentPublicKeyFingerprint: z.optional(z.string()),
                 managedEnrollment: z.optional(ManagedEnrollmentCorrelationV1Schema),
             })
         }
@@ -549,6 +577,7 @@ export function machinesRoutes(app: Fastify) {
             let updated: UpdatedMachineRow;
             try {
                 updated = await inTx(async (tx) => {
+                    await acquireMachineRegistrationAccountsInTx(tx, { accountId: userId, machineId: id, managedEnrollment });
                     await requireManagedMachineRegistrationInTx(tx, { custodianAccountId: userId, machineId: id, enrollment: managedEnrollment });
                     const current = await tx.machine.findFirst({
                         where: {
@@ -703,6 +732,7 @@ export function machinesRoutes(app: Fastify) {
             let machineReplacement: MachineRegistrationReplacementResult | null = null;
             try {
                 const created = await inTx(async (tx) => {
+                    await acquireMachineRegistrationAccountsInTx(tx, { accountId: userId, machineId: id, managedEnrollment });
                     await requireManagedMachineRegistrationInTx(tx, { custodianAccountId: userId, machineId: id, enrollment: managedEnrollment });
                     const registered = await createMachineWithInstallationIdentityInTx(tx, {
                     accountId: userId,
@@ -723,6 +753,9 @@ export function machinesRoutes(app: Fastify) {
                 newMachine = created.machine;
                 machineReplacement = created.machineReplacement;
             } catch (e) {
+                if (e instanceof MachineStorageModeMismatchError) {
+                    return reply.code(400).send({ error: "invalid-params", reason: e.code });
+                }
                 if (e instanceof ManagedMachineError) return reply.code(409).send({ error: "invalid-params", reason: e.code });
                 if (e instanceof MachineRegistrationReplacementError) {
                     return reply.code(e.statusCode).send({ error: "invalid-params", reason: e.reason });
@@ -749,6 +782,7 @@ export function machinesRoutes(app: Fastify) {
                         {
                             try {
                                 rejoinedMachine = await inTx(async tx => {
+                                    await acquireMachineRegistrationAccountsInTx(tx, { accountId: userId, machineId: id, managedEnrollment });
                                     await requireManagedMachineRegistrationInTx(tx, { custodianAccountId: userId, machineId: id, enrollment: managedEnrollment });
                                     const current = await tx.machine.findUnique({ where: { accountId_id: { accountId: userId, id } } });
                                     if (!current || current.revokedAt) throw new ManagedMachineError("enrollment_retired");
@@ -860,7 +894,7 @@ export function machinesRoutes(app: Fastify) {
     app.get('/v1/machines', {
         preHandler: app.authenticate,
         schema: {
-            querystring: z.object({ includeRevoked: z.enum(['true', 'false']).optional() }),
+            querystring: z.object({ includeRevoked: z.optional(z.enum(['true', 'false'])) }),
         },
         config: {
             allowApiToken: true,

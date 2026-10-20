@@ -291,6 +291,11 @@ export interface AcpBackendOptions {
   /** Environment variable names to remove from the final child environment */
   unsetEnv?: readonly string[];
 
+  /** The host Exec owner supplied the complete process tuple. */
+  hostFinalizedLaunch?: true;
+
+  windowsVerbatimArguments?: boolean;
+
   /** Runner-private final child-launch substitution seam. */
   transformAgentChildLaunchEnvironment?: (
     environment: Readonly<Record<string, string>>,
@@ -637,7 +642,7 @@ export class AcpBackend implements CatalogAcpBackend {
   private buildSpawnEnv(): NodeJS.ProcessEnv {
     const environment = finalizeSessionChildEnvironment({
       environment: buildScopedProcessEnv({
-        baseEnv: process.env,
+        baseEnv: this.options.hostFinalizedLaunch ? {} : process.env,
         explicitEnv: this.options.env,
         unsetEnvKeys: this.options.unsetEnv,
       }),
@@ -729,6 +734,8 @@ export class AcpBackend implements CatalogAcpBackend {
         args: this.options.args || [],
         cwd: this.options.cwd,
         env: this.buildSpawnEnv(),
+        ...(this.options.hostFinalizedLaunch ? { hostFinalizedLaunch: true } : {}),
+        ...(this.options.windowsVerbatimArguments === undefined ? {} : { windowsVerbatimArguments: this.options.windowsVerbatimArguments }),
       });
 
       this.recentStderrDiagnostics = [];
@@ -1050,6 +1057,7 @@ export class AcpBackend implements CatalogAcpBackend {
       clientName: 'happier-cli',
       clientVersion: packageJson.version,
       fsEnabled,
+      elicitationEnabled: typeof this.options.permissionHandler?.handleElicitation === 'function',
       ...(typeof this.options.parameterizedModelPicker === 'boolean'
         ? { parameterizedModelPicker: this.options.parameterizedModelPicker }
         : {}),
@@ -2028,7 +2036,10 @@ export class AcpBackend implements CatalogAcpBackend {
     if (this.permissionFlushTurnGeneration === this.turnGeneration) return;
     this.permissionFlushTurnGeneration = this.turnGeneration;
     void abortPendingAcpPermissionRequests(this.options.permissionHandler, reason, (error) => {
-      logger.debug('[AcpBackend] Failed to abort pending permission requests:', error);
+      logger.infoFile('[AcpBackend] Pending permission cancellation persistence failed', {
+        event: 'permission_request_cancellation_persistence_failed',
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
     });
   }
 
@@ -2686,6 +2697,20 @@ export class AcpBackend implements CatalogAcpBackend {
       ? await this.options.prepareSessionModels(response)
       : readSessionModelStateFromSessionResponse(response, this.options.projectModel);
     const observedCatalog = returnedState !== null;
+    // Legacy ACP set_model acknowledges success with an object containing only
+    // optional metadata. It does not have to repeat the session/new catalog.
+    if (
+      !returnedState
+      && !this.options.projectSetModelResponse
+      && !this.options.projectSetModelResponseAwaitable
+      && response !== null
+      && typeof response === 'object'
+      && !Array.isArray(response)
+      && !('models' in response)
+      && this.sessionModelState?.availableModels.some((model) => model.id === normalizedModelId)
+    ) {
+      returnedState = { ...this.sessionModelState, currentModelId: normalizedModelId };
+    }
     if (
       !returnedState
       && (this.options.projectSetModelResponse

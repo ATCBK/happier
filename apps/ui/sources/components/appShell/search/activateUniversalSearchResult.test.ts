@@ -1,7 +1,7 @@
 import { installFileFindAccountBoundaryMocks } from '@/components/appShell/panes/fileFindSeedTestHelpers';
 import { describe, expect, it, vi } from 'vitest';
 
-import { activateUniversalSearchResult } from './activateUniversalSearchResult';
+import { activateUniversalSearchResult, type UniversalSearchActivationOwners } from './activateUniversalSearchResult';
 import type { UniversalSearchTarget } from './universalSearchResult';
 import { parseSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
 import { createFileFindSeedHandoff, openChatWithFindSeed } from '@/components/appShell/panes/fileFindSeedHandoff';
@@ -40,8 +40,8 @@ describe('activateUniversalSearchResult', () => {
         const target = { kind: 'session' as const, accountId: 'account-a', ...destination, seq: 7, find };
         let failed = false;
         const routes: unknown[] = [];
-        const owners = { push: () => {}, openProject: async () => true,
-            navigateToSession: async (sessionId: string, options?: { serverId?: string; query?: unknown; find?: typeof find }) => {
+        const owners: UniversalSearchActivationOwners = { push: () => {}, openProject: async () => true,
+            navigateToSession: async (sessionId, options) => {
                 await openChatWithFindSeed({ handoff, destination: { sessionId, serverId: options?.serverId ?? '' },
                     seed: options?.find, authority, open: () => {
                         routes.push(options?.query);
@@ -72,9 +72,9 @@ describe('activateUniversalSearchResult', () => {
                 find: { query: row.query, sourceItemId: row.sourceItemId } }).then(outcome => outcome === 'opened'),
         })).toEqual({ ok: true });
         expect(openSession.mock.calls[0]?.[2]).toMatchObject({ query: 'quartz', target: { kind: 'route-message-id' } });
-        expect(openSession.mock.calls[0]?.[2].target.routeMessageId).toBe(makeExternalSessionHistoricalImportLocalId({
+        expect(openSession.mock.calls[0]?.[2].target.routeMessageId).toBe(`server:${makeExternalSessionHistoricalImportLocalId({
             agentId: 'fixture-agent', remoteSessionId: 'native', directItemId: 'message-uuid',
-        }));
+        })}`);
     });
 
     it('opens named memory topics and instructions through their existing document route owners', async () => {

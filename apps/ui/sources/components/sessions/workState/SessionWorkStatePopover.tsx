@@ -5,7 +5,7 @@ import type { SessionWorkStateSnapshot } from '@/sync/domains/session/workState/
 
 import { SessionManagedWorkflowSection } from './SessionManagedWorkflowSection';
 import { SessionWorkflowActivitySection } from './SessionWorkflowActivitySection';
-import type { SessionManagedWorkflowRunsState } from './useSessionManagedWorkflowRuns';
+import type { SessionManagedWorkflowRunsState } from '@/components/workflows/run/useContextManagedWorkflowRuns';
 import type { GoalActionCapabilities } from './goalActionVisibility';
 import type { SessionWorkflowActivityState } from './useSessionWorkflowActivity';
 import {
@@ -40,8 +40,8 @@ export function SessionWorkStatePopover(props: Readonly<{
     // budget editor stays hidden on providers that don't support it (e.g. Claude). QA-CHIP-2.
     goalActionCapabilityProfile?: GoalActionCapabilities | null;
     onRequestClose: () => void;
-    onSetGoal?: (request: SessionWorkStateGoalSetRequest) => Promise<SessionWorkStateGoalOperationResult>;
-    onClearGoal?: () => Promise<SessionWorkStateGoalOperationResult>;
+    onSetGoal?: (request: SessionWorkStateGoalSetRequest, signal?: AbortSignal) => Promise<SessionWorkStateGoalOperationResult>;
+    onClearGoal?: (signal?: AbortSignal) => Promise<SessionWorkStateGoalOperationResult>;
 }>) {
     const managedWorkflowSection = props.managedWorkflowRuns !== undefined
         && props.onOpenManagedWorkflowRun !== undefined

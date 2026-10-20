@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import type { RemoteHostId } from '@/sync/domains/remoteHosts/remoteHostModel';
@@ -29,15 +29,15 @@ export const REMOTE_HOST_LOCAL_OVERRIDES_PERSIST_KEY = 'remote-host-local-overri
 
 const isWebRuntime = typeof window !== 'undefined' && typeof document !== 'undefined';
 
-const RemoteHostLocalOverridesSchema = z.object({
-    identityFilePath: z.string().nullable().optional(),
-    sshConfigFilePath: z.string().nullable().optional(),
-}).strict();
+const RemoteHostLocalOverridesSchema = z.strictObject({
+    identityFilePath: z.optional(z.nullable(z.string())),
+    sshConfigFilePath: z.optional(z.nullable(z.string())),
+});
 
-const PersistedRemoteHostLocalOverridesSchema = z.object({
+const PersistedRemoteHostLocalOverridesSchema = z.strictObject({
     version: z.literal(1),
     overridesById: z.record(z.string(), RemoteHostLocalOverridesSchema),
-}).strict();
+});
 
 type PersistedRemoteHostLocalOverrides = z.infer<typeof PersistedRemoteHostLocalOverridesSchema>;
 const PersistedRemoteHostLocalOverridesReadSchema = createStoredReadSchema(PersistedRemoteHostLocalOverridesSchema);

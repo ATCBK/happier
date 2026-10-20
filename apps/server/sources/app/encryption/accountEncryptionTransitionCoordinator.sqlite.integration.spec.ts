@@ -1550,7 +1550,7 @@ describe("Account encryption transition coordinator Collection participant", () 
                 transitionId: prepared.transition.transitionId,
             })
         ));
-        expect(activation).toMatchObject({ status: "activated", mode: "plain" });
+        expect(activation).toMatchObject({ status: "activated", mode: "plain", cursor: 2, version: 2 });
 
         await expect(db.pluginCollectionRow.findUniqueOrThrow({
             where: { id: row.id },
@@ -1569,8 +1569,8 @@ describe("Account encryption transition coordinator Collection participant", () 
         })).resolves.toEqual({ encryptionMode: "plain", seq: 2 });
         await expect(db.accountEncryptionTransition.findUniqueOrThrow({
             where: { id: prepared.transition.transitionId },
-            select: { status: true, activeAccountId: true },
-        })).resolves.toEqual({ status: "activated", activeAccountId: null });
+            select: { status: true, activeAccountId: true, activatedAccountCursor: true, activatedAccountVersion: true },
+        })).resolves.toEqual({ status: "activated", activeAccountId: null, activatedAccountCursor: 2, activatedAccountVersion: 2 });
         await expect(db.accountEncryptionTransitionCollectionStage.count({
             where: { transitionId: prepared.transition.transitionId },
         })).resolves.toBe(0);

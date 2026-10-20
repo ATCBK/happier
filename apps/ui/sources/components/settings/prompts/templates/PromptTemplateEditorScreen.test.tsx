@@ -1,9 +1,10 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { invokeTestInstanceHandler, renderScreen, standardCleanup } from '@/dev/testkit';
 import { clearActiveUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
 import { createPlainPromptLibraryCatalogHomeFixture } from '@/dev/testkit/harness/promptLibraryCatalogBoundary';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import {
     installPromptTemplatesCommonModuleMocks,
     promptTemplatesRouterBackSpy,
@@ -24,6 +25,7 @@ installPromptTemplatesCommonModuleMocks({
             ScrollView: 'ScrollView',
             View: 'View',
             Switch: 'Switch',
+            useWindowDimensions: () => ({ width: 1440, height: 1000, scale: 1, fontScale: 1 }),
             Platform: {
                 OS: 'web',
                 select: ({ web, default: defaultValue }: { web?: unknown; default?: unknown }) =>
@@ -67,6 +69,7 @@ const preventRemoveState = vi.hoisted(() => ({ last: null as boolean | null }));
 // The navigator's remove interception is the navigation library boundary; record what the screen asks for.
 vi.mock('@react-navigation/native', async (importOriginal) => ({
     ...await importOriginal<typeof import('@react-navigation/native')>(),
+    ...(await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock(),
     usePreventRemove: (preventRemove: boolean) => {
         preventRemoveState.last = preventRemove;
     },
@@ -96,6 +99,44 @@ async function chooseTarget(screen: Awaited<ReturnType<typeof renderScreen>>, ar
 }
 
 describe('PromptTemplateEditorScreen', () => {
+    it.each(['doc', 'template'] as const)('isolates %s draft rail titles and cleanup between retained collection destinations', async kind => {
+        if (kind === 'doc') {
+            // Monaco is a browser SDK boundary; without its API the real editor uses its text-input fallback.
+            vi.stubGlobal('window', {});
+            onTestFinished(() => { vi.unstubAllGlobals(); });
+        }
+        const { PromptTemplateEditorScreen } = await import('./PromptTemplateEditorScreen');
+        const { PromptDocEditorScreen } = await import('../docs/PromptDocEditorScreen');
+        const { PromptCollectionLayout } = await import('../collection/PromptCollectionList');
+        const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
+        const { WorkspaceRouteOutlet } = await import('@/components/appShell/workspace/WorkspaceRouteOutlet');
+        const { router } = await import('expo-router');
+        const renderDestination = async (id: string) => {
+            const screen = await renderScreen(<DestinationInstanceHost tabId={id} ref={{ kind: 'settings', params: {} }}
+                pathname={`/settings/prompts/${kind === 'doc' ? 'docs' : 'templates'}/new`} navigation={router} focused visible>
+                <WorkspaceRouteOutlet.Provider value={kind === 'doc' ? <PromptDocEditorScreen artifactId={null} /> : <PromptTemplateEditorScreen invocationId={null} />}>
+                    <PromptCollectionLayout kind={kind} />
+                </WorkspaceRouteOutlet.Provider>
+            </DestinationInstanceHost>);
+            await act(async () => { invokeTestInstanceHandler(screen.findHostByTestId(`settings-prompts-${kind}-layout`), 'onLayout', {
+                nativeEvent: { layout: { x: 0, y: 0, width: 1440, height: 1000 } },
+            }); });
+            return screen;
+        };
+        const first = await renderDestination('first');
+        const titleId = kind === 'doc' ? 'promptDoc.title' : 'promptTemplate.title';
+        await act(async () => { first.changeTextByTestId(titleId, 'First draft'); });
+        const second = await renderDestination('second');
+        await act(async () => { second.changeTextByTestId(titleId, 'Second draft'); });
+        const title = (screen: typeof first) => screen.findAll(node => node.props.testID === `promptLibrary.collection.${kind}.draft`
+            && typeof node.props.title === 'string').map(node => node.props.title);
+        expect(title(first)).toContain('First draft');
+        expect(title(first)).not.toContain('Second draft');
+        expect(title(second)).toContain('Second draft');
+        await act(async () => { second.unmount(); });
+        expect(title(first)).toContain('First draft');
+    });
+
     afterEach(() => {
         standardCleanup();
         clearActiveUnsavedChangesGuard();
@@ -183,5 +224,58 @@ describe('PromptTemplateEditorScreen', () => {
         const saved = record.value.entries[0]!;
         expect(saved.id).not.toBe('');
         await vi.waitFor(() => expect(promptTemplatesRouterReplaceSpy).toHaveBeenCalledWith(`/settings/prompts/templates/${saved.id}`));
+    });
+
+    it('honors Action Off for a complete new template before writing the catalog', async () => {
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.alert).mockClear();
+        storage.setState({ settings: { ...storage.getState().settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
+            v: 1, actions: { 'prompts.invocation.create': { enabled: false } },
+        }) } });
+        const { PromptTemplateEditorScreen } = await import('./PromptTemplateEditorScreen');
+        const screen = await renderScreen(React.createElement(PromptTemplateEditorScreen, { invocationId: null }));
+        await act(async () => {
+            screen.changeTextByTestId('promptTemplate.title', 'Daily');
+            screen.changeTextByTestId('promptTemplate.token', 'daily');
+        });
+        await chooseTarget(screen, 'doc-1');
+        await act(async () => { await screen.findByTestId('promptTemplate.save')?.props.onPress(); });
+        // A raw catalog writer would persist despite the disabled Action.
+        await vi.waitFor(() => expect(promptTemplatesRouterReplaceSpy.mock.calls.length + vi.mocked(Modal.alert).mock.calls.length).toBeGreaterThan(0));
+        expect(catalog.mutations).toEqual([]);
+        expect(preventRemoveState.last).toBe(true);
+        expect(promptTemplatesRouterReplaceSpy).not.toHaveBeenCalled();
+    });
+
+    it('edits through the captured revision and lets the Action waiver own deletion confirmation', async () => {
+        const scope = storage.getState().settingsScope;
+        if (!scope) throw new Error('Missing admitted template Account');
+        const { writePromptLibraryRecord } = await import('@/sync/api/account/apiPromptLibraryCatalog');
+        await writePromptLibraryRecord(scope, { record: { key: 'invocations', value: { v: 1, entries: [{
+            id: 'saved', token: '/daily', title: 'Daily', target: { kind: 'doc', artifactId: 'doc-1', serverId: scope.serverId },
+            behavior: 'insert', allowArgs: false, availableIn: 'session_only',
+        }] } }, expectedRevision: 4 });
+        catalog.mutations.length = 0;
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.confirm).mockClear();
+        vi.mocked(Modal.show).mockClear();
+        const { PromptTemplateEditorScreen } = await import('./PromptTemplateEditorScreen');
+        const screen = await renderScreen(<PromptTemplateEditorScreen invocationId="saved" />);
+        await act(async () => { screen.changeTextByTestId('promptTemplate.title', 'Weekly'); });
+        await screen.pressByTestIdAsync('promptTemplate.save');
+        await vi.waitFor(() => expect(catalog.read().record.value).toMatchObject({ entries: [{ id: 'saved', title: 'Weekly',
+            availableIn: 'session_only', target: { serverId: scope.serverId } }] }));
+        expect(catalog.mutations).toEqual([{ key: 'invocations', expectedRevision: 5 }]);
+        storage.setState({ settings: { ...storage.getState().settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
+            v: 1, approvalWaivedSurfaces: { 'prompts.invocation.delete': ['ui'] },
+        }) } });
+        const menu = screen.findAllByType(DropdownMenu).find(node => node.props.testID === 'promptTemplate.header.menu');
+        if (!menu) throw new Error('Missing template operations menu');
+        await act(async () => { await menu.props.onSelect('delete'); });
+        await vi.waitFor(() => expect(catalog.read().record.value).toEqual({ v: 1, entries: [] }));
+        expect(catalog.mutations).toEqual([{ key: 'invocations', expectedRevision: 5 }, { key: 'invocations', expectedRevision: 6 }]);
+        expect(Modal.confirm).not.toHaveBeenCalled();
+        expect(Modal.show).not.toHaveBeenCalled();
+        await vi.waitFor(() => expect(promptTemplatesRouterReplaceSpy).toHaveBeenCalledWith('/settings/prompts/templates'));
     });
 });

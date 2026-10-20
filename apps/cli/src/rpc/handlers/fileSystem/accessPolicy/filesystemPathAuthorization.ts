@@ -10,8 +10,8 @@ import {
 } from './filesystemAccessPolicy';
 
 export type FilesystemPathAuthorizationResult =
-  | Readonly<{ valid: true; resolvedPath: string }>
-  | Readonly<{ valid: false; error: string }>;
+  | Readonly<{ valid: true; resolvedPath: string; error?: never }>
+  | Readonly<{ valid: false; error: string; resolvedPath?: never }>;
 
 export type AuthorizeFilesystemPathInput = Readonly<{
   targetPath: unknown;
@@ -210,7 +210,7 @@ export function authorizeFilesystemPath(input: AuthorizeFilesystemPathInput): Fi
 /** Admit the checkout under host policy, then confine its entry under that exact root. */
 export function authorizeFilesystemPathWithinRoot(
   input: AuthorizeFilesystemPathInput & Readonly<{ rootPath: string }>,
-): (Readonly<{ valid: true; resolvedPath: string; rootPath: string }> | Readonly<{ valid: false; error: string }>) {
+): (Readonly<{ valid: true; resolvedPath: string; rootPath: string; error?: never }> | Readonly<{ valid: false; error: string; resolvedPath?: never }>) {
   if (!isFilesystemPathAbsolute(input.rootPath, input.platform)) {
     return { valid: false, error: 'The filesystem root must be absolute' };
   }

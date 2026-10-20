@@ -214,6 +214,9 @@ it('renders current registry listings and a single polite status region through 
         && typeof node.props.onSubmitEditing === 'function')[0];
     await act(async () => { submittedSearch!.props.onSubmitEditing(); });
     await waitForHomeGovernance(() => expect(screen.findByTestId(`settings.plugins.marketplace.entry.${sourceId}.sample.plugin`)).toBeNull());
+    // The loading view also has no rows; Clear belongs to the settled no-match
+    // result, so wait for that actual recovery control before pressing it.
+    await waitForHomeGovernance(() => expect(screen.findByTestId('settings.plugins.marketplace.discover.clearSearch')).not.toBeNull());
     await act(async () => { screen.pressByTestId('settings.plugins.marketplace.discover.clearSearch'); });
     await waitForHomeGovernance(() => expect(screen.findByTestId(`settings.plugins.marketplace.entry.${sourceId}.sample.plugin`)).not.toBeNull());
 });

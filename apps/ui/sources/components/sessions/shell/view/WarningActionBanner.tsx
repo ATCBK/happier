@@ -9,9 +9,11 @@ import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback
 import { ITEM_SUBTITLE_TEXT_METRICS, ITEM_TITLE_TEXT_METRICS } from '@/components/ui/lists/itemDensityMetrics';
 import { Text } from '@/components/ui/text/Text';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import type { Theme } from '@/theme';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { SurfaceRim } from '@/components/ui/surfaces/SurfaceRim';
+import { shadowLevelStyle } from '@/shadowElevation';
 
 export type SessionBannerTone = 'warning' | 'neutral';
 
@@ -45,6 +47,12 @@ export type WarningActionBannerProps = Readonly<{
     actionBusy?: boolean;
     secondaryActions?: ReadonlyArray<SessionBannerAction>;
     style?: React.ComponentProps<typeof HappierBanner>['style'];
+    /**
+     * The banner floats over content (an overlay on the transcript) instead of sitting in flow: it stands on an
+     * opaque paper base under its tint, with the floating rim and a low elevation, so what lies beneath never shows
+     * through its copy. In-flow banners keep the flat tinted surface.
+     */
+    floating?: boolean;
     testID: string;
 }>;
 
@@ -103,7 +111,7 @@ export function resolveWarningActionBannerToneTokens(
 
 export function WarningActionBanner(props: WarningActionBannerProps): React.ReactElement {
     const { theme } = useUnistyles();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const { width } = useWindowDimensions();
     const [measuredWidth, setMeasuredWidth] = React.useState<number | null>(null);
     const availableWidth = typeof measuredWidth === 'number' && measuredWidth > 0 ? measuredWidth : width;
@@ -198,7 +206,8 @@ export function WarningActionBanner(props: WarningActionBannerProps): React.Reac
         </View>
     ) : null;
 
-    return (
+    const bannerRadius = theme.parts.composer.radius;
+    const banner = (
         <HappierBanner
             testID={props.testID}
             onLayout={handleLayout}
@@ -207,14 +216,15 @@ export function WarningActionBanner(props: WarningActionBannerProps): React.Reac
             tone={tone === 'warning' ? 'warning' : 'neutral'}
             theme={presentationTheme}
             backgroundColor={toneTokens.background}
-            borderColor={toneTokens.border}
+            // A floating banner's whole hairline is the rim's, drawn over it.
+            borderColor={props.floating ? 'transparent' : toneTokens.border}
             icon={iconName ? <Icon name={iconName} size={16} color={toneTokens.icon} /> : undefined}
             style={[
                 {
                     paddingHorizontal: BANNER_PADDING_HORIZONTAL,
                     paddingVertical: BANNER_PADDING_VERTICAL,
                     // The composer stack's radius: the banner and the panel below it round alike.
-                    borderRadius: theme.parts.composer.radius,
+                    borderRadius: bannerRadius,
                 },
                 props.style,
             ]}
@@ -251,5 +261,19 @@ export function WarningActionBanner(props: WarningActionBannerProps): React.Reac
             details={<>{props.content}{!inlineActions ? actionsNode : null}</>}
             action={inlineActions && !actionsInTitle ? actionsNode : undefined}
         />
+    );
+    if (!props.floating) return banner;
+    return (
+        <View
+            testID={`${props.testID}-floating`}
+            style={{
+                borderRadius: bannerRadius,
+                backgroundColor: theme.colors.edge.floatingFill,
+                ...shadowLevelStyle(theme.colors.shadowLevels[2]),
+            }}
+        >
+            {banner}
+            <SurfaceRim role="floating" radius={bannerRadius} border="modal" />
+        </View>
     );
 }

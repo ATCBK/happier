@@ -20,6 +20,7 @@ describe('current admitted daemon child metadata', () => {
     const post = vi.spyOn(axios, 'post').mockImplementation(async () => ({ status: 200, data: row }));
     onTestFinished(() => post.mockRestore());
     const current = { host: 'child', platform: 'linux', happyCliVersion: 'test', displayName: 'My child',
+      homeDir: '/home/child', happyHomeDir: '/home/child/.happier', happyLibDir: '/opt/happier',
       devcontainerChild: { relation: { managedMachineId: row.id, managedMachineKind: 'devcontainer' as const,
         parentMachineId: row.controller.machineId }, observation: { ...observation, nativeResourceId: 'old-native' } } };
     const input = { current, credentials: { token: 'account-token', encryption: null }, homeId: row.homeId,
@@ -27,6 +28,7 @@ describe('current admitted daemon child metadata', () => {
     const projection = await readCurrentManagedChildMachineMetadata(input);
     expect(projection).toEqual({ relation: current.devcontainerChild.relation, observation });
     const published = refreshMachineMetadataForCurrentDaemon(current, { host: current.host, platform: current.platform,
+      homeDir: current.homeDir, happyHomeDir: current.happyHomeDir, happyLibDir: current.happyLibDir,
       happyCliVersion: current.happyCliVersion, devcontainerChild: projection });
     expect(published).toMatchObject({ displayName: 'My child', devcontainerChild: { observation } });
     expect(post.mock.calls.every(([url]) => url === `${input.serverHttpBaseUrl}${managedMachineActionEndpointPathV1('machines.managed.get')}`)).toBe(true);
@@ -36,6 +38,7 @@ describe('current admitted daemon child metadata', () => {
     const retired = await readCurrentManagedChildMachineMetadata(input);
     expect(retired).toBeNull();
     expect(refreshMachineMetadataForCurrentDaemon(current, { host: current.host, platform: current.platform,
+      homeDir: current.homeDir, happyHomeDir: current.happyHomeDir, happyLibDir: current.happyLibDir,
       happyCliVersion: current.happyCliVersion, devcontainerChild: retired }).devcontainerChild).toBeUndefined();
   });
 });

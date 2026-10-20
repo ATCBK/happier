@@ -9,12 +9,13 @@ import {
     verifyAccountContentKeyBindingV1,
 } from "@happier-dev/protocol";
 import tweetnacl from "tweetnacl";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { openPlainAccountSettingsDbValue } from "@/app/encryption/accountSettingsStorage";
+import * as accountCurrentness from "@/app/encryption/accountContentKeyAdmission";
 
 import {
     SavedSecretResourceTransactionAbort,
@@ -337,7 +338,10 @@ describe("Saved Secret resource service (SQLite integration)", () => {
                 source: { kind: 'personal-saved-secret', secretId: 'old-token' } });
             const ref = formatSharedSavedSecretRefV1(resourceId);
             const prepared = prepareAcpCatalogTransferV2({ rawSettings: raw, sourceSettingsVersion: 7,
-                savedSecretRefs: new Map([['old-token', ref]]), kiroStderrRules: KIRO_ACP_STDERR_RULES });
+                savedSecretRefs: new Map([['old-token', ref]]), agentDeclarations: [{
+                    identity: { pluginId: 'happier.agent.kiro', localId: 'kiro' },
+                    acpStderrRules: KIRO_ACP_STDERR_RULES,
+                }] });
             expect(prepared.status).toBe('ready');
             if (prepared.status !== 'ready') throw new Error('The pinned predecessor source must prepare completely');
             const input = { accountId: owner.id, resourceId, displayName: 'Token', kind: 'token' as const,
@@ -1607,6 +1611,17 @@ describe("Saved Secret resource service (SQLite integration)", () => {
                 formatSharedSavedSecretRefV1("resource_restricted_team"),
             ].sort());
 
+        for (const [resourceId, authentication, expected] of [
+            ['resource_restricted_team', unqualified, false],
+            ['resource_restricted_team', qualified, true],
+            ['resource_direct_grant', unqualified, true],
+        ] as const) {
+            expect(await inTx(tx => resourceService.validateSavedSecretResourceReferencesInTx(tx, {
+                accountId: member.id, authentication, references: [formatSharedSavedSecretRefV1(resourceId)],
+                savedSecretRevisions: [{ resourceId, expectedRevision: 1 }],
+            }))).toBe(expected);
+        }
+
         // The custodian's own resources never depend on the Team credential.
         const ownerView = await inTx((tx) => listSavedSecretResourcesForAccountInTx(tx, custodian.id, unqualified));
         expect([...ownerView.map((entry) => (entry.materialStatus === "resource_corrupt" ? null : entry.ref))].sort())
@@ -1807,6 +1822,11 @@ describe("Saved Secret resource service (SQLite integration)", () => {
             return {
                 catalog: entries.map((entry) => (entry.materialStatus === "resource_corrupt" ? null : entry.ref)),
                 materials: materials.map((row) => (row.entry.materialStatus === "resource_corrupt" ? null : row.entry.ref)),
+                referenceUsable: await inTx(tx => resourceService.validateSavedSecretResourceReferencesInTx(tx, {
+                    accountId: member.id, authentication,
+                    references: [formatSharedSavedSecretRefV1('resource_archived_arm')],
+                    savedSecretRevisions: [{ resourceId: 'resource_archived_arm', expectedRevision: 1 }],
+                })),
             };
         };
 
@@ -1815,14 +1835,15 @@ describe("Saved Secret resource service (SQLite integration)", () => {
         expect(await listedRefs(unqualified)).toEqual({
             catalog: [formatSharedSavedSecretRefV1("resource_archived_arm")],
             materials: [formatSharedSavedSecretRefV1("resource_archived_arm")],
+            referenceUsable: true,
         });
 
         await db.teamGroup.update({ where: { id: group.id }, data: { archivedAt: new Date() } });
-        expect(await listedRefs(unqualified)).toEqual({ catalog: [], materials: [] });
+        expect(await listedRefs(unqualified)).toEqual({ catalog: [], materials: [], referenceUsable: false });
 
         await db.teamGroup.update({ where: { id: group.id }, data: { archivedAt: null } });
         await db.team.update({ where: { id: inherited.id }, data: { archivedAt: new Date() } });
-        expect(await listedRefs(unqualified)).toEqual({ catalog: [], materials: [] });
+        expect(await listedRefs(unqualified)).toEqual({ catalog: [], materials: [], referenceUsable: false });
 
         // A direct grant still authorizes the row while the Group arm is archived,
         // and provenance never names the archived Group.
@@ -2046,6 +2067,11 @@ describe("Saved Secret resource service (SQLite integration)", () => {
 
         const current = await inTx((tx) => listSavedSecretResourceMaterialsForAccountInTx(tx, recipient.id));
         expect(current[0]?.entry.materialStatus).toBe("ready");
+        const validateReference = () => inTx(tx => resourceService.validateSavedSecretResourceReferencesInTx(tx, {
+            accountId: recipient.id, references: [formatSharedSavedSecretRefV1('resource_stale_envelope')],
+            savedSecretRevisions: [{ resourceId: 'resource_stale_envelope', expectedRevision: 1 }],
+        }));
+        expect(await validateReference()).toBe(true);
         await db.account.update({
             where: { id: recipient.id },
             data: {
@@ -2057,6 +2083,7 @@ describe("Saved Secret resource service (SQLite integration)", () => {
 
         const stale = await inTx((tx) => listSavedSecretResourceMaterialsForAccountInTx(tx, recipient.id));
         expect(stale[0]?.entry.materialStatus).toBe("preparing_encrypted_access");
+        expect(await validateReference()).toBe(false);
     });
 
     it("repairs newly eligible E2EE recipient material at the exact resource revision", async () => {
@@ -2171,11 +2198,21 @@ describe("Saved Secret resource service (SQLite integration)", () => {
             data: { storedContent: "malformed-at-rest-container" },
         });
 
-        const beforeBindingDamage = await inTx((tx) => listSavedSecretResourceMaterialsForAccountInTx(tx, recipient.id));
-        expect(beforeBindingDamage.find((row) => row.entry.materialStatus === "resource_corrupt")?.entry)
-            .toEqual({ materialStatus: "resource_corrupt", relationship: "recipient", repair: null });
-        expect(beforeBindingDamage.find((row) => "resourceId" in row && row.resourceId === "resource_healthy_sibling")?.entry.materialStatus)
-            .toBe("ready");
+        // Transparent counter of the signature-verifying owner: both list
+        // projections reuse one Account read even with a corrupt neighbor.
+        const verify = vi.spyOn(accountCurrentness, "deriveAccountEncryptionCurrentnessFromRow");
+        try {
+            const beforeBindingDamage = await inTx((tx) => listSavedSecretResourceMaterialsForAccountInTx(tx, recipient.id));
+            expect(beforeBindingDamage.find((row) => row.entry.materialStatus === "resource_corrupt")?.entry)
+                .toEqual({ materialStatus: "resource_corrupt", relationship: "recipient", repair: null });
+            expect(beforeBindingDamage.find((row) => "resourceId" in row && row.resourceId === "resource_healthy_sibling")?.entry.materialStatus)
+                .toBe("ready");
+            expect(verify).toHaveBeenCalledTimes(1);
+            verify.mockClear();
+            const catalog = await inTx(tx => listSavedSecretResourcesForAccountInTx(tx, recipient.id));
+            expect(catalog.map(row => row.materialStatus).sort()).toEqual(["ready", "resource_corrupt"]);
+            expect(verify).toHaveBeenCalledTimes(1);
+        } finally { verify.mockRestore(); }
 
         await db.account.update({
             where: { id: recipient.id },

@@ -77,7 +77,7 @@ function buildActionSlashCommands(state: any): CommandItem[] {
 
 function buildPromptInvocationSlashCommands(invocations: PromptInvocationsV1 | null | undefined, sessionId: string | null): CommandItem[] {
     const out: CommandItem[] = [];
-    const parsed = PromptInvocationsV1Schema.removeCatch().safeParse(invocations);
+    const parsed = PromptInvocationsV1Schema.def.innerType.safeParse(invocations);
     if (!parsed.success) return out;
     for (const entry of parsed.data.entries) {
         if (!isPromptInvocationAvailable(entry, { sessionId })) continue;

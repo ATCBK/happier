@@ -36,6 +36,7 @@ import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 // IndexedDB is the genuine browser persistence leaf; record transactions and Sync stay real.
 import 'fake-indexeddb/auto';
 import { ActionsSettingsV1Schema, type ActionSettingsActionId } from '@happier-dev/protocol/actions/actionSettings';
+import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { PROJECT_ACCOUNT_ROWS_ROUTE_V1, ProjectAccountRowListResponseV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
@@ -46,6 +47,7 @@ import { createEmptyAccountBootstrapHttpResponse } from '../fixtures/accountBoot
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance, type AddHomeOptions, type HomeGovernanceHarness, type HomeDomainAnswer } from './homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from './serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from './syncSingletonLoader';
+import { createAccountSettingsHttpBoundary } from './actionHomesHttpHarness';
 import { createSessionMetadataHttpBoundary } from './sessionMetadataHttpBoundary';
 import { createPlainAccountEncryptionCurrentnessFixture } from '../fixtures/accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from '../fixtures/featureFixtures';
@@ -486,7 +488,8 @@ export function createProviderSettingsAccountHarness() {
             const method = (requestInit?.method ?? 'GET').toUpperCase();
             // Keep the original leaf's request census and every explicit error/response override.
             const response = await home.request(input, requestInit);
-            if (!record || record.answers.has(`${method} ${path}`) || record.answers.has(path)) return response;
+            if (!record || record.answers.has(`${method} ${path}`) || record.answers.has(path)
+                || record.answers.has(`${method} ${url.pathname}`) || record.answers.has(url.pathname)) return response;
             return createEmptyAccountBootstrapHttpResponse(path, requestInit) ?? response;
         },
     };
@@ -499,9 +502,9 @@ export function createProviderSettingsAccountHarness() {
     let catalogMutationInterceptor: ((input: ProviderConnectionsRowMutationV1, next: () => HomeDomainAnswer)
         => HomeDomainAnswer | Promise<HomeDomainAnswer>) | null = null;
     const catalogMutations: ProviderConnectionsRowMutationV1[] = [];
-    const defaultFeatures = () => createRootLayoutFeaturesResponse({ features: {
+    const defaultFeatures = (serverIdentityId?: string) => createRootLayoutFeaturesResponse({ features: {
         providers: { enabled: true, localDiscovery: { enabled: true }, localModelManagement: { enabled: true } },
-    } });
+    }, ...(serverIdentityId ? { capabilities: { serverIdentity: { serverIdentityId } } } : {}) });
     async function publishFeatures(targetServerId: string, features: ReturnType<typeof createRootLayoutFeaturesResponse>) {
         home.answer(targetServerId, '/v1/features', { body: features });
         home.answer(targetServerId, '/v1/features/authenticated', { body: features });
@@ -567,7 +570,10 @@ export function createProviderSettingsAccountHarness() {
         selectMachine,
         async addHome(options: AddHomeOptions & Readonly<{ features?: ReturnType<typeof createRootLayoutFeaturesResponse> }>) {
             const targetServerId = await home.addHome(options);
-            await publishFeatures(targetServerId, options.features ?? defaultFeatures());
+            await publishFeatures(targetServerId, options.features ?? defaultFeatures(options.serverIdentityId));
+            // Re-adding a fixture Home must not inherit another case's live
+            // Machine census and become the selector's sole candidate.
+            await publishMachines(targetServerId, []);
             for (const machine of installedProviderSettingsHarness.current?.state.machines ?? []) {
                 home.answer(targetServerId, `/v1/machines/${encodeURIComponent(machine.id)}`, {
                     body: { machine: { id: machine.id, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } },
@@ -598,7 +604,7 @@ export function createProviderSettingsAccountHarness() {
             if (!serverId) serverId = await home.addHome({ name: 'Provider settings', serverUrl, accountId,
                 serverIdentityId: options.serverIdentityId, currentAccount: options.currentAccount });
             else await home.switchAccount(serverId, accountId, { currentAccount: options.currentAccount });
-            await publishFeatures(serverId, options.features ?? defaultFeatures());
+            await publishFeatures(serverId, options.features ?? defaultFeatures(options.serverIdentityId));
             let credentials: import('@/auth/storage/tokenStorage').AuthCredentials | undefined;
             if (options.currentAccount) credentials = { token: home.findByServerUrl(serverUrl)!.token! };
             const secret = options.e2eeSecret;
@@ -629,12 +635,12 @@ export function createProviderSettingsAccountHarness() {
                 }) } : {}),
             };
             const encryption = secret ? await (await import('@/sync/encryption/encryption')).Encryption.create(secret) : null;
-            const settingsContent = encryption ? { t: 'encrypted', c: sealAccountScopedBlobCiphertext({
+            const settingsContent = encryption ? { t: 'encrypted' as const, c: sealAccountScopedBlobCiphertext({
                 kind: 'account_settings', material: { type: 'dataKey', machineKey: encryption.getContentPrivateKey() }, payload: settings,
                 // Synthetic boundary fixture only; no production keys or private data are used.
                 randomBytes: length => new Uint8Array(length).fill(17),
             }) }
-                : { t: 'plain', v: settings };
+                : { t: 'plain' as const, v: settings };
             if (secret) home.answer(serverId, `POST ${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`, { body:
                 ProjectAccountRowListResponseV1Schema.parse({ status: 'listed', coverage: 'complete', rows: [] }),
             });
@@ -646,7 +652,14 @@ export function createProviderSettingsAccountHarness() {
                 ? { revision: null, content: null } : { revision: 1, content: catalogContent };
             catalogRow = row;
             catalogMutations.length = 0;
-            home.answer(serverId, '/v2/account/settings', { body: { version: 1, content: settingsContent } });
+            const settingsHttp = createAccountSettingsHttpBoundary({ serverUrl, initialAccounts: [
+                { accountId, snapshot: AccountSettingsV2GetResponseSchema.parse({ version: 1, content: settingsContent }) },
+            ] });
+            home.answer(serverId, '/v2/account/settings', { select: async (_input, request) => {
+                const response = settingsHttp.handle(request.url, request.init);
+                if (!response) throw new Error('Missing Provider Account settings HTTP fixture');
+                return { status: response.status, body: await response.json() };
+            } });
             home.answer(serverId, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, { select: () => ({ body: row.revision === null
                 ? { status: 'absent' } : {
                     status: row.content === null ? 'deleted' : 'present', revision: row.revision,
@@ -676,7 +689,7 @@ export function createProviderSettingsAccountHarness() {
             // across the next Account restoration.
             const sessions = createSessionMetadataHttpBoundary(() => ({}));
             for (const path of ['/v2/sessions', '/v2/sessions/active', '/v2/session-organization']) {
-                home.answer(serverId, path, { select: async () => {
+                home.answer(serverId, `GET ${path}`, { select: async () => {
                     const response = sessions.handle(new URL(path, serverUrl));
                     if (!response) throw new Error(`Missing Provider bootstrap fixture: ${path}`);
                     return { status: response.status, body: await response.json() };

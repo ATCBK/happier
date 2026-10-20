@@ -33,6 +33,7 @@ vi.mock('@/sync/api/session/apiSocket', () => ({
         sendMachineLiveStreamRelayEnvelope: (payload: MachineLiveStreamRelayEnvelopeV1) => apiSocketSendSpy(payload),
         onMachineLiveStreamRelayEnvelope: (listener: (payload: MachineLiveStreamRelayEnvelopeV1) => void) => apiSocketOnSpy(listener),
         getSocketId: () => 'viewer-socket-1',
+        onStatusChange: () => () => {},
     },
 }));
 

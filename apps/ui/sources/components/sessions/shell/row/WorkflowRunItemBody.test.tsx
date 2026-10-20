@@ -14,36 +14,45 @@ import { createWorkflowDefinitionFixture, createWorkflowInvocationIndexFixture, 
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 const http = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(http);
 const { storage } = await import('@/sync/domains/state/storageStore');
-const { workflowRunRowFromSummary } = await import('@/sync/store/domains/workflowRuns');
+const { workflowRunRowFromSummary, workflowRunStoreKey } = await import('@/sync/store/domains/workflowRuns');
 const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
 const { SessionWritesHereSection } = await import('@/components/workflows/triggers/SessionWritesHereSection');
 const { resetWorkflowLibraryReadsForTests } = await import('@/components/workflows/library/workflowLibraryReads');
 const { WorkViewportContext } = await import('@/components/sessions/work/WorkItemRow');
 const { WorkflowRunItemBody } = await import('./WorkflowRunItemBody');
+const { SessionTriggerHistoryScope } = await import('@/components/workflows/triggers/SessionTriggerHistoryScope');
+const { WorkflowTriggerRunHistory } = await import('@/components/workflows/triggers/WorkflowTriggerRunHistory');
 const route = '/v3/automations/runs/workflow-storage';
 const resultText = 'Kept the useful fact.\nArchived its predecessor.';
 let previous = storage.getState();
 let previousSnapshot = getActiveServerSnapshot();
+let singleton: Awaited<ReturnType<typeof loadSyncSingletonForTests>> | undefined;
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
-vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+const routerPush = vi.hoisted(() => vi.fn());
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ router: { push: routerPush } }).module);
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 
 afterEach(async () => {
     await standardCleanup();
     await http.reset();
+    singleton?.dispose();
+    singleton = undefined;
     resetWorkflowLibraryReadsForTests();
     storage.setState(previous, true);
+    routerPush.mockClear();
     publishAppliedActiveServerSnapshot(previousSnapshot);
 });
 
 async function initializeRun() {
+    singleton = await loadSyncSingletonForTests();
     previous = storage.getState();
     previousSnapshot = getActiveServerSnapshot();
     await http.reset();
@@ -123,6 +132,12 @@ describe('opened habit History result', () => {
         expect(screen.getTextContent()).toContain('workflows.run.stopping');
         expect(screen.getTextContent()).not.toContain('workflows.run.stopWhenMachineReconnects');
     });
+    it.each(['work', 'list'] as const)('retains the Run source Home when opening its %s row', async (presentation) => {
+        const { home } = await initializeRun();
+        const screen = await renderScreen(<WorkflowRunItemBody kind="workflow_run" runId="habit-run" serverId={home.id} presentation={presentation} />);
+        await screen.pressByTestIdAsync('workflow-run-row:habit-run');
+        expect(routerPush).toHaveBeenCalledWith(`/workflows/runs/habit-run?serverId=${encodeURIComponent(home.id)}`);
+    });
     it('shows pending physical Stop custody and then the settled outcome despite retained attention membership', async () => {
         const { home } = await initializeRun();
         const stopping = createWorkflowRunSummaryFixture({ id: 'habit-run', revision: 4,
@@ -149,8 +164,9 @@ describe('opened habit History result', () => {
         const running = describeWorkflowInvocationLifecycle('running').label;
         expect(describeWorkflowRunDestinationProgress(progress, 'writes-here', { saidStatus: running }))
             .toEqual(['sessionWork.scheduled.step(ordinal=2,title=Draft the notes)']);
-        expect(describeWorkflowRunDestinationProgress(progress, 'writes-here', { saidStatus: 'another word' })[0])
-            .toContain('workflows.list.observedProgress');
+        // A differing observation is the plain state word, never a labelled "Observed:" fragment.
+        expect(describeWorkflowRunDestinationProgress(progress, 'writes-here', { saidStatus: 'another word' }))
+            .toEqual(['sessionWork.scheduled.step(ordinal=2,title=Draft the notes) · ' + running]);
         const summary: WorkflowRunSummaryV1 = { ...createWorkflowRunSummaryFixture({ id: 'habit-run', state: 'running', revision: 4 }),
             stepProgress: progress };
         storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(summary, null)]);
@@ -161,6 +177,28 @@ describe('opened habit History result', () => {
         expect(text.indexOf('sessionWork.scheduled.step')).toBeLessThan(text.indexOf('workflows.list.stepsProgress'));
         // The fixture Run started on Sep 8; a Writes-here row says what writes here, not when the Run began.
         expect(text).not.toMatch(/Sep(?:tember)? 8/);
+    });
+    it('lists a Run once when an open trigger History already shows it', async () => {
+        const { home } = await initializeRun();
+        const viewport = { observe: (_target: unknown, onChange: (visible: boolean) => void) => {
+            onChange(false);
+            return () => {};
+        } };
+        const mount = (scoped: boolean) => {
+            const lists = <>
+                <WorkflowTriggerRunHistory automationId="auto-1" />
+                <SessionWritesHereSection sessionId="first-session" serverId={home.id} />
+            </>;
+            return renderScreen(<WorkViewportContext.Provider value={viewport}>
+                {scoped ? <SessionTriggerHistoryScope>{lists}</SessionTriggerHistoryScope> : lists}
+            </WorkViewportContext.Provider>);
+        };
+        const unscoped = await mount(false);
+        await flushHookEffects({ cycles: 40 });
+        expect(unscoped.findAllHostsByTestId('workflow-run-row:habit-run').length).toBeGreaterThan(1);
+        const scoped = await mount(true);
+        await flushHookEffects({ cycles: 40 });
+        expect(scoped.findAllHostsByTestId('workflow-run-row:habit-run')).toHaveLength(1);
     });
     it('keeps each destination writer and its observed progress beside aggregate Run progress', async () => {
         const { home, serve } = await initializeRun();
@@ -198,7 +236,7 @@ describe('opened habit History result', () => {
         expect(second.getTextContent()).toContain('Follow up');
         expect(second.getTextContent()).toContain('workflows.invocationState.running');
         expect(second.getTextContent()).not.toContain('workflows.invocationState.pending');
-        expect(second.getTextContent()).toContain('workflows.list.observedProgress');
+        expect(second.getTextContent()).not.toContain('workflows.list.observedProgress');
         for (const screen of [first, second]) {
             expect(screen.getTextContent()).toContain('workflows.list.stepsProgress');
             expect(screen.findHostByTestId('workflow-run-row:habit-run')?.props.accessibilityLabel)
@@ -208,6 +246,18 @@ describe('opened habit History result', () => {
             { operation: 'list', request: { targetSessionId: 'first-session' } },
             { operation: 'list', request: { targetSessionId: 'second-session' } },
         ]);
+    });
+    it.each(['list', 'work'] as const)('names a Run whose title is unreadable by its trigger, and says why quietly (%s)', async (presentation) => {
+        const { home } = await initializeRun();
+        const summary = createWorkflowRunSummaryFixture({ id: 'habit-run', state: 'running', revision: 4,
+            stepProgress: { completed: 0, total: 1 } });
+        storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(summary, { kind: 'unavailable', reason: 'content_unavailable' })]);
+        const screen = await renderScreen(<WorkflowRunItemBody kind="workflow_run" runId="habit-run"
+            serverId={home.id} presentation={presentation} fallbackName="Memory upkeep" />);
+        const label = String(screen.findHostByTestId('workflow-run-row:habit-run')?.props.accessibilityLabel);
+        // The accessible name leads with the trigger's name; the read failure is a later, quiet fragment.
+        expect(label.startsWith('Memory upkeep.')).toBe(true);
+        expect(label).toContain('workflows.contentUnavailable');
     });
     it('keeps the stopped lifecycle word in visual and spoken attention rows', async () => {
         const { home } = await initializeRun();
@@ -231,27 +281,27 @@ describe('opened habit History result', () => {
             {...{ includeResult: true }} />);
         await flushHookEffects({ cycles: 40 });
         expect(JSON.stringify(screen.tree.toJSON())).toContain('Kept the useful fact. Archived its predecessor.');
-        expect(storage.getState().workflowRunsById['habit-run']?.detail)
+        expect(storage.getState().workflowRunsById[workflowRunStoreKey('habit-run')]?.detail)
             .toMatchObject({ result: detail.result, finalOutputInvocationId: 'chosen-output' });
         expect(http.requestsFor(route).filter(request => request.input && typeof request.input === 'object'
             && 'operation' in request.input && request.input.operation === 'get').map(request => request.input))
             .toEqual([{ operation: 'get', runId: 'habit-run' }]);
     });
 
-    it('refuses an unavailable exact result and keeps the summary and retry reachable', async () => {
+    it.each([true, false])('refuses an unavailable exact result and keeps the summary and retry reachable (press event: %s)', async (withPressEvent) => {
         const { home, serve } = await initializeRun();
         serve({ refuse: true });
         const screen = await renderScreen(<WorkflowRunItemBody kind="workflow_run" runId="habit-run" serverId={home.id}
             {...{ includeResult: true }} />);
         expect(JSON.stringify(screen.tree.toJSON())).toContain('workflows.contentUnavailable');
-        expect(storage.getState().workflowRunsById['habit-run']?.detail).toBeUndefined();
+        expect(storage.getState().workflowRunsById[workflowRunStoreKey('habit-run')]?.detail).toBeUndefined();
         serve();
         const stopPropagation = vi.fn();
         await act(async () => {
-            invokeTestInstanceHandler(screen.findHostByTestId('workflow-run-result:habit-run:retry'), 'onPress', { stopPropagation });
+            invokeTestInstanceHandler(screen.findHostByTestId('workflow-run-result:habit-run:retry'), 'onPress', withPressEvent ? { stopPropagation } : undefined);
         });
         await flushHookEffects({ cycles: 40 });
-        expect(stopPropagation).toHaveBeenCalledOnce();
+        expect(stopPropagation).toHaveBeenCalledTimes(withPressEvent ? 1 : 0);
         expect(JSON.stringify(screen.tree.toJSON())).toContain('Kept the useful fact. Archived its predecessor.');
     });
 
@@ -268,7 +318,7 @@ describe('opened habit History result', () => {
             await pending.promise;
         });
         await flushHookEffects({ cycles: 40 });
-        expect(storage.getState().workflowRunsById['habit-run']).toBeUndefined();
+        expect(storage.getState().workflowRunsById[workflowRunStoreKey('habit-run', { serverId: home.id, accountId: 'account-1' })]).toBeUndefined();
         expect(JSON.stringify(screen.tree.toJSON())).not.toContain('Kept the useful fact.');
     });
 });

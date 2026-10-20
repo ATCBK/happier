@@ -12,7 +12,7 @@ import {
   PluginContributesV2Schema,
   PluginManifestV2Schema,
   PluginProjectionV2Schema,
-  type PluginProjectionV2,
+  type PluginMachineExecutionOriginV1,
   type VoiceProviderContribution,
 } from '@happier-dev/protocol';
 import type { PluginClientApi } from '@happier-dev/plugin-sdk';
@@ -246,6 +246,31 @@ function requireConversationDeclaration(
 ): VoiceConversationProviderContribution {
   if (declaration.kind !== 'conversation') throw new Error('expected conversation declaration');
   return declaration;
+}
+
+function projectConversationVoiceEntries(input: Readonly<{
+  pluginId: string;
+  generation: number;
+  declarations: readonly VoiceConversationProviderContribution[];
+  executionOrigin: PluginMachineExecutionOriginV1;
+}>): PluginUiProjectionModel['voiceProvidersById'] {
+  const projection = resolvePluginUiProjectionState(EMPTY_PLUGIN_UI_PROJECTION, PluginProjectionV2Schema.parse({
+    v: 2, generation: input.generation,
+    installedPackagesById: {}, agentsById: {}, actionsById: {}, toolsById: {},
+    commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [],
+    familiesById: { voiceProviders: { family: 'voiceProviders', entriesById: Object.fromEntries(
+      input.declarations.map(definition => {
+        const id = `${input.pluginId}/${definition.id}`;
+        return [id, { id, pluginId: input.pluginId,
+          occurrenceId: `${input.pluginId}-occurrence-${input.generation}`,
+          generation: input.generation, contributionKey: id, definition }];
+      }),
+    ) } },
+  }));
+  // Execution authority belongs to the UI projection after strict wire parsing.
+  return Object.freeze(Object.fromEntries(Object.entries(projection.voiceProvidersById).map(([id, entry]) => [
+    id, Object.freeze({ ...entry, executionOrigin: input.executionOrigin }),
+  ])));
 }
 
 describe('projected external Voice provider activation', () => {
@@ -802,17 +827,7 @@ describe('projected external Voice provider activation', () => {
     const projection: PluginUiProjectionModel = Object.freeze({
       ...EMPTY_PLUGIN_UI_PROJECTION,
       generation,
-      voiceProvidersById: Object.freeze({
-        [providerId]: Object.freeze({
-          id: providerId,
-          pluginId,
-          occurrenceId: `${pluginId}-occurrence-${generation}`,
-          generation,
-          contributionKey: providerId,
-          definition: declaration,
-          ...origin,
-        }),
-      }),
+      voiceProvidersById: projectConversationVoiceEntries({ pluginId, generation, declarations: [declaration], executionOrigin: origin }),
       reactNativeBundlesById: Object.freeze({
         [`reactNativeBundle:${pluginId}:${declaration.id}`]: Object.freeze({
           id: `reactNativeBundle:${pluginId}:${declaration.id}`,
@@ -821,7 +836,7 @@ describe('projected external Voice provider activation', () => {
           contributionKind: 'reactNativeBundle' as const,
           contributionId: declaration.id,
           generatedOwnerKind: 'voiceProvider',
-          ...origin,
+          executionOrigin: origin,
           artifactGraph,
           runtime: Object.freeze({
             decision: Object.freeze({ state: 'load' }),
@@ -948,17 +963,7 @@ describe('projected external Voice provider activation', () => {
     const projection: PluginUiProjectionModel = Object.freeze({
       ...EMPTY_PLUGIN_UI_PROJECTION,
       generation,
-      voiceProvidersById: Object.freeze({
-        [providerId]: Object.freeze({
-          id: providerId,
-          pluginId,
-          occurrenceId: `${pluginId}-occurrence-${generation}`,
-          generation,
-          contributionKey: providerId,
-          definition: declaration,
-          ...origin,
-        }),
-      }),
+      voiceProvidersById: projectConversationVoiceEntries({ pluginId, generation, declarations: [declaration], executionOrigin: origin }),
       reactNativeBundlesById: Object.freeze({
         [`reactNativeBundle:${pluginId}:${declaration.id}`]: Object.freeze({
           id: `reactNativeBundle:${pluginId}:${declaration.id}`,
@@ -967,7 +972,7 @@ describe('projected external Voice provider activation', () => {
           contributionKind: 'reactNativeBundle',
           contributionId: declaration.id,
           generatedOwnerKind: 'voiceProvider',
-          ...origin,
+          executionOrigin: origin,
           artifactGraph,
           runtime: { decision: { state: 'load' }, loadPolicy: { source: 'installedArtifact' }, cacheIdentity: { artifactDigest: identity.artifactDigest } },
         }),
@@ -1163,7 +1168,6 @@ describe('projected external Voice provider activation', () => {
         occurrenceId: `${pluginId}-occurrence-12`,
         generation: 12,
         contributionKey: candidateProviderId,
-        ...origin,
         definition: candidate,
         ...(recipientContract
           ? {
@@ -1183,7 +1187,7 @@ describe('projected external Voice provider activation', () => {
           contributionKind: 'reactNativeBundle' as const,
           contributionId: candidate.id,
           generatedOwnerKind: candidate.id === action.id ? 'clientContribution' : 'voiceProvider',
-          ...origin,
+          executionOrigin: origin,
           artifactGraph,
         runtime: {
           decision: { state: 'load' as const },
@@ -1194,7 +1198,7 @@ describe('projected external Voice provider activation', () => {
         },
       }] as const;
     }));
-    const rawProjection: PluginProjectionV2 = {
+    const rawProjection = PluginProjectionV2Schema.parse({
       v: 2,
       generation: 12,
       installedPackagesById: {}, agentsById: {}, actionsById: {
@@ -1202,7 +1206,7 @@ describe('projected external Voice provider activation', () => {
           ...action,
           pluginId,
           occurrenceId: `${pluginId}-occurrence-12`,
-          ...origin,
+          executionOrigin: origin,
           available: true,
         },
       }, toolsById: {},
@@ -1218,8 +1222,14 @@ describe('projected external Voice provider activation', () => {
         },
       },
       diagnostics: [],
-    };
-    const projection = resolvePluginUiProjectionState(EMPTY_PLUGIN_UI_PROJECTION, rawProjection);
+    });
+    const normalizedProjection = resolvePluginUiProjectionState(EMPTY_PLUGIN_UI_PROJECTION, rawProjection);
+    const projection = Object.freeze({
+      ...normalizedProjection,
+      voiceProvidersById: Object.freeze(Object.fromEntries(Object.entries(normalizedProjection.voiceProvidersById).map(([id, entry]) => [
+        id, Object.freeze({ ...entry, executionOrigin: origin }),
+      ]))),
+    });
     const actionProjection = unionPluginUiProjections([{
       machineId: 'machine-1',
       serverId: account.home.id,
@@ -1349,20 +1359,20 @@ describe('projected external Voice provider activation', () => {
       actionsById: Object.freeze(Object.fromEntries(
         Object.entries(projection.actionsById).map(([id, entry]) => [id, Object.freeze({
           ...entry,
-          ...replacementOrigin,
+          executionOrigin: replacementOrigin,
         })]),
       )),
       voiceProvidersById: Object.freeze(Object.fromEntries(
         Object.entries(projection.voiceProvidersById).map(([id, entry]) => [id, Object.freeze({
           ...entry,
-          ...replacementOrigin,
+          executionOrigin: replacementOrigin,
           ...(id === providerId ? { definition: declarationB } : {}),
         })]),
       )),
       reactNativeBundlesById: Object.freeze(Object.fromEntries(
         Object.entries(projection.reactNativeBundlesById).map(([id, bundle]) => [id, Object.freeze({
           ...bundle,
-          ...replacementOrigin,
+          executionOrigin: replacementOrigin,
         })]),
       )),
     });
@@ -1506,7 +1516,7 @@ describe('projected external Voice provider activation', () => {
         },
         platforms: ['web'],
       },
-      ...origin,
+      executionOrigin: origin,
     };
     const identities = Object.fromEntries(declarations.map((declaration) => [declaration.id, Object.freeze({
       pluginId, contributionId: declaration.id, artifactId: artifactGraph.artifactId,
@@ -1522,18 +1532,7 @@ describe('projected external Voice provider activation', () => {
       actionsById: Object.freeze({
         [`${pluginId}/open-voice-settings`]: Object.freeze(action),
       }),
-      voiceProvidersById: Object.freeze(Object.fromEntries(declarations.map((declaration) => {
-        const providerId = `${pluginId}/${declaration.id}`;
-        return [providerId, Object.freeze({
-          id: providerId,
-          pluginId,
-          occurrenceId: `${pluginId}-occurrence-${generation}`,
-          generation,
-          contributionKey: providerId,
-          definition: declaration,
-          ...origin,
-        })];
-      }))),
+      voiceProvidersById: projectConversationVoiceEntries({ pluginId, generation, declarations, executionOrigin: origin }),
       reactNativeBundlesById: Object.freeze({
         [`reactNativeBundle:${pluginId}:${action.id}`]: Object.freeze({
           id: `reactNativeBundle:${pluginId}:${action.id}`,
@@ -1542,7 +1541,7 @@ describe('projected external Voice provider activation', () => {
           contributionKind: 'reactNativeBundle',
           contributionId: action.id,
           generatedOwnerKind: 'clientContribution',
-          ...origin,
+          executionOrigin: origin,
           artifactGraph,
           runtime: {
             decision: { state: 'load' },
@@ -1560,7 +1559,7 @@ describe('projected external Voice provider activation', () => {
             contributionKind: 'reactNativeBundle',
             contributionId: declaration.id,
             generatedOwnerKind: 'voiceProvider',
-            ...origin,
+            executionOrigin: origin,
             artifactGraph,
             runtime: { decision: { state: 'load' }, loadPolicy: { source: 'installedArtifact' }, cacheIdentity: { artifactDigest: identity.artifactDigest } },
           })];

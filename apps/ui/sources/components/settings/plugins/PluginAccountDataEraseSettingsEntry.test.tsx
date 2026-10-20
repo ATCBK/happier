@@ -353,7 +353,7 @@ function createAccountAvailabilityReader(input: Pick<
                 pluginId: materialization.pluginId,
             },
             releaseContent: 'unknown',
-            validation: { kind: 'rejected', reason: 'unknown' },
+            validation: { kind: 'rejected', reason: 'release_unavailable' },
         }),
         subscribe: () => () => {},
     };

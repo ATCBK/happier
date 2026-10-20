@@ -490,7 +490,8 @@ export function useSessionListRenderModels(input: Readonly<{
         cacheByKey: rowRenderableCacheByKeyRef.current,
         credentialBindingsByServerId: audience.credentialBindingsByServerId,
     }), [audience.credentialBindingsByServerId, selectionScopeListItems, subscribedRowRenderableByKey]);
-    const clocksActive = input.clocksActive !== false;
+    // Deferred rows own their time-dependent presentation at the row boundary.
+    const clocksActive = input.clocksActive !== false && deriveRowViewModels;
     const relativeNowMs = useSessionListRelativeNowMs(clocksActive);
     // Shared session-list runtime clock: rows must derive working freshness
     // from the SAME timestamp as group placement (useVisibleSessionListViewState)

@@ -22,7 +22,8 @@ const predecessorSource = {
 
 describe('configured ACP predecessor transport', () => {
   it('preserves optional native notification suppression without suppressing a neighboring real error', () => {
-    const prepared = prepareAcpCatalogTransferV2({ rawSettings: predecessorSource, sourceSettingsVersion: 7, kiroStderrRules: KIRO_ACP_STDERR_RULES });
+    const prepared = prepareAcpCatalogTransferV2({ rawSettings: predecessorSource, sourceSettingsVersion: 7,
+      agentDeclarations: [{ identity: { pluginId: 'happier.agent.kiro', localId: 'kiro' }, acpStderrRules: KIRO_ACP_STDERR_RULES }] });
     expect(prepared.status).toBe('ready');
     if (prepared.status !== 'ready') return;
     const definition = prepared.record.definitions[0]!;

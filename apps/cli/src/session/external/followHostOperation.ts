@@ -61,18 +61,16 @@ export type ExternalSessionFollowHostOperation = Readonly<{
 type FollowLeaseManager = ReturnType<typeof createExternalSessionFollowLeaseManager>;
 type ObservationProjection = ReturnType<typeof createExternalSessionObservationDaemonProjection>;
 
-// Whole-admission ceilings deliberately mirror the already-proven bounded
-// External Sessions inventory topology. They are source-independent and do
-// not create resumable/background replay work after admission fails.
-const MAX_INITIAL_REPLAY_PAGES = 100;
-const MAX_INITIAL_REPLAY_ITEMS = 10_000;
+// Byte capacity bounds retained historical terminal batches and aggregate
+// fresh/nonterminal replay. Paging follows the containing admission lifetime;
+// total history length is not a separate admission decision.
 const MAX_INITIAL_REPLAY_SERIALIZED_BYTES = 4 * 1024 * 1024;
 
 /**
  * Sizes an already admitted replay page through the canonical iterative
  * Protocol byte owner. Recursive serialization would reject valid deep
  * transcript values the strict-JSON contract deliberately admits, so the
- * replay byte budget stays the only bound.
+ * byte accounting does not introduce a separate depth bound.
  *
  * The remaining allowance is passed through so an over-budget page returns the
  * fail-closed `remaining + 1` sentinel instead of materializing its bytes.
@@ -218,10 +216,13 @@ export function createExternalSessionFollowHostOperation(params: Readonly<{
                 return unavailable('plugin_external_follow_unavailable');
             }
 
-            const combinedSignal = AbortSignal.any([
-                ...(request.options.signal ? [request.options.signal] : []),
+            const retirementSignal = AbortSignal.any([
                 ...(request.retirementSignal ? [request.retirementSignal] : []),
                 ...(resource.retirementSignal ? [resource.retirementSignal] : []),
+            ]);
+            const combinedSignal = AbortSignal.any([
+                ...(request.options.signal ? [request.options.signal] : []),
+                retirementSignal,
             ]);
             let delivery = Promise.resolve();
             const emit = (event: HostExternalTranscriptFollowEvent): Promise<void> => {
@@ -235,19 +236,17 @@ export function createExternalSessionFollowHostOperation(params: Readonly<{
                 let pageCursor: string | undefined;
                 let fromCursor: string | null = null;
                 const seenCursors = new Set<string>();
-                let replayPages = 0;
-                let replayItems = 0;
                 let replaySerializedBytes = 0;
                 const replayBatchesNewestFirst: Array<Readonly<{
-                    items: ReadonlyArray<ReturnType<typeof mapPluginExternalTerminalSourceItem>>;
+                    items: Array<ReturnType<typeof mapPluginExternalTerminalSourceItem>>;
                     fetchCursor: string | null;
                 }>> = [];
                 let replayTailCursor: string | null = null;
                 let historicalCutoff: string | null = null;
                 while (!replayTailCursor) {
+                    combinedSignal.throwIfAborted();
                     if (
-                        replayPages >= MAX_INITIAL_REPLAY_PAGES
-                        || Date.now() >= (
+                        Date.now() >= (
                             request.options.admissionDeadlineAtMs
                             ?? Number.POSITIVE_INFINITY
                         )
@@ -271,21 +270,6 @@ export function createExternalSessionFollowHostOperation(params: Readonly<{
                         signal: combinedSignal,
                     });
                     if (!fresh && historicalCutoff === null) historicalCutoff = page.tailCursor;
-                    replayPages += 1;
-                    replayItems += page.items.length;
-                    replaySerializedBytes += measureReplayPageBytes(
-                        page,
-                        MAX_INITIAL_REPLAY_SERIALIZED_BYTES - replaySerializedBytes,
-                    );
-                    if (
-                        replayItems > MAX_INITIAL_REPLAY_ITEMS
-                        || replaySerializedBytes > MAX_INITIAL_REPLAY_SERIALIZED_BYTES
-                    ) {
-                        throw terminalAdmissionFailure(
-                            'plugin_external_follow_resync_required',
-                            'External Session initial replay exceeded its bounded capacity',
-                        );
-                    }
                     if (page.truncated) {
                         throw terminalAdmissionFailure(
                             'plugin_external_follow_resync_required',
@@ -306,10 +290,46 @@ export function createExternalSessionFollowHostOperation(params: Readonly<{
                         );
                     }
                     seenCursors.add(nextCursor);
-                    replayBatchesNewestFirst.push(Object.freeze({
-                        items: Object.freeze(page.items.map(terminal ? mapPluginExternalTerminalSourceItem : mapPluginExternalTranscriptItem)),
+                    const batch = {
+                        items: page.items.map(terminal ? mapPluginExternalTerminalSourceItem : mapPluginExternalTranscriptItem),
                         fetchCursor: fresh ? page.nextCursor ?? null : fromCursor,
-                    }));
+                    };
+                    replayBatchesNewestFirst.push(batch);
+                    if (terminal && !fresh) {
+                        // Native observations establish the complete correlation
+                        // baseline. Display history keeps its newest suffix in
+                        // the same retained replay capacity as before.
+                        replaySerializedBytes += measureReplayPageBytes(
+                            { ...page, items: [] }, MAX_INITIAL_REPLAY_SERIALIZED_BYTES,
+                        );
+                        for (const item of batch.items) {
+                            replaySerializedBytes += measureReplayPageBytes(item, MAX_INITIAL_REPLAY_SERIALIZED_BYTES);
+                        }
+                        replaySerializedBytes += Math.max(0, batch.items.length - 1);
+                        for (let batchIndex = replayBatchesNewestFirst.length - 1;
+                            replaySerializedBytes > MAX_INITIAL_REPLAY_SERIALIZED_BYTES && batchIndex >= 0;
+                            batchIndex -= 1) {
+                            const older = replayBatchesNewestFirst[batchIndex]!;
+                            for (let itemIndex = 0;
+                                replaySerializedBytes > MAX_INITIAL_REPLAY_SERIALIZED_BYTES && itemIndex < older.items.length;) {
+                                const item = older.items[itemIndex]!;
+                                if (item.kind === 'source_observation') { itemIndex += 1; continue; }
+                                replaySerializedBytes -= measureReplayPageBytes(item, MAX_INITIAL_REPLAY_SERIALIZED_BYTES)
+                                    + (older.items.length > 1 ? 1 : 0);
+                                older.items.splice(itemIndex, 1);
+                            }
+                        }
+                    } else {
+                        replaySerializedBytes += measureReplayPageBytes(
+                            page, MAX_INITIAL_REPLAY_SERIALIZED_BYTES - replaySerializedBytes,
+                        );
+                    }
+                    if (replaySerializedBytes > MAX_INITIAL_REPLAY_SERIALIZED_BYTES) {
+                        throw terminalAdmissionFailure(
+                            'plugin_external_follow_resync_required',
+                            'External Session initial replay exceeded its bounded capacity',
+                        );
+                    }
                     if (!page.hasMore || !page.nextCursor) {
                         replayTailCursor = historicalCutoff ?? page.tailCursor ?? nextCursor;
                         break;
@@ -365,7 +385,7 @@ export function createExternalSessionFollowHostOperation(params: Readonly<{
             let terminated = false;
             const removeTerminationListeners = (): void => {
                 request.options.signal?.removeEventListener('abort', onCallerAbort);
-                request.retirementSignal?.removeEventListener('abort', onRetirement);
+                retirementSignal.removeEventListener('abort', onRetirement);
             };
             const release = async (): Promise<void> => {
                 if (releasePromise) return await releasePromise;
@@ -413,7 +433,7 @@ export function createExternalSessionFollowHostOperation(params: Readonly<{
                 void terminate('retired', 'plugin_generation_retired');
             }
             request.options.signal?.addEventListener('abort', onCallerAbort, { once: true });
-            request.retirementSignal?.addEventListener('abort', onRetirement, { once: true });
+            retirementSignal.addEventListener('abort', onRetirement, { once: true });
 
             if (Date.now() >= (
                 request.options.admissionDeadlineAtMs

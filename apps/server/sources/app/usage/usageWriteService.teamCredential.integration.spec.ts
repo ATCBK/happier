@@ -287,14 +287,18 @@ describe("usageWriteService Team credential attribution", () => {
                 currency: "USD",
             },
             context: { usedTokens: 12, windowTokens: 200_000 },
+        } satisfies UsageEventIngestRequest;
+
+        // New writes reject caller-supplied attribution rather than stripping it.
+        // The admitted ordinary request still derives only the immutable turn witness.
+        const forgedRequest = {
+            ...request,
             teamCredentialResourceId: fixture.resourceB.id,
             teamCredentialActorAccountId: fixture.actorB.id,
             teamCredentialGroups: [currentOnlyGroup.id],
-        } satisfies UsageEventIngestRequest & {
-            teamCredentialResourceId: string;
-            teamCredentialActorAccountId: string;
-            teamCredentialGroups: readonly string[];
         };
+        await expect(recordUsageEvent(fixture.storageAccount.id, forgedRequest)).resolves.toMatchObject({ ok: false, error: "invalid-params" });
+        expect(await db.usageEvent.count({ where: { source: "claude_sdk", externalKey: request.externalKey } })).toBe(0);
 
         await expect(recordUsageEvent(fixture.storageAccount.id, request)).resolves.toMatchObject({ ok: true });
 

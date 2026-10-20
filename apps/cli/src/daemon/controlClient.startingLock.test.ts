@@ -5,7 +5,9 @@ import { EventEmitter } from 'node:events';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
+import { procfsFileHandle } from '@/testkit/process/procfsFileHandle';
 import { configuration, reloadConfiguration } from '@/configuration';
+import type { ProcessCensusRow } from '@/processes/census/processCensus';
 const processBoundary = vi.hoisted(() => ({
   commands: [] as string[],
   command: '',
@@ -14,49 +16,59 @@ const processBoundary = vi.hoisted(() => ({
 const daemonCommand = '/usr/bin/node /repo/dist/index.mjs daemon start-sync';
 const lockPid = 999_999_998;
 
-// Raw process inventory and process execution are OS boundaries. Classification,
-// lock admission and zombie-state interpretation remain the real owners.
+// Procfs descriptors and native helper execution are OS boundaries. Classification,
+// the census, lock admission and zombie-state interpretation remain real.
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
-  return { ...actual, readFile: (...args: Parameters<typeof actual.readFile>) => {
-    if (String(args[0]) === `/proc/${lockPid}/cmdline`) {
+  return { ...actual, open: (...args: Parameters<typeof actual.open>) => {
+    const path = String(args[0]);
+    if (path === `/proc/${lockPid}/cmdline`) {
       processBoundary.command = processBoundary.commands.shift() ?? '';
-      return Promise.resolve(Buffer.from(processBoundary.command.replaceAll(' ', '\0')));
+      return Promise.resolve(procfsFileHandle(processBoundary.command.replaceAll(' ', '\0')));
     }
-    return actual.readFile(...args);
+    if (path === `/proc/${lockPid}/status`) {
+      const uid = process.getuid?.() ?? 1000;
+      return Promise.resolve(procfsFileHandle(`Uid:\t${uid}\t${uid}\t${uid}\t${uid}\n`));
+    }
+    if (path === `/proc/${lockPid}/stat`) {
+      const state = processBoundary.commands[0] ? 'S' : processBoundary.runStates[0] ?? 'S';
+      return Promise.resolve(procfsFileHandle(
+        `${lockPid} (node) ${state} 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 12345 22`,
+      ));
+    }
+    return actual.open(...args);
   } };
+});
+vi.mock('node:fs', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, existsSync: (path: Parameters<typeof actual.existsSync>[0]) =>
+    /[\\/]tools[\\/]unpacked[\\/]happier-process-custody(?:\.exe)?$/u.test(String(path))
+      || actual.existsSync(path) };
 });
 vi.mock('node:child_process', async importOriginal => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   return { ...actual,
-    execFileSync: (...args: Parameters<typeof actual.execFileSync>) => {
-      if (String(args[0]).toLowerCase().endsWith('powershell.exe')
-        && args[1]?.some(arg => arg.includes(String(lockPid)))) {
-        processBoundary.command = processBoundary.commands.shift() ?? '';
-        return JSON.stringify(processBoundary.command
-          ? [{ ProcessId: lockPid, Name: 'node.exe', CommandLine: processBoundary.command }]
-          : []);
-      }
-      if (args[0] === 'ps' && args[1]?.includes(String(lockPid))) {
-        if (process.platform !== 'linux' && args[1].includes('command=')) {
-          processBoundary.command = processBoundary.commands.shift() ?? '';
-        }
-        return args[1].includes('comm=') ? (processBoundary.command ? 'node' : '') : processBoundary.command;
-      }
-      return actual.execFileSync(...args);
-    },
     execFile: (command: string, args: string[], options: unknown,
       callback: (error: Error | null, stdout: string, stderr: string) => void) => {
-      if (command !== 'ps' || !args.includes('state=')) {
-        throw new Error('Unexpected process-state boundary invocation');
+      if (args[0] !== 'process-census') {
+        throw new Error(`Unexpected process boundary invocation: ${command}`);
       }
+      // Darwin and Windows consume the same strict helper census contract.
+      processBoundary.command = processBoundary.commands.shift() ?? '';
+      const rows: ProcessCensusRow[] = [process.pid, lockPid].map(pid => ({
+        pid, ppid: 1, start: { startTimeMs: 1000 },
+        principal: { kind: process.platform === 'win32' ? 'sid' : 'uid', value: 'fixture-user' },
+        name: 'node', memory: null, cpuTimeUs: null,
+        ...(pid === lockPid && processBoundary.command ? { argv: processBoundary.command.split(' ') } : {}),
+        state: pid === lockPid && !processBoundary.command && processBoundary.runStates[0] === 'Z' ? 'zombie' : 'sleeping',
+      }));
+      const stdout = JSON.stringify({ v: 1, capturedAtMs: Date.now(), logicalCpus: 1, rows });
       const child = Object.assign(new EventEmitter(), { stdout: null, stderr: null, exitCode: 0, signalCode: null });
-      queueMicrotask(() => { callback(null, processBoundary.runStates.shift() ?? 'S', ''); child.emit('close', 0, null); });
+      queueMicrotask(() => { callback(null, stdout, ''); child.emit('close', 0, null); });
       return child;
     },
   };
 });
-vi.mock('ps-list', () => ({ default: async () => [] }));
 
 let controlClient: typeof import('./controlClient');
 let persistence: typeof import('@/persistence');

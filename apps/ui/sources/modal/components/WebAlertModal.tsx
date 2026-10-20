@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Pressable } from 'react-native';
+import { View } from 'react-native';
 import { BaseModal } from './BaseModal';
 import { AlertModalConfig, ConfirmModalConfig } from '../types';
 import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
@@ -7,6 +7,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { t } from '@/text';
 import { Text } from '@/components/ui/text/Text';
 import { ModalCardFrame } from './card/ModalCardFrame';
+import { ModalChoiceRow } from './card/ModalChoiceRow';
 
 
 interface WebAlertModalProps {
@@ -37,46 +38,6 @@ const stylesheet = StyleSheet.create((theme) => ({
         textAlign: 'center',
         color: theme.colors.text.primary,
         marginTop: theme.space.s4,
-    },
-    buttonContainer: {
-        borderTopWidth: 1,
-        borderTopColor: theme.colors.border.default,
-    },
-    buttonRow: {
-        flexDirection: 'row',
-    },
-    buttonColumn: {
-        flexDirection: 'column',
-    },
-    button: {
-        flex: 1,
-        paddingVertical: theme.space.s10,
-        paddingHorizontal: 14,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    buttonPressed: {
-        backgroundColor: theme.colors.border.default,
-    },
-    separatorVertical: {
-        width: 1,
-        backgroundColor: theme.colors.border.default,
-    },
-    separatorHorizontal: {
-        height: 1,
-        backgroundColor: theme.colors.border.default,
-    },
-    buttonText: {
-        color: theme.colors.text.primary,
-        textAlign: 'center',
-        flexShrink: 1,
-        paddingHorizontal: theme.space.s2,
-    },
-    primaryText: {
-        color: theme.colors.text.primary,
-    },
-    destructiveText: {
-        color: theme.colors.state.danger.foreground,
     },
     irreversibleText: {
         color: theme.colors.state.warning.foreground,
@@ -118,9 +79,6 @@ export function WebAlertModal({ config, onClose, onConfirm, showBackdrop = true,
             ? config.buttons
             : [{ text: t('common.ok'), style: 'default' as const }];
 
-    // Two choices sit side by side; three or more stack, each a full-width row in the caller's order (DESIGN-9 N33).
-    const buttonLayout = buttons.length > 2 ? 'column' : 'row';
-
     const resolveButtonTestId = (index: number): string => {
         if (isConfirm) {
             if (index === 0) return 'web-modal-cancel';
@@ -151,45 +109,19 @@ export function WebAlertModal({ config, onClose, onConfirm, showBackdrop = true,
                         ]}>
                             {paragraph.text}
                         </Text>
-                    )) : config.message && (
+                    )) : config.message ? (
                         <Text variant="body" style={styles.message}>
                             {config.message}
                         </Text>
-                    )}
+                    ) : null}
                 </View>
 
-                <View
-                    style={[
-                        styles.buttonContainer,
-                        buttonLayout === 'row' ? styles.buttonRow : styles.buttonColumn,
-                    ]}
-                >
-                    {buttons.map((button, index) => (
-                        <React.Fragment key={index}>
-                            {index > 0 && (
-                                <View style={buttonLayout === 'row' ? styles.separatorVertical : styles.separatorHorizontal} />
-                            )}
-                            <Pressable
-                                style={({ pressed }) => [
-                                    styles.button,
-                                    pressed && styles.buttonPressed
-                                ]}
-                                testID={resolveButtonTestId(index)}
-                                accessibilityRole="button"
-                                accessibilityLabel={button.text}
-                                onPress={() => handleButtonPress(index)}
-                            >
-                                <Text variant="label" emphasis={button.style === 'cancel' ? 'regular' : 'semiBold'} style={[
-                                    styles.buttonText,
-                                    buttonLayout === 'column' && (button.style === 'default' || !button.style) && styles.primaryText,
-                                    button.style === 'destructive' && styles.destructiveText,
-                                ]}>
-                                    {button.text}
-                                </Text>
-                            </Pressable>
-                        </React.Fragment>
-                    ))}
-                </View>
+                <ModalChoiceRow choices={buttons.map((button, index) => ({
+                    text: button.text,
+                    testID: resolveButtonTestId(index),
+                    role: button.style === 'cancel' || button.style === 'destructive' ? button.style : 'default',
+                    onPress: () => handleButtonPress(index),
+                }))} />
             </ModalCardFrame>
         </BaseModal>
     );

@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import type * as ExpoBlur from 'expo-blur';
 
 /**
@@ -13,6 +14,15 @@ type BlurModule = typeof ExpoBlur;
 
 let cachedModule: BlurModule | null | undefined;
 
+/**
+ * Native blur without an explicit content target is supported only on iOS.
+ * SDK 55 Android requires a BlurTargetView outside its consuming blur views; until the
+ * composition owner supplies that target, consumers use their tint/dim fallback.
+ */
+export function isNativeBlurAvailable(): boolean {
+    return Platform.OS === 'ios';
+}
+
 function loadBlurModule(): BlurModule | null {
     if (cachedModule !== undefined) {
         return cachedModule;
@@ -27,5 +37,6 @@ function loadBlurModule(): BlurModule | null {
 }
 
 export function getBlurViewComponent(): BlurModule['BlurView'] | null {
+    if (!isNativeBlurAvailable()) return null;
     return loadBlurModule()?.BlurView ?? null;
 }

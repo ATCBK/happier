@@ -107,7 +107,8 @@ export async function fetchSessionSnapshotUpdateFromServer(opts: {
     currentAgentState?: AgentState | null;
     reason?: SessionSnapshotRefreshReason;
 } & SessionStoredContentCryptoContext): Promise<{
-    organization?: Pick<V2SessionByIdResponse['session'], 'reportsTo' | 'origin'>;
+    archivedAt?: number | null;
+    organization?: Pick<V2SessionByIdResponse['session'], 'manager' | 'origin'>;
     metadataLayoutVersion?: number;
     metadataTuple?: SessionMetadataEnvelopeTupleSnapshot;
     sharedMetadataTuple?: SessionMetadataSharedEditorSnapshot;
@@ -125,7 +126,8 @@ export async function fetchSessionSnapshotUpdateFromServer(opts: {
         (raw as any)?.encryptionMode === 'plain' ? 'plain' : 'e2ee';
 
     const out: {
-        organization?: Pick<V2SessionByIdResponse['session'], 'reportsTo' | 'origin'>;
+        archivedAt?: number | null;
+        organization?: Pick<V2SessionByIdResponse['session'], 'manager' | 'origin'>;
         metadataLayoutVersion?: number;
         metadataTuple?: SessionMetadataEnvelopeTupleSnapshot;
         sharedMetadataTuple?: SessionMetadataSharedEditorSnapshot;
@@ -136,8 +138,9 @@ export async function fetchSessionSnapshotUpdateFromServer(opts: {
         latestTurnStatus?: LatestTurnStatusSnapshot;
         latestTurnStatusObservedAt?: number;
     } = {};
+    if (raw.archivedAt !== undefined) out.archivedAt = raw.archivedAt;
     out.organization = {
-        ...(raw.reportsTo ? { reportsTo: raw.reportsTo } : {}),
+        ...(raw.manager ? { manager: raw.manager } : {}),
         ...(raw.origin ? { origin: raw.origin } : {}),
     };
 

@@ -57,7 +57,7 @@ function readOhMyPiTimestampMs(value: unknown): number {
   return 0;
 }
 
-function buildSessionFileQualifier(sessionFilePath: string): string {
+export function buildOhMyPiSessionFileQualifier(sessionFilePath: string): string {
   return createHash('sha256').update(sessionFilePath, 'utf8').digest('base64url');
 }
 
@@ -330,7 +330,7 @@ export function projectOhMyPiSessionSnapshotToDirectMessages(params: Readonly<{
   sessionId: string;
   lines: readonly unknown[];
 }>): ProjectedSnapshot {
-  const sessionFileQualifier = buildSessionFileQualifier(params.sessionFilePath);
+  const sessionFileQualifier = buildOhMyPiSessionFileQualifier(params.sessionFilePath);
   const records = params.lines.map((line) => asRecord(line));
   const headerIndex = records.findIndex((record) => record?.type === 'session');
   const header = (headerIndex >= 0 ? records[headerIndex] : null) as SessionHeader | null;

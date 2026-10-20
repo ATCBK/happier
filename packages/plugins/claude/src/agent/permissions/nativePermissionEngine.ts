@@ -100,6 +100,7 @@ function selectedLabels(
 async function answerClaudeQuestions(
   context: AgentRuntimeContext,
   input: unknown,
+  signal?: AbortSignal,
 ): Promise<PermissionResult> {
   const questions = readQuestions(input);
   if (!questions) {
@@ -128,7 +129,7 @@ async function answerClaudeQuestions(
       toHostQuestion(firstQuestion),
       ...remainingQuestions.map(toHostQuestion),
     ],
-  });
+  }, signal ? { signal } : undefined);
   if (result.status !== 'answered') {
     return { behavior: 'deny', message: 'Permission denied', interrupt: true };
   }
@@ -154,7 +155,7 @@ export function createClaudeNativePermissionEngine(
   return Object.freeze({
     async canCallTool(toolName, input, options = {}) {
       if (isAskUserQuestionToolName(toolName)) {
-        return await answerClaudeQuestions(context, input);
+        return await answerClaudeQuestions(context, input, options.signal);
       }
       const toolInput = AgentRuntimeJsonValueSchema.safeParse(isRecord(input) ? input : {});
       if (!toolInput.success) {

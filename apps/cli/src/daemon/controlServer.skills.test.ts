@@ -1,7 +1,7 @@
 import { chmod, lstat, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { expect, it, vi } from 'vitest';
+import { expect, it, onTestFinished, vi } from 'vitest';
 import { computePromptBundleDigestV1 } from '@happier-dev/protocol/prompts/library/promptLibraryDigests';
 import { createSkillStore } from '@/prompts/skills/store/skillStore';
 import { createDaemonControlApp } from './controlServer';
@@ -15,6 +15,9 @@ import { spawnInlineNodeTestProcess } from '@/testkit/process/spawn';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { once } from 'node:events';
 import fastify from 'fastify';
+import axios from 'axios';
+import { PROJECT_ACCOUNT_ROWS_ROUTE_V1, ProjectAccountRowListResponseV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { resolveRunnerSkills, type ResolveRunnerSkillsInput } from '@/prompts/skills/runtime/resolveRunnerSkills';
 import type { SkillArtifactStore } from '@/prompts/skills/library/readSkillLibraryContent';
@@ -23,6 +26,21 @@ import { ensureSkillSessionDirHttp } from './controlClient';
 import { SkillSessionDirControlRequestSchema } from '@/prompts/skills/store/controlRoutes';
 import { writeDaemonState } from '@/persistence';
 import * as processCensus from '@/processes/census/processCensus';
+
+const filesystemBoundary = vi.hoisted(() => ({
+    observeWrite: undefined as ((file: Parameters<typeof import('node:fs/promises').writeFile>[0],
+        completion: Promise<void>) => void) | undefined,
+}));
+
+// Observe the real filesystem boundary without replacing registration or exit logic.
+vi.mock('node:fs/promises', async importOriginal => {
+    const actual = await importOriginal<typeof import('node:fs/promises')>();
+    return { ...actual, writeFile: (...args: Parameters<typeof actual.writeFile>) => {
+        const completion = actual.writeFile(...args);
+        filesystemBoundary.observeWrite?.(args[0], completion);
+        return completion;
+    } };
+});
 
 it('serves the real authenticated skill store and rejects unknown authority fields', async () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-impl-p3b-store-control-'));
@@ -74,7 +92,6 @@ it('tracks foreground identity before report and removes its Session and Runs th
         machineId: 'machine-one', stopSession: async () => ({ status: 'not_found' as const }),
         spawnSession: async () => ({ type: 'success' as const, sessionId: 'unused' }), requestShutdown: () => {},
         onHappySessionWebhook: ordinaryReport, controlToken: 'secret', skillStore });
-    let tick: (() => Promise<void>) | undefined;
     let restoreInterval = () => {};
     try {
         const response = await app.inject({ method: 'POST', url: '/skills/session-dir',
@@ -103,21 +120,16 @@ it('tracks foreground identity before report and removes its Session and Runs th
         expect(sessions.has(process.pid)).toBe(false);
         const exited = createOnChildExited({ pidToTrackedSession: sessions, spawnResourceCleanupByPid: new Map(),
             sessionAttachCleanupByPid: new Map(), getApiMachineForSessions: () => null, skillStore });
-        const interval = vi.spyOn(global, 'setInterval').mockImplementation(handler => {
-            if (typeof handler !== 'function') throw new Error('Expected heartbeat clock callback');
-            tick = async () => { await handler(); };
-            return 1 as unknown as NodeJS.Timeout;
-        });
-        restoreInterval = () => interval.mockRestore();
+        vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+        restoreInterval = () => { vi.useRealTimers(); };
         startDaemonHeartbeatLoop({ pidToTrackedSession: sessions, spawnResourceCleanupByPid: new Map(),
             sessionAttachCleanupByPid: new Map(), getApiMachineForSessions: () => null, onChildExited: exited,
             controlPort: 8765, fileState: { pid: process.pid, httpPort: 8765, startedAt: Date.now(),
                 startedWithCliVersion: configuration.currentCliVersion, daemonLogPath: join(happyHomeDir, 'daemon.log') },
             currentCliVersion: configuration.currentCliVersion, requestShutdown: () => {}, writeDaemonStateForCurrentOwner: () => true });
         child.kill(); await childExit;
-        if (!tick) throw new Error('Missing heartbeat clock callback');
-        await tick();
-        expect(sessions.size).toBe(0);
+        await vi.advanceTimersToNextTimerAsync();
+        await vi.waitFor(() => expect(sessions.size).toBe(0));
         await expect(lstat(join(happyHomeDir, 'skills', 'sessions', 'foreground-session'))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
         restoreInterval();
@@ -163,6 +175,18 @@ it('releases a fresh startup folder on failure before the readiness webhook', as
 });
 
 it.each(['registered', 'untracked index parent'] as const)('does not recreate an exited parent folder from an already-issued Session-owned Run ensure (%s)', async parentMode => {
+    // Home transport reports an observed empty Project association; resolution,
+    // skill planning and daemon materialization continue through their real owners.
+    const projectMode = vi.spyOn(axios, 'get').mockImplementation(async url => {
+        if (String(url).endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+        throw new Error(`Unexpected skill preparation Home read: ${String(url)}`);
+    });
+    const projectRows = vi.spyOn(axios, 'post').mockImplementation(async url => {
+        if (String(url).endsWith(`${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`)) return { status: 200,
+            data: ProjectAccountRowListResponseV1Schema.parse({ status: 'listed', coverage: 'complete', rows: [] }) };
+        throw new Error(`Unexpected skill preparation Home write: ${String(url)}`);
+    });
+    onTestFinished(() => { projectMode.mockRestore(); projectRows.mockRestore(); withdrawActiveProjectAccountRowsSnapshot(); });
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-impl-p3b-store-late-run-'));
     const homeDescriptor = Object.getOwnPropertyDescriptor(configuration, 'happyHomeDir')!;
     const serverDescriptor = Object.getOwnPropertyDescriptor(configuration, 'activeServerDir')!;
@@ -208,7 +232,8 @@ it.each(['registered', 'untracked index parent'] as const)('does not recreate an
     // Account Artifact persistence is external I/O; plan, body parsing, native
     // scan, resolver, HTTP client, daemon route, store and exit owner stay real.
     const artifacts: SkillArtifactStore = {
-        list: async () => ({ items: [artifact], coverage: 'complete' }), read: async () => artifact,
+        list: async () => ({ items: [{ ...artifact, headerVersion: artifact.revision.headerVersion,
+            bodyVersion: artifact.revision.bodyVersion }], coverage: 'complete' }), read: async () => artifact,
     };
     try {
         await app.listen({ host: '127.0.0.1', port: 0 });
@@ -357,20 +382,32 @@ it('keeps native registration inside exit custody while the OS observation is pe
     const childExit = once(child, 'exit');
     const pid = child.pid!;
     const sessions = new Map<number, TrackedSession>();
+    const exitReportPath = join(happyHomeDir, 'logs', 'session-exit', `session-pending-parent-pid-${pid}.json`);
+    let observeExitReportWrite!: (completion: Promise<void>) => void;
+    const exitReportWrite = new Promise<{ completion: Promise<void> }>(resolve => {
+        observeExitReportWrite = completion => resolve({ completion });
+    });
     let releaseSample!: () => void;
     const sampleGate = new Promise<void>(resolve => { releaseSample = resolve; });
     let observeSample!: () => void;
     const sampled = new Promise<void>(resolve => { observeSample = resolve; });
     const readCensus = processCensus.readProcessCensus;
-    // Hold a real OS-adapter observation, not registration or lifecycle logic.
-    const boundary = vi.spyOn(processCensus, 'readProcessCensus').mockImplementation(async request => {
-        const snapshot = await readCensus(request);
-        if (request?.pids?.includes(pid)) { observeSample(); await sampleGate; }
-        return snapshot;
-    });
+    let restoreCensusBoundary = () => {};
     let registration: ReturnType<typeof registerExternalSessionIdentity> | undefined;
     let retirement: Promise<void> | undefined;
     try {
+        // The exit owner intentionally publishes diagnostics asynchronously. Join
+        // this owned filesystem write before removing its temporary destination.
+        filesystemBoundary.observeWrite = (file, completion) => {
+            if (file === exitReportPath) observeExitReportWrite(completion);
+        };
+        // Hold a real OS-adapter observation, not registration or lifecycle logic.
+        const boundary = vi.spyOn(processCensus, 'readProcessCensus').mockImplementation(async request => {
+            const snapshot = await readCensus(request);
+            if (request?.pids?.includes(pid)) { observeSample(); await sampleGate; }
+            return snapshot;
+        });
+        restoreCensusBoundary = () => { boundary.mockRestore(); };
         registration = registerExternalSessionIdentity({ pidToTrackedSession: sessions, pid, sessionId: 'pending-parent',
             metadata: createTestMetadata({ path: happyHomeDir, happyHomeDir, hostPid: pid, startedBy: 'terminal' }) });
         await sampled;
@@ -385,10 +422,15 @@ it('keeps native registration inside exit custody while the OS observation is pe
         expect(await readSessionMarkerForPid(pid)).toBeNull();
     } finally {
         releaseSample(); await registration?.catch(() => undefined); await retirement?.catch(() => undefined);
-        boundary.mockRestore();
-        if (child.exitCode === null && child.signalCode === null) { child.kill(); await childExit; }
-        Object.defineProperty(configuration, 'happyHomeDir', homeDescriptor);
-        Object.defineProperty(configuration, 'activeServerDir', serverDescriptor);
-        await rm(happyHomeDir, { recursive: true, force: true });
+        try {
+            if (retirement && !sessions.has(pid)) await (await exitReportWrite).completion;
+        } finally {
+            filesystemBoundary.observeWrite = undefined;
+            restoreCensusBoundary();
+            if (child.exitCode === null && child.signalCode === null) { child.kill(); await childExit; }
+            Object.defineProperty(configuration, 'happyHomeDir', homeDescriptor);
+            Object.defineProperty(configuration, 'activeServerDir', serverDescriptor);
+            await rm(happyHomeDir, { recursive: true, force: true });
+        }
     }
 });

@@ -6,11 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionFixture, renderScreen } from '@/dev/testkit';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createAutomationRunFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
+import { createAutomationRunFixture, createWorkflowInvocationIndexFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import { createInboxAttentionFixture } from '@/dev/testkit/fixtures/inboxFixtures';
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { buildInboxWorkGroups } from '@/activity/presentation/buildInboxWorkGroups';
+import { buildInboxItems, type InboxItem } from './inboxItems';
 import { EMPTY_WORKFLOW_ATTENTION_SOURCE } from '@/hooks/inbox/useWorkflowAttentionSource';
 import { buildServerScopedSessionKey } from '@/sync/domains/session/navigation/sessionNavigationOrder';
 import type { Session } from '@/sync/domains/state/storageTypes';
@@ -32,8 +33,19 @@ import { SessionListIdentity } from '@/components/sessions/shell/SessionListIden
 import { InboxSessionRowMenu } from './workGroups/InboxSessionRowMenu';
 import { ActionOperationSnapshotV1Schema } from '@happier-dev/protocol/actions/operations/v1';
 import { UserProfileSchema } from '@happier-dev/protocol/social/friends';
+import { KeyboardShortcutProvider } from '@/keyboard/KeyboardShortcutProvider';
+import { useInboxItemNavigation } from '@/hooks/inbox/useInboxItemNavigation';
+import type { InboxItemFocus } from './inboxItemFocus';
+import type { InboxItemView } from './inboxItems';
+import { InboxWorkItemRow } from './workGroups/InboxWorkItemRow';
+import { Text } from '@/components/ui/text/Text';
+import { InboxWorkRow } from './InboxWorkRow';
+import { resolveInboxItemPageRoute } from './inboxItemFocus';
+import { readWorkflowRunTarget } from '@/sync/domains/workflows/workflowRunRoute';
 
 const routerPush = vi.hoisted(() => vi.fn());
+const viewport = vi.hoisted(() => ({ width: 1024 }));
+let heldInvocationId: string | null = null;
 const initialStorageState = storage.getState();
 
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
@@ -42,7 +54,7 @@ vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({ View: 'View',
-        useWindowDimensions: () => ({ width: 1024, height: 768, scale: 1, fontScale: 1 }),
+        useWindowDimensions: () => ({ width: viewport.width, height: 768, scale: 1, fontScale: 1 }),
     });
 });
 vi.mock('react-native-unistyles', async () => {
@@ -63,7 +75,7 @@ function PagePresentation({ children }: React.PropsWithChildren) {
 }
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 
-function storedSession(id: string, facts: Readonly<{ lead?: string; reports?: number; turn?: Session['latestTurnStatus'] }> = {}): Session {
+function storedSession(id: string, facts: Readonly<{ lead?: string; managedSessions?: number; turn?: Session['latestTurnStatus'] }> = {}): Session {
     return createSessionFixture({
         id,
         serverId: 'server-a',
@@ -72,8 +84,8 @@ function storedSession(id: string, facts: Readonly<{ lead?: string; reports?: nu
         active: false,
         presence: 'online',
         updatedAt: NOW - 3 * 60_000,
-        ...(facts.lead ? { reportsTo: { sessionId: facts.lead } } : {}),
-        ...(facts.reports ? { reports: { total: facts.reports, working: 1, needsYou: 1, stalled: 1 } } : {}),
+        ...(facts.lead ? { manager: { sessionId: facts.lead } } : {}),
+        ...(facts.managedSessions ? { managedSessions: { total: facts.managedSessions, working: 1, needsYou: 1, stalled: 1 } } : {}),
         ...(facts.turn ? { latestTurnStatus: facts.turn } : {}),
     });
 }
@@ -91,10 +103,11 @@ function candidate(session: Session, attentionState: string, reasons: readonly s
         route: `/session/${session.id}`,
         attentionState,
         personalAttention: { reasons, presentation: 'full' },
+        reasons: { hasBlockedPendingDelivery: false },
     } as never;
 }
 
-const lead = storedSession('lead', { reports: 3 });
+const lead = storedSession('lead', { managedSessions: 3 });
 const worker = storedSession('worker', { lead: 'lead' });
 const stalledWorker = storedSession('stalled-worker', { lead: 'lead' });
 const stopped = storedSession('stopped');
@@ -109,10 +122,13 @@ function createModel(options: Readonly<{
     /** Further runs with no orchestrator, after `library-run`. */
     moreRunIds?: readonly string[];
     /** A run's own state, where it is not the default held `interrupted`. */
-    runStates?: Readonly<Record<string, 'cancelled' | 'succeeded' | 'interrupted'>>;
+    runStates?: Readonly<Record<string, 'cancelled' | 'succeeded' | 'interrupted' | 'waiting_for_review'>>;
     automationRunRows?: readonly WorkflowRunRow[];
+    automationServerId?: string;
     /** The step a run's summary says waits, with its lane. */
     heldStep?: Readonly<{ invocationId: string; label: string; laneLabel?: string }>;
+    /** Rows other owners contribute to the canonical item model (Discussion mentions, notices). */
+    extraItems?: readonly InboxItem[];
 }> = {}): InboxModel {
     const needsYou = options.needsYou ?? true;
     const attention = createInboxAttentionFixture('server-a');
@@ -143,7 +159,7 @@ function createModel(options: Readonly<{
             ...(options.heldStep && id === 'library-run' ? { heldStep: options.heldStep } : {}),
         }), null)) : [],
         automationRuns: options.automationRunRows ?? [],
-        automationServerId: 'server-a',
+        automationServerId: options.automationServerId ?? 'server-a',
         openApprovals: approvals as never,
         stalledSessions: needsYou ? [stalledWorker] : [],
         landings: [],
@@ -151,6 +167,14 @@ function createModel(options: Readonly<{
         resolveSession: (id) => sessions.get(id),
         resolveOriginRunId: () => null,
     });
+    const sessionPresentation = {
+        sessionsNeedingAttention: sessionEntries,
+        readySessions: [ready],
+        markAllReadTargets: [readyTarget],
+        pendingRequestHydrationTargets: [],
+    };
+    const items = [...buildInboxItems({ workGroups, sessionPresentation: sessionPresentation as never,
+        workflowServerId: 'server-a', accountServerId: 'server-a', notices: [] }), ...(options.extraItems ?? [])];
     return {
         source: { isDataReady: true, sessionsById: Object.fromEntries(sessions), sessionListRowsByServerId: {},
             ordinarySessionListMembershipByServerId: {}, sessionListIndexByServerId: {}, concurrentSessionListCacheByServerId: {} },
@@ -159,12 +183,7 @@ function createModel(options: Readonly<{
         dismissUsageNotice: vi.fn(async () => {}),
         friendRequests: [UserProfileSchema.parse({ id: 'friend-1', username: 'friend', firstName: 'Friend', lastName: null,
             avatar: null, bio: null, status: 'pending', publicKey: null })],
-        sessionPresentation: {
-            sessionsNeedingAttention: sessionEntries,
-            readySessions: [ready],
-            markAllReadTargets: [readyTarget],
-            pendingRequestHydrationTargets: [],
-        },
+        sessionPresentation,
         targetBySessionAddress: new Map([[readyTarget.key, readyTarget]]),
         actionOperationEntries: needsYou ? [{
             reason: 'failed',
@@ -185,6 +204,7 @@ function createModel(options: Readonly<{
         workGroups,
         spansHomes: true,
         ...attention,
+        items,
         workflowAttention: options.workflowStale
             ? { ...attention.workflowAttention, available: true, phase: 'loaded', refreshFailed: true,
                 runIds: needsYou ? ['library-run'] : [], knownAt: NOW - 60_000 }
@@ -207,22 +227,49 @@ function groupOrder(tree: { root: Node }): string[] {
         .map((node) => String(node.props.testID))));
 }
 
-describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
-    it.each(['screen', 'popover'] as const)('renders Automation-only attention and its route in the %s', async (presentation) => {
+function pressInboxKey(key: string) {
+    const event = new Event('keydown', { cancelable: true });
+    for (const [name, value] of Object.entries({ key, code: key.length === 1 ? `Key${key.toUpperCase()}` : key, altKey: false, ctrlKey: false,
+        metaKey: false, shiftKey: false, repeat: false })) Object.defineProperty(event, name, { value });
+    window.dispatchEvent(event);
+}
+
+function NavigableInbox(props: Readonly<{ model: InboxModel; view: InboxItemView; content: typeof import('./InboxContent')['InboxContent'] }>) {
+    const [focus, select] = React.useState<InboxItemFocus | null>(null);
+    const close = React.useCallback(() => select(null), []);
+    useInboxItemNavigation({ items: props.model.items, view: props.view, focus, enabled: true,
+        select, open: routerPush, close, markOpened: props.model.markItemOpened });
+    const Content = props.content;
+    return <><Content model={props.model} view={props.view} focusedItem={focus} onSelectItem={select} />
+        <Text testID="inbox.selected">{JSON.stringify(focus)}</Text></>;
+}
+
+describe('InboxContent rows, attention sources and popover (ORC R-10, lab inbox-I1, P4)', () => {
+    it.each(['screen', 'popover'] as const)('renders Automation-only attention as an Update and never as caught up in the %s', async (presentation) => {
         const { InboxContent } = await import('./InboxContent');
+        const onOpenInbox = vi.fn();
         const run = createAutomationRunFixture({ id: 'pre-session', state: 'failed' });
-        const route = { pathname: '/automations/[id]/runs/[runId]' as const, params: { id: run.automationId, runId: run.id } };
-        const model = { ...createModel({ needsYou: false, automationRunRows: [workflowRunRowFromAutomationRun(run)] }), friendRequests: [],
+        const route = `/workflows/runs/${run.id}?target=occurrence&automationId=${run.automationId}&serverId=home-b` as const;
+        const model = { ...createModel({ needsYou: false, automationServerId: 'home-b', automationRunRows: [workflowRunRowFromAutomationRun(run)] }), friendRequests: [],
             sessionPresentation: { sessionsNeedingAttention: [], readySessions: [], markAllReadTargets: [], pendingRequestHydrationTargets: [] },
             automationAttention: { ...EMPTY_WORKFLOW_ATTENTION_SOURCE, available: true, phase: 'loaded' as const, runIds: [run.id], knownAt: NOW },
             automationAttentionItems: [{ key: `automation-run:${run.id}`, run, route }],
         };
-        const screen = await renderScreen(<InboxContent model={model} presentation={presentation} />);
-        const row = screen.findByTestId(`inbox.automation_run.${run.id}`);
-        expect(row).not.toBeNull();
+        // A failed Automation run asks for nothing now: it is an Update, so the page draws its row under
+        // Updates and the popover says so in its one Updates line, which opens the Inbox.
+        const screen = await renderScreen(<InboxContent model={model} presentation={presentation} view="updates" onOpenInbox={onOpenInbox} />,
+            presentation === 'screen' ? { wrapper: PagePresentation } : {});
         expect(screen.findByTestId('inbox.empty')).toBeNull();
-        row!.props.onPress();
-        expect(routerPush).toHaveBeenCalledWith(route);
+        if (presentation === 'screen') {
+            const row = screen.findByTestId(`inbox.automation_run.${run.id}`);
+            expect(row).not.toBeNull();
+            row!.props.onPress();
+            expect(routerPush).toHaveBeenCalledWith(route);
+        } else {
+            expect(screen.findByTestId(`inbox.automation_run.${run.id}`)).toBeNull();
+            screen.findByTestId('inbox.popover.updates')!.props.onPress();
+            expect(onOpenInbox).toHaveBeenCalledTimes(1);
+        }
     });
 
     it.each(['screen', 'popover'] as const)('does not claim caught up after an initial Automation failure in the %s', async (presentation) => {
@@ -250,10 +297,13 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
             automationAttention: { ...EMPTY_WORKFLOW_ATTENTION_SOURCE, available: true, phase: 'loaded' as const,
                 refreshFailed: true, runIds: [run.id], knownAt: NOW - 60_000, retry },
             automationAttentionItems: [{ key: `automation-run:${run.id}`, run,
-                route: { pathname: '/automations/[id]/runs/[runId]' as const, params: { id: run.automationId, runId: run.id } } }],
+                route: `/workflows/runs/${run.id}?target=occurrence&automationId=${run.automationId}` as const }],
         };
+        // The last-known row stays in Updates; the stale line (Needs you, where attention sources report) retries the source.
+        const updates = await renderScreen(<InboxContent model={model} view="updates" />, { wrapper: PagePresentation });
+        expect(updates.findByTestId(`inbox.automation_run.${run.id}`)).not.toBeNull();
+        await updates.unmount();
         const screen = await renderScreen(<InboxContent model={model} />);
-        expect(screen.findByTestId(`inbox.automation_run.${run.id}`)).not.toBeNull();
         const stale = screen.findAllByType(SurfaceFreshnessLine).find(node => node.props.testID === 'inbox.automation_stale');
         expect(stale?.props.asOf).toBe(NOW - 60_000);
         stale!.props.action.onPress();
@@ -261,6 +311,8 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
         expect(workflowRetry).not.toHaveBeenCalled();
     });
     beforeEach(async () => {
+        heldInvocationId = null;
+        viewport.width = 1024;
         storage.setState({ settings: { ...storage.getState().settings, sessionListIdentityDisplay: 'agentLogo' } });
         routerPush.mockClear();
         connection = await restoreServerAccountForTest({ serverUrl: 'https://server-a', accountId: 'account-a',
@@ -274,15 +326,52 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
                 });
                 if (path === '/v3/automations/runs/workflow-storage') {
                     const operation = JSON.parse(String(init?.body)) as { operation: string };
-                    if (operation.operation === 'invocations.list') return Response.json({ invocations: [], parentRevision: 0 });
+                    if (operation.operation === 'invocations.list') return Response.json({ invocations: heldInvocationId ? [
+                        createWorkflowInvocationIndexFixture({ id: heldInvocationId, runId: 'library-run', lifecycle: 'waiting_for_review' }),
+                    ] : [], parentRevision: 0 });
                 }
                 return new Response('{}', { status: 404 });
             },
         });
         vi.useFakeTimers({ now: NOW, toFake: ['Date', 'setInterval', 'clearInterval'] });
     });
+
+    it.each([false, true])('keeps the exact Run and Home through mobile and wide navigation (held=%s)', async (held) => {
+        const { InboxContent } = await import('./InboxContent');
+        heldInvocationId = held ? 'held/step' : null;
+        const model = createModel();
+        const hosted = { ...model, workflowAttention: { ...model.workflowAttention, serverId: 'server-a' } };
+        const routes: string[] = [];
+        for (const width of [390, 1440]) {
+            viewport.width = width;
+            const selected: InboxItemFocus[] = [];
+            const screen = await renderScreen(<InboxContent model={hosted} view="updates"
+                {...(width > 390 ? { onSelectItem: (focus: InboxItemFocus) => selected.push(focus) } : {})} />);
+            await screen.pressByTestIdAsync('inbox.run.library-run');
+            await vi.waitFor(() => expect(width === 390 ? routerPush.mock.calls.length : selected.length).toBeGreaterThan(0));
+            const route = width === 390 ? String(routerPush.mock.calls.at(-1)?.[0]) : resolveInboxItemPageRoute(selected[0]!);
+            routes.push(route);
+            const url = new URL(route, 'https://app.test');
+            expect(url.searchParams.get('serverId')).toBe('server-a');
+            expect(url.searchParams.get('invocationId')).toBe(heldInvocationId);
+            expect(readWorkflowRunTarget({ runId: decodeURIComponent(url.pathname.split('/').at(-1)!), ...Object.fromEntries(url.searchParams) }))
+                .toEqual({ kind: 'managed', runId: 'library-run' });
+            await screen.unmount();
+        }
+        expect(routes[0]).toBe(routes[1]);
+    });
+
+    it('does not rebind another Home\'s Inbox Run to the active Home', async () => {
+        const { InboxContent } = await import('./InboxContent');
+        const model = createModel();
+        const screen = await renderScreen(<InboxContent model={{ ...model,
+            workflowAttention: { ...model.workflowAttention, serverId: 'other-home' } }} view="updates" />);
+        await screen.pressByTestIdAsync('inbox.run.library-run');
+        expect(routerPush).not.toHaveBeenCalled();
+    });
     afterEach(async () => {
         await standardCleanup();
+        vi.unstubAllGlobals();
         vi.useRealTimers();
         await connection?.dispose();
         connection = null;
@@ -292,11 +381,11 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
     it('updates an unchanged Automation attention row age on the shared clock and keeps its open target', async () => {
         const { InboxContent } = await import('./InboxContent');
         const run = createAutomationRunFixture({ id: 'aging-run', state: 'failed', finishedAt: NOW - 60_000 });
-        const route = { pathname: '/automations/[id]/runs/[runId]' as const, params: { id: run.automationId, runId: run.id } };
+        const route = `/workflows/runs/${run.id}?target=occurrence&automationId=${run.automationId}&serverId=server-a` as const;
         const base = createModel({ needsYou: false, automationRunRows: [workflowRunRowFromAutomationRun(run)] });
         const model = { ...base, automationAttentionItems: [{ key: `automation-run:${run.id}`, run, route }],
             automationAttention: { ...base.automationAttention, available: true, phase: 'loaded' as const, runIds: [run.id] } };
-        const screen = await renderScreen(<InboxContent model={model} />);
+        const screen = await renderScreen(<InboxContent model={model} view="updates" />);
         expect(screen.getTextContent()).toContain('1m');
         await act(async () => { vi.advanceTimersByTime(60_000); });
         expect(screen.getTextContent()).toContain('2m');
@@ -305,73 +394,24 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
         await screen.unmount();
     });
 
-    it('renders one section per work root, with its mark, name, one quiet fact and Open, Other sessions last', async () => {
+    it('puts Action operations after the type sections in Needs you, and the stalled session with its reason in Updates', async () => {
         const { InboxContent } = await import('./InboxContent');
-        const { tree } = await renderScreen(<InboxContent model={createModel()} />);
+        const needsYou = await renderScreen(<InboxContent model={createModel()} />, { wrapper: PagePresentation });
+        expect(scopedByType(needsYou.tree, needsYou.tree.root.findByProps({ testID: 'inbox.section.operations' }), ActionOperationRows)).toHaveLength(1);
+        expect(needsYou.tree.findAllByType(InboxReadySessionRow)).toHaveLength(0);
+        await needsYou.unmount();
 
-        expect(groupOrder(tree as never)).toEqual([
-            'inbox.group.lead:lead',
-            'inbox.group.run:library-run',
-            'inbox.group.other',
-        ]);
-        const groups = tree.findAllByType(ItemGroup);
-        expect(groups).toHaveLength(3);
-        expect(groups[2]?.props.title).toBe('inbox.work.groups.otherTitle');
-        expect(groups[0]?.props.titleLeading).toBeTruthy();
-        expect(groups[0]?.props.action).toBeTruthy();
-        expect(groups[2]?.props.action).toBeUndefined();
-
-        // The worker's prompt keeps the canonical answer card inside its lead's section.
-        const leadSection = tree.root.findByProps({ testID: 'inbox.group.lead:lead' });
-        expect(scopedByType(tree, leadSection, InboxSessionAttentionGroupCard).map((card) => card.props.session.id)).toEqual(['worker']);
-        expect(leadSection.findByProps({ testID: 'inbox.stalled.stalled-worker' }).props.facts)
+        const updates = await renderScreen(<InboxContent model={createModel()} view="updates" />, { wrapper: PagePresentation });
+        expect(updates.tree.root.findByProps({ testID: 'inbox.stalled.stalled-worker' }).props.facts)
             .toEqual(['inbox.work.rows.stalled', 'inbox.work.rows.stalledReason']);
-
-        // An interrupted run with no orchestrator is its own root, reviewed from its row.
-        await tree.pressByTestIdAsync('inbox.run.library-run.review');
+        // An interrupted run with no held step asks for nothing: it is reviewed from its Updates row.
+        await updates.tree.pressByTestIdAsync('inbox.run.library-run.review');
         await vi.waitFor(() => expect(routerPush).toHaveBeenCalledWith(expect.stringContaining('library-run')));
-
-        // Approvals and operations belong to Other sessions, beside loose sessions.
-        const other = tree.root.findByProps({ testID: 'inbox.group.other' });
-        expect(scopedByType(tree, other, ApprovalInboxCard)).toHaveLength(1);
-        expect(scopedByType(tree, other, ActionOperationRows)).toHaveLength(1);
-        expect(tree.findAllByType(InboxReadySessionRow)).toHaveLength(0);
-    });
-
-    it('opens a run group header on the workflow attention window’s exact Home', async () => {
-        const { InboxWorkGroupSection } = await import('./workGroups/InboxWorkGroupSection');
-        const base = createModel();
-        const model = { ...base, workflowAttention: { ...base.workflowAttention, serverId: 'home/1 a' } };
-        const group = model.workGroups.find((entry) => entry.root.kind === 'run')!;
-        // A run which leads with its own row is headerless. Exercise the section's declared
-        // run-header input without that row; the route still belongs to the window's Home.
-        const screen = await renderScreen(<InboxWorkGroupSection
-            group={{ ...group, items: [] }}
-            model={model}
-            identityDisplay="agentLogo"
-            presentation="screen"
-            navigate={routerPush}
-        />, { wrapper: PagePresentation });
-
-        screen.findByTestId(`inbox.group.${group.key}.open`)!.props.onPress();
-        expect(routerPush).toHaveBeenCalledWith('/workflows/runs/library-run?serverId=home%2F1%20a');
-    });
-
-    it('keeps runs that are their own root in one sheet, rather than one card per run', async () => {
-        const { InboxContent } = await import('./InboxContent');
-        const { tree } = await renderScreen(<InboxContent model={createModel({ moreRunIds: ['second-run', 'third-run'] })} />);
-
-        // Lead, the runs, Other sessions: three sheets, not five.
-        expect(tree.findAllByType(ItemGroup)).toHaveLength(3);
-        const runs = tree.root.findByProps({ testID: 'inbox.group.run:library-run' });
-        for (const id of ['library-run', 'second-run', 'third-run']) {
-            expect(runs.findByProps({ testID: `inbox.run.${id}.review` })).toBeTruthy();
-        }
     });
 
     it('opens a stopped run rather than offering to review it (DESIGN-14 D8)', async () => {
         const { InboxContent } = await import('./InboxContent');
-        const { tree } = await renderScreen(<InboxContent model={createModel({
+        const { tree } = await renderScreen(<InboxContent view="updates" model={createModel({
             moreRunIds: ['stopped-run'], runStates: { 'stopped-run': 'cancelled' },
         })} />);
 
@@ -389,17 +429,17 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
         const runRoute = createInboxItemRoute({ kind: 'workflow_run', serverId: 'server-a', id: 'library-run' });
         expect(runRoute.pathname).toBe('/inbox');
         const model = createModel();
-        const run = await renderScreen(<InboxContent model={{ ...model, workflowAttention: { ...model.workflowAttention, serverId: 'server-a' } }} focusedItem={readInboxItemFocus(runRoute.params.item)} />);
+        const run = await renderScreen(<InboxContent view="updates" model={{ ...model, workflowAttention: { ...model.workflowAttention, serverId: 'server-a' } }} focusedItem={readInboxItemFocus(runRoute.params.item)} />);
         expect(selectedRows(run.tree as never)).toEqual(['inbox.run.library-run']);
 
         const sessionRoute = createInboxItemRoute({ kind: 'session', serverId: 'server-a', id: 'stalled-worker' });
-        const session = await renderScreen(<InboxContent model={createModel()} focusedItem={readInboxItemFocus([sessionRoute.params.item])} />);
+        const session = await renderScreen(<InboxContent view="updates" model={createModel()} focusedItem={readInboxItemFocus([sessionRoute.params.item])} />);
         expect(selectedRows(session.tree as never)).toEqual(['inbox.stalled.stalled-worker']);
 
-        const none = await renderScreen(<InboxContent model={createModel()} />);
+        const none = await renderScreen(<InboxContent view="updates" model={createModel()} />);
         expect(selectedRows(none.tree as never)).toEqual([]);
 
-        const invalid = await renderScreen(<InboxContent model={createModel()} focusedItem={readInboxItemFocus('session: ')} />);
+        const invalid = await renderScreen(<InboxContent view="updates" model={createModel()} focusedItem={readInboxItemFocus('session: ')} />);
         expect(selectedRows(invalid.tree as never)).toEqual([]);
     });
 
@@ -407,15 +447,16 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
         const { InboxContent } = await import('./InboxContent');
         const selected: unknown[] = [];
         const model = createModel({ openApprovals: [{ id: 'approval-1', header: { serverIdentityId: 'server-a' } }] });
-        const { tree } = await renderScreen(
-            <InboxContent
-                model={{ ...model, workflowAttention: { ...model.workflowAttention, serverId: 'server-a' } }}
-                onSelectItem={(focus) => selected.push(focus)}
-            />,
+        const hosted = { ...model, workflowAttention: { ...model.workflowAttention, serverId: 'server-a' } };
+        const updates = await renderScreen(
+            <InboxContent model={hosted} view="updates" onSelectItem={(focus) => selected.push(focus)} />,
         );
-
-        tree.root.findByProps({ testID: 'inbox.stalled.stalled-worker' }).props.onPress();
-        await tree.pressByTestIdAsync('inbox.run.library-run');
+        updates.tree.root.findByProps({ testID: 'inbox.stalled.stalled-worker' }).props.onPress();
+        await updates.tree.pressByTestIdAsync('inbox.run.library-run');
+        await updates.unmount();
+        const { tree } = await renderScreen(
+            <InboxContent model={hosted} onSelectItem={(focus) => selected.push(focus)} />,
+        );
         tree.findByType(ApprovalInboxCard).props.onPress();
 
         await vi.waitFor(() => expect(selected).toEqual([
@@ -430,38 +471,49 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
         const { InboxContent } = await import('./InboxContent');
         const { tree } = await renderScreen(<InboxContent model={createModel()} />);
 
-        const other = tree.root.findByProps({ testID: 'inbox.group.other' });
-        const cards = scopedByType(tree, other, InboxSessionAttentionGroupCard);
-        expect(cards.map((card) => card.props.session.id)).toEqual(['stopped']);
-        expect(cards[0]?.props.permissionRequests).toEqual([{ id: 'p-stopped' }]);
+        const approvals = tree.root.findByProps({ testID: 'inbox.type.approval' });
+        const stoppedCard = scopedByType(tree, approvals, InboxSessionAttentionGroupCard).find((card) => card.props.session.id === 'stopped');
+        expect(stoppedCard?.props.permissionRequests).toEqual([{ id: 'p-stopped' }]);
         // Answer controls exist once per request: nowhere else in the Inbox.
         expect(tree.findAllByType(InboxSessionAttentionGroupCard)).toHaveLength(2);
     });
 
-    it('shows a snoozed session quietly in place with its time and the row menu', async () => {
+    it('draws a request-carrying session with its sheet-mates\' anatomy: the Inbox session line and its age', async () => {
         const { InboxContent } = await import('./InboxContent');
         const { tree } = await renderScreen(<InboxContent model={createModel()} />);
+
+        const approvals = tree.root.findByProps({ testID: 'inbox.type.approval' });
+        const card = scopedByType(tree, approvals, InboxSessionAttentionGroupCard).find((entry) => entry.props.session.id === 'stopped');
+        const facts = card?.findAll((node) => typeof node.props.testID === 'string' && node.props.testID.endsWith('.stopped.summary:facts'))[0];
+        const textOf = (value: unknown): string => typeof value === 'string' ? value
+            : Array.isArray(value) ? value.map(textOf).join('')
+                : value && typeof value === 'object' && 'props' in value ? textOf((value as { props: { children?: unknown } }).props.children) : '';
+        // One session line (no raw Home segment on a single-Home Inbox) and the row's age, like a plain session row.
+        expect(textOf(facts?.props.children)).not.toContain('Home');
+        expect(card?.findAll((node) => typeof node.props.timestamp === 'number').length).toBeGreaterThan(0);
+    });
+
+    it('shows a snoozed session quietly in Updates with its time and the row menu', async () => {
+        const { InboxContent } = await import('./InboxContent');
+        const { tree } = await renderScreen(<InboxContent model={createModel()} view="updates" />);
 
         const row = tree.root.findByProps({ testID: 'inbox.snoozed.snoozed' });
         expect(row.props.facts.join(' · ')).toContain('inbox.work.rows.snoozedUntil');
         expect(scopedByType(tree, row, InboxSessionRowMenu)).toHaveLength(1);
-        const other = tree.root.findByProps({ testID: 'inbox.group.other' });
-        const keys = other.findAll((node) => typeof node.props.testID === 'string'
-            && /^inbox\.(session|snoozed)\.[a-z-]+$/.test(String(node.props.testID)))
-            .map((node) => String(node.props.testID));
-        // Snoozed rows follow what still needs the person.
-        expect(Array.from(new Set(keys))).toEqual(['inbox.session.failed', 'inbox.snoozed.snoozed']);
+        // It asks for nothing now, so Needs you does not carry it.
+        const needsYou = await renderScreen(<InboxContent model={createModel()} />);
+        expect(needsYou.tree.root.findAllByProps({ testID: 'inbox.snoozed.snoozed' })).toHaveLength(0);
     });
 
     it('says once that the workflow input is stale while keeping the last-known rows', async () => {
         const { InboxContent } = await import('./InboxContent');
-        const model = createModel({ workflowStale: true });
+        const model = createModel({ workflowStale: true, heldStep: { invocationId: 'inv-1', label: 'Write changelog' } });
         const { tree } = await renderScreen(<InboxContent model={model} />);
 
         const line = tree.findByType(SurfaceFreshnessLine);
         expect(line.props.asOf).toBe(NOW - 60_000);
         expect(line.props.action.onPress).toBe(model.workflowAttention.retry);
-        expect(tree.root.findByProps({ testID: 'inbox.group.run:library-run' })).toBeTruthy();
+        expect(tree.root.findByProps({ testID: 'inbox.type.decision' }).findAllByProps({ testID: 'inbox.run.library-run' }).length).toBeGreaterThan(0);
     });
 
     it.each(['screen', 'popover'] as const)('shows unavailable with retry instead of empty on the %s', async (presentation) => {
@@ -514,23 +566,31 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
         expect(empty.props.primaryAction).toBeUndefined();
     });
 
-    it('keeps the popover flat: work roots inline, Other sessions and Updates as one line each', async () => {
+    it('keeps the popover flat: Needs you types inline, Updates as one line', async () => {
         const { InboxContent } = await import('./InboxContent');
         const onOpenInbox = vi.fn();
         const { tree } = await renderScreen(
-            <InboxContent model={createModel()} presentation="popover" onOpenInbox={onOpenInbox} />,
+            <InboxContent model={createModel({ heldStep: { invocationId: 'inv-1', label: 'Write changelog' } })} presentation="popover" onOpenInbox={onOpenInbox} />,
         );
 
         expect(tree.findAllByType(ItemGroup)).toHaveLength(0);
-        expect(groupOrder(tree as never)).toEqual(['inbox.group.lead:lead', 'inbox.group.run:library-run']);
-        tree.root.findByProps({ testID: 'inbox.popover.more_other' }).props.onPress();
+        const typeSections = Array.from(new Set(tree.root
+            .findAll((node) => typeof node.props.testID === 'string' && /^inbox\.type\.[a-z_]+$/.test(String(node.props.testID)))
+            .map((node) => String(node.props.testID))));
+        expect(typeSections).toEqual(['inbox.type.approval', 'inbox.type.decision']);
+        expect(groupOrder(tree as never)).toEqual([]);
+        // What asks for nothing now is one line to Updates, not rows.
+        expect(tree.root.findAllByProps({ testID: 'inbox.stalled.stalled-worker' })).toHaveLength(0);
+        expect(tree.root.findAllByProps({ testID: 'inbox.session.failed' })).toHaveLength(0);
+        tree.root.findByProps({ testID: 'inbox.popover.updates' }).props.onPress();
         expect(onOpenInbox).toHaveBeenCalledTimes(1);
-        expect(tree.root.findAllByProps({ testID: 'inbox.popover.updates' }).length).toBeGreaterThan(0);
     });
 
     it('gives a popover row its title’s full width: kind and age on the line beneath and the answer inline (lab inbox-I2, phone-P4)', async () => {
         const { InboxContent } = await import('./InboxContent');
-        const { tree } = await renderScreen(<InboxContent model={createModel()} presentation="popover" onOpenInbox={vi.fn()} />);
+        // A run waiting for review is a decision, so the popover draws it.
+        const { tree } = await renderScreen(<InboxContent model={createModel({ runStates: { 'library-run': 'waiting_for_review' } })}
+            presentation="popover" onOpenInbox={vi.fn()} />);
 
         const runRow = tree.root.findByProps({ testID: 'inbox.run.library-run' });
         // Every row here needs the person: no state column and no state word compete with the title;
@@ -545,7 +605,8 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
         expect(line).toContain('inbox.work.rows.workflowRun');
         expect(line).not.toContain('workflows.runState');
         // The age rides at the end of that line, not in a trailing column.
-        expect(facts.findAll((node) => typeof node.type === 'function' && node.type.name === 'InboxRelativeTime').length).toBeGreaterThan(0);
+        // (the bundler may suffix the component's name)
+        expect(facts.findAll((node) => typeof node.type === 'function' && /^InboxRelativeTime\d*$/.test(node.type.name)).length).toBeGreaterThan(0);
         expect(tree.root.findByProps({ testID: 'inbox.run.library-run.review' })).toBeTruthy();
     });
 
@@ -586,7 +647,7 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
         const { readSessionWorkStatusFacts } = await import('@/components/work/status/sessionWorkStatusFacts');
         const { workStatusWordStyle } = await import('@/components/work/status/workStatusTreatment');
         const { describeWorkflowRunState } = await import('@/components/workflows/presentation/workflowLifecyclePresentation');
-        const { tree } = await renderScreen(<InboxContent model={createModel()} />);
+        const { tree } = await renderScreen(<InboxContent model={createModel()} view="updates" />);
 
         // A failed session: the Session owner's word, in the resolver's danger tone.
         const failedStatus = resolveWorkStatusTone({ kind: 'session', facts: readSessionWorkStatusFacts(failed, NOW) });
@@ -596,17 +657,13 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
         expect(NativeStyleSheet.flatten(failedWord.props.style).color).toBe(workStatusWordStyle('danger').color);
         expect(tree.findHostByTestId('inbox.session.failed.summary:facts')!.findAll((node) => node.props.children === failedStatus.word)).toHaveLength(0);
 
-        // A run in the attention window: the run owner's word, in the attention tone (not a local "interrupted is error").
-        // The row is titled by the run; its state is the row's one status, in the status column.
+        // A run listed as an update: the run owner's own word for its state, never "Needs you" in the attention
+        // tone, which only Needs you rows carry. The row is titled by the run; its state is the row's one status.
         const runRow = tree.root.findByProps({ testID: 'inbox.run.library-run' });
         expect(runRow.props.title).not.toBe(describeWorkflowRunState('interrupted').label);
         const runWord = tree.findHostByTestId('inbox.run.library-run.summary:state:label')!;
-        expect(runWord.props.children).toBe(describeWorkflowRunState('interrupted').label);
-        expect(NativeStyleSheet.flatten(runWord.props.style).color).toBe(workStatusWordStyle('attention').color);
-        // A run that is its own work root does not repeat its name above its row; its sheet is headed by
-        // the kind, like its sibling groups (DESIGN-17 R4).
-        const runGroup = scopedByType(tree, tree.root.findByProps({ testID: 'inbox.group.run:library-run' }), ItemGroup)[0];
-        expect(runGroup?.props.title).toBe('inbox.work.groups.runsTitle');
+        expect(runWord.props.children).toBe(describeWorkflowRunState('interrupted', { inAttentionWindow: false }).label);
+        expect(runWord.props.children).not.toBe(describeWorkflowRunState('interrupted', { inAttentionWindow: true }).label);
 
         // A stalled worker: its Session word beside the row's own explanation.
         const stalledStatus = resolveWorkStatusTone({ kind: 'session', facts: readSessionWorkStatusFacts(stalledWorker, NOW) });
@@ -629,10 +686,115 @@ describe('InboxContent grouped by work root (ORC R-10, lab inbox-I1)', () => {
     it('removes the leading slot when the canonical Session-list identity preference is none', async () => {
         storage.setState({ settings: { ...storage.getState().settings, sessionListIdentityDisplay: 'none' } });
         const { InboxContent } = await import('./InboxContent');
-        const { tree } = await renderScreen(<InboxContent model={createModel()} />);
+        const { tree } = await renderScreen(<InboxContent model={createModel()} view="updates" />);
 
         const failedRow = tree.root.findByProps({ testID: 'inbox.session.failed' });
         // A failed session keeps its failure glyph; identity marks follow the preference.
         expect(scopedByType(tree, failedRow, SessionListIdentity)).toHaveLength(0);
+    });
+});
+
+function mentionItem(id: string): InboxItem {
+    const focus = { kind: 'discussion', serverId: 'server-a', id: 'disc-1', messageId: id } as const;
+    return { key: `discussion:server-a:disc-1:${id}`, producer: 'live', type: 'mention', view: 'mentions',
+        title: 'Retry cap during deploys', context: null, createdAt: NOW - 120_000, read: false, focus,
+        pageRoute: `/discussions/disc-1`, source: { kind: 'discussion', id: 'disc-1', serverId: 'server-a' } };
+}
+
+describe('InboxContent renders the canonical item model in three views (C1 L10, lab P4)', () => {
+    afterEach(() => { standardCleanup(); vi.unstubAllGlobals(); storage.setState(initialStorageState, true); });
+    it('groups Needs you by type — Approvals, Decisions, Blocked — never by work root', async () => {
+        const { InboxContent } = await import('./InboxContent');
+        const model = createModel({ heldStep: { invocationId: 'inv-1', label: 'Write changelog' } });
+        const { tree } = await renderScreen(<InboxContent model={model} />, { wrapper: PagePresentation });
+
+        const typeSections = Array.from(new Set(tree.root
+            .findAll((node) => typeof node.props.testID === 'string' && /^inbox\.type\.[a-z_]+$/.test(String(node.props.testID)))
+            .map((node) => String(node.props.testID))));
+        expect(typeSections).toEqual(['inbox.type.approval', 'inbox.type.decision']);
+        expect(groupOrder(tree as never)).toEqual([]);
+        const approvals = tree.root.findByProps({ testID: 'inbox.type.approval' });
+        // The worker's and the stopped session's prompts keep their answer cards; the open approval its card.
+        expect(scopedByType(tree, approvals, InboxSessionAttentionGroupCard).map((card) => card.props.session.id)).toEqual(['worker', 'stopped']);
+        expect(scopedByType(tree, approvals, ApprovalInboxCard)).toHaveLength(1);
+        const decisions = tree.root.findByProps({ testID: 'inbox.type.decision' });
+        expect(decisions.findAllByProps({ testID: 'inbox.run.library-run' }).length).toBeGreaterThan(0);
+        // What asks for nothing now (stalled, snoozed, a failed turn) is not in Needs you.
+        expect(tree.root.findAllByProps({ testID: 'inbox.stalled.stalled-worker' })).toHaveLength(0);
+        expect(tree.root.findAllByProps({ testID: 'inbox.snoozed.snoozed' })).toHaveLength(0);
+    });
+
+    it('shows Mentions as their own view, each opening its item, with a calm empty state when none', async () => {
+        const { InboxContent } = await import('./InboxContent');
+        const onSelectItem = vi.fn();
+        const model = createModel({ extraItems: [mentionItem('m-1')] });
+        const screen = await renderScreen(<InboxContent model={model} view="mentions" onSelectItem={onSelectItem} />, { wrapper: PagePresentation });
+        const row = screen.findByTestId('inbox.item.discussion:server-a:disc-1:m-1');
+        expect(row).not.toBeNull();
+        row!.props.onPress();
+        expect(onSelectItem).toHaveBeenCalledWith(mentionItem('m-1').focus);
+        expect(screen.findByTestId('inbox.empty')).toBeNull();
+        await screen.unmount();
+
+        const empty = await renderScreen(<InboxContent model={createModel()} view="mentions" />, { wrapper: PagePresentation });
+        expect(empty.tree.findByType(EmptyState).props.title).toBe('inbox.work.mentionsEmpty.title');
+    });
+
+    it('walks and auto-advances the mounted Needs-you order across work groups and request types', async () => {
+        const { InboxContent } = await import('./InboxContent');
+        vi.stubGlobal('window', new EventTarget());
+        vi.stubGlobal('navigator', { platform: 'Linux' });
+        storage.setState({ settings: { ...storage.getState().settings, keyboardShortcutsV2Enabled: true, keyboardSingleKeyShortcutsEnabled: true } });
+        const base = createModel({ heldStep: { invocationId: 'inv-order', label: 'Review result' } });
+        const decision = base.items.find(item => item.type === 'decision')!;
+        const approvals = base.items.filter(item => item.type === 'approval');
+        const model = { ...base, items: [decision, ...base.items.filter(item => item !== decision)], markItemOpened: async () => {} };
+        const render = (value: InboxModel) => <KeyboardShortcutProvider handlers={{}}>
+            <NavigableInbox model={value} view="needs_you" content={InboxContent} />
+        </KeyboardShortcutProvider>;
+        const screen = await renderScreen(render(model), { wrapper: PagePresentation });
+        const expected = [...approvals, decision];
+        expect(screen.tree.findAllByType(InboxWorkItemRow).map(node => node.props.item.key)).toEqual(expected.map(item => item.key));
+        for (const item of expected) {
+            await act(async () => pressInboxKey('ArrowDown'));
+            expect(screen.findByTestId('inbox.selected')?.props.children).toBe(JSON.stringify(item.focus));
+        }
+        for (const item of expected.slice(0, -1).reverse()) {
+            await act(async () => pressInboxKey('k'));
+            expect(screen.findByTestId('inbox.selected')?.props.children).toBe(JSON.stringify(item.focus));
+        }
+        await screen.update(render({ ...model, items: model.items.filter(item => item.key !== expected[0]!.key) }));
+        expect(screen.findByTestId('inbox.selected')?.props.children).toBe(JSON.stringify(expected[1]!.focus));
+    });
+
+    it.each(['updates', 'mentions'] as const)('walks the mounted %s in descending arrival time', async view => {
+        const { InboxContent } = await import('./InboxContent');
+        vi.stubGlobal('window', new EventTarget());
+        vi.stubGlobal('navigator', { platform: 'Linux' });
+        storage.setState({ settings: { ...storage.getState().settings, keyboardShortcutsV2Enabled: true, keyboardSingleKeyShortcutsEnabled: true } });
+        const rows = [mentionItem('older'), mentionItem('newer'), mentionItem('middle')].map((item, index) => ({
+            ...item, type: view === 'updates' ? 'update' as const : 'mention' as const, view,
+            createdAt: NOW - [90_000_000, 1_000, 60_000][index]!,
+        }));
+        const model = { ...createModel({ needsYou: false }), items: rows, markItemOpened: async () => {} };
+        const screen = await renderScreen(<KeyboardShortcutProvider handlers={{}}>
+            <NavigableInbox model={model} view={view} content={InboxContent} />
+        </KeyboardShortcutProvider>, { wrapper: PagePresentation });
+        const expected = [rows[1]!, rows[2]!, rows[0]!];
+        expect(screen.tree.findAllByType(InboxWorkRow).map(node => node.props.testID))
+            .toEqual(expected.map(item => `inbox.item.${item.key}`));
+        for (const item of expected) {
+            await act(async () => pressInboxKey('j'));
+            expect(screen.findByTestId('inbox.selected')?.props.children).toBe(JSON.stringify(item.focus));
+        }
+    });
+
+    it('lists Updates newest first: finished sessions, what stopped asking, and people', async () => {
+        const { InboxContent } = await import('./InboxContent');
+        const { tree } = await renderScreen(<InboxContent model={createModel()} view="updates" />, { wrapper: PagePresentation });
+        expect(tree.findAllByType(InboxReadySessionRow)).toHaveLength(1);
+        expect(tree.root.findAllByProps({ testID: 'inbox.stalled.stalled-worker' }).length).toBeGreaterThan(0);
+        expect(tree.root.findAllByProps({ testID: 'inbox.snoozed.snoozed' }).length).toBeGreaterThan(0);
+        expect(tree.findAllByType(UserCard)).toHaveLength(1);
     });
 });

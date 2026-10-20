@@ -47,6 +47,7 @@ const prepared = {
 function createDeps(overrides: Record<string, unknown> = {}) {
   const calls: string[] = [];
   const workspaceSyncAdapter = {
+    prepareBetween: vi.fn(async () => { throw new Error('unexpected workspace route preparation'); }),
     prepare: vi.fn(async () => { throw new Error('unexpected workspace preparation'); }),
     finalize: vi.fn(async () => { throw new Error('unexpected workspace finalization'); }),
     commit: vi.fn(async () => { throw new Error('unexpected workspace commit'); }),

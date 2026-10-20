@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
 import { createExternalScratch } from './schemaLibraryScratch.mjs';
+import { resolveVitestNodeCommand } from '../../../scripts/testing/vitestNodeCommand.mjs';
 
 const repo = process.cwd();
 const req = createRequire(new URL('../package.json', import.meta.url));
@@ -15,12 +16,13 @@ const childMode = process.argv[2] === 'child';
 const specs = ['valibot@1.5.0', '@valibot/to-json-schema@1.8.0', 'arktype@2.2.7', 'typebox@1.3.35'];
 if (process.argv[2] === 'post-slice') {
   console.log(JSON.stringify({event:'post-slice-basis',host:hostname(),node:process.version}));
+  const { argsPrefix: vitestArgs } = resolveVitestNodeCommand(repo);
   const tasks = [
-    ['scratch-guard',['node_modules/vitest/vitest.mjs','run','packages/protocol/scripts/schemaLibraryScratch.test.mjs','--config','vitest.config.ts','--maxWorkers=1']],
+    ['scratch-guard',[...vitestArgs,'run','packages/protocol/scripts/schemaLibraryScratch.test.mjs','--config','vitest.config.ts','--maxWorkers=1']],
     ['slice-typecheck',['packages/protocol/scripts/schema-library-census-codemod.mjs','slice-typecheck','packages/protocol/src/plugins/actions/internalProtocolZodAdapter.ts','packages/protocol/src/plugins/actions/internalProtocolZodAdapter.test.ts']],
     ['protocol-root',['--experimental-transform-types','--expose-gc','packages/protocol/scripts/schema-library-benchmark.mjs','bridge-census']],
     ['browser-protocol-contribution',['packages/protocol/scripts/profile-schema-browser-bundle.mjs']],
-    ['cold-daemon',['../../node_modules/vitest/vitest.mjs','run','src/ui/auth.lazyRenderer.test.ts','--config','../../packages/protocol/scripts/daemon-schema-memory.config.ts','--maxWorkers=1'],resolve(repo,'apps/cli')],
+    ['cold-daemon',[...vitestArgs,'run','src/ui/auth.lazyRenderer.test.ts','--config','../../packages/protocol/scripts/daemon-schema-memory.config.ts','--maxWorkers=1'],resolve(repo,'apps/cli')],
   ];
   for (const [task,args,cwd] of tasks) {
     console.log(JSON.stringify({event:'start',task,args,cwd:cwd ?? repo}));

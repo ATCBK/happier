@@ -30,7 +30,8 @@ vi.mock('expo-router', async () => {
 });
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit');
-    return createModalModuleMock().module;
+    // These save intents accept canonical Action confirmation; navigation discard choices below stay explicit.
+    return createModalModuleMock({ confirmResult: true }).module;
 });
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit');
@@ -354,6 +355,9 @@ describe('ArtifactEditor', () => {
         expect(navigation.replace).toHaveBeenCalledWith(`/artifacts/${stored!.id}`);
         expect(persisted.readPlainBody(stored!.id)).toBe('First body');
         await screen.unmount();
+        // The edit route opens the full HTTP body/authority tuple, not its create-list header.
+        const { sync } = await import('@/sync/sync');
+        await sync.fetchArtifactWithBody(stored!.id);
         const artifact = getStorage().getState().artifacts[stored!.id]!;
         const editor = await renderScreen(<ArtifactEditor artifact={artifact} mode="edit" />);
         await act(async () => { editor.changeTextByTestId('artifact-editor:body:source', 'Second body'); });
@@ -381,11 +385,11 @@ describe('ArtifactEditor', () => {
     });
 
     it('opens a distinct draft when a hydrated document route changes identity', async () => {
-        await loadSyncSingletonForTests();
+        await restoreEditorHome('https://artifact-editor-route-reset.test');
         const { EditArtifactContent } = await import('@/app/(app)/artifacts/edit/[id]');
         const first: DecryptedArtifact = { id: 'first', title: 'First', body: 'First body',
             header: { title: 'First' }, rawHeader: { title: 'First' }, headerVersion: 1, bodyVersion: 1,
-            isDecrypted: true, seq: 1, createdAt: 1, updatedAt: 1, storageMode: 'plain' };
+            isDecrypted: true, seq: 1, createdAt: 1, updatedAt: 1, ownerAccountId: 'owner', access: 'owner', storageMode: 'plain' };
         const second = { ...first, id: 'second', title: 'Second', body: 'Second body',
             header: { title: 'Second' }, rawHeader: { title: 'Second' }, headerVersion: 4, bodyVersion: 6 };
         const screen = await renderScreen(<EditArtifactContent id={first.id} artifact={first} />);
@@ -397,11 +401,11 @@ describe('ArtifactEditor', () => {
     });
 
     it('does not expose a text Save that can erase a binary file opened through a direct edit route', async () => {
-        await loadSyncSingletonForTests();
+        await restoreEditorHome('https://artifact-editor-binary.test');
         const artifact: DecryptedArtifact = { id: 'binary', title: 'archive.zip', isDecrypted: true,
             header: { kind: 'artifact.legacy', title: 'archive.zip' }, rawHeader: { kind: 'artifact.legacy', title: 'archive.zip' },
             body: { blobId: 'a668646c-dc5f-464d-9e49-285c03698cc9', mime: 'application/zip', sizeBytes: 0, sha256: '0'.repeat(64) },
-            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1, access: 'owner', storageMode: 'plain' };
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1, ownerAccountId: 'owner', access: 'owner', storageMode: 'plain' };
         const ArtifactEditor = await loadArtifactEditor();
         const screen = await renderScreen(<ArtifactEditor artifact={artifact} mode="edit" />);
         expect(screen.findByTestId('artifact-editor:save')).toBeNull();

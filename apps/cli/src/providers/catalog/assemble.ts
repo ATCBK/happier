@@ -3,6 +3,8 @@ import type { CustomProviderTemplateV1, ProviderCatalogDeclarationV1, ProviderCa
 import { ProviderEndpointRuntimeStateV1Schema, serializeProviderCatalogRuntimeStateKeyV1 } from '@happier-dev/protocol/providers/runtimeState/v1';
 import { mergeProviderCatalogV1, providerCatalogPermitsUnlistedModelIdV1 } from '@happier-dev/protocol/providers/catalog/merge';
 import { readOwnRecordValue } from '@happier-dev/protocol/providers/ownRecordValue';
+import { qualifiedPurposeKey } from '@happier-dev/protocol/connect/connectedAccountPurposeBindings';
+import { resolveModelDisplayName } from '@happier-dev/protocol/models/descriptor';
 
 import type {
   AssembleProviderConnectionCatalogInput,
@@ -107,6 +109,7 @@ export type ProjectedProviderCatalogPresentationRow = Readonly<{
  * remain free to project their distinct RPC or Agent-facing row shapes.
  */
 export function projectProviderCatalogPresentation(input: Readonly<{
+  modelNameCatalog?: ProviderCatalogMergeInput['modelNameCatalog'];
   staticModels: ProviderCatalogMergeInput['staticModels'];
   manualModels: ProviderCatalogMergeInput['manualModels'];
   probeState: ProviderCatalogMergeInput['probeState'];
@@ -121,6 +124,7 @@ export function projectProviderCatalogPresentation(input: Readonly<{
   staleRows: readonly ProjectedProviderCatalogPresentationRow[];
 }> {
   const merged = mergeProviderCatalogV1({
+    modelNameCatalog: input.modelNameCatalog,
     staticModels: input.staticModels,
     manualModels: input.manualModels,
     probeState: input.probeState,
@@ -187,6 +191,17 @@ function bindRow(input: Readonly<{
     catalog: input.catalog,
     loadState: input.loadState,
   };
+  const deployment = input.hostInput.connection.deployment;
+  // The resolved connection already owns declaration/default admission. Join
+  // only those admitted bindings to the model producer's exact slot evidence;
+  // this display projection never chooses credentials or infers a vendor.
+  const observedPurposes = new Set(input.merged.connectedAccountPurposes?.map(qualifiedPurposeKey));
+  const gatewaySlots = deployment.kind === 'managedLocal'
+    ? deployment.purposeBindingIntents.bindings.filter(binding => observedPurposes.has(qualifiedPurposeKey(binding.purpose))
+        && binding.purpose.consumer.pluginId === deployment.implementationIdentity.pluginId
+        && binding.purpose.consumer.localId === deployment.implementationIdentity.localId
+        && deployment.managedRuntime.connectedAccounts.some(declaration => declaration.purpose === binding.purpose.purpose))
+    : [];
   return {
     ref: {
       agentTargetKey: input.agentTargetKey,
@@ -196,6 +211,7 @@ function bindRow(input: Readonly<{
     descriptor: input.merged.descriptor,
     sources: input.merged.sources,
     confidence: input.merged.confidence,
+    ...(gatewaySlots.length > 0 ? { gatewaySlots } : {}),
     presentation,
   };
 }
@@ -218,6 +234,7 @@ export function assembleProviderConnectionCatalog(
     };
 
   const projected = projectProviderCatalogPresentation({
+    modelNameCatalog: input.modelNameCatalog,
     staticModels: staticModels(catalog),
     manualModels,
     probeState,
@@ -272,7 +289,9 @@ export function assembleProviderConnectionCatalog(
         row: {
           descriptor: {
             id: unrepresentedCurrentSelection.modelId,
-            name: unrepresentedCurrentSelection.modelId,
+            name: resolveModelDisplayName(
+              { id: unrepresentedCurrentSelection.modelId }, input.modelNameCatalog ?? staticModels(catalog),
+            ),
           },
           sources: { manual: false, static: false, probe: retainUnobservableSelection },
           confidence: retainUnobservableSelection

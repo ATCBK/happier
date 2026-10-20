@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import ts from 'typescript';
 
@@ -19,7 +20,7 @@ function writeCanonicalSdkTypeFixtures(root) {
     export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
     export type PluginJsonValueV2 = JsonValue;
   `);
-  put('packages/plugin-sdk/src/scm/projections.ts', `
+  put('packages/plugin-sdk/src/scm/comparisonSource.ts', `
     import type { JsonValue } from '../identity.js';
     export type ScmComparisonSource =
       | { kind: 'turnCheckpoint'; sessionId?: string; turnId?: string; checkpointReceiptId?: string; evidenceMode?: 'checkpoint' | 'agent_reported' | 'reconciled' }
@@ -194,10 +195,15 @@ test('current published Action DTO closure emits portable declarations and recur
     }
   };
   inspectDeclarations(resolve(actionsRoot, 'declarations'));
+  // Resolve the real package export and its prepared declarations, as an external
+  // plugin does. Generated DTO modules alone cannot prove public reachability.
+  const packageScope = resolve(actionsRoot, 'node_modules/@happier-dev');
+  mkdirSync(packageScope, { recursive: true });
+  symlinkSync(fileURLToPath(new URL('..', import.meta.url)), resolve(packageScope, 'plugin-sdk'), 'junction');
   writeFileSync(resolve(actionsRoot, 'consumer.ts'), `
     import type { Input, Result } from './declarations/actions/compare.js';
     import type { PluginActionWorkflowIngressBlockV1, PluginActionWorkflowBlockV1, PluginActionResultById, PluginActionInputById,
-      ExecutionRunChildChoiceV1, ExecutionRunStartFailureDetailsV1 } from './declarations/actions/actionTypeMap.generated.js';
+      ExecutionRunChildChoiceV1, ExecutionRunStartFailureDetailsV1 } from '@happier-dev/plugin-sdk/actions';
     import type { PluginDeclarativeNodeV2 } from './declarations/actions/dtos/actionDeclarativeNodeDto.generated.js';
     declare const input: Input;
     declare const result: Result;

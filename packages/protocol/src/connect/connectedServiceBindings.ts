@@ -114,6 +114,23 @@ export type TeamResourceConnectedServiceSelectionV2 = z.infer<
     typeof TeamResourceConnectedServiceSelectionV2Schema
 >;
 
+/** The exact Session/recipient selection identity, independent of absent optional wire fields. */
+export function teamResourceConnectedServiceSelectionKey(binding: TeamResourceConnectedServiceSelectionV2): string {
+    return JSON.stringify([
+        binding.resourceId,
+        binding.deliveryMode,
+        binding.disclosedMember ? buildQualifiedPluginContributionKey(binding.disclosedMember.service) : null,
+        binding.disclosedMember?.accountId ?? null,
+    ]);
+}
+
+export function areTeamResourceConnectedServiceSelectionsEqual(
+    left: TeamResourceConnectedServiceSelectionV2,
+    right: TeamResourceConnectedServiceSelectionV2,
+): boolean {
+    return teamResourceConnectedServiceSelectionKey(left) === teamResourceConnectedServiceSelectionKey(right);
+}
+
 export const ConnectedServiceBindingSelectionV2Schema = lazyZodSchema(() => z.union([
     (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(ConnectedServiceNativeBindingV1Schema),
     (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(ConnectedServiceGroupBindingV1Schema),

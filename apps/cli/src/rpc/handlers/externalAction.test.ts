@@ -6,6 +6,7 @@ import {
   type ExternalActionDaemonDispatchRequest,
   type ExternalActionDaemonDispatchRequestV1,
   createActionExecutor,
+  ExternalActionExecutionAuthorizationV1Schema,
 } from '@happier-dev/protocol';
 import tweetnacl from 'tweetnacl';
 import {
@@ -42,15 +43,17 @@ function authorizedDispatch<T extends ExternalActionDaemonDispatchRequest>(reque
 } {
   return {
     ...request,
-    executionAuthorization: {
+    executionAuthorization: ExternalActionExecutionAuthorizationV1Schema.parse({
       v: 1,
       token: `authorization-${request.actionId}`,
       binding: {
         serverIdentityId: 'server-reserved-rpc',
         accountId: request.principal.accountId,
-        principalId: request.principal.principalId,
-        credentialId: request.principal.credentialId,
-        grant: request.principal.grant,
+        ...('credentialId' in request.principal ? {
+          principalId: request.principal.principalId,
+          credentialId: request.principal.credentialId,
+          grant: request.principal.grant,
+        } : { authentication: request.principal.authentication }),
         machineId: request.placement.machineId,
         custodianAccountId: request.principal.accountId,
         installationId: 'installation-1',
@@ -59,7 +62,7 @@ function authorizedDispatch<T extends ExternalActionDaemonDispatchRequest>(reque
         requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope),
         target: request.envelope.target ?? { kind: 'machine', machineId: request.placement.machineId },
       },
-    },
+    }),
   };
 }
 
@@ -89,7 +92,7 @@ describe('registerExternalActionRpcHandler', () => {
     registerExternalActionRpcHandler(registrar, {
       machineId: 'machine-1', currentServerId: 'home-profile',
       resolveAccountId: async () => 'account-1', resolveInstallationId: () => installationId,
-      resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token: 'daemon-token' } }),
+      resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token: 'daemon-token', encryption: null } }),
       executor: createActionExecutor({ ...createUnavailableActionTransportDeps(), sessionSpawnNew }),
       externalActionMachineRequestPrivateKey: installationIdentity.secretKey,
       // Home verification is the network boundary. Installation replacement
@@ -118,7 +121,7 @@ describe('registerExternalActionRpcHandler', () => {
     registerExternalActionRpcHandler(registrar, {
       machineId: 'machine-1', currentServerId: 'home-profile',
       resolveAccountId: async () => 'alice', resolveInstallationId: () => 'alice-installation',
-      resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token: 'alice-daemon-token' } }),
+      resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token: 'alice-daemon-token', encryption: null } }),
       executor: createActionExecutor(createUnavailableActionTransportDeps()),
       externalActionMachineRequestPrivateKey: installationIdentity.secretKey,
       verifyExecutionAuthorization: async () => true,
@@ -263,6 +266,7 @@ describe('registerExternalActionRpcHandler', () => {
 
     expect(resolveTarget).toHaveBeenCalledWith({
       actionId: 'action.invoke',
+      actionInput: request.envelope.input,
       target: { kind: 'session', sessionId: 'session-1' },
       currentMachineId: 'machine-1',
       signal,

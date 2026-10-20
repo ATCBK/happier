@@ -134,6 +134,7 @@ describe('annotation editor overlay → draft adapter (ANNO-1)', () => {
 
     it('Attach commits the draft into grouped context items sharing one annotationId + one media (not a fake-contextId attach*)', async () => {
         const { adapter, getState } = buildAdapter();
+        expect(await adapter.dispatch({ kind: 'start' })).toMatchObject({ status: 'started' });
         await adapter.dispatch({
             kind: 'addDraftTarget',
             target: { kind: 'element', selectorPath: '#a', rect: { x: 10, y: 10, width: 20, height: 20 } },

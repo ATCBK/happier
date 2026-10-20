@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { killProcessTree, runCaptureResult, spawnProc } from '../proc/proc.mjs';
@@ -6,11 +7,7 @@ import {
   buildRemoteCancelCommand,
   buildRemoteExecCommand,
   buildSshWorkerArgs,
-  classifyRemoteCommand,
-  requiresRemoteWorkspacePreparation,
-  resolveRemoteCommandPolicy,
-  resolveRemoteValidationKind,
-  resolveRemoteValidationComponentRelativeDir,
+  resolvePackageCommandPolicy,
 } from './remote_commands.mjs';
 import {
   MUTAGEN_SYNC_LIST_JSON_TEMPLATE,
@@ -96,6 +93,25 @@ export async function inspectDevTargetSync(
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+/** Shared source admission for commands and finite SSH control helpers. The
+ * synchronization owner repairs missing/paused mirrors; consumers only admit
+ * a ready mirror and use its existing causal flush barrier. */
+export async function prepareDevTargetSourceCommand(
+  { target, stackBaseDir, sourceDir, syncAlreadyVerified = false, flush = null, env = process.env },
+  { runCaptureResult: runCaptureResultImpl = defaultRunCaptureResult } = {},
+) {
+  const syncEnv = sourceDir ? { ...env, HAPPIER_STACK_SYNC_SOURCE_DIR: sourceDir } : env;
+  let status = { state: 'unknown', successfulCycles: 0 };
+  if (!syncAlreadyVerified) {
+    status = await inspectDevTargetSync({ target, stackBaseDir, sourceDir, env: syncEnv }, { runCaptureResult: runCaptureResultImpl });
+    assertReadySyncStatus(status, { allowRescan: flush !== false, allowNeedsFlush: flush !== false });
+  }
+  if (flush === true || (flush === null && !syncAlreadyVerified)) {
+    await flushDevTarget({ target, stackBaseDir, env: syncEnv }, { runCaptureResult: runCaptureResultImpl });
+  }
+  return status;
 }
 
 /** Read-only worker observation, independent of admission and sync readiness. */
@@ -235,6 +251,7 @@ export async function runDevTargetWorkspacePreparation(
     stackBaseDir,
     cwd,
     validationKind = 'runtime',
+    requiredTools = '',
     defaultBuildMode = 'strict',
     syncAlreadyVerified = false,
     env = process.env,
@@ -249,6 +266,7 @@ export async function runDevTargetWorkspacePreparation(
       './apps/stack/scripts/utils/dev_targets/remote_validation_preparation.mjs',
       `--component-relative-dir=${cwd}`,
       `--validation-kind=${validationKind}`,
+      ...(requiredTools ? [`--required-tools=${requiredTools}`] : []),
       `--default-build-mode=${env.HAPPIER_WORKSPACE_BUILD_MODE ?? defaultBuildMode}`,
     ],
     environment: {
@@ -298,30 +316,22 @@ export async function runDevTargetCommand(
   } = {},
 ) {
   signal?.throwIfAborted();
-  const classification = classifyRemoteCommand(commandArgs, { cwd });
-  if (classification.placement === 'primary-only') {
+  const commandPolicy = await resolvePackageCommandPolicy(commandArgs, {
+    cwd: resolve(sourceDir, cwd), repoRoot: sourceDir, env: { ...env, ...environment },
+  });
+  if (commandPolicy.placement === 'primary-only') {
     throw new Error('[dev-targets] Git/index/worktree commands must execute on the authoritative primary checkout');
   }
-  let syncStatus = { state: 'unknown', successfulCycles: 0 };
-  if (!syncAlreadyVerified) {
-    syncStatus = await inspectDevTargetSync(
-      { target, stackBaseDir, env },
-      { runCaptureResult: runCaptureResultImpl },
-    );
-    assertReadySyncStatus(syncStatus, { allowRescan: flush !== false, allowNeedsFlush: flush !== false });
-  }
-  if (flush === true || (flush === null && !syncAlreadyVerified)) {
-    await flushDevTarget(
-      { target, stackBaseDir, env },
-      { runCaptureResult: runCaptureResultImpl },
-    );
-  }
+  const syncStatus = await prepareDevTargetSourceCommand(
+    { target, stackBaseDir, syncAlreadyVerified, flush, env },
+    { runCaptureResult: runCaptureResultImpl },
+  );
 
-  const bootstrapRequired = dependencyAdmission !== 'skip' && classification.requiresDependencyBootstrap;
-  const preparationRequired = workspacePreparation !== 'skip' && requiresRemoteWorkspacePreparation(commandArgs, { cwd });
-  const validationKind = resolveRemoteValidationKind(commandArgs, { cwd });
+  const bootstrapRequired = dependencyAdmission !== 'skip' && commandPolicy.bootstrap === '1';
+  const preparationRequired = workspacePreparation !== 'skip' && commandPolicy.commandClass === 'targeted-validation';
+  const validationKind = commandPolicy.kind;
   const defaultBuildMode = environment.HAPPIER_WORKSPACE_BUILD_MODE ?? env.HAPPIER_WORKSPACE_BUILD_MODE
-    ?? resolveRemoteCommandPolicy(commandArgs, { cwd }).preparationBuildMode;
+    ?? commandPolicy.preparationBuildMode;
   // POSIX preparation shares the payload's execution custody, but completes
   // before its native admission. Windows retains its separate transport.
   if (target.platform === 'windows' && bootstrapRequired) {
@@ -330,7 +340,7 @@ export async function runDevTargetCommand(
       stackBaseDir,
       validationKind,
       defaultBuildMode,
-      componentRelativeDir: resolveRemoteValidationComponentRelativeDir(commandArgs, { cwd }),
+      componentRelativeDir: commandPolicy.component,
       syncAlreadyVerified: true,
       env: { ...env, HAPPIER_WORKSPACE_BUILD_MODE: defaultBuildMode },
     });
@@ -343,8 +353,9 @@ export async function runDevTargetCommand(
     const preparation = await runWorkspacePreparation({
       target,
       stackBaseDir,
-      cwd: resolveRemoteValidationComponentRelativeDir(commandArgs, { cwd }),
+      cwd: commandPolicy.component,
       validationKind,
+      requiredTools: commandPolicy.requiredTools,
       defaultBuildMode,
       syncAlreadyVerified: true,
       env: { ...env, HAPPIER_WORKSPACE_BUILD_MODE: defaultBuildMode },
@@ -359,15 +370,16 @@ export async function runDevTargetCommand(
     executionId,
     cwd,
     commandArgs,
+    commandPolicy,
     ...(target.platform === 'windows' ? {} : {
       preparation: bootstrapRequired || preparationRequired ? {
         bootstrap: bootstrapRequired,
-        bootstrapComponentRelativeDir: resolveRemoteValidationComponentRelativeDir(commandArgs, { cwd }),
-        ...(preparationRequired ? { componentRelativeDir: resolveRemoteValidationComponentRelativeDir(commandArgs, { cwd }) } : {}),
+        bootstrapComponentRelativeDir: commandPolicy.component,
+        ...(preparationRequired ? { componentRelativeDir: commandPolicy.component } : {}),
         validationKind,
         defaultBuildMode,
       } : null,
-      admissionClass: resolveRemoteCommandPolicy(commandArgs, { cwd }).heavyClass,
+      admissionClass: commandPolicy.heavyClass,
     }),
     environment,
     admissionMode,
@@ -466,7 +478,7 @@ export async function runDevTargetCommand(
       executionId,
       timestamp: admittedAt,
       target: target.name,
-      commandClass: classification.commandClass,
+      commandClass: commandPolicy.commandClass,
       syncStatus: syncStatus.state,
       syncSuccessfulCycles: syncStatus.session?.successfulCycles ?? 0,
     });
@@ -479,7 +491,7 @@ export async function runDevTargetCommand(
       executionId,
       timestamp: completedAt,
       target: target.name,
-      commandClass: classification.commandClass,
+      commandClass: commandPolicy.commandClass,
       exitCode: result.code,
       signal: result.signal,
       durationMs: completedAt - admittedAt,

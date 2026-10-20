@@ -43,12 +43,11 @@ vi.mock('@/scm/scmStatusSync', () => ({
 }));
 
 describe('applyFileDiscardAction (daemon unavailable)', () => {
-  it('shows a confirm prompt and does not call RPC when user cancels', async () => {
+  it('does not add a caller confirmation before the discard Action', async () => {
     modalAlert.mockReset();
     modalConfirm.mockReset();
     sessionScmChangeDiscard.mockReset();
-
-    modalConfirm.mockResolvedValueOnce(false);
+    sessionScmChangeDiscard.mockResolvedValueOnce({ success: true });
 
     const { applyFileDiscardAction } = await import('./applyFileDiscardAction');
 
@@ -62,8 +61,8 @@ describe('applyFileDiscardAction (daemon unavailable)', () => {
       surface: 'file',
     } as any);
 
-    expect(modalConfirm).toHaveBeenCalled();
-    expect(sessionScmChangeDiscard).not.toHaveBeenCalled();
+    expect(modalConfirm).not.toHaveBeenCalled();
+    expect(sessionScmChangeDiscard).toHaveBeenCalledTimes(1);
   });
 
   it('shows daemon-unavailable alert with Retry when SCM RPC backend is unavailable', async () => {
@@ -71,7 +70,6 @@ describe('applyFileDiscardAction (daemon unavailable)', () => {
     modalConfirm.mockReset();
     sessionScmChangeDiscard.mockReset();
 
-    modalConfirm.mockResolvedValueOnce(true);
     sessionScmChangeDiscard.mockResolvedValueOnce({
       success: false,
       errorCode: SCM_OPERATION_ERROR_CODES.BACKEND_UNAVAILABLE,
@@ -96,5 +94,30 @@ describe('applyFileDiscardAction (daemon unavailable)', () => {
     expect(String(message ?? '')).toContain('errors.daemonUnavailableBody');
     expect(Array.isArray(buttons)).toBe(true);
     expect((buttons as any[]).some((b) => b?.text === 'common.retry')).toBe(true);
+  });
+
+  it('stays quiet when the person declines the Action confirmation', async () => {
+    modalAlert.mockReset();
+    sessionScmChangeDiscard.mockReset();
+    // What the real SCM facade returns for a declined in-place confirmation.
+    const { normalizeUiScmFacadeResult } = await import('@/sync/ops/scm/scmActionInvocation');
+    sessionScmChangeDiscard.mockResolvedValueOnce(
+      normalizeUiScmFacadeResult({ success: false, errorCode: 'approval_canceled', error: 'approval_canceled' }),
+    );
+
+    const { applyFileDiscardAction } = await import('./applyFileDiscardAction');
+
+    await applyFileDiscardAction({
+      sessionId: 's1',
+      sessionPath: '/tmp',
+      file: { fullPath: 'a.txt', status: 'modified' },
+      snapshot: null,
+      scmWriteEnabled: true,
+      commitStrategy: 'git_staging',
+      surface: 'file',
+    } as any);
+
+    expect(sessionScmChangeDiscard).toHaveBeenCalledTimes(1);
+    expect(modalAlert).not.toHaveBeenCalled();
   });
 });

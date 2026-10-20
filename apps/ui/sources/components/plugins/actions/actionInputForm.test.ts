@@ -63,6 +63,27 @@ function createAccountLifetimeHarness() {
 }
 
 describe('generic Action input form', () => {
+    it('seeds declared defaults only for missing initial fields and preserves falsy draft values', () => {
+        const form = createActionInputForm({
+            presentation: {
+                title: 'Plugin settings', description: null,
+                inputHints: { fields: [
+                    { path: 'enabled', title: 'Enabled', widget: 'boolean', defaultValue: true },
+                    { path: 'settings.count', title: 'Count', widget: 'integer', defaultValue: 5 },
+                    { path: 'settings.label', title: 'Label', widget: 'text', defaultValue: 'Default' },
+                    { path: 'settings.mode', title: 'Mode', widget: 'text', defaultValue: 'automatic' },
+                ] },
+            },
+            initialInput: { enabled: false, settings: { count: 0, label: '' } },
+            submit: async () => ({ ok: true }),
+        });
+        expect(form.getInput()).toEqual({ enabled: false, settings: { count: 0, label: '', mode: 'automatic' } });
+        form.replaceInput({});
+        expect(form.getInput()).toEqual({});
+        form.retire();
+        expect(form.getInput()).toEqual({});
+    });
+
     it.each(Object.entries(widgetRequiredFields))('presents the required execution inputs of %s', (id, requiredPaths) => {
         const form = createSpecForm(id as keyof typeof widgetRequiredFields);
         const fields = form.getFields();

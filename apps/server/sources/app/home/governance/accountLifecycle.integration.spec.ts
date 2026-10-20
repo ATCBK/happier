@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import { auth } from "@/app/auth/auth";
@@ -278,6 +279,7 @@ describe("Account lifecycle", () => {
                 version: 1,
             } });
             await db.accountSessionFollow.create({ data: {
+                id: randomUUID(),
                 accountId: target.id,
                 sessionId: session.id,
                 following: true,
@@ -349,7 +351,7 @@ describe("Account lifecycle", () => {
             value: new Uint8Array([1]),
             version: 1,
         } });
-        await db.accountSessionFollow.create({ data: { accountId: target.id, sessionId: session.id } });
+        await db.accountSessionFollow.create({ data: { id: randomUUID(), accountId: target.id, sessionId: session.id } });
 
         await expect(inTx(async tx => {
             expect(await setAccountStatusInTx(tx, {

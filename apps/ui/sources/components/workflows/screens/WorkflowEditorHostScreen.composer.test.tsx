@@ -22,14 +22,16 @@ import { getActionSpec, ActionIdSchema, StrictJsonValueSchema, WorkflowRunStartR
 import { materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
 import { zodSchemaToJsonSchemaObject } from '@happier-dev/protocol/actions/actionInputJsonSchema';
 import { createAuthoringMemoryHttpBoundary } from '@/dev/testkit/mocks/authoringMemoryHttp';
-import { TargetedActionRpcRequestV1Schema } from '@happier-dev/protocol/actions';
-import type { WorkflowActionTransport } from '@/sync/ops/actions/workflowActionTransport';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
+import { createAccountTokenForTests, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
 
-const machineRpc = vi.hoisted(() => vi.fn<WorkflowActionTransport>());
+const runStart = vi.fn<(request: ReturnType<typeof WorkflowRunStartRequestV1Schema.parse>) => Promise<unknown>>();
+let runFailure: Readonly<{ errorCode: string; error: string }> | null = null;
+const runBoundaries = new Map<string, Awaited<ReturnType<typeof createExternalActionAccountHttpBoundary>>>();
 const viewport = vi.hoisted(() => ({ width: 1280 }));
 const appliedHome = vi.hoisted(() => ({ serverId: 'server-a', serverUrl: 'https://server-a.example', generation: 0 }));
 const routeBoundary = vi.hoisted(() => ({ params: {} as Record<string, string>, platform: 'ios', credentials: null as { token: string } | null }));
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
 vi.mock('react-native', async () => {
     const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeNativeMock({ platformOS: 'ios' }, {
@@ -97,15 +99,31 @@ function runKeyCensus(runId: string) {
 function renderScreen(element: React.ReactElement, options: Parameters<typeof renderTestScreen>[1] = {}) {
     const Wrapper = options.wrapper;
     return renderTestScreen(element, { ...options, wrapper: ({ children }) => (
-        <AuthProvider initialCredentials={routeBoundary.credentials}>
+        <AuthProvider initialCredentials={routeBoundary.credentials}><ModalProvider>
             {Wrapper ? <Wrapper>{children}</Wrapper> : children}
-        </AuthProvider>
+        </ModalProvider></AuthProvider>
     ) });
 }
 
 function startRequests() {
-    return machineRpc.mock.calls.filter(([request]) => request.method === getActionSpec('workflow.run.start').bindings?.rpcMethod)
-        .map(([request]) => WorkflowRunStartRequestV1Schema.parse(TargetedActionRpcRequestV1Schema.parse(request.payload).input));
+    return runStart.mock.calls.map(([request]) => request);
+}
+
+async function addComposerHome(name: string, serverUrl: string) {
+    const serverIdentityId = `srv_composer-${new URL(serverUrl).hostname.replaceAll('.', '-')}`;
+    const id = await home.addHome({ name, serverUrl, accountId: 'account-a', serverIdentityId,
+        credentials: { token: createAccountTokenForTests('account-a', { currentAccount: true }) } });
+    runBoundaries.set(new URL(serverUrl).origin, await createExternalActionAccountHttpBoundary({
+        serverUrl, serverIdentityId, accountId: 'account-a', machineId: 'machine-1', tokenEpoch: 0,
+        actionId: 'workflow.run.start', execute: raw => runStart(WorkflowRunStartRequestV1Schema.parse(raw)),
+        failure: () => runFailure,
+    }));
+    if (accountConnection) {
+        await (await import('@/sync/runtime/orchestration/connectionManager')).switchConnectionToActiveServer();
+        await (await import('@/sync/sync')).sync.awaitBootstrapForegroundAcquisition();
+        await waitForHomeGovernance(() => expect(getStorage().getState().isDataReady).toBe(true));
+    }
+    return { id, serverIdentityId };
 }
 
 function definitionWrites() {
@@ -203,13 +221,13 @@ describe('editor workflow composer', () => {
         };
         if (admission === 'remote') {
             appliedHome.serverUrl = 'https://workspace-peer.test';
-            appliedHome.serverId = await home.addHome({ name: 'Workspace peer', serverUrl: appliedHome.serverUrl, accountId: 'account-a' });
-            publishAppliedActiveServerSnapshot({ ...appliedHome });
+            appliedHome.serverId = (await addComposerHome('Workspace peer', appliedHome.serverUrl)).id;
+            publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
             const token = home.findByServerUrl(appliedHome.serverUrl)?.token;
             if (!token) throw new Error('Missing synthetic Account credential');
             routeBoundary.credentials = { token };
-            getStorage().setState({ profileScope: { serverId: appliedHome.serverId, accountId: 'account-a' },
-                settingsScope: { serverId: appliedHome.serverId, accountId: 'account-a' } });
+            const scope = { serverId: getActiveServerSnapshot().serverId, accountId: 'account-a' };
+            getStorage().setState({ profileScope: scope, settingsScope: scope });
         }
         const first = seed('FIRST');
         routeBoundary.params = { [param]: first };
@@ -259,7 +277,7 @@ describe('editor workflow composer', () => {
                 addEventListener: events.addEventListener.bind(events), removeEventListener: events.removeEventListener.bind(events),
                 dispatchEvent: events.dispatchEvent.bind(events) });
         }
-        const scopeKey = workspaceLayoutScopeKey({ serverId: appliedHome.serverId, accountId: 'account-a', windowId: 'main' });
+        const scopeKey = workspaceLayoutScopeKey({ serverId: getActiveServerSnapshot().serverId, accountId: 'account-a', windowId: 'main' });
         getStorage().setState({ isDataReady: admission === 'shell', localSettings: { ...getStorage().getState().localSettings,
             workspaceLayoutV1: { [scopeKey]: serializeWorkspaceLayout(createWorkspaceState(pinned)) } } });
         let workspace: WorkspaceNavigationContextValue | undefined;
@@ -516,8 +534,11 @@ describe('editor workflow composer', () => {
         installHomeGovernanceBoundaries(home);
         resetTeamsDirectoryEngineForTests(); resetTeamsSnapshotsForTests();
         await home.reset();
+        runBoundaries.clear();
+        runFailure = null;
         appliedHome.serverUrl = 'https://server-a.example';
-        appliedHome.serverId = await home.addHome({ name: 'Editor composer', serverUrl: appliedHome.serverUrl, accountId: 'account-a' });
+        const restoredHome = await addComposerHome('Editor composer', appliedHome.serverUrl);
+        appliedHome.serverId = restoredHome.id;
         publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
         const credentials = home.findByServerUrl(appliedHome.serverUrl)?.token;
         if (!credentials) throw new Error('Missing synthetic Account credential');
@@ -531,14 +552,19 @@ describe('editor workflow composer', () => {
         // Restoration creates the real memory owner and captures its HTTP port.
         // Install that port before restoration, just as the application does.
         accountConnection = await restoreServerAccountForTest({ serverUrl: appliedHome.serverUrl,
-            accountId: 'account-a', credentials: routeBoundary.credentials, request: (url, init) => home.request(url, init) });
+            serverIdentityId: restoredHome.serverIdentityId,
+            additionalRequestOrigins: ['https://workspace-peer.test', 'https://workflow.example'],
+            accountId: 'account-a', credentials: routeBoundary.credentials, request: async (url, init) =>
+                await runBoundaries.get(new URL(String(url)).origin)?.handle(new URL(String(url)), init) ?? home.request(url, init) });
         viewport.width = 1280;
         const machine = createMachineFixture();
-        getStorage().setState({ profileScope: { serverId: appliedHome.serverId, accountId: 'account-a' },
-            settingsScope: { serverId: appliedHome.serverId, accountId: 'account-a' }, isDataReady: true, isSessionDraftsReady: true,
+        const scope = { serverId: getActiveServerSnapshot().serverId, accountId: 'account-a' };
+        getStorage().setState({ profileScope: scope,
+            settingsScope: scope, isDataReady: true, isSessionDraftsReady: true,
+            localSettings: { ...getStorage().getState().localSettings, workspaceLayoutV1: {} },
             machines: { [machine.id]: machine }, machineListByServerId: {} });
-        machineRpc.mockReset();
-        machineRpc.mockImplementation(async () => { throw new Error('Fixture Machine is offline'); });
+        runStart.mockReset();
+        runStart.mockImplementation(async () => { throw new Error('Fixture Machine is offline'); });
         home.answer(appliedHome.serverId, '/v3/automations', { body: { automations: [], nextCursor: null } });
         home.answer(appliedHome.serverId, '/v1/account/encryption/currentness', { body: {
             mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
@@ -646,9 +672,7 @@ describe('editor workflow composer', () => {
         const definition = createWorkflowDefinitionFixture({ inputs: [], blocks: [{ kind: 'wait', id: 'review',
             document: { text: 'Saved contents', references: [], attachments: [] } }] });
         await seedSavedDefinition(definitionId, definition);
-        machineRpc.mockImplementation(async ({ method, payload }) => {
-            if (method !== getActionSpec('workflow.run.start').bindings?.rpcMethod) throw new Error('Unexpected native Machine request');
-            const request = WorkflowRunStartRequestV1Schema.parse(TargetedActionRpcRequestV1Schema.parse(payload).input);
+        runStart.mockImplementation(async (request) => {
             return { admission: 'created', run: createWorkflowRunSummaryFixture({ id: request.runId, sourceArtifactId: definitionId }) };
         });
         home.answer(appliedHome.serverId, storageRoute, { select: async input => {
@@ -717,13 +741,15 @@ describe('editor workflow composer', () => {
         ]);
         expect(home.requestsFor(storageRoute).filter(({ input }) => input && typeof input === 'object'
             && 'operation' in input && input.operation === 'invocations.get')).toHaveLength(0);
+        await screen.pressByTestIdAsync('workflow-editor-test-review-open');
+        expect(router.push).toHaveBeenLastCalledWith(`/workflows/runs/${startRequests()[0]!.runId}?invocationId=review&serverId=${encodeURIComponent(getStorage().getState().profileScope!.serverId)}`);
     });
 
     it('runs the reviewed saved draft with its granted Team without saving or substituting saved contents', async () => {
         appliedHome.serverUrl = 'https://workflow.example';
-        appliedHome.serverId = await home.addHome({ name: 'Workflow Home', serverUrl: 'https://workflow.example', accountId: 'account-a' });
-        publishAppliedActiveServerSnapshot({ ...appliedHome });
-        getStorage().setState({ profileScope: { serverId: appliedHome.serverId, accountId: 'account-a' } });
+        appliedHome.serverId = (await addComposerHome('Workflow Home', appliedHome.serverUrl)).id;
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        getStorage().setState({ profileScope: { serverId: getActiveServerSnapshot().serverId, accountId: 'account-a' } });
         home.answer(appliedHome.serverId, '/v3/automations', { body: { automations: [], nextCursor: null } });
         home.answer(appliedHome.serverId, '/v1/teams/get', { body: teamSummaryFixture({ id: 'team-a', name: 'Builders',
             viewerRole: 'member', capabilities: teamCapabilitiesFixture({}) }) });
@@ -734,9 +760,7 @@ describe('editor workflow composer', () => {
         home.answer(appliedHome.serverId, `/v1/artifacts/${definitionId}/access/grants`, { body: { artifactId: definitionId,
             ownerAccountId: 'account-a', access: 'owner', grants: [{ principal: { kind: 'team', teamId: 'team-a' },
                 accessLevel: 'edit', createdByAccountId: 'account-a', createdAt: 1, display: { name: 'Builders' } }] } });
-        machineRpc.mockImplementation(async ({ method, payload }) => {
-            if (method !== getActionSpec('workflow.run.start').bindings?.rpcMethod) throw new Error('Unexpected native Machine request');
-            const request = WorkflowRunStartRequestV1Schema.parse(TargetedActionRpcRequestV1Schema.parse(payload).input);
+        runStart.mockImplementation(async (request) => {
             return { admission: 'created', run: createWorkflowRunSummaryFixture({ id: request.runId,
                 sourceArtifactId: definitionId, visibleTeamId: 'team-a' }) };
         });
@@ -762,6 +786,8 @@ describe('editor workflow composer', () => {
             source: { kind: 'inline', sourceArtifactId: definitionId, visibleTeamId: 'team-a',
                 definition: { blocks: [{ document: { text: 'Reviewed unsaved contents' } }] } },
         });
+        const { router } = await import('expo-router');
+        expect(router.push).toHaveBeenLastCalledWith(`/workflows/runs/${startRequests()[0]!.runId}?serverId=${encodeURIComponent(getStorage().getState().profileScope!.serverId)}`);
         expect(definitionWrites()).toHaveLength(0);
     });
 
@@ -798,7 +824,7 @@ describe('editor workflow composer', () => {
         const { getBuiltinWorkflowCatalogV1, WorkflowRunStartRequestV1Schema, WorkflowRunGetResultV1Schema } = await import('@happier-dev/protocol');
         const { WorkflowRunComposer } = await import('../run/WorkflowRunComposer');
         const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
-        const builtin = getBuiltinWorkflowCatalogV1().find(entry => entry.requiresOriginSession !== true)!;
+        const builtin = getBuiltinWorkflowCatalogV1().find(entry => entry.id === 'builtin:plan-with-a-panel')!;
         const inputs = { request: 'Plan the next release' };
         let startedId: string | null = null;
         let admitted = false;
@@ -811,10 +837,10 @@ describe('editor workflow composer', () => {
                 materializedLeaves: [], frozenChildren: {},
                 workspaceTarget: { project: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' } }, origin: { kind: 'direct' } },
         });
-        machineRpc.mockImplementation(async ({ method, payload }) => {
-            if (method !== getActionSpec('workflow.run.start').bindings?.rpcMethod) throw new Error('Unexpected native Machine request');
-            startedId = WorkflowRunStartRequestV1Schema.parse(TargetedActionRpcRequestV1Schema.parse(payload).input).runId;
-            return { ok: false, errorCode: 'workflow_outcome_unresolved', error: 'Lost reply' };
+        runFailure = { errorCode: 'workflow_outcome_unresolved', error: 'Lost reply' };
+        runStart.mockImplementation(async request => {
+            startedId = request.runId;
+            return null;
         });
         home.answer(appliedHome.serverId, storageRoute, { select: async input => {
             if (!input || typeof input !== 'object' || !('operation' in input)) throw new Error('Expected a storage request');
@@ -841,10 +867,10 @@ describe('editor workflow composer', () => {
         await acceptedStorage(detailFor(startedId!));
         await act(async () => { admitted = true; publishHomeAccountChange(appliedHome.serverId, [`workflow-run:${startedId}`]); });
         await vi.waitFor(() => expect(screen.root.findAllByType(WorkflowRunComposer)).toHaveLength(0));
-        expect(getStorage().getState().workflowRunsById[startedId!]?.summary?.id).toBe(startedId);
+        expect(getStorage().getState().workflowRunsById[workflowRunStoreKey(startedId!)]?.summary?.id).toBe(startedId);
         const { router } = await import('expo-router');
         const { createWorkflowRunRoute } = await import('@/sync/domains/workflows/workflowRunRoute');
-        expect(router.push).toHaveBeenLastCalledWith(createWorkflowRunRoute(startedId!));
+        expect(router.push).toHaveBeenLastCalledWith(createWorkflowRunRoute(startedId!, getStorage().getState().profileScope!.serverId));
     });
 
     it('opens the real native engine panel from the step composer and only edits authoring values', async () => {
@@ -908,7 +934,7 @@ describe('editor workflow composer', () => {
         expect(readStep().execution?.modelSelection).toBeUndefined();
         expect(validateWorkflowEditorDraft(body.props.draft).valid).toBe(true);
         expectNoWorkflowWrites();
-        expect(machineRpc.mock.calls.filter(([request]) => request.method === getActionSpec('session.spawn_new').bindings?.rpcMethod)).toHaveLength(0);
+        expect(home.requests.filter(request => request.path === '/v1/actions/session.spawn_new')).toHaveLength(0);
         await screen.pressByTestIdAsync(`workflow-editor-step-${readStep().id}-customize`);
         const { WorkflowStepInspector } = await import('../editor/WorkflowStepInspector');
         const inspector = screen.root.findByType(WorkflowStepInspector);
@@ -937,7 +963,15 @@ describe('editor workflow composer', () => {
         const onChangeProjectTarget = body.props.onChangeProjectTarget;
         if (!onChangeProjectTarget) throw new Error('Missing workflow Project target handler');
         await act(async () => onChangeProjectTarget({ machineId: 'machine-1', directory: '/repo' }));
+        const confirmation = vi.spyOn(Alert, 'alert');
         await screen.pressByTestIdAsync('workflow-editor-save');
+        await vi.waitFor(async () => {
+            await act(async () => {});
+            expect(screen.findByTestId('web-modal-confirm') !== null || confirmation.mock.calls.length > 0).toBe(true);
+        });
+        if (screen.findByTestId('web-modal-confirm')) await screen.pressByTestIdAsync('web-modal-confirm');
+        else await act(async () => { confirmation.mock.calls.at(-1)?.[2]?.find(button => button.style !== 'cancel')?.onPress?.(); });
+        await vi.waitFor(() => expect(body.props.saveStatus?.kind).toBe('failed'));
         expect(automationWrites(), JSON.stringify(body.props.saveStatus)).toHaveLength(1);
         expect(definitionWrites()).toHaveLength(0);
         expect(body.props.saveStatus).toMatchObject({ kind: 'failed' });
@@ -1060,9 +1094,7 @@ describe('editor workflow composer', () => {
         expect(screen.findByTestId('workflow-run-inputs-preview')).not.toBeNull();
         expect(screen.findByTestId('workflow-start-where-chip')).not.toBeNull();
         expect(screen.findByTestId('workflow-run-inputs-unsaved')).not.toBeNull();
-        machineRpc.mockImplementation(async ({ method, payload }) => {
-            if (method !== getActionSpec('workflow.run.start').bindings?.rpcMethod) throw new Error('Unexpected native Machine request');
-            const request = WorkflowRunStartRequestV1Schema.parse(TargetedActionRpcRequestV1Schema.parse(payload).input);
+        runStart.mockImplementation(async (request) => {
             return { admission: 'created', run: createWorkflowRunSummaryFixture({ id: request.runId, origin: { kind: 'direct' } }) };
         });
         await screen.pressByTestIdAsync('workflow-run-inputs-run');

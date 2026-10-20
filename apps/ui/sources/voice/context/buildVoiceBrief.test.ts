@@ -46,7 +46,7 @@ describe('Voice brief from the mounted Inbox', () => {
     ])('keeps report buckets truthful in the spoken session context: %j', (reports) => {
         const inbox = source();
         const candidates = [...inbox.sessionPresentation.sessionsNeedingAttention.map(entry => entry.candidate),
-            ...inbox.sessionPresentation.readySessions].map(candidate => ({ ...candidate, session: { ...candidate.session, reports } }));
+            ...inbox.sessionPresentation.readySessions].map(candidate => ({ ...candidate, session: { ...candidate.session, managedSessions: reports } }));
         const brief = buildVoiceBrief({ inbox: { ...inbox, sessionPresentation: buildInboxSessionPresentation({
             overview: buildActivityOverviewFromCandidates(candidates),
         }) }, settings: { voice: { privacy: { shareSessionSummary: true } } } });
@@ -61,12 +61,13 @@ describe('Voice brief from the mounted Inbox', () => {
         const inbox = source();
         const row = { ...workflowRunRowFromSummary(createWorkflowRunSummaryFixture({ id: 'run/a', state: 'interrupted' })),
             metadata: WorkflowRunPrivateMetadataV1Schema.parse({ kind: 'available', value: { title: 'Publish release notes' } }) };
-        const route = { pathname: '/automations/[id]/runs/[runId]' as const, params: { id: 'automation', runId: 'run/b' } };
+        const route = '/workflows/runs/run%2Fb?target=occurrence&automationId=automation' as const;
         const brief = buildVoiceBrief({ inbox: { ...inbox,
+            workflowAttention: { ...inbox.workflowAttention, serverId: 'home-b' },
             workGroups: buildInboxWorkGroups({ sessionEntries: [], workflowRuns: [row], automationRuns: [], automationServerId: null,
                 openApprovals: [], stalledSessions: [], landings: [], snoozed: [], resolveSession: () => null, resolveOriginRunId: () => null }),
             automationAttentionItems: [{ key: 'automation:run/b', title: 'Nightly dependency check', run: createAutomationRunFixture({ id: 'run/b', state: 'dispatch_failed' }), route }] }, settings: {} });
-        expect(brief.items.find((item) => item.destination.kind === 'workflow')).toMatchObject({ title: 'Publish release notes', destination: { kind: 'workflow', runId: 'run/a' }, route: '/workflows/runs/run%2Fa' });
+        expect(brief.items.find((item) => item.destination.kind === 'workflow')).toMatchObject({ title: 'Publish release notes', destination: { kind: 'workflow', runId: 'run/a' }, route: '/workflows/runs/run%2Fa?serverId=home-b' });
         expect(brief.items.find((item) => item.destination.kind === 'automation')).toMatchObject({ title: 'Nightly dependency check', destination: { kind: 'automation', route }, route });
         expect(brief.items).toHaveLength(5);
     });
@@ -95,7 +96,7 @@ describe('Voice brief from the mounted Inbox', () => {
         const sessions = [createSessionFixture({ ...original, id: 'locked', encryptionMode: 'e2ee', encryptedContentAvailability: 'encrypted_access_pending', metadata: null }),
             createSessionFixture({ ...original, id: 'unnamed', metadata: null })];
         const row = workflowRunRowFromSummary(createWorkflowRunSummaryFixture({ id: 'unnamed-run', state: 'interrupted' }));
-        const route = { pathname: '/automations/[id]/runs/[runId]' as const, params: { id: 'automation', runId: 'unnamed-automation-run' } };
+        const route = '/workflows/runs/unnamed-automation-run?target=occurrence&automationId=automation' as const;
         const brief = buildVoiceBrief({ inbox: { ...inbox,
             sessionPresentation: buildInboxSessionPresentation({ overview: buildActivityOverviewSnapshot({ sessions, nowMs: 1000 }) }),
             workGroups: buildInboxWorkGroups({ sessionEntries: [], workflowRuns: [row], automationRuns: [], automationServerId: null,

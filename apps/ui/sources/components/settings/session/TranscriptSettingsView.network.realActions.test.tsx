@@ -43,7 +43,7 @@ describe('Transcript HTML network preference through Actions', () => {
         homes.answer(serverId, 'POST /v2/account/settings', { select: input => {
             writes.push(input);
             const update = AccountSettingsV2UpdateRequestSchema.parse(input);
-            if (update.content.t !== 'plain') throw new Error('Plain Account must retain plain settings');
+            if (update.content?.t !== 'plain') throw new Error('Plain Account must retain plain settings');
             if (typeof update.content.v !== 'object' || update.content.v === null || Array.isArray(update.content.v))
                 throw new Error('Account settings must be an object');
             saved = update.content.v;

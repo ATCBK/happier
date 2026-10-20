@@ -5,7 +5,7 @@ import type {
 import { applyDisplayTitleSessionMetadata } from '@happier-dev/agents/session/state/metadataWriters';
 
 import type { Metadata } from '@happier-dev/session-core/state';
-import { writeUiSessionStateField } from './engine';
+import { publishUiSessionStateFieldToMetadata } from './publishField';
 
 type DisplayTitleWriteValue = SessionStateFieldWriteValue<'display.title'>;
 
@@ -59,16 +59,13 @@ export async function publishDisplayTitleMetadataMutation(params: Readonly<{
             }
             : {}),
     };
-    const result = await writeUiSessionStateField({
+    await publishUiSessionStateFieldToMetadata({
         sessionId: params.sessionId,
         fieldId: 'display.title',
         value,
-        metadataReason: 'ui-display-title',
+        reason: 'ui-display-title',
         updateSessionMetadataWithRetry: params.updateSessionMetadataWithRetry,
         ...(params.resolveTitle ? { metadataPreprocess: (metadata: Metadata) => applyResolvedDisplayTitleMetadata(params, metadata) } : {}),
         ...(params.transformAfterTitle ? { metadataPostprocess: params.transformAfterTitle } : {}),
     });
-    if (!result.ok) {
-        throw new Error(`Session state metadata update failed: ${result.reason}`);
-    }
 }

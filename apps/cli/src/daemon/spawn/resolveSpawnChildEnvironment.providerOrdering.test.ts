@@ -1,84 +1,73 @@
 import { describe, expect, it, vi } from 'vitest';
-import { readHookEventEnvelopeV1 } from '@happier-dev/protocol';
-import type { ResolvedActivatedHookRegistration } from '@/plugins/projection/registry/types';
-import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import type { PluginApi } from '@happier-dev/plugin-sdk';
+import type { ProtocolJsonValue } from '@happier-dev/plugin-sdk/protocol';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 
 import { resolveSpawnChildEnvironment } from './resolveSpawnChildEnvironment';
 
-function createRegistration(eventId: 'agent.resolvePrerequisites' | 'agent.spawnEnv.augment'): ResolvedActivatedHookRegistration {
-  const prerequisite = eventId === 'agent.resolvePrerequisites';
-  return {
-    provenance: 'first_party',
-    source: { kind: 'bundled' },
-    pluginId: 'happier.agent.codex',
-    manifestPath: '/plugins/codex/plugin.json',
-    daemonEntryPath: '/plugins/codex/daemon.mjs',
-    sourceSpec: {
-      kind: 'bundled',
-      locator: '@happier-dev/plugins-codex',
-      trustPolicy: 'local_trusted',
-      installPolicy: 'link',
-    },
-    definition: {
-      hookApiVersion: 1,
-      id: eventId,
-      category: prerequisite ? 'decision' : 'augmentation',
-      scope: prerequisite ? 'agent' : 'daemon',
-      executionKind: prerequisite ? 'decide' : 'augment',
-      filters: { agentId: 'codex' },
-    },
-  };
-}
+const pluginId = 'acme.provider-ordering';
+const localAgentId = 'ordering-agent';
+const agentId = `${pluginId}/${localAgentId}`;
 
-function createRuntimeRegistry(params: Readonly<{
+async function createProviderOrderingFixture(params: Readonly<{
   events: string[];
   prerequisiteEnvironments: unknown[];
-}>): ResolvedExecutablePluginRuntimeRegistry {
-  const createHandler = (eventId: 'agent.resolvePrerequisites' | 'agent.spawnEnv.augment') => {
-    const registration = createRegistration(eventId);
-    return {
-      pluginId: 'happier.agent.codex',
-      localId: eventId,
-      hookId: eventId,
-      priority: 0,
-      registrationIndex: eventId === 'agent.resolvePrerequisites' ? 0 : 1,
-      manifestPath: registration.manifestPath,
-      daemonEntryPath: registration.daemonEntryPath,
-      registration,
-      handler: async (event: unknown) => {
-        const envelope = readHookEventEnvelopeV1(event);
-        if (!envelope) throw new Error('Expected a canonical hook event envelope');
-        params.events.push(envelope.eventId);
-        if (envelope.eventId === 'agent.resolvePrerequisites') {
-          const runtimeSelection = envelope.payload.runtimeSelection;
-          params.prerequisiteEnvironments.push(
-            runtimeSelection && typeof runtimeSelection === 'object' && !Array.isArray(runtimeSelection)
-              ? (runtimeSelection as Readonly<{ env?: unknown }>).env
-              : undefined,
-          );
-          return { decision: 'allow' as const };
-        }
-        return { GENERIC_AUGMENT: 'yes' };
-      },
-    };
+}>) {
+  const createHookHandler = (eventId: 'agent.resolvePrerequisites' | 'agent.spawnEnv.augment') => async (payload: unknown): Promise<ProtocolJsonValue> => {
+    params.events.push(eventId);
+    if (eventId === 'agent.resolvePrerequisites') {
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('Expected the SDK hook payload');
+      const runtimeSelection = Reflect.get(payload, 'runtimeSelection');
+      params.prerequisiteEnvironments.push(
+        runtimeSelection && typeof runtimeSelection === 'object' && !Array.isArray(runtimeSelection)
+          ? Reflect.get(runtimeSelection, 'env')
+          : undefined,
+      );
+      return { decision: 'allow' as const };
+    }
+    return { GENERIC_AUGMENT: 'yes' };
   };
-  return {
-    contributes: {
-      agentDefinitionsById: new Map([['codex', {
-        id: 'codex',
-        provenance: 'first_party',
-        source: { kind: 'bundled' },
-        pluginId: 'happier.agent.codex',
-        definition: { id: 'codex' },
-      }]]),
-      activationTargets: Object.freeze([]),
-      managedDependencies: Object.freeze([]),
-    },
-    hookHandlersByHookId: new Map([
-      ['agent.resolvePrerequisites', [createHandler('agent.resolvePrerequisites')]],
-      ['agent.spawnEnv.augment', [createHandler('agent.spawnEnv.augment')]],
-    ]),
-  } as unknown as ResolvedExecutablePluginRuntimeRegistry;
+  return await createAuthoredAdmittedPluginRuntimeFixture({
+    plugins: [{
+      manifest: createPluginManifestV2Fixture({
+        id: pluginId,
+        contributes: {
+          agents: [{ id: localAgentId, title: 'Ordering Agent', runtime: { kind: 'custom' }, primary: 'sessions',
+            capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } } }],
+          hooks: [
+            { hookApiVersion: 1, id: 'prerequisites', on: 'agent.resolvePrerequisites', category: 'decision', scope: 'agent', executionKind: 'decide' },
+            { hookApiVersion: 1, id: 'augment', on: 'agent.spawnEnv.augment', category: 'augmentation', scope: 'daemon', executionKind: 'augment' },
+          ],
+        },
+      }),
+      files: {
+        'daemon.mjs': `import { createRuntime } from './runtime.mjs';
+export function activate(api) {
+  api.agents.register('${localAgentId}', createRuntime, {
+    sessionRunnerFactory: { module: './runtime.mjs', export: 'createRuntime', runtimeApiVersion: 1 },
+  });
+}`,
+        'runtime.mjs': `export function createRuntime() {
+  return { sessions: { async open(request) {
+    return { sessionId: request.sessionId, async send() { return { status: 'admitted' }; },
+      watch() { return { dispose() {} }; }, async dispose() {} };
+  } } };
+}`,
+      },
+      // Public SDK callbacks are the fixture plugin's authored behavior. Source
+      // admission, registration policy, activation and dispatch remain real.
+      instantiateCommittedModule: (module) => ({
+        ...module,
+        activate(api: PluginApi) {
+          if (typeof module.activate !== 'function') throw new Error('Expected authored activation');
+          module.activate(api);
+          api.hooks.register('prerequisites', createHookHandler('agent.resolvePrerequisites'));
+          api.hooks.register('augment', createHookHandler('agent.spawnEnv.augment'));
+        },
+      }),
+    }],
+  });
 }
 
 describe('resolveSpawnChildEnvironment provider authorization ordering', () => {
@@ -89,62 +78,70 @@ describe('resolveSpawnChildEnvironment provider authorization ordering', () => {
       events.push('agent-runtime-prerequisite');
       return { ok: true as const };
     });
-    const pluginRuntimeRegistry = createRuntimeRegistry({
+    const fixture = await createProviderOrderingFixture({
       events,
       prerequisiteEnvironments,
     });
-    const common = {
-      happyHomeDir: '/tmp/happier-provider-ordering',
-      pluginRuntimeRegistry,
-      options: {
-        directory: '/repo',
-        machineId: 'machine-a',
-        backendTarget: { kind: 'backend' as const, backendId: 'codex', sourceKind: 'built_in' as const },
-      },
-      profileEnvironmentVariables: {},
-      daemonSpawnHooks: { resolveRuntimePrerequisites },
-      processEnv: {},
-      logDebug: () => {},
-      logInfo: () => {},
-      logWarn: () => {},
-      connectedServiceAuth: null,
-      providerBindingContext: {
-        v: 1 as const,
-        agentTargetKey: 'codex',
-        connectionId: 'pc_gateway',
-        modelId: 'model-a',
-      },
-    };
+    try {
+      await fixture.registry.activateContributionsOnDemand([
+        { pluginId, family: 'agents', localId: localAgentId },
+      ]);
+      const common = {
+        happyHomeDir: fixture.happyHomeDir,
+        pluginRuntimeRegistry: fixture.registry,
+        resolvedAgentId: agentId,
+        options: {
+          directory: '/repo',
+          machineId: 'machine-a',
+          backendTarget: { kind: 'backend' as const, backendId: agentId, sourceKind: 'built_in' as const },
+        },
+        profileEnvironmentVariables: {},
+        daemonSpawnHooks: { resolveRuntimePrerequisites },
+        processEnv: {},
+        logDebug: () => {},
+        logInfo: () => {},
+        logWarn: () => {},
+        connectedServiceAuth: null,
+        providerBindingContext: {
+          v: 1 as const,
+          agentTargetKey: agentId,
+          connectionId: 'pc_gateway',
+          modelId: 'model-a',
+        },
+      };
 
-    const prerequisite = await resolveSpawnChildEnvironment({
-      ...common,
-      providerBindingPrerequisitesOnly: true,
-    });
-    expect(prerequisite.ok).toBe(true);
-    expect(events).toEqual(['agent-runtime-prerequisite', 'agent.resolvePrerequisites']);
+      const prerequisite = await resolveSpawnChildEnvironment({
+        ...common,
+        providerBindingPrerequisitesOnly: true,
+      });
+      expect(prerequisite, JSON.stringify(prerequisite)).toMatchObject({ ok: true });
+      expect(events).toEqual(['agent-runtime-prerequisite', 'agent.resolvePrerequisites']);
 
-    events.push('provider-authorized');
-    const full = await resolveSpawnChildEnvironment({
-      ...common,
-      runtimePrerequisitesAlreadyResolved: true,
-      connectedServiceAuth: {
-        env: { PI_CODING_AGENT_DIR: 'C:\\materialized\\pi-agent' },
-        cleanupOnFailure: null,
-        cleanupOnExit: null,
-      },
-    });
-    expect(full).toMatchObject({ ok: true, extraEnvForChild: { GENERIC_AUGMENT: 'yes' } });
-    expect(events).toEqual([
-      'agent-runtime-prerequisite',
-      'agent.resolvePrerequisites',
-      'provider-authorized',
-      'agent.resolvePrerequisites',
-      'agent.spawnEnv.augment',
-    ]);
-    expect(prerequisiteEnvironments).toEqual([
-      undefined,
-      { PI_CODING_AGENT_DIR: 'C:\\materialized\\pi-agent' },
-    ]);
-    expect(resolveRuntimePrerequisites).toHaveBeenCalledTimes(1);
+      events.push('provider-authorized');
+      const full = await resolveSpawnChildEnvironment({
+        ...common,
+        runtimePrerequisitesAlreadyResolved: true,
+        connectedServiceAuth: {
+          env: { PI_CODING_AGENT_DIR: 'C:\\materialized\\pi-agent' },
+          cleanupOnFailure: null,
+          cleanupOnExit: null,
+        },
+      });
+      expect(full).toMatchObject({ ok: true, extraEnvForChild: { GENERIC_AUGMENT: 'yes' } });
+      expect(events).toEqual([
+        'agent-runtime-prerequisite',
+        'agent.resolvePrerequisites',
+        'provider-authorized',
+        'agent.resolvePrerequisites',
+        'agent.spawnEnv.augment',
+      ]);
+      expect(prerequisiteEnvironments).toEqual([
+        undefined,
+        { PI_CODING_AGENT_DIR: 'C:\\materialized\\pi-agent' },
+      ]);
+      expect(resolveRuntimePrerequisites).toHaveBeenCalledTimes(1);
+    } finally {
+      await fixture.dispose();
+    }
   });
 });

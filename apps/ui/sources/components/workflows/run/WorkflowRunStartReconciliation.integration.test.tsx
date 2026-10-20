@@ -4,9 +4,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
     CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
     createWorkflowAccountRunActionOwner,
-    TargetedActionRpcRequestV1Schema,
+    ActionExecuteFailureSchema,
     WorkflowRunStartRequestV1Schema,
+    WorkflowRunGetResultV1Schema,
     WorkflowRunRecipientCensusResponseV1Schema,
+    prepareWorkflowRunStartV1,
     type WorkflowRunStartResultV1,
 } from '@happier-dev/protocol';
 import { createDeferred, renderScreen } from '@/dev/testkit';
@@ -15,19 +17,20 @@ import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } 
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installShippedNativeFrameScheduler } from '@/dev/testkit/legend/shippedNativeLegendRuntime';
 import { resolveAbsolutePath } from '@/utils/path/pathUtils';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 installDisconnectedServerSocketBoundary();
 const { ModalProvider, useModal } = await import('@/modal/ModalProvider');
-const { markRpcRequestDisposition } = await import('@happier-dev/sync-client');
 const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
 const { useWorkflowRunNowController } = await import('./useWorkflowRunNowController');
+const { useWorkflowInlineRunControls } = await import('./useWorkflowInlineRunControls');
+const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
 const { WorkflowRunComposer } = await import('./WorkflowRunComposer');
-const machineRpc = vi.hoisted(() => vi.fn());
 // Admission fixtures never stream Markdown; keep the genuine vendor SDK leaf outside this seam.
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
     splitStreamingRevealTextParts: () => { throw new Error('Unexpected vendor Markdown reveal in start-reconciliation test'); },
 }));
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
@@ -48,17 +51,17 @@ const definition = createWorkflowDefinitionFixture({ blocks: [{ kind: 'wait', id
 const disposals: Array<() => Promise<void>> = [];
 afterEach(async () => {
     for (const dispose of disposals.splice(0).reverse()) await dispose();
-    machineRpc.mockReset();
     vi.unstubAllGlobals();
 });
 
-async function harness(outcome: 'admitted' | 'not-sent' | 'unknown', holdFirstMissingRead = false) {
+async function harness(outcome: 'admitted' | 'not-sent' | 'unknown', holdFirstMissingRead = false, anotherRound = false, inlineRound = false) {
     vi.stubGlobal('React', React);
     installShippedNativeFrameScheduler();
     await loadSyncSingletonForTests();
     const entries = new Map<string, { run: ReturnType<typeof createWorkflowRunSummaryFixture>; acceptedEnvelope: string }>();
     let admissions = 0;
     let reads = 0;
+    let dispatches = 0;
     const firstMissingRead = createDeferred<void>();
     const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
     const storageBoundary = async (operation: Readonly<Record<string, unknown>>) => {
@@ -81,8 +84,20 @@ async function harness(outcome: 'admitted' | 'not-sent' | 'unknown', holdFirstMi
         if (operation.operation === 'invocations.list') return { invocations: [] };
         throw new Error(`unexpected_storage_operation:${operation.operation}`);
     };
-    const account = await restoreServerAccountForTest({ serverUrl: `https://start-${crypto.randomUUID()}.test`, accountId,
+    const serverUrl = `https://start-${crypto.randomUUID()}.test`;
+    const serverIdentityId = 'srv_workflow_reconciliation';
+    let dispatch: (input: unknown) => Promise<unknown> = async () => { throw new Error('start_fixture_not_ready'); };
+    const external = await createExternalActionAccountHttpBoundary({ serverUrl, serverIdentityId, accountId,
+        machineId: 'machine-a', actionId: 'workflow.run.start', tokenEpoch: 0,
+        execute: input => dispatch(input), failure: value => {
+            const parsed = ActionExecuteFailureSchema.safeParse(value);
+            return parsed.success ? parsed.data : null;
+        } });
+    const account = await restoreServerAccountForTest({ serverUrl, serverIdentityId, accountId,
+        credentials: { token: createAccountTokenForTests(accountId, { currentAccount: true }) },
         request: async (url, init) => {
+            const handled = await external.handle(new URL(String(url)), init);
+            if (handled) return handled;
             const path = new URL(String(url)).pathname;
             if (path === '/health') return json({});
             if (path === '/v1/features') return json({ features: { automations: { enabled: true }, workflows: { enabled: true } }, capabilities: {
@@ -115,40 +130,99 @@ async function harness(outcome: 'admitted' | 'not-sent' | 'unknown', holdFirstMi
         prepareWorkspace: async () => ({ ok: true, workspaceTarget: { project: { machineId: 'machine-a', directory: '/repo', checkoutRootPath: '/repo' } } }),
         resolveMaterializationContext: async () => ({ effects: { resolveTargetAvailability: async () => true } }),
     });
-    const input = WorkflowRunStartRequestV1Schema.parse({ runId, source: { kind: 'inline', definition } });
     const context = { surface: 'ui' as const, authority: 'present_user' as const, callerPermissionMode: 'default',
         externalActionTarget: { kind: 'machine' as const, machineId: 'machine-a', project: { machineId: 'machine-a', directory: '/repo' } } };
-    machineRpc.mockImplementation(async (request) => {
-        const targeted = TargetedActionRpcRequestV1Schema.parse(request.payload);
-        expect(targeted.input).toEqual(input);
-        if (outcome === 'not-sent') throw markRpcRequestDisposition(new Error('offline before dispatch'), 'notSent');
+    const priorId = '33333333-3333-4333-8333-333333333333';
+    let priorDetail: ReturnType<typeof WorkflowRunGetResultV1Schema.parse> | null = null;
+    let admittedRunId = runId;
+    let source: Parameters<typeof WorkflowRunStartRequestV1Schema.parse>[0] = { runId, source: { kind: 'inline', definition } };
+    if (anotherRound) {
+        const priorDefinition = { ...definition, blocks: [...definition.blocks], inputs: [
+            { name: 'participants', valueType: 'json' as const, required: true },
+            { name: 'previousRoundContext', valueType: 'json' as const, required: false },
+        ] };
+        await owner.execute({ actionId: 'workflow.run.start', input: { runId: priorId,
+            source: { kind: 'inline', definition: priorDefinition }, inputs: { participants: ['retained-participant'] } }, context });
+        const prior = entries.get(priorId)!;
+        entries.set(priorId, { ...prior, run: { ...prior.run, state: 'succeeded' } });
+        const opened = WorkflowRunGetResultV1Schema.parse(await owner.execute({ actionId: 'workflow.run.get', input: { runId: priorId }, context }));
+        priorDetail = opened;
+        if (!opened.acceptedContext) throw new Error('prior_context_unavailable');
+        const prepared = prepareWorkflowRunStartV1({ definition: priorDefinition, acceptedContext: opened.acceptedContext,
+            replay: { runId: priorId, intent: 'another_round' } });
+        source = { runId, source: prepared.source, inputs: prepared.inputs };
+        admissions = 0;
+    }
+    const input = WorkflowRunStartRequestV1Schema.parse(source);
+    let dispatchedInput: ReturnType<typeof WorkflowRunStartRequestV1Schema.parse> | null = null;
+    dispatch = async (request) => {
+        dispatches++;
+        const actual = WorkflowRunStartRequestV1Schema.parse(request);
+        dispatchedInput = actual;
+        if (inlineRound) admittedRunId = actual.runId;
+        if (outcome === 'not-sent') return { ok: false, errorCode: 'target_unavailable', error: 'offline before dispatch' };
         if (outcome === 'admitted') {
-            await expect(owner.execute({ actionId: 'workflow.run.start', input, context })).resolves.toMatchObject({ admission: 'created', run: { id: runId } });
+            await expect(owner.execute({ actionId: 'workflow.run.start', input: actual, context })).resolves.toMatchObject({ admission: 'created', run: { id: admittedRunId } });
         }
-        throw Object.assign(new Error('Machine RPC timed out after 30000ms'), { code: 'MACHINE_RPC_TIMEOUT' });
-    });
+        throw new Error('Start response lost after dispatch');
+    };
     const opened = vi.fn<(result: WorkflowRunStartResultV1) => void>();
     let pending: Promise<unknown> | undefined;
     let state = 'idle';
     let modals: ReturnType<typeof useModal>['state']['modals'] = [];
-    function Host() {
+    const lifetime = captureActiveServerAccountScopeLifetime();
+    if (!lifetime) throw new Error('missing_workflow_account_scope');
+    const Host = () => {
         modals = useModal().state.modals;
         const controller = useWorkflowRunNowController();
-        state = controller.stateFor(runId);
+        const inline = useWorkflowInlineRunControls({ run: priorDetail?.run ?? createWorkflowRunSummaryFixture({ id: runId }),
+            definition: null, acceptedContext: null, supportsAnotherRound: inlineRound, accountLifetime: lifetime, canEdit: true,
+            onStarted: result => { opened(result); } });
+        state = inlineRound ? inline.start.stateFor(inline.start.pendingRunId ?? admittedRunId) : controller.stateFor(runId);
         return <WorkflowRunComposer inputs={[]} definition={definition} values={{}} onChangeValues={() => {}} onCancel={() => {}}
             pending={state === 'submitting' || state === 'reconciling'}
             reconciling={state === 'reconciling'}
             startProblem={controller.refusal?.message ?? null}
-            onRun={() => { pending = controller.runNow({ ...input, project: context.externalActionTarget.project, refusal: 'inline' }).then(result => { if (result) opened(result); }); }} />;
-    }
+            onRun={() => { pending = inlineRound ? inline.anotherRound?.()
+                : controller.runNow({ ...input, project: context.externalActionTarget.project, refusal: 'inline' }).then(result => { if (result) opened(result); }); }} />;
+    };
     const screen = await renderScreen(<ModalProvider><Host /></ModalProvider>);
     disposals.push(screen.unmount);
     return { screen, opened, owner, input, context, account, readState: () => state, readModals: () => modals,
-        counts: () => ({ admissions, reads }), pending: () => pending, releaseFirstMissingRead: () => firstMissingRead.resolve() };
+        counts: () => ({ admissions, reads, dispatches }), pending: () => pending, admittedRunId: () => admittedRunId,
+        dispatchedInput: () => dispatchedInput,
+        releaseFirstMissingRead: () => firstMissingRead.resolve() };
 }
 
-describe('Run start response-loss through the real composer, Machine transport and Account owner', () => {
-    it('opens the admitted Run after the Machine transport times out, without a failure or second start', async () => {
+describe('Run start response-loss through the real composer, authenticated HTTP and Account owner', () => {
+    it('opens inline continuation detail only on press and reconciles one ordinary new Run', async () => {
+        const h = await harness('admitted', false, true, true);
+        expect(h.counts()).toMatchObject({ reads: 0, dispatches: 0 });
+        await h.screen.pressByTestIdAsync('workflow-run-inputs-run');
+        await act(async () => { await h.pending(); });
+        expect(h.opened).toHaveBeenCalledWith(expect.objectContaining({ admission: 'existing' }));
+        expect(h.counts()).toMatchObject({ admissions: 1, dispatches: 1 });
+        expect(h.dispatchedInput()).toMatchObject({ ...h.input, runId: h.admittedRunId() });
+        const opened = await h.owner.execute({ actionId: 'workflow.run.get', input: { runId: h.admittedRunId() }, context: h.context });
+        expect(opened).toMatchObject({ acceptedContext: { inputs: { participants: ['retained-participant'],
+            previousRoundContext: { runId: '33333333-3333-4333-8333-333333333333', state: 'succeeded', outcomes: [] } } } });
+    });
+    it('rejoins Another round after commit-before-ACK with accepted participants and prior context', async () => {
+        const h = await harness('admitted', false, true);
+        await h.screen.pressByTestIdAsync('workflow-run-inputs-run');
+        await act(async () => { await h.pending(); });
+        await vi.waitFor(() => expect(h.opened).toHaveBeenCalledWith(expect.objectContaining({ admission: 'existing' })));
+        const opened = await h.owner.execute({ actionId: 'workflow.run.get', input: { runId }, context: h.context });
+        expect(opened).toMatchObject({ acceptedContext: { inputs: {
+            participants: ['retained-participant'],
+            previousRoundContext: { runId: '33333333-3333-4333-8333-333333333333', state: 'succeeded', outcomes: [] },
+        } } });
+        expect(h.counts().admissions).toBe(1);
+        expect(h.counts().dispatches).toBe(1);
+        expect(h.readModals()).toEqual([]);
+    });
+
+    it('opens the admitted Run after the Start response is lost, without a failure or second start', async () => {
         const h = await harness('admitted');
         await h.screen.pressByTestIdAsync('workflow-run-inputs-run');
         await act(async () => { await h.pending(); });
@@ -156,7 +230,7 @@ describe('Run start response-loss through the real composer, Machine transport a
         await vi.waitFor(() => expect(h.opened).toHaveBeenCalledWith(expect.objectContaining({ admission: 'existing', run: expect.objectContaining({ id: runId }) })));
         expect(h.readModals()).toEqual([]);
         expect(h.counts()).toMatchObject({ admissions: 1 });
-        expect(machineRpc).toHaveBeenCalledTimes(1);
+        expect(h.counts().dispatches).toBe(1);
         // A deliberate retry with the same admission identity rejoins at the real owner.
         await expect(h.owner.execute({ actionId: 'workflow.run.start', input: h.input, context: h.context })).resolves.toMatchObject({ admission: 'existing' });
         expect(h.counts().admissions).toBe(1);
@@ -172,7 +246,7 @@ describe('Run start response-loss through the real composer, Machine transport a
             .toBe('workflows.problem.targetUnavailable'));
         expect(h.readState()).toBe('idle');
         expect(h.screen.findByTestId('workflow-run-inputs-run')?.props.disabled).toBe(false);
-        expect(h.counts()).toEqual({ admissions: 0, reads: 0 });
+        expect(h.counts()).toEqual({ admissions: 0, reads: 0, dispatches: 1 });
     });
     it('keeps an absent outcome pending and resolves on the Account feed without polling or resending', async () => {
         const h = await harness('unknown', true);
@@ -188,7 +262,6 @@ describe('Run start response-loss through the real composer, Machine transport a
             publishHomeAccountChange(h.account.home.id, [`workflow-run:${runId}`]);
             h.releaseFirstMissingRead(); });
         await vi.waitFor(() => expect(h.opened).toHaveBeenCalled());
-        expect(h.counts()).toEqual({ admissions: 1, reads: 2 });
-        expect(machineRpc).toHaveBeenCalledTimes(1);
+        expect(h.counts()).toEqual({ admissions: 1, reads: 2, dispatches: 1 });
     });
 });

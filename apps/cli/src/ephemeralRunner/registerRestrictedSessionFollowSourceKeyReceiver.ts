@@ -21,6 +21,7 @@ export function registerRestrictedSessionFollowSourceKeyReceiver(input: Readonly
         || authorization.destinationSessionId !== input.destinationSessionId
         || request.sourceSessionId !== authorization.sourceSessionId
         || request.destinationSessionId !== authorization.destinationSessionId
+        || request.localInputId !== authorization.localInputId
       ) throw new Error('session_follow_source_key_binding_invalid');
       const dataKey = decodeSessionFollowSourceDataEncryptionKeyV1(request.sourceDataEncryptionKeyBase64);
       try {

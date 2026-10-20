@@ -1,4 +1,5 @@
-import type { RpcActionExecutor } from './_actionDispatchAdapter';
+import type { RpcActionExecutor, RpcActionExecutorContext } from './_actionDispatchAdapter';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import type { RpcHandlerContext } from '@/api/rpc/types';
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import { readStoredCredentials } from '@/persistence';
@@ -209,8 +210,8 @@ export function createSessionLifecycleRpcActionExecutor(
                     error: `unsupported_action:${actionId}`,
                 };
             }
-            return {
-                ok: true,
+            const executeEffect = async (context: RpcActionExecutorContext | undefined) => ({
+                ok: true as const,
                 result: await handler(input, context
                     ? {
                         signal: context.signal ?? new AbortController().signal,
@@ -220,9 +221,14 @@ export function createSessionLifecycleRpcActionExecutor(
                         ...(context.sessionActionOrigin ? { sessionActionOrigin: context.sessionActionOrigin } : {}),
                         ...(context.callerInputAuthorization ? { callerInputAuthorization: context.callerInputAuthorization } : {}),
                         callerAuthority: context.authority ?? 'account_automation',
-                        ...(context.operationProgress || context.operationOwnerUpdate
+                        ...(context.operationProgress || context.operationOwnerUpdate || context.operationAcceptance || context.operationReview
                             ? {
                                 localActionContext: {
+                                    ...(context.actionRequestId ? { actionRequestId: context.actionRequestId } : {}),
+                                    ...(context.operationAcceptance ? { operationAcceptance: context.operationAcceptance } : {}),
+                                    ...(context.operationCancellation ? { operationCancellation: context.operationCancellation } : {}),
+                                    ...(context.operationReview ? { operationReview: context.operationReview } : {}),
+                                    ...(context.requesterWorkAttributionV1 ? { requesterWorkAttributionV1: context.requesterWorkAttributionV1 } : {}),
                                     ...(context.operationProgress
                                         ? { operationProgress: context.operationProgress }
                                         : {}),
@@ -234,7 +240,12 @@ export function createSessionLifecycleRpcActionExecutor(
                             : {}),
                     }
                     : undefined),
-            };
+            });
+            if (context?.runActionOperation && getActionSpec(actionId).operation
+                && context.operationAcceptance?.actionId !== actionId) {
+                return context.runActionOperation({ actionId, input, context, execute: executeEffect });
+            }
+            return executeEffect(context);
         },
     };
 }
@@ -424,7 +435,7 @@ export function registerSessionSpawnNewRpcHandlers(params: Readonly<{
                                 errorMessage: 'Requester Session creation identity unavailable' };
                         }
                         return await params.requesterBootstrapBoundary!.spawnLifecycleHandler(input,
-                            { ...context, ...request.ingress, requesterSessionBootstrap: requester });
+                            { ...request.ingress, ...context, requesterSessionBootstrap: requester });
                     },
                     ...(params.requesterBootstrapBoundary.resolveSpawnSessionByNonce
                         ? { resolveSpawnSessionByNonce: params.requesterBootstrapBoundary.resolveSpawnSessionByNonce } : {}),

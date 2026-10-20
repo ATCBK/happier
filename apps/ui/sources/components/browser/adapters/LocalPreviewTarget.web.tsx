@@ -29,6 +29,8 @@ export function LocalPreviewTarget(props: Readonly<{
     navigationCommand?: BrowserFrameNavigationCommand;
     onLoad?: () => void;
     onError?: () => void;
+    /** Closes the page from the ended-preview state. */
+    onClosePage?: () => void;
     diagnostics?: BrowserDiagnosticsEngineBridgeConfig;
     automation?: BrowserAutomationEngineBridgeConfig;
     /**
@@ -75,6 +77,17 @@ export function LocalPreviewTarget(props: Readonly<{
                     props.onError?.();
                     onLifecycle?.({ kind: 'loadFailed', errorCode: WEBVIEW_LOAD_FAILED_ERROR_CODE, url: props.url });
                 },
+                // The preview's own documents are the only source of its history truth.
+                onNavigationStateChange: (navigationState) => onLifecycle?.({
+                    kind: 'navigationStateChanged',
+                    ...navigationState,
+                }),
+                // The proxy's refusal is the page's outcome: the view settles as failed with that reason.
+                onPreviewRefused: (reasonCode) => {
+                    props.onError?.();
+                    onLifecycle?.({ kind: 'loadFailed', errorCode: reasonCode, url: props.url });
+                },
+                onClosePage: props.onClosePage,
                 diagnostics: props.diagnostics,
                 automation: props.automation,
             }}

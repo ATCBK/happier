@@ -130,7 +130,7 @@ function policyFailureLabel(failure: Readonly<{ code: string | null; details?: u
 export const TeamAuthenticationPolicySections = React.memo(function TeamAuthenticationPolicySections(
     props: Readonly<{
         context: TeamSectionContext;
-        connections: readonly TeamIdentityConnectionV1[];
+        connections: readonly Pick<TeamIdentityConnectionV1, 'id' | 'enabled' | 'provider' | 'externalReference'>[];
         /** False while the connection projection is absent, refreshing or stale. */
         connectionsCurrent: boolean;
         admissionModeApplicability: TeamAdmissionModeApplicabilityV1 | null;

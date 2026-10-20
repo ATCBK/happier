@@ -1,41 +1,55 @@
 import * as React from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
-import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
+import { flushHookEffects, pressTestInstance, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
-import { createStorageModuleMock } from '@/dev/testkit/mocks/storage';
-import type { LocalSettings } from '@/sync/domains/settings/localSettings';
+import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
+import { settingsDefaults } from '@/sync/domains/settings/settings';
 import type { Settings } from '@/sync/domains/settings/settings';
 import { clearTempData, peekTempData, type NewSessionData } from '@/utils/sessions/tempDataStore';
-import { installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers';
+import { createSessionRouteHomesFixture, installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers';
 import type { SessionRouteHydrationState } from '@/sync/domains/session/sessionRouteHydrationState';
 import type {
-    SessionOrganizationProjection,
-    UiSessionOrganizationFolder,
-    UiSessionOrganizationTag,
-} from '@/sync/domains/session/organization';
-import { buildSessionOrganizationProjection, buildSessionOrganizationServerKey, buildSessionOrganizationSessionKey } from '@/sync/domains/session/organization';
-import { createUseSettingMock } from '@/dev/testkit/mocks/storage';
-import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
+    SessionOrganizationSnapshot,
+    SessionOrganizationFolder,
+    SessionOrganizationTag,
+} from '@happier-dev/protocol';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
+import { installReactDomPortalBoundaryForTests } from '@/dev/testkit/mocks/reactDom';
 import { buildQualifiedPluginContributionKey, deriveSessionCreationTagV1, PluginProjectionV2Schema, SessionCreationCorrespondenceV1Schema, SessionOrganizationContentEnvelopeSchema } from '@happier-dev/protocol';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
 import { evaluatePluginUiPolicy } from '@/sync/domains/plugins/ui/policy';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
-import { buildServerFeaturesResponse } from '@/hooks/server/serverFeaturesTestUtils';
 import { getServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { normalizeSessionId } from '@/sync/domains/session/normalizeSessionId';
-import { createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createPlainSessionCurrentProjectionRecordFixture, createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createPlainSessionByIdResponseFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
+import { SESSION_ORGANIZATION_SNAPSHOT_VERSION } from '@happier-dev/protocol/sessions/organization/constants';
 import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 import { AUTHORING_MEMORY_ROUTE_V1 } from '@happier-dev/protocol';
-import { MMKV } from 'react-native-mmkv';
-
-installDisconnectedServerSocketBoundary();
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
+import { machinePoolActionEndpointPathV1 } from '@happier-dev/protocol/machines/pools/actionsV1';
+import { V2SessionByIdNotFoundSchema } from '@happier-dev/protocol/sessions/control/contract';
+import { SESSION_ACTION_MARK_UNREAD_ID, SESSION_ACTION_MOVE_TO_FOLDER_ID } from '@/components/sessions/actions/sessionActionIds';
+import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { ServerIdentityCapabilitiesSchema } from '@happier-dev/protocol/features/payload/capabilities/serverIdentityCapabilities';
+import type { PluginMachineExecutionOriginV1, PluginSourceCustodyV1 } from '@happier-dev/protocol';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { waitForNetworkResponseForTests } from '@/dev/testkit/mocks/runtimeFetch';
+import { tryParseDecryptedSessionMetadata } from '@/sync/engine/sessions/parsePlainSessionPayload';
 
 vi.mock('@/sync/domains/state/browserRecordStorage', async () => {
     const { createBrowserRecordStorageModuleMock } = await import('@/dev/testkit/mocks/browserRecordStorage');
@@ -47,17 +61,11 @@ vi.mock('@/sync/domains/state/browserRecordStorage', async () => {
 let mockSessionId = 'session-1';
 let mockServerId: string | undefined;
 let mockSession: any = null;
-let mockProfile = { ...profileDefaults };
+let mockProfile = { ...profileDefaults, id: 'viewer-account' };
 let isDataReady = true;
 let routeHydrationState: SessionRouteHydrationState = { kind: 'available', sessionId: 'session-1' };
 let sessionIsConnected = true;
 let localDevModeEnabled = false;
-const allSessionsState = vi.hoisted(() => ({
-    current: [] as any[],
-}));
-const allMachinesState = vi.hoisted(() => ({
-    current: [] as any[],
-}));
 const machineListByServerIdState = vi.hoisted(() => ({
     current: {} as Record<string, any[]>,
 }));
@@ -66,13 +74,8 @@ const machinePoolListByServerIdState = vi.hoisted(() => ({
 }));
 const routerPushSpy = vi.fn();
 const routerBackSpy = vi.fn();
-const safeRouterBackSpy = vi.hoisted(() => vi.fn());
-const readMachineTargetForSessionSpy = vi.hoisted(() => vi.fn());
-const resolveSessionTargetServerIdSpy = vi.hoisted(() => vi.fn());
-const resolveServerIdForSessionIdFromLocalCacheSpy = vi.hoisted(() => vi.fn());
-const machineRpcWithServerScopeSpy = vi.hoisted(() => vi.fn());
-const machineContributionRegistryProjectionDescribeMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]): Promise<any> => ({ supported: false, reason: 'not-supported' })));
-const useSessionExecutionRunsSupportedSpy = vi.fn<(sessionId: string, sessionServerId?: string | null) => boolean>(() => false);
+let machineTargetFixture: Readonly<{ machineId: string; basePath: string }> | null = null;
+let cachedSessionServerId: string | null = null;
 type CreateDefaultActionExecutorConfig = Readonly<{
     resolveServerIdForSessionId?: (sessionId: string) => string | null;
     openSession?: (
@@ -80,50 +83,23 @@ type CreateDefaultActionExecutorConfig = Readonly<{
         options?: Readonly<{ serverId?: string | null }>,
     ) => void | Promise<void>;
 }>;
-const createDefaultActionExecutorSpy = vi.hoisted(() => vi.fn((_config: CreateDefaultActionExecutorConfig) => ({})));
-// `vi.mock('@/sync/ops', …)` below closes over these spies, and mock factories are
-// hoisted above ordinary `const` declarations. Once any import chain pulls
-// `@/sync/ops` in eagerly the factory runs first and a plain `const` is still in
-// its temporal dead zone, which fails the whole suite at load. `vi.hoisted` is the
-// canonical fix and matches the hoisted state this file already uses above.
-const sessionStopSpy = vi.hoisted(() => vi.fn(async () => ({ success: true })));
-type ArchiveSpyResult = Readonly<{
-    success: boolean;
-    archivedAt?: number | null;
-    message?: string;
-    code?: string;
-}>;
-const sessionArchiveSpy = vi.hoisted(() => vi.fn(async (): Promise<Readonly<{
-    success: boolean;
-    archivedAt?: number | null;
-    message?: string;
-    code?: string;
-}>> => ({ success: true, archivedAt: 1 })));
-const sessionDeleteSpy = vi.hoisted(() => vi.fn(async () => ({ success: true })));
-const sessionSetManualReadStateSpy = vi.hoisted(() => vi.fn(async () => ({ success: true, readState: 'unread', lastViewedSessionSeq: 0, didChange: true })));
 const modalAlertSpy = vi.fn();
 const modalConfirmSpy = vi.fn(async () => true);
 const modalPromptSpy = vi.fn(async () => 'urgent, review');
 const modalShowSpy = vi.hoisted(() => vi.fn<typeof import('@/modal').Modal.show>());
-const setSessionFolderAssignmentSpy = vi.hoisted(() => vi.fn<typeof import('@/sync/api/session/sessionOrganizationApi').setSessionFolderAssignment>());
-const setSessionPinSpy = vi.hoisted(() => vi.fn<typeof import('@/sync/api/session/sessionOrganizationApi').setSessionPin>());
-const setSessionTagAssignmentsSpy = vi.hoisted(() => vi.fn<typeof import('@/sync/api/session/sessionOrganizationApi').setSessionTagAssignments>());
-vi.mock('@/sync/api/session/sessionOrganizationApi', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/api/session/sessionOrganizationApi')>(),
-    setSessionFolderAssignment: setSessionFolderAssignmentSpy,
-    setSessionPin: setSessionPinSpy,
-    setSessionTagAssignments: setSessionTagAssignmentsSpy,
-}));
 let hideInactiveSessions = false;
 let organizationPinnedSessionKeys: unknown = null;
 let organizationTagsBySessionKey: unknown = null;
 let organizationFolders: unknown = null;
-let acpCatalogSettingsV1: Settings['acpCatalogSettingsV1'] | null = null;
+let organizationFolderAssignments: Record<string, string> = {};
 let backendEnabledByTargetKey: Settings['backendEnabledByTargetKey'] | null = null;
 let resolvedServerId = 'server-1';
 let sessionHandoffFeatureEnabled = false;
 let sessionFoldersFeatureEnabled = false;
-const folderFeatureScopes = vi.hoisted(() => [] as unknown[]);
+const sessionInfoProjectionHomeIdentity = ServerIdentityCapabilitiesSchema.parse({
+    serverIdentityId: 'srv_session_info_projection_fixture',
+}).serverIdentityId;
+if (!sessionInfoProjectionHomeIdentity) throw new Error('Expected the fixture Home to advertise its identity');
 let serverFeaturesSnapshot: any = {
     status: 'ready',
     features: {
@@ -150,32 +126,87 @@ let serverFeaturesSnapshot: any = {
         capabilities: {},
     },
 };
-let mockAgentCore: any = {
-    displayNameKey: 'agentInput.agent.claude',
-    resume: {},
-    permissions: { modeGroup: 'codexLike' },
-    ui: { agentPickerIconName: 'code-slash-outline' },
-};
-const AnimatedValue = vi.hoisted(
-    () =>
-        class AnimatedValue {
-            constructor(_value: unknown) {}
-
-            setValue(_value: unknown) {}
-
-            interpolate(_config: unknown) {
-                return 1;
-            }
-        },
-);
-const useHappyActionMock = vi.hoisted(() =>
-    vi.fn((fn: any): readonly [boolean, any] => [false, fn] as const),
-);
-const mockResolveAgentIdFromFlavor = vi.fn<(flavor: string | null | undefined) => string | undefined>(() => 'claude');
-const mockGetSessionName = vi.hoisted(() => vi.fn(() => 'name'));
-const useSessionSpy = vi.fn<(sessionId: string) => any>(() => mockSession);
-let mockPluginUiProjection: any = null;
-let mockPluginUiPlatform: 'web' | 'desktop' | 'ios' | 'android' = 'web';
+async function serveSessionInfoPluginSections(sections: readonly Readonly<{
+    id: string;
+    placementId: string;
+    order?: number;
+    availability?: import('@happier-dev/protocol/plugins/contributions/public-types').PluginAvailabilityDescriptorV2;
+}>[]) {
+    const { normalizePluginUiInlineSurfaceBindingV1, PluginUiInlineSurfaceBindingV1Schema } = await import('@happier-dev/protocol/plugins/ui');
+    const { DaemonContributionRegistryProjectionDescribeResponseSchema, DaemonPluginUiResourceReadResponseSchema } = await import('@happier-dev/protocol/daemon/contributionRegistryProjection');
+    const { PluginDeclarativeDocumentV1Schema, PLUGIN_DECLARATIVE_DOCUMENT_CONTENT_TYPE_V1 } = await import('@happier-dev/protocol/plugins/contributions/ui/declarativeDocument');
+    const { createStablePluginDeclarativeModel } = await import('@happier-dev/protocol/plugins/contributions/ui/declarativeModel');
+    const { encodeBase64 } = await import('@/encryption/base64');
+    const { createHash } = await import('node:crypto');
+    const pluginId = 'acme.preview';
+    const occurrenceId = 'session-info-preview-occurrence';
+    await restoreInfoAccountIfNeeded();
+    if (!accountConnection) throw new Error('Expected the fixture Home Account to be restored');
+    machineCensusByServerId['server-1'] = [createPlainMachineRowFixture({ id: 'machine-1', accountId: 'viewer-account' })];
+    await sync.refreshMachines({ serverId: accountConnection.serverId });
+    const { getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
+    const { getStorage } = await import('@/sync/domains/state/storageStore');
+    const profile = getServerProfileById(accountConnection.serverId);
+    const machine = getStorage().getState().machines['machine-1'];
+    if (!profile?.serverIdentityId || !machine) throw new Error('Expected the restored Home and its published Machine');
+    const sourceCustody = { kind: 'development', registeredRootId: 'session-info-preview-root' } satisfies PluginSourceCustodyV1;
+    const executionOrigin = resolvePluginMachineExecutionOrigin({ pluginId, sourceCustody,
+        context: { serverIdentityId: profile.serverIdentityId, machineId: machine.id } });
+    if (!executionOrigin) throw new Error('Expected the daemon producer to admit this exact Home/Machine source');
+    const resource = { pluginId, localId: 'session-overview' };
+    const document = PluginDeclarativeDocumentV1Schema.parse({ version: 1, root: { kind: 'text', text: 'Session overview from daemon Resource' } });
+    const bytes = new TextEncoder().encode(JSON.stringify(document));
+    const digest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+    const projection = PluginProjectionV2Schema.parse({
+        v: 2, generation: 1,
+        installedPackagesById: { [pluginId]: {
+            id: pluginId, displayName: 'Session overview', version: '1.0.0', enabled: true,
+            source: { kind: 'path', locator: '/plugins/session-info-preview' }, occurrenceId,
+            sourceCustody, executionOrigin,
+            declaresContributionPoints: false,
+        } },
+        resourcesById: { [`${pluginId}/${resource.localId}`]: {
+            id: resource.localId, pluginId, occurrenceId, executionOrigin, resourceKind: 'asset', scope: 'global',
+            path: 'session-overview.json', digest, contentType: PLUGIN_DECLARATIVE_DOCUMENT_CONTENT_TYPE_V1,
+        } },
+        familiesById: { pluginUi: { family: 'pluginUi', entriesById: Object.fromEntries(sections.map(section => {
+            const rendererId = `session-info-${section.id}`;
+            const binding = PluginUiInlineSurfaceBindingV1Schema.parse(normalizePluginUiInlineSurfaceBindingV1({
+                pluginId, surfaceId: section.id, rendererId, fallbackRendererIds: [],
+                availableRendererIds: [rendererId], role: 'sessionInfoSection', target: { kind: 'session' },
+            }));
+            const documentSource = { kind: 'resource', resourceId: resource.localId };
+            // The daemon supplies an admitted static loading model before the
+            // Resource-backed document can be read and atomically adopted.
+            const model = createStablePluginDeclarativeModel({
+                pluginId, occurrenceId,
+                renderer: { id: rendererId, kind: 'declarative',
+                    root: { kind: 'state', state: 'loading', title: 'Loading' }, documentSource },
+                settings: [], actions: [], destinations: [], uiQueries: [],
+                availability: { visible: true, enabledActions: {} },
+            });
+            const renderer = { kind: 'declarative', contributionId: rendererId, documentSource, model };
+            const runtime = { resourceCapability: { readable: true, dynamic: false } };
+            const id = `sessionInfoSection:${pluginId}:${section.id}`;
+            return [id, {
+                id, pluginId, occurrenceId, pluginVersion: '1.0.0', contributionKind: 'sessionInfoSection',
+                descriptorId: section.id, order: section.order ?? 10, resource, actions: [], renderer, runtime,
+                ...(section.availability ? { availability: section.availability } : {}),
+                placement: {
+                    id: section.placementId, pluginId, occurrenceId, contributionKind: 'surfacePlacement',
+                    descriptorId: section.id, binding, target: binding.target, renderer, runtime,
+                    display: {}, availability: { state: 'available', reason: 'available', diagnostics: [] }, headerActions: [],
+                },
+            }];
+        })) } },
+    });
+    network.respond(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
+        DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1, projection }));
+    network.respond(RPC_METHODS.DAEMON_PLUGIN_UI_RESOURCE_READ, DaemonPluginUiResourceReadResponseSchema.parse({
+        ok: true, resource, kind: 'asset', contentType: PLUGIN_DECLARATIVE_DOCUMENT_CONTENT_TYPE_V1,
+        digest, bytesBase64: encodeBase64(bytes, 'base64'),
+    }));
+}
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
     return value != null && typeof value === 'object' && !Array.isArray(value);
@@ -189,7 +220,7 @@ function stripServerSessionKey(serverId: string, keyRaw: unknown): string | null
     return sessionId || null;
 }
 
-function buildSessionOrganizationProjectionFromFixtures(serverIdRaw: unknown): SessionOrganizationProjection {
+function buildSessionOrganizationSnapshotFromFixtures(serverIdRaw: unknown): SessionOrganizationSnapshot {
     const serverId = typeof serverIdRaw === 'string' && serverIdRaw.trim()
         ? serverIdRaw.trim()
         : 'server-1';
@@ -199,7 +230,7 @@ function buildSessionOrganizationProjectionFromFixtures(serverIdRaw: unknown): S
             .filter((sessionId): sessionId is string => sessionId != null)
         : [];
     const tagIdByLabel = new Map<string, string>();
-    const tagsById: Record<string, UiSessionOrganizationTag> = {};
+    const tagsById: Record<string, SessionOrganizationTag> = {};
     const tagAssignmentsBySessionId: Record<string, string[]> = {};
     if (isPlainRecord(organizationTagsBySessionKey)) {
         for (const [key, tags] of Object.entries(organizationTagsBySessionKey)) {
@@ -217,7 +248,6 @@ function buildSessionOrganizationProjectionFromFixtures(serverIdRaw: unknown): S
                         tagKey: tagId,
                         sortKey: null,
                         display: { t: 'plain', v: { label: tag } },
-                        displayState: { status: 'available', value: { label: tag } },
                         archivedAt: null,
                         createdAt: 1,
                         updatedAt: 1,
@@ -231,7 +261,7 @@ function buildSessionOrganizationProjectionFromFixtures(serverIdRaw: unknown): S
     const folders = isPlainRecord(organizationFolders) && Array.isArray(organizationFolders.folders)
         ? organizationFolders.folders
         : [];
-    const folderEntries: Array<[string, UiSessionOrganizationFolder]> = [];
+    const folderEntries: Array<[string, SessionOrganizationFolder]> = [];
     for (const folder of folders) {
         if (!isPlainRecord(folder)) continue;
         const folderId = typeof folder.id === 'string' ? folder.id.trim() : '';
@@ -255,38 +285,27 @@ function buildSessionOrganizationProjectionFromFixtures(serverIdRaw: unknown): S
                     workspace,
                 },
             },
-            displayState: {
-                status: 'available',
-                value: {
-                    name: typeof folder.name === 'string'
-                        ? folder.name
-                        : null,
-                    workspace,
-                },
-            },
             sortKey: typeof folder.sortKey === 'string' ? folder.sortKey : null,
             createdAt: typeof folder.createdAt === 'number' ? folder.createdAt : 0,
             updatedAt: typeof folder.updatedAt === 'number' ? folder.updatedAt : 0,
             archivedAt: null,
         }]);
     }
-    return buildSessionOrganizationProjection({
-        schemaVersionByServerId: { [serverId]: 1 },
-        snapshotVersionByServerId: { [serverId]: 1 },
-        pinsBySessionKey: Object.fromEntries(pinnedSessionIds.map((sessionId, index) => [
-            buildSessionOrganizationSessionKey(serverId, sessionId),
-            { sessionId, sortKey: String(index + 1).padStart(4, '0'), pinnedAt: index + 1, listPinned: true, railPinned: false },
-        ])),
-        foldersByFolderKey: Object.fromEntries(folderEntries.map(([id, folder]) => [buildSessionOrganizationServerKey(serverId, id), folder])),
-        attentionStandingsBySessionKey: {},
-        folderAssignmentsBySessionKey: {},
-        tagsByTagKey: Object.fromEntries(Object.entries(tagsById).map(([id, tag]) => [buildSessionOrganizationServerKey(serverId, id), tag])),
-        tagAssignmentsBySessionKey: Object.fromEntries(Object.entries(tagAssignmentsBySessionId).map(([sessionId, tagIds]) => [
-            buildSessionOrganizationSessionKey(serverId, sessionId), { sessionId, tagIds },
-        ])),
-        orderEntriesByScopeKey: {},
-        labelsByLabelKey: {},
-    }, serverId);
+    return {
+        schemaVersion: SESSION_ORGANIZATION_SNAPSHOT_VERSION,
+        version: 1,
+        pins: pinnedSessionIds.map((sessionId, index) => ({
+            sessionId, sortKey: String(index + 1).padStart(4, '0'), pinnedAt: index + 1, listPinned: true, railPinned: false,
+        })),
+        folders: folderEntries.map(([, folder]) => folder),
+        attentionStandings: [],
+        folderAssignments: Object.entries(organizationFolderAssignments)
+            .map(([sessionId, folderId]) => ({ sessionId, folderId })),
+        tags: Object.values(tagsById),
+        tagAssignments: Object.entries(tagAssignmentsBySessionId).map(([sessionId, tagIds]) => ({ sessionId, tagIds })),
+        orderEntries: [],
+        labels: [],
+    };
 }
 
 const routerMock = createExpoRouterMock({
@@ -306,16 +325,7 @@ installSessionRouteCommonModuleMocks({
     router: async () => routerMock.module,
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            View: 'View',
-            Animated: {
-                View: 'AnimatedView',
-                Value: AnimatedValue,
-                loop: vi.fn(() => ({ start: vi.fn() })),
-                sequence: vi.fn(() => ({ start: vi.fn() })),
-                timing: vi.fn(() => ({ start: vi.fn() })),
-            },
-        });
+        return createReactNativeWebMock();
     },
     modal: async () => {
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
@@ -329,298 +339,139 @@ installSessionRouteCommonModuleMocks({
             },
         }).module;
     },
-    storageModule: async (importOriginal) =>
-        createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                useSession: (sessionId: string) => useSessionSpy(sessionId),
-                useProfile: () => mockProfile,
-                useIsDataReady: () => isDataReady,
-                useAllSessions: () => allSessionsState.current,
-                useAllMachines: () => allMachinesState.current,
-                useWorkspaceRefs: () => [],
-                useWorkspaceSyncRelationships: () => [],
-                useMachineListByServerId: () => machineListByServerIdState.current,
-                useProjectForSession: () => null,
-                useLocalSetting: <K extends keyof LocalSettings>(name: K): LocalSettings[K] => {
-                    if (name === 'devModeEnabled') {
-                        return localDevModeEnabled as LocalSettings[K];
-                    }
-                    return null as unknown as LocalSettings[K];
-                },
-                useSetting: createUseSettingMock({ fallback: (key) => {
-                    if (key === 'hideInactiveSessions') {
-                        return hideInactiveSessions;
-                    }
-                    if (key === 'acpCatalogSettingsV1') {
-                        return acpCatalogSettingsV1;
-                    }
-                    if (key === 'backendEnabledByTargetKey') {
-                        return backendEnabledByTargetKey;
-                    }
-                    return null;
-                } }),
-                useSessionOrganizationProjection: (serverId: string | null | undefined) =>
-                    buildSessionOrganizationProjectionFromFixtures(serverId),
-            },
-        }),
 });
 
-vi.mock('@expo/vector-icons', () => ({
-    Ionicons: 'Ionicons',
-    Octicons: 'Octicons',
-}));
-
-vi.mock('@/sync/ops/sessionMachineTarget', () => ({
-    readMachineTargetForSession: (sessionId: string) => readMachineTargetForSessionSpy(sessionId),
-}));
-vi.mock('@/components/sessions/model/useSessionMachineReachability', () => ({
-    useSessionReachableMachineTarget: (sessionId: string) => readMachineTargetForSessionSpy(sessionId),
-}));
-vi.mock('@/sync/engine/machines/useMachinePoolOriginName', () => ({
-    useMachinePoolOriginName: ({ serverId, poolId }: { serverId?: string | null; poolId?: string | null }) => {
-        if (!serverId || !poolId) return null;
-        return machinePoolListByServerIdState.current[serverId]
-            ?.find((entry) => entry.pool.id === poolId)
-            ?.pool.name.trim() || null;
-    },
-}));
-
-vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
-    useHydrateSessionForRoute: (sessionId: string) => ({
-        ...routeHydrationState,
-        sessionId,
-    }),
-}));
-vi.mock('@/utils/navigation/safeRouterBack', () => ({
-    safeRouterBack: (...args: any[]) => safeRouterBackSpy(...args),
-}));
-
-vi.mock('@/components/ui/text/Text', () => ({ Text: (props: any) => React.createElement('Text', props, props.children) }));
-vi.mock('@/components/ui/popover', async (importOriginal) => {
-    const { createInlinePopoverModuleMock } = await import('@/dev/testkit/mocks/popover');
-    return createInlinePopoverModuleMock(importOriginal);
-});
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: any) => React.createElement('Item', { ...props, testID: props.testID ?? props.title }, props.children),
-}));
-vi.mock('@/components/ui/lists/ItemGroup', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/components/ui/lists/ItemGroup')>(),
-    ItemGroup: 'ItemGroup',
-}));
-vi.mock('@/components/ui/lists/ItemList', () => ({ ItemList: 'ItemList' }));
-vi.mock('@/components/ui/avatar/Avatar', () => ({
-    Avatar: (props: any) => React.createElement('Avatar', { ...props, testID: props.testID ?? 'session-info-avatar' }),
-}));
-vi.mock('@/components/ui/media/CodeView', () => ({
-    CodeView: ({ code, language }: { code: string; language: string }) =>
-        React.createElement('CodeView', { code, language }),
-}));
-vi.mock('@/components/sessions/info/SessionRetentionNotice', () => ({ SessionRetentionNotice: 'SessionRetentionNotice' }));
-vi.mock('@/components/sessions/plugins/useSessionPluginRuntime', () => ({
-    useSessionAddressForSessionId: () => ({ serverId: 'server-1', sessionId: 'session-1' }),
-    useSessionPluginRuntime: () => ({
-        pluginUiProjection: mockPluginUiProjection,
-        pluginBrowserProjection: null,
-        phase: 'current',
-        interactionEnabled: true,
-        machineId: 'machine-1',
-        serverId: 'server-1',
-        platform: mockPluginUiPlatform,
-    }),
-}));
-vi.mock('@/components/plugins/surfaces', () => ({ PluginInlineSurfaceHost: 'PluginInlineSurfaceHost' }));
-vi.mock('@/components/plugins/surfaces/PluginSurfaceHost', () => ({
-    PluginInlineSurfaceHost: 'PluginInlineSurfaceHost',
-}));
-vi.mock('@/hooks/ui/useHappyAction', () => ({ useHappyAction: (fn: any) => useHappyActionMock(fn) }));
-vi.mock('@/sync/ops', () => ({
-    sessionArchiveWithServerScope: sessionArchiveSpy,
-    sessionDelete: sessionDeleteSpy,
-    sessionDeleteWithServerScope: sessionDeleteSpy,
-    sessionRename: vi.fn(),
-    sessionSetManualReadStateWithServerScope: sessionSetManualReadStateSpy,
-    sessionStop: sessionStopSpy,
-    sessionStopWithServerScope: sessionStopSpy,
-}));
-
-vi.mock('@/sync/ops/machineContributionRegistryProjection', () => ({
-    getMachineContributionRegistryProjectionRevision: () => 0,
-    subscribeMachineContributionRegistryProjectionInvalidation: () => () => {},
-    machineContributionRegistryProjectionDescribe: (...args: any[]) => machineContributionRegistryProjectionDescribeMock(...args),
-    machinePluginSettingsGet: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-    machinePluginSettingsSet: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-    machinePluginSecretStatus: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-    machinePluginSecretSet: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-    machinePluginSecretDelete: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-}));
-vi.mock('@/agents/catalog/catalog', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/agents/catalog/catalog')>();
-    return {
-        ...actual,
-        DEFAULT_AGENT_ID: 'claude',
-        // Only a bundled Agent has catalog presentation. A stub that answers for
-        // every id would hand this screen a brand it cannot actually have.
-        getAgentCore: (agentId: string) => (actual.isBundledAgentId(agentId)
-            ? { availability: { experimental: false }, ...mockAgentCore }
-            : null),
-        resolveAgentIdFromFlavor: (flavor: string | null | undefined) => mockResolveAgentIdFromFlavor(flavor),
-    };
-});
-vi.mock('@/hooks/server/useAutomationsSupport', () => ({ useAutomationsSupport: () => ({ enabled: false }) }));
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: (featureId: string, scope?: unknown) => {
-        if (featureId === 'sessions.handoff') {
-            return sessionHandoffFeatureEnabled;
-        }
-        if (featureId === 'sessions.folders') {
-            folderFeatureScopes.push(scope);
-            return sessionFoldersFeatureEnabled;
-        }
-        return false;
-    },
-}));
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
-    return createTokenStorageModuleMock({
-        importOriginal,
-        tokenStorage: {
-            getCredentialsForServerUrl: vi.fn(async () => ({ token: 'token' })),
-        },
-    });
-});
-vi.mock('@/hooks/server/useSessionExecutionRunsSupported', () => ({
-    useSessionExecutionRunsSupported: (sessionId: string, sessionServerId?: string | null) =>
-        useSessionExecutionRunsSupportedSpy(sessionId, sessionServerId),
-}));
-vi.mock('@/sync/ops/actions/defaultActionExecutor', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/ops/actions/defaultActionExecutor')>();
-    return {
-        ...actual,
-        createDefaultActionExecutor: (config: Parameters<typeof actual.createDefaultActionExecutor>[0]) => (
-            config && 'machinePoolAction' in config
-                ? actual.createDefaultActionExecutor(config)
-                : createDefaultActionExecutorSpy(config ?? {})
-        ),
-    };
-});
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId', () => ({
-    resolvePreferredServerIdForSessionId: (sessionId: string) => resolveSessionTargetServerIdSpy(sessionId),
-}));
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache', () => ({
-    resolveServerIdForSessionIdFromLocalCache: (sessionId: string) => resolveServerIdForSessionIdFromLocalCacheSpy(sessionId),
-}));
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: (...args: unknown[]) => machineRpcWithServerScopeSpy(...args),
-}));
-vi.mock('@/sync/domains/features/featureDecisionRuntime', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/domains/features/featureDecisionRuntime')>(),
-    useServerFeaturesSnapshotForServerId: () => serverFeaturesSnapshot,
-}));
-vi.mock('@/sync/domains/settings/actionsSettings', () => ({ isActionEnabledInState: () => true }));
-vi.mock('@/sync/domains/sessionFork/forkUiSupport', () => ({ canForkConversation: () => true }));
-vi.mock('@/sync/domains/sessionHandoff/runSessionHandoffPickerFlow', () => ({ runSessionHandoffPickerFlow: vi.fn() }));
-vi.mock('@happier-dev/protocol', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@happier-dev/protocol')>();
-    return {
-        ...actual,
-        getActionSpec: () => ({
-            id: 'session.handoff',
-            title: 'Hand off session',
-            description: 'Move the current session',
-        }),
-    };
-});
-vi.mock('@happier-dev/agents', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@happier-dev/agents')>();
-    return {
-        ...actual,
-        resolveAgentIdFromSessionMetadata: (metadata: Record<string, unknown> | null | undefined) => {
-            const runtimeDescriptor = metadata?.runtimeDescriptorV1 as any;
-            if (typeof runtimeDescriptor?.agentId === 'string') return runtimeDescriptor.agentId;
-            const flavor = typeof metadata?.flavor === 'string' ? metadata.flavor : null;
-            return mockResolveAgentIdFromFlavor(flavor) ?? null;
-        },
-    };
-});
-vi.mock('@/utils/sessions/sessionUtils', () => ({
-    getSessionName: mockGetSessionName,
-    resolveLockedSessionTitle: (title: string) => title === 'session.untitled' ? 'session.access.lockedTitleFallback' : title,
-    useSessionStatus: () => ({
-        isConnected: sessionIsConnected,
-        statusText: 'Connected',
-        statusColor: 'green',
-        statusDotColor: 'green',
-        isPulsing: false,
-    }),
-    formatOSPlatform: () => 'macOS',
-    formatPathRelativeToHome: (p: string) => p,
-    getSessionAvatarId: () => 'id',
-}));
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn() }));
-vi.mock('@/utils/system/versionUtils', () => ({ isVersionSupported: () => true, MINIMUM_CLI_VERSION: '0.0.0' }));
-vi.mock('@/utils/sessions/terminalSessionDetails', () => ({ getAttachCommandForSession: () => null, getTmuxFallbackReason: () => null, getTmuxTargetForSession: () => null }));
-vi.mock('@/utils/errors/errors', () => ({ HappyError: class HappyError extends Error {} }));
-vi.mock('@/sync/domains/profiles/profileUtils', () => ({ resolveProfileById: () => null }));
-vi.mock('@/components/profiles/profileDisplay', () => ({ getProfileDisplayName: () => 'profile' }));
-vi.mock('@/components/ui/layout/layout', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/components/ui/layout/layout')>()),
-    layout: { screenPaddingHorizontal: 16 },
-}));
+
+const routeHomes = createSessionRouteHomesFixture();
+const routeHomeIds = ['server-1', 'server-a', 'server-b', 'server-session-info', 'server-cache-info',
+    'server_preferred_info', 'server_reactive_info', 'server-owner', 'server-shared'] as const;
+routeHomes.seed(routeHomeIds);
+const network = await installSessionOpsNetworkBoundary();
+await loadSyncSingletonForTests();
+const { AppShellPluginUiProjectionProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+const { sync } = await import('@/sync/sync');
+// Consume the daemon's pure source producer without rooting CLI-private types in UI compilation.
+const originProducerPath = '../../../../../../../cli/src/plugins/runtime/resolvePluginMachineExecutionOrigin';
+const { resolvePluginMachineExecutionOrigin } = await vi.importActual<{
+    resolvePluginMachineExecutionOrigin(input: Readonly<{
+        pluginId: string;
+        context: Readonly<{ serverIdentityId: string; machineId: string }>;
+        sourceCustody: PluginSourceCustodyV1;
+    }>): PluginMachineExecutionOriginV1 | null;
+}>(originProducerPath);
+// Call-through observation: admission, selection, and effects stay with their real owners.
+const createDefaultActionExecutorSpy = vi.spyOn(await import('@/sync/ops/actions/defaultActionExecutor'), 'createDefaultActionExecutor');
+const executeSessionActionSpy = vi.spyOn(await import('@/components/sessions/actions/sessionActionExecution'), 'executeSessionAction');
+const useSessionExecutionRunsSupportedSpy = vi.spyOn(await import('@/hooks/server/useSessionExecutionRunsSupported'), 'useSessionExecutionRunsSupported');
+const machineRpcWithServerScopeSpy = vi.spyOn(await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc'), 'machineRpcWithServerScope');
+const safeRouterBackSpy = vi.spyOn(await import('@/utils/navigation/safeRouterBack'), 'safeRouterBack');
+const resolveServerIdForSessionIdFromLocalCacheSpy = vi.spyOn(await import('@/sync/runtime/orchestration/serverScopedRpc/resolveServerIdForSessionIdFromLocalCache'), 'resolveServerIdForSessionIdFromLocalCache');
+const { Item } = await import('@/components/ui/lists/Item');
+const { Avatar } = await import('@/components/ui/avatar/Avatar');
+const { CodeView } = await import('@/components/ui/media/CodeView');
+const credentials = { token: createAccountTokenForTests('viewer-account', { currentAccount: true }) };
+let sessionRecordForHttp: ReturnType<typeof createSessionFixture> | null = null;
+let sessionByIdForHttp: ReturnType<typeof createPlainSessionByIdResponseFixture> | null = null;
+let machineCensusByServerId: Record<string, ReturnType<typeof createPlainMachineRowFixture>[]> = {};
+const httpMutations: Array<Readonly<{ serverUrl: string; method: string; path: string; body: unknown }>> = [];
+let archiveStatuses: number[] = [];
+let accountConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | undefined;
+let portal: ReturnType<typeof installReactDomPortalBoundaryForTests> | undefined;
+const pendingRouteReads = new Set<() => void>();
+let observeCachedSessionUntilTeardown = false;
+const SessionInfoScreen = (await import('@/app/(app)/session/[id]/info')).default;
+
+function requestsFor(path: string) {
+    return httpMutations.filter(request => request.path === path);
+}
+
+function expectSessionStoppedAt(serverId: string) {
+    expect(network.requests.filter(request => request.method === RPC_METHODS.STOP_SESSION)).toEqual([
+        expect.objectContaining({ serverUrl: `https://${serverId}.example`, token: credentials.token,
+            targetId: 'machine-1', payload: { sessionId: 'session-1' } }),
+    ]);
+}
+
+function browserHostNode(element: Readonly<{ type: React.ReactElement['type']; props: Record<string, unknown> }>) {
+    // Retain actual SDK id/nativeID nodes across ref callbacks, as the browser
+    // does. Allocating a fresh node here feeds Radix's setNode lifecycle back.
+    const id = typeof element.props.id === 'string' ? element.props.id
+        : typeof element.props.nativeID === 'string' ? element.props.nativeID : null;
+    const tag = typeof element.type === 'string' && /^[a-z]/.test(element.type) ? element.type
+        : element.type === 'TextInput' ? 'textarea' : 'div';
+    const node = (id ? document.getElementById(id) : null) ?? document.createElement(tag);
+    if (id && !node.id) {
+        node.id = id;
+        document.body.appendChild(node);
+    }
+    // Test Renderer has no native layout engine. Supply only its measurement
+    // port; actual Popover placement, phone presentation and lifecycle stay real.
+    return Object.assign(node, {
+        setNativeProps() {},
+        getBoundingClientRect: () => ({ x: 0, y: 0, left: 0, top: 0, right: 300, bottom: 100, width: 300, height: 100,
+            toJSON: () => ({}) }),
+        measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 0, 300, 100),
+    });
+}
+
+function SessionInfoTestProviders({ children }: React.PropsWithChildren) {
+    return <InjectedAuthProvider credentials={sync.getCredentials()}>
+        <AppShellPluginUiProjectionProvider>{children}</AppShellPluginUiProjectionProvider>
+    </InjectedAuthProvider>;
+}
+
+async function restoreInfoAccountIfNeeded() {
+    if (accountConnection) return;
+    // Case-owned server bits and SDK ports must exist before bootstrap observes
+    // them. Do not publish an initially disabled descriptor then reset its cache.
+    accountConnection = await restoreServerAccountForTest({ serverUrl: 'https://server-1.example',
+        serverIdentityId: sessionInfoProjectionHomeIdentity ?? undefined,
+        accountId: 'viewer-account', credentials, request: network.request, activation: 'switch',
+        additionalRequestOrigins: routeHomeIds.map(id => `https://${id}.example`) });
+}
+
+afterAll(async () => {
+    await network.dispose();
+    routeHomes.restore();
+});
 
 describe('/session/[id]/info', () => {
     beforeEach(async () => {
-        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token: 'token' });
+        observeCachedSessionUntilTeardown = false;
+                        browser = await installBrowserRuntimeForTests({ url: 'https://session-info-route.test' });
+        portal = installReactDomPortalBoundaryForTests();
         mockSessionId = 'session-1';
         mockServerId = undefined;
         mockSession = null;
-        mockProfile = { ...profileDefaults };
+        mockProfile = { ...profileDefaults, id: 'viewer-account' };
         isDataReady = true;
         routeHydrationState = { kind: 'available', sessionId: 'session-1' };
         sessionIsConnected = true;
         localDevModeEnabled = false;
-        mockPluginUiProjection = null;
-        mockPluginUiPlatform = 'web';
         routerPushSpy.mockReset();
         routerBackSpy.mockReset();
-        safeRouterBackSpy.mockReset();
-        readMachineTargetForSessionSpy.mockReset();
-        readMachineTargetForSessionSpy.mockReturnValue(null);
-        sessionStopSpy.mockClear();
-        sessionArchiveSpy.mockClear();
-        sessionDeleteSpy.mockClear();
-        sessionSetManualReadStateSpy.mockClear();
+        machineTargetFixture = null;
+        cachedSessionServerId = null;
         modalAlertSpy.mockClear();
         modalConfirmSpy.mockClear();
         modalPromptSpy.mockClear();
         modalPromptSpy.mockResolvedValue('urgent, review');
         modalShowSpy.mockReset();
         modalShowSpy.mockReturnValue('modal-id');
-        setSessionFolderAssignmentSpy.mockClear();
-        setSessionFolderAssignmentSpy.mockImplementation(async ({ sessionId, request }) => ({ sessionId, folderId: request.folderId }));
-        setSessionPinSpy.mockClear();
-        setSessionPinSpy.mockImplementation(async ({ sessionId, request }) => ({ sessionId, pin: request.pinned ? { sessionId, sortKey: null, pinnedAt: 1 } : null }));
-        setSessionTagAssignmentsSpy.mockClear();
-        setSessionTagAssignmentsSpy.mockImplementation(async ({ sessionId, request }) => ({ sessionId, tagIds: request.tagIds }));
-        resolveSessionTargetServerIdSpy.mockClear();
-        resolveServerIdForSessionIdFromLocalCacheSpy.mockClear();
         machineRpcWithServerScopeSpy.mockClear();
         useSessionExecutionRunsSupportedSpy.mockClear();
-        resolveSessionTargetServerIdSpy.mockImplementation(() => resolvedServerId);
-        resolveServerIdForSessionIdFromLocalCacheSpy.mockImplementation(() => null);
-        machineRpcWithServerScopeSpy.mockRejectedValue(new Error('unreachable'));
         hideInactiveSessions = false;
         organizationPinnedSessionKeys = null;
         organizationTagsBySessionKey = null;
         organizationFolders = null;
-        acpCatalogSettingsV1 = null;
+        organizationFolderAssignments = {};
         backendEnabledByTargetKey = null;
         resolvedServerId = 'server-1';
         sessionHandoffFeatureEnabled = false;
         sessionFoldersFeatureEnabled = false;
-        folderFeatureScopes.length = 0;
-        allSessionsState.current = [];
-        allMachinesState.current = [];
         machineListByServerIdState.current = {};
         machinePoolListByServerIdState.current = {};
         serverFeaturesSnapshot = {
@@ -649,37 +500,116 @@ describe('/session/[id]/info', () => {
                 capabilities: {},
             },
         };
-        mockAgentCore = {
-            displayNameKey: 'agentInput.agent.claude',
-            resume: {},
-            permissions: { modeGroup: 'codexLike' },
-            ui: { agentPickerIconName: 'code-slash-outline' },
-        };
-        useSessionSpy.mockClear();
-        mockResolveAgentIdFromFlavor.mockReset();
-        mockResolveAgentIdFromFlavor.mockReturnValue('claude');
-        mockGetSessionName.mockReset();
-        mockGetSessionName.mockReturnValue('name');
         vi.clearAllMocks();
-        useHappyActionMock.mockReset();
-        useHappyActionMock.mockImplementation((fn: any) => [false, fn] as const);
-        useSessionExecutionRunsSupportedSpy.mockReturnValue(false);
-        machineContributionRegistryProjectionDescribeMock.mockReset();
-        machineContributionRegistryProjectionDescribeMock.mockResolvedValue({ supported: false, reason: 'not-supported' });
+        resetServerFeaturesClientForTests();
         clearTempData();
-        // Seed device persistence at the existing MMKV boundary; profile resolution stays real.
-        new MMKV().set('server-state-v1', JSON.stringify({
-            activeServerId: 'server-1',
-            servers: Object.fromEntries([
-                ['server-1', 'https://server.example.test'],
-                ['server-b', 'https://server-b.example.test'],
-                ['server-session-info', 'https://session-info.example.test'],
-            ].map(([id, serverUrl]) => [id, {
-                id, serverUrl, name: id, createdAt: 1, updatedAt: 1, lastUsedAt: 1,
-            }])),
-        }));
+        routeHomes.seed(routeHomeIds);
+        network.resetRequests();
+        sessionRecordForHttp = null;
+        sessionByIdForHttp = null;
+        machineCensusByServerId = {};
+        for (const serverId of routeHomeIds) {
+            await network.addHome(`https://${serverId}.example`, 'viewer-account', { credentials });
+        }
+        httpMutations.length = 0;
+        archiveStatuses = [];
+        network.respond(RPC_METHODS.STOP_SESSION, { status: 'stopped' });
+        network.setHttpResponder(async (input, init) => {
+            const url = new URL(String(input));
+            const fixtureHomeId = routeHomeIds.find(id => `https://${id}.example` === url.origin) ?? resolvedServerId;
+            const method = init?.method ?? 'GET';
+            const body: unknown = typeof init?.body === 'string' ? JSON.parse(init.body) : null;
+            if (method !== 'GET') httpMutations.push({ serverUrl: url.origin, method, path: url.pathname, body });
+            if (url.pathname === '/v1/features') {
+                const base = createRootLayoutFeaturesResponse(sessionInfoProjectionHomeIdentity && fixtureHomeId === 'server-1'
+                    ? { capabilities: { serverIdentity: { serverIdentityId: sessionInfoProjectionHomeIdentity } } } : {});
+                const advertised = serverFeaturesSnapshot.features?.features ?? {};
+                const features = {
+                    ...base,
+                    features: {
+                        ...base.features,
+                        sessions: { ...base.features.sessions, ...advertised.sessions },
+                        machines: { ...base.features.machines, ...advertised.machines },
+                    },
+                };
+                tryWriteServerEnabledBitInPlace(features, 'sessions.handoff', sessionHandoffFeatureEnabled);
+                tryWriteServerEnabledBitInPlace(features, 'sessions.folders', sessionFoldersFeatureEnabled);
+                tryWriteServerEnabledBitInPlace(features, 'automations', false);
+                tryWriteServerEnabledBitInPlace(features, 'machines.pools', true);
+                return Response.json(features);
+            }
+            if (url.pathname === '/v1/account/profile') return Response.json({ ...profileDefaults, id: 'viewer-account' });
+            if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            if (url.pathname === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json(AcpCatalogRowReadResponseV1Schema.parse({
+                status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: [] } },
+            }));
+            if (url.pathname === AUTHORING_MEMORY_ROUTE_V1) return Response.json({ rows: [] });
+            if (url.pathname === '/v1/artifacts') return Response.json([]);
+            if (url.pathname === '/v1/account/project-rows/list') return Response.json(createPlainProjectAccountRowListFixture());
+            if (url.pathname === '/v2/session-organization' && method === 'GET') return Response.json(SessionOrganizationSnapshotResponseSchema.parse({
+                snapshot: buildSessionOrganizationSnapshotFromFixtures(fixtureHomeId),
+            }));
+            if (/^\/v2\/sessions\/[^/]+\/read-state$/.test(url.pathname) && method === 'POST') {
+                return Response.json({ success: true, state: isPlainRecord(body) ? body.state : 'unread',
+                    lastViewedSessionSeq: 0, didChange: true });
+            }
+            if (url.pathname === '/v2/sessions' || url.pathname === '/v2/sessions/active') return answerSessionHttp(Response.json({ sessions: sessionRecordForHttp?.serverId === fixtureHomeId && sessionRecordForHttp.encryptionMode === 'plain'
+                    ? [sessionByIdForHttp!.session] : [], next: null, hasNext: false }), init?.signal);
+            if (url.pathname === '/v2/sessions/session-1/archive') {
+                const status = archiveStatuses.shift() ?? 200;
+                return Response.json(status === 409 ? { error: 'session_active' } : { archivedAt: 1 }, { status });
+            }
+            if (url.pathname === '/v1/sessions/session-1' && method === 'DELETE') return Response.json({ success: true });
+            if (url.pathname === machinePoolActionEndpointPathV1('machines.pools.list')) {
+                const homeId = routeHomeIds.find(id => `https://${id}.example` === url.origin) ?? resolvedServerId;
+                return Response.json({ pools: machinePoolListByServerIdState.current[homeId] ?? [] });
+            }
+            if (url.pathname === '/v1/machines') return Response.json(machineCensusByServerId[fixtureHomeId] ?? []);
+            const machineRead = /^\/v1\/machines\/([^/]+)$/.exec(url.pathname);
+            if (machineRead) {
+                const machine = machineCensusByServerId[fixtureHomeId]?.find(row => row.id === decodeURIComponent(machineRead[1]!));
+                return machine ? Response.json({ machine }) : Response.json({ error: 'not_found' }, { status: 404 });
+            }
+            const sessionRead = /^\/v2\/sessions\/([^/]+)$/.exec(url.pathname);
+            if (sessionRead && method === 'GET') {
+                if (routeHydrationState.kind === 'loading') {
+                    return new Promise<Response>(resolve => {
+                        const release = () => { pendingRouteReads.delete(release); resolve(Response.json(
+                            V2SessionByIdNotFoundSchema.parse({ error: 'Session not found' }), { status: 404 })); };
+                        pendingRouteReads.add(release);
+                        init?.signal?.addEventListener('abort', release, { once: true });
+                    });
+                }
+                if (routeHydrationState.kind === 'retrying') return Response.json({ error: 'server_unavailable' }, { status: 503 });
+                if (!mockSession || routeHydrationState.kind === 'missing') return Response.json(
+                    V2SessionByIdNotFoundSchema.parse({ error: 'Session not found' }), { status: 404 });
+                const record = sessionRecordForHttp;
+                if (!record || record.id !== decodeURIComponent(sessionRead[1]!) || record.serverId !== fixtureHomeId)
+                    return Response.json(V2SessionByIdNotFoundSchema.parse({ error: 'not_found' }), { status: 404 });
+                // Locked E2EE cache fixtures have no plaintext HTTP producer to disclose.
+                if (record.encryptionMode !== 'plain') return Response.json({ error: 'unavailable' }, { status: 503 });
+                return answerSessionHttp(Response.json(sessionByIdForHttp), init?.signal);
+            }
+            const organization = /^\/v2\/session-organization\/(pins|tag-assignments|folder-assignments)\/([^/]+)$/.exec(url.pathname);
+            if (organization && method === 'PUT' && isPlainRecord(body)) {
+                const sessionId = decodeURIComponent(organization[2]!);
+                if (organization[1] === 'pins') return Response.json({ pin: body.pinned ? {
+                    sessionId, sortKey: body.sortKey ?? null, pinnedAt: 1,
+                    listPinned: body.surface !== 'rail', railPinned: body.surface === 'rail',
+                } : null });
+                if (organization[1] === 'folder-assignments') {
+                    if (typeof body.folderId === 'string') organizationFolderAssignments[sessionId] = body.folderId;
+                    else delete organizationFolderAssignments[sessionId];
+                }
+                return Response.json({ sessionId, ...(organization[1] === 'tag-assignments'
+                    ? { tagIds: body.tagIds } : { folderId: body.folderId }) });
+            }
+            return null;
+        });
         const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
         await setActiveServerId('server-1');
+        const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+        clearDaemonMergedProjectionCacheForTests();
     });
 
     afterEach(async () => {
@@ -690,29 +620,171 @@ describe('/session/[id]/info', () => {
                 for (const [config] of modalShowSpy.mock.calls) config.onRequestClose?.();
             });
         } finally {
-            clearTempData();
-            standardCleanup();
-            resetRuntimeFetch();
-            resetServerFeaturesClientForTests();
-            vi.unstubAllGlobals();
+            try {
+                clearTempData();
+                standardCleanup();
+                for (const release of pendingRouteReads) release();
+                // This suite owns the focused runtime, including cases that
+                // deliberately replace its Home or native credential boundary.
+                // Retire it before removing its HTTP/DOM ports; a restorer's
+                // target-fenced disposal may correctly leave a successor alive.
+                const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+                await disconnectActiveServerConnection();
+                const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
+                await serverScopedRpcSocketPool.stopAll();
+                const { stopAllEndpointSupervisorsForTests } = await import('@/sync/runtime/connectivity/endpointSupervisorPool');
+                await stopAllEndpointSupervisorsForTests();
+                const { stopServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
+                await stopServerReachabilitySupervisors();
+                await accountConnection?.dispose();
+                accountConnection = undefined;
+                resetRuntimeFetch();
+                resetServerFeaturesClientForTests();
+                vi.unstubAllGlobals();
+            } finally {
+                portal?.restore();
+                portal = undefined;
+                browser?.restore();
+                browser = undefined;
+            }
         }
     });
 
-    async function applyInfoSessionFixture() {
+    function answerSessionHttp(response: Response, signal?: AbortSignal | null): Promise<Response> {
+        if (!observeCachedSessionUntilTeardown) return Promise.resolve(response);
+        // A supported layout0 cache can contain fields a new layout1 writer
+        // cannot publish. Keep that cache observable while a valid refresh is
+        // in flight, using the same abort-obeying HTTP boundary as other holds.
+        return waitForNetworkResponseForTests(new Promise<Response>(resolve => {
+            const release = () => { pendingRouteReads.delete(release); resolve(response); };
+            pendingRouteReads.add(release);
+        }), signal);
+    }
+
+    async function applyInfoSessionFixture(publishMachineCensus = false) {
         const { getStorage } = await import('@/sync/domains/state/storageStore');
-        const sessionFixture = mockSession ? { encryptionMode: 'plain', ...mockSession } : null;
+        if (mockSessionId === 'session-1' && typeof mockSession?.id === 'string') mockSessionId = mockSession.id;
+        const defaults = createSessionFixture();
+        const sessionFixture = mockSession ? createSessionFixture({
+            ...mockSession,
+            sessionTurns: mockSession.sessionTurns ?? null,
+            activeAt: sessionIsConnected ? Date.now() : 0,
+            presence: sessionIsConnected ? 'online' : 'offline',
+            ...(mockSession.metadata ? { metadata: { ...defaults.metadata, name: 'name', ...mockSession.metadata } } : {}),
+        }) : null;
         const serverScopedSession = sessionFixture && mockServerId && !sessionFixture.serverId
             ? { ...sessionFixture, serverId: mockServerId } : sessionFixture;
         const session = serverScopedSession && !serverScopedSession.access
             ? { ...serverScopedSession, access: createSessionAccessFixture(serverScopedSession.accessLevel ?? 'owner') }
             : serverScopedSession;
-        getStorage().setState({ sessions: session ? { [normalizeSessionId(mockSessionId)]: session } : {} });
+        mockSession = session;
+        const serverId = session?.serverId ?? mockServerId ?? resolvedServerId;
+        const machine = createMachineFixture({ id: machineTargetFixture?.machineId ?? session?.metadata?.machineId ?? 'machine-1',
+            active: true, activeAt: Date.now(), metadata: { ...createMachineFixture().metadata!,
+                host: 'info-machine.test', homeDir: '/home/info', happyCliVersion: '999.0.0' } });
+        const plainMachineRow = createPlainMachineRowFixture({ id: machine.id, accountId: 'viewer-account' });
+        const plainMachine = { ...machine, storageMode: 'plain' as const, access: plainMachineRow.access,
+            dataEncryptionKey: plainMachineRow.dataEncryptionKey };
+        const sessionRecord = session ? { ...session, serverId,
+            ...(session.metadata && machineTargetFixture ? { metadata: {
+                ...session.metadata, host: 'info-machine.test', homeDir: '/home/info', path: machineTargetFixture.basePath,
+            } } : {}),
+        } : null;
+        sessionRecordForHttp = observeCachedSessionUntilTeardown && sessionRecord
+            ? createSessionFixture({ id: sessionRecord.id, serverId, active: false }) : sessionRecord;
+        // Validate producer input synchronously at setup, not in an HTTP
+        // callback where a fixture exception looks like a network outage.
+        sessionByIdForHttp = sessionRecordForHttp?.encryptionMode === 'plain'
+            ? createPlainSessionByIdResponseFixture(sessionRecordForHttp) : null;
+        const machineInventory: Record<string, ReturnType<typeof createMachineFixture>[]> = { [serverId]: [plainMachine], ...Object.fromEntries(
+                Object.entries(machineListByServerIdState.current).map(([homeId, machines]) => [homeId, machines.map(candidate => ({
+                    ...plainMachine, ...candidate, metadata: { ...plainMachine.metadata, ...candidate.metadata },
+                }))]),
+            ) };
+        machineCensusByServerId = Object.fromEntries(Object.entries(machineInventory).map(([homeId, rows]) => [homeId, rows.map(machine => ({
+            ...createPlainMachineRowFixture({ id: machine.id, accountId: 'viewer-account' }),
+            seq: machine.seq, createdAt: machine.createdAt, updatedAt: machine.updatedAt,
+            active: machine.active, activeAt: machine.activeAt,
+            metadata: encodePlainMachineStoredContent(machine.metadata), metadataVersion: machine.metadataVersion,
+            daemonState: machine.daemonState ? encodePlainMachineStoredContent(machine.daemonState) : null,
+            daemonStateVersion: machine.daemonStateVersion,
+        }))]));
+        const store = getStorage();
+        store.setState({
+            sessions: sessionRecord ? { [normalizeSessionId(mockSessionId)]: sessionRecord } : {},
+            sessionListRowsByServerId: {},
+            sessionListIndexByServerId: {},
+            concurrentSessionListCacheByServerId: {},
+            sessionLocalStateScope: { serverId, accountId: 'viewer-account' },
+            machines: { [plainMachine.id]: plainMachine },
+            machineListByServerId: machineInventory,
+            machineListStatusByServerId: Object.fromEntries([serverId, ...Object.keys(machineListByServerIdState.current)]
+                .map(homeId => [homeId, 'idle'])),
+            profile: mockProfile,
+            isDataReady,
+            settings: { ...settingsDefaults, hideInactiveSessions,
+                backendEnabledByTargetKey: backendEnabledByTargetKey ?? settingsDefaults.backendEnabledByTargetKey },
+            localSettings: { ...localSettingsDefaults, devModeEnabled: localDevModeEnabled },
+        });
+        for (const homeId of routeHomeIds) {
+            store.getState().clearSessionOrganizationForServer(homeId);
+            store.getState().applySessionOrganizationSnapshot(homeId, buildSessionOrganizationSnapshotFromFixtures(homeId));
+        }
+        if (cachedSessionServerId && sessionRecord) {
+            const { createSessionListRenderableSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
+            const row = createSessionListRenderableSessionFixture(sessionRecord);
+            store.setState({ sessionListRowsByServerId: { [cachedSessionServerId]: { [normalizeSessionId(mockSessionId)]: row } } });
+        }
+        await getServerFeaturesSnapshot({ serverId: 'server-1', force: true });
+        if (serverId !== 'server-1') await getServerFeaturesSnapshot({ serverId, force: true });
+        if (publishMachineCensus) {
+            // Projection cases require a settled HTTP Machine census. Loading
+            // route cases deliberately hold the foreground read this awaits.
+            await sync.refreshMachines({ serverId });
+        }
     }
 
-    async function renderInfoScreen() {
-        await applyInfoSessionFixture();
-        const Screen = (await import('@/app/(app)/session/[id]/info')).default;
-        return renderScreen(<Screen />);
+    async function renderInfoScreen(options?: Readonly<{ publishMachineCensus: true }>) {
+        await restoreInfoAccountIfNeeded();
+        const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const { getStorage } = await import('@/sync/domains/state/storageStore');
+        // Account/Profile and SDK connection readiness are independent of the
+        // Session reads intentionally held by loading/retry route fixtures.
+        await waitForHomeGovernance(() => {
+            expect(getActiveServerAccountScope()?.accountId).toBe('viewer-account');
+            expect(getStorage().getState().endpointStatus).toBe('online');
+        });
+        await applyInfoSessionFixture(options?.publishMachineCensus);
+        const screen = await renderScreen(<SessionInfoScreen />, { wrapper: SessionInfoTestProviders, createNodeMock: browserHostNode });
+        if (routeHydrationState.kind === 'missing' || (!mockSession && routeHydrationState.kind === 'available')) {
+            await vi.waitFor(() => expect(screen.getTextContent()).toContain('errors.sessionDeleted'));
+        }
+        return screen;
+    }
+
+    async function waitForHeaderMenuOutcome(assertion: () => void) {
+        // DropdownMenu defers opening/selection to the next native frame/task.
+        // Finish each act before retrying, so its scheduled React state commits
+        // instead of remaining batched behind the assertion's unresolved act.
+        await vi.waitFor(async () => {
+            await flushHookEffects({ cycles: 1 });
+            assertion();
+        });
+    }
+
+    async function settleSessionAction(actionId: string) {
+        // useHappyAction deliberately returns void. Observe the genuine Action's
+        // completion, not the button callback's already-settled return value.
+        await waitForHeaderMenuOutcome(() => {
+            expect(modalAlertSpy).not.toHaveBeenCalled();
+            expect(executeSessionActionSpy.mock.calls.some(([input]) => input.actionId === actionId)).toBe(true);
+        });
+        let index = executeSessionActionSpy.mock.calls.length - 1;
+        while (index >= 0 && executeSessionActionSpy.mock.calls[index]?.[0].actionId !== actionId) index -= 1;
+        expect(index).toBeGreaterThanOrEqual(0);
+        const result = executeSessionActionSpy.mock.results[index];
+        if (result?.type !== 'return') throw new Error('The Session Action did not return its completion');
+        await act(async () => { await result.value; });
     }
 
     it('shows loading while the route hydration is still in progress', async () => {
@@ -760,24 +832,48 @@ describe('/session/[id]/info', () => {
     });
 
     it('uses the encrypted title and hides private detail/actions for a locked recipient', async () => {
-        mockGetSessionName.mockReturnValue('session.untitled');
-        mockSession = {
-            id: 'session-locked-recipient',
-            serverId: 'server-1',
-            active: false,
-            accessLevel: 'view',
-            access: createSessionAccessFixture('view'),
-            encryptionMode: 'e2ee',
-            encryptedContentAvailability: 'encrypted_access_pending',
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-            seq: 1,
-            metadata: {
-                name: 'private name',
-                host: 'private machine',
-                path: '/private/workspace',
+        const { Encryption } = await import('@/sync/encryption/encryption');
+        const { encodeBase64 } = await import('@/encryption/base64');
+        const { fetchAndApplySessionById } = await import('@/sync/engine/sessions/sessionById');
+        const { SessionCurrentProjectionRecordV1Schema } = await import('@happier-dev/protocol/sessions/listing/response');
+        const { getStorage } = await import('@/sync/domains/state/storageStore');
+        const sessionId = 'session-locked-recipient';
+        const secret = new Uint8Array(32).fill(7);
+        const writer = await Encryption.create(secret);
+        writer.configureNativeCryptoWorker({ routing: { mode: 'off' } });
+        await writer.initializeSessions(new Map([[sessionId, new Uint8Array(32).fill(8)]]));
+        const metadata = await writer.getSessionEncryption(sessionId)!.encryptRaw({
+            name: 'private name', host: 'private machine', path: '/private/workspace',
+        });
+        const reader = await Encryption.create(secret);
+        reader.configureNativeCryptoWorker({ routing: { mode: 'off' } });
+        const { ownerMetadata: _ownerMetadata, ...base } = createPlainSessionCurrentProjectionRecordFixture({ id: sessionId });
+        const access = createSessionAccessFixture('view');
+        const row = SessionCurrentProjectionRecordV1Schema.parse({
+            ...base, encryptionMode: 'e2ee', dataEncryptionKey: null, metadataLayoutVersion: 0, metadata,
+            share: { accessLevel: 'view', canApprovePermissions: false },
+            effectiveAccess: { v: 1, level: 'view', capabilities: access.capabilities, sources: [] },
+        });
+        const store = getStorage();
+        const hydrated = await fetchAndApplySessionById({
+            sessionId, serverId: 'server-1',
+            credentials: { token: credentials.token, secret: encodeBase64(secret) },
+            accountCurrentness: {
+                mode: 'e2ee', version: 1, updatedAt: 1,
+                signingKeyFingerprint: 'signing-current', contentKeyFingerprint: 'content-current',
+                recipientEnvelopeReadiness: { status: 'available' },
             },
-        };
+            encryption: reader, sessionDataKeys: new Map(),
+            request: async () => Response.json({ session: row }),
+            applySessions: store.getState().applySessions,
+            getExistingSession: id => store.getState().sessions[id],
+            includeTurnsProjection: false,
+            log: { log: () => {} },
+        });
+        expect(hydrated.ok).toBe(true);
+        mockSession = store.getState().sessions[sessionId];
+        expect(mockSession).toMatchObject({ metadata: null, ownerMetadataView: null,
+            encryptedContentAvailability: 'encrypted_access_pending' });
 
         const screen = await renderInfoScreen();
 
@@ -790,18 +886,60 @@ describe('/session/[id]/info', () => {
         expect(screen.findByTestId('session-info-collaboration')).toBeNull();
     });
 
+    it('renders an archived locked owner as unavailable with only eligible Delete instead of Loading', async () => {
+        sessionIsConnected = false;
+        mockSession = createSessionFixture({
+            id: 'session-1',
+            serverId: 'server-1',
+            active: false,
+            archivedAt: 5,
+            access: createSessionAccessFixture('owner', { deleteSession: true }),
+            encryptionMode: 'e2ee',
+            encryptedContentAvailability: 'encrypted_content_unavailable',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 1,
+            metadata: null,
+            ownerMetadataView: null,
+            agentState: null,
+        });
+
+        const screen = await renderInfoScreen();
+
+        expect(screen.getTextContent()).not.toContain('common.loading');
+        expect(screen.getTextContent()).toContain('session.access.lockedTitleFallback');
+        expect(screen.findByTestId('sessionInfo.deleteSession')).not.toBeNull();
+        expect(screen.findByTestId('sessionInfo.archiveSession')).toBeNull();
+        expect(screen.findByTestId('session-info-rename')).toBeNull();
+    });
+
+    it('keeps Archive reachable for an inactive unarchived locked owner so Delete can become eligible in place', async () => {
+        sessionIsConnected = false;
+        mockSession = createSessionFixture({
+            id: 'session-1',
+            serverId: 'server-1',
+            active: false,
+            archivedAt: null,
+            access: createSessionAccessFixture('owner', { archiveSession: true, deleteSession: true }),
+            encryptionMode: 'e2ee',
+            encryptedContentAvailability: 'encrypted_content_unavailable',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            seq: 1,
+            metadata: null,
+            ownerMetadataView: null,
+            agentState: null,
+        });
+
+        const screen = await renderInfoScreen();
+
+        expect(screen.getTextContent()).not.toContain('common.loading');
+        expect(screen.findByTestId('sessionInfo.archiveSession')).not.toBeNull();
+        expect(screen.findByTestId('sessionInfo.deleteSession')).toBeNull();
+        expect(screen.findByTestId('session-info-rename')).toBeNull();
+    });
+
     it('shows the current exact Machine and an independently readable creation pool after handoff', async () => {
-        const token = `header.${Buffer.from(JSON.stringify({ sub: 'viewer-account' })).toString('base64')}.signature`;
-        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockResolvedValue({ token });
-        const features = buildServerFeaturesResponse();
-        vi.stubGlobal('fetch', vi.fn(async () => Response.json({
-            ...features,
-            features: {
-                ...features.features,
-                machines: { ...features.features.machines, pools: { enabled: true } },
-            },
-        })));
-        await getServerFeaturesSnapshot({ serverId: 'server-1', force: true });
         const poolId = '0191f11b-4ab2-7ef2-8dd2-268abc9c191f';
         mockSession = {
             id: 'session-1',
@@ -816,10 +954,10 @@ describe('/session/[id]/info', () => {
                 placementOrigin: { kind: 'machine_pool', poolId },
             },
         };
-        readMachineTargetForSessionSpy.mockReturnValue({
+        machineTargetFixture = {
             machineId: 'machine-after-handoff',
             basePath: '/workspace',
-        });
+        };
         machineListByServerIdState.current = {
             'server-1': [{
                 id: 'machine-after-handoff',
@@ -836,16 +974,12 @@ describe('/session/[id]/info', () => {
                 availability: { state: 'unknown' },
             }],
         };
-        setRuntimeFetch(async (url) => String(url).endsWith('/v1/account/encryption')
-            ? Response.json({ mode: 'plain', updatedAt: 1 })
-            : Response.json({ pools: machinePoolListByServerIdState.current['server-1'] }));
-
         const screen = await renderInfoScreen();
 
-        expect(screen.findByTestId('session-info-execution-machine')?.props).toMatchObject({
+        expect(screen.findAllByType(Item).find(node => node.props.testID === 'session-info-execution-machine')?.props).toMatchObject({
             subtitle: 'Mac Studio',
         });
-        await vi.waitFor(() => expect(screen.findByTestId('session-info-placement-origin')?.props).toMatchObject({
+        await vi.waitFor(() => expect(screen.findAllByType(Item).find(node => node.props.testID === 'session-info-placement-origin')?.props).toMatchObject({
             subtitle: 'Development',
         }));
     });
@@ -867,18 +1001,18 @@ describe('/session/[id]/info', () => {
                 },
             },
         };
-        readMachineTargetForSessionSpy.mockReturnValue({ machineId: 'machine-1', basePath: '/workspace' });
+        machineTargetFixture = { machineId: 'machine-1', basePath: '/workspace' };
         machinePoolListByServerIdState.current = { 'server-1': [] };
 
         const screen = await renderInfoScreen();
 
-        expect(screen.findByTestId('session-info-placement-origin')?.props).toMatchObject({
+        expect(screen.findAllByType(Item).find(node => node.props.testID === 'session-info-placement-origin')?.props).toMatchObject({
             subtitle: 'machinePools.aMachinePool',
         });
     });
 
     it('mounts projected Session-info sections through the shared semantic inline host', async () => {
-        mockSession = {
+                mockSession = {
             id: 'session-1',
             active: false,
             accessLevel: null,
@@ -888,31 +1022,44 @@ describe('/session/[id]/info', () => {
             metadata: {},
         };
         const placement = { id: 'session-info-placement' };
-        mockPluginUiProjection = {
-            sessionInfoSectionsById: {
-                'sessionInfoSection:acme.preview:overview': {
-                    id: 'sessionInfoSection:acme.preview:overview',
-                    order: 10,
-                    placement,
-                },
-            },
-        };
+        await serveSessionInfoPluginSections([{ id: 'overview', placementId: placement.id }]);
+        const { PluginInlineSurfaceHost } = await import('@/components/plugins/surfaces');
 
-        const screen = await renderInfoScreen();
-        const mounts = screen.findAllByType('PluginInlineSurfaceHost' as never);
+        const screen = await renderInfoScreen({ publishMachineCensus: true });
+        await vi.waitFor(() => expect(screen.findAllByType(PluginInlineSurfaceHost)).toHaveLength(1));
+        const mounts = screen.findAllByType(PluginInlineSurfaceHost);
         expect(mounts).toHaveLength(1);
-        expect(mounts[0]?.props).toMatchObject({
+        await vi.waitFor(() => expect(screen.findAllByType(PluginInlineSurfaceHost)[0]?.props).toMatchObject({
             placement,
             inlineMount: { role: 'sessionInfoSection', presentation: 'content' },
             sessionId: 'session-1',
             machineId: 'machine-1',
             serverId: 'server-1',
             projectionInteractionEnabled: true,
-        });
+        }));
+        await vi.waitFor(() => expect(machineRpcWithServerScopeSpy.mock.calls.some(([input]) =>
+            input.method === RPC_METHODS.DAEMON_PLUGIN_UI_RESOURCE_READ)).toBe(true));
+        let resourceReadIndex = machineRpcWithServerScopeSpy.mock.calls.length - 1;
+        while (resourceReadIndex >= 0 && machineRpcWithServerScopeSpy.mock.calls[resourceReadIndex]?.[0].method
+            !== RPC_METHODS.DAEMON_PLUGIN_UI_RESOURCE_READ) resourceReadIndex -= 1;
+        const resourceRead = machineRpcWithServerScopeSpy.mock.results[resourceReadIndex];
+        if (resourceRead?.type !== 'return') throw new Error('The real daemon Resource read did not return its completion');
+        let delivered: unknown;
+        await act(async () => { delivered = await resourceRead.value; });
+        expect(delivered).toMatchObject({ ok: true, resource: { pluginId: 'acme.preview', localId: 'session-overview' } });
+        await flushHookEffects({ cycles: 1 });
+        await waitForHeaderMenuOutcome(() => expect(screen.getTextContent()).toContain('Session overview from daemon Resource'));
+        expect(network.requests).toContainEqual(expect.objectContaining({
+            serverUrl: 'https://server-1.example', targetId: 'machine-1',
+            method: RPC_METHODS.DAEMON_PLUGIN_UI_RESOURCE_READ,
+            payload: expect.objectContaining({ callerPluginId: 'acme.preview',
+                expectedCallerOccurrenceId: 'session-info-preview-occurrence',
+                resource: { pluginId: 'acme.preview', localId: 'session-overview' } }),
+        }));
     });
 
     it('projects declared session-info section availability through the canonical policy owner', async () => {
-        mockSession = {
+                mockSession = {
             id: 'session-1',
             active: false,
             accessLevel: null,
@@ -921,53 +1068,26 @@ describe('/session/[id]/info', () => {
             seq: 1,
             metadata: {},
         };
-        const placement = { id: 'session-info-placement' };
-        const sectionBase = {
-            pluginId: 'acme.preview',
-            descriptorId: 'overview',
-            order: 10,
-            placement,
-            renderer: { kind: 'declarative' },
-            resource: { pluginId: 'acme.preview', localId: 'overview' },
-            actions: [],
-        };
         const hiddenPlacement = { id: 'session-info-placement-hidden' };
         const disabledPlacement = { id: 'session-info-placement-disabled' };
         const enabledPlacement = { id: 'session-info-placement-enabled' };
-        mockPluginUiProjection = {
-            sessionInfoSectionsById: {
-                'sessionInfoSection:acme.preview:hidden': {
-                    ...sectionBase,
-                    id: 'sessionInfoSection:acme.preview:hidden',
-                    placement: hiddenPlacement,
-                    availability: {
-                        when: { fact: 'host.platform', operator: 'equals', value: 'ios' },
-                    },
-                },
-                'sessionInfoSection:acme.preview:disabled': {
-                    ...sectionBase,
-                    id: 'sessionInfoSection:acme.preview:disabled',
-                    order: 20,
-                    placement: disabledPlacement,
-                    availability: {
-                        disabledWhen: { fact: 'host.platform', operator: 'equals', value: 'web' },
-                        disabledReason: 'Disabled on web',
-                    },
-                },
-                'sessionInfoSection:acme.preview:enabled': {
-                    ...sectionBase,
-                    id: 'sessionInfoSection:acme.preview:enabled',
-                    order: 30,
-                    placement: enabledPlacement,
-                    availability: {
-                        when: { fact: 'session.exists', operator: 'equals', value: true },
-                    },
-                },
-            },
-        };
+        await serveSessionInfoPluginSections([
+            { id: 'hidden', placementId: hiddenPlacement.id, availability: {
+                when: { fact: 'host.platform', operator: 'equals', value: 'ios' },
+            } },
+            { id: 'disabled', placementId: disabledPlacement.id, order: 20, availability: {
+                disabledWhen: { fact: 'host.platform', operator: 'equals', value: 'web' },
+                disabledReason: 'Disabled on web',
+            } },
+            { id: 'enabled', placementId: enabledPlacement.id, order: 30, availability: {
+                when: { fact: 'session.exists', operator: 'equals', value: true },
+            } },
+        ]);
+        const { PluginInlineSurfaceHost } = await import('@/components/plugins/surfaces');
 
-        const screen = await renderInfoScreen();
-        const mounts = screen.findAllByType('PluginInlineSurfaceHost' as never);
+        const screen = await renderInfoScreen({ publishMachineCensus: true });
+        await vi.waitFor(() => expect(screen.findAllByType(PluginInlineSurfaceHost)).toHaveLength(2));
+        const mounts = screen.findAllByType(PluginInlineSurfaceHost);
         expect(mounts).toHaveLength(2);
         const byPlacementId = new Map(mounts.map((mount) => [
             String(mount.props.placement.id),
@@ -994,7 +1114,7 @@ describe('/session/[id]/info', () => {
     });
 
     it('uses the mounted plugin runtime platform for Session-info policy facts', async () => {
-        mockSession = {
+                mockSession = {
             id: 'session-1',
             active: false,
             accessLevel: null,
@@ -1003,32 +1123,31 @@ describe('/session/[id]/info', () => {
             seq: 1,
             metadata: {},
         };
-        mockPluginUiPlatform = 'desktop';
-        mockPluginUiProjection = {
-            sessionInfoSectionsById: {
-                'sessionInfoSection:acme.preview:desktop': {
-                    id: 'sessionInfoSection:acme.preview:desktop',
-                    pluginId: 'acme.preview',
-                    descriptorId: 'desktop',
-                    order: 10,
-                    placement: { id: 'session-info-placement-desktop' },
-                    renderer: { kind: 'declarative' },
-                    resource: { pluginId: 'acme.preview', localId: 'desktop' },
-                    actions: [],
-                    availability: {
-                        when: { fact: 'host.platform', operator: 'equals', value: 'desktop' },
-                    },
-                },
-            },
-        };
+        const { createDesktopSecureStorageBoundary } = await import('@/dev/testkit/mocks/desktopSecureStorage');
+        // The real platform resolver observes the desktop shell's native bridge.
+        vi.stubGlobal('__TAURI_INTERNALS__', createDesktopSecureStorageBoundary());
+        // The desktop SDK owns a different credential port. Restore the actual
+        // Account through it before any Machine or Resource request captures it.
+        const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+        await disconnectActiveServerConnection();
+        await accountConnection?.dispose();
+        accountConnection = await restoreServerAccountForTest({ serverUrl: 'https://server-1.example',
+            serverIdentityId: sessionInfoProjectionHomeIdentity, accountId: 'viewer-account', credentials,
+            request: network.request, activation: 'switch',
+            additionalRequestOrigins: routeHomeIds.map(id => `https://${id}.example`) });
+        await serveSessionInfoPluginSections([{ id: 'desktop', placementId: 'session-info-placement-desktop', availability: {
+            when: { fact: 'host.platform', operator: 'equals', value: 'desktop' },
+        } }]);
+        const { PluginInlineSurfaceHost } = await import('@/components/plugins/surfaces');
 
-        const screen = await renderInfoScreen();
-        const mount = screen.findAllByType('PluginInlineSurfaceHost' as never)[0];
-        expect(mount?.props).toMatchObject({
+        const screen = await renderInfoScreen({ publishMachineCensus: true });
+        await vi.waitFor(() => expect(screen.findAllByType(PluginInlineSurfaceHost)).toHaveLength(1));
+        const mount = screen.findAllByType(PluginInlineSurfaceHost)[0];
+        await vi.waitFor(() => expect(screen.findAllByType(PluginInlineSurfaceHost)[0]?.props).toMatchObject({
             placement: { id: 'session-info-placement-desktop' },
             platform: 'desktop',
             policyContext: { platform: 'desktop' },
-        });
+        }));
     });
 
     it('normalizes the route id before looking up the session', async () => {
@@ -1058,7 +1177,6 @@ describe('/session/[id]/info', () => {
             seq: 1,
             metadata: {},
         };
-        resolveSessionTargetServerIdSpy.mockImplementation((_sessionId, fallbackServerId) => fallbackServerId ?? null);
 
         await renderInfoScreen();
 
@@ -1072,7 +1190,12 @@ describe('/session/[id]/info', () => {
 
     it('uses daemon merged projection titles when resolving the default session action backend label', async () => {
         mockServerId = 'server-session-info';
-        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockResolvedValue({ token: createAccountTokenForTests('viewer-account') });
+        // This title reads the addressed Home's Account catalog, not another
+        // Home's focused preferences or a fabricated catalog-hook result.
+        await accountConnection?.dispose();
+        accountConnection = await restoreServerAccountForTest({ serverUrl: 'https://server-session-info.example',
+            accountId: 'viewer-account', credentials, request: network.request, activation: 'switch',
+            additionalRequestOrigins: routeHomeIds.map(id => `https://${id}.example`) });
         // V2 projects Agent titles, not the retired backend registry. An installed
         // Agent exercises the daemon title without replacing a bundled Agent's brand.
         const agentIdentity = { pluginId: 'acme.review', localId: 'claude' };
@@ -1114,8 +1237,8 @@ describe('/session/[id]/info', () => {
             },
         };
 
-        machineContributionRegistryProjectionDescribeMock.mockResolvedValue({
-            supported: true,
+        network.respond(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE, {
+            protocolVersion: 1,
             projection: PluginProjectionV2Schema.parse({
                 v: 2,
                 generation: 1,
@@ -1133,12 +1256,15 @@ describe('/session/[id]/info', () => {
             }),
         });
 
-        const screen = await renderInfoScreen();
+        const screen = await renderInfoScreen({ publishMachineCensus: true });
         await flushHookEffects({ cycles: 10 });
-        expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledWith('machine-projection-1', expect.objectContaining({ serverId: 'server-session-info' }));
+        expect(network.requests).toContainEqual(expect.objectContaining({
+            serverUrl: 'https://server-session-info.example', targetId: 'machine-projection-1',
+            method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
+        }));
 
         const aiProviderItems = screen
-            .findAllByType('Item' as any)
+            .findAllByType(Item)
             .filter((node: any) => node.props?.title === 'sessionInfo.aiProvider');
         expect(aiProviderItems).toHaveLength(1);
         expect(aiProviderItems[0]?.props?.subtitle).toBe('Claude (daemon)');
@@ -1148,7 +1274,6 @@ describe('/session/[id]/info', () => {
         // Nothing in this session names its Agent, so the screen has no brand to
         // show. Presenting the product default would tell the user the session
         // belongs to Claude.
-        mockResolveAgentIdFromFlavor.mockReturnValue(undefined);
         mockSession = {
             id: 'session-unknown-agent',
             serverId: 'server-session-info',
@@ -1168,14 +1293,14 @@ describe('/session/[id]/info', () => {
         const screen = await renderInfoScreen();
         await flushHookEffects({ cycles: 10 });
 
-        const avatars = screen.root.findAllByProps({ testID: 'session-info-avatar' });
+        const avatars = screen.findAllByType(Avatar);
         expect(avatars.length).toBeGreaterThan(0);
         for (const avatar of avatars) {
             expect(avatar.props.flavor ?? null).toBeNull();
         }
 
         const aiProviderItems = screen
-            .findAllByType('Item' as any)
+            .findAllByType(Item)
             .filter((node: any) => node.props?.title === 'sessionInfo.aiProvider');
         expect(aiProviderItems).toHaveLength(1);
         expect(aiProviderItems[0]?.props?.subtitle).not.toBe('agentInput.agent.claude');
@@ -1193,8 +1318,13 @@ describe('/session/[id]/info', () => {
             metadata: {
                 path: '/workspace/repo',
                 sessionModelsV1: {
+                    v: 1,
+                    agentId: 'codex',
+                    updatedAt: 1,
+                    currentModelId: 'model-0',
                     availableModels: Array.from({ length: 50 }, (_, index) => ({
                         id: `model-${index}`,
+                        name: `Model ${index}`,
                         description: 'large metadata payload',
                     })),
                 },
@@ -1206,9 +1336,9 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        expect(screen.findAllByType('CodeView' as any)).toHaveLength(0);
+        expect(screen.findAllByType(CodeView)).toHaveLength(0);
 
-        const metadataRawItem = screen.findAllByType('Item' as any)
+        const metadataRawItem = screen.findAllByType(Item)
             .find((node: any) => node.props?.title === 'sessionInfo.metadata' && typeof node.props?.onPress === 'function');
         expect(metadataRawItem).toBeTruthy();
 
@@ -1216,7 +1346,7 @@ describe('/session/[id]/info', () => {
             metadataRawItem?.props.onPress();
         });
 
-        const codeViews = screen.findAllByType('CodeView' as any);
+        const codeViews = screen.findAllByType(CodeView);
         expect(codeViews).toHaveLength(1);
         expect(codeViews[0]?.props.language).toBe('json');
         expect(codeViews[0]?.props.code).toContain('"sessionModelsV1"');
@@ -1224,6 +1354,7 @@ describe('/session/[id]/info', () => {
 
     it('redacts sensitive fields from copied and expanded dev JSON', async () => {
         localDevModeEnabled = true;
+        observeCachedSessionUntilTeardown = true;
         mockSession = {
             id: 'session-1',
             active: false,
@@ -1250,15 +1381,19 @@ describe('/session/[id]/info', () => {
                 },
             },
         };
+        // The actual supported layout0 decoder preserves these untrusted root
+        // fields. They are cache input, not a new layout1 owner publication.
+        mockSession.metadata = tryParseDecryptedSessionMetadata(mockSession.metadata, 0);
+        expect(mockSession.metadata).toMatchObject({ apiKey: expect.any(String), nested: { visible: 'safe-visible-value' } });
 
         const screen = await renderInfoScreen();
-        const copyMetadataItem = screen.findAllByType('Item' as any)
+        const copyMetadataItem = screen.findAllByType(Item)
             .find((node: any) => node.props?.title === 'sessionInfo.copyMetadata');
         expect(copyMetadataItem?.props.copy).toContain('safe-visible-value');
         expect(copyMetadataItem?.props.copy).not.toContain('raw-metadata-api-key');
         expect(copyMetadataItem?.props.copy).not.toContain('raw-auth-token');
 
-        const fullSessionRawItem = screen.findAllByType('Item' as any)
+        const fullSessionRawItem = screen.findAllByType(Item)
             .find((node: any) => node.props?.title === 'sessionInfo.fullSessionObject' && typeof node.props?.onPress === 'function');
         expect(fullSessionRawItem).toBeTruthy();
 
@@ -1266,11 +1401,13 @@ describe('/session/[id]/info', () => {
             fullSessionRawItem?.props.onPress();
         });
 
-        const codeViews = screen.findAllByType('CodeView' as any);
+        const codeViews = screen.findAllByType(CodeView);
         expect(codeViews).toHaveLength(1);
         const rawCode = String(codeViews[0]?.props.code ?? '');
         expect(rawCode).toContain('safe-visible-value');
         expect(rawCode).toContain('safe-agent-value');
+        expect(rawCode).toContain('"apiKey": "[redacted]"');
+        expect(rawCode).toContain('"authorization": "[redacted]"');
         expect(rawCode).not.toContain('raw-session-data-key');
         expect(rawCode).not.toContain('raw-metadata-api-key');
         expect(rawCode).not.toContain('raw-auth-token');
@@ -1288,19 +1425,19 @@ describe('/session/[id]/info', () => {
             seq: 1,
             metadata: {
                 path: '/workspace/repo',
-                liveHeartbeat: 'initial-value',
+                name: 'initial-value',
             },
         };
 
         const screen = await renderInfoScreen();
-        const fullSessionRawItem = screen.findAllByType('Item' as any)
+        const fullSessionRawItem = screen.findAllByType(Item)
             .find((node: any) => node.props?.title === 'sessionInfo.fullSessionObject' && typeof node.props?.onPress === 'function');
         expect(fullSessionRawItem).toBeTruthy();
 
         await act(async () => {
             fullSessionRawItem?.props.onPress();
         });
-        const initialCode = String(screen.findAllByType('CodeView' as any)[0]?.props.code ?? '');
+        const initialCode = String(screen.findAllByType(CodeView)[0]?.props.code ?? '');
         expect(initialCode).toContain('initial-value');
 
         mockSession = {
@@ -1308,18 +1445,18 @@ describe('/session/[id]/info', () => {
             updatedAt: 2,
             metadata: {
                 ...mockSession.metadata,
-                liveHeartbeat: 'refreshed-value',
+                name: 'refreshed-value',
             },
         };
         const Screen = (await import('@/app/(app)/session/[id]/info')).default;
         await act(async () => { await applyInfoSessionFixture(); });
         await screen.update(<Screen />);
 
-        const refreshedCode = String(screen.findAllByType('CodeView' as any)[0]?.props.code ?? '');
+        const refreshedCode = String(screen.findAllByType(CodeView)[0]?.props.code ?? '');
         expect(refreshedCode).toBe(initialCode);
         expect(refreshedCode).not.toContain('refreshed-value');
 
-        const reopenedRawItem = screen.findAllByType('Item' as any)
+        const reopenedRawItem = screen.findAllByType(Item)
             .find((node: any) => node.props?.title === 'sessionInfo.fullSessionObject' && typeof node.props?.onPress === 'function');
         await act(async () => {
             reopenedRawItem?.props.onPress();
@@ -1328,7 +1465,7 @@ describe('/session/[id]/info', () => {
             reopenedRawItem?.props.onPress();
         });
 
-        const reopenedCode = String(screen.findAllByType('CodeView' as any)[0]?.props.code ?? '');
+        const reopenedCode = String(screen.findAllByType(CodeView)[0]?.props.code ?? '');
         expect(reopenedCode).toContain('refreshed-value');
     });
 
@@ -1352,12 +1489,13 @@ describe('/session/[id]/info', () => {
 
         try {
             const screen = await renderInfoScreen();
-            const items = screen.findAllByType('Item' as any);
+            const items = screen.findAllByType(Item);
 
             expect(items.some((node: any) =>
                 node.props?.title === 'sessionInfo.sessionStatus'
                 && node.props?.detail === 'Connected'
-            )).toBe(true);
+            ), JSON.stringify(items.filter(node => node.props.title === 'sessionInfo.sessionStatus')
+                .map(node => ({ title: node.props.title, detail: node.props.detail })))).toBe(true);
             expect(items.some((node: any) => node.props?.title === 'sessionInfo.thinking')).toBe(false);
         } finally {
             (globalThis as { __DEV__?: boolean }).__DEV__ = previousDevFlag;
@@ -1407,7 +1545,7 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        const handoffItems = screen.findAllByType('Item' as any).filter((node: any) => node.props?.title === 'Hand off session');
+        const handoffItems = screen.findAllByType(Item).filter((node: any) => node.props?.title === 'Hand off session');
         expect(handoffItems).toHaveLength(0);
     });
 
@@ -1455,11 +1593,13 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        const handoffItems = screen.findAllByType('Item' as any).filter((node: any) => node.props?.title === 'Hand off session');
+        const handoffItems = screen.findAllByType(Item).filter((node: any) => node.props?.title === 'Hand off session');
         expect(handoffItems).toHaveLength(0);
     });
 
     it('shows manual mark-unread in quick actions for read sessions and uses scoped server mutations', async () => {
+        // The suite already owns this exact restored Home/Account. A second
+        // restoration would compete for its physical connection and cleanup.
         mockSession = {
             id: 'session-read-state',
             active: false,
@@ -1474,21 +1614,21 @@ describe('/session/[id]/info', () => {
                 flavor: 'claude',
             },
         };
-        resolveServerIdForSessionIdFromLocalCacheSpy.mockReturnValue('server-cached');
+        cachedSessionServerId = 'server-cached';
 
         const screen = await renderInfoScreen();
         const item = screen.findByProps({ testID: 'session-info-mark-unread' });
         expect(item).toBeTruthy();
 
         await act(async () => {
-            item.props.onPress();
+            await item.props.onPress();
         });
+        await settleSessionAction(SESSION_ACTION_MARK_UNREAD_ID);
 
-        expect(sessionSetManualReadStateSpy).toHaveBeenCalledWith(
-            'session-read-state',
-            'unread',
-            { serverId: 'server-1' },
-        );
+        expect(httpMutations).toContainEqual(expect.objectContaining({
+            serverUrl: 'https://server-1.example', method: 'POST',
+            path: '/v2/sessions/session-read-state/read-state', body: { state: 'unread' },
+        }));
     });
 
     it('hides manual read-state quick actions for archived sessions', async () => {
@@ -1552,29 +1692,22 @@ describe('/session/[id]/info', () => {
             metadata: {},
         };
 
-        await withPopoverWebGlobals(async () => {
-            const screen = await renderInfoScreen();
+        const screen = await renderInfoScreen();
 
         await screen.pressByTestIdAsync('session-info-session-pin');
-        expect(setSessionPinSpy).toHaveBeenCalledWith(expect.objectContaining({
-            credentials: { token: 'token' },
-            serverUrl: 'https://server-b.example.test',
-            sessionId: 'session-1',
-            request: expect.objectContaining({ pinned: true }),
-        }));
+        expect(requestsFor('/v2/session-organization/pins/session-1')).toEqual([expect.objectContaining({
+            serverUrl: 'https://server-b.example', method: 'PUT',
+            body: expect.objectContaining({ pinned: true }),
+        })]);
 
         await screen.pressByTestIdAsync('session-info-session-tags-edit');
         await act(async () => {
             await new Promise((resolve) => setTimeout(resolve, 0));
         });
         await screen.pressByTestIdAsync('session-tags-menu-item:fixture-tag-1');
-        expect(setSessionTagAssignmentsSpy).toHaveBeenCalledWith(expect.objectContaining({
-            credentials: { token: 'token' },
-            serverUrl: 'https://server-b.example.test',
-            sessionId: 'session-1',
-            request: { tagIds: [] },
-        }));
-        });
+        expect(requestsFor('/v2/session-organization/tag-assignments/session-1')).toEqual([expect.objectContaining({
+            serverUrl: 'https://server-b.example', method: 'PUT', body: { tagIds: [] },
+        })]);
     });
 
     it('surfaces the existing info-screen error when organization mutation scope is unavailable', async () => {
@@ -1592,43 +1725,29 @@ describe('/session/[id]/info', () => {
             archivedAt: null,
             metadata: {},
         };
-        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockResolvedValue(null);
+        await TokenStorage.removeCredentialsForServerUrl('https://server-b.example', { serverId: 'server-b' });
 
         const screen = await renderInfoScreen();
 
-        await expect(
-            screen.pressByTestIdAsync('session-info-session-pin'),
-        ).rejects.toThrow('server-b');
-        expect(setSessionPinSpy).not.toHaveBeenCalled();
+        await screen.pressByTestIdAsync('session-info-session-pin');
+        await act(async () => { await vi.waitFor(() => expect(modalAlertSpy).toHaveBeenCalledWith(
+            'common.error', 'errors.unknownError', [{ text: 'common.ok', style: 'cancel' }],
+        )); });
+        expect(requestsFor('/v2/session-organization/pins/session-1')).toEqual([]);
     });
 
     it.each(['select', 'cancel'] as const)('surfaces move-to-folder from the session view when folder targets match the session workspace (%s)', async (choice) => {
-        await loadSyncSingletonForTests();
-        const credentials = { token: createAccountTokenForTests('viewer-account') };
-        const account = await restoreServerAccountForTest({
-            serverUrl: 'https://server.example.test',
-            credentials,
-            request: async (url) => {
-                const path = new URL(String(url)).pathname;
-                if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
-                if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
-                if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
-                if (path === '/v1/account/profile') return Response.json({ ...profileDefaults, id: 'viewer-account' });
-                if (path === AUTHORING_MEMORY_ROUTE_V1) return Response.json({ rows: [] });
-                if (path === '/v1/artifacts') return Response.json([]);
-                return Response.json({});
-            },
-        });
-        try {
             mockServerId = 'server-1';
             sessionFoldersFeatureEnabled = true;
+            await restoreInfoAccountIfNeeded();
+            if (!accountConnection) throw new Error('Expected the folder workspace Home to be restored');
             organizationFolders = {
                 v: 1,
                 folders: [{
                     id: 'folder-1',
                     workspace: {
                         t: 'workspaceScope',
-                        serverId: 'server-1',
+                        serverId: accountConnection.serverId,
                         machineId: 'machine-1',
                         rootPath: '/repo',
                     },
@@ -1638,6 +1757,7 @@ describe('/session/[id]/info', () => {
                     updatedAt: 1,
                 }],
             };
+            organizationFolderAssignments = { 'session-1': 'folder-existing' };
             mockSession = {
                 id: 'session-1',
                 active: false,
@@ -1671,35 +1791,53 @@ describe('/session/[id]/info', () => {
             });
 
             const { getStorage } = await import('@/sync/domains/state/storageStore');
-            getStorage().getState().applySessionFolderAssignments('server-1', [{ sessionId: 'session-1', folderId: 'folder-existing' }]);
+            const { buildSessionOrganizationServerKey } = await import('@/sync/domains/session/organization');
+            const { createSessionRouteServerScope } = await import('@/hooks/session/sessionRouteServerScope');
             const screen = await renderInfoScreen();
             try {
-                expect(folderFeatureScopes).toContainEqual({ scopeKind: 'spawn', serverId: 'server-1' });
+                const addressedHomeId = createSessionRouteServerScope({ id: 'session-1', serverId: mockServerId }).serverId;
+                expect(addressedHomeId).toBe(accountConnection.serverId);
+                if (!addressedHomeId) throw new Error('Expected the folder selection to address its restored Home');
+                await waitForHeaderMenuOutcome(() => {
+                    const state = getStorage().getState();
+                    const session = state.sessions['session-1'];
+                    const folder = state.sessionOrganizationFoldersByFolderKey[
+                        buildSessionOrganizationServerKey(addressedHomeId, 'folder-1')
+                    ];
+                    expect(folder?.display).toMatchObject({ t: 'plain', v: { workspace: {
+                        t: 'workspaceScope', serverId: addressedHomeId,
+                        machineId: session?.metadata?.machineId, rootPath: session?.metadata?.path,
+                    } } });
+                });
+                expect(network.httpRequests).toContainEqual(expect.objectContaining({
+                    url: 'https://server-1.example/v1/features',
+                }));
                 await screen.pressByTestIdAsync('session-info-session-move-to-folder');
+                await waitForHeaderMenuOutcome(() => {
+                    expect(modalShowSpy).toHaveBeenCalledOnce();
+                    expect(modalAlertSpy).not.toHaveBeenCalled();
+                });
+                if (choice === 'select') await settleSessionAction(SESSION_ACTION_MOVE_TO_FOLDER_ID);
 
-                const assignment = getStorage().getState().sessionOrganizationFolderAssignmentsBySessionKey[
-                    sessionAddressKey({ serverId: 'server-1', sessionId: 'session-1' })
-                ];
-                if (choice === 'select') {
-                    expect(setSessionFolderAssignmentSpy).toHaveBeenCalledWith(expect.objectContaining({
-                        credentials,
-                        serverUrl: 'https://server.example.test',
-                        sessionId: 'session-1',
-                        request: { folderId: 'folder-1' },
-                    }));
-                    expect(assignment).toEqual({ sessionId: 'session-1', folderId: 'folder-1' });
-                    expect(TokenStorage.getCredentialsForServerUrl).toHaveBeenCalledWith('https://server.example.test', { serverId: 'server-1' });
-                } else {
-                    expect(setSessionFolderAssignmentSpy).not.toHaveBeenCalled();
-                    expect(assignment).toEqual({ sessionId: 'session-1', folderId: 'folder-existing' });
-                }
-                expect(getStorage().getState().sessionOrganizationOptimisticRecords).toEqual({});
+                await vi.waitFor(() => {
+                    const assignment = getStorage().getState().sessionOrganizationFolderAssignmentsBySessionKey[
+                        sessionAddressKey({ serverId: addressedHomeId, sessionId: 'session-1' })
+                    ];
+                    if (choice === 'select') {
+                        expect(requestsFor('/v2/session-organization/folder-assignments/session-1')).toEqual([
+                            expect.objectContaining({ serverUrl: 'https://server-1.example', method: 'PUT', body: { folderId: 'folder-1' } }),
+                        ]);
+                        expect(assignment).toEqual({ sessionId: 'session-1', folderId: 'folder-1' });
+                        expect(network.credentialRequests).toContainEqual({ serverUrl: 'https://server-1.example', serverId: 'server-1' });
+                    } else {
+                        expect(requestsFor('/v2/session-organization/folder-assignments/session-1')).toEqual([]);
+                        expect(assignment).toEqual({ sessionId: 'session-1', folderId: 'folder-existing' });
+                    }
+                    expect(getStorage().getState().sessionOrganizationOptimisticRecords).toEqual({});
+                });
             } finally {
                 await screen.unmount();
             }
-        } finally {
-            await account.dispose();
-        }
     });
 
     it('shows the handoff quick action when server-routed transfer is the only transport the selected server advertises', async () => {
@@ -1745,18 +1883,17 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        const handoffItems = screen.findAllByType('Item' as any).filter((node: any) => node.props?.title === 'Hand off session');
+        const handoffItems = screen.findAllByType(Item).filter((node: any) => node.props?.title === 'Hand off session');
         expect(handoffItems).toHaveLength(1);
     });
 
     it('reacts when machine-rpc direct-peer viability becomes available for the reachable machine target after metadata goes stale', async () => {
         sessionHandoffFeatureEnabled = true;
         resolvedServerId = 'server_reactive_info';
-        resolveSessionTargetServerIdSpy.mockReturnValue('server_reactive_info');
-        readMachineTargetForSessionSpy.mockReturnValue({
+        machineTargetFixture = {
             machineId: 'machine_rebound',
             basePath: '/workspace/repo',
-        });
+        };
         serverFeaturesSnapshot = {
             status: 'ready',
             features: {
@@ -1798,7 +1935,7 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        let handoffItems = screen.findAllByType('Item' as any).filter((node: any) => node.props?.title === 'Hand off session');
+        let handoffItems = screen.findAllByType(Item).filter((node: any) => node.props?.title === 'Hand off session');
         expect(handoffItems).toHaveLength(0);
 
         const { recordCachedMachineRpcDirectRouteViable } = await import('@/sync/domains/transfers/runtime/transferRouteCache');
@@ -1810,15 +1947,14 @@ describe('/session/[id]/info', () => {
         });
         await flushHookEffects({ cycles: 10 });
 
-        handoffItems = screen.findAllByType('Item' as any).filter((node: any) => node.props?.title === 'Hand off session');
+        handoffItems = screen.findAllByType(Item).filter((node: any) => node.props?.title === 'Hand off session');
         expect(handoffItems).toHaveLength(1);
     });
 
     it('falls back to the canonical target server when the local server cache misses and still surfaces handoff after a scoped reachability probe succeeds', async () => {
         sessionHandoffFeatureEnabled = true;
         resolvedServerId = 'server_preferred_info';
-        resolveSessionTargetServerIdSpy.mockReturnValue('server_preferred_info');
-        machineRpcWithServerScopeSpy.mockResolvedValue({ ok: true });
+        network.respond(RPC_METHODS.CAPABILITIES_DESCRIBE, {});
         serverFeaturesSnapshot = {
             status: 'ready',
             features: {
@@ -1862,39 +1998,16 @@ describe('/session/[id]/info', () => {
         const screen = await renderInfoScreen();
         await flushHookEffects({ cycles: 10 });
 
-        const handoffItems = screen.findAllByType('Item' as any).filter((node: any) => node.props?.title === 'Hand off session');
+        const handoffItems = screen.findAllByType(Item).filter((node: any) => node.props?.title === 'Hand off session');
         expect(handoffItems).toHaveLength(1);
     });
 
     it('shows the configured ACP backend title in AI provider metadata when a concrete backend target is stored on the session', async () => {
-        mockResolveAgentIdFromFlavor.mockReturnValue('customAcp');
-        mockAgentCore = {
-            resume: {},
-            displayNameKey: 'agents.customAcp.displayName',
-            ui: { agentPickerIconName: 'code-slash-outline' },
-        };
-        acpCatalogSettingsV1 = {
-            v: 2,
-            backends: [{
-                id: 'qa-acp-stub',
-                name: 'qa-acp-stub',
-                title: 'QA ACP Stub Backend',
-                launch: { kind: 'command' as const, command: 'qa-acp-stub', args: [] },
-                env: {},
-                auth: { support: 'unsupported' },
-                capabilities: {
-                    supportsLoadSession: false,
-                    supportsModes: 'unknown',
-                    supportsModels: 'unknown',
-                    supportsConfigOptions: 'unknown',
-                    promptImageSupport: 'unknown',
-                },
-                createdAt: 1,
-                updatedAt: 1,
-            }],
-        };
+        observeCachedSessionUntilTeardown = true;
+        const { buildAcpConfiguredBackendV1 } = await import('@happier-dev/protocol/sessions/metadata/acpConfiguredBackendV1');
+        const { resolveBackendTargetKeyV2 } = await import('@/agents/backendCatalog/backendTargetKeyV2');
         backendEnabledByTargetKey = {
-            'acpBackend:qa-acp-stub': false,
+            [resolveBackendTargetKeyV2({ kind: 'backend', backendId: 'qa-acp-stub', configuredBackendId: 'qa-acp-stub' })]: false,
         };
         mockSession = {
             id: 'session-1234567890abcdef',
@@ -1904,33 +2017,30 @@ describe('/session/[id]/info', () => {
             updatedAt: Date.now(),
             seq: 1,
             metadata: {
-                flavor: 'customAcp',
-                agent: 'customAcp',
-                acpConfiguredBackendV1: {
-                    v: 1,
+                flavor: 'custom-acp',
+                agent: 'custom-acp',
+                acpConfiguredBackendV1: buildAcpConfiguredBackendV1({
                     updatedAt: 1,
                     backendId: 'qa-acp-stub',
                     title: 'QA ACP Stub Backend',
-                },
+                }),
             },
         };
+        // The configured-ACP compatibility reader still inspects the legacy
+        // `agent` spelling without turning it into a current Agent identity.
+        mockSession.metadata = tryParseDecryptedSessionMetadata(mockSession.metadata, 0);
+        expect(mockSession.metadata).toMatchObject({ acpConfiguredBackendV1: { backendId: 'qa-acp-stub' } });
 
         const screen = await renderInfoScreen();
-        const providerItem = screen.findByTestId('sessionInfo.aiProvider');
+        const providerItem = screen.findAllByType(Item).find(node => node.props.title === 'sessionInfo.aiProvider');
         expect(providerItem?.props.subtitle).toBe('QA ACP Stub Backend');
     });
 
     it('shows the provider resume surfaces from the current runtime and native resume identities', async () => {
-        mockResolveAgentIdFromFlavor.mockReturnValue('opencode');
-        mockAgentCore = {
-            resume: {
-                vendorResumeIdField: 'opencodeSessionId',
-                uiVendorResumeIdLabelKey: 'sessionInfo.openCodeSessionId',
-                uiVendorResumeIdCopiedKey: 'sessionInfo.openCodeSessionIdCopied',
-            },
-            displayNameKey: 'agents.opencode.displayName',
-            ui: { agentPickerIconName: 'code-slash-outline' },
-        };
+        const { RuntimeDescriptorV1Schema, writeRuntimeDescriptorV1ForPersistence } = await import(
+            '@happier-dev/protocol/sessions/metadata/runtimeDescriptorV1'
+        );
+        const { AgentNativeResumeIdentityV1Schema } = await import('@happier-dev/protocol/agents/nativeResumeIdentityV1');
         mockSession = {
             id: 'session-1234567890abcdef',
             active: false,
@@ -1940,30 +2050,33 @@ describe('/session/[id]/info', () => {
             seq: 1,
             metadata: {
                 flavor: 'opencode',
-                runtimeDescriptorV1: {
+                runtimeDescriptorV1: writeRuntimeDescriptorV1ForPersistence(RuntimeDescriptorV1Schema.parse({
                     v: 1,
                     agentId: 'opencode',
                     agent: { backendMode: 'server' },
-                },
-                nativeResumeIdentityV1: { v: 1, vendorResumeId: 'runtime-session-1234567890' },
+                })),
+                nativeResumeIdentityV1: AgentNativeResumeIdentityV1Schema.parse({
+                    v: 1, vendorResumeId: 'runtime-session-1234567890',
+                }),
             },
         };
 
         const screen = await renderInfoScreen();
-        expect(screen.findByTestId('sessionInfo.openCodeSessionId')).toBeTruthy();
-        expect(screen.findByTestId('sessionInfo.copyResumeCommand')).toBeTruthy();
+        const resumeIdentity = screen.findAllByType(Item).find(node => node.props.title === 'sessionInfo.opencodeSessionId');
+        expect(resumeIdentity?.props.copy).toBe('runtime-session-1234567890');
+        const resumeCommand = screen.findAllByType(Item).find(node => node.props.title === 'sessionInfo.copyResumeCommand');
+        expect(resumeCommand).toBeTruthy();
+        expect(resumeCommand?.props.copy).toEqual(expect.any(String));
+        expect(resumeCommand?.props.copy).not.toBe('');
+        expect(resumeCommand?.props.copy).toBe(resumeCommand?.props.subtitle);
     });
 
     it('infers the provider from the current runtime descriptor when flavor is missing', async () => {
-        mockAgentCore = {
-            resume: {
-                vendorResumeIdField: 'opencodeSessionId',
-                uiVendorResumeIdLabelKey: 'sessionInfo.openCodeSessionId',
-                uiVendorResumeIdCopiedKey: 'sessionInfo.openCodeSessionIdCopied',
-            },
-            displayNameKey: 'agents.opencode.displayName',
-            ui: { agentPickerIconName: 'code-slash-outline' },
-        };
+        const { RuntimeDescriptorV1Schema, writeRuntimeDescriptorV1ForPersistence } = await import(
+            '@happier-dev/protocol/sessions/metadata/runtimeDescriptorV1'
+        );
+        const { AgentNativeResumeIdentityV1Schema } = await import('@happier-dev/protocol/agents/nativeResumeIdentityV1');
+        const { Avatar } = await import('@/components/ui/avatar/Avatar');
         mockSession = {
             id: 'session-1234567890abcdef',
             active: false,
@@ -1972,29 +2085,29 @@ describe('/session/[id]/info', () => {
             updatedAt: Date.now(),
             seq: 1,
             metadata: {
-                runtimeDescriptorV1: {
+                runtimeDescriptorV1: writeRuntimeDescriptorV1ForPersistence(RuntimeDescriptorV1Schema.parse({
                     v: 1,
                     agentId: 'opencode',
                     agent: { backendMode: 'server' },
-                },
-                nativeResumeIdentityV1: { v: 1, vendorResumeId: 'runtime-session-1234567890' },
+                })),
+                nativeResumeIdentityV1: AgentNativeResumeIdentityV1Schema.parse({
+                    v: 1, vendorResumeId: 'runtime-session-1234567890',
+                }),
             },
         };
 
         const screen = await renderInfoScreen();
-        expect(screen.findByTestId('sessionInfo.openCodeSessionId')).toBeTruthy();
-        const avatar = screen.findByTestId('session-info-avatar');
-        if (!avatar) {
-            throw new Error('expected session info avatar');
-        }
+        const resumeIdentity = screen.findAllByType(Item).find(node => node.props.title === 'sessionInfo.opencodeSessionId');
+        expect(resumeIdentity?.props.copy).toBe('runtime-session-1234567890');
+        const avatar = screen.findByType(Avatar);
         expect(avatar.props.flavor).toBe('opencode');
     });
 
     it('routes View Machine to the reachable machine target when session metadata is stale after handoff', async () => {
-        readMachineTargetForSessionSpy.mockReturnValue({
+        machineTargetFixture = {
             machineId: 'machine-target',
             basePath: '/workspace/repo',
-        });
+        };
         mockSession = {
             id: 'session-1',
             active: true,
@@ -2010,24 +2123,24 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        const viewMachineItem = screen.findByTestId('sessionInfo.viewMachine');
+        const viewMachineItem = screen.findAllByType(Item).find(node => node.props.title === 'sessionInfo.viewMachine');
         expect(viewMachineItem).toBeTruthy();
         expect(viewMachineItem?.props.subtitleAccessory).toBeTruthy();
         expect(viewMachineItem?.props.subtitleAccessory?.props.testID).toBe('sessionInfo.viewMachineTargetMachineId');
         expect(viewMachineItem?.props.subtitleAccessory?.props.children).toBe('machine-target');
-        expect(screen.findByTestId('sessionInfo.path')).toBeTruthy();
+        expect(screen.findAllByType(Item).find(node => node.props.title === 'sessionInfo.path')).toBeTruthy();
 
-        screen.pressByTestId('sessionInfo.viewMachine');
+        pressTestInstance(viewMachineItem);
 
         expect(routerPushSpy).toHaveBeenCalledWith('/machines/machine-target?serverId=server-1');
     });
 
     it('opens a new session seeded from the current session configuration', async () => {
-        mockResolveAgentIdFromFlavor.mockReturnValue('codex');
-        readMachineTargetForSessionSpy.mockReturnValue({
+        observeCachedSessionUntilTeardown = true;
+        machineTargetFixture = {
             machineId: 'machine-target',
             basePath: '/workspace/repo',
-        });
+        };
         mockSession = {
             id: 'session-1',
             active: false,
@@ -2065,6 +2178,11 @@ describe('/session/[id]/info', () => {
             modelMode: 'gpt-5',
             modelModeUpdatedAt: 102,
         };
+        // This consumer still reads the supported layout0 transcript-storage
+        // carrier; do not reinterpret it as a new layout1 owner publication.
+        mockSession.metadata = tryParseDecryptedSessionMetadata(mockSession.metadata, 0);
+        expect(mockSession.metadata).toMatchObject({ transcriptStorage: 'direct',
+            backendTarget: { kind: 'backend', backendId: 'codex' } });
 
         const screen = await renderInfoScreen();
         screen.pressByTestId('session-info-new-session-same-setup');
@@ -2122,7 +2240,7 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        expect(screen.findByTestId('sessionInfo.viewSessionLogTitle')).toBeTruthy();
+        expect(screen.findAllByType(Item).find(node => node.props.title === 'sessionInfo.viewSessionLogTitle')).toBeTruthy();
     });
 
     it('shows the session log path row when a sessionLogPath is present even when developer mode is disabled', async () => {
@@ -2139,18 +2257,12 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        expect(screen.findByTestId('sessionLog.logPathCopyLabel')).toBeTruthy();
+        expect(screen.findAllByType(Item).find(node => node.props.title === 'sessionLog.logPathCopyLabel')).toBeTruthy();
     });
 
     it('copies developer debug information and omits unknown provider artifact lines', async () => {
         const Clipboard = await import('expo-clipboard');
         localDevModeEnabled = true;
-        mockAgentCore = {
-            displayNameKey: 'agentInput.agent.codex',
-            resume: { vendorResumeIdField: 'codexSessionId' },
-            permissions: { modeGroup: 'codexLike' },
-            ui: { agentPickerIconName: 'code-slash-outline' },
-        };
         mockSession = {
             id: 'session-1',
             active: false,
@@ -2173,7 +2285,7 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        const copyDebugRow = screen.findByTestId('session-info-copy-debug-information');
+        const copyDebugRow = screen.findAllByType(Item).find(node => node.props.testID === 'session-info-copy-debug-information');
         expect(copyDebugRow?.props.copy).toBe([
             'Happier session ID: session-1',
             'agentInput.agent.codex session ID: codex-session-1',
@@ -2185,12 +2297,6 @@ describe('/session/[id]/info', () => {
     it('shows and copies provider session logs when a provider artifact path is known', async () => {
         const Clipboard = await import('expo-clipboard');
         localDevModeEnabled = true;
-        mockAgentCore = {
-            displayNameKey: 'agentInput.agent.claude',
-            resume: { vendorResumeIdField: 'claudeSessionId' },
-            permissions: { modeGroup: 'codexLike' },
-            ui: { agentPickerIconName: 'code-slash-outline' },
-        };
         mockSession = {
             id: 'session-1',
             active: false,
@@ -2208,7 +2314,7 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        const providerLogsRow = screen.findByTestId('sessionInfo.providerSessionLogs');
+        const providerLogsRow = screen.findAllByType(Item).find(node => node.props.title === 'sessionInfo.providerSessionLogs');
         expect(providerLogsRow?.props.copy).toBe('/tmp/claude/session.jsonl');
         expect(Clipboard.setStringAsync).not.toHaveBeenCalled();
     });
@@ -2229,21 +2335,15 @@ describe('/session/[id]/info', () => {
 
         const screen = await renderInfoScreen();
         await screen.pressByTestIdAsync('sessionInfo.stopSession');
+        await act(async () => { await vi.waitFor(() => expectSessionStoppedAt('server-b')); });
 
-        expect(modalConfirmSpy).toHaveBeenCalledWith(
-            'sessionInfo.stopSession',
-            'sessionInfo.stopSessionConfirm',
-            {
-                cancelText: 'common.cancel',
-                confirmText: 'sessionInfo.stopSession',
-                destructive: true,
-            },
-        );
+        // Stop is catalogued as approval:none; it must not prompt to archive.
+        expect(modalConfirmSpy).not.toHaveBeenCalled();
         expect(modalAlertSpy).not.toHaveBeenCalled();
 
-        expect(sessionStopSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
-        expect(sessionArchiveSpy).not.toHaveBeenCalled();
-        expect(routerBackSpy).not.toHaveBeenCalled();
+        expectSessionStoppedAt('server-b');
+        expect(requestsFor('/v2/sessions/session-1/archive')).toEqual([]);
+        expect(routerBackSpy).toHaveBeenCalledTimes(2);
         expect(safeRouterBackSpy).toHaveBeenCalledTimes(2);
         expect(safeRouterBackSpy).toHaveBeenNthCalledWith(1, {
             router: expect.any(Object),
@@ -2255,15 +2355,9 @@ describe('/session/[id]/info', () => {
         });
     });
 
-    it('stops and retries archiving when an inactive session is still active server-side', async () => {
+    it('stops and retries archiving in place when an inactive session is still active server-side', async () => {
         mockServerId = 'server-b';
-        sessionArchiveSpy
-            .mockResolvedValueOnce({
-                success: false,
-                message: 'Cannot archive an active session',
-                code: 'session_active',
-            })
-            .mockResolvedValueOnce({ success: true, archivedAt: 1 });
+        archiveStatuses = [409, 200];
         mockSession = {
             id: 'session-1',
             active: false,
@@ -2271,17 +2365,18 @@ describe('/session/[id]/info', () => {
             createdAt: Date.now(),
             updatedAt: Date.now(),
             seq: 1,
-            metadata: {},
+            metadata: { path: '/workspace' },
             archivedAt: null,
         };
 
         const screen = await renderInfoScreen();
         await screen.pressByTestIdAsync('sessionInfo.archiveSession');
+        await act(async () => { await vi.waitFor(() => expect(requestsFor('/v2/sessions/session-1/archive')).toHaveLength(2)); });
 
         expect(modalAlertSpy).not.toHaveBeenCalled();
-        expect(sessionArchiveSpy).toHaveBeenCalledTimes(2);
-        expect(sessionStopSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
-        expect(safeRouterBackSpy).toHaveBeenCalledTimes(2);
+        expect(requestsFor('/v2/sessions/session-1/archive')).toHaveLength(2);
+        expectSessionStoppedAt('server-b');
+        expect(safeRouterBackSpy).not.toHaveBeenCalled();
     });
 
     it('stops with the cached owning server id when route scope and preferred scope are unavailable', async () => {
@@ -2289,8 +2384,7 @@ describe('/session/[id]/info', () => {
         hideInactiveSessions = true;
         organizationPinnedSessionKeys = [];
         resolvedServerId = 'server-cache-info';
-        resolveSessionTargetServerIdSpy.mockReturnValue(null);
-        resolveServerIdForSessionIdFromLocalCacheSpy.mockReturnValue('server-cache-info');
+        cachedSessionServerId = 'server-cache-info';
         mockSession = {
             id: 'session-1',
             active: true,
@@ -2303,9 +2397,10 @@ describe('/session/[id]/info', () => {
 
         const screen = await renderInfoScreen();
         await screen.pressByTestIdAsync('sessionInfo.stopSession');
+        await act(async () => { await vi.waitFor(() => expectSessionStoppedAt('server-cache-info')); });
 
-        expect(modalConfirmSpy).toHaveBeenCalledTimes(1);
-        expect(sessionStopSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-cache-info' });
+        expect(modalConfirmSpy).not.toHaveBeenCalled();
+        expectSessionStoppedAt('server-cache-info');
     });
 
     it('uses the explicit route Home for actions instead of a bare same-id cache', async () => {
@@ -2313,7 +2408,7 @@ describe('/session/[id]/info', () => {
         hideInactiveSessions = true;
         organizationPinnedSessionKeys = [];
         resolvedServerId = 'server-preferred';
-        resolveServerIdForSessionIdFromLocalCacheSpy.mockReturnValue('server-a');
+        cachedSessionServerId = 'server-a';
         mockSession = {
             id: 'session-1',
             serverId: 'server-b',
@@ -2327,9 +2422,10 @@ describe('/session/[id]/info', () => {
 
         const screen = await renderInfoScreen();
         await screen.pressByTestIdAsync('sessionInfo.stopSession');
+        await act(async () => { await vi.waitFor(() => expectSessionStoppedAt('server-b')); });
 
-        expect(modalConfirmSpy).toHaveBeenCalledTimes(1);
-        expect(sessionStopSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
+        expect(modalConfirmSpy).not.toHaveBeenCalled();
+        expectSessionStoppedAt('server-b');
         expect(resolveServerIdForSessionIdFromLocalCacheSpy).not.toHaveBeenCalled();
     });
 
@@ -2401,12 +2497,13 @@ describe('/session/[id]/info', () => {
 
         const screen = await renderInfoScreen();
         await screen.pressByTestIdAsync('sessionInfo.stopSession');
+        await act(async () => { await vi.waitFor(() => expectSessionStoppedAt('server-b')); });
 
-        expect(modalConfirmSpy).toHaveBeenCalledTimes(1);
+        expect(modalConfirmSpy).not.toHaveBeenCalled();
 
-        expect(sessionStopSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
-        expect(sessionArchiveSpy).not.toHaveBeenCalled();
-        expect(routerBackSpy).not.toHaveBeenCalled();
+        expectSessionStoppedAt('server-b');
+        expect(requestsFor('/v2/sessions/session-1/archive')).toEqual([]);
+        expect(routerBackSpy).toHaveBeenCalledTimes(2);
         expect(safeRouterBackSpy).toHaveBeenCalledTimes(2);
         expect(safeRouterBackSpy).toHaveBeenNthCalledWith(1, {
             router: expect.any(Object),
@@ -2418,7 +2515,7 @@ describe('/session/[id]/info', () => {
         });
     });
 
-    it('archives an inactive session and exits via the safe back helper', async () => {
+    it('archives an inactive session in place so Delete remains reachable', async () => {
         mockServerId = 'server-b';
         mockSession = {
             id: 'session-1',
@@ -2427,12 +2524,13 @@ describe('/session/[id]/info', () => {
             createdAt: Date.now(),
             updatedAt: Date.now(),
             seq: 1,
-            metadata: {},
+            metadata: { path: '/workspace' },
             archivedAt: null,
         };
 
         const screen = await renderInfoScreen();
         await screen.pressByTestIdAsync('sessionInfo.archiveSession');
+        await act(async () => { await vi.waitFor(() => expect(requestsFor('/v2/sessions/session-1/archive')).toHaveLength(1)); });
 
         expect(modalConfirmSpy).toHaveBeenCalledWith(
             'sessionInfo.archiveSession',
@@ -2445,42 +2543,35 @@ describe('/session/[id]/info', () => {
         );
         expect(modalAlertSpy).not.toHaveBeenCalled();
 
-        expect(sessionArchiveSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
+        expect(requestsFor('/v2/sessions/session-1/archive')).toEqual([
+            expect.objectContaining({ serverUrl: 'https://server-b.example', method: 'POST' }),
+        ]);
         expect(routerBackSpy).not.toHaveBeenCalled();
-        expect(safeRouterBackSpy).toHaveBeenCalledTimes(2);
-        expect(safeRouterBackSpy).toHaveBeenNthCalledWith(1, {
-            router: expect.any(Object),
-            fallbackHref: '/session/session-1?serverId=server-b',
-        });
-        expect(safeRouterBackSpy).toHaveBeenNthCalledWith(2, {
-            router: expect.any(Object),
-            fallbackHref: '/',
-        });
+        expect(safeRouterBackSpy).not.toHaveBeenCalled();
     });
 
     it('deletes a session and exits via the safe back helper', async () => {
         mockServerId = 'server-b';
         sessionIsConnected = false;
-        mockSession = {
+        mockSession = createSessionFixture({
             id: 'session-1',
+            serverId: 'server-b',
             active: false,
-            accessLevel: null,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-            seq: 1,
-            metadata: {
-                terminalControlServiceabilityV1: {
-                    v: 1,
-                    state: 'unknown',
-                    observedAt: Date.now(),
-                    retired: true,
-                },
-            },
-            archivedAt: null,
-        };
+            archivedAt: 5,
+            access: createSessionAccessFixture('owner', { deleteSession: true }),
+            encryptionMode: 'e2ee',
+            encryptedContentAvailability: 'encrypted_content_unavailable',
+            metadata: null,
+            ownerMetadataView: null,
+            agentState: null,
+        });
 
         const screen = await renderInfoScreen();
-        await screen.pressByTestIdAsync('sessionInfo.deleteSession');
+        screen.pressByTestId('sessionInfo.deleteSession');
+
+        await act(async () => {
+            await vi.waitFor(() => expect(requestsFor('/v1/sessions/session-1').filter(request => request.method === 'DELETE')).toHaveLength(1));
+        });
 
         expect(modalConfirmSpy).toHaveBeenCalledWith(
             'sessionInfo.deleteSession',
@@ -2493,8 +2584,10 @@ describe('/session/[id]/info', () => {
         );
         expect(modalAlertSpy).not.toHaveBeenCalled();
 
-        expect(sessionDeleteSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
-        expect(routerBackSpy).not.toHaveBeenCalled();
+        expect(requestsFor('/v1/sessions/session-1')).toContainEqual(expect.objectContaining({
+            serverUrl: 'https://server-b.example', method: 'DELETE',
+        }));
+        expect(routerBackSpy).toHaveBeenCalledTimes(2);
         expect(safeRouterBackSpy).toHaveBeenCalledTimes(2);
         expect(safeRouterBackSpy).toHaveBeenNthCalledWith(1, {
             router: expect.any(Object),
@@ -2515,21 +2608,29 @@ describe('/session/[id]/info', () => {
             createdAt: Date.now(),
             updatedAt: Date.now(),
             seq: 1,
-            metadata: {},
+            metadata: { path: '/workspace' },
         };
 
         const screen = await renderInfoScreen();
         await screen.pressByTestIdAsync('sessionInfo.archiveSession');
+        await act(async () => { await vi.waitFor(() => expect(requestsFor('/v2/sessions/session-1/archive')).toHaveLength(1)); });
 
         expect(modalConfirmSpy).toHaveBeenCalledTimes(1);
 
-        expect(sessionStopSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
-        expect(sessionArchiveSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
-        expect(safeRouterBackSpy).toHaveBeenCalledTimes(2);
+        expectSessionStoppedAt('server-b');
+        expect(requestsFor('/v2/sessions/session-1/archive')).toEqual([
+            expect.objectContaining({ serverUrl: 'https://server-b.example', method: 'POST' }),
+        ]);
+        expect(safeRouterBackSpy).not.toHaveBeenCalled();
     });
 
     it('shows loading on the stop and archive buttons while their mutations are running', async () => {
-        useHappyActionMock.mockImplementation((fn: any) => [true, fn] as const);
+                const { createDeferred } = await import('@/dev/testkit');
+        const { waitForHomeGovernance } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+        const { RPC_ERROR_CODES } = await import('@happier-dev/protocol/rpc');
+        const stopGate = createDeferred<void>();
+        const archiveGate = createDeferred<void>();
+        let archiveDispatched = false;
         mockSession = {
             id: 'session-1',
             active: true,
@@ -2543,11 +2644,56 @@ describe('/session/[id]/info', () => {
 
         const screen = await renderInfoScreen();
 
-        // The leave actions are buttons; the pressable host under each carries only the busy state.
+        network.setRpcAckResponder(async (request) => {
+            if (request.method !== RPC_METHODS.STOP_SESSION) {
+                return { ok: false, error: 'RPC method not found', errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
+            }
+            await stopGate.promise;
+            return { ok: true, result: { status: 'stopped' } };
+        });
+        // Preserve the suite's Home responses, holding only the archive request
+        // at the external HTTP port until the test releases its acknowledgement.
+        setRuntimeFetch(async (input, init) => {
+            if (new URL(String(input)).pathname === '/v2/sessions/session-1/archive'
+                && init?.method === 'POST') {
+                archiveDispatched = true;
+                await archiveGate.promise;
+            }
+            return network.request(input, init);
+        });
+
         const control = (testID: string) => screen.root.findAllByProps({ testID })
-            .find((node: any) => 'loading' in (node.props ?? {}));
-        expect(control('sessionInfo.stopSession')?.props.loading).toBe(true);
-        expect(control('sessionInfo.archiveSession')?.props.loading).toBe(true);
+            .find(node => 'loading' in (node.props ?? {}));
+        try {
+            await screen.pressByTestIdAsync('sessionInfo.stopSession');
+            await waitForHomeGovernance(() => {
+                expect(network.requests.some(request => request.method === RPC_METHODS.STOP_SESSION)).toBe(true);
+                expect(control('sessionInfo.stopSession')?.props.loading).toBe(true);
+                expect(control('sessionInfo.archiveSession')?.props.loading).toBe(false);
+            });
+            await act(async () => { stopGate.resolve(); });
+            await waitForHomeGovernance(() => expect(control('sessionInfo.stopSession')?.props.loading).not.toBe(true));
+
+            await screen.pressByTestIdAsync('sessionInfo.archiveSession');
+            await waitForHomeGovernance(() => {
+                expect(archiveDispatched).toBe(true);
+                expect(control('sessionInfo.archiveSession')?.props.loading).toBe(true);
+                expect(control('sessionInfo.stopSession')?.props.loading).not.toBe(true);
+            });
+        } finally {
+            await act(async () => {
+                stopGate.resolve();
+                archiveGate.resolve();
+            });
+            await waitForHomeGovernance(() => {
+                expect(control('sessionInfo.stopSession')?.props.loading).not.toBe(true);
+                expect(control('sessionInfo.archiveSession')?.props.loading).not.toBe(true);
+            });
+        }
+        expect(requestsFor('/v2/sessions/session-1/archive')).toEqual([
+            expect.objectContaining({ serverUrl: 'https://server-1.example', method: 'POST' }),
+        ]);
+        expect(modalAlertSpy).not.toHaveBeenCalled();
     });
 
     it('offers rename from the page header menu to a session owner', async () => {
@@ -2556,14 +2702,14 @@ describe('/session/[id]/info', () => {
 
         const screen = await renderInfoScreen();
         await screen.pressByTestIdAsync('session-info-menu.trigger');
-        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('session-info-rename')).not.toBeNull()); });
+        await waitForHeaderMenuOutcome(() => expect(screen.findByTestId('session-info-rename')).not.toBeNull());
         await screen.pressByTestIdAsync('session-info-rename');
 
-        await act(async () => { await vi.waitFor(() => expect(modalPromptSpy).toHaveBeenCalledWith(
+        await waitForHeaderMenuOutcome(() => expect(modalPromptSpy).toHaveBeenCalledWith(
             'sessionInfo.renameSession',
             'sessionInfo.renameSessionSubtitle',
             expect.objectContaining({ confirmText: 'common.save' }),
-        )); });
+        ));
     });
 
     it.each([true, false])('offers Delete from the page header menu for a retired eligible session with rename rights %s and the existing confirmation', async (canRename) => {
@@ -2581,16 +2727,16 @@ describe('/session/[id]/info', () => {
 
         const screen = await renderInfoScreen();
         await screen.pressByTestIdAsync('session-info-menu.trigger');
-        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('session-info-delete')).not.toBeNull()); });
+        await waitForHeaderMenuOutcome(() => expect(screen.findByTestId('session-info-delete')).not.toBeNull());
         expect(screen.findByTestId('session-info-rename') !== null).toBe(canRename);
         await screen.pressByTestIdAsync('session-info-delete');
 
-        await act(async () => { await vi.waitFor(() => expect(modalConfirmSpy).toHaveBeenCalledWith(
+        await waitForHeaderMenuOutcome(() => expect(modalConfirmSpy).toHaveBeenCalledWith(
             'sessionInfo.deleteSession',
             'sessionInfo.deleteSessionWarning',
             expect.objectContaining({ destructive: true, confirmText: 'sessionInfo.deleteSession' }),
-        )); });
-        expect(sessionDeleteSpy).not.toHaveBeenCalled();
+        ));
+        expect(requestsFor('/v1/sessions/session-1').filter(request => request.method === 'DELETE')).toEqual([]);
         expect(safeRouterBackSpy).not.toHaveBeenCalled();
     });
 
@@ -2614,7 +2760,7 @@ describe('/session/[id]/info', () => {
 
         const screen = await renderInfoScreen();
         await screen.pressByTestIdAsync('session-info-menu.trigger');
-        await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('session-info-rename')).not.toBeNull()); });
+        await waitForHeaderMenuOutcome(() => expect(screen.findByTestId('session-info-rename')).not.toBeNull());
         expect(screen.findByTestId('session-info-delete')).toBeNull();
         expect(screen.findByTestId('sessionInfo.deleteSession')).toBeNull();
     });
@@ -2633,7 +2779,7 @@ describe('/session/[id]/info', () => {
         };
 
         const screen = await renderInfoScreen();
-        const renameItems = screen.findAllByType('Item' as any)
+        const renameItems = screen.findAllByType(Item)
             .filter((node: any) => node.props?.title === 'sessionInfo.renameSession');
 
         expect(renameItems).toHaveLength(0);

@@ -638,11 +638,12 @@ describe('SessionHeaderActionMenu handoff', () => {
       access: null,
     } as any;
 
+    const revealAfterMutation = vi.fn();
     const screen = await renderScreen(
       <SessionCompanionRevealPortProvider
         address={{ serverId: 'server_a', sessionId: session.id }}
         openFullSurface={() => undefined}
-        revealAfterMutation={() => undefined}
+        revealAfterMutation={revealAfterMutation}
         revealBoardItem={() => undefined}
       >
         <SessionHeaderActionMenu
@@ -662,10 +663,11 @@ describe('SessionHeaderActionMenu handoff', () => {
 
     const dropdown = screen.findByType('DropdownMenu' as any);
     expect(dropdown.props.items.map((item: { id: string }) => item.id)).toContain('header.openCompanion');
-    expect(dropdown.props.items).toEqual(expect.arrayContaining([expect.objectContaining({
-      id: 'header.openCompanion',
-      title: 'sessionBoard.companion.a11y.headerAction',
-    })]));
+    await act(async () => { dropdown.props.onSelect('header.openCompanion'); });
+    expect(revealAfterMutation).toHaveBeenCalledWith(expect.objectContaining({
+      applied: expect.objectContaining({ visible: true, collapsed: false }),
+    }));
+    expect(sessionActionsModuleState.routerPushSpy).not.toHaveBeenCalled();
   });
 
   it('hands a first show to the exact mounted reveal owner after the preference applies', async () => {
@@ -865,7 +867,6 @@ describe('SessionHeaderActionMenu handoff', () => {
     expect(overflow.findByType('DropdownMenu' as any).props.items)
       .toEqual(expect.arrayContaining([expect.objectContaining({
         id: 'header.openCompanion',
-        title: 'sessionBoard.companion.a11y.headerAction',
         checked: false,
         accessibilityLabel: 'sessionBoard.companion.a11y.show',
       })]));
@@ -1105,6 +1106,7 @@ describe('SessionHeaderActionMenu handoff', () => {
       sourceMachineId: 'machine_rebound',
       serverId: 'server_a',
       placement: 'session_action_menu',
+      availability: { available: true, reason: 'available' },
     });
   });
 
@@ -1589,17 +1591,19 @@ describe('SessionHeaderActionMenu handoff', () => {
     let dropdown = screen.findByType('DropdownMenu' as any);
     expect(dropdown.props.items.some((item: any) => item?.id === SESSION_ACTION_MARK_UNREAD_ID)).toBe(true);
 
-    storageState.current.sessionListRowsByServerId = {
-      'server-header': {
-        sess_read_header: {
-          ...sessionShell,
-          lastViewedSessionSeq: 741,
-          hasUnreadMessages: true,
-        },
-      },
-    };
+    const { storage } = await import('@/sync/domains/state/storage');
     await act(async () => {
-      notifyStorageListeners();
+      storage.setState({
+        sessionListRowsByServerId: {
+          'server-header': {
+            sess_read_header: {
+              ...sessionShell,
+              lastViewedSessionSeq: 741,
+              hasUnreadMessages: true,
+            },
+          },
+        },
+      });
     });
     await flushHookEffects({ cycles: 1 });
 
@@ -2167,6 +2171,7 @@ describe('SessionHeaderActionMenu handoff', () => {
       sourceMachineId: 'machine_rebound',
       serverId: 'server_a',
       placement: 'session_action_menu',
+      availability: { available: true, reason: 'available' },
     });
   });
 

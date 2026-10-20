@@ -2,6 +2,27 @@ import { describe, expect, it } from 'vitest';
 import { buildWorkflowRunStartInputs, projectWorkflowRunInputFields } from './workflowAuthoring';
 
 describe('workflow run raw input drafts', () => {
+    it('rejects a malformed typed Session value instead of treating all JSON as a Session choice', () => {
+        const fields = projectWorkflowRunInputFields({
+            inputs: [{ name: 'reviewSession', valueType: 'json', required: true,
+                inputType: { hostType: 'session' }, defaultFrom: 'origin_session' }],
+            values: { reviewSession: { sessionId: 'missing-home' } },
+            originSession: { serverId: 'home', sessionId: 'origin' },
+        });
+        expect(fields[0].errorCode).toBe('invalid_input');
+        expect(fields[0].blocking).toBe(true);
+    });
+    it('keeps a malformed explicit Session draft blocking rather than replacing it with the origin default', () => {
+        const fields = projectWorkflowRunInputFields({
+            inputs: [{ name: 'reviewSession', valueType: 'json', required: true,
+                inputType: { hostType: 'session' }, defaultFrom: 'origin_session' }],
+            values: {}, rawTextValues: { reviewSession: '{unfinished' },
+            originSession: { serverId: 'home', sessionId: 'origin' },
+        });
+        expect(fields[0].errorCode).toBe('invalid_input');
+        expect(fields[0].blocking).toBe(true);
+        expect(buildWorkflowRunStartInputs(fields)).toBeUndefined();
+    });
     it('rejects non-JSON numbers even when JSON.parse accepts their overflow', () => {
         const fields = projectWorkflowRunInputFields({
             inputs: [{ name: 'config', valueType: 'json', required: true }],

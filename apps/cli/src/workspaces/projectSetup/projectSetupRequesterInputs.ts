@@ -1,6 +1,6 @@
 import type { SecretReferenceOverlayV1 } from '@happier-dev/protocol/profiles/secretReferenceOverlayV1';
-import { readRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
-import { readSavedSecretCatalogForOperation } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { readRequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
+import { readSavedSecretCatalogForOperation } from "@/settings/secrets/savedSecretCatalogRead";
 import type { ProjectFiniteActionRuntime } from './projectFiniteAction';
 
 /** Materializes only the admitted requester's selected refs through the existing secret owner. */

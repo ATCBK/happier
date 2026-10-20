@@ -6,25 +6,22 @@ import type {
 } from '@/components/atmosphere/orbit/homeOrbitScene';
 
 import type { McpServerCollectionRow } from '../collection/mcpServerCollectionModel';
-import { mcpServerNeedsKey, type McpSavedSecretAvailability } from '../status/mcpServerStatus';
+import type { CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
 
-/** The Account's sign-in grant for one server, as the homepage reads it (`useMcpServerSignIn` owns the flow). */
-export type McpHomeGrant = Readonly<{
-  connected: boolean;
-  identity: string | null;
-}> | null;
-
-/** What a server needs from the person before it reaches anyone; each has one fix. */
-export type McpHomeProblem = 'signin' | 'expired' | 'key';
+import { mcpServerAttentionStatus, type McpSavedSecretAvailability } from '../status/mcpServerStatus';
+import { mcpSignInFact, type McpSignInView } from '../signIn/mcpSignInGrantView';
 
 export type McpHomeServer = Readonly<{
   id: string;
   title: string;
   server: McpServerCatalogEntryV1;
+  /** The reach rules that put it on machines: the legend says where a local server runs from them. */
+  bindings: McpServerCollectionRow['bindings'];
   /** Legend group: held by the Account (remote, signed in or keyed once) or run on the machines (stdio). */
   group: 'account' | 'machine';
   tether: HomeOrbitTether;
-  problem: McpHomeProblem | null;
+  /** What the server needs from the person before it reaches anyone (the status vocabulary every list shares). */
+  status: CapabilityStatus | null;
   /** OAuth identity the Account signed in as ("leeroy@acme.dev"). */
   identity: string | null;
   /** Tools and their per-turn tokens from the last Test; null until a machine has answered. */
@@ -67,23 +64,10 @@ export function mcpServerSignsIn(server: McpServerCatalogEntryV1): boolean {
   return server.transport !== 'stdio' && server.remote?.auth?.kind === 'oauth';
 }
 
-function problemOf(
-  server: McpServerCatalogEntryV1,
-  grant: McpHomeGrant,
-  savedSecretCatalog: McpSavedSecretAvailability,
-): McpHomeProblem | null {
-  if (mcpServerSignsIn(server)) {
-    if (!grant) return 'signin';
-    if (!grant.connected) return 'expired';
-  }
-  if (mcpServerNeedsKey(server, savedSecretCatalog)) return 'key';
-  return null;
-}
-
 export function buildMcpHome(
   input: Readonly<{
     rows: readonly McpServerCollectionRow[];
-    grantOf: (serverId: string) => McpHomeGrant;
+    signInOf: (serverId: string) => McpSignInView | null;
     savedSecretCatalog: McpSavedSecretAvailability;
     firstVisitDismissed: boolean;
     suggestions?: readonly McpHomeSuggestionMark[];
@@ -91,19 +75,26 @@ export function buildMcpHome(
 ): McpHome {
   const servers = input.rows.map((row): McpHomeServer => {
     const { server } = row;
-    const grant = mcpServerSignsIn(server) ? input.grantOf(server.id) : null;
+    const signIn = mcpServerSignsIn(server) ? input.signInOf(server.id) : null;
     const off = row.unbound;
-    const problem = off ? null : problemOf(server, grant, input.savedSecretCatalog);
+    const status = off
+      ? null
+      : mcpServerAttentionStatus({
+          entry: server,
+          signIn: mcpSignInFact(signIn),
+          savedSecretCatalog: input.savedSecretCatalog,
+        });
     const group = server.transport === 'stdio' ? 'machine' : 'account';
     const tools = server.toolsSnapshot?.tools;
     return {
       id: server.id,
       title: row.title,
       server,
+      bindings: row.bindings,
       group,
-      tether: off ? 'none' : problem ? 'attention' : group,
-      problem,
-      identity: grant?.connected ? grant.identity : null,
+      tether: off ? 'none' : status ? 'attention' : group,
+      status,
+      identity: signIn?.state === 'connected' ? signIn.identity : null,
       toolCount: tools ? tools.length : null,
       tokens: tools ? tools.reduce((sum, tool) => sum + tool.tokens, 0) : null,
       off,
@@ -114,8 +105,8 @@ export function buildMcpHome(
   const inUse = servers.filter((server) => !server.off);
   // No usage producer exists for MCP servers: the ring leads with what needs the person, then what is in use.
   const ordered = [
-    ...inUse.filter((server) => server.problem).sort(byName),
-    ...inUse.filter((server) => !server.problem).sort(byName),
+    ...inUse.filter((server) => server.status).sort(byName),
+    ...inUse.filter((server) => !server.status).sort(byName),
     ...servers.filter((server) => server.off).sort(byName),
   ];
   const ringMarks: HomeOrbitRingMark[] =
@@ -147,7 +138,7 @@ export function buildMcpHome(
       tokens: inUse.reduce((sum, server) => sum + (server.tokens ?? 0), 0),
       toolsKnown: inUse.some((server) => server.toolCount !== null),
     },
-    needsYou: inUse.filter((server) => server.problem).length,
+    needsYou: inUse.filter((server) => server.status).length,
     firstVisitLine:
       !input.firstVisitDismissed &&
       servers.length > 0 &&

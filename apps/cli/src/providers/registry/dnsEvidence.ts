@@ -87,6 +87,12 @@ export async function collectProviderConnectionsDnsEvidence(input: Readonly<{
   ) => Promise<T>;
   isCurrent?: () => boolean;
   lifetime: ProviderOperationLifetime;
+  /** Bulk presentation admits each source as its hosts settle and retains
+   * source-scoped failures. Without this consumer, DNS admission fails closed. */
+  onConnectionResolved?: (connectionId: string, result: Readonly<{
+    evidence: ProviderEndpointDnsEvidence;
+    error?: ProviderOperationAbandonedError | ProviderProbeAdmissionCapacityError;
+  }>) => void;
 }>): Promise<ReadonlyMap<string, ProviderEndpointDnsEvidence>> {
   const urlsByConnectionId = new Map<string, readonly ProviderConnectionEndpointUrl[]>();
   const hostnamesToResolve = new Set<string>();
@@ -104,6 +110,31 @@ export async function collectProviderConnectionsDnsEvidence(input: Readonly<{
   const resolveAddresses = input.resolveAddresses ?? (async (hostname: string) =>
     (await lookup(hostname, { all: true, verbatim: true })).map((answer) => answer.address));
   const addressesByHostname = new Map<string, readonly string[]>();
+  const errorsByHostname = new Map<string, ProviderOperationAbandonedError | ProviderProbeAdmissionCapacityError>();
+  const evidenceByConnectionId = new Map<string, ProviderEndpointDnsEvidence>();
+  const pendingHostsByConnectionId = new Map<string, Set<string>>();
+  const connectionsByHostname = new Map<string, Set<string>>();
+  const publishConnection = (connectionId: string) => {
+    const urls = urlsByConnectionId.get(connectionId) ?? [];
+    const error = urls.map(url => errorsByHostname.get(url.hostname)).find(error => error !== undefined);
+    const evidence = new Map<string, readonly string[]>();
+    for (const url of urls) {
+      const addresses = addressesByHostname.get(url.hostname);
+      if (addresses) evidence.set(url.normalizedUrl, addresses);
+    }
+    evidenceByConnectionId.set(connectionId, evidence);
+    input.onConnectionResolved?.(connectionId, { evidence, ...(error ? { error } : {}) });
+  };
+  for (const [connectionId, urls] of urlsByConnectionId) {
+    const pendingHosts = new Set(urls.map(url => url.hostname));
+    pendingHostsByConnectionId.set(connectionId, pendingHosts);
+    for (const hostname of pendingHosts) {
+      const connections = connectionsByHostname.get(hostname) ?? new Set<string>();
+      connections.add(connectionId);
+      connectionsByHostname.set(hostname, connections);
+    }
+    if (pendingHosts.size === 0) publishConnection(connectionId);
+  }
   const hostnames = [...hostnamesToResolve];
   let nextHostnameIndex = 0;
   const resolveWorker = async (): Promise<void> => {
@@ -117,8 +148,8 @@ export async function collectProviderConnectionsDnsEvidence(input: Readonly<{
       const hostname = hostnames[hostnameIndex]!;
       // Refuse before invoking the resolver, not only while awaiting it. This
       // keeps cancellation from feeding more unabortable libuv work.
-      await awaitWithinProviderOperation(Promise.resolve(), input.lifetime);
       try {
+        await awaitWithinProviderOperation(Promise.resolve(), input.lifetime);
         const resolveOne = () => awaitWithinProviderOperation(
           resolveAddresses(hostname),
           input.lifetime,
@@ -131,9 +162,17 @@ export async function collectProviderConnectionsDnsEvidence(input: Readonly<{
         if (
           error instanceof ProviderOperationAbandonedError
           || error instanceof ProviderProbeAdmissionCapacityError
-        ) throw error;
+        ) {
+          if (!input.onConnectionResolved || input.lifetime.signal?.aborted) throw error;
+          errorsByHostname.set(hostname, error);
+        }
         // Ordinary lookup failure remains absent evidence; the authoritative
         // connection resolver turns that into its typed endpoint refusal.
+      }
+      for (const connectionId of connectionsByHostname.get(hostname) ?? []) {
+        const pendingHosts = pendingHostsByConnectionId.get(connectionId)!;
+        pendingHosts.delete(hostname);
+        if (pendingHosts.size === 0) publishConnection(connectionId);
       }
     }
   };
@@ -147,15 +186,6 @@ export async function collectProviderConnectionsDnsEvidence(input: Readonly<{
     () => resolveWorker(),
   ));
 
-  const evidenceByConnectionId = new Map<string, ProviderEndpointDnsEvidence>();
-  for (const [connectionId, urls] of urlsByConnectionId) {
-    const evidence = new Map<string, readonly string[]>();
-    for (const url of urls) {
-      const addresses = addressesByHostname.get(url.hostname);
-      if (addresses) evidence.set(url.normalizedUrl, addresses);
-    }
-    evidenceByConnectionId.set(connectionId, evidence);
-  }
   return evidenceByConnectionId;
 }
 

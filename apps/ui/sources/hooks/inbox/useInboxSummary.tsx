@@ -4,12 +4,13 @@ import { useActivityOverviewSummary } from '@/activity/source/useActivityOvervie
 import { useFriendsEnabled } from '@/hooks/server/useFriendsEnabled';
 import { useFriendsIdentityReadiness } from '@/hooks/server/useFriendsIdentityReadiness';
 import { isOpenApprovalInboxArtifact } from '@/sync/domains/artifacts/approvalArtifacts';
-import { readOpenUsageNoticeArtifactHeader } from '@/sync/domains/artifacts/usageNoticeArtifacts';
+import { readAccountNoticeArtifactHeader, isUnreadAccountNotice } from '@/sync/domains/artifacts/usageNoticeArtifacts';
 import { useInboxActionOperationSummary } from '@/sync/domains/actionOperations/useActionOperations';
 import { useFriendRequestCount } from '@/sync/domains/state/storage';
 import { storage } from '@/sync/domains/state/storageStore';
 import type { StorageState } from '@/sync/store/types';
-import { countInboxItems } from '@/components/inbox/inboxCounts';
+import { countInboxDiscussionItems, countInboxItems } from '@/components/inbox/inboxCounts';
+import { useInboxDiscussionAttention } from './useInboxDiscussionSource';
 
 import { useAutomationAttentionSource, useWorkflowAttentionSource, WorkflowAttentionSourceBoundary } from './useWorkflowAttentionSource';
 
@@ -35,8 +36,9 @@ export function createOpenApprovalInboxCountSelector(): (state: StorageState) =>
         previousCount = 0;
         if (!state.isDataReady) return previousCount;
         for (const artifact of Object.values(state.artifacts)) {
+            const notice = readAccountNoticeArtifactHeader(artifact, previousAccountId);
             if (isOpenApprovalInboxArtifact(artifact)
-                || (artifact.draft !== true && readOpenUsageNoticeArtifactHeader(artifact, previousAccountId))) previousCount += 1;
+                || (notice && isUnreadAccountNotice(notice))) previousCount += 1;
         }
         return previousCount;
     };
@@ -55,6 +57,9 @@ export function useInboxSummary(): InboxSummary {
     // under its run, so a run is counted once here and its step rows are presentation.
     const workflowAttention = useWorkflowAttentionSource();
     const automationAttention = useAutomationAttentionSource();
+    const serverId = storage(state => state.profileScope?.serverId ?? null);
+    const discussionAttention = useInboxDiscussionAttention(serverId);
+    const discussionCount = React.useMemo(() => countInboxDiscussionItems(discussionAttention.source), [discussionAttention.source]);
     const visibleFriendRequestCount = friendsEnabled && friendsIdentityReadiness.isReady
         ? friendRequestCount
         : 0;
@@ -67,6 +72,7 @@ export function useInboxSummary(): InboxSummary {
         approvalsAndNotices: openApprovalCount,
         operations: actionOperations.count,
         friendRequests: visibleFriendRequestCount,
+        discussions: discussionCount,
     });
 
     return React.useMemo(() => ({ count, hasContent: count > 0 }), [count]);

@@ -185,7 +185,7 @@ describe('createManagedServiceProcessSupervisorHost', () => {
         expect(failure).toBeInstanceOf(PluginError);
         if (!(failure instanceof PluginError)) throw failure;
         const details = failure.details;
-        const evidence = LocalServiceEstablishmentFailureV1Schema.parse(details && typeof details === 'object' && !Array.isArray(details)
+        const evidence = LocalServiceEstablishmentFailureV1Schema.parse(details && typeof details === 'object' && !Array.isArray(details) && 'establishmentFailure' in details
             ? details.establishmentFailure : undefined);
         expect(evidence).toMatchObject({ cause: 'process_exited', exitCode: 23 });
         if (_shape === 'bounded redacted exception') {
@@ -201,6 +201,10 @@ describe('createManagedServiceProcessSupervisorHost', () => {
         ['Unix socket', "Error: listen EADDRINUSE: address already in use /tmp/service.sock\naddress: '/tmp/service.sock',\nport: -1", 'process_exited'],
         ['Unix socket without metadata', 'Error: listen EADDRINUSE: address already in use /tmp/service.sock', 'process_exited'],
         ['Windows named pipe', "Error: listen EADDRINUSE: address already in use \\\\.\\pipe\\service\nport: -1", 'process_exited'],
+        ['negative bind port without a path', 'Error: listen EADDRINUSE\nport: -1', 'process_exited'],
+        ['Unix address metadata without a bind path', "Error: listen EADDRINUSE\naddress: '/tmp/service.sock'", 'process_exited'],
+        ['Windows pipe without metadata', String.raw`Error: listen EADDRINUSE: address already in use \\.\pipe\service`, 'process_exited'],
+        ['TCP collision with a source path in its stack', 'Error: listen EADDRINUSE: address already in use :::49152\n    at bind (/tmp/service.js:18:3)', 'port_in_use'],
         ['unrelated exit on an occupied port', 'Configuration failed: fixture-private-value', 'process_exited'],
     ] as const)('retains exit evidence without inventing collision causality (%s)', async (_shape, stderr, cause) => {
         // Only OS terminal output and the platform listener census are simulated.

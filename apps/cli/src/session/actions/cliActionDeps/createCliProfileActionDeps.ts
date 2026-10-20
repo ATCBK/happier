@@ -1,13 +1,14 @@
 import { AGENT_IDS } from '@happier-dev/agents';
 import type { ActionExecuteResult, ActionExecutorContext, ActionExecutorDeps } from '@happier-dev/protocol';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import { AccountSettingMutationV1Schema } from '@happier-dev/protocol/account/settings/accountSettingMutationV1';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { buildLaunchProfileArtifactHeaderV1, LaunchProfileArtifactV1Schema, readLaunchProfileArtifactV1 } from '@happier-dev/protocol/launchProfiles/launchProfileArtifactV1';
 import { AIBackendProfileSchema } from '@happier-dev/protocol/profiles/backendProfileSchema';
-import { DEFAULT_BUILT_IN_BACKEND_PROFILES } from '@happier-dev/protocol/profiles/builtInBackendProfiles';
+import { DEFAULT_BUILT_IN_BACKEND_PROFILES, getBuiltInBackendProfile } from '@happier-dev/protocol/profiles/builtInBackendProfiles';
 import { createProfileActionExecuteV1 } from '@happier-dev/protocol/profiles/profileActionsV1';
 import { readSkillLibraryCatalog } from '@happier-dev/protocol/prompts/library/skills/readSkillLibraryCatalog';
+import { readAccountPluginSkills } from '@/prompts/skills/library/readAccountPluginSkills';
 import { createProfileOperations, setBuiltinProfileEnabledPreferenceV1, setProfileFavoritePreferenceV1,
   type ProfileOperationResult, type ProfileOperations } from '@happier-dev/protocol/profiles/profileOperations';
 import { isLaunchProfileV2 } from '@happier-dev/protocol/profiles/read';
@@ -17,7 +18,7 @@ import { createProviderErrorV1, ProviderErrorV1Schema, providerErrorFromRpcFailu
 import { DaemonProviderProfileMigrationPreviewRequestV1Schema, DaemonProviderProfileMigrationPreviewResponseV1Schema,
   DaemonProviderProfileMigrationConfirmRequestV1Schema, DaemonProviderProfileMigrationConfirmResponseV1Schema,
   DaemonProviderProfileMigrationConflictConfirmRequestV1Schema, DaemonProviderProfileMigrationConflictConfirmResponseV1Schema } from '@happier-dev/protocol/rpc/providers';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { StoredCredentials } from '@/persistence';
@@ -74,7 +75,7 @@ export function createCliProfileActionExecuteV1(params: Readonly<{
         throw Object.assign(new Error('scope-retired'), { code: 'scope-retired' });
       }
     };
-    const requestLegacyRpc = async <TSchema extends z.ZodType>(schema: TSchema, operation: 'read' | 'mutation',
+    const requestLegacyRpc = async <TSchema extends z.ZodMiniType>(schema: TSchema, operation: 'read' | 'mutation',
       payload: Readonly<{ machineId: string; sourceProfileId: string }>, method: string): Promise<z.output<TSchema>> => {
       assertCurrent();
       const errorContext = { machineId: payload.machineId, sourceProfileId: payload.sourceProfileId };
@@ -115,7 +116,7 @@ export function createCliProfileActionExecuteV1(params: Readonly<{
       const addressedId = request.actionId === 'launch_profiles.read' ? request.input.id : undefined;
       const requiresVisibility = request.actionId === 'launch_profiles.search'
         || (request.actionId === 'launch_profiles.select' && request.input.id !== null)
-        || (addressedId !== undefined && projection.catalog.status === 'ready'
+        || (addressedId !== undefined && getBuiltInBackendProfile(addressedId) !== null && projection.catalog.status === 'ready'
           && !projection.catalog.records.some(row => row.record.id === addressedId));
       if (requiresVisibility && projection.catalog.status === 'ready') {
         const lastUsedProfile = await readAuthoringMemoryLastUsedProfile(params.credentials, context.signal);
@@ -190,7 +191,11 @@ export function createCliProfileActionExecuteV1(params: Readonly<{
       operations: resolveOperations,
       readSkillLibrary: async signal => {
         assertCurrent();
-        const items = await readSkillLibraryCatalog(createCredentialedAccountArtifactStore(params.credentials), signal);
+        const items = await readSkillLibraryCatalog({ ...createCredentialedAccountArtifactStore(params.credentials),
+          readPluginSkills: (readSignal, skillIds) => readAccountPluginSkills({ credentials: params.credentials,
+            serverHttpBaseUrl: params.serverHttpBaseUrl, signal: readSignal, skillIds, isCurrent, availableOnly: true,
+            settings: (params.operationContext ? params.operationContext.readSnapshot() : getActiveAccountSettingsSnapshot())?.settings,
+          }) }, signal);
         assertCurrent();
         return items;
       },

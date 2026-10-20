@@ -119,36 +119,48 @@ export type ProtocolSchemaOutput<TSchema> =
         ? TOutput
         : never;
 
-type ProtocolObjectProjection<
+// Separate mapped projections keep declaration emit from forwarding an unbound
+// projection parameter through generic object fields.
+type ProtocolObjectInput<
     TShape extends Readonly<Record<string, ProtocolComposableSchema<unknown, unknown>>>,
-    TProjection extends 'input' | 'output',
 > = Readonly<{
-    readonly [TKey in keyof TShape as undefined extends (
-        TProjection extends 'input'
-            ? ProtocolSchemaInput<TShape[TKey]>
-            : ProtocolSchemaOutput<TShape[TKey]>
-    )
+    readonly [TKey in keyof TShape as undefined extends ProtocolSchemaInput<TShape[TKey]>
         ? never
         : TKey]: Exclude<
-        TProjection extends 'input'
-            ? ProtocolSchemaInput<TShape[TKey]>
-            : ProtocolSchemaOutput<TShape[TKey]>,
+        ProtocolSchemaInput<TShape[TKey]>,
         undefined
     >;
 } & {
-    readonly [TKey in keyof TShape as undefined extends (
-        TProjection extends 'input'
-            ? ProtocolSchemaInput<TShape[TKey]>
-            : ProtocolSchemaOutput<TShape[TKey]>
-    )
+    readonly [TKey in keyof TShape as undefined extends ProtocolSchemaInput<TShape[TKey]>
         ? TKey
         : never]?: Exclude<
-        TProjection extends 'input'
-            ? ProtocolSchemaInput<TShape[TKey]>
-            : ProtocolSchemaOutput<TShape[TKey]>,
+        ProtocolSchemaInput<TShape[TKey]>,
         undefined
     >;
 }>;
+
+type ProtocolObjectOutput<
+    TShape extends Readonly<Record<string, ProtocolComposableSchema<unknown, unknown>>>,
+> = Readonly<{
+    readonly [TKey in keyof TShape as undefined extends ProtocolSchemaOutput<TShape[TKey]>
+        ? never
+        : TKey]: Exclude<
+        ProtocolSchemaOutput<TShape[TKey]>,
+        undefined
+    >;
+} & {
+    readonly [TKey in keyof TShape as undefined extends ProtocolSchemaOutput<TShape[TKey]>
+        ? TKey
+        : never]?: Exclude<
+        ProtocolSchemaOutput<TShape[TKey]>,
+        undefined
+    >;
+}>;
+
+type ProtocolObjectProjection<
+    TShape extends Readonly<Record<string, ProtocolComposableSchema<unknown, unknown>>>,
+    TProjection extends 'input' | 'output',
+> = TProjection extends 'input' ? ProtocolObjectInput<TShape> : ProtocolObjectOutput<TShape>;
 
 type ProtocolObjectAdditionalValue<
     TOptions extends ProtocolObjectOptions,

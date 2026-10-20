@@ -32,6 +32,7 @@ import {
 } from '@/auth/terminalAuthEnrollmentClient';
 import { fetchServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { useServerProfile } from '@/server/serverProfiles';
+import { retryHomeOperation, TERMINAL_AUTH_POLL_INTERVAL_MS, type HomeOperationRetry } from '@/api/client/retryHomeOperation';
 
 type PendingAuthState = Readonly<{
   publicKey: string;
@@ -52,6 +53,14 @@ type PendingAuthState = Readonly<{
 const V3_REQUIRED_ERROR =
   'Authenticated terminal pairing v3 is required. Update the Happier mobile app and scan a new QR code.';
 
+class AuthWaitError extends Error {
+  constructor(readonly code: 'AUTH_WAIT_INVALID_ARGUMENT' | 'AUTH_WAIT_INVALID_STATE' | 'AUTH_WAIT_TRANSPORT_UNAVAILABLE'
+    | 'AUTH_REQUEST_EXPIRED' | 'AUTH_RESPONSE_HOME_MISMATCH' | 'AUTH_RESPONSE_INVALID' | 'AUTH_PAIRING_V3_REQUIRED', message: string) {
+    super(message);
+    this.name = 'AuthWaitError';
+  }
+}
+
 // Bound the claim response before decoding: legitimate v3 payloads are ~141
 // bytes (188 base64 chars), so anything beyond this is malformed server input.
 const MAX_PROVISIONING_RESPONSE_B64_CHARS = 4096;
@@ -68,7 +77,7 @@ function pendingAuthStatePath(publicKey: Uint8Array): string {
 
 function decodePublicKey(value: string): Uint8Array {
   const raw = String(value ?? '').trim();
-  if (!raw) throw new Error('Missing --public-key');
+  if (!raw) throw new AuthWaitError('AUTH_WAIT_INVALID_ARGUMENT', 'Missing --public-key');
   const tryBase64 = (enc: BufferEncoding): Uint8Array | null => {
     try {
       const buf = Buffer.from(raw, enc);
@@ -79,7 +88,7 @@ function decodePublicKey(value: string): Uint8Array {
     }
   };
   return tryBase64('base64') ?? tryBase64('base64url') ?? (() => {
-    throw new Error('Invalid --public-key (expected base64 or base64url encoded 32-byte key)');
+    throw new AuthWaitError('AUTH_WAIT_INVALID_ARGUMENT', 'Invalid --public-key (expected base64 or base64url encoded 32-byte key)');
   })();
 }
 
@@ -188,12 +197,13 @@ async function completeClaimedCredentialHandoff(params: Readonly<{
   credentials: StoredCredentials;
   statePath: string;
   runtimeOrigin: string;
+  homeRetry: HomeOperationRetry;
 }>): Promise<string> {
   // The relay claim is one-shot. Once credentials are durable, this request
   // must no longer be retryable even if the subsequent registration fails.
   await removeProtectedLocalStateFile(params.statePath, PENDING_AUTH_STATE_PROTECTION);
   try {
-    return await registerTerminalEnrollmentMachine(params.credentials, params.runtimeOrigin);
+    return await registerTerminalEnrollmentMachine(params.credentials, params.runtimeOrigin, undefined, params.homeRetry);
   } catch (cause) {
     throw new Error(
       'Authentication credentials were saved, but machine registration is incomplete. '
@@ -220,26 +230,25 @@ export async function handleAuthWait(argsRaw: string[], signal?: AbortSignal): P
 
   const json = args.includes('--json');
   if (!json) {
-    console.error('Missing required flag: --json');
-    process.exit(2);
+    throw new AuthWaitError('AUTH_WAIT_INVALID_ARGUMENT', 'Missing required flag: --json');
   }
 
   const keyIndex = args.findIndex((a) => a === '--public-key');
   const publicKeyRaw = keyIndex >= 0 ? (args[keyIndex + 1] ?? '') : '';
   if (!publicKeyRaw || String(publicKeyRaw).startsWith('--')) {
-    console.error('Missing required flag: --public-key <base64>');
-    process.exit(2);
+    throw new AuthWaitError('AUTH_WAIT_INVALID_ARGUMENT', 'Missing required flag: --public-key <base64>');
   }
 
   const publicKeyBytes = decodePublicKey(String(publicKeyRaw));
   const statePath = pendingAuthStatePath(publicKeyBytes);
-  const state = parsePendingAuthState(await readProtectedLocalStateFile(
-    statePath,
-    PENDING_AUTH_STATE_PROTECTION,
-  ));
+  const rawState = await readProtectedLocalStateFile(statePath, PENDING_AUTH_STATE_PROTECTION);
+  let state: PendingAuthState;
+  try { state = parsePendingAuthState(rawState); } catch {
+    throw new AuthWaitError('AUTH_WAIT_INVALID_STATE', 'Invalid pending authentication state. Request fresh approval.');
+  }
   const remoteEnrollment = args.includes('--remote-enrollment');
   if (remoteEnrollment && (!state.remoteProfileId || state.remoteProfileId !== configuration.activeServerId)) {
-    throw new Error('Remote enrollment requires its exact prepared Home profile.');
+    throw new AuthWaitError('AUTH_WAIT_INVALID_STATE', 'Remote enrollment requires its exact prepared Home profile.');
   }
   const pairing = {
     secret: decodeBase64(state.pairingSecret, 'base64url'),
@@ -259,9 +268,10 @@ export async function handleAuthWait(argsRaw: string[], signal?: AbortSignal): P
   const acquired = await acquireTerminalAuthEnrollmentRuntime(
     target.descriptor ?? target, target.preferredTransport, signal,
   );
-  if (!acquired.ok) throw new Error('Unable to acquire the selected Home enrollment carrier');
+  if (!acquired.ok) throw new AuthWaitError('AUTH_WAIT_TRANSPORT_UNAVAILABLE', 'Unable to acquire the selected Home enrollment carrier');
   const pollIntervalMsRaw = Number(process.env.HAPPIER_AUTH_POLL_INTERVAL_MS ?? '');
-  const pollIntervalMs = Number.isFinite(pollIntervalMsRaw) && pollIntervalMsRaw > 0 ? pollIntervalMsRaw : 1000;
+  const pollIntervalMs = Number.isFinite(pollIntervalMsRaw) && pollIntervalMsRaw > 0 ? pollIntervalMsRaw : TERMINAL_AUTH_POLL_INTERVAL_MS;
+  const homeRetry = { deadlineMs: state.pairingExpiresAtMs, pollIntervalMs, signal };
 
   try {
     if (target.descriptor) {
@@ -270,11 +280,16 @@ export async function handleAuthWait(argsRaw: string[], signal?: AbortSignal): P
     }
     while (true) {
     signal?.throwIfAborted();
+    if (Date.now() >= state.pairingExpiresAtMs) {
+      throw new AuthWaitError('AUTH_REQUEST_EXPIRED', 'Authentication request expired. Run `happier auth request --json` again.');
+    }
     const statusData = await readTerminalAuthRequestStatus({ runtime: acquired.runtime, publicKey: state.publicKey, ...(signal ? { signal } : {}) });
     const status = isRecord(statusData) ? statusData.status : undefined;
     if (status === 'not_found') {
-      console.error('Authentication request expired. Run `happier auth request --json` again.');
-      process.exit(1);
+      throw new AuthWaitError('AUTH_REQUEST_EXPIRED', 'Authentication request expired. Run `happier auth request --json` again.');
+    }
+    if (status !== 'pending' && status !== 'authorized') {
+      throw new AuthWaitError('AUTH_RESPONSE_INVALID', 'Unexpected authentication request status from server.');
     }
 
     if (status === 'authorized') {
@@ -285,34 +300,41 @@ export async function handleAuthWait(argsRaw: string[], signal?: AbortSignal): P
         ...(signal ? { signal } : {}),
       });
       if (!isRecord(claimData) || claimData.state !== 'authorized') {
+        if (!isRecord(claimData) || claimData.state !== 'requested') {
+          throw new AuthWaitError('AUTH_RESPONSE_INVALID', 'Unexpected authentication claim response from server.');
+        }
         await waitForPollInterval(pollIntervalMs, signal);
         continue;
       }
       const claimedServerIdentityId = normalizeServerIdentityIdCapability(claimData.serverIdentityId);
       if (claimedServerIdentityId !== state.serverIdentityId) {
-        console.error(
+        throw new AuthWaitError('AUTH_RESPONSE_HOME_MISMATCH',
           `The authentication response came from a different Home identity `
           + `(expected ${state.serverIdentityId}, received ${claimedServerIdentityId ?? 'missing'}). `
           + 'Credentials were not changed; create a new request for the intended Home.',
         );
-        process.exit(1);
       }
       const token = String(claimData.token ?? '');
       const responseB64 = String(claimData.response ?? '');
       if (!token || !responseB64 || responseB64.length > MAX_PROVISIONING_RESPONSE_B64_CHARS) {
-        console.error('Unexpected response from server.');
-        process.exit(1);
+        throw new AuthWaitError('AUTH_RESPONSE_INVALID', 'Unexpected response from server.');
       }
       if (target.descriptor) {
-        const authenticatedSnapshot = await fetchServerFeaturesSnapshot({
-          serverUrl: acquired.runtime.runtimeOrigin,
-          token,
-          ...(signal ? { signal } : {}),
+        await retryHomeOperation(homeRetry, async () => {
+          const authenticatedSnapshot = await fetchServerFeaturesSnapshot({
+            serverUrl: acquired.runtime.runtimeOrigin,
+            token,
+            timeoutMs: Math.max(1, homeRetry.deadlineMs - Date.now()),
+            ...(signal ? { signal } : {}),
+          });
+          verifyTerminalAuthEnrollmentRuntime({ target, runtime: acquired.runtime, snapshot: authenticatedSnapshot });
         });
-        verifyTerminalAuthEnrollmentRuntime({ target, runtime: acquired.runtime, snapshot: authenticatedSnapshot });
       }
 
       const terminalSecretKey = decodeBase64(state.secretKey);
+      if (Date.now() >= state.pairingExpiresAtMs) {
+        throw new AuthWaitError('AUTH_REQUEST_EXPIRED', 'Authentication request expired. Run `happier auth request --json` again.');
+      }
       const opened = openTerminalProvisioningResponse({
         payload: decodeBase64(responseB64),
         terminalSecretKey,
@@ -322,8 +344,7 @@ export async function handleAuthWait(argsRaw: string[], signal?: AbortSignal): P
         supportsTokenOnly: true,
       });
       if (!opened) {
-        console.error(V3_REQUIRED_ERROR);
-        process.exit(1);
+        throw new AuthWaitError('AUTH_PAIRING_V3_REQUIRED', V3_REQUIRED_ERROR);
       }
 
       signal?.throwIfAborted();
@@ -335,11 +356,12 @@ export async function handleAuthWait(argsRaw: string[], signal?: AbortSignal): P
         await removeProtectedLocalStateFile(statePath, PENDING_AUTH_STATE_PROTECTION);
         ({ machineId } = await registerAndPersistManagedTerminalEnrollmentCredential({ token, opened,
           runtimeOrigin: acquired.runtime.runtimeOrigin, managedEnrollment: state.managedEnrollment,
+          homeRetry,
           assertCurrent: () => signal?.throwIfAborted() }));
       } else {
         const persisted = await persistTerminalEnrollmentCredential({ token, opened });
         machineId = await completeClaimedCredentialHandoff({
-          credentials: persisted.credentials, statePath, runtimeOrigin: acquired.runtime.runtimeOrigin,
+          credentials: persisted.credentials, statePath, runtimeOrigin: acquired.runtime.runtimeOrigin, homeRetry,
         });
       }
       if (remoteEnrollment) {

@@ -206,6 +206,7 @@ describe('runner daemon PluginServices proxy', () => {
                 logger: unavailable.logger,
                 sessions: unavailable.sessions,
                 managedServices: unavailable.managedServices,
+                machineProvisioners: unavailable.machineProvisioners,
                 exec: unavailable.exec,
                 composerContent: unavailable.composerContent,
                 interactions: unavailable.interactions,
@@ -1721,8 +1722,9 @@ describe('runner daemon PluginServices proxy', () => {
                 code: 'plugin_external_sources_unavailable',
             },
         });
-        expect(externalCapabilitiesDispatchSignal)
-            .toBe(externalCapabilitiesController.signal);
+        expect(externalCapabilitiesDispatchSignal?.aborted).toBe(false);
+        externalCapabilitiesController.abort();
+        expect(externalCapabilitiesDispatchSignal?.aborted).toBe(true);
         expect(calls.filter((call) =>
             call.kind === 'plugin_sessions.external.capabilities_v1',
         )).toHaveLength(1);
@@ -1799,8 +1801,12 @@ describe('runner daemon PluginServices proxy', () => {
         )).rejects.toMatchObject({
             code: 'plugin_action_generation_private_unavailable',
         });
-        expect(providerDispatchSignal).toBe(providerCaller.signal);
-        expect(actionDispatchSignal).toBe(actionCaller.signal);
+        expect(providerDispatchSignal?.aborted).toBe(false);
+        expect(actionDispatchSignal?.aborted).toBe(false);
+        providerCaller.abort();
+        actionCaller.abort();
+        expect(providerDispatchSignal?.aborted).toBe(true);
+        expect(actionDispatchSignal?.aborted).toBe(true);
         expect(calls.every((call) => (
             RunnerDaemonPluginServiceOperationV1Schema.safeParse(call).success
         ))).toBe(true);
@@ -2308,9 +2314,21 @@ describe('runner daemon PluginServices proxy', () => {
                 if (operation.kind === 'plugin_services.prepare_v1') {
                     prepareCount += 1;
                     if (prepareCount === 2) {
+                        const bootstrap = managedProviderBootstrap('1');
                         return {
                             ...preparedSnapshot(),
-                            managedProvider: { invalid: true },
+                            managedProvider: {
+                                ...bootstrap,
+                                scope: {
+                                    ...bootstrap.scope,
+                                    runtimeBindingBasis: {
+                                        ...bootstrap.scope.runtimeBindingBasis,
+                                        adapterVersion: 'private-bootstrap-value',
+                                    },
+                                },
+                                providerPluginHardRevocationRevisionAtAdmission:
+                                    'private-bootstrap-value',
+                            },
                         };
                     }
                     return {
@@ -2356,11 +2374,23 @@ describe('runner daemon PluginServices proxy', () => {
 
         expect(bindingCurrentness).toHaveLength(1);
         expect(bindingCurrentness[0]?.()).toBe(true);
-        await expect(
-            services.storage.daemon.get('invalid-successor-prepare'),
-        ).rejects.toMatchObject({
+        const failure = await services.storage.daemon
+            .get('invalid-successor-prepare')
+            .catch((error: unknown) => error);
+        expect(failure).toMatchObject({
             code: 'plugin_services_prepare_invalid',
+            message: expect.stringContaining(
+                'providerPluginHardRevocationRevisionAtAdmission:invalid_type',
+            ),
+            details: { issues: expect.arrayContaining([{
+                path: ['providerPluginHardRevocationRevisionAtAdmission'],
+                code: 'invalid_type',
+            }, {
+                path: ['scope', 'runtimeBindingBasis', 'adapterVersion'],
+                code: 'invalid_type',
+            }]) },
         });
+        expect(JSON.stringify(failure)).not.toContain('private-bootstrap-value');
         expect(bindingCurrentness).toHaveLength(1);
         expect(bindingCurrentness[0]?.()).toBe(true);
     });
@@ -2517,6 +2547,7 @@ describe('runner daemon PluginServices proxy', () => {
         const materializationController = new AbortController();
         const dispatch = vi.fn(async (
             operation: RunnerDaemonPluginServiceOperationV1,
+            _options?: Readonly<{ signal?: AbortSignal }>,
         ) => {
             if (operation.kind === 'plugin_services.prepare_v1') {
                 return preparedSnapshot();
@@ -2575,8 +2606,12 @@ describe('runner daemon PluginServices proxy', () => {
                     accountId: 'expected-account',
                 },
             }),
-            { signal: materializationController.signal },
+            expect.objectContaining({ signal: expect.any(AbortSignal) }),
         );
+        const signal = dispatch.mock.calls.at(-1)?.[1]?.signal;
+        expect(signal?.aborted).toBe(false);
+        materializationController.abort();
+        expect(signal?.aborted).toBe(true);
     });
 
     it('forwards each service call\'s own cancellation signal through the runner dispatch', async () => {
@@ -2655,7 +2690,10 @@ describe('runner daemon PluginServices proxy', () => {
         for (const [index, [kind, invoke]] of calls.entries()) {
             const controller = new AbortController();
             await invoke(controller.signal);
-            expect(forwarded[index]).toEqual({ kind, signal: controller.signal });
+            expect(forwarded[index]?.kind).toBe(kind);
+            expect(forwarded[index]?.signal?.aborted).toBe(false);
+            controller.abort();
+            expect(forwarded[index]?.signal?.aborted).toBe(true);
         }
         expect(forwarded).toHaveLength(calls.length);
     });

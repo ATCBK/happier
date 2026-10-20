@@ -3,6 +3,7 @@ import { createReadStream } from 'node:fs';
 import { lstat, mkdir, readFile, readdir, readlink, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { WORKSPACE_PACKAGE_BUILD_INPUT_RECORD } from '../../packageBuildOutputTargets.mjs';
+import { resolveInstalledRuntimePackage } from '../../workspaceRuntimeDependencies.mjs';
 
 import { commandExists, execOrThrow, resolveYarnCommand, type RunCommand } from './commands.js';
 import type { BinaryTarget } from './targets.js';
@@ -214,7 +215,7 @@ function requiredSharpRuntimePackages(target: BinaryTarget): string[] {
     : [`@img/sharp-${suffix}`, `@img/sharp-libvips-${suffix}`];
 }
 
-async function resolveSharpRuntimePackageRoot({
+async function resolveSharpRuntimePackageJsonPath({
   repoRoot,
   target,
   env,
@@ -228,11 +229,12 @@ async function resolveSharpRuntimePackageRoot({
   commandProbe: (cmd: string) => boolean;
 }): Promise<string> {
   const platform = target.os === 'windows' ? 'win32' : target.os;
-  if (platform === process.platform && target.arch === process.arch) return repoRoot;
+  const serverPackageJsonPath = join(repoRoot, 'apps', 'server', 'package.json');
+  if (platform === process.platform && target.arch === process.arch) return serverPackageJsonPath;
   if (!commandProbe('npm')) {
     throw new Error('[component-artifacts] cross-target server support requires npm with --cpu/--os selection');
   }
-  const sharp = await readPackageJson(join(repoRoot, 'node_modules', 'sharp', 'package.json'));
+  const { packageJson: sharp } = resolveInstalledRuntimePackage({ packageName: 'sharp', resolveFromPackageJsonPath: serverPackageJsonPath });
   if (!sharp.version) throw new Error('[component-artifacts] installed Sharp has no version');
   const packageRoot = join(repoRoot, '.project', 'tmp', 'server-native-dependencies', `${target.os}-${target.arch}`);
   await mkdir(packageRoot, { recursive: true });
@@ -256,7 +258,7 @@ async function resolveSharpRuntimePackageRoot({
     '--package-lock=false',
     '--workspaces=false',
   ], { cwd: packageRoot, env });
-  return packageRoot;
+  return join(packageRoot, 'package.json');
 }
 
 function resolveIrohNodeAddonTarget(target: BinaryTarget): string {
@@ -316,27 +318,27 @@ export async function resolveIrohNativeServerSidecarEntries({
 }
 
 async function collectInstalledPackageSidecars({
-  repoRoot,
+  resolveFromPackageJsonPath,
   packageName,
   target,
   optional,
   visited,
 }: {
-  repoRoot: string;
+  resolveFromPackageJsonPath: string;
   packageName: string;
   target: BinaryTarget;
   optional: boolean;
   visited: Set<string>;
 }): Promise<StageEntry[]> {
   if (visited.has(packageName)) return [];
-  const packageDir = join(repoRoot, packageNameToNodeModulesPath(packageName));
-  const packageJsonPath = join(packageDir, 'package.json');
-  const packageJsonInfo = await stat(packageJsonPath).catch(() => null);
-  if (!packageJsonInfo?.isFile()) {
-    if (optional) return [];
-    throw new Error(`[component-artifacts] missing runtime package ${packageName}: ${packageJsonPath}`);
+  let installed: ReturnType<typeof resolveInstalledRuntimePackage>;
+  try {
+    installed = resolveInstalledRuntimePackage({ packageName, resolveFromPackageJsonPath });
+  } catch (error) {
+    if (optional && error && typeof error === 'object' && 'code' in error && error.code === 'MODULE_NOT_FOUND') return [];
+    throw error;
   }
-
+  const { packageDir, packageJsonPath } = installed;
   const packageJson = await readPackageJson(packageJsonPath);
   if (!packageSupportsTarget(packageJson, target)) {
     if (optional) return [];
@@ -351,7 +353,7 @@ async function collectInstalledPackageSidecars({
 
   for (const depName of Object.keys(packageJson.dependencies ?? {})) {
     entries.push(...await collectInstalledPackageSidecars({
-      repoRoot,
+      resolveFromPackageJsonPath: packageJsonPath,
       packageName: depName,
       target,
       optional: false,
@@ -361,7 +363,7 @@ async function collectInstalledPackageSidecars({
 
   for (const depName of Object.keys(packageJson.optionalDependencies ?? {})) {
     entries.push(...await collectInstalledPackageSidecars({
-      repoRoot,
+      resolveFromPackageJsonPath: packageJsonPath,
       packageName: depName,
       target,
       optional: true,
@@ -369,6 +371,30 @@ async function collectInstalledPackageSidecars({
     }));
   }
 
+  return entries;
+}
+
+/** Sharp's native closure beside the compiled server; target acquisition stays server-owned. */
+export async function resolveSharpServerSidecarEntries({
+  repoRoot,
+  target,
+  env = process.env,
+  runCommand = execOrThrow,
+  commandProbe = commandExists,
+}: {
+  repoRoot: string;
+  target: BinaryTarget;
+  env?: NodeJS.ProcessEnv;
+  runCommand?: RunCommand;
+  commandProbe?: (cmd: string) => boolean;
+}): Promise<StageEntry[]> {
+  const resolveFromPackageJsonPath = await resolveSharpRuntimePackageJsonPath({ repoRoot, target, env, runCommand, commandProbe });
+  const visited = new Set<string>();
+  const entries = await collectInstalledPackageSidecars({ resolveFromPackageJsonPath, packageName: 'sharp', target, optional: false, visited });
+  const sharp = resolveInstalledRuntimePackage({ packageName: 'sharp', resolveFromPackageJsonPath });
+  for (const packageName of requiredSharpRuntimePackages(target)) {
+    entries.push(...await collectInstalledPackageSidecars({ resolveFromPackageJsonPath: sharp.packageJsonPath, packageName, target, optional: false, visited }));
+  }
   return entries;
 }
 
@@ -537,24 +563,7 @@ export async function resolveServerRuntimeSupportEntries({
       target,
       requireNativeAddon: String(env.HAPPIER_SERVER_REQUIRE_IROH_NATIVE ?? '').trim() === '1',
     }));
-    const sharpPackageRoot = await resolveSharpRuntimePackageRoot({ repoRoot, target, env, runCommand, commandProbe });
-    const sharpVisited = new Set<string>();
-    entries.push(...await collectInstalledPackageSidecars({
-      repoRoot: sharpPackageRoot,
-      packageName: 'sharp',
-      target,
-      optional: false,
-      visited: sharpVisited,
-    }));
-    for (const packageName of requiredSharpRuntimePackages(target)) {
-      entries.push(...await collectInstalledPackageSidecars({
-        repoRoot: sharpPackageRoot,
-        packageName,
-        target,
-        optional: false,
-        visited: sharpVisited,
-      }));
-    }
+    entries.push(...await resolveSharpServerSidecarEntries({ repoRoot, target, env, runCommand, commandProbe }));
   }
 
   return entries;
@@ -581,6 +590,10 @@ export async function resolveServerRuntimeSupportToolIdentityEntries({
     {
       sourcePath: join(repoRoot, 'packages', 'cli-common', 'scripts', 'buildPrismaMigrateBinary.mjs'),
       targetPath: join('tool-inputs', 'buildPrismaMigrateBinary.mjs'),
+    },
+    {
+      sourcePath: join(repoRoot, 'packages', 'cli-common', 'src', 'componentArtifacts', 'commands.ts'),
+      targetPath: join('tool-inputs', 'commands.ts'),
     },
     {
       sourcePath: join(repoRoot, 'node_modules', 'prisma'),

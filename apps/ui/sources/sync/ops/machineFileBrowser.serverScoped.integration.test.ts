@@ -1,4 +1,5 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, renderHook } from '@/dev/testkit';
 import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 
@@ -37,6 +38,92 @@ const listings = [
 ] as const;
 
 describe('file-browser failures across the scoped network boundary', () => {
+    it('retires a stuck tree read on disable and loads again when reopened', async () => {
+        const { useWorkspaceRepositoryTreeBrowser } = await import('@/hooks/workspaces/files/useWorkspaceRepositoryTreeBrowser');
+        const { SOCKET_RPC_EVENTS } = await import('@happier-dev/protocol/socketRpc');
+        boundary.setRpcResponder(async () => new Promise(() => {}));
+        const scope = { serverId: home.id, machineId: 'machine-1', rootPath: '/tree-lifetime' };
+        const hook = await renderHook(({ enabled }) => useWorkspaceRepositoryTreeBrowser({ scope, enabled }), {
+            initialProps: { enabled: true },
+        });
+        await vi.waitFor(() => expect(boundary.requests).toHaveLength(1));
+        expect(hook.getCurrent().rootLoading).toBe(true);
+        await hook.rerender({ enabled: false });
+        await vi.waitFor(() => expect(boundary.socketBoundaries.some(({ socket }) =>
+            socket.emit.mock.calls.some(([event]) => event === SOCKET_RPC_EVENTS.CANCEL))).toBe(true));
+        expect(hook.getCurrent().rootLoading).toBe(false);
+        boundary.setRpcResponder(async request => {
+            const decoded = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, request.payload, `${request.targetId}:${request.method}`);
+            return socketRpcCodec.encodeResponse({ mode: 'plain' }, { ok: true, path: scope.rootPath,
+                entries: [{ name: 'ready.ts', path: `${scope.rootPath}/ready.ts`, type: 'file' }], truncated: false }, decoded.callId);
+        });
+        await hook.rerender({ enabled: true });
+        await vi.waitFor(() => expect(hook.getCurrent().nodes.map(node => node.path)).toEqual(['ready.ts']));
+        await hook.unmount();
+    });
+
+    it('keeps a shared warm read for another browser and retires it when the last browser leaves', async () => {
+        const { warmMachineFileBrowserDirectoryCache } = await import('@/sync/domains/input/machineFileBrowser');
+        const { SOCKET_RPC_EVENTS } = await import('@happier-dev/protocol/socketRpc');
+        boundary.setRpcResponder(async () => new Promise(() => {}));
+        const first = new AbortController();
+        const second = new AbortController();
+        const input = { machineId: 'machine-1', serverId: home.id, directoryPath: '/warm-lifetime', includeFiles: true };
+        let firstRetired = false;
+        let secondRetired = false;
+        const a = warmMachineFileBrowserDirectoryCache({ ...input, signal: first.signal }).catch(() => { firstRetired = true; });
+        const b = warmMachineFileBrowserDirectoryCache({ ...input, signal: second.signal }).catch(() => { secondRetired = true; });
+        await vi.waitFor(() => expect(boundary.requests).toHaveLength(1));
+        first.abort();
+        await vi.waitFor(() => expect(firstRetired).toBe(true));
+        expect(secondRetired).toBe(false);
+        expect(boundary.socketBoundaries.some(({ socket }) => socket.emit.mock.calls.some(([event]) => event === SOCKET_RPC_EVENTS.CANCEL))).toBe(false);
+        second.abort();
+        await vi.waitFor(() => expect(secondRetired).toBe(true));
+        expect(boundary.socketBoundaries.some(({ socket }) => socket.emit.mock.calls.some(([event]) => event === SOCKET_RPC_EVENTS.CANCEL))).toBe(true);
+        await Promise.all([a, b]);
+        boundary.setRpcResponder(async request => {
+            const decoded = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, request.payload, `${request.targetId}:${request.method}`);
+            return socketRpcCodec.encodeResponse({ mode: 'plain' }, { ok: true, path: input.directoryPath,
+                entries: [], truncated: false }, decoded.callId);
+        });
+        expect(await warmMachineFileBrowserDirectoryCache(input)).toEqual({ ok: true, entries: [], truncated: false });
+        expect(boundary.requests).toHaveLength(2);
+    });
+
+    it('retires a terminal stream observation without closing the live terminal', async () => {
+        const { createMachineRpcTerminalStreamCarrier } = await import('@/sync/domains/terminal/stream/carrier');
+        const { SOCKET_RPC_EVENTS } = await import('@happier-dev/protocol/socketRpc');
+        const controller = new AbortController();
+        boundary.setRpcResponder(async () => new Promise(() => {}));
+        const carrier = createMachineRpcTerminalStreamCarrier({ machineId: 'machine-1', serverId: home.id, signal: controller.signal });
+        let retired = false;
+        const read = carrier.read({ terminalId: 'term-1', cursor: { mode: 'byte-offset', value: 0 } }).catch(() => { retired = true; });
+        await vi.waitFor(() => expect(boundary.requests).toHaveLength(1));
+        await act(async () => controller.abort());
+        await vi.waitFor(() => expect(retired).toBe(true));
+        expect(boundary.socketBoundaries.some(({ socket }) => socket.emit.mock.calls.some(([event]) => event === SOCKET_RPC_EVENTS.CANCEL))).toBe(true);
+        expect(boundary.requests.map(request => request.method)).toEqual([RPC_METHODS.DAEMON_TERMINAL_STREAM_READ_BYTES]);
+        await read;
+    });
+
+    it('retires the mounted terminal read when its view leaves', async () => {
+        const { useMachineTerminalSession } = await import('@/hooks/machine/useMachineTerminalSession');
+        const { SOCKET_RPC_EVENTS } = await import('@happier-dev/protocol/socketRpc');
+        boundary.setRpcResponder(async () => new Promise(() => {}));
+        const terminalRef = { current: { write: () => {}, clear: () => {} } };
+        const hook = await renderHook(() => useMachineTerminalSession({ machineId: 'machine-1',
+            serverId: home.id, cwd: null, terminalKey: 'borrowed-lifetime', terminalRef, attachedTerminalId: 'term-1',
+            readOnly: true, closeOnUnmount: true }));
+        // This Home does not advertise byte streaming, so the mounted owner
+        // uses its supported legacy stream; cancellation applies to both.
+        await vi.waitFor(() => expect(boundary.requests.map(request => request.method)).toEqual([RPC_METHODS.DAEMON_TERMINAL_STREAM_READ]));
+        await hook.unmount();
+        await vi.waitFor(() => expect(boundary.socketBoundaries.some(({ socket }) =>
+            socket.emit.mock.calls.some(([event]) => event === SOCKET_RPC_EVENTS.CANCEL))).toBe(true));
+        expect(boundary.requests.map(request => request.method)).toEqual([RPC_METHODS.DAEMON_TERMINAL_STREAM_READ]);
+    });
+
     it.each(listings)('lists %s on the selected Home with unavailable features', async (_name, list) => {
         boundary.setRpcResponder(async request => {
             const decoded = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, request.payload, `${request.targetId}:${request.method}`);

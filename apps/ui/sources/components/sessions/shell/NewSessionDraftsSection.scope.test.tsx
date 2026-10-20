@@ -17,6 +17,7 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { FocusReturnProvider } from '@/keyboard/focusReturn';
 import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { settingsParse } from '@/sync/domains/settings/settings';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 
 const navigation = vi.hoisted(() => ({ pushes: [] as unknown[] }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
@@ -102,6 +103,7 @@ async function createScopeFixture() {
         // Preserve the authenticated-carrier HTTP boundary installed by Account restoration.
         if (path === '/v1/auth/ping' || path === '/health') return new Response('{}', { status: 200 });
         if (parsed.origin !== new URL(otherHome.serverUrl).origin) return account.request(url, init);
+        if (path === '/v1/account/profile') return Response.json(AccountProfileSchema.parse({ id: otherScope.accountId }));
         if (path === SESSION_DRAFT_V2_ROUTE_LIST) {
             if (listGate) await listGate;
             return Response.json({ items: [...records.values()] });
@@ -163,7 +165,10 @@ it('subscribes only to the focused Home and replaces its rows when focus moves',
         const screen = await fixture.mount();
         expect(screen.findByTestId(rowId(activeDraftId))).not.toBeNull();
         expect(screen.findByTestId(rowId(ordinaryDraftId))).toBeNull();
-        expect(fixture.requests.some(request => request.path === SESSION_DRAFT_V2_ROUTE_LIST)).toBe(false);
+        // Focused Sync hydrates its own drafts independently of this section.
+        // A signed-out inactive Home must not acquire a draft-list request.
+        expect(fixture.requests.some(request => request.path === SESSION_DRAFT_V2_ROUTE_LIST
+            && request.origin === new URL(fixture.otherHome.serverUrl).origin)).toBe(false);
         await act(async () => { await fixture.focusOtherHome(); });
         await vi.waitFor(() => expect(screen.findByTestId(rowId(ordinaryDraftId))).not.toBeNull());
         expect(screen.findByTestId(rowId(activeDraftId))).toBeNull();
@@ -179,10 +184,11 @@ it('keeps another Home’s waiting Temporary-computer request discoverable and e
         expect(screen.findByTestId(rowId(ordinaryDraftId))).toBeNull();
         expect(screen.findByTestId(rowId(selectedDraftId))).toBeNull();
         expect(screen.findByTestId(`session-drafts-waiting-section:${fixture.otherScope.serverId}:${fixture.otherScope.accountId}`)).not.toBeNull();
-        const reads = fixture.requests.filter(request => request.path === SESSION_DRAFT_V2_ROUTE_LIST);
+        const reads = fixture.requests.filter(request => request.path === SESSION_DRAFT_V2_ROUTE_LIST
+            && request.origin === new URL(fixture.otherHome.serverUrl).origin);
         expect(reads.length).toBeGreaterThan(0);
-        expect(reads.every(request => request.origin === new URL(fixture.otherHome.serverUrl).origin
-            && request.authorization === `Bearer e30.${Buffer.from(JSON.stringify({ sub: 'account-b' })).toString('base64url')}.signature`)).toBe(true);
+        expect(reads.every(request =>
+            request.authorization === `Bearer e30.${Buffer.from(JSON.stringify({ sub: 'account-b' })).toString('base64url')}.signature`)).toBe(true);
     } finally { await fixture.dispose(); }
 });
 

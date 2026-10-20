@@ -4,7 +4,7 @@ import type {
   TargetedContributionSnapshot,
   TargetedContributionsService,
 } from '@happier-dev/plugin-sdk';
-import type { ActionsService } from '@happier-dev/plugin-sdk/actions';
+import { getPluginMachineExecutionRouting, type ActionsService } from '@happier-dev/plugin-sdk/actions';
 import { describe, expect, it, vi } from 'vitest';
 
 import * as management from './management.js';
@@ -40,7 +40,7 @@ function admittedProviderOperation(role: string, occurrenceId = 'provider-occurr
 const endpointResolveAction = admittedProviderOperation('endpointResolve');
 const principalResolveAction = admittedProviderOperation('principalResolve');
 const executionOrigin = Object.freeze({
-  serverIdentityId: 'server-1',
+  serverIdentityId: 'srv_account_one',
   materializationRef: Object.freeze({
     pluginId: providerPluginId,
     machineId: 'machine-1',
@@ -92,6 +92,7 @@ const connectionAuthority = {
 function connectionRow(): StateRow {
   const value = createCurrentConversationConnectionFixture({
     connectionId: 'connection-1',
+    configurationRevision: 4,
     authority: connectionAuthority,
     createdAt: 1_000,
     updatedAt: 1_000,
@@ -238,7 +239,7 @@ describe('Conversation binding resolution and creation', () => {
         query: 'Alice',
       });
       expect(options).toEqual(expect.objectContaining({
-        expectedExecutionOrigin: executionOrigin,
+        expectedExecutionRouting: getPluginMachineExecutionRouting(executionOrigin),
         signal: expect.any(AbortSignal),
       }));
       return { result: { kind: 'resolved', candidates: [endpointCandidate] }, executionOrigin };
@@ -468,13 +469,13 @@ describe('Conversation binding resolution and creation', () => {
       1,
       endpointResolveAction,
       expect.objectContaining({ query: 'Alice' }),
-      expect.objectContaining({ expectedExecutionOrigin: executionOrigin }),
+      expect.objectContaining({ expectedExecutionRouting: getPluginMachineExecutionRouting(executionOrigin) }),
     );
     expect(executeAdmittedTargetedOperationWithExecutionOrigin).toHaveBeenNthCalledWith(
       2,
       principalResolveAction,
       expect.objectContaining({ endpoint: endpointCandidate, query: 'Alice' }),
-      expect.objectContaining({ expectedExecutionOrigin: executionOrigin }),
+      expect.objectContaining({ expectedExecutionRouting: getPluginMachineExecutionRouting(executionOrigin) }),
     );
     expect(collection.batches[0]).toEqual(expect.arrayContaining([
       { kind: 'assert', rowId: 'connection-1', expectedRevision: 4 },

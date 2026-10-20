@@ -1,6 +1,7 @@
 import { deriveExternalSessionActivity } from '@happier-dev/plugin-sdk/sessions/external';
 import {
   createExternalSessionContentSearchControl,
+  prefilterExternalSessionContentPaths,
   ExternalSessionContentSearchYield,
   type JsonlScannerFileSystem,
 } from '@happier-dev/plugin-sdk/sessions/file-stores';
@@ -10,6 +11,8 @@ import {
   pageClaudeJsonlSessionFiles,
   type ClaudeJsonlSessionScanPosition,
   type DiscoveredClaudeJsonlSession,
+  resolveClaudeJsonlSessionFile,
+  isSafeClaudeJsonlPathSegment,
 } from './files.js';
 import {
   readClaudeJsonlSessionTitleWithIndex,
@@ -24,6 +27,8 @@ import { findExternalSessionContentMatchRange } from '@happier-dev/plugin-sdk/se
 export type ClaudeExternalSessionCandidate = Readonly<{
   remoteSessionId: string;
   title?: string;
+  cwd?: string;
+  messageCount?: number;
   updatedAtMs: number;
   createdAtMs?: number;
   activity?: ReturnType<typeof deriveExternalSessionActivity>;
@@ -47,7 +52,6 @@ type ClaudeCandidateCursorV5 =
       scanPosition: ClaudeJsonlSessionScanPosition;
       scanned: number;
       search: ClaudeCandidateSearchContext;
-      contentProgress?: ClaudeContentSearchProgress;
     }>
   | Readonly<{
       v: 5;
@@ -57,6 +61,28 @@ type ClaudeCandidateCursorV5 =
       offset: number;
       search: ClaudeCandidateSearchContext;
     }>;
+
+type ClaudeCandidateContentCursor = Readonly<{
+  v: 7;
+  kind: 'claudeCandidateContentScan';
+  search: ClaudeCandidateSearchContext;
+  startedAtMs: number;
+  changedBeforeMs?: number;
+  scanPosition: ClaudeJsonlSessionScanPosition | null;
+  unfinished?: ClaudeJsonlSessionScanPosition;
+  contentProgress?: ClaudeContentSearchProgress;
+}>;
+
+function encodeRecentPosition(position: ClaudeJsonlSessionScanPosition | null): unknown {
+  return position?.recent ? [position.recent.updatedAtMs, position.projectId, position.recent.remoteSessionId] : null;
+}
+
+function decodeRecentPosition(value: unknown): ClaudeJsonlSessionScanPosition | null {
+  if (!Array.isArray(value) || value.length !== 3 || !Number.isSafeInteger(value[0]) || value[0] < 0
+    || typeof value[1] !== 'string' || !isSafeClaudeJsonlPathSegment(value[1])
+    || typeof value[2] !== 'string' || !isSafeClaudeJsonlPathSegment(value[2])) return null;
+  return { projectId: value[1], sessionEntryOffset: 0, recent: { updatedAtMs: value[0], remoteSessionId: value[2] } };
+}
 
 export type ClaudeCandidatePreparation = Readonly<{
   kind: 'building_candidate_index';
@@ -83,21 +109,25 @@ export class ClaudeCandidateInvalidCursorError extends Error {
   readonly name = 'ClaudeCandidateInvalidCursorError';
 }
 
-function encodeCandidateCursor(cursor: ClaudeCandidateCursorV5): string {
+function encodeCandidateCursor(cursor: ClaudeCandidateCursorV5 | ClaudeCandidateContentCursor): string {
   const searchMode = cursor.search.searchMode === 'fast' ? 'f' : 'l';
+  if (cursor.kind === 'claudeCandidateContentScan') {
+    return Buffer.from(JSON.stringify([7, cursor.search.searchTerm, searchMode, cursor.startedAtMs,
+      cursor.changedBeforeMs ?? null, encodeRecentPosition(cursor.scanPosition),
+      ...(cursor.unfinished && cursor.contentProgress ? [encodeRecentPosition(cursor.unfinished), cursor.contentProgress] : []),
+    ]), 'utf8').toString('base64url');
+  }
   const value =
     cursor.kind === 'claudeCandidateIndexScan'
       ? [
           5,
           cursor.sourceGeneration,
           cursor.scanPosition.projectId,
-          cursor.scanPosition.recent === undefined ? cursor.scanPosition.sessionEntryOffset
-            : [cursor.scanPosition.sessionEntryOffset, cursor.scanPosition.recent.updatedAtMs, cursor.scanPosition.recent.remoteSessionId],
+          cursor.scanPosition.sessionEntryOffset,
           cursor.scanned,
           cursor.search.searchTerm,
           searchMode,
           cursor.search.searchTarget,
-          ...(cursor.contentProgress ? [cursor.contentProgress] : []),
         ]
       : [
           5,
@@ -114,20 +144,33 @@ function encodeCandidateCursor(cursor: ClaudeCandidateCursorV5): string {
 
 function decodeCandidateCursor(
   raw: string | undefined,
-): ClaudeCandidateCursorV5 | null {
+): ClaudeCandidateCursorV5 | ClaudeCandidateContentCursor | null {
   if (typeof raw !== 'string' || raw.trim().length === 0) return null;
   try {
     const parsed = JSON.parse(
       Buffer.from(raw, 'base64url').toString('utf8'),
     ) as unknown;
-    if (!Array.isArray(parsed) || (parsed.length !== 8 && parsed.length !== 9) || parsed[0] !== 5)
-      return null;
+    if (Array.isArray(parsed) && parsed[0] === 7 && (parsed.length === 6 || parsed.length === 8)) {
+      const searchMode = parsed[2] === 'f' ? 'fast' : parsed[2] === 'l' ? 'full' : null;
+      const scanPosition = decodeRecentPosition(parsed[5]);
+      const unfinished = parsed.length === 8 ? decodeRecentPosition(parsed[6]) : undefined;
+      const contentProgress = parsed.length === 8 ? parseClaudeContentSearchProgress(parsed[7]) : undefined;
+      if (typeof parsed[1] !== 'string' || !searchMode || !Number.isSafeInteger(parsed[3]) || parsed[3] < 0
+        || (parsed[4] !== null && (!Number.isSafeInteger(parsed[4]) || parsed[4] < parsed[3]))
+        || (parsed[5] !== null && !scanPosition) || (parsed.length === 8 && (!unfinished || !contentProgress))) return null;
+      return { v: 7, kind: 'claudeCandidateContentScan', startedAtMs: parsed[3],
+        ...(parsed[4] === null ? {} : { changedBeforeMs: parsed[4] }), scanPosition,
+        search: { searchTerm: parsed[1], searchMode, searchTarget: 'content' },
+        ...(unfinished && contentProgress ? { unfinished, contentProgress } : {}),
+      };
+    }
+    // Intermediate development content cursors have no compatibility obligation.
+    if (!Array.isArray(parsed) || parsed.length !== 8 || parsed[0] !== 5 || parsed[7] !== 'metadata') return null;
     const searchMode =
       parsed[6] === 'f' ? 'fast' : parsed[6] === 'l' ? 'full' : null;
     if (
       typeof parsed[5] !== 'string' ||
-      !searchMode ||
-      (parsed[7] !== 'metadata' && parsed[7] !== 'content')
+      !searchMode
     )
       return null;
     const search: ClaudeCandidateSearchContext = {
@@ -135,8 +178,6 @@ function decodeCandidateCursor(
       searchMode,
       searchTarget: parsed[7],
     };
-    const contentProgress = parsed.length === 9 ? parseClaudeContentSearchProgress(parsed[8]) : undefined;
-    if (parsed.length === 9 && (!contentProgress || parsed[7] !== 'content')) return null;
     if (
       parsed.length === 8 && parsed[1] === 'e' &&
       typeof parsed[2] === 'string' &&
@@ -155,15 +196,13 @@ function decodeCandidateCursor(
         search,
       };
     }
-    const position = Array.isArray(parsed[3]) && parsed[3].length === 3 ? parsed[3] : [parsed[3]];
+    const position = [parsed[3]];
     return typeof parsed[1] === 'string' &&
       parsed[1].length > 0 &&
       typeof parsed[2] === 'string' &&
       parsed[2].length > 0 &&
       Number.isSafeInteger(position[0]) &&
       (position[0] as number) >= 0 &&
-      (position.length === 1 || (parsed[7] === 'content' && Number.isSafeInteger(position[1]) && (position[1] as number) >= 0
-        && typeof position[2] === 'string' && position[2].length > 0)) &&
       Number.isSafeInteger(parsed[4]) &&
       (parsed[4] as number) >= 0
       ? {
@@ -173,11 +212,9 @@ function decodeCandidateCursor(
           scanPosition: {
             projectId: parsed[2],
             sessionEntryOffset: position[0] as number,
-            ...(position.length === 3 ? { recent: { updatedAtMs: position[1] as number, remoteSessionId: position[2] as string } } : {}),
           },
           scanned: parsed[4] as number,
           search,
-          ...(contentProgress ? { contentProgress } : {}),
         }
       : null;
   } catch {
@@ -385,24 +422,28 @@ export async function listClaudeExternalSessionCandidates(
     search.searchTarget === 'content'
       ? createExternalSessionContentSearchControl(params)
       : undefined;
-  const decodedCursor = params.cursor
+  const suppliedCursor = params.cursor
     ? decodeCandidateCursor(params.cursor)
     : null;
-  if (params.cursor && !decodedCursor) {
-    throw new ClaudeCandidateInvalidCursorError(
-      'Claude candidate cursor is invalid.',
-    );
+  if (params.cursor && !suppliedCursor) {
+    if (search.searchTarget === 'content') {
+      throw new ClaudeCandidateSourceChangedError('external_sessions_content_cursor_invalid');
+    }
+    throw new ClaudeCandidateInvalidCursorError('Claude candidate cursor is invalid.');
   }
   if (
-    decodedCursor &&
-    (decodedCursor.search.searchTerm !== search.searchTerm ||
-      decodedCursor.search.searchMode !== search.searchMode ||
-      decodedCursor.search.searchTarget !== search.searchTarget)
+    suppliedCursor &&
+    (suppliedCursor.search.searchTerm !== search.searchTerm ||
+      suppliedCursor.search.searchMode !== search.searchMode ||
+      suppliedCursor.search.searchTarget !== search.searchTarget)
   ) {
     throw new ClaudeCandidateInvalidCursorError(
       'Claude candidate cursor does not match the current search.',
     );
   }
+  const contentCursor = suppliedCursor?.kind === 'claudeCandidateContentScan' ? suppliedCursor : null;
+  const decodedCursor = suppliedCursor?.kind === 'claudeCandidateContentScan' ? null : suppliedCursor;
+  const startedAtMs = contentCursor?.startedAtMs ?? Date.now();
 
   if (
     search.searchTarget === 'metadata' &&
@@ -432,7 +473,7 @@ export async function listClaudeExternalSessionCandidates(
           exactFilenameSnapshot.sourceGeneration
       ) {
         throw new ClaudeCandidateSourceChangedError(
-          'Claude exact-id candidate source changed during pagination.',
+          'external_sessions_exact_id_source_changed',
         );
       }
       const offset =
@@ -514,41 +555,56 @@ export async function listClaudeExternalSessionCandidates(
 
   if (decodedCursor?.kind === 'claudeCandidateExactId') {
     throw new ClaudeCandidateSourceChangedError(
-      'Claude exact-id candidate source changed during pagination.',
+      'external_sessions_exact_id_source_changed',
     );
+  }
+  if (search.searchTarget === 'content' && !params.ripgrep) {
+    return { candidates: [], nextCursor: null, contentCoverage: 'unsupported' };
   }
   const scanPosition =
     decodedCursor?.kind === 'claudeCandidateIndexScan'
       ? decodedCursor.scanPosition
-      : null;
+      : contentCursor?.scanPosition ?? null;
   // Recency needs the native file metadata set, never its transcript bodies.
-  // Reuse that one inventory for this content page instead of restatting it
+  // Reuse that one listing for this content page instead of restatting it
   // for each hit-sized chunk. Returned hits keep the existing page budget.
-  const scanLimit = search.searchTarget === 'content' ? Number.POSITIVE_INFINITY : limit;
+  const scanLimit = search.searchTarget === 'content'
+    ? Number.POSITIVE_INFINITY : limit;
   const traversed = await pageClaudeJsonlSessionFiles({
-    source: params.source,
-    env: params.env,
-    scanPosition,
-    skip: 0,
-    limit: scanLimit,
-    ...(search.searchTarget === 'content' ? { order: 'recent' as const } : {}),
+    source: params.source, env: params.env, scanPosition, skip: 0, limit: scanLimit,
+    ...(search.searchTarget === 'content' ? { order: 'recent' as const,
+      recentWindow: { startedAtMs, changedBeforeMs: contentCursor?.changedBeforeMs },
+      unfinished: contentCursor?.unfinished,
+    } : {}),
     signal: params.signal,
   });
+  const encodeScanCursor = (resume: Extract<ClaudeCandidateCursorV5, { kind: 'claudeCandidateIndexScan' }>
+    & { contentProgress?: ClaudeContentSearchProgress; unfinished?: ClaudeJsonlSessionScanPosition }) =>
+    encodeCandidateCursor(search.searchTarget === 'content'
+      ? { v: 7, kind: 'claudeCandidateContentScan', search, startedAtMs,
+          changedBeforeMs: contentCursor?.changedBeforeMs,
+          scanPosition: resume.scanPosition.recent ? resume.scanPosition : null,
+          ...(resume.contentProgress && resume.unfinished ? { contentProgress: resume.contentProgress, unfinished: resume.unfinished } : {}),
+        }
+      : resume);
+  // Capture T1 only after finishing the main pass. No later write can move a
+  // file back into this final pass; the next fresh search covers writes after T1.
+  let endContentCursor: Promise<string | null> | undefined;
+  const finishContentPass = (): Promise<string | null> => endContentCursor ??= (async () => {
+    if (search.searchTarget !== 'content' || contentCursor?.changedBeforeMs !== undefined) return null;
+    const changedBeforeMs = Date.now();
+    const changed = await pageClaudeJsonlSessionFiles({ source: params.source, env: params.env, limit: 1,
+      order: 'recent', recentWindow: { startedAtMs, changedBeforeMs }, signal: params.signal });
+    return changed.entries.length ? encodeCandidateCursor({ v: 7, kind: 'claudeCandidateContentScan',
+      search, startedAtMs, changedBeforeMs, scanPosition: null }) : null;
+  })();
   let contentPartial = false;
-  if (search.searchTarget === 'content') {
-    if (!params.ripgrep)
-      return {
-        candidates: [],
-        nextCursor: null,
-        contentCoverage: 'unsupported',
-      };
-  }
   if (
     decodedCursor?.kind === 'claudeCandidateIndexScan' &&
     decodedCursor.sourceGeneration !== traversed.sourceGeneration
   ) {
     throw new ClaudeCandidateSourceChangedError(
-      'Claude candidate source changed while building its exact index.',
+      'external_sessions_frontier_anchor',
     );
   }
   const scannedBefore =
@@ -569,6 +625,11 @@ export async function listClaudeExternalSessionCandidates(
       : undefined
     : undefined;
   const page: ClaudeExternalSessionCandidate[] = [];
+  const prefilteredPaths = search.searchTarget === 'content' && traversed.contentSearchRoot && traversed.entries.length
+    ? await prefilterExternalSessionContentPaths({ query: searchTerm, paths: [traversed.contentSearchRoot.path],
+        glob: '*.jsonl', maxDepth: traversed.contentSearchRoot.maxDepth,
+        ripgrep: params.ripgrep!, signal: params.signal })
+    : null;
   let previousScanPosition = scanPosition;
   let previousSourceGeneration = traversed.sourceGeneration;
   let fileStartedAtMs: number | undefined;
@@ -579,21 +640,27 @@ export async function listClaudeExternalSessionCandidates(
     if (!session) continue;
     throwIfAborted(params.signal);
     const cursorBefore = previousScanPosition
-      ? encodeCandidateCursor({
+      ? encodeScanCursor({
           v: 5,
           kind: 'claudeCandidateIndexScan',
           sourceGeneration: previousSourceGeneration,
           scanPosition: previousScanPosition,
           scanned: scannedBefore + traversalIndex,
           search,
+          ...(traversalIndex === 0 && contentCursor?.contentProgress ? {
+            contentProgress: contentCursor.contentProgress, unfinished: contentCursor.unfinished,
+          } : {}),
         })
-      : encodeCandidateCursor({
+      : encodeScanCursor({
           v: 5,
           kind: 'claudeCandidateIndexScan',
           sourceGeneration: traversed.sourceGeneration,
           scanPosition: { projectId: session.projectId, sessionEntryOffset: 0 },
           scanned: scannedBefore + traversalIndex,
           search,
+          ...(traversalIndex === 0 && contentCursor?.contentProgress ? {
+            contentProgress: contentCursor.contentProgress, unfinished: contentCursor.unfinished,
+          } : {}),
         });
     if (
       search.searchTarget === 'content' &&
@@ -610,6 +677,7 @@ export async function listClaudeExternalSessionCandidates(
       // us whether another unit fits; there is no subordinate timeout.
       if (
         cursorBefore &&
+        fileStartedAtMs !== undefined &&
         params.deadlineAtMs - nowMs <= longestFileDurationMs
       ) {
         if (
@@ -636,26 +704,35 @@ export async function listClaudeExternalSessionCandidates(
     }
     previousScanPosition = session.scanPosition;
     previousSourceGeneration = session.sourceGeneration;
+    if (search.searchTarget === 'content' && prefilteredPaths !== null && !prefilteredPaths.has(session.filePath)
+      && !(traversalIndex === 0 && contentCursor?.contentProgress)) continue;
     let candidate: ClaudeExternalSessionCandidate;
     let needsSelectedRowTitle = false;
     if (search.searchTarget === 'content') {
       try {
         if (!searchTerm) continue;
+        // Cursor metadata names native refs; it never grants a file path.
+        const authorizedSession = await resolveClaudeJsonlSessionFile({
+          source: { ...params.source, projectId: session.projectId }, env: params.env,
+          remoteSessionId: session.remoteSessionId, signal: params.signal,
+        });
+        if (!authorizedSession) throw new ClaudeCandidateSourceChangedError('external_sessions_path_authority');
         const projection = await searchClaudeExternalTranscript({
-          filePath: session.filePath,
+          prefiltered: traversed.contentSearchRoot !== undefined,
+          filePath: authorizedSession.filePath,
           fileRelPath: `${session.projectId}/${session.remoteSessionId}.jsonl`,
           query: searchTerm,
           // Source record span and serialized result size are different
           // resources: decode one real row, then pack its hit context.
           maxBytes: Math.max(
             1,
-            await readClaudeJsonlFileSize(session.filePath, params.signal),
+            await readClaudeJsonlFileSize(authorizedSession.filePath, params.signal),
           ),
           signal: params.signal,
           ripgrep: params.ripgrep!,
           control: contentFileSystem!,
-          ...(decodedCursor?.kind === 'claudeCandidateIndexScan' && traversalIndex === 0 && decodedCursor.contentProgress
-            ? { progress: decodedCursor.contentProgress } : {}),
+          ...(traversalIndex === 0 && contentCursor?.contentProgress
+            ? { progress: contentCursor.contentProgress } : {}),
         });
         contentFileSystem?.assertNotYielded();
         contentPartial ||= projection.partial;
@@ -666,13 +743,15 @@ export async function listClaudeExternalSessionCandidates(
             env: params.env,
           }),
           ...(projection.title ? { title: projection.title } : {}),
+          ...(projection.cwd ? { cwd: projection.cwd } : {}),
+          ...(projection.messageCount !== undefined ? { messageCount: projection.messageCount } : {}),
           match: projection.match,
         };
       } catch (error) {
         if (!(error instanceof ExternalSessionContentSearchYield)) throw error;
         const before = decodeCandidateCursor(cursorBefore);
-        const continuation = error instanceof ClaudeContentSearchYield && before?.kind === 'claudeCandidateIndexScan'
-          ? encodeCandidateCursor({ ...before, contentProgress: error.progress }) : cursorBefore;
+        const continuation = error instanceof ClaudeContentSearchYield && before?.kind === 'claudeCandidateContentScan'
+          ? encodeCandidateCursor({ ...before, unfinished: session.scanPosition, contentProgress: error.progress }) : cursorBefore;
         if (
           params.resultBudget &&
           !params.resultBudget.fits(page, continuation, true, undefined)
@@ -723,7 +802,7 @@ export async function listClaudeExternalSessionCandidates(
 
     const cursorAfter =
       traversalIndex < traversed.entries.length - 1 || traversed.hasMore
-        ? encodeCandidateCursor({
+        ? encodeScanCursor({
             v: 5,
             kind: 'claudeCandidateIndexScan',
             sourceGeneration: session.sourceGeneration,
@@ -731,7 +810,7 @@ export async function listClaudeExternalSessionCandidates(
             scanned: scannedBefore + traversalIndex + 1,
             search,
           })
-        : null;
+        : await finishContentPass();
     if (candidate.match && params.resultBudget) {
       const original = candidate;
       const match = candidate.match;
@@ -891,7 +970,7 @@ export async function listClaudeExternalSessionCandidates(
 
   const nextCursor =
     traversed.hasMore && traversed.nextScanPoint
-      ? encodeCandidateCursor({
+      ? encodeScanCursor({
           v: 5,
           kind: 'claudeCandidateIndexScan',
           sourceGeneration: traversed.nextScanPoint.sourceGeneration,
@@ -899,7 +978,7 @@ export async function listClaudeExternalSessionCandidates(
           scanned,
           search,
         })
-      : null;
+      : await finishContentPass();
   if (
     params.resultBudget &&
     !params.resultBudget.fits(page, nextCursor, searchIncomplete, preparation)

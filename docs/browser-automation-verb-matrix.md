@@ -20,6 +20,50 @@ UPDATE_AUTOMATION_VERB_MATRIX=1 ../../apps/stack/bin/hstack-exec --local -- \
 
 ## Controller and cancellation (development source)
 
+An approved first `browser.view.open` on a Machine retains the original command while managed
+Chromium is installed. Concurrent requests share the existing provisioner. Installation is
+followed by the canonical route refresh, then the original dispatch reads that refreshed control
+route and opens its view. Daemon startup does not download Chromium.
+
+The existing Machine Action operation owns this continuation beyond the RPC response. During
+installation, the open returns `status: in_progress`, `phase: browser_runtime_provisioning` and
+its `operationId`; acceptance does not mean the page is open yet. The operation retains the
+terminal command result or a typed failure. A later fresh request may retry a failed install;
+there is no automatic retry. Session-local control requests without an operation observer wait
+for the same provisioner and dispatch. These are development-source contracts; loaded-runtime
+first-frame validation remains a QA responsibility.
+
+The operation scope comes from the installed requester's verified Machine admission, not the
+daemon custodian or a caller-supplied Account id. Approval acceptance retains that private
+requester custody until the original open settles. The requester can observe its operation;
+another Account cannot read it or publish its snapshot through the custodian's channel.
+
+Every admitted Machine `browser.view.open` uses that same operation runner, including
+already-installed opens and approved Artifact replay. Route availability decides whether
+provisioning is needed; it does not decide whether the open is observed. An invocation already
+carrying that Action's operation acceptance continues its original operation. The Artifact
+execution claim remains the replay authority, so repeating approval does not reopen the view
+or create another operation.
+
+Operation lists intentionally omit terminal result payloads. After reload, a UI bound to a
+settled open fetches that exact operation through `action.operations.get` to recover its typed
+command result; list absence of `result` is not a successful page-open outcome. Typed operation
+failures remain on the list's `error`. Approval history may contain provisioning acceptance:
+its `operationId` links to live operation state, while Artifact `executed` only means the
+approved invocation returned that acceptance. These are development-source contracts.
+
+Machine-targeted `browser.diagnostics.*` Actions use the same Machine Action transport as other
+daemon-owned Browser Actions. The UI front door validates catalog input and requires an explicit
+Machine target; it does not interpret the lack of a local diagnostics producer as global
+unavailability. The runtime CLI admits the same diagnostics family through the canonical Action
+surface policy.
+
+Exact-Machine control and automation also use that transport when the managed view has no mounted
+client presentation. Mounting a daemon-owned view does not transfer execution to the client; its
+host projects returned control events through its existing reducer. In-app engines such as an
+iframe retain their mounted executor. Missing or blank Machine targets are not inferred from a
+Session's default Machine, and forwarding preserves the existing Action approval policy.
+
 Before a Browser view exists, `browser.workspace.open` admits a target through the same Action
 front door. Its closed input names the answering-client workspace, command and Browser target,
 not an arbitrary OS-open URL. The registered workspace owner captures the exact Home/Account
@@ -36,6 +80,17 @@ Action front door before the existing runtime adapter dispatches them. The UI an
 same exact mounted-view registration and captured Home/Account lifetime. Continuous human input
 remains on the existing sideband custody path, not a per-frame Action loop. A daemon command's
 unconfirmed response cannot be projected as an accepted takeover or overwrite current owner events.
+
+In 0.3 development, mounted console evaluation, property reads, object-group release and element
+picker Actions name both `browserSessionId` and `viewId`. UI controls enter the Action front door;
+the default runtime and authenticated reverse dispatcher resolve the same mounted diagnostics
+owner and its injected-engine bridge. Evaluation, property reads and picking require interaction
+to be enabled on that surface; object-group release remains available for cleanup. A missing or
+retired view refuses execution. The Action input selects client placement for `injectedPage` and
+Machine placement for `cdp`. UI approval retains the mounted invocation and rechecks the view,
+navigation generation and interaction state before delivery. Sidecar-owned views continue through
+the daemon diagnostics adapter and CDP. These are current source contracts, not loaded-runtime or native-platform
+certification.
 
 The overflow menu and non-framable/slow-frame escape use `browser.view.openExternal`. Its closed
 input names the Browser Session, view and command; the runtime resolves the current page URL from
@@ -96,11 +151,13 @@ a claim that the composed stream journey has been live-verified.
 In current 0.3 development source, the normal browser selector admits daemon-backed streamed
 views for display and navigation. Session surfaces discover registered capture sources through
 Session-filtered daemon discovery before a view is mounted, then refresh that projection when a
-browser Action completes in the Session transcript. Watch resolves the exact named daemon view's
+browser Action completes in the Session transcript or a retained Browser open operation reaches a
+terminal state in the same Home, Account, Machine and Session. Provisioning acceptance alone is not
+terminal completion. Watch resolves the exact named daemon view's
 capture source, rather than reopening the Action's URL. Opened-view metadata and command results
-feed the existing control reducer. There is no independent daemon-open push outside this Session
-Action/transcript flow: an out-of-band open is discovered on the next surface mount or browser
-Action completion. The engine capability table below describes local automation producers;
+feed the existing control reducer. There is no separate daemon-open push outside this Session
+Action/transcript/operation flow: an out-of-band open is discovered on the next surface mount or
+matching Browser Action completion. The engine capability table below describes local automation producers;
 streamed rendering does not turn the viewer into a second automation owner.
 
 Session browser presence uses that same daemon control route for `takeControl` and `handBack`.
@@ -149,6 +206,15 @@ redaction; query completeness does not weaken confidentiality admission or field
 This is a development-source contract; the composed live query journey remains to be validated.
 
 ## Browser context and model images (development)
+
+Managed Chromium snapshots include current AX `value` text for editable text inputs, textareas and
+contenteditable elements. Password and `autocomplete="one-time-code"` fields are excluded. DOM
+metadata establishes field eligibility; values come from the accessibility tree. Missing metadata
+omits the value and marks the AX projection incomplete, while preserving the structural snapshot.
+Values use the snapshot's existing 256-character per-node text budget, with `axNodesTruncated` set
+when a value is clipped. Empty values remain explicit. `visibleText` remains the page's body text;
+agents verifying typed input should also inspect `axNodes`. Confidential-input holds and existing
+sensitive-page admission still apply. This is an unreleased 0.3 development contract.
 
 The launch suggestion owner supplies detected-listener identity in
 `sourceClass.inventoryEntryId`. Services Open, lifecycle controls, row/listener association and

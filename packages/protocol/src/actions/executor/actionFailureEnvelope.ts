@@ -1,4 +1,5 @@
 import { SpawnSessionErrorCodeSchema } from '../../sessions/spawnSession.js';
+import { SessionGoalControlFailureV1Schema } from '../../sessions/work/state/sessionWorkStateRpc.js';
 import type { ActionExecuteFailure } from './types.js';
 
 export function readFailureEnvelopeDetails(record: Readonly<Record<string, unknown>>): unknown | undefined {
@@ -23,8 +24,8 @@ export function readActionFailureEnvelope(
   const errorCode = record.errorCode.trim();
   if (!errorCode) return null;
   if (record.ok !== false) {
-    if (record.type !== 'error' || (options.treatReturnedErrorEnvelopeAsFailure !== true
-      && !SpawnSessionErrorCodeSchema.safeParse(errorCode).success)) return null;
+    if (options.treatReturnedErrorEnvelopeAsFailure !== true
+      && (record.type !== 'error' || !SpawnSessionErrorCodeSchema.safeParse(errorCode).success)) return null;
   }
   const rawError = typeof record.error === 'string' ? record.error.trim() : '';
   const rawFallbackMessage = typeof record.errorMessage === 'string' && record.errorMessage.trim().length > 0
@@ -32,5 +33,7 @@ export function readActionFailureEnvelope(
     : typeof record.message === 'string' && record.message.trim().length > 0 ? record.message.trim() : '';
   const error = rawError && rawError !== errorCode ? rawError : rawFallbackMessage || rawError || errorCode;
   const details = readFailureEnvelopeDetails(record);
-  return { ok: false, errorCode, error, ...(details !== undefined ? { details } : {}) };
+  const goalControlFailure = SessionGoalControlFailureV1Schema.safeParse(record.goalControlFailure);
+  return { ok: false, errorCode, error, ...(details !== undefined ? { details } : {}),
+    ...(goalControlFailure.success ? { goalControlFailure: goalControlFailure.data } : {}) };
 }

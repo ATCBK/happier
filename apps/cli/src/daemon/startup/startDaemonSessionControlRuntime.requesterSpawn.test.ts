@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import axios from 'axios';
 import { randomBytes } from 'node:crypto';
 import { ExternalActionSignedAuthenticationV1Schema, ExternalActionExecutionAuthorizationV1Schema,
-    ExternalActionAccountServerPrincipalV1Schema, ExternalActionTerminalServerPrincipalV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+    ExternalActionAccountServerPrincipalV1Schema, ExternalActionTerminalServerPrincipalV1Schema,
+    ExternalActionRequestEnvelopeV1Schema, ExternalActionRequestEnvelopeSchema } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { executeExternalAction } from '../externalActions/executeExternalAction';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
@@ -18,6 +19,8 @@ import { ConnectedServiceRuntimeRegistry } from '../connectedServices/runtimeReg
 import { createMachineSessionDirectTargetTransport } from '@/rpc/handlers/sessionServerStartLifecycleAdapter';
 import { createSpawnNewSessionLifecycleActionHandler } from '@/session/actions/lifecycle/createSpawnNewSessionLifecycleActionHandler';
 import type { AdmittedRequesterSessionBootstrap } from '../sessionEncryption/requesterSessionCredentials';
+import { logger } from '@/ui/logger';
+import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 
 // The Home HTTP and physical process/listener are system boundaries. The installed
 // ingress, private Account admission, bootstrap and Session Action owners stay real.
@@ -32,7 +35,9 @@ it.each(['account', 'terminal'] as const)('prepares fresh admitted %s custody th
     const requesterToken = `e30.${Buffer.from(JSON.stringify({ sub: 'bob', tokenEpoch: 0,
         ...(authenticationKind === 'terminal' ? { session: 'bob-terminal-session' } : {}),
         provenance: { v: 1, kind: authenticationKind, authority } })).toString('base64url')}.signature`;
+    const custodianToken = `e30.${Buffer.from(JSON.stringify({ sub: 'alice' })).toString('base64url')}.signature`;
     let admissionCurrent = true;
+    const phaseDiagnostics = vi.spyOn(logger, 'warnLocalFile');
     vi.stubGlobal('fetch', vi.fn<typeof fetch>(async url => {
         const path = new URL(String(url)).pathname;
         if (path === '/v1/account/profile') return Response.json({ id: 'bob' });
@@ -64,12 +69,14 @@ it.each(['account', 'terminal'] as const)('prepares fresh admitted %s custody th
     const transport = createMachineSessionDirectTargetTransport({ machineId: 'machine', spawnLifecycleHandler: lifecycle });
     const fixture = await createRequesterSessionControlRuntimeFixture({ happyHomeDir: join(directory, 'daemon'),
         activeServerDir: join(directory, 'daemon', 'servers', homeId), serverId: homeId, serverHttpBaseUrl: endpoint,
-        machineId: 'machine', custodianAccountId: 'alice', credentials: { token: 'alice-token', encryption: null },
+        machineId: 'machine', custodianAccountId: 'alice', credentials: { token: custodianToken, encryption: null },
         connectedServicesMaterializationBaseDir: join(directory, 'connected-services'), registry: new ConnectedServiceRuntimeRegistry(),
         trackedSessions: new Map(), getRequester: () => null, resolveQualifiedConnectedAccountV4Support: () => 'advertised',
         startup: { resolveSessionSpawnDirectTargetTransport: () => transport,
             resolveCurrentMachineExecutionOriginContext: async () => ({ machineId: 'machine', serverIdentityId: homeId }) } });
+    let currentnessChannel: Awaited<ReturnType<typeof createRequesterCurrentnessSocketHarness>> | undefined;
     try {
+        currentnessChannel = await createRequesterCurrentnessSocketHarness();
         const installation = fixture.installation;
         const ingress = fixture.runtime.externalActionIngressOwner;
         if (!installation || !ingress?.prepareRequesterAccountContext) throw new Error('Missing actual daemon ingress');
@@ -80,7 +87,12 @@ it.each(['account', 'terminal'] as const)('prepares fresh admitted %s custody th
         const admittedInput = getActionSpec('session.spawn_new').inputSchema.safeParse(input);
         expect(admittedInput, JSON.stringify(admittedInput)).toMatchObject({ success: true });
         const target = { kind: 'machine' as const, machineId: 'machine' };
-        const envelope = { v: 1 as const, requestId: 'requester-birth', target, input };
+        // The HTTP boundary serializes optional Action fields before ingress.
+        const envelope = ExternalActionRequestEnvelopeV1Schema.parse(JSON.parse(JSON.stringify({
+            v: 1, requestId: 'requester-birth', target, input,
+        })));
+        const acceptedEnvelope = ExternalActionRequestEnvelopeSchema.safeParse(envelope);
+        expect(acceptedEnvelope, JSON.stringify(acceptedEnvelope)).toMatchObject({ success: true });
         const authentication = ExternalActionSignedAuthenticationV1Schema.parse({ kind: authenticationKind, tokenEpoch: 0 });
         const principal = (authenticationKind === 'terminal' ? ExternalActionTerminalServerPrincipalV1Schema
             : ExternalActionAccountServerPrincipalV1Schema).parse({ accountId: 'bob', authentication, authority });
@@ -104,7 +116,9 @@ it.each(['account', 'terminal'] as const)('prepares fresh admitted %s custody th
             resolveTarget: ingress.resolveTarget, resolveEncryption: ingress.resolveEncryption, executor: ingress.executor,
         });
         const outcome = await invoke();
-        expect(physicalLaunches, JSON.stringify(outcome)).toBe(1);
+        const refusedPhases = phaseDiagnostics.mock.calls.filter(([message]) => message === '[external-action-phase]')
+            .map(([, diagnostic]) => diagnostic);
+        expect(physicalLaunches, JSON.stringify({ outcome, refusedPhases })).toBe(1);
         expect(received, JSON.stringify(outcome)).toBeDefined();
         expect(received?.attribution).toEqual({ serverId: homeId, accountId: 'bob', machineId: 'machine', installationId: installation.installationId });
         expect(received?.credentials.token).toBe(requesterToken);
@@ -117,5 +131,11 @@ it.each(['account', 'terminal'] as const)('prepares fresh admitted %s custody th
         }
         admissionCurrent = false;
         expect(await received?.isCurrent()).toBe(false);
-    } finally { await fixture.dispose(); await rm(directory, { recursive: true, force: true }); }
+    } finally {
+        try { await fixture.dispose(); }
+        finally {
+            try { await currentnessChannel?.close(); }
+            finally { await rm(directory, { recursive: true, force: true }); }
+        }
+    }
 });

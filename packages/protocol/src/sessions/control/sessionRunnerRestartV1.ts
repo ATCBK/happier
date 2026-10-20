@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
+import type { SessionRunnerRuntimeStateV1 } from './sessionRunnerRuntimeV1.js';
 
 const SessionRunnerSessionIdV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
 const SessionRunnerIdentityV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1)));
@@ -47,6 +48,7 @@ export const SESSION_RUNNER_RESTART_DISABLED_REASONS = [
   'runner_entrypoint_unknown',
   'runner_generation_unattested',
   'unsupported_daemon_version',
+  'restart_admission_unsupported',
 ] as const;
 export const SessionRunnerRestartDisabledReasonSchema = lazyZodSchema(() => z.enum(SESSION_RUNNER_RESTART_DISABLED_REASONS));
 export type SessionRunnerRestartDisabledReason =
@@ -76,6 +78,7 @@ export const SESSION_RUNNER_RESTART_STATUSES_V1 = [
   'missing_resume_snapshot',
   'missing_spawn_options',
   'unsupported_daemon',
+  'restart_admission_unsupported',
   'ineligible',
   'stop_failed',
   'spawn_failed',
@@ -112,6 +115,35 @@ export const RestartSessionRunnerResultV1Schema = lazyZodSchema(() => z.strictOb
     diagnostics: z.optional(SessionRunnerDiagnosticsV1Schema),
   }));
 export type RestartSessionRunnerResultV1 = z.infer<typeof RestartSessionRunnerResultV1Schema>;
+
+/** One request witness policy for the banner and public runtime-refresh Action. */
+export function readSessionRunnerRestartIdentityGuardV1(runtimeState: SessionRunnerRuntimeStateV1): Readonly<{
+  expectedRunnerPid: number;
+  expectedProcessCommandHash: string;
+  expectedRunnerEntrypointIdentity: string;
+}> | RestartSessionRunnerResultV1 {
+  const refused = (status: RestartSessionRunnerResultV1['status'], reasonCode: SessionRunnerRestartDisabledReason): RestartSessionRunnerResultV1 => ({
+    ok: false, sessionId: runtimeState.sessionId, status, reasonCode,
+  });
+  if (runtimeState.runner.pid == null) return refused('runner_not_active', 'no_tracked_process');
+  const expectedProcessCommandHash = runtimeState.runner.processCommandHash?.trim();
+  const expectedRunnerEntrypointIdentity = runtimeState.runner.entrypointSource === 'unknown'
+    ? null : runtimeState.runner.runtimeId?.trim();
+  if (!expectedProcessCommandHash || !expectedRunnerEntrypointIdentity) {
+    return refused('version_unknown', 'runner_entrypoint_unknown');
+  }
+  if (runtimeState.daemon.currentEntrypointSource === 'unknown' || !runtimeState.daemon.currentEntrypointVersion?.trim()) {
+    return refused('version_unknown', 'current_entrypoint_unknown');
+  }
+  return { expectedRunnerPid: runtimeState.runner.pid, expectedProcessCommandHash, expectedRunnerEntrypointIdentity };
+}
+
+export function buildSessionRunnerRuntimeRefreshRequestV1(runtimeState: SessionRunnerRuntimeStateV1): RestartSessionRunnerRequestV1 | RestartSessionRunnerResultV1 {
+  const guard = readSessionRunnerRestartIdentityGuardV1(runtimeState);
+  if ('ok' in guard) return guard;
+  return RestartSessionRunnerRequestV1Schema.parse({ sessionId: runtimeState.sessionId,
+    mode: 'if_stale', reason: 'ui_stale_runner_banner', ...guard });
+}
 
 export const RestartAllSessionRunnersRequestV1Schema = lazyZodSchema(() => z.strictObject({
     mode: SessionRunnerRestartModeV1Schema,

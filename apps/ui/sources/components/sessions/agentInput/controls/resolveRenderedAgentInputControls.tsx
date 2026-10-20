@@ -17,6 +17,11 @@ export function resolveRenderedAgentInputControls(params: Readonly<{
      * else is reached from the actions menu (which omits these). Unset: every control shows.
      */
     barControlIds?: readonly AgentInputControlId[];
+    /**
+     * Every layout: the only controls this composer contains (a compact composer). Controls outside
+     * it, and chips that name no control, are not rendered. Unset: every control the host offers.
+     */
+    containedControlIds?: readonly AgentInputControlId[];
 }>): Readonly<{
     chips: readonly React.ReactNode[];
     /** Location rail controls that lead the folder and resume controls (the machine). */
@@ -25,10 +30,12 @@ export function resolveRenderedAgentInputControls(params: Readonly<{
     secondaryTrailingControls: readonly React.ReactNode[];
     hasPermissionControl: boolean;
 }> {
-    const controlNodesById: ControlNodesById = {
+    const contained = params.containedControlIds ? new Set(params.containedControlIds) : null;
+    const controlNodesById: ControlNodesById = Object.fromEntries(Object.entries({
         ...params.coreControlNodesById,
         ...params.extraControlNodesById,
-    };
+    }).filter(([controlId]) => !contained || contained.has(controlId as AgentInputControlId)));
+    const extraChips = contained ? [] : params.extraChips;
 
     const controlIds = Object.entries(controlNodesById)
         .filter(([, nodes]) => (nodes?.length ?? 0) > 0)
@@ -54,10 +61,10 @@ export function resolveRenderedAgentInputControls(params: Readonly<{
     const secondaryTrailingControls = resolveControlNodes(rowControlIds.filter((controlId) => secondaryPlacement(controlId) === 'trailing'));
 
     const chips = params.layout === 'collapsed'
-        ? resolveControlNodes(params.barControlIds ?? controlLines.collapsed).filter(Boolean)
+        ? resolveControlNodes(contained ? controlLines.collapsed : params.barControlIds ?? controlLines.collapsed).filter(Boolean)
         : [
             ...resolveControlNodes(controlLines.primary),
-            ...params.extraChips,
+            ...extraChips,
         ].filter(Boolean);
 
     return {
@@ -65,7 +72,7 @@ export function resolveRenderedAgentInputControls(params: Readonly<{
         secondaryLeadingControls,
         secondaryTrailingControls,
         hasPermissionControl: (params.layout === 'collapsed'
-            ? params.barControlIds ?? controlLines.collapsed
+            ? (contained ? controlLines.collapsed : params.barControlIds ?? controlLines.collapsed)
             : [...controlLines.primary, ...controlLines.secondary]).includes('permission')
             && (controlNodesById.permission?.length ?? 0) > 0,
     };

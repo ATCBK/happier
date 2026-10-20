@@ -30,6 +30,18 @@ export type ActivityLog = Readonly<{
   subscribe(listener: () => void): () => void;
 }>;
 
+function portableActivityEntry(entry: MachineGuardActivityEntryV1): MachineGuardActivityEntryV1 {
+  if (!entry.wayBack) return entry;
+  return { ...entry, wayBack: entry.wayBack.map(item => {
+    const input = item.input;
+    if (!input || typeof input !== 'object' || Array.isArray(input) || !('serverId' in input)) return item;
+    // Home selection belongs to the invoking Action context. A daemon profile alias
+    // is not portable to another client; attribution and the exact action selection stay intact.
+    const { serverId: _localServerId, ...portableInput } = input;
+    return { ...item, input: portableInput };
+  }) };
+}
+
 export async function createActivityLog(input: Readonly<{
   activeServerDir: string; nowMs?: () => number;
   resourceSummary: Pick<MachineResourceSummary, 'reportAutomaticAction'>;
@@ -38,7 +50,7 @@ export async function createActivityLog(input: Readonly<{
   const listeners = new Set<() => void>();
   const journal = await createDayPartitionedJsonl({ directory: join(input.activeServerDir, 'machine-guard'), prefix: 'activity', nowMs,
     timestamp: (row: MachineGuardActivityEntryV1) => row.at,
-    parse: value => { const result = MachineGuardActivityStoredReadV1Schema.safeParse(value); return result.success ? result.data : null; } });
+    parse: value => { const result = MachineGuardActivityStoredReadV1Schema.safeParse(value); return result.success ? portableActivityEntry(result.data) : null; } });
   const dayMs = 86_400_000;
   let prunedDay: string | undefined;
   const pruneAtDayBoundary = async () => {
@@ -49,7 +61,7 @@ export async function createActivityLog(input: Readonly<{
   };
   await pruneAtDayBoundary();
   const append = async (entry: MachineGuardActivityEntryV1) => {
-    const parsed = MachineGuardActivityEntryV1Schema.parse(entry);
+    const parsed = portableActivityEntry(MachineGuardActivityEntryV1Schema.parse(entry));
     await pruneAtDayBoundary();
     await journal.append(parsed);
     // The durable append is the receipt. Never announce an effect that failed to commit.
@@ -73,9 +85,21 @@ export async function createActivityLog(input: Readonly<{
     for (const row of records) if (row.kind === 'undone' && row.ref) {
       undone.set(row.ref, Math.min(undone.get(row.ref) ?? row.at, row.at));
     }
+    // Trash owns one move/empty receipt per entry. Existing receipts use that
+    // entry's deterministic ID; new empties also link the original receipt.
+    const emptied = new Set(records.filter(row => row.kind === 'trash_emptied' && row.outcome === 'done')
+      .map(row => row.ref ?? (row.id.endsWith('-trash_emptied')
+        ? `${row.id.slice(0, -'-trash_emptied'.length)}-trash_moved` : null)));
     return records.filter(row => row.kind !== 'undone').map(row => {
       const undoneAt = undone.get(row.id);
-      return undoneAt === undefined ? row : { ...row, undoneAt };
+      // Project current action availability without rewriting the durable
+      // history or pretending that permanent emptying was an Undo.
+      const { wayBack, note, ...receipt } = row;
+      const trashEmptied = row.kind === 'trash_moved' && emptied.has(row.id);
+      const available = undoneAt !== undefined || row.kind === 'kept_running' || trashEmptied ? undefined : wayBack;
+      return { ...receipt, ...(available?.length ? { wayBack: available } : {}),
+        ...(note !== undefined && row.kind !== 'start_failed' ? { note } : {}),
+        ...(trashEmptied ? { inTrashBytes: 0 } : {}), ...(undoneAt === undefined ? {} : { undoneAt }) };
     }).reverse().sort((a, b) => b.at - a.at);
   };
   const stopped = (row: MachineGuardActivityRowV1) => ['stopped_session', 'closed_browser', 'stopped_service', 'stopped_left_behind', 'closed_terminal'].includes(row.kind);

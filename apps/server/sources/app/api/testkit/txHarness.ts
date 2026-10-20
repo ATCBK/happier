@@ -111,6 +111,11 @@ export async function flushAfterTxCallbacks(
     }
 }
 
+/** Fake only Prisma's transaction entry point, leaving inTx and publication real. */
+export function createPrismaTransactionBoundary<TTx extends object>(createTxState: () => TTx) {
+    return async <T>(callback: (tx: TTx) => Promise<T>): Promise<T> => callback(createTxState());
+}
+
 export function createInTxHarness<TTx extends object>(createTxState: () => TTx) {
     const afterTx = (tx: any, callback: AfterTxCallback) => {
         registerAfterTxCallback(tx, callback);
@@ -136,13 +141,6 @@ export function createInTxHarness<TTx extends object>(createTxState: () => TTx) 
 export function createEmptySessionFollowEdgeTransactionModel() {
     return {
         findMany: async (): Promise<never[]> => [],
-    };
-}
-
-/** Empty ReportsTo storage boundary for transactions without authored relations. */
-export function createEmptySessionReportsToTransactionModel() {
-    return {
-        findMany: async (): Promise<never[]> => [],
         findUnique: async (): Promise<null> => null,
     };
 }
@@ -162,7 +160,11 @@ export function createAccountCursorRawQueryTransactionModel(params: Readonly<{
 }>) {
     return async (query: string, ...values: unknown[]): Promise<unknown[]> => {
         if (query.startsWith('SELECT "id" FROM "Account"')) {
-            const ids = values[0];
+            // The metadata fence uses a scalar binding for its one-Account
+            // query; cursor audience locking uses the array form.
+            const ids = (query === 'SELECT "id" FROM "Account" WHERE "id" = $1 FOR KEY SHARE'
+                || query === 'SELECT "id" FROM "Account" WHERE "id" = $1 FOR UPDATE')
+                ? values : values[0];
             if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string')) {
                 throw new Error('Account cursor lock query requires Account ids');
             }

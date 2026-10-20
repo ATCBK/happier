@@ -1,6 +1,7 @@
 import { RuntimeDescriptorV1Schema } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor';
 import { agentReceivesUserMcpServersV1 } from '@happier-dev/protocol/plugins/contributions/v2';
 import { createPreflightComposerSuggestionCatalogSource, type ComposerSuggestionCatalogs } from '@/components/autocomplete/composerSuggestionCatalogs';
+import type { AutocompleteSuggestionUpdate } from '@/components/autocomplete/autocompleteTypes';
 import { buildSpawnEnvironmentVariablesFromUiState, buildSpawnSessionExtrasFromUiState } from '@/agents/catalog/catalog';
 import { resolveNewSessionBehaviorAgentId } from '@/components/sessions/new/modules/newSessionBehaviorAgent';
 import { resolveStrictV2ProfileSecretReadiness } from '@/components/sessions/new/modules/resolveStrictV2ProfileSecretReadiness';
@@ -25,12 +26,11 @@ import {
     useMachineListStatusByServerId,
     useSetting,
     useSettingMutable,
-    useSettings,
 } from '@/sync/domains/state/storage';
-import { useAccountSettingsScope, useActiveServerAccountScope } from '@/sync/store/hooks';
+import { useAccountSettingsScope, useActiveServerAccountScope, useSettingsSelector } from '@/sync/store/hooks';
 import { useServerCredentialAccountScopeResolution } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { areServerAccountScopesEqual, serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
-import { settingsDefaults } from '@/sync/domains/settings/settings';
+import type { Settings } from '@/sync/domains/settings/settings';
 import { projectCurrentSecretBindingsByProfileId } from '@/sync/domains/settings/secretBindings';
 import { usePathname } from 'expo-router';
 import { useNewSessionPlacementSessions } from '@/components/sessions/new/hooks/screenModel/useNewSessionPlacementSessions';
@@ -190,11 +190,11 @@ import {
 import { resolveNewSessionOperationalBackendTarget } from '@/components/sessions/new/modules/newSessionCapabilityProbeContext';
 import { buildNewSessionLaunchStatus } from '@/components/sessions/new/hooks/screenModel/newSessionLaunchStatusBadges';
 import { resolveNewSessionCreateAdmission } from '@/components/sessions/new/hooks/screenModel/newSessionCreateAdmission';
-import { resolveMachineAgentStatus } from '@/components/machines/agents/machineAgentPresentation';
-import { formatMachineAgentStatus } from '@/components/machines/agents/machineAgentCopy';
+import { resolveAgentLaunchBlockedReasonForNewSession } from '@/components/sessions/new/modules/newSessionAgentSelection';
 import { describeTemporaryComputerLaunchBlock, describeTemporaryComputerUnavailability } from '@/components/sessions/new/hooks/temporaryComputerCopy';
 import type { NewSessionInstructionsCreationModel, NewSessionScreenModel } from '@/components/sessions/new/hooks/newSessionScreenModelTypes';
 import { NewSessionInstructions } from '@/components/sessions/new/components/NewSessionInstructions';
+import { ComposerAuxiliaryFrame } from '@/components/sessions/shell/view/ComposerAuxiliaryFrame';
 import type { OptionPickerProbeState } from '@/components/sessions/pickers/OptionPickerOverlay';
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -217,6 +217,7 @@ import {
     projectAiLaunchProfileForLegacyUi,
 } from '@/sync/domains/profiles/aiLaunchProfileCollection';
 import { useDeleteAiLaunchProfile, useProfileFavoriteIdsMutable } from '@/sync/store/settingsWriters';
+import type { NewSessionAgentPickerViewV1 } from '@/sync/domains/settings/registry/account/accountSessionCreationSettingDefinitions';
 import { getMaterializedSavedSecrets, resolveSavedSecretReference as resolveScopedSavedSecretReference } from '@/sync/store/settings/savedSecretCatalogSnapshot';
 import { prepareRunnerMcpMaterial } from '@/sync/domains/ephemeralRunner/prepareRunnerMcpMaterial';
 import { createRunnerCreatorSecretReader } from '@/sync/domains/ephemeralRunner/runnerCreatorSecretReader';
@@ -238,6 +239,8 @@ import { supportsFreeformModelSelectionForSession } from '@/sync/domains/models/
 import { notifyComposerPresentationTargetChanged } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
 import { useAtmosphereComposerText, useAtmosphereSendSignal } from '@/components/atmosphere/atmosphereStage';
 import { useNewSessionActionOperationReconciliation } from '@/components/sessions/new/hooks/screenModel/useNewSessionActionOperationReconciliation';
+import { resolveSessionSpawnNewOperationFailureMessage } from '@/sync/ops/actions/sessionSpawnNewAction';
+import type { ActionOperationFailureV1 } from '@happier-dev/protocol/actions/operations/v1';
 import type { PluginUiSessionPlacementCandidateV1 } from '@happier-dev/protocol/plugins/ui';
 import { createNewSessionSeededPlacementActionChip } from '@/components/sessions/new/newSessionSeededPlacementActionChip';
 import { useNewSessionOrganizationPlacement } from '@/components/sessions/new/organization/useNewSessionOrganizationPlacement';
@@ -335,9 +338,8 @@ import {
     presentMaterializedTemporaryComputerSessionAndContinueSettlement,
     settlePersistedMaterializedTemporaryComputerSession,
 } from '@/components/sessions/new/navigation/settleMaterializedTemporaryComputerSession';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineDisplayName, getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { resolveAgentSessionStartBlockLine } from '@/components/machines/agents/agentSessionStartBlockLine';
-import { resolveBackendEntryUnavailabilityReasonForNewSession } from '@/components/sessions/new/modules/newSessionAgentSelection';
 import { machineCollectionHref } from '@/components/settings/machines/collection/machineCollectionModel';
 
 
@@ -347,6 +349,24 @@ const subscribeAbsentPreflightCatalogs = (_listener: () => void): (() => void) =
 
 const RECENT_PATHS_DEFAULT_VISIBLE = 5;
 const styles = newSessionScreenStyles;
+
+const readSettings = () => storage.getState().settings;
+const selectTerminalSettings = (settings: Settings) => ({
+    sessionTerminalHost: settings.sessionTerminalHost,
+    sessionUseTmux: settings.sessionUseTmux,
+    sessionTmuxByMachineId: settings.sessionTmuxByMachineId,
+    sessionTerminalHostByMachineId: settings.sessionTerminalHostByMachineId,
+    sessionTmuxSessionName: settings.sessionTmuxSessionName,
+    sessionTmuxIsolated: settings.sessionTmuxIsolated,
+    sessionTmuxTmpDir: settings.sessionTmuxTmpDir,
+    sessionWindowsTerminalWindowName: settings.sessionWindowsTerminalWindowName,
+});
+const selectConnectedServicesSettings = (settings: Settings) => ({
+    connectedServicesDefaultProfileByServiceId: settings.connectedServicesDefaultProfileByServiceId,
+    connectedServicesDefaultAuthByAgentIdV1: settings.connectedServicesDefaultAuthByAgentIdV1,
+    connectedServicesAdditionalDefaultAuthByAgentIdV1: settings.connectedServicesAdditionalDefaultAuthByAgentIdV1,
+});
+const selectExecutionRunsEnabled = (settings: Settings) => resolveLocalFeaturePolicyEnabled('execution.runs', settings);
 
 function resolveCompatibilityBackendTarget(
     agentTarget: AgentExecutionTargetV1 | null | undefined,
@@ -490,6 +510,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         ? creationProfile.machineId?.trim() || null
         : null;
     const requestedHostDemanded = useNewSessionHostDemanded();
+    const newSessionLayoutPresented = useLayoutPresentationActive();
     // A restricted host supplies its own creation options; Account daemon catalogs are not its authority.
     const hostDemanded = requestedHostDemanded && hostBoundMachineId === null;
     const pathname = usePathname();
@@ -722,8 +743,6 @@ export function useNewSessionScreenModel(input?: Readonly<{
 
     const recentMachinePaths = useAuthoringMemoryField('recentMachinePaths');
     const accountSettingsScope = useAccountSettingsScope();
-    const lastUsedAgent = useSetting('lastUsedAgent');
-    const lastUsedBackendTarget = useSetting('lastUsedBackendTarget');
     const newSessionDefaultPersistenceModeV1 = useSetting('newSessionDefaultPersistenceModeV1');
     const newSessionDefaultPersistenceModeByTargetKeyV1 = useSetting('newSessionDefaultPersistenceModeByTargetKeyV1');
 
@@ -749,13 +768,15 @@ export function useNewSessionScreenModel(input?: Readonly<{
     const [secrets, setSecrets] = useSavedSecretsMutable();
     const [secretBindingsByProfileId, setSecretBindingsByProfileId] = useCurrentSecretBindingsByProfileIdMutable();
     const sessionDefaultPermissionModeByTargetKey = useSetting('sessionDefaultPermissionModeByTargetKey');
-    const accountSettings = useSettings() ?? settingsDefaults;
     const homeViewSelectionSettings = useHomeViewSelectionSettings();
-    const settings = React.useMemo(() => ({
-        ...accountSettings,
-        ...homeViewSelectionSettings,
-    }), [accountSettings, homeViewSelectionSettings]);
-    const executionRunsEnabled = resolveLocalFeaturePolicyEnabled('execution.runs', settings);
+    const executionRunsEnabled = useSettingsSelector(selectExecutionRunsEnabled);
+    const profileEnabledByIdSetting = useSetting('profileEnabledById');
+    const backendEnabledByTargetKey = useSetting('backendEnabledByTargetKey');
+    const terminalSettings = useSettingsSelector(selectTerminalSettings);
+    const connectedServicesSettings = useSettingsSelector(selectConnectedServicesSettings);
+    const sessionWindowsRemoteSessionLaunchMode = useSetting('sessionWindowsRemoteSessionLaunchMode');
+    const windowsLaunchSettings = React.useMemo(() => ({ sessionWindowsRemoteSessionLaunchMode }), [sessionWindowsRemoteSessionLaunchMode]);
+    const availabilitySettings = React.useMemo(() => ({ ...terminalSettings, backendEnabledByTargetKey }), [backendEnabledByTargetKey, terminalSettings]);
     const activeServerSource = useNewSessionActiveServerSource();
     const {
         serverProfiles,
@@ -766,7 +787,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         targetServerName,
         showServerPickerChip,
     } = useNewSessionServerTargetState({
-        settings,
+        settings: homeViewSelectionSettings,
         hostTargetServerId: hostSpawnExecutor ? creationProfile?.draftScope?.serverId : embeddedHost?.targetServerId,
         activeServerId: activeServerSource.activeServerId,
         serverProfiles: activeServerSource.serverProfiles,
@@ -844,7 +865,9 @@ export function useNewSessionScreenModel(input?: Readonly<{
     const [favoriteProfileIds, setFavoriteProfileIds] = useProfileFavoriteIdsMutable();
     const [favoriteModelSelections, setFavoriteModelSelections] = useCurrentFavoriteModelSelectionsV1Mutable();
     const [favoriteBackendTargetKeys, setFavoriteBackendTargetKeys] = useSettingMutable('favoriteBackendTargetKeysV1');
-    const [lastNewSessionAgentPickerView, setLastNewSessionAgentPickerView] = useSettingMutable('lastNewSessionAgentPickerViewV1');
+    const setLastNewSessionAgentPickerView = React.useCallback((view: NewSessionAgentPickerViewV1) => {
+        sync.applySettings({ lastNewSessionAgentPickerViewV1: view }, { expectedSettingsScope: accountSettingsScope, source: 'ui' });
+    }, [accountSettingsScope]);
     const rememberLastEngineSelections = useSetting('rememberLastEngineSelectionsV1') !== false;
     const [lastEngineSelectionsByScope, setLastEngineSelectionsByScope] = useCurrentRememberedEngineSelectionsByScopeV1Mutable();
 
@@ -989,8 +1012,8 @@ export function useNewSessionScreenModel(input?: Readonly<{
 
     const providerSettingsForProfileIntent = useProviderSettings(accountSettingsScope);
     const profileEnabledById = React.useMemo(
-        () => readProfileEnabledById(settings.profileEnabledById),
-        [settings.profileEnabledById],
+        () => readProfileEnabledById(profileEnabledByIdSetting),
+        [profileEnabledByIdSetting],
     );
 
     // Combined profiles (built-in + custom)
@@ -1009,10 +1032,9 @@ export function useNewSessionScreenModel(input?: Readonly<{
     const selectableProfiles = React.useMemo(() => {
         return allProfiles.filter((profile) => isProfileEnabled(profile, profileEnabledById));
     }, [allProfiles, profileEnabledById]);
-    const selectableProfileMap = useProfileMap(selectableProfiles);
-    const activeMachines = useLaunchSelectionMachines();
+    const activeMachines = useLaunchSelectionMachines(newSessionLayoutPresented);
     const sessions = useNewSessionPlacementSessions();
-    const machineListByServerId = useMachineListByServerId();
+    const machineListByServerId = useMachineListByServerId(newSessionLayoutPresented, 'launch');
     const machineListStatusByServerId = useMachineListStatusByServerId();
     // One resolved Home-group set feeds every destination family. When an explicit settings target
     // is rejected the Machine side used to widen to the resolved allowed Homes while Pools stayed
@@ -1021,10 +1043,12 @@ export function useNewSessionScreenModel(input?: Readonly<{
         ? allowedTargetServerIds
         : resolvedSettingsTarget.allowedServerIds;
     const serverScopedMachineGroups = useServerScopedMachineOptions({
+        inventoryPurpose: 'launch',
         allowedServerIds: destinationServerIds,
         activeServerId: activeServerSource.activeServerId,
         activeMachines,
         refreshToken: activeServerSource.serverProfilesSignature,
+        presented: newSessionLayoutPresented,
     });
     const machinePoolGroups = useMachinePoolGroups(serverScopedMachineGroups);
     const machines = React.useMemo(() => resolveNewSessionTargetMachines({
@@ -1034,19 +1058,6 @@ export function useNewSessionScreenModel(input?: Readonly<{
         machineListByServerId,
         machineListStatusByServerId,
     }), [activeMachines, activeServerSource.activeServerId, machineListByServerId, machineListStatusByServerId, targetServerId]);
-    const hasExplicitSeededProfileSelection = React.useMemo(() => {
-        if (!useProfiles) {
-            return false;
-        }
-        const tempProfileId = typeof hydratedTempAuthoringDraft?.profileId === 'string'
-            ? hydratedTempAuthoringDraft.profileId.trim()
-            : '';
-        if (tempProfileId.length > 0) {
-            return true;
-        }
-        const draftProfileId = hydratedPersistedAuthoringDraft?.profileId;
-        return Boolean(draftProfileId && selectableProfileMap.has(draftProfileId));
-    }, [hydratedPersistedAuthoringDraft?.profileId, hydratedTempAuthoringDraft?.profileId, selectableProfileMap, useProfiles]);
     const initialImplicitProfileId = React.useMemo(() => {
         if (!useProfiles) {
             return null;
@@ -1075,14 +1086,9 @@ export function useNewSessionScreenModel(input?: Readonly<{
     }, [initialImplicitProfileId, launchProfiles, providerSettingsForProfileIntent.migration]);
 
     // Wizard state
-    const [selectedProfileId, setSelectedProfileId] = React.useState<string | null>(() => initialProfileAuthoringIntent.profileId);
-    const hasUserTouchedProfileSelectionRef = React.useRef<boolean>(hasExplicitSeededProfileSelection);
-
-    React.useEffect(() => {
-        if (!useProfiles && selectedProfileId !== null) {
-            setSelectedProfileId(null);
-        }
-    }, [useProfiles, selectedProfileId]);
+    // Untouched selection follows the normalized draft/default intent. Only an explicit
+    // selection is stored; catalog reconciliation below derives its effective value.
+    const [authoredProfileId, setAuthoredProfileId] = React.useState<string | null | undefined>(undefined);
 
     const emptyAutocompleteKinds = NEW_SESSION_COMPOSER_SUGGESTION_KINDS;
 
@@ -1274,7 +1280,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         return getResolvedBackendCatalogEntries({
             enabledAgentIds,
             acpCatalogSnapshot: acpCatalog?.catalog,
-            backendEnabledByTargetKey: settings.backendEnabledByTargetKey,
+            backendEnabledByTargetKey,
             collapseConfiguredBackendProviderSentinels: true,
             mergedProviderProjectionById: currentProjectionInputs?.mergedProviderProjectionById ?? null,
             mergedBackendProjectionById: currentProjectionInputs?.mergedBackendProjectionById ?? null,
@@ -1286,8 +1292,12 @@ export function useNewSessionScreenModel(input?: Readonly<{
         currentProjectionInputs?.mergedProviderProjectionById,
         enabledAgentIds,
         acpCatalog,
-        settings.backendEnabledByTargetKey,
+        backendEnabledByTargetKey,
     ]);
+    const resolvedBackendTargets = React.useMemo(
+        () => resolvedBackendEntries.map((entry) => entry.backendTarget),
+        [resolvedBackendEntries],
+    );
     const profilePreferredBackendTarget = React.useMemo(() => {
         if (!initialProfileAuthoringIntent.preferredAgentTargetKey) return null;
         return resolveBackendTargetFromRouteParams({
@@ -1310,8 +1320,6 @@ export function useNewSessionScreenModel(input?: Readonly<{
     } = useNewSessionBackendTargetState({
         entries: resolvedBackendEntries,
         configuredCatalogReady: acpCatalogReady,
-        lastUsedAgent,
-        lastUsedBackendTarget,
         routeBackendTarget,
         persistedBackendTarget: hydratedPersistedBackendTarget,
         tempBackendTarget: routeBackendTarget
@@ -1405,11 +1413,27 @@ export function useNewSessionScreenModel(input?: Readonly<{
             || selectedAgentSettingsSources.every((source) => source.declaration === null || source.projection.state.ready),
         [selectedAgentHasScopedSettings, selectedAgentSettingsSources],
     );
+    const selectedAgentAccountFieldValues = useSettingsSelector(React.useCallback((accountSettings) => {
+        const values: Record<string, unknown> = {};
+        const declaration = selectedAgentScopedSettingsDeclarations.account;
+        if (!declaration) return values;
+        const serverIdentityId = resolveScopedPluginSettingsServerIdentity(targetServerId);
+        for (const field of declaration.fields) {
+            const value = readScopedPluginSettingsDeclaredFieldValue({
+                values: selectedAgentAccountSettings.state.values,
+                field,
+                serverIdentityId,
+                releasedFlatSettings: accountSettings,
+            });
+            if (value !== undefined) values[field.key] = value;
+        }
+        return values;
+    }, [selectedAgentAccountSettings.state.values, selectedAgentScopedSettingsDeclarations.account, targetServerId]));
     const selectedAgentPluginSettings: AgentPluginSettingsSnapshot | null = React.useMemo(() => {
         if (!selectedAgentHasScopedSettings || !selectedAgentSettingsReady) return null;
         const serverIdentityId = resolveScopedPluginSettingsServerIdentity(targetServerId);
         const values: Record<'account' | 'daemon', Record<string, unknown>> = {
-            account: {},
+            account: selectedAgentAccountFieldValues,
             daemon: {},
         };
         // Preserve both scope records independently. A declaration may reuse a
@@ -1418,12 +1442,12 @@ export function useNewSessionScreenModel(input?: Readonly<{
         for (const source of selectedAgentSettingsSources) {
             if (!source.declaration) continue;
             const scope = source.declaration.scope.kind;
+            if (scope === 'account') continue;
             for (const field of source.declaration.fields) {
                 const value = readScopedPluginSettingsDeclaredFieldValue({
                     values: source.projection.state.values,
                     field,
                     serverIdentityId,
-                    releasedFlatSettings: scope === 'account' ? accountSettings : null,
                 });
                 if (value !== undefined) values[scope][field.key] = value;
             }
@@ -1432,7 +1456,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
             account: Object.freeze(values.account),
             daemon: Object.freeze(values.daemon),
         });
-    }, [accountSettings, selectedAgentHasScopedSettings, selectedAgentSettingsReady, selectedAgentSettingsSources, targetServerId]);
+    }, [selectedAgentAccountFieldValues, selectedAgentHasScopedSettings, selectedAgentSettingsReady, selectedAgentSettingsSources, targetServerId]);
     // Explicit embedding values are accepted only when this screen has an
     // identified selected Agent. Never let an unqualified snapshot become a
     // global availability input for every catalog Agent.
@@ -1511,10 +1535,10 @@ export function useNewSessionScreenModel(input?: Readonly<{
         projection: daemonMergedProjection,
         selectedBackendTargetKey,
         catalog: { enabledAgentIds, acpCatalogSnapshot: acpCatalog?.catalog,
-            backendEnabledByTargetKey: settings.backendEnabledByTargetKey,
+            backendEnabledByTargetKey,
             collapseConfiguredBackendProviderSentinels: true },
     }), [daemonMergedProjection.inputs, selectedBackendTargetKey,
-        enabledAgentIds, acpCatalog?.catalog, settings.backendEnabledByTargetKey]);
+        enabledAgentIds, acpCatalog?.catalog, backendEnabledByTargetKey]);
     const rememberedEngineSelection = React.useMemo(() => readRememberedEngineSelection({
         enabled: rememberLastEngineSelections,
         selectionsByScope: lastEngineSelectionsByScope,
@@ -1530,24 +1554,20 @@ export function useNewSessionScreenModel(input?: Readonly<{
     const agentPolicyType = staticAgentId ?? selectedUiAgentType;
     const agentLabel = selectedBackendEntry?.title ?? formatAgentLikeIdForDisplay(selectedUiAgentType);
 
-    React.useEffect(() => {
-        if (!useProfiles) return;
-        if (!selectedProfileId) return;
-        if (!acpCatalogReady || !projectionCurrent) return;
-        const selected = profileMap.get(selectedProfileId);
-        if (!selected) {
-            setSelectedProfileId(null);
-            return;
-        }
-        if (!isProfileEnabled(selected, profileEnabledById)) {
-            setSelectedProfileId(null);
-            return;
-        }
-        if (resolvedBackendEntries.some((entry) => isProfileCompatibleWithResolvedBackendEntry(selected, entry))) {
-            return;
-        }
-        setSelectedProfileId(null);
-    }, [acpCatalogReady, profileEnabledById, profileMap, projectionCurrent, resolvedBackendEntries, selectedProfileId, useProfiles]);
+    const selectedProfileId = React.useMemo(() => {
+        if (!useProfiles) return null;
+        const candidate = authoredProfileId === undefined ? initialProfileAuthoringIntent.profileId : authoredProfileId;
+        if (!candidate || !acpCatalogReady || !projectionCurrent) return candidate;
+        const profile = profileMap.get(candidate);
+        return profile && isProfileEnabled(profile, profileEnabledById)
+            && resolvedBackendEntries.some((entry) => isProfileCompatibleWithResolvedBackendEntry(profile, entry))
+            ? candidate
+            : null;
+    }, [acpCatalogReady, authoredProfileId, initialProfileAuthoringIntent.profileId, profileEnabledById,
+        profileMap, projectionCurrent, resolvedBackendEntries, useProfiles]);
+    const setSelectedProfileId = React.useCallback<React.Dispatch<React.SetStateAction<string | null>>>((next) => {
+        setAuthoredProfileId(typeof next === 'function' ? next(selectedProfileId) : next);
+    }, [selectedProfileId]);
 
     useRouteBackendTargetSelectionSync({
         routeBackendTarget,
@@ -1780,7 +1800,12 @@ export function useNewSessionScreenModel(input?: Readonly<{
         if (!selectedMachineId) return null;
         return machines.find(m => m.id === selectedMachineId) ?? null;
     }, [selectedMachineId, machines]);
-    const selectedMachineDisplayName = React.useMemo(() => getMachineDisplayName(selectedMachine, machines), [selectedMachine, machines]);
+    // Only ever read inside copy ("Not on {machine} yet", "Run setup on {machine}"): a machine whose name
+    // is still loading reads "this machine", never its placeholder title.
+    const selectedMachineSentenceName = React.useMemo(
+        () => selectedMachine ? getMachineSentenceName(selectedMachine, getMachineDisplayName(selectedMachine, machines)) : null,
+        [selectedMachine, machines],
+    );
     const selectedMachineHomeDir = selectedMachine?.metadata?.homeDir ?? null;
     const providerModelProjection = useProviderModelProjection({
         // A machine RPC: an embedded composer asks only once the person reaches for it.
@@ -1845,11 +1870,40 @@ export function useNewSessionScreenModel(input?: Readonly<{
             ? `route:new:${selectedMachineId ?? ''}:${selectedPath}`
             : null,
     });
+    const persistedWindowsRemoteSessionLaunchModeOverride = resolvePersistedWindowsLaunchOverrideForMachine(
+        persistedDraft,
+        selectedMachineId,
+    );
+    const [windowsRemoteSessionLaunchModeOverride, setWindowsRemoteSessionLaunchModeOverride] =
+        React.useState<WindowsRemoteSessionLaunchMode | null>(() => persistedWindowsRemoteSessionLaunchModeOverride);
+
+    const persistedWindowsRemoteSessionLaunchModeOverrideMachineId = persistedDraft?.windowsRemoteSessionLaunchModeOverride?.machineId ?? null;
+    const persistedWindowsRemoteSessionLaunchModeOverrideMode = persistedDraft?.windowsRemoteSessionLaunchModeOverride?.mode ?? null;
+    React.useEffect(() => {
+        setWindowsRemoteSessionLaunchModeOverride(
+            resolvePersistedWindowsLaunchOverrideForMachine(persistedDraft, selectedMachineId),
+        );
+    }, [
+        persistedDraft,
+        persistedWindowsRemoteSessionLaunchModeOverrideMachineId,
+        persistedWindowsRemoteSessionLaunchModeOverrideMode,
+        selectedMachineId,
+    ]);
+    const effectiveWindowsRemoteSessionLaunchMode = React.useMemo(() => {
+        return resolveEffectiveWindowsRemoteSessionLaunchMode({
+            machineMetadata: selectedMachine?.metadata,
+            settings: windowsLaunchSettings,
+            sessionOverride: windowsRemoteSessionLaunchModeOverride ?? undefined,
+        }).mode;
+    }, [selectedMachine?.metadata, windowsLaunchSettings, windowsRemoteSessionLaunchModeOverride]);
     const [agentInventoryDemanded, setAgentInventoryDemanded] = React.useState(false);
     const {
+        machineAgents,
         machineAgentsById,
+        getBackendEntryMachineAgent,
         cliAvailability,
         selectedMachineCapabilities,
+        capabilitiesCacheKeySalt,
         selectedMachineCapabilitiesSnapshot,
         tmuxRequested,
         showResumePicker,
@@ -1863,13 +1917,16 @@ export function useNewSessionScreenModel(input?: Readonly<{
         selectedMachineOnline,
         selectedMachineSpawnReadiness,
         windowsTerminalAvailable,
+        onWindowsTerminalIntent,
     } = useNewSessionAvailabilityState({
         agentInventoryDemanded,
+        windowsTerminalRequested: selectedMachine?.metadata?.platform === 'win32' && effectiveWindowsRemoteSessionLaunchMode === 'windows_terminal',
+        machineProbesEnabled: hostDemanded,
         selectedMachineId,
         selectedMachine,
         capabilityServerId,
         externalSessionsFeatureEnabled,
-        settings,
+        settings: availabilitySettings,
         pluginSettings: effectiveAgentPluginSettings,
         pluginSettingsAgentId: selectedRuntimeCarrierAgentId ?? staticAgentId,
         pluginSettingsReadiness: effectiveAgentPluginSettingsReadiness,
@@ -1929,7 +1986,6 @@ export function useNewSessionScreenModel(input?: Readonly<{
         agentNewSessionOptions,
         selectedCredentialMachineAgent,
         connectedServicesRecoveryAction,
-        routePresentation: connectedServicesRoutePresentation,
         nativeSourceLabel: connectedServicesNativeSourceLabel,
         requesterSignInPurposes,
     } = useNewSessionConnectedServicesAgentOptions({
@@ -1951,8 +2007,8 @@ export function useNewSessionScreenModel(input?: Readonly<{
         teamNameById: teamCredentialCatalog.teamNameById,
         setBackendNewSessionOptionStateByTargetKey,
         agentOptionState,
-        machineAgent: selectedBackendEntry ? machineAgentsById[selectedBackendEntry.agentId] ?? null : null,
-        settings,
+        machineAgent: selectedBackendEntry ? getBackendEntryMachineAgent(selectedBackendEntry) : null,
+        settings: connectedServicesSettings,
         router,
         applyTeamCredentialPolicy: applyConnectedServiceTeamCredentialPolicy,
     });
@@ -1976,20 +2032,6 @@ export function useNewSessionScreenModel(input?: Readonly<{
         teamCredentialCatalog.resources,
         teamCredentialProviderBinding,
     ]);
-    React.useEffect(() => {
-        if (!useProfiles) {
-            return;
-        }
-        if (hasUserTouchedProfileSelectionRef.current) {
-            return;
-        }
-
-        const nextProfileId = initialImplicitProfileId;
-        if (selectedProfileId === nextProfileId) {
-            return;
-        }
-        setSelectedProfileId(nextProfileId);
-    }, [initialImplicitProfileId, selectedProfileId, useProfiles]);
     const {
         preflightModels,
         preflightModelsTargetKey,
@@ -2003,7 +2045,6 @@ export function useNewSessionScreenModel(input?: Readonly<{
         backendTarget,
         runtimeCarrierAgentId: selectedRuntimeCarrierAgentId,
         selectedProfileId,
-        settings,
         pluginSettings: effectiveAgentPluginSettings,
         pluginSettingsReadiness: effectiveAgentPluginSettingsReadiness,
         selectedMachineId,
@@ -2141,9 +2182,11 @@ export function useNewSessionScreenModel(input?: Readonly<{
     const actionOperationReconciliationCallbacksRef = React.useRef<Readonly<{
         disableDraftPersistence: () => void;
         resetLaunchRequestId: (requestId: null) => void;
+        onOperationFailure: (failure: ActionOperationFailureV1) => void;
     }>>({
         disableDraftPersistence: () => {},
         resetLaunchRequestId: () => {},
+        onOperationFailure: () => {},
     });
     const disableDraftPersistenceForActionOperation = React.useCallback(() => {
         actionOperationReconciliationCallbacksRef.current.disableDraftPersistence();
@@ -2151,13 +2194,17 @@ export function useNewSessionScreenModel(input?: Readonly<{
     const resetLaunchRequestIdForActionOperation = React.useCallback((requestId: null) => {
         actionOperationReconciliationCallbacksRef.current.resetLaunchRequestId(requestId);
     }, []);
-    const { isCreatingFromOperation } = useNewSessionActionOperationReconciliation({
+    const presentActionOperationFailureForNewSession = React.useCallback((failure: ActionOperationFailureV1) => {
+        actionOperationReconciliationCallbacksRef.current.onOperationFailure(failure);
+    }, []);
+    const { isCreatingFromOperation, launchApproval } = useNewSessionActionOperationReconciliation({
         draftId,
         requestId: launchUserAttemptId,
         draftScope,
         localCreationInFlight: isCreatingLocally,
         disableDraftPersistence: disableDraftPersistenceForActionOperation,
         resetLaunchRequestId: resetLaunchRequestIdForActionOperation,
+        onOperationFailure: presentActionOperationFailureForNewSession,
         router,
     });
     const isCreating = isCreatingLocally || isCreatingFromOperation;
@@ -2169,7 +2216,6 @@ export function useNewSessionScreenModel(input?: Readonly<{
     const [pendingLaunchAttempt, setPendingLaunchAttempt] = React.useState<NewSessionLaunchAttempt | null>(null);
     const newSessionComposerCanSubmitRef = React.useRef(false);
     const newSessionRouteIsFocused = useIsFocused();
-    const newSessionLayoutPresented = useLayoutPresentationActive();
     const newSessionComposerPresentedRef = React.useRef(false);
     newSessionComposerPresentedRef.current = newSessionRouteIsFocused && newSessionLayoutPresented;
     const newSessionComposerDocument = useNewSessionComposerDocument({
@@ -2259,33 +2305,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         return null;
     }, [profileEnabledById, selectedProfileId, profileMap]);
 
-    const persistedWindowsRemoteSessionLaunchModeOverride = resolvePersistedWindowsLaunchOverrideForMachine(
-        persistedDraft,
-        selectedMachineId,
-    );
-    const [windowsRemoteSessionLaunchModeOverride, setWindowsRemoteSessionLaunchModeOverride] =
-        React.useState<WindowsRemoteSessionLaunchMode | null>(() => persistedWindowsRemoteSessionLaunchModeOverride);
-
-    const persistedWindowsRemoteSessionLaunchModeOverrideMachineId = persistedDraft?.windowsRemoteSessionLaunchModeOverride?.machineId ?? null;
-    const persistedWindowsRemoteSessionLaunchModeOverrideMode = persistedDraft?.windowsRemoteSessionLaunchModeOverride?.mode ?? null;
-    React.useEffect(() => {
-        setWindowsRemoteSessionLaunchModeOverride(
-            resolvePersistedWindowsLaunchOverrideForMachine(persistedDraft, selectedMachineId),
-        );
-    }, [
-        persistedDraft,
-        persistedWindowsRemoteSessionLaunchModeOverrideMachineId,
-        persistedWindowsRemoteSessionLaunchModeOverrideMode,
-        selectedMachineId,
-    ]);
-    const effectiveWindowsRemoteSessionLaunchMode = React.useMemo(() => {
-        return resolveEffectiveWindowsRemoteSessionLaunchMode({
-            machineMetadata: selectedMachine?.metadata,
-            settings,
-            sessionOverride: windowsRemoteSessionLaunchModeOverride ?? undefined,
-        }).mode;
-    }, [selectedMachine?.metadata, settings, windowsRemoteSessionLaunchModeOverride]);
-    const { chip: capabilitiesChip } = useNewSessionCapabilitiesChip({
+    const { chip: capabilitiesChip, skillSource: newSessionSkillSource } = useNewSessionCapabilitiesChip({
         draft: {
             machineId: selectedMachineId,
             directory: selectedPath,
@@ -2296,7 +2316,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
             selection: capabilitySelection,
             setSelection: setCapabilitySelection,
         },
-        machineName: selectedMachineDisplayName ?? '',
+        machineName: selectedMachineSentenceName ?? '',
         machineOnline: selectedMachineOnline,
     });
 
@@ -2356,29 +2376,32 @@ export function useNewSessionScreenModel(input?: Readonly<{
     });
     const nativeCatalogAgentLaunchParams = React.useMemo(() => {
         if (!nativeCatalogAgentId || effectiveAgentPluginSettingsReadiness?.ready === false || connectedAccountDefaultsStatus !== 'ready') return null;
-        const newSessionOptions = { ...(agentNewSessionOptions ?? {}), targetServerId };
-        const extras = buildSpawnSessionExtrasFromUiState({
-            agentId: nativeCatalogAgentId, settings, pluginSettings: effectiveAgentPluginSettings,
-            machineId: selectedMachineId, resumeSessionId, newSessionOptions, sessionConfigOptionOverrides,
-        });
-        const probeContext = resolveNewSessionCapabilityProbeContext({
-            backendTarget, runtimeCarrierAgentId: selectedRuntimeCarrierAgentId,
-            selectedProfileId: useProfiles ? selectedProfileId : null,
-            settings, pluginSettings: effectiveAgentPluginSettings, machineId: selectedMachineId,
-            runtimeDescriptorV1: extras.runtimeDescriptorV1 === undefined ? undefined : RuntimeDescriptorV1Schema.parse(extras.runtimeDescriptorV1),
-        });
-        return {
-            ...(probeContext?.capabilityParams ?? {}),
-            environmentVariables: buildSpawnEnvironmentVariablesFromUiState({
-                environmentVariables: undefined,
+        return () => {
+            const settings = readSettings();
+            const newSessionOptions = { ...(agentNewSessionOptions ?? {}), targetServerId };
+            const extras = buildSpawnSessionExtrasFromUiState({
                 agentId: nativeCatalogAgentId, settings, pluginSettings: effectiveAgentPluginSettings,
-                machineId: selectedMachineId, newSessionOptions,
-            }) ?? {},
-            ...(connectedServicesBindingsPayload ? { connectedServices: connectedServicesBindingsPayload } : {}),
+                machineId: selectedMachineId, resumeSessionId, newSessionOptions, sessionConfigOptionOverrides,
+            });
+            const probeContext = resolveNewSessionCapabilityProbeContext({
+                backendTarget, runtimeCarrierAgentId: selectedRuntimeCarrierAgentId,
+                selectedProfileId: useProfiles ? selectedProfileId : null,
+                settings, pluginSettings: effectiveAgentPluginSettings, machineId: selectedMachineId,
+                runtimeDescriptorV1: extras.runtimeDescriptorV1 === undefined ? undefined : RuntimeDescriptorV1Schema.parse(extras.runtimeDescriptorV1),
+            });
+            return {
+                ...(probeContext?.capabilityParams ?? {}),
+                environmentVariables: buildSpawnEnvironmentVariablesFromUiState({
+                    environmentVariables: undefined,
+                    agentId: nativeCatalogAgentId, settings, pluginSettings: effectiveAgentPluginSettings,
+                    machineId: selectedMachineId, newSessionOptions,
+                }) ?? {},
+                ...(connectedServicesBindingsPayload ? { connectedServices: connectedServicesBindingsPayload } : {}),
+            };
         };
     }, [agentNewSessionOptions, backendTarget, connectedAccountDefaultsStatus, connectedServicesBindingsPayload, effectiveAgentPluginSettings,
         effectiveAgentPluginSettingsReadiness?.ready, nativeCatalogAgentId, resumeSessionId, selectedMachineId,
-        selectedProfileId, selectedRuntimeCarrierAgentId, sessionConfigOptionOverrides, settings, targetServerId, useProfiles]);
+        selectedProfileId, selectedRuntimeCarrierAgentId, sessionConfigOptionOverrides, targetServerId, useProfiles]);
     const nativeCatalogProfile = useProfiles ? selectedProfile : null;
     const nativeCatalogSecretChoices = nativeCatalogProfile
         ? selectedSecretIdByProfileIdByEnvVarName[nativeCatalogProfile.id] ?? {} : {};
@@ -2390,7 +2413,11 @@ export function useNewSessionScreenModel(input?: Readonly<{
     );
     const nativeCatalogScopeKey = stableJsonStringify({
         workspace: newSessionComposerFileScope, agentId: nativeCatalogAgentId, backendTarget: operationalBackendTarget,
-        accountScope: draftScope, launchParams: nativeCatalogAgentLaunchParams,
+        accountScope: draftScope,
+        launchInputs: { agentNewSessionOptions, backendTarget, connectedAccountDefaultsStatus,
+            connectedServicesBindingsPayload, effectiveAgentPluginSettings, ready: effectiveAgentPluginSettingsReadiness?.ready,
+            resumeSessionId, selectedMachineId, selectedProfileId, selectedRuntimeCarrierAgentId,
+            sessionConfigOptionOverrides, targetServerId, useProfiles },
         profile: nativeCatalogProfile, selectedSecrets: nativeCatalogSecretChoices,
         sessionOnlyValues: nativeCatalogSessionOnlyValues, defaultBindings: nativeCatalogDefaultBindings,
         machineEnv: nativeCatalogMachineEnv, connectedServicesIdentity: connectedServicesModelProbeCacheIdentity,
@@ -2402,10 +2429,11 @@ export function useNewSessionScreenModel(input?: Readonly<{
         profile: nativeCatalogProfile, selectedSecrets: nativeCatalogSecretChoices,
         sessionOnlyValues: nativeCatalogSessionOnlyValues, defaultBindings: nativeCatalogDefaultBindings,
         machineEnv: nativeCatalogMachineEnv, resolveSavedSecretReference,
-    }), [nativeCatalogScopeKey, resolveSavedSecretReference]);
+    }), [nativeCatalogScopeKey, nativeCatalogAgentLaunchParams, resolveSavedSecretReference]);
     const preflightComposerCatalogSource = React.useMemo(() => {
         const scope = nativeCatalogScope;
-        if (!scope.workspace || !scope.agentId || !scope.launchParams) return undefined;
+        const buildLaunchParams = scope.launchParams;
+        if (!scope.workspace || !scope.agentId || !buildLaunchParams) return undefined;
         return createPreflightComposerSuggestionCatalogSource({
             machineId: scope.workspace.machineId, serverId: scope.workspace.serverId,
             accountId: scope.accountScope?.serverId === scope.workspace.serverId ? scope.accountScope.accountId : null,
@@ -2418,7 +2446,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
                 }) : { ok: true as const };
                 if (!readiness.ok) throw new Error(`Pre-session profile unavailable (${readiness.reason})`);
                 return {
-                    ...scope.launchParams, cwd: scope.workspace!.rootPath, timeoutMs: NEW_SESSION_CAPABILITY_PROBE_TIMEOUT_MS,
+                    ...buildLaunchParams(), cwd: scope.workspace!.rootPath, timeoutMs: NEW_SESSION_CAPABILITY_PROBE_TIMEOUT_MS,
                     ...('secretReferenceOverlay' in readiness && readiness.secretReferenceOverlay
                         ? { secretReferenceOverlay: readiness.secretReferenceOverlay } : {}),
                 };
@@ -2432,14 +2460,16 @@ export function useNewSessionScreenModel(input?: Readonly<{
     );
     // All triggers continue through the canonical registry, including plugin references.
     const emptyAutocompleteSuggestions = React.useCallback(
-        (query: string, signal: AbortSignal) => getSuggestions(null, query, {
+        (query: string, signal: AbortSignal, onUpdate: AutocompleteSuggestionUpdate) => getSuggestions(null, query, {
             kinds: NEW_SESSION_COMPOSER_SUGGESTION_KINDS, serverId: targetServerId,
             workspace: newSessionComposerFileScope, signal,
             composerReferenceHost: newSessionComposerReferenceHost,
             catalogs: preflightComposerCatalogs, loadCatalogs: preflightComposerCatalogSource?.read,
+            skillSource: newSessionSkillSource,
+            onUpdate,
         }),
         [newSessionComposerReferenceHost, newSessionComposerFileScope, preflightComposerCatalogs,
-            preflightComposerCatalogSource, targetServerId],
+            preflightComposerCatalogSource, targetServerId, newSessionSkillSource],
     );
 
     // NOTE: we intentionally do NOT clear per-profile secret overrides when profile changes.
@@ -2457,11 +2487,10 @@ export function useNewSessionScreenModel(input?: Readonly<{
         selectedProfileId,
         newSessionDefaultPersistenceModeV1,
         newSessionDefaultPersistenceModeByTargetKeyV1,
-        resolvedBackendTargets: resolvedBackendEntries.map((entry) => entry.backendTarget),
+        resolvedBackendTargets,
         agentType: agentPolicyType,
         selectedMachineId,
         backendTarget,
-        settings,
         externalSessionsFeatureEnabled,
     });
     const {
@@ -2506,14 +2535,12 @@ export function useNewSessionScreenModel(input?: Readonly<{
         applyPermissionMode,
         resolveDefaultPermissionMode,
         prepareSecretPromptForProfileSelection,
-        hasUserTouchedProfileSelectionRef,
         agentType: agentPolicyType,
         resolveProfileAuthoringIntent: resolveSelectedProfileAuthoringIntent,
         setModelSelectionForBackendTarget,
     });
 
     const { onPressDefaultEnvironment, handleDeleteProfile } = useNewSessionProfileActions({
-        hasUserTouchedProfileSelectionRef,
         setSelectedProfileId,
         selectedProfileId,
         deleteProfile: deleteAiLaunchProfile,
@@ -2525,6 +2552,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         favoriteMachineItems,
         recentPaths,
     } = useNewSessionMachineRefreshState({
+        focused: newSessionRouteIsFocused && newSessionLayoutPresented,
         capabilityServerId,
         selectedMachineId,
         machines,
@@ -2707,8 +2735,8 @@ export function useNewSessionScreenModel(input?: Readonly<{
         isBackendEntrySelectable,
         getBackendEntryUnavailabilityReason,
         selectedBackendEntry,
-        getBackendEntryMachineAgent: (entry) => machineAgentsById[entry.agentId] ?? null,
-        selectedMachineName: selectedMachineDisplayName,
+        getBackendEntryMachineAgent,
+        selectedMachineName: selectedMachineSentenceName,
         selectedBackendTargetKey,
         setBackendTarget,
         modelMode,
@@ -2723,12 +2751,11 @@ export function useNewSessionScreenModel(input?: Readonly<{
         capabilityServerId,
         projectionCurrent,
         selectedPath,
-        settings,
+        readSettings,
         favoriteModelSelections,
         setFavoriteModelSelections,
         favoriteBackendTargetKeys,
         setFavoriteBackendTargetKeys,
-        rememberedAgentPickerView: lastNewSessionAgentPickerView,
         onRememberAgentPickerView: setLastNewSessionAgentPickerView,
         rememberEngineSelectionsEnabled: rememberLastEngineSelections,
         rememberedEngineSelectionsByScope: lastEngineSelectionsByScope,
@@ -2738,6 +2765,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         refreshProbe: cliAvailabilityProbe ?? null,
         providerProjection: providerModelProjection,
         selectedNativeSourceLabel: connectedServicesNativeSourceLabel,
+        selectedConnectedServices: connectedServicesBindingsPayload,
         experimentalConfirmation: confirmExperimentalProviderModel,
     });
 
@@ -2761,7 +2789,6 @@ export function useNewSessionScreenModel(input?: Readonly<{
         getInstructionsPromptStack,
         initialSessionFacts: hydratedTempAuthoringDraft?.initialSessionFacts ?? hydratedPersistedAuthoringDraft?.initialSessionFacts,
         memoryEnabled: hydratedTempAuthoringDraft?.memoryEnabled ?? hydratedPersistedAuthoringDraft?.memoryEnabled,
-        zenTaskSource: persistedDraft?.zenTaskSource,
         authoringOrigin: persistedDraft?.authoringOrigin,
         automationDraft,
         automationFeatureEnabled,
@@ -2798,7 +2825,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         modelSelection,
         capabilitySelection,
         agentNewSessionOptions,
-        settings,
+        settings: terminalSettings,
         effectiveWindowsRemoteSessionLaunchMode,
         windowsRemoteSessionLaunchModeOverride: selectedMachineId && windowsRemoteSessionLaunchModeOverride
             ? {
@@ -2935,7 +2962,6 @@ export function useNewSessionScreenModel(input?: Readonly<{
         agentType: selectedUiAgentType,
         agentLabel,
         agentOptionState,
-        settings,
         pluginProjectionV2: currentProjectionInputs?.pluginProjectionV2 ?? null,
     });
     // New Session's Automation entry transfers the composed draft to the one
@@ -2983,6 +3009,12 @@ export function useNewSessionScreenModel(input?: Readonly<{
     actionOperationReconciliationCallbacksRef.current = {
         disableDraftPersistence,
         resetLaunchRequestId: onLaunchUserAttemptIdChange,
+        onOperationFailure: (failure) => {
+            Modal.alert(
+                t('common.error'),
+                resolveSessionSpawnNewOperationFailureMessage(failure),
+            );
+        },
     };
     const launchIntentSignature = React.useMemo(() => JSON.stringify({
         draft: managedMachineSelection ? { ...effectiveCurrentAuthoringDraft, executionTarget: null } : effectiveCurrentAuthoringDraft,
@@ -3178,35 +3210,38 @@ export function useNewSessionScreenModel(input?: Readonly<{
         let staged: StagedRunnerAttachments | null = null;
         let acquired: Awaited<ReturnType<typeof acquireRunnerArtifact>> | null = null;
         try {
-            await beginRunnerCreatorAttachmentStagingCustody({
-                scope: temporaryComputerTargetScope,
-                activationId: custody.activationId,
-                attachmentMessageLocalId: settlement.attachmentMessageLocalId,
-                firstTurnLocalId: settlement.firstTurnLocalId,
-                maxFileBytes: submission.maxFileBytes,
-            });
-            staged = await stageRunnerAttachments(submission.attachmentDrafts, {
-                maxFileBytes: submission.maxFileBytes,
-                onCustodyAcquired: (custodyFile) => recordRunnerCreatorStagingCustodyHandle({
-                    scope: temporaryComputerTargetScope,
-                    activationId: custody.activationId,
-                    custodyFile,
-                }),
-                onStagedAttachment: ({ reviewedFile, custodyFile }) => recordRunnerCreatorStagedAttachmentCustody({
-                    scope: temporaryComputerTargetScope,
-                    activationId: custody.activationId,
-                    reviewedFile,
-                    custodyFile,
-                }),
-            }, signal);
-            signal.throwIfAborted();
-            acquired = await acquireRunnerArtifact({ artifact: selectedTemporaryArtifact, signal });
+            // Capture credential currentness before artifact acquisition can suspend.
+            // The same context must still be current before using the acquired bytes.
             const context = await captureActionAccountContext(temporaryComputerTargetScope.serverId, signal);
             let prepared: Awaited<ReturnType<typeof prepareTemporaryComputerActivation>>;
             try {
                 if (context.accountId !== temporaryComputerTargetScope.accountId) {
                     throw new RunnerCreatorRecipientAuthorityError('runner_creator_scope_mismatch');
                 }
+                await beginRunnerCreatorAttachmentStagingCustody({
+                    scope: temporaryComputerTargetScope,
+                    activationId: custody.activationId,
+                    attachmentMessageLocalId: settlement.attachmentMessageLocalId,
+                    firstTurnLocalId: settlement.firstTurnLocalId,
+                    maxFileBytes: submission.maxFileBytes,
+                });
+                staged = await stageRunnerAttachments(submission.attachmentDrafts, {
+                    maxFileBytes: submission.maxFileBytes,
+                    onCustodyAcquired: (custodyFile) => recordRunnerCreatorStagingCustodyHandle({
+                        scope: temporaryComputerTargetScope,
+                        activationId: custody.activationId,
+                        custodyFile,
+                    }),
+                    onStagedAttachment: ({ reviewedFile, custodyFile }) => recordRunnerCreatorStagedAttachmentCustody({
+                        scope: temporaryComputerTargetScope,
+                        activationId: custody.activationId,
+                        reviewedFile,
+                        custodyFile,
+                    }),
+                }, signal);
+                signal.throwIfAborted();
+                acquired = await acquireRunnerArtifact({ artifact: selectedTemporaryArtifact, signal });
+                context.assertCurrent();
                 const exactAccountSettings = await context.readSettings();
                 // Every reviewed secret below belongs to the exact target
                 // Account, not to whichever Account is currently in focus.
@@ -3800,7 +3835,6 @@ export function useNewSessionScreenModel(input?: Readonly<{
         deleteManagedMachineAfterFailedSetup,
         cancelManagedMachineCreation: abortManagedMachineCreation,
     } = useNewSessionCreateSessionAction({
-        zenTaskSource: persistedDraft?.zenTaskSource,
         authoringOrigin: persistedDraft?.authoringOrigin,
         targetAccountScope: temporaryComputerTargetScope,
         flushComposerInput: newSessionComposerDocument.flushComposerInput,
@@ -3821,7 +3855,6 @@ export function useNewSessionScreenModel(input?: Readonly<{
         setIsResumeSupportChecking,
         checkoutCreationDraft,
         transcriptStorage,
-        settings,
         pluginSettings: effectiveAgentPluginSettings,
         pluginSettingsReadiness: effectiveAgentPluginSettingsReadiness,
         useProfiles,
@@ -3870,6 +3903,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         launchIntentSignature,
         launchUserAttemptId,
         onLaunchUserAttemptIdChange,
+        onLaunchApprovalPending: launchApproval.request,
         authoringCommitPending: confirmExperimentalProviderModel.pending,
         sourceContext: sourceContextState.sourceContext,
         temporaryComputerLaunch: launchOnTemporaryComputer,
@@ -3890,25 +3924,26 @@ export function useNewSessionScreenModel(input?: Readonly<{
         || (temporaryComputerAvailability.status === 'available'
             && selectedTemporaryArtifact !== null
             && temporaryComputerLaunchBlock === null);
-    // The picker evaluates aggregate inventory; Start evaluates the credential
-    // this draft actually selected, through the same backend selection owner.
-    const selectedLaunchBackendUnavailabilityReason = selectedBackendEntry === null ? null
-        : resolveBackendEntryUnavailabilityReasonForNewSession({
-            entry: selectedBackendEntry,
-            machineAgentsById: selectedCredentialMachineAgent
-                ? { [selectedCredentialMachineAgent.agentId]: selectedCredentialMachineAgent } : {},
-        });
-    const agentLaunchBlockedReason = selectedBackendEntry === null ? t('newSession.selectAiBackendTitle')
-        : `${agentLabel} · ${selectedLaunchBackendUnavailabilityReason === 'no-supported-cli' ? t('common.unavailable')
-            : selectedCredentialMachineAgent ? formatMachineAgentStatus(resolveMachineAgentStatus(selectedCredentialMachineAgent))
-                : t('machineAgents.unknown')}`;
+    // Admission, the status line and recovery all consume the exact selected credential's
+    // canonical state. Picker eligibility deliberately permits signed-out executables.
+    const agentStartBlock = React.useMemo(() => selectedMachineId ? resolveAgentSessionStartBlockLine({
+        agent: selectedCredentialMachineAgent ?? null,
+        machineName: selectedMachineSentenceName ?? selectedMachineId,
+        onSetUp: targetServerId === null ? undefined : () => router.push(machineCollectionHref({ machineId: selectedMachineId, serverId: targetServerId }) as never),
+        connectedServicesRecoveryAction,
+    }) : null, [selectedMachineId, selectedCredentialMachineAgent, selectedMachineSentenceName, targetServerId, router, connectedServicesRecoveryAction]);
+    const agentLaunchBlockedReason = resolveAgentLaunchBlockedReasonForNewSession({
+        backendTarget, selectedBackendEntry, projectionPhase: daemonMergedProjection.phase,
+        acpCatalog: acpCatalog?.catalog ?? null, agentLabel, selectedCredentialMachineAgent,
+        machineAgentsStatus: machineAgents.status, agentStartBlock,
+    });
     const createAdmission = resolveNewSessionCreateAdmission([
         { ready: canCreateFromAuthoring, reason: !selectedMachineId && !managedMachineSelection
             ? t('newSession.noMachineSelected')
             : directoryKind !== 'managed' && !selectedPath.trim()
                 ? t('newSession.noPathSelected') : t('newSession.machineUnavailableStatus') },
         { ready: backendTarget.kind !== 'backend' || !backendTarget.configuredBackendId || acpCatalogReady,
-            reason: `${t('settings.acpCatalog')} · ${t('common.unavailable')}` },
+            reason: agentLaunchBlockedReason ?? `${t('settings.acpCatalog')} · ${t('common.unavailable')}` },
         { ready: connectedAccountDefaultsStatus === 'ready',
             reason: `${t('settings.connectedServices')} · ${t('common.unavailable')}` },
         { ready: temporaryComputerTargetReady,
@@ -3917,8 +3952,8 @@ export function useNewSessionScreenModel(input?: Readonly<{
                     : temporaryComputerLaunchBlock !== null ? describeTemporaryComputerLaunchBlock(temporaryComputerLaunchBlock)
                         : t('newSession.temporaryComputer.unavailable.notAvailable')) },
         { ready: effectiveCurrentAuthoringDraft.executionTarget?.kind === 'temporary_computer'
-            || (selectedBackendEntry !== null && selectedLaunchBackendUnavailabilityReason === null),
-            reason: agentLaunchBlockedReason },
+            || agentLaunchBlockedReason === null,
+            reason: agentLaunchBlockedReason ?? '' },
         { ready: canCreateSessionWithInitialAccess(currentAuthoringDraft.access, collaborationAvailability),
             reason: t('session.access.homeUnsupported') },
         { ready: targetServerId !== null, reason: t('newSession.notConnectedToServer') },
@@ -3992,6 +4027,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         selectedMachineIsWindows,
         effectiveWindowsRemoteSessionLaunchMode,
         windowsTerminalAvailable,
+        onWindowsTerminalIntent,
         setWindowsRemoteSessionLaunchModeOverride,
         temporaryComputerTeamAccess: effectiveCurrentAuthoringDraft.executionTarget?.kind === 'temporary_computer'
             && existingTemporaryComputerActivationRef === null
@@ -4047,15 +4083,6 @@ export function useNewSessionScreenModel(input?: Readonly<{
         draftChangeKey: launchIntentSignature,
     });
 
-    // Why the chosen agent can't start on the chosen machine, with its fix (lab agent-setup ST): the one
-    // inventory owner decides; the composer's status line says it once, Set up / Sign in opens the
-    // machine's Agents section.
-    const agentStartBlock = React.useMemo(() => selectedMachineId ? resolveAgentSessionStartBlockLine({
-        agent: selectedCredentialMachineAgent ?? null,
-        machineName: selectedMachineDisplayName ?? selectedMachineId,
-        onSetUp: targetServerId === null ? undefined : () => router.push(machineCollectionHref({ machineId: selectedMachineId, serverId: targetServerId }) as never),
-        connectedServicesRecoveryAction,
-    }) : null, [selectedMachineId, selectedCredentialMachineAgent, selectedMachineDisplayName, targetServerId, router, connectedServicesRecoveryAction]);
     const launchStatus = React.useMemo(
         () => buildNewSessionLaunchStatus({ isCreating: isCreating || temporaryComputerLaunchActive, launchPresentation,
             disabledReason: createAdmission.disabledReason, translate: t,
@@ -4063,9 +4090,9 @@ export function useNewSessionScreenModel(input?: Readonly<{
             requesterDisclosure: targetAccountScopeResolution.kind === 'bound' && selectedMachine?.access
                 && selectedMachine.access.custodian.accountId !== targetAccountScopeResolution.scope.accountId
                 ? { owner: selectedMachine.access.custodian.displayName || t('shareSheet.person'),
-                    machine: selectedMachineDisplayName ?? selectedMachine.id, signIn: 'full', signInPurposes: requesterSignInPurposes }
+                    machine: selectedMachineSentenceName ?? selectedMachine.id, signIn: 'full', signInPurposes: requesterSignInPurposes }
                 : undefined }),
-        [isCreating, temporaryComputerLaunchActive, launchPresentation, createAdmission.disabledReason, agentStartBlock, selectedMachine, selectedMachineDisplayName, targetAccountScopeResolution, requesterSignInPurposes],
+        [isCreating, temporaryComputerLaunchActive, launchPresentation, createAdmission.disabledReason, agentStartBlock, selectedMachine, selectedMachineSentenceName, targetAccountScopeResolution, requesterSignInPurposes],
     );
     // One cause, one line: the machine's own state leads (it is the cause of a blocked launch), then the
     // launch's blocker or progress, on the status line above the card where a session states its status.
@@ -4084,17 +4111,23 @@ export function useNewSessionScreenModel(input?: Readonly<{
     );
 
     // Instructions before the first input (plans 60 §2, 61 I61-1): a Bot draft offers them; any draft
-    // that already carries a document or retained authoring shows it, so nothing is sent unseen.
+    // that already carries a document or retained authoring shows it, so nothing is sent unseen. A Bot's
+    // Instructions are part of its identity, so they sit under its name in the draft header (lab `b-new`);
+    // another draft shows them on the composer's own edge.
+    const isBotDraft = Boolean(effectiveCurrentAuthoringDraft.initialSessionFacts?.bot);
     const draftInstructions = draftScope ? (
         <NewSessionInstructions
             creation={instructionsCreation}
             serverId={draftScope.serverId}
-            invite={Boolean(effectiveCurrentAuthoringDraft.initialSessionFacts?.bot)}
+            invite={isBotDraft}
             getName={sessionNameStore.getPrompt}
         />
     ) : null;
-    const composerTopContent = input?.composerTopContent || draftInstructions
-        ? <>{input?.composerTopContent}{draftInstructions}</>
+    const composerDraftInstructions = draftInstructions && !isBotDraft
+        ? <ComposerAuxiliaryFrame>{draftInstructions}</ComposerAuxiliaryFrame>
+        : null;
+    const composerTopContent = input?.composerTopContent || composerDraftInstructions
+        ? <>{input?.composerTopContent}{composerDraftInstructions}</>
         : undefined;
 
     const {
@@ -4105,6 +4138,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         machine: wizardMachineProps,
         footer: wizardFooterProps,
     } = useNewSessionScreenWizardProps({
+        focused: newSessionRouteIsFocused && newSessionLayoutPresented,
         layout: {
             theme,
             styles,
@@ -4147,9 +4181,9 @@ export function useNewSessionScreenModel(input?: Readonly<{
         installables: {
             wizardInstallableDeps,
             selectedMachineCapabilities,
+            capabilitiesCacheKeySalt,
         },
         agent: {
-            routePresentation: connectedServicesRoutePresentation,
             cliAvailability,
             tmuxRequested,
             enabledAgentIds,
@@ -4248,6 +4282,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
             launchPendingPreviewVisible: launchPresentation === 'machine',
             providerLaunchError,
             retryProviderLaunch,
+            launchApproval: launchApproval.notice,
             emptyAutocompleteKinds,
             emptyAutocompleteSuggestions,
             connectionStatus: composerConnectionStatus,
@@ -4273,7 +4308,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
         useProfiles,
         profilesProps: wizardProfilesProps,
         serverId: targetServerId,
-        machineName: selectedMachineDisplayName ?? (selectedMachineId || undefined),
+        machineName: selectedMachineSentenceName ?? (selectedMachineId || undefined),
         popoverBoundaryRef,
     });
 
@@ -4303,6 +4338,7 @@ export function useNewSessionScreenModel(input?: Readonly<{
             launchPendingPreviewVisible: launchPresentation === 'machine',
             providerLaunchError,
             retryProviderLaunch,
+            launchApproval: launchApproval.notice,
             emptyAutocompleteKinds,
             emptyAutocompleteSuggestions,
             sessionPromptInputMaxHeight,
@@ -4388,8 +4424,8 @@ export function useNewSessionScreenModel(input?: Readonly<{
 
     return buildNewSessionScreenVariantModel({
         instructionsCreation,
-        botCreation: effectiveCurrentAuthoringDraft.initialSessionFacts?.bot
-            ? { nameStore: sessionNameStore, onSessionNameChange }
+        botCreation: isBotDraft
+            ? { nameStore: sessionNameStore, onSessionNameChange, instructions: draftInstructions }
             : undefined,
         useEnhancedSessionWizard,
         popoverBoundaryRef,

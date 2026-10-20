@@ -88,7 +88,7 @@ function attempt(
         required: {},
         credentialSupport: { supportsNoAuth: true, apiKeyTransports: [] },
         authIsolation: {
-          suppressConnectedServiceIds: [codexServiceKey],
+          suppressConnectedServiceIds: ['openai-codex'],
           ownedEnvKeys: [],
         },
         materialization: 'engineConfig',
@@ -187,8 +187,10 @@ describe('prepareProviderLaunch', () => {
         v: 2,
         bindingsByServiceId: { [githubServiceKey]: expect.anything() },
       },
-      suppressedConnectedServiceIds: [codexServiceKey],
+      suppressedConnectedServiceIds: ['openai-codex'],
     });
+    if (!result.ok || result.kind !== 'provider') throw new Error('Expected a Provider launch');
+    expect(result.connectedServices?.bindingsByServiceId).not.toHaveProperty(codexServiceKey);
     expect(input.resolvePrerequisites).toHaveBeenCalledWith(expect.objectContaining({
       agentTargetKey: 'agent:happier.agent.codex/codex',
       connectionId,

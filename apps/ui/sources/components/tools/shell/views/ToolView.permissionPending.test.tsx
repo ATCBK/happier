@@ -135,6 +135,21 @@ describe('ToolView (permission pending)', () => {
         expect(footers[0]?.props.canApprovePermissions).toBe(false);
     });
 
+    it('marks a card waiting for the person with the one attention edge, and drops it once settled', async () => {
+        const waiting = await renderWithSessionTranscriptSource(React.createElement(ToolView, {
+            tool: makeToolCall({ name: 'execute', state: 'running', input: { command: 'pwd' }, result: null, completedAt: null,
+                permission: { id: 'perm1', status: 'pending' } }),
+            metadata: null, messages: [], sessionId: 's1', messageId: 'm1',
+        }));
+        expect(waiting.findByTestId('tool-view-waiting-edge')).toBeTruthy();
+        const settled = await renderWithSessionTranscriptSource(React.createElement(ToolView, {
+            tool: makeToolCall({ name: 'execute', state: 'running', input: { command: 'pwd' }, result: null, completedAt: null,
+                permission: { id: 'perm1', status: 'approved' } }),
+            metadata: null, messages: [], sessionId: 's1', messageId: 'm1',
+        }));
+        expect(settled.findByTestId('tool-view-waiting-edge')).toBeNull();
+    });
+
     it('does not show elapsed time while waiting for permission', async () => {
         const tool = makeToolCall({
             name: 'execute',

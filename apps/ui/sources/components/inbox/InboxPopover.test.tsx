@@ -49,8 +49,10 @@ describe('InboxPopoverContent (lab inbox-I2)', () => {
 
         await screen.pressByTestIdAsync('inbox.popover.open');
         expect(navigation.order).toEqual(['close', 'open']);
-        await screen.pressByTestIdAsync(`inbox.usage-notice.${notice.id}`);
-        expect(navigation.order).toEqual(['close', 'open', 'close', '/settings/usage']);
+        // A notice is an Update: the popover offers one line to the Inbox rather than its row.
+        expect(screen.findByTestId(`inbox.usage-notice.${notice.id}`)).toBeNull();
+        await screen.pressByTestIdAsync('inbox.popover.updates');
+        expect(navigation.order).toEqual(['close', 'open', 'close', 'open']);
     });
 
     it('shows the same real Account-notice count as the rail summary that opened it', async () => {

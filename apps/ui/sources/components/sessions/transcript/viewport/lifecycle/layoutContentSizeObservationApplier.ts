@@ -44,8 +44,8 @@ export function applyTranscriptLayoutObservation(
 ): boolean {
     if (!Number.isFinite(input.layoutHeight)) return false;
 
-    effects.commitLayoutHeight(input.layoutHeight);
     if (input.layoutHeightChanged) {
+        effects.commitLayoutHeight(input.layoutHeight);
         effects.recordLayoutMeasuredTelemetry({
             contentHeight: input.contentHeight,
             layoutHeight: input.layoutHeight,
@@ -75,7 +75,13 @@ export function applyTranscriptContentSizeObservation(
 
     const observation = input.observation;
     const reason = observation.reason;
-    effects.commitContentHeight(observation.measuredContentHeight);
+    // Web mirrors every measured height immediately, so an unchanged fact
+    // must not schedule another state write from the renderer's commit. Native
+    // can defer its render-visible height during initial placement; retain that
+    // synchronization even when its measurement ref already holds this height.
+    if (observation.contentHeightChanged || input.platformOS !== 'web') {
+        effects.commitContentHeight(observation.measuredContentHeight);
+    }
 
     const metrics = {
         contentHeight: observation.measuredContentHeight,

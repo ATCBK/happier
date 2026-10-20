@@ -43,6 +43,7 @@ const fixtureStorage = await getStorage();
 const { createVoiceSessionLifecycleController } = await import('@/voice/session/voiceSessionLifecycleController');
 const { getVoiceSessionLifecycleController, setVoiceSessionLifecycleController } = await import('@/voice/session/voiceSessionLifecycleControllerStore');
 const { voiceSessionManager } = await import('@/voice/session/voiceSession');
+const { getVoiceConversationRuntimeSnapshot } = await import('@/voice/runtime/machine/voiceConversationRuntimeStore');
 const { readDaemonSpeechStreamQaRouteRequirement } = await import('@/voice/runtime/daemonInference/daemonSpeechStreamQaRouteRequirement');
 const { createSessionMetadataHttpBoundary } = await import('@/dev/testkit/harness/sessionMetadataHttpBoundary');
 const { useVoiceTargetStore } = await import('@/voice/runtime/voiceTargetStore');
@@ -145,7 +146,7 @@ describe('voiceQaController', () => {
     expect(promptPending).toHaveLength(1);
     expect(promptPending[0]?.path).toBe('/v2/sessions/voice-hidden-s1/pending');
     expect(localVoiceAgentRpc.requests.some(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START_V2
-      && ExecutionRunTurnStreamStartV2RequestSchema.parse(request.input).userTranscript?.mode === 'persist')).toBe(true);
+      && ExecutionRunTurnStreamStartV2RequestSchema.parse(request.input).userTranscript?.mode === 'suppress')).toBe(true);
     await controller.stop();
     expect(localVoiceAgentRpc.readRetainedRun()).toBeNull();
   });
@@ -197,7 +198,7 @@ describe('voiceQaController', () => {
     if (!body || typeof body !== 'object' || !('localId' in body) || typeof body.localId !== 'string') {
       throw new Error('Expected the canonical pending local id');
     }
-    expect(starts[0]?.userTranscript).toEqual({ mode: 'persist', localId: body.localId });
+    expect(starts[0]?.userTranscript).toEqual({ mode: 'suppress', localId: body.localId });
     expect(starts[1]?.userTranscript).toEqual({ mode: 'suppress' });
     const followUp = starts[1]?.message;
     if (!followUp?.startsWith(VOICE_TOOL_RESULTS_JSON_PREFIX)) throw new Error('Expected actual tool-result custody');
@@ -262,7 +263,7 @@ describe('voiceQaController', () => {
         expect(v2Calls.length).toBeGreaterThan(0);
         expect(v2Calls.every(request => {
           const transcript = ExecutionRunTurnStreamStartV2RequestSchema.parse(request.payload).userTranscript;
-          return transcript?.mode === 'persist' && transcript.localId === body.localId;
+          return transcript?.mode === 'suppress' && transcript.localId === body.localId;
         })).toBe(true);
         expect(calls.some(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START)).toBe(false);
         expect(useVoiceQaStore.getState().entries.some(entry => entry.kind === 'error')).toBe(true);
@@ -834,7 +835,7 @@ describe('voiceQaController', () => {
       'voice-home-hidden',
       'Teleport into the active coding session.',
       expect.objectContaining({
-        userTranscript: { mode: 'persist', localId: expect.any(String) },
+        userTranscript: { mode: 'suppress', localId: expect.any(String) },
         onUserTranscriptAccepted: expect.any(Function),
       }),
     );
@@ -1330,6 +1331,7 @@ describe('voiceQaController', () => {
       const start = controller.start({ sessionAddress: qaAddress('s1'), mode: 'media' });
       await expect(start).rejects.toThrow('voice_qa_media_session_not_started:adapter=local_conversation');
       await expect(start).rejects.toThrow('mic_permission_denied');
+      await expect(start).rejects.toHaveProperty('cause', getVoiceConversationRuntimeSnapshot().error);
       expect(nativeMicRequestPermissionsAsync).toHaveBeenCalledTimes(1);
       expect(voiceSessionManager.getSnapshot().status).not.toBe('connected');
       expect(useVoiceQaStore.getState().status).toBe('error');

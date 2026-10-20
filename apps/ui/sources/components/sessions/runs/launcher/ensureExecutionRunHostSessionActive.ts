@@ -34,6 +34,7 @@ export async function ensureExecutionRunHostSessionActive(input: Readonly<{
     settings: Settings;
     serverId?: string | null;
     accountLifetime?: ServerAccountScopeLifetime;
+    signal?: AbortSignal;
     machineTarget?: Readonly<{ machineId: string; basePath: string }>;
     /** Stable identity of the user operation that will start/admit this Run. */
     readinessOperationId?: string;
@@ -72,6 +73,7 @@ export async function ensureExecutionRunHostSessionActive(input: Readonly<{
 
     const result = await resumeSession({
         ...base,
+        ...(input.signal ? { signal: input.signal } : {}),
         ...(input.accountLifetime ? { accountLifetime: input.accountLifetime } : {}),
         ...(input.serverId ? { serverId: input.serverId } : {}),
         ...buildResumeSessionExtrasFromUiState({

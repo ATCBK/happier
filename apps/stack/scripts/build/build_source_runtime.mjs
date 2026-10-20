@@ -20,7 +20,7 @@ import { probeCliDistRuntimeImport } from '../utils/cli/cliDistIntegrity.mjs';
 import { retainPendingSourcePreparation, updatePendingSourcePreparationPhase } from '../runtime/shared/pending_source_start.mjs';
 import { readBundledPluginPackageResourceRelativePaths } from '../../../../packages/cli-common/bundledPluginResources.mjs';
 
-import { SOURCE_CONDITION, sourceExport, readWorkspacePackages, resolveWorkspaceSource, workspaceSourceCompilerPaths, packageNameOfSpecifier, readCliSourceEntries, createWorkspaceSourceResolver, bundleCliSourceSidecars, runtimePackageExports } from '../../../../packages/cli-common/sourceRuntimeEntries.mjs';
+import { SOURCE_CONDITION, SOURCE_RUNTIME_OUTPUT_OPTIONS, sourceExport, readWorkspacePackages, resolveWorkspaceSource, workspaceSourceCompilerPaths, packageNameOfSpecifier, readCliSourceEntries, createWorkspaceSourceResolver, bundleCliSourceSidecars, runtimePackageExports } from '../../../../packages/cli-common/sourceRuntimeEntries.mjs';
 export { readWorkspacePackages, resolveWorkspaceSource } from '../../../../packages/cli-common/sourceRuntimeEntries.mjs';
 
 /** Finite web builds reuse workspace capture, not a second snapshot engine.
@@ -257,7 +257,9 @@ async function retainSourceBundles({ stacksRoot, bundleRoot, newest }) {
       candidates.push(directory);
       continue;
     }
-    const createdMs = (await lstat(directory)).mtimeMs;
+    // Completion is immutable; allocation-directory metadata can change
+    // independently and must not make an older product the newest fallback.
+    const createdMs = (await lstat(join(directory, 'source-bundle.json'))).mtimeMs;
     const component = record.component ?? (record.cliDir ? 'daemon' : 'server');
     if (!newestBuilt.has(component) || createdMs > newestBuilt.get(component).createdMs) {
       newestBuilt.set(component, {directory, createdMs});
@@ -793,6 +795,7 @@ async function emitSourceRuntimeBundle({ repoDir, sourceRepoDir, capturedFiles, 
   const result = await build({
     absWorkingDir: repoDir, entryPoints: entries, outdir: outputDir,
     bundle: true, splitting: true, format: 'esm', platform: 'node', target: 'node20',
+    ...SOURCE_RUNTIME_OUTPUT_OPTIONS,
     conditions: [SOURCE_CONDITION], tsconfig: join(projectDir, 'tsconfig.json'),
     chunkNames: `${outputPrefix}/src/chunks/[name]-[hash]`,
     banner: { js: "import { createRequire as __sourceCreateRequire } from 'node:module'; import {fileURLToPath as __sourceFileURLToPath} from 'node:url'; import {dirname as __sourcePathDirname} from 'node:path'; const require = __sourceCreateRequire(import.meta.url); const __sourceFilename = __sourceFileURLToPath(import.meta.url); const __sourceDirname = __sourcePathDirname(__sourceFilename);" },
@@ -878,9 +881,12 @@ async function emitSourceRuntimeBundle({ repoDir, sourceRepoDir, capturedFiles, 
     Object.assign(result.metafile.outputs,sidecars.metafile.outputs);
     if (existsSync(join(projectDir, 'assets'))) await cp(join(projectDir, 'assets'), join(runtimeDir, 'assets'), { recursive: true });
     const nativeSource = join(projectDir, 'native/processcustody');
-    if (existsSync(join(nativeSource, 'go.mod'))) {
-      // Vendor tools retain their installed lifecycle; the first-party helper must
-      // match the source daemon's command contract, never an old checkout output.
+    const buildsProcessCustody = existsSync(join(nativeSource, 'go.mod'));
+    const buildsCliProxyApi = pluginMetadata.some(item => item.package.name === '@happier-dev/plugins-cliproxyapi');
+    if (buildsProcessCustody || buildsCliProxyApi) {
+      // Vendor tools retain their installed lifecycle. First-party native code
+      // must match this source graph, and staging must not write through a link
+      // into the checkout's installed tools.
       const sourceTools = join(installedProjectDir, 'tools');
       for (const entry of existsSync(sourceTools) ? await readdir(sourceTools, { withFileTypes: true }) : []) {
         if (entry.name !== 'unpacked') {
@@ -891,30 +897,47 @@ async function emitSourceRuntimeBundle({ repoDir, sourceRepoDir, capturedFiles, 
         const destination = join(runtimeDir, 'tools/unpacked');
         await mkdir(destination, { recursive: true });
         for (const tool of await readdir(join(sourceTools, 'unpacked'), { withFileTypes: true })) {
-          if (/^happier-process-custody(?:\.exe)?$/.test(tool.name)) continue;
+          if ((buildsProcessCustody && /^happier-process-custody(?:\.exe)?$/.test(tool.name))
+            || (buildsCliProxyApi && /^happier-cliproxyapi-managed(?:\.exe)?$/.test(tool.name))) continue;
           if (tool.isDirectory()) await linkInstalledDirectory(join(sourceTools, 'unpacked', tool.name), join(destination, tool.name));
           else await cp(join(sourceTools, 'unpacked', tool.name), join(destination, tool.name));
         }
       }
       const preparationDir = await mkdtemp(join(runtimeDir, '.source-native-'));
       try {
-        const capture = await captureBuildInputFiles({ sourceDir: repoDir, captureDir: preparationDir,
-          readPaths: () => readWorkspaceBuildInputs(projectDir, { additionalInputPaths: ['native/processcustody'] })
-            .filter(path => path.startsWith('native/')).map(path => relative(repoDir, join(projectDir, path))) });
-        for (const path of capture.files) sourceInputDigests[path] = createHash('sha256')
-          .update(await readFile(join(preparationDir, path))).digest('hex');
-        const ownerPath = join(preparationDir, 'owner.mjs');
-        await build({ entryPoints: [join(repoDir, 'packages/cli-common/src/componentArtifacts/stageProcessCustodyRuntime.ts')],
-          outfile: ownerPath, bundle: true, platform: 'node', format: 'esm', logLevel: 'silent' });
-        const { stageProcessCustodyRuntime } = await import(pathToFileURL(ownerPath).href);
         const targetPath = join(preparationDir, 'target.mjs');
         await build({ entryPoints: [join(repoDir, 'packages/cli-common/src/componentArtifacts/targets.ts')],
           outfile: targetPath, bundle: true, platform: 'node', format: 'esm', logLevel: 'silent' });
         const { CLI_BINARY_TARGETS, resolveCurrentBinaryTarget } = await import(pathToFileURL(targetPath).href);
         const target = resolveCurrentBinaryTarget({ availableTargets: CLI_BINARY_TARGETS });
-        const { executablePath } = await stageProcessCustodyRuntime({ repoRoot: preparationDir, payloadDir: runtimeDir,
-          target, runCommand: (command, args, options) => runCapture(command, args, { ...options, env: { ...env, ...options?.env }, signal }) });
-        retainedCodeFiles.push(executablePath);
+        const runCommand = (command, args, options) => runCapture(command, args,
+          { ...options, env: { ...env, ...options?.env }, signal });
+        if (buildsProcessCustody) {
+          const capture = await captureBuildInputFiles({ sourceDir: repoDir, captureDir: preparationDir,
+            readPaths: () => readWorkspaceBuildInputs(projectDir, { additionalInputPaths: ['native/processcustody'] })
+              .filter(path => path.startsWith('native/')).map(path => relative(repoDir, join(projectDir, path))) });
+          for (const path of capture.files) sourceInputDigests[path] = createHash('sha256')
+            .update(await readFile(join(preparationDir, path))).digest('hex');
+          const ownerPath = join(preparationDir, 'custody.mjs');
+          await build({ entryPoints: [join(repoDir, 'packages/cli-common/src/componentArtifacts/stageProcessCustodyRuntime.ts')],
+            outfile: ownerPath, bundle: true, platform: 'node', format: 'esm', logLevel: 'silent' });
+          const { stageProcessCustodyRuntime } = await import(pathToFileURL(ownerPath).href);
+          const { executablePath } = await stageProcessCustodyRuntime({ repoRoot: preparationDir, payloadDir: runtimeDir, target, runCommand });
+          retainedCodeFiles.push(executablePath);
+        }
+        if (buildsCliProxyApi) {
+          const ownerPath = join(preparationDir, 'cliproxyapi.mjs');
+          const commandsPath = join(preparationDir, 'commands.mjs');
+          await build({ entryPoints: [join(repoDir, 'packages/cli-common/src/componentArtifacts/stageCliProxyApiManagedRuntime.ts')],
+            outfile: ownerPath, bundle: true, platform: 'node', format: 'esm', logLevel: 'silent' });
+          await build({ entryPoints: [join(repoDir, 'packages/cli-common/src/componentArtifacts/commands.ts')],
+            outfile: commandsPath, bundle: true, platform: 'node', format: 'esm', logLevel: 'silent' });
+          const { stageCliProxyApiManagedRuntime } = await import(pathToFileURL(ownerPath).href);
+          const { resolveYarnCommand } = await import(pathToFileURL(commandsPath).href);
+          const staged = await stageCliProxyApiManagedRuntime({ repoRoot: repoDir, payloadDir: runtimeDir,
+            target, yarn: resolveYarnCommand(), runCommand });
+          retainedCodeFiles.push(staged.executablePath, staged.licensePath, staged.thirdPartyNoticesPath);
+        }
       } finally { await rm(preparationDir, { recursive: true, force: true }); }
     } else await linkInstalledDirectory(join(installedProjectDir, 'tools'), join(runtimeDir, 'tools'));
     const assets = join(projectDir, 'src/plugins/projection/registry/static-assets');

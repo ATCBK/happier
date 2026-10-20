@@ -21,7 +21,7 @@ describe('workflow trigger wire contract', () => {
     const cause = { kind: 'conversation', triggerId: 'trigger', occurrenceKey: 'A'.repeat(43), occurredAt: 10 };
     expect(AutomationRunCauseSchema.safeParse(cause).success).toBe(true);
     expect(AutomationV3WorkerClaimedRunSchema.safeParse({
-      id: 'run', automationId: 'automation', attempt: 1, revision: 0, recipeKind: 'workflow-v2',
+      id: 'run', automationId: 'automation', attempt: 1, leaseExpiresAt: Date.now() + 120_000, revision: 0, recipeKind: 'workflow-v2',
       executionInputEnvelope: 'sealed', automationEvidenceEnvelope: 'evidence', triggerId: 'trigger',
       triggerRetired: false, cause, causeWorkDepth: 3,
     }).success).toBe(true);

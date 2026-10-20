@@ -1,18 +1,27 @@
-import { createDeferred, flushHookEffects, renderScreen, type RenderScreenResult } from '@/dev/testkit';
+import { createDeferred, createMachineFixture, createRootLayoutFeaturesResponse, createSessionFixture, flushHookEffects, renderScreen, type RenderScreenResult } from '@/dev/testkit';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createRpcCallError } from '@happier-dev/protocol/rpcErrors';
+import { DaemonTerminalEnsureRequestSchema, DaemonTerminalRestartRequestSchema, DaemonTerminalResizeRequestSchema, DaemonTerminalStreamReadRequestSchema } from '@happier-dev/protocol/daemon/terminal';
+import { ExternalActionMachineBootstrapV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { installSessionDetailsPanelCommonModuleMocks } from '../sessionDetailsPanelTestHelpers';
+import { installSessionPaneRuntimeTestHarness } from '../sessionPaneRuntimeTestHarness';
+import { createAccountTokenForTests, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { storage } from '@/sync/domains/state/storageStore';
+import { createSessionPaneScopeId } from '../sessionPaneScopeId';
+import type { EmbeddedTerminalRendererHandle } from '@/components/terminal/embedded/embeddedTerminalRendererHandle';
+import type { SessionEmbeddedTerminalPaneProps } from '@/components/sessions/terminal/useSessionEmbeddedTerminalPaneModel';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
-const machineTerminalEnsureSpy = vi.fn();
-const machineTerminalRestartSpy = vi.fn();
-const machineTerminalStreamReadSpy = vi.fn();
-const machineTerminalResizeSpy = vi.fn();
-const storageGetStateSpy = vi.fn();
+const terminalOps = vi.hoisted(() => ({ ensure: vi.fn(), restart: vi.fn(), streamRead: vi.fn(), resize: vi.fn() }));
+const machineTerminalEnsureSpy = terminalOps.ensure;
+const machineTerminalRestartSpy = terminalOps.restart;
+const machineTerminalStreamReadSpy = terminalOps.streamRead;
+const machineTerminalResizeSpy = terminalOps.resize;
 const terminalHandleInstances: Array<{
     write: ReturnType<typeof vi.fn>;
     clear: ReturnType<typeof vi.fn>;
@@ -21,39 +30,78 @@ const terminalHandleInstances: Array<{
 
 let shouldTriggerResizeAfterReady = false;
 let terminalRendererVersion = 0;
-let activeScreen: RenderScreenResult | null = null;
-let sessionState: any = { metadata: { machineId: 'machine-1', path: '/tmp' } };
-let projectState: any = null;
+let scopeId: string;
 
-installSessionDetailsPanelCommonModuleMocks({
-    storage: async () => {
-        const {
-            createLiveStorageStoreMock,
-            createStorageModuleStub,
-        } = await import('@/dev/testkit/mocks/storage');
-
-        return createStorageModuleStub({
-            storage: createLiveStorageStoreMock(() => storageGetStateSpy()),
-            useLocalSetting: (key: string) => {
-                if (key === 'uiFontScale') return 1;
-                if (key === 'embeddedTerminalDockLocation') return 'sidebar';
-                return null;
-            },
-            useLocalSettingMutable: (key: string) => {
-                if (key === 'embeddedTerminalDockLocation') return ['sidebar', vi.fn()];
-                return [null, vi.fn()];
-            },
-            useAllMachines: () => Object.values(storageGetStateSpy()?.machines ?? {}),
-            useAllSessions: () => Object.values(storageGetStateSpy()?.sessions ?? {}),
-            useProjectForSession: () => projectState,
-            useSession: () => sessionState,
+installSessionDetailsPanelCommonModuleMocks();
+vi.mock('socket.io-client', async importOriginal => (
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal)
+));
+// Only the daemon network and browser renderer are substituted; terminal
+// admission, request/response codecs, workspace identity and stream state stay real.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => (
+    (await import('@/dev/testkit/mocks/serverScopedRpc')).createServerScopedMachineRpcBoundaryMock(async request => {
+        const options = { serverId: request.serverId, accountId: request.accountId };
+        switch (request.method) {
+            case RPC_METHODS.DAEMON_TERMINAL_LIST: return { ok: true, terminals: [] };
+            case RPC_METHODS.DAEMON_TERMINAL_ENSURE:
+                return terminalOps.ensure(request.machineId, DaemonTerminalEnsureRequestSchema.parse(request.payload), options);
+            case RPC_METHODS.DAEMON_TERMINAL_RESTART:
+                return terminalOps.restart(request.machineId, DaemonTerminalRestartRequestSchema.parse(request.payload), options);
+            case RPC_METHODS.DAEMON_TERMINAL_STREAM_READ:
+                return terminalOps.streamRead(request.machineId, DaemonTerminalStreamReadRequestSchema.parse(request.payload), options);
+            case RPC_METHODS.DAEMON_TERMINAL_RESIZE:
+                return terminalOps.resize(request.machineId, DaemonTerminalResizeRequestSchema.parse(request.payload), options);
+            default: throw new Error(`Unexpected terminal RPC: ${request.method}`);
+        }
+    })
+));
+const runtime = installSessionPaneRuntimeTestHarness({
+    credentials: { token: createAccountTokenForTests('account-a', { currentAccount: true }) },
+    scopeId: ({ sessionId, serverId }) => createSessionPaneScopeId(sessionId, serverId),
+    features: () => createRootLayoutFeaturesResponse({ features: { terminal: {
+        embeddedPty: { enabled: true }, transport: { byteStream: { enabled: false } },
+    } } }),
+    request: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v2/account/settings' && (init?.method ?? 'GET') === 'GET') return Response.json({
+            content: { t: 'plain', v: { featureToggles: { 'terminal.embeddedPty': true },
+                actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: {
+                    'machines.terminal.open': ['ui'], 'machines.terminal.restart': ['ui'],
+                } },
+            } }, version: 0,
         });
+        if (path === '/v1/machines') return Response.json(['machine-1', 'm-project', 'm-stale'].map(id =>
+            ExternalActionMachineBootstrapV1Schema.parse({ id, kind: 'persistent', active: id !== 'm-stale',
+                revokedAt: null, replacedByMachineId: id === 'm-stale' ? 'm-project' : null,
+                installationId: `${id}-installation`, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+                runnerContentKeyBinding: null, access: { custodian: { accountId: 'account-a', displayName: 'Terminal owner' },
+                    role: 'manage', resourceMode: 'plain', accessState: 'ready' },
+            })));
+        return null;
     },
 });
 
-async function renderAndFlush(element: React.ReactElement): Promise<RenderScreenResult> {
-    const screen = await renderScreen(element);
-    activeScreen = screen;
+async function renderAndFlush(element: React.ReactElement<SessionEmbeddedTerminalPaneProps>): Promise<RenderScreenResult> {
+    const screen = await renderScreen(<></>, { wrapper: runtime.Wrapper });
+    const { readSessionTerminalWorkspace } = await import('@/components/sessions/terminal/sessionTerminalWorkspace');
+    const { dispatchSessionTerminalWorkspaceCommand } = await import('@/components/sessions/terminal/sessionTerminalWorkspaceRuntime');
+    await act(async () => {
+        runtime.pane.openBottom({ tabId: 'terminal' });
+        if (!runtime.pane.scopeState?.bottom.tabState.terminal) {
+            runtime.pane.setBottomTabState('terminal', readSessionTerminalWorkspace(undefined));
+        }
+        const id = element.props.terminal?.id ?? element.props.terminalInstanceId ?? 'embedded';
+        if (id !== 'embedded') dispatchSessionTerminalWorkspaceCommand(scopeId, { type: 'open', terminal: {
+            id, target: element.props.terminal?.target ?? { kind: 'workspace_shell' },
+        } });
+    });
+    await screen.update(element);
+    const { EmbeddedTerminalPane } = await import('@/components/terminal/embedded/EmbeddedTerminalPane.web');
+    await waitForHomeGovernance(() => {
+        expect(screen.findByType(EmbeddedTerminalPane).props.controller.status)
+            .not.toMatch(/^(not-open|connecting)$/);
+        expect(screen.findByType(EmbeddedTerminalPane).props.controller.error).toBeNull();
+    });
     await flushHookEffects();
     return screen;
 }
@@ -75,24 +123,11 @@ async function loadSessionEmbeddedTerminalPaneWeb() {
     return mod.SessionEmbeddedTerminalPane;
 }
 
-vi.mock('@/components/ui/buttons/PrimaryCircleIconButton', () => ({
-    PrimaryCircleIconButton: (props: any) => React.createElement('PrimaryCircleIconButton', props, props.children),
-}));
-
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-    DropdownMenu: (props: any) => React.createElement('DropdownMenu', props),
-}));
-
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: (props: any) => React.createElement('Text', props, props.children),
-}));
-
-vi.mock('@/components/ui/code/editor/codeEditorFontMetrics', () => ({
-    resolveCodeEditorFontMetrics: () => ({ fontSize: 12 }),
-}));
-
 vi.mock('@/components/terminal/xterm/XtermTerminalView.web', () => ({
-    XtermTerminalView: React.forwardRef((props: any, ref: any) => {
+    XtermTerminalView: React.forwardRef<EmbeddedTerminalRendererHandle, {
+        onReady: (cols: number, rows: number) => void;
+        onResize: (cols: number, rows: number) => void;
+    }>((props, ref) => {
         const handle = React.useMemo(() => ({
             write: vi.fn(),
             clear: vi.fn(),
@@ -125,83 +160,25 @@ vi.mock('@/components/terminal/xterm/XtermTerminalView.web', () => ({
     }),
 }));
 
-vi.mock('@/components/sessions/model/useSessionMachineReachability', () => ({
-    useSessionMachineReachability: () => ({ machineReachable: true, machineRpcTargetAvailable: true }),
-}));
-
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: (featureId: string) => featureId !== 'terminal.transport.byteStream',
-}));
-
-vi.mock('@/utils/platform/responsive', () => ({
-    useDeviceType: () => 'phone',
-}));
-
-vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
-    useAppPaneScope: () => ({
-        scopeId: 'session:s1',
-        scopeState: {
-            right: { isOpen: true, activeTabId: 'terminal', tabState: {} },
-            details: { isOpen: false, tabs: [], activeTabKey: null, tabState: {} },
-            bottom: { isOpen: false, activeTabId: null, tabState: {} },
-        },
-        openRight: vi.fn(),
-        closeRight: vi.fn(),
-        setRightTab: vi.fn(),
-        setRightTabState: vi.fn(),
-        openBottom: vi.fn(),
-        closeBottom: vi.fn(),
-        setBottomTab: vi.fn(),
-        setBottomTabState: vi.fn(),
-        openDetailsTab: vi.fn(),
-        setDetailsTabState: vi.fn(),
-        pinDetailsTab: vi.fn(),
-        closeDetails: vi.fn(),
-        closeDetailsTab: vi.fn(),
-        setActiveDetailsTab: vi.fn(),
-    }),
-}));
-
-vi.mock('@/sync/ops/machineTerminal', () => ({
-    machineTerminalEnsure: (...args: any[]) => machineTerminalEnsureSpy(...args),
-    machineTerminalRestart: (...args: any[]) => machineTerminalRestartSpy(...args),
-    machineTerminalStreamRead: (...args: any[]) => machineTerminalStreamReadSpy(...args),
-    machineTerminalInput: vi.fn(),
-    machineTerminalResize: (...args: any[]) => machineTerminalResizeSpy(...args),
-}));
-
-vi.mock('@/utils/ui/clipboard', () => ({
-    setClipboardStringSafe: vi.fn(),
-}));
-
-vi.mock('@/utils/url/openExternalUrl', () => ({
-    openExternalUrl: vi.fn(),
-}));
+// Cold module transforms are setup, not part of a renderer interaction's clock.
+await import('@/components/sessions/terminal/SessionEmbeddedTerminalPane.web');
 
 describe('SessionRightPanelTerminalView.web', () => {
-    beforeEach(() => {
-        vi.resetModules();
+    beforeEach(async () => {
         shouldTriggerResizeAfterReady = false;
         terminalRendererVersion = 0;
-        activeScreen = null;
         terminalHandleInstances.length = 0;
-        sessionState = { metadata: { machineId: 'machine-1', path: '/tmp' } };
-        projectState = null;
-        storageGetStateSpy.mockReset();
-        storageGetStateSpy.mockReturnValue({
-            sessions: {
-                s1: sessionState,
-            },
-            machines: {
-                'machine-1': {
-                    id: 'machine-1',
-                    active: true,
-                    activeAt: Date.now(),
-                    metadata: { host: 'mbp.local' },
-                },
-            },
-            getProjectForSession: () => projectState,
-        });
+        scopeId = createSessionPaneScopeId('s1', runtime.serverId);
+        storage.getState().applySessions([createSessionFixture({ id: 's1', serverId: runtime.serverId, active: true,
+            metadata: { machineId: 'machine-1', path: '/tmp', host: 'mbp.local' },
+        })]);
+        storage.getState().applyMachines([createMachineFixture({ storageMode: 'plain', activeAt: Date.now(),
+            metadata: { ...createMachineFixture().metadata!, host: 'mbp.local' },
+        })], true, { sourceServerId: runtime.serverId });
+        const cache = await import('@/components/sessions/terminal/terminalSurfaceStateCache');
+        for (const key of [`${scopeId}:terminal`, `${scopeId}:terminal:term-7`, `${scopeId}:attach`]) {
+            cache.replaceTerminalSurfaceState(key, cache.createEmptyTerminalSurfaceState());
+        }
         machineTerminalEnsureSpy.mockReset();
         machineTerminalRestartSpy.mockReset();
         machineTerminalStreamReadSpy.mockReset();
@@ -210,7 +187,7 @@ describe('SessionRightPanelTerminalView.web', () => {
         machineTerminalEnsureSpy.mockResolvedValue({ ok: true, terminalId: 't1', reused: false });
         machineTerminalRestartSpy.mockResolvedValue({ ok: true, terminalId: 't2', reused: false });
         machineTerminalResizeSpy.mockResolvedValue({ ok: true });
-        machineTerminalStreamReadSpy.mockImplementation(async (_machineId: string, input: any) => ({
+        machineTerminalStreamReadSpy.mockImplementation(async (_machineId: string, input: { terminalId: string }) => ({
             ok: true,
             terminalId: input.terminalId,
             events: [],
@@ -219,17 +196,9 @@ describe('SessionRightPanelTerminalView.web', () => {
         }));
     });
 
-    afterEach(async () => {
-        if (activeScreen) {
-            await activeScreen.unmount();
-            activeScreen = null;
-        }
-        terminalHandleInstances.length = 0;
-    });
-
     it('restarts the PTY when the user presses restart', async () => {
         const SessionRightPanelTerminalViewWeb = await loadSessionRightPanelTerminalViewWeb();
-        const screen = await renderAndFlush(<SessionRightPanelTerminalViewWeb sessionId="s1" scopeId="session:s1" />);
+        const screen = await renderAndFlush(<SessionRightPanelTerminalViewWeb sessionId="s1" scopeId={scopeId} />);
 
         expect(machineTerminalEnsureSpy).toHaveBeenCalledTimes(1);
 
@@ -238,9 +207,7 @@ describe('SessionRightPanelTerminalView.web', () => {
 
         await screen.pressByTestIdAsync('session-rightpanel-terminal-restart');
 
-        await flushHookEffects();
-
-        expect(machineTerminalRestartSpy).toHaveBeenCalledTimes(1);
+        await waitForHomeGovernance(() => expect(machineTerminalRestartSpy).toHaveBeenCalledTimes(1));
     });
 
     it('uses a canonical session-scoped terminalKey', async () => {
@@ -249,7 +216,7 @@ describe('SessionRightPanelTerminalView.web', () => {
         await renderAndFlush(
             <SessionEmbeddedTerminalPaneWeb
                 sessionId="s1"
-                scopeId="session:s1"
+                scopeId={scopeId}
                 currentDockLocation="details"
                 testIdPrefix="pane-a"
             />,
@@ -257,7 +224,7 @@ describe('SessionRightPanelTerminalView.web', () => {
 
         expect(machineTerminalEnsureSpy).toHaveBeenCalledTimes(1);
         const ensureInput = machineTerminalEnsureSpy.mock.calls[0]?.[1];
-        expect(ensureInput?.terminalKey).toBe('session:s1:terminal:embedded');
+        expect(ensureInput?.terminalKey).toBe(`${scopeId}:terminal`);
     });
 
     it('uses an instance-aware session terminalKey when a terminal tab instance is provided', async () => {
@@ -266,7 +233,7 @@ describe('SessionRightPanelTerminalView.web', () => {
         await renderAndFlush(
             <SessionEmbeddedTerminalPaneWeb
                 sessionId="s1"
-                scopeId="session:s1"
+                scopeId={scopeId}
                 currentDockLocation="details"
                 terminalInstanceId="term-7"
                 testIdPrefix="pane-a"
@@ -275,7 +242,7 @@ describe('SessionRightPanelTerminalView.web', () => {
 
         expect(machineTerminalEnsureSpy).toHaveBeenCalledTimes(1);
         const ensureInput = machineTerminalEnsureSpy.mock.calls[0]?.[1];
-        expect(ensureInput?.terminalKey).toBe('session:s1:terminal:term-7');
+        expect(ensureInput?.terminalKey).toBe(`${scopeId}:terminal:term-7`);
     });
 
     it('uses the typed session-attach launch intent without workspace-shell inputs', async () => {
@@ -284,9 +251,9 @@ describe('SessionRightPanelTerminalView.web', () => {
         await renderAndFlush(
             <SessionEmbeddedTerminalPaneWeb
                 sessionId="s1"
-                scopeId="session:s1"
+                scopeId={scopeId}
                 currentDockLocation="details"
-                terminalMode="session_attach"
+                terminal={{ id: 'session-attach', target: { kind: 'session_attach' } }}
                 testIdPrefix="pane-attached"
             />,
         );
@@ -296,55 +263,28 @@ describe('SessionRightPanelTerminalView.web', () => {
             cols: 80,
             rows: 24,
             launch: { kind: 'session_attach', sessionId: 's1' },
-            terminalKey: 'session-attach:s1',
+            terminalKey: `${scopeId}:attach`,
+            sessionId: 's1',
         });
     });
 
     it('uses the resolved session machine target when the session machine id is stale', async () => {
-        sessionState = {
-            metadata: {
-                machineId: 'm-stale',
-                path: '/workspace/repo',
-                host: 'mbp.local',
-            },
-        };
-        projectState = {
-            key: {
-                machineId: 'm-project',
-                rootPath: '/workspace/repo',
-            },
-        };
-        storageGetStateSpy.mockReturnValue({
-            sessions: {
-                s1: {
-                    active: false,
-                    metadata: sessionState.metadata,
-                },
-            },
-            machines: {
-                'm-stale': {
-                    id: 'm-stale',
-                    active: false,
-                    activeAt: 1,
-                    replacedByMachineId: 'm-project',
-                    metadata: { host: 'mbp.local' },
-                },
-                'm-project': {
-                    id: 'm-project',
-                    active: true,
-                    activeAt: Date.now(),
-                    metadata: { host: 'mbp.local' },
-                },
-            },
-            getProjectForSession: () => projectState,
-        });
+        storage.getState().applySessions([createSessionFixture({ id: 's1', serverId: runtime.serverId,
+            metadata: { machineId: 'm-stale', path: '/workspace/repo', host: 'mbp.local' },
+        })]);
+        storage.getState().applyMachines([
+            createMachineFixture({ id: 'm-stale', storageMode: 'plain', active: false, activeAt: 1,
+                replacedByMachineId: 'm-project', metadata: { ...createMachineFixture().metadata!, host: 'mbp.local' } }),
+            createMachineFixture({ id: 'm-project', storageMode: 'plain', activeAt: Date.now(),
+                metadata: { ...createMachineFixture().metadata!, host: 'mbp.local' } }),
+        ], true, { sourceServerId: runtime.serverId });
 
         const SessionEmbeddedTerminalPaneWeb = await loadSessionEmbeddedTerminalPaneWeb();
 
         await renderAndFlush(
             <SessionEmbeddedTerminalPaneWeb
                 sessionId="s1"
-                scopeId="session:s1"
+                scopeId={scopeId}
                 currentDockLocation="details"
                 testIdPrefix="pane-a"
             />,
@@ -360,7 +300,7 @@ describe('SessionRightPanelTerminalView.web', () => {
 
         const SessionRightPanelTerminalViewWeb = await loadSessionRightPanelTerminalViewWeb();
 
-        const screen = await renderAndFlush(<SessionRightPanelTerminalViewWeb sessionId="s1" scopeId="session:s1" />);
+        const screen = await renderAndFlush(<SessionRightPanelTerminalViewWeb sessionId="s1" scopeId={scopeId} />);
         await flushHookEffects();
 
         expect(screen.tree).toBeTruthy();
@@ -377,14 +317,12 @@ describe('SessionRightPanelTerminalView.web', () => {
 
         const SessionRightPanelTerminalViewWeb = await loadSessionRightPanelTerminalViewWeb();
 
-        const screen = await renderAndFlush(<SessionRightPanelTerminalViewWeb sessionId="s1" scopeId="session:s1" />);
+        const screen = await renderAndFlush(<SessionRightPanelTerminalViewWeb sessionId="s1" scopeId={scopeId} />);
 
-        await act(async () => {
-            await new Promise((resolve) => setTimeout(resolve, 350));
+        await waitForHomeGovernance(() => {
+            expect(machineTerminalEnsureSpy).toHaveBeenCalledTimes(2);
+            expect(screen.findByTestId('session-rightpanel-terminal-retry')).toBeNull();
         });
-        await flushHookEffects();
-
-        expect(screen.findByTestId('session-rightpanel-terminal-retry')).toBeNull();
     });
 
     it('preserves the stream cursor when auto-retrying after a transient read error', async () => {
@@ -416,7 +354,7 @@ describe('SessionRightPanelTerminalView.web', () => {
 
         const SessionRightPanelTerminalViewWeb = await loadSessionRightPanelTerminalViewWeb();
 
-        const screen = await renderAndFlush(<SessionRightPanelTerminalViewWeb sessionId="s1" scopeId="session:s1" />);
+        const screen = await renderAndFlush(<SessionRightPanelTerminalViewWeb sessionId="s1" scopeId={scopeId} />);
 
         await act(async () => {
             await new Promise((resolve) => setTimeout(resolve, 350));
@@ -453,7 +391,7 @@ describe('SessionRightPanelTerminalView.web', () => {
 
         const SessionRightPanelTerminalViewWeb = await loadSessionRightPanelTerminalViewWeb();
 
-        const screen = await renderAndFlush(<SessionRightPanelTerminalViewWeb sessionId="s1" scopeId="session:s1" />);
+        const screen = await renderAndFlush(<SessionRightPanelTerminalViewWeb sessionId="s1" scopeId={scopeId} />);
 
         await act(async () => {
             await new Promise((resolve) => setTimeout(resolve, 350));
@@ -506,12 +444,11 @@ describe('SessionRightPanelTerminalView.web', () => {
 
             const SessionRightPanelTerminalViewWeb = await loadSessionRightPanelTerminalViewWeb();
 
-            const screen = await renderAndFlush(<SessionRightPanelTerminalViewWeb sessionId="s1" scopeId="session:s1" />);
+            const screen = await renderAndFlush(<SessionRightPanelTerminalViewWeb sessionId="s1" scopeId={scopeId} />);
 
             expect(terminalHandleInstances[0]?.write).toHaveBeenCalledWith('hello');
 
             await screen.unmount();
-            activeScreen = null;
 
             firstMountReadBlocked.resolve({
                 ok: true,
@@ -522,11 +459,11 @@ describe('SessionRightPanelTerminalView.web', () => {
             });
             await flushHookEffects();
 
-            await renderAndFlush(<SessionRightPanelTerminalViewWeb sessionId="s1" scopeId="session:s1" />);
+            await renderAndFlush(<SessionRightPanelTerminalViewWeb sessionId="s1" scopeId={scopeId} />);
 
             expect(machineTerminalEnsureSpy).toHaveBeenCalledTimes(2);
             expect(machineTerminalStreamReadSpy.mock.calls[2]?.[1]?.cursor).toBe(5);
-            expect(terminalHandleInstances[1]?.write).toHaveBeenCalledWith('hello');
+            expect(terminalHandleInstances[1]?.write).toHaveBeenCalledWith('hello', { intent: 'replay' });
 
             secondMountReadBlocked.resolve({
                 ok: true,
@@ -579,7 +516,7 @@ describe('SessionRightPanelTerminalView.web', () => {
         const screen = await renderAndFlush(
             <SessionEmbeddedTerminalPaneWeb
                 sessionId="s1"
-                scopeId="session:s1"
+                scopeId={scopeId}
                 currentDockLocation="details"
                 testIdPrefix="pane-a"
             />,
@@ -591,7 +528,7 @@ describe('SessionRightPanelTerminalView.web', () => {
         await screen.update(
             <SessionEmbeddedTerminalPaneWeb
                 sessionId="s1"
-                scopeId="session:s1"
+                scopeId={scopeId}
                 currentDockLocation="details"
                 testIdPrefix="pane-b"
             />,
@@ -601,7 +538,7 @@ describe('SessionRightPanelTerminalView.web', () => {
 
         expect(terminalHandleInstances).toHaveLength(2);
         expect(terminalHandleInstances[1]?.clear).toHaveBeenCalledTimes(1);
-        expect(terminalHandleInstances[1]?.write).toHaveBeenCalledWith('hello');
+        expect(terminalHandleInstances[1]?.write).toHaveBeenCalledWith('hello', { intent: 'replay' });
 
         blockedRead.resolve({
             ok: true,
@@ -615,7 +552,7 @@ describe('SessionRightPanelTerminalView.web', () => {
 
     it('clears cached transcript when a reused terminal reconnects without a cached terminal id', async () => {
         const cacheMod = await import('@/components/sessions/terminal/terminalSurfaceStateCache');
-        cacheMod.replaceTerminalSurfaceState('session:s1:terminal', {
+        cacheMod.replaceTerminalSurfaceState(`${scopeId}:terminal`, {
             terminalId: null,
             cursor: 5,
             output: 'hello',
@@ -633,10 +570,10 @@ describe('SessionRightPanelTerminalView.web', () => {
 
         const SessionRightPanelTerminalViewWeb = await loadSessionRightPanelTerminalViewWeb();
 
-        await renderAndFlush(<SessionRightPanelTerminalViewWeb sessionId="s1" scopeId="session:s1" />);
+        await renderAndFlush(<SessionRightPanelTerminalViewWeb sessionId="s1" scopeId={scopeId} />);
         await flushHookEffects();
 
-        const cached = cacheMod.readTerminalSurfaceState('session:s1:terminal');
+        const cached = cacheMod.readTerminalSurfaceState(`${scopeId}:terminal`);
         expect(cached).toEqual({
             terminalId: 't1',
             cursor: 0,
@@ -670,7 +607,7 @@ describe('SessionRightPanelTerminalView.web', () => {
 
         const SessionRightPanelTerminalViewWeb = await loadSessionRightPanelTerminalViewWeb();
 
-        const screen = await renderAndFlush(<SessionRightPanelTerminalViewWeb sessionId="s1" scopeId="session:s1" />);
+        const screen = await renderAndFlush(<SessionRightPanelTerminalViewWeb sessionId="s1" scopeId={scopeId} />);
         await vi.waitFor(() => {
             expect(machineTerminalStreamReadSpy).toHaveBeenCalled();
         });

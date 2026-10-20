@@ -6,6 +6,8 @@ import {
     PluginManifestV2Schema, ManagedPolicyAdmissionInputV1Schema, ManagedControllerMachineOutputV1Schema,
     ManagedResourceV1Schema, createManagedPolicyProofV1, encodeManagedPolicyProofV1, MANAGED_POLICY_PROOF_HEADER,
     ExternalActionExecutionAuthorizationV1Schema,
+    ActionIdSchema, createActionExecutor, getActionSpec, normalizeActionsSettingsV1,
+    type ActionExecutorDeps,
     type ExternalActionExecutionAuthorizationV1,
 } from '@happier-dev/protocol';
 import { auth } from '@/app/auth/auth';
@@ -46,14 +48,19 @@ import { enableAuthentication } from '@/app/api/utils/enableAuthentication';
 import { registerExternalActionRoutes } from '@/app/api/routes/actions/registerExternalActionRoutes';
 import { currentAccountStoredContentCompatibilityHeaders } from '@/app/api/testkit/accountStoredContentCompatibility';
 import type { Fastify as ServerFastify } from '@/app/api/types';
-import { projectExternalActionBoundPrincipal, verifyCurrentExternalActionPrincipal } from '@/app/auth/externalActionExecutionAuthorization';
+import { projectExternalActionBoundPrincipal, verifyCurrentExternalActionPrincipal, resolveExternalActionExecutionMachineAdmissionInTx } from '@/app/auth/externalActionExecutionAuthorization';
 import { EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, EXTERNAL_ACTION_EFFECT_ACTION_HEADER,
     EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER, EXTERNAL_ACTION_RESOLVED_TARGET_HEADER,
     encodeExternalActionResolvedTargetV1, signExternalActionMachineRequestV1 } from '@happier-dev/protocol/actions';
 import { bindExternalActionExecutionAuthorizationVerifyHttpPathV1 } from '@happier-dev/protocol/actions';
-import { enqueuePendingMessage, updatePendingRequestedAction } from '@/app/session/pending/pendingMessageService';
+import { enqueuePendingMessage, listPendingMessages, updatePendingRequestedAction } from '@/app/session/pending/pendingMessageService';
 import { createSessionMachineAccessKeyInTx } from '@/app/accessKeys/sessionMachineAccessKeyMutations';
 import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
+import { createAuthenticatedTestApp, withAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
+import { sessionPendingRoutes } from '@/app/api/routes/session/pendingRoutes';
+import { PendingActivationHoldReasonV1Schema, ManagedPendingActivationFailureRequestV1Schema,
+    PendingActivationAuthorizationV1Schema } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
+import { markPendingActivationAuthorizationFailedInTx, mapPendingActivationAuthorization } from '@/app/session/pending/pendingActivationAuthorization';
 
 describe('finite managed wake original Action authority (real SQLite)', () => {
     let harness: LightSqliteHarness;
@@ -145,6 +152,319 @@ describe('finite managed wake original Action authority (real SQLite)', () => {
             const sessionAfter = await db.session.findUniqueOrThrow({ where: { id: session.id } });
             expect(sessionAfter.pendingActivationManagedTarget).toBeNull();
         } finally { restoreEnv(envBefore); }
+    });
+
+    it('retains a managed wake against ordinary runtime failure until compute is observed running', async () => {
+        const test = await setup();
+        await db.machine.update({ where: { id: test.guest.id }, data: {
+            operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } },
+        } });
+        const session = await db.session.create({ data: { accountId: test.account.id, tag: randomUUID(),
+            metadata: '{}', encryptionMode: 'plain', active: false } });
+        expect(await inTx(tx => createSessionMachineAccessKeyInTx(tx, { accountId: test.account.id,
+            sessionId: session.id, machineId: test.guest.id, data: 'private-key-ciphertext' }))).toMatchObject({ ok: true });
+        const input = { actorUserId: test.account.id, authentication: createPresentUserSessionAccessAuthentication(),
+            sessionId: session.id, localId: randomUUID(), targetMachineId: test.guest.id,
+            requestedAction: { v: 1, kind: 'enqueue' }, content: { t: 'plain', v: {
+                role: 'user', content: { type: 'text', text: 'retained original input' } } } } as const;
+        const envBefore = snapshotEnv();
+        applyEnvValues({ HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional' });
+        const app = createAuthenticatedTestApp({ authentication: 'real' });
+        sessionPendingRoutes(app); await app.ready();
+        try {
+            expect(await enqueuePendingMessage(input)).toMatchObject({ ok: true });
+            expect(await updatePendingRequestedAction({ ...input, resumeWhenAvailable: true })).toMatchObject({ ok: true });
+            const armed = await db.session.findUniqueOrThrow({ where: { id: session.id } });
+            const queued = await db.sessionPendingMessage.findMany({ where: { sessionId: session.id } });
+            const token = await auth.createToken(test.account.id, undefined, { kind: 'account', authority: 'present_user' });
+            const report = () => app.inject({ method: 'POST', url: `/v2/sessions/${session.id}/pending/activation/fail`,
+                headers: { authorization: `Bearer ${token}` }, payload: { requestId: input.localId,
+                    requestedAt: armed.pendingActivationRequestedAt!.getTime(), failureCode: 'runtime_start_failed' } });
+            const waiting = await report();
+            expect(waiting.statusCode, waiting.body).toBe(200);
+            expect(waiting.json()).toEqual({ ok: true, didFail: false });
+            expect(await db.session.findUniqueOrThrow({ where: { id: session.id } })).toEqual(armed);
+            // Once compute runs, the ordinary runtime owner can report its
+            // genuine Agent startup refusal against this same authorization.
+            await db.managedMachine.update({ where: { id: test.row.id }, data: { observation: {
+                observedAt: 2, availability: 'present', power: 'running', storage: 'retained' } } });
+            const failed = await report();
+            expect(failed.statusCode, failed.body).toBe(200);
+            expect(failed.json()).toEqual({ ok: true, didFail: true });
+            expect(mapPendingActivationAuthorization(await db.session.findUniqueOrThrow({ where: { id: session.id } })))
+                .toMatchObject({ status: 'failed', failureCode: 'runtime_start_failed' });
+            expect(await db.sessionPendingMessage.findMany({ where: { sessionId: session.id } })).toEqual(queued);
+        } finally { await app.close(); restoreEnv(envBefore); }
+    });
+
+    it.each(['managed_start_refused', 'managed_start_denied', 'managed_start_expired', 'managed_start_failed'] as const)(
+        'settles an exact signed pre-admission wake failure and permits same-input rearm (%s)', async failureCode => {
+        const test = await setup();
+        const requester = await db.account.create({ data: { encryptionMode: 'plain' } });
+        for (const machine of [test.controller, test.guest]) await inTx(tx => setMachineAccessGrantInTx(tx, {
+            actorAccountId: test.account.id, machineId: machine.id,
+            principal: { kind: 'account', accountId: requester.id }, level: 'admin',
+        }));
+        await db.machine.update({ where: { id: test.guest.id }, data: {
+            operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } },
+        } });
+        const session = await db.session.create({ data: { accountId: requester.id, tag: randomUUID(),
+            metadata: '{}', encryptionMode: 'plain', active: false } });
+        await inTx(tx => createSessionMachineAccessKeyInTx(tx, { accountId: requester.id,
+            sessionId: session.id, machineId: test.guest.id, data: 'private-key-ciphertext' }));
+        const input = { actorUserId: requester.id, authentication: createPresentUserSessionAccessAuthentication(),
+            sessionId: session.id, localId: randomUUID(), targetMachineId: test.guest.id,
+            requestedAction: { v: 1, kind: 'enqueue' }, content: { t: 'plain', v: {
+                role: 'user', content: { type: 'text', text: 'original queued input' } } } } as const;
+        const envBefore = snapshotEnv();
+        applyEnvValues({ HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional' });
+        const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>() as unknown as ServerFastify;
+        app.setValidatorCompiler(validatorCompiler); app.setSerializerCompiler(serializerCompiler);
+        enableAuthentication(app); registerManagedMachineRoutes(app); await app.ready();
+        try {
+            expect(await enqueuePendingMessage(input)).toMatchObject({ ok: true });
+            expect(await updatePendingRequestedAction({ ...input, resumeWhenAvailable: true })).toMatchObject({ ok: true });
+            const original = await db.sessionPendingMessage.findMany({ where: { sessionId: session.id } });
+            const first = await db.session.findUniqueOrThrow({ where: { id: session.id } });
+            const authorization = mapPendingActivationAuthorization(first);
+            const target = authorization?.managedWakeTargetV1;
+            if (!authorization || !target) throw new Error('Missing admitted managed target');
+            const body = ManagedPendingActivationFailureRequestV1Schema.parse({ target, failureCode });
+            const path = '/v1/machines/managed/controller/activation-failed';
+            const token = await auth.createToken(test.account.id, undefined, { kind: 'account', authority: 'present_user' });
+            const invoke = (proofPath = path) => app.inject({ method: 'POST', url: path, payload: body, headers: {
+                ...currentAccountStoredContentCompatibilityHeaders, authorization: `Bearer ${token}`,
+                [MANAGED_POLICY_PROOF_HEADER]: encodeManagedPolicyProofV1(createManagedPolicyProofV1({
+                    correlation: { homeId, managedId: test.row.id, controller: target.controller,
+                        expectedIntentRevision: target.expectedIntentRevision, requestId: randomUUID() },
+                    purpose: { kind: 'accepted-input-start', target }, resource: ManagedResourceV1Schema.parse(test.row.resource),
+                    custodianAccountId: test.account.id, path: proofPath, body, privateKey: test.controllerKeys.secretKey,
+                })),
+            } });
+            // Mis-bound proof cannot settle an authorization even with the same signer.
+            expect((await invoke('/v1/machines/managed/controller/admit-policy')).statusCode).toBe(403);
+            expect(mapPendingActivationAuthorization(await db.session.findUniqueOrThrow({ where: { id: session.id } })))
+                .toMatchObject({ status: 'waiting' });
+            const failed = await invoke();
+            expect(failed.statusCode, failed.body).toBe(200);
+            expect(failed.json()).toEqual({ ok: true, didFail: true });
+            const projected = mapPendingActivationAuthorization(await db.session.findUniqueOrThrow({ where: { id: session.id } }));
+            expect(PendingActivationAuthorizationV1Schema.parse(projected)).toMatchObject({ requestId: input.localId,
+                requestedAt: authorization.requestedAt, status: 'failed', failureCode, managedWakeTargetV1: target });
+            expect(await listPendingMessages(input)).toMatchObject({ ok: true, pending: [{ localId: input.localId,
+                status: 'queued', activationHoldReason: 'resume_not_requested' }] });
+            expect(await updatePendingRequestedAction({ ...input, resumeWhenAvailable: true })).toMatchObject({ ok: true, didUpdate: true });
+            const retried = mapPendingActivationAuthorization(await db.session.findUniqueOrThrow({ where: { id: session.id } }));
+            expect(retried).toMatchObject({ requestId: input.localId, status: 'waiting' });
+            expect(retried!.requestedAt).toBeGreaterThan(authorization.requestedAt);
+            expect((await invoke()).json()).toEqual({ ok: true, didFail: false });
+            expect(await db.sessionPendingMessage.findMany({ where: { sessionId: session.id } })).toEqual(original);
+            expect(await db.managedMachine.findUniqueOrThrow({ where: { id: test.row.id } })).toMatchObject({ desired: 'stop', intentRevision: test.row.intentRevision });
+        } finally { await app.close(); restoreEnv(envBefore); }
+    });
+
+    it.each(['view', 'admin'] as const)('explains stopped managed enqueue custody without inventing activation (%s)', async level => {
+        const test = await setup();
+        const requester = await db.account.create({ data: { encryptionMode: 'plain' } });
+        for (const machine of [test.controller, test.guest]) await inTx(tx => setMachineAccessGrantInTx(tx, {
+            actorAccountId: test.account.id, machineId: machine.id,
+            principal: { kind: 'account', accountId: requester.id }, level,
+        }));
+        await db.machine.update({ where: { id: test.guest.id }, data: {
+            operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } },
+        } });
+        const session = await db.session.create({ data: {
+            accountId: requester.id, tag: randomUUID(), metadata: '{}', encryptionMode: 'plain', active: false,
+        } });
+        expect(await inTx(tx => createSessionMachineAccessKeyInTx(tx, {
+            accountId: requester.id, sessionId: session.id, machineId: test.guest.id, data: 'private-key-ciphertext',
+        }))).toMatchObject({ ok: true });
+        const authentication = createPresentUserSessionAccessAuthentication();
+        const input = { actorUserId: requester.id, authentication, sessionId: session.id, localId: randomUUID(),
+            targetMachineId: test.guest.id, requestedAction: { v: 1, kind: 'enqueue' },
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'accepted while stopped' } } } } as const;
+        const envBefore = snapshotEnv();
+        applyEnvValues({ HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional' });
+        try {
+            expect(await enqueuePendingMessage(input)).toMatchObject({ ok: true });
+            const expected = level === 'view' ? 'managed_power_required' : 'resume_not_requested';
+            expect(await listPendingMessages(input)).toMatchObject({ ok: true, pending: [{
+                localId: input.localId, status: 'queued', deliveryState: null, activationHoldReason: expected,
+            }] });
+            await withAuthenticatedTestApp(sessionPendingRoutes, async app => {
+                const response = await app.inject({ method: 'GET', url: `/v2/sessions/${session.id}/pending`,
+                    headers: { 'x-test-user-id': requester.id } });
+                expect(response.statusCode).toBe(200);
+                const pending = response.json().pending[0];
+                expect(pending.localId).toBe(input.localId);
+                expect(PendingActivationHoldReasonV1Schema.parse(pending.activationHoldReason)).toBe(expected);
+            });
+            const before = await db.session.findUniqueOrThrow({ where: { id: session.id } });
+            expect(before.pendingActivationRequestId).toBeNull();
+            expect(before.pendingActivationManagedTarget).toBeNull();
+            expect(await db.managedMachine.findUniqueOrThrow({ where: { id: test.row.id } }))
+                .toMatchObject({ desired: 'stop', intentRevision: test.row.intentRevision });
+            // The ordinary Process-when-online owner, not inspection, changes authorization.
+            expect(await updatePendingRequestedAction({ ...input, requestedAction: { v: 1, kind: 'enqueue' }, resumeWhenAvailable: true }))
+                .toMatchObject({ ok: true });
+            const authorized = await listPendingMessages(input);
+            if (!authorized.ok) throw new Error('Accepted queue disappeared');
+            if (level === 'view') expect(authorized.pending[0]).toMatchObject({ activationHoldReason: 'managed_power_required' });
+            else expect(authorized.pending[0]).not.toHaveProperty('activationHoldReason');
+            if (level === 'view') {
+                // Ordinary runtime resume can be admitted without compute power.
+                // Receiving Manage later must not turn that waiting, targetless
+                // authorization into a previously approved managed wake.
+                for (const machine of [test.controller, test.guest]) await inTx(tx => setMachineAccessGrantInTx(tx, {
+                    actorAccountId: test.account.id, machineId: machine.id,
+                    principal: { kind: 'account', accountId: requester.id }, level: 'admin',
+                }));
+                expect(await listPendingMessages(input)).toMatchObject({ ok: true, pending: [{
+                    localId: input.localId, activationHoldReason: 'resume_not_requested',
+                }] });
+                for (const machine of [test.controller, test.guest]) await inTx(tx => setMachineAccessGrantInTx(tx, {
+                    actorAccountId: test.account.id, machineId: machine.id,
+                    principal: { kind: 'account', accountId: requester.id }, level: 'view',
+                }));
+            }
+            const first = await db.session.findUniqueOrThrow({ where: { id: session.id } });
+            expect(await inTx(tx => markPendingActivationAuthorizationFailedInTx({ tx, sessionId: session.id,
+                requestId: input.localId, requestedAt: first.pendingActivationRequestedAt!, failureCode: 'managed_start_failed' }))).toBe(true);
+            // A terminal wake is history, not an outstanding resume request. Keep
+            // the original input and expose its current authorization prerequisite.
+            expect(await listPendingMessages(input)).toMatchObject({ ok: true, pending: [{
+                localId: input.localId, status: 'queued', deliveryState: null, content: input.content, activationHoldReason: expected,
+            }] });
+            expect(await updatePendingRequestedAction({ ...input, resumeWhenAvailable: true })).toMatchObject({ ok: true, didUpdate: true });
+            const retried = await db.session.findUniqueOrThrow({ where: { id: session.id } });
+            expect(retried.pendingActivationRequestedAt!.getTime()).toBeGreaterThan(first.pendingActivationRequestedAt!.getTime());
+            expect(mapPendingActivationAuthorization(retried)).toMatchObject({ requestId: input.localId, status: 'waiting' });
+            if (level === 'admin') expect(mapPendingActivationAuthorization(retried)?.managedWakeTargetV1).toMatchObject({
+                managedId: test.row.id, enrolledMachineId: test.guest.id, controller: {
+                    machineId: test.controller.id, installationId: test.controller.installationId,
+                }, origin: { kind: 'session-input', pendingRequestId: input.localId,
+                    requestedAt: retried.pendingActivationRequestedAt!.getTime() },
+            });
+            else expect(retried.pendingActivationManagedTarget).toBeNull();
+            expect(await inTx(tx => markPendingActivationAuthorizationFailedInTx({ tx, sessionId: session.id,
+                requestId: input.localId, requestedAt: first.pendingActivationRequestedAt!, failureCode: 'runtime_start_failed' }))).toBe(false);
+            await db.managedMachine.update({ where: { id: test.row.id }, data: { observation: {
+                observedAt: 20, availability: 'present', power: 'running', storage: 'retained', daemon: 'connected',
+            } } });
+            const running = await listPendingMessages(input);
+            if (!running.ok) throw new Error('Accepted queue disappeared');
+            expect(running.pending[0]).not.toHaveProperty('activationHoldReason');
+        } finally { restoreEnv(envBefore); }
+    });
+
+    it.each(['view', 'admin'] as const)('rearms the same failed input through registered pending Action and HTTP (%s)', async level => {
+        const test = await setup();
+        const requester = await db.account.create({ data: { encryptionMode: 'plain' } });
+        for (const machine of [test.controller, test.guest]) await inTx(tx => setMachineAccessGrantInTx(tx, {
+            actorAccountId: test.account.id, machineId: machine.id,
+            principal: { kind: 'account', accountId: requester.id }, level,
+        }));
+        await db.machine.update({ where: { id: test.guest.id }, data: {
+            operationProtocolCapabilities: { sessionInputAdmission: { protocolVersions: [1, 2] } },
+        } });
+        const session = await db.session.create({ data: { accountId: requester.id, tag: randomUUID(),
+            metadata: '{}', encryptionMode: 'plain', active: false } });
+        const sourceSession = await db.session.create({ data: { accountId: requester.id, tag: randomUUID(),
+            metadata: '{}', encryptionMode: 'plain', active: true, lastActiveAt: new Date() } });
+        expect(await inTx(tx => createSessionMachineAccessKeyInTx(tx, { accountId: requester.id,
+            sessionId: sourceSession.id, machineId: test.controller.id, data: 'source-private-key-ciphertext' }))).toMatchObject({ ok: true });
+        expect(await inTx(tx => createSessionMachineAccessKeyInTx(tx, { accountId: requester.id,
+            sessionId: session.id, machineId: test.guest.id, data: 'private-key-ciphertext' }))).toMatchObject({ ok: true });
+        const input = { actorUserId: requester.id, authentication: createPresentUserSessionAccessAuthentication(),
+            sessionId: session.id, localId: randomUUID(), targetMachineId: test.guest.id,
+            requestedAction: { v: 1, kind: 'enqueue' }, resumeWhenAvailable: true,
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'retain this input' } } } } as const;
+        const envBefore = snapshotEnv();
+        applyEnvValues({ HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: 'optional' });
+        const app = createAuthenticatedTestApp({ authentication: 'real' });
+        const presence = createSessionPublisherPresence();
+        const publisher = { data: {} };
+        expect((await presence.registerPublisher({ socket: publisher,
+            binding: { accountId: requester.id, machineId: test.controller.id, sessionId: sourceSession.id },
+            completeActivitySnapshot: { state: 'active', activeCount: 1 } })).status).toBe('registered');
+        const io = createSocketRoomDiscoveryHarness(async room => room === getAccountSessionSocketRoom(requester.id, sourceSession.id) ? [publisher] : []);
+        const resolveSource = (params: Readonly<{ accountId: string; sessionId: string }>) =>
+            resolveCurrentSessionMachineFromServer({ io, presence, ...params });
+        app.decorate('resolveCurrentSessionMachine', resolveSource);
+        sessionPendingRoutes(app);
+        try {
+            expect(await enqueuePendingMessage(input)).toMatchObject({ ok: true });
+            const first = await db.session.findUniqueOrThrow({ where: { id: session.id } });
+            expect(await inTx(tx => markPendingActivationAuthorizationFailedInTx({ tx, sessionId: session.id,
+                requestId: input.localId, requestedAt: first.pendingActivationRequestedAt!, failureCode: 'managed_start_failed' }))).toBe(true);
+            const before = await db.session.findUniqueOrThrow({ where: { id: session.id } });
+            const original = await db.sessionPendingMessage.findMany({ where: { sessionId: session.id } });
+            // Import the real CLI composition without widening the server's compiler root.
+            const importCli = async <T,>(path: string) => await import(path) as T;
+            const { createCliActionDeps } = await importCli<{ createCliActionDeps: (options: unknown) => ActionExecutorDeps }>(
+                '../../../../../cli/src/session/actions/createCliActionDeps');
+            const origin = await app.listen({ host: '127.0.0.1', port: 0 });
+            const token = await auth.createToken(requester.id, undefined, { kind: 'account', authority: 'present_user' });
+            const actionId = ActionIdSchema.parse('session.pending.action.set');
+            const deps = createCliActionDeps({ token, credentials: { token, encryption: null }, mode: 'plain', ctx: null,
+                sessionId: session.id, serverId: origin, serverHttpBaseUrl: origin, serverIdentityId: homeId,
+                externalActionMachineInstallationId: test.guest.installationId,
+                externalActionMachineRequestPrivateKey: test.controllerKeys.secretKey });
+            const actionInput = { sessionId: session.id, localId: input.localId,
+                requestedAction: input.requestedAction, resumeWhenAvailable: true, serverId: origin };
+            const target = { kind: 'session' as const, sessionId: session.id };
+            const requestId = randomUUID();
+            const sessionActionOrigin = SessionActionRpcOriginV1Schema.parse({ v: 1, requestId,
+                caller: { kind: 'session', sessionId: sourceSession.id, starterDepth: 0, turnDepth: 0 },
+                sourceInputId: 'original-agent-input', sourceTurnId: 'original-agent-turn',
+                callerPermissionMode: 'yolo', causalPermissionAuthority: null });
+            const authorization = await auth.mintExternalActionExecutionAuthorization({ accountId: requester.id,
+                authentication: { kind: 'account', tokenEpoch: requester.tokenEpoch }, serverIdentityId: homeId,
+                machineId: test.guest.id, actionId, requestId, target,
+                sessionActionOrigin, sessionActionSource: { machineId: test.controller.id, installationId: test.controller.installationId! },
+                requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1({ v: 1, requestId, target, input: actionInput }) },
+                { resolveCurrentSessionMachine: resolveSource });
+            const context = { surface: 'agent' as const, authority: 'account_automation' as const,
+                externalActionTarget: target, externalActionExecutionAuthorization: authorization,
+                actionCaller: sessionActionOrigin.caller, actionsSettings: normalizeActionsSettingsV1({ v: 1,
+                    approvalWaivedSurfaces: { [actionId]: ['agent'] } }) };
+            const missing = createActionExecutor({ ...deps, sessionPendingActionSet: undefined });
+            expect(await missing.execute(actionId, actionInput, context)).toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+            expect(await db.session.findUniqueOrThrow({ where: { id: session.id } })).toEqual(before);
+            const executor = createActionExecutor(deps);
+            expect(await executor.execute(actionId, actionInput, { ...context, actionsSettings: normalizeActionsSettingsV1({ v: 1,
+                actions: { [actionId]: { enabled: false } } }) })).toMatchObject({ ok: false, errorCode: 'action_disabled' });
+            expect(await db.session.findUniqueOrThrow({ where: { id: session.id } })).toEqual(before);
+            const result = await executor.execute(actionId, actionInput, context);
+            expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { didUpdate: true, requestedAction: input.requestedAction } });
+            if (!result.ok) throw new Error('Expected same-input rearm');
+            getActionSpec(actionId).outputSchema!.parse(result.result);
+            const retried = await db.session.findUniqueOrThrow({ where: { id: session.id } });
+            expect(retried.pendingActivationRequestedAt!.getTime()).toBeGreaterThan(first.pendingActivationRequestedAt!.getTime());
+            expect(mapPendingActivationAuthorization(retried)).toMatchObject({ requestId: input.localId, status: 'waiting' });
+            if (level === 'admin') expect(mapPendingActivationAuthorization(retried)?.managedWakeTargetV1).toMatchObject({ managedId: test.row.id });
+            else {
+                expect(retried.pendingActivationManagedTarget).toBeNull();
+                expect(await listPendingMessages(input)).toMatchObject({ ok: true, pending: [{ activationHoldReason: 'managed_power_required' }] });
+            }
+            expect(await db.sessionPendingMessage.findMany({ where: { sessionId: session.id } })).toEqual(original);
+            expect(await db.managedMachine.findUniqueOrThrow({ where: { id: test.row.id } }))
+                .toMatchObject({ desired: 'stop', intentRevision: test.row.intentRevision });
+            // A retained signed root cannot outlive its installed signer.
+            await db.machine.update({ where: { id: test.guest.id }, data: { installationId: randomUUID() } });
+            expect(await executor.execute(actionId, actionInput, context))
+                .toMatchObject({ ok: false, errorCode: 'action_failed' });
+            expect(await db.session.findUniqueOrThrow({ where: { id: session.id } })).toEqual(retried);
+        } finally { await app.close(); restoreEnv(envBefore); }
+    });
+
+    it('retains native admission for Actions whose input may select a Machine effect', async () => {
+        const test = await setup();
+        const requester = await db.account.create({ data: { encryptionMode: 'plain' } });
+        await inTx(tx => setMachineAccessGrantInTx(tx, { actorAccountId: test.account.id, machineId: test.controller.id,
+            principal: { kind: 'account', accountId: requester.id }, level: 'admin' }));
+        expect(await inTx(tx => resolveExternalActionExecutionMachineAdmissionInTx(tx, { actorAccountId: requester.id,
+            machineId: test.controller.id, actionId: 'providers.connections.secrets.bind' }))).toMatchObject({ kind: 'denied', code: 'unsupported_operation' });
     });
 
     async function publishWakeDeclaration(test: Awaited<ReturnType<typeof setup>>) {
@@ -802,6 +1122,7 @@ describe('finite managed wake original Action authority (real SQLite)', () => {
             const execution = { v: 1 as const, authorization: carrier, effectActionId: 'projects.script.run',
                 target: carrier.binding.target, installationId: test.guest.installationId!,
                 machineSignature: signExternalActionMachineRpcRequestV1({ authorizationToken: carrier.token,
+                    requesterAccountContext: carrier.requesterAccountContext,
                     effectActionId: 'projects.script.run', target: carrier.binding.target,
                     installationId: test.guest.installationId!, requestId: test.requestId, method: guestMethod,
                     params: original, privateKey: test.controllerKeys.secretKey }),
@@ -810,7 +1131,7 @@ describe('finite managed wake original Action authority (real SQLite)', () => {
             await getSocketHandler(caller, SOCKET_RPC_EVENTS.CALL)({ method: guestMethod, requestId: test.requestId,
                 params: original, externalActionExecution: execution }, (value: unknown) => { response = value; });
             if (boundaryErrors.length > 0) throw boundaryErrors[0];
-            expect(wakeEligibilityDue).toBe(true);
+            expect(wakeEligibilityDue, JSON.stringify({ initialEligibilityReached, response, methods })).toBe(true);
             expect(wakeEligibilityReached).toBe(true);
             if (disposition === 'current') {
                 expect(response).toEqual({ ok: true, result: { completed: true } });

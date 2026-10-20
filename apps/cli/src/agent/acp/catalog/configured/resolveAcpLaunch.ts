@@ -14,6 +14,7 @@ import { ensureRuntimeInstallableDescriptorForLaunch } from '@/packagedRuntime/i
 import { resolveEffectiveInstallablePolicy } from '@happier-dev/protocol/installablesPolicy';
 import { hasPinnedArchiveManagedInstall } from '@/packagedRuntime/installables/sourceAdapters/pinnedArchive';
 import { executeInstallCommand } from '@/capabilities/installJobs/executeInstallCommand';
+import type { ProcessEnvInput } from '@/utils/processEnv/buildScopedProcessEnv';
 
 export type AcpLaunchDefinition = Pick<AcpBackendDefinitionV1, 'id' | 'title' | 'launch'>;
 export type AcpLaunchResolution =
@@ -22,7 +23,7 @@ export type AcpLaunchResolution =
   | Readonly<{ kind: 'cant_run'; fit: AcpPlatformFitV1 }>;
 export type AcpLaunchParams = Readonly<{
   accountId?: string;
-  definition: AcpLaunchDefinition; platform: string | null; arch: string | null; env: NodeJS.ProcessEnv;
+  definition: AcpLaunchDefinition; platform: string | null; arch: string | null; env: ProcessEnvInput;
   launchEnv?: Readonly<Record<string, string>>;
 }>;
 

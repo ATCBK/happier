@@ -28,6 +28,7 @@ import type { HappierUiAccessibility, HappierUiEnvironment, HappierUiLocalizatio
 import { PluginUiDataProviderInternal } from '../data/context.js';
 import type { PluginUiDataClient } from '../data/types.js';
 import { PluginHostApiProviderInternal } from '../hostApi/context.js';
+import { PluginUiHostReadinessProviderInternal } from '../hostApi/readiness.public.js';
 import type { PluginUiResourceAccountLifetime, PluginUiResourceStore } from '../hostApi/resourceStore.js';
 import type { PluginUiEphemeralSharedScope } from '../hostApi/ephemeralSharedScope.public.js';
 import type { ComposerRefV1 } from '../composer/types.js';
@@ -106,6 +107,16 @@ type ObservedSurfaceState = Readonly<{
   context: SurfaceContext | null;
 }>;
 
+/** Transport copies of unchanged messages must not restart translation-dependent author effects. */
+function retainSurfaceContextTranslations(previous: SurfaceContext | null, next: SurfaceContext): SurfaceContext {
+  if (!previous || previous.translations === next.translations) return next;
+  const keys = Object.keys(next.translations);
+  if (keys.length !== Object.keys(previous.translations).length
+    || keys.some((key) => !Object.prototype.hasOwnProperty.call(previous.translations, key)
+      || previous.translations[key] !== next.translations[key])) return next;
+  return { ...next, translations: previous.translations };
+}
+
 export function PluginUiProvider(props: PluginUiProviderProps) {
   return <PluginUiProviderInternal {...props} />;
 }
@@ -172,7 +183,9 @@ export function PluginUiProviderInternal({
     setObserved({
       hostApi,
       seed: context,
-      context: context ?? (surfaceChanged ? null : observed.context),
+      context: context
+        ? retainSurfaceContextTranslations(surfaceChanged ? null : observed.context, context)
+        : surfaceChanged ? null : observed.context,
     });
   }
 
@@ -196,7 +209,9 @@ export function PluginUiProviderInternal({
       if (source === 'snapshot' && watchedContextDelivered) return;
       if (source === 'watch') watchedContextDelivered = true;
       setObserved((previous) => (
-        previous.hostApi === hostApi ? { ...previous, context: next } : previous
+        previous.hostApi === hostApi
+          ? { ...previous, context: retainSurfaceContextTranslations(previous.context, next) }
+          : previous
       ));
     };
 
@@ -246,31 +261,33 @@ export function PluginUiProviderInternal({
   if (!effectiveContext || !environment) return null;
 
   return (
-    <PluginHostApiProviderInternal
-      hostApi={hostApi}
-      {...(accountLifetime === undefined ? {} : { accountLifetime })}
-      {...(resourceStoreGeneration === undefined ? {} : { resourceStoreGeneration })}
-      {...(resourceStore === undefined ? {} : { resourceStore })}
-      {...(mountedPluginId === undefined ? {} : { mountedPluginId })}
-      {...(composerRef === undefined ? {} : { composerRef })}
-      {...(surfaceActivity === undefined ? {} : { surfaceActivity })}
-      {...(presentationActive === undefined ? {} : { presentationActive })}
-      {...(ephemeralSharedScope === undefined ? {} : { ephemeralSharedScope })}
-    >
-      <PluginSurfaceContextContext.Provider value={effectiveContext}>
-        <HappierUiEnvironmentProvider environment={environment}>
-          <PluginUiDataProviderInternal {...(dataClient ? { client: dataClient } : {})}>
-            {presentationHost
-              ? (
-                <PluginUiPresentationHostProviderInternal host={presentationHost}>
-                  {installHostPresentationFacts(presentationHost, children)}
-                </PluginUiPresentationHostProviderInternal>
-              )
-              : children}
-          </PluginUiDataProviderInternal>
-        </HappierUiEnvironmentProvider>
-      </PluginSurfaceContextContext.Provider>
-    </PluginHostApiProviderInternal>
+    <PluginUiHostReadinessProviderInternal hostApi={hostApi} context={effectiveContext}>
+      <PluginHostApiProviderInternal
+        hostApi={hostApi}
+        {...(accountLifetime === undefined ? {} : { accountLifetime })}
+        {...(resourceStoreGeneration === undefined ? {} : { resourceStoreGeneration })}
+        {...(resourceStore === undefined ? {} : { resourceStore })}
+        {...(mountedPluginId === undefined ? {} : { mountedPluginId })}
+        {...(composerRef === undefined ? {} : { composerRef })}
+        {...(surfaceActivity === undefined ? {} : { surfaceActivity })}
+        {...(presentationActive === undefined ? {} : { presentationActive })}
+        {...(ephemeralSharedScope === undefined ? {} : { ephemeralSharedScope })}
+      >
+        <PluginSurfaceContextContext.Provider value={effectiveContext}>
+          <HappierUiEnvironmentProvider environment={environment}>
+            <PluginUiDataProviderInternal {...(dataClient ? { client: dataClient } : {})}>
+              {presentationHost
+                ? (
+                  <PluginUiPresentationHostProviderInternal host={presentationHost}>
+                    {installHostPresentationFacts(presentationHost, children)}
+                  </PluginUiPresentationHostProviderInternal>
+                )
+                : children}
+            </PluginUiDataProviderInternal>
+          </HappierUiEnvironmentProvider>
+        </PluginSurfaceContextContext.Provider>
+      </PluginHostApiProviderInternal>
+    </PluginUiHostReadinessProviderInternal>
   );
 }
 

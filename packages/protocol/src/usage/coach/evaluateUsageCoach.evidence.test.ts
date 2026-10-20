@@ -4,6 +4,7 @@ import { UsageCoachFindingSchema, type UsageCoachEvaluationInput } from './coach
 import { USAGE_COACH_DETECTOR_IDS } from './coachDetectorIds.js';
 import { UsageAnalyticsQueryResponseSchema } from '../usageAnalyticsContracts.js';
 import { UsageModelPriceCatalogSchema } from '../usageModelPriceCatalog.js';
+import { resolveUsageHowYouWork } from '../resolveUsageHowYouWork.js';
 
 const base = { queryKey: 'evidence', period: { startMs: 0, endMs: 1000 }, asOfMs: 1000, currentness: 'current' as const };
 const read = (input: Partial<UsageCoachEvaluationInput>, id: string) =>
@@ -30,6 +31,26 @@ const accounting = (reads: number[]) => {
 };
 
 describe('research-grounded Coach rules', () => {
+    it('counts the same answered approvals as Human loop, including earlier requests and immediate decisions', () => {
+        const permission = { workId: 'w', requestId: 'within', requestedAtMs: 110, decidedAtMs: 140,
+            toolId: 'shell', answeringClientCategory: null };
+        const permissions = [permission, permission,
+            { ...permission, requestId: 'earlier', requestedAtMs: 90 },
+            { ...permission, requestId: 'immediate', requestedAtMs: 150, decidedAtMs: 150 },
+            { ...permission, requestId: 'pending', decidedAtMs: null },
+            { ...permission, requestId: 'later', decidedAtMs: 210 },
+            { ...permission, requestId: 'invalid', requestedAtMs: 160 }];
+        const period = { startMs: 100, endMs: 200 };
+        const human = resolveUsageHowYouWork({ period, timeZoneOffsetMinutes: 0, detail: { status: 'partial', permissions } });
+        const coach = evaluateUsageCoach({ ...base, period, detail: { coverage: 'partial', permissions } });
+        const finding = coach.findings.find(row => row.detectorId === 'approval_friction')!;
+        expect(human.permissions).toMatchObject({ pairedDecisionCount: 3, decisionLatencyMs: 80 });
+        expect(finding.measurements).toEqual(expect.arrayContaining([
+            { metric: 'permission_requests', value: human.permissions!.pairedDecisionCount, unit: 'count' },
+            { metric: 'permission_wait', value: human.permissions!.decisionLatencyMs, unit: 'milliseconds' },
+        ]));
+        expect(UsageCoachFindingSchema.safeParse(finding).success).toBe(true);
+    });
     it('requires three consecutive identical failures, including the same error and no progress', () => {
         const rows = [loop, { ...loop, evidenceId: 'l2', observedAtMs: 20 }, { ...loop, evidenceId: 'l3', observedAtMs: 30 }];
         expect(read({ detail: { coverage: 'complete', loops: rows.slice(0, 2) } }, 'anomalous_looping_usage')?.status).toBe('no_finding');

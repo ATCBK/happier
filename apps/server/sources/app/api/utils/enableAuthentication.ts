@@ -1,8 +1,9 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import type { Fastify } from "../types";
 import { log } from "@/utils/logging/log";
+import { timeWebLatencyPhase } from '@/utils/webLatencyTrace';
 import { readRequestHomeEnv } from '@/app/home/settings/requestHomeEnv';
 import { captureAccountStoredContentCompatibilityForHttpRequest } from "@/app/clientCompatibility/accountStoredContentCompatibility";
 import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
@@ -15,7 +16,7 @@ import { redactHttpRequestUrlForLog } from "@/utils/logging/redactHttpRequestUrl
 import {
     isRestrictedAuthTokenDeniedForRoute,
     admitApiTokenSessionOperation,
-    readRestrictedCredentialRouteField,
+    readRestrictedCredentialRouteSessionIds,
     resolveApiTokenSessionActionForRoute,
     isExternalActionSessionRoutePurposeAllowed,
     PRESENT_USER_REQUIRED_ERROR,
@@ -36,12 +37,13 @@ import {
     verifyExternalActionExecutionAuthorizationCurrentness,
 } from "@/app/auth/externalActionExecutionAuthorization";
 
-/** Ordinary Account routes without Session-purpose or custom restricted-error configuration. */
+/** Account and declared Session-purpose routes without custom restricted-error configuration. */
 export const AccountRouteAuthenticationForbiddenResponseSchema = z.union([
     PresentUserRequiredResponseSchema,
-    z.object({ error: z.literal("provider-required"), provider: z.string() }).strict(),
-    z.object({ error: z.literal("not-eligible") }).strict(),
-    z.object({ error: z.literal("credential_origin_denied") }).strict(),
+    z.strictObject({ error: z.literal("provider-required"), provider: z.string() }),
+    z.strictObject({ error: z.literal("not-eligible") }),
+    z.strictObject({ error: z.literal("credential_origin_denied") }),
+    z.strictObject({ error: z.literal("credential_scope_denied") }),
 ]);
 
 function readScalarHeader(value: unknown): string | null {
@@ -125,7 +127,7 @@ export function enableAuthentication(app: Fastify) {
             || effectActionId !== null
             || encodedTarget !== null;
         // Never log bearer tokens or header contents.
-        const logDiagnostics = readServerConfig(await readRequestHomeEnv(request), SERVER_CONFIG.HAPPIER_AUTH_DECORATOR_DIAGNOSTIC_LOGS);
+        const logDiagnostics = readServerConfig(await timeWebLatencyPhase('auth.home_env', () => readRequestHomeEnv(request)), SERVER_CONFIG.HAPPIER_AUTH_DECORATOR_DIAGNOSTIC_LOGS);
         if (logDiagnostics) {
             log(
                 { module: 'auth-decorator' },
@@ -143,10 +145,12 @@ export function enableAuthentication(app: Fastify) {
                 return sendInvalidConnectionCredentialFailure(request, reply);
             }
             const sessionBinding = request.routeOptions?.config?.restrictedCredentialBinding;
-            const routeSessionId = sessionBinding?.scope === 'session'
-                && resolveApiTokenSessionActionForRoute(request) !== undefined
+            const routeActionId = resolveApiTokenSessionActionForRoute(request);
+            const routeSessionIds = sessionBinding?.scope === 'session'
                 && isExternalActionSessionRoutePurposeAllowed(request, effectActionId)
-                ? readRestrictedCredentialRouteField(request, sessionBinding.session) : null;
+                ? readRestrictedCredentialRouteSessionIds(request, sessionBinding) : [];
+            if (routeSessionIds === null) return sendInvalidConnectionCredentialFailure(request, reply);
+            const [routeSessionId, ...additionalSessionIds] = routeSessionIds;
             const proof = {
                 authorizationToken: executionAuthorization,
                 machineSignature,
@@ -155,21 +159,25 @@ export function enableAuthentication(app: Fastify) {
                 method: request.method,
                 path: request.url,
                 body: request.body,
+                ...(readScalarHeader(request.headers['idempotency-key']) === null ? {}
+                    : { idempotencyKey: readScalarHeader(request.headers['idempotency-key'])! }),
                 ...(typeof routeSessionId === 'string' && routeSessionId.length > 0
-                    ? { sessionRouteTarget: { kind: 'session' as const, sessionId: routeSessionId } } : {}),
+                    ? { sessionRouteTarget: { kind: 'session' as const, sessionId: routeSessionId,
+                        ...(routeActionId ? { actionId: routeActionId } : {}),
+                        ...(additionalSessionIds.length > 0 ? { additionalSessionIds } : {}) } } : {}),
                 routeInput: {
                     ...(request.params && typeof request.params === 'object' && !Array.isArray(request.params) ? request.params : {}),
                     ...(request.query && typeof request.query === 'object' && !Array.isArray(request.query) ? request.query : {}),
                     ...(request.body && typeof request.body === 'object' && !Array.isArray(request.body) ? request.body : {}),
                 },
             };
-            const routeActionId = typeof request.params?.actionId === "string"
+            const externalActionRouteId = typeof request.params?.actionId === "string"
                 ? request.params.actionId
                 : null;
-            const authorizationCurrentnessActionId = routeActionId !== null
+            const authorizationCurrentnessActionId = externalActionRouteId !== null
                 && request.routeOptions?.url
                     === EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_VERIFY_HTTP_PATH_TEMPLATE_V1
-                ? routeActionId
+                ? externalActionRouteId
                 : null;
             const verified = authorizationCurrentnessActionId !== null
                 ? await verifyExternalActionExecutionAuthorizationCurrentness({
@@ -196,6 +204,7 @@ export function enableAuthentication(app: Fastify) {
                 return reply.code(403).send({ error: "credential_origin_denied" });
             }
             request.externalActionExecutionAuthorized = true;
+            if (proof.sessionRouteTarget) request.externalActionSessionAccessAdmitted = true;
             request.externalActionExecutionAuthorizationBinding = verified.binding;
             request.externalActionManagedGuestActivity = verified.managedGuestActivity;
             // Ordinary authenticated callers have no PAT input ceiling.
@@ -231,12 +240,12 @@ export function enableAuthentication(app: Fastify) {
         // route families that explicitly reject legacy Home authority use
         // only the strict current verifier; ordinary Home routes retain
         // the explicitly named compatibility reader.
-        const verification = earlyRequestPrincipals.get(request) ?? await verifyRequestPrincipal({
+        const verification = earlyRequestPrincipals.get(request) ?? await timeWebLatencyPhase('auth.verify_principal', () => verifyRequestPrincipal({
             authorizationHeader: authHeader,
             allowLegacyHomeToken: request.routeOptions?.config?.allowAccountDirectoryToken !== true
                 && request.routeOptions?.config?.allowLegacyHomeToken !== false,
             env: process.env,
-        });
+        }));
         if (
             verification.status === "absent"
             || verification.status === "invalid"
@@ -299,17 +308,19 @@ export function enableAuthentication(app: Fastify) {
         const sessionAction = resolveApiTokenSessionActionForRoute(request);
         const binding = request.routeOptions.config.restrictedCredentialBinding;
         if (apiTokenPrincipal && sessionAction && binding?.scope === "session") {
-            const sessionId = readRestrictedCredentialRouteField(request, binding.session);
-            if (typeof sessionId !== "string") {
+            const sessionIds = readRestrictedCredentialRouteSessionIds(request, binding);
+            if (sessionIds === null) {
                 return reply.code(403).send({ error: "credential_scope_denied" });
             }
-            const admitted = await admitApiTokenSessionOperation({
-                principal: apiTokenPrincipal, sessionId, actionId: sessionAction,
-                targetMachineId: await app.resolveCurrentSessionMachine?.({
-                    accountId: apiTokenPrincipal.accountId, sessionId,
-                }),
-            });
-            if (!admitted.ok) return reply.code(403).send({ error: admitted.error });
+            for (const sessionId of sessionIds) {
+                const admitted = await admitApiTokenSessionOperation({
+                    principal: apiTokenPrincipal, sessionId, actionId: sessionAction,
+                    targetMachineId: await app.resolveCurrentSessionMachine?.({
+                        accountId: apiTokenPrincipal.accountId, sessionId,
+                    }),
+                });
+                if (!admitted.ok) return reply.code(403).send({ error: admitted.error });
+            }
         }
         captureAccountStoredContentCompatibilityForHttpRequest(request);
     });

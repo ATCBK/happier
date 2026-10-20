@@ -59,9 +59,10 @@ import {
 import { SelectionListBodyScrollFrame } from './SelectionListBodyScrollFrame';
 import {
     renderSelectionListSectionNodes,
+    SelectionListStateLine,
     type SelectionListSectionRenderContext,
 } from './SelectionListDynamicSectionRows';
-import { SelectionListEmptyState } from './SelectionListEmptyState';
+import { t } from '@/text';
 import {
     advanceSelectionListBodyRendererLatch,
     applyLatchedVirtualizationToPlan,
@@ -138,6 +139,9 @@ export type SelectionListBodyProps = Readonly<{
      * Defaults to `'normal'`.
      */
     mode?: 'measure' | 'normal';
+    /** The typed search, for a step's `emptyStateForQuery`, and what its Clear does. */
+    emptyQuery?: string;
+    onClearInput?: () => void;
     /**
      * Lane G — resolved visual columns per row. `1` (or omitted) renders the
      * classic one-option-per-row list. Resolved ONCE by the orchestrator and
@@ -263,6 +267,7 @@ function SelectionListBodyPlannedContent(props: SelectionListBodyProps & Readonl
     const styles = stylesheet;
     const plan = props.plan;
     const isMeasure = props.mode === 'measure';
+    const emptyLine = resolveEmptyLine(props);
     const a11yPattern = props.a11yPattern;
     const optionPositions = React.useMemo(() => {
         const byId = new Map<string, number>();
@@ -374,14 +379,16 @@ function SelectionListBodyPlannedContent(props: SelectionListBodyProps & Readonl
     const emptyNode = isMeasure ? null : (() => {
         const emptyStateGroupA11y = buildSelectionListSectionGroupA11yProps({ pattern: a11yPattern });
         return emptyStateGroupA11y === null ? (
-            <SelectionListEmptyState
-                label={props.step.emptyStateLabel}
+            <SelectionListStateLine
+                label={emptyLine.label}
+                retry={emptyLine.retry}
                 testID={selectionListTestId(props.rootTestID, 'empty')}
             />
         ) : (
             <View role="group" {...emptyStateGroupA11y}>
-                <SelectionListEmptyState
-                    label={props.step.emptyStateLabel}
+                <SelectionListStateLine
+                    label={emptyLine.label}
+                    retry={emptyLine.retry}
                     testID={selectionListTestId(props.rootTestID, 'empty')}
                 />
             </View>
@@ -513,6 +520,7 @@ function SelectionListBodyDirectVirtualizedSource(props: SelectionListBodyProps 
     if (!source) {
         throw new Error('SelectionList direct virtualized source is required');
     }
+    const emptyLine = resolveEmptyLine(props);
     const isMeasure = props.mode === 'measure';
     const listboxAria: SelectionListContainerA11yProps | null = isMeasure
         ? null
@@ -550,14 +558,16 @@ function SelectionListBodyDirectVirtualizedSource(props: SelectionListBodyProps 
                 {...(bodyHostAccessibilityHide ?? {})}
             >
                 {isMeasure ? null : emptyStateGroupA11y === null ? (
-                    <SelectionListEmptyState
-                        label={props.step.emptyStateLabel}
+                    <SelectionListStateLine
+                        label={emptyLine.label}
+                        retry={emptyLine.retry}
                         testID={selectionListTestId(props.rootTestID, 'empty')}
                     />
                 ) : (
                     <View role="group" {...emptyStateGroupA11y}>
-                        <SelectionListEmptyState
-                            label={props.step.emptyStateLabel}
+                        <SelectionListStateLine
+                            label={emptyLine.label}
+                            retry={emptyLine.retry}
                             testID={selectionListTestId(props.rootTestID, 'empty')}
                         />
                     </View>
@@ -584,4 +594,18 @@ function SelectionListBodyDirectVirtualizedSource(props: SelectionListBodyProps 
             viewportHeight={props.virtualizedViewportHeight}
         />
     );
+}
+
+/** The empty state's sentence and its Clear: the step's own wording while a search is typed, else its static label. */
+function resolveEmptyLine(props: SelectionListBodyProps): Readonly<{
+    label: string;
+    retry: Readonly<{ label: string; onPress: () => void }> | undefined;
+}> {
+    const query = props.emptyQuery?.trim() ?? '';
+    const searching = query && props.step.emptyStateForQuery ? props.step.emptyStateForQuery(query) : null;
+    const onClear = props.onClearInput;
+    return {
+        label: searching?.label ?? props.step.emptyStateLabel ?? t('selectionList.emptyMatch'),
+        retry: searching?.clearLabel && onClear ? { label: searching.clearLabel, onPress: onClear } : undefined,
+    };
 }

@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PluginProjectionV2Schema, type MachineAgentInventoryItem } from '@happier-dev/protocol';
+import 'fake-indexeddb/auto';
+import { buildQualifiedPluginContributionKey, PluginProjectionV2Schema, type MachineAgentInventoryItem } from '@happier-dev/protocol';
 import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '@happier-dev/agents/agent-ids';
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import {
@@ -39,10 +40,10 @@ vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () =
  * the daemon spawn Action records any attempt to emit a stale target.
  */
 
-const ACME_AGENT_ID = 'acme.review.provider';
 const ACME_PLUGIN_ID = 'acme.review';
 const ACME_LOCAL_ID = 'provider';
 const ACME_IDENTITY = { pluginId: ACME_PLUGIN_ID, localId: ACME_LOCAL_ID } as const;
+const ACME_AGENT_ID = buildQualifiedPluginContributionKey(ACME_IDENTITY);
 const ACME_TARGET_KEY = resolveBackendTargetKeyV2({ kind: 'agent', identity: ACME_IDENTITY });
 const CLAUDE_TARGET_KEY = resolveBackendTargetKeyV2({
     kind: 'agent',
@@ -109,7 +110,6 @@ function setProjection(phase: ProjectionPhase, inputs: Record<string, unknown> |
 }
 
 const pendingFireAndForget = vi.hoisted((): Array<Promise<unknown>> => []);
-const applySettingsMock = vi.hoisted(() => vi.fn());
 const modalAlertMock = vi.hoisted(() => vi.fn());
 const sessionSpawnNewActionBoundarySpy = vi.hoisted(() => vi.fn(async (_input: unknown) => ({
     type: 'error' as const,
@@ -172,25 +172,24 @@ const testSettingsDefaults = vi.hoisted(() => ({
     },
 }));
 
-const settingsState = vi.hoisted(() => ({
-    ...testSettingsDefaults,
-}));
-const settingsRuntimeState = vi.hoisted(() => ({
-    current: settingsState as typeof settingsState | undefined,
-}));
-
 const initialHookFlushOptions = { cycles: 2, turns: 2 } as const;
 
 async function renderNewSessionScreenModel() {
     const { useNewSessionScreenModel } = await import('./useNewSessionScreenModel');
-    settingsRuntimeState.current = { ...settingsRuntimeState.current ?? testSettingsDefaults, useEnhancedSessionWizard: false };
+    getStorage().getState().applySettingsLocal({ useEnhancedSessionWizard: false });
     const hook = await renderHook(() => useNewSessionScreenModel(), {
         flushOptions: initialHookFlushOptions,
     });
     // Opening the real picker is what demands all Agent facts. Merely mounting
     // the screen intentionally probes only its selected Agent.
-    await invokeHookAction(() => hook.getCurrent().simpleProps?.onAgentPickerVisibilityChange?.(true));
-    settingsRuntimeState.current = { ...settingsRuntimeState.current ?? testSettingsDefaults, useEnhancedSessionWizard: true };
+    await invokeHookAction(() => {
+        const model = hook.getCurrent();
+        if (model.variant !== 'simple') throw new Error('Expected the simple New Session surface');
+        model.simpleProps.onAgentPickerVisibilityChange?.(true);
+    });
+    await act(async () => {
+        getStorage().getState().applySettingsLocal({ useEnhancedSessionWizard: true });
+    });
     await hook.rerender();
     return hook;
 }
@@ -210,7 +209,7 @@ async function invokeHookAction(action: () => void | Promise<void>) {
 type ScreenModel = ReturnType<typeof import('./useNewSessionScreenModel')['useNewSessionScreenModel']>;
 
 function wizard(model: ScreenModel) {
-    if (!model.wizardProps) throw new Error('Expected the enhanced New Session surface');
+    if (model.variant !== 'wizard') throw new Error('Expected the enhanced New Session surface');
     return model.wizardProps;
 }
 
@@ -293,35 +292,10 @@ installNewSessionScreenModelCommonModuleMocks({
         navigation: {},
         pathname: '/new',
     },
-    storage: async (importOriginal) => {
-        const { createPartialStorageModuleMock } = await import('@/dev/testkit/createPartialStorageModuleMock');
-        return createPartialStorageModuleMock(importOriginal, {
-            useAllMachines: () => machineState.value,
-            useLaunchSelectionMachines: () => machineState.value,
-            useMachineListByServerId: () => ({
-                [serverState.id]: machineState.value,
-            }),
-            useMachineListStatusByServerId: () => ({}),
-            useSetting: (key: string) => (settingsRuntimeState.current as any)?.[key] ?? (testSettingsDefaults as any)[key],
-            useSettingMutable: (key: string) => [
-                (settingsRuntimeState.current as any)?.[key] ?? (testSettingsDefaults as any)[key],
-                vi.fn(),
-            ],
-            useCurrentFavoriteModelSelectionsV1Mutable: () => [
-                (settingsRuntimeState.current as any)?.currentFavoriteModelSelectionsV1
-                    ?? (testSettingsDefaults as any).currentFavoriteModelSelectionsV1,
-                vi.fn(),
-            ],
-            useCurrentRememberedEngineSelectionsByScopeV1Mutable: () => [
-                (settingsRuntimeState.current as any)?.currentRememberedEngineSelectionsByScopeV1
-                    ?? (testSettingsDefaults as any).currentRememberedEngineSelectionsByScopeV1,
-                vi.fn(),
-            ],
-            // Boundary fixture: the suite overrides only the settings fields it actually reads.
-            useSettings: (() => (settingsRuntimeState.current ?? testSettingsDefaults) as any) as any,
-        });
-    },
 });
+// Keep selectors, writers and consumers on one real store. Async partial mocks
+// can wait on their own module through the model's Action/settings import graph.
+vi.doUnmock('@/sync/domains/state/storage');
 
 vi.mock('react-native-safe-area-context', () => ({
     initialWindowMetrics: null,
@@ -383,19 +357,6 @@ vi.mock('@/sync/sync', () => ({
     },
 }));
 
-vi.mock('@/sync/store/settingsWriters', async (importOriginal) => {
-    const { mergeModuleMock } = await import('@/dev/testkit/mocks/_shared');
-    return mergeModuleMock<typeof import('@/sync/store/settingsWriters')>({
-        importOriginal,
-        overrides: {
-            useApplySettings: () => applySettingsMock,
-            useDeleteAiLaunchProfile: () => vi.fn(async (): Promise<never> => {
-                throw new Error('Profile deletion is outside the currentness journey');
-            }),
-        },
-    });
-});
-
 vi.mock('@/agents/hooks/useEnabledAgentIds', () => ({
     useEnabledAgentIds: () => enabledAgentIdsState.value,
 }));
@@ -448,12 +409,6 @@ vi.mock('@/components/sessions/new/modules/automationFeatureGate', () => ({
     shouldShowAutomationActionChips: () => false,
 }));
 
-vi.mock('@/components/sessions/new/modules/useNewSessionConnectedServices', () => ({
-    useNewSessionConnectedServices: () => ({
-        connectedServicesAuthChip: null,
-    }),
-}));
-
 vi.mock('@/components/sessions/new/modules/profileHelpers', () => ({
     useProfileMap: (profiles: Array<{ id: string }>) => new Map(profiles.map((profile) => [profile.id, profile])),
     transformProfileToEnvironmentVars: () => [],
@@ -463,14 +418,6 @@ vi.mock('@/components/sessions/new/hooks/newSessionModelModePolicy', () => ({
     resolveInitialNewSessionModelMode: () => 'default',
     coerceNewSessionModelMode: ({ modelMode }: any) => modelMode,
 }));
-
-vi.mock('@/sync/domains/settings/settings', async (importOriginal) => {
-    const actual = await importOriginal<any>();
-    return {
-        ...actual,
-        settingsDefaults: testSettingsDefaults,
-    };
-});
 
 vi.mock('@/sync/domains/profiles/profileUtils', () => ({
     getBuiltInProfile: () => null,
@@ -631,6 +578,7 @@ const network = await installSessionOpsNetworkBoundary();
 // As in useMachineAgents.test.tsx, physical Socket.IO must be installed before
 // importing the real storage/model graph that captures its transport adapter.
 const { getStorage } = await import('@/sync/domains/state/storageStore');
+const { settingsParse } = await import('@/sync/domains/settings/settings');
 const { AIBackendProfileSchema } = await import('@/sync/domains/profiles/profileCompatibility');
 const { applyProfileCatalogSnapshot, resetProfileCatalogSnapshotsForTests } = await import('@/sync/store/settings/profileCatalogSnapshot');
 const { publishProjectedAgentUiBehaviorDescriptors } = await import('@/agents/registry/agentUiBehaviorProjection');
@@ -657,7 +605,6 @@ describe('useNewSessionScreenModel (Agent projection currentness)', () => {
     }, 180_000);
 
     beforeEach(async () => {
-        applySettingsMock.mockClear();
         modalAlertMock.mockClear();
         sessionSpawnNewActionBoundarySpy.mockClear();
         ensureAgentInstallablesBackgroundMock.mockClear();
@@ -676,13 +623,15 @@ describe('useNewSessionScreenModel (Agent projection currentness)', () => {
             };
             if (method === 'capabilities.detect') return { protocolVersion: 1, results: {
                 [`cli.${ACME_AGENT_ID}`]: { ok: true, checkedAt: Date.now(), data: { ...inventoryItem, installed: inventoryState.installed } },
+                'cli.claude': { ok: true, checkedAt: Date.now(), data: { ...inventoryItem, agentId: 'claude', title: 'Claude', installed: true } },
             } };
             return { jobs: [] };
         });
         machineState.value = ['machine-1', 'machine-2'].map((id) => createMachineFixture({
             id, active: true, activeAt: Date.now(),
-            metadata: { displayName: id, host: id, homeDir: `/home/${id}` },
+            metadata: { ...createMachineFixture().metadata!, displayName: id, host: id, homeDir: `/home/${id}` },
         }));
+        getStorage().getState().applyMachines(machineState.value);
         getStorage().setState({ machineListByServerId: { [serverState.id]: machineState.value } });
         const { publishMachineContributionRegistryProjectionInvalidation } = await import('@/sync/ops/machineContributionRegistryProjectionRevision');
         for (const machineId of ['machine-1', 'machine-2']) {
@@ -690,7 +639,7 @@ describe('useNewSessionScreenModel (Agent projection currentness)', () => {
         }
         enabledAgentIdsState.value = ['claude'];
         routeParamsState.value = { machineId: 'machine-1' };
-        settingsRuntimeState.current = { ...testSettingsDefaults };
+        getStorage().getState().applySettingsLocal(settingsParse(testSettingsDefaults));
         publishProjectedAgentUiBehaviorDescriptors({
             machineId: 'machine-1',
             descriptorsByAgentId: {},
@@ -707,12 +656,11 @@ describe('useNewSessionScreenModel (Agent projection currentness)', () => {
             identity: BUNDLED_AGENT_CONTRIBUTION_IDENTITIES['custom-acp'],
             definitionId: 'review-agent',
         } as const;
-        settingsRuntimeState.current = {
-            ...testSettingsDefaults,
+        getStorage().getState().applySettingsLocal({
             useProfiles: true,
             useEnhancedSessionWizard: true,
             lastUsedBackendTarget: target,
-        };
+        });
         setProjection('ready', null);
         const profile = AIBackendProfileSchema.parse({
             id: 'review-profile', name: 'Review profile', compatibility: {},
@@ -734,14 +682,14 @@ describe('useNewSessionScreenModel (Agent projection currentness)', () => {
         let hook: Awaited<ReturnType<typeof renderNewSessionScreenModel>> | undefined;
         try {
             hook = await renderNewSessionScreenModel();
-            const model = hook.getCurrent();
-            expect(model?.wizardProps?.profiles.profiles.map((entry: AIBackendProfile) => entry.id)).toContain(profile.id);
-            expect(model?.wizardProps?.agent.agentPickerSelectedOptionId).toBe(
+            const model = wizard(hook.getCurrent());
+            expect(model.profiles.profiles.map((entry: AIBackendProfile) => entry.id)).toContain(profile.id);
+            expect(model.agent.agentPickerSelectedOptionId).toBe(
                 'agent:happier.agent.custom-acp/custom-acp:definition:review-agent',
             );
             // Missing catalog availability must retain intent, not silently
             // select a bundled fallback or dispatch a Session spawn.
-            expect(model?.wizardProps?.agent.selectedBackendEntry).toBeNull();
+            expect(model.agent.selectedBackendEntry).toBeNull();
             expect(sessionSpawnNewActionBoundarySpy).not.toHaveBeenCalled();
         } finally {
             await hook?.unmount();
@@ -774,6 +722,9 @@ describe('useNewSessionScreenModel (Agent projection currentness)', () => {
         expect(pickerOptionIds(model)).not.toContain(ACME_TARGET_KEY);
         expect(wizard(model).agent.selectedBackendEntry?.backendTargetKey).toBeUndefined();
         expect(wizard(model).agent.agentLabel).not.toBe('Acme Review Provider');
+        expect(wizard(model).agent.agentPickerSelectedOptionId).toBe(ACME_TARGET_KEY);
+        expect(wizard(model).footer.canCreate).toBe(false);
+        expect(wizard(model).footer.connectionStatus?.text).toBe('machineAgents.checking');
 
         // The current picker owner uses its compact single-bundled-Agent
         // presentation instead of an option array when no external entry exists.
@@ -823,7 +774,7 @@ describe('useNewSessionScreenModel (Agent projection currentness)', () => {
         await hook.unmount();
     });
 
-    it('drops the stale external target when the authoritative projection arrives without it', async () => {
+    it('drops the retired external entry without replacing the authored target', async () => {
         setProjection('ready', buildAcmeProjectionInputs({ title: 'Acme Review Provider', generation: 7 }));
         const hook = await renderNewSessionScreenModel();
         let model = hook.getCurrent();
@@ -838,8 +789,13 @@ describe('useNewSessionScreenModel (Agent projection currentness)', () => {
         model = hook.getCurrent();
 
         expect(pickerOptionIds(model)).not.toContain(ACME_TARGET_KEY);
-        expect(wizard(model).agent.selectedBackendEntry?.backendTargetKey).toBe(CLAUDE_TARGET_KEY);
-        expect(wizard(model).agent.agentPickerSelectedOptionId).not.toBe(ACME_TARGET_KEY);
+        // The selection owner preserves explicit picker intent. A catalog
+        // withdrawal removes availability; it cannot pick a different Agent.
+        expect(wizard(model).agent.selectedBackendEntry).toBeNull();
+        expect(wizard(model).agent.agentPickerSelectedOptionId).toBe(ACME_TARGET_KEY);
+        expect(wizard(model).footer.canCreate).toBe(false);
+        await invokeHookAction(() => wizard(hook.getCurrent()).footer.handleCreateSession?.());
+        expect(sessionSpawnNewActionBoundarySpy).not.toHaveBeenCalled();
 
         await hook.unmount();
     });
@@ -869,7 +825,11 @@ describe('useNewSessionScreenModel (Agent projection currentness)', () => {
         model = hook.getCurrent();
 
         expect(pickerOptionIds(model)).not.toContain(ACME_TARGET_KEY);
-        expect(wizard(model).agent.selectedBackendEntry?.backendTargetKey).toBe(CLAUDE_TARGET_KEY);
+        expect(wizard(model).agent.selectedBackendEntry).toBeNull();
+        expect(wizard(model).agent.agentPickerSelectedOptionId).toBe(ACME_TARGET_KEY);
+        expect(wizard(model).footer.canCreate).toBe(false);
+        await invokeHookAction(() => wizard(hook.getCurrent()).footer.handleCreateSession?.());
+        expect(sessionSpawnNewActionBoundarySpy).not.toHaveBeenCalled();
 
         await hook.unmount();
     });
@@ -901,9 +861,13 @@ describe('useNewSessionScreenModel (Agent projection currentness)', () => {
         const inventoryKey = serverAccountScopedResourceKey(
             { serverId: serverState.id, accountId: 'currentness-account' }, 'machine-agents', 'machine-1',
         );
-        await vi.waitFor(() => expect(machineAgentInventoryStore.read(inventoryKey).agents).toEqual([
-            expect.objectContaining({ agentId: ACME_AGENT_ID, state: 'notInstalled', installed: false }),
-        ]));
+        await vi.waitFor(() => {
+            expect(machineAgentInventoryStore.read(inventoryKey)).toMatchObject({ status: 'ready' });
+            expect(machineAgentInventoryStore.read(inventoryKey).agents).toEqual(expect.arrayContaining([
+                expect.objectContaining({ agentId: ACME_AGENT_ID, state: 'notInstalled', installed: false, stale: false }),
+            ]));
+            expect(pickerOption(hook.getCurrent(), ACME_TARGET_KEY)?.disabled).toBe(false);
+        });
         model = hook.getCurrent();
         const acmeOption = pickerOption(model, ACME_TARGET_KEY);
         expect(acmeOption).toBeTruthy();

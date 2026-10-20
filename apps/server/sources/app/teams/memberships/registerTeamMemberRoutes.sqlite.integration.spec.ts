@@ -2,18 +2,24 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import tweetnacl from "tweetnacl";
 import { decodeBase64 } from "privacy-kit";
 import {
+    NO_TEAM_CAPABILITIES_V1,
+    TeamSummaryV1Schema,
+    TeamsPageV1Schema,
     openEncryptedDataKeyEnvelopeV1,
     sealEncryptedDataKeyEnvelopeV1,
     signAccountContentKeyBindingV1,
 } from "@happier-dev/protocol";
 
 import { createAuthenticatedTestApp } from "@/app/api/testkit/sqliteFastify";
+import { resolveEffectiveSessionAccess } from "@/app/session/access/sessionAccess";
+import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 
 import { registerTeamGroupRoutes } from "../groups/registerTeamGroupRoutes";
-import { listTeamsForActorInTx } from "../queries";
+import { listTeamsForActorInTx, resolveGrantableTeamForActorInTx } from "../queries";
+import { registerTeamRoutes } from "../registerTeamRoutes";
 import { admitTeamMemberInTx } from "./membershipService";
 import { registerTeamMemberRoutes } from "./registerTeamMemberRoutes";
 
@@ -31,6 +37,7 @@ describe("Team member and Group routes (SQLite integration)", () => {
             },
         });
         app = createAuthenticatedTestApp();
+        registerTeamRoutes(app);
         registerTeamMemberRoutes(app);
         registerTeamGroupRoutes(app);
         await app.ready();
@@ -150,6 +157,109 @@ describe("Team member and Group routes (SQLite integration)", () => {
         expect(await db.teamMembership.count({ where: { teamId, accountId: ownerAccountId } })).toBe(1);
         const after = await inTx((tx) => listTeamsForActorInTx(tx, { v: 1, actorAccountId: person.id, scope: "member", archived: "active" }));
         expect(after).toMatchObject({ ok: true, page: { items: [] } });
+    });
+
+    it("discovers a suspended native membership for leave without restoring roster or content access", async () => {
+        const { teamId, ownerAccountId } = await teamWithOwner("Suspended leave");
+        const person = await account();
+        const added = await post("/v1/teams/members/add", ownerAccountId, {
+            v: 1, teamId, accountId: person.id, role: "member", historyAccess: "all_existing",
+        });
+        expect(added.statusCode).toBe(200);
+        const membershipId = added.json().id as string;
+        const group = await post("/v1/teams/groups/create", ownerAccountId, {
+            v: 1, teamId, name: "Developers", requestKey: crypto.randomUUID(),
+        });
+        expect(group.statusCode).toBe(200);
+        expect((await post("/v1/teams/groups/members/add", ownerAccountId, {
+            v: 1, teamId, groupId: group.json().id, accountId: person.id, historyAccess: "all_existing",
+        })).statusCode).toBe(200);
+        const session = await db.session.create({ data: {
+            accountId: ownerAccountId, tag: crypto.randomUUID(), encryptionMode: "plain", metadata: "{}",
+            teamGrants: { create: { teamId, accessLevel: "view", effectiveAt: new Date(0) } },
+            groupGrants: { create: { teamGroupId: group.json().id, accessLevel: "view", effectiveAt: new Date(0) } },
+        } });
+        const access = () => resolveEffectiveSessionAccess(db, {
+            sessionId: session.id, accountId: person.id,
+            authentication: createPresentUserSessionAccessAuthentication({ authenticationEvidence: [] }),
+        });
+        expect(await access()).not.toBeNull();
+        expect((await post("/v1/teams/members/suspend", ownerAccountId, {
+            v: 1, teamId, membershipId,
+        })).statusCode).toBe(200);
+
+        const page = await post("/v1/teams/list", person.id, { v: 1, scope: "member", archived: "active" });
+        expect(page.statusCode).toBe(200);
+        const listed = TeamsPageV1Schema.parse(page.json()).items.find((item) => item.id === teamId);
+        expect(listed).toMatchObject({
+            viewerRole: "member", capabilities: { ...NO_TEAM_CAPABILITIES_V1, leave: true }, counts: null,
+        });
+        const detail = await post("/v1/teams/get", person.id, { v: 1, teamId });
+        expect(detail.statusCode).toBe(200);
+        expect(TeamSummaryV1Schema.parse(detail.json())).toEqual(listed);
+        for (const [url, payload] of [
+            ["/v1/teams/members/list", { v: 1, teamId, filter: "all" }],
+            ["/v1/teams/members/get", { v: 1, teamId, membershipId }],
+            ["/v1/teams/groups/list", { v: 1, teamId, archived: "active" }],
+        ] as const) {
+            expect((await post(url, person.id, payload)).statusCode).toBe(404);
+        }
+        for (const [url, payload] of [
+            ["/v1/teams/update", { v: 1, teamId, name: "Not permitted" }],
+            ["/v1/teams/archive", { v: 1, teamId }],
+            ["/v1/teams/restore", { v: 1, teamId }],
+            ["/v1/teams/policy/set", { v: 1, teamId, externalSharingPolicy: "disabled" }],
+            ["/v1/teams/logo/remove", { v: 1, teamId }],
+        ] as const) {
+            const denied = await post(url, person.id, payload);
+            expect(denied.statusCode).toBe(403);
+            expect(denied.json()).toEqual({ error: "team_forbidden" });
+        }
+        expect(await inTx((tx) => resolveGrantableTeamForActorInTx(tx, {
+            actorAccountId: person.id, teamId,
+        }))).toBeNull();
+        expect(await access()).toBeNull();
+
+        const left = await post("/v1/teams/members/leave", person.id, { v: 1, teamId });
+        expect(left.statusCode).toBe(200);
+        expect(left.json()).toEqual({ status: "removed", membershipId });
+        expect(await db.teamGroupMembership.count({ where: { teamMembershipId: membershipId } })).toBe(0);
+        const after = await post("/v1/teams/list", person.id, { v: 1, scope: "member", archived: "active" });
+        expect(TeamsPageV1Schema.parse(after.json()).items).toEqual([]);
+        expect((await post("/v1/teams/get", person.id, { v: 1, teamId })).statusCode).toBe(404);
+        const rejoined = await post("/v1/teams/members/add", ownerAccountId, {
+            v: 1, teamId, accountId: person.id, role: "member", historyAccess: "from_membership",
+        });
+        expect(rejoined.statusCode).toBe(200);
+        expect(rejoined.json()).toMatchObject({ status: "active", historyAccess: "from_membership" });
+        expect(rejoined.json().id).not.toBe(membershipId);
+        expect(await db.teamGroupMembership.count({ where: { teamMembershipId: rejoined.json().id } })).toBe(0);
+        expect(await access()).toBeNull();
+    });
+
+    it("keeps Team authentication qualification on suspended self-leave", async () => {
+        const { teamId, ownerAccountId } = await teamWithOwner("Qualified suspended leave");
+        const person = await account();
+        const admitted = await inTx((tx) => admitTeamMemberInTx(tx, {
+            teamId, accountId: person.id, role: "member", historyAccess: "from_membership",
+        }));
+        if (!admitted.ok) throw new Error("member admission failed");
+        expect((await post("/v1/teams/members/suspend", ownerAccountId, {
+            v: 1, teamId, membershipId: admitted.membership.teamMembershipId,
+        })).statusCode).toBe(200);
+        await db.team.update({ where: { id: teamId }, data: {
+            authenticationPolicy: { v: 1, mode: "restricted", accepted: [{ kind: "team_connection", connectionId: "required-sso" }] },
+        } });
+        const page = await post("/v1/teams/list", person.id, { v: 1, scope: "member", archived: "active" });
+        expect(page.statusCode).toBe(200);
+        expect(TeamsPageV1Schema.parse(page.json()).items.find((item) => item.id === teamId)?.capabilities)
+            .toEqual(NO_TEAM_CAPABILITIES_V1);
+        for (const url of ["/v1/teams/get", "/v1/teams/members/leave"]) {
+            const response = await post(url, person.id, { v: 1, teamId });
+            expect(response.statusCode).toBe(503);
+            expect(response.json()).toMatchObject({ error: "team_authentication_unavailable" });
+        }
+        expect(await db.teamMembership.findUnique({ where: { id: admitted.membership.teamMembershipId } })).not.toBeNull();
     });
 
     it("carries one member through add, role, suspend, reactivate, and remove", async () => {

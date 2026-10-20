@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
+import { SessionSpawnNewResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { readLocalConversationVoiceSettings } from '@/sync/domains/settings/voiceSettings';
 import { createSessionFixture } from '@/dev/testkit';
 import type { PartialOptions as ElevenLabsStartOptions } from '@elevenlabs/client';
@@ -103,8 +104,14 @@ describe('local voice engine local conversation binding', () => {
         });
     }, 60_000);
 
-    it('publishes connecting while the hidden Voice Home session is being prepared', async () => {
+    it('publishes connecting for a targetless lifecycle start and admits its host-owned Voice Home creation', async () => {
         await configureAgentMode();
+        const storage = await getStorage();
+        storage.__setState({ settings: { ...storage.getState().settings,
+            actionsSettingsV1: { v: 1, actions: {
+                'session.spawn_new': { approvalRequiredSurfaces: ['voice'] },
+            } },
+        } });
         let resolveBinding!: () => void;
         interceptVoiceSpawn(async () => {
             await new Promise<void>((resolve) => {
@@ -112,8 +119,11 @@ describe('local voice engine local conversation binding', () => {
             });
         });
 
-        const start = localVoiceEngine.toggleLocalVoiceTurn('');
-        await vi.waitFor(() => expect(resolveBinding).toBeTypeOf('function'));
+        const { createVoiceSessionLifecycleController } = await import('@/voice/session/voiceSessionLifecycleController');
+        const lifecycle = createVoiceSessionLifecycleController();
+        lifecycle.setConfiguredProviderId('local_conversation');
+        const start = lifecycle.toggle(null);
+        await Promise.race([start, vi.waitFor(() => expect(resolveBinding).toBeTypeOf('function'))]);
         const preparingSnapshot = await getLocalConversationSnapshot();
         resolveBinding();
         await start;
@@ -124,6 +134,37 @@ describe('local voice engine local conversation binding', () => {
             status: 'connecting',
             canStop: true,
         });
+        expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', canStop: true });
+        await lifecycle.dispose();
+    }, 60_000);
+
+    it('retains explicit UI approval custody as a typed Start refusal instead of parsing it as a spawned Session', async () => {
+        await configureAgentMode();
+        const storage = await getStorage();
+        storage.__setState({ settings: { ...storage.getState().settings,
+            actionsSettingsV1: { v: 1, actions: {
+                'session.spawn_new': { approvalRequiredSurfaces: ['ui'] },
+            } },
+        } });
+        const { createArtifactStoreBoundary } = await import('@/dev/testkit/harness/artifactStoreBoundary');
+        const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
+        setLocalVoiceHttpResponder(request => artifacts.handle(request.path, {
+            method: request.method, headers: request.headers,
+            ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }),
+        }) ?? undefined);
+        const { createVoiceSessionLifecycleController } = await import('@/voice/session/voiceSessionLifecycleController');
+        const lifecycle = createVoiceSessionLifecycleController();
+        lifecycle.setConfiguredProviderId('local_conversation');
+        try {
+            await expect(lifecycle.toggle(null)).rejects.toMatchObject({ code: 'approval_request_created' });
+            expect(lifecycle.getSnapshot()).toMatchObject({
+                status: 'disconnected', errorMessage: 'approval_request_created', canStop: false,
+            });
+            expect(artifacts.list()).toHaveLength(1);
+            expect(machineRpcWithServerScope.mock.calls.filter(([request]) => request.method === RPC_METHODS.SESSION_SPAWN_NEW)).toEqual([]);
+        } finally {
+            await lifecycle.dispose();
+        }
     }, 60_000);
 
     it('surfaces a safe retryable error when hidden Voice Home preparation fails', async () => {
@@ -147,6 +188,39 @@ describe('local voice engine local conversation binding', () => {
             errorMessage: 'action_failed',
             errorRecoveryAction: 'retry',
         });
+        const { getVoiceConversationRuntimeSnapshot } = await import('@/voice/runtime/machine/voiceConversationRuntimeStore');
+        expect(getVoiceConversationRuntimeSnapshot().error).toHaveProperty('cause.code', 'action_failed');
+        expect(JSON.stringify(getVoiceConversationRuntimeSnapshot().error)).not.toContain(preparationFailure.message);
+    }, 60_000);
+
+    it('keeps a signed-out Agent refusal visible and offers authentication recovery before capture', async () => {
+        await configureAgentMode();
+        const incumbent = machineRpcWithServerScope.getMockImplementation();
+        if (!incumbent) throw new Error('Missing canonical machine Socket boundary');
+        machineRpcWithServerScope.mockImplementation(async (request: MachineRequest) => {
+            if (request.method === RPC_METHODS.SESSION_SPAWN_NEW) {
+                SessionSpawnNewInputV2Schema.parse(request.payload);
+                return SessionSpawnNewResultV1Schema.parse({
+                    type: 'error', code: 'agent_signed_out', agentId: 'claude', retryable: false,
+                });
+            }
+            return incumbent(request);
+        });
+
+        const { createVoiceSessionLifecycleController } = await import('@/voice/session/voiceSessionLifecycleController');
+        const lifecycle = createVoiceSessionLifecycleController();
+        lifecycle.setConfiguredProviderId('local_conversation');
+        try {
+            await expect(lifecycle.toggle(null)).rejects.toMatchObject({ code: 'agent_signed_out' });
+            expect(lifecycle.getSnapshot()).toMatchObject({
+                status: 'error', canStop: false,
+                errorCode: 'authentication_required', errorMessage: 'agent_signed_out',
+                errorRecoveryAction: 'connect_agent', errorPresentation: 'error',
+            });
+            expect(localVoiceSpeechOutputBoundary.getAudioSessionCoordinator().getSnapshot().leaseCount).toBe(0);
+        } finally {
+            await lifecycle.dispose();
+        }
     }, 60_000);
 
     it('does not start capture when Voice Home preparation settles after Stop', async () => {

@@ -19,7 +19,7 @@ import { ACTIONS_PROMPT_DOCUMENT_SETTINGS } from '@/components/settings/actions/
 import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
 import { normalizeActionsSettings } from '@/components/settings/actions/normalizeActionsSettings';
 import { promptCollectionItemHref } from '@/components/settings/prompts/collection/promptCollectionModel';
-import { WorkSection, WorkSectionEmptyLine } from '@/components/sessions/work/WorkSection';
+import { WorkSection, WorkSectionBlock, WorkSectionEmptyLine } from '@/components/sessions/work/WorkSection';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Icon } from '@/components/ui/icons/Icon';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -29,7 +29,6 @@ import { Item } from '@/components/ui/lists/Item';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { Modal } from '@/modal';
 import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 import { isSessionAccessOwner } from '@/sync/engine/sessions/normalizeSessionAccessProjection';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
@@ -45,7 +44,6 @@ import {
 } from '@/sync/ops/promptLibrary/sessionInstructions';
 import { t } from '@/text';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
-import { useDeviceType } from '@/utils/platform/responsive';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import {
@@ -130,6 +128,7 @@ export const SessionInstructionsSection = React.memo(
     });
     return (
       <SessionInstructionsBody
+        key={JSON.stringify([serverId, session.id])}
         session={session}
         serverId={serverId}
         source={source}
@@ -231,17 +230,7 @@ export const SessionInstructionsBody = React.memo(function SessionInstructionsBo
   }, [execution.execute, execution.isCurrent, router, serverId, session, settle, target]);
   const detach = React.useCallback(() => {
     fireAndForget(
-      (async () => {
-        const confirmed = await Modal.confirm(
-          t('sessionInstructions.detach'),
-          t('sessionInstructions.detachHelp'),
-          {
-            confirmText: t('sessionInstructions.detach'),
-          },
-        );
-        if (confirmed)
-          await settle(() => sessionInstructionsActions.set(target, null, undefined, execution.execute));
-      })(),
+      settle(() => sessionInstructionsActions.set(target, null, undefined, execution.execute)),
       { tag: 'SessionInstructions.detach' },
     );
   }, [execution.execute, settle, target]);
@@ -333,9 +322,9 @@ export const SessionInstructionsBody = React.memo(function SessionInstructionsBo
           ) : null}
         </>
       ) : status === 'none' ? (
-        <View style={styles.invite}>
+        <WorkSectionBlock style={styles.invite}>
           <Text style={styles.inviteText}>{t('sessionInstructions.none')}</Text>
-          <View style={styles.actions}>
+          <View style={[styles.actions, styles.inviteActions]}>
             <RoundButton
               testID="session-work-instructions.create"
               size="small"
@@ -351,7 +340,7 @@ export const SessionInstructionsBody = React.memo(function SessionInstructionsBo
               onAttach={attach}
             />
           </View>
-        </View>
+        </WorkSectionBlock>
       ) : repairable ? (
         <View style={styles.repair}>
           <Item
@@ -493,7 +482,6 @@ function SessionInstructionsAgentEdits(props: Readonly<{
   settle: (run: () => Promise<ActionExecuteResult>) => Promise<boolean>;
 }>) {
   const accountScope = useActiveServerAccountScope();
-  const deviceType = useDeviceType();
   const rawSettings = useSetting('actionsSettingsV1');
   const writeSetting = useSettingActionWriter({ serverId: props.serverId });
   const settings = React.useMemo(
@@ -516,20 +504,20 @@ function SessionInstructionsAgentEdits(props: Readonly<{
     )
   )
     return null;
-  const stacked = deviceType === 'phone';
   return (
     <Item
       testID="session-work-instructions.agentEdits"
       title={t('sessionInstructions.agentEdits')}
       subtitle={t('sessionInstructions.policyScope')}
       showChevron={false}
-      accessoryLayout={stacked ? 'stacked' : 'adaptive'}
+      // The Work pane is a narrow column on every device: the choice sits beneath its words, where they start.
+      accessoryLayout="stacked"
       rightElement={
         <ActionSettingsTargetModeControl
           controlState={policy.controlState}
           accessibilityLabel={t('sessionInstructions.agentEdits')}
           testIDPrefix="session-work-instructions.agentEdits"
-          layout={stacked ? 'stacked' : 'inline'}
+          layout="stacked"
           disabled={props.disabled}
           onChange={(value) => {
             if (value !== 'on') {
@@ -556,6 +544,8 @@ export function AttachExistingInstructions(
     testID?: string;
     /** Beside a primary way to start (Create instructions): the quiet second choice, not a second button. */
     quiet?: boolean;
+    /** Written as words on a line (a New bot's Instructions line), not a button. */
+    link?: boolean;
     onAttach: (ref: PromptDocArtifactRefV1) => void;
   }>,
 ) {
@@ -573,13 +563,23 @@ export function AttachExistingInstructions(
     return null;
   return (
     <View ref={anchorRef} collapsable={false}>
-      <RoundButton
-        testID={props.testID ?? 'session-work-instructions.attach'}
-        size="small"
-        display={props.quiet ? 'inverted' : 'secondary'}
-        title={props.title}
-        onPress={() => setOpen(true)}
-      />
+      {props.link ? (
+        <TextLinkButton
+          testID={props.testID ?? 'session-work-instructions.attach'}
+          tone={props.quiet ? 'quiet' : 'strong'}
+          label={props.title}
+          expanded={open}
+          onPress={() => setOpen(true)}
+        />
+      ) : (
+        <RoundButton
+          testID={props.testID ?? 'session-work-instructions.attach'}
+          size="small"
+          display={props.quiet ? 'inverted' : 'secondary'}
+          title={props.title}
+          onPress={() => setOpen(true)}
+        />
+      )}
       {open ? (
         <AttachExistingMenu
           anchorRef={anchorRef}
@@ -647,8 +647,11 @@ const stylesheet = StyleSheet.create((theme) => ({
     color: theme.colors.state.warning.foreground,
   },
   invite: {
-    paddingHorizontal: HAPPIER_WORK_PANE_METRICS.rowInsetPx,
     gap: theme.space.s10,
+  },
+  // Inside the invitation the buttons share its text edge.
+  inviteActions: {
+    paddingHorizontal: 0,
   },
   inviteText: {
     ...Typography.default(),

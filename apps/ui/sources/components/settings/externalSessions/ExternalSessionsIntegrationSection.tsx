@@ -17,6 +17,7 @@ import { restoreFocusToBestTarget } from '@/keyboard/focusReturn';
 import type { PluginDiagnosticDataV1 } from '@happier-dev/protocol';
 import type { PluginSessionHookInstallPreviewV1 } from '@happier-dev/protocol';
 import { announceAccessibilityMessage } from '@/components/ui/accessibility/announceAccessibilityMessage';
+import { HappyError } from '@/utils/errors/errors';
 
 import {
     filterExternalSessionsAutoLinkSources,
@@ -316,10 +317,11 @@ export const ExternalSessionsIntegrationSection = React.memo(function ExternalSe
         );
         try {
             if (action === 'review_install') {
+                armIntegrationFocusReturn(integration, action, pendingKey);
                 await operations.reviewAndInstall(
                     integration,
                     async (preview) => {
-                        const confirmed = await Modal.confirm(
+                        return await Modal.confirm(
                             t('externalSessions.settingsIntegrationReviewTitle', { agent: integration.agentTitle }),
                             t('externalSessions.settingsIntegrationReviewBody', {
                                 entries: formatInstallPreview(preview),
@@ -328,29 +330,16 @@ export const ExternalSessionsIntegrationSection = React.memo(function ExternalSe
                                 confirmText: t('externalSessions.settingsIntegrationActionInstall'),
                             },
                         );
-                        if (confirmed) {
-                            armIntegrationFocusReturn(integration, action, pendingKey);
-                        }
-                        return confirmed;
                     },
                 );
                 return;
             }
-            if (action === 'uninstall') {
-                const confirmed = await Modal.confirm(
-                    t('externalSessions.settingsIntegrationUninstallTitle', { agent: integration.agentTitle }),
-                    t('externalSessions.settingsIntegrationUninstallBody'),
-                    {
-                        confirmText: t('externalSessions.settingsIntegrationActionUninstall'),
-                        destructive: true,
-                    },
-                );
-                if (!confirmed) return;
-            }
             armIntegrationFocusReturn(integration, action, pendingKey);
             await resolveActionOperation(action, operations)(integration);
-        } catch {
+        } catch (error) {
             discardPendingFocusReturn(pendingKey);
+            if (error instanceof HappyError && (error.code === 'approval_rejected' || error.code === 'approval_canceled'
+                || error.code === 'approval_request_created' || error.code === 'cancelled')) return;
             await Modal.alertAsync(
                 t('common.error'),
                 t('externalSessions.settingsIntegrationActionFailed'),
@@ -823,7 +812,6 @@ export const ExternalSessionsIntegrationSection = React.memo(function ExternalSe
                             {inventoryAnnouncementElement}
                         </>
                     )}
-                    backendPreference="auto"
                     initialNumToRender={6}
                     maxToRenderPerBatch={4}
                     windowSize={7}

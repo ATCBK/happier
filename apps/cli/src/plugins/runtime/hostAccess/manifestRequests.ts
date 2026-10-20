@@ -16,7 +16,13 @@ type ManifestHostAccessContributionFamily =
     | 'backgroundServices'
     | 'projectNativeAdapters'
     | 'notificationChannels'
-    | 'connectedAccountDescriptors';
+    | 'connectedAccountDescriptors'
+    | 'composerReferences'
+    | 'composerAttachments'
+    | 'requestInterceptors'
+    | 'events'
+    | 'mcp.servers'
+    | 'mcp.discoverySources';
 
 type ManifestHostAccessContributionDeclaration = Readonly<{
     id: string;
@@ -37,6 +43,36 @@ type ManifestHostAccessContributionPolicy = Readonly<{
  * contributions select the request ids their declaration names.
  */
 const MANIFEST_HOST_ACCESS_CONTRIBUTION_POLICIES: readonly ManifestHostAccessContributionPolicy[] = Object.freeze([
+    Object.freeze({
+        family: 'composerReferences',
+        scope: 'manifest',
+        readDeclarations: (manifest: Pick<CanonicalPluginManifest, 'contributes'>) => manifest.contributes.composerReferences,
+    }),
+    Object.freeze({
+        family: 'composerAttachments',
+        scope: 'manifest',
+        readDeclarations: (manifest: Pick<CanonicalPluginManifest, 'contributes'>) => manifest.contributes.composerAttachments,
+    }),
+    Object.freeze({
+        family: 'requestInterceptors',
+        scope: 'manifest',
+        readDeclarations: (manifest: Pick<CanonicalPluginManifest, 'contributes'>) => manifest.contributes.requestInterceptors,
+    }),
+    Object.freeze({
+        family: 'events',
+        scope: 'manifest',
+        readDeclarations: (manifest: Pick<CanonicalPluginManifest, 'contributes'>) => manifest.contributes.events,
+    }),
+    Object.freeze({
+        family: 'mcp.servers',
+        scope: 'manifest',
+        readDeclarations: (manifest: Pick<CanonicalPluginManifest, 'contributes'>) => manifest.contributes.mcp.servers,
+    }),
+    Object.freeze({
+        family: 'mcp.discoverySources',
+        scope: 'manifest',
+        readDeclarations: (manifest: Pick<CanonicalPluginManifest, 'contributes'>) => manifest.contributes.mcp.discoverySources,
+    }),
     Object.freeze({
         family: 'projectNativeAdapters',
         scope: 'manifest',
@@ -100,9 +136,10 @@ export function projectRequiredManifestEnvironmentNames(
 }
 
 /**
- * External-session observation accepts only workspace-relative paths. Other
- * filesystem roots remain available solely through the normal invocation
- * binding that owns their root resolution and operation checks.
+ * Projects only workspace-relative manifest grants into observation admission.
+ * Other plugin filesystem grants retain their normal invocation binding and
+ * operation checks. Host-materialized Session state is admitted from captured
+ * host custody by the observation path validator, never from this projection.
  */
 export function projectRequiredManifestWorkspaceFilesystemReadPaths(
     manifest: Pick<CanonicalPluginManifest, 'hostAccess'>,

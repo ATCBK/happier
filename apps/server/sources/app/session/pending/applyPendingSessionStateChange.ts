@@ -1,5 +1,5 @@
 import { markPendingStateChangedRecipients } from "@/app/session/pending/markPendingStateChangedRecipients";
-import type { SessionRecipientCursor } from "@/app/session/changeTracking/markSessionProjectionRecipientsChanged";
+import type { SessionRecipientPublication } from "@/app/session/changeTracking/markSessionProjectionRecipientsChanged";
 import type { Tx } from "@/storage/inTx";
 import { didSessionActivityBadgeSignalChange } from "@/app/activity/accountActivityBadge";
 import { SESSION_TRANSCRIPT_PUBLICATION_SELECT } from "@/app/session/sessionTranscriptPublicationPolicy";
@@ -16,7 +16,7 @@ export async function applyPendingSessionStateChange(params: {
     pendingCount: number;
     pendingBlockedCount: number;
     pendingVersion: number;
-    recipientCursors: SessionRecipientCursor[];
+    recipientCursors: SessionRecipientPublication[];
     badgeAttentionChanged: boolean;
     meaningfulActivityAt?: Date;
 }> {

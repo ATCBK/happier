@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
@@ -24,6 +24,10 @@ const [{ getActiveServerSnapshot }, { setActiveServerId },
     import('@/sync/runtime/orchestration/appliedActiveServerRuntime'), import('./remoteHostOperations'),
     import('@/sync/domains/settings/settings'),
 ]);
+
+// Global test cleanup resets runtimeFetch after every case. Reinstall the
+// genuine HTTP boundary before the next captured Account can issue a request.
+beforeEach(() => { installHomeGovernanceBoundaries(home); });
 
 afterEach(async () => {
     await standardCleanup();
@@ -115,7 +119,7 @@ it.each(['list', 'read', 'duplicate'] as const)('serves the current destination 
     const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
     const account = await captureLazyActionAccountContext(serverId);
     const execute = createUiRemoteHostActionExecuteV1(account);
-    const request = operation === 'duplicate'
+    const request: Parameters<typeof execute>[0] = operation === 'duplicate'
         ? { actionId: 'remote_hosts.duplicate' as const, input: { hostId: host.id, expectedRevision: 4, newHostId: 'copy-host', name: 'Copy' } }
         : operation === 'read' ? { actionId: 'remote_hosts.read' as const, input: { hostId: host.id } }
         : { actionId: 'remote_hosts.list' as const, input: {} };

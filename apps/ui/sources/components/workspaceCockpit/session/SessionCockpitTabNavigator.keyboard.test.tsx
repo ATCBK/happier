@@ -17,6 +17,10 @@ import {
     resolveSessionCockpitMobileNavigatorSurfaces,
 } from './sessionCockpitMobileCatalog';
 import type { SessionMobileSurface } from './sessionCockpitState';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { SessionViewerDestinationScope } from '@/components/sessions/viewer/SessionViewerDestinationScope';
+import { SessionViewerControllerProvider } from '@/components/sessions/viewer/SessionViewerControllerProvider';
+import { useOptionalSessionViewerController, type SessionViewerController } from '@/components/sessions/viewer/SessionViewerController';
 
 const navigatorState = vi.hoisted(() => ({
     screenOptions: null as null | Record<string, unknown>,
@@ -153,10 +157,11 @@ vi.mock('@react-navigation/bottom-tabs', () => ({
             backBehavior?: string;
             screenOptions?: Record<string, unknown>;
             tabBar?: (props: {
-                state: { index: number; routes: Array<{ key: string; name: string }> };
+                state: { index: number; routes: Array<{ key: string; name: string }>; history: Array<{ type: 'route'; key: string }> };
                 navigation: {
                     emit: () => { defaultPrevented: boolean };
                     navigate: (name: string) => void;
+                    reset: (state: { index: number; routes: Array<{ key: string; name: string }>; history?: Array<{ type: 'route'; key: string }> }) => void;
                 };
             }) => React.ReactNode;
         }) => {
@@ -213,10 +218,16 @@ vi.mock('@react-navigation/bottom-tabs', () => ({
                 React.createElement('BottomTabNavigator', { screenOptions }, [
                     React.createElement(React.Fragment, { key: 'screens' }, children),
                     React.createElement(React.Fragment, { key: 'tab-bar' }, tabBar?.({
-                        state: { index: activeIndex, routes },
+                        state: { index: activeIndex, routes, history: historyRef.current.map(key => ({ type: 'route' as const, key })) },
                         navigation: {
                             emit: () => ({ defaultPrevented: false }),
                             navigate,
+                            reset: (state) => {
+                                historyRef.current = (state.history ?? []).map(entry => (
+                                    state.routes.find(route => route.key === entry.key)?.name ?? 'chat'
+                                ));
+                                setActiveName(state.routes[state.index]?.name ?? 'chat');
+                            },
                         },
                     })),
                 ]),
@@ -348,6 +359,39 @@ function createSettledEmptyPluginProjection() {
 }
 
 describe('SessionCockpitTabNavigator keyboard behavior', () => {
+    it.each([true, false])('lands on Chat only when the destination viewer is presented at phone cockpit mount (%s)', async (presented) => {
+        const { SessionCockpitTabNavigator } = await import('./SessionCockpitTabNavigator');
+        const { getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
+        const home = getServerProfileById('server-session');
+        if (!home) throw new Error('Navigator fixture Home is missing');
+        await TokenStorage.setCredentialsForServerUrl(home.serverUrl, { serverId: home.id }, {
+            token: `e30.${Buffer.from(JSON.stringify({ sub: 'account-a' })).toString('base64url')}.signature`,
+        });
+        const observed: { viewer: SessionViewerController | null } = { viewer: null };
+        function ViewerProbe() { observed.viewer = useOptionalSessionViewerController(); return null; }
+        function Tree(props: Readonly<{ cockpit: boolean }>) {
+            return <SessionViewerDestinationScope sessionId="s1" serverId={home!.id}>
+                <SessionViewerControllerProvider sessionId="s1" serverId={home!.id} phone canPresentSource={() => true} openDocked={() => {}}>
+                    <ViewerProbe />
+                </SessionViewerControllerProvider>
+                {props.cockpit ? <SessionCockpitTabNavigator initialSurface="browser" routeServerId={home!.id}
+                    scopeId="session:s1" sessionId="s1" terminalTabAvailable /> : null}
+            </SessionViewerDestinationScope>;
+        }
+        const screen = await renderScreen(<Tree cockpit={false} />);
+        try {
+            if (presented) await act(async () => { observed.viewer!.port.apply({ kind: 'viewer.open', source: 'computer' }); });
+            await screen.update(<Tree cockpit />);
+            expect(navigatorState.activeRouteName).toBe(presented ? 'chat' : 'browser');
+            // Later presentation changes must not route the person away from their chosen surface.
+            await act(async () => { observed.viewer!.port.apply(presented ? { kind: 'viewer.close' } : { kind: 'viewer.open', source: 'computer' }); });
+            expect(navigatorState.activeRouteName).toBe(presented ? 'chat' : 'browser');
+        } finally {
+            await screen.unmount();
+            await TokenStorage.removeCredentialsForServerUrl(home.serverUrl, { serverId: home.id });
+        }
+    });
+
     afterEach(() => {
         standardCleanup();
         stopObservingPersistence?.();
@@ -697,6 +741,26 @@ describe('SessionCockpitTabNavigator keyboard behavior', () => {
         ]);
     });
 
+    it('restores the phone surface and Back history after classic temporarily presents Chat', async () => {
+        const { SessionCockpitTabNavigator } = await import('./SessionCockpitTabNavigator');
+        const body = (experience: 'classic' | 'cockpit') => <SessionCockpitTabNavigator
+            experience={experience} initialSurface="chat" routeServerId="server-session"
+            scopeId="session:s1" sessionId="s1" terminalTabAvailable />;
+        const screen = await renderScreen(body('cockpit'));
+        await act(async () => { navigatorState.registeredChrome?.switchSurface('browse'); });
+        await act(async () => { navigatorState.registeredChrome?.switchSurface('git'); });
+        expect(navigatorState.activeRouteName).toBe('git');
+        const persisted = [...navigatorState.persistedSurfaces];
+        await screen.update(body('classic'));
+        expect(navigatorState.activeRouteName).toBe('chat');
+        expect(navigatorState.persistedSurfaces).toEqual(persisted);
+        await screen.update(body('cockpit'));
+        expect(navigatorState.activeRouteName).toBe('git');
+        await act(async () => { navigatorState.goBack?.(); });
+        expect(navigatorState.activeRouteName).toBe('browse');
+        expect(navigatorState.persistedSurfaces.at(-1)).toEqual({ sessionId: 's1', surface: 'browse' });
+    });
+
     it('follows the selected nested navigation route rather than a stale parent route', async () => {
         const { resolveSessionCockpitSurfaceFromNavigationState } = await import('./SessionCockpitTabNavigator');
 
@@ -734,7 +798,7 @@ describe('SessionCockpitTabNavigator keyboard behavior', () => {
         expect(screens).not.toContain('board');
         expect(screens).not.toContain('terminal');
 
-        for (const surface of ['navigation', 'browser', 'services']) {
+        for (const surface of ['navigation', 'browser', 'services'] as const) {
             await act(async () => {
                 navigatorState.registeredChrome?.switchSurface(surface);
             });

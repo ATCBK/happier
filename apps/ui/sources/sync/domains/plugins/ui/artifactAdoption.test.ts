@@ -5,11 +5,18 @@ import { DaemonPluginReactNativeBundleCacheIdentityV1Schema } from '@happier-dev
 import {
     PluginUiArtifactAdoptionOwner,
     readPluginUiDaemonProjectionSelection,
+    readPluginUiArtifactDaemonSources,
     readPluginUiReactNativeBundleCacheIdentity,
     resolvePluginUiRendererTechnicalAdmission,
 } from './artifactAdoption';
 
 describe('readPluginUiDaemonProjectionSelection', () => {
+    it('retains every byte supplier without admitting a Machine execution origin', () => {
+        const supply = { machineId: 'offline', serverId: 'home', phase: 'retainedOffline', interactionEnabled: false,
+            generation: 1, executionOrigin: null, occurrenceId: 'old', pluginVersion: '1.0.0', sourceCustody: null };
+        expect(readPluginUiArtifactDaemonSources({ hostSupplies: [supply, { ...supply, machineId: 'other' }, supply] }))
+            .toEqual([{ machineId: 'offline', serverId: 'home' }, { machineId: 'other', serverId: 'home' }]);
+    });
     it('reads only an explicit daemon-owned current projection stamp', () => {
         expect(readPluginUiDaemonProjectionSelection({
             artifactSelectionOwner: 'daemonProjection',

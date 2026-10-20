@@ -13,6 +13,7 @@ import {
     upsertServerProfile,
 } from '@/sync/domains/server/serverProfiles';
 import { storage } from '@/sync/domains/state/storageStore';
+import * as machineDisplayNames from '@/utils/sessions/machineDisplayNames';
 
 import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from './selectionPreferences';
 import { useMachineAdministrationExecutionTargetBinding } from './useExecutionTargetBinding';
@@ -32,6 +33,60 @@ afterEach(async () => {
 });
 
 describe('machine administration target demand', () => {
+    it.each(['select', 'clear'] as const)('remembers %s navigation past an unavailable route with Settings writes Off', async (intent) => {
+        const syncRuntime = await import('@/sync/syncEngine');
+        const requiredSync: typeof import('@/sync/sync') = createRequire(import.meta.url)('../../../sync.ts');
+        requiredSync.registerSyncRuntime(syncRuntime);
+        const previous = storage.getState();
+        const serverUrl = 'https://administration-route-recovery.example.test';
+        await upsertServerProfile({ serverUrl, name: 'Route recovery' });
+        const profile = await setServerProfileIdentityForUrl(serverUrl, 'srv_route_recovery');
+        if (!profile) throw new Error('Test profile was not created');
+        const scope = { serverId: profile.id, accountId: 'route-recovery-account' };
+        await network.addHome(serverUrl, scope.accountId);
+        await setActiveServerId(profile.id);
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        const saved = { serverIdentityId: 'srv_route_recovery', machineId: 'chosen-machine' };
+        const requested = { serverIdentityId: 'srv_route_recovery', machineId: 'missing-machine' };
+        try {
+            storage.setState(state => ({ profile: { ...state.profile, id: scope.accountId }, profileScope: scope, settingsScope: scope,
+                machineListByServerId: { [profile.id]: [createMachineFixture({ id: saved.machineId, activeAt: Date.now() }),
+                    createMachineFixture({ id: 'other-machine', activeAt: Date.now() })] },
+                machineListStatusByServerId: { [profile.id]: 'idle' },
+                settings: { ...state.settings, machineAdministrationTargetsLocalV1: { agents: saved },
+                    actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } } }));
+            const hook = await renderHook(() => useMachineAdministrationTargetSelection('agents', { initialTarget: requested }));
+            expect(hook.getCurrent().selectedTarget).toEqual(requested);
+            expect(hook.getCurrent().resolveExecutionTarget()).toBeNull();
+            await act(async () => hook.getCurrent().selectTarget({ ...saved, serverIdentityId: 'srv_wrong_home' }));
+            expect(hook.getCurrent().selectedTarget).toEqual(requested);
+            await act(async () => intent === 'select' ? hook.getCurrent().selectTarget(saved) : hook.getCurrent().clearTarget());
+            await vi.waitFor(() => expect(hook.getCurrent().selectedTarget).toEqual(intent === 'select' ? saved : null));
+            if (intent === 'select') {
+                await vi.waitFor(() => expect(hook.getCurrent().resolveExecutionTarget()?.target).toEqual(saved));
+            } else {
+                expect(hook.getCurrent().state.kind).toBe('unselected');
+                expect(hook.getCurrent().resolveExecutionTarget()).toBeNull();
+            }
+            await hook.unmount();
+        } finally { storage.setState(previous); await removeServerProfile(profile.id); }
+    });
+    it('keeps an unavailable explicit route target instead of borrowing the saved Machine on another Home', async () => {
+        const previous = storage.getState();
+        const saved = { serverIdentityId: 'srv_saved', machineId: 'same-machine' };
+        const requested = { serverIdentityId: 'srv_requested', machineId: 'same-machine' };
+        try {
+            storage.setState(state => ({ settings: { ...state.settings,
+                machineAdministrationTargetsLocalV1: { agents: saved } } }));
+            const hook = await renderHook(() => useMachineAdministrationTargetSelection('agents', {
+                enabled: false, initialTarget: requested,
+            }));
+            expect(hook.getCurrent().selectedTarget).toEqual(requested);
+            expect(hook.getCurrent().state).toMatchObject({ kind: 'missing', target: requested });
+            expect(hook.getCurrent().resolveExecutionTarget()).toBeNull();
+            expect(storage.getState().settings.machineAdministrationTargetsLocalV1.agents).toEqual(saved);
+        } finally { storage.setState(previous); }
+    });
     it('leaves Plugin administration unresolved when more than one Account machine is eligible', async () => {
         // Vitest's ESM graph and the lazy Node require boundary have separate
         // module instances. Register the real engine in the latter, as app entry does.
@@ -59,11 +114,32 @@ describe('machine administration target demand', () => {
                 machineListStatusByServerId: { [profile.id]: 'idle' },
                 settings: { ...state.settings, machineAdministrationTargetsLocalV1: {} },
             }));
-            const hook = await renderHook(() => useMachineAdministrationTargetSelection(selectionKey));
-            expect(hook.getCurrent().selectedTarget).toBeNull();
-            expect(hook.getCurrent().resolveExecutionTarget()).toBeNull();
-            expect(storage.getState().settings.machineAdministrationTargetsLocalV1[selectionKey]).toBeUndefined();
-            await hook.unmount();
+            // Observe actual projection work; the spy delegates to the real name owner.
+            const names = vi.spyOn(machineDisplayNames, 'resolveMachineDisplayNameParts');
+            let maxNameProjectionsPerRender = 0;
+            const hook = await renderHook(() => {
+                const before = names.mock.calls.length;
+                const selection = useMachineAdministrationTargetSelection(selectionKey);
+                maxNameProjectionsPerRender = Math.max(maxNameProjectionsPerRender, names.mock.calls.length - before);
+                return selection;
+            });
+            try {
+                expect(hook.getCurrent().pickerRows).toHaveLength(2);
+                expect(maxNameProjectionsPerRender).toBe(1);
+                expect(hook.getCurrent().candidates.every((candidate, index) => candidate === hook.getCurrent().pickerRows[index]?.candidate)).toBe(true);
+                expect(hook.getCurrent().selectedTarget).toBeNull();
+                expect(hook.getCurrent().resolveExecutionTarget()).toBeNull();
+                expect(storage.getState().settings.machineAdministrationTargetsLocalV1[selectionKey]).toBeUndefined();
+                await act(async () => storage.setState({ machineListByServerId: { [profile.id]: [other,
+                    createMachineFixture({ ...machine, metadata: { ...machine.metadata!, displayName: 'Renamed machine' } }),
+                ] } }));
+                const updated = hook.getCurrent();
+                expect(updated.candidates.find(candidate => candidate.target.machineId === machine.id)?.displayName).toBe('Renamed machine');
+                expect(updated.candidates.every((candidate, index) => candidate === updated.pickerRows[index]?.candidate)).toBe(true);
+            } finally {
+                await hook.unmount();
+                names.mockRestore();
+            }
         } finally {
             storage.setState(previous);
             await removeServerProfile(profile.id);
@@ -171,9 +247,22 @@ describe('machine administration target demand', () => {
             await act(async () => {
                 storage.setState({ machineListStatusByServerId: { [profile.id]: 'loading' } });
             });
+            expect(initialBinding.resolveExactExecutionTarget(targetA)?.machine.daemonStateVersion).toBe(2);
+            await act(async () => {
+                storage.setState({ machineListByServerId: { [profile.id]: [{
+                    ...machineA, daemonStateVersion: 2,
+                    keyBasis: { metadataVersion: machineA.metadataVersion + 1, daemonStateVersion: 2, dataEncryptionKey: machineA.dataEncryptionKey ?? null },
+                }, machineB] } });
+            });
             expect(initialBinding.resolveExactExecutionTarget(targetA)).toBeNull();
             await act(async () => {
-                storage.setState({ machineListStatusByServerId: { [profile.id]: 'idle' } });
+                storage.setState({
+                    machineListStatusByServerId: { [profile.id]: 'idle' },
+                    machineListByServerId: { [profile.id]: [{
+                        ...machineA, metadataVersion: machineA.metadataVersion + 1, daemonStateVersion: 2,
+                        keyBasis: { metadataVersion: machineA.metadataVersion + 1, daemonStateVersion: 2, dataEncryptionKey: machineA.dataEncryptionKey ?? null },
+                    }, machineB] },
+                });
             });
             expect(initialBinding.resolveExactExecutionTarget(targetA)?.machine.daemonStateVersion).toBe(2);
             await hook.rerender({ enabled: false });

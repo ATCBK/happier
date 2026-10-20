@@ -735,12 +735,12 @@ async function readCurrentFixtureGenerationAuthority(input: Readonly<{
             }),
             { isolateInvalidInstalledGenerations: true },
         );
-    if (!generationAuthority?.generations.has(PLUGIN_ID)) {
+    if (!generationAuthority?.commit || !generationAuthority.generations.has(PLUGIN_ID)) {
         throw new Error(
             `Expected current ${input.expectedVersion} generation authority`,
         );
     }
-    return generationAuthority;
+    return { ...generationAuthority, commit: generationAuthority.commit };
 }
 
 function responseErrorCode(error: unknown): string {
@@ -849,6 +849,7 @@ function providerRuntimeBindingBasis(): ProviderRuntimeBindingBasisV1 {
                 requestAuthUses: [],
             },
             purposeBindings: { v: 1, bindings: [] },
+            gatewayPlacement: { kind: 'sessionMachine' },
         },
         agentTargetKey: 'backend:routing-agent',
         connectionId:
@@ -1943,7 +1944,7 @@ describe('retained Agent composed daemon-service routing (integration)', () => {
             await reloadController.adoptPreparedRuntimeRegistry({
                 registry: hRegistry,
                 changedPluginIds: [PLUGIN_ID],
-                durableRevision: 1,
+                durableRevision: hGenerationAuthority.commit.revision,
                 runningSessionDisposition: 'retainRunningSessions',
             });
             expect(reloadController.getState().activeRegistry)
@@ -2277,17 +2278,24 @@ describe('retained Agent composed daemon-service routing (integration)', () => {
             >(async (request) => {
                 expect(request.isCurrent()).toBe(true);
                 expect(request.occurrenceId.length).toBeGreaterThan(0);
-                if (!request.providerOps) {
+                if (!request.providerOps || !retainedExternalSurface.pageTranscript) {
                     throw new Error('Expected exact retained-provider transcript callbacks');
                 }
-                await expect(request.providerOps.pageTranscript({
+                const pageRequest = {
                     source: request.source,
                     remoteSessionId: request.ref.remoteSessionId,
-                    direction: 'newer',
+                    direction: 'newer' as const,
                     maxBytes: 1024,
                     maxItems: 10,
                     signal: request.options.signal,
-                })).resolves.toMatchObject({ tailCursor: 'native-G' });
+                };
+                // The admitted G owner qualifies native cursors with its
+                // retained identity. The daemon roundtrip must preserve that
+                // exact producer output, rather than leak a raw native cursor
+                // or substitute the current H companion's cursor.
+                const retainedGPage = await retainedExternalSurface.pageTranscript(pageRequest);
+                await expect(request.providerOps.pageTranscript(pageRequest))
+                    .resolves.toEqual(retainedGPage);
                 return Object.freeze({
                     status: 'following' as const,
                     startingCursor: request.options.cursor ?? null,
@@ -2345,8 +2353,6 @@ describe('retained Agent composed daemon-service routing (integration)', () => {
                 createRunnerAgentDaemonFacetService({
                     externalSessionHostOperationOwner: positiveOwner,
                     machineId: 'machine-routing',
-                    readAccountRevision: () =>
-                        'account-revision-after-h',
                     authorizeCurrent: async () => true,
                     authorizeActiveTurn: async ({ witness }) =>
                         activeWitness
@@ -2493,7 +2499,7 @@ describe('retained Agent composed daemon-service routing (integration)', () => {
                     options: { cursor: 'cursor-g' },
                     listener: async () => {},
                 });
-            expect(positiveFollow).toMatchObject({
+            expect(positiveFollow, JSON.stringify(positiveFollow)).toMatchObject({
                 status: 'following',
                 startingCursor: 'cursor-g',
             });
@@ -2520,8 +2526,6 @@ describe('retained Agent composed daemon-service routing (integration)', () => {
                 createRunnerAgentDaemonFacetService({
                     externalSessionHostOperationOwner: missingOwner,
                     machineId: 'machine-routing',
-                    readAccountRevision: () =>
-                        'account-revision-after-h',
                     authorizeCurrent: async () => true,
                     authorizeActiveTurn: async ({ witness }) =>
                         activeWitness
@@ -2638,8 +2642,13 @@ describe('retained Agent composed daemon-service routing (integration)', () => {
             expect(exactGSubscriptionDispose).toHaveBeenCalledOnce();
             const exactGFollowRequest = exactGFollow.mock.calls[0]?.[0];
             if (!exactGFollowRequest) throw new Error('Expected the admitted retained follow binding');
-            expect(exactGFollowRequest.isCurrent()).toBe(false);
+            // Closing this follow releases its subscription. The daemon keeps
+            // the exact Session binding until its own authority retires.
+            expect(exactGFollowRequest.isCurrent()).toBe(true);
             await positiveFacets.dispose();
+            expect(exactGSubscriptionDispose).toHaveBeenCalledOnce();
+            await positiveFacetService.dispose();
+            expect(exactGFollowRequest.isCurrent()).toBe(false);
             expect(exactGSubscriptionDispose).toHaveBeenCalledOnce();
 
             await writePluginSource({
@@ -2681,7 +2690,7 @@ describe('retained Agent composed daemon-service routing (integration)', () => {
             await reloadController.adoptPreparedRuntimeRegistry({
                 registry: successorRegistry,
                 changedPluginIds: [PLUGIN_ID],
-                durableRevision: 2,
+                durableRevision: iGenerationAuthority.commit.revision,
                 runningSessionDisposition: 'retainRunningSessions',
             });
             expect(hRegistry.retirementSignal?.aborted).toBe(false);

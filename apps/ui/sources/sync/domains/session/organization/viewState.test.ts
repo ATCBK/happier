@@ -20,7 +20,12 @@ import type { SessionOrganizationProjection } from './types';
 import { buildSessionOrganizationProjection } from './projection';
 import { buildSessionOrganizationSessionKey } from './keys';
 import type { SessionOrganizationOrderItemAddress } from './viewState';
-import type { SessionFolderV1, SessionFoldersV1 } from '@/sync/domains/session/folders';
+import {
+    buildSessionFolderWorkspaceTargets,
+    selectAvailableSessionFolders,
+    type SessionFolderV1,
+    type SessionFoldersV1,
+} from '@/sync/domains/session/folders';
 
 function folderKey(serverId: string, folderId: string): string {
     return buildSessionListFolderOrderItemKey({ serverId, folderId })!;
@@ -138,6 +143,92 @@ describe('buildSessionOrganizationListViewState', () => {
             'folder-home-b',
         ]);
         expect(state.sessionListGroupOrderV1['shared-order']).toEqual([homeAKey, homeBKey]);
+    });
+
+    it('projects only the selected Machine\'s persisted Chats folders into embed picker targets', () => {
+        const state = buildSessionOrganizationListViewState({
+            serverId: 'server-a',
+            projection: {
+                ...projectOrganizationPins('server-a'),
+                schemaVersion: 1,
+                version: 1,
+                foldersById: {
+                    'folder-leads': {
+                        folderId: 'folder-leads',
+                        folderKey: 'folder-leads',
+                        parentFolderId: null,
+                        parentFolderKey: null,
+                        sortKey: '0001',
+                        display: {
+                            t: 'plain',
+                            v: {
+                                name: 'Leads',
+                                workspace: {
+                                    t: 'managedSessions',
+                                    serverId: 'server-a',
+                                    machineId: 'machine-a',
+                                },
+                            },
+                        },
+                        displayState: { status: 'available', value: null },
+                        archivedAt: null,
+                        createdAt: 1,
+                        updatedAt: 2,
+                    },
+                    'folder-other-machine': {
+                        folderId: 'folder-other-machine',
+                        folderKey: 'folder-other-machine',
+                        parentFolderId: null,
+                        parentFolderKey: null,
+                        sortKey: '0002',
+                        display: {
+                            t: 'plain',
+                            v: {
+                                name: 'Other Machine',
+                                workspace: {
+                                    t: 'managedSessions',
+                                    serverId: 'server-a',
+                                    machineId: 'machine-b',
+                                },
+                            },
+                        },
+                        displayState: { status: 'available', value: null },
+                        archivedAt: null,
+                        createdAt: 1,
+                        updatedAt: 2,
+                    },
+                },
+            },
+        });
+
+        expect(buildSessionFolderWorkspaceTargets({
+            folders: selectAvailableSessionFolders(state.sessionFoldersV1),
+            workspace: {
+                t: 'managedSessions',
+                serverId: 'server-a',
+                machineId: 'machine-a',
+            },
+        })).toEqual([{ folderId: 'folder-leads', title: 'Leads', depth: 0 }]);
+    });
+
+    it('reads a folder written with a bare plain name (an Action caller\'s shorthand) as that name, not as unavailable', () => {
+        const state = buildSessionOrganizationListViewState({
+            serverId: 'server-a',
+            projection: {
+                ...projectOrganizationPins('server-a'),
+                schemaVersion: 1,
+                version: 1,
+                foldersById: {
+                    'folder-bare': {
+                        folderId: 'folder-bare', folderKey: 'folder-bare', parentFolderId: null, parentFolderKey: null, sortKey: '0001',
+                        display: { t: 'plain', v: 'J15b folder' },
+                        displayState: { status: 'available', value: 'J15b folder' },
+                        archivedAt: null, createdAt: 1, updatedAt: 2,
+                    },
+                },
+            },
+        });
+        expect(state.sessionFoldersV1.folders.map((folder) => [folder.id, folder.name])).toEqual([['folder-bare', 'J15b folder']]);
     });
 
     it('projects every valid group and workspace ordering entry beyond 100 items', () => {

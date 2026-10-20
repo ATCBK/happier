@@ -1,25 +1,10 @@
+import { coerceTextFromContentBlocks } from './toolEnvelope';
+
 type UnknownRecord = Record<string, unknown>;
 
 function asRecord(value: unknown): UnknownRecord | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     return value as UnknownRecord;
-}
-
-function coerceTextFromContentBlocks(content: unknown): string | null {
-    if (typeof content === 'string') return content;
-    if (!Array.isArray(content)) return null;
-    const parts: string[] = [];
-    for (const item of content) {
-        if (!item || typeof item !== 'object') continue;
-        const rec = item as UnknownRecord;
-        if (typeof rec.text === 'string') parts.push(rec.text);
-        const nested = rec.content;
-        if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
-            const nestedRec = nested as UnknownRecord;
-            if (typeof nestedRec.text === 'string') parts.push(nestedRec.text);
-        }
-    }
-    return parts.length > 0 ? parts.join('\n') : null;
 }
 
 export function normalizeWebFetchInput(rawInput: unknown): UnknownRecord {
@@ -44,20 +29,20 @@ export function normalizeWebFetchInput(rawInput: unknown): UnknownRecord {
 export function normalizeWebFetchResult(rawOutput: unknown): UnknownRecord {
     const record = asRecord(rawOutput);
     if (record) {
-        const status = (record as any).status;
+        const status = record.status;
         const text =
-            typeof (record as any).text === 'string'
-                ? (record as any).text
-                : typeof (record as any).body === 'string'
-                    ? (record as any).body
-                    : coerceTextFromContentBlocks((record as any).content);
+            typeof record.text === 'string'
+                ? record.text
+                : typeof record.body === 'string'
+                    ? record.body
+                    : coerceTextFromContentBlocks(record.content);
         const errorMessage =
-            typeof (record as any).errorMessage === 'string'
-                ? (record as any).errorMessage
-                : typeof (record as any).error === 'string'
-                    ? (record as any).error
-                    : typeof (record as any).message === 'string'
-                        ? (record as any).message
+            typeof record.errorMessage === 'string'
+                ? record.errorMessage
+                : typeof record.error === 'string'
+                    ? record.error
+                    : typeof record.message === 'string'
+                        ? record.message
                         : null;
 
         const out: UnknownRecord = { ...record };
@@ -113,17 +98,17 @@ export function normalizeWebSearchResult(rawOutput: unknown): UnknownRecord {
     if (!record) return { results: [], value: rawOutput };
 
     const resultsCandidate =
-        Array.isArray((record as any).results)
-            ? (record as any).results
-            : Array.isArray((record as any).items)
-                ? (record as any).items
+        Array.isArray(record.results)
+            ? record.results
+            : Array.isArray(record.items)
+                ? record.items
                 : null;
 
     if (resultsCandidate) {
         return { results: resultsCandidate };
     }
 
-    const text = coerceTextFromContentBlocks((record as any).content) ?? (typeof (record as any).text === 'string' ? (record as any).text : null);
+    const text = coerceTextFromContentBlocks(record.content) ?? (typeof record.text === 'string' ? record.text : null);
     if (typeof text === 'string' && text.trim().length > 0) return { results: [{ snippet: text.trim() }] };
     return { ...record, results: [] };
 }

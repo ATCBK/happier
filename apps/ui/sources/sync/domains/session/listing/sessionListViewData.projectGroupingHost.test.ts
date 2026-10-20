@@ -208,7 +208,7 @@ describe('buildSessionListViewData (project grouping)', () => {
         expect(list.filter((item) => item.type === 'session')).toHaveLength(3);
     });
 
-    it('lists home-folder sessions with that machine’s Chats, so “no folder” is one group, never “No folder” beside “Chats” (lab FL3)', () => {
+    it('keeps path sessions at machine home separate from the managed Chats bucket', () => {
         const managed = { v: 1, kind: 'managed' } as const;
         const sessions: Record<string, SessionListRenderableSession> = {
             chat: makeRenderableSession({
@@ -240,12 +240,17 @@ describe('buildSessionListViewData (project grouping)', () => {
         const list = buildSessionListViewData(sessions, machines, {
             activeGroupingV1: 'project',
             inactiveGroupingV1: 'project',
+            serverScope: { serverId: 's' },
         });
 
-        const titles = list.filter(isProjectHeader).map((header) => header.title);
-        expect(titles).not.toContain(t('sessions.workspace.noFolder'));
-        // One Chats group per machine: the machine tells them apart, as for other groups.
-        expect(titles.filter((title) => title === t('session.folderless.chats'))).toHaveLength(2);
+        const headers = list.filter(isProjectHeader);
+        const titles = headers.map((header) => header.title);
+        // Only the marker-backed managed Session belongs to Chats. A path Session at home
+        // remains a real workspace group; its visible label is a separate UI-copy decision.
+        expect(headers).toHaveLength(4);
+        expect(titles.filter((title) => title === t('session.folderless.chats'))).toHaveLength(1);
+        expect(headers.filter((header) => header.workspaceScopeHint?.rootPath === '/home/u')).toHaveLength(1);
+        expect(headers.filter((header) => header.workspaceScopeHint?.rootPath === '/home/v')).toHaveLength(1);
         expect(titles).toContain('~/repo');
         expect(list.filter((item) => item.type === 'session')).toHaveLength(4);
     });

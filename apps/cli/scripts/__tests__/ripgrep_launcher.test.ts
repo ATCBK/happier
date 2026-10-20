@@ -38,6 +38,46 @@ function createPackagedLauncherFixture(): { launcherPath: string; toolsDir: stri
 }
 
 describe('ripgrep launcher behavior', () => {
+  it.each(['signal', 'failure', 'error'] as const)('does not launch later batches after a native %s', kind => {
+    const fixture = createPackagedLauncherFixture()
+    writeFileSync(join(fixture.toolsDir, process.platform === 'win32' ? 'rg.exe' : 'rg'), 'fixture')
+    const nativeLaunch = vi.spyOn(require('child_process') as typeof import('node:child_process'), 'spawnSync')
+      .mockReturnValue({ status: kind === 'failure' ? 7 : null, signal: kind === 'signal' ? 'SIGTERM' : null,
+        ...(kind === 'error' ? { error: new Error('native launch failed') } : {}),
+        output: [], pid: 1, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const launcher = require(fixture.launcherPath) as { main: (argv: string[]) => number }
+    const paths = Array.from({ length: 1000 }, (_, i) => `C:\\admitted root\\${'r'.repeat(180)}\\rollout-${i}.jsonl`)
+    expect(launcher.main([JSON.stringify({ args: ['-e', 'needle'], paths })])).toBe(kind === 'failure' ? 7 : 2)
+    expect(nativeLaunch).toHaveBeenCalledTimes(1)
+  })
+  it('passes escaped patterns over stdin and batches every source operand within the Windows process boundary', () => {
+    const fixture = createPackagedLauncherFixture()
+    writeFileSync(join(fixture.toolsDir, process.platform === 'win32' ? 'rg.exe' : 'rg'), 'fixture')
+    const nativeLaunch = vi.spyOn(require('child_process') as typeof import('node:child_process'), 'spawnSync')
+      .mockReturnValue({ status: 0, signal: null, output: [], pid: 1, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) })
+    const launcher = require(fixture.launcherPath) as { main: (argv: string[]) => number }
+    const patterns = ['\\'.repeat(4000), '\\'.repeat(8000), '\\\\u(?:005c)']
+    const paths = Array.from({ length: 1000 }, (_, i) => `C:\\admitted root\\${'r'.repeat(180)}\\rollout-${i}.jsonl`)
+    expect(launcher.main([JSON.stringify({ args: ['--no-config', '--files-with-matches', ...patterns.flatMap(value => ['-e', value])], paths })])).toBe(0)
+    expect(nativeLaunch.mock.calls.length).toBeGreaterThan(1)
+    const observed: string[] = []
+    for (const [binary, args, options] of nativeLaunch.mock.calls) {
+      const argv = args as string[]
+      expect(argv.slice(0, 2)).toEqual(['--file', '-'])
+      expect(options).toMatchObject({ input: patterns.join('\n') + '\n' })
+      observed.push(...argv.slice(argv.indexOf('--') + 1))
+      // Independent conservative encoding for this vector: every operand
+      // containing spaces is quoted; no operand contains embedded quotes.
+      const encoded = [String(binary), ...argv].map(value => /[ \t]/.test(value) ? `"${value}"` : value).join(' ')
+      expect(encoded.length + 1).toBeLessThanOrEqual(32767)
+      expect(argv.some(value => patterns.includes(value))).toBe(false)
+    }
+    expect(observed).toEqual(paths)
+    nativeLaunch.mockImplementation(() => { throw Object.assign(new Error('launch failed'), { code: 'E2BIG' }) })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(launcher.main([JSON.stringify({ args: ['-e', 'needle'], paths: ['source.jsonl'] })])).toBe(2)
+  })
   it('reports missing native ripgrep distinctly instead of simulating an empty successful search', () => {
     const launcher = require(join(__dirname, '../ripgrep_launcher.cjs')) as { main: (argv: string[]) => number }
     // These are native filesystem/process lookup boundaries, not launcher domain logic.
@@ -100,7 +140,7 @@ exit 7
       { ...process.env, PATH: '' },
     )
 
-    expect(result.status).toBe(1)
+    expect(result.status).toBe(2)
   })
 
   it('resolves the Windows packaged executable name', () => {

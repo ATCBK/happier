@@ -11,12 +11,15 @@ import {
   SessionMetadataTuplePatchV1Schema, SessionSpawnNewInputV2Schema,
   V2SessionListResponseSchema, MachineAccessGrantsListResponseV1Schema,
   SessionOrganizationSnapshotResponseSchema,
+  SPAWN_SESSION_ERROR_CODES,
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { SessionCreationCorrespondenceV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
+import { SessionResumeRequestV1Schema } from '@happier-dev/protocol/sessions/control/sessionResumeRequestV1';
+import { SessionCreationTargetPreparationRequestV1Schema, SessionCreationTargetPreparationResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationTargetPreparationV1';
 import { deriveSessionCreationTagV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
-import { createSessionOwnerMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { createPlainSessionOwnerMetadataEnvelopeV1, createSessionOwnerMetadataV1, projectSessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
@@ -67,10 +70,12 @@ const spawnResponse = vi.fn();
 const trustedSpawnResponse = vi.fn<MachineSpawnTrustedHiddenSystemSessionFn>();
 const spawnRequests = vi.fn();
 const listResponse = vi.fn();
+let sessionListWireOverride: ReturnType<typeof V2SessionListResponseSchema.parse> | null = null;
 const metadataPatchResponse = vi.fn<(sessionId: string) => Promise<void>>();
 const sessionDetailResponse = vi.fn();
 let sessionOrganizationFailure: Error | null = null;
 const sessionRpcResponse = vi.fn();
+const resumeResponse = vi.fn();
 let runnerObservedAtMs = 2000;
 const globalVoiceStartupInstructionsMarker = Object.freeze({
   v: 1 as const,
@@ -112,13 +117,17 @@ function rejectNextMetadataCommitForSession(sessionId: string, error: Error): vo
 const voiceFixtureMetadataDefaults = { path: '/voice', host: 'voice.test', flavor: 'codex' };
 
 function sessionWireRecord(session: ReturnType<typeof createSessionFixture>) {
+  const metadata = session.metadata ? { ...voiceFixtureMetadataDefaults, ...session.metadata,
+    ...(session.permissionMode ? { permissionMode: session.permissionMode } : {}) } : null;
+  const owner = session.metadataLayoutVersion === 1 ? createSessionOwnerMetadataV1({ metadata }) : null;
+  if (owner && !owner.ok) throw new Error('Invalid split Session fixture owner metadata');
   return SessionCurrentProjectionRecordV1Schema.parse({
     id: session.id, seq: session.seq ?? 1, createdAt: session.createdAt ?? 1,
     updatedAt: session.updatedAt, active: session.active,
     activeAt: session.presence === 'online' ? Date.now() : session.activeAt ?? 1,
-    archivedAt: null, encryptionMode: 'plain', metadataLayoutVersion: 0,
-    metadata: session.metadata ? JSON.stringify({ ...voiceFixtureMetadataDefaults, ...session.metadata,
-      ...(session.permissionMode ? { permissionMode: session.permissionMode } : {}) }) : JSON.stringify(null),
+    archivedAt: null, encryptionMode: 'plain', metadataLayoutVersion: session.metadataLayoutVersion ?? 0,
+    metadata: JSON.stringify(owner?.ok ? projectSessionSharedMetadataV1({ metadata }) : metadata),
+    ...(owner?.ok ? { ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(owner.ownerMetadata) } : {}),
     metadataVersion: session.metadataVersion ?? 1,
     effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }], capabilities: createSessionFixture().access!.capabilities },
     responsibleAccountId: null, responsibleAccount: null, share: null,
@@ -173,7 +182,10 @@ async function respondToServerRequest(input: RequestInfo | URL, init?: RequestIn
   if (/^\/v1\/sessions\/[^/]+\/messages$/.test(path)) return json({ messages: [], hasMore: false });
   if (path === '/v2/sessions/metadata-upgrades') return json({ sessionIds: [] });
   if (path === '/v2/sessions' || path === '/v2/sessions/active' || path === '/v1/sessions') {
-    if (path !== '/v2/sessions/active') await listResponse();
+    if (path !== '/v2/sessions/active') {
+      await listResponse();
+      if (sessionListWireOverride) return json(V2SessionListResponseSchema.parse(sessionListWireOverride));
+    }
     for (const id of Object.keys(state.sessions)) commitFixtureSession(id);
     for (const id of Object.keys(state.sessionListRowsByServerId?.[homeId] ?? {})) commitFixtureSession(id);
     const sessions = [...sessionRecords.values()].map(record => {
@@ -246,6 +258,19 @@ installDisconnectedServerSocketBoundary(socket => {
 });
 // Synthetic daemon responses sit below the real scoped transport, Action and catalogs.
 async function dispatchMachineRpc(request: { method: string; payload: unknown; machineId: string; serverId?: string }) {
+    if (request.method === RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT) {
+      // Directory existence is an OS boundary; all Session admission remains real.
+      const input = SessionCreationTargetPreparationRequestV1Schema.parse(request.payload);
+      if (input.directory.kind !== 'path') throw new Error('Expected a direct Voice carrier directory');
+      return SessionCreationTargetPreparationResultV1Schema.parse({
+        ok: true, directory: input.directory.path, directoryKind: 'path',
+        directoryCreationRequired: false, checkout: null,
+      });
+    }
+    if (request.method === RPC_METHODS.SPAWN_HAPPY_SESSION || request.method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE) {
+      const input = SessionResumeRequestV1Schema.parse(request.payload);
+      return resumeResponse({ ...request, payload: input });
+    }
     if (request.method === RPC_METHODS.DAEMON_SESSION_RUNNER_STATUS_V2_GET) {
       const payload = request.payload as { sessionId: string };
       return createSessionRunnerRuntimeStatusFixture({ sessionId: payload.sessionId, machineId: request.machineId, wrapperPid: 122, observedAtMs: runnerObservedAtMs });
@@ -290,6 +315,7 @@ afterEach(async () => {
 });
 async function restoreAccount() {
   sessionRecords.clear();
+  sessionListWireOverride = null;
   sessionOrganizationFailure = null;
   connection = await restoreServerAccountForTest({
     serverUrl: 'https://voice-conversation.example.test', accountId: 'account-1',
@@ -458,6 +484,8 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
     metadataPatchResponse.mockReset();
     sessionDetailResponse.mockReset();
     sessionRpcResponse.mockReset();
+    resumeResponse.mockReset();
+    resumeResponse.mockImplementation(async ({ payload }) => ({ type: 'success', sessionId: payload.sessionId }));
     projectionResponse.mockReset();
     projectionResponse.mockResolvedValue({ supported: false, reason: 'not-supported' });
 
@@ -822,6 +850,33 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
     ]);
   });
 
+  it('releases one cancelled Voice Home reader while another reader completes the shared spawn', async () => {
+    const spawned = createDeferred<{ type: 'success'; sessionId: string }>();
+    spawnResponse.mockImplementation((params: WireSpawnFixtureInput) => {
+      state.sessions['voice-home-session'] = { id: 'voice-home-session', active: true, updatedAt: 1,
+        metadata: { machineId: params.machineId, path: params.directory } };
+      return spawned.promise;
+    });
+    const { ensureVoiceConversationSessionForVoiceHome } = await loadConversationSession();
+    const caller = new AbortController();
+    let outcome = 'pending';
+    const first = ensureVoiceConversationSessionForVoiceHome(null, caller.signal)
+      .then(() => { outcome = 'resolved'; }, () => { outcome = 'cancelled'; });
+    const second = ensureVoiceConversationSessionForVoiceHome();
+    await vi.waitFor(() => expect(spawnResponse).toHaveBeenCalledTimes(1));
+    caller.abort();
+    try {
+      await vi.waitFor(() => expect(outcome).toBe('cancelled'));
+      spawned.resolve({ type: 'success', sessionId: 'voice-home-session' });
+      await expect(second).resolves.toBe('voice-home-session');
+      await first;
+      expect(spawnResponse).toHaveBeenCalledTimes(1);
+    } finally {
+      spawned.resolve({ type: 'success', sessionId: 'voice-home-session' });
+      await Promise.allSettled([first, second]);
+    }
+  });
+
   it('releases a failed voice-home ensure so a later call can retry', async () => {
     const failedSpawn = createDeferred<{
       type: 'error';
@@ -960,7 +1015,9 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
       sessionId: 'voice-home-session',
       compensationFailureCode: 'VOICE_CONVERSATION_RETIREMENT_FAILED',
     });
-    expect(failedEnsure).not.toHaveProperty('cause');
+    // The real HTTP adapter converts the synthetic transport rejection to a Sync error.
+    expect(failedEnsure).toHaveProperty('cause', expect.any(Error));
+    expect(Object.getOwnPropertyDescriptor(failedEnsure, 'cause')?.enumerable).toBe(false);
     expect(JSON.stringify(failedEnsure)).not.toContain(metadataFailure.message);
     expect(JSON.stringify(failedEnsure)).not.toContain(retirementFailure.message);
   });
@@ -989,16 +1046,43 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
       sessionId: 'voice-home-session',
       reason: 'session_refresh_failed',
     });
+    expect(refreshRejection).toHaveProperty('cause', expect.any(Error));
     expect(writeRejection).toMatchObject({
       code: 'VOICE_CONVERSATION_METADATA_COMMIT_FAILED',
       sessionId: 'voice-home-session',
       reason: 'metadata_write_rejected',
     });
+    expect(writeRejection).toHaveProperty('cause', expect.any(Error));
     expect((refreshRejection as { reason?: unknown }).reason)
       .not.toBe((writeRejection as { reason?: unknown }).reason);
     const serializedRejections = `${JSON.stringify(refreshRejection)}${JSON.stringify(writeRejection)}`;
     expect(serializedRejections).not.toContain(refreshFailure.message);
     expect(serializedRejections).not.toContain(metadataFailure.message);
+  });
+
+  it('finalizes a fresh global carrier by exact address when it is absent from the ordinary Session list', async () => {
+    spawnResponse.mockImplementation(async (params: WireSpawnFixtureInput) => {
+      state.sessions['voice-home-session'] = {
+        id: 'voice-home-session', active: true, updatedAt: 1, metadataLayoutVersion: 1,
+        metadata: { machineId: params.machineId, path: params.directory },
+      };
+      return { type: 'success', sessionId: 'voice-home-session' };
+    });
+    sessionListWireOverride = { sessions: [], hasNext: false, nextCursor: null };
+    const { ensureVoiceConversationSessionForVoiceHome } = await loadConversationSession();
+
+    const result = await ensureVoiceConversationSessionForVoiceHome().catch((error: unknown) => error);
+    expect(spawnResponse).toHaveBeenCalled();
+    expect(result).toBe('voice-home-session');
+
+    const carrier = storage.getState().sessions['voice-home-session'];
+    expect(carrier?.serverId).toBe(homeId);
+    expect(readSessionOwnerMetadataView(carrier!)).toMatchObject({
+      machineId: 'machine-1',
+      systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true },
+      voiceConversationScopeV1: { v: 1, kind: 'voice_home' },
+    });
+    expect(sessionDetailResponse).toHaveBeenCalledWith('voice-home-session', { serverId: homeId });
   });
 
   it('reports a stalled session-metadata wait as its own typed commit reason', async () => {
@@ -1035,6 +1119,25 @@ describe('ensureVoiceConversationSessionForVoiceHome', () => {
       directory: '/Users/test/.happier/voice-agent',
       serverId: homeId,
     }));
+  });
+
+  it('preserves the typed launch refusal without exposing its diagnostic message', async () => {
+    spawnResponse.mockResolvedValue({
+      type: 'error',
+      code: 'spawn_failed',
+      retryable: true,
+      launchError: {
+        kind: 'launch_error',
+        code: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+        message: 'private credential transport detail',
+      },
+    });
+
+    const { ensureVoiceConversationSessionForVoiceHome } = await loadConversationSession();
+    await expect(ensureVoiceConversationSessionForVoiceHome()).rejects.toMatchObject({
+      code: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+      message: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+    });
   });
 
   it('surfaces the authoritative spawn operation failure for a raw online machine record', async () => {
@@ -1886,6 +1989,8 @@ describe('ensureVoiceConversationSessionForSessionRoot', () => {
     listResponse.mockReset();
     metadataPatchResponse.mockReset();
     sessionDetailResponse.mockReset();
+    resumeResponse.mockReset();
+    resumeResponse.mockImplementation(async ({ payload }) => ({ type: 'success', sessionId: payload.sessionId }));
     projectionResponse.mockReset();
     projectionResponse.mockResolvedValue({ supported: false, reason: 'not-supported' });
 
@@ -2346,7 +2451,7 @@ describe('ensureVoiceConversationSessionForSessionRoot', () => {
     }
   });
 
-  it('reuses an older inactive exact session-root conversation when a newer unrelated voice session exists', async () => {
+  it.each(['coding root', 'synced carrier'])('resumes the inactive exact carrier before returning its endpoint from %s', async entry => {
     state.sessions['root-session'] = {
       id: 'root-session',
       active: true,
@@ -2389,8 +2494,48 @@ describe('ensureVoiceConversationSessionForSessionRoot', () => {
     };
 
     const { ensureVoiceConversationSessionForSessionRoot } = await loadConversationSession();
+    const admitted = createDeferred<void>();
+    const order: string[] = [];
+    resumeResponse.mockImplementation(async () => {
+      order.push('resume');
+      await admitted.promise;
+      return { type: 'success', sessionId: 'voice-root-session' };
+    });
+    const ensured = ensureVoiceConversationSessionForSessionRoot({ sessionRootAddress: {
+      serverId: homeId, sessionId: entry === 'coding root' ? 'root-session' : 'voice-root-session',
+    } }).then(id => { order.push('endpoint'); return id; });
+    try {
+      await vi.waitFor(() => expect(order.length).toBeGreaterThan(0));
+      expect(order).toEqual(['resume']);
+      expect(resumeResponse).toHaveBeenCalledWith(expect.objectContaining({
+        serverId: homeId, machineId: 'machine-target', payload: expect.objectContaining({
+          type: 'resume-session', sessionId: 'voice-root-session', directory: '/Users/test/workspace/rebound',
+          agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+        }),
+      }));
+      admitted.resolve();
+      await expect(ensured).resolves.toBe('voice-root-session');
+      expect(order).toEqual(['resume', 'endpoint']);
+      expect(spawnResponse).not.toHaveBeenCalled();
+    } finally {
+      admitted.resolve();
+      await ensured.catch(() => undefined);
+    }
+  });
 
-    await expect(ensureVoiceConversationSessionForSessionRoot({ sessionRootAddress: { serverId: homeId, sessionId: 'root-session' } })).resolves.toBe('voice-root-session');
+  it('refuses an unavailable retained carrier without exposing its endpoint or spawning a replacement', async () => {
+    state.sessions['voice-offline'] = {
+      id: 'voice-offline', active: false, updatedAt: 10,
+      metadata: { machineId: 'machine-target', path: '/Users/test/workspace/rebound',
+        voiceConversationScopeV1: { v: 1, kind: 'voice_home' },
+        systemSessionV1: { v: 1, key: 'voice_conversation', hidden: true } },
+    };
+    const { ensureVoiceConversationSessionForSessionRoot } = await loadConversationSession();
+    resumeResponse.mockResolvedValue({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED, errorMessage: 'private runtime detail' });
+    const error = await ensureVoiceConversationSessionForSessionRoot({ sessionRootAddress: {
+      serverId: homeId, sessionId: 'voice-offline',
+    } }).then(() => null, (error: unknown) => error);
+    expect(error).toMatchObject({ code: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED, message: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED });
     expect(spawnResponse).not.toHaveBeenCalled();
   });
 

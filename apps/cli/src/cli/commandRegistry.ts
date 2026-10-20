@@ -137,6 +137,7 @@ const ACTION_CLI_ROOT_HELP: Readonly<Record<string, Readonly<{ label: string; de
   credentials: { label: 'happier credentials', description: 'Manage Team credential resources and usage' },
   secrets: { label: 'happier secrets', description: 'Manage shared Saved Secrets' },
   workflow: { label: 'happier workflow', description: 'Run, inspect, and manage reusable workflows' },
+  discussions: { label: 'happier discussions', description: 'Read and manage Home discussions' },
 };
 
 const firstClassSessionCommandRegistryEntries: Readonly<Record<string, CommandRegistryEntry>> = Object.freeze(

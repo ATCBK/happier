@@ -5,7 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 import { describe, expect, it } from 'vitest';
 
-import { withWorkspaceBundleLock } from '../../../scripts/workspaces/workspaceBundleLock.mjs';
+import { WORKSPACE_BUNDLE_LOCK_BUSY_ERROR_CODE, withWorkspaceBundleLock } from '../../../scripts/workspaces/workspaceBundleLock.mjs';
 import {
   resolveCliSharedDepsBuildLockPath,
   withOptionalCliSharedDepsBuildLock,
@@ -52,7 +52,7 @@ describe('optionalWorkspaceBundleLock', () => {
     }
   });
 
-  it('waits when the inherited lock path does not match', async () => {
+  it('does not reenter when the inherited lock path does not match', async () => {
     const repoRoot = mkdtempSync(join(tmpdir(), 'happier-cli-lock-mismatch-'));
     try {
       const lockPath = resolveCliSharedDepsBuildLockPath(repoRoot);
@@ -66,7 +66,7 @@ describe('optionalWorkspaceBundleLock', () => {
       }, { lockPath });
       await acquired;
       try {
-        const result = await withOptionalCliSharedDepsBuildLock(async () => 'successor', {
+        const successor = withOptionalCliSharedDepsBuildLock(async () => 'successor', {
           repoRoot,
           lockPath,
           env: { HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: join(repoRoot, 'different.lock') },
@@ -74,9 +74,15 @@ describe('optionalWorkspaceBundleLock', () => {
           lockStaleAfterMs: 1_000,
           onWait: (event: { lockPath: string }) => waits.push(event.lockPath),
         });
-        expect(result).toBe('successor');
-        expect(waits).toContain(lockPath);
+        if (process.env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED === '0') {
+          await expect(successor).rejects.toMatchObject({ code: WORKSPACE_BUNDLE_LOCK_BUSY_ERROR_CODE });
+        } else {
+          expect(await successor).toBe('successor');
+          expect(waits).toContain(lockPath);
+        }
       } finally { await holder; }
+      await expect(withOptionalCliSharedDepsBuildLock(async () => 'successor', { repoRoot, lockPath }))
+        .resolves.toBe('successor');
     } finally {
       rmSync(repoRoot, { recursive: true, force: true });
     }

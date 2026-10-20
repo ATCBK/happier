@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { RpcHandler } from '@/api/rpc/types';
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { createSessionProviderInputConsumer } from '@/agent/runtime/session/input/sessionProviderInputConsumer';
@@ -12,6 +12,16 @@ import type { TrackedSession } from '../types';
 import { createSessionLiveWorkProducer } from './sessionLiveWorkProducer';
 import { readTrackedSessionInputLiveWork } from './readTrackedSessionInputLiveWork';
 import { readCurrentSessionEligibility } from '../guard/sessionEligibility';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+
+let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
+beforeAll(async () => { runtime = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+  runtimeOptions: { pluginIds: ['happier.agent.codex'] } }); });
+afterAll(async () => {
+  try { await runtime?.dispose(); }
+  finally { await pluginReloadController.shutdown(); }
+});
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -23,7 +33,9 @@ describe('requester-qualified live Session network observation', () => {
       requesterWorkAttributionV1: attribution };
     let current = true;
     let loseAdmissionDuringRpc = false;
-    let metadata: Record<string, unknown> = { machineId: 'machine', path: '/project', flavor: 'codex' };
+    const resumableMetadata = { machineId: 'machine', path: '/project', flavor: 'codex', codexSessionId: 'native-bob-session',
+      runtimeDescriptorV1: { v: 1, agentId: 'codex', agent: { backendMode: 'appServer' } } };
+    let metadata: Record<string, unknown> = resumableMetadata;
     const requesterBootstrap: Pick<AdmittedRequesterSessionBootstrap,
       'credentials' | 'attribution' | 'serverHttpBaseUrl' | 'getBoundSessionId' | 'isCurrent'> = {
       credentials: { token: 'bob-ordinary', encryption: null }, attribution,
@@ -90,7 +102,7 @@ describe('requester-qualified live Session network observation', () => {
       .toMatchObject({ eligible: false });
     expect(posts).not.toHaveBeenCalled();
     posts.mockResolvedValue({ data: { items: [] } });
-    metadata = { machineId: 'machine', path: '/project', flavor: 'codex' };
+    metadata = resumableMetadata;
     expect(await readCurrentSessionEligibility({ access: input }))
       .toMatchObject({ eligible: true, resumeOptions: { existingSessionId: sessionId, directory: '/project' } });
     posts.mockImplementationOnce(async () => {
@@ -109,7 +121,7 @@ describe('requester-qualified live Session network observation', () => {
       { category: 'agents', state: 'settled' }, { category: 'attention', state: 'settled' },
     ] });
     queue.discardMatching(() => true);
-    metadata = { machineId: 'machine', path: '/project', flavor: 'codex' };
+    metadata = resumableMetadata;
     const ownInventory = await source.read();
     const inventory = { coverage: 'unknown' as const, items: [...ownInventory.items,
       { category: 'session' as const, ownerRef: {}, attribution: { kind: 'unknown' as const }, state: 'unknown' as const }] };

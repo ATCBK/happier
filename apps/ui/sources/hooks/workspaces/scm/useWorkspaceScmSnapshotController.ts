@@ -39,7 +39,7 @@ export function useWorkspaceScmSnapshotController(scope: WorkspaceScopeBase | nu
 
     const [loading, setLoading] = React.useState(false);
     const error = React.useMemo<WorkspaceScmSnapshotControllerError | null>(() => {
-        if (unreachable) return { message: t('errors.machineOffline'), errorCode: 'machine_offline' };
+        if (unreachable) return { message: t('errors.daemonUnavailableBody'), errorCode: 'machine_offline' };
         if (!snapshotError) return null;
         const code =
             typeof snapshotError === 'object'

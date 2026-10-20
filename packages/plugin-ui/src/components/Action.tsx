@@ -131,6 +131,15 @@ export type ActionExecuteProps<TAction extends PluginUiActionReference = PluginU
   onSettled?: (execution: PluginActionExecution<PluginUiActionResultFor<NoInfer<TAction>>>) => void;
 }>;
 
+function notifyActionSettled<Execution extends Readonly<{ status: string }>>(
+  execute: () => Promise<Execution>,
+  onSettled: ((execution: Execution) => void) | undefined,
+): void {
+  void execute().then(settled => {
+    if (settled.status !== 'pending') onSettled?.(settled);
+  });
+}
+
 /**
  * Run a contributed or host action.
  *
@@ -146,20 +155,35 @@ function ActionExecute<TAction extends PluginUiActionReference>({
   onSettled,
   ...chrome
 }: ActionExecuteProps<TAction>): ReactElement {
-  const { execution, execute } = useExecutePluginAction(action, input);
+  const { execution, execute, pendingApproval } = useExecutePluginAction<TAction>(action, input);
+  const translate = usePluginTranslation();
 
-  const onPress = useCallback(async () => {
-    const settled = await execute();
-    if (settled.status !== 'pending') onSettled?.(settled);
+  // Not returned: a promise handed to the button would make it busy on its own until the dispatch
+  // settles, and the hook's execution state is the one pending source (a held approval is not busy).
+  const onPress = useCallback(() => {
+    notifyActionSettled(execute, onSettled);
   }, [execute, onSettled]);
 
+  // A request the host holds for approval is not "busy": the button stops spinning and says what it
+  // waits for. The host's mount notice owns the approval notice and the way to it, so the Action adds
+  // no notice or control of its own.
+  const waitingForApproval = pendingApproval !== null;
   return (
     <ActionButton
       defaultTitle="Run"
       defaultTitleKey="happier.plugin-ui.action.execute"
-      busy={execution.status === 'pending'}
+      busy={execution.status === 'pending' && !waitingForApproval}
       onPress={onPress}
       {...chrome}
+      {...(waitingForApproval
+        ? {
+          title: translate('happier.plugin-ui.approvalPending.title', 'Waiting for approval'),
+          titleKey: undefined,
+          accessibilityLabel: undefined,
+          accessibilityLabelKey: undefined,
+          disabled: true,
+        }
+        : null)}
     />
   );
 }
@@ -221,6 +245,13 @@ export type ActionRefreshProps = ActionChromeProps & Readonly<{
 function ActionRefresh({ onRefresh, ...chrome }: ActionRefreshProps): ReactElement {
   return <ActionButton defaultTitle="Refresh" defaultTitleKey="happier.plugin-ui.action.refresh" onPress={onRefresh} {...chrome} />;
 }
+
+// Each member is a labelled button: in a stretching column it keeps its own width (`isHappierInlineControl`).
+ActionExecute.happierInlineControl = true as const;
+ActionCopy.happierInlineControl = true as const;
+ActionOpenExternal.happierInlineControl = true as const;
+ActionOpenSurface.happierInlineControl = true as const;
+ActionRefresh.happierInlineControl = true as const;
 
 /**
  * The action family (§3.10.5: a cohesive compound family, not a prop bag).

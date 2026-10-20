@@ -34,8 +34,8 @@ export type TriageDetailTabFromV1 = 'entry' | 'fixPullRequest' | 'none';
  * does not carry that fact: a tab never shows an invented count.
  */
 export type TriageDetailTabV1 =
-  | Readonly<{ kind: 'shared'; id: TriageDetailSharedTabIdV1; from: TriageDetailTabFromV1; summary?: TriageRowFactValueV1 }>
-  | Readonly<{ kind: 'source'; id: string; title: string; titleKey?: string; from: 'entry'; summary?: TriageRowFactValueV1 }>;
+  | Readonly<{ kind: 'shared'; id: TriageDetailSharedTabIdV1; frameId: TriageDetailSharedTabIdV1; from: TriageDetailTabFromV1; summary?: TriageRowFactValueV1 }>
+  | Readonly<{ kind: 'source'; id: string; frameId: `source:${string}`; title: string; titleKey?: string; from: 'entry'; summary?: TriageRowFactValueV1 }>;
 
 export type TriageDetailCompositionV1 =
   | Readonly<{ kind: 'whole' }>
@@ -90,16 +90,16 @@ export function planTriageDetailTabsV1(input: Readonly<{
       const declared = declaredShared(input.fixPullRequest?.detailTabs, id);
       if (declared !== undefined) {
         tabs.push(Object.freeze({
-          kind: 'shared', id, from: 'fixPullRequest', ...summaryOf(declared, input.fixPullRequest?.facts),
+          kind: 'shared', id, frameId: id, from: 'fixPullRequest', ...summaryOf(declared, input.fixPullRequest?.facts),
         }));
       }
       continue;
     }
     const declared = declaredShared(input.entryTabs, id);
     if (declared !== undefined) {
-      tabs.push(Object.freeze({ kind: 'shared', id, from: 'entry', ...summaryOf(declared, input.entryFacts) }));
+      tabs.push(Object.freeze({ kind: 'shared', id, frameId: id, from: 'entry', ...summaryOf(declared, input.entryFacts) }));
     } else if (id === 'overview') {
-      tabs.push(Object.freeze({ kind: 'shared', id, from: 'none' }));
+      tabs.push(Object.freeze({ kind: 'shared', id, frameId: id, from: 'none' }));
     }
   }
   for (const tab of input.entryTabs) {
@@ -107,6 +107,8 @@ export function planTriageDetailTabsV1(input: Readonly<{
       tabs.push(Object.freeze({
         kind: 'source',
         id: tab.id,
+        // Source panel ids are author-owned; frame ids must also coexist with host tabs.
+        frameId: `source:${tab.id}`,
         title: tab.title,
         ...(tab.titleKey ? { titleKey: tab.titleKey } : {}),
         from: 'entry',

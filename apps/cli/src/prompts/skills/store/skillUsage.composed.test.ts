@@ -12,6 +12,14 @@ import { createClaudeSkillUsageWitness } from '../../../../../../packages/plugin
 import { createLightSqliteHarness, type LightSqliteHarness } from '../../../../../server/sources/testkit/lightSqliteHarness';
 import { createAuthenticatedTestApp } from '../../../../../server/sources/app/api/testkit/sqliteFastify';
 import { accountRoutes } from '../../../../../server/sources/app/api/routes/account/accountRoutes';
+import { artifactsRoutes } from '../../../../../server/sources/app/api/routes/artifacts/artifactsRoutes';
+import { createPromptBundleInLibrary } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
+import { createSkillActionExecuteV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionOperations';
+import { SKILL_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
+import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/artifactStore';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { readSkillBundleContentV1 } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
+import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import type { Fastify } from '../../../../../server/sources/app/api/types';
 import { auth } from '../../../../../server/sources/app/auth/auth';
 import { db } from '../../../../../server/sources/storage/db';
@@ -71,6 +79,7 @@ it('records captured vendor evidence through strict host projection, authenticat
         return payload;
     });
     accountRoutes(server);
+    artifactsRoutes(server);
     const sockets = new Server(server.server, { path: '/v1/updates' });
     sockets.use((socket, next) => {
         const token: unknown = socket.handshake.auth.token;
@@ -91,9 +100,11 @@ it('records captured vendor evidence through strict host projection, authenticat
         observer.once('connect', resolve); observer.once('connect_error', reject);
     });
     const releaseHome = publishServerHttpRuntimeOrigin(serverUrl, 'https');
+    // Production constructs the recorder before warming the daemon's Account.
+    resetActiveAccountSettingsSnapshotForTests();
+    const recorder = createSkillUsageRecorder({ credentials });
     setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
         settingsVersion: 7, loadedAtMs: Date.now(), settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) });
-    const recorder = createSkillUsageRecorder({ credentials });
     const daemon = createDaemonControlApp({ getChildren: () => [], machineId: 'skill-seam-machine',
         stopSession: async () => ({ status: 'not_found' }), spawnSession: async () => ({ type: 'success', sessionId: 'unused' }),
         requestShutdown: () => {}, onHappySessionWebhook: () => {}, controlToken: 'skill-seam-control', skillUsageRecorder: recorder });
@@ -103,12 +114,30 @@ it('records captured vendor evidence through strict host projection, authenticat
         startedAt: Date.now(), startedWithCliVersion: 'test', controlToken: 'skill-seam-control' });
     let now = Date.parse(captured.provenance.capturedAt);
     vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const library = createCliApprovalsArtifactStore({ credentials });
+    const created = await createPromptBundleInLibrary({ store: library.promptLibraryStore, request: {
+        title: 'contract-skill', bundleSchemaId: 'skills.skill_md_v1', entries: [{ path: 'SKILL.md', contentKind: 'utf8',
+            contentBase64: Buffer.from('---\nname: contract-skill\ndescription: Usage contract\n---\nRead this skill.\n').toString('base64') }],
+    } });
+    const skillId = created.artifactId;
+    const content = readSkillBundleContentV1((await library.promptLibraryStore.read(skillId))!);
+    if (!content) throw new Error('Created skill is unreadable');
+    const actions = createSkillActionExecuteV1({ store: library.promptLibraryStore, skillRules: library.skillRules,
+        randomId: () => { throw new Error('Read must not allocate an id'); },
+        includeInSession: async () => { throw new Error('Read must not change selection'); } });
+    const readList = async () => SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.list'].parse(
+        await actions('skills.list', { query: 'contract-skill' }, { surface: 'cli' }));
     const delivery: AgentSessionSkillDelivery = { pluginRoot: join(database.baseDir, 'session-plugin'),
         skillsRoot: join(database.baseDir, 'session-plugin', 'skills'), nativeDisables: [],
-        items: [{ name: 'contract-skill', skillId: 'library-contract-skill', digest: `sha256:${'a'.repeat(64)}` }] };
+        items: [{ name: 'contract-skill', skillId, digest: content.digest }] };
     let transcriptCommits = 0;
     const session = { sessionId: captured.assistant.session_id,
         enqueueAgentMessageCommitted: async () => { transcriptCommits += 1; return { persisted: true, delivered: true }; } };
+    const executor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials,
+        sessionId: session.sessionId, serverHttpBaseUrl: serverUrl, getCurrentSessionSkillItems: () => delivery.items }));
+    // This is the successful Session-scoped skills.read path observed in native Codex QA.
+    const readInSession = () => executor.execute('skills.read', { name: 'contract-skill', sessionId: session.sessionId },
+        { surface: 'agent', defaultSessionId: session.sessionId });
     const projection = { session, skillDelivery: delivery, usageAccount: { accountId: account.id, serverHttpBaseUrl: serverUrl } };
     const witness = createClaudeSkillUsageWitness();
     witness.observe(captured.assistant);
@@ -135,6 +164,7 @@ it('records captured vendor evidence through strict host projection, authenticat
         expect(Reflect.apply(parseParams, mutationParamsSchema, [{ key: producerKey }])).toEqual({ key: producerKey });
         expect(() => Reflect.apply(parseParams, mutationParamsSchema, [{ key: buildPromptLibraryPhysicalKeyV1(producerKey) }])).toThrow();
         expect(event.skills).toEqual([{ name: 'happier:contract-skill' }]);
+        expect(await readList()).toMatchObject({ usageObservedSince: null, items: [{ skillId }] });
         expect(AgentSessionRuntimeEventSchema.safeParse({ ...event, unexpected: true }).success).toBe(false);
         rejectUsageWrite = true;
         expect(await projectRuntimeTranscriptEvent({ ...projection, event })).toEqual({ projected: true, kind: 'skill-usage' });
@@ -144,10 +174,12 @@ it('records captured vendor evidence through strict host projection, authenticat
         // This is a fresh native use, never a queued replay of the rejected observation.
         expect(await projectRuntimeTranscriptEvent({ ...projection, event: { ...event, sequence: 2, emittedAtMs: now } }))
             .toEqual({ projected: true, kind: 'skill-usage' });
-        expect(await readPersisted()).toEqual({ revision: 1, value: { v: 1, lastUsedAt: { 'library-contract-skill': now } } });
+        expect(await readPersisted()).toEqual({ revision: 1, value: { v: 1, lastUsedAt: { [skillId]: now } } });
+        expect(await readList()).toMatchObject({ usageObservedSince: now, items: [{ skillId, lastUsedAt: now }] });
         expect(rowOutcomes).toContainEqual({ method: 'POST', status: 'updated' });
         await vi.waitFor(() => expect(wakes).toContainEqual(expect.objectContaining({ body: { t: 'account-change' } })));
         await projectRuntimeTranscriptEvent({ ...projection, event: { ...event, sequence: 2 } });
+        expect(await readInSession()).toMatchObject({ ok: true, result: { skillId, lastUsedAt: now } });
         expect((await readPersisted()).revision).toBe(1);
 
         const requestsBeforeForeignEvidence = homeRequests;
@@ -166,11 +198,11 @@ it('records captured vendor evidence through strict host projection, authenticat
         // A genuine competing row writer advances the Server CAS while the daemon retains revision 1.
         const competitor = createCliPromptLibraryStore({ credentials });
         expect(await competitor.writeRecord({ expectedRevision: 1, record: { key: 'skill-usage', value: {
-            v: 1, lastUsedAt: { 'library-contract-skill': now - 86_400_000, 'other-skill': now } } } })).toMatchObject({ status: 'updated', revision: 2 });
+            v: 1, lastUsedAt: { [skillId]: now - 86_400_000, 'other-skill': now } } } })).toMatchObject({ status: 'updated', revision: 2 });
         await projectRuntimeTranscriptEvent({ ...projection, event: { ...event, sequence: 5, emittedAtMs: now } });
         expect(rowOutcomes).toContainEqual({ method: 'POST', status: 'conflict' });
         expect(await readPersisted()).toEqual({ revision: 2, value: { v: 1, lastUsedAt: {
-            'library-contract-skill': now - 86_400_000, 'other-skill': now } } });
+            [skillId]: now - 86_400_000, 'other-skill': now } } });
 
         failRowReads = true;
         expect((await refreshActivePromptLibraryCatalog({ credentials })).status).toBe('unavailable');
@@ -179,8 +211,9 @@ it('records captured vendor evidence through strict host projection, authenticat
         expect((await readPersisted()).revision).toBe(2);
         expect(rowOutcomes.filter(row => row.method === 'POST')).toHaveLength(mutationsBeforeFailure);
         failRowReads = false;
-        await projectRuntimeTranscriptEvent({ ...projection, event: { ...event, sequence: 7, emittedAtMs: now } });
-        expect(await readPersisted()).toEqual({ revision: 3, value: { v: 1, lastUsedAt: { 'library-contract-skill': now, 'other-skill': now } } });
+        expect(await readInSession()).toMatchObject({ ok: true, result: { skillId } });
+        expect(await readPersisted()).toEqual({ revision: 3, value: { v: 1, lastUsedAt: { [skillId]: now, 'other-skill': now } } });
+        expect(await readList()).toMatchObject({ usageObservedSince: now, items: [{ skillId, lastUsedAt: now }] });
         expect(transcriptCommits).toBe(0);
         expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).settingsVersion).toBe(7);
         expect(await db.accountSettingsSnapshot.count({ where: { accountId: account.id } })).toBe(0);

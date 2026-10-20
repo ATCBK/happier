@@ -1,10 +1,46 @@
 import { describe, expect, it } from 'vitest';
 
 import { ApprovalRequestV2Schema, type ApprovalRequestV2 } from './approvalRequestV1.js';
-import { decideApprovalRequestTransition } from './approvalRequestTransition.js';
+import { decideApprovalRequestTransition, settleApprovalRequestActionArgs } from './approvalRequestTransition.js';
 import { PileApplyResultV1Schema } from '../storage/storageV1.js';
+import { computeExternalActionRequestEnvelopeDigestV1 } from '../actions/externalActionExecutionAuthorization.js';
 
 const target = { kind: 'window', displayId: ':73', pid: 42, windowId: 123 } as const;
+
+describe('finite original envelope settlement', () => {
+  it.each(['rejected', 'canceled', 'executed', 'failed'] as const)('removes the replay envelope only on %s settlement', status => {
+    const actionId = 'projects.compute.exec';
+    const target = { kind: 'machine' as const, machineId: 'worker' };
+    const input = { workspace: { serverId: 'home', workspaceId: 'source-ref', machineId: 'source', rootPath: '/source' },
+      executable: 'echo', argv: ['private-value'], cwd: '.' };
+    const envelope = { v: 1 as const, requestId: 'finite-request', target, input };
+    const open = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+      createdBy: { surface: 'cli' }, requestedSurface: 'cli', actionId, actionArgs: input, summary: 'Run command',
+      executionOriginV1: { v: 1, authority: 'account_automation', surface: 'cli', caller: { kind: 'host' },
+        serverId: 'home-profile', serverIdentityId: 'home', accountId: 'requester', machineId: 'worker', actionId,
+        requestId: envelope.requestId, target, originalActionEnvelope: envelope,
+        externalActionExecutionAuthorization: { v: 1, token: 'root', binding: { accountId: 'requester',
+          authentication: { kind: 'terminal', tokenEpoch: 1 }, custodianAccountId: 'owner', serverIdentityId: 'home',
+          machineId: 'worker', installationId: 'worker-installation', accountEncryptionMode: 'plain', actionId,
+          requestId: envelope.requestId, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope), target } } } });
+    const { originalActionEnvelope: _envelope, ...settledOrigin } = open.executionOriginV1;
+    expect(decideApprovalRequestTransition(open, { ...open, status: 'approved', updatedAtMs: 2,
+      decision: { kind: 'approve', decidedAtMs: 2 }, executionOriginV1: settledOrigin }))
+      .toMatchObject({ ok: false, errorCode: 'subject_mismatch' });
+    const existing = status === 'executed' || status === 'failed' ? ApprovalRequestV2Schema.parse({ ...open,
+      status: 'executing', decision: { kind: 'approve', decidedAtMs: 1 } }) : open;
+    const next = ApprovalRequestV2Schema.parse({ ...existing, status, updatedAtMs: 2,
+      actionArgs: settleApprovalRequestActionArgs(existing), executionOriginV1: settledOrigin,
+      decision: status === 'rejected' ? { kind: 'reject', decidedAtMs: 2 }
+        : status === 'canceled' ? undefined : existing.decision,
+      ...(status === 'executed' ? { execution: { executedAtMs: 2, ok: true, result: {} } }
+        : status === 'failed' ? { execution: { executedAtMs: 2, ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' } } : {}),
+    });
+    expect(decideApprovalRequestTransition(existing, next)).toEqual({ ok: true, changed: true });
+    expect(decideApprovalRequestTransition(existing, { ...next, executionOriginV1: existing.executionOriginV1 }))
+      .toMatchObject({ ok: false, errorCode: 'subject_mismatch' });
+  });
+});
 
 function openRequest(): ApprovalRequestV2 {
   return ApprovalRequestV2Schema.parse({

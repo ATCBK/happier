@@ -27,7 +27,11 @@ export const LegacyProfileMigrationConflictFlow = React.memo(function LegacyProf
     if (!machineId) {
         return <ItemList style={{ paddingTop: 0 }}>
             <ItemGroup>
-                <Item mode="info" title={t('settingsProviders.noMachine')} subtitle={t('settingsProviders.noMachineDescription')} />
+                {targetMachines.length > 0 ? <ProviderMachineSelector
+                    machines={targetMachines}
+                    selectedId={null}
+                    onSelect={setPreferredMachineId}
+                /> : <Item mode="info" title={t('settingsProviders.noMachine')} subtitle={t('settingsProviders.noMachineDescription')} />}
                 <Item title={t('common.cancel')} onPress={props.onClose} />
             </ItemGroup>
         </ItemList>;

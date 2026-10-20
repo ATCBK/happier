@@ -10,6 +10,12 @@ export const ITEM_GROUP_CONTENT_MARGIN_HORIZONTAL_PX = {
     default: 12,
 } as const;
 
+/** A grouped section title's inset inside the group container (also its footer's). */
+export const ITEM_GROUP_HEADER_HORIZONTAL_PADDING_PX = {
+    ios: 32,
+    default: 24,
+} as const;
+
 /**
  * The top spacer an untitled group draws in place of its header.
  *
@@ -21,6 +27,14 @@ export const ITEM_GROUP_HEADER_NO_TITLE_PADDING_TOP_PX = {
     ios: 20,
     default: 16,
 } as const;
+
+/** Where a grouped section title starts, from the group's outer edge. */
+export function resolveItemGroupHeaderHorizontalInsetPx(): number {
+    return (
+        (Platform.select(ITEM_GROUP_CONTAINER_HORIZONTAL_PADDING_PX) ?? 0)
+        + (Platform.select(ITEM_GROUP_HEADER_HORIZONTAL_PADDING_PX) ?? 0)
+    );
+}
 
 export function resolveItemGroupContentHorizontalInsetPx(): number {
     return (

@@ -91,6 +91,7 @@ export type { ProviderAccountUsageQuotaScopeV1 } from '../connectedAccounts.js';
 export type { ProviderAccountSubscriptionV1 } from '../connectedAccounts.js';
 export type {
     ConnectedServiceQuotaRecoveryCreditV1,
+    ConnectedServiceQuotaRecoveryCreditsV1,
     ConnectedServiceQuotaRecoveryCreditDetailsV1,
     ConnectedServiceQuotaRecoveryCreditDetailsByIdV1,
 } from '../connectedAccounts.js';

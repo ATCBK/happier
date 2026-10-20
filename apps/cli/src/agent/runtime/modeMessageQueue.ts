@@ -12,6 +12,7 @@ type QueueItem<Mode, Message> = {
   mode: Mode;
   modeHash: string;
   isolate: boolean;
+  contextOnly?: true;
 };
 
 type MessageBatcher<Message> = (messages: Message[]) => Message;
@@ -34,6 +35,8 @@ export class MessageQueue2<Mode, Message = string> {
   private onMessageHandler: ((message: Message, mode: Mode) => void) | null = null;
   readonly modeHasher: (mode: Mode) => string;
   private readonly batcher: MessageBatcher<Message>;
+  private readonly isContextOnly: (message: Message, mode: Mode) => boolean;
+  private readonly withContext: (message: Message, context: Message[]) => Message;
   private lastWaitLogAt = 0;
   private lastAbortLogAt = 0;
   private readonly changeListeners = new Set<(collected?: MessageQueueBatch<Mode, Message>) => void>();
@@ -47,21 +50,41 @@ export class MessageQueue2<Mode, Message = string> {
     for (const listener of this.changeListeners) listener(collected);
   }
 
+  private notifyInserted(message: Message, mode: Mode, contextOnly: boolean): void {
+    this.notifyChanged();
+    if (contextOnly) return;
+    this.onMessageHandler?.(message, mode);
+    if (this.waiter) {
+      const waiter = this.waiter;
+      this.waiter = null;
+      waiter(true);
+    }
+  }
+
   constructor(
     modeHasher: (mode: Mode) => string,
     opts?: {
       onMessageHandler?: ((message: Message, mode: Mode) => void) | null;
       batcher?: MessageBatcher<Message>;
+      /** Retain information for the next real input; it must not trigger a turn. */
+      isContextOnly?: (message: Message, mode: Mode) => boolean;
+      withContext?: (message: Message, context: Message[]) => Message;
     },
   ) {
     this.modeHasher = modeHasher;
     this.onMessageHandler = opts?.onMessageHandler ?? null;
     this.batcher = opts?.batcher ?? (defaultStringBatcher as unknown as MessageBatcher<Message>);
+    this.isContextOnly = opts?.isContextOnly ?? (() => false);
+    this.withContext = opts?.withContext ?? ((message, context) => this.batcher([...context, message]));
     logger.debug('[MessageQueue2] Initialized');
   }
 
   setOnMessage(handler: ((message: Message, mode: Mode) => void) | null): void {
     this.onMessageHandler = handler;
+  }
+
+  getContextOnlyMessages(): readonly Message[] {
+    return this.queue.filter(item => item.contextOnly).map(item => item.message);
   }
 
   push(message: Message, mode: Mode): void {
@@ -71,23 +94,15 @@ export class MessageQueue2<Mode, Message = string> {
 
     const modeHash = this.modeHasher(mode);
 
+    const contextOnly = this.isContextOnly(message, mode);
     this.queue.push({
       message,
       mode,
       modeHash,
       isolate: false,
+      ...(contextOnly ? { contextOnly: true as const } : {}),
     });
-    this.notifyChanged();
-
-    if (this.onMessageHandler) {
-      this.onMessageHandler(message, mode);
-    }
-
-    if (this.waiter) {
-      const waiter = this.waiter;
-      this.waiter = null;
-      waiter(true);
-    }
+    this.notifyInserted(message, mode, contextOnly);
   }
 
   pushImmediate(message: Message, mode: Mode): void {
@@ -106,23 +121,15 @@ export class MessageQueue2<Mode, Message = string> {
 
     const modeHash = this.modeHasher(mode);
 
+    const contextOnly = this.isContextOnly(message, mode);
     this.queue.push({
       message,
       mode,
       modeHash,
       isolate: true,
+      ...(contextOnly ? { contextOnly: true as const } : {}),
     });
-    this.notifyChanged();
-
-    if (this.onMessageHandler) {
-      this.onMessageHandler(message, mode);
-    }
-
-    if (this.waiter) {
-      const waiter = this.waiter;
-      this.waiter = null;
-      waiter(true);
-    }
+    this.notifyInserted(message, mode, contextOnly);
   }
 
   pushIsolateAndClear(message: Message, mode: Mode): void {
@@ -131,25 +138,17 @@ export class MessageQueue2<Mode, Message = string> {
     }
 
     const modeHash = this.modeHasher(mode);
-    this.queue = [];
+    this.queue = this.queue.filter(item => item.contextOnly);
 
+    const contextOnly = this.isContextOnly(message, mode);
     this.queue.push({
       message,
       mode,
       modeHash,
       isolate: true,
+      ...(contextOnly ? { contextOnly: true as const } : {}),
     });
-    this.notifyChanged();
-
-    if (this.onMessageHandler) {
-      this.onMessageHandler(message, mode);
-    }
-
-    if (this.waiter) {
-      const waiter = this.waiter;
-      this.waiter = null;
-      waiter(true);
-    }
+    this.notifyInserted(message, mode, contextOnly);
   }
 
   unshift(message: Message, mode: Mode): void {
@@ -159,23 +158,15 @@ export class MessageQueue2<Mode, Message = string> {
 
     const modeHash = this.modeHasher(mode);
 
+    const contextOnly = this.isContextOnly(message, mode);
     this.queue.unshift({
       message,
       mode,
       modeHash,
       isolate: false,
+      ...(contextOnly ? { contextOnly: true as const } : {}),
     });
-    this.notifyChanged();
-
-    if (this.onMessageHandler) {
-      this.onMessageHandler(message, mode);
-    }
-
-    if (this.waiter) {
-      const waiter = this.waiter;
-      this.waiter = null;
-      waiter(true);
-    }
+    this.notifyInserted(message, mode, contextOnly);
   }
 
   reset(): void {
@@ -206,7 +197,7 @@ export class MessageQueue2<Mode, Message = string> {
   }
 
   size(): number {
-    return this.queue.length;
+    return this.queue.reduce((size, item) => size + (item.contextOnly ? 0 : 1), 0);
   }
 
   discardMatching(predicate: (message: Message, mode: Mode) => boolean): number {
@@ -223,7 +214,7 @@ export class MessageQueue2<Mode, Message = string> {
    * backwards compatibility with string queues.
    */
   async waitForMessagesAndGetAsString(abortSignal?: AbortSignal): Promise<MessageQueueBatch<Mode, Message> | null> {
-    if (this.queue.length > 0) {
+    if (this.size() > 0) {
       return this.collectBatch();
     }
 
@@ -240,7 +231,7 @@ export class MessageQueue2<Mode, Message = string> {
   }
 
   async waitForMessagesSignal(abortSignal?: AbortSignal): Promise<boolean> {
-    if (this.queue.length > 0) {
+    if (this.size() > 0) {
       return true;
     }
     if (this.closed || abortSignal?.aborted) {
@@ -260,14 +251,14 @@ export class MessageQueue2<Mode, Message = string> {
    */
   async waitForQueueGrowthBeyond(depth: number, abortSignal?: AbortSignal): Promise<boolean> {
     while (!abortSignal?.aborted) {
-      if (this.queue.length > depth) {
+      if (this.size() > depth) {
         return true;
       }
       if (this.closed) {
         return false;
       }
       if (!(await this.waitForQueueMutation(abortSignal))) {
-        return this.queue.length > depth;
+        return this.size() > depth;
       }
     }
     return false;
@@ -319,27 +310,39 @@ export class MessageQueue2<Mode, Message = string> {
   }
 
   private collectBatch(): MessageQueueBatch<Mode, Message> | null {
-    if (this.queue.length === 0) {
+    if (this.size() === 0) {
       return null;
     }
 
-    const firstItem = this.queue[0];
+    const context = this.queue.filter(item => item.contextOnly).map(item => item.message);
+    // Context selection happens after collection. Keep originals available until
+    // the consumer discards the exact identities represented in its final input.
+    const firstItemIndex = this.queue.findIndex(item => !item.contextOnly);
+    const firstItem = this.queue[firstItemIndex];
     const sameModeMessages: Message[] = [];
     const mode = firstItem.mode;
     const isolate = firstItem.isolate;
     const targetModeHash = firstItem.modeHash;
 
     if (firstItem.isolate) {
-      const item = this.queue.shift()!;
+      const item = this.queue.splice(firstItemIndex, 1)[0];
       sameModeMessages.push(item.message);
     } else {
-      while (this.queue.length > 0 && this.queue[0].modeHash === targetModeHash && !this.queue[0].isolate) {
-        const item = this.queue.shift()!;
+      let index = firstItemIndex;
+      while (index < this.queue.length) {
+        const item = this.queue[index];
+        if (item.contextOnly) {
+          index++;
+          continue;
+        }
+        if (item.modeHash !== targetModeHash || item.isolate) break;
+        this.queue.splice(index, 1);
         sameModeMessages.push(item.message);
       }
     }
 
-    const combinedMessage = this.batcher(sameModeMessages);
+    const combined = this.batcher(sameModeMessages);
+    const combinedMessage = context.length === 0 ? combined : this.withContext(combined, context);
     const batch = {
       message: combinedMessage,
       mode,
@@ -379,7 +382,7 @@ export class MessageQueue2<Mode, Message = string> {
         abortSignal.addEventListener('abort', abortHandler);
       }
 
-      if (this.queue.length > 0) {
+      if (this.size() > 0) {
         if (abortHandler && abortSignal) {
           abortSignal.removeEventListener('abort', abortHandler);
         }

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { flattenTestStyle, withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
+import { flattenTestStyle, reportPopoverContentLayout, withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { createDeferred } from '@/dev/testkit';
 import { OverlayPortalHost, OverlayPortalProvider } from '@/components/ui/popover/OverlayPortal';
@@ -376,6 +376,7 @@ describe('QualifiedAccountDetailView', () => {
 
         expect(screen.findByTestId('qualified-account-detail:rename:input')).toBeNull();
         await screen.pressByTestIdAsync('qualified-account-detail:action:edit-label');
+        await act(async () => reportPopoverContentLayout(screen, { width: 320, height: 180 }));
         await act(async () => screen.changeTextByTestId('qualified-account-detail:rename:input', '  Team · Acme  '));
         expect(screen.findHostByTestId('qualified-account-detail:rename:input')?.props.value).toBe('  Team · Acme  ');
         await act(async () => { screen.pressByTestId('qualified-account-detail:rename:save'); });

@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { SkillsRulesSetOutputV1Schema } from '@happier-dev/protocol/actions/specs/capabilityRules';
-import type { SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import { isReadOnlySkillProvenanceV1, type SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { useLocalSettingMutable } from '@/sync/domains/state/storage';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
@@ -57,7 +57,7 @@ export function useSkillsFirstRun(items: readonly SkillListItemV1[]) {
     inFlight.current = operation;
     return operation;
   }, [firstVisit, execution.ready, execution.execute, selectedIds, setDecidedAt]);
-  const migrated = React.useMemo(() => items.filter(item => item.provenance.kind !== 'first_party' && item.migratedFromContext), [items]);
+  const migrated = React.useMemo(() => items.filter(item => !isReadOnlySkillProvenanceV1(item.provenance) && item.migratedFromContext), [items]);
   return { eligible: firstVisit !== null, firstVisit, items: selection.items, migrated, selectedIds, selectedCount: selectedIds.length,
     setSelected, turnOn, notNow, pending, errorCode };
 }

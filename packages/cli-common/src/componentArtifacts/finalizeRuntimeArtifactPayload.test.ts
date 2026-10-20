@@ -167,14 +167,20 @@ describe('finalizeRuntimeArtifactPayload', () => {
             'sharp-libvips-linuxmusl-arm64', 'sharp-libvips-linuxmusl-x64',
             'sharp-win32-arm64', 'sharp-win32-ia32', 'sharp-win32-x64',
             'sharp-wasm32',
+            'sharp-freebsd-wasm32', 'sharp-webcontainers-wasm32',
         ];
-        for (const packageName of sharpPackages) await put(`${sharpRoot}/${packageName}/package.json`);
+        for (const packageName of sharpPackages) {
+            const path = join(root, sharpRoot, packageName, 'package.json');
+            await mkdir(join(path, '..'), { recursive: true });
+            await writeFile(path, JSON.stringify({ name: `@img/${packageName}` }));
+        }
         for (const nativeTarget of ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64', 'linuxmusl-arm64', 'linuxmusl-x64']) {
             const nested = join(root, sharpRoot, `sharp-${nativeTarget}/node_modules/@img/sharp-libvips-${nativeTarget}`);
             await mkdir(join(nested, '..'), { recursive: true });
             await cp(join(root, sharpRoot, `sharp-libvips-${nativeTarget}`), nested, { recursive: true });
         }
-        await put(`${sharpRoot}/colour/package.json`);
+        await mkdir(join(root, sharpRoot, 'colour'), { recursive: true });
+        await writeFile(join(root, sharpRoot, 'colour/package.json'), JSON.stringify({ name: '@img/colour' }));
         for (const packageName of ['bare-fs', 'bare-os', 'bare-url']) {
             await put(`node_modules/${packageName}/LICENSE`);
             for (const targetKey of [
@@ -499,8 +505,20 @@ describe('finalizeRuntimeArtifactPayload', () => {
             installedPackage: 'node_modules/sharp/node_modules/@img/sharp-linux-arm64',
             expectedMissing: '@img/sharp-darwin-arm64',
         },
+        {
+            packageRoot: 'node_modules/sharp',
+            installedPackage: 'node_modules/@img/sharp-linux-arm64',
+            expectedMissing: '@img/sharp-darwin-arm64',
+        },
     ])('rejects an incomplete cross-target closure for $packageRoot', async ({ packageRoot, installedPackage, expectedMissing }) => {
-        const root = await createTempDir();
+        const fixtureRoot = await createTempDir();
+        const root = join(fixtureRoot, 'payload');
+        // Build-host ancestors cannot satisfy the packaged runtime's closure.
+        for (const name of ['sharp-darwin-arm64', 'sharp-libvips-darwin-arm64']) {
+            const packageDir = join(fixtureRoot, 'node_modules/@img', name);
+            await mkdir(packageDir, { recursive: true });
+            await writeFile(join(packageDir, 'package.json'), JSON.stringify({ name: `@img/${name}` }));
+        }
         for (const path of [`${packageRoot}/package.json`, `${installedPackage}/package.json`, 'package-dist/index.mjs']) {
             const fullPath = join(root, path);
             await mkdir(join(fullPath, '..'), { recursive: true });
@@ -510,6 +528,16 @@ describe('finalizeRuntimeArtifactPayload', () => {
         await expect(finalizeRuntimeArtifactPayload(root, {
             os: 'darwin', arch: 'arm64', bunTarget: 'bun-darwin-arm64', exeExt: '',
         })).rejects.toThrow(expectedMissing);
+        const scopeDirectory = installedPackage.startsWith('node_modules/sharp/')
+            ? 'node_modules/sharp/node_modules/@img'
+            : 'node_modules/@img';
+        for (const name of ['sharp-darwin-arm64', 'sharp-libvips-darwin-arm64']) {
+            const packageDir = join(root, scopeDirectory, name);
+            await mkdir(packageDir, { recursive: true });
+            await writeFile(join(packageDir, 'package.json'), JSON.stringify({ name: `@img/${name}` }));
+        }
+        await finalizeRuntimeArtifactPayload(root, { os: 'darwin', arch: 'arm64', bunTarget: 'bun-darwin-arm64', exeExt: '' });
+        expect(await readdir(join(root, scopeDirectory))).toEqual(['sharp-darwin-arm64', 'sharp-libvips-darwin-arm64']);
     });
 
     it.each([

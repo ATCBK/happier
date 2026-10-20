@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import tweetnacl from 'tweetnacl';
 import {
+    type AccountDisplayProfileV1,
     convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1,
     createAccountScopedCryptoMaterialSnapshotV1,
     CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
@@ -73,7 +74,10 @@ vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
 });
 const TEAM_MEMBER_LOOKUPS = vi.hoisted(() => ({
     queries: [] as string[],
-    members: [] as Array<{ accountId: string; account: { firstName: string | null; lastName: string | null; username: string | null; avatarUrl: string | null } }>,
+    members: [] as Array<{ accountId: string; account: AccountDisplayProfileV1 }>,
+    principalBatches: [] as string[][],
+    principalSignals: [] as (AbortSignal | undefined)[],
+    principalGate: null as Promise<void> | null,
 }));
 
 installDisconnectedServerSocketBoundary();
@@ -166,8 +170,11 @@ async function setupHome(options: Readonly<{ sharing: boolean; encrypted: boolea
         granted: false,
         grantAccessLevel: 'view' as 'view' | 'edit' | 'admin',
         grantMode: 'normal' as 'normal' | 'malformed_after_commit' | 'malformed_without_commit',
+        mutationChanged: true,
+        mutationGate: null as Promise<void> | null,
         primaryTeamId: null as string | null,
         includeRequiredTeamGrant: false,
+        additionalTeamIds: [] as string[],
         includeContextGroupGrant: false,
         contextMode: 'normal' as 'normal' | 'denied' | 'malformed_after_commit' | 'malformed_without_commit',
         contextArchived: false,
@@ -215,6 +222,16 @@ async function setupHome(options: Readonly<{ sharing: boolean; encrypted: boolea
         const path = new URL(String(url)).pathname;
         if (path === '/v2/cursor') return Response.json({ cursor: '0' });
         if (path === '/v1/auth/ping') return new Response('{}');
+        if (path === '/v1/session-access/principals/resolve') {
+            const body = JSON.parse(String(init?.body)) as { subjects: Array<{ kind: string; accountId?: string }> };
+            const accountIds = body.subjects.flatMap(subject => subject.kind === 'account' ? [subject.accountId!] : []);
+            TEAM_MEMBER_LOOKUPS.principalBatches.push(accountIds);
+            TEAM_MEMBER_LOOKUPS.principalSignals.push(init?.signal ?? undefined);
+            await TEAM_MEMBER_LOOKUPS.principalGate;
+            return Response.json({ v: 1, principals: TEAM_MEMBER_LOOKUPS.members
+                .filter(member => accountIds.includes(member.accountId))
+                .map(member => ({ kind: 'account', accountId: member.accountId, ...member.account })) });
+        }
         if (path === '/v1/teams/list' || path === '/v1/teams/members/list') {
             teamPaths.push(path);
             if (TEAM_DIRECTORY.failed) throw new Error('Team directory network unavailable');
@@ -295,7 +312,10 @@ async function setupHome(options: Readonly<{ sharing: boolean; encrypted: boolea
         if (path === '/v2/sessions/access-grants/list') {
             return new Response(JSON.stringify({
                 visibility: 'complete', owner: OWNER, primaryTeamId: state.primaryTeamId,
-                grants: [...(state.granted ? [{...GRANT_ROW,grant:{...GRANT_ROW.grant,accessLevel:state.grantAccessLevel}}] : []), ...(state.includeRequiredTeamGrant ? [TEAM_GRANT_ROW] : []), ...(state.includeContextGroupGrant ? [{
+                grants: [...(state.granted ? [{...GRANT_ROW,grant:{...GRANT_ROW.grant,accessLevel:state.grantAccessLevel}}] : []), ...(state.includeRequiredTeamGrant ? [TEAM_GRANT_ROW] : []), ...state.additionalTeamIds.map(teamId => ({
+                    ...TEAM_GRANT_ROW, grant: { ...TEAM_GRANT_ROW.grant, subject: { kind: 'team', teamId } },
+                    principal: { kind: 'team', teamId, name: teamId },
+                })), ...(state.includeContextGroupGrant ? [{
                     grant: { subject: { kind: 'group', teamId: 'team-acme', groupId: 'reviewers' }, accessLevel: 'view', canApprovePermissions: false },
                     principal: { kind: 'group', teamId: 'team-acme', groupId: 'reviewers', name: 'Reviewers', teamName: 'Product Reliability' },
                     allowedTransitions: { accessLevels: ['view'], canChangePermissionDelegation: false, canRemove: true },
@@ -311,7 +331,8 @@ async function setupHome(options: Readonly<{ sharing: boolean; encrypted: boolea
             if (state.contextMode !== 'malformed_without_commit') state.primaryTeamId = body.primaryTeamId;
             if (state.contextMode === 'malformed_after_commit') return new Response('{}');
             if (state.contextMode === 'malformed_without_commit') return new Response('{}');
-            return new Response(JSON.stringify({ changed: true, primaryTeamId: state.primaryTeamId }));
+            await state.mutationGate;
+            return new Response(JSON.stringify({ changed: state.mutationChanged, primaryTeamId: state.primaryTeamId }));
         }
         if (path === '/v2/sessions/access-grants/set') {
             const body = JSON.parse(String(init?.body)) as {
@@ -324,11 +345,12 @@ async function setupHome(options: Readonly<{ sharing: boolean; encrypted: boolea
                 state.grantAccessLevel = body.accessLevel;
             }
             if (state.grantMode !== 'normal') return new Response('{}');
-            return new Response(JSON.stringify({ changed: true, grant: {...GRANT_ROW.grant,accessLevel:state.grantAccessLevel} }));
+            return new Response(JSON.stringify({ changed: state.mutationChanged, grant: {...GRANT_ROW.grant,accessLevel:state.grantAccessLevel} }));
         }
         if (path === '/v2/sessions/access-grants/remove') {
             state.granted = false;
-            return new Response(JSON.stringify({ changed: true, subject: GRANT_ROW.grant.subject }));
+            await state.mutationGate;
+            return new Response(JSON.stringify({ changed: state.mutationChanged, subject: GRANT_ROW.grant.subject }));
         }
         const sessionSnapshotMatch = path.match(/^\/v2\/sessions\/([^/]+)$/);
         if (sessionSnapshotMatch && init?.method === 'PATCH') {
@@ -439,6 +461,9 @@ beforeEach(async () => {
     TEAM_DIRECTORY.failed = false;
     TEAM_MEMBER_LOOKUPS.queries = [];
     TEAM_MEMBER_LOOKUPS.members = [];
+    TEAM_MEMBER_LOOKUPS.principalBatches = [];
+    TEAM_MEMBER_LOOKUPS.principalSignals = [];
+    TEAM_MEMBER_LOOKUPS.principalGate = null;
 });
 
 afterEach(async () => {
@@ -958,30 +983,118 @@ describe('useLiveSessionAccessEditorController encrypted-access preparation', ()
         expect(controller().model.encryption?.showAllLabel).toBe('Show encryption per person');
     });
 
-    it('names a recipient reachable only through the Team grant, and asks once per visible Account', async () => {
+    it('batches 500 Team recipients only in the visible census and resolves just the next page', async () => {
         const home = await setupHome({ sharing: true, encrypted: true });
         home.state.granted = true;
         home.state.includeRequiredTeamGrant = true;
-        TEAM_MEMBER_LOOKUPS.members = [{
-            accountId: 'carol',
-            account: { firstName: 'Carol', lastName: 'Shaw', username: 'carol', avatarUrl: null },
-        }];
-        home.state.envelopePages = [{
-            summary: { prepared: 0, pending: 2, invalid: 0, recipientKeyUnavailable: 0 },
-            items: [
-                { ...createRecipientEnvelopeItem(), recipientAccountId: 'carol' },
-                // Nobody in this Team: the identifier is the honest presentation.
-                { ...createRecipientEnvelopeItem(), recipientAccountId: 'dora' },
-            ],
+        home.state.additionalTeamIds = ['team-design'];
+        const item = createRecipientEnvelopeItem();
+        const accountIds = Array.from({ length: 500 }, (_, index) => `recipient-${index}`);
+        TEAM_MEMBER_LOOKUPS.members = [...accountIds.slice(0, -1), 'second-page'].map(accountId => ({
+            accountId, account: { name: `Team ${accountId}`, firstName: 'Team', lastName: accountId, username: accountId, avatarUrl: null },
+        }));
+        const page = {
+            summary: { prepared: 0, pending: 501, invalid: 0, recipientKeyUnavailable: 0 },
+            items: accountIds.map(recipientAccountId => ({ ...item, recipientAccountId })),
+            nextCursor: encodeSessionDataKeyEnvelopeCursorV1(accountIds.at(-1)!),
+        };
+        home.state.envelopePages = [page, page, {
+            summary: page.summary, items: [{ ...item, recipientAccountId: 'second-page' }],
         }];
         const controller = await mountController(home.profile.id);
-        await vi.waitFor(() => expect(controller().model.encryption?.recipients?.rows).toHaveLength(2));
-        await vi.waitFor(() => expect(controller().model.encryption?.recipients?.rows[0]?.label).toBe('Carol Shaw'));
-        expect(controller().model.encryption?.recipients?.rows[1]?.label).toBe('dora');
+        await vi.waitFor(() => expect(controller().model.encryption?.recipients?.rows).toHaveLength(500));
+        expect(TEAM_MEMBER_LOOKUPS.queries).toEqual([]);
+        expect(TEAM_MEMBER_LOOKUPS.principalBatches).toEqual([]);
+        await act(async () => { controller().actions.toggleAllRecipients(); });
+        await vi.waitFor(() => expect(controller().model.encryption?.recipients?.rows[0]?.label).toBe('Team recipient-0'));
+        expect(controller().model.encryption?.recipients?.rows[499]?.label).toBe('recipient-499');
+        expect(TEAM_MEMBER_LOOKUPS.principalBatches).toEqual([accountIds]);
+        await act(async () => { controller().actions.loadMoreRecipients(); });
+        await vi.waitFor(() => expect(controller().model.encryption?.recipients?.rows[500]?.label).toBe('Team second-page'));
+        expect(TEAM_MEMBER_LOOKUPS.principalBatches).toEqual([accountIds, ['second-page']]);
+        expect(TEAM_MEMBER_LOOKUPS.queries).toEqual([]);
+    });
 
-        // Exactly the visible Accounts, exactly once each: no roster paging, and no
-        // second question about an answer the Home already gave.
-        expect([...TEAM_MEMBER_LOOKUPS.queries].sort()).toEqual(['carol', 'dora']);
+    it('cancels recipient identity disclosure when the census closes', async () => {
+        const home = await setupHome({ sharing: true, encrypted: true });
+        home.state.includeRequiredTeamGrant = true;
+        let release!: () => void;
+        TEAM_MEMBER_LOOKUPS.principalGate = new Promise<void>(resolve => { release = resolve; });
+        TEAM_MEMBER_LOOKUPS.members = [{ accountId: 'carol',
+            account: { name: 'Carol Shaw', firstName: 'Carol', lastName: 'Shaw', username: 'carol', avatarUrl: null } }];
+        home.state.envelopePages.push({ summary: { prepared: 0, pending: 1, invalid: 0, recipientKeyUnavailable: 0 },
+            items: [{ ...createRecipientEnvelopeItem(), recipientAccountId: 'carol' }] },
+        { summary: { prepared: 0, pending: 0, invalid: 0, recipientKeyUnavailable: 0 }, items: [] });
+        const controller = await mountController(home.profile.id);
+        await act(async () => { controller().actions.toggleAllRecipients(); });
+        await vi.waitFor(() => expect(TEAM_MEMBER_LOOKUPS.principalBatches).toEqual([['carol']]));
+        await act(async () => { controller().actions.toggleAllRecipients(); });
+        expect(TEAM_MEMBER_LOOKUPS.principalSignals[0]?.aborted).toBe(true);
+        await act(async () => { release(); });
+        expect(controller().model.encryption?.recipients).toBeUndefined();
+    });
+
+    it('settles an acknowledged no-op grant without refreshing or preparing keys', async () => {
+        const home = await setupHome({ sharing: true, encrypted: true });
+        home.state.granted = true;
+        home.state.mutationChanged = false;
+        const controller = await mountController(home.profile.id);
+        await vi.waitFor(() => expect(controller().model.encryption).toBeDefined());
+        const reads = home.paths.filter(path => path === '/v2/sessions/access-grants/list').length;
+        const envelopeReads = home.envelopeStates.length;
+        await act(async () => { controller().actions.setAccessLevel(GRANT_ROW.grant.subject, 'view'); });
+        await vi.waitFor(() => expect(home.paths).toContain('/v2/sessions/access-grants/set'));
+        await vi.waitFor(() => expect(controller().model.grants[0]?.operation.kind).toBe('idle'));
+        expect(home.paths.filter(path => path === '/v2/sessions/access-grants/list')).toHaveLength(reads);
+        expect(home.envelopeStates).toHaveLength(envelopeReads);
+    });
+
+    it('refreshes a no-op grant when its acknowledged values differ from the retained row', async () => {
+        const home = await setupHome({ sharing: true, encrypted: false });
+        home.state.granted = true;
+        home.state.mutationChanged = false;
+        const controller = await mountController(home.profile.id);
+        await vi.waitFor(() => expect(controller().model.grants[0]?.level).toMatchObject({ value: 'view' }));
+        const reads = home.paths.filter(path => path === '/v2/sessions/access-grants/list').length;
+        home.state.grantAccessLevel = 'edit';
+        await act(async () => { controller().actions.setAccessLevel(GRANT_ROW.grant.subject, 'edit'); });
+        await vi.waitFor(() => expect(controller().model.grants[0]?.level).toMatchObject({ value: 'edit' }));
+        expect(home.paths.filter(path => path === '/v2/sessions/access-grants/list')).toHaveLength(reads + 1);
+    });
+
+    it.each(['remove', 'context'] as const)('consumes a no-op %s acknowledgement already reconciled by the Home wake', async kind => {
+        const home = await setupHome({ sharing: true, encrypted: false });
+        home.state.granted = true;
+        home.state.mutationChanged = false;
+        TEAM_DIRECTORY.items = [{ id: 'team-acme', name: 'Acme', policy: {
+            sessionCreationPolicy: 'private_default', externalSharingPolicy: 'allowed',
+        } }];
+        let release!: () => void;
+        home.state.mutationGate = new Promise<void>(resolve => { release = resolve; });
+        const controller = await mountController(home.profile.id);
+        if (kind === 'remove') {
+            home.state.granted = false;
+            act(() => { controller().actions.requestRemove(GRANT_ROW.grant.subject); });
+            await act(async () => { controller().actions.confirmRemove(GRANT_ROW.grant.subject); });
+        } else {
+            await vi.waitFor(() => expect(controller().model.context?.options).toEqual(expect.arrayContaining([
+                expect.objectContaining({ teamId: 'team-acme' }),
+            ])));
+            home.state.primaryTeamId = 'team-acme';
+            await act(async () => { controller().actions.setContext('team-acme'); });
+        }
+        const mutationPath = kind === 'remove' ? '/v2/sessions/access-grants/remove' : '/v2/sessions/access-context/set';
+        await vi.waitFor(() => expect(home.paths).toContain(mutationPath));
+        // Another device's committed transition is already visible before this
+        // idempotent request's acknowledgement arrives.
+        await act(async () => { publishHomeAccountChange(home.profile.id, [SESSION_ID]); });
+        await vi.waitFor(() => kind === 'remove'
+            ? expect(controller().model.grants).toHaveLength(0)
+            : expect(controller().model.context?.primaryTeamId).toBe('team-acme'));
+        const reads = home.paths.filter(path => path === '/v2/sessions/access-grants/list').length;
+        await act(async () => { release(); });
+        if (kind === 'context') await vi.waitFor(() => expect(controller().model.context?.operation).toBe('idle'));
+        expect(home.paths.filter(path => path === '/v2/sessions/access-grants/list')).toHaveLength(reads);
     });
 
     it('lists the discovered exceptions beneath the aggregate by default and re-reads them after a pass', async () => {

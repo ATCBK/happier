@@ -9,6 +9,7 @@ import type { JsonValue } from '../identity.js';
 import type { PluginJsonRpcClient } from '../services/io.js';
 import type { ManagedServiceHandle, ManagedServiceSpec } from '../managed-services/contract.js';
 import type { AgentConnectedAccountContinuityV1 } from './connectedAccountContinuity.js';
+import type { ConnectedAccountsService } from '../services/connectedAccounts.js';
 
 /**
  * Secret-free connected-service selection supplied to an Agent daemon spawn
@@ -591,6 +592,17 @@ export type AgentPreflightSessionControlsProbeContextV1 =
       args: readonly string[];
       authenticationMethodId?: string;
     }>): Promise<Readonly<{ commands: readonly unknown[] | null; skills: readonly unknown[] | null }>>;
+    /** Optional host capability for an Agent selecting ACP at runtime. Uses the
+     * same initial native snapshot and normalizers as declarative ACP controls.
+     */
+    probeDeclaredAcpSessionControls?(input: AgentPreflightExecutableSelectorV1 & Readonly<{
+      args: readonly string[];
+      authenticationMethodId?: string;
+    }>): Promise<Readonly<{
+      models: readonly unknown[] | null;
+      modes: readonly unknown[] | null;
+      configOptions: unknown;
+    }>>;
     /** Resolves only a manifest-declared system tool; no executable or process handle is exposed. */
     resolveDeclaredSystemTool(input: Readonly<{ toolId: string }>): Promise<Readonly<{ executablePath: string }>>;
     /** Host supervises the statically declared spawn and disposes it after inspection. */
@@ -629,6 +641,26 @@ export type AgentPreflightSessionControlsModelsV1 = Readonly<{
  * enforcement, dispatch, and result projection.
  */
 export type AgentPreflightSessionControlsContributionV1 = Readonly<{
+  /** Extra launch directories whose project skill roots this Agent will load.
+   * The host scans them using the Agent's declared nativeRoots.project patterns.
+   */
+  resolveNativeSkillDirectories?: (input: Readonly<{
+    pluginSettings: AgentCliSessionCommandPluginSettingsV1;
+    runtimeDescriptorV1?: RuntimeDescriptorV1;
+  }>) => readonly string[] | Promise<readonly string[]>;
+  /** Reuse the Agent's native account preparation for this exact operation.
+   * Values stay private to launch preparation; catalog callbacks see presence facts only.
+   * The host disposes prepared assets after native inspection, before retiring account custody.
+   */
+  prepareLaunchEnvironment?: (input: Readonly<{
+    environment: Readonly<Record<string, string>>;
+    connectedAccounts: Pick<ConnectedAccountsService, 'getBinding' | 'materialize' | 'watch'>;
+    signal: AbortSignal;
+  }>) => Promise<Readonly<{
+    environment: Readonly<Record<string, string>>;
+    unset?: readonly string[];
+    dispose(): void | Promise<void>;
+  }>>;
   resolveProbeVariant?: (
     input: AgentPreflightSessionControlsProbeInputV1,
   ) => string | null | undefined;

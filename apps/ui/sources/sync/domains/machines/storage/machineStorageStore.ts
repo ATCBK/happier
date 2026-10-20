@@ -109,6 +109,9 @@ export function createMachineStorageStore(clients: MachineStorageClients) {
             return apply(current, { kind: 'summary', summary: overlaySummary(input, result.value) });
         },
         failRefresh: state => apply(state, { kind: 'error' }), applySnapshot: apply,
+        onWatchSnapshot: (input, update, previous) => {
+            if (update.kind === 'summary' && previous.summary?.revision !== update.summary.revision) refreshCategories(input);
+        },
         watch: async ({ input, state, watchClient, signal }) => {
             const result = await watchClient({ ...input, sinceRevision: state.summary?.revision, signal });
             if (signal?.aborted) return { status: 'unavailable' };
@@ -119,8 +122,7 @@ export function createMachineStorageStore(clients: MachineStorageClients) {
             if (!result.value.changed) return { status: 'idle' };
             const current = summaries.getState(input);
             if (current.summary !== state.summary && current.summary && result.value.summary.revision < current.summary.revision) return { status: 'idle' };
-            acceptSummary(input, result.value.summary);
-            return { status: 'idle' };
+            return { status: 'changed', snapshot: { kind: 'summary', summary: overlaySummary(input, result.value.summary) } };
         },
     });
     const categories = createSharedSubscriptionStore<MachineStorageCategoryInput, MachineStorageCategoryState, MachineStorageCategoryListResultV1, MachineStorageClients['categoryClient']>({
@@ -128,16 +130,8 @@ export function createMachineStorageStore(clients: MachineStorageClients) {
         normalizeInput: input => ({ ...input, serverId: input.serverId ?? null, expectedAccountId: input.expectedAccountId ?? null }),
         storeKey: categoryKey, defaultSnapshotClient: clients.categoryClient, retainState: true,
         refresh: async ({ input, state, snapshotClient, signal }): Promise<MachineStorageCategoryState> => {
-            let result;
-            let startedRevision;
-            // A watch can invalidate a page while its read is pending. Coalesce that demand, then
-            // re-read only when that actual revision edge made the pending answer obsolete.
-            do {
-                startedRevision = summaries.getState(input).summary?.revision;
-                result = await snapshotClient({ ...input, signal });
-                if (signal?.aborted) return state;
-            } while (result.ok && result.value.revision !== summaries.getState(input).summary?.revision
-                && startedRevision !== summaries.getState(input).summary?.revision);
+            const result = await snapshotClient({ ...input, signal });
+            if (signal?.aborted) return state;
             const current = categories.getState(input);
             if (!result.ok) return retain(current, { ...current, status: result.reason === 'older_happier' ? 'not_reported' : 'error' });
             if (result.value.categoryId !== input.categoryId) return retain(current, { ...current, status: 'error' });
@@ -182,16 +176,8 @@ export function createMachineStorageStore(clients: MachineStorageClients) {
         emptyState: EMPTY_SCAN, createState: () => EMPTY_SCAN, storeKey: scanKey, defaultSnapshotClient: scanClient, retainState: true,
         normalizeInput: input => ({ ...input, serverId: input.serverId ?? null, expectedAccountId: input.expectedAccountId ?? null }),
         refresh: async ({ input, state, snapshotClient, signal }): Promise<MachineStorageScanState> => {
-            let response;
-            let startedRevision;
-            do {
-                startedRevision = summaries.getState(input).summary?.revision;
-                response = await snapshotClient({ ...input, signal });
-                if (signal?.aborted) return state;
-                // Progress is useful even when another revision arrived during this read.
-                // Publish it before the coalesced follow-up, rather than waiting for a quiet scan.
-                if (response.ok) scans.publish(input, response.value);
-            } while (response.ok && startedRevision !== summaries.getState(input).summary?.revision);
+            const response = await snapshotClient({ ...input, signal });
+            if (signal?.aborted) return state;
             const current = scans.getState(input);
             return response.ok ? retain(current, { status: 'ready', page: retain(current.page, response.value) })
                 : retain(current, { ...current, status: response.reason === 'older_happier' ? 'not_reported' : 'error' });
@@ -329,12 +315,11 @@ export function createMachineStorageStore(clients: MachineStorageClients) {
         },
         /** Move to Trash or Delete now, exactly the reviewed items the person kept ticked; the result is the machine's receipt. */
         async applyPile(input: MachineStorageApplyInput): Promise<MachineStorageResult<PileApplyResultV1>> {
-            // The review sheet is the person's confirmation of exactly these items (R24: no second dialog).
+            // Review selects exact operands; the Action's policy owns confirmation.
             const { mode, items, ...rest } = input;
-            const target = { ...rest, confirmedByPerson: true };
             const response = mode === 'trash'
-                ? await (clients.trashMoveClient ?? (async value => (await rpc()).moveMachineStorageToTrashViaAction(value)))({ ...target, items: items.map(item => ({ ...item, claimedVerdict: item.claimedVerdict ?? 'safe' })) })
-                : await (clients.deleteNowClient ?? (async value => (await rpc()).deleteMachineStorageNowViaAction(value)))({ ...target, items: items.map(item => ({ ref: item.ref, expect: item.expect })) });
+                ? await (clients.trashMoveClient ?? (async value => (await rpc()).moveMachineStorageToTrashViaAction(value)))({ ...rest, items: items.map(item => ({ ...item, claimedVerdict: item.claimedVerdict ?? 'safe' })) })
+                : await (clients.deleteNowClient ?? (async value => (await rpc()).deleteMachineStorageNowViaAction(value)))({ ...rest, items: items.map(item => ({ ref: item.ref, expect: item.expect })) });
             if (response.ok) { setReceipt(input, { kind: 'applied', result: response.value, at: Date.now(), paths: Object.fromEntries(items.map(item => [item.ref.itemId, item.ref.path])) }); afterEffect(input); }
             return response;
         },

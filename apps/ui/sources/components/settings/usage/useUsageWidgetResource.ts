@@ -24,6 +24,9 @@ export type UsageWidgetBodyModel = Readonly<{
     refresh(): Promise<void>;
 }>;
 const EMPTY_SNAPSHOT: PluginUiResourceSnapshot = Object.freeze({ freshness: 'unknown', pending: 'idle', subscription: 'ended' });
+type UsageWidgetBodySnapshot = Readonly<Pick<PluginUiResourceSnapshot, 'pending' | 'freshness' | 'error'> & {
+    current: boolean; authorityLost: boolean; slice: UsageQueryResultSlice | undefined;
+}>;
 
 /** One canonical batch Resource per mounted page; bodies select its already decoded slices. */
 export function useUsageWidgetResource(input: Readonly<{
@@ -43,21 +46,34 @@ export function useUsageWidgetResource(input: Readonly<{
 }
 export function useUsageWidgetBodyModel(resource: UsageWidgetResource, instanceId: string): UsageWidgetBodyModel {
     const { entry, lifetime } = resource;
-    const subscribe = React.useCallback((listener: () => void) => entry?.subscribe(listener, true) ?? (() => {}), [entry]);
-    const getSnapshot = React.useCallback(() => entry?.getSnapshot() ?? EMPTY_SNAPSHOT, [entry]);
-    const snapshot = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
     const row = resource.plan.widgets.get(instanceId);
     const query = row?.query;
     const key = row?.key;
-    const current = lifetime?.isCurrent() === true && query !== undefined && key !== undefined;
-    const authorityLost = isPluginUiResourceReadAuthorityLost(snapshot);
-    const projectedSlice = current && !authorityLost && snapshot.value
-        ? decodeUsageQueryResource(snapshot.value).results.find(value => value.key === key) : undefined;
-    // Page chrome can name the producer's pending reads before any facts arrive.
-    // A source-only revision is not a zero-valued body or previous-period value.
-    const slice = projectedSlice?.pending && !projectedSlice.accounting && !projectedSlice.quota?.length
-        && !projectedSlice.sources.some(source => source.asOfMs !== undefined || source.status === 'error')
-        ? undefined : projectedSlice;
+    const subscribe = React.useCallback((listener: () => void) => entry?.subscribe(listener, true) ?? (() => {}), [entry]);
+    const getSnapshot = React.useMemo(() => {
+        let previous: UsageWidgetBodySnapshot | undefined;
+        return (): UsageWidgetBodySnapshot => {
+            const snapshot = entry?.getSnapshot() ?? EMPTY_SNAPSHOT;
+            const current = lifetime?.isCurrent() === true && query !== undefined && key !== undefined;
+            const authorityLost = isPluginUiResourceReadAuthorityLost(snapshot);
+            const projectedSlice = current && !authorityLost && snapshot.value
+                ? decodeUsageQueryResource(snapshot.value).results.find(value => value.key === key) : undefined;
+            // Source-only progress belongs to page chrome until this body has facts.
+            const slice = projectedSlice?.pending && !projectedSlice.accounting && !projectedSlice.quota?.length
+                && !projectedSlice.sources.some(source => source.asOfMs !== undefined || source.status === 'error')
+                ? undefined : projectedSlice;
+            // The Resource retains unchanged slice references. Select before React
+            // renders so sibling progress cannot repeat this body's model work.
+            if (previous && previous.slice === slice && previous.current === current && previous.authorityLost === authorityLost
+                && previous.pending === snapshot.pending && previous.freshness === snapshot.freshness && previous.error === snapshot.error) {
+                return previous;
+            }
+            previous = { slice, current, authorityLost, pending: snapshot.pending, freshness: snapshot.freshness, error: snapshot.error };
+            return previous;
+        };
+    }, [entry, lifetime, query, key]);
+    const snapshot = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+    const { current, authorityLost, slice } = snapshot;
     const identity = React.useMemo<UsageWidgetQueryIdentity | null>(() => current && query && lifetime
         ? { query, authority: lifetime.scope } : null, [current, lifetime, key]);
     const prior = React.useRef<Readonly<{ instanceId: string; identity: UsageWidgetQueryIdentity;
@@ -83,12 +99,13 @@ export function useUsageWidgetBodyModel(resource: UsageWidgetResource, instanceI
     // settles. Those sources keep their own pending state; they do not re-read
     // the already shown accounting. Before the first progress snapshot, retain
     // the entry's activity so an actual refresh is still visible immediately.
-    const accountingPending = !slice || slice.sources.some(source => source.source === 'accounting' && source.status === 'pending')
+    // A quota-only body has no A response that can end its refresh indicator.
+    const shownReadPending = query?.includeAccounting === false || !slice || slice.sources.some(source => source.source === 'accounting' && source.status === 'pending')
         || slice.comparison?.source.status === 'pending';
     return { requestedQuery: current ? identity : null,
         shownQuery: slice ? identity : retained?.identity ?? null, slice: shownSlice,
         pending: current && (snapshot.pending !== 'idle' || slice?.pending === true),
         error: current ? error : null, freshness: shownSlice && sourceError ? 'stale' : snapshot.freshness,
         updatingPreviousPeriod: !slice && retained !== null,
-        refreshing: current && shownSlice !== null && snapshot.pending !== 'idle' && accountingPending, refresh };
+        refreshing: current && shownSlice !== null && snapshot.pending !== 'idle' && shownReadPending, refresh };
 }

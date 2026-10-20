@@ -6,12 +6,12 @@ describe('resolveAgentInputControlLines', () => {
     it('reads rail 1 as setup and rail 2 as location (owner 2026-10-12)', () => {
         const lines = resolveAgentInputControlLines({
             layout: 'scroll',
-            controlIds: ['workflow', 'mcp', 'checkout', 'automation', 'env', 'profile', 'connectedServices', 'mode',
+            controlIds: ['workflow', 'capabilities', 'checkout', 'automation', 'env', 'profile', 'connectedServices', 'mode',
                 'permission', 'engine', 'files', 'attachments', 'resume', 'path', 'machine', 'organization', 'tags', 'sessionAccess'],
         });
 
         expect(lines.primary).toEqual(['attachments', 'files', 'engine', 'permission', 'mode', 'connectedServices',
-            'profile', 'env', 'workflow', 'mcp', 'sessionAccess', 'tags']);
+            'profile', 'env', 'workflow', 'capabilities', 'sessionAccess', 'tags']);
         expect(lines.secondary).toEqual(['machine', 'path', 'resume', 'checkout', 'organization', 'automation']);
     });
 
@@ -95,13 +95,13 @@ describe('resolveAgentInputControlLines', () => {
         expect(lines.secondary).toEqual(['machine', 'path']);
     });
 
-    it('keeps mcp on the primary line ahead of secondary machine/path controls', () => {
+    it('keeps capabilities on the primary line ahead of secondary machine/path controls', () => {
         const lines = resolveAgentInputControlLines({
             layout: 'wrap',
-            controlIds: ['engine', 'mcp', 'machine', 'path'],
+            controlIds: ['engine', 'capabilities', 'machine', 'path'],
         });
 
-        expect(lines.primary).toEqual(['engine', 'mcp']);
+        expect(lines.primary).toEqual(['engine', 'capabilities']);
         expect(lines.secondary).toEqual(['machine', 'path']);
     });
 

@@ -18,12 +18,13 @@ import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client
 import { resolveConnectedServicesServerApiTimeoutMs } from '@/api/client/connectedServicesServerApiTimeout';
 import { classifyActionTransportFailure } from '@/api/client/classifyServerEndpointError';
 import { ConnectedPurposeCatalogV1Schema } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
-import { readDeclaredConnectedAccountResourcePurposeV1, resolveConnectedAccountPurposeSelectedAccountV1 } from '@happier-dev/protocol/connect/connectedAccountPurposeSelectionV1';
+import { readDeclaredConnectedAccountPurposeV1, resolveConnectedAccountPurposeSelectedAccountV1 } from '@happier-dev/protocol/connect/connectedAccountPurposeSelectionV1';
 import { ConnectedAccountUiProjectionEntryV1Schema } from '@happier-dev/protocol/connect/connectedAccountUiProjectionV1';
 import { DaemonContributionRegistryProjectionDescribeRequestSchema, DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
-import { captureSavedSecretReferencesForOperation, promoteSavedSecretsWithConnectedAccountCatalog } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { captureSavedSecretReferencesForOperation } from "@/settings/secrets/savedSecretCatalogRead";
+import { promoteSavedSecretsWithConnectedAccountCatalog } from "@/settings/secrets/hydrateSavedSecretCatalog";
 import { createCliConnectedAccountCatalogStore } from '@/settings/connectedAccounts/connectedAccountCatalogStore';
 import { readActiveConnectedAccountCatalog } from '@/settings/connectedAccounts/hydrateConnectedAccountCatalog';
 import { commitActiveConnectedAccountCatalog, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -131,7 +132,8 @@ export function createCliConnectedServiceAction(params: Readonly<{
         signal?.throwIfAborted();
         const response = await axios.request<unknown>({
           url: `${serverHttpBaseUrl}${request.path}`,
-          method: request.method, headers: { ...headers, 'Content-Type': 'application/json' },
+          method: request.method, headers: { ...headers,
+            ...(request.body === undefined ? {} : { 'Content-Type': 'application/json' }) },
           ...(request.body === undefined ? {} : { data: request.body }),
           timeout: resolveConnectedServicesServerApiTimeoutMs(),
           ...(signal ? { signal } : {}), validateStatus: () => true,
@@ -188,7 +190,7 @@ export function createCliConnectedServiceAction(params: Readonly<{
           // projection is no longer publishable to the captured incumbent.
         }
       },
-      admitResourcePurposeTarget: async input => {
+      admitPurposeTarget: async input => {
         await assertReadCurrent();
         const request = DaemonContributionRegistryProjectionDescribeRequestSchema.parse({ machineId: input.machineId });
         let rawProjection: unknown;
@@ -207,8 +209,8 @@ export function createCliConnectedServiceAction(params: Readonly<{
         const described = DaemonContributionRegistryProjectionDescribeResponseSchema.safeParse(rawProjection);
         if (!described.success) return null;
         const projection = described.data.projection;
-        const declaration = readDeclaredConnectedAccountResourcePurposeV1({ purpose: input.purpose, projection });
-        if (!declaration) return null;
+        const declaration = readDeclaredConnectedAccountPurposeV1({ purpose: input.purpose, projection });
+        if (!declaration || declaration.consumerKind === 'machineProvisioner') return null;
         let rawProfile: unknown;
         try { rawProfile = await host.request({ method: 'GET', path: '/v1/account/profile' }); }
         catch { await assertReadCurrent(); return null; }
@@ -228,7 +230,7 @@ export function createCliConnectedServiceAction(params: Readonly<{
           },
         });
         if (!selected) return null;
-        // This is a preference, not Resource permission. Its runtime re-admits the
+        // This is a preference, not consumer permission. Its runtime re-admits the
         // declaration; the existing catalog transport fences captured Account CAS.
         return () => catalogStore.assertCurrent();
       },

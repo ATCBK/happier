@@ -9,8 +9,13 @@ import type {
   VoiceSpeechDiagnosticsCaptureContextV1,
 } from '@happier-dev/protocol';
 import { DAEMON_VOICE_INFERENCE_STT_STREAM_PCM_FORMAT } from '@happier-dev/protocol/daemon/voiceInference';
+import {
+  DEFAULT_MAX_PENDING_APPLICATION_DISPATCHES as DEFAULT_MAX_IN_FLIGHT_CHUNKS,
+  DEFAULT_MAX_PENDING_APPLICATION_DISPATCH_BYTES as DEFAULT_MAX_IN_FLIGHT_BYTES,
+} from '@happier-dev/peer-transport/duplexFrames';
 
 import type { DaemonSpeechStreamTransportKind } from './daemonSpeechStreamDiagnostics';
+import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes';
 
 import {
   createDaemonSpeechStreamRpcCompatibilityCarrierAdapter,
@@ -28,6 +33,8 @@ type ActiveStream = Readonly<{
 export type DaemonSpeechStreamTransport = Readonly<{
   /** PCM capacity of one negotiated carrier frame, after its encoding overhead. */
   maxPcm16ChunkBytes?: number;
+  /** Bytes retained by downstream packet admission, including carrier encoding. */
+  measureInFlightChunkBytes?: (pcm16ByteLength: number) => number;
   start: (input: DaemonVoiceInferenceSttStreamStartRequest) => Promise<DaemonVoiceInferenceSttStreamStartResponse>;
   chunk: (input: DaemonSpeechStreamTransportChunkRequest) => Promise<DaemonVoiceInferenceSttStreamChunkResponse>;
   finish: (input: DaemonVoiceInferenceSttStreamFinishRequest) => Promise<DaemonVoiceInferenceSttStreamFinishResponse>;
@@ -70,10 +77,6 @@ type PendingChunk = {
 
 const DEFAULT_MAX_BUFFERED_CHUNKS = 64;
 const DEFAULT_MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
-const DEFAULT_MAX_IN_FLIGHT_CHUNKS = 8;
-const DEFAULT_MAX_IN_FLIGHT_BYTES = 256 * 1024;
-const DEFAULT_FINISH_TIMEOUT_MS = 10_000;
-
 function createSenderError(code: string): Error & { code: string } {
   return Object.assign(new Error(code), { code });
 }
@@ -82,7 +85,9 @@ function throwIfErrorResponse(response: Readonly<{ ok: boolean; errorCode?: stri
   if (response.ok) {
     return;
   }
-  throw createSenderError(response.errorCode ?? response.error ?? 'daemon_speech_stream_error');
+  const error = createSenderError(response.errorCode ?? response.error ?? 'daemon_speech_stream_error');
+  Object.defineProperty(error, 'cause', { value: response, enumerable: false });
+  throw error;
 }
 
 export class DaemonSpeechStreamSender {
@@ -121,7 +126,7 @@ export class DaemonSpeechStreamSender {
     this.maxBufferedBytes = Math.max(1, Math.trunc(options.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES));
     this.maxInFlightChunks = Math.max(1, Math.trunc(options.maxInFlightChunks ?? DEFAULT_MAX_IN_FLIGHT_CHUNKS));
     this.maxInFlightBytes = Math.max(1, Math.trunc(options.maxInFlightBytes ?? DEFAULT_MAX_IN_FLIGHT_BYTES));
-    this.finishTimeoutMs = Math.max(1, Math.trunc(options.finishTimeoutMs ?? DEFAULT_FINISH_TIMEOUT_MS));
+    this.finishTimeoutMs = Math.max(1, Math.trunc(options.finishTimeoutMs ?? DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS));
     this.carrierAdapter = options.carrierAdapter ?? createDaemonSpeechStreamRpcCompatibilityCarrierAdapter();
     this.transport = options.transport;
   }
@@ -163,7 +168,7 @@ export class DaemonSpeechStreamSender {
     }
     if (
       this.pendingBytes + pcm16Bytes.byteLength > this.maxBufferedBytes
-      || pcm16Bytes.byteLength > this.maxInFlightBytes
+      || this.measureInFlightChunkBytes(pcm16Bytes.byteLength) > this.maxInFlightBytes
     ) {
       return Promise.reject(createSenderError('daemon_speech_stream_backpressure'));
     }
@@ -174,7 +179,8 @@ export class DaemonSpeechStreamSender {
     const packetBudget = Math.min(this.transport.maxPcm16ChunkBytes ?? 0, this.maxInFlightBytes);
     if (tail && pcm16Bytes.byteLength > 0 && tail.pcm16Bytes.byteLength > 0
       && tail.scheduledGeneration === null && !tail.acknowledged
-      && tail.pcm16Bytes.byteLength + pcm16Bytes.byteLength <= packetBudget) {
+      && tail.pcm16Bytes.byteLength + pcm16Bytes.byteLength <= packetBudget
+      && this.measureInFlightChunkBytes(tail.pcm16Bytes.byteLength + pcm16Bytes.byteLength) <= this.maxInFlightBytes) {
       const combined = new Uint8Array(tail.pcm16Bytes.byteLength + pcm16Bytes.byteLength);
       combined.set(tail.pcm16Bytes);
       combined.set(pcm16Bytes, tail.pcm16Bytes.byteLength);
@@ -271,9 +277,9 @@ export class DaemonSpeechStreamSender {
       if (pending.acknowledged) continue;
       if (pending.scheduledGeneration === ownerGeneration) continue;
       if (this.inFlightChunks >= this.maxInFlightChunks) break;
-      if (this.inFlightBytes + pending.pcm16Bytes.byteLength > this.maxInFlightBytes) break;
+      const sentByteLength = this.measureInFlightChunkBytes(pending.pcm16Bytes.byteLength);
+      if (this.inFlightBytes + sentByteLength > this.maxInFlightBytes) break;
       pending.scheduledGeneration = ownerGeneration;
-      const sentByteLength = pending.pcm16Bytes.byteLength;
       this.highestSentSeq = Math.max(this.highestSentSeq, pending.seq);
       this.inFlightChunks += 1;
       this.inFlightBytes += sentByteLength;
@@ -285,6 +291,10 @@ export class DaemonSpeechStreamSender {
         this.resolveDrainIfNeeded();
       });
     }
+  }
+
+  private measureInFlightChunkBytes(pcm16ByteLength: number): number {
+    return this.transport.measureInFlightChunkBytes?.(pcm16ByteLength) ?? pcm16ByteLength;
   }
 
   private async sendChunk(pending: PendingChunk, ownerGeneration: number): Promise<void> {

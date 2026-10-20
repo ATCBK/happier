@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { executePluginDevLoopAction } from './actions';
 import { buildPluginInstallApprovalPreview } from './installApprovalPreview';
+import { createPluginInstallationReviewFixture } from '@/plugins/testkit/pluginInstallationReviewFixture';
 
 const daemonBoundary = vi.hoisted(() => ({
   ensureRunning: vi.fn(async () => undefined),
@@ -42,8 +43,9 @@ describe('scaffold → install authoring journey', () => {
     const targetDir = join(workspaceRoot, 'fresh-plugin');
     daemonBoundary.requestChange.mockReset();
     daemonBoundary.development.mockReset();
-    daemonBoundary.development.mockResolvedValue({
-      kind: 'status', status: { roots: [], plugins: [] },
+    daemonBoundary.requestChange.mockResolvedValue({
+      kind: 'committed', pluginId: 'acme.fresh-scaffold', desiredGeneration: 'generation-1',
+      appliedGeneration: 'generation-1', pendingSurfaces: [],
     });
 
     try {
@@ -65,20 +67,22 @@ describe('scaffold → install authoring journey', () => {
         input: { path: targetDir, dev: true },
         defaultPreview: { actionId: 'plugins.install' },
         workspaceRoot,
+        daemonEvaluation: {
+          kind: 'reviewRequired', reviewKind: 'installation', pendingChangeId: 'pending-code-install',
+          reason: 'firstInstall', currentVersion: null, authorityExpansion: [],
+          review: createPluginInstallationReviewFixture({
+            pluginId: 'acme.fresh-scaffold', source: { kind: 'path', locator: targetDir },
+            updateChannel: { kind: 'path', locator: targetDir, development: true },
+          }),
+        },
       });
       expect(preview).toMatchObject({
         actionId: 'plugins.install',
         pluginInstall: {
           ok: true,
-          authoring: 'code',
-          source: { kind: 'path', dev: true, trustPolicy: 'prompt', installPolicy: 'link' },
-          provenance: {
-            sourceKind: 'path',
-            entryPath: expect.stringContaining(join('fresh-plugin', 'src', 'index.ts')),
-          },
-          // Identity and host access are the daemon's to establish, so the
-          // preview must not present an empty permission set as "none".
-          permissionsDisclosure: 'pendingDaemonEvaluation',
+          source: { kind: 'path', dev: true },
+          permissionsDisclosure: 'daemonEvaluated',
+          pendingReview: expect.objectContaining({ pendingChangeId: 'pending-code-install' }),
         },
       });
       expect(preview).not.toHaveProperty('pluginInstall.diagnostics');
@@ -91,13 +95,14 @@ describe('scaffold → install authoring journey', () => {
         happyHomeDir,
       })).resolves.toMatchObject({
         ok: true,
-        kind: 'plugins_dev_submit',
-        status: { roots: [], plugins: [] },
+        kind: 'plugins_install',
+        outcome: 'applied',
+        change: { kind: 'committed', pluginId: 'acme.fresh-scaffold' },
       });
-      expect(daemonBoundary.requestChange).not.toHaveBeenCalled();
-      expect(daemonBoundary.development).toHaveBeenCalledWith({
-        kind: 'registerExplicit', rootPath: targetDir,
-      }, {});
+      expect(daemonBoundary.requestChange).toHaveBeenCalledWith({
+        kind: 'development', sourceRootPath: targetDir,
+      });
+      expect(daemonBoundary.development).not.toHaveBeenCalled();
 
     } finally {
       await rm(workspaceRoot, { recursive: true, force: true });

@@ -35,6 +35,22 @@ afterEach(async () => {
 });
 
 describe('useSavedSecretCatalog resource authority', () => {
+    it('honors waived private-secret deletion without a caller confirmation', async () => {
+        home = await createSecretSettingsTestHarness({ settings: settingsParse({ secrets: [],
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { 'secrets.delete': ['ui'] } }),
+        }) });
+        const { entry } = await home.addOwnerResource();
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.confirm).mockClear();
+        const { useSavedSecretCatalog } = await import('./useSavedSecretCatalog');
+        const hook = await renderHook(() => useSavedSecretCatalog({ scope: home!.scope }));
+        await act(async () => hook.getCurrent().reload());
+        const secret = hook.getCurrent().usableSecrets.find(secret => secret.id === entry.ref)!;
+        expect(secret).toBeDefined();
+        await act(async () => { expect(await hook.getCurrent().personalMutations.delete(secret)).toBe(true); });
+        expect(home.deletes).toHaveLength(1);
+        expect(Modal.confirm).not.toHaveBeenCalled();
+    });
     it('preserves the admitted material read when an equivalent Account scope object is replaced', async () => {
         home = await createSecretSettingsTestHarness({ settings: settingsParse({ secrets: [] }) });
         const { entry } = await home.addOwnerResource();
@@ -97,8 +113,8 @@ describe('useSavedSecretCatalog resource authority', () => {
         const hook = await renderHook(() => useSavedSecretCatalog({ scope: home!.scope }));
         await act(async () => hook.getCurrent().reload());
         expect(hook.getCurrent().entries.map(row => row.ref)).toEqual([entry.ref]);
-        expect(hook.getCurrent().personalSecrets).toEqual([]);
-        expect(hook.getCurrent().sharedEntries.map(row => row.ref)).toEqual([entry.ref]);
+        expect(hook.getCurrent().personalSecrets.map(secret => secret.id)).toEqual(privateRow ? [entry.ref] : []);
+        expect(hook.getCurrent().sharedEntries.map(row => row.ref)).toEqual(privateRow ? [] : [entry.ref]);
         expect(hook.getCurrent().picker.personalSecrets.map(secret => secret.id)).toEqual(privateRow ? [entry.ref] : []);
         expect(hook.getCurrent().picker.sharedEntries.map(row => row.ref)).toEqual(privateRow ? [] : [entry.ref]);
         if (!canUse) {
@@ -121,6 +137,16 @@ describe('useSavedSecretCatalog resource authority', () => {
                 expect(await hook.getCurrent().personalMutations.rotate(secret, 'must-not-write')).toBe(false);
             });
             expect(home.updates).toHaveLength(1);
+        } else if (_kind === 'shared') {
+            const { Modal } = await import('@/modal');
+            vi.mocked(Modal.confirm).mockClear().mockResolvedValue(false);
+            await act(async () => {
+                const result = await hook.getCurrent().updateResource({ resourceId: resource.resourceId,
+                    expectedRevision: entry.revision!, nextName: 'Shared rename', decryptDataKeyEnvelope: async () => null });
+                expect(result.ok).toBe(false);
+            });
+            expect(Modal.confirm).toHaveBeenCalledTimes(1);
+            expect(home.updates).toHaveLength(0);
         }
         expect(home.settingsWrites).toEqual([]);
     });

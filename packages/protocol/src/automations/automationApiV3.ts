@@ -1,3 +1,4 @@
+import { maxCodeUnits } from '../strings/maxCodeUnits.js';
 import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
@@ -473,7 +474,7 @@ export const AutomationV3WorkerClaimRequestSchema = lazyZodSchema(() => z.strict
 }));
 export type AutomationV3WorkerClaimRequest = z.infer<typeof AutomationV3WorkerClaimRequestSchema>;
 
-const AutomationRunExecutionInputEnvelopeSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES), z.superRefine((value, context) => {
+const AutomationRunExecutionInputEnvelopeSchema = lazyZodSchema(() => z.string().check(z.minLength(1), maxCodeUnits(MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES), z.superRefine((value, context) => {
     if (UTF8_ENCODER.encode(value).byteLength > MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES) {
       context.addIssue({
         code: "custom",
@@ -573,6 +574,8 @@ function addRunTriggerCauseCorrespondenceIssue(
 const AutomationV3WorkerClaimedAutomationRunBaseSchema = lazyZodSchema(() => z.strictObject({
   id: IDENTIFIER_SCHEMA,
   automationId: IDENTIFIER_SCHEMA,
+  /** Exact server-granted expiry, retained unchanged by claim receipt replay. */
+  leaseExpiresAt: TIMESTAMP_SCHEMA,
   attempt: z.number().check(z.int(), z.positive(), z.int()),
   /** Exact post-claim parent CAS revision for workflow snapshot finalization. */
   revision: z.number().check(z.int(), z.nonnegative(), z.int()),
@@ -637,6 +640,8 @@ const AutomationV3WorkerClaimedAutomationRunSchema = lazyZodSchema(() => Automat
 const AutomationV3WorkerClaimedDirectWorkflowRunSchema = lazyZodSchema(() => z.strictObject({
   id: IDENTIFIER_SCHEMA,
   automationId: z.null(),
+  /** Exact server-granted expiry, retained unchanged by claim receipt replay. */
+  leaseExpiresAt: TIMESTAMP_SCHEMA,
   attempt: z.number().check(z.int(), z.positive(), z.int()),
   revision: z.number().check(z.int(), z.nonnegative(), z.int()),
   /** Boundary Resume request consumed by this claim; absent on unrelated claims. */
@@ -742,7 +747,7 @@ export const AutomationV3WorkerFailRequestSchema = lazyZodSchema(() => (<T exten
   /** Claimed-only trigger admission refusal; ordinary failures remain failed. */
   terminalState: z.optional(z.literal('skipped')),
   /** Private Account-mode-correct detail; errorCode remains the structural outcome. */
-  errorDetailEnvelope: z.optional(z.nullable(z.string().check(z.minLength(1), z.maxLength(MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES)))),
+  errorDetailEnvelope: z.optional(z.nullable(z.string().check(z.minLength(1), maxCodeUnits(MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES)))),
 })));
 export type AutomationV3WorkerFailRequest = z.infer<typeof AutomationV3WorkerFailRequestSchema>;
 
@@ -908,7 +913,7 @@ export const AutomationV3RunDetailSchema = lazyZodSchema(() => z.strictObject({
   /** Committed lifecycle transitions in ascending time order. */
   events: z.array(AutomationV3RunEventSchema).check(z.maxLength(AUTOMATION_V3_RUN_DETAIL_MAX_EVENTS)),
   /** Exact private Run failure detail; never emitted by list or mutation projections. */
-  errorDetailEnvelope: z.optional(z.nullable(z.string().check(z.minLength(1), z.maxLength(MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES)))),
+  errorDetailEnvelope: z.optional(z.nullable(z.string().check(z.minLength(1), maxCodeUnits(MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES)))),
 }).check(z.superRefine((value, context) => {
   addRunTriggerCauseCorrespondenceIssue(value, context);
   addWorkflowRunCorrespondenceIssue(value, context);

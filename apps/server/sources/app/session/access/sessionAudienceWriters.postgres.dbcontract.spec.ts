@@ -8,8 +8,9 @@ import { restoreTeamGroupForActorInTx } from "@/app/teams/groups/groupService";
 import { resolveCurrentSessionRecipientAccountIdsInTx } from "./sessionRecipients";
 import { setAccountStatusInTx } from "@/app/home/governance/accountLifecycle";
 import { acquireAccountSessionOwnerMetadataFenceInTx } from "@/app/encryption/accountSessionOwnerMetadataFence";
-import { setSessionReportsTo } from "@/app/session/relations/sessionReportsToService";
+import { setSessionManager } from "@/app/session/follow/sessionManagerService";
 import { setSessionFollowSource } from "@/app/session/follow/sessionFollowEdgeService";
+import { publishSessionReadyProjectionUpdate } from "@/app/session/ready/publishSessionReadyProjectionUpdate";
 
 describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== "postgres")("Session audience expansion writer fences (PostgreSQL)", () => {
     beforeAll(async () => {
@@ -18,6 +19,85 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== "postgres")("Session audienc
         await db.$connect();
     });
     afterAll(async () => { await db.$disconnect(); });
+
+    it("waits on the ready projection's Session before terminal Account publication", async () => {
+        const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
+        const session = await db.session.create({ data: {
+            accountId: owner.id, tag: randomUUID(), metadata: "{}", encryptionMode: "plain", currentStorageState: "hosted",
+        } });
+        let publisher: Promise<unknown> | undefined;
+        try {
+            await db.$transaction(async tx => {
+                const [{ pid }] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+                // Physical deletion takes this strongest parent mode. A publisher
+                // must wait here before its terminal Account/FK writes, not in them.
+                await tx.$queryRaw`SELECT "id" FROM "Session" WHERE "id" = ${session.id} FOR UPDATE`;
+                let finished = false;
+                publisher = publishSessionReadyProjectionUpdate({ sessionId: session.id,
+                    readyProjection: { latestReadyEventSeq: 1, latestReadyEventAt: Date.now() } })
+                    .finally(() => { finished = true; });
+                void publisher.catch(() => undefined);
+                let waiting = false;
+                while (!finished && !waiting) {
+                    const [row] = await db.$queryRaw<Array<{ waiting: boolean }>>`
+                        SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database()
+                            AND ${pid} = ANY(pg_blocking_pids(pid))) AS waiting
+                    `;
+                    waiting = row.waiting;
+                }
+                expect(waiting).toBe(true);
+                // Probe the persistent boundary directly: inTx deliberately
+                // retries 55P03, which would hide the lock-order observation.
+                await expect(db.$transaction(peer => peer.$queryRawUnsafe(
+                    'SELECT "id" FROM "Account" WHERE "id" = $1 FOR NO KEY UPDATE NOWAIT', owner.id,
+                ))).resolves.toEqual([{ id: owner.id }]);
+            });
+            await publisher;
+        } finally {
+            await publisher;
+            await db.session.delete({ where: { id: session.id } });
+            await db.account.delete({ where: { id: owner.id } });
+        }
+    });
+
+    it("serializes a direct grant with the Session domain writer before changing its audience", async () => {
+        const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
+        const reader = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
+        const session = await db.session.create({ data: {
+            accountId: owner.id, tag: randomUUID(), metadata: "{}", encryptionMode: "plain", currentStorageState: "hosted",
+        } });
+        await db.userRelationship.create({ data: { fromUserId: owner.id, toUserId: reader.id, status: "friend" } });
+        let writer: Promise<unknown> | undefined;
+        try {
+            await db.$transaction(async tx => {
+                const [{ pid }] = await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`;
+                await tx.$queryRaw`SELECT "id" FROM "Session" WHERE "id" = ${session.id} FOR NO KEY UPDATE`;
+                let finished = false;
+                writer = inTx(peer => putSessionAccessGrantInTx(peer, {
+                    sessionId: session.id, actorAccountId: owner.id, subject: { kind: "account", accountId: reader.id },
+                    grant: { accessLevel: "view", canApprovePermissions: false },
+                    authentication: { env: process.env, authority: "present_user", authenticationEvidence: [] },
+                }), { isolationLevel: "ReadCommitted" }).finally(() => { finished = true; });
+                void writer.catch(() => undefined);
+                let waiting = false;
+                while (!finished && !waiting) {
+                    const [row] = await db.$queryRaw<Array<{ waiting: boolean }>>`
+                        SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database()
+                            AND ${pid} = ANY(pg_blocking_pids(pid))) AS waiting
+                    `;
+                    waiting = row.waiting;
+                }
+                expect(waiting).toBe(true);
+                expect(await tx.sessionShare.count({ where: { sessionId: session.id, sharedWithUserId: reader.id } })).toBe(0);
+            });
+            expect(await writer).toMatchObject({ ok: true, changed: true });
+            expect(await db.sessionShare.count({ where: { sessionId: session.id, sharedWithUserId: reader.id } })).toBe(1);
+        } finally {
+            await writer;
+            await db.session.delete({ where: { id: session.id } });
+            await db.account.deleteMany({ where: { id: { in: [owner.id, reader.id] } } });
+        }
+    });
 
     it("holds Follow attachment until the source Account fence is available", async () => {
         const prefix = `audience-follow-${randomUUID()}`;
@@ -34,7 +114,7 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== "postgres")("Session audienc
                 sharedWithUserId: destinationOwner.id, accessLevel: "edit" } });
             let holderPid = -1;
             const holder = inTx(async tx => {
-                await acquireAccountSessionOwnerMetadataFenceInTx(tx, sourceOwner.id);
+                await acquireAccountSessionOwnerMetadataFenceInTx(tx, sourceOwner.id, "exclusive");
                 const [row] = await tx.$queryRawUnsafe<{ pid: number }[]>("SELECT pg_backend_pid() AS pid");
                 holderPid = row.pid;
                 holderReady();
@@ -44,7 +124,7 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== "postgres")("Session audienc
             await sourceHeld;
             let writerSettled = false;
             const writer = setSessionFollowSource({ accountId: destinationOwner.id, sourceSessionId: source.id,
-                destinationSessionId: destination.id,
+                destinationSessionId: destination.id, policy: { preset: 'quiet' },
                 authentication: { env: process.env, authority: "present_user", authenticationEvidence: [] } });
             const writerOutcome = Promise.allSettled([writer]).finally(() => { writerSettled = true; });
             try {
@@ -83,12 +163,12 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== "postgres")("Session audienc
         const authentication = { env: process.env, authority: "present_user", authenticationEvidence: [] } as const;
         try {
             await db.sessionShare.create({ data: { sessionId: child.id, sharedByUserId: childOwner.id, sharedWithUserId: leadOwner.id, accessLevel: "edit" } });
-            expect(await setSessionReportsTo({ accountId: leadOwner.id, sessionId: child.id, leadSessionId: lead.id,
-                expectedLeadSessionId: null, authentication })).toMatchObject({ ok: true });
+            expect(await setSessionManager({ accountId: leadOwner.id, sessionId: child.id, managerSessionId: lead.id,
+                expectedManagerSessionId: null, authentication })).toMatchObject({ ok: true });
             await db.userRelationship.create({ data: { fromUserId: leadOwner.id, toUserId: reader.id, status: "friend" } });
             let holderPid = -1;
             const holder = inTx(async tx => {
-                await acquireAccountSessionOwnerMetadataFenceInTx(tx, childOwner.id);
+                await acquireAccountSessionOwnerMetadataFenceInTx(tx, childOwner.id, "exclusive");
                 const [row] = await tx.$queryRawUnsafe<{ pid: number }[]>("SELECT pg_backend_pid() AS pid");
                 holderPid = row.pid;
                 holderReady();
@@ -119,7 +199,7 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== "postgres")("Session audienc
                     if (outcome.status === "rejected") throw outcome.reason;
                 }
             }
-            expect(await db.sessionReportsTo.findUnique({ where: { sessionId: child.id } })).toBeNull();
+            expect(await db.sessionFollowEdge.findUnique({ where: { managerSourceSessionId: child.id } })).toBeNull();
         } finally {
             release();
             await db.session.deleteMany({ where: { id: { in: [child.id, lead.id] } } });
@@ -151,7 +231,7 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== "postgres")("Session audienc
             } });
             let holderPid = -1;
             const holder = inTx(async tx => {
-                await acquireAccountSessionOwnerMetadataFenceInTx(tx, owner.id);
+                await acquireAccountSessionOwnerMetadataFenceInTx(tx, owner.id, "exclusive");
                 const [row] = await tx.$queryRawUnsafe<{ pid: number }[]>("SELECT pg_backend_pid() AS pid");
                 holderPid = row.pid;
                 holderReady();
@@ -256,11 +336,14 @@ describe.skipIf(process.env.HAPPIER_DB_PROVIDER !== "postgres")("Session audienc
                 const writerOutcome = Promise.allSettled([writer]);
                 await mutationComplete;
                 try {
-                    // Admission and native transitions remain real; NOWAIT observes
-                    // the Account fence without timing or internal spies.
-                    await expect(inTx(tx => tx.$queryRawUnsafe(
+                    // Observe one NOWAIT attempt. The production transaction owner
+                    // retries 55P03, which would outwait this test's held writer.
+                    await expect(db.$queryRawUnsafe(
+                        'SELECT "id" FROM "Account" WHERE "id" = $1 FOR UPDATE NOWAIT', owner.id,
+                    )).rejects.toMatchObject({ meta: { code: '55P03' } });
+                    await expect(db.$queryRawUnsafe(
                         'SELECT "id" FROM "Account" WHERE "id" = $1 FOR NO KEY UPDATE NOWAIT', owner.id,
-                    ), { isolationLevel: "ReadCommitted" })).rejects.toThrow();
+                    )).resolves.toEqual([{ id: owner.id }]);
                 } finally {
                     release();
                     for (const outcome of await writerOutcome) if (outcome.status === "rejected") throw outcome.reason;

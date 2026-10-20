@@ -1,25 +1,26 @@
 import * as React from 'react';
 import { TextInput, View } from 'react-native';
 import { act } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { flushHookEffects, renderScreen } from '@/dev/testkit';
+import { installExpoBlurRequireStub } from '@/dev/testkit/mocks/expoBlur';
+
+const platform = vi.hoisted(() => ({ OS: 'ios' as 'ios' | 'android' }));
+const restoreExpoBlur = installExpoBlurRequireStub();
+afterAll(restoreExpoBlur);
+afterEach(() => { platform.OS = 'ios'; });
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({
         Platform: {
-            OS: 'ios',
+            get OS() { return platform.OS; },
             select: <T,>(options: { ios?: T; native?: T; default?: T; web?: T; android?: T }) =>
                 options.ios ?? options.native ?? options.default ?? options.web ?? options.android,
         },
     });
 });
-
-vi.mock('expo-blur', () => ({
-    BlurView: (props: React.PropsWithChildren<Record<string, unknown>>) =>
-        React.createElement('BlurView', props, props.children),
-}));
 
 describe('SoftSlideTransitionFrame native blur', () => {
     it('preserves the outgoing native slide instance while it exits', async () => {
@@ -75,4 +76,18 @@ describe('SoftSlideTransitionFrame native blur', () => {
             importantForAccessibility: 'no-hide-descendants',
         });
     });
+    it('keeps both slide contents without mounting targetless Android blur', async () => {
+        platform.OS = 'android';
+        const { SoftSlideTransitionFrame } = await import('./SoftSlideTransitionFrame');
+        const frame = (key: string) => <SoftSlideTransitionFrame direction="forward" reducedMotion={false}
+            testID="soft" transitionKey={key}><View testID={`slide-${key}`} /></SoftSlideTransitionFrame>;
+        const screen = await renderScreen(frame('one'));
+        await screen.update(frame('two'));
+        await vi.dynamicImportSettled();
+        await flushHookEffects({ cycles: 1, turns: 1 });
+        expect(screen.findAllByType('BlurView')).toHaveLength(0);
+        expect(screen.findByTestId('slide-one')).toBeTruthy();
+        expect(screen.findByTestId('slide-two')).toBeTruthy();
+    });
+
 });

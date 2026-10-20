@@ -14,6 +14,7 @@ import { resolveTeamCapabilitiesV1 } from "./capabilities";
 import { isEffectiveTeamMembership } from "./memberships/effectiveMembership";
 import { TEAM_PROJECTION_SELECT, projectTeamSummaryV1 } from "./projections";
 import { readTeamSummaryCountsInTx } from "./teamSummaryCounts";
+import { toTeamViewer } from "./viewer";
 
 /**
  * The Home-local Team directory.
@@ -104,7 +105,7 @@ export async function listTeamsForActorInTx(
             ...(input.scope === "member"
                 ? {
                     memberships: {
-                        some: { accountId: input.actorAccountId, status: TeamMembershipStatus.active },
+                        some: { accountId: input.actorAccountId },
                     },
                 }
                 : {}),
@@ -169,6 +170,10 @@ export async function listTeamsForActorInTx(
 
     const items: TeamsPageV1["items"] = [];
     for (const context of contexts) {
+        // Suspension withdraws Team reads but preserves native self-leave.
+        // Use the same summary admission as the point read; a source-managed
+        // suspended lifetime with neither capability has no readable destination.
+        if (toTeamViewer(context) === null) continue;
         // Qualification is per Team because the authentication policy is per
         // Team. A Team whose accepted method this credential does not satisfy
         // keeps its row and loses its Team-derived capabilities; it must not
@@ -199,6 +204,8 @@ export async function listTeamsForActorInTx(
         }));
     }
 
+    // Advance over scanned rows, including withheld summaries, so pagination
+    // cannot revisit a suspended source-managed lifetime indefinitely.
     const last = page.at(-1);
     const nextCursor = rows.length > limit && last
         ? encodeTeamDirectoryCursorV1({ queryKey, name: last.name, id: last.id })

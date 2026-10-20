@@ -1368,7 +1368,7 @@ describe('hydrateReplayDialogFromForkChain — character-budget window', () => {
           // `beforeSeq` it answers 400, which the guard above now enforces here
           // too. This filter therefore only ever runs for a forward query.
           .filter((r) => (afterSeq == null ? true : r.seq > afterSeq))
-          .filter((r) => (params.honorRoles === false || !requested ? true : requested.includes(r.messageRole)));
+          .filter((r) => (params.honorRoles === false || !requested ? true : typeof r.messageRole === 'string' && requested.includes(r.messageRole)));
         const picked = eligible.slice().sort((a, b) => afterSeq === null ? b.seq - a.seq : a.seq - b.seq).slice(0, limit);
         const hasMore = eligible.length > picked.length;
         res.statusCode = 200;

@@ -67,6 +67,26 @@ Choose **New document**, enter a title and content, then **Save**. Use **Edit**
 on the document to change it later. If you cancel with unsaved changes, Happier
 asks before discarding them.
 
+## Passage comments and proposed edits in development
+
+The unreleased 0.3 Actions can discuss prose Docs through a
+[Home Discussion](/accounts/session-sharing#home-discussions-03-development).
+They require current Doc access; posting also checks the Discussion's access
+and whether its audience may receive the passage. The Conversations feature
+must be enabled for comments and proposals. The page's passage-selection and
+review flow is still being built; these are Action contracts, not screen instructions.
+
+Use `doc.read` to read the current text and revision, `doc.comment.reply` to
+comment or reply, and `doc.edit.propose` to save a proposed change with its
+original passage, before/after text and reason. A proposal changes no Doc text.
+Quotes and proposals stay in the Discussion content; a link grants no access.
+
+Only a present person with current Discussion access and Doc edit permission
+can use `doc.edit.accept` or `doc.edit.decline`. Accept checks the complete
+reviewed revision. If the Doc changed, nothing is applied: read it again and
+ask for a fresh proposal. Decline leaves the Doc unchanged. Waiving an Action
+confirmation never lets an Agent accept. Ordinary Doc editing remains available.
+
 ## Revisit an earlier version
 
 Open **History** on a document, choose an earlier version, and preview its

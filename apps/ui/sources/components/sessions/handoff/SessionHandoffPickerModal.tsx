@@ -1,5 +1,5 @@
 import { useAuthoringMemoryField } from '@/sync/domains/state/storage';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { readSessionDirectoryKind } from '@happier-dev/protocol/sessions/metadata/directory';
 import * as React from 'react';
 import { View } from 'react-native';
@@ -56,6 +56,8 @@ import {
 import { sync } from '@/sync/sync';
 import { getRecentMachinesFromSessions } from '@/utils/sessions/recentMachines';
 import { canAttemptMachineSpawn } from '@/sync/domains/machines/identity/resolveMachineSpawnReadiness';
+import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { readExternalSessionLink } from '@/sync/domains/session/external/readExternalSessionLink';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
@@ -111,6 +113,9 @@ const EMPTY_PATH_SELECTION_FAVORITES = [] as const;
 const ignorePathSelectionRequestClose = () => {};
 
 export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessionId, sourceMachineId, serverId, inlineErrorCode, awaitingAdmission = false }: SessionHandoffPickerModalProps) {
+    const { binding } = useServerCredentialAccountScopeBinding(serverId);
+    const scope = binding?.isCurrent() ? binding.scope : null;
+    useMachineReachabilityRevision();
     const { theme } = useUnistyles();
     const styles = stylesheet;
     const actionSpec = getActionSpec('session.handoff');
@@ -165,6 +170,7 @@ export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessi
     const canAttemptSourceMachine = canAttemptMachineSpawn({
         machine: sourceMachine,
         selectedMachineId: resolvedSourceMachineId,
+        scope,
     }) && sourceMachine?.availability?.kind !== 'locked'
         && (!sourceMachine?.access || sourceMachine.access.accessState === 'ready');
     const resolvedSourceRootPath = React.useMemo(
@@ -220,10 +226,7 @@ export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessi
         () => machines.find((machine: any) => normalizeId(machine?.id) === normalizeId(selectedMachineId)) ?? null,
         [machines, selectedMachineId],
     );
-    const canAttemptSelectedMachine = React.useMemo(
-        () => canAttemptMachineSpawn({ machine: selectedMachine as any, selectedMachineId }),
-        [selectedMachine, selectedMachineId],
-    );
+    const canAttemptSelectedMachine = canAttemptMachineSpawn({ machine: selectedMachine, selectedMachineId, scope });
     const recentTargetPaths = useStableRecentPathsForMachine({
         machineId: selectedMachineId,
         recentMachinePaths,
@@ -400,6 +403,7 @@ export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessi
 
     const handleStart = React.useCallback(() => {
         if (awaitingAdmission) return;
+        if (!binding?.isCurrent()) return;
         const targetMachineId = normalizeId(selectedMachineId);
         const sourceRootPath = normalizeId(currentSessionMetadata?.path);
         if (!startReadiness.canStart) return;
@@ -432,7 +436,7 @@ export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessi
             ...(reviewSummary ? { workspaceSyncReviewRelationshipIds: selectedLinkedWorkspace && linkedWorkspaceChoice
                 ? linkedWorkspaceChoice.relationshipIds : [reviewSummary.relationshipId] } : {}),
         });
-    }, [awaitingAdmission, canAttemptSelectedMachine, currentSessionMetadata?.path, directTargetMode, existingStateAvailability, existingStateRequested, sourceWithoutFolder, isExternalSession, linkedWorkspaceChoice, onResolve, parsedWorkspaceAction, relationshipSummaries, resolvedTargetPath, selectedLinkedWorkspace, selectedMachine?.metadata?.displayName, selectedMachineId, selectedRelationshipId, selectedRelationshipSummary, startReadiness.canStart, workspaceEngineRequired, workspaceSourcePathSafety.allowed, workspaceTargetPathSafety.allowed]);
+    }, [awaitingAdmission, binding, canAttemptSelectedMachine, currentSessionMetadata?.path, directTargetMode, existingStateAvailability, existingStateRequested, sourceWithoutFolder, isExternalSession, linkedWorkspaceChoice, onResolve, parsedWorkspaceAction, relationshipSummaries, resolvedTargetPath, selectedLinkedWorkspace, selectedMachine?.metadata?.displayName, selectedMachineId, selectedRelationshipId, selectedRelationshipSummary, startReadiness.canStart, workspaceEngineRequired, workspaceSourcePathSafety.allowed, workspaceTargetPathSafety.allowed]);
 
     const canStart = startReadiness.canStart && (!existingStateRequested || existingStateAvailability === 'available');
 
@@ -482,13 +486,13 @@ export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessi
                             kind="warning"
                             size="line"
                             title={t('machineRequester.handoffUnavailable')}
-                            reason={t('machineRequester.resumeElsewhere', { machine: getMachineDisplayName(sourceMachine) ?? currentSessionMetadata?.host ?? t('status.unknown') })}
+                            reason={t('machineRequester.resumeElsewhere', { machine: sourceMachine ? getMachineSentenceName(sourceMachine) : currentSessionMetadata?.host ?? t('status.unknown') })}
                         />
                     ) : null}
                     <WorkspaceActivationDestinationFields
                         disabled={awaitingAdmission}
                         machine={{
-                            machines: machines as any, selectedMachine: selectedMachine as any,
+                            machines: machines as any, selectedMachine: selectedMachine as any, serverId: serverId ?? undefined,
                             recentMachines: recentMachines as any, favoriteMachines: favoriteMachines as any,
                             showFavorites: favoriteMachines.length > 0, showRecent: recentMachines.length > 0,
                             showSearch: true, presentation: 'dropdown', showCliGlyphs: false,
@@ -523,7 +527,7 @@ export function SessionHandoffPickerModal({ onClose, setChrome, onResolve, sessi
                         pathTitle={t('machine.launchNewSessionInDirectory')}
                         fixedFolderLabel={sourceWithoutFolder
                             ? t('session.folderless.privateFolderOn', {
-                                machine: getMachineDisplayName(selectedMachine) ?? normalizeId(selectedMachineId),
+                                machine: selectedMachine ? getMachineSentenceName(selectedMachine) : normalizeId(selectedMachineId),
                             })
                             : null}
                     />

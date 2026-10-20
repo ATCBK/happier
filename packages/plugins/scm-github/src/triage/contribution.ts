@@ -21,6 +21,9 @@ export const GITHUB_TRIAGE_CONTRIBUTION_LOCAL_ID_V1 = 'github-forge';
 
 /** The Action ids the contribution's operation roles bind to. */
 export const GITHUB_TRIAGE_ACTION_IDS_V1 = Object.freeze({
+  create: 'github/issue/create',
+  edit: 'github/issue/edit',
+  transition: 'github/issue/transition',
   listInstances: 'triage/list-github-instances',
   scan: 'triage/scan-github',
   get: 'triage/get-github-entry',
@@ -52,6 +55,8 @@ export const GITHUB_TRIAGE_DETAIL_ACTION_IDS_V1 = Object.freeze({
  * The GitHub pull-request mutation Action ids, spelled exactly as SCM.md 3.8
  * names them.
  *
+ * Create, edit and transition are source roles declared above; both native
+ * callers and role callers execute those same Actions. These writes have no role.
  * They are declared separately from every read above because they are a
  * different kind of thing: each is ONE exact externally visible write with its
  * own strict input and its own confirmation presentation. UI and agent callers
@@ -158,6 +163,16 @@ export const GITHUB_TRIAGE_SOURCE_DESCRIPTOR_V1: TriageSourceDescriptorV1 =
       workflowSubject: 'issue',
       displayName: 'Issue',
       pluralDisplayName: 'Issues',
+      task: true,
+      taskCapabilities: {
+        createFields: ['title', 'body', 'assigneeIds', 'labelIds', 'scopeId'],
+        editFields: ['title', 'body', 'assigneeIds', 'labelIds'],
+        transitions: [
+          { id: 'open', label: 'Open', state: { presentation: 'active', nativeLabel: 'Open' } },
+          { id: 'completed', label: 'Completed', state: { presentation: 'resolved', completionReason: 'completed', nativeLabel: 'Closed as completed' } },
+          { id: 'not_planned', label: 'Not planned', state: { presentation: 'closed', completionReason: 'canceled', nativeLabel: 'Closed as not planned' } },
+        ],
+      },
       // An issue has no changes of its own: Triage sources its Files and
       // Checks from the linked fix PR.
       detailTabs: Object.freeze([

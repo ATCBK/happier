@@ -51,11 +51,14 @@ describe('renderProviderSessionDetailsTab', () => {
                 },
             } as any,
         });
-        if (!React.isValidElement<Readonly<{ inlineMount: unknown; launchInput: unknown; surfaceId: string }>>(node)) {
+        // The surface is `content`: the Details tab hosts it inside the frame that owns its gutters.
+        if (!React.isValidElement<Readonly<{ children: React.ReactNode }>>(node)) throw new Error('expected the launch frame');
+        const surface = React.Children.only(node.props.children);
+        if (!React.isValidElement<Readonly<{ inlineMount: unknown; launchInput: unknown; surfaceId: string }>>(surface)) {
             throw new Error('expected the launch surface');
         }
-        expect(node.props.surfaceId).toBe('subagent-launch');
-        expect(node.props.inlineMount).toEqual({ role: 'sessionSubagentLaunch', presentation: 'content' });
-        expect(node.props.launchInput).toEqual({ teamIds: ['qa-team'] });
+        expect(surface.props.surfaceId).toBe('subagent-launch');
+        expect(surface.props.inlineMount).toEqual({ role: 'sessionSubagentLaunch', presentation: 'content' });
+        expect(surface.props.launchInput).toEqual({ teamIds: ['qa-team'] });
     });
 });

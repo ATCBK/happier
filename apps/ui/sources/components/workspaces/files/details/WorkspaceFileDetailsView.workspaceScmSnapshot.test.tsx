@@ -722,7 +722,7 @@ describe('WorkspaceFileDetailsView (workspace SCM snapshot)', () => {
         };
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <WorkspaceFileDetailsView
                     scopeId="workspace:srv1:m1:/repo"
                     scope={{ serverId: 'srv1', machineId: 'm1', rootPath: '/repo' }}
@@ -785,7 +785,7 @@ describe('WorkspaceFileDetailsView (workspace SCM snapshot)', () => {
         });
         fileEditorState.isEditingFile = true;
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <WorkspaceFileDetailsView
                     scopeId="workspace:srv1:m1:/repo"
                     scope={{ serverId: 'srv1', machineId: 'm1', rootPath: '/repo' }}
@@ -802,7 +802,7 @@ describe('WorkspaceFileDetailsView (workspace SCM snapshot)', () => {
         };
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <WorkspaceFileDetailsView
                     scopeId="workspace:srv1:m1:/repo"
                     scope={{ serverId: 'srv1', machineId: 'm1', rootPath: '/repo' }}
@@ -835,7 +835,7 @@ describe('WorkspaceFileDetailsView (workspace SCM snapshot)', () => {
         expect(typeof firstCallback).toBe('function');
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <WorkspaceFileDetailsView
                     scopeId="workspace:srv1:m1:/repo"
                     scope={{ serverId: 'srv1', machineId: 'm1', rootPath: '/repo' }}
@@ -867,7 +867,7 @@ describe('WorkspaceFileDetailsView (workspace SCM snapshot)', () => {
         expect(typeof firstCallback).toBe('function');
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <WorkspaceFileDetailsView
                     scopeId="workspace:srv1:m1:/repo"
                     scope={{ serverId: 'srv1', machineId: 'm1', rootPath: '/repo' }}

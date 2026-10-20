@@ -7,6 +7,7 @@ import {
   sealWorkflowAcceptedSnapshotStoredEnvelopeV1,
   createAccountScopedCryptoMaterialSnapshotV1,
   convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1,
+  prepareWorkflowRunDataKeyV1,
   type AvailableAutomationAccountEncryptionV1,
   type WorkflowDefinitionV1,
 } from '@happier-dev/protocol';
@@ -87,9 +88,9 @@ describe('durable review coordinator', () => {
     vi.useFakeTimers();
     try {
       const execution = executeClaimedRun({ machineId: 'machine', heartbeatMs: 1_000, leaseDurationMs: 10_000,
-        claimClient: { heartbeatRun: async () => {}, failRun: async () => { throw new Error('Must not settle unknown custody'); } },
+        claimClient: { heartbeatRun: async (request: { leaseDurationMs: number }) => Date.now() + request.leaseDurationMs, failRun: async () => { throw new Error('Must not settle unknown custody'); } },
         coordinateWorkflowRun: coordinate, claimed: { protocol: 'v3', automation: null, accountCurrentness: encryption.witness,
-          run: { id: runId, automationId: null, attempt: 0, revision: 0, triggerId: null,
+          run: { id: runId, automationId: null, attempt: 0, leaseExpiresAt: Date.now() + 10_000, revision: 0, triggerId: null,
             origin: { kind: 'direct' }, workflowAcceptedSnapshotEnvelope: acceptedEnvelope } },
       });
       await initialized;
@@ -389,8 +390,20 @@ describe('durable review coordinator', () => {
     }
   });
 
-  it('keeps opened Workflow authorization current across Account sequence writes but refuses a content-mode change', async () => {
-    const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+  it.each(['plain', 'e2ee'] as const)('initializes a claimed Workflow across Account sequence writes but refuses changed content identity (%s)', async mode => {
+    const material = createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee',
+      material: { type: 'legacy', secret: new Uint8Array(32).fill(7) } });
+    const accountEncryption: AvailableAutomationAccountEncryptionV1 = mode === 'plain'
+      ? { kind: 'available', witness: encryption.witness }
+      : { kind: 'available', witness: { mode, version: 1,
+        contentKeyFingerprint: convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(material.contentPublicKeyFingerprint) }, material };
+    const prepared = prepareWorkflowRunDataKeyV1({ accountId, encryption: accountEncryption,
+      randomBytes: length => new Uint8Array(length).fill(3) });
+    const ownerEnvelope = prepared.recipientKeyEnvelopes[0]?.encryptedDataKey ?? null;
+    const sealMode = prepared.runCrypto.mode === 'plain' ? prepared.runCrypto
+      : { ...prepared.runCrypto, randomBytes: (length: number) => new Uint8Array(length).fill(4) };
+    const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({
+      ...sealMode,
       binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId }, acceptedSnapshot: {
         authoredDefinition: { version: 1, inputs: [], defaults: {}, blocks: [{ kind: 'wait', id: 'human', document: { text: 'Continue', references: [], attachments: [] } }] },
         startedBy: 'user', workDepth: 0, metadata: null, frozenChildren: {},
@@ -402,8 +415,13 @@ describe('durable review coordinator', () => {
         authorization: { admittedPermissionCeiling: 'default', principal: { kind: 'host' } },
       } }));
     const boundary = createWorkflowRunStorageTestkit({ runId, machineId: 'machine', origin: { kind: 'direct' },
-      acceptedEnvelope, state: 'claimed' });
-    let current: AvailableAutomationAccountEncryptionV1 = { kind: 'available', witness: encryption.witness };
+      acceptedEnvelope, state: 'claimed', keyCensus: { runId, ownerAccountId: accountId, access: 'owner', visibleTeamId: null,
+        encryptionMode: mode, ownerAccountCurrentness: accountEncryption.witness, dataEncryptionKey: ownerEnvelope,
+        callerDataEncryptionKey: ownerEnvelope, recipients: [] } });
+    // Another Session/Run can publish after the claim response and before the
+    // coordinator opens it. Account.seq is not the content's encryption identity.
+    let current = structuredClone(accountEncryption);
+    current.witness.version = 2;
     let registeredCheck: ((signal?: AbortSignal) => Promise<boolean>) | undefined;
     const coordinate = createProductionWorkflowRunCoordinator({ token: 'token', accountId, machineId: 'machine',
       resolveControllerContext: async () => ({ surface: 'cli', authority: 'account_automation', callerPermissionMode: 'default' }),
@@ -418,7 +436,7 @@ describe('durable review coordinator', () => {
         const result = await boundary.execute(operation, options);
         // The real server initialization publishes an Account change. Model
         // that network boundary's new cursor without replacing internal auth.
-        if (operation.operation === 'initialize') current = { kind: 'available', witness: { ...encryption.witness, version: 2 } };
+        if (operation.operation === 'initialize') current.witness.version = 3;
         return result;
       } }, execution: { credentials: { token: 'token', encryption: null }, serverId: 'server',
 
@@ -428,17 +446,23 @@ describe('durable review coordinator', () => {
           buildActionContext: () => ({ surface: 'agent', authority: 'account_automation' }) },
       } });
     expect(await coordinate({ runId, attempt: 0, expectedRevision: 0, acceptedEnvelope,
-      accountCurrentness: encryption.witness,
+      accountCurrentness: accountEncryption.witness,
       registerAuthorizationCurrentnessCheck: (check) => { registeredCheck = check; },
     })).toMatchObject({ state: 'waiting_for_review' });
     expect(registeredCheck).toBeTypeOf('function');
-    current = { kind: 'available', witness: { ...encryption.witness, version: 3 } };
+    expect(boundary.checkpointEnvelope()).not.toBeNull();
+    expect(boundary.rows()).toEqual(expect.arrayContaining([expect.objectContaining({ index: expect.objectContaining({ lifecycle: 'waiting_for_review' }) })]));
+    current.witness.version = 4;
     expect(await registeredCheck!()).toBe(true);
-    const material = createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee',
+    const changedMaterial = createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee',
       material: { type: 'legacy', secret: new Uint8Array(32).fill(1) } });
     current = { kind: 'available', witness: { mode: 'e2ee', version: 4,
-      contentKeyFingerprint: convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(material.contentPublicKeyFingerprint) }, material };
+      contentKeyFingerprint: convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(changedMaterial.contentPublicKeyFingerprint) }, material: changedMaterial };
     expect(await registeredCheck!()).toBe(false);
+    const contentBeforeRefusal = boundary.checkpointEnvelope();
+    expect(await coordinate({ runId, attempt: 0, expectedRevision: boundary.run().revision,
+      accountCurrentness: accountEncryption.witness, acceptedEnvelope })).toMatchObject({ state: 'failed', reason: 'content_unavailable' });
+    expect(boundary.checkpointEnvelope()).toBe(contentBeforeRefusal);
   });
   it.each(['unchanged', 'committed'] as const)('reconciles review park transport failure from the actual parent (%s)', async (parent) => {
     const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',

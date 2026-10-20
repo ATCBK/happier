@@ -7,11 +7,26 @@ import { createThemeFixture, renderScreen, standardCleanup } from '@/dev/testkit
 import { FocusReturnProvider, useFocusReturnFallbackRef } from '@/keyboard/focusReturn';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import type { NewSessionDraftProjection } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
+import type { NewSessionDraftProjection as RepositoryNewSessionDraftProjection } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
+import type { SessionDraftDocumentV1, NewSessionDraftDocumentV2 } from '@happier-dev/protocol';
+import { resolveSessionListRowTitleTextMetrics } from '@/components/sessions/shell/resolveSessionListDensityViewState';
+
+type NewSessionDraftProjection = RepositoryNewSessionDraftProjection & {
+    document: (SessionDraftDocumentV1 | NewSessionDraftDocumentV2) & { target: { kind: 'newSession' } };
+};
+
+function readableDraft<T extends Omit<NewSessionDraftProjection, 'readView'>>(input: T): T & Pick<NewSessionDraftProjection, 'readView'> {
+    return { ...input, readView: {
+        address: { kind: 'newSession', draftId: input.draftId },
+        revision: 0, materialized: true, status: input.status, conflict: input.conflict,
+        createdAt: input.createdAt, updatedAt: input.updatedAt, localSupplement: input.localSupplement,
+        composer: input.document.composer, documentVersion: input.document.v, targetKind: 'newSession',
+    } };
+}
 
 type CataloguedNewSessionDraftDocument = Extract<
     NewSessionDraftProjection['document'],
-    { target: { kind: 'newSession' } }
+    { v: 2 }
 >;
 
 function assertCataloguedNewSessionDocument(
@@ -116,7 +131,7 @@ function draft(
     overrides: Partial<NewSessionDraftProjection> = {},
     prompt = 'Fix login\nwith tests',
 ): NewSessionDraftProjection {
-    return {
+    return readableDraft({
         draftId: '00000000-0000-4000-8000-000000000001',
         document: {
             v: 1,
@@ -142,7 +157,7 @@ function draft(
         updatedAt: 20,
         localSupplement: {},
         ...overrides,
-    };
+    });
 }
 
 /**
@@ -156,7 +171,7 @@ function temporaryComputerDraft(input: Readonly<{
     activationRef?: Readonly<{ v: 1; activationId: string; createdOnDeviceLabel: string }>;
 }>): NewSessionDraftProjection {
     const base = input.base ?? draft();
-    return {
+    return readableDraft({
         ...base,
         document: {
             v: 2,
@@ -181,7 +196,7 @@ function temporaryComputerDraft(input: Readonly<{
             },
             extensions: {},
         },
-    };
+    });
 }
 
 describe('NewSessionDraftsSection', () => {
@@ -403,7 +418,7 @@ describe('NewSessionDraftsSection', () => {
         const projection = temporaryComputerDraft({ serverId: 'server-a' });
         const document = projection.document;
         assertCataloguedNewSessionDocument(document);
-        const installedProjection: NewSessionDraftProjection = {
+        const installedProjection = readableDraft({
             ...projection,
             document: {
                 v: 2,
@@ -423,7 +438,7 @@ describe('NewSessionDraftsSection', () => {
                     },
                 },
             },
-        };
+        });
 
         expect(resolveNewSessionDraftAgentId(installedProjection)).toBe('acme.agent.review/review');
     });
@@ -453,7 +468,7 @@ describe('NewSessionDraftsSection', () => {
         const released = draft();
         expect(resolveNewSessionDraftMachineId(released)).toBe('machine-a');
 
-        const catalogued: NewSessionDraftProjection = {
+        const catalogued = readableDraft({
             ...released,
             document: {
                 v: 2,
@@ -469,7 +484,7 @@ describe('NewSessionDraftsSection', () => {
                 },
                 extensions: {},
             },
-        };
+        });
         expect(resolveNewSessionDraftMachineId(catalogued)).toBe('machine-b');
 
         // A Temporary computer names no Machine, so it must never be reported
@@ -706,7 +721,7 @@ describe('NewSessionDraftsSection', () => {
             titleLines: 2,
             subtitle: 'sessionDrafts.status.syncing',
             style: { height: 84, minHeight: 84, paddingVertical: 0 },
-            titleStyle: { fontSize: 14, lineHeight: 18 },
+            titleStyle: resolveSessionListRowTitleTextMetrics({ density: 'default', readableNativePhoneMinimal: false }),
             subtitleStyle: { fontSize: 12, lineHeight: 16 },
         });
         expect(detailed.findByTestId(`session-draft-row:new-session:${projection.draftId}`)?.props.leftElement).toBeUndefined();
@@ -719,7 +734,7 @@ describe('NewSessionDraftsSection', () => {
         if (document.v !== 1 || document.target.kind !== 'newSession') {
             throw new Error('expected a released new-session draft');
         }
-        const externalProjection: NewSessionDraftProjection = {
+        const externalProjection = readableDraft({
             ...projection,
             document: {
                 ...document,
@@ -731,7 +746,7 @@ describe('NewSessionDraftsSection', () => {
                     },
                 },
             },
-        };
+        });
         const screen = await renderScreen(
             <NewSessionDraftsSectionView
                 drafts={[externalProjection]}
@@ -754,7 +769,7 @@ describe('NewSessionDraftsSection', () => {
         const projection = temporaryComputerDraft({ serverId: 'server-a' });
         const document = projection.document;
         assertCataloguedNewSessionDocument(document);
-        const v2Projection = {
+        const v2Projection = readableDraft({
             ...projection,
             document: {
                 ...document,
@@ -772,11 +787,11 @@ describe('NewSessionDraftsSection', () => {
                     },
                 },
             },
-        } satisfies NewSessionDraftProjection;
+        });
 
         expect(resolveNewSessionDraftAgentId(v2Projection)).toBe('codex');
 
-        const installedProjection = {
+        const installedProjection = readableDraft({
             ...v2Projection,
             document: {
                 ...v2Projection.document,
@@ -794,14 +809,16 @@ describe('NewSessionDraftsSection', () => {
                     },
                 },
             },
-        } satisfies NewSessionDraftProjection;
+        });
         expect(resolveNewSessionDraftAgentId(installedProjection)).toBe('acme.review/reviewer');
     });
 
     it('keeps an installed Agent’s draft on its own identity instead of the default mark', async () => {
+        const document = draft().document;
+        if (document.v !== 1) throw new Error('expected a released new-session draft');
         const projection = draft({
             document: {
-                ...draft().document,
+                ...document,
                 target: {
                     kind: 'newSession',
                     authoring: {
@@ -811,7 +828,7 @@ describe('NewSessionDraftsSection', () => {
                     },
                 },
             },
-        } as Partial<NewSessionDraftProjection>);
+        });
         const screen = await renderScreen(
             <NewSessionDraftsSectionView
                 drafts={[projection]}

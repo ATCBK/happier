@@ -1,5 +1,5 @@
 import { act, useState, type ReactNode } from 'react';
-import { Dimensions, View } from 'react-native';
+import { View } from 'react-native';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { HappierUiPalette } from '../environment/types.js';
@@ -64,9 +64,9 @@ function textOf(element: Element | null | undefined): string {
 }
 
 describe('plugin page anatomy through the shared page owners', () => {
-  it('exposes one add row with a leading plus, controlled expansion and disabled activation', async () => {
+  it('exposes one add row with a semantic add glyph, controlled expansion and disabled activation', async () => {
     const onPress = vi.fn();
-    const renderIcon = vi.fn(({ name }: { name: string }) => <span data-testid={`mark-${name}`} />);
+    const renderIcon: PluginUiPresentationHost['renderIcon'] = ({ name }) => <span data-testid={`mark-${name}`} />;
     expect(PublicUi).toHaveProperty('ItemAddRow');
     const AddRow = PublicUi.ItemAddRow;
     function Harness() {
@@ -80,7 +80,9 @@ describe('plugin page anatomy through the shared page owners', () => {
     try {
       const row = mount.container.querySelector<HTMLElement>('[data-testid="add"]')!;
       expect(row.getAttribute('aria-expanded')).toBe('false');
-      expect(row.querySelector('[data-testid="mark-plus"]')).not.toBeNull();
+      expect(row.getAttribute('role')).toBe('button');
+      expect(row.textContent).toContain('Add variable');
+      expect(row.querySelector('[data-testid="mark-add"]')).not.toBeNull();
       expect(row.querySelector('[data-testid="mark-chevron-right"]')).toBeNull();
       await act(async () => row.click());
       expect(onPress).toHaveBeenCalledTimes(1);
@@ -288,6 +290,19 @@ describe('plugin page anatomy through the shared page owners', () => {
     own.unmount();
   });
 
+  it('hands its title to host chrome that hides it, and withdraws it on leaving', () => {
+    const published: Array<string | undefined> = [];
+    const mount = mountPage(
+      <PageHeader title="wilson@test.local" description="Routes mail into sessions." testID="header" />,
+      { pageChrome: { showsTitle: true, publishTitle: (title: string | undefined) => { published.push(title); } } },
+    );
+    // The body omits the title, so the chrome is the only place the page names itself.
+    expect(mount.container.querySelector('[data-testid="header"] [role="heading"]')).toBeNull();
+    expect(published).toEqual(['wilson@test.local']);
+    mount.unmount();
+    expect(published).toEqual(['wilson@test.local', undefined]);
+  });
+
   it('places host page actions beside the desktop title even when the plugin declares no actions', () => {
     const mount = mountPage(<PageHeader title="Sentry" testID="header" />, {
       pageChrome: {
@@ -351,14 +366,10 @@ describe('plugin page anatomy through the shared page owners', () => {
   });
 
   it.each([
-    { viewportWidth: 1280, viewportHeight: 900, rowWidth: 481, trailing: true },
-    { viewportWidth: 430, viewportHeight: 932, rowWidth: 398, trailing: false },
-  ])('fits a page select beside its label in a desktop column and below it on a phone ($viewportWidth)', ({ viewportWidth, viewportHeight, rowWidth, trailing }) => {
-    const getDimensions = Dimensions.get.bind(Dimensions);
-    let viewport = { width: viewportWidth, height: viewportHeight, scale: 1, fontScale: 1 };
-    const dimensions = vi.spyOn(Dimensions, 'get').mockImplementation((name) => name === 'window'
-      ? viewport
-      : getDimensions(name));
+    { rowWidth: 481, trailing: true },
+    { rowWidth: 398, trailing: true },
+    { rowWidth: 280, trailing: false },
+  ])('fits a page select beside its label when the measured row has room and beneath it otherwise ($rowWidth)', ({ rowWidth, trailing }) => {
     const mount = mountPage(
       <ItemGroup title="Acquisition">
         <Item
@@ -388,24 +399,103 @@ describe('plugin page anatomy through the shared page owners', () => {
       expect(composition.style.flexDirection).toBe(trailing ? 'row' : 'column');
       const field = trigger.firstElementChild as HTMLElement;
       expect(getComputedStyle(field).width).not.toBe('240px');
-      if (trailing) {
+      if (rowWidth === 481) {
         expect(Array.from(trigger.querySelectorAll<HTMLElement>('div')).some((node) => getComputedStyle(node).maxWidth === '237px')).toBe(true);
-        // A host can resize around a fixed-width pane: the row width alone has not changed.
-        viewport = { width: 430, height: 932, scale: 1, fontScale: 1 };
-        act(() => layout({ nativeEvent: { layout: { x: 0, y: 0, width: rowWidth, height: 52 } } }));
-        expect(composition.style.flexDirection).toBe('column');
-        viewport = { width: viewportWidth, height: viewportHeight, scale: 1, fontScale: 1 };
-        act(() => layout({ nativeEvent: { layout: { x: 0, y: 0, width: rowWidth, height: 52 } } }));
-        expect(composition.style.flexDirection).toBe('row');
-        act(() => layout({ nativeEvent: { layout: { x: 0, y: 0, width: 370, height: 52 } } }));
-        expect(composition.style.flexDirection).toBe('column');
       }
+      // Placement follows the row's available width, including within a narrow pane.
+      act(() => layout({ nativeEvent: { layout: { x: 0, y: 0, width: 280, height: 52 } } }));
+      expect(composition.style.flexDirection).toBe('column');
+      act(() => layout({ nativeEvent: { layout: { x: 0, y: 0, width: 481, height: 52 } } }));
+      expect(composition.style.flexDirection).toBe('row');
       // Recomposition must retain the trigger and its focus/menu owner.
       expect(mount.container.querySelector('[role="button"][aria-label="Strategy: Round robin"]')).toBe(trigger);
       expect(trigger.textContent).toContain('Round robin');
     } finally {
       mount.unmount();
-      dimensions.mockRestore();
+    }
+  });
+
+  // The same facts core's Item measures (Item.operationPlacement.test.tsx): a short measured name, and a
+  // sibling control sharing the field's slot. Row 358 at a 16 px inset: 358 - 32 - 12 - 120 = 194 px of room.
+  it.each([
+    { siblingPx: 40, trailing: true },
+    { siblingPx: 80, trailing: false },
+  ])('fits a field beside a short measured name and its sibling control in a narrow row, as core rows do (sibling $siblingPx)', ({ siblingPx, trailing }) => {
+    const mount = mountPage(
+      <ItemGroup title="Engines">
+        <Item
+          testID="engine-row"
+          title="Reviewer"
+          accessoryWraps
+          fieldAccessory
+          fieldAccessorySiblingPx={siblingPx}
+          accessoryOutsidePressable
+          accessory={<Select
+            label="Engine"
+            presentation="field"
+            value="fast"
+            options={[{ value: 'fast', label: 'Fast' }, { value: 'deep', label: 'Deep' }]}
+            onChange={() => undefined}
+          />}
+        />
+      </ItemGroup>,
+    );
+    try {
+      const handler = (node: Element) => Reflect.get(node, '__reactLayoutHandler') as ((event: HappierLayoutChangeEvent) => void) | undefined;
+      const row = mount.container.querySelector<HTMLElement>('[data-testid="engine-row"]')!;
+      act(() => handler(row)!({ nativeEvent: { layout: { x: 0, y: 0, width: 358, height: 52 } } }));
+      const nameMeasure = [...mount.container.querySelectorAll<HTMLElement>('[aria-hidden="true"]')]
+        .find((node) => node.textContent === 'Reviewer' && handler(node) !== undefined);
+      expect(nameMeasure, 'a narrow field row measures its name').toBeDefined();
+      act(() => handler(nameMeasure!)!({ nativeEvent: { layout: { x: 0, y: 0, width: 120, height: 20 } } }));
+      const composition = row.firstElementChild as HTMLElement;
+      expect(composition.style.flexDirection).toBe(trailing ? 'row' : 'column');
+    } finally {
+      mount.unmount();
+    }
+  });
+
+  it('moves a select beneath its label once its value fills the room beside it, even though the row was measured first', () => {
+    const mount = mountPage(
+      <ItemGroup title="Messages">
+        <Item
+          testID="incoming-row"
+          title="Incoming messages"
+          accessoryWraps
+          fieldAccessory
+          accessoryOutsidePressable
+          accessory={<Select
+            label="Incoming messages"
+            presentation="field"
+            value="all"
+            options={[{ value: 'all', label: 'All allowed messages' }, { value: 'mentions', label: 'Mentions only' }]}
+            onChange={() => undefined}
+          />}
+        />
+      </ItemGroup>,
+    );
+    try {
+      const handler = (node: Element) => Reflect.get(node, '__reactLayoutHandler') as ((event: HappierLayoutChangeEvent) => void) | undefined;
+      const layout = (node: Element, width: number) => act(() => handler(node)!({ nativeEvent: { layout: { x: 0, y: 0, width, height: 52 } } }));
+      const row = mount.container.querySelector<HTMLElement>('[data-testid="incoming-row"]')!;
+      // React Native Web starts observing a view's size only when it mounts with an `onLayout`, so the
+      // field box must carry one from its first render, before any room beside the label is known.
+      const trigger = mount.container.querySelector<HTMLElement>('[role="button"][aria-label="Incoming messages: All allowed messages"]')!;
+      const box = trigger.firstElementChild as HTMLElement;
+      expect(handler(box), 'a field box mounts observing its size').toBeDefined();
+      // A 358px phone row, and the name's measured 140px: the field gets 358 - 32 - 12 - 140 = 174px beside it.
+      layout(row, 358);
+      const nameMeasure = [...mount.container.querySelectorAll<HTMLElement>('[aria-hidden="true"]')]
+        .find((node) => node.textContent === 'Incoming messages' && handler(node) !== undefined);
+      expect(nameMeasure, 'a narrow field row measures its name').toBeDefined();
+      layout(nameMeasure!, 140);
+      const composition = row.firstElementChild as HTMLElement;
+      expect(composition.style.flexDirection).toBe('row');
+      // The value fills the 174px it was given and would be cut, so the field moves beneath its label.
+      layout(box, 174);
+      expect(composition.style.flexDirection).toBe('column');
+    } finally {
+      mount.unmount();
     }
   });
 

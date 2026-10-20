@@ -3,6 +3,7 @@ import type { RuntimeInstallLifecycleContext } from './runtimeInstallLifecycleCo
 import { AgentCliDownloadError } from '../downloadGitHubReleaseAsset.js';
 import { ExecFileTerminationError } from '../../process/index.js';
 import { ArchiveExtractionTimeoutError } from '@happier-dev/release-runtime/archiveExtraction';
+import { GitHubReleaseRateLimitError } from '@happier-dev/release-runtime/github';
 
 type RuntimeInstallFailureErrorCode = 'managed-runtime-unavailable' | 'command-failed' | 'command-timed-out' | 'termination-failed' | AgentCliDownloadError['errorCode'];
 
@@ -12,6 +13,7 @@ function resolveRuntimeInstallFailureMessage(error: unknown): string {
 
 function classifyRuntimeInstallFailureErrorCode(error: unknown, message: string): RuntimeInstallFailureErrorCode {
     if (error instanceof AgentCliDownloadError) return error.errorCode;
+    if (error instanceof GitHubReleaseRateLimitError) return 'rate-limited';
     if (error instanceof ExecFileTerminationError) return 'termination-failed';
     if (error instanceof ArchiveExtractionTimeoutError) return 'command-timed-out';
     if (

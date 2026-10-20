@@ -969,43 +969,33 @@ describe('Oh My Pi public External Sessions contribution', () => {
       cursor: initial.value.tailCursor,
       maxItems: 10,
     });
-    expect(advanced).toEqual({
+    expect(advanced).toMatchObject({
       ok: true,
       value: {
         outcome: 'advanced',
-        items: [],
+        items: [expect.objectContaining({ messageRole: 'agent' }), expect.objectContaining({ messageRole: 'agent' }),
+          expect.objectContaining({ messageRole: 'agent' })],
         nextCursor: expect.any(String),
         boundary: expect.any(String),
         hasMore: false,
         diagnostics: [
           {
-            code: 'malformed_record_skipped',
-            severity: 'required',
-            count: 1,
-            positions: [priorSize],
+            code: 'external_sessions_transcript_unsupported_record',
+            severity: 'benign',
+            count: 3,
+            positions: [priorSize,
+              priorSize + Buffer.byteLength(`${malformed}${nonTranscript}${lateSessionHeader}${lateTitleSlot}`, 'utf8'),
+              priorSize + Buffer.byteLength(`${malformed}${nonTranscript}${lateSessionHeader}${lateTitleSlot}${unknownMetadata}`, 'utf8')],
           },
           {
             code: 'non_transcript_record_skipped',
             severity: 'benign',
-            count: 1,
-            positions: [priorSize + Buffer.byteLength(malformed, 'utf8')],
-          },
-          {
-            code: 'unsupported_record_skipped',
-            severity: 'required',
-            count: 4,
+            count: 3,
             positions: [
+              priorSize + Buffer.byteLength(malformed, 'utf8'),
               priorSize + Buffer.byteLength(`${malformed}${nonTranscript}`, 'utf8'),
               priorSize + Buffer.byteLength(
                 `${malformed}${nonTranscript}${lateSessionHeader}`,
-                'utf8',
-              ),
-              priorSize + Buffer.byteLength(
-                `${malformed}${nonTranscript}${lateSessionHeader}${lateTitleSlot}`,
-                'utf8',
-              ),
-              priorSize + Buffer.byteLength(
-                `${malformed}${nonTranscript}${lateSessionHeader}${lateTitleSlot}${unknownMetadata}`,
                 'utf8',
               ),
             ],
@@ -1129,7 +1119,86 @@ describe('Oh My Pi public External Sessions contribution', () => {
     });
   });
 
-  it('rejects a page when one native message mixes representable and unsupported blocks', async () => {
+  it('keeps known Oh My Pi model bookkeeping silent while advancing its native branch', async () => {
+    const agentDir = await createAgentDir();
+    const remoteSessionId = 'known-model-bookkeeping';
+    const transcriptPath = await writeTranscript({ agentDir, remoteSessionId, records: [
+      { type: 'session', id: remoteSessionId },
+      { type: 'message', id: 'root', parentId: null, message: { role: 'user', content: 'before' } },
+    ] });
+    const contribution = createOhMyPiExternalSessionsContribution({ env: { PI_CODING_AGENT_DIR: agentDir } });
+    const request = { ...invocation(), source: { kind: 'ohMyPiAgentDir' as const, agentDir, sessionFilePath: transcriptPath },
+      remoteSessionId, direction: 'older' as const, maxItems: 10 };
+    const initial = await contribution.pageTranscript(request);
+    expect(initial.ok).toBe(true);
+    if (!initial.ok || !initial.value.tailCursor) return;
+    await appendFile(transcriptPath, jsonlLine({ type: 'model_change', id: 'model', parentId: 'root',
+      provider: 'anthropic', modelId: 'sonnet' }));
+    const after = await contribution.readAfterTranscript({ ...request, cursor: initial.value.tailCursor });
+    expect(after).toMatchObject({ ok: true, value: { outcome: 'advanced', items: [], diagnostics: [{
+      code: 'non_transcript_record_skipped', severity: 'benign', count: 1,
+    }] } });
+    const page = await contribution.pageTranscript(request);
+    expect(page).toMatchObject({ ok: true, value: { items: [{ raw: { role: 'user' } }] } });
+    if (!after.ok || after.value.outcome !== 'advanced') return;
+    await appendFile(transcriptPath, jsonlLine({ type: 'message', id: 'next', parentId: 'model',
+      message: { role: 'user', content: 'after' } }));
+    expect(await contribution.readAfterTranscript({ ...request, cursor: after.value.nextCursor })).toMatchObject({
+      ok: true, value: { outcome: 'advanced', items: [{ raw: { role: 'user', content: { text: 'after' } } }] },
+    });
+  });
+
+  it.each(['unknown', 'malformed', 'unaddressable', 'invalid-json', 'missing-type'])('keeps Oh My Pi messages pageable around an %s record', async (shape) => {
+    const agentDir = await createAgentDir();
+    const remoteSessionId = `tolerant-${shape}`;
+    const transcriptPath = await writeTranscript({ agentDir, remoteSessionId, records: [
+      { type: 'session', id: remoteSessionId, timestamp: '2026-07-23T10:00:00.000Z' },
+      { type: 'message', id: 'root', parentId: null, message: { role: 'user', content: 'before' } },
+    ] });
+    const contribution = createOhMyPiExternalSessionsContribution({ env: { PI_CODING_AGENT_DIR: agentDir } });
+    const request = { ...invocation(), source: { kind: 'ohMyPiAgentDir' as const, agentDir, sessionFilePath: transcriptPath },
+      remoteSessionId, direction: 'older' as const, maxItems: 10 };
+    const initial = await contribution.pageTranscript(request);
+    expect(initial.ok).toBe(true);
+    if (!initial.ok || !initial.value.tailCursor) return;
+    await appendFile(transcriptPath, [
+      shape === 'invalid-json' ? 'invalid-json\n' : jsonlLine(shape === 'unaddressable'
+        ? { type: 'future', payload: 'private-native-payload' }
+        : { id: 'unsupported', parentId: 'root', type: shape === 'missing-type' ? undefined : shape === 'unknown' ? 'future' : 'message',
+          message: { role: 'assistant', content: 42 }, payload: 'private-native-payload' }),
+      jsonlLine({ type: 'message', id: 'after', parentId: shape === 'unaddressable' || shape === 'invalid-json' ? 'root' : 'unsupported',
+        message: { role: 'user', content: 'after' } }),
+    ].join(''));
+    const advancedItems = [];
+    let cursor = initial.value.tailCursor;
+    for (let index = 0; index < 4; index += 1) {
+      const next = await contribution.readAfterTranscript({ ...request, cursor, maxItems: 1 });
+      expect(next.ok).toBe(true);
+      if (!next.ok || next.value.outcome === 'already_current') break;
+      expect(next.value.outcome).toBe('advanced');
+      if (next.value.outcome !== 'advanced') return;
+      advancedItems.push(...next.value.items);
+      cursor = next.value.nextCursor;
+    }
+    expect(advancedItems).toHaveLength(2);
+    expect(advancedItems[0]).toMatchObject({ messageRole: 'agent' });
+    expect(advancedItems[1]?.raw).toMatchObject({ role: 'user', content: { text: 'after' } });
+    const pageItems = [];
+    let olderCursor: string | undefined;
+    do {
+      const page = await contribution.pageTranscript({ ...request, cursor: olderCursor, maxItems: 1 });
+      expect(page.ok).toBe(true);
+      if (!page.ok) return;
+      pageItems.unshift(...page.value.items);
+      olderCursor = page.value.nextCursor ?? undefined;
+    } while (olderCursor);
+    expect(pageItems).toHaveLength(3);
+    expect(pageItems.slice(1)).toEqual(advancedItems);
+    expect(pageItems.every((item) => TranscriptRawRecordV1Schema.safeParse(item.raw).success)).toBe(true);
+    expect(JSON.stringify(pageItems)).not.toContain('private-native-payload');
+  });
+
+  it('represents a mixed native message with a visible unsupported row', async () => {
     const agentDir = await createAgentDir();
     const remoteSessionId = 'mixed-page-record';
     const transcriptPath = await writeTranscript({
@@ -1169,10 +1238,14 @@ describe('Oh My Pi public External Sessions contribution', () => {
       remoteSessionId,
       direction: 'older',
       maxItems: 10,
-    })).resolves.toMatchObject({ ok: false, code: 'agent_error', retryable: false });
+    })).resolves.toMatchObject({ ok: true, value: {
+      items: [{ raw: { role: 'user' } }, { messageRole: 'agent', raw: { role: 'agent', content: {
+        type: 'acp', agentId: 'ohMyPi', data: { type: 'message', message: 'Agent emitted an unsupported content block.' },
+      } } }], diagnostics: [{ code: 'external_sessions_transcript_unsupported_record' }],
+    } });
   });
 
-  it('rejects a page when a user message mixes text with an unsupported block', async () => {
+  it('represents a mixed user message with a visible unsupported row', async () => {
     const agentDir = await createAgentDir();
     const remoteSessionId = 'mixed-user-page-record';
     const transcriptPath = await writeTranscript({
@@ -1212,7 +1285,9 @@ describe('Oh My Pi public External Sessions contribution', () => {
       remoteSessionId,
       direction: 'older',
       maxItems: 10,
-    })).resolves.toMatchObject({ ok: false, code: 'agent_error', retryable: false });
+    })).resolves.toMatchObject({ ok: true, value: { items: [{}, { messageRole: 'agent' }],
+      diagnostics: [{ code: 'external_sessions_transcript_unsupported_record' }],
+    } });
   });
 
   it('advances past a mixed native message with a diagnostic instead of publishing a partial row', async () => {
@@ -1271,13 +1346,13 @@ describe('Oh My Pi public External Sessions contribution', () => {
       ok: true,
       value: {
         outcome: 'advanced',
-        items: [],
+        items: [expect.objectContaining({ messageRole: 'agent' })],
         nextCursor: expect.any(String),
         boundary: expect.any(String),
         hasMore: false,
         diagnostics: [{
-          code: 'unsupported_record_skipped',
-          severity: 'required',
+          code: 'external_sessions_transcript_unsupported_record',
+          severity: 'benign',
           count: 1,
           positions: [position],
         }],
@@ -1341,13 +1416,13 @@ describe('Oh My Pi public External Sessions contribution', () => {
       ok: true,
       value: {
         outcome: 'advanced',
-        items: [],
+        items: [expect.objectContaining({ messageRole: 'agent' })],
         nextCursor: expect.any(String),
         boundary: expect.any(String),
         hasMore: false,
         diagnostics: [{
-          code: 'unsupported_record_skipped',
-          severity: 'required',
+          code: 'external_sessions_transcript_unsupported_record',
+          severity: 'benign',
           count: 1,
           positions: [position],
         }],
@@ -1512,9 +1587,11 @@ describe('Oh My Pi public External Sessions contribution', () => {
       ok: true,
       value: {
         outcome: 'advanced',
-        items: [expect.objectContaining({ id: expect.stringContaining(':assistant-next:text:0') })],
+        items: [expect.objectContaining({ messageRole: 'agent' }),
+          expect.objectContaining({ id: expect.stringContaining(':assistant-next:text:0') })],
         diagnostics: [{
-          code: 'malformed_record_skipped',
+          code: 'external_sessions_transcript_unsupported_record',
+          severity: 'benign',
           count: 1,
           positions: [priorSize],
         }],

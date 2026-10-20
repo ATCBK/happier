@@ -282,7 +282,7 @@ describe('sessionHandoffPrepareTargetJobStore', () => {
           phase: 'preparing',
           recoveryActions: [],
         },
-      })).rejects.toMatchObject({ name: 'ZodError' });
+      })).rejects.toMatchObject({ issues: expect.arrayContaining([expect.objectContaining({ code: 'custom', path: ['status', 'handoffId'] })]) });
     } finally {
       await rm(activeServerDir, { recursive: true, force: true }).catch(() => undefined);
     }
@@ -304,7 +304,7 @@ describe('sessionHandoffPrepareTargetJobStore', () => {
           jobId: 'job_other',
           recoveryActions: [],
         },
-      })).rejects.toMatchObject({ name: 'ZodError' });
+      })).rejects.toMatchObject({ issues: expect.arrayContaining([expect.objectContaining({ code: 'custom', path: ['status', 'jobId'] })]) });
     } finally {
       await rm(activeServerDir, { recursive: true, force: true }).catch(() => undefined);
     }

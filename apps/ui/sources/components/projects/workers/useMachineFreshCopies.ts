@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { z } from 'zod/mini';
 import { useProjectAccountRows } from '@/sync/store/hooks';
 import { readMachineFreshCopies } from '@/sync/store/domains/projectAccountRows';
 import type { MachineFreshCopyRow } from '@/sync/store/domains/projectAccountRows';
@@ -192,7 +193,7 @@ export function useMachineFreshCopies(serverId: string, machineId: string) {
         || code === 'outcome_unknown' || code === 'outcomeUnknown' ? 'unknown'
         : code === 'workspace_sync_relationship_in_use' || (detailRecord && Array.isArray(Reflect.get(detailRecord, 'dependencies')))
           ? 'in_use' : 'failed';
-      const dependencies = ProjectWorkerDependencyV1Schema.array().safeParse(detailRecord ? Reflect.get(detailRecord, 'dependencies') : undefined);
+      const dependencies = z.array(ProjectWorkerDependencyV1Schema).safeParse(detailRecord ? Reflect.get(detailRecord, 'dependencies') : undefined);
       const filesUnknown = kind === 'unknown' && code === 'workspace_copy_removal_unknown';
       publishNotice({ relationshipId: copy.relationship.relationshipId, kind, errorCode: code, details,
         ...(dependencies.success && dependencies.data.length > 0 ? { dependencies: dependencies.data } : {}),

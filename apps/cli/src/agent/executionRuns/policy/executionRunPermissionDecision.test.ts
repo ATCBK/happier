@@ -1,8 +1,37 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { McpServerToolPolicyV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
 import { createExecutionRunPermissionHandler, resolveExecutionRunPermissionDecision } from './executionRunPermissionDecision';
+import { createRunScopedExecutionPermissionHandler } from './runScopedExecutionPermissionHandler';
 
 describe('MCP policy for execution runs', () => {
+  it('settles a disposed Run during catalog preparation without publishing after disposal', async () => {
+    let release!: () => void;
+    const preparation = new Promise<void>(resolve => { release = resolve; });
+    const published: string[] = [];
+    const handler = createExecutionRunPermissionHandler({ backendId: 'agent', permissionMode: 'default',
+      getMcpToolContext: () => ({ catalog: null,
+        mcpServerIdentities: { docs: { serverId: 'docs-id', serverTitle: 'Docs' } },
+        prepareCatalog: () => preparation }),
+      publishPendingRequest: request => { published.push(request.requestId); } });
+    const run = createRunScopedExecutionPermissionHandler({ runId: 'run', controllerOccurrenceId: 'occurrence', handler });
+    const pending = run.handler.handleToolCall('pending', 'mcp__docs__create', {});
+    const survivor = handler.handleToolCall('survivor', 'mcp__docs__create', {});
+    expect(handler.respondToPermissionRequest('survivor', true)).toBe(false);
+    let settled = false;
+    void pending.then(() => { settled = true; });
+    try {
+      await run.dispose('Run stopped');
+      await vi.waitFor(() => expect(settled).toBe(true));
+      await expect(pending).resolves.toEqual({ decision: 'denied' });
+    } finally {
+      release();
+      await preparation;
+    }
+    await vi.waitFor(() => expect(published).toEqual(['survivor']));
+    expect(run.respondToPermissionRequest('pending', true)).toBe(false);
+    expect(handler.respondToPermissionRequest('survivor', true)).toBe(true);
+    await expect(survivor).resolves.toEqual({ decision: 'approved' });
+  });
   function fixture(policy: McpServerToolPolicyV1) {
     let current = policy;
     return { change(next: McpServerToolPolicyV1) { current = next; }, getMcpToolContext: () => ({ mcpServerIdentities: { docs: { serverId: 'docs-id', serverTitle: 'Docs' } },

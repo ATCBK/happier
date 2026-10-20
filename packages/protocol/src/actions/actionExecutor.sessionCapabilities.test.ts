@@ -19,14 +19,13 @@ function fixture(options: { vendorResume?: 'supported' | 'unsupported'; liveRelo
   const port = {
     readSession: async () => {
       if (options.readFailure) throw new Error('Home unavailable');
-      return { metadata, revision: 7, sessionRunning: !options.stopped,
+      return { metadata, sessionRunning: !options.stopped,
         agent: { vendorResume: options.vendorResume ?? 'supported', skillsLiveReload: options.liveReload ?? 'supported' }, launchRestart: options.launchRestart ?? 'automatic' };
     },
     resolveItem: async ({ id }: { id: string }) => id === 'missing' ? null : id,
-    writeMetadata: async ({ metadata: next, expectedRevision }: { metadata: object; expectedRevision: number }) => {
-      expect(expectedRevision).toBe(7);
+    writeMetadata: async ({ update }: { update: (metadata: object) => object }) => {
       if (options.conflict) return 'conflict';
-      metadata = next; writes++; return 'updated';
+      metadata = update(metadata); writes++; return 'updated';
     },
   } satisfies SessionCapabilitiesActionPortV1;
   // The substituted boundary is Account Session metadata persistence; unrelated executor ports are unused.

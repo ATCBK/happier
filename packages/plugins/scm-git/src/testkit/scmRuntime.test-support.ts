@@ -12,7 +12,9 @@ import {
     type BackendRuntimeServices as ScmBackendRuntimeServices,
 } from '@happier-dev/plugin-sdk/scm/backend';
 import type { ResolvedScmHostingProviderRegistry } from '../hostingProviders/types.js';
-import { runScmCommand as runHostScmCommand } from '@/scm/runtime';
+// This plugin-owned testkit composes the real CLI host; its imports must not
+// resolve through whichever app's private @/ namespace consumes the fixture.
+import { runScmCommand as runHostScmCommand } from '../../../../../apps/cli/src/scm/runtime';
 
 export type GitScmCommandRunner = (input: ScmBackendCommandRunInput | BackendCommandStreamInput) => Promise<ScmBackendCommandRunResult>;
 
@@ -94,12 +96,12 @@ function runInteractiveGitCommand(input: ScmBackendCommandRunInput): Promise<Scm
 export function createRealGitScmBackendRuntimeServices(): ScmBackendRuntimeServices {
     return {
         async renamePathNoReplace({ sourcePath, targetPath, expectedIdentity, signal }) {
-            const { renameStoragePathNoReplace } = await import('@/storage/trash/renameStoragePath');
+            const { renameStoragePathNoReplace } = await import('../../../../../apps/cli/src/storage/trash/renameStoragePath');
             await renameStoragePathNoReplace(sourcePath, targetPath, signal, expectedIdentity);
         },
         async removeRetainedPath({ path, expectedIdentity, beforeEffect }) {
             const { dirname } = await import('node:path');
-            const { removeStoragePath } = await import('@/storage/trash/removeStoragePath');
+            const { removeStoragePath } = await import('../../../../../apps/cli/src/storage/trash/removeStoragePath');
             await removeStoragePath(path, { allowedRoot: dirname(path), expectedIdentity: { ...expectedIdentity, kind: 'directory' }, beforeEffect });
         },
         // Real incremental reads use the canonical host process owner, including

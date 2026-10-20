@@ -38,6 +38,11 @@ function sameHomeSelection(a: readonly string[], b: readonly string[]): boolean 
 }
 
 const retainedFiltersByKey = new Map<string, RetainedEntry>();
+/** The one Sessions list: `global` is its retained view, whichever surface opens it. */
+const GLOBAL_SESSION_LIST_CONTEXT_KEY = 'global';
+const retainedFilterListeners = new Set<() => void>();
+/** Asked for before the list ever mounted: its first mount opens already narrowed. */
+let coordinatorsOnlyPending = false;
 let unsubscribeCredentialChanges: (() => void) | null = null;
 
 function ensureCredentialChangeSubscription(): void {
@@ -51,6 +56,10 @@ function retentionKey(contextKey: string): string {
     return contextKey.trim();
 }
 
+function withCoordinatorsOnly(defaults: SessionListViewFilterDefaultsInput): SessionListViewFilterDefaultsInput {
+    return { ...defaults, coordinator: 'coordinator' };
+}
+
 function getOrCreateEntry(
     contextKey: string,
     defaults: SessionListViewFilterDefaultsInput,
@@ -59,7 +68,12 @@ function getOrCreateEntry(
     const key = retentionKey(contextKey);
     const existing = retainedFiltersByKey.get(key);
     if (existing) return existing;
-    const filters = createSessionListViewFilterDefaults(defaults);
+    const filters = createSessionListViewFilterDefaults(
+        key === GLOBAL_SESSION_LIST_CONTEXT_KEY && coordinatorsOnlyPending
+            ? withCoordinatorsOnly(defaults)
+            : defaults,
+    );
+    if (key === GLOBAL_SESSION_LIST_CONTEXT_KEY) coordinatorsOnlyPending = false;
     const entry: RetainedEntry = {
         filters,
         defaultHomeServerIds: filters.homeServerIds,
@@ -174,7 +188,23 @@ export function buildSessionListViewCredentialScopeKey(
     return JSON.stringify([contextKey.trim(), serverIds, serverAccountScopeListKey(scopes)]);
 }
 
+/**
+ * The intent behind "Show coordinators": the Sessions list shows its default view narrowed to
+ * coordinators, whether it is mounted now or mounts later. The caller navigates to the list.
+ * Resetting also clears any other facet, so the list is never left narrowed two ways.
+ */
+export function showOnlyCoordinatorsInSessionList(): void {
+    const entry = retainedFiltersByKey.get(GLOBAL_SESSION_LIST_CONTEXT_KEY);
+    if (!entry) {
+        coordinatorsOnlyPending = true;
+        return;
+    }
+    resetRetainedEntry(entry, withCoordinatorsOnly(entry.defaults));
+    for (const listener of retainedFilterListeners) listener();
+}
+
 export function clearSessionListViewFilterRetentionForTests(): void {
+    coordinatorsOnlyPending = false;
     retainedFiltersByKey.clear();
     unsubscribeCredentialChanges?.();
     unsubscribeCredentialChanges = null;
@@ -219,6 +249,13 @@ export function useSessionListViewFilters(input: UseSessionListViewFiltersInput)
         key: string;
         filters: SessionListViewFilters;
     }>>(() => ({ key, filters: retained.filters }));
+
+    // A retained view can be changed from outside the list (Show coordinators); follow it.
+    const [, followRetained] = React.useReducer((version: number) => version + 1, 0);
+    React.useEffect(() => {
+        retainedFilterListeners.add(followRetained);
+        return () => { retainedFilterListeners.delete(followRetained); };
+    }, []);
 
     reconcileAccountScopeResolutions(
         retained,

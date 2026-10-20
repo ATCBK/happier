@@ -13,6 +13,7 @@ import { storage } from '@/sync/domains/state/storage';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 import type { ScmCommitSelectionPatch } from '@/sync/domains/state/storageTypes';
 import { machineScmCommitCreate, machineScmCommitUndoLast } from '@/sync/ops/scm/machineScm';
+import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 import { runWorkspaceScmMutation } from '@/scm/operations/runSessionScmMutation';
 import { SCM_OPERATION_ERROR_CODES, createScmOperationUnknownOutcome, normalizeScmOperationOutcome } from '@happier-dev/protocol/scm';
 
@@ -27,10 +28,10 @@ export async function executeWorkspaceScmCommitUndoLast(input: Readonly<{
         cwd: input.scope.rootPath,
         operation: 'commit_undo',
         fallbackError: t('sessionGitPane.flow.undo.failed'),
-        run: () => machineScmCommitUndoLast(input.scope.machineId, {
+        run: (call) => machineScmCommitUndoLast(input.scope.machineId, {
             cwd: input.scope.rootPath,
             expectedHeadOid: input.expectedHeadOid,
-        }, { serverId: input.scope.serverId }),
+        }, { serverId: input.scope.serverId, ...call }),
         refreshAfterMutation: async () => {
             await input.refreshScmData();
             // Snapshot controllers retain failure state and resolve their refresh promise.
@@ -74,6 +75,8 @@ export async function executeWorkspaceScmCommit(input: Readonly<{
                 }, {
                     serverId: input.scope.serverId,
                 });
+                // Declined, or waiting on an approval: nothing ran and nothing failed.
+                if (isScmActionNotRun(response)) return;
                 const outcome = normalizeScmOperationOutcome(response);
                 const effect = 'effect' in outcome ? outcome.effect : undefined;
                 const createdCommitSha = effect?.kind === 'commit' ? effect.commitSha : undefined;

@@ -58,6 +58,8 @@ import { createReviewCommentOperations } from "./operations";
 import { registerReviewCommentRoutes } from "./routes";
 import { createReviewCommentAccountEncryptionMigrationPersistenceInTx } from "./accountEncryptionMigrationPersistence";
 import { createSqlReviewCommentStore } from "./store";
+import { sourceKeyForSessionFollowSourceV1 } from '@/app/session/follow/sessionFollowSourceIdentity';
+import { serializeFollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 
 const CODERABBIT_PLUGIN_ID = "happier.review.coderabbit";
 const EXTERNAL_PLUGIN_ID = "acme.reviewbot";
@@ -672,8 +674,15 @@ describe("review comment durable storage", () => {
             await db.session.create({ data: { id: sessionId, accountId: [unreadableId, readOnlyId].includes(sessionId) ? foreign.id : account.id,
                 tag: sessionId, metadata: "{}", encryptionMode: "plain" } });
         }
-        await db.sessionReportsTo.createMany({ data: [childId, unreadableId, readOnlyId].map((sessionId) => ({ sessionId, leadSessionId: leadId })) });
-        await db.sessionReportsTo.create({ data: { sessionId: nestedId, leadSessionId: unreadableId } });
+        await db.sessionFollowEdge.createMany({ data: [childId, unreadableId, readOnlyId].map((sessionId) => ({
+            sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId }),
+            policyJson: serializeFollowPolicyV1({ preset: 'important' }),
+            sourceSessionId: sessionId, destinationSessionId: leadId, relation: 'manager', managerSourceSessionId: sessionId,
+        })) });
+        await db.sessionFollowEdge.create({ data: { sourceSessionId: nestedId, destinationSessionId: unreadableId,
+            sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: nestedId }),
+            policyJson: serializeFollowPolicyV1({ preset: 'important' }),
+            relation: 'manager', managerSourceSessionId: nestedId } });
         await db.sessionShare.create({ data: { sessionId: readOnlyId, sharedByUserId: foreign.id, sharedWithUserId: account.id, accessLevel: "view" } });
         const keyPair = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(36));
         const machineId = "machine-lead-review";
@@ -737,7 +746,7 @@ describe("review comment durable storage", () => {
                 assignments: { create: { machineId } } } });
             const workflowBody = { ...body, expectedServerRevision: 3, clientMutationId: "workflow-child-denied" };
             expect((await disposition(childCommentId, workflowBody, { kind: "workflow", runId: workflowRunId })).json()).toMatchObject({ error: "review_comment_permission_denied" });
-            await db.sessionReportsTo.delete({ where: { sessionId: childId } });
+            await db.sessionFollowEdge.delete({ where: { managerSourceSessionId: childId } });
             const detachedBody = { ...body, expectedServerRevision: 3, clientMutationId: "detached-lead-uphold" };
             expect((await disposition(childCommentId, detachedBody)).json()).toMatchObject({ error: "review_comment_permission_denied" });
         });
@@ -1467,6 +1476,40 @@ describe("review comment durable storage", () => {
         expect(await db.reviewCommentEvent.count({ where: { accountId: account.id } })).toBe(3);
     });
 
+    it("persists encrypted comments when an unrelated Account cursor advances after preparation", async () => {
+        const account = await db.account.create({ data: {
+            id: "account-review-comments-cursor-advance", ...e2eeAccountFields(35),
+        } });
+        await initEncrypt();
+        await withAuthenticatedTestApp(registerReviewCommentRoutes, async (app: FastifyInstance) => {
+            const context = { accountId: account.id, mode: "e2ee", material: {
+                type: "dataKey", machineKey: new Uint8Array(32).fill(36),
+            } } as const;
+            const output = await executeReviewCommentTransportV1({
+                actionId: "reviews.comments.create",
+                input: { projectId: "project-1", anchor: { kind: "file", filePath: "src/example.ts" },
+                    snapshot: textSnapshot(), body: "Private finding", clientMutationId: "cursor-advance" },
+                actor: { kind: "user", userId: account.id }, context, randomBytes,
+                request: async (request) => {
+                    const response = await app.inject({ method: "POST", url: request.path,
+                        headers: { "x-test-user-id": account.id }, payload: request.body });
+                    expect(response.statusCode, response.body).toBe(200);
+                    if (request.path.endsWith("/prepare")) {
+                        // Account.seq also tracks unrelated Account updates; the
+                        // persisted encryption mode and binding remain unchanged.
+                        await db.account.update({ where: { id: account.id }, data: { seq: { increment: 1 } } });
+                    }
+                    return response.json();
+                },
+            });
+            const created = ReviewCommentCreateResponseV1Schema.parse(output);
+            expect(created.comment.body).toBe("Private finding");
+            const stored = await createSqlReviewCommentStore().getSource({ accountId: account.id, commentId: created.comment.id });
+            expect(stored?.source).toMatchObject({ layout: "canonical_v1", envelope: { t: "encrypted" } });
+            expect(await db.reviewCommentEvent.count({ where: { accountId: account.id } })).toBe(1);
+        });
+    });
+
     it("refuses a stale plain create after the Account transition commits E2EE before persistence", async () => {
         const binding = e2eeAccountFields(31);
         const account = await db.account.create({
@@ -1493,7 +1536,7 @@ describe("review comment durable storage", () => {
         try {
             await Promise.race([latch.entered, pendingCreate.then(() => { throw new Error("Writer never reached persistence"); })]);
             await inTx(async (tx) => {
-                const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, account.id);
+                const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, account.id, "exclusive");
                 expect(fence.status).toBe("ready");
                 if (fence.status !== "ready") throw new Error("Missing Account fence");
                 await applyAccountEncryptionTransitionInTx(tx, {
@@ -1554,7 +1597,7 @@ describe("review comment durable storage", () => {
             try {
                 await Promise.race([latch.entered, pendingCreate.then(response => { throw new Error(`Writer never reached persistence: ${response.statusCode}`); })]);
                 await inTx(async (tx) => {
-                    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, account.id);
+                    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, account.id, "exclusive");
                     expect(fence.status).toBe("ready");
                     if (fence.status !== "ready") throw new Error("Missing Account fence");
                     await tx.account.update({

@@ -2,6 +2,7 @@ import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
+import type { RenderWithAppProvidersOptions } from '@/dev/testkit';
 import { Text } from '@/components/ui/text/Text';
 import { storage } from '@/sync/domains/state/storage';
 import { takeStoreSnapshot } from '@/demoMode/seed/storeSnapshot';
@@ -276,10 +277,12 @@ function readMountedDemoStages(
     return screen.findAllByType('DemoStage' as never).map((node) => node.props as DemoStageMountProps);
 }
 
+type NodeMockElement = Parameters<NonNullable<RenderWithAppProvidersOptions['createNodeMock']>>[0];
+
 function isRendererElementWithTestId(
-    element: React.ReactElement<unknown>,
+    element: NodeMockElement,
     testID: string,
-): element is React.ReactElement<Readonly<{ testID: string }>> {
+): element is NodeMockElement & Readonly<{ props: Readonly<{ testID: string }> }> {
     const props = element.props;
     return typeof props === 'object'
         && props !== null
@@ -510,7 +513,6 @@ describe('OnboardingJourneyHost', () => {
         );
 
         const screen = await renderScreen(
-            <React.StrictMode>
                 <OnboardingJourneyHost
                     surface="desktop"
                     isDesktopShell
@@ -522,9 +524,8 @@ describe('OnboardingJourneyHost', () => {
                     })}
                     wizardSurfaceProps={createWizardSurfaceProps()}
                     testID="journey-host"
-                />
-            </React.StrictMode>,
-            { flushOptions: { cycles: 8, turns: 4, frames: 1 } },
+                />,
+            { wrapper: React.StrictMode, flushOptions: { cycles: 8, turns: 4, frames: 1 } },
         );
 
         expect({
@@ -564,7 +565,6 @@ describe('OnboardingJourneyHost', () => {
         );
 
         const screen = await renderScreen(
-            <React.StrictMode>
                 <OnboardingJourneyHost
                     surface="desktop"
                     isDesktopShell
@@ -576,9 +576,8 @@ describe('OnboardingJourneyHost', () => {
                     })}
                     wizardSurfaceProps={createWizardSurfaceProps()}
                     testID="journey-host"
-                />
-            </React.StrictMode>,
-            { flushOptions: { cycles: 8, turns: 4, frames: 1 } },
+                />,
+            { wrapper: React.StrictMode, flushOptions: { cycles: 8, turns: 4, frames: 1 } },
         );
 
         expect(demoWorldState.clearCallsAtSeed).toEqual([0, 2]);

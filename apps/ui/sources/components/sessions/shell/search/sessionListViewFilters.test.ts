@@ -33,6 +33,32 @@ type TeamHomeSelectionResolver = (input: Readonly<{
 >;
 
 describe('sessionListViewFilters', () => {
+    it('routes Only coordinators to its own producer-filtered corpus and refuses ordinary-page coverage', () => {
+        const filters = createSessionListViewFilterDefaults({ homeServerIds: ['home-a'], coordinator: 'coordinator' });
+        const options = { mountedHomeServerIds: ['home-a'], storage: 'active' as const, includeInactive: true };
+        const [home] = buildSessionListFilterQueryHomes(filters, options);
+        const [ordinary] = buildSessionListFilterQueryHomes({ ...filters, coordinator: undefined }, options);
+        expect(home?.query.coordinator).toBe('coordinator');
+        expect(home?.queryKey).not.toBe(ordinary?.queryKey);
+        expect(resolveSessionListFilterOrdinaryPageAdapter(filters, home!.query)).toBeNull();
+        const eligibility = { eligibleHomeServerIds: ['home-a'], eligibleAudiences: [], eligibleTagIds: [] };
+        expect(buildSessionListSelectionScopeSignature(filters, eligibility))
+            .not.toBe(buildSessionListSelectionScopeSignature({ ...filters, coordinator: undefined }, eligibility));
+    });
+    it('keeps Under at the listing producer and separates subtree corpora and selection identities', () => {
+        const filters = createSessionListViewFilterDefaults({ homeServerIds: ['home-a'], underSessionId: 'manager-a', statuses: ['failed'], projects: { include: [{ serverId: 'home-a', projectKey: 'payments' }], exclude: [] } });
+        const options = { mountedHomeServerIds: ['home-a'], storage: 'active' as const, includeInactive: true };
+        const [home] = buildSessionListFilterQueryHomes(filters, options);
+        const [other] = buildSessionListFilterQueryHomes({ ...filters, underSessionId: 'manager-b' }, options);
+        expect(home?.query.underSessionId).toBe('manager-a');
+        expect(home?.queryKey).not.toBe(other?.queryKey);
+        expect(resolveSessionListFilterOrdinaryPageAdapter(filters, home!.query)).toBeNull();
+        const eligibility = { eligibleHomeServerIds: ['home-a'], eligibleAudiences: [], eligibleTagIds: [] };
+        const signature = buildSessionListSelectionScopeSignature(filters, eligibility);
+        for (const changed of [{ ...filters, underSessionId: 'manager-b' }, { ...filters, statuses: ['thinking'] as const }, { ...filters, projects: { include: [], exclude: filters.projects!.include } }]) {
+            expect(buildSessionListSelectionScopeSignature(changed, eligibility)).not.toBe(signature);
+        }
+    });
     it('carries the Bot projection through the existing Home corpus and ordinary paging adapter', () => {
         const filters = createSessionListViewFilterDefaults({ homeServerIds: ['home-a'], bot: 'bot' });
         const [home] = buildSessionListFilterQueryHomes(filters, {

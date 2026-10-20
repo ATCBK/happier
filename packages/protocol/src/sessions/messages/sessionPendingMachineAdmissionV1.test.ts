@@ -3,6 +3,7 @@ import { API_TOKEN_FULL_GRANT_V1 } from '../../auth/apiTokenGrant.js';
 import {
   SessionExecutionRunPendingEnqueueRequestV1Schema,
   SessionPendingExecutionRunEnqueueByMachineRequestV2Schema,
+  SessionPendingExecutionRunEnqueueByMachineResponseV2Schema,
   SessionPendingExecutionRunMaterializeNextRequestV2Schema,
   SessionPendingExecutionRunAcceptedRequestV2Schema,
   SessionPendingExecutionRunMaterializeNextResponseV2Schema,
@@ -12,6 +13,7 @@ import {
   SessionPendingEnqueueByMachineRequestV1Schema,
   SessionPendingEnqueueByMachineResponseV1Schema,
 } from './sessionPendingMachineAdmissionV1.js';
+import { SessionPendingAdmissionSettlementResponseV1Schema } from './sessionPendingAdmissionSettlementV1.js';
 
 describe('Session Pending machine admission V1', () => {
   it('admits only the existing signed execution proof, never caller-authored constraint claims', () => {
@@ -137,13 +139,21 @@ describe('Session Pending machine admission V1', () => {
   });
 
   it('returns only durable admission truth and typed rejection', () => {
-    expect(SessionPendingEnqueueByMachineResponseV1Schema.parse({
-      v: 1,
-      result: { status: 'accepted', localId: 'machine-input-1' },
-    })).toEqual({ v: 1, result: { status: 'accepted', localId: 'machine-input-1' } });
-    expect(SessionPendingEnqueueByMachineResponseV1Schema.parse({
-      v: 1,
-      result: { status: 'rejected', code: 'session_input_target_update_required' },
-    })).toEqual({ v: 1, result: { status: 'rejected', code: 'session_input_target_update_required' } });
+    for (const result of [
+      { status: 'accepted', localId: 'machine-input-1' },
+      { status: 'alreadyAccepted', localId: 'machine-input-1' },
+      { status: 'rejected', code: 'session_input_target_update_required' },
+      { status: 'outcomeUnknown', localId: 'machine-input-1', code: 'session_input_admission_outcome_unknown' },
+    ]) {
+      expect(SessionPendingEnqueueByMachineResponseV1Schema.parse({ v: 1, result })).toEqual({ v: 1, result });
+      expect(SessionPendingExecutionRunEnqueueByMachineResponseV2Schema.parse({ v: 2, result })).toEqual({ v: 2, result });
+    }
+  });
+
+  it('keeps receiver holds at settlement rather than initial enqueue acknowledgements', () => {
+    const result = { status: 'held', localId: 'machine-input-1', code: 'autonomous_check_in' };
+    expect(SessionPendingEnqueueByMachineResponseV1Schema.safeParse({ v: 1, result }).success).toBe(false);
+    expect(SessionPendingExecutionRunEnqueueByMachineResponseV2Schema.safeParse({ v: 2, result }).success).toBe(false);
+    expect(SessionPendingAdmissionSettlementResponseV1Schema.parse({ v: 1, result })).toEqual({ v: 1, result });
   });
 });

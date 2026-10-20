@@ -10,6 +10,7 @@ import {
 import type { TranslationKey } from '@/text/i18n';
 import { localServiceListenerGroupKey } from '@happier-dev/protocol/local/services/inventory';
 import { normalizeWorkspaceRootPathV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
+import { hasUncertainLocalServiceNativeCustodyV1, isLocalServiceStateRunningV1 } from '@happier-dev/protocol/local/services/launcher/v1';
 
 export type ServiceRowScope = 'thisSession' | 'workspace' | 'machine' | 'suggestion';
 export type ServiceRowStatus = 'loading' | 'running' | 'starting' | 'stopping' | 'stale' | 'stopped' | 'failed' | 'unavailable';
@@ -70,13 +71,6 @@ const SOURCE_LABEL_KEYS: Readonly<Record<LocalServiceLaunchTarget['source'], Tra
     recent: 'localServices.source.recent',
 };
 
-function hasUncertainNativeCustody(target: LocalServiceLaunchTarget): boolean {
-    return target.source === 'managed_service' && (
-        target.unavailableReason === 'managed_service_native_state_unknown'
-        || target.unavailableReason === 'managed_service_native_cleanup_unconfirmed'
-    );
-}
-
 function resolveStatus(target: LocalServiceLaunchTarget): ServiceRowStatus {
     if (target.unavailableReason === 'project_service_binding_pending') return 'loading';
     if (target.unavailableReason === 'project_service_binding_unavailable') return 'unavailable';
@@ -86,7 +80,7 @@ function resolveStatus(target: LocalServiceLaunchTarget): ServiceRowStatus {
     // Launcher availability does not revive a settled managed lifetime. Keep
     // stale/offline presentation, but consume the supervisor's actual outcome.
     if (target.source === 'managed_service' && target.state !== 'stale') {
-        if (hasUncertainNativeCustody(target)) return 'unavailable';
+        if (hasUncertainLocalServiceNativeCustodyV1(target)) return 'unavailable';
         if (target.serviceState === 'stopped') return 'stopped';
         if (target.serviceState === 'failed') return 'failed';
         if (target.serviceState === 'stopping') return 'stopping';
@@ -110,7 +104,7 @@ function resolveStatus(target: LocalServiceLaunchTarget): ServiceRowStatus {
 function resolvePrimaryAction(target: LocalServiceLaunchTarget): ServiceRow['primaryAction'] {
     if (target.unavailableReason === 'project_service_binding_pending') return null;
     if (target.unavailableReason === 'project_service_binding_unavailable') return null;
-    if (hasUncertainNativeCustody(target)) return null;
+    if (hasUncertainLocalServiceNativeCustodyV1(target)) return null;
     // An unaccepted package is presentation only, not a Session terminal command.
     if (target.source === 'package_script' && !(target.workspace && target.declaration)) return null;
     // A target with private-preview registration is an Open intent. The shared action
@@ -140,14 +134,10 @@ function resolveSourceBadge(target: LocalServiceLaunchTarget): string | null {
     return selection.source.file.split(/[\\/]/).filter(Boolean).pop() ?? null;
 }
 
-const LIVE_MANAGED_STATES: ReadonlySet<NonNullable<LocalServiceLaunchTarget['serviceState']>> = new Set([
-    'running', 'detecting', 'healthy', 'unhealthy',
-]);
-
 function resolveAddressNote(target: LocalServiceLaunchTarget, hasAddress: boolean): ServiceRow['addressNote'] {
-    if (hasUncertainNativeCustody(target)) return null;
+    if (hasUncertainLocalServiceNativeCustodyV1(target)) return null;
     if (target.source !== 'managed_service' || target.state === 'stale' || hasAddress || target.endpointUrl) return null;
-    if (!target.serviceState || !LIVE_MANAGED_STATES.has(target.serviceState)) return null;
+    if (!isLocalServiceStateRunningV1(target.serviceState)) return null;
     return target.serviceState === 'detecting' ? 'waiting' : 'none';
 }
 
@@ -485,7 +475,7 @@ export function groupLocalServiceRowsBySection(rows: readonly ServiceRow[]): Rea
 
 /**
  * Actual running user services: a listener the scan observed, or a supervised service whose actual
- * lifetime is `running` (a queue worker has no listener). Openable access and startable suggestions
+ * lifetime is running regardless of readiness (a queue worker has no listener). Openable access and startable suggestions
  * are not evidence, so the header's count never contradicts the "Running" group it sits above.
  */
 export function selectLocalServiceRunningCount(rows: readonly ServiceRow[]): number {
@@ -493,7 +483,7 @@ export function selectLocalServiceRunningCount(rows: readonly ServiceRow[]): num
     for (const row of rows) {
         if (row.internal) continue;
         if (row.listeningListenerKey) running.add(row.listeningListenerKey);
-        else if (row.target.source === 'managed_service' && row.target.serviceState === 'running' && row.status === 'running') running.add(row.id);
+        else if (row.target.source === 'managed_service' && isLocalServiceStateRunningV1(row.target.serviceState) && row.status === 'running') running.add(row.id);
     }
     return running.size;
 }

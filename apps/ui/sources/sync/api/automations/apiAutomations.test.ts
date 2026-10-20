@@ -30,6 +30,27 @@ vi.mock('@/sync/domains/server/serverRuntime', async (importOriginal) => ({
 
 const credentials: AuthCredentials = { token: 'token-1', secret: 'secret-1' };
 
+describe('Automation write receipt certainty', () => {
+    it.each(['lost', 'invalid', 'server'] as const)('keeps a %s mutation receipt unresolved', async kind => {
+        const request = vi.fn(async () => {
+            if (kind === 'lost') throw new Error('transport lost');
+            return new Response('{}', { status: kind === 'server' ? 500 : 200 });
+        });
+        await expect(reconcileAutomationDefinition(credentials, 'set-one', {
+            expectedTemplateVersion: 1, name: 'Triggers', description: null, enabled: true,
+            assignments: [], triggers: [], removedTriggers: [],
+        }, { serverId: 'test', request })).rejects.toMatchObject({ code: 'workflow_outcome_unresolved' });
+        expect(request).toHaveBeenCalledTimes(1);
+    });
+    it('keeps known pre-write conflicts as refusals', async () => {
+        const request = vi.fn(async () => new Response(JSON.stringify({ error: 'automation_template_version_conflict' }), { status: 409 }));
+        await expect(reconcileAutomationDefinition(credentials, 'set-one', {
+            expectedTemplateVersion: 1, name: 'Triggers', description: null, enabled: true,
+            assignments: [], triggers: [], removedTriggers: [],
+        }, { serverId: 'test', request })).rejects.toMatchObject({ code: 'automation_template_version_conflict' });
+    });
+});
+
 const eventSummary = {
     id: 'automation-event-1',
     name: 'Repository updates',

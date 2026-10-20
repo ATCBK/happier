@@ -1,20 +1,24 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
-import { AccountProfileSchema, PluginProjectionV2Schema, RPC_METHODS, type PublicActionInputById } from '@happier-dev/protocol';
+import { AccountProfileSchema, PluginProjectionV2Schema, RPC_METHODS, createWorkBoardV1, type PublicActionInputById } from '@happier-dev/protocol';
 import { flushHookEffects, renderScreen as renderBaseScreen, standardCleanup } from '@/dev/testkit';
-import { HappierInputField } from '@happier-dev/plugin-ui/presentation';
+import { HappierInputField, useHappierInputPickerPort } from '@happier-dev/plugin-ui/presentation';
+import { View } from 'react-native';
 import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { USAGE_QUERY_INPUT_FIELDS } from '@happier-dev/protocol/inputs/usageQuery';
 import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installSessionActionFixture } from '@/dev/testkit/harness/sessionActionRpcBoundary';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 import { widgetProjectionEntry } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
+import { createWorkBoardArtifactBoundary } from '@/dev/testkit/harness/workBoardArtifactBoundary';
+import { createWorkBoardAccountStore } from '@/components/boards/model/workBoardAccountStore';
+import { buildAccountWidgetAddSections } from './accountWidgetAddSections';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
@@ -24,11 +28,12 @@ vi.mock('socket.io-client', async importOriginal =>
 
 // Only network transports are replaced: Account admission, the catalog, executor,
 // draft binding and options demand all remain real.
-const discovery = vi.hoisted(() => ({ requests: [] as PublicActionInputById['action.options.resolve'][], wait: null as (() => Promise<void>) | null }));
+const discovery = vi.hoisted(() => ({ requests: [] as PublicActionInputById['action.options.resolve'][], wait: null as (() => Promise<void>) | null,
+    unrelatedMachine: false }));
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: async (args: { method: string; payload: unknown }) => {
+    machineRpcWithServerScope: async (args: { method: string; machineId?: string; payload: unknown }) => {
         if (args.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)
-            return { protocolVersion: 1, projection: projectionWire };
+            return { protocolVersion: 1, projection: pickerProjections.get(args.machineId ?? '') ?? projectionWire };
         throw new Error(`Unexpected daemon RPC: ${args.method}`);
     },
 }));
@@ -40,6 +45,7 @@ const { buildWidgetCandidateSetup } = await import('@/components/widgets/surface
 const { buildWidgetGroupInputsCandidate } = await import('@/components/widgets/group/widgetGroupInputs');
 const { RoundButton } = await import('@/components/ui/buttons/RoundButton');
 const { WidgetSetupStep } = await import('./WidgetSetupStep');
+const { ItemGroup } = await import('@/components/ui/lists/ItemGroup');
 const { WidgetSetupFieldRow } = await import('./WidgetSetupFieldRow');
 const { SurfaceStateCard } = await import('@/components/ui/surfaces/SurfaceStateCard');
 const { WidgetPreviewStage } = await import('@/components/widgets/flow/WidgetPreviewStage');
@@ -47,8 +53,11 @@ const { storage } = await import('@/sync/domains/state/storage');
 const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 const { AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
 const { normalizePluginUiProjection } = await import('@/sync/domains/plugins/ui/projection');
+const { unionPluginUiProjections } = await import('@/sync/domains/plugins/ui/projectionUnion');
 const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
 const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+const { InputTypePickerHostProvider } = await import('@/components/sessions/actions/InputTypePickerHostProvider');
+const pickerProjections = new Map<string, ReturnType<typeof PluginProjectionV2Schema.parse>>();
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let releaseLoader: (() => void) | undefined;
 let projectionWire: ReturnType<typeof PluginProjectionV2Schema.parse>;
@@ -73,7 +82,16 @@ beforeEach(async () => {
         } });
     connection = await restoreServerAccountForTest({ serverUrl: 'https://setup-home.test', serverIdentityId, accountId: 'me',
         credentials: { token: createAccountTokenForTests('me', { currentAccount: true }) },
-        request: async (input, init) => await external.handle(new URL(String(input)), init) ?? homes.request(input, init) });
+        request: async (input, init) => {
+            const url = new URL(String(input));
+            const response = await external.handle(url, init);
+            if (url.pathname === '/v1/machines' && response && discovery.unrelatedMachine) {
+                const current: unknown = await response.json();
+                if (!Array.isArray(current)) throw new Error('Expected the Machine census');
+                return Response.json([{ ...createPlainMachineRowFixture({ id: 'unrelated', accountId: 'me' }), createdAt: 2 }, ...current]);
+            }
+            return response ?? homes.request(input, init);
+        } });
     scope = { serverId: connection.home.id, accountId: 'me', owner: { kind: 'home' } };
     for (const id of ['A', 'B']) installSessionActionFixture({ homes, storage, serverId, session: { id } });
     storage.setState({ machines: { machine_1: createMachineFixture({ id: 'machine_1', active: true, activeAt: Date.now() }) }, profile });
@@ -110,13 +128,23 @@ beforeEach(async () => {
     releaseLoader = await installRealActionExecutorModuleLoader();
 });
 afterEach(async () => {
-    standardCleanup(); discovery.requests = []; discovery.wait = null; releaseLoader?.(); releaseLoader = undefined;
+    standardCleanup(); discovery.requests = []; discovery.wait = null; discovery.unrelatedMachine = false; pickerProjections.clear(); releaseLoader?.(); releaseLoader = undefined;
     clearDaemonMergedProjectionCacheForTests(); await connection?.dispose(); connection = undefined;
 });
-function renderScreen(element: React.ReactElement) {
+function renderScreen(element: React.ReactElement, union = false) {
+    const origin = { serverIdentityId: 'srv_setup_home', sourceRef: { machineId: 'machine_1', pluginId: 'acme.options',
+        sourceCustody: { kind: 'development' as const, registeredRootId: 'options-root' } } };
+    const normalized = normalizePluginUiProjection(projectionWire);
+    const runtime = union ? unionPluginUiProjections([
+        { machineId: 'machine_1', serverId: scope.serverId, serverIdentityId: 'srv_setup_home', phase: 'current', interactionEnabled: true,
+            selectableExecutionOrigins: [origin], projection: { ...normalized, installedPackagesById: {
+                ...normalized.installedPackagesById, 'acme.options': { ...normalized.installedPackagesById['acme.options']!, executionOrigin: origin },
+            } } },
+        { machineId: 'unrelated', serverId: scope.serverId, serverIdentityId: 'srv_setup_home', phase: 'current', interactionEnabled: true, projection: null },
+    ], new Map([['acme.options', origin]])) : null;
     return renderBaseScreen(<AppShellPluginUiProjectionValueProvider value={{
-        pluginUiProjection: normalizePluginUiProjection(projectionWire), pluginBrowserProjection: null, phase: 'current', interactionEnabled: true,
-        machineId: 'machine_1', serverId: scope.serverId, platform: 'web', accountLifetime: captureActiveServerAccountScopeLifetime(),
+        pluginUiProjection: union ? runtime!.pluginUiProjection : normalized, pluginBrowserProjection: null, phase: 'current', interactionEnabled: true,
+        machineId: union ? runtime!.machineId : 'machine_1', serverId: scope.serverId, platform: 'web', accountLifetime: captureActiveServerAccountScopeLifetime(),
         reloadConnectedAccountProjection: () => {}, clientExecutableActivation: { status: 'ready' }, reloadClientExecutables: () => {},
     }}>{element}</AppShellPluginUiProjectionValueProvider>);
 }
@@ -131,6 +159,156 @@ const candidate: WidgetCandidate = { key: 'acme.options/checks', title: 'Checks'
     ] } };
 
 describe('WidgetSetupStep discovery', () => {
+    it.each([false, true, 'session'] as const)('offers each contributed picker from its own producer in a mixed-plugin group (inherited port: %s)', async inherited => {
+        const { normalizePluginUiProjection } = await import('@/sync/domains/plugins/ui/projection');
+        const { loadDaemonMergedProjectionCacheEntry } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+        const accountLifetime = captureActiveServerAccountScopeLifetime()!;
+        const fields = ['acme.first', 'acme.second'].map(pluginId => ({ path: pluginId, title: pluginId,
+            inputType: { pluginId, localId: 'choice' } }));
+        const origins = fields.map(({ inputType }, index) => ({ serverIdentityId: 'srv_setup_home', sourceRef: {
+            machineId: `picker-${index}`, pluginId: inputType.pluginId,
+            sourceCustody: { kind: 'development' as const, registeredRootId: `picker-root-${index}` },
+        } }));
+        const members = fields.map(({ inputType }, index) => {
+            const { pluginId } = inputType;
+            const origin = origins[index]!;
+            const renderer = { pluginId, localId: 'browse' };
+            const wire = PluginProjectionV2Schema.parse({ v: 2, generation: 1,
+                installedPackagesById: { [pluginId]: { id: pluginId, displayName: pluginId, version: '1.0.0', enabled: true,
+                    occurrenceId: 'current', source: { kind: 'local', locator: `/plugins/${pluginId}` }, executionOrigin: origin } },
+                familiesById: { inputTypes: { family: 'inputTypes', entriesById: { [`${pluginId}/choice`]: {
+                    id: `${pluginId}/choice`, pluginId, pluginVersion: '1.0.0', occurrenceId: 'current', executionOrigin: origin,
+                    definition: { id: 'choice', title: 'Choice', semantic: 'choice', valueSchema: { type: 'string' }, picker: 'browse' },
+                    pickerSurface: { contribution: inputType, occurrenceId: 'current', projectionGeneration: 1,
+                        rendererChain: [renderer], selectedRenderer: { identity: renderer,
+                            renderer: { kind: 'declarative', contributionId: 'browse' },
+                            availability: { state: 'available', reason: 'available', diagnostics: [] } },
+                        executionOrigin: origin, resourceCapability: { readable: false, dynamic: false },
+                        contributorTargetedContributions: { target: { pluginId, occurrenceId: 'current', sourceCustody: origin.sourceRef.sourceCustody }, points: [] },
+                    },
+                } } } } });
+            pickerProjections.set(origin.sourceRef.machineId, wire);
+            return { machineId: origin.sourceRef.machineId, serverId: scope.serverId, serverIdentityId: origin.serverIdentityId,
+                phase: 'current' as const, interactionEnabled: true, selectableExecutionOrigins: [origin], projection: normalizePluginUiProjection(wire) };
+        });
+        let fieldTargets: React.ComponentProps<typeof InputTypePickerHostProvider>['fieldTargets'];
+        if (inherited === 'session') {
+            const appWire = pickerProjections.get('picker-0')!;
+            const identity = fields[0]!.inputType;
+            const key = `${identity.pluginId}/${identity.localId}`;
+            const entry = appWire.familiesById.inputTypes!.entriesById[key]!;
+            const { picker: _picker, ...withoutPicker } = entry.definition;
+            const { pickerSurface: _surface, ...withoutSurface } = entry;
+            const appWithoutPicker = PluginProjectionV2Schema.parse({ ...appWire, familiesById: {
+                ...appWire.familiesById, inputTypes: { family: 'inputTypes', entriesById: { [key]: { ...withoutSurface, definition: withoutPicker } } },
+            } });
+            pickerProjections.set('picker-0', appWithoutPicker);
+            members[0]!.projection = normalizePluginUiProjection(appWithoutPicker);
+            const origin = { ...origins[0]!, sourceRef: { ...origins[0]!.sourceRef, machineId: 'picker-bound' } };
+            const sessionWire = PluginProjectionV2Schema.parse({ ...appWire,
+                installedPackagesById: { [identity.pluginId]: { ...appWire.installedPackagesById[identity.pluginId]!,
+                    occurrenceId: 'session-current', executionOrigin: origin } },
+                familiesById: { ...appWire.familiesById, inputTypes: { family: 'inputTypes', entriesById: { [key]: {
+                    ...entry, occurrenceId: 'session-current', executionOrigin: origin,
+                    pickerSurface: { ...entry.pickerSurface!, occurrenceId: 'session-current', executionOrigin: origin,
+                        contributorTargetedContributions: { ...entry.pickerSurface!.contributorTargetedContributions,
+                            target: { ...entry.pickerSurface!.contributorTargetedContributions.target, occurrenceId: 'session-current' } } },
+                } } } } });
+            pickerProjections.set('picker-bound', sessionWire);
+            await loadDaemonMergedProjectionCacheEntry({ machineId: 'picker-bound', serverId: scope.serverId, accountLifetime });
+            fieldTargets = { [fields[0]!.path]: { machineId: 'picker-bound', serverId: scope.serverId, sessionId: 'B' } };
+        }
+        await Promise.all(members.map(member => loadDaemonMergedProjectionCacheEntry({ machineId: member.machineId,
+            serverId: scope.serverId, accountLifetime })));
+        const projection = unionPluginUiProjections(members, new Map(origins.map(origin => [origin.sourceRef.pluginId, origin]))).pluginUiProjection;
+        function PickerProbe() {
+            const port = useHappierInputPickerPort();
+            return <>{fields.map(field => <View key={field.path} testID={field.path} accessibilityLabel={port?.describe(field)?.label ?? 'missing'} />)}</>;
+        }
+        const fieldsWithProducer = <InputTypePickerHostProvider enabled serverId={scope.serverId} accountLifetime={accountLifetime}
+            pluginUiProjection={projection} pluginUiMachineId={null} machineId={null} fieldTargets={fieldTargets}><PickerProbe /></InputTypePickerHostProvider>;
+        const screen = await renderBaseScreen(inherited
+            ? <InputTypePickerHostProvider enabled serverId={scope.serverId} accountLifetime={accountLifetime} machineId="machine_1">
+                {fieldsWithProducer}</InputTypePickerHostProvider>
+            : fieldsWithProducer);
+        await vi.waitFor(() => fields.forEach(field => expect(screen.findByTestId(field.path)?.props.accessibilityLabel).toBe('inputPicker.browse')));
+    });
+    it.each([false, true])('reads contributed choices from the widget producer instead of the first reachable machine (union: %s)', async union => {
+        discovery.unrelatedMachine = true;
+        storage.setState({ machines: {
+            unrelated: createMachineFixture({ id: 'unrelated', createdAt: 2, active: true, activeAt: Date.now() }),
+            machine_1: createMachineFixture({ id: 'machine_1', active: true, activeAt: Date.now() }),
+        } });
+        const { resolveUiAccountActionFallbackMachineId } = await import('@/sync/ops/actions/accountActionDeps');
+        expect(resolveUiAccountActionFallbackMachineId(scope)).toBe('unrelated');
+        const setup = buildWidgetCandidateSetup({ candidate: { ...candidate, target: 'app', sessionInputPath: undefined,
+            surface: { pluginId: 'acme.options', localId: 'first' },
+            inputs: { fields: [{ path: 'period', title: 'Period', widget: 'select', required: true,
+                inputType: { pluginId: 'acme.options', localId: 'choice' } }] } },
+            scope, audience: 'personal', context: {}, mode: { kind: 'add', submitLabel: 'Add' }, submit: async () => ({ ok: true }) });
+        const screen = await renderScreen(<WidgetSetupStep setup={setup} phone={false} serverId={scope.serverId}
+            onDone={() => {}} testID="producer-options" />, union);
+        await vi.waitFor(() => expect(screen.findAllByType(HappierInputField).find(field => field.props.field.path === 'period')!.props.options)
+            .toEqual([expect.objectContaining({ value: 'choice', label: 'ambient:none' })]));
+    });
+    it('retries the same add after gallery entries rebuild, then adds another copy only by choosing the widget again', async () => {
+        const board = createWorkBoardV1({ id: 'retry-board', name: 'Overview' });
+        const persistence = createWorkBoardArtifactBoundary({ v: 1, boards: [board] });
+        let lostAck = false;
+        let readable = true;
+        const store = createWorkBoardAccountStore({ ...persistence.transport,
+            read: async (id, options) => { if (!readable) throw new Error('Read-back unavailable'); return persistence.transport.read(id, options); },
+            update: async input => {
+                const result = await persistence.transport.update(input);
+                if (!lostAck) { lostAck = true; readable = false; throw new Error('Acknowledgement lost'); }
+                return result;
+            },
+        }, () => true);
+        const target = { ...scope, owner: { kind: 'workBoard', boardId: board.id } } as const;
+        const completed = vi.fn();
+        const addAnother = vi.fn();
+        let entriesBuilt = 0;
+        function GalleryStep() {
+            const [chosen, setChosen] = React.useState(0);
+            const boards = React.useSyncExternalStore(store.subscribe, store.getBoards, store.getBoards);
+            const sections = buildAccountWidgetAddSections({ candidates: [{ ...candidate, target: 'app', sessionInputPath: undefined, inputs: { fields: [] } }],
+                instances: boards.boards[0]?.widgets?.map(item => item.instance) ?? [], scope: target,
+                labels: { count: count => `${count} here`, submit: 'Add' },
+                addInstance: async (instance, size) => {
+                    const result = await store.queue.dispatch({ kind: 'widget_add', boardId: board.id,
+                        ref: { surface: target, instanceId: instance.id }, instance, ...(size ? { size } : {}) });
+                    if (result.status !== 'applied') throw new Error(result.code);
+                },
+            });
+            entriesBuilt++;
+            const setup = sections.flatMap(section => section.entries).find(entry => entry.id === `plugin-${candidate.key}`)!.setup!();
+            return <WidgetSetupStep key={chosen} setup={setup} phone={false} presentation="pane" onDone={completed}
+                onAddAnother={() => { addAnother(); setChosen(count => count + 1); }} testID="retry-copy" />;
+        }
+        const screen = await renderScreen(<GalleryStep />);
+        await act(async () => { screen.findByTestId('retry-copy.submit')!.props.onPress(); });
+        await vi.waitFor(() => expect(store.queue.getState().failure).not.toBeNull());
+        expect(completed).not.toHaveBeenCalled();
+        const beforeRebuild = entriesBuilt;
+        readable = true;
+        await act(async () => { await store.refresh(); });
+        expect(entriesBuilt).toBeGreaterThan(beforeRebuild);
+        expect(persistence.acknowledged().boards[0]?.widgets).toHaveLength(1);
+        await act(async () => { screen.findByTestId('retry-copy.submit')!.props.onPress(); });
+        await vi.waitFor(() => expect(completed).toHaveBeenCalledTimes(1));
+        expect(persistence.acknowledged().boards[0]?.widgets).toHaveLength(1);
+        // After an applied Add the button only returns to the picker: pressing it writes nothing.
+        await act(async () => { screen.findByTestId('retry-copy.submit')!.props.onPress(); });
+        expect(addAnother).toHaveBeenCalledTimes(1);
+        expect(completed).toHaveBeenCalledTimes(1);
+        expect(persistence.acknowledged().boards[0]?.widgets).toHaveLength(1);
+        // Choosing the widget again opens a fresh step whose Add is the intentional second copy.
+        await act(async () => { screen.findByTestId('retry-copy.submit')!.props.onPress(); });
+        await vi.waitFor(() => expect(completed).toHaveBeenCalledTimes(2));
+        const ids = persistence.acknowledged().boards[0]?.widgets?.map(item => item.instance.id);
+        expect(ids).toHaveLength(2);
+        expect(new Set(ids).size).toBe(2);
+    });
     it('does not claim a mounted error preview is live data when its inputs resolve', async () => {
         const setup = buildWidgetCandidateSetup({ candidate: { ...candidate, target: 'app', sessionInputPath: undefined, inputs: { fields: [] } },
             scope, audience: 'personal', context: {}, mode: { kind: 'add', submitLabel: 'Add' }, submit: async () => ({ ok: true }),
@@ -146,7 +324,7 @@ describe('WidgetSetupStep discovery', () => {
         expect(screen.root.findByType(WidgetPreviewStage).props.caption).toBe('widgetAdd.preview');
     });
 
-    it('shows an unreachable Home while a dispatched save remains pending, then accepts its actual receipt', async () => {
+    it('keeps a dispatched save busy across a Home disconnect until its late receipt arrives', async () => {
         const previous = storage.getState();
         const applied = getAppliedActiveServerSnapshot();
         const available = isAppliedActiveServerRuntimeAvailable();
@@ -162,9 +340,9 @@ describe('WidgetSetupStep discovery', () => {
         try {
             await act(async () => { screen.findByTestId('pending-home.submit')!.props.onPress(); });
             await act(async () => { storage.setState({ endpointStatus: 'offline' }); });
-            expect(screen.findByTestId('pending-home.why')!.props.children).toBe('settingsPlugins.targetSelection.unreachableThisHome');
+            expect(screen.getTextContent()).not.toContain('settingsPlugins.targetSelection.unreachableThisHome');
             expect(screen.findByTestId('pending-home.submit')!.props.disabled).toBe(true);
-            expect(screen.findAllByType(RoundButton).find(node => node.props.testID === 'pending-home.submit')!.props.loading).toBe(false);
+            expect(screen.findAllByType(RoundButton).find(node => node.props.testID === 'pending-home.submit')!.props.loading).toBe(true);
             expect(completed).not.toHaveBeenCalled();
             await act(async () => { finish({ ok: true }); });
             expect(completed).toHaveBeenCalledWith({ ok: true });
@@ -210,6 +388,9 @@ describe('WidgetSetupStep discovery', () => {
         expect(screen.findAllByType(WidgetSetupFieldRow).filter(row => row.props.entry.field.path === 'result')).toHaveLength(1);
         expect(screen.findAllByType(HappierInputField).find(row => row.props.field.path === 'result')!.props.options)
             .toEqual([expect.objectContaining({ value: 'choice', label: 'B:none' })]);
+        expect(screen.findByType(InputTypePickerHostProvider).props.fieldTargets.result).toMatchObject({
+            machineId: 'machine_1', serverId: scope.serverId, sessionId: 'B',
+        });
     });
     it('names the picked value immediately while the new draft options read is held', async () => {
         const setup = buildWidgetCandidateSetup({ candidate, scope, audience: 'personal', context: {},
@@ -275,6 +456,20 @@ describe('WidgetSetupStep discovery', () => {
         await screen.pressByTestIdAsync('size-setup.submit');
         expect(previews.at(-1)).toEqual({ size: 'large', bindings: { filter: { kind: 'value', value: 'open' } } });
         expect(submit).toHaveBeenCalledWith({ size: 'large', bindings: { filter: { kind: 'value', value: 'open' } } });
+    });
+
+    it('draws no empty inputs column for a copy that asks for nothing, only its preview and size', async () => {
+        const bare: WidgetCandidate = { ...candidate, target: 'app', sessionInputPath: undefined, inputs: { fields: [] },
+            sizeDeclaration: { sizes: ['small', 'medium'], defaultSize: 'medium' } };
+        const setup = buildWidgetCandidateSetup({ candidate: bare, scope: { ...scope, owner: { kind: 'home' } },
+            audience: 'personal', context: {}, mode: { kind: 'add', submitLabel: 'Add' }, submit: async () => ({ ok: true }),
+            renderPreview: () => null });
+        const screen = await renderScreen(<WidgetSetupStep setup={setup} phone={false} onCancel={() => {}} onDone={() => {}} testID="bare-setup" />);
+        // A memo component's rendered element type is its `type`, which React.memo's public type does not declare.
+        const itemGroupType = (ItemGroup as unknown as Readonly<{ type: unknown }>).type;
+        expect(screen.root.findAll(node => node.type === itemGroupType)).toHaveLength(0);
+        expect(screen.findByTestId('bare-setup.size.small')).not.toBeNull();
+        expect(screen.findByTestId('bare-setup.preview')).not.toBeNull();
     });
 
     it('accepts a typed JSON literal without discovery through the public field parser and binder', async () => {

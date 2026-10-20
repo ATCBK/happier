@@ -1,4 +1,5 @@
 import { PluginUiArtifactsManifestEntryV2Schema } from '@happier-dev/protocol/plugins/ui';
+import type { PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 
 import {
     createActivePluginAccountHostedArtifactSourceCandidate,
@@ -86,12 +87,17 @@ export type PluginReactNativeArtifactLeaseInput = Readonly<{
     accountLifetime: ActiveServerAccountScopeLifetime;
     persistent?: PluginReactNativeArtifactLeasePersistentScope;
     signal?: AbortSignal;
+    /** Mount cancellation when acquisition belongs to a shorter-lived adoption. */
+    accountHostingSignal?: AbortSignal;
     /** Daemon route for an Account-release selection (the mount's machine). */
     daemon?: PluginArtifactDaemonTransport;
+    /** Other suppliers of this selected digest, never execution targets. */
+    daemons?: readonly PluginArtifactDaemonTransport[];
     /** Daemon RPC boundary; production uses the canonical machine-RPC transport. */
     fetchDaemonArtifactBytes?: PluginArtifactDaemonByteFetcher;
     appExact?: PluginArtifactSourceCandidate & Readonly<{ kind: 'appExact' }>;
     daemonProjectionSelection?: PluginArtifactDaemonProjectionSelectionInput;
+    executionOrigin?: PluginMachineExecutionOriginV1 | null;
 }>;
 
 function artifactMatchesCacheIdentity(input: Readonly<{
@@ -220,9 +226,10 @@ export async function acquirePluginReactNativeArtifactLease(
         sources.push(createPluginArtifactPersistentSource({ scope: input.persistent }));
     }
     const daemonTransport = input.daemonProjectionSelection?.transport ?? input.daemon;
-    if (daemonTransport) {
+    const daemonTransports = [...(daemonTransport ? [daemonTransport] : []), ...(input.daemons ?? [])];
+    if (daemonTransports.length > 0) {
         sources.push(createPluginArtifactDaemonSource({
-            transport: daemonTransport,
+            transports: daemonTransports,
             family: 'reactNative',
             ...(input.fetchDaemonArtifactBytes ? { fetchArtifactBytes: input.fetchDaemonArtifactBytes } : {}),
         }));
@@ -251,6 +258,7 @@ export async function acquirePluginReactNativeArtifactLease(
 
     const acquired = await acquirePluginSelectedArtifactLease({
         reader: input.reader,
+        executionOrigin: input.executionOrigin,
         accountLifetime: input.accountLifetime,
         ...(input.signal ? { signal: input.signal } : {}),
         slot: Object.freeze({
@@ -278,10 +286,15 @@ export async function acquirePluginReactNativeArtifactLease(
     // Account hosting is the only source a new uncached client can reach while
     // every daemon is offline, and these verified bytes are the only copy this
     // process will ever hold beside a current Account authority.
-    await publishVerifiedPluginArtifactToAccountHosting({
+    const publication = await publishVerifiedPluginArtifactToAccountHosting({
         reader: input.reader,
         accountLifetime: input.accountLifetime,
         lease,
+        signal: input.accountHostingSignal ?? input.signal,
     });
-    return Object.freeze({ kind: 'available', lease });
+    return Object.freeze({
+        kind: 'available',
+        lease,
+        ...(publication ? { accountHosting: publication.completion } : {}),
+    });
 }

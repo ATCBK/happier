@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
-import type { AgentSessionRuntimeEvent } from '@happier-dev/protocol/runtime';
+import type { AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { TerminalHostAdapter } from '@happier-dev/agents';
 
 import { createPluginTerminalHostService } from './terminalHost';

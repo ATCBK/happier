@@ -11,7 +11,9 @@ import { lightTheme } from '@/theme';
 it('every bundled first-party plugin declares a mark that resolves to packaged bytes or its declared Agent artwork', async () => {
   const missing: string[] = [];
   for (const locator of BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS) {
-    const ingestion = ingestPluginManifestV2(locator.manifest);
+    const ingestion = ingestPluginManifestV2(JSON.parse(readFileSync(
+      resolve(import.meta.dirname, '../../../../../cli', locator.manifestRelativePath), 'utf8',
+    )));
     if (!ingestion.ok) throw new Error(JSON.stringify(ingestion.diagnostics));
     const manifest = ingestion.manifest;
     if (manifest.brand) {

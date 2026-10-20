@@ -2,12 +2,12 @@
 // Type-only projection of Protocol-owned Action DTO declarations.
 
 import type { JsonValue } from '../../identity.js';
-import type { PluginActionWorkflowBlockV1 } from './pluginActionDtoSupport.generated.js';
+import type { PluginActionWorkflowBlockV1, SessionTargetV1 } from './pluginActionDtoSupport.generated.js';
 
 export type SessionLifecycleActionInputById = {
     readonly "session.open": {
         tabId?: string | undefined;
-        sessionId?: string | undefined;
+        sessionId?: SessionTargetV1<true> | undefined;
         sessionTitle?: string | undefined;
         serverId?: string | undefined;
         approvedNewDirectoryCreation?: boolean | undefined;
@@ -46,7 +46,17 @@ export type SessionLifecycleActionInputById = {
             resume?: string | undefined;
             runtimeDescriptorV1?: JsonValue | undefined;
             environmentVariables?: Record<string, string> | undefined;
-            terminal?: any;
+            terminal?: {
+                mode?: 'plain' | 'tmux' | 'zellij' | 'herdr' | 'windows_terminal' | 'windows_console' | undefined;
+                tmux?: {
+                    sessionName?: string | undefined;
+                    isolated?: boolean | undefined;
+                    tmpDir?: string | null | undefined;
+                } | undefined;
+                herdr?: {
+                    sessionName?: string | undefined;
+                } | undefined;
+            } | undefined;
             connectedServices?: JsonValue | undefined;
             connectedServicesUpdatedAt?: number | undefined;
             transcriptStorage?: 'persisted' | 'direct' | undefined;
@@ -112,10 +122,16 @@ export type SessionLifecycleActionInputById = {
                             localId: string;
                         };
                         input?: JsonValue;
+                        messageActionReference?: {
+                            v: 1;
+                            sessionId: string;
+                            messageId: string;
+                            observedRevision: string;
+                        };
                     };
                 };
             };
-            view: 'walkthrough' | 'files';
+            view: 'walkthrough' | 'files' | 'commits';
             explain?: boolean | undefined;
             comparisonId?: string | undefined;
         } | undefined;
@@ -480,6 +496,22 @@ export type SessionLifecycleActionInputById = {
         destinationIntent: 'use_existing' | 'materialize_from_source_workspace';
         purpose?: 'worker_clean_copy' | undefined;
     };
+    readonly "workspace.sync.relationship.disable": {
+        controllerMachineId: string;
+        relationshipId: string;
+    };
+    readonly "workspace.sync.relationship.enable": {
+        controllerMachineId: string;
+        relationshipId: string;
+    };
+    readonly "workspace.sync.relationship.flush": {
+        controllerMachineId: string;
+        relationshipId: string;
+    };
+    readonly "workspace.sync.relationship.terminate": {
+        controllerMachineId: string;
+        relationshipId: string;
+    };
     readonly "workspace.sync.relationships.list": {
         controllerMachineId?: string | undefined;
         workspaceRefId?: string | undefined;
@@ -532,136 +564,6 @@ export type SessionLifecycleActionInputById = {
             definitionId?: string | undefined;
         };
         creationKey?: string | undefined;
-        placementOrigin?: {
-            kind: 'machine_pool';
-            poolId: string;
-        } | undefined;
-        organizationPlacement?: {
-            folderId: string | null;
-            tagIds: string[];
-        } | undefined;
-        roleId?: string | undefined;
-        modelSelection?: {
-            v: 1;
-            ref: {
-                agentTargetKey: string;
-                providerConnectionId: null;
-                modelId: string;
-            } | {
-                agentTargetKey: string;
-                providerConnectionId: string;
-                modelId: string;
-            };
-            updatedAt: number;
-        } | undefined;
-        profileId?: string | undefined;
-        secretReferenceOverlay?: {
-            v: 1;
-            bindings: Record<string, {
-                ref: string;
-                revision?: number | undefined;
-            }>;
-        } | undefined;
-        permissionMode?: 'default' | 'plan' | 'read-only' | 'safe-yolo' | 'yolo' | undefined;
-        agentModeId?: string | undefined;
-        configuration?: unknown;
-        connectedServices?: {
-            v: 1;
-            bindingsByServiceId: Record<string, {
-                source: 'native';
-            } | {
-                source: 'connected';
-                selection: 'group';
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: 'connected';
-                profileId: string;
-                selection?: 'profile' | undefined;
-            }>;
-        } | {
-            v: 1;
-            bindingsByServiceId: Record<string, {
-                source: 'native';
-            } | {
-                source: 'connected';
-                selection: 'group';
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: 'connected';
-                profileId: string;
-                selection?: 'profile' | undefined;
-            }>;
-        } | {
-            v: 2;
-            bindingsByServiceId?: Record<string, {
-                source: 'native';
-            } | {
-                source: 'connected';
-                selection: 'group';
-                groupId: string;
-                profileId?: string | undefined;
-            } | {
-                source: 'connected';
-                profileId: string;
-                selection?: 'profile' | undefined;
-            } | {
-                source: 'team_resource';
-                resourceId: string;
-                deliveryMode: 'direct';
-                disclosedMember: {
-                    service: {
-                        pluginId: string;
-                        localId: string;
-                    };
-                    accountId: string;
-                };
-            } | {
-                source: 'team_resource';
-                resourceId: string;
-                deliveryMode: 'brokered';
-                disclosedMember?: undefined;
-            }> | undefined;
-        } | undefined;
-        capabilitySelection?: {
-            mcp?: {
-                v?: 1 | undefined;
-                managedServersEnabled?: boolean | undefined;
-                forceIncludeServerIds?: string[] | undefined;
-                forceExcludeServerIds?: string[] | undefined;
-            } | undefined;
-            skills?: {
-                v?: 1 | undefined;
-                forceIncludeSkillIds?: string[] | undefined;
-                forceExcludeSkillIds?: string[] | undefined;
-                excludeNativeSkillNames?: string[] | undefined;
-            } | undefined;
-        } | undefined;
-        transcriptStorage?: 'persisted' | 'direct' | undefined;
-        terminal?: {
-            mode?: 'integrated' | 'plain' | 'tmux' | 'zellij' | 'herdr' | 'windows_terminal' | 'windows_console' | undefined;
-            tmux?: {
-                sessionName?: string | undefined;
-                isolated?: boolean | undefined;
-                tmpDir?: string | null | undefined;
-            } | undefined;
-            herdr?: {
-                sessionName?: string | undefined;
-            } | undefined;
-            windows?: {
-                launchMode?: 'windows_terminal' | 'hidden' | 'console' | undefined;
-                console?: 'hidden' | 'visible' | undefined;
-                windowName?: string | undefined;
-            } | undefined;
-        } | undefined;
-        checkoutCreationDraft?: {
-            kind: 'git_worktree';
-            displayName: string;
-            baseRef: string | null;
-            branchMode?: 'new' | 'existing' | undefined;
-        } | null | undefined;
-        title?: string | undefined;
         identity?: {
             bot?: {
                 kind: 'bot';
@@ -680,7 +582,10 @@ export type SessionLifecycleActionInputById = {
                 installationId: string;
             };
         } | undefined;
-        memoryEnabled?: boolean | undefined;
+        discussionParticipant?: {
+            discussionId: string;
+            participantSlotId: string;
+        } | undefined;
         promptStack?: {
             id: string;
             ref: {
@@ -693,18 +598,19 @@ export type SessionLifecycleActionInputById = {
             maxChars?: number | undefined;
             required?: boolean | undefined;
             skillMigrationV1?: true | undefined;
+            plan?: true | undefined;
         }[] | undefined;
         initialInput?: {
             text?: string | undefined;
             attachments?: {
                 attachmentLocalId: string;
                 value: {
-                    key: unknown;
+                    key: string;
                     value: unknown;
                     presentation: {
-                        label: unknown;
-                        description?: unknown;
-                        icon?: 'file' | 'error' | 'check' | 'terminal' | 'review' | 'search' | 'new' | 'action' | 'preview' | 'browser' | 'copy' | 'globe' | 'info' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                        label: string;
+                        description?: string | undefined;
+                        icon?: 'file' | 'filter' | 'error' | 'check' | 'terminal' | 'review' | 'new' | 'action' | 'preview' | 'browser' | 'copy' | 'globe' | 'info' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                     };
                 };
@@ -1020,10 +926,10 @@ export type SessionLifecycleActionInputById = {
                     canInspect: boolean;
                     summary?: string | undefined;
                 } | undefined;
-                sessionDiscussionSelectionSourceV1?: {
-                    sessionId: string;
-                    kind: 'session_discussion';
+                discussionSelectionSourceV1?: {
                     discussionId: string;
+                    serverId: string;
+                    kind: 'discussion';
                     messageIds: string[];
                 } | undefined;
                 composerAttachments?: {
@@ -1033,13 +939,13 @@ export type SessionLifecycleActionInputById = {
                         pluginId: string;
                         localId: string;
                     };
-                    key: unknown;
+                    key: string;
                     value: unknown;
                     presentation: {
-                        label: unknown;
-                        typeLabel: unknown;
-                        description?: unknown;
-                        icon?: 'file' | 'error' | 'check' | 'terminal' | 'review' | 'search' | 'new' | 'action' | 'preview' | 'browser' | 'copy' | 'globe' | 'info' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
+                        label: string;
+                        typeLabel: string;
+                        description?: string | undefined;
+                        icon?: 'file' | 'filter' | 'error' | 'check' | 'terminal' | 'review' | 'new' | 'action' | 'preview' | 'browser' | 'copy' | 'globe' | 'info' | 'refresh' | 'settings' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'waiting' | 'list' | 'board' | undefined;
                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                     };
                     content?: {
@@ -1062,6 +968,120 @@ export type SessionLifecycleActionInputById = {
                             sha256: string;
                         };
                     } | undefined;
+                }[] | undefined;
+                reviewComments?: {
+                    sessionId: string;
+                    comments: {
+                        id: string;
+                        filePath: string;
+                        source: 'file' | 'diff';
+                        anchor: {
+                            kind: 'fileLine';
+                            startLine: number;
+                            lineHash?: `lh1:${string}` | undefined;
+                        } | {
+                            kind: 'diffLine';
+                            startLine: number;
+                            side: 'before' | 'after';
+                            oldLine: number | null;
+                            newLine: number | null;
+                            lineHash?: `lh1:${string}` | undefined;
+                        } | {
+                            kind: 'line';
+                            filePath: string;
+                            line: number;
+                            side?: 'before' | 'after' | undefined;
+                            lineHash?: `lh1:${string}` | undefined;
+                        } | {
+                            kind: 'range';
+                            filePath: string;
+                            startLine: number;
+                            endLine: number;
+                            side?: 'before' | 'after' | undefined;
+                            startLineHash?: `lh1:${string}` | undefined;
+                            endLineHash?: `lh1:${string}` | undefined;
+                            selectedTextHash?: `lh1:${string}` | undefined;
+                        };
+                        snapshot: {
+                            selectedLines: string[];
+                            beforeContext: string[];
+                            afterContext: string[];
+                        };
+                        body: string;
+                        createdAt: number;
+                        anchorResolution?: {
+                            filePath: string;
+                            originalAnchor: {
+                                kind: 'fileLine';
+                                startLine: number;
+                                lineHash?: `lh1:${string}` | undefined;
+                            } | {
+                                kind: 'diffLine';
+                                startLine: number;
+                                side: 'before' | 'after';
+                                oldLine: number | null;
+                                newLine: number | null;
+                                lineHash?: `lh1:${string}` | undefined;
+                            } | {
+                                kind: 'line';
+                                filePath: string;
+                                line: number;
+                                side?: 'before' | 'after' | undefined;
+                                lineHash?: `lh1:${string}` | undefined;
+                            } | {
+                                kind: 'range';
+                                filePath: string;
+                                startLine: number;
+                                endLine: number;
+                                side?: 'before' | 'after' | undefined;
+                                startLineHash?: `lh1:${string}` | undefined;
+                                endLineHash?: `lh1:${string}` | undefined;
+                                selectedTextHash?: `lh1:${string}` | undefined;
+                            };
+                            status: 'exact' | 'missing' | 'hash' | 'context' | 'ambiguous' | 'stale' | 'unsupported';
+                            confidence: number;
+                            id?: string | undefined;
+                            resolvedAnchor?: {
+                                kind: 'fileLine';
+                                startLine: number;
+                                lineHash?: `lh1:${string}` | undefined;
+                            } | {
+                                kind: 'diffLine';
+                                startLine: number;
+                                side: 'before' | 'after';
+                                oldLine: number | null;
+                                newLine: number | null;
+                                lineHash?: `lh1:${string}` | undefined;
+                            } | {
+                                kind: 'line';
+                                filePath: string;
+                                line: number;
+                                side?: 'before' | 'after' | undefined;
+                                lineHash?: `lh1:${string}` | undefined;
+                            } | {
+                                kind: 'range';
+                                filePath: string;
+                                startLine: number;
+                                endLine: number;
+                                side?: 'before' | 'after' | undefined;
+                                startLineHash?: `lh1:${string}` | undefined;
+                                endLineHash?: `lh1:${string}` | undefined;
+                                selectedTextHash?: `lh1:${string}` | undefined;
+                            } | undefined;
+                            reason?: string | undefined;
+                            preview?: {
+                                selectedLines: string[];
+                                beforeContext: string[];
+                                afterContext: string[];
+                            } | undefined;
+                        } | undefined;
+                        includeInPrompt?: boolean | undefined;
+                    }[];
+                } | undefined;
+                sessionAttachments?: {
+                    v: 1;
+                    sessionId: string;
+                    id: string;
                 }[] | undefined;
             } | undefined;
             reviewComments?: {
@@ -1346,8 +1366,10 @@ export type SessionLifecycleActionInputById = {
                         name: string;
                         valueType: 'string' | 'number' | 'boolean' | 'json';
                         required: boolean;
+                        multiple?: boolean | undefined;
                         enum?: string[] | undefined;
                         default?: JsonValue | undefined;
+                        defaultFrom?: 'origin_session' | undefined;
                         description?: string | undefined;
                         optionsSourceId?: string | undefined;
                         inputType?: {
@@ -1357,7 +1379,7 @@ export type SessionLifecycleActionInputById = {
                             hostType: 'usageQuery';
                             field?: 'session' | 'period' | undefined;
                         } | {
-                            hostType: 'workspace' | 'session' | 'machine';
+                            hostType: 'workspace' | 'session' | 'machine' | 'agentParticipant';
                         } | undefined;
                     }[];
                     defaults: {
@@ -1489,6 +1511,9 @@ export type SessionLifecycleActionInputById = {
                         } | {
                             kind: 'origin_session';
                         } | {
+                            kind: 'input';
+                            name: string;
+                        } | {
                             kind: 'from_step';
                             producer: {
                                 blockId: string;
@@ -1574,6 +1599,23 @@ export type SessionLifecycleActionInputById = {
                                 updatedAt: number;
                             } | null | undefined;
                             effort?: string | undefined;
+                        } | {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
+                        } | undefined;
+                        participant?: {
+                            kind: 'input';
+                            name: string;
+                            path?: (string | number)[] | undefined;
+                        } | {
+                            kind: 'item';
+                            field: 'value';
+                            path?: (string | number)[] | undefined;
                         } | undefined;
                         executionTarget?: {
                             kind: 'session';
@@ -1592,11 +1634,12 @@ export type SessionLifecycleActionInputById = {
                             kind: 'session';
                         } | {
                             kind: 'background_run';
-                            intent: 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
+                            intent: 'agent' | 'plan' | 'review' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
                         } | undefined;
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     } | {
                         roleId: string;
                         name: string;
@@ -1605,7 +1648,7 @@ export type SessionLifecycleActionInputById = {
                             kind: 'session';
                         } | {
                             kind: 'background_run';
-                            intent: 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
+                            intent: 'agent' | 'plan' | 'review' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
                         };
                         engine?: {
                             agentTargetKey: string;
@@ -1615,6 +1658,7 @@ export type SessionLifecycleActionInputById = {
                         profileId?: string | undefined;
                         workspaceWrites?: 'allow' | 'deny' | undefined;
                         secondOpinion?: 'off' | 'encouraged' | undefined;
+                        canDelegateToOtherRoles?: boolean | undefined;
                     })[] | undefined;
                     blocks: readonly PluginActionWorkflowBlockV1<true>[];
                     finalOutput?: {
@@ -1642,7 +1686,7 @@ export type SessionLifecycleActionInputById = {
                 kind: 'detached_run';
             } | undefined;
             inputs?: Record<string, unknown> | undefined;
-            visibleTeamId?: unknown;
+            visibleTeamId?: string | null | undefined;
             roleOverrides?: {
                 roleId: string;
                 engine?: {
@@ -1654,11 +1698,12 @@ export type SessionLifecycleActionInputById = {
                     kind: 'session';
                 } | {
                     kind: 'background_run';
-                    intent: 'agent' | 'review' | 'plan' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
+                    intent: 'agent' | 'plan' | 'review' | 'delegate' | 'task' | 'voice_agent' | 'memory_hints' | 'scm_commit_message' | 'scm_diff_summary';
                 } | undefined;
                 profileId?: string | undefined;
                 workspaceWrites?: 'allow' | 'deny' | undefined;
                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
             }[] | undefined;
             onComplete?: {
                 kind: 'originating_session';
@@ -1689,9 +1734,158 @@ export type SessionLifecycleActionInputById = {
                 };
             })[];
         } | undefined;
-        reportsTo?: {
+        manager?: {
             sessionId: string;
         } | undefined;
+        agentSessionStartupInstructionsV1?: Readonly<{
+            instructions: string;
+            v: 1;
+            id: string;
+            revision: number;
+        }> | undefined;
+        sourceContext?: {
+            v: 1;
+            kind: 'session_replay';
+            sourceSessionId: string;
+            forkPoint: {
+                type: 'latest';
+            } | {
+                type: 'seq';
+                upToSeqInclusive: number;
+            };
+        } | undefined;
+        environmentVariables?: Record<string, string> | undefined;
+        placementOrigin?: {
+            kind: 'machine_pool';
+            poolId: string;
+        } | undefined;
+        organizationPlacement?: {
+            folderId: string | null;
+            tagIds: string[];
+        } | undefined;
+        roleId?: string | undefined;
+        modelSelection?: {
+            v: 1;
+            ref: {
+                agentTargetKey: string;
+                providerConnectionId: null;
+                modelId: string;
+            } | {
+                agentTargetKey: string;
+                providerConnectionId: string;
+                modelId: string;
+            };
+            updatedAt: number;
+        } | undefined;
+        profileId?: string | undefined;
+        secretReferenceOverlay?: {
+            v: 1;
+            bindings: Record<string, {
+                ref: string;
+                revision?: number | undefined;
+            }>;
+        } | undefined;
+        permissionMode?: 'default' | 'plan' | 'read-only' | 'safe-yolo' | 'yolo' | undefined;
+        agentModeId?: string | undefined;
+        configuration?: unknown;
+        connectedServices?: {
+            v: 1;
+            bindingsByServiceId: Record<string, {
+                source: 'native';
+            } | {
+                source: 'connected';
+                selection: 'group';
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: 'connected';
+                profileId: string;
+                selection?: 'profile' | undefined;
+            }>;
+        } | {
+            v: 1;
+            bindingsByServiceId: Record<string, {
+                source: 'native';
+            } | {
+                source: 'connected';
+                selection: 'group';
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: 'connected';
+                profileId: string;
+                selection?: 'profile' | undefined;
+            }>;
+        } | {
+            v: 2;
+            bindingsByServiceId?: Record<string, {
+                source: 'native';
+            } | {
+                source: 'connected';
+                selection: 'group';
+                groupId: string;
+                profileId?: string | undefined;
+            } | {
+                source: 'connected';
+                profileId: string;
+                selection?: 'profile' | undefined;
+            } | {
+                source: 'team_resource';
+                resourceId: string;
+                deliveryMode: 'direct';
+                disclosedMember: {
+                    service: {
+                        pluginId: string;
+                        localId: string;
+                    };
+                    accountId: string;
+                };
+            } | {
+                source: 'team_resource';
+                resourceId: string;
+                deliveryMode: 'brokered';
+                disclosedMember?: undefined;
+            }> | undefined;
+        } | undefined;
+        capabilitySelection?: {
+            mcp?: {
+                v?: 1 | undefined;
+                managedServersEnabled?: boolean | undefined;
+                forceIncludeServerIds?: string[] | undefined;
+                forceExcludeServerIds?: string[] | undefined;
+            } | undefined;
+            skills?: {
+                v?: 1 | undefined;
+                forceIncludeSkillIds?: string[] | undefined;
+                forceExcludeSkillIds?: string[] | undefined;
+                excludeNativeSkillNames?: string[] | undefined;
+            } | undefined;
+        } | undefined;
+        transcriptStorage?: 'persisted' | 'direct' | undefined;
+        terminal?: {
+            mode?: 'integrated' | 'plain' | 'tmux' | 'zellij' | 'herdr' | 'windows_terminal' | 'windows_console' | undefined;
+            tmux?: {
+                sessionName?: string | undefined;
+                isolated?: boolean | undefined;
+                tmpDir?: string | null | undefined;
+            } | undefined;
+            herdr?: {
+                sessionName?: string | undefined;
+            } | undefined;
+            windows?: {
+                launchMode?: 'windows_terminal' | 'hidden' | 'console' | undefined;
+                console?: 'hidden' | 'visible' | undefined;
+                windowName?: string | undefined;
+            } | undefined;
+        } | undefined;
+        checkoutCreationDraft?: {
+            kind: 'git_worktree';
+            displayName: string;
+            baseRef: string | null;
+            branchMode?: 'new' | 'existing' | undefined;
+        } | null | undefined;
+        title?: string | undefined;
+        memoryEnabled?: boolean | undefined;
         primaryTeamId?: string | null | undefined;
         teamCredentialBindings?: ({
             v: 1;
@@ -1727,24 +1921,6 @@ export type SessionLifecycleActionInputById = {
             };
             resourceId: null;
         })[] | undefined;
-        agentSessionStartupInstructionsV1?: Readonly<{
-            instructions: string;
-            v: 1;
-            id: string;
-            revision: number;
-        }> | undefined;
-        sourceContext?: {
-            v: 1;
-            kind: 'session_replay';
-            sourceSessionId: string;
-            forkPoint: {
-                type: 'latest';
-            } | {
-                type: 'seq';
-                upToSeqInclusive: number;
-            };
-        } | undefined;
-        environmentVariables?: Record<string, string> | undefined;
         allowedTools?: string[] | undefined;
         unlistedTools?: 'deny' | 'ask' | undefined;
     };
@@ -2503,7 +2679,143 @@ export type SessionLifecycleActionResultById = {
             errorCode?: string | undefined;
         };
     };
-    readonly "workspace.sync.relationships.list": JsonValue;
+    readonly "workspace.sync.relationship.disable": {
+        v: 1;
+        relationshipId: string;
+        enabled: false;
+    };
+    readonly "workspace.sync.relationship.enable": {
+        v: 1;
+        relationshipId: string;
+        enabled: true;
+    };
+    readonly "workspace.sync.relationship.flush": {
+        v: 1;
+        relationshipId: string;
+        status: {
+            relationshipId: string;
+            controllerMachineId: string;
+            state: 'error' | 'paused' | 'starting' | 'watching' | 'flushing' | 'disconnected' | 'conflicted' | 'controller_unavailable' | 'stopped';
+            alphaPath: string;
+            betaPath: string;
+            mode: 'copy_once' | 'keep_synced' | 'mirror_exactly' | 'keep_both_in_sync';
+            endpointStates: {
+                alpha: {
+                    connected: boolean;
+                    scanned: boolean;
+                    scanProblemCount: number;
+                    transitionProblemCount: number;
+                } | null;
+                beta: {
+                    connected: boolean;
+                    scanned: boolean;
+                    scanProblemCount: number;
+                    transitionProblemCount: number;
+                } | null;
+            };
+            conflictCount: number;
+            lastCycleObservedAtMs: number | null;
+            lastCleanSyncAtMs?: number | null | undefined;
+            errorCode?: string | undefined;
+        };
+    };
+    readonly "workspace.sync.relationship.terminate": {
+        v: 1;
+        relationshipId: string;
+        terminated: true;
+    };
+    readonly "workspace.sync.relationships.list": {
+        controllerMachineId: string;
+        sets: readonly {
+            hubWorkspaceRefId: string;
+            controllerMachineId: string;
+            relationshipIds: readonly string[];
+        }[];
+        relationships: readonly {
+            definition: {
+                v: 1;
+                relationshipId: string;
+                controllerMachineId: string;
+                alphaWorkspaceRefId: string;
+                betaWorkspaceRefId: string;
+                mode: 'keep_synced' | 'mirror_exactly' | 'keep_both_in_sync';
+                contentPolicy: {
+                    v: 1;
+                    selection: 'git_worktree' | 'all_files';
+                    extraIgnorePatterns: readonly string[];
+                    extraIncludePatterns: readonly string[];
+                    policyDigest: string;
+                };
+                enabled: boolean;
+                createdAtMs: number;
+                updatedAtMs: number;
+                provenance?: {
+                    kind: 'worker_clean_copy';
+                    sourceWorkspaceRefId: string;
+                    targetWorkspaceRefId: string;
+                } | undefined;
+                committedAtMs?: number | null | undefined;
+            };
+            status: {
+                relationshipId: string;
+                controllerMachineId: string;
+                state: 'error' | 'paused' | 'starting' | 'watching' | 'flushing' | 'disconnected' | 'conflicted' | 'controller_unavailable' | 'stopped';
+                alphaPath: string;
+                betaPath: string;
+                mode: 'copy_once' | 'keep_synced' | 'mirror_exactly' | 'keep_both_in_sync';
+                endpointStates: {
+                    alpha: {
+                        connected: boolean;
+                        scanned: boolean;
+                        scanProblemCount: number;
+                        transitionProblemCount: number;
+                    } | null;
+                    beta: {
+                        connected: boolean;
+                        scanned: boolean;
+                        scanProblemCount: number;
+                        transitionProblemCount: number;
+                    } | null;
+                };
+                conflictCount: number;
+                lastCycleObservedAtMs: number | null;
+                lastCleanSyncAtMs?: number | null | undefined;
+                errorCode?: string | undefined;
+            } | null;
+        }[];
+        remoteRelationships: readonly {
+            definition: {
+                v: 1;
+                relationshipId: string;
+                controllerMachineId: string;
+                alphaWorkspaceRefId: string;
+                betaWorkspaceRefId: string;
+                mode: 'keep_synced' | 'mirror_exactly' | 'keep_both_in_sync';
+                contentPolicy: {
+                    v: 1;
+                    selection: 'git_worktree' | 'all_files';
+                    extraIgnorePatterns: readonly string[];
+                    extraIncludePatterns: readonly string[];
+                    policyDigest: string;
+                };
+                enabled: boolean;
+                createdAtMs: number;
+                updatedAtMs: number;
+                provenance?: {
+                    kind: 'worker_clean_copy';
+                    sourceWorkspaceRefId: string;
+                    targetWorkspaceRefId: string;
+                } | undefined;
+                committedAtMs?: number | null | undefined;
+            };
+            controllerMachineId: string;
+        }[];
+        membership: {
+            workspaceRefId: string | null;
+            found: boolean | null;
+        };
+        discoveryAvailable: boolean;
+    };
     readonly "workspace.sync.conflicts.list": JsonValue;
     readonly "workspace.sync.conflict.inspect": JsonValue;
     readonly "session.spawn_new": {
@@ -2525,6 +2837,9 @@ export type SessionLifecycleActionResultById = {
             kind: 'terminal_host_unavailable';
             host: 'zellij' | 'herdr';
             reason: 'installation_unavailable' | 'server_version_unsupported';
+        } | undefined;
+        incompatibleTarget?: {
+            reason: 'terminal_host_unavailable' | 'initial_access_unsupported' | 'target_preparation_rpc_unavailable' | 'target_preparation_invalid_result' | 'checkout_unavailable' | 'session_spawn_protocol_unavailable' | 'creation_lookup_unavailable' | 'initial_trigger_protocol_unavailable' | 'context_memory_protocol_unavailable' | 'spawn_rpc_unavailable' | 'creation_settlement_unavailable' | 'requester_credentials_unavailable' | 'daemon_rpc_unavailable';
         } | undefined;
         launchError?: {
             kind: 'launch_error';
@@ -2553,7 +2868,7 @@ export type SessionLifecycleActionResultById = {
             localId: string;
         } | {
             status: 'rejected';
-            code: 'session_input_invalid' | 'model_not_granted' | 'permission_mode_not_granted' | 'session_input_archived' | 'session_input_unauthorized' | 'session_input_target_unavailable' | 'session_input_storage_unavailable' | 'session_input_target_update_required' | 'session_input_cancelled' | 'session_input_untrusted_assertion' | 'session_input_idempotency_conflict' | 'session_input_source_authority_mismatch' | 'session_input_permission_ceiling_rejected' | 'session_input_encryption_mode_mismatch';
+            code: 'session_input_invalid' | 'model_not_granted' | 'permission_mode_not_granted' | 'session_input_archived' | 'session_input_unauthorized' | 'session_input_target_unavailable' | 'session_input_muted' | 'session_input_storage_unavailable' | 'session_input_target_update_required' | 'session_input_cancelled' | 'session_input_untrusted_assertion' | 'session_input_idempotency_conflict' | 'session_input_source_authority_mismatch' | 'session_input_permission_ceiling_rejected' | 'session_input_encryption_mode_mismatch';
         } | {
             status: 'outcomeUnknown';
             localId: string;
@@ -2573,6 +2888,7 @@ export type SessionLifecycleActionResultById = {
         } | {
             kind: 'waiting';
             reason: 'unsupported' | 'source_key_unavailable' | 'runner_unreachable' | 'runner_key_unavailable';
+            cause?: 'source_key_unavailable' | 'credentials_unavailable' | 'action_context_unavailable' | 'preparation_exception' | 'server_features_exception' | 'source_transport_exception' | 'destination_transport_exception' | 'source_transport_unavailable' | 'destination_transport_unavailable' | 'source_key_exception' | 'home_identity_unavailable' | 'destination_machine_exception' | 'destination_machine_unresolved' | 'destination_machine_missing' | 'rpc_method_unavailable' | 'machine_content_key_unavailable' | 'machine_content_mode_mismatch' | 'machine_target_not_current' | 'machine_rpc_failed' | 'machine_rpc_invalid_response' | undefined;
         } | undefined;
     } | {
         type: 'pending';

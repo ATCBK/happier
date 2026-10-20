@@ -74,6 +74,63 @@ describe('plugin-ui List item presentation', () => {
     mount.unmount();
   });
 
+  it('ranks searchable text like the core pickers: prefix, then label, then subtitle, then hidden text', () => {
+    const folders = [
+      { id: 'fixups', title: '.codex-pr-fixups', path: '~/src/.codex-pr-fixups' },
+      { id: 'lib', title: 'lib', path: '~/src/lib' },
+      { id: 'api', title: 'api', path: '~/src/dev/api' },
+      { id: 'dev', title: 'dev', path: '~/src/dev' },
+      { id: 'web', title: 'web', path: '~/src/web', aliases: 'devtools' },
+    ] as const;
+    const titles = (container: HTMLElement) => folders
+      .filter((folder) => container.textContent?.includes(folder.title))
+      .map((folder) => folder.title)
+      .sort((a, b) => container.textContent!.indexOf(a) - container.textContent!.indexOf(b));
+    const search = {
+      label: 'Search folders',
+      value: 'de',
+      onValueChange: () => undefined,
+      text: (item: (typeof folders)[number]) => ({
+        label: item.title,
+        subtitle: item.path,
+        searchText: 'aliases' in item ? item.aliases : undefined,
+      }),
+    };
+    const context = createSurfaceContext();
+    const flat = mountThroughReactNativeWeb(
+      <PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+        <List
+          accessibilityLabel="Folders"
+          items={folders}
+          keyForItem={(item) => item.id}
+          renderItem={(item) => <List.Item title={item.title} />}
+          search={search}
+        />
+      </PluginUiProvider>,
+    );
+    expect(titles(flat.container)).toEqual(['dev', '.codex-pr-fixups', 'api', 'web']);
+    flat.unmount();
+
+    const sectioned = mountThroughReactNativeWeb(
+      <PluginUiProvider hostApi={createHostApiStub(context)} context={context}>
+        <List
+          accessibilityLabel="Folders"
+          sections={[
+            { key: 'recent', title: 'Recent', data: [folders[0], folders[3]] },
+            { key: 'other', title: 'Other', data: [folders[1]] },
+          ]}
+          keyForItem={(item) => item.id}
+          renderItem={(item) => <List.Item title={item.title} />}
+          search={search}
+        />
+      </PluginUiProvider>,
+    );
+    expect(titles(sectioned.container)).toEqual(['dev', '.codex-pr-fixups']);
+    // A section the query empties leaves no header behind.
+    expect(sectioned.container.textContent).not.toContain('Other');
+    sectioned.unmount();
+  });
+
   it('rejects duplicate authored row identities even when search hides one occurrence', () => {
     const context = createSurfaceContext();
     expect(() => mountThroughReactNativeWeb(

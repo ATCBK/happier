@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import axios from 'axios';
 import { buildApprovalExecutionOriginV1, createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
@@ -107,6 +108,7 @@ describe('createDaemonExternalActionTargetResolver', () => {
       accountId: 'owner', machineId: 'machine-local', serverId: 'home', resolveTarget,
       // Authenticated Home identity and Account token-list reads are remote boundaries.
       resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'identity', machineId: 'machine-local' }),
+      isAccountCurrent: async () => true,
       listAccountApiTokens: async () => ({ tokens: [] }),
       resolveCurrentSessionAgentSpawnPolicyV1: async () => (
         await resolveAvailableAccountSettings({ credentials: TOKEN_ONLY_CREDENTIALS })
@@ -115,6 +117,7 @@ describe('createDaemonExternalActionTargetResolver', () => {
     let approval: ApprovalRequest | null = null;
     const readApproval = (): ApprovalRequest | null => approval;
     await createActionExecutor({
+      ...createUnavailableActionTransportDeps(),
       approvalsCreate: async ({ request }) => { approval = request; return { artifactId: 'approval' }; },
       isActionApprovalRequired: () => false,
     }).execute('computer.secret.fill', {
@@ -150,6 +153,7 @@ describe('createDaemonExternalActionTargetResolver', () => {
       accountId: 'owner', machineId: 'machine-local', serverId: 'home', resolveTarget,
       // Raw Home/Machine identity and authenticated token-list transport leaves, never the currentness predicate.
       resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'identity', machineId: 'machine-local' }),
+      isAccountCurrent: async () => true,
       listAccountApiTokens: async () => ({ tokens: [] }),
       // Use the credential-bound current Account settings owner, as the production composition does.
       resolveCurrentSessionAgentSpawnPolicyV1: async () => (
@@ -270,6 +274,7 @@ describe('createDaemonExternalActionTargetResolver', () => {
     const isCurrent = createDaemonApprovalExecutionOriginCurrentness({
       accountId: 'account-1', machineId: 'machine-local', serverId: 'home-1', resolveTarget,
       resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'home-1', machineId: 'machine-local' }),
+      isAccountCurrent: async () => true,
       listAccountApiTokens: async () => ({ tokens: [] }),
       isSessionCallerCurrent: async ({ caller }) => caller.sessionId === 'local-caller',
       resolveCurrentPermissionMode: async () => 'default',
@@ -331,6 +336,7 @@ describe('createDaemonExternalActionTargetResolver', () => {
       accountId: 'account-1', machineId: 'guest', serverId: 'home-profile',
       resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'srv_home', machineId: 'guest' }),
       resolveTarget: createDaemonExternalActionTargetResolver({ credentials: TOKEN_ONLY_CREDENTIALS }),
+      isAccountCurrent: async () => true,
       listAccountApiTokens: async () => ({ tokens: [] }), externalActionMachinePublicKey: keys.publicKey,
       verifyExternalExecutionAuthorization: args => verifyExternalActionExecutionAuthorizationCurrent({ ...args,
         privateKey: keys.secretKey, installationId: 'guest-installation', serverHttpBaseUrl: 'https://home.example' }),
@@ -339,7 +345,8 @@ describe('createDaemonExternalActionTargetResolver', () => {
       resolveCurrentPermissionMode: async () => permission,
       resolveCurrentSessionAgentSpawnPolicyV1: async () => currentPolicy,
     });
-    const check = () => isCurrent({ origin, actionInput: spawnInput });
+    const staleReasons: string[] = [];
+    const check = () => isCurrent({ origin, actionInput: spawnInput, reportStale: (reason: string) => { staleReasons.push(reason); } });
     await expect(check()).resolves.toBe(true);
     homeCurrent = false;
     await expect(check()).resolves.toBe(false);
@@ -349,6 +356,7 @@ describe('createDaemonExternalActionTargetResolver', () => {
     permission = 'yolo';
     currentPolicy = { ...spawnPolicy, allowCrossMachine: false };
     await expect(check()).resolves.toBe(false);
+    expect(staleReasons.at(-1)).toBe('spawn_policy_changed');
     currentPolicy = spawnPolicy;
     // A signed Session invocation without the managed-child tuple still needs
     // its incumbent local source owner; Home signature alone is not a waiver.
@@ -396,8 +404,7 @@ describe('createDaemonExternalActionTargetResolver', () => {
     expect(mocks.fetchSessionById).toHaveBeenCalledWith({
       token: 'daemon-token',
       sessionId: 'c111111111111111111111111',
-      signal: expect.any(AbortSignal),
-      deadlineAtMs: expect.any(Number),
+      signal,
     });
     expect(mocks.fetchAccountMachineReplacements).not.toHaveBeenCalled();
   });
@@ -426,8 +433,6 @@ describe('createDaemonExternalActionTargetResolver', () => {
       token: 'daemon-token',
       sessionId: 'c111111111111111111111111',
       serverFeaturesSnapshot,
-      signal: expect.any(AbortSignal),
-      deadlineAtMs: expect.any(Number),
     });
   });
 

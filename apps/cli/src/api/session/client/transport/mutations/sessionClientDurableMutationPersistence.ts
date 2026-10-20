@@ -1,8 +1,10 @@
+import * as z from 'zod/mini';
 import { readFile, readdir, unlink } from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
 import { join } from 'node:path';
 
 import { configuration } from '@/configuration';
+import { SessionRoleEditSchema, type SessionRoleEdit } from '@/session/roles/sessionRoleEdit';
 import { writeJsonAtomic } from '@/utils/fs/writeJsonAtomic';
 import { getSessionStateFieldDescriptor } from '@happier-dev/agents';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
@@ -378,7 +380,8 @@ function createDeadLetterEntry(params: Readonly<{
 
 function resolveQueuedMutationKind(value: unknown): SessionClientDurableMutationDeadLetterEntry['kind'] {
     if (
-        value === 'session_turn_mutation'
+        value === 'agent_state_request_settlement'
+        || value === 'session_turn_mutation'
         || value === 'session_end'
         || value === 'transcript_message_append'
         || value === 'voice_agent_transcript_turn'
@@ -604,6 +607,13 @@ function parseRegisteredSessionStateFieldPayload(value: unknown, stored: boolean
     }
 
     let op: RegisteredSessionStateFieldMutationV1['op'] | null = null;
+    let sessionRoleEdit: SessionRoleEdit | undefined;
+    if (value.sessionRoleEdit !== undefined) {
+        if (fieldId.data !== 'intent.sessionRoles' || value.op.kind !== 'set') return null;
+        const parsed = SessionRoleEditSchema.safeParse(value.sessionRoleEdit);
+        if (!parsed.success || parsed.data.input.sessionId !== value.sessionId) return null;
+        sessionRoleEdit = parsed.data;
+    }
     let retainedSessionContextEntry: RegisteredSessionStateFieldMutationV1['retainedSessionContextEntry'];
     if (value.retainedSessionContextEntry !== undefined) {
         if (fieldId.data !== 'intent.sessionRoles' || value.op.kind !== 'set') return null;
@@ -663,6 +673,7 @@ function parseRegisteredSessionStateFieldPayload(value: unknown, stored: boolean
         ...(typeof value.expectedMetadataRevision === 'number' ? { expectedMetadataRevision: value.expectedMetadataRevision } : {}),
         ...(dependencies.length > 0 ? { dependsOn: dependencies } : {}),
         ...(retainedSessionContextEntry ? { retainedSessionContextEntry } : {}),
+        ...(sessionRoleEdit ? { sessionRoleEdit } : {}),
     };
 }
 
@@ -677,7 +688,7 @@ function parseRegisteredSessionStateFieldValue(
     }
     if (fieldId === 'intent.memoryEnabled') return typeof value === 'boolean' ? { ok: true, value } : { ok: false };
     if (fieldId === 'intent.voicePreference') {
-        const parsed = StoredSessionVoicePreferenceV1Schema.nullable().safeParse(value);
+        const parsed = z.nullable(StoredSessionVoicePreferenceV1Schema).safeParse(value);
         return parsed.success ? { ok: true, value: parsed.data } : { ok: false };
     }
     if (fieldId === 'identity.runtimeDescriptor') {
@@ -824,7 +835,8 @@ function isSessionClientDurableMutationAttemptReason(
         || value === 'session_turn_mutation_rejected'
         || value === 'metadata_tuple_conflict'
         || value === 'transcript_message_provenance_missing_or_invalid'
-        || value === 'transcript_message_invalid_observation';
+        || value === 'transcript_message_invalid_observation'
+        || value === 'invalid_agent_state_request_settlement';
 }
 
 function parseSessionClientDurableMutationAttemptAccounting(
@@ -926,6 +938,26 @@ function parseQueuedSessionClientDurableMutation(value: unknown, sessionId: stri
                 payload: value,
             })],
         };
+    }
+
+    if (value.kind === 'agent_state_request_settlement') {
+        const payload = z.strictObject({
+            v: z.literal(1), source: z.literal('agent_state_request_settlement'),
+            sessionId: z.literal(sessionId), mutationId: z.string().check(z.minLength(1)),
+            content: z.union([
+                z.strictObject({ t: z.literal('device_local_v1'), c: z.string().check(z.minLength(1)) }),
+                z.strictObject({ t: z.literal('encrypted'), c: z.string().check(z.minLength(1)) }),
+                z.strictObject({ t: z.literal('installation_encrypted_v1'), c: z.string().check(z.minLength(1)) }),
+            ]),
+        }).safeParse(value.payload);
+        if (!payload.success || payload.data.mutationId !== mutationId) return {
+            mutations: [], deadLetters: [createDeadLetterEntry({ sessionId,
+                kind: 'agent_state_request_settlement', reason: 'invalid_agent_state_request_settlement',
+                mutationId, attempts, createdAt, payload: value.payload })],
+        };
+        return { mutations: [{ kind: 'agent_state_request_settlement', mutationId: payload.data.mutationId,
+            payload: payload.data, createdAt, attempts, nextAttemptAt, ...attemptAccounting.value,
+            ...(dependsOn ? { dependsOn } : {}), ...(paused ? { paused } : {}) }], deadLetters: [] };
     }
 
     if (value.kind === 'session_end') {
@@ -1125,6 +1157,7 @@ export function parseRuntimeSessionClientDurableMutation(
     const belongsToExpectedSession = mutation.payload.sessionId === expectedSessionId;
     const admitted = belongsToExpectedSession && (
         (mutation.kind === 'session_turn_mutation' && mutation.payload.action !== 'end_session')
+        || mutation.kind === 'agent_state_request_settlement'
         || mutation.kind === 'session_end'
         || mutation.kind === 'transcript_message_append'
         || mutation.kind === 'voice_agent_transcript_turn'

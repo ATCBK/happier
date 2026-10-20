@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ProviderConnectionDisplaySnapshotV1Schema, type ProviderConnectionDisplaySnapshotV1 } from '@happier-dev/protocol/providers/sessions/bindingMetadataV1';
 import { ProviderBoundModelRefSchema, type ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
 import { FavoriteModelSelectionV1Schema } from '@happier-dev/protocol/providers/modelFavoritesV1';

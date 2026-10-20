@@ -38,6 +38,21 @@ import {
 } from './actionToolExposure.js';
 
 describe('actionToolExposure', () => {
+  it('publishes settings parity and mounted tab opening as direct Session Agent tools', () => {
+    for (const actionId of [
+      'settings.get',
+      'settings.set',
+      'settings.reset',
+      'workspace.tabs.open',
+    ] as const) {
+      const spec = getActionSpec(actionId);
+      expect(spec.surfaces, actionId).toMatchObject({ agent: true, mcp: true });
+      expect(spec.bindings?.mcpToolName, actionId).toBe(actionId.replaceAll('.', '_'));
+      expect(isActionDirectToolExposedOn(spec, 'agent'), actionId).toBe(true);
+      expect(isActionDirectToolExposedOn(spec, 'mcp'), actionId).toBe(true);
+    }
+  });
+
   it('delivers resource guidance through the same closed Action definition agents discover', () => {
     const definition = projectActionDefinitionForExternalDiscovery(actionSpecToActionDefinitionV1(getActionSpec('machines.storage.trash.move')));
     expect(definition.prompting).toMatchObject({ agentGuidance: expect.any(String) });
@@ -100,10 +115,11 @@ describe('actionToolExposure', () => {
   it('uses the same Session memory availability for direct and discoverable writes without changing Account surfaces', () => {
     const settings = ActionsSettingsV1Schema.parse({ v: 1, actions: {
       'memory.remember': { toolExposureModes: { agent: 'direct' } },
+      'memory.decision.save': { toolExposureModes: { agent: 'direct' } },
       'memory.update': { toolExposureModes: { agent: 'direct' } },
       'memory.forget': { toolExposureModes: { agent: 'direct' } },
     } });
-    for (const id of ['memory.remember', 'memory.update', 'memory.forget'] as const) {
+    for (const id of ['memory.remember', 'memory.decision.save', 'memory.update', 'memory.forget'] as const) {
       const spec = getActionSpec(id);
       expect(isActionDirectToolExposedOn(spec, 'agent', { settings, sessionMemoryEnabled: true }), id).toBe(true);
       expect(isActionDirectToolExposedOn(spec, 'agent', { settings, sessionMemoryEnabled: false }), id).toBe(false);
@@ -148,7 +164,7 @@ describe('actionToolExposure', () => {
     }
     const picker = getActionSpec('ui.prompts.picker.open');
     expect(isActionDiscoverableOnToolSurface(picker, 'agent')).toBe(true);
-    expect(resolveActionSurfaceAvailability({ actionId: picker.id, surface: 'mcp' }).available).toBe(false);
+    expect(resolveActionSurfaceAvailability({ actionId: picker.id, surface: 'mcp' }).available).toBe(true);
   });
   it('makes landed explanation Actions reachable through the existing UI and Voice catalogs', () => {
     const voiceIds = new Set(listVoiceToolActionSpecs().map((spec) => spec.id));
@@ -411,6 +427,12 @@ describe('actionToolExposure', () => {
     const humanSecretApiExcludedActionIds = new Set(HUMAN_SECRET_API_EXCLUSION_ACTION_IDS);
     const pluginProvenanceOnlyActionIds = new Set(PLUGIN_PROVENANCE_ONLY_API_EXCLUSION_ACTION_IDS);
     const pluginSurfaceExcludedActionIds = new Set(PLUGIN_SURFACE_EXCLUSION_ACTION_IDS);
+    // Saved-secret administration, token inventory and installation withhold PAT access at their spec owners;
+    // the dedicated registry contract also checks these remain absent from PublicActionId.
+    const specApiExcludedActionIds = new Set([
+      'plugins.settings.secret.bind', 'plugins.settings.secret.unbind', 'plugins.settings.secret.delete',
+      'account.apiTokens.list', 'plugins.install',
+    ]);
 
     expect(INTERNAL_ACTION_IDS).not.toContain('plugin.webhook.delivery.movePending');
     expect(getActionSpec('plugin.webhook.delivery.movePending').surfaces).toMatchObject({ agent: true, mcp: true, api: false, plugin: false });
@@ -430,6 +452,7 @@ describe('actionToolExposure', () => {
           spec.id !== 'plugin.webhook.delivery.movePending'
             && !pluginProvenanceOnlyActionIds.has(spec.id)
             && !humanSecretApiExcludedActionIds.has(spec.id)
+            && !specApiExcludedActionIds.has(spec.id)
             && (spec.requiredAuthority === 'account_automation'
               || ['approval.request.decide', 'session.permission.respond', 'session.user_action.answer'].includes(spec.id)),
         );

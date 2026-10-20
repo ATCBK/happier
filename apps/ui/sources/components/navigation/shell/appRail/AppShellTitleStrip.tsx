@@ -26,6 +26,7 @@ import { AppShellThemeToggle } from './AppShellThemeToggle';
 import type { CompactAppDestination } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import { WorkspaceTitleBar } from '@/components/appShell/workspace/titleBar/WorkspaceTitleBar';
 import { WORKSPACE_BAR_CONTROL_GAP_PX } from '@/components/appShell/workspace/titleBar/workspaceBarGeometry';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 /**
  * The strip across the top of the window (lab `xrail-R1`): the window's own controls where the host
@@ -58,6 +59,9 @@ export const AppShellTitleStrip = React.memo(function AppShellTitleStrip(props: 
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const router = useRouter();
+    const presentationActive = useLayoutPresentationActive();
+    const presentationActiveRef = React.useRef(presentationActive);
+    presentationActiveRef.current = presentationActive;
     const dragProps = useDesktopWindowDragMouseProps();
     const history = useDesktopSidebarHistoryNavigationAvailability();
     const windowControls = useResolvedDesktopWindowControls({ variant: 'expanded', desktopWindowControls: undefined, hasDesktopWindowControlsOverride: false });
@@ -78,12 +82,25 @@ export const AppShellTitleStrip = React.memo(function AppShellTitleStrip(props: 
         if (result !== true) fireAndForget(result, { tag: 'AppShellTitleStrip.forward' });
     }, [props.navigation]);
     const [clusterEndPx, setClusterEndPx] = React.useState(0);
-    const [trailingStartPx, setTrailingStartPx] = React.useState<number | undefined>(undefined);
-    const onTrailingLayout = React.useCallback((event: { nativeEvent: { layout: { x: number } } }) => {
-        const next = Math.max(0, Math.round(event.nativeEvent.layout.x) - WORKSPACE_BAR_CONTROL_GAP_PX);
-        setTrailingStartPx((current) => current === next ? current : next);
+    // The trailing accessories sit at the strip's end, so their start follows from the strip's and
+    // their own widths. Both are sizes, which the web reports on every change; the accessories' own
+    // position is not (widening the window moves them without resizing them).
+    const [stripWidthPx, setStripWidthPx] = React.useState<number | undefined>(undefined);
+    const [trailingWidthPx, setTrailingWidthPx] = React.useState<number | undefined>(undefined);
+    const onStripLayout = React.useCallback((event: { nativeEvent: { layout: { width: number } } }) => {
+        if (!presentationActiveRef.current) return;
+        const next = Math.round(event.nativeEvent.layout.width);
+        setStripWidthPx((current) => current === next ? current : next);
     }, []);
+    const onTrailingLayout = React.useCallback((event: { nativeEvent: { layout: { width: number } } }) => {
+        if (!presentationActiveRef.current) return;
+        const next = Math.round(event.nativeEvent.layout.width);
+        setTrailingWidthPx((current) => current === next ? current : next);
+    }, []);
+    const trailingStartPx = stripWidthPx === undefined || trailingWidthPx === undefined ? undefined
+        : Math.max(0, stripWidthPx - TITLE_STRIP_END_PADDING_PX - trailingWidthPx - WORKSPACE_BAR_CONTROL_GAP_PX);
     const onClusterLayout = React.useCallback((event: { nativeEvent: { layout: { x: number; width: number } } }) => {
+        if (!presentationActiveRef.current) return;
         const { x, width } = event.nativeEvent.layout;
         const next = Math.round(x + width);
         setClusterEndPx((current) => (current === next ? current : next));
@@ -92,7 +109,7 @@ export const AppShellTitleStrip = React.memo(function AppShellTitleStrip(props: 
     const toggleLabel = props.columnVisible ? t('common.collapse') : t('common.expand');
     const stripHeightPx = Math.max(APP_SHELL_TITLE_STRIP_HEIGHT_PX, resolveTouchTargetFloorPx() ?? 0);
     return (
-        <View {...dragProps} testID="app-shell-title-strip" style={[styles.strip, { height: stripHeightPx }]}>
+        <View {...dragProps} testID="app-shell-title-strip" style={[styles.strip, { height: stripHeightPx }]} onLayout={onStripLayout}>
             <DesktopShellWindowControlsHost>{windowControls}</DesktopShellWindowControlsHost>
             <View style={styles.logoSlot}>
                 <Pressable
@@ -167,6 +184,9 @@ export const AppShellTitleStrip = React.memo(function AppShellTitleStrip(props: 
     );
 });
 
+/** The strip's own end inset, after its trailing accessories. */
+const TITLE_STRIP_END_PADDING_PX = 12;
+
 const stylesheet = StyleSheet.create(() => ({
     strip: {
         position: 'relative',
@@ -174,7 +194,7 @@ const stylesheet = StyleSheet.create(() => ({
         flexShrink: 0,
         flexDirection: 'row',
         alignItems: 'center',
-        paddingRight: 12,
+        paddingRight: TITLE_STRIP_END_PADDING_PX,
         gap: 4,
     },
     // Centred over the rail, so the logo heads the rail's column of icons.

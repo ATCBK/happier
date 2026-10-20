@@ -42,8 +42,12 @@ export async function invokeWorkspaceFileSystemAction(
         externalActionTarget: { kind: 'machine', machineId: target.machineId },
     } as const;
     try {
-        const prepared = await execute.prepare(actionId, input, context);
-        return prepared.kind === 'settled' ? prepared.result : await prepared.invocation.run();
+        // Run-now present-user entry: `execute` alone offers the in-place default confirmation.
+        const result = await execute(actionId, input, context);
+        // Cancellation stays a rejection for mounted byte-delivery callers; `execute` would
+        // otherwise settle an aborted approval wait as a typed failure.
+        if (!result.ok) signal?.throwIfAborted();
+        return result;
     } finally {
         subscription?.dispose();
         cancellation?.dispose();
@@ -55,8 +59,9 @@ export async function invokeWorkspaceFileSystemMutation(
     target: WorkspaceFileSystemTarget,
     actionId: Exclude<FilesystemMutationActionId, 'daemon.filesystem.copy'>,
     input: unknown,
+    options?: Readonly<{ signal?: AbortSignal }>,
 ): Promise<WorkspaceFileSystemMutationResponse> {
-    const result = await invokeWorkspaceFileSystemAction(target, actionId, input);
+    const result = await invokeWorkspaceFileSystemAction(target, actionId, input, options);
     if (!result.ok) return { success: false, error: result.error, errorCode: result.errorCode };
     const approval = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);
     if (approval.success) return { success: false, errorCode: 'approval_required',

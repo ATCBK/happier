@@ -131,6 +131,12 @@ export const SessionFollowDestinationPickerModal = React.memo(function SessionFo
     const destinationMachineId = destinationForPreparation
         ? resolveSessionMachineId(readSessionOwnerMetadataView(destinationForPreparation))
         : null;
+    const preparationRequestRef = React.useRef<AbortController | null>(null);
+    React.useEffect(() => () => {
+        preparationRequestRef.current?.abort();
+        preparationRequestRef.current = null;
+        setPreparation(current => current === 'preparing' ? 'queued' : current);
+    }, [fixedAddress.serverId, fixedAddress.sessionId, destinationMachineId]);
     const destinationMachine = destinationMachineId
         ? (machinesByServerId[fixedAddress.serverId] ?? []).find((machine) => machine.id === destinationMachineId) ?? null
         : null;
@@ -177,8 +183,14 @@ export const SessionFollowDestinationPickerModal = React.memo(function SessionFo
     }), [contextTitle, options]);
 
     const prepareCommittedRelation = React.useCallback(async (relation: NonNullable<typeof committedRelation>) => {
+        preparationRequestRef.current?.abort();
+        const controller = new AbortController();
+        preparationRequestRef.current = controller;
         setPreparation('preparing');
-        const result = await prepareSessionFollowSourceKey({ serverId: fixedAddress.serverId, ...relation });
+        const result = await prepareSessionFollowSourceKey({ serverId: fixedAddress.serverId, ...relation, signal: controller.signal })
+            .catch(() => ({ kind: 'waiting', reason: 'runner_unreachable' } as const));
+        if (controller.signal.aborted || preparationRequestRef.current !== controller) return;
+        preparationRequestRef.current = null;
         lastAttemptReadinessSignatureRef.current = retryReadinessSignatureRef.current;
         setPreparation(result);
         if (result.kind === 'prepared' || result.kind === 'not_needed') {
@@ -253,6 +265,7 @@ export const SessionFollowDestinationPickerModal = React.memo(function SessionFo
                     serverId: fixedAddress.serverId,
                     sourceSessionId: choosingDestination ? fixedAddress.sessionId : destinationSessionId,
                     destinationSessionId: choosingDestination ? destinationSessionId : fixedAddress.sessionId,
+                    policy: { preset: 'important' as const },
                 };
                 void setSessionFollowSource(relation).then((result) => {
                     if (result.kind === 'ok') {

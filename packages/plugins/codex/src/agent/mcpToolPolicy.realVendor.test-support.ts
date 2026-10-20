@@ -10,6 +10,7 @@ import { createCodexNativeAppServerClient } from './runtime/appServer/client.js'
 import { createCodexAppServerRuntime, startCodexAppServerRuntime, type CodexAppServerRuntimeHost } from './runtime/appServer/runtime.js';
 import { createCodexNativeAppServerSessionRuntime } from './runtime/appServer/native.js';
 import { assignInjectedServerKeys } from './runtime/appServer/config/overrides.js';
+import { resolveCodexTerminalPermissionPolicy } from './runtime/terminal/permissionPolicy.js';
 
 /** Runs installed Codex. The only simulated peer is the loopback Responses API. */
 export async function openRealCodexMcpSession(request: AgentSessionOpenRequest, input: Readonly<{
@@ -100,7 +101,8 @@ export async function openRealCodexMcpSession(request: AgentSessionOpenRequest, 
       const dispose = async () => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM'); await terminal; lines.close(); };
       children.add({ dispose });
       return { wait: () => terminal, dispose, client: {
-        request(method: string, params: unknown) { const id = ++next; const result = new Promise((resolve, reject) => pending.set(id, { resolve, reject })); void write({ id, method, params }); return result; },
+        request(method: string, params: unknown) { input.observer.recordAppServerRequest(method, params);
+          const id = ++next; const result = new Promise((resolve, reject) => pending.set(id, { resolve, reject })); void write({ id, method, params }); return result; },
         notify: (method: string, params: unknown) => write({ method, ...(params === undefined ? {} : { params }) }),
         onRequest(method: string, handler: (request: { id: number | string; params: unknown }) => Promise<unknown>) { requests.set(method, handler); return { dispose() { requests.delete(method); } }; },
         onNotification(listener: (message: { method: string; params: unknown }) => Promise<void> | void) { notifications.add(listener); return { dispose() { notifications.delete(listener); } }; },
@@ -110,7 +112,7 @@ export async function openRealCodexMcpSession(request: AgentSessionOpenRequest, 
   const runtime = createCodexAppServerRuntime({ directory: request.cwd, happierSessionId: request.sessionId,
     mcpServers: request.mcpServers, mcpToolPolicy: request.mcpToolPolicy, initialModelId: 'fixture',
     initialPermissionMode: request.configuration?.permissionIntent.value ?? 'default', processEnv: env,
-    resolveCurrentPolicy: () => ({ approvalPolicy: 'on-request', sandbox: 'danger-full-access', sandboxPolicy: { type: 'dangerFullAccess' } }),
+    resolveCurrentPolicy: () => resolveCodexTerminalPermissionPolicy(request.configuration?.permissionIntent.value ?? 'default'),
     host: { baseProcessEnv: env, logger: { debug() {}, warn() {} }, ui: input.interactions,
       createClient: options => createCodexNativeAppServerClient({ ...options, exec,
         configOverrides: [...options.configOverrides, 'model_provider="fixture"',
@@ -120,7 +122,9 @@ export async function openRealCodexMcpSession(request: AgentSessionOpenRequest, 
   const cleanup = async () => { await Promise.allSettled([...children].map(child => child.dispose())); model.closeAllConnections();
     await new Promise<void>((resolve, reject) => model.close(error => error ? reject(error) : resolve())); };
   try {
-    await startCodexAppServerRuntime(runtime);
+    await startCodexAppServerRuntime(runtime, request.kind === 'resume'
+      ? { resumeId: request.providerSessionId, strictNativeResumeIdentity: true }
+      : undefined);
     const session = createCodexNativeAppServerSessionRuntime(runtime, request.sessionId, undefined, undefined, request.mcpToolPolicy);
     session.watch(input.observer.recordRuntimeEvent);
     return { ...session, async dispose() { try { await session.dispose(); } finally { await cleanup(); } } };

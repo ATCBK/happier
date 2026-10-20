@@ -1,4 +1,10 @@
 import type { SessionFollowActionIdV1 } from '../../sessions/follow/actions.js';
+import type { QualifiedConnectedAccountPurposeV1 } from '../../connect/connectedAccountPurposeIdentity.js';
+import type { QualifiedConnectedAccountPurposeTeamResourceSelectionV1 } from '../../connect/connectedAccountPurposeBindings.js';
+import type { SessionMessageSendAuthoredInput } from '../actionSpecs.js';
+import type { ApprovalStaleReason } from '../../approvals/approvalExecutionFailure.js';
+import type { NpmRegistryProfileActionIdV1 } from '../npmRegistryProfileActionFamily.js';
+import type { PluginAccountAdministrationActionId } from '../pluginAccountAdministrationActionFamily.js';
 import type { TargetActionApprovalRequestV1 } from '../../approvals/targetActionApprovalRequestV1.js';
 import type { SessionCapabilitiesActionPortV1 } from './sessionCapabilities.js';
 import type { SessionCapabilitiesGetInputV1, SpawnCapabilitiesPreviewInputV1 } from '../specs/sessionCapabilities.js';
@@ -8,10 +14,14 @@ import type { LocalDaemonServiceActionId } from '../specs/localDaemonService.js'
 import type { MemoryWindowRequestV1 } from '../../memory/memoryWindow.js';
 import type { SessionModelMutationExpectedV1 } from '../../sessions/control/modelTransitionV1.js';
 import type { SessionGoalSetRequestV1 } from '../../sessions/work/state/sessionWorkStateRpc.js';
+import type { SessionNeedsYouRaiseInputV1 } from '../../sessions/permissions/questionV1.js';
+import type { SessionMessageExplicitReplyV1, SessionMessageDiscussionReplyReturnV1, SessionMessageReplyAccountMutationV1 } from '../../sessions/messages/sessionMessageReplyV1.js';
+import type { AutonomousExchangeControlRequestV1 } from '../../sessions/messages/autonomousExchangeV1.js';
 import type { SessionResumeRequestV1 } from '../../sessions/control/sessionResumeRequestV1.js';
 import type { AcpCatalogSnapshotV1, AcpCatalogRowMutationV1 } from '../../acp/catalog/catalogRowsV1.js';
 import type { AcpCatalogCleanupV1 } from '../../acp/catalog/catalogMutationsV1.js';
 import type { RequesterWorkAttributionV1 } from '../../machines/requesterWorkAttributionV1.js';
+import type { ActionRequestAttributionV1 } from '../actionRequestAttributionV1.js';
 import type { UsageSourceActionPort } from './usageSourceActions.js';
 import type { CapabilitiesDetectRequest, CapabilitiesInvokeRequest } from '../../capabilities/index.js';
 export type { MemorySessionSnapshotV1, MemoryAccountContextV1, MemoryInheritedContextV1, MemoryScopeContextV1, MemoryLibraryActionPortV1 } from './memoryDocumentActions.js';
@@ -29,7 +39,7 @@ import type { AccountLifecycleActionId, AccountLifecycleActionInput } from '../a
 import type { FilesystemActionId } from '../filesystemActionFamily.js';
 import type { SessionStateFieldActionWrite } from '../sessionStateFieldActions.js';
 import type { ProjectContextUpdateInputV1, ProjectContextUpdateOutputV1 } from '../../projects/projectContextV1.js';
-import type { SessionWorkerPublishInputV1 } from '../../sessions/relations/workerUpdateV1.js';
+import type { SessionUpdatePostInputV1 } from '../../sessions/relations/workerUpdateV1.js';
 import type { WorkflowAuthoringActionId } from '../workflowAuthoringActionIds.js';
 import type { ManagedMachineActionIdV1, ManagedMachineActionInputV1 } from '../../machines/managed/actionsV1.js';
 import type { MachineReferenceCensusV1 } from '../../machines/machineReferenceCensusV1.js';
@@ -67,8 +77,9 @@ import type { ProjectPlacementActionExecutorV1 } from './projectActionPlacement.
 import type { ProjectDefinitionActionId } from '../projectDefinitionActionFamily.js';
 import type { WorkBoardArtifactPortV1 } from '../../boards/workBoardArtifactV1.js';
 import type { TodoSessionLinkOutputV1 } from '../../todos/todoSessionLinkV1.js';
+import type { InternalTaskActionId, InternalTaskListOutput, InternalTaskMutationOutput } from '../internalTaskActions.js';
 import type { ArtifactAccessActionIdV1 } from '../../artifacts/artifactAccessV1.js';
-import type { ArtifactActionIdV1 } from '../../artifacts/artifactActionsV1.js';
+import type { ArtifactHostActionInvocationV1 } from '../../artifacts/artifactCollaborationActionsV1.js';
 import type { SessionRoleConfigurationV1, SessionRolesV1 } from '../../prompts/roles/sessionRolesSnapshot.js';
 import type { ExecutionRunSendRequest, ExecutionRunCancelTurnRequest } from '../../execution/runs/index.js';
 import type { ExecutionRunGetResponse } from '../../execution/runs/responseSchemas.js';
@@ -109,11 +120,11 @@ import type {
 import type { HomeDomainActionIdV1 } from '../homeDomainActionFamily.js';
 import type { WorkspaceActionId } from '../workspaceActionFamily.js';
 import type { OpenProjectInputV1, OpenProjectResultV1 } from '../../projects/openProjectV1.js';
-import type { SessionCanvasActionId } from '../sessionCanvasActionFamily.js';
 import type { SessionTerminalActionId } from '../sessionTerminalActionFamily.js';
 import type { SessionAgentTransitionRequestV1, SessionAgentTransitionSelectionV1 } from '../../sessions/agentTransition.js';
 import type { ConnectedServiceConfigurationActionIdV1 } from '../../connect/configurationActionsV1.js';
 import type { SettingsDeclarationActionIdV1 } from '../settingsDeclarationActionFamily.js';
+import type { ActionPolicyActionId } from '../actionPolicyActionFamily.js';
 import type { SettingsOwnerActionExecuteV1 } from '../settings/settingsOwnerActions.js';
 import type { VoiceConversationActionId } from '../voiceConversationActionFamily.js';
 import type { AppShellActionId } from '../appShellActionFamily.js';
@@ -133,6 +144,7 @@ import type { SearchConversationsInputV1 } from '../actionSpecs.js';
 import type {
   ApprovalExecutionOriginV1,
   ApprovalRequest,
+  ApprovalRequestV2,
   ApprovalRequestOriginV1,
 } from '../../approvals/approvalRequestV1.js';
 import type { PluginSourceCustodyV1 } from '../../plugins/runtime/sourceCustody.js';
@@ -143,10 +155,10 @@ import type { SessionBoardActionIdV1 } from '../../sessions/board/actionIds.js';
 import type { SessionBoardActionPortResultV1 } from '../../sessions/board/actions.js';
 import type { SessionReadStateActionIdV1 } from '../../sessions/readState/actionIds.js';
 import type { CurrentSessionPresentationActionInputV1 } from '../../sessions/presentation/currentSessionPresentationV1.js';
-import type { SessionDiscussionActionIdV1 } from '../../sessions/discussions/actionIds.js';
+import type { DiscussionActionIdV1 } from '../../discussions/actionIds.js';
 import type { SessionRollbackTarget } from '../../sessions/rollback.js';
 import type { SessionListQueryV1 } from '../../sessions/listing/query.js';
-import type { SessionReportsToSetActionInputV1, SessionReportsToSetResultV1 } from '../../sessions/relations/sessionReportsToV1.js';
+import type { SessionManagerSetActionInputV1, SessionManagerSetResultV1 } from '../../sessions/follow/sessionManagerV1.js';
 import type { SessionListViewV1 } from '../../sessions/awareness/action.js';
 import type { WaitActionInputV1, WaitOwnerResultV1 } from '../specs/wait.js';
 import type { WaitOwnerOptionsV1 } from './waitAction.js';
@@ -367,7 +379,7 @@ export type ScmActionExecute = (args: Readonly<{
    * second dispatcher, Session adapter, or execution-run service.
    */
   executeCanonicalAction: (
-    actionId: Extract<ActionId, 'execution.run.start' | 'execution.run.get' | 'execution.run.send' | 'session.message.send' | 'action.invoke'>,
+    actionId: Extract<ActionId, 'execution.run.start' | 'execution.run.get' | 'execution.run.send' | 'execution.run.ensure' | 'session.message.send' | 'action.invoke'>,
     input: unknown,
     options?: Readonly<{ requiredContributedActionDangerLevel?: 'safe' }>,
   ) => Promise<ActionExecuteResult>;
@@ -384,6 +396,10 @@ export type ActionPluginCaller = Readonly<{
   kind: 'plugin';
   pluginId: string;
   contributionLocalId?: string;
+  /** Original SDK descriptor, descriptive only; never authorization or durable origin data. */
+  contributionQualifiedId?: string;
+  /** Diagnostic originating surface; the immediate Action surface still owns policy. */
+  originSurface?: Exclude<keyof ActionSurfaces, 'plugin' | 'rpc'> | 'background';
   /** Exact host-stamped process-local plugin occurrence. */
   occurrenceId?: string;
   /** Durable source custody for owners that freeze replay provenance. */
@@ -441,6 +457,8 @@ export type InvokeContributedAction = (request: Readonly<{
   action: import('../../plugins/contributionIdentity.js').PluginContributionIdentityV1;
   input: unknown;
   context: ActionExecutorContext;
+  /** Opaque committed Message identity, never caller-authored disclosure text. */
+  messageActionReference?: import('../../sessions/messages/messageActionReferenceV1.js').MessageActionReferenceV1;
   approvalExecutionOrigin?: ApprovalExecutionOriginV1;
   /** Host-only source-read constraint, enforced against the leased manifest. */
   requiredDangerLevel?: 'safe';
@@ -532,6 +550,7 @@ export type SessionPermissionRemoteActionArgs =
       actionId: 'session.permission.remote.grants.list';
       input: SessionPermissionRemoteGrantsListInputV1;
       caller: ActionCaller;
+      context?: ActionExecutorContext;
       serverId?: string | null;
       signal?: AbortSignal;
     }>
@@ -539,11 +558,18 @@ export type SessionPermissionRemoteActionArgs =
       actionId: 'session.permission.remote.grants.revoke';
       input: SessionPermissionRemoteGrantRevokeInputV1;
       caller: ActionCaller;
+      context?: ActionExecutorContext;
       serverId?: string | null;
       signal?: AbortSignal;
     }>;
 
 export type ActionExecutorContext = Readonly<{
+  /** Host-only, exact-invocation observer of actual credential admission. Never parsed from input. */
+  recordOperationCredentialUse?: (use: import('../actionExecutionResult.js').ActionOperationCredentialUseV1) => void;
+  /** Host-prepared target snapshot, retained by the existing approval origin. Never caller input. */
+  sessionTargetsV1?: import('../sessionTargetV1.js').ActionResolvedSessionTargetsV1;
+  /** Host-only read admission for Coach mutations; ordinary usage.query remains progressive. Never wire input. */
+  usageQueryReadiness?: 'coach_evidence';
   /** Content-free observer installed by the host; never parsed from Action/RPC input. */
   recordActionStartDiagnostic?: (event: import('./actionStartDiagnostics.js').ActionStartDiagnosticV1) => void;
   /** Host-captured Account identity for this invocation; never Action input or RPC authority. */
@@ -558,12 +584,20 @@ export type ActionExecutorContext = Readonly<{
   requiredContributedActionDangerLevel?: 'safe';
   /** Host-only current occurrence from contributed Action transport admission. */
   expectedContributedActionOccurrenceId?: string;
+  /** Host-only observation/preconditions for the SDK's ordinary ref invocation; never Action input or authority. */
+  contributedActionExecutionOrigin?: Readonly<{
+    expectedExecutionOrigin?: import('../../machines/administration/pluginMachineExecutionOriginV1.js').PluginMachineExecutionOriginV1;
+    expectedExecutionRouting?: import('../../machines/administration/pluginMachineExecutionOriginV1.js').PluginMachineExecutionRoutingV1;
+    onExecuted(origin: import('../../machines/administration/pluginMachineExecutionOriginV1.js').PluginMachineExecutionOriginV1): void;
+  }>;
   /**
    * Host-only Session corpus admission. For autonomous callers,
    * `current_session` also bounds Actions that declare a current-Session
-   * contextual `sessionId`; it is never Action input or an Account-wide grant.
+   * contextual `sessionId`. `mounted_ui` admits the Account list for a current
+   * mounted plugin UI, without granting present-user execution authority.
+   * Never accepted from Action input.
    */
-  sessionListAccess?: 'current_session' | 'led_subtree' | 'unavailable';
+  sessionListAccess?: 'current_session' | 'led_subtree' | 'unavailable' | 'mounted_ui';
 
   /**
    * Stable cryptographic Home identity observed by the host for this exact
@@ -592,14 +626,18 @@ export type ActionExecutorContext = Readonly<{
     actionId?: string;
     accept(result: unknown): void;
   }>;
+  /** Receiving host's in-process runner port. Never serialized or accepted from Action input. */
+  runActionOperation?: ActionExecutorDeps['runActionOperation'];
   /** Existing operation-owner sinks, strictly in-process and never Action input. */
   operationProgress?: Readonly<{
-    update(progress: Readonly<{ label?: string; phase?: string; queueAhead?: number; current?: number; total?: number }>): void;
+    update(progress: Readonly<{ label?: string; phase?: string; queueAhead?: number; current?: number; total?: number;
+      approval?: ActionApprovalRequestCreatedResult }>): void;
   }>;
   operationOwnerUpdate?: Readonly<{
     update(update: Readonly<{
       state?: 'running';
-      progress?: Readonly<{ label?: string; phase?: string; queueAhead?: number; current?: number; total?: number }>;
+      progress?: Readonly<{ label?: string; phase?: string; queueAhead?: number; current?: number; total?: number;
+        approval?: ActionApprovalRequestCreatedResult }>;
       domainRef?: ActionOperationDomainRefV1;
       /** Null clears a previous unconfirmed outcome after actual owner evidence. */
       observation?: ActionOperationObservationV1 | null;
@@ -612,9 +650,18 @@ export type ActionExecutorContext = Readonly<{
   onWaitSnapshot?: (snapshot: unknown) => void | Promise<void>;
   /** Host-only issuance witness for callers retaining uncertain mutation custody. */
   onTransportIssued?: () => void;
+  /** In-process observation for the caller's existing retry intent; never serialized or execution authority. */
+  onSessionTargetsResolved?: (resolution: Readonly<{
+    actionId: ActionId;
+    input: unknown;
+    targets: import('../sessionTargetV1.js').ActionResolvedSessionTargetsV1;
+  }>) => void;
 
   /** Host-stamped caller identity. Never accepted from plugin action input. */
   actionCaller?: ActionCaller;
+
+  /** Host-private fresh admitted Session witness for question raise/answer only. Never accepted from plugin input. */
+  readSessionActionRpcOrigin?: () => import('../../rpc/socket.js').SessionActionRpcOriginV1 | null;
 
   /**
    * Host-stamped admission authority. Public ingress must set this explicitly;
@@ -648,10 +695,19 @@ export type ActionExecutorContext = Readonly<{
   /** Process-local Machine signer; capture signs only the canonical stored approval input. */
   signExternalActionApprovalInput?: (input: Readonly<{
     actionId: ActionId; input: unknown; target: ExternalActionTargetV1; authorization: ExternalActionExecutionAuthorizationV1;
+    requesterConfirmation?: import('../../approvals/approvalRequestV1.js').ApprovalRequesterConfirmationV1;
+    sessionTargetsV1?: import('../sessionTargetV1.js').ActionResolvedSessionTargetsV1;
   }>) => string;
 
   /** Host-stamped runtime Account principal for durable approval origin capture. */
   runtimeAccountId?: string;
+  /** Server-minted present person, distinct from the Bot's execution Account. Never Action input. */
+  requesterApprovalDecision?: Readonly<{
+    sessionId: string;
+    actor: import('../../sessions/permissions/v1.js').SessionPermissionAccountUserDecisionActorV1;
+    /** Reuses the authenticated Session admission owner before decision/claim/effect. */
+    isCurrent: () => Promise<boolean>;
+  }>;
   /** Separately verified Session authority from the canonical RPC ingress; never Action input. */
   rpcSessionAuthorization?: Readonly<{ kind: 'session.write'; sessionId: string }>;
   /** Exact current runtime occurrence, when the admitted Action is Run-bound. */
@@ -713,8 +769,12 @@ export type ActionExecutorContext = Readonly<{
   executionRunWorkflowObservationSink?: unknown;
   /** Host-private admitted Workflow identity, not caller Action input. */
   executionRunWorkflowRunId?: string;
+  /** Host-private accepted scope paired with the current Workflow Action invocation. */
+  executionRunWorkflowScope?: NonNullable<ReviewCommentPrincipalHeaderV1['workflowScope']>;
   /** Accepted host-private work observation; never Action input or execution authority. */
   requesterWorkAttributionV1?: RequesterWorkAttributionV1;
+  /** Host-stamped exact input/turn cause, distinct from process ownership and never authority. */
+  actionRequestAttributionV1?: ActionRequestAttributionV1;
 
   /**
    * Optional explicit server routing hint. When omitted, deps may resolve serverId
@@ -778,7 +838,18 @@ export type ActionExecutorContext = Readonly<{
     actionId: ActionId;
     requestId: string;
     inputDigest: string;
+    /** Verified proposal consumer; may retain stricter disclosure policy than the deciding UI. */
+    requestSurface?: keyof ActionSurfaces;
+    decidingAccountId?: string;
+    /** Time of the canonical witnessed decision, not replay execution time. */
+    decidedAtMs?: number;
   }>;
+
+  /** Host-only reference to this executing approved Session Discussion proposal. Never Action input. */
+  approvedActionReplay?: Readonly<{ artifactId: string }>;
+
+  /** Host-bound original Discussion obligation, including failures before any turn was accepted. */
+  discussionReplyReturn?: SessionMessageDiscussionReplyReturnV1;
 
   /**
    * Exact target-path evidence recovered only from an approved
@@ -845,6 +916,9 @@ export type RuntimeActionExecuteArgsFor<TActionId extends RuntimeActionIdV1 = Ru
       | 'machines.pools.get'
       | 'projects.service.placement.set'
       | 'projects.worker.status'
+      | 'projects.inspect'
+      | 'localServices.launcher.snapshot'
+      | 'localServices.actions.stopManaged'
       | 'localServices.launcher.start', input: unknown) => Promise<ActionExecuteResult>;
   }>;
 
@@ -918,6 +992,8 @@ export type ApprovalQueueListResultV1 = Readonly<{
 
 type ExecutionRunActionOptions = Readonly<{
   serverId?: string | null;
+  surface?: ActionExecutorContext['surface'];
+  callerInputConstraints?: ActionExecutorContext['callerInputConstraints'];
   /** Host-only issuance witness; never serialized into the Run request. */
   onTransportIssued?: () => void;
   /** Immutable caller facts already admitted by the outer Action executor. */
@@ -961,6 +1037,8 @@ type ExecutionRunActionOptions = Readonly<{
   workflowObservationSink?: unknown;
   /** Real admitted Workflow identity, host-only even without an observation sink. */
   workflowRunId?: string;
+  /** Accepted invocation Session authority, host-private alongside the Run identity. */
+  workflowScope?: NonNullable<ReviewCommentPrincipalHeaderV1['workflowScope']>;
   /** In-process accepted attribution; never serialized into a Run request. */
   requesterWorkAttributionV1?: RequesterWorkAttributionV1;
   /** Absolute host-admitted delegation depth, never public Run input. */
@@ -1070,7 +1148,19 @@ export type ActionExecutorDeps = Readonly<{
   /** Answering mounted area owner; a successful selection changes only its device-local presentation. */
   widgetAreaLayoutSelect?: (surface: WidgetSurfaceRefV1, context: ActionExecutorContext, signal?: AbortSignal) => Promise<ActionExecuteResult>;
   widgetInputs?: WidgetActionInputResolverV1;
-  widgetCatalog?: Readonly<{ list(surface: WidgetSurfaceRefV1, context: ActionExecutorContext, signal?: AbortSignal, boundSession?: Readonly<{ serverId: string; sessionId: string }>): Promise<readonly WidgetCatalogSourceEntryV1[] | ActionExecuteFailure> }>;
+  widgetCatalog?: Readonly<{
+    /** Admitted page/area display metadata. Never participates in target selection or access. */
+    describeSurface?(surface: WidgetSurfaceRefV1, context: ActionExecutorContext, signal?: AbortSignal): Promise<Readonly<{ pageName?: string; areaName?: string }> | null>;
+    list(surface: WidgetSurfaceRefV1, context: ActionExecutorContext, signal?: AbortSignal, boundSession?: Readonly<{ serverId: string; sessionId: string }>): Promise<readonly WidgetCatalogSourceEntryV1[] | ActionExecuteFailure>;
+    /** Installed metadata needs its admitted runtime, not the surface's saved content or instance counts. */
+    readInstalledInputFields?(args: Readonly<{
+      surface: WidgetSurfaceRefV1;
+      definition: Extract<WidgetCatalogSourceEntryV1['definition'], { kind: 'installed' }>;
+      context: ActionExecutorContext;
+      signal?: AbortSignal;
+      boundSession?: Readonly<{ serverId: string; sessionId: string }>;
+    }>): Promise<Readonly<WidgetCatalogSourceEntryV1['fields']> | ActionExecuteFailure | null>;
+  }>;
   /** Host-captured viewer Account inventory for an already-admitted widget field. */
   widgetConnectedAccountOptions?: (args: Readonly<{ consumer: Extract<import('../../inputs/inputOptionsConsumer.js').InputOptionsConsumerV1, { kind: 'widget' }>;
     fieldPath: string; context: ActionExecutorContext }>) => Promise<readonly import('../../inputs/inputFields.js').InputOption[] | ActionExecuteFailure>;
@@ -1124,6 +1214,14 @@ export type ActionExecutorDeps = Readonly<{
     caller: NonNullable<ActionExecutorContext['actionCaller']>;
     result: ActionExecuteResult;
   }>) => Promise<void> | void;
+
+  /** Host-private execution custody after admission/approval, never a plugin hook or wire field. */
+  runActionOperation?: (request: Readonly<{
+    actionId: ActionId;
+    input: unknown;
+    context: ActionExecutorContext;
+    execute: (context: ActionExecutorContext) => Promise<ActionExecuteResult>;
+  }>) => Promise<ActionExecuteResult>;
 
   // Execution runs share one scope owner: an exact Session id or detached (`null`).
   /**
@@ -1297,7 +1395,6 @@ export type ActionExecutorDeps = Readonly<{
   projectDefinitionAction?: (args: Readonly<{ actionId: ProjectDefinitionActionId; input: unknown; context: ActionExecutorContext }>) => Promise<unknown>;
   /** Authenticated Machine materialization; result publication belongs to the Project row owner. */
   projectsOpen?: (input: OpenProjectInputV1, context: ActionExecutorContext) => Promise<OpenProjectResultV1 | ActionApprovalRequestCreatedResult | ActionExecuteFailure>;
-  sessionCanvasAction?: (args: Readonly<{ actionId: SessionCanvasActionId; input: unknown; signal?: AbortSignal }>) => Promise<unknown>;
   workflowAuthoringAction?: (args: Readonly<{ actionId: WorkflowAuthoringActionId; input: unknown; context: ActionExecutorContext; signal?: AbortSignal }>) => Promise<unknown>;
   sessionOrganizationMove?: (args: Readonly<{ input: unknown; signal?: AbortSignal }>) => Promise<unknown>;
   /** Authenticated Account HTTP mutation; rail admission uses current Session metadata in the host. */
@@ -1309,16 +1406,25 @@ export type ActionExecutorDeps = Readonly<{
     signal?: AbortSignal;
   }>) => Promise<unknown>;
   composerIngress?: (args: Readonly<{ actionId: 'composer.transaction.apply' | 'composer.attachments.pick' | 'repository.upload.pick'; input: unknown; context: ActionExecutorContext; signal?: AbortSignal }>) => Promise<unknown>;
-  listReorder?: (args: Readonly<{ actionId: 'session.pending.reorder' | 'todos.reorder'; input: unknown; signal?: AbortSignal }>) => Promise<unknown>;
+  listReorder?: (args: Readonly<{ actionId: 'session.pending.reorder' | 'tasks.internal.reorder'; input: unknown; context: ActionExecutorContext; signal?: AbortSignal }>) => Promise<unknown>;
+  internalTaskAction?: (args: Readonly<{ actionId: InternalTaskActionId; input: unknown; context: ActionExecutorContext; signal?: AbortSignal }>) => Promise<InternalTaskListOutput | InternalTaskMutationOutput>;
   todoSessionLink?: (args: Readonly<{ input: unknown; context: ActionExecutorContext; signal?: AbortSignal }>) => Promise<TodoSessionLinkOutputV1>;
   sessionTerminalAction?: (args: Readonly<{ actionId: SessionTerminalActionId; input: unknown; context: ActionExecutorContext; signal?: AbortSignal }>) => Promise<unknown>;
   /** Canonical host resolver for non-qualified Session ids/titles. */
   resolveSessionReference?: (args: Readonly<{
     context: ActionExecutorContext;
+    actionId?: ActionId;
     sessionId?: string;
     sessionTitle?: string;
     signal?: AbortSignal;
   }>) => Promise<ActionSessionReferenceResolution>;
+  /** Thin authorized read of the canonical manager relation; absence and unavailable stay distinct. */
+  readSessionManager?: (args: Readonly<{
+    address: ActionSessionAddress;
+    context: ActionExecutorContext;
+    actionId: ActionId;
+    signal?: AbortSignal;
+  }>) => Promise<Readonly<{ kind: 'manager'; address: ActionSessionAddress | null }> | Readonly<{ kind: 'unavailable' }>>;
   sessionOpen: (args: ActionSessionAddress & Readonly<{
     tabId?: string;
     destination?: PublicActionInputById['session.open']['destination'];
@@ -1383,6 +1489,9 @@ export type ActionExecutorDeps = Readonly<{
     destinationIntent?: 'use_existing' | 'materialize_from_source_workspace';
     serverId?: string | null;
     operationId: string;
+    effectActionId: 'session.handoff' | 'workspace.sync.relationship.create';
+    /** Admitted root custody for the exact Machine-targeted preflight. */
+    context: ActionExecutorContext;
     signal?: AbortSignal;
   }>) => Promise<
     | Readonly<{ type: 'not_required' }>
@@ -1408,13 +1517,16 @@ export type ActionExecutorDeps = Readonly<{
   workspaceSyncRelationshipCreate?: (args: Readonly<{
     input: WorkspaceSyncRelationshipCreateActionInputV1;
     operationId: string;
+    /** Stable Home identity for Account-scoped WorkspaceRef resolution. */
+    serverIdentityId?: string | null;
+    /** Device-local profile/routing key for transport selection. */
     serverId?: string | null;
     targetReplacementApproval?: HandoffTargetReplacementApprovalV1 | null;
     targetReplacementApprovalReceiptId?: string | null;
+    /** Admitted root custody for the source controller Machine effect. */
+    context: ActionExecutorContext;
     signal?: AbortSignal;
   }>) => Promise<WorkspaceSyncRelationshipCreateResultV1 | unknown>;
-  workspaceSyncRelationshipsList?: (args: Readonly<{
-    input: WorkspaceSyncRelationshipsListActionInputV1;
   workspaceSyncRelationshipTerminate?: (args: Readonly<{
     input: WorkspaceSyncRelationshipTerminateActionInputV1;
     serverId?: string | null;
@@ -1429,6 +1541,8 @@ export type ActionExecutorDeps = Readonly<{
   workspaceSyncRelationshipFlush?: (args: Readonly<{
     input: WorkspaceSyncRelationshipFlushActionInputV1; serverId?: string | null; signal?: AbortSignal;
   }>) => Promise<WorkspaceSyncRelationshipFlushActionOutputV1 | unknown>;
+  workspaceSyncRelationshipsList?: (args: Readonly<{
+    input: WorkspaceSyncRelationshipsListActionInputV1;
     signal?: AbortSignal;
   }>) => Promise<WorkspaceSyncRelationshipsListActionOutputV1>;
   workspaceSyncConflictsList?: (args: Readonly<{
@@ -1440,12 +1554,14 @@ export type ActionExecutorDeps = Readonly<{
     signal?: AbortSignal;
   }>) => Promise<WorkspaceSyncConflictInspectActionOutputV1>;
   sessionSpawnNew: (args: SessionSpawnNewInputV2 & SessionCreateOriginFieldsV1 & Readonly<{
+    /** Exact admitted public intent for requester transport, before host launch expansion; never a wire field. */
+    admittedInput?: SessionSpawnNewInputV2;
     /** Host-only invocation binding for post-commit private material preparation; never sent in the spawn payload. */
     context?: ActionExecutorContext;
     /** Complete host-resolved spawn snapshot; memory remains subject to target owner proof. */
     initialSessionRolesV1?: SessionRolesV1;
     creationKey: SessionSpawnNewInputV2['creationKey'];
-    creationAuthorization?: Readonly<{ token: string }>;
+    creationAuthorization?: import('../../sessions/creation/sessionCreationAuthorizationV1.js').SessionCreationAuthorizationV1;
     callerInputConstraints?: CallerInputConstraintsV1;
     sessionCreationTag: SessionCreationTagV1;
     /**
@@ -1469,8 +1585,11 @@ export type ActionExecutorDeps = Readonly<{
    * Host-owned admission for an Agent-originated child Session request. It
    * runs before approval creation and compares explicit V2 choices with the
    * live parent Session; approval replay never becomes a policy bypass.
+   * Session-scope readers need the same validated caller/baseline but consume
+   * no launch Role or Agent selections. Omission retains full start admission.
    */
-  resolveAgentStartContext?: (context: ActionExecutorContext) => Promise<AgentStartContextV1 | null>;
+  resolveAgentStartContext?: (context: ActionExecutorContext,
+    options?: Readonly<{ purpose: 'session_scope' }>) => Promise<AgentStartContextV1 | null>;
   /** Live Session role owner; checked again after deferred approval/prepared invocation. */
   getCurrentWorkspaceWrites?: () => 'allow' | 'deny' | undefined;
   /**
@@ -1480,6 +1599,7 @@ export type ActionExecutorDeps = Readonly<{
    */
   sessionSpawnNewDirectoryApprovalPreflight?: (args: Readonly<{
     input: SessionSpawnNewInputV2;
+    context?: ActionExecutorContext;
     signal?: AbortSignal;
   }>) => Promise<
     | Readonly<{ type: 'not_required' }>
@@ -1494,13 +1614,13 @@ export type ActionExecutorDeps = Readonly<{
   >;
   /**
    * Host transport for replay that must run on an exact daemon. The canonical
-   * executor calls this only after the present-user decision is durably
-   * recorded; the receiving host may consume that approved Artifact but cannot
-   * create or alter the decision.
+   * executor calls this after a local decision, or with `decision` to route a
+   * requester decision to the original owner before any local Artifact write.
    */
   approvalRequestApprovedReplay?: (args: Readonly<{
     artifactId: string;
-    request: ApprovalRequest;
+    request: ApprovalRequestV2 | TargetActionApprovalRequestV1;
+    decision?: 'approve' | 'reject' | 'cancel';
     /** The current deciding invocation, not the immutable native effect's authority. */
     context: ActionExecutorContext;
     requestId?: string;
@@ -1513,8 +1633,9 @@ export type ActionExecutorDeps = Readonly<{
    */
   targetActionApprovalReplay?: (args: Readonly<{
     artifactId: string;
-    decision: 'approve' | 'reject';
+    decision: 'approve' | 'reject' | 'cancel';
     callerGrant?: ApiTokenGrantV1;
+    context?: ActionExecutorContext;
     signal?: AbortSignal;
   }>) => Promise<ActionExecuteResult | null>;
   // Local inventory + discovery (voice)
@@ -1536,6 +1657,11 @@ export type ActionExecutorDeps = Readonly<{
    * different words in front of a reader.
    */
   projectsList?: (args: Readonly<{ serverId?: string; machineId?: string; limit?: number; includeHidden?: boolean }>, context?: ActionExecutorContext) => Promise<unknown>;
+  /**
+   * The Account's opened checkouts as complete refs, for the typed Checkout input's choices. It reads the same
+   * private Project rows and admission as `projectsList`, and answers a failure envelope when they are not admitted.
+   */
+  projectWorkspaceRefs?: (args: Readonly<{ serverId?: string }>, context?: ActionExecutorContext) => Promise<unknown>;
   projectsContextUpdate?: (args: ProjectContextUpdateInputV1, context?: ActionExecutorContext) => Promise<ProjectContextUpdateOutputV1>;
   projectsVisibilitySet?: (args: import('../../projects/projectVisibilityV1.js').ProjectVisibilitySetInputV1, context?: ActionExecutorContext) => Promise<import('../../projects/projectVisibilityV1.js').ProjectVisibilitySetOutputV1>;
   projectsWorkspaceUpdate?: (args: import('../../projects/projectWorkspaceActionsV1.js').ProjectWorkspaceUpdateInputV1, context?: ActionExecutorContext) => Promise<import('../../projects/projectWorkspaceActionsV1.js').ProjectWorkspaceUpdateOutputV1>;
@@ -1617,7 +1743,7 @@ export type ActionExecutorDeps = Readonly<{
     directory?: string;
     selection?: unknown;
     limit?: number;
-  }>) => Promise<unknown>;
+  }>, context?: ActionExecutorContext) => Promise<unknown>;
   spawnCapabilitiesPreview?: (args: SpawnCapabilitiesPreviewInputV1, context: ActionExecutorContext) => Promise<unknown>;
   sessionCapabilitiesGet?: (args: SessionCapabilitiesGetInputV1, context: ActionExecutorContext) => Promise<unknown>;
   sessionCapabilities?: SessionCapabilitiesActionPortV1;
@@ -1636,6 +1762,8 @@ export type ActionExecutorDeps = Readonly<{
   }>) => Promise<unknown>;
   sessionSendMessage: (args: Readonly<{
     context: ActionExecutorContext;
+    /** Validated author intent retained for same-Action transport relays. */
+    authoredInput?: SessionMessageSendAuthoredInput;
     callerInputConstraints?: CallerInputConstraintsV1;
     sessionId: string;
     message: string;
@@ -1659,6 +1787,10 @@ export type ActionExecutorDeps = Readonly<{
     permissionModeOverride?: string;
     modelOverride?: string | null;
     providerConnectionId?: ProviderConnectionId | null;
+    reply?: 'none' | 'wait' | 'return';
+    /** Exact human-selected return destination; the input owner attests the requester. */
+    returnToSessionId?: string;
+    /** Released caller ingress; new producers use reply. */
     wait?: boolean;
     timeoutSeconds?: number;
     serverId?: string | null;
@@ -1667,11 +1799,37 @@ export type ActionExecutorDeps = Readonly<{
     sessionInputSource?: Readonly<{
       sourceSessionId: string;
       sourceTurnId: string;
+      sourceInputId?: string;
       via: 'action' | 'mcp';
       causalPermissionAuthority: SessionInputCausalPermissionAuthorityV1;
     }>;
     signal?: AbortSignal;
   }>) => Promise<unknown>;
+  sessionMessageReply?: (args: Readonly<{
+    context: ActionExecutorContext;
+    sessionId: string;
+    requestLocalId: string;
+    serverId?: string | null;
+    signal?: AbortSignal;
+  } & (
+    | { reply: SessionMessageExplicitReplyV1; reviewDecision?: never }
+    | { reviewDecision: Extract<SessionMessageReplyAccountMutationV1, { kind: 'discussion_review' }>; reply?: never }
+  )>) => Promise<unknown>;
+  sessionExchangeControl?: (args: Readonly<{
+    context: ActionExecutorContext;
+    sessionId: string;
+    originInputLocalId: string;
+    request: AutonomousExchangeControlRequestV1;
+    serverId?: string | null;
+    signal?: AbortSignal;
+  }>) => Promise<unknown>;
+  sessionExchangePrepare?: (args: Readonly<{
+    context: ActionExecutorContext;
+    sessionId: string;
+    originInputLocalId: string;
+    serverId?: string | null;
+    signal?: AbortSignal;
+  }>) => Promise<string | null>;
   sessionApprovalReviewerSet?: (args: Readonly<{ context: ActionExecutorContext; sessionId: string; enabled: boolean; serverId?: string | null }>) => Promise<unknown>;
   /**
    * `session.attention.set` host port (ORC R-10). It writes the existing attention-standing route
@@ -1685,7 +1843,8 @@ export type ActionExecutorDeps = Readonly<{
     signal?: AbortSignal;
   }>) => Promise<unknown>;
   sessionStateFieldSet?: (args: SessionStateFieldActionWrite) => Promise<unknown>;
-  sessionStop?: (args: Readonly<{ sessionId: string; serverId?: string | null; signal?: AbortSignal }>) => Promise<unknown>;
+  sessionStop?: (args: Readonly<{ sessionId: string; serverId?: string | null; context?: ActionExecutorContext; signal?: AbortSignal }>) => Promise<unknown>;
+  sessionRuntimeRefresh?: (args: Readonly<{ sessionId: string; machineId: string; serverId?: string; context: ActionExecutorContext; signal?: AbortSignal }>) => Promise<unknown>;
   sessionTurnCancel?: (args: Readonly<{ sessionId: string; serverId?: string | null; context: ActionExecutorContext; signal?: AbortSignal }>) => Promise<unknown>;
   sessionTerminalComposerClear?: (args: Readonly<{
     sessionId: string;
@@ -1700,6 +1859,18 @@ export type ActionExecutorDeps = Readonly<{
   }>) => Promise<unknown>;
   sessionPendingWithdraw?: (args: Readonly<{
     sessionId: string; localId: string; serverId?: string; targetExecutionRunId?: string;
+    context: ActionExecutorContext;
+  }>) => Promise<unknown>;
+  sessionPendingActionSet?: (args: Readonly<import('../../sessions/pending/pendingRequestedActionV1.js').SessionPendingActionSetInputV1 & {
+    context: ActionExecutorContext;
+  }>) => Promise<unknown>;
+  sessionPendingMarkHandled?: (args: Readonly<import('../../sessions/control/pendingDeliveryRecoveryV1.js').SessionPendingMarkHandledInputV1 & {
+    context: ActionExecutorContext;
+  }>) => Promise<unknown>;
+  sessionPendingDismiss?: (args: Readonly<import('../../sessions/control/pendingDeliveryRecoveryV1.js').SessionPendingDeliveryRecoveryInputV1 & {
+    context: ActionExecutorContext;
+  }>) => Promise<unknown>;
+  sessionPendingSendAsNew?: (args: Readonly<import('../../sessions/control/pendingDeliveryRecoveryV1.js').SessionPendingDeliveryRecoveryInputV1 & {
     context: ActionExecutorContext;
   }>) => Promise<unknown>;
   sessionPendingResetStartSet?: (args: Readonly<import('../../sessions/pending/pendingRequestedActionV1.js').PendingResetStartSetInputV1 & {
@@ -1729,7 +1900,7 @@ export type ActionExecutorDeps = Readonly<{
     teamVisibilityGrantConsent?: Readonly<{ teamId: string }>;
     serverId?: string | null;
   }>) => Promise<unknown>;
-  sessionArchiveSet?: (args: Readonly<{ sessionId: string; archived: boolean; serverId?: string | null }>) => Promise<unknown>;
+  sessionArchiveSet?: (args: Readonly<{ sessionId: string; archived: boolean; context?: ActionExecutorContext; serverId?: string | null }>) => Promise<unknown>;
   /**
    * Durable Session-to-Session Follow authoring. The destination is always
    * explicit: Follow is a relation between two Sessions, so neither endpoint is
@@ -1739,6 +1910,20 @@ export type ActionExecutorDeps = Readonly<{
     context: ActionExecutorContext;
     actionId: SessionFollowActionIdV1;
     input: Readonly<Record<string, unknown>>;
+    serverId?: string | null;
+    signal?: AbortSignal;
+  }>) => Promise<unknown>;
+  /** Complete own-Account rule facts; selector matching remains at the shared preview owner. */
+  readSessionFollowRules?: (args: Readonly<{
+    context: ActionExecutorContext;
+    serverId: string;
+    signal?: AbortSignal;
+  }>) => Promise<Readonly<{ kind: 'complete'; rules: readonly import('../../sessions/follow/actions.js').OpenedSessionFollowRuleV1[] }>
+    | Readonly<{ kind: 'unavailable' }>>;
+  /** Authorized fact-bearing corpus adapter at the existing Session listing owner. */
+  sessionFollowPreview?: (args: Readonly<{
+    context: ActionExecutorContext;
+    input: import('../../sessions/follow/actions.js').FollowPreviewActionInputV1;
     serverId?: string | null;
     signal?: AbortSignal;
   }>) => Promise<unknown>;
@@ -1763,7 +1948,7 @@ export type ActionExecutorDeps = Readonly<{
     serverId?: string | null;
     signal?: AbortSignal;
   }>) => Promise<unknown>;
-  sessionStatusGet?: (args: Readonly<{ sessionId: string; live?: boolean; serverId?: string | null }>) => Promise<unknown>;
+  sessionStatusGet?: (args: Readonly<{ sessionId: string; live?: boolean; readiness?: boolean; operation?: 'conversation' | 'credential'; credentialPurpose?: QualifiedConnectedAccountPurposeV1; credentialTeamSelection?: QualifiedConnectedAccountPurposeTeamResourceSelectionV1; serverId?: string | null; context?: ActionExecutorContext; signal?: AbortSignal }>) => Promise<unknown>;
   sessionHistoryGet?: (args: Readonly<{
     sessionId: string;
     limit?: number;
@@ -1810,6 +1995,10 @@ export type ActionExecutorDeps = Readonly<{
     maxTextChars?: number;
     maxPayloadChars?: number;
     serverId?: string | null;
+  }>, invocation: Readonly<{
+    actionId: 'session.history.get' | 'session.events.get';
+    input: unknown;
+    context: ActionExecutorContext;
   }>) => Promise<unknown>;
   sessionWaitIdle?: (args: Readonly<{ sessionId: string; timeoutSeconds?: number; serverId?: string | null; signal?: AbortSignal }>) => Promise<unknown>;
   sessionAwarenessWait?: (args: Readonly<{
@@ -1885,10 +2074,18 @@ export type ActionExecutorDeps = Readonly<{
     signal?: AbortSignal;
   }>) => Promise<unknown>;
   sessionPermissionRemoteAction?: (args: SessionPermissionRemoteActionArgs) => Promise<unknown>;
+  sessionNeedsYouRaise?: (args: Readonly<{
+    sessionId: string;
+    input: SessionNeedsYouRaiseInputV1;
+    context: ActionExecutorContext;
+    serverId?: string | null;
+    signal?: AbortSignal;
+  }>) => Promise<unknown>;
   sessionUserActionAnswer?: (args: Readonly<{
     sessionId: string;
     context?: ActionExecutorContext;
     requestId?: string | null;
+    disposition?: 'pass_up';
     answers: readonly Readonly<{ question: string; values: readonly string[] }>[];
     decision?: 'approve' | 'reject' | 'request_changes';
     reason?: string;
@@ -1899,6 +2096,13 @@ export type ActionExecutorDeps = Readonly<{
     signal?: AbortSignal;
   }>) => Promise<unknown>;
   sessionModeSet: (args: Readonly<{ sessionId: string; modeId: string }>) => Promise<unknown>;
+  sessionControlSwitch?: (args: Readonly<{
+    sessionId: string;
+    to: 'remote' | 'local';
+    serverId?: string | null;
+    context: ActionExecutorContext;
+    signal?: AbortSignal;
+  }>) => Promise<unknown>;
   sessionConfigOptionSet?: (args: Readonly<{ sessionId: string; configId: string; valueId: string }>) => Promise<unknown>;
   sessionConnectedServicesAuthSet?: (args: SessionConnectedServiceAuthSwitchRpcParams & Readonly<{ machineId: string; serverId?: string | null }>) => Promise<unknown>;
   sessionModesList: (args: Readonly<{ sessionId: string }>) => Promise<unknown>;
@@ -1932,12 +2136,12 @@ export type ActionExecutorDeps = Readonly<{
     serverId?: string | null;
     signal?: AbortSignal;
   }>) => Promise<unknown>;
-  sessionReportsToSet?: (args: SessionReportsToSetActionInputV1 & Readonly<{
+  sessionManagerSet?: (args: SessionManagerSetActionInputV1 & Readonly<{
     context: ActionExecutorContext;
     serverId?: string | null;
     signal?: AbortSignal;
-  }>) => Promise<SessionReportsToSetResultV1 | ActionExecuteFailure>;
-  sessionWorkerPublish?: (args: SessionWorkerPublishInputV1 & Readonly<{ context: ActionExecutorContext }>) => Promise<unknown>;
+  }>) => Promise<SessionManagerSetResultV1 | ActionExecuteFailure>;
+  sessionUpdatePost?: (args: SessionUpdatePostInputV1 & Readonly<{ context: ActionExecutorContext }>) => Promise<unknown>;
   sessionActivityGet: (args: Readonly<{ context: ActionExecutorContext; sessionId: string; view?: SessionListViewV1; windowSeconds?: number; serverId?: string; signal?: AbortSignal }>) => Promise<unknown>;
   sessionRecentMessagesGet: (args: Readonly<{
     sessionId: string;
@@ -1986,6 +2190,7 @@ export type ActionExecutorDeps = Readonly<{
     origin: ApprovalExecutionOriginV1;
     request: ApprovalRequest;
     signal?: AbortSignal;
+    reportStale?: (reason: ApprovalStaleReason) => void;
   }>) => Promise<boolean>;
   /** Reacquires host-private requester ports for a verified exact-daemon replay. Never persisted. */
   prepareApprovalExecutionAuthorization?: (args: Readonly<{
@@ -1995,11 +2200,18 @@ export type ActionExecutorDeps = Readonly<{
     authorization: ExternalActionExecutionAuthorizationV1;
     dispose?: () => Promise<void>;
   }> | null>;
+  /** Admitted deciding-human custody for a live, exact token approval; never serialized. */
+  prepareApprovedApiTokenExecution?: (args: Readonly<{
+    artifactId: string;
+    request: ApprovalRequest;
+  }>) => Promise<import('../blockingApprovalCoordinator.js').BlockingApprovalTokenExecution | null>;
   approvalsResolveBlockingDecision?: (args: Readonly<{
     artifactId: string;
     decision: 'approve' | 'reject';
     /** Host-stamped live ingress authority; never persisted with the request. */
     decisionAuthority: ActionRequiredAuthority;
+    requesterApprovalDecision?: ActionExecutorContext['requesterApprovalDecision'];
+    tokenExecution?: import('../blockingApprovalCoordinator.js').BlockingApprovalTokenExecution;
     request: ApprovalRequest;
     serverId?: string | null;
   }>) => Promise<{ resolved: boolean }>;
@@ -2016,7 +2228,9 @@ export type ActionExecutorDeps = Readonly<{
     serverId?: string | null;
     signal?: AbortSignal;
   }>) => Promise<
-    | { decision: 'approve'; request: ApprovalRequest; decisionAuthority?: ActionRequiredAuthority }
+    | { decision: 'approve'; request: ApprovalRequest; decisionAuthority?: ActionRequiredAuthority;
+        requesterApprovalDecision?: ActionExecutorContext['requesterApprovalDecision'];
+        tokenExecution?: import('../blockingApprovalCoordinator.js').BlockingApprovalTokenExecution }
     | { decision: 'reject'; request: ApprovalRequest; reason?: string }
     | { decision: 'canceled'; request: ApprovalRequest; reason?: string }
   >;
@@ -2127,6 +2341,18 @@ export type ActionExecutorDeps = Readonly<{
   }>, context: ActionExecutorContext) => Promise<unknown>;
   pluginsDevLoopAction?: (args: Readonly<{
     actionId: PluginDevLoopActionIdV1;
+    input: unknown;
+    context: ActionExecutorContext;
+  }>) => Promise<unknown>;
+
+  npmRegistryProfileAction?: (args: Readonly<{
+    actionId: NpmRegistryProfileActionIdV1;
+    input: unknown;
+    context: ActionExecutorContext;
+  }>) => Promise<unknown>;
+
+  pluginAccountAdministrationAction?: (args: Readonly<{
+    actionId: PluginAccountAdministrationActionId;
     input: unknown;
     context: ActionExecutorContext;
   }>) => Promise<unknown>;
@@ -2327,7 +2553,7 @@ export type ActionExecutorDeps = Readonly<{
 
   /** Declared preferences through the captured Account owner or the answering device's local owner. */
   settingsDeclarationAction?: (args: Readonly<{
-    actionId: SettingsDeclarationActionIdV1;
+    actionId: SettingsDeclarationActionIdV1 | ActionPolicyActionId;
     input: unknown;
     context: ActionExecutorContext;
     /** Nested domain Actions re-enter this executor's ordinary grant and consent admission. */
@@ -2427,19 +2653,19 @@ export type ActionExecutorDeps = Readonly<{
   }>) => Promise<unknown>;
 
   /**
-   * The one Session human-discussion family port. Each executor host implements
-   * it once over its own incumbent authenticated transport and Session
+   * The one Home Discussion family port. Each executor host implements
+   * it once over its own incumbent authenticated transport and resource
    * encryption context: the UI over its exact-Home repository, the CLI/daemon
    * over its authenticated Account HTTP adapter. The host seals and opens
-   * discussion content through the existing Session cipher, so the Action layer
+   * discussion content through the Discussion's own key, so the Action layer
    * carries only strict semantic plaintext.
    *
    * It is absent until that host's discussion producer exists, and the executor
    * then returns the canonical unsupported result rather than running without a
    * proven authority and policy path.
    */
-  sessionDiscussionAction?: (args: Readonly<{
-    actionId: SessionDiscussionActionIdV1;
+  discussionAction?: (args: Readonly<{
+    actionId: DiscussionActionIdV1;
     input: unknown;
     context: ActionExecutorContext;
     signal?: AbortSignal;
@@ -2580,9 +2806,7 @@ export type ActionExecutorDeps = Readonly<{
   }>) => Promise<unknown>;
 
   /** Ordinary Account content; authenticated storage and workspace copying remain host-owned. */
-  artifactAction?: (args: Readonly<{
-    actionId: ArtifactActionIdV1;
-    input: unknown;
+  artifactAction?: (args: ArtifactHostActionInvocationV1 & Readonly<{
     context: ActionExecutorContext;
     signal?: AbortSignal;
   }>) => Promise<unknown>;
@@ -2606,8 +2830,9 @@ export type ActionExecutorDeps = Readonly<{
    * Optional approvals routing policy hook.
    *
    * When true, the executor will create an approval request instead of executing the action.
+   * Host-admitted UI defaults are resolved against the hook's current persisted policy.
    */
-  isActionApprovalRequired?: (actionId: ActionId, ctx: ActionExecutorContext, input?: unknown) => boolean;
+  isActionApprovalRequired?: (actionId: ActionId, ctx: ActionExecutorContext, input?: unknown, defaultUiConfirmation?: boolean) => boolean;
 
   // Server routing resolver (optional)
   resolveServerIdForSessionId?: (sessionId: string) => string | null;

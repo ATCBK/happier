@@ -13,7 +13,7 @@ import { createHostActionOperationRuntime } from '@/daemon/actionOperations/crea
 import { acknowledgeExternalSessionOperationProgressProjection, compactExternalSessionOperationRecordToTerminalReceipt, mutateExternalSessionOperationRecordAtRevision, writeExternalSessionOperationRecord } from '@/session/actions/externalSessions/operationRecordStore';
 import { registerMachineExternalSessionsRpcHandlers } from './rpcHandlers.externalSessions';
 
-const environment = vi.hoisted(() => ({ activeServerDir: '' }));
+const environment = vi.hoisted(() => ({ activeServerDir: '', accountId: 'account-1' as string | null }));
 // Configuration and credential storage are genuine environment boundaries.
 vi.mock('@/configuration', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/configuration')>();
@@ -21,10 +21,10 @@ vi.mock('@/configuration', async (importOriginal) => {
 });
 vi.mock('@/persistence', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/persistence')>();
-  return { ...actual, readStoredCredentials: async () => ({
-    token: `e30.${Buffer.from(JSON.stringify({ sub: 'account-1' })).toString('base64url')}.signature`,
+  return { ...actual, readStoredCredentials: async () => environment.accountId ? ({
+    token: `e30.${Buffer.from(JSON.stringify({ sub: environment.accountId })).toString('base64url')}.signature`,
     encryption: { type: 'legacy' as const, secret: new Uint8Array(32) },
-  }) };
+  }) : null };
 });
 
 // The boot/reconnect repair path runs real owner logic; HTTP session lookup is offline in this fixture.
@@ -79,6 +79,26 @@ async function register(retainedDirectory?: string) {
 }
 
 describe('durable external operations in shared Action Operations', () => {
+  it('keeps a foreign requester Browser operation readable without probing the custodian external-session partition', async () => {
+    const { runtime } = await register();
+    const initial = record();
+    await writeExternalSessionOperationRecord(environment.activeServerDir, initial);
+    runtime.store.create({ operationId: 'requester-browser', actionId: 'browser.view.open', title: 'Open Browser',
+      scope: { accountId: 'requester', machineId: 'machine-1' }, cancellation: 'unsupported', inputIdentity: '{}' });
+    const context = { machineAdmission: { actorAccountId: 'requester', custodianAccountId: 'account-1', machineId: 'machine-1',
+      installationId: 'installation', role: 'use' as const, encryptionMode: 'e2ee' as const }, verifyMachineAdmissionCurrent: async () => true };
+    await expect(runtime.handlers.list({}, context)).resolves.toMatchObject({ items: [{ operationId: 'requester-browser' }] });
+    await expect(runtime.handlers.get({ operationId: 'requester-browser' }, context)).resolves.toMatchObject({ kind: 'found' });
+    await expect(runtime.handlers.get({ operationId: initial.operationId }, context)).resolves.toEqual({ kind: 'not_found' });
+    await expect(runtime.handlers.cancel({ operationId: initial.operationId }, context)).resolves.toEqual({ kind: 'not_found' });
+    await expect(runtime.handlers.list({})).resolves.toMatchObject({ items: [{ operationId: initial.operationId }] });
+    await expect(readExternalSessionOperationRecord(environment.activeServerDir, initial.operationId))
+      .resolves.toMatchObject({ status: initial.status, revision: initial.revision });
+    environment.accountId = null;
+    try {
+      await expect(runtime.handlers.list({})).rejects.toMatchObject({ reason: 'account_scope_unavailable' });
+    } finally { environment.accountId = 'account-1'; }
+  });
   it('rebuilds activity from the durable owner and publishes every committed revision without completing at admission', async () => {
     const { runtime, snapshots } = await register();
     const initial = record();

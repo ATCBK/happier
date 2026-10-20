@@ -73,11 +73,11 @@ export const MANAGED_IDENTITY_PROVIDER_ACTION_SPECS: readonly PreNormalizedActio
     const metadata = METADATA[id];
     return {
       id, approval: { result: 'required' },
-      // Replacement destroys a retained write-only value. Removal already owns
-      // a designed review; other configuration/test effects are reversible.
+      // Removal and secret replacement destroy retained configuration. Other
+      // configuration/test effects are reversible.
       ...(['identity.providers.create', 'identity.providers.update', 'identity.providers.validate',
         'identity.providers.test.start', 'identity.providers.test.consume',
-        'identity.providers.enable', 'identity.providers.disable', 'identity.providers.remove'].includes(id)
+        'identity.providers.enable', 'identity.providers.disable'].includes(id)
         ? { approvalPolicy: { uiConfirmation: 'direct' as const } } : {}),
       title: metadata.title,
       description: metadata.description,

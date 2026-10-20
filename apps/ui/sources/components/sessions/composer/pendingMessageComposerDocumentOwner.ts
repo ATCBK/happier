@@ -69,7 +69,7 @@ export async function withdrawPendingMessageToComposer(input: Readonly<{
 }
 
 export type PendingMessageApprovalWithdrawalInput = Omit<Parameters<typeof withdrawPendingMessageToComposer>[0], 'withdraw'> & Readonly<{
-    actionExecutor: Pick<ReturnType<typeof createDefaultActionExecutor>, 'prepare'>;
+    actionExecutor: Pick<ReturnType<typeof createDefaultActionExecutor>, 'execute'>;
     withdrawInput: SessionPendingWithdrawInputV1;
     context: UiActionExecutorContext;
     scope: ServerAccountScope;
@@ -82,7 +82,7 @@ export async function withdrawPendingMessageToComposerWithActionApproval(
 ): Promise<PendingMessageWithdrawRecoveryResult> {
     return await withdrawPendingMessageToComposer({ ...input, withdraw: async () => {
         const unknown = (): Readonly<{ outcome: PendingMessageWithdrawOutcomeV1 }> => ({ outcome: 'delivery_unknown' });
-        const result = await awaitActionApprovalResult({
+        const result = await awaitActionApprovalResult<unknown, Readonly<{ outcome: PendingMessageWithdrawOutcomeV1 }>>({
             signal: input.signal,
             succeeded: (value: unknown) => {
                 const parsed = SessionPendingWithdrawResultV1Schema.safeParse(value);
@@ -91,12 +91,12 @@ export async function withdrawPendingMessageToComposerWithActionApproval(
             failed: unknown,
             aborted: unknown,
             execute: async (callbacks) => {
-                const prepared = await input.actionExecutor.prepare('session.pending.withdraw', input.withdrawInput, {
+                if (!input.isCurrent() || input.signal?.aborted) return unknown();
+                // Run-now present-user entry: only `execute` offers the in-place default confirmation.
+                const executed = await input.actionExecutor.execute('session.pending.withdraw', input.withdrawInput, {
                     ...input.context,
                     ...(input.signal ? { signal: input.signal } : {}),
                 });
-                if (!input.isCurrent() || input.signal?.aborted) return unknown();
-                const executed = prepared.kind === 'ready' ? await prepared.invocation.run() : prepared.result;
                 if (!executed.ok) return unknown();
                 const deferred = ActionApprovalRequestCreatedResultSchema.safeParse(executed.result);
                 if (deferred.success) {

@@ -81,6 +81,13 @@ native membership without manager authority. Directory-owned lifetimes return
 receives `team_owner_transfer_required`. An archived Team may be left after its
 resource access has stopped. Team credential qualification still applies.
 
+A suspended native member can discover the Team through `teams.list` and, after Team
+credential qualification, load its `teams.get` summary. Without independent Home
+authority, only `leave` is enabled; `viewTeam`, `viewRoster`, summary counts,
+directory-source facts and Session access stay unavailable. The shared
+summary admission withholds a suspended source-managed membership when neither
+Team visibility nor leave is available.
+
 Both manager removal and leave write the typed `teams.members.remove` detail through
 the existing Home audit writer in the removal transaction, targeting the subject
 Account. Its summary names the Team and ended lifetime; leave has actor = subject.

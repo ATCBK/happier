@@ -153,7 +153,7 @@ function register(
     isOccurrenceCurrent?: () => boolean;
     retirementSignal?: AbortSignal;
     resolveRetirementSignal?: () => AbortSignal | null;
-    resolveSystemAppendBlocks?: (input: Readonly<{ sessionId: string; signal: AbortSignal }>) => Promise<readonly string[]>;
+    resolveSystemAppendBlocks?: (input: Readonly<{ sessionId: string; signal?: AbortSignal }>) => Promise<readonly string[]>;
   }>,
 ) {
   const handlers = new Map<string, Handler>();
@@ -226,7 +226,7 @@ describe('Agent-session realtime Voice session RPC', () => {
           signal,
           readArtifact: async ({ artifactId }) => {
             if (body === 'pending') await new Promise<void>(resolve => { release = resolve; });
-            signal.throwIfAborted();
+            signal?.throwIfAborted();
             return { id: artifactId, header: { v: 1, kind: 'prompt_doc.v2', title: 'Persona' },
               revision: { headerVersion: 1, bodyVersion: 1 },
               body: JSON.stringify({ v: 1, markdown: body, createdAtMs: 1, updatedAtMs: 1 }) };
@@ -427,7 +427,7 @@ describe('Agent-session realtime Voice session RPC', () => {
 
     expect(watchOutcome).toEqual({
       kind: 'settled',
-      result: { error: 'agent_realtime_watch_aborted' },
+      result: { error: 'RPC target transport disconnected' },
     });
     expect(idleOutcome).toBe('idle');
 

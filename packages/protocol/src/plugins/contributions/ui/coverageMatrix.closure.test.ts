@@ -421,10 +421,14 @@ const DESTINATION_REACHABILITY_SOURCE_PROOFS_V1 = [
     additionalSourceChecks: [
       {
         sourcePath: 'apps/cli/src/plugins/projection/registry/ui/projection.ts',
+        codeIdentifier: 'projectPluginUiPresentationEntriesV1({',
+      },
+      {
+        sourcePath: 'packages/protocol/src/plugins/contributions/ui/declarationProjection.ts',
         codeIdentifier: 'normalizePluginUiDestinationBindingV1({',
       },
       {
-        sourcePath: 'apps/cli/src/plugins/projection/registry/ui/projection.ts',
+        sourcePath: 'packages/protocol/src/plugins/contributions/ui/declarationProjection.ts',
         codeIdentifier: 'const binding = normalizePluginUiSettingsPageBindingV1({',
       },
     ],

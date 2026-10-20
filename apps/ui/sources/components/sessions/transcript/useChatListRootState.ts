@@ -21,6 +21,7 @@ import type {
 import { useTranscriptSessionCommon } from '@/components/sessions/transcript/transcriptSessionCommon';
 import { useStableValueBySignature } from '@/components/sessions/transcript/items/stableValueBySignature';
 import { preloadEnrichedMarkdownRuntime } from '@/components/markdown/enriched/preloadEnrichedMarkdownRuntime';
+import { useSessionManagedWorkflowRuns } from '@/components/workflows/run/useContextManagedWorkflowRuns';
 import { useTranscriptRootDerivedItems } from '@/components/sessions/transcript/items/useTranscriptRootDerivedItems';
 import { useTranscriptRootNavigationState } from '@/components/sessions/transcript/navigation/useTranscriptRootNavigationState';
 import { useTranscriptRootPendingRequests } from '@/components/sessions/transcript/items/useTranscriptRootPendingRequests';
@@ -36,7 +37,7 @@ import { isRecoveredHistoryTranscriptObservation } from "@happier-dev/session-co
 import { readExternalSessionOperationPresentationFromMetadata } from '@/components/sessions/transcript/items/externalSessionOperationMetadata';
 import { useExternalSessionOperationTranscriptDismissal } from '@/components/sessions/transcript/items/useExternalSessionOperationTranscriptDismissal';
 import { useExternalSessionOperationOwnerHydration } from '@/components/sessions/transcript/items/useExternalSessionOperationOwnerHydration';
-import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { readSessionOwnerMetadataView, readSessionOwnerMetadataViewPreferences } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { resolveSessionMachineId } from '@/sync/domains/session/external/resolveSessionMachineId';
 import { useMachinePresenceSummary } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
 import { usePreferredServerIdForSession } from '@/sync/runtime/orchestration/serverScopedRpc/usePreferredServerIdForSession';
@@ -243,7 +244,7 @@ export function useChatListRootState(props: ChatListProps) {
 
     const groupingMode = transcriptGroupingMode === 'turns' ? 'turns' : 'linear';
     const toolVisibility = resolveTranscriptToolVisibility({
-        sessionOverride: stableSessionMetadata?.work?.viewPreferences?.showToolCalls,
+        sessionOverride: readSessionOwnerMetadataViewPreferences(stableSessionMetadata)?.showToolCalls,
         isBot: readSessionBotV1(props.session.metadata?.bot) !== null,
         accountShowToolCalls: transcriptShowToolCalls,
         groupToolCalls: transcriptGroupToolCalls === true && toolViewTimelineChromeMode === 'activity_feed',
@@ -290,7 +291,15 @@ export function useChatListRootState(props: ChatListProps) {
         Object.entries(hostWakeCounts).map(([id, count]) => `${id}:${count}`).join('|'),
     );
 
-    const interaction = useSessionTranscriptSource().useInteraction();
+    const transcriptSource = useSessionTranscriptSource();
+    const interaction = transcriptSource.useInteraction();
+    // Trigger Runs that fired from this Session's turn ends, read through the one Account Run owner, so a
+    // Run that wrote no turn (Keep going checked done) still gets its fold (07 U9).
+    const originRuns = useSessionManagedWorkflowRuns({
+        sessionId: props.session.id,
+        serverId: sessionServerId,
+        enabled: transcriptSource.kind === 'app',
+    });
     // Whole-message Actions consume the generic normalized daemon projection,
     // but only while this transcript's existing local-owner projection remains
     // current. The generation agreement prevents an Action catalog refresh from
@@ -413,6 +422,8 @@ export function useChatListRootState(props: ChatListProps) {
         dismissedPluginTranscriptActivityIds,
         isPluginTranscriptActivityActionAvailable,
         sessionId: props.session.id,
+        sessionTurns: props.session.sessionTurns?.turns ?? null,
+        triggerRuns: originRuns.runs,
         toolCallsGroupStrategy,
     });
     const onOpenPluginTranscriptActivityAction = React.useCallback((action: Readonly<{

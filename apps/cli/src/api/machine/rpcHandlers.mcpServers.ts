@@ -1,12 +1,11 @@
 import { randomUUID } from 'node:crypto';
-
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { DaemonMcpServersDetectRequestSchema, DaemonMcpServersTestRequestSchema } from '@happier-dev/protocol/mcp/servers/daemonRpcV1';
 import { DaemonMcpServersPreviewRequestSchema } from '@happier-dev/protocol/mcp/servers/previewV1';
 import { listMcpServerCatalogSavedSecretRefsV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { estimateTokensV1 } from '@happier-dev/protocol/capabilities/estimateTokensV1';
 import type { McpServerToolsSnapshotV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
-import type { DaemonMcpServersPreviewResponse, DaemonMcpServersTestErrorCode, DaemonMcpServersDetectResponse, DaemonMcpServersDetectWarningV1, DaemonMcpServersTestRequest, DaemonMcpServersTestResponse, McpServerRuleV1, McpServersSettingsV1, McpServerMaterializationV1 } from '@happier-dev/protocol';
+import type { DaemonMcpServersPreviewResponse, DaemonMcpServersTestErrorCode, DaemonMcpServersDetectResponse, DaemonMcpServersDetectWarningV1, DaemonMcpServersTestRequest, DaemonMcpServersTestResponse, McpServersSettingsV1, McpServerMaterializationV1 } from '@happier-dev/protocol';
 
 import type { McpServerConfig } from '@/agent';
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
@@ -17,7 +16,8 @@ import { resolveSessionCapabilitiesForDirectory } from '@/mcp/servers/resolveSes
 import { projectMcpServerMaterializationV1 } from '@happier-dev/protocol/reach/resolveSessionCapabilitiesV1';
 import { materializeMcpServerConfigRecord } from '@/mcp/servers/materializeMcpServerConfigRecord';
 import { createSavedSecretMaterializerFromSnapshotV1 } from '@/settings/secrets/savedSecretCatalog';
-import { createInvocationSavedSecretOperationContextV1, refreshSavedSecretCatalogForOperation, type SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1, type SavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
+import { refreshSavedSecretCatalogForOperation } from "@/settings/secrets/hydrateSavedSecretCatalog";
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, type ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
@@ -28,7 +28,10 @@ import { detectProviderMcpServers } from '@/mcp/providerDetection/detectProvider
 import { resolveSessionMcpPreview } from '@/mcp/preview/resolveSessionMcpPreview';
 import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import { readSkillLibraryInventory } from '@/prompts/skills/library/readSkillLibraryContent';
-import { prepareActivePromptLibraryRecord } from '@/settings/prompts/hydratePromptLibraryCatalog';
+import { readAccountPluginSkills } from '@/prompts/skills/library/readAccountPluginSkills';
+import { readAvailablePluginSkillItemsV1 } from '@happier-dev/protocol/prompts/library/skills/readSkillLibraryCatalog';
+import { createCliPromptLibraryStore } from '@/settings/prompts/promptLibraryStore';
+import { readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
 import { resolveSessionTransportContext } from '@/session/services/resolveSessionTransportContext';
 import { tryDecryptSessionOwnerMetadataView, readSessionOwnerLocality } from '@/session/transport/encryption/sessionEncryptionContext';
@@ -48,87 +51,29 @@ function nowMs(depsNowMs: (() => number) | undefined): number {
   return Date.now();
 }
 
-function implicitBindingForMachine(params: Readonly<{ serverId: string; machineId: string; nowMs: number }>): McpServerRuleV1 {
-  return {
-    id: `implicit_${randomUUID()}`,
-    serverId: params.serverId,
-    enabled: true,
-    target: { t: 'machine', machineId: params.machineId },
-    createdAt: params.nowMs,
-    updatedAt: params.nowMs,
-  };
-}
-
 function resolveServerForTestRequest(params: Readonly<{
   request: DaemonMcpServersTestRequest;
   accountMcpSettings?: McpServersSettingsV1;
 }>): { ok: true; serverName: string; resolved: McpServerMaterializationV1 } | { ok: false; errorCode: DaemonMcpServersTestErrorCode; error: string } {
   const req = params.request;
-
-  if (req.t === 'draft') {
-    const binding =
-      req.binding && req.binding.serverId === req.server.id
-        ? req.binding
-        : req.binding
-          ? null
-          : implicitBindingForMachine({ serverId: req.server.id, machineId: req.machineId, nowMs: Date.now() });
-
-    if (!binding) {
-      return { ok: false, errorCode: 'binding_not_found', error: 'Draft binding does not match the draft server.' };
-    }
-
-    const settings: McpServersSettingsV1 = {
-      v: 1,
-      strictMode: true,
-      servers: [req.server],
-      bindings: [binding],
-    };
-
-    const resolved = projectMcpServerMaterializationV1(resolveSessionCapabilitiesForDirectory({
-      settings,
-      machineId: req.machineId,
-      directory: req.directory,
-    }), req.directory);
-
-    const item = resolved.serversByName[req.server.name];
-    if (!item) return { ok: false, errorCode: 'server_not_found', error: 'Server not found after resolution.' };
-    if (item.enabled !== true) return { ok: false, errorCode: 'server_disabled', error: 'Server is not enabled for this target.' };
-
-    return { ok: true, serverName: req.server.name, resolved: { directory: req.directory, strictMode: true, serversByName: { [req.server.name]: item } } };
-  }
-
-  const accountMcpSettings = params.accountMcpSettings;
-  if (!accountMcpSettings) return { ok: false, errorCode: 'materialization_failed', error: 'mcp_catalog_unavailable' };
-  const server = accountMcpSettings.servers.find((s) => s.id === req.serverId) ?? null;
+  const settings: McpServersSettingsV1 | undefined = req.t === 'draft'
+    ? { v: 1, strictMode: true, servers: [req.server], bindings: req.binding ? [req.binding] : [] }
+    : params.accountMcpSettings;
+  if (!settings) return { ok: false, errorCode: 'materialization_failed', error: 'mcp_catalog_unavailable' };
+  const server = req.t === 'draft' ? req.server : settings.servers.find((s) => s.id === req.serverId);
   if (!server) return { ok: false, errorCode: 'server_not_found', error: 'Server id not found.' };
-
-  if (req.bindingId) {
-    const binding = accountMcpSettings.bindings.find((b) => b.id === req.bindingId) ?? null;
-    if (!binding) return { ok: false, errorCode: 'binding_not_found', error: 'Binding id not found.' };
-    if (binding.serverId !== server.id) {
-      return { ok: false, errorCode: 'binding_not_found', error: 'Binding does not belong to the selected server.' };
-    }
-    const settings: McpServersSettingsV1 = {
-      v: 1,
-      strictMode: true,
-      servers: [server],
-      bindings: [binding],
-    };
-    const resolved = projectMcpServerMaterializationV1(resolveSessionCapabilitiesForDirectory({
-      settings,
-      machineId: req.machineId,
-      directory: req.directory,
-    }), req.directory);
-    const item = resolved.serversByName[server.name];
-    if (!item) return { ok: false, errorCode: 'server_not_found', error: 'Server not found after resolution.' };
-    if (item.enabled !== true) return { ok: false, errorCode: 'server_disabled', error: 'Server is not enabled for this target.' };
-    return { ok: true, serverName: server.name, resolved: { directory: req.directory, strictMode: true, serversByName: { [server.name]: item } } };
+  const binding = req.t === 'draft' ? req.binding : req.bindingId ? settings.bindings.find((b) => b.id === req.bindingId) : undefined;
+  if ((req.t === 'byId' && req.bindingId && !binding) || (binding && binding.serverId !== server.id)) {
+    return { ok: false, errorCode: 'binding_not_found', error: 'Binding does not belong to the selected server.' };
   }
-
+  // Test is an explicit one-server operation. Reach rules decide Session defaults,
+  // not whether the person can check an Off server before adding it to a Session.
   const resolved = projectMcpServerMaterializationV1(resolveSessionCapabilitiesForDirectory({
-    settings: accountMcpSettings,
+    settings,
     machineId: req.machineId,
     directory: req.directory,
+    selection: { mcp: { v: 1, managedServersEnabled: false,
+      forceIncludeServerIds: [server.id], forceExcludeServerIds: [] } },
   }), req.directory);
   const item = resolved.serversByName[server.name];
   if (!item) return { ok: false, errorCode: 'server_not_found', error: 'Server not found after resolution.' };
@@ -369,66 +314,78 @@ export function registerMachineMcpServersRpcHandlers(params: Readonly<{
       }
 
       try {
-        const accountSettingsContext = await loadFreshMcpAccountSettingsContext(credentials, {
-          bootstrapAccountSettingsContext: bootstrapAccountSettingsContextImpl,
-        });
-        const accountMcpSettings = readMcpServersSettingsFromAccountSettings(accountSettingsContext);
-        const operationContext = accountSettingsContext.operationContext;
-        let metadata: Record<string, unknown> = {};
-        let sessionRunning = false;
-        let directory = parsed.data.directory ?? null;
-        let agentId = parsed.data.agentId;
-        let capabilitySelection = parsed.data.capabilitySelection ?? (parsed.data.selection ? { mcp: parsed.data.selection } : null);
-        if (parsed.data.sessionId) {
-          const session = await resolveSessionTransportContext({ credentials, idOrPrefix: parsed.data.sessionId, signal: context?.signal });
-          if (!session.ok || session.sessionId !== parsed.data.sessionId) throw new Error('session_unavailable');
-          const opened = tryDecryptSessionOwnerMetadataView({ credentials, accountEncryptionMode: session.accountEncryptionCurrentness.mode,
-            rawSession: session.rawSession });
-          if (!opened || readSessionOwnerLocality({ metadata: opened, rawSession: session.rawSession })?.machineId !== parsed.data.machineId) {
-            throw new Error('session_unavailable');
-          }
-          metadata = opened;
-          directory = typeof opened.path === 'string' ? opened.path : null;
-          const target = resolveBackendTargetFromSessionMetadata(opened);
-          if (target?.kind === 'backend') agentId = target.backendId;
-          sessionRunning = session.rawSession.active === true;
-          capabilitySelection = readSessionCapabilitySelectionFromMetadataV1(opened);
-        }
-        const scopeKey = resolveAccountSettingsScopeKeyForToken(credentials.token);
-        const rules = await prepareActivePromptLibraryRecord({ credentials, scopeKey,
-          lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(), key: 'skill-rules', operationContext, signal: context?.signal });
-        if (rules.status !== 'ready' || rules.record.key !== 'skill-rules') throw new Error('skill_rules_unavailable');
         const artifacts = createCredentialedAccountArtifactStore(credentials);
-        const inventory = await readSkillLibraryInventory(artifacts);
-        const lease = await acquireAuthoritativePluginRuntimeRegistryLease();
-        let mcpPluginItems;
-        try { mcpPluginItems = await lease.registry.projectMcpServerItems?.(accountMcpSettings) ?? []; }
-        finally { await lease.release(); }
-        const detected = await detectProviderMcpServersImpl({
-          directory,
-          providers: undefined,
-          env: depsEnv,
-        });
-        if (!await operationContext.isCurrent()) throw new McpServerCatalogUnavailableError('scope-retired');
+        const inventoryRead = readSkillLibraryInventory(artifacts, context?.signal);
+        // Catalog admission, exact Session resolution and the read-only Artifact
+        // inventory are independent. Observe both promises even if either fails.
+        const previewRead = (async () => {
+          const [accountSettingsContext, session] = await Promise.all([
+            loadFreshMcpAccountSettingsContext(credentials, { bootstrapAccountSettingsContext: bootstrapAccountSettingsContextImpl }),
+            parsed.data.sessionId ? resolveSessionTransportContext({ credentials, idOrPrefix: parsed.data.sessionId, signal: context?.signal }) : null,
+          ]);
+          const accountMcpSettings = readMcpServersSettingsFromAccountSettings(accountSettingsContext);
+          const operationContext = accountSettingsContext.operationContext;
+          let metadata: Record<string, unknown> = {};
+          let sessionRunning = false;
+          let directory = parsed.data.directory ?? null;
+          let agentId = parsed.data.agentId;
+          let capabilitySelection = parsed.data.capabilitySelection ?? (parsed.data.selection ? { mcp: parsed.data.selection } : null);
+          if (parsed.data.sessionId) {
+            if (!session?.ok || session.sessionId !== parsed.data.sessionId) throw new Error('session_unavailable');
+            const opened = tryDecryptSessionOwnerMetadataView({ credentials, accountEncryptionMode: session.accountEncryptionCurrentness.mode,
+              rawSession: session.rawSession });
+            if (!opened || readSessionOwnerLocality({ metadata: opened, rawSession: session.rawSession })?.machineId !== parsed.data.machineId) {
+              throw new Error('session_unavailable');
+            }
+            metadata = opened;
+            directory = typeof opened.path === 'string' ? opened.path : null;
+            const target = resolveBackendTargetFromSessionMetadata(opened);
+            if (target?.kind === 'backend') agentId = target.backendId;
+            sessionRunning = session.rawSession.active === true;
+            capabilitySelection = readSessionCapabilitySelectionFromMetadataV1(opened);
+          }
+          // Finite previews observe current destinations without starting retained-source
+          // maintenance. Their independent inventories share only this request's lifetime.
+          const [ruleCatalog, inventory, mcpPluginItems, pluginSkills, detected] = await Promise.all([
+            createCliPromptLibraryStore({ credentials, operationContext, signal: context?.signal })
+              .readCatalog(context?.signal, 'skill-rules'),
+            inventoryRead,
+            (async () => {
+              const lease = await acquireAuthoritativePluginRuntimeRegistryLease();
+              try { return await lease.registry.projectMcpServerItems?.(accountMcpSettings) ?? []; }
+              finally { await lease.release(); }
+            })(),
+            readAvailablePluginSkillItemsV1(() => readAccountPluginSkills({ credentials, settings: operationContext.readSnapshot()?.settings,
+              serverHttpBaseUrl: operationContext.serverHttpBaseUrl, signal: context?.signal, availableOnly: true,
+              isCurrent: () => operationContext.isCurrent() }), context?.signal),
+            detectProviderMcpServersImpl({ directory, providers: [agentId], env: depsEnv }),
+          ]);
+          const rules = readPromptLibraryCatalogRecordV1({ ...ruleCatalog, key: 'skill-rules' });
+          if (rules.status !== 'ready' || rules.record.key !== 'skill-rules') throw new Error('skill_rules_unavailable');
+          if (!await operationContext.isCurrent()) throw new McpServerCatalogUnavailableError('scope-retired');
 
-        const preview = await resolveSessionMcpPreview({
-          settings: accountMcpSettings,
-          machineId: parsed.data.machineId,
-          directory,
-          agentId,
-          ...(parsed.data.projectKey !== undefined ? { projectKey: parsed.data.projectKey } : {}),
-          sessionProject: { credentials, metadata, signal: context?.signal },
-          capabilitySelection,
-          sessionMetadata: metadata, sessionRunning,
-          skillLibrary: { inventory, artifacts, rules: rules.record.value.rules }, mcpPluginItems,
-          assertCurrent: async () => { context?.signal?.throwIfAborted();
-            if (!await operationContext.isCurrent()) throw new McpServerCatalogUnavailableError('scope-retired');
-            context?.signal?.throwIfAborted(); },
-          detectedServers: detected.servers,
-          detectedWarnings: detected.warnings,
-        });
-        if (!await operationContext.isCurrent()) throw new McpServerCatalogUnavailableError('scope-retired');
-        context?.signal?.throwIfAborted();
+          const preview = await resolveSessionMcpPreview({
+            settings: accountMcpSettings,
+            machineId: parsed.data.machineId,
+            directory,
+            agentId,
+            ...(parsed.data.projectKey !== undefined ? { projectKey: parsed.data.projectKey } : {}),
+            sessionProject: { credentials, metadata, signal: context?.signal },
+            capabilitySelection,
+            sessionMetadata: metadata, sessionRunning,
+            signal: context?.signal,
+            skillLibrary: { inventory, artifacts, rules: rules.record.value.rules, pluginSkills }, mcpPluginItems,
+            assertCurrent: async () => { context?.signal?.throwIfAborted();
+              if (!await operationContext.isCurrent()) throw new McpServerCatalogUnavailableError('scope-retired');
+              context?.signal?.throwIfAborted(); },
+            detectedServers: detected.servers,
+            detectedWarnings: detected.warnings,
+          });
+          if (!await operationContext.isCurrent()) throw new McpServerCatalogUnavailableError('scope-retired');
+          context?.signal?.throwIfAborted();
+          return preview;
+        })();
+        const [preview] = await Promise.all([previewRead, inventoryRead]);
         return preview;
       } catch (error) {
         context?.signal?.throwIfAborted();

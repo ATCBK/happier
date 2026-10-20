@@ -1,7 +1,4 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-    DaemonContributionRegistryProjectionDescribeResponseSchema,
-} from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createSessionFixture, createPlainMachineRowFixture } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
@@ -18,29 +15,6 @@ await loadSyncSingletonForTests();
 const { storage } = await import('@/sync/domains/state/storage');
 const { setActiveServer } = await import('@/sync/domains/server/serverRuntime');
 const { assertActiveDaemonTargetSession, resolveVoiceAgentSessionFromState } = await import('./voiceAgentRunState');
-const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
-
-function projection(terminal: boolean) {
-    // A daemon response is an external fixture; its public strict schema owns the shape.
-    return DaemonContributionRegistryProjectionDescribeResponseSchema.parse({
-        protocolVersion: 1,
-        projection: {
-            v: 2,
-            generation: 3,
-            agentsById: {
-                claude: {
-                    id: 'claude',
-                    identity: { pluginId: 'happier.agent.claude', localId: 'claude' },
-                    capabilities: {
-                        ...(terminal ? { surfaces: ['terminal'] } : {}),
-                        sessions: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: true },
-                    },
-                },
-            },
-            familiesById: {},
-        },
-    });
-}
 
 function seedTargetSession(overrides: Parameters<typeof createSessionFixture>[0] = {}) {
     const session = createSessionFixture({
@@ -56,7 +30,6 @@ function seedTargetSession(overrides: Parameters<typeof createSessionFixture>[0]
 
 describe('assertActiveDaemonTargetSession', () => {
     beforeEach(async () => {
-        clearDaemonMergedProjectionCacheForTests();
         network.resetRequests();
         targetHome = await network.addHome('https://voice-target.example.test', 'account-a');
         focusedHome = await network.addHome('https://voice-focused.example.test', 'account-a');
@@ -73,33 +46,23 @@ describe('assertActiveDaemonTargetSession', () => {
     });
     afterAll(() => network.dispose());
 
-    it('admits a target whose own Home projects the terminal surface for its Agent', async () => {
-        network.respond(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE, projection(true));
+    it('admits a live Codex context target with no terminal support or daemon declaration probe', async () => {
+        seedTargetSession({ metadata: {
+            flavor: 'codex', machineId: 'machine-1', path: '/tmp/target', host: 'voice.test',
+            agentRuntimeCapabilitiesV1: { localControl: null },
+        } });
         await expect(assertActiveDaemonTargetSession({ serverId: targetHome.id, sessionId: 'target-1' })).resolves.toBeUndefined();
         expect(network.requests.filter(request => request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE))
-            .toMatchObject([{ targetId: 'machine-1', serverUrl: targetHome.serverUrl }]);
+            .toEqual([]);
     });
 
-    it('refuses a target whose projected Agent declares no terminal surface', async () => {
-        network.respond(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE, projection(false));
-        await expect(assertActiveDaemonTargetSession({ serverId: targetHome.id, sessionId: 'target-1' }))
-            .rejects.toMatchObject({ code: 'VOICE_AGENT_TARGET_SESSION_UNSUPPORTED' });
-    });
-
-    it('fails closed when the target Home cannot project its Agent declarations', async () => {
-        await expect(assertActiveDaemonTargetSession({ serverId: targetHome.id, sessionId: 'target-1' }))
-            .rejects.toMatchObject({ code: 'VOICE_AGENT_TARGET_SESSION_UNSUPPORTED' });
-    });
-
-    it('fails closed for an unreadable Agent identity even with a ready projection', async () => {
+    it('leaves Agent selection admission to the initializer and Execution Run owner', async () => {
         seedTargetSession({ metadata: { machineId: 'machine-1', path: '/tmp/target', host: 'voice.test' } });
-        network.respond(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE, projection(true));
         await expect(assertActiveDaemonTargetSession({ serverId: targetHome.id, sessionId: 'target-1' }))
-            .rejects.toMatchObject({ code: 'VOICE_AGENT_TARGET_SESSION_UNSUPPORTED' });
+            .resolves.toBeUndefined();
     });
 
-    it('still reports inactive and offline targets after the capability check passes', async () => {
-        network.respond(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE, projection(true));
+    it('still reports inactive and offline targets', async () => {
         seedTargetSession({ active: false });
         await expect(assertActiveDaemonTargetSession({ serverId: targetHome.id, sessionId: 'target-1' }))
             .rejects.toMatchObject({ code: 'VOICE_AGENT_TARGET_SESSION_INACTIVE' });

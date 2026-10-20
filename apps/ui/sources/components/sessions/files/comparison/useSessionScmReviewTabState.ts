@@ -51,6 +51,9 @@ function scrollPositionsEqual(previous: unknown, next: unknown): boolean {
 export function useScmReviewTabState(hostKey: string, pane: ReturnType<typeof useAppPaneScope>, tabKey = SESSION_DETAILS_SCM_REVIEW_TAB_KEY) {
     const raw = pane.scopeState?.details?.tabState?.[tabKey];
     const persistedReviewTabState = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw as Record<string, unknown> : null;
+    const rawReviewRunIds = persistedReviewTabState?.reviewRunIds;
+    const startedReviewRunIds = React.useMemo(() => Array.isArray(rawReviewRunIds)
+        ? rawReviewRunIds.filter((id): id is string => typeof id === 'string') : null, [rawReviewRunIds]);
     const initialStateRef = React.useRef<Readonly<{ hostKey: string; scrollTop: number | null; collapsedPaths: string[] | null }> | null>(null);
     if (!initialStateRef.current || initialStateRef.current.hostKey !== hostKey) {
         const scrollTop = persistedReviewTabState?.scrollTop;
@@ -87,15 +90,15 @@ export function useScmReviewTabState(hostKey: string, pane: ReturnType<typeof us
         timerRef.current = setTimeout(flushPendingScrollTop, SCROLL_PERSIST_DEBOUNCE_MS);
     }, [flushPendingScrollTop]);
     React.useEffect(() => flushPendingScrollTop, [flushPendingScrollTop]);
-    return { persistedReviewTabState, mountedInitialReviewState: initialStateRef.current,
+    return { persistedReviewTabState, startedReviewRunIds, mountedInitialReviewState: initialStateRef.current,
         setPersistedReviewTabState, onCollapsedPathsChange, onScrollTopChange };
 }
 
 /** Session destination authoring stays at the Session adapter; persistence is shared. */
-export function useSessionScmReviewTabState(sessionId: string, pane: ReturnType<typeof useAppPaneScope>, target: SessionScmReviewTarget = {}) {
+export function useSessionScmReviewTabState(sessionId: string, pane: ReturnType<typeof useAppPaneScope>, target: SessionScmReviewTarget = {},
+    openDetailsTab = pane.openDetailsTab) {
     // Explain is presentation on the semantic destination, shared by UI and session.open.
     const explain = target.explain === true;
-    const openDetailsTab = pane.openDetailsTab;
     const setExplain = React.useCallback((next: boolean) => {
         openDetailsTab(createSessionScmReviewDetailsTab({ ...target, explain: next }), { intent: 'pinned' });
     }, [openDetailsTab, target]);

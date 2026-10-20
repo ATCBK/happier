@@ -55,8 +55,9 @@ function useDestinationFindSeed<Seed>(params: Readonly<{
     const pending = React.useSyncExternalStore(params.subscribe ?? noSubscription, snapshot, () => null);
     const [launch, setLaunch] = React.useState<Readonly<{ identity: string; seed: Seed; authority: ServerAccountScopeLifetime }> | null>(null);
 
-    // The mounted destination retains launch input while its content loads lazily.
-    React.useLayoutEffect(() => { setLaunch(null); }, [identity]);
+    // Suspense reconnects layout effects for the same mounted destination. Its
+    // seed has already left the handoff, so only a different identity clears it.
+    React.useLayoutEffect(() => { setLaunch(current => current?.identity === identity ? current : null); }, [identity]);
     React.useLayoutEffect(() => {
         if (!pending) return;
         const taken = take();

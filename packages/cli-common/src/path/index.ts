@@ -1,5 +1,6 @@
 export {
   canonicalAbsolutePathsEqual,
+  createCanonicalAbsolutePathComparator,
   expandHomeDirPath,
   isCanonicalAbsolutePathInsideRoot,
   resolveCanonicalAbsoluteChildPathComparisonIdentity,

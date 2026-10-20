@@ -23,15 +23,7 @@ describe('Sentry plugin activation', () => {
     expect(registered).toEqual(
       [...PLUGIN_MANIFEST.contributes.actions.map((action) => action.id)].sort(),
     );
-    expect(registered).toEqual([
-      SENTRY_ACTION_IDS.get,
-      SENTRY_ACTION_IDS.listInstances,
-      SENTRY_ACTION_IDS.listIssueEvents,
-      SENTRY_ACTION_IDS.listTagValues,
-      SENTRY_ACTION_IDS.readEvent,
-      SENTRY_ACTION_IDS.readIssue,
-      SENTRY_ACTION_IDS.scan,
-    ].sort());
+    expect(registered).toEqual(Object.values(SENTRY_ACTION_IDS).sort());
     for (const [, handler] of registerAction.mock.calls) {
       expect(typeof handler).toBe('function');
     }

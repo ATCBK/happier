@@ -27,6 +27,10 @@ export type ResolveActionApprovalRoutingArgs = Readonly<{
   requiredByPolicy?: boolean;
   /** Host-proved contextual classification, resolved through the same settings/waiver owner. */
   defaultSafety?: ActionSpec['safety'];
+  /** Host-proved exposure classification; Settings and execution authority still apply. */
+  defaultUiConfirmation?: boolean;
+  /** An admitted shared request's outward effect; still subject to Settings Require/Waive. */
+  defaultConfirmation?: boolean;
   /** Fresh computer-owner consent, never a caller-authored grant. */
   computerConsentGranted?: boolean;
   /** Exact live host operation proved by the executor's private factory port. */
@@ -75,16 +79,30 @@ export function isAgentInitiatedApprovalRequiredByDefault(actionId: ActionId): b
     || (spec.safety === 'danger' && spec.surfaces.agent === true && spec.approvalPolicy?.scopeAdmissionOwnsConfirmation !== true);
 }
 
+/** Whether persisted Action settings may waive this host-declared confirmation. */
+export function isActionApprovalWaivable(spec: Pick<ActionSpec, 'approvalPolicy'>): boolean {
+  return spec.approvalPolicy?.nonWaivable !== true;
+}
+
+/** Host attribution identifies the cause, not authority. Unknown people never become the Bot owner. */
+export function isSharedRequesterActionV1(context: Pick<ActionExecutorContext, 'actionRequestAttributionV1' | 'runtimeAccountId'>): boolean {
+  const cause = context.actionRequestAttributionV1;
+  return Boolean(cause && context.runtimeAccountId
+    && (!cause.requester || cause.requester.accountId !== context.runtimeAccountId));
+}
+
 function requiresDefaultApprovalFloor(
   actionId: ActionId,
   ctx?: Pick<ActionExecutorContext, 'surface' | 'authority' | 'presentUserConfirmation'> | null,
   defaultSafety?: ActionSpec['safety'],
   input?: unknown,
+  defaultUiConfirmation?: boolean,
 ): boolean {
   const surface = resolveApprovalSurface(ctx);
   const spec = getActionSpec(actionId);
   const policy = spec.approvalPolicy;
-  const uiPolicyConfirmation = policy?.uiConfirmationForInput?.(input) ?? (policy?.uiConfirmation === 'policy');
+  const uiPolicyConfirmation = defaultUiConfirmation
+    ?? policy?.uiConfirmationForInput?.(input) ?? (policy?.uiConfirmation === 'policy');
   defaultSafety ??= spec.safetyForInput?.(input) ?? spec.safety;
   if (policy?.pluginCaptureWaiver === true) return true;
   // Permission answers share the Agent default on MCP too; persisted surface
@@ -93,16 +111,17 @@ function requiresDefaultApprovalFloor(
   // Scoped removal is dangerous metadata, but its own/led Session policy owns
   // admission (FIN 03 §5.4/§5.7); it does not acquire the Account trigger approval floor.
   if (policy?.scopeAdmissionOwnsConfirmation === true && surface.kind !== 'ambiguous') return false;
-  // Declared and contextual danger share the UI host's configurable default
-  // confirmation. Contextually safe neighbors remain direct unless the Action
-  // declares a policy-owned UI confirmation.
+  // Reversible UI intents and effects with their own UI review may explicitly
+  // declare direct admission. This changes only the present user's UI default;
+  // declared danger still governs automation and ambiguous callers.
   // CLI and UI suppress the duplicate default when the host records a completed
   // confirmation for this exact Action. Explicit settings are evaluated first
   // and still win.
   if (
     surface.kind === 'non_agent'
     && (
-      (surface.surface === 'ui' && defaultSafety !== 'danger' && !uiPolicyConfirmation)
+      (surface.surface === 'ui' && !uiPolicyConfirmation
+        && (defaultSafety !== 'danger' || policy?.uiConfirmation === 'direct'))
       || ((surface.surface === 'cli' || surface.surface === 'ui') && ctx?.presentUserConfirmation?.actionId === actionId)
     )
     && ctx?.authority === 'present_user'
@@ -141,8 +160,11 @@ export function isApprovalRequiredByActionsSettings(
   /** Contributed Action manifest default, resolved by its shared admission owner. */
   contributedApprovalDefault?: boolean,
   input?: unknown,
+  defaultUiConfirmation?: boolean,
+  defaultConfirmation?: boolean,
 ): boolean {
   const requestActionId = ActionIdSchema.safeParse(actionId);
+  if (requestActionId.success && !isActionApprovalWaivable(getActionSpec(requestActionId.data))) return true;
   const surface = resolveApprovalSurface(ctx);
   const rawSurface = ctx?.surface;
   const override: ActionSettingsOverride | undefined = settings.actions?.[actionId];
@@ -161,7 +183,7 @@ export function isApprovalRequiredByActionsSettings(
 
   const builtInActionId = ActionIdSchema.safeParse(actionId);
   return builtInActionId.success
-    ? requiresDefaultApprovalFloor(builtInActionId.data, ctx, defaultSafety, input)
+    ? defaultConfirmation === true || requiresDefaultApprovalFloor(builtInActionId.data, ctx, defaultSafety, input, defaultUiConfirmation)
     : contributedApprovalDefault === true;
 }
 
@@ -193,17 +215,22 @@ export function resolveActionApprovalRouting(args: ResolveActionApprovalRoutingA
     .some(surface => surface === args.context?.surface) === true;
   const requiredByPolicy = computerConsent
     ? explicitComputerApproval
+    : args.defaultConfirmation === true
+    ? args.settings ? isApprovalRequiredByActionsSettings(args.actionId, args.settings, args.context,
+      args.defaultSafety, undefined, args.input, args.defaultUiConfirmation, true) : true
     : typeof args.requiredByPolicy === 'boolean'
     ? args.requiredByPolicy
     : args.settings
-      ? isApprovalRequiredByActionsSettings(args.actionId, args.settings, args.context, args.defaultSafety, undefined, args.input)
-      : presentUserRequest || (args.defaultSafety !== undefined
-        ? requiresDefaultApprovalFloor(args.actionId, args.context, args.defaultSafety, args.input)
+      ? isApprovalRequiredByActionsSettings(args.actionId, args.settings, args.context, args.defaultSafety, undefined, args.input, args.defaultUiConfirmation)
+      : presentUserRequest || (args.defaultSafety !== undefined || args.defaultUiConfirmation !== undefined
+        ? requiresDefaultApprovalFloor(args.actionId, args.context, args.defaultSafety, args.input, args.defaultUiConfirmation)
         : resolveUnwiredApprovalDefault(args.actionId, args.context, args.input));
   // Waivers choose whether to request approval; execution authority remains
   // independently enforced by the executor before preparation or effects.
   const required = !isApprovalAction(args.actionId)
-    && requiredByPolicy;
+    && (args.context?.bypassApprovals === true
+      ? false
+      : !isActionApprovalWaivable(args.spec) || requiredByPolicy);
 
   // The public Action API reports a created approval artifact to its caller;
   // it cannot retain an HTTP or server-relay request as the blocking waiter.
@@ -235,8 +262,10 @@ export function resolveActionApprovalRouting(args: ResolveActionApprovalRoutingA
       args.context?.surface === 'api'
       || args.context?.surface === 'cli'
       || args.context?.surface === 'ui'
+      || args.defaultConfirmation === true
     );
-  const flow = required && (args.retainHostOperationApproval === true || retainPluginSettingsFieldIntent)
+  const flow = required && (args.retainHostOperationApproval === true || retainPluginSettingsFieldIntent
+    || custodyStaysOnLiveInvocation && args.spec.approval.flow === 'blocking')
     ? 'blocking'
     : required && (mustReturnApprovalCustody
     || (presentUserRequest && args.spec.approvalInputCustody !== 'live_only'))

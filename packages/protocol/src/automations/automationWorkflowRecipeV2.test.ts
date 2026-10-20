@@ -100,7 +100,7 @@ describe('AutomationStoredWorkflowDefinitionRecipeV2', () => {
     expect(AutomationV3WorkerClaimedRunSchema.parse({
       id: 'run-1',
       automationId: 'automation-1',
-      attempt: 1,
+      attempt: 1, leaseExpiresAt: Date.now() + 120_000,
       revision: 2,
       recipeKind: 'workflow-v2',
       executionInputEnvelope: JSON.stringify(recipe.workflow),
@@ -115,7 +115,7 @@ describe('AutomationStoredWorkflowDefinitionRecipeV2', () => {
     const workflowClaim = {
       id: 'run-1',
       automationId: 'automation-1',
-      attempt: 1,
+      attempt: 1, leaseExpiresAt: Date.now() + 120_000,
       revision: 2,
       executionInputEnvelope: JSON.stringify(recipe.workflow),
       automationEvidenceEnvelope: null,
@@ -132,7 +132,7 @@ describe('AutomationStoredWorkflowDefinitionRecipeV2', () => {
     expect(AutomationV3WorkerClaimedRunSchema.safeParse({
       id: workflowClaim.id,
       automationId: workflowClaim.automationId,
-      attempt: workflowClaim.attempt,
+      attempt: workflowClaim.attempt, leaseExpiresAt: Date.now() + 120_000,
       revision: workflowClaim.revision,
       recipeKind: 'legacy',
       executionInputEnvelope: workflowClaim.executionInputEnvelope,

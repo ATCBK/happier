@@ -29,13 +29,15 @@ import { resolveExecutionRunIntentProfile, resolveExecutionRunIntentProfileFromC
 import type { ExecutionRunTranscriptPublisher } from '../executionRunTranscriptPublisher';
 import { isExecutionRunTranscriptCustodyError } from '../executionRunTranscriptPublisher';
 import { isExecutionRunControllerCurrent, settleExecutionRunController } from '../settleExecutionRunController';
-import { readExecutionRunErrorCode } from '../errors';
+import { projectExecutionRunError } from '../errors';
 import { buildExecutionRunResultContractPrompt, decodeExecutionRunProfileResult } from '@happier-dev/protocol/execution/runs/resultContract';
 import { projectExecutionRunWorkflowInputAcceptance, type ExecutionRunWorkflowObservationSink } from '../executionRunWorkflowObservation';
 import { createExactTurnUsageAccumulator } from '@/usage/exactTurnUsage';
 import { publishExecutionRunTurn } from '../publishExecutionRunTurn';
 import type { ReviewRunCommentService } from '@/agent/executionRuns/profiles/review/reviewComments';
 import { readRuntimeTurnFailureAlreadySurfacedEvent } from '@/agent/runtime/turns/runtimeTurnOperations';
+import { resolveExecutionRunInputAuthority } from '@/agent/executionRuns/policy/executionRunPermissionDecision';
+import { projectExecutionRunInputTurn } from '../runOccurrenceWitness';
 
 function buildObservedTurnResult(
   contract: ExecutionRunResultContractV1 | undefined,
@@ -61,6 +63,8 @@ export async function sendBackendLongLivedRun(args: Readonly<{
     resultContract?: ExecutionRunResultContractV1;
     structuredInput?: import('@happier-dev/protocol').HappierStructuredInputV1;
     causalPermissionAuthority?: SessionInputCausalPermissionAuthorityV1;
+    actionRequestAttributionV1?: import('@happier-dev/protocol/actions/actionRequestAttributionV1').ActionRequestAttributionV1;
+    effectiveCallerPermissionMode?: string;
     workflowObservationSink?: ExecutionRunWorkflowObservationSink;
   }>;
   runs: Map<string, ExecutionRunState>;
@@ -73,6 +77,7 @@ export async function sendBackendLongLivedRun(args: Readonly<{
     backendTarget?: BackendTargetRefV1;
     permissionMode: string;
     causalPermissionAuthority?: SessionInputCausalPermissionAuthorityV1;
+    actionRequestAttributionV1?: import('@happier-dev/protocol/actions/actionRequestAttributionV1').ActionRequestAttributionV1;
     accountSettings?: Readonly<Record<string, unknown>> | null;
   }) => ExecutionRunHostRuntime;
   maxTurns: number | null;
@@ -87,6 +92,8 @@ export async function sendBackendLongLivedRun(args: Readonly<{
   writeActivityMarker: (runId: string, nowMs: number, opts?: Readonly<{ force?: boolean; resumed?: boolean }>) => Promise<void>;
   onPublicStateUpdated?: (runId: string) => void;
   profileCatalog?: ExecutionRunProfileContributionCatalog;
+  readNativeOfferedModel?: ExecutionRunController['readNativeOfferedModel'];
+  nativeModelRegistry?: ExecutionRunController['nativeModelRegistry'];
   authorizeProviderEffect?: () => Promise<{ ok: boolean; errorCode?: string; error?: string }>;
   }>): Promise<{ ok: boolean; errorCode?: string; error?: string }> {
   const admittedController = args.controllers.get(args.runId) ?? null;
@@ -100,6 +107,15 @@ export async function sendBackendLongLivedRun(args: Readonly<{
   }
   const run = args.runs.get(args.runId);
   if (!run) return { ok: false, errorCode: 'execution_run_not_found', error: 'Not found' };
+  if (run.sessionId === null) {
+    const authority = resolveExecutionRunInputAuthority({ permissionMode: run.permissionMode,
+      ...(Object.hasOwn(args.params, 'causalPermissionAuthority') ? { causalPermissionAuthority: args.params.causalPermissionAuthority } : {}),
+      ...(args.params.effectiveCallerPermissionMode !== undefined ? { effectiveCallerPermissionMode: args.params.effectiveCallerPermissionMode } : {}),
+    });
+    if (!authority.ok) return authority;
+    args = { ...args, params: { ...args.params, causalPermissionAuthority: authority.causalPermissionAuthority,
+      effectiveCallerPermissionMode: authority.effectiveCallerPermissionMode } };
+  }
   const wantsResume = args.params.resume === true;
   const delivery = normalizeExecutionRunSendDelivery(args.params.delivery);
   if (run.status !== 'running' && !(wantsResume && run.retentionPolicy === 'resumable')) {
@@ -132,6 +148,8 @@ export async function sendBackendLongLivedRun(args: Readonly<{
         writeActivityMarker: args.writeActivityMarker,
         getNowMs: args.getNowMs,
         profileCatalog: args.profileCatalog,
+        readNativeOfferedModel: args.readNativeOfferedModel,
+        nativeModelRegistry: args.nativeModelRegistry,
         ...(args.params.causalPermissionAuthority
           ? { causalPermissionAuthority: args.params.causalPermissionAuthority }
           : {}),
@@ -152,6 +170,7 @@ export async function sendBackendLongLivedRun(args: Readonly<{
     return { ok: false, errorCode: 'execution_run_not_allowed', error: 'Not running' };
   }
   if (ctrl2.cancelled) return { ok: false, errorCode: 'execution_run_not_allowed', error: 'Not running' };
+  if (ctrl2.delegatedTurn) return { ok: false, errorCode: 'execution_run_busy', error: 'Run is busy' };
   if (ctrl2.initialPendingInputAdmission) {
     const admissionBarrier = ctrl2.initialPendingInputAdmission;
     const initialAdmission = await admissionBarrier;
@@ -174,16 +193,17 @@ export async function sendBackendLongLivedRun(args: Readonly<{
     }
   }
 
-  const publishInputTurns = (): void => {
+  const publishInputTurns = (error?: ExecutionRunState['error']): void => {
     if (!ctrl2.inputTurnOccurrenceId) return;
     const currentRun = args.runs.get(args.runId);
     if (!currentRun) return;
     args.runs.set(args.runId, {
       ...currentRun,
+      ...(error ? { error } : {}),
       inputTurns: {
         occurrenceId: ctrl2.inputTurnOccurrenceId,
-        ...(ctrl2.currentInputTurn ? { current: ctrl2.currentInputTurn } : {}),
-        ...(ctrl2.lastInputTurn ? { last: ctrl2.lastInputTurn } : {}),
+        ...(ctrl2.currentInputTurn ? { current: projectExecutionRunInputTurn(ctrl2.currentInputTurn) } : {}),
+        ...(ctrl2.lastInputTurn ? { last: projectExecutionRunInputTurn(ctrl2.lastInputTurn) } : {}),
       },
     });
     args.onPublicStateUpdated?.(args.runId);
@@ -193,6 +213,8 @@ export async function sendBackendLongLivedRun(args: Readonly<{
     const admission = await args.authorizeProviderEffect();
     if (!admission.ok) return admission;
   }
+
+  if (ctrl2.delegatedTurn) return { ok: false, errorCode: 'execution_run_busy', error: 'Run is busy' };
 
   if (ctrl2.turnInFlight) {
     if (args.params.localInputId || args.params.resultContract) {
@@ -224,8 +246,10 @@ export async function sendBackendLongLivedRun(args: Readonly<{
               ? { structuredInput: normalizeStrictJsonValue(args.params.structuredInput) }
               : {}),
           },
-          args.params.causalPermissionAuthority
-            ? { causalPermissionAuthority: args.params.causalPermissionAuthority }
+          args.params.causalPermissionAuthority || args.params.actionRequestAttributionV1 || args.params.effectiveCallerPermissionMode !== undefined
+            ? { ...(args.params.causalPermissionAuthority ? { causalPermissionAuthority: args.params.causalPermissionAuthority } : {}),
+                ...(args.params.actionRequestAttributionV1 ? { actionRequestAttributionV1: args.params.actionRequestAttributionV1 } : {}),
+                ...(args.params.effectiveCallerPermissionMode !== undefined ? { effectiveCallerPermissionMode: args.params.effectiveCallerPermissionMode } : {}) }
             : undefined,
         );
         if (result.status !== 'admitted') {
@@ -346,13 +370,18 @@ export async function sendBackendLongLivedRun(args: Readonly<{
           ? { structuredInput: normalizeStrictJsonValue(args.params.structuredInput) }
           : {}),
       },
-      localInputId || args.params.resultContract || args.params.causalPermissionAuthority
+      localInputId || args.params.resultContract || args.params.causalPermissionAuthority || args.params.actionRequestAttributionV1 || args.params.effectiveCallerPermissionMode !== undefined
         ? {
             ...(localInputId ? { localId: localInputId } : {}),
             ...(args.params.resultContract ? { resultContract: args.params.resultContract } : {}),
             ...(args.params.causalPermissionAuthority
               ? { causalPermissionAuthority: args.params.causalPermissionAuthority }
               : {}),
+            ...(args.params.actionRequestAttributionV1
+              ? { actionRequestAttributionV1: args.params.actionRequestAttributionV1 }
+              : {}),
+            ...(args.params.effectiveCallerPermissionMode !== undefined
+              ? { effectiveCallerPermissionMode: args.params.effectiveCallerPermissionMode } : {}),
           }
         : undefined,
     );
@@ -362,7 +391,8 @@ export async function sendBackendLongLivedRun(args: Readonly<{
     const admitNextInput = async ({ instructions, localId }: Readonly<{ instructions: string; localId: string }>) => {
       const result = await sendBackendLongLivedRun({ ...args,
         params: { message: instructions, localInputId: localId,
-          ...(args.params.causalPermissionAuthority ? { causalPermissionAuthority: args.params.causalPermissionAuthority } : {}) },
+          ...(args.params.causalPermissionAuthority ? { causalPermissionAuthority: args.params.causalPermissionAuthority } : {}),
+          ...(args.params.effectiveCallerPermissionMode !== undefined ? { effectiveCallerPermissionMode: args.params.effectiveCallerPermissionMode } : {}) },
       });
       return result.ok ? { status: 'accepted' as const } : {
         status: result.errorCode === 'execution_run_send_outcome_unknown' ? 'outcomeUnknown' as const : 'rejected' as const,
@@ -506,15 +536,18 @@ export async function sendBackendLongLivedRun(args: Readonly<{
         return;
       }
 
-      const message = e instanceof Error ? e.message : 'Execution failed';
-      const errorCode = readExecutionRunErrorCode(e) ?? 'execution_run_failed';
+      const error = projectExecutionRunError(e);
+      const message = error.message;
+      if (ctrl2.turnEpoch === thisEpoch) ctrl2.turnInFlight = false;
       if (localInputId && ctrl2.currentInputTurn) {
         ctrl2.lastInputTurn = { ...ctrl2.currentInputTurn, state: 'failed' };
         ctrl2.currentInputPermissionRequestStore?.releaseResponseTarget();
         ctrl2.currentInputPermissionRequestStore = undefined;
         ctrl2.currentInputTurn = undefined;
         clearWorkflowObservation();
-        publishInputTurns();
+        // Exact-input waiters settle on this publication, before finishRun's
+        // asynchronous terminal work. Publish the classified cause with it.
+        publishInputTurns(error);
       }
       await ctrl2.streamWriter?.flushAll({ reason: 'abort', interruptedReason: message });
       const finishedAtMs = args.getNowMs();
@@ -522,7 +555,7 @@ export async function sendBackendLongLivedRun(args: Readonly<{
       try {
         await args.finishRun(
           args.runId,
-          { status: 'failed', summary: message, finishedAtMs, error: { code: errorCode, message } },
+          { status: 'failed', summary: message, finishedAtMs, error },
           {
             output: {
               status: 'failed',
@@ -532,7 +565,7 @@ export async function sendBackendLongLivedRun(args: Readonly<{
               sidechainId: run.sidechainId,
               finishedAtMs,
               startedAtMs: run.startedAtMs,
-              error: { code: errorCode, message },
+              error,
             },
             isError: true,
           },
@@ -632,13 +665,13 @@ export async function sendBackendLongLivedRun(args: Readonly<{
     }
 
     await args.writeActivityMarker(args.runId, args.getNowMs(), { force: true }).catch(() => {});
-    const message = e instanceof Error ? e.message : 'Execution failed';
-    const errorCode = readExecutionRunErrorCode(e) ?? 'execution_run_failed';
+    const error = projectExecutionRunError(e);
+    const message = error.message;
     const finishedAtMs = args.getNowMs();
     try {
       await args.finishRun(
         args.runId,
-        { status: 'failed', summary: message, finishedAtMs, error: { code: errorCode, message } },
+        { status: 'failed', summary: message, finishedAtMs, error },
         {
           output: {
             status: 'failed',
@@ -648,7 +681,7 @@ export async function sendBackendLongLivedRun(args: Readonly<{
             sidechainId: run.sidechainId,
             finishedAtMs,
             startedAtMs: run.startedAtMs,
-            error: { code: errorCode, message },
+            error,
           },
           isError: true,
         },

@@ -9,9 +9,9 @@ const actionsSettings = ActionsSettingsV1Schema.parse({ v: 1, actions: { 'settin
 
 describe('declared settings Actions', () => {
   it.each([
-    { anchor: 'transcript.agentHtmlNetworkPolicy', value: 'allowed' },
-    { anchor: 'transcript.showToolCalls', value: false },
-  ])('admits $anchor through ordinary dangerous approval and its explicit waiver', async input => {
+    { input: { anchor: 'transcript.agentHtmlNetworkPolicy', value: 'allowed' }, autonomous: true },
+    { input: { anchor: 'transcript.showToolCalls', value: false }, autonomous: false },
+  ])('enforces automated surface admission and approval waivers for $input.anchor', async ({ input, autonomous }) => {
     const writes: unknown[] = [];
     // The answering Settings host is the process boundary; Action admission and policy stay real.
     const executor = createActionExecutor({ settingsDeclarationAction: async ({ input }: Parameters<NonNullable<ActionExecutorDeps['settingsDeclarationAction']>>[0]) => {
@@ -22,16 +22,29 @@ describe('declared settings Actions', () => {
     } as unknown as ActionExecutorDeps);
     for (const surface of ['agent', 'mcp'] as const) {
       expect(await executor.execute('settings.set', input, { surface, actionsSettings }))
-        .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+        .toMatchObject({ ok: false, errorCode: autonomous ? 'approvals_not_supported' : 'unsupported_action' });
       expect(writes).toEqual([]);
     }
     const waived = ActionsSettingsV1Schema.parse({ v: 1,
       approvalWaivedSurfaces: { 'settings.set': ['agent', 'mcp'] } });
     for (const surface of ['agent', 'mcp'] as const) {
-      expect(await executor.execute('settings.set', input, { surface, actionsSettings: waived }))
-        .toEqual({ ok: true, result: { anchor: input.anchor, value: input.value } });
+      const result = await executor.execute('settings.set', input, { surface, actionsSettings: waived });
+      if (autonomous) expect(result).toEqual({ ok: true, result: { anchor: input.anchor, value: input.value } });
+      else expect(result).toMatchObject({ ok: false, errorCode: 'unsupported_action' });
     }
-    expect(writes).toEqual([input, input]);
+    expect(writes).toEqual(autonomous ? [input, input] : []);
+  });
+  it('applies a present user\'s own UI change directly while agents keep the approval default', () => {
+    // A person changing their own preference in Settings is not an agent-initiated Action.
+    const ui = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
+    for (const id of ['settings.set', 'settings.reset'] as const) {
+      const input = id === 'settings.set' ? { anchor: 'appearance.density', value: 'compact' } : { anchor: 'appearance.density' };
+      expect(isApprovalRequiredByActionsSettings(id, actionsSettings, ui, undefined, undefined, input), id).toBe(false);
+      for (const surface of ['agent', 'mcp', 'voice'] as const) {
+        expect(isApprovalRequiredByActionsSettings(id, actionsSettings, { surface }, undefined, undefined, input), `${id}/${surface}`).toBe(true);
+      }
+      expect(isApprovalRequiredByActionsSettings(id, actionsSettings, { surface: 'ui', authority: 'account_automation', actionCaller: { kind: 'host' } }, undefined, undefined, input), `${id}/automation`).toBe(true);
+    }
   });
   it('round-trips compound JSON settings through the same strict Action envelope', async () => {
     const value = { appRail: { orderedIds: ['plugin:removed', 'sessions'], placements: { sessions: 'overflow', 'plugin:removed': 'hidden' } } };

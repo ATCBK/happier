@@ -15,7 +15,7 @@ import { PromptLibraryCatalogKeyV1Schema, StoredPromptLibraryRecordV1Schema, ope
 
 export type PromptLibraryCatalogUnavailableReasonV1 = 'account-not-found' | 'account-inconsistent' | 'account-mode-mismatch'
   | 'encryption-material-unavailable' | 'invalid-stored-content' | 'unauthorized' | 'forbidden' | 'unsupported'
-  | 'unreachable' | 'scope-retired' | 'cancelled' | 'source-version-conflict' | 'authority-not-confirmed';
+  | 'unreachable' | 'database_transaction_conflict_exhausted' | 'scope-retired' | 'cancelled' | 'source-version-conflict' | 'authority-not-confirmed';
 export type PromptLibraryCatalogRowV1 = Readonly<{ record: PromptLibraryRecordV1; revision: number }>;
 export type PromptLibraryCatalogDiagnosticV1 = Readonly<{ key: PromptLibraryCatalogKeyV1; revision: number | 'absent';
   reason: 'invalid-stored-content' | 'unreachable' | 'cancelled' | 'source-version-conflict' | 'authority-not-confirmed' }>;
@@ -35,7 +35,8 @@ export type PromptLibrarySourceTransferV1 = Readonly<{
     Promise<ReturnType<typeof PromptLibraryRowMutationResponseV1Schema.parse>>;
   replaceSource?(input: Readonly<{ raw: Readonly<Record<string, unknown>>; expectedVersion: number }>): Promise<
     Readonly<{ status: 'applied'; settingsVersion: number }> | Readonly<{ status: 'conflict'; currentSettingsVersion: number }>
-    | Readonly<{ status: 'outcomeUnknown'; lastKnownSettingsVersion: number }> | Readonly<{ status: 'rejected' }>>;
+    | Readonly<{ status: 'outcomeUnknown'; lastKnownSettingsVersion: number }> | Readonly<{ status: 'rejected' }>
+    | Readonly<{ status: 'invalid'; reason: 'invalidPreparedMutation' }>>;
   /** The existing Role owner retains documents; this catalog never translates guidance. */
   retainLegacyRoleArtifacts?(raw: Readonly<Record<string, unknown>>): Promise<readonly AccountSettingsHistoryLegacyRoleArtifactTransferV1[]>;
   normalizeHistory?(input: Readonly<{ activeTransferredRoots: readonly string[];
@@ -57,6 +58,8 @@ type PromptLibraryLoadInputV1 = Readonly<{
   onReadyBeforeCleanup?: (catalog: Extract<PromptLibraryCatalogSnapshotV1, { rows: unknown }>) => Promise<void>;
   /** An incumbent captured-lifetime cleanup may already own this maintenance. */
   hasPendingCleanup?: () => boolean;
+  /** Finite reads still activate/migrate destinations, but leave retained-source cleanup to hydration. */
+  maintainSource?: false;
 }>;
 
 async function readCatalog(input: PromptLibraryLoadInputV1): Promise<PromptLibraryCatalogSnapshotV1> {
@@ -94,6 +97,10 @@ export async function loadPromptLibraryCatalogV1(input: PromptLibraryLoadInputV1
   if (missing.length === 0) {
     catalog = await migrateStackSkills(input, catalog);
     if (catalog.status !== 'ready' && catalog.status !== 'partial') return catalog;
+    if (input.maintainSource === false) {
+      await input.onReadyBeforeCleanup?.(catalog);
+      return catalog;
+    }
   }
   // Complete destination authority needs no retained source to be readable.
   // Publish it before optional Settings/history maintenance can block a demand.
@@ -141,6 +148,10 @@ export async function loadPromptLibraryCatalogV1(input: PromptLibraryLoadInputV1
   if (malformed.length) catalog = { ...catalog, status: 'partial', diagnostics: [...catalog.diagnostics, ...malformed] };
   if (missing.length) catalog = await migrateStackSkills(input, catalog);
   if (catalog.status !== 'ready' && catalog.status !== 'partial') return catalog;
+  if (input.maintainSource === false) {
+    await input.onReadyBeforeCleanup?.(catalog);
+    return catalog;
+  }
   if (!transfer.replaceSource) return catalog;
   if (!publishedBeforeSource) await input.onReadyBeforeCleanup?.(catalog);
   if (input.hasPendingCleanup?.()) return catalog;

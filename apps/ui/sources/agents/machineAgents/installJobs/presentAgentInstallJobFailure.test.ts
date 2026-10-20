@@ -9,6 +9,8 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
     return createServerScopedMachineRpcBoundaryMock(vi.fn());
 });
 
+import { formatResetAtTime } from '@/utils/time/formatResetAtTime';
+
 import { AgentInstallJobRpcError } from './api';
 import { presentAgentInstallJobFailure, presentAgentInstallJobRpcFailure } from './presentAgentInstallJobFailure';
 
@@ -34,5 +36,28 @@ describe('agent install failure presentation', () => {
             body: 'agentInstallJob.updateBody', recovery: { kind: 'guide', guideUrl: failure.guideUrl },
         });
         expect(presentAgentInstallJobFailure({ ...failure, guideUrl: undefined }).recovery.kind).toBe('chooseAgent');
+    });
+
+    it('says the download source is rate-limited and when to retry, in local time rather than the raw reset', () => {
+        const resetIso = '2026-10-19T14:20:00.000Z';
+        const failure = {
+            kind: 'failed', code: 'rate_limited', stepId: 'download',
+            message: `GitHub's API rate limit has been reached. Try again after ${resetIso}.`,
+        } as const;
+        const presented = presentAgentInstallJobFailure(failure);
+        expect(presented).toMatchObject({
+            code: 'rate_limited', title: 'agentInstallJob.rateLimited',
+            recovery: { kind: 'retry', label: 'agentInstallJob.retry' },
+        });
+        expect(presented.body).toBe(`agentInstallJob.rateLimitedBody(time=${formatResetAtTime(Date.parse(resetIso))})`);
+        expect(presented.body).not.toContain(resetIso);
+    });
+
+    it('does not invent a retry time when the rate-limit message names none', () => {
+        const presented = presentAgentInstallJobFailure({
+            kind: 'failed', code: 'rate_limited', stepId: 'download',
+            message: 'GitHub\'s API rate limit has been reached. Wait for GitHub to reset it, then try again.',
+        });
+        expect(presented).toMatchObject({ title: 'agentInstallJob.rateLimited', body: 'agentInstallJob.rateLimitedBodyNoTime' });
     });
 });

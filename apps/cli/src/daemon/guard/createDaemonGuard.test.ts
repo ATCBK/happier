@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as childProcess from 'node:child_process';
 import { PassThrough } from 'node:stream';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
 import { MachineGuardPolicyV1Schema, type MachineGuardPolicyV1 } from '@happier-dev/protocol/machines/guard/guardPolicyV1';
 import { MachineProcessesCleanUpInputV1Schema } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
@@ -41,6 +41,13 @@ import { createDaemonGuard, type DaemonGuard } from './createDaemonGuard';
 import { evaluateSessionEligibility } from './sessionEligibility';
 import type { TrackedSession } from '../types';
 import { SessionGuardNoticeStateV1Schema, type SessionGuardNoticeStateV1 } from '@happier-dev/protocol/machines/guard/sessionGuardStateV1';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+
+let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
+beforeAll(async () => { runtime = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+    runtimeOptions: { pluginIds: ['happier.agent.codex'] } }); });
+afterAll(async () => { await runtime?.dispose(); });
 
 const epoch = Date.UTC(2026, 9, 10);
 const target = { serverId: 'home', machineId: 'machine', installationId: 'installation' };
@@ -192,10 +199,10 @@ describe('daemon Guard composition at the real minute, Activity and summary owne
         const projectFacts = createReadGuardFacts({ readBrowsers: () => [], trackedSessions: () => idleSession ? [workspaceSession] : [], readInventory: () => inventory.read(),
             readServiceTargets: () => serviceOwner?.readResourceTargets() ?? [], readSessionEligibility: async (tracked, liveWork) => {
                 if (!idleSession) throw new Error('No owned Session root');
-                return evaluateSessionEligibility({ tracked, inventory: liveWork, draft: { status: 'absent' }, resume: {
+                return (await evaluateSessionEligibility({ tracked, inventory: liveWork, draft: { status: 'absent' }, resume: {
                     sessionId: tracked.happySessionId!, rawSession: { machineId: target.machineId, path: '/project' },
-                    metadata: { machineId: target.machineId, path: '/project', flavor: 'codex', codexSessionId: 'native' },
-                } });
+                    metadata: { runtimeDescriptorV1: { v: 1 as const, agentId: 'codex', agent: { backendMode: 'appServer' } }, machineId: target.machineId, path: '/project', flavor: 'codex', codexSessionId: 'native' },
+                } }));
             },
             readServices: async () => {
                 // Native socket counters only; real normalization joins the exact owner and generation.

@@ -150,7 +150,7 @@ function buildSpawnSemanticFingerprint(options: SpawnSessionOptions): Json {
       ? null
       : sha256Hex(stableJsonStringify(options.initialAccess)),
     primaryTeamId: options.primaryTeamId === undefined ? null : [options.primaryTeamId],
-    reportsTo: options.reportsTo ?? null,
+    manager: options.manager ?? null,
     identity: options.identity ?? null,
     memoryEnabled: options.memoryEnabled ?? null,
     initialSessionRolesHash: options.initialSessionRolesV1 === undefined
@@ -234,7 +234,10 @@ export function createSpawnRequestCoalescer(params: Readonly<{
   pendingTimeoutTtlMs?: number;
   nowMs?: () => number;
 }>) {
-  const inFlightByKey = new Map<string, Promise<SpawnSessionResult>>();
+  const inFlightByKey = new Map<string, {
+    promise: Promise<SpawnSessionResult>;
+    isAdmissionCurrent?: () => boolean;
+  }>();
   const changeListeners = new Set<() => void>();
   const notifyChanged = () => { for (const listener of changeListeners) listener(); };
   const inFlightKeyByAuthorizationKey = new Map<string, string>();
@@ -266,14 +269,8 @@ export function createSpawnRequestCoalescer(params: Readonly<{
     if (key.kind === 'existing' && !key.authorizationKey) return;
     if (ttlMs <= 0) return;
     if (result.type !== 'success') return;
-    if (key.kind === 'existing') {
-      recentSuccessByKey.set(key.key, { result, atMs: nowMs() });
-      pendingTimeoutByKey.delete(key.key);
-      return;
-    }
-    const sessionId = normalizeNonEmptyString(result.sessionId);
-    if (!sessionId) return;
-    recentSuccessByKey.set(key.key, { result: { type: 'success', sessionId }, atMs: nowMs() });
+    if (key.kind === 'new' && !normalizeNonEmptyString(result.sessionId)) return;
+    recentSuccessByKey.set(key.key, { result, atMs: nowMs() });
     pendingTimeoutByKey.delete(key.key);
   };
 
@@ -285,12 +282,16 @@ export function createSpawnRequestCoalescer(params: Readonly<{
   };
 
   return {
-    readInFlightRequests: () => [...inFlightByKey.values()],
+    readInFlightRequests: () => [...inFlightByKey.values()].map(request => request.promise),
     subscribeChanges(listener: () => void) {
       changeListeners.add(listener);
       return () => { changeListeners.delete(listener); };
     },
-    run: async (key: DaemonSpawnRequestKey, work: () => Promise<SpawnSessionResult>): Promise<SpawnSessionResult> => {
+    run: async (
+      key: DaemonSpawnRequestKey,
+      work: () => Promise<SpawnSessionResult>,
+      isAdmissionCurrent?: () => boolean,
+    ): Promise<SpawnSessionResult> => {
       const recentSuccess = tryGetRecent(recentSuccessByKey, key, ttlMs);
       if (recentSuccess) return recentSuccess;
 
@@ -298,7 +299,9 @@ export function createSpawnRequestCoalescer(params: Readonly<{
       if (pendingTimeout) return pendingTimeout;
 
       const existing = inFlightByKey.get(key.key);
-      if (existing) return await existing;
+      // A fresh Resume must wait for retired work through the existing Session
+      // lane, then run with its own admission instead of inheriting a refusal.
+      if (existing && (existing.isAdmissionCurrent?.() ?? true)) return await existing.promise;
 
       if (key.kind === 'existing' && key.authorizationKey) {
         const activeKey = inFlightKeyByAuthorizationKey.get(key.authorizationKey);
@@ -329,7 +332,8 @@ export function createSpawnRequestCoalescer(params: Readonly<{
           recordPendingTimeout(key, result);
           return result;
         } finally {
-          if (inFlightByKey.get(key.key) === promise) {
+          const ownsInFlightKey = inFlightByKey.get(key.key)?.promise === promise;
+          if (ownsInFlightKey) {
             inFlightByKey.delete(key.key);
             notifyChanged();
           }
@@ -342,13 +346,14 @@ export function createSpawnRequestCoalescer(params: Readonly<{
           if (
             key.kind === 'existing'
             && key.authorizationKey
+            && ownsInFlightKey
             && inFlightKeyByAuthorizationKey.get(key.authorizationKey) === key.key
           ) {
             inFlightKeyByAuthorizationKey.delete(key.authorizationKey);
           }
         }
       })();
-      inFlightByKey.set(key.key, promise);
+      inFlightByKey.set(key.key, { promise, isAdmissionCurrent });
       notifyChanged();
       if (key.kind === 'existing') {
         serializationTailByKey.set(key.serializationKey, promise);

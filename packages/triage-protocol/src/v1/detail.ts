@@ -40,11 +40,14 @@ export type TriageLinkedSessionProjectionV1 = ReturnType<
 
 /**
  * The mounted detail input: the exact configured instance, the host-applied
- * present observation, and the required bounded linked-Session projection.
+ * present observation's launch projection, and the required bounded linked-Session projection.
  *
  * The applied observation is target-stamped — it carries the qualified
  * `entryRef` and the target's `observedAtMs`, which a source result may never
- * contain. `[]` linked sessions means no links.
+ * contain. Large relationship/workflow lists may be omitted with snapshot
+ * `projectionTruncated`; native content remains readable through the source's
+ * live detail owner. Linked Sessions may be a byte-fitted prefix with
+ * `linkedSessionsHasMore: true`; only an empty complete projection means no links.
  *
  * A Composer-origin launch adds no field here. Its `originComposer` address
  * lives in exactly one carrier — Triage's own CLOSED private launch input at

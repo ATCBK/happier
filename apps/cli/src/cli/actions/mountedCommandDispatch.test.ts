@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Buffer } from 'node:buffer';
+import nacl from 'tweetnacl';
 import fastify from 'fastify';
-import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
+import { createActionExecutor, deriveAccountMachineKeyFromRecoverySecret, sealEncryptedDataKeyEnvelopeV1, type ActionExecutorDeps } from '@happier-dev/protocol';
+import { encodeBase64 } from '@/api/encryption';
+import { ExternalActionRequestEnvelopeV2Schema, EXTERNAL_ACTION_HTTP_PATH_PREFIX_V1 } from '@happier-dev/protocol/actions/externalActionApi';
+import { openExternalActionRequestV2, prepareExternalActionResponseV2 } from '@happier-dev/protocol/actions/externalActionEncryption';
 import { clientActionUnavailable } from '@happier-dev/protocol/actions/clientDispatchV1';
 import { SignedRootActionExecuteRequestSchema } from '@/daemon/externalActions/signedRootActionControl';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
@@ -27,8 +31,8 @@ const credentials = { token: `${encode({ alg: 'none', typ: 'JWT' })}.${encode({
   sub: 'account-a', session: 'stored-session-a', tokenEpoch: 7,
   provenance: { v: 1, kind: 'account', authority: 'present_user' },
 })}.signature`, encryption: null, credentialProvenance: 'stored_session' } as const;
-const input = { scope: { serverId: 'home-a', accountId: 'account-a' }, canvasKey: 'canvas-a' };
-const listed = { status: 'listed', focusedLeafId: null, maximizedLeafId: null, leaves: [], tabs: [] };
+const input = { scope: { serverId: 'home-a', accountId: 'account-a' }, ref: { kind: 'newSession', instanceId: 'composer-a' } };
+const listed = { status: 'opened' };
 
 afterEach(() => { daemonPost.mockReset(); process.exitCode = 0; });
 
@@ -37,15 +41,24 @@ describe('compiled mounted-client CLI command daemon ingress', () => {
     const sessionId = 'c123456789012345678901234';
     const origin = new URL(resolveServerHttpBaseUrl()).origin;
     const app = fastify();
+    const ingressDiagnostics: unknown[] = [];
+    app.addHook('onError', async (_request, _reply, error) => { ingressDiagnostics.push(error.message); });
     const secret = new Uint8Array(32).fill(7);
+    const dataKey = new Uint8Array(32).fill(19);
+    const publicKey = nacl.box.keyPair.fromSecretKey(deriveAccountMachineKeyFromRecoverySecret(secret)).publicKey;
+    const dataEncryptionKey = encodeBase64(sealEncryptedDataKeyEnvelopeV1({
+      dataKey, recipientPublicKey: publicKey,
+      randomBytes: length => new Uint8Array(length).fill(11),
+    }));
     const sessionCredentials = mode === 'e2ee'
       ? { ...credentials, encryption: { type: 'legacy' as const, secret } } : credentials;
     const metadata = { machineId: 'machine-a', path: '/workspace', flavor: 'claude' };
+    app.get('/v1/account/encryption', async () => ({ mode, updatedAt: 1 }));
     app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture({ mode }));
     app.get(`/v2/sessions/${sessionId}`, async () => ({ session: createSessionRecordFixture({
-      id: sessionId, active: true, encryptionMode: mode, dataEncryptionKey: null,
+      id: sessionId, active: true, encryptionMode: mode, dataEncryptionKey: mode === 'e2ee' ? dataEncryptionKey : null,
       metadata: mode === 'e2ee'
-        ? encryptSessionPayload({ ctx: { encryptionKey: secret, encryptionVariant: 'legacy' }, payload: metadata })
+        ? encryptSessionPayload({ ctx: { encryptionKey: dataKey, encryptionVariant: 'dataKey' }, payload: metadata })
         : JSON.stringify(metadata),
       latestTurnId: 'settled-turn', latestTurnStatus: 'completed',
     }) }));
@@ -63,6 +76,26 @@ describe('compiled mounted-client CLI command daemon ingress', () => {
         return { status: 'accepted', localId: request.localId };
       },
     });
+    // Live Sessions receive protected input through the current Account HTTP
+    // ingress, not the retired own-daemon signed-root shortcut. Substitute
+    // only that remote service; use its real request/response crypto codecs.
+    app.post(`${EXTERNAL_ACTION_HTTP_PATH_PREFIX_V1}session.message.send`, async request => {
+      const envelope = ExternalActionRequestEnvelopeV2Schema.parse(request.body);
+      const binding = { serverIdentityId: 'srv_home_identity_a', accountId: 'account-a',
+        authentication: { kind: 'account' as const, tokenEpoch: 7 },
+        actionId: 'session.message.send' as const, requestId: envelope.requestId,
+        target: { kind: 'session' as const, sessionId } };
+      const material = { type: 'dataKey' as const, machineKey: deriveAccountMachineKeyFromRecoverySecret(secret) };
+      const opened = openExternalActionRequestV2({ envelope, binding, material });
+      expect(opened).not.toBeNull();
+      const execution = await daemon.execute('session.message.send', opened!.input, {
+        surface: 'cli', authority: 'present_user', actionRequestId: envelope.requestId,
+      });
+      ingressDiagnostics.push(execution);
+      return prepareExternalActionResponseV2({ binding, request: envelope, execution, material,
+        executedMachineId: 'machine-a',
+        randomBytes: length => new Uint8Array(length).fill(13) }).response;
+    });
     daemonPost.mockImplementation(async (_path: string, raw: unknown) => {
       const request = SignedRootActionExecuteRequestSchema.parse(raw);
       return await daemon.execute(request.actionId, request.input, {
@@ -78,11 +111,13 @@ describe('compiled mounted-client CLI command daemon ingress', () => {
         argv: [...command.path, sessionId, 'Reply only FX16', '--local-id', 'fx16-idle-input', '--json'],
         deps: { readCredentialsFn: async () => sessionCredentials,
           createExecutorFn: params => createCliActionExecutorFromCredentials({ ...params,
+            serverIdentityId: 'srv_home_identity_a',
             actionsSettingsProvider: createActionSettingsProvider(),
           }),
         },
       }));
-      expect(output.json()).toMatchObject({ ok: true, data: { sessionId, localId: 'fx16-idle-input' } });
+      const result = output.json();
+      expect(result, JSON.stringify({ result, ingressDiagnostics })).toMatchObject({ ok: true, data: { sessionId, localId: 'fx16-idle-input' } });
       if (mode === 'e2ee') {
         expect(admitted).toEqual([expect.objectContaining({ sessionId, targetMachineId: 'machine-a', localId: 'fx16-idle-input' })]);
         expect(httpAdmitted).toEqual([]);
@@ -103,7 +138,7 @@ describe('compiled mounted-client CLI command daemon ingress', () => {
         surface: 'cli', authority: 'present_user', actionRequestId: request.actionRequestId,
       });
     });
-    const command = listCompiledActionCliCommands().find(row => row.actionId === 'session.canvas.tabs.list')!;
+    const command = listCompiledActionCliCommands().find(row => row.actionId === 'composer.attachments.pick')!;
     const output = captureConsoleJsonOutput();
     try {
       await runCompiledActionCliCommand({ command,

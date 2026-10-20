@@ -182,6 +182,10 @@ export const sessionListStyles = StyleSheet.create((theme) => ({
         borderRadius: 999,
         marginLeft: theme.space.s4,
     },
+    groupHeaderDragHandle: {
+        width: theme.space.s24,
+        height: theme.space.s24,
+    },
     folderHeaderDragHandleIcon: {
         opacity: 0,
     },
@@ -244,6 +248,15 @@ export const sessionListStyles = StyleSheet.create((theme) => ({
         alignItems: 'center' as const,
         gap: theme.space.s8,
         minHeight: 28,
+    },
+    /** Active-facet chips under the title: they leave the field's gap and the list's rows where they were. */
+    searchChromeChipRow: {
+        flexDirection: 'row' as const,
+        flexWrap: 'wrap' as const,
+        alignItems: 'center' as const,
+        gap: theme.space.s8,
+        paddingTop: theme.space.s2,
+        paddingBottom: theme.space.s4,
     },
     searchChromeScopeRow: {
         minHeight: 24,

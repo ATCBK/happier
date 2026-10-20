@@ -83,7 +83,6 @@ function launchInput(
         } : {}),
       },
       viewer: { involvement: ['reviewRequested'] },
-      nativeRevision: OBSERVED_HEAD,
     },
     linkedSessions,
   } as JsonValue;

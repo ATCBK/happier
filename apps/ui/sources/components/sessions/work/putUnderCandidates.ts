@@ -1,10 +1,10 @@
 import type { Session } from '@/sync/domains/state/storageTypes';
-import type { SessionReportsToEligibilitySnapshot } from '@/sync/ops/relations/sessionReportsToEligibility';
+import type { SessionManagerEligibilitySnapshot } from '@/sync/ops/relations/sessionManagerEligibility';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 type SessionRecord = Readonly<Record<string, Session>>;
 
-export type PutUnderEligibility = Readonly<{ allowed: true; expectedLeadSessionId: string | null }> | Readonly<{
+export type PutUnderEligibility = Readonly<{ allowed: true; expectedManagerSessionId: string | null }> | Readonly<{
     allowed: false;
     reason: 'unavailable' | 'different_home' | 'archived' | 'input' | 'read' | 'pairwise' | 'cycle' | 'already_under';
 }>;
@@ -12,11 +12,11 @@ export type PutUnderScope = Readonly<{ serverId?: string | null; accountId?: str
 
 /** Structural exclusions are local; endpoint/context admission comes only from the Home owner. */
 export function resolvePutUnderEligibility(
-    sessions: SessionRecord, sessionId: string, leadSessionId: string,
-    facts?: SessionReportsToEligibilitySnapshot | null, scope: PutUnderScope = {},
+    sessions: SessionRecord, sessionId: string, managerSessionId: string,
+    facts?: SessionManagerEligibilitySnapshot | null, scope: PutUnderScope = {},
 ): PutUnderEligibility {
     const session = sessions[sessionId];
-    const candidate = sessions[leadSessionId];
+    const candidate = sessions[managerSessionId];
     if (!session || !candidate) return { allowed: false, reason: 'unavailable' };
     const serverId = session.serverId ?? null;
     if (serverId === null) return { allowed: false, reason: 'unavailable' };
@@ -30,15 +30,15 @@ export function resolvePutUnderEligibility(
     // Retained list rows may still show previous edges; they cannot decide the current graph.
     if (!facts || !facts.isCurrent() || !areServerProfileIdentifiersEquivalent(facts.serverId, serverId) || facts.sessionId !== session.id
         || (scope.accountId !== undefined && facts.accountId !== scope.accountId)) return { allowed: false, reason: 'unavailable' };
-    if (!scope.allowCurrentLead && facts.currentLeadSessionId === candidate.id) return { allowed: false, reason: 'already_under' };
+    if (!scope.allowCurrentLead && facts.currentManagerSessionId === candidate.id) return { allowed: false, reason: 'already_under' };
     const verdict = facts.readCandidate(candidate.id);
-    return verdict ? verdict.allowed ? { allowed: true, expectedLeadSessionId: facts.currentLeadSessionId } : { allowed: false, reason: verdict.reason }
+    return verdict ? verdict.allowed ? { allowed: true, expectedManagerSessionId: facts.currentManagerSessionId } : { allowed: false, reason: verdict.reason }
         : { allowed: false, reason: 'unavailable' };
 }
 
 /** Applicable targets include unavailable ones, so the chooser can explain current refusal. */
 export function listPutUnderCandidateOptions(sessions: SessionRecord, session: Pick<Session, 'id' | 'serverId'>,
-    facts?: SessionReportsToEligibilitySnapshot | null) {
+    facts?: SessionManagerEligibilitySnapshot | null) {
     return Object.values(sessions)
         .map((candidate) => ({ candidate, eligibility: resolvePutUnderEligibility(sessions, session.id, candidate.id, facts, {
             serverId: session.serverId ?? null, allowCurrentLead: true,
@@ -54,18 +54,18 @@ export function listPutUnderCandidateOptions(sessions: SessionRecord, session: P
 export function listPutUnderCandidates(
     sessions: SessionRecord,
     session: Pick<Session, 'id' | 'serverId'>,
-    facts?: SessionReportsToEligibilitySnapshot | null,
+    facts?: SessionManagerEligibilitySnapshot | null,
 ): readonly Session[] {
     return listPutUnderCandidateOptions(sessions, session, facts)
         .filter(({ eligibility }) => eligibility.allowed).map(({ candidate }) => candidate);
 }
 
 /**
- * Whether dragging `sessionId` onto `leadSessionId` in the Sessions list is a real "put under": the
+ * Whether dragging `sessionId` onto `managerSessionId` in the Sessions list is a real "put under": the
  * person can steer the dragged Session (the same right "Put under…" asks for), the target could
  * lead it, and it is not already its lead (that drop would change nothing, so it shows no target).
  */
-export function canDropSessionUnder(sessions: SessionRecord, sessionId: string, leadSessionId: string,
-    facts?: SessionReportsToEligibilitySnapshot | null, scope?: PutUnderScope): boolean {
-    return resolvePutUnderEligibility(sessions, sessionId, leadSessionId, facts, scope).allowed;
+export function canDropSessionUnder(sessions: SessionRecord, sessionId: string, managerSessionId: string,
+    facts?: SessionManagerEligibilitySnapshot | null, scope?: PutUnderScope): boolean {
+    return resolvePutUnderEligibility(sessions, sessionId, managerSessionId, facts, scope).allowed;
 }

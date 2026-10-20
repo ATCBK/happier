@@ -72,7 +72,7 @@ describe("accountRoutes (/v2/account/settings) (integration)", () => {
         const releaseTransition = deferred();
         let writerSettled = false;
         const transition = inTx(async (tx) => {
-            const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, account.id);
+            const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, account.id, "exclusive");
             expect(fence.status).toBe("ready");
             if (fence.status !== "ready") return;
             transitionFenceAcquired.resolve();

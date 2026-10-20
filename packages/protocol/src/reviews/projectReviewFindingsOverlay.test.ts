@@ -45,8 +45,18 @@ describe('projectReviewFindingsOverlay', () => {
             expect(result.tail).toEqual(result.entries);
             expect(result.entries[0]).toMatchObject({ reason, finding: engine.findings[0], changeRefs: [], stopIds: [] });
         }
-        const sameSides = { ...comparison, inventory: { ...comparison.inventory, files: comparison.inventory.files.map((file) => ({ ...file, previousPath: undefined, occurrences: file.occurrences.map((occurrence) => ({ ...occurrence, previousPath: undefined, before: occurrence.after })) })) } };
-        expect(projectReviewFindingsOverlay({ comparison: sameSides, reviews: [review] }).tail[0]?.reason).toBe('side_ambiguous');
+        const differentSides = { ...comparison, inventory: { ...comparison.inventory, files: comparison.inventory.files.map((file) => ({ ...file, previousPath: undefined, occurrences: file.occurrences.map((occurrence, index) => ({ ...occurrence, previousPath: undefined, before: index === 1 ? file.occurrences[0]!.after : occurrence.before })) })) } };
+        expect(projectReviewFindingsOverlay({ comparison: differentSides, reviews: [review] }).tail[0]?.reason).toBe('side_ambiguous');
+    });
+
+    it('maps overlapping before and after lines when both sides identify the same exact changes without inventing a side', () => {
+        const sameSides = { ...comparison, inventory: { ...comparison.inventory, files: comparison.inventory.files.map((file) => ({
+            ...file, previousPath: undefined, occurrences: file.occurrences.map((occurrence) => ({ ...occurrence, previousPath: undefined, before: occurrence.after })),
+        })) } };
+        const result = projectReviewFindingsOverlay({ comparison: sameSides, walkthrough, reviews: [review] });
+        expect(result.entries[0]).toMatchObject({ state: 'mapped', changeRefs: ['exact-1'], stopIds: ['stop-1'] });
+        expect(result.entries[0]?.side).toBeUndefined();
+        expect(result.tail).toEqual([]);
     });
 
     it('uses explicit deletion side and never selects a zero-line after range or a model alias', () => {
@@ -109,5 +119,13 @@ describe('projectReviewFindingsOverlay', () => {
             occurrences: file.occurrences.map((occurrence) => ({ ...occurrence, evidence: { state: 'available' as const } })),
         })) } };
         expect(projectReviewFindingsOverlay({ comparison: partial, reviews: [review] }).entries[0]).toMatchObject({ state: 'mapped', changeRefs: ['exact-1'] });
+    });
+
+    it('retains review identity and findings before the captured comparison is available', () => {
+        const result = projectReviewFindingsOverlay({ comparison: null, reviews: [review] });
+        expect(result).toMatchObject({ status: 'incomplete', reviews: [review], entries: [
+            { runRef, finding, state: 'unmapped', reason: 'evidence_unavailable', changeRefs: [], stopIds: [] },
+        ] });
+        expect(result.tail).toEqual(result.entries);
     });
 });

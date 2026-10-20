@@ -3,7 +3,27 @@ import { describe, expect, it } from 'vitest';
 import { ActivityWebhookPayloadV1Schema, buildActivityWebhookPayload, MachineVitalsPushRoutingDataV1Schema,
   buildGuardStopWarningPushDataV1, GuardStopWarningPushDataV1Schema, readGuardStopWarningPushActionV1,
   isGuardStopWarningCurrentV1 } from './webhookPayload.js';
-import { readUsageNoticeArtifactV1 } from './usageNoticeArtifactV1.js';
+import { readUsageNoticeArtifactV1, readAccountNoticeArtifactV1, readAccountNoticeArtifactHeaderV1, AccountNoticeArtifactHeaderV1Schema } from './usageNoticeArtifactV1.js';
+
+describe('private Account notices', () => {
+  it('binds the stored body to its plugin source and preserves independent personal state', () => {
+    const content = { v: 1, source: { kind: 'plugin', pluginId: 'acme.tasks', itemId: 'task-1' },
+      type: 'update', resolved: false, page: { pageId: 'tasks', subPath: 'task-1' }, body: 'Changed' };
+    const header = { ...content, kind: 'account_notice.v1', title: 'Task changed', status: 'dismissed', readAt: 123 };
+    expect(readAccountNoticeArtifactV1({ header, body: JSON.stringify(content) })).toEqual(header);
+    expect(readAccountNoticeArtifactV1({ header, body: JSON.stringify({ ...content,
+      source: { ...content.source, pluginId: 'another.plugin' } }) })).toBeNull();
+    expect(AccountNoticeArtifactHeaderV1Schema.safeParse({ ...header, accountId: 'claimed' }).success).toBe(false);
+    expect(AccountNoticeArtifactHeaderV1Schema.safeParse({ ...header, page: { ...content.page, pluginId: 'other' } }).success).toBe(false);
+    expect(readAccountNoticeArtifactHeaderV1({ ...header, retiredPresentation: true })).toEqual(header);
+    expect(readAccountNoticeArtifactHeaderV1({ ...header, source: { ...content.source, accountId: 'claimed' } })).toBeNull();
+    expect(readAccountNoticeArtifactHeaderV1({ ...header, page: { ...content.page, pluginId: 'other' } })).toBeNull();
+    expect(readAccountNoticeArtifactV1({ header, body: JSON.stringify({ ...content, source: { ...content.source, accountId: 'claimed' } }) })).toBeNull();
+    expect(readAccountNoticeArtifactV1({ header, body: JSON.stringify({ ...content, page: { ...content.page, pluginId: 'other' } }) })).toBeNull();
+    expect(AccountNoticeArtifactHeaderV1Schema.safeParse({ ...header, page: { pageId: 'tasks', subPath: '../escape' } }).success).toBe(false);
+    expect(readAccountNoticeArtifactHeaderV1({ ...header, page: { pageId: 'tasks', subPath: '../escape' } })).toBeNull();
+  });
+});
 
 describe('guard warning routing and withdrawal', () => {
   it('binds each action and dismissal to the exact Session or terminal occurrence', () => {
@@ -50,6 +70,9 @@ describe('machine vitals Inbox notices', () => {
       const value = { ...notice, phase };
       const header = { v: 1, kind: 'usage_notice.v1', title: 'Machine resources', status: 'open', notice: value };
       expect(readUsageNoticeArtifactV1({ header, body: JSON.stringify({ v: 1, notice: value }) })).toEqual(header);
+      const content = { v: 1, source: { kind: 'host', topic: 'resource_limit' }, type: 'update', resolved: false, notice: value };
+      const current = { ...content, kind: 'account_notice.v1', title: 'Machine resources', status: 'open' };
+      expect(readAccountNoticeArtifactV1({ header: current, body: JSON.stringify(content) })).toEqual(current);
     }
   });
   it('drops retired stored fields while rejecting mismatched evidence and divergent Artifact copies', () => {
@@ -76,6 +99,44 @@ describe('machine vitals Inbox notices', () => {
 });
 
 describe('buildActivityWebhookPayload', () => {
+  it('keeps Discussion Follow navigation bound to the exact committed C3 message reference', () => {
+    const original = { kind: 'discussion' as const, discussion: { serverId: 'home', discussionId: 'discussion' }, messageId: 'message' };
+    const follow = { original, event: { kind: 'person_wrote' as const } };
+    const payload = buildActivityWebhookPayload({ channelId: 'hook', createdAt: 1, topic: 'follow_update',
+      content: { title: 'A person wrote in the discussion', body: '' }, follow });
+    expect(ActivityWebhookPayloadV1Schema.parse(payload)).toMatchObject({ follow, navigation: { message: original } });
+    expect(ActivityWebhookPayloadV1Schema.safeParse({ ...payload,
+      navigation: { message: { ...original, messageId: 'another-message' } } }).success).toBe(false);
+    expect(ActivityWebhookPayloadV1Schema.safeParse({ ...payload, navigation: { sessionId: 'unrelated-parent' } }).success).toBe(false);
+  });
+  it.each([
+    { source: { kind: 'execution_run' as const, sessionId: 'c111111111111111111111111', runId: 'execution' }, terminalEventId: 'terminal' },
+    { source: { kind: 'workflow_run' as const, runId: 'workflow' }, revision: 3 },
+  ])('preserves exact Run originals through webhook and private Inbox consumers', original => {
+    const follow = { original, event: { kind: 'failed_or_stopped' as const } };
+    const notice = { topic: 'follow_update' as const, follow };
+    const payload = buildActivityWebhookPayload({ channelId: 'run-hook', createdAt: 1, topic: notice.topic,
+      content: { title: 'Run failed or stopped', body: '' }, follow });
+    expect(ActivityWebhookPayloadV1Schema.parse(payload)).toMatchObject({ follow, navigation: { source: original.source } });
+    expect(ActivityWebhookPayloadV1Schema.safeParse({ ...payload,
+      navigation: { source: { ...original.source, runId: 'another-run' } } }).success).toBe(false);
+    const content = { v: 1, source: { kind: 'host', topic: notice.topic }, type: 'update', resolved: false, notice };
+    const header = { ...content, kind: 'account_notice.v1', title: 'Run failed', status: 'open' };
+    expect(readAccountNoticeArtifactV1({ header, body: JSON.stringify(content) })).toEqual(header);
+  });
+  it('carries one strict Follow original without private rules or forwarded human text', () => {
+    const follow = { event: { kind: 'person_wrote' as const }, sourceMessage: { localId: 'human-original', seq: 3 } };
+    const payload = buildActivityWebhookPayload({ channelId: 'follow-hook', createdAt: 1, topic: 'follow_update',
+      content: { title: 'A person wrote in the session', body: '' }, session: { sessionId: 'source' }, follow });
+    expect(ActivityWebhookPayloadV1Schema.parse(payload)).toEqual(payload);
+    expect(payload).toMatchObject({ follow, navigation: { sessionId: 'source' } });
+    for (const extra of [{ rules: ['private-rule'] }, { text: 'private human message' },
+      { sourceRequests: { agentStateVersion: 1, requests: [{ requestId: 'request', createdAt: 1 }] } }]) {
+      expect(ActivityWebhookPayloadV1Schema.safeParse({ ...payload, follow: { ...follow, ...extra } }).success).toBe(false);
+    }
+    expect(ActivityWebhookPayloadV1Schema.safeParse({ ...payload, navigation: { sessionId: 'source', accountId: 'claimed' } }).success).toBe(false);
+  });
+
   it('builds a ready webhook payload with session navigation', () => {
     const payload = buildActivityWebhookPayload({
       channelId: 'webhook-primary',

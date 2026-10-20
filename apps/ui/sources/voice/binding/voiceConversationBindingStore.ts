@@ -7,7 +7,7 @@ import { readPreferredVoiceConversationBindingMetadata } from './voiceConversati
 import type { VoiceSessionBinding } from './voiceConversationBindingTypes';
 import { readVoiceSessionOwnerMetadataFromState } from '@/voice/shared/readVoiceSessionOwnerMetadata';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
-import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
+import { areSessionAddressesEqual, normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 
 type BindingsByConversationSessionId = Record<string, VoiceSessionBinding>;
 
@@ -24,6 +24,24 @@ type RuntimeAttemptOwnedBinding = VoiceSessionBinding & Readonly<{
 
 function readRuntimeAttemptBindingOwner(binding: VoiceSessionBinding): object | null {
     return (binding as RuntimeAttemptOwnedBinding)[runtimeAttemptBindingOwner] ?? null;
+}
+
+/** Normalization copies bindings; equality retains the incumbent attempt's ownership. */
+export function areVoiceSessionBindingsEqual(
+    left: VoiceSessionBinding | null | undefined,
+    right: VoiceSessionBinding | null | undefined,
+): boolean {
+    if (!left || !right) return false;
+    return readRuntimeAttemptBindingOwner(left) === readRuntimeAttemptBindingOwner(right)
+        && left.adapterId === right.adapterId
+        && left.controlSessionId === right.controlSessionId
+        && left.conversationSessionId === right.conversationSessionId
+        && areSessionAddressesEqual(left.conversationSessionAddress, right.conversationSessionAddress)
+        && (left.targetSessionAddress === null && right.targetSessionAddress === null
+            || areSessionAddressesEqual(left.targetSessionAddress, right.targetSessionAddress))
+        && left.transcriptMode === right.transcriptMode
+        && left.lifetime === right.lifetime
+        && left.updatedAt === right.updatedAt;
 }
 
 function withRuntimeAttemptBindingOwner(
@@ -127,6 +145,21 @@ function buildBindingsByConversationSessionId(
     return nextBindings;
 }
 
+function reconcileBindings(
+    current: BindingsByConversationSessionId,
+    next: BindingsByConversationSessionId,
+): BindingsByConversationSessionId {
+    let unchanged = Object.keys(current).length === Object.keys(next).length;
+    for (const [id, binding] of Object.entries(next)) {
+        if (areVoiceSessionBindingsEqual(current[id], binding)) {
+            next[id] = current[id]!;
+        } else {
+            unchanged = false;
+        }
+    }
+    return unchanged ? current : next;
+}
+
 /**
  * Canonical "which binding wins" comparator. Newest `updatedAt` wins; on an
  * equal-`updatedAt` tie the larger `conversationSessionId` wins. This is the
@@ -201,6 +234,10 @@ export function createVoiceSessionBindingStore() {
             set((state) => {
                 const normalized = normalizeBinding(binding);
                 if (!normalized) return state;
+                if (areVoiceSessionBindingsEqual(
+                    state.runtimeBindingsByConversationSessionId[normalized.conversationSessionId],
+                    normalized,
+                )) return state;
                 const runtimeBindingsByConversationSessionId = upsertBindingRecord(
                     state.runtimeBindingsByConversationSessionId,
                     normalized,
@@ -218,6 +255,7 @@ export function createVoiceSessionBindingStore() {
             set((state) => {
                 const normalized = normalizeId(conversationSessionId);
                 if (!normalized) return state;
+                if (!state.runtimeBindingsByConversationSessionId[normalized]) return state;
                 const runtimeBindingsByConversationSessionId = { ...state.runtimeBindingsByConversationSessionId };
                 delete runtimeBindingsByConversationSessionId[normalized];
                 return {
@@ -231,13 +269,20 @@ export function createVoiceSessionBindingStore() {
             }),
         replacePersistedBindings: (bindings) =>
             set((state) => {
-                const persistedBindingsByConversationSessionId = buildBindingsByConversationSessionId(bindings);
+                const persistedBindingsByConversationSessionId = reconcileBindings(
+                    state.persistedBindingsByConversationSessionId,
+                    buildBindingsByConversationSessionId(bindings),
+                );
+                if (persistedBindingsByConversationSessionId === state.persistedBindingsByConversationSessionId) return state;
                 return {
                     ...state,
                     persistedBindingsByConversationSessionId,
-                    bindingsByConversationSessionId: mergeVoiceConversationBindings(
-                        state.runtimeBindingsByConversationSessionId,
-                        persistedBindingsByConversationSessionId,
+                    bindingsByConversationSessionId: reconcileBindings(
+                        state.bindingsByConversationSessionId,
+                        mergeVoiceConversationBindings(
+                            state.runtimeBindingsByConversationSessionId,
+                            persistedBindingsByConversationSessionId,
+                        ),
                     ),
                 };
             }),

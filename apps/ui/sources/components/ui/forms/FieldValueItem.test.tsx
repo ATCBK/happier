@@ -52,6 +52,23 @@ function field(screen: Awaited<ReturnType<typeof renderField>>) {
 }
 
 describe('FieldValueItem', () => {
+    it('commits a controlled draft against its acknowledged value and stops after acknowledgement', async () => {
+        const { FieldValueItem } = await import('./FieldValueItem');
+        const saved: string[] = [];
+        function Host() {
+            const [value, setValue] = React.useState('old-command');
+            const [committedValue, setCommittedValue] = React.useState('old-command');
+            return <FieldValueItem title="Command" fieldTestID="controlled" value={value} committedValue={committedValue}
+                onDraftChange={setValue} onCommit={next => { saved.push(next); setCommittedValue(next); }} />;
+        }
+        const screen = await renderScreen(<Host />);
+        await act(async () => { screen.findByTestId('controlled')!.props.onChangeText('new-command'); });
+        expect(saved).toEqual([]);
+        await act(async () => { screen.findByTestId('controlled')!.props.onBlur(); });
+        expect(saved).toEqual(['new-command']);
+        await act(async () => { screen.findByTestId('controlled')!.props.onBlur(); });
+        expect(saved).toEqual(['new-command']);
+    });
     it('steps a numeric draft, keeps its units out of storage, and respects the owner bounds', async () => {
         const { FieldValueItem } = await import('./FieldValueItem');
         const saved: string[] = [];
@@ -72,6 +89,22 @@ describe('FieldValueItem', () => {
         await act(async () => { screen.findByTestId('count.decrement')!.props.onPress(); });
         expect(saved.at(-1)).toBe('1');
         expect(screen.findByTestId('count.decrement')!.props.disabled).toBe(true);
+    });
+    it('keeps stepping and typing through the same draft owner when the stepper is compact', async () => {
+        const { FieldValueItem } = await import('./FieldValueItem');
+        const saved: string[] = [];
+        function Host() {
+            const [value, setValue] = React.useState('5');
+            return <FieldValueItem title="Pause after" value={value} kind="integer" compactStepper
+                stepper={{ min: 1, step: 1 }} fieldTestID="pause"
+                onCommit={(next) => { saved.push(next); setValue(next); return next; }} />;
+        }
+        const screen = await renderScreen(<Host />);
+        expect(screen.findByTestId('pause')!.props.value).toBe('5');
+        await act(async () => { screen.findByTestId('pause.increment')!.props.onPress(); });
+        await act(async () => { screen.findByTestId('pause')!.props.onChangeText('9'); });
+        await act(async () => { screen.findByTestId('pause')!.props.onBlur(); });
+        expect(saved).toEqual(['6', '9']);
     });
     it('commits the typed value when focus leaves the field, not on every keystroke', async () => {
         const onCommit = vi.fn();

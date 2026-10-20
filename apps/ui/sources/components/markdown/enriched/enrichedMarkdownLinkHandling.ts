@@ -132,7 +132,7 @@ function resolveInlineReferenceLink(
     if (!reference) return null;
     const href = buildMarkdownInlineReferenceHref(references.scheme, target);
     resolved.set(href, reference);
-    const label = `● ${reference.label}`.replace(/[[\]\\]/g, (char) => `\\${char}`);
+    const label = reference.label.replace(/[[\]\\]/g, (char) => `\\${char}`);
     return `[${label}](${href})`;
 }
 

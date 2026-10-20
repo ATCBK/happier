@@ -250,6 +250,8 @@ const ConnectedAccountServiceController = React.memo(
         serverId,
     });
     const machineId = targetSelection.selectedTargetServerMatchesActiveAccount
+        && executionTarget?.target.serverIdentityId === targetSelection.selectedTarget?.serverIdentityId
+        && executionTarget?.target.machineId === targetSelection.selectedTarget?.machineId
         ? executionTarget?.machine.id ?? '' : '';
     const expectedActiveServer = React.useMemo(
         () => serverId === activeServerId
@@ -287,8 +289,10 @@ const ConnectedAccountServiceController = React.memo(
         : null;
     const exactRoute = route !== null;
 
+    // Availability can disappear while the selected sign-in is still the same draft.
+    // Retire its native work only when that selection changes; fresh resolution still gates effects.
     const operationAbortController = React.useMemo(() => new AbortController(),
-        [machineId, executionTarget?.target.serverIdentityId, executionTarget?.serverId]);
+        [targetSelection.selectedTarget?.machineId, targetSelection.selectedTarget?.serverIdentityId, serverId]);
     const lifecycleSignal = operationAbortController.signal;
     const [describedOperation, setDescribedOperation] = React.useState<Readonly<{
         description: ServiceDescription; signal: AbortSignal;
@@ -934,7 +938,7 @@ const ConnectedAccountServiceController = React.memo(
     // again starts the account's own way. Once per panel; switching ways is the person's choice.
     React.useEffect(() => {
         const panel = panelRef.current;
-        if (!panel || panelStartedRef.current || !service || !description || attempt || busy || !noPendingAttempt) return;
+        if (!panel || panelStartedRef.current || !service || !description || !machineId || attempt || busy || !noPendingAttempt) return;
         const modes = description.descriptor.authentication.modes;
         panelStartedRef.current = true;
         if (panel.intent.kind === 'reconnect') {
@@ -944,7 +948,7 @@ const ConnectedAccountServiceController = React.memo(
         const recommended = rankConnectedAccountSetupModes(modes)[0]?.mode;
         if (!recommended) return;
         void beginIntent({ kind: 'connect', service, modeId: recommended.id });
-    }, [attempt, beginIntent, busy, description, noPendingAttempt, service]);
+    }, [attempt, beginIntent, busy, description, machineId, noPendingAttempt, service]);
 
     /** Shared Action approval owns revocation; a deferred review retains this account. */
     const revokeAccount = React.useCallback(async (
@@ -1078,10 +1082,10 @@ const ConnectedAccountServiceController = React.memo(
         />
     );
 
-    if (controllerProps.panel && (!serverId || !machineId)) {
+    if (controllerProps.panel && (!serverId || !machineId) && !description) {
         return <ConnectedServiceSetupFlowBody state="chooseMachine" />;
     }
-    if ((!serverId || !machineId) && !accountDetailAvailable) {
+    if ((!serverId || !machineId) && !accountDetailAvailable && !description) {
         const pendingTitle = registryEntry
             ? resolveConnectedServiceRegistryEntryDisplayName(registryEntry, t, controllerProps.localizePluginText)
             : t('connectedServices.fallbackName');
@@ -1312,6 +1316,7 @@ const ConnectedAccountServiceController = React.memo(
                     navigation={navigation}
                     onSubmit={async ({ values, secretValues }) => {
                         if (!isControllerCurrent() || !('scope' in accountLifetime)) return false;
+                        if (configuration.target.kind !== 'service' && !machineId) return false;
                         // Replies to this submit belong to the draft as it is now (see `acceptAttemptResponse`).
                         const requestEpoch = setupAttemptEpochRef.current;
                         setBusy(true);
@@ -1688,9 +1693,8 @@ export function ConnectedAccountSetupController(props: Readonly<{
     const controllerKey = [
         activeAccountScope ? serverAccountScopeKeySuffix(activeAccountScope) : 'no-active-account',
         String(activeServer.generation ?? ''),
-        executionTarget?.target.serverIdentityId ?? '',
-        executionTarget?.target.machineId ?? '',
-        executionTarget?.serverId ?? '',
+        props.targetSelection.selectedTarget?.serverIdentityId ?? '',
+        props.targetSelection.selectedTarget?.machineId ?? '',
         props.service.pluginId,
         props.service.localId,
         intentKey,

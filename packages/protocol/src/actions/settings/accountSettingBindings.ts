@@ -1,4 +1,5 @@
 import { ACCOUNT_SETTING_DEFINITIONS, resolveNewSessionWizardSectionPresentation, type AccountSettings, type NewSessionWizardSelectionSectionId } from '../../account/settings/accountSettings.js';
+import { GlassTintIntensitySchema } from '../../account/settings/glassTint.js';
 import type { SettingDomainValueV1 } from './settingsOwnerActions.js';
 import { normalizeActionsSettingsV1, setActionApprovalOverride, type ActionSurfaceKey } from '../actionSettings.js';
 import { accountNotificationStorageBinding } from './notificationPreferenceMutations.js';
@@ -7,7 +8,7 @@ import { DEFAULT_AGENT_ID } from '../../agents/defaultAgent.js';
 import { readDirectConnectionsEnabled, withDirectConnectionsEnabled, readMachineDirectConnectionChoice, withMachineDirectConnectionChoice } from '../../account/settings/peerMediationPreferencesV1.js';
 import { MachineRetentionDefaultsV1Schema, updateMachineRetentionCategoryPreferenceV1, type MachineRetentionCategoryV1 } from '../../account/settings/machineRetentionDefaultsV1.js';
 import { UI_FEATURE_REGISTRY, listUiFeatureToggleDefinitions, resolveUiFeatureToggleEnabled, buildUiFeatureToggleChange, buildUiFeatureExperimentsChange } from './featurePreferenceMutations.js';
-import { GLASS_PRESETS, GLASS_BLUR_STEPS, GLASS_SURFACE_GROUPS, GLASS_TINT_STEPS, resolveGlassTintSettingsDelta, readGlassMaterials, readGlassPreset, readGlassSurfaceMode, resolveGlassSurfaceModeSettingsDelta, resolveGlassPresetSettingsDelta, resolveGlassIntensitySettingsDelta, resolveGlassSurfaceSettingsDelta, type GlassSurfaceGroup } from './glassPreferenceMutations.js';
+import { GLASS_PRESETS, GLASS_BLUR_STEPS, GLASS_SURFACE_GROUPS, readGlassTintIntensity, resolveGlassTintSettingsDelta, readGlassMaterials, readGlassPreset, readGlassSurfaceMode, resolveGlassSurfaceModeSettingsDelta, resolveGlassPresetSettingsDelta, resolveGlassIntensitySettingsDelta, resolveGlassSurfaceSettingsDelta, type GlassSurfaceGroup } from './glassPreferenceMutations.js';
 import { buildKeyboardShortcutResetDelta, buildKeyboardShortcutSetDelta, buildKeyboardShortcutToggleDelta } from './keyboardPreferenceMutations.js';
 import { prepareDefaultProviderStateSharingChangeV1, prepareAgentProviderStateSharingChangeV1, AgentProviderStateSharingChangeV1Schema, type ProviderStateSharingMutationServicesV1 } from './providerStateSharingMutations.js';
 import { BackendTargetKeyV2InputSchema } from '../../backends/targets/backendTargetRefV2.js';
@@ -198,10 +199,16 @@ export const glassIntensityStorageBinding: PortableAccountSettingBindingV1 = { .
     parse: value => value === 'light' || value === 'regular' || value === 'strong' ? { success: true, value } : { success: false },
     mutate: (settings, value) => value === 'light' || value === 'regular' || value === 'strong' ? resolveGlassIntensitySettingsDelta(settings, value) : null,
 };
-export const glassTintStorageBinding: PortableAccountSettingBindingV1 = { ...owner, allowedValues: GLASS_TINT_STEPS,
-    read: settings => settings.glassTintIntensity ?? 'subtle',
-    parse: value => GLASS_TINT_STEPS.some(step => step === value) && typeof value === 'string' ? { success: true, value } : { success: false },
-    mutate: (settings, value) => { const tint = GLASS_TINT_STEPS.find(step => step === value); return tint ? resolveGlassTintSettingsDelta(settings, tint) : null; },
+export const glassTintStorageBinding: PortableAccountSettingBindingV1 = { ...owner,
+    read: settings => readGlassTintIntensity(settings.glassTintIntensity),
+    parse: value => {
+        const parsed = GlassTintIntensitySchema.safeParse(value);
+        return parsed.success ? { success: true, value: parsed.data } : { success: false };
+    },
+    mutate: (settings, value) => {
+        const parsed = GlassTintIntensitySchema.safeParse(value);
+        return parsed.success ? resolveGlassTintSettingsDelta(settings, parsed.data) : null;
+    },
 };
 export function glassSurfaceStorageBinding(group: GlassSurfaceGroup, field: 'blur' | 'opacity' | 'mode'): PortableAccountSettingBindingV1 {
     if (field === 'mode') return { ...owner, allowedValues: ['glass', 'solid'],
@@ -327,18 +334,21 @@ export const terminalHostStorage: PortableAccountSettingBindingV1 = { ...owner, 
     parse: value => value === 'none' || value === 'tmux' || value === 'zellij' || value === 'herdr' ? { success: true, value } : { success: false },
     mutate: (_settings, value) => value === 'none' || value === 'tmux' || value === 'zellij' || value === 'herdr' ? { sessionTerminalHost: value, sessionUseTmux: value === 'tmux' } : null,
 };
-const commandValueSchema = z.strictObject({ enabled: z.boolean(), binding: z.nullable(z.string().check(z.trim())) });
+const commandValueSchema = z.strictObject({ enabled: z.boolean(), binding: z.optional(z.nullable(z.string().check(z.trim()))) });
 export function commandStorage(commandId: string): PortableAccountSettingBindingV1 { return { ...owner,
     read: settings => ({ enabled: !settings.keyboardShortcutDisabledCommandIdsV1.includes(commandId) && (commandId !== 'commandPalette.open' || settings.commandPaletteEnabled), binding: settings.keyboardShortcutOverridesV1[commandId]?.[0]?.binding ?? null }),
-    parse: value => {
+    parse: (value): ReturnType<PortableAccountSettingBindingV1['parse']> => {
         const parsed = commandValueSchema.safeParse(value);
-        if (!parsed.success || parsed.data.binding !== null && !buildKeyboardShortcutSetDelta({ commandId, binding: parsed.data.binding, disabledCommandIds: [], overrides: {} })) return { success: false };
-        if (parsed.data.binding !== null && !ACCOUNT_SETTING_DEFINITIONS.keyboardShortcutOverridesV1.parseMutationValue({ [commandId]: [{ binding: parsed.data.binding }] }).success) return { success: false };
-        return { success: true, value: parsed.data };
+        if (!parsed.success || parsed.data.binding != null && !buildKeyboardShortcutSetDelta({ commandId, binding: parsed.data.binding, disabledCommandIds: [], overrides: {} })) return { success: false };
+        if (parsed.data.binding != null && !ACCOUNT_SETTING_DEFINITIONS.keyboardShortcutOverridesV1.parseMutationValue({ [commandId]: [{ binding: parsed.data.binding }] }).success) return { success: false };
+        return { success: true, value: parsed.data.binding === undefined
+            ? { enabled: parsed.data.enabled } : { enabled: parsed.data.enabled, binding: parsed.data.binding } };
     },
     mutate: (settings, value) => {
         const parsed = commandValueSchema.safeParse(value);
         if (!parsed.success) return null;
+        // An enabled-only intent preserves every platform-qualified override rule.
+        if (parsed.data.binding === undefined) return buildKeyboardShortcutToggleDelta(settings.keyboardShortcutDisabledCommandIdsV1, commandId, !parsed.data.enabled);
         const current = { commandId, disabledCommandIds: settings.keyboardShortcutDisabledCommandIdsV1, overrides: settings.keyboardShortcutOverridesV1 };
         const bindingDelta = parsed.data.binding === null ? buildKeyboardShortcutResetDelta(current) : buildKeyboardShortcutSetDelta({ ...current, binding: parsed.data.binding });
         if (bindingDelta && !ACCOUNT_SETTING_DEFINITIONS.keyboardShortcutOverridesV1.parseMutationValue(bindingDelta.keyboardShortcutOverridesV1).success) return null;

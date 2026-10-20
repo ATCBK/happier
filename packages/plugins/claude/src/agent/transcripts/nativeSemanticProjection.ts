@@ -13,6 +13,7 @@ import type { RawJSONLines } from './rawJsonLines.js';
 import { normalizeClaudeToolUseNamesInRawJsonLines } from './toolUseNames.js';
 import {
   isClaudeInternalTranscriptMessage,
+  isClaudeLocalCommandCaveatTranscriptMessage,
   readClaudeVisibleCompactSummaryText,
   readClaudeVisibleLocalCommandOutputText,
   readClaudeVisibleSlashCommandText,
@@ -55,6 +56,9 @@ export type ClaudeNativeTranscriptContentPart =
     }>;
 
 export type ClaudeNativeTranscriptLifecycleMeaning =
+  | Readonly<{ kind: 'shell_input'; text: string }>
+  | Readonly<{ kind: 'shell_output' }>
+  | Readonly<{ kind: 'local_command_caveat' }>
   | Readonly<{ kind: 'none' }>
   | Readonly<{ kind: 'text'; text: string }>
   | Readonly<{ kind: 'stop_hook_feedback' }>
@@ -406,6 +410,13 @@ export function classifyClaudeNativeTranscriptRow(
     });
   }
 
+  if (row.isMeta === true && isClaudeLocalCommandCaveatTranscriptMessage(row)) {
+    return {
+      ...createBaseClassification({ rawObject, rawType, row, visibility: 'hidden', messageRole: 'event', content: { kind: 'none' } }),
+      lifecycle: { kind: 'local_command_caveat' },
+    };
+  }
+
   if (isClaudeInternalTranscriptMessage(row)) {
     return createBaseClassification({
       rawObject,
@@ -468,6 +479,34 @@ export function classifyClaudeNativeTranscriptRow(
     return text.startsWith(STOP_HOOK_FEEDBACK_PREFIX)
       ? { ...base, lifecycle: { kind: 'stop_hook_feedback' } }
       : base;
+  }
+  // Claude Code 2.1.302: bash input retains the bytes after the leading `!`.
+  // Display and lifecycle correlation share the same logical shell command.
+  const shellInput = /^<bash-input>([\s\S]*)<\/bash-input>$/u.exec(text.trim());
+  if (shellInput) {
+    const commandText = `!${shellInput[1]}`;
+    return {
+      ...base,
+      content: { kind: 'message', text: commandText },
+      semanticParts: [{ kind: 'text', text: commandText }],
+      lifecycle: { kind: 'shell_input', text: commandText },
+    };
+  }
+  if (/^<bash-(?:stdout|stderr)>/u.test(text.trim())) {
+    // Bash output carries literal stream bytes, unlike slash-command output's
+    // XML-escaped presentation text. Preserve whitespace and entities verbatim.
+    const combinedOutput = /^<bash-stdout>([\s\S]*)<\/bash-stdout><bash-stderr>([\s\S]*)<\/bash-stderr>$/u.exec(text.trim());
+    const singleOutput = /^<bash-(stdout|stderr)>([\s\S]*)<\/bash-\1>$/u.exec(text.trim());
+    const outputText = combinedOutput
+      ? `${combinedOutput[1] ?? ''}${combinedOutput[2] ?? ''}`
+      : singleOutput?.[2] ?? text;
+    return {
+      ...base,
+      messageRole: 'agent',
+      content: { kind: 'message', text: outputText },
+      semanticParts: outputText.length > 0 ? [{ kind: 'text', text: outputText }] : [],
+      lifecycle: { kind: 'shell_output' },
+    };
   }
   return { ...base, lifecycle: { kind: 'text', text } };
 }

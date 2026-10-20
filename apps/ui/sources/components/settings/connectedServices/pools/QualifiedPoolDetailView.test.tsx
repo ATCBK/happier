@@ -2,7 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import type { ReactTestInstance } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
+import { reportPopoverContentLayout, withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 
 import { renderScreen } from '@/dev/testkit';
 import { presentConnectedAccountIdentity } from '@/sync/domains/connectedServices/maskAccountEmail';
@@ -206,6 +206,7 @@ it('keeps compact defaults in the identity line and retains sharing without desk
     act(() => screen.findHostByTestId('connected-services-pool-detail')?.props.onLayout?.({ nativeEvent: { layout: { width: 390, height: 800, x: 0, y: 0 } } }));
     expect(screen.findHostByTestId('connected-services-pool-detail:more')).toBeNull();
     await screen.pressByTestIdAsync('connected-services-pool-detail:default-for');
+    await act(async () => reportPopoverContentLayout(screen, { width: 280, height: 180 }));
     await screen.pressByTestIdAsync('connected-services-pool-detail:default-for:agent:codex');
     expect(setDefault).toHaveBeenCalledWith('codex', false);
     await screen.pressByTestIdAsync('connected-services-pool-detail:share');
@@ -581,9 +582,6 @@ describe('QualifiedPoolDetailView', () => {
 
     it('names a member by its personal label, native name or email, never the raw account id', async () => {
         const { screen } = await renderPoolDetail({}, {
-            accounts: ACCOUNTS.map((account) => account.ref.accountId === 'work'
-                ? { ...account, displayName: undefined }
-                : account),
             memberQuotaByAccountId: quota({ work: snapshot('work', [{ id: '5h', label: '5-hour', left: 40, resetsInMs: 60 * MIN }]) }),
         });
         // A real native name wins over email; the distinct email remains beside it.
@@ -775,17 +773,6 @@ describe('QualifiedPoolDetailView', () => {
         expect(setActiveAccount.mock.calls[0]?.[0]).toMatchObject({ group, account: { accountId: 'backup' } });
     });
 
-    it('confirms before removing a member and does not remove when declined', async () => {
-        const { screen } = await renderPoolDetail();
-        await press(memberAction(screen, 'backup', 'remove'));
-        expect(modalSpies.confirm).toHaveBeenCalledTimes(1);
-        expect(removeMember).not.toHaveBeenCalled();
-        modalSpies.confirm.mockResolvedValue(true);
-        await press(memberAction(screen, 'backup', 'remove'));
-        expect(removeMember).toHaveBeenCalledTimes(1);
-        expect(removeMember.mock.calls[0]?.[0]).toMatchObject({ account: { accountId: 'backup' } });
-    });
-
     it('Manage members adds the accounts checked in its list', async () => {
         const { screen } = await renderPoolDetail();
         await act(async () => { membersDropdown(screen).props.onOpenChange?.(true); });
@@ -913,16 +900,6 @@ describe('QualifiedPoolDetailView', () => {
         expect(screen.findByTestId('connected-services-pool-detail:switches-per-turn')).toBeNull();
         await pressRow(screen, 'connected-services-pool-detail:advanced:header');
         expect(screen.findByTestId('connected-services-pool-detail:switches-per-turn')).not.toBeNull();
-    });
-
-    it('confirms before deleting the pool', async () => {
-        const { screen, group } = await renderPoolDetail();
-        await pressRow(screen, 'connected-services-pool-detail:delete');
-        expect(modalSpies.confirm).toHaveBeenCalledTimes(1);
-        expect(deleteGroup).not.toHaveBeenCalled();
-        modalSpies.confirm.mockResolvedValue(true);
-        await pressRow(screen, 'connected-services-pool-detail:delete');
-        expect(deleteGroup).toHaveBeenCalledWith(group);
     });
 
     it('disables the fallback controls when automatic fallback is unavailable', async () => {

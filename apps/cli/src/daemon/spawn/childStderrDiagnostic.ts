@@ -19,3 +19,15 @@ export function sanitizeChildStderrTail(
   const redacted = redactBugReportSensitiveText(sanitizeDiagnosticText(trimmed));
   return trimBugReportTextToMaxBytes(redacted, CHILD_STDERR_DIAGNOSTIC_MAX_BYTES).trim() || null;
 }
+
+export function formatChildExitBeforeWebhookMessage(input: Readonly<{
+  pid: number;
+  reason?: string;
+  code: number | null;
+  signal: string | null;
+  stderrTail?: string | null;
+}>): string {
+  const stderrTail = sanitizeChildStderrTail(input.stderrTail ?? '', value => value);
+  const message = `Child process exited before session webhook (pid=${input.pid}, code=${input.code ?? 'null'}, signal=${input.signal ?? 'null'}${input.reason ? `, reason=${input.reason}` : ''})`;
+  return stderrTail ? `${message}; recent stderr: ${stderrTail}` : message;
+}

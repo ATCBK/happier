@@ -10,7 +10,7 @@ import {
 
 import { createProviderProbeHttpClient } from './client';
 import { createProviderDraftProbeService } from './draft';
-import { SavedSecretOperationAdmissionError } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { SavedSecretOperationAdmissionError } from "@/settings/secrets/savedSecretCatalogRead";
 
 const key = new Uint8Array(32).fill(7);
 

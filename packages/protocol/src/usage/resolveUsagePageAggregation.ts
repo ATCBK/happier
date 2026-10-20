@@ -3,11 +3,11 @@ import type { UsageCoachPreferencesV1 } from '../account/settings/usageCoachPref
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';
 import { getUsageQueryKey, normalizeUsageQuery, resolveUsageQueryPeriod, UsageQuerySchema, type UsageQuery } from '../inputs/usageQuery.js';
-import { UsageQueryAccountingSchema, UsageAnalyticsSourceCoverageSchema, type UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
+import { UsageQueryAccountingSchema, type UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
 import { UsageCostFactTotalSchema, projectUsageCostFactTotals } from './usageCostFactTotals.js';
 import { allocateUsageOutcomes, UsageWorkProjectionSchema, type UsageWorkEvidence } from './usageOutcomeAllocation.js';
 import type { ScmBranchWorkEvidence } from '../scm/branches.js';
-import { resolveUsageHowYouWork, UsageHowYouWorkSchema, type UsageHowYouWorkDetailInput } from './resolveUsageHowYouWork.js';
+import { resolveUsageHowYouWork, UsageHowYouWorkSchema, type UsageHowYouWorkDetailInput, type UsageSessionEvidenceCoverage } from './resolveUsageHowYouWork.js';
 import type { UsageWorkIntervalsInput } from './usageWorkIntervals.js';
 import { ConnectedServiceQuotaGetResultV1Schema, type ConnectedServiceQuotaGetResultV1 } from '../connect/providerAccountUsageHistorySchemasV1.js';
 import { evaluateUsageCoach } from './coach/evaluateUsageCoach.js';
@@ -79,6 +79,9 @@ export const UsageQueryResultSliceSchema = lazyZodSchema(() => z.strictObject({
 }).check(z.superRefine((slice, context) => {
   if (slice.key !== getUsageQueryKey(slice.requestedQuery)) {
     context.addIssue({ code: 'custom', path: ['key'], message: 'Result key must identify the requested query' });
+  }
+  if (!slice.requestedQuery.includeAccounting && (slice.accounting || slice.comparison || slice.costFactTotals || slice.work || slice.howYouWork || slice.coach)) {
+    context.addIssue({ code: 'custom', path: ['accounting'], message: 'Quota-only demand cannot disclose accounting or Session evidence' });
   }
   // An Action snapshot names exactly what it queried. Previous-period display
   // belongs to the retained Resource consumer, never relabelled Action facts.
@@ -160,17 +163,65 @@ export const UsageQueryBatchResultSchema = lazyZodSchema(() => z.strictObject({
 })));
 export type UsageQueryBatchResult = z.infer<typeof UsageQueryBatchResultSchema>;
 
+/** Compare changed members once; already reconciled children need only identity checks. */
+function retainUsageMembers<T extends object>(value: T, previous: T, reconciled: readonly (keyof T)[] = []): T {
+  if (value === previous) return previous;
+  const keys = Object.keys(value) as Array<keyof T>;
+  let result = value;
+  for (const key of keys) {
+    if (!reconciled.includes(key) && value[key] !== previous[key] && sameStrictJsonValue(value[key], previous[key])) {
+      result = { ...result, [key]: previous[key] };
+    }
+  }
+  return keys.length === Object.keys(previous).length && keys.every(key =>
+    Object.prototype.hasOwnProperty.call(previous, key) && result[key] === previous[key]) ? previous : result;
+}
+
 /** Reuse semantically unchanged validated slices from the caller's same-authority prior value. */
 export function retainUsageQueryResultReferences(current: UsageQueryBatchResult,
-  previous: UsageQueryBatchResult | undefined): UsageQueryBatchResult {
-  if (!previous) return current;
+  previous: UsageQueryBatchResult | undefined, settled?: UsageQueryBatchResult): UsageQueryBatchResult {
+  if (!previous || current === previous) return current;
   const prior = new Map(previous.results.map(slice => [slice.key, slice]));
+  const original = new Map(settled?.results.map(slice => [slice.key, slice]));
+  const retainAccounting = (value: UsageAnalyticsQueryResponse | undefined, retained: UsageAnalyticsQueryResponse | undefined) => {
+    if (!value || !retained || value === retained) return value;
+    // New accounting facts do not replace unchanged tariffs. Keeping the
+    // admitted catalog also lets prior/current UI projections share its model
+    // dictionaries instead of retaining a full clone on every refresh.
+    if (value.priceCatalog && retained.priceCatalog && value.priceCatalog !== retained.priceCatalog) {
+      value = { ...value, priceCatalog: retainUsageMembers(value.priceCatalog, retained.priceCatalog) };
+    }
+    return retainUsageMembers(value, retained, ['priceCatalog']);
+  };
   const results = current.results.map(slice => {
     const retained = prior.get(slice.key);
-    return retained && sameStrictJsonValue(retained, slice) ? retained : slice;
+    if (!retained || slice === retained) return slice;
+    // Source progress replaces the slice, not its unchanged accounting. Mounted
+    // consumers key their existing price/ranking projections by these facts.
+    let reconciled = slice;
+    const accounting = retainAccounting(slice.accounting, retained.accounting);
+    if (accounting !== slice.accounting) {
+      reconciled = { ...reconciled, accounting };
+    }
+    if (slice.comparison?.accounting && retained.comparison?.accounting
+      && getUsageQueryKey(slice.comparison.query) === getUsageQueryKey(retained.comparison.query)) {
+      const accounting = retainAccounting(slice.comparison.accounting, retained.comparison.accounting);
+      reconciled = { ...reconciled, comparison: retainUsageMembers({ ...slice.comparison, accounting }, retained.comparison, ['accounting']) };
+    }
+    // A source revision also leaves the other admitted projections unchanged.
+    // Keep their references for selectors and the Resource's byte projection.
+    const result = retainUsageMembers(reconciled, retained, ['accounting', ...(slice.comparison?.accounting && retained.comparison?.accounting
+      && getUsageQueryKey(slice.comparison.query) === getUsageQueryKey(retained.comparison.query) ? ['comparison' as const] : [])]);
+    // A source can return to its settled state after a pending revision. Only
+    // a changed slice needs that original identity restored; re-reconciling an
+    // unchanged current slice against the baseline would replace equal child
+    // references and force its identical transport bytes to be hashed again.
+    const baseline = original.get(slice.key);
+    return result !== retained && baseline && sameStrictJsonValue(result, baseline) ? baseline : result;
   });
   if (results.length === previous.results.length
     && results.every((slice, index) => slice === previous.results[index])) return previous;
+  if (results.every((slice, index) => slice === current.results[index])) return current;
   return { ...current, results };
 }
 
@@ -182,7 +233,35 @@ export type UsageAccountingSourceSnapshot = Readonly<{
   status: UsageQuerySourceState['status'];
   asOfMs?: number;
   errorCode?: string;
+  /** Same-read derived value held by the existing accounting snapshot owner; never serialized. */
+  priceProjection?: Readonly<{
+    input: UsageAnalyticsQueryResponse;
+    overrides: UsageModelPriceOverridesV1 | undefined;
+    costBasis: UsageQuery['costBasis'];
+    value: UsageAnalyticsQueryResponse;
+  }>;
 }>;
+
+/** Reconcile one retained accounting snapshot at its existing owner, before independent source publications. */
+export function projectUsageAccountingSnapshotPrices(snapshot: UsageAccountingSourceSnapshot,
+  overrides: UsageModelPriceOverridesV1 | undefined,
+  siblings?: Iterable<UsageAccountingSourceSnapshot>): UsageAccountingSourceSnapshot {
+  const value = snapshot.value;
+  if (!value || !value.priceCatalog && overrides === undefined) return snapshot.priceProjection
+    ? { ...snapshot, priceProjection: undefined } : snapshot;
+  const retained = snapshot.priceProjection;
+  if (retained?.input === value && retained.costBasis === snapshot.query.costBasis && sameStrictJsonValue(retained.overrides, overrides)) return snapshot;
+  // Evidence flags can share one admitted accounting response. Reuse that
+  // response's projection already held by a sibling in this same read, rather
+  // than repricing and retaining the complete contribution population again.
+  for (const sibling of siblings ?? []) {
+    const projection = sibling.priceProjection;
+    if (projection?.input === value && projection.costBasis === snapshot.query.costBasis
+      && sameStrictJsonValue(projection.overrides, overrides)) return { ...snapshot, priceProjection: projection };
+  }
+  return { ...snapshot, priceProjection: { input: value, overrides, costBasis: snapshot.query.costBasis,
+    value: repriceUsageAnalyticsResponse(value, value.priceCatalog, overrides, snapshot.query.costBasis) } };
+}
 
 /** A successful read retains producer observation time, never the adapter's clock. */
 export function resolveUsageAccountingAsOfMs(value: UsageAnalyticsQueryResponse): number | undefined {
@@ -203,6 +282,7 @@ export type UsageWorkSourceSnapshot = Readonly<{
 export type UsageHowYouWorkSourceSnapshot = Readonly<{
   query: UsageQuery;
   detail: UsageHowYouWorkDetailInput;
+  sessionCoverage?: UsageSessionEvidenceCoverage;
   asOfMs?: number;
   nightHours?: UsageWorkIntervalsInput['nightHours'];
 }>;
@@ -221,6 +301,7 @@ export function resolveUsagePageAccountingReads(queries: readonly UsageQuery[], 
   const requests = new Map<string, Readonly<{ query: UsageQuery; period: ReturnType<typeof resolveUsageQueryPeriod> }>>();
   for (const candidate of queries) {
     const query = normalizeUsageQuery(candidate);
+    if (!query.includeAccounting) continue;
     const period = resolveUsageQueryPeriod(query, nowMs);
     requests.set(getUsageQueryKey(query), { query, period });
     const comparison = resolveUsageComparisonQuery(query, period);
@@ -233,7 +314,7 @@ export function resolveUsagePageAccountingRequests(queries: readonly UsageQuery[
   return resolveUsagePageAccountingReads(queries, nowMs).map(read => read.query);
 }
 
-function retainAccountingOnReadFailure(observed: UsageAccountingSourceSnapshot | undefined,
+export function retainAccountingOnReadFailure(observed: UsageAccountingSourceSnapshot | undefined,
   value: UsageAnalyticsQueryResponse | undefined, asOfMs: number | undefined): UsageAccountingSourceSnapshot | undefined {
   // Authority loss/cancellation never revives previously disclosed facts.
   if (!observed || observed.value !== undefined || value === undefined || observed.status !== 'error'
@@ -245,7 +326,7 @@ function retainAccountingOnReadFailure(observed: UsageAccountingSourceSnapshot |
  * One deterministic page composition over already-authorized owner snapshots.
  * No accounting, vendor refresh, transport, cache or authority is invented here.
  */
-export function resolveUsagePageAggregation(input: Readonly<{
+export type UsagePageAggregationInput = Readonly<{
   queries: readonly UsageQuery[];
   accounting?: readonly UsageAccountingSourceSnapshot[];
   work?: readonly UsageWorkSourceSnapshot[];
@@ -261,37 +342,87 @@ export function resolveUsagePageAggregation(input: Readonly<{
   previous?: UsageQueryBatchResult;
   pricingOverrides?: UsageModelPriceOverridesV1;
   coachPreferences?: UsageCoachPreferencesV1 | null;
-}>): UsageQueryBatchResult {
+}>;
+
+/** Shared B admission and source projection for accounting-backed and quota-only slices. */
+function projectUsageQuotaFields(quota: UsagePageAggregationInput['quota'], pools: readonly UsageQueryPoolSnapshot[] | undefined) {
+  const sources: UsageQuerySourceState[] = [
+    { source: 'quota', status: quota?.status ?? 'not_loaded',
+      ...(quota?.asOfMs === undefined ? {} : { asOfMs: quota.asOfMs }),
+      ...(quota?.errorCode === undefined ? {} : { errorCode: quota.errorCode }) },
+    ...(pools?.map(pool => ({ source: `selection:${pool.group.service.pluginId}/${pool.group.service.localId}:${pool.group.groupId}`,
+      status: pool.selection.status, ...(pool.selection.asOfMs === undefined ? {} : { asOfMs: pool.selection.asOfMs }),
+      ...(pool.selection.errorCode === undefined ? {} : { errorCode: pool.selection.errorCode }) })) ?? []),
+  ];
+  return { sources,
+    ...(quota?.value && ['available', 'partial', 'stale'].includes(quota.status) ? { quota: [...quota.value] } : {}),
+    ...(pools ? { pools: pools.map(pool => ({ ...pool, selection: ['available', 'stale'].includes(pool.selection.status)
+      ? pool.selection : { ...pool.selection, value: undefined } })) } : {}),
+  };
+}
+
+/** Quota-only demand uses the same admitted B snapshots and result identity, without touching A or private evidence. */
+export function resolveUsageQuotaPageAggregation(input: Pick<UsagePageAggregationInput, 'queries' | 'quota' | 'pools' | 'sources' | 'previous' | 'nowMs'>): UsageQueryBatchResult {
+  const poolsByQuery = new Map(input.pools?.map(snapshot => [getUsageQueryKey(snapshot.query), snapshot.value]));
+  const queries = new Map(input.queries.map(candidate => {
+    const query = normalizeUsageQuery(candidate);
+    if (query.includeAccounting) throw new Error('Quota-only projection requires quota-only demand');
+    return [getUsageQueryKey(query), query] as const;
+  }));
+  const results = [...queries].map(([key, query]): UsageQueryResultSlice => {
+    const { sources: quotaSources, ...quotaFields } = projectUsageQuotaFields(input.quota, poolsByQuery.get(key));
+    const sources: UsageQuerySourceState[] = [
+      { source: 'accounting', status: 'unsupported' },
+      { source: 'work', status: 'not_loaded' },
+      { source: 'how_you_work', status: 'not_loaded' },
+      ...quotaSources,
+      ...(input.sources ?? []).filter(source => source.source.startsWith('quota:')),
+    ];
+    return { key, requestedQuery: query, shownQuery: query,
+      ...quotaFields,
+      sources, pending: sources.some(source => (source.source === 'quota' || source.source.startsWith('quota:') || source.source.startsWith('selection:'))
+        && (source.status === 'pending' || source.status === 'not_loaded')) };
+  });
+  return retainUsageQueryResultReferences({ v: 1, results }, input.previous);
+}
+
+export function resolveUsagePageAggregation(input: UsagePageAggregationInput): UsageQueryBatchResult {
   const queries = new Map<string, UsageQuery>();
   for (const candidate of input.queries) {
     const query = normalizeUsageQuery(candidate);
     const key = getUsageQueryKey(query);
     if (!queries.has(key)) queries.set(key, query);
   }
-  const accounting = new Map(input.accounting?.map(snapshot => [getUsageQueryKey(snapshot.query), {
+  const accounting = new Map<string, UsageAccountingSourceSnapshot>(input.accounting?.map(snapshot => [getUsageQueryKey(snapshot.query), {
     ...snapshot,
     asOfMs: snapshot.asOfMs ?? (snapshot.value ? resolveUsageAccountingAsOfMs(snapshot.value) : undefined),
   }]));
   const sourceLocations = new Map(input.sourceLocations?.map(location => [location.machineId, location.displayLocation]));
   const projectSourceLocations = (value: UsageAnalyticsQueryResponse) => !value.coverage ? value : { ...value,
     coverage: { ...value.coverage, sources: value.coverage.sources.map(candidate => {
-      // Retained snapshots can carry old labels. Re-admit only accounting fields before applying current authorization.
-      const source = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as z.ZodMiniObject<T['shape'], z.core.$strip>)(UsageAnalyticsSourceCoverageSchema)).parse(candidate);
+      // Facts were admitted by the A boundary. Only the authorized client label
+      // can expire here; removing it does not require parsing those facts again.
+      const { displayLocation: _previous, ...source } = candidate as typeof candidate & { displayLocation?: string };
       const displayLocation = source.machineId ? sourceLocations.get(source.machineId) : undefined;
       return { ...source, ...(displayLocation === undefined ? {} : { displayLocation }) };
     }) } };
-  const projectPrices = (snapshot: UsageAccountingSourceSnapshot | undefined) => snapshot?.value
-    && (snapshot.value.priceCatalog || input.pricingOverrides !== undefined)
-    ? { ...snapshot, value: repriceUsageAnalyticsResponse(snapshot.value, snapshot.value.priceCatalog, input.pricingOverrides, snapshot.query.costBasis) }
-    : snapshot;
+  const projectPrices = (snapshot: UsageAccountingSourceSnapshot | undefined) => {
+    if (!snapshot) return snapshot;
+    const projected = projectUsageAccountingSnapshotPrices(snapshot, input.pricingOverrides, accounting.values());
+    const key = getUsageQueryKey(projected.query);
+    if (accounting.get(key)?.value === projected.value) accounting.set(key, projected);
+    return projected.priceProjection ? { ...projected, value: projected.priceProjection.value } : projected;
+  };
   const work = new Map(input.work?.map(snapshot => [getUsageQueryKey(snapshot.query), snapshot]));
   const howYouWork = new Map(input.howYouWork?.map(snapshot => [getUsageQueryKey(snapshot.query), snapshot]));
   const poolsByQuery = new Map(input.pools?.map(snapshot => [getUsageQueryKey(snapshot.query), snapshot.value]));
   const previous = new Map(input.previous?.results.map(slice => [slice.key, slice]));
   const results = [...queries].map(([key, query]) => {
+    if (!query.includeAccounting) return resolveUsageQuotaPageAggregation({ ...input, queries: [query] }).results[0]!;
     const observed = accounting.get(key);
     const prior = previous.get(key);
     const pools = poolsByQuery.get(key);
+    const { sources: quotaSources, ...quotaFields } = projectUsageQuotaFields(input.quota, pools);
     const snapshot = projectPrices(retainAccountingOnReadFailure(observed, prior?.accounting,
       prior?.sources.find(source => source.source === 'accounting')?.asOfMs));
     const readPeriod = observed?.period ?? (input.nowMs !== undefined ? resolveUsageQueryPeriod(query, input.nowMs)
@@ -326,6 +457,7 @@ export function resolveUsagePageAggregation(input: Readonly<{
     const detailProjection = endMs === undefined || endMs < startMs ? undefined : resolveUsageHowYouWork({
       period: { startMs, endMs }, timeZoneOffsetMinutes: query.timeZoneOffsetMinutes,
       accounting: snapshot?.value, detail: detailSnapshot?.detail,
+      sessionCoverage: detailSnapshot?.sessionCoverage,
       retained: retainedDetail?.howYouWork,
       nowMs: input.nowMs ?? detailSnapshot?.asOfMs,
       nightHours: input.nightHours === undefined ? detailSnapshot?.nightHours ?? (retainedNightHours
@@ -368,19 +500,17 @@ export function resolveUsagePageAggregation(input: Readonly<{
         ...(snapshot?.errorCode === undefined ? {} : { errorCode: snapshot.errorCode }) },
       ...(snapshot?.value?.coverage?.sources.map(source => ({ source: source.source, status: source.status,
         ...(source.asOfMs === undefined ? {} : { asOfMs: source.asOfMs }) })) ?? []),
-      { source: 'quota', status: input.quota?.status ?? 'not_loaded',
-        ...(input.quota?.asOfMs === undefined ? {} : { asOfMs: input.quota.asOfMs }),
-        ...(input.quota?.errorCode === undefined ? {} : { errorCode: input.quota.errorCode }) },
+      ...quotaSources,
       { source: 'work', status: workSnapshot?.status ?? 'not_loaded',
         ...(workSnapshot?.asOfMs === undefined ? {} : { asOfMs: workSnapshot.asOfMs }),
         ...(workSnapshot?.errorCode === undefined ? {} : { errorCode: workSnapshot.errorCode }) },
-      ...(query.includeSessionEvidence ? input.sources ?? [] : [
+      // An exact-query detail snapshot supersedes the batch-wide initial
+      // source. Retaining both lets an unfinished sibling keep this slice
+      // pending after its own private evidence has answered.
+      ...(query.includeSessionEvidence ? (input.sources ?? []).filter(source => !detailSnapshot || source.source !== 'how_you_work') : [
         ...(input.sources ?? []).filter(source => source.source !== 'how_you_work'),
         { source: 'how_you_work', status: 'not_loaded' as const },
       ]),
-      ...(pools?.map(pool => ({ source: `selection:${pool.group.service.pluginId}/${pool.group.service.localId}:${pool.group.groupId}`,
-        status: pool.selection.status, ...(pool.selection.asOfMs === undefined ? {} : { asOfMs: pool.selection.asOfMs }),
-        ...(pool.selection.errorCode === undefined ? {} : { errorCode: pool.selection.errorCode }) })) ?? []),
       ...(detailSnapshot ? [{ source: 'how_you_work', status: detailProjection?.detailStatus ?? 'unknown',
         ...(detailSnapshot.asOfMs === undefined ? {} : { asOfMs: detailSnapshot.asOfMs }) }] : []),
     ];
@@ -393,20 +523,19 @@ export function resolveUsagePageAggregation(input: Readonly<{
       planInsights: projectUsagePlanInsights({ query: { ...query, period }, nowMs: input.nowMs, accounting: snapshot?.value, accountingAsOfMs: snapshot?.asOfMs,
         howYouWork: detailProjection,
         quota: input.quota?.value && ['available', 'partial', 'stale'].includes(input.quota.status) ? input.quota.value : undefined }),
-      ...(input.quota?.value && ['available', 'partial', 'stale'].includes(input.quota.status) ? { quota: [...input.quota.value] } : {}),
-      ...(pools ? { pools: pools.map(pool => ({ ...pool, selection: ['available', 'stale'].includes(pool.selection.status)
-        ? pool.selection : { ...pool.selection, value: undefined } })) } : {}),
+      ...quotaFields,
       ...(detailProjection === undefined ? {} : { howYouWork: detailProjection }),
       ...(coachProjection === undefined ? {} : { coach: { ...coachProjection,
+        ...(detailProjection?.sessionCoverage === undefined ? {} : { sessionCoverage: detailProjection.sessionCoverage }),
         ...(digestSuggestion === undefined ? {} : { digestSuggestion }),
       } }),
       ...(comparisonQuery ? { comparison: { query: comparisonQuery, source: comparisonSource,
         ...(comparisonSnapshot?.value === undefined ? {} : { accounting: projectSourceLocations(comparisonSnapshot.value), costFactTotals: projectUsageCostFactTotals(comparisonSnapshot.value.costFacts ?? []) }) } } : {}),
-      ...(!query.includeWorkEvidence || snapshot?.value?.contributions === undefined ? {} : { work: UsageWorkProjectionSchema.parse(allocateUsageOutcomes({
+      ...(!query.includeWorkEvidence || snapshot?.value?.contributions === undefined ? {} : { work: allocateUsageOutcomes({
         contributions: snapshot.value.contributions,
         evidence: workEvidence,
         branchEvidence,
-      })) }),
+      }) }),
       sources,
       pending: [...sources, ...(comparisonQuery ? [comparisonSource] : [])].some(source =>
         (source.status === 'pending' || source.status === 'not_loaded')

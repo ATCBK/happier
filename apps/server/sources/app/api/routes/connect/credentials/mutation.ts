@@ -1,6 +1,7 @@
 import type { ConnectedServiceCredentialHealthV1 } from '@happier-dev/protocol/connect/connected-service-schemas';
 
 import { inTx, type Tx } from "@/storage/inTx";
+import { acquireAccountCredentialSourceTeamAdmissionInTx } from "@/app/teams/teamChanges";
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
 import { recordConnectedServiceAccountProfileChange } from "../connectedServicesAccountProfileChange";
 import {
@@ -88,6 +89,8 @@ async function mutateConnectedServiceCredentialForModeInTx(
     if (params.expectedCredentialRevision === undefined) {
         return { status: "revision_required" };
     }
+    const recheckAudience = await acquireAccountCredentialSourceTeamAdmissionInTx(tx,
+        { accountId: params.accountId, intent: "exclusive" });
     const account = await tx.account.findUnique({
         where: { id: params.accountId },
         select: {
@@ -200,6 +203,7 @@ async function mutateConnectedServiceCredentialForModeInTx(
                 },
                 legacyExpiresAt: params.expiresAt,
             };
+    await recheckAudience();
     const result =
         accountEncryptionTransitionMode
             ? await migrateQualifiedConnectedServiceCredentialInTx(
@@ -241,7 +245,7 @@ export async function mutateConnectedServiceCredential(
             await recordConnectedServiceAccountProfileChange({ tx, accountId: params.accountId });
         }
         return result;
-    }, { /* Credential mode admission and full connected-services projection precede Account publication. */ isolationLevel: "Serializable" });
+    });
 }
 
 export async function mutateConnectedServiceCredentialHealth(params: Readonly<{

@@ -5,6 +5,7 @@ import { V2SessionRecordSchema } from '@happier-dev/protocol/sessions/control/co
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { AgentStartSessionCallerV1Schema } from '@happier-dev/protocol/account/settings/admitAgentStartV1';
 import { SessionEffectiveAccessV1Schema, projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol';
+import { createPlainSessionOwnerMetadataEnvelopeV1, SessionMetadataOwnerPatchV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { createCliActionDeps } from './createCliActionDeps';
 
@@ -13,6 +14,8 @@ const boundary = vi.hoisted(() => ({
   patches: [] as unknown[],
   refuse: false,
   reads: 0,
+  race: null as 'unrelated' | 'same-field' | null,
+  raceField: 'memory' as 'memory' | 'context' | 'instructions' | 'voice',
 }));
 
 // Only HTTP adapters are replaced: target lookup, Account-mode parsing, the
@@ -27,6 +30,30 @@ vi.mock('@/session/transport/http/sessionsHttp', async (importOriginal) => ({
   patchSessionMetadataEnvelopeTuple: async (request: Readonly<{ patch: unknown }>) => {
     if (boundary.refuse) throw Object.assign(new Error('forbidden'), { status: 403 });
     boundary.patches.push(request.patch);
+    if (boundary.session?.metadataLayoutVersion === 1) {
+      const patch = SessionMetadataOwnerPatchV1Schema.parse(request.patch);
+      const current = boundary.session;
+      if (boundary.race) {
+        if (current.ownerMetadata?.t !== 'plain') throw new Error('Missing plain owner fixture');
+        const work = current.ownerMetadata.v.work;
+        boundary.session = { ...current, metadataVersion: current.metadataVersion + 1,
+          ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1({ ...current.ownerMetadata.v, work: {
+            ...work, sessionRolesV1: { overrides: {}, sessionRoles: {}, notes: 'Concurrent notes' },
+            ...(boundary.race === 'same-field' ? boundary.raceField === 'memory' ? { memoryEnabled: true }
+              : boundary.raceField === 'voice' ? { voicePreference: { providerContributionId: 'example.voice/speech', settingFieldPath: 'voice', value: 'competing' } }
+              : { promptStack: [{ id: 'session.instructions', ref: { kind: 'doc', artifactId: 'competing' }, enabled: true, placement: 'system_append' }] } : {}),
+          } }) };
+        boundary.race = null;
+        return { success: false, error: 'session_metadata_version_conflict', metadataLayoutVersion: 1,
+          sharedMetadata: { version: boundary.session.metadataVersion }, agentState: { version: current.agentStateVersion } };
+      }
+      expect(patch.sharedMetadata.expectedVersion).toBe(current.metadataVersion);
+      expect(patch.expectedOwnerMetadata).toEqual(current.ownerMetadata);
+      boundary.session = { ...current, metadataVersion: current.metadataVersion + 1, metadata: patch.sharedMetadata.ciphertext,
+        ownerMetadata: patch.ownerMetadata, agentState: patch.agentState.ciphertext, agentStateVersion: current.agentStateVersion! + 1 };
+      return { success: true, metadataLayoutVersion: 1, sharedMetadata: { version: boundary.session.metadataVersion },
+        agentState: { version: boundary.session.agentStateVersion } };
+    }
     return { success: true, metadataLayoutVersion: 1, sharedMetadata: { version: 5 }, agentState: { version: 8 } };
   },
 }));
@@ -60,6 +87,7 @@ describe('headless registered Session field Actions', () => {
     boundary.patches.length = 0;
     boundary.refuse = false;
     boundary.reads = 0;
+    boundary.race = null;
     boundary.session = V2SessionRecordSchema.parse({
       id: sessionId, seq: 0, createdAt: 1, updatedAt: 1, active: false, activeAt: 1,
       encryptionMode: 'plain', metadataLayoutVersion: 0, metadataVersion: 4,
@@ -69,6 +97,50 @@ describe('headless registered Session field Actions', () => {
       effectiveAccess: SessionEffectiveAccessV1Schema.parse({ v: 1, level: 'owner', sources: [{ kind: 'owner' }],
         capabilities: projectSessionAccessCapabilitiesV1({ owner: true, grants: [] }) }),
     });
+  });
+
+  it.each(['memory', 'context', 'instructions', 'voice'] as const)(
+    'reapplies the headless %s Action after an unrelated writer, without overwriting a competing field edit', async field => {
+      if (!boundary.session) throw new Error('Missing Home fixture');
+      const initialOwner = createPlainSessionOwnerMetadataEnvelopeV1({ v: 1, work: { memoryEnabled: false,
+        promptStack: [{ id: 'session.instructions', ref: { kind: 'doc', artifactId: 'original' }, enabled: true, placement: 'system_append' }],
+        voicePreference: { providerContributionId: 'example.voice/speech', settingFieldPath: 'voice', value: 'original' },
+      } });
+      boundary.session = { ...boundary.session, active: true, metadataLayoutVersion: 1, metadata: JSON.stringify({ v: 1 }), ownerMetadata: initialOwner };
+      boundary.raceField = field;
+      const owner = executor();
+      const target = { sessionId, serverId: 'home', expectedMetadataRevision: 3 };
+      for (const surface of ['cli', 'agent', 'mcp'] as const) {
+        boundary.session = { ...boundary.session, metadataVersion: 4, ownerMetadata: initialOwner };
+        const context = { surface, authority: 'present_user', serverId: 'home', defaultSessionId: sessionId } as const;
+        const execute = () => field === 'memory' ? owner.execute('session.memory.set', { ...target, enabled: true }, context)
+          : field === 'context' ? owner.execute('session.context.update', { ...target, intent: { kind: 'detach', entryId: 'session.instructions' } }, context)
+          : field === 'instructions' ? owner.execute('session.instructions.set', { ...target, ref: null }, context)
+          : owner.execute('session.voice.preference.set', { ...target, preference: null }, context);
+        boundary.race = 'unrelated';
+        const applied = await execute();
+        expect(applied, JSON.stringify({ surface, applied })).toMatchObject({ ok: true, result: { version: 6 } });
+        expect(boundary.session.ownerMetadata).toMatchObject({ t: 'plain', v: { work: { sessionRolesV1: { notes: 'Concurrent notes' },
+          ...(field === 'memory' ? { memoryEnabled: true } : field === 'context' || field === 'instructions' ? { promptStack: [] } : {}),
+        } } });
+        if (field === 'voice' && boundary.session.ownerMetadata?.t === 'plain') expect(boundary.session.ownerMetadata.v.work).not.toHaveProperty('voicePreference');
+        boundary.session = { ...boundary.session, ownerMetadata: initialOwner };
+        boundary.race = 'same-field';
+        const commitsBeforeConflict = boundary.patches.length;
+        expect(await execute()).toMatchObject({ ok: false, errorCode: 'conflict' });
+        expect(boundary.patches).toHaveLength(commitsBeforeConflict + 1);
+        expect(boundary.session.ownerMetadata).toMatchObject({ t: 'plain', v: { work: { sessionRolesV1: { notes: 'Concurrent notes' } } } });
+      }
+    },
+  );
+
+  it('refuses the real Action when its registered-field dependency is missing, without any metadata write', async () => {
+    const deps = createCliActionDeps({ token: 'token', credentials: { token: 'token', encryption: null },
+      sessionId, mode: 'plain', ctx: null, serverId: 'home', serverHttpBaseUrl: 'https://home.example.test' });
+    const miswired = createActionExecutor({ ...deps, sessionStateFieldSet: undefined });
+    expect(await miswired.execute('session.memory.set', { sessionId, serverId: 'home', expectedMetadataRevision: 4, enabled: true },
+      { surface: 'cli', authority: 'present_user', serverId: 'home' })).toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+    expect(boundary.patches).toEqual([]);
   });
 
   it('refuses caller-local next-prompt mode selection before Home reads or writes, while immediate retains its metadata owner', async () => {
@@ -126,7 +198,7 @@ describe('headless registered Session field Actions', () => {
     expect(boundary.patches).toEqual([]);
   });
 
-  it('admits current Artifact headers and commits Session context and memory only against the reviewed tuple', async () => {
+  it('admits current Artifact headers and applies field intents despite older metadata observations', async () => {
     if (!boundary.session) throw new Error('Missing Home fixture');
     boundary.session = { ...boundary.session, metadata: JSON.stringify({ path: '/repo', host: 'host', work: {
       memoryEnabled: false, sessionRolesV1: { overrides: {}, sessionRoles: {}, notes: 'Keep notes' },
@@ -148,7 +220,12 @@ describe('headless registered Session field Actions', () => {
       if (request.pathname === '/v1/artifacts') return { status: 200, data: inventory };
       throw new Error(`Unexpected Artifact HTTP read: ${url}`);
     });
-    const owner = executor();
+    const owner = createActionExecutor(createCliActionDeps({
+      token: 'token', credentials: { token: 'token', encryption: null,
+        requesterSessionCredentialScope: { serverId: 'home-profile', serverHttpBaseUrl: 'https://home.example.test' } },
+      sessionId, mode: 'plain', ctx: null, serverId: 'home-profile', serverIdentityId: 'home',
+      serverHttpBaseUrl: 'https://home.example.test',
+    }));
     const target = { sessionId, serverId: 'home', expectedMetadataRevision: 4 };
     const context = { surface: 'cli', authority: 'present_user', serverId: 'home' } as const;
     const deniedIntent = { kind: 'attach', entry: { id: 'dashboard', ref: { kind: 'bundle', artifactId: 'dashboard' } } };
@@ -163,13 +240,37 @@ describe('headless registered Session field Actions', () => {
       ] } } });
     expect(await owner.execute('session.memory.set', { ...target, enabled: true }, context))
       .toMatchObject({ ok: true, result: { enabled: true, version: 5 } });
-    const committed = boundary.patches.length;
     expect(await owner.execute('session.memory.set', { ...target, expectedMetadataRevision: 3, enabled: true }, context))
-      .toMatchObject({ ok: false, errorCode: 'conflict' });
+      .toMatchObject({ ok: true });
     expect(await owner.execute('session.context.update', { ...target, expectedMetadataRevision: 3,
       intent: { kind: 'inherited_enable', entryId: 'inherited', enabled: false } }, context))
-      .toMatchObject({ ok: false, errorCode: 'conflict' });
-    expect(boundary.patches).toHaveLength(committed);
+      .toMatchObject({ ok: true });
+  });
+
+  it('selects a Plan through the Context Action against the reviewed revision, preserving current neighboring metadata', async () => {
+    if (!boundary.session) throw new Error('Missing Home fixture');
+    boundary.session = { ...boundary.session, metadataVersion: 5, metadata: JSON.stringify({ path: '/repo', host: 'host', work: {
+      memoryEnabled: false, sessionRolesV1: { overrides: {}, sessionRoles: {}, notes: 'Concurrent notes' }, promptStack: [
+        { id: 'a', ref: { kind: 'doc', artifactId: 'doc-a' }, enabled: true, placement: 'system_append', plan: true },
+        { id: 'b', ref: { kind: 'doc', artifactId: 'doc-b' }, enabled: false, placement: 'composer_insert', maxChars: 42 },
+      ],
+    } }) };
+    const owner = executor();
+    const context = { surface: 'cli', authority: 'present_user', serverId: 'home' } as const;
+    const target = { sessionId, serverId: 'home', expectedMetadataRevision: 4, intent: { kind: 'set_plan', entryId: 'b' } };
+    const selected = await owner.execute('session.context.update', target, context);
+    expect(selected, JSON.stringify(selected))
+      .toMatchObject({ ok: true, result: { work: { memoryEnabled: false, sessionRolesV1: { notes: 'Concurrent notes' }, promptStack: [
+        { id: 'a' }, { id: 'b', plan: true, enabled: false, placement: 'composer_insert', maxChars: 42 },
+      ] } } });
+    expect(boundary.patches.at(-1)).toMatchObject({ target: { ownerMetadata: { t: 'plain', v: { work: {
+      sessionRolesV1: { notes: 'Concurrent notes' }, promptStack: [
+        { id: 'a' }, { id: 'b', plan: true, enabled: false, maxChars: 42 },
+      ],
+    } } } } });
+    expect(JSON.stringify(boundary.patches.at(-1))).not.toContain('"planEntryId"');
+    const patch = boundary.patches.at(-1) as { target: { ownerMetadata: { v: { work: { promptStack: unknown[] } } } } };
+    expect(patch.target.ownerMetadata.v.work.promptStack[0]).not.toHaveProperty('plan');
   });
 
   it('preserves an existing Session memory choice and context when promoting or demoting its Bot marker', async () => {
@@ -195,7 +296,7 @@ describe('headless registered Session field Actions', () => {
 
   it('does not advertise autonomous write access to the human transcript preference', async () => {
     expect(await executor().execute('settings.list', { pageId: 'transcript' }, { surface: 'agent' }))
-      .toMatchObject({ ok: true, result: { items: [expect.objectContaining({ anchor: 'transcript.showToolCalls', writable: false })] } });
+      .toMatchObject({ ok: true, result: { items: expect.arrayContaining([expect.objectContaining({ anchor: 'transcript.showToolCalls', writable: false })]) } });
   });
 
   it('does not let an authenticated Session agent hide tool calls through a human-looking surface', async () => {

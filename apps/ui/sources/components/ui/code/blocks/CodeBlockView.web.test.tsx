@@ -1,12 +1,28 @@
 import React from 'react';
 import type { ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { flushHookEffects, renderScreen } from '@/dev/testkit';
-import { storage } from '@/sync/domains/state/storage';
+import { createThemeFixture, flushHookEffects, renderScreen } from '@/dev/testkit';
 import { installCodeBlockCommonModuleMocks } from './codeBlockTestHelpers';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+
+const themeOverrides = {
+    dark: false,
+    colors: {
+        border: { default: '#ddd' },
+        surface: { base: '#fff', inset: '#fff' },
+        text: { primary: '#111', secondary: '#666' },
+        syntax: {
+            default: '#111',
+            keyword: '#123456',
+            string: '#0a3069',
+            comment: '#666',
+            number: '#0550ae',
+            function: '#8250df',
+        },
+    },
+};
 
 installCodeBlockCommonModuleMocks({
     reactNative: async () => {
@@ -36,22 +52,7 @@ installCodeBlockCommonModuleMocks({
     unistyles: async () => {
         const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
         return createUnistylesMock({
-            theme: {
-                dark: false,
-                colors: {
-                    border: { default: '#ddd' },
-                    surface: { base: '#fff', inset: '#fff' },
-                    text: { primary: '#111', secondary: '#666' },
-                    syntax: {
-                        default: '#111',
-                        keyword: '#123456',
-                        string: '#0a3069',
-                        comment: '#666',
-                        number: '#0550ae',
-                        function: '#8250df',
-                    },
-                },
-            },
+            theme: themeOverrides,
         });
     },
 });
@@ -60,6 +61,8 @@ vi.mock('expo-clipboard', () => ({
     setStringAsync: vi.fn(async () => {}),
 }));
 
+// Storage's consumer graph reaches the native/theme boundary; install it before loading that graph.
+const { storage } = await import('@/sync/domains/state/storage');
 const initialSettings = storage.getState().settings;
 beforeEach(() => storage.setState({ settings: { ...initialSettings, experiments: true,
     featureToggles: { ...initialSettings.featureToggles, 'files.diffSyntaxHighlighting': true,
@@ -124,7 +127,13 @@ describe('CodeBlockView (web)', () => {
     });
 
     it('uses Shiki tokens when advanced highlighting is enabled', async () => {
-        // The web mark case may already have populated the real Shiki engine cache.
+        // Earlier mark cases populate the real cache, while Vitest clears SDK spy history.
+        // Evict that theme through its existing owner before asserting engine initialization.
+        const { clearShikiCacheForKey, resolveHappierShikiThemeId } = await import('../highlighting/shiki/shikiTokenize.web');
+        clearShikiCacheForKey(resolveHappierShikiThemeId({
+            isDark: false,
+            colors: createThemeFixture(themeOverrides).colors,
+        }));
 
         const { CodeBlockView } = await import('./CodeBlockView.web');
 

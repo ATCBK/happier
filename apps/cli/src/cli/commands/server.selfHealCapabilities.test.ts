@@ -52,6 +52,7 @@ describe('happier server add (self-heal from /v1/features capabilities)', () => 
     const restoreTty = setTtyMode(false, false);
     const home = await mkdtemp(join(tmpdir(), 'happier-server-selfheal-'));
 
+    app.get('/health', async () => ({ version: '0.3.0-test' }));
     app.get('/v1/features', async () => {
       return {
         features: {},

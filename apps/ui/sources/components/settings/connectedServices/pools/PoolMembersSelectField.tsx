@@ -1,6 +1,5 @@
 import * as React from 'react';
 
-import { Modal } from '@/modal';
 import { t } from '@/text';
 
 import { computePoolMembershipDiff } from './poolMembershipDiff';
@@ -40,28 +39,8 @@ export const PoolMembersSelectField = React.memo(function PoolMembersSelectField
         );
         if (toAdd.length === 0 && toRemove.length === 0) return;
 
-        if (toRemove.length > 0) {
-            const removedTitles = toRemove.map((accountId) => (
-                candidates.find((candidate) => candidate.accountId === accountId)?.title
-                ?? t('common.unavailable')
-            ));
-            const ok = await Modal.confirm(
-                t('connectedServices.detail.groupActions.removeMemberConfirmTitle'),
-                t('connectedServices.detail.groupActions.removeMembersConfirmBody', {
-                    count: toRemove.length,
-                    members: removedTitles.join(', '),
-                }),
-                {
-                    confirmText: t('connectedServices.detail.groupActions.removeMember'),
-                    cancelText: t('common.cancel'),
-                    destructive: true,
-                },
-            );
-            if (!ok) return;
-        }
-
         onCommit(nextSelectedAccountIds);
-    }, [candidates, onCommit, selectedAccountIds]);
+    }, [onCommit, selectedAccountIds]);
 
     return (
         <MultiSelectField

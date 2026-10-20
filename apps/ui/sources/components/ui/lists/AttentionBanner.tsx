@@ -1,14 +1,15 @@
-import { HappierBanner, HappierPressable, happierPageTextMetrics, type HappierBannerPoint } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_FRESHNESS_LINE_METRICS, HappierBanner, HappierPressable, happierPageTextMetrics, type HappierBannerPoint } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { RoundButton, type RoundButtonDisplay } from '@/components/ui/buttons/RoundButton';
+import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
@@ -20,6 +21,8 @@ export type AttentionBannerAction = Readonly<{
     disabled?: boolean;
     loading?: boolean;
     display?: RoundButtonDisplay;
+    /** A glyph before the label (Try again's arrows), for the band's one recovery button. */
+    icon?: IconName;
 }>;
 
 /**
@@ -31,6 +34,11 @@ export type AttentionBannerAction = Readonly<{
  * tone's glyph in the rows' icon column, the title and description on the rows' text steps, and the
  * action on the right — beneath the text when the banner is too narrow for both. It takes a section's
  * place in the page flow (one section gap above it, on the sheets' edges).
+ *
+ * `presentation="strip"` is the same notice as the compact band across the top of a pane or reading
+ * surface (Walkthrough lab `wk-band`), drawn by the shared banner's strip: the title leads when a
+ * description finishes the sentence, the second ways forward are words and the action is the band's one
+ * button at its end. A strip that fails is announced as an alert; any other is a polite status.
  */
 export const AttentionBanner = React.memo(function AttentionBanner(props: Readonly<{
     testID: string;
@@ -67,14 +75,18 @@ export const AttentionBanner = React.memo(function AttentionBanner(props: Readon
     announce?: 'alert';
     /** The notice can be put away (an operation's failure the reader has seen): a quiet × at its end. */
     onDismiss?: () => void;
+    presentation?: 'card' | 'strip';
+    /** The tone's glyph unless the notice names its own state ("x-circle" failed, "path" rewritten). */
+    iconName?: IconName;
 }>) {
+    if (props.presentation === 'strip') return <AttentionBannerStrip {...props} />;
     const { theme } = useUnistyles();
     const styles = stylesheet;
     const textStyles = attentionBannerTextStyles;
     const tone = props.tone ?? 'warning';
     const palette = theme.colors.state[tone];
-    const iconName: IconName = tone === 'neutral' ? 'info' : 'warning';
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const iconName: IconName = props.iconName ?? (tone === 'neutral' ? 'info' : 'warning');
+    const presentationTheme = usePluginUiTheme(theme);
     const [detailsOpen, setDetailsOpen] = React.useState(false);
     const [compact, setCompact] = React.useState(false);
     const fullWidthAction = compact && props.compactActionPlacement === 'full-width';
@@ -156,7 +168,58 @@ export const AttentionBanner = React.memo(function AttentionBanner(props: Readon
     return props.placement === 'inline' ? banner : <ItemGroup surface="none">{banner}</ItemGroup>;
 });
 
+function AttentionBannerStrip(props: React.ComponentProps<typeof AttentionBanner>) {
+    const { theme } = useUnistyles();
+    const tone = props.tone ?? 'warning';
+    const palette = theme.colors.state[tone];
+    const presentationTheme = usePluginUiTheme(theme);
+    const links = [...(props.secondaryAction ? [{ action: props.secondaryAction, testID: `${props.testID}.secondaryAction` }] : []),
+        ...(props.moreActions ?? []).map((action, index) => ({ action, testID: `${props.testID}.moreAction.${index}` }))];
+    const hasActions = Boolean(props.action) || links.length > 0;
+    return (
+        <HappierBanner
+            presentation="strip"
+            testID={props.testID}
+            title={props.title}
+            description={props.description}
+            tone={tone}
+            theme={presentationTheme}
+            backgroundColor={tone === 'neutral' ? theme.colors.surface.inset : palette.background}
+            borderColor={theme.colors.border.default}
+            announce={props.announce ?? (tone === 'danger' ? 'alert' : 'status')}
+            accessibilityLiveRegion={props.accessibilityLiveRegion}
+            icon={props.icon ?? <Icon name={props.iconName ?? (tone === 'neutral' ? 'info' : tone === 'danger' ? 'x-circle' : 'warning')}
+                size={HAPPIER_FRESHNESS_LINE_METRICS.glyphPx} color={tone === 'neutral' ? theme.colors.text.tertiary : palette.foreground} />}
+            titleContent={(
+                <Text style={stripStyles.text}>
+                    {props.description ? <Text style={stripStyles.lead}>{props.title}</Text> : props.title}
+                    {props.description ? ` ${props.description}` : null}
+                </Text>
+            )}
+            action={hasActions ? (
+                <>
+                    {links.map(({ action, testID }) => (
+                        <TextLinkButton key={testID} testID={action.testID ?? testID} tone="strong" size="meta"
+                            label={action.label} onPress={action.onPress} disabled={action.disabled} />
+                    ))}
+                    {props.action ? <BannerButton action={props.action} testID={`${props.testID}.action`} /> : null}
+                </>
+            ) : undefined}
+            details={props.details?.length ? (
+                <View testID={`${props.testID}.detailsContent`}>
+                    {props.details.map((line, index) => <Text key={index} selectable style={stripStyles.detail}>{line}</Text>)}
+                </View>
+            ) : undefined}
+            dismiss={props.onDismiss ? (
+                <IconButton testID={`${props.testID}.dismiss`} variant="plain" size={28} accessibilityLabel={t('common.close')}
+                    icon={<Icon name="x" size={ICON_SIZE.xs} color={theme.colors.text.secondary} />} onPress={props.onDismiss} />
+            ) : undefined}
+        />
+    );
+}
+
 function BannerButton(props: Readonly<{ action: AttentionBannerAction; testID: string; quiet?: boolean; fullWidth?: boolean }>) {
+    const { theme } = useUnistyles();
     return (
         <RoundButton
             testID={props.action.testID ?? props.testID}
@@ -164,6 +227,7 @@ function BannerButton(props: Readonly<{ action: AttentionBannerAction; testID: s
             style={props.fullWidth ? { width: '100%' } : undefined}
             display={props.action.display ?? (props.quiet ? 'inverted' : 'secondary')}
             title={props.action.label}
+            leading={props.action.icon ? <Icon name={props.action.icon} size={ICON_SIZE.xs} color={theme.colors.text.primary} /> : undefined}
             textStyle={props.quiet ? Typography.default() : undefined}
             disabled={props.action.disabled}
             loading={props.action.loading}
@@ -185,6 +249,12 @@ export const attentionBannerTextStyles = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
         marginTop: theme.space.s2,
     },
+}));
+
+const stripStyles = StyleSheet.create((theme) => ({
+    text: { ...Typography.variant('meta'), color: theme.colors.text.secondary },
+    lead: { ...Typography.variant('meta', 'semiBold'), color: theme.colors.text.primary },
+    detail: { ...Typography.variant('meta'), color: theme.colors.text.tertiary },
 }));
 
 const stylesheet = StyleSheet.create((theme) => ({

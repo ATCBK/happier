@@ -32,7 +32,7 @@ export const ReviewProfile: ExecutionRunIntentProfile = {
   supportsDetached: true,
   transcriptMaterialization: 'full',
   emitFinalSidechainMessageWhenStreamed: true,
-  prepareStartParams: async ({ request, cwd, sessionId, contextWindowTokens }) => {
+  prepareStartParams: async ({ request, cwd, sessionId, contextWindowTokens, resolveReviewScmScope: resolveScope = resolveReviewScmScope }) => {
     const existing = readIntentInputRecord(request.intentInput);
     delete existing.scmContextWindowTokens;
     delete existing.reviewNarration;
@@ -40,7 +40,7 @@ export const ReviewProfile: ExecutionRunIntentProfile = {
     delete existing.metadata;
     delete existing.resultGenerator;
     delete existing.resultBaseRevision;
-    const scmReviewScope = await resolveReviewScmScope({
+    const scmReviewScope = await resolveScope({
       cwd,
       intentInput: existing,
     });
@@ -77,7 +77,7 @@ export const ReviewProfile: ExecutionRunIntentProfile = {
     ? ScmDiffSummaryProfile.onRetainedInputAdmitted!(params) : Promise.resolve(null),
   buildInitialInputContext: (params) => {
     const narration = readReviewNarration(params.start.intentInput);
-    if (!narration) return '';
+    if (!narration) return ReviewProfile.buildPrompt({ ...params.start, instructions: '' });
     return ScmDiffSummaryProfile.buildInitialInputContext!(params);
   },
   onTurnComplete: async (params) => {

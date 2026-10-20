@@ -28,6 +28,10 @@ describe('deepIndexDb', () => {
         db.insertChunk({ sessionId: 'excluded', seqFrom: seq, seqTo: seq, createdAtFromMs: 200, createdAtToMs: 200, text: 'quasray planes nebualy' });
       }
       const scoped = { type: 'session' as const, sessionId: 'target' };
+      const project = { type: 'project' as const, projectRef: { serverId: 'home', projectKey: 'project' } };
+      expect(db.search({ query: 'quasar', scope: project, maxResults: 1 })).toEqual([]);
+      expect(db.search({ query: 'quasar', scope: project, eligibleSessionIds: ['target'], maxResults: 1 }))
+        .toMatchObject([{ sessionId: 'target' }]);
       for (const query of ['quasra', 'planer']) {
         expect.soft(db.search({ query, scope: scoped, maxResults: 10 }).map((hit) => hit.sessionId), query).toEqual(['target']);
         expect.soft(db.search({ query, scope: { type: 'global' }, eligibleSessionIds: ['target', ...Array.from({ length: 1000 }, (_, i) => `absent-${i}`)], maxResults: 10 }).map((hit) => hit.sessionId), query).toEqual(['target']);

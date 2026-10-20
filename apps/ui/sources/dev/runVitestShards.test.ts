@@ -45,8 +45,9 @@ describe('apps/ui runVitestShards', () => {
         expect(resolveVitestShardRange({}, 32)).toEqual({ start: 1, end: 32, part: 1, parts: 1 });
     });
 
-    it('bounds each shard independently', () => {
-        expect(resolveVitestShardTimeoutMs({})).toBe(1_200_000);
+    it('uses the containing deadline unless a diagnostic watchdog is explicitly configured', () => {
+        expect(resolveVitestShardTimeoutMs({})).toBeUndefined();
+        expect(resolveVitestShardTimeoutMs({ HAPPIER_UI_VITEST_SHARD_TIMEOUT_MS: 'invalid' })).toBeUndefined();
         expect(resolveVitestShardTimeoutMs({ HAPPIER_UI_VITEST_SHARD_TIMEOUT_MS: '120000' })).toBe(120_000);
         expect(classifyVitestShardTermination({ code: null, signal: 'SIGTERM', timedOut: true })).toEqual({
             outcome: 'failed',
@@ -57,21 +58,24 @@ describe('apps/ui runVitestShards', () => {
     });
 
     it('defaults shard concurrency to 1', () => {
-        expect(resolveVitestShardConcurrency({}, ['node', 'run'])).toBe(1);
+        expect(resolveVitestShardConcurrency({}, ['node', 'run'], 12, 4)).toBe(1);
     });
 
-    it('uses HAPPIER_UI_VITEST_SHARD_CONCURRENCY override when valid', () => {
-        expect(resolveVitestShardConcurrency({ HAPPIER_UI_VITEST_SHARD_CONCURRENCY: '3' }, ['node', 'run'])).toBe(
+    it('admits a valid requested concurrency within the CPU and worker budget', () => {
+        expect(resolveVitestShardConcurrency({ HAPPIER_UI_VITEST_SHARD_CONCURRENCY: '3' }, ['node', 'run'], 12, 4)).toBe(
+            2,
+        );
+        expect(resolveVitestShardConcurrency({ HAPPIER_UI_VITEST_SHARD_CONCURRENCY: '3' }, ['node', 'run'], 48, 4)).toBe(
             3,
         );
     });
 
     it('ignores invalid shard concurrency overrides', () => {
-        expect(resolveVitestShardConcurrency({ HAPPIER_UI_VITEST_SHARD_CONCURRENCY: '0' }, ['node', 'run'])).toBe(
+        expect(resolveVitestShardConcurrency({ HAPPIER_UI_VITEST_SHARD_CONCURRENCY: '0' }, ['node', 'run'], 12, 4)).toBe(
             1,
         );
         expect(
-            resolveVitestShardConcurrency({ HAPPIER_UI_VITEST_SHARD_CONCURRENCY: 'nope' }, ['node', 'run']),
+            resolveVitestShardConcurrency({ HAPPIER_UI_VITEST_SHARD_CONCURRENCY: 'nope' }, ['node', 'run'], 12, 4),
         ).toBe(1);
     });
 
@@ -80,9 +84,12 @@ describe('apps/ui runVitestShards', () => {
             resolveVitestShardConcurrency(
                 { HAPPIER_UI_VITEST_SHARD_CONCURRENCY: '2' },
                 ['node', 'run', '--concurrency', '4'],
+                48,
+                4,
             ),
         ).toBe(4);
-        expect(resolveVitestShardConcurrency({}, ['node', 'run', '--concurrency=5'])).toBe(5);
+        expect(resolveVitestShardConcurrency({}, ['node', 'run', '--concurrency=5'], 48, 4)).toBe(5);
+        expect(resolveVitestShardConcurrency({}, ['node', 'run', '--concurrency=5'], 12, 4)).toBe(2);
     });
 
     it('parses --config path from argv', () => {

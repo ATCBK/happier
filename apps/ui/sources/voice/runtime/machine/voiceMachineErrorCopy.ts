@@ -23,12 +23,33 @@ export const VOICE_MACHINE_ERROR_TRANSLATION_KEYS = {
     service_temporarily_unavailable: 'errors.voiceServiceUnavailable',
 } as const;
 
+/**
+ * A machine error kind is a family; some of its safe reasons carry their own sentence because the
+ * next step differs from the family's generic copy. Any other reason keeps the kind's copy, so a
+ * raw reason code or transport text is never shown.
+ */
+export const VOICE_MACHINE_ERROR_REASON_TRANSLATION_KEYS = {
+    voice_previous_session_stop_failed: 'settingsVoice.local.machineErrors.previous_session_stop_failed',
+} as const;
+
 export type VoiceMachineErrorTranslationKey =
-    (typeof VOICE_MACHINE_ERROR_TRANSLATION_KEYS)[keyof typeof VOICE_MACHINE_ERROR_TRANSLATION_KEYS];
+    | (typeof VOICE_MACHINE_ERROR_TRANSLATION_KEYS)[keyof typeof VOICE_MACHINE_ERROR_TRANSLATION_KEYS]
+    | (typeof VOICE_MACHINE_ERROR_REASON_TRANSLATION_KEYS)[keyof typeof VOICE_MACHINE_ERROR_REASON_TRANSLATION_KEYS];
+
+function isVoiceMachineErrorReasonWithCopy(
+    reason: string | undefined,
+): reason is keyof typeof VOICE_MACHINE_ERROR_REASON_TRANSLATION_KEYS {
+    return reason !== undefined
+        && Object.prototype.hasOwnProperty.call(VOICE_MACHINE_ERROR_REASON_TRANSLATION_KEYS, reason);
+}
 
 export function resolveVoiceMachineErrorTranslationKey(
     kind: VoiceMachineErrorKind,
+    reason?: string,
 ): VoiceMachineErrorTranslationKey {
+    if (kind === 'service_temporarily_unavailable' && isVoiceMachineErrorReasonWithCopy(reason)) {
+        return VOICE_MACHINE_ERROR_REASON_TRANSLATION_KEYS[reason];
+    }
     switch (kind) {
         case 'mic_permission_revoked':
             return VOICE_MACHINE_ERROR_TRANSLATION_KEYS.mic_permission_denied;

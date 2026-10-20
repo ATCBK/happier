@@ -20,7 +20,7 @@ import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/cat
 import { PROVIDER_CONNECTIONS_ROWS_ROUTE_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1, sealPromptLibraryContentV1, openPromptLibraryContentV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
-import { RegistrySourcesRecordV1Schema } from '@happier-dev/protocol/registries/registrySourcesV1';
+import { RegistrySourcesRecordV1Schema } from '@happier-dev/protocol/registries';
 import { CONNECTED_PRESENTATION_ROWS_ROUTE_V1, CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1 } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
 import { REMOTE_HOST_ROWS_ROUTE_V1, REMOTE_HOST_ACCOUNT_CIPHER_KIND_V1, RemoteHostCatalogRecordV1Schema,
   sealRemoteHostCatalogContentV1, openRemoteHostCatalogContentV1 } from '@happier-dev/protocol/remoteHosts/remoteHostRecordV1';
@@ -32,7 +32,8 @@ import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotFor
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { deriveSettingsSecretsReadKeysForCredentials } from './settingsSecretsKey';
 import { createSavedSecretMaterializerFromSnapshotV1 } from './savedSecretCatalog';
-import { createInvocationSavedSecretOperationContextV1, refreshSavedSecretCatalogForOperation } from './hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
+import { refreshSavedSecretCatalogForOperation } from "./hydrateSavedSecretCatalog";
 import * as savedSecretOperations from './hydrateSavedSecretCatalog';
 
 // HTTP and credential persistence are process-external boundaries; all import decisions remain real.
@@ -637,7 +638,8 @@ describe('SavedSecret material-demand legacy import', () => {
         registryRevision++;
       }
       if (nativeArtifact) {
-        expect(mutation.referenceCensus.artifacts).toEqual([{ artifactId: 'selected', headerVersion: 2, bodyVersion: 4 }]);
+        expect('artifacts' in mutation.referenceCensus ? mutation.referenceCensus.artifacts : undefined)
+          .toEqual([{ artifactId: 'selected', headerVersion: 2, bodyVersion: 4 }]);
         expect(mutation.profileMutations).toMatchObject([{ id: 'p', operation: 'update', expectedRevision: 2 }]);
       const rowMutation = mutation.profileMutations[0]!;
         profileRows[0] = { id: rowMutation.id, revision: 3, content: rowMutation.content };
@@ -765,8 +767,9 @@ describe('SavedSecret material-demand legacy import', () => {
     const snapshot = operationContext ? operationContext.readSnapshot() : getActiveAccountSettingsSnapshot();
     if (!snapshot) throw new Error('missing_import_snapshot');
     expect(snapshot.settingsVersion).toBe(5);
-    expect(createSavedSecretMaterializerFromSnapshotV1(snapshot, operationContext
-      ? { isCurrent: () => operationContext.readSnapshot() === snapshot } : undefined).resolve(ref))
+    const capturedOperationContext = operationContext;
+    expect(createSavedSecretMaterializerFromSnapshotV1(snapshot, capturedOperationContext
+      ? { isCurrent: () => capturedOperationContext.readSnapshot() === snapshot } : undefined).resolve(ref))
       .toMatchObject({ status: 'ready', value: 'fixture-private' });
     if (operationContext) {
       expect(getActiveAccountSettingsSnapshot()).toBe(ambientBefore);
@@ -791,7 +794,8 @@ describe('SavedSecret material-demand legacy import', () => {
     expect(historyMutations).toHaveLength(1);
     expect(historyMutations[0]?.operation).toMatchObject({ kind: 'normalize', removedRoots: activeConnected
       ? ['connectedAccountServiceConfigurationsV1', 'connectedAccountPurposeBindingsV1']
-      : activeReferenceCatalogs || deletedReferenceCatalogs ? ['notificationChannelsV1', 'remoteHostsV1'] : [],
+      : activeReferenceCatalogs || deletedReferenceCatalogs ? ['notificationChannelsV1', 'remoteHostsV1']
+      : activeRegistry ? ['promptRegistrySourcesV1'] : [],
       savedSecretTransfers: [{ ...(inference ? { source: { kind: 'legacy-inference-openai-key' } } : { savedSecretId: legacy.id }), resourceId, expectedRevision: 1 }] });
     if (inference) {
       const historical = retained?.t === 'plain' ? retained.v : retained?.t === 'encrypted' && material

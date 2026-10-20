@@ -286,6 +286,22 @@ describe('projects.list through the real CLI Account composition', () => {
       .toMatchObject({ ok: true, result: { items: [{ projectKey: { serverId: 'home-a', id: 'first' } }], truncated: true, coverage: 'partial' } });
   });
 
+  it('offers the visible checkouts of this Home as the typed Checkout input choices, through the admission the input validator uses', async () => {
+    accountBoundary({ visibleUnpinned: true });
+    const owner = executor();
+    const accountId = `project-account-${accountFixtureSequence}`;
+    const surface = { serverId: 'home-a', accountId, owner: { kind: 'home' as const } };
+    const request = { consumer: { kind: 'widget' as const, surface, definition: { kind: 'builtin' as const, id: 'project_checkouts' } }, fieldPath: 'checkout' };
+    const result = await owner.execute('action.options.resolve', request, { surface: 'mcp', bypassApprovals: true, serverId: 'home-a' });
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { optionsSourceId: 'host-input:workspace' } });
+    if (!result.ok) return;
+    const options = (result.result as { options: readonly { value: { id: string; serverId: string; machineId: string } }[] }).options;
+    // Another Home's checkout is not a choice, and a choice carries the complete ref the validator resolves.
+    expect(options.map(option => option.value.id).sort()).toEqual(['first', 'second', 'visible']);
+    expect(options.every(option => option.value.serverId === 'home-a')).toBe(true);
+    expect(options.find(option => option.value.id === 'second')?.value).toMatchObject({ machineId: 'machine-b', rootPath: '/work/second' });
+  });
+
   it('refuses another Home before touching the current Account and exposes no unaccepted registration Action', async () => {
     const { post } = accountBoundary();
     const owner = executor();

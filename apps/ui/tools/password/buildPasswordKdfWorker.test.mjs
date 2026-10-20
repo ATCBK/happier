@@ -7,8 +7,45 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
+import { build } from 'esbuild';
 
 import { buildPasswordKdfWorker } from './buildPasswordKdfWorker.mjs';
+import { buildCryptoWorker } from '../crypto/buildCryptoWorker.mjs';
+
+test('the emitted crypto worker opens canonical envelopes without Metro, Node or script imports', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'happier-crypto-worker-'));
+    const uiDir = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+    try {
+        const { outputFile } = await buildCryptoWorker({ outputFile: join(directory, 'crypto-worker.js') });
+        const goldenModule = { exports: {} };
+        const fixtureBundle = await build({
+            entryPoints: [resolve(uiDir, '../../packages/protocol/src/crypto/cryptoGoldenVectors.ts')],
+            bundle: true, platform: 'node', format: 'cjs', write: false,
+        });
+        runInNewContext(fixtureBundle.outputFiles[0].text, { module: goldenModule });
+        const vectors = goldenModule.exports.CRYPTO_GOLDEN_VECTORS.encryptedDataKeyEnvelopeV1;
+        const selected = [vectors.directSecretKey, vectors.compatibilitySeed, vectors.undersizedDataKeyEnvelope, vectors.oversizedDataKeyEnvelope];
+        const replies = [];
+        const context = {
+            TextEncoder, TextDecoder, Uint8Array,
+            postMessage: (message, transfer) => replies.push(structuredClone(message, { transfer })),
+        };
+        runInNewContext(await readFile(outputFile, 'utf8'), context);
+        const data = selected.map(vector => ({
+            envelope: new Uint8Array(Buffer.from(vector.envelope.hex, 'hex')),
+            recipientSecretKeyOrSeed: new Uint8Array(Buffer.from(vector.recipientSecretKeyOrSeed.hex, 'hex')),
+        }));
+        context.onmessage({ data });
+        assert.equal(replies.length, 1);
+        assert.equal(replies[0].status, 'ok');
+        assert.deepEqual(replies[0].items.map(item => item?.byteLength ?? null), [32, 32, null, null]);
+        assert.equal(Buffer.from(replies[0].items[0]).toString('hex') === vectors.directSecretKey.dataKey.hex, true);
+        assert.equal(Buffer.from(replies[0].items[1]).toString('hex') === vectors.compatibilitySeed.dataKey.hex, true);
+        assert.equal(data.every(item => item.recipientSecretKeyOrSeed.every(byte => byte === 0)), true);
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
 
 test('UI postinstall builds its real password worker before Protocol dist exists', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'happier-cold-password-worker-'));

@@ -14,6 +14,8 @@ import type {
   JsonValue,
 } from '@happier-dev/plugin-sdk';
 import type { PluginJsonSchema } from '@happier-dev/plugin-sdk/protocol';
+export { readExternalDoc, commentOnExternalDoc, proposeExternalDocEdit,
+  requestExternalDocAcceptance, requestExternalDocDecline } from './docReview.js';
 
 type ExternalIssueDraft = Readonly<Record<string, JsonValue>>;
 

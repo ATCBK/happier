@@ -5,6 +5,7 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { homeGovernanceProjectionFixture } from '@/dev/testkit/fixtures/homeGovernanceFixtures';
 import { collectRenderedTestIds } from '@/dev/testkit/render/collectRenderedTestIds';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { createDesktopSecureStorageBoundary } from '@/dev/testkit/mocks/desktopSecureStorage';
 
 import type { HomeAdministrationContext } from '@/components/settings/home/governance/homeAdministrationContext';
 
@@ -50,6 +51,7 @@ const { getDefaultSystemTaskRunner } = await import('@/components/systemTasks');
 let scope = { serverId: '', accountId: 'account-1' };
 beforeEach(async () => {
     await home.reset();
+    vi.stubGlobal('__TAURI_INTERNALS__', { invoke: createDesktopSecureStorageBoundary().invoke });
     machineRpc.mockReset();
     vi.mocked(Modal.alertAsync).mockClear();
     desktop.listeners.clear();

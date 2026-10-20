@@ -1,11 +1,11 @@
 import { Readable } from 'node:stream';
 import { readFile, rm } from 'node:fs/promises';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1 } from '@happier-dev/protocol/server/http/requestBodyBoundsV1';
 import { type ArtifactBlobUploadInitV1 } from '@happier-dev/protocol/artifacts/artifactBinaryV1';
 import { ARTIFACT_UPLOAD_CONTENT_TYPE_V1, ARTIFACT_UPLOAD_PATH_V1, decodeArtifactUploadMetadataV1 } from '@happier-dev/transfers';
 import { TransferSessionStore, createTransferSessionLifecycle, readFiniteTransferConfig } from '@happier-dev/transfers/node';
-import { inTx } from '@/storage/inTx';
+import { inReadSnapshot } from '@/storage/inTx';
 import { resolveArtifactAccessInTx } from '@/app/artifacts/artifactAccessService';
 import { resolveEffectiveAccountEncryptionModeFromAccountRow } from '@/app/encryption/accountEncryptionMode';
 import { createArtifactHttpMutation, updateArtifactHttpMutation } from '@/app/artifacts/artifactMutationHttpResponse';
@@ -20,7 +20,7 @@ class UploadRefusal extends Error {
 }
 
 async function admitDestination(accountId: string, metadata: ArtifactBlobUploadInitV1): Promise<void> {
-    const refusal = await inTx(async tx => {
+    const refusal = await inReadSnapshot(async tx => {
         if (metadata.kind === 'create') {
             const account = await tx.account.findUnique({ where: { id: accountId }, select: { encryptionMode: true } });
             if (!account) return { statusCode: 404, body: { error: 'Artifact not found' } };
@@ -37,7 +37,7 @@ async function admitDestination(accountId: string, metadata: ArtifactBlobUploadI
         const matches = (access.encryptionMode === 'plain') === (metadata.t === 'plain');
         return matches === (metadata.kind !== 'encryption-conversion') ? null
             : { statusCode: 400, body: { error: 'artifact_account_mode_mismatch' } };
-    }, { /* Artifact upload admission captures mode and effective access together. */ isolationLevel: "Serializable" });
+    });
     if (refusal) throw new UploadRefusal(refusal);
 }
 
@@ -118,9 +118,11 @@ export function registerArtifactUploadRoutes(app: Fastify): void {
                                         const blob = { blobId: destination.blobId, content };
                                         result = destination.kind === 'create'
                                             ? await createArtifactHttpMutation(request.userId, { id: destination.artifactId,
+                                                kind: destination.artifactKind,
                                                 header: destination.header, body: destination.body, dataEncryptionKey: destination.dataEncryptionKey, blob,
                                                 provenance: destination.provenance, provenanceDataEncryptionKey: destination.provenanceDataEncryptionKey })
                                             : await updateArtifactHttpMutation(request.userId, destination.artifactId, {
+                                                kind: destination.artifactKind,
                                                 header: destination.header, expectedHeaderVersion: destination.expectedHeaderVersion,
                                                 body: destination.body, expectedBodyVersion: destination.expectedBodyVersion, blob,
                                                 provenance: destination.provenance, provenanceDataEncryptionKey: destination.provenanceDataEncryptionKey });
@@ -151,7 +153,7 @@ export function registerArtifactUploadRoutes(app: Fastify): void {
             }
         });
         scoped.delete<{ Params: { uploadId: string } }>('/v1/artifacts/content/uploads/:uploadId', { preHandler: scoped.authenticate,
-            schema: { params: z.object({ uploadId: z.string().uuid() }).strict() },
+            schema: { params: z.strictObject({ uploadId: z.string().check(z.uuid()) }) },
         }, async (request, reply) => {
             await cancelArtifactBlobAccountEncryptionConversion({ accountId: request.userId, uploadId: request.params.uploadId });
             return reply.send({ success: true });

@@ -1,18 +1,17 @@
 import * as React from 'react';
-import { ScrollView, View, type LayoutChangeEvent } from 'react-native';
+import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { usePaneHeaderSlotContent } from '@/components/appShell/panes/paneHeaderSlot';
-import { SessionRoleValueRow, isSessionRoleSnapshotCopiedAcrossOwners } from '@/components/roles/session/sessionRole';
-import { readSessionRolesV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
-import { readSessionBotV1 } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
-import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
-import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
+import { Item } from '@/components/ui/lists/Item';
 import { SessionAgentsLaunchMenu } from '@/components/sessions/agents/launch/SessionAgentsLaunchMenu';
 import { useSessionGoalControlEntry } from '@/components/sessions/workState/openSessionGoalControl';
 import { SessionGoalValueRow } from '@/components/sessions/workState/SessionGoalControlContent';
 import { SessionAgentStartDraftRows } from '@/components/sessions/agents/launch/SessionAgentStartDraftRows';
-import { projectAgentStartDrafts } from '@/components/sessions/agents/launch/agentStartDrafts';
+import { useSessionRetainedLauncherDraftKeys } from '@/components/sessions/agents/launch/useSessionRetainedLauncherDraftKeys';
+import { projectAgentStartDrafts, type AgentStartDraft } from '@/components/sessions/agents/launch/agentStartDrafts';
 import { useSessionAgentLauncher, type SessionAgentLauncher } from '@/components/sessions/agents/launch/useSessionAgentLauncher';
 import { groupSessionSubagents } from '@/components/sessions/agents/list/groupSessionSubagents';
 import { SessionSubagentGroup } from '@/components/sessions/agents/list/SessionSubagentGroup';
@@ -29,6 +28,8 @@ import {
 import { useSessionAgentRowOriginLabels } from '@/components/sessions/agents/presentation/useSessionAgentRowOriginLabels';
 import { useSessionMachineName } from '@/components/sessions/agents/presentation/useSessionMachineName';
 import { useSessionMachineReachability } from '@/components/sessions/model/useSessionMachineReachability';
+import { retryMachineReachability } from '@/components/workspaces/reachability/checkoutReachability';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 import { useSessionViewShellSession } from '@/components/sessions/shell/sessionViewStableSession';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
@@ -51,20 +52,17 @@ import { useDeviceType } from '@/utils/platform/responsive';
 import { useSessionWorkSources } from './sessionWorkSources';
 import { useSessionWorkMap } from './useSessionWorkMap';
 import { SessionWorkMapView } from './SessionWorkMapView';
-import { SessionNotesSection } from './roles/SessionNotesSection';
-import { SessionInstructionsSection } from './instructions/SessionInstructionsSection';
-import { SessionVoiceSection } from './voice/SessionVoiceSection';
-import { SessionMemorySection } from './memory/SessionMemorySection';
-import { SessionContextSection } from './context/SessionContextSection';
-import { SessionRolesSection } from './roles/SessionRolesSection';
 import { useSessionWorkMenuActions } from './sessionWorkMenuActions';
-import { describeSessionLineage, useSessionLineage } from './sessionLineage';
-import { SessionLineageNavigation } from './SessionLineageBreadcrumb';
+import { useSessionLineage } from './sessionLineage';
 import { createSessionWorkMapDetailsTab } from './SessionWorkMapDetailsView';
 import { WorkItemRow, WorkViewportContext, useWorkScrollViewport } from './WorkItemRow';
-import { SessionWorkNotifications } from './SessionWorkNotifications';
+import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
+import { useSessionContentDemand } from '@/sync/domains/session/useSessionContentDemand';
+import { useSessionArchivedReports } from './useSessionArchivedReports';
+import { WorkRowUnarchive } from './WorkRowUnarchive';
 import { readSessionWorkflowStepRunId, SessionStepWork } from './SessionStepWork';
 import { describeWorkPaneLine } from './workPaneLine';
+import { SessionWorkPlanRow } from './SessionWorkPlanRow';
 import { WorkFlatSheet, WorkSection } from './WorkSection';
 import {
     groupWorkByState, resolveWorkMachineNotices, resolveWorkReadPresentation, resolveWorkTitleTailStarts,
@@ -74,17 +72,17 @@ import {
 /**
  * The Session's Work tab (ORC §3.8; lab `session-A`, `session-G`, `session-S`).
  *
- * One pane for everything this Session leads: the Sessions under it (the `reportsTo` tree), the
+ * One pane for everything this Session leads: the Sessions under it (the `manager` tree), the
  * workflows and background runs it started, and the agents working inside it — read from the ONE Work
  * projection its Session host mounted, so the pane, the header strip and "never Finished" agree.
  *
- * Rows state where each item stands and open its peek; they carry no answer controls (S-1). The Goal
- * control, Roles for this session and Triggers are owned by FIN 04, lane U2 and FIN; this pane only
- * hosts them in their slots (Roles and the Goal row are mounted here — the row opens FIN 04's one Goal
- * control, the composer's; Triggers arrives as a prop).
+ * Work answers one question, what's happening (coordination lab P1w, owner decision Y5): Managed by
+ * and the Goal row, then the list by state (or its Map). How the agent is set up — Role, Instructions,
+ * Memory, Context, Voice, Triggers, Roles and Notes — is the Session's Info page
+ * (`SessionSetupSections`); who hears about it is People. Rows state where each item stands and open
+ * its peek; they carry no answer controls (S-1). The Goal row opens FIN 04's one Goal control, the
+ * composer's.
  */
-
-export const SESSION_WORK_TRIGGERS_ANCHOR_ID = 'session-work-triggers';
 
 const stylesheet = StyleSheet.create(() => ({
     container: {
@@ -110,9 +108,6 @@ const stylesheet = StyleSheet.create(() => ({
     empty: {
         flexGrow: 1,
         justifyContent: 'center',
-    },
-    slot: {
-        paddingHorizontal: 0,
     },
     marks: {
         flexDirection: 'row',
@@ -154,20 +149,13 @@ export const SessionWorkView = React.memo((props: Readonly<{
     scopeId: string;
     /** The Session pane's exact Home; never infer it from a same-id live cache entry. */
     serverId?: string | null;
-    /** FIN's session Triggers section, in its slot (`/session/[id]/triggers` scrolls here). */
-    triggersSection?: React.ReactNode;
 }>) => {
     const styles = stylesheet;
     const { theme } = useUnistyles();
     const deviceType = useDeviceType();
     const session = useSessionViewShellSession(props.sessionId, props.serverId);
     const sessionServerId = props.serverId ?? session?.serverId ?? null;
-    const inheritedFrom = readSessionRolesV1(session?.metadata)?.inheritedFrom ?? '';
-    const inheritedLead = useSessionViewShellSession(inheritedFrom, sessionServerId);
-    const accountScope = useActiveServerAccountScope();
-    const accountId = accountScope && sessionServerId && areServerProfileIdentifiersEquivalent(accountScope.serverId, sessionServerId)
-        ? accountScope.accountId : null;
-    const copiedAtSpawn = isSessionRoleSnapshotCopiedAcrossOwners(session, inheritedLead, accountId);
+    const router = useRouter();
     const sources = useSessionWorkSources();
     const projection = sources?.projection ?? null;
     const agentActivity = sources?.agentActivity ?? null;
@@ -183,7 +171,7 @@ export const SessionWorkView = React.memo((props: Readonly<{
     // FIN 04's Goal control is the composer's; "+" › Keep going until done… opens it there.
     const goalControlEntry = useSessionGoalControlEntry({ sessionId: props.sessionId, serverId: sessionServerId });
     const machineName = useSessionMachineName(props.sessionId, sessionServerId);
-    const { machineReachable } = useSessionMachineReachability(props.sessionId, sessionServerId);
+    const { machineReachable, machineLastSeenAt } = useSessionMachineReachability(props.sessionId, sessionServerId);
     const originLabelById = useSessionAgentRowOriginLabels({
         sessionId: props.sessionId,
         serverId: sessionServerId,
@@ -248,26 +236,62 @@ export const SessionWorkView = React.memo((props: Readonly<{
         pane.openDetailsTab(createSessionWorkMapDetailsTab({ sessionId: props.sessionId }), { intent: 'pinned' });
     }, [pane, props.sessionId]);
     const canExpandMap = deviceType !== 'phone';
-    // "Add a trigger…" (the "+" menu) brings this Session's Triggers section into view; it is
-    // offered only while that section is mounted here.
+    // "Add a trigger…" (the "+" menu) opens this Session's Triggers, on its Info page.
     const scrollRef = React.useRef<ScrollView>(null);
-    const triggersOffsetRef = React.useRef<number | null>(null);
-    const hasTriggersSection = Boolean(props.triggersSection);
-    const scrollToTriggers = React.useCallback(() => {
-        const y = triggersOffsetRef.current;
-        if (y !== null) scrollRef.current?.scrollTo({ y, animated: true });
-    }, []);
-    const onTriggersLayout = React.useCallback((event: LayoutChangeEvent) => {
-        triggersOffsetRef.current = event.nativeEvent.layout.y;
-    }, []);
+    const openTriggers = React.useCallback(() => {
+        router.push(buildScopedSessionRouteHref({ sessionId: props.sessionId, serverId: sessionServerId, suffix: '/triggers' }) as never);
+    }, [props.sessionId, router, sessionServerId]);
     // Rows that carry live content (a working run's mini-map) mount it only while on screen here.
     const workViewport = useWorkScrollViewport(scrollRef);
-    // Unsent starts open beside the Session lead the list until their first Send (the Start row).
-    const startDrafts = React.useMemo(() => projectAgentStartDrafts(pane.scopeState?.details), [pane.scopeState?.details]);
-    const setActiveDetailsTab = pane.setActiveDetailsTab;
+    // Unsent starts lead the list until their first Send (the Start row): the tabs open beside the
+    // Session, and the text kept on the Session's draft when no tab shows it (a phone, a closed tab).
+    const retainedDraftKeys = useSessionRetainedLauncherDraftKeys({ sessionId: props.sessionId, serverId: sessionServerId });
+    const startDrafts = React.useMemo(
+        () => projectAgentStartDrafts(pane.scopeState?.details, retainedDraftKeys),
+        [pane.scopeState?.details, retainedDraftKeys],
+    );
+    const openLauncherStartDraft = launcher.openStartDraft;
+    const openLauncherConversation = launcher.openConversation;
+    const openLauncherRun = launcher.openRun;
+    const openStartDraft = React.useCallback((draft: AgentStartDraft) => {
+        if (draft.tabKey === null) {
+            // Nothing shows it: start the same ask again, whose launcher reads the retained text back.
+            if (draft.intent === null) openLauncherConversation();
+            else openLauncherRun(draft.intent, draft.roleId
+                ? { roleId: draft.roleId, title: t(`agentStart.startRow.${draft.intent}` as const) }
+                : undefined);
+            return;
+        }
+        const details = pane.scopeState?.details;
+        const tabs = details?.groups?.flatMap(group => group.tabs) ?? details?.tabs;
+        const tab = tabs?.find(candidate => candidate.key === draft.tabKey);
+        if (tab) openLauncherStartDraft(tab);
+    }, [openLauncherConversation, openLauncherRun, openLauncherStartDraft, pane.scopeState?.details]);
     const hasReports = (projection?.summary.sessions ?? 0) > 0;
+    // A workflow step's checks are the workflow's (lab `session-F`): no List | Map, ⤢ or "+".
+    const stepRunId = readSessionWorkflowStepRunId(session);
+    // What this Session led and archived is read here, where it is shown; a closed strip never asks.
+    useSessionArchivedReports({ sessionId: props.sessionId, serverId: sessionServerId, enabled: stepRunId === null });
+    const archivedCount = projection?.archivedSessions.length ?? 0;
+    // A Session shown here names itself from its own content, like in the sidebar: the pane demands it, so an
+    // archived row reads its real title, Agent mark and facts instead of waiting for another surface.
+    const shownSessionAddresses = React.useMemo(() => {
+        if (!sessionServerId || !projection) return NO_SESSION_ADDRESSES;
+        return [...projection.sessions, ...projection.archivedSessions].flatMap((item) => (
+            item.open.kind === 'session' ? [{ serverId: sessionServerId, sessionId: item.open.sessionId }] : []
+        ));
+    }, [projection, sessionServerId]);
+    useSessionContentDemand(shownSessionAddresses, { tag: 'sessionWork.hydrateShownSessions', hydrate: 'unsettled', active: stepRunId === null });
+    const summary = projection?.summary ?? null;
+    const liveLine = React.useMemo(() => (summary ? describeWorkPaneLine(summary, archivedCount) : EMPTY_LINE), [archivedCount, summary]);
+    const { nothingYet, holdWorkingPlace, managedUnavailable } = resolveWorkReadPresentation({
+        projection, managedRuns: sources?.managedRuns ?? null, transcriptLoaded: useSessionTranscriptLoaded(props.sessionId),
+    });
+    // The invitation is for a Session that never started anything: an archived child is something it did.
+    const nothingStarted = nothingYet && archivedCount === 0;
     // List | Map: in the pane header beside the lead; full width at the top of a phone's pushed page,
-    // whose nav bar holds only "+" and ⋯ (lab `convo-P1`).
+    // whose nav bar holds only "+" and ⋯ (lab `convo-P1`). One rule for both widths: the switch exists only
+    // while there is live work to list or map; an invitation or archived-only Session has nothing to switch.
     const phone = deviceType === 'phone';
     const viewTabs = (
         <SegmentedTabBar
@@ -284,13 +308,11 @@ export const SessionWorkView = React.memo((props: Readonly<{
             onSelectTab={setView}
         />
     );
-    // A workflow step's checks are the workflow's (lab `session-F`): no List | Map, ⤢ or "+".
-    const stepRunId = readSessionWorkflowStepRunId(session);
     const headerAction = React.useMemo(() => stepRunId ? null : (
         <View style={styles.headerActions}>
-            {phone ? null : viewTabs}
+            {phone || nothingYet ? null : viewTabs}
             {/* ⤢ (lab `convo-W7`): the map at full size beside the transcript, where there is room. */}
-            {canExpandMap ? (
+            {canExpandMap && !nothingYet ? (
                 <IconButton
                     testID="session-work-expand-map"
                     iconName="arrows-out"
@@ -302,28 +324,25 @@ export const SessionWorkView = React.memo((props: Readonly<{
             ) : null}
             <SessionAgentsLaunchMenu
                 launcher={launcher}
-                onAddTrigger={hasTriggersSection ? scrollToTriggers : null}
+                onAddTrigger={openTriggers}
                 onKeepGoing={goalControlEntry.available ? goalControlEntry.open : null}
                 unavailableText={resolveUnavailableText(launcher, machineName)}
             />
         </View>
-    ), [canExpandMap, goalControlEntry, hasTriggersSection, launcher, machineName, openMapInDetails, phone, scrollToTriggers, stepRunId, styles.headerActions, view]);
+    ), [canExpandMap, goalControlEntry, launcher, machineName, nothingYet, openMapInDetails, openTriggers, phone, stepRunId, styles.headerActions, view]);
     const menuActions = useSessionWorkMenuActions({
         sessionId: props.sessionId, serverId: sessionServerId, hasReports,
     });
-    const summary = projection?.summary ?? null;
-    const liveLine = React.useMemo(() => (summary ? describeWorkPaneLine(summary) : EMPTY_LINE), [summary]);
-    const { nothingYet, holdWorkingPlace, managedUnavailable } = resolveWorkReadPresentation({
-        projection, managedRuns: sources?.managedRuns ?? null, transcriptLoaded: useSessionTranscriptLoaded(props.sessionId),
-    });
-    // A Session that reports to a lead says so first (lab `session-E`: "Reports to Payments v2 rollout").
+    // The lead this Session reports to is the pane's first fact, its "Managed by" row (lab P1w); the
+    // header line says what is going on under it.
     const lineage = useSessionLineage(props.sessionId, sessionServerId);
-    const lineageDescription = describeSessionLineage(lineage);
+    const manager = lineage.length > 0 ? lineage[lineage.length - 1]! : null;
+    const openManager = React.useCallback(() => {
+        if (manager) router.push(buildScopedSessionRouteHref({ sessionId: manager.sessionId, serverId: sessionServerId }) as never);
+    }, [manager, router, sessionServerId]);
     const headerLine = React.useMemo(
-        () => lineage.length > 0 && deviceType === 'phone'
-            ? { leading: <SessionLineageNavigation lineage={lineage} serverId={sessionServerId} presentation="reportsTo" />, segments: [] }
-            : { segments: stepRunId ? [t('sessionWork.step.drivenBy')] : lineageDescription ? [lineageDescription] : liveLine.length > 0 ? liveLine : nothingYet ? [t('sessionWork.subtitle.nothingStarted')] : [] },
-        [deviceType, lineageDescription, lineage, liveLine, sessionServerId, nothingYet, stepRunId],
+        () => ({ segments: stepRunId ? [t('sessionWork.step.drivenBy')] : liveLine.length > 0 ? liveLine : nothingStarted ? [t('sessionWork.subtitle.nothingStarted')] : [] }),
+        [liveLine, nothingStarted, stepRunId],
     );
     usePaneHeaderSlotContent(React.useMemo(
         () => ({ line: headerLine, action: headerAction, menuActions }),
@@ -331,7 +350,14 @@ export const SessionWorkView = React.memo((props: Readonly<{
     ));
 
     const unavailableText = resolveUnavailableText(launcher, machineName);
-    const machineNotices = resolveWorkMachineNotices({ machineReachable, nothingYet, unavailableReason: launcher.unavailableReason });
+    // The offline line's one Retry asks again for everything the pane reads: the machine's presence and the runs.
+    const retryManagedRuns = sources?.managedRuns.retry;
+    const retryOfflineWork = React.useCallback(() => {
+        fireAndForget(retryMachineReachability(), { tag: 'SessionWorkView.retryMachineReachability' });
+        retryManagedRuns?.();
+    }, [retryManagedRuns]);
+    const managedStale = sources?.managedRuns.phase === 'loaded' && sources.managedRuns.refreshFailed;
+    const machineNotices = resolveWorkMachineNotices({ machineReachable, nothingYet, unavailableReason: launcher.unavailableReason, managedUnavailable, managedStale });
     // One list by state on every surface (INT r0.4 §6 I4, lab `convo-W1/W8full`, `phone-P5`).
     const previousStateGroups = React.useRef<Readonly<{ sessionId: string; serverId: string | null;
         groups: ReturnType<typeof groupWorkByState> }> | null>(null);
@@ -372,33 +398,15 @@ export const SessionWorkView = React.memo((props: Readonly<{
         openSubagentPreview, originLabelById, props.sessionId, session, sessionAgentId, sessionServerId, showItemInTranscript,
     ]);
 
-    // The Session's guidance sections lead the configuration. A Bot reads Instructions · Memory · Voice ·
-    // Triggers (plan 65, D44), so the Context it inherits follows its Triggers; an ordinary Session keeps
-    // Context beside the Memory it reads (lab `c-mem O`).
-    const isBot = readSessionBotV1(session?.metadata?.bot)?.kind === 'bot';
-    const contextSection = session && sessionServerId
-        ? <SessionContextSection session={session} serverId={sessionServerId} />
-        : null;
-    const guidanceSections = session && sessionServerId ? (
-        <>
-            <SessionInstructionsSection session={session} serverId={sessionServerId} />
-            <SessionMemorySection session={session} serverId={sessionServerId} />
-            {isBot ? null : contextSection}
-            <SessionVoiceSection session={session} serverId={sessionServerId} />
-        </>
-    ) : null;
-    const triggersSlot = props.triggersSection ? (
-        <View testID="session-work-triggers-slot" nativeID={SESSION_WORK_TRIGGERS_ANCHOR_ID} style={styles.slot} onLayout={onTriggersLayout}>
-            {props.triggersSection}
-        </View>
-    ) : null;
-
     return (
         <View style={styles.container}>
             {machineNotices.offline ? (
                 <SurfaceFreshnessLine
                     testID="session-work-machine-offline"
                     tone="warning"
+                    // The rows below are the last known state: say from when, and offer the one Retry.
+                    asOf={managedStale ? sources?.managedRuns.lastSuccessfulReadAt ?? machineLastSeenAt : machineLastSeenAt}
+                    action={{ label: t('common.retry'), onPress: retryOfflineWork }}
                     reason={machineName
                         ? t('sessionAgentActivity.roster.machineOffline', { machine: machineName })
                         : t('sessionAgentActivity.roster.machineOfflineUnnamed')}
@@ -409,10 +417,11 @@ export const SessionWorkView = React.memo((props: Readonly<{
                     reason={t('sessionWork.leadArchived', { count: projection?.summary.outstanding ?? 0 })}
                 />
             ) : null}
-            {sources?.managedRuns.refreshFailed && sources.managedRuns.phase === 'loaded' ? (
+            {machineNotices.runsStale && sources ? (
                 <SurfaceFreshnessLine
                     testID="session-work-runs-stale"
                     tone="warning"
+                    asOf={sources.managedRuns.lastSuccessfulReadAt}
                     reason={t('sessionWork.runsStale')}
                     action={{ label: t('common.retry'), onPress: sources.managedRuns.retry }}
                 />
@@ -422,7 +431,7 @@ export const SessionWorkView = React.memo((props: Readonly<{
                     ref={scrollRef}
                     testID="session-work-scroll"
                     style={styles.scroll}
-                    contentContainerStyle={[styles.content, nothingYet ? styles.contentEmpty : null]}
+                    contentContainerStyle={[styles.content, nothingStarted ? styles.contentEmpty : null]}
                     onScroll={workViewport.onScroll}
                     scrollEventThrottle={100}
                     onLayout={workViewport.onLayout}
@@ -444,31 +453,33 @@ export const SessionWorkView = React.memo((props: Readonly<{
                             />
                         )) : undefined}
                             </SessionStepWork>
-                            <WorkFlatSheet testID="session-work-top">
-                                <SessionWorkNotifications sessionId={props.sessionId} serverId={sessionServerId} />
-                            </WorkFlatSheet>
-                            {guidanceSections}
-                            {isBot ? contextSection : null}
                         </>
                     ) : (<>
                     {phone && !nothingYet ? <View style={styles.phoneTabs}>{viewTabs}</View> : null}
-                    {/* The top value rows (Role, Goal; lab `convo-W8full`) lie flat on the pane like the
-                        sections below (INT r0.4 §6 I4): page `Item` rows on the flat sheet, on the list's inset. */}
+                    {/* The top value rows (Managed by, Goal; lab P1w) lie flat on the pane (INT r0.4 §6 I4):
+                        page `Item` rows on the flat sheet, on the list's inset. */}
                     <WorkFlatSheet testID="session-work-top">
-                        <SessionRoleValueRow sessionId={props.sessionId} serverId={sessionServerId} testID="session-work-role" />
+                        {manager ? (
+                            <Item
+                                testID="session-work-managed-by"
+                                title={t('sessionWork.managedBy')}
+                                detail={manager.title}
+                                density="compact"
+                                onPress={openManager}
+                            />
+                        ) : null}
                         {/* FIN 04's slot: the Goal row opens the one Goal control, the composer's. */}
                         <SessionGoalValueRow sessionId={props.sessionId} entry={goalControlEntry} testID="session-work-goal" />
-                        <SessionWorkNotifications sessionId={props.sessionId} serverId={sessionServerId} />
+                        <SessionWorkPlanRow sessionId={props.sessionId} serverId={sessionServerId} />
                     </WorkFlatSheet>
-                    <SessionAgentStartDraftRows drafts={startDrafts} onOpen={setActiveDetailsTab} />
-                    {managedUnavailable ? (
+                    <SessionAgentStartDraftRows sessionId={props.sessionId} serverId={sessionServerId} drafts={startDrafts} onOpen={openStartDraft} />
+                    {machineNotices.runsUnavailable ? (
                         <SurfaceStateCard testID="session-work-runs-unavailable" size="line" kind="error"
                             title={t('common.unavailable')}
                             action={sources ? { label: t('common.retry'), onPress: sources.managedRuns.retry } : undefined} />
                     ) : null}
-                    {/* With no work yet the invite stands where the list will be (lab `convo-ST`); the Session's
-                        guidance follows it in the same order as under a list. */}
-                    {nothingYet ? (
+                    {/* With no work yet the invite stands where the list will be (lab `convo-ST`). */}
+                    {nothingStarted ? (
                         <View style={styles.empty}>
                             {/* The invite (lab `convo-ST`, "Nothing started yet"): the Agents that can take work
                                 here, one way to start and the asks. Without a way to start, the plain empty. */}
@@ -526,18 +537,6 @@ export const SessionWorkView = React.memo((props: Readonly<{
                             title={unavailableText}
                         />
                     ) : null}
-                    {/* The configuration sections under the live list, each opened by its own full-width
-                        hairline (`WorkSection anatomy="page"`), in one order whether or not work has started
-                        (lab `b-work A`, plan 60 D43/D44): Instructions · Memory · Voice · Triggers, then Roles
-                        (and Notes). */}
-                    {guidanceSections}
-                    {triggersSlot}
-                    {isBot ? contextSection : null}
-                    <View testID="session-work-roles-slot" style={styles.slot}>
-                        {/* Lane U2's section. */}
-                        <SessionRolesSection sessionId={props.sessionId} serverId={sessionServerId} copiedAtSpawn={copiedAtSpawn} />
-                    </View>
-                    <SessionNotesSection sessionId={props.sessionId} serverId={sessionServerId} />
                     </>)}
                 </ScrollView>
             </WorkViewportContext.Provider>
@@ -605,6 +604,8 @@ const WORK_STATE_SECTIONS: readonly WorkStateSectionSpec[] = [
     { key: 'needsYou', title: () => describeWorkStatusBucket('needs_you'), countMode: 'attention', collapsedRows: null },
     { key: 'working', title: () => describeWorkStatusBucket('working'), countMode: 'quiet', collapsedRows: null },
     { key: 'recent', title: () => t('sessionWork.states.recent'), countMode: 'none', collapsedRows: 4 },
+    // Sessions this one led and archived: after everything live, short, each with its Unarchive.
+    { key: 'archived', title: () => t('sessionWork.states.archived'), countMode: 'quiet', collapsedRows: 3 },
 ];
 
 /** What a state section needs to draw each item through its own row. */
@@ -689,6 +690,9 @@ const WorkStateSection = React.memo(function WorkStateSection(props: Readonly<{
                         key={segment.item.key}
                         item={segment.item}
                         titleTailStart={props.titleTailStartByKey.get(segment.item.key)}
+                        trailingAccessory={section.key === 'archived' && segment.item.open.kind === 'session' ? (
+                            <WorkRowUnarchive sessionId={segment.item.open.sessionId} serverId={roster.serverId} title={segment.item.title} />
+                        ) : undefined}
                         onOpen={roster.onOpenItem}
                         onShowInTranscript={roster.onShowItemInTranscript}
                     />
@@ -725,4 +729,5 @@ const WorkStateSection = React.memo(function WorkStateSection(props: Readonly<{
 
 const EMPTY_SUBAGENTS: readonly SessionSubagent[] = Object.freeze([]);
 const EMPTY_LINE: ReturnType<typeof describeWorkPaneLine> = [];
+const NO_SESSION_ADDRESSES: readonly SessionAddress[] = [];
 const EMPTY_ROWS: ReturnType<typeof readSessionAgentActivityRows> = Object.freeze([]);

@@ -119,7 +119,8 @@ describe('foreground Voice text-turn QA bridge', () => {
     vi.mocked(router.push).mockClear();
     vi.mocked(router.replace).mockClear();
     (globalThis as { __DEV__?: boolean }).__DEV__ = true;
-    const features = createRootLayoutFeaturesResponse({ capabilities: { session: { pendingInput: { protocolVersion: 1 } } } });
+    const features = createRootLayoutFeaturesResponse();
+    features.capabilities.session.pendingInput = { protocolVersion: 1 };
     for (const id of ['voice', 'voice.agent', 'execution.runs'] as const) tryWriteServerEnabledBitInPlace(features, id, true);
     const sessionHttp = createSessionMetadataHttpBoundary(() => getStorage().getState().sessions);
     home = await serveAccountHomes({ homes: [{ key: 'voice', serverUrl: 'https://foreground-voice.test', accountId: 'account-a',
@@ -185,8 +186,9 @@ describe('foreground Voice text-turn QA bridge', () => {
       transcriptMode: 'native_session' as const, targetSessionAddress: null, updatedAt: 1 };
     const session = createSessionFixture({ id: persistedBinding.conversationSessionId, serverId });
     if (!session.metadata) throw new Error('Persisted Session fixture metadata unavailable');
+    const metadata = session.metadata;
     getStorage().setState(state => ({ sessions: { ...state.sessions, [session.id]: { ...session,
-      metadata: writeVoiceConversationBindingMetadata({ ...session.metadata,
+      metadata: writeVoiceConversationBindingMetadata({ ...metadata,
         ...buildSystemSessionMetadataV1({ key: 'voice_conversation', hidden: true }) }, persistedBinding) },
     } }));
     const { dispatchForegroundVoiceTextTurnQa } = await import('./foregroundVoiceTextTurnQaBridge');
@@ -270,6 +272,33 @@ describe('foreground Voice text-turn QA bridge', () => {
     expect(turns).toHaveLength(1);
     expect(pendingWrites()).toHaveLength(1);
     expect(handledWrites()).toHaveLength(1);
+    await hook.unmount();
+  });
+
+  it.each(['generation', 'target'] as const)('delivers the query again when the same carrier changes its %s', async change => {
+    await activateAttempt('voice-carrier-reused');
+    localSearchParamsState.current = { happier_voice_e2e_text_turn: 'Read the current issue' };
+    await publishAttempt('connected');
+    const { useForegroundVoiceTextTurnQaBridge } = await import('./useForegroundVoiceTextTurnQaBridge');
+    const hook = await renderHook(() => { useForegroundVoiceTextTurnQaBridge(); return null; });
+    await flushHookEffects({ cycles: 4, turns: 4 });
+    expect(turns).toHaveLength(1);
+
+    if (change === 'generation') {
+      // A newly admitted attempt can reuse all public binding fields.
+      await activateAttempt('voice-carrier-reused');
+    } else {
+      const store = voiceSessionBindingStore.getState();
+      const binding = store.runtimeBindingsByConversationSessionId['voice-carrier-reused'];
+      if (!binding) throw new Error('Expected the admitted runtime binding');
+      store.bind({ ...binding, targetSessionAddress: { serverId, sessionId: 'new-target' } });
+    }
+    await publishAttempt('connected', 'listening');
+    expect(turns).toHaveLength(2);
+    await publishAttempt('connected', 'speaking');
+    expect(turns).toHaveLength(2);
+    expect(pendingWrites()).toHaveLength(2);
+    expect(handledWrites()).toHaveLength(2);
     await hook.unmount();
   });
 });

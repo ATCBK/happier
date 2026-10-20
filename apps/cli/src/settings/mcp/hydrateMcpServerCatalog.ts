@@ -1,3 +1,5 @@
+import { $ZodError } from 'zod/v4/core';
+import { isRetryableAccountEncryptionCurrentnessError } from '@/api/client/accountEncryptionCurrentness';
 import type { McpServerCatalogSnapshotV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
@@ -5,7 +7,7 @@ import { beginActiveMcpServerCatalogRefresh, commitActiveMcpServerCatalog, getAc
   getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createCliMcpServerStore } from './mcpServerStore';
 
-type RefreshInput = Readonly<{ credentials: StoredCredentials; signal?: AbortSignal }>;
+type RefreshInput = Readonly<{ credentials: StoredCredentials; signal?: AbortSignal; maintainSource?: false }>;
 type CapturedAccount = Readonly<{ scopeKey: string; lifetimeToken: number }>;
 type PendingRefresh = {
   completion: Promise<McpServerCatalogSnapshotV1>;
@@ -23,9 +25,11 @@ export function projectMcpServerCatalogRefreshFailure(input: Readonly<{
   const code = input.error instanceof Error && 'code' in input.error ? input.error.code : undefined;
   return { status: 'unavailable', reason: input.signal?.aborted ? 'cancelled'
     : !input.current || code === 'scope-retired' ? 'scope-retired'
-    : code === 'unauthorized' || code === 'forbidden' || code === 'unsupported' || code === 'account-mode-mismatch' ? code
+    : code === 'unauthorized' || code === 'forbidden' || code === 'unsupported' || code === 'account-mode-mismatch'
+      || code === 'database_transaction_conflict_exhausted' ? code
+    : isRetryableAccountEncryptionCurrentnessError(input.error) ? 'unreachable'
     : code === 'account_storage_currentness_unavailable' || code === 'account_encryption_currentness_unavailable' ? 'encryption-material-unavailable'
-    : input.error instanceof Error && input.error.name === 'ZodError' ? 'invalid-stored-content' : 'unreachable' };
+    : input.error instanceof $ZodError ? 'invalid-stored-content' : 'unreachable' };
 }
 
 function refresh(input: RefreshInput, captured?: CapturedAccount, afterChange = false): Promise<McpServerCatalogSnapshotV1> {
@@ -47,7 +51,7 @@ function refresh(input: RefreshInput, captured?: CapturedAccount, afterChange = 
   beginActiveMcpServerCatalogRefresh({ scopeKey, lifetimeToken });
   let work!: Promise<McpServerCatalogSnapshotV1>;
   work = (async (): Promise<McpServerCatalogSnapshotV1> => {
-    let requestInput: RefreshInput = afterChange ? { credentials: input.credentials } : input;
+    let requestInput: RefreshInput = afterChange ? { credentials: input.credentials, maintainSource: input.maintainSource } : input;
     while (true) {
       if (!current()) return { status: 'unavailable', reason: 'scope-retired' };
       let catalog: McpServerCatalogSnapshotV1;
@@ -60,7 +64,7 @@ function refresh(input: RefreshInput, captured?: CapturedAccount, afterChange = 
           if (!current() || refreshAfterInFlight.has(key)) return;
           commitActiveMcpServerCatalog({ scopeKey, lifetimeToken, catalog: readable });
           for (const reader of entry.readers) reader();
-        });
+        }, { maintainSource: requestInput.maintainSource });
         entry.maintenance.add(maintenance);
         // Keep the existing captured cleanup handle until terminal, while the
         // next demanded GET can reobserve a write without joining that phase.
@@ -79,7 +83,7 @@ function refresh(input: RefreshInput, captured?: CapturedAccount, afterChange = 
         catalog = projectMcpServerCatalogRefreshFailure({ error, current: current(), signal: requestInput.signal });
       }
       if (!current()) return { status: 'unavailable', reason: 'scope-retired' };
-      if (refreshAfterInFlight.delete(key)) { requestInput = { credentials: input.credentials }; continue; }
+      if (refreshAfterInFlight.delete(key)) { requestInput = { credentials: input.credentials, maintainSource: input.maintainSource }; continue; }
       // A synchronous publication wake must start a new read, not join an
       // admission that has already chosen its terminal result.
       entry.refreshing = false;

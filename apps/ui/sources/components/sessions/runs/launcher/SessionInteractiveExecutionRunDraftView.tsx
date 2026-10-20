@@ -1,23 +1,26 @@
 import { ExecutionRunStartResponseSchema, readExecutionRunStartRunCreation } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { resolveExecutionRunImplicitRoleIdV1 } from '@happier-dev/protocol/prompts/roles/builtInRolesV1';
 import { resolveExecutionRunNotifyParentDefaultV1 } from '@happier-dev/protocol/execution/runs/executionRunNotifyParentDefaultV1';
-import type { SessionDiscussionSelectionSourceV1 } from '@happier-dev/protocol/sessions/discussions/content';
+import type { DiscussionSelectionSourceV1 } from '@happier-dev/protocol/discussions/content';
 import * as React from 'react';
 import { useHomeAiLaunchProfiles } from '@/sync/store/useAiLaunchProfiles';
-import { Platform, Pressable, View } from 'react-native';
+import { Platform, Pressable, View, useWindowDimensions } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
+import { isMobileLayoutWidth } from '@/components/sessions/layout/isMobileLayoutWidth';
 import { backendTargetKeysMatch } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { buildRolesRailPickerOption, ROLES_RAIL_PICKER_OPTION_ID } from '@/components/roles/rail/buildRolesRailPickerOption';
 import type { RoleRailItem } from '@/components/roles/rail/rolesRailTypes';
-import { useRoleRailItems } from '@/components/roles/rail/useRoleRailItems';
+import { useRoleRailCatalog } from '@/components/roles/rail/useRoleRailItems';
 import { useMachineCapabilitiesCache } from '@/hooks/server/useMachineCapabilitiesCache';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { useSessionExecutionRunLaunchability } from '@/hooks/session/useSessionExecutionRunLaunchability';
+import { SESSION_EXECUTION_RUN_LAUNCH_UNAVAILABLE_KEYS, useSessionExecutionRunLaunchability } from '@/hooks/session/useSessionExecutionRunLaunchability';
 import { useDaemonMergedProjectionInputs } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
+import { useMachineAgents } from '@/agents/machineAgents/useMachineAgents';
+import { resolveExecutionRunsCapabilityRead } from '@/sync/domains/executionRuns/extractExecutionRunsBackendsFromMachineCapabilities';
 import { createRepositoryComposerDocumentOwner } from '@/components/sessions/composer/repositoryComposerDocumentOwner';
 import {
     promoteAcceptedComposerDocument,
@@ -80,7 +83,7 @@ import { PoliteAccessibilityStatus } from '@/components/ui/accessibility/PoliteA
 import { requestRegisteredComposerFocus } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
 import type { ComposerRefV1 } from '@happier-dev/protocol/plugins/ui/composerRef';
 import { useExecutionRunLaunchContext } from './useExecutionRunLaunchContext';
-import { useExactModelChoice } from '@/components/sessions/modelPicker/useExactModelChoice';
+import { ExactModelChoicePicker, useExactModelChoice } from '@/components/sessions/modelPicker/useExactModelChoice';
 import { useExecutionRunChildChoice } from './useExecutionRunChildChoice';
 import {
     applyExecutionRunChildSelection,
@@ -88,9 +91,13 @@ import {
     readExecutionRunChildChoice,
     readExecutionRunFanoutMembers,
     type ExecutionRunChildSelection,
+    type ExecutionRunFanoutMember,
 } from './executionRunChildChoice';
 import { ExecutionRunExactModelRow } from './ExecutionRunExactModelRow';
+import { executionRunLauncherDraftKey } from '@/components/sessions/agents/launch/agentStartDrafts';
 import { ExecutionRunChildChoiceCard } from './ExecutionRunChildChoiceCard';
+import { deriveTranscriptInteractionFromSession } from '@/utils/sessions/deriveTranscriptInteraction';
+import { useExecutionRunLauncherDraft } from './useExecutionRunLauncherDraft';
 
 type DraftIdentity = Readonly<{ correlationId: string; inputLocalId: string }>;
 
@@ -103,11 +110,18 @@ export type ExecutionRunStartedPresentation = Readonly<{
     title: string | null;
 }>;
 
-const UNAVAILABLE_REASON_KEYS = {
-    notEnabled: 'sessionAgentActivity.roster.unavailable.notEnabled',
-    sessionInactive: 'sessionAgentActivity.roster.unavailable.sessionInactive',
-    externalRunnerInactive: 'sessionAgentActivity.roster.unavailable.externalRunnerInactive',
-} as const;
+const UNAVAILABLE_REASON_KEYS = SESSION_EXECUTION_RUN_LAUNCH_UNAVAILABLE_KEYS;
+
+/**
+ * A fresh start of one refused target with its chosen selection. `waiting` are the other refused
+ * targets still owed their own question; `startedRunId` is a Run already started by this launch.
+ */
+type BoundedStartRetry = Readonly<{
+    selection: ExecutionRunChildSelection;
+    targetKeys: readonly string[];
+    waiting: readonly ExecutionRunFanoutMember[];
+    startedRunId: string | null;
+}>;
 
 /** A review's scope fields: the "Uncommitted · 4 files" chip asks these, Advanced asks the rest. */
 function isReviewScopeFieldPath(path: string): boolean {
@@ -121,9 +135,21 @@ function choiceRunsAgent(choice: ExecutionRunLauncherBackendChoice, agentTargetK
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
+    // The view owns its gutter, so the Details pane and the phone's Run page frame it the same way;
+    // the lead and foot sit on the composer card's edge.
+    root: {
+        flex: 1,
+        gap: theme.space.s12,
+        justifyContent: 'flex-end',
+        paddingHorizontal: theme.space.s16,
+    },
     lead: {
         gap: theme.space.s6,
-        paddingHorizontal: theme.space.s4,
+        paddingHorizontal: theme.space.s8,
+    },
+    // A question asked of the person stands on the lead's edge, not the composer card's.
+    question: {
+        paddingHorizontal: theme.space.s8,
     },
     marks: {
         flexDirection: 'row',
@@ -143,7 +169,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         color: theme.colors.text.secondary,
         ...Typography.variant('meta'),
         textAlign: 'right',
-        paddingHorizontal: theme.space.s4,
+        paddingHorizontal: theme.space.s8,
     },
 }));
 
@@ -161,7 +187,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
      * person writes their question around) and sent to the agent ahead of the prompt.
      */
     initialText?: string;
-    launchOrigin?: SessionDiscussionSelectionSourceV1 & Readonly<{ draftCorrelationId: string }>;
+    launchOrigin?: DiscussionSelectionSourceV1 & Readonly<{ draftCorrelationId: string }>;
     autoFocusComposer?: boolean;
     /**
      * What the first message starts (lab `convo-S1`–`S3`): a review, a plan or a delegated task
@@ -189,7 +215,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
     });
     const serverId = preferredServerId;
     const { session, accountBinding, accountLifetime, exactSettings, settings, profileCatalogReady, acpCatalogSnapshot, enabledAgentIds, defaultBackend,
-        backendTarget, inheritedModelSelection, inheritedRoutePresentation, inheritedConnectedServicesSelection, machineId, startAction } = useExecutionRunLaunchContext(props.sessionId, serverId);
+        backendTarget, inheritedModelSelection, resolveInheritedModelLabel, inheritedRoutePresentation, inheritedConnectedServicesSelection, machineId, startAction } = useExecutionRunLaunchContext(props.sessionId, serverId);
     const [mountedComposerRef, setMountedComposerRef] = React.useState<Extract<ComposerRefV1, { kind: 'participantMessage' }> | null>(null);
     const initialComposerFocusApplied = React.useRef(false);
     const sharedSavedSecretsEnabled = useFeatureEnabled('teams', {
@@ -219,38 +245,48 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         enabled: Boolean(machineId),
         staleMs: 60_000,
     });
+    // Which Agents the Machine really has; the New Session picker reads the same inventory.
+    const machineAgents = useMachineAgents({ machineId, serverId, load: Boolean(machineId) });
     const browserContextRuntime = useSessionBrowserContextRuntimeContext();
-    const [identity, setIdentity] = React.useState<DraftIdentity>(() => ({
-        correlationId: props.launchOrigin?.draftCorrelationId ?? randomUUID(),
-        inputLocalId: randomUUID(),
-    }));
     const [phase, setPhase] = React.useState<'idle' | 'starting' | 'reconciling' | 'unresolved'>('idle');
     const [error, setError] = React.useState<string | null>(null);
     const [secretOverlayState, setSecretOverlayState] = React.useState<ExecutionRunSecretReferenceOverlayState>({
         readiness: { ok: true },
     });
-    const [actionInput, setActionInput] = React.useState<Record<string, unknown>>(() => buildExecutionRunActionDraftInputForUi({
-        actionId: resolveExecutionRunLauncherActionId(optionsIntent),
+    const launcherDraftKey = executionRunLauncherDraftKey({
+        intent,
+        roleId: props.roleId,
+        discussionCorrelationId: props.launchOrigin?.draftCorrelationId,
+    });
+    const launcherDraft = useExecutionRunLauncherDraft({
+        lifetime: accountLifetime,
         sessionId: props.sessionId,
-        // A review asks who reviews; it never silently picks the Session's own Agent.
-        defaultBackendTarget: intent === 'review' ? null : backendTarget,
-        defaultBackendId: defaultBackend?.defaultBackendId ?? null,
-        instructions: '',
-        // "Report to this session" starts at the one default owner: on for an ask, the Account's
-        // preference for a side conversation. The chip's value is always sent explicitly.
-        extra: {
-            ...(props.roleId ? { roleId: props.roleId } : {}),
-            notifyParentOnCompletion: resolveExecutionRunNotifyParentDefaultV1({
-                runClass: intent ? 'bounded' : 'long_lived',
-                accountDefault: settings.executionRunsNotifyParentOnCompletionDefault,
-            }),
-        },
-    }));
+        draftKey: launcherDraftKey,
+        correlationId: props.launchOrigin?.draftCorrelationId,
+        createDefaultInput: () => buildExecutionRunActionDraftInputForUi({
+            actionId: resolveExecutionRunLauncherActionId(optionsIntent),
+            sessionId: props.sessionId,
+            // A review asks who reviews; it never silently picks the Session's own Agent.
+            defaultBackendTarget: intent === 'review' ? null : backendTarget,
+            defaultBackendId: defaultBackend?.defaultBackendId ?? null,
+            instructions: '',
+            // The Report chip sends the Account's existing default explicitly.
+            extra: {
+                ...(props.roleId ? { roleId: props.roleId } : {}),
+                notifyParentOnCompletion: resolveExecutionRunNotifyParentDefaultV1({
+                    runClass: intent ? 'bounded' : 'long_lived',
+                    accountDefault: settings.executionRunsNotifyParentOnCompletionDefault,
+                }),
+            },
+        }),
+    });
+    const { identity, setIdentity, actionInput, setActionInput: setNormalizedActionInput, setUserActionInput: setActionInput } = launcherDraft;
     const options = useExecutionRunLauncherOptionsModel({
         sessionId: props.sessionId,
         intent: optionsIntent,
         actionInput,
-        setActionInput,
+        setActionInput: setNormalizedActionInput,
+        setUserActionInput: setActionInput,
         singleTarget: intent !== 'review',
         enabledAgentIds,
         executionRunsBackends,
@@ -263,6 +299,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         machineCapabilitiesState,
         mergedBackendProjectionById: daemonMergedProjection.inputs?.mergedBackendProjectionById ?? null,
         mergedProviderProjectionById: daemonMergedProjection.inputs?.mergedProviderProjectionById ?? null,
+        machineAgents: machineAgents.agents,
     });
     const teamCredential = useExecutionRunTeamCredentialModel({
         sessionId: props.sessionId,
@@ -304,8 +341,8 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                 return false;
             }
             return props.launchOrigin
-                ? launchOrigin.kind === 'session_discussion'
-                    && launchOrigin.sessionId === props.launchOrigin.sessionId
+                ? launchOrigin.kind === 'discussion'
+                    && launchOrigin.serverId === props.launchOrigin.serverId
                     && launchOrigin.discussionId === props.launchOrigin.discussionId
                     && launchOrigin.messageIds.length === props.launchOrigin.messageIds.length
                     && launchOrigin.messageIds.every((messageId, index) => messageId === props.launchOrigin?.messageIds[index])
@@ -320,15 +357,15 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
      * canonical Action (several reviewers fan out there). The captured message is accepted only once
      * the Action returns a Run; a refusal leaves the draft as it was.
      */
-    const submitBoundedStartRef = React.useRef<(
+    const submitBoundedStartRef = React.useRef<((
         boundedIntent: ExecutionRunIntent,
         submission: ParticipantComposerPreparedSubmission,
-        retry?: Readonly<{ selection: ExecutionRunChildSelection; targetKeys?: readonly string[] }>,
-    ) => Promise<void>>();
+        retry?: BoundedStartRetry,
+    ) => Promise<void>) | undefined>(undefined);
     const submitBoundedStart = React.useCallback(async (
         boundedIntent: ExecutionRunIntent,
         submission: ParticipantComposerPreparedSubmission,
-        retry?: Readonly<{ selection: ExecutionRunChildSelection; targetKeys?: readonly string[] }>,
+        retry?: BoundedStartRetry,
     ) => {
         if (submitInFlightRef.current) throw new Error(t('common.loading'));
         const targetFieldPath = resolveExecutionRunTargetFieldPath(boundedIntent);
@@ -337,10 +374,11 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
             instructions: submission.text,
             ...(secretOverlayState.overlay ? { secretReferenceOverlay: secretOverlayState.overlay } : {}),
         };
-        // A chosen default or model is a fresh start of the refused targets only (D9).
+        // A chosen default or model is a fresh start of the one refused target it answers (D9).
         const input = retry
-            ? applyExecutionRunChildSelection(retry.targetKeys ? { ...drafted, [targetFieldPath]: retry.targetKeys } : drafted, retry.selection)
+            ? applyExecutionRunChildSelection({ ...drafted, [targetFieldPath]: retry.targetKeys }, retry.selection)
             : drafted;
+        const selectionCapture = launcherDraft.captureSelection();
         const validationError = resolveActionInputValidationError({
             sessionId: props.sessionId,
             input,
@@ -349,7 +387,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         });
         if (validationError) {
             setError(validationError);
-            throw new Error(validationError);
+            throw new ParticipantComposerSubmissionHeld();
         }
         if (!accountLifetime?.isCurrent() || !secretOverlayState.readiness.ok || !teamCredential.available) {
             throw new Error(t('common.unavailable'));
@@ -364,25 +402,31 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
             // A target whose Agent can't follow this Session asks D9's question, with host proof that
             // nothing started for it. Members that started keep their Runs and members of unknown
             // outcome stay unknown: the draft keeps only the refused targets, so neither starts again.
-            const refused = members.filter((member) => member.choice !== null);
+            // Each refused target asks its own question, one at a time: a choice is addressed to the one
+            // Agent it names, so it resubmits that target alone while the others wait their turn.
+            const startedRunId = members.find((member) => member.runId !== null)?.runId ?? retry?.startedRunId ?? null;
+            const refused = [...members.filter((member) => member.choice !== null), ...(retry?.waiting ?? [])];
             if (refused.length > 0) {
-                const refusedKeys = refused.length < members.length ? refused.map((member) => member.key) : undefined;
-                if (refusedKeys) setActionInput((previous) => ({ ...previous, [targetFieldPath]: refusedKeys }));
-                childChoice.offer(refused[0]!.choice, (selection) => submitBoundedStartRef.current?.(
-                    boundedIntent, submission, { selection, ...(refusedKeys ? { targetKeys: refusedKeys } : {}) }) ?? Promise.resolve());
+                const [next, ...waiting] = refused;
+                if (retry || refused.length < members.length) {
+                    const refusedKeys = refused.map((member) => member.key);
+                    setActionInput((previous) => ({ ...previous, [targetFieldPath]: refusedKeys }));
+                }
+                childChoice.offer(next!.choice, (selection) => submitBoundedStartRef.current?.(
+                    boundedIntent, submission, { selection, targetKeys: [next!.key], waiting, startedRunId }) ?? Promise.resolve());
                 throw new ParticipantComposerSubmissionHeld();
             }
             // Several reviewers start as one group (`display.groupId`); its pane shows them all, so
             // any member that started opens it, and the start is accepted. Members that didn't
             // start are said out loud, not dropped; only a start where none did is refused.
-            const runId = members.find((member) => member.runId !== null)?.runId;
+            const runId = startedRunId;
             if (!runId) {
                 throw new Error(resolveActionExecutionFailureMessage(result, t('common.requestFailed')) ?? t('common.requestFailed'));
             }
             const notStarted = members.filter((member) => member.runId === null).map((member) => (
                 options.backendChoices.find((choice) => choice.targetKey === member.key || choice.backendId === member.key)?.title ?? member.key
             ));
-            submission.onOutboundHandoff();
+            launcherDraft.clearAcceptedSelection(selectionCapture, submission.onOutboundHandoff());
             setPhase('idle');
             props.onRunStarted(runId, undefined, {
                 title: resolveExecutionRunLaunchTitle({
@@ -403,7 +447,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
             setError(failureLabelKey
                 ? t(failureLabelKey)
                 : cause instanceof Error ? cause.message : t('common.requestFailed'));
-            throw cause;
+            throw new ParticipantComposerSubmissionHeld();
         } finally {
             submitInFlightRef.current = false;
         }
@@ -411,12 +455,13 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
 
     submitBoundedStartRef.current = submitBoundedStart;
 
-    const submitConversationStartRef = React.useRef<(submission: ParticipantComposerPreparedSubmission, childSelection?: ExecutionRunChildSelection) => Promise<void>>();
+    const submitConversationStartRef = React.useRef<((submission: ParticipantComposerPreparedSubmission, childSelection?: ExecutionRunChildSelection) => Promise<void>) | undefined>(undefined);
     const submitConversationStart = React.useCallback(async (submission: ParticipantComposerPreparedSubmission,
         childSelection?: ExecutionRunChildSelection) => {
         if (submitInFlightRef.current) {
             throw new Error(t('common.loading'));
         }
+        const selectionCapture = launcherDraft.captureSelection();
         const startOptions = options.selectedBackendChoice
             ? resolveRowlessExecutionRunStartOptions({
                 choice: options.selectedBackendChoice,
@@ -528,6 +573,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                     onOutboundHandoff: () => {
                         handedOff = true;
                         const residual = submission.onOutboundHandoff();
+                        launcherDraft.clearAcceptedSelection(selectionCapture, residual);
                         promoteAcceptedComposerDocument({
                             residual: {
                                 text: residual.text,
@@ -570,7 +616,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                 ? t(failureLabelKey)
                 : cause instanceof Error ? cause.message : t('errors.failedToSendMessage');
             setError(message);
-            throw cause;
+            throw new ParticipantComposerSubmissionHeld();
         } finally {
             submitInFlightRef.current = false;
         }
@@ -586,12 +632,14 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
     );
 
     const editable = phase === 'idle';
+    const canSendMessages = session !== null && deriveTranscriptInteractionFromSession(session).canSendMessages;
     const hasTarget = intent === 'review'
         ? options.selectedBackendTargetKeys.length > 0
         : options.selectedBackendChoice !== null;
     const unavailable = exactSettings === null
         || !profileCatalogReady
         || !session
+        || !canSendMessages
         || canLaunchExecutionRuns !== true
         || !hasTarget
         || !secretOverlayState.readiness.ok
@@ -608,7 +656,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
     // owner gives its intent (a review is the Reviewer's). Only a chosen role travels as `roleId`; the
     // target Session's admission resolves it and stamps its engine.
     const router = useRouter();
-    const roles = useRoleRailItems();
+    const { items: roles, status: rolesStatus } = useRoleRailCatalog();
     const chosenRoleId = typeof actionInput.roleId === 'string' ? actionInput.roleId : null;
     const roleValue = chosenRoleId ?? resolveExecutionRunImplicitRoleIdV1(intent) ?? null;
     const roleItem = roleValue ? roles.find((item) => item.roleId === roleValue) ?? null : null;
@@ -668,34 +716,52 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
     // Who answers: the one engine popover, led by the Roles rail (lab `convo-S2`), when one Agent
     // takes the start. A review asks for several at once, so its reviewers and role are chips instead.
     const selectedChoice = options.selectedBackendChoice;
+    // While the Machine has not said what it can run, the Agent chip still names the Session's own
+    // Agent instead of vanishing; its popover lists the same choices, unavailable until it answers.
+    const engineChoice = selectedChoice ?? (executionRunsBackends == null ? options.initialBackendChoice : null);
+    const draftModelSelection = React.useMemo(() => {
+        const parsed = ProviderBoundModelRefSchema.safeParse(actionInput.modelSelection);
+        return parsed.success ? parsed.data : null;
+    }, [actionInput.modelSelection]);
     // The Roles row makes the popover a detailed one, where a row commits only through its own
     // `onSelectImmediate` (as every other detailed picker's rows do); a plain row would just take focus.
-    const engineOptions = React.useMemo<ReadonlyArray<AgentInputChipPickerOption>>(() => options.backendChoices.map((choice) => ({
+    // The rail draws one heading per group in first-seen order: Agents the Machine has, then the rest.
+    const engineOptions = React.useMemo<ReadonlyArray<AgentInputChipPickerOption>>(() => [
+        ...options.backendChoices.filter((choice) => !choice.unavailable),
+        ...options.backendChoices.filter((choice) => choice.unavailable === 'notOnMachine'),
+        ...options.backendChoices.filter((choice) => choice.unavailable === 'cantRun'),
+    ].map((choice) => ({
         id: choice.targetKey,
         label: choice.title,
         icon: <ExecutionRunAgentMark agentId={choice.agentId} size={12} />,
         ...(choice.disabled ? { muted: true } : {}),
+        ...(choice.unavailable === 'notOnMachine'
+            ? { sectionId: 'notOnMachine', sectionLabel: t('machineAgents.notOnMachineYet', { machine: machine.name }) }
+            : choice.unavailable === 'cantRun'
+                ? { sectionId: 'cantRun', sectionLabel: t('machineAgents.cantRunOn', { machine: machine.name }) }
+                : {}),
         onSelectImmediate: () => selectBackend(choice.targetKey),
-    })), [options.backendChoices, selectBackend]);
-    const roleName = chosenRoleId ? roleItem?.name ?? chosenRoleId : null;
-    const engine = React.useMemo<ParticipantComposerEngine | null>(() => (
-        intent !== 'review' && selectedChoice && engineOptions.length > 0
-            ? {
-                agentType: selectedChoice.agentId,
-                // The chip names the role it runs ("Planner"), else who answers.
-                label: roleName ?? selectedChoice.title,
-                title: t('agentStart.chips.engineTitle'),
-                options: [rolesRail, ...engineOptions],
-                selectedOptionId: selectedChoice.targetKey,
-                onSelect: (optionId: string) => {
-                    // The rail chooses through its own detail; its row is not an Agent.
-                    if (optionId === ROLES_RAIL_PICKER_OPTION_ID) return;
-                    selectBackend(optionId);
-                },
-            }
-            : null
-    ), [engineOptions, intent, roleName, rolesRail, selectBackend, selectedChoice]);
-
+        closeOnSelectImmediate: false,
+        ...(!choice.disabled ? {
+            renderDetailContent: () => <ExactModelChoicePicker
+                agentTargetKey={buildBackendTargetKeyV2(choice.backendTarget)}
+                agentId={choice.agentId}
+                machineId={machineId}
+                serverId={serverId}
+                selected={[draftModelSelection, options.inheritedDraftSelection].find(ref => ref
+                    && choiceRunsAgent(choice, ref.agentTargetKey)) ?? null}
+                title={t('agentInput.model.title')}
+                fallbackLabel={t('runPage.menu.selectionChoose')}
+                onSelect={(ref) => {
+                    selectBackend(choice.targetKey);
+                    setActionInput(previous => ref
+                        ? applyExecutionRunChildSelection(previous, ref)
+                        : clearExecutionRunChildSelection(previous));
+                }}
+            />,
+        } : {}),
+    })), [draftModelSelection, machine.name, machineId, options.backendChoices, options.inheritedDraftSelection, selectBackend, serverId, setActionInput]);
+    const roleName = chosenRoleId ? roleItem?.name ?? (rolesStatus === 'loading' ? null : chosenRoleId) : null;
     // One exact-model chooser serves both asks: D9's after a refusal (the refused Agent's default or an
     // exact model), and the Run's own model from the route chip. The route's list loads once asked for.
     const pendingChildChoice = childChoice.choice;
@@ -704,10 +770,6 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         : null;
     const [routeModelDemanded, setRouteModelDemanded] = React.useState(false);
     const demandRouteModel = React.useCallback(() => setRouteModelDemanded(true), []);
-    const draftModelSelection = React.useMemo(() => {
-        const parsed = ProviderBoundModelRefSchema.safeParse(actionInput.modelSelection);
-        return parsed.success ? parsed.data : null;
-    }, [actionInput.modelSelection]);
     const modelChoiceAgent = pendingChildChoice ? childChoiceAgent : intent === 'review' ? null : selectedChoice;
     const exactModelChoice = useExactModelChoice({
         agentTargetKey: pendingChildChoice?.agentTargetKey
@@ -715,7 +777,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
         agentId: modelChoiceAgent?.agentId ?? null,
         machineId,
         serverId,
-        selected: pendingChildChoice ? null : draftModelSelection,
+        selected: pendingChildChoice ? null : draftModelSelection ?? options.inheritedDraftSelection,
         title: pendingChildChoice ? t('session.agentContinuation.childChoice.chooseModel') : t('agentInput.model.title'),
         fallbackLabel: t('runPage.menu.selectionChoose'),
         enabled: pendingChildChoice !== null || routeModelDemanded,
@@ -732,9 +794,26 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
     const chooseDraftModel = React.useCallback(() => openExactModel((ref) => {
         setError(null);
         setActionInput((previous) => (ref ? applyExecutionRunChildSelection(previous, ref) : clearExecutionRunChildSelection(previous)));
-    }), [openExactModel]);
+    }), [openExactModel, setActionInput]);
     const exactModelPresentation = exactModelChoice.presentation;
     const exactModelSubtitle = [exactModelPresentation.subtitle, exactModelPresentation.detail].filter(Boolean).join(' · ');
+    const engine = React.useMemo<ParticipantComposerEngine | null>(() => (
+        intent !== 'review' && engineChoice && engineOptions.length > 0
+            ? {
+                agentType: engineChoice.agentId,
+                label: roleName ?? engineChoice.title,
+                ...(!roleName && (draftModelSelection || options.inheritedDraftSelection)
+                    ? { modelLabel: exactModelPresentation.subtitle } : {}),
+                title: t('agentStart.chips.engineTitle'),
+                options: [rolesRail, ...engineOptions],
+                selectedOptionId: engineChoice.targetKey,
+                onSelect: (optionId: string) => {
+                    if (optionId === ROLES_RAIL_PICKER_OPTION_ID) return;
+                    selectBackend(optionId);
+                },
+            }
+            : null
+    ), [draftModelSelection, engineChoice, engineOptions, exactModelPresentation.subtitle, intent, options.inheritedDraftSelection, roleName, rolesRail, selectBackend]);
 
     const reportToSession = actionInput.notifyParentOnCompletion === true;
     const onPatch = options.onPatch;
@@ -754,6 +833,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
             input={actionInput}
             editable={editable}
             resolveFieldOptions={options.resolveFieldOptions}
+            machineName={machine.name}
             sections={sections}
             {...(includeFieldPath ? { includeFieldPath } : {})}
             backendSectionLabel={intent === 'review' ? t('runPage.launcher.who.review') : undefined}
@@ -768,7 +848,25 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                 options.onPatch(patch);
             }}
         />
-    ), [actionInput, editable, intent, options, selectBackend]);
+    ), [actionInput, editable, intent, machine.name, options, selectBackend]);
+
+    // RT4: a new Run follows the session's route and model unless the draft chooses its own. On a
+    // phone the composer's rail scrolls and shows whole chips only, so a chip with a long label
+    // sits past its edge: there the chip keeps just its glyph and the words move beside "Starts
+    // when you send". A wide window has room for the labelled chip and says it once.
+    const { width: windowWidth } = useWindowDimensions();
+    const routeInFoot = isMobileLayoutWidth(windowWidth);
+    const routeFollowed = options.inheritedDraftRoutePresentation !== null;
+    const hasSelectedBackend = options.selectedBackendChoice !== null;
+    const routeChoice = React.useMemo(() => intent !== 'review' && hasSelectedBackend
+        ? resolveExecutionRunRouteChoice({
+            inherits: routeFollowed,
+            inheritedSelection: options.targetMatchesParent ? inheritedModelSelection ?? null : null,
+            inheritedRoutePresentation: options.targetMatchesParent ? inheritedRoutePresentation ?? null : null,
+            inheritedModelLabel: options.targetMatchesParent ? resolveInheritedModelLabel(inheritedModelSelection ?? null) : null,
+        })
+        : null,
+    [hasSelectedBackend, inheritedModelSelection, inheritedRoutePresentation, intent, options.targetMatchesParent, resolveInheritedModelLabel, routeFollowed]);
 
     const startChips = React.useMemo<ReadonlyArray<AgentInputExtraActionChip>>(() => {
         const chips: AgentInputExtraActionChip[] = [];
@@ -778,11 +876,11 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
             chips.push(createExecutionRunStartContentChip({
                 key: 'execution-run-start-role',
                 icon: 'users',
-                label: roleItem?.name ?? roleValue ?? t('roles.rail.title'),
+                label: roleItem?.name ?? (rolesStatus === 'loading' ? t('common.loading') : roleValue ?? t('roles.rail.title')),
                 title: t('roles.rail.title'),
                 testID: 'execution-run-start-role-chip',
                 disabled,
-                revision: `${chipRevision}:${roleValue ?? ''}:${roleItem?.name ?? ''}`,
+                revision: `${chipRevision}:${roleValue ?? ''}:${roleItem?.name ?? ''}:${rolesStatus}`,
                 renderContent: ({ requestClose }) => rolesRail.renderDetailContent?.({ onRequestClose: requestClose }) ?? null,
             }));
             // Lab convo-S1: one removable chip per chosen reviewer, then "+" for the reviewer tiles.
@@ -825,14 +923,8 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                 renderContent: () => renderOptions(['permissions']),
             }));
         }
-        // RT4: a new Run follows the session's route and model unless the draft chooses its own.
-        if (intent !== 'review' && options.selectedBackendChoice) {
-            const inherits = options.inheritedDraftRoutePresentation !== null;
-            const routeChoice = resolveExecutionRunRouteChoice({
-                inherits,
-                inheritedSelection: options.targetMatchesParent ? inheritedModelSelection ?? null : null,
-                inheritedRoutePresentation: options.targetMatchesParent ? inheritedRoutePresentation ?? null : null,
-            });
+        if (routeChoice) {
+            const inherits = routeFollowed;
             const hasModelField = options.fields.some((field) => field.path === 'modelId' && field.visible !== false);
             chips.push(createExecutionRunStartContentChip({
                 key: 'execution-run-start-route',
@@ -840,6 +932,7 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                 label: routeChoice.label,
                 title: t('agentInput.model.title'),
                 testID: 'execution-run-start-route-chip',
+                iconOnly: routeInFoot,
                 disabled,
                 revision: `${chipRevision}:${routeChoice.label}:${routeChoice.inheritDetail ?? ''}:${exactModelSubtitle}`,
                 renderContent: () => (
@@ -907,38 +1000,45 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
             }));
         }
         return chips;
-    }, [actionInput.changeType, chipRevision, editable, inheritedModelSelection, inheritedRoutePresentation, intent, onPatch, onSelectBackend, roleItem?.name, roleValue, rolesRail, options.backendChoices, options.fields, options.inheritedDraftRoutePresentation, options.profileChoices.length, options.selectedBackendChoice, options.selectedBackendTargetKeys, options.selectedPermissionMode, options.targetMatchesParent, options.visiblePermissionModeOptions, renderOptions, reportToSession, teamCredential.picker, exactModelSubtitle, exactModelPresentation.accessibilityLabel, demandRouteModel, chooseDraftModel]);
+    }, [actionInput.changeType, chipRevision, editable, routeChoice, routeFollowed, routeInFoot, intent, onPatch, onSelectBackend, roleItem?.name, roleValue, rolesRail, rolesStatus, options.backendChoices, options.fields, options.profileChoices.length, options.selectedBackendTargetKeys, options.selectedPermissionMode, options.targetMatchesParent, options.visiblePermissionModeOptions, renderOptions, reportToSession, teamCredential.picker, exactModelSubtitle, exactModelPresentation.accessibilityLabel, demandRouteModel, chooseDraftModel]);
 
     // Why it can't start yet, said above the kept draft (lab `convo-ST` "Machine offline"): still
     // reading what the machine offers, or the reason agents can't start in this Session.
-    const checkingCapabilities = launchUnavailableReason === null
+    const capabilityRead = launchUnavailableReason === null
         && canLaunchExecutionRuns !== true
         && !(executionRunsBackends && Object.keys(executionRunsBackends).length > 0)
-        && (machineCapabilitiesState.status === 'idle' || machineCapabilitiesState.status === 'loading');
+        ? resolveExecutionRunsCapabilityRead(machineCapabilitiesState)
+        : 'answered';
+    const checkingCapabilities = capabilityRead === 'reading';
     const blockedReason = launchUnavailableReason === 'machineOffline'
         ? t('agentStart.offline', { machine: machine.name })
         : launchUnavailableReason !== null
             ? t(UNAVAILABLE_REASON_KEYS[launchUnavailableReason])
             : checkingCapabilities
                 ? t('runPage.launcher.checking')
-                : canLaunchExecutionRuns !== true
-                    ? t('runPage.launcher.unavailableReason')
-                    : null;
+                : capabilityRead === 'unreadable'
+                    ? t('machineAgents.unknown')
+                    : canLaunchExecutionRuns !== true
+                        ? t('runPage.launcher.unavailableReason')
+                        : null;
     const leadAgentIds = intent === 'review'
         ? options.backendChoices.filter((choice) => options.selectedBackendTargetKeys.includes(choice.targetKey)).map((choice) => choice.agentId)
         : selectedChoice ? [selectedChoice.agentId] : [];
     const startCount = intent === 'review' ? Math.max(1, options.selectedBackendTargetKeys.length) : 1;
+    const startsWhenYouSend = t('agentStart.startsWhenYouSend', { count: startCount });
 
+    const childParentSelection = pendingChildChoice?.parentModelSelection ?? inheritedModelSelection ?? null;
     const childParentDetail = pendingChildChoice
         ? resolveExecutionRunRouteChoice({
             inherits: true,
-            inheritedSelection: pendingChildChoice.parentModelSelection ?? inheritedModelSelection ?? null,
+            inheritedSelection: childParentSelection,
             inheritedRoutePresentation: inheritedRoutePresentation ?? null,
+            inheritedModelLabel: resolveInheritedModelLabel(childParentSelection),
         }).inheritDetail
         : null;
 
     return (
-        <View style={{ flex: 1, gap: theme.space.s12, justifyContent: 'flex-end' }}>
+        <View style={styles.root}>
             {/* What this start is, right above the composer where the answer will appear (lab S1/S3).
                 An Ask Agent draft leads with the lead and the selected context instead (collab lab R1). */}
             {props.launchOrigin && selectionContext ? (
@@ -972,41 +1072,47 @@ export const SessionInteractiveExecutionRunDraftView = React.memo((props: Readon
                 <SurfaceStateCard
                     testID="execution-run-start-blocked"
                     size="line"
-                    kind={checkingCapabilities ? 'loading' : launchUnavailableReason === 'machineOffline' ? 'warning' : 'denied'}
+                    kind={checkingCapabilities ? 'loading' : launchUnavailableReason === 'machineOffline' || capabilityRead === 'unreadable' ? 'warning' : 'denied'}
                     title={blockedReason}
                 />
             ) : null}
             {pendingChildChoice ? (
-                <ExecutionRunChildChoiceCard
-                    choice={pendingChildChoice}
-                    agentTitle={childChoiceAgent?.title ?? t('session.agentContinuation.childChoice.agentFallback')}
-                    parentDetail={childParentDetail}
-                    starting={phase === 'starting'}
-                    onUseDefault={() => startWithChild('agentDefault')}
-                    onChooseModel={chooseChildModel}
-                    onCancel={childChoice.cancel}
-                />
+                <View style={styles.question}>
+                    <ExecutionRunChildChoiceCard
+                        choice={pendingChildChoice}
+                        agentTitle={childChoiceAgent?.title ?? t('session.agentContinuation.childChoice.agentFallback')}
+                        parentDetail={childParentDetail}
+                        starting={phase === 'starting'}
+                        onUseDefault={() => startWithChild('agentDefault')}
+                        onChooseModel={chooseChildModel}
+                        onCancel={childChoice.cancel}
+                    />
+                </View>
             ) : null}
             <SessionParticipantComposer
                 // The draft identity rotates as a live prop. Keying on it would remount the
                 // composer and discard the text, references and staged attachments the
                 // person authored but has not sent anywhere.
-                key={JSON.stringify([serverId, props.sessionId])}
+                key={JSON.stringify([serverId, accountBinding?.accountId, props.sessionId, launcherDraftKey])}
                 sessionId={props.sessionId}
                 serverId={serverId}
-                canSendMessages={!unavailable && editable}
+                canSendMessages={canSendMessages}
+                disabled={!editable}
+                isSendDisabled={unavailable || !editable}
                 recipient={null}
                 browserContextState={browserContextRuntime?.composerContext.state ?? null}
                 initialText={composerInitialText}
                 initialLocalId={identity.inputLocalId}
                 draftOccurrenceId={identity.inputLocalId}
+                launcherDraftKey={launcherDraftKey}
+                onDraftDocumentEdit={launcherDraft.onDocumentEdit}
                 onComposerRefAvailable={setMountedComposerRef}
                 submitPreparedMessage={submitPreparedMessage}
                 engine={engine}
                 extraActionChips={startChips}
             />
             <Text testID="execution-run-start-foot" style={styles.foot}>
-                {t('agentStart.startsWhenYouSend', { count: startCount })}
+                {routeInFoot && routeChoice ? `${routeChoice.label} \u00B7 ${startsWhenYouSend}` : startsWhenYouSend}
             </Text>
             <ExecutionRunSecretReferenceOverlayField
                 profile={sessionLaunchProfile}

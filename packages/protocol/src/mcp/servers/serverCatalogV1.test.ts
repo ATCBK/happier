@@ -5,9 +5,11 @@ import { sealMcpServerCatalogContentV1, openMcpServerCatalogContentV1, sealMcpSe
   parseMcpServerCatalogMigrationContentV1, McpServerCatalogContentV1Schema,
   type McpServerCatalogV1 } from './serverRowsV1.js';
 import { formatSharedSavedSecretRefV1 } from '../../account/settings/savedSecretReferenceV1.js';
+import { mcpPluginItemIdV1 } from './settingsV1.js';
 
 const oldReference = formatSharedSavedSecretRefV1('old');
 const newReference = formatSharedSavedSecretRefV1('new');
+const pluginServerId = mcpPluginItemIdV1({ pluginId: 'example.fixture', localId: 'server' });
 
 const catalog: McpServerCatalogV1 = { v: 1, servers: [{ id: 'server', name: 'server', transport: 'http',
   remote: { url: 'http://127.0.0.1:1234/mcp', headers: { Authorization: { t: 'savedSecret', secretId: oldReference } } },
@@ -28,10 +30,27 @@ const retainedCatalog = { ...catalog,
 };
 
 describe('MCP catalog row authority', () => {
+  it.each([true, false])('keeps finite catalog reads free of retained maintenance after admission (present=%s)', async present => {
+    let destination: McpServerCatalogV1 | null = present ? catalog : null;
+    const reads: string[] = [];
+    const loaded = await loadMcpServerCatalogV1({ mode: 'plain', material: null, maintainSource: false,
+      readRow: async () => destination ? { status: 'present', revision: 1, content: { t: 'plain', v: destination } }
+        : { status: 'absent' },
+      transfer: {
+        readSourceSnapshot: async () => { reads.push('source'); return { raw: { mcpServersSettingsV1: retainedCatalog, mcpServersStrictMode: true }, version: 3 }; },
+        initializeCatalog: async input => { destination = input.catalog; return { status: 'updated', revision: 1, cursor: 1 }; },
+        replaceSource: async () => { reads.push('cleanup'); return { status: 'applied', settingsVersion: 4 }; },
+        normalizeHistory: async () => { reads.push('history'); return { status: 'complete' }; },
+      },
+    });
+    expect(loaded).toMatchObject({ status: 'ready', authority: 'active', revision: 1, catalog });
+    expect(reads).toEqual(present ? [] : ['source']);
+  });
+
   it('does not interpret admitted tool names as credential carrier fields', () => {
     const tools = { default: 'ask' as const, overrides: { savedSecretId: 'allow' as const, apiSecretRef: 'off' as const } };
     const source = { ...catalog, servers: catalog.servers.map(server => ({ ...server, tools })),
-      pluginServers: { 'plugin:fixture/server': { tools } } };
+      pluginServers: { [pluginServerId]: { tools } } };
     expect(openMcpServerCatalogContentV1({ mode: 'plain', material: null, content: { t: 'plain', v: source } }))
       .toEqual({ status: 'opened', catalog: source });
     expect(openMcpServerCatalogContentV1({ mode: 'plain', material: null, content: { t: 'plain', v: {
@@ -157,16 +176,16 @@ describe('MCP catalog row authority', () => {
       tools: [{ name: 'read', title: 'Read', description: 'Read entries', tokens: 17, annotations: { readOnlyHint: true } }],
     };
     const source = { ...catalog, servers: catalog.servers.map(server => ({ ...server, tools, toolsSnapshot })),
-      pluginServers: { 'plugin:example/server': { tools, toolsSnapshot } },
+      pluginServers: { [pluginServerId]: { tools, toolsSnapshot } },
     };
     expect(openMcpServerCatalogContentV1({ mode: 'plain', material: null, content: { t: 'plain', v: source } }))
       .toEqual({ status: 'opened', catalog: source });
-    const extra = { ...source, pluginServers: { 'plugin:example/server': { ...source.pluginServers['plugin:example/server'],
+    const extra = { ...source, pluginServers: { [pluginServerId]: { ...source.pluginServers[pluginServerId],
       future: 'metadata', toolsSnapshot: { ...toolsSnapshot, tools: toolsSnapshot.tools.map(tool => ({ ...tool, future: 'metadata' })) },
     } } };
     expect(openMcpServerCatalogContentV1({ mode: 'plain', material: null, content: { t: 'plain', v: extra } }))
       .toEqual({ status: 'opened', catalog: source });
-    const invalid = { ...source, pluginServers: { 'plugin:example/server': { tools: { default: 'allow_all', overrides: { remove: 'invalid' } } } } };
+    const invalid = { ...source, pluginServers: { [pluginServerId]: { tools: { default: 'allow_all', overrides: { remove: 'invalid' } } } } };
     expect(openMcpServerCatalogContentV1({ mode: 'plain', material: null, content: { t: 'plain', v: invalid } }))
       .toMatchObject({ status: 'partial', diagnostics: [{ path: 'pluginServers', reason: 'invalid-stored-content' }] });
   });
@@ -185,7 +204,7 @@ describe('MCP catalog row authority', () => {
   });
 
   it.each(['server-create', 'server-create-batch', 'server-duplicate'] as const)('refuses reserved plugin ids on %s', kind => {
-    const entry = { ...catalog.servers[0]!, id: 'plugin:example/server', name: 'copy' };
+    const entry = { ...catalog.servers[0]!, id: pluginServerId, name: 'copy' };
     const change = kind === 'server-create-batch' ? { kind, entries: [{ entry, rules: [] }] }
       : kind === 'server-duplicate' ? { kind, serverId: 'server', entry, rules: [] } : { kind, entry, rules: [] };
     expect(() => applyMcpServerCatalogMutationV1(catalog, change)).toThrow();
@@ -324,6 +343,23 @@ describe('MCP catalog row authority', () => {
     expect(catalog.bindings).toHaveLength(1);
   });
 
+  it('advances witnessed entry revisions for definition, tool-policy and same-clock rule edits', () => {
+    const server = catalog.servers[0]!;
+    const definition = applyMcpServerCatalogMutationV1(catalog, { kind: 'server-update', entry: { ...server, title: 'Changed' } });
+    expect(definition.servers[0]!.updatedAt).toBeGreaterThan(server.updatedAt);
+    const tools = applyMcpServerCatalogMutationV1(catalog, { kind: 'tools-change', serverId: server.id,
+      settings: { default: 'allow_all' } }, { nowMs: server.updatedAt, newId: () => 'unused' });
+    expect(tools.servers[0]!.updatedAt).toBeGreaterThan(server.updatedAt);
+    const rule = catalog.bindings[0]!;
+    const ctx = { nowMs: rule.updatedAt, newId: () => 'unused' };
+    const disabled = applyMcpServerCatalogMutationV1(catalog, { kind: 'rules-change', serverIds: [server.id],
+      change: { kind: 'write', write: { place: rule.target, state: 'off' } } }, ctx);
+    const restored = applyMcpServerCatalogMutationV1(disabled, { kind: 'rules-change', serverIds: [server.id],
+      change: { kind: 'write', write: { place: rule.target, state: 'on' } } }, ctx);
+    expect(disabled.bindings[0]!.updatedAt).toBeGreaterThan(rule.updatedAt);
+    expect(restored.bindings[0]!.updatedAt).toBeGreaterThan(disabled.bindings[0]!.updatedAt);
+  });
+
   it('changes and inherits rules without changing their platform-qualified target or definition', () => {
     const binding = catalog.bindings[0]!;
     const ctx = { nowMs: 3, newId: () => 'new' };
@@ -337,19 +373,20 @@ describe('MCP catalog row authority', () => {
   });
 
   it('refuses unsupported plugin rule writes before producing a catalog mutation', () => {
+    const unsupportedPluginServerId = mcpPluginItemIdV1({ pluginId: 'example.unknown', localId: 'item' });
     const source: McpServerCatalogV1 = { ...catalog, bindings: [...catalog.bindings, {
-      id: 'reserved-plugin-rule', serverId: 'plugin:unknown/item', enabled: true,
+      id: 'reserved-plugin-rule', serverId: unsupportedPluginServerId, enabled: true,
       target: { t: 'allMachines' }, createdAt: 1, updatedAt: 2,
     }] };
     // Reserved stored shapes do not establish a live plugin item producer.
     expect(openMcpServerCatalogContentV1({ mode: 'plain', material: null, content: { t: 'plain', v: source } }))
       .toEqual({ status: 'opened', catalog: source });
     expect(() => applyMcpServerCatalogMutationV1(source, {
-      kind: 'rules-change', serverIds: ['server', 'plugin:unknown/item'],
+      kind: 'rules-change', serverIds: ['server', unsupportedPluginServerId],
       change: { kind: 'write', write: { place: { t: 'allMachines' }, state: 'off' } },
     }, { nowMs: 3, newId: () => 'new-rule' })).toThrow('Server not found');
     expect(source.bindings).toEqual([...catalog.bindings, {
-      id: 'reserved-plugin-rule', serverId: 'plugin:unknown/item', enabled: true,
+      id: 'reserved-plugin-rule', serverId: unsupportedPluginServerId, enabled: true,
       target: { t: 'allMachines' }, createdAt: 1, updatedAt: 2,
     }]);
   });

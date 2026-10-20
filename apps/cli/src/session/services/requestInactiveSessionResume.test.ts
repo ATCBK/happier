@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
 import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { RpcError } from '@happier-dev/protocol/rpcErrors';
 import {
   deriveSessionCreationTagV1,
   SessionCreationCorrespondenceV1Schema,
+  SessionMetadataTuplePatchV1Schema,
 } from '@happier-dev/protocol';
 
 const { callMachineRpc } = vi.hoisted(() => ({ callMachineRpc: vi.fn() }));
@@ -12,6 +14,12 @@ vi.mock('@/session/transport/rpc/machineRpc', () => ({ callMachineRpc }));
 import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { requestInactiveSessionResume } from './requestInactiveSessionResume';
 import { logger } from '@/ui/logger';
+import { buildSessionMetadataEnvelopeFields } from '@/session/metadata/buildSessionMetadataEnvelopeCreateFields';
+import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { resolveSessionStartupTimeoutMs } from '@/daemon/spawn/waitForSessionWebhook';
+import { resolveCliAgentStartContextV1 } from '@/session/actions/resolveCliAgentStartContextV1';
+import { clearSessionExplicitStopIntentAfterResume } from './sessionExplicitStopIntent';
+import { accountSettingsParse } from '@happier-dev/protocol';
 
 const machineKey = new Uint8Array(32).fill(1);
 const credentials = {
@@ -106,6 +114,115 @@ function metadataWithLaunchCorrespondence() {
 }
 
 describe('requestInactiveSessionResume', () => {
+  it.each([false, true])('keeps malformed Stop authority distinct from archive (archived=%s)', async archived => {
+    const result = await requestInactiveSessionResume({ credentials, sessionId: 'session-1', requestId: 'malformed-stop',
+      rawSession: rawSession(archived ? { archivedAt: 123 } : {}),
+      metadata: { ...metadata, sessionExplicitStopV1: { v: 1 } },
+    });
+    expect(result).toMatchObject({ ok: false, code: archived ? 'session_archived' : 'authority_unavailable' });
+    expect(callMachineRpc).not.toHaveBeenCalled();
+  });
+
+  it.each(['success', 'refused', 'automatic', 'manager_child', 'foreign_manager', 'unbound_manager', 'person_hold'] as const)('does not spend native Stop clear authority after transport acceptance (%s)', async outcome => {
+    const stop = { v: 1, cause: 'explicit_stop', requestId: 'stop-request', requestedAtMs: 100,
+      ...(outcome !== 'person_hold' ? { managerSessionId: 'direct-manager' } : {}),
+    } as const;
+    const heldMetadata = { ...metadata, sessionExplicitStopV1: stop };
+    const saved = rawSession({ encryptionMode: 'plain', dataEncryptionKey: null, metadataLayoutVersion: 0,
+      metadataVersion: 1, agentStateVersion: 0, agentState: null, ownerMetadata: null,
+      metadata: JSON.stringify(heldMetadata), manager: { sessionId: 'direct-manager' } });
+    const get = vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: {
+      mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+    } });
+    const patch = vi.spyOn(axios, 'patch').mockResolvedValue({ status: 200, data: { success: true,
+      metadataLayoutVersion: 1, sharedMetadata: { version: 2 }, agentState: { version: 0 } } });
+    callMachineRpc.mockResolvedValue(outcome === 'refused'
+      ? { type: 'error', errorMessage: 'rejected' } : { type: 'success', sessionId: 'session-1' });
+    try {
+      const result = await requestInactiveSessionResume({ credentials: { token: 'plain-owner', encryption: null },
+        sessionId: 'session-1', requestId: 'resume-held', rawSession: saved, metadata: heldMetadata,
+        ...(outcome === 'automatic' || outcome === 'manager_child' || outcome === 'foreign_manager' || outcome === 'unbound_manager' || outcome === 'person_hold'
+          ? { executionAuthority: 'account_automation' as const } : {}),
+        ...(outcome === 'manager_child' || outcome === 'foreign_manager' || outcome === 'unbound_manager' || outcome === 'person_hold' ? { actionContext: {
+          surface: 'agent' as const, authority: 'account_automation' as const,
+          actionCaller: { kind: 'session' as const, sessionId: outcome === 'foreign_manager' ? 'unrelated-session' : 'direct-manager',
+            starterDepth: 0, turnDepth: 1 }, actionRequestId: 'resume-held',
+          ...(outcome !== 'unbound_manager' ? { agentStartContext: resolveCliAgentStartContextV1({
+            sessionId: outcome === 'foreign_manager' ? 'unrelated-session' : 'direct-manager', machineId: 'machine-1',
+            directory: '/repo', backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' },
+            metadata: {}, starterDepth: 0, turnDepth: 1, callerPermissionMode: 'default',
+            settings: accountSettingsParse({}), roles: {},
+          }) ?? undefined } : {}),
+        } } : {}),
+      });
+      if (outcome === 'success' || outcome === 'manager_child') {
+        expect(result).toEqual({ ok: true });
+        if (outcome === 'manager_child') expect(callMachineRpc.mock.calls[0]?.[0]?.request).not.toHaveProperty('executionAuthorization');
+      } else {
+        expect(result).toMatchObject({ ok: false });
+      }
+      expect(patch, 'Only the admitted native launch may consume its observed hold').not.toHaveBeenCalled();
+      if (outcome === 'automatic' || outcome === 'foreign_manager' || outcome === 'unbound_manager' || outcome === 'person_hold') expect(callMachineRpc).not.toHaveBeenCalled();
+    } finally { get.mockRestore(); patch.mockRestore(); }
+  });
+
+  it('preserves a later Stop when the exact native clear retries a stale metadata tuple', async () => {
+    const stop = { v: 1, cause: 'explicit_stop', requestId: 'stop-before-resume', requestedAtMs: 100 } as const;
+    const newer = { ...stop, requestId: 'stop-during-resume', requestedAtMs: 101 };
+    const savedMetadata = { ...metadata, sessionExplicitStopV1: stop };
+    const plainCredentials = { token: 'plain-owner', encryption: null };
+    const initial = buildSessionMetadataEnvelopeFields({ credentials: plainCredentials, accountEncryptionMode: 'plain',
+      storedContentMode: 'plain', metadata: savedMetadata, agentState: null });
+    const latest = buildSessionMetadataEnvelopeFields({ credentials: plainCredentials, accountEncryptionMode: 'plain',
+      storedContentMode: 'plain', metadata: { ...metadata, sessionExplicitStopV1: newer }, agentState: null });
+    const saved = createSessionRecordFixture({ id: 'session-1', machineId: 'machine-1', encryptionMode: 'plain',
+      dataEncryptionKey: null, metadataLayoutVersion: 1, metadataVersion: 1, share: null,
+      metadata: initial.sharedMetadata.ciphertext, ownerMetadata: initial.ownerMetadata, agentState: initial.agentState });
+    const refreshed = { ...saved, metadataVersion: 2, active: true,
+      metadata: latest.sharedMetadata.ciphertext, ownerMetadata: latest.ownerMetadata };
+    let storedStop: unknown = newer;
+    let conflict = true;
+    const get = vi.spyOn(axios, 'get').mockImplementation(async url => String(url).endsWith('/encryption/currentness')
+      ? { status: 200, data: { mode: 'plain', version: 1, signingKeyFingerprint: null,
+          contentKeyFingerprint: null, updatedAt: 1 } }
+      : { status: 200, data: { session: refreshed } });
+    const patch = vi.spyOn(axios, 'patch').mockImplementation(async (_url, body) => {
+      if (conflict) {
+        conflict = false;
+        return { status: 409, data: { code: 'session_metadata_version_conflict', metadataLayoutVersion: 1,
+          sharedMetadata: { version: 2 }, agentState: { version: 0 } } };
+      }
+      const update = SessionMetadataTuplePatchV1Schema.parse(body);
+      if (update.mode !== 'owner' || update.ownerMetadata.t !== 'plain') {
+        throw new Error('Expected a plain owner tuple after the concurrent Stop');
+      }
+      storedStop = update.ownerMetadata.v.runtime
+        ? Reflect.get(update.ownerMetadata.v.runtime, 'sessionExplicitStopV1') : undefined;
+      return { status: 200, data: { success: true, metadataLayoutVersion: 1,
+        sharedMetadata: { version: 3 }, agentState: { version: 1 } } };
+    });
+    try {
+      await clearSessionExplicitStopIntentAfterResume({ credentials: plainCredentials,
+        sessionId: 'session-1', rawSession: saved, metadata: savedMetadata });
+      expect(conflict).toBe(false);
+      expect(storedStop).toEqual(newer);
+    } finally { get.mockRestore(); patch.mockRestore(); }
+  });
+
+  it('uses the same resume owner for machine-local automatic Follow wake without a second RPC or user authorization', async () => {
+    const accepted: unknown[] = [];
+    const spawnSession = async (options: unknown) => {
+      accepted.push(options);
+      return { type: 'success' as const, sessionId: 'session-1' };
+    };
+    await expect(requestInactiveSessionResume({ credentials, sessionId: 'session-1', requestId: 'follow-resume',
+      rawSession: rawSession(), metadata, executionAuthority: 'account_automation', spawnSession,
+    })).resolves.toEqual({ ok: true });
+    expect(accepted).toEqual([expect.objectContaining({ existingSessionId: 'session-1', machineId: 'machine-1', directory: '/repo',
+      initialTranscriptAfterSeq: 17 })]);
+    expect(accepted[0]).not.toHaveProperty('executionAuthorization');
+    expect(callMachineRpc).not.toHaveBeenCalled();
+  });
   it('delivers the invocation initial goal in the existing resume request without changing saved launch controls', async () => {
     callMachineRpc.mockResolvedValue({ type: 'success', sessionId: 'session-1' });
     await expect(requestInactiveSessionResume({ credentials, sessionId: 'session-1', localId: 'goal-request',
@@ -315,6 +432,37 @@ describe('requestInactiveSessionResume', () => {
       : { status: 'not_found' });
     await expect(requestInactiveSessionResume({ credentials, sessionId: 'session-1', localId: 'local-1',
       rawSession: rawSession(), metadata, waitForReady: true })).resolves.toEqual({ ok: true });
+  });
+
+  it('keeps resume and nonce readiness on the supplied exact Machine transport', async () => {
+    vi.useFakeTimers();
+    callMachineRpc.mockRejectedValue(new Error('The ordinary replacement-aware route must not observe this admitted startup'));
+    let spawnNonce = '';
+    const transport = vi.fn<NonNullable<Parameters<typeof requestInactiveSessionResume>[0]['machineRpcTransport']>>(async (method, request) => {
+      if (method === RPC_METHODS.SPAWN_HAPPY_SESSION) {
+        if (!request || typeof request !== 'object' || !('spawnNonce' in request) || typeof request.spawnNonce !== 'string') {
+          throw new Error('Missing canonical resume creation identity');
+        }
+        spawnNonce = request.spawnNonce;
+        return { type: 'success', sessionId: 'session-1', spawnNonce };
+      }
+      if (method === RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE) {
+        expect(request).toMatchObject({ spawnNonce });
+        return { status: 'success', sessionId: 'session-1' };
+      }
+      throw new Error(`Unexpected exact Machine operation: ${method}`);
+    });
+    const resumed = requestInactiveSessionResume({ credentials, sessionId: 'session-1', localId: 'local-1',
+      rawSession: rawSession(), metadata, waitForReady: true, machineRpcTransport: transport });
+    await vi.runAllTimersAsync();
+    await expect(resumed).resolves.toEqual({ ok: true });
+    expect(transport.mock.calls).toMatchObject([
+      [RPC_METHODS.SPAWN_HAPPY_SESSION, expect.objectContaining({ sessionId: 'session-1', spawnNonce }),
+        expect.objectContaining({ timeoutMs: resolveSessionStartupTimeoutMs() })],
+      [RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE, expect.objectContaining({ spawnNonce }),
+        expect.objectContaining({ timeoutMs: null, reattachOnReconnect: { readRequest: expect.any(Function) } })],
+    ]);
+    expect(callMachineRpc).not.toHaveBeenCalled();
   });
 
   it('waits for a 1231ms accepted resume to become ready without submitting the resume twice', async () => {

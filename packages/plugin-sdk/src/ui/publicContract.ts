@@ -1,6 +1,6 @@
 import type { PluginUiToneV1 as DtoPluginUiToneV1, PluginUiAttachmentToneV1 as DtoPluginUiAttachmentToneV1, PluginUiIconTokenV1 as DtoPluginUiIconTokenV1 } from '../actions/dtos/actionDeclarativeNodeDto.generated.js';
-import type { QualifiedConnectedAccountRef } from '../connectedAccounts.js';
-import type { ProjectKeyV1, SessionServerStartSpawnDraftV1 } from '../services/sessions.js';
+import type { QualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
+import type { ProjectKeyV1, SessionServerStartSpawnDraftV1 } from '../sessions/authoring.js';
 import type { JsonValue } from '../identity.js';
 import type { ArtifactHtmlBundleV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
 import type { PluginActionInputById } from '../actions/actionTypeMap.generated.js';
@@ -9,12 +9,12 @@ import type {
     StoredImageRefV1 as ProtocolStoredImageRefV1,
     PluginUiReadStoredImageResultV1 as ProtocolPluginUiReadStoredImageResultV1,
 } from '@happier-dev/protocol/plugins/ui/client';
-import type { PluginAvailabilityDescriptor } from '../manifest.js';
+import type { PluginAvailabilityDescriptor } from '../availability.js';
 import type {
     PluginDeclarativeNodeV2 as PluginManifestDeclarativeNodeV2,
-    PluginDeclarativeToneV2 as PluginManifestDeclarativeToneV2,
     PluginLocalizedStringV2,
-} from '../manifest.js';
+} from '../actions/dtos/pluginActionDtoSupport.generated.js';
+import type { PluginDeclarativeToneV2 as PluginManifestDeclarativeToneV2 } from '../actions/dtos/actionDeclarativeNodeDto.generated.js';
 import type {
     CurrentUiCommandDeclarationV1 as ProtocolCurrentUiCommandDeclarationV1,
     CurrentUiCommandDescriptorV1 as ProtocolCurrentUiCommandDescriptorV1,
@@ -35,6 +35,7 @@ import type {
     ComposerControlStateContentTypeV1 as ProtocolComposerControlStateContentTypeV1,
     ComposerControlStateV1 as ProtocolComposerControlStateV1,
     PluginUiContextEnrichmentV1 as ProtocolPluginUiContextEnrichmentV1,
+    PluginUiHostApiSurfaceContextV1 as ProtocolPluginUiHostApiSurfaceContextV1,
     PluginTargetedContributionSelectionV1 as ProtocolPluginUiTargetedContributionSelectionV1,
     PluginUiTargetedContributionOperationV1 as ProtocolPluginUiTargetedContributionOperationV1,
     PluginUiTargetedContributionPointRefV1 as ProtocolPluginUiTargetedContributionPointRefV1,
@@ -75,7 +76,6 @@ type DeepReadonly<T> = T extends readonly (infer TItem)[]
 export type {
     ComposerContentHandleV1,
     ComposerContentInspectRequestV1,
-    ComposerContentInspectResultV1,
     ComposerContentInspectWireResultV1,
     ComposerContentMediaKindV1,
     ComposerContentMimeTypeV1,
@@ -83,7 +83,14 @@ export type {
     ComposerMediaContentCapabilityV1,
     ComposerSessionMediaContentV1,
     ComposerStagedMediaContentV1,
-} from '../composer.js';
+} from '@happier-dev/protocol/plugins/ui/client';
+
+/** A bounded inspection result; transfer/session implementation details remain host-private. */
+export type ComposerContentInspectResultV1 = Readonly<{
+    offset: number;
+    bytes: Uint8Array;
+    eof: boolean;
+}>;
 export type ComposerControlStateContentTypeV1 = ProtocolComposerControlStateContentTypeV1;
 export type ComposerControlStateV1 = ProtocolComposerControlStateV1;
 /** Declaration-only image projections; Protocol owns the request and disclosure grammar. */
@@ -214,6 +221,8 @@ export type PluginUiHostApiSurfaceThemeV1 = {
         focus: string;
         accent: string;
         onAccent: string;
+        /** The one accent data marks are drawn in (series, meters); older snapshots omit it. */
+        dataAccent?: string;
         success: string;
         warning: string;
         attention: string;
@@ -282,6 +291,12 @@ export type PluginUiHostApiSurfaceContextV1 = {
     target: PluginUiHostApiSurfaceTargetV1;
     /** Host page chrome for app pages; absent on other surface placements. */
     page?: { columnVisible: boolean };
+    /** Read-only pending review from the mounted host's canonical approval presenter. */
+    pendingApproval?: ProtocolPluginUiHostApiSurfaceContextV1['pendingApproval'];
+    /** The mounted host is loading Machine prerequisites; Account/local work remains available. */
+    machineConnectionPending?: boolean;
+    /** Exact-target execution is currently admitted. Observation only; every invocation revalidates authority. */
+    machineExecutionReady?: boolean;
     accountEncryptionMode: 'plain' | 'e2ee';
     platform: PluginUiPlatform;
     locale: string;
@@ -722,6 +737,13 @@ export type PluginUiViewDestinationBindingInputV2 =
     | {
         container: 'appPage';
         target: { kind: 'app' };
+        /** Page purpose available to the host before the executable surface loads. */
+        description?: PluginLocalizedStringV2;
+        /**
+         * What the page draws as its own header once loaded: `'page'` (default) a page header, `'toolbar'` a
+         * Collection toolbar that leads with the page's name. The host says the loading identity the same way.
+         */
+        headerStyle?: 'page' | 'toolbar';
         instancePolicy?: 'singleton';
         headerActions?: PluginUiPageHeaderActionV1[];
         placement?: PluginUiDestinationPlacementV1;

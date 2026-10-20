@@ -3,7 +3,7 @@ import { isExternalActionResultWithinResponseEnvelopeLimitV1 } from '@happier-de
 import {
   MAX_TRIAGE_TEXT_UTF8_BYTES_V1,
   projectTriageDisplayTextV1,
-  TriageGetInputV1Schema,
+  TriageSourceCredentialInputsV1,
   TriagePullRequestStatusResultV1Schema,
   type TriagePullRequestStatusResultV1,
   type TriageSourceFailureV1,
@@ -633,7 +633,7 @@ export async function readGithubPullRequestStatus(
   input: unknown,
   context: PluginInvocationContext,
 ): Promise<TriagePullRequestStatusResultV1> {
-  const parsed = TriageGetInputV1Schema.safeParse(input);
+  const parsed = TriageSourceCredentialInputsV1.get.safeParse(input);
   if (!parsed.success) return unavailable(INVALID_INPUT_FAILURE);
   const request = parsed.data;
   const admitted = await admitGithubEntryInvocation({

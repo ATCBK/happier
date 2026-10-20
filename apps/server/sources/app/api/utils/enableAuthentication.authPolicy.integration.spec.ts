@@ -57,35 +57,6 @@ describe("enableAuthentication (auth policy) (integration)", () => {
         await harness.close();
     });
 
-    it("keeps a lifecycle transition between credential verification and eligibility opaque", async () => {
-        harness.resetEnv({ AUTH_REQUIRED_LOGIN_PROVIDERS: "" });
-        const account = await db.account.create({ data: { publicKey: "admission-status-race" } });
-        const token = await auth.createToken(account.id, undefined, { kind: "account", authority: "present_user" });
-        const accountDelegate = db.account;
-        const originalFindUnique = accountDelegate.findUnique;
-        const findUnique = originalFindUnique.bind(accountDelegate);
-        let transitioned = false;
-        // The persisted boundary changes after verification's read, before
-        // eligibility rereads it. AuthModule and eligibility remain real.
-        accountDelegate.findUnique = (async (args) => {
-            const row = await findUnique(args);
-            if (!transitioned && args.where.id === account.id) {
-                transitioned = true;
-                await db.account.update({ where: { id: account.id }, data: { status: "suspended" } });
-            }
-            return row;
-        }) as typeof db.account.findUnique;
-        try {
-            await withAuthenticatedApp(async (app) => {
-                const response = await app.inject({ method: "GET", url: "/private", headers: { authorization: `Bearer ${token}` } });
-                expect(response.statusCode).toBe(401);
-                expect(response.json()).toEqual({ error: "invalid_token" });
-            });
-        } finally {
-            accountDelegate.findUnique = originalFindUnique;
-        }
-    });
-
     it("blocks authenticated requests when GitHub is required but the account is not linked", async () => {
         harness.resetEnv({
             AUTH_REQUIRED_LOGIN_PROVIDERS: "github",

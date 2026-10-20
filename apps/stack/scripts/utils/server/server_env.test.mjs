@@ -39,6 +39,27 @@ test('buildServerRuntimeEnv honors explicit server logging env', () => {
   assert.equal(env.HAPPIER_SERVER_LOG_LEVEL, 'debug');
 });
 
+test('buildServerRuntimeEnv keeps the explicit stack webapp origin for the server process', () => {
+  const env = buildServerRuntimeEnv({
+    baseEnv: { HAPPIER_WEBAPP_URL: 'http://happier-qa.localhost:19364' },
+    serverPort: 3005,
+    publicServerUrl: 'http://happier-qa.localhost:3005',
+  });
+
+  assert.equal(env.HAPPIER_WEBAPP_URL, 'http://happier-qa.localhost:19364');
+});
+
+test('buildServerRuntimeEnv uses the server origin when this process serves the UI', () => {
+  const env = buildServerRuntimeEnv({
+    baseEnv: {},
+    serverPort: 3005,
+    publicServerUrl: 'http://happier-qa.localhost:3005',
+    serveUi: true,
+  });
+
+  assert.equal(env.HAPPIER_WEBAPP_URL, 'http://happier-qa.localhost:3005');
+});
+
 test('buildServerRuntimeEnv defaults canonical identity locally without promoting inferred ingress', () => {
   const env = buildServerRuntimeEnv({
     baseEnv: {

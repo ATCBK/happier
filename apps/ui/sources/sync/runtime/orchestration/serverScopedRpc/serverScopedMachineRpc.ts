@@ -32,7 +32,7 @@ import {
 import { resolveProductionMachineRpcRelayFallbackForServer } from '@/sync/domains/machines/peer/mediation/rpc/productionRelayFallback';
 import { recordMachineRpcPeerMediationReceipt } from '@/sync/domains/machines/peer/mediation/rpc/receiptLog';
 import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from './serverScopedRpcTypes';
-import type { ServerScopedMachineRpcParams } from './serverScopedRpcTypes';
+import type { ScopedSocketClient, ServerScopedMachineRpcParams } from './serverScopedRpcTypes';
 import { isGuardedMachineRpcMethod, resolveTransferPolicyAllowsMachineRpcDirect } from './guardedMachineRpcPolicy';
 import {
     isMachineRpcTimeoutError,
@@ -49,6 +49,7 @@ import {
 } from '@/sync/domains/machines/reachability/machineReachability';
 import { createServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { parseToken } from '@/utils/auth/parseToken';
+import { userRequestLeaseOwner } from '@/sync/runtime/connectivity/userRequestLease';
 
 const SCOPED_MACHINE_RPC_SESSION_WRITE_METHODS = new Set<string>([
     RPC_METHODS.SPAWN_HAPPY_SESSION,
@@ -83,6 +84,7 @@ function createMachineRpcTimeoutError(params: Readonly<{
     );
     Object.assign(error, {
         code: MACHINE_RPC_TIMEOUT_ERROR_CODE,
+        scope: params.scope,
         timeoutMs: params.timeoutMs,
         remainingTimeoutMs: params.remainingTimeoutMs,
     });
@@ -90,7 +92,10 @@ function createMachineRpcTimeoutError(params: Readonly<{
 }
 
 function createMachineRpcAbortError(method: string, cause?: unknown): Error {
-    const error = new Error(`Machine RPC for ${method} was aborted by the caller`);
+    const error = createRpcCallError({
+        error: `Machine RPC for ${method} was aborted by the caller`,
+        errorCode: 'MACHINE_RPC_ABORTED',
+    });
     error.name = 'AbortError';
     Object.assign(error, { code: 'MACHINE_RPC_ABORTED' });
     const disposition = readRpcRequestDisposition(cause);
@@ -331,8 +336,28 @@ async function machineRpcWithServerTransport<R, A>(
 
         observeScope(createServerAccountScope(context.targetServerId, context.targetAccountId ?? parseToken(context.token)));
 
+        const releaseRequestLease = userRequestLeaseOwner.acquire();
         let carrierCustodyTransferred = false;
+        const socketLifetime: { finished: boolean; client: ScopedSocketClient | null } = { finished: false, client: null };
         try {
+            // Authentication/socket readiness does not depend on opening Machine content.
+            // Both preparations consume the same caller deadline; no RPC is emitted until
+            // the fresh key/access checks below have admitted its exact content context.
+            const socketRead = timeoutBudget.runWithinTimeout('scoped', async (timeoutMs) =>
+                await createEphemeralServerSocketClient(createScopedSocketConnectParams({ ...context, timeoutMs }, () => {
+                    // Acquisition can resume after an awaited pool teardown. A retired
+                    // preparation cannot transfer an already-released carrier then.
+                    if (socketLifetime.finished) throw createMachineRpcAbortError(params.method);
+                    carrierCustodyTransferred = true;
+                    return context.release;
+                })).then((client) => {
+                    if (socketLifetime.finished) client.disconnect();
+                    else socketLifetime.client = client;
+                    return client;
+                }));
+            // Material admission can fail before this independent connection settles.
+            // Its original rejection is still observed by the await below when needed.
+            void socketRead.catch(() => {});
             const credentials = context.credentials;
             const runnerTrust = credentials
                 ? await timeoutBudget.runWithinTimeout('scoped', async () => await resolveRunnerMachineContentKeyTrustV1({
@@ -372,79 +397,66 @@ async function machineRpcWithServerTransport<R, A>(
                         : {}),
                     }),
             );
-        throwIfMachineRpcAborted(params.method, params.signal);
+            throwIfMachineRpcAborted(params.method, params.signal);
 
-        if (!machineTransport || (machineTransport.mode === 'e2ee' && !runnerTrust)) {
-            await context.encryption?.initializeMachines(new Map(), new Set([context.machineId]));
-            throw createRpcCallError({
-                error: `Machine encryption not found for ${context.machineId}`,
-                errorCode: 'MACHINE_ENCRYPTION_UNAVAILABLE',
-            });
-        }
-        const usePlaintextTransport = machineTransport.mode === 'plain';
-        let requestPayload: unknown = params.payload;
-        if (params.requireEncryptedPayload && usePlaintextTransport) {
-            const { SessionRequesterBootstrapRpcRequestV1Schema, sealSessionRequesterBootstrapRpcRequestV1 } =
-                await import('@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1');
-            const request = SessionRequesterBootstrapRpcRequestV1Schema.safeParse(params.payload);
-            const installationId = machineTransport.installationId;
-            const publicKey = readMachineInstallationPublicKey(machineTransport.installationPublicKey);
-            if (params.method !== RPC_METHODS.SESSION_SPAWN_NEW || !request.success || !installationId || !publicKey
-                || request.data.input.executionTarget.machineId !== context.machineId
-                || request.data.input.executionTarget.serverId !== context.targetServerId) {
-                throw createRpcCallError({ error: 'Private Machine payload requires an encrypted transport', errorCode: 'MACHINE_ENCRYPTION_UNAVAILABLE' });
+            if (!machineTransport || (machineTransport.mode === 'e2ee' && !runnerTrust)) {
+                await context.encryption?.initializeMachines(new Map(), new Set([context.machineId]));
+                throw createRpcCallError({
+                    error: `Machine encryption not found for ${context.machineId}`,
+                    errorCode: 'MACHINE_ENCRYPTION_UNAVAILABLE',
+                });
             }
-            if ('kind' in request.data.requesterBootstrap) {
-                if (request.data.requesterBootstrap.installationId !== installationId) {
-                    throw createRpcCallError({ error: 'Private Machine payload has a stale installation', errorCode: 'MACHINE_ENCRYPTION_UNAVAILABLE' });
+            const usePlaintextTransport = machineTransport.mode === 'plain';
+            let requestPayload: unknown = params.payload;
+            if (params.requireEncryptedPayload && usePlaintextTransport) {
+                const { SessionRequesterBootstrapRpcRequestV1Schema, sealSessionRequesterBootstrapRpcRequestV1 } =
+                    await import('@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1');
+                const request = SessionRequesterBootstrapRpcRequestV1Schema.safeParse(params.payload);
+                const installationId = machineTransport.installationId;
+                const publicKey = readMachineInstallationPublicKey(machineTransport.installationPublicKey);
+                if (params.method !== RPC_METHODS.SESSION_SPAWN_NEW || !request.success || !installationId || !publicKey
+                    || request.data.input.executionTarget.machineId !== context.machineId
+                    || request.data.input.executionTarget.serverId !== context.targetServerId) {
+                    throw createRpcCallError({ error: 'Private Machine payload requires an encrypted transport', errorCode: 'MACHINE_ENCRYPTION_UNAVAILABLE' });
                 }
-                requestPayload = request.data;
-            } else {
-                requestPayload = sealSessionRequesterBootstrapRpcRequestV1({ request: {
-                    kind: request.data.kind, input: request.data.input, requesterBootstrap: request.data.requesterBootstrap,
-                }, installationId, installationPublicKey: publicKey, randomBytes: getRandomBytes });
+                if ('kind' in request.data.requesterBootstrap) {
+                    if (request.data.requesterBootstrap.installationId !== installationId) {
+                        throw createRpcCallError({ error: 'Private Machine payload has a stale installation', errorCode: 'MACHINE_ENCRYPTION_UNAVAILABLE' });
+                    }
+                    requestPayload = request.data;
+                } else {
+                    requestPayload = sealSessionRequesterBootstrapRpcRequestV1({ request: {
+                        kind: request.data.kind, input: request.data.input, requesterBootstrap: request.data.requesterBootstrap,
+                    }, installationId, installationPublicKey: publicKey, randomBytes: getRandomBytes });
+                }
             }
-        }
-        const isMachineCurrent = () => machineTransport.context?.isCurrent() !== false;
-        if (usePlaintextTransport) context.encryption?.removeMachineEncryption(context.machineId);
-        let machineEncryption = null;
-        if (!usePlaintextTransport) {
-            if (!context.encryption) {
-                throw new Error(`Machine encryption not found for ${context.machineId}`);
+            const isMachineCurrent = () => machineTransport.context?.isCurrent() !== false;
+            if (usePlaintextTransport) context.encryption?.removeMachineEncryption(context.machineId);
+            let machineEncryption = null;
+            if (!usePlaintextTransport) {
+                if (!context.encryption) {
+                    throw new Error(`Machine encryption not found for ${context.machineId}`);
+                }
+                await timeoutBudget.runWithinTimeout(
+                    'scoped',
+                    async () => {
+                        await context.encryption!.initializeMachines(new Map([[
+                            context.machineId,
+                            machineTransport.mode === 'e2ee'
+                                ? machineTransport.dataKey
+                                : null,
+                        ]]), undefined, { isMachineCurrent });
+                        return undefined;
+                    },
+                );
+                machineEncryption = context.encryption.getMachineEncryption(context.machineId);
+                if (!machineEncryption || !isMachineCurrent()) {
+                    throw new Error(`Machine encryption not found for ${context.machineId}`);
+                }
             }
-            await timeoutBudget.runWithinTimeout(
-                'scoped',
-                async () => {
-                    await context.encryption!.initializeMachines(new Map([[
-                        context.machineId,
-                        machineTransport.mode === 'e2ee'
-                            ? machineTransport.dataKey
-                            : null,
-                    ]]), undefined, { isMachineCurrent });
-                    return undefined;
-                },
-            );
-            machineEncryption = context.encryption.getMachineEncryption(context.machineId);
-            if (!machineEncryption || !isMachineCurrent()) {
-                throw new Error(`Machine encryption not found for ${context.machineId}`);
-            }
-        }
-        throwIfMachineRpcAborted(params.method, params.signal);
+            throwIfMachineRpcAborted(params.method, params.signal);
 
-        const socket = await timeoutBudget.runWithinTimeout(
-            'scoped',
-            async (timeoutMs) =>
-                await createEphemeralServerSocketClient(
-                    createScopedSocketConnectParams({
-                        ...context,
-                        timeoutMs,
-                    }, () => {
-                        carrierCustodyTransferred = true;
-                        return context.release;
-                    }),
-                ),
-        );
-        try {
+            const socket = await socketRead;
             throwIfMachineRpcAborted(params.method, params.signal);
             return await runOperation(
                 'scoped',
@@ -507,10 +519,16 @@ async function machineRpcWithServerTransport<R, A>(
                 },
             );
         } finally {
-            socket.disconnect();
-        }
-        } finally {
-            if (!carrierCustodyTransferred) await context.release?.();
+            socketLifetime.finished = true;
+            try {
+                socketLifetime.client?.disconnect();
+            } finally {
+                try {
+                    if (!carrierCustodyTransferred) await context.release?.();
+                } finally {
+                    releaseRequestLease();
+                }
+            }
         }
     };
 
@@ -563,6 +581,9 @@ export async function machineRpcWithServerScope<R, A>(params: ServerScopedMachin
     const onNoEffect = () => { requestMayHaveEffects = false; };
     const effectiveParams: ServerScopedMachineRpcParams<A> = {
         ...params,
+        // The default budget bounds connection/setup, not remote operation work.
+        // Explicit caller deadlines still cover the complete invocation.
+        ...(params.timeoutMs === undefined ? { operationTimeoutMs: null } : {}),
         serverId: effectiveServerId || undefined,
         onDispatched: () => {
             requestMayHaveEffects = true;

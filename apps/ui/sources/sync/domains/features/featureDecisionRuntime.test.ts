@@ -4,7 +4,7 @@ import { act } from 'react-test-renderer';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createHomeGovernanceHarness, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { flushHookEffects } from '@/hooks/server/serverFeatureHookHarness.testHelpers';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
@@ -18,11 +18,22 @@ beforeAll(loadSyncSingletonForTests);
 
 let testProfiles: typeof import('@/sync/domains/server/serverProfiles');
 let testConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+let testHomes: ReturnType<typeof createHomeGovernanceHarness>;
 
 async function publishTestHomeProfiles(options: { restoreAccount?: boolean } = {}): Promise<void> {
     testProfiles = await import('@/sync/domains/server/serverProfiles');
+    testHomes = createHomeGovernanceHarness();
     for (const serverId of ['srv_server-a', 'srv_server-b']) {
         const serverUrl = `https://${serverId}.example.test`;
+        await testHomes.addHome({
+            name: serverId,
+            serverIdentityId: serverId,
+            serverUrl,
+            accountId: options.restoreAccount ? (serverId === 'srv_server-a' ? 'account-a' : 'account-b') : null,
+            active: false,
+        });
+        // The connection owner needs the Home-published carrier descriptor,
+        // beyond the harness's saved Home/Account HTTP responses.
         await testProfiles.adoptHomeProfile({
             descriptor: {
                 v: 1,
@@ -41,9 +52,7 @@ async function publishTestHomeProfiles(options: { restoreAccount?: boolean } = {
         testConnection = await restoreServerAccountForTest({
             serverUrl: 'https://srv_server-a.example.test',
             serverIdentityId: 'srv_server-a',
-            request: async (url) => isHealthFetchUrl(url)
-                ? Response.json({ status: 'ok' })
-                : new Response('{}', { status: 404 }),
+            request: testHomes.request,
         });
         expect(testProfiles.getActiveServerSnapshot()).toMatchObject({
             serverId: 'srv_server-a',
@@ -108,11 +117,6 @@ function isFeaturesFetchUrl(url: unknown): boolean {
     return raw.includes('/v1/features');
 }
 
-function isHealthFetchUrl(url: unknown): boolean {
-    const raw = readFetchUrl(url);
-    return raw.endsWith('/health');
-}
-
 function countFeaturesFetchCalls(fetchMock: { mock: { calls: Array<readonly unknown[]> } }): number {
     return fetchMock.mock.calls.filter((call) => isFeaturesFetchUrl(call[0])).length;
 }
@@ -124,11 +128,41 @@ describe('featureDecisionRuntime', () => {
         standardCleanup();
         try {
             await testConnection?.dispose();
+            await testHomes?.reset();
         } finally {
             testConnection = undefined;
             vi.unstubAllGlobals();
             vi.restoreAllMocks();
         }
+    });
+
+    it.each(['disabled', 'empty', 'cached'] as const)('does not enqueue an unchanged %s selection before a store render', async (selection) => {
+        await publishTestHomeProfiles();
+        const { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
+        const { storage, useSetting } = await import('@/sync/domains/state/storage');
+        const { useServerFeaturesMainSelectionSnapshot } = await import('./featureDecisionRuntime');
+        resetServerFeaturesClientForTests();
+        primeServerFeaturesSnapshot({ serverId: 'srv_server-a', snapshot: {
+            status: 'ready', features: createFeaturesPayload({ voiceEnabled: false }),
+        } });
+        const serverIds = selection === 'empty' ? [] : ['srv_server-a'];
+        const commits = vi.fn();
+        let renders = 0;
+        function Probe() {
+            const snapshot = useServerFeaturesMainSelectionSnapshot(serverIds, { enabled: selection !== 'disabled' });
+            useSetting('experiments');
+            renders += 1;
+            return React.createElement('View', { snapshot });
+        }
+        const screen = await renderScreen(React.createElement(React.Profiler, { id: selection, onRender: commits }, React.createElement(Probe)));
+        expect(screen.findByType('View').props.snapshot.status).toBe('ready');
+        const baseline = { commits: commits.mock.calls.length, renders };
+        await act(async () => {
+            storage.getState().applySettingsLocal({ experiments: !storage.getState().settings.experiments });
+        });
+        expect({ commits: commits.mock.calls.length - baseline.commits, renders: renders - baseline.renders })
+            .toEqual({ commits: 1, renders: 1 });
+        await screen.unmount();
     });
 
     it('reprojects a mounted runtime snapshot when the same server cache entry changes', async () => {
@@ -469,16 +503,16 @@ describe('featureDecisionRuntime', () => {
         await publishTestHomeProfiles({ restoreAccount: true });
 
         const { resetRuntimeFetch, setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-        const fetchMock = vi.fn(async (url: any) => {
+        const fetchMock = vi.fn<typeof testHomes.request>(async (url, init) => {
             const raw = readFetchUrl(url);
             if (!raw.includes('/v1/features')) {
-                return Response.json(({ ok: true }));
+                return testHomes.request(url, init);
             }
-            const voiceEnabled = testProfiles.getActiveServerSnapshot().serverId === 'srv_server-a';
+            const voiceEnabled = new URL(raw).hostname === 'srv_server-a.example.test';
             return Response.json(createFeaturesPayload({ voiceEnabled }));
         });
-        vi.stubGlobal('fetch', fetchMock as any);
-        setRuntimeFetch(fetchMock as any);
+        vi.stubGlobal('fetch', fetchMock);
+        setRuntimeFetch(fetchMock);
 
         try {
             const { resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
@@ -507,8 +541,8 @@ describe('featureDecisionRuntime', () => {
             expect(firstReady.features.features.voice.enabled).toBe(true);
 
             await act(async () => {
-        await activateTestHome('srv_server-b');
-        await flushHookEffects(6);
+                await activateTestHome('srv_server-b');
+                await flushHookEffects(6);
             });
 
             await waitForHomeGovernance(() => expect(seen.at(-1)).toMatchObject({
@@ -531,10 +565,10 @@ describe('featureDecisionRuntime', () => {
         const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
 
         let fetchCallIndex = 0;
-        const fetchMock = vi.fn(async (url: any) => {
+        const fetchMock = vi.fn<typeof testHomes.request>(async (url, init) => {
             const raw = readFetchUrl(url);
             if (!raw.includes('/v1/features')) {
-                return Response.json(({ ok: true }));
+                return testHomes.request(url, init);
             }
             const voiceEnabled = fetchCallIndex === 0;
             fetchCallIndex += 1;
@@ -606,7 +640,9 @@ describe('featureDecisionRuntime', () => {
         const { resetRuntimeFetch, setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
         resetRuntimeFetch();
 
-        const fetchMock = vi.fn(async () => Response.json(createFeaturesPayload({ voiceEnabled: true })));
+        const fetchMock = vi.fn<typeof testHomes.request>(async (url, init) => isFeaturesFetchUrl(url)
+            ? Response.json(createFeaturesPayload({ voiceEnabled: true }))
+            : testHomes.request(url, init));
         vi.stubGlobal('fetch', fetchMock as any);
         setRuntimeFetch(fetchMock as any);
 
@@ -653,9 +689,9 @@ describe('featureDecisionRuntime', () => {
         const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
         let featuresFetchCount = 0;
         const { resetRuntimeFetch, setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-        const fetchMock = vi.fn(async (url: any) => {
+        const fetchMock = vi.fn<typeof testHomes.request>(async (url, init) => {
             if (!isFeaturesFetchUrl(url)) {
-                return Response.json(({ ok: true }));
+                return testHomes.request(url, init);
             }
             featuresFetchCount += 1;
             if (featuresFetchCount === 1) throw new Error('temporary server restart');
@@ -732,9 +768,9 @@ describe('featureDecisionRuntime', () => {
         let featuresFetchCount = 0;
         let responseMode: 'recover' | 'error' | 'unsupported' = 'recover';
         const { resetRuntimeFetch, setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-        const fetchMock = vi.fn(async (url: any) => {
+        const fetchMock = vi.fn<typeof testHomes.request>(async (url, init) => {
             if (!isFeaturesFetchUrl(url)) {
-                return Response.json(({ ok: true }));
+                return testHomes.request(url, init);
             }
             featuresFetchCount += 1;
             if (responseMode === 'unsupported') {
@@ -873,9 +909,9 @@ describe('featureDecisionRuntime', () => {
             return nativeSetTimeout(handler, timeout, ...args);
         });
         const { resetRuntimeFetch, setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-        const fetchMock = vi.fn(async (url: unknown) => {
+        const fetchMock = vi.fn<typeof testHomes.request>(async (url, init) => {
             if (isFeaturesFetchUrl(url)) throw new Error('srv_server-a is restarting');
-            return Response.json(({ ok: true }));
+            return testHomes.request(url, init);
         });
         vi.stubGlobal('fetch', fetchMock as any);
         setRuntimeFetch(fetchMock as any);
@@ -950,9 +986,9 @@ describe('featureDecisionRuntime', () => {
             return nativeSetTimeout(handler, timeout, ...args);
         });
         const { resetRuntimeFetch, setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-        const fetchMock = vi.fn(async (url: unknown) => {
+        const fetchMock = vi.fn<typeof testHomes.request>(async (url, init) => {
             if (isFeaturesFetchUrl(url)) throw new Error('still restarting');
-            return Response.json(({ ok: true }));
+            return testHomes.request(url, init);
         });
         vi.stubGlobal('fetch', fetchMock as any);
         setRuntimeFetch(fetchMock as any);

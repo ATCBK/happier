@@ -76,7 +76,8 @@ export type RegistriesTranslation = Readonly<{
     cancel: string;
     organisation: string;
     unknownFormat: string;
-    needsToken: string;
+    needsToken: (params: Readonly<{ host: string }>) => string;
+    tokenRejected: string;
     unreachable: string;
     alreadyAdded: string;
     failed: string;
@@ -176,8 +177,9 @@ const en: RegistriesTranslation = {
     organisation: 'This is an organisation. Add one of its repositories.',
     unknownFormat:
       'This link isn’t a Git repository, a Claude marketplace, an MCP Registry or an ACP Registry.',
-    needsToken:
-      'This registry asked for a token. Add it from the CLI for now: happier registries add <link> --token-secret <name>.',
+    needsToken: ({ host }) =>
+      `This registry asked for a token. It’s sent only to ${host}.`,
+    tokenRejected: 'That token was rejected. Choose another.',
     unreachable: 'Couldn’t reach this link. Check it and try again.',
     alreadyAdded: 'Already in your registries',
     failed: 'Couldn’t add this registry. Try again.',
@@ -245,6 +247,9 @@ export type SkillAddTranslation = Readonly<{
   addToLibrary: string;
   pinnedTo: (params: Readonly<{ ref: string }>) => string;
   via: (params: Readonly<{ source: string }>) => string;
+  outsideReferences: (params: Count) => string;
+  outsideReferencesMore: (params: Count) => string;
+  alsoAdds: (params: Readonly<{ name: string }>) => string;
   detail: Readonly<{
     whereTitle: string;
     whereBody: string;
@@ -293,6 +298,7 @@ export type SkillAddTranslation = Readonly<{
     reading: string;
     invalidName: (params: Readonly<{ file: string }>) => string;
     unreadable: (params: Readonly<{ file: string }>) => string;
+    found: (params: Count) => string;
     noSkill: string;
     failed: string;
   }>;
@@ -322,6 +328,10 @@ const enSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Add to library',
   pinnedTo: ({ ref }) => `Pinned to ${ref}`,
   via: ({ source }) => `via ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Refers to one file that won’t be included.' : `Refers to ${count} files that won’t be included.`,
+  outsideReferencesMore: ({ count }) => `and ${count} more`,
+  alsoAdds: ({ name }) => `Also adds ${name}, which it refers to`,
   detail: {
     whereTitle: 'Where it’s on',
     whereBody: 'Every machine and agent, unless you narrow it now.',
@@ -380,6 +390,10 @@ const enSkillAdd: SkillAddTranslation = {
     reading: 'Reading…',
     invalidName: ({ file }) =>
       `“${file}” has a name that can’t be saved on every machine. Rename it and try again.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'One skill in this upload'
+        : `${count} skills in this upload`,
     unreadable: ({ file }) => `Couldn’t read “${file}”.`,
     noSkill: 'No SKILL.md in what you chose.',
     failed: 'Couldn’t read this upload. Try again.',
@@ -523,8 +537,9 @@ const ca: RegistriesTranslation = {
     organisation: 'Això és una organització. Afegeix-ne un dels repositoris.',
     unknownFormat:
       'Aquest enllaç no és un repositori Git, un marketplace de Claude, un registre MCP ni un registre ACP.',
-    needsToken:
-      'Aquest registre ha demanat un token. De moment, afegeix-lo des de la CLI: happier registries add <link> --token-secret <name>.',
+    needsToken: ({ host }) =>
+      `Aquest registre ha demanat un token. Només s’enviarà a ${host}.`,
+    tokenRejected: 'S’ha rebutjat aquest token. Tria’n un altre.',
     unreachable: 'No s’ha pogut contactar amb aquest enllaç. Comprova’l i torna-ho a provar.',
     alreadyAdded: 'Ja és als teus registres',
     failed: 'No s’ha pogut afegir aquest registre. Torna-ho a provar.',
@@ -595,6 +610,10 @@ const caSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Afegeix a la biblioteca',
   pinnedTo: ({ ref }) => `Fixada a ${ref}`,
   via: ({ source }) => `via ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Fa referència a un fitxer que no s’inclourà.' : `Fa referència a ${count} fitxers que no s’inclouran.`,
+  outsideReferencesMore: ({ count }) => `i ${count} més`,
+  alsoAdds: ({ name }) => `També afegeix ${name}, a què fa referència`,
   detail: {
     whereTitle: 'On està activada',
     whereBody:
@@ -655,6 +674,10 @@ const caSkillAdd: SkillAddTranslation = {
     reading: 'Llegint…',
     invalidName: ({ file }) =>
       `«${file}» té un nom que no es pot desar a totes les màquines. Canvia-li el nom i torna-ho a provar.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'Una habilitat en aquesta càrrega'
+        : `${count} habilitats en aquesta càrrega`,
     unreadable: ({ file }) => `No s’ha pogut llegir «${file}».`,
     noSkill: 'No hi ha cap SKILL.md en el que has triat.',
     failed: 'No s’ha pogut llegir aquesta pujada. Torna-ho a provar.',
@@ -735,8 +758,9 @@ const de: RegistriesTranslation = {
       'Das ist eine Organisation. Füge eines ihrer Repositories hinzu.',
     unknownFormat:
       'Dieser Link ist weder ein Git-Repository noch ein Claude-Marketplace, eine MCP Registry oder eine ACP Registry.',
-    needsToken:
-      'Diese Registry verlangt ein Token. Füge es vorerst über die CLI hinzu: happier registries add <link> --token-secret <name>.',
+    needsToken: ({ host }) =>
+      `Diese Registry verlangt ein Token. Es wird nur an ${host} gesendet.`,
+    tokenRejected: 'Dieses Token wurde abgelehnt. Wähle ein anderes.',
     unreachable:
       'Dieser Link ist nicht erreichbar. Prüfe ihn und versuche es erneut.',
     alreadyAdded: 'Schon in deinen Registries',
@@ -813,6 +837,10 @@ const deSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Zur Bibliothek hinzufügen',
   pinnedTo: ({ ref }) => `Angeheftet an ${ref}`,
   via: ({ source }) => `über ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Verweist auf eine Datei, die nicht enthalten ist.' : `Verweist auf ${count} Dateien, die nicht enthalten sind.`,
+  outsideReferencesMore: ({ count }) => `und ${count} weitere`,
+  alsoAdds: ({ name }) => `Fügt außerdem ${name} hinzu, auf das es verweist`,
   detail: {
     whereTitle: 'Wo er an ist',
     whereBody:
@@ -874,6 +902,10 @@ const deSkillAdd: SkillAddTranslation = {
     reading: 'Wird gelesen…',
     invalidName: ({ file }) =>
       `„${file}“ hat einen Namen, der nicht auf jeder Maschine gespeichert werden kann. Benenne sie um und versuche es erneut.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'Ein Skill in diesem Upload'
+        : `${count} Skills in diesem Upload`,
     unreadable: ({ file }) => `„${file}“ konnte nicht gelesen werden.`,
     noSkill: 'Keine SKILL.md in deiner Auswahl.',
     failed: 'Dieser Upload konnte nicht gelesen werden. Versuche es erneut.',
@@ -952,8 +984,9 @@ const es: RegistriesTranslation = {
     organisation: 'Esto es una organización. Añade uno de sus repositorios.',
     unknownFormat:
       'Este enlace no es un repositorio Git, un marketplace de Claude, un registro MCP ni un registro ACP.',
-    needsToken:
-      'Este registro ha pedido un token. Por ahora, añádelo desde la CLI: happier registries add <link> --token-secret <name>.',
+    needsToken: ({ host }) =>
+      `Este registro ha pedido un token. Solo se envía a ${host}.`,
+    tokenRejected: 'Se ha rechazado ese token. Elige otro.',
     unreachable: 'No se pudo acceder a este enlace. Revísalo y vuelve a intentarlo.',
     alreadyAdded: 'Ya está en tus registros',
     failed: 'No se pudo añadir este registro. Vuelve a intentarlo.',
@@ -1025,6 +1058,10 @@ const esSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Añadir a la biblioteca',
   pinnedTo: ({ ref }) => `Fijada a ${ref}`,
   via: ({ source }) => `vía ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Hace referencia a un archivo que no se incluirá.' : `Hace referencia a ${count} archivos que no se incluirán.`,
+  outsideReferencesMore: ({ count }) => `y ${count} más`,
+  alsoAdds: ({ name }) => `También añade ${name}, a la que hace referencia`,
   detail: {
     whereTitle: 'Dónde está activada',
     whereBody:
@@ -1085,6 +1122,10 @@ const esSkillAdd: SkillAddTranslation = {
     reading: 'Leyendo…',
     invalidName: ({ file }) =>
       `«${file}» tiene un nombre que no se puede guardar en todas las máquinas. Cámbiale el nombre y vuelve a intentarlo.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'Una habilidad en esta subida'
+        : `${count} habilidades en esta subida`,
     unreadable: ({ file }) => `No se pudo leer «${file}».`,
     noSkill: 'No hay ningún SKILL.md en lo que elegiste.',
     failed: 'No se pudo leer esta subida. Vuelve a intentarlo.',
@@ -1167,8 +1208,9 @@ const fr: RegistriesTranslation = {
       'Il s’agit d’une organisation. Ajoutez l’un de ses dépôts.',
     unknownFormat:
       'Ce lien n’est ni un dépôt Git, ni un marketplace Claude, ni un registre MCP, ni un registre ACP.',
-    needsToken:
-      'Ce registre demande un jeton. Pour l’instant, ajoutez-le depuis la CLI : happier registries add <link> --token-secret <name>.',
+    needsToken: ({ host }) =>
+      `Ce registre demande un jeton. Il n’est envoyé qu’à ${host}.`,
+    tokenRejected: 'Ce jeton a été refusé. Choisissez-en un autre.',
     unreachable: 'Impossible de joindre ce lien. Vérifiez-le et réessayez.',
     alreadyAdded: 'Déjà dans vos registres',
     failed: 'Impossible d’ajouter ce registre. Réessayez.',
@@ -1241,6 +1283,10 @@ const frSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Ajouter à la bibliothèque',
   pinnedTo: ({ ref }) => `Épinglé sur ${ref}`,
   via: ({ source }) => `via ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Renvoie à un fichier qui ne sera pas inclus.' : `Renvoie à ${count} fichiers qui ne seront pas inclus.`,
+  outsideReferencesMore: ({ count }) => `et ${count} de plus`,
+  alsoAdds: ({ name }) => `Ajoute aussi ${name}, auquel il fait référence`,
   detail: {
     whereTitle: 'Où il est activé',
     whereBody:
@@ -1301,6 +1347,10 @@ const frSkillAdd: SkillAddTranslation = {
     reading: 'Lecture…',
     invalidName: ({ file }) =>
       `« ${file} » a un nom qui ne peut pas être enregistré sur toutes les machines. Renommez-le et réessayez.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'Un skill dans cet envoi'
+        : `${count} skills dans cet envoi`,
     unreadable: ({ file }) => `Impossible de lire « ${file} ».`,
     noSkill: 'Aucun SKILL.md dans votre sélection.',
     failed: 'Impossible de lire cet import. Réessayez.',
@@ -1378,8 +1428,9 @@ const it: RegistriesTranslation = {
     organisation: 'Questa è un’organizzazione. Aggiungi uno dei suoi repository.',
     unknownFormat:
       'Questo link non è un repository Git, un marketplace di Claude, un registro MCP né un registro ACP.',
-    needsToken:
-      'Questo registro ha richiesto un token. Per ora aggiungilo dalla CLI: happier registries add <link> --token-secret <name>.',
+    needsToken: ({ host }) =>
+      `Questo registro ha richiesto un token. Viene inviato solo a ${host}.`,
+    tokenRejected: 'Token rifiutato. Scegline un altro.',
     unreachable: 'Impossibile raggiungere questo link. Controllalo e riprova.',
     alreadyAdded: 'Già nei tuoi registri',
     failed: 'Impossibile aggiungere questo registro. Riprova.',
@@ -1450,6 +1501,10 @@ const itSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Aggiungi alla libreria',
   pinnedTo: ({ ref }) => `Bloccata su ${ref}`,
   via: ({ source }) => `tramite ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Rimanda a un file che non sarà incluso.' : `Rimanda a ${count} file che non saranno inclusi.`,
+  outsideReferencesMore: ({ count }) => `e altri ${count}`,
+  alsoAdds: ({ name }) => `Aggiunge anche ${name}, a cui rimanda`,
   detail: {
     whereTitle: 'Dove è attiva',
     whereBody:
@@ -1510,6 +1565,10 @@ const itSkillAdd: SkillAddTranslation = {
     reading: 'Lettura…',
     invalidName: ({ file }) =>
       `«${file}» ha un nome che non può essere salvato su ogni macchina. Rinominalo e riprova.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'Una skill in questo caricamento'
+        : `${count} skill in questo caricamento`,
     unreadable: ({ file }) => `Impossibile leggere «${file}».`,
     noSkill: 'Nessun file SKILL.md in ciò che hai scelto.',
     failed: 'Impossibile leggere questo caricamento. Riprova.',
@@ -1589,8 +1648,9 @@ const ja: RegistriesTranslation = {
     organisation: 'これは組織です。その中のリポジトリを追加してください。',
     unknownFormat:
       'このリンクは、Git リポジトリ、Claude マーケットプレイス、MCP レジストリ、ACP レジストリのいずれでもありません。',
-    needsToken:
-      'このレジストリにはトークンが必要です。当面は CLI から追加してください: happier registries add <link> --token-secret <name>',
+    needsToken: ({ host }) =>
+      `このレジストリにはトークンが必要です。${host} にのみ送信されます。`,
+    tokenRejected: 'このトークンは拒否されました。別のトークンを選んでください。',
     unreachable:
       'このリンクに接続できませんでした。確認してからもう一度お試しください。',
     alreadyAdded: 'すでにレジストリにあります',
@@ -1662,6 +1722,10 @@ const jaSkillAdd: SkillAddTranslation = {
   addToLibrary: 'ライブラリに追加',
   pinnedTo: ({ ref }) => `${ref} に固定`,
   via: ({ source }) => `${source} 経由`,
+  outsideReferences: ({ count }) =>
+    `含まれない ${count} 件のファイルを参照しています。`,
+  outsideReferencesMore: ({ count }) => `ほか ${count} 件`,
+  alsoAdds: ({ name }) => `参照先の ${name} も追加します`,
   detail: {
     whereTitle: 'オンになっている場所',
     whereBody:
@@ -1719,6 +1783,8 @@ const jaSkillAdd: SkillAddTranslation = {
     reading: '読み込み中…',
     invalidName: ({ file }) =>
       `「${file}」はすべてのマシンで保存できない名前です。名前を変えてからもう一度お試しください。`,
+    found: ({ count }) =>
+      `このアップロードにスキルが ${count} 件あります`,
     unreadable: ({ file }) => `「${file}」を読み込めませんでした。`,
     noSkill: '選択した内容に SKILL.md がありません。',
     failed: 'このアップロードを読み込めませんでした。もう一度お試しください。',
@@ -1825,8 +1891,9 @@ const pl: RegistriesTranslation = {
     organisation: 'To organizacja. Dodaj jedno z jej repozytoriów.',
     unknownFormat:
       'Ten link nie jest repozytorium Git, marketplace’em Claude, rejestrem MCP ani rejestrem ACP.',
-    needsToken:
-      'Ten rejestr wymaga tokenu. Na razie dodaj go z poziomu CLI: happier registries add <link> --token-secret <name>.',
+    needsToken: ({ host }) =>
+      `Ten rejestr wymaga tokenu. Zostanie wysłany tylko do ${host}.`,
+    tokenRejected: 'Ten token został odrzucony. Wybierz inny.',
     unreachable:
       'Nie można połączyć się z tym linkiem. Sprawdź go i spróbuj ponownie.',
     alreadyAdded: 'Już w Twoich rejestrach',
@@ -1897,6 +1964,10 @@ const plSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Dodaj do biblioteki',
   pinnedTo: ({ ref }) => `Przypięta do ${ref}`,
   via: ({ source }) => `przez ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Odwołuje się do jednego pliku, który nie zostanie dołączony.' : `Odwołuje się do ${count} plików, które nie zostaną dołączone.`,
+  outsideReferencesMore: ({ count }) => `i ${count} więcej`,
+  alsoAdds: ({ name }) => `Dodaje też ${name}, do którego się odwołuje`,
   detail: {
     whereTitle: 'Gdzie jest włączona',
     whereBody:
@@ -1962,6 +2033,10 @@ const plSkillAdd: SkillAddTranslation = {
     reading: 'Odczytywanie…',
     invalidName: ({ file }) =>
       `„${file}” ma nazwę, której nie da się zapisać na każdej maszynie. Zmień ją i spróbuj ponownie.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'Jedna umiejętność w tym przesłanym pliku'
+        : `${count} umiejętności w tym przesłanym pliku`,
     unreadable: ({ file }) => `Nie udało się odczytać „${file}”.`,
     noSkill: 'W tym, co wybrano, nie ma pliku SKILL.md.',
     failed: 'Nie udało się odczytać tego przesłania. Spróbuj ponownie.',
@@ -2040,8 +2115,9 @@ const pt: RegistriesTranslation = {
     organisation: 'Isto é uma organização. Adicione um dos repositórios dela.',
     unknownFormat:
       'Este link não é um repositório Git, um marketplace do Claude, um registro MCP nem um registro ACP.',
-    needsToken:
-      'Este registro pediu um token. Por enquanto, adicione-o pela CLI: happier registries add <link> --token-secret <name>.',
+    needsToken: ({ host }) =>
+      `Este registro pediu um token. Ele é enviado só para ${host}.`,
+    tokenRejected: 'Esse token foi recusado. Escolha outro.',
     unreachable: 'Não foi possível acessar este link. Confira-o e tente de novo.',
     alreadyAdded: 'Já está nos seus registros',
     failed: 'Não foi possível adicionar este registro. Tente de novo.',
@@ -2113,6 +2189,10 @@ const ptSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Adicionar à biblioteca',
   pinnedTo: ({ ref }) => `Fixada em ${ref}`,
   via: ({ source }) => `via ${source}`,
+  outsideReferences: ({ count }) =>
+    count === 1 ? 'Faz referência a um arquivo que não será incluído.' : `Faz referência a ${count} arquivos que não serão incluídos.`,
+  outsideReferencesMore: ({ count }) => `e mais ${count}`,
+  alsoAdds: ({ name }) => `Também adiciona ${name}, a que faz referência`,
   detail: {
     whereTitle: 'Onde está ativada',
     whereBody:
@@ -2173,6 +2253,10 @@ const ptSkillAdd: SkillAddTranslation = {
     reading: 'Lendo…',
     invalidName: ({ file }) =>
       `“${file}” tem um nome que não pode ser salvo em todas as máquinas. Renomeie e tente de novo.`,
+    found: ({ count }) =>
+      count === 1
+        ? 'Uma habilidade neste envio'
+        : `${count} habilidades neste envio`,
     unreadable: ({ file }) => `Não foi possível ler “${file}”.`,
     noSkill: 'Nenhum SKILL.md no que você escolheu.',
     failed: 'Não foi possível ler este envio. Tente de novo.',
@@ -2279,8 +2363,9 @@ const ru: RegistriesTranslation = {
     organisation: 'Это организация. Добавьте один из её репозиториев.',
     unknownFormat:
       'Эта ссылка не ведёт ни на Git-репозиторий, ни на маркетплейс Claude, ни на реестр MCP, ни на реестр ACP.',
-    needsToken:
-      'Этому реестру нужен токен. Пока добавьте его через CLI: happier registries add <link> --token-secret <name>.',
+    needsToken: ({ host }) =>
+      `Этому реестру нужен токен. Он отправляется только на ${host}.`,
+    tokenRejected: 'Токен отклонён. Выберите другой.',
     unreachable:
       'Не удалось открыть ссылку. Проверьте её и повторите попытку.',
     alreadyAdded: 'Уже в ваших реестрах',
@@ -2353,6 +2438,10 @@ const ruSkillAdd: SkillAddTranslation = {
   addToLibrary: 'Добавить в библиотеку',
   pinnedTo: ({ ref }) => `Закреплён на ${ref}`,
   via: ({ source }) => `через ${source}`,
+  outsideReferences: ({ count }) =>
+    `Не включены файлы, на которые есть ссылки: ${count}.`,
+  outsideReferencesMore: ({ count }) => `и ещё ${count}`,
+  alsoAdds: ({ name }) => `Также добавит ${name}, на который он ссылается`,
   detail: {
     whereTitle: 'Где включён',
     whereBody:
@@ -2427,6 +2516,15 @@ const ruSkillAdd: SkillAddTranslation = {
     reading: 'Читаем…',
     invalidName: ({ file }) =>
       `У «${file}» имя, которое нельзя сохранить на всех машинах. Переименуйте и повторите попытку.`,
+    found: ({ count }) =>
+      pickForm(russianForm(count), {
+        one:
+          count === 1
+            ? 'Один скилл в этой загрузке'
+            : `${count} скилл в этой загрузке`,
+        few: `${count} скилла в этой загрузке`,
+        many: `${count} скиллов в этой загрузке`,
+      }),
     unreadable: ({ file }) => `Не удалось прочитать «${file}».`,
     noSkill: 'В выбранном нет файла SKILL.md.',
     failed: 'Не удалось прочитать загрузку. Повторите попытку.',
@@ -2504,8 +2602,9 @@ const zhHans: RegistriesTranslation = {
     organisation: '这是一个组织。请添加它的某个仓库。',
     unknownFormat:
       '此链接不是 Git 仓库、Claude 插件市场、MCP 注册表或 ACP 注册表。',
-    needsToken:
-      '此注册表需要令牌。目前请通过 CLI 添加：happier registries add <link> --token-secret <name>',
+    needsToken: ({ host }) =>
+      `此注册表需要令牌。仅会发送到 ${host}。`,
+    tokenRejected: '该令牌被拒绝。请选择另一个。',
     unreachable: '无法访问此链接。请检查后重试。',
     alreadyAdded: '已在你的注册表中',
     failed: '无法添加此注册表。请重试。',
@@ -2576,6 +2675,10 @@ const zhHansSkillAdd: SkillAddTranslation = {
   addToLibrary: '添加到资料库',
   pinnedTo: ({ ref }) => `固定到 ${ref}`,
   via: ({ source }) => `经由 ${source}`,
+  outsideReferences: ({ count }) =>
+    `引用了 ${count} 个不会被包含的文件。`,
+  outsideReferencesMore: ({ count }) => `另外 ${count} 个`,
+  alsoAdds: ({ name }) => `同时添加它引用的 ${name}`,
   detail: {
     whereTitle: '在哪里开启',
     whereBody: '所有机器和智能体，除非你现在就限定范围。',
@@ -2628,6 +2731,8 @@ const zhHansSkillAdd: SkillAddTranslation = {
     reading: '正在读取…',
     invalidName: ({ file }) =>
       `“${file}”的名称无法在所有机器上保存。请重命名后重试。`,
+    found: ({ count }) =>
+      `此上传中有 ${count} 个技能`,
     unreadable: ({ file }) => `无法读取“${file}”。`,
     noSkill: '你选择的内容中没有 SKILL.md。',
     failed: '无法读取此上传内容。请重试。',
@@ -2705,8 +2810,9 @@ const zhHant: RegistriesTranslation = {
     organisation: '這是一個組織。請新增它的其中一個儲存庫。',
     unknownFormat:
       '此連結不是 Git 儲存庫、Claude 外掛程式市集、MCP 註冊表或 ACP 註冊表。',
-    needsToken:
-      '此註冊表需要權杖。目前請透過 CLI 新增：happier registries add <link> --token-secret <name>',
+    needsToken: ({ host }) =>
+      `此註冊表需要權杖。僅會傳送到 ${host}。`,
+    tokenRejected: '該權杖被拒絕。請選擇另一個。',
     unreachable: '無法連線到此連結。請檢查後重試。',
     alreadyAdded: '已在你的註冊表中',
     failed: '無法新增此註冊表。請重試。',
@@ -2777,6 +2883,10 @@ const zhHantSkillAdd: SkillAddTranslation = {
   addToLibrary: '新增到資料庫',
   pinnedTo: ({ ref }) => `固定在 ${ref}`,
   via: ({ source }) => `經由 ${source}`,
+  outsideReferences: ({ count }) =>
+    `參照了 ${count} 個不會被包含的檔案。`,
+  outsideReferencesMore: ({ count }) => `另有 ${count} 個`,
+  alsoAdds: ({ name }) => `同時新增它引用的 ${name}`,
   detail: {
     whereTitle: '在哪裡開啟',
     whereBody: '所有機器和代理，除非你現在就限定範圍。',
@@ -2829,6 +2939,8 @@ const zhHantSkillAdd: SkillAddTranslation = {
     reading: '正在讀取…',
     invalidName: ({ file }) =>
       `「${file}」的名稱無法在所有機器上儲存。請重新命名後重試。`,
+    found: ({ count }) =>
+      `此上傳中有 ${count} 個技能`,
     unreadable: ({ file }) => `無法讀取「${file}」。`,
     noSkill: '你選擇的內容中沒有 SKILL.md。',
     failed: '無法讀取此上傳內容。請重試。',

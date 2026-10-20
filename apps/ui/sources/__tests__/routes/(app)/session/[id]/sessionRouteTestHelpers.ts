@@ -28,7 +28,7 @@ export function createSessionRouteHomesFixture() {
 type SessionRouteImportOriginal = <T = unknown>() => Promise<T>;
 type SessionRouteStorageModuleFactory = (
     importOriginal: SessionRouteImportOriginal,
-) => unknown | Promise<unknown>;
+) => object | Promise<object>;
 
 type InstallSessionRouteCommonModuleMocksOptions = Readonly<{
     reactNative?: SessionRouteModuleFactory;
@@ -148,14 +148,11 @@ export function installSessionRouteCommonModuleMocks(
         };
     });
 
-    vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-        const activeOptions = sessionRouteModuleState.options;
-        if (activeOptions.storageModule) {
-            return await activeOptions.storageModule(importOriginal as SessionRouteImportOriginal);
-        }
-
-        return await importOriginal();
-    });
+    if (options.storageModule) {
+        const storageModule = options.storageModule;
+        vi.doMock('@/sync/domains/state/storage', (importOriginal) =>
+            storageModule(importOriginal as SessionRouteImportOriginal));
+    }
 }
 
 export function getStyleValue(node: ReactTestInstance, key: string): unknown {

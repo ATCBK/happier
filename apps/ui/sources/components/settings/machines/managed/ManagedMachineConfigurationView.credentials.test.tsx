@@ -5,7 +5,7 @@ import { Dimensions } from 'react-native';
 import { installApprovalCommonModuleMocks } from '@/components/approvals/approvalsTestHelpers';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { renderScreen, standardCleanup, flushHookEffects, findTestInstanceByTypeContainingText, pressTestInstanceAsync } from '@/dev/testkit';
+import { renderScreen, standardCleanup, flushHookEffects, pressTestInstanceAsync, reportPopoverContentLayout, withPopoverWebGlobals } from '@/dev/testkit';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { ExternalActionRequestEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { MachineProvisionersListResultV1Schema } from '@happier-dev/protocol/plugins/contributions/machineProvisioners';
@@ -29,6 +29,7 @@ const { resetScopedHomeActionExecutorsForTests } = await import('@/sync/ops/acti
 const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
 const { resetMachineProjectionReadsForTests } = await import('@/sync/ops/machineContributionRegistryProjection');
 let restoreViewport: (() => void) | undefined;
+let restorePopover: (() => void) | undefined;
 const controller = { machineId: 'host', installationId: 'installation' };
 const otherController = { machineId: 'other-host', installationId: 'other-installation' };
 const contribution = { pluginId: 'custom.compute', localId: 'vm' };
@@ -51,6 +52,7 @@ const provisioner = MachineProvisionersListResultV1Schema.parse({ controller, pr
 ] }] }).provisioners[0]!;
 
 beforeEach(async () => {
+    restorePopover = withPopoverWebGlobals();
     await harness.reset(); resetScopedHomeActionExecutorsForTests(); route.replace.mockReset(); nativeBoundary.rpc.mockReset();
     clearDaemonMergedProjectionCacheForTests(); resetMachineProjectionReadsForTests();
     const viewport = vi.spyOn(Dimensions, 'get').mockReturnValue({ width: 1280, height: 844, scale: 1, fontScale: 1 });
@@ -76,7 +78,10 @@ beforeEach(async () => {
         ? projection : request.method === RPC_METHODS.DAEMON_PLUGIN_ACTION_SCHEMAS_READ ? { ok: true,
             inputSchema: { type: 'object', properties: { cpu: { type: 'integer', minimum: 1 } }, additionalProperties: false } } : { ok: false, code: 'unsupported' });
 });
-afterEach(() => { standardCleanup(); restoreViewport?.(); restoreViewport = undefined; });
+afterEach(async () => {
+    await standardCleanup(); restoreViewport?.(); restoreViewport = undefined;
+    restorePopover?.(); restorePopover = undefined;
+});
 
 async function setupHome() {
     const serverId = await harness.addHome({ name: 'Compute', serverUrl: 'https://credential-purposes.example', serverIdentityId: 'srv_credentials', accountId: 'owner', currentAccount: true });
@@ -127,8 +132,24 @@ function credentialControl(screen: Screen, purpose: string) {
     return credentialField(screen, purpose).findAll(node => typeof node.type === 'string' && node.props.role === 'radiogroup')[0];
 }
 async function pressCredentialOption(screen: Screen, purpose: string, label: string) {
-    const option = findTestInstanceByTypeContainingText(credentialField(screen, purpose), 'Pressable', label);
-    expect(option?.props.role ?? option?.props.accessibilityRole).toBe('radio');
+    const findOption = () => screen.findAll(node => typeof node.type === 'string'
+        && (node.props.role ?? node.props.accessibilityRole) === 'radio'
+        && ((node.props['aria-label'] ?? node.props.accessibilityLabel) === label
+            || String(node.props['aria-label'] ?? node.props.accessibilityLabel).startsWith(`${label}: `)))[0];
+    if (!findOption()) {
+        // One or long-labelled choices use the field's dropdown instead of inline segments.
+        const trigger = credentialField(screen, purpose).findAll(node => typeof node.type === 'string'
+            && (node.props.role ?? node.props.accessibilityRole) === 'button'
+            && (node.props['aria-expanded'] === false || node.props.accessibilityState?.expanded === false))[0];
+        expect(trigger).toBeDefined();
+        await pressTestInstanceAsync(trigger);
+        await act(async () => { reportPopoverContentLayout(screen.tree, { width: 320, height: 200 }); });
+    }
+    const option = await waitForHomeGovernance(() => {
+        const current = findOption();
+        expect(current).toBeDefined();
+        return current;
+    });
     await pressTestInstanceAsync(option);
 }
 async function selectCredentials(screen: Screen) {
@@ -207,8 +228,7 @@ describe('managed provisioner credential purposes', () => {
             kind: 'reconnect', serviceKey: buildQualifiedPluginContributionKey(cloud.service), accountId: cloud.accountId,
         }, targetLocked: true, targetSelection: { selectedTarget: { machineId: controller.machineId } } });
         await screen.pressByTestIdAsync('connected-service-setup:close');
-        await waitForHomeGovernance(() => expect(credentialControl(screen, 'computer-access')).toBeDefined());
-        expect(credentialField(screen, 'computer-access').props.value).toEqual(cua);
+        await waitForHomeGovernance(() => expect(credentialField(screen, 'computer-access').props.value).toEqual(cua));
         expect(credentialField(screen, 'cloud-account').props.value).toBeUndefined();
         expect(actionInputs('machines.provisioners.options')).toHaveLength(0);
         expect(actionInputs('machines.managed.acquire')).toHaveLength(0);

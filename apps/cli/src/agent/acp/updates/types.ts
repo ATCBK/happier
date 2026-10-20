@@ -21,7 +21,7 @@ export interface SessionUpdate {
   toolCallId?: string;
   status?: string;
   kind?: string | unknown;
-  title?: string;
+  title?: string | null;
   rawInput?: unknown;
   rawOutput?: unknown;
   input?: unknown;

@@ -14,9 +14,11 @@ export function useResumeCapabilityOptions(opts: {
     machineId: string | null | undefined;
     serverId?: string | null;
     accountScope?: ServerAccountScope | null;
-    settings: Settings;
+    settings: Pick<Settings, 'backendEnabledByTargetKey'>;
     pluginSettings?: AgentPluginSettingsSnapshot | null;
     enabled?: boolean;
+    /** Passive composers retain current cached facts without starting a Machine read. */
+    load?: boolean;
 }): {
     resumeCapabilityOptions: ResumeCapabilityOptions;
 } {
@@ -26,6 +28,7 @@ export function useResumeCapabilityOptions(opts: {
         machineId: opts.machineId,
         serverId: opts.serverId,
         enabled: opts.enabled !== false && opts.agentId !== null && opts.agentId !== undefined,
+        load: opts.load,
     });
     const linkedSessionCurrentAgent = React.useMemo(() => {
         if (projection.phase !== 'ready' || !opts.agentId) return null;

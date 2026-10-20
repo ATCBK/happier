@@ -8,7 +8,7 @@ async function listSourceFiles(dir: string): Promise<string[]> {
     const entries = await readdir(dir, { withFileTypes: true });
     const files: string[] = [];
     for (const entry of entries) {
-        if (entry.name === 'node_modules') continue;
+        if (entry.name === 'node_modules' || entry.name === 'testkit' || entry.name === '__tests__') continue;
         if (entry.name.startsWith('.')) continue;
         const full = join(dir, entry.name);
         if (entry.isDirectory()) {
@@ -17,8 +17,7 @@ async function listSourceFiles(dir: string): Promise<string[]> {
         }
         if (!entry.isFile()) continue;
         if (!/\.(ts|tsx)$/.test(entry.name)) continue;
-        if (/\.(test|spec)\.(ts|tsx)$/.test(entry.name)) continue;
-        if (/\.testHelpers\.(ts|tsx)$/.test(entry.name)) continue;
+        if (/(?:\.(?:test|spec)|testHelpers|testHarness|testkit|testFixtures)\.(ts|tsx)$/i.test(entry.name)) continue;
         files.push(full);
     }
     return files;
@@ -32,7 +31,6 @@ describe('capabilities guardrails', () => {
             // retry behavior; they do not initiate feature probes.
             join(SOURCES_ROOT, 'sync', 'http', 'client.ts'),
             join(SOURCES_ROOT, 'sync', 'runtime', 'connectivity', 'serverReachabilityRuntimeFetch.ts'),
-            join(SOURCES_ROOT, 'dev', 'testkit', 'fixtures', 'releasedServerV021Compatibility.ts'),
         ]);
 
         const files = await listSourceFiles(SOURCES_ROOT);

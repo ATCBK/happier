@@ -2,6 +2,8 @@ import {
     HappierTextSelectabilityScope,
     useHappierTextPresentation,
     useHappierMaterialColorResolver,
+    HAPPIER_TEXT_INPUT_FOCUS_RESET_STYLE,
+    HAPPIER_TEXT_INPUT_WEB_MARKER,
     type HappierTypeRole,
     type HappierTypeEmphasis,
 } from '@happier-dev/plugin-ui/presentation';
@@ -12,13 +14,12 @@ import {
     TextInput as RNTextInput,
     type TextInputProps as RNTextInputProps,
     type TextProps as RNTextProps,
-    type TextStyle,
 } from 'react-native';
 
 import { Typography } from '@/constants/Typography';
 import { readSurfaceStyleProperty } from '@/components/ui/surfaces/surfaceStyle';
 import { useGlassBackedInk } from '@/components/ui/glass/glassBackedInk';
-import { useLocalSetting } from '@/sync/store/hooks';
+import { useLocalSetting } from '@/sync/store/settingsReadHooks';
 
 import { scaleTextStyle } from './uiFontScale';
 
@@ -162,13 +163,8 @@ export const TextInput = React.memo(
                     out.push({ fontSize: 16 / uiFontScale });
                 }
             }
-            if (Platform.OS === 'web') {
-                const webResetStyle = {
-                    outlineStyle: 'solid',
-                    outlineWidth: 0,
-                    outlineColor: 'transparent',
-                } satisfies TextStyle;
-                out.push(webResetStyle);
+            if (HAPPIER_TEXT_INPUT_FOCUS_RESET_STYLE) {
+                out.push(HAPPIER_TEXT_INPUT_FOCUS_RESET_STYLE);
             }
             const backgroundColor = readSurfaceStyleProperty(out, 'backgroundColor');
             if (typeof backgroundColor === 'string') {
@@ -179,7 +175,7 @@ export const TextInput = React.memo(
         }, [defaultStyle, scaledStyle, uiFontScale, paintColor, metricScale]);
 
         const webAccessibilityProps = Platform.OS === 'web'
-            ? { 'data-happier-text-input': 'true', ...(disableUiFontScaling ? WEB_FONT_SCALING_DISABLED_PROPS : null) }
+            ? { ...HAPPIER_TEXT_INPUT_WEB_MARKER, ...(disableUiFontScaling ? WEB_FONT_SCALING_DISABLED_PROPS : null) }
             : {};
 
         return (

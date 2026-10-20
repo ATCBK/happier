@@ -52,6 +52,8 @@ struct ActivityRemoteAlert {
   let sequenceDomain: String?
   let discussionId: String?
   let requestId: String?
+  let stalledTurnId: String?
+  let stalledPublisherFence: Int64?
   let version: Int64
 
   private static let supportedPreviewBehaviors = Set(["status_only", "title_only", "include_preview"])
@@ -65,6 +67,7 @@ struct ActivityRemoteAlert {
   /// delivery receipt; it keeps equal local sequences owned by two Discussions
   /// distinct for presentation dedupe and diagnostics.
   var eventIdentity: String? {
+    if let stalledTurnId, let stalledPublisherFence { return "stalled:\(stalledTurnId):\(stalledPublisherFence)" }
     if version == 2, let requestId,
        ["permission_request", "user_action_request"].contains(eventType) {
       return "request:\(requestId)"
@@ -163,6 +166,9 @@ struct ActivityRemoteAlert {
     self.requestId = version == 2 && ["permission_request", "user_action_request"].contains(eventType)
       ? ActivityRemoteAlert.requiredBoundedIdentifier(event["requestId"])
       : nil
+    let stalled = version == 2 && eventType == "source_unavailable" ? event["stalledOccurrence"] as? [String: Any] : nil
+    self.stalledTurnId = ActivityRemoteAlert.requiredBoundedIdentifier(stalled?["turnId"])
+    self.stalledPublisherFence = ActivityRemoteAlert.exactInteger(stalled?["publisherFence"])
   }
 
   private static func requiredString(_ value: Any?) -> String? {
@@ -217,6 +223,13 @@ struct ActivityRemoteAlert {
       if event["requestId"] == nil { return exactKeys(event, allowed: ["type"]) }
       return exactKeys(event, allowed: ["type", "requestId"])
         && requiredBoundedIdentifier(event["requestId"]) != nil
+    }
+    if version == 2 && type == "source_unavailable", let raw = event["stalledOccurrence"] {
+      guard exactKeys(event, allowed: ["type", "stalledOccurrence"]),
+            let occurrence = raw as? [AnyHashable: Any], exactKeys(occurrence, allowed: ["turnId", "publisherFence"]),
+            requiredBoundedIdentifier(occurrence["turnId"]) != nil,
+            let fence = exactInteger(occurrence["publisherFence"]), fence >= 0, fence <= 9_007_199_254_740_991 else { return false }
+      return true
     }
     return exactKeys(event, allowed: ["type"])
   }

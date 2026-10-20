@@ -90,6 +90,14 @@ function createDaemonServiceListEntry(overrides: Partial<DaemonServiceListEntry>
 }
 
 describe('server background service follow-up helpers', () => {
+    it('ignores unverified service candidates in both inventory projections', () => {
+        expect(resolveInstalledDefaultFollowingDaemonServiceModes([
+            createServiceInventoryEntry({ verification: 'candidate', scope: 'system' }),
+            createDaemonServiceListEntry({ verification: 'candidate', mode: 'system' }),
+            createDaemonServiceListEntry({ verification: 'verified', mode: 'user' }),
+        ])).toEqual(['user']);
+    });
+
     afterEach(() => {
         readStoredCredentialsMock.mockReset();
         readStoredCredentialsMock.mockResolvedValue(null);

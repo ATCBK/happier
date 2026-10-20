@@ -19,7 +19,7 @@ import { createMachineVitalsSampler } from '../vitals/createMachineVitalsSampler
 import { createMinuteHistoryStore } from '../vitals/history/minuteHistoryStore';
 import { createMachineResourceSummary } from '../resources/machineResourceSummary';
 import type { SpawnFailureV1 } from '@happier-dev/protocol/machines/processes/spawnFailureV1';
-type ResumeOptions = Parameters<Parameters<typeof activatePendingInactiveSession>[0]['spawnSession']>[0];
+type ResumeOptions = Parameters<Parameters<typeof activatePendingInactiveSession>[0]['spawnSessionForInternalResume']>[0];
 
 vi.mock('@/session/transport/http/sessionsHttp', () => ({
   fetchSessionByIdCompat: vi.fn(),
@@ -79,18 +79,16 @@ function createSession(active: boolean) {
 }
 
 describe('activatePendingInactiveSession', () => {
-  it('retains the exact typed spawn refusal without copying its private message', async () => {
+  it('retains a retryable transport spawn refusal as waiting without copying its private message', async () => {
     vi.mocked(fetchSessionByIdCompat).mockResolvedValue(createSession(false));
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('eligible');
     const result = await activatePendingInactiveSession({ credentials: tokenOnlyCredentials, machineId: 'machine-1',
       sessionId: 'session-1', requestId: 'pending-after-ui-death', pendingVersion: 9,
-      spawnSession: async () => ({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+      spawnSessionForInternalResume: async () => ({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
         runtimeFailureReason: 'transport_unavailable',
         errorMessage: 'secret credential and transcript' }) });
-    expect(result).toMatchObject({ status: 'rejected', reason: 'spawn-rejected',
-      failureDetails: { reason: 'spawn-rejected', spawnErrorCode: 'SPAWN_VALIDATION_FAILED', runtimeReason: 'transport_unavailable' } });
-    expect(reportPendingSessionActivationFailure).toHaveBeenCalledWith(expect.objectContaining({
-      failureCode: 'runtime_start_failed', failureDetails: { reason: 'spawn-rejected', spawnErrorCode: 'SPAWN_VALIDATION_FAILED', runtimeReason: 'transport_unavailable' } }));
+    expect(result).toEqual({ status: 'not-needed', reason: 'spawn-retryable' });
+    expect(reportPendingSessionActivationFailure).not.toHaveBeenCalled();
     expect(JSON.stringify(result)).not.toContain('secret');
   });
   it('records a rejected Guard-stopped wake with its native cause, then folds actual runner restoration without changing resume options', async () => {
@@ -109,11 +107,11 @@ describe('activatePendingInactiveSession', () => {
       session.metadata = JSON.stringify({ ...JSON.parse(session.metadata), permissionMode: 'read-only', permissionModeUpdatedAt: 5 });
       vi.mocked(fetchSessionByIdCompat).mockResolvedValue(session);
       vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('eligible');
-      const spawnSession = vi.fn(async (_options: ResumeOptions): Promise<SpawnSessionResult> => ({ type: 'error',
+      const spawnSessionForInternalResume = vi.fn(async (_options: ResumeOptions): Promise<SpawnSessionResult> => ({ type: 'error',
         errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED, errorMessage: 'native launch failed',
         errorDetail: { kind: 'spawn_failure', reason: 'too_many_open_files', errno: 'EMFILE' } }));
       const params = { credentials: tokenOnlyCredentials, machineId: 'machine-1', sessionId: 'session-1', requestId: 'pending-after-ui-death',
-        pendingVersion: 9, spawnSession,
+        pendingVersion: 9, spawnSessionForInternalResume,
         onActivationRejected: async (event: PendingInactiveSessionActivationRejected) => {
           const { createGuardSessionRestoration } = await import('../guard/sessionRestoration');
           await createGuardSessionRestoration({ activity, nowMs: () => now,
@@ -123,9 +121,9 @@ describe('activatePendingInactiveSession', () => {
         } };
       expect(await activatePendingInactiveSession(params)).toMatchObject({ status: 'rejected', reason: 'spawn-rejected' });
       expect((await activity.list({ range: 'today' })).entries).toEqual(expect.arrayContaining([
-        expect.objectContaining({ kind: 'start_failed', rule: 'idle_sessions', ref: 'guard-stop', note: expect.stringContaining('Could not resume'),
+        expect.objectContaining({ kind: 'start_failed', rule: 'idle_sessions', ref: 'guard-stop',
           failure: { reason: 'too_many_open_files', errno: 'EMFILE' }, nextStep: 'review_processes', attribution })]));
-      expect(spawnSession.mock.calls[0]?.[0]).toMatchObject({ existingSessionId: 'session-1', directory: '/repo',
+      expect(spawnSessionForInternalResume.mock.calls[0]?.[0]).toMatchObject({ existingSessionId: 'session-1', directory: '/repo',
         permissionMode: 'read-only', permissionModeUpdatedAt: 5, initialTranscriptAfterSeq: 12,
         executionAuthorization: { provenance: 'user_request', requestId: 'pending-after-ui-death', requestedAt: 10 } });
       const { createGuardSessionRestoration } = await import('../guard/sessionRestoration');
@@ -143,16 +141,16 @@ describe('activatePendingInactiveSession', () => {
   it('retains requester pending custody without reporting failure or spawning after Machine admission is lost', async () => {
     vi.mocked(fetchSessionByIdCompat).mockResolvedValue(createSession(false));
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('eligible');
-    const spawnSession = vi.fn(async (_options: ResumeOptions) => ({ type: 'success' as const, sessionId: 'session-1' }));
+    const spawnSessionForInternalResume = vi.fn(async (_options: ResumeOptions) => ({ type: 'success' as const, sessionId: 'session-1' }));
     const params = {
       credentials: tokenOnlyCredentials, machineId: 'machine-1', sessionId: 'session-1',
-      requestId: 'pending-after-ui-death', pendingVersion: 9, spawnSession,
+      requestId: 'pending-after-ui-death', pendingVersion: 9, spawnSessionForInternalResume,
       requester: { serverHttpBaseUrl: 'https://bob-home.test',
         attribution: { serverId: 'bob-home', accountId: 'bob', machineId: 'machine-1', installationId: 'installation' },
         isCurrent: async () => false },
     };
     expect(await activatePendingInactiveSession(params)).toEqual({ status: 'not-needed', reason: 'authorization-stale' });
-    expect(spawnSession).not.toHaveBeenCalled();
+    expect(spawnSessionForInternalResume).not.toHaveBeenCalled();
     expect(reportPendingSessionActivationFailure).not.toHaveBeenCalled();
   });
 
@@ -164,7 +162,7 @@ describe('activatePendingInactiveSession', () => {
     vi.mocked(reportPendingSessionActivationFailure).mockImplementationOnce(async () => { current = false; return { didFail: true }; });
     const params = { credentials: tokenOnlyCredentials, machineId: 'machine-1', sessionId: 'session-1',
       requestId: 'pending-after-ui-death', pendingVersion: 9,
-      spawnSession: async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'session-1' }),
+      spawnSessionForInternalResume: async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'session-1' }),
       requester: { serverHttpBaseUrl: 'https://owner-home.test',
         attribution: { serverId: 'home', accountId: 'owner', machineId: 'machine-1', installationId: 'installation' },
         isCurrent: async () => current },
@@ -177,17 +175,18 @@ describe('activatePendingInactiveSession', () => {
     let current = true;
     vi.mocked(fetchSessionByIdCompat).mockResolvedValue(createSession(false));
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('eligible');
-    const spawnSession = vi.fn(async (_options: ResumeOptions) => ({ type: 'success' as const, sessionId: 'session-1' }));
+    const spawnSessionForInternalResume = vi.fn(async (_options: ResumeOptions) => ({ type: 'success' as const, sessionId: 'session-1' }));
     const requester = { serverHttpBaseUrl: 'https://bob-home.test',
       attribution: { serverId: 'bob-home', accountId: 'bob', machineId: 'machine-1', installationId: 'installation' },
       isCurrent: async () => current };
     const params = { credentials: tokenOnlyCredentials, machineId: 'machine-1', sessionId: 'session-1',
-      requestId: 'pending-after-ui-death', pendingVersion: 9, spawnSession, requester };
+      requestId: 'pending-after-ui-death', pendingVersion: 9, spawnSessionForInternalResume, requester };
     expect(await activatePendingInactiveSession(params)).toEqual({ status: 'activated' });
-    expect(spawnSession).toHaveBeenCalledWith(expect.objectContaining({ existingSessionId: 'session-1',
+    expect(spawnSessionForInternalResume).toHaveBeenCalledWith(expect.objectContaining({ existingSessionId: 'session-1',
       requesterWorkAttributionV1: requester.attribution,
-      verifyRequesterMachineAdmissionCurrent: expect.any(Function) }));
-    const options = spawnSession.mock.calls[0]?.[0];
+      verifyRequesterMachineAdmissionCurrent: expect.any(Function) }),
+      { requestId: 'pending-after-ui-death', requestedAt: 10 });
+    const options = spawnSessionForInternalResume.mock.calls[0]?.[0];
     current = false;
     const verifyAdmission = options?.verifyRequesterMachineAdmissionCurrent;
     if (!verifyAdmission) throw new Error('Expected the resume launch to retain its requester admission verifier');
@@ -203,14 +202,14 @@ describe('activatePendingInactiveSession', () => {
     });
     vi.mocked(fetchSessionByIdCompat).mockResolvedValue(session);
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('eligible');
-    const spawnSession = vi.fn(async () => ({
+    const spawnSessionForInternalResume = vi.fn(async () => ({
       type: 'error' as const,
       errorCode: 'SESSION_DIRECTORY_MISSING' as const,
       errorMessage: 'Session folder is missing',
     }));
     await expect(activatePendingInactiveSession({
       credentials: tokenOnlyCredentials, machineId: 'machine-1', sessionId: 'session-1',
-      requestId: 'pending-after-ui-death', pendingVersion: 9, spawnSession,
+      requestId: 'pending-after-ui-death', pendingVersion: 9, spawnSessionForInternalResume,
     })).resolves.toMatchObject({ status: 'rejected', reason: 'session-directory-missing' });
     expect(reportPendingSessionActivationFailure).toHaveBeenCalledWith({
       token: 'token-only', sessionId: 'session-1', requestId: 'pending-after-ui-death',
@@ -228,7 +227,7 @@ describe('activatePendingInactiveSession', () => {
   it('starts the exact inactive session from durable Pending custody without any UI process', async () => {
     vi.mocked(fetchSessionByIdCompat).mockResolvedValue(createSession(false));
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('eligible');
-    const spawnSession = vi.fn(async () => ({
+    const spawnSessionForInternalResume = vi.fn(async () => ({
       type: 'success' as const,
       sessionId: 'session-1',
     }));
@@ -239,11 +238,11 @@ describe('activatePendingInactiveSession', () => {
       sessionId: 'session-1',
       requestId: 'pending-after-ui-death',
       pendingVersion: 9,
-      spawnSession,
+      spawnSessionForInternalResume,
     })).resolves.toEqual({ status: 'activated' });
 
-    expect(spawnSession).toHaveBeenCalledTimes(1);
-    expect(spawnSession).toHaveBeenCalledWith(expect.objectContaining({
+    expect(spawnSessionForInternalResume).toHaveBeenCalledTimes(1);
+    expect(spawnSessionForInternalResume).toHaveBeenCalledWith(expect.objectContaining({
       existingSessionId: 'session-1',
       machineId: 'machine-1',
       directory: '/repo',
@@ -253,7 +252,7 @@ describe('activatePendingInactiveSession', () => {
         requestId: 'pending-after-ui-death',
         requestedAt: 10,
       },
-    }));
+    }), { requestId: 'pending-after-ui-death', requestedAt: 10 });
   });
 
   it('does not spawn when the exact durable authorization is rearmed before the final decision', async () => {
@@ -268,7 +267,7 @@ describe('activatePendingInactiveSession', () => {
         },
       });
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('eligible');
-    const spawnSession = vi.fn();
+    const spawnSessionForInternalResume = vi.fn();
 
     await expect(activatePendingInactiveSession({
       credentials: tokenOnlyCredentials,
@@ -276,12 +275,12 @@ describe('activatePendingInactiveSession', () => {
       sessionId: 'session-1',
       requestId: 'pending-after-ui-death',
       pendingVersion: 9,
-      spawnSession,
+      spawnSessionForInternalResume,
     })).resolves.toEqual({ status: 'not-needed', reason: 'authorization-stale' });
 
     expect(fetchSessionByIdCompat).toHaveBeenCalledTimes(2);
     expect(readPendingQueueV2ActivationEligibilityFromServer).toHaveBeenCalledTimes(2);
-    expect(spawnSession).not.toHaveBeenCalled();
+    expect(spawnSessionForInternalResume).not.toHaveBeenCalled();
     expect(reportPendingSessionActivationFailure).not.toHaveBeenCalled();
   });
 
@@ -318,7 +317,7 @@ describe('activatePendingInactiveSession', () => {
       path: undefined,
     });
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('eligible');
-    const spawnSession = vi.fn(async () => ({
+    const spawnSessionForInternalResume = vi.fn(async () => ({
       type: 'success' as const,
       sessionId: 'session-1',
     }));
@@ -329,10 +328,10 @@ describe('activatePendingInactiveSession', () => {
       sessionId: 'session-1',
       requestId: 'pending-after-ui-death',
       pendingVersion: 9,
-      spawnSession,
+      spawnSessionForInternalResume,
     })).resolves.toEqual({ status: 'activated' });
 
-    expect(spawnSession).toHaveBeenCalledWith(expect.objectContaining({
+    expect(spawnSessionForInternalResume).toHaveBeenCalledWith(expect.objectContaining({
       existingSessionId: 'session-1',
       machineId: 'machine-1',
       directory: '/repo',
@@ -349,7 +348,7 @@ describe('activatePendingInactiveSession', () => {
           providerSessionId: 'vendor-1',
         }),
       },
-    }));
+    }), { requestId: 'pending-after-ui-death', requestedAt: 10 });
   });
 
   it('keeps retained encrypted layout-v1 owner metadata locked for token-only credentials', async () => {
@@ -380,7 +379,7 @@ describe('activatePendingInactiveSession', () => {
       path: undefined,
     });
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('eligible');
-    const spawnSession = vi.fn();
+    const spawnSessionForInternalResume = vi.fn();
 
     await expect(activatePendingInactiveSession({
       credentials: tokenOnlyCredentials,
@@ -388,16 +387,16 @@ describe('activatePendingInactiveSession', () => {
       sessionId: 'session-1',
       requestId: 'pending-after-ui-death',
       pendingVersion: 9,
-      spawnSession,
+      spawnSessionForInternalResume,
     })).resolves.toMatchObject({
       status: 'rejected',
       reason: 'identity-unavailable',
     });
-    expect(spawnSession).not.toHaveBeenCalled();
+    expect(spawnSessionForInternalResume).not.toHaveBeenCalled();
   });
 
   it('delegates an active relay projection to the canonical runner serviceability owner', async () => {
-    const spawnSession = vi.fn(async () => ({
+    const spawnSessionForInternalResume = vi.fn(async () => ({
       type: 'success' as const,
       sessionId: 'session-1',
       runnerAcceptance: 'preexisting_or_adopted' as const,
@@ -410,13 +409,13 @@ describe('activatePendingInactiveSession', () => {
       sessionId: 'session-1',
       requestId: 'pending-after-ui-death',
       pendingVersion: 9,
-      spawnSession,
+      spawnSessionForInternalResume,
     })).resolves.toEqual({ status: 'activated' });
-    expect(spawnSession).toHaveBeenCalledOnce();
+    expect(spawnSessionForInternalResume).toHaveBeenCalledOnce();
   });
 
   it('does not start a session whose exact Pending authorization resolved', async () => {
-    const spawnSession = vi.fn();
+    const spawnSessionForInternalResume = vi.fn();
 
     vi.mocked(fetchSessionByIdCompat).mockResolvedValue(createSession(false));
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('missing');
@@ -426,9 +425,9 @@ describe('activatePendingInactiveSession', () => {
       sessionId: 'session-1',
       requestId: 'pending-after-ui-death',
       pendingVersion: 9,
-      spawnSession,
+      spawnSessionForInternalResume,
     })).resolves.toEqual({ status: 'not-needed', reason: 'pending-resolved' });
-    expect(spawnSession).not.toHaveBeenCalled();
+    expect(spawnSessionForInternalResume).not.toHaveBeenCalled();
   });
 
   it('rejects Pending activation for an externally linked session instead of spawning it', async () => {
@@ -448,7 +447,7 @@ describe('activatePendingInactiveSession', () => {
     });
     vi.mocked(fetchSessionByIdCompat).mockResolvedValue(linked);
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('eligible');
-    const spawnSession = vi.fn();
+    const spawnSessionForInternalResume = vi.fn();
 
     await expect(activatePendingInactiveSession({
       credentials: tokenOnlyCredentials,
@@ -456,10 +455,10 @@ describe('activatePendingInactiveSession', () => {
       sessionId: 'session-1',
       requestId: 'pending-after-ui-death',
       pendingVersion: 9,
-      spawnSession,
+      spawnSessionForInternalResume,
     })).resolves.toMatchObject({ status: 'rejected', reason: 'takeover-required' });
 
-    expect(spawnSession).not.toHaveBeenCalled();
+    expect(spawnSessionForInternalResume).not.toHaveBeenCalled();
     expect(reportPendingSessionActivationFailure).toHaveBeenCalledOnce();
   });
 
@@ -471,7 +470,7 @@ describe('activatePendingInactiveSession', () => {
     });
     vi.mocked(fetchSessionByIdCompat).mockResolvedValue(unresolved);
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('eligible');
-    const spawnSession = vi.fn();
+    const spawnSessionForInternalResume = vi.fn();
 
     await expect(activatePendingInactiveSession({
       credentials: tokenOnlyCredentials,
@@ -479,10 +478,10 @@ describe('activatePendingInactiveSession', () => {
       sessionId: 'session-1',
       requestId: 'pending-after-ui-death',
       pendingVersion: 9,
-      spawnSession,
+      spawnSessionForInternalResume,
     })).resolves.toMatchObject({ status: 'rejected', reason: 'takeover-required' });
 
-    expect(spawnSession).not.toHaveBeenCalled();
+    expect(spawnSessionForInternalResume).not.toHaveBeenCalled();
     expect(reportPendingSessionActivationFailure).toHaveBeenCalledWith({
       token: 'token-only', sessionId: 'session-1', requestId: 'pending-after-ui-death',
       requestedAt: 10, failureCode: 'runtime_start_failed',
@@ -493,7 +492,7 @@ describe('activatePendingInactiveSession', () => {
   it('rejects a Pending activation owned by a different exact machine', async () => {
     vi.mocked(fetchSessionByIdCompat).mockResolvedValue(createSession(false));
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('eligible');
-    const spawnSession = vi.fn();
+    const spawnSessionForInternalResume = vi.fn();
 
     await expect(activatePendingInactiveSession({
       credentials,
@@ -501,16 +500,16 @@ describe('activatePendingInactiveSession', () => {
       sessionId: 'session-1',
       requestId: 'pending-after-ui-death',
       pendingVersion: 9,
-      spawnSession,
+      spawnSessionForInternalResume,
     })).resolves.toEqual({ status: 'not-needed', reason: 'target-mismatch' });
 
-    expect(spawnSession).not.toHaveBeenCalled();
+    expect(spawnSessionForInternalResume).not.toHaveBeenCalled();
   });
 
   it('leaves the evolved deferred spawn result waiting because session identity is ambiguous', async () => {
     vi.mocked(fetchSessionByIdCompat).mockResolvedValue(createSession(false));
     vi.mocked(readPendingQueueV2ActivationEligibilityFromServer).mockResolvedValue('eligible');
-    const spawnSession = vi.fn(async () => ({
+    const spawnSessionForInternalResume = vi.fn(async () => ({
       type: 'success' as const,
       spawnNonce: 'spawn-1',
       sessionIdStatus: 'pending' as const,
@@ -522,10 +521,10 @@ describe('activatePendingInactiveSession', () => {
       sessionId: 'session-1',
       requestId: 'pending-after-ui-death',
       pendingVersion: 9,
-      spawnSession,
+      spawnSessionForInternalResume,
     })).resolves.toEqual({ status: 'not-needed', reason: 'spawn-ambiguous' });
 
-    expect(spawnSession).toHaveBeenCalledTimes(1);
+    expect(spawnSessionForInternalResume).toHaveBeenCalledTimes(1);
     expect(reportPendingSessionActivationFailure).not.toHaveBeenCalled();
   });
 
@@ -538,7 +537,7 @@ describe('activatePendingInactiveSession', () => {
       ...createSession(false),
       pendingActivationAuthorization: authorization,
     });
-    const spawnSession = vi.fn();
+    const spawnSessionForInternalResume = vi.fn();
 
     await expect(activatePendingInactiveSession({
       credentials,
@@ -546,11 +545,11 @@ describe('activatePendingInactiveSession', () => {
       sessionId: 'session-1',
       requestId: 'pending-after-ui-death',
       pendingVersion: 9,
-      spawnSession,
+      spawnSessionForInternalResume,
     })).resolves.toEqual({ status: 'not-needed', reason: 'authorization-stale' });
 
     expect(readPendingQueueV2ActivationEligibilityFromServer).not.toHaveBeenCalled();
-    expect(spawnSession).not.toHaveBeenCalled();
+    expect(spawnSessionForInternalResume).not.toHaveBeenCalled();
   });
 
   it('reports deterministic ineligibility through the exact failure CAS', async () => {
@@ -558,7 +557,7 @@ describe('activatePendingInactiveSession', () => {
       ...createSession(false),
       archivedAt: 11,
     });
-    const spawnSession = vi.fn();
+    const spawnSessionForInternalResume = vi.fn();
 
     await expect(activatePendingInactiveSession({
       credentials,
@@ -566,7 +565,7 @@ describe('activatePendingInactiveSession', () => {
       sessionId: 'session-1',
       requestId: 'pending-after-ui-death',
       pendingVersion: 9,
-      spawnSession,
+      spawnSessionForInternalResume,
     })).resolves.toMatchObject({ status: 'rejected', reason: 'ineligible' });
 
     expect(reportPendingSessionActivationFailure).toHaveBeenCalledWith({
@@ -577,7 +576,7 @@ describe('activatePendingInactiveSession', () => {
       failureCode: 'runtime_start_failed',
       failureDetails: { reason: 'ineligible' },
     });
-    expect(spawnSession).not.toHaveBeenCalled();
+    expect(spawnSessionForInternalResume).not.toHaveBeenCalled();
   });
 
   it('does not terminally fail a durable authorization targeted at another machine', async () => {
@@ -590,7 +589,7 @@ describe('activatePendingInactiveSession', () => {
       sessionId: 'session-1',
       requestId: 'pending-after-ui-death',
       pendingVersion: 9,
-      spawnSession: vi.fn(),
+      spawnSessionForInternalResume: vi.fn(),
     })).resolves.toEqual({ status: 'not-needed', reason: 'target-mismatch' });
 
     expect(reportPendingSessionActivationFailure).not.toHaveBeenCalled();
@@ -607,7 +606,7 @@ describe('activatePendingInactiveSession', () => {
       sessionId: 'session-1',
       requestId: 'pending-after-ui-death',
       pendingVersion: 9,
-      spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({
+      spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({
         type: 'error',
         errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
         errorMessage: 'invalid persisted identity',
@@ -626,7 +625,7 @@ describe('activatePendingInactiveSession', () => {
       sessionId: 'session-1',
       requestId: 'pending-after-ui-death',
       pendingVersion: 9,
-      spawnSession: vi.fn(),
+      spawnSessionForInternalResume: vi.fn(),
     })).resolves.toEqual({ status: 'not-needed', reason: 'authorization-stale' });
   });
 });

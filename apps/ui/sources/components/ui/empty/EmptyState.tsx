@@ -4,6 +4,7 @@ import {
     HAPPIER_STATE_LINE_METRICS,
     HAPPIER_STATE_SIZE_METRICS,
     HappierInfoState,
+    HappierStateLine,
     resolveHappierScene,
     resolveHappierSceneArtSize,
     type HappierSceneInput,
@@ -18,7 +19,6 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
 import { CenteredInfoTile } from '@/components/ui/lists/CenteredInfoTile';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
-import { Item } from '@/components/ui/lists/Item';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { PageContentColumn } from '@/components/ui/lists/PageContentColumn';
 import { useListPresentation } from '@/components/ui/lists/listPresentation';
@@ -91,8 +91,6 @@ type EmptyStateProps = Readonly<{
      * - `centered`: the compact centred column for panes and cards (`SurfaceStateCard`).
      */
     layout?: 'page' | 'line' | 'inline' | 'centered';
-    /** `line` only: the row's pressable style when the line sits among styled rows (a rail's rows). */
-    lineRowStyle?: React.ComponentProps<typeof Item>['pressableStyle'];
     /**
      * `centered` only: the container's size step (pane, details, page, phone), which sets the measure,
      * glyph and type. `SurfaceStateCard` passes its container's size here.
@@ -100,8 +98,8 @@ type EmptyStateProps = Readonly<{
     size?: HappierStateSize;
     /** `line` only: the row is waiting for its answer, so it leads with the quiet spinner a loading state line draws. */
     lineLoading?: boolean;
-    /** `line` only: the density of the rows it sits among. */
-    lineDensity?: React.ComponentProps<typeof Item>['density'];
+    /** `line` only: `menu` when the line sits among a menu's rows; it takes the menu row's height and glyph column. */
+    lineDensity?: 'menu';
     testID?: string;
     titleTestID?: string;
     subtitleTestID?: string;
@@ -160,32 +158,33 @@ export const EmptyState = React.memo((props: EmptyStateProps) => {
                 ))}
             </View>
         ) : props.action;
-        const linksBelowSentence = false && lineLinks.length > 0 && typeof props.subtitle === 'string';
         // Lab 0 "N": a line may lead with its kind's glyph (a ring while loading, a warning while failed),
-        // small and quiet on the rows' edge.
+        // small and quiet on the rows' edge. The shared line keeps the size given here.
         const lineGlyph = props.lineLoading ? (
-            <ActivitySpinner size={HAPPIER_STATE_LINE_METRICS.glyphPx - 2} color={theme.colors.text.tertiary} />
+            <ActivitySpinner
+                testID={props.testID ? `${props.testID}-loading-spinner` : undefined}
+                size={HAPPIER_STATE_LINE_METRICS.glyphPx - 2}
+                color={theme.colors.text.tertiary}
+            />
         ) : props.icon ?? (props.iconName
             ? <Icon name={props.iconName} size={HAPPIER_STATE_LINE_METRICS.glyphPx} color={theme.colors.text.tertiary} />
             : undefined);
+        const sentence = typeof props.subtitle === 'string' ? props.subtitle : undefined;
+        // The one in-list line (`HappierStateLine`), which the plugin line states draw too; core binds its
+        // own Text (so the reader's type scale applies), glyphs and links.
         return (
-            <Item
+            <HappierStateLine
                 testID={props.testID}
                 icon={lineGlyph}
-                title={props.title}
-                titleStyle={stylesheet.lineTitle}
-                subtitle={typeof props.subtitle === 'string' ? props.subtitle : undefined}
-                subtitleTestID={props.subtitleTestID}
-                // The line's sentence is why the list is empty and what to do; it wraps, never cut.
-                subtitleLines={0}
-                mode="info"
-                showChevron={false}
+                action={lineAction ?? undefined}
                 density={props.lineDensity}
-                pressableStyle={props.lineRowStyle}
-                rightElement={linksBelowSentence ? undefined : lineAction ?? undefined}
-                bottomElement={linksBelowSentence ? lineAction : undefined}
-                bottomElementInset="text"
-            />
+            >
+                <Text style={stylesheet.lineText}>
+                    {props.title}
+                    {sentence ? ' · ' : null}
+                    {sentence ? <Text testID={props.subtitleTestID} style={stylesheet.lineText}>{sentence}</Text> : null}
+                </Text>
+            </HappierStateLine>
         );
     }
 
@@ -315,7 +314,10 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...HAPPIER_EMPTY_STATE_FRAME.unavailableReason,
         color: theme.colors.text.secondary,
     },
-    lineTitle: {
+    // The line's sentence, at the shared line's type step, in core's typography.
+    lineText: {
+        ...Typography.default(),
+        ...HAPPIER_STATE_LINE_METRICS.text,
         color: theme.colors.text.secondary,
     },
     lineLinks: {

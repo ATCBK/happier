@@ -35,7 +35,6 @@ export function HiddenInactiveSessionsEmptyState() {
         <View testID="sessions-hidden-inactive-empty-state" style={styles.root}>
             <EmptyState
                 layout="line"
-                lineDensity="compact"
                 titleTestID="sessions-hidden-inactive-empty-state-title"
                 title={t('settingsFeatures.hiddenInactiveSessionsEmptyStateTitle')}
                 primaryAction={{

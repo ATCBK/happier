@@ -47,6 +47,9 @@ export function createManagedGuestActivityTransport(input: Pick<ManagedMachineAc
     let ready!: () => void;
     let rejectReady!: (error: unknown) => void;
     const connected = new Promise<void>((resolve, reject) => { ready = resolve; rejectReady = reject; });
+    // Readiness starts eagerly, but a refused preparation may dispose without
+    // a reader. Observe that rejection while preserving it for awaited reads.
+    void connected.catch(() => {});
     let close!: () => void;
     const closed = new Promise<void>(resolve => { close = resolve; });
     const lifetime = new AbortController();

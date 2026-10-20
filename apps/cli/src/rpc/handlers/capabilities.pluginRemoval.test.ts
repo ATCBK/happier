@@ -6,7 +6,7 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { createPluginStateStore } from '@/plugins/store/state.testkit';
 import type { PluginChangeRequestResult } from '@/plugins/daemon/changeContract';
-import { createCliCapabilitiesService } from './capabilities';
+import { executePluginDevLoopAction } from '@/plugins/devLoop/actions';
 
 const daemonControl = vi.hoisted(() => ({
     requestDaemonPluginChange: vi.fn<typeof import('@/daemon/controlClient').requestDaemonPluginChange>(),
@@ -15,7 +15,7 @@ const daemonControl = vi.hoisted(() => ({
 const confirm = vi.hoisted(() => vi.fn(async () => false));
 
 // Only daemon HTTP/process startup and terminal interaction cross a system boundary.
-// Capability dispatch, the user-change client, registry and schemas remain real.
+// Action dispatch, the user-change client, registry and schemas remain real.
 vi.mock('@/daemon/controlClient', async (importOriginal) => ({
     ...await importOriginal<typeof import('@/daemon/controlClient')>(),
     ...daemonControl,
@@ -34,7 +34,7 @@ const resource = ManagedResourceDependencyV1Schema.parse({
     recovery: { reference: 'native-8', reason: 'credential_missing', consoleUrl: 'https://provider.example/native-8' },
 });
 
-describe('plugin removal capability', () => {
+describe('plugin removal Actions', () => {
     let happyHomeDir: string;
     let envScope: ReturnType<typeof createEnvKeyScope>;
 
@@ -67,11 +67,10 @@ describe('plugin removal capability', () => {
     });
 
     it.each(['disable', 'uninstall'] as const)('preserves the exact managed-resource review and reviewed retry for %s', async (method) => {
-        const service = await createCliCapabilitiesService({ readPluginCatalog: async () => [] });
         const review = { kind: 'managedResourcesReviewRequired' as const, pluginId, resources: [resource] };
         daemonControl.requestDaemonPluginChange.mockResolvedValueOnce(review);
-        await expect(service.invoke({ id: 'tool.plugins', method, params: { pluginId } }))
-            .resolves.toEqual({ ok: true, result: { action: method, pluginId, change: review } });
+        await expect(executePluginDevLoopAction({ actionId: `plugins.${method}`, input: { pluginId }, happyHomeDir }))
+            .resolves.toEqual({ ok: false, kind: `plugins_${method}`, action: method, pluginId, change: review });
         expect((await createPluginStateStore({ happyHomeDir }).read()).plugins[pluginId]?.state.enabled).toBe(true);
 
         const disposition = ManagedResourceDispositionV1Schema.parse({
@@ -81,9 +80,9 @@ describe('plugin removal capability', () => {
         const committed = { kind: 'committed' as const, pluginId, desiredGeneration: null,
             appliedGeneration: null, pendingSurfaces: [] };
         daemonControl.requestDaemonPluginChange.mockResolvedValueOnce(committed);
-        await expect(service.invoke({ id: 'tool.plugins', method,
-            params: { pluginId, managedResourceDispositions: [disposition] } }))
-            .resolves.toMatchObject({ ok: true, result: { action: method, pluginId, change: committed } });
+        await expect(executePluginDevLoopAction({ actionId: `plugins.${method}`,
+            input: { pluginId, managedResourceDispositions: [disposition] }, happyHomeDir }))
+            .resolves.toMatchObject({ ok: true, action: method, pluginId, change: committed });
         expect(daemonControl.requestDaemonPluginChange).toHaveBeenLastCalledWith({
             kind: method, pluginId, managedResourceDispositions: [disposition],
         });
@@ -92,10 +91,11 @@ describe('plugin removal capability', () => {
     });
 
     it.each(['disable', 'uninstall'] as const)('refuses malformed managed-resource dispositions before %s', async (method) => {
-        const service = await createCliCapabilitiesService({ readPluginCatalog: async () => [] });
-        await expect(service.invoke({ id: 'tool.plugins', method,
-            params: { pluginId, managedResourceDispositions: [{ managedId: resource.managedId, responsibility: 'manual' }] } }))
-            .resolves.toMatchObject({ ok: false, error: { code: 'invalid-request' } });
+        await expect(executePluginDevLoopAction({ actionId: `plugins.${method}`,
+            input: { pluginId, managedResourceDispositions: [{ managedId: resource.managedId, responsibility: 'manual' }] }, happyHomeDir }))
+            .rejects.toMatchObject({ issues: expect.arrayContaining([
+                expect.objectContaining({ path: ['expectedIntentRevision'] }),
+            ]) });
         expect(daemonControl.requestDaemonPluginChange).not.toHaveBeenCalled();
     });
 
@@ -104,9 +104,8 @@ describe('plugin removal capability', () => {
         { kind: 'outcomeUnknown', pluginId },
         { kind: 'conflict', pluginId },
     ] satisfies readonly PluginChangeRequestResult[])('preserves the typed $kind removal outcome without claiming commitment', async (change) => {
-        const service = await createCliCapabilitiesService({ readPluginCatalog: async () => [] });
         daemonControl.requestDaemonPluginChange.mockResolvedValueOnce(change);
-        await expect(service.invoke({ id: 'tool.plugins', method: 'uninstall', params: { pluginId } }))
-            .resolves.toEqual({ ok: true, result: { action: 'uninstall', pluginId, change } });
+        await expect(executePluginDevLoopAction({ actionId: 'plugins.uninstall', input: { pluginId }, happyHomeDir }))
+            .resolves.toEqual({ ok: false, kind: 'plugins_uninstall', action: 'uninstall', pluginId, change });
     });
 });

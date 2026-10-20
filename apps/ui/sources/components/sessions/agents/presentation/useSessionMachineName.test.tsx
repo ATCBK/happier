@@ -1,6 +1,7 @@
 import { afterEach, expect, it } from 'vitest';
 
 import { createSessionFixture, standardCleanup } from '@/dev/testkit';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { storage } from '@/sync/domains/state/storage';
@@ -15,6 +16,18 @@ it('names the machine a Session ran on from the Session itself when its Machine 
     storage.getState().applySessions([createSessionFixture({
         id: 'lead', metadata: { ...createSessionFixture().metadata!, host: 'ubuntu-02' },
     })]);
+    const hook = await renderHook(() => useSessionMachineName('lead', serverId));
+    expect(hook.getCurrent()).toBe('ubuntu-02');
+});
+
+it('keeps the Session recorded host while its Machine record is still hydrating its names, never a placeholder in a sentence', async () => {
+    const serverId = getActiveServerSnapshot().serverId;
+    storage.getState().activateProfileScope({ serverId, accountId: 'account-1' });
+    storage.getState().applySessions([createSessionFixture({
+        id: 'lead', metadata: { ...createSessionFixture().metadata!, host: 'ubuntu-02', machineId: 'm-hydrating' },
+    })]);
+    // Encrypted display metadata that has not been read yet: the Machine's own display name is "Loading…".
+    storage.setState({ machineListByServerId: { [serverId]: [createMachineFixture({ id: 'm-hydrating', metadata: null })] } });
     const hook = await renderHook(() => useSessionMachineName('lead', serverId));
     expect(hook.getCurrent()).toBe('ubuntu-02');
 });

@@ -8,9 +8,10 @@ import { actionIdFamilyTitleKey } from '@/components/settings/actions/actionSett
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useProviderSettingsTarget } from '@/providers/hooks/targetMachine';
 import { useProviderModelProjection } from '@/providers/hooks/useProviderModelProjection';
-import { useSetting } from '@/sync/domains/state/storage';
+import { useAutomations, useSetting } from '@/sync/domains/state/storage';
 import { useAcpCatalog } from '@/sync/store/useAcpCatalog';
 import { t } from '@/text';
+import { useMachineAgentModels } from '@/components/sessions/actions/useMachineAgentModels';
 
 import {
     buildApiTokenGrantActionGroups,
@@ -47,7 +48,6 @@ export type ApiTokenGrantModelGroup = Readonly<{
 
 const NO_NATIVE_MODELS: readonly ApiTokenGrantNativeModel[] = Object.freeze([]);
 const NO_PROVIDER_GROUPS: readonly ApiTokenGrantProviderModelGroup[] = Object.freeze([]);
-
 /**
  * Every enabled Agent, with its native catalog models, plus an entry for each Agent a granted ref
  * names that this client does not have enabled (so that ref stays visible and removable).
@@ -133,9 +133,29 @@ export function useApiTokenGrantProviderModelGroups(input: Readonly<{
     return projection.data?.groups ?? NO_PROVIDER_GROUPS;
 }
 
+/**
+ * Native grant choices come from Session spawn's declared model option source, so the picker and
+ * Agent Actions observe the same machine/account-specific catalog. A missing machine retains the
+ * build catalog fallback; once a machine is known, loading or failure never manufactures choices.
+ */
+export function useApiTokenGrantNativeModels(input: Readonly<{
+    agentTargetKey: string;
+    machineId: string | null;
+    serverId: string | null;
+    accountAddressAvailable: boolean;
+}>): readonly ApiTokenGrantNativeModel[] | null {
+    return useMachineAgentModels({
+        agentTargetKey: input.agentTargetKey,
+        machineId: input.machineId,
+        serverId: input.serverId,
+        enabled: input.accountAddressAvailable,
+    });
+}
+
 function readStaticModels(agentId: AgentId): readonly ApiTokenGrantNativeModel[] {
     try {
-        return getAgentStaticModels(agentId).map((model) => ({ id: model.id, name: model.name || model.id, description: model.description ?? null }));
+        return getAgentStaticModels(agentId, { catalogOnly: true })
+            .map((model) => ({ id: model.id, name: model.name || model.id, description: model.description ?? null }));
     } catch {
         return NO_NATIVE_MODELS;
     }
@@ -145,18 +165,22 @@ export type ApiTokenGrantNames = Readonly<{
     familyName: (family: ActionIdFamilyV1) => string | null;
     actionName: (actionId: string) => string | null;
     modelName: (ref: ProviderBoundModelRef) => string | null;
+    automationName: (automationId: string) => string | null;
 }>;
 
-/** Names for access summaries: Action families and titles, and model names from the catalog. */
+/** Names for access summaries: Action families and titles, model names from the catalog, and Automation names. */
 export function useApiTokenGrantNames(): ApiTokenGrantNames {
     const actionGroups = useApiTokenGrantActionGroups();
     const modelGroups = useApiTokenGrantModelGroups(null);
+    const automations = useAutomations();
     return React.useMemo(() => {
         const modelNames = new Map(modelGroups.flatMap((group) => group.models.map((model) => [model.key, model.name] as const)));
+        const automationNames = new Map(automations.map((automation) => [automation.id, automation.name] as const));
         return {
             familyName: (family) => t(actionIdFamilyTitleKey(family)),
             actionName: (actionId) => resolveApiTokenGrantActionTitle(actionId, actionGroups),
             modelName: (ref) => modelNames.get(apiTokenGrantModelKey(ref)) ?? null,
+            automationName: (automationId) => automationNames.get(automationId) || null,
         };
-    }, [actionGroups, modelGroups]);
+    }, [actionGroups, automations, modelGroups]);
 }

@@ -207,6 +207,75 @@ not redirect the clear to the page's newly selected target.
 
 ## Memory index and native ingestion (0.3 development)
 
+Native title/transcript display hides only reproduced Happier base guidance
+and installed-Agent catalog blocks. The coding-plan delivery renderer and its
+inverse live together in `prompts/promptPlanV1.ts`: its length-qualified frame
+delimits content but does not establish authorship. A framed plan is hidden
+only when its entire content matches those known producer blocks. Variable
+context and unreproducible plugin resources remain visible verbatim, including
+their frame. Historical base-prefix rules retain their exact producer text.
+This is display cleanup, never provenance, identity or authorization.
+
+The UI's `normalizeExternalSessionTranscriptMessages` applies the same
+base/plan inverse to user text in native transcript display projections. The
+History exchange preview and linked transcript page/read-after views consume
+that projection, including Find. Unverified wrappers therefore remain visible
+and findable. Content matching searches the original text even when a known
+prefix is hidden; a clean snippet is preferred only when it contains the query.
+Native `raw` records, persisted imports and Agent input retain their original
+bytes.
+
+For historical bare Agent guidance, the native candidate invocation binds the
+reader derived from the same current Agent catalog used for injection
+(`providerPromptBehaviorRegistry.ts`). The SDK's scoped reader serves native
+title decoders, the bounded scanner and content matching, including separately
+bundled SDK copies; concurrent reads do not replace one another's catalog.
+Removed or changed historical plugin text cannot be reconstructed from a
+current declaration alone. Existing native title precedence remains intact.
+For transcript page/read-after display, the bounded host adds optional
+`displayUserText` only when that catalog-derived inverse changes a native user
+record. The UI uses it under the same native/imported message identity. The
+field is presentation only, is not admitted from plugins, and is absent from
+terminal projections; `raw` stays byte-exact. Older responses without it still
+use the Protocol base/plan inverse at the UI display boundary.
+
+The host verifies connected native homes physically at configured-source
+admission using the SDK's `resolveVerifiedNativeHomePath`, and grants the
+returned physical path to native readers and retained/configured adapters.
+Repointing a lexical ancestor of a relocated root after admission therefore
+does not redirect an existing grant. Relocating the whole homes root and
+linking shared state inside an admitted home remain supported. This assumes
+the daemon user's verified directory components remain trusted; it does not
+bind filesystem handles against changes to those components. A profile that
+has never created its home still returns retryable unavailable.
+
+The packaged ripgrep transport sends its payload over stdin. Explicit regexes
+use ripgrep's pattern-file stdin, and admitted file operands are split into
+launches within the CreateProcessW command-line boundary. Every file is kept;
+no query or family is truncated, and a failed launch cannot become a complete
+empty result. A signalled or failed native batch ends the launch loop before
+another child can escape the existing process-tree cancellation. Native
+decoding remains the content-match authority.
+
+Candidate link/import annotations currently use indexed external-link tags.
+The shared hit-status owner shows “In Happier” for a positive link/import
+annotation. A missing annotation, even after a standard scan with complete
+external-link tag lookup, does not prove that the native conversation is absent
+from Happier. Such rows stay neutral. “Not in Happier” requires an authoritative
+absence proof; the current annotation response supplies none for hosted native
+Sessions, so the UI does not show that label.
+
+The synced Session store retains decrypted owner native-resume identity and
+workspace metadata through `ownerMetadataView`. Ordinary native metadata does
+not carry a canonical external-source identity, and the native Agent's source
+qualification can require resolving its files on the Machine. An id/cwd match
+alone is therefore not promoted to a link annotation. The browser adds no
+inventory read, index or per-hit RPC to establish it.
+`hostedExternalSessionIdentity.ts` remains the hosted proof used by link.ensure
+after native source resolution. Activation still recovers an existing hosted
+Session there; an authoritative `linkedSessionId` opens that Session through
+the existing shared candidate opener.
+
 `memoryFtsIndex.ts` is the common FTS5 owner for deep message chunks and light
 summary shards. It uses weighted `bm25(body, identifiers)` retrieval, requiring
 every query term group; a multi-word query cannot rank a chunk on a single
@@ -258,10 +327,29 @@ The palette and History Conversations mode query indexed conversations while typ
 search row runs `auto`: ready native sources use the index, and unknown/stale
 sources retain the enabled standard fallback. `standard` explicitly scans;
 `indexed` never starts a scan. `useConversationSearch` cancels superseded queries
-and keeps continuations qualified by their producing machine/source. Machine
-and source pages publish after Account authorization as they complete, without
+and keeps continuations qualified by their producing machine/source.
+
+Machine presence and background inventory updates do not create a new query or
+erase its hits, selection or cursors. Each explicit Search more or Retry reads
+current Machine admission through the Account operation. A native continuation
+uses its already-published exact source declaration rather than rediscovering
+the whole machine catalog; the daemon still validates that source and cursor.
+
+Stop retains published hits and the unfinished page's continuation. Retry gives
+that same page a fresh cancellation controller; without a continuation it
+restarts the search. A late reply from the stopped page cannot replace Retry's
+result, and Account retirement still cancels the replacement request.
+
+Machine and source pages publish after Account authorization as they complete, without
 waiting for slower sources. Loading remains active for unfinished work; a
 response timeout reports incomplete work, not machine unreachability.
+
+Mixed indexed queries issue conversation and document requests independently;
+fresh document admission does not delay available conversation hits. The palette
+publishes these authorized snapshots through SelectionList's existing query and
+abort fences while the remaining work stays loading. Only a settled result is
+cached across mounts, and document failure retains the conversation hits with
+unavailable document coverage.
 Machine statuses are `ok`, `offline`, `outdated`, `partial`, or `disabled-by-settings`;
 `conversationSearchCoverage.ts` owns the palette/scan coverage wording. Standard
 scans cannot apply message-date bounds and report partial coverage rather than
@@ -442,12 +530,79 @@ host invocation deadline, including while reading or decoding a file. A yielded
 page retains completed hits, marks coverage partial and returns a continuation
 that keeps the unfinished candidate. Both presenters show incomplete coverage
 even for a settled empty partial page, and offer **Search more conversations**
-when a cursor remains. Stop preserves incomplete coverage. A cursor is an
-opportunity to continue, not proof of eventual exhaustion: an indivisible
-transcript that cannot fit in one invocation may be rescanned without finishing.
+when a cursor remains. Stop preserves incomplete coverage. In current 0.3
+development source, transcript continuations retain source-bound row positions
+and re-decode native text before publishing a hit. Claude content cursors carry
+the search start time T0, the last fully visited file's recent-first position
+(mtime and stable native identity), and progress for at most one unfinished
+transcript. Each page lists current files afresh. The main pass visits files with
+mtime <= T0 strictly after that position; appends to visited or unrelated files
+cannot reset it. After the main pass ends, a single final pass captures T1 and
+visits files with T0 < mtime <= T1 using its own recent-first frontier. This also
+reaches an unvisited file modified since the search began. Files written after
+T1 require a fresh search, so actively written files cannot loop through the final
+pass. The existing page-merge owner deduplicates scanned hits by native candidate
+identity even when the matching message changes. No corpus inventory, transcript
+text or query store is carried between pages; cursor size is independent of file
+count and uses the existing bounds. Intermediate development content cursors
+return `source_invalid` and start a fresh search. Native path authorization and
+unfinished-transcript source validation still apply. Claude reads a captured
+file prefix, bound by the existing physical-generation and bounded head/boundary
+anchors. Appends, including appends while scanning or capturing an anchor, do not
+invalidate that prefix; replacement, truncation or a changed anchor still reject
+it. The T1 pass covers changed files under the traversal contract above. Codex reports a
+retryable Agent failure when
+unavailable native
+listing prevents ordered progress, and does not reopen native streams already
+marked complete. Cancellation, source changes and result-byte limits can still
+prevent a page from completing; a cursor alone does not certify exhaustion.
 Standalone MCP reaches this same machine operation through
 `createCliActionDeps`'s `hostExternalSessionActionTransport`, after canonical
 admission/approval and exact-machine target reconciliation.
+
+The conversation-search owner preserves failed native sources alongside successful
+hits as optional `failures` coverage: `{ machineId, agentId, sourceKey, errorCode,
+retryable }`. `search.conversations` returns that same coverage through its strict
+output schema to app, Agent and MCP callers. An empty successful search therefore
+differs from an Agent that could not search. Raw daemon error messages stay out of
+the result. Browse and the palette reuse the external-session error presentation
+owner and offer Retry only for retryable failures; a daemon that omits retryability
+retains explicit Retry. Retry reuses the existing page operation for the failed
+source and its cursor, keeping other sources' hits and coverage. Action callers
+can target that source with `machineIds` and `query.externalSource`, carrying its
+qualified continuation in `query.cursor` when present.
+
+In current 0.3 development source, deadline-triggered RPC cancellation is a
+retryable timeout; an explicit Stop remains cancellation. The daemon's Agent
+failure diagnostics retain closed host admission reasons, source-validity checks
+and exception classes,
+without logging native cursor contents or arbitrary Agent error messages. Titles
+keeps rows already served by the current preparing generation when a later page
+fails, marks preparation stopped, and exposes the failure for retry.
+
+Claude's initial linked-transcript window uses `hasMore` and `nextCursor` for
+older readable history; reaching a page boundary is not `truncated`. The shared
+native record classifier skips observed bookkeeping (`cost-state`, `atis-latch`,
+attachments and queue state) without declaring content loss. Unknown or malformed
+native records project to a visible, fixed unsupported-content marker through the
+shared SDK file-store projection; surrounding messages, paging and Find remain
+readable across Agent CLI releases. The marker contains no native payload, and
+the safe diagnostic still reports the unsupported record. `truncated` is reserved
+for real source loss, such as replacement, an invalid source anchor or an unread
+record boundary. The Session initial-window reader keeps those discontinuities
+closed. Bounded source diagnostics reach the daemon's existing
+`agent_failure` safe-token logger and are not copied into transcript text or
+the public page response. A normal bounded initial window renders immediately,
+retains its older cursor and can be searched by Find as older pages load.
+
+Claude's native tool-result image blocks use the same visible unsupported-image
+meaning as top-level image blocks. Their inline bytes, including the native
+Read metadata's duplicate base64, stay out of transcript pages; text, tool
+correlation and non-binary metadata remain. An image therefore cannot strand
+older readable history behind the existing page byte budget. A failed older
+read retains its cursor and loaded rows. Find's existing failure note offers
+Retry while older history remains, and a successful retry clears that paging
+failure without reopening Find or changing the query.
 
 Both History entry points use `openExternalSessionCandidate`, preserving the
 existing link/open guards without implicit materialize or takeover. Landing
@@ -468,11 +623,17 @@ does not resume a session or answer a request. Header, post-answer composer
 and phone count pills all invoke the same mounted navigation port. Failed
 delivery, unread items and broad Inbox/operational badges remain separate.
 Confirmation answerability uses the shared protocol predicate at summary,
-detail and landing boundaries. Metadata-only Action confirmations in
-shared-editor-hosted sessions still lack cold summary publication; they can
-surface after the session is opened. This is the deferred R4-1(b) gap, not a
-claim that all cold confirmations are discoverable. Loaded-runtime evidence
-remains separate from source integration.
+detail and landing boundaries. The CLI metadata tuple producer derives
+`sharedActionConfirmationSummaryV1` from the next `actionConfirmationsV1` map,
+including completed-request coverage, on each metadata mutation and CAS retry.
+The server commits its independent `pendingSharedActionConfirmationCount` in
+the same Session metadata CAS. Personal attention composes it with the owner's
+Agent-state counts under the existing tracking, publication-ceiling and
+`approveRuntimePermissions` rules. The attention query includes that contribution,
+so an unopened shared-editor approval can become a Next candidate. Request age
+still comes from the canonical on-demand detail reader; no second timestamp or
+pending-request store is introduced. Loaded-runtime evidence remains separate
+from source integration.
 
 `ui.find`, `ui.prompts.picker.open` and `session.pending.next` are
 client-placed display/navigation Actions. The canonical `actionExecutor`

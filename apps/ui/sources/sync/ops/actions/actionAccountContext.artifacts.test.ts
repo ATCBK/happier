@@ -8,8 +8,9 @@ import { decodeBase64, encodeBase64 } from '@/encryption/base64';
 import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 import type { Artifact, ArtifactCreateRequest, ArtifactUpdateRequest } from '@/sync/domains/artifacts/artifactTypes';
 import { ArtifactEncryption } from '@/sync/encryption/artifactEncryption';
-import { openArtifactPrivateRevisionMetadata } from '@/sync/domains/artifacts/accountArtifactEnvelope';
+import { createAccountArtifactStoredEnvelope, openArtifactPrivateRevisionMetadata } from '@/sync/domains/artifacts/accountArtifactEnvelope';
 import { ARTIFACT_UPLOAD_PATH_V1, decodeArtifactUploadMetadataV1 } from '@happier-dev/transfers';
+import { createWorkBoardArtifactPortV1 } from '@happier-dev/protocol/boards/workBoardArtifactV1';
 import { captureLazyActionAccountContext } from './actionAccountContext';
 import { createUiArtifactAction } from './artifactActionDeps';
 import { createFrontDoorActionExecute } from './frontDoorRuntimeActionExecutor';
@@ -30,6 +31,18 @@ import { createUiMcpServerActionExecuteV1 } from './mcpServerActionDeps';
 import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1, McpServerCatalogRowMutationV1Schema, McpServerCatalogV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { UsageCoachApplyResultSchema } from '@happier-dev/protocol/usage/coach/coachActions';
 import { decodeUsageQueryResource, getUsageQueryResourceStore } from '@/sync/api/account/usageQueryResource';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { DocEditAcceptTransportInputV1Schema, DocEditDeclineTransportInputV1Schema,
+    DocEditDecisionResultV1Schema } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
+import { DiscussionMessageV1Schema, DiscussionSummaryV1Schema, type DiscussionMessageV1,
+    type DiscussionSummaryV1 } from '@happier-dev/protocol/discussions/models';
+import { createResourceDataKey } from '@/sync/encryption/resourceDataKey';
+import { resourceStoredContentContext } from '@/sync/encryption/resourceStoredContent';
+import { sealSessionStoredContent } from '@happier-dev/sync-client';
+import { executeDiscussionActionInAccountContext } from '@/sync/api/discussions/discussionActions';
+import { createArtifactActionsClient } from '@/components/artifacts/artifactActionsClient';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 
 // HTTP, device credential storage and the native theme runtime are substituted boundaries.
 const runtimeFetch = vi.hoisted(() => vi.fn());
@@ -42,10 +55,203 @@ vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock();
 });
+await loadSyncSingletonForTests();
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'Content-Type': 'application/json' } });
+// Adapt the existing HTTP facts through the canonical Session batch fixture;
+// Coach now reads exact Session snapshots, turns and messages on this transport.
+function installSessionBatchHttpFixture(accountId: string, route: (url: unknown, init?: RequestInit) => Promise<Response>) {
+    const boundary = createSessionReadBatchHttpBoundary(request => request.path === '/v2/sessions/read-batch' ? undefined
+        : route(request.url, { method: request.method, headers: request.headers, signal: request.signal,
+            ...(request.body === undefined ? {} : { body: JSON.stringify(request.body) }) }));
+    runtimeFetch.mockImplementation(async (input: unknown, init?: RequestInit) => {
+        const url = new URL(String(input));
+        return boundary.handle({ url, path: url.pathname, home: url.origin, accountId,
+            method: init?.method ?? 'GET', headers: new Headers(init?.headers), signal: init?.signal,
+            body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined });
+    });
+}
 afterEach(() => { runtimeFetch.mockReset(); vi.restoreAllMocks(); });
 
 describe('scoped Account workflow Artifact operations', () => {
+    it.each([{ mode: 'plain', accountMode: 'plain' }, { mode: 'e2ee', accountMode: 'e2ee' },
+        { mode: 'plain', accountMode: 'e2ee' }] as const)('applies a reviewed $mode Doc proposal for a $accountMode Account through the existing codec and rejoins authoritative decisions', async ({ mode, accountMode }) => {
+        const home = await upsertAndActivateServer({ serverUrl: `https://doc-decision-${mode}-${accountMode}.test`, scope: 'tab' });
+        await upsertAndActivateServer({ serverUrl: `https://doc-decision-other-${mode}.test`, scope: 'tab' });
+        const token = `header.${encodeBase64(new TextEncoder().encode(JSON.stringify({ sub: 'artifact-account' })), 'base64url')}.signature`;
+        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue(accountMode === 'plain' ? { token }
+            : { token, secret: encodeBase64(new Uint8Array(32).fill(24), 'base64url') });
+        let stored: Artifact | undefined;
+        let thread: DiscussionSummaryV1 | undefined;
+        let message: DiscussionMessageV1 | undefined;
+        const decisionBodies: unknown[] = [];
+        const recipientRequests: string[] = [];
+        const countQueries: URL[] = [];
+        const countWrites: string[] = [];
+        let countThreads: DiscussionSummaryV1[] = [];
+        let countingDoc = false;
+        let proposalRef = { kind: 'discussion' as const, discussion: { serverId: home.id, discussionId: 'review' }, messageId: 'proposal' };
+        runtimeFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
+            const target = new URL(String(url));
+            if (target.pathname === '/health' || target.pathname === '/v1/auth/ping') return json({});
+            if (target.pathname === '/v1/features') return json({ features: {}, capabilities: { accountStoredContentCompatibility: {
+                v: 1, minimumProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
+                currentProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION, declarationTransport: 'http-header-and-socket-auth-v1',
+            } } });
+            expect(target.origin).toBe(home.serverUrl);
+            if (countingDoc && target.pathname.startsWith('/v1/discussions')) countQueries.push(target);
+            if (countingDoc && init?.method && init.method !== 'GET') countWrites.push(target.pathname);
+            if (target.pathname === '/v1/account/encryption') return json({ mode: accountMode, updatedAt: 0 });
+            if (target.pathname === '/v2/account/settings') return json({ content: null, version: 0 });
+            if (target.pathname === '/v1/artifacts' && init?.method === 'POST') {
+                const write = JSON.parse(String(init.body)) as ArtifactCreateRequest;
+                stored = { ...write, ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: mode,
+                    seq: 1, headerVersion: 1, bodyVersion: 1, createdAt: 1, updatedAt: 1 };
+                return json(stored);
+            }
+            if (stored && target.pathname === `/v1/artifacts/${stored.id}`) return json(stored);
+            if (stored && target.pathname === `/v1/artifacts/${stored.id}/access/recipients`) {
+                recipientRequests.push(target.pathname);
+                return json({ artifactId: stored.id, ownerAccountId: stored.ownerAccountId, access: stored.access, encryptionMode: mode,
+                    dataEncryptionKey: stored.dataEncryptionKey, callerDataEncryptionKey: stored.dataEncryptionKey,
+                    provenanceDataEncryptionKey: stored.provenanceDataEncryptionKey,
+                    callerProvenanceDataEncryptionKey: stored.provenanceDataEncryptionKey, recipients: [] });
+            }
+            if (target.pathname === '/v1/discussions') {
+                if (target.searchParams.get('anchorDocArtifactId') !== stored?.id || target.searchParams.get('state') !== 'active')
+                    return json({ error: 'discussion_access_forbidden' }, 403);
+                return target.searchParams.get('cursor') === 'doc-second'
+                    ? json({ discussions: countThreads.slice(1), nextCursor: null })
+                    : json({ discussions: countThreads.slice(0, 1), nextCursor: 'doc-second' });
+            }
+            if (target.pathname === '/v1/discussions/review') {
+                if (countingDoc) return json({ error: 'discussion_access_forbidden' }, 403);
+                return json({ discussion: thread });
+            }
+            if (target.pathname === '/v1/discussions/review/messages') {
+                if (countingDoc) return json({ error: 'discussion_access_forbidden' }, 403);
+                return json({ messages: [message], hasMoreOlder: false, messageSeq: 1 });
+            }
+            if (target.pathname === '/v1/artifacts/doc-edit-proposals/accept' || target.pathname === '/v1/artifacts/doc-edit-proposals/decline') {
+                if (!stored || !message) throw new Error('Expected existing Doc and proposal');
+                const accepting = target.pathname.endsWith('/accept');
+                const body: unknown = JSON.parse(String(init?.body));
+                decisionBodies.push(body);
+                const acceptInput = accepting ? DocEditAcceptTransportInputV1Schema.parse(body) : undefined;
+                const args = acceptInput ?? DocEditDeclineTransportInputV1Schema.parse(body);
+                expect(args.proposalRef).toEqual(proposalRef);
+                if (message.docEditProposalDispositionV1?.state === 'open') {
+                    if (accepting) {
+                        if (!acceptInput?.preparation) return json({ error: 'doc_edit_proposal_preparation_required' }, 409);
+                        expect(acceptInput.preparation.doc).toEqual({ ref: { kind: 'doc', serverId: home.id, artifactId: stored.id },
+                            revision: { headerVersion: 1, bodyVersion: 1 } });
+                        stored = { ...stored, body: acceptInput.preparation.body, bodyVersion: 2 };
+                        message = { ...message, docEditProposalDispositionV1: { state: 'accepted', acceptedRevision: { headerVersion: 1, bodyVersion: 2 },
+                            decidedBy: { accountId: 'artifact-account', atMs: 20 } } };
+                    } else message = { ...message, docEditProposalDispositionV1: { state: 'declined', decidedBy: { accountId: 'artifact-account', atMs: 20 } } };
+                }
+                return json(DocEditDecisionResultV1Schema.parse({ proposalRef, docEditProposalDispositionV1: message.docEditProposalDispositionV1 }));
+            }
+            return json({ error: 'unexpected_route' }, 404);
+        });
+        const account = await captureLazyActionAccountContext(home.id);
+        try {
+            let created: Pick<Awaited<ReturnType<typeof account.createArtifactDocument>>, 'artifactId' | 'revision'>;
+            if (mode === accountMode) created = await account.createArtifactDocument({ header: { kind: 'artifact.legacy', title: 'Notes' }, body: 'Before secret passage after' });
+            else {
+                // An admitted plain document keeps its owner's mode when its editor uses E2EE.
+                const envelope = await createAccountArtifactStoredEnvelope({ mode, header: { kind: 'artifact.legacy', title: 'Shared notes' },
+                    body: { body: 'Before secret passage after' } });
+                if (!envelope) throw new Error('Expected owner-produced plain Artifact envelope');
+                stored = { ...envelope, id: 'shared-plain-doc', ownerAccountId: 'source-owner', access: 'edit', encryptionMode: mode,
+                    seq: 1, headerVersion: 1, bodyVersion: 1, createdAt: 1, updatedAt: 1 };
+                created = { artifactId: stored.id, revision: { headerVersion: 1, bodyVersion: 1 } };
+            }
+            const { encryption } = await account.resolveAccountEncryption();
+            const key = await createResourceDataKey({ mode: accountMode, ...(encryption ? { encryptDataEncryptionKey: (value: Uint8Array) => encryption.encryptEncryptionKey(value) } : {}) });
+            if (!key) throw new Error('Expected canonical Discussion key');
+            const title = await sealSessionStoredContent(resourceStoredContentContext(key), { v: 1, title: 'Review' });
+            const proposalContent = { kind: 'doc_edit_proposal', proposal: {
+                target: { ref: { kind: 'doc', serverId: home.id, artifactId: created.artifactId }, revision: created.revision,
+                    range: { start: 7, end: 21 }, quote: 'secret passage' }, baseRevision: created.revision,
+                before: 'secret passage', after: 'reviewed replacement', reason: 'Clarify' } };
+            const content = await sealSessionStoredContent(resourceStoredContentContext(key), proposalContent);
+            if (title.status !== 'ready' || content.status !== 'ready') throw new Error('Expected canonical stored Discussion content');
+            message = DiscussionMessageV1Schema.parse({ id: 'proposal', discussionId: 'review', localId: 'proposal-local', seq: 1,
+                authorAccountId: 'artifact-account', accountActor: { v: 1, accountId: 'artifact-account', profile: null }, producerV1: null,
+                content: content.content, mentionedAccountIds: [], replyTarget: { kind: 'doc_passage', doc: {
+                    ref: { kind: 'doc', serverId: home.id, artifactId: created.artifactId }, revision: created.revision } },
+                docEditProposalDispositionV1: { state: 'open' }, createdAt: 1 });
+            thread = DiscussionSummaryV1Schema.parse({ id: 'review', ownerAccountId: 'artifact-account', encryptionMode: accountMode,
+                anchor: { kind: 'doc', doc: { ref: { kind: 'doc', serverId: home.id, artifactId: created.artifactId }, revision: created.revision } },
+                access: 'owner', keyReadiness: true, dataEncryptionKey: key.dataEncryptionKey, creationLocalId: 'review-create', titleContent: title.content,
+                latestMessage: { id: message.id, localId: message.localId, seq: 1, authorAccountId: message.authorAccountId,
+                    accountActor: message.accountActor, producerV1: null, createdAt: 1 }, messageSeq: 1, lastReadSeq: 0,
+                unreadCount: 1, unreadMentionCount: 0, recentAuthorAccountIds: ['artifact-account'], archivedAt: null,
+                capabilities: { postMessages: true, rename: true, archive: true, restore: false, askAgent: true,
+                    sendToSession: true, manageAccess: true, leave: false } });
+            const secondKey = await createResourceDataKey({ mode: accountMode,
+                ...(encryption ? { encryptDataEncryptionKey: (value: Uint8Array) => encryption.encryptEncryptionKey(value) } : {}) });
+            if (!secondKey) throw new Error('Expected independent second Discussion key');
+            const secondContent = await sealSessionStoredContent(resourceStoredContentContext(secondKey), proposalContent);
+            const secondTitle = await sealSessionStoredContent(resourceStoredContentContext(secondKey), { v: 1, title: 'Another review' });
+            if (secondContent.status !== 'ready' || secondTitle.status !== 'ready') throw new Error('Expected canonical second Discussion content');
+            const secondMessage = DiscussionMessageV1Schema.parse({ ...message, id: 'second-root', discussionId: 'second-review',
+                localId: 'second-local', content: secondContent.content });
+            countThreads = [DiscussionSummaryV1Schema.parse({ ...thread, firstMessage: message }),
+                DiscussionSummaryV1Schema.parse({ ...thread, id: 'second-review', firstMessage: secondMessage,
+                    titleContent: secondTitle.content, dataEncryptionKey: secondKey.dataEncryptionKey,
+                    latestMessage: { ...thread.latestMessage, id: 'second-root', localId: 'second-local' } })];
+            const artifactAction = createUiArtifactAction(account);
+            const execute = createFrontDoorActionExecute(createActionExecutor(createActionExecutorBoundaryFixture({ artifactAction,
+                discussionAction: args => executeDiscussionActionInAccountContext(account, 'available', args) })));
+            const caller = { surface: 'ui' as const, serverId: home.id, expectedAccountId: 'artifact-account',
+                authority: 'present_user' as const, actionCaller: { kind: 'host' as const } };
+            countingDoc = true;
+            expect(await execute('doc.read', { ref: { kind: 'doc', serverId: home.id, artifactId: created.artifactId } }, caller))
+                .toMatchObject({ ok: true, result: { openCommentCount: 2 } });
+            countingDoc = false;
+            expect(countQueries.map(query => query.pathname)).toEqual(['/v1/discussions', '/v1/discussions']);
+            expect(countQueries.map(query => query.searchParams.get('anchorDocArtifactId'))).toEqual([created.artifactId, created.artifactId]);
+            expect(countQueries.map(query => query.searchParams.get('cursor'))).toEqual([null, 'doc-second']);
+            expect(countWrites).toEqual([]);
+            const accepted = await execute('doc.edit.accept', { proposalRef, expectedRevision: created.revision }, caller);
+            expect(accepted, JSON.stringify(accepted)).toMatchObject({ ok: true, result: { proposalRef,
+                docEditProposalDispositionV1: { state: 'accepted', acceptedRevision: { headerVersion: 1, bodyVersion: 2 } } } });
+            if (!stored) throw new Error('Expected committed Doc');
+            const dataKey = mode === 'e2ee' && encryption ? await encryption.decryptEncryptionKey(stored.dataEncryptionKey) : null;
+            const opened = mode === 'plain' ? decodePlainArtifactStoredContent(stored.body!) : await new ArtifactEncryption(dataKey!).decryptBody(stored.body!);
+            expect(opened).toEqual({ body: 'Before reviewed replacement after' });
+            expect(recipientRequests).toEqual([]);
+            if (mode === 'e2ee') expect(JSON.stringify(decisionBodies)).not.toContain('reviewed replacement');
+            const client = createArtifactActionsClient({ serverId: home.id, accountId: 'artifact-account' }, execute);
+            expect(await client.acceptEdit({ proposalRef, expectedRevision: created.revision })).toEqual({ ok: true, value: accepted.ok ? accepted.result : null });
+            expect(await client.declineEdit({ proposalRef })).toEqual({ ok: true, value: accepted.ok ? accepted.result : null });
+            expect(stored.bodyVersion).toBe(2);
+            expect(decisionBodies).toHaveLength(3);
+            expect(decisionBodies[1]).not.toHaveProperty('preparation');
+            proposalRef = { ...proposalRef, messageId: 'decline-proposal' };
+            message = { ...message, id: proposalRef.messageId, docEditProposalDispositionV1: { state: 'open' } };
+            const declined = await client.declineEdit({ proposalRef });
+            expect(declined).toMatchObject({ ok: true, value: { proposalRef, docEditProposalDispositionV1: { state: 'declined' } } });
+            expect(await client.declineEdit({ proposalRef })).toEqual(declined);
+            expect(await client.acceptEdit({ proposalRef, expectedRevision: created.revision })).toEqual(declined);
+            expect(stored.bodyVersion).toBe(2);
+            expect(decisionBodies).toHaveLength(6);
+            expect(decisionBodies[5]).not.toHaveProperty('preparation');
+            expect(await execute('doc.edit.accept', { proposalRef, expectedRevision: created.revision }, {
+                ...caller, surface: 'agent', authority: 'account_automation', actionCaller: { kind: 'session', sessionId: 'agent', starterDepth: 0, turnDepth: 0 },
+                bypassApprovals: true, actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { 'doc.edit.accept': ['agent'] } }),
+            } satisfies ActionExecutorContext)).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+            expect(decisionBodies).toHaveLength(6);
+            if (mode === 'e2ee') {
+                message = { ...message, docEditProposalDispositionV1: { state: 'open' } };
+                expect(await artifactAction({ actionId: 'doc.edit.accept', input: { proposalRef, expectedRevision: created.revision },
+                    context: caller })).toMatchObject({ ok: false, errorCode: 'doc_edit_proposal_preparation_required' });
+                expect(decisionBodies.at(-1)).toEqual({ proposalRef, expectedRevision: created.revision });
+                expect(stored.bodyVersion).toBe(2);
+            }
+        } finally { account.dispose(); }
+    });
     it('queries retained unused MCP evidence and applies and undoes rules through the canonical Action', async () => {
         const previous = storage.getState();
         const home = await upsertAndActivateServer({ serverUrl: 'https://coach-binding.test', scope: 'tab' });
@@ -64,7 +270,7 @@ describe('scoped Account workflow Artifact operations', () => {
         let witnessSequence = 1;
         let calls = 0;
         let coverage: 'complete' | 'partial' = 'complete';
-        runtimeFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
+        installSessionBatchHttpFixture('coach-account', async (url: unknown, init?: RequestInit) => {
             const path = new URL(String(url)).pathname;
             if (path === '/health' || path === '/v1/auth/ping') return json({});
             if (path === '/v1/features') return json({ features: {}, capabilities: { accountStoredContentCompatibility: {
@@ -96,8 +302,9 @@ describe('scoped Account workflow Artifact operations', () => {
                     agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } } }),
                 agentStateVersion: 1, agentState: null, share: null,
             } });
+            if (path === '/v1/sessions/coach-session/turns') return json({ v: 1, sessionId: 'coach-session', updatedAt: 900, turns: [] });
             if (path === '/v1/sessions/coach-session/messages') {
-                const usage = { v: 1, evidenceId: `mcp-window-${witnessSequence}`, sessionId: 'coach-session', turnId: `turn-${witnessSequence}`, observedAtMs: 300 + witnessSequence,
+                const usage = { v: 2, evidenceId: `mcp-window-${witnessSequence}`, sessionId: 'coach-session', turnId: `turn-${witnessSequence}`, observedAtMs: 300 + witnessSequence,
                     window: { startMs: 200 + witnessSequence, endMs: 300 + witnessSequence }, coverage, bindings: [{ serverId: 'server', bindingId: 'binding', catalogRevision: witnessedRevision,
                         bindingRevision: witnessedBindingRevision, serverRevision: 10, toolCallCount: calls, schemaBytes: null }] };
                 return json({ messages: [{ id: `usage-row-${witnessSequence}`, seq: witnessSequence, localId: null, createdAt: 300,
@@ -118,6 +325,11 @@ describe('scoped Account workflow Artifact operations', () => {
             const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 }, session: 'coach-session', timeZoneOffsetMinutes: 0 });
             const entry = getUsageQueryResourceStore(account).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
             releaseUsage = entry.subscribe(() => {}, true);
+            const advanceNativeWindow = () => {
+                witnessSequence += 1;
+                // New retained HTTP content arrives with its exact Session wake.
+                publishHomeAccountChange(home.id, ['coach-session'], { changeKinds: ['session'] });
+            };
             const find = async () => {
                 // The page owner refreshes changed native/catalog evidence;
                 // the one-shot Action consumes that exact admitted snapshot.
@@ -133,7 +345,7 @@ describe('scoped Account workflow Artifact operations', () => {
                 target: { t: 'machine', machineId: 'machine' }, enabled: false, expectedRevision: 3 } });
             if (!finding) throw new Error('Expected witnessed unused binding finding from retained HTTP evidence');
             const refused = await executor.execute('usage.coach.apply', { query, evidenceKey: finding.evidenceKey }, {
-                ...context, actionsSettings: ActionsSettingsV1Schema.parse({ v: 1 }),
+                ...context, surface: 'agent', authority: 'account_automation', actionsSettings: ActionsSettingsV1Schema.parse({ v: 1 }),
             });
             expect(refused).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
             expect(catalog.bindings[0]!.enabled).toBe(true);
@@ -156,25 +368,27 @@ describe('scoped Account workflow Artifact operations', () => {
             // A new successful native window witnesses the configuration after Undo.
             witnessedRevision = revision;
             witnessedBindingRevision = catalog.bindings[0]!.updatedAt;
-            witnessSequence += 1;
+            advanceNativeWindow();
             finding = await find();
             if (!finding) throw new Error('Expected fresh binding witness after Undo');
             const staleReversal = await apply(finding.evidenceKey);
             const intervening = await executor.execute('mcp.rules.set', { items: [{ serverId: 'server' }],
                 change: { kind: 'write', write: { place: { t: 'machine', machineId: 'machine' }, state: 'on' } } }, context);
             expect(intervening, JSON.stringify(intervening)).toMatchObject({ ok: true, result: { ok: true } });
+            const afterIntervening = catalog;
             expect(await executor.execute('usage.coach.undo', { query, evidenceKey: finding.evidenceKey, reversal: staleReversal }, context))
-                .toMatchObject({ ok: true, result: { kind: 'undone' } });
+                .toMatchObject({ ok: false, errorCode: 'coach_owner_refused' });
+            expect(catalog).toBe(afterIntervening);
             expect(catalog.bindings[0]!.enabled).toBe(true);
             calls = 1;
-            witnessSequence += 1;
+            advanceNativeWindow();
             expect(await find()).toBeUndefined();
             calls = 0;
             coverage = 'partial';
-            witnessSequence += 1;
+            advanceNativeWindow();
             expect(await find()).toBeUndefined();
             coverage = 'complete';
-            witnessSequence += 1;
+            advanceNativeWindow();
             catalog = { ...catalog, servers: catalog.servers.map(server => ({ ...server, updatedAt: 11 })) };
             revision += 1;
             expect((await find())?.remedy ?? null).toBeNull();
@@ -204,7 +418,7 @@ describe('scoped Account workflow Artifact operations', () => {
         let race = true;
         let retainHistory = true;
         const history = new Map<number, Record<string, unknown>>();
-        runtimeFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
+        installSessionBatchHttpFixture('settings-account', async (url: unknown, init?: RequestInit) => {
             const path = new URL(String(url)).pathname;
             if (path === '/health' || path === '/v1/auth/ping') return json({});
             if (path === '/v1/features') return json({ features: {}, capabilities: { accountStoredContentCompatibility: {
@@ -226,6 +440,7 @@ describe('scoped Account workflow Artifact operations', () => {
                     agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } }),
                 agentStateVersion: 1, agentState: null, share: null,
             } });
+            if (path === '/v1/sessions/coach-session/turns') return json({ v: 1, sessionId: 'coach-session', updatedAt: 900, turns: [] });
             if (path === '/v1/sessions/coach-session/messages') {
                 // This retained host event is an HTTP fixture, not model-native evidence or a prebuilt Coach evaluation.
                 const composition = { v: 1, evidenceId: 'composition', sessionId: 'coach-session', turnId: 'turn', inputId: 'input',
@@ -280,7 +495,7 @@ describe('scoped Account workflow Artifact operations', () => {
                 expect(applied).toMatchObject({ reversal: { before: { unset: true }, applied: { value: true } } });
                 const restored = await action({ actionId: 'settings.set', input: { anchor, value: false,
                     reversal: { kind: 'restore', ...applied.reversal } } });
-                expect.soft(restored).toEqual({ anchor, unset: true });
+                expect.soft(restored).toEqual({ anchor, unset: true, settingsVersion: 7 });
                 expect(SettingsDeclarationActionOutputSchemasV1['settings.set'].safeParse(restored).success).toBe(true);
                 expect(Object.hasOwn(raw, 'scmIncludeCoAuthoredBy')).toBe(false);
                 return;
@@ -306,7 +521,7 @@ describe('scoped Account workflow Artifact operations', () => {
                     input: { anchor: 'sourceControl.showLineNumbersInDiffs', value: false, reversal: { kind: 'capture' } } }));
                 expect(applied).toMatchObject({ reversal: { beforeVersion: 5, appliedVersion: 6, before: { unset: true }, applied: { value: false } } });
                 expect(history.size).toBe(0);
-                expect(await action({ actionId: 'settings.set', input: { anchor: applied.anchor, value: 'ignored caller value',
+                expect(await action({ actionId: 'settings.set', input: { anchor: applied.anchor, value: false,
                     reversal: { kind: 'restore', ...applied.reversal } } })).toMatchObject({ anchor: applied.anchor, value: true });
                 expect(raw).toEqual({ futureSibling: { retained: 'winner' } });
                 const inverted = SettingsDeclarationActionOutputSchemasV1['settings.set'].parse(await action({ actionId: 'settings.set',
@@ -340,7 +555,7 @@ describe('scoped Account workflow Artifact operations', () => {
             const applied = await action({ actionId: 'settings.set', input: { anchor: 'sourceControl.showLineNumbersInDiffs', value: false, reversal: { kind: 'capture' } } });
             const firstReceipt = SettingsDeclarationActionOutputSchemasV1['settings.set'].parse(applied);
             expect(firstReceipt).toEqual({
-                anchor: 'sourceControl.showLineNumbersInDiffs', value: false, reversal: { beforeVersion: 5, appliedVersion: 6,
+                anchor: 'sourceControl.showLineNumbersInDiffs', value: false, settingsVersion: 6, reversal: { beforeVersion: 5, appliedVersion: 6,
                     scope: { serverId: home.id, accountId: 'settings-account' },
                     before: { unset: true }, applied: { value: false } },
             });
@@ -352,7 +567,7 @@ describe('scoped Account workflow Artifact operations', () => {
                 expect(raw.showLineNumbers).toBe(false);
             }
             expect(raw).toEqual({ futureSibling: { retained: 'winner' }, showLineNumbers: false });
-            const restore = () => action({ actionId: 'settings.set', input: { anchor: 'sourceControl.showLineNumbersInDiffs', value: 'forged restore',
+            const restore = () => action({ actionId: 'settings.set', input: { anchor: 'sourceControl.showLineNumbersInDiffs', value: false,
                 reversal: { kind: 'restore', ...firstReceipt.reversal } } });
             expect(await restore()).toMatchObject({ anchor: 'sourceControl.showLineNumbersInDiffs', value: true });
             expect(raw).toEqual({ futureSibling: { retained: 'winner' } });
@@ -366,15 +581,18 @@ describe('scoped Account workflow Artifact operations', () => {
                 .toMatchObject({ ok: false, errorCode: 'account_settings_mutation_conflict' });
             expect(raw).toEqual({ futureSibling: { retained: 'winner' }, showLineNumbers: false });
             expect(await action({ actionId: 'settings.set', input: { anchor: 'sourceControl.showLineNumbersInDiffs', value: false, reversal: { kind: 'capture' } } }))
-                .toEqual({ anchor: 'sourceControl.showLineNumbersInDiffs', value: false, reversalUnavailableReason: 'no_change' });
+                .toEqual({ anchor: 'sourceControl.showLineNumbersInDiffs', value: false, settingsVersion: 8, reversalUnavailableReason: 'no_change' });
             const secondApply = await action({ actionId: 'settings.set', input: { anchor: 'sourceControl.showLineNumbersInDiffs', value: true, reversal: { kind: 'capture' } } });
             const secondReceipt = SettingsDeclarationActionOutputSchemasV1['settings.set'].parse(secondApply);
             expect(secondApply).toMatchObject({ reversal: { beforeVersion: 8, appliedVersion: 9, before: { value: false }, applied: { value: true } } });
-            race = true;
+            // An unrelated CAS winner is safe to rebase over. To test refusal,
+            // the intervening writer must actually change the captured setting.
+            raw = { ...raw, showLineNumbers: false };
+            version += 1;
             expect(await action({ actionId: 'settings.set', input: { anchor: 'sourceControl.showLineNumbersInDiffs', value: false,
                 reversal: { kind: 'restore', ...secondReceipt.reversal } } }))
                 .toMatchObject({ ok: false, errorCode: 'account_settings_mutation_conflict' });
-            expect(raw).toEqual({ futureSibling: { retained: 'winner' }, showLineNumbers: true });
+            expect(raw).toEqual({ futureSibling: { retained: 'winner' }, showLineNumbers: false });
             expect.soft(await action({ actionId: 'settings.get', input: { anchor: 'usage.coachPreferences', includeVersion: true } }))
                 .toEqual({ anchor: 'usage.coachPreferences', value: { v: 1, suppressions: [], disabledChecks: [], modelSuggestion: 'suggest_with_estimates' }, settingsVersion: 10 });
                 return;
@@ -535,12 +753,17 @@ describe('scoped Account workflow Artifact operations', () => {
         const account = await captureLazyActionAccountContext(home.id);
         try {
             expect(storage.getState().artifacts[artifactId]).toBeUndefined();
-            await account.fetchArtifact(artifactId);
+            const artifactAction = createUiArtifactAction(account);
+            const invocation = { actionId: 'artifact.get' as const, input: { artifactId }, context: { surface: 'ui' as const } };
+            const quiet = await artifactAction({ ...invocation, readOnly: true });
+            expect(quiet).toMatchObject({ artifact: { artifactId, body: 'readable', revision: { headerVersion: 1, bodyVersion: 1 } } });
+            expect(storage.getState().artifacts[artifactId]).toBeUndefined();
+            expect(await artifactAction(invocation)).toEqual(quiet);
             const published = storage.getState().artifacts[artifactId];
             // One admitted read is not the list: the Library must keep loading, not show its first-visit state.
             expect(storage.getState().artifactsLoaded).toBe(false);
             expect(published).toMatchObject({ access: 'view', ownerAccountId: 'owner', isDecrypted: true, body: 'readable' });
-            await account.fetchArtifact(artifactId);
+            await artifactAction(invocation);
             expect(storage.getState().artifacts[artifactId]).toBe(published);
             await account.artifactAccessGrants.remove({ artifactId, principal: { kind: 'account', accountId: 'artifact-account' } });
             expect(storage.getState().artifacts[artifactId]).toBeUndefined();
@@ -598,10 +821,11 @@ describe('scoped Account workflow Artifact operations', () => {
         } finally { account.dispose(); storage.setState(previousState); }
     });
 
-    it('admits a typed binary body through the captured public-link keyholding resource', async () => {
+    it.each(['plain', 'e2ee'] as const)('admits a shared plain typed binary body through the captured keyholding resource for a %s caller', async callerMode => {
         const home = await upsertAndActivateServer({ serverUrl: 'https://artifact-binary-resource.test', scope: 'tab' });
         const token = `header.${encodeBase64(new TextEncoder().encode(JSON.stringify({ sub: 'artifact-account' })), 'base64url')}.signature`;
-        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
+        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue(callerMode === 'plain' ? { token }
+            : { token, secret: encodeBase64(new Uint8Array(32).fill(24), 'base64url') });
         const body = { blobId: '11111111-1111-4111-8111-111111111111', mime: 'image/png', sizeBytes: 4, sha256: 'a'.repeat(64) };
         runtimeFetch.mockImplementation(async (url: unknown) => {
             const target = new URL(String(url));
@@ -610,16 +834,16 @@ describe('scoped Account workflow Artifact operations', () => {
                 v: 1, minimumProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION, currentProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
                 declarationTransport: 'http-header-and-socket-auth-v1',
             } } });
-            if (target.pathname === '/v1/account/encryption') return json({ mode: 'plain', updatedAt: 0 });
+            if (target.pathname === '/v1/account/encryption') return json({ mode: callerMode, updatedAt: 0 });
             if (target.pathname === '/v1/artifacts/binary-artifact') return json({ id: 'binary-artifact',
-                ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: 'plain', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+                ownerAccountId: 'source-owner', access: 'edit', encryptionMode: 'plain', dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
                 header: encodePlainArtifactStoredContent({ title: 'Image', kind: 'published.v1' }), body: encodePlainArtifactStoredContent({ body }),
                 headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
             return json({ error: 'unexpected_route' }, 404);
         });
         const account = await captureLazyActionAccountContext(home.id);
         try {
-            expect(await account.readArtifactPublicLinkResource('binary-artifact')).toMatchObject({ body, encryptionMode: 'plain', dataKey: null, access: 'owner' });
+            expect(await account.readArtifactPublicLinkResource('binary-artifact')).toMatchObject({ body, encryptionMode: 'plain', dataKey: null, access: 'edit' });
         } finally { account.dispose(); }
     });
     it('returns the committed Artifact create acknowledgement without depending on a subsequent read', async () => {
@@ -661,6 +885,47 @@ describe('scoped Account workflow Artifact operations', () => {
             expect(reads).toEqual([]);
             expect(await account.workflowArtifacts.create({ artifactId, header: {}, body: 'workflow body' })).toBe(artifactId);
             expect(reads).toEqual([]);
+        } finally { account.dispose(); }
+    });
+    it.each([{ unclassified: false }, { unclassified: true }])('lists WorkBoards through one filtered Artifact request, and from the full inventory while rows are unclassified (unclassified=$unclassified)', async ({ unclassified }) => {
+        const home = await upsertAndActivateServer({ serverUrl: `https://board-listing-${unclassified}.test`, scope: 'tab' });
+        const token = `header.${encodeBase64(new TextEncoder().encode(JSON.stringify({ sub: 'artifact-account' })), 'base64url')}.signature`;
+        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token });
+        const row = (id: string, header: Record<string, unknown>, kind: NonNullable<Artifact['kind']> | null): Artifact => ({
+            id, kind, ownerAccountId: 'artifact-account', access: 'owner', encryptionMode: 'plain',
+            header: encodePlainArtifactStoredContent(header), body: encodePlainArtifactStoredContent({ body: 'retained body' }),
+            dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
+        });
+        const board = (id: string) => ({ kind: 'work-board.v1', v: 1, title: id, pinnedInSessions: false, readsNeedsYou: false });
+        const rows = [...Array.from({ length: 700 }, (_, index) => row(`other-${index}`, { kind: 'memory_doc.v1' }, 'other')),
+            row('board-classified', board('board-classified'), 'work_board'),
+            // A legacy row is only discoverable through the full inventory.
+            row('board-legacy', board('board-legacy'), unclassified ? null : 'work_board')];
+        const urls: URL[] = [];
+        runtimeFetch.mockImplementation(async (url: unknown) => {
+            const target = new URL(String(url));
+            if (target.pathname === '/health' || target.pathname === '/v1/auth/ping') return json({});
+            if (target.pathname === '/v1/features') return json({ features: {}, capabilities: { accountStoredContentCompatibility: {
+                v: 1, minimumProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
+                currentProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION, declarationTransport: 'http-header-and-socket-auth-v1',
+            } } });
+            if (target.pathname === '/v1/account/encryption') return json({ mode: 'plain', updatedAt: 0 });
+            if (target.pathname !== '/v1/artifacts') return json({ error: 'unexpected_route' }, 404);
+            urls.push(target);
+            const kind = target.searchParams.get('kind');
+            if (!kind) {
+                const cursor = target.searchParams.get('cursor');
+                const after = cursor ? JSON.parse(new TextDecoder().decode(decodeBase64(cursor, 'base64url'))) as { id: string } : null;
+                const start = after ? rows.findIndex(item => item.id === after.id) + 1 : 0;
+                return json(rows.slice(start, start + Number(target.searchParams.get('limit') ?? 100)));
+            }
+            return json({ items: rows.filter(item => item.kind === kind), hasUnclassified: rows.some(item => item.kind === null) });
+        });
+        const account = await captureLazyActionAccountContext(home.id);
+        try {
+            const port = createWorkBoardArtifactPortV1(account.workflowArtifacts);
+            expect((await port.list()).map(item => item.id).sort()).toEqual(['board-classified', 'board-legacy']);
+            expect(urls.map(url => url.searchParams.get('kind'))).toEqual(unclassified ? ['work_board', null, null] : ['work_board']);
         } finally { account.dispose(); }
     });
     it('selects ordinary Artifact lists across structural pages without leaking filters or truncating omitted limits', async () => {
@@ -775,8 +1040,15 @@ describe('scoped Account workflow Artifact operations', () => {
         });
         const context = await captureLazyActionAccountContext(home.id);
         try {
-            const execute = createFrontDoorActionExecute(createActionExecutor(createActionExecutorBoundaryFixture({ artifactAction: createUiArtifactAction(context) })));
-            const caller = { surface: 'ui' as const, authority: 'present_user' as const, actionCaller: { kind: 'host' as const } };
+            const actionsSettings = ActionsSettingsV1Schema.parse({ v: 1,
+                approvalWaivedSurfaces: { 'artifact.update': ['ui'], 'artifact.delete': ['ui'] } });
+            const execute = createFrontDoorActionExecute(createActionExecutor(createActionExecutorBoundaryFixture({
+                artifactAction: createUiArtifactAction(context),
+                isActionApprovalRequired: (id, actionContext, input) => isApprovalRequiredByActionsSettings(id,
+                    actionContext.actionsSettings ?? ActionsSettingsV1Schema.parse({ v: 1 }), actionContext, undefined, undefined, input),
+            })));
+            const caller = { surface: 'ui' as const, authority: 'present_user' as const,
+                actionCaller: { kind: 'host' as const }, actionsSettings };
             expect(await execute('artifact.create', { artifactId, header: { title: 'First' }, body: 'initial' }, caller))
                 .toEqual({ ok: true, result: { artifactId, revision: { headerVersion: 1, bodyVersion: 1 } } });
             const openedEnvelope = async () => {
@@ -831,7 +1103,9 @@ describe('scoped Account workflow Artifact operations', () => {
             });
             // This port is the remote workspace byte-transport boundary; Session lookup and publication remain real.
             // Session provenance retains the Agent approval floor. Use the real persisted waiver policy for this admitted source test.
-            const publicationSettings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { 'artifact.publish_from_file': ['agent'] } });
+            const publicationSettings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
+                'artifact.publish_from_file': ['agent'], 'artifact.update': ['ui'],
+            } });
             const publication = createFrontDoorActionExecute(createActionExecutor(createActionExecutorBoundaryFixture({ artifactAction: createUiArtifactAction(context, {
                 workspaceDownload: download,
             }), isActionApprovalRequired: (actionId, actionContext, input) => isApprovalRequiredByActionsSettings(
@@ -1096,6 +1370,16 @@ describe('scoped Account workflow Artifact operations', () => {
             expect(page.nextCursor).toBe(context.encodeArtifactListCursor(page.items[0]!));
             expect(requests.find((url) => url.searchParams.has('cursor'))?.searchParams.get('cursor')).toBe('incoming-cursor');
             expect(requests.find((url) => url.searchParams.has('limit'))?.searchParams.get('limit')).toBe('1');
+            // Header-only classification does not consume private attribution.
+            // Unreadable attribution must still fail a body/exact read closed.
+            const validStored = stored!;
+            stored = { ...validStored, provenance: 'unreadable attribution' };
+            expect(await port.list({ limit: 500, includeBody: false })).toMatchObject({
+                coverage: 'complete', items: [{ artifactId, header: expectedHeader }],
+            });
+            expect((await port.list({ limit: 500, includeBody: true })).coverage).toBe('partial');
+            await expect(port.read(artifactId)).rejects.toMatchObject({ code: 'content_unavailable' });
+            stored = validStored;
             const nextHeader = { ...header, revision: { headerVersion: 2, bodyVersion: 2 } };
             expect(await port.update({ artifactId, expectedRevision: header.revision, header: nextHeader, body })).toEqual({ ok: true, revision: nextHeader.revision });
             expect(await port.update({ artifactId, expectedRevision: header.revision, header: nextHeader, body: workflowBody('Overwrite') })).toMatchObject({ ok: false, errorCode: 'version_mismatch' });

@@ -71,7 +71,7 @@ export function SessionViewerStickySlot(
         onRectChange={() => {}}
         onModeChange={onModeChange}
         controlsAlwaysVisible
-        accessibilityLabel={resolveSessionViewerWatchingLabel(source, machine.name)}
+        accessibilityLabel={resolveSessionViewerWatchingLabel(source, machine.name, machine.targetTitle)}
         controls={
           <SessionViewerControls
             sessionId={props.sessionId}

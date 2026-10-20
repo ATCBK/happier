@@ -1,18 +1,42 @@
 import { describe, expect, it } from 'vitest';
 import { readBuiltinWidgetDescriptorV1, SESSION_COMPANION_BUILTIN_ITEM_IDS } from './builtinWidgetDescriptorV1.js';
-import { isWidgetTargetHostableV1, readWidgetInputTargetV1, resolveConfiguredWidgetInputs, resolveConfiguredWidgetTargetInputV1, type WidgetInputDescriptorV1 } from './widgetInputAdmissionV1.js';
+import { isWidgetTargetHostableV1, readWidgetInputTargetV1, resolveConfiguredWidgetInputs, resolveConfiguredWidgetTargetInputV1, validateWidgetWorkspaceInputV1, type WidgetInputDescriptorV1 } from './widgetInputAdmissionV1.js';
 import { composeWidgetGroupContextV1 } from './widgetActionInputResolverV1.js';
 import { normalizeUsageQuery } from '../inputs/usageQuery.js';
 import { setWidgetInputBindingsV1, type WidgetInstanceV1 } from './widgetInstanceV1.js';
 
 describe('native widget target contracts', () => {
-    it('admits app accounting on core pages while retaining Session pins on the established hosts', () => {
+    it.each(['usage_source_coverage', 'usage_unpriced'])('admits %s with independently bound query scope and no presentation controls', id => {
+        const descriptor = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id });
+        expect(descriptor).not.toBeNull();
+        if (!descriptor) return;
+        expect(readWidgetInputTargetV1(descriptor)).toEqual({ kind: 'app' });
+        expect(isWidgetTargetHostableV1(descriptor, 'corePage')).toBe(true);
+        expect(descriptor.inputs?.fields.map(field => field.path)).toEqual(['period', 'agents', 'machines', 'projects', 'sources', 'session', 'costBasis']);
+        const query = normalizeUsageQuery({ period: { startMs: 1000 }, machines: ['pinned'] });
+        const instance: WidgetInstanceV1 = { v: 1, id: 'panel', definition: { kind: 'builtin', id },
+            bindings: Object.fromEntries(descriptor.inputs!.fields.map(field => [field.path, { kind: 'value', value: query[field.path as keyof typeof query] ?? null }])) };
+        expect(resolveConfiguredWidgetInputs({ descriptor, instance, providedContext: {}, viewerValues: {} }))
+            .toMatchObject({ status: 'ready', input: { period: { startMs: 1000 }, machines: ['pinned'] } });
+    });
+    it('derives machine and root from authorized checkout rows rather than supplied page values', () => {
+        const checkout = { serverId: 'home', id: 'checkout', machineId: 'real-machine', rootPath: '/repo', createdAtMs: 0 };
+        const input = { value: { ...checkout, rootPath: '/repo/' }, serverId: 'home', workspaceRefs: [checkout] };
+        expect(validateWidgetWorkspaceInputV1(input)).toEqual({ status: 'valid', checkout });
+        expect(validateWidgetWorkspaceInputV1({ ...input, value: { ...checkout, rootPath: '/other' } })).toMatchObject({ status: 'denied' });
+        expect(validateWidgetWorkspaceInputV1({ ...input, value: { ...checkout, machineId: 'forged' } })).toMatchObject({ status: 'denied' });
+        expect(validateWidgetWorkspaceInputV1({ ...input, value: { ...checkout, serverId: 'other-home' } })).toMatchObject({ status: 'denied', reasonCode: 'widget_target_scope_mismatch' });
+        expect(validateWidgetWorkspaceInputV1({ ...input, workspaceRefs: [] })).toMatchObject({ status: 'denied' });
+    });
+    it('admits declared targets independently of physical hosting', () => {
         const session = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'session_summary' })!;
         const usage = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'usage_daily' })!;
-        expect(isWidgetTargetHostableV1(session, 'corePage')).toBe(false);
+        expect(isWidgetTargetHostableV1(session, 'corePage')).toBe(true);
         expect(isWidgetTargetHostableV1(usage, 'corePage')).toBe(true);
-        for (const surface of ['home', 'project', 'pluginArea', 'sessionBoard', 'companion']) {
+        const checkout = readBuiltinWidgetDescriptorV1({ kind: 'builtin', id: 'project_code' })!;
+        for (const surface of ['home', 'project', 'pluginArea', 'workBoard', 'corePage', 'sessionBoard', 'companion']) {
             expect(isWidgetTargetHostableV1(session, surface)).toBe(true);
+            expect(isWidgetTargetHostableV1(checkout, surface)).toBe(true);
         }
     });
     it('admits machine widgets with followed qualified machines and per-widget size contracts', () => {

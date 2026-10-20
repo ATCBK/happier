@@ -124,6 +124,107 @@ function fetchedRegistrySkill() {
 }
 
 describe('createActionExecutor (prompt library actions)', () => {
+  it.each(['update', 'replace'] as const)('keeps edit A and candidate B distinct through the real Memory Action (%s)', async kind => {
+    const edited = { id: 'A', text: 'Prefer green tea', createdAtMs: 1, sourceSessionRef: null, expiresAtMs: 500 };
+    const candidate = { id: 'B', text: 'Use PostgreSQL for storage', createdAtMs: 2, sourceSessionRef: null, expiresAtMs: 900 };
+    const { store, artifacts } = createStoredLibrary([{ id: 'memory', revision: { headerVersion: 2, bodyVersion: 7 },
+      header: { v: 1, kind: 'memory_doc.v1', title: 'Memory' }, body: JSON.stringify({ v: 1, index: [edited, candidate], topics: [] }) }]);
+    const executor = createExecutor({ memoryLibrary: { serverId: 'home', store, nowMs: () => 10, randomId: () => 'replacement',
+      readExposure: async () => ({ grants: { artifactId: 'memory', ownerAccountId: 'person', access: 'owner', grants: [] },
+        publicShares: { publicShares: [] } }),
+    } });
+    const context = { surface: 'ui' as const, serverId: 'home', authority: 'present_user' as const, runtimeAccountId: 'person' };
+    const input = { ref: { kind: 'doc' as const, artifactId: 'memory', serverId: 'home' },
+      expectedRevision: { headerVersion: 2, bodyVersion: 7 }, factId: edited.id, text: 'Prefer PostgreSQL for storage',
+      ...(kind === 'update' ? { expiresAtMs: null } : {}) };
+    expect(await executor.execute('memory.update', input, context)).toMatchObject({ ok: true, result: {
+      ok: false, errorCode: 'memory_duplicate_choice_required', candidates: [{ factId: candidate.id }],
+    } });
+    const replay = { ...input, duplicateChoice: { kind, factId: candidate.id, expectedRevision: input.expectedRevision } };
+    expect(await executor.execute('memory.update', replay, context)).toMatchObject({ ok: true, result: {
+      ok: true, factId: 'replacement', revision: { headerVersion: 3, bodyVersion: 8 },
+    } });
+    const saved = artifacts.get('memory')!;
+    const body = MemoryDocBodyV1Schema.parse(JSON.parse(saved.body!));
+    expect(body.index).toEqual([{ id: 'replacement', text: input.text, createdAtMs: 10, sourceSessionRef: null,
+      supersedes: candidate.id, ...(kind === 'replace' ? { expiresAtMs: edited.expiresAtMs } : {}) }]);
+    expect(body.topics.find(topic => topic.title === 'archive')?.facts).toEqual(kind === 'update'
+      ? [candidate, edited] : [edited, candidate]);
+    expect(await executor.execute('memory.update', replay, context)).toMatchObject({ ok: false, errorCode: 'version_mismatch' });
+    expect(artifacts.get('memory')).toBe(saved);
+  });
+  it('saves decisions through memory admission with host-only approval and server source disclosure metadata', async () => {
+    for (const [authority, bypassApprovals, approvedBy] of [
+      ['present_user', false, { accountId: 'person', atMs: 10 }],
+      ['account_automation', false, null],
+      ['present_user', true, null],
+    ] as const) {
+      const { store, artifacts } = createStoredLibrary([{ id: 'memory', revision: { headerVersion: 1, bodyVersion: 1 },
+        header: { v: 1, kind: 'memory_doc.v1', title: 'Memory' }, body: JSON.stringify({ v: 1, index: [], topics: [] }) }]);
+      let source: unknown;
+      const executor = createExecutor({ memoryLibrary: { serverId: 'home', nowMs: () => 10, randomId: () => 'decision',
+        store: { ...store, update: async input => { source = input.memoryDecisionSource; return store.update(input); } },
+        readExposure: async () => ({ grants: { artifactId: 'memory', ownerAccountId: 'person', access: 'owner', grants: [] },
+          publicShares: { publicShares: [] } }),
+      } });
+      const sourceMessageRef = { kind: 'session' as const, session: { serverId: 'home', sessionId: 'source' }, messageId: 'committed' };
+      const input = { ref: { kind: 'doc' as const, artifactId: 'memory', serverId: 'home' },
+        expectedRevision: { headerVersion: 1, bodyVersion: 1 }, text: 'Use PostgreSQL', reason: 'Reviewed the alternatives', sourceMessageRef };
+      const context = { surface: 'ui' as const, serverId: 'home', authority, bypassApprovals, runtimeAccountId: 'person' };
+      expect(await executor.execute('memory.decision.save', { ...input, approvedBy: { accountId: 'forged', atMs: 1 } }, context))
+        .toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
+      expect(await executor.execute('memory.decision.save', input, context)).toMatchObject({ ok: true, result: { factId: 'decision' } });
+      expect(source).toEqual(sourceMessageRef);
+      expect(JSON.parse(artifacts.get('memory')!.body!).index[0]).toMatchObject({ text: input.text,
+        decision: { reason: input.reason, sourceMessageRef, approvedBy } });
+    }
+  });
+  it('retains a lazy first decision and its admitted source when scope attachment conflicts', async () => {
+    const library = createStoredLibrary();
+    let source: unknown;
+    const executor = createExecutor({ memoryLibrary: { serverId: 'home', randomId: () => 'first-decision', nowMs: () => 10,
+      store: { ...library.store, create: async input => { source = input.memoryDecisionSource; return library.store.create!(input); } },
+      readScopeContext: async () => ({ entries: [], safety: 'safe', attachMemory: async () => false }),
+      readExposure: async () => { throw new Error('No existing document'); },
+    } });
+    const sourceMessageRef = { kind: 'session' as const, session: { serverId: 'home', sessionId: 'source' }, messageId: 'committed' };
+    expect(await executor.execute('memory.decision.save', { scope: 'account', text: 'Use PostgreSQL', reason: 'Reviewed', sourceMessageRef },
+      { surface: 'ui', authority: 'present_user', runtimeAccountId: 'person', serverId: 'home' }))
+      .toMatchObject({ ok: true, result: { factId: 'first-decision', attachment: 'conflict', ref: { artifactId: 'artifact-1' } } });
+    expect(source).toEqual(sourceMessageRef);
+    expect(JSON.parse(library.artifacts.get('artifact-1')!.body!).index[0].decision)
+      .toEqual({ reason: 'Reviewed', sourceMessageRef, approvedBy: { accountId: 'person', atMs: 10 } });
+  });
+  it.each(['ui', 'agent', 'mcp', 'cli'] as const)('returns the same duplicate review before approval on %s and persists only the explicit current choice', async surface => {
+    const original = { id: 'old', text: 'Use PostgreSQL', createdAtMs: 1, sourceSessionRef: null };
+    const { store, artifacts } = createStoredLibrary([{ id: 'memory', header: { v: 1, kind: 'memory_doc.v1', title: 'Memory' },
+      revision: { headerVersion: 1, bodyVersion: 1 }, body: JSON.stringify({ v: 1, index: [original], topics: [] }) }]);
+    let approvals = 0;
+    const executor = createExecutor({ memoryLibrary: { serverId: 'home', store, randomId: () => 'new', nowMs: () => 10,
+      readExposure: async artifactId => ({ grants: { artifactId, ownerAccountId: 'owner', access: 'owner', grants: [
+        { principal: { kind: 'team', teamId: 'team' }, accessLevel: 'edit', createdByAccountId: 'owner', createdAt: 1, display: { name: null } },
+      ] }, publicShares: { publicShares: [] } }) },
+      approvalsCreate: async () => { approvals++; return { artifactId: 'approval' }; } });
+    const input = { ref: { kind: 'doc' as const, artifactId: 'memory', serverId: 'home' }, expectedRevision: artifacts.get('memory')!.revision,
+      text: 'Prefer PostgreSQL' };
+    const context = { surface, serverId: 'home', authority: surface === 'ui' ? 'present_user' as const : 'account_automation' as const,
+      actionCaller: { kind: 'host' as const }, actionRequestId: 'remember', actionsSettings: ActionsSettingsV1Schema.parse({ v: 1, actions: {},
+        approvalWaivedSurfaces: { 'memory.remember': [surface] } }) };
+    const result = await executor.execute('memory.remember', input, context);
+    expect(result).toMatchObject({ ok: true, result: { ok: false, errorCode: 'memory_duplicate_choice_required',
+      ref: input.ref, revision: input.expectedRevision, candidates: [{ factId: 'old', match: 'related' }] } });
+    if (!result.ok) throw new Error('Expected admitted review');
+    expect(getActionSpec('memory.remember').outputSchema.parse(result.result)).toEqual(result.result);
+    expect(approvals).toBe(0);
+    expect(artifacts.get('memory')!.revision).toEqual(input.expectedRevision);
+    const saved = await executor.execute('memory.remember', { ...input, duplicateChoice: { kind: 'replace', factId: 'old', expectedRevision: input.expectedRevision } }, context);
+    expect(saved).toMatchObject({ ok: true, result: { ok: true, factId: 'new', revision: artifacts.get('memory')!.revision } });
+    expect(MemoryDocBodyV1Schema.parse(JSON.parse(artifacts.get('memory')!.body!))).toMatchObject({
+      index: [{ id: 'new', supersedes: 'old' }], topics: [{ title: 'archive', facts: [original] }],
+    });
+    expect(await executor.execute('memory.remember', { ...input, text: 'Stale intent', duplicateChoice: { kind: 'keep_both', expectedRevision: input.expectedRevision } }, context))
+      .toMatchObject({ ok: false, errorCode: 'version_mismatch' });
+  });
   it('reviews and replays a CLI-created skill through the spec-owned approval and real skill writer', async () => {
     const { store, artifacts } = createStoredLibrary();
     let approval: ApprovalRequest | null = null;
@@ -300,7 +401,7 @@ describe('createActionExecutor (prompt library actions)', () => {
     expect(getActionSpec('prompt_doc.create').inputSchema.safeParse({ title: 'Doc', markdown: 'Text', folderId: 'other',
       createFolder: { id: 'new', name: 'New', expectedRevision: 3 } }).success).toBe(false);
   });
-  it('keeps an agent memory proposal unchanged until the existing approval owner approves it', async () => {
+  it.each(['memory.remember', 'memory.decision.save'] as const)('keeps an agent %s proposal unchanged until the existing approval owner approves it', async actionId => {
     let request: ApprovalRequest | null = null;
     let stored: PromptLibraryStoredArtifact = { id: 'memory', revision: { headerVersion: 1, bodyVersion: 1 },
       header: { v: 1, kind: 'memory_doc.v1', title: 'Memory' }, body: JSON.stringify({ v: 1, index: [], topics: [] }) };
@@ -329,22 +430,28 @@ describe('createActionExecutor (prompt library actions)', () => {
         serverId: 'home', machineId: 'machine-1', sessionId: 'lead', surface: 'agent',
       } });
       expect(context).toMatchObject({ surface: 'ui', authority: 'present_user' });
-      return originExecutor.replayApprovedApprovalRequest({ artifactId });
+      if (actionId === 'memory.decision.save' && approved.decision) {
+        // Writable Artifact metadata cannot select a different person for this same-Account replay.
+        request = { ...approved, decision: { ...approved.decision, decidingAccountId: 'forged-person' } };
+      }
+      return originExecutor.replayApprovedApprovalRequest({ artifactId, callerAuthority: context.authority });
     } });
     const original = stored;
     const prepareWorker = () => resolvePromptStackSystemAppendBlocksV1({ surface: 'coding', memoryEnabled: true,
       scope: { serverId: 'home', accountId: 'owner', sessionId: 'worker' },
       sessionEntries: [{ id: 'session.memory', ref: { kind: 'doc', artifactId: 'memory', serverId: 'home' },
         enabled: true, placement: 'system_append' }], readArtifact: async () => stored });
-    expect(await originExecutor.execute('approval.request.create', { actionId: 'memory.remember',
+    expect(await originExecutor.execute('approval.request.create', { actionId,
       actionArgs: { ref: { kind: 'doc', artifactId: 'memory', serverId: 'home' }, expectedRevision: stored.revision,
-        text: 'Use the canonical Context owner.' }, summary: 'Remember', createdBy: { surface: 'agent' } },
+        text: 'Use the canonical Context owner.', ...(actionId === 'memory.decision.save' ? {
+          reason: 'Reviewed the owner', sourceMessageRef: { kind: 'session', session: { serverId: 'home', sessionId: 'lead' }, messageId: 'committed' },
+        } : {}) }, summary: 'Remember', createdBy: { surface: 'agent' } },
       { surface: 'agent', authority: 'account_automation', actionCaller: { kind: 'host' },
-        serverId: 'home', defaultSessionId: 'lead', defaultSessionMachineId: 'machine-1', actionRequestId: 'memory-proposal' }))
+        serverId: 'home', runtimeAccountId: 'owner', defaultSessionId: 'lead', defaultSessionMachineId: 'machine-1', actionRequestId: 'memory-proposal' }))
       .toMatchObject({ ok: true });
     expect(stored).toBe(original);
     expect((await prepareWorker()).blocks.join('\n')).not.toContain('Use the canonical Context owner.');
-    expect(request).toMatchObject({ status: 'open', actionId: 'memory.remember' });
+    expect(request).toMatchObject({ status: 'open', actionId });
     const decided = await uiExecutor.execute('approval.request.decide', { artifactId: 'proposal', decision: 'approve' },
       { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId: 'home',
         defaultSessionId: 'lead' });
@@ -356,6 +463,11 @@ describe('createActionExecutor (prompt library actions)', () => {
     expect(request).toMatchObject({ status: 'executed', execution: { ok: true } });
     expect(MemoryDocBodyV1Schema.parse(JSON.parse(stored.body!)).index).toEqual([expect.objectContaining({ id: 'approved-fact',
       text: 'Use the canonical Context owner.', sourceSessionRef: { serverId: 'home', sessionId: 'lead' } })]);
+    if (actionId === 'memory.decision.save') {
+      expect(JSON.parse(stored.body!).index[0].decision).toMatchObject({ approvedBy: {
+        accountId: 'owner', atMs: persistedApproval?.decision?.decidedAtMs,
+      } });
+    }
     const read = await originExecutor.execute('memory.read', {
       ref: { kind: 'doc', artifactId: 'memory', serverId: 'home' },
     }, { surface: 'ui', authority: 'present_user', serverId: 'home' });
@@ -641,7 +753,8 @@ describe('createActionExecutor (prompt library actions)', () => {
         grants: shared ? [{ principal: { kind: 'account', accountId: 'other' }, accessLevel: 'edit', createdByAccountId: 'owner', createdAt: 1, display: { name: null } }] : [] },
         publicShares: publicationAvailable ? { publicShares: publication ? [publication] : [] } : null }),
     }, approvalsCreate: async args => { approvalInput = args.request; return { artifactId: 'approval' }; } });
-    const request = () => ({ ref: { kind: 'doc', artifactId: 'memory', serverId: 'home' }, expectedRevision: stored.revision, text: 'Prefer tea; password=secret' });
+    const request = () => ({ ref: { kind: 'doc', artifactId: 'memory', serverId: 'home' }, expectedRevision: stored.revision, text: 'Prefer tea; password=secret',
+      ...(writes ? { duplicateChoice: { kind: 'keep_both', expectedRevision: stored.revision } } : {}) });
     const context = { surface: 'agent', authority: 'account_automation', actionCaller: { kind: 'host' },
       actionRequestId: 'request', defaultSessionId: 'session', serverId: 'home' } as const;
     expect(await executor.execute('memory.remember', request(), context)).toMatchObject({ ok: true, result: { factId: 'fact-0' } });
@@ -721,6 +834,36 @@ describe('createActionExecutor (prompt library actions)', () => {
       .toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
     expect(stored).toBe(archived);
   });
+  it('keeps Session memory admission field-scoped while active-runtime revisions advance', async () => {
+    const { store, artifacts } = createStoredLibrary([{ id: 'memory', header: { v: 1, kind: 'memory_doc.v1', title: 'Memory' },
+      body: JSON.stringify(MemoryDocBodyV1Schema.parse({ v: 1, index: [], topics: [] })), revision: { headerVersion: 1, bodyVersion: 1 } }]);
+    let revision = 4;
+    let enabled = true;
+    let selected = 'memory';
+    const executor = createExecutor({ isActionApprovalRequired: undefined, memoryLibrary: { serverId: 'home', randomId: () => 'active-session-fact',
+      store,
+      readSession: async () => ({ revision: ++revision, metadata: { bot: { kind: 'bot' }, work: { memoryEnabled: enabled,
+        promptStack: [{ id: 'session.memory', ref: { kind: 'doc', artifactId: selected, serverId: 'home' }, enabled: true, placement: 'system_append' }],
+        sessionRolesV1: { overrides: {}, sessionRoles: {}, notes: `Runtime revision ${revision}` },
+      } } }),
+      readExposure: async artifactId => ({ grants: { artifactId, ownerAccountId: 'owner', access: 'owner', grants: [] }, publicShares: { publicShares: [] } }),
+    } });
+    const context = { surface: 'agent', authority: 'account_automation', actionCaller: { kind: 'host' }, defaultSessionId: 'session', serverId: 'home' } as const;
+    const request = { sessionRef: { serverId: 'home', sessionId: 'session' }, expectedMetadataRevision: 4, text: 'Remember this active Session fact' };
+    const remembered = await executor.execute('memory.remember', request, context);
+    expect(remembered, JSON.stringify(remembered)).toMatchObject({ ok: true, result: { artifactId: 'memory' } });
+    const reviewed = { ...request, text: 'Do not redirect this reviewed proposal', reviewedTarget: {
+      ref: { kind: 'doc', artifactId: 'memory', serverId: 'home' }, expectedRevision: artifacts.get('memory')!.revision,
+    } };
+    const before = artifacts.get('memory');
+    selected = 'other-memory';
+    expect(await executor.execute('memory.remember', reviewed, context)).toMatchObject({ ok: false, errorCode: 'approval_stale' });
+    expect(artifacts.get('memory')).toBe(before);
+    selected = 'memory'; enabled = false;
+    expect(await executor.execute('memory.remember', reviewed, context)).toMatchObject({ ok: false, errorCode: 'action_disabled' });
+    expect(artifacts.get('memory')).toBe(before);
+  });
+
   it('creates memory only on first remember, reuses the reserved attachment and retains an attach-conflicted fact', async () => {
     const artifacts = new Map<string, PromptLibraryStoredArtifact>();
     let metadata: Record<string, unknown> = { bot: { kind: 'bot' }, work: { memoryEnabled: true, promptStack: [] } };
@@ -747,9 +890,10 @@ describe('createActionExecutor (prompt library actions)', () => {
     const request = () => ({ sessionRef: { serverId: 'home', sessionId: 'session' }, expectedMetadataRevision: revision, text: 'Preference' });
     const first = await executor.execute('memory.remember', request(), context);
     expect(first).toMatchObject({ ok: true, result: { artifactId: 'memory-1', attachment: 'attached' } });
-    expect(await executor.execute('memory.remember', request(), context)).toMatchObject({ ok: true, result: { artifactId: 'memory-1' } });
+    expect(await executor.execute('memory.remember', request(), context)).toMatchObject({ ok: true, result: {
+      ok: false, errorCode: 'memory_duplicate_choice_required', ref: { artifactId: 'memory-1' } } });
     expect(creates).toBe(1); expect(attaches).toBe(1);
-    expect(JSON.parse(artifacts.get('memory-1')!.body!).index).toHaveLength(2);
+    expect(JSON.parse(artifacts.get('memory-1')!.body!).index).toHaveLength(1);
     metadata = { bot: { kind: 'bot' }, work: { memoryEnabled: true, promptStack: [] } }; revision++; conflict = true;
     const conflicted = await executor.execute('memory.remember', request(), context);
     expect(conflicted).toMatchObject({ ok: true, result: { artifactId: 'memory-2', attachment: 'conflict' } });
@@ -764,12 +908,13 @@ describe('createActionExecutor (prompt library actions)', () => {
       sessionId: 'session', serverId: 'home', expectedMetadataRevision: revision,
       intent: { kind: 'attach', entry: { id: 'session.memory', ref: receipt.ref, enabled: true, placement: 'system_append' } },
     }, context)).toMatchObject({ ok: true });
-    expect(await executor.execute('memory.remember', request(), context)).toMatchObject({ ok: true, result: { artifactId: 'memory-2' } });
+    expect(await executor.execute('memory.remember', request(), context)).toMatchObject({ ok: true, result: {
+      ok: false, errorCode: 'memory_duplicate_choice_required', ref: { artifactId: 'memory-2' } } });
     expect(creates).toBe(2);
     expect(attaches).toBe(2);
-    expect(JSON.parse(artifacts.get('memory-2')!.body!).index).toHaveLength(2);
+    expect(JSON.parse(artifacts.get('memory-2')!.body!).index).toHaveLength(1);
     expect(await executor.execute('memory.remember', { ...request(), expectedMetadataRevision: revision - 1 }, context))
-      .toMatchObject({ ok: false, errorCode: 'version_mismatch' });
+      .toMatchObject({ ok: true, result: { ok: false, errorCode: 'memory_duplicate_choice_required' } });
     expect(creates).toBe(2);
     metadata = { work: { memoryEnabled: false, promptStack: [] } }; revision++;
     expect(await executor.execute('memory.remember', request(), { ...context, surface: 'cli' }))
@@ -819,7 +964,10 @@ describe('createActionExecutor (prompt library actions)', () => {
     expect(await executor.execute('memory.remember', request, context)).toMatchObject({ ok: true, result: { artifactId: 'project-memory' } });
     expect(creates).toBe(0);
     shared = true;
-    expect(await executor.execute('memory.remember', request, context)).toMatchObject({ ok: true,
+    expect(await executor.execute('memory.remember', { ...request, reviewedTarget: {
+      ref: { kind: 'doc', artifactId: 'project-memory', serverId: 'home' }, expectedRevision: artifacts.get('project-memory')!.revision },
+      duplicateChoice: { kind: 'keep_both', expectedRevision: artifacts.get('project-memory')!.revision },
+    }, context)).toMatchObject({ ok: true,
       result: { kind: 'approval_request_created' } });
     expect(artifacts.get('project-memory')!.revision.bodyVersion).toBe(2);
     shared = false; projectEntries = [];
@@ -827,7 +975,8 @@ describe('createActionExecutor (prompt library actions)', () => {
     accountEntries = [];
     expect(await executor.execute('memory.remember', request, context)).toMatchObject({ ok: true,
       result: { artifactId: 'created-1', attachment: 'attached' } });
-    expect(await executor.execute('memory.remember', request, context)).toMatchObject({ ok: true, result: { artifactId: 'created-1' } });
+    expect(await executor.execute('memory.remember', request, context)).toMatchObject({ ok: true, result: {
+      ok: false, errorCode: 'memory_duplicate_choice_required', ref: { artifactId: 'created-1' } } });
     expect(creates).toBe(1); expect(accountAttachments).toBe(1); expect(sessionAttachments).toBe(0);
     expect(metadata.work.promptStack).toEqual([]);
   });
@@ -869,7 +1018,7 @@ describe('createActionExecutor (prompt library actions)', () => {
       if (!first.ok) throw new Error('Expected scope creation');
       const receipt = MemoryMutationResultV1Schema.parse(first.result);
       expect(await executor.execute('memory.remember', { ...target, text: 'Second fact' }, context))
-        .toMatchObject({ ok: true, result: { artifactId: receipt.artifactId } });
+        .toMatchObject({ ok: true, result: { ok: false, errorCode: 'memory_duplicate_choice_required', ref: { artifactId: receipt.artifactId } } });
       expect(JSON.parse(artifacts.get(receipt.artifactId)!.body!).topics[0].facts[0].sourceSessionRef).toBeNull();
     }
     expect(creates).toBe(2);

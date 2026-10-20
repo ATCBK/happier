@@ -21,7 +21,6 @@ import {
 import type { VoiceQaControllerDeps } from './voiceQaController';
 import { ensureDefaultLocalVoiceQaBinding } from './ensureDefaultLocalVoiceQaBinding';
 import { useVoiceQaStore } from './voiceQaStore';
-import { stopVoiceQaMediaSession } from './stopVoiceQaMediaSession';
 import { waitForVoiceQaLifecycleController } from './waitForVoiceQaLifecycleController';
 
 /**
@@ -186,20 +185,7 @@ export function createDefaultVoiceQaControllerDeps(): VoiceQaControllerDeps {
             });
             await lifecycleController.toggle(target);
         },
-        stopMedia: async (sessionId, adapterId) => {
-            await stopVoiceQaMediaSession({
-                sessionId,
-                snapshot: { adapterId },
-                getSnapshot: () => voiceSessionManager.getSnapshot(),
-                resolveEngineKind: (adapterId) => getVoiceAdapterRegistry().get(adapterId)?.engineKind ?? null,
-                toggleLocalTurn: async (nextSessionId) => {
-                    await localVoiceRuntimeController.toggleTurn(nextSessionId);
-                },
-                stopSession: async (nextSessionId) => {
-                    await voiceSessionManager.stop(nextSessionId);
-                },
-            });
-        },
+        stopMedia: async (sessionId) => await voiceSessionManager.stop(sessionId),
         getMediaSnapshot: () => voiceSessionManager.getSnapshot(),
         qaStore: useVoiceQaStore,
     };

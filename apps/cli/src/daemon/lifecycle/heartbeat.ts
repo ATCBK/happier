@@ -19,6 +19,7 @@ import { createOnChildExited } from '../sessions/onChildExited';
 import { classifyTrackedSessionProcessPresence } from '../sessions/isSessionRunnerActive';
 import { readProcessRunState } from '../processRunState';
 import { requestDaemonSelfRestart } from './requestDaemonSelfRestart';
+import type { ManagedActivityInventory } from './managedActivity';
 
 type RequestDaemonSelfRestart = typeof requestDaemonSelfRestart;
 
@@ -47,6 +48,10 @@ export function startDaemonHeartbeatLoop(params: Readonly<{
     exit: Readonly<{ reason: string; code: number | null; signal: string | null }>,
   ) => void | Promise<void>;
   onTrackedSessionHealthy?: (tracked: TrackedSession) => Promise<void>;
+  allocatorMaintenance?: Readonly<{
+    activity: Pick<ManagedActivityInventory, 'readDecision'>;
+    trim: () => Promise<boolean>;
+  }>;
   pidSafetyDependencies?: Readonly<{
     readProcessIdentityByPidFn?: typeof readProcessIdentityByPid;
     readProcessRunStateFn?: typeof readProcessRunState;
@@ -106,6 +111,7 @@ export function startDaemonHeartbeatLoop(params: Readonly<{
     6 * 60 * 60 * 1000,
   );
   let heartbeatRunning = false;
+  let lastAllocatorTrimAt: number | null = null;
   let sessionHandoffPrepareTargetRecoveryPromise: Promise<void> | null = null;
 
   const ensureSessionHandoffPrepareTargetRecovery = (): Promise<void> => {
@@ -192,11 +198,20 @@ export function startDaemonHeartbeatLoop(params: Readonly<{
           await observeHealthySession(tracked);
           continue;
         }
+        const runState = await (
+          pidSafetyDependencies?.readProcessRunStateFn ?? readProcessRunState
+        )(pid).catch(() => null);
+        if (isShuttingDown?.() === true) return;
+        if (pidToTrackedSession.get(pid) !== tracked) continue;
+        if (runState === 'dead' || runState === 'zombie') {
+          logger.debug(`[DAEMON RUN] Removing stale session with PID ${pid} (run state: ${runState})`);
+          await onChildExitedForPrune(pid, { reason: 'process-missing', code: null, signal: null });
+          continue;
+        }
         if (!isPidPresent(pid)) {
           if (isShuttingDown?.() === true) {
             return;
           }
-          // Process is dead, remove from tracking
           logger.debug(`[DAEMON RUN] Removing stale session with PID ${pid} (process no longer exists)`);
           await onChildExitedForPrune(pid, { reason: 'process-missing', code: null, signal: null });
           continue;
@@ -329,6 +344,27 @@ export function startDaemonHeartbeatLoop(params: Readonly<{
         }
       } catch (error) {
         logger.debug('[DAEMON RUN] Failed to write heartbeat', error);
+      }
+
+      // The idle glibc probe retained ~455 MB of its 513 MB release at +10m;
+      // only another ~27 MB regrew by +20m. Reuse heartbeat instead of adding
+      // a timer or paying for a trim on every 30-second maintenance tick.
+      const allocatorMaintenance = params.allocatorMaintenance;
+      if (allocatorMaintenance && isShuttingDown?.() !== true
+        && (lastAllocatorTrimAt === null || Date.now() - lastAllocatorTrimAt >= 10 * 60_000)) {
+        try {
+          if ((await allocatorMaintenance.activity.readDecision()).kind === 'idle'
+            && isShuttingDown?.() !== true) {
+            lastAllocatorTrimAt = Date.now();
+            const startedAt = performance.now();
+            const released = await allocatorMaintenance.trim();
+            logger.debug('[DAEMON RUN] Allocator maintenance completed', {
+              released, durationMs: performance.now() - startedAt,
+            });
+          }
+        } catch (error) {
+          logger.debug('[DAEMON RUN] Allocator maintenance failed', error);
+        }
       }
     } catch (error) {
       // This is defensive: any unexpected error in the async interval callback should not permanently stop the loop.

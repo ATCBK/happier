@@ -60,7 +60,7 @@ describe('external-session operation ActionSpecs', () => {
       'sessions.external.operation.discard',
     ] as const;
     const expectedFields = [
-      { path: 'sessionId', title: 'Session id', widget: 'text', required: true },
+      { path: 'sessionId', title: 'Session id', prompt: 'Which session?', widget: 'text', required: true },
       { path: 'operationId', title: 'Operation id', widget: 'text', required: true },
       { path: 'revision', title: 'Revision', widget: 'text', required: true },
     ] as const;

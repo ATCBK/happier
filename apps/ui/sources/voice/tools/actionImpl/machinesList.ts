@@ -3,7 +3,8 @@ import { readVoicePrivacySettings } from '@/sync/domains/settings/readVoicePriva
 import { normalizeNonEmptyString, resolveVoiceMachineLabel } from './shared';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { resolveServerScopedMachines } from '@/sync/domains/machines/resolveServerScopedMachines';
-import { resolveMachineDisplayNames } from '@/utils/sessions/machineUtils';
+import { getMachineDisplayName, isMachineDisplayHydrating, resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
+import { isMachineVisibleForSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
 import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
 import { resolveServerCredentialAccountScope } from '@/sync/domains/scope/serverCredentialAccountScope';
 
@@ -25,7 +26,9 @@ export async function listMachinesForVoiceTool(params: Readonly<{ serverId?: str
     machineListStatusByServerId: state.machineListStatusByServerId,
   }) ?? [];
   const limit = typeof params.limit === 'number' && Number.isFinite(params.limit) ? Math.max(1, Math.min(200, Math.floor(params.limit))) : 50;
-  const names = params.purpose === 'input' ? resolveMachineDisplayNames(machines) : null;
+  // The machines the Projects list and its widgets name are the ones selection shows; an input row says whether its label
+  // is such a name, so a consumer never presents a hidden or still-loading machine's placeholder as one.
+  const names = params.purpose === 'input' ? resolveMachineDisplayNames(machines.filter(isMachineVisibleForSelection)) : null;
   const scopeResolution = params.purpose === 'input' ? await resolveServerCredentialAccountScope(serverId) : null;
   const scope = scopeResolution?.kind === 'bound' ? scopeResolution.scope : null;
 
@@ -35,7 +38,8 @@ export async function listMachinesForVoiceTool(params: Readonly<{ serverId?: str
       serverId,
       machineId: normalizeNonEmptyString(m?.id),
       label: names?.get(m.id) ?? resolveVoiceMachineLabel(m),
-      ...(params.purpose === 'input' ? { presence: isMachineReachable(scope, m) ? 'online' : 'offline',
+      ...(params.purpose === 'input' ? { named: isMachineVisibleForSelection(m) && !isMachineDisplayHydrating(m),
+        presence: isMachineReachable(scope, m) ? 'online' : 'offline',
         platform: normalizeNonEmptyString(m?.metadata?.platform), arch: normalizeNonEmptyString(m?.metadata?.arch),
         revokedAt: m.revokedAt, replacedByMachineId: m.replacedByMachineId } : {}),
       ...(normalizeNonEmptyString(m?.metadata?.host) ? { host: normalizeNonEmptyString(m?.metadata?.host) } : {}),
@@ -43,5 +47,5 @@ export async function listMachinesForVoiceTool(params: Readonly<{ serverId?: str
     }))
     .filter((m) => m.machineId);
 
-  return { items };
+  return { items, ...(params.purpose === 'input' ? { unlistedLabel: getMachineDisplayName({ absence: 'unlisted' }) } : {}) };
 }

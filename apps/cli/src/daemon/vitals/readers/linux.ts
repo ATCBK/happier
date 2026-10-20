@@ -75,6 +75,7 @@ export function createLinuxMachineVitalsReader(options: LinuxMachineVitalsReader
     const list = async (path: string): Promise<string[]> => { try { return await readdir(at(path)); } catch { return []; } };
     const statfs = options.statfs ?? readStatfs;
     const cpuRates = createCounterRateReader(), networkRates = createCounterRateReader(), eventRates = createCounterRateReader(), containerRates = createCounterRateReader();
+    const excludedNetworkRates = createCounterRateReader();
     let topology: { clusters?: ('p' | 'e')[]; performanceCores?: number; efficiencyCores?: number; sockets?: number } | undefined;
     let topologyCoreCount: number | undefined;
     let pageSize: number | undefined;
@@ -166,7 +167,8 @@ export function createLinuxMachineVitalsReader(options: LinuxMachineVitalsReader
         const seen = new Set<string>();
         const result: Extract<MachineVitalsSampleV1['disk'], { reported: true }>['volumes'] = [];
         for (const mount of [...mounts].sort((a, b) => a.mount.length - b.mount.length)) {
-            if (seen.has(mount.device) || /^(?:proc|sysfs|devtmpfs|devpts|tmpfs|cgroup2?|securityfs|debugfs|tracefs|pstore|mqueue|hugetlbfs|configfs|fusectl|autofs|squashfs|nsfs|ramfs|rpc_pipefs|nfs4?|cifs|smb3)$/u.test(mount.kind)) continue;
+            if (seen.has(mount.device) || mount.options.split(',').includes('ro')
+                || /^(?:proc|sysfs|devtmpfs|devpts|tmpfs|cgroup2?|securityfs|debugfs|tracefs|pstore|mqueue|hugetlbfs|configfs|fusectl|autofs|squashfs|iso9660|udf|nsfs|ramfs|rpc_pipefs|nfs4?|cifs|smb3)$/u.test(mount.kind)) continue;
             if (mount.mount !== '/' && (!mount.source.startsWith('/dev/') || mount.mount.startsWith('/sys/') || mount.mount.startsWith('/proc/') || mount.mount.startsWith('/dev/'))) continue;
             try {
                 const stats = await statfs(at(mount.mount));
@@ -199,12 +201,16 @@ export function createLinuxMachineVitalsReader(options: LinuxMachineVitalsReader
             entries.push({ id, rx: values[0], tx: values[8], included });
         }
         entries.sort((a, b) => a.id.localeCompare(b.id));
-        const counters = Object.fromEntries(entries.flatMap((entry) => [[`${entry.id}:rx`, entry.rx], [`${entry.id}:tx`, entry.tx], [`${entry.id}:included:${entry.included}`, 0]]));
-        const delta = networkRates({ monotonicMs: input.monotonicMs, counters }, input.intervalMs);
+        const counted = entries.filter(entry => entry.included);
+        const counters = (interfaces: typeof entries) => Object.fromEntries(interfaces.flatMap(entry => [[`${entry.id}:rx`, entry.rx], [`${entry.id}:tx`, entry.tx]]));
+        const delta = networkRates({ monotonicMs: input.monotonicMs, counters: counters(counted) }, input.intervalMs);
+        // Excluded traffic stays inspectable without participating in machine-counter continuity.
+        const excludedDelta = excludedNetworkRates({ monotonicMs: input.monotonicMs, counters: counters(entries.filter(entry => !entry.included)) }, input.intervalMs);
         let rxBps = 0, txBps = 0, label: string | undefined, busiest = -1;
         const interfaces = entries.map((entry) => {
-            const rx = delta ? delta.deltas[`${entry.id}:rx`] * 1000 / delta.elapsedMs : null;
-            const tx = delta ? delta.deltas[`${entry.id}:tx`] * 1000 / delta.elapsedMs : null;
+            const interfaceDelta = entry.included ? delta : excludedDelta;
+            const rx = interfaceDelta ? interfaceDelta.deltas[`${entry.id}:rx`] * 1000 / interfaceDelta.elapsedMs : null;
+            const tx = interfaceDelta ? interfaceDelta.deltas[`${entry.id}:tx`] * 1000 / interfaceDelta.elapsedMs : null;
             if (entry.included && rx !== null && tx !== null) {
                 rxBps += rx; txBps += tx;
                 if (rx + tx > busiest) { label = entry.id; busiest = rx + tx; }
@@ -212,7 +218,7 @@ export function createLinuxMachineVitalsReader(options: LinuxMachineVitalsReader
             return { id: entry.id, label: entry.id, included: entry.included, rxBps: rx, txBps: tx };
         });
         return { sample: { reported: true as const, rxBps: delta ? rxBps : null, txBps: delta ? txBps : null, label, interfaces },
-            counters: { interfaceIds: entries.filter((entry) => entry.included).map((entry) => entry.id), rxBytes: entries.filter((entry) => entry.included).reduce((sum, entry) => sum + entry.rx, 0), txBytes: entries.filter((entry) => entry.included).reduce((sum, entry) => sum + entry.tx, 0) } };
+            counters: { interfaceIds: counted.map((entry) => entry.id), rxBytes: counted.reduce((sum, entry) => sum + entry.rx, 0), txBytes: counted.reduce((sum, entry) => sum + entry.tx, 0) } };
     }
 
     async function limits(group: Cgroup | undefined, overview: boolean): Promise<MachineVitalsSampleV1['limits']> {
@@ -384,10 +390,13 @@ export function createLinuxMachineVitalsReader(options: LinuxMachineVitalsReader
             const memory: MachineVitalsSampleV1['memory'] = { reported: true, totalBytes, availableBytes, usedBytes,
                 pressure: { level, source: scopedPsi ? 'psi' : 'events' }, ...(isContainer ? { limitSource: 'cgroup' as const } : {}),
                 ...(mem.SwapTotal !== undefined ? { swap: { kind: 'swap' as const, totalBytes: group?.swap?.totalBytes ?? mem.SwapTotal, usedBytes: group?.swap?.usedBytes ?? mem.SwapTotal - (mem.SwapFree ?? mem.SwapTotal), swapping } } : {}) };
-            if (input.overviewExtras && !isContainer) {
-                const cached = Math.min(usedBytes, Math.max(0, (mem.Cached ?? 0) + (mem.SReclaimable ?? 0) - (mem.Shmem ?? 0)));
-                const kernel = Math.min(usedBytes - cached, Math.max(0, (mem.Slab ?? 0) - (mem.SReclaimable ?? 0) + (mem.KernelStack ?? 0) + (mem.PageTables ?? 0)));
-                memory.composition = [{ kind: 'apps', bytes: usedBytes - cached - kernel }, { kind: 'kernel', bytes: kernel }, { kind: 'cached_files', bytes: cached }];
+            if (!isContainer) {
+                // Composition belongs to this meminfo observation, not the slower extras cache.
+                // MemAvailable already credits reclaimable cache. Preserve the
+                // resident app/kernel footprint before attributing its remainder.
+                const kernel = Math.min(usedBytes, Math.max(0, (mem.Slab ?? 0) - (mem.SReclaimable ?? 0) + (mem.KernelStack ?? 0) + (mem.PageTables ?? 0)));
+                const apps = Math.min(usedBytes - kernel, Math.max(0, (mem.AnonPages ?? 0) + (mem.Shmem ?? 0)));
+                memory.composition = [{ kind: 'apps', bytes: apps }, { kind: 'kernel', bytes: kernel }, { kind: 'cached_files', bytes: usedBytes - apps - kernel }];
             }
             if (!topology || topologyCoreCount !== logicalCores) {
                 const [pRaw, eRaw, info] = await Promise.all([text('/sys/devices/cpu_core/cpus'), text('/sys/devices/cpu_atom/cpus'), text('/proc/cpuinfo')]);

@@ -26,6 +26,7 @@ function createE2eeSession(
     },
     updateMetadata: vi.fn(),
     updateAgentState: vi.fn(),
+    updateAgentStateRequestSettlement: vi.fn(async () => undefined),
     keepAlive: vi.fn(),
     getMetadataSnapshot: () => null,
     hasUserMessageLocalConsumption: () => false,
@@ -52,7 +53,7 @@ describe('sessionSystemRecordPayloadService', () => {
   it('keeps the guard stop receipt encrypted under the fixed Session storage mode', async () => {
     const context = { encryptionKey: new Uint8Array(32).fill(1), encryptionVariant: 'dataKey' as const };
     const writes: Parameters<NonNullable<SessionClientPort['upsertSessionSystemRecord']>>[0][] = [];
-    const payload = { v: 1, at: 300_000, rule: 'memory_guard', idleMs: 7_200_000 } as const;
+    const payload = { v: 1, at: 300_000, rule: 'memory_guard', idleMs: 7_200_000, status: 'stopped' } as const;
     const service = createSessionSystemRecordPayloadService(createE2eeSession({
       getStoredContentEncryptionContext: () => ({ mode: 'e2ee', ctx: context }),
       upsertSessionSystemRecord: async record => { writes.push(record); },

@@ -36,6 +36,7 @@ import { resolvePreferredPublicReleaseRingLabelForCurrentApp } from '@/sync/runt
 import { t } from '@/text';
 import { isDesktopHost, invokeDesktopHost } from '@/utils/platform/desktopHost';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 
 function useRelocationDirectoryPublication(enabled: boolean): RelocationDirectoryPublication | null {
@@ -211,7 +212,7 @@ export function usePersonalHomeRuntimeOperations(params: Readonly<{
                 repairSearch: async () => {
                     const result = await searchAction.execute('home.search.rebuild', {});
                     if (!result.ok) {
-                        if (result.errorCode === 'approval_canceled' || result.errorCode === 'approval_rejected') return false;
+                        if (isActionApprovalDeclinedErrorCode(result.errorCode)) return false;
                         throw new Error(result.error);
                     }
                     if (!getActionSpec('home.search.rebuild').outputSchema?.safeParse(result.result).success) throw new Error(t('errors.operationFailed'));

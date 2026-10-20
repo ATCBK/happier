@@ -13,6 +13,7 @@ import { encryptBytes, decryptBytes } from '@/modules/encrypt';
 import { readEncryptionFeatureEnv } from '@/app/features/catalog/readFeatureEnv';
 import { readArtifactForCallerInTx, readmitArtifactContentInTx } from './artifactAccessService';
 import { acquireAccountEncryptionTransitionFenceInTx } from '@/app/encryption/accountEncryptionTransition';
+import { log } from '@/utils/logging/log';
 
 const PlainBlobFileSchema = createStoredReadSchema(z.discriminatedUnion('t', [
     z.strictObject({ t: z.literal('plain'), v: z.string() }),
@@ -69,7 +70,7 @@ export async function openArtifactBlobBytes(accountId: string, row: ArtifactBlob
 }
 
 async function isArtifactUploadAccountActiveInTx(tx: Tx, accountId: string): Promise<boolean> {
-    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId);
+    const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, accountId, "content");
     const account = await tx.account.findUnique({ where: { id: accountId }, select: { status: true } });
     return fence.status === 'ready' && account?.status === 'active';
 }
@@ -198,5 +199,15 @@ export async function cleanupArtifactOrphanBlobs(artifactId: string): Promise<vo
             }
             await tx.artifactBlob.deleteMany({ where: { id: row.id, artifactId, storageKey: row.storageKey } });
         });
+    }
+}
+
+/** A committed update keeps its receipt while blob rows retain cleanup custody. */
+export async function cleanupArtifactOrphanBlobsAfterCommit(artifactId: string): Promise<void> {
+    try {
+        await cleanupArtifactOrphanBlobs(artifactId);
+    } catch {
+        // The next operation or Account erasure can resume cleanup from the retained rows.
+        log({ module: 'api', level: 'warn', artifactId }, 'Artifact update committed but orphan blob cleanup failed');
     }
 }

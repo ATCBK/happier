@@ -4,19 +4,16 @@ import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useWorkspaceScmSnapshotController } from '@/hooks/workspaces/scm/useWorkspaceScmSnapshotController';
 import { evaluateScmOperationPreflight } from '@/scm/core/operationPolicy';
 import { resolveCommitAdjacentPushActionState } from '@/scm/operations/commitAdjacentPushAction';
-import { confirmCommitAdjacentPush } from '@/scm/operations/commitAdjacentPushConfirmation';
 import { buildCommitSelectionPathHints } from '@/scm/operations/commitSelectionHints';
 import { formatRemoteTargetForDisplay } from '@/scm/operations/remoteFeedback';
 import { isAtomicCommitStrategy, SCM_COMMIT_STRATEGIES, type ScmCommitStrategy } from '@/scm/settings/commitStrategy';
 import type { ScmPushRejectPolicy } from '@/scm/settings/preferences';
-import { normalizeScmRemoteConfirmPolicy } from '@/scm/settings/remoteConfirmationPolicy';
 import { useScmCommitMessageSuggestion } from '@/scm/operations/useScmCommitMessageSuggestion';
 import { findWorkspaceRefByScope } from '@/sync/domains/workspaces/workspaceRefs';
 import { workspaceAddressFromRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 import {
     storage,
     useSetting,
-    useSettingMutable,
     useWorkspaceScmCommitSelectionPatches,
     useWorkspaceScmCommitSelectionPaths,
     useWorkspaceScmInFlightOperation,
@@ -44,7 +41,6 @@ export function useWorkspaceScmCommitControls(scope: WorkspaceScopeBase) {
     const commitSelectionPaths = useWorkspaceScmCommitSelectionPaths(scope);
     const commitSelectionPatches = useWorkspaceScmCommitSelectionPatches(scope);
     const scmCommitStrategySetting = useSetting('scmCommitStrategy');
-    const [scmRemoteConfirmPolicySetting, setScmRemoteConfirmPolicy] = useSettingMutable('scmRemoteConfirmPolicy');
     const scmPushRejectPolicySetting = useSetting('scmPushRejectPolicy');
     const scmCommitStrategy: ScmCommitStrategy = React.useMemo(() => {
         if (typeof scmCommitStrategySetting !== 'string') return 'atomic';
@@ -52,10 +48,6 @@ export function useWorkspaceScmCommitControls(scope: WorkspaceScopeBase) {
             ? (scmCommitStrategySetting as ScmCommitStrategy)
             : 'atomic';
     }, [scmCommitStrategySetting]);
-    const normalizedRemoteConfirmPolicy = React.useMemo(
-        () => normalizeScmRemoteConfirmPolicy(scmRemoteConfirmPolicySetting),
-        [scmRemoteConfirmPolicySetting],
-    );
     const normalizedPushRejectPolicy: ScmPushRejectPolicy = React.useMemo(() => {
         return scmPushRejectPolicySetting === 'auto_fetch'
             || scmPushRejectPolicySetting === 'prompt_fetch'
@@ -138,38 +130,26 @@ export function useWorkspaceScmCommitControls(scope: WorkspaceScopeBase) {
 
     const onCommitAdjacentPush = React.useCallback(() => {
         if (!commitAdjacentPushState.visible) return;
-        void (async () => {
-            const confirmed = await confirmCommitAdjacentPush({
-                target: commitAdjacentPushState.target,
-                policy: normalizedRemoteConfirmPolicy,
-                setRemoteConfirmPolicy: setScmRemoteConfirmPolicy,
-                detachedHeadLabel: t('files.detachedHead'),
-            });
-            if (!confirmed) return;
-            await executeWorkspaceScmRemoteOperation({
-                kind: 'push',
-                scope,
-                scmSnapshot: snapshot,
-                scmWriteEnabled,
-                scmCommitStrategy,
-                scmRemoteConfirmPolicy: normalizedRemoteConfirmPolicy,
-                scmPushRejectPolicy: normalizedPushRejectPolicy,
-                refreshScmData: refresh,
-                setScmOperationBusy,
-                setScmOperationStatus,
-                tracking: null,
-                skipConfirmation: true,
-            });
-        })();
+        // The push Action's own confirmation (the person's remote-confirmation preference) is the one ask.
+        void executeWorkspaceScmRemoteOperation({
+            kind: 'push',
+            scope,
+            scmSnapshot: snapshot,
+            scmWriteEnabled,
+            scmCommitStrategy,
+            scmPushRejectPolicy: normalizedPushRejectPolicy,
+            refreshScmData: refresh,
+            setScmOperationBusy,
+            setScmOperationStatus,
+            tracking: null,
+        });
     }, [
         commitAdjacentPushState,
         normalizedPushRejectPolicy,
-        normalizedRemoteConfirmPolicy,
         refresh,
         scmCommitStrategy,
         scmWriteEnabled,
         scope,
-        setScmRemoteConfirmPolicy,
         snapshot,
     ]);
 

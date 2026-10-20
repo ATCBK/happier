@@ -847,7 +847,10 @@ describe('parseClaudeScreenState — unrecognized confirmation dialogs (P-B fail
     expect(resolveClaudeScreenInFlightSteerVeto(cursorUnavailable)).toBe('unrecognized_confirmation_dialog');
   });
 
-  it('distinguishes a focused chooser artifact from the separate cursor-proven bordered composer', () => {
+  it.each([
+    { composer: '❯ ', cursorX: 2, draft: '' },
+    { composer: '│ ❯ my unfinished draft │', cursorX: 23, draft: 'my unfinished draft' },
+  ])('distinguishes a focused chooser artifact from the separate cursor-proven bordered composer: $composer', ({ composer, cursorX, draft }) => {
     const screen = [
       'Allow external CLAUDE.md file imports?',
       '',
@@ -857,18 +860,20 @@ describe('parseClaudeScreenState — unrecognized confirmation dialogs (P-B fail
       'Enter to confirm · Esc to cancel',
       '',
       '──────────────────────────────',
-      '❯ ',
+      composer,
       '──────────────────────────────',
     ].join('\n');
 
-    const composerOwned = parseClaudeScreenState(screen, { cursor: { x: 2, y: 8 } });
-    expect(composerOwned.composerContent).toBe('');
-    expect(composerOwned.composerCursorRelation).toBe('at_content_start');
+    const composerOwned = parseClaudeScreenState(screen, { cursor: { x: cursorX, y: 8 } });
+    expect(composerOwned.composerContent).toBe(draft);
+    expect(composerOwned.composerCursorRelation).toBe(draft ? 'inside_or_after_content' : 'at_content_start');
     expect(composerOwned.unrecognizedConfirmationDialogVisible).toBe(false);
     expect(composerOwned.unrecognizedConfirmationDialog).toBeNull();
-    expect(isClaudeScreenReadyForInput(composerOwned)).toBe(true);
-    expect(isSafeWindowForSlashControl(composerOwned)).toBe(true);
-    expect(resolveClaudeScreenInFlightSteerVeto(composerOwned)).toBeNull();
+    expect(composerOwned.userDraftPresent).toBe(Boolean(draft));
+    expect(isClaudeScreenReadyForInput(composerOwned)).toBe(!draft);
+    expect(isSafeWindowForSlashControl(composerOwned)).toBe(!draft);
+    expect(isSafeWindowForModeCycle(composerOwned)).toBe(!draft);
+    expect(resolveClaudeScreenInFlightSteerVeto(composerOwned)).toBe(draft ? 'user_draft' : null);
 
     for (const state of [
       parseClaudeScreenState(screen, { cursor: { x: 2, y: 2 } }),
@@ -1292,5 +1297,69 @@ describe('parseClaudeScreenState — plain contextual suggestion with cursor pro
 
     expect(state.composerContent).toBe('what can you help me with');
     expect(state.userDraftPresent).toBe(true);
+  });
+});
+
+describe('parseClaudeScreenState — bash mode prompt (2.1.301)', () => {
+  const RULE = '────────────────────────────────────────────────';
+  const FOOTER = '  ! for shell mode';
+  const STAGED = ['', RULE, '!  echo hi', RULE, FOOTER].join('\n');
+  const EMPTY = ['', RULE, '! Try "fix typecheck errors"', RULE, FOOTER].join('\n');
+
+  it('exposes the command staged after a pasted "! cmd" as shellComposerContent', () => {
+    expect(parseClaudeScreenState(STAGED).shellComposerContent).toBe('echo hi');
+  });
+
+  it('never reads the "! for shell mode" footer hint as the prompt line', () => {
+    const state = parseClaudeScreenState(EMPTY);
+    expect(state.shellComposerContent).toBe('Try "fix typecheck errors"');
+    expect(state.shellComposerContent).not.toBe('for shell mode');
+  });
+
+  it('reads the bottom bash-mode prompt line, not an earlier "!" line', () => {
+    const state = parseClaudeScreenState([
+      '! earlier line in the scrollback',
+      RULE,
+      '!  git status',
+      RULE,
+      FOOTER,
+    ].join('\n'));
+    expect(state.shellComposerContent).toBe('git status');
+  });
+
+  it('is not a message composer: no readiness, control window or steering on a bash-mode prompt', () => {
+    for (const screen of [STAGED, EMPTY]) {
+      for (const context of [undefined, { cursor: { x: 2, y: 2 } }]) {
+        const state = parseClaudeScreenState(screen, context);
+        expect(state.composerContent).toBeNull();
+        expect(isClaudeScreenReadyForInput(state)).toBe(false);
+        expect(isSafeWindowForSlashControl(state)).toBe(false);
+        expect(isSafeWindowForModeCycle(state)).toBe(false);
+        expect(resolveClaudeScreenInFlightSteerVeto(state)).toBe('no_interactive_composer');
+      }
+    }
+  });
+
+  it('leaves normal mode untouched: a "!" line without the bash-mode footer is not a prompt', () => {
+    const normal = parseClaudeScreenState([
+      '! warning: not a prompt',
+      RULE,
+      '❯ a real draft',
+      RULE,
+      '  ⏵⏵ bypass permissions on',
+    ].join('\n'));
+    expect(normal.composerContent).toBe('a real draft');
+    expect(normal.shellComposerContent).toBeNull();
+    expect(parseClaudeScreenState('! warning: not a prompt').shellComposerContent).toBeNull();
+  });
+
+  it('selects one active input instead of retaining an older empty message composer', () => {
+    const state = parseClaudeScreenState(['❯ ', RULE, STAGED].join('\n'));
+    expect(state.composerContent).toBeNull();
+    expect(state.shellComposerContent).toBe('echo hi');
+    expect(isClaudeScreenReadyForInput(state)).toBe(false);
+    expect(isSafeWindowForSlashControl(state)).toBe(false);
+    expect(isSafeWindowForModeCycle(state)).toBe(false);
+    expect(resolveClaudeScreenInFlightSteerVeto(state)).toBe('no_interactive_composer');
   });
 });

@@ -1,25 +1,32 @@
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createDeferred, renderHook } from '@/dev/testkit';
-import { installWorkspaceFileDetailsCommonModuleMocks } from './workspaceFileDetailsTestHelpers';
+import { createDeferred, renderHook, standardCleanup } from '@/dev/testkit';
+import { FilesystemWriteFileInputSchema } from '@happier-dev/protocol/actions/filesystemActionFamily';
+import {
+    installWorkspaceFileDetailsCommonModuleMocks,
+    installWorkspaceFileDetailsActionBoundary,
+    prepareWorkspaceFileDetailsActionBoundary,
+    cleanupWorkspaceFileDetailsActionBoundary,
+    getWorkspaceFileDetailsActionBoundary,
+} from './workspaceFileDetailsTestHelpers';
 import { workspaceFileEditorDraftCache } from './workspaceFileEditorDraftCache';
 import { buildWorkspaceCacheKey } from '@/sync/domains/workspaces/workspaceScope';
-import { useWorkspaceFileEditorState } from './useWorkspaceFileEditorState';
-import { storage, useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { Modal } from '@/modal';
 
 installWorkspaceFileDetailsCommonModuleMocks();
+installWorkspaceFileDetailsActionBoundary();
 
-type WriteRpc = typeof import('@/sync/domains/transfers/runtime/transferRuntime').callDaemonWorkspaceWriteFileRpc;
+type WriteRpc = (request: Parameters<typeof import('@/sync/runtime/orchestration/serverScopedRpc/guardedMachineRpc').callGuardedMachineRpcWithPolicy>[0]) => Promise<import('@/sync/ops/workspaceFileSystem/fileReadWrite').WorkspaceWriteFileResponse>;
 type WriteResponse = Awaited<ReturnType<WriteRpc>>;
 const writeRpcSpy = vi.hoisted(() => vi.fn<WriteRpc>());
 
-// Keep file encoding, guarded-write handling and editor state real beneath the daemon RPC boundary.
-vi.mock('@/sync/domains/transfers/runtime/transferRuntime', () => ({
-    callDaemonWorkspaceWriteFileRpc: writeRpcSpy,
-}));
+// Keep encoding, Action admission and editor state real beneath the Machine RPC boundary.
+const actionBoundary = getWorkspaceFileDetailsActionBoundary();
+const { useWorkspaceFileEditorState } = await import('./useWorkspaceFileEditorState');
+const { workspaceWriteFile } = await import('@/sync/domains/workspaces/files/workspaceFileReadWrite');
+const { storage, useActiveServerAccountScope } = await import('@/sync/domains/state/storage');
 
 const scope = { serverId: 'srv1', machineId: 'm1', rootPath: '/repo' };
 
@@ -64,18 +71,26 @@ async function createHarness(options: Readonly<{
 }
 
 function writtenRequests() {
-    return writeRpcSpy.mock.calls.map(([params]) => ({
-        ...params.request,
-        content: Buffer.from(params.request.content, 'base64').toString('utf8'),
-    }));
+    return writeRpcSpy.mock.calls.map(([params]) => {
+        const { rootPath: _rootPath, ...request } = FilesystemWriteFileInputSchema.parse(params.payload);
+        return {
+            ...request,
+            path: request.path.slice(`${scope.rootPath}/`.length),
+            content: Buffer.from(request.content, 'base64').toString('utf8'),
+        };
+    });
 }
 
 describe('useWorkspaceFileEditorState autosave', () => {
-    beforeEach(() => {
-        vi.useFakeTimers();
+    beforeEach(async () => {
+        scope.serverId = await prepareWorkspaceFileDetailsActionBoundary();
         writeRpcSpy.mockReset();
+        actionBoundary.read.mockReset().mockImplementation(writeRpcSpy);
         vi.mocked(Modal.show).mockClear();
+        vi.mocked(Modal.alert).mockClear();
+        vi.mocked(Modal.confirm).mockResolvedValue(true);
         for (const accountId of ['alice', 'bob']) workspaceFileEditorDraftCache.setDraft({ accountId, workspaceCacheKey: buildWorkspaceCacheKey(scope), filePath: 'src/a.ts', draft: null });
+        vi.useFakeTimers();
     });
 
     afterEach(async () => {
@@ -84,6 +99,31 @@ describe('useWorkspaceFileEditorState autosave', () => {
             publishAppliedActiveServerRuntimeAvailability(false);
         });
         vi.useRealTimers();
+        await standardCleanup();
+        await cleanupWorkspaceFileDetailsActionBoundary();
+    });
+
+    it('retires only the write observer on navigation while the admitted write retains its Account custody', async () => {
+        const issued = createDeferred<void>();
+        const remoteResult = createDeferred<WriteResponse>();
+        writeRpcSpy.mockImplementationOnce(async () => { issued.resolve(); return await remoteResult.promise; })
+            .mockResolvedValueOnce({ success: true, hash: 'h2' });
+        const observer = new AbortController();
+        let observationEnded = false;
+        const pending = workspaceWriteFile({ scope, path: 'src/a.ts', content: 'saved draft', expectedHash: 'h1', signal: observer.signal });
+        const outcome = pending.then(value => value, error => { observationEnded = true; return error as unknown; });
+        await issued.promise;
+        observer.abort();
+        await vi.waitFor(() => expect(observationEnded).toBe(true));
+        await expect(outcome).resolves.toMatchObject({ name: 'AbortError', code: 'TRANSFER_OBSERVATION_ABORTED' });
+        expect(writeRpcSpy).toHaveBeenCalledTimes(1);
+        expect(writeRpcSpy.mock.calls[0]?.[0].signal?.aborted).not.toBe(true);
+        remoteResult.resolve({ success: true, hash: 'h2' });
+        await act(async () => { await Promise.resolve(); });
+        expect(writeRpcSpy).toHaveBeenCalledTimes(1);
+        await expect(workspaceWriteFile({ scope, path: 'src/a.ts', content: 'fresh draft', expectedHash: 'h2',
+            signal: new AbortController().signal })).resolves.toEqual({ success: true, hash: 'h2' });
+        expect(writeRpcSpy).toHaveBeenCalledTimes(2);
     });
 
     it('does not restore or persist a private draft without captured Account authority', async () => {
@@ -93,7 +133,7 @@ describe('useWorkspaceFileEditorState autosave', () => {
         expect(hook.getCurrent().getEditorText()).toBe('hello');
         await act(async () => hook.getCurrent().startEditingFile());
         await act(async () => hook.getCurrent().onEditorChange('new private draft'));
-        await act(async () => vi.advanceTimersByTime(100));
+        await act(async () => { vi.advanceTimersByTime(100); });
         expect(hook.persistDraft).not.toHaveBeenCalled();
     });
 
@@ -139,7 +179,7 @@ describe('useWorkspaceFileEditorState autosave', () => {
         hook.accountIdRef.current = 'bob';
         await hook.rerender();
         await act(async () => oldEditorChange('Alice delayed callback'));
-        await act(async () => vi.advanceTimersByTime(100));
+        await act(async () => { vi.advanceTimersByTime(100); });
         expect(writeRpcSpy).not.toHaveBeenCalled();
         expect(hook.getCurrent().getEditorText()).toBe('hello');
         expect(workspaceFileEditorDraftCache.getDraft({ accountId: 'bob', workspaceCacheKey: buildWorkspaceCacheKey(scope), filePath: 'src/a.ts' })).toBeNull();
@@ -151,14 +191,14 @@ describe('useWorkspaceFileEditorState autosave', () => {
         writeRpcSpy.mockReturnValueOnce(pending.promise).mockReturnValueOnce(bobPending.promise);
         const hook = await createHarness();
         await act(async () => hook.getCurrent().onEditorChange('Alice writing'));
-        await act(async () => vi.advanceTimersByTime(100));
-        expect(writeRpcSpy).toHaveBeenCalled();
+        await act(async () => { vi.advanceTimersByTime(100); });
+        expect(writeRpcSpy, JSON.stringify(vi.mocked(Modal.alert).mock.calls)).toHaveBeenCalled();
         hook.accountIdRef.current = 'bob';
         await hook.rerender();
         expect(hook.getCurrent().isSavingEdits).toBe(false);
         await act(async () => hook.getCurrent().startEditingFile());
         await act(async () => hook.getCurrent().onEditorChange('Bob writing'));
-        await act(async () => vi.advanceTimersByTime(100));
+        await act(async () => { vi.advanceTimersByTime(100); });
         expect(writtenRequests().map(request => request.content)).toEqual(['Alice writing', 'Bob writing']);
         await act(async () => pending.resolve({ success: true, hash: 'Alice saved basis' }));
         expect(hook.getCurrent()).toMatchObject({ isEditingFile: true, editorDirty: true, isSavingEdits: true, editorOriginalHash: 'h1' });
@@ -191,13 +231,13 @@ describe('useWorkspaceFileEditorState autosave', () => {
         writeRpcSpy.mockReturnValueOnce(first.promise).mockReturnValueOnce(returned.promise);
         const hook = await createHarness();
         await act(async () => hook.getCurrent().onEditorChange('Alice first invocation'));
-        await act(async () => vi.advanceTimersByTime(100));
+        await act(async () => { vi.advanceTimersByTime(100); });
         hook.accountIdRef.current = 'bob';
         await hook.rerender();
         hook.accountIdRef.current = 'alice';
         await hook.rerender();
         await act(async () => hook.getCurrent().onEditorChange('Alice returned invocation'));
-        await act(async () => vi.advanceTimersByTime(100));
+        await act(async () => { vi.advanceTimersByTime(100); });
         expect(writtenRequests().map(request => request.content)).toEqual(['Alice first invocation', 'Alice returned invocation']);
         await act(async () => first.resolve({ success: true, hash: 'first' }));
         expect(hook.getCurrent()).toMatchObject({ isSavingEdits: true, editorDirty: true });

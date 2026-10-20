@@ -55,7 +55,7 @@ describe('Machine current key preparation', () => {
         expect(await prepareCurrentMachineDataKeyEnvelopes({ serverId: 'home', machineId: 'machine', transport: {
             fetchPage: async () => ({ ...page, callerDataEncryptionKey: row.dataEncryptionKey!, machineOwnerEnvelopeFingerprint: computeMachineOwnerEnvelopeFingerprintV1(decodeBase64(row.dataEncryptionKey!)),
                 content: { metadata: row.metadata!, metadataVersion: 4, daemonState: row.daemonState, daemonStateVersion: 5 } }), patchPage,
-        }, resolveTransferableMachineDataKey: async () => prepared.encryptionKey, isHostScopeCurrent: () => true })).toEqual({ kind: 'pending_holder' });
+        }, resolveTransferableMachineDataKey: async () => prepared.encryptionKey ?? null, isHostScopeCurrent: () => true })).toEqual({ kind: 'pending_holder' });
         expect(patchPage).not.toHaveBeenCalled();
     });
     it('custodian material selection rejects Account borrowing and opens an independent current owner key', async () => {

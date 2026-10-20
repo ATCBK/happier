@@ -8,6 +8,7 @@ import {
 } from '@happier-dev/protocol';
 
 import { prepareDirectProviderLaunch } from './prepareDirectLaunch';
+import { createProviderRedactionLease } from '@/providers/spawn/redaction';
 
 const connectionId = ProviderConnectionIdSchema.parse('pc_direct');
 const bindingMetadata: SessionProviderBindingMetadataV1 = {
@@ -106,14 +107,7 @@ describe('direct Provider launch lifecycle', () => {
             additionalRedactionValues: [],
             cleanup: null,
           },
-          redactionLease: {
-            redact: (value: string) => value.replaceAll('secret-value', '[REDACTED]'),
-            values: () => ['secret-value'],
-            add: () => {},
-            snapshotRedactor: () => (value: string) => value.replaceAll('secret-value', '[REDACTED]'),
-            createStreamingSanitizer: () => ({ push: () => '', flush: () => '' }),
-            close: vi.fn(),
-          },
+          redactionLease: createProviderRedactionLease({ values: ['secret-value'] }),
         };
       }),
       revalidateBeforeCommit: vi.fn(async () => {
@@ -156,6 +150,7 @@ describe('direct Provider launch lifecycle', () => {
       agentTargetKey: 'agent:happier.agent.codex/codex',
       environment: { PROVIDER_KEY: 'secret-value' },
       unsetEnvKeys: [],
+      additionalRedactionValues: ['secret-value'],
       bindingMetadata,
       launchMaterialization: { kind: 'engineConfig' },
     });
@@ -199,9 +194,7 @@ describe('direct Provider launch lifecycle', () => {
           providerEnvironmentOverlay: [],
           launchMaterialization: { v: 1 as const, kind: 'engineConfig' as const, engineConfig: {} },
         },
-        redactionLease: {
-          snapshotRedactor: () => (value: string) => value,
-        },
+        redactionLease: createProviderRedactionLease({ values: [] }),
       })),
       revalidateBeforeCommit,
       cleanupOnFailure: vi.fn(),
@@ -227,6 +220,7 @@ describe('direct Provider launch lifecycle', () => {
       createAuthorizationAttempt: async () => ({ ok: true, attempt: attempt as never }),
     });
 
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true, kind: 'provider' });
     if (!result.ok || result.kind !== 'provider') throw new Error('Expected Provider launch');
     expect(revalidateBeforeCommit).toHaveBeenCalledTimes(1);
     await expect(result.revalidateBeforeCommit()).resolves.toEqual({
@@ -298,9 +292,7 @@ describe('direct Provider launch lifecycle', () => {
             ],
             launchMaterialization: { kind: 'engineConfig' as const },
           },
-          redactionLease: {
-            snapshotRedactor: () => (value: string) => value,
-          },
+          redactionLease: createProviderRedactionLease({ values: [] }),
         };
       }),
       revalidateBeforeCommit: vi.fn(async () => ({ ok: true as const })),

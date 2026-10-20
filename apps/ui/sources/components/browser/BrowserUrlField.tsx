@@ -172,6 +172,8 @@ export type BrowserUrlFieldProps = Readonly<{
      * bar reflects a loaded page and wants this; the launchpad's entry box starts empty and does not.
      */
     formatWhileBlurred?: boolean;
+    /** Names the blurred address by another host than the URL's (a relay preview's exposed service). */
+    displayHost?: string;
     /** Clear the draft after a successful submit (a new-tab entry box, not an address bar). */
     clearOnSubmit?: boolean;
     searchUrlTemplate?: string;
@@ -228,10 +230,12 @@ export function BrowserUrlField(props: BrowserUrlFieldProps): React.ReactElement
     draftRef.current = rawDraft;
     const editIntent = React.useRef({ key: props.editIntentKey, started: false });
 
-    // Keep the editable draft in sync with the authoritative value while blurred so navigations
-    // driven elsewhere (redirects, programmatic loads) are reflected on the next focus without
-    // clobbering an in-progress edit.
+    // External navigations update a blurred draft. A focus transition alone must not reset it:
+    // clicking Go blurs the input before the button's release submits the typed address.
+    const observedValue = React.useRef(props.value);
     React.useEffect(() => {
+        if (observedValue.current === props.value) return;
+        observedValue.current = props.value;
         if (!focused) {
             setRawDraft(props.value);
             draftRef.current = props.value;
@@ -242,7 +246,7 @@ export function BrowserUrlField(props: BrowserUrlFieldProps): React.ReactElement
     const resting = densityKey === 'capsule' && !focused && props.value.length > 0;
     const displayValue = focused || props.formatWhileBlurred !== true
         ? rawDraft
-        : formatBrowserDisplayUrl(props.value, { hostOnly: densityKey === 'capsule' });
+        : formatBrowserDisplayUrl(props.value, { hostOnly: densityKey === 'capsule', displayHost: props.displayHost });
 
     const handleFocus = React.useCallback(() => {
         editIntent.current = { key: props.editIntentKey, started: false };

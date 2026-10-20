@@ -112,24 +112,44 @@ describe('stateUpdates (plaintext sessions)', () => {
     expect(kind === 'metadata' ? metadata.name : Object.keys(agentState.requests ?? {})).toEqual(kind === 'metadata' ? 'title!' : ['r0']);
   });
 
-  it('reoffers the exact uncertain CAS through the replacement Session transport', async () => {
+  it.each(['metadata', 'agent-state'] as const)('reoffers the exact uncertain %s CAS through the replacement Session transport', async (kind) => {
     let stored = '';
     let version = 1;
-    const replacement = { emitWithAck: async () => ({ result: 'version-mismatch', version: 2, metadata: stored }) };
+    let metadata = createMetadata({ name: 'title' });
+    let agentState: import('@/api/types').AgentState = { requests: {} };
+    const submitted: unknown[] = [];
+    const replacement = { emitWithAck: async (_event: string, payload: unknown) => {
+      submitted.push(payload);
+      return { result: 'version-mismatch', version: 2, metadata: stored, agentState: stored };
+    } };
     const disconnected = { emitWithAck: async (_event: string, payload: unknown) => {
-      // The server database and the socket are external boundaries; retain the real CAS owner.
-      stored = (payload as PlainMetadataAckPayload).metadata;
+      // The database and socket are external boundaries; the CAS owner stays real.
+      submitted.push(payload);
+      const request = payload as { metadata?: string; agentState?: string };
+      stored = request.metadata ?? request.agentState!;
       current = replacement;
       throw new Error('socket has been disconnected');
     } };
     let current: Parameters<typeof updateSessionMetadataWithAck>[0]['socket'] = disconnected;
-    const options = {
-      socket: disconnected, getSocket: async () => current, sessionId: 's1', sessionEncryptionMode: 'plain' as const,
-      getMetadata: () => createMetadata({ name: 'title' }), setMetadata: () => {},
-      getMetadataVersion: () => version, setMetadataVersion: (value: number) => { version = value; },
-      syncSessionSnapshotFromServer: async () => {}, handler: (value: Metadata) => ({ ...value, name: `${value.name}!` }),
-    };
-    await expect(updateSessionMetadataWithAck(options)).resolves.toMatchObject({ version: 2 });
+    const common = { socket: disconnected, getSocket: () => current,
+      sessionId: 's1', sessionEncryptionMode: 'plain' as const,
+      syncSessionSnapshotFromServer: async () => {} };
+    const result = kind === 'metadata'
+      ? await updateSessionMetadataWithAck({ ...common,
+        getMetadata: () => metadata, setMetadata: value => { metadata = value!; },
+        getMetadataVersion: () => version, setMetadataVersion: value => { version = value; },
+        handler: value => ({ ...value, name: `${value.name}!` }) })
+      : await updateSessionAgentStateWithAck({ ...common,
+        getAgentState: () => agentState, setAgentState: value => { agentState = value!; },
+        getAgentStateVersion: () => version, setAgentStateVersion: value => { version = value; },
+        handler: value => ({ ...value, requests: { ...value.requests,
+          [`r${Object.keys(value.requests ?? {}).length}`]: { tool: 'Read', arguments: {}, createdAt: 1 } } }) });
+    expect(result.version).toBe(2);
+    expect(version).toBe(2);
+    expect(submitted).toHaveLength(2);
+    expect(submitted[1]).toEqual(submitted[0]);
+    expect(kind === 'metadata' ? metadata.name : Object.keys(agentState.requests ?? {}))
+      .toEqual(kind === 'metadata' ? 'title!' : ['r0']);
   });
 
   it('reports terminal metadata write failure without leaking the rejected payload or changing local state', async () => {
@@ -156,6 +176,35 @@ describe('stateUpdates (plaintext sessions)', () => {
       });
       expect(JSON.stringify(infoFile.mock.calls)).not.toContain('private-server-payload');
       expect(JSON.stringify(infoFile.mock.calls)).not.toContain('private-session-title');
+    } finally {
+      infoFile.mockRestore();
+    }
+  });
+
+  it('reports a settled agent-state write failure without logging private state or server payloads', async () => {
+    const privateServerError = 'private server response /private/workspace';
+    const agentState: import('@/api/types').AgentState = {
+      requests: { pending: { tool: 'Bash', arguments: { command: 'private command' }, createdAt: 1 } },
+    };
+    const infoFile = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
+    try {
+      await expect(updateSessionAgentStateWithAck({
+        socket: { emitWithAck: async () => ({ result: 'error', error: privateServerError }) },
+        sessionId: 's1',
+        sessionEncryptionMode: 'plain',
+        getAgentState: () => agentState,
+        setAgentState: () => { throw new Error('failed write must not replace the acknowledged snapshot'); },
+        getAgentStateVersion: () => 1,
+        setAgentStateVersion: () => { throw new Error('failed write must not advance the version'); },
+        syncSessionSnapshotFromServer: async () => {},
+        handler: (current) => ({ ...current, requests: {} }),
+      })).rejects.toMatchObject({ code: 'agent_state_update_failed', retryable: false });
+      expect(infoFile.mock.calls).toEqual([[
+        '[API] session_agent_state_update_failed',
+        { phase: 'terminal_failure', operation: 'update-state', sessionId: 's1' },
+      ]]);
+      expect(JSON.stringify(infoFile.mock.calls)).not.toContain(privateServerError);
+      expect(JSON.stringify(infoFile.mock.calls)).not.toContain('private command');
     } finally {
       infoFile.mockRestore();
     }

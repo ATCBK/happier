@@ -148,6 +148,23 @@ describe('ActionExecutor prepared invocation', () => {
       .resolves.toMatchObject({ ok: false });
   });
 
+  it('refuses a still-led child headless Resume before the Session open effect', async () => {
+    const { caller, sessionList } = sessionReadHarness();
+    const opened: string[] = [];
+    const executor = createExecutor({ sessionList, isActionApprovalRequired: () => false,
+      sessionOpen: async ({ sessionId }) => { opened.push(sessionId); return { ok: true }; },
+    });
+    const context = caller('parent');
+    await expect(executor.execute('session.open', { sessionId: 'child', intent: 'resume' }, context))
+      .resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action', details: { cause: 'action_scope_restricted' } });
+    expect(opened).toEqual([]);
+    // The same port remains reachable for the current Session.
+    await expect(executor.execute('session.open', { sessionId: 'parent', intent: 'resume' }, context))
+      .resolves.toMatchObject({ ok: true });
+    expect(opened).toEqual(['parent']);
+  });
+
+
   it('admits registered Session setters for own and server-proved led targets', async () => {
     const { caller, sessionList } = sessionReadHarness();
     const writes: Array<Readonly<{ sessionId: string; fieldId: string; value: unknown }>> = [];
@@ -345,22 +362,31 @@ describe('ActionExecutor prepared invocation', () => {
     expect(sessionList).not.toHaveBeenCalled();
   });
 
-  it('admits a mounted plugin surface driven by the present user, and still refuses an autonomous one', async () => {
+  it('admits only a host-stamped mounted UI Session list without elevating plugin authority', async () => {
     const payload = { sessions: [{ id: 'listed-session', active: false, presence: 'offline', updatedAt: 10 }], nextCursor: null };
     const sessionList = vi.fn(async () => payload);
     const executor = createExecutor({ sessionList, isActionApprovalRequired: () => false });
 
-    // A trusted plugin mounted in front of the person is that person reading
-    // their own list, so it gets the corpus a `ui` caller gets.
+    // Reading the mounted Account's list does not turn the plugin into the person.
     await expect(executor.execute('session.list', {}, {
       surface: 'plugin',
-      authority: 'present_user',
+      authority: 'account_automation',
+      sessionListAccess: 'mounted_ui',
       actionCaller: {
         kind: 'plugin',
         pluginId: 'acme.board',
         contributionLocalId: 'sessions-panel',
       },
     })).resolves.toEqual({ ok: true, result: payload });
+
+    for (const context of [
+      { surface: 'agent', authority: 'account_automation', sessionListAccess: 'mounted_ui' },
+      { surface: 'plugin', authority: 'account_automation', sessionListAccess: 'mounted_ui', actionCaller: { kind: 'host' } },
+      { surface: 'plugin', authority: 'account_automation', actionCaller: { kind: 'plugin', pluginId: 'acme.board', contributionLocalId: 'sessions-panel' } },
+    ] as const) {
+      await expect(executor.execute('session.list', {}, context)).resolves.toMatchObject({ ok: false });
+    }
+    expect(sessionList).toHaveBeenCalledTimes(1);
 
     // The same plugin invoked with no present user stays bound to its corpus.
     await expect(executor.execute('session.list', {}, {
@@ -564,8 +590,11 @@ describe('ActionExecutor prepared invocation', () => {
       strategy: 'replay',
       replaySummaryRunner: {
         v: 1,
-        backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
-        modelId: 'default',
+        modelSelection: {
+          agentTargetKey: 'agent:happier.agent.claude/claude',
+          providerConnectionId: null,
+          modelId: 'default',
+        },
         permissionMode: 'no_tools',
       },
       replayMaxSeedChars: 40_000,
@@ -574,7 +603,7 @@ describe('ActionExecutor prepared invocation', () => {
     });
   });
 
-  it('completes blocking approval admission before ready and dispatches only from run', async () => {
+  it.each(['Session MCP', 'mounted plugin'] as const)('completes %s blocking approval admission before dispatch', async (origin) => {
     let storedRequest: ApprovalRequest | null = null;
     const approvalsCreate = vi.fn(async ({ request }: { request: ApprovalRequest }) => {
       storedRequest = request;
@@ -603,12 +632,18 @@ describe('ActionExecutor prepared invocation', () => {
       isActionApprovalRequired: (actionId) => actionId === 'session.list',
     });
 
-    const prepared = await executor.prepare('session.list', {}, {
+    const prepared = await executor.prepare('session.list', {}, origin === 'Session MCP' ? {
       surface: 'mcp',
       serverId: 'server-1',
       actionRequestId: 'request-1',
       defaultSessionId: 'session-1',
       sessionListAccess: 'current_session',
+    } : {
+      surface: 'plugin', authority: 'account_automation', serverId: 'server-1',
+      actionRequestId: 'mounted-list-request', sessionListAccess: 'mounted_ui',
+      defaultSessionMachineId: 'machine-1',
+      actionCaller: { kind: 'plugin', pluginId: 'acme.board', contributionLocalId: 'sessions-panel',
+        sourceCustody: { kind: 'development', registeredRootId: 'board-root' } },
     });
 
     expect(prepared.kind).toBe('ready');
@@ -628,6 +663,10 @@ describe('ActionExecutor prepared invocation', () => {
       status: 'executed',
       execution: { ok: true, result: { sessions: [{ id: 'session-1', active: false, presence: 'offline', updatedAt: 10 }], nextCursor: null } },
     });
+    if (origin === 'mounted plugin') expect(storedRequest).toMatchObject({ executionOriginV1: {
+      authority: 'account_automation', surface: 'plugin', sessionListAccess: 'mounted_ui',
+      caller: { kind: 'plugin', pluginId: 'acme.board', contributionLocalId: 'sessions-panel' },
+    } });
   });
 
   it('keeps blocking waiter ownership when approval is decided concurrently', async () => {

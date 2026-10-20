@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import type {
     DeviceSimulatorPreviewCapabilities,
     FeaturesResponse as ServerFeatures,
@@ -147,7 +148,7 @@ function resolveSelectedSimulatorId(input: Readonly<{
 export function useSimulatorPreviewSessionSurfaceRuntime(
     input: UseSimulatorPreviewSessionSurfaceRuntimeInput,
 ): SimulatorPreviewSurfaceRuntime {
-    const enabled = input.enabled ?? true;
+    const presented = useLayoutPresentationActive();
     const machineId = normalizeId(input.machineId);
     const serverId = normalizeId(input.serverId);
     const refreshIntervalMs = resolveRefreshIntervalMs(input.refreshIntervalMs);
@@ -171,7 +172,18 @@ export function useSimulatorPreviewSessionSurfaceRuntime(
     const nowMs = resolveNowMsFn(input.nowMs);
     const nowMsRef = React.useRef(nowMs);
     const featureEnabled = featureDecision?.state === 'enabled';
-    const daemonRuntimeEnabled = enabled && Boolean(machineId) && featureEnabled && capabilities.enabled;
+    const daemonRuntimeAvailable = (input.enabled ?? true) && Boolean(machineId) && featureEnabled && capabilities.enabled;
+    const daemonRuntimeEnabled = daemonRuntimeAvailable && presented;
+    const actionScope = React.useRef<AbortController | null>(null);
+    React.useEffect(() => {
+        if (!daemonRuntimeEnabled) return;
+        const controller = new AbortController();
+        actionScope.current = controller;
+        return () => {
+            controller.abort();
+            if (actionScope.current === controller) actionScope.current = null;
+        };
+    }, [daemonRuntimeEnabled, machineId, serverId]);
 
     React.useEffect(() => {
         snapshotClientRef.current = snapshotClient;
@@ -180,6 +192,7 @@ export function useSimulatorPreviewSessionSurfaceRuntime(
     }, [actionClient, nowMs, snapshotClient]);
 
     React.useEffect(() => {
+        if (!presented && daemonRuntimeAvailable) return;
         if (!daemonRuntimeEnabled || !machineId) {
             setDaemonState(createSimulatorPreviewDaemonState());
             return;
@@ -230,7 +243,7 @@ export function useSimulatorPreviewSessionSurfaceRuntime(
                 clearInterval(intervalId);
             }
         };
-    }, [daemonRuntimeEnabled, machineId, refreshIntervalMs, serverId]);
+    }, [daemonRuntimeAvailable, daemonRuntimeEnabled, machineId, presented, refreshIntervalMs, serverId]);
 
     const resources = React.useMemo(() => resolveRuntimeResources({
         explicitResources: input.resources ?? daemonState.resources,
@@ -251,12 +264,15 @@ export function useSimulatorPreviewSessionSurfaceRuntime(
         }
         return createSimulatorPreviewApi({
             dispatch: async (event) => {
+                const signal = actionScope.current?.signal;
+                if (!signal || signal.aborted) return;
                 const result = await actionClientRef.current({
                     machineId,
                     serverId,
                     event,
+                    signal,
                 });
-                if (result.ok && actionResultUpdatesDaemonState(event)) {
+                if (!signal.aborted && result.ok && actionResultUpdatesDaemonState(event)) {
                     setDaemonState((previous) => applySimulatorPreviewDaemonActionResult(
                         previous,
                         event,

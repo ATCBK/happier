@@ -7,9 +7,11 @@ import {
   type RegistryItemV1,
 } from '@happier-dev/protocol/registries';
 import type { ReachRulesChangeV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
-import type { SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import { findHeldSkillV1, type SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 import { deriveSkillTrustV1 } from '@happier-dev/protocol/prompts/library/skills/skillTrustV1';
 import { estimateSkillCostV1 } from '@happier-dev/protocol/prompts/library/skills/skillCostV1';
+import { readSkillOutsideReferencesV1 } from '@happier-dev/protocol/prompts/library/skills/skillReferencesV1';
+import type { SkillInstallPreviewV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 import { reachRulesToDraftsV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
 
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
@@ -23,6 +25,7 @@ import {
   type CapabilityTrust,
 } from '@/components/capabilities/facts/CapabilityFacts';
 import { buildCapabilityCollectionAnatomy } from '@/components/capabilities/row/buildCapabilityCollectionAnatomy';
+import { CapabilityRow } from '@/components/capabilities/row/CapabilityRow';
 import {
   useDraftReachRules,
   WhereItsOnControl,
@@ -30,6 +33,7 @@ import {
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
+import { BareSectionContent } from '@/components/ui/lists/BareSectionContent';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -47,10 +51,13 @@ import { useSkillsLibrary } from '@/sync/domains/skills/useSkillsLibrary';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { t } from '@/text';
 
+import { remainingOutsideReferences, SkillAlsoAddsNote, SkillOutsideReferencesItem } from '../outsideReferences';
 import { useSkillPlaces } from '../useSkillPlaces';
-import { installSkills, retrySkillRules } from './skillInstall';
+import { installSkills, previewSkillInstall, retrySkillRules } from './skillInstall';
 import { SkillLinkInput } from './SkillLinkInput';
 import { SkillUploadInput } from './SkillUploadInput';
+import { heldSkillRowProps, SkillInLibraryMark } from './SkillPreviewRows';
+import type { MountedAuthoringActionExecute } from '@/sync/ops/actions/sessionAuthoringActions';
 
 export type SkillAddModeKey = 'browse' | 'link' | 'upload' | 'write';
 
@@ -92,14 +99,7 @@ function libraryMatch(
   items: readonly SkillListItemV1[],
   row: Row,
 ): SkillListItemV1 | null {
-  return (
-    items.find(
-      (item) =>
-        item.provenance.kind === 'registry' &&
-        item.provenance.registry.sourceId === row.sourceId &&
-        item.provenance.registry.itemId === row.itemId,
-    ) ?? null
-  );
+  return findHeldSkillV1(items, { registry: row });
 }
 /** A listing whose "description" is only its repository says nothing the facts line doesn't: no second copy. */
 function rowDescription(row: Row): string | null {
@@ -176,8 +176,22 @@ export function SkillAddModal(
   const [reads, setReads] = React.useState<ReadonlyMap<string, RegistryItemV1>>(
     () => new Map(),
   );
+  // What the install preview says about each detail's primary: the held skill's id, null when it is new, undefined
+  // until the preview has answered (the Action decides, including a Git identity from another source).
+  const [heldByPreview, setHeldByPreview] = React.useState<ReadonlyMap<string, string | null | undefined>>(
+    () => new Map(),
+  );
+  const onHeld = React.useCallback(
+    (key: string, held: string | null | undefined) =>
+      setHeldByPreview((previous) => (previous.get(key) === held && previous.has(key) ? previous : new Map(previous).set(key, held))),
+    [],
+  );
   const wheres = React.useRef(
     new Map<string, ReachRulesChangeV1 | undefined>(),
+  );
+  // The skills a detail adds: its own path and the referenced siblings the person kept (undefined: nothing to choose).
+  const selections = React.useRef(
+    new Map<string, readonly string[] | undefined>(),
   );
   const [adds, setAdds] = React.useState<ReadonlyMap<string, AddState>>(
     () => new Map(),
@@ -202,6 +216,7 @@ export function SkillAddModal(
       row: Row,
       version: string,
       where: ReachRulesChangeV1 | undefined,
+      selectPaths?: readonly string[],
     ) => {
       const key = rowKey(row);
       setAdd(key, { status: 'adding' });
@@ -212,6 +227,7 @@ export function SkillAddModal(
           itemId: row.itemId,
           version,
         },
+        ...(selectPaths ? { selectPaths } : {}),
         ...(where ? { where } : {}),
       });
       if (!outcome.ok) {
@@ -298,21 +314,7 @@ export function SkillAddModal(
             state?.status === 'added' ||
             libraryMatch(library.items, row) !== null;
           if (!inLibrary) return null;
-          return (
-            <View style={styles.inLibrary}>
-              <Icon
-                name="check"
-                size={ICON_SIZE.xs}
-                color={theme.colors.text.secondary}
-              />
-              <Text
-                variant="meta"
-                style={{ color: theme.colors.text.secondary }}
-              >
-                {t('capabilities.skillAdd.inLibrary')}
-              </Text>
-            </View>
-          );
+          return <SkillInLibraryMark />;
         },
         facts: (row) => {
           const repo = repositoryLabel(row.links?.repository);
@@ -394,6 +396,7 @@ export function SkillAddModal(
                 props.onClose();
                 params.onAdded?.(skillId);
               }}
+              onDone={props.onClose}
               testID={`${TEST_ID}.link`}
             />
           ),
@@ -411,6 +414,7 @@ export function SkillAddModal(
                 props.onClose();
                 params.onAdded?.(skillId);
               }}
+              onDone={props.onClose}
               testID={`${TEST_ID}.upload`}
             />
           ),
@@ -453,8 +457,17 @@ export function SkillAddModal(
           sourceTitle={sourceTitle(row.sourceId)}
           state={adds.get(rowKey(row)) ?? null}
           onRead={onRead}
+          onHeld={onHeld}
+          onOpenHeld={(skillId) => {
+            props.onClose();
+            params.onAdded?.(skillId);
+          }}
+          execute={execute}
           onWhereChange={(key, where) => {
             wheres.current.set(key, where);
+          }}
+          onSelectionChange={(key, selectPaths) => {
+            selections.current.set(key, selectPaths);
           }}
           onRetryRules={async (skillId, where) => {
             const ok = await retrySkillRules(execute, {
@@ -474,7 +487,10 @@ export function SkillAddModal(
       detailFooter: (row) => {
         const key = rowKey(row);
         const read = reads.get(key) ?? null;
-        const existing = libraryMatch(library.items, row);
+        // The preview after the item read is authoritative; the summary match only stands in until it answers.
+        const previewedHeld = heldByPreview.get(key);
+        const existingId =
+          previewedHeld !== undefined ? previewedHeld : (libraryMatch(library.items, row)?.skillId ?? null);
         const state = adds.get(key);
         const version = read?.summary.version;
         const provenance = version ? (
@@ -485,12 +501,12 @@ export function SkillAddModal(
           </Text>
         </View>
       ) : undefined;
-        if (existing !== null && state?.status !== 'added') {
+        if (existingId !== null && state?.status !== 'added') {
           return {
             ...(provenance ? { provenance } : {}),
             primary: {
               label: t('capabilities.skillAdd.open'),
-              onPress: async () => ({ itemId: existing.skillId }),
+              onPress: async () => ({ itemId: existingId }),
             },
           };
         }
@@ -506,7 +522,7 @@ export function SkillAddModal(
                     'capabilities.skillAdd.detail.problemUnsupported',
                   ),
                 }
-              : !version
+              : !version || previewedHeld === undefined
                 ? { disabledReason: t('capabilities.skillAdd.detail.loading') }
                 : {}),
             onPress: async () => {
@@ -514,6 +530,7 @@ export function SkillAddModal(
                 row,
                 version!,
                 wheres.current.get(key),
+                selections.current.get(key),
               );
               // A partial add stays open on the item, so its Try again is right there (IR-70).
               return result.rulesMissing
@@ -533,6 +550,7 @@ export function SkillAddModal(
       catalog.sourceFailures,
       execute,
       groups,
+      heldByPreview,
       install,
       items,
       library,
@@ -583,8 +601,12 @@ function SkillAddDetail(
     row: Row;
     sourceTitle: string;
     state: AddState | null;
+    execute: MountedAuthoringActionExecute;
     onRead: (key: string, item: RegistryItemV1) => void;
+    onHeld: (key: string, held: string | null | undefined) => void;
+    onOpenHeld: (skillId: string) => void;
     onWhereChange: (key: string, where: ReachRulesChangeV1 | undefined) => void;
+    onSelectionChange: (key: string, selectPaths: readonly string[] | undefined) => void;
     onRetryRules: (
       skillId: string,
       where: ReachRulesChangeV1,
@@ -625,6 +647,80 @@ function SkillAddDetail(
     ? deriveSkillTrustV1(skill.files)
     : undefined;
   const cost = skill ? estimateSkillCostV1(skill.skillMarkdown) : null;
+  const outsideReferences = React.useMemo(
+    () =>
+      skill
+        ? readSkillOutsideReferencesV1(
+            skill.skillMarkdown,
+            skill.files.map((file) => file.path),
+          )
+        : [],
+    [skill],
+  );
+  // What adding this item would do, asked once the item is read (a dry run, nothing written): whether the library
+  // already holds it, and the sibling skills of the same repository that its instructions refer to (added with it
+  // unless unticked, or held already).
+  const { execute, onSelectionChange, onHeld } = props;
+  const version = read.item?.summary.version;
+  const primaryPath = skill?.ref.path;
+  const [offered, setOffered] = React.useState<Readonly<{ primary: SkillInstallPreviewV1; siblings: readonly SkillInstallPreviewV1[] }> | null>(null);
+  const [unticked, setUnticked] = React.useState<ReadonlySet<string>>(() => new Set());
+  React.useEffect(() => {
+    setOffered(null);
+    setUnticked(new Set());
+    if (!version) {
+      onHeld(key, undefined);
+      return;
+    }
+    if (primaryPath === undefined) {
+      onHeld(key, null);
+      return;
+    }
+    onHeld(key, undefined);
+    let current = true;
+    void previewSkillInstall(execute, {
+      kind: 'registry',
+      sourceId: props.row.sourceId,
+      itemId: props.row.itemId,
+      version,
+    }).then((preview) => {
+      if (!current) return;
+      const primary = preview.ok ? preview.items.find((item) => item.path === primaryPath) : undefined;
+      // A preview that cannot answer leaves Add to the Action, which holds the same identity on commit.
+      onHeld(key, primary?.inLibrary ?? null);
+      if (!preview.ok || !primary) return;
+      const siblings = preview.items.filter((item) => item.path !== primaryPath);
+      if (siblings.length > 0) setOffered({ primary, siblings });
+    });
+    return () => {
+      current = false;
+    };
+  }, [execute, key, onHeld, primaryPath, props.row.itemId, props.row.sourceId, version]);
+  const heldSiblings = React.useMemo(
+    () => new Set((offered?.siblings ?? []).filter((item) => item.inLibrary !== undefined).map((item) => item.path)),
+    [offered],
+  );
+  const keptSiblings = React.useMemo(
+    () =>
+      new Set(
+        (offered?.siblings ?? []).map((item) => item.path).filter((path) => !unticked.has(path) && !heldSiblings.has(path)),
+      ),
+    [heldSiblings, offered, unticked],
+  );
+  React.useEffect(() => {
+    onSelectionChange(key, offered && primaryPath !== undefined ? [primaryPath, ...keptSiblings] : undefined);
+  }, [key, keptSiblings, offered, onSelectionChange, primaryPath]);
+  const stillOutside = React.useMemo(
+    () =>
+      offered
+        ? remainingOutsideReferences(
+            { path: offered.primary.path, outsideReferences, siblingSkills: offered.primary.siblingSkills },
+            keptSiblings,
+            heldSiblings,
+          )
+        : outsideReferences,
+    [heldSiblings, keptSiblings, offered, outsideReferences],
+  );
   const ref = skill
     ? skill.ref.commit.slice(0, 7)
     : shortRef(read.item?.summary.version);
@@ -643,10 +739,11 @@ function SkillAddDetail(
   return (
     <View style={styles.detail}>
       <ItemGroup surface="none">
+        <BareSectionContent>
         <View style={styles.head}>
         <Text
           variant="title"
-          emphasis="strong"
+          emphasis="semiBold"
           style={{ color: theme.colors.text.primary }}
           testID={`${TEST_ID}.detail.title`}
         >
@@ -725,6 +822,7 @@ function SkillAddDetail(
           </View>
         ) : null}
         </View>
+        </BareSectionContent>
       </ItemGroup>
       <WhereItsOnControl
         testID={`${TEST_ID}.detail.where`}
@@ -779,6 +877,10 @@ function SkillAddDetail(
                 : t('capabilities.skillAdd.detail.textOnlyBody')
           }
         />
+        <SkillOutsideReferencesItem
+          references={stillOutside}
+          testID={`${TEST_ID}.detail.outsideReferences`}
+        />
         {cost ? (
           <Item
             icon={
@@ -812,12 +914,57 @@ function SkillAddDetail(
             })}
           />
         ) : null}
+        {offered?.siblings.map((sibling) =>
+          sibling.inLibrary !== undefined ? (
+            <CapabilityRow
+              key={sibling.path}
+              testID={`${TEST_ID}.detail.sibling.${sibling.name}`}
+              title={sibling.name}
+              description={sibling.description}
+              facts={{
+                presentation: 'row',
+                trust: sibling.trust,
+                cost: { tokensWhenUsed: sibling.cost.bodyTokens },
+              }}
+              {...heldSkillRowProps(sibling.inLibrary, props.onOpenHeld, `${TEST_ID}.detail.sibling.${sibling.name}`)}
+            />
+          ) : (
+          <CapabilityRow
+            key={sibling.path}
+            testID={`${TEST_ID}.detail.sibling.${sibling.name}`}
+            title={sibling.name}
+            description={sibling.description}
+            facts={{
+              presentation: 'row',
+              trust: sibling.trust,
+              cost: { tokensWhenUsed: sibling.cost.bodyTokens },
+            }}
+            checked={keptSiblings.has(sibling.path)}
+            note={
+              keptSiblings.has(sibling.path) ? (
+                <SkillAlsoAddsNote
+                  name={sibling.name}
+                  testID={`${TEST_ID}.detail.sibling.${sibling.name}.alsoAdds`}
+                />
+              ) : undefined
+            }
+            onPress={() =>
+              setUnticked((previous) => {
+                const next = new Set(previous);
+                if (!next.delete(sibling.path)) next.add(sibling.path);
+                return next;
+              })
+            }
+          />
+          ),
+        )}
       </ItemGroup>
       ) : null}
       <ItemGroup
         title={t('capabilities.skillAdd.detail.nextTitle')}
         surface="none"
       >
+        <BareSectionContent>
         <View style={styles.steps}>
           {[
             t('capabilities.skillAdd.detail.next1'),
@@ -831,6 +978,7 @@ function SkillAddDetail(
             >{`${index + 1}. ${line}`}</Text>
           ))}
         </View>
+        </BareSectionContent>
       </ItemGroup>
       {skill && skill.files.length > 0 ? (
         <ItemGroup
@@ -859,11 +1007,6 @@ function SkillAddDetail(
 }
 
 const styles = StyleSheet.create((theme) => ({
-  inLibrary: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.space.s4,
-  },
   provenance: {
     flexDirection: 'row',
     alignItems: 'center',

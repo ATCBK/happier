@@ -7,6 +7,8 @@ import type { Fastify } from '@/app/api/types';
 import { db } from '@/storage/db';
 import { inTx } from '@/storage/inTx';
 import { writeAccountSettingsInTx } from '@/app/accountSettings/writeAccountSettingsInTx';
+import { prepareAcpCatalogTransferV2 } from '@happier-dev/protocol/acp/catalog/transferAcpCatalogV2';
+import { KIRO_ACP_STDERR_RULES } from '@happier-dev/plugins-kiro/agent/acp/transport';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
 import { createSignedAccountContentBinding } from '@/testkit/accountEncryption';
 import { ACP_CATALOG_ACCOUNT_ROW_KEY_V1, ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRecordV1Schema,
@@ -166,14 +168,20 @@ describe('Account configured ACP catalog (SQLite)', () => {
         expect((await db.account.findUniqueOrThrow({ where: { id: incomplete.id } })).settings).toBe(JSON.stringify(content));
     });
 
-    it('activates only an exact captured predecessor transfer before ordinary user CAS', async () => {
-        const settings = JSON.stringify({ t: 'plain', v: { acpCatalogSettingsV1: {
-            v: 2, backends: predecessorDefinitions.map(definition => ({ ...definition, transportProfile: 'generic' })),
-        }, unrelatedPreference: 'retained' } });
+    it.each(['generic', 'kiro'] as const)('activates only an exact captured predecessor transfer before ordinary user CAS (%s)', async transportProfile => {
+        const rawSettings = { acpCatalogSettingsV1: {
+            v: 2, backends: predecessorDefinitions.map(definition => ({ ...definition, transportProfile })),
+        }, unrelatedPreference: 'retained' };
+        const settings = JSON.stringify({ t: 'plain', v: rawSettings });
+        const transfer = prepareAcpCatalogTransferV2({ rawSettings, sourceSettingsVersion: 11,
+            agentDeclarations: [{ identity: { pluginId: 'happier.agent.kiro', localId: 'kiro' }, acpStderrRules: KIRO_ACP_STDERR_RULES }] });
+        if (transfer.status !== 'ready') throw new Error('Expected complete predecessor transfer');
+        const transferredRecord = transfer.record;
+        if (transportProfile === 'kiro') expect(transferredRecord.definitions[0]?.runtime?.stderrRules).toEqual(KIRO_ACP_STDERR_RULES);
         const account = await db.account.create({ data: { encryptionMode: 'plain', settingsVersion: 11, settings } });
-        const changedRecord = { ...record, definitions: record.definitions.map(definition => ({ ...definition, defaultModel: 'new-intent' })) };
+        const changedRecord = { ...transferredRecord, definitions: transferredRecord.definitions.map(definition => ({ ...definition, defaultModel: 'new-intent' })) };
         const initial = { expectedRevision: 'absent', source: 'predecessor', sourceSettingsVersion: 11,
-            content: { t: 'plain', v: record }, settingsCleanup: { expectedSettingsVersion: 11,
+            content: { t: 'plain', v: transferredRecord }, settingsCleanup: { expectedSettingsVersion: 11,
                 nextSettings: { t: 'plain', v: { unrelatedPreference: 'retained' } } } };
         const app = createAuthenticatedTestApp() as Fastify; accountRoutes(app);
         const headers = { 'x-test-user-id': account.id };

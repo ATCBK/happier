@@ -124,11 +124,13 @@ export const imapSmtpConnectedAccountRuntime: ConnectedAccountRuntime = {
 const textField = (id: string, title: string, required = true) => ({ id, title, required, secret: false as const, schema: { type: 'string' as const, minLength: 1 } });
 const configuration = {
   scope: 'account' as const, changeBehavior: 'reconnect' as const,
-  fields: [textField('mailbox', 'Mailbox address'), textField('username', 'IMAP/SMTP username (defaults to mailbox)', false),
+  fields: [textField('mailbox', 'Mailbox address'), { ...textField('username', 'Username', false), description: 'Defaults to the mailbox address.' },
     textField('imapHost', 'IMAP TLS host'), { id: 'imapPort', title: 'IMAP TLS port', secret: false as const, default: 993, schema: { type: 'integer' as const, minimum: 1, maximum: 65535 } },
     textField('smtpHost', 'SMTP submission host'), { id: 'smtpPort', title: 'SMTP submission port', secret: false as const, default: 587, schema: { type: 'integer' as const, minimum: 1, maximum: 65535 } },
-    { id: 'smtpSecurity', title: 'SMTP TLS mode (465 uses TLS; other ports use STARTTLS)', required: false, secret: false as const, schema: { type: 'string' as const, enum: ['starttls', 'tls'] } },
-    { ...textField('inboxFolder', 'Inbox folder', false), default: 'INBOX' }, textField('sentFolder', 'Sent folder (auto-detected when omitted)', false),
+    { id: 'smtpSecurity', title: 'SMTP security', description: 'Port 465 uses TLS; other ports use STARTTLS.', required: false, secret: false as const,
+      schema: { type: 'string' as const, enum: ['starttls', 'tls'] },
+      presentation: { control: 'select' as const, options: [{ value: 'starttls', title: 'STARTTLS' }, { value: 'tls', title: 'TLS' }] } },
+    { ...textField('inboxFolder', 'Inbox folder', false), default: 'INBOX' }, { ...textField('sentFolder', 'Sent folder', false), description: 'Found automatically when left empty.' },
     { ...textField('tlsCaPem', 'Custom TLS CA certificate (PEM)', false),
       presentation: { control: 'textarea' as const },
       description: 'Trust this certificate authority for both IMAP and SMTP. Leave empty to use the standard trusted authorities.' }],

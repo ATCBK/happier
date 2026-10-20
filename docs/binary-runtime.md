@@ -30,6 +30,16 @@ Do not introduce direct product-runtime calls to:
 
 These are allowed only behind centralized managed runtime/tooling abstractions.
 
+In current development source, the PTY provider uses the existing Python relay on
+POSIX Bun. Both native packages use `tty.ReadStream` for a nonblocking PTY master;
+Bun 1.4.2 can return a successful spawn without working input/output
+([upstream issue](https://github.com/oven-sh/bun/issues/25822)). Module-load success
+therefore cannot establish backend usability. Re-enable native POSIX selection
+only after the bundled runtime passes interactive input/output and cleanup checks.
+The relay requires Python 3, applies the initial window size, and reports
+`terminal_resize_unavailable` for subsequent resizes. Node-hosted and Windows
+backend selection are unchanged.
+
 In 0.3 development, remote SSH machine setup installs the selected CLI through
 the canonical first-party payload installer after host trust and before relay
 installation, service inventory, or Home enrollment. SSH command execution and
@@ -47,6 +57,67 @@ obtains approval, then `auth wait` registers the same guest. Live output observe
 are optional and apply only to the selected guest process, not prerequisite
 inspection processes. Provider-reported SSH key
 evidence must match a fresh scan but cannot approve replacing saved host trust.
+
+The remote enrollment recipe shares one budget across request, consent and wait.
+The consent prompt ends at the earlier recipe deadline or Home request expiry,
+with `auth_enrollment_timeout` or `auth_request_expired` and a request to Retry
+setup; late consent cannot authorize the expired request. Finite `auth wait`
+failures project a credential-free code through the buffered enrollment error,
+including local expiry and argument/state validation. These are development
+source changes. Transient Home HTTP, network and timeout failures are classified
+as `AUTH_WAIT_HOME_UNAVAILABLE`; the wait does not replay the one-shot claim.
+After a successful claim, buffered and streaming enrollment retain that response
+and retry transient authenticated Home observations and Machine registration
+within their existing lifetime, using the existing polling cadence. Admission
+refusals remain terminal, and managed enrollment saves its bearer only after
+registration succeeds. Retry after an unsuccessful attempt requests fresh
+approval while retaining the guest's Machine identity. Feature-read diagnostics
+preserve the HTTP status or transport failure for the shared recovery policy.
+During managed enrollment, the controller's repeatable `controller/current`
+observations use that same Home retry policy and the remote recipe's existing
+deadline and polling cadence. Native effects, submission and report mutations
+are not replayed. If Home remains unavailable after that lifetime, Create or
+bootstrap Retry retains `action_outcome_unknown` as an `outcome_uncertain`
+operation rather than claiming the guest failed; enrollment may already have
+committed. This controller-side recovery requires a controller refresh.
+Shared offline warnings use stderr, keeping finite command stdout valid JSON
+when post-claim machine registration fails.
+A failed wait process without a usable diagnostic code reports
+`AUTH_WAIT_PROCESS_FAILED`, distinguishing absent output from an invalid
+diagnostic envelope. An invalid envelope identifies the first failed check
+(`parse`, `v`, `ok`, `kind`, or `code`) without copying rejected values. Safe
+unrecognised error codes remain reportable data; they do not need a controller
+allowlist. The recipe retains the exit without exposing native output or
+inferring an authentication cause. Controller and guest CLI reloads
+are required; the server's
+terminal-request TTL policy is unchanged.
+
+For source-built guest QA in 0.3 development, an operator can set
+`HAPPIER_FIRST_PARTY_REMOTE_CLI_PAYLOAD_ROOT` on the controller to a prepared,
+target-compatible CLI payload directory. The shared payload installer consumes
+this input for managed native, managed SSH and SSH setup, using the same archive,
+delivery and promotion path. A bad local payload fails with `invalid_payload`
+instead of falling back to a release; without the input, normal verified release
+acquisition is unchanged. Build the directory through the existing
+`buildCliBinaryArtifactPayload` owner; it is an explicit trusted operator input,
+not a release publication. Existing controllers need the input in their daemon
+environment and the shared installer change needs reload.
+
+For an already enrolled service-managed native guest, the admitted managed
+bootstrap Retry updates the CLI through that same installer and reinstalls its
+background service through the CLI service owner. It retains the existing Machine
+registration without another pairing request. Native-process guests instead
+retry their retained boot configuration without reinstalling or pairing.
+
+The shared remote Home enrollment recipe recognizes the ordinary `auth request`
+JSON emitted by `cli-v0.2.16`, and its status-1 `Unknown auth subcommand: enroll-remote`
+response with auth help, returning `remote_cli_update_required` before approval.
+The SSH executor preserves the process status and stderr for that shared decision.
+Managed native, managed SSH and SSH Home setup consume that same
+boundary. Older ordinary requests are never accepted as enrollment, and their
+stdout is never included in errors because it can contain claim and pairing
+secrets. Malformed or unrecognized responses remain `invalid_cli_response`.
+This behavior is development-only and needs reload on existing controllers.
 
 Before adding or changing an agent runtime, managed dependency, install, or update flow, classify it as one of:
 
@@ -125,6 +196,46 @@ otherwise it follows `HAPPIER_INSTALL_DIR`, falling back to `%USERPROFILE%\.happ
 The binary install directory can remain separate from an explicit data home.
 On Windows, `HAPPIER_NO_PATH_UPDATE` skips PATH changes only, not state-home persistence.
 This does not copy or migrate credentials from a previous data home.
+
+## Desktop executable identity
+
+Current development source configures `mainBinaryName` per desktop channel:
+`happier-desktop`, `happier-desktop-preview`, and `happier-desktop-dev`. These names
+keep Linux executables and icons distinct between channels and from the `happier`
+CLI. The Tauri configs own the names; candidate transfer, AppImage diagnostics, and
+macOS updater architecture inspection read them through the shared channel-config
+resolver instead of assuming the Cargo template name `app`.
+
+After an upgrade, open the app once so it can observe the computer's login-start
+setting. The existing autostart writer re-enables the same channel's login item
+with the current executable and `--menu-bar`, or removes it when login start is
+off. An unknown setting leaves the item untouched; failures remain visible in
+the tray and retry on the next setting observation. This reuses the existing
+login-item migration rather than adding another startup preference or writer.
+
+## Linux desktop rendering runtime
+
+In development source, the desktop release pipeline prepares WebKitGTK 2.54.1
+for AppImage bundling. The trusted Linux finalizer opts into
+`.github/actions/install-tauri-linux-dependencies`; its checksum-pinned source
+recipe builds on Ubuntu 22.04 with Clang 18 and GCC 12's standard library.
+An exact Actions cache reuses the staged SDK. Missing helpers, unresolved native
+dependencies, the wrong engine version or a newer libc ABI fail validation rather
+than falling back to the distribution engine. The AppImage artifact audit repeats
+the runtime validation after bundling.
+
+Candidate compilation keeps Ubuntu's native WebKit headers. DEB and RPM packages
+continue to use the installed distribution runtime; the SDK and additional GPU
+helper are bundled only into AppImage. Direct Tauri development commands retain
+their system-runtime behavior; the pinned runtime contract belongs to the release
+pipeline. This source change does not establish availability in a published release.
+
+WebKit can migrate IndexedDB when opening an existing desktop profile. An older
+engine may then be unable to open that database; replacing the executable does
+not reverse the migration. Follow the downgrade warning on the
+[downloads page](../apps/docs/content/docs/getting-started/get-the-apps.mdx),
+preserve pending drafts and messages, and do not delete the profile to diagnose
+rendering performance. No second storage writer or profile migration is added.
 
 ## Native computer driver (0.3 development source)
 
@@ -242,6 +353,12 @@ strict, and public packing/publishing forces semantic checks before replacing
 last-green output. This policy concerns package outputs, not native source
 construction or the public no-emit typecheck.
 
+In current 0.3 development, admitted package builds retain the shared foreground
+process custody until cancellation settles. Cancelling a running build reaps its
+compiler and preserves the prior `dist`; cancelling a queued build releases its
+waiter without disturbing another publisher. The build reports the caller's
+actual signal, while ordinary numeric compiler exits remain numeric.
+
 In current 0.3 development, the explicit `happier-source` condition resolves
 first-party source. Native CLI construction and retained source QA share the entry
 authority in `packages/cli-common/sourceRuntimeEntries.mjs`: CLI exports/imports,
@@ -250,6 +367,15 @@ graph. Native code construction rejects first-party dist/generated runtime input
 Bun compiles a launcher that loads the emitted physical ESM graph from its own
 payload. It does not run pkgroll, the public declaration compiler, or a prior
 CLI dist build.
+
+These two emitters and their bundled executable sidecars also share the output
+policy in `sourceRuntimeEntries.mjs`. esbuild removes whitespace and ordinary
+comments, lowers tagged templates before ASCII emission, and retains exact legal
+comments in adjacent `.LEGAL.txt` files. Identifiers stay unminified, preserving
+named stack frames and emitted file/line/column locations. This avoids widening
+whole V8 Script source strings for Unicode comments or raw template text. esbuild
+does not escape Unicode regular-expression literals; first-party regex owners
+use equivalent Unicode escapes to keep those source graphs Latin-1-safe.
 
 Retained source daemon bundles also compile bundled Plugin UI graphs through
 `prepareSourcePluginUiArtifacts.mjs`, the same SDK compiler/inventory owner used
@@ -262,22 +388,41 @@ projection; genuine integrity mismatches still fail closed. Bundle reuse and
 pending source preparation share the compiler/inventory input list, including
 the UI package metadata, so correcting these inputs can resume preparation.
 
-Retained source daemon bundles build the first-party process-custody helper from
-captured current Go source through the existing native staging owner. They do not
-borrow a checkout's previously built helper: Storage, vitals and process census
-commands must match the JavaScript that calls them. Native inputs participate in
-the bundle's existing reuse checks and startup preparation watcher. Go source
-diagnostics use the existing drift classifier, so correcting a failed native build
-resumes pending preparation; configuration and OS errors still fail fast.
-Installed vendor tools retain their lifecycle.
+Retained source daemon bundles build the first-party process-custody helper and,
+when CLIProxyAPI is bundled, its managed wrapper from captured current Go source
+through their existing native staging owners. They do not borrow a checkout's
+previously built first-party executables. Native sources, module files, build tools
+and licenses participate in the bundle's existing reuse checks and startup
+preparation watcher. Managed executable resolution admits physical executables
+from the exact executing source root; prepared distributions retain their packaged
+asset-integrity checks. Go source diagnostics use the existing drift classifier,
+so correcting a failed native build resumes pending preparation; configuration and
+OS errors still fail fast. Installed vendor tools retain their lifecycle.
 
 Native server construction resolves `main.light.ts`, `main.ts`, and the packaged
 migration entry through that same source export owner. Bun bundles the authored
 graph directly, including the Iroh JavaScript loader; binary construction and
 support discovery do not prepare workspace dist. Server support owns generated
 Prisma clients, query and migration engines, Sharp assets, and the exact-target
-Iroh addon with its package metadata. Sharp's binding loader still resolves the
-addon beside the compiled executable so its libvips sidecar remains available.
+Iroh addon with its package metadata. The server Sharp projection resolves each
+package from its actual consumer, including the server's installed Sharp version
+for foreign-target acquisition, then stages one adjacent native/libvips cohort.
+The Bun server builder selects Sharp's public CJS entry and redirects only its
+actual native addon import to that staged file. Sharp retains its own platform
+selection, CPU checks, and error reporting; package-JSON autoload stays disabled.
+Optional foreign-platform native imports stay virtual until selected at runtime;
+guarded libvips resolution hints remain external so unselected platform libraries
+are not embedded in the server executable.
+The thin CLI continues to load its physical source graph and uses its existing
+runtime dependency vendoring and target acquisition owners.
+Only the thin CLI launcher enables package-JSON metadata loading so the physical
+graph can resolve exports-only native packages beside itself. CLI dotenv and
+bunfig autoload remain disabled; working-directory package metadata does not
+replace the physical importing package's resolution authority.
+Standalone compiler defaults come from `DEFAULT_BUN_COMPILE_OPTIONS` in the
+existing compiler owner. The ordinary compiler and both Sharp/Prisma build
+adapters disable implicit project `bunfig.toml` loading, preventing local preload
+scripts from running before the tool starts. Dotenv policy remains separate.
 Server typechecking and public npm/SDK declaration tasks remain separate.
 
 Explicit web artifact construction and source QA share
@@ -296,20 +441,67 @@ through the existing project-local staging and final-output owner. This source
 path does not prepare workspace dist or public declarations. In 0.3 development,
 ordinary Expo uses that same source plugin-UI compiler and inventory generator
 without the finite-export input capture. Each consumer publishes its own inventory
-atomically, referencing retained inputs beside that inventory. Managed Expo uses
+atomically, referencing verified content-addressed assets beside that inventory. Managed Expo uses
 its existing isolated state directory; standalone Expo uses `apps/ui/.expo/hstack`.
 Other source preparations and exports never rewrite that consumer's inventory.
+While serving source, Metro's existing batched file-map changes trigger that
+same producer for bundled-plugin and compiler inputs. The workspace input
+owner supplies source/dependency membership, including added source files;
+generated inventory assets do not trigger another preparation. Pending edits
+share serialized preparation. The inventory producer materializes each distinct
+plugin byte graph once, using the canonical file-set digest, and does not rewrite
+unchanged assets. Completed or failed compiler invocations remove their own
+`.happier-plugin-ui-stage-*` scratch, including generated tooling and temporary
+manifests. That existing staging prefix is excluded from Metro's crawl, so
+retiring it cannot race Metro's fallback directory watcher.
+Live refresh materializes the candidate's verified assets under the consumer's
+content-addressed `artifacts/` root after Metro's initial watcher is ready. The
+inventory producer assembles each first missing subtree under the excluded
+staging prefix and renames the complete subtree into place. This prevents the
+fallback watcher's directory-listing/watch-attachment gap from losing newly
+created descendants; existing identical files retain their paths and mtimes.
+Admission checks file existence, lexical and real project/watch roots, blocklist
+and indexed extensions before waiting for Metro's file map. An
+unindexable candidate reports `plugin_ui_inventory_unindexable` with its inventory
+and asset path, preserves the serving inventory and releases the refresh queue
+for subsequent source edits. An admitted candidate waits on Metro's existing
+file-map change events until every asset is indexed before atomic publication.
+Bundle and artifact-asset requests also use that readiness check for inventories
+published by warm-start or explicit one-shot preparation, including Expo's
+`/assets?unstable_path=...` route. Ordinary image requests do not read the plugin
+inventory. There is no polling or new deadline.
+Older browser/native bundles can request their asset URLs later: Metro 0.83 reads
+those files on request, and an inventory swap does not acknowledge that every
+client has retired its previous graph. Distinct served graphs therefore remain
+with the consumer's state, whose lifecycle owner decides when it can be retired;
+they are not reclaimed by a guessed age or generation count. This does not retain
+compiler scratch or duplicate identical graphs. The listener and any pending
+indexing wait end with Metro.
+An already-running Expo must first load this
+configuration at its owner's chosen restart; merely restarting a borrowing
+server or daemon does not update the Expo configuration or its inventory.
+To explicitly refresh an existing consumer without restarting Expo, run
+`HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY=<absolute-inventory-path> node apps/ui/scripts/ensureWorkspacePackagesBuilt.mjs`
+from the checkout on the Expo-owning machine (PowerShell: set that environment
+variable before invoking the same Node command). This is the normal source
+preparation owner, not package dist construction.
 When a new Metro consumer has no private inventory but the producer has usable
 last-green plugin UI, the same inventory producer seeds the private file with
 absolute references to retained artifacts. Metro starts from that file while
 source preparation runs in the background and observes its next atomic green
-publication without a restart. In 0.3 development source, a plugin UI compile
-failure reports that plugin's compiler error and retains its own validated
+publication without a restart. In 0.3 development source, a plugin manifest
+evaluation or UI compile failure reports that plugin's error and retains its own validated
 last-green artifact. Without usable retained bytes, only that UI is unavailable;
 healthy plugins still publish and source preparation continues. The existing
 inventory producer validates retained manifests and complete file digests before
 admission. Native source construction materializes those verified bytes into its
 own retained output graph, or leaves the unavailable plugin's output root empty.
+Source preparation loads each declaration through the existing source loader
+inside that per-plugin boundary, so a malformed declaration cannot abort an
+aggregate tool import. The graph's successful build-input record also retains
+its manifest for this failure path; it does not authorize new source or skip
+graph validation. Source-preparation diagnostics remain in Expo's log; neither
+the app's byte inventory nor `hstack stack info` carries them.
 The source daemon retains that inventory beside its emitted runtime. Its next
 shared build feeds the selected incumbent inventory to the same compiler and
 inventory producer, which revalidates the candidate graphs and copies admitted
@@ -450,6 +642,12 @@ bytes. Ordinary writes publish the source-owned projection set through that same
 writer. There is no generator completion record, private compiler orchestrator or
 prepared Agent-facts child protocol.
 
+Aggregate final-artifact publication deliberately reads serialized plugin declarations.
+Both authored and serialized inputs must validate before replacing semantic membership;
+invalid declarations fail visibly and leave the prior projection intact. Optional
+runtime-preparation failures remain governed by the existing publication policy, not
+silently reclassified as invalid semantic inputs.
+
 Repository source tools run with the source condition and shared registration leaf:
 
 ```sh
@@ -457,11 +655,19 @@ Repository source tools run with the source condition and shared registration le
 ```
 
 The registration leaf loads the TypeScript adapter and registers the canonical
-workspace source resolver before the tool entry is linked. Public/npm preparation
+workspace source resolver before the tool entry is linked. In current 0.3
+development it selects tsx's in-process transform cache before loading the adapter:
+long-lived Stack controllers must not each enumerate and retain the shared tsx
+disk-cache directory. This preserves ESM and CommonJS source transforms without
+requiring cache deletion or changing installed runtime artifacts. Public/npm preparation
 explicitly requests `--package-artifacts` when installed plugin manifests and
 runtime bytes must be materialized. Its workspace compilation and strict declaration
 checks remain owned by `buildSharedDeps.mjs` and the package-build owner, not by the
 projection generator.
+
+Stack's database environment and retained-data helpers import the existing storage
+configuration and Personal Home layout leaves directly, keeping unrelated Home
+activation and account-schema graphs out of long-lived controllers.
 
 All workspace/package publication that shares the CLI dist path uses the canonical cli-common lock implementation. Development waiters continue while an authenticated owner's heartbeat is fresh, even beyond the elapsed contention budget; the existing staleness policy governs owner recovery, while unknown or unreadable owners still have a bounded wait. Nested build processes inherit an owner-authenticated lease containing both the normalized path and a random owner token; a path alone never proves ownership and cannot bypass a successor process. Publication and the prepared consumer that reads the published graph are one locked transaction: reconciliation replaces the dependency tree entry by entry, so a compiler, API-surface, or prepack reader released early could resolve one module from the new generation and its import target from the previous one. The prepared consumer therefore runs inside the same held lock and receives that lock's lease, which is what lets a prepared script that republishes the graph itself — `prepack` — reenter instead of waiting for its own owner. Dependency builds preserve that lease but remove the parent package's staged-output override so one workspace cannot compile into another workspace's publication directory. If compiled cli-common helpers are unavailable during bootstrap, the repository sync script stages and vendors a complete package off-path before publishing it, and propagates failures without modifying the previous live package.
 
@@ -488,6 +694,12 @@ admitted by the runtime snapshot, including profile reconciliation before startu
 A snapshot's separate Node entrypoint remains available for bundle-closure inspection
 and provenance; it does not replace an admitted native launcher. Source launches
 without an explicit command still use the managed JavaScript runtime.
+CLI launch-context resolution, including Stack auth, follows a matching live
+Stack owner's recorded source basis before persisted runtime-mode defaults.
+If a source daemon has already loaded that basis, a missing retained CLI
+fails closed rather than rebuilding different source for the running stack.
+Explicit `--runtime=built` requests still validate the built snapshot, and
+deployment selection does not inherit this implicit CLI-mode decision.
 Explicit-runtime Stack start, daemon lifecycle and CLI commands consume their
 admitted snapshot without first preparing the moving source workspace. Source
 commands retain the existing workspace preflight.
@@ -668,7 +880,8 @@ native helper staging shares the admitted source-bundle envelope.
 Source bundles use the measured 10 GiB worker envelope;
 web preparation/export keeps its separate validation envelope. A newer pending source start
 supersedes only that stack's previous pending start. The bundle owner retains live/selected
-bundles plus the newest, and reclaims unreferenced bundles when process visibility is available
+bundles plus the newest completed product (using its immutable completion record,
+not allocation-directory timestamps), and reclaims unreferenced bundles when process visibility is available
 (native Windows currently retains them). Emitted code remains unchanged between restarts. The existing
 server also serves a finite source web export by default. Same-host Stacks sharing
 the configured source-products store reuse completed read-only web bytes when authored
@@ -779,6 +992,15 @@ Codex's managed release recipe retains its native-file allowance and uses the pl
 512 MiB total expansion ceiling. The digest-verified `rust-v0.161.0` Linux package includes resources
 beyond the installed executables and exceeds the former 384 MiB total. Digest verification, declared
 runtime-member publication and the shared path/compression/extraction guards remain enforced.
+
+In 0.3 development, the managed Codex Linux recipe also publishes the pinned
+release's `codex-resources/bwrap` with executable permissions. Codex resolves
+this bundled helper beside the package's `bin` directory when system bubblewrap
+is unavailable; Happier does not require installing a system package for this
+helper. Existing managed installs missing it need a forced reinstall through the
+normal Agent install Action after the corrected declaration is loaded. Linux
+hosts must also permit the user namespaces used by Codex's sandbox. macOS
+and Windows keep their platform-specific package members.
 
 Managed runtime support is component-owned, not a generic dependency-layer registry, and its references are a development/QA snapshot concern only. A server manifest may reference an immutable server-support artifact containing its generated Prisma/native closure; a daemon manifest may reference its immutable daemon-support artifact containing external/native runtime dependencies, tools and Go payloads; JavaScript sidecars and plugin resources/UI package files remain code-owned. The component builder computes and validates its own support identity. Snapshot validation follows those references, and retention follows the graph from retained snapshots through component artifacts to referenced support artifacts before deleting anything. Existing self-contained release/runtime artifacts remain readable until ordinary retention removes them. Release/self-host builders discover and embed their own complete target support closure directly.
 

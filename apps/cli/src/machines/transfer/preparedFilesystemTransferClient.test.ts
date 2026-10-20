@@ -12,7 +12,7 @@ import { createActionOperationRpcHandlers } from '@/daemon/actionOperations/acti
 import { createDirectTransferServerLifecycle } from './directTransferServerLifecycle';
 import { createPreparedFilesystemTransferActionExecutor, projectPreparedFilesystemActionResult } from './createPreparedFilesystemTransferActionExecutor';
 import { createPreparedFilesystemTransferClient } from './preparedFilesystemTransferClient';
-import { FilesystemUploadOutputSchema } from '@happier-dev/protocol/actions/filesystemActionFamily';
+import { FilesystemUploadOutputSchema, type FilesystemPreparedCopyInput, type FilesystemTargetCopyInput } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { prepareWorkspaceEntryExport } from './prepareWorkspaceFileExport';
 import { observeWorkspaceSyncEntryAtRoot } from '@/workspaces/sync/workspaceSyncFileRead';
 
@@ -213,9 +213,10 @@ describe('headless prepared filesystem client', () => {
         await mkdir(join(sourceRoot, 'tree', name)); await writeFile(join(sourceRoot, 'tree', name, 'literal.bin'), bytes);
       }
       await symlink('~/literal.bin', join(sourceRoot, 'tree', 'literal-link'));
-      const copied = await client.copy({ source: kind === 'file' ? { kind: 'file', serverId: 'home-one', machineId: 'machine-source', rootPath: sourceRoot,
+      const source: FilesystemPreparedCopyInput['source'] | FilesystemTargetCopyInput['source'] = kind === 'file' ? { kind: 'file', serverId: 'home-one', machineId: 'machine-source', rootPath: sourceRoot,
         path: 'source.dat', sourceId: 'copy-source', sizeBytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }
-        : { serverId: 'home-one', machineId: 'machine-source', rootPath: sourceRoot, path: 'tree' },
+        : { serverId: 'home-one', machineId: 'machine-source', rootPath: sourceRoot, path: 'tree' };
+      const copied = await client.copy({ source,
         destination: { serverId: 'home-one', machineId: 'machine-destination', rootPath: destinationRoot, path: kind === 'file' ? 'copied.dat' : 'tree' }, overwrite: false, recursive: kind === 'entry_tree' });
       expect(copied, JSON.stringify(copied)).toMatchObject(kind === 'file' ? { success: true, status: 'completed', sourceId: 'copy-source', sizeBytes: bytes.length }
         : { success: true, status: 'completed', expectation: { kind: 'directory' } });

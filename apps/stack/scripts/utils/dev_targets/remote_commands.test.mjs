@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile, spawn, spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,11 +9,14 @@ import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
-import { installNativeAdmissionFixture } from '../../testkit/core/native_admission_fixture.mjs';
+import { buildNativeAdmissionFixtureEnv, installCliNativeCustodySourceFixture, installNativeAdmissionFixture, installWorkspaceAdmissionProcessFixture } from '../../testkit/core/native_admission_fixture.mjs';
 import { writeFakeBin } from '../../testkit/core/fake_bin_harness.mjs';
 import { withWorkspaceBundleLock } from '../../../../../packages/cli-common/workspaceBundleLock.mjs';
 
 import { buildStackStableScopeId } from '../auth/stable_scope_id.mjs';
+import { parseArgs } from '../cli/args.mjs';
+import { resolveSourceQaUiMode } from '../../runtime/shared/borrowed_expo.mjs';
+import { buildServerRuntimeEnv } from '../server/server_env.mjs';
 import * as commandPolicy from './remote_commands.mjs';
 import {
   buildRemoteCancelCommand,
@@ -45,6 +48,47 @@ import {
 } from './remote_commands.mjs';
 
 const executionId = '018f0f52-5fe8-7a9f-8ef5-f81f20572791';
+
+test('plugin source-resolving Vitest uses source preparation in both dispatchers', async t => {
+  const root = fileURLToPath(new URL('../../../../../', import.meta.url)).replace(/\/$/u, '');
+  const args = ['corepack', 'yarn', '-s', 'vitest', 'run', 'src/source.test.ts'];
+  for (const tracker of ['linear', 'jira', 'sentry', 'posthog', 'claude']) {
+    const cwd = join(root, `packages/plugins/${tracker}`);
+    assert.equal(resolveRemoteCommandPolicy(args, { cwd }).kind, 'source-test');
+    if (process.platform === 'win32') continue;
+    const fixture = await createTempFixture(t, { prefix: `${tracker}-source-command-policy-` });
+    const artifact = fixture.path('policy.sh');
+    await writeFile(artifact, renderNativeCommandPolicy());
+    const native = spawnSync('/bin/sh', ['-c', '. "$1"; repo_root=$2; invoked_cwd=$3; shift 3; resolve_native_command_policy "$@"; printf "%s" "$policy_kind"',
+      'policy', artifact, root, cwd, ...args], { encoding: 'utf8' });
+    assert.equal(native.status, 0, native.stderr);
+    assert.equal(native.stdout, 'source-test');
+  }
+});
+
+test('Node source-test loaders do not count as requested test files in either dispatcher', async t => {
+  const root = fileURLToPath(new URL('../../../../../', import.meta.url)).replace(/\/$/u, '');
+  const fixture = await createTempFixture(t, { prefix: 'node-source-loader-command-policy-' });
+  const artifact = fixture.path('policy.sh');
+  await writeFile(artifact, renderNativeCommandPolicy());
+  const file = 'apps/stack/scripts/preferred_execution_launcher.test.mjs';
+  for (const loader of [
+    ['--import=./packages/cli-common/registerSourceRuntime.mjs'],
+    ['--import', './packages/cli-common/registerSourceRuntime.mjs'],
+  ]) {
+    for (const files of [[file], [file, 'apps/stack/scripts/utils/dev_targets/remote_validation_preparation.test.mjs']]) {
+      const args = ['node', '--conditions=happier-source', ...loader, '--test', ...files];
+      const expected = files.length === 1 ? 'source-test' : 'runtime';
+      assert.equal(resolveRemoteCommandPolicy(args, { cwd: root }).kind, expected);
+      if (process.platform !== 'win32') {
+        const native = spawnSync('/bin/sh', ['-c', '. "$1"; repo_root=$2; invoked_cwd=$2; shift 2; resolve_native_command_policy "$@"; printf "%s" "$policy_kind"',
+          'policy', artifact, root, ...args], { encoding: 'utf8' });
+        assert.equal(native.status, 0, native.stderr);
+        assert.equal(native.stdout, expected);
+      }
+    }
+  }
+});
 
 test('finite compiler projections retain their package envelope in both dispatchers', async t => {
   const root = fileURLToPath(new URL('../../../../../', import.meta.url)).replace(/\/$/u, '');
@@ -108,6 +152,21 @@ test('Docs content coordination delegates admission to its finite reference prod
   assert.equal(resolveRemoteCommandPolicy(['node', './fixture/apps/docs/scripts/checkContent.mjs'], { cwd: root }).selfPublisher, '0');
 });
 
+test('the disposable database contract harness requires Docker in AUTO placement', async () => {
+  const root = fileURLToPath(new URL('../../../../../', import.meta.url)).replace(/\/$/u, '');
+  const args = ['node', './packages/tests/scripts/run-extended-db-docker.mjs', '--db', 'postgres', '--mode', 'contract'];
+  assert.equal(resolveRemoteCommandPolicy(args, { cwd: root }).requiredTools, 'docker');
+  const publicPolicy = await commandPolicy.resolveCommandPublisherPolicy(
+    ['yarn', 'test:db-contract:postgres:docker'], { repoRoot: root, cwd: root },
+  );
+  assert.equal(publicPolicy.requiredTools, 'docker');
+  const native = spawnSync('/bin/sh', ['-c', `${renderNativeCommandPolicy()}\nrepo_root=$1; invoked_cwd=$1; shift; resolve_native_command_policy "$@"; printf '%s' "$policy_requiredTools"`,
+    'policy', root, ...args], { encoding: 'utf8' });
+  assert.equal(native.status, 0, native.stderr);
+  assert.equal(native.stdout, 'docker');
+  assert.equal(resolveRemoteCommandPolicy(['node', './fixture/packages/tests/scripts/run-extended-db-docker.mjs'], { cwd: root }).requiredTools, '');
+});
+
 test('Stack public test coordination requires Bun and leaves admission to preparation and the finite test runner', async () => {
   const root = fileURLToPath(new URL('../../../../../', import.meta.url)).replace(/\/$/u, '');
   const args = ['node', './apps/stack/scripts/test_ci.mjs'];
@@ -145,7 +204,7 @@ test('placed script dispatch preserves publisher admission with inherited Yarn e
   await writeFile(manager, 'process.stdout.write(JSON.stringify(process.argv.slice(2))); process.exitCode = 23;\n');
   writeFakeBin({ root, name: 'awk', content: '#!/bin/sh\ncase "$*" in */proc/meminfo*) printf "1048576 1048576\\n" ;; *) exec /usr/bin/awk "$@" ;; esac\n' });
   writeFakeBin({ root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
-  const env = { ...process.env, PATH: `${join(root, 'bin')}:${process.env.PATH}`, HOME: root, CI: '',
+  const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${join(root, 'bin')}:${process.env.PATH}`, HOME: root, CI: '',
     npm_node_execpath: process.execPath, npm_execpath: manager,
     HAPPIER_DEV_TARGET_EXECUTION: '1', HAPPIER_HSTACK_EXECUTION: '', HAPPIER_HSTACK_DISPATCH_CONTROL: '',
     HAPPIER_STACK_PM_CACHE_BASE_DIR: '', HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: '',
@@ -178,7 +237,8 @@ test('native test preparation follows reachable source imports rather than the p
   const leaf = fixture.path('apps/stack/scripts/leaf.mjs');
   await writeFile(entry, 'import test from "node:test"; import "./leaf.mjs"; test("owner", () => {});');
   const args = ['node', '--test', entry];
-  const classify = () => resolveRemoteCommandPolicy(args, { repoRoot, cwd: repoRoot });
+  const env = { ...process.env, NODE_OPTIONS: '' };
+  const classify = () => resolveRemoteCommandPolicy(args, { repoRoot, cwd: repoRoot, env });
   await writeFile(leaf, '// import "@happier-dev/protocol";\nexport const value = "import \\\"@happier-dev/protocol\\\"";');
   assert.equal(classify().kind, 'source-test');
   assert.equal(classify().bootstrap, '0', 'built-ins and source files do not consume the dependency installation');
@@ -187,7 +247,7 @@ test('native test preparation follows reachable source imports rather than the p
     const artifact = fixture.path('policy.sh');
     await writeFile(artifact, renderNativeCommandPolicy());
     const owner = fileURLToPath(new URL('./remote_commands.mjs', import.meta.url));
-    const native = spawnSync('/bin/sh', ['-c', '. "$1"; repo_root=$2; invoked_cwd=$2; projection_command_policy=$3; shift 3; resolve_native_command_policy "$@"; printf "%s,%s,%s" "$policy_kind" "$policy_bootstrap" "$policy_heavyClass"', 'policy', artifact, repoRoot, owner, ...args], { encoding: 'utf8' });
+    const native = spawnSync('/bin/sh', ['-c', '. "$1"; repo_root=$2; invoked_cwd=$2; projection_command_policy=$3; shift 3; resolve_native_command_policy "$@"; printf "%s,%s,%s" "$policy_kind" "$policy_bootstrap" "$policy_heavyClass"', 'policy', artifact, repoRoot, owner, ...args], { encoding: 'utf8', env });
     assert.equal(native.status, 0, native.stderr);
     assert.equal(native.stdout, 'source-test,0,native-source-test');
   }
@@ -203,20 +263,31 @@ test('native test preparation follows reachable source imports rather than the p
   assert.equal(classify().kind, 'runtime', 'an incomplete source graph cannot suppress prerequisites');
 });
 
-test('Channels source Vitest skips emitted publication while alternate configs retain preparation', async t => {
+test('host and first-party plugin source Vitest skip emitted publication while resolver overrides retain preparation', () => {
   const root = fileURLToPath(new URL('../../../../../', import.meta.url)).replace(/\/$/u, '');
-  const fixture = await createTempFixture(t, { prefix: 'channels-source-policy-' });
-  const artifact = fixture.path('policy.sh');
-  await writeFile(artifact, renderNativeCommandPolicy());
-  for (const component of ['packages/sdk', 'packages/channels-protocol', 'packages/email-transports-protocol', 'packages/plugins/channels', 'packages/plugins/channel-email', 'packages/plugins/channel-telegram', 'packages/plugins/channel-discord', 'packages/plugins/scm-github']) {
+  const artifact = fileURLToPath(new URL('./native_command_policy.sh', import.meta.url));
+  assert.equal(readFileSync(artifact, 'utf8'), renderNativeCommandPolicy());
+  for (const component of ['apps/server', 'packages/sdk', 'packages/channels-protocol', 'packages/email-transports-protocol', 'packages/plugins/channels', 'packages/plugins/channel-email', 'packages/plugins/channel-telegram', 'packages/plugins/channel-discord', 'packages/plugins/scm-github', 'packages/plugins/app-context', 'packages/plugins/inspector']) {
     const args = ['node', 'node_modules/vitest/vitest.mjs', 'run', '--config', 'vitest.config.ts', 'src/ingress.test.ts'];
-    assert.equal(resolveRemoteCommandPolicy(args, { repoRoot: root, cwd: join(root, component) }).kind, 'source-test');
-    if (process.platform !== 'win32') {
-      const native = spawnSync('/bin/sh', ['-c', '. "$1"; repo_root=$2; invoked_cwd=$2/$3; shift 3; resolve_native_command_policy "$@"; printf "%s" "$policy_kind"', 'policy', artifact, root, component, ...args], { encoding: 'utf8' });
-      assert.equal(native.status, 0, native.stderr);
-      assert.equal(native.stdout, 'source-test');
+    const cases = [
+      { args, kind: 'source-test' },
+      ...['--config=vitest.integration.config.ts', '--root=../other', '--workspace=custom.workspace.ts', '--project=artifact']
+        .map(override => ({ args: [...args, override], kind: component === 'apps/server' && override === '--config=vitest.integration.config.ts' ? 'source-test' : 'runtime' })),
+      ...(component === 'apps/server' ? [{
+        args: ['--script=vitest:local', 'run', '--isolate', '-c', 'vitest.config.ts', 'sources/app/api/socket/externalActionDispatcher.test.ts'],
+        kind: 'source-test',
+      }] : []),
+    ];
+    for (const { args, kind } of cases) {
+      const policy = resolveRemoteCommandPolicy(args, { repoRoot: root, cwd: join(root, component) });
+      assert.equal(policy.kind, kind);
+      assert.equal(policy.heavyClass, 'validation');
+      if (process.platform !== 'win32') {
+        const native = spawnSync('/bin/sh', ['-c', '. "$1"; repo_root=$2; invoked_cwd=$2/$3; shift 3; resolve_native_command_policy "$@"; printf "%s,%s" "$policy_kind" "$policy_heavyClass"', 'policy', artifact, root, component, ...args], { encoding: 'utf8' });
+        assert.equal(native.status, 0, native.stderr);
+        assert.equal(native.stdout, `${kind},validation`);
+      }
     }
-    assert.equal(resolveRemoteCommandPolicy([...args, '--config=vitest.external.config.ts'], { repoRoot: root, cwd: join(root, component) }).kind, 'runtime');
   }
 });
 
@@ -233,6 +304,7 @@ test('plugin-ui source Vitest skips emitted dependency publication in both dispa
 
 test('finite workspace publishers retain placement class without an outer payload owner', async t => {
   const root = fileURLToPath(new URL('../../../../../', import.meta.url)).replace(/\/$/u, '');
+  const env = { ...process.env, HAPPIER_WORKSPACE_BUILD_MODE: 'strict' };
   const fixture = await createTempFixture(t, { prefix: 'finite-publisher-policy-' });
   const artifact = fixture.path('policy.sh');
   await writeFile(artifact, renderNativeCommandPolicy());
@@ -242,25 +314,76 @@ test('finite workspace publishers retain placement class without an outer payloa
     ['packages/cli-common', join(root, 'packages/cli-common/scripts/build.mjs'), '1', 'package-dist'],
     ['packages/privacy-kit', 'scripts/build.mjs', '0', 'compilation'],
     ['apps/cli', 'scripts/build.mjs', '1', 'compilation'],
+    ['apps/server', '../../scripts/workspaces/runTypeScriptCli.mjs', '0', 'compilation-server'],
+    ['apps/server', 'scripts/runTypeScriptCli.mjs', '0', 'compilation-server'],
+    ['apps/server', 'scripts/buildSharedDeps.mjs', '1', 'compilation'],
+    ['packages/plugins/triage', 'scripts/ensureTypecheckDeclarationPrerequisites.mjs', '1', 'compilation'],
+    ['apps/server', 'fixture/runTypeScriptCli.mjs', '0', 'compilation-server'],
     ['packages/protocol', './fixture/buildTypeScriptPackageDist.mjs', '0', 'runtime-build'],
   ]) {
     const args = ['node', entry, '-p', 'tsconfig.json'];
-    const policy = resolveRemoteCommandPolicy(args, { cwd });
+    const policy = resolveRemoteCommandPolicy(args, { cwd, env });
     assert.equal(policy.selfPublisher ?? '0', expected, `${cwd}/${entry}`);
     assert.equal(policy.heavyClass, heavyClass);
-    const native = spawnSync('/bin/sh', ['-c', '. "$1"; repo_root=$2; invoked_cwd=$2/$3; shift 3; resolve_native_command_policy "$@"; printf "%s,%s" "$policy_selfPublisher" "$policy_heavyClass"', 'policy', artifact, root, cwd, ...args], { encoding: 'utf8' });
+    const native = spawnSync('/bin/sh', ['-c', '. "$1"; repo_root=$2; invoked_cwd=$2/$3; shift 3; resolve_native_command_policy "$@"; printf "%s,%s" "$policy_selfPublisher" "$policy_heavyClass"', 'policy', artifact, root, cwd, ...args], { encoding: 'utf8', env });
     assert.equal(native.status, 0, native.stderr);
     assert.equal(native.stdout, `${expected},${heavyClass}`);
   }
 });
 
-test('manifest publisher delegation follows real scripts without bypassing placement', async () => {
+test('manifest publisher delegation follows real scripts without bypassing placement', async t => {
   const root = fileURLToPath(new URL('../../../../../', import.meta.url));
   const classify = commandPolicy.isSelfPublishingPackageCommand ?? (async () => false);
   for (const [name, expected] of [['protocol', true], ['cli-common', true], ['sdk', true], ['privacy-kit', false], ['plugin-sdk', true]]) {
     const cwd = join(root, 'packages', name);
     assert.equal(await classify(['yarn', 'build'], { repoRoot: root, cwd }), expected, name);
     assert.equal(await isSelfDispatchingPackageCommand(['yarn', 'build'], { repoRoot: root, cwd }), false, 'publisher ownership is not target dispatch');
+  }
+  for (const [workspace, script, component, heavyClass, selfPublisher] of [
+    ['@happier-dev/server', 'build', 'apps/server', 'compilation', '1'],
+    ['@happier-dev/plugin-ui', 'typecheck', 'packages/plugin-ui', 'compilation', '1'],
+    ['@happier-dev/plugins-triage', 'typecheck', 'packages/plugins/triage', 'compilation', '1'],
+    ['@happier-dev/app', 'typecheck', 'apps/ui', 'compilation-ui', '0'],
+  ]) await t.test(`${workspace} ${script}`, async () => {
+    const policy = await commandPolicy.resolvePackageCommandPolicy(['yarn', 'workspace', workspace, script], {
+      repoRoot: root, cwd: root,
+    });
+    assert.equal(policy.component, component);
+    assert.equal(policy.selfPublisher, selfPublisher,
+      'producer-containing scripts defer admission; pure compiler scripts retain outer busy fallback');
+    assert.equal(policy.heavyClass, heavyClass, 'placement covers the full producer/compiler lifecycle');
+  });
+});
+
+test('manifest publisher delegation resolves repository package references and rejects unresolved graphs', async t => {
+  const { root: fixtureRoot } = await createTempFixture(t, { prefix: 'publisher-references-' });
+  const root = join(fixtureRoot, 'repo');
+  await mkdir(join(root, 'packages/consumer'), { recursive: true });
+  await mkdir(join(root, 'packages/producer'), { recursive: true });
+  await writeFile(join(root, 'package.json'), JSON.stringify({ workspaces: ['packages/*'] }));
+  await writeFile(join(root, 'packages/producer/package.json'), JSON.stringify({ name: '@fixture/producer', scripts: {
+    check: 'node ../../apps/stack/scripts/test_ci.mjs && yarn -s publish',
+    publish: 'node ../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json',
+    cycle: 'yarn --cwd ../consumer -s cycle',
+  } }));
+  await mkdir(join(fixtureRoot, 'external'), { recursive: true });
+  await writeFile(join(fixtureRoot, 'external/package.json'), JSON.stringify({ scripts: {
+    publish: 'node ../repo/scripts/workspaces/runTypeScriptCli.mjs --noEmit',
+  } }));
+  const cwd = join(root, 'packages/consumer');
+  const writeConsumer = scripts => writeFile(join(cwd, 'package.json'), JSON.stringify({ name: '@fixture/consumer', scripts }));
+  const compiler = 'node ../../scripts/workspaces/runTypeScriptCli.mjs --noEmit -p tsconfig.json';
+  for (const reference of ['yarn --cwd ../producer -s check', 'yarn workspace @fixture/producer check']) {
+    await writeConsumer({ check: `${reference} && ${compiler}` });
+    const policy = await commandPolicy.resolvePackageCommandPolicy(['yarn', 'check'], { repoRoot: root, cwd });
+    assert.equal(policy.selfPublisher, '1', reference);
+    assert.equal(policy.requiredTools, 'bun', 'referenced manifests retain their real tool requirements');
+  }
+  for (const script of ['yarn --cwd ../missing -s publish', 'yarn workspace @fixture/missing publish',
+    'yarn --cwd ../../../external -s publish', 'yarn --cwd ../producer -s cycle', 'npx arbitrary-compiler']) {
+    await writeConsumer({ check: script, cycle: 'yarn --cwd ../producer -s cycle' });
+    const policy = await commandPolicy.resolvePackageCommandPolicy(['yarn', 'check'], { repoRoot: root, cwd });
+    assert.equal(policy.selfPublisher, '0', script);
   }
 });
 
@@ -273,8 +396,8 @@ test('publisher policy uses effective compiler argv and the selected prepared sc
   }
   const sdkDir = join(repoRoot, 'packages/plugin-sdk');
   const packageJson = JSON.parse(readFileSync(join(sdkDir, 'package.json'), 'utf8'));
-  assert.equal(commandPolicy.resolveWorkspacePackageBuildAdmissionClass({ packageJson, cwd: sdkDir, scriptName: 'check:prepare:api-governance:prepared', env: {} }), 'package-dist');
-  assert.equal(commandPolicy.resolveWorkspacePackageBuildAdmissionClass({ packageJson: { scripts: { build: 'pkgroll', selected: 'node ../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json' } }, cwd: sdkDir, scriptName: 'selected', env: {} }), 'package-dist');
+  assert.equal(await commandPolicy.resolveWorkspacePackageBuildAdmissionClass({ packageJson, cwd: sdkDir, scriptName: 'check:prepare:api-governance:prepared', env: {} }), 'package-dist');
+  assert.equal(await commandPolicy.resolveWorkspacePackageBuildAdmissionClass({ packageJson: { scripts: { build: 'pkgroll', selected: 'node ../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json' } }, cwd: sdkDir, scriptName: 'selected', env: {} }), 'package-dist');
   const resolvePublisher = commandPolicy.resolveCommandPublisherPolicy ?? (async () => ({ selfPublisher: '0', heavyClass: '' }));
   assert.deepEqual(await resolvePublisher(['yarn', 'build'], { repoRoot, cwd, env: {} }), { selfPublisher: '1', heavyClass: 'runtime-build', requiredTools: '' });
   assert.deepEqual(await resolvePublisher(['node', 'scripts/bundleWorkspaceDeps.mjs', '--declarations', '--run-script=check:prepare:api-governance:prepared'], { repoRoot, cwd: sdkDir, env: {} }), { selfPublisher: '1', heavyClass: 'package-dist', requiredTools: '' });
@@ -285,7 +408,7 @@ test('manifest prerequisites retain a stable tool union for publishers and ordin
   const { root } = await createTempFixture(t, { prefix: 'manifest-tool-prerequisites-' });
   const cwd = join(root, 'apps/cli');
   await mkdir(cwd, { recursive: true });
-  await writeFile(join(cwd, 'package.json'), JSON.stringify({ scripts: {
+  await writeFile(join(cwd, 'package.json'), JSON.stringify({ happierSourceTestTools: ['go'], scripts: {
     check: 'node ../stack/scripts/test_ci.mjs && yarn -s ordinary && node ../stack/scripts/test_ci.mjs',
     ordinary: 'vitest run example.test.ts',
   } }));
@@ -300,7 +423,39 @@ test('manifest prerequisites retain a stable tool union for publishers and ordin
   assert.equal(metadata.stdout, `${policy.selfPublisher} ${policy.heavyClass} bun go\n`);
 });
 
-test('workspace build admission covers effective compilers behind real package lifecycle scripts', () => {
+test('workspace aliases derive preparation from the selected manifest rather than the caller directory', async t => {
+  const { root } = await createTempFixture(t, { prefix: 'workspace-alias-policy-' });
+  const packageDir = join(root, 'packages', 'nested', "viewer's tools");
+  await mkdir(packageDir, { recursive: true });
+  await writeFile(join(root, 'package.json'), JSON.stringify({ workspaces: ['packages/nested/*'] }));
+  await writeFile(join(packageDir, 'package.json'), JSON.stringify({ name: '@fixture/unrelated-name', scripts: {
+    build: 'node compile.mjs',
+  } }));
+  for (const args of [
+    ['yarn', 'workspace', '@fixture/unrelated-name', 'build'],
+    ['corepack', 'yarn', '--cwd', root, 'workspace', '@fixture/unrelated-name', 'build'],
+    ['yarn', '--cwd', "packages\\nested\\viewer's tools", 'build'],
+  ]) {
+    const policy = await commandPolicy.resolvePackageCommandPolicy(args, { repoRoot: root, cwd: '.' });
+    assert.equal(policy.component, "packages/nested/viewer's tools");
+    assert.equal(policy.commandClass, 'targeted-validation', 'the selected component must prepare before payload admission');
+    assert.equal(policy.kind, 'runtime');
+    assert.equal(policy.selfPublisher, '0', 'a package alias cannot grant publisher admission authority');
+  }
+  const rootPolicy = await commandPolicy.resolvePackageCommandPolicy(['yarn', 'lint'], { repoRoot: root, cwd: root });
+  assert.equal(rootPolicy.component, '.');
+  assert.equal(rootPolicy.commandClass, 'full-validation', 'repository scripts retain their own preparation contract');
+  const metadata = spawnSync(process.execPath, [fileURLToPath(new URL('./remote_commands.mjs', import.meta.url)),
+    '--package-policy', root, root, 'yarn', 'workspace', '@fixture/unrelated-name', 'build'], { encoding: 'utf8' });
+  assert.equal(metadata.status, 0, metadata.stderr);
+  const native = spawnSync('/bin/sh', ['-c', 'eval "$PACKAGE_POLICY"; printf "%s|%s|%s" "$policy_component" "$policy_commandClass" "$policy_kind"'], {
+    encoding: 'utf8', env: { ...process.env, PACKAGE_POLICY: metadata.stdout },
+  });
+  assert.equal(native.status, 0, native.stderr);
+  assert.equal(native.stdout, "packages/nested/viewer's tools|targeted-validation|runtime");
+});
+
+test('workspace build admission covers effective compilers behind real package lifecycle scripts', async () => {
   const repoRoot = fileURLToPath(new URL('../../../../../', import.meta.url));
   const classify = commandPolicy.resolveWorkspacePackageBuildAdmissionClass
     ?? (({ cwd }) => resolveRemoteCommandPolicy(['yarn', 'build'], { cwd }).heavyClass);
@@ -315,22 +470,22 @@ test('workspace build admission covers effective compilers behind real package l
   ]) {
     const cwd = join(repoRoot, 'packages', name);
     const packageJson = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf8'));
-    assert.equal(classify({ packageJson, cwd, env: { HAPPIER_WORKSPACE_BUILD_MODE: mode } }), expected, `${name}/${mode}`);
+    assert.equal(await classify({ packageJson, cwd, env: { HAPPIER_WORKSPACE_BUILD_MODE: mode } }), expected, `${name}/${mode}`);
   }
 });
 
-test('workspace build admission includes hooks and fails closed for unresolved script graphs', () => {
+test('workspace build admission includes hooks and fails closed for unresolved script graphs', async () => {
   const cwd = fileURLToPath(new URL('../../../../../packages/protocol', import.meta.url));
   const classify = commandPolicy.resolveWorkspacePackageBuildAdmissionClass
     ?? (({ cwd }) => resolveRemoteCommandPolicy(['yarn', 'build'], { cwd }).heavyClass);
   const compiler = 'node ../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json';
-  assert.equal(classify({ cwd, packageJson: { scripts: { build: compiler, postbuild: 'node scripts/build.mjs' } } }), 'compilation');
-  assert.equal(classify({ cwd, packageJson: { scripts: { build: 'yarn -s missing' } } }), 'compilation');
-  assert.equal(classify({ cwd, packageJson: { scripts: { build: 'yarn -s recursive', recursive: 'yarn build' } } }), 'compilation');
-  assert.equal(classify({ cwd, packageJson: { scripts: { build: '../../apps/stack/bin/hstack-exec --script=build:local', 'build:local': compiler } }, env: {} }), 'runtime-build');
-  assert.equal(classify({ cwd, packageJson: { scripts: { build: `node -e "$(compiler)" && ${compiler}` } } }), 'compilation');
-  assert.equal(classify({ cwd, packageJson: { scripts: { build: `cd .. && ${compiler}` } }, env: {} }), 'compilation');
-  assert.equal(classify({ cwd, packageJson: { scripts: { build: compiler } }, env: {
+  assert.equal(await classify({ cwd, packageJson: { scripts: { build: compiler, postbuild: 'node scripts/build.mjs' } } }), 'compilation');
+  assert.equal(await classify({ cwd, packageJson: { scripts: { build: 'yarn -s missing' } } }), 'compilation');
+  assert.equal(await classify({ cwd, packageJson: { scripts: { build: 'yarn -s recursive', recursive: 'yarn build' } } }), 'compilation');
+  assert.equal(await classify({ cwd, packageJson: { scripts: { build: '../../apps/stack/bin/hstack-exec --script=build:local', 'build:local': compiler } }, env: {} }), 'runtime-build');
+  assert.equal(await classify({ cwd, packageJson: { scripts: { build: `node -e "$(compiler)" && ${compiler}` } } }), 'compilation');
+  assert.equal(await classify({ cwd, packageJson: { scripts: { build: `cd .. && ${compiler}` } }, env: {} }), 'compilation');
+  assert.equal(await classify({ cwd, packageJson: { scripts: { build: compiler } }, env: {
     HAPPIER_WORKSPACE_BUILD_MODE: 'source-dev', npm_lifecycle_event: 'prepack',
   } }), 'runtime-build');
 });
@@ -370,7 +525,7 @@ exit 23
 ` });
   writeFakeBin({ root: fixture.root, name: 'awk', content: '#!/bin/sh\ncase "$*" in */proc/meminfo*) printf "1048576 %s\\n" "${FIXTURE_MEMORY_TOTAL_KIB:-33554432}" ;; *) exec /usr/bin/awk "$@" ;; esac\n' });
   writeFakeBin({ root: fixture.root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
-  const env = { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`, HOME: fixture.root, CI: '',
+  const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`, HOME: fixture.root, CI: '',
     FIXTURE_ADMISSION_ROOT: admissionRoot, HAPPIER_EXEC_CONFIG_PATH: '', HAPPIER_STACK_STORAGE_DIR: fixture.path('stacks'),
     HAPPIER_DEV_TARGET_EXECUTION: '', HAPPIER_HSTACK_EXECUTION: '', HAPPIER_HSTACK_DISPATCH_CONTROL: '',
     HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' };
@@ -419,16 +574,47 @@ test('remote credential seeding preserves an enrolled credential across repeated
   const { cliHomeDir, activeServerId } = resolveRemoteStackStatePaths(target, { stackName: 'agent-qa', runtimeMode: 'source-snapshot' });
   const finalPath = join(cliHomeDir, 'servers', activeServerId, 'access.key');
   const stagedPath = join(cliHomeDir, '.access-key-agent-qa.tmp');
-  const enrolled = JSON.stringify({ token: 'qa-enrolled', encryption: { publicKey: Buffer.alloc(32, 1).toString('base64'), machineKey: Buffer.alloc(32, 2).toString('base64') } });
+  const token = suffix => `header.${Buffer.from(JSON.stringify({ sub: 'qa-account' })).toString('base64url')}.${suffix}`;
   await mkdir(join(cliHomeDir, 'servers', activeServerId), { recursive: true });
-  await writeFile(finalPath, enrolled, { mode: 0o600 });
   const command = buildRemoteInstallCredentialCommand(target, { stagedPath, finalPath });
-  for (let start = 0; start < 2; start += 1) {
-    await writeFile(stagedPath, JSON.stringify({ token: 'qa-seed', secret: Buffer.alloc(32, 3).toString('base64') }));
-    await execFileAsync('/bin/bash', ['-c', command]);
-    assert.equal(readFileSync(finalPath, 'utf8'), enrolled, 'startup must not replace the target enrollment with controller seed material');
-    assert.equal(existsSync(stagedPath), false, 'unused staged credentials must be retired');
+  for (const enrolledToken of [token('enrolled'), 'opaque-enrollment']) {
+    const enrolled = JSON.stringify({ token: enrolledToken, encryption: { publicKey: Buffer.alloc(32, 1).toString('base64'), machineKey: Buffer.alloc(32, 2).toString('base64') } });
+    await writeFile(finalPath, enrolled, { mode: 0o600 });
+    for (const seedToken of [token('older-seed'), 'opaque-controller']) {
+      await writeFile(stagedPath, JSON.stringify({ token: seedToken, secret: Buffer.alloc(32, 3).toString('base64') }));
+      await execFileAsync('/bin/bash', ['-c', command]);
+      assert.equal(readFileSync(finalPath, 'utf8'), enrolled, 'startup must preserve enrollment unless both Account subjects are known and differ');
+      assert.equal(existsSync(stagedPath), false, 'unused staged credentials must be retired');
+    }
   }
+});
+
+test('remote credential seeding adopts a changed controller Account and preserves its next enrollment', { skip: process.platform === 'win32' }, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-auth-account-switch-' });
+  const target = { ...posix, cliHomeDir: fixture.path('remote cli') };
+  const { cliHomeDir, activeServerId } = resolveRemoteStackStatePaths(target, { stackName: 'agent-qa', runtimeMode: 'source-snapshot' });
+  const finalPath = join(cliHomeDir, 'servers', activeServerId, 'access.key');
+  const stagedPath = join(cliHomeDir, '.access-key-agent-qa.tmp');
+  const credential = (accountId, signature) => JSON.stringify({
+    token: `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.${signature}`,
+    encryption: { publicKey: Buffer.alloc(32, 1).toString('base64'), machineKey: Buffer.alloc(32, 2).toString('base64') },
+  });
+  await mkdir(join(cliHomeDir, 'servers', activeServerId), { recursive: true });
+  await writeFile(finalPath, credential('previous-account', 'enrolled'), { mode: 0o600 });
+  const seed = credential('replacement-account', 'controller');
+  await writeFile(stagedPath, seed);
+  const command = buildRemoteInstallCredentialCommand(target, { stagedPath, finalPath });
+  await execFileAsync('/bin/bash', ['-c', command]);
+  assert.equal(readFileSync(finalPath, 'utf8'), seed, 'the next start must adopt the controller Account change');
+  assert.equal((await stat(finalPath)).mode & 0o777, 0o600);
+  assert.equal(existsSync(stagedPath), false);
+
+  const enrolled = credential('replacement-account', 'remote-enrolled');
+  await writeFile(finalPath, enrolled);
+  await writeFile(stagedPath, seed);
+  await execFileAsync('/bin/bash', ['-c', command]);
+  assert.equal(readFileSync(finalPath, 'utf8'), enrolled, 'same-Account restarts must preserve the new remote enrollment');
+  assert.equal(existsSync(stagedPath), false);
 });
 
 test('remote credential seeding initializes missing or empty target credentials privately', { skip: process.platform === 'win32' }, async t => {
@@ -478,11 +664,17 @@ test('CLI command prerequisites distinguish Vitest setup from generator-only pro
   const vitest = resolveRemoteCommandPolicy(['corepack', 'yarn', '--cwd', 'apps/cli', 'vitest', 'run', 'src/example.test.ts']);
   const projection = resolveRemoteCommandPolicy(['corepack', 'yarn', '--cwd', 'apps/cli', 'test:migration:bundled-plugin-projections']);
   assert.equal(vitest.requiredTools, 'go');
+  assert.equal(vitest.heavyClass, 'validation', 'explicit owner-test files keep their existing envelope');
   assert.equal(projection.requiredTools, '', 'generator-only checks do not run Vitest global setup');
-  assert.equal(vitest.workspaceLock, '.project/tmp/cli-dist-build.lock');
+  assert.equal(vitest.workspaceLock, '');
   assert.equal(projection.workspaceLock, '');
   const unrelated = resolveRemoteCommandPolicy(['vitest', 'run'], { cwd: 'packages/plugin-sdk' });
   assert.equal(unrelated.workspaceLock, '');
+  const integration = resolveRemoteCommandPolicy(['vitest', 'run', '--config', 'vitest.integration.config.ts'], { cwd: 'apps/cli' });
+  assert.equal(integration.workspaceLock, '.project/tmp/cli-dist-build.lock');
+  const unit = resolveRemoteCommandPolicy(['corepack', 'yarn', '--cwd', 'apps/cli', 'test:unit']);
+  assert.equal(unit.workspaceLock, '');
+  assert.equal(unit.heavyClass, 'compilation', 'the complete CLI unit lane contains real compiler consumers');
   const artifact = fileURLToPath(new URL('./native_command_policy.sh', import.meta.url));
   const root = fileURLToPath(new URL('../../../../../', import.meta.url)).replace(/\/$/u, '');
   if (process.platform !== 'win32') for (const [component, expected] of [['apps/cli', vitest.workspaceLock], ['packages/plugin-sdk', '']]) {
@@ -492,29 +684,97 @@ test('CLI command prerequisites distinguish Vitest setup from generator-only pro
   }
 });
 
-test('CLI Vitest acquires its native-setup publication lease jointly before payload admission', { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
+test('source-test native requirements belong to the selected package declaration', async t => {
+  const { root } = await createTempFixture(t, { prefix: 'selected-source-test-tools-' });
+  const cliDir = join(root, 'apps/cli');
+  mkdirSync(cliDir, { recursive: true });
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'] }));
+  const manifest = { name: '@happier-dev/cli', scripts: { vitest: 'vitest' } };
+  const owner = fileURLToPath(new URL('./remote_commands.mjs', import.meta.url));
+  const requests = [
+    { cwd: cliDir, args: ['vitest', 'run', 'src/example.test.ts'] },
+    { cwd: root, args: ['yarn', '--cwd', 'apps/cli', 'vitest', 'run', 'src/example.test.ts'] },
+    { cwd: cliDir, args: ['hstack-exec', '--heavyweight-admission', '--class=compilation', '--', 'vitest', 'run', 'src/example.test.ts'] },
+  ];
+  const nativePolicy = request => spawnSync('/bin/sh', ['-c', `${renderNativeCommandPolicy()}\nrepo_root=$1; invoked_cwd=$2; projection_command_policy=$3; shift 3; resolve_native_command_policy "$@" || exit $?; printf '%s' "$policy_requiredTools"`,
+    'policy', root, request.cwd, owner, ...request.args], { encoding: 'utf8' });
+  for (const [declaration, expected] of [[undefined, ''], [['go'], 'go']]) {
+    writeFileSync(join(cliDir, 'package.json'), JSON.stringify({ ...manifest,
+      ...(declaration === undefined ? {} : { happierSourceTestTools: declaration }) }));
+    for (const request of requests) {
+      const policy = await commandPolicy.resolvePackageCommandPolicy(request.args, { repoRoot: root, cwd: request.cwd });
+      assert.equal(policy.requiredTools, expected);
+      if (process.platform !== 'win32') {
+        const native = nativePolicy(request);
+        assert.equal(native.status, 0, native.stderr);
+        assert.equal(native.stdout, expected);
+      }
+      if (declaration === undefined) {
+        // A predecessor-shaped checkout has no native source owner or loader.
+        // Its declared flow must remain usable without either new private API.
+        const { prepareRemoteValidationWorkspace } = await import('./remote_validation_preparation.mjs');
+        const result = await prepareRemoteValidationWorkspace({ repoDir: root,
+          componentRelativeDir: policy.component, validationKind: policy.kind,
+          requiredTools: policy.requiredTools });
+        assert.deepEqual(result.skipped, ['workspace-source-test']);
+      }
+    }
+    if (declaration !== undefined) {
+      const { prepareRemoteValidationWorkspace } = await import('./remote_validation_preparation.mjs');
+      await assert.rejects(prepareRemoteValidationWorkspace({ repoDir: root,
+        componentRelativeDir: 'apps/cli', validationKind: 'source-test', requiredTools: expected }),
+      error => error.code === 'EEXIT' && error.err.includes('ERR_MODULE_NOT_FOUND'),
+      'a declared native prerequisite must not silently skip a missing selected source owner');
+    }
+  }
+  for (const declaration of ['go', ['go;not-a-tool']]) {
+    writeFileSync(join(cliDir, 'package.json'), JSON.stringify({ ...manifest, happierSourceTestTools: declaration }));
+    for (const request of requests) {
+      await assert.rejects(commandPolicy.resolvePackageCommandPolicy(request.args,
+        { repoRoot: root, cwd: request.cwd }), /happierSourceTestTools/u);
+      if (process.platform !== 'win32') {
+        const native = nativePolicy(request);
+        assert.notEqual(native.status, 0);
+        assert.match(native.stderr, /happierSourceTestTools/u);
+      }
+    }
+  }
+});
+
+test('CLI source Vitest releases its admitted native-preparation publication lease before the payload', { skip: process.platform !== 'linux', timeout: 30_000 }, async t => {
   for (const placement of ['remote', 'local']) await t.test(placement, async t => {
     const { root } = await createTempFixture(t, { prefix: 'cli-vitest-publication-' });
-    const { launcher } = await installNativeAdmissionFixture({ root });
+    const { launcher } = await installNativeAdmissionFixture({ root, prepareDependencies: true });
     const checkout = join(root, 'native-owner');
+    await installCliNativeCustodySourceFixture(checkout);
     const cliDir = join(checkout, 'apps/cli');
     const sdkDir = join(checkout, 'packages/plugin-sdk');
     mkdirSync(cliDir, { recursive: true });
+    mkdirSync(join(cliDir, 'native/processcustody'), { recursive: true });
     mkdirSync(sdkDir, { recursive: true });
     const lockPath = join(checkout, '.project/tmp/cli-dist-build.lock');
     const lockOwner = fileURLToPath(new URL('../../../../../packages/cli-common/workspaceBundleLock.mjs', import.meta.url));
     const payload = join(root, 'payload.mjs');
-    writeFileSync(payload, `import { withWorkspaceBundleLock, callerHoldsWorkspaceBundleLock } from ${JSON.stringify(lockOwner)};
+    writeFileSync(payload, `import { callerHoldsWorkspaceBundleLock } from ${JSON.stringify(lockOwner)};
+import { readFileSync } from 'node:fs';
 const lockPath = ${JSON.stringify(lockPath)};
 const held = process.env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD;
 if (process.cwd() === ${JSON.stringify(cliDir)}) {
-  await withWorkspaceBundleLock(async () => {}, { lockPath, heldLockValue: held });
+  if (readFileSync(${JSON.stringify(join(cliDir, 'tools/unpacked/happier-process-custody'))}, 'utf8') !== 'prepared-native') throw new Error('native preparation missing');
 }
-process.stdout.write(JSON.stringify({ admitted: Boolean(process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN), inherited: callerHoldsWorkspaceBundleLock(lockPath, held) }));
+process.stdout.write(JSON.stringify({ admitted: Boolean(process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN), inherited: callerHoldsWorkspaceBundleLock(lockPath, held), buildMode: process.env.HAPPIER_WORKSPACE_BUILD_MODE }));
 `);
     // The test runner executable and OS capacity are genuine boundaries. Both
     // dispatchers, native admission and authenticated publication remain real.
     writeFakeBin({ root, name: 'vitest', content: `#!/bin/sh\nexec '${process.execPath}' '${payload}'\n` });
+    writeFakeBin({ root, name: 'go', content: `#!/bin/sh
+[ -n "$HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN" ] || exit 91
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = '-o' ]; then shift; output=$1; fi
+  shift
+done
+printf 'prepared-native' > "$output"
+` });
     writeFakeBin({ root, name: 'awk', content: '#!/bin/sh\ncase "$*" in */proc/meminfo*) printf "33554432 33554432\\n" ;; *) exec /usr/bin/awk "$@" ;; esac\n' });
     writeFakeBin({ root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
     const bin = join(root, 'bin');
@@ -525,15 +785,21 @@ process.stdout.write(JSON.stringify({ admitted: Boolean(process.env.HAPPIER_HEAV
       HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: '', HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES: '',
       HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED: '',
     };
-    const run = component => {
+    const run = (component, buildMode) => {
+      const fixtureEnv = buildNativeAdmissionFixtureEnv();
+      delete fixtureEnv.HAPPIER_WORKSPACE_BUILD_MODE;
+      const commandEnvironment = { ...environment,
+        HAPPIER_DEV_TARGET_EXECUTION: placement === 'remote' ? '1' : '',
+        ...(buildMode ? { HAPPIER_WORKSPACE_BUILD_MODE: buildMode } : {}) };
       if (placement === 'remote') {
         const command = buildRemoteExecCommand({ ...posix, repoDir: checkout, cliHomeDir: join(root, 'home'), remotePath: [bin] }, {
-          executionId, cwd: component, commandArgs: ['vitest', 'run'], admissionClass: 'validation', environment,
+          executionId, cwd: component, commandArgs: ['vitest', 'run', 'src/example.test.ts'], admissionClass: 'validation', environment: commandEnvironment,
+          preparation: { componentRelativeDir: component, validationKind: 'source-test' },
         });
-        return execFileAsync('/bin/bash', ['-c', command]);
+        return execFileAsync('/bin/bash', ['-c', command], { env: fixtureEnv });
       }
-      return execFileAsync('/bin/sh', [launcher, '--local', '--', 'vitest', 'run'], {
-        cwd: join(checkout, component), env: { ...process.env, ...environment },
+      return execFileAsync('/bin/sh', [launcher, '--local', '--', 'vitest', 'run', 'src/example.test.ts'], {
+        cwd: join(checkout, component), env: { ...fixtureEnv, ...commandEnvironment },
       });
     };
     let release;
@@ -543,7 +809,9 @@ process.stdout.write(JSON.stringify({ admitted: Boolean(process.env.HAPPIER_HEAV
     const held = withWorkspaceBundleLock(async () => {
       // An unrelated package's Vitest must not acquire the CLI publication lease.
       const control = await run('packages/plugin-sdk');
-      assert.deepEqual(JSON.parse(control.stdout), { admitted: true, inherited: false });
+      assert.deepEqual(JSON.parse(control.stdout), { admitted: true, inherited: false, buildMode: 'qa-runtime' });
+      const strictControl = await run('packages/plugin-sdk', 'strict');
+      assert.deepEqual(JSON.parse(strictControl.stdout), { admitted: true, inherited: false, buildMode: 'strict' });
       await new Promise(resolve => { release = resolve; ready(); });
     }, { lockPath });
     held.catch(refuse);
@@ -556,12 +824,12 @@ process.stdout.write(JSON.stringify({ admitted: Boolean(process.env.HAPPIER_HEAV
     // Attach rejection immediately while observing the real owner's waiter.
     result.catch(() => {});
     try {
-      while (!settled && !stderr.includes('Workspace publication lease is busy')) await new Promise(resolve => setTimeout(resolve, 20));
+      while (!settled && !stderr.includes('busy')) await new Promise(resolve => setTimeout(resolve, 20));
       assert.equal(settled, false, stderr);
     } finally { release(); }
     await held;
     const completed = await result;
-    assert.deepEqual(JSON.parse(completed.stdout), { admitted: true, inherited: true });
+    assert.deepEqual(JSON.parse(completed.stdout), { admitted: true, inherited: false, buildMode: 'qa-runtime' });
   });
 });
 
@@ -595,6 +863,10 @@ test('source snapshot remote commands retain the QA stack home and start source 
     assert.match(recoveryCommand, /--restart/);
     assert.match(recoveryCommand, new RegExp(`--source-start-request-id=[^ ]*${executionId}`),
       'both remote launchers carry the parent pending-start identity');
+    const refreshInvocation = buildRemoteStackCommand(target, { ...options, refreshSourceRuntime: true });
+    const refreshCommand = target.platform === 'windows' ? Buffer.from(refreshInvocation.split(' ').at(-1), 'base64').toString('utf16le') : refreshInvocation;
+    assert.match(refreshCommand, /--restart/, 'a crashed source worker enters preparation before retirement');
+    assert.doesNotMatch(refreshCommand, /--reuse-source-runtime|--prepared-source-reload/);
   }
 });
 
@@ -621,7 +893,7 @@ test('source snapshot launches the canonical Stack entry directly and preserves 
     stackName: 'agent-qa', runtimeMode: 'source-snapshot',
     services: { server: false, expo: false, daemon: true }, serverUrl: 'http://127.0.0.1:43001',
   });
-  const env = { ...process.env, HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' };
+  const env = buildNativeAdmissionFixtureEnv();
   await execFileAsync('/bin/bash', ['-c', command], { env });
   const invocations = readFileSync(recorded, 'utf8').trim().split('\n');
   assert.equal(invocations.length, 3);
@@ -662,9 +934,12 @@ test('source snapshot identity probe observes selected and loaded component iden
     stackName: 'agent-qa', runtimeMode: 'source-snapshot', services: { daemon: true }, includeDaemonServerUrl: true,
   });
   writeFileSync(join(paths.stackBaseDir, 'stack.runtime.json'), JSON.stringify({ sourceRuntimeIdentities,
+    ports: { server: 43865 },
     serverConnection: { internalServerUrl: 'http://127.0.0.1:43001', publicServerUrl: 'https://home.example' } }));
   const preserved = await execFileAsync('/bin/bash', ['-c', preservedProbe]);
   assert.equal(JSON.parse(preserved.stdout).daemonServerUrl, 'http://127.0.0.1:43001', 'transport adoption observes the native daemon endpoint rather than allocating another');
+  assert.equal(JSON.parse(preserved.stdout).serverPort, 43865,
+    'a co-located server restart consumes its recorded private port separately from the daemon route');
   writeFileSync(join(paths.stackBaseDir, 'stack.runtime.json'), JSON.stringify({ sourceRuntimeIdentities, sourceUi: 'export' }));
   await assert.rejects(execFileAsync('/bin/bash', ['-c', command]));
   writeFileSync(join(paths.stackBaseDir, 'stack.runtime.json'), JSON.stringify({ sourceRuntimeIdentities }));
@@ -702,7 +977,7 @@ test('runtime identity probe reports actionable structured errors for absent, em
   }
 });
 
-test('source snapshot server placement exports its UI unless borrowed or disabled while daemon-only placement never exports', () => {
+test('source snapshot server placement exports its UI unless borrowed or disabled while daemon-only placement never exports', async t => {
   const options = {
     stackName: 'agent-qa', runtimeMode: 'source-snapshot',
     services: { server: true, expo: false, daemon: false }, remoteServerPort: 43001,
@@ -711,10 +986,33 @@ test('source snapshot server placement exports its UI unless borrowed or disable
   };
   for (const target of [posix, windows]) {
     const decode = command => target.platform === 'windows' ? Buffer.from(command.split(' ').at(-1), 'base64').toString('utf16le') : command;
+    assert.match(decode(buildRemoteStackCommand(target, options)), /--ui=.*export/);
     assert.doesNotMatch(decode(buildRemoteStackCommand(target, options)), /--no-ui/);
     assert.doesNotMatch(decode(buildRemoteStackCommand(target, { ...options, borrowedExpoProducerStackName: 'repo-producer' })), /--no-ui/);
     for (const sourceUi of ['borrowed', 'disabled']) assert.match(decode(buildRemoteStackCommand(target, { ...options, sourceUi })), /--no-ui/);
     assert.match(decode(buildRemoteStackCommand(target, { ...options, services: { server: false, expo: false, daemon: true } })), /--no-ui/);
+  }
+  const fixture = await createTempFixture(t, { prefix: 'hstack-remote-export-mode-' });
+  const target = { ...posix, repoDir: fixture.path('repo with spaces'), cliHomeDir: fixture.path('home'), remotePath: [fixture.path('bin')] };
+  mkdirSync(target.repoDir, { recursive: true });
+  // Replace only the external Stack process: execute the real remote shell and
+  // pass its argv through the same parser, UI policy and server-env owners.
+  writeFakeBin({ root: fixture.root, name: 'node', content: `#!${process.execPath}\nif (process.argv[4] === 'start') process.stdout.write(JSON.stringify(process.argv.slice(2)));\n` });
+  const paths = resolveRemoteStackStatePaths(target, options);
+  const uiDir = join(paths.stackBaseDir, 'source-runtime/ui');
+  for (const launch of [{}, { reuseSourceRuntime: true, sourceUiLaunch: { uiDir } }, { refreshSourceRuntime: true }]) {
+    for (const sourceUi of ['export', 'borrowed', 'disabled']) {
+      const { stdout } = await execFileAsync('/bin/bash', ['-c', buildRemoteStackCommand(target, { ...options, ...launch, sourceUi })]);
+      const { flags, kv } = parseArgs(JSON.parse(stdout));
+      const resolved = resolveSourceQaUiMode({ uiMode: kv.get('--ui'), noUi: flags.has('--no-ui'), consumerStackName: options.stackName });
+      assert.equal(resolved, sourceUi === 'export' ? 'export' : 'disabled');
+      const serverEnv = buildServerRuntimeEnv({ baseEnv: {}, serverPort: options.remoteServerPort,
+        publicServerUrl: options.publicServerUrl, serveUi: resolved === 'export', uiRequired: resolved === 'export',
+        uiBuildDir: kv.get('--source-ui-dir') ?? uiDir, uiBuildDirExists: true });
+      assert.equal(serverEnv.HAPPIER_SERVER_UI_REQUIRED, sourceUi === 'export' ? '1' : undefined);
+      assert.equal(serverEnv.HAPPIER_SERVER_UI_DIR, sourceUi === 'export' ? uiDir : undefined);
+      assert.equal(serverEnv.HAPPIER_SERVER_LIGHT_UI_DIR, sourceUi === 'export' ? uiDir : undefined);
+    }
   }
 });
 
@@ -804,34 +1102,83 @@ test('preparation precedes payload admission, preserves cwd/env and stops on pre
     environment: { HOME: root, HAPPIER_STACK_CLI_HOME_DIR: join(root, 'admission-home'), TRACE: trace, VALUE: "literal '$value'", FAIL_STAGE: failStage,
       HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' },
   });
-  await execFileAsync('/bin/bash', ['-c', request('')]);
+  await execFileAsync('/bin/bash', ['-c', request('')], { env: buildNativeAdmissionFixtureEnv() });
   assert.equal(readFileSync(trace, 'utf8'), `bootstrap\nprepare\npayload:${checkout}/apps/cli:literal '$value'\n`);
   writeFileSync(trace, '');
-  await assert.rejects(execFileAsync('/bin/bash', ['-c', request('bootstrap')]), error => error.code === 42);
+  await assert.rejects(execFileAsync('/bin/bash', ['-c', request('bootstrap')], { env: buildNativeAdmissionFixtureEnv() }), error => error.code === 42);
   assert.equal(readFileSync(trace, 'utf8'), 'bootstrap\n');
   writeFileSync(trace, '');
-  await assert.rejects(execFileAsync('/bin/bash', ['-c', request('prepare')]), error => error.code === 42);
+  await assert.rejects(execFileAsync('/bin/bash', ['-c', request('prepare')], { env: buildNativeAdmissionFixtureEnv() }), error => error.code === 42);
   assert.equal(readFileSync(trace, 'utf8'), 'bootstrap\nprepare\n');
 });
 
 test('remote payload admission delegates finite publishers on the selected host', { skip: process.platform !== 'linux' }, async t => {
   const { root } = await createTempFixture(t, { prefix: 'remote-finite-publisher-' });
-  await installNativeAdmissionFixture({ root });
+  const native = await installWorkspaceAdmissionProcessFixture(t, root);
   const checkout = join(root, 'native-owner');
   installRemoteCustody(checkout);
   const packageDir = join(checkout, 'packages/probe');
   mkdirSync(packageDir, { recursive: true });
-  writeFileSync(join(packageDir, 'package.json'), JSON.stringify({ scripts: { build: 'node ../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json', unsafe: 'compiler' } }));
-  writeFakeBin({ root, name: 'yarn', content: '#!/bin/sh\nprintf "%s" "${HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN:+reserved}"\n' });
+  writeFileSync(join(packageDir, 'package.json'), JSON.stringify({ scripts: {
+    build: 'node ../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json', unsafe: 'compiler',
+    premixed: 'node ../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json',
+    mixed: 'node ../../scripts/workspaces/runTypeScriptCli.mjs --noEmit -p tsconfig.json',
+  } }));
+  const lifecycle = join(root, 'mixed-lifecycle.mjs');
+  const trace = join(root, 'mixed-parent.json');
+  const foreignLock = join(root, 'foreign-publication.lock');
+  const compilerRunner = fileURLToPath(new URL('../../../../../scripts/workspaces/runTypeScriptCli.mjs', import.meta.url));
+  writeFileSync(join(packageDir, 'input.ts'), 'export const value = 1;\n');
+  writeFileSync(join(packageDir, 'tsconfig.json'), JSON.stringify({ compilerOptions: { types: [], noEmit: true }, files: ['input.ts'] }));
+  // Package-manager execution is the OS boundary. Its fixture preserves the
+  // real prebuild publisher and canonical compiler runner beneath that boundary.
+  writeFileSync(lifecycle, `
+    import {writeFileSync} from 'node:fs';
+    import {runWorkspaceBuildAdmission} from ${JSON.stringify(new URL('../proc/workspace_build_admission.mjs', import.meta.url).href)};
+    import {runCommand} from ${JSON.stringify(new URL('../proc/proc.mjs', import.meta.url).href)};
+    writeFileSync(${JSON.stringify(trace)}, JSON.stringify({admitted:Boolean(process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN)}));
+    const prepared=await runWorkspaceBuildAdmission({command:process.execPath,args:['-e',''],
+      locks:[{path:${JSON.stringify(foreignLock)}}],launcherPath:${JSON.stringify(native.launcher)},env:process.env});
+    if(prepared.error || prepared.status!==0 || prepared.signal) throw prepared.error ?? new Error('prebuild did not complete');
+    const compiled=await runCommand(process.execPath,[${JSON.stringify(compilerRunner)},'--noEmit','-p','tsconfig.json'],
+      {cwd:${JSON.stringify(packageDir)},env:process.env,ownedProcessGroup:true,stdio:'inherit'});
+    if(compiled.error || compiled.status!==0 || compiled.signal) throw compiled.error ?? new Error('compiler did not complete');
+  `);
+  writeFakeBin({ root, name: 'yarn', content: `#!/bin/sh
+if [ "$1" = mixed ]; then exec ${JSON.stringify(process.execPath)} ${JSON.stringify(lifecycle)}; fi
+printf "%s" "\${HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN:+reserved}"
+` });
   writeFakeBin({ root, name: 'awk', content: '#!/bin/sh\ncase "$*" in */proc/meminfo*) printf "33554432 33554432\\n" ;; *) exec /usr/bin/awk "$@" ;; esac\n' });
   writeFakeBin({ root, name: 'systemctl', content: '#!/bin/sh\nexit 1\n' });
   const target = { ...posix, repoDir: checkout, cliHomeDir: join(root, 'home'), remotePath: [join(root, 'bin'), '/usr/bin', '/bin'] };
   const request = script => buildRemoteExecCommand(target, { executionId, cwd: 'packages/probe', commandArgs: ['yarn', script], admissionClass: 'compilation', environment: {
-    HOME: root, CI: '', HAPPIER_WORKSPACE_BUILD_MODE: 'strict', HAPPIER_DEV_TARGET_EXECUTION: '', HAPPIER_HSTACK_EXECUTION: '',
+    HOME: root, CI: '', HAPPIER_WORKSPACE_BUILD_MODE: 'strict', HAPPIER_DEV_TARGET_EXECUTION: script === 'mixed' ? '1' : '', HAPPIER_HSTACK_EXECUTION: '',
+    HAPPIER_WORKSPACE_BUILD_STARTUP: '', HAPPIER_TYPECHECK_REPORT_DIR: '',
     HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '',
   } });
-  assert.equal((await execFileAsync('/bin/bash', ['-c', request('build')])).stdout, '');
-  assert.equal((await execFileAsync('/bin/bash', ['-c', request('unsafe')])).stdout, 'reserved');
+  assert.equal((await execFileAsync('/bin/bash', ['-c', request('build')], { env: native.env })).stdout, '');
+  assert.equal((await execFileAsync('/bin/bash', ['-c', request('unsafe')], { env: native.env })).stdout, 'reserved');
+  let child, terminal, stderr = '';
+  try {
+    await withWorkspaceBundleLock(async () => {
+      child = spawn('/bin/bash', ['-c', request('mixed')], { env: native.env });
+      terminal = once(child, 'close');
+      await new Promise(resolveBusy => {
+        child.stderr.on('data', chunk => { stderr += chunk; if (stderr.includes('workspace-lease-busy')) resolveBusy(); });
+        child.once('close', resolveBusy);
+      });
+      assert.equal(child.exitCode, null, stderr);
+      assert.deepEqual(JSON.parse(readFileSync(trace, 'utf8')), { admitted: false });
+      assert.deepEqual(readdirSync(join(native.admissionRoot, 'owners')), [], 'waiting prebuild must not reserve the parent compiler envelope');
+    }, { lockPath: foreignLock, env: native.env });
+    assert.deepEqual(await terminal, [0, null], stderr);
+    const owners = readdirSync(join(native.admissionRoot, 'owners'));
+    assert.equal(owners.length, 1, 'the exec-admitted compiler leaf retains its terminal owner record until observation');
+    assert.equal(readFileSync(join(native.admissionRoot, 'owners', owners[0], 'class'), 'utf8'), 'compilation\n');
+  } finally {
+    if (child?.exitCode === null && child?.signalCode === null) child.kill('SIGTERM');
+    await terminal;
+  }
 });
 
 test('remote Stack state paths use one canonical target CLI-home derivation', () => {
@@ -1082,6 +1429,37 @@ test('native source tests and generator checks use their real preparation contra
   assert.equal(classifyRemoteCommand(['tsc', '-p', 'apps/cli/tsconfig.json']).commandClass, 'targeted-validation');
 });
 
+test('the UI Vitest tool source keepers admit dependencies without emitted workspace preparation', () => {
+  const root = fileURLToPath(new URL('../../../../../', import.meta.url));
+  const artifact = fileURLToPath(new URL('./native_command_policy.sh', import.meta.url));
+  for (const [cwd, path] of [
+    [root, 'apps/ui/scripts/runVitestShards.test.mjs'],
+    [join(root, 'apps/ui'), 'scripts/runVitestShards.test.mjs'],
+    [root, 'apps/ui/scripts/activitySurfacesValidationContract.test.mjs'],
+    [join(root, 'apps/ui'), 'scripts/activitySurfacesValidationContract.test.mjs'],
+  ]) {
+    const args = ['node', '--test', path];
+    const policy = resolveRemoteCommandPolicy(args, { cwd, repoRoot: root });
+    assert.equal(policy.kind, 'source-test', 'the keeper loads authored tools and external Vitest, not emitted workspaces');
+    assert.equal(policy.bootstrap, '1');
+    assert.equal(policy.heavyClass, 'validation');
+    if (process.platform !== 'win32') {
+      const native = spawnSync('/bin/sh', ['-c', '. "$1"; repo_root=$2; invoked_cwd=$3; shift 3; resolve_native_command_policy "$@"; printf "%s,%s,%s" "$policy_kind" "$policy_bootstrap" "$policy_heavyClass"', 'policy', artifact, root, cwd, ...args], { encoding: 'utf8' });
+      assert.equal(native.status, 0, native.stderr);
+      assert.equal(native.stdout, 'source-test,1,validation');
+    }
+  }
+  for (const path of ['apps/ui/scripts/unknown.test.mjs', 'apps/ui/scripts/generateBundledPluginUiArtifacts.test.mjs', 'apps/ui/scripts/runActivitySurfacesCertification.test.mjs']) {
+    const args = ['node', '--test', path];
+    assert.equal(resolveRemoteCommandPolicy(args, { cwd: root, repoRoot: root }).kind, 'runtime');
+    if (process.platform !== 'win32') {
+      const native = spawnSync('/bin/sh', ['-c', '. "$1"; repo_root=$2; invoked_cwd=$2; shift 2; resolve_native_command_policy "$@"; printf "%s" "$policy_kind"', 'policy', artifact, root, ...args], { encoding: 'utf8' });
+      assert.equal(native.status, 0, native.stderr);
+      assert.equal(native.stdout, 'runtime');
+    }
+  }
+});
+
 test('source-condition lifecycle fixtures admit authored exports without Stack publication', () => {
   for (const path of [
     'apps/stack/scripts/utils/dev/expo_dev_crash_supervision.test.mjs',
@@ -1213,9 +1591,11 @@ test('explicit admission retains UI and CLI payload preparation and its declared
 test('public source shard entrypoints retain source preparation through admission and cwd expansion', () => {
   for (const [payload, cwd, component] of [
     [['corepack', 'yarn', '--cwd', 'apps/ui', '-s', 'test:unit'], '.', 'apps/ui'],
+    [['corepack', 'yarn', '--cwd', 'apps/cli', '-s', 'test:unit'], '.', 'apps/cli'],
     [['corepack', 'yarn', '--cwd', 'apps/cli', '-s', 'test:unit:vitest'], '.', 'apps/cli'],
     [['node', 'apps/ui/scripts/runVitestShards.mjs', '--config', 'vitest.config.ts'], '.', 'apps/ui'],
     [['node', './scripts/runVitestShards.mjs', '--config', 'vitest.config.ts'], 'apps/cli', 'apps/cli'],
+    [['node', 'scripts/runVitestShards.mjs', '--config', 'vitest.integration.config.ts'], 'apps/ui', 'apps/ui'],
     [['corepack', 'yarn', '--cwd', 'apps/ui', '-s', 'node', './scripts/runVitestShards.mjs', '--config', 'vitest.config.ts'], '.', 'apps/ui'],
   ]) {
     const args = ['apps/stack/bin/hstack-exec', '--heavyweight-admission',
@@ -1225,8 +1605,8 @@ test('public source shard entrypoints retain source preparation through admissio
     assert.equal(requiresRemoteDependencyBootstrap(args, { cwd }), true);
   }
   for (const [args, cwd] of [
-    [['corepack', 'yarn', '--cwd', 'apps/cli', '-s', 'test:unit'], '.'],
-    [['node', 'scripts/runVitestShards.mjs', '--config', 'vitest.integration.config.ts'], 'apps/ui'],
+    [['corepack', 'yarn', '--cwd', 'apps/cli', '-s', 'test:unit', '--config', 'vitest.integration.config.ts'], '.'],
+    [['node', 'scripts/runVitestShards.mjs', '--config', 'vitest.artifact-cache.config.ts'], 'apps/ui'],
     [['node', 'custom/runVitestShards.mjs', '--config', 'vitest.config.ts'], 'apps/ui'],
     [['node', 'scripts/runVitestShards.mjs'], 'apps/stack'],
   ]) assert.equal(resolveRemoteValidationKind(args, { cwd }), 'runtime', args.join(' '));
@@ -1524,6 +1904,36 @@ test('remote execution ids are mandatory and path-safe', () => {
   );
 });
 
+test('remote daemon launch projects the controller latency switch on POSIX and Windows', () => {
+  for (const target of [posix, windows]) {
+    for (const setting of ['1', '']) {
+      const command = buildRemoteStackCommand(target, {
+        services: { server: false, expo: false, daemon: true },
+        serverUrl: 'http://127.0.0.1:43005', stackName: 'remote-qa',
+        env: { HAPPIER_WEB_LATENCY_TRACE: setting, UNRELATED_SETTING: 'excluded-value' },
+      });
+      const rendered = target.platform === 'windows'
+        ? Buffer.from(command.split(' ').at(-1), 'base64').toString('utf16le') : command;
+      assert.ok(rendered.includes(`HAPPIER_WEB_LATENCY_TRACE=${setting}`));
+      assert.doesNotMatch(rendered, /UNRELATED_SETTING|excluded-value/);
+    }
+  }
+  for (const target of [posix, windows]) {
+    const command = buildRemoteStackCommand(target, {
+      services: { server: true, expo: false, daemon: true },
+      serverUrl: 'http://127.0.0.1:43005', publicServerUrl: 'https://qa.example.test',
+      remoteServerPort: 43005, stackName: 'remote-qa', env: {},
+      remoteServerRuntimeConfig: { serverComponentName: 'happier-server-light', dbProvider: 'sqlite',
+        environment: { HAPPIER_WEB_LATENCY_TRACE: '1' } },
+    });
+    const rendered = target.platform === 'windows'
+      ? Buffer.from(command.split(' ').at(-1), 'base64').toString('utf16le') : command;
+    assert.match(rendered, /HAPPIER_WEB_LATENCY_TRACE=1/);
+    assert.equal([...rendered.matchAll(/HAPPIER_WEB_LATENCY_TRACE=/gu)].length, 1,
+      'co-located services must consume one trace setting without a later daemon override');
+  }
+});
+
 test('remote daemon command reuses the Stack dev owner and adopts a last-green daemon on reconnect', () => {
   const posixRemoteStack = resolveRemoteStackStatePaths(posix, { stackName: 'repo-local-dev' }).stackName;
   const command = buildRemoteDaemonCommand(posix, {
@@ -1656,6 +2066,49 @@ test('remote Stack preserves an explicit allocator arena setting without supplyi
     assert.ok(rendered.includes('MALLOC_ARENA_MAX=2'), `${target.platform} omitted allocator configuration`);
     assert.doesNotMatch(rendered, /UNRELATED_SETTING|not-forwarded/);
   }
+});
+
+test('remote source server and daemon receive the canonical server runtime webapp origin', () => {
+  const controllerOrigin = 'http://happier-agent-qa-embed.localhost:19364';
+  const options = {
+    services: { server: true, expo: false, daemon: true },
+    serverUrl: 'http://127.0.0.1:43005',
+    publicServerUrl: 'http://192.168.1.20:53005',
+    env: { HAPPIER_WEBAPP_URL: controllerOrigin },
+    activeServerId: 'stack_repo__id_default',
+    stackName: 'repo-local-dev',
+    remoteServerPort: 43005,
+    runtimeMode: 'source-snapshot',
+    sourceUi: 'borrowed',
+    remoteServerRuntimeConfig: resolveRemoteServerRuntimeConfig({
+      serverComponentName: 'happier-server-light',
+      env: { HAPPIER_DB_PROVIDER: 'sqlite', HAPPIER_WEBAPP_URL: controllerOrigin },
+    }),
+  };
+  const command = buildRemoteStackCommand(posix, options);
+
+  assert.match(command, /HAPPIER_WEBAPP_URL=http:\/\/happier-agent-qa-embed\.localhost:19364/);
+  assert.doesNotMatch(command, /EXPO_PACKAGER_PROXY_URL=/);
+
+  const unprojected = buildRemoteStackCommand(posix, {
+    ...options,
+    remoteServerRuntimeConfig: {
+      ...options.remoteServerRuntimeConfig,
+      environment: {},
+    },
+  });
+  assert.doesNotMatch(unprojected, /HAPPIER_WEBAPP_URL=/,
+    'the remote env writer must not make a second origin decision from its ambient env');
+
+  const explicit = buildRemoteStackCommand(posix, {
+    ...options,
+    remoteServerRuntimeConfig: {
+      ...options.remoteServerRuntimeConfig,
+      environment: { HAPPIER_WEBAPP_URL: 'https://explicit.example.test' },
+    },
+  });
+  assert.match(explicit, /HAPPIER_WEBAPP_URL=https:\/\/explicit\.example\.test/);
+  assert.doesNotMatch(explicit, /HAPPIER_WEBAPP_URL=http:\/\/happier-agent-qa-embed\.localhost:19364/);
 });
 
 test('remote light Postgres admits the source-host authority without transporting its URL or secret', () => {
@@ -1826,6 +2279,13 @@ test('remote Stack server uses the stable outer public URL and projects only sup
         HAPPIER_SERVER_RETENTION__SESSIONS__MODE: 'delete_inactive',
         HAPPIER_SQLITE_BUSY_TIMEOUT_MS: '45000',
         HAPPIER_SQLITE_CONNECTION_LIMIT: '6',
+        HAPPIER_DB_CONNECTION_LIMIT: '30',
+        HAPPIER_STACK_SERVER_LOG_LEVEL: 'debug',
+        HAPPIER_SERVER_LOG_LEVEL: 'info',
+        HAPPIER_WEB_LATENCY_TRACE: '1',
+        HAPPIER_FEATURE_PLUGINS_UI_ARTIFACT_HOSTING__ENABLED: '1',
+        HAPPIER_FEATURE_PLUGINS_UI_ARTIFACT_HOSTING__MAX_ARTIFACT_BYTES: '16777216',
+        HAPPIER_FEATURE_PLUGINS_UI_ARTIFACT_HOSTING__MAX_ACCOUNT_BYTES: '268435456',
         DATABASE_URL: 'postgresql://operator:do-not-forward@db.example.test/happier',
         HAPPIER_SERVER_LIGHT_DATA_DIR: '/private/remote-state',
         HAPPIER_STACK_SERVER_PORT: '9999',
@@ -1842,16 +2302,29 @@ test('remote Stack server uses the stable outer public URL and projects only sup
   assert.match(command, /HAPPIER_SERVER_RETENTION__SESSIONS__MODE=delete_inactive/);
   assert.match(command, /HAPPIER_SQLITE_BUSY_TIMEOUT_MS=45000/);
   assert.match(command, /HAPPIER_SQLITE_CONNECTION_LIMIT=6/);
+  // The Postgres pool budget is the same server-owned choice as the SQLite one.
+  assert.match(command, /HAPPIER_DB_CONNECTION_LIMIT=30/);
+  // A Stack's own server log level must reach its server wherever it is placed.
+  assert.match(command, /HAPPIER_STACK_SERVER_LOG_LEVEL=debug/);
+  assert.match(command, /HAPPIER_SERVER_LOG_LEVEL=info/);
+  // So does its request-latency trace switch, the server's existing correlation owner.
+  assert.match(command, /HAPPIER_WEB_LATENCY_TRACE=1/);
   assert.doesNotMatch(command, /do-not-forward|private\/remote-state|never-forward-this|HAPPIER_MASTER_SECRET/);
   assert.match(command, /--server-public-url=.*192\.168\.1\.20:53005/);
   // The originating Stack owns the signed auth audience: the remote server must sign the origin's
   // canonical origin, not one derived from the remote target's own Stack name and port.
   assert.match(command, /HAPPIER_CANONICAL_SERVER_URL=http:\/\/happier-repo-local-dev\.localhost:53288/);
   const windowsServerCommand = buildRemoteStackCommand(windows, serverPlacedOptions);
+  for (const rendered of [command, Buffer.from(windowsServerCommand.split(' ').at(-1), 'base64').toString('utf16le')]) {
+    assert.match(rendered, /HAPPIER_FEATURE_PLUGINS_UI_ARTIFACT_HOSTING__ENABLED=1/);
+    assert.match(rendered, /HAPPIER_FEATURE_PLUGINS_UI_ARTIFACT_HOSTING__MAX_ARTIFACT_BYTES=16777216/);
+    assert.match(rendered, /HAPPIER_FEATURE_PLUGINS_UI_ARTIFACT_HOSTING__MAX_ACCOUNT_BYTES=268435456/);
+  }
   assert.match(
     Buffer.from(windowsServerCommand.split(' ').at(-1), 'base64').toString('utf16le'),
     /HAPPIER_CANONICAL_SERVER_URL=http:\/\/happier-repo-local-dev\.localhost:53288/,
   );
+  assert.match(Buffer.from(windowsServerCommand.split(' ').at(-1), 'base64').toString('utf16le'), /HAPPIER_WEB_LATENCY_TRACE=1/);
   assert.match(command, /HAPPIER_STACK_EXPO_DEV_PORT=48081/);
   assert.match(command, /HAPPIER_STACK_EXPO_HOST=localhost/);
   assert.match(command, /EXPO_PACKAGER_PROXY_URL=http:\/\/192\.168\.1\.20:18081/);

@@ -9,6 +9,9 @@ import { readSessionPresentationAgentId } from '@/sync/domains/session/presentat
 
 import { applySessionListRenderablePatch, areSessionListRenderablesEqual, buildSessionListRenderableFromSession } from './sessionListRenderable';
 import { buildSessionFromListRenderable } from './sessionListRenderableSessionProjection';
+import { buildSessionListRowFilterFacts } from './sessionListWorkFilter';
+import { matchSessionListFilterV1, normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import { areStoredSessionsEqual } from '@/sync/store/domains/areStoredSessionsEqual';
 
 describe('locked shared title projection', () => {
     const title = 'Previously authorized shared title';
@@ -89,6 +92,33 @@ describe('locked shared title projection', () => {
 });
 
 describe('buildSessionFromListRenderable', () => {
+    it('carries rule membership through cold row projection, filter facts and reconstruction without guessing missing counts', () => {
+        const session = createSessionFixture({ ownerAccountId: 'owner', origin: { kind: 'none' },
+            managedSessions: { total: 0, working: 0, needsYou: 0, stalled: 0 }, receivedRuleCount: 1 });
+        const row = buildSessionListRenderableFromSession(session);
+        expect(row.receivedRuleCount).toBe(1);
+        expect(buildSessionFromListRenderable(row).receivedRuleCount).toBe(1);
+        const facts = buildSessionListRowFilterFacts(row, 'home', { nowMs: 1, viewerAccountId: 'owner' });
+        expect(facts).toMatchObject({ receivedRuleCount: 1, managedSessions: { total: 0 } });
+        const filter = normalizeSessionListFilterV1({ homeServerIds: ['home'], scope: 'all_accessible', coordinator: 'coordinator' });
+        const match = (candidate: typeof row) => matchSessionListFilterV1(filter,
+            buildSessionListRowFilterFacts(candidate, 'home', { nowMs: 1, viewerAccountId: 'owner' }));
+        expect(match(row)).toBe('match');
+        const noRules = buildSessionListRenderableFromSession({ ...session, receivedRuleCount: 0 }, row);
+        expect(areSessionListRenderablesEqual(row, noRules)).toBe(false);
+        expect(areStoredSessionsEqual(session, { ...session, receivedRuleCount: 0 })).toBe(false);
+        expect(match(noRules)).toBe('miss');
+        const unknown = buildSessionListRenderableFromSession({ ...session, receivedRuleCount: undefined }, row);
+        expect(buildSessionFromListRenderable(unknown, { baseSession: session }).receivedRuleCount).toBeUndefined();
+        expect(match(unknown)).toBe('unavailable');
+    });
+    it('retains the protected owner Account and invalidates stale starter projections', () => {
+        const session = createSessionFixture({ ownerAccountId: 'owner', origin: { kind: 'none' } });
+        const row = buildSessionListRenderableFromSession(session);
+        expect(row.ownerAccountId).toBe('owner');
+        expect(buildSessionFromListRenderable(row).ownerAccountId).toBe('owner');
+        expect(areSessionListRenderablesEqual(row, { ...row, ownerAccountId: 'other' })).toBe(false);
+    });
     it('uses independently current metadata for work facts when an opened report has older metadata', () => {
         const metadata = (title: string) => ({ path: '/repo', host: 'test', sessionWorkStateV1: {
             v: 1 as const, backendId: 'claude', updatedAt: 1_000_000,
@@ -148,6 +178,10 @@ describe('buildSessionFromListRenderable', () => {
         const report = buildSessionFromListRenderable(row);
         expect(readSessionPresentationAgentId(report)).toBe('claude');
         expect(readSessionOwnerMetadataView(report)?.path).toBe('/repo');
+        const { flavor: _previousAgentId, ...withoutAgent } = row.metadata!;
+        const changed = buildSessionFromListRenderable({ ...row, metadata: withoutAgent,
+            seq: row.seq + 1, metadataVersion: row.metadataVersion + 1 }, { baseSession: report });
+        expect(readSessionPresentationAgentId(changed)).toBeNull();
         const unreadable = buildSessionFromListRenderable({ ...row, metadata: null, metadataUnavailable: true });
         expect(readSessionPresentationAgentId(unreadable)).toBeNull();
         const warmUnreadable = buildSessionFromListRenderable({ ...row, metadata: null, metadataUnavailable: true }, { baseSession: source });
@@ -155,10 +189,10 @@ describe('buildSessionFromListRenderable', () => {
         expect(warmUnreadable.ownerMetadataView).toBeNull();
     });
     it('preserves an explicit detached list edge rather than reviving the opened session lead', () => {
-        const base = createSessionFixture({ reportsTo: { sessionId: 'former-lead' } });
-        const detached = buildSessionListRenderableFromSession({ ...base, reportsTo: null });
-        expect(buildSessionFromListRenderable(detached, { baseSession: base }).reportsTo).toBeNull();
-        expect(buildSessionFromListRenderable({ ...detached, reportsTo: undefined }, { baseSession: base }).reportsTo)
+        const base = createSessionFixture({ manager: { sessionId: 'former-lead' } });
+        const detached = buildSessionListRenderableFromSession({ ...base, manager: null });
+        expect(buildSessionFromListRenderable(detached, { baseSession: base }).manager).toBeNull();
+        expect(buildSessionFromListRenderable({ ...detached, manager: undefined }, { baseSession: base }).manager)
             .toEqual({ sessionId: 'former-lead' });
     });
     it('keeps legacy row metadata readable without reviving an unavailable layout-v1 owner view', () => {
@@ -199,6 +233,7 @@ describe('buildSessionFromListRenderable', () => {
         const responsibleAccount = {
             kind: 'account' as const,
             accountId: 'account-alice',
+            name: 'Alice',
             firstName: 'Alice',
             lastName: null,
             username: 'alice',

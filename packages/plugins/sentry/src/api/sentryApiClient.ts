@@ -26,6 +26,13 @@ import {
 import type { SentryDeploymentV1 } from '../auth/sentryOrigin.js';
 
 import { classifySentryFailure } from './sentryFailure.js';
+import { buildSentryIssueUrl } from './sentryRoutes.js';
+
+/** Exact single-issue updates; bulk/discard/delete are not representable. */
+export type SentryIssueUpdateV1 =
+  | Readonly<{ status: 'resolved' }>
+  | Readonly<{ status: 'ignored'; substatus: 'archived_forever' }>
+  | Readonly<{ assignedTo: `user:${string}` | `team:${string}` }>;
 
 export type SentryApiResponseV1 = Readonly<{
   status: number;
@@ -41,6 +48,11 @@ export type SentryApiClientV1 = Readonly<{
   request(input: Readonly<{
     url: string;
     operation: SentryOperationV1;
+  }>): Promise<SentryApiOutcomeV1>;
+  updateIssue(input: Readonly<{
+    organizationId: string;
+    issueId: string;
+    update: SentryIssueUpdateV1;
   }>): Promise<SentryApiOutcomeV1>;
 }>;
 
@@ -158,8 +170,11 @@ export async function createSentryApiClient(
     return authorization;
   }
 
-  return Object.freeze({
-    async request(request): Promise<SentryApiOutcomeV1> {
+  async function send(request: Readonly<{
+    url: string;
+    operation: SentryOperationV1;
+    update?: SentryIssueUpdateV1;
+  }>): Promise<SentryApiOutcomeV1> {
       let url: URL;
       try {
         url = new URL(request.url);
@@ -193,8 +208,12 @@ export async function createSentryApiClient(
       try {
         response = await context.services.http.request({
           url: request.url,
-          method: 'GET',
-          headers: { Accept: 'application/json', Authorization: bearer },
+          method: request.update === undefined ? 'GET' : 'PUT',
+          headers: {
+            Accept: 'application/json', Authorization: bearer,
+            ...(request.update === undefined ? {} : { 'Content-Type': 'application/json' }),
+          },
+          ...(request.update === undefined ? {} : { body: new TextEncoder().encode(JSON.stringify(request.update)) }),
           redirect: 'error',
         }, { signal });
       } catch (error) {
@@ -205,6 +224,7 @@ export async function createSentryApiClient(
         );
       }
 
+      if (signal.aborted) return failed(abortFailure(request.operation));
       return Object.freeze({
         kind: 'response' as const,
         response: Object.freeze({
@@ -213,6 +233,16 @@ export async function createSentryApiClient(
           bodyText: new TextDecoder().decode(response.body),
         }),
       });
-    },
+  }
+  return Object.freeze({
+    request: send,
+    updateIssue: (target: Parameters<SentryApiClientV1['updateIssue']>[0]) => send({
+      url: buildSentryIssueUrl({
+        instance: { deploymentOrigin: origin, organizationId: target.organizationId },
+        entryId: target.issueId,
+      }),
+      operation: 'issue',
+      update: target.update,
+    }),
   });
 }

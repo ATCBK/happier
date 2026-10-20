@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { ConnectedServiceUsageSourceV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { isConnectedServiceQuotaObservationFresh } from '@happier-dev/protocol/connect/quotaObservationTime';
@@ -124,7 +125,7 @@ async function resolveAccountEncryptionModeForHydration(
 function parseQualifiedUsageSources(
   value: unknown,
 ): readonly QualifiedConnectedServiceUsageSourceV4[] {
-  const parsed = createStoredReadSchema(QualifiedConnectedServiceUsageSourceV4Schema.array()).safeParse(
+  const parsed = createStoredReadSchema(z.array(QualifiedConnectedServiceUsageSourceV4Schema)).safeParse(
     value,
   );
   return parsed.success ? parsed.data : [];

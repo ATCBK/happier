@@ -51,7 +51,9 @@ import {
 import {
     ConversationConnectionPrepareInputV1Schema,
     ConversationConnectionPrepareResultV1Schema,
+    ConversationConnectionSetupRemediateInputV1Schema,
 } from './prepare.js';
+import { ConversationProviderSetupRemediationResultV1Schema } from '../provider/setup.js';
 import {
     ConversationConnectionRetestManagementActionDeclarationV1,
 } from './retest.js';
@@ -68,6 +70,7 @@ import type {
 
 export {
     ConversationSessionLastDeliveryOutcomeV1Schema,
+    ConversationSessionLastDeliveryOutcomeV1JsonSchema,
     ConversationSessionLastDeliveryV1Schema,
     ConversationSessionLastDeliveryV1JsonSchema,
     ConversationSessionLastDeliveriesV1Schema,
@@ -229,12 +232,15 @@ export {
     ConversationConnectionPrepareInputV1Schema,
     ConversationConnectionPrepareResultV1JsonSchema,
     ConversationConnectionPrepareResultV1Schema,
+    ConversationConnectionSetupRemediateInputV1JsonSchema,
+    ConversationConnectionSetupRemediateInputV1Schema,
     ConversationProviderSetupRemediationV1JsonSchema,
     ConversationProviderSetupRemediationV1Schema,
 } from './prepare.js';
 export type {
     ConversationConnectionPrepareInputV1,
     ConversationConnectionPrepareResultV1,
+    ConversationConnectionSetupRemediateInputV1,
     ConversationProviderSetupRemediationV1,
 } from './prepare.js';
 export {
@@ -288,6 +294,11 @@ export type {
 export const ConversationConnectionPrepareManagementActionDeclarationV1: ConversationActionDeclarationV1 = Object.freeze({
     inputSchema: ConversationConnectionPrepareInputV1Schema.jsonSchema,
     resultSchema: ConversationConnectionPrepareResultV1Schema.jsonSchema,
+});
+
+export const ConversationConnectionSetupRemediateManagementActionDeclarationV1: ConversationActionDeclarationV1 = Object.freeze({
+    inputSchema: ConversationConnectionSetupRemediateInputV1Schema.jsonSchema,
+    resultSchema: ConversationProviderSetupRemediationResultV1Schema.jsonSchema,
 });
 
 /**
@@ -415,6 +426,7 @@ export const CONVERSATION_MANAGEMENT_ACTION_DECLARATIONS_V1: ConversationManagem
     connectionCreate: ConversationConnectionCreateManagementActionDeclarationV1,
     connectionTransfer: ConversationConnectionTransferManagementActionDeclarationV1,
     connectionPrepare: ConversationConnectionPrepareManagementActionDeclarationV1,
+    connectionSetupRemediate: ConversationConnectionSetupRemediateManagementActionDeclarationV1,
     connectionRetest: ConversationConnectionRetestManagementActionDeclarationV1,
     connectionUpdate: ConversationConnectionUpdateManagementActionDeclarationV1,
     connectionDelete: ConversationConnectionDeleteManagementActionDeclarationV1,

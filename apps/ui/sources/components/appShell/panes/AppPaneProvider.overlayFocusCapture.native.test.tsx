@@ -3,6 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
+import type { RenderWithAppProvidersOptions } from '@/dev/testkit';
 
 const nativeFocus = vi.hoisted(() => ({
     findNodeHandle: vi.fn<(target: unknown) => number | null>(() => null),
@@ -117,8 +118,8 @@ function NativeRightOverlayHarness(): React.ReactElement {
     );
 }
 
-function createNodeMock(element: React.ReactElement): NativeNode | null {
-    const props = (element as React.ReactElement<NativeElementProps>).props;
+function createNodeMock(element: Parameters<NonNullable<RenderWithAppProvidersOptions['createNodeMock']>>[0]): NativeNode | null {
+    const props: NativeElementProps = element.props;
     if (props?.accessible === true && props.accessibilityLabel === 'Right sidebar') {
         return nativeNodes.overlayFocusAnchor;
     }

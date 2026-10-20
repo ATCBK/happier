@@ -1,5 +1,8 @@
 import { stripCliApiTokenEnvironment } from '@/auth/cliApiToken';
 
+/** Caller-supplied environment keys, not a snapshot of every host process field. */
+export type ProcessEnvInput = Readonly<Record<string, string | undefined>>;
+
 const ENVIRONMENT_VARIABLE_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 
 export function normalizeUnsetEnvKeys(
@@ -20,7 +23,7 @@ export function normalizeUnsetEnvKeys(
 }
 
 export function stripUnsetEnvironmentVariables(
-  environment: Readonly<Record<string, string | undefined>>,
+  environment: ProcessEnvInput,
   unsetEnvKeys: readonly string[] | undefined,
 ): Record<string, string> {
   const unsetNames = new Set(normalizeUnsetEnvKeys(unsetEnvKeys).map((key) => key.toUpperCase()));
@@ -34,10 +37,10 @@ export function stripUnsetEnvironmentVariables(
 
 /** Merge authored values using the operating system's environment-key identity. */
 export function mergeProcessEnv(params: Readonly<{
-  baseEnv: Readonly<NodeJS.ProcessEnv>;
-  explicitEnv?: Readonly<Record<string, string | undefined>>;
+  baseEnv: ProcessEnvInput;
+  explicitEnv?: ProcessEnvInput;
   platform?: NodeJS.Platform;
-}>): NodeJS.ProcessEnv {
+}>): Record<string, string | undefined> {
   const scopedEnvironment = { ...params.baseEnv };
   const explicitEnv: Record<string, string> = {};
   for (const [key, value] of Object.entries(params.explicitEnv ?? {})) {
@@ -61,11 +64,11 @@ export function mergeProcessEnv(params: Readonly<{
 }
 
 export function buildScopedProcessEnv(params: Readonly<{
-  baseEnv: Readonly<NodeJS.ProcessEnv>;
-  explicitEnv?: Readonly<Record<string, string | undefined>>;
+  baseEnv: ProcessEnvInput;
+  explicitEnv?: ProcessEnvInput;
   unsetEnvKeys?: readonly string[];
   platform?: NodeJS.Platform;
-}>): NodeJS.ProcessEnv {
+}>): Record<string, string> {
   return stripCliApiTokenEnvironment(mergeProcessEnv({ ...params,
     baseEnv: stripUnsetEnvironmentVariables(params.baseEnv, params.unsetEnvKeys) }));
 }

@@ -195,11 +195,15 @@ function mentionRefIdentityKey(reference: MentionRefV1): string {
 }
 
 /** Exact editable-draft ownership. The downstream Message reference remains positionless. */
+type MentionRange = Readonly<{ tokenText: string; start: number; end: number }>;
+
 export function structuredInputMentionSurvivesText(
     text: string,
-    mention: ComposerStructuredInputMention,
+    mention: MentionRange,
 ): boolean {
-    return text.slice(mention.start, mention.end) === mention.tokenText;
+    return Number.isSafeInteger(mention.start) && Number.isSafeInteger(mention.end)
+        && mention.start >= 0 && mention.end > mention.start && mention.end <= text.length
+        && text.slice(mention.start, mention.end) === mention.tokenText;
 }
 
 function findChangedSpan(previousText: string, nextText: string): Readonly<{
@@ -207,6 +211,7 @@ function findChangedSpan(previousText: string, nextText: string): Readonly<{
     previousEnd: number;
     nextEnd: number;
     delta: number;
+    inferred: boolean;
 }> {
     let prefix = 0;
     const maxPrefix = Math.min(previousText.length, nextText.length);
@@ -231,6 +236,7 @@ function findChangedSpan(previousText: string, nextText: string): Readonly<{
         previousEnd: previousText.length - suffix,
         nextEnd: nextText.length - suffix,
         delta: nextText.length - previousText.length,
+        inferred: true,
     };
 }
 
@@ -257,30 +263,26 @@ function resolveSelectionChangedSpan(args: Readonly<{
     if (insertedLength < 0) return null;
     const nextEnd = selection.start + insertedLength;
     if (nextEnd > args.nextText.length) return null;
-    if (
-        selection.start > 0
-        && args.previousText.charCodeAt(selection.start - 1) !== args.nextText.charCodeAt(selection.start - 1)
-    ) return null;
-    if (
-        selection.end < args.previousText.length
-        && nextEnd < args.nextText.length
-        && args.previousText.charCodeAt(selection.end) !== args.nextText.charCodeAt(nextEnd)
-    ) return null;
+    if (args.previousText.slice(0, selection.start) !== args.nextText.slice(0, selection.start)) return null;
+    if (args.previousText.slice(selection.end) !== args.nextText.slice(nextEnd)) return null;
     return {
         previousStart: selection.start,
         previousEnd: selection.end,
         nextEnd,
         delta: args.nextText.length - args.previousText.length,
+        inferred: false,
     };
 }
 
-function reconcileStructuredInputMentionsWithChangedSpan(args: Readonly<{
+function reconcileStructuredInputMentionsWithChangedSpan<T extends MentionRange>(args: Readonly<{
+    previousText: string;
     nextText: string;
-    mentions: readonly ComposerStructuredInputMention[];
+    mentions: readonly T[];
     change: ReturnType<typeof findChangedSpan>;
-}>): ComposerStructuredInputMention[] {
-    const nextMentions: ComposerStructuredInputMention[] = [];
+}>): T[] {
+    const nextMentions: T[] = [];
     for (const mention of args.mentions) {
+        if (!structuredInputMentionSurvivesText(args.previousText, mention)) continue;
         // A suffix diff can begin inside a surviving token when the removed
         // prefix ends with the same characters as that token (for example,
         // deleting the first of two file references). The reference still has
@@ -288,7 +290,7 @@ function reconcileStructuredInputMentionsWithChangedSpan(args: Readonly<{
         // delta. Admit that range when it matches; never search for another
         // occurrence.
         const changeBeforeMention = args.change.previousEnd <= mention.start
-            || args.change.previousStart <= mention.start;
+            || (args.change.inferred && args.change.previousStart <= mention.start && args.change.previousEnd < mention.end);
         const changeAfterMention = args.change.previousStart >= mention.end;
         if (changeBeforeMention) {
             const shifted = {
@@ -306,33 +308,35 @@ function reconcileStructuredInputMentionsWithChangedSpan(args: Readonly<{
     return nextMentions;
 }
 
-export function reconcileStructuredInputMentionsWithText(args: Readonly<{
+export function reconcileStructuredInputMentionsWithText<T extends MentionRange>(args: Readonly<{
     previousText: string;
     nextText: string;
-    mentions: readonly ComposerStructuredInputMention[];
-}>): ComposerStructuredInputMention[] {
+    mentions: readonly T[];
+}>): T[] {
     if (args.mentions.length === 0) return [];
     if (args.previousText === args.nextText) {
         return args.mentions.filter((mention) => structuredInputMentionSurvivesText(args.nextText, mention));
     }
     return reconcileStructuredInputMentionsWithChangedSpan({
+        previousText: args.previousText,
         nextText: args.nextText,
         mentions: args.mentions,
         change: findChangedSpan(args.previousText, args.nextText),
     });
 }
 
-export function reconcileStructuredInputMentionsWithTextChange(args: Readonly<{
+export function reconcileStructuredInputMentionsWithTextChange<T extends MentionRange>(args: Readonly<{
     previousText: string;
     nextText: string;
     previousSelection: Readonly<{ start: number; end: number }>;
-    mentions: readonly ComposerStructuredInputMention[];
-}>): ComposerStructuredInputMention[] {
+    mentions: readonly T[];
+}>): T[] {
     if (args.mentions.length === 0) return [];
     if (args.previousText === args.nextText) {
         return args.mentions.filter((mention) => structuredInputMentionSurvivesText(args.nextText, mention));
     }
     return reconcileStructuredInputMentionsWithChangedSpan({
+        previousText: args.previousText,
         nextText: args.nextText,
         mentions: args.mentions,
         change: resolveSelectionChangedSpan(args) ?? findChangedSpan(args.previousText, args.nextText),

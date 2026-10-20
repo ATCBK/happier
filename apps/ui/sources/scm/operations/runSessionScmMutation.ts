@@ -4,12 +4,13 @@ import { runScmOperationWithGitIndexLockRecovery } from '@/scm/operations/gitInd
 import { reportSessionScmOperation, reportWorkspaceScmOperation } from '@/scm/operations/reporting';
 import { getScmUserFacingError } from '@/scm/operations/userFacingErrors';
 import { withSessionProjectScmOperationLock, withWorkspaceScmOperationLock } from '@/scm/operations/withOperationLock';
+import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 import { sessionScmRepositoryRemoveIndexLock } from '@/sync/ops/sessionScm';
 import { machineScmRepositoryRemoveIndexLock } from '@/sync/ops/scm/machineScm';
 import type { ScmProjectOperationKind } from '@/sync/runtime/orchestration/projectManager';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 
-export type ScmMutationResponse = Readonly<{ success: boolean; error?: string; stderr?: string; errorCode?: ScmOperationErrorCode | string; outcome?: ScmOperationOutcome; commitSha?: string }>;
+export type ScmMutationResponse = Readonly<{ success: boolean; error?: string; stderr?: string; errorCode?: ScmOperationErrorCode | string; outcome?: ScmOperationOutcome; commitSha?: string; declined?: true; awaitingApproval?: true }>;
 type ScmMutationFailureResponse = Readonly<{ success: false; error: string; errorCode: ScmOperationErrorCode; outcome: ScmOperationOutcome }>;
 
 type ScmMutationState = Parameters<typeof withSessionProjectScmOperationLock>[0]['state']
@@ -17,10 +18,17 @@ type ScmMutationState = Parameters<typeof withSessionProjectScmOperationLock>[0]
 type WorkspaceScmMutationState = Parameters<typeof withWorkspaceScmOperationLock>[0]['state']
     & Parameters<typeof reportWorkspaceScmOperation>[0]['state'];
 
+/**
+ * What the mutation hands its SCM facade. The facade fires `onDispatched` when the Action really reaches the
+ * Machine, after any in-place confirmation and never for a decline or a waiting approval; that is when the
+ * operation starts showing as running.
+ */
+export type ScmMutationCall = Readonly<{ onDispatched: () => void }>;
+
 type ScmMutationInput<T extends ScmMutationResponse> = Readonly<{
     operation: ScmProjectOperationKind;
     cwd: string | null;
-    run: () => Promise<T | 'cancelled'>;
+    run: (call: ScmMutationCall) => Promise<T | 'cancelled'>;
     fallbackError: string;
     successDetail?: (response: T) => string | undefined;
     /** Reconcile changed or uncertain repository state without replaying the mutation. */
@@ -61,11 +69,13 @@ async function runScmMutation<T extends ScmMutationResponse>(input: SessionScmMu
         if ('scope' in input) reportWorkspaceScmOperation({ ...report, state: input.state, scope: input.scope });
         else reportSessionScmOperation({ ...report, state: input.state, sessionId: input.sessionId, serverId: input.serverId });
     };
-    const executeMutation = async (): Promise<T | ScmMutationFailureResponse | 'cancelled'> => {
+    const executeMutation = async (call: ScmMutationCall): Promise<T | ScmMutationFailureResponse | 'cancelled'> => {
         let response: T | ScmMutationFailureResponse;
         try {
-            const first = await input.run();
+            const first = await input.run(call);
             if (first === 'cancelled') return first;
+            // A declined confirmation or a waiting approval ran nothing: no retry, reconciliation or log entry, and no failure to present.
+            if (isScmActionNotRun(first)) return first;
             response = first;
             const firstOutcome = normalizeScmOperationOutcome({ ...response, errorCode: ScmOperationErrorCodeSchema.safeParse(response.errorCode).data });
             if (firstOutcome.kind === 'failed' && input.cwd) {
@@ -77,7 +87,7 @@ async function runScmMutation<T extends ScmMutationResponse>(input: SessionScmMu
                         ? machineScmRepositoryRemoveIndexLock(input.scope.machineId, request, { serverId: input.scope.serverId })
                         : sessionScmRepositoryRemoveIndexLock(input.sessionId, request, input.serverId),
                     retryOriginalOperation: async () => {
-                        const again = await input.run();
+                        const again = await input.run(call);
                         return again === 'cancelled' ? response : again;
                     },
                 });
@@ -141,18 +151,22 @@ async function runScmMutation<T extends ScmMutationResponse>(input: SessionScmMu
         });
         return response;
     };
-    const run = async () => {
-        input.setScmOperationBusy?.(true);
+    const run = async (markRunning: () => void) => {
+        // The operation waits `queued` (it still serializes presses) until its Action is dispatched.
+        const call: ScmMutationCall = { onDispatched: () => {
+            markRunning();
+            input.setScmOperationBusy?.(true);
+        } };
         try {
-            return await executeMutation();
+            return await executeMutation(call);
         } finally {
             input.setScmOperationBusy?.(false);
             input.setScmOperationStatus?.(null);
         }
     };
     const lock = 'scope' in input
-        ? await withWorkspaceScmOperationLock({ state: input.state, scope: input.scope, operation: input.operation, run })
-        : await withSessionProjectScmOperationLock({ state: input.state, sessionId: input.sessionId, serverId: input.serverId, operation: input.operation, run });
+        ? await withWorkspaceScmOperationLock({ state: input.state, scope: input.scope, operation: input.operation, deferRunning: true, run })
+        : await withSessionProjectScmOperationLock({ state: input.state, sessionId: input.sessionId, serverId: input.serverId, operation: input.operation, deferRunning: true, run });
     if (!lock.started) return { started: false, message: lock.message };
     return { started: true, response: lock.value };
 }

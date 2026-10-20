@@ -98,6 +98,56 @@ it('settles a pending physical connection when the pool stops before the handsha
     }
 });
 
+it('redials after the last connection waiter expires even while an older stream retains the socket', async () => {
+    const http = createServer();
+    const server = new Server(http, { path: '/v1/updates/' });
+    let handshakeCount = 0;
+    let stalledHandshake!: () => void;
+    const stalled = new Promise<void>(resolve => { stalledHandshake = resolve; });
+    server.use((_socket, next) => {
+        handshakeCount += 1;
+        if (handshakeCount === 2) { stalledHandshake(); return; }
+        next();
+    });
+    server.on('connection', socket => socket.on('probe', (_payload: unknown, ack: (value: string) => void) => ack('ready')));
+    await new Promise<void>(resolve => { http.listen(0, '127.0.0.1', resolve); });
+    const address = http.address();
+    if (!address || typeof address === 'string') throw new Error('Missing loopback server address');
+    const sockets: Socket[] = [];
+    const pool = createServerScopedRpcSocketPool({
+        createSocket: ({ serverUrl }) => {
+            const socket = io(serverUrl, { path: '/v1/updates/', autoConnect: false, reconnection: false, forceNew: true });
+            socket.io.timeout(false);
+            sockets.push(socket);
+            return socket;
+        },
+        // The real Socket.IO handshake is the failure boundary; the Home stays reachable.
+        reachability: {
+            startReachability: async () => {}, waitForReachable: async () => {},
+            reportUnreachable: () => {}, subscribeNetworkAllowed: () => () => {},
+        },
+        readIdleDisconnectMs: () => 0,
+    });
+    const scope = { serverUrl: `http://127.0.0.1:${address.port}`, token: 'synthetic-token', timeoutMs: 2_000 };
+    try {
+        const retainedStream = await pool.acquire(scope);
+        sockets[0]!.disconnect();
+        const expired = pool.acquire({ ...scope, timeoutMs: 100 }).catch((error: unknown) => error);
+        await stalled;
+        expect(await expired).toMatchObject({ code: 'MACHINE_RPC_TIMEOUT' });
+        const recovered = await pool.acquire(scope);
+        expect(await recovered.timeout(1_000).emitWithAck('probe', null)).toBe('ready');
+        // Recovery is in-place: existing holders/listeners still use the pooled socket.
+        expect(await retainedStream.timeout(1_000).emitWithAck('probe', null)).toBe('ready');
+        expect(sockets).toHaveLength(1);
+        recovered.disconnect();
+        retainedStream.disconnect();
+    } finally {
+        await pool.stopAll();
+        await new Promise<void>(resolve => { server.close(() => resolve()); });
+    }
+});
+
 it('refuses an ACK write after its pooled physical socket disconnects without buffering a later effect', async () => {
     const http = createServer();
     const server = new Server(http, { path: '/v1/updates/' });

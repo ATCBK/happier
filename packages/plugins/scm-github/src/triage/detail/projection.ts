@@ -337,8 +337,11 @@ function readTimelineSubject(raw: JsonRecord, kind: GithubTimelineKindV1): unkno
       const team = raw['requested_team'];
       return isRecord(team) ? team['name'] : null;
     }
-    case 'committed':
-      return raw['message'];
+    case 'committed': {
+      // A commit message is a subject line, a blank line and a body; the row is the subject.
+      const message = raw['message'];
+      return typeof message === 'string' ? message.split(/\r?\n/, 1)[0] : message;
+    }
     case 'reviewed':
       return raw['state'];
     default:

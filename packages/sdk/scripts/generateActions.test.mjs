@@ -101,7 +101,7 @@ test('excludes every catalog-owned non-public Action class without generator pol
     assert.equal(emitted.has(actionId), false, `${actionId} must stay private to trusted interactive hosts.`);
   }
   assert.equal(emitted.has('account.security.get'), true);
-  assert.equal(emitted.has('session.discussion.read_state.set'), true);
+  assert.equal(emitted.has('discussion.read_state.set'), false);
   assert.equal(emitted.has('approval.request.decide'), true);
   assert.equal(emitted.has('plugins.install'), false);
   assert.equal(emitted.has('teams.directory.sources.remove.preview'), true);

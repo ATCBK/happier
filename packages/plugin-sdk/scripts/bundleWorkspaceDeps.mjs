@@ -115,7 +115,8 @@ async function runPreparedWorkspace(scriptName, { signal } = {}) {
   const result = await runWorkspaceBuildAdmission({ command: process.execPath,
     args: [fileURLToPath(import.meta.url), '--prepared-workspace-worker', JSON.stringify({ repoRoot, pluginSdkDir, scriptName })],
     locks: locks.map(path => ({ path })), cwd: pluginSdkDir, env, signal,
-    admissionClass: resolveWorkspacePackageBuildAdmissionClass({ packageJson, cwd: pluginSdkDir, env, scriptName, repoRoot }),
+    dependencyInstallDir: env.HAPPIER_WORKSPACE_CAPTURE_SOURCE_REPO_DIR || repoRoot,
+    admissionClass: await resolveWorkspacePackageBuildAdmissionClass({ packageJson, cwd: pluginSdkDir, env, scriptName, repoRoot }),
     admissionRequired: requiresTypeScriptAdmission({ env }),
   });
   if (result.error) throw result.error;

@@ -20,10 +20,12 @@ import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { useProfileCatalog } from '@/sync/store/useProfileCatalog';
 import { useAcpCatalog } from '@/sync/store/useAcpCatalog';
 import { areAccountSettingsScopesEqual } from '@/sync/domains/settings/scope/accountSettingsScope';
-import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import { admitExecutionRunLaunchTarget, isExecutionRunSessionProfileReady } from './executionRunLaunchAdmission';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { readAppliedModelSelection } from '@/sync/domains/models/describeEffectiveModelMode';
+import { resolveSessionModelLabel } from '@/sync/domains/models/modelOptions';
+import type { ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
 import { readSessionConnectedServiceBindings } from '@/sync/domains/connectedServices/readSessionConnectedServiceBindings';
 import { readSessionProviderBindingMetadataV1 } from '@happier-dev/protocol/providers/sessions/bindingMetadataV1';
 import { resolveSessionRoutePresentation } from '@/providers/session/resolveSessionRoutePresentation';
@@ -61,6 +63,11 @@ export function useExecutionRunLaunchContext(sessionId: string | null, serverId:
         ? readAppliedModelSelection({ agentId: defaultBackend.defaultAgentId,
             agentTargetKey: buildBackendTargetKeyV2(backendTarget), metadata: readSessionOwnerMetadataView(session) })
         : null, [session, backendTarget, defaultBackend?.defaultAgentId]);
+    /** The parent's catalog title for one of its native models; a Provider model's id is already its name. */
+    const resolveInheritedModelLabel = React.useCallback((selection: ProviderBoundModelRef | null) =>
+        session && defaultBackend?.defaultAgentId && selection && selection.providerConnectionId === null
+            ? resolveSessionModelLabel(defaultBackend.defaultAgentId, readSessionOwnerMetadataView(session), selection.modelId)
+            : null, [session, defaultBackend?.defaultAgentId]);
     const inheritedConnectedServicesSelection = React.useMemo(() => session && defaultBackend?.defaultAgentId
         ? readSessionConnectedServiceBindings({ agentId: defaultBackend.defaultAgentId, metadata: readSessionOwnerMetadataView(session) })
         : null, [session, defaultBackend?.defaultAgentId]);
@@ -97,15 +104,17 @@ export function useExecutionRunLaunchContext(sessionId: string | null, serverId:
         const scope = createServerAccountScope(accountBinding.serverId, accountBinding.accountId);
         return scope ? { scope, isCurrent: accountBinding.isCurrent, onRetire: accountBinding.onRetire } : null;
     }, [accountBinding]);
-    const executor = React.useMemo(() => createDefaultActionExecutor({ resolveServerIdForSessionId: () => serverId }), [serverId]);
+    const executorOptions = React.useMemo(() => ({ resolveServerIdForSessionId: () => serverId }), [serverId]);
+    const executor = useMountedActionExecution(accountBinding?.scope, { executorOptions });
     const admitExactTarget = React.useCallback(async (requires: Readonly<{
         secretReferenceOverlay: boolean; teamCredentialModel: boolean; roleBinding?: boolean;
     }>, readinessOperationId: string, runBackendTargets?: readonly PersistedBackendTargetRefV2[]) => {
         await admitExecutionRunLaunchTarget({ sessionId, serverId, session, exactSettings, settings, accountLifetime,
+            signal: executor.getSignal(),
             ...(workspace ? { cwd: workspace.cwd } : {}),
             machineId, ...(machineTarget ? { machineTarget } : {}), machineReachable, resumeCapabilityOptions,
             defaultBackend, runBackendTargets, requirements: requires, readinessOperationId });
-    }, [session, exactSettings, accountLifetime, sessionId, serverId, machineId, machineTarget, machineReachable, resumeCapabilityOptions, defaultBackend, settings, workspace?.cwd]);
+    }, [session, exactSettings, accountLifetime, sessionId, serverId, machineId, machineTarget, machineReachable, resumeCapabilityOptions, defaultBackend, settings, workspace?.cwd, executor.getSignal]);
     const startAction = React.useCallback(async (actionId: ActionId, input: Record<string, unknown>, readinessOperationId: string,
         launchOrigin?: ExecutionRunLaunchOrigin) => {
         const rawTargets = actionId === 'execution.run.start' ? [input.backendTarget]
@@ -126,12 +135,12 @@ export function useExecutionRunLaunchContext(sessionId: string | null, serverId:
         await admitExactTarget({ secretReferenceOverlay: input.secretReferenceOverlay !== undefined,
             teamCredentialModel: input.teamCredentialModel !== undefined, roleBinding: input.roleId !== undefined }, readinessOperationId, runBackendTargets);
         return executor.execute(actionId, { ...input, ...(sessionId !== null ? { sessionId } : {}) },
-            { ...(sessionId ? { defaultSessionId: sessionId } : {}), ...(serverId ? { serverId } : {}),
-                ...(accountBinding ? { expectedAccountId: accountBinding.accountId } : {}),
+            { ...(sessionId ? { defaultSessionId: sessionId } : {}),
                 ...(machineId ? { executionRunTargetMachineId: machineId } : {}),
                 ...(launchOrigin ? { executionRunLaunchOrigin: launchOrigin } : {}),
                 ...(!sessionId && workspace ? { externalActionTarget: { kind: 'machine' as const, machineId: workspace.machineId } } : {}) });
-    }, [accountBinding, admitExactTarget, executor, machineId, sessionId, serverId, workspace?.machineId, workspace?.cwd]);
+    }, [admitExactTarget, executor.execute, machineId, sessionId, workspace?.machineId, workspace?.cwd]);
     return { session, accountBinding, accountLifetime, exactSettings, settings, profileCatalogReady, acpCatalogReady, acpCatalogSnapshot, enabledAgentIds, defaultBackend,
-        backendTarget, inheritedModelSelection, inheritedConnectedServicesSelection, inheritedRoutePresentation, machineTarget, machineId, admitExactTarget, startAction };
+        backendTarget, inheritedModelSelection, resolveInheritedModelLabel, inheritedConnectedServicesSelection, inheritedRoutePresentation, machineTarget, machineId, admitExactTarget, startAction,
+        isStartCurrent: executor.isCurrent, cancelStart: executor.cancel };
 }

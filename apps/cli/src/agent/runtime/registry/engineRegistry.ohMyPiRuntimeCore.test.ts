@@ -14,9 +14,12 @@ import { withTempDir } from '@/testkit/fs/tempDir';
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
 import { createResolvedContributionRegistry } from '../../../plugins/projection/registry/createResolvedContributionRegistry';
 import { resolveBuiltInContributions } from '../../../plugins/projection/registry/resolveBuiltInContributions';
-import { resolveExecutablePluginRuntimeRegistry } from '../../../plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createCurrentSessionPresentationHost } from '@/session/presentation/currentSessionPresentationService';
 import { resolveBackendEngineAdapterResolution } from './engineRegistry';
 import { resolveEngineRuntimeContribution } from './engineRegistry/contributions';
+import { createUnboundConnectedAccountsFixture } from './engineRegistry/connectedAccounts.testkit';
+import { bindNativeAgentLaunchPreparationFixture, createNativeAgentLaunchPreparationFixture } from './engineRegistry/nativeAgentSession.testkit';
 
 const OH_MY_PI_AGENT_ID = 'ohMyPi';
 const OH_MY_PI_PLUGIN_ID = 'happier.agent.ohmypi';
@@ -134,7 +137,7 @@ describe('engineRegistry (OhMyPi runtimeCore)', () => {
           });
       chmodSync(systemToolExecutablePath, 0o755);
 
-      let runtimeRegistry: Awaited<ReturnType<typeof resolveExecutablePluginRuntimeRegistry>> | null = null;
+      let admittedRuntime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | null = null;
       try {
         const fixture = resolveGeneratedOhMyPiFixture(systemToolExecutablePath);
         expect(fixture.agentContribution).toMatchObject({
@@ -144,11 +147,15 @@ describe('engineRegistry (OhMyPi runtimeCore)', () => {
             localId: 'ohmypi',
           },
         });
-        runtimeRegistry = await resolveExecutablePluginRuntimeRegistry({
-          contributes: fixture.contributes,
+        admittedRuntime = await createAdmittedPluginRuntimeFixture({
           happyHomeDir: join(directory, 'home'),
-          pluginIds: [OH_MY_PI_PLUGIN_ID],
+          runtimeOptions: {
+            contributes: fixture.contributes,
+            pluginIds: [OH_MY_PI_PLUGIN_ID],
+            connectedAccounts: createUnboundConnectedAccountsFixture(),
+          },
         });
+        const runtimeRegistry = bindNativeAgentLaunchPreparationFixture(admittedRuntime.registry, await createNativeAgentLaunchPreparationFixture());
         const systemToolDefinitions = runtimeRegistry.systemToolDefinitionsByPluginId?.get(
           OH_MY_PI_PLUGIN_ID,
         );
@@ -224,6 +231,7 @@ describe('engineRegistry (OhMyPi runtimeCore)', () => {
           agentTargetKey: 'backend:oh-my-pi',
           session,
           transcriptSession: session,
+          currentSessionPresentation: createCurrentSessionPresentationHost({ session, signal: new AbortController().signal }).bindCurrentSession,
           messageBuffer: new MessageBuffer(),
           mcpServers: {},
           permissionHandler: createProviderEnforcedPermissionHandler({
@@ -255,7 +263,7 @@ describe('engineRegistry (OhMyPi runtimeCore)', () => {
           await created.operations.resetOrDisposeRuntime();
         }
       } finally {
-        await runtimeRegistry?.dispose();
+        await admittedRuntime?.dispose();
       }
     });
   });

@@ -34,7 +34,7 @@ vi.mock('@/text', async () => {
 });
 vi.mock('@/modal', async () => {
   const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-  return createModalModuleMock({ spies: { alert: modal.alert } }).module;
+  return createModalModuleMock({ confirmResult: true, spies: { alert: modal.alert } }).module;
 });
 // Native navigation interception is external to the editor's draft/save owner.
 vi.mock('@react-navigation/native', async importOriginal => ({

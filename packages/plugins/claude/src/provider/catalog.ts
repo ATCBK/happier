@@ -52,7 +52,7 @@ const ANTHROPIC_MODEL_DEFINITIONS = [
   { id: 'claude-opus-4-6', name: 'Opus 4.6', description: 'Highest-capability Claude model for the hardest coding and reasoning tasks.', effortLevels: MAX_WITHOUT_XHIGH, oneMillionContext: 'optIn' },
   { id: 'claude-sonnet-4-6', name: 'Sonnet 4.6', description: 'Balanced Claude model for everyday coding, editing, and analysis.', effortLevels: MAX_WITHOUT_XHIGH, oneMillionContext: 'optIn' },
   { id: 'claude-haiku-5-5', name: 'Haiku 5.5', costTier: 'low', description: 'Claude Haiku model for lighter tasks and lower-latency replies.' },
-  { id: 'claude-haiku-4-5', name: 'Haiku 4.5', costTier: 'low', description: 'Fastest Claude option for lighter tasks and lower-latency replies.' },
+  { id: 'claude-haiku-4-5', name: 'Haiku 4.5', aliases: ['claude-haiku-4-5-20251001'], costTier: 'low', description: 'Fastest Claude option for lighter tasks and lower-latency replies.' },
   { id: 'claude-opus-4-5', name: 'Opus 4.5', description: 'Prior Opus generation alias for compatibility with existing Claude setups.', effortLevels: LEGACY_EFFORT_LEVELS },
   { id: 'claude-sonnet-4-5', name: 'Sonnet 4.5', description: 'Prior Sonnet generation alias for compatibility with existing Claude setups.' },
 ] as const satisfies readonly AnthropicModelDefinition[];

@@ -397,9 +397,10 @@ async function captureRemoteHostResourceRevisions(context: RemoteHostAccountCont
     for (const ref of refs) {
         const parsed = parseSavedSecretRefV1(ref);
         if (parsed.kind !== 'shared_resource') return null;
-        const fresh = created.has(parsed.resourceId) ? 1 : metadata.resources.find(resource => 'resourceId' in resource
+        const entry = metadata.resources.find(resource => 'resourceId' in resource
             && resource.resourceId === parsed.resourceId && resource.entry.materialStatus === 'ready'
-            && resource.entry.capabilities.use)?.entry.revision;
+            && resource.entry.capabilities.use)?.entry;
+        const fresh = created.has(parsed.resourceId) ? 1 : entry?.materialStatus === 'ready' ? entry.revision : undefined;
         if (fresh == null || (supplied.has(parsed.resourceId) && supplied.get(parsed.resourceId) !== fresh)) return null;
         revisions.push({ resourceId: parsed.resourceId, revision: fresh });
     }

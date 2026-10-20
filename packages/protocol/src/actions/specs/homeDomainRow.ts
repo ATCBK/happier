@@ -46,6 +46,7 @@ type HomeDomainActionRowInput<
    * declares its own verb per row.
    */
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  preservePathFieldsInBody?: true;
   path: string;
   /**
    * The generated-SDK method path, when the derived one would nest under a
@@ -61,6 +62,7 @@ type HomeDomainActionRowInput<
    * public API and trusted-plugin exposure remain independently derived.
    */
   agent?: boolean;
+  mcp?: boolean;
   inputHints?: PreNormalizedActionSpec['inputHints'];
   projectObservationInput?: PreNormalizedActionSpec['projectObservationInput'];
   projectObservationOutput?: PreNormalizedActionSpec['projectObservationOutput'];
@@ -108,7 +110,7 @@ export function homeDomainActionRow<
     },
     ...(spec.sdkMethod ? { bindings: { sdkMethod: spec.sdkMethod } } : {}),
     placements: [],
-    surfaces: { ui: true, voice: false, agent: spec.agent ?? true, mcp: false, cli: true, rpc: false },
+    surfaces: { ui: true, voice: false, agent: spec.agent ?? true, mcp: spec.mcp ?? false, cli: true, rpc: false },
     sideEffectClass: spec.sideEffectClass,
     inputHints: spec.inputHints ?? { fields: [] },
     inputSchema: spec.inputSchema,
@@ -116,6 +118,7 @@ export function homeDomainActionRow<
     ...(spec.projectObservationInput ? { projectObservationInput: spec.projectObservationInput } : {}),
     ...(spec.projectObservationOutput ? { projectObservationOutput: spec.projectObservationOutput } : {}),
     ...(spec.approvalResultCustody ? { approvalResultCustody: spec.approvalResultCustody } : {}),
-    serverTransport: { method: spec.method ?? 'POST', path: spec.path },
+    serverTransport: { method: spec.method ?? 'POST', path: spec.path,
+      ...(spec.preservePathFieldsInBody ? { preservePathFieldsInBody: true as const } : {}) },
   };
 }

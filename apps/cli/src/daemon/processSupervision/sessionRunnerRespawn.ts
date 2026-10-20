@@ -26,15 +26,20 @@ export type DaemonChildExit = Readonly<{ reason: string; code: number | null; si
 export type SessionRunnerRespawnDisposition = 'ignored' | 'scheduled' | 'terminal';
 
 export type SessionRunnerRespawnManager = Readonly<{
-  hasPendingIntendedRestarts: () => boolean;
+  hasPendingIntendedRestarts: (sessionId?: string) => boolean;
   markStopRequested: (sessionId: string, request: StopRequest) => void;
   prepareAutomaticResumeAdmission: (sessionId: string) => () => boolean;
-  prepareFreshExplicitResumeAdmission: (sessionId: string) => () => void;
+  prepareFreshExplicitResumeAdmission: (sessionId: string) => Readonly<{
+    isCurrent: () => boolean;
+    retireIncumbent: (request: StopRequest) => void;
+    complete: () => void;
+  }>;
   handleUnexpectedExit: (
     trackedSession: TrackedSession,
     exit: DaemonChildExit,
     options?: Readonly<{
       forceRestart?: boolean;
+      restartReason?: string;
       spawnOptionsOverride?: SpawnSessionOptions;
     }>,
   ) => SessionRunnerRespawnDisposition;
@@ -58,6 +63,7 @@ export type SessionRunnerRespawnTerminalReason =
   | 'session_directory_missing'
   | 'startup_dependency_failure'
   | 'startup_instructions_cold_resume_unproven'
+  | 'terminal_follow_admission_failed'
   | 'stop_requested';
 
 function normalizeSessionId(raw: unknown): string {
@@ -112,12 +118,6 @@ function toTerminationEvent(exit: DaemonChildExit): TerminationEvent {
   return { type: 'exited', code: 1 };
 }
 
-const connectedServiceRestartRequestedTerminationEvent: TerminationEvent = {
-  type: 'spawn_error',
-  errorName: 'ConnectedServiceRestartRequested',
-  errorMessage: 'connected_service_auth_group_restart_requested',
-};
-
 // A runner webhook proves startup reached the session boundary, but not that the replacement
 // process is stable. Keep the existing crash budget until the replacement survives this window.
 const DEFAULT_RESPAWN_STABILITY_WINDOW_MS = 60_000;
@@ -161,6 +161,19 @@ export function isSessionRunnerColdResumeSupported(input: Readonly<{
   );
 }
 
+/** Home evidence must belong to this runner occurrence before it can end startup recovery. */
+export function isCurrentDefiniteSessionStartupFailure(
+  issue: SessionRuntimeIssueV1 | null | undefined,
+  processStartTimeMs: number | undefined,
+): issue is SessionRuntimeIssueV1 {
+  return issue?.scope === 'primary_session' && issue.status === 'failed'
+    && issue.source === 'dependency_failure'
+    && issue.code !== 'preparation_pending'
+    && issue.code !== DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_CODE
+    && typeof processStartTimeMs === 'number' && Number.isFinite(processStartTimeMs)
+    && issue.occurredAt >= processStartTimeMs;
+}
+
 export function createSessionRunnerRespawnManager(params: Readonly<{
   enabled: boolean;
   maxRestarts: number | null;
@@ -188,6 +201,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
     reason: SessionRunnerRespawnTerminalReason;
     detail?: string;
   }>) => void;
+  onStopRequested?: (sessionId: string) => void;
   random: () => number;
   logDebug: (message: string, payload?: unknown) => void;
   logWarn: (message: string) => void;
@@ -199,7 +213,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
   };
   const stateBySessionId = new Map<
     string,
-    { controller: RestartController; timer: NodeJS.Timeout | null; intended: boolean }
+    { controller: RestartController; timer: NodeJS.Timeout | null; intended: boolean; retire?: () => void }
   >();
 
   const getOrCreateController = (sessionId: string): RestartController => {
@@ -289,6 +303,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
     const existing = stateBySessionId.get(sessionId);
     if (!existing) return;
     clearTimer(sessionId);
+    delete existing.retire;
     if (existing.controller.hasRecentIntendedRestarts()) {
       existing.controller.resetCrashBudget();
       existing.intended = false;
@@ -301,6 +316,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
   const observeRespawnSuccess = (sessionId: string) => {
     const existing = stateBySessionId.get(sessionId);
     if (!existing) return;
+    delete existing.retire;
 
     if (existing.intended) {
       endRespawnCycle(sessionId);
@@ -370,19 +386,22 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
     const existing = stateBySessionId.get(sessionId);
     if (!existing) return;
 
+    let stopRetirementReported = false;
+    const reportStopRetirement = () => {
+      if (stopRetirementReported) return;
+      stopRetirementReported = true;
+      params.onRespawnTerminal?.({ sessionId, previousPid, reason: 'stop_requested' });
+    };
+    existing.retire = reportStopRetirement;
     const timer = setTimeout(() => {
       void (async () => {
-        let stopRetirementReported = false;
         const finishIfCycleRetired = (): boolean => {
           const stopRequest = readActiveStopRequest(sessionId);
           // Explicit Resume can clear Stop while an old Home read is still pending.
           // Clearing that intent does not revive the retired supervision cycle.
           if (!stopRequest) return stateBySessionId.get(sessionId) !== existing;
           if (stateBySessionId.get(sessionId) === existing) endRespawnCycle(sessionId);
-          if (!stopRetirementReported) {
-            stopRetirementReported = true;
-            params.onRespawnTerminal?.({ sessionId, previousPid, reason: 'stop_requested' });
-          }
+          reportStopRetirement();
           return true;
         };
 
@@ -398,12 +417,7 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
         const processStartTimeMs = trackedSession.processStartTimeMs;
         // Home retains the host's typed failure. An older occurrence's issue must not
         // veto a fresh explicit Resume or a later runner's ordinary crash recovery.
-        if (issue?.scope === 'primary_session' && issue.status === 'failed'
-          && issue.source === 'dependency_failure'
-          && issue.code !== 'preparation_pending'
-          && issue.code !== DAEMON_PLUGIN_TOOL_CATALOG_UNAVAILABLE_CODE
-          && typeof processStartTimeMs === 'number' && Number.isFinite(processStartTimeMs)
-          && issue.occurredAt >= processStartTimeMs) {
+        if (isCurrentDefiniteSessionStartupFailure(issue, processStartTimeMs)) {
           endRespawnCycle(sessionId);
           params.logWarn(`[DAEMON RUN] Respawn suppressed for session ${sessionId} (startup dependency: ${issue.code})`);
           params.onRespawnTerminal?.({ sessionId, previousPid, reason: 'startup_dependency_failure', detail: issue.code });
@@ -523,22 +537,27 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
     existing.timer = timer as any;
   };
 
+  const markStopRequested = (sessionIdRaw: string, request: StopRequest) => {
+    const sessionId = normalizeSessionId(sessionIdRaw);
+    if (!sessionId) return;
+    stopRequestedBySessionId.set(sessionId, { request, active: true });
+    const existing = stateBySessionId.get(sessionId);
+    if (existing) {
+      existing.controller.markStopRequested(request);
+      clearTimer(sessionId);
+      stateBySessionId.delete(sessionId);
+      existing.retire?.();
+    }
+    params.onStopRequested?.(sessionId);
+  };
+
   return {
-    hasPendingIntendedRestarts: () => {
+    hasPendingIntendedRestarts: (sessionId) => {
+      if (sessionId !== undefined) return stateBySessionId.get(normalizeSessionId(sessionId))?.intended === true;
       for (const state of stateBySessionId.values()) if (state.intended) return true;
       return false;
     },
-    markStopRequested: (sessionIdRaw: string, request: StopRequest) => {
-      const sessionId = normalizeSessionId(sessionIdRaw);
-      if (!sessionId) return;
-      stopRequestedBySessionId.set(sessionId, { request, active: true });
-      const existing = stateBySessionId.get(sessionId);
-      if (existing) {
-        existing.controller.markStopRequested(request);
-        clearTimer(sessionId);
-        stateBySessionId.delete(sessionId);
-      }
-    },
+    markStopRequested,
     prepareAutomaticResumeAdmission: (sessionIdRaw: string) => {
       const sessionId = normalizeSessionId(sessionIdRaw);
       const admittedStop = stopRequestedBySessionId.get(sessionId);
@@ -547,17 +566,28 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
     },
     prepareFreshExplicitResumeAdmission: (sessionIdRaw: string) => {
       const sessionId = normalizeSessionId(sessionIdRaw);
-      const admittedStopRequest = sessionId
+      let admittedStopRequest = sessionId
         ? stopRequestedBySessionId.get(sessionId) ?? null
         : null;
-      return () => {
-        if (!sessionId) return;
-        const currentStopRequest = stopRequestedBySessionId.get(sessionId) ?? null;
-        if (currentStopRequest !== admittedStopRequest) return;
-        // Keep the actual last Stop witness so a completed explicit Resume cannot
-        // revive automatic launch preparation that began before that Stop.
-        if (currentStopRequest) currentStopRequest.active = false;
-        stateBySessionId.get(sessionId)?.controller.clearStopRequested();
+      const isCurrent = () => Boolean(sessionId)
+        && (stopRequestedBySessionId.get(sessionId) ?? null) === admittedStopRequest;
+      return {
+        // An earlier Stop permits this new intent; a later Stop retires it.
+        isCurrent,
+        retireIncumbent: (request) => {
+          const belongsToThisResume = isCurrent();
+          markStopRequested(sessionId, request);
+          // Advance only across this admission's own synchronous retirement.
+          // An external Stop before or after this call still retires the admission.
+          if (belongsToThisResume) admittedStopRequest = stopRequestedBySessionId.get(sessionId) ?? null;
+        },
+        complete: () => {
+          if (!isCurrent()) return;
+          // Keep the actual last Stop witness so a completed explicit Resume cannot
+          // revive automatic launch preparation that began before that Stop.
+          if (admittedStopRequest) admittedStopRequest.active = false;
+          stateBySessionId.get(sessionId)?.controller.clearStopRequested();
+        },
       };
     },
     handleUnexpectedExit: (trackedSession: TrackedSession, exit: DaemonChildExit, options) => {
@@ -578,6 +608,17 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
           sessionId,
           previousPid: trackedSession.pid,
           reason: 'continuation_unreachable',
+        });
+        return 'terminal';
+      }
+
+      if (exit.code === SESSION_RUNNER_EXIT_CODES.TERMINAL_FOLLOW_ADMISSION_FAILED) {
+        endRespawnCycle(sessionId);
+        params.logWarn(`[DAEMON RUN] Respawn suppressed for session ${sessionId} (terminal follow admission failed)`);
+        params.onRespawnTerminal?.({
+          sessionId,
+          previousPid: trackedSession.pid,
+          reason: 'terminal_follow_admission_failed',
         });
         return 'terminal';
       }
@@ -631,7 +672,10 @@ export function createSessionRunnerRespawnManager(params: Readonly<{
         const state = stateBySessionId.get(sessionId);
         if (state) state.intended = true;
       }
-      const event = forceRestart ? connectedServiceRestartRequestedTerminationEvent : toTerminationEvent(exit);
+      const event: TerminationEvent = forceRestart ? {
+        type: 'spawn_error', errorName: 'PlannedRunnerRestart',
+        errorMessage: options?.restartReason ?? exit.reason,
+      } : toTerminationEvent(exit);
       const decision = decideRestartForCycle(sessionId, controller, event);
       if (decision.type === 'no_restart') {
         if (decision.reason.startsWith('max_restarts_exceeded') || decision.reason.startsWith('max_intended_restarts_exceeded')) {

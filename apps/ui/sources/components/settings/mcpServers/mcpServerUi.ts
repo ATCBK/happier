@@ -24,26 +24,6 @@ export function describeMachine(machineId: string, machines: readonly Machine[])
     return getMachineDisplayName(machine) ?? machineId;
 }
 
-export function summarizeBindings(bindings: ReadonlyArray<McpServerRuleV1>, machines: readonly Machine[]): string {
-    const enabled = bindings.filter((binding) => binding.enabled);
-    const hasAll = enabled.some((binding) => binding.target.t === 'allMachines');
-    const machineTargets = enabled.filter((binding) => binding.target.t === 'machine');
-    const workspaceTargets = enabled.filter((binding) => binding.target.t === 'workspace');
-
-    const parts: string[] = [];
-    if (hasAll) parts.push(t('settings.mcpServersBindingSummaryAllMachines'));
-    if (machineTargets.length > 0) {
-        const firstMachineId = machineTargets[0]?.target.t === 'machine' ? machineTargets[0].target.machineId : null;
-        parts.push(machineTargets.length === 1 && firstMachineId
-            ? describeMachine(firstMachineId, machines)
-            : t('settings.mcpServersBindingSummaryMachines', { count: machineTargets.length }));
-    }
-    if (workspaceTargets.length > 0) {
-        parts.push(t('settings.mcpServersBindingSummaryWorkspaces', { count: workspaceTargets.length }));
-    }
-    return parts.length > 0 ? parts.join(' · ') : t('settings.mcpServersBindingSummaryNone');
-}
-
 export function describeConfiguredServerEndpoint(server: McpServerCatalogEntryV1): string {
     if (server.transport === 'stdio') {
         return [server.stdio?.command ?? '', ...(server.stdio?.args ?? [])]
@@ -51,17 +31,6 @@ export function describeConfiguredServerEndpoint(server: McpServerCatalogEntryV1
             .join(' ');
     }
     return server.remote?.url ?? '';
-}
-
-export function resolveBindingBadgeLabels(bindings: ReadonlyArray<McpServerRuleV1>, machines: readonly Machine[]): string[] {
-    return bindings
-        .filter((binding) => binding.enabled)
-        .map((binding) => {
-            if (binding.target.t === 'allMachines') return t('settings.mcpServersBindingSummaryAllMachines');
-            if (binding.target.t === 'machine') return describeMachine(binding.target.machineId, machines);
-            if (binding.target.t === 'project') return binding.target.projectKey;
-            return binding.target.workspaceRoot;
-        });
 }
 
 export function resolveAuthBadgeLabel(authMode: McpPreviewAuthModeV1 | ReturnType<typeof inferMcpServerAuthModeV1>): string {

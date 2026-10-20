@@ -58,18 +58,15 @@ installSessionRouteCommonModuleMocks({
             },
         });
     },
-    storageModule: async (importOriginal) => {
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                storage: machineTargetStorage,
-                getStorage: () => machineTargetStorage,
-                useSession: ((sessionId: string) => machineTargetStorage(
-                    (state) => state.sessions[sessionId] ?? null,
-                )) as typeof import('@/sync/domains/state/storage')['useSession'],
-                useIsDataReady: () => isDataReady,
-            },
+    storageModule: async () => {
+        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+        return createStorageModuleStub({
+            storage: machineTargetStorage,
+            getStorage: () => machineTargetStorage,
+            useSession: ((sessionId: string) => machineTargetStorage(
+                (state) => state.sessions[sessionId] ?? null,
+            )) as typeof import('@/sync/domains/state/storage')['useSession'],
+            useIsDataReady: () => isDataReady,
         });
     },
 });
@@ -200,7 +197,7 @@ describe('Session log screen', () => {
         const screen = await renderScreen(React.createElement(SessionLogScreen));
 
         expect(screen.getTextContent()).not.toContain('common.loading');
-        expect(machineReadSessionLogTailMock).toHaveBeenCalledWith('machine-1', { path: sessionLogPath, maxBytes: 200000 }, undefined);
+        expect(machineReadSessionLogTailMock).toHaveBeenCalledWith('machine-1', { path: sessionLogPath, maxBytes: 200000 }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
     });
 
     it('does not fetch log tail when log path is unavailable', async () => {
@@ -217,7 +214,7 @@ describe('Session log screen', () => {
 
         await renderScreen(React.createElement(SessionLogScreen));
 
-        expect(machineReadSessionLogTailMock).toHaveBeenCalledWith('machine-1', { path: sessionLogPath, maxBytes: 200000 }, undefined);
+        expect(machineReadSessionLogTailMock).toHaveBeenCalledWith('machine-1', { path: sessionLogPath, maxBytes: 200000 }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
     });
 
     it('fetches session log tail from the resolved live machine target instead of stale metadata', async () => {
@@ -227,7 +224,7 @@ describe('Session log screen', () => {
 
         await renderScreen(React.createElement(SessionLogScreen));
 
-        expect(machineReadSessionLogTailMock).toHaveBeenCalledWith('replacement-machine', { path: sessionLogPath, maxBytes: 200000 }, undefined);
+        expect(machineReadSessionLogTailMock).toHaveBeenCalledWith('replacement-machine', { path: sessionLogPath, maxBytes: 200000 }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
     });
 
     it('does not call bug report log tail RPC for session logs', async () => {
@@ -261,7 +258,7 @@ describe('Session log screen', () => {
         expect(machineReadSessionLogTailMock).toHaveBeenCalledWith(
             'machine-1',
             { path: sessionLogPath, maxBytes: 200000 },
-            undefined,
+            expect.objectContaining({ signal: expect.any(AbortSignal) }),
         );
     });
 });

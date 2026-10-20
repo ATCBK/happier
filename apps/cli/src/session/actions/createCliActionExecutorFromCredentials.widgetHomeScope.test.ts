@@ -15,7 +15,7 @@ it.each([false, true])('binds the authenticated portable Home instead of the loc
         provenance: { v: 2, kind: 'terminal', authority: 'account_automation', evidence: [{ kind: 'home_method', methodId: 'key_challenge' }] },
     })).toString('base64url')}.signature`, encryption: null, credentialProvenance: 'stored_session' as const };
     // HTTP is the boundary; the feature reader, both executors and widget owners remain real.
-    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+    vi.stubGlobal('fetch', async (input: Parameters<typeof fetch>[0]) => {
         expect(String(input)).toBe(`${serverApiUrl}/v1/features/authenticated`);
         return Response.json(FeaturesResponseSchema.parse({ features: {}, capabilities: { serverIdentity: { serverIdentityId } } }));
     });

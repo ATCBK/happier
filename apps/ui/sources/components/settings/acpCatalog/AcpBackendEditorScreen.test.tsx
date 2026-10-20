@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AcpCatalogSettingsV1 } from '@happier-dev/protocol';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
@@ -13,10 +13,12 @@ import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } 
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { getStorage } from '@/sync/domains/state/storage';
 import { applyAcpCatalogSnapshot, getAcpCatalogSnapshot, resetAcpCatalogSnapshotsForTests } from '@/sync/store/settings/acpCatalogSnapshot';
 import { refreshAcpCatalog, resetAcpCatalogEngineForTests } from '@/sync/engine/settings/acpCatalogEngine';
-import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { AcpCatalogRowMutationV1Schema, ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { createDeferred } from '@/dev/testkit';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
@@ -42,13 +44,7 @@ const shared = vi.hoisted(() => ({
 vi.mock('socket.io-client', async importOriginal =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary();
-// Metro's lazy module loader is the substituted platform boundary, not Action execution.
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => {
-    const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
-    const { createFrontDoorActionExecuteForVitest } = await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary');
-    return { ...original, createFrontDoorActionExecute: createFrontDoorActionExecuteForVitest(original) };
-});
-beforeAll(loadSyncSingletonForTests);
+await loadSyncSingletonForTests();
 let scope: { serverId: string; accountId: string };
 let disposeConnection: (() => Promise<void>) | undefined;
 let receipt: ReturnType<typeof createDeferred<void>>;
@@ -82,6 +78,7 @@ await vi.hoisted(async () => {
         storage: async (importOriginal) => importOriginal(),
     });
 });
+await import('./AcpBackendEditorScreen');
 
 const EDITOR = 'settings.acpCatalog.backendEditor';
 
@@ -169,6 +166,7 @@ beforeEach(async () => {
         const path = new URL(String(url)).pathname;
         if (path === '/health') return Response.json({});
         if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
+        if (path === '/v1/account/profile') return Response.json(AccountProfileSchema.parse({ id: 'account-a' }));
         if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
         if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
         if (path === '/v2/account/settings') {
@@ -198,7 +196,7 @@ beforeEach(async () => {
             if (shared.holdRowRead) await rowRead.promise;
             return Response.json({ status: 'present', revision, content: { t: 'plain', v: { v: 1, definitions: shared.settingsState.value.backends } } });
         }
-        return new Response(null, { status: 404 });
+        return createEmptyAccountBootstrapHttpResponse(`${path}${new URL(String(url)).search}`, init) ?? new Response(null, { status: 404 });
     } });
     disposeConnection = connection.dispose;
     scope = { serverId: connection.home.id, accountId: 'account-a' };
@@ -284,6 +282,9 @@ describe('AcpBackendEditorScreen', () => {
         expect(shared.routerReplaceSpy).not.toHaveBeenCalled();
     });
     it.each(['ordinary ACK', 'interleaved later writer'] as const)('preserves newer editable draft changes when the originally submitted approval is acknowledged (%s)', async (scenario) => {
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        expect(lifetime?.scope).toEqual(scope);
+        expect(lifetime?.isCurrent()).toBe(true);
         const approvalPolicy = ActionsSettingsV1Schema.parse({ v: 1, actions: {
             'agents.acp.backends.upsert': { approvalRequiredSurfaces: ['ui'] },
         } });
@@ -319,6 +320,7 @@ describe('AcpBackendEditorScreen', () => {
         const terminal = StoredApprovalRequestSchema.parse(JSON.parse(terminalBody));
         expect(terminal).toMatchObject({ status: 'executed', execution: { ok: true } });
         expect(AgentsAcpBackendsUpsertOutputV1Schema.parse(terminal.execution?.result)).toMatchObject({ revision: 2 });
+        expect(lifetime?.isCurrent()).toBe(true);
         await waitForHomeGovernance(() => expectSavePending(screen, false));
         const interleaved = scenario === 'interleaved later writer';
         expect(shared.writes).toHaveLength(interleaved ? 2 : 1);
@@ -609,9 +611,11 @@ describe('AcpBackendEditorScreen', () => {
         expect(input(screen, `${EDITOR}.name`).props.value).toBe('kiro');
     });
 
-    it('deletes an existing agent from its menu after confirmation and leaves the page', async () => {
+    it('deletes an existing agent under its Allowed Action setting without a local confirmation and leaves the page', async () => {
         shared.settingsState.value = { v: 2, backends: [existingKiro] };
         const screen = await renderEditor('kiro');
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.confirm).mockClear().mockResolvedValue(false);
 
         const menu = screen.findAll((node) => node.props?.testID === `${EDITOR}.menu`
             && typeof node.props?.onSelect === 'function')[0];
@@ -622,7 +626,24 @@ describe('AcpBackendEditorScreen', () => {
 
         expect(shared.writes.at(-1)?.backends).toEqual([]);
         expect(shared.routerReplaceSpy).toHaveBeenCalledWith('/(app)/settings/agents');
+        expect(Modal.confirm).not.toHaveBeenCalled();
     });
+    it('keeps the agent and stays silent when the shared delete confirmation is declined', async () => {
+        shared.settingsState.value = { v: 2, backends: [existingKiro] };
+        shared.accountSettings = {};
+        const screen = await renderEditor('kiro');
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.confirm).mockClear().mockResolvedValue(false);
+        shared.modalAlertSpy.mockClear();
+        const menu = screen.findAll((node) => node.props?.testID === `${EDITOR}.menu`
+            && typeof node.props?.onSelect === 'function')[0];
+        await act(async () => { await menu?.props.onSelect('delete'); });
+        expect(Modal.confirm).toHaveBeenCalledOnce();
+        expect(shared.writes).toEqual([]);
+        expect(shared.modalAlertSpy).not.toHaveBeenCalled();
+        expect(shared.routerReplaceSpy).not.toHaveBeenCalled();
+    });
+
     it('keeps the authored draft on row refusal and navigates only after the durable receipt', async () => {
         const screen = await renderEditor(null);
         await type(screen, `${EDITOR}.title`, 'Retained draft');

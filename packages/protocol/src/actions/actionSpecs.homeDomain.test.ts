@@ -15,6 +15,19 @@ import { PluginInvocableActionIdSchema } from './pluginActionSurface.js';
 import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
 
 describe('Home runtime Action parity', () => {
+  it('publishes the target and supported assignment choice for organization deletion', () => {
+    for (const [actionId, identity, behavior] of [
+      ['session.folders.delete', 'folderId', 'moveAssignmentsToParent'],
+      ['session.tags.delete', 'tagId', 'removeAssignments'],
+    ] as const) {
+      const spec = serializeActionSpec(getActionSpec(actionId));
+      expect(spec.inputHints?.fields).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: identity, required: true }),
+        expect.objectContaining({ path: 'assignmentBehavior', options: [expect.objectContaining({ value: behavior })] }),
+      ]));
+    }
+  });
+
   it('admits local runtime, access and Personal Home intents through the answering client', () => {
     const reads = ['relay.access.status', 'relay.runtime.status', 'relay.runtime.personal_home.inspect',
       'relay.runtime.personal_home.verify_backup', 'home.runtime.get'];

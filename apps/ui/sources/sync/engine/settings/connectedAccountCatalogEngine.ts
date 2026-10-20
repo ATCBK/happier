@@ -17,7 +17,7 @@ const loader = createScopedSnapshotLoader<Target>({
         const guard = publicationGuards.get(key);
         try { guard?.(); } catch { return; }
         beginConnectedAccountCatalogLoad(scope, catalogKey);
-        return context.readWithMaintenance({
+        return context.readWithMaintenance<Awaited<ReturnType<typeof readConnectedAccountCatalog>>>({
             read: publication => readConnectedAccountCatalog(scope, catalogKey, undefined, guard, publication, { sourceMachineId }),
             publish: (catalog, current) => {
                 try { guard?.(); } catch { return; }

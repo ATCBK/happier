@@ -3,7 +3,7 @@ import type {
   HandoffImportResultV1,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { open } from 'node:fs/promises';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   buildCodexAgentRuntimeDescriptor,
@@ -58,25 +58,25 @@ type CodexSessionHandoffAffinity = Readonly<{
   runtimeDescriptor?: CodexHandoffRuntimeDescriptor;
 }>;
 
-export const CodexSessionHandoffBundleSchema = z.object({
+export const CodexSessionHandoffBundleSchema = z.strictObject({
   agentId: z.literal('codex'),
-  remoteSessionId: z.string().min(1),
-  affinity: z.object({
-    backendMode: z.enum(['acp', 'appServer']).nullable(),
-    source: CodexExternalSessionHandoffSourceSchema.optional(),
-    runtimeDescriptor: z.record(z.string(), z.unknown()).optional(),
-  }).strict().optional(),
-  files: z.array(z.object({
-    relativePath: z.string().min(1),
-    contentBase64: z.string().min(1).optional(),
-    contentFile: z.object({
+  remoteSessionId: z.string().check(z.minLength(1)),
+  affinity: z.optional(z.strictObject({
+    backendMode: z.nullable(z.enum(['acp', 'appServer'])),
+    source: z.optional(CodexExternalSessionHandoffSourceSchema),
+    runtimeDescriptor: z.optional(z.record(z.string(), z.unknown())),
+  })),
+  files: z.array(z.strictObject({
+    relativePath: z.string().check(z.minLength(1)),
+    contentBase64: z.optional(z.string().check(z.minLength(1))),
+    contentFile: z.optional(z.strictObject({
       t: z.literal('happier.handoff.file.v1'),
-      filePath: z.string().min(1),
-      offsetBytes: z.number().int().nonnegative(),
-      sizeBytes: z.number().int().nonnegative(),
-    }).strict().optional(),
-  }).strict().refine((file) => Boolean(file.contentBase64) !== Boolean(file.contentFile))).min(1),
-}).strict();
+      filePath: z.string().check(z.minLength(1)),
+      offsetBytes: z.number().check(z.int(), z.nonnegative()),
+      sizeBytes: z.number().check(z.int(), z.nonnegative()),
+    })),
+  }).check(z.refine((file) => Boolean(file.contentBase64) !== Boolean(file.contentFile)))).check(z.minLength(1)),
+});
 
 export type CodexSessionHandoffBundle = Readonly<
   z.infer<typeof CodexSessionHandoffBundleSchema>

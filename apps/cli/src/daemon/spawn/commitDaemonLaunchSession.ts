@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { pickSessionCreateOriginFields } from '@/session/shared/sessionCreateOrigin';
+import { pickDefinedSpawnSessionOptions, SpawnDaemonSessionRequestSchema } from '@/rpc/handlers/spawnSessionOptionsContract';
 
 import { SessionCreationTagV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
 
@@ -40,6 +41,14 @@ type SpawnError = Extract<SpawnSessionResult, { type: 'error' }>;
  * runner-side creation.
  */
 export function daemonLaunchRequiresCommittedSession(options: SpawnSessionOptions): boolean {
+  if (!options.existingSessionId && (options.discussionParticipant !== undefined
+    || options.sessionCreationCorrespondence?.recipe.discussionParticipant !== undefined)) {
+    // Typed native callers share the raw owner's fresh-origin correspondence
+    // and no-initial-work admission; never infer omitted birth authority.
+    SpawnDaemonSessionRequestSchema.parse(pickDefinedSpawnSessionOptions(options));
+    return true;
+  }
+  if (options.workspaceWrites !== undefined) return true;
   if (options.capabilitySelection !== undefined) return true;
   if (options.requesterSessionBootstrap) return true;
   if ((options.promptStack?.length ?? 0) > 0) return true;
@@ -90,6 +99,7 @@ export async function commitDaemonLaunchSession(input: Readonly<{
   try {
     created = await input.api.getOrCreateSession({
       ...pickSessionCreateOriginFields(options),
+      ...(options.projectSetupOperation ? { signal: options.projectSetupOperation.signal } : {}),
       tag,
       ...(options.creationAuthorization ? { creationAuthorizationToken: options.creationAuthorization.token } : {}),
       metadata: buildCommittedLaunchMetadata({
@@ -105,7 +115,7 @@ export async function commitDaemonLaunchSession(input: Readonly<{
       state: { controlledByUser: false },
       ...(options.initialAccess !== undefined ? { initialAccess: options.initialAccess } : {}),
       ...(options.initialTriggers !== undefined ? { initialTriggers: options.initialTriggers } : {}),
-      ...(options.reportsTo !== undefined ? { reportsTo: options.reportsTo } : {}),
+      ...(options.manager !== undefined ? { manager: options.manager } : {}),
       ...(options.primaryTeamId !== undefined ? { primaryTeamId: options.primaryTeamId } : {}),
       ...(options.teamCredentialBindings !== undefined
         ? { teamCredentialBindings: options.teamCredentialBindings }
@@ -125,7 +135,9 @@ export async function commitDaemonLaunchSession(input: Readonly<{
       result: {
         type: 'error',
         errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_FAILED,
-        errorMessage: 'Unable to start the Agent because the Happier server did not create a durable Session.',
+        // The API's null result means offline mode, including a pre-create
+        // currentness failure. It is not a negative Session-create receipt.
+        errorMessage: 'Unable to start the Agent because the Happier server is unreachable (offline).',
       },
     };
   }
@@ -181,11 +193,13 @@ export function withoutFreshSessionCreationFields(options: SpawnSessionOptions):
     identity: _initialIdentity,
     memoryEnabled: _initialMemoryEnabled,
     promptStack: _initialPromptStack,
-    reportsTo: _reportsTo,
+    manager: _manager,
     initialSessionRolesV1: _initialSessionRolesV1,
     originKind: _originKind,
     originSessionId: _originSessionId,
     originRunId: _originRunId,
+    discussionParticipant: _discussionParticipant,
+    discussionParticipantLaunch: _discussionParticipantLaunch,
     workDepth: _workDepth,
     primaryTeamId: _primaryTeamId,
     teamCredentialBindings: _teamCredentialBindings,

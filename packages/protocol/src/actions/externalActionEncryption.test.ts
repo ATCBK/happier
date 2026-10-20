@@ -26,6 +26,22 @@ const binding = {
 const randomBytes = (length: number) => new Uint8Array(length).fill(2);
 
 describe('whole external Action encryption', () => {
+  it('reports only the failed opening phase while preserving opaque public refusal', () => {
+    const request = sealExternalActionRequestV2({ binding, material, randomBytes, input: { privateInput: 'private-content' } });
+    const failures: unknown[] = [];
+    expect(openExternalActionRequestV2({ envelope: request, binding,
+      material: { type: 'dataKey', machineKey: new Uint8Array(32).fill(3) },
+      onFailure: failure => { failures.push(failure); },
+    })).toBeNull();
+    expect(failures).toEqual([{ phase: 'ciphertext_open' }]);
+    failures.length = 0;
+    expect(openExternalActionRequestV2({ envelope: request, binding: { ...binding, accountId: 'different' }, material,
+      onFailure: failure => { failures.push(failure); },
+    })).toBeNull();
+    expect(failures).toEqual([{ phase: 'plaintext_binding' }]);
+    expect(JSON.stringify(failures)).not.toContain('private-content');
+    expect(openExternalActionRequestV2({ envelope: request, binding, material })).toEqual({ input: { privateInput: 'private-content' } });
+  });
   it('retains narrowing mounted provenance beside E2EE content through the root codec', () => {
     const pluginInvocation = { kind: 'mountedPluginSurface' as const, mountedBinding: {
       pluginId: 'happier.inspector', contributionLocalId: 'inspector-app', occurrenceId: 'occurrence',

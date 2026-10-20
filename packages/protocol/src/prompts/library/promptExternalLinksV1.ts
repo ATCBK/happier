@@ -5,7 +5,7 @@ import { PromptAssetExternalRefV1Schema, PromptAssetScopeV1Schema } from './prom
 import { MachineAdministrationTargetV1Schema, type MachineAdministrationTargetV1 } from '../../account/settings/machineAdministrationSelectionsV1.js';
 
 /** Predecessor export modes are inert; current receipts have one manual mode. */
-export const PromptExternalLinkSyncModeV1Schema = lazyZodSchema(() => z.pipe(z.transform(value => value === 'export_on_save' || value === 'read_only' ? 'manual' : value), z.literal('manual')));
+export const PromptExternalLinkSyncModeV1Schema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(value => value === 'export_on_save' || value === 'read_only' ? 'manual' : value), z.literal('manual')));
 export type PromptExternalLinkSyncModeV1 = z.infer<typeof PromptExternalLinkSyncModeV1Schema>;
 
 export const PromptExternalLinkEntryV1Schema = lazyZodSchema(() => z.looseObject({
@@ -25,13 +25,13 @@ export const PromptExternalLinkEntryV1Schema = lazyZodSchema(() => z.looseObject
 }));
 export type PromptExternalLinkEntryV1 = z.infer<typeof PromptExternalLinkEntryV1Schema>;
 
-export const PromptExternalLinksV1Schema = lazyZodSchema(() => z.pipe(z.looseObject({
+export const PromptExternalLinksV1Schema = lazyZodSchema(() => z.looseObject({
   v: z.literal(1),
   links: z._default(z.array(PromptExternalLinkEntryV1Schema), []),
-}), z.transform((value): typeof value => ({
+}).apply((schema) => z.pipe(schema, z.transform<z.output<typeof schema>, z.output<typeof schema>>((value): typeof value => ({
   ...value,
   links: value.links.map(link => ({ ...link, syncMode: link.syncMode ?? 'manual' })),
-}))));
+})))));
 export type PromptExternalLinksV1 = z.infer<typeof PromptExternalLinksV1Schema>;
 
 /** Bare predecessor links belong only to their original library Home. */

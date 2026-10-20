@@ -13,6 +13,7 @@ import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderScreen } from '@/dev/testkit';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { installPopoverCommonModuleMocks } from './popoverTestHelpers';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -25,11 +26,11 @@ let mockPopoverContentDomRect: { width: number; height: number } | null = null;
 let mockPopoverContentRefKind: 'dom' | 'opaque' = 'dom';
 
 async function flushInitialPositioning() {
-    await flushHookEffects({ cycles: 1, turns: INITIAL_POSITIONING_TICKS });
+    await flushHookEffects({ cycles: 1, turns: INITIAL_POSITIONING_TICKS, frames: 1 });
 }
 
 async function flushRetryPositioning() {
-    await flushHookEffects({ cycles: 1, turns: RETRY_POSITIONING_TICKS });
+    await flushHookEffects({ cycles: RETRY_POSITIONING_TICKS, turns: 2, frames: 1 });
 }
 
 async function flushPostLayoutTicks() {
@@ -95,14 +96,20 @@ installPopoverCommonModuleMocks({
     },
 });
 
+// Resolve the cold component graph during collection, before mounted lifecycle deadlines.
+await import('./Popover');
+
 describe('Popover (web)', () => {
     let restorePopoverWebGlobals: (() => void) | null = null;
+    let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | null = null;
 
     beforeEach(() => {
         restorePopoverWebGlobals = withPopoverWebGlobals();
     });
 
     afterEach(() => {
+        browser?.restore();
+        browser = null;
         restorePopoverWebGlobals?.();
         restorePopoverWebGlobals = null;
         mockPopoverContentDomRect = null;
@@ -187,7 +194,7 @@ describe('Popover (web)', () => {
         expect(screen.findAllByType('PopoverChild' as any)).toHaveLength(1);
 
         await act(async () => {
-            screen.tree.update(React.createElement(
+            await screen.update(React.createElement(
                 Popover,
                 {
                     open: false,
@@ -264,7 +271,7 @@ describe('Popover (web)', () => {
             contentView?.props?.onLayout?.({ nativeEvent: { layout: { width: 220, height: 160 } } });
         });
 
-        expect(flattenStyle(motionFrame.props.style).pointerEvents).toBe('auto');
+        expect(flattenStyle(screen.findByType('AnimatedView').props.style).pointerEvents).toBe('auto');
     });
 
     it('does not fall back to document.body when a boundary portal target is requested but not ready yet', async () => {
@@ -323,6 +330,7 @@ describe('Popover (web)', () => {
 
     it('can close when clicking the anchor when closeOnAnchorPress is enabled', async () => {
         const { Popover } = await import('./Popover');
+        browser = await installBrowserRuntimeForTests({ url: 'https://popover.test/' });
 
         const pointerHandlers: any[] = [];
         const keyHandlers: Array<{ handler: any; options: any }> = [];
@@ -339,7 +347,7 @@ describe('Popover (web)', () => {
 
         const onRequestClose = vi.fn();
 
-        const anchorTarget = {} as any;
+        const anchorTarget = browser.document.createElement('button');
         const anchorRef = {
             current: {
                 contains: (node: any) => node === anchorTarget,
@@ -431,6 +439,7 @@ describe('Popover (web)', () => {
 
     it('stops event propagation when closing on outside clicks so underlying modal layers do not also dismiss', async () => {
         const { Popover } = await import('./Popover');
+        browser = await installBrowserRuntimeForTests({ url: 'https://popover.test/' });
 
         const pointerHandlers: Array<{ handler: any; options: any }> = [];
         const addEventListener = vi.fn((type: string, handler: any, options?: any) => {
@@ -466,7 +475,7 @@ describe('Popover (web)', () => {
         const stopPropagation = vi.fn();
         const stopImmediatePropagation = vi.fn();
         pointerHandlers.at(-1)?.handler({
-            target: {} as any,
+            target: browser.document.createElement('div'),
             stopPropagation,
             stopImmediatePropagation,
         });
@@ -479,6 +488,7 @@ describe('Popover (web)', () => {
 
     it('does not stop event propagation when consumeOutsidePointerDown is disabled (allows click-through)', async () => {
         const { Popover } = await import('./Popover');
+        browser = await installBrowserRuntimeForTests({ url: 'https://popover.test/' });
 
         vi.useFakeTimers();
 
@@ -517,7 +527,7 @@ describe('Popover (web)', () => {
         const stopPropagation = vi.fn();
         const stopImmediatePropagation = vi.fn();
         pointerHandlers.at(-1)?.handler({
-            target: {} as any,
+            target: browser.document.createElement('div'),
             stopPropagation,
             stopImmediatePropagation,
         });
@@ -526,7 +536,9 @@ describe('Popover (web)', () => {
         expect(stopImmediatePropagation).not.toHaveBeenCalled();
         expect(onRequestClose).not.toHaveBeenCalled();
 
-        vi.runOnlyPendingTimers();
+        await act(async () => {
+            await vi.runOnlyPendingTimersAsync();
+        });
         expect(onRequestClose).toHaveBeenCalledTimes(1);
         expect(pointerHandlers.at(-1)?.options).toBe(true);
     });
@@ -557,7 +569,7 @@ describe('Popover (web)', () => {
         expect((portal as any)?.props?.target).toBe(modalTarget);
     });
 
-    it('does not subscribe to scroll events when portaling into a modal/boundary target (avoids scroll jank on mobile web)', async () => {
+    it('tracks ancestor scroll in capture without a bubbling window-scroll subscription for modal portals', async () => {
         const { Popover } = await import('./Popover');
         const { ModalPortalTargetProvider } = await import('@/modal/portal/ModalPortalTarget');
 
@@ -582,7 +594,9 @@ describe('Popover (web)', () => {
         const calls = add?.mock?.calls ?? [];
         const events = calls.map((c: any[]) => c?.[0]).filter(Boolean);
         expect(events).toContain('resize');
-        expect(events).not.toContain('scroll');
+        const scrollSubscriptions = calls.filter((call: unknown[]) => call[0] === 'scroll');
+        expect(scrollSubscriptions).toHaveLength(1);
+        expect(scrollSubscriptions[0]?.[2]).toMatchObject({ capture: true, passive: true });
     });
 
     it('defaults to portaling to document.body even when a PopoverBoundaryProvider is present', async () => {
@@ -1255,6 +1269,7 @@ describe('Popover (web)', () => {
 
     it('fails open when pointerdown capture cannot resolve anchor/content DOM elements (does not swallow clicks)', async () => {
         const { Popover } = await import('./Popover');
+        browser = await installBrowserRuntimeForTests({ url: 'https://popover.test/' });
 
         mockPopoverContentRefKind = 'opaque';
 
@@ -1291,7 +1306,7 @@ describe('Popover (web)', () => {
         expect(pointerHandlers.length).toBeGreaterThan(0);
 
         pointerHandlers.at(-1)?.handler({
-            target: {} as any,
+            target: browser.document.createElement('div'),
             stopPropagation: vi.fn(),
             stopImmediatePropagation: vi.fn(),
         });

@@ -58,7 +58,7 @@ describe('installed external plugin Lane 05 Session Action', () => {
                 creationKey: 'lane05-plugin-session',
             }),
             recipe: {
-                execution: { machineId: 'machine-lane05-plugin', directory: '/workspace' },
+                execution: { machineId: 'machine-lane05-plugin', directory: { kind: 'path', path: '/workspace' } },
                 organization: { folderId: null, tagIds: [] },
                 agentTarget: {
                     kind: 'agent',

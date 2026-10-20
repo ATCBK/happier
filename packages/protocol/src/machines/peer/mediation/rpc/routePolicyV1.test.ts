@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1, ExternalActionExecutionAuthorizationV1Schema } from '../../../../actions/externalActionApi.js';
 import { API_TOKEN_FULL_GRANT_V1 } from '../../../../auth/apiTokenGrant.js';
-import { HOST_PRIVATE_PLUGIN_INSTALL_DECISION_RPC_METHOD } from '../../../../marketplace/internal.js';
 import {
   RPC_METHODS,
   SESSION_RPC_METHODS,
@@ -20,6 +19,22 @@ async function importRpcPolicy() {
 }
 
 describe('MachineRpcRoutePolicyV1', () => {
+  it('projects prepare-between only from finite Project worker and reviewed Service Move roots', async () => {
+    const { resolveMachineRpcExternalActionEffectV1: resolve } = await import('./routePolicyV1');
+    const binding = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'finite-root', binding: {
+      accountId: 'requester', custodianAccountId: 'owner', authentication: { kind: 'terminal', tokenEpoch: 1 },
+      serverIdentityId: 'home', machineId: 'worker', installationId: 'worker-installation',
+      actionId: 'projects.script.run', requestId: 'run', requestEnvelopeDigest: 'a'.repeat(43),
+      target: { kind: 'machine', machineId: 'worker' },
+    } }).binding;
+    for (const actionId of ['projects.script.run', 'projects.compute.exec', 'projects.service.relocate'] as const) {
+      expect(resolve(RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN, { ...binding, actionId })).toBe(actionId);
+    }
+    expect(resolve(RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN)).toBeNull();
+    expect(resolve(RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN, { ...binding, actionId: 'projects.open' })).toBeNull();
+    expect(resolve(RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN, { ...binding,
+      target: { kind: 'machine', machineId: 'foreign' } })).toBeNull();
+  });
   it('classifies Agent install job transports without promoting native mutations to direct routes', async () => {
     const { resolveMachineRpcRoutePolicy } = await import('./routePolicyV1');
     for (const method of [RPC_METHODS.DAEMON_AGENTS_INSTALL_START, RPC_METHODS.DAEMON_AGENTS_INSTALL_CANCEL,
@@ -111,6 +126,15 @@ describe('MachineRpcRoutePolicyV1', () => {
     }
     expect(resolve(RPC_METHODS.SESSION_SPAWN_NEW, binding)).not.toBe('session.agent.transition');
     expect(resolve(RPC_METHODS.STOP_SESSION)).not.toBe('session.agent.transition');
+  });
+  it('keeps physical Stop as the effect when Archive is the retained root', async () => {
+    const { resolveMachineRpcExternalActionEffectV1: resolve } = await import('./routePolicyV1');
+    const binding = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'archive-root', binding: {
+      accountId: 'requester', custodianAccountId: 'requester', authentication: { kind: 'account', tokenEpoch: 1 },
+      serverIdentityId: 'home', machineId: 'machine', installationId: 'installation', actionId: 'session.archive',
+      requestId: 'original', requestEnvelopeDigest: 'a'.repeat(43), target: { kind: 'machine', machineId: 'machine' },
+    } }).binding;
+    expect(resolve(RPC_METHODS.STOP_SESSION, binding)).toBe('session.stop');
   });
   it('admits versioned inactive goal wake only as its canonical Session Action', async () => {
     const { resolveMachineRpcRoutePolicy, resolveMachineRpcExternalActionEffectV1 } = await import('./routePolicyV1');
@@ -383,6 +407,7 @@ describe('MachineRpcRoutePolicyV1', () => {
     expect(protocol.resolveMachineRpcRoutePolicy(RPC_METHODS.SPAWN_HAPPY_SESSION)).toMatchObject({ sharedMachineAccess: 'custodian_only' });
     expect(protocol.resolveMachineRpcRoutePolicy(RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE)).toMatchObject({ sharedMachineAccess: 'custodian_only' });
     expect(protocol.resolveMachineRpcRoutePolicy(RPC_METHODS.DAEMON_SESSION_CREATION_PREPARE)).toMatchObject({ sharedMachineAccess: 'custodian_only' });
+    expect(protocol.resolveMachineRpcRoutePolicy(RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT)).toMatchObject({ sharedMachineAccess: 'use', routeClass: 'server_required', rpcClassification: 'internal_only' });
     expect(protocol.resolveMachineRpcRoutePolicy(RPC_METHODS.SESSION_FORK_PROVIDER_SAFE)).toMatchObject({ sharedMachineAccess: 'custodian_only' });
     expect(protocol.resolveMachineRpcRoutePolicy('not.registered')).toMatchObject({ sharedMachineAccess: 'custodian_only' });
   });
@@ -1110,25 +1135,17 @@ describe('MachineRpcRoutePolicyV1', () => {
     });
   });
 
-  it('routes the host-private plugin install decision directly without advertising it in the public RPC catalog', async () => {
+  it('does not classify the retired host-private plugin install decision route', async () => {
     expect(Object.values(RPC_METHODS)).not.toContain('daemon.plugins.install.review.decide');
 
     const protocol = await importRpcPolicy();
     expect(protocol).toHaveProperty('resolveMachineRpcRoutePolicy');
     if ('importError' in protocol) throw protocol.importError;
 
-    expect(protocol.resolveMachineRpcRoutePolicy(
-      HOST_PRIVATE_PLUGIN_INSTALL_DECISION_RPC_METHOD,
-    )).toMatchObject({
-      routeClass: 'direct_medium_risk_receipted',
-      rpcClassification: 'internal_only',
-      commandReceiptRequired: true,
-      scope: expect.objectContaining({
-        accountRequired: true,
-        machineRequired: true,
-        sessionRequired: false,
-        serverRequired: false,
-      }),
+    expect(protocol.resolveMachineRpcRoutePolicy('daemon.plugins.install.review.decide')).toMatchObject({
+      routeClass: 'server_required',
+      rpcClassification: 'advisory_unclassified',
+      serverRequiredReason: 'unclassified',
     });
   });
 
@@ -1537,7 +1554,7 @@ describe('MachineRpcRoutePolicyV1', () => {
     }
   });
 
-  it('identifies execution-run session RPC governance from A.12 ActionSpec bindings', async () => {
+  it('identifies attached and detached execution-run governance from A.12 ActionSpec bindings', async () => {
     const protocol = await importRpcPolicy();
     expect(protocol).toHaveProperty('resolveMachineRpcRoutePolicy');
     if ('importError' in protocol) throw protocol.importError;
@@ -1567,7 +1584,7 @@ describe('MachineRpcRoutePolicyV1', () => {
       scope: expect.objectContaining({
         accountRequired: true,
         machineRequired: true,
-        sessionRequired: true,
+        sessionRequired: false,
         serverRequired: true,
       }),
     });

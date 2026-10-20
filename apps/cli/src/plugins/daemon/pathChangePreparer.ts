@@ -1,6 +1,7 @@
 import { isReservedHappierPluginId } from '@happier-dev/protocol/plugins/plugin-id';
 import type { ManagedResourceDependencyV1, ManagedResourceDispositionV1 } from '@happier-dev/protocol';
 import { runPluginAuthorPhase } from '@/plugins/authoring/phaseLog';
+import { readGeneratedPluginUiArtifactsManifest } from '@/plugins/install/ui/generatedArtifacts';
 
 import {
   resolveLocalPathPluginSource,
@@ -39,6 +40,7 @@ import {
 import { bindPluginRuntimeSourceAuthority } from '@/plugins/runtime/sourceAuthority';
 import { isPluginDevelopmentDependencyInputPath } from '@/plugins/authoring/developmentDependencyInputs';
 import {
+  isPluginAuthorRootMaterialized,
   runPluginUiArtifactBuild,
   type PluginUiArtifactBuildResult,
 } from '@/plugins/authoring/toolchain';
@@ -82,12 +84,19 @@ async function buildOwnedPluginDevelopmentUiArtifacts(params: Readonly<{
   projectRoot: string;
   manifest?: Parameters<typeof runPluginUiArtifactBuild>[0]['manifest'];
   runPluginUiArtifactBuild?: RunPluginUiArtifactBuildBoundary;
-}>): Promise<void> {
+}>): Promise<Parameters<typeof projectPluginInstallationReview>[0]['uiArtifacts']> {
   const build = await (params.runPluginUiArtifactBuild ?? runPluginUiArtifactBuild)({
     projectRoot: params.projectRoot,
     ...(params.manifest ? { manifest: params.manifest } : {}),
   });
-  if (build.ok) return;
+  if (build.ok) {
+    if (!build.built) return { verification: 'unavailable', contributionIds: [] };
+    const artifacts = await readGeneratedPluginUiArtifactsManifest(params.projectRoot);
+    if (!artifacts) throw new DaemonPluginChangePreparationError(
+      'plugin_dev_ui_build_failed', 'Built plugin UI artifact inventory is unavailable',
+    );
+    return { verification: 'verified', contributionIds: artifacts.entries.map(entry => entry.artifactId) };
+  }
   // The change contract carries one failure string, not structured
   // diagnostics, so the author's file and line lead the text instead.
   throw new DaemonPluginChangePreparationError(
@@ -194,7 +203,7 @@ export function createDaemonPathPluginChangePreparer(params: Readonly<{
         );
       }
       const expectedPluginId = request.kind === 'development'
-        ? request.pluginId
+        ? request.pluginId ?? trustedDevelopmentPluginId ?? undefined
         : trustedDevelopmentPluginId ?? undefined;
       const entry = authoringSource.kind === 'code'
         ? authoringSource.entry
@@ -210,8 +219,11 @@ export function createDaemonPathPluginChangePreparer(params: Readonly<{
         throw new Error('Plugin development source did not resolve to a local path identity');
       }
       const changedPaths = request.kind === 'development' ? request.changedPaths : undefined;
+      const refreshDependencies = changedPaths?.some(isPluginDevelopmentDependencyInputPath) === true
+        || (request.kind === 'development' && typeof request.sdkRegistryOrigin === 'string');
       const prepareDependencies = (entry?.kind ?? 'packageRoot') === 'packageRoot'
-        && !isSourceOnlyDevelopmentBatch({ expectedPluginId, changedPaths });
+        && (refreshDependencies || (!isSourceOnlyDevelopmentBatch({ expectedPluginId, changedPaths })
+          && !await isPluginAuthorRootMaterialized(sourceRootPath)));
       const preparedRoot = await preparePluginDevelopmentRoot({
         sourceRootPath,
         prepareDependencies,
@@ -257,8 +269,11 @@ export function createDaemonPathPluginChangePreparer(params: Readonly<{
             `Plugin development source identity changed from '${expectedPluginId}' to '${projected.manifest.id}'`,
           );
         }
+        let uiArtifacts: Parameters<typeof projectPluginInstallationReview>[0]['uiArtifacts'] = {
+          verification: 'unavailable', contributionIds: [],
+        };
         if ((entry?.kind ?? 'packageRoot') === 'packageRoot') {
-          await buildOwnedPluginDevelopmentUiArtifacts({
+          uiArtifacts = await buildOwnedPluginDevelopmentUiArtifacts({
             projectRoot: preparedRoot.rootPath,
             ...(developmentAuthoringSource.kind === 'code' ? { manifest: projected.manifest } : {}),
             ...(params.runPluginUiArtifactBuild
@@ -325,7 +340,7 @@ export function createDaemonPathPluginChangePreparer(params: Readonly<{
             curation: { status: 'notApplicable' },
             updatePolicy: 'allowed',
           },
-          uiArtifacts: { verification: 'unavailable', contributionIds: [] },
+          uiArtifacts,
         });
         const installReviewPrincipal = derivePluginInstallReviewPrincipal(review);
         const priorPrincipalDigest = registrySnapshot.installReviewPrincipalDigestsByPluginId[projected.manifest.id];
@@ -386,7 +401,7 @@ export function createDaemonPathPluginChangePreparer(params: Readonly<{
           ...(existing ? { currentVersion: existing.install.manifestVersion } : {}),
           authorityExpansion,
           requiresReview,
-          ...(requiresReview ? { review } : {}),
+          review,
           cleanup: preparedRoot.cleanup,
         });
         return candidate;

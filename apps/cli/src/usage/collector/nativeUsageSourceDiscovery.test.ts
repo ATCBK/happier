@@ -23,6 +23,7 @@ import { createNativeUsageCaptureStore } from './nativeUsageCaptureState';
 import { readOrCreateDeviceLocalSecretStorage } from '@/daemon/deviceLocalSecretStorage';
 import { ExecutionBudgetRegistry } from '@/daemon/executionBudget/ExecutionBudgetRegistry';
 import { createUsageObservationPublisher } from '../createUsageObservationPublisher';
+import { UsageSourcesListV1Schema } from '@happier-dev/protocol/usage/usageSources';
 
 afterEach(() => { vi.unstubAllEnvs(); });
 
@@ -46,23 +47,33 @@ describe('native source metadata discovery', () => {
             const authority = { serverId: 'home', accountId: 'account', machineId: 'machine' };
             const storage = await readOrCreateDeviceLocalSecretStorage({ path: join(directory, 'device.key') });
             const store = createNativeUsageCaptureStore({ authority, storage, path: join(directory, 'capture.sealed') });
+            await mkdir(join(directory, 'projects', 'project'), { recursive: true });
+            // File metadata is enough: these deliberately invalid records must never be opened by discovery.
+            await writeFile(join(directory, 'projects', 'project', 'one.jsonl'), 'PRIVATE_INVALID_NATIVE_CONTENT');
+            await writeFile(join(directory, 'projects', 'project', 'two.jsonl'), 'PRIVATE_INVALID_NATIVE_CONTENT');
             const unavailable = async () => { throw new Error('Unconsented accounting access'); };
             const collector = createNativeUsageCollector({ authority, storage, store,
                 budgetRegistry: new ExecutionBudgetRegistry({ maxConcurrentExecutionRuns: null, maxConcurrentOneShotTasks: null }),
                 discoverSources: () => discoverNativeUsageSourceMetadata({ agents, account: { connectedServicesV2: [] },
                     activeServerId: 'home', activeServerDir: directory, signal: new AbortController().signal,
-                    resolveBoundary: async () => ({ externalSessions: bounded, occurrenceId: 'current', retirementSignal: retirement.signal, isCurrent: () => true }) }),
+                    resolveBoundary: async () => ({ catalogEntry: null, externalSessions: bounded, occurrenceId: 'current', retirementSignal: retirement.signal, isCurrent: () => true }) }),
                 resolveRoot: unavailable, readAccounting: unavailable, subscribeSource: unavailable,
                 publisher: { publish: unavailable }, deleteHistory: unavailable,
             });
             try {
                 const discovered = await collector.discover();
                 expect(discovered[0]).toMatchObject({ accountingSources: ['claude-assistant-usage', 'claude-sdk-result'], captureKind: 'from_logs' });
+                expect(discovered[0]).toMatchObject({ discoveredFileCount: 2, consent: 'disabled', pendingCount: 0 });
+                expect(UsageSourcesListV1Schema.parse({ sources: discovered }).sources[0].discoveredFileCount).toBe(2);
+                expect(discovered[0]).not.toHaveProperty('tokens');
+                expect(discovered[0]).not.toHaveProperty('sessionCount');
                 const state = await store.load();
                 expect(state.sources).toHaveLength(1);
                 expect(state.sources[0].agent).toEqual({ pluginId: ingestion.manifest.id, localId: 'claude' });
                 expect(state.sources[0]).toMatchObject({ accountingSources: ['claude-assistant-usage', 'claude-sdk-result'] });
                 expect(state.sources[0]).not.toHaveProperty('configuredSourceKey');
+                expect(state.sources[0]).not.toHaveProperty('discoveredFileCount');
+                expect((await collector.get())[0]).not.toHaveProperty('discoveredFileCount');
             } finally { await collector.dispose(); }
         } finally { await rm(directory, { recursive: true, force: true }); }
     });
@@ -106,7 +117,7 @@ describe('native source metadata discovery', () => {
             });
             const discoverSources = () => discoverNativeUsageSourceMetadata({ agents, account: { connectedServicesV2: [] },
                 activeServerId: 'home', activeServerDir: directory, signal: new AbortController().signal,
-                resolveBoundary: async () => ({ externalSessions: bounded, occurrenceId: 'current', retirementSignal: retirement.signal,
+                resolveBoundary: async () => ({ catalogEntry: null, externalSessions: bounded, occurrenceId: 'current', retirementSignal: retirement.signal,
                     isCurrent: () => !retirement.signal.aborted }),
             });
             const [before] = await discoverSources();
@@ -154,7 +165,7 @@ describe('native source metadata discovery', () => {
             const legacyKey = resolveExternalSessionsSourceKeyForDeclaration(legacyDeclaration, legacySource);
             expect(await readNativeUsageAccountingAtAdmission({ agents, agentId: 'pi',
                 source: legacySource, admittedSourceKey: legacyKey, activeServerDir: directory,
-                signal: new AbortController().signal, boundary: { externalSessions: bounded,
+                signal: new AbortController().signal, boundary: { catalogEntry: null, externalSessions: bounded,
                     occurrenceId: 'current', retirementSignal: retirement.signal, isCurrent: () => true },
             })).toEqual({ ok: false, code: 'unavailable' });
             const legacyId = deriveNativeUsageAccountingIdentity({ authority, storage, agent: captured.agent, sourceKey: legacyKey }).sourceRootKey;
@@ -173,19 +184,19 @@ describe('native source metadata discovery', () => {
                 resolveRoot: async () => { throw new Error('No root edit requested'); },
                 readAccounting: (source, signal) => readNativeUsageAccountingAtAdmission({ agents, agentId: 'pi',
                     source: source.source, admittedSourceKey: source.sourceKey, cursor: source.cursor,
-                    activeServerDir: directory, signal, boundary: { externalSessions: bounded, occurrenceId: 'current',
+                    activeServerDir: directory, signal, boundary: { catalogEntry: null, externalSessions: bounded, occurrenceId: 'current',
                         retirementSignal: retirement.signal, isCurrent: () => true } }),
                 subscribeSource: async (source, onChange, signal) => {
                     const resolved = await resolveNativeUsageSourceMetadata({ agents, agentId: 'pi', source: source.source,
                         admittedSourceKey: source.sourceKey, activeServerDir: directory, signal,
-                        boundary: { externalSessions: bounded, occurrenceId: 'current', retirementSignal: retirement.signal, isCurrent: () => true } });
+                        boundary: { catalogEntry: null, externalSessions: bounded, occurrenceId: 'current', retirementSignal: retirement.signal, isCurrent: () => true } });
                     const descriptor = resolved?.metadata.accountingSource;
                     if (!resolved || !descriptor) throw new Error('Source unavailable');
                     return await observation!.registerAccountingSource({ source: resolved.descriptor.source,
                         resource: { pluginId: source.agent.pluginId, agentLocalId: source.agent.localId,
                             occurrenceId: 'current', resourceKey: descriptor.resourceKey, retirementSignal: signal },
                         changeObservation: descriptor.changeObservation, watchFileChanges: descriptor.watchFileChanges,
-                        onChange });
+                        onChange: input => onChange(input.changedNativeSessionIds) });
                 },
                 publisher: createUsageObservationPublisher({ token: 'token', apiServerUrl: 'https://home.test',
                     emitLegacyUsageReport: () => false,
@@ -234,11 +245,13 @@ describe('native source metadata discovery', () => {
         }));
         const retirement = new AbortController();
         const contentAccess = () => { throw new Error('Native records must remain unopened without consent'); };
+        let discoveredFileCount: number | undefined;
         const contribution: AgentExternalSessionsContribution = {
             resolveSource: ({ source }) => ({ ok: true, value: {
                 source: { ...source, configDir: '/configured/claude' },
                 accountingSource: { rootPath: '/configured/claude', rootField: 'configDir', resourceKey: 'claude-root',
-                    changeObservation: 'watch_file_changes', watchFileChanges: { files: [], topologyDirectories: ['/configured/claude'] } },
+                    ...(discoveredFileCount === undefined ? {} : { discoveredFileCount }),
+                    changeObservation: 'watch_file_changes', watchFileChanges: { files: ['/configured/claude/a.jsonl', '/configured/claude/b.jsonl'], topologyDirectories: ['/configured/claude'] } },
             } }),
             listCandidates: contentAccess, resolveLinkIdentity: contentAccess, resolveLinkedIdentity: contentAccess,
             pageTranscript: contentAccess, readAfterTranscript: contentAccess, readAccounting: contentAccess,
@@ -249,14 +262,18 @@ describe('native source metadata discovery', () => {
             retirementSignal: retirement.signal, isCurrent: () => !retirement.signal.aborted,
             createInvocationExec: async () => createUnavailablePluginServices().exec,
         });
-        const sources = await discoverNativeUsageSourceMetadata({
+        const request = {
             agents, account: { connectedServicesV2: [] }, agentSettings: { claudeConfigDir: '/configured/claude' },
             activeServerId: 'home', activeServerDir: '/happier/home', signal: new AbortController().signal,
-            resolveBoundary: async () => ({ externalSessions: bounded, occurrenceId: 'current', retirementSignal: retirement.signal,
+            resolveBoundary: async () => ({ catalogEntry: null, externalSessions: bounded, occurrenceId: 'current', retirementSignal: retirement.signal,
                 isCurrent: () => !retirement.signal.aborted }),
-        });
+        };
+        const unwitnessed = await discoverNativeUsageSourceMetadata(request);
+        expect(unwitnessed[0]).not.toHaveProperty('discoveredFileCount');
+        discoveredFileCount = 2;
+        const sources = await discoverNativeUsageSourceMetadata(request);
         expect(sources).toEqual([expect.objectContaining({ agent: { pluginId: manifest.id, localId: 'claude' },
-            root: '/configured/claude', rootKind: 'default', supported: true, source: { kind: 'claudeConfig', configDir: '/configured/claude' } })]);
+            root: '/configured/claude', rootKind: 'default', supported: true, discoveredFileCount: 2, source: { kind: 'claudeConfig', configDir: '/configured/claude' } })]);
         expect(await discoverNativeUsageSourceMetadata({ agents, account: { connectedServicesV2: [] },
             activeServerId: 'home', activeServerDir: '/happier/home', signal: new AbortController().signal,
             // Plugin activation is an executable boundary and can be unavailable independently.
@@ -265,7 +282,7 @@ describe('native source metadata discovery', () => {
         retirement.abort();
         expect(await discoverNativeUsageSourceMetadata({ agents, account: { connectedServicesV2: [] },
             activeServerId: 'home', activeServerDir: '/happier/home', signal: new AbortController().signal,
-            resolveBoundary: async () => ({ externalSessions: bounded, occurrenceId: 'current', retirementSignal: retirement.signal,
+            resolveBoundary: async () => ({ catalogEntry: null, externalSessions: bounded, occurrenceId: 'current', retirementSignal: retirement.signal,
                 isCurrent: () => !retirement.signal.aborted }) })).toEqual([]);
     });
 });

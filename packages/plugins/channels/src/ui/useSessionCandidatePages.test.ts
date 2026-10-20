@@ -12,6 +12,7 @@ import { defineUiSurface, Text, useExecutePluginAction } from '@happier-dev/plug
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
 import type { RenderContext } from '@happier-dev/plugin-sdk/ui';
 import { useSessionCandidatePages } from './useSessionCandidatePages.js';
+import { createSessionCandidatePageFixture } from '../testkit/sessionCandidatePageFixture.js';
 
 describe('Channels Session candidate pages', () => {
   it('keeps an empty continuing page reachable and accepts valid candidate pages beyond the requested count', async () => {
@@ -34,9 +35,9 @@ describe('Channels Session candidate pages', () => {
         executeAction: async ({ action, input }): Promise<JsonValue> => {
           if (action !== 'session.list') throw new Error(`Unexpected host Action ${String(action)}`);
           const cursor = (input as Readonly<{ cursor?: string }>).cursor;
-          return cursor === undefined
+          return createSessionCandidatePageFixture(cursor === undefined
             ? { sessions: [], nextCursor: 'continuing-page' }
-            : { sessions: Array.from({ length: 101 }, (_, index) => ({ id: `session-${index}`, title: `Session ${index}` })), nextCursor: null };
+            : { sessions: Array.from({ length: 101 }, (_, index) => ({ id: `session-${index}`, title: `Session ${index}` })), nextCursor: null });
         },
       },
     });
@@ -74,22 +75,23 @@ describe('Channels Session candidate pages', () => {
     let startedSessionId: unknown;
     const executeAction = vi.fn(async ({ action, input }: PluginUiTestkitExecuteActionInput): Promise<JsonValue> => {
       if (action === 'session.list') {
-        expect(input).toMatchObject({ limit: 100, includeLastMessagePreview: false });
+        expect(input).toMatchObject({ view: 'awareness', limit: 100 });
+        expect(input).not.toHaveProperty('includeLastMessagePreview');
         const cursor = (input as Readonly<{ cursor?: string }>).cursor;
-        if (cursor === undefined) return {
+        if (cursor === undefined) return createSessionCandidatePageFixture({
           sessions: [{ id: 'recent-session', title: 'Recent Session' }],
           nextCursor: 'older-session-page',
-        };
+        });
         expect(cursor).toBe('older-session-page');
         pageTwoReads += 1;
         if (pageTwoReads === 1) return new Promise((_resolve, reject) => { rejectPage = reject; });
-        return {
+        return createSessionCandidatePageFixture({
           sessions: [
             { id: 'recent-session', title: 'Duplicate Session' },
             { id: 'older-session', title: 'Older Session' },
           ],
           nextCursor: null,
-        };
+        });
       }
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.conversationStart) {
         startedSessionId = ConversationStartInputV1Schema.parse(input).sessionId;
@@ -115,7 +117,7 @@ describe('Channels Session candidate pages', () => {
       await vi.waitFor(() => { expect(current().pages.loading).toBe(true); });
       expect(current().pages.candidates).toBe(firstCandidates);
       await act(async () => {
-        rejectPage?.(new PluginError('plugin_service_unavailable', 'Page unavailable'));
+        rejectPage?.(new PluginError({ code: 'plugin_service_unavailable', message: 'Page unavailable' }));
         await pageRequest;
       });
       expect(current().pages.unavailable).toBe(true);
@@ -141,6 +143,13 @@ describe('Channels Session candidate pages', () => {
       expect(startedSessionId).toBe('older-session');
       expect(current().start.execution.status).toBe('success');
       expect(pageTwoReads).toBe(2);
+      const namedCandidates = current().pages.candidates;
+      // Older hosts may ignore the requested view. An unmarked summary cannot
+      // prove the canonical display names were supplied for this picker.
+      executeAction.mockImplementationOnce(async () => ({ sessions: [{ id: 'legacy', title: 'Legacy summary' }] }));
+      await act(async () => { await current().pages.load(); });
+      expect(current().pages.unavailable).toBe(true);
+      expect(current().pages.candidates).toBe(namedCandidates);
     } finally {
       await fixture.dispose();
     }

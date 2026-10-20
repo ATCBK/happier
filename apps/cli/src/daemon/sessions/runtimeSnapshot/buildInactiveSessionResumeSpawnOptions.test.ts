@@ -1,19 +1,41 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { projectCurrentAgentSessionView } from '@happier-dev/agents';
 import {
+  buildQualifiedPluginContributionKey,
   deriveSessionCreationTagV1,
   SessionCreationCorrespondenceV1Schema,
 } from '@happier-dev/protocol';
-
-const { readAgentCatalogSnapshot } = vi.hoisted(() => ({
-  readAgentCatalogSnapshot: vi.fn(),
-}));
-
-vi.mock('@/agent/catalog/snapshot', () => ({
-  readAgentCatalogSnapshot,
-}));
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 
 import { buildInactiveSessionResumeSpawnOptions, resolveSessionPersistedRuntimeIdentity } from './buildInactiveSessionResumeSpawnOptions';
+
+const EXTERNAL_PLUGIN_ID = 'acme.inactive-resume';
+const EXTERNAL_LOCAL_AGENT_ID = 'acme-agent';
+const EXTERNAL_AGENT_ID = buildQualifiedPluginContributionKey({ pluginId: EXTERNAL_PLUGIN_ID, localId: EXTERNAL_LOCAL_AGENT_ID });
+let runtime: Awaited<ReturnType<typeof createAuthoredAdmittedPluginRuntimeFixture>>;
+
+beforeAll(async () => {
+  runtime = await createAuthoredAdmittedPluginRuntimeFixture({
+    controller: pluginReloadController,
+    runtimeOptions: { pluginIds: ['happier.agent.codex', 'happier.agent.claude', EXTERNAL_PLUGIN_ID] },
+    plugins: [{
+      manifest: createPluginManifestV2Fixture({ id: EXTERNAL_PLUGIN_ID, contributes: { agents: [{
+        id: EXTERNAL_LOCAL_AGENT_ID, title: 'Acme Agent', runtime: { kind: 'custom' }, primary: 'sessions',
+        capabilities: { sessions: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: true } },
+      }] } }),
+      files: { 'daemon.mjs': [
+        'export async function createRuntime() { throw new Error("Native Agent execution is outside inactive resume composition"); }',
+        `export function activate(api) { api.agents.register('${EXTERNAL_LOCAL_AGENT_ID}', createRuntime, { sessionRunnerFactory: { module: './daemon.mjs', export: 'createRuntime', runtimeApiVersion: 1 } }); }`,
+      ].join('\n') },
+    }],
+  });
+});
+afterAll(async () => {
+  try { await runtime?.dispose(); }
+  finally { await pluginReloadController.shutdown(); }
+});
 
 describe('buildInactiveSessionResumeSpawnOptions', () => {
   it.each(['custom-acp', 'happier.agent.custom-acp/custom-acp'])('retains the exact configured definition when resuming the declared %s Agent', (agentId) => {
@@ -43,24 +65,7 @@ describe('buildInactiveSessionResumeSpawnOptions', () => {
     expect(result).toMatchObject({ directoryKind: 'managed', approvedNewDirectoryCreation: false });
   });
 
-  beforeEach(() => {
-    readAgentCatalogSnapshot.mockReturnValue({
-      agentDefinitionsById: new Map(),
-      catalogEntriesById: {
-        codex: { id: 'codex', cliSubcommand: 'codex', vendorResumeSupport: 'supported' },
-        claude: { id: 'claude', cliSubcommand: 'claude', vendorResumeSupport: 'supported' },
-        'acme-agent': {
-          id: 'acme-agent',
-          cliSubcommand: 'acme-agent',
-          vendorResumeSupport: 'supported',
-        },
-      },
-    });
-  });
-
-  it.each(['codex', 'claude', 'acp:review-bot'] as const)('reconstructs current %s runtime while retaining immutable creation profile and Saved Secret provenance', async (currentAgentId) => {
-    const catalog = await vi.importActual<typeof import('@/agent/catalog/snapshot')>('@/agent/catalog/snapshot');
-    readAgentCatalogSnapshot.mockImplementation(catalog.readAgentCatalogSnapshot);
+  it.each(['codex', 'claude', 'acp:review-bot', 'uninitialized'] as const)('reconstructs current %s runtime while retaining immutable creation profile and Saved Secret provenance', (currentAgentId) => {
     const sessionCreationTag = deriveSessionCreationTagV1({
       callerCreationNamespace: 'user',
       creationKey: 'creation-resume',
@@ -98,7 +103,11 @@ describe('buildInactiveSessionResumeSpawnOptions', () => {
       },
     });
 
-    const metadata = projectCurrentAgentSessionView({
+    const birthMetadata = {
+      machineId: 'machine-1', path: '/home/coder/project',
+      sessionCreationCorrespondenceV1: { ...correspondence, futureField: 'ignored' },
+    };
+    const metadata = currentAgentId === 'uninitialized' ? birthMetadata : projectCurrentAgentSessionView({
       machineId: 'machine-1', path: '/home/coder/project', flavor: 'codex',
       sessionCreationCorrespondenceV1: { ...correspondence, futureField: 'ignored' },
     }, {
@@ -163,17 +172,17 @@ describe('buildInactiveSessionResumeSpawnOptions', () => {
       metadata: {
         machineId: 'machine-1',
         path: '/home/coder/project',
-        runtimeDescriptorV1: { v: 1, agentId: 'acme-agent', agent: {} },
+        runtimeDescriptorV1: { v: 1, agentId: EXTERNAL_AGENT_ID, agent: {} },
       },
     });
 
     expect(result).toMatchObject({
       backendTarget: {
         kind: 'backend',
-        backendId: 'acme-agent',
+        backendId: EXTERNAL_AGENT_ID,
         sourceKind: 'built_in',
       },
-      runtimeDescriptorV1: { v: 1, agentId: 'acme-agent', agent: {} },
+      runtimeDescriptorV1: { v: 1, agentId: EXTERNAL_AGENT_ID, agent: {} },
     });
   });
 

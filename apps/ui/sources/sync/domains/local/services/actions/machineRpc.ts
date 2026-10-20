@@ -28,6 +28,7 @@ export async function executeLocalServiceActionViaMachineRpc(
             serverId: input.serverId,
             method: RPC_METHODS.DAEMON_LOCAL_SERVICES_ACTIONS_EXECUTE,
             payload: payload.data,
+            signal: input.signal,
         });
         if (isRpcMethodNotFoundResult(raw)) {
             return { ok: false, reason: 'unavailable' };

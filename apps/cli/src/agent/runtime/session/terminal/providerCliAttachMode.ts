@@ -9,7 +9,7 @@ import { logger } from '@/ui/logger';
 import { SessionProviderCliAttachPrepareRequestV1Schema } from '@happier-dev/protocol/sessions/control/sessionProviderCliAttachPrepareV1';
 import { SessionTerminalMetadataSchema } from '@happier-dev/protocol/sessions/metadata/terminalMetadata';
 import type { SessionProviderCliAttachPrepareRequestV1, SessionProviderCliAttachPrepareResultV1 } from '@happier-dev/protocol';
-import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { configuration } from '@/configuration';
 import { createHerdrClient, type HerdrClient } from '@/integrations/herdr/client';
 import { HERDR_ACTION_TIMEOUT_MS, HERDR_STARTUP_TIMEOUT_MS } from '@/integrations/herdr/runtimeBinary';

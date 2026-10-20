@@ -1,10 +1,9 @@
-import { afterTx, inTx, type Tx } from "@/storage/inTx";
+import { afterTx, inTx, transactionResult, type Tx } from "@/storage/inTx";
 import { publishManagedRunWakeInTx } from '@/app/machines/managed/managedWake';
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { markAccountChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
 import { invalidateSessionReviewProjectionsForAutomationInTx } from './sessionReviewProjectionInvalidation';
 import { AUTOMATION_RUN_CANCELLED_AFTER_DISPATCH_PERMITTED_CAUSE_V1, AUTOMATION_RUN_CANCELLED_WHILE_RUNNING_CAUSE_V1 } from '@happier-dev/protocol/plugins/events/hostReferencesV1';
 import { AutomationRunResultStoredV1Schema, validateAutomationReplyHandoffStoredEnvelopeOuterForModeV1, type AutomationRunResultStoredV1 } from '@happier-dev/protocol/automations/event';
-import { deriveSessionCreationTagV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
 import { parseAutomationRunExecutionRecipeV1 } from '@happier-dev/protocol/automations/automationRunExecutionRecipeV1';
 import { sameAutomationAccountContentIdentityV1, sameAutomationAccountCurrentnessWitnessV1, type AutomationAccountCurrentnessWitnessV1 } from '@happier-dev/protocol/automations/automationAccountCurrentnessV1';
 import { type ExecutionRunWaitResult } from '@happier-dev/protocol/execution/runs/responseSchemas';
@@ -16,7 +15,7 @@ import { retireAutomationPendingInputInTx } from "@/app/session/pending/pendingM
 import { cancelWorkflowRunTx, WorkflowRunServiceError } from "@/app/workflows/workflowRunService";
 
 import { emitAutomationRunTransition } from "./automationChangePublisher";
-import { fetchAutomationAccountCurrentnessWitnessTx } from "./automationAccountCurrentness";
+import { captureAutomationAccountCurrentnessAfterPublication, fetchAutomationAccountCurrentnessWitnessTx } from "./automationAccountCurrentness";
 import { automationRunItemSelect } from "./automationPersistenceSelect";
 import {
     decodeAutomationRunCause,
@@ -25,10 +24,8 @@ import {
 } from "./automationRunCauseCodec";
 import { advanceAutomationScheduleCursorAfterTerminalRunTx } from "./automationRunQueueService";
 import { applyAutomationRunSucceededTx, applyAutomationRunTerminalEffectsTx } from "./automationRunSucceeded";
-import {
-    assertAutomationRunFailureDetailEnvelopeOuterForMode,
-    readRetainedAutomationRunExecutionTargetV2,
-} from "./automationStoredContentRead";
+import { assertAutomationRunFailureDetailEnvelopeOuterForMode } from "./automationStoredContentRead";
+import { deriveStrictNewSessionCreationTag, findStrictNewSessionByRunCreationTagTx, resolveAutomationPendingInputSessionIdTx } from "./automationRunSessionTarget";
 import {
     AUTOMATION_EXECUTION_DISPATCH_MAX_ATTEMPTS,
     type AutomationRunItem,
@@ -67,8 +64,8 @@ async function hasExpectedAutomationAccountCurrentnessTx(params: Readonly<{
 
 
 /**
- * Content-identity currentness for a decision taken *after* an external effect
- * already happened. `Account.seq` advances for every Account-scoped write,
+ * Content-identity currentness for reporting an outcome or refusing work.
+ * `Account.seq` advances for every Account-scoped write,
  * including the canonical Session creation a strict new-Session settlement
  * reports, the cancellation that produced the terminality being reported, and
  * any unrelated Account mutation, so a post-effect report's witness is
@@ -76,8 +73,8 @@ async function hasExpectedAutomationAccountCurrentnessTx(params: Readonly<{
  * content-key identity instead — through the one Protocol comparison owner:
  * they open no content under a new mode, and their write is still gated by the
  * exact machine/attempt/revision/lease Run CAS that authorized the effect. An
- * encryption-mode or content-key transition still refuses them. Pre-effect and
- * redispatch-permission decisions keep the exact witness.
+ * encryption-mode or content-key transition still refuses them. Admission and
+ * redispatch-permission decisions that release work keep the exact witness.
  */
 async function hasCompatibleAutomationAccountEncryptionTx(params: Readonly<{
     tx: Tx;
@@ -164,68 +161,6 @@ async function resolveProducedSessionIdTx(params: {
     return session ? session.id : null;
 }
 
-/**
- * A strict new-Session Run may retain only the Session created/rejoined by its
- * own immutable Automation creation identity. Other Run arms retain their
- * incumbent same-Account validation, so this does not alter predecessor flows.
- */
-function deriveStrictNewSessionCreationTag(params: {
-    originKind: string;
-    automationId: string | null;
-    runId: string;
-    executionInputEnvelope: string | null;
-}): string | null {
-    if (params.originKind !== "automation" || params.automationId === null) return null;
-    const recipe = parseAutomationRunExecutionRecipeV1(params.executionInputEnvelope);
-    if (recipe.kind !== "available" || recipe.recipe.target.kind !== "newSession") return null;
-    return deriveSessionCreationTagV1({
-        callerCreationNamespace: `automation:${params.automationId}`,
-        creationKey: `automation-run:${params.runId}`,
-    });
-}
-
-async function findStrictNewSessionByRunCreationTagTx(params: {
-    tx: any;
-    accountId: string;
-    originKind: string;
-    automationId: string | null;
-    runId: string;
-    executionInputEnvelope: string | null;
-}): Promise<{ id: string } | null> {
-    const sessionCreationTag = deriveStrictNewSessionCreationTag(params);
-    if (!sessionCreationTag) return null;
-    return await params.tx.session.findUnique({
-        where: {
-            accountId_tag: {
-                accountId: params.accountId,
-                tag: sessionCreationTag,
-            },
-        },
-        select: { id: true },
-    });
-}
-
-async function findNewSessionByRunCreationTagTx(params: {
-    tx: Tx;
-    accountId: string;
-    automationId: string;
-    runId: string;
-}): Promise<{ id: string } | null> {
-    const sessionCreationTag = deriveSessionCreationTagV1({
-        callerCreationNamespace: `automation:${params.automationId}`,
-        creationKey: `automation-run:${params.runId}`,
-    });
-    return await params.tx.session.findUnique({
-        where: {
-            accountId_tag: {
-                accountId: params.accountId,
-                tag: sessionCreationTag,
-            },
-        },
-        select: { id: true },
-    });
-}
-
 async function resolveStrictNewSessionProducedSessionIdTx(params: {
     tx: any;
     accountId: string;
@@ -257,55 +192,6 @@ async function resolveProducedSessionIdForRunTx(params: {
         : await resolveProducedSessionIdTx(params);
 }
 
-async function resolveAutomationPendingInputSessionIdTx(params: Readonly<{
-    tx: Tx;
-    accountId: string;
-    automationId: string;
-    runId: string;
-    executionInputEnvelope: string | null;
-    accountEncryptionMode: "plain" | "e2ee";
-    retainedV2OriginKind: "scheduled" | "manual" | undefined;
-}>): Promise<string | null> {
-    const recipe = parseAutomationRunExecutionRecipeV1(params.executionInputEnvelope);
-    if (recipe.kind === "available" && recipe.recipe.target.kind === "existingSession") {
-        const session = await params.tx.session.findFirst({
-            where: {
-                id: recipe.recipe.target.sessionId,
-                accountId: params.accountId,
-            },
-            select: { id: true },
-        });
-        return session?.id ?? null;
-    }
-    if (recipe.kind === "available" && recipe.recipe.target.kind === "newSession") {
-        const session = await findStrictNewSessionByRunCreationTagTx({
-            ...params,
-            originKind: "automation",
-        });
-        return session?.id ?? null;
-    }
-    if (recipe.kind === "available") return null;
-
-    const retainedTarget = params.executionInputEnvelope === null
-        || params.retainedV2OriginKind === undefined
-        ? null
-        : readRetainedAutomationRunExecutionTargetV2({
-            raw: params.executionInputEnvelope,
-            mode: params.accountEncryptionMode,
-            retainedV2OriginKind: params.retainedV2OriginKind,
-        });
-    if (retainedTarget?.kind === "existingSession") {
-        const session = await params.tx.session.findFirst({
-            where: { id: retainedTarget.sessionId, accountId: params.accountId },
-            select: { id: true },
-        });
-        return session?.id ?? null;
-    }
-    if (retainedTarget?.kind !== "newSession") return null;
-    const session = await findNewSessionByRunCreationTagTx(params);
-    return session?.id ?? null;
-}
-
 /**
  * Retains the exact Session produced by the Session-owned cross-machine start
  * before its source daemon receives the outer Socket acknowledgement. This
@@ -324,7 +210,7 @@ export async function retainAutomationRunProducedSession(params: {
 
     return await inTx(async (tx) => {
         await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, runIds: [params.runId] });
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (accountFence.status !== "ready") return null;
 
         const run = await tx.automationRun.findFirst({
@@ -400,7 +286,7 @@ export async function retainAutomationRunProducedSession(params: {
             accountId: params.accountId,
             runId: params.runId,
         });
-    });
+    }, { transactionClass: "automation-run-produced-session-retain" });
 }
 
 /**
@@ -485,7 +371,7 @@ async function publishFailedAutomationRunTx(params: {
             accountId: params.accountId,
             run: terminalRun as AutomationRunItem,
             previousState: params.previousState,
-            cursor,
+            cursor: cursor.resolveCursor(),
         });
     });
 
@@ -551,7 +437,7 @@ async function settleSucceededAutomationRun(params: {
 }): Promise<AutomationRunItem | null> {
     return await inTx(async (tx) => {
         await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, runIds: [params.runId] });
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (accountFence.status !== "ready") return null;
 
         const now = new Date();
@@ -758,7 +644,7 @@ async function settleSucceededAutomationRun(params: {
                 producedSessionId: producedSessionId ?? null,
             },
         });
-    });
+    }, { transactionClass: "automation-run-succeed" });
 }
 
 async function startAutomationRunInternal(params: {
@@ -771,7 +657,7 @@ async function startAutomationRunInternal(params: {
 }): Promise<AutomationRunStartResult | null> {
     return await inTx(async (tx) => {
         await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, runIds: [params.runId] });
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (accountFence.status !== "ready") return null;
 
         if (await readMachineAvailabilityStateInTx({
@@ -924,23 +810,22 @@ async function startAutomationRunInternal(params: {
         });
 
         const cursor = await markRunAutomationChanged({ tx, accountId: params.accountId, automationId: run.automationId });
-        const accountCurrentness = await fetchAutomationAccountCurrentnessWitnessTx(tx, params.accountId);
-        if (!accountCurrentness) {
-            // The running transition and its S witness are one contract: do
-            // not commit a start a worker cannot safely settle.
-            throw new Error("Automation Account currentness became unavailable during start");
-        }
+        const terminalCurrentness = captureAutomationAccountCurrentnessAfterPublication(tx, params.accountId);
         afterTx(tx, () => {
             emitAutomationRunTransition({
                 accountId: params.accountId,
                 run: run as AutomationRunItem,
                 previousState: "claimed",
-                cursor,
+                cursor: cursor.resolveCursor(),
             });
         });
 
-        return { run: run as AutomationRunItem, accountCurrentness };
-    });
+        return transactionResult(() => {
+            const accountCurrentness = terminalCurrentness.resolveResult();
+            if (!accountCurrentness) throw new Error("Automation Account currentness became unavailable during start publication");
+            return { run: run as AutomationRunItem, accountCurrentness };
+        });
+    }, { transactionClass: "automation-run-start" });
 }
 
 export async function startAutomationRun(params: {
@@ -1069,7 +954,7 @@ async function retainSupersededExecutionDispatchIdentityTx(params: Readonly<{
             accountId: params.accountId,
             run: run as AutomationRunItem,
             previousState: "outcome_uncertain",
-            cursor,
+            cursor: cursor.resolveCursor(),
         });
     });
     return run as AutomationRunItem;
@@ -1090,7 +975,7 @@ export async function settleAutomationExecutionDispatch(params: Readonly<{
 }>): Promise<AutomationRunItem | null> {
     return await inTx(async (tx) => {
         await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, runIds: [params.runId] });
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (accountFence.status !== "ready") return null;
         // `started` and `outcomeUnknown` both report after the external start
         // effect may have happened. An unrelated Account write that moved only
@@ -1262,11 +1147,11 @@ export async function settleAutomationExecutionDispatch(params: Readonly<{
                 accountId: params.accountId,
                 run: run as AutomationRunItem,
                 previousState: "running",
-                cursor,
+                cursor: cursor.resolveCursor(),
             });
         });
         return run as AutomationRunItem;
-    });
+    }, { transactionClass: "automation-execution-dispatch-settle" });
 }
 
 /** Lease recovery may classify a committed dispatch as ambiguous, never retry it. */
@@ -1357,7 +1242,7 @@ export async function markAbandonedAutomationExecutionDispatchOutcomeUnknownTx(p
             accountId: params.accountId,
             run: run as AutomationRunItem,
             previousState: params.state,
-            cursor,
+            cursor: cursor.resolveCursor(),
         });
     });
     return run as AutomationRunItem;
@@ -1478,7 +1363,7 @@ async function failAutomationRunInternal(params: {
 }): Promise<AutomationRunItem | null> {
     return await inTx(async (tx) => {
         await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, runIds: [params.runId] });
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (accountFence.status !== "ready") return null;
 
         const now = new Date();
@@ -1597,28 +1482,20 @@ async function failAutomationRunInternal(params: {
                     accountId: params.accountId,
                     run: run as AutomationRunItem,
                     previousState: cancelledRun.state,
-                    cursor,
+                    cursor: cursor.resolveCursor(),
                 });
             });
             return run as AutomationRunItem;
         }
-        // A `running` failure reports a post-start outcome: the start's target
-        // effect and any unrelated Account write may have advanced
-        // `Account.seq` past S, so it compares encryption identity under the
-        // same exact Run CAS as the success settlement. A `claimed` failure is
-        // a pre-effect decision — nothing has started — and keeps the exact
-        // claim witness.
-        if (!await (previousRun.state === "running"
-            ? hasCompatibleAutomationAccountEncryptionTx({
-                tx,
-                accountId: params.accountId,
-                expected: params.accountCurrentness,
-            })
-            : hasExpectedAutomationAccountCurrentnessTx({
-                tx,
-                accountId: params.accountId,
-                expected: params.accountCurrentness,
-            }))) {
+        // Failure never releases target work. Both a post-start outcome and a
+        // pre-start refusal must survive unrelated Account publications;
+        // encryption identity protects the detail, while the exact Run claim
+        // and CAS below retain settlement authority.
+        if (!await hasCompatibleAutomationAccountEncryptionTx({
+            tx,
+            accountId: params.accountId,
+            expected: params.accountCurrentness,
+        })) {
             return null;
         }
 
@@ -1688,7 +1565,7 @@ async function failAutomationRunInternal(params: {
             now,
             machineId: params.machineId,
         });
-    });
+    }, { transactionClass: "automation-run-fail" });
 }
 
 export async function failAutomationRun(params: {
@@ -1697,11 +1574,9 @@ export async function failAutomationRun(params: {
     machineId: string;
     attempt: number;
     /**
-     * S: the post-start witness echoed unchanged from the successful start.
-     * A `running` failure compares Account encryption identity against it —
-     * not the exact sequence, which the reported effect itself may have
-     * advanced; a `claimed` (pre-start) failure keeps the exact claim
-     * witness. Either way the exact Run CAS owns whose report is accepted.
+     * C before start or S after start. Failure compares Account encryption
+     * identity, not the change-feed sequence: it releases no target work.
+     * The exact Run CAS owns whose report is accepted.
      */
     accountCurrentness: AutomationAccountCurrentnessWitnessV1;
     producedSessionId?: string | null;
@@ -1883,7 +1758,7 @@ export async function publishCancelledAutomationRunsTx(params: Readonly<{
     results: readonly CancelledAutomationRunTxResult[];
 }>): Promise<void> {
     const automationIds = [...new Set(params.results.map((result) => result.run.automationId))];
-    const cursorByAutomationId = new Map<string, number>();
+    const cursorByAutomationId = new Map<string, AccountChangePublication>();
     for (const automationId of automationIds) {
         cursorByAutomationId.set(automationId, await markRunAutomationChanged({
             tx: params.tx,
@@ -1899,7 +1774,7 @@ export async function publishCancelledAutomationRunsTx(params: Readonly<{
                 accountId: params.accountId,
                 run: result.run,
                 previousState: result.previousState,
-                cursor,
+                cursor: cursor.resolveCursor(),
                 ...(result.transitionCause ? { transitionCause: result.transitionCause } : {}),
             });
         }
@@ -1913,7 +1788,7 @@ export async function cancelAutomationRun(params: {
 }): Promise<AutomationRunItem | null> {
     return await inTx(async (tx) => {
         await acquireWorkflowPublicationLocksInTx(tx, { accountId: params.accountId, runIds: [params.runId] });
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (accountFence.status !== "ready") return null;
         const previousRun = await fetchRunForAccount({
             tx,
@@ -1954,7 +1829,8 @@ export async function cancelAutomationRun(params: {
         });
         return result.run;
     }, {
-        // Cancellation retires Session pending input and participates in Workflow lifecycle watcher admission.
-        isolationLevel: "Serializable",
+        // Publication locks and Run/pending-input CAS protect cancellation and watcher admission.
+        isolationLevel: "ReadCommitted",
+        transactionClass: "automation-run-cancel",
     });
 }

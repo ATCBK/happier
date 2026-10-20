@@ -78,10 +78,9 @@ import {
 import {
   HAPPIER_FOREGROUND_AGENT_RUNTIME_ADMISSION_FILE_ENV_KEY,
 } from '@/daemon/agentRuntime/foregroundAdmissionContract';
-import {
-  isAgentSessionContinuationUnreachableError,
-  SESSION_RUNNER_EXIT_CODES,
-} from '@/session/shared/spawnSessionContract';
+import { HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE_ENV_KEY } from '@/daemon/agentRuntime/sessionBridgeAuthorization';
+import { reportSessionRunnerFailure } from './resolveSessionRunnerFailureExitCode';
+import { projectResolvedAgentBackendTarget } from '@/session/creation/resolveSessionCreationAgentTarget';
 
 type CommonBackendRunOptions = ParsedSessionStartArgs & {
   credentials: StoredCredentials;
@@ -178,17 +177,39 @@ export async function runBackendSessionCliCommand<Extra extends Record<string, u
   recordStartupPhase('entered');
   return withSessionRunnerOwnership(async () => {
     let releaseForegroundAdmission: (() => void | Promise<void>) | null = null;
+    let restoreForegroundRuntimeEnvironment: (() => void) | null = null;
+    const applyForegroundRuntimeEnvironment = (claim: Readonly<{
+      bootstrapFilePath: string;
+      authorityFilePath: string;
+    }>): void => {
+      const environment = {
+        [HAPPIER_AGENT_RUNTIME_RUNNER_BOOTSTRAP_FILE_ENV_KEY]: claim.bootstrapFilePath,
+        [HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE_ENV_KEY]: claim.authorityFilePath,
+      };
+      if (!restoreForegroundRuntimeEnvironment) {
+        const previous = Object.keys(environment).map(key => [key, process.env[key]] as const);
+        restoreForegroundRuntimeEnvironment = () => {
+          for (const [key, value] of previous) {
+            if (value === undefined) delete process.env[key];
+            else process.env[key] = value;
+          }
+        };
+      }
+      Object.assign(process.env, environment);
+    };
     const cleanupForegroundAdmission = async (): Promise<void> => {
       const cleanup = releaseForegroundAdmission;
       releaseForegroundAdmission = null;
-      if (!cleanup) return;
       try {
-        await cleanup();
+        await cleanup?.();
       } catch (error) {
         void error;
         logger.warn('[session] Foreground admission cleanup failed', {
           error: 'foreground_admission_cleanup_failed',
         });
+      } finally {
+        restoreForegroundRuntimeEnvironment?.();
+        restoreForegroundRuntimeEnvironment = null;
       }
     };
 
@@ -492,9 +513,9 @@ Provider CLI Options:
             directory:
               parsed.directory ?? resolveRequestedSessionDirectory(),
             agentId: runtimeAuthorityAgentId,
-            backendTarget: readBackendTargetRefV2(
-              modelSelectionBackendTargetInput,
-            ),
+            backendTarget: agentTarget
+              ? projectResolvedAgentBackendTarget(agentTarget, runtimeAuthorityAgentId)
+              : readBackendTargetRefV2(modelSelectionBackendTargetInput),
             ...(agentTarget ? { agentTarget } : {}),
             ...(runtimeDescriptorV1 ? { runtimeDescriptorV1 } : {}),
             ...(selectedProfile ? { profileId: selectedProfile.id } : {}),
@@ -527,6 +548,15 @@ Provider CLI Options:
             ...(params.context.signal ? { signal: params.context.signal } : {}),
           });
           if (!admission.ok) {
+            if (admission.error.code === 'project_agent_launch_refused') {
+              const reason = admission.error.reason;
+              const recovery = reason === 'child_required'
+                ? 'Open this Project in its Devcontainer child.'
+                : reason === 'project_setup_consent_required' || reason === 'project_setup_effect_changed'
+                  ? 'Review this Project’s setup before starting the Agent.'
+                  : 'Review this Project’s setup and native environment before trying again.';
+              throw new Error(`Project launch refused (${reason}). ${recovery}`);
+            }
             throw new DirectProviderLaunchError(admission.error);
           }
           return Object.freeze({
@@ -582,6 +612,7 @@ Provider CLI Options:
           }).catch(() => undefined);
         };
         releaseForegroundAdmission = releaseActiveForegroundAdmission;
+        applyForegroundRuntimeEnvironment(foregroundAdmissionClaim);
       }
 
       let profileEnvironmentVariables: Record<string, string> = {};
@@ -914,6 +945,7 @@ Provider CLI Options:
               );
             }
             foregroundAdmissionClaim = retryAdmission.claim;
+            applyForegroundRuntimeEnvironment(foregroundAdmissionClaim);
             claimed = await claim();
             if (!claimed.ok && claimed.profileSecretRecovery) {
               throw new DirectProviderLaunchError(claimed.error);
@@ -990,8 +1022,9 @@ Provider CLI Options:
           {
             agentRuntimeRunnerBootstrapFilePath:
               foregroundAdmissionClaim.bootstrapFilePath,
-            agentRuntimeDaemonServiceAuthorityFilePath:
-              foregroundAdmissionClaim.authorityFilePath,
+            get agentRuntimeDaemonServiceAuthorityFilePath() {
+              return foregroundAdmissionClaim?.authorityFilePath;
+            },
           },
         );
       } else {
@@ -1001,11 +1034,7 @@ Provider CLI Options:
         );
       }
     } catch (error) {
-      logger.fatal(error);
-      const exitCode =
-        isAgentSessionContinuationUnreachableError(error)
-          ? SESSION_RUNNER_EXIT_CODES.CONTINUATION_UNREACHABLE
-          : 1;
+      const exitCode = reportSessionRunnerFailure(error);
       const rawLines = error instanceof DirectProviderLaunchError
         ? presentProviderCliRefusal(error.providerError)
         : [error instanceof Error ? error.message : 'Unknown error'];

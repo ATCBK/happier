@@ -18,6 +18,8 @@ import {
   SessionDraftReadResponseV1Schema,
   SessionDraftPrivatePayloadV1Schema,
   SessionDraftDocumentV1Schema,
+  SessionDraftRecordV1Schema,
+  SessionDraftStoredContentEnvelopeV1StoredSchema,
 } from './sessionDrafts.js';
 import { SyncedSessionAuthoringFieldIdV1Schema } from '../sessions/authoring/index.js';
 import { OpenProjectDraftSelectionV1Schema, ProjectOpenDraftDocumentV2StoredSchema } from '../projects/openProjectDraftV1.js';
@@ -27,7 +29,7 @@ import {
   SESSION_DRAFT_V2_ROUTE_READ,
   SESSION_DRAFT_V2_SOCKET_EVENT,
   CanonicalSessionDraftAddressV2Schema,
-  SessionDiscussionDraftDocumentV2Schema,
+  DiscussionDraftDocumentV2Schema,
   SessionDraftAddressV2Schema,
   SessionDraftChangeHintV2Schema,
   SessionDraftListRequestV2Schema,
@@ -35,8 +37,11 @@ import {
   SessionDraftPrivatePayloadV2Schema,
   SessionDraftStoredContentEnvelopeV2Schema,
   SessionDraftReadRequestV2Schema,
+  SessionDraftRecordV2Schema,
+  SessionDraftStoredContentEnvelopeV2StoredSchema,
   canonicalSessionDraftAddressV2,
   isSessionDraftAddressV1,
+  isAccountOwnedDraftAddressV2,
   parseCanonicalSessionDraftAddressV2,
 } from './sessionDraftsV2.js';
 
@@ -70,6 +75,44 @@ function discussionDocument(kind: 'discussion' | 'newDiscussion') {
 }
 
 describe('session draft V2 addresses', () => {
+  it('isolates keyed new Discussion drafts without aliasing the retained singleton', () => {
+    const draftId = '00000000-0000-4000-8000-00000000000a';
+    const address = { kind: 'newDiscussion' as const, draftId };
+    const parsed = SessionDraftAddressV2Schema.safeParse(address);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) throw new Error('Expected a keyed new Discussion address');
+    expect(parsed.data).toEqual(address);
+    const canonical = `new-discussion/${draftId}`;
+    expect(canonicalSessionDraftAddressV2(parsed.data)).toBe(canonical);
+    expect(parseCanonicalSessionDraftAddressV2(canonical)).toEqual(address);
+    expect(isAccountOwnedDraftAddressV2(parsed.data)).toBe(true);
+    expect(SessionDraftPrivatePayloadV2Schema.parse({ v: 2, address, document: discussionDocument('newDiscussion') }).address)
+      .toEqual(address);
+    expect(SessionDraftAddressV1Schema.safeParse(address).success).toBe(false);
+    expect(SessionDraftAddressV2Schema.safeParse({ ...address, draftId: 'not-a-uuid' }).success).toBe(false);
+    for (const invalid of ['new-discussion/', 'new-discussion/not-a-uuid', `${canonical}/extra`,
+      `new-discussion/%30${draftId.slice(1)}`]) {
+      expect(parseCanonicalSessionDraftAddressV2(invalid)).toBeNull();
+    }
+    expect(canonicalSessionDraftAddressV2({ kind: 'newDiscussion' })).toBe('new-discussion');
+    expect(parseCanonicalSessionDraftAddressV2('new-discussion')).toEqual({ kind: 'newDiscussion' });
+  });
+
+  it('addresses Discussion drafts under the captured Account without a Session', () => {
+    const existing = SessionDraftAddressV2Schema.safeParse({ kind: 'discussion', discussionId: 'discussion-a' });
+    const creating = SessionDraftAddressV2Schema.safeParse({ kind: 'newDiscussion' });
+    expect(existing.success).toBe(true);
+    expect(creating.success).toBe(true);
+    if (!existing.success || !creating.success) return;
+    expect(canonicalSessionDraftAddressV2(existing.data)).toBe('discussion/discussion-a');
+    expect(canonicalSessionDraftAddressV2(creating.data)).toBe('new-discussion');
+    expect(parseCanonicalSessionDraftAddressV2('discussion/discussion-a')).toEqual(existing.data);
+    expect(parseCanonicalSessionDraftAddressV2('new-discussion')).toEqual(creating.data);
+    expect(isAccountOwnedDraftAddressV2(existing.data)).toBe(true);
+    expect(isAccountOwnedDraftAddressV2(creating.data)).toBe(true);
+    expect(SessionDraftPrivatePayloadV1Schema.safeParse({ v: 2, address: existing.data, document: discussionDocument('discussion') }).success).toBe(false);
+  });
+
   it('projects retired fields inside retained known authoring values before catalog validation', () => {
     const canonicalTarget = { kind: 'machine', target: { serverId: 'home-a', machineId: 'machine-a' } };
     const payload = { v: 2, address: { kind: 'newSession', draftId: '00000000-0000-4000-8000-00000000000a' },
@@ -151,8 +194,8 @@ describe('session draft V2 addresses', () => {
       { kind: 'newSession', draftId: '00000000-0000-4000-8000-00000000000a' },
       { kind: 'session', sessionId: 'session-1' },
       { kind: 'run', sessionId: 'session-1', runId: 'run-1' },
-      { kind: 'discussion', sessionId: 'session-1', discussionId: 'disc-1' },
-      { kind: 'newDiscussion', sessionId: 'session-1' },
+      { kind: 'discussion', discussionId: 'disc-1' },
+      { kind: 'newDiscussion', },
     ];
     for (const address of addresses) {
       expect(SessionDraftAddressV2Schema.safeParse(address).success).toBe(true);
@@ -168,18 +211,18 @@ describe('session draft V2 addresses', () => {
     })).toBe('new-session/00000000-0000-4000-8000-00000000000a');
     expect(canonicalSessionDraftAddressV2({ kind: 'run', sessionId: 's/1', runId: 'r 1' }))
       .toBe('session/s%2F1/run/r%201');
-    expect(canonicalSessionDraftAddressV2({ kind: 'discussion', sessionId: 's1', discussionId: 'd1' }))
-      .toBe('session/s1/discussion/d1');
-    expect(canonicalSessionDraftAddressV2({ kind: 'newDiscussion', sessionId: 's1' }))
-      .toBe('session/s1/new-discussion');
+    expect(canonicalSessionDraftAddressV2({ kind: 'discussion', discussionId: 'd1' }))
+      .toBe('discussion/d1');
+    expect(canonicalSessionDraftAddressV2({ kind: 'newDiscussion', }))
+      .toBe('new-discussion');
   });
 
   it('round-trips every canonical address and rejects non-canonical strings', () => {
     const addresses = [
       { kind: 'session', sessionId: 'a/b' },
       { kind: 'run', sessionId: 'a/b', runId: 'c d' },
-      { kind: 'discussion', sessionId: 's1', discussionId: 'd1' },
-      { kind: 'newDiscussion', sessionId: 's1' },
+      { kind: 'discussion', discussionId: 'd1' },
+      { kind: 'newDiscussion', },
     ] as const;
     for (const address of addresses) {
       const canonical = canonicalSessionDraftAddressV2(address);
@@ -203,23 +246,36 @@ describe('session draft V2 addresses', () => {
 
   it('keeps the new-discussion discriminator disjoint from any admitted discussion id', () => {
     const spoof = canonicalSessionDraftAddressV2({
-      kind: 'discussion',
-      sessionId: 's1',
-      discussionId: 'new-discussion',
+      kind: 'discussion', discussionId: 'new-discussion',
     });
-    expect(spoof).toBe('session/s1/discussion/new-discussion');
-    expect(parseCanonicalSessionDraftAddressV2('session/s1/new-discussion'))
-      .toEqual({ kind: 'newDiscussion', sessionId: 's1' });
+    expect(spoof).toBe('discussion/new-discussion');
+    expect(parseCanonicalSessionDraftAddressV2('new-discussion'))
+      .toEqual({ kind: 'newDiscussion', });
   });
 
   it('classifies V1 addresses for epoch-scoped readers', () => {
     expect(isSessionDraftAddressV1({ kind: 'session', sessionId: 's1' })).toBe(true);
     expect(isSessionDraftAddressV1({ kind: 'run', sessionId: 's1', runId: 'r1' })).toBe(false);
-    expect(isSessionDraftAddressV1({ kind: 'newDiscussion', sessionId: 's1' })).toBe(false);
+    expect(isSessionDraftAddressV1({ kind: 'newDiscussion', })).toBe(false);
   });
 });
 
 describe('strict V1 isolation', () => {
+  it.each([
+    { epoch: 'V1', recordSchema: SessionDraftRecordV1Schema, storedEnvelopeSchema: SessionDraftStoredContentEnvelopeV1StoredSchema,
+      content: { t: 'encrypted', c: 'ciphertext' } },
+    { epoch: 'V2', recordSchema: SessionDraftRecordV2Schema, storedEnvelopeSchema: SessionDraftStoredContentEnvelopeV2StoredSchema,
+      content: { t: 'encrypted', v: 2, c: 'ciphertext' } },
+  ])('keeps $epoch wire records strict while projecting stored envelope fields', ({ recordSchema, storedEnvelopeSchema, content }) => {
+    const record = { address: { kind: 'newSession', draftId: '00000000-0000-4000-8000-00000000000a' },
+      revision: 1, content, createdAt: 1, updatedAt: 2 };
+    const retainedContent = { ...content, retired: true };
+    expect(recordSchema.parse(record)).toEqual(record);
+    expect(storedEnvelopeSchema.parse(retainedContent)).toEqual(content);
+    expect(recordSchema.safeParse({ ...record, content: retainedContent }).success).toBe(false);
+    expect(storedEnvelopeSchema.safeParse({ ...retainedContent, c: 7 }).success).toBe(false);
+  });
+
   it('keeps every post-0.2 authoring field out of the released V1 document', () => {
     const currentOnlyFields = {
       executionTarget: { kind: 'machine', target: { serverId: 'home-a', machineId: 'machine-a' } },
@@ -543,40 +599,50 @@ describe('V2 private payload correspondence', () => {
   it('binds discussion addresses to the human document target of the same kind', () => {
     expect(SessionDraftPrivatePayloadV2Schema.safeParse({
       v: 2,
-      address: { kind: 'discussion', sessionId: 's1', discussionId: 'd1' },
+      address: { kind: 'discussion', discussionId: 'd1' },
       document: discussionDocument('discussion'),
     }).success).toBe(true);
     expect(SessionDraftPrivatePayloadV2Schema.safeParse({
       v: 2,
-      address: { kind: 'newDiscussion', sessionId: 's1' },
+      address: { kind: 'newDiscussion', },
       document: discussionDocument('discussion'),
     }).success).toBe(false);
     expect(SessionDraftPrivatePayloadV2Schema.safeParse({
       v: 2,
-      address: { kind: 'discussion', sessionId: 's1', discussionId: 'd1' },
+      address: { kind: 'discussion', discussionId: 'd1' },
       document: runDocument('r1'),
     }).success).toBe(false);
   });
 });
 
 describe('human discussion draft document', () => {
+  it('keeps a revision-qualified passage inside the same private draft payload', () => {
+    const passage = { ref: { kind: 'doc', artifactId: 'notes', serverId: 'home-a' },
+      revision: { headerVersion: 2, bodyVersion: 4 }, range: { start: 12, end: 18 }, quote: 'second' };
+    const document = { ...discussionDocument('newDiscussion'), passage: field(passage) };
+    expect(SessionDraftPrivatePayloadV2Schema.parse({ v: 2, address: { kind: 'newDiscussion' }, document }))
+      .toMatchObject({ document: { passage: { value: passage } } });
+    expect(DiscussionDraftDocumentV2Schema.safeParse({ ...document, passage: field({ ...passage, ref: { ...passage.ref, serverId: undefined } }) }).success)
+      .toBe(false);
+  });
+
   it('carries only human composer fields and a new-discussion title', () => {
-    expect(SessionDiscussionDraftDocumentV2Schema.safeParse({
+    expect(DiscussionDraftDocumentV2Schema.safeParse({
       ...discussionDocument('newDiscussion'),
       title: { mutationId: titleMutationId, value: 'Release plan' },
     }).success).toBe(true);
-    expect(SessionDiscussionDraftDocumentV2Schema.safeParse({
+    expect(DiscussionDraftDocumentV2Schema.safeParse({
       ...discussionDocument('discussion'),
       title: { mutationId: titleMutationId, value: 'Release plan' },
     }).success).toBe(false);
   });
 
   it('rejects Agent routing, delivery and attachment bytes in a human document', () => {
-    expect(SessionDiscussionDraftDocumentV2Schema.safeParse({
+    expect(DiscussionDraftDocumentV2Schema.safeParse({
       ...discussionDocument('discussion'),
       target: { kind: 'discussion', routing: {} },
     }).success).toBe(false);
-    expect(SessionDiscussionDraftDocumentV2Schema.safeParse({
+    expect(DiscussionDraftDocumentV2Schema.safeParse({
       ...discussionDocument('discussion'),
       composer: {
         ...discussionDocument('discussion').composer,

@@ -31,6 +31,7 @@ import {
 } from "./credentialSelectionRecord";
 import { readRunnerActivationAuthentication } from "./activationAuthentication";
 import { readRunnerConsentDisplayFactsInTx } from "./runnerConsentDisplayFacts";
+import { acquireRunnerActivationLockInTx } from './activationLock';
 
 type ProviderProjectionInput = Readonly<{
     custodianAccountId: string;
@@ -72,7 +73,8 @@ async function readFrozenSelection(input: Readonly<{
             if (!initial || initial.creatorAccountId !== input.creatorAccountId) {
                 return { status: "unavailable", reason: "activation_unavailable" } as const;
             }
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, initial.creatorAccountId);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, initial.creatorAccountId, "content");
+            await acquireRunnerActivationLockInTx(tx, input.activationId);
             const fenced = await tx.ephemeralRunnerActivation.findUnique({ where: { id: input.activationId } });
             if (!fenced || fenced.creatorAccountId !== input.creatorAccountId) {
                 return { status: "unavailable", reason: "activation_unavailable" } as const;
@@ -172,7 +174,8 @@ async function freezeSelection(input: Readonly<{
             if (!initial || initial.creatorAccountId !== input.creatorAccountId) {
                 return { v: 1, status: "unavailable", reason: "activation_unavailable" } as const;
             }
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, initial.creatorAccountId);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, initial.creatorAccountId, "content");
+            await acquireRunnerActivationLockInTx(tx, input.activationId);
             const fenced = await tx.ephemeralRunnerActivation.findUnique({ where: { id: input.activationId } });
             if (!fenced || fenced.creatorAccountId !== input.creatorAccountId) {
                 return { v: 1, status: "unavailable", reason: "activation_unavailable" } as const;
@@ -383,7 +386,8 @@ async function readCurrentSelection(input: Readonly<{
             if (!initial || initial.creatorAccountId !== input.creatorAccountId) {
                 return { ok: false, reason: "activation_unavailable" } as const;
             }
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, initial.creatorAccountId);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, initial.creatorAccountId, "content");
+            await acquireRunnerActivationLockInTx(tx, input.activationId);
             const fenced = await tx.ephemeralRunnerActivation.findUnique({ where: { id: input.activationId } });
             if (!fenced || fenced.creatorAccountId !== input.creatorAccountId) {
                 return { ok: false, reason: "activation_unavailable" } as const;

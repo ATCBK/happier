@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildProjectAccountRowPhysicalKeyV1, type ProjectAccountRowKeyV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { SESSION_FOLLOW_CREATION_PREFERENCES_ACCOUNT_KEY_V1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 
 import {
     AccountScopedKvReservedKeyError,
@@ -11,6 +12,12 @@ import {
 } from "./accountScopedKv";
 
 describe("AccountScopedKv namespace classifier", () => {
+    it('keeps Follow creation preferences at their private singleton owner', () => {
+        const key = SESSION_FOLLOW_CREATION_PREFERENCES_ACCOUNT_KEY_V1;
+        expect(classifyAccountScopedKvKey(key)).toEqual({ kind: 'accountSessionFollowCreationPreferences' });
+        expect(() => assertPublicGenericKvKey(key)).toThrow(AccountScopedKvReservedKeyError);
+        expect(classifyAccountScopedKvKey(`${key}/other`)).toEqual({ kind: 'reservedUnknown' });
+    });
     it('admits only the canonical singleton Remote host, Notification and connected metadata catalog addresses', () => {
         for (const [namespace, kind] of [
             ['remote-hosts', 'accountRemoteHosts'],

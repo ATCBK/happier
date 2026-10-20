@@ -11,6 +11,10 @@ import type {
 import { BrowserWorkspaceOpenResultV1Schema } from '@happier-dev/protocol/browser/control/v1';
 import { ActionApprovalRequestCreatedResultSchema, type ActionApprovalRequestCreatedResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { BrowserRuntimeWorkspaceOpeningAdapter } from '@/sync/domains/browser/actions/runtimeActionExecutor';
+import {
+    claimBrowserRuntimeWorkspaceOpenRegion,
+    type BrowserWorkspaceOpenerRegion,
+} from '@/sync/domains/browser/actions/runtimeControlRegistry';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 import type { BrowserLaunchpadOpenTargetOptions } from '@/components/browser/launchpad/BrowserLaunchpad';
@@ -50,7 +54,7 @@ export type OpenBrowserTargetScope = 'sessionDetails' | 'workspaceDetails' | 'se
 
 type OpenDetailsTab = (
     tab: DetailsTab,
-    options?: Readonly<{ intent?: 'default' | 'pinned' | 'preview' }>,
+    options?: Readonly<{ intent?: 'default' | 'pinned' | 'preview'; origin?: BrowserWorkspaceOpenerRegion }>,
 ) => void;
 
 /**
@@ -78,6 +82,8 @@ export type CreateOpenBrowserTargetInWorkspaceDeps = ResolveBrowserViewTargetOpe
     isCurrent?: () => boolean;
     actionExecute?: (actionId: ActionId, input: unknown, context?: ActionExecutorContext) => Promise<ActionExecuteResult>;
     openDetailsTab: OpenDetailsTab;
+    /** The pane column this caller sits in, read at open time; lent to the scope's opener. */
+    readOpenerRegion?: () => BrowserWorkspaceOpenerRegion | null;
     /**
      * Records the opened target as a recent. Supplied by the caller because the recents store lives
      * outside this owner (FP-BRW-LAUNCHER-1 wires it to the launchpad's recent section); fold the
@@ -322,6 +328,8 @@ export function resolveBrowserViewTargetOpen(
     };
 }
 
+let workspaceOpenSequence = 0;
+
 /**
  * Canonical admitted workspace opener. The runtime leaf selects the target and opens only the
  * deterministic tab resource; the renderer materializes live Browser state when it mounts.
@@ -334,7 +342,7 @@ export function createOpenBrowserTargetInWorkspace(
     const runtimeAdapter: BrowserRuntimeWorkspaceOpeningAdapter = {
         scopeId: deps.scopeId,
         accountLifetime: deps.accountLifetime,
-        open: async (request, context) => {
+        open: async (request, context, presentation) => {
             const current = () => deps.accountLifetime?.isCurrent() === true
                 && deps.isCurrent?.() !== false && !context.signal?.aborted;
             if (!current()) return unavailable();
@@ -357,7 +365,8 @@ export function createOpenBrowserTargetInWorkspace(
                 if (!await openBrowserExternalTabSelection(selection)) return { ok: false,
                     errorCode: 'runtime_action_disabled', error: 'runtime_action_disabled:browser:browser_adapter_unavailable' };
             } else {
-                deps.openDetailsTab(resolved.tab, { intent: 'default' });
+                deps.openDetailsTab(resolved.tab, { intent: 'default',
+                    ...(presentation?.openerRegion ? { origin: presentation.openerRegion } : {}) });
                 deps.onRememberRecentTarget?.(target);
             }
             return BrowserWorkspaceOpenResultV1Schema.parse({ v: 1, commandId: request.commandId,
@@ -368,12 +377,18 @@ export function createOpenBrowserTargetInWorkspace(
     const open = async (target: BrowserViewTargetV1): Promise<ActionExecuteResult> => {
         if (!deps.accountLifetime?.isCurrent() || deps.isCurrent?.() === false || deps.signal?.aborted) return unavailable();
         const execute = deps.actionExecute ?? (await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')).createFrontDoorActionExecute();
-        return await execute('browser.workspace.open', {
-            scopeId: runtimeAdapter.scopeId,
-            commandId: `workspace-open:${Date.now()}`,
-            target,
-        }, { surface: 'ui', authority: 'present_user', serverId: deps.accountLifetime?.scope.serverId,
-            expectedAccountId: deps.accountLifetime?.scope.accountId, signal: deps.signal });
+        const commandId = `workspace-open:${Date.now()}:${++workspaceOpenSequence}`;
+        // The scope's opener decides the open; Details still learns which column it came from.
+        const region = deps.readOpenerRegion?.() ?? null;
+        const releaseClaim = region ? claimBrowserRuntimeWorkspaceOpenRegion({ scope: deps.accountLifetime.scope,
+            scopeId: runtimeAdapter.scopeId, commandId, region }) : () => {};
+        try {
+            return await execute('browser.workspace.open', { scopeId: runtimeAdapter.scopeId, commandId, target },
+                { surface: 'ui', authority: 'present_user', serverId: deps.accountLifetime?.scope.serverId,
+                    expectedAccountId: deps.accountLifetime?.scope.accountId, signal: deps.signal });
+        } finally {
+            releaseClaim();
+        }
     };
     return Object.assign(open, { runtimeAdapter });
 }

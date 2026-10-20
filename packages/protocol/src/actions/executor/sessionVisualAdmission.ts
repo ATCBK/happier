@@ -1,5 +1,4 @@
 import { ACCOUNT_SETTING_DEFINITIONS } from '../../account/settings/accountSettings.js';
-import { buildArtifactHtmlDocumentV1 } from '../../artifacts/artifactHtmlDocumentV1.js';
 import { computeCanonicalDomainSeparatedDigest } from '../../crypto/canonicalDigest.js';
 import { sameStrictJsonValue } from '../../json/strictJsonValue.js';
 import type { NormalizedUiSurfaceCapabilityRequestV1 } from '../../plugins/contributions/ui/hostedHtmlCapabilitiesV1.js';
@@ -87,6 +86,7 @@ export async function readSessionVisualAdmissionV1(
     try {
       // The renderer's bundle owner also validates referenced assets and UTF-8.
       // Refuse an unrenderable executable before it acquires approval custody.
+      const { buildArtifactHtmlDocumentV1 } = await import('../../artifacts/artifactHtmlDocumentV1.js');
       buildArtifactHtmlDocumentV1(htmlSource);
     } catch {
       return { ok: false, errorCode: 'invalid_parameters', error: 'Invalid HTML source or bundle assets',

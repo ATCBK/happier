@@ -12,6 +12,7 @@ import { quoteRemotePathWithHomeExpansion, safeBashSingleQuote } from '../../ssh
 import {
   buildRemoteFirstPartyPromotionCommand,
   normalizeRemoteFirstPartyHomeDir,
+  pruneRemoteFirstPartyVersions,
   resolveRemoteFirstPartyInstallLayout,
   resolveRemoteInstalledFirstPartyBinaryPath,
   sanitizeRemoteFirstPartyPathSegment,
@@ -28,6 +29,22 @@ export type RemoteSelfDownloadFirstPartyInstallPlan = Readonly<{
   source: string;
   versionId: string;
 }>;
+
+/** Execute every self-download carrier through the same pre/post retention operation. */
+export async function executeRemoteSelfDownloadFirstPartyInstallPlan(params: Readonly<{
+  componentId: FirstPartyComponentId;
+  channel?: string;
+  remoteHomeDir?: string;
+  plan: RemoteSelfDownloadFirstPartyInstallPlan;
+  runRemoteText: (command: string) => Promise<Readonly<{ status: number; stdout: string; stderr: string }>>;
+}>): Promise<Readonly<{ status: number; stdout: string; stderr: string }>> {
+  const layout = resolveRemoteFirstPartyInstallLayout({ ...params, versionId: params.plan.versionId });
+  const prune = () => pruneRemoteFirstPartyVersions({ layout, runRemoteText: params.runRemoteText });
+  await prune();
+  const result = await params.runRemoteText(params.plan.command);
+  if (result.status === 0) await prune();
+  return result;
+}
 
 type FetchImpl = typeof fetch;
 type VerifyMinisignImpl = typeof verifyMinisign;

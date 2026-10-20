@@ -50,6 +50,12 @@ describe('workflowProblemPresentation', () => {
         });
     });
 
+    it('titles a missing Run for what it is rather than with the generic failure heading', () => {
+        expect(resolveWorkflowProblemPresentation(actionError('run_not_found'))).toMatchObject({
+            title: 'workflows.problem.notFoundTitle', message: 'workflows.problem.notFound',
+        });
+    });
+
     it('presents the precise conversation check from the typed refusal', () => {
         const error = new WorkflowActionError({ rawCode: 'workflow_conversation_unavailable', message: 'private diagnostics',
             failure: { ok: false, errorCode: 'workflow_conversation_unavailable', error: 'workflow_conversation_unavailable',

@@ -12,6 +12,8 @@ import {
 } from '../corpus/collections/ids.js';
 import { findConfiguredSourceInstanceRow } from '../corpus/configuration/administerConfiguredSourceInstance.js';
 import { readTriageSessionLinksPageV1 } from '../sessions/readEntrySessionLinks.js';
+import { createTriageSourceSessionRelations, type TriageSourceSessionLinkV1 } from '../sessions/sourceSessionRelations.js';
+import type { TriageReadSourceSessionLinksResultV1 } from './sessionLinksProtocol.js';
 import { requireTriageAccountStorage } from '../requiredAccountStorage.js';
 import { isTriageAccountCaller, isTriageHostActionCaller, resolveTriageCallerSource } from './callerSource.js';
 import type {
@@ -26,7 +28,8 @@ import type {
  * projection does not already hold: the exact configured instance the selected
  * row was observed through and that entry's Session links. Descriptor,
  * operation, and surface facts remain on the physical mount's exact targeted
- * snapshot. It writes nothing, reaches no provider, and needs no daemon.
+ * snapshot. External links read directly from Account data. Sources that declare
+ * their own relation read supply it through the same source-neutral owner.
  *
  * It is caller-bound to this target's own surfaces and authenticated host Actions. The configured instance
  * carries the owning source's account binding and its source-private
@@ -56,6 +59,9 @@ export type TriageReadEntryDetailDepsV1 = Readonly<{
     sourceInstances: Pick<CorpusCollectionHandleV1, 'query'>;
     sessionLinks: Pick<CorpusCollectionHandleV1, 'query' | 'identityTag'>;
     readSessionSummary: TriageLinkedSessionSummaryReaderV1;
+    readSourceLinks?: (input: Readonly<{ entryRef: TriageEntryRefV1; sourceInstanceId: string }>) => Promise<Readonly<{
+        kind: TriageReadSourceSessionLinksResultV1['kind']; links: readonly TriageSourceSessionLinkV1[]; sourceOwned: boolean;
+    }>>;
     signal?: AbortSignal;
 }>;
 
@@ -71,14 +77,15 @@ async function readLinkedSessions(
     deps: TriageReadEntryDetailDepsV1,
     cursor?: string,
     options?: PluginCancellationOptions,
+    sourceLinks?: readonly TriageSourceSessionLinkV1[],
 ): Promise<Readonly<{
     sessions: readonly TriageLinkedSessionProjectionV1[];
     nextCursor?: string;
 }>> {
-    const page = await readTriageSessionLinksPageV1(deps.sessionLinks, {
+    const page = sourceLinks === undefined ? await readTriageSessionLinksPageV1(deps.sessionLinks, {
         relation: { entryRef },
         ...(cursor === undefined ? {} : { cursor }),
-    }, options);
+    }, options) : { links: sourceLinks, nextCursor: undefined };
 
     const projections: TriageLinkedSessionProjectionV1[] = [];
     for (const link of page.links) {
@@ -129,11 +136,14 @@ export async function readTriageEntryDetail(
         return UNAVAILABLE;
     }
 
+    const sourceLinks = await deps.readSourceLinks?.({ entryRef: input.entryRef, sourceInstanceId: input.sourceInstanceId });
+    if (sourceLinks !== undefined && sourceLinks.kind !== 'complete') throw new Error('triage:sessionLinks:sourceUnavailable');
     const linkedSessionPage = await readLinkedSessions(
         input.entryRef,
         deps,
         input.linkedSessionsCursor,
         options,
+        sourceLinks?.sourceOwned ? sourceLinks.links : undefined,
     );
 
     return Object.freeze({
@@ -165,6 +175,7 @@ export function createTriageReadEntryDetailActionHandler(): ActionHandler<
         return await readTriageEntryDetail(input, {
             sourceInstances,
             sessionLinks,
+            readSourceLinks: createTriageSourceSessionRelations(context, { sourceInstances, sessionLinks }).read,
             readSessionSummary: async (sessionId, options) => {
                 const handle = await context.services.sessions.get(sessionId, options);
                 return handle === null ? null : await handle.summary(options);

@@ -19,7 +19,7 @@ describe('Session semantic readers content mode', () => {
         return { status: 200, data: { session: createSessionRecordFixture({ id: sessionId, encryptionMode }) } };
       }
       if (path === `/v1/sessions/${sessionId}/messages`) {
-        return { status: 200, data: { messages: [{ seq: 1, createdAt: 1, content: encryptionMode === 'plain'
+        return { status: 200, data: { messages: [{ id: 'message-1', seq: 1, createdAt: 1, content: encryptionMode === 'plain'
           ? { t: 'encrypted', c: 'unopenable' }
           : { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'do not disclose' } } },
         }], hasMore: false } };

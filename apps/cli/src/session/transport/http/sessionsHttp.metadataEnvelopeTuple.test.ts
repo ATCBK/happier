@@ -1,5 +1,8 @@
 import axios from 'axios';
+import { createServer } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { reloadConfiguration } from '@/configuration';
 
 import {
   patchSessionMetadata,
@@ -32,6 +35,54 @@ const request = {
     },
   },
 };
+
+describe('metadata mutation caller lifetime', () => {
+  it.each([
+    ['legacy', 'cancel'], ['tuple', 'cancel'], ['legacy', 'slow'], ['tuple', 'slow'],
+  ] as const)('keeps the %s PATCH within its owning operation (%s)', async (kind, scenario) => {
+    let acknowledgeRequest!: () => void;
+    const requested = new Promise<void>(resolve => { acknowledgeRequest = resolve; });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const server = createServer((incoming, response) => {
+      incoming.resume();
+      acknowledgeRequest();
+      timer = setTimeout(() => {
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify(kind === 'tuple'
+          ? { success: true, metadataLayoutVersion: 1, sharedMetadata: { version: 4 }, agentState: { version: 6 } }
+          : { success: true, metadata: { version: 4 } }));
+      }, scenario === 'slow' ? 1500 : 500);
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Missing metadata fixture address');
+    const controller = new AbortController();
+    const previousTimeout = process.env.HAPPIER_SESSION_CONTROL_HTTP_TIMEOUT_MS;
+    process.env.HAPPIER_SESSION_CONTROL_HTTP_TIMEOUT_MS = '1000';
+    reloadConfiguration();
+    try {
+      const result = runWithServerHttpBaseUrl(`http://127.0.0.1:${address.port}`, () => kind === 'tuple'
+        ? patchSessionMetadataEnvelopeTuple({ ...request, ...{ signal: controller.signal } })
+        : patchSessionMetadata({ token: request.token, sessionId: request.sessionId, ciphertext: 'legacy-metadata',
+            expectedVersion: 3, ...{ signal: controller.signal } }));
+      if (scenario === 'cancel') {
+        const outcome = expect(result).rejects.toMatchObject({ code: 'ERR_CANCELED' });
+        await requested;
+        controller.abort();
+        await outcome;
+      } else {
+        await expect(result).resolves.toMatchObject({ success: true });
+      }
+    } finally {
+      if (timer) clearTimeout(timer);
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+      if (previousTimeout === undefined) delete process.env.HAPPIER_SESSION_CONTROL_HTTP_TIMEOUT_MS;
+      else process.env.HAPPIER_SESSION_CONTROL_HTTP_TIMEOUT_MS = previousTimeout;
+      reloadConfiguration();
+    }
+  });
+});
 
 describe('patchSessionMetadataEnvelopeTuple', () => {
   afterEach(() => {

@@ -13,10 +13,8 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { inspect } from 'node:util'
-import {
-  isPluginInvocationLogRecord,
-  type PluginInvocationLogRecord,
-} from '@/plugins/runtime/invocation/services/logger'
+import { PluginInvocationLogRecordV1Schema } from '@happier-dev/protocol/daemon/plugin-invocation-logs'
+import type { PluginInvocationLogRecord } from '@/plugins/runtime/invocation/services/logger'
 import { writeConsoleErrorBestEffort, writeConsoleLogBestEffort } from '../utils/writeConsoleBestEffort'
 import { BufferedFileAppender } from './logFileAppender'
 import { isFileLogLevelEnabled, resolveFileLogLevel, type FileLogLevel } from './logFileLevel'
@@ -36,6 +34,12 @@ const DEFAULT_PLUGIN_INVOCATION_LOG_READ_LIMIT = 100
 const MAX_PLUGIN_INVOCATION_LOG_READ_LIMIT = 500
 const MAX_PLUGIN_INVOCATION_LOG_READ_BYTES = 1024 * 1024
 const MAX_FATAL_ERROR_LOG_CHARS = 50_000
+
+// The file reader needs only the record schema. Loading invocation services here
+// also loads Action presentation into lightweight CLI children such as MCP bridges.
+function isPluginInvocationLogRecord(value: unknown): value is PluginInvocationLogRecord {
+  return PluginInvocationLogRecordV1Schema.safeParse(value).success
+}
 
 function readStringPropertyBestEffort(value: object, key: 'message' | 'name' | 'stack'): string | null {
   try {

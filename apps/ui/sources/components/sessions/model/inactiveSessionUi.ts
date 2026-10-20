@@ -2,7 +2,7 @@ export type InactiveSessionNoticeKind = 'none' | 'not-resumable' | 'machine-offl
 
 export type InactiveSessionUiState = Readonly<{
     shouldShowInput: boolean;
-    inactiveStatusTextKey: 'session.inactiveResumable' | 'session.inactiveMachineOffline' | 'session.inactiveNotResumable' | null;
+    inactiveStatusTextKey: 'session.inactiveResumable' | 'session.inactiveArchived' | 'session.inactiveMachineOffline' | 'session.inactiveNotResumable' | null;
     noticeKind: InactiveSessionNoticeKind;
 }>;
 
@@ -10,6 +10,8 @@ export function getInactiveSessionUiState(opts: {
     isSessionActive: boolean;
     isResumable: boolean;
     isMachineOnline: boolean;
+    /** Archived sessions say so; sending resumes one, and resuming unarchives it. */
+    isArchived?: boolean;
     allowInputWhileInactive?: boolean;
 }): InactiveSessionUiState {
     if (opts.isSessionActive) {
@@ -23,7 +25,7 @@ export function getInactiveSessionUiState(opts: {
     if (!opts.isResumable) {
         return {
             shouldShowInput: false,
-            inactiveStatusTextKey: 'session.inactiveNotResumable',
+            inactiveStatusTextKey: opts.isArchived ? 'session.inactiveArchived' : 'session.inactiveNotResumable',
             noticeKind: 'not-resumable',
         };
     }
@@ -38,7 +40,7 @@ export function getInactiveSessionUiState(opts: {
 
     return {
         shouldShowInput: true,
-        inactiveStatusTextKey: 'session.inactiveResumable',
+        inactiveStatusTextKey: opts.isArchived ? 'session.inactiveArchived' : 'session.inactiveResumable',
         noticeKind: 'none',
     };
 }

@@ -2,13 +2,46 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { log } from '@/log';
 
 import {
+  readSafeVoiceRuntimeFailureCode,
   readSafeVoiceRuntimeFailureDiagnosticReason,
   recordVoiceRuntimeFailure,
 } from './voiceRuntimeFailureCode';
+import { createVoiceTextTurnRejectedBeforeEffectError } from '@/voice/session/types';
 
 describe('voiceRuntimeFailureCode', () => {
   beforeEach(() => {
     log.clear();
+  });
+
+  it.each(['agent_signed_out', 'VOICE_AGENT_TARGET_SESSION_UNSUPPORTED'])(
+    'preserves the acquisition failure %s beneath definite pre-effect rejection', (code) => {
+      const cause = Object.assign(new Error('private acquisition details'), { code });
+      const rejection = createVoiceTextTurnRejectedBeforeEffectError(cause, 'provider_unavailable_before_acceptance');
+
+      expect(rejection).toMatchObject({
+        code: 'VOICE_TEXT_TURN_REJECTED_BEFORE_EFFECT',
+        pendingDeliveryBlockedReason: 'provider_unavailable_before_acceptance',
+        cause,
+      });
+      expect(cause.code).toBe(code);
+      expect(readSafeVoiceRuntimeFailureCode(rejection)).toBe(code);
+    },
+  );
+
+  it('does not disclose arbitrary acquisition prose or unwrap an unrelated error family', () => {
+    const cause = new Error('Bearer private-token for /Users/example/secret');
+    const rejection = createVoiceTextTurnRejectedBeforeEffectError(cause, 'provider_unavailable_before_acceptance');
+    expect(readSafeVoiceRuntimeFailureCode(rejection)).toBe('VOICE_TEXT_TURN_REJECTED_BEFORE_EFFECT');
+    expect(readSafeVoiceRuntimeFailureCode(Object.assign(new Error('outer'), {
+      code: 'another_error', cause: { code: 'agent_signed_out' },
+    }))).toBe('another_error');
+  });
+
+  it('preserves cancellation identity for the existing Local Voice abort handler', () => {
+    const cause = Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+    const rejection = createVoiceTextTurnRejectedBeforeEffectError(cause, 'provider_unavailable_before_acceptance');
+    expect(rejection.name).toBe('AbortError');
+    expect(rejection.cause).toBe(cause);
   });
 
   it('distinguishes bounded metadata commit reasons without retaining arbitrary error data', () => {

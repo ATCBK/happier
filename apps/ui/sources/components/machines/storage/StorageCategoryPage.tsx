@@ -18,12 +18,12 @@ import { formatRelativeTime } from '@/utils/time/formatShortRelativeTime';
 
 import { useMachineTabCompactLayout } from '@/components/machines/page/useMachineTabCompactLayout';
 import { formatStorageDay } from './storageCategoryText';
-import { describeStorageVerdict, storageCategoryTitle } from './storageReasonPresentation';
+import { describeStorageVerdict, storageCategoryTitle, storageEvidenceLabel } from './storageReasonPresentation';
 import { StorageItemRow } from './StorageItemRow';
 import type { StorageCategory } from './storageViewModel';
 import { useMachineTabFacts } from '@/components/machines/page/useMachineTabFacts';
 import { useMachineStorageCleanup } from '@/sync/domains/machines/storage/useMachineStorageCleanup';
-import { confirmStorageEmpty, useStorageCollect, type StorageCollectController } from './StorageCollectToggle';
+import { useStorageCollect, type StorageCollectController } from './StorageCollectToggle';
 import { StoragePageHead, StorageSayLine } from './StoragePageHead';
 import { StoragePileDock } from './StoragePileDock';
 
@@ -40,7 +40,7 @@ export const StorageCategoryPage = React.memo(function StorageCategoryPage(props
     categoryId: HappierStorageCategoryIdV1;
     onBack: () => void;
 }>) {
-    const { homeDir, recipient } = useMachineTabFacts(props.serverId, props.machineId);
+    const { homeDir } = useMachineTabFacts(props.serverId, props.machineId);
     const summary = useMachineStorageSummary({ machineId: props.machineId, serverId: props.serverId });
     const offline = summary.offline;
     const collect = useStorageCollect({ serverId: props.serverId, machineId: props.machineId, readOnly: offline });
@@ -78,10 +78,7 @@ export const StorageCategoryPage = React.memo(function StorageCategoryPage(props
                             <TextLinkButton testID="machine-storage-trash-empty-all" label={t('machineStorage.pile.emptyNow')} tone="strong"
                                 onPress={async () => {
                                 const entries = first.page?.trashEntries ?? [];
-                                const bytes = entries.reduce((sum, entry) => sum + entry.size.allocatedBytes, 0);
-                                if (await confirmStorageEmpty({ count: entries.length, amount: formatMachineBytes(bytes, 'storage') })) {
-                                    await cleanup.empty({ entryIds: entries.map(entry => entry.entryId) }, true);
-                                }
+                                await cleanup.empty({ entryIds: entries.map(entry => entry.entryId) });
                             }} />
                         </View>
                         : undefined}>
@@ -102,7 +99,8 @@ export const StorageCategoryPage = React.memo(function StorageCategoryPage(props
                 // Offline wins over a failed or unreported read: the machine is away, nothing to retry yet.
                 <ItemGroup>
                     <SurfaceStateCard testID="machine-storage-page-offline" kind="unavailable" size="line"
-                        title={t('machineStorage.states.offlineEmpty', { machine: props.machineName })} />
+                        title={t('machineStorage.states.offlineTitle', { machine: props.machineName })}
+              reason={t('machineStorage.states.offlineReason')} />
                 </ItemGroup>
             ) : first.status === 'error' || first.status === 'not_reported' ? (
                 <ItemGroup>
@@ -113,7 +111,7 @@ export const StorageCategoryPage = React.memo(function StorageCategoryPage(props
             ) : (
                 <CategoryPageLoading />
             )}
-            {summary.summary && !recipient ? (
+            {summary.summary ? (
                 <StoragePileDock serverId={props.serverId} machineId={props.machineId} machineName={props.machineName}
                     summary={summary.summary} compact={layout.compact} readOnly={offline}
                     omitTrashReceipt={props.categoryId === 'trash'} />
@@ -159,7 +157,7 @@ function readPageLargest(page: MachineStorageCategoryListResultV1 | null): numbe
 }
 
 function describeItemEvidence(item: StorageItemV1, homeDir: string | undefined): string {
-    const parts = item.evidence.length > 0 ? [...item.evidence] : [formatPathRelativeToHome(item.path, homeDir)];
+    const parts = item.evidence.length > 0 ? item.evidence.map(storageEvidenceLabel) : [formatPathRelativeToHome(item.path, homeDir)];
     if (item.lastUsedAt !== undefined) parts.push(t('machineStorage.page.used', { when: formatRelativeTime(item.lastUsedAt) }));
     else if (item.lastChangedAt !== undefined) parts.push(t('machineStorage.page.changed', { when: formatRelativeTime(item.lastChangedAt) }));
     return parts.join(' · ');
@@ -292,7 +290,7 @@ function MoreRow(props: Readonly<{ onPress: () => void }>) {
 
 function CategoryPageLoading() {
     const { theme } = useUnistyles();
-    const color = theme.colors.border.default;
+    const color = theme.colors.surface.skeleton;
     return (
         <ItemGroup>
             <View testID="machine-storage-page-loading" accessibilityLabel={t('machineStorage.page.loading')} accessibilityRole="progressbar">

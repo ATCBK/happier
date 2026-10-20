@@ -3,7 +3,7 @@ import * as React from 'react';
 import { useReleaseNotesLauncher, useReleaseNotesUnread } from '@/changelog/releaseNotes';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useMachineAgentsByMachine } from '@/agents/machineAgents/useMachineAgents';
-import { ensureMachineUpdateFactsBackground } from '@/capabilities/ensureAgentInstallablesBackground';
+import { useMachineUpdateFactsBackground } from './useMachineUpdateFactsBackground';
 import { useActiveServerAccountScope, useAllMachines } from '@/sync/domains/state/storage';
 import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
 import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
@@ -93,15 +93,12 @@ export function useUpdatesContentModel(): UpdatesContentModel {
         if (thisComputer.machineId) ids.unshift(thisComputer.machineId);
         return ids;
     }, [machines, thisComputer.machineId, updateScope, reachabilityRevision, presenceNowMs]);
-    const onlineKey = onlineMachineIds.join('\u0000');
     // Every machine's cached detect (offline ones keep their last-known rows); only online ones are asked.
     const machineIds = React.useMemo(() => machines.map((machine) => machine.id), [machines]);
     const machineAgents = useMachineAgentsByMachine({ serverId, machineIds, load: true });
-    const snapshots = useMachinesCapabilitySnapshots(serverId, machineIds);
+    const snapshots = useMachinesCapabilitySnapshots(serverId, machineIds, activeHomeScope?.accountId);
     // Opening the surface asks each online machine through the cache's existing freshness policy.
-    React.useEffect(() => {
-        void ensureMachineUpdateFactsBackground({ serverId, machineIds: onlineKey ? onlineKey.split('\u0000') : [] });
-    }, [onlineKey, serverId]);
+    useMachineUpdateFactsBackground({ serverId, accountId: activeHomeScope?.accountId, machineIds: onlineMachineIds });
 
     const { groups, remotes, uncheckedMachineCount, factsCheckedAt } = React.useMemo(() => {
         const built = buildMachineUpdateGroups({
@@ -182,16 +179,16 @@ export function useUpdatesContentModel(): UpdatesContentModel {
     const stopAfterCurrent = React.useCallback(() => { void executeAction('updates.batch.stop', {}); }, [executeAction]);
 
     const check = React.useCallback(async () => {
-        if (!isCurrent()) return;
+        if (!updateScope || !isCurrent()) return;
         const appCheck = app.checkNow();
         // Explicit Check is also recovery: its reply can clear a failed request observation.
         for (const machine of machines) {
             if (isMachineVisibleForLaunchSelection(machine) && machine.availability?.kind !== 'locked') {
-                refreshMachineUpdateFacts(serverId, machine.id);
+                refreshMachineUpdateFacts(serverId, machine.id, { accountScope: updateScope });
             }
         }
         await appCheck;
-    }, [app, isCurrent, machines, serverId]);
+    }, [app, isCurrent, machines, serverId, updateScope]);
     const checkNow = React.useCallback(() => { void executeAction('updates.check', {}); }, [executeAction]);
     const skipAppVersion = React.useCallback(() => {
         if (appItem.latestVersion) void executeAction('app.updates.skip', { version: appItem.latestVersion });

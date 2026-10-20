@@ -4,13 +4,15 @@ import { join } from 'node:path';
 import { createServer } from 'node:http';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent, openWorkflowAcceptedSnapshotStoredEnvelopeV1, parseWorkflowStoredContentEnvelopeV1, PluginInstallationManifestPublisherHeaderV1Schema, PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1, WorkflowActionFailureV1Schema, WorkflowRunRecipientCensusResponseV1Schema } from '@happier-dev/protocol';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { actionSpecToActionDefinitionV1 } from '@happier-dev/protocol/actions/actionCatalog';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { callSocketRpc } from '@happier-dev/sync-client';
 import { Server } from 'socket.io';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { loadWorkflowActionTransportForTests } from '../../../../ui/sources/dev/testkit/harness/homeGovernanceHarness';
 import { createTargetedActionRpcRequestV1 } from '@happier-dev/protocol/actions';
 
@@ -25,7 +27,7 @@ import { updateSettings } from '@/persistence';
 import { configuration } from '@/configuration';
 import { bootstrapAccountSettingsContext, resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { clearActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
+import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSettings/emptyAccountSettingsHistoryCapture.testkit';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
@@ -33,7 +35,7 @@ import { resolveBuiltInContributions } from '@/plugins/projection/registry/resol
 import { registerActionSpecRpcHandlers } from './registerActionSpecRpcHandlers';
 import { createDeferred } from '@/testkit/async/deferred';
 import { refreshActivePromptLibraryCatalog } from '@/settings/prompts/hydratePromptLibraryCatalog';
-import type { WorkflowDefinitionV1 } from '@happier-dev/protocol/workflows/workflowV1';
+import { WorkflowDefinitionV1Schema, type WorkflowDefinitionV1 } from '@happier-dev/protocol/workflows/workflowV1';
 
 const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
 const machineRpc = vi.hoisted(() => vi.fn());
@@ -50,7 +52,7 @@ vi.mock('../../../../server/sources/storage/db', () => ({ db: {
 } }));
 const forwardingModulePath = '../../../../server/sources/app/api/socket/rpc/forwardRpcCall';
 const { forwardRpcCall }: { forwardRpcCall: (params: Readonly<{
-    io: Server; targetUserId: string; method: string; callParams: unknown; callerAuthority: 'present_user';
+    io: Server; targetUserId: string; method: string; callParams: unknown; timeoutMs?: number | null; callerAuthority: 'present_user';
 }>) => Promise<unknown> } = await import(forwardingModulePath);
 const temporaryDirectories: string[] = [];
 afterEach(async () => {
@@ -129,6 +131,7 @@ async function createBoundaryHarness(holdRetainedSource?: () => Promise<void>, s
     // Generate the real installation publisher key there instead of faking crypto.
     await updateSettings((settings) => ({
         ...settings,
+        machineId: project.machineId,
         machineIdByServerId: {
             ...settings.machineIdByServerId,
             [configuration.activeServerId]: project.machineId,
@@ -164,7 +167,9 @@ async function createBoundaryHarness(holdRetainedSource?: () => Promise<void>, s
             status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map((key) => ({ key, revision: 1,
                 content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) } })),
         } }; }
-        if (path === '/v1/account/entity-rows/profiles/transfer') return { status: 200, data: { status: 'absent' } };
+        if (path === '/v1/account/entity-rows/provider-connections') return { status: 200, data: { status: 'absent' } };
+        const historyCapture = emptyAccountSettingsHistoryCaptureResponse(path);
+        if (historyCapture) return historyCapture;
         if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
         if (path === '/v1/artifacts') {
             // The real role-source owner inventories saved roles even when the
@@ -280,28 +285,23 @@ async function createBoundaryHarness(holdRetainedSource?: () => Promise<void>, s
     return { handlers, rpcHandlerManager, received, storageOperations, project, credentials, serverUrl, boundaryObservations, boundaryTimings, readCommittedEnvelope: () => acceptedEnvelope };
 }
 
+// Prepare the real source-loaded host graph outside the invocation deadline,
+// as the capability preflight harness does. Scope catalog and custody together
+// so workspace resolution cannot request unrelated SCM hosting providers.
+const gitPluginId = 'happier.scm.backend.git';
+const builtIn = resolveBuiltInContributions();
+const contributes = createResolvedContributionRegistry({
+    scmBackends: builtIn.scmBackends?.filter((entry) => entry.pluginId === gitPluginId),
+    managedDependencies: builtIn.managedDependencies?.filter((entry) => entry.pluginId === gitPluginId),
+    activationTargets: builtIn.activationTargets?.filter((entry) => entry.pluginId === gitPluginId),
+});
+const runtimeRegistryLease = await pluginReloadController.acquireRuntimeRegistry({
+    resolveRuntimeRegistry: () => resolveExecutablePluginRuntimeRegistry({ contributes, pluginIds: [gitPluginId] }),
+});
+
 describe('UI Workflow targeted Action RPC boundary', () => {
-    let runtimeRegistryLease: PluginRuntimeRegistryLease | null = null;
-
-    beforeAll(async () => {
-        // This fixture uses the real Git runtime. Scope its source catalog and
-        // admitted custody together so workspace resolution cannot request
-        // unrelated SCM hosting providers from an unscoped catalog.
-        const pluginId = 'happier.scm.backend.git';
-        const builtIn = resolveBuiltInContributions();
-        const contributes = createResolvedContributionRegistry({
-            scmBackends: builtIn.scmBackends?.filter((entry) => entry.pluginId === pluginId),
-            managedDependencies: builtIn.managedDependencies?.filter((entry) => entry.pluginId === pluginId),
-            activationTargets: builtIn.activationTargets?.filter((entry) => entry.pluginId === pluginId),
-        });
-        runtimeRegistryLease = await pluginReloadController.acquireRuntimeRegistry({
-            resolveRuntimeRegistry: () => resolveExecutablePluginRuntimeRegistry({ contributes, pluginIds: [pluginId] }),
-        });
-    });
-
     afterAll(async () => {
-        await runtimeRegistryLease?.release();
-        runtimeRegistryLease = null;
+        await runtimeRegistryLease.release();
         await pluginReloadController.shutdown();
     });
 
@@ -331,17 +331,19 @@ describe('UI Workflow targeted Action RPC boundary', () => {
                     socket: { connected: true, emit: () => {}, emitWithAck: async (_event, payload) => {
                         const call = payload as SocketRpcRequestPayload;
                         return forwardRpcCall({ io: sockets, targetUserId: 'account-1', method: call.method,
-                            callParams: call.params, callerAuthority: 'present_user' });
+                            callParams: call.params, timeoutMs: call.timeoutMs, callerAuthority: 'present_user' });
                     } },
                     target: { kind: 'machine', id: request.machineId }, method: request.method,
-                    params: request.payload, content: encryptedTransport, timeoutMs: request.operationTimeoutMs,
+                    params: createTargetedActionRpcRequestV1(request.payload, request.target), content: encryptedTransport,
+                    timeoutMs: request.operationTimeoutMs,
                 }),
             });
             const input = { runId, source: { kind: 'saved' as const, definitionId,
                 revision: { headerVersion: 1, bodyVersion: 1 } }, inputs: {} };
-            const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId: 'server-1', runtimeAccountId: 'account-1',
+            const context = { actionCaller: { kind: 'host' as const }, surface: 'ui' as const, authority: 'present_user' as const, serverId: 'server-1', runtimeAccountId: 'account-1',
                 externalActionTarget: { kind: 'machine' as const, machineId: boundary.project.machineId, project: boundary.project } };
-            expect(await execute({ actionId: 'workflow.run.start', input, context })).toEqual({ run, admission: 'created' });
+            expect(await execute({ actionId: 'workflow.run.start', input, context }),
+                JSON.stringify(boundary.boundaryObservations)).toEqual({ run, admission: 'created' });
             const accepted = openWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
                 envelope: parseWorkflowStoredContentEnvelopeV1(boundary.readCommittedEnvelope()!)!,
                 binding: { v: 1, purpose: 'accepted_snapshot', accountId: 'account-1', runId } });
@@ -357,13 +359,23 @@ describe('UI Workflow targeted Action RPC boundary', () => {
     });
 
     it('admits the saved Action-only For-each using the actual credentialed CLI materializer and native catalog', async () => {
-        const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {}, blocks: [{
+        const actionId = 'action.spec.get';
+        const actionInput = { id: 'workflow.starters.list', includeOutputSchema: true };
+        const definition = WorkflowDefinitionV1Schema.parse({ version: 1, inputs: [], defaults: {}, blocks: [{
             kind: 'loop', id: 'loop-1',
             repetition: { kind: 'items', items: { kind: 'literal', value: ['first', 'second'] }, execution: 'sequential', failurePolicy: 'fail_stop' },
-            body: [{ kind: 'action', id: 'action-1', name: 'Read templates', actionId: 'workflow.starters.list', input: {} }],
-        }] };
+            body: [{ kind: 'action', id: 'action-1', name: 'Read Action contract', actionId, input: {
+                id: { kind: 'literal', value: actionInput.id }, includeOutputSchema: { kind: 'literal', value: true },
+            } }],
+        }] });
         const boundary = await createBoundaryHarness(undefined, definition);
         const nativeCatalog = createActionExecutor({ isActionApprovalRequired: () => false });
+        const completeContract = actionSpecToActionDefinitionV1(getActionSpec(actionId), { surface: 'cli', includeOutputSchema: true });
+        const projectedContract = await nativeCatalog.execute('action.spec.get', { id: actionId, includeOutputSchema: true },
+            { surface: 'cli', authority: 'account_automation' });
+        expect(projectedContract).toMatchObject({ ok: true, result: { schemaSections: expect.arrayContaining([
+            expect.objectContaining({ path: expect.stringMatching(/^\/outputSchema\/definitions\//) }),
+        ]) } });
         // Only the authenticated local daemon HTTP hop is substituted. Its
         // answering Action executor and the caller's materializer stay real.
         vi.spyOn(daemonControlClient, 'requestDaemonSignedRootActionExecution').mockImplementation(async (request) => {
@@ -383,9 +395,9 @@ describe('UI Workflow targeted Action RPC boundary', () => {
         expect(accepted.kind).toBe('available');
         if (accepted.kind !== 'available') throw new Error('accepted_snapshot_unavailable');
         expect(accepted.content).toMatchObject({ authoredDefinition: definition, materializedLeaves: [{
-            kind: 'action', blockId: 'action-1', actionInput: {}, actionContract: {
-                inputSchema: { $schema: 'http://json-schema.org/draft-07/schema#' },
-                outputSchema: { $schema: 'http://json-schema.org/draft-07/schema#' },
+            kind: 'action', blockId: 'action-1', actionInput, actionContract: {
+                inputSchema: completeContract.inputSchema,
+                outputSchema: completeContract.outputSchema,
             },
         }] });
     });
@@ -449,7 +461,7 @@ describe('UI Workflow targeted Action RPC boundary', () => {
                         // This network fixture receives callSocketRpc's actual wire payload.
                         const call = payload as SocketRpcRequestPayload;
                         return await forwardRpcCall({ io: sockets, targetUserId: 'account-1',
-                            method: call.method, callParams: call.params,
+                            method: call.method, callParams: call.params, timeoutMs: call.timeoutMs,
                             callerAuthority: 'present_user' });
                     } },
                     target: { kind: 'machine', id: request.machineId }, method: request.method,

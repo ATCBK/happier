@@ -24,7 +24,11 @@ const { RoundButton, RoundButtonSizeScope } = await import('./RoundButton');
 describe('RoundButton', () => {
     it('keeps the primary and disabled primary solid inside floating material', async () => {
         const screen = await renderScreen(<FloatingButtonScene />);
-        const fillOf = (id: string) => flattenTestStyle(screen.findByTestId(id)!.findAll(node => String(node.type) === 'Animated.View')[0]!.props.style).backgroundColor;
+        const fillOf = (id: string) => {
+            const fill = flattenTestStyle(screen.findByTestId(id)!.findAll(node => String(node.type) === 'Animated.View')[0]!.props.style).backgroundColor;
+            if (typeof fill !== 'string') throw new Error(`Expected a string background color for ${id}`);
+            return fill;
+        };
         expect(fillOf('glass-primary')).toBe(lightTheme.colors.button.primary.background);
         // The disabled primary keeps the primary's look, receded into the page, and stays one solid colour.
         const disabledFill = Color(fillOf('glass-disabled'));

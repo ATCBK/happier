@@ -1,13 +1,9 @@
 import { isAbsolute, resolve } from 'path';
 
 import type { FilesystemAccessPolicy } from './fileSystem/accessPolicy/filesystemAccessPolicy';
-import { authorizeFilesystemPath } from './fileSystem/accessPolicy/filesystemPathAuthorization';
+import { authorizeFilesystemPath, type FilesystemPathAuthorizationResult } from './fileSystem/accessPolicy/filesystemPathAuthorization';
 
-export interface PathValidationResult {
-    valid: boolean;
-    error?: string;
-    resolvedPath?: string;
-}
+export type PathValidationResult = FilesystemPathAuthorizationResult;
 
 export function validateWorkspaceInspectionPath(targetPath: string): PathValidationResult {
     const trimmedPath = typeof targetPath === 'string' ? targetPath.trim() : '';

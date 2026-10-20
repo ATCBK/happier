@@ -2,6 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { buildMachineAgentInventoryKey } from '@happier-dev/protocol/capabilities';
 
 import type { MachineAgent } from '@/agents/machineAgents/machineAgentTypes';
 import { useMachineAgents } from '@/agents/machineAgents/useMachineAgents';
@@ -58,8 +59,8 @@ export const ThisComputerAgentsPane = React.memo(function ThisComputerAgentsPane
                 <MachineAgentCardGrid testID={`${props.testID}.agents`}>
                     {installed.map((agent) => (
                         <MachineAgentCard
-                            key={agent.agentId}
-                            testID={`${props.testID}.agent.${agent.agentId}`}
+                            key={buildMachineAgentInventoryKey(agent)}
+                            testID={`${props.testID}.agent.${buildMachineAgentInventoryKey(agent)}`}
                             agent={agent}
                             mark={<MachineAgentMark agentId={agent.agentId} machineId={props.machineId} serverId={props.serverId} size={22} />}
                             onAction={(action) => onAction(agent, action)}

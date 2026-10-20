@@ -6,7 +6,15 @@ import { PromptDocArtifactRefV1Schema, PromptArtifactRefV1Schema } from '../../p
 import { readSessionBotV1 } from '../identity/sessionBotV1.js';
 import { assertPromptStackArtifactHeaderV1, PromptStackPreparationError, type PromptStackSystemAppendInputV1 } from '../../prompts/library/resolvePromptStackSystemAppendBlocksV1.js';
 
-export const SessionPromptStackV1Schema = lazyZodSchema(() => z.array(PromptStackEntryV1Schema).check(z.refine((entries) => new Set(entries.map((entry) => entry.id)).size === entries.length, { message: 'Duplicate context entry id' })));
+/** Plan is a Session annotation, not a second Account or Project Context authority. */
+export const SessionPromptStackEntryV1Schema = lazyZodSchema(() => z.extend(PromptStackEntryV1Schema, {
+  plan: z.optional(z.literal(true)),
+}).check(z.refine(entry => entry.plan !== true || entry.ref.kind === 'doc', { message: 'Plan must reference a Doc' })));
+export type SessionPromptStackEntryV1 = z.infer<typeof SessionPromptStackEntryV1Schema>;
+export const SessionPromptStackV1Schema = lazyZodSchema(() => z.array(SessionPromptStackEntryV1Schema).check(
+  z.refine((entries) => new Set(entries.map((entry) => entry.id)).size === entries.length, { message: 'Duplicate context entry id' }),
+  z.refine((entries) => entries.filter(entry => entry.plan === true).length <= 1, { message: 'Multiple Plan entries' }),
+));
 export const SessionPromptStackV1StoredSchema = createStoredReadSchema(SessionPromptStackV1Schema);
 export type SessionPromptStackV1 = Readonly<z.infer<typeof SessionPromptStackV1Schema>>;
 export const SessionDisabledInheritedEntryIdsV1Schema = lazyZodSchema(() => z.array(z.string().check(z.minLength(1))).check(z.refine((ids) => new Set(ids).size === ids.length, { message: 'Duplicate inherited entry id' })));
@@ -19,6 +27,7 @@ export const SessionContextIntentV1Schema = lazyZodSchema(() => z.discriminatedU
   z.strictObject({ kind: z.literal('detach'), entryId: z.string().check(z.minLength(1)) }),
   z.strictObject({ kind: z.literal('reorder'), entryId: z.string().check(z.minLength(1)), siblingId: z.string().check(z.minLength(1)), position: z.enum(['before', 'after']) }),
   z.strictObject({ kind: z.literal('set_budget'), entryId: z.string().check(z.minLength(1)), maxChars: z.nullable(z.number().check(z.int(), z.positive())) }),
+  z.strictObject({ kind: z.literal('set_plan'), entryId: z.nullable(z.string().check(z.minLength(1))) }),
   PromptStackSetEnabledIntentV1Schema,
   z.strictObject({ kind: z.literal('inherited_enable'), entryId: z.string().check(z.minLength(1)), enabled: z.boolean() }),
 ]));
@@ -82,8 +91,22 @@ export function writeSessionContextIntentV1ToMetadata<T extends Record<string, u
   }
   const index = entries.findIndex((entry) => entry.id === ('entry' in intent ? intent.entry.id : intent.entryId));
   const refuse = (code: string): never => { throw Object.assign(new Error(code), { code }); };
+  const migratedStack = 'promptStack' in work && rawWork !== null && typeof rawWork === 'object'
+    && (!('promptStack' in rawWork) || rawWork.promptStack !== work.promptStack);
   let promptStack = entries;
-  if (intent.kind === 'attach' || intent.kind === 'set') {
+  if (intent.kind === 'set_plan') {
+    // Validate before clearing the previous choice. The intent is applied to the
+    // current reviewed stack, never to a caller-supplied replacement snapshot.
+    if (intent.entryId !== null) {
+      if (index === -1) refuse('entry_not_found');
+      if (entries[index]!.ref.kind !== 'doc') refuse('invalid_parameters');
+    }
+    if (!migratedStack && entries.every(entry => (entry.plan === true) === (entry.id === intent.entryId))) return metadata;
+    promptStack = entries.map(entry => {
+      const { plan: _previous, ...withoutPlan } = entry;
+      return entry.id === intent.entryId ? { ...withoutPlan, plan: true as const } : withoutPlan;
+    });
+  } else if (intent.kind === 'attach' || intent.kind === 'set') {
     if (intent.kind === 'attach' && index !== -1) refuse('entry_conflict');
     promptStack = index === -1 ? [...entries, intent.entry] : entries.map((entry, i) => i === index ? intent.entry : entry);
   } else {
@@ -95,8 +118,6 @@ export function writeSessionContextIntentV1ToMetadata<T extends Record<string, u
     const mutation = applyPromptStackIntentV1({ promptStack: entries }, intent);
     if (!mutation.ok) return refuse(mutation.errorCode);
     // A no-op may still carry the canonical retained-role migration; do not drop that transition.
-    const migratedStack = 'promptStack' in work && rawWork !== null && typeof rawWork === 'object'
-      && (!('promptStack' in rawWork) || rawWork.promptStack !== work.promptStack);
     if (!mutation.changed && !migratedStack) return metadata;
     promptStack = [...mutation.row.promptStack];
   }

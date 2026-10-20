@@ -7,6 +7,9 @@ import { expect, it, vi } from 'vitest';
 import { createEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropRuntime';
 import { createPluginEntityDragDropBinding } from './pluginEntityDragDropBinding';
 import { PluginEntityDragSourceView, PluginEntityDropTargetView } from './PluginEntityDragDropView';
+import { List } from '@happier-dev/plugin-ui';
+import { PluginUiProvider } from '../../../../../../../packages/plugin-ui/src/components/PluginUiProvider';
+import { createHostApiStub, createSurfaceContext } from '../../../../../../../packages/plugin-ui/src/surfaceFixture.testSupport';
 
 // Platform/native presentation are system boundaries. Pressable's real RNW event propagation runs unchanged.
 vi.mock('react-native', async () => { const actual = await vi.importActual<typeof import('react-native-web')>('react-native-web'); return { ...actual, Platform: { ...actual.Platform, OS: 'web' } }; });
@@ -37,14 +40,19 @@ it('offers a named focusable source entry without stealing RNW primary or second
         // jsdom does not synthesize the browser's native button click after keyboard activation.
         if (element.tagName === 'BUTTON') await act(async () => element.click());
     };
-    const render = (interactive: boolean) => <>
-        <PluginEntityDragSourceView binding={binding} sourceId="pr" reference={{ id: '42' }} testID="source">
-            {interactive ? <Pressable accessibilityRole="button" onPress={() => { primary++; }} testID="primary"><Text>Open PR</Text></Pressable> : <Text>PR summary</Text>}
+    const context = createSurfaceContext();
+    const hostApi = createHostApiStub(context);
+    const render = (interactive: boolean, tabIndex?: -1 | 0, composite = false) => <PluginUiProvider hostApi={hostApi} context={context}>
+        <PluginEntityDragSourceView binding={binding} sourceId="pr" reference={{ id: '42' }} testID="source" tabIndex={tabIndex}>
+            {composite ? <List items={['42', '43']} keyForItem={item => item} accessibilityLabel="Reviews" accessibilityPattern="grid"
+                selection={{ selectedKey: null, onSelectedKeyChange: () => { primary++; } }}
+                renderItem={item => <List.Item title={`Review ${item}`} testID={`row:${item}`} />} />
+                : interactive ? <Pressable accessibilityRole="button" onPress={() => { primary++; }} testID="primary"><Text>Open PR</Text></Pressable> : <Text>PR summary</Text>}
             <Pressable accessibilityRole="button" aria-haspopup="menu" onPress={() => { overflow++; }} testID="overflow"><Text>More</Text></Pressable>
         </PluginEntityDragSourceView>
         <PluginEntityDropTargetView binding={binding} targetId="detail" testID="target"><Text>Detail</Text></PluginEntityDropTargetView>
         <PluginEntityDropTargetView binding={binding} targetId="detail" input={{ pane: 'second' }} testID="target2"><Text>Second detail</Text></PluginEntityDropTargetView>
-    </>;
+    </PluginUiProvider>;
     try {
         await act(async () => root.render(render(false)));
         const entry = container.querySelector<HTMLElement>('[data-testid="source"]')!;
@@ -71,5 +79,27 @@ it('offers a named focusable source entry without stealing RNW primary or second
         await activate(action, ' ');
         expect(primary).toBe(2); expect(runtime.getSnapshot().phase).not.toBe('carrying');
         entry.focus(); await key(entry, ' '); await key(entry, 'Enter'); expect(writes).toBe(2);
+        await act(async () => root.render(render(true, -1)));
+        expect(entry.tabIndex).toBe(-1);
+        expect(entry.getAttribute('aria-label')).toContain('Review PR');
+        // The row's roving owner only removes sequential access; programmatic/native actions stay available.
+        entry.focus(); await key(entry, ' '); await key(entry, 'Escape');
+        expect(runtime.getSnapshot().phase).toBe('idle');
+        await act(async () => root.render(render(true, 0)));
+        expect(entry.tabIndex).toBe(0);
+        await act(async () => root.render(render(true, -1, true)));
+        const row = container.querySelector<HTMLElement>('[data-testid="row:42"]')!;
+        expect(row.tabIndex).toBe(0);
+        row.focus();
+        await act(async () => { row.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', altKey: true, bubbles: true, cancelable: true })); });
+        expect(runtime.getSnapshot().phase).toBe('carrying');
+        await key(row, 'ArrowDown');
+        expect(document.activeElement).toBe(row);
+        await activate(row, 'Enter');
+        expect(writes).toBe(3);
+        expect(primary).toBe(2);
+        await act(async () => { row.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', altKey: true, bubbles: true, cancelable: true })); });
+        await key(row, 'Escape');
+        expect(runtime.getSnapshot().phase).toBe('idle');
     } finally { await act(async () => root.unmount()); binding.dispose(); container.remove(); }
 });

@@ -122,6 +122,64 @@ describe('generic plugin settings actions', () => {
         });
     });
 
+    it.each([
+        { fieldCount: 2, fieldBytes: 40_000, accepted: true },
+        { fieldCount: 9, fieldBytes: 60_000, accepted: false },
+    ])('applies canonical final-record bounds to a $fieldCount-field Action patch', async ({ fieldCount, fieldBytes, accepted }) => {
+        let record: unknown | null = null;
+        const fieldIds = Array.from({ length: fieldCount }, (_, index) => `field${index}`);
+        const patch = Object.fromEntries(fieldIds.map((id) => [id, 'x'.repeat(fieldBytes)]));
+        const batchContribution: PluginSettingsContributionV2 = {
+            ...contribution,
+            fields: fieldIds.map((id) => ({ id, title: id, schema: { type: 'string' } })),
+            actions: [{
+                ...contribution.actions![0]!,
+                placement: { kind: 'afterField', fieldId: fieldIds[0]! },
+                patchFieldIds: fieldIds,
+            }],
+        };
+        const owner = createStablePluginSettingsOwner({
+            recordStore: {
+                supports: () => true,
+                read: async () => record,
+                async update<T>(
+                    _model: StablePluginSettingsModel,
+                    operation: (current: unknown | null) => Readonly<{
+                        record: CanonicalPluginSettingsRecord;
+                        result: T;
+                    }>,
+                ): Promise<T> {
+                    const next = operation(record);
+                    record = next.record;
+                    return next.result;
+                },
+            },
+            broker: createStablePluginEventsBroker(),
+        });
+        const model = createStablePluginSettingsModel({ pluginId: 'acme.plugin', contribution: batchContribution });
+        const invoker = createPluginSettingsActionInvoker({
+            owner,
+            confirm: async () => true,
+            execute: async () => ({ patch }),
+        });
+        const invocation = invoker.invoke({
+            declaration: batchContribution.actions![0]!,
+            contributionId: batchContribution.id,
+            model,
+            seed: seed(),
+            userGesture: true,
+            expectedRevision: '0',
+        });
+
+        if (accepted) {
+            await expect(invocation).resolves.toMatchObject({ revision: '1', values: patch });
+            expect(record).toMatchObject({ revision: 1, values: patch });
+        } else {
+            await expect(invocation).rejects.toMatchObject({ code: 'plugin_settings_values_too_large' });
+            expect(record).toBeNull();
+        }
+    });
+
     it('refuses a byte-small deeply nested settings-action patch at the canonical record bound', async () => {
         let record: unknown | null = null;
         const nestedContribution: PluginSettingsContributionV2 = {

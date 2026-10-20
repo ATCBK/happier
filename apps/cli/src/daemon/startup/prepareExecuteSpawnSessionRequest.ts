@@ -2,7 +2,7 @@ import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaq
 import { findCatalogEntry } from '@/agent/catalog/registry';
 import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
 import { isCustomAcpAgentContributionIdentityV1 } from '@happier-dev/protocol/agents/executionTargetV1';
-import { getVendorResumeSupport } from '@/session/runtime/catalogHooks';
+import { isSessionResumeSupported } from '@/session/runtime/resumeSupport';
 import type { CatalogAgentId } from '@/agent/catalog/ids';
 import { logger } from '@/ui/logger';
 
@@ -27,9 +27,16 @@ import { buildProviderSpawnErrorResult } from '../spawn/buildProviderSpawnErrorR
 import { AcpCatalogUnavailableError, resolveConfiguredAcpBackendFromAccountSettings } from '@/agent/acp/catalog/configured/resolveBackend';
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { resolvePreparedSessionDirectory } from './resolvePreparedSessionDirectory';
-import { isRequesterLaunchAdmissionCurrent } from '../lifecycle/requesterWorkAttribution';
+import { resolveRequesterLaunchAdmissionFailure } from '../lifecycle/requesterWorkAttribution';
 import { resolveSessionMemoryCeilingBytes } from '../platform/linux/sessionMemoryCeiling';
 import { resolveSessionRuntimeSnapshot } from '../sessions/runtimeSnapshot/resolveSessionRuntimeSnapshot';
+import {
+    ConnectedServicesDefaultUnavailableError,
+    createCredentialsSpawnConnectedServicesTeamResourceCatalogResolver,
+    mergeSessionTeamCredentialBindingIntents,
+    resolveSessionSpawnConnectedServicesDefaultsPayload,
+} from '@/session/services/spawnConnectedServicesDefaults';
+import type { SavedSecretOperationContextV1 } from '@/settings/secrets/savedSecretOperationContext';
 
 /**
  * A requested Agent that is not installed in the current catalog is an invalid
@@ -78,6 +85,7 @@ export type PreparedExecuteSpawnSessionRequest = Readonly<{
     | 'connectedServices'
     | 'connectedServicesUpdatedAt'
     | 'connectedServiceMaterializationIdentityV1'
+    | 'teamCredentialBindings'
 >;
 
 export type PrepareExecuteSpawnSessionRequestInput = Readonly<{
@@ -89,6 +97,7 @@ export type PrepareExecuteSpawnSessionRequestInput = Readonly<{
     /** The captured Account caller owns async hydration and custody, not this admission projection. */
     readAcpCatalogSnapshot?(): Promise<AcpCatalogSnapshotV1>;
     credentials: NonNullable<Parameters<typeof resolveSpawnBackendIdentity>[0]['credentials']>;
+    operationContext?: SavedSecretOperationContextV1;
 }>;
 
 export async function prepareExecuteSpawnSessionRequest(
@@ -107,10 +116,8 @@ export async function prepareExecuteSpawnSessionRequest(
     }>,
 ): Promise<PreparedExecuteSpawnSessionRequest | SpawnSessionResult> {
     const { options } = params.request;
-    if (!await isRequesterLaunchAdmissionCurrent(options)) {
-        return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
-            errorMessage: 'Requester Machine admission unavailable' };
-    }
+    const requesterAdmissionFailure = await resolveRequesterLaunchAdmissionFailure(options);
+    if (requesterAdmissionFailure) return requesterAdmissionFailure;
     const environmentVariableCount = options.environmentVariables && typeof options.environmentVariables === 'object'
         ? Object.keys(options.environmentVariables as Record<string, unknown>).length
         : 0;
@@ -281,7 +288,7 @@ export async function prepareExecuteSpawnSessionRequest(
             // The resume token is the provider Session id, and attach metadata
             // (when rejoining) has already established generation/materialization
             // correspondence. Unsupported or unavailable declarations fail closed.
-            if (!configuredBackend?.capabilities.supportsLoadSession) {
+            if (!await isSessionResumeSupported({ agentId: catalogAgentId, configuredBackend })) {
                 return {
                     type: 'error',
                     errorCode: SPAWN_SESSION_ERROR_CODES.RESUME_NOT_SUPPORTED,
@@ -297,8 +304,8 @@ export async function prepareExecuteSpawnSessionRequest(
             };
         }
         if (configuredBackendId === null) {
-            const vendorResumeSupport = await getVendorResumeSupport(catalogAgentId!);
-            const ok = vendorResumeSupport({
+            const ok = await isSessionResumeSupported({
+                agentId: catalogAgentId,
                 ...(runtimeSelection.runtimeDescriptorV1
                     ? { runtimeDescriptorV1: runtimeSelection.runtimeDescriptorV1 }
                     : {}),
@@ -342,6 +349,33 @@ export async function prepareExecuteSpawnSessionRequest(
                 : sessionAttachPayload?.snapshot?.metadata ?? null,
         }).spawnOptions
         : options;
+    // Omitted fresh-launch intent consumes the same Account default owner as
+    // CLI/Workflow creators. An explicit native/empty object is still a choice;
+    // resumed Sessions retain their admitted identity rather than today's default.
+    let connectedServicesDefaults: Awaited<ReturnType<typeof resolveSessionSpawnConnectedServicesDefaultsPayload>> = null;
+    if (!normalizedExistingSessionId && !effectiveResume && catalogAgentId
+        && connectedServiceOptions.connectedServices === undefined) {
+        try {
+            connectedServicesDefaults = await resolveSessionSpawnConnectedServicesDefaultsPayload({
+                agentId: catalogAgentId,
+                credentials: params.request.credentials,
+                ...(params.request.operationContext ? { operationContext: params.request.operationContext } : {}),
+                resolveTeamCredentialResourceCatalog: async request =>
+                    await createCredentialsSpawnConnectedServicesTeamResourceCatalogResolver(params.request.credentials)?.(request) ?? null,
+            });
+        } catch (error) {
+            if (!(error instanceof ConnectedServicesDefaultUnavailableError)) throw error;
+            return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.SPAWN_VALIDATION_FAILED,
+                errorMessage: error.reason };
+        }
+    }
+    const connectedServices = connectedServiceOptions.connectedServices ?? connectedServicesDefaults?.connectedServices;
+    const connectedServicesUpdatedAt = connectedServiceOptions.connectedServicesUpdatedAt
+        ?? connectedServicesDefaults?.connectedServicesUpdatedAt;
+    const teamCredentialBindings = mergeSessionTeamCredentialBindingIntents({
+        explicit: options.teamCredentialBindings,
+        admitted: connectedServicesDefaults?.teamCredentialBindings ?? null,
+    });
     const resources = params.request.readMachineResourcesPolicy?.();
     return {
         memoryHighBytes: resolveSessionMemoryCeilingBytes(effectiveSessionAttachPayload?.snapshot?.metadata,
@@ -364,10 +398,9 @@ export async function prepareExecuteSpawnSessionRequest(
         daemonSpawnHooks,
         environmentVariablesValidation,
         persistedProviderResumeState,
-        ...(connectedServiceOptions.connectedServices
-            ? { connectedServices: connectedServiceOptions.connectedServices } : {}),
-        ...(connectedServiceOptions.connectedServicesUpdatedAt !== undefined
-            ? { connectedServicesUpdatedAt: connectedServiceOptions.connectedServicesUpdatedAt } : {}),
+        ...(connectedServices ? { connectedServices } : {}),
+        ...(connectedServicesUpdatedAt !== undefined ? { connectedServicesUpdatedAt } : {}),
+        ...(teamCredentialBindings ? { teamCredentialBindings } : {}),
         ...(connectedServiceOptions.connectedServiceMaterializationIdentityV1
             ? { connectedServiceMaterializationIdentityV1: connectedServiceOptions.connectedServiceMaterializationIdentityV1 } : {}),
         ...runtimeSelection,

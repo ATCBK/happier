@@ -3,6 +3,8 @@ import { Modal } from '@/modal';
 import { t } from '@/text';
 import type { DaemonVoiceInferenceClient, DaemonVoiceInferenceModelMachineScope } from '@/voice/runtime/daemonInference/DaemonVoiceInferenceClient';
 import type { ModelCatalogRow } from './buildModelCatalogRows';
+import { captureDaemonVoiceModelCatalogObservation } from './daemonVoiceModelCatalogObservation';
+import { resolveVoiceExecutionMachineId } from '@/voice/settings/executionMachine';
 
 /** UI and Actions share eligibility, consent and exact-machine mutation admission. */
 export async function invokeDaemonModelPackOperation(input: Readonly<{
@@ -18,6 +20,7 @@ export async function invokeDaemonModelPackOperation(input: Readonly<{
         return admitted && !input.signal?.aborted;
     };
     const { row, client, scope } = input;
+    const observation = captureDaemonVoiceModelCatalogObservation(scope?.machineId ?? resolveVoiceExecutionMachineId());
     if (!await current()) return { status: 'cancelled' };
     if (input.operation === 'remove') {
         if (!row.canRemove) return { status: 'unavailable', reason: 'model_not_installed' };
@@ -25,8 +28,7 @@ export async function invokeDaemonModelPackOperation(input: Readonly<{
             t('settingsVoice.local.models.removeConfirmBody', { name: row.displayName }),
             { confirmText: t(row.state === 'error' ? 'common.discard' : 'common.remove'), destructive: true });
         if (!confirmed || !await current()) return { status: 'cancelled' };
-        if (scope) await client.removeModel(row.packId, scope);
-        else await client.removeModel(row.packId);
+        await client.removeModel(row.packId, scope, input.signal);
     } else {
         if (!row.canInstall) return { status: 'unavailable', reason: row.state === 'downloading' ? 'model_install_in_progress' : 'model_install_unavailable' };
         const review = row.licenseReview;
@@ -37,12 +39,15 @@ export async function invokeDaemonModelPackOperation(input: Readonly<{
                 packId: review.packId, pluginVersion: review.pluginVersion, packVersion: review.packVersion,
                 licenseId: review.licenseId, licenseSourceUrl: review.licenseSourceUrl,
                 licenseTextDigest: review.licenseTextDigest, artifactBinding: review.artifactBinding };
-            if (scope) await client.acceptModelPackLicense(license, scope);
-            else await client.acceptModelPackLicense(license);
+            await client.acceptModelPackLicense(license, scope, input.signal);
         }
         if (!await current()) return { status: 'cancelled' };
         if (scope) await client.installModel({ packId: row.packId, signal: input.signal }, scope);
         else await client.installModel({ packId: row.packId, signal: input.signal });
     }
+    // The mutation may come from a settings Action with no mounted controller.
+    // Withdraw only its captured Account/Machine observation; demanded readers
+    // recheck while passive Home readers remain unknown without issuing RPCs.
+    observation.invalidate();
     return await current() ? { status: 'completed', value: { packId: row.packId } } : { status: 'cancelled' };
 }

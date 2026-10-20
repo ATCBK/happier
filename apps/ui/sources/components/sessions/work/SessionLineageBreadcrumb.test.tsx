@@ -19,9 +19,9 @@ describe('Session lineage navigation', () => {
         getStorage().setState({
             sessions: { lead: createSessionFixture({ id: 'lead', serverId: 'other-home', metadata: { path: '/other', host: 'other', name: 'Wrong Home' } }) },
             sessionListRowsByServerId: { 'report-home': {
-                child: createSessionListRenderableSessionFixture({ id: 'child', reportsTo: { sessionId: 'lead' } }),
-                lead: createSessionListRenderableSessionFixture({ id: 'lead', metadata: { path: '/repo', host: 'host', name: 'Unopened lead' }, reportsTo: { sessionId: 'root' } }),
-                root: createSessionListRenderableSessionFixture({ id: 'root', metadata: { path: '/repo', host: 'host', name: 'Root' }, reportsTo: null }),
+                child: createSessionListRenderableSessionFixture({ id: 'child', manager: { sessionId: 'lead' } }),
+                lead: createSessionListRenderableSessionFixture({ id: 'lead', metadata: { path: '/repo', host: 'host', name: 'Unopened lead' }, manager: { sessionId: 'root' } }),
+                root: createSessionListRenderableSessionFixture({ id: 'root', metadata: { path: '/repo', host: 'host', name: 'Root' }, manager: null }),
             } },
         });
     });
@@ -29,14 +29,14 @@ describe('Session lineage navigation', () => {
 
     it('offers Reports-to as one link to the unopened immediate lead in its exact Home', async () => {
         const push = vi.fn();
-        const relationship = <SessionLineageBreadcrumb sessionId="child" serverId="report-home" presentation="reportsTo" />;
+        const relationship = <SessionLineageBreadcrumb sessionId="child" serverId="report-home" presentation="manager" />;
         const screen = await renderScreen(
             <DestinationInstanceHost tabId="phone-work" ref={{ kind: 'session', params: { id: 'child' } }} pathname="/session/child" focused visible
                 navigation={{ push, replace: () => {}, back: () => {} }}>
                 {relationship}
             </DestinationInstanceHost>,
         );
-        expect(screen.getTextContent()).toContain(t('sessionWork.peek.reportsTo', { lead: 'Unopened lead' }));
+        expect(screen.getTextContent()).toContain(t('sessionWork.peek.manager', { lead: 'Unopened lead' }));
         expect(screen.getTextContent()).not.toContain('Root');
         const link = screen.findHostByTestId('session-header-lineage:lead');
         expect(link?.props.role ?? link?.props.accessibilityRole).toBe('link');

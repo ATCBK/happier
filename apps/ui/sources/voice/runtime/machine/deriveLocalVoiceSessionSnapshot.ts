@@ -185,6 +185,7 @@ export function deriveLocalVoiceSessionSnapshot(
         status: projection.sessionStatus,
         mode: projection.sessionMode,
         canStop: projection.canStop,
+        ...(engineKind === 'local' && snapshot.state === 'listening' ? { canCommitInput: true } : {}),
         ...(snapshot.micMuted ? { micMuted: true } : {}),
         ...(snapshot.inUseVoice && projection.sessionStatus === 'connected' ? { inUseVoice: snapshot.inUseVoice } : {}),
         ...(snapshot.error

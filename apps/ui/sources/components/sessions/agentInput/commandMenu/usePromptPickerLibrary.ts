@@ -50,7 +50,7 @@ export function usePromptPickerLibrary(serverId: string) {
             });
             const { executeDefaultActionInCapturedAccount } = await import('@/sync/ops/actions/defaultActionExecutor');
             const [library, projection] = await Promise.all([
-                executeDefaultActionInCapturedAccount(captured, 'prompts.library.list', { includeBundles: false }, {
+                executeDefaultActionInCapturedAccount(captured, 'prompts.library.list', {}, {
                     surface: 'ui', authority: 'present_user', serverId, expectedAccountId: captured.accountId, signal: controller.signal,
                 }).then((result) => {
                     if (!result.ok) throw Object.assign(new Error(result.error), { code: result.errorCode });

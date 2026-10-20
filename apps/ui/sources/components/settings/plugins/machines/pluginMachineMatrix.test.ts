@@ -21,6 +21,7 @@ import {
     type PluginMachineMatrixCellStateV1,
     type PluginMachineMatrixV1,
 } from './pluginMachineMatrix';
+import { resolvePluginMachineCoverageLabels } from './pluginMachineCoverage';
 
 const NOW = Date.now();
 const OBSERVED_AT = 1_700_000_000_000;
@@ -457,6 +458,13 @@ describe('buildPluginMachineMatrix', () => {
             Revoked: 'machineUnavailable',
             Untrusted: 'untrusted',
         });
+        const revokedOnly = buildPluginMachineMatrix({
+            admission: admission([materialization({ machineId: 'machine-revoked' })]),
+            machineSnapshots: snapshots,
+            classifyRelease: () => MATCHED,
+            pluginId: 'acme.plugin',
+        });
+        expect(resolvePluginMachineCoverageLabels(revokedOnly)).not.toHaveProperty('acme.plugin');
     });
 
     it('exposes no portable target or execution origin a caller could mutate through', () => {

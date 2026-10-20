@@ -32,6 +32,7 @@ import type { PluginSurfaceScopedLaunchFacts } from '@/components/plugins/surfac
 import { PluginReactNativeUnavailable } from '@/components/plugins/reactNative/PluginReactNativeUnavailable';
 import type { AttachmentDraft } from '@/components/sessions/attachments/attachmentDraftModel';
 import type { SessionRouteHydrationState } from '@/sync/domains/session/sessionRouteHydrationState';
+import type { TranscriptExperience } from '@/components/sessions/transcript/viewport/lifecycle/transcriptSameSessionHandoff';
 import { SessionDetailsPanel } from '@/components/sessions/panes/SessionDetailsPanel';
 import {
     createSessionCommitDetailsTab,
@@ -87,11 +88,18 @@ import { resolveSessionCockpitMobileCatalog } from './sessionCockpitMobileCatalo
 import { SessionServicesSurfaceScreen } from './SessionServicesSurfaceScreen';
 import { useSessionCockpitSurfaceNavigation } from './SessionCockpitSurfaceNavigation';
 
-// The one Work tab host the desktop sidebar mounts too: the Work view with FIN's Triggers section in its slot.
-const SessionWorkViewWithTriggers = retryableLazy(() => import('@/components/workflows/triggers/SessionWorkViewWithTriggers').then((module) => ({ default: module.SessionWorkViewWithTriggers })));
-const SessionCollaborationSurface = retryableLazy(() => import('@/components/sessions/collaboration/SessionCollaborationSurface').then((module) => ({ default: module.SessionCollaborationSurface })));
+// The one Work tab the desktop sidebar mounts too.
+const SessionWorkView = retryableLazy<React.ComponentProps<typeof import('@/components/sessions/work/SessionWorkView')['SessionWorkView']>>(
+    () => import('@/components/sessions/work/SessionWorkView').then((module) => ({ default: module.SessionWorkView })),
+);
+const SessionCollaborationSurface = retryableLazy<React.ComponentProps<typeof import('@/components/sessions/collaboration/SessionCollaborationSurface')['SessionCollaborationSurface']>>(
+    () => import('@/components/sessions/collaboration/SessionCollaborationSurface').then((module) => ({ default: module.SessionCollaborationSurface })),
+);
 
 export type SessionCockpitSurfaceScreenProps = Readonly<{
+    experience?: TranscriptExperience;
+    surfaceFocusedOverride?: boolean;
+    surfaceVisibleOverride?: boolean;
     sessionId: string;
     scopeId: string;
     surface: SessionMobileSurface;
@@ -136,7 +144,10 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
     const instanceKey = useDestinationInstanceKey();
     // eslint-disable-next-line react-hooks/rules-of-hooks -- ownership is fixed for this mounted body.
     const destinationFocused = instanceKey === null ? true : useDestinationFocus();
-    const isFocused = sceneFocused && destinationFocused;
+    const cockpit = props.experience !== 'classic';
+    const surfaceFocused = props.surfaceFocusedOverride ?? destinationFocused;
+    const surfaceVisible = props.surfaceVisibleOverride ?? true;
+    const isFocused = cockpit && sceneFocused && surfaceFocused && surfaceVisible;
     const pane = useAppPaneScope(props.scopeId);
     const surfaceNavigation = useSessionCockpitSurfaceNavigation();
     const enclosingNavigation = usePluginSurfaceDestinationNavigationBinding();
@@ -181,7 +192,9 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
     const resolveBoardPrimaryHost = useSessionBoardPrimaryMountResolver({
         address: sessionAddress,
         paneScopeId: props.scopeId,
-        presented: isFocused,
+        // Classic workspace panes have no independent Cockpit scene. Visible
+        // unfocused panes still run their visuals; retained Cockpit scenes do not.
+        presented: ((!cockpit && instanceKey !== null) || sceneFocused) && surfaceVisible,
         mobileSurface: props.surface === 'board' || props.surface === 'companion' ? props.surface : null,
     });
     const openRight = pane.openRight;
@@ -518,22 +531,18 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
         targetRightTabId,
     ]);
 
+    const previousCockpitRef = React.useRef(cockpit);
     React.useEffect(() => {
+        const resumingCockpit = cockpit && !previousCockpitRef.current;
+        previousCockpitRef.current = cockpit;
+        // Wide mode temporarily focuses Chat. Returning to the cockpit restores
+        // its navigation state; that intermediate focus is not a request to close panes.
+        if (resumingCockpit) return;
         if (!isFocused) return;
         if (props.surface !== 'chat') return;
-        if (rightIsOpen !== true) return;
-
-        closeRight();
-    }, [closeRight, isFocused, props.surface, rightIsOpen]);
-
-    React.useEffect(() => {
-        if (!isFocused) return;
-        if (props.surface !== 'chat') return;
-        if (detailsIsOpen !== true) return;
-        if (hasDeepLinkedDetailsTarget) return;
-
-        closeDetails();
-    }, [closeDetails, detailsIsOpen, hasDeepLinkedDetailsTarget, isFocused, props.surface]);
+        if (rightIsOpen) closeRight();
+        if (detailsIsOpen && !hasDeepLinkedDetailsTarget) closeDetails();
+    }, [closeDetails, closeRight, cockpit, detailsIsOpen, hasDeepLinkedDetailsTarget, isFocused, props.surface, rightIsOpen]);
 
     const openDetailsSurface = React.useCallback(() => {
         surfaceNavigation?.switchSurface('tabs');
@@ -591,8 +600,8 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
         });
     }, [openDetailsSurface, pane]);
 
-    const safeAreaTopMode = 'internal';
-    const headerSafeAreaTopMode = 'internal';
+    const safeAreaTopMode = cockpit ? 'internal' : undefined;
+    const headerSafeAreaTopMode = cockpit ? 'internal' : undefined;
     const renderSessionChrome = React.useCallback((contentOverride?: React.ReactNode) => (
         <SessionView
             id={props.sessionId}
@@ -601,17 +610,23 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
             jumpToSeq={props.jumpToSeq}
             paneUrlState={props.paneUrlState ?? undefined}
             initialAttachmentDrafts={props.initialAttachmentDrafts}
-            routeAnchorOverride={Platform.OS === 'web' ? undefined : true}
+            surfaceFocusedOverride={surfaceFocused && (cockpit ? sceneFocused : true)}
+            surfaceVisibleOverride={surfaceVisible && (cockpit ? sceneFocused : true)}
+            routeAnchorOverride={cockpit ? Platform.OS === 'web' ? undefined : true : surfaceFocused && surfaceVisible}
             contentOverride={contentOverride}
             safeAreaTopMode={safeAreaTopMode}
             headerSafeAreaTopMode={headerSafeAreaTopMode}
-            chatBottomSpacing="none"
+            chatBottomSpacing={cockpit ? 'none' : undefined}
             openWorkStateRequestKey={openWorkStateRequestKey}
             resolveBoardPrimaryHost={resolveBoardPrimaryHost}
             sessionPluginRuntime={boardPluginRuntime}
         />
     ), [
         headerSafeAreaTopMode,
+        cockpit,
+        sceneFocused,
+        surfaceFocused,
+        surfaceVisible,
         props.initialAttachmentDrafts,
         props.jumpToSeq,
         props.paneUrlState,
@@ -735,7 +750,7 @@ const SessionCockpitSurfaceScreenContent = React.memo((props: SessionCockpitSurf
             <SessionCockpitFullscreenSurface screenTestID="session-agents-screen" safeAreaPadding={false} header={surfaceHeader}>
                 <SurfaceStateSizeProvider size="phone">
                     <React.Suspense fallback={<PaneLoadingFallback />}>
-                        <SessionWorkViewWithTriggers
+                        <SessionWorkView
                             sessionId={props.sessionId}
                             scopeId={props.scopeId}
                             serverId={servicesServerId}

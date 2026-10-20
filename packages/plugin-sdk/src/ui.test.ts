@@ -6,6 +6,7 @@ import * as protocol from '@happier-dev/protocol';
 import {
     CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1 as canonicalCurrentUiContextBoundedIncompletenessV1,
     ComposerRefV1Schema as canonicalComposerRefV1Schema,
+    PluginUiLaunchInputV1Schema as canonicalPluginUiLaunchInputV1Schema,
     MAX_COMPOSER_ATTACHMENT_DESCRIPTION_CODE_POINTS_V1 as canonicalComposerAttachmentDescriptionCodePointsV1,
     MAX_COMPOSER_ATTACHMENT_LABEL_CODE_POINTS_V1 as canonicalComposerAttachmentLabelCodePointsV1,
     pluginUiTargetedContributionOperationKey as canonicalPluginUiTargetedContributionOperationKey,
@@ -55,6 +56,7 @@ describe('plugin UI public surface', () => {
         const resourceAuthorContracts = pluginResourcesAuthorSurface as Readonly<Record<string, unknown>>;
 
         for (const surface of [uiContracts, uiAuthorContracts]) {
+            expect(surface['PluginUiLaunchInputV1Schema']).toBe(canonicalPluginUiLaunchInputV1Schema);
             expect(surface['MAX_COMPOSER_CONTENT_INSPECT_BYTES_V1'])
                 .toBe(protocol.MAX_COMPOSER_CONTENT_INSPECT_BYTES_V1);
             expect(surface['ComposerContentInspectWireResultV1Schema'])
@@ -166,6 +168,8 @@ describe('plugin UI public surface', () => {
         }, { policy: 'closed' });
         expect(launchInput.parse({ originComposer: { kind: 'session', sessionId: 'session-1' } }))
             .toEqual({ originComposer: { kind: 'session', sessionId: 'session-1' } });
+        expect(launchInput.parse({ originComposer: { kind: 'discussion', discussionId: 'discussion-1' } }))
+            .toEqual({ originComposer: { kind: 'discussion', discussionId: 'discussion-1' } });
         expect(launchInput.parse({
             originComposer: {
                 kind: 'workflowAuthoring',
@@ -185,6 +189,9 @@ describe('plugin UI public surface', () => {
         // The arms stay closed through the projection.
         expect(launchInput.safeParse({
             originComposer: { kind: 'session', sessionId: 'session-1', unknownArmField: true },
+        }).success).toBe(false);
+        expect(launchInput.safeParse({
+            originComposer: { kind: 'discussion', discussionId: 'discussion-1', serverId: 'forged-home' },
         }).success).toBe(false);
         expect(launchInput.jsonSchema.properties?.originComposer).toBeDefined();
 
@@ -293,6 +300,7 @@ describe('plugin UI public surface', () => {
             'waiting',
             'list',
             'board',
+            'filter',
         ]);
     });
 

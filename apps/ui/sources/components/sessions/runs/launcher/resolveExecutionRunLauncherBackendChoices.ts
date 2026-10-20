@@ -15,6 +15,9 @@ import {
 import { backendTargetKeysMatch, resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { buildAvailableReviewEngineOptions, resolveReviewEngineTarget, type ExecutionRunsBackendSnapshotEntry } from '@/sync/domains/reviews/reviewEngineCatalog';
 import { resolveExecutionRunAvailableBackends } from '@/sync/domains/executionRuns/resolveExecutionRunAvailableBackends';
+import { findMachineAgentForBackendTarget } from '@/agents/machineAgents/machineAgentCatalog';
+import type { MachineAgent } from '@/agents/machineAgents/machineAgentTypes';
+import { resolveMachineAgentPickerPlacement } from '@/components/machines/agents/machineAgentPresentation';
 
 export type ExecutionRunLauncherBackendChoice = Readonly<{
     backendTarget: PersistedBackendTargetRefV2;
@@ -24,6 +27,8 @@ export type ExecutionRunLauncherBackendChoice = Readonly<{
     agentId: string;
     title: string;
     disabled: boolean;
+    /** Where the Machine's own inventory says this Agent is, when it is not ready to run there. */
+    unavailable?: 'notOnMachine' | 'cantRun';
 }>;
 
 export function resolveInitialExecutionRunBackendTargetKey(
@@ -84,6 +89,8 @@ function resolveReviewBackendLabel(params: Readonly<{
     backendId: string;
     executionRunBackend?: ExecutionRunsBackendSnapshotEntry | null;
     mergedBackendProjectionById?: Readonly<Record<string, MergedBackendProjectionEntry>> | null;
+    /** The Agent catalog's own title, so an Agent the machine has not described yet never shows its raw id. */
+    catalogTitle?: string | null;
 }>): string {
     const projectedTitle = params.mergedBackendProjectionById?.[params.backendId]?.title;
     if (typeof projectedTitle === 'string' && projectedTitle.trim().length > 0) {
@@ -92,17 +99,48 @@ function resolveReviewBackendLabel(params: Readonly<{
     return params.executionRunBackend?.title
         ?? params.executionRunBackend?.label
         ?? params.executionRunBackend?.displayName
+        ?? params.catalogTitle
         ?? params.backendId;
 }
 
-export function resolveExecutionRunLauncherBackendChoices(params: Readonly<{
+type ResolveBackendChoicesParams = Readonly<{
     enabledAgentIds: readonly string[];
     executionRunsBackends: Readonly<Record<string, ExecutionRunsBackendSnapshotEntry>> | null | undefined;
     acpCatalogSnapshot?: AcpCatalogSnapshotV1;
     intent: string;
     mergedBackendProjectionById?: Readonly<Record<string, MergedBackendProjectionEntry>> | null;
     mergedProviderProjectionById?: Readonly<Record<string, MergedProviderProjectionEntry>> | null;
-}>): readonly ExecutionRunLauncherBackendChoice[] {
+    /** The Machine's own Agent inventory, once it has answered. */
+    machineAgents?: readonly MachineAgent[] | null;
+}>;
+
+/**
+ * A choice is not offered while the Machine has not told us what it offers (an unread Machine says
+ * neither yes nor no), nor for an Agent its inventory places off the Machine; that placement is the
+ * New Session picker's, so both surfaces name the same Agents the same way.
+ */
+function applyMachineFacts(
+    choices: readonly ExecutionRunLauncherBackendChoice[],
+    params: Pick<ResolveBackendChoicesParams, 'executionRunsBackends' | 'machineAgents'>,
+): readonly ExecutionRunLauncherBackendChoice[] {
+    const unread = params.executionRunsBackends == null;
+    return choices.map((choice) => {
+        const agent = findMachineAgentForBackendTarget(params.machineAgents ?? [], choice.backendTarget);
+        const group = resolveMachineAgentPickerPlacement(agent).group;
+        const unavailable = group === 'onMachine' ? undefined : group;
+        return {
+            ...choice,
+            disabled: choice.disabled || unread || unavailable !== undefined,
+            ...(unavailable ? { unavailable } : {}),
+        };
+    });
+}
+
+export function resolveExecutionRunLauncherBackendChoices(params: ResolveBackendChoicesParams): readonly ExecutionRunLauncherBackendChoice[] {
+    return applyMachineFacts(resolveCatalogBackendChoices(params), params);
+}
+
+function resolveCatalogBackendChoices(params: ResolveBackendChoicesParams): readonly ExecutionRunLauncherBackendChoice[] {
     const catalogBackendIds = Array.from(
         new Set([
             ...params.enabledAgentIds,
@@ -130,6 +168,7 @@ export function resolveExecutionRunLauncherBackendChoices(params: Readonly<{
                 backendId: id,
                 executionRunBackend: params.executionRunsBackends?.[id] ?? null,
                 mergedBackendProjectionById: params.mergedBackendProjectionById ?? null,
+                catalogTitle: catalogEntries.find((entry) => entry.backendId === id || entry.agentId === id)?.title ?? null,
             }),
         }).flatMap((option) => {
             const target = resolveReviewEngineTarget(option.id);

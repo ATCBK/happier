@@ -1,6 +1,5 @@
-import { z } from 'zod';
-import { TodoItemV1Schema, TodoItemV1StoredSchema, TodoSessionLinkInputV1Schema } from '@happier-dev/protocol/todos/todoSessionLinkV1';
-import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { z } from 'zod/mini';
+import { TodoItemV1Schema, TodoItemV1StoredSchema, TodoIndexV1Schema, TodoIndexV1StoredSchema } from '@happier-dev/protocol/todos/todoSessionLinkV1';
 
 import {
     AccountStoredJsonContentEncryptionMaterialUnavailableError,
@@ -12,26 +11,13 @@ import {
 export const TODO_PREFIX = 'todo.';
 export const TODO_INDEX_KEY = 'todo.index';
 
-export const ZenTaskSourceSchema = z.object({
-    kind: z.literal('zen_task'),
-    taskId: z.string().min(1),
-    title: z.string(),
-    scope: TodoSessionLinkInputV1Schema.shape.scope,
-}).strict();
-
-/** Local draft custody; never part of the synchronized authoring document. */
-export type ZenTaskSource = z.infer<typeof ZenTaskSourceSchema>;
-
 export const TodoItemSchema = TodoItemV1Schema;
 
-export const TodoIndexSchema = z.object({
-    undoneOrder: z.array(z.string()),
-    completedOrder: z.array(z.string()),
-}).strict();
+export const TodoIndexSchema = TodoIndexV1Schema;
 
 export type TodoItem = z.infer<typeof TodoItemSchema>;
 export type TodoIndex = z.infer<typeof TodoIndexSchema>;
-const TodoIndexStoredSchema = createStoredReadSchema(TodoIndexSchema);
+const TodoIndexStoredSchema = TodoIndexV1StoredSchema;
 
 type RawAccountEncryption = Readonly<{
     encryptRaw: (value: unknown) => Promise<string>;
@@ -65,6 +51,24 @@ export function isTodoStoredContentUnavailableError(
         && (error as { code?: unknown }).code === 'todo_stored_content_unavailable';
 }
 
+/** A stored row the Account cipher refused, whichever module instance of its error class raised it. */
+export function isAccountStoredContentFailure(error: unknown): boolean {
+    const code = error instanceof Error && 'code' in error ? error.code : undefined;
+    return code === 'account_stored_json_mode_mismatch'
+        || code === 'account_stored_json_encryption_material_unavailable'
+        || code === 'account_kv_content_unreadable';
+}
+
+export function toTodoStoredContentUnavailableError(key: string, error: unknown): TodoStoredContentUnavailableError {
+    if (isTodoStoredContentUnavailableError(error)) return error;
+    const code = error instanceof Error && 'code' in error ? error.code : undefined;
+    return new TodoStoredContentUnavailableError(key,
+        error instanceof AccountStoredJsonContentModeMismatchError || code === 'account_stored_json_mode_mismatch'
+            ? 'account_mode_mismatch'
+            : error instanceof AccountStoredJsonContentEncryptionMaterialUnavailableError || code === 'account_stored_json_encryption_material_unavailable'
+                ? 'encryption_material_unavailable' : 'content_unreadable', error);
+}
+
 export type DecodedTodoStoredContent =
     | Readonly<{ kind: 'index'; value: TodoIndex }>
     | Readonly<{ kind: 'item'; todoId: string; value: TodoItem }>;
@@ -85,7 +89,7 @@ function resolveTodoKey(key: string):
     return { kind: 'item', todoId };
 }
 
-function parseTodoStoredContent(
+export function parseTodoStoredContent(
     key: string,
     value: unknown,
     storedRead = false,
@@ -132,18 +136,7 @@ export async function decodeTodoStoredContent(params: Readonly<{
             expectedMode: params.expectedMode,
         });
     } catch (error) {
-        if (isTodoStoredContentUnavailableError(error)) {
-            throw error;
-        }
-        throw new TodoStoredContentUnavailableError(
-            params.key,
-            error instanceof AccountStoredJsonContentModeMismatchError
-                ? 'account_mode_mismatch'
-                : error instanceof AccountStoredJsonContentEncryptionMaterialUnavailableError
-                ? 'encryption_material_unavailable'
-                : 'content_unreadable',
-            error,
-        );
+        throw toTodoStoredContentUnavailableError(params.key, error);
     }
 
     return parseTodoStoredContent(params.key, value, true);

@@ -39,7 +39,7 @@ export function createMachineConnectionActionDeps(options: Readonly<{ runner?: S
                 return { ok: false, errorCode: 'account_settings_scope_changed', error: 'account_settings_scope_changed' };
             }
             if (actionId === 'machines.daemon.stop') {
-                return machineStopDaemon(input.machineId, { serverId });
+                return machineStopDaemon(input.machineId, { serverId, signal: context.signal });
             }
             if (actionId === 'machines.capabilities.install') {
                 const request = MachineCapabilityInstallInputSchema.parse(input);
@@ -163,14 +163,14 @@ export function createMachineConnectionActionDeps(options: Readonly<{ runner?: S
                 const account = options.account;
                 const request = MACHINE_TERMINAL_ACTION_INPUT_SCHEMAS[actionId].parse(input);
                 if (!areServerProfileIdentifiersEquivalent(account.serverId, request.serverId)
-                    || context.surface !== 'ui' || context.authority !== 'present_user'
+                    || account.credentialAuthorityKind !== 'account'
                     || !context.actionRequestId || !canUsePrivateProjectAccountAction(account, context)) {
                     return { ok: false, errorCode: 'admission_unavailable', error: 'admission_unavailable' };
                 }
                 const requestId = context.actionRequestId;
                 const run = () => executeOriginalAccountMachineAction({ account, actionId,
                         input: { ...request, serverId: account.serverId }, machineId: request.machineId,
-                        requestId, foreignTargetOnly: true, ...(signal ? { signal } : {}) });
+                        requestId, authority: context.authority ?? 'account_automation', foreignTargetOnly: true, ...(signal ? { signal } : {}) });
                 const execution = 'terminalKey' in request && typeof request.terminalKey === 'string'
                     ? await trackPendingMachineTerminalCreation(request.machineId, request.terminalKey, run,
                         { serverId: account.serverId, accountId: account.accountId, signal })

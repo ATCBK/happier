@@ -57,6 +57,26 @@ describe('waitForTranscriptEncryptedMessageByLocalId', () => {
     }
   });
 
+  it('refuses a different localId before exposing its committed message identity', async () => {
+    const { findTranscriptEncryptedMessageByLocalIdV2 } = await import('./transcriptMessageLookup');
+    let returnedLocalId = 'another-input';
+    const receipt = { v: 1, issuer: 'authenticatedAccount', actorAccountId: 'bob', sessionRelationship: 'sharedEditor' } as const;
+    app = fastify({ logger: false });
+    app.get('/v2/sessions/:sid/messages/by-local-id/:localId', async () => ({ message: {
+      id: 'committed-answer', seq: 7, localId: returnedLocalId, createdAt: 1, updatedAt: 1,
+      messageRole: 'user', inputAdmissionReceipt: receipt,
+      content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Exact request' } } },
+    } }));
+    await app.ready();
+    restoreAdapter = installAxiosFastifyAdapter({ app, origin: 'http://adapter.test' });
+    const read = () => findTranscriptEncryptedMessageByLocalIdV2({ token: 'token', serverUrl: 'http://adapter.test',
+      sessionId: 'session', localId: 'accepted-input' });
+    expect(await read()).toMatchObject({ type: 'protocol_error' });
+    returnedLocalId = 'accepted-input';
+    expect(await read()).toMatchObject({ type: 'found', message: { id: 'committed-answer', localId: 'accepted-input',
+      messageRole: 'user', inputAdmissionReceipt: receipt } });
+  });
+
   it('parks after request errors until an event or reconnect rather than rereading on a cadence', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));

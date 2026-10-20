@@ -8,7 +8,7 @@ import { areServerAccountScopesEqual, serverAccountScopeKeySuffix } from '@/sync
 import { publishPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import { t } from '@/text';
 import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
-import { runWidgetDefinitionCommand, type WidgetCommandTarget } from './widgetDefinitionCommands';
+import { createWidgetArtifactWriteAttempt, runWidgetDefinitionCommand, type WidgetCommandTarget } from './widgetDefinitionCommands';
 
 const EMPTY_FRAGMENTS: readonly WidgetLayoutFragmentSummaryV1[] = Object.freeze([]);
 
@@ -25,6 +25,8 @@ export function useYourWidgetLayoutFragments(account: WidgetCommandTarget | null
     const serverId = account?.serverId;
     const accountId = account?.accountId;
     const scope = React.useMemo(() => serverId && accountId ? { serverId, accountId } : null, [accountId, serverId]);
+    // Several Gallery entries can each hold an unresolved copy; one cannot replace another's id.
+    const duplicateAttempts = React.useMemo(() => new Map<string, ReturnType<typeof createWidgetArtifactWriteAttempt<'widgets.fragment.duplicate'>>>(), [scope]);
     const [reload, refresh] = React.useReducer((value: number) => value + 1, 0);
     const mountedAccount = React.useRef<WidgetCommandTarget | null>(null);
     React.useEffect(() => {
@@ -71,10 +73,19 @@ export function useYourWidgetLayoutFragments(account: WidgetCommandTarget | null
             }
             if (intent === 'duplicate') {
                 // The Action owns the copy's name/default and its independent Artifact identity.
-                const copied = await runWidgetDefinitionCommand('widgets.fragment.duplicate',
-                    () => ({ account: scope, artifactId, newArtifactId: randomUUID() }), scope, signal);
+                let attempt = duplicateAttempts.get(artifactId);
+                if (!attempt) {
+                    attempt = createWidgetArtifactWriteAttempt('widgets.fragment.duplicate', scope);
+                    duplicateAttempts.set(artifactId, attempt);
+                }
+                const copied = await attempt.run(() => ({ account: scope, artifactId, newArtifactId: randomUUID() }), signal);
                 if (!current()) return;
-                if (copied.kind === 'applied') refresh();
+                // An accepted approval owns its prepared copy. A later Duplicate is another intent,
+                // including after that request is rejected; only uncertain failures stay here.
+                if (copied.kind !== 'refused' && duplicateAttempts.get(artifactId) === attempt) duplicateAttempts.delete(artifactId);
+                if (copied.kind === 'applied') {
+                    refresh();
+                }
                 else notify(copied);
                 return;
             }
@@ -100,7 +111,7 @@ export function useYourWidgetLayoutFragments(account: WidgetCommandTarget | null
                 notify(renamed);
             } else notify(renamed);
         } finally { cancellation.dispose(); }
-    }, [scope]);
+    }, [duplicateAttempts, scope]);
     const actionsFor = React.useCallback((fragment: WidgetLayoutFragmentSummaryV1): ItemAction[] => [
         { id: 'rename', title: t('common.rename'), icon: 'pencil-simple', onPress: () => { void manage(fragment, 'rename'); } },
         { id: 'duplicate', title: t('common.duplicate'), icon: 'copy', onPress: () => { void manage(fragment, 'duplicate'); } },

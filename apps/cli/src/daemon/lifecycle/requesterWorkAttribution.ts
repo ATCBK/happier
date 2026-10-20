@@ -1,14 +1,23 @@
 import type { RpcHandlerContext } from '@/api/rpc/types';
-import type { SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
+import { isPluginError } from '@happier-dev/plugin-sdk';
+import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol/spawnSession';
+import type { SpawnSessionOptions, SpawnSessionResult } from '@/session/shared/spawnSessionContract';
+import { rethrowRequesterHomeReadFailure } from '../sessionEncryption/requesterCurrentness';
 export { RequesterWorkAttributionV1Schema, RequesterWorkAttributionStoredReadV1Schema,
   type RequesterWorkAttributionV1 } from '@happier-dev/protocol/machines/requesterWorkAttributionV1';
+
+/** Principal equality only; the caller must still verify the admission's currentness. */
+export function isCustodianMachineAdmission(admission: Pick<NonNullable<RpcHandlerContext['machineAdmission']>,
+  'actorAccountId' | 'custodianAccountId'>): boolean {
+  return admission.actorAccountId === admission.custodianAccountId;
+}
 
 /** C41 owns Machine permission. This only prevents borrowing a different Account's credentials. */
 export async function canUseCustodianAccountForMachineRequest(context: Pick<RpcHandlerContext,
   'machineAdmission' | 'verifyMachineAdmissionCurrent'> & Readonly<{ signal?: AbortSignal }> | undefined): Promise<boolean> {
   if (!context?.machineAdmission) return !context?.signal?.aborted;
   const admission = context.machineAdmission;
-  if (context.signal?.aborted || admission.actorAccountId !== admission.custodianAccountId
+  if (context.signal?.aborted || !isCustodianMachineAdmission(admission)
     || !context.verifyMachineAdmissionCurrent) return false;
   try { return await context.verifyMachineAdmissionCurrent() && !context.signal?.aborted; }
   catch { return false; }
@@ -19,5 +28,21 @@ export async function isRequesterLaunchAdmissionCurrent(options: Pick<SpawnSessi
   'verifyRequesterMachineAdmissionCurrent'>): Promise<boolean> {
   if (!options.verifyRequesterMachineAdmissionCurrent) return true;
   try { return await options.verifyRequesterMachineAdmissionCurrent(); }
-  catch { return false; }
+  catch (error) {
+    rethrowRequesterHomeReadFailure(error);
+    return false;
+  }
+}
+
+/** One spawn-result projection for every fresh requester admission checkpoint. */
+export async function resolveRequesterLaunchAdmissionFailure(options: Pick<SpawnSessionOptions,
+  'verifyRequesterMachineAdmissionCurrent'>): Promise<Extract<SpawnSessionResult, { type: 'error' }> | null> {
+  const refusal = { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
+    errorMessage: 'Requester Machine admission unavailable' } as const;
+  try { return await isRequesterLaunchAdmissionCurrent(options) ? null : refusal; }
+  catch (error) {
+    if (!isPluginError(error) || error.code !== 'project_requester_home_unavailable' || error.retryable !== true) return refusal;
+    return { ...refusal, errorMessage: 'Requester Home is temporarily unavailable',
+      errorDetail: { kind: 'requester_home_unavailable' } };
+  }
 }

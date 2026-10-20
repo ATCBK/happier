@@ -1,3 +1,5 @@
+import { $ZodError } from 'zod/v4/core';
+import { isRetryableAccountEncryptionCurrentnessError } from '@/api/client/accountEncryptionCurrentness';
 import axios from 'axios';
 import { randomBytes } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
@@ -24,9 +26,9 @@ import { commitActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, 
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { parseSettingsFromContent, readAccountSettingsV2Raw, replaceAccountSettingsV2RawForOwnerCutover } from '@/settings/accountSettings/updateAccountSettingsV2WithRetry';
 import { createSavedSecretMaterializerFromSnapshotV1 } from '@/settings/secrets/savedSecretCatalog';
-import { captureSavedSecretSourcePreparationForOperation, prepareSavedSecretResourceCreateForOperation,
-  promoteSavedSecretResourceForOperation, readSavedSecretCatalogForOperation,
-  type SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { captureSavedSecretSourcePreparationForOperation, prepareSavedSecretResourceCreateForOperation, promoteSavedSecretResourceForOperation } from "@/settings/secrets/hydrateSavedSecretCatalog";
+import { readSavedSecretCatalogForOperation } from "@/settings/secrets/savedSecretCatalogRead";
+import { type SavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 
 /** The existing Account transport and publication lifetime admit this row. */
 export function createCliNotificationChannelStore(input: Readonly<{
@@ -270,8 +272,9 @@ export function createCliNotificationChannelStore(input: Readonly<{
       return { status: 'unavailable', reason: input.signal?.aborted ? 'cancelled' : !isCurrent() ? 'scope-retired'
         : code === 'unauthorized' || code === 'forbidden' || code === 'unsupported' || code === 'scope-retired'
           || code === 'account-mode-mismatch' ? code
+        : isRetryableAccountEncryptionCurrentnessError(error) ? 'unreachable'
         : code === 'account_storage_currentness_unavailable' || code === 'account_encryption_currentness_unavailable'
-          ? 'encryption-material-unavailable' : error instanceof Error && error.name === 'ZodError' ? 'invalid-stored-content' : 'unreachable' };
+          ? 'encryption-material-unavailable' : error instanceof $ZodError ? 'invalid-stored-content' : 'unreachable' };
     }
   };
   return { assertCurrent, readRow, readStorageContext, readNotificationChannelCatalog };

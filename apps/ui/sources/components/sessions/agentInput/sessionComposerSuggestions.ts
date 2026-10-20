@@ -9,6 +9,7 @@ import type {
 import { getSuggestions } from '@/components/autocomplete/suggestions';
 import type { PluginContributedActionDescriptor } from '@/components/plugins/actions/pluginContributedActionController';
 import { resolveWorkspaceTargetForSession } from '@/sync/domains/session/resolveWorkspaceTargetForSession';
+import type { SkillComposerSource } from '@/sync/domains/skills/skillComposerGroups';
 
 /**
  * How a composer attached to an EXISTING session asks for suggestions.
@@ -31,6 +32,8 @@ export function resolveSessionComposerSuggestions(
         signal: AbortSignal;
         composerReferenceHost?: ComposerReferenceSearchHost | null;
         contributedActions?: readonly PluginContributedActionDescriptor[];
+        /** The library/Found source for `$`; hosts without the Session capabilities owner omit it. */
+        skillSource?: SkillComposerSource | null;
         onUpdate?: AutocompleteSuggestionUpdate;
     }>,
 ): Promise<AutocompleteSuggestion[]> {
@@ -44,6 +47,7 @@ export function resolveSessionComposerSuggestions(
         signal: options.signal,
         composerReferenceHost: options.composerReferenceHost,
         contributedActions: options.contributedActions,
+        skillSource: options.skillSource,
         onUpdate: options.onUpdate,
     });
 }

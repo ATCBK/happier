@@ -140,6 +140,8 @@ export function LookPanelBlock(
     title: string;
     /** A live value or a small action at the header's end (Strength's percentage, Shuffle). */
     accessory?: React.ReactNode;
+    /** A live value as text at the header's end (Strength's percentage); `accessory` wins when both are set. */
+    value?: string;
     /** What the choice needs or does right now, under the control. */
     note?: string;
     testID?: string;
@@ -148,7 +150,10 @@ export function LookPanelBlock(
 ) {
   return (
     <View testID={props.testID}>
-      <SelectionListSectionHeader title={props.title} rightAccessory={props.accessory} />
+      <SelectionListSectionHeader
+        title={props.title}
+        rightAccessory={props.accessory ?? (props.value !== undefined ? <Text style={styles.value}>{props.value}</Text> : undefined)}
+      />
       <View style={styles.panelBlock}>
         {props.children}
         {props.note ? <Text style={styles.note}>{props.note}</Text> : null}
@@ -220,7 +225,8 @@ function LookBlock(
     <LookPanelBlock
       testID={props.testID}
       title={props.title}
-      accessory={props.action ?? (props.value !== undefined ? <Text style={styles.value}>{props.value}</Text> : undefined)}
+      accessory={props.action}
+      value={props.value}
     >
       {props.children}
     </LookPanelBlock>

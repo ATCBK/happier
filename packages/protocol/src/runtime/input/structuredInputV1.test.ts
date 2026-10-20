@@ -77,6 +77,22 @@ describe('browser context Message admission', () => {
   });
 });
 
+describe('raw review context admission', () => {
+  it('accepts only strict issued Session attachment handles at raw ingress', () => {
+    const handle = { v: 1, sessionId: 'session-1', id: 'upload-1' };
+    expect(RawIngressStructuredInputV1Schema.safeParse({ v: 1, sessionAttachments: [handle] }).success).toBe(true);
+    for (const attachment of [{ ...handle, path: '/etc/passwd' }, { ...handle, sha256: 'a'.repeat(64) }, { path: '/etc/passwd' }]) {
+      expect(RawIngressStructuredInputV1Schema.safeParse({ v: 1, sessionAttachments: [attachment] }).success).toBe(false);
+    }
+  });
+
+  it('validates review source and nested drafts rather than accepting an opaque annotation', () => {
+    expect(RawIngressStructuredInputV1Schema.safeParse({ v: 1, reviewComments: {
+      sessionId: 'source-session', comments: [{ id: 'incomplete-draft' }],
+    } }).success).toBe(false);
+  });
+});
+
 function canonicalJsonByteLength(value: unknown): number {
   return new TextEncoder().encode(createCanonicalJsonSigningInput(value)).byteLength;
 }
@@ -127,36 +143,36 @@ describe('readSessionAttachmentEnvelopeRecordsV1', () => {
   });
 
   it('opens retained declared structured fields while preserving the explicitly open native reference bags', () => {
-    const source = { kind: 'session_discussion', sessionId: 'session-a', discussionId: 'discussion-a', messageIds: ['message-a'] };
+    const source = { kind: 'discussion', serverId: 'home-a', discussionId: 'discussion-a', messageIds: ['message-a'] };
     const mention = { kind: 'future.reference', ref: 'future:opaque', token: '@future', nativeAnnotation: { keep: true } };
-    const canonical = { v: 1, sessionDiscussionSelectionSourceV1: source,
+    const canonical = { v: 1, discussionSelectionSourceV1: source,
       mentions: [mention], nativeEnvelope: { keep: true } };
     expect(readAdmittedHappierStructuredInputV1FromMeta({ happierStructuredInputV1: canonical }))
       .toEqual({ status: 'admitted', structuredInput: canonical });
-    const retained = { ...canonical, sessionDiscussionSelectionSourceV1: { ...source, retired: true } };
+    const retained = { ...canonical, discussionSelectionSourceV1: { ...source, retired: true } };
     expect(readAdmittedHappierStructuredInputV1FromMeta({ happierStructuredInputV1: retained }))
       .toEqual({ status: 'admitted', structuredInput: canonical });
     expect(HappierStructuredInputV1Schema.safeParse(retained).success).toBe(false);
     expect(readAdmittedHappierStructuredInputV1FromMeta({ happierStructuredInputV1: { ...retained,
-      sessionDiscussionSelectionSourceV1: { ...source, sessionId: ' ' } } })).toEqual({ status: 'invalid' });
+      discussionSelectionSourceV1: { ...source, serverId: ' ' } } })).toEqual({ status: 'invalid' });
     expect(readAdmittedHappierStructuredInputV1FromMeta({ happierStructuredInputV1: { ...retained,
       resolvedComposerAttachments: [] } })).toEqual({ status: 'invalid' });
   });
 
   it('retains a bounded Discussion selection source and rejects Run-only correlation', () => {
     const source = {
-      kind: 'session_discussion' as const,
-      sessionId: 'session-a',
+      kind: 'discussion' as const,
+      serverId: 'home-a',
       discussionId: 'discussion-a',
       messageIds: ['message-a'],
     };
     expect(HappierStructuredInputV1Schema.parse({
       v: 1,
-      sessionDiscussionSelectionSourceV1: source,
-    }).sessionDiscussionSelectionSourceV1).toEqual(source);
+      discussionSelectionSourceV1: source,
+    }).discussionSelectionSourceV1).toEqual(source);
     expect(HappierStructuredInputV1Schema.safeParse({
       v: 1,
-      sessionDiscussionSelectionSourceV1: { ...source, draftCorrelationId: 'draft-a' },
+      discussionSelectionSourceV1: { ...source, draftCorrelationId: 'draft-a' },
     }).success).toBe(false);
   });
 

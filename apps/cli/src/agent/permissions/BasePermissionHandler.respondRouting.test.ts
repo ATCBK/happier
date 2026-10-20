@@ -7,6 +7,7 @@ import { createSessionActionConfirmationAdapter } from '@/session/actions/approv
 import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
 import { ServerBoundPermissionRpcHandlerManager } from './testkit/serverBoundPermissionRpcHandlerManager';
 import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { abortPendingAcpPermissionRequests } from '@/agent/acp/permissions/permissionFinalization';
 
 beforeEach(() => {
   resetActiveAccountSettingsSnapshotForTests();
@@ -61,6 +62,49 @@ class FakeSession {
 }
 
 describe('BasePermissionHandler permission-response routing (gap 28/29)', () => {
+  it('withdraws an open native question on explicit foreground Stop', async () => {
+    const session = new FakeSession();
+    const handler = new ProviderEnforcedPermissionHandler(session as never, { logPrefix: '[Stop]' });
+    const pending = handler.handleToolCall('stopped-question', 'AskUserQuestion', {
+      questions: [{ question: 'Continue?', options: [{ label: 'Yes', description: 'Continue' }], multiSelect: false }],
+    }).catch(() => null);
+    await vi.waitFor(() => expect(session.agentState.requests['stopped-question']).toBeDefined());
+    await handler.reset({ scope: 'foreground' });
+    await pending;
+    expect(session.agentState.requests['stopped-question']).toBeUndefined();
+    expect(session.agentState.completedRequests['stopped-question'])
+      .toMatchObject({ status: 'canceled', reason: 'Foreground turn stopped' });
+  });
+
+  it.each(['reset', 'plugin', 'turn', 'acp-finalization'] as const)('keeps native questions answerable after incidental %s', async (lifecycle) => {
+    const session = new FakeSession();
+    const handler = new ProviderEnforcedPermissionHandler(session as never, { logPrefix: '[Lifetime]' });
+    const owner = { kind: 'plugin' as const, pluginId: 'plugin-a' };
+    const context = { owner, turnId: 'question-turn' };
+    const question = handler.handleToolCall('retained-question', 'AskUserQuestion', {
+      questions: [{ question: 'Choose?', options: [{ label: 'Yes', description: 'Continue' }], multiSelect: false }],
+    }, context).catch(() => null);
+    const approval = handler.handleToolCall('retired-approval', 'Write', { path: '/tmp/x', content: 'hi' },
+      context).catch(() => null);
+    await vi.waitFor(() => {
+      expect(session.agentState.requests['retained-question']).toBeDefined();
+      expect(session.agentState.requests['retired-approval']).toBeDefined();
+    });
+    if (lifecycle === 'reset') await handler.reset();
+    if (lifecycle === 'plugin') await handler.cancelByPlugin('plugin-a', 'agent_runtime_replaced');
+    if (lifecycle === 'turn') await handler.cancelByPluginTurn('plugin-a', 'question-turn', 'turn ended');
+    if (lifecycle === 'acp-finalization') await abortPendingAcpPermissionRequests(handler, 'ACP turn failed');
+    expect(session.agentState.requests['retained-question']).toBeDefined();
+    expect(session.agentState.completedRequests['retired-approval']).toMatchObject({ status: 'canceled' });
+    await Promise.all([question, approval]);
+    const replacement = new ProviderEnforcedPermissionHandler(session as never, { logPrefix: '[Replacement]' });
+    const rpc = session.rpcHandlerManager.handlers.get('permission')!;
+    await expect(rpc({ id: 'retained-question', approved: true, answers: { 'Choose?': 'Yes' } })).resolves.toBeUndefined();
+    expect(session.agentState.requests['retained-question']).toBeUndefined();
+    expect(session.agentState.completedRequests['retained-question']).toMatchObject({ status: 'approved' });
+    await replacement.reset();
+  });
+
   it.each([
     { name: 'unknown request', requestId: 'unknown', turnId: 'turn-current', decision: 'allow', errorCode: 'permission_request_not_found' },
     { name: 'stale turn', requestId: 'pending', turnId: 'turn-old', decision: 'allow', errorCode: 'permission_request_not_found' },

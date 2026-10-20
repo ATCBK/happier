@@ -51,6 +51,7 @@ export type AgentCliManagedInstallSpec =
   | Readonly<{
       kind: 'github_release_binary';
       githubRepo: string;
+      releaseTag?: string;
       binaryName: string;
       assetNameByPlatform?: AgentCliManagedAssetNameByPlatform;
       archiveEntriesByPlatform?: Readonly<

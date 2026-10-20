@@ -10,7 +10,10 @@ import type { UpdateItem } from '@/updates/items/updateItem';
 import type { UpdatesGroup } from '@/updates/buildMachineUpdateGroups';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { installOwnMachineApprovalReplayBoundary } from '@/dev/testkit/harness/approvalInbox';
 
+vi.mock('@/modal', async () =>
+    (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
 vi.mock('socket.io-client', async importOriginal => (await import('@/dev/testkit/harness/serverAccountConnectionHarness'))
     .createSocketIoClientBoundary(importOriginal));
 installDisconnectedServerSocketBoundary(socket => {
@@ -63,16 +66,22 @@ const cli: UpdateItem = {
 
 async function installOwner() {
     const serverUrl = 'https://updates-action.test';
-    const serverId = await homes.addHome({ name: 'Updates', serverUrl, accountId: 'alice', currentAccount: true });
+    const serverId = await homes.addHome({ name: 'Updates', serverUrl, serverIdentityId: 'srv_updates_action', accountId: 'alice', currentAccount: true });
+    await installOwnMachineApprovalReplayBoundary({ harness: homes, serverId, accountId: 'alice', machineId: 'studio' });
+    const approvalActions = ['updates.batch.start', 'machines.cli.update', 'machines.capabilities.install'] as const;
+    await homes.requireUiApproval(serverId, approvalActions);
     homes.answer(serverId, '/v2/cursor', { body: { cursor: '0' } });
     const token = homes.findByServerUrl(serverUrl)?.token;
     if (!token) throw new Error('Expected Updates Account credential fixture');
     const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
     await restoreConnectionToActiveServer({ token });
+    // Publish the Account policy after restoration has applied its Settings
+    // baseline, so bootstrap cannot overwrite the fixture's Ask-first policy.
+    await homes.requireUiApproval(serverId, approvalActions);
     const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
     const scope = getActiveServerAccountScope();
     if (!scope) throw new Error('Expected applied Updates Account runtime');
-    expect(scope).toEqual({ serverId, accountId: 'alice' });
+    expect(scope).toEqual({ serverId: 'srv_updates_action', accountId: 'alice' });
     let items: readonly UpdateItem[] = [cli];
     const groups = (): UpdatesGroup[] => [{ id: 'machine:studio', kind: 'machine', machineId: 'studio', machineName: 'Studio',
         online: true, lastSeenAt: null, items }];
@@ -132,7 +141,10 @@ describe('Updates Actions through current UI update owners', () => {
             const approval = ActionApprovalRequestCreatedResultSchema.parse(admitted.result);
             expect(starts()).toEqual([]);
             const replay = executor.execute('approval.request.decide', { artifactId: approval.artifactId, decision: 'approve' }, context);
-            await pollEntered;
+            expect(await Promise.race([
+                pollEntered.then(() => ({ kind: 'dispatched' as const })),
+                replay.then(result => ({ kind: 'settled' as const, result })),
+            ])).toEqual({ kind: 'dispatched' });
             expect((await readSnapshot()).batch).toMatchObject({ done: 0, total: 1, stopping: false });
             expect(await executor.execute('updates.batch.stop', {}, context)).toEqual({ ok: true, result: { status: 'requested' } });
             expect((await readSnapshot()).batch?.stopping).toBe(true);
@@ -160,7 +172,6 @@ describe('Updates Actions through current UI update owners', () => {
         const { scope, replaceItems } = await installOwner();
         const helper: UpdateItem = { ...cli, id: 'studio:installable:gh', subject: { kind: 'installable', key: 'gh' } };
         replaceItems([helper]);
-        await homes.requireUiApproval(scope.serverId, 'machines.capabilities.install');
         const executor = createDefaultActionExecutor();
         const context = { surface: 'ui' as const, serverId: scope.serverId, expectedAccountId: scope.accountId };
         const initial = await executor.execute('machines.capabilities.install', { machineId: 'studio', capabilityId: 'dep.gh', method: 'upgrade' }, context);
@@ -193,7 +204,7 @@ describe('Updates Actions through current UI update owners', () => {
             running: false, errorMessage: 'Update failed.', logPath: '/logs/update.log',
         });
     });
-    it('keeps default confirmation before effects, then replays the exact target through the existing remote updater', async () => {
+    it('keeps Account Ask-first policy before effects, then replays the exact target through the existing remote updater', async () => {
         const { scope } = await installOwner();
         const executor = createDefaultActionExecutor();
         const context = { surface: 'ui' as const, serverId: scope.serverId, expectedAccountId: scope.accountId };
@@ -220,6 +231,7 @@ describe('Updates Actions through current UI update owners', () => {
         const foreign = await executor.execute('machines.cli.update', { target: { kind: 'machine', machineId: 'other' } }, context);
         if (!foreign.ok) throw new Error(JSON.stringify(foreign));
         const foreignApproval = ActionApprovalRequestCreatedResultSchema.parse(foreign.result);
+        expect(starts()).toEqual([]);
         expect(await executor.execute('approval.request.decide', { artifactId: foreignApproval.artifactId, decision: 'approve' }, context))
             .toMatchObject({ ok: true, result: { status: 'failed', execution: { ok: false, errorCode: 'update_target_unavailable' } } });
         expect(starts()).toEqual([]);
@@ -234,6 +246,7 @@ describe('Updates Actions through current UI update owners', () => {
         const invalid = await executor.execute('updates.batch.start', { groupId: 'machine:studio', itemIds: ['made-up'] }, context);
         if (!invalid.ok) throw new Error(JSON.stringify(invalid));
         const invalidApproval = ActionApprovalRequestCreatedResultSchema.parse(invalid.result);
+        expect(starts()).toEqual([]);
         expect(await executor.execute('approval.request.decide', { artifactId: invalidApproval.artifactId, decision: 'approve' }, context))
             .toMatchObject({ ok: true, result: { status: 'failed', execution: { ok: false, errorCode: 'update_target_unavailable' } } });
         expect(starts()).toEqual([]);

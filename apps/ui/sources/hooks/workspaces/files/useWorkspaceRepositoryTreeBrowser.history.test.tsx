@@ -54,7 +54,7 @@ describe('workspace browser demanded history', () => {
             expect(request.payload).toMatchObject({ cwd: windowsScope.rootPath, folder: 'Sub Dir/Nested', paths: ['Sub Dir/Nested/Name '] });
             return { success: true, headOid: newHead, entries: [{ path: 'Sub Dir/Nested/Name ', kind: 'none' }] };
         });
-        const hook = await renderHook((repoRootPath: string | null) => useWorkspaceEntryHistory({ scope: windowsScope,
+        const hook = await renderHook<ReturnType<typeof useWorkspaceEntryHistory>, string | null>((repoRootPath) => useWorkspaceEntryHistory({ scope: windowsScope,
             repoRootPath, folder: 'Nested', paths: ['Nested/Name '], headOid: newHead, enabled: true }),
         { initialProps: 'C:/repo' });
         await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
@@ -116,7 +116,7 @@ describe('workspace browser demanded history', () => {
             return { success: true, headOid: oldHead, entries: [{ path: 'LICENSE', kind: 'none' }] };
         });
         const renders: Array<{ demandedHead: string | null; stale: boolean; known: boolean }> = [];
-        const hook = await renderHook((headOid: string | null) => {
+        const hook = await renderHook<ReturnType<typeof useWorkspaceEntryHistory>, string | null>((headOid) => {
             const history = useWorkspaceEntryHistory({ scope, repoRootPath: scope.rootPath, folder: '', paths: ['LICENSE'], headOid, enabled: true });
             renders.push({ demandedHead: headOid, stale: history.stale, known: history.entries.has('LICENSE') });
             return history;
@@ -124,6 +124,17 @@ describe('workspace browser demanded history', () => {
         await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
         await hook.rerender(nextHead);
         expect(renders.find(render => render.demandedHead === nextHead)).toEqual({ demandedHead: nextHead, stale: true, known: true });
+    });
+    it('keeps last-known facts current while a wider demand on the same HEAD is read', async () => {
+        historyRpc.mockImplementation(async request => (request.payload as { paths: string[] }).paths.length > 1
+            ? new Promise(() => {}) : { success: true, headOid: oldHead, entries: [{ path: 'README.md', kind: 'none' }] });
+        const hook = await renderHook((paths: string[]) => useWorkspaceEntryHistory({ scope, repoRootPath: scope.rootPath, folder: '',
+            paths, headOid: oldHead, enabled: true }), { initialProps: ['README.md'] });
+        await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
+        await hook.rerender(['README.md', 'src']);
+        // More rows becoming visible is not the checkout changing: nothing on screen may say it did.
+        expect(hook.getCurrent()).toMatchObject({ status: 'pending', stale: false });
+        expect(hook.getCurrent().entries.get('README.md')?.kind).toBe('none');
     });
     it('batches real visible entry facts and discards a retired HEAD response', async () => {
         directoryRpc.mockImplementation(async (_machine, request) => ({

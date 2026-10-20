@@ -32,6 +32,7 @@ import {
 import {
   buildResourceProposalNarrowedInput,
   resourceProposalApprovedKeys,
+  resolveResourceProposalOutcomes,
   deriveResourceProposalDisplay,
   describeResourceProposalRows,
   initialResourceProposalSelection,
@@ -322,9 +323,11 @@ export function useResourceProposalCheck(
   const [trashReceipts, setTrashReceipts] = React.useState<ReadonlyMap<string, ResourceProposalTrashReceipt>>(() => new Map());
   React.useEffect(() => {
     if (!model || receiptResults.length === 0) return;
-    // A retry adds its own receipt; do not overwrite settled follow-ups on an earlier batch.
+    // Reopening refreshes the approval snapshot: retry failed reads, not settled outcomes.
+    // A retry also adds its own receipt without overwriting earlier settled batches.
     const pendingResults = receiptResults.filter(result => !trashReceipts.has(result.batchId)
-      || trashReceipts.get(result.batchId)?.kind === 'checking');
+      || trashReceipts.get(result.batchId)?.kind === 'checking'
+      || trashReceipts.get(result.batchId)?.kind === 'unavailable');
     if (pendingResults.length === 0) return;
     const controller = new AbortController();
     setTrashReceipts(current => new Map([...current, ...pendingResults.filter(result => !current.has(result.batchId))
@@ -429,10 +432,11 @@ export function useResourceProposalCheck(
   );
 
   React.useEffect(() => {
-    if (!isOpen) return;
-    setSelection(model ? initialResourceProposalSelection(model) : new Set());
-    setConfirmedKeep(new Set());
-    runCheck(false);
+    if (isOpen) {
+      setSelection(model ? initialResourceProposalSelection(model) : new Set());
+      setConfirmedKeep(new Set());
+      runCheck(false);
+    }
     return () => runRef.current?.abort();
   }, [isOpen, model, runCheck]);
 
@@ -501,6 +505,10 @@ export function useResourceProposalCheck(
   if (display.kind === 'trashed') display = resourceProposalDisplayWithTrashReceipt(display.result,
     trashReceipts.get(display.result.batchId) ?? { kind: 'checking' });
   const selectedCount = rows.filter((row) => row.selected).length;
+  const approvedKeys = localRun ? new Set(rows.filter((row) => row.selected).map((row) => row.item.key)) : resourceProposalApprovedKeys(approval, model);
+  const retryKeys = new Set([...(resolveResourceProposalOutcomes(display, approvedKeys) ?? [])]
+    .filter(([key, outcome]) => (retriedOutcomes.get(key) ?? outcome).status === 'skipped')
+    .map(([key]) => key));
   const stale = display.kind === 'ask' && display.stale;
   const scope = {
     machineId: model.machineId,
@@ -542,7 +550,22 @@ export function useResourceProposalCheck(
   };
   const approveWithheld = selectedCount === 0 || stale || check.kind !== 'ready';
   const runFromUi = async (keys: ReadonlySet<string> | null): Promise<boolean> => {
-    const selectedRows = rowsRef.current.filter((row) => (keys ? keys.has(row.item.key) && row.selectable : row.selected));
+    let selectedRows = rowsRef.current.filter((row) => row.selected);
+    if (keys) {
+      const retryModel = { ...model, items: model.items.filter(item => keys.has(item.key) && retryKeys.has(item.key)) };
+      if (retryModel.items.length === 0) return false;
+      runRef.current?.abort();
+      const controller = new AbortController();
+      runRef.current = controller;
+      // A settled receipt has no live check on remount (Delete now has no claimed verdict).
+      // Refresh only the selected original operands before narrowing a new UI Action invocation.
+      const read = model.kind === 'storage' ? checkStorage : checkProcesses;
+      const facts = await read(retryModel, { serverId, signal: controller.signal }).catch(() => null);
+      if (!facts || controller.signal.aborted) return false;
+      selectedRows = describeResourceProposalRows(retryModel,
+        { kind: 'ready', facts, checkedAt: Date.now(), acknowledged: true }, keys, confirmedKeep)
+        .filter(row => row.selectable);
+    }
     const input = buildResourceProposalNarrowedInput(model, selectedRows.map((row) => ({ ...row, selected: true })));
     if (!input) return false;
     const outcome = await runResourceProposalFromUi(model, input, serverId,
@@ -563,7 +586,7 @@ export function useResourceProposalCheck(
     ? display.result.outcomes.filter((outcome) => outcome.outcome === 'ended').map((outcome) => outcome.ref) : [];
   return {
     model,
-    approvedKeys: localRun ? new Set(rows.filter((row) => row.selected).map((row) => row.item.key)) : resourceProposalApprovedKeys(approval, model),
+    approvedKeys,
     rows,
     check,
     display,
@@ -579,7 +602,7 @@ export function useResourceProposalCheck(
     reopened: reopened && settledDeclined && !localRun,
     reopen: settledDeclined && !reopened ? () => { setReopened(true); runCheck(true); } : null,
     runFromUi: reopened && settledDeclined && !localRun && !approveWithheld ? () => runFromUi(null) : null,
-    retryItem: display.kind === 'trashed' || display.kind === 'stopped'
+    retryItem: retryKeys.size > 0
       ? (key: string) => runFromUi(new Set([key])) : null,
     retried: retriedOutcomes,
     startAgain: model.actionId === 'machines.processes.stop' && endedKeys.length > 0 && serverId

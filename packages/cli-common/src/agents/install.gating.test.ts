@@ -6,6 +6,7 @@ import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fetchGitHubLatestRelease, fetchGitHubReleaseByTag } from '@happier-dev/release-runtime';
 import { execFileWithDeadline } from '../process/index.js';
 import { runLoggedAgentCommand } from './install/vendorRecipeInstall.js';
 
@@ -37,6 +38,25 @@ function expectedOhMyPiReleaseAssetName(): string | null {
   return null;
 }
 
+function githubReleaseHttpFixture(release: Readonly<{ tag_name?: string; assets?: ReadonlyArray<Readonly<{
+  name: string; browser_download_url: string; digest?: string;
+}>> }>) {
+  // Only the external HTTP response is synthetic; both release readers stay real.
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname.includes('/expanded_assets/')) {
+      const prefix = url.pathname.replace('/expanded_assets/', '/download/');
+      return new Response(`<ul>${(release.assets ?? []).map((asset) => `<li><a href="${prefix}/${asset.name}">${asset.name}</a>
+        ${asset.digest ? `<clipboard-copy value="${asset.digest}"></clipboard-copy>` : ''}</li>`).join('')}</ul>`);
+    }
+    return new Response(JSON.stringify(release), { status: 200 });
+  };
+  return {
+    fetchGitHubLatestRelease: (params: Parameters<typeof fetchGitHubLatestRelease>[0]) => fetchGitHubLatestRelease({ ...params, fetchImpl }),
+    fetchGitHubReleaseByTag: (params: Parameters<typeof fetchGitHubReleaseByTag>[0]) => fetchGitHubReleaseByTag({ ...params, fetchImpl }),
+  };
+}
+
 function expectedCodexReleaseAssetName(): string | null {
   if (process.platform === 'darwin' && process.arch === 'arm64') return 'codex-package-aarch64-apple-darwin.tar.gz';
   if (process.platform === 'darwin' && process.arch === 'x64') return 'codex-package-x86_64-apple-darwin.tar.gz';
@@ -65,6 +85,9 @@ function expectedCodexArchiveEntries() {
   return [
     { archivePath: 'bin/codex', destinationPath: 'bin/codex' },
     { archivePath: 'bin/codex-code-mode-host', destinationPath: 'bin/codex-code-mode-host' },
+    ...(process.platform === 'linux' ? [
+      { archivePath: 'codex-resources/bwrap', destinationPath: 'codex-resources/bwrap' },
+    ] : []),
   ];
 }
 
@@ -804,7 +827,7 @@ describe('installAgentCli vendor_recipe execution gating', () => {
         },
         skipIfInstalled: false,
         deps: {
-          fetchGitHubLatestRelease: async () => ({
+          ...githubReleaseHttpFixture({
             tag_name: 'v16.1.5',
             assets: [
               {
@@ -886,13 +909,13 @@ describe('installAgentCli vendor_recipe execution gating', () => {
         },
         skipIfInstalled: false,
         deps: {
-          fetchGitHubLatestRelease: async () => ({
+          ...githubReleaseHttpFixture({
             tag_name: 'rust-v0.139.0',
             assets: [
               {
                 name: expectedAssetName,
                 browser_download_url: `https://example.test/${expectedAssetName}`,
-                digest: 'sha256:codexdigest',
+                digest: `sha256:${'c'.repeat(64)}`,
               },
             ],
           }),
@@ -921,9 +944,10 @@ describe('installAgentCli vendor_recipe execution gating', () => {
       if (!res.ok) return;
       expect(res.plan.installMode).toBe('github_release_binary');
       expect(downloadCalls).toHaveLength(1);
-      expect(downloadCalls[0]?.url).toBe(`https://example.test/${expectedAssetName}`);
+      expect(downloadCalls[0]?.url).toBe(`https://github.com/openai/codex/releases/download/rust-v0.162.1/${expectedAssetName}`);
       expect(downloadCalls[0]?.destinationPath).toContain(expectedAssetName);
-      expect(downloadCalls[0]?.digest).toBe('sha256:codexdigest');
+      expect(downloadCalls[0]?.digest).toBe(`sha256:${'c'.repeat(64)}`);
+      expect(res.plan.managedInstall).toMatchObject({ releaseTag: 'rust-v0.162.1' });
       expect(extractCalls[0]?.archiveExtractionLimits?.maxFileBytes).toBeGreaterThanOrEqual(observedCodexWindowsExecutableBytes);
       expect(extractCalls).toHaveLength(1);
       const extractCall = extractCalls[0];
@@ -995,12 +1019,12 @@ describe('installAgentCli vendor_recipe execution gating', () => {
           PATH: useSystemRuntime ? binDir : '',
         },
         deps: {
-          fetchGitHubLatestRelease: async () => ({
+          ...githubReleaseHttpFixture({
             tag_name: 'rust-v0.140.0',
             assets: [{
               name: expectedAssetName,
               browser_download_url: `https://example.test/${expectedAssetName}`,
-              digest: 'sha256:updated',
+              digest: `sha256:${'d'.repeat(64)}`,
             }],
           }),
           downloadGitHubReleaseAsset: async (params) => {
@@ -1021,9 +1045,9 @@ describe('installAgentCli vendor_recipe execution gating', () => {
       expect(res.alreadyInstalled).toBe(false);
       expect((await stat(join(homeDir, 'tools', 'providers', 'codex', 'active', 'bin', 'codex'))).isFile()).toBe(true);
       expect(downloadCalls).toEqual([
-        `https://example.test/${expectedAssetName}`,
-        `https://example.test/${expectedAssetName}`,
-        `https://example.test/${expectedAssetName}`,
+        `https://github.com/openai/codex/releases/download/rust-v0.162.1/${expectedAssetName}`,
+        `https://github.com/openai/codex/releases/download/rust-v0.162.1/${expectedAssetName}`,
+        `https://github.com/openai/codex/releases/download/rust-v0.162.1/${expectedAssetName}`,
       ]);
     } finally {
       await rm(homeDir, { recursive: true, force: true });

@@ -4,7 +4,7 @@ import {
     MachineAdministrationTargetV1Schema,
     type MachineAdministrationTargetV1,
 } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
-import type { MachineInventoryStatus } from '../machineInventorySnapshots';
+import type { MachineInventoryStatus, ServerMachineInventorySnapshotV1 } from '../machineInventorySnapshots';
 import { isFleetMemberCurrent } from './fleetUnion';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 
@@ -57,6 +57,8 @@ export type MachineAdministrationCandidateAvailabilityV1 =
 export type MachineAdministrationCandidateV1 = Readonly<{
     target: MachineAdministrationTargetV1;
     displayName: string;
+    /** `displayName` in its two parts: the Machine's own name and the suffix that tells it apart from a same-named one. */
+    displayNameParts?: Readonly<{ name: string; hint: string | null }>;
     serverLabel: string;
     availability: MachineAdministrationCandidateAvailabilityV1;
     observation: 'live' | 'stale';
@@ -143,14 +145,16 @@ export function readMachineAdministrationCandidateName(candidate: MachineAdminis
 export function resolveMachineAdministrationTargetLabel(params: Readonly<{
     target: MachineAdministrationTargetV1 | null;
     candidates: readonly MachineAdministrationCandidateV1[];
-}>): Readonly<{ machine: string; server: string }> | null {
+}>): Readonly<{ machine: string; machineParts: Readonly<{ name: string; hint: string | null }>; server: string }> | null {
     const target = params.target;
     if (!target) return null;
     const candidate = params.candidates.find((entry) => (
         machineAdministrationTargetsEqual(entry.target, target)
     )) ?? null;
+    const machine = candidate?.displayName ?? getMachineDisplayName({ id: target.machineId, absence: 'unlisted' });
     return Object.freeze({
-        machine: candidate?.displayName ?? getMachineDisplayName({ id: target.machineId, absence: 'unlisted' }),
+        machine,
+        machineParts: candidate?.displayNameParts ?? { name: machine, hint: null },
         server: candidate?.serverLabel ?? resolveHomeDisplayLabel(getServerProfileById(target.serverIdentityId), target.serverIdentityId),
     });
 }
@@ -161,8 +165,19 @@ function compareCandidates(left: MachineAdministrationCandidateV1, right: Machin
 }
 
 /**
- * Administration's initial target decision. Ordinary scopes require a sole
- * candidate. A stored target remains authoritative while unavailable.
+ * Whether every Home that can supply machines has answered, so a sole live machine is really the only one.
+ * A Home this device never identified has no sign-in here (credentials are keyed by identity) and can
+ * supply none, so it does not hold the decision open.
+ */
+export function areMachineAdministrationInventoriesKnown(snapshots: readonly ServerMachineInventorySnapshotV1[]): boolean {
+    return snapshots.every((snapshot) => snapshot.kind === 'resolved' || snapshot.kind === 'missingIdentity');
+}
+
+/**
+ * Administration's initial target decision. Ordinary scopes start on the sole
+ * live online candidate: machines that are away cannot run anything, so they
+ * leave no choice to make yet (two live machines still ask). A stored target
+ * remains authoritative while unavailable.
  */
 export function resolveMachineAdministrationTargetState(params: Readonly<{
     storedTarget: MachineAdministrationTargetV1 | null;
@@ -174,13 +189,9 @@ export function resolveMachineAdministrationTargetState(params: Readonly<{
 }>): MachineAdministrationTargetStateV1 {
     const candidates = [...params.candidates].sort(compareCandidates);
     if (params.storedTarget === null) {
-        const only = candidates[0];
-        if (
-            params.allowSoleCandidate === false
-            || candidates.length !== 1
-            || only?.availability !== 'online'
-            || only.observation !== 'live'
-        ) {
+        const live = candidates.filter((candidate) => candidate.availability === 'online' && candidate.observation === 'live');
+        const only = live[0];
+        if (params.allowSoleCandidate === false || live.length !== 1 || !only) {
             return Object.freeze({ kind: 'unselected', candidates: Object.freeze(candidates) });
         }
         return projectCandidateState(only.target, only);

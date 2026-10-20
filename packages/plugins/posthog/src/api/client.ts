@@ -51,7 +51,7 @@ export type PosthogHeaderMaterializer = (
 ) => Promise<PosthogMaterializationOutcome>;
 
 export type PosthogTransportRequest = Readonly<{
-    method: 'GET' | 'POST';
+    method: 'GET' | 'POST' | 'PATCH';
     headers: Readonly<Record<string, string>>;
     body?: string;
     signal: AbortSignal;
@@ -65,7 +65,7 @@ export type PosthogTransport = (
 ) => Promise<Response>;
 
 export type PosthogJsonRequest = Readonly<{
-    method: 'GET' | 'POST';
+    method: 'GET' | 'POST' | 'PATCH';
     path: string;
     query?: Readonly<Record<string, string>>;
     body?: unknown;
@@ -131,7 +131,12 @@ function signalFailure(signal: AbortSignal): PosthogFailure | null {
  */
 async function awaitWithSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
     const alreadyAborted = signalFailure(signal);
-    if (alreadyAborted !== null) throw signal.reason;
+    if (alreadyAborted !== null) {
+        // The boundary may synchronously cancel while producing this promise.
+        // Observe a later rejection even though cancellation has already won.
+        void promise.catch(() => {});
+        throw signal.reason;
+    }
 
     let onAbort: (() => void) | undefined;
     const aborted = new Promise<never>((_resolve, reject) => {
@@ -213,7 +218,7 @@ export function createPosthogApiClient(
                 accept: 'application/json',
             };
             let body: string | undefined;
-            if (request.method === 'POST') {
+            if (request.method !== 'GET') {
                 requestHeaders['content-type'] = 'application/json';
                 body = JSON.stringify(request.body ?? {});
             }

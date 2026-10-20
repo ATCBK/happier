@@ -1,133 +1,95 @@
+import 'fake-indexeddb/auto';
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen as renderTestScreen, standardCleanup } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installBrowserStorageLockBoundary } from '@/dev/testkit/harness/browserStorageLockBoundary';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
+import { installReactDomPortalBoundaryForTests } from '@/dev/testkit/mocks/reactDom';
 import type { ConnectedServiceQuotaGaugeViewModel } from '@/sync/domains/connectedServices/connectedServiceQuotaGauge';
 
-import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('react-native-keyboard-controller', () => ({ useFocusedInputHandler: () => {} }));
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | undefined;
+async function installBrowserBoundary() {
+    browser?.restore();
+    browser = await installBrowserRuntimeForTests({ url: 'https://composer-status.test' });
+}
+await installBrowserBoundary();
+afterAll(() => browser?.restore());
 
-vi.mock('react-native-svg', () => ({
-    __esModule: true,
-    default: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement('Svg', props, props.children),
-    Svg: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement('Svg', props, props.children),
-    Circle: (props: Record<string, unknown>) => React.createElement('Circle', props, null),
-    G: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement('G', props, props.children),
-}));
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+installSessionActionRpcBoundary(() => { throw new Error('Unexpected composer RPC'); });
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const { AgentInput } = await import('./AgentInput');
+const { getStorage } = await import('@/sync/domains/state/storage');
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+const { ModalProvider } = await import('@/modal');
+const { FloatingOverlay } = await import('@/components/ui/overlays/FloatingOverlay');
+const { UsageMeterRow } = await import('@/components/settings/connectedServices/usage/UsageMeterRow');
+const { sync } = await import('@/sync/sync');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+const initialStorageState = getStorage().getState();
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+let releaseLocks: (() => void) | undefined;
+let portal: ReturnType<typeof installReactDomPortalBoundaryForTests> | undefined;
 
-const capturedFloatingOverlayProps = vi.hoisted(() => ({
-    last: null as (Record<string, unknown> & { children?: React.ReactNode }) | null,
-}));
+function ComposerAccountBoundary({ children }: React.PropsWithChildren) {
+    if (!connection) throw new Error('Composer Account is not restored');
+    return <InjectedAuthProvider credentials={connection.credentials}><ModalProvider>{children}</ModalProvider></InjectedAuthProvider>;
+}
 
-installAgentInputCommonModuleMocks({
-    text: async () => {
-        const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        return createTextModuleMock({
-            translate: (key: string) => key,
-            translateLoose: (key: string) => key,
-        });
-    },
-    storage: async (importOriginal) => {
-        const actual = await importOriginal<Record<string, unknown>>();
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return {
-            ...actual,
-            ...createStorageModuleStub({
-                useSetting: () => null,
-                useSettings: () => ({}),
-                useSessionMessagesById: () => ({}),
-                useSessionMessagesVersion: () => 0,
-                useSessionTranscriptIds: () => ({ ids: [], isLoaded: true }),
-                useSessionMessagesReducerState: () => null,
-            }),
-            useSessionProjectScmSnapshot: () => null,
-        };
-    },
+function renderScreen(element: React.ReactElement) {
+    return renderTestScreen(element, {
+        wrapper: ComposerAccountBoundary,
+        createNodeMock: element => {
+            const node = document.createElement(element.type === 'TextInput' ? 'textarea' : 'div');
+            return Object.assign(node, {
+                setNativeProps() {},
+                measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 0, 300, 100),
+            });
+        },
+    });
+}
+
+beforeEach(async () => {
+    await installBrowserBoundary();
+    releaseLocks = installBrowserStorageLockBoundary();
+    portal = installReactDomPortalBoundaryForTests();
+    await homes.reset();
+    getStorage().setState(initialStorageState, true);
+    const serverId = await homes.addHome({ name: 'Composer status', serverUrl: 'https://composer-status.test', accountId: 'composer-account', currentAccount: true });
+    const credentials = await TokenStorage.getCredentialsForServerUrl('https://composer-status.test');
+    if (!credentials) throw new Error('The composer Home did not restore its Account');
+    connection = await restoreServerAccountForTest({ serverUrl: 'https://composer-status.test', accountId: 'composer-account', credentials, request: homes.request });
+    await sync.awaitBootstrapForegroundAcquisition();
+    const scope = { serverId, accountId: 'composer-account' };
+    getStorage().setState({ settingsScope: scope, profileScope: scope });
+    const state = getStorage().getState();
+    state.applySettingsForScope(scope, { ...state.settings, agentInputEnterToSend: true,
+        agentInputActionBarLayout: 'wrap', agentInputChipDensity: 'labels' }, (state.settingsVersion ?? 0) + 1);
 });
-
-vi.mock('expo-image', () => ({
-    Image: 'Image',
-}));
-
-vi.mock('react-native-svg', () => ({
-    Svg: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement('Svg', props, props.children),
-    Circle: (props: Record<string, unknown>) => React.createElement('Circle', props, null),
-}));
-
-vi.mock('@/hooks/session/useUserMessageHistory', () => ({
-    useUserMessageHistory: () => ({ reset: () => {}, moveUp: () => {}, moveDown: () => {}, setText: () => {} }),
-}));
-
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: () => false,
-}));
-
-vi.mock('@/hooks/ui/useKeyboardHeight', () => ({
-    useKeyboardHeight: () => 0,
-}));
-
-vi.mock('@/components/ui/forms/MultiTextInput', () => ({
-    MultiTextInput: (props: Record<string, unknown>) => React.createElement('MultiTextInput', props, null),
-}));
-
-vi.mock('@/components/ui/overlays/FloatingOverlay', () => ({
-    FloatingOverlay: (props: Record<string, unknown> & { children?: React.ReactNode }) => {
-        capturedFloatingOverlayProps.last = props;
-        return React.createElement('FloatingOverlay', props, props.children);
-    },
-}));
-
-vi.mock('@/agents/catalog/catalog', () => ({
-    getAgentIconSvgXml: () => null,
-    getAgentIconSource: () => null,
-    getAgentIconTintColor: () => undefined,
-    AGENT_IDS: ['codex', 'claude', 'opencode', 'gemini'],
-    DEFAULT_AGENT_ID: 'codex',
-    resolveAgentIdFromFlavor: () => null,
-    getAgentCore: () => ({ displayNameKey: 'agents.codex', toolRendering: { hideUnknownToolsByDefault: false } }),
-}));
-
-vi.mock('@/sync/domains/models/modelOptions', () => ({
-    findModelOptionForEffectiveModelId: (options: any, effectiveModelId: any) =>
-        options?.find?.((option: any) => option.value === effectiveModelId)
-            ?? options?.find?.((option: any) => option.value === String(effectiveModelId ?? '').replace(/\[[^\]]*\]$/u, ''))
-            ?? null,
-    getModelOptionsForSession: () => [{ value: 'default', label: 'Default' }],
-    supportsFreeformModelSelectionForSession: () => false,
-}));
-
-vi.mock('@/sync/domains/models/describeEffectiveModelMode', () => ({
-    describeEffectiveModelMode: () => ({ selectedModelId: 'default', appliedModelId: null, effectiveModelId: 'default' }),
-}));
-
-vi.mock('@/sync/domains/permissions/permissionModeOptions', () => ({
-    getPermissionModeBadgeLabelForAgentType: () => 'Default',
-    getPermissionModeLabelForAgentType: () => 'Default',
-    getPermissionModeOptionsForSession: () => [{ value: 'default', label: 'Default' }],
-    getPermissionModeTitleForAgentType: () => 'Permissions',
-}));
-
-vi.mock('@/sync/domains/permissions/describeEffectivePermissionMode', () => ({
-    describeEffectivePermissionMode: () => ({ effectiveMode: 'default' }),
-}));
+afterEach(async () => {
+    standardCleanup();
+    await connection?.dispose();
+    connection = undefined;
+    await homes.reset();
+    portal?.restore(); portal = undefined;
+    releaseLocks?.(); releaseLocks = undefined;
+    getStorage().setState(initialStorageState, true);
+});
 
 describe('AgentInput status badges', () => {
     it('renders provider quota gauge as a clickable usage badge', async () => {
-        const { AgentInput } = await import('./AgentInput');
-        const previousWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'window');
-        Object.defineProperty(globalThis, 'window', {
-            configurable: true,
-            value: {
-                addEventListener: () => {},
-                removeEventListener: () => {},
-            },
-        });
+        const { createSessionFixture } = await import('@/dev/testkit/fixtures/sessionFixtures');
         const providerUsageGauge: ConnectedServiceQuotaGaugeViewModel = {
             serviceId: 'openai-codex',
             providerDisplayName: 'OpenAI Codex',
@@ -178,100 +140,83 @@ describe('AgentInput status badges', () => {
         };
         const onProviderUsageRecoveryCreditPress = vi.fn();
 
-        try {
-            const screen = await renderScreen(
-                <AgentInput
-                    value=""
-                    placeholder="Type"
-                    onChangeText={() => {}}
-                    onSend={() => {}}
-                    autocompleteKinds={[]}
-                    autocompleteSuggestions={async () => []}
-                    instrumentQuota={{
-                        viewModel: providerUsageGauge,
-                        onRecoveryCreditPress: onProviderUsageRecoveryCreditPress,
-                    }}
-                />,
-            );
+        const screen = await renderScreen(
+            <AgentInput
+                value=""
+                placeholder="Type"
+                onChangeText={() => {}}
+                onSend={() => {}}
+                autocompleteKinds={[]}
+                autocompleteSuggestions={async () => []}
+                agentType="codex"
+                metadata={{
+                    ...createSessionFixture().metadata!,
+                    connectedServices: { v: 2, bindingsByServiceId: {
+                        'happier.agent.codex/openai-codex': { source: 'native' },
+                    } },
+                }}
+                instrumentQuota={{
+                    viewModel: providerUsageGauge,
+                    onRecoveryCreditPress: onProviderUsageRecoveryCreditPress,
+                }}
+            />,
+        );
 
-            const badge = screen.findByTestId('session-instrument-quota-ring');
-            expect(badge).toBeTruthy();
-            expect(screen.findByTestId('session-instrument-quota-ring-arc')).toBeTruthy();
-
-            act(() => {
-                badge?.props.onPress?.({} as never);
-            });
-
-            expect(screen.findByTestId('session-instrument-quota-popover')).toBeTruthy();
-            expect(screen.findByTestId('session-instrument-quota-meter:weekly')).toBeTruthy();
-            // A quota bar shows what is left (18%), like every other quota row, never what was used.
-            const fill = screen.findByTestId('session-instrument-quota-meter:weekly:bar:fill');
-            const fillStyles = [fill?.props.style].flat(3) as Array<Record<string, unknown> | null | undefined>;
-            expect(fillStyles.find((style) => style && 'width' in style)?.width).toBe('18%');
-            const recoveryCreditAction = screen.findByTestId('session-instrument-quota-recovery-credit-action');
-            expect(recoveryCreditAction).toBeTruthy();
-            act(() => {
-                recoveryCreditAction?.props.onPress?.({} as never);
-            });
-            expect(onProviderUsageRecoveryCreditPress).toHaveBeenCalledTimes(1);
-            expect(capturedFloatingOverlayProps.last?.scrollEnabled).toBe(false);
-        } finally {
-            if (previousWindowDescriptor) {
-                Object.defineProperty(globalThis, 'window', previousWindowDescriptor);
-            } else {
-                delete (globalThis as { window?: unknown }).window;
-            }
-        }
+        const badge = screen.findByTestId('session-instrument-quota-ring');
+        expect(badge).toBeTruthy();
+        expect(screen.findByTestId('session-instrument-quota-ring-arc')).toBeTruthy();
+        act(() => {
+            badge?.props.onPress?.({} as never);
+        });
+        expect(screen.findByTestId('session-instrument-quota-popover')).toBeTruthy();
+        const weekly = screen.findAllByType(UsageMeterRow).find((row) => row.props.label === 'Weekly');
+        expect(weekly).toBeTruthy();
+        if (!weekly) throw new Error('The own-sign-in weekly quota must be visible');
+        // A quota bar shows what is left (18%), like every other quota row, never what was used.
+        expect(weekly.props.remainingPct).toBe(18);
+        // The usage rows vary in number, so the popover scrolls rather than clipping what is past its height cap.
+        expect(screen.findAllByType(FloatingOverlay).at(-1)?.props.scrollEnabled).toBe(true);
+        const recoveryCreditAction = screen.findByTestId('usage-popover-own-sign-in-resets:use');
+        expect(recoveryCreditAction).toBeTruthy();
+        act(() => {
+            recoveryCreditAction?.props.onPress?.({} as never);
+        });
+        expect(onProviderUsageRecoveryCreditPress).toHaveBeenCalledTimes(1);
     });
 
     it('renders status badges and keeps their popovers click-persistent', async () => {
-        const { AgentInput } = await import('./AgentInput');
-        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-        try {
-            const screen = await renderScreen(
-                <AgentInput
-                    value=""
-                    placeholder="Type"
-                    onChangeText={() => {}}
-                    onSend={() => {}}
-                    autocompleteKinds={[]}
-                    autocompleteSuggestions={async () => []}
-                    connectionStatus={{
-                        text: 'online',
-                        color: 'green',
-                        dotColor: 'green',
-                    }}
-                    statusBadges={[{
-                        key: 'work-state',
-                        label: 'Goal: ship',
-                        testID: 'session-work-state-status-badge',
-                        renderPopover: (ctx) => ctx.open
-                            ? React.createElement('WorkStatePopover', {
-                                testID: 'session-work-state-popover',
-                                onRequestClose: ctx.onRequestClose,
-                            })
-                            : null,
-                    }]}
-                />,
-            );
-
-            expect(screen.findByTestId('session-work-state-popover')).toBeNull();
-
-            const badge = screen.findByTestId('session-work-state-status-badge');
-            expect(badge).toBeTruthy();
-
-            act(() => {
-                badge?.props.onPress?.({} as never);
-            });
-            expect(screen.findByTestId('session-work-state-popover')).toBeTruthy();
-
-            act(() => {
-                screen.findByTestId('session-work-state-popover')?.props.onRequestClose();
-            });
-            expect(screen.findByTestId('session-work-state-popover')).toBeNull();
-        } finally {
-            consoleError.mockRestore();
-        }
+        const screen = await renderScreen(
+            <AgentInput
+                value=""
+                placeholder="Type"
+                onChangeText={() => {}}
+                onSend={() => {}}
+                autocompleteKinds={[]}
+                autocompleteSuggestions={async () => []}
+                connectionStatus={{ text: 'online', color: 'green', dotColor: 'green' }}
+                statusBadges={[{
+                    key: 'work-state',
+                    label: 'Goal: ship',
+                    testID: 'session-work-state-status-badge',
+                    renderPopover: (ctx) => ctx.open
+                        ? React.createElement('WorkStatePopover', {
+                            testID: 'session-work-state-popover',
+                            onRequestClose: ctx.onRequestClose,
+                        })
+                        : null,
+                }]}
+            />,
+        );
+        expect(screen.findByTestId('session-work-state-popover')).toBeNull();
+        const badge = screen.findByTestId('session-work-state-status-badge');
+        expect(badge).toBeTruthy();
+        act(() => {
+            badge?.props.onPress?.({} as never);
+        });
+        expect(screen.findByTestId('session-work-state-popover')).toBeTruthy();
+        act(() => {
+            screen.findByTestId('session-work-state-popover')?.props.onRequestClose();
+        });
+        expect(screen.findByTestId('session-work-state-popover')).toBeNull();
     });
 });

@@ -9,7 +9,7 @@ import { createPassThroughComponent, createPassThroughModule } from '@/dev/testk
 
 import { installAutomationScreensCommonModuleMocks } from './automationScreensTestHelpers';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { AutomationV3SettingsSchema, type AutomationV3Settings } from '@happier-dev/protocol';
+import { AutomationV3SettingsSchema, type AutomationV3Settings } from '@happier-dev/protocol/automations/automationApiV3';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
@@ -36,15 +36,7 @@ installAutomationScreensCommonModuleMocks({
     storage: async (importOriginal) => await importOriginal(),
 });
 
-installDisconnectedServerSocketBoundary((socket) => {
-    vi.spyOn(socket, 'emit').mockReturnValue(socket);
-    vi.spyOn(socket, 'disconnect').mockImplementation(() => { socket.connected = false; return socket; });
-    vi.mocked(socket.connect).mockImplementation(() => {
-        socket.connected = true;
-        for (const listener of socket.listeners('connect')) listener();
-        return socket;
-    });
-});
+installDisconnectedServerSocketBoundary();
 vi.mock('@/components/ui/lists/Item', () => createPassThroughModule(['Item']));
 vi.mock('@/components/ui/lists/ItemGroup', () => createPassThroughModule(['ItemGroup']));
 vi.mock('@/components/ui/lists/ItemList', () => createPassThroughModule(['ItemList']));
@@ -73,11 +65,11 @@ describe('AutomationSettingsScreen', () => {
         await loadSyncSingletonForTests();
         restoreActionLoader = await installRealActionExecutorModuleLoader();
         serverId = await harness.addHome({ name: 'Run settings', serverUrl: 'https://run-settings.test', accountId: 'account-a' });
-        connection = await restoreServerAccountForTest({ serverUrl: 'https://run-settings.test', accountId: 'account-a' });
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://run-settings.test', accountId: 'account-a', request: harness.request });
         const { storage } = await import('@/sync/domains/state/storage');
         const { profileDefaults } = await import('@/sync/domains/profiles/profile');
         const { settingsParse } = await import('@/sync/domains/settings/settings');
-        const scope = { serverId, accountId: 'account-a' };
+        const scope = { serverId: connection.serverId, accountId: 'account-a' };
         storage.setState({ profileScope: scope, settingsScope: scope, profile: { ...profileDefaults, id: 'account-a' }, settings: settingsParse({}) });
         record = { maxActiveRunsPerMachine: 4, runRetention: 'thirtyDays' };
         harness.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {} }, version: 1 } });
@@ -185,18 +177,42 @@ describe('AutomationSettingsScreen', () => {
     it('honors settings Action refusal without bypassing it through the Sync writer', async () => {
         const { storage } = await import('@/sync/domains/state/storage');
         const { settingsParse } = await import('@/sync/domains/settings/settings');
-        const settings = settingsParse({ actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } });
-        storage.setState({ settings });
-        harness.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
+        const { loadAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
+        const { isActionEnabledInState } = await import('@/sync/domains/settings/actionsSettings');
         const { AutomationSettingsScreen } = await import('./AutomationSettingsScreen');
         const screen = await renderScreen(<AutomationSettingsScreen />);
         await waitForHomeGovernance(() => expect(maxActiveRunsField(screen).props.value).toBe('4'));
+        const settings = settingsParse({ actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } } });
+        const persisted = loadAccountSettings({ serverId: connection!.serverId, accountId: 'account-a' });
+        harness.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: (persisted.version ?? 0) + 1 } });
+        // Publish policy after cold Account hydration, as when the person disables
+        // this Action while its run-settings page remains mounted.
+        await act(async () => { storage.getState().applySettingsLocal({ actionsSettingsV1: settings.actionsSettingsV1 }); });
+        expect(isActionEnabledInState(storage.getState(), 'settings.set', { surface: 'ui' })).toBe(false);
         await act(async () => { maxActiveRunsField(screen).props.onChangeText('2'); });
         await act(async () => { maxActiveRunsField(screen).props.onBlur(); });
         await waitForHomeGovernance(() => expect(record.maxActiveRunsPerMachine !== 4 || modalAlertSpy.mock.calls.length > 0).toBe(true));
         expect(record).toEqual({ maxActiveRunsPerMachine: 4, runRetention: 'thirtyDays' });
         expect(modalAlertSpy).toHaveBeenCalled();
         expect(harness.requestsFor('/v3/automations/settings').filter(request => request.input !== null)).toHaveLength(0);
+    });
+
+    it('retains a required approval without reporting a failed save, then resumes the original write once', async () => {
+        await harness.requireUiApproval(serverId, 'settings.set');
+        const { AutomationSettingsScreen } = await import('./AutomationSettingsScreen');
+        const screen = await renderScreen(<AutomationSettingsScreen />);
+        await waitForHomeGovernance(() => expect(maxActiveRunsField(screen).props.value).toBe('4'));
+        await act(async () => { maxActiveRunsField(screen).props.onChangeText('2'); });
+        await act(async () => { maxActiveRunsField(screen).props.onBlur(); });
+        await waitForHomeGovernance(() => expect(harness.artifacts(serverId).list()).toHaveLength(1));
+        expect(record.maxActiveRunsPerMachine).toBe(4);
+        expect(modalAlertSpy).not.toHaveBeenCalled();
+        const artifactId = harness.artifacts(serverId).list()[0]!.id;
+        const { decideApprovalAsInbox } = await import('@/dev/testkit/harness/approvalInbox');
+        expect(await decideApprovalAsInbox(serverId, artifactId, 'approve')).toMatchObject({ ok: true });
+        await waitForHomeGovernance(() => expect(record.maxActiveRunsPerMachine).toBe(2));
+        expect(harness.requestsFor('/v3/automations/settings').filter(request => request.input !== null)).toHaveLength(1);
+        expect(modalAlertSpy).not.toHaveBeenCalled();
     });
 
     it('retires stale Account work and reloads settings for the newly active Account', async () => {
@@ -217,9 +233,9 @@ describe('AutomationSettingsScreen', () => {
         await act(async () => {
             await harness.switchAccount(serverId, 'account-b');
             await connection?.dispose();
-            connection = await restoreServerAccountForTest({ serverUrl: 'https://run-settings.test', accountId: 'account-b' });
+            connection = await restoreServerAccountForTest({ serverUrl: 'https://run-settings.test', accountId: 'account-b', request: harness.request });
             const { storage } = await import('@/sync/domains/state/storage');
-            const scope = { serverId, accountId: 'account-b' };
+            const scope = { serverId: connection.serverId, accountId: 'account-b' };
             storage.setState({ profileScope: scope, settingsScope: scope, profile: { ...storage.getState().profile, id: 'account-b' } });
         });
         await screen.update(<AutomationSettingsScreen />);

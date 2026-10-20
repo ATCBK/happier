@@ -156,7 +156,7 @@ export function eligibleProviderFixHref(
   serverId: string,
   provider: TeamIdentityEligibleProviderV1,
   destination: EligibleProviderFixDestination,
-): string {
+) {
   switch (destination) {
     case 'workos_platform':
       return homeSignInPlatformHref(serverId, 'workos');

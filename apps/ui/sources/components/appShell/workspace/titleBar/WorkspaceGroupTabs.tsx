@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Platform, View, type LayoutChangeEvent } from 'react-native';
+import { Platform, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { hrefForDestinationRef, resolveCurrentAppDestination, useDestinationInstanceTitles, type CompactAppDestination } from '@/components/appShell/destinations/compactAppDestinationCatalog';
@@ -11,8 +11,6 @@ import { resolveTouchTargetFloorPx } from '@/components/ui/interactiveTargetSize
 import { DocumentTabStrip, DOCUMENT_TAB_BAR_METRICS as B, type DocumentTabItem } from '@/components/ui/navigation/DocumentTabStrip';
 import type { PopoverAnchor } from '@/components/ui/popover';
 import { resolvePointerMenuAnchor } from '@/components/ui/popover/resolvePointerMenuAnchor';
-import { Text } from '@/components/ui/text/Text';
-import { Typography } from '@/constants/Typography';
 import { KeyboardShortcutLabelsContext } from '@/keyboard/shortcutLabels';
 import { t } from '@/text';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
@@ -35,39 +33,11 @@ import { createWorkspaceDropScene } from '../workspaceDropScene';
 type WorkspaceDocumentTab = DocumentTabItem & Readonly<{ icon: IconName }>;
 type MenuState = Readonly<{ tabId: string; anchor: PopoverAnchor | undefined }>;
 
-/** Room the "+" (new tab) and the "+N" overflow keep beside the tabs, so tabs never push them out. */
-const ACTION_SLOT_PX = 30;
-const OVERFLOW_SLOT_PX = 44;
-const PIN_SEPARATOR_PX = 11;
-
-/**
- * Which unpinned tabs fit at their minimum width (workspace lab V). The open tab always stays, then
- * the most recently used; the rest wait behind "+N". Strip order is kept among the tabs that show.
- */
-export function selectVisibleWorkspaceTabs(input: Readonly<{
-    tabIds: readonly string[];
-    activeTabId: string;
-    mru: readonly string[];
-    capacity: number;
-}>): readonly string[] {
-    if (input.tabIds.length <= input.capacity) return input.tabIds;
-    const keep = new Set<string>();
-    if (input.tabIds.includes(input.activeTabId)) keep.add(input.activeTabId);
-    for (const id of input.mru) {
-        if (keep.size >= Math.max(1, input.capacity)) break;
-        if (input.tabIds.includes(id)) keep.add(id);
-    }
-    for (const id of input.tabIds) {
-        if (keep.size >= Math.max(1, input.capacity)) break;
-        keep.add(id);
-    }
-    return input.tabIds.filter((id) => keep.has(id));
-}
-
 /**
  * One pane's tabs, wherever the pane's tabs live: in the window's top strip over a top-row pane
- * (`bar`), or in the pane's own strip below the top row (`strip`). Both are the same tabs, menu and
- * overflow; only the height and the surface they sit on differ (workspace lab T/S).
+ * (`bar`), or in the pane's own strip below the top row (`strip`). Both are the same tabs and menu;
+ * only the height and the surface they sit on differ (workspace lab T/S). Every tab stays in the
+ * strip, which scrolls sideways; one trailing menu lists them all with the recently closed ones.
  */
 export function WorkspaceGroupTabs(props: Readonly<{
     workspace: WorkspaceNavigationContextValue;
@@ -86,7 +56,6 @@ export function WorkspaceGroupTabs(props: Readonly<{
     const runtime = useEntityDragDropRuntime();
     const safeGroup = toTestIdSafeValue(group.id);
     const shortcutLabels = React.useContext(KeyboardShortcutLabelsContext);
-    const [widthPx, setWidthPx] = React.useState<number | null>(null);
     const [menu, setMenu] = React.useState<MenuState | null>(null);
     const [overflowOpen, setOverflowOpen] = React.useState(false);
     const tabHeightPx = props.placement === 'bar' ? B.tabHeightPx : M.tabHeightPx;
@@ -102,8 +71,6 @@ export function WorkspaceGroupTabs(props: Readonly<{
         : titleEntries, [overflowOpen, titleEntries, workspace.state.recentlyClosed]);
     const liveTitles = useDestinationInstanceTitles(props.catalog, titleResolutionEntries);
     const hasRecentlyClosed = workspace.state.recentlyClosed.length > 0;
-    const hasClosableTabs = (selectWorkspaceTabsToClose(workspace.state, 'workspace.tabs.close_all', { groupId: group.id })?.tabIds.length ?? 0) > 0;
-    const hasOverflow = hasRecentlyClosed || hasClosableTabs;
     const tabs = React.useMemo(() => {
         const byId = new Map<string, WorkspaceDocumentTab>();
         for (const id of group.tabIds) {
@@ -121,27 +88,8 @@ export function WorkspaceGroupTabs(props: Readonly<{
         return byId;
     }, [group.tabIds, liveTitles, props.catalog, workspace.state.fallbackTitlesByTabId, workspace.state.tabs]);
 
-    const pinnedIds = group.tabIds.filter((id) => tabs.get(id)?.isPinned);
-    const unpinnedIds = group.tabIds.filter((id) => tabs.has(id) && !tabs.get(id)?.isPinned);
-    const capacity = React.useMemo(() => {
-        if (widthPx === null) return unpinnedIds.length;
-        const pinnedPx = pinnedIds.length * (tabHeightPx + B.stripGapPx) + (pinnedIds.length > 0 ? PIN_SEPARATOR_PX : 0);
-        const room = widthPx - pinnedPx - ACTION_SLOT_PX - (hasOverflow ? OVERFLOW_SLOT_PX : 0);
-        if (room >= unpinnedIds.length * (B.tabMinWidthPx + B.stripGapPx)) return unpinnedIds.length;
-        return Math.max(1, Math.floor((room - (hasOverflow ? 0 : OVERFLOW_SLOT_PX)) / (B.tabMinWidthPx + B.stripGapPx)));
-    }, [hasOverflow, pinnedIds.length, tabHeightPx, unpinnedIds.length, widthPx]);
-    const visibleUnpinned = selectVisibleWorkspaceTabs({ tabIds: unpinnedIds, activeTabId: group.activeTabId, mru: group.mru, capacity });
-    const hiddenCount = unpinnedIds.length - visibleUnpinned.length;
-    const pinnedTabs = pinnedIds.flatMap((id) => tabs.get(id) ?? []);
-    const visibleTabs = visibleUnpinned.flatMap((id) => tabs.get(id) ?? []);
-    // Hidden tabs have no status mark; keep their live work updates out of the mounted strip.
-    const visibleTabKeys = new Set([...pinnedIds, ...visibleUnpinned]);
-    const livePresentations = useDestinationInstanceTabPresentations(titleEntries.filter(entry => visibleTabKeys.has(entry.key)));
-
-    const onLayout = React.useCallback((event: LayoutChangeEvent) => {
-        const next = Math.round(event.nativeEvent.layout.width);
-        setWidthPx((current) => (current === next ? current : next));
-    }, []);
+    const stripTabs = group.tabIds.flatMap((id) => tabs.get(id) ?? []);
+    const livePresentations = useDestinationInstanceTabPresentations(titleEntries);
 
     const execute = React.useCallback((request: Parameters<typeof executeWorkspaceUiAction>[0]) => {
         fireAndForget(executeWorkspaceUiAction(request, href => {
@@ -149,10 +97,13 @@ export function WorkspaceGroupTabs(props: Readonly<{
             (navigation.pushRetainingCurrent ?? navigation.push)(href);
         }), { tag: 'Workspace.tabs' });
     }, [group.activeTabId, workspace]);
+    // A tab's own menu offers every bulk close around it; the pane's tab list ends with Close others / Close all.
     const closeItems = React.useCallback((tabId: string, prefix: 'workspace-tab-menu' | 'workspace-overflow'): readonly DropdownMenuItem[] => [
         { id: 'closeOthers', actionId: 'workspace.tabs.close_others' as const, title: t('workspaceBar.closeOtherTabs'), testID: `${prefix}-close-others` },
-        { id: 'closeLeft', actionId: 'workspace.tabs.close_left' as const, title: t('workspaceBar.closeTabsToLeft'), testID: `${prefix}-close-left` },
-        { id: 'closeRight', actionId: 'workspace.tabs.close_right' as const, title: t('workspaceBar.closeTabsToRight'), testID: `${prefix}-close-right` },
+        ...(prefix === 'workspace-tab-menu' ? [
+            { id: 'closeLeft', actionId: 'workspace.tabs.close_left' as const, title: t('workspaceBar.closeTabsToLeft'), testID: `${prefix}-close-left` },
+            { id: 'closeRight', actionId: 'workspace.tabs.close_right' as const, title: t('workspaceBar.closeTabsToRight'), testID: `${prefix}-close-right` },
+        ] : []),
         { id: 'closeAll', actionId: 'workspace.tabs.close_all' as const, title: t('workspaceBar.closeAllTabs'), testID: `${prefix}-close-all`, shortcut: shortcutLabels['workspace.tab.closeAll'] },
     ].filter(item => (selectWorkspaceTabsToClose(workspace.state, item.actionId,
         item.actionId === 'workspace.tabs.close_all' ? { groupId: group.id } : { tabId })?.tabIds.length ?? 0) > 0),
@@ -210,22 +161,28 @@ export function WorkspaceGroupTabs(props: Readonly<{
         }
     }, [close, execute, group.id, menu?.tabId, workspace.state.maximizedGroupId]);
 
-    const overflowItems = React.useMemo((): readonly DropdownMenuItem[] => [...group.tabIds.flatMap((id) => {
-        const tab = tabs.get(id);
-        return tab ? [{
-            id, testID: `workspace-overflow-tab-${toTestIdSafeValue(id)}`, title: tab.title,
-            icon: <Icon name={tab.icon} size={16} color={theme.colors.text.secondary} />,
-            checked: id === group.activeTabId,
-            ...(hasRecentlyClosed ? { category: t('workspaceBar.tabsLabel') } : {}),
-        }] : [];
-    }), ...workspace.state.recentlyClosed.map((entry, index) => ({
+    // The menu lists the tabs in the strip's order: pinned marks lead, and each says so.
+    const overflowItems = React.useMemo((): readonly DropdownMenuItem[] => [...[...stripTabs].sort((a, b) => Number(b.isPinned) - Number(a.isPinned)).map((tab) => ({
+        id: tab.key, testID: `workspace-overflow-tab-${toTestIdSafeValue(tab.key)}`, title: tab.title,
+        icon: <Icon name={tab.icon} size={16} color={theme.colors.text.secondary} />,
+        ...(tab.isPinned ? {
+            rightElement: <View style={styles.menuTabMarks}>
+                <View testID={`workspace-overflow-pinned-${toTestIdSafeValue(tab.key)}`}>
+                    <Icon name="push-pin" size={14} color={theme.colors.text.tertiary} />
+                </View>
+                {tab.key === group.activeTabId ? <Icon name="check" size={16} color={theme.colors.text.primary} /> : null}
+            </View>,
+        } : {}),
+        checked: tab.key === group.activeTabId,
+        category: t('workspaceBar.tabsLabel'),
+    })), ...workspace.state.recentlyClosed.map((entry, index) => ({
         id: `closed:${entry.tab.id}`, testID: `workspace-reopen-tab-${toTestIdSafeValue(entry.tab.id)}`,
         title: liveTitles.get(`closed:${entry.tab.id}`) ?? t('common.loading'),
         category: t('workspaceTabs.recentlyClosed'),
         icon: <Icon name="clock-counter-clockwise" size={16} color={theme.colors.text.secondary} />,
         ...(index === 0 ? { shortcut: shortcutLabels['workspace.tab.reopen'] } : {}),
     })), ...closeItems(group.activeTabId, 'workspace-overflow').map(item => ({ ...item, category: t('workspaceBar.tabMenuLabel') }))],
-    [closeItems, group.activeTabId, group.tabIds, hasRecentlyClosed, liveTitles, shortcutLabels, tabs, theme.colors.text.secondary, workspace.state.recentlyClosed]);
+    [closeItems, group.activeTabId, hasRecentlyClosed, liveTitles, shortcutLabels, stripTabs, styles.menuTabMarks, theme.colors.text.primary, theme.colors.text.secondary, theme.colors.text.tertiary, workspace.state.recentlyClosed]);
 
     const entityDragDrop: DocumentTabEntityDragDrop | undefined = scope ? {
         runtime, id: `workspace-tabs:${group.id}`, scope, acceptedKinds: WORKSPACE_ENTITY_KINDS,
@@ -269,70 +226,32 @@ export function WorkspaceGroupTabs(props: Readonly<{
 
     const touchFloor = resolveTouchTargetFloorPx(Platform.OS);
     const actionSize = Math.max(props.placement === 'bar' ? 28 : M.actionSizePx, touchFloor ?? 0);
-    const renderStrip = (items: readonly WorkspaceDocumentTab[]) => (
-        <DocumentTabStrip
-            variant="bar"
-            barTabHeightPx={tabHeightPx}
-            activeEmphasis={props.focused ? 'raised' : 'quiet'}
-            tabs={items}
-            activeTabKey={group.activeTabId}
-            resolveTabPresentation={(tab) => livePresentations.get(tab.key)}
-            accessibilityLabel={t('workspaceBar.tabsLabel')}
-            onActivate={(tabId) => execute({ actionId: 'workspace.tabs.activate', input: { tabId } })}
-            onPin={(tabId) => execute({ actionId: 'workspace.tabs.pin', input: { tabId, pinned: true } })}
-            onUnpin={(tabId) => execute({ actionId: 'workspace.tabs.pin', input: { tabId, pinned: false } })}
-            onClose={(tabId) => execute({ actionId: 'workspace.tabs.close', input: { tabId } })}
-            onTabMenu={(tabId, event) => setMenu({ tabId, anchor: resolvePointerMenuAnchor(event) })}
-            onDismissTabMenu={(tabId) => setMenu(current => current?.tabId === tabId ? null : current)}
-            entityDragDrop={entityDragDrop}
-            dropSlot={dropCue.slot}
-            dropRingTabKey={dropCue.pulseTabKey}
-            renderLeadingIcon={(tab, emphasized) => <Icon name={tab.icon} size={M.tabGlyphPx}
-                color={emphasized ? theme.colors.text.primary : theme.colors.text.secondary} />}
-            tabNativeId={(key) => `workspace-${safeGroup}-tab-${toTestIdSafeValue(key)}`}
-            panelNativeId={(key) => `workspace-${safeGroup}-panel-${toTestIdSafeValue(key)}`}
-            testIds={{ tab: (key) => `workspace-tab-${key}`, tabClose: (key) => `workspace-tab-close-${key}` }}
-        />
-    );
-
     return (
-        <View ref={attachStrip} testID={`workspace-tabs-${safeGroup}`} style={styles.row} onLayout={onLayout}>
-            <View style={styles.tabs}>
-                {renderStrip([...pinnedTabs, ...visibleTabs])}
-            </View>
-            {hiddenCount > 0 || hasOverflow ? (
-                <DropdownMenu
-                    open={overflowOpen}
-                    onOpenChange={setOverflowOpen}
-                    items={overflowItems}
-                    onSelect={(tabId) => {
-                        if (close(tabId, group.activeTabId)) return;
-                        const closed = workspace.state.recentlyClosed.find(entry => `closed:${entry.tab.id}` === tabId);
-                        if (closed) execute({ actionId: 'workspace.tabs.reopen', input: { tabId: closed.tab.id } });
-                        else execute({ actionId: 'workspace.tabs.activate', input: { tabId } });
-                    }}
-                    search
-                    searchPlaceholder={t('workspaceBar.searchTabs')}
-                    matchTriggerWidth={false}
-                    maxWidthCap={300}
-                    placement="bottom"
-                    popoverAnchorAlign="start"
-                    trigger={({ toggle }) => (
-                        <IconButton
-                            testID={`workspace-overflow-${safeGroup}`}
-                            variant="plain"
-                            size={actionSize}
-                            accessibilityLabel={hiddenCount > 0 ? t('workspaceBar.moreTabs', { count: hiddenCount }) : hasRecentlyClosed ? t('workspaceTabs.recentlyClosed') : t('workspaceBar.tabMenuLabel')}
-                            tooltip={hiddenCount > 0 ? t('workspaceBar.moreTabs', { count: hiddenCount }) : hasRecentlyClosed ? t('workspaceTabs.recentlyClosed') : t('workspaceBar.tabMenuLabel')}
-                            tooltipPlacement="bottom"
-                            hasPopup="menu"
-                            expanded={overflowOpen}
-                            onPress={toggle}
-                            icon={hiddenCount > 0 ? <Text style={styles.overflowCount}>{`+${hiddenCount}`}</Text> : <Icon name="dots-three" size={M.actionGlyphPx} color={theme.colors.text.secondary} />}
-                        />
-                    )}
-                />
-            ) : null}
+        <View ref={attachStrip} testID={`workspace-tabs-${safeGroup}`} style={styles.row}>
+            <DocumentTabStrip
+                variant="bar"
+                barTabHeightPx={tabHeightPx}
+                barFadeColor={theme.colors.background.canvas}
+                activeEmphasis={props.focused ? 'raised' : 'quiet'}
+                tabs={stripTabs}
+                activeTabKey={group.activeTabId}
+                resolveTabPresentation={(tab) => livePresentations.get(tab.key)}
+                accessibilityLabel={t('workspaceBar.tabsLabel')}
+                onActivate={(tabId) => execute({ actionId: 'workspace.tabs.activate', input: { tabId } })}
+                onPin={(tabId) => execute({ actionId: 'workspace.tabs.pin', input: { tabId, pinned: true } })}
+                onUnpin={(tabId) => execute({ actionId: 'workspace.tabs.pin', input: { tabId, pinned: false } })}
+                onClose={(tabId) => execute({ actionId: 'workspace.tabs.close', input: { tabId } })}
+                onTabMenu={(tabId, event) => setMenu({ tabId, anchor: resolvePointerMenuAnchor(event) })}
+                onDismissTabMenu={(tabId) => setMenu(current => current?.tabId === tabId ? null : current)}
+                entityDragDrop={entityDragDrop}
+                dropSlot={dropCue.slot}
+                dropRingTabKey={dropCue.pulseTabKey}
+                renderLeadingIcon={(tab, emphasized) => <Icon name={tab.icon} size={M.tabGlyphPx}
+                    color={emphasized ? theme.colors.text.primary : theme.colors.text.secondary} />}
+                tabNativeId={(key) => `workspace-${safeGroup}-tab-${toTestIdSafeValue(key)}`}
+                panelNativeId={(key) => `workspace-${safeGroup}-panel-${toTestIdSafeValue(key)}`}
+                testIds={{ tab: (key) => `workspace-tab-${key}`, tabClose: (key) => `workspace-tab-close-${key}` }}
+            />
             <IconButton
                 testID={`workspace-new-tab-${safeGroup}`}
                 variant="plain"
@@ -345,6 +264,39 @@ export function WorkspaceGroupTabs(props: Readonly<{
                 onPress={() => execute({ actionId: 'workspace.tabs.open', input: { groupId: group.id } })}
             />
             <View style={styles.grow} />
+            <DropdownMenu
+                open={overflowOpen}
+                onOpenChange={setOverflowOpen}
+                items={overflowItems}
+                onSelect={(tabId) => {
+                    if (close(tabId, group.activeTabId)) return;
+                    const closed = workspace.state.recentlyClosed.find(entry => `closed:${entry.tab.id}` === tabId);
+                    if (closed) execute({ actionId: 'workspace.tabs.reopen', input: { tabId: closed.tab.id } });
+                    else execute({ actionId: 'workspace.tabs.activate', input: { tabId } });
+                }}
+                search
+                separateCategories
+                searchPlaceholder={t('workspaceBar.searchTabs')}
+                matchTriggerWidth={false}
+                maxWidthCap={300}
+                placement="bottom"
+                popoverAnchorAlign="end"
+                trigger={({ toggle }) => (
+                    <IconButton
+                        testID={`workspace-overflow-${safeGroup}`}
+                        variant="plain"
+                        size={actionSize}
+                        iconSize={M.actionGlyphPx}
+                        iconName="caret-down"
+                        accessibilityLabel={t('workspaceBar.allTabs')}
+                        tooltip={t('workspaceBar.allTabs')}
+                        tooltipPlacement="bottom"
+                        hasPopup="menu"
+                        expanded={overflowOpen}
+                        onPress={toggle}
+                    />
+                )}
+            />
             {props.trailing}
             {menu ? (
                 <DropdownMenu
@@ -366,7 +318,7 @@ export function WorkspaceGroupTabs(props: Readonly<{
     );
 }
 
-const stylesheet = StyleSheet.create((theme) => ({
+const stylesheet = StyleSheet.create(() => ({
     row: {
         flex: 1,
         minWidth: 0,
@@ -374,19 +326,13 @@ const stylesheet = StyleSheet.create((theme) => ({
         alignItems: 'center',
         gap: B.stripGapPx,
     },
-    tabs: {
-        flexShrink: 1,
-        minWidth: 0,
-        flexDirection: 'row',
-    },
     grow: {
         flex: 1,
         minWidth: 8,
     },
-    overflowCount: {
-        ...M.tabLabel,
-        ...Typography.default('semiBold'),
-        color: theme.colors.text.secondary,
-        fontVariant: ['tabular-nums'],
+    menuTabMarks: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
     },
 }));

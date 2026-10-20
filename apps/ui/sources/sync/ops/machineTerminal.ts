@@ -13,19 +13,23 @@ type MachineTerminalOpts = Readonly<{
     signal?: AbortSignal;
 }>;
 
-const pendingTerminalCreations = new Map<string, Set<Promise<unknown>>>();
+type PendingTerminalCreation = {
+    operations: Set<Promise<unknown>>;
+    admission?: Promise<unknown>;
+};
+const pendingTerminalCreations = new Map<string, PendingTerminalCreation>();
 function terminalCreationKey(machineId: string, terminalKey: string, opts?: MachineTerminalOpts): string {
     return JSON.stringify([opts?.serverId?.trim() ?? null, machineId.trim(), terminalKey]);
 }
 async function trackTerminalCreation<T>(key: string, run: () => Promise<T>): Promise<T> {
     const operation = run();
-    const pending = pendingTerminalCreations.get(key) ?? new Set<Promise<unknown>>();
-    pending.add(operation);
+    const pending = pendingTerminalCreations.get(key) ?? { operations: new Set<Promise<unknown>>() };
+    pending.operations.add(operation);
     pendingTerminalCreations.set(key, pending);
     try { return await operation; }
     finally {
-        pending.delete(operation);
-        if (pending.size === 0) pendingTerminalCreations.delete(key);
+        pending.operations.delete(operation);
+        if (pending.operations.size === 0) pendingTerminalCreations.delete(key);
     }
 }
 
@@ -35,16 +39,46 @@ export function trackPendingMachineTerminalCreation<T>(machineId: string, termin
     return trackTerminalCreation(terminalCreationKey(machineId, terminalKey, opts), run);
 }
 
+/** Serialize leaf admission, ending at the receipt/Artifact association, before a human's deferred decision. */
+export async function serializeMachineTerminalAdmission<T>(machineId: string, terminalKey: string,
+    run: () => Promise<T>, opts?: MachineTerminalOpts): Promise<T> {
+    const key = terminalCreationKey(machineId, terminalKey, opts);
+    const previous = pendingTerminalCreations.get(key)?.admission;
+    const operation = trackTerminalCreation(key, async () => {
+        // A failed predecessor does not decide the next leaf's current admission.
+        await previous?.catch(() => {});
+        return run();
+    });
+    const pending = pendingTerminalCreations.get(key)!;
+    pending.admission = operation;
+    try { return await operation; }
+    finally { if (pending.admission === operation) delete pending.admission; }
+}
+
 /** A connecting/restarting pane may not yet appear in the daemon's PTY list. */
 export async function awaitPendingMachineTerminalCreation(machineId: string, terminalKey: string,
     opts?: MachineTerminalOpts & Readonly<{ shouldStopWaiting?: () => boolean }>): Promise<void> {
     const key = terminalCreationKey(machineId, terminalKey, opts);
     while (pendingTerminalCreations.has(key)) {
+        opts?.signal?.throwIfAborted();
         if (opts?.shouldStopWaiting?.()) return;
         // An initial issuance can install durable Artifact custody while another
         // Inbox already holds the physical operation. Observe that association
         // after either operation settles, without waiting for a human decision.
-        await Promise.race(pendingTerminalCreations.get(key)!);
+        const pending = Promise.race(pendingTerminalCreations.get(key)!.operations);
+        if (!opts?.signal) await pending;
+        else {
+            const signal = opts.signal;
+            // Retire this observer while the creation owner retains its receipt.
+            await new Promise<void>((resolve, reject) => {
+                const abort = () => { signal.removeEventListener('abort', abort); reject(signal.reason); };
+                signal.addEventListener('abort', abort, { once: true });
+                pending.then(() => { signal.removeEventListener('abort', abort); resolve(); }, error => {
+                    signal.removeEventListener('abort', abort);
+                    reject(error);
+                });
+            });
+        }
     }
 }
 

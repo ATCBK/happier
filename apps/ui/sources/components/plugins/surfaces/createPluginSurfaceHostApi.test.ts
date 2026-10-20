@@ -37,6 +37,24 @@ function request(
 }
 
 describe('createPluginSurfaceHostApi', () => {
+    it('adds trusted unavailable context without interpreting a matching domain result as an error', async () => {
+        const invocation = request('executeAction');
+        const domainResult = { code: 'unavailable', diagnostics: ['plugin_surface_contributed_action_unavailable'] };
+        for (const [value, expectedKind] of [
+            [createPluginSurfaceHostApiError('unavailable', domainResult.diagnostics), 'error'],
+            [domainResult, 'result'],
+        ] as const) {
+            const hostApi = createPluginSurfaceHostApi({ surfaceContext,
+                resolveUnavailableError: error => ({ ...error, message: 'Studio Mac is unavailable' }),
+                handlers: { executeAction: async () => value },
+            });
+            const result = await settlePluginSurfaceHostApiRequest(invocation, () => hostApi.handleRequest(invocation));
+            expect(result.kind).toBe(expectedKind);
+            if (result.kind === 'error') expect(result.payload).toMatchObject({ ...domainResult, message: 'Studio Mac is unavailable' });
+            else expect(result.payload).toEqual(domainResult);
+        }
+    });
+
     it('keeps canonical failures as strict JSON while transport settlement retains their provenance', async () => {
         const failure = createPluginSurfaceHostApiError('timeout', ['host_timeout']);
         const actionResult = { code: 'timeout', outcome: 'domain-success' } as const;
@@ -132,6 +150,7 @@ describe('createPluginSurfaceHostApi', () => {
                 watchResource: async () => ({ ok: true }),
             },
             isMethodAvailable: (method) => method === 'context' || daemonReachable,
+            resolveUnavailableError: error => ({ ...error, message: 'Studio Mac is unavailable' }),
         });
 
         // Structurally installed, momentarily unreachable. Reporting it as
@@ -140,6 +159,7 @@ describe('createPluginSurfaceHostApi', () => {
         expect(hostApi.handleRequest(request('watchResource'))).toEqual({
             code: 'unavailable',
             diagnostics: ['host_api_method_unavailable:watchResource'],
+            message: 'Studio Mac is unavailable',
         });
         expect(createPluginSurfaceHostApiPluginErrorData('unavailable').retryable).toBe(true);
 

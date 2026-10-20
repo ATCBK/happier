@@ -4,6 +4,7 @@ import type {
 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
 import type { PromptDocArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';
 import type { ArtifactCallerAccessV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { readArtifactAudience, type ArtifactAudience } from '@/sync/domains/artifacts/artifactAudience';
 import { MemoryDocReadResultV1Schema } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
 import * as React from 'react';
 
@@ -11,11 +12,11 @@ import type {
   MemoryDocumentRevision,
   MemoryDocumentTarget,
 } from '@/sync/ops/promptLibrary/memoryDocuments';
-import { withUiPromptLibraryArtifactReader } from '@/sync/ops/promptLibrary/promptLibraryArtifactStore';
 import type { LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import { createArtifactAccessApi } from '@/sync/api/artifacts/apiArtifacts';
 import { useArtifact, useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { captureActiveServerAccountScopeCurrentness, captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { subscribeHomeAccountChange, subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
 export type MemoryDocumentStatus =
@@ -34,6 +35,9 @@ export type MemoryDocumentView = Readonly<{
   /** The admitted readable address survives refresh without retaining write authority. */
   ref: PromptDocArtifactRefV1;
   access: ArtifactCallerAccessV1 | null;
+  /** Current admitted granted/public audience; null cannot establish privacy. */
+  shared: boolean | null;
+  audience: ArtifactAudience | null;
   title: string;
   revision: MemoryDocumentRevision;
   /** The facts of this page: the index's key facts, or the open topic's facts. */
@@ -79,7 +83,7 @@ function reviewedWriteTarget(
   authority: Pick<Loaded, 'accountId' | 'isCurrent'>,
   topic?: string,
 ): MemoryDocumentTarget | null {
-  if (view.access === null || view.access === 'view' || authority.accountId === null) return null;
+  if (view.access === null || view.access === 'view' || view.shared === null || authority.accountId === null) return null;
   return { ref: view.ref, serverId, accountId: authority.accountId, isCurrent: authority.isCurrent,
     expectedRevision: view.revision,
     ...(topic === undefined ? {} : { topic }) };
@@ -105,6 +109,8 @@ export function useMemoryDocument(
     topic?: string;
     /** A closed or switched-off surface reads nothing. */
     enabled?: boolean;
+    /** An unresolved context attachment is unknown, not a successful empty read. */
+    attachmentStatus?: 'loading' | 'ready' | 'unavailable';
   }>,
 ): MemoryDocumentSource {
   const { ref, serverId, topic } = params;
@@ -114,7 +120,7 @@ export function useMemoryDocument(
   const accountScope = useActiveServerAccountScope();
   const activeLifetime = captureActiveServerAccountScopeLifetime();
   const identity = JSON.stringify([homeId, accountScope?.serverId, accountScope?.accountId, artifactId, topic ?? null]);
-  // The active Home's Artifact row is the change signal; another Home's document re-reads on demand.
+  // The active row tracks content revisions; captured-Home wakes also cover grant-only changes.
   const activeRow = useArtifact(artifactId);
   const row = accountScope && areServerProfileIdentifiersEquivalent(accountScope.serverId, homeId) ? activeRow : null;
   const key = JSON.stringify([
@@ -123,12 +129,15 @@ export function useMemoryDocument(
     topic ?? null,
     row?.headerVersion ?? null,
     row?.bodyVersion ?? null,
+    row?.access ?? null,
+    row?.publicAudience ?? null,
   ]);
   const [loaded, setLoaded] = React.useState<Loaded | null>(null);
   // Keep the canonical captured Home Account alive while its content is displayed.
   const displayedAccount = React.useRef<LazyActionAccountContext | null>(null);
   const pending = React.useRef<Readonly<{
     key: string;
+    identity: string;
     controller: AbortController;
     promise: Promise<MemoryDocumentTarget | null>;
   }> | null>(null);
@@ -138,6 +147,23 @@ export function useMemoryDocument(
     pending.current?.controller.abort();
     const controller = new AbortController();
     const currentness = captureActiveServerAccountScopeCurrentness();
+    const retainedAccount = displayedAccount.current;
+    const successorRead = async (): Promise<MemoryDocumentTarget | null> => {
+      const successor = pending.current;
+      // An Artifact wake may supersede the post-write read while its caller is
+      // awaiting the refreshed target. Follow that same-document read, never a
+      // replacement Account or a different document's target.
+      if (!currentness.isCurrent() || !retainedAccount || !successor
+        || successor.controller === controller || successor.identity !== identity) return null;
+      try {
+        // This is the existing retained-Account boundary: it watches and rechecks
+        // the exact credential before and after awaiting, even for the same Account id.
+        return await retainedAccount.runPrepared(async () => {
+          const target = await successor.promise;
+          return currentness.isCurrent() ? target : null;
+        });
+      } catch { return null; }
+    };
     setLoaded((previous) => {
       const view = previous?.identity === identity && previous.isCurrent() ? previous.view : null;
       return {
@@ -155,28 +181,42 @@ export function useMemoryDocument(
       try {
         const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
         account = await captureLazyActionAccountContext(homeId, controller.signal);
-        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
-        const result = await createDefaultActionExecutor().execute('memory.read', {
+        const { executeDefaultActionInCapturedAccount } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const readAccount = { ...account };
+        const readArtifactContent = account.readArtifactContent;
+        // Observe the admitted Action's existing read, rather than fetching the body again for audience metadata.
+        const observed: { artifact: Awaited<ReturnType<LazyActionAccountContext['readArtifactContent']>> } = { artifact: null };
+        readAccount.readArtifactContent = async (...args: Parameters<LazyActionAccountContext['readArtifactContent']>) => {
+          const artifact = await readArtifactContent(...args);
+          if (args[0] === artifactId) observed.artifact = artifact;
+          return artifact;
+        };
+        const result = await executeDefaultActionInCapturedAccount(readAccount, 'memory.read', {
           ref: { kind: 'doc', artifactId, serverId: homeId },
           ...(topic === undefined ? {} : { topic }),
         }, { surface: 'ui', authority: 'present_user', serverId: homeId,
           expectedAccountId: account.accountId, signal: controller.signal });
         if (!result.ok) throw Object.assign(new Error(result.error), { code: result.errorCode });
         const read = MemoryDocReadResultV1Schema.parse(result.result);
-        const access = await withUiPromptLibraryArtifactReader(
-          async (reader) => {
-            const artifact = await reader.readArtifactHeader({ kind: 'doc', artifactId, serverId: homeId });
-            return artifact?.access ?? null;
-          },
-          { serverId: homeId, signal: controller.signal, accountContext: account },
-        );
-        if (controller.signal.aborted || !currentness.isCurrent()) return null;
+        const artifact = observed.artifact;
+        if (!artifact) throw Object.assign(new Error('memory_doc_not_found'), { code: 'memory_doc_not_found' });
+        const access = artifact.access ?? null;
+        // Finite observations must not prepare/publish the Artifact and invalidate their own read.
+        const accessGrants = createArtifactAccessApi(account.credentials, { request: account.request });
+        const audience = await readArtifactAudience({ current: artifact, signal: controller.signal,
+          readGrants: () => accessGrants.list({ artifactId }, controller.signal),
+        }).catch(() => null);
+        const shared = audience?.shared ?? null;
+        if (!currentness.isCurrent()) return null;
+        if (controller.signal.aborted) return await successorRead();
         const view: MemoryDocumentView =
           'topic' in read
             ? {
                 artifactId,
                 ref: { kind: 'doc', artifactId, serverId: homeId },
                 access,
+                shared,
+                audience,
                 title: read.header.title,
                 revision: read.revision,
                 facts: read.topic.facts,
@@ -187,6 +227,8 @@ export function useMemoryDocument(
                 artifactId,
                 ref: { kind: 'doc', artifactId, serverId: homeId },
                 access,
+                shared,
+                audience,
                 title: read.header.title,
                 revision: read.revision,
                 facts: read.body.index,
@@ -202,7 +244,8 @@ export function useMemoryDocument(
           status: 'ready', view, stale: false });
         return isCurrent() ? reviewedWriteTarget(view, homeId, { accountId: account.accountId, isCurrent }, topic) : null;
       } catch (error) {
-        if (controller.signal.aborted || !currentness.isCurrent()) return null;
+        if (!currentness.isCurrent()) return null;
+        if (controller.signal.aborted) return await successorRead();
         const failure = (status: MemoryDocumentStatus): Loaded => ({ key, identity, accountId: null,
           isCurrent: currentness.isCurrent, status, view: null, stale: false });
         const code: unknown =
@@ -233,7 +276,7 @@ export function useMemoryDocument(
         if (pending.current?.controller === controller) pending.current = null;
       }
     })();
-    pending.current = { key, controller, promise };
+    pending.current = { key, identity, controller, promise };
     return promise;
   }, [activeLifetime, artifactId, enabled, homeId, identity, key, topic]);
 
@@ -254,6 +297,17 @@ export function useMemoryDocument(
     if (enabled) void refresh();
   }), [enabled, homeId, refresh]);
 
+  React.useEffect(() => {
+    if (!enabled) return;
+    return subscribeHomeAccountChange(event => {
+      if (!areServerProfileIdentifiersEquivalent(event.serverId, homeId)) return;
+      if (event.changeKinds && !event.changeKinds.includes('artifact')) return;
+      if (event.entityIds && !event.entityIds.includes(artifactId)) return;
+      // Grant changes have no document revision; the existing Account wake owns their invalidation.
+      void refresh();
+    });
+  }, [artifactId, enabled, homeId, refresh]);
+
   React.useEffect(() => () => {
     displayedAccount.current?.dispose();
     displayedAccount.current = null;
@@ -270,7 +324,7 @@ export function useMemoryDocument(
   return React.useMemo((): MemoryDocumentSource => {
     if (!enabled || !ref || !serverId)
       return {
-        status: 'none',
+        status: !ref && params.attachmentStatus && params.attachmentStatus !== 'ready' ? params.attachmentStatus : 'none',
         view: null,
         stale: false,
         target: null,
@@ -303,5 +357,5 @@ export function useMemoryDocument(
           : null,
       refresh,
     };
-  }, [activeLifetime, enabled, homeId, identity, key, loaded, ref, refresh, serverId, topic]);
+  }, [activeLifetime, enabled, homeId, identity, key, loaded, params.attachmentStatus, ref, refresh, serverId, topic]);
 }

@@ -1,18 +1,11 @@
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 
 import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { createResolvedAgentCatalogEntryFixture } from '@/dev/testkit/fixtures/agentCatalogFixtures';
 
 import { buildSessionAgentPickerOptions } from './buildSessionAgentPickerOptions';
-
-vi.mock('@/agents/registry/AgentIcon', () => ({
-    AgentIcon: (props: Record<string, unknown>) => React.createElement('AgentIcon', props),
-}));
-
-vi.mock('@/agents/registry/registryUi', () => ({
-    getAgentPickerIconScale: () => 1,
-}));
 
 function entry(
     backendId: string,
@@ -21,7 +14,7 @@ function entry(
     return {
         agentCatalogEntry: createResolvedAgentCatalogEntryFixture({ agentId: backendId }),
         backendTarget: { kind: 'backend', backendId },
-        backendTargetKey: `backend:${backendId}`,
+        backendTargetKey: buildBackendTargetKeyV2({ kind: 'backend', backendId }),
         kind: 'builtInAgent',
         backendId,
         agentId: backendId,

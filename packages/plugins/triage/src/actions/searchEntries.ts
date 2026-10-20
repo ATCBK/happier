@@ -6,12 +6,14 @@ import type {
     PluginClientActionHandler,
 } from '@happier-dev/plugin-sdk/actions';
 import type {
+    PluginClientApi,
     PluginSearchItemV1,
     PluginSearchQueryV1,
     PluginSearchResultV1,
 } from '@happier-dev/plugin-sdk';
 
 import { entryReferenceComponents } from '../corpus/identity/components.js';
+import { TRIAGE_SEARCH_ENTRIES_ACTION_LOCAL_ID_V1 } from './searchEntriesProtocol.js';
 import { buildTriageEntryDetailLaunchInput } from '../composer/entryDetailLaunchInput.js';
 import { TRIAGE_APP_PAGE_LOCAL_ID_V1 } from '../composer/openEntryDetails.js';
 import {
@@ -20,7 +22,9 @@ import {
     type TriageListRowV1,
     type TriageListWindowV1,
 } from '../projection/listWindow.js';
-import { projectTriageEntryDisplay } from '../ui/window/entryDisplay.js';
+import { projectTriageEntryDisplay, readTriageEntryGlyphV1 } from '../ui/window/entryDisplay.js';
+import { resolveTriageSourceWorkflowSubjectV1 } from '../ui/detail/sourceSurface.js';
+import type { SurfaceContext } from '@happier-dev/plugin-sdk/ui';
 import {
     acquireTriageListWindow,
     projectTriageListWindow,
@@ -65,14 +69,15 @@ function deriveTriageSearchResultId(row: TriageListRowV1): string {
  */
 function toSearchItem(
     row: TriageListRowV1,
+    targetedContributions: SurfaceContext['targetedContributions'],
 ): readonly PluginSearchItemV1[] {
     if (row.selected.kind !== 'selected') return [];
     const display = projectTriageEntryDisplay(row);
     return [{
         id: deriveTriageSearchResultId(row),
         title: display.title,
-        subtitle: display.scopeLabel,
-        icon: 'action',
+        subtitle: [display.scopeLabel, ...(display.designation ? [display.designation] : [])].join(' · '),
+        icon: readTriageEntryGlyphV1(display.lifecyclePresentation, resolveTriageSourceWorkflowSubjectV1(targetedContributions, row.entryRef)),
         command: {
             kind: 'openSurface',
             destination: TRIAGE_APP_PAGE_LOCAL_ID_V1,
@@ -115,9 +120,10 @@ async function waitForRefreshOrAbort(
 export function searchTriageEntries(
     input: PluginSearchQueryV1,
     window: TriageListWindowV1,
+    targetedContributions: SurfaceContext['targetedContributions'],
 ): PluginSearchResultV1 {
     const limit = Math.max(1, Math.min(input.limit, MAX_TRIAGE_LIST_WINDOW_ROWS_V1));
-    const openableItems = window.rows.flatMap(toSearchItem);
+    const openableItems = window.rows.flatMap(row => toSearchItem(row, targetedContributions));
     const items = openableItems.slice(0, limit);
     return {
         items,
@@ -165,11 +171,26 @@ export function createTriageSearchEntriesActionHandler(): PluginClientActionHand
                 limit,
             }, host, scope);
             if (window === undefined) {
-                throw new PluginError({ code: 'plugin_triage_window_unavailable' });
+                // The shared acquisition owns the failure. Never infer a missing
+                // folder from Search's selected Session: this window is Account-scoped.
+                const code = readTriageListWindowSnapshot(host, scope).error?.code;
+                return {
+                    items: [],
+                    truncated: false,
+                    failure: { code: code === 'root_not_found' || code === 'ROOT_NOT_FOUND'
+                        ? 'root_not_found'
+                        : code === 'auth_required' ? 'auth_required' : 'unavailable' },
+                };
             }
-            return searchTriageEntries(input, window);
+            const { targetedContributions } = await context.ui.context({ signal: context.signal });
+            if (context.signal.aborted) throw new PluginError({ code: 'plugin_action_aborted' });
+            return searchTriageEntries(input, window, targetedContributions ?? undefined);
         } finally {
             lease.release();
         }
     };
+}
+
+export function activate(api: PluginClientApi): void {
+    api.actions.register(TRIAGE_SEARCH_ENTRIES_ACTION_LOCAL_ID_V1, createTriageSearchEntriesActionHandler());
 }

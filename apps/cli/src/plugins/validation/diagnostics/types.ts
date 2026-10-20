@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { BUNDLED_PLUGIN_PUBLICATION_DIAGNOSTIC_CODES } from '@happier-dev/cli-common/bundledPluginPublicationPolicy';
 import { PluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugins/contribution-identity';
 import { PluginDiagnosticStageV1Schema, PluginDiagnosticTextV1Schema } from '@happier-dev/protocol/daemon/pluginContributionIntrospection';
@@ -124,24 +124,24 @@ export type BundledPluginPublicationFailure = Readonly<{
  * plugin whose authenticated root is known; every other realm publishes the
  * ordinary redacted message and nothing else.
  */
-export const PluginDiagnosticSourceLocationSchema = z.object({
-  file: z.string().trim().min(1),
-  line: z.number().int().positive().optional(),
-  column: z.number().int().nonnegative().optional(),
-}).strict();
+export const PluginDiagnosticSourceLocationSchema = z.strictObject({
+  file: z.string().check(z.trim(), z.minLength(1)),
+  line: z.optional(z.number().check(z.int(), z.positive())),
+  column: z.optional(z.number().check(z.int(), z.nonnegative())),
+});
 export type PluginDiagnosticSourceLocationRecord = z.infer<
   typeof PluginDiagnosticSourceLocationSchema
 >;
 
-export const PluginCompatibilityDiagnosticSchema = z.object({
+export const PluginCompatibilityDiagnosticSchema = z.strictObject({
   code: PluginDiagnosticCodeSchema,
   message: PluginDiagnosticTextV1Schema,
-  contribution: HostPluginContributionIdentityV1Schema.optional(),
-  details: PluginJsonValueV2Schema.optional(),
-  stage: PluginDiagnosticStageV1Schema.optional(),
+  contribution: z.optional(HostPluginContributionIdentityV1Schema),
+  details: z.optional(PluginJsonValueV2Schema),
+  stage: z.optional(PluginDiagnosticStageV1Schema),
   /** Local-development realm only; see `PluginDiagnosticSourceLocationSchema`. */
-  source: PluginDiagnosticSourceLocationSchema.optional(),
+  source: z.optional(PluginDiagnosticSourceLocationSchema),
   /** Local-development realm only: root-rebased, credential- and path-redacted. */
-  stack: PluginDiagnosticTextV1Schema.optional(),
-}).strict();
+  stack: z.optional(PluginDiagnosticTextV1Schema),
+});
 export type PluginCompatibilityDiagnostic = z.infer<typeof PluginCompatibilityDiagnosticSchema>;

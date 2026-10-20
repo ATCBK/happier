@@ -14,8 +14,8 @@ import { TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1 } from '@happier-dev/protocol/changes
 
 import {
     requestHomeDomain,
-    type HomeDomainFailure,
 } from '@/sync/api/home/homeServerActionTransport';
+import type { HomeDomainFailure } from '@/sync/ops/teams/teamActionClient';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import {
     serverAccountScopeKeySuffix,

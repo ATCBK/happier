@@ -31,7 +31,7 @@ import {
   HappierItemGroupBehavior,
   useHappierItemGroupItemBehavior,
 } from '../collection/ItemGroup.js';
-import { happierFocusRingStyle } from '../interaction/focusVisible.js';
+import { happierFocusRingStyle, HAPPIER_TEXT_INPUT_FOCUS_RESET_STYLE, HAPPIER_TEXT_INPUT_WEB_MARKER } from '../interaction/focusVisible.js';
 import { HappierPressable } from '../interaction/Pressable.js';
 import { settleHappierRaisedEdge } from '../layout/raisedEdge.js';
 import type {
@@ -294,6 +294,9 @@ function combineAccessibilityHints(...hints: readonly (string | undefined)[]): s
   }, '');
 }
 
+/** How far a field that cannot be used right now (disabled, or waiting on its choices) recedes. */
+export const HAPPIER_FIELD_DISABLED_OPACITY = 0.5;
+
 export function HappierField(props: HappierFieldProps) {
   const captionStyle = useHappierTypeRoleStyle('micro', props.theme);
   const generatedIssueId = useId();
@@ -316,7 +319,7 @@ export function HappierField(props: HappierFieldProps) {
       <HappierFieldScopeContext.Provider value>
       <View
         testID={props.testID}
-        style={[{ gap: props.theme.spacing.xsmall, opacity: props.disabled ? 0.5 : 1 }, props.style]}
+        style={[{ gap: props.theme.spacing.xsmall, opacity: props.disabled ? HAPPIER_FIELD_DISABLED_OPACITY : 1 }, props.style]}
       >
         <HappierLabel theme={props.theme}>
           {props.label}{props.required ? ' *' : ''}
@@ -547,8 +550,9 @@ export function HappierTextField(props: HappierTextFieldProps) {
       {...({
         onCompositionStart: handleCompositionStart,
         onCompositionEnd: handleCompositionEnd,
+        ...HAPPIER_TEXT_INPUT_WEB_MARKER,
       } as Record<string, unknown>)}
-      style={props.appearance === 'search' ? {
+      style={[props.appearance === 'search' ? {
           ...textStyle, flex: 1, minWidth: 0, minHeight: 20, padding: 0, margin: 0, borderWidth: 0, backgroundColor: 'transparent',
         } : fieldAppearance !== null
         ? {
@@ -577,7 +581,7 @@ export function HappierTextField(props: HappierTextFieldProps) {
             ...textStyle,
             backgroundColor: 'transparent',
             textAlignVertical: 'center',
-          }}
+          }, HAPPIER_TEXT_INPUT_FOCUS_RESET_STYLE]}
     />
   );
   if (props.appearance === 'search') return (

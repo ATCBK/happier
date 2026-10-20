@@ -46,7 +46,7 @@ import { getCachedReadyServerFeatures } from '@/sync/api/capabilities/getReadySe
 import { apiSocket } from '@/sync/api/session/apiSocket';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { readEndpointFromMachineState } from '@/sync/domains/machines/peer/mediation/stream/productionRouteHttp';
-import { readVoiceDaemonHttpPortFromState } from '@/voice/settings/voiceProviderLocalAvailability';
+import { readPeerEndpointForServerScope } from '@/sync/domains/machines/peer/mediation/readPeerEndpointForServerScope';
 import { resolveVoiceQaTransportReadiness } from './voiceQaTransportReadiness';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 
@@ -461,10 +461,11 @@ export function VoiceQaScreen() {
     serverId: activeServerSnapshot.serverId,
   });
   const daemonHttpPort = activeServerSnapshot.serverId && executionMachineId
-    ? readVoiceDaemonHttpPortFromState({
+    ? readPeerEndpointForServerScope({
         state: appState,
         serverId: activeServerSnapshot.serverId,
         machineId: executionMachineId,
+        select: (machine) => machine.daemonState?.httpPort,
       })
     : null;
   const directEndpoint = activeServerSnapshot.serverId && executionMachineId

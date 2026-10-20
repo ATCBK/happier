@@ -1,5 +1,5 @@
 import fastify from 'fastify';
-import { readdir } from 'node:fs/promises';
+import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { vi } from 'vitest';
 
@@ -22,6 +22,11 @@ import { configuration } from '@/configuration';
 import { resolveReleaseRingScopedBasename } from '@/cli/runtime/publicReleaseChannel';
 import { writeCredentialsLegacy, type Credentials } from '@/persistence';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { loadCurrentBundledPluginLocatorResult } from '@/plugins/projection/registry/builtIn/locators';
+import { createMergedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { resolveBuiltInContributions } from '@/plugins/projection/registry/resolveBuiltInContributions';
+import { projectLoadedPluginContributes, resolvePluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
 import { resolveProviderConnectionForMachine } from '@/providers/registry';
 import { collectProviderConnectionDnsEvidence } from '@/providers/registry/dnsEvidence';
 import { createProviderOperationLifetime } from '@/providers/operationLifetime';
@@ -29,10 +34,19 @@ import { bootstrapAccountSettingsContext, resetInMemoryAccountSettingsContextFor
 import { deriveSettingsSecretsKeyForCredentials } from '@/settings/secrets/settingsSecretsKey';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { withRealForegroundAdmissionFixture } from './foregroundAdmission.testkit';
-import { sealProfileRecordContentV1, type ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
+import { ProfileRecordV1Schema, sealProfileRecordContentV1, type ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { sealProfileTransferContentV1 } from '@happier-dev/protocol/profiles/profileTransferV1';
 import { createAccountScopedCryptoMaterialSnapshotV1 } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
+import { createProjectAccountRowCipherV1 } from '@happier-dev/protocol/projects/projectAccountRowCipherV1';
+import { PROJECT_ACCOUNT_ROWS_ROUTE_V1, ProjectAccountRowListResponseV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import type { ProjectManifestV1 } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestV1';
+import { withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
+import { MachinePublishedRowV1Schema } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
+import { refreshActiveProfileCatalog } from '@/settings/profiles/hydrateProfileCatalog';
+import { refreshSavedSecretCatalogForOperation } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsRowReadResponseV1Schema,
+  sealProviderConnectionsContentV1, splitProviderSettingsV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 
 type BaseContext = Parameters<Parameters<typeof withRealForegroundAdmissionFixture>[1]>[0];
 type RequestOverrides = NonNullable<Parameters<BaseContext['prepare']>[0]>;
@@ -46,6 +60,7 @@ type SettingsOptions = Readonly<{
 type SharedFailure = 'reference_forbidden' | 'reference_deleted' | 'reference_mode_incompatible'
   | 'reference_repair_required' | 'reference_corrupt';
 type FixtureOptions = Readonly<{
+  projectManifest?: ProjectManifestV1;
   providersFeatureEnabled?: boolean;
   configFileAgent?: boolean;
   settings?: SettingsOptions;
@@ -57,6 +72,7 @@ type FixtureOptions = Readonly<{
 const connectionId = ProviderConnectionIdSchema.parse('pc_gateway');
 const contributionKey = 'acme.gateway/gateway';
 const sharedReference = 'happier:shared-secret:v1:resource-profile-shared';
+const providerSecretReference = 'happier:shared-secret:v1:resource-provider';
 const externalAgentPluginId = 'acme.foreground';
 const externalAgentId = 'acme.foreground/fixture';
 
@@ -106,7 +122,7 @@ function configFileAgentPlugin() {
   };
 }
 
-function sharedMaterial(options: FixtureOptions) {
+function sharedMaterial(options: FixtureOptions, settings: SettingsOptions) {
   const statuses: Readonly<Record<Exclude<SharedFailure, 'reference_corrupt'>, SavedSecretCatalogMaterialStatusV1>> = {
     reference_forbidden: 'access_removed', reference_deleted: 'deleted',
     reference_mode_incompatible: 'recipient_mode_unsupported', reference_repair_required: 'update_required',
@@ -124,6 +140,13 @@ function sharedMaterial(options: FixtureOptions) {
         name: options.sharedSecretFailure === 'reference_corrupt' ? 'Mismatched projected name' : 'Shared Profile secret',
         kind: 'apiKey', value: 'shared-profile-plaintext' },
     }) : null,
+  }, {
+    resourceId: 'resource-provider', encryptionMode: 'plain', recipientEnvelope: null,
+    entry: { ref: providerSecretReference, source: 'shared_resource', relationship: 'recipient', name: 'Provider secret',
+      kind: 'apiKey', ownerAccountId: 'owner-account', revision: settings.providerSecretUpdatedAt ?? 1, materialStatus: 'ready',
+      capabilities: { use: true, rename: false, rotate: false, manageAccess: false, delete: false } },
+    storedContent: sealSavedSecretResourceStoredContentV1({ resourceId: 'resource-provider', mode: 'plain',
+      content: { v: 1, name: 'Provider secret', kind: 'apiKey', value: settings.providerSecretValue ?? 'provider-plaintext' } }),
   }] });
 }
 
@@ -146,21 +169,51 @@ export async function withForegroundProviderFixture<T>(options: FixtureOptions, 
   const agentPluginId = options.configFileAgent ? externalAgentPluginId : 'happier.agent.codex';
   const agentTargetKey = buildBackendTargetKeyV2({ kind: 'backend', backendId: agentId });
   const plugins = [providerPlugin(agentTargetKey), ...(options.configFileAgent ? [configFileAgentPlugin()] : [])];
-  return await withRealForegroundAdmissionFixture({ plugins, runtimeOptions: {
-    pluginIds: options.configFileAgent ? ['acme.gateway', externalAgentPluginId] : ['acme.gateway', 'happier.agent.codex'],
-  } }, async (base) => {
+  return await withRealForegroundAdmissionFixture({
+    createRuntime: ({ home, controller }) => createAuthoredAdmittedPluginRuntimeFixture({
+      plugins, happyHomeDir: home, controller, coldStart: true,
+      async resolveContributes(happyHomeDir) {
+        const bundledPluginIds = new Set(options.configFileAgent ? [] : ['happier.agent.codex']);
+        const bundled = projectLoadedPluginContributes({
+          loadResult: {
+            loadedPlugins: loadCurrentBundledPluginLocatorResult().loadedPlugins
+              .filter(plugin => bundledPluginIds.has(plugin.pluginId)),
+            diagnosticsByPluginId: {},
+          },
+          provenance: 'first_party',
+        });
+        const builtIn = {
+          ...bundled,
+          agents: resolveBuiltInContributions().agents.filter(agent => bundledPluginIds.has(agent.pluginId ?? '')),
+        };
+        const external = await resolvePluginContributes({
+          happyHomeDir, existingAgentIds: new Set(builtIn.agents.map(agent => agent.id)),
+        });
+        return createMergedContributionRegistry(external, builtIn);
+      },
+    }),
+  }, async (base) => {
     const app = fastify();
     let restoreAxios: (() => void) | null = null;
     const originalFetch = globalThis.fetch;
     const accountSecret = new Uint8Array(32).fill(5);
     const credentials: Credentials = { token: 'foreground-account-token', encryption: { type: 'legacy', secret: accountSecret } };
     const material = { type: 'legacy' as const, secret: accountSecret };
-    let profileRow: Readonly<{ id: string; revision: number; content: ReturnType<typeof sealProfileRecordContentV1> }> | null = null;
+    const initialProfile = ProfileRecordV1Schema.parse({ v: 1, id: 'profile-1', enabled: true,
+      definition: { kind: 'inline', profile: { v: 2, id: 'profile-1', name: 'Profile', createdAt: 1, updatedAt: 1,
+        envVarRequirements: [{ name: 'PROFILE_SECRET', kind: 'secret', required: true }] } },
+      promptStack: [], secretBindings: { PROFILE_SECRET: options.settings?.profileSecretRef ?? 'profile-secret' },
+    });
+    let profileRow: Readonly<{ id: string; revision: number; content: ReturnType<typeof sealProfileRecordContentV1> }> | null = {
+      id: initialProfile.id, revision: 1, content: sealProfileRecordContentV1({ mode: 'e2ee', material, record: initialProfile }),
+    };
     const transfer = () => profileRow ? { status: 'present' as const, revision: 1, content: sealProfileTransferContentV1({
       mode: 'e2ee', material, record: { v: 1, phase: 'active', sourceSettingsVersion: 1,
         migratedLogicalRevision: 1, inventory: [] },
     }) } : { status: 'absent' as const };
     let profileTransfer = transfer();
+    let publishedSettings = options.settings ?? { version: 1 };
+    let providerRow = ProviderConnectionsRowReadResponseV1Schema.parse({ status: 'absent' });
     let settingsResponse: Readonly<{ version: number; content: Readonly<{ t: 'encrypted'; c: string }> }> | null = null;
     const features = FeaturesResponseSchema.parse({ features: {
       providers: { enabled: options.providersFeatureEnabled ?? true }, teams: { enabled: true },
@@ -174,13 +227,31 @@ export async function withForegroundProviderFixture<T>(options: FixtureOptions, 
       signingKeyFingerprint: null, contentKeyFingerprint: convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1(
         createAccountScopedCryptoMaterialSnapshotV1({ accountEncryptionMode: 'e2ee', material }).contentPublicKeyFingerprint),
     }));
+    let projectRows = ProjectAccountRowListResponseV1Schema.parse({ status: 'listed', coverage: 'complete', rows: [] });
+    if (options.projectManifest) {
+      await mkdir(join(base.directory, '.happier'), { recursive: true });
+      await writeFile(join(base.directory, '.happier', 'project.json'), JSON.stringify(options.projectManifest));
+      const key = { kind: 'workspace-ref' as const, serverId: configuration.activeServerId, id: 'foreground-workspace' };
+      const cipher = createProjectAccountRowCipherV1({ mode: 'e2ee', material,
+        randomBytes: length => new Uint8Array(length).fill(7) });
+      projectRows = ProjectAccountRowListResponseV1Schema.parse({ status: 'listed', coverage: 'complete', rows: [{ key,
+        revision: 0, content: cipher.seal({ key, value: { id: key.id, serverId: key.serverId,
+          machineId: 'machine-1', rootPath: base.directory, projectKey: 'foreground-project', createdAtMs: 1 } }),
+      }] });
+    }
+    app.post(`${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`, async () => projectRows);
+    app.get('/v1/machines/machine-1', async () => ({ machine: MachinePublishedRowV1Schema.parse({
+      id: 'machine-1', storageMode: 'e2ee', metadata: null, metadataVersion: 0,
+      daemonState: null, daemonStateVersion: 0, dataEncryptionKey: null,
+    }) }));
     app.get('/v1/account/entity-rows/profiles/reference-guard', async () => ({ status: 'ready', revision: profileRow?.revision ?? 'absent' }));
     app.get('/v1/account/entity-rows/profiles/transfer', async () => profileTransfer);
     app.get('/v1/account/entity-rows/profiles', async () => ({ status: 'listed', rows: profileRow ? [profileRow] : [],
       nextCursor: null, complete: true, diagnostics: [], referenceGuardRevision: profileRow?.revision ?? 'absent', transferControl: profileTransfer }));
+    app.get(PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, async () => providerRow);
     app.get('/v1/account/saved-secrets/resources/materials', async (_request, reply) => {
       if (options.sharedSecretHttpStatus) return reply.code(options.sharedSecretHttpStatus).send({ error: 'access_removed' });
-      return sharedMaterial(options);
+      return sharedMaterial(options, publishedSettings);
     });
     try {
       await app.ready();
@@ -212,21 +283,21 @@ export async function withForegroundProviderFixture<T>(options: FixtureOptions, 
       if (resolved.status !== 'resolved') throw new Error('Physical Provider connection did not resolve');
       const providerSettings = ProviderSettingsV1Schema.parse({ ...initialProviderSettings,
         accountGrants: [{ v: 1, connectionId, connectionSecurityFingerprint: resolved.record.connectionSecurityFingerprint, confirmedAt: 1 }],
-        secretBindingsByConnectionId: { [connectionId]: { account: { apiKey: 'provider-secret' } } },
+        secretBindingsByConnectionId: { [connectionId]: { account: { apiKey: providerSecretReference } } },
+      });
+      providerRow = ProviderConnectionsRowReadResponseV1Schema.parse({ status: 'present', revision: 1,
+        content: sealProviderConnectionsContentV1({ mode: 'e2ee', material, catalog: splitProviderSettingsV1(providerSettings).catalog }),
       });
       const secretKey = deriveSettingsSecretsKeyForCredentials(credentials);
       let scopeKey = '';
       let currentVersion = options.settings?.version ?? 1;
       const publishSettings = async (params: SettingsOptions) => {
+        publishedSettings = params;
         const secret = (id: string, value: string, updatedAt = 1) => ({ id, name: id, kind: 'apiKey', createdAt: 1, updatedAt,
           encryptedValue: { _isSecretValue: true, encryptedValue: encryptSecretStringV1(value, secretKey, (length) => new Uint8Array(length).fill(3)) } });
-        const settings = AccountSettingsSchema.parse({ providerSettingsV1: providerSettings,
-          secrets: [secret('provider-secret', params.providerSecretValue ?? 'provider-plaintext', params.providerSecretUpdatedAt),
-            params.corruptProfileSecret ? { ...secret('profile-secret', 'unused'), encryptedValue: { _isSecretValue: true, encryptedValue: 'invalid' } }
+        const settings = AccountSettingsSchema.parse({
+          secrets: [params.corruptProfileSecret ? { ...secret('profile-secret', 'unused'), encryptedValue: { _isSecretValue: true, encryptedValue: 'invalid' } }
               : secret('profile-secret', 'profile-plaintext')],
-          profiles: [{ id: 'profile-1', name: 'Profile', envVarRequirements: [{ name: 'PROFILE_SECRET', kind: 'secret', required: true }],
-            environmentVariables: [], defaultPermissionModeByTargetKey: {}, compatibilityByTargetKey: {}, isBuiltIn: false, createdAt: 1, updatedAt: 1, version: '1.0.0' }],
-          secretBindingsByProfileId: { 'profile-1': { PROFILE_SECRET: params.profileSecretRef ?? 'profile-secret' } },
         });
         settingsResponse = { version: params.version, content: { t: 'encrypted', c: sealAccountScopedBlobCiphertext({ kind: 'account_settings',
           material: { type: 'legacy', secret: accountSecret }, payload: settings, randomBytes: (length) => new Uint8Array(length).fill(9) }) } };
@@ -235,23 +306,38 @@ export async function withForegroundProviderFixture<T>(options: FixtureOptions, 
         if (!snapshot.scopeKey) throw new Error('Canonical Account scope unavailable');
         scopeKey = snapshot.scopeKey;
         currentVersion = params.version;
+        const profileCatalog = await refreshActiveProfileCatalog({ credentials });
+        if (profileCatalog.status !== 'ready' || profileCatalog.source !== 'destination') {
+          throw new Error(`Foreground fixture Profile catalog is unavailable: ${profileCatalog.status}`);
+        }
+        if (params.providerSecretValue !== undefined || params.providerSecretUpdatedAt !== undefined) {
+          await refreshSavedSecretCatalogForOperation({ expectedScopeKey: scopeKey,
+            references: [{ ref: providerSecretReference }] });
+        }
       };
       resetInMemoryAccountSettingsContextForTests();
       await publishSettings(options.settings ?? { version: 1 });
-      const request = (overrides: RequestOverrides = {}) => base.request({
-        agentId, backendTarget: options.configFileAgent ? { kind: 'backend', backendId: agentId }
-          : { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' },
-        profileId: 'profile-1', accountSettingsScopeKey: scopeKey, accountSettingsVersion: currentVersion,
-        selection: { v: 1, updatedAt: 1, ref: { agentTargetKey, providerConnectionId: connectionId, modelId: 'model-a' } },
-        ...overrides,
-      });
+      const request = (overrides: RequestOverrides = {}) => {
+        const profileId = Object.hasOwn(overrides, 'profileId') ? overrides.profileId : 'profile-1';
+        return base.request({
+          agentId, backendTarget: options.configFileAgent ? { kind: 'backend', backendId: agentId }
+            : { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' },
+          profileId, accountSettingsScopeKey: scopeKey, accountSettingsVersion: currentVersion,
+          profileRecordRevision: profileId === undefined ? undefined : profileRow?.revision,
+          selection: { v: 1, updatedAt: 1, ref: { agentTargetKey, providerConnectionId: connectionId, modelId: 'model-a' } },
+          ...overrides,
+        });
+      };
       return await run({ ...base, connectionId, contributionKey, sharedReference, agentId, agentPluginId, agentTargetKey,
         get scopeKey() { return scopeKey; }, request, publishSettings,
         publishProfileRecord(record, revision) {
           profileRow = { id: record.id, revision, content: sealProfileRecordContentV1({ mode: 'e2ee', material, record }) };
           if (profileTransfer.status === 'absent') profileTransfer = transfer();
         },
-        prepare: (overrides = {}, dependencies = {}) => base.prepare(request(overrides), dependencies),
+        prepare: (overrides = {}, dependencies = {}) => base.prepare(request(overrides), {
+          connectedServicesMaterializationBaseDir: join(base.home, 'connected-services'),
+          ...dependencies,
+        }),
         async bootstrapFiles() {
           const directory = join(base.home, 'tmp', resolveReleaseRingScopedBasename('foreground-agent-runtime-bootstraps', configuration.publicReleaseRing));
           try { return await readdir(directory); }
@@ -259,6 +345,7 @@ export async function withForegroundProviderFixture<T>(options: FixtureOptions, 
         },
       });
     } finally {
+      withdrawActiveProjectAccountRowsSnapshot();
       restoreAxios?.();
       vi.stubGlobal('fetch', originalFetch);
       resetInMemoryAccountSettingsContextForTests();

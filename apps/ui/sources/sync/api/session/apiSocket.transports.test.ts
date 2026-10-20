@@ -3,6 +3,16 @@ import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { SESSION_HUMAN_PRESENCE_SNAPSHOT_EVENT } from '@happier-dev/protocol/sessions';
 import { createSocketIoBoundaryStub } from '@/dev/testkit/mocks/socketIo';
 import { DEFAULT_MANAGED_CONNECTION_POLICY } from '@happier-dev/connection-supervisor';
+import { act, createDeferred, createMachineFixture, renderHook } from '@/dev/testkit';
+import { Encryption } from '@/sync/encryption/encryption';
+import { storage } from '@/sync/domains/state/storage';
+import { useSimulatorRelayIngestion, type UseSimulatorRelayIngestionInput } from '@/components/devices/simulator/relay/useSimulatorRelayIngestion';
+import { sealMachineLiveStreamEnvelopeV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/payloadV1';
+import { MACHINE_LIVE_STREAM_SOCKET_EVENT, type MachineLiveStreamStartRequestV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
+import { fetchAndApplyMachines } from '@/sync/engine/machines/syncMachines';
+import { encodeBase64 } from '@/encryption/base64';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 // Ordinary transport lifecycles share one real module graph and retire their concrete sockets.
 import './apiSocket';
 
@@ -17,7 +27,8 @@ vi.mock('@/utils/system/runtimeFetch', () => ({
     setRuntimeFetch: () => {},
 }));
 
-async function boot(socketRole?: Readonly<{ clientType: 'session-scoped'; sessionId: string }>) {
+async function boot(socketRole?: Readonly<{ clientType: 'session-scoped'; sessionId: string }>, encryption: Encryption | null = null,
+    serverId = 'socket-test-home') {
     const boundary = createSocketIoBoundaryStub();
     ioSpy.mockReturnValue(boundary.socket);
     const { apiSocket } = await import('./apiSocket');
@@ -25,9 +36,9 @@ async function boot(socketRole?: Readonly<{ clientType: 'session-scoped'; sessio
     const { resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
     resetReachability = resetServerReachabilitySupervisors;
     const token = `e30.${Buffer.from(JSON.stringify({ sub: 'self' })).toString('base64')}.signature`;
-    const config = { endpoint: 'https://server.example.test/', token, serverId: 'socket-test-home',
+    const config = { endpoint: 'https://server.example.test/', token, serverId,
         generation: 1, ...(socketRole ? { socketRole, request: await createViewerRequest() } : {}) };
-    apiSocket.initialize(config, null);
+    apiSocket.initialize(config, encryption);
     await vi.waitFor(() => expect(boundary.socket.connected).toBe(true));
     return { apiSocket, ...boundary };
 }
@@ -40,11 +51,13 @@ async function createViewerRequest() {
 }
 
 describe('apiSocket transports and roles', () => {
+    const initialState = storage.getState();
     const previousForceWebsocket = process.env.EXPO_PUBLIC_HAPPIER_SOCKET_FORCE_WEBSOCKET;
     afterEach(async () => {
         activeSocket?.disconnect(); activeSocket = undefined;
         await resetReachability?.(); resetReachability = undefined;
         ioSpy.mockReset();
+        storage.setState(initialState, true);
         vi.useRealTimers();
         vi.unstubAllGlobals();
         if (previousForceWebsocket === undefined) delete process.env.EXPO_PUBLIC_HAPPIER_SOCKET_FORCE_WEBSOCKET;
@@ -52,6 +65,113 @@ describe('apiSocket transports and roles', () => {
         if (coldEnvironmentGraph) {
             coldEnvironmentGraph = false;
             vi.resetModules();
+        }
+    });
+
+    it.each(['available', 'cached-available', 'pending-material', 'pending-material-settled', 'locked', 'list-failed', 'disconnected'] as const)('awaits Machine hydration after screen-stream mount without Retry, then respects %s', async outcome => {
+        const machineId = 'cold-machine';
+        const streamId = 'cold-stream';
+        const serverId = resolveServerProfileScopeIdForIdentifier(getActiveServerSnapshot().serverId);
+        const secret = new Uint8Array(32).fill(1);
+        const dataKey = new Uint8Array(32).fill(2);
+        const source = await Encryption.create(secret);
+        await source.initializeMachines(new Map([[machineId, dataKey]]));
+        const encryption = await Encryption.create(secret);
+        const cold = createMachineFixture({ id: machineId, storageMode: 'e2ee', metadata: null,
+            ...(outcome === 'cached-available' ? { availability: { kind: 'available' } } : {}),
+            ...(outcome.startsWith('pending-material') ? { storageMode: undefined,
+                availability: { kind: 'locked', reason: 'encryption_material_unavailable' } } : {}),
+            dataEncryptionKey: encodeBase64(await source.encryptEncryptionKey(dataKey), 'base64') });
+        storage.setState({ machines: { [machineId]: cold }, machineListStatusByServerId: { [serverId]: 'loading' } });
+        const { apiSocket, trigger } = await boot(undefined, encryption, serverId);
+        const startRequest: MachineLiveStreamStartRequestV1 = {
+            v: 1, streamId, streamFamily: 'screen', sourceId: 'computer-display', routeKind: 'server_relay',
+            sourceMachineId: machineId, targetMachineId: machineId,
+            authorization: { payload: { v: 1, grantId: 'grant', accountId: 'self', sourceMachineId: machineId,
+                targetMachineId: machineId, flowKind: 'live_stream', routeKind: 'server_relay', streamId,
+                streamFamily: 'screen', sourceId: 'computer-display', iat: Date.now(), exp: Date.now() + 60_000,
+                aud: 'happier-live-stream-relay-authorization' },
+                signature: { keyId: 'relay', alg: 'Ed25519', valueBase64Url: 'AbCdEf012_-' } },
+        };
+        const input: UseSimulatorRelayIngestionInput = {
+            transport: { send: (_event, envelope) => apiSocket.sendMachineLiveStreamRelayEnvelope(envelope),
+                onEnvelope: listener => apiSocket.onMachineLiveStreamRelayEnvelope(listener) },
+            sourceMachineId: machineId, targetMachineId: machineId, streamId, streamFamily: 'screen',
+            sourceId: 'computer-display', simulatorId: 'computer-display', caps: {}, sourceCodecs: ['image.frame.v1'],
+            // These are the HTTP grant and daemon RPC boundaries. The socket framing, crypto,
+            // hydration, relay client, ingestion and player remain the production implementations.
+            startProduction: async () => ({ ok: true, routeKind: 'server_relay', startRequest,
+                relayAuthorization: startRequest.authorization! }),
+            startDaemonRelay: async () => ({ ok: true, streamId }),
+        };
+        const mounted = await renderHook(() => useSimulatorRelayIngestion(input));
+        const frame = await sealMachineLiveStreamEnvelopeV1({ v: 1, sourceMachineId: machineId, targetMachineId: machineId,
+            message: { kind: 'frame', frame: { v: 1, streamId, sequence: 1, timestampMs: 1,
+                payloadKind: 'image_keyframe', payloadEncoding: 'binary_base64', payloadBase64: 'AQID', payloadSizeBytes: 3 } } },
+            { mode: 'e2ee', cipher: source.getMachineEncryption(machineId)! });
+        expect(frame.ok).toBe(true);
+        if (!frame.ok) throw new Error(frame.code);
+        const firstPicture = createDeferred<void>();
+        const stopObserving = apiSocket.onMachineLiveStreamRelayEnvelope(envelope => {
+            if (envelope.message.kind === 'frame' && envelope.message.frame.streamId === streamId) firstPicture.resolve();
+        });
+        try {
+            await act(async () => trigger(MACHINE_LIVE_STREAM_SOCKET_EVENT, frame.value));
+            expect(mounted.getCurrent().playerStatesBySimulatorId['computer-display']?.phase).toBe('opening');
+            if (outcome === 'pending-material-settled') {
+                await act(async () => storage.getState().markMachineListSettled(serverId));
+                await vi.waitFor(() => expect(mounted.getCurrent().playerStatesBySimulatorId['computer-display'])
+                    .toMatchObject({ phase: 'stopped', diagnostic: { reasonCode: 'stream_payload_mode_mismatch' } }));
+                expect(mounted.getCurrent().playerStatesBySimulatorId['computer-display']?.lastFrameUrl).toBeUndefined();
+                return;
+            }
+            if (outcome === 'list-failed') {
+                await act(async () => storage.getState().markMachineListUnavailable(serverId));
+                await vi.waitFor(() => expect(mounted.getCurrent().playerStatesBySimulatorId['computer-display'])
+                    .toMatchObject({ phase: 'stopped', diagnostic: { reasonCode: 'stream_encryption_material_unavailable' } }));
+                expect(mounted.getCurrent().playerStatesBySimulatorId['computer-display']?.lastFrameUrl).toBeUndefined();
+                return;
+            }
+            if (outcome === 'locked') {
+                await act(async () => {
+                    await encryption.initializeMachines(new Map(), new Set([machineId]));
+                    storage.setState({ machines: { [machineId]: { ...cold,
+                        availability: { kind: 'locked', reason: 'decryption_failed' } } } });
+                });
+                await vi.waitFor(() => expect(mounted.getCurrent().playerStatesBySimulatorId['computer-display'])
+                    .toMatchObject({ phase: 'stopped', diagnostic: { reasonCode: 'stream_payload_mode_mismatch' } }));
+                expect(mounted.getCurrent().playerStatesBySimulatorId['computer-display']?.lastFrameUrl).toBeUndefined();
+                return;
+            }
+            if (outcome === 'disconnected') {
+                apiSocket.disconnect();
+                await act(async () => {
+                    await encryption.initializeMachines(new Map([[machineId, dataKey]]));
+                    storage.setState({ machines: { [machineId]: { ...cold, availability: { kind: 'available' } } } });
+                });
+                expect(mounted.getCurrent().playerStatesBySimulatorId['computer-display']?.lastFrameUrl).toBeUndefined();
+                return;
+            }
+            const metadata = await source.getMachineEncryption(machineId)!.encryptMetadata(createMachineFixture().metadata!);
+            await act(async () => {
+                await fetchAndApplyMachines({
+                    credentials: { token: `e30.${Buffer.from(JSON.stringify({ sub: 'self' })).toString('base64')}.signature`,
+                        secret: encodeBase64(secret) }, expectedAccountMode: 'e2ee', sourceServerId: serverId,
+                    encryption, machineDataKeys: new Map(),
+                    request: async () => new Response(JSON.stringify([{ ...cold, metadata }])),
+                    getMachineSnapshot: () => storage.getState().machines,
+                    getExistingMachine: id => storage.getState().machines[id],
+                    applyMachineDisplayEntries: (machines, options) => storage.getState().replaceMachineDisplays(machines,
+                        { sourceServerId: serverId, ...options }),
+                    applyMachines: (machines, replace) => storage.getState().applyMachines(machines, replace, { sourceServerId: serverId }),
+                    onListComplete: () => storage.getState().markMachineListSettled(serverId),
+                });
+                await firstPicture.promise;
+            });
+            expect(mounted.getCurrent().playerStatesBySimulatorId['computer-display'])
+                .toMatchObject({ phase: 'playing', lastFrameUrl: 'data:image/jpeg;base64,AQID' });
+        } finally {
+            stopObserving(); await mounted.unmount();
         }
     });
 

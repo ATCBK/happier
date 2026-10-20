@@ -42,3 +42,34 @@ export function resolveSessionViewerReadingInset(
   if (areaWidth - yielded < input.columnMinWidth) return { left: 0, right: 0 };
   return leftSide ? { left: yielded, right: 0 } : { left: 0, right: yielded };
 }
+
+/** The narrowest free width beside the frame that still holds the empty state's tile (its scene and headline). */
+const CENTRED_MIN_WIDTH = 240;
+/** The least height above the frame that holds that tile, header band included. */
+const CENTRED_MIN_HEIGHT_ABOVE = 260;
+
+/**
+ * Where centred content (the empty Session state) sits so a settled floating viewer never covers it:
+ * in the free width beside the frame, or, when that width is too narrow to hold the tile (a Details
+ * pane narrows the transcript), at full width above the frame. Unlike the reading column it carries
+ * no column minimum. Zero when it already clears, or when neither side can hold it.
+ * `contentBottom` is the bottom edge of the transcript's content region (the composer band's top).
+ */
+export function resolveSessionViewerCentredInset(
+  input: Readonly<{ areaWidth: number; contentBottom: number; rect: FrameRect }>,
+): Readonly<{ left: number; right: number; bottom: number }> {
+  const { areaWidth, contentBottom, rect } = input;
+  const none = { left: 0, right: 0, bottom: 0 };
+  const leftSide = rect.x + rect.width / 2 < areaWidth / 2;
+  const reach = leftSide
+    ? areaWidth - (rect.x + rect.width + SESSION_VIEWER_EDGE)
+    : rect.x - SESSION_VIEWER_EDGE;
+  if (reach >= areaWidth) return none;
+  if (reach >= CENTRED_MIN_WIDTH) {
+    const yielded = Math.ceil(areaWidth - reach);
+    return leftSide ? { left: yielded, right: 0, bottom: 0 } : { left: 0, right: yielded, bottom: 0 };
+  }
+  const above = rect.y - SESSION_VIEWER_EDGE;
+  if (above < CENTRED_MIN_HEIGHT_ABOVE) return none;
+  return { left: 0, right: 0, bottom: Math.max(0, Math.ceil(contentBottom - above)) };
+}

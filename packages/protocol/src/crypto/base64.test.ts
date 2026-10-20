@@ -100,6 +100,26 @@ describe('protocol base64 helpers', () => {
     expect(readCanonicalPaddedBase64DecodedLength(' AA==')).toBeNull();
   });
 
+  it('admits a canonical payload without allocating a substring or scanning it with RegExp', () => {
+    const encoded = encodeBase64(createDeterministicBytes(65_537));
+    // Observe the real string operations, preserving their implementations.
+    const regex = vi.spyOn(RegExp.prototype, 'test');
+    const slice = vi.spyOn(String.prototype, 'slice');
+    let length: number | null;
+    let regexScans: number;
+    let substringCopies: number;
+    try {
+      length = readCanonicalPaddedBase64DecodedLength(encoded);
+      regexScans = regex.mock.calls.filter(([input]) => input.length >= encoded.length - 2).length;
+      substringCopies = slice.mock.contexts.filter(input => input === encoded).length;
+    } finally {
+      regex.mockRestore();
+      slice.mockRestore();
+    }
+    expect(length).toBe(65_537);
+    expect({ regexScans, substringCopies }).toEqual({ regexScans: 0, substringCopies: 0 });
+  });
+
   it('rejects invalid alphabet and padding while checking every unused padding-bit value', () => {
     const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
     for (const [value, character] of [...alphabet].entries()) {

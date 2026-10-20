@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFailed, vi } from 'v
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { ClipboardWriteResultSchema } from '@happier-dev/protocol/actions/clipboardActionFamily';
-import { StoredApprovalRequestSchema } from '@happier-dev/protocol';
+import { StoredApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { McpServerCatalogRowMutationV1Schema, McpServerCatalogRowMutationResponseV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
@@ -11,6 +11,9 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { LocalServiceInventorySnapshotV1Schema, DaemonLocalServiceInventorySnapshotResponseV1Schema } from '@happier-dev/protocol/local/services/inventory/v1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 
 const clipboard = vi.hoisted(() => vi.fn<(text: string) => Promise<boolean>>());
 const daemonRpc = vi.hoisted(() => vi.fn<(request: Readonly<{
@@ -32,6 +35,24 @@ const { runTeamAction } = await import('@/sync/ops/teams/teamActionClient');
 describe('composed UI Action front-door adapters', () => {
     beforeEach(async () => { await homes.reset(); clipboard.mockReset(); daemonRpc.mockReset(); });
     afterEach(() => standardCleanup());
+
+    it('preserves a declined shared-policy confirmation as a typed failure without a webhook effect', async () => {
+        const transport = vi.fn(async () => ({ kind: 'discarded', revision: 4 }));
+        const settings = ActionsSettingsV1Schema.parse({ v: 1 });
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+            pluginWebhookAction: transport,
+            isActionApprovalRequired: (actionId, context, input) =>
+                isApprovalRequiredByActionsSettings(actionId, settings, context, undefined, undefined, input),
+            presentUserActionConfirmation: async () => false,
+        }));
+        const host = { execute: ((actionId, input, context) => executor.execute(actionId, input, {
+            ...context, surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, actionRequestId: 'discard-press',
+        })) satisfies typeof executor.execute };
+        await expect(createFrontDoorUiActionExecutor(host)('plugin.webhook.delivery.discard', {
+            deliveryId: 'delivery-1', expectedRevision: 3,
+        })).rejects.toMatchObject({ code: 'approval_canceled' });
+        expect(transport).not.toHaveBeenCalled();
+    });
 
     it.each(['ui', 'scoped'] as const)('executes a confirmed present-user delete through %s while the Agent caller still asks through the real policy', async bridge => {
         const serverId = await homes.addHome({ name: 'MCP', serverUrl: 'https://confirmed-mcp.test',
@@ -109,7 +130,7 @@ describe('composed UI Action front-door adapters', () => {
     it('preserves admission failures and rejects platform failures without executing disabled or cancelled work', async () => {
         const serverId = await homes.addHome({ name: 'Clipboard', serverUrl: 'https://clipboard-front-door.test', accountId: 'alice' });
         const wrongAccount = createFrontDoorUiActionExecutor(undefined, { serverId, expectedAccountId: 'bob' });
-        await expect(wrongAccount('clipboard.write', { text: 'wrong account' })).rejects.toMatchObject({ message: 'action_account_scope_changed' });
+        await expect(wrongAccount('clipboard.write', { text: 'wrong account' })).rejects.toMatchObject({ message: 'action_account_scope_changed', code: 'action_account_scope_changed' });
         expect(clipboard).not.toHaveBeenCalled();
         homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
             actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {
@@ -122,7 +143,7 @@ describe('composed UI Action front-door adapters', () => {
         } });
         expect(ActionExecuteFailureSchema.parse(disabled)).toMatchObject({ ok: false, errorCode: 'action_disabled' });
         await expect(createFrontDoorUiActionExecutor(undefined, { serverId })('clipboard.write', { text: 'disabled' }))
-            .rejects.toMatchObject({ message: 'action_disabled' });
+            .rejects.toMatchObject({ message: 'action_disabled', code: 'action_disabled' });
         expect(clipboard).not.toHaveBeenCalled();
 
         homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {} }, version: 2 } });

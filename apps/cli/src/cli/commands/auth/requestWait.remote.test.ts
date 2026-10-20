@@ -23,7 +23,7 @@ describe('buffered normal auth request/wait', () => {
   const env = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_LOCAL_SERVER_URL', 'HAPPIER_PUBLIC_SERVER_URL', 'HAPPIER_WEBAPP_URL']);
   afterEach(() => { env.restore(); reloadConfiguration(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-  it.each(['current', 'retired'] as const)('retains the admitted tuple privately and saves the Account bearer only for a %s normal registration', async (admission) => {
+  it.each(['current', 'retired', 'invalid-response', 'expired', 'invalid-status', 'denied', 'transport'] as const)('retains the admitted tuple privately and saves the Account bearer only for a %s normal registration', async (admission) => {
     await withTempDir('happier-buffered-auth-', async (homeDir) => {
       env.patch({ HAPPIER_HOME_DIR: homeDir, HAPPIER_SERVER_URL: undefined, HAPPIER_ACTIVE_SERVER_ID: undefined });
       reloadConfiguration();
@@ -41,10 +41,16 @@ describe('buffered normal auth request/wait', () => {
       vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ features: {},
         capabilities: { serverIdentity: { serverIdentityId: descriptor.homeServerIdentityId } }, homeConnectionDescriptor: descriptor }), { status: 200 })));
       let response = '';
+      let statusReads = 0;
       let registration: unknown;
       const httpResult = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: { headers: new AxiosHeaders() } });
       vi.spyOn(axios, 'get').mockImplementation(async (url) => {
-        if (String(url).endsWith('/v1/auth/request/status')) return httpResult({ status: 'authorized' });
+        if (String(url).endsWith('/v1/auth/request/status')) {
+          if (admission === 'invalid-status' && ++statusReads > 1) throw new AxiosError('unexpected status was polled again', 'UNEXPECTED_STATUS_REPOLLED');
+          if (admission === 'denied') throw new AxiosError('private-denial', 'ERR_BAD_REQUEST', undefined, undefined, { ...httpResult({}), status: 403 });
+          if (admission === 'transport') throw new AxiosError('private-transport', 'ECONNREFUSED');
+          return httpResult({ status: admission === 'invalid-status' ? 'unexpected' : 'authorized' });
+        }
         if (String(url).includes('/encryption')) return httpResult({ mode: 'plain', updatedAt: 0 });
         throw new AxiosError('not found', 'ERR_BAD_REQUEST', undefined, undefined, { ...httpResult({}), status: 404 });
       });
@@ -79,12 +85,19 @@ describe('buffered normal auth request/wait', () => {
         createdAtMs: request.pairing.createdAtMs, expiresAtMs: request.pairing.expiresAtMs,
         randomBytes: (length) => new Uint8Array(randomBytes(length)),
       })).toString('base64');
+      if (admission === 'invalid-response') {
+        response = Buffer.from([0]).toString('base64');
+        // The process-exit boundary must not swallow a typed auth refusal.
+        vi.spyOn(process, 'exit').mockImplementation(() => { throw new Error('process_exit'); });
+        vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      }
       // A second guest process does not inherit the first process's ephemeral
       // Home selection. Only the non-secret returned profile identifies its
       // incumbent profile-scoped pending state.
       env.patch({ HAPPIER_SERVER_URL: undefined, HAPPIER_ACTIVE_SERVER_ID: undefined,
         HAPPIER_LOCAL_SERVER_URL: undefined, HAPPIER_PUBLIC_SERVER_URL: undefined, HAPPIER_WEBAPP_URL: undefined });
       reloadConfiguration();
+      if (admission === 'expired') vi.spyOn(Date, 'now').mockReturnValue(request.pairing.expiresAtMs + 1);
       const wait = handleAuthWait(['--json', '--remote-enrollment', '--server', request.remoteProfileId, '--no-persist', '--public-key', request.publicKey]);
       if (admission === 'current') {
         await wait;
@@ -100,10 +113,16 @@ describe('buffered normal auth request/wait', () => {
         });
         expect(consumed).toMatchObject({ machineId: JSON.parse(completion).machineId, remoteProfileId: request.remoteProfileId,
           homeServerIdentityId: descriptor.homeServerIdentityId });
+      } else if (admission === 'invalid-response') {
+        await expect(wait).rejects.toMatchObject({ code: 'AUTH_PAIRING_V3_REQUIRED' });
+      } else if (admission === 'expired' || admission === 'invalid-status' || admission === 'denied' || admission === 'transport') {
+        await expect(wait).rejects.toMatchObject({ code: { expired: 'AUTH_REQUEST_EXPIRED', 'invalid-status': 'AUTH_RESPONSE_INVALID',
+          denied: 'ERR_BAD_REQUEST', transport: 'ECONNREFUSED' }[admission] });
       } else {
         await expect(wait).rejects.toThrow('retired managed row');
       }
-      expect(registration).toMatchObject({ managedEnrollment });
+      if (admission !== 'current' && admission !== 'retired') expect(registration).toBeUndefined();
+      else expect(registration).toMatchObject({ managedEnrollment });
       expect((await readdir(homeDir, { recursive: true })).some((path) => /(?:^|[\\/])access\.key$/u.test(path))).toBe(admission === 'current');
       expect(outputs.join('')).not.toContain('full-account-bearer');
     });

@@ -10,10 +10,12 @@ import { AuthTokenAuthenticationEvidenceSnapshotV1Schema } from '@happier-dev/pr
 import { isStoredJsonContentEnvelopeModeCompatible } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { verifyRunnerEndpointFactsV1 } from '@happier-dev/protocol/ephemeralRunner/endpoint';
-import { readSessionDraftInTx } from '@/app/account/sessionDrafts/sessionDraftService';
+import { acquireSessionDraftLockInTx, readSessionDraftInTx } from '@/app/account/sessionDrafts/sessionDraftService';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
 import { acquireAccountSessionOwnerMetadataFenceInTx, AccountSessionOwnerMetadataFenceAccountNotFoundError } from '@/app/encryption/accountSessionOwnerMetadataFence';
 import { inTx, type Tx } from '@/storage/inTx';
+import { isPrismaErrorCode } from '@/storage/prisma';
+import { acquireRunnerActivationLockInTx } from './activationLock';
 import { closeEphemeralRunnerActivationInTx, PREMATERIALIZED_RUNNER_ACTIVATION_STATES } from './activationLifecycle';
 import { readRunnerCreatorCurrentnessInTx, reconcileRunnerActivationCurrentnessInTx, type RunnerCreatorCurrentness } from './activationCurrentness';
 import {
@@ -106,12 +108,22 @@ export async function createEphemeralRunnerActivation(
     return await inTx(async (tx): Promise<CreateEphemeralRunnerActivationResult> => {
         // Missing Accounts cannot acquire the existing Account fence.
         if (!await tx.account.findUnique({ where: { id: params.creatorAccountId }, select: { id: true } })) return { status: 'creator_unavailable' };
-        await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.creatorAccountId);
+        await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.creatorAccountId, "content");
         const current = await readRunnerCreatorCurrentnessInTx(tx, params.creatorAccountId);
         if (current.status !== 'ready') return current;
         const recipient = request.endpointFactsRecipient;
         if (!pluginJsonValuesEqual(current.endpointFactsRecipient, recipient)) return { status: 'recipient_mismatch' };
-        const existing = await tx.ephemeralRunnerActivation.findUnique({ where: { id: request.activationId } });
+        await acquireRunnerActivationLockInTx(tx, request.activationId);
+        let existing = await tx.ephemeralRunnerActivation.findUnique({ where: { id: request.activationId } });
+        if (!existing) {
+            // No activation row was locked above. The existing draft is the
+            // creation resource; cancellation also writes KV before Activation.
+            if (!await acquireSessionDraftLockInTx(tx, {
+                accountId: params.creatorAccountId, address: { kind: 'newSession', draftId: request.draftId },
+            })) return { status: 'draft_unavailable' };
+            await acquireRunnerActivationLockInTx(tx, request.activationId);
+            existing = await tx.ephemeralRunnerActivation.findUnique({ where: { id: request.activationId } });
+        }
         if (existing) {
             return existing.creatorAccountId === params.creatorAccountId && existing.creatorTokenEpoch === current.creatorTokenEpoch && matchesCreate(existing, request)
                 ? { status: 'created', activation: projectRunnerActivation(await reconcileRunnerActivationCurrentnessInTx(tx, existing, current), current) }
@@ -138,9 +150,13 @@ export async function createEphemeralRunnerActivation(
             authentication: params.authentication,
         });
         if (draft.status !== 'present') return { status: 'draft_unavailable' };
-        const attached = await tx.ephemeralRunnerActivation.findFirst({ where: {
+        const attachedIdentity = await tx.ephemeralRunnerActivation.findFirst({ where: {
             creatorAccountId: params.creatorAccountId, draftId: request.draftId, state: { in: PREMATERIALIZED_RUNNER_ACTIVATION_STATES },
-        } });
+        }, select: { id: true } });
+        if (attachedIdentity) await acquireRunnerActivationLockInTx(tx, attachedIdentity.id);
+        const attached = attachedIdentity
+            ? await tx.ephemeralRunnerActivation.findUnique({ where: { id: attachedIdentity.id } })
+            : null;
         if (attached && (await reconcileRunnerActivationCurrentnessInTx(tx, attached, current)).state !== 'closed') return { status: 'conflict' };
         const row = await tx.ephemeralRunnerActivation.create({ data: {
             id: request.activationId, creatorAccountId: params.creatorAccountId, creatorTokenEpoch: current.creatorTokenEpoch,
@@ -152,6 +168,11 @@ export async function createEphemeralRunnerActivation(
             authenticationEvidence: authenticationEvidenceSnapshot,
         } });
         return { status: 'created', activation: projectRunnerActivation(row, current) };
+    }).catch((error: unknown): CreateEphemeralRunnerActivationResult => {
+        // Different drafts may race for one submitted activation identity.
+        // PostgreSQL must roll back its failed insert before returning conflict.
+        if (isPrismaErrorCode(error, 'P2002')) return { status: 'conflict' };
+        throw error;
     });
 }
 
@@ -168,13 +189,19 @@ export async function readDraftEphemeralRunnerActivation(params: Readonly<{ crea
 async function readCreatorActivation(creatorAccountId: string, identity: { id: string } | { draftId: string }): Promise<EphemeralRunnerActivationProjection | null> {
     return await inTx(async (tx) => {
         try {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, creatorAccountId);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, creatorAccountId, "content");
         } catch (error) {
             if (error instanceof AccountSessionOwnerMetadataFenceAccountNotFoundError) return null;
             throw error;
         }
-        const row = await tx.ephemeralRunnerActivation.findFirst({ where: {
+        const initial = await tx.ephemeralRunnerActivation.findFirst({ where: {
             creatorAccountId, ...identity,
+            ...('draftId' in identity ? { state: { in: PREMATERIALIZED_RUNNER_ACTIVATION_STATES } } : {}),
+        }, select: { id: true } });
+        if (!initial) return null;
+        await acquireRunnerActivationLockInTx(tx, initial.id);
+        const row = await tx.ephemeralRunnerActivation.findFirst({ where: {
+            id: initial.id, creatorAccountId,
             ...('draftId' in identity ? { state: { in: PREMATERIALIZED_RUNNER_ACTIVATION_STATES } } : {}),
         } });
         if (!row) return null;
@@ -187,7 +214,7 @@ async function readCreatorActivation(creatorAccountId: string, identity: { id: s
 export async function cancelEphemeralRunnerActivation(params: Readonly<{ creatorAccountId: string; activationId: string }>): Promise<EphemeralRunnerActivationProjection | null> {
     return await inTx(async (tx) => {
         try {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.creatorAccountId);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.creatorAccountId, "content");
         } catch (error) {
             if (error instanceof AccountSessionOwnerMetadataFenceAccountNotFoundError) return null;
             throw error;

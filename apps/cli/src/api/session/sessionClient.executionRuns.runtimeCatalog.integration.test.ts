@@ -16,10 +16,14 @@ import { registerSessionClientRuntimeHandlers } from './client/executionRuns/reg
 import { ApiSessionClient } from './sessionClient';
 import { createExecutionRunRpcActionExecutor } from '@/rpc/handlers/executionRuns/dispatchExecutionRunRpcAction';
 import { resolveExecutionRunPolicy } from '@/agent/executionRuns/policy/executionRunPolicy';
-import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol';
 import { SessionMetadataOwnerMigrationPatchV1Schema, projectSessionOwnerCompatibilityViewV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { randomUUID } from 'node:crypto';
+import axios from 'axios';
+import { AccountSettingsV2GetResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
+import { bootstrapAccountSettingsContext, resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
+import { installAxiosRequestMethodAdapter } from '@/testkit/http/axiosAdapter';
 
 // One runtime, one lifetime: the signal must stay stable across calls so
 // subscribers do not accumulate against a fresh controller each read.
@@ -40,7 +44,6 @@ const sessionSocketStubState = vi.hoisted(() => ({
   importHistoricalSessionTranscriptMock: vi.fn(),
   fetchSessionsPageMock: vi.fn(),
   fetchSessionsQueryPageMock: vi.fn(),
-  bootstrapAccountSettingsContextMock: vi.fn(),
   fetchAccountEncryptionCurrentnessMock: vi.fn(),
   resolveRunnerMcpServersMock: vi.fn(),
   executionRunServiceMocks: {
@@ -97,6 +100,7 @@ vi.mock('@happier-dev/connection-supervisor', () => ({
 vi.mock('@/rpc/handlers/executionRuns', () => ({
   registerExecutionRunHandlers: (_rpc: unknown, ctx: unknown) => {
     sessionSocketStubState.executionRunHandlerContext = ctx;
+    return { dispose() {} };
   },
 }));
 
@@ -138,22 +142,10 @@ vi.mock('@/session/transport/http/sessionsHttp', async (importActual) => ({
     sessionSocketStubState.fetchSessionsQueryPageMock(...args),
 }));
 
-// The two remaining network reads `listSessions` composes beside the page, mocked
-// exactly as its own canonical suite mocks them (`listSessions.test.ts:20,24`).
-vi.mock('@/settings/accountSettings/bootstrapAccountSettingsContext', async (importActual) => ({
-  ...await importActual<typeof import('@/settings/accountSettings/bootstrapAccountSettingsContext')>(),
-  bootstrapAccountSettingsContext: (...args: unknown[]) =>
-    sessionSocketStubState.bootstrapAccountSettingsContextMock(...args),
-}));
-
 vi.mock('@/api/client/connectedServiceCredentialApi', async (importActual) => ({
   ...await importActual<typeof import('@/api/client/connectedServiceCredentialApi')>(),
   fetchAccountEncryptionCurrentness: (...args: unknown[]) =>
     sessionSocketStubState.fetchAccountEncryptionCurrentnessMock(...args),
-}));
-
-vi.mock('@/settings/accountSettings/activeAccountSettingsSnapshot', () => ({
-  getActiveAccountSettingsSnapshot: () => null,
 }));
 
 describe('ApiSessionClient execution-run backend wiring', () => {
@@ -211,8 +203,19 @@ describe('ApiSessionClient execution-run backend wiring', () => {
     sessionSocketStubState.importHistoricalSessionTranscriptMock.mockReset();
     sessionSocketStubState.fetchSessionsPageMock.mockReset();
     sessionSocketStubState.fetchSessionsQueryPageMock.mockReset();
-    sessionSocketStubState.bootstrapAccountSettingsContextMock.mockReset();
-    sessionSocketStubState.bootstrapAccountSettingsContextMock.mockResolvedValue({ settings: null });
+    resetInMemoryAccountSettingsContextForTests();
+    vi.stubEnv('HAPPIER_ACCOUNT_SETTINGS_MODE', 'auto');
+    // Serve the external Settings wire document; bootstrap must build the real
+    // Account-scoped snapshot and Saved Secret operation lifetime from it.
+    vi.spyOn(axios, 'get').mockImplementation(async (url) => {
+      if (new URL(String(url)).pathname !== '/v2/account/settings') {
+        throw new Error(`Unexpected runtime-catalog HTTP read: ${url}`);
+      }
+      return { data: AccountSettingsV2GetResponseSchema.parse({
+        content: { t: 'plain', v: {} }, version: 1,
+      }) };
+    });
+    installAxiosRequestMethodAdapter();
     sessionSocketStubState.fetchAccountEncryptionCurrentnessMock.mockReset();
     sessionSocketStubState.fetchAccountEncryptionCurrentnessMock.mockResolvedValue({
       mode: 'plain',
@@ -402,6 +405,11 @@ describe('ApiSessionClient execution-run backend wiring', () => {
       token: runtimeToken,
       encryption: null,
     };
+    // Match parent Session startup: owner policy is admitted before Run RPCs
+    // register, so a later fast list read reuses that exact Home snapshot.
+    await runWithServerHttpBaseUrl('https://home-a.example.test', () => bootstrapAccountSettingsContext({
+      credentials: ownerCredentials!, mode: 'blocking',
+    }));
     let observedServerUrl: string | null = null;
     sessionSocketStubState.fetchSessionByIdMock.mockImplementation(async () => {
       observedServerUrl = resolveServerHttpBaseUrl();
@@ -599,7 +607,7 @@ describe('ApiSessionClient execution-run backend wiring', () => {
       active: true,
       activeAt: 1,
     }));
-    registerSessionClientRuntimeHandlers({
+    const registration = registerSessionClientRuntimeHandlers({
       ...TEST_SESSION_SERVER_BINDING,
       readOwnerAccountCredentials: async () => null,
       runtimePrincipalAccountId: 'runtime-runner-account',
@@ -655,6 +663,7 @@ describe('ApiSessionClient execution-run backend wiring', () => {
     expect(sessionSocketStubState.fetchSessionsPageMock).not.toHaveBeenCalled();
     expect(sessionSocketStubState.fetchSessionsQueryPageMock).not.toHaveBeenCalled();
     expect(sessionSocketStubState.executionRunHandlerContext.serverId).toBe('runner-home-b');
+    expect(axios.get).not.toHaveBeenCalled();
 
     // One detail row cannot prove assignment: the restricted reader reports the
     // shared typed unsupported result instead of a silently empty page.
@@ -750,6 +759,13 @@ describe('ApiSessionClient execution-run backend wiring', () => {
       runtimeAccountId: 'another-account',
     })).resolves.toMatchObject({ ok: false, errorCode: 'unsupported_action' });
     expect(sessionSocketStubState.fetchSessionByIdMock).toHaveBeenCalledTimes(callsAfterAllowed);
+    await registration.dispose();
+    await expect(executor.execute('session.list', {}, {
+      surface: 'agent', authority: 'account_automation', bypassApprovals: true,
+      defaultSessionId: 'runner-session', sessionListAccess: 'current_session',
+      runtimeAccountId: 'runtime-runner-account',
+    })).rejects.toMatchObject({ code: 'provider_authorization_changed' });
+    expect(sessionSocketStubState.fetchSessionByIdMock).toHaveBeenCalledTimes(callsAfterAllowed);
   });
 
   it('denies a Session-owned Run list without the admitted runtime principal and exact Session corpus', async () => {
@@ -811,10 +827,12 @@ describe('ApiSessionClient execution-run backend wiring', () => {
     expect(sessionSocketStubState.fetchSessionsPageMock).not.toHaveBeenCalled();
     expect(sessionSocketStubState.fetchSessionsQueryPageMock).not.toHaveBeenCalled();
     expect(sessionSocketStubState.fetchSessionByIdMock).not.toHaveBeenCalled();
+    expect(axios.get).not.toHaveBeenCalled();
   });
 
   afterEach(() => {
     sessionSocketStubState.executionRunHandlerContext = null;
+    resetInMemoryAccountSettingsContextForTests();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });

@@ -1,201 +1,127 @@
-import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
+import 'fake-indexeddb/auto';
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
-import { installMachineDetailsCommonModuleMocks } from './machineDetailsTestHelpers';
-import { createStorageModuleStub, createStorageStoreMock } from '@/dev/testkit/mocks/storage';
-import { profileDefaults } from '@/sync/domains/profiles/profile';
-import { settingsParse } from '@/sync/domains/settings/settings';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { flushHookEffects, renderScreen as renderTestScreen, standardCleanup } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { installBrowserStorageLockBoundary } from '@/dev/testkit/harness/browserStorageLockBoundary';
 
-type ReactActEnvironmentGlobal = typeof globalThis & {
-    IS_REACT_ACT_ENVIRONMENT?: boolean;
-};
+const route = vi.hoisted(() => ({ params: {} as Record<string, string> }));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('react-native-keyboard-controller', () => ({ useFocusedInputHandler: () => {} }));
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ params: () => route.params }).module);
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 
-(globalThis as ReactActEnvironmentGlobal).IS_REACT_ACT_ENVIRONMENT = true;
-(globalThis as any).expo = { EventEmitter: class {} };
-
-const { refreshMachinesThrottledSpy, switchSpy } = vi.hoisted(() => ({
-    refreshMachinesThrottledSpy: vi.fn(async () => {}),
-    switchSpy: vi.fn(async () => true),
-}));
-const machineCollectBugReportDiagnosticsMock = vi.hoisted(() => vi.fn(async () => null));
-
-installMachineDetailsCommonModuleMocks({
-    router: async () => {
-        const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-        const routerMock = createExpoRouterMock({
-            router: { back: vi.fn(), push: vi.fn(), replace: vi.fn() },
-            params: { id: 'machine-1', serverId: 'server-b' },
-        });
-        return routerMock.module;
-    },
-    storage: async () => createStorageModuleStub({
-        storage: createStorageStoreMock({ profile: profileDefaults, settings: settingsParse({}) }),
-        useSessions: () => [],
-        useAllMachines: () => [
-            {
-                id: 'machine-1',
-                active: true,
-                activeAt: Date.now(),
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
-                seq: 1,
-                metadata: {
-                    displayName: 'Machine One',
-                    host: 'machine-one.local',
-                    platform: 'darwin',
-                    happyCliVersion: '1.2.3',
-                    happyHomeDir: '/Users/tester/.happier',
-                    homeDir: '/Users/tester',
-                },
-                metadataVersion: 1,
-                daemonState: null,
-                daemonStateVersion: 0,
-                revokedAt: null,
-            },
-        ],
-        useMachine: () => ({
-            id: 'machine-1',
-            active: true,
-            activeAt: Date.now(),
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-            seq: 1,
-            metadata: {
-                displayName: 'Machine One',
-                host: 'machine-one.local',
-                platform: 'darwin',
-                happyCliVersion: '1.2.3',
-                happyHomeDir: '/Users/tester/.happier',
-                homeDir: '/Users/tester',
-            },
-            metadataVersion: 1,
-            daemonState: null,
-            daemonStateVersion: 0,
-            revokedAt: null,
-        }),
-        useSetting: () => false,
-        useSettingMutable: () => [null, vi.fn()],
-        useSettings: () => settingsParse({}),
-    }),
+const { JSDOM } = await import('jsdom');
+const browser = new JSDOM('<!doctype html><html><body></body></html>', { url: 'https://machine-switch-a.test' });
+function installBrowserBoundary() {
+    for (const name of ['window', 'document', 'HTMLElement', 'Node', 'MutationObserver', 'CustomEvent', 'navigator'] as const) {
+        vi.stubGlobal(name, name === 'window' ? browser.window : browser.window[name]);
+    }
+}
+installBrowserBoundary();
+afterAll(() => browser.window.close());
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+const rpcRequests = installSessionActionRpcBoundary(() => {
+    throw Object.assign(new Error('Fixture daemon method is unavailable'), { code: 'RPC_METHOD_NOT_AVAILABLE' });
 });
-
-vi.mock('@/components/ui/lists/Item', () => ({ Item: () => null }));
-vi.mock('@/components/ui/lists/ItemGroup', () => ({ ItemGroup: ({ children }: any) => React.createElement(React.Fragment, null, children) }));
-vi.mock('@/components/ui/lists/ItemList', () => ({ ItemList: ({ children }: any) => React.createElement(React.Fragment, null, children) }));
-vi.mock('@/components/ui/forms/MultiTextInput', () => ({ MultiTextInput: () => null }));
-vi.mock('@/components/ui/pathBrowser/PathInputBrowseButton', () => ({
-    PathInputBrowseButton: () => null,
-}));
-vi.mock('@/components/ui/pathBrowser/openMachinePathBrowserModal', () => ({
-    openMachinePathBrowserModal: vi.fn(async () => null),
-}));
-vi.mock('@/components/ui/forms/Switch', () => ({ Switch: () => null }));
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: 'Text',
-    TextInput: 'TextInput',
-}));
-vi.mock('@/components/machines/InstallableDepInstaller', () => ({ InstallableDepInstaller: () => null }));
-
-vi.mock('@/hooks/session/useNavigateToSession', () => ({ useNavigateToSession: () => () => {} }));
-vi.mock('@/hooks/ui/useMountedShouldContinue', () => ({
-    useMountedShouldContinue: () => () => true,
-}));
-vi.mock('@/hooks/server/useMachineCapabilitiesCache', () => ({ useMachineCapabilitiesCache: () => ({ state: { status: 'idle' }, refresh: vi.fn() }) }));
-
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>(),
-    areServerProfileIdentifiersEquivalent: (left: unknown, right: unknown) => String(left ?? '').trim() === String(right ?? '').trim(),
-    getActiveServerId: () => 'server-a',
-}));
-
-vi.mock('@/sync/domains/server/activeServerSwitch', () => ({
-    setActiveServerAndSwitch: switchSpy,
-}));
-
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        refreshMachinesThrottled: refreshMachinesThrottledSpy,
-        refreshMachines: vi.fn(),
-        retryNow: vi.fn(),
-    },
-}));
-vi.mock('@/utils/system/fireAndForget', () => ({
-    fireAndForget: (promise: Promise<unknown>, options?: { onError?: (error: unknown) => void }) => {
-        void promise.catch((error) => {
-            options?.onError?.(error);
-        });
-    },
-}));
-vi.mock('@/utils/errors/daemonUnavailableAlert', () => ({
-    tryShowDaemonUnavailableAlertForRpcError: () => false,
-    tryShowDaemonUnavailableAlertForRpcFailure: () => false,
-}));
-
-vi.mock('@/utils/sessions/machineUtils', () => ({ isMachineOnline: () => true }));
-vi.mock('@/utils/sessions/sessionUtils', () => ({ formatOSPlatform: (platform?: string) => platform ?? '', formatPathRelativeToHome: () => '', getSessionName: () => '', getSessionSubtitle: () => '' }));
-vi.mock('@/utils/path/pathUtils', () => ({ resolveAbsolutePath: () => '' }));
-vi.mock('@/sync/domains/session/spawn/windowsRemoteSessionConsole', () => ({ resolveWindowsRemoteSessionConsoleFromMachineMetadata: () => 'visible' }));
-vi.mock('@/sync/domains/session/spawn/windowsRemoteSessionLaunchMode', () => ({
-    readMachineWindowsRemoteSessionLaunchMode: () => undefined,
-    resolveEffectiveWindowsRemoteSessionLaunchMode: () => ({ mode: 'visible' }),
-}));
-vi.mock('@/capabilities/installablesRegistry', () => ({ getInstallablesRegistryEntries: () => [] }));
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-    DropdownMenu: () => null,
-}));
-vi.mock('@/sync/domains/session/spawn/windowsRemoteSessionLaunchModeOptions', () => ({
-    WINDOWS_REMOTE_SESSION_LAUNCH_MODE_OPTIONS: [],
-}));
-vi.mock('@/sync/ops/sessionMachineTarget', () => ({
-    readMachineTargetForSession: () => null,
-}));
-vi.mock('@/sync/ops/machines', () => ({
-    machineCollectBugReportDiagnostics: machineCollectBugReportDiagnosticsMock,
-}));
-
-// Load after the boundary harness is configured, outside the individual behavior test's timeout.
-const { MachinePageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachinePageScreen');
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const { MachinePageScreen } = await import('@/components/machines/page/MachinePageScreen');
 const { DestinationInstanceHost } = await import('@/components/appShell/workspace/DestinationInstanceHost');
 const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+const { ModalProvider } = await import('@/modal');
+const { getStorage } = await import('@/sync/domains/state/storage');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { getAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/connectionManager');
+const { sync } = await import('@/sync/sync');
+const initialState = getStorage().getState();
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+let releaseLocks: (() => void) | undefined;
+let serverA = '';
+let serverB = '';
+let serverC = '';
+function machineRequests() { return homes.requests.filter(request => new URL(request.path, request.serverUrl).pathname === '/v1/machines'); }
+
+function AccountBoundary({ children }: React.PropsWithChildren) {
+    if (!connection) throw new Error('Machine Account is not restored');
+    return <InjectedAuthProvider credentials={connection.credentials}><ModalProvider><AppPaneProvider>{children}</AppPaneProvider></ModalProvider></InjectedAuthProvider>;
+}
+function renderScreen(element: React.ReactElement) {
+    return renderTestScreen(element, { wrapper: AccountBoundary, createNodeMock: element => Object.assign(
+        document.createElement(element.type === 'TextInput' ? 'textarea' : 'div'), {
+            setNativeProps() {}, measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(0, 0, 300, 100),
+        }) });
+}
+beforeEach(async () => {
+    installBrowserBoundary();
+    releaseLocks = installBrowserStorageLockBoundary();
+    await homes.reset();
+    getStorage().setState(initialState, true);
+    rpcRequests.length = 0;
+    serverC = await homes.addHome({ name: 'Machine C', serverUrl: 'https://machine-switch-c.test', accountId: 'account-c', currentAccount: true, active: false });
+    serverB = await homes.addHome({ name: 'Machine B', serverUrl: 'https://machine-switch-b.test', accountId: 'account-b', currentAccount: true, active: false });
+    serverA = await homes.addHome({ name: 'Machine A', serverUrl: 'https://machine-switch-a.test', accountId: 'account-a', currentAccount: true });
+    for (const [serverId, accountId] of [[serverA, 'account-a'], [serverB, 'account-b'], [serverC, 'account-c']]) {
+        homes.answer(serverId, '/v1/machines', { body: [createPlainMachineRowFixture({ id: 'machine-1', accountId })] });
+    }
+    const credentials = await TokenStorage.getCredentialsForServerUrl('https://machine-switch-a.test');
+    if (!credentials) throw new Error('Machine Home credentials are missing');
+    connection = await restoreServerAccountForTest({ serverUrl: 'https://machine-switch-a.test', accountId: 'account-a', credentials,
+        additionalRequestOrigins: ['https://machine-switch-b.test', 'https://machine-switch-c.test'], request: homes.request });
+    await sync.awaitBootstrapForegroundAcquisition();
+    const machine = createMachineFixture({ activeAt: Date.now() });
+    getStorage().setState({ machines: { [machine.id]: machine }, machineListByServerId: { [serverA]: [machine], [serverB]: [machine], [serverC]: [machine] } });
+    route.params = { id: 'machine-1', serverId: serverB };
+});
+afterEach(async () => {
+    standardCleanup();
+    await connection?.dispose(); connection = undefined;
+    await homes.reset();
+    releaseLocks?.(); releaseLocks = undefined;
+    getStorage().setState(initialState, true);
+});
 
 describe('MachineDetailScreen (serverId param switching)', () => {
     it('uses the hosted Machine destination scope instead of the unrelated Expo route', async () => {
-        switchSpy.mockClear();
-        await renderScreen(<AppPaneProvider><DestinationInstanceHost tabId="machine-tab"
-            ref={{ kind: 'settings', params: { pageId: 'machines/machine-1', id: 'machine-1', serverId: 'server-c' } }}
+        await renderScreen(<DestinationInstanceHost tabId="machine-tab"
+            ref={{ kind: 'settings', params: { pageId: 'machines/machine-1', id: 'machine-1', serverId: serverC } }}
             pathname="/settings/machines/machine-1" focused visible
             navigation={{ push: () => {}, replace: () => {}, back: () => {} }}>
-            <MachineDetailScreen />
-        </DestinationInstanceHost></AppPaneProvider>);
+            <MachinePageScreen />
+        </DestinationInstanceHost>);
         await flushHookEffects({ cycles: 2, turns: 1 });
-        expect(switchSpy).toHaveBeenCalledWith({ serverId: 'server-c', scope: 'tab' });
-        expect(switchSpy).not.toHaveBeenCalledWith({ serverId: 'server-b', scope: 'tab' });
+        await waitForHomeGovernance(() => expect(getAppliedActiveServerSnapshot()?.serverId).toBe(serverC));
+        await waitForHomeGovernance(() => expect(machineRequests().some(request => request.serverId === serverC)).toBe(true));
+        expect(getActiveServerSnapshot().serverId).toBe(serverC);
+        expect(getAppliedActiveServerSnapshot()?.serverId).toBe(serverC);
+        expect(machineRequests().some(request => request.serverId === serverC)).toBe(true);
+        expect(machineRequests().filter(request => request.serverId === serverB)).toEqual([]);
     });
     it('switches active server when serverId param is provided and differs from current active server', async () => {
-        switchSpy.mockClear();
-        refreshMachinesThrottledSpy.mockClear();
-        machineCollectBugReportDiagnosticsMock.mockClear();
-
-        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-        const unhandledSpy = vi.fn();
-        process.on('unhandledRejection', unhandledSpy);
-
-
-        refreshMachinesThrottledSpy.mockRejectedValueOnce(new Error('network down'));
-
+        // The external Home refuses the refresh; the real switch, Sync and fire-and-forget
+        // owners must contain this failure rather than starting a bug-report RPC.
+        homes.answer(serverB, '/v1/machines', { status: 503, body: { error: 'unavailable' } });
+        const unhandled = vi.fn();
+        process.on('unhandledRejection', unhandled);
         try {
-            await renderScreen(<AppPaneProvider><MachineDetailScreen /></AppPaneProvider>);
-
+            await renderScreen(<MachinePageScreen />);
             await flushHookEffects({ cycles: 2, turns: 1 });
+            await waitForHomeGovernance(() => expect(getAppliedActiveServerSnapshot()?.serverId).toBe(serverB));
+            await waitForHomeGovernance(() => expect(machineRequests().some(request => request.serverId === serverB)).toBe(true));
+            expect(getActiveServerSnapshot().serverId).toBe(serverB);
+            expect(getAppliedActiveServerSnapshot()?.serverId).toBe(serverB);
+            expect(machineRequests().some(request => request.serverId === serverB)).toBe(true);
+            expect(rpcRequests.filter(request => /diagnostic|bug.?report/i.test(request.method))).toEqual([]);
+            expect(unhandled).not.toHaveBeenCalled();
         } finally {
-            process.removeListener('unhandledRejection', unhandledSpy);
-            consoleError.mockRestore();
+            process.removeListener('unhandledRejection', unhandled);
         }
-
-        expect(switchSpy).toHaveBeenCalledWith({ serverId: 'server-b', scope: 'tab' });
-        expect(refreshMachinesThrottledSpy).toHaveBeenCalled();
-        expect(machineCollectBugReportDiagnosticsMock).not.toHaveBeenCalled();
-        expect(unhandledSpy).not.toHaveBeenCalled();
     });
 });

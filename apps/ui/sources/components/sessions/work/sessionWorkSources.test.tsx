@@ -21,6 +21,7 @@ installSessionSubagentCommonModuleMocks({
 });
 installDisconnectedServerSocketBoundary();
 const { storage } = await import('@/sync/domains/state/storage');
+const { readLockedSessionName } = await import('@/utils/sessions/sessionUtils');
 // Load the real Work graph at collection so the test budget measures the journey.
 const { useSessionWorkSourcesOwner, toWorkReportSessionSource } = await import('./sessionWorkSources');
 const { resolveSessionInstructionsPolicy, useSessionInstructionsDetail } = await import('./useSessionInstructionsSource');
@@ -33,6 +34,14 @@ describe('the Session Work operation source', () => {
         const session = createSessionFixture({ metadata: { ...createSessionFixture().metadata!,
             flavor: 'claude', host: 'MacBook Pro' } });
         expect(toWorkReportSessionSource(session, Date.now()).facts.join(' · ')).toContain('MacBook Pro');
+    });
+    it('names a report whose encrypted content is still undecided like the sidebar does, then by its own title once it settles', () => {
+        // A cold archived row: listed, but nothing has decided its content or title yet.
+        const undecided = { ...createSessionFixture({ id: 'child', metadata: null }), encryptionMode: 'e2ee' as const, encryptedContentAvailability: null };
+        expect(toWorkReportSessionSource(undecided, Date.now()).title).toBe(readLockedSessionName());
+        const settled = { ...createSessionFixture({ id: 'child', metadata: { ...createSessionFixture().metadata!, summaryText: 'Fix flaky retries' } }),
+            encryptionMode: 'e2ee' as const, encryptedContentAvailability: 'ready' as const };
+        expect(toWorkReportSessionSource(settled, Date.now()).title).toBe('Fix flaky retries');
     });
     it('refreshes a report identity on machine rename without reprojecting unrelated settings', async () => {
         const connection = await restoreServerAccountForTest({
@@ -47,7 +56,7 @@ describe('the Session Work operation source', () => {
         });
         const initial = storage.getState();
         const serverId = connection.home.id;
-        const session = createSessionFixture({ id: 'report', serverId, reportsTo: { sessionId: 'lead' },
+        const session = createSessionFixture({ id: 'report', serverId, manager: { sessionId: 'lead' },
             metadata: { ...createSessionFixture().metadata!, machineId: 'work-mac', host: 'mac.local' } });
         const machine = createMachineFixture({ id: 'work-mac',
             metadata: { ...createMachineFixture().metadata!, displayName: 'Studio Mac' } });
@@ -224,7 +233,7 @@ describe('the Session Work operation source', () => {
 
 describe('the Session Work source owner: own trigger runs (ORC R-09, INT §6 I4)', () => {
     it("leaves the Session's own trigger runs to Triggers, by their Automation's scope, in Work and in the header count", async () => {
-        const { readOwnTriggerRunIds } = await import('./sessionWorkSources');
+        const { readOwnTriggerRunIds } = await import('./workflowRunTriggerScope');
         const { projectWork } = await import('./workProjection');
         const triggerCause = AutomationRunCauseSchema.parse({
             kind: 'trigger', triggerId: 'retired-trigger', triggerRevision: 1,

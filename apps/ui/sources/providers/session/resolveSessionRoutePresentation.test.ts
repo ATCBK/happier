@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { t } from '@/text';
+import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
 import { presentArmedSessionRouteSource, presentNativeRouteSourceLabel, presentSessionRouteChip, resolveSessionRoutePresentation } from './resolveSessionRoutePresentation';
 
 describe('session route presentation', () => {
     it('names a same-name source once in the model picker route', () => {
         expect(resolveSessionRoutePresentation({ phase: 'draft',
-            selection: { agentTargetKey: 'agent:codex', providerConnectionId: 'pc_a', modelId: 'model' },
+            selection: ProviderBoundModelRefSchema.parse({ agentTargetKey: 'agent:codex', providerConnectionId: 'pc_a', modelId: 'model' }),
             native: { label: 'Native', authSource: 'native', connectedCount: 0 },
             sources: [{ connectionId: 'pc_a', providerName: 'QA custom live', connectionName: ' qa custom live ',
                 connectionRole: 'named', connectionDisplayNameMode: 'custom' }],
@@ -14,7 +15,7 @@ describe('session route presentation', () => {
     it('names only the selected Provider credential and omits an auth-free selected route', async () => {
         const { projectProviderRouteSignInPurposes } = await import('./resolveSessionRoutePresentation');
         const route = resolveSessionRoutePresentation({ phase: 'draft',
-            selection: { agentTargetKey: 'agent:claude', providerConnectionId: 'pc_selected', modelId: 'model' },
+            selection: ProviderBoundModelRefSchema.parse({ agentTargetKey: 'agent:claude', providerConnectionId: 'pc_selected', modelId: 'model' }),
             native: { label: 'Native', authSource: 'native', connectedCount: 0 },
             sources: [{ connectionId: 'pc_selected', providerName: 'Gateway', connectionName: 'Work',
                 connectionRole: 'named', connectionDisplayNameMode: 'custom' }],
@@ -30,8 +31,8 @@ describe('session route presentation', () => {
     });
 
     it('keeps the runtime-applied route separate from a requested restart change', () => {
-        const actual = { agentTargetKey: 'agent:codex', providerConnectionId: 'pc_now', modelId: 'same' };
-        const next = { ...actual, providerConnectionId: 'pc_next' };
+        const actual = ProviderBoundModelRefSchema.parse({ agentTargetKey: 'agent:codex', providerConnectionId: 'pc_now', modelId: 'same' });
+        const next = ProviderBoundModelRefSchema.parse({ ...actual, providerConnectionId: 'pc_next' });
         const view = resolveSessionRoutePresentation({ phase: 'running', appliedSelection: actual,
             selection: next, transitionPending: true, native: { label: 'Personal', authSource: 'connected', connectedCount: 1 },
             sources: [
@@ -40,6 +41,38 @@ describe('session route presentation', () => {
             ] });
         expect(view.applied).toMatchObject({ kind: 'provider', connectionId: 'pc_now', sourceLabel: 'Provider · Work' });
         expect(view.pending).toMatchObject({ kind: 'provider', connectionId: 'pc_next', sourceLabel: 'Provider · Lab' });
+    });
+
+    it('retains the last reported Provider route while the runner observation is unavailable', () => {
+        const actual = ProviderBoundModelRefSchema.parse({ agentTargetKey: 'agent:claude', providerConnectionId: 'pc_deepseek', modelId: 'deepseek-v4-flash' });
+        const native = { label: 'Native', authSource: 'native' as const, connectedCount: 0 };
+        const source = { connectionId: 'pc_deepseek', providerName: 'DeepSeek', connectionName: 'DeepSeek',
+            connectionRole: 'default' as const, connectionDisplayNameMode: 'automatic' as const };
+        const view = resolveSessionRoutePresentation({ phase: 'running', appliedSelection: null,
+            reportedSelection: actual, appliedProviderSource: source, selection: { ...actual, providerConnectionId: null },
+            transitionPending: true, native });
+        expect(view.applied.kind).toBe('unknown');
+        expect(view.reported).toMatchObject({ kind: 'provider', connectionId: 'pc_deepseek', sourceLabel: 'DeepSeek' });
+        expect(view.pending).toMatchObject({ kind: 'native' });
+        expect(presentSessionRouteChip({ ...view, pending: null }, native)).toEqual({
+            label: t('connectedServices.authChip.runsThrough', { source: 'DeepSeek' }),
+        });
+        const current = resolveSessionRoutePresentation({ phase: 'running', reportedSelection: actual,
+            appliedSelection: { ...actual, providerConnectionId: null }, appliedProviderSource: source, selection: actual, native });
+        expect(current.applied.kind).toBe('native');
+    });
+
+    it('names a retained Provider selection before the closed picker has requested its catalog', () => {
+        const selection = ProviderBoundModelRefSchema.parse({ agentTargetKey: 'agent:claude', providerConnectionId: 'pc_deepseek', modelId: 'deepseek-v4-flash' });
+        const native = { label: 'Native', authSource: 'native' as const, connectedCount: 0 };
+        const snapshot = { connectionId: 'pc_deepseek', providerName: 'DeepSeek', connectionName: 'DeepSeek',
+            connectionRole: 'default' as const, connectionDisplayNameMode: 'automatic' as const };
+        const retained = resolveSessionRoutePresentation({ phase: 'draft', selection, native, appliedProviderSource: snapshot });
+        expect(retained.applied).toMatchObject({ kind: 'provider', connectionId: 'pc_deepseek', sourceLabel: 'DeepSeek', unavailable: true });
+        expect(presentSessionRouteChip(retained, native)).toEqual({ label: t('connectedServices.authChip.runsThrough', { source: 'DeepSeek' }) });
+        const changed = resolveSessionRoutePresentation({ phase: 'draft', selection: ProviderBoundModelRefSchema.parse({ ...selection, providerConnectionId: 'pc_other' }),
+            native, appliedProviderSource: snapshot });
+        expect(changed.applied).toMatchObject({ kind: 'provider', connectionId: 'pc_other', sourceLabel: null });
     });
 
     it('preserves Team identity and never guesses native from unreadable applied state', () => {
@@ -51,7 +84,7 @@ describe('session route presentation', () => {
         expect(resolveSessionRoutePresentation({ phase: 'running', selection, native }).applied.kind).toBe('unknown');
     });
     it('uses applied display evidence after a rename and keeps the requested source separate', () => {
-        const selection = { agentTargetKey: 'agent:codex', providerConnectionId: 'pc_a', modelId: 'model' };
+        const selection = ProviderBoundModelRefSchema.parse({ agentTargetKey: 'agent:codex', providerConnectionId: 'pc_a', modelId: 'model' });
         const current = { connectionId: 'pc_a', providerName: 'Provider', connectionName: 'Renamed',
             connectionRole: 'named' as const, connectionDisplayNameMode: 'custom' as const };
         const view = resolveSessionRoutePresentation({ phase: 'running', selection, appliedSelection: selection,
@@ -67,14 +100,14 @@ describe('session route presentation', () => {
         const source = { connectionId: 'pc_a', providerName: 'DeepSeek', connectionName: 'DeepSeek',
             connectionRole: 'default' as const, connectionDisplayNameMode: 'automatic' as const };
         const pool = { label: 'Claude: Work pool', authSource: 'connected' as const };
-        const provider = { agentTargetKey: 'agent:claude', providerConnectionId: 'pc_a', modelId: 'deepseek-v4' };
+        const provider = ProviderBoundModelRefSchema.parse({ agentTargetKey: 'agent:claude', providerConnectionId: 'pc_a', modelId: 'deepseek-v4' });
         const draft = resolveSessionRoutePresentation({ phase: 'draft', selection: provider, sources: [source],
             native: { ...pool, connectedCount: 1 } });
         expect(presentSessionRouteChip(draft, pool)).toEqual({ label: t('connectedServices.authChip.runsThrough', { source: 'DeepSeek' }) });
         const nativeDraft = resolveSessionRoutePresentation({ phase: 'draft', selection: null, native: { ...pool, connectedCount: 1 } });
-        expect(presentSessionRouteChip(nativeDraft, pool).label).toBe(t('connectedServices.authChip.runsThrough', { source: 'Claude: Work pool' }));
-        expect(presentSessionRouteChip(nativeDraft, { label: 'Native', authSource: 'native' }).label)
-            .toBe(t('connectedServices.authChip.runsThroughOwnSignIn'));
+        expect(presentSessionRouteChip(nativeDraft, pool)).toHaveProperty('label', t('connectedServices.authChip.runsThrough', { source: 'Claude: Work pool' }));
+        expect(presentSessionRouteChip(nativeDraft, { label: 'Native', authSource: 'native' })).toHaveProperty('label',
+            t('connectedServices.authChip.runsThroughOwnSignIn'));
         const unread = resolveSessionRoutePresentation({ phase: 'running', selection: null, appliedSelection: null,
             sources: [source], native: { ...pool, connectedCount: 1 } });
         // Without applied evidence the chip keeps the incumbent label instead of guessing the route.
@@ -100,5 +133,26 @@ describe('session route presentation', () => {
         // The picker heading names a connected account or pool, and keeps its default for the Agent's own sign-in.
         expect(presentNativeRouteSourceLabel(pool)).toBe('Claude: Work pool');
         expect(presentNativeRouteSourceLabel({ label: 'Native', authSource: 'native' })).toBeNull();
+    });
+    it('arms no route switch when only the model changes within the same source', () => {
+        const source = { connectionId: 'pc_a', providerName: 'DeepSeek', connectionName: 'DeepSeek',
+            connectionRole: 'default' as const, connectionDisplayNameMode: 'automatic' as const };
+        const pool = { label: 'ChatGPT · Leeroy', authSource: 'connected' as const };
+        const native = { ...pool, connectedCount: 1 };
+        // A native model change keeps the Agent's own account: the route that applies is the route that runs.
+        const nativeModel = resolveSessionRoutePresentation({ phase: 'running', transitionPending: true, native,
+            selection: { agentTargetKey: 'agent:codex', providerConnectionId: null, modelId: 'gpt-6-sol' },
+            appliedSelection: { agentTargetKey: 'agent:codex', providerConnectionId: null, modelId: 'gpt-6-luna' } });
+        expect(presentArmedSessionRouteSource(nativeModel, pool)).toBeNull();
+        expect(presentSessionRouteChip(nativeModel, pool)).toEqual({
+            label: t('connectedServices.authChip.runsThrough', { source: 'ChatGPT · Leeroy' }) });
+        // Another model from the same connection is still that connection.
+        const providerModel = resolveSessionRoutePresentation({ phase: 'running', transitionPending: true, native,
+            sources: [source],
+            selection: ProviderBoundModelRefSchema.parse({ agentTargetKey: 'agent:claude', providerConnectionId: 'pc_a', modelId: 'deepseek-v4-pro' }),
+            appliedSelection: ProviderBoundModelRefSchema.parse({ agentTargetKey: 'agent:claude', providerConnectionId: 'pc_a', modelId: 'deepseek-v4-flash' }) });
+        expect(presentArmedSessionRouteSource(providerModel, pool)).toBeNull();
+        expect(presentSessionRouteChip(providerModel, pool)).toEqual({
+            label: t('connectedServices.authChip.runsThrough', { source: 'DeepSeek' }) });
     });
 });

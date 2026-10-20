@@ -10,6 +10,8 @@ vi.mock('@/text', async () => {
 import { createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { resolveWorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
 import { readSessionWorkStalled, readSessionWorkStatusFacts } from '@/components/work/status/sessionWorkStatusFacts';
+import { describeWorkflowRunState } from '@/components/workflows/presentation/workflowLifecyclePresentation';
+import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import type { AgentActivityEntry } from '@/sync/domains/session/agentActivity';
 import { NO_SESSION_AGENT_ACTIVITY_ATTENTION } from '@/sync/domains/session/agentActivity';
 import { createActionOperationSelectors } from '@/sync/domains/actionOperations/actionOperationSelectors';
@@ -21,7 +23,6 @@ import { projectSessionWorkMap } from './workMapProducer';
 import {
     groupWorkByState,
     projectWork,
-    resolveWorkItemOpenTarget,
     resolveWorkItemContextActions,
     resolveWorkMachineNotices,
     resolveWorkReadPresentation,
@@ -40,7 +41,7 @@ const needsYouFacts = readSessionWorkStatusFacts(createSessionListRenderableSess
 const settledFacts = readSessionWorkStatusFacts(createSessionListRenderableSessionFixture({ active: true,
     activeAt: fixtureNow, latestTurnStatus: 'completed', latestTurnStatusObservedAt: fixtureNow }), fixtureNow);
 
-function report(overrides: Partial<WorkReportSessionSource> & Pick<WorkReportSessionSource, 'sessionId' | 'leadSessionId'>): WorkReportSessionSource {
+function report(overrides: Partial<WorkReportSessionSource> & Pick<WorkReportSessionSource, 'sessionId' | 'managerSessionId'>): WorkReportSessionSource {
     return {
         title: overrides.sessionId,
         agentId: 'claude',
@@ -70,7 +71,7 @@ function agentEntry(overrides: Partial<AgentActivityEntry> & Pick<AgentActivityE
 }
 
 function managed(id: string, state: WorkManagedRunSource['run']['state'], needsAttention = false): WorkManagedRunSource {
-    return { run: { id, state }, title: `Run ${id}`, word: state, needsAttention };
+    return { run: { id, state, workflowCustodyState: null }, title: `Run ${id}`, word: state, needsAttention };
 }
 
 function headline(runId: string, completedAgents: number, totalAgents: number): SessionWorkflowRunHeadlineV1 {
@@ -108,19 +109,19 @@ describe('projectWork', () => {
     ])('agrees with direct-report counts and lead settlement for $active / $latestTurnStatus', ({ active, latestTurnStatus, needsYou, stalled, outstanding, group }) => {
         const now = Date.now();
         const child = createSessionListRenderableSessionFixture({ id: 'child', active, activeAt: now,
-            presence: active ? 'online' : 'offline', latestTurnStatus, latestTurnStatusObservedAt: now });
-        const projection = projectWork(input({ reportSessions: [report({ sessionId: child.id, leadSessionId: 'lead',
+            presence: active ? 'online' : 0, latestTurnStatus, latestTurnStatusObservedAt: now });
+        const projection = projectWork(input({ reportSessions: [report({ sessionId: child.id, managerSessionId: 'lead',
             statusFacts: readSessionWorkStatusFacts(child, now), stalled: readSessionWorkStalled(child, now) })] }));
         expect(projection.summary).toMatchObject({ needsYou, stalled, outstanding });
         expect(groupWorkByState(projection)[group].map(item => item.key)).toEqual(['session:child']);
         const lead = createSessionListRenderableSessionFixture({ active: true, activeAt: now, latestTurnStatus: 'completed',
-            reports: { total: 1, working: 0, needsYou, stalled } });
+            managedSessions: { total: 1, working: 0, needsYou, stalled } });
         expect(readSessionWorkStatusFacts(lead, now).settled).toBe(outstanding === 0);
     });
 
     it('retains unchanged work identities when unrelated work updates', () => {
-        const a = report({ sessionId: 'a', leadSessionId: 'lead' });
-        const b = report({ sessionId: 'b', leadSessionId: 'lead' });
+        const a = report({ sessionId: 'a', managerSessionId: 'lead' });
+        const b = report({ sessionId: 'b', managerSessionId: 'lead' });
         const first = projectWork(input({ reportSessions: [a, b], managedRuns: [managed('run', 'running')] }));
         const next = projectWork(input({ reportSessions: [a, { ...b, title: 'Updated B' }], managedRuns: [managed('run', 'running')] }), first);
         expect(next.sessions[0]).toBe(first.sessions[0]);
@@ -131,9 +132,9 @@ describe('projectWork', () => {
         expect(projectWork(input({ reportSessions: [a, b], managedRuns: [managed('run', 'running')] }), first)).toBe(first);
     });
     it('retains a report flattened into a different state group when unrelated work changes', () => {
-        const parent = report({ sessionId: 'parent', leadSessionId: 'lead', statusFacts: needsYouFacts });
-        const child = report({ sessionId: 'child', leadSessionId: 'parent' });
-        const other = report({ sessionId: 'other', leadSessionId: 'lead' });
+        const parent = report({ sessionId: 'parent', managerSessionId: 'lead', statusFacts: needsYouFacts });
+        const child = report({ sessionId: 'child', managerSessionId: 'parent' });
+        const other = report({ sessionId: 'other', managerSessionId: 'lead' });
         const first = projectWork(input({ reportSessions: [parent, child, other] }));
         const groups = groupWorkByState(first);
         const next = groupWorkByState(projectWork(input({ reportSessions: [parent, child, { ...other, title: 'Changed' }] }), first), groups);
@@ -167,7 +168,7 @@ describe('projectWork', () => {
             transcript: { serverId: 'home', sessionId: 'lead' },
             stop: { serverId: 'home', machineId: 'machine', operationId: 'command' },
         });
-        expect(projectSessionWorkMap({ leadSessionId: 'lead', leadTitle: 'Lead', projection }).nodesById.get(key)?.open)
+        expect(projectSessionWorkMap({ managerSessionId: 'lead', leadTitle: 'Lead', projection }).nodesById.get(key)?.open)
             .toEqual(projection.projectCommands[0].open);
         store.mergeSnapshots({ serverId: 'home', snapshots: [{ ...snapshot, revision: 2,
             setupReview: { kind: 'pendingApproval', code: 'project_setup_effect_changed', reviewedEffectDigest: 'reviewed', reviewedEffect: {} },
@@ -250,16 +251,34 @@ describe('projectWork', () => {
 
     it('says an offline machine once: the pane notice carries it, so no second "needs this machine online" line', () => {
         // Work is listed and the machine is down: the pane's offline notice alone (lab `convo-ST`).
-        expect(resolveWorkMachineNotices({ machineReachable: false, nothingYet: false, unavailableReason: 'machineOffline' }))
-            .toEqual({ offline: true, unavailable: false });
+        expect(resolveWorkMachineNotices({ machineReachable: false, nothingYet: false, unavailableReason: 'machineOffline', managedUnavailable: false }))
+            .toEqual({ offline: true, unavailable: false, runsUnavailable: false, runsStale: false });
         // Another reason agents cannot start is its own message beside the offline notice.
-        expect(resolveWorkMachineNotices({ machineReachable: false, nothingYet: false, unavailableReason: 'sessionInactive' }))
-            .toEqual({ offline: true, unavailable: true });
-        expect(resolveWorkMachineNotices({ machineReachable: true, nothingYet: false, unavailableReason: 'machineOffline' }))
-            .toEqual({ offline: false, unavailable: true });
+        expect(resolveWorkMachineNotices({ machineReachable: false, nothingYet: false, unavailableReason: 'sessionInactive', managedUnavailable: false }))
+            .toEqual({ offline: true, unavailable: true, runsUnavailable: false, runsStale: false });
+        expect(resolveWorkMachineNotices({ machineReachable: true, nothingYet: false, unavailableReason: 'machineOffline', managedUnavailable: false }))
+            .toEqual({ offline: false, unavailable: true, runsUnavailable: false, runsStale: false });
         // With nothing started, the empty state explains it instead of either line.
-        expect(resolveWorkMachineNotices({ machineReachable: false, nothingYet: true, unavailableReason: 'machineOffline' }))
-            .toEqual({ offline: false, unavailable: false });
+        expect(resolveWorkMachineNotices({ machineReachable: false, nothingYet: true, unavailableReason: 'machineOffline', managedUnavailable: false }))
+            .toEqual({ offline: false, unavailable: false, runsUnavailable: false, runsStale: false });
+    });
+
+    it('does not stack an "Unavailable" runs line with its own Retry under the offline notice that already says why', () => {
+        // Runs cannot be read while the machine is not answering: the pane's one offline line says so (and retries).
+        expect(resolveWorkMachineNotices({ machineReachable: false, nothingYet: false, unavailableReason: null, managedUnavailable: true }))
+            .toEqual({ offline: true, unavailable: false, runsUnavailable: false, runsStale: false });
+        // A runs read that failed on its own, with the machine answering, still says what failed and offers Retry.
+        expect(resolveWorkMachineNotices({ machineReachable: true, nothingYet: false, unavailableReason: null, managedUnavailable: true }))
+            .toEqual({ offline: false, unavailable: false, runsUnavailable: true, runsStale: false });
+    });
+
+    it('uses the combined offline recovery for retained runs, keeping a runs-only failure when reachable', () => {
+        for (const machineReachable of [false, true]) {
+            expect(resolveWorkMachineNotices({ machineReachable, nothingYet: false, unavailableReason: null,
+                managedUnavailable: false, managedStale: true })).toEqual({
+                offline: !machineReachable, unavailable: false, runsUnavailable: false, runsStale: machineReachable,
+            });
+        }
     });
 
     it('keeps the words that tell sibling titles apart, with one word of context, and leaves distinct titles alone', () => {
@@ -275,7 +294,7 @@ describe('projectWork', () => {
     });
 
     it('holds Working\'s place while runs arrive only when nothing else is shown, so known rows never jump up', () => {
-        const withReports = projectWork(input({ reportSessions: [report({ sessionId: 'child', leadSessionId: 'lead' })] }));
+        const withReports = projectWork(input({ reportSessions: [report({ sessionId: 'child', managerSessionId: 'lead' })] }));
         const loading = resolveWorkReadPresentation({
             projection: withReports, managedRuns: { phase: 'loading', refreshFailed: false }, transcriptLoaded: true,
         });
@@ -283,14 +302,14 @@ describe('projectWork', () => {
         expect(loading).toEqual({ nothingYet: false, holdWorkingPlace: false, managedUnavailable: false });
     });
 
-    it('lists the reportsTo subtree once, each session under its lead, and ignores unrelated sessions', () => {
+    it('lists the manager subtree once, each session under its lead, and ignores unrelated sessions', () => {
         const projection = projectWork(input({
             reportSessions: [
-                report({ sessionId: 'api', leadSessionId: 'lead' }),
-                report({ sessionId: 'ledger', leadSessionId: 'api' }),
-                report({ sessionId: 'checkout', leadSessionId: 'lead', statusFacts: needsYouFacts }),
-                report({ sessionId: 'elsewhere', leadSessionId: 'other-lead' }),
-                report({ sessionId: 'root', leadSessionId: null }),
+                report({ sessionId: 'api', managerSessionId: 'lead' }),
+                report({ sessionId: 'ledger', managerSessionId: 'api' }),
+                report({ sessionId: 'checkout', managerSessionId: 'lead', statusFacts: needsYouFacts }),
+                report({ sessionId: 'elsewhere', managerSessionId: 'other-lead' }),
+                report({ sessionId: 'root', managerSessionId: null }),
             ],
         }));
 
@@ -302,15 +321,77 @@ describe('projectWork', () => {
         expect(projection.sessions[2]?.status.bucket).toBe('needs_you');
     });
 
+    it('lists archived direct reports apart from live work and its counts, so an archived child is never "nothing started"', () => {
+        const projection = projectWork(input({
+            reportSessions: [
+                report({ sessionId: 'api', managerSessionId: 'lead' }),
+                report({ sessionId: 'old-child', managerSessionId: 'lead', archived: true }),
+                report({ sessionId: 'old-grandchild', managerSessionId: 'old-child', archived: true }),
+                report({ sessionId: 'elsewhere', managerSessionId: 'other-lead', archived: true }),
+            ],
+        }));
+
+        expect(projection.sessions.map((item) => item.key)).toEqual(['session:api']);
+        expect(projection.summary).toMatchObject({ sessions: 1, outstanding: 1 });
+        expect(projection.archivedSessions.map((item) => [item.key, item.level, item.status.word, item.open])).toEqual([
+            ['session:old-child', 0, 'sessionWork.states.archived', { kind: 'session', sessionId: 'old-child' }],
+        ]);
+        expect(groupWorkByState(projection).archived).toBe(projection.archivedSessions);
+        expect(projectWork(input({ reportSessions: [] })).archivedSessions).toEqual([]);
+    });
+
     it('never loops on a cycle the store transiently holds', () => {
         const projection = projectWork(input({
             reportSessions: [
-                report({ sessionId: 'a', leadSessionId: 'lead' }),
-                report({ sessionId: 'b', leadSessionId: 'a' }),
-                report({ sessionId: 'a', leadSessionId: 'b' }),
+                report({ sessionId: 'a', managerSessionId: 'lead' }),
+                report({ sessionId: 'b', managerSessionId: 'a' }),
+                report({ sessionId: 'a', managerSessionId: 'b' }),
             ],
         }));
         expect(projection.sessions.map((item) => item.key)).toEqual(['session:a', 'session:b']);
+    });
+
+    it('keeps live grandchildren reachable through archived intermediates without counting archived work', () => {
+        const projection = projectWork(input({ reportSessions: [
+            report({ sessionId: 'api', managerSessionId: 'lead', statusFacts: settledFacts }),
+            report({ sessionId: 'old-worker', managerSessionId: 'api', archived: true }),
+            report({ sessionId: 'approval', managerSessionId: 'old-worker', statusFacts: needsYouFacts }),
+            report({ sessionId: 'old-direct', managerSessionId: 'lead', archived: true }),
+            report({ sessionId: 'live-worker', managerSessionId: 'old-direct' }),
+            // An archived edge may participate in the same transient cycles as live edges.
+            report({ sessionId: 'old-direct', managerSessionId: 'live-worker', archived: true }),
+        ] }));
+        expect(projection.sessions.map(item => [item.key, item.parentKey, item.level, item.status.bucket])).toEqual([
+            ['session:api', null, 0, 'idle'],
+            ['session:approval', 'session:api', 1, 'needs_you'],
+            ['session:live-worker', null, 0, 'working'],
+        ]);
+        expect(projection.archivedSessions.map(item => item.key)).toEqual(['session:old-direct']);
+        expect(projection.summary).toMatchObject({ sessions: 3, outstanding: 2, needsYou: 1 });
+        const map = projectSessionWorkMap({ managerSessionId: 'lead', leadTitle: 'Lead', projection });
+        expect(map.nodesById.get('session:approval')?.parentNodeId).toBe('session:api');
+        expect(map.nodesById.get('session:live-worker')?.parentNodeId).toBe('session:lead');
+    });
+
+    it('agrees with History while Stop custody is pending and after it settles', () => {
+        const run = createWorkflowRunSummaryFixture({ id: 'stopping', state: 'cancelled', workflowCustodyState: 'pending' });
+        const read = (workflowCustodyState: typeof run.workflowCustodyState) => {
+            const current = { ...run, workflowCustodyState };
+            const history = describeWorkflowRunState(current.state, { workflowCustodyState });
+            const projection = projectWork(input({ managedRuns: [{
+                run: current, title: 'Stopping run', word: history.label, needsAttention: false,
+            }] }));
+            expect(projection.workflows[0]?.status.word).toBe(history.label);
+            return { history, projection, groups: groupWorkByState(projection) };
+        };
+        const pending = read('pending');
+        expect(pending.history.terminal).toBe(false);
+        expect(pending.groups.working.map(item => item.key)).toEqual(['run:stopping']);
+        expect(pending.projection.summary.outstanding).toBe(1);
+        const settled = read('settled');
+        expect(settled.history.terminal).toBe(true);
+        expect(settled.groups.recent.map(item => item.key)).toEqual(['run:stopping']);
+        expect(settled.projection.summary.outstanding).toBe(0);
     });
 
     it('classifies each report from the Session owner\'s work-status facts, with no settled rule of its own', () => {
@@ -326,7 +407,7 @@ describe('projectWork', () => {
         const projection = projectWork(input({
             reportSessions: sessions.map((session) => report({
                 sessionId: session.id,
-                leadSessionId: 'lead',
+                managerSessionId: 'lead',
                 statusFacts: readSessionWorkStatusFacts(session, NOW),
             })),
         }));
@@ -341,10 +422,10 @@ describe('projectWork', () => {
     it('never finishes a report while its own reports are still working (R-10), however deep', () => {
         const projection = projectWork(input({
             reportSessions: [
-                report({ sessionId: 'api', leadSessionId: 'lead', statusFacts: settledFacts }),
-                report({ sessionId: 'ledger', leadSessionId: 'api', statusFacts: settledFacts }),
-                report({ sessionId: 'probe', leadSessionId: 'ledger' }),
-                report({ sessionId: 'docs', leadSessionId: 'lead', statusFacts: settledFacts }),
+                report({ sessionId: 'api', managerSessionId: 'lead', statusFacts: settledFacts }),
+                report({ sessionId: 'ledger', managerSessionId: 'api', statusFacts: settledFacts }),
+                report({ sessionId: 'probe', managerSessionId: 'ledger' }),
+                report({ sessionId: 'docs', managerSessionId: 'lead', statusFacts: settledFacts }),
             ],
         }));
 
@@ -365,14 +446,16 @@ describe('projectWork', () => {
     });
 
     it('counts a report as stalled only from the owner\'s stalled fact, not because it is offline and unsettled', () => {
-        const offline = { runtime: 'offline', operational: { primary: 'idle', reasons: ['runtime_offline'] } };
+        const offline = readSessionWorkStatusFacts(createSessionListRenderableSessionFixture({
+            active: false, presence: 0,
+        }), fixtureNow);
         const projection = projectWork(input({
             reportSessions: [
                 // Offline with a turn in flight: stalled.
-                report({ sessionId: 'cut-off', leadSessionId: 'lead', stalled: true, statusFacts: { awareness: offline, word: 'Offline', settled: false } as unknown as StatusFacts }),
+                report({ sessionId: 'cut-off', managerSessionId: 'lead', stalled: true, statusFacts: { ...offline, settled: false } }),
                 // Offline, no turn in flight, its own report still working: not settled, not stalled.
-                report({ sessionId: 'waiting-on-reports', leadSessionId: 'lead', statusFacts: { awareness: offline, word: 'Offline', settled: true } as unknown as StatusFacts }),
-                report({ sessionId: 'probe', leadSessionId: 'waiting-on-reports' }),
+                report({ sessionId: 'waiting-on-reports', managerSessionId: 'lead', statusFacts: { ...offline, settled: true } }),
+                report({ sessionId: 'probe', managerSessionId: 'waiting-on-reports' }),
             ],
         }));
 
@@ -417,8 +500,8 @@ describe('projectWork', () => {
     it('splits background runs from in-session agents and counts only outstanding work', () => {
         const projection = projectWork(input({
             reportSessions: [
-                report({ sessionId: 'done', leadSessionId: 'lead', statusFacts: settledFacts }),
-                report({ sessionId: 'busy', leadSessionId: 'lead' }),
+                report({ sessionId: 'done', managerSessionId: 'lead', statusFacts: settledFacts }),
+                report({ sessionId: 'busy', managerSessionId: 'lead' }),
             ],
             agentEntries: [
                 agentEntry({ id: 'run:scout', kind: 'execution_run', status: 'succeeded', runId: 'scout' }),
@@ -434,7 +517,7 @@ describe('projectWork', () => {
 
     it('reports nothing outstanding when every report has settled', () => {
         const projection = projectWork(input({
-            reportSessions: [report({ sessionId: 'done', leadSessionId: 'lead', statusFacts: settledFacts })],
+            reportSessions: [report({ sessionId: 'done', managerSessionId: 'lead', statusFacts: settledFacts })],
             agentEntries: [agentEntry({ id: 'run:x', kind: 'execution_run', status: 'failed', runId: 'x' })],
         }));
         expect(projection.summary.outstanding).toBe(0);
@@ -448,10 +531,10 @@ describe('projectWork', () => {
             presence: 1 }), fixtureNow);
         const projection = projectWork(input({
             reportSessions: [
-                report({ sessionId: 'checkout', leadSessionId: 'lead', statusFacts: needsYouFacts }),
-                report({ sessionId: 'done', leadSessionId: 'lead', statusFacts: settledFacts }),
-                report({ sessionId: 'quiet', leadSessionId: 'lead', statusFacts: idleFacts }),
-                report({ sessionId: 'gone', leadSessionId: 'lead', statusFacts: offlineFacts }),
+                report({ sessionId: 'checkout', managerSessionId: 'lead', statusFacts: needsYouFacts }),
+                report({ sessionId: 'done', managerSessionId: 'lead', statusFacts: settledFacts }),
+                report({ sessionId: 'quiet', managerSessionId: 'lead', statusFacts: idleFacts }),
+                report({ sessionId: 'gone', managerSessionId: 'lead', statusFacts: offlineFacts }),
             ],
             managedRuns: [managed('paused-run', 'paused'), managed('live-run', 'running')],
             agentEntries: [
@@ -476,17 +559,17 @@ describe('projectWork', () => {
         expect(groups.recent.map((item) => item.key)).toEqual([
             'session:done', 'session:quiet', 'session:gone', 'agent:run:x', 'run:paused-run',
         ]);
-        expect(Object.keys(groups)).toEqual(['needsYou', 'working', 'recent']);
+        expect(Object.keys(groups)).toEqual(['needsYou', 'working', 'recent', 'archived']);
     });
 
     it('nests a report under its lead only inside the same state group', () => {
         const projection = projectWork(input({
             reportSessions: [
-                report({ sessionId: 'api', leadSessionId: 'lead' }),
-                report({ sessionId: 'ledger', leadSessionId: 'api' }),
-                report({ sessionId: 'ledger-probe', leadSessionId: 'ledger' }),
-                report({ sessionId: 'checkout', leadSessionId: 'lead', statusFacts: needsYouFacts }),
-                report({ sessionId: 'retry-copy', leadSessionId: 'checkout' }),
+                report({ sessionId: 'api', managerSessionId: 'lead' }),
+                report({ sessionId: 'ledger', managerSessionId: 'api' }),
+                report({ sessionId: 'ledger-probe', managerSessionId: 'ledger' }),
+                report({ sessionId: 'checkout', managerSessionId: 'lead', statusFacts: needsYouFacts }),
+                report({ sessionId: 'retry-copy', managerSessionId: 'checkout' }),
             ],
         }));
         const groups = groupWorkByState(projection);
@@ -501,43 +584,5 @@ describe('projectWork', () => {
         expect(groups.needsYou.map((item) => [item.key, item.level])).toEqual([['session:checkout', 0]]);
         // Unchanged items keep their identity, so their rows do not re-render.
         expect(groups.working[0]).toBe(projection.sessions[0]);
-    });
-});
-
-describe('resolveWorkItemOpenTarget', () => {
-    function item(overrides: Partial<WorkItem> & Pick<WorkItem, 'kind' | 'open'>): WorkItem {
-        return {
-            key: 'k',
-            title: 't',
-            agentId: null,
-            facts: [],
-            parentKey: null,
-            level: 0,
-            status: { bucket: 'working', tone: 'neutral', word: 'Running' },
-            progress: null,
-            ...overrides,
-        };
-    }
-    const needsYou = { bucket: 'needs_you', tone: 'attention', word: 'Waiting for your review' } as const;
-
-    it('sends needs-you work to where it is answered, never to an inline control (S-1)', () => {
-        const run = item({ kind: 'workflow_run', open: { kind: 'workflow_run', runId: 'r1' }, status: needsYou });
-        const session = item({ kind: 'session', open: { kind: 'session', sessionId: 's1' }, status: needsYou });
-        const agent = item({
-            kind: 'background_run',
-            open: { kind: 'agent_activity', entryId: 'e1', subagentId: 'a1', runId: 'x' },
-            status: needsYou,
-        });
-
-        // A workflow run has no peek: its review waits in the Inbox.
-        expect(resolveWorkItemOpenTarget(run, { inboxAvailable: true })).toEqual({ kind: 'inbox' });
-        // Sessions and agents open their peek, which holds the one set of answer controls.
-        expect(resolveWorkItemOpenTarget(session, { inboxAvailable: true })).toEqual(session.open);
-        expect(resolveWorkItemOpenTarget(agent, { inboxAvailable: true })).toEqual(agent.open);
-        // Without an Inbox the run's own page is the place to answer it.
-        expect(resolveWorkItemOpenTarget(run, { inboxAvailable: false })).toEqual(run.open);
-        // Work that does not need the person opens where it lives.
-        expect(resolveWorkItemOpenTarget({ ...run, status: { bucket: 'working', tone: 'neutral', word: 'Running' } }, { inboxAvailable: true }))
-            .toEqual(run.open);
     });
 });

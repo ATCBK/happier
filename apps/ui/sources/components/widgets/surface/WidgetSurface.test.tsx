@@ -1,18 +1,24 @@
 import * as React from 'react';
+import * as Unistyles from 'react-native-unistyles';
 import { expect, it, vi } from 'vitest';
 import { WidgetDefinitionV1Schema, type WidgetInputBindingsV1, type WidgetInstanceV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
-import { renderScreen, renderHook, flushHookEffects } from '@/dev/testkit';
+import { createDeferred, renderScreen, renderHook, flushHookEffects } from '@/dev/testkit';
 import { useConfiguredWidgetTarget } from '@/sync/domains/widgets/useConfiguredWidgetTarget';
 import type { ConfiguredWidgetTargetResolution } from '@/sync/domains/widgets/widgetBinding';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createHomeHubArtifactHttpBoundary, createLayoutArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
+import { SessionSystemRecordStoredPageResponseSchema, SessionSystemRecordStoredReadResponseSchema } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRoutes';
 import { buildWidgetDefinitionArtifactHeaderV1 } from '@happier-dev/protocol/widgets/widgetDefinitionArtifactV1';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { decryptSocketNewArtifactUpdate, type ArtifactDataKeyCache } from '@/sync/engine/artifacts/syncArtifacts';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
 import { ProjectBuiltinWidgetBody } from '@/components/projects/widgets/ProjectBuiltinWidgetBody';
 import { WidgetSurface } from './WidgetSurface';
-import { captureActiveServerAccountScopeLifetime, getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import { captureActiveServerAccountScopeLifetime, getActiveServerAccountScope, retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { describeAuthoredWidgetDefinitionV1, readWidgetDescriptor, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { Text } from '@/components/ui/text/Text';
 import { HostedHtmlSurfaceAdapter } from '@/components/ui/surfaces/hostedHtml/HostedHtmlSurfaceAdapter';
@@ -21,19 +27,30 @@ import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { readInputPath } from '@happier-dev/protocol/inputs';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
-import type { UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
+import { SessionSystemRecordStoredSchema, type UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
 import { HappierDataMetric, StackedSeriesChart, type HappierSeries } from '@happier-dev/plugin-ui/presentation';
 import { invalidateUsageQueryResources } from '@/sync/api/account/usageQueryResource';
 import { readUsageWidgetPageContext, readUsageWidgetPageScope } from '@/components/settings/usage/usageWidgetPageContext';
 import { ConfiguredWidgetRefusal } from '@/components/widgets/InstalledWidgetSurface';
 import { SessionSurfaceItemV1Schema } from '@happier-dev/protocol/sessions/board';
 import { createSessionBoardSourceAvailabilityResolver } from '@/components/sessions/board/sessionBoardItemPresentation';
-import { createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createPlainSessionCurrentProjectionRecordFixture, createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { storage } from '@/sync/domains/state/storage';
 import { loadPluginUiHostSupport } from '@/components/plugins/hostApi/loadPluginUiHostSupport';
 import { TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1 } from '@happier-dev/triage-protocol/v1';
 import { widgetProjectionOf, widgetInstalledPackage } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
 import { unionPluginUiProjections } from '@/sync/domains/plugins/ui/projectionUnion';
+import { darkTheme, lightTheme } from '@/theme';
+import { createWorkBoardV1, WorkBoardV1Schema } from '@happier-dev/protocol/boards/workBoardV1';
+import { buildWorkBoardArtifactHeaderV1 } from '@happier-dev/protocol/boards/workBoardArtifactV1';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { resolveUiAccountActionFallbackMachineId } from '@/sync/ops/actions/accountActionDeps';
+import { recordMachineRequestFailed, recordMachineRequestSucceeded } from '@/sync/domains/machines/reachability/machineReachability';
+import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
+import { createWorkBoardArtifactBoundary } from '@/dev/testkit/harness/workBoardArtifactBoundary';
+import { createWorkBoardAccountStore } from '@/components/boards/model/workBoardAccountStore';
+import { useBoardWidgets } from '@/components/boards/model/useBoardContent';
+import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 
 // Statically imported surface consumers reach Sync; install its external Socket boundary before that graph loads.
 vi.mock('socket.io-client', async importOriginal =>
@@ -76,6 +93,147 @@ it('mounts the exact installed app widget from a multi-machine Home union and re
     } finally { await screen.unmount(); if (!disconnected) await connection.dispose(); }
 });
 
+it('renders an exact saved definition while unrelated layout reads remain pending', async () => {
+    const definition = WidgetDefinitionV1Schema.parse({ v: 1, id: 'literal-table', name: 'Orders',
+        sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' }, inputs: { fields: [] },
+        inputSchema: { type: 'object', additionalProperties: false }, provenance: { source: { kind: 'authored' } },
+        body: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Exact saved data' } } } });
+    const http = createLayoutArtifactHttpBoundary('viewer', { artifactId: definition.id, kind: 'widget-definition.v1',
+        defaultLayout: definition, parseLayout: value => WidgetDefinitionV1Schema.parse(value), buildHeader: buildWidgetDefinitionArtifactHeaderV1 });
+    http.seed(definition);
+    let finishLayout!: (response: Response) => void;
+    const pendingLayout = new Promise<Response>(resolve => { finishLayout = resolve; });
+    let deleted = false;
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://widget-exact-read.test', accountId: 'viewer', request: (url, init) => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v1/artifacts' || path.startsWith('/v1/artifacts/') && !path.startsWith(`/v1/artifacts/${definition.id}`)) return pendingLayout;
+        if (deleted && path === `/v1/artifacts/${definition.id}`) return Promise.resolve(Response.json({ error: 'not_found' }, { status: 404 }));
+        return http.request(url, init);
+    } });
+    const viewer = getActiveServerAccountScope()!;
+    const reference = { kind: 'artifact' as const, artifactId: definition.id };
+    const runtime = { phase: 'establishing' as const, interactionEnabled: false, machineId: null, serverId: null,
+        pluginUiProjection: null, pluginBrowserProjection: null, platform: 'web' as const, accountLifetime: captureActiveServerAccountScopeLifetime() };
+    const screen = await renderScreen(<WidgetSurface scope={{ ...viewer, owner: { kind: 'home' } }}
+        instance={{ v: 1, id: 'literal-instance', definition: reference, bindings: {} }}
+        descriptor={describeAuthoredWidgetDefinitionV1(definition, reference, null)} providedContext={{}}
+        recordRevision="literal" appRuntime={runtime} presentation="content" testID="exact-saved" />);
+    try {
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('Exact saved data'));
+        deleted = true;
+        await React.act(async () => { storage.getState().deleteArtifact(definition.id); });
+        await vi.waitFor(() => expect(screen.getTextContent()).not.toContain('Exact saved data'));
+    } finally {
+        finishLayout(Response.json({ error: 'not_found' }, { status: 404 }));
+        await screen.unmount();
+        await connection.dispose();
+    }
+});
+
+it('renews a pending exact saved definition read when the same Account lifetime is restored', async () => {
+    const definition = WidgetDefinitionV1Schema.parse({ v: 1, id: 'renewed-definition', name: 'Renewed',
+        sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' }, inputs: { fields: [] },
+        inputSchema: { type: 'object', additionalProperties: false }, provenance: { source: { kind: 'authored' } },
+        body: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Renewed saved data' } } } });
+    const http = createLayoutArtifactHttpBoundary('viewer', { artifactId: definition.id, kind: 'widget-definition.v1',
+        defaultLayout: definition, parseLayout: value => WidgetDefinitionV1Schema.parse(value), buildHeader: buildWidgetDefinitionArtifactHeaderV1 });
+    http.seed(definition);
+    const inventory = createDeferred<Response>();
+    const firstRead = createDeferred<Response>();
+    let firstReadSignal: AbortSignal | null | undefined;
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://widget-lifetime-read.test', accountId: 'viewer', request: (url, init) => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v1/artifacts' || path.startsWith('/v1/artifacts/') && path !== `/v1/artifacts/${definition.id}`) return inventory.promise;
+        if (path === `/v1/artifacts/${definition.id}` && firstReadSignal === undefined) {
+            firstReadSignal = init?.signal;
+            firstReadSignal?.addEventListener('abort', () => firstRead.reject(firstReadSignal?.reason), { once: true });
+            return firstRead.promise;
+        }
+        return http.request(url, init);
+    } });
+    const viewer = getActiveServerAccountScope()!;
+    const lifetime = captureActiveServerAccountScopeLifetime()!;
+    const reference = { kind: 'artifact' as const, artifactId: definition.id };
+    const runtime = { phase: 'establishing' as const, interactionEnabled: false, machineId: null, serverId: null,
+        pluginUiProjection: null, pluginBrowserProjection: null, platform: 'web' as const, accountLifetime: lifetime };
+    const surface = <WidgetSurface scope={{ ...viewer, owner: { kind: 'home' } }}
+        instance={{ v: 1, id: 'renewed-instance', definition: reference, bindings: {} }}
+        descriptor={describeAuthoredWidgetDefinitionV1(definition, reference, null)} providedContext={{}}
+        recordRevision="renewed" appRuntime={runtime} presentation="content" testID="renewed-saved" />;
+    const screen = await renderScreen(surface);
+    try {
+        await vi.waitFor(() => expect(firstReadSignal).toBeInstanceOf(AbortSignal));
+        await React.act(async () => {
+            // The canonical owner renews even a restored connection to the same Home and Account.
+            retireActiveServerAccountScopeLifetime();
+            const restored = captureActiveServerAccountScopeLifetime()!;
+            expect(restored).not.toBe(lifetime);
+            expect(restored.scope).toEqual(viewer);
+            await screen.update(React.cloneElement(surface, { appRuntime: { ...runtime, accountLifetime: restored } }));
+        });
+        expect(firstReadSignal?.aborted).toBe(true);
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('Renewed saved data'));
+    } finally {
+        inventory.resolve(Response.json({ error: 'not_found' }, { status: 404 }));
+        firstRead.resolve(Response.json({ error: 'not_found' }, { status: 404 }));
+        await screen.unmount();
+        await connection.dispose();
+    }
+});
+
+it('opens a socket-only saved definition through exact HTTP authority before rendering it', async () => {
+    const definition = WidgetDefinitionV1Schema.parse({ v: 1, id: 'socket-definition', name: 'Socket definition',
+        sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' }, inputs: { fields: [] },
+        inputSchema: { type: 'object', additionalProperties: false }, provenance: { source: { kind: 'authored' } },
+        body: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Authenticated saved data' } } } });
+    const http = createLayoutArtifactHttpBoundary('viewer', { artifactId: definition.id, kind: 'widget-definition.v1',
+        defaultLayout: definition, parseLayout: value => WidgetDefinitionV1Schema.parse(value), buildHeader: buildWidgetDefinitionArtifactHeaderV1 });
+    http.seed(definition);
+    const inventory = createDeferred<Response>();
+    const exactRead = createDeferred<void>();
+    let exactReadEntered = false;
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://widget-socket-authority.test', accountId: 'viewer', request: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v1/artifacts' || path.startsWith('/v1/artifacts/') && path !== `/v1/artifacts/${definition.id}`) return inventory.promise;
+        if (path === `/v1/artifacts/${definition.id}`) {
+            exactReadEntered = true;
+            await exactRead.promise;
+        }
+        return http.request(url, init);
+    } });
+    const artifactDataKeys: ArtifactDataKeyCache = new Map();
+    // Content-only Socket.IO messages carry bytes and revisions, never HTTP owner/grant facts.
+    const socketRow = await decryptSocketNewArtifactUpdate({ artifactId: definition.id,
+        dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, header: encodePlainArtifactStoredContent(buildWidgetDefinitionArtifactHeaderV1(definition)),
+        body: encodePlainArtifactStoredContent({ body: JSON.stringify(definition) }),
+        headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1, encryption: null, artifactDataKeys });
+    expect(socketRow).toMatchObject({ isDecrypted: true, body: JSON.stringify(definition) });
+    expect(socketRow?.ownerAccountId).toBeUndefined();
+    expect(socketRow?.access).toBeUndefined();
+    if (!socketRow) throw new Error('Expected a readable socket Artifact');
+    await React.act(async () => { storage.getState().addArtifact(socketRow); });
+    const viewer = getActiveServerAccountScope()!;
+    const reference = { kind: 'artifact' as const, artifactId: definition.id };
+    const runtime = { phase: 'establishing' as const, interactionEnabled: false, machineId: null, serverId: null,
+        pluginUiProjection: null, pluginBrowserProjection: null, platform: 'web' as const, accountLifetime: captureActiveServerAccountScopeLifetime() };
+    const screen = await renderScreen(<WidgetSurface scope={{ ...viewer, owner: { kind: 'home' } }}
+        instance={{ v: 1, id: 'socket-instance', definition: reference, bindings: {} }}
+        descriptor={describeAuthoredWidgetDefinitionV1(definition, reference, null)} providedContext={{}}
+        recordRevision="socket" appRuntime={runtime} presentation="content" testID="socket-saved" />);
+    try {
+        await vi.waitFor(() => expect(exactReadEntered).toBe(true));
+        expect(screen.getTextContent()).not.toContain('Authenticated saved data');
+        await React.act(async () => { exactRead.resolve(); });
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('Authenticated saved data'));
+        expect(storage.getState().artifacts[definition.id]).toMatchObject({ ownerAccountId: 'viewer', access: 'owner' });
+    } finally {
+        exactRead.resolve();
+        inventory.resolve(Response.json({ error: 'not_found' }, { status: 404 }));
+        await screen.unmount();
+        await connection.dispose();
+    }
+});
+
 it.each([['artifact', 'home'], ['artifact', 'project'], ['inline', 'sessionBoard']] as const)('renders a saved builtin daily widget through %s on %s with viewer admission and retires its Resource on authority loss', async (kind, owner) => {
     const disposeActionLoader = await installRealActionExecutorModuleLoader();
     const native = readWidgetDescriptor(null, { kind: 'builtin', id: 'usage_daily' })!;
@@ -88,9 +246,26 @@ it.each([['artifact', 'home'], ['artifact', 'project'], ['inline', 'sessionBoard
     let total = 15;
     const start = Date.UTC(2026, 9, 10);
     const query = normalizeUsageQuery({ period: { startMs: start, endMs: start + 86_400_000 }, metric: 'tokens', breakdown: [] });
+    const reference = kind === 'artifact' ? { kind, artifactId: saved.id } : { kind, definition: saved };
+    const instance: WidgetInstanceV1 = { v: 1, id: 'daily-instance', definition: reference,
+        bindings: Object.fromEntries(saved.inputs.fields.map(field => [field.path, { kind: 'value', value: StrictJsonValueSchema.parse(readInputPath(query, field.path)) }])) };
+    const record = kind === 'inline' ? SessionSystemRecordStoredSchema.parse({ id: 'daily-record',
+        address: { owner: 'host', namespace: 'surface', kind: 'item.v1', localId: instance.id },
+        content: { t: 'plain', v: SessionSurfaceItemV1Schema.parse({ v: 1, title: saved.name, frame: 'card',
+            height: { mode: 'auto', fallback: 'regular' }, source: { kind: 'widget', instance } }) },
+        revision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ', createdAt: '2026-10-10T00:00:00.000Z', updatedAt: '2026-10-10T00:00:00.000Z' }) : null;
+    // Session-scoped choices admit the containing Session through the real HTTP reader.
+    const containingSession = createPlainSessionCurrentProjectionRecordFixture({ id: 'destination', metadata: null });
+    const features = createRootLayoutFeaturesResponse();
+    if (!tryWriteServerEnabledBitInPlace(features, 'sessions.board', true)) throw new Error('Expected the Board feature');
     const connection = await restoreServerAccountForTest({ serverUrl: `https://saved-builtin-${owner}.test`, accountId: 'viewer', request: async (url, init) => {
         const path = new URL(String(url)).pathname;
         if (path === '/v1/machines') return Response.json({ machines: [] });
+        if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
+        if (path === '/v2/sessions/destination') return Response.json({ session: containingSession });
+        if (path === '/v2/sessions/destination/system-records/record') return Response.json(SessionSystemRecordStoredReadResponseSchema.parse({
+            record: new URL(String(url)).searchParams.get('localId') === instance.id ? record : null }));
+        if (path === '/v2/sessions/destination/system-records') return Response.json(SessionSystemRecordStoredPageResponseSchema.parse({ records: record ? [record] : [], nextCursor: null, hasNext: false }));
         if (path !== '/v2/usage/query') return http.request(url, init);
         const tokens = { input: total - 5, output: 5, reasoning: 0, cacheRead: 0, cacheWrite: 0, total };
         const cost = { reportedUsd: 1, estimatedUsd: 0, currency: 'USD' };
@@ -98,11 +273,9 @@ it.each([['artifact', 'home'], ['artifact', 'project'], ['inline', 'sessionBoard
     } });
     const viewer = getActiveServerAccountScope();
     if (!viewer) throw new Error('Expected current viewer');
-    const reference = kind === 'artifact' ? { kind, artifactId: saved.id } : { kind, definition: saved };
-    const instance: WidgetInstanceV1 = { v: 1, id: 'daily-instance', definition: reference,
-        bindings: Object.fromEntries(saved.inputs.fields.map(field => [field.path, { kind: 'value', value: StrictJsonValueSchema.parse(readInputPath(query, field.path)) }])) };
     // Shared Session content is an inline copy, never a foreign private Account reference.
-    const scope: WidgetSurfaceRefV1 = { ...viewer, ...(kind === 'inline' ? { accountId: 'author' } : {}), owner: owner === 'home' ? { kind: owner }
+    // Session hosts scope their reads to the current viewer; shared content carries no author Account authority.
+    const scope: WidgetSurfaceRefV1 = { ...viewer, owner: owner === 'home' ? { kind: owner }
         : owner === 'project' ? { kind: owner, projectId: 'project-one' } : { kind: owner, sessionId: 'destination' } };
     if (kind === 'inline') {
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
@@ -197,15 +370,23 @@ it.each(['declarative', 'html', 'installed'] as const)('renders a published inli
 });
 
 it.each([
-    ['follow', 'corePage'], ['pin', 'corePage'], ['pin', 'home'], ['project-follow', 'project'], ['session-follow', 'corePage'],
+    ['follow', 'corePage'], ['pin', 'corePage'], ['pin', 'home'], ['project-follow', 'project'], ['session-follow', 'corePage'], ['pin', 'workBoard'],
 ] as const)('renders Usage through real %s admission on an unmaterialized %s host', async (bindingKind, host) => {
     const disposeActionLoader = await installRealActionExecutorModuleLoader();
     const http = createHomeHubArtifactHttpBoundary('viewer');
+    const board = createWorkBoardV1({ id: 'board-one', name: 'Overview' });
+    const boardHttp = createLayoutArtifactHttpBoundary('viewer', { artifactId: board.id, kind: 'work-board.v1',
+        defaultLayout: board, parseLayout: value => WorkBoardV1Schema.parse(value), buildHeader: buildWorkBoardArtifactHeaderV1 });
+    boardHttp.seed(board);
+    let usageReads = 0;
     const connection = await restoreServerAccountForTest({ serverUrl: `https://usage-${bindingKind}-admission.test`,
         accountId: 'viewer', request: async (url, init) => {
             const path = new URL(String(url)).pathname;
             if (path === '/v1/machines') return Response.json({ machines: [] });
+            if (host === 'workBoard' && (path === '/v1/features' || path === '/v1/features/authenticated')) return Response.json(createRootLayoutFeaturesResponse());
+            if (host === 'workBoard' && path.startsWith(`/v1/artifacts/${board.id}`)) return boardHttp.request(url, init);
             if (path !== '/v2/usage/query') return http.request(url, init);
+            usageReads += 1;
             const totals: UsageAnalyticsQueryResponse['totals'] = { eventCount: 1,
                 tokens: { input: 10, output: 5, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 15 },
                 cost: { reportedUsd: 1, estimatedUsd: 0, currency: 'USD' } };
@@ -215,8 +396,9 @@ it.each([
     if (!account) throw new Error('Expected current viewer Account');
     const scope: WidgetSurfaceRefV1 = { ...account, owner: host === 'home' ? { kind: 'home' }
         : host === 'project' ? { kind: 'project', projectId: 'project-one' }
+        : host === 'workBoard' ? { kind: 'workBoard', boardId: 'board-one' }
         : { kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'overview' } };
-    const query = normalizeUsageQuery({ period: { startMs: 1000 }, agents: bindingKind === 'pin' ? ['codex'] : [], metric: 'tokens',
+    const query = normalizeUsageQuery({ period: host === 'workBoard' ? { relative: '30days' } : { startMs: 1000 }, agents: bindingKind === 'pin' ? ['codex'] : [], metric: 'tokens',
         projects: host === 'project' ? ['project-one'] : [], session: bindingKind === 'session-follow' ? ['session-one'] : null });
     const definition = { kind: 'builtin', id: 'usage_period_summary' } as const;
     const descriptor = readWidgetDescriptor(null, definition)!;
@@ -227,20 +409,66 @@ it.each([
     const runtime = { pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION, pluginBrowserProjection: null, phase: 'current' as const,
         interactionEnabled: true, machineId: null, serverId: null, platform: 'web' as const,
         accountLifetime: captureActiveServerAccountScopeLifetime() };
+    let layoutCurrent = true;
+    let layoutPending = false;
     const body = (context: ReturnType<typeof readUsageWidgetPageContext>) => <InjectedAuthProvider credentials={connection.credentials}>
         <WidgetSurface scope={scope} instance={{ v: 1, id: 'usage-admission', definition, bindings }} descriptor={descriptor}
-            providedContext={context} appRuntime={runtime} recordRevision="fixture:1" presentation="content" testID="usage-admission" />
+            providedContext={context} appRuntime={runtime} recordRevision="fixture:1" presentation="content" testID="usage-admission"
+            isCurrent={() => layoutCurrent} isReadPending={() => layoutPending} />
     </InjectedAuthProvider>;
     const pageContext = readUsageWidgetPageContext(readUsageWidgetPageScope(query));
     const providedContext = host === 'home' ? {} : host === 'project' ? { projects: pageContext.projects! } : pageContext;
+    if (host === 'workBoard') {
+        await getServerFeaturesSnapshot({ serverId: account.serverId });
+        storage.getState().applyMachines([createMachineFixture({ id: 'new-relay', activeAt: Date.now() })]);
+        recordMachineRequestFailed({ ...account, machineId: 'new-relay' });
+        expect(resolveUiAccountActionFallbackMachineId(account)).toBeNull();
+    }
     const screen = await renderScreen(body(providedContext));
+    let restoreAppearance: (() => void) | undefined;
     try {
         await flushHookEffects({ cycles: 30 });
         await vi.waitFor(() => {
             expect(screen.tree.root.findAllByType(ConfiguredWidgetRefusal).map(node => node.props.resolution)).toEqual([]);
             expect(screen.tree.root.findAllByType(HappierDataMetric).map(node => node.props.value)).toContain(15);
         });
+        if (host === 'workBoard') {
+            const metrics = screen.tree.root.findAllByType(HappierDataMetric);
+            // A native Account input does not acquire Machine identity merely because
+            // an unrelated daemon becomes reachable before an appearance render.
+            await React.act(async () => { recordMachineRequestSucceeded({ ...account, machineId: 'new-relay' }); });
+            expect(resolveUiAccountActionFallbackMachineId(account)).toBe('new-relay');
+            await flushHookEffects({ cycles: 30 });
+            const reads = usageReads;
+            const runtime = Unistyles.useUnistyles();
+            const themeBoundary = vi.spyOn(Unistyles, 'useUnistyles');
+            restoreAppearance = () => { themeBoundary.mockRestore(); };
+            for (const theme of [darkTheme, lightTheme]) {
+                themeBoundary.mockReturnValue({ ...runtime, theme });
+                await screen.update(body(providedContext));
+                await flushHookEffects({ cycles: 10 });
+                expect(screen.tree.root.findAllByType(ConfiguredWidgetRefusal)).toEqual([]);
+                const currentMetrics = screen.tree.root.findAllByType(HappierDataMetric);
+                expect(currentMetrics).toHaveLength(metrics.length);
+                currentMetrics.forEach((metric, index) => expect(metric).toBe(metrics[index]));
+                expect(usageReads).toBe(reads);
+            }
+        }
         if (bindingKind === 'follow') {
+            // The layout keeps its admitted context while its Artifact is reread.
+            // That observation must not unmount the already populated Usage Resource.
+            const metrics = screen.tree.root.findAllByType(HappierDataMetric);
+            const reads = usageReads;
+            layoutCurrent = false;
+            layoutPending = true;
+            await screen.update(body(providedContext));
+            await flushHookEffects({ cycles: 10 });
+            const refreshingMetrics = screen.tree.root.findAllByType(HappierDataMetric);
+            expect(refreshingMetrics).toHaveLength(metrics.length);
+            refreshingMetrics.forEach((metric, index) => expect(metric).toBe(metrics[index]));
+            expect(usageReads).toBe(reads);
+            layoutCurrent = true;
+            layoutPending = false;
             // The page can retain a selected Agent absent from this period's choice inventory.
             const changed = normalizeUsageQuery({ ...query, agents: ['claude'] });
             await screen.update(body(readUsageWidgetPageContext(readUsageWidgetPageScope(changed))));
@@ -249,7 +477,7 @@ it.each([
         }
         expect(http.writes).toEqual([]);
     } finally {
-        await screen.unmount(); await connection.dispose(); disposeActionLoader(); invalidateUsageQueryResources();
+        restoreAppearance?.(); await screen.unmount(); await connection.dispose(); disposeActionLoader(); invalidateUsageQueryResources();
     }
 });
 
@@ -297,6 +525,86 @@ it('consumes a live U5 widget in the generic Session surface through ordinary us
     } finally { await screen.unmount(); if (!disconnected) await connection.dispose(); invalidateUsageQueryResources(); }
 });
 
+it('retains exact WorkBoard option admission across delayed responsive remounts and withdraws it on Account retirement', async () => {
+    const disposeActionLoader = await installRealActionExecutorModuleLoader();
+    const http = createHomeHubArtifactHttpBoundary('viewer');
+    const board = createWorkBoardV1({ id: 'responsive-board', name: 'Launch week' });
+    const boardHttp = createLayoutArtifactHttpBoundary('viewer', { artifactId: board.id, kind: 'work-board.v1',
+        defaultLayout: board, parseLayout: value => WorkBoardV1Schema.parse(value), buildHeader: buildWorkBoardArtifactHeaderV1 });
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://responsive-board-options.test', accountId: 'viewer',
+        request: (url, init) => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v1/machines') return Promise.resolve(Response.json({ machines: [] }));
+            if (path.startsWith(`/v1/artifacts/${board.id}`)) return boardHttp.request(url, init);
+            return http.request(url, init);
+        } });
+    const account = getActiveServerAccountScope();
+    if (!account) throw new Error('Expected the restored WorkBoard viewer');
+    const lifetime = captureActiveServerAccountScopeLifetime();
+    const scope: WidgetSurfaceRefV1 = { ...account, owner: { kind: 'workBoard', boardId: board.id } };
+    const definition = { kind: 'builtin', id: 'usage_flow' } as const;
+    let descriptor = readWidgetDescriptor(null, definition)!;
+    const query = normalizeUsageQuery({ period: { relative: '30days' }, metric: 'tokens', breakdown: [] });
+    const instance: WidgetInstanceV1 = { v: 1, id: 'daily', definition,
+        bindings: Object.fromEntries(descriptor.inputs!.fields.map(field => [field.path,
+            field.path === 'period' ? { kind: 'context', slot: 'period' }
+                : { kind: 'value', value: StrictJsonValueSchema.parse(readInputPath(query, field.path)) }])) };
+    const storedBoard = WorkBoardV1Schema.parse({ ...board, widgets: [{ kind: 'widget', ref: { surface: scope, instanceId: instance.id }, instance, size: 'medium' }] });
+    boardHttp.seed(storedBoard);
+    const persistence = createWorkBoardArtifactBoundary({ v: 1, boards: [storedBoard] });
+    const store = createWorkBoardAccountStore(persistence.transport, () => lifetime?.isCurrent() === true);
+    await store.refresh();
+    const runtime = { pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION, pluginBrowserProjection: null, phase: 'current' as const,
+        interactionEnabled: true, machineId: null, serverId: account.serverId, platform: 'web' as const, accountLifetime: lifetime };
+    const observed: ConfiguredWidgetTargetResolution[] = [];
+    const instances: WidgetInstanceV1[] = [];
+    let period = StrictJsonValueSchema.parse(query.period);
+    function Probe() {
+        // Both BoardCanvas and BoardByStatus receive this canonical placement unchanged.
+        const widgets = useBoardWidgets(store.getDisplayedBoard(board.id)!);
+        const instance = widgets[0]!.instance;
+        instances.push(instance);
+        const resolution = useConfiguredWidgetTarget({ scope, instance, descriptor, providedContext: { period: [period] }, appRuntime: runtime });
+        observed.push(resolution);
+        return null;
+    }
+    const screen = await renderScreen(<Probe key="desktop" />);
+    let disconnected = false;
+    try {
+        await vi.waitFor(() => expect(observed.at(-1)?.status).toBe('ready'));
+        for (const layout of ['phone', 'desktop']) {
+            // Canvas has no body subscriber until its new measured span exists.
+            await screen.update(<></>);
+            await flushHookEffects({ cycles: 2 });
+            const before = observed.length;
+            await screen.update(<Probe key={layout} />);
+            await flushHookEffects({ cycles: 2 });
+            expect(observed.slice(before).map(state => state.status)).not.toContain('loading');
+            expect(instances.at(-1)).toBe(instances[0]);
+        }
+        await screen.update(<></>);
+        await flushHookEffects({ cycles: 2 });
+        period = { relative: '7days' };
+        const beforeChangedInput = observed.length;
+        await screen.update(<Probe key="changed-context" />);
+        expect(observed.slice(beforeChangedInput).map(state => state.status)).toContain('loading');
+        await vi.waitFor(() => expect(observed.at(-1)?.status).toBe('ready'));
+        await screen.update(<></>);
+        await flushHookEffects({ cycles: 2 });
+        descriptor = { ...descriptor, inputs: { ...descriptor.inputs!, fields: descriptor.inputs!.fields.map(field =>
+            field.path === 'period' ? { ...field, title: 'Reporting period' } : field) } };
+        const beforeChangedDeclaration = observed.length;
+        await screen.update(<Probe key="changed-declaration" />);
+        expect(observed.slice(beforeChangedDeclaration).map(state => state.status)).toContain('loading');
+        await vi.waitFor(() => expect(observed.at(-1)?.status).toBe('ready'));
+        await screen.update(<></>);
+        await flushHookEffects({ cycles: 2 });
+        await React.act(async () => { await connection.dispose(); disconnected = true; });
+        await screen.update(<Probe key="retired" />);
+        expect(observed.at(-1)?.status).not.toBe('ready');
+    } finally { await screen.unmount(); store.retire(); if (!disconnected) await connection.dispose(); disposeActionLoader(); }
+});
+
 it('keeps an input-options read pending, then preserves the canonical terminal refusal', async () => {
     const disposeActionLoader = await installRealActionExecutorModuleLoader();
     const http = createHomeHubArtifactHttpBoundary('actor');
@@ -327,6 +635,31 @@ it('keeps an input-options read pending, then preserves the canonical terminal r
         // This inline definition is not published in the Account catalog. The real Action
         // refuses it after discovery; that terminal fact must not become permanent loading.
         expect(hook.getCurrent()).toMatchObject({ status: 'unavailable', reasonCode: 'input_type_consumer_unavailable' });
+    } finally { await hook.unmount(); await connection.dispose(); disposeActionLoader(); }
+});
+
+it('settles as unavailable, never loading, when its plugin runtime is offline and the saved input needs a choices read', async () => {
+    const disposeActionLoader = await installRealActionExecutorModuleLoader();
+    const http = createHomeHubArtifactHttpBoundary('actor');
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://offline-widget-options.test', accountId: 'actor', request: http.request });
+    const scope: WidgetSurfaceRefV1 = { serverId: connection.home.id, accountId: 'actor', owner: { kind: 'home' } };
+    const definition = WidgetDefinitionV1Schema.parse({ v: 1, id: 'offline-options', name: 'Offline options',
+        sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
+        inputs: { fields: [{ path: 'home', title: 'Home', widget: 'select', optionsSourceId: 'sessions.spawn.servers.available' }] },
+        inputSchema: { type: 'object', properties: { home: { type: 'string' } }, additionalProperties: false },
+        provenance: { source: { kind: 'authored' } },
+        body: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'A declared options reader' } } } });
+    const reference = { kind: 'inline' as const, definition };
+    const instance: WidgetInstanceV1 = { v: 1, id: 'options', definition: reference, bindings: { home: { kind: 'value', value: connection.home.id } } };
+    const descriptor = describeAuthoredWidgetDefinitionV1(definition, reference, null);
+    // The daemon is unreachable and only the retained snapshot remains: no choices read is demanded, so none will ever answer.
+    const runtime = { pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION, pluginBrowserProjection: null, phase: 'retainedOffline' as const,
+        unavailableReasonCode: 'plugin_machine_unreachable', interactionEnabled: false, machineId: null, serverId: null, platform: 'web' as const,
+        accountLifetime: captureActiveServerAccountScopeLifetime() };
+    const hook = await renderHook(() => useConfiguredWidgetTarget({ scope, instance, descriptor, providedContext: {}, appRuntime: runtime }));
+    try {
+        await flushHookEffects({ cycles: 3 });
+        expect(hook.getCurrent()).toMatchObject({ status: 'unavailable', reasonCode: 'plugin_machine_unreachable' });
     } finally { await hook.unmount(); await connection.dispose(); disposeActionLoader(); }
 });
 
@@ -370,7 +703,7 @@ it('renders an HTML copy through the shared sandbox with its copied policy and r
     } finally { await screen?.unmount(); await connection.dispose(); vi.unstubAllGlobals(); }
 });
 
-it('renders a declared native app-read fixture and removes it when its Account read retires', async () => {
+it('retains an admitted native body during layout refresh and removes it when its Account read retires', async () => {
     const http = createHomeHubArtifactHttpBoundary('actor');
     const connection = await restoreServerAccountForTest({ serverUrl: 'http://native-app-widget.test', accountId: 'actor', request: http.request });
     const scope: WidgetSurfaceRefV1 = { serverId: connection.home.id, accountId: 'actor', owner: { kind: 'home' } };
@@ -380,21 +713,34 @@ it('renders a declared native app-read fixture and removes it when its Account r
         inputSchema: { type: 'object', properties: { period: { type: 'integer' } }, required: ['period'], additionalProperties: false } };
     const runtime = { pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION, pluginBrowserProjection: null, phase: 'current' as const,
         interactionEnabled: true, machineId: null, serverId: null, platform: 'web' as const, accountLifetime: captureActiveServerAccountScopeLifetime() };
-    let current = true;
-    let pending = false;
-    const body = () => <WidgetSurface scope={scope} instance={instance} descriptor={descriptor}
+    let current = false;
+    let pending = true;
+    let shownScope: WidgetSurfaceRefV1 = scope;
+    const body = () => <WidgetSurface scope={shownScope} instance={instance} descriptor={descriptor}
         providedContext={{}} appRuntime={runtime} presentation="content" recordRevision="same-instance" isCurrent={() => current} isReadPending={() => pending}
         reference={<Text testID="native-app-read">7 days</Text>} testID="native-app-widget" />;
     const screen = await renderScreen(body());
     try {
+        expect(screen.tree.root.findAllByProps({ testID: 'native-app-read' })).toHaveLength(0);
+        expect(screen.tree.root.findAllByProps({ testID: 'native-app-widget-state-rows' }).length).toBeGreaterThan(0);
+        current = true;
+        pending = false;
+        await screen.update(body());
         expect(screen.tree.root.findAllByProps({ testID: 'native-app-read' }).length).toBeGreaterThan(0);
         current = false;
         pending = true;
         await screen.update(body());
-        expect(screen.tree.root.findAllByProps({ testID: 'native-app-read' })).toHaveLength(0);
-        // A read still pending keeps the card's first-load rows (one loading look per card), never a state card.
-        expect(screen.tree.root.findAllByProps({ testID: 'native-app-widget-state-rows' }).length).toBeGreaterThan(0);
+        expect(screen.tree.root.findAllByProps({ testID: 'native-app-read' }).length).toBeGreaterThan(0);
+        expect(screen.tree.root.findAllByProps({ testID: 'native-app-widget-state-rows' })).toHaveLength(0);
         expect(screen.tree.root.findAllByType(SurfaceStateCard)).toHaveLength(0);
+        shownScope = { ...scope, owner: { kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'overview' } };
+        await screen.update(body());
+        expect(screen.tree.root.findAllByProps({ testID: 'native-app-read' })).toHaveLength(0);
+        expect(screen.tree.root.findAllByProps({ testID: 'native-app-widget-state-rows' }).length).toBeGreaterThan(0);
+        shownScope = scope;
+        await screen.update(body());
+        expect(screen.tree.root.findAllByProps({ testID: 'native-app-read' })).toHaveLength(0);
+        expect(screen.tree.root.findAllByProps({ testID: 'native-app-widget-state-rows' }).length).toBeGreaterThan(0);
         pending = false;
         await screen.update(body());
         expect(screen.tree.root.findByType(SurfaceStateCard).props.kind).toBe('unavailable');
@@ -405,6 +751,7 @@ it('does not mount native readers while the containing document admission is sus
     const http = createHomeHubArtifactHttpBoundary('actor');
     const connection = await restoreServerAccountForTest({ serverUrl: 'http://native-widget.test', accountId: 'actor', request: http.request });
     const checkout = { id: 'checkout', serverId: connection.home.id, machineId: 'machine', rootPath: '/repo', createdAtMs: 1 };
+    applyProjectAccountRowsFixture(storage, { workspaceRefs: [checkout] });
     const scope: WidgetSurfaceRefV1 = { serverId: connection.home.id, accountId: 'actor', owner: { kind: 'project', projectId: 'project' } };
     const instance: WidgetInstanceV1 = { v: 1, id: 'about', definition: { kind: 'builtin', id: 'project_about' },
         bindings: { checkout: { kind: 'context', slot: 'checkout' } } };

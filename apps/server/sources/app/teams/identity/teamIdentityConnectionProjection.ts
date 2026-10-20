@@ -1,8 +1,9 @@
 import type { TeamIdentityConnectionUserActionIdV1, IdentityConnectionUserActionIdV1, HomeIdentityConnectionUserActionIdV1 } from '@happier-dev/protocol/teams/identity/actionIds';
-import type { IdentityConnectionV1, TeamIdentityConnectionV1 } from '@happier-dev/protocol/teams/identity/connection';
-import type { HomeIdentityConnectionV1 } from '@happier-dev/protocol/home/identity';
+import type { IdentityConnectionV1, TeamIdentityConnectionV1 } from '@happier-dev/protocol/teams';
+import type { HomeIdentityConnectionV1 } from '@happier-dev/protocol/home';
+import { normalizeAuthMethodId } from '@happier-dev/protocol/auth/providers';
 
-import { resolveTeamAuthenticationPolicyInTx } from "@/app/auth/entry/resolveTeamAuthenticationPolicy";
+import { resolveTeamAuthenticationPolicy, resolveTeamAuthenticationPolicyInTx } from "@/app/auth/entry/resolveTeamAuthenticationPolicy";
 import { resolveOAuthRuntimeByIdInTx } from "@/app/auth/providers/identityProviderCatalog";
 import { readHomeGovernancePolicyInTx, resolveIdentityConnectionProviderKindPolicy } from "@/app/home/governance/governancePolicy";
 import { resolveWorkosPlatformRuntimeMetadata } from "@/app/integrations/workos/workosPlatform";
@@ -30,7 +31,35 @@ export type TeamIdentityConnectionCurrentness = Readonly<{
     providerAllowedByHome: boolean;
     policyStatus: "available" | "in_use" | "unavailable";
     workosPlatformAvailable: boolean;
+    teamsUsingIt?: HomeIdentityConnectionV1["teamsUsingIt"];
 }>;
+
+/** Explicit Home-method uses, shared by connection presentation and removal admission. */
+export async function readTeamsUsingHomeIdentityMethodsInTx(
+    tx: Tx,
+    providerInstanceIds: readonly string[],
+): Promise<ReadonlyMap<string, NonNullable<HomeIdentityConnectionV1["teamsUsingIt"]>>> {
+    const requested = new Set(providerInstanceIds.map(normalizeAuthMethodId));
+    const result = new Map<string, NonNullable<HomeIdentityConnectionV1["teamsUsingIt"]>>();
+    if (requested.size === 0) return result;
+    const teams = await tx.team.findMany({
+        select: { id: true, name: true, authenticationPolicy: true },
+        orderBy: [{ name: "asc" }, { id: "asc" }],
+    });
+    for (const team of teams) {
+        const policy = resolveTeamAuthenticationPolicy({ policy: team.authenticationPolicy, homeMethods: [], teamConnections: [] });
+        if (policy.status !== "restricted") continue;
+        for (const choice of policy.choices) {
+            if (choice.reference.kind !== "home_method") continue;
+            const providerId = normalizeAuthMethodId(choice.reference.methodId);
+            if (!requested.has(providerId)) continue;
+            const uses = result.get(providerId) ?? [];
+            uses.push({ teamId: team.id, name: team.name });
+            result.set(providerId, uses);
+        }
+    }
+    return result;
+}
 
 export function resolveTeamIdentityConnectionCurrentState(
     connection: TeamIdentityConnectionView,
@@ -54,15 +83,17 @@ export type TeamIdentityCurrentnessInputs = Readonly<{
     home: Awaited<ReturnType<typeof readHomeGovernancePolicyInTx>>;
     policyStatusFor: (connectionId: string) => TeamIdentityConnectionCurrentness["policyStatus"];
     workosPlatformAvailable: boolean;
+    teamsUsingHomeMethods: ReadonlyMap<string, NonNullable<HomeIdentityConnectionV1["teamsUsingIt"]>>;
 }>;
 
 export async function readTeamIdentityCurrentnessInputsInTx(
     tx: Tx,
-    input: Readonly<{ env: NodeJS.ProcessEnv; teamId: string | null }>,
+    input: Readonly<{ env: NodeJS.ProcessEnv; teamId: string | null; homeProviderInstanceIds?: readonly string[] }>,
 ): Promise<TeamIdentityCurrentnessInputs> {
-    const [team, home] = await Promise.all([
+    const [team, home, teamsUsingHomeMethods] = await Promise.all([
         input.teamId === null ? Promise.resolve(null) : tx.team.findUnique({ where: { id: input.teamId }, select: { authenticationPolicy: true } }),
         readHomeGovernancePolicyInTx(tx),
+        readTeamsUsingHomeIdentityMethodsInTx(tx, input.teamId === null ? input.homeProviderInstanceIds ?? [] : []),
     ]);
     const policy = team && input.teamId !== null
         ? await resolveTeamAuthenticationPolicyInTx(tx, {
@@ -84,6 +115,7 @@ export async function readTeamIdentityCurrentnessInputsInTx(
                 : "available";
         },
         workosPlatformAvailable: resolveWorkosPlatformRuntimeMetadata(input.env).available,
+        teamsUsingHomeMethods,
     };
 }
 
@@ -105,7 +137,9 @@ export async function resolveTeamIdentityConnectionCurrentnessInTx(
         inputs?: TeamIdentityCurrentnessInputs;
     }>,
 ): Promise<Readonly<{ currentness: TeamIdentityConnectionCurrentness; runtimeFingerprint: string | null }>> {
-    const shared = input.inputs ?? await readTeamIdentityCurrentnessInputsInTx(tx, input);
+    const shared = input.inputs ?? await readTeamIdentityCurrentnessInputsInTx(tx, {
+        ...input, homeProviderInstanceIds: [input.connection.providerInstanceId],
+    });
     const runtime = await resolveOAuthRuntimeByIdInTx(
         tx,
         input.env,
@@ -119,6 +153,9 @@ export async function resolveTeamIdentityConnectionCurrentnessInTx(
             providerAllowedByHome: resolveIdentityConnectionProviderKindPolicy(shared.home, identityConnectionOwner(input.teamId), input.connection.providerKind) === "allowed",
             policyStatus: shared.policyStatusFor(input.connection.id),
             workosPlatformAvailable: shared.workosPlatformAvailable,
+            ...(input.teamId === null ? {
+                teamsUsingIt: shared.teamsUsingHomeMethods.get(normalizeAuthMethodId(input.connection.providerInstanceId)) ?? [],
+            } : {}),
         },
         runtimeFingerprint: runtime?.reference.runtimeFingerprint ?? null,
     };
@@ -201,7 +238,7 @@ function projectTeamIdentityConnectionScope(
     connection: TeamIdentityConnectionView,
     current: TeamIdentityConnectionCurrentness,
 ): Readonly<{ teamId: string; allowedActions: TeamIdentityConnectionUserActionIdV1[] }>
-    | Readonly<{ teamId: null; allowedActions: HomeIdentityConnectionUserActionIdV1[] }> {
+    | Readonly<{ teamId: null; allowedActions: HomeIdentityConnectionUserActionIdV1[]; teamsUsingIt?: HomeIdentityConnectionV1["teamsUsingIt"] }> {
     const actions: TeamIdentityConnectionUserActionIdV1[] = ["teams.identity.connections.remove"];
     if (connection.providerKind === "oidc") {
         actions.unshift("teams.identity.connections.settings.update");
@@ -240,5 +277,8 @@ function projectTeamIdentityConnectionScope(
         "teams.identity.workos.reconcile": "home.identity.workos.reconcile",
         "teams.identity.workos.connection.set": "home.identity.workos.connection.set",
     } as const satisfies Record<TeamIdentityConnectionUserActionIdV1, IdentityConnectionUserActionIdV1>;
-    return { teamId: null, allowedActions: [...new Set(actions.map((action) => homeActions[action]))] };
+    return {
+        teamId: null, allowedActions: [...new Set(actions.map((action) => homeActions[action]))],
+        ...(current.teamsUsingIt !== undefined ? { teamsUsingIt: current.teamsUsingIt } : {}),
+    };
 }

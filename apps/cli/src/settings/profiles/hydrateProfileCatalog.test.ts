@@ -12,7 +12,7 @@ import { readAccountLaunchProfiles } from './readProfilesFromAccountSettings';
 import { resolveCanonicalSpawnProfile } from './validateSpawnProfile';
 import { resolveSpawnLaunchProfileDefaults } from '@/daemon/spawn/resolveSpawnLaunchProfileDefaults';
 import type { SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import * as persistence from '@/persistence';
 import { refreshDemandedActiveProfileCatalog } from './hydrateProfileCatalog';
@@ -324,7 +324,7 @@ it.each(['applied', 'conflict'] as const)('cleans transferred source and retaine
       expect(request).toMatchObject({ expectedSettingsVersion: 8, expectedProfileTransferRevision: 2,
         expectedContent: historyContent, operation: { kind: 'normalize', transferredProfileIds: ['retained'],
           removedRoots: ['profiles', 'secretBindingsByProfileId'], content: { t: 'plain', v: { futurePreference: { preserve: true } } } } });
-      if (request.operation.kind !== 'normalize' || request.operation.content.t !== 'plain') {
+      if (request.operation.kind !== 'normalize' || request.operation.content?.t !== 'plain') {
         throw new Error('Expected actual Plain retained-history normalization');
       }
       if (historyResult === 'applied') historyContent = request.operation.content;

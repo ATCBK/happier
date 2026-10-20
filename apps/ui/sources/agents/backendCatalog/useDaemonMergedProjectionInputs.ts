@@ -152,6 +152,24 @@ export function useDaemonMergedProjectionInputs(params: Readonly<{
     const stateAccountLifetimeRef = React.useRef<ActiveServerAccountScopeLifetime | null>(accountLifetime);
 
     React.useEffect(() => {
+        if (!hasProjectionScope || !accountLifetime) return;
+        // App-shell and detail readers publish through this same cache. A
+        // mounted reader must observe their answers even when it owns no RPC.
+        return subscribeDaemonMergedProjectionSummary({ machineId, serverId }, () => {
+            const entry = readReusableDaemonMergedProjectionCacheEntry({
+                machineId, serverId, accountLifetime, staleMs,
+            });
+            if (!entry) return;
+            stateAccountLifetimeRef.current = accountLifetime;
+            setState((previous) => entry.kind === 'ready'
+                ? previous.phase === 'ready' && previous.inputs === entry.inputs
+                    ? previous : { phase: 'ready', inputs: entry.inputs }
+                : previous.phase === 'unsupported'
+                    ? previous : { phase: 'unsupported', inputs: null });
+        });
+    }, [accountLifetime, hasProjectionScope, machineId, serverId, staleMs]);
+
+    React.useEffect(() => {
         const forceReload = refreshKeyRef.current !== params.refreshKey
             || projectionRevisionRef.current !== projectionRevision
             || localeRef.current !== locale;
@@ -243,12 +261,14 @@ export function useDaemonMergedProjectionInputs(params: Readonly<{
         }
 
         let alive = true;
+        const abort = new AbortController();
         void (async () => {
             try {
                 const entry = await loadDaemonMergedProjectionCacheEntry({
                     machineId,
                     serverId: serverId || null,
                     ...(accountLifetime ? { accountLifetime } : {}),
+                    signal: abort.signal,
                 });
                 if (!alive || !entry) return;
                 stateAccountLifetimeRef.current = accountLifetime;
@@ -275,6 +295,7 @@ export function useDaemonMergedProjectionInputs(params: Readonly<{
 
         return () => {
             alive = false;
+            abort.abort();
         };
     }, [
         accountLifetime,

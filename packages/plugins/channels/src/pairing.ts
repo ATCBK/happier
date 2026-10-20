@@ -6,13 +6,11 @@ import {
   type ConversationResolvedEndpointV1,
 } from '@happier-dev/channels-protocol/v1';
 import {
-  arePluginMachineMaterializationRefsEqual,
   isPluginError,
   PluginError,
-  type PluginMachineMaterializationRefV1,
 } from '@happier-dev/plugin-sdk';
 import { pluginJsonValuesEqual } from '@happier-dev/plugin-sdk/protocol';
-import type { PluginActionResultById } from '@happier-dev/plugin-sdk/actions';
+import { arePluginMachineExecutionRoutingsEqual, type PluginActionResultById, type PluginMachineExecutionRoutingV1 } from '@happier-dev/plugin-sdk/actions';
 
 import type { ConversationCommandClassification } from './commands.js';
 import { renderConversationPairingDeepLink } from './pairingLink.js';
@@ -30,7 +28,7 @@ type PairingIdKind = 'challenge' | 'proposal' | 'binding';
 
 /**
  * Whether a repeated create matches the frozen content of the challenge its
- * request key created: revision, materialization, destination label, selected
+ * request key created: revision, execution origin, destination label, selected
  * endpoint, target, and the deep link rendered for this exact challenge
  * token. Callers reach this comparison only after the request keys matched.
  */
@@ -38,7 +36,7 @@ function isSameChallengeRequest(
   challenge: Challenge,
   input: Readonly<{
     expectedConnectionRevision: number;
-    materialization: PluginMachineMaterializationRefV1;
+    executionOrigin: PluginMachineExecutionRoutingV1;
     destinationLabel: string;
     endpoint: ConversationResolvedEndpointV1;
     target: ConversationBindingTargetV1;
@@ -46,7 +44,7 @@ function isSameChallengeRequest(
   requestedDeepLinkUrl: string | null,
 ): boolean {
   return challenge.expectedConnectionRevision === input.expectedConnectionRevision
-    && arePluginMachineMaterializationRefsEqual(challenge.materialization, input.materialization)
+    && arePluginMachineExecutionRoutingsEqual(challenge.executionOrigin, input.executionOrigin)
     && challenge.destinationLabel === input.destinationLabel
     && areConversationEndpointIdentitiesEqual(challenge.endpoint, input.endpoint)
     && challenge.endpoint.label === input.endpoint.label
@@ -64,7 +62,7 @@ export type ConversationAutomationTargetNotVerifiedResult = Extract<
 export type ConversationPairingBindingWriteInput = Readonly<{
   bindingId: string;
   connectionId: string;
-  materialization: PluginMachineMaterializationRefV1;
+  executionOrigin: PluginMachineExecutionRoutingV1;
   endpoint: ConversationResolvedEndpointV1;
   principalId: string;
   target: ConversationBindingTargetV1;
@@ -92,7 +90,7 @@ type Challenge = Readonly<{
   expectedConnectionRevision: number;
   /** The client-generated opaque create-request key this challenge answers. */
   pairingRequestId: string;
-  materialization: PluginMachineMaterializationRefV1;
+  executionOrigin: PluginMachineExecutionRoutingV1;
   destinationLabel: string;
   expiresAt: number;
   /**
@@ -112,7 +110,7 @@ type Proposal = Readonly<{
   proposalId: string;
   bindingId: string;
   connectionId: string;
-  materialization: PluginMachineMaterializationRefV1;
+  executionOrigin: PluginMachineExecutionRoutingV1;
   /** The owner-selected destination frozen by the challenge. */
   endpoint: ConversationResolvedEndpointV1;
   /** The private conversation the `/pair` proof actually arrived on. */
@@ -144,9 +142,27 @@ type ConversationPreBindingPairingReservation =
     challengeId: string;
     challengeToken: string;
     connectionId: string;
-    materialization: PluginMachineMaterializationRefV1;
+    executionOrigin: PluginMachineExecutionRoutingV1;
     endpoint: ConversationResolvedEndpointV1;
     principalId: string;
+  }>;
+
+type ConversationPreBindingPairingPreparation =
+  | ConversationPreBindingPairingReservation
+  | Readonly<{
+    kind: 'silent';
+    ownerReason: 'ineligibleCaller' | 'notPairingCommand';
+    attemptsRemaining?: undefined;
+  }>
+  | Readonly<{
+    kind: 'silent';
+    ownerReason: 'attemptLimitReached' | 'attemptCapacityReached';
+    attemptsRemaining: 0;
+  }>
+  | Readonly<{
+    kind: 'silent';
+    ownerReason: 'challengeConsumed' | 'tokenMismatch';
+    attemptsRemaining: number;
   }>;
 
 export type ConversationPairingFinalizeResult =
@@ -355,7 +371,7 @@ export function createConversationPairingManager(dependencies: Readonly<{
       connectionId: string;
       expectedConnectionRevision: number;
       pairingRequestId: string;
-      materialization: PluginMachineMaterializationRefV1;
+      executionOrigin: PluginMachineExecutionRoutingV1;
       destinationLabel: string;
       pairingDeepLinkTemplate?: string;
       endpoint: ConversationResolvedEndpointV1;
@@ -412,7 +428,7 @@ export function createConversationPairingManager(dependencies: Readonly<{
         connectionId: input.connectionId,
         expectedConnectionRevision: input.expectedConnectionRevision,
         pairingRequestId: input.pairingRequestId,
-        materialization: input.materialization,
+        executionOrigin: input.executionOrigin,
         destinationLabel: input.destinationLabel,
         expiresAt: now + CONVERSATION_PAIRING_EXPIRY_MS,
         endpoint: input.endpoint,
@@ -473,7 +489,7 @@ export function createConversationPairingManager(dependencies: Readonly<{
     preparePreBindingMessage(input: Readonly<{
       censusId: string;
       connectionId: string;
-      materialization: PluginMachineMaterializationRefV1;
+      executionOrigin: PluginMachineExecutionRoutingV1;
       endpoint: ConversationResolvedEndpointV1;
       actor: Readonly<{
         principalId: string | null;
@@ -482,7 +498,7 @@ export function createConversationPairingManager(dependencies: Readonly<{
       }>;
       contentProvenance: 'original' | 'forwarded' | 'viaBot';
       command: ConversationCommandClassification;
-    }>) {
+    }>): ConversationPreBindingPairingPreparation {
       if (input.endpoint.audience !== 'direct'
         || input.actor.kind !== 'human'
         || input.actor.principalId === null
@@ -529,7 +545,7 @@ export function createConversationPairingManager(dependencies: Readonly<{
       const challenge = challengeId === undefined ? undefined : challengesById.get(challengeId);
       if (challenge === undefined
         || challenge.connectionId !== input.connectionId
-        || !arePluginMachineMaterializationRefsEqual(challenge.materialization, input.materialization)) {
+        || !arePluginMachineExecutionRoutingsEqual(challenge.executionOrigin, input.executionOrigin)) {
         const ownerReason = consumedTokens.has(input.command.token) ? 'challengeConsumed' : 'tokenMismatch';
         if (failureState === undefined) {
           // No live challenge on this connection: nothing is matchable here,
@@ -575,7 +591,7 @@ export function createConversationPairingManager(dependencies: Readonly<{
         challengeId: challenge.challengeId,
         challengeToken: challenge.token,
         connectionId: challenge.connectionId,
-        materialization: challenge.materialization,
+        executionOrigin: challenge.executionOrigin,
         endpoint: input.endpoint,
         principalId: input.actor.principalId,
       } as const satisfies ConversationPreBindingPairingReservation;
@@ -602,7 +618,7 @@ export function createConversationPairingManager(dependencies: Readonly<{
         challenge === undefined
         || challenge.token !== reservation.challengeToken
         || challenge.connectionId !== reservation.connectionId
-        || !arePluginMachineMaterializationRefsEqual(challenge.materialization, reservation.materialization)
+        || !arePluginMachineExecutionRoutingsEqual(challenge.executionOrigin, reservation.executionOrigin)
       ) {
         return { kind: 'silent', ownerReason: 'reservationUnavailable' } as const;
       }
@@ -622,7 +638,7 @@ export function createConversationPairingManager(dependencies: Readonly<{
         proposalId,
         bindingId: dependencies.createId('binding'),
         connectionId: challenge.connectionId,
-        materialization: challenge.materialization,
+        executionOrigin: challenge.executionOrigin,
         endpoint: challenge.endpoint,
         proofEndpoint: reservation.endpoint,
         principalId: reservation.principalId,
@@ -744,7 +760,7 @@ export function createConversationPairingManager(dependencies: Readonly<{
           const result = await writeBinding({
             bindingId: proposal.bindingId,
             connectionId: proposal.connectionId,
-            materialization: proposal.materialization,
+            executionOrigin: proposal.executionOrigin,
             endpoint: proposal.endpoint,
             principalId: proposal.principalId,
             target: proposal.target,

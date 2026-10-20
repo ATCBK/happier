@@ -7,15 +7,15 @@ describe('ExecutionRunHostBridge Session Run prompt context', () => {
     const context = buildExecutionRunSessionPromptContext({
       sessionId: 'session-1',
       launchOrigin: {
-        kind: 'session_discussion',
-        sessionId: 'session-1',
+        kind: 'discussion',
+        serverId: 'server-1',
         discussionId: 'discussion-1',
         messageIds: ['message-1'],
         draftCorrelationId: 'draft-1',
       },
       supportedReadActions: [
         'session.transcript.get',
-        'session.discussion.read',
+        'discussion.read',
       ],
     });
 
@@ -23,13 +23,14 @@ describe('ExecutionRunHostBridge Session Run prompt context', () => {
       kind: 'happier_session_run',
       sessionId: 'session-1',
       origin: {
-        kind: 'session_discussion',
+        kind: 'discussion',
+        serverId: 'server-1',
         discussionId: 'discussion-1',
         messageIds: ['message-1'],
       },
       supportedReadActions: [
         'session.transcript.get',
-        'session.discussion.read',
+        'discussion.read',
       ],
     });
     expect(context).not.toHaveProperty('authority');

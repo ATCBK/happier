@@ -35,5 +35,7 @@ export function buildSessionListQueryKey(serverIdRaw: string, query: SessionList
         sortedIdentities(query.audiences.map(audienceIdentity)),
         [...query.tagIds].sort(),
         query.includeAttention === true,
+        ...(query.coordinator === undefined ? [] : [{ coordinator: query.coordinator }]),
+        ...(query.underSessionId === undefined ? [] : [query.underSessionId]),
     ]);
 }

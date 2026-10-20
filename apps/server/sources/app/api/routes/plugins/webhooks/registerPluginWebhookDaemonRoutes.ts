@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { PluginWebhookClaimRequestV1Schema, PluginWebhookClaimResultV1Schema, PluginWebhookCompleteRequestV1Schema, PluginWebhookFailRequestV1Schema, PluginWebhookRenewRequestV1Schema, PluginWebhookRenewResultV1Schema, PluginWebhookSettleResultV1Schema, type PluginWebhookClaimRequestV1, type PluginWebhookClaimResultV1 } from '@happier-dev/protocol/plugins/webhooks/deliveryV1';
 import { PluginMachineMaterializationRefV1Schema } from '@happier-dev/protocol/plugins/availability/materializationRefV1';
@@ -19,9 +19,9 @@ import {
 } from "@/app/plugins/webhooks/claimStore";
 import type { Fastify } from "../../../types";
 
-const DeliveryParamsSchema = z.object({
-    deliveryId: z.string().regex(/^[A-Za-z0-9._:-]{1,128}$/u),
-}).strict();
+const DeliveryParamsSchema = z.strictObject({
+    deliveryId: z.string().check(z.regex(/^[A-Za-z0-9._:-]{1,128}$/u)),
+});
 
 const CHECK_CORRESPONDENCE_PATH = PluginWebhookPluginSurfaceActionHttpPathsV1[
     "plugin.webhook.endpoint.checkCorrespondence"
@@ -29,15 +29,15 @@ const CHECK_CORRESPONDENCE_PATH = PluginWebhookPluginSurfaceActionHttpPathsV1[
 const CONVERGE_TARGET_PATH = PluginWebhookPluginSurfaceActionHttpPathsV1[
     "plugin.webhook.endpoint.convergeTarget"
 ];
-const EmptyQuerySchema = z.object({}).strict();
-const PluginWebhookCheckCorrespondenceRequestSchema = z.object({
+const EmptyQuerySchema = z.strictObject({});
+const PluginWebhookCheckCorrespondenceRequestSchema = z.strictObject({
     caller: PluginMachineMaterializationRefV1Schema,
     input: PluginWebhookEndpointCheckCorrespondenceInputV1Schema,
-}).strict();
-const PluginWebhookConvergeTargetRequestSchema = z.object({
+});
+const PluginWebhookConvergeTargetRequestSchema = z.strictObject({
     caller: PluginMachineMaterializationRefV1Schema,
     input: PluginWebhookEndpointConvergeTargetInputV1Schema,
-}).strict();
+});
 
 type AuthenticatedPluginCallerV1 = Readonly<{ pluginId: string }>;
 type AuthenticatePluginCallerV1 = (params: Readonly<{

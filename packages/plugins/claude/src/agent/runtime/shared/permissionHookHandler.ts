@@ -98,9 +98,9 @@ function buildPermissionResponse(
 
 export function createClaudePermissionHookHandler(
   ctx: ClaudeToolExecutionContext,
-): (data: PermissionHookData) => Promise<PermissionHookResponse> {
+): (data: PermissionHookData, options?: Readonly<{ signal?: AbortSignal }>) => Promise<PermissionHookResponse> {
   const permissionEngine = 'permissionEngine' in ctx ? ctx.permissionEngine : createClaudePermissionEngine(ctx);
-  return async (data) => {
+  return async (data, options) => {
     const toolName = readToolName(data);
     if (!toolName) return buildDefaultPermissionHookResponse(data);
 
@@ -135,6 +135,7 @@ export function createClaudePermissionHookHandler(
     const result = await permissionEngine.canCallTool(toolName, transformedInput, {
       requestId: toolUseId,
       toolUseId,
+      signal: options?.signal,
     });
     return buildPermissionResponse(data, result);
   };

@@ -74,6 +74,27 @@ const AGENTS: readonly ConnectedServicesIndexAgentUse[] = [
 ];
 
 describe('buildConnectedServicesIndexModel · who uses what', () => {
+    it('keeps service order independent of descriptor arrival, labels and account health', () => {
+        const project = (arrived: boolean) => buildConnectedServicesIndexModel({
+            transport: 'advertised-v4',
+            entries: arrived
+                ? [entry(CODEX, 'ChatGPT'), entry(CLAUDE, 'Claude')]
+                : [entry(CLAUDE, 'Loading Claude'), entry(CODEX, 'Loading ChatGPT')],
+            qualifiedAccounts: [account(CLAUDE, 'work'), {
+                ...account(CODEX, 'me'), status: arrived ? 'needs_reauth' : 'connected',
+            }],
+            qualifiedGroups: [], legacyServices: [], defaultAccountByServiceKey: {},
+            resolveLabel: candidate => String(candidate?.projectedTitle ?? 'Unknown'),
+            resolveFallbackEntry: () => null,
+            presentDiagnostics: () => ({ primary: null, supportDetails: null }),
+            loadingLabel: 'Loading',
+        });
+        const keys = (model: ReturnType<typeof project>) => model.sheets.map(sheet => sheet.serviceKey);
+        expect(keys(project(false))).toEqual([CLAUDE, CODEX].map(service => `${service.pluginId}/${service.localId}`));
+        expect(keys(project(true))).toEqual(keys(project(false)));
+        expect(project(true).sheets.find(sheet => sheet.service.pluginId === CODEX.pluginId)?.attentionAccountId).toBe('me');
+    });
+
     it('names the agents that sign in with each service and splits agent accounts from code and tools', () => {
         const model = build(AGENTS);
         const claude = model.sheets.find((sheet) => sheet.service.localId === 'anthropic')!;

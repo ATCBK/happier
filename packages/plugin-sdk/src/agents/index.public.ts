@@ -32,4 +32,5 @@ export type { PluginAgentSessionCapabilitiesV2 } from '../agents.js';
 export type { PluginCustomAgentDeclaration } from '../definePlugin.js';
 export type { PluginHostOwnedAgentDeclaration } from '../definePlugin.js';
 export { buildAgentTargetKeyV2 } from '../agents.js';
+export { resolveModelDisplayName } from '../agents.js';
 export { projectAgentCapabilitiesV2FromDefinition } from '../agents.js';

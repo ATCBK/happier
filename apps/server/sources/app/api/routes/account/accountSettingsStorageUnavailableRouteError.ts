@@ -1,10 +1,10 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { PlainAccountSettingsStorageUnavailableError } from "@/app/encryption/accountSettingsStorage";
 
-export const AccountSettingsStorageUnavailableResponseSchema = z.object({
+export const AccountSettingsStorageUnavailableResponseSchema = z.strictObject({
     error: z.literal("account_settings_storage_unavailable"),
-}).strict();
+});
 
 type AccountSettingsStorageUnavailableRouteError = Readonly<{
     statusCode: 503;

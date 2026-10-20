@@ -5,20 +5,23 @@ import { inTx } from '@/storage/inTx';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
 import { resolveSessionFollowFactsInTx } from '@/app/session/personal/followFacts';
 import { createSessionListScopeWhere } from '@/app/session/personal/queries';
-import { loadSessionDiscussionAttentionForAccounts } from '@/app/session/discussions/attentionFacts';
-import { postSessionDiscussionMessage } from '@/app/session/discussions/mutations';
 import {
-    applySessionAutoFollowForRelationshipChangeInTx,
     setSessionAutoFollowPreferences,
+    setOtherAccountFollow,
     getAccountSessionFollow as getAccountSessionFollowWithAuthentication,
     removeAccountSessionFollow as removeAccountSessionFollowWithAuthentication,
     setAccountSessionFollow as setAccountSessionFollowWithAuthentication,
     replaceAccountSessionVoiceInclusions as replaceAccountSessionVoiceInclusionsWithAuthentication,
     observePendingAccountVoiceFollowInTx,
     acknowledgeAccountVoiceFollowInTx,
+    consumeAccountSessionFollowOnceInTx,
+    acceptAccountSessionFollowOnceDelivery,
     removeAccountSessionFollowsOnAccessLossInTx,
 } from './accountFollowService';
-import { VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG } from '@happier-dev/protocol';
+import { VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG, ARTIFACT_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
+import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { transitionSessionArchiveStateInTx } from '@/app/session/archive/transitionSessionArchiveStateInTx';
+import { changeDeliveryMute } from './sessionDeliveryMuteService';
 
 // The push provider is the external boundary; Follow, transactions, badge
 // candidacy, counting and coalescing execute through their real owners.
@@ -71,9 +74,13 @@ async function createDiscussion(params: Readonly<{
     messageSeq: number;
     archivedAt?: Date;
 }>) {
-    return await db.sessionDiscussion.create({
+    return await db.discussion.create({
         data: {
-            sessionId: params.sessionId,
+            ownerAccountId: params.creatorAccountId,
+            encryptionMode: "plain",
+            dataEncryptionKey: Uint8Array.from(decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER)),
+            anchorV1: { kind: "session", sessionId: params.sessionId },
+            anchorSessionId: params.sessionId,
             creationLocalId: randomUUID(),
             creationEqualityEvidenceV1: { kind: 'plainDigest', digest: randomUUID() },
             createdByAccountId: params.creatorAccountId,
@@ -103,6 +110,143 @@ describe('Account Follow service', () => {
     });
     afterAll(async () => { await harness?.close(); });
 
+    it('arms and cancels a one-shot without changing suppression, Voice or private read progress', async () => {
+        const { session, key } = await fixture();
+        await removeAccountSessionFollow(key);
+        await db.session.update({ where: { id: session.id }, data: { latestTurnId: 'turn-once', latestTurnStatus: 'in_progress' } });
+        const before = await db.accountSessionFollow.findUniqueOrThrow({ where: { accountId_sessionId: key } });
+        const armed = await setAccountSessionFollow({ ...key, preferences: { once: { kind: 'turn_finished', sourceTurnId: 'turn-once' } } });
+        expect(armed).toMatchObject({ ok: true, value: { follow: {
+            following: false, notificationLevel: 'none', includeInVoice: false,
+            once: { kind: 'turn_finished', sourceTurnId: 'turn-once' },
+        } } });
+        const after = await db.accountSessionFollow.findUniqueOrThrow({ where: { accountId_sessionId: key } });
+        expect(after.voiceDeliveredFrontier).toBe(before.voiceDeliveredFrontier);
+        expect(await db.accountSessionReadState.findUnique({ where: { accountId_sessionId: key } })).toBeNull();
+        expect(await setAccountSessionFollow({ ...key, preferences: { once: null } }))
+            .toMatchObject({ ok: true, value: { follow: { following: false, once: null } } });
+    });
+
+    it('consumes only an accepted matching occurrence and does not consume a re-armed choice on retry', async () => {
+        const { session, key } = await fixture();
+        await db.session.update({ where: { id: session.id }, data: { latestTurnId: 'turn-once', latestTurnStatus: 'in_progress' } });
+        await setAccountSessionFollow({ ...key, preferences: { once: { kind: 'turn_finished', sourceTurnId: 'turn-once' } } });
+        const armed = await db.accountSessionFollow.findUniqueOrThrow({ where: { accountId_sessionId: key } });
+        const consume = (event: 'ready' | 'failed' | 'cancelled', turnId: string, accepted: boolean) => inTx(tx => consumeAccountSessionFollowOnceInTx(tx, {
+            ...key, expectedOnce: armed.notifyOnce!, accepted,
+            occurrence: { event, turnId, agentStateVersion: 1 },
+        }));
+        expect(await consume('ready', 'next-turn', true)).toBe(false);
+        expect(await consume('failed', 'turn-once', false)).toBe(false);
+        expect(await consume('cancelled', 'turn-once', true)).toBe(true);
+        expect(await consume('cancelled', 'turn-once', true)).toBe(false);
+        await setAccountSessionFollow({ ...key, preferences: { once: { kind: 'first_needs_you' } } });
+        expect(await consume('ready', 'turn-once', true)).toBe(false);
+        expect((await getAccountSessionFollow(key))).toMatchObject({ ok: true, value: { follow: { once: { kind: 'first_needs_you' } } } });
+    });
+
+    it('does not consume candidate reads and accepts an Inbox effect exactly once', async () => {
+        const { listSessionPersonalEventRecipients } = await import('@/app/session/personal/eventEligibility');
+        const { session, key } = await fixture();
+        await removeAccountSessionFollow(key);
+        await db.session.update({ where: { id: session.id }, data: { latestTurnId: 'turn-once', latestTurnStatus: 'in_progress' } });
+        await setAccountSessionFollow({ ...key, preferences: { once: { kind: 'turn_finished', sourceTurnId: 'turn-once' } } });
+        await db.session.update({ where: { id: session.id }, data: { latestTurnStatus: 'completed' } });
+        await db.sessionTurn.create({ data: { sessionId: session.id, turnId: 'turn-once', status: 'completed', startedAt: 1, updatedAt: 2, terminalAt: 2 } });
+        const occurrence = { event: 'ready' as const, turnId: 'turn-once', agentStateVersion: 0, transcriptSeq: session.seq };
+        const candidates = await listSessionPersonalEventRecipients({ sessionId: session.id, event: 'ready', onceOccurrence: occurrence });
+        expect(candidates.find(row => row.accountId === key.accountId)).toMatchObject({ reason: 'follow_once' });
+        await listSessionPersonalEventRecipients({ sessionId: session.id, event: 'ready', onceOccurrence: occurrence });
+        expect((await getAccountSessionFollow(key))).toMatchObject({ ok: true, value: { follow: { once: { kind: 'turn_finished' } } } });
+        const once = candidates.find(row => row.accountId === key.accountId)?.once;
+        if (!once) throw new Error('Expected exact one-shot candidate');
+        // A later turn does not revoke the completed original source witness.
+        await db.session.update({ where: { id: session.id }, data: { latestTurnId: 'next-turn', latestTurnStatus: 'in_progress' } });
+        expect(await acceptAccountSessionFollowOnceDelivery({ ...key, ...once })).toBe(true);
+        expect(await acceptAccountSessionFollowOnceDelivery({ ...key, ...once })).toBe(false);
+        expect((await getAccountSessionFollow(key))).toMatchObject({ ok: true, value: { follow: {
+            following: false, once: null, onceDelivery: occurrence,
+        } } });
+        const { applyViewerReadCursorOperation } = await import('@/app/session/personal/readState');
+        expect(await applyViewerReadCursorOperation({ ...key, authentication: defaultAuthentication,
+            operation: { kind: 'mark-read' } })).toMatchObject({ ok: true });
+        const afterRead = await getAccountSessionFollow(key);
+        expect(afterRead.ok && afterRead.value.follow?.onceDelivery).toBeUndefined();
+        expect(afterRead).toMatchObject({ ok: true, value: { follow: { following: false } } });
+    });
+
+    it('keeps a first-request intent armed when a later revision cannot prove its exact current request', async () => {
+        const { session, key } = await fixture();
+        await db.sessionShare.updateMany({ where: { sessionId: session.id, sharedWithUserId: key.accountId }, data: { accessLevel: 'edit' } });
+        await setAccountSessionFollow({ ...key, preferences: { once: { kind: 'first_needs_you' } } });
+        const armed = await db.accountSessionFollow.findUniqueOrThrow({ where: { accountId_sessionId: key } });
+        if (!armed.notifyOnce) throw new Error('Expected armed one-shot');
+        const occurrence = { event: 'user_action_required' as const, requestId: 'original-request', agentStateVersion: session.agentStateVersion + 1 };
+        await db.session.update({ where: { id: session.id }, data: { agentStateVersion: occurrence.agentStateVersion + 1 } });
+        expect(await acceptAccountSessionFollowOnceDelivery({ ...key, expectedOnce: armed.notifyOnce, occurrence })).toBe(false);
+        expect((await getAccountSessionFollow(key))).toMatchObject({ ok: true, value: { follow: { once: { kind: 'first_needs_you' } } } });
+    });
+
+    it('accepts the exact original request transaction once before a later withdrawal can hide its source', async () => {
+        const { acceptSessionPersonalEventOnceInTx } = await import('@/app/session/personal/eventEligibility');
+        const { session, key } = await fixture();
+        await db.sessionShare.updateMany({ where: { sessionId: session.id, sharedWithUserId: key.accountId }, data: { accessLevel: 'edit' } });
+        await removeAccountSessionFollow(key);
+        await setAccountSessionFollow({ ...key, preferences: { once: { kind: 'first_needs_you' } } });
+        const occurrence = { event: 'user_action_required' as const, requestId: 'original-request', agentStateVersion: session.agentStateVersion + 1 };
+        const input = { sessionId: session.id, event: occurrence.event, onceOccurrence: occurrence };
+        const accepted = await inTx(async tx => {
+            await tx.session.update({ where: { id: session.id }, data: { agentStateVersion: occurrence.agentStateVersion, pendingUserActionRequestCount: 1 } });
+            return acceptSessionPersonalEventOnceInTx(tx, input);
+        });
+        expect(accepted).toContain(key.accountId);
+        await db.session.update({ where: { id: session.id }, data: { agentStateVersion: occurrence.agentStateVersion + 1, pendingUserActionRequestCount: 0 } });
+        expect(await inTx(tx => acceptSessionPersonalEventOnceInTx(tx, input))).toEqual([]);
+        expect((await getAccountSessionFollow(key))).toMatchObject({ ok: true, value: { follow: { following: false, once: null, onceDelivery: occurrence } } });
+    });
+
+    it('keeps a source-muted first-request one-shot armed instead of accepting personal delivery', async () => {
+        const { acceptSessionPersonalEventOnceInTx } = await import('@/app/session/personal/eventEligibility');
+        const { changeDeliveryMute } = await import('./sessionDeliveryMuteService');
+        const { session, key } = await fixture();
+        await db.sessionShare.updateMany({ where: { sessionId: session.id, sharedWithUserId: key.accountId }, data: { accessLevel: 'edit' } });
+        await setAccountSessionFollow({ ...key, preferences: { once: { kind: 'first_needs_you' } } });
+        await changeDeliveryMute({ accountId: key.accountId, receiver: { kind: 'account' },
+            scope: { kind: 'source', source: { kind: 'session', sessionId: session.id } },
+            operation: 'set', authentication: defaultAuthentication });
+        const occurrence = { event: 'user_action_required' as const, requestId: 'muted-request', agentStateVersion: session.agentStateVersion + 1 };
+        const accepted = await inTx(async tx => {
+            await tx.session.update({ where: { id: session.id }, data: { agentStateVersion: occurrence.agentStateVersion, pendingUserActionRequestCount: 1 } });
+            return acceptSessionPersonalEventOnceInTx(tx, { sessionId: session.id, event: occurrence.event, onceOccurrence: occurrence });
+        });
+        expect(accepted).not.toContain(key.accountId);
+        expect((await getAccountSessionFollow(key))).toMatchObject({ ok: true, value: { follow: { once: { kind: 'first_needs_you' } } } });
+    });
+
+    it('rechecks source mute before accepting a previously listed terminal one-shot', async () => {
+        const { listSessionPersonalEventRecipients } = await import('@/app/session/personal/eventEligibility');
+        const { changeDeliveryMute } = await import('./sessionDeliveryMuteService');
+        const { session, key } = await fixture();
+        await removeAccountSessionFollow(key);
+        await db.session.update({ where: { id: session.id }, data: { latestTurnId: 'muted-terminal', latestTurnStatus: 'in_progress' } });
+        await setAccountSessionFollow({ ...key, preferences: { once: { kind: 'turn_finished', sourceTurnId: 'muted-terminal' } } });
+        await db.sessionTurn.create({ data: { sessionId: session.id, turnId: 'muted-terminal', status: 'completed', startedAt: 1, updatedAt: 2, terminalAt: 2 } });
+        const occurrence = { event: 'ready' as const, turnId: 'muted-terminal', agentStateVersion: session.agentStateVersion };
+        const candidate = (await listSessionPersonalEventRecipients({ sessionId: session.id, event: 'ready', onceOccurrence: occurrence }))
+            .find(row => row.accountId === key.accountId);
+        if (!candidate?.once) throw new Error('Expected an unmuted one-shot candidate');
+        expect(await changeDeliveryMute({ accountId: key.accountId, receiver: { kind: 'account' },
+            scope: { kind: 'source', source: { kind: 'session', sessionId: session.id } },
+            operation: 'set', authentication: defaultAuthentication })).toMatchObject({ ok: true });
+        expect(await acceptAccountSessionFollowOnceDelivery({ ...key, ...candidate.once })).toBe(false);
+        expect((await getAccountSessionFollow(key))).toMatchObject({ ok: true, value: { follow: { once: { kind: 'turn_finished' } } } });
+        expect(await changeDeliveryMute({ accountId: key.accountId, receiver: { kind: 'account' },
+            scope: { kind: 'source', source: { kind: 'session', sessionId: session.id } },
+            operation: 'remove', authentication: defaultAuthentication })).toMatchObject({ ok: true });
+        expect(await acceptAccountSessionFollowOnceDelivery({ ...key, ...candidate.once })).toBe(true);
+        expect(await acceptAccountSessionFollowOnceDelivery({ ...key, ...candidate.once })).toBe(false);
+    });
+
     it('atomically replaces durable Voice inclusions while preserving Follow preferences', async () => {
         const { owner, viewer, session, key } = await fixture();
         const second = await db.session.create({ data: {
@@ -131,6 +275,22 @@ describe('Account Follow service', () => {
         expect(await db.accountSessionFollow.findMany({ where: { accountId: viewer.id, includeInVoice: true } })).toEqual([]);
     });
 
+    it('replaces Session Voice inclusions without rewriting a generic source policy', async () => {
+        const { viewer, session, key } = await fixture();
+        const discussion = await createDiscussion({ sessionId: session.id, creatorAccountId: viewer.id, messageSeq: 1 });
+        const source = { kind: 'discussion' as const, discussionId: discussion.id };
+        const policy = { preset: 'important' as const, voice: true };
+        expect(await setOtherAccountFollow({ accountId: viewer.id, source, policy, authentication: defaultAuthentication }))
+            .toMatchObject({ ok: true });
+        expect(await replaceAccountSessionVoiceInclusions({ accountId: viewer.id, sessionIds: [key.sessionId] }))
+            .toMatchObject({ ok: true, value: { sessionIds: [key.sessionId] } });
+        expect(await replaceAccountSessionVoiceInclusions({ accountId: viewer.id, sessionIds: [] }))
+            .toMatchObject({ ok: true, value: { sessionIds: [] } });
+        expect(await db.accountSessionFollow.findUnique({ where: { accountId_sourceKey: {
+            accountId: viewer.id, sourceKey: `discussion:${discussion.id}`,
+        } } })).toMatchObject({ following: true, followPolicy: JSON.stringify(policy) });
+    });
+
     it('validates the complete replacement before mutating durable Voice inclusions', async () => {
         const { viewer, key } = await fixture();
         await setAccountSessionFollow({ ...key, preferences: { notificationLevel: 'important', includeInVoice: true } });
@@ -138,6 +298,34 @@ describe('Account Follow service', () => {
             .resolves.toEqual({ ok: false, error: 'session_not_found' });
         expect(await db.accountSessionFollow.findUnique({ where: { accountId_sessionId: key } }))
             .toMatchObject({ following: true, notificationLevel: 'important', includeInVoice: true });
+    });
+
+    it('replaces modern Voice inclusions through their event policy without changing event selection', async () => {
+        const { key } = await fixture();
+        await setAccountSessionFollow({ ...key, preferences: { policy: { preset: 'custom', events: {
+            finished: { delivery: 'quiet', voice: true }, message: { delivery: 'off', voice: true },
+        } } } });
+        await expect(replaceAccountSessionVoiceInclusions({ accountId: key.accountId, sessionIds: [] }))
+            .resolves.toMatchObject({ ok: true, value: { changed: true, sessionIds: [] } });
+        expect(await getAccountSessionFollow(key)).toMatchObject({ ok: true, value: { follow: { includeInVoice: false,
+            policy: { preset: 'custom', events: { finished: { delivery: 'quiet', voice: false }, message: { delivery: 'off', voice: false } } },
+        } } });
+        await expect(replaceAccountSessionVoiceInclusions({ accountId: key.accountId, sessionIds: [key.sessionId] }))
+            .resolves.toMatchObject({ ok: true, value: { changed: true, sessionIds: [key.sessionId] } });
+        expect(await getAccountSessionFollow(key)).toMatchObject({ ok: true, value: { follow: { includeInVoice: true,
+            policy: { preset: 'custom', events: { finished: { delivery: 'quiet', voice: true }, message: { delivery: 'off', voice: true } } },
+        } } });
+        expect(await db.accountSessionFollow.findUniqueOrThrow({ where: { accountId_sessionId: key } })).toMatchObject({ includeInVoice: false });
+        await setAccountSessionFollow({ ...key, preferences: { policy: { preset: 'custom', events: {
+            finished: { delivery: 'off', voice: true },
+        } } } });
+        expect(await replaceAccountSessionVoiceInclusions({ accountId: key.accountId, sessionIds: [key.sessionId] }))
+            .toMatchObject({ ok: true, value: { sessionIds: [] } });
+        expect(await getAccountSessionFollow(key)).toMatchObject({ ok: true, value: { follow: { includeInVoice: false,
+            policy: { preset: 'custom', events: { finished: { delivery: 'off', voice: true } } },
+        } } });
+        expect(await replaceAccountSessionVoiceInclusions({ accountId: key.accountId, sessionIds: [key.sessionId] }))
+            .toMatchObject({ ok: true, value: { changed: false, sessionIds: [] } });
     });
 
     it('refreshes the affected Account badge after committed Follow choices and stays quiet on no-op', async () => {
@@ -166,37 +354,8 @@ describe('Account Follow service', () => {
         expect(sendPushNotificationsAsync.mock.calls.flatMap(([messages]) => messages)).toEqual([]);
     });
 
-    it('refreshes badges for committed automatic Follow and access loss, but never rollback', async () => {
-        const { key } = await fixture();
-        const token = `ExponentPushToken[${key.accountId}]`;
-        await db.accountPushToken.create({ data: { accountId: key.accountId, token } });
-        await db.session.update({ where: { id: key.sessionId }, data: { responsibleAccountId: key.accountId, pendingUserActionRequestCount: 1 } });
-        const automaticallyFollow = async (tx: Parameters<typeof applySessionAutoFollowForRelationshipChangeInTx>[0]) =>
-            applySessionAutoFollowForRelationshipChangeInTx(tx, {
-                sessionId: key.sessionId, accountIds: [key.accountId], relationship: 'assigned',
-            });
-        sendPushNotificationsAsync.mockClear();
-        await expect(inTx(async tx => {
-            await automaticallyFollow(tx);
-            throw new Error('abort Follow transaction');
-        })).rejects.toThrow('abort Follow transaction');
-        await new Promise(resolve => setTimeout(resolve, 100));
-        expect(sendPushNotificationsAsync.mock.calls.flatMap(([messages]) => messages)).toEqual([]);
-        expect(await db.accountSessionFollow.findUnique({ where: { accountId_sessionId: key } })).toBeNull();
 
-        await inTx(automaticallyFollow);
-        await vi.waitFor(() => expect(sendPushNotificationsAsync.mock.calls.flatMap(([messages]) => messages))
-            .toEqual([{ to: token, badge: 1, data: { type: 'badge_refresh' } }]));
-        sendPushNotificationsAsync.mockClear();
-        await inTx(async tx => {
-            await tx.sessionShare.deleteMany({ where: { sessionId: key.sessionId } });
-            await removeAccountSessionFollowsOnAccessLossInTx(tx, { sessionId: key.sessionId, accountIds: [key.accountId] });
-        });
-        await vi.waitFor(() => expect(sendPushNotificationsAsync.mock.calls.flatMap(([messages]) => messages))
-            .toEqual([{ to: token, badge: 0, data: { type: 'badge_refresh' } }]));
-    });
-
-    it('removes final-access Follows for many Accounts with one set invalidation', async () => {
+    it('removes final-access Follows and invalidates the exact affected Account set', async () => {
         const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
         const viewers = await Promise.all([0, 1, 2].map(() => db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } })));
         const viewerIds = viewers.map(viewer => viewer.id);
@@ -218,26 +377,9 @@ describe('Account Follow service', () => {
         // Revoke every direct share so the next call observes final access loss.
         await db.sessionShare.deleteMany({ where: { sessionId: session.id } });
 
-        const counts = { accountUpdate: 0, accountUpdateMany: 0, accountFindMany: 0, accountChangeUpsert: 0, accountChangeUpdateMany: 0, accountChangeCreateMany: 0, accountChangeDeleteMany: 0 };
-        const removed = await inTx(async tx => {
-            const account = tx.account as unknown as Record<string, unknown>;
-            const accountChange = tx.accountChange as unknown as Record<string, unknown>;
-            const wrap = (target: Record<string, unknown>, method: string, counter: keyof typeof counts) => {
-                const original = ((target[method] as (...args: any[]) => Promise<unknown>).bind(target));
-                (target[method] as unknown) = async (...args: any[]) => {
-                    counts[counter] += 1;
-                    return original(...args);
-                };
-            };
-            wrap(account, 'update', 'accountUpdate');
-            wrap(account, 'updateMany', 'accountUpdateMany');
-            wrap(account, 'findMany', 'accountFindMany');
-            wrap(accountChange, 'upsert', 'accountChangeUpsert');
-            wrap(accountChange, 'updateMany', 'accountChangeUpdateMany');
-            wrap(accountChange, 'createMany', 'accountChangeCreateMany');
-            wrap(accountChange, 'deleteMany', 'accountChangeDeleteMany');
-            return await removeAccountSessionFollowsOnAccessLossInTx(tx, { sessionId: session.id, accountIds: viewerIds });
-        });
+        const removed = await inTx(tx => removeAccountSessionFollowsOnAccessLossInTx(tx, {
+            sessionId: session.id, accountIds: viewerIds,
+        }));
         expect(removed).toBe(viewerIds.length);
         // All active Follows disappear.
         expect(await db.accountSessionFollow.findMany({ where: { sessionId: session.id } })).toEqual([]);
@@ -246,14 +388,6 @@ describe('Account Follow service', () => {
             await expect(db.accountChange.findFirst({ where: { accountId: viewerId, kind: 'account', entityId: 'session-follows' }, select: { hint: true } }))
                 .resolves.toMatchObject({ hint: { sessionFollows: true, full: true } });
         }
-        // One set invalidation, not one statement per Account.
-        expect(counts.accountUpdate).toBe(0);
-        expect(counts.accountChangeUpsert).toBe(0);
-        expect(counts.accountUpdateMany).toBe(1);
-        expect(counts.accountFindMany).toBe(1);
-        expect(counts.accountChangeDeleteMany).toBe(1);
-        expect(counts.accountChangeCreateMany).toBe(1);
-        expect(counts.accountChangeUpdateMany).toBe(1);
         // Badge refresh scheduling covers the exact full Account set through the real transport.
         await vi.waitFor(() => {
             const delivered = sendPushNotificationsAsync.mock.calls.flatMap(([messages]) => messages as Array<{ to: string }>);
@@ -268,7 +402,7 @@ describe('Account Follow service', () => {
     it('projects create, update, Unfollow, and refollow into the Following list predicate', async () => {
         const { key, session } = await fixture();
         const followingIds = async () => (await db.session.findMany({
-            where: createSessionListScopeWhere({ accountId: key.accountId, scope: 'following' }),
+            where: await createSessionListScopeWhere({ accountId: key.accountId, scope: 'following' }),
             select: { id: true },
         })).map((row) => row.id);
 
@@ -311,113 +445,8 @@ describe('Account Follow service', () => {
         expect(await db.accountSessionReadState.findUnique({ where: { accountId_sessionId: ownerKey } })).toMatchObject({ lastViewedSessionSeq: 3, unreadSince: new Date(3000) });
     });
 
-    it('atomically baselines every current discussion only on a genuine Follow entry', async () => {
-        const { owner, viewer, key, session } = await fixture();
-        const first = await createDiscussion({ sessionId: session.id, creatorAccountId: owner.id, messageSeq: 3 });
-        const second = await createDiscussion({ sessionId: session.id, creatorAccountId: owner.id, messageSeq: 7 });
-        const archived = await createDiscussion({
-            sessionId: session.id,
-            creatorAccountId: owner.id,
-            messageSeq: 11,
-            archivedAt: new Date(),
-        });
-        const preferences = { notificationLevel: 'important' as const, includeInVoice: false };
 
-        // Merely having read access (including browsing) must not materialize tracking state.
-        expect(await db.sessionDiscussionReadState.count({ where: { accountId: viewer.id } })).toBe(0);
 
-        await setAccountSessionFollow({ ...key, preferences });
-        expect(await db.sessionDiscussionReadState.findMany({
-            where: { accountId: viewer.id },
-            orderBy: { discussionId: 'asc' },
-            select: { discussionId: true, lastReadSeq: true },
-        })).toEqual([
-            { discussionId: first.id, lastReadSeq: 3 },
-            { discussionId: second.id, lastReadSeq: 7 },
-            { discussionId: archived.id, lastReadSeq: 11 },
-        ].sort((a, b) => a.discussionId.localeCompare(b.discussionId)));
-
-        // A preference refresh while already tracked cannot erase unread work.
-        await db.sessionDiscussion.update({ where: { id: first.id }, data: { messageSeq: 5 } });
-        await setAccountSessionFollow({
-            ...key,
-            preferences: { ...preferences, notificationLevel: 'all_messages' },
-        });
-        expect(await db.sessionDiscussionReadState.findUnique({
-            where: { discussionId_accountId: { discussionId: first.id, accountId: viewer.id } },
-        })).toMatchObject({ lastReadSeq: 3 });
-
-        // A real exit followed by a later entry gets a fresh quiet baseline.
-        await removeAccountSessionFollow(key);
-        await db.sessionDiscussion.update({ where: { id: first.id }, data: { messageSeq: 9 } });
-        await setAccountSessionFollow({ ...key, preferences });
-        expect(await db.sessionDiscussionReadState.findUnique({
-            where: { discussionId_accountId: { discussionId: first.id, accountId: viewer.id } },
-        })).toMatchObject({ lastReadSeq: 9 });
-    });
-
-    it('keeps repeated and concurrent Follow entry idempotent without duplicate discussion cursors', async () => {
-        const { owner, viewer, key, session } = await fixture();
-        const discussion = await createDiscussion({ sessionId: session.id, creatorAccountId: owner.id, messageSeq: 4 });
-        const preferences = { notificationLevel: 'important' as const, includeInVoice: false };
-
-        await Promise.all([
-            setAccountSessionFollow({ ...key, preferences }),
-            setAccountSessionFollow({ ...key, preferences }),
-        ]);
-
-        expect(await db.sessionDiscussionReadState.findMany({ where: {
-            discussionId: discussion.id,
-            accountId: viewer.id,
-        } })).toEqual([expect.objectContaining({ lastReadSeq: 4 })]);
-    });
-
-    it('serializes Follow entry with concurrent Discussion activity without losing the baseline', async () => {
-        const { owner, viewer, key, session } = await fixture();
-        const discussion = await createDiscussion({ sessionId: session.id, creatorAccountId: owner.id, messageSeq: 4 });
-        const preferences = { notificationLevel: 'important' as const, includeInVoice: false };
-
-        const [, concurrentPost] = await Promise.all([
-            setAccountSessionFollow({ ...key, preferences }),
-            postSessionDiscussionMessage({
-                authentication: defaultAuthentication,
-                actorAccountId: owner.id,
-                sessionId: session.id,
-                discussionId: discussion.id,
-                request: {
-                    localId: randomUUID(),
-                    content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'concurrent' }] } },
-                    mentionedAccountIds: [],
-                },
-            }),
-        ]);
-        expect(concurrentPost.ok).toBe(true);
-
-        const baseline = await db.sessionDiscussionReadState.findUniqueOrThrow({
-            where: { discussionId_accountId: { discussionId: discussion.id, accountId: viewer.id } },
-        });
-        // Either serial order is valid: entry sees the old or new ceiling, but
-        // it must never omit the Discussion or invent a future cursor.
-        expect([4, 5]).toContain(baseline.lastReadSeq);
-
-        const laterPost = await postSessionDiscussionMessage({
-            authentication: defaultAuthentication,
-            actorAccountId: owner.id,
-            sessionId: session.id,
-            discussionId: discussion.id,
-            request: {
-                localId: randomUUID(),
-                content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'later' }] } },
-                mentionedAccountIds: [],
-            },
-        });
-        expect(laterPost.ok).toBe(true);
-        const attention = await loadSessionDiscussionAttentionForAccounts({
-            accountIds: [viewer.id],
-            sessionIds: [session.id],
-        });
-        expect(attention.get(viewer.id)?.get(session.id)?.unreadConversationCount).toBe(1);
-    });
 
     it('preserves acknowledged Voice on true→true and resets only disable/re-enable', async () => {
         const { key } = await fixture();
@@ -430,6 +459,81 @@ describe('Account Follow service', () => {
         await setAccountSessionFollow({ ...key, preferences: { ...preferences, includeInVoice: false } });
         await setAccountSessionFollow({ ...key, preferences });
         expect(await db.accountSessionFollow.findUnique({ where: { accountId_sessionId: key } })).toMatchObject({ voiceDeliveredFrontier: null });
+    });
+
+    it('keeps legacy Voice ingress distinct from modern policy writes without dual-writing authority', async () => {
+        const { key } = await fixture();
+        for (const notificationLevel of ['important', 'none'] as const) {
+            await setAccountSessionFollow({ ...key, preferences: { policy: { preset: 'quiet' } } });
+            expect(await setAccountSessionFollow({ ...key, preferences: { notificationLevel, includeInVoice: true } }))
+                .toMatchObject({ ok: true, value: { follow: { includeInVoice: true }, voiceInitialSnapshotPending: true } });
+            expect(await db.accountSessionFollow.findUniqueOrThrow({ where: { accountId_sessionId: key } }))
+                .toMatchObject({ notificationLevel, includeInVoice: true, followPolicy: null });
+        }
+        expect(await setAccountSessionFollow({ ...key, preferences: { policy: { preset: 'important' }, includeInVoice: true } }))
+            .toMatchObject({ ok: true, value: { follow: { includeInVoice: false } } });
+        expect(await db.accountSessionFollow.findUniqueOrThrow({ where: { accountId_sessionId: key } }))
+            .toMatchObject({ includeInVoice: false, followPolicy: JSON.stringify({ preset: 'important' }) });
+    });
+
+    it('admits explicit policy Voice and rechecks policy withdrawal before accepted frontier mutation', async () => {
+        const { viewer, session, key } = await fixture();
+        const voiceSession = await db.session.create({ data: {
+            accountId: viewer.id, tag: VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG,
+            metadata: '{}', encryptionMode: 'plain',
+        } });
+        const runtimeAuthority = { executionRunId: 'voice-run-policy', occurrenceId: 'voice-occurrence-policy',
+            parentSessionId: voiceSession.id, intent: 'voice_agent' as const, runtimeState: 'active_turn' as const };
+        await setAccountSessionFollow({ ...key, preferences: { notificationLevel: 'important', includeInVoice: true } });
+        await setAccountSessionFollow({ ...key, preferences: { policy: { preset: 'custom', events: {
+            finished: { delivery: 'quiet', voice: true },
+        } } } });
+        const observe = () => inTx(tx => observePendingAccountVoiceFollowInTx(tx, {
+            accountId: viewer.id, voiceSessionId: voiceSession.id, authentication: defaultAuthentication, runtimeAuthority,
+        }));
+        const pending = await observe();
+        expect(pending).toEqual([expect.objectContaining({ sourceSessionId: session.id, expected: null })]);
+        expect(await getAccountSessionFollow(key)).toMatchObject({ ok: true, value: { voiceInitialSnapshotPending: true } });
+        const acceptance = { localInputId: 'accepted-policy-voice', userMessageSeq: 1 };
+        await db.sessionMessage.create({ data: {
+            sessionId: voiceSession.id, seq: 1, localId: acceptance.localInputId, messageRole: 'user',
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Voice turn' } } },
+            inputAdmissionReceipt: { v: 1, issuer: 'authenticatedAccount', actorAccountId: viewer.id, sessionRelationship: 'owner' },
+        } });
+        if (!pending?.[0]) throw new Error('Expected source admitted for Voice');
+        const acknowledge = (policy = pending[0]!.policy) => inTx(tx => acknowledgeAccountVoiceFollowInTx(tx, {
+            accountId: viewer.id, voiceSessionId: voiceSession.id, sourceSessionId: session.id,
+            expected: null, observed: pending[0]!.observed, consumed: pending[0]!.observed, policy,
+            acceptance, authentication: defaultAuthentication, runtimeAuthority,
+        }));
+        expect(pending[0]!.policy).toEqual({ preset: 'custom', events: { finished: { delivery: 'quiet', voice: true } } });
+        const mute = { accountId: viewer.id, receiver: { kind: 'account' as const },
+            scope: { kind: 'sender_session' as const, sessionId: session.id }, authentication: defaultAuthentication };
+        expect(await changeDeliveryMute({ ...mute, operation: 'set' })).toMatchObject({ ok: true });
+        expect(await observe()).toEqual([]);
+        expect(await acknowledge()).toEqual({ ok: false, rejection: 'not_followed' });
+        expect(await getAccountSessionFollow(key)).toMatchObject({ ok: true, value: { follow: { following: true } } });
+        expect(await changeDeliveryMute({ ...mute, operation: 'remove' })).toMatchObject({ ok: true });
+        expect(await observe()).toEqual(pending);
+        await setAccountSessionFollow({ ...key, preferences: { policy: { preset: 'custom', events: {
+            finished: { delivery: 'interrupt', voice: true },
+        } } } });
+        expect(await acknowledge()).toEqual({ ok: false, rejection: 'stale_expected_frontier' });
+        await setAccountSessionFollow({ ...key, preferences: { policy: { preset: 'quiet' } } });
+        expect(await observe()).toEqual([]);
+        expect(await inTx(tx => acknowledgeAccountVoiceFollowInTx(tx, {
+            accountId: viewer.id, voiceSessionId: voiceSession.id, sourceSessionId: session.id,
+            expected: null, observed: pending[0]!.observed, consumed: pending[0]!.observed,
+            acceptance, authentication: defaultAuthentication, runtimeAuthority,
+        }))).toEqual({ ok: false, rejection: 'not_followed' });
+        expect(await db.accountSessionFollow.findUnique({ where: { accountId_sessionId: key } }))
+            .toMatchObject({ voiceDeliveredFrontier: null });
+        await setAccountSessionFollow({ ...key, preferences: { policy: pending[0]!.policy } });
+        expect(await acknowledge()).toMatchObject({ ok: true, delivered: pending[0]!.observed });
+        expect(await observe()).toEqual([]);
+        await inTx(tx => transitionSessionArchiveStateInTx({ tx, sessionId: session.id, wasArchived: false, archivedAt: new Date() }));
+        await inTx(tx => transitionSessionArchiveStateInTx({ tx, sessionId: session.id, wasArchived: true, archivedAt: null }));
+        expect(await observe()).toEqual([expect.objectContaining({ sourceSessionId: session.id, expected: null, policy: pending[0]!.policy })]);
     });
 
     it('delivers one pending-current Voice snapshot and advances only its exact accepted frontier', async () => {
@@ -621,138 +725,36 @@ describe('Account Follow service', () => {
         }))).toEqual({ ok: false, rejection: 'forbidden' });
     });
 
-    it('retains explicit suppression after access loss and never lets auto-follow overwrite a manual choice', async () => {
+    it('retains explicit suppression after access loss', async () => {
         const { key } = await fixture();
         await setAccountSessionFollow({ ...key, preferences: { notificationLevel: 'none', includeInVoice: true } });
-        await inTx(tx => applySessionAutoFollowForRelationshipChangeInTx(tx, { sessionId: key.sessionId, accountIds: [key.accountId], relationship: 'assigned' }));
-        expect(await inTx(tx => resolveSessionFollowFactsInTx(tx, key))).toEqual({ follows: true, notificationLevel: 'none' });
+        expect(await inTx(tx => resolveSessionFollowFactsInTx(tx, key))).toMatchObject({ follows: true, notificationLevel: 'none' });
         await db.sessionShare.deleteMany({ where: { sessionId: key.sessionId } });
         expect(await getAccountSessionFollow(key)).toEqual({ ok: false, error: 'session_not_found' });
         expect(await removeAccountSessionFollow(key)).toEqual({ ok: true, value: { changed: true } });
-        expect(await inTx(tx => resolveSessionFollowFactsInTx(tx, key))).toEqual({ follows: false, notificationLevel: 'none' });
-        await inTx(tx => applySessionAutoFollowForRelationshipChangeInTx(tx, { sessionId: key.sessionId, accountIds: [key.accountId], relationship: 'assigned' }));
+        expect(await inTx(tx => resolveSessionFollowFactsInTx(tx, key))).toMatchObject({ follows: false, notificationLevel: 'none' });
         expect(await db.accountSessionFollow.findUnique({ where: { accountId_sessionId: key } })).toMatchObject({ following: false, includeInVoice: false, voiceDeliveredFrontier: null });
     });
 
-    it('seeds automatic tracking only when its conditional insert creates the Follow row', async () => {
+
+    it('keeps independent Discussion cursors neutral across Follow entry, refresh and re-entry', async () => {
         const { owner, viewer, key, session } = await fixture();
-        const discussion = await createDiscussion({
-            sessionId: session.id,
-            creatorAccountId: owner.id,
-            messageSeq: 8,
-        });
-        const unreadSince = new Date(1_234);
-        await db.accountSessionReadState.create({
-            data: { ...key, lastViewedSessionSeq: 2, unreadSince },
-        });
-        await db.sessionDiscussionReadState.create({
-            data: { discussionId: discussion.id, accountId: viewer.id, lastReadSeq: 3 },
-        });
-
-        // SQLite serializes writers, so this trigger deterministically exercises
-        // the same conditional-insert boundary as a concurrent explicit choice:
-        // the service's eligibility snapshot sees no row, then the explicit row
-        // wins immediately before the automatic insert settles.
-        await db.$executeRawUnsafe('CREATE TABLE "AutoFollowInsertRaceGate" ("armed" INTEGER NOT NULL)');
-        await db.$executeRawUnsafe('INSERT INTO "AutoFollowInsertRaceGate" ("armed") VALUES (1)');
-        await db.$executeRawUnsafe(`
-            CREATE TRIGGER "inject_explicit_follow_before_automatic_insert"
-            BEFORE INSERT ON "AccountSessionFollow"
-            WHEN EXISTS (SELECT 1 FROM "AutoFollowInsertRaceGate" WHERE "armed" = 1)
-            BEGIN
-                DELETE FROM "AutoFollowInsertRaceGate";
-                INSERT INTO "AccountSessionFollow" (
-                    "accountId", "sessionId", "following", "notificationLevel",
-                    "includeInVoice", "voiceDeliveredFrontier"
-                ) VALUES (NEW."accountId", NEW."sessionId", true, 'all_messages', true, NULL);
-            END
-        `);
-        try {
-            expect(await inTx(tx => applySessionAutoFollowForRelationshipChangeInTx(tx, {
-                sessionId: session.id,
-                accountIds: [viewer.id],
-                relationship: 'assigned',
-            }))).toBe(0);
-
-            expect(await db.accountSessionFollow.findUnique({
-                where: { accountId_sessionId: key },
-            })).toMatchObject({
-                following: true,
-                notificationLevel: 'all_messages',
-                includeInVoice: true,
-                voiceDeliveredFrontier: null,
-            });
-            expect(await db.accountSessionReadState.findUnique({
-                where: { accountId_sessionId: key },
-            })).toMatchObject({ lastViewedSessionSeq: 2, unreadSince });
-            expect(await db.sessionDiscussionReadState.findUnique({
-                where: { discussionId_accountId: { discussionId: discussion.id, accountId: viewer.id } },
-            })).toMatchObject({ lastReadSeq: 3 });
-            expect(await db.accountChange.count({
-                where: { accountId: viewer.id, entityId: 'session-follows' },
-            })).toBe(0);
-        } finally {
-            await db.$executeRawUnsafe('DROP TRIGGER IF EXISTS "inject_explicit_follow_before_automatic_insert"');
-            await db.$executeRawUnsafe('DROP TABLE IF EXISTS "AutoFollowInsertRaceGate"');
-        }
+        const discussion = await createDiscussion({ sessionId: session.id, creatorAccountId: owner.id, messageSeq: 3 });
+        const preferences = { notificationLevel: 'important' as const, includeInVoice: false };
+        await setAccountSessionFollow({ ...key, preferences });
+        expect(await db.discussionReadState.count({ where: { discussionId: discussion.id, accountId: viewer.id } })).toBe(0);
+        await db.discussionReadState.create({ data: { discussionId: discussion.id, accountId: viewer.id, lastReadSeq: 1 } });
+        await setAccountSessionFollow({ ...key, preferences: { ...preferences, notificationLevel: 'all_messages' } });
+        await removeAccountSessionFollow(key);
+        await db.discussion.update({ where: { id: discussion.id }, data: { messageSeq: 7 } });
+        await setAccountSessionFollow({ ...key, preferences });
+        expect(await db.discussionReadState.findUnique({
+            where: { discussionId_accountId: { discussionId: discussion.id, accountId: viewer.id } },
+        })).toMatchObject({ lastReadSeq: 1 });
     });
 
-    it('atomically seeds both automatic Follow baselines once and preserves them on retry', async () => {
-        const { owner, viewer, key, session } = await fixture();
-        const discussion = await createDiscussion({
-            sessionId: session.id,
-            creatorAccountId: owner.id,
-            messageSeq: 8,
-        });
-        await db.accountSessionReadState.create({
-            data: { ...key, lastViewedSessionSeq: 2, unreadSince: new Date(2_000) },
-        });
-        await db.sessionDiscussionReadState.create({
-            data: { discussionId: discussion.id, accountId: viewer.id, lastReadSeq: 3 },
-        });
-        const apply = () => inTx(tx => applySessionAutoFollowForRelationshipChangeInTx(tx, {
-            sessionId: session.id,
-            accountIds: [viewer.id],
-            relationship: 'assigned',
-        }));
 
-        expect(await apply()).toBe(1);
-        expect(await db.accountSessionFollow.findUnique({
-            where: { accountId_sessionId: key },
-        })).toMatchObject({
-            following: true,
-            notificationLevel: 'important',
-            includeInVoice: false,
-        });
-        expect(await db.accountSessionReadState.findUnique({
-            where: { accountId_sessionId: key },
-        })).toMatchObject({ lastViewedSessionSeq: 10, unreadSince: null });
-        expect(await db.sessionDiscussionReadState.findUnique({
-            where: { discussionId_accountId: { discussionId: discussion.id, accountId: viewer.id } },
-        })).toMatchObject({ lastReadSeq: 8 });
-
-        const laterUnreadSince = new Date(3_000);
-        await db.accountSessionReadState.update({
-            where: { accountId_sessionId: key },
-            data: { lastViewedSessionSeq: 4, unreadSince: laterUnreadSince },
-        });
-        await db.sessionDiscussionReadState.update({
-            where: { discussionId_accountId: { discussionId: discussion.id, accountId: viewer.id } },
-            data: { lastReadSeq: 5 },
-        });
-        await db.session.update({ where: { id: session.id }, data: { seq: 12 } });
-        await db.sessionDiscussion.update({ where: { id: discussion.id }, data: { messageSeq: 9 } });
-
-        expect(await apply()).toBe(0);
-        expect(await db.accountSessionReadState.findUnique({
-            where: { accountId_sessionId: key },
-        })).toMatchObject({ lastViewedSessionSeq: 4, unreadSince: laterUnreadSince });
-        expect(await db.sessionDiscussionReadState.findUnique({
-            where: { discussionId_accountId: { discussionId: discussion.id, accountId: viewer.id } },
-        })).toMatchObject({ lastReadSeq: 5 });
-    });
-
-    it('leaves retained read frontiers untouched when explicit Unfollow suppresses automatic entry', async () => {
+    it('leaves suppression and retained read frontiers untouched when default rules change', async () => {
         const { owner, viewer, key, session } = await fixture();
         const discussion = await createDiscussion({
             sessionId: session.id,
@@ -764,18 +766,16 @@ describe('Account Follow service', () => {
         await db.accountSessionReadState.create({
             data: { ...key, lastViewedSessionSeq: 2, unreadSince },
         });
-        await db.sessionDiscussionReadState.create({
+        await db.discussionReadState.create({
             data: { discussionId: discussion.id, accountId: viewer.id, lastReadSeq: 3 },
         });
         const changesBefore = await db.accountChange.count({
             where: { accountId: viewer.id, entityId: 'session-follows' },
         });
 
-        expect(await inTx(tx => applySessionAutoFollowForRelationshipChangeInTx(tx, {
-            sessionId: session.id,
-            accountIds: [viewer.id],
-            relationship: 'assigned',
-        }))).toBe(0);
+        expect(await setSessionAutoFollowPreferences({ accountId: viewer.id, preferences: {
+            assigned: true, direct: true, team: true, group: true,
+        } })).toMatchObject({ ok: true });
 
         expect(await db.accountSessionFollow.findUnique({
             where: { accountId_sessionId: key },
@@ -783,7 +783,7 @@ describe('Account Follow service', () => {
         expect(await db.accountSessionReadState.findUnique({
             where: { accountId_sessionId: key },
         })).toMatchObject({ lastViewedSessionSeq: 2, unreadSince });
-        expect(await db.sessionDiscussionReadState.findUnique({
+        expect(await db.discussionReadState.findUnique({
             where: { discussionId_accountId: { discussionId: discussion.id, accountId: viewer.id } },
         })).toMatchObject({ lastReadSeq: 3 });
         expect(await db.accountChange.count({
@@ -838,20 +838,8 @@ describe('Account Follow service', () => {
         expect(await hintFor(viewer.id)).toEqual({ sessionFollows: true, full: true });
     });
 
-    it('keeps an explicit concurrent Unfollow authoritative over automatic assignment enrollment', async () => {
-        const { key } = await fixture();
-        await Promise.all([
-            inTx(tx => applySessionAutoFollowForRelationshipChangeInTx(tx, {
-                sessionId: key.sessionId, accountIds: [key.accountId], relationship: 'assigned',
-            })),
-            removeAccountSessionFollow(key),
-        ]);
-        expect(await db.accountSessionFollow.findUnique({ where: { accountId_sessionId: key } })).toMatchObject({
-            following: false, notificationLevel: 'none', includeInVoice: false, voiceDeliveredFrontier: null,
-        });
-    });
 
-    it('qualifies restricted Team auto-follow through the canonical access owner', async () => {
+    it('qualifies an explicit Follow through the canonical restricted Team access owner', async () => {
         const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
         const viewer = await db.account.create({ data: {
             publicKey: randomUUID(), encryptionMode: 'plain',
@@ -869,9 +857,9 @@ describe('Account Follow service', () => {
             sessionId: session.id, teamId: team.id, accessLevel: 'view', effectiveAt: new Date(0),
         } });
 
-        await expect(inTx(tx => applySessionAutoFollowForRelationshipChangeInTx(tx, {
-            sessionId: session.id, accountIds: [viewer.id], relationship: 'team',
-        }))).resolves.toBe(0);
+        await expect(setAccountSessionFollow({
+            accountId: viewer.id, sessionId: session.id, preferences: { notificationLevel: 'important', includeInVoice: false },
+        })).resolves.toEqual({ ok: false, error: 'session_not_found' });
         expect(await db.accountSessionFollow.findUnique({ where: {
             accountId_sessionId: { accountId: viewer.id, sessionId: session.id },
         } })).toBeNull();
@@ -882,9 +870,9 @@ describe('Account Follow service', () => {
         await db.sessionShare.create({ data: {
             sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: viewer.id, accessLevel: 'view',
         } });
-        await expect(inTx(tx => applySessionAutoFollowForRelationshipChangeInTx(tx, {
-            sessionId: session.id, accountIds: [viewer.id], relationship: 'direct',
-        }))).resolves.toBe(1);
+        await expect(setAccountSessionFollow({
+            accountId: viewer.id, sessionId: session.id, preferences: { notificationLevel: 'important', includeInVoice: false },
+        })).resolves.toMatchObject({ ok: true });
         expect(await db.accountSessionFollow.findUnique({ where: {
             accountId_sessionId: { accountId: viewer.id, sessionId: session.id },
         } })).toMatchObject({ following: true, notificationLevel: 'important' });

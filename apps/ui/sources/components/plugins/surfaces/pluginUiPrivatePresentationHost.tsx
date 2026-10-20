@@ -24,6 +24,7 @@ import {
     resolveHappierDiffViewerRequest,
     type HappierDiffViewerRequest,
     type HappierImageSize,
+    type HappierMarkdownRenderInput,
     type HappierMaterialRole,
     type HappierSceneRenderRequest,
     type HappierSurfaceProps,
@@ -74,10 +75,12 @@ import type { HappierPageChrome, HappierStateSize, HappierLiveStreamProps } from
 import type { DetailsPaneSlotBinding } from '@/components/appShell/panes/details/DetailsPaneSlot';
 import type { usePaneHeaderSlotBinding } from '@/components/appShell/panes/paneHeaderSlot';
 import { readPluginUiHostTypography } from '@/components/plugins/surfaces/pluginUiThemeProjection';
-import { useSetting } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/store/settingsReadHooks';
 import { createScrollViewNearViewportTracker } from '@/components/widgets/nearViewport';
 import { resolveAppLocalDateTimePicker } from '@/components/ui/dateTime/LocalDateTimeEditor';
 import { KeyboardStickyFooter } from '@/components/ui/keyboardAvoidance/KeyboardStickyFooter';
+import { ExecutableParticipantPickerPresentation } from '@/components/sessions/authoring/ExecutableParticipantPickerPresentation';
+import type { ExecutableParticipantPickerProps } from '@happier-dev/plugin-ui/components';
 import type { PluginUiScrollActivityTracker } from '@happier-dev/plugin-ui/advanced';
 import {
     useInstalledPluginBrandPresentation,
@@ -348,6 +351,9 @@ function PluginUiPrivateQRCode(props: Readonly<{ data: string; size: number; tes
 
 function createPluginUiPrivatePresentationRenderers(direction?: PluginUiIconDirection) {
     return Object.freeze({
+    renderExecutableParticipantPicker(input: ExecutableParticipantPickerProps) {
+        return <ExecutableParticipantPickerPresentation {...input} />;
+    },
     renderVoiceMarkArt(input: Omit<VoiceMarkArtProps, 'fallback'>) {
         // Only explicit art props: no live energy acquisition or attempt data.
         return <VoiceMarkArt {...input} still={input.still ?? true} presentationOnly />;
@@ -372,10 +378,13 @@ function createPluginUiPrivatePresentationRenderers(direction?: PluginUiIconDire
     renderKeyboardStickyFooter(input: Readonly<{ openedOffset: number; children: React.ReactNode }>) {
         return <KeyboardStickyFooter offset={input.openedOffset}>{input.children}</KeyboardStickyFooter>;
     },
-    localDateTimePicker: resolveAppLocalDateTimePicker(),
+    // The web picker reaches this host through shared collection controls while
+    // its module is still loading. Resolve its binding when a host is consumed.
+    get localDateTimePicker() { return resolveAppLocalDateTimePicker(); },
     renderMaterialSurface: renderThemeMaterialSurface,
-    renderMarkdown(input: Readonly<{ value: string; selectable: boolean; testID?: string }>) {
-        return <MarkdownView markdown={input.value} selectable={input.selectable} testID={input.testID} />;
+    renderMarkdown(input: HappierMarkdownRenderInput) {
+        // Plugin Markdown sits inside interface chrome (a detail step, a page section): the document scale.
+        return <MarkdownView markdown={input.value} selectable={input.selectable} testID={input.testID} inlineReferences={input.inlineReferences} profile="document" />;
     },
     renderCodeBlock(input: Readonly<{ code: string; language?: string; selectable: boolean; testID?: string }>) {
         return (
@@ -401,10 +410,12 @@ function createPluginUiPrivatePresentationRenderers(direction?: PluginUiIconDire
         presentation?: 'popover' | 'menu' | 'dropdown' | 'context';
         width?: 'anchor' | 'content';
         autoFocusOnOpen?: boolean;
+        sheet?: Readonly<{ title: string; footer?: React.ReactNode }>;
         onRequestClose(): void;
         content(controls: Readonly<{
             requestClose(reason: 'selection' | 'escape'): void;
             maxHeight: number;
+            presentation?: 'sheet';
         }>): React.ReactNode;
     }>) {
         const presentation = resolvePluginUiPopoverPresentation(input);
@@ -422,8 +433,18 @@ function createPluginUiPrivatePresentationRenderers(direction?: PluginUiIconDire
                 portal={presentation.portal}
                 maxWidthCap={presentation.maxWidthCap}
                 onRequestClose={input.onRequestClose}
+                // A requested sheet is the shared phone bottom sheet (its title, close and pinned footer).
+                {...(input.sheet === undefined ? {} : {
+                    phonePresentation: 'sheet' as const,
+                    accessibilityLabel: input.sheet.title,
+                    sheetFooter: input.sheet.footer,
+                })}
             >
-                {(render) => input.content({ requestClose: render.requestClose, maxHeight: render.maxHeight })}
+                {(render) => input.content({
+                    requestClose: render.requestClose,
+                    maxHeight: render.maxHeight,
+                    ...(render.presentation === 'sheet' ? { presentation: 'sheet' as const } : {}),
+                })}
             </Popover>
         );
     },

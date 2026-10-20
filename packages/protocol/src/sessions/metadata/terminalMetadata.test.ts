@@ -1,8 +1,20 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as protocol from './terminalMetadata.js';
 import { SessionTerminalMetadataSchema as ReleasedUiTerminalSchema } from './fixtures/uiWeb0212TerminalMetadata.js';
 
 describe('sessionMetadata terminal metadata', () => {
+  it('does not parse absent terminal serviceability while retaining validation for present evidence', () => {
+    const parse = vi.spyOn(protocol.SessionTerminalControlServiceabilityV1Schema, 'safeParse');
+    try {
+      for (let index = 0; index < 20; index += 1) {
+        expect(protocol.readSessionTerminalControlServiceabilityStateV1(undefined)).toBeNull();
+        expect(protocol.readSessionTerminalControlServiceabilityStateV1(null)).toBeNull();
+      }
+      expect(parse).not.toHaveBeenCalled();
+      expect(protocol.readSessionTerminalControlServiceabilityStateV1({ v: 1, state: 'servable', observedAt: 1 })).toBe('servable');
+      expect(protocol.readSessionTerminalControlServiceabilityStateV1({ v: 2, state: 'servable', observedAt: 1 })).toBeNull();
+    } finally { parse.mockRestore(); }
+  });
   it.each(['herdr', 'plain'] as const)('round-trips a flat %s host with a Herdr preference through the ui-web-v0.2.12 reader', (mode) => {
     const metadata = {
       path: '/repo', name: 'original', providerExtension: { retained: true },

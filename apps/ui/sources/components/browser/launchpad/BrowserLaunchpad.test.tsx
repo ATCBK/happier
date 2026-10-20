@@ -12,6 +12,7 @@ import {
 import { createBrowserWorkspaceOpeningFixture } from '@/dev/testkit/fixtures/browserWorkspaceOpening';
 import type { DetailsTab } from '@/components/appShell/panes/details/workspace/detailsWorkspaceTypes';
 import type { BrowserLaunchpadOpenTargetOptions } from './BrowserLaunchpad';
+import type { BrowserSandboxInstallOutcome } from '@/sync/domains/browser/firstUse/browserFirstUse';
 import type { LocalServiceLaunchTarget } from '@/sync/domains/local/services/launch';
 import type { ServiceRow } from '@/sync/domains/local/services/serviceRow';
 
@@ -466,6 +467,112 @@ describe('BrowserLaunchpad', () => {
         expect(screen.findByTestId('browser-launchpad-guidance')).toBeTruthy();
         // The old inert single banner is gone.
         expect(screen.findByTestId('browser-launchpad-empty')).toBeNull();
+    });
+
+    it('explains a missing managed Chromium in place of the guidance, with the code behind Details and a way to check again', async () => {
+        const { BrowserLaunchpad } = await import('./BrowserLaunchpad');
+        const onRetry = vi.fn();
+
+        const screen = await renderScreen(
+            <BrowserLaunchpad
+                platform="desktop"
+                rows={[]}
+                refreshStatus="idle"
+                onOpenTarget={vi.fn()}
+                agentBrowser={{ reasonCode: 'managed_package_missing', agent: null, onRetry }}
+                testID="browser-launchpad"
+            />,
+        );
+
+        expect(screen.findByTestId('browser-launchpad-url-entry')).toBeTruthy();
+        expect(screen.findByTestId('browser-launchpad-agent-browser')).toBeTruthy();
+        expect(screen.findByTestId('browser-launchpad-agent-browser-diagnostic-managed_package_missing')).toBeTruthy();
+        expect(screen.findByTestId('browser-launchpad-guidance')).toBeNull();
+        await act(async () => { screen.pressByTestId('browser-launchpad-agent-browser-action'); });
+        expect(onRetry).toHaveBeenCalledTimes(1);
+    });
+
+    it('says a failed Chromium install in words, keeps the code behind Details and offers no replay (a new open is the retry)', async () => {
+        const { BrowserLaunchpad } = await import('./BrowserLaunchpad');
+
+        const screen = await renderScreen(
+            <BrowserLaunchpad
+                platform="desktop"
+                rows={[]}
+                refreshStatus="idle"
+                onOpenTarget={vi.fn()}
+                agentBrowser={{ reasonCode: 'browser_runtime_provisioning_failed', agent: null, onRetry: vi.fn() }}
+                testID="browser-launchpad"
+            />,
+        );
+
+        expect(screen.findByTestId('browser-launchpad-agent-browser-diagnostic-browser_runtime_provisioning_failed')).toBeTruthy();
+        expect(screen.findByTestId('browser-launchpad-agent-browser-action')).toBeNull();
+        expect(screen.findByTestId('browser-launchpad-guidance')).toBeNull();
+    });
+
+    describe('sandbox unavailable', () => {
+        async function renderSandboxCard(onAllowSandbox: () => Promise<BrowserSandboxInstallOutcome | null>) {
+            const { BrowserLaunchpad } = await import('./BrowserLaunchpad');
+            return await renderScreen(
+                <BrowserLaunchpad
+                    platform="desktop"
+                    rows={[]}
+                    refreshStatus="idle"
+                    onOpenTarget={vi.fn()}
+                    agentBrowser={{ reasonCode: 'sandbox_unavailable', agent: null, onAllowSandbox }}
+                    testID="browser-launchpad"
+                />,
+            );
+        }
+        const allowButton = 'browser-launchpad-agent-browser-allow-sandbox';
+
+        it('offers one primary action that asks the Machine to allow the sandbox, with the code behind Details', async () => {
+            const onAllowSandbox = vi.fn(async () => ({ status: 'installed' }) as const);
+            const screen = await renderSandboxCard(onAllowSandbox);
+            expect(screen.findByTestId('browser-launchpad-agent-browser-diagnostic-sandbox_unavailable')).toBeTruthy();
+            await act(async () => { screen.pressByTestId(allowButton); });
+            expect(onAllowSandbox).toHaveBeenCalledTimes(1);
+            // Installed: the card says so and leaves nothing to press (the agent opens the page again).
+            expect(screen.findByTestId(allowButton)).toBeNull();
+            expect(screen.findByTestId('browser-launchpad-agent-browser-diagnostic-sandbox_unavailable')).toBeNull();
+        });
+
+        it('explains a missing system permission, keeps its code in Details and lets the person allow again', async () => {
+            const onAllowSandbox = vi.fn(async () => ({ status: 'failed', code: 'os_authorization_required' }) as const);
+            const screen = await renderSandboxCard(onAllowSandbox);
+            await act(async () => { screen.pressByTestId(allowButton); });
+            expect(screen.findByTestId('browser-launchpad-agent-browser-diagnostic-os_authorization_required')).toBeTruthy();
+            await act(async () => { screen.pressByTestId(allowButton); });
+            expect(onAllowSandbox).toHaveBeenCalledTimes(2);
+        });
+
+        it('returns to its resting card when the approval is declined', async () => {
+            const onAllowSandbox = vi.fn(async () => null);
+            const screen = await renderSandboxCard(onAllowSandbox);
+            await act(async () => { screen.pressByTestId(allowButton); });
+            expect(screen.findByTestId('browser-launchpad-agent-browser-diagnostic-sandbox_unavailable')).toBeTruthy();
+            expect(screen.findByTestId(allowButton)).toBeTruthy();
+        });
+    });
+
+    it('keeps the running services and recents beside the managed Chromium explanation', async () => {
+        const { BrowserLaunchpad } = await import('./BrowserLaunchpad');
+
+        const screen = await renderScreen(
+            <BrowserLaunchpad
+                platform="desktop"
+                rows={rows}
+                refreshStatus="idle"
+                onOpenTarget={vi.fn()}
+                agentBrowser={{ reasonCode: 'managed_package_missing', agent: null }}
+                testID="browser-launchpad"
+            />,
+        );
+
+        expect(screen.findByTestId('browser-launchpad-agent-browser')).toBeTruthy();
+        expect(screen.findByTestId('browser-launchpad-service:preview:preview_vite')).toBeTruthy();
+        expect(screen.findByTestId('browser-launchpad-card:recent:external_docs')).toBeTruthy();
     });
 
     it('DV-NAV: a typed URL on the new-tab page navigates the CURRENT tab in place (onNavigateInPlace), NOT onOpenTarget', async () => {

@@ -72,6 +72,11 @@ describe('Session activity startup socket recovery', () => {
             },
             metadataAuthority: { kind: 'owner', credentials: { token: 'test-token', encryption: null } },
             durableMutationDeliveryInitiallyActive: options.durable === true,
+            initialRegisteredSessionStateFieldMutations: options.durable ? [{
+                v: 1, sessionId: options.sessionId ?? 'socket-recovery', mutationId: 'activity-online',
+                fieldId: 'runtime.activity', deliveryClass: 'durable_best_effort', source: 'runtime', observedAt: Date.now(),
+                op: { kind: 'set', value: { state: 'active', activeCount: 1 } },
+            }] : [],
         });
         clients.push(client);
         return { client, socket, connect: () => connect(), goOffline: () => {
@@ -136,18 +141,16 @@ describe('Session activity startup socket recovery', () => {
     });
 
     it('closes offline durable Activity delivery while retaining its journal for recovery', async () => {
+        const now = vi.spyOn(Date, 'now').mockReturnValue(1);
         const taskHome = await mkdtemp(join(tmpdir(), 'happier-gq-offline-close-'));
         vi.stubEnv('HAPPIER_HOME_DIR', taskHome);
         reloadConfiguration();
         const sessionId = 'durable-offline-close';
         const { client, socket, connect, goOffline } = createClient({ durable: true, sessionId });
         connect();
-        await client.enqueueRegisteredSessionStateFieldMutation({
-            v: 1, sessionId, mutationId: 'activity-online', fieldId: 'runtime.activity',
-            deliveryClass: 'durable_best_effort', source: 'runtime', observedAt: 1,
-            op: { kind: 'set', value: { state: 'active', activeCount: 1 } },
-        });
+        await expect(client.claimCurrentSessionPublisherAuthorityForStartup()).resolves.toEqual({ status: 'claimed' });
         goOffline();
+        now.mockReturnValue(2);
         const mutation = {
             v: 1 as const, sessionId, mutationId: 'activity-offline', fieldId: 'runtime.activity' as const,
             deliveryClass: 'durable_best_effort' as const, source: 'runtime' as const, observedAt: 2,

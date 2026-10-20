@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { PluginManifestV2Schema, PluginManagedDependencyContributionV2Schema, projectMachineAgentsDetectResponse } from '@happier-dev/protocol';
+import { PluginManifestV2Schema, PluginManagedDependencyContributionV2Schema, projectMachineAgentsDetectResponse, materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
 import { createProbeTempDir, writeExecutableScript } from '@/capabilities/probes/agentModelsProbe.testkit';
 import { readCurrentContributionRegistry } from '@/agent/catalog/snapshot';
@@ -16,6 +17,7 @@ import { createAdmittedPluginRuntimeFixture, createAuthoredAdmittedPluginRuntime
 import { SkillRuleV1Schema } from '@happier-dev/protocol/reach/reachRuleV1';
 import { projectReachForMachinesV1 } from '@happier-dev/protocol/reach/projectReachV1';
 import { readInstalledMachineAgentIds } from '../../../../ui/sources/sync/domains/capabilities/reach/installedMachineAgents';
+import { createWorkflowMaterializationHostV1 } from '@/session/actions/workflowMaterializationHost';
 
 function publishSnapshot(snapshot: Awaited<ReturnType<typeof detectCliSnapshotOnDaemonPath>>) {
     const current = { ...initialMachineMetadata,
@@ -41,6 +43,61 @@ describe('machine agent inventory on the daemon', () => {
     afterAll(async () => {
         for (const fixture of runtimeFixtures) await fixture.lease.release();
         for (const fixture of runtimeFixtures) await fixture.dispose();
+    });
+
+    it.each([true, false])('uses the same observed Codex installation for Session and detached Workflow admission: %s', async (installed) => {
+        const fixture = await createProbeTempDir('happier-workflow-agent-installation');
+        try {
+            vi.stubEnv('HAPPIER_HOME_DIR', fixture.dir);
+            vi.stubEnv('HOME', fixture.dir);
+            vi.stubEnv('USERPROFILE', fixture.dir);
+            vi.stubEnv('PATH', '');
+            const cliPath = join(fixture.dir, process.platform === 'win32' ? 'codex.cmd' : 'codex');
+            await writeExecutableScript(cliPath, process.platform === 'win32'
+                ? `@echo off\r\necho 1.2.3\r\nexit /b ${installed ? 0 : 1}\r\n`
+                : `#!/bin/sh\necho 1.2.3\nexit ${installed ? 0 : 1}\n`);
+            vi.stubEnv('HAPPIER_CODEX_PATH', cliPath);
+            const snapshot = await detectCliSnapshotOnDaemonPath({ requestedCliNames: ['codex'], bypassCache: true });
+            const response = { protocolVersion: 1, results: {
+                'cli.codex': { ok: true, data: buildCliCapabilityData({ request: { id: 'cli.codex' }, entry: snapshot.clis.codex }) },
+                // Native Run support is a declaration, not proof of installation.
+                'tool.executionRuns': { ok: true, data: { available: true, features: { detachedScope: true }, backends: { codex: { available: true } } } },
+            } };
+            const inventory = projectMachineAgentsDetectResponse({ agents: [{ agentId: 'codex', title: 'Codex' }], response });
+            expect(inventory.items[0]?.installed).toBe(installed);
+            const agentTarget = { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } };
+            // The Machine RPC is the boundary; detection, strict inventory projection,
+            // Workflow availability and accepted-snapshot materialization stay real.
+            const host = createWorkflowMaterializationHostV1({
+                credentials: { token: 'workflow-installation', encryption: null },
+                readRoleSelection: async () => ({}), readLaunchProfile: async () => null, readWorkflowDefinition: async () => null,
+                callMachineAction: async ({ method }) => {
+                    if (method === RPC_METHODS.CAPABILITIES_DETECT) return response;
+                    if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return {
+                        protocolVersion: 1, projection: { v: 2, generation: 1, agentsById: { codex: {
+                            id: 'codex', identity: agentTarget.identity,
+                            capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+                        } } },
+                    };
+                    throw new Error('Unexpected Workflow Machine read');
+                },
+            });
+            for (const kind of ['session', 'detached_run'] as const) {
+                const result = await materializeWorkflowAcceptedSnapshotV1({
+                    ...await host({ machineId: 'machine', directory: fixture.dir }), admission: { kind: 'user' },
+                    definition: { version: 1, defaults: { agentTarget }, blocks: [{ kind: 'step', id: 'reply',
+                        document: { text: 'Reply', references: [], attachments: [] } }] },
+                    context: { source: { kind: 'inline' }, inputs: {}, machineId: 'machine', executionTarget: { kind },
+                        workspaceTarget: { project: { machineId: 'machine', directory: fixture.dir, checkoutRootPath: fixture.dir } },
+                        authorization: { principal: { kind: 'host' } } },
+                });
+                expect(result, `${kind}: ${JSON.stringify(result)}`).toMatchObject(installed ? { ok: true } : { ok: false, error: {
+                    code: 'target_unavailable', reason: 'agent_not_installed', agentId: 'codex', blockId: 'reply',
+                } });
+            }
+        } finally {
+            await fixture.cleanup();
+        }
     });
 
     it('keeps healthy native CLI facts when a sibling Agent has no native CLI probe', async () => {

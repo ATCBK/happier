@@ -5,13 +5,14 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { PluginProjectionV2Schema } from '@happier-dev/protocol';
 import { DEFAULT_MEMORY_SETTINGS } from '@happier-dev/protocol/memory/memorySettings';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { createMachineFixture, flushHookEffects, PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createDeferred, createMachineFixture, flushHookEffects, PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import type { FileFindSeedHandoff } from '@/components/appShell/panes/fileFindSeedHandoff';
 import { makeExternalSessionHistoricalImportLocalId } from '@happier-dev/protocol/sessions/external/historicalImportIdentity';
+import { ExternalSessionsCandidatesListRequestSchema, ExternalSessionsCandidatesListResponseSchema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
 
 const rpc = vi.hoisted(() => vi.fn());
 const homes = createHomeGovernanceHarness();
@@ -94,6 +95,116 @@ afterEach(async () => { standardCleanup(); vi.useRealTimers(); await connection?
 async function flush() { await flushHookEffects({ runOnlyPendingTimers: true }); }
 
 describe('History unified conversation search', () => {
+    it('routes a thrown title-list transport failure through the shared failure copy and Retry', async () => {
+        let recovered = false;
+        rpc.mockImplementation(async call => {
+            if (call.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return { protocolVersion: 1, projection };
+            if (call.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET) return DEFAULT_MEMORY_SETTINGS;
+            if (call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST) {
+                if (!recovered) throw new Error('private transport detail');
+                return ExternalSessionsCandidatesListResponseSchema.parse({ ok: true, candidates: [], nextCursor: null });
+            }
+            throw new Error(`Unexpected listing transport ${call.method}`);
+        });
+        const screen = await renderScreen(<ExternalSessionsBrowseScreen
+            lockScope={{ machineId: 'machine-1', serverId, providerId: 'acme.archive', source: { kind: 'archive' } }} />,
+        { flushOptions: { runOnlyPendingTimers: true } });
+        await waitForHomeGovernance(async () => { await flush(); expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)[0].props.error).toBeTruthy(); });
+        const list = screen.findAllByType(ExternalSessionBrowseCandidatesList)[0];
+        expect(list.props.error).toBe('externalSessions.browseAgentFailed');
+        expect(typeof list.props.onRetry).toBe('function');
+        expect(screen.getTextContent()).not.toContain('private transport detail');
+        recovered = true;
+        await act(async () => list.props.onRetry());
+        await waitForHomeGovernance(async () => { await flush(); expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)[0].props.error).toBeNull(); });
+    });
+    it.each(['retryable', 'terminal', 'transport'])('preserves actionable source failure and Retry admission in Browse (%s)', async failureKind => {
+        const retryable = failureKind !== 'terminal';
+        let recovered = false;
+        rpc.mockImplementation(async call => {
+            if (call.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return { protocolVersion: 1, projection };
+            if (call.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET) return DEFAULT_MEMORY_SETTINGS;
+            if (call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST) {
+                if (failureKind === 'transport' && !recovered) throw new Error('private transport detail');
+                return ExternalSessionsCandidatesListResponseSchema.parse(recovered
+                ? { ok: true, candidates: [], contentCoverage: 'complete' }
+                : { ok: false, errorCode: 'agent_error', retryable, error: 'private native path' });
+            }
+            throw new Error(`Unexpected failure-presentation transport ${call.method}`);
+        });
+        const screen = await renderScreen(<ExternalSessionsBrowseScreen
+            lockScope={{ machineId: 'machine-1', serverId, providerId: 'acme.archive', source: { kind: 'archive' } }} initialSearchTarget="content" />,
+        { flushOptions: { runOnlyPendingTimers: true } });
+        await waitForHomeGovernance(async () => { await flush(); expect(screen.findHostByTestId('direct-session-candidates-search-input')).not.toBeNull(); });
+        await act(async () => screen.changeTextByTestId('direct-session-candidates-search-input', 'body phrase'));
+        await waitForHomeGovernance(async () => { await flush(); expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)[0].props.contentScanAvailable).toBe(true); });
+        await screen.pressByTestIdAsync('direct-session-candidates-content-submit');
+        await waitForHomeGovernance(async () => { await flush(); expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)[0].props.loading).toBe(false); });
+        const list = screen.findAllByType(ExternalSessionBrowseCandidatesList)[0];
+        expect(list.props.error).toBe(retryable ? 'externalSessions.browseAgentFailed' : 'externalSessions.browseAgentFailedNoRetry');
+        expect(typeof list.props.onRetry === 'function').toBe(retryable);
+        expect(screen.getTextContent()).not.toContain('private native path');
+        expect(screen.getTextContent()).not.toContain('private transport detail');
+        if (retryable) {
+            recovered = true;
+            await act(async () => list.props.onRetry());
+            await waitForHomeGovernance(async () => { await flush(); expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)[0].props.contentCoverage).toBe('complete'); });
+            expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)[0].props.error).toBeNull();
+        }
+    });
+    it('retries the same cancelled continuation through Browse with fresh request custody', async () => {
+        const pages: Array<ReturnType<typeof createDeferred<unknown>>> = [];
+        const cursors: Array<string | null | undefined> = [];
+        rpc.mockImplementation(async call => {
+            if (call.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return { protocolVersion: 1, projection };
+            if (call.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET) return DEFAULT_MEMORY_SETTINGS;
+            if (call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST) {
+                const request = ExternalSessionsCandidatesListRequestSchema.parse(call.payload);
+                cursors.push(request.cursor);
+                if (!request.cursor) return ExternalSessionsCandidatesListResponseSchema.parse({
+                    ok: true, candidates: [], contentCoverage: 'partial', nextCursor: 'remaining-file',
+                });
+                const page = createDeferred<unknown>();
+                pages.push(page);
+                return page.promise;
+            }
+            throw new Error(`Unexpected History retry transport ${call.method}`);
+        });
+        const screen = await renderScreen(<ExternalSessionsBrowseScreen
+            lockScope={{ machineId: 'machine-1', serverId, providerId: 'acme.archive', source: { kind: 'archive' } }} initialSearchTarget="content" />,
+        { flushOptions: { runOnlyPendingTimers: true } });
+        await waitForHomeGovernance(async () => { await flush(); expect(screen.findHostByTestId('direct-session-candidates-search-input')).not.toBeNull(); });
+        await act(async () => screen.changeTextByTestId('direct-session-candidates-search-input', 'body phrase'));
+        await waitForHomeGovernance(async () => { await flush(); expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)[0].props.contentScanAvailable).toBe(true); });
+        await screen.pressByTestIdAsync('direct-session-candidates-content-submit');
+        await waitForHomeGovernance(async () => { await flush(); expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)[0].props.nextCursor).toBe('remaining-file'); });
+        await screen.pressByTestIdAsync('direct-session-candidates:pagination:more');
+        await waitForHomeGovernance(async () => { await flush(); expect(pages).toHaveLength(1); });
+        await screen.pressByTestIdAsync('direct-session-candidates-content-submit');
+        expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)[0].props.cancelled).toBe(true);
+        await screen.pressByTestIdAsync('direct-session-candidates:cancelled-action');
+        await flush();
+        expect(pages).toHaveLength(2);
+        expect(cursors).toEqual([undefined, 'remaining-file', 'remaining-file']);
+        expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)[0].props.cancelled).toBe(false);
+        // A cancelled transport may still reply. It must not finish or replace Retry.
+        await act(async () => pages[0].resolve(ExternalSessionsCandidatesListResponseSchema.parse({
+            ok: true, candidates: [], contentCoverage: 'complete', nextCursor: null,
+        })));
+        await flush();
+        expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)[0].props.loading).toBe(true);
+        await act(async () => pages[1].resolve(ExternalSessionsCandidatesListResponseSchema.parse({
+            ok: true, candidates: [{ remoteSessionId: 'resumed-native', updatedAtMs: 1,
+                match: { snippet: 'body phrase', sourceItemId: 'resumed-message', messageIndex: 0 } }],
+            contentCoverage: 'complete', nextCursor: null,
+        })));
+        await waitForHomeGovernance(async () => { await flush(); expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)[0].props.candidates).toMatchObject([
+            { remoteSessionId: 'resumed-native', match: { sourceItemId: 'resumed-message' } },
+        ]); });
+        expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)[0].props).toMatchObject({
+            cancelled: false, loading: false, contentCoverage: 'complete', nextCursor: null,
+        });
+    });
     it('scans an unready source only on activation and keeps an empty partial page searchable', async () => {
         rpc.mockImplementation(async call => {
             if (call.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return { protocolVersion: 1, projection };
@@ -132,7 +243,23 @@ describe('History unified conversation search', () => {
         expect(screen.findAllByType(ExternalSessionBrowseCandidatesList)[0].props.candidates).toEqual([]);
         expect(rpc.mock.calls.filter(([call]) => call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST)).toHaveLength(2);
     });
-    it('searches a ready native source while standard search is disabled and opens with a mapped Find seed', async () => {
+    // F6 (r11): "Press Return to search…" invited an action that could not run while Search on demand was off.
+    it('says Search on demand is off, and leads to its setting, instead of inviting Return', async () => {
+        rpc.mockImplementation(async call => {
+            if (call.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return { protocolVersion: 1, projection };
+            if (call.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET) return { ...DEFAULT_MEMORY_SETTINGS,
+                conversationSearch: { standardSearch: { enabled: false }, indexExternal: { enabled: false, agents: [], historyDays: null, includeToolOutput: false } } };
+            throw new Error(`Unexpected History transport ${call.method}`);
+        });
+        const screen = await renderScreen(<ExternalSessionsBrowseScreen
+            lockScope={{ machineId: 'machine-1', serverId, providerId: 'acme.archive', source: { kind: 'archive' } }} initialSearchTarget="content" />,
+        { flushOptions: { runOnlyPendingTimers: true } });
+        await waitForHomeGovernance(async () => { await flush(); expect(screen.findHostByTestId('direct-session-candidates:content-scan-off')).not.toBeNull(); });
+        expect(screen.findHostByTestId('direct-session-candidates:content-unsearched')).toBeNull();
+        expect(screen.findHostByTestId('direct-session-candidates:content-scan-off:settings')).not.toBeNull();
+        expect(rpc.mock.calls.some(([call]) => call.method === RPC_METHODS.DAEMON_EXTERNAL_SESSIONS_CANDIDATES_LIST)).toBe(false);
+    });
+    it.each(['explicit Account', 'local Home alias'] as const)('searches a ready native source and opens with a mapped Find seed (%s)', async custody => {
         rpc.mockImplementation(async call => {
             if (call.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return { protocolVersion: 1, projection };
             if (call.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET) return { ...DEFAULT_MEMORY_SETTINGS, enabled: true,
@@ -154,8 +281,11 @@ describe('History unified conversation search', () => {
         expect(lifetime?.isCurrent()).toBe(true);
         const handoff: { current: FileFindSeedHandoff | undefined } = { current: undefined };
         function HandoffProbe() { handoff.current = useOptionalAppPaneContext()?.fileFindSeedHandoff; return null; }
-        const screen = await renderScreen(<AppPaneProvider><HandoffProbe /><ExternalSessionsBrowseScreen accountLifetime={lifetime}
-            lockScope={{ machineId: 'machine-1', serverId, providerId: 'acme.archive', source: { kind: 'archive' } }} initialSearchTarget="content" /></AppPaneProvider>,
+        const routeServerId = custody === 'local Home alias' ? connection!.home.id : serverId;
+        if (custody === 'local Home alias') expect(routeServerId).not.toBe(serverId);
+        storage.setState(state => ({ settings: { ...state.settings, keyboardShortcutsV2Enabled: false } }));
+        const screen = await renderScreen(<AppPaneProvider><HandoffProbe /><ExternalSessionsBrowseScreen accountLifetime={custody === 'explicit Account' ? lifetime : undefined}
+            lockScope={{ machineId: 'machine-1', serverId: routeServerId, providerId: 'acme.archive', source: { kind: 'archive' } }} initialSearchTarget="content" /></AppPaneProvider>,
         { flushOptions: { runOnlyPendingTimers: true } });
         await flush();
         await act(async () => screen.changeTextByTestId('direct-session-candidates-search-input', 'body phrase'));
@@ -173,7 +303,7 @@ describe('History unified conversation search', () => {
         await flush();
         expect(handoff.current?.peekChatCurrent({ sessionId: 'happy-session', serverId })).toEqual({
             query: 'body phrase', options: { matchCase: false, regex: false }, target: { kind: 'route-message-id',
-                routeMessageId: makeExternalSessionHistoricalImportLocalId({ agentId: 'acme.archive', remoteSessionId: 'indexed-native', directItemId: 'native-message' }) },
+                routeMessageId: `server:${makeExternalSessionHistoricalImportLocalId({ agentId: 'acme.archive', remoteSessionId: 'indexed-native', directItemId: 'native-message' })}` },
         });
         await act(async () => screen.changeTextByTestId('direct-session-candidates-search-input', 'new phrase'));
         await flush();

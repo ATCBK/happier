@@ -1,6 +1,6 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-import { MemorySearchQueryV1Schema, MemorySearchScopeSchema } from '@happier-dev/protocol/memory/memorySearch';
+import { MemorySearchQueryV1Schema, MemorySearchScopeSchema, resolveMemorySearchCorporaV1 } from '@happier-dev/protocol/memory/memorySearch';
 import type { MemorySearchResultV1, MemoryWindowV1 } from '@happier-dev/protocol';
 import { MemoryStatusV1Schema, type MemoryDocumentStatusV1 } from '@happier-dev/protocol/memory/memoryStatus';
 import { MemorySettingsV1Schema } from '@happier-dev/protocol/memory/memorySettings';
@@ -16,12 +16,11 @@ import { resolveOperationalMemoryEmbeddingsSettings } from '@/daemon/memory/reso
 import type { RpcHandlerManager } from '../rpc/RpcHandlerManager';
 import type { MemoryWorkerHandle } from '@/daemon/memory/memoryWorker';
 import { getSqliteFootprintBytes } from '@/daemon/memory/sqliteFootprint';
+import { logger } from '@/ui/logger';
 
-const EnsureUpToDateParamsSchema = z
-  .object({
-    sessionId: z.string().min(1).optional(),
-  })
-  .passthrough();
+const EnsureUpToDateParamsSchema = z.looseObject({
+    sessionId: z.optional(z.string().check(z.minLength(1))),
+  });
 
 function disabledResult(): MemorySearchResultV1 {
   return { v: 1, ok: false, errorCode: 'memory_disabled', error: 'memory_disabled' };
@@ -86,7 +85,7 @@ export function registerMachineMemoryRpcHandlers(params: Readonly<{
       if (parsedScope.success && settings.enabled && deepDbPath && memoryWorker.resolveDocumentSearchScope) {
         try {
           const admitted = await memoryWorker.resolveDocumentSearchScope(parsedScope.data, context?.signal);
-          if (admitted.state !== 'ready') documents = { state: admitted.state };
+          if (admitted.state !== 'ready') documents = { state: admitted.state === 'partial' ? 'unavailable' : admitted.state };
           else if (admitted.eligibleMemoryDocuments) {
             admitted.assertCurrent();
             const db = openDeepIndexDb({ dbPath: deepDbPath });
@@ -148,6 +147,7 @@ export function registerMachineMemoryRpcHandlers(params: Readonly<{
       // daemons omit it and must not be presented as applying the setting.
       includeArchivedSessionsEffective: settings.includeArchivedSessions === true,
       ...(memoryWorker.resolveDocumentSearchScope ? { documentSearchSupported: true } : {}),
+      ...(memoryWorker.resolveDocumentSearchScope ? { projectSearchSupported: true } : {}),
       ...(documents ? { documents } : {}),
       ...(memoryWorker.getIndexSources ? { sources: [...memoryWorker.getIndexSources()] } : {}),
       hintsIndexReady,
@@ -208,12 +208,18 @@ export function registerMachineMemoryRpcHandlers(params: Readonly<{
     if (!parsed.success) return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
     const { writeMemorySettingsToDisk } = await import('@/settings/memorySettings');
     const next = await writeMemorySettingsToDisk(parsed.data);
-    await memoryWorker.reloadSettings();
+    // Persistence acknowledges the user's change. Native discovery, index
+    // reconciliation and draining stay serialized by the worker's lifecycle.
+    void memoryWorker.reloadSettings().catch((error: unknown) => {
+      logger.warn('[memoryWorker] Saved settings reconciliation failed', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
     return next;
   });
 
   rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_MEMORY_CLEAR_INDEX, async (raw: unknown, context) => {
-    if (!z.object({}).strict().safeParse(raw ?? {}).success) {
+    if (!z.strictObject({}).safeParse(raw ?? {}).success) {
       return { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' };
     }
     await memoryWorker.clearIndex(context?.signal);
@@ -237,15 +243,19 @@ export function registerMachineMemoryRpcHandlers(params: Readonly<{
 
     const settings = memoryWorker.getSettings();
     if (!settings.enabled) return disabledResult();
+    if (parsed.data.scope.type === 'project' && !memoryWorker.resolveDocumentSearchScope) {
+      return { v: 1, ok: false, errorCode: 'memory_project_scope_unsupported', error: 'memory_project_scope_unsupported' };
+    }
 
     const mode = parsed.data.mode;
-    const externalRequested = parsed.data.corpora?.includes('external_transcripts') === true;
+    const corpora = resolveMemorySearchCorporaV1(parsed.data);
+    const externalRequested = corpora.includes('external_transcripts');
     const externalEnabled = settings.conversationSearch.indexExternal.enabled;
-    const query = externalRequested && !externalEnabled
+    const query = externalRequested && !externalEnabled && parsed.data.scope.type !== 'project'
       ? { ...parsed.data, corpora: parsed.data.corpora?.filter(corpus => corpus !== 'external_transcripts') }
       : parsed.data;
     const deepSessions = mode === 'deep' || (mode === 'auto' && settings.indexMode === 'deep');
-    const preferDeep = deepSessions || query.corpora?.includes('documents') === true
+    const preferDeep = deepSessions || corpora.includes('documents')
       || (externalRequested && externalEnabled);
 
     if (preferDeep) {
@@ -274,7 +284,9 @@ export function registerMachineMemoryRpcHandlers(params: Readonly<{
 
     const tier1Path = memoryWorker.getTier1DbPath();
     if (!tier1Path) return { v: 1, ok: false, errorCode: 'memory_index_missing', error: 'memory_index_missing' };
-    return searchTier1Memory({ dbPath: tier1Path, query });
+    const projectScope = query.scope.type === 'project' && memoryWorker.resolveDocumentSearchScope
+      ? await memoryWorker.resolveDocumentSearchScope(query.scope, context?.signal) : undefined;
+    return searchTier1Memory({ dbPath: tier1Path, query, ...(projectScope ? { projectScope } : {}) });
   });
 
   rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_MEMORY_GET_WINDOW, async (raw: unknown, context): Promise<MemoryWindowV1> => {

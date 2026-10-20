@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   DEFAULT_PROVIDER_SETTINGS_V1,
+  ProviderConnectionIdSchema,
   ProviderContributionV1Schema,
   ProviderRuntimeStateFileV1Schema,
   ProviderSettingsV1Schema,
@@ -61,6 +62,7 @@ describe('provider spawn runtime catalog bridge', () => {
               models: [{
                 id: 'probe-only',
                 name: 'Probe only',
+                connectedAccountPurposes: [{ consumer: { pluginId: 'acme.gateway', localId: 'gateway' }, purpose: 'upstream' }],
                 capabilities: {
                   toolRoundTrips: 'supported',
                   reasoningControls: 'unsupported',
@@ -334,7 +336,7 @@ describe('provider spawn runtime catalog bridge', () => {
   });
 
   it.each(['sessionMachine', 'remote'] as const)('resolves a managed catalog model on %s through stable source authorization without a durable endpoint', async (placement) => {
-    const connectionId = 'pc_managed_gateway';
+    const connectionId = ProviderConnectionIdSchema.parse('pc_managed_gateway');
     const contributionKey = 'acme.gateway/gateway';
     const definition = ProviderContributionV1Schema.parse({
       v: 1,

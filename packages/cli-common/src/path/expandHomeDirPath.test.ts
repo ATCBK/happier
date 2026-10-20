@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   canonicalAbsolutePathsEqual,
+  createCanonicalAbsolutePathComparator,
   expandHomeDirPath,
   isCanonicalAbsolutePathInsideRoot,
   resolveCanonicalAbsolutePath,
@@ -9,6 +10,34 @@ import {
 } from './expandHomeDirPath.js';
 
 describe('expandHomeDirPath', () => {
+  it('reuses the canonical equality and containment decisions for one read', () => {
+    const compare = createCanonicalAbsolutePathComparator();
+    for (const [root, child, equal, inside] of [
+      ['/home/alice', '/home/alice/../alice/project', false, true],
+      ['/home/alice', '/home/alice2/project', false, false],
+      ['/home/Alice', '/home/alice/project', false, false],
+      ['C:\\Users\\Alice', 'c:/users/alice/project', false, true],
+      ['C:\\Users\\Alice', 'c:/users/alice', true, true],
+      ['C:\\Users\\Alice', 'C:\\Users\\Alice2\\project', false, false],
+      ['C:\\Users\\Alice', 'D:\\Users\\Alice\\project', false, false],
+      ['\\\\server\\share\\Alice', '//SERVER/share/alice/project', false, true],
+      ['/home/alice', 'C:\\Users\\Alice', false, false],
+      ['relative', 'relative/child', false, false],
+    ] as const) {
+      expect(compare.equal(root, child)).toBe(equal);
+      expect(compare.contains(root, child)).toBe(inside);
+      expect(compare.contains(child, root)).toBe(equal);
+    }
+    const first = createCanonicalAbsolutePathComparator({ platform: 'linux', env: { HOME: '/home/first' } });
+    const second = createCanonicalAbsolutePathComparator({ platform: 'linux', env: { HOME: '/home/second' } });
+    expect(first.contains('~', '/home/first/project')).toBe(true);
+    expect(second.contains('~', '/home/first/project')).toBe(false);
+    expect(second.contains('~', '/home/second/project')).toBe(true);
+    const windows = createCanonicalAbsolutePathComparator({ platform: 'win32', env: { USERPROFILE: 'C:\\Users\\Alice' } });
+    expect(windows.equal('~\\projects//app', 'c:/users/alice/projects/app')).toBe(true);
+    expect(windows.contains('~\\', 'C:/Users/Alice/projects/app')).toBe(true);
+    expect(windows.contains('~\\', 'C:/Users/Alice2/projects/app')).toBe(false);
+  });
   it.each([
     {
       label: 'Windows forward-slash prefix and mixed separators',

@@ -33,6 +33,46 @@ afterEach(async () => {
 });
 
 describe('Prompt catalog captured Account mutation publication', () => {
+  it('keeps finite Action catalog reads out of retained Settings and history maintenance', async () => {
+    const accountId = 'account-finite-prompt-catalog';
+    const sourceReads: string[] = [];
+    let measuring = false;
+    setRuntimeFetch(async (url) => {
+      const path = new URL(String(url)).pathname;
+      if (measuring && path.startsWith('/v2/account/settings')) sourceReads.push(path);
+      if (path === '/health' || path === '/v1/auth/ping') return Response.json({ ok: true });
+      if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
+      if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+      if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+      if (path === '/v2/account/settings') return Response.json({ version: 7, content: { t: 'plain', v: {} } });
+      if (path === '/v1/artifacts') return Response.json([]);
+      if (path === PROMPT_LIBRARY_ROWS_ROUTE_V1) return Response.json({ status: 'listed',
+        rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: 1,
+          content: sealPromptLibraryContentV1({ mode: 'plain', material: null, record: emptyPromptLibraryRecordV1(key) }) })) });
+      return Response.json({ error: 'not_found' }, { status: 404 });
+    });
+    await disconnectActiveServerConnection();
+    const home = await upsertAndActivateServer({ serverUrl: 'https://finite-prompt-catalog.example.test', name: 'Finite prompt catalog' });
+    const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature` };
+    await TokenStorage.setCredentialsForServerUrl(home.serverUrl, { serverId: home.id }, credentials);
+    await restoreConnectionToActiveServer(credentials);
+    const scope = { serverId: home.id, accountId };
+    getStorage().setState({ profileScope: scope, settingsScope: scope });
+    await vi.waitFor(() => expect(getStorage().getState().settingsVersion).toBe(7));
+    measuring = true;
+    const finite = await readPromptLibraryCatalogProjection(scope);
+    expect(finite.catalog).toMatchObject({ status: 'ready', rows: expect.arrayContaining([
+      expect.objectContaining({ record: expect.objectContaining({ key: 'skill-rules' }), revision: 1 }),
+    ]) });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(sourceReads).toEqual([]);
+    // The existing observed catalog lifecycle still owns retained-source maintenance.
+    const release = observePromptLibraryCatalog(scope);
+    try {
+      await refreshPromptLibraryCatalog(scope);
+      await vi.waitFor(() => expect(sourceReads).toContain('/v2/account/settings'));
+    } finally { release(); }
+  });
   it('migrates Account and Voice skills through captured Home HTTP and strict row CAS without losing custody or user Off', async () => {
     const accountId = 'account-prompt-skill-migration';
     const coding = PromptLibraryRecordV1Schema.parse(StoredPromptLibraryRecordV1Schema.parse({ key: 'coding', value: {
@@ -241,6 +281,7 @@ describe('Prompt catalog captured Account mutation publication', () => {
     const accountId = 'account-prompt-ack';
     const controller = new AbortController();
     let revision = 1;
+    let readsAfterWrite = 0;
     // Only Home HTTP is replaced; qualified credentials, Account lifetime, crypto, store and CAS stay real.
     setRuntimeFetch(async (url, init) => {
       const path = new URL(String(url)).pathname;
@@ -250,11 +291,14 @@ describe('Prompt catalog captured Account mutation publication', () => {
       if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
       if (path === '/v2/account/settings') return Response.json({ version: 7, content: { t: 'plain', v: {} } });
       if (path === '/v1/artifacts') return Response.json([]);
-      if (path === '/v1/account/entity-rows/prompt-library') return Response.json({ status: 'listed',
+      if (path === '/v1/account/entity-rows/prompt-library') {
+        if (revision > 1) readsAfterWrite += 1;
+        return Response.json({ status: 'listed',
         rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision, content: { t: 'plain',
           v: key === 'role-overrides' ? { key, value: { v: 1, overrides: {
             builder: { roleId: 'builder', workspaceWrites: revision === 1 ? 'allow' : 'deny' },
           } } } : emptyPromptLibraryRecordV1(key) } })) });
+      }
       if (path === '/v1/account/entity-rows/prompt-library/role-overrides' && init?.method === 'POST') {
         expect(PromptLibraryRowMutationV1Schema.parse(JSON.parse(String(init.body))).expectedRevision).toBe(1);
         revision = 2;
@@ -280,5 +324,7 @@ describe('Prompt catalog captured Account mutation publication', () => {
     await vi.waitFor(() => expect(getPromptLibraryCatalogValue(scope, 'role-overrides')).toMatchObject({ status: 'ready', revision: 2,
       value: { overrides: { builder: { workspaceWrites: 'deny' } } } }));
     expect(getStorage().getState().settingsVersion).toBe(settingsVersion);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    expect(readsAfterWrite).toBe(0);
   });
 });

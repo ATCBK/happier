@@ -1,4 +1,4 @@
-import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_FRESHNESS_LINE_METRICS, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
@@ -10,27 +10,23 @@ import {
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 
-/** The header and the action rows beneath the list: what the list cannot have of the popover's height. */
-const CHROME_HEIGHT_PX = 150;
-/** A roster keeps a few rows visible however short the window is. */
-const MIN_LIST_HEIGHT_PX = 160;
-
-/** The height a rail roster's own list may take inside a popover of `maxHeight`. */
-export function resolveRailPopoverRosterListMaxHeight(
-  maxHeight: number,
-): number {
-  return Math.max(MIN_LIST_HEIGHT_PX, maxHeight - CHROME_HEIGHT_PX);
-}
+/**
+ * The list's frame: it takes what the popover's height leaves after the header, any line above it and
+ * the action rows (which vary with the freshness line and two-line actions), and scrolls inside it.
+ */
+export const RAIL_POPOVER_ROSTER_LIST_STYLE = { flexShrink: 1, minHeight: 0 } as const;
 
 /**
  * The one anatomy of a rail roster popover (Bots, Machines): what it lists and a quiet summary of
  * those things on one line (or on a second header line), the list itself, a hairline, then the rows
  * that add to it. The list owns
- * its scrolling; size it with `resolveRailPopoverRosterListMaxHeight`.
+ * its scrolling; give it `RAIL_POPOVER_ROSTER_LIST_STYLE` so it shrinks within `maxHeight`.
  */
 export function RailPopoverRoster(
   props: Readonly<{
     testID: string;
+    /** The popover's height: the header and the action rows stay whole, the list gives way. */
+    maxHeight: number;
     title: string;
     /** What the listed things are doing, at the end of the title line. */
     summary?: React.ReactNode;
@@ -41,7 +37,7 @@ export function RailPopoverRoster(
   }>,
 ) {
   return (
-    <View testID={props.testID}>
+    <View testID={props.testID} style={{ maxHeight: props.maxHeight }}>
       <View style={styles.header}>
         <Text style={styles.title} accessibilityRole="header" numberOfLines={1}>
           {props.title}
@@ -75,6 +71,9 @@ const styles = StyleSheet.create((theme) => ({
     gap: theme.space.s12,
     paddingHorizontal: theme.space.s16,
     paddingBottom: theme.space.s6,
+    // The line may become the freshness chip ("As of 10:42 · Retry"): the header keeps the chip's height so
+    // nothing beneath it moves when the counts turn stale.
+    minHeight: HAPPIER_FRESHNESS_LINE_METRICS.chip.minHeightPx + theme.space.s6,
   },
   title: {
     // The roster's name leads its rows: the section-title step, one above the rows' meta and summary line.

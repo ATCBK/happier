@@ -64,7 +64,8 @@ function makeJwtWithSub(sub: string, signature = 'signature'): string {
 
 describe('authAndSetupMachineIfNeeded (machine id binding)', () => {
   const envScope = createEnvKeyScope(['HAPPIER_PUBLIC_SERVER_URL', 'HAPPIER_LOCAL_SERVER_URL',
-    'HAPPIER_API_TOKEN', 'HAPPIER_HOME_CARRIER_POLICY', 'HAPPIER_SESSION_AUTOSTART_DAEMON']);
+    'HAPPIER_API_TOKEN', 'HAPPIER_HOME_CARRIER_POLICY', 'HAPPIER_SESSION_AUTOSTART_DAEMON',
+    'HAPPIER_SESSION_REQUESTER_CREDENTIAL_FILE', 'HAPPIER_SESSION_REQUESTER_SESSION_ID']);
   const previousHomeDir = process.env.HAPPIER_HOME_DIR;
   const previousActiveServerId = process.env.HAPPIER_ACTIVE_SERVER_ID;
   const previousServerUrl = process.env.HAPPIER_SERVER_URL;
@@ -88,7 +89,8 @@ describe('authAndSetupMachineIfNeeded (machine id binding)', () => {
     homeBoundary.activeTunnel = false;
     process.env.HAPPIER_SERVER_URL = homeBoundary.origin;
     envScope.patch({ HAPPIER_PUBLIC_SERVER_URL: undefined, HAPPIER_LOCAL_SERVER_URL: undefined,
-      HAPPIER_API_TOKEN: undefined, HAPPIER_HOME_CARRIER_POLICY: undefined, HAPPIER_SESSION_AUTOSTART_DAEMON: '0' });
+      HAPPIER_API_TOKEN: undefined, HAPPIER_HOME_CARRIER_POLICY: undefined, HAPPIER_SESSION_AUTOSTART_DAEMON: '0',
+      HAPPIER_SESSION_REQUESTER_CREDENTIAL_FILE: undefined, HAPPIER_SESSION_REQUESTER_SESSION_ID: undefined });
     app = Fastify();
     app.addHook('preHandler', async (request) => {
       homeBoundary.requests.push({ method: request.method, path: request.url.split('?')[0]!, body: request.body });
@@ -106,7 +108,8 @@ describe('authAndSetupMachineIfNeeded (machine id binding)', () => {
         expect(homeBoundary.activeTunnel).toBe(true);
       }
       homeBoundary.events.push('register');
-      return { machine: { ...request.body, metadataVersion: 1, daemonStateVersion: 0 } };
+      return { machine: { ...request.body, daemonState: request.body.daemonState ?? null,
+        metadataVersion: 1, daemonStateVersion: 0 } };
     });
     app.post('/v1/auth/request', async () => ({ state: 'requested' }));
     app.get('/v1/auth/request/status', async () => ({ status: homeBoundary.response ? 'authorized' : 'pending', supportsV2: true }));
@@ -194,6 +197,44 @@ describe('authAndSetupMachineIfNeeded (machine id binding)', () => {
 
       expect(homeBoundary.events).toEqual(['register', 'close']);
       expect(homeBoundary.activeTunnel).toBe(false);
+    } finally {
+      const { logger } = await import('./logger');
+      logger.flushSync();
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps requester child startup on its admitted machine without selecting or registering a requester machine', async () => {
+    const homeDir = mkdtempSync(join(tmpdir(), 'happier-cli-auth-requester-machine-'));
+    process.env.HAPPIER_HOME_DIR = homeDir;
+    process.env.HAPPIER_ACTIVE_SERVER_ID = 'cloud';
+    const settingsPath = join(homeDir, 'settings.json');
+    writeFileSync(settingsPath, JSON.stringify({ schemaVersion: 6, onboardingCompleted: true,
+      activeServerId: 'cloud', servers: { cloud: { id: 'cloud', name: 'cloud', serverUrl: homeBoundary.origin,
+        webappUrl: 'https://app.happier.dev', createdAt: 0, updatedAt: 0, lastUsedAt: 0 } },
+      machineIdByServerId: { cloud: 'custodian-machine' }, lastTokenSubByServerId: { cloud: 'custodian' },
+      machineIdByServerIdByAccountId: { cloud: { custodian: 'custodian-machine' } },
+      machineIdConfirmedByServerByServerId: { cloud: true },
+    }));
+    try {
+      const { createRequesterSessionCredentialCustody } = await import('@/daemon/sessionEncryption/requesterSessionCredentials');
+      const custody = await createRequesterSessionCredentialCustody({ happyHomeDir: homeDir, sessionId: 'requester-session',
+        attribution: { serverId: 'cloud', accountId: 'requester', machineId: 'custodian-machine', installationId: 'installation' },
+        credentials: { token: makeJwtWithSub('requester'), encryption: null } });
+      envScope.patch({ HAPPIER_SESSION_REQUESTER_CREDENTIAL_FILE: custody.path,
+        HAPPIER_SESSION_REQUESTER_SESSION_ID: 'requester-session' });
+      const { authAndSetupMachineIfNeeded } = await import('./auth');
+      const result = await authAndSetupMachineIfNeeded();
+      expect(result.machineId).toBe('custodian-machine');
+      expect(result.credentials.token).toBe(makeJwtWithSub('requester'));
+      expect(homeBoundary.requests.filter(request => request.method === 'POST' && request.path === '/v1/machines')).toEqual([]);
+      const settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+      expect(settings).toMatchObject({ machineIdByServerId: { cloud: 'custodian-machine' },
+        lastTokenSubByServerId: { cloud: 'custodian' }, machineIdConfirmedByServerByServerId: { cloud: true } });
+      expect(settings.machineIdByServerIdByAccountId.cloud).toEqual({ custodian: 'custodian-machine' });
+      await custody.cleanup();
+      await expect(authAndSetupMachineIfNeeded()).rejects.toThrow('requester_session_credentials_unavailable');
+      expect(homeBoundary.requests).toEqual([]);
     } finally {
       const { logger } = await import('./logger');
       logger.flushSync();

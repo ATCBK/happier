@@ -2,6 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
+import { Text } from '@/components/ui/text/Text';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { StatusPill } from '@/components/ui/status/StatusPill';
 
@@ -23,7 +24,8 @@ export const CapabilityStatusChip = React.memo(function CapabilityStatusChip(pro
     if (pill === null) return null;
     const fix = props.status.fix;
     return (
-        <View style={styles.row} testID={props.testID}>
+        <View style={styles.root} testID={props.testID}>
+        <View style={styles.row}>
             <StatusPill
                 variant={pill.variant}
                 chrome={pill.chrome}
@@ -42,9 +44,16 @@ export const CapabilityStatusChip = React.memo(function CapabilityStatusChip(pro
                 />
             ) : null}
         </View>
+        {presentation.reason === undefined ? null : (
+            <Text variant="meta" style={styles.reason}>{presentation.reason}</Text>
+        )}
+        </View>
     );
 });
 
 const styles = StyleSheet.create((theme) => ({
+    // The pill says the state short; a reason (why it stopped) wraps under it, whole.
+    root: { gap: theme.space.s2, minWidth: 0, flexShrink: 1 },
+    reason: { color: theme.colors.text.secondary },
     row: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, minWidth: 0, flexShrink: 1 },
 }));

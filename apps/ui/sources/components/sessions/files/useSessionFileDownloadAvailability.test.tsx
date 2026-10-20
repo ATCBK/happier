@@ -18,12 +18,12 @@ describe('useSessionFileDownloadAvailability', () => {
     });
     afterEach(() => vi.unstubAllGlobals());
 
-    it('fails closed when server-routed is disabled and the current Machine endpoint is unknown', async () => {
+    it('keeps browser downloads available through Home RPC when the current Iroh endpoint is unknown', async () => {
         installTransferProjection({ machine: transferMachine({ operationProtocolCapabilities: { finiteTransferRpc: { protocolVersions: [1] } } }) });
         recordCachedMachineRpcDirectRouteViable({ serverId: 'server-1', remoteMachineId: 'machine-1' });
         const { useSessionFileDownloadAvailability } = await import('./useSessionFileDownloadAvailability');
         const hook = await renderHook(() => useSessionFileDownloadAvailability('s1'));
-        expect(hook.getCurrent()).toBe(false);
+        expect(hook.getCurrent()).toBe(true);
         await hook.unmount();
     });
 
@@ -35,12 +35,12 @@ describe('useSessionFileDownloadAvailability', () => {
         await hook.unmount();
     });
 
-    it('upload fails closed when server-routed is disabled and the current Machine endpoint is unknown', async () => {
+    it('keeps browser uploads available through Home RPC when the current Iroh endpoint is unknown', async () => {
         installTransferProjection({ machine: transferMachine({ operationProtocolCapabilities: { finiteTransferRpc: { protocolVersions: [1] } } }) });
         recordCachedMachineRpcDirectRouteViable({ serverId: 'server-1', remoteMachineId: 'machine-1' });
         const { useSessionFileUploadAvailability } = await import('./useSessionFileUploadAvailability');
         const hook = await renderHook(() => useSessionFileUploadAvailability('s1'));
-        expect(hook.getCurrent()).toBe(false);
+        expect(hook.getCurrent()).toBe(true);
         await hook.unmount();
     });
 

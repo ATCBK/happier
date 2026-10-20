@@ -8,6 +8,74 @@ import type { MachineGuardWatchResultV1 } from '@happier-dev/protocol/machines/g
 async function settle() { for (let i = 0; i < 20; i++) await Promise.resolve(); }
 
 describe('Guard last-good freshness', () => {
+    it('keeps standalone Activity ranges live through one shared Guard watch until the final release', async () => {
+        const watches: Array<{ signal?: AbortSignal; reply: ReturnType<typeof createDeferred<MachineGuardResult<MachineGuardWatchResultV1>>> }> = [];
+        let entries: ReturnType<typeof createMachineGuardViewFixture>['recentActivity'] = [];
+        const store = createMachineGuardStore({
+            viewClient: async () => ({ ok: true, value: createMachineGuardViewFixture() }),
+            watchClient: input => {
+                const reply = createDeferred<MachineGuardResult<MachineGuardWatchResultV1>>();
+                watches.push({ signal: input.signal, reply });
+                return reply.promise;
+            },
+            activityClient: async () => ({ ok: true, value: { entries, counts: { stopped: entries.length, cleanedUp: 0, needsLook: 0, others: 0 }, asOf: 2000 } }),
+        });
+        const firstKey = { machineId: 'machine', serverId: null, expectedAccountId: null, range: '7d' as const, filter: 'all' as const };
+        const secondKey = { ...firstKey, range: '30d' as const };
+        const first = store.demandActivity(firstKey);
+        const second = store.demandActivity(secondKey);
+        try {
+            await settle();
+            expect(watches).toHaveLength(1);
+            const append = async (id: string) => {
+                entries = [{ v: 1, id, at: 2000, kind: 'closed_browser', rule: 'memory_guard', outcome: 'done', attribution: { kind: 'unknown' } }, ...entries];
+                watches.at(-1)!.reply.resolve({ ok: true, value: { changed: true, since: entries.length,
+                    view: createMachineGuardViewFixture({ recentActivity: entries }) } });
+                await settle();
+            };
+            await append('first');
+            expect(store.getActivity(firstKey).list?.entries).toEqual(entries);
+            expect(store.getActivity(secondKey).list?.entries).toEqual(entries);
+            first(); first();
+            expect(watches.at(-1)!.signal?.aborted).toBe(false);
+            await append('second');
+            expect(store.getActivity(secondKey).list?.entries).toEqual(entries);
+            second();
+            expect(watches.at(-1)!.signal?.aborted).toBe(true);
+        } finally { first(); second(); store.reset(); }
+    });
+
+    it('rearms a changed Guard watch before notifying the view or invalidating Activity', async () => {
+        const watches: Array<ReturnType<typeof createDeferred<MachineGuardResult<MachineGuardWatchResultV1>>>> = [];
+        const order: string[] = [];
+        let changed = false;
+        const store = createMachineGuardStore({
+            viewClient: async () => ({ ok: true, value: createMachineGuardViewFixture() }),
+            watchClient: () => {
+                order.push('watch');
+                const reply = createDeferred<MachineGuardResult<MachineGuardWatchResultV1>>();
+                watches.push(reply); return reply.promise;
+            },
+            activityClient: async () => {
+                if (changed) order.push('activity');
+                return { ok: true, value: { entries: [], counts: { stopped: 0, cleanedUp: 0, needsLook: 0, others: 0 }, asOf: 1 } };
+            },
+        });
+        const key = { machineId: 'machine', serverId: null, expectedAccountId: null, range: '7d' as const, filter: 'all' as const };
+        const unobserve = store.observeView(key, () => { if (changed) order.push('view'); });
+        const releaseView = store.demandView(key);
+        const releaseActivity = store.demandActivity(key);
+        try {
+            await settle(); order.length = 0; changed = true;
+            watches[0]!.resolve({ ok: true, value: { changed: true, since: 2, view: createMachineGuardViewFixture({
+                recentActivity: [{ v: 1, id: 'append', at: 1, kind: 'closed_browser', rule: 'memory_guard', outcome: 'done', attribution: { kind: 'unknown' } }],
+            }) } });
+            await settle();
+            expect(order).toEqual(['watch', 'activity', 'view']);
+            expect(store.getView(key).since).toBe(2);
+        } finally { releaseActivity(); releaseView(); unobserve(); store.reset(); }
+    });
+
     it('refreshes Activity after one of two consumers releases the same query', async () => {
         let asOf = 1000;
         const store = createMachineGuardStore({

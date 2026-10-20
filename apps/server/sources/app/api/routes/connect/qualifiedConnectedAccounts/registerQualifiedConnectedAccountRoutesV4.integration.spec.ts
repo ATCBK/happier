@@ -16,11 +16,13 @@ import {
     encodeQualifiedConnectedAccountV4StructuredQueryValue,
     type QualifiedConnectedAccountGroupV4,
 } from "@happier-dev/protocol";
-import { buildProviderAccountUsagePageProjectionV1, sealProviderAccountUsagePageProjectionV1 } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
+import { buildProviderAccountUsagePageProjectionV1 } from '@happier-dev/protocol/connect/providerAccountUsagePageProjection';
+import { sealProviderAccountUsagePageProjectionV1 } from '@happier-dev/protocol/connect/providerAccountUsagePageProjectionCrypto';
 import { readProviderAccountUsageHistory } from '../providerAccountUsage/recordStorage';
 
 import { db } from "@/storage/db";
 import { prismaRuntime } from "@/storage/prisma";
+import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 import {
     createLightSqliteHarness,
     type LightSqliteHarness,
@@ -140,6 +142,8 @@ describe("qualified Connected Account V4 route family (integration)", () => {
 
     afterEach(async () => {
         harness.resetEnv();
+        await db.$executeRawUnsafe('DROP TRIGGER IF EXISTS usage_idle_credential_write');
+        await db.$executeRawUnsafe('DROP TRIGGER IF EXISTS usage_idle_account_write');
         await db.connectedServiceUsageSource.deleteMany().catch(() => {});
         await db.providerAccountUsageRecord.deleteMany().catch(() => {});
         await db.connectedServiceAuthGroupMember.deleteMany().catch(() => {});
@@ -162,12 +166,24 @@ describe("qualified Connected Account V4 route family (integration)", () => {
             expect(credential.statusCode, credential.body).toBe(200);
             const write = async (snapshot: typeof first) => {
                 const result = await app.inject({ method: 'POST', url: '/v4/connect/qualified/provider-account-usage', headers, payload: {
-                    source, expectedCredentialRevision: credential.json().credentialRevision, recordId: first.recordId, recordKey: first.recordKey,
+                    source, expectedCredentialRevision: credential.json().credentialRevision, expectedConfigurationRevision: null, recordId: first.recordId, recordKey: first.recordKey,
                     payloadMode: 'plain_json_v1', status: 'ok', snapshot, fetchedAt: snapshot.fetchedAtMs, staleAfterMs: snapshot.staleAfterMs,
                 } });
                 expect(result.statusCode, result.body).toBe(200);
             };
             await write(first);
+            // Real database guards reject physical writes as well as cursor
+            // changes; unchanged timestamp assignments still take row locks.
+            await db.$executeRawUnsafe(`CREATE TRIGGER usage_idle_credential_write BEFORE UPDATE ON ServiceAccountToken
+                BEGIN SELECT RAISE(ABORT, 'unchanged_usage_updated_credential'); END`);
+            await db.$executeRawUnsafe(`CREATE TRIGGER usage_idle_account_write BEFORE UPDATE ON Account
+                BEGIN SELECT RAISE(ABORT, 'derived_usage_updated_account'); END`);
+            const sourceTimestamp = new Date(1);
+            await db.connectedServiceUsageSource.updateMany({ where: { accountId: account.id }, data: { updatedAt: sourceTimestamp } });
+            const beforeIdle = await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } });
+            for (let index = 0; index < 10; index++) await write(first);
+            expect((await db.connectedServiceUsageSource.findFirstOrThrow({ where: { accountId: account.id } })).updatedAt).toEqual(sourceTimestamp);
+            expect(await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } })).toEqual(beforeIdle);
             const range = { startAtMs: first.fetchedAtMs, endAtMs: first.fetchedAtMs + 1000 };
             const demand = { range, resolution: 'accepted_observations' as const };
             const read = (projection = demand, readHeaders: Record<string, string> = headers) => app.inject({ method: 'GET', url: route + '?query=' + encodeURIComponent(JSON.stringify({ recordId: first.recordId, projection })), headers: readHeaders });
@@ -176,7 +192,7 @@ describe("qualified Connected Account V4 route family (integration)", () => {
             expect(missing.json()).toEqual({ projection: null, complete: false });
             const history = await readProviderAccountUsageHistory({ accountId: account.id, recordId: first.recordId, history: { range, pageSize: 100 } });
             const witness = history.entries[0]!;
-            const projection = { recordId: first.recordId, demand, observationCount: 1,
+            const projection = { recordId: first.recordId, encoding: 'meter_readings_runs_v1', demand, observationCount: 1,
                 frontier: { id: witness.id, observedAtMs: witness.observedAtMs },
                 content: sealProviderAccountUsagePageProjectionV1({ accountMode: 'plain', projection: buildProviderAccountUsagePageProjectionV1({
                     recordId: first.recordId, range, history: { entries: [{ id: witness.id, observedAtMs: witness.observedAtMs, snapshot: first }], nextCursor: null },
@@ -201,13 +217,86 @@ describe("qualified Connected Account V4 route family (integration)", () => {
             const written = await put();
             expect(written.statusCode, written.body).toBe(200);
             expect(written.json()).toEqual({ success: true });
+            const documentUrl = route + '/document?recordId=' + encodeURIComponent(first.recordId);
+            const heldDocument = await app.inject({ method: 'GET', url: documentUrl, headers });
+            expect(heldDocument.statusCode, heldDocument.body).toBe(200);
+            expect(heldDocument.json().projection).toEqual(projection);
+            expect(written.headers.etag).toBe(heldDocument.headers.etag);
+            for (let index = 0; index < 5; index++) {
+                const moving = { ...demand, range: { ...range, endAtMs: range.endAtMs + index } };
+                const head = await app.inject({ method: 'HEAD', url: route + '?query=' + encodeURIComponent(JSON.stringify({
+                    recordId: first.recordId, projection: moving })), headers });
+                expect(head.statusCode).toBe(200);
+                expect(head.body).toBe('');
+                expect(head.headers['x-happier-usage-projection-complete']).toBe('true');
+                expect(head.headers['access-control-expose-headers']).toContain('x-happier-usage-projection-complete');
+                expect(head.headers.etag).toBe(heldDocument.headers.etag);
+                expect(String(head.headers['access-control-expose-headers']).toLowerCase()).toContain('etag');
+                const unchanged = await app.inject({ method: 'GET', url: documentUrl,
+                    headers: { ...headers, 'if-none-match': String(heldDocument.headers.etag) } });
+                expect(unchanged.statusCode, unchanged.body).toBe(304);
+                expect(unchanged.body).toBe('');
+            }
+            const held = heldDocument;
+            const revision = held.headers.etag;
+            for (let index = 0; index < 5; index++) {
+                const unchanged = await app.inject({ method: 'GET', url: documentUrl, headers: { ...headers, 'if-none-match': String(revision) } });
+                expect(unchanged.statusCode, unchanged.body).toBe(304);
+                expect(Buffer.byteLength(unchanged.body)).toBe(0);
+            }
+            expect(held.headers['cache-control']).toBe('private, no-cache');
+            expect(String(held.headers['access-control-expose-headers']).toLowerCase()).toContain('etag');
+            expect(held.headers.vary).toContain('Authorization');
+            expect(typeof revision).toBe('string');
+            // Revalidation never bypasses the qualified source or Account admission.
+            expect((await app.inject({ method: 'GET', url: documentUrl, headers: { 'x-test-user-id': stranger.id,
+                'if-none-match': String(revision) } })).statusCode).toBe(404);
+            // A derived document never advances Account changes. Repeated
+            // publication by two tabs also leaves the current record untouched.
+            const projectionTimestamp = new Date(2);
+            await db.providerAccountUsageRecord.updateMany({ where: { accountId: account.id }, data: { updatedAt: projectionTimestamp } });
+            const afterProjection = await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } });
+            expect(afterProjection).toEqual(beforeIdle);
+            for (let index = 0; index < 10; index++) expect((await put()).statusCode).toBe(200);
+            expect((await db.providerAccountUsageRecord.findFirstOrThrow({ where: { accountId: account.id } })).updatedAt).toEqual(projectionTimestamp);
+            expect(await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } })).toEqual(afterProjection);
             const widerDemand = { ...demand, range: { ...range, endAtMs: range.endAtMs + 5000 } };
             expect((await read(widerDemand)).json()).toEqual({ projection, complete: true });
             expect((await read({ ...demand, range: { startAtMs: range.startAtMs - 1, endAtMs: range.endAtMs } })).json())
                 .toEqual({ projection: null, complete: false });
+            await db.$executeRawUnsafe('DROP TRIGGER usage_idle_credential_write');
+            await db.$executeRawUnsafe('DROP TRIGGER usage_idle_account_write');
             await write({ ...first, planLabel: 'new plan', fetchedAtMs: first.fetchedAtMs + 2000, observedAtMs: first.observedAtMs + 2000 });
+            expect((await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } })).seq).toBe(beforeIdle.seq + 1);
             expect((await read(widerDemand)).json()).toEqual({ projection, complete: false });
             expect((await read()).json()).toEqual({ projection, complete: true });
+            const incompleteHead = await app.inject({ method: 'HEAD', url: route + '?query=' + encodeURIComponent(JSON.stringify({ recordId: first.recordId, projection: widerDemand })), headers });
+            expect(incompleteHead.headers['x-happier-usage-projection-complete']).toBe('false');
+            const tailRead = await app.inject({ method: 'GET', url: documentUrl, headers });
+            const tailRevision = tailRead.headers.etag;
+            const extendedHistory = await readProviderAccountUsageHistory({ accountId: account.id, recordId: first.recordId,
+                history: { range: widerDemand.range, pageSize: 100 } });
+            const extension = extendedHistory.entries.map(entry => ({ id: entry.id, observedAtMs: entry.observedAtMs,
+                snapshot: entry.record.snapshot! }));
+            const lastExtension = extension.at(-1)!;
+            const otherTab = await put({ ...projection, demand: widerDemand, observationCount: extension.length,
+                frontier: { id: lastExtension.id, observedAtMs: lastExtension.observedAtMs },
+                content: sealProviderAccountUsagePageProjectionV1({ accountMode: 'plain', projection: buildProviderAccountUsagePageProjectionV1({
+                    recordId: first.recordId, range: widerDemand.range, history: { entries: extension, nextCursor: null },
+                }) }) });
+            expect(otherTab.statusCode, otherTab.body).toBe(200);
+            const changed = await app.inject({ method: 'GET', url: documentUrl, headers: { ...headers, 'if-none-match': String(tailRevision) } });
+            expect(changed.statusCode, changed.body).toBe(200);
+            expect(changed.json().projection.observationCount).toBe(2);
+            expect(otherTab.headers.etag).toBe(changed.headers.etag);
+            // A narrower valid submission can reuse an already-stored wider
+            // document. It must not bind that winner's ETag to its smaller body.
+            const retainedWider = await put();
+            expect(retainedWider.statusCode, retainedWider.body).toBe(200);
+            expect(retainedWider.headers.etag).toBeUndefined();
+            const acknowledged = await app.inject({ method: 'GET', url: documentUrl, headers: { ...headers, 'if-none-match': String(changed.headers.etag) } });
+            expect(acknowledged.statusCode, acknowledged.body).toBe(304);
+            expect(acknowledged.body).toBe('');
             const stale = await put({ ...projection, demand: widerDemand, content: sealProviderAccountUsagePageProjectionV1({ accountMode: 'plain',
                 projection: buildProviderAccountUsagePageProjectionV1({ recordId: first.recordId, range: widerDemand.range,
                     history: { entries: [{ id: witness.id, observedAtMs: witness.observedAtMs, snapshot: first }], nextCursor: null } }) }) });
@@ -218,9 +307,13 @@ describe("qualified Connected Account V4 route family (integration)", () => {
             await db.providerAccountUsageRecord.update({ where: { accountId_recordId: { accountId: account.id, recordId: first.recordId } },
                 data: { metadata: { pageProjection: { ...projection, content: { t: 'encrypted', c: 'opaque' } } } } });
             expect((await read()).statusCode).toBe(409);
+            expect((await app.inject({ method: 'GET', url: documentUrl,
+                headers: { ...headers, 'if-none-match': String(changed.headers.etag) } })).statusCode).toBe(409);
             await db.connectedServiceUsageSource.deleteMany({ where: { accountId: account.id } });
             expect((await put()).statusCode).toBe(404);
             expect((await read()).statusCode).toBe(404);
+            expect((await app.inject({ method: 'GET', url: documentUrl,
+                headers: { ...headers, 'if-none-match': String(changed.headers.etag) } })).statusCode).toBe(404);
         });
     });
 
@@ -741,6 +834,21 @@ describe("qualified Connected Account V4 route family (integration)", () => {
             expect(group.state.lastSwitchAt).toBe(selectedAt);
             expect(group.state.lastSwitchReason).toBe(selection === "automatic" ? "usage_limit" : "manual");
             expect(group.state.activeSince).toEqual({ accountId: backup.accountId, atMs: selectedAt });
+            const beforeNoOp = await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } });
+            const beforeRows = await db.connectedServiceAuthGroup.findMany({ where: { accountId: account.id }, include: { members: true } });
+            for (const runtimeState of [
+                { memberStates: [] },
+                { state: { lastSwitchAt: 1, status: "ready" }, memberStates: [] },
+                { memberStates: group.members.map(member => ({ connectedAccountId: member.connectedAccountId, state: member.state })) },
+            ]) {
+                const equal = await app.inject({ method: "PATCH", url: "/v4/connect/qualified/group/runtime-state", headers,
+                    payload: { service, groupId: groupRef.groupId, expectedGeneration: group.generation,
+                        expectedIncarnation: group.incarnation, expectedRuntimeStateRevision: group.runtimeStateRevision, runtimeState } });
+                expect(equal.statusCode, equal.body).toBe(200);
+                expect(equal.json().group).toEqual(group);
+                expect(await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } })).toEqual(beforeNoOp);
+                expect(await db.connectedServiceAuthGroup.findMany({ where: { accountId: account.id }, include: { members: true } })).toEqual(beforeRows);
+            }
             const repeated = await app.inject({
                 method: "POST", url: "/v4/connect/qualified/group/active-account", headers,
                 payload: {
@@ -1530,7 +1638,7 @@ describe("qualified Connected Account V4 route family (integration)", () => {
 
                 await db.account.update({
                     where: { id: account.id },
-                    data: { encryptionMode: "e2ee" },
+                    data: { encryptionMode: "e2ee", ...createSignedAccountContentBinding() },
                 });
                 const modeMismatchRead = await app.inject({
                     method: "GET",

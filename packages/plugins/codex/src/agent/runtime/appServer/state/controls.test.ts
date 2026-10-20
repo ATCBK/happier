@@ -7,6 +7,14 @@ import {
 } from './controls';
 
 describe('Codex app-server session controls', () => {
+    it('preserves the observed native model display name and never invents one from an unknown id', async () => {
+        const snapshot = await readCodexAppServerSessionControls({ client: { request: async method => method === 'model/list'
+            ? { data: [{ id: 'gpt-6-luna', model: 'gpt-6-luna', displayName: 'GPT-6-Luna' }, { id: 'unknown-native-model' }] }
+            : [] } });
+        expect(snapshot.availableModels).toEqual([
+            { id: 'gpt-6-luna', name: 'GPT-6-Luna' }, { id: 'unknown-native-model', name: 'unknown-native-model' },
+        ]);
+    });
     it.each(['rejected', 'malformed', 'empty'] as const)('distinguishes %s model discovery from an unavailable observation', async (outcome) => {
         const snapshot = await readCodexAppServerSessionControls({
             client: { request: async (method) => {
@@ -69,7 +77,7 @@ describe('Codex app-server session controls', () => {
             availableModels: [
                 {
                     id: 'gpt-5.5',
-                    name: 'GPT 5.5',
+                    name: 'GPT-5.5',
                     modelOptions: [
                         {
                             id: 'reasoning_effort',
@@ -106,6 +114,8 @@ describe('Codex app-server session controls', () => {
                                     { reasoningEffort: 'medium', description: 'Balanced' },
                                     { reasoningEffort: 'high', description: 'Deep' },
                                     { reasoningEffort: 'xhigh', description: 'Extra deep' },
+                                    // A level this build has no word for still reads as a name, not a raw enum value.
+                                    { reasoningEffort: 'ultra', description: 'Longest thinking' },
                                 ],
                                 defaultReasoningEffort: 'medium',
                                 serviceTiers: [
@@ -129,7 +139,7 @@ describe('Codex app-server session controls', () => {
         expect(snapshot.availableModels).toEqual([
             {
                 id: 'gpt-5.6-sol',
-                name: 'GPT 5.6 Sol',
+                name: 'GPT-5.6-Sol',
                 modelOptions: [
                     {
                         id: 'reasoning_effort',
@@ -141,6 +151,7 @@ describe('Codex app-server session controls', () => {
                             { value: 'medium', name: 'Medium', description: 'Balanced' },
                             { value: 'high', name: 'High', description: 'Deep' },
                             { value: 'xhigh', name: 'XHigh', description: 'Extra deep' },
+                            { value: 'ultra', name: 'Ultra', description: 'Longest thinking' },
                         ],
                     },
                     {

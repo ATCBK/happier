@@ -42,6 +42,15 @@ describe('summarizeSessionRow', () => {
     };
   };
 
+  it('preserves the canonical manager facts used by direct worker target resolution', () => {
+    const manager = { sessionId: 'c222222222222222222222222' };
+    const managedSessions = { total: 3, working: 1, needsYou: 1, stalled: 0 };
+    const row = createSessionRecordFixture({ id: 'c111111111111111111111111', encryptionMode: 'plain',
+      metadata: JSON.stringify({}), manager, managedSessions });
+    const summary = SessionSummarySchema.parse(summarizeSessionRow({ credentials, row }));
+    expect(summary).toMatchObject({ manager, managedSessions });
+  });
+
   it('adds system session fields when metadata includes systemSessionV1', () => {
     const metadata = encodeBase64(encryptLegacy({
       tag: 'MySession',

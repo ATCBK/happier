@@ -100,6 +100,30 @@ describe('DetailsTabHeader', () => {
         }
     });
 
+    it('keeps a phone header in one band when its quiet toggles are all it carries', async () => {
+        const { SurfaceStateSizeProvider } = await import('@/components/ui/surfaces/surfaceStateSize');
+        const { Text } = await import('@/components/ui/text/Text');
+        const iconsInBand = (screen: Awaited<ReturnType<typeof renderScreen>>) =>
+            (screen.findHostByTestId('hdr')?.findAll((node) => node.props.testID === 'people').length ?? 0) > 0;
+        const alone = await renderScreen(
+            <SurfaceStateSizeProvider size="phone">
+                <DetailsTabHeader testID="hdr" title="Retry cap during deploys" actions={<Text testID="people">people</Text>}
+                    menuActions={[{ id: 'rename', title: 'Rename', onSelect: () => {} }]} />
+            </SurfaceStateSizeProvider>,
+        );
+        expect(iconsInBand(alone)).toBe(true);
+        await alone.unmount();
+        // With view controls the toggles still share the row beneath with them.
+        const withControls = await renderScreen(
+            <SurfaceStateSizeProvider size="phone">
+                <DetailsTabHeader testID="hdr" title="SettingsModal.tsx" actions={<Text testID="people">people</Text>}
+                    controls={<Text testID="ctl">Diff | File</Text>} />
+            </SurfaceStateSizeProvider>,
+        );
+        expect(iconsInBand(withControls)).toBe(false);
+        await withControls.unmount();
+    });
+
     it('moves the view controls beneath the band when they would collide with its actions', async () => {
         const { act } = await import('react-test-renderer');
         const { Text } = await import('@/components/ui/text/Text');
@@ -112,7 +136,7 @@ describe('DetailsTabHeader', () => {
         const measure = async (root: number) => {
             await act(async () => {
                 screen.findHostByTestId('hdr.root')!.props.onLayout(layout(root));
-                screen.findHostByTestId('hdr.actions')!.props.onLayout(layout(300));
+                screen.findHostByTestId('hdr.icons')!.props.onLayout(layout(300));
                 screen.findHostByTestId('hdr.controls')!.props.onLayout(layout(170));
             });
         };
@@ -136,7 +160,7 @@ describe('DetailsTabHeader', () => {
         const measure = async (root: number) => {
             await act(async () => {
                 screen.findHostByTestId('hdr.root')!.props.onLayout(layout(root));
-                screen.findHostByTestId('hdr.actions')!.props.onLayout(layout(300));
+                screen.findHostByTestId('hdr.icons')!.props.onLayout(layout(300));
             });
         };
         await measure(1200);
@@ -149,14 +173,164 @@ describe('DetailsTabHeader', () => {
         expect(inBand()).toBe(true);
     });
 
+    it('counts the room taken by `⋯` and the pane controls before leaving the actions beside the title', async () => {
+        const { act } = await import('react-test-renderer');
+        const { Text } = await import('@/components/ui/text/Text');
+        const layout = (width: number) => ({ nativeEvent: { layout: { x: 0, y: 0, width, height: 40 } } });
+        const screen = await renderScreen(
+            <DetailsTabHeader testID="hdr" title="Initial note store" actions={<Text testID="icons">icons</Text>}
+                menuActions={[{ id: 'copy', title: 'Copy', onSelect: () => {} }]} />,
+        );
+        const inBand = () => (screen.findHostByTestId('hdr')?.findAll((node) => node.props.testID === 'icons').length ?? 0) > 0;
+        await act(async () => {
+            screen.findHostByTestId('hdr.root')!.props.onLayout(layout(420));
+            screen.findHostByTestId('hdr.icons')!.props.onLayout(layout(150));
+            screen.findHostByTestId('hdr.trailing')!.props.onLayout(layout(130));
+        });
+        // Beside the title the icons would leave it the 100px left after the menu: it moves them beneath.
+        expect(inBand()).toBe(false);
+    });
+
+    it('holds the view controls and actions on one row beneath the band, folding the quieter buttons into its menu', async () => {
+        const { act } = await import('react-test-renderer');
+        const { Text } = await import('@/components/ui/text/Text');
+        const layout = (width: number) => ({ nativeEvent: { layout: { x: 0, y: 0, width, height: 32 } } });
+        const onRaw = vi.fn();
+        const buttons = [
+            { label: 'Raw', onPress: onRaw, testID: 'raw' },
+            { label: 'Copy', onPress: () => {}, testID: 'copy' },
+            { label: 'Select lines', onPress: () => {}, testID: 'select' },
+            { label: 'Add to commit', onPress: () => {}, testID: 'stage' },
+        ];
+        const widths: Record<string, number> = { raw: 50, copy: 56, select: 90, stage: 110 };
+        const screen = await renderScreen(
+            <DetailsTabHeader testID="hdr" title="" meta={[{ key: 'status', text: 'Modified' }]} buttons={buttons}
+                actions={<Text testID="icons">icons</Text>} controls={<Text testID="ctl">Pending · Diff | File</Text>} />,
+        );
+        const shown = (id: string) => screen.findAll((node) => node.props.testID === id && node.props.label !== undefined).length > 0;
+        const measure = async (root: number) => {
+            await act(async () => {
+                screen.findHostByTestId('hdr.root')!.props.onLayout(layout(root));
+                screen.findHostByTestId('hdr.icons')!.props.onLayout(layout(128));
+                screen.findHostByTestId('hdr.controls')!.props.onLayout(layout(230));
+                for (const button of buttons) {
+                    const host = screen.findAll((node) => node.props.testID === button.testID && node.props.label !== undefined)[0];
+                    host?.parent?.props.onLayout?.(layout(widths[button.testID]!));
+                }
+            });
+        };
+        await measure(1400);
+        expect(buttons.every((button) => shown(button.testID))).toBe(true);
+        expect(screen.findHostByTestId('hdr.menu.trigger')).toBeNull();
+        // A ~540px centre pane: controls, toggles and the one file action share a row; the rest wait in `⋯`.
+        await measure(540);
+        expect(shown('stage')).toBe(true);
+        expect(['raw', 'copy', 'select'].some(shown)).toBe(false);
+        const { PageHeaderMenu } = await import('@/components/ui/layout/PageHeaderEntityParts');
+        const menu = screen.findAllByType(PageHeaderMenu)[0]!;
+        expect(menu.props.actions.map((action: { testID?: string }) => action.testID)).toEqual(['raw', 'copy', 'select']);
+        await act(async () => { await menu.props.actions[0].onSelect(); });
+        expect(onRaw).toHaveBeenCalledTimes(1);
+        // Room again: every button returns to the row.
+        await measure(1400);
+        expect(buttons.every((button) => shown(button.testID))).toBe(true);
+    });
+
+    it('folds the quiet toggles into `⋯` too when the folded buttons still leave the row too narrow', async () => {
+        const { act } = await import('react-test-renderer');
+        const { Text } = await import('@/components/ui/text/Text');
+        const layout = (width: number) => ({ nativeEvent: { layout: { x: 0, y: 0, width, height: 32 } } });
+        const buttons = [
+            { label: 'Raw', onPress: () => {}, testID: 'raw' },
+            { label: 'Add to commit', onPress: () => {}, testID: 'stage' },
+        ];
+        const widths: Record<string, number> = { raw: 50, stage: 106 };
+        const screen = await renderScreen(
+            <DetailsTabHeader testID="hdr" title="" meta={[{ key: 'status', text: 'Modified' }]} buttons={buttons}
+                actions={<Text testID="icons">icons</Text>} controls={<Text testID="ctl">Pending · Diff | File</Text>} />,
+        );
+        const { PageHeaderMenu } = await import('@/components/ui/layout/PageHeaderEntityParts');
+        const iconsInRow = () => screen.findAll((node) => node.props.testID === 'icons').some((node) => {
+            for (let parent = node.parent; parent; parent = parent.parent) if (parent.type === PageHeaderMenu) return false;
+            return true;
+        });
+        const measure = async (root: number) => {
+            await act(async () => {
+                screen.findHostByTestId('hdr.root')!.props.onLayout(layout(root));
+                screen.findHostByTestId('hdr.icons')?.props.onLayout(layout(126));
+                screen.findHostByTestId('hdr.controls')!.props.onLayout(layout(231));
+                for (const button of buttons) {
+                    const host = screen.findAll((node) => node.props.testID === button.testID && node.props.label !== undefined)[0];
+                    host?.parent?.props.onLayout?.(layout(widths[button.testID]!));
+                }
+            });
+        };
+        await measure(540);
+        expect(iconsInRow()).toBe(true);
+        // The ~470px file column beside an open commit: the toggles join `⋯`, the file action keeps the row.
+        await measure(470);
+        expect(iconsInRow()).toBe(false);
+        const menu = screen.findAllByType(PageHeaderMenu)[0]!;
+        expect(menu.props.content).toBeTruthy();
+        expect(screen.findAll((node) => node.props.testID === 'stage' && node.props.label !== undefined).length).toBeGreaterThan(0);
+        await measure(540);
+        expect(iconsInRow()).toBe(true);
+    });
+
+    it('keeps the file action beside the title when it and the view controls would not share a row, folding the rest into `⋯`', async () => {
+        const { act } = await import('react-test-renderer');
+        const { Text } = await import('@/components/ui/text/Text');
+        const { PageHeaderMenu } = await import('@/components/ui/layout/PageHeaderEntityParts');
+        const layout = (width: number) => ({ nativeEvent: { layout: { x: 0, y: 0, width, height: 32 } } });
+        const buttons = [
+            { label: 'Raw', onPress: () => {}, testID: 'raw' },
+            { label: 'Copy', onPress: () => {}, testID: 'copy' },
+            { label: 'Add to commit', onPress: () => {}, testID: 'stage' },
+        ];
+        const widths: Record<string, number> = { raw: 47, copy: 52, stage: 106 };
+        const screen = await renderScreen(
+            <DetailsTabHeader testID="hdr" title="README.md" meta={[{ key: 'status', text: 'Modified' }]} buttons={buttons}
+                menuActions={[{ id: 'edit', title: 'Edit', onSelect: () => {} }]}
+                actions={<Text testID="icons">icons</Text>} controls={<Text testID="ctl">Pending · Diff | File</Text>} />,
+        );
+        const inBand = (id: string) => (screen.findHostByTestId('hdr')?.findAll((node) => node.props.testID === id).length ?? 0) > 0;
+        const measure = async (root: number) => {
+            await act(async () => {
+                screen.findHostByTestId('hdr.root')!.props.onLayout(layout(root));
+                screen.findHostByTestId('hdr.icons')?.props.onLayout(layout(282));
+                screen.findHostByTestId('hdr.controls')!.props.onLayout(layout(298));
+                screen.findHostByTestId('hdr.trailing')!.props.onLayout(layout(96));
+                for (const button of buttons) {
+                    const host = screen.findAll((node) => node.props.testID === button.testID && node.props.label !== undefined)[0];
+                    host?.parent?.props.onLayout?.(layout(widths[button.testID]!));
+                }
+            });
+        };
+        await measure(1400);
+        expect(buttons.every((button) => inBand(button.testID))).toBe(true);
+        expect(inBand('icons')).toBe(true);
+        // A ~360px drawer: the controls (298) and even the one button that stays (106) cannot share a row, and a
+        // button alone on a second row reads as an afterthought. It stays by the title; the rest wait in `⋯`.
+        await measure(360);
+        expect(inBand('stage')).toBe(true);
+        expect(inBand('raw') || inBand('copy')).toBe(false);
+        expect(inBand('ctl')).toBe(false);
+        const menu = screen.findAllByType(PageHeaderMenu)[0]!;
+        expect(menu.props.content).toBeTruthy();
+        expect(menu.props.actions.map((action: { testID?: string }) => action.testID).filter(Boolean)).toEqual(['raw', 'copy']);
+        await measure(1400);
+        expect(buttons.every((button) => inBand(button.testID))).toBe(true);
+        expect(inBand('icons')).toBe(true);
+    });
+
     it('does not offer a busy action again', async () => {
         const onSave = vi.fn();
         const screen = await renderScreen(
             <DetailsTabHeader title="useSettingsRouteKey.ts" buttons={[{ label: 'Save', tone: 'primary', busy: true, onPress: onSave, testID: 'save' }]} />,
         );
-        const save = screen.findByTestId('save');
+        const save = screen.findHostByTestId('save');
         expect(save?.props.accessibilityState).toMatchObject({ disabled: true, busy: true });
-        expect(save?.props.onPress).toBeUndefined();
+        await screen.pressByTestIdAsync('save');
         expect(onSave).not.toHaveBeenCalled();
     });
 });

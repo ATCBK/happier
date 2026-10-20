@@ -7,6 +7,7 @@ import { useOverlayPortal } from './OverlayPortal';
 import {
     ModalPortalTargetProvider,
     useHasModalPortalTargetProvider,
+    useModalLayerZIndex,
     useModalPortalTarget,
 } from '@/modal/portal/ModalPortalTarget';
 import { usePopoverPortalTarget } from './PopoverPortalTarget';
@@ -184,6 +185,8 @@ type PopoverCommonProps = Readonly<{
     sheetHeader?: 'band' | 'none';
     /** `solid`: an opaque sheet, for live content that must not show the screen through it. */
     sheetMaterial?: 'glass' | 'solid';
+    /** Controls pinned under the sheet's scrolling body (a filter sheet's Clear and Show results). */
+    sheetFooter?: React.ReactNode;
     accessibilityLabel?: string;
     /** Move focus into the popover after it opens when the content is menu-like. */
     autoFocusOnOpen?: boolean;
@@ -193,6 +196,18 @@ type PopoverCommonProps = Readonly<{
     /** Explicit physical target for menu-like autofocus; falls back to the content wrapper. */
     initialFocusRef?: React.RefObject<any>;
     boundaryRef?: React.RefObject<any> | null;
+    /**
+     * A view the popover never covers: a top/bottom popover opens beyond this view's top or bottom
+     * edge instead of its anchor's, while still hanging horizontally from the anchor. A picker opened
+     * from a chip inside a composer passes the composer, so the text being written stays visible.
+     */
+    clearanceRef?: React.RefObject<any>;
+    /**
+     * A view whose width the popover stays within, while `boundaryRef` (or the window) still sets its
+     * vertical room: a picker opened from a chip near the end of a composer slides back inside the
+     * composer's width instead of running past it.
+     */
+    horizontalBoundaryRef?: React.RefObject<any>;
     /**
      * Web-only: scroll container to subscribe to for anchor-tracking recomputes.
      *
@@ -205,6 +220,7 @@ type PopoverCommonProps = Readonly<{
     followScrollRef?: React.RefObject<any> | null;
     placement?: PopoverPlacement;
     gap?: number;
+    /** The tallest the popover may be. Defaults to the room its side of the anchor offers: content scrolls, never hides. */
     maxHeightCap?: number;
     maxWidthCap?: number;
     /**
@@ -299,18 +315,76 @@ function hasOpenNestedWebPopover(owner: OpenWebPopoverEntry): boolean {
     });
 }
 
-export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
+/** The room a top/bottom side must offer before it is preferred when the caller sets no cap. */
+const DEFAULT_PREFERRED_ROOM_PX = 400;
+
+type PopoverProps = PopoverWithBackdrop | PopoverWithoutBackdrop;
+
+function resolveFocusReturnRef(props: PopoverProps) {
+    return props.focusReturnRef ?? (props.anchor?.kind === 'view' ? props.anchor.ref : props.anchorRef);
+}
+
+export function Popover(props: PopoverProps) {
+    const deviceType = useDeviceType();
+    // Placement measurements belong to the anchored presentation's mounted tree. A sheet
+    // replaces that tree, so returning to desktop measures its new anchor and content afresh.
+    return props.phonePresentation === 'sheet' && deviceType === 'phone'
+        ? <PhonePopoverSheet {...props} />
+        : <AnchoredPopover {...props} />;
+}
+
+function PhonePopoverSheet(props: PopoverProps) {
+    const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+    const insets = useChromeSafeAreaInsets();
+    const maxHeight = Math.min(props.maxHeightCap ?? windowHeight, Math.max(0, windowHeight - insets.top - insets.bottom));
+    const closeSheet = () => props.onRequestClose?.();
+    return <BaseModal
+        visible={props.open}
+        onClose={closeSheet}
+        placement="bottom"
+        scrollHost="body"
+        accessibilityLabel={props.accessibilityLabel}
+        focusReturnRef={resolveFocusReturnRef(props)}
+        focusReturnFallback="activation-time"
+    >
+        <ModalCardFrame
+            presentation="sheet"
+            header={props.sheetHeader}
+            material={props.sheetMaterial}
+            sheetBottomInset={insets.bottom}
+            title={props.accessibilityLabel}
+            subtitle={props.sheetSubtitle}
+            closeButtonTestID="popover-sheet.close"
+            actions={props.sheetHeaderAction}
+            footer={props.sheetFooter}
+            onClose={props.onRequestClose && !props.sheetHeaderAction ? closeSheet : undefined}
+            style={{ maxHeight: Math.max(0, windowHeight - insets.top) }}
+            bodyStyle={{ flexGrow: 0, paddingLeft: insets.left, paddingRight: insets.right }}
+        >
+            <FloatingOverlaySheetContext.Provider value={true}>
+                {props.children({
+                    placement: 'bottom',
+                    maxWidth: Math.max(0, windowWidth - insets.left - insets.right),
+                    maxHeight,
+                    presentation: 'sheet',
+                    requestClose: closeSheet,
+                })}
+            </FloatingOverlaySheetContext.Provider>
+        </ModalCardFrame>
+    </BaseModal>;
+}
+
+function AnchoredPopover(props: PopoverProps) {
     const {
         open: requestedOpen,
         anchorRef: anchorRefLegacy,
         anchor: anchorProp,
-        focusReturnRef: focusReturnRefProp,
         initialFocusRef: initialFocusRefProp,
         boundaryRef: boundaryRefProp,
         followScrollRef: followScrollRefProp,
         placement = 'auto',
         gap = 8,
-        maxHeightCap = 400,
+        maxHeightCap: maxHeightCapProp,
         maxWidthCap = 520,
         minWidth: contentSizedMinWidth = CONTENT_SIZED_POPOVER_WIDTH.minPx,
         onRequestClose,
@@ -319,10 +393,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
         containerStyle,
         children,
     } = props;
-    const deviceType = useDeviceType();
-    const phoneSheet = props.phonePresentation === 'sheet' && deviceType === 'phone';
-    const insets = useChromeSafeAreaInsets();
-    const open = requestedOpen && !phoneSheet;
+    const open = requestedOpen;
     const keyboardBottomInsetProp = props.keyboardBottomInset;
     const autoFocusOnOpen = props.autoFocusOnOpen === true;
     const resolvedAnchorMode: 'view' | 'rect' = anchorProp ? anchorProp.kind : 'view';
@@ -345,12 +416,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
             height: rectAnchorHeight,
         };
     }, [resolvedAnchorMode, rectAnchorLeft, rectAnchorTop, rectAnchorWidth, rectAnchorHeight]);
-    const resolvedFocusReturnRef: React.RefObject<any> | undefined = (() => {
-        if (focusReturnRefProp) return focusReturnRefProp;
-        if (anchorProp?.kind === 'view') return anchorProp.ref;
-        if (anchorRefLegacy) return anchorRefLegacy;
-        return undefined;
-    })();
+    const resolvedFocusReturnRef = resolveFocusReturnRef(props);
 
     const boundaryFromContext = usePopoverBoundaryRef();
     const scrollSourceFromContext = usePopoverScrollSourceRef();
@@ -360,8 +426,13 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
     const boundaryRef = boundaryRefProp === undefined ? boundaryFromContext : boundaryRefProp;
     const followScrollRef = followScrollRefProp === undefined ? scrollSourceFromContext : followScrollRefProp;
     const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+    // Without an explicit cap a popover takes whatever room its side offers (content scrolls inside it);
+    // the room a side must offer to be preferred stays the usual menu height.
+    const maxHeightCap = maxHeightCapProp ?? windowHeight;
+    const preferredRoom = maxHeightCapProp ?? DEFAULT_PREFERRED_ROOM_PX;
     const overlayPortal = useOverlayPortal();
     const modalPortalTarget = useModalPortalTarget();
+    const modalLayerZIndex = useModalLayerZIndex();
     const hasModalPortalTargetProvider = useHasModalPortalTargetProvider();
     const portalTarget = usePopoverPortalTarget();
     const portalWeb = props.portal?.web;
@@ -373,6 +444,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
             ? (portalWeb.target ?? defaultPortalTargetOnWeb)
             : defaultPortalTargetOnWeb;
     const matchAnchorWidthOnPortal = props.portal?.matchAnchorWidth ?? true;
+    const sizesToAnchorExplicitly = props.portal?.matchAnchorWidth === true;
     const anchorAlignOnPortal = props.portal?.anchorAlign ?? 'start';
     const anchorAlignVerticalOnPortal = props.portal?.anchorAlignVertical ?? 'center';
     const topBottomLayoutOnPortal = props.portal?.topBottomLayout ?? 'anchored';
@@ -733,6 +805,13 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
     const [anchorRectState, setAnchorRectState] = React.useState<WindowRect | null>(null);
     const [boundaryRectState, setBoundaryRectState] = React.useState<WindowRect | null>(null);
     const [contentRectState, setContentRectState] = React.useState<WindowRect | null>(null);
+    /**
+     * Where an open side popover first settled, as an offset from its anchor's top. Content that grows
+     * after opening (a field expands, a sub-page pushes) keeps this top and grows downward, rising only
+     * by what no longer fits; re-centring on every height change made it leap toward the window top.
+     */
+    const settledSideTopRef = React.useRef<Readonly<{ placement: 'left' | 'right'; offset: number }> | null>(null);
+    if (!open) settledSideTopRef.current = null;
     const isMountedRef = React.useRef(true);
     React.useLayoutEffect(() => {
         isMountedRef.current = true;
@@ -760,7 +839,14 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
 
     // The edge padding is a transparent gutter inside the popover's box (see `paddingStyle`): the
     // width a child may fill is the box less that gutter, never the box itself.
-    const horizontalGutter = computed.placement === 'top' || computed.placement === 'bottom' ? edgeInsets.horizontal : 0;
+    // The edge margin is the gutter the box actually carries: a caller's `containerStyle` padding can
+    // narrow it (the composer's pickers zero it), and the clamp then keeps the visible surface the full
+    // margin from the window edge itself instead of assuming the gutter is there.
+    const horizontalGutter = React.useMemo(() => {
+        if (computed.placement !== 'top' && computed.placement !== 'bottom') return 0;
+        const carried = resolvePaddingEdges([{ paddingHorizontal: edgeInsets.horizontal }, containerStyle]);
+        return Math.max(0, Math.min(edgeInsets.horizontal, carried.left, carried.right));
+    }, [computed.placement, containerStyle, edgeInsets.horizontal]);
     const contentMaxWidth = Math.max(0, computed.maxWidth - horizontalGutter * 2);
 
     const keyboardHeightRef = React.useRef(0);
@@ -998,12 +1084,58 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
 
             // Shrink the usable boundary so the popover doesn't sit flush to the container edges.
             // (This also makes maxHeight/maxWidth clamping respect the margin.)
-            const effectiveBoundaryRect: WindowRect = {
+            let effectiveBoundaryRect: WindowRect = {
                 x: boundaryRect.x + edgeInsets.horizontal,
                 y: boundaryRect.y + edgeInsets.top,
                 width: Math.max(0, boundaryRect.width - edgeInsets.horizontal * 2),
                 height: Math.max(0, boundaryRect.height - edgeInsets.top - edgeInsets.bottom),
             };
+
+            const horizontalBoundaryNode = props.horizontalBoundaryRef?.current ?? null;
+            if (horizontalBoundaryNode) {
+                // Same carry as the clearance below: window-space rects, moved into the anchor's space.
+                const [horizontalWindowRect, anchorWindowRect] = await Promise.all([
+                    measureInWindow(horizontalBoundaryNode),
+                    resolvedAnchorMode === 'rect' ? Promise.resolve(anchorRectFromProp) : measureInWindow(anchorNode),
+                ]);
+                if (!isMountedRef.current) return false;
+                if (horizontalWindowRect && anchorWindowRect) {
+                    const left = Math.max(effectiveBoundaryRect.x, horizontalWindowRect.x + (anchorRect.x - anchorWindowRect.x));
+                    const right = Math.min(
+                        effectiveBoundaryRect.x + effectiveBoundaryRect.width,
+                        horizontalWindowRect.x + horizontalWindowRect.width + (anchorRect.x - anchorWindowRect.x),
+                    );
+                    // A view the anchor does not sit inside gives no usable width: the window keeps it.
+                    if (right - left >= 1 && anchorRect.x >= left && anchorRect.x <= right) {
+                        effectiveBoundaryRect = { ...effectiveBoundaryRect, x: left, width: right - left };
+                    }
+                }
+            }
+
+            const clearanceNode = props.clearanceRef?.current ?? null;
+            if (clearanceNode) {
+                // Measured in window space and carried into the anchor's space by the anchor's own window
+                // offset, so a portal-relative anchor and a window-relative clearance never mix.
+                const [clearanceWindowRect, anchorWindowRect] = await Promise.all([
+                    measureInWindow(clearanceNode),
+                    resolvedAnchorMode === 'rect' ? Promise.resolve(anchorRectFromProp) : measureInWindow(anchorNode),
+                ]);
+                if (!isMountedRef.current) return false;
+                if (clearanceWindowRect && anchorWindowRect) {
+                    // The clearance alone sets the vertical extent: a caret anchor's rect can trail a
+                    // reflow by a frame, and only the live clearance says where the composer is now.
+                    const top = clearanceWindowRect.y + (anchorRect.y - anchorWindowRect.y);
+                    const bottom = top + clearanceWindowRect.height;
+                    const roomBeyond = Math.max(
+                        top - effectiveBoundaryRect.y,
+                        effectiveBoundaryRect.y + effectiveBoundaryRect.height - bottom,
+                    ) - gap;
+                    // A clearance view that fills the boundary leaves no side to open on: hang from the anchor.
+                    if (roomBeyond >= 1) {
+                        anchorRect = { ...anchorRect, y: top, height: bottom - top };
+                    }
+                }
+            }
 
             const availableTop = (anchorRect.y - effectiveBoundaryRect.y) - gap;
             const availableBottom = (effectiveBoundaryRect.y + effectiveBoundaryRect.height - (anchorRect.y + anchorRect.height)) - gap;
@@ -1015,7 +1147,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                 preferredMinAvailable: props.placementMinSpace ?? (
                     placement === 'auto-horizontal' || placement === 'left' || placement === 'right'
                         ? maxWidthCap
-                        : maxHeightCap
+                        : preferredRoom
                 ),
                 flip: props.flip !== false,
                 available: {
@@ -1030,7 +1162,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
             // the bottom placement's clamp then lifts it until it ends at the boundary's bottom edge.
             const shiftsToFit = props.fit === 'shift'
                 && (resolvedPlacement === 'top' || resolvedPlacement === 'bottom')
-                && Math.max(availableTop, availableBottom) < maxHeightCap;
+                && Math.max(availableTop, availableBottom) < preferredRoom;
             const placementUsed = shiftsToFit ? 'bottom' : resolvedPlacement;
             const maxHeightAvailable = shiftsToFit
                 ? effectiveBoundaryRect.height
@@ -1044,7 +1176,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                             boundaryY: effectiveBoundaryRect.y,
                             boundaryHeight: effectiveBoundaryRect.height,
                             gap,
-                            preferredMinHeight: Math.min(maxHeightCap, props.placementMinSpace ?? maxHeightCap),
+                            preferredMinHeight: Math.min(maxHeightCap, props.placementMinSpace ?? preferredRoom),
                         });
 
             const maxWidthAvailable =
@@ -1053,7 +1185,9 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                     : resolvedPlacement === 'left'
                         ? availableLeft
                         : (
-                            topBottomLayoutOnPortal === 'boundary'
+                            // A popover that asks to size to its anchor hangs from the anchor's own edges: the boundary (already
+                            // inset by `edgePadding`) is its only margin, so the gap does not narrow it again.
+                            (topBottomLayoutOnPortal === 'boundary' || sizesToAnchorExplicitly)
                             && (resolvedPlacement === 'top' || resolvedPlacement === 'bottom')
                                 ? effectiveBoundaryRect.width
                                 : effectiveBoundaryRect.width - gap * 2
@@ -1127,7 +1261,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
         scheduleFrame(() => {
             void measureWithRetries(0);
         });
-    }, [anchorAlignVerticalOnPortal, anchorRef, anchorRectFromProp, boundaryRef, edgeInsets.horizontal, edgeInsets.top, edgeInsets.bottom, gap, keyboardBottomInsetProp, maxHeightCap, maxWidthCap, open, placement, props.fit, props.flip, props.placementMinSpace, resolvedAnchorMode, shouldPortalNative, shouldPortalWeb, topBottomLayoutOnPortal, windowHeight, windowWidth, portalTarget]);
+    }, [anchorAlignVerticalOnPortal, anchorRef, anchorRectFromProp, boundaryRef, edgeInsets.horizontal, edgeInsets.top, edgeInsets.bottom, gap, keyboardBottomInsetProp, maxHeightCap, maxWidthCap, open, preferredRoom, placement, props.clearanceRef, props.horizontalBoundaryRef, props.fit, props.flip, props.placementMinSpace, resolvedAnchorMode, shouldPortalNative, shouldPortalWeb, topBottomLayoutOnPortal, sizesToAnchorExplicitly, windowHeight, windowWidth, portalTarget]);
 
     React.useLayoutEffect(() => {
         if (!open) return;
@@ -1161,11 +1295,17 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
             if (anchorEl?.contains(event.target) || getContentDomElement()?.contains(event.target)) schedule();
         };
         window.addEventListener('focusin', scheduleFocusLayout);
-        const anchorLayoutObserver = anchorEl && typeof ResizeObserver === 'function'
+        // The clearance view sets the vertical extent, so its reflow (an ancestor settling after a
+        // window resize moves it without resizing it) re-places the popover like the anchor's does.
+        const clearanceEl = getDomElementFromNode(props.clearanceRef?.current ?? null);
+        const horizontalBoundaryEl = getDomElementFromNode(props.horizontalBoundaryRef?.current ?? null);
+        const anchorLayoutObserver = (anchorEl || clearanceEl || horizontalBoundaryEl) && typeof ResizeObserver === 'function'
             ? new ResizeObserver(schedule)
             : null;
-        for (let element: HTMLElement | null = anchorEl; element && anchorLayoutObserver; element = element.parentElement) {
-            anchorLayoutObserver.observe(element);
+        for (const start of [anchorEl, clearanceEl, horizontalBoundaryEl]) {
+            for (let element: HTMLElement | null = start; element && anchorLayoutObserver; element = element.parentElement) {
+                anchorLayoutObserver.observe(element);
+            }
         }
 
         const scrollSourceEl = shouldPortalWeb ? getScrollSourceDomElement() : null;
@@ -1218,7 +1358,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                 legacyBoundaryScrollEl.removeEventListener('scroll', schedule as any);
             }
         };
-    }, [anchorRef, getContentDomElement, getDomElementFromNode, getBoundaryDomElement, getScrollSourceDomElement, open, portalTargetOnWeb, recompute, resolvedAnchorMode, shouldPortalWeb]);
+    }, [anchorRef, getContentDomElement, getDomElementFromNode, getBoundaryDomElement, getScrollSourceDomElement, open, portalTargetOnWeb, props.clearanceRef, props.horizontalBoundaryRef, recompute, resolvedAnchorMode, shouldPortalWeb]);
 
     React.useEffect(() => {
         if (!open) return;
@@ -1386,10 +1526,19 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                         }
                     })();
 
-                    return Math.min(
+                    const settled = settledSideTopRef.current;
+                    const heldTopRaw = settled !== null && settled.placement === computed.placement
+                        ? anchorRectState.y + settled.offset
+                        : desiredTopRaw;
+                    const fittedTop = Math.min(
                         boundaryRect.y + boundaryRect.height - contentHeight,
-                        Math.max(boundaryRect.y, desiredTopRaw),
+                        Math.max(boundaryRect.y, heldTopRaw),
                     );
+                    // Settle once the content has a measured height (until then the box is hidden).
+                    if ((settled === null || settled.placement !== computed.placement) && contentRectState !== null && contentRectState.height > 0) {
+                        settledSideTopRef.current = { placement: computed.placement, offset: fittedTop - anchorRectState.y };
+                    }
+                    return fittedTop;
                 }
 
                 // top/bottom
@@ -1715,8 +1864,11 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
     }, [containerStyle, nativePortalShadowOutset, paddingStyle]);
     const contentContainerMaxWidth = computed.maxWidth + (nativePortalShadowOutset * 2);
 
-    // Body-level floating surfaces sit below dialogs; modal-local portals inherit their layer.
-    const portalZ = POPOVER_PORTAL_Z_INDEX;
+    // Body-level floating surfaces sit below dialogs, except one opened from inside a dialog, which
+    // stacks just above that dialog's layer; modal-local portals inherit their layer.
+    const portalZ = portalTargetOnWeb === 'body' && modalLayerZIndex !== null
+        ? Math.max(POPOVER_PORTAL_Z_INDEX, modalLayerZIndex + 1)
+        : POPOVER_PORTAL_Z_INDEX;
 
     const backdropEnabled =
         typeof backdrop === 'boolean'
@@ -1837,6 +1989,11 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
         requestClose,
     ]);
 
+    // A repeated native geometry measurement can revisit this component without changing
+    // the public layout. Keep the content render tied to that layout, not the measurement.
+    const renderedChildren = React.useMemo(() => shouldRender
+        ? children({ ...computed, maxWidth: contentMaxWidth, requestClose })
+        : null, [children, computed, contentMaxWidth, requestClose, shouldRender]);
     const content = shouldRender ? (
         <EscapeLayerProvider layer={escapeLayer}>
             <PopoverBackdrop
@@ -1946,7 +2103,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                                 kind="popover"
                                 direction={popoverMotionDirection}
                             >
-                                {children({ ...computed, maxWidth: contentMaxWidth, requestClose })}
+                                {renderedChildren}
                             </OverlayMotionFrame>
                         </ModalPortalTargetProvider>
                     </>
@@ -1956,7 +2113,7 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
                         kind="popover"
                         direction={popoverMotionDirection}
                     >
-                        {children({ ...computed, maxWidth: contentMaxWidth, requestClose })}
+                        {renderedChildren}
                     </OverlayMotionFrame>
                 )}
             </ViewWithWheel>
@@ -1988,44 +2145,6 @@ export function Popover(props: PopoverWithBackdrop | PopoverWithoutBackdrop) {
         enabled: shouldUseOverlayPortalOnNative,
         content,
     });
-
-    if (phoneSheet) {
-        const maxHeight = Math.min(maxHeightCap, Math.max(0, windowHeight - insets.top - insets.bottom));
-        const closeSheet = () => onRequestClose?.();
-        return <BaseModal
-            visible={requestedOpen}
-            onClose={closeSheet}
-            placement="bottom"
-            scrollHost="body"
-            accessibilityLabel={props.accessibilityLabel}
-            focusReturnRef={resolvedFocusReturnRef}
-            focusReturnFallback="activation-time"
-        >
-            <ModalCardFrame
-                presentation="sheet"
-                header={props.sheetHeader}
-                material={props.sheetMaterial}
-                sheetBottomInset={insets.bottom}
-                title={props.accessibilityLabel}
-                subtitle={props.sheetSubtitle}
-                closeButtonTestID="popover-sheet.close"
-                actions={props.sheetHeaderAction}
-                onClose={onRequestClose && !props.sheetHeaderAction ? closeSheet : undefined}
-                style={{ maxHeight: Math.max(0, windowHeight - insets.top) }}
-                bodyStyle={{ flexGrow: 0, paddingLeft: insets.left, paddingRight: insets.right }}
-            >
-                <FloatingOverlaySheetContext.Provider value={true}>
-                    {children({
-                        placement: 'bottom',
-                        maxWidth: Math.max(0, windowWidth - insets.left - insets.right),
-                        maxHeight,
-                        presentation: 'sheet',
-                        requestClose: closeSheet,
-                    })}
-                </FloatingOverlaySheetContext.Provider>
-            </ModalCardFrame>
-        </BaseModal>;
-    }
 
     if (!shouldRender) return null;
 

@@ -32,6 +32,33 @@ export function createBackdropWebStyle(params: Readonly<{
     };
 }
 
+/**
+ * The modal scrim behind a dialog or a floating route (BaseModal, the floating New Session
+ * composer): the wizard scrim under a light frost, or the strong scrim when blur is off.
+ */
+export function createModalScrimWebStyle(params: Readonly<{
+    overlay: Readonly<{ scrim: string; scrimWizard?: string; scrimStrong?: string }>;
+    enableBlur: boolean;
+    /** False while the scrim is leaving: it clears to transparent. */
+    visible?: boolean;
+    /**
+     * `scrim` (default): a light frost behind a card. `floating`: content sits directly on the scrim
+     * (no card), so it takes the floating glass frost and the page behind it stops competing.
+     */
+    frost?: 'scrim' | 'floating';
+}>): CSSProperties {
+    const visible = params.visible !== false;
+    return createBackdropWebStyle({
+        backgroundColor: visible ? (params.overlay.scrimWizard ?? params.overlay.scrim) : 'transparent',
+        blurPx: visible ? 2 : 0,
+        ...(params.frost === 'floating' && visible ? { surfaceGroup: 'floating' as const } : {}),
+        enableBlur: params.enableBlur && visible,
+        fallbackBackgroundColorWhenBlurDisabled: visible
+            ? (params.overlay.scrimStrong ?? params.overlay.scrim)
+            : 'transparent',
+    });
+}
+
 export function createBackdropNativeStyle(params: Readonly<{
     backgroundColor: string;
 }>): ViewStyle {

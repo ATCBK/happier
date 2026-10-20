@@ -20,6 +20,15 @@ const bridge = vi.hoisted(() => {
         },
         subscribe: async (taskId: string, listener: SystemTaskBridgeListenerSet) => {
             listeners.set(taskId, listener);
+            if (specs.find(spec => spec.taskId === taskId)?.kind === 'relay.runtime.status.v1') {
+                queueMicrotask(() => listener.onResult({
+                    protocolVersion: 1, taskId, ok: true,
+                    data: {
+                        installed: false, dataPresent: false, relayUrl: 'http://127.0.0.1:3005',
+                        service: { active: false, enabled: false },
+                    },
+                }));
+            }
             return () => { listeners.delete(taskId); };
         },
         cancel: async () => {},
@@ -38,36 +47,26 @@ describe('Personal Home bootstrap live task progress', () => {
         const { usePersonalHomeBootstrapRuntime } = await import('./usePersonalHomeBootstrapRuntime');
         const { PersonalHomeBootstrapContent, PersonalHomeBootstrapGate } = await import('./PersonalHomeBootstrapGate');
         let latestRuntime!: ReturnType<typeof usePersonalHomeBootstrapRuntime>;
-        let initialReadFacts!: ReturnType<typeof usePersonalHomeBootstrapRuntime>['readFacts'];
-        const readFacts = vi.fn(() => initialReadFacts());
-        // Keep the original callback while proving live task delivery independently of facts.
-        // The identity assertion below also protects the production mount's effect dependency.
+        const readFacts = vi.fn((read: ReturnType<typeof usePersonalHomeBootstrapRuntime>['readFacts']) => read());
         function Gate() {
             const runtime = usePersonalHomeBootstrapRuntime();
             latestRuntime = runtime;
-            initialReadFacts ??= runtime.readFacts;
+            const currentReadFacts = React.useCallback(() => readFacts(runtime.readFacts), [runtime.readFacts]);
             return <PersonalHomeBootstrapGate
-                isDesktopHost isDesktopMainWindow readFacts={readFacts}
+                isDesktopHost isDesktopMainWindow readFacts={currentReadFacts}
                 activeTask={runtime.activeTask}
             ><PersonalHomeBootstrapContent><></></PersonalHomeBootstrapContent></PersonalHomeBootstrapGate>;
         }
         const screen = await renderScreen(<Gate />);
 
-        await act(async () => {
-            for (const spec of [...bridge.specs]) {
-                if (spec.kind !== 'relay.runtime.status.v1') continue;
-                bridge.listeners.get(spec.taskId)?.onResult({
-                    protocolVersion: 1, taskId: spec.taskId, ok: true,
-                    data: {
-                        installed: false, dataPresent: false, relayUrl: 'http://127.0.0.1:3005',
-                        service: { active: false, enabled: false },
-                    },
-                });
-            }
-        });
         await flushHookEffects();
         const daemonSpec = bridge.specs.filter((spec) => spec.kind === 'daemon.service.status.v1').at(-1)!;
         expect(daemonSpec).toBeDefined();
+        // Credential admission can legitimately replace the initial callback. Once
+        // admitted status reads are pending, byte events must not restart them.
+        const readFactsBeforeProgress = latestRuntime.readFacts;
+        const readsBeforeProgress = readFacts.mock.calls.length;
+        expect(readsBeforeProgress).toBeGreaterThan(0);
         const startsBeforeProgress = bridge.specs.length;
         const emit = async (receivedBytes: number) => {
             await act(async () => {
@@ -85,8 +84,8 @@ describe('Personal Home bootstrap live task progress', () => {
         const firstProgress = screen.findByTestId('personal-home-bootstrap-download-progress')!.props.children;
         await emit(2048);
         expect(screen.findByTestId('personal-home-bootstrap-download-progress')!.props.children).not.toEqual(firstProgress);
-        expect(latestRuntime.readFacts).toBe(initialReadFacts);
-        expect(readFacts).toHaveBeenCalledTimes(1);
+        expect(latestRuntime.readFacts).toBe(readFactsBeforeProgress);
+        expect(readFacts).toHaveBeenCalledTimes(readsBeforeProgress);
         expect(bridge.specs).toHaveLength(startsBeforeProgress);
 
         await act(async () => {

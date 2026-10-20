@@ -9,7 +9,9 @@ import {
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import type { ResolvedProviderConnectionRecord } from '@/providers/registry';
+import type { ResolvedAgentContribution } from '@/plugins/projection/registry/types';
 import { projectManifestAgentContribution } from '@/plugins/projection/registry/projectManifestAgentContribution';
+import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 import { PLUGIN_MANIFEST as CUSTOM_ACP_MANIFEST } from '../../../../../packages/plugins/custom-acp/src/manifest';
 
 import { projectProviderConnectionCompatibility } from './compatibility';
@@ -17,7 +19,7 @@ import { projectProviderConnectionCompatibility } from './compatibility';
 const contributionKey = 'acme.gateway/main';
 
 function lease(externalAgentProtocol?: ProviderWireProtocol): PluginRuntimeRegistryLease {
-  const support = (protocol: ProviderWireProtocol) => ({
+  const support = (protocol: ProviderWireProtocol): NonNullable<ResolvedAgentContribution['definition']['providerRequirements']> => ({
     acceptsProtocols: [protocol],
     required: { streaming: true },
     credentialSupport: { supportsNoAuth: true, apiKeyTransports: [] },
@@ -32,24 +34,32 @@ function lease(externalAgentProtocol?: ProviderWireProtocol): PluginRuntimeRegis
     prepare: () => ({ v: 1 as const, materialization: 'spawnEnv' as const }),
     materialize: async () => ({ v: 1 as const, kind: 'spawnEnv' as const, env: [] }),
   };
-  const definitions = new Map([
+  const definitions = new Map<string, Readonly<{
+    definition: ResolvedAgentContribution['definition'];
+    runtimeSpec?: Pick<NonNullable<ResolvedAgentContribution['runtimeSpec']>, 'title'> | null;
+    richDefinition?: Readonly<{
+      provenance: NonNullable<ResolvedAgentContribution['richDefinition']>['provenance'];
+      definition: Pick<NonNullable<ResolvedAgentContribution['richDefinition']>['definition'], 'id' | 'title'>;
+    }>;
+  }>>([
     ['codex', {
-      definition: { id: 'codex', kindVersion: 1, providerRequirements: support('openai-responses') },
+      definition: { id: 'codex', kindVersion: 1, ownedBackendIds: [], providerRequirements: support('openai-responses') },
       runtimeSpec: { title: 'Legacy Codex runtime title' },
       richDefinition: {
         provenance: 'first_party' as const,
         definition: { id: 'codex', title: 'Codex' },
       },
     }],
-    ['claude', { definition: { id: 'claude', kindVersion: 1, providerRequirements: support('anthropic') }, runtimeSpec: { title: 'Claude' } }],
+    ['claude', { definition: { id: 'claude', kindVersion: 1, ownedBackendIds: [], providerRequirements: support('anthropic') }, runtimeSpec: { title: 'Claude' } }],
     ['inactive', {
-      definition: { id: 'inactive', kindVersion: 1, providerRequirements: support('openai-responses') },
+      definition: { id: 'inactive', kindVersion: 1, ownedBackendIds: [], providerRequirements: support('openai-responses') },
       runtimeSpec: { title: 'Inactive supported Agent' },
     }],
     ['external', {
       definition: {
         id: 'external',
         kindVersion: 1,
+        ownedBackendIds: [],
         ...(externalAgentProtocol ? { providerRequirements: support(externalAgentProtocol) } : {}),
       },
       ...(externalAgentProtocol ? { runtimeSpec: { title: 'External Agent' } } : {}),
@@ -58,9 +68,9 @@ function lease(externalAgentProtocol?: ProviderWireProtocol): PluginRuntimeRegis
         definition: { id: 'external', title: { key: 'agents.external.title', fallback: 'External Agent' } },
       },
     }],
-    ['gemini', { definition: { id: 'gemini', kindVersion: 1 }, runtimeSpec: { title: 'Gemini' } }],
+    ['gemini', { definition: { id: 'gemini', kindVersion: 1, ownedBackendIds: [] }, runtimeSpec: { title: 'Gemini' } }],
     ['custom-acp', projectManifestAgentContribution({
-      definition: CUSTOM_ACP_MANIFEST.contributes.agents![0]!,
+      definition: normalizePluginManifestV2(CUSTOM_ACP_MANIFEST).contributes.agents[0]!,
       pluginId: CUSTOM_ACP_MANIFEST.id,
       provenance: 'first_party', source: { kind: 'bundled' },
     })],

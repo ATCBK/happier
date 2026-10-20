@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import { UpdateContainerSchema } from "@happier-dev/protocol/updates";
 
 import { db } from "@/storage/db";
+import { sourceKeyForSessionFollowSourceV1 } from '@/app/session/follow/sessionFollowSourceIdentity';
 import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { withAuthenticatedTestApp } from "../../testkit/sqliteFastify";
@@ -437,8 +438,8 @@ describe("publicShareRoutes (AccountChange integration)", () => {
             } }),
         ]);
         await db.sessionFollowEdge.createMany({ data: [
-            { sourceSessionId: source.id, destinationSessionId: session.id },
-            { sourceSessionId: session.id, destinationSessionId: destination.id },
+            { sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: source.id }), sourceSessionId: source.id, destinationSessionId: session.id, policyJson: JSON.stringify({ preset: 'quiet' }) },
+            { sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: session.id }), sourceSessionId: session.id, destinationSessionId: destination.id, policyJson: JSON.stringify({ preset: 'quiet' }) },
         ] });
 
         await withAuthenticatedTestApp(

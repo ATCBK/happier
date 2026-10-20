@@ -6,7 +6,7 @@ import { admitDirectSessionRecipientEnvelope, type DirectSessionRecipientEnvelop
 import { inTx, type Tx } from "@/storage/inTx";
 import { ShareAccessLevel, TeamMembershipStatus, TeamSessionCreationPolicy } from "@/storage/prisma";
 import { readTransactionDatabaseTime } from "@/storage/transactionDatabaseTime";
-import { markAccountsChanged } from "@/app/changes/markAccountChanged";
+import { markAccountsChanged, type AccountChangePublication } from "@/app/changes/markAccountChanged";
 import {
     isStructurallyValidSessionDataKeyEnvelope,
     readSessionDataKeyEnvelopeInTx,
@@ -20,9 +20,6 @@ import type { SessionAccessAuthentication } from "./sessionAccessAuthentication"
 import {
     resolveSubjectMemberAccountIdsInTx,
 } from "./sessionGrantSubjects";
-import {
-    applySessionAutoFollowForRelationshipChangeInTx,
-} from "@/app/session/follow/accountFollowService";
 import { acquireSessionAccessTransitionCursorLocksInTx, applySessionAccessTransitionEffectsInTx } from "./sessionAccessTransitionEffects";
 import {
     resolveSessionAccessGrantSubjectInTx,
@@ -90,7 +87,7 @@ export type SessionAccessGrantEffects = Readonly<{
     /** Lost `readTranscript` entirely, not merely downgraded. */
     revokedAccountIds: readonly string[];
     rosterManagerAccountIds: readonly string[];
-    accountCursors: ReadonlyMap<string, number>;
+    accountCursors: ReadonlyMap<string, AccountChangePublication>;
 }>;
 
 export type PutSessionAccessGrantResult =
@@ -368,19 +365,6 @@ export async function applyInitialSessionAccessInTx(
         before,
         after,
     });
-    const newlyGranted = new Set(effects.grantedAccountIds);
-    for (const item of resolved) {
-        const accountIds = item.subject.kind === "account"
-            ? [item.subject.accountId]
-            : (await resolveAffectedAccountIdsInTx(tx, item.subject))
-                .filter((accountId) => newlyGranted.has(accountId));
-        if (accountIds.length === 0) continue;
-        await applySessionAutoFollowForRelationshipChangeInTx(tx, {
-            sessionId: params.sessionId,
-            accountIds,
-            relationship: item.subject.kind === "account" ? "direct" : item.subject.kind,
-        });
-    }
     return { ok: true, effects, directShares };
 }
 
@@ -478,10 +462,17 @@ function teamPolicyRequiresGrant(
  * also where the now-stale marker is cleared: there is no bulk relaxation job.
  */
 export async function teamPolicyStillRequiresGrant(tx: Tx, teamId: string): Promise<boolean> {
-    return teamPolicyRequiresGrant(await tx.team.findUnique({
-        where: { id: teamId },
-        select: { sessionCreationPolicy: true, archivedAt: true },
-    }));
+    return (await teamsPolicyStillRequireGrants(tx, [teamId])).has(teamId);
+}
+
+/** Evaluate the same required-Team floor once for a complete grant roster. */
+export async function teamsPolicyStillRequireGrants(tx: Tx, teamIds: readonly string[]): Promise<ReadonlySet<string>> {
+    if (teamIds.length === 0) return new Set();
+    const teams = await tx.team.findMany({
+        where: { id: { in: [...new Set(teamIds)] } },
+        select: { id: true, sessionCreationPolicy: true, archivedAt: true },
+    });
+    return new Set(teams.filter(teamPolicyRequiresGrant).map((team) => team.id));
 }
 
 async function resolveAffectedAccountIdsInTx(
@@ -495,6 +486,23 @@ async function resolveAffectedAccountIdsInTx(
             ? { kind: "team", teamId: subject.teamId }
             : { kind: "group", teamId: subject.teamId, groupId: subject.groupId },
     );
+}
+
+/** Pure birth census; grant eligibility and envelope validation remain with the writer. */
+export async function readInitialSessionAccessAccountIdsInTx(tx: Tx, input: Readonly<{
+    initialAccess?: SessionInitialAccessMaterializedV1;
+    primaryTeamId?: string | null;
+}>): Promise<readonly string[]> {
+    const subjects = (input.initialAccess?.grants ?? []).map(grant => grant.subject);
+    if (input.primaryTeamId && await teamPolicyStillRequiresGrant(tx, input.primaryTeamId)
+        && !subjects.some(subject => subject.kind === "team" && subject.teamId === input.primaryTeamId)) {
+        subjects.push({ kind: "team", teamId: input.primaryTeamId });
+    }
+    const accounts = new Set<string>();
+    for (const subject of subjects) {
+        for (const accountId of await resolveAffectedAccountIdsInTx(tx, subject)) accounts.add(accountId);
+    }
+    return [...accounts].sort();
 }
 
 /** Grant changes also invalidate the explicit roster for its current managers. */
@@ -519,8 +527,10 @@ async function applyGrantTransitionEffectsInTx(
     }
     const effects = await applySessionAccessTransitionEffectsInTx(tx, { ...params, additionalPublicationAccountIds: [...rosterManagerAccountIds] });
     const accountCursors = new Map(effects.accountCursors);
-    for (const { accountId, cursor } of await markAccountsChanged(tx, { accountIds: [...rosterManagerAccountIds], kind: "share", entityId: params.sessionId })) {
-        accountCursors.set(accountId, Math.max(accountCursors.get(accountId) ?? 0, cursor));
+    for (const publication of await markAccountsChanged(tx, { accountIds: [...rosterManagerAccountIds], kind: "share", entityId: params.sessionId })) {
+        // Roster publication follows the access projection for this Account,
+        // so its terminal cursor is the newest one without eager resolution.
+        accountCursors.set(publication.accountId, publication);
     }
     return { ...effects, rosterManagerAccountIds: [...rosterManagerAccountIds], accountCursors };
 }
@@ -784,20 +794,6 @@ export async function putSessionAccessGrantInTx(
         ...(subject.kind === "account" ? { directGrantChangedAccountId: subject.accountId } : {}),
     });
 
-    if (stored === null) {
-        await applySessionAutoFollowForRelationshipChangeInTx(tx, {
-            sessionId: params.sessionId,
-            // A direct share is itself the newly-created relationship, even when
-            // the recipient already reads through a Team. Derived Team/Group
-            // relationships still qualify only Accounts that gained effective
-            // read. Eligibility, explicit-choice precedence and conditional
-            // insertion remain in the Follow owner.
-            accountIds: subject.kind === "account"
-                ? [subject.accountId]
-                : effects.grantedAccountIds,
-            relationship: subject.kind === "account" ? "direct" : subject.kind,
-        });
-    }
 
     return {
         ok: true,
@@ -1087,14 +1083,24 @@ export async function setSessionAccessContextInTx(
         before,
         after,
     });
-    if (targetTeamRequired && targetTeamGrant === null) {
-        await applySessionAutoFollowForRelationshipChangeInTx(tx, {
-            sessionId: params.sessionId,
-            accountIds: effects.grantedAccountIds,
-            relationship: "team",
-        });
-    }
     return { ok: true, changed: true, primaryTeamId: params.primaryTeamId };
+}
+
+/** Entry discovery and cleanup share the authored-or-received retained-share predicate. */
+export function readSessionAccessGrantsForAccountErasureInTx(tx: Tx, accountId: string) {
+    return tx.sessionShare.findMany({
+        where: {
+            OR: [{ sharedByUserId: accountId }, { sharedWithUserId: accountId }],
+            session: { accountId: { not: accountId } },
+        },
+        select: {
+            id: true,
+            sessionId: true,
+            sharedWithUserId: true,
+            session: { select: { accountId: true } },
+        },
+        orderBy: [{ sessionId: "asc" }, { id: "asc" }],
+    });
 }
 
 /**
@@ -1112,19 +1118,16 @@ export async function eraseSessionAccessGrantsForAccountInTx(
     tx: Tx,
     params: Readonly<{ accountId: string }>,
 ): Promise<void> {
-    const shares = await tx.sessionShare.findMany({
-        where: {
-            OR: [{ sharedByUserId: params.accountId }, { sharedWithUserId: params.accountId }],
-            session: { accountId: { not: params.accountId } },
-        },
-        select: {
-            id: true,
-            sessionId: true,
-            sharedWithUserId: true,
-            session: { select: { accountId: true } },
-        },
-        orderBy: [{ sessionId: "asc" }, { id: "asc" }],
-    });
+    const readShares = () => readSessionAccessGrantsForAccountErasureInTx(tx, params.accountId);
+    const capturedShares = await readShares();
+    if (capturedShares.length === 0) return;
+    // Retirement has closed new grants received or authored by this Account.
+    // Surviving Session owners can still remove a captured share, so use the
+    // ordinary grant-transition fence before reading access or changing rows.
+    // Reread after the fence: a share removed during discovery is already gone.
+    await acquireSessionAccessTransitionCursorLocksInTx(tx,
+        [...new Set(capturedShares.map(share => share.sessionId))], [params.accountId]);
+    const shares = await readShares();
     for (const share of shares) {
         const accountIds = [share.sharedWithUserId];
         const before = await resolveStructuralSessionAccessForAccountsInTx(tx, {

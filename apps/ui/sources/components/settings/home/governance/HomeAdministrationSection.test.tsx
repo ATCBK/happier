@@ -34,6 +34,11 @@ import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelp
 const routerPush = vi.hoisted(() => vi.fn());
 
 installSettingsViewCommonModuleMocks({
+    storage: 'real',
+    modal: async () => {
+        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+        return createModalModuleMock({ confirmResult: true }).module;
+    },
     // A phone: the one place Overview lists the console's pages (elsewhere its sidebar or menu does).
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');

@@ -151,6 +151,15 @@ describe('PageHeader primary action placement', () => {
         expect(screen.root.findAllByProps({ 'data-testid': 'route-action' })).toHaveLength(1);
         expect(screen.root.findAll(node => typeof node.type === 'string' && node.props.children === 'Route title')).toHaveLength(1);
     });
+    it('never lends a hidden header\'s Back as a trailing action: the page keeps one way back', async () => {
+        const screen = await renderScreen(<DestinationInstanceHost tabId="hidden" ref={{ kind: 'settings', params: {} }}
+            pathname="/settings/machines/m/agents" focused visible phone navigation={{ push: () => {}, replace: () => {}, back: () => {} }}>
+            <Stack.Screen options={{ headerShown: false, headerLeft: () => <button data-testid="route-back">Back</button>,
+                headerRight: () => <button data-testid="route-action">Action</button> }} />
+        </DestinationInstanceHost>);
+        expect(screen.root.findAllByProps({ 'data-testid': 'route-action' })).toHaveLength(1);
+        expect(screen.root.findAllByProps({ 'data-testid': 'route-back' })).toHaveLength(0);
+    });
     it('lets a retained draft Cancel replace collection Back and restores Back when the draft leaves', async () => {
         const cancel = vi.fn();
         function Collection(props: Readonly<{ draft: boolean }>) {

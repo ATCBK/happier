@@ -83,7 +83,7 @@ function Authenticated(props: Readonly<{
     }>();
     const router = useRouter();
     const activeServerAccountScope = useActiveServerAccountScope();
-    const startAskHappier = useAskHappierStarter();
+    const { start: startAskHappier, ready: askHappierReady } = useAskHappierStarter();
 
     const sessionId = typeof params.id === 'string' ? params.id : Array.isArray(params.id) ? (params.id[0] ?? null) : null;
     const messageId = typeof params.messageId === 'string' ? params.messageId : Array.isArray(params.messageId) ? (params.messageId[0] ?? null) : null;
@@ -123,6 +123,9 @@ function Authenticated(props: Readonly<{
         if (pendingSetupIntent.phase !== 'awaiting_auth' && pendingSetupIntent.phase !== 'post_auth') return;
 
         if (pendingSetupIntent.branch === 'askHappier') {
+            // The authenticated Account can exist before this mounted Action
+            // binding resolves. Keep its intent until the same owner can run it.
+            if (!askHappierReady) return;
             const lifetime = captureActiveServerAccountScopeLifetime();
             if (!lifetime) return;
             consumedIntentRef.current = pendingSetupIntent;
@@ -138,7 +141,7 @@ function Authenticated(props: Readonly<{
         router.replace(buildMachineAddHref({
             path: pendingSetupIntent.branch === 'remoteMachine' ? 'ssh' : 'thisComputer',
         }));
-    }, [activeServerAccountScope, newSessionAuthContinuation, pendingSetupIntent, pendingTerminalConnect, router, sessionId, shouldSuppressSetupContinuation, startAskHappier]);
+    }, [activeServerAccountScope, askHappierReady, newSessionAuthContinuation, pendingSetupIntent, pendingTerminalConnect, router, sessionId, shouldSuppressSetupContinuation, startAskHappier]);
 
     return (
         <View style={stylesheet.root}>

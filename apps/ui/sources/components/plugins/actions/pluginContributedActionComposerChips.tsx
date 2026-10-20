@@ -61,7 +61,7 @@ function composerControlId(control: PluginProjectedComposerControlEntryV1): `plu
     return `plugin:${control.id}`;
 }
 
-function composerControlKey(control: PluginProjectedComposerControlEntryV1): string {
+export function composerControlKey(control: PluginProjectedComposerControlEntryV1): string {
     return `plugin-composer-control:${control.id}`;
 }
 

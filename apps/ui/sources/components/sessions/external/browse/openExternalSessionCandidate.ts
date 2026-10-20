@@ -19,7 +19,16 @@ export type ExternalSessionCandidateOpenTarget = Readonly<{ machineId: string; s
 export type ExternalSessionCandidateOpenState = {
     requestToken: number;
     linkingCandidateKey: string | null;
+    controller?: AbortController;
 };
+
+/** Withdraw this browser's interest; an admitted machine import remains machine-owned. */
+export function cancelExternalSessionCandidateOpen(state: ExternalSessionCandidateOpenState): void {
+    state.requestToken += 1;
+    state.controller?.abort();
+    state.controller = undefined;
+    state.linkingCandidateKey = null;
+}
 
 /** The browser and Search share the same guarded link/open operation. */
 export async function openExternalSessionCandidate(params: Readonly<{
@@ -35,7 +44,8 @@ export async function openExternalSessionCandidate(params: Readonly<{
     onLinkingChange(candidateKey: string | null): void;
     onPickRemoteSessionId?(remoteSessionId: string): void;
     /** Exact selected Home authority; browser callers default to the active Account. */
-    accountCurrentness?: Readonly<{ isCurrent(): boolean }>;
+    accountCurrentness?: Readonly<{ isCurrent(): boolean; onRetire?(cancel: () => void): Readonly<{ dispose(): void }> }>;
+    signal?: AbortSignal;
     /** Usage surfaces retain ordinary Action policy/approval at the existing front door. */
     linkActionExecute?: FrontDoorActionExecute;
     openSession(sessionId: string, target: ExternalSessionCandidateOpenTarget, find?: ExternalSessionCandidateFindSeed): void | Promise<void>;
@@ -68,8 +78,14 @@ export async function openExternalSessionCandidate(params: Readonly<{
     state.linkingCandidateKey = readExternalSessionBrowseCandidateKey(candidate);
     params.onLinkingChange(state.linkingCandidateKey);
     const accountCurrentness = params.accountCurrentness ?? captureActiveServerAccountScopeCurrentness();
+    const controller = new AbortController();
+    state.controller = controller;
+    const abort = () => controller.abort();
+    const retirement = accountCurrentness.onRetire?.(abort);
+    params.signal?.addEventListener('abort', abort, { once: true });
+    if (params.signal?.aborted) controller.abort();
     const requestIsCurrent = () => state.requestToken === requestToken
-        && params.isSelectionCurrent() && accountCurrentness.isCurrent();
+        && !controller.signal.aborted && params.isSelectionCurrent() && accountCurrentness.isCurrent();
     try {
         const extras = resolveExternalSessionBrowseLinkEnsureRequestExtras({
             providerId: agentId, machineId: target.machineId, source, candidate,
@@ -88,14 +104,16 @@ export async function openExternalSessionCandidate(params: Readonly<{
             ...extras, source: effectiveSource,
         };
         const action = params.linkActionExecute ? await params.linkActionExecute('sessions.external.link.ensure', request, {
+            signal: controller.signal,
             surface: 'ui', ...(target.serverId ? { serverId: target.serverId } : {}),
             ...(target.accountId ? { expectedAccountId: target.accountId } : {}),
         }) : null;
         if (action && (!action.ok || !ExternalSessionLinkEnsureResponseSchema.safeParse(action.result).success)) return 'failed';
         const result = action?.ok ? ExternalSessionLinkEnsureResponseSchema.parse(action.result) : target.serverId
             ? await machineExternalSessionLinkEnsure(request, { serverId: target.serverId,
+                signal: controller.signal,
                 ...(target.accountId ? { accountId: target.accountId } : {}) })
-            : await machineExternalSessionLinkEnsure(request);
+            : await machineExternalSessionLinkEnsure(request, { signal: controller.signal });
         if (!requestIsCurrent()) return 'ignored';
         if (!result.ok) {
             Modal.alert(t('common.error'), resolveExternalSessionBrowseRpcErrorMessage(result.errorCode, 'link'));
@@ -108,6 +126,9 @@ export async function openExternalSessionCandidate(params: Readonly<{
         Modal.alert(t('common.error'), resolveExternalSessionBrowseThrownErrorMessage(error, 'link'));
         return 'failed';
     } finally {
+        retirement?.dispose();
+        params.signal?.removeEventListener('abort', abort);
+        if (state.controller === controller) state.controller = undefined;
         if (state.requestToken === requestToken) {
             state.linkingCandidateKey = null;
             params.onLinkingChange(null);

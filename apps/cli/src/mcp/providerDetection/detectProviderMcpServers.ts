@@ -1,4 +1,5 @@
 import { DaemonMcpServersDetectWarningV1Schema, McpDetectedProviderV1Schema } from '@happier-dev/protocol/mcp/servers/daemonRpcV1';
+import type { ProcessEnvInput } from '@/utils/processEnv/buildScopedProcessEnv';
 import { PluginMcpServerTransportV1Schema } from '@happier-dev/protocol/plugins/contributions/mcp';
 import type { DaemonMcpServersDetectWarningV1, DetectedMcpServerV1, McpDetectedProviderV1 } from '@happier-dev/protocol';
 import type {
@@ -196,7 +197,7 @@ function clampDiscoveryTimeoutMs(input: number): number {
 }
 
 function resolveDiscoveryTimeoutMs(params: Readonly<{
-  env?: NodeJS.ProcessEnv;
+  env?: ProcessEnvInput;
   discoveryTimeoutMs?: number;
 }>): number {
   const explicit = readPositiveFiniteInteger(params.discoveryTimeoutMs);
@@ -331,7 +332,7 @@ function normalizeDiscoveryResult(
 export async function detectProviderMcpServers(params: Readonly<{
   directory: string | null;
   providers: unknown;
-  env?: NodeJS.ProcessEnv;
+  env?: ProcessEnvInput;
   discoveryTimeoutMs?: number;
   mcpDiscoverySources?: readonly PluginMcpDiscoverySourceEntry[];
   runtimeRegistry?: ResolvedExecutablePluginRuntimeRegistry;

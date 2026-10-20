@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { decodeSessionDataKeyEnvelopeCursorV1, PatchSessionDataKeyEnvelopesResultV1Schema, PatchSessionDataKeyEnvelopesV1Schema, SessionDataKeyEnvelopePageQueryV1Schema, SessionDataKeyEnvelopePageV1Schema } from '@happier-dev/protocol/sessions/encryption/sessionDataKeyEnvelopes';
 
@@ -10,6 +10,7 @@ import {
 } from "@/app/session/encryption/sessionDataKeyEnvelopeService";
 import { type Fastify } from "../../types";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
+import { AccountRouteAuthenticationForbiddenResponseSchema } from "@/app/api/utils/enableAuthentication";
 
 /**
  * Transport for the per-Session recipient envelope collection.
@@ -25,10 +26,13 @@ import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access
  * gating the transport would instead break direct-share preparation.
  */
 
-const errorSchema = <Code extends z.ZodType>(code: Code) => z.object({ error: code }).strict();
+const errorSchema = <Code extends z.ZodMiniType>(code: Code) => z.strictObject({ error: code });
 const InvalidRequestErrorSchema = errorSchema(z.literal("invalid_request"));
 const PageBadRequestErrorSchema = errorSchema(z.enum(["invalid_request", "invalid_cursor"]));
-const ForbiddenErrorSchema = errorSchema(z.enum(["forbidden", "session_access_authentication_required"]));
+const ForbiddenErrorSchema = z.union([
+    errorSchema(z.enum(["forbidden", "session_access_authentication_required"])),
+    AccountRouteAuthenticationForbiddenResponseSchema,
+]);
 const NotFoundErrorSchema = errorSchema(z.literal("session_not_found"));
 const PageConflictErrorSchema = errorSchema(z.literal("session_data_key_unavailable"));
 const PatchConflictErrorSchema = errorSchema(z.enum([
@@ -37,7 +41,7 @@ const PatchConflictErrorSchema = errorSchema(z.enum([
     "recipient_key_unavailable",
     "session_data_key_unavailable",
 ]));
-const ParamsSchema = z.object({ sessionId: z.string().min(1) }).strict();
+const ParamsSchema = z.strictObject({ sessionId: z.string().check(z.minLength(1)) });
 
 /** One code decides one status; there are no per-item errors or retry hints. */
 function statusForPageError(error: SessionDataKeyEnvelopePageError): 400 | 403 | 404 | 409 | 503 {
@@ -71,6 +75,7 @@ function statusForPatchError(error: SessionDataKeyEnvelopePatchError): 400 | 403
 export function registerSessionDataKeyEnvelopeRoutes(app: Fastify) {
     app.get("/v2/sessions/:sessionId/data-key/envelopes", {
         preHandler: app.authenticate,
+        config: { restrictedCredentialBinding: { scope: "session", session: "params.sessionId", allowSessionRuntime: false } },
         attachValidation: true,
         schema: {
             params: ParamsSchema,

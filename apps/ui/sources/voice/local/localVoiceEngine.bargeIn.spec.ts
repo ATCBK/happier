@@ -17,6 +17,7 @@ import {
     acknowledgeLocalVoicePendingEnqueue,
     localVoiceSpeechOutputBoundary,
     publishLocalVoiceAssistantMessage,
+    publishLocalVoiceSubmittedUserMessage,
 } from './localVoiceEngine.testHarness';
 
 const REPLY_TEXT = 'the weather today is sunny and warm outside right now';
@@ -36,7 +37,7 @@ async function registerControlSessionBinding(): Promise<void> {
     });
 }
 
-async function driveReplyToSpeaking() {
+async function driveReplyToSpeaking(handsFree = true, capturedTurn = false) {
     const storage = await getStorage();
     const config = readLocalDirectVoiceSettings(storage.getState().settings.voice);
     storage.__setState({ settings: {
@@ -48,7 +49,7 @@ async function driveReplyToSpeaking() {
                 ...storage.getState().settings.voice.providers,
                 local_direct: { schemaVersion: 1, config: {
                     ...config,
-                    handsFree: { ...config.handsFree, enabled: true,
+                    handsFree: { ...config.handsFree, enabled: handsFree,
                         endpointing: { silenceMs: 0, minSpeechMs: 0 } },
                     stt: { ...config.stt, provider: 'device' },
                     tts: { ...config.tts, autoSpeakReplies: true, provider: 'device', bargeInEnabled: true },
@@ -68,13 +69,21 @@ async function driveReplyToSpeaking() {
     expoSpeechStop.mockImplementation(() => stopSpeak?.());
     speechRecStart.mockImplementation(() => emitSpeechRecEvent('audiostart'));
     speechRecStop.mockImplementation(() => emitSpeechRecEvent('end'));
-    localVoicePendingEnqueue.mockImplementationOnce(async request => {
-        await publishLocalVoiceAssistantMessage({ sessionId: 's1', id: 'm1', text: REPLY_TEXT });
+    localVoicePendingEnqueue.mockImplementation(async request => {
+        // The real server commits this input before the Agent replies. Reply
+        // admission uses its localId to exclude late-hydrated older answers.
+        await publishLocalVoiceSubmittedUserMessage(request);
+        await publishLocalVoiceAssistantMessage({ sessionId: 's1', id: `m${localVoicePendingEnqueue.mock.calls.length}`, text: REPLY_TEXT });
         return acknowledgeLocalVoicePendingEnqueue(request);
     });
     const engine = await loadLocalVoiceEngineWithCompatState();
     await engine.toggleLocalVoiceTurn('s1');
-    const turnPromise = engine.sendLocalVoiceAgentTextTurn('s1', 'what is the forecast');
+    if (capturedTurn) {
+        emitFinal('what is the forecast');
+    }
+    const turnPromise = capturedTurn
+        ? engine.commitLocalVoiceInput('s1')
+        : engine.sendLocalVoiceAgentTextTurn('s1', 'what is the forecast');
     let outputFailure: { name: string; message: string; code?: unknown } | null = null;
     void turnPromise.catch(error => {
         outputFailure = error instanceof Error
@@ -166,5 +175,28 @@ describe('local voice engine real-producer barge-in', () => {
         expect(isVoiceTurnInterrupted('m1')).toBe(false);
         expect(expoSpeechStop).not.toHaveBeenCalled();
         expect(localVoicePendingEnqueue).toHaveBeenCalledTimes(1);
+    }, 180_000);
+
+    it.each([false, true])('preserves correction across playback completion with hands-free %s', async (handsFree) => {
+        const handle = await driveReplyToSpeaking(handsFree, !handsFree);
+        emitSpeechRecEvent('result', { isFinal: false, results: [{ transcript: INTERRUPTING_TEXT, confidence: 0.9 }] });
+        handle.finishSpeak();
+        await handle.turnPromise;
+
+        // Partial recognition is not an endpoint. Playback completion must leave
+        // the same capture listening, so manual Send and a later endpoint work.
+        expect(handle.engine.getLocalVoiceState()).toMatchObject({ sessionId: 's1', status: 'recording' });
+        expect(localVoicePendingEnqueue).toHaveBeenCalledTimes(1);
+        emitFinal(INTERRUPTING_TEXT);
+        if (!handsFree) {
+            await new Promise<void>(resolve => setTimeout(resolve, 0));
+            expect(localVoicePendingEnqueue).toHaveBeenCalledTimes(1);
+            await handle.engine.commitLocalVoiceInput('s1');
+        }
+        await vi.waitFor(() => expect(localVoicePendingEnqueue).toHaveBeenCalledWith(expect.objectContaining({
+            sessionId: 's1', body: expect.objectContaining({ content: { t: 'plain', v: expect.objectContaining({
+                role: 'user', content: { type: 'text', text: INTERRUPTING_TEXT },
+            }) } }),
+        })));
     }, 180_000);
 });

@@ -8,7 +8,6 @@ import { resolveRequestedSessionModeId } from '@happier-dev/protocol/actions/ses
 import { Platform, ScrollView, View, useWindowDimensions, type View as RNView } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import Color from 'color';
-import { Typography } from '@/constants/Typography';
 import { AgentInput } from '@/components/sessions/agentInput';
 import { projectAgentInputAttachmentRowItems } from '@/components/sessions/agentInput/agentInputContracts';
 import type { AgentInputExtraActionPresentation } from '@/components/sessions/agentInput/agentInputContracts';
@@ -17,9 +16,11 @@ import { AttachmentFilePicker } from '@/components/sessions/attachments/Attachme
 import { PopoverBoundaryProvider } from '@/components/ui/popover';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ItemList } from '@/components/ui/lists/ItemList';
+import { ContainedPageScopeProvider } from '@/components/ui/lists/listPresentation';
+import { IconButton } from '@/components/ui/buttons/IconButton';
 import type { DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { PathSelectionList } from '@/components/sessions/new/components/PathSelectionList';
-import { WizardSectionHeaderRow } from '@/components/sessions/new/components/WizardSectionHeaderRow';
 import { NewSessionModelSelectionContent } from '@/components/sessions/new/components/NewSessionModelSelectionContent';
 import { ProfilesList } from '@/components/profiles/ProfilesList';
 import { AdaptiveSelectionSection } from '@/components/ui/selection/AdaptiveSelectionSection';
@@ -86,6 +87,7 @@ import {
 } from '@/components/sessions/new/components/NewSessionLaunchPendingPreview';
 import type { NewSessionLaunchAttempt } from '@/components/sessions/new/modules/newSessionLaunchAttempt';
 import { NewSessionProviderLaunchError } from '@/components/sessions/new/components/NewSessionProviderLaunchError';
+import { NewSessionLaunchApprovalNotice, type NewSessionLaunchApprovalNoticeState } from '@/components/sessions/new/components/NewSessionLaunchApprovalNotice';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import {
     useNewSessionPromptValue,
@@ -232,6 +234,7 @@ export interface NewSessionWizardFooterProps {
     launchPendingPreviewVisible?: boolean;
     providerLaunchError?: ProviderErrorV1 | null;
     retryProviderLaunch?: () => void;
+    launchApproval?: NewSessionLaunchApprovalNoticeState | null;
     submitAccessibilityLabel?: React.ComponentProps<typeof AgentInput>['submitAccessibilityLabel'];
     emptyAutocompleteKinds: React.ComponentProps<typeof AgentInput>['autocompleteKinds'];
     emptyAutocompleteSuggestions: React.ComponentProps<typeof AgentInput>['autocompleteSuggestions'];
@@ -540,6 +543,10 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
         sectionPresentation.profiles,
         profiles.length > 8 ? 'compact' : 'expanded',
     );
+    const profileSection = {
+        title: t('newSession.wizardSection.profile'),
+        description: t('newSession.selectAiProfileDescription'),
+    };
     const canonicalBackendPickerOptions = React.useMemo(
         () => (agentPickerOptions ?? []).filter(isWizardBackendPickerOption),
         [agentPickerOptions],
@@ -609,12 +616,13 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
         || (providerModelGroups ?? []).some((group) => group.rows.length > 0)
         || hasModelOptionsProbeAffordance;
     const pairAgentAndModelSections = useSelectionColumns && shouldRenderModelSection;
-    const warningBackgroundColor = theme.colors.state?.warning?.background ?? theme.colors.box?.warning?.background;
-    const warningBorderColor = theme.colors.state?.warning?.border ?? theme.colors.box?.warning?.border;
-    const neutralForegroundColor = theme.colors.state?.neutral?.foreground
-        ?? theme.colors.text?.secondary
-        ?? theme.colors.textSecondary;
-    const dangerForegroundColor = theme.colors.state?.danger?.foreground ?? neutralForegroundColor;
+    // Amber marks what needs the user (a missing CLI, an offline machine); glyphs otherwise stay ink.
+    const warningForegroundColor = theme.colors.state?.warning?.foreground ?? theme.colors.text.secondary;
+    const renderSelectedMark = (selected: boolean) => (
+        <View style={{ width: 24, alignItems: 'center', justifyContent: 'center' }}>
+            {renderIconNode('check-circle', 24, selectedIndicatorColor, { opacity: selected ? 1 : 0 })}
+        </View>
+    );
     const defaultBorderColor = theme.colors.border?.default ?? theme.colors.divider;
     const canvasBackgroundColor = theme.colors.background?.canvas
         ?? theme.colors.groupped?.background
@@ -626,7 +634,8 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
         {
             backgroundColor: materialColor(canvasBackgroundColor, 'transparent'),
             justifyContent: shouldBottomAnchor ? 'flex-end' : 'center',
-            ...(shouldBottomAnchor ? { paddingTop: 0 } : {}),
+            // On the web the card's corner-controls row (`NewSessionWizardWebDismissal`) is the top inset.
+            ...(shouldBottomAnchor || Platform.OS === 'web' ? { paddingTop: 0 } : {}),
         },
     ];
     return (
@@ -698,6 +707,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                         error={props.footer.providerLaunchError}
                                         retry={props.footer.retryProviderLaunch}
                                     />
+                                    <NewSessionLaunchApprovalNotice approval={props.footer.launchApproval} />
                                     {/*
                                       * Resolved upstream by
                                       * `resolveNewSessionLaunchPresentation`. The Wizard
@@ -807,34 +817,22 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                         </View>
                     )}
                 >
-                    <ScrollView
+                    {/* One configuration page: every section is the page's `ItemGroup` (sentence-case
+                        title, its description above, one sheet edge), so profile, agent, model, machine,
+                        folder and permission rows share one row grammar and one column. */}
+                    {/* The sections share the composer's column below them: the same side padding and
+                        width cap, with the page sections filling it (a contained page scope). */}
+                    <ContainedPageScopeProvider>
+                    <ItemList
                         ref={scrollViewRef}
+                        presentation="page"
                         style={styles.scrollContainer}
-                        contentContainerStyle={styles.contentContainer}
+                        containerStyle={[styles.contentContainer, { paddingTop: safeAreaTop, paddingHorizontal: newSessionSidePadding }]}
                         keyboardShouldPersistTaps="handled"
                     >
-                        <View style={{ paddingHorizontal: 0 }}>
-                            <View style={[
-                                {
-                                    maxWidth: layout.maxWidth,
-                                    flex: 1,
-                                    width: '100%',
-                                    alignSelf: 'center',
-                                    paddingTop: safeAreaTop,
-                                },
-                            ]}>
-                                        <View onLayout={registerWizardSectionOffset('profile')} style={styles.wizardContainer}>
+                        <View style={{ maxWidth: layout.maxWidth, width: '100%', alignSelf: 'center' }}>
                                 {useProfiles && (
-                                    <>
-                                        <View style={styles.wizardSectionHeaderRow}>
-                                            {renderIconNode('person', 18, theme.colors.text.primary)}
-                                            <Text style={[styles.sectionHeader, { marginBottom: 0, marginTop: 0 }]}>
-                                                {t('newSession.selectAiProfileTitle')}
-                                            </Text>
-                                        </View>
-                                        <Text style={styles.sectionDescription}>
-                                            {t('newSession.selectAiProfileDescription')}
-                                        </Text>
+                                    <View onLayout={registerWizardSectionOffset('profile')}>
                                         <AdaptiveSelectionSection
                                             presentation={profilePresentation}
                                             expandedContent={(
@@ -846,77 +844,30 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                                     previewDisplay="below-list"
                                                     inlinePreviewSpacingTop={16}
                                                     renderListContent={(profilesListProps) => (
-                                                        <ProfilesList {...profilesListProps} />
+                                                        <ProfilesList {...profilesListProps} presentation="embedded" section={profileSection} />
                                                     )}
                                                 />
                                             )}
                                             compactContent={(
-                                                <NewSessionWizardPopoverItem
-                                                    testID="new-session-profile-dropdown-trigger"
-                                                    title={t('newSession.selectAiProfileTitle')}
-                                                    subtitle={
-                                                        selectedProfileId
-                                                            ? (resolvedProfileMap.get(selectedProfileId)?.name ?? getBuiltInProfile(selectedProfileId)?.name ?? selectedProfileId)
-                                                            : t('profiles.noProfile')
-                                                    }
-                                                    icon={renderIconNode('person', 24, theme.colors.text.secondary)}
-                                                    popover={profilePopover}
-                                                    boundaryRef={props.popoverBoundaryRef}
-                                                />
+                                                <ItemGroup title={profileSection.title} description={profileSection.description}>
+                                                    <NewSessionWizardPopoverItem
+                                                        testID="new-session-profile-dropdown-trigger"
+                                                        title={
+                                                            selectedProfileId
+                                                                ? (resolvedProfileMap.get(selectedProfileId)?.name ?? getBuiltInProfile(selectedProfileId)?.name ?? selectedProfileId)
+                                                                : t('profiles.noProfile')
+                                                        }
+                                                        popover={profilePopover}
+                                                        boundaryRef={props.popoverBoundaryRef}
+                                                    />
+                                                </ItemGroup>
                                             )}
                                         />
-
-                                        <View style={{ height: 24 }} />
-                                    </>
+                                    </View>
                                 )}
 
                                 <View style={pairAgentAndModelSections ? styles.wizardSelectionPair : undefined}>
                                     <View style={pairAgentAndModelSections ? styles.wizardSelectionPairColumn : undefined}>
-                                        {/* Section: AI Backend */}
-                                        <View onLayout={registerWizardSectionOffset('agent')}>
-                                            <View style={styles.wizardSectionHeaderRow}>
-                                                {renderIconNode('cpu', 18, theme.colors.text.primary)}
-                                                <Text style={[styles.sectionHeader, { marginBottom: 0, marginTop: 0 }]}>
-                                                    {t('newSession.selectAiBackendTitle')}
-                                                </Text>
-                                            </View>
-                                        </View>
-                                        <Text style={styles.sectionDescription}>
-                                            {useProfiles && selectedProfileId
-                                                ? t('newSession.aiBackendLimitedByProfileAndMachineClis')
-                                                : t('newSession.aiBackendSelectWhichAiRuns')}
-                                        </Text>
-
-                                        {/* Missing CLI Installation Banners */}
-                                        {selectedMachineId && tmuxRequested && cliAvailability.tmux === false && (
-                                            <View style={{
-                                                backgroundColor: warningBackgroundColor,
-                                                borderRadius: 10,
-                                                padding: theme.space.s12,
-                                                marginBottom: theme.space.s12,
-                                                borderWidth: 1,
-                                                borderColor: warningBorderColor ?? defaultBorderColor,
-                                            }}>
-                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s6, marginBottom: theme.space.s6 }}>
-                                                    {renderIconNode('warning', 16, neutralForegroundColor)}
-                                                    <Text style={{ ...Typography.variant('body', 'semiBold'),  color: theme.colors.text.primary,  }}>
-                                                        {t('machine.tmux.notDetectedSubtitle')}
-                                                    </Text>
-                                                </View>
-                                                <Text style={{ ...Typography.variant('micro'), color: theme.colors.text.secondary,  }}>
-                                                    {t('machine.tmux.notDetectedMessage')}
-                                                </Text>
-                                            </View>
-                                        )}
-
-                                        {installableDepInstallers && installableDepInstallers.length > 0 ? (
-                                            <>
-                                                {installableDepInstallers.map((installer) => (
-                                                    <InstallableDepInstaller key={installer.depId} {...installer} />
-                                                ))}
-                                            </>
-                                        ) : null}
-
                                         {(() => {
                                             const selectedProfile = useProfiles && selectedProfileId
                                                 ? (resolvedProfileMap.get(selectedProfileId) || getBuiltInProfile(selectedProfileId))
@@ -946,8 +897,8 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                                     testID: `new-session-agent:${builtInAgentId ?? option.id}`,
                                                     title: option.label,
                                                     subtitle: option.subtitle ?? null,
-                                                    leftElement: option.icon ?? renderIconNode('cpu', 24, theme.colors.text.secondary),
-                                                    dropdownIcon: option.icon ?? renderIconNode('cpu', 20, theme.colors.text.secondary),
+                                                    leftElement: option.icon ?? null,
+                                                    dropdownIcon: option.icon ?? undefined,
                                                     compatible: true,
                                                     disabled: Boolean(option.disabled),
                                                     disabledReason,
@@ -1005,7 +956,7 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                                 };
                                             });
                                             const backendRows = canonicalBackendRows.length > 0 ? canonicalBackendRows : legacyBackendRows;
-                                            const selectedBackendRowId = backendRows.find((row) => row.isSelected)?.id ?? null;
+                                            const selectedBackendRow = backendRows.find((row) => row.isSelected) ?? null;
                                             const dropdownItems: DropdownMenuItem[] = backendRows.map((row) => ({
                                                 id: row.id,
                                                 title: row.title,
@@ -1015,213 +966,197 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                             }));
 
                                             return (
-                                                <AdaptiveSelectionSection
-                                                    presentation={backendPresentation}
-                                                    expandedContent={(
-                                                        <ItemGroup title={<View />} headerStyle={{ paddingTop: 0, paddingBottom: 0 }}>
-                                                            {backendRows.map((row, index) => (
+                                                <View onLayout={registerWizardSectionOffset('agent')}>
+                                                    <ItemGroup
+                                                        title={t('newSession.wizardSection.agent')}
+                                                        description={useProfiles && selectedProfileId
+                                                            ? t('newSession.aiBackendLimitedByProfileAndMachineClis')
+                                                            : t('newSession.aiBackendSelectWhichAiRuns')}
+                                                    >
+                                                        {/* Missing CLI installation notices lead the section they block. */}
+                                                        {selectedMachineId && tmuxRequested && cliAvailability.tmux === false ? (
+                                                            <Item
+                                                                title={t('machine.tmux.notDetectedSubtitle')}
+                                                                subtitle={t('machine.tmux.notDetectedMessage')}
+                                                                leftElement={renderIconNode('warning', 20, warningForegroundColor)}
+                                                                showChevron={false}
+                                                            />
+                                                        ) : null}
+                                                        {installableDepInstallers?.map((installer) => (
+                                                            <InstallableDepInstaller key={installer.depId} {...installer} />
+                                                        ))}
+                                                        <AdaptiveSelectionSection
+                                                            presentation={backendPresentation}
+                                                            expandedContent={backendRows.map((row, index) => (
                                                                 <Item
                                                                     key={row.key}
                                                                     testID={row.testID}
                                                                     title={row.title}
                                                                     subtitle={row.disabledReason ?? row.subtitle ?? undefined}
-                                                                    leftElement={row.leftElement}
+                                                                    leftElement={row.leftElement ?? undefined}
                                                                     selected={row.isSelected}
                                                                     disabled={row.disabled}
                                                                     onPress={row.onPress}
-                                                                    rightElement={(
-                                                                        <View style={{ width: 24, alignItems: 'center', justifyContent: 'center' }}>
-                                                                            {renderIconNode(
-                                                                                'check-circle',
-                                                                                24,
-                                                                                selectedIndicatorColor,
-                                                                                { opacity: row.isSelected ? 1 : 0 },
-                                                                            )}
-                                                                        </View>
-                                                                    )}
+                                                                    rightElement={renderSelectedMark(row.isSelected)}
                                                                     showChevron={false}
                                                                     showDivider={index < backendRows.length - 1}
                                                                 />
                                                             ))}
-                                                        </ItemGroup>
-                                                    )}
-                                                    compactContent={(
-                                                        <NewSessionWizardDropdownSelectionItem
-                                                            testID="new-session-agent-dropdown-trigger"
-                                                            title={t('newSession.selectAiBackendTitle')}
-                                                            subtitle={agentLabel ?? dropdownItems.find((item) => item.id === selectedBackendRowId)?.title ?? t('newSession.aiBackendSelectWhichAiRuns')}
-                                                            icon={renderIconNode('cpu', 24, theme.colors.text.secondary)}
-                                                            items={dropdownItems}
-                                                            selectedId={selectedBackendRowId}
-                                                            onSelect={(id) => {
-                                                                const row = backendRows.find((candidate) => candidate.id === id);
-                                                                if (row) {
-                                                                    row.onPress();
-                                                                }
-                                                            }}
-                                                            search={dropdownItems.length >= 10}
-                                                            searchPlaceholder={t('subAgentGuidance.ruleEditor.backendPicker.searchPlaceholder')}
-                                                            boundaryRef={props.popoverBoundaryRef}
+                                                            compactContent={(
+                                                                <NewSessionWizardDropdownSelectionItem
+                                                                    testID="new-session-agent-dropdown-trigger"
+                                                                    title={agentLabel ?? selectedBackendRow?.title ?? t('newSession.selectAiBackendTitle')}
+                                                                    icon={selectedBackendRow?.leftElement ?? undefined}
+                                                                    items={dropdownItems}
+                                                                    selectedId={selectedBackendRow?.id ?? null}
+                                                                    onSelect={(id) => {
+                                                                        const row = backendRows.find((candidate) => candidate.id === id);
+                                                                        if (row) {
+                                                                            row.onPress();
+                                                                        }
+                                                                    }}
+                                                                    search={dropdownItems.length >= 10}
+                                                                    searchPlaceholder={t('subAgentGuidance.ruleEditor.backendPicker.searchPlaceholder')}
+                                                                    boundaryRef={props.popoverBoundaryRef}
+                                                                />
+                                                            )}
                                                         />
-                                                    )}
-                                                />
+                                                    </ItemGroup>
+                                                </View>
                                             );
                                         })()}
                                     </View>
 
                                     {shouldRenderModelSection && (
-                                        <View style={pairAgentAndModelSections ? styles.wizardSelectionPairColumn : { marginTop: theme.space.s24 }}>
-                                        <View onLayout={registerWizardSectionOffset('model')}>
-                                            <WizardSectionHeaderRow
-                                                rowStyle={styles.wizardSectionHeaderRow}
-                                                iconName="sparkle"
-                                                iconColor={theme.colors.text.primary}
-                                                title={t('newSession.selectModelTitle')}
-                                                titleStyle={[styles.sectionHeader, { marginBottom: 0, marginTop: 0 }]}
-                                                action={hasModelOptionsProbeAffordance ? {
-                                                    accessibilityLabel: modelOptionsProbe?.refreshAccessibilityLabel ?? t('common.refresh'),
-                                                    iconName: 'arrow-clockwise',
-                                                    iconColor: theme.colors.text.secondary,
-                                                    loading: modelOptionsProbeIsBusy,
-                                                    loadingAccessibilityLabel: modelOptionsProbePhase === 'loading'
-                                                        ? (modelOptionsProbe?.loadingAccessibilityLabel ?? t('modelPickerOverlay.loadingModelsA11y'))
-                                                        : (modelOptionsProbe?.refreshingAccessibilityLabel ?? t('modelPickerOverlay.refreshingModelsA11y')),
-                                                    onPress: modelOptionsProbePhase === 'idle' ? modelOptionsProbe?.onRefresh : undefined,
-                                                    testID: 'new-session-model-refresh',
-                                                } : undefined}
-                                            />
-                                        </View>
-                                        <Text style={styles.sectionDescription}>
-                                            {t('newSession.selectModelDescription')}
-                                        </Text>
-                                        <NewSessionModelSelectionContent
-                                            modelDiscoveryFailed={modelOptionsProbe?.failed}
-                                            presentation={modelPresentation}
-                                            modelOptions={modelOptions}
-                                            selectedModelId={modelMode}
-                                            selectedModelSelection={modelSelection}
-                                            selectedIndicatorColor={selectedIndicatorColor}
-                                            selectedBackendEntry={selectedBackendEntry}
-                                            popoverBoundaryRef={props.popoverBoundaryRef}
-                                            favoriteModelSelections={favoriteModelSelections}
-                                            onFavoriteModelSelectionsChange={setFavoriteModelSelections}
-                                            providerGroups={providerModelGroups}
-                                            teamCredentialResources={teamCredentialResources}
-                                            teamNameById={teamNameById}
-                                            homeNameByTeamId={homeNameByTeamId}
-                                            currentTeamCredentialResourceKeys={currentTeamCredentialResourceKeys}
-                                            teamCredentialServerId={teamCredentialServerId}
-                                            selectedTeamCredentialModel={selectedTeamCredentialModel}
-                                            onSelectTeamCredentialModel={onSelectTeamCredentialModel}
-                                            providerProjectionAuthoritative={providerModelProjectionAuthoritative === true}
-                                            providerProjectionError={providerModelProjectionError}
-                                            providerProjectionFailures={providerModelProjectionFailures}
-                                            retryProviderProjection={retryProviderModelProjection}
-                                            currentSelectionRecovery={providerCurrentSelectionRecovery}
-                                            hiddenNativeModelKeys={hiddenNativeModelKeys}
-                                            experimentalConfirmation={experimentalModelConfirmation}
-                                            onSelectModel={setModelMode}
-                                            onSelectSelection={setModelSelection ? (ref) => {
-                                                setModelSelection(ref ? {
-                                                    v: 1,
-                                                    updatedAt: Date.now(),
-                                                    ref,
-                                                } : null);
-                                            } : undefined}
-                                        />
+                                        <View
+                                            onLayout={registerWizardSectionOffset('model')}
+                                            style={pairAgentAndModelSections ? styles.wizardSelectionPairColumn : undefined}
+                                        >
+                                            <ItemGroup
+                                                title={t('newSession.wizardSection.model')}
+                                                description={t('newSession.selectModelDescription')}
+                                                // The expanded picker draws its rows edge to edge inside the sheet.
+                                                clipContent={modelPresentation === 'expanded'}
+                                                // A quiet icon at the title's end, so paired columns keep their rows level.
+                                                actionLayout="trailing"
+                                                action={hasModelOptionsProbeAffordance ? (
+                                                    <IconButton
+                                                        testID="new-session-model-refresh"
+                                                        iconName="arrow-clockwise"
+                                                        variant="plain"
+                                                        accessibilityLabel={modelOptionsProbeIsBusy
+                                                            ? (modelOptionsProbePhase === 'loading'
+                                                                ? (modelOptionsProbe?.loadingAccessibilityLabel ?? t('modelPickerOverlay.loadingModelsA11y'))
+                                                                : (modelOptionsProbe?.refreshingAccessibilityLabel ?? t('modelPickerOverlay.refreshingModelsA11y')))
+                                                            : (modelOptionsProbe?.refreshAccessibilityLabel ?? t('common.refresh'))}
+                                                        busy={modelOptionsProbeIsBusy}
+                                                        disabled={!modelOptionsProbeIsBusy && typeof modelOptionsProbe?.onRefresh !== 'function'}
+                                                        onPress={() => {
+                                                            if (modelOptionsProbePhase === 'idle') modelOptionsProbe?.onRefresh?.();
+                                                        }}
+                                                    />
+                                                ) : undefined}
+                                            >
+                                                <NewSessionModelSelectionContent
+                                                    modelDiscoveryFailed={modelOptionsProbe?.failed}
+                                                    presentation={modelPresentation}
+                                                    modelOptions={modelOptions}
+                                                    selectedModelId={modelMode}
+                                                    selectedModelSelection={modelSelection}
+                                                    selectedIndicatorColor={selectedIndicatorColor}
+                                                    selectedBackendEntry={selectedBackendEntry}
+                                                    popoverBoundaryRef={props.popoverBoundaryRef}
+                                                    favoriteModelSelections={favoriteModelSelections}
+                                                    onFavoriteModelSelectionsChange={setFavoriteModelSelections}
+                                                    providerGroups={providerModelGroups}
+                                                    teamCredentialResources={teamCredentialResources}
+                                                    teamNameById={teamNameById}
+                                                    homeNameByTeamId={homeNameByTeamId}
+                                                    currentTeamCredentialResourceKeys={currentTeamCredentialResourceKeys}
+                                                    teamCredentialServerId={teamCredentialServerId}
+                                                    selectedTeamCredentialModel={selectedTeamCredentialModel}
+                                                    onSelectTeamCredentialModel={onSelectTeamCredentialModel}
+                                                    providerProjectionAuthoritative={providerModelProjectionAuthoritative === true}
+                                                    providerProjectionError={providerModelProjectionError}
+                                                    providerProjectionFailures={providerModelProjectionFailures}
+                                                    retryProviderProjection={retryProviderModelProjection}
+                                                    currentSelectionRecovery={providerCurrentSelectionRecovery}
+                                                    hiddenNativeModelKeys={hiddenNativeModelKeys}
+                                                    experimentalConfirmation={experimentalModelConfirmation}
+                                                    onSelectModel={setModelMode}
+                                                    onSelectSelection={setModelSelection ? (ref) => {
+                                                        setModelSelection(ref ? {
+                                                            v: 1,
+                                                            updatedAt: Date.now(),
+                                                            ref,
+                                                        } : null);
+                                                    } : undefined}
+                                                />
+                                            </ItemGroup>
                                         </View>
                                     )}
                                 </View>
 
-                                <View style={{ height: 24 }} />
-
                                 <View style={useSelectionColumns ? styles.wizardSelectionPair : undefined}>
-                                    <View style={useSelectionColumns ? styles.wizardSelectionPairColumn : undefined}>
-                                        {/* Section 2: Machine Selection */}
-                                        <View onLayout={registerWizardSectionOffset('machine')}>
-                                            <WizardSectionHeaderRow
-                                                rowStyle={styles.wizardSectionHeaderRow}
-                                                iconName="desktop"
-                                                iconColor={theme.colors.text.primary}
-                                                title={t('newSession.selectMachineTitle')}
-                                                titleStyle={[styles.sectionHeader, { marginBottom: 0, marginTop: 0 }]}
-                                                action={onRefreshMachines ? {
-                                                    accessibilityLabel: t('common.refresh'),
-                                                    iconName: 'arrow-clockwise',
-                                                    iconColor: theme.colors.text.secondary,
-                                                    onPress: onRefreshMachines,
-                                                } : undefined}
-                                            />
-                                        </View>
-                                        <Text style={styles.sectionDescription}>
-                                            {t('newSession.selectMachineDescription')}
-                                        </Text>
-
-                                        <View style={{ marginBottom: theme.space.s24 }}>
+                                    <View
+                                        onLayout={registerWizardSectionOffset('machine')}
+                                        style={useSelectionColumns ? styles.wizardSelectionPairColumn : undefined}
+                                    >
+                                        <ItemGroup
+                                            title={t('newSession.wizardSection.machine')}
+                                            description={t('newSession.selectMachineDescription')}
+                                            clipContent={machinePresentation === 'expanded'}
+                                            actionLayout="trailing"
+                                            action={onRefreshMachines ? (
+                                                <IconButton
+                                                    iconName="arrow-clockwise"
+                                                    variant="plain"
+                                                    accessibilityLabel={t('common.refresh')}
+                                                    onPress={() => onRefreshMachines()}
+                                                />
+                                            ) : undefined}
+                                        >
+                                            {selectedMachineIsOffline ? (
+                                                <Item
+                                                    title={t('newSession.machineOfflineInlineTitle')}
+                                                    subtitle={t('newSession.machineOfflineInlineBody')}
+                                                    leftElement={renderIconNode('warning', 20, warningForegroundColor)}
+                                                    showChevron={false}
+                                                />
+                                            ) : null}
                                             <AdaptiveSelectionSection
                                                 presentation={machinePresentation}
                                                 expandedContent={typeof props.footer.machinePopover?.renderContent === 'function'
                                                     ? props.footer.machinePopover.renderContent({
                                                         maxHeight: props.footer.machinePopover.maxHeightCap ?? 560,
                                                         requestClose: () => {},
+                                                        inline: true,
                                                     })
                                                     : props.footer.machinePopover?.renderContent}
                                                 compactContent={(
                                                     <NewSessionWizardPopoverItem
                                                         testID="new-session-machine-dropdown-trigger"
-                                                        title={t('newSession.selectMachineTitle')}
-                                                        subtitle={machineDisplayName ?? t('newSession.selectMachineDescription')}
-                                                        icon={<Icon name="desktop" size={24} color={theme.colors.text.primary} />}
+                                                        title={machineDisplayName ?? t('newSession.selectMachineTitle')}
+                                                        icon={renderIconNode('desktop', 24, theme.colors.text.secondary)}
                                                         popover={props.footer.machinePopover}
                                                         boundaryRef={props.popoverBoundaryRef}
                                                     />
                                                 )}
                                             />
-                                            {selectedMachineIsOffline && (
-                                                <View
-                                                    style={{
-                                                        marginTop: theme.space.s12,
-                                                        borderRadius: 10,
-                                                        padding: theme.space.s12,
-                                                        borderWidth: 1,
-                                                        backgroundColor: warningBackgroundColor,
-                                                        borderColor: warningBorderColor ?? defaultBorderColor,
-                                                    }}
-                                                >
-                                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.space.s6, marginBottom: theme.space.s4 }}>
-                                                        {renderIconNode(
-                                                            'warning',
-                                                            16,
-                                                            neutralForegroundColor ?? dangerForegroundColor,
-                                                        )}
-                                                        <Text style={{ color: theme.colors.text.primary,  ...Typography.default('semiBold') }}>
-                                                            {t('newSession.machineOfflineInlineTitle')}
-                                                        </Text>
-                                                    </View>
-                                                    <Text style={{ color: theme.colors.text.secondary, ...Typography.default() }}>
-                                                        {t('newSession.machineOfflineInlineBody')}
-                                                    </Text>
-                                                </View>
-                                            )}
-                                        </View>
+                                        </ItemGroup>
                                     </View>
 
-                                    <View style={useSelectionColumns ? styles.wizardSelectionPairColumn : undefined}>
-                                        {/* API key selection is now handled inline from the profile list (via the requirements badge). */}
-
-                                        {/* Section 3: Working Directory */}
-                                        <View onLayout={registerWizardSectionOffset('path')}>
-                                            <View style={styles.wizardSectionHeaderRow}>
-                                                {renderIconNode('folder', 18, theme.colors.text.primary)}
-                                                <Text style={[styles.sectionHeader, { marginBottom: 0, marginTop: 0 }]}>{t('newSession.selectWorkingDirectoryTitle')}</Text>
-                                            </View>
-                                        </View>
-                                        <Text style={styles.sectionDescription}>
-                                            {t('newSession.selectWorkingDirectoryDescription')}
-                                        </Text>
-
-                                        <View style={{ marginBottom: theme.space.s24 }}>
+                                    <View
+                                        onLayout={registerWizardSectionOffset('path')}
+                                        style={useSelectionColumns ? styles.wizardSelectionPairColumn : undefined}
+                                    >
+                                        <ItemGroup
+                                            title={t('newSession.wizardSection.folder')}
+                                            description={t('newSession.selectWorkingDirectoryDescription')}
+                                            clipContent
+                                        >
                                             <PathSelectionList
+                                                autoFocusInput={false}
                                                 initialValue={selectedPath}
                                                 machineHomeDir={selectedMachineHomeDir}
                                                 favorites={favoriteDirectories.map((path) => ({ path }))}
@@ -1247,66 +1182,49 @@ export const NewSessionWizard = React.memo(function NewSessionWizard(props: NewS
                                                 }}
                                                 maxHeight={pathPresentation === 'compact' ? 320 : 420}
                                             />
-                                        </View>
+                                        </ItemGroup>
                                     </View>
                                 </View>
 
-                                {/* Section 4: Permission Mode */}
                                 <View onLayout={registerWizardSectionOffset('permission')}>
-                                    <View style={styles.wizardSectionHeaderRow}>
-                                        {renderIconNode('shield', 18, theme.colors.text.primary)}
-                                        <Text style={[styles.sectionHeader, { marginBottom: 0, marginTop: 0 }]}>{t('newSession.selectPermissionModeTitle')}</Text>
-                                    </View>
-                                </View>
-                                <Text style={styles.sectionDescription}>
-                                    {t('newSession.selectPermissionModeDescription')}
-                                </Text>
-                                <AdaptiveSelectionSection
-                                    presentation={permissionPresentation}
-                                    expandedContent={(
-                                        <ItemGroup title="">
-                                            {permissionOptions.map((option, index, array) => (
+                                    <ItemGroup
+                                        title={t('newSession.wizardSection.permission')}
+                                        description={t('newSession.selectPermissionModeDescription')}
+                                    >
+                                        <AdaptiveSelectionSection
+                                            presentation={permissionPresentation}
+                                            expandedContent={permissionOptions.map((option, index, array) => (
                                                 <Item
                                                     key={option.value}
                                                     title={option.label}
                                                     subtitle={option.description}
-                                                    leftElement={renderIconNode(option.icon as any, 24, theme.colors.text.secondary)}
-                                                    rightElement={permissionMode === option.value
-                                                        ? renderIconNode('check-circle', 24, selectedIndicatorColor)
-                                                        : null}
+                                                    rightElement={renderSelectedMark(permissionMode === option.value)}
                                                     onPress={() => handlePermissionModeChange(option.value)}
                                                     showChevron={false}
                                                     selected={permissionMode === option.value}
                                                     showDivider={index < array.length - 1}
                                                 />
                                             ))}
-                                        </ItemGroup>
-                                    )}
-                                    compactContent={(
-                                        <NewSessionWizardDropdownSelectionItem
-                                            testID="new-session-permission-dropdown-trigger"
-                                            title={t('newSession.selectPermissionModeTitle')}
-                                            subtitle={permissionOptions.find((option) => option.value === permissionMode)?.label ?? t('newSession.selectPermissionModeDescription')}
-                                            icon={renderIconNode('shield', 24, theme.colors.text.secondary)}
-                                            items={permissionOptions.map((option) => ({
-                                                id: option.value,
-                                                title: option.label,
-                                                subtitle: option.description,
-                                                icon: renderIconNode(option.icon as any, 20, theme.colors.text.secondary),
-                                            }))}
-                                            selectedId={permissionMode}
-                                            boundaryRef={props.popoverBoundaryRef}
-                                            onSelect={(id) => handlePermissionModeChange(id as PermissionMode)}
+                                            compactContent={(
+                                                <NewSessionWizardDropdownSelectionItem
+                                                    testID="new-session-permission-dropdown-trigger"
+                                                    title={permissionOptions.find((option) => option.value === permissionMode)?.label ?? t('newSession.selectPermissionModeTitle')}
+                                                    items={permissionOptions.map((option) => ({
+                                                        id: option.value,
+                                                        title: option.label,
+                                                        subtitle: option.description,
+                                                    }))}
+                                                    selectedId={permissionMode}
+                                                    boundaryRef={props.popoverBoundaryRef}
+                                                    onSelect={(id) => handlePermissionModeChange(id as PermissionMode)}
+                                                />
+                                            )}
                                         />
-                                    )}
-                                />
-
-                                <View style={{ height: 24 }} />
-
-                            </View>
+                                    </ItemGroup>
+                                </View>
                         </View>
-                    </View>
-                </ScrollView>
+                    </ItemList>
+                    </ContainedPageScopeProvider>
                 </ComposerKeyboardScaffold>
             </PopoverBoundaryProvider>
         </View>

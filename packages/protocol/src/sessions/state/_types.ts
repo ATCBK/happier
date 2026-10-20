@@ -68,6 +68,7 @@ export interface SessionStateFieldRegistry {
   'intent.acpSessionMode': { value: AcpSessionModeIntentV1 };
   'intent.acpConfigOption': { value: AcpConfigOptionIntentV1 };
   'display.title': { value: string };
+  'display.statusReason': { value: string | null };
   'display.bot': { value: SessionBotV1 | null };
   'runtime.workState': { value: SessionWorkStateV1 };
   'runtime.activity': { value: SessionRuntimeActivitySnapshot };

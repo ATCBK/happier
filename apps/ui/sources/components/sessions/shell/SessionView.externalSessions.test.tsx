@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { createReactNavigationNativeMock } from '@/dev/testkit/mocks/reactNavigation';
 import { act } from 'react-test-renderer';
@@ -12,6 +13,7 @@ import {
   PluginProjectionV2Schema,
   ParticipantRecipientV1Schema,
   StrictJsonValueSchema,
+  SessionDraftDocumentV1Schema,
   SessionCurrentProjectionRecordV1Schema,
   SessionMetadataTuplePatchV1Schema,
   SessionMetadataTuplePatchSuccessV1Schema,
@@ -36,7 +38,8 @@ import {
 } from '@happier-dev/protocol';
 import { ExternalSessionTakeoverStartInputV1Schema, ExternalSessionOperationActionResponseV1Schema,
   ExternalSessionOperationProgressV1Schema, EXTERNAL_SESSION_OPERATION_TIMELINES_V1 } from '@happier-dev/protocol/sessions';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { ExecutionRunStartRequestSchema, ExecutionRunEnsureOrStartRequestSchema, ExecutionRunStartResponseSchema } from '@happier-dev/protocol/execution/runs/index';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import type { FetchedMachineRow } from '@/sync/engine/machines/syncMachines';
 
@@ -50,6 +53,9 @@ import { createSessionMessagesFixture } from '@/dev/testkit/fixtures/transcriptF
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
+import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { buildWorkspaceCacheKey } from '@/sync/domains/workspaces/workspaceScope';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -72,10 +78,12 @@ import {
   writeExistingSessionDraft,
 } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
-import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 (globalThis as any).__DEV__ = false;
+
+vi.mock('socket.io-client', async (importOriginal) =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 vi.mock('@/agents/backendCatalog/getResolvedBackendCatalogEntries', () => ({
   getResolvedBackendCatalogEntries: () => [],
@@ -101,6 +109,7 @@ const machineExternalSessionTakeoverPersistSpy = vi.hoisted(() => vi.fn<
   (input: ReturnType<typeof ExternalSessionTakeoverStartInputV1Schema.parse>) => Promise<ReturnType<typeof ExternalSessionOperationActionResponseV1Schema.parse>>
 >());
 const createDefaultActionExecutorMock = vi.hoisted(() => vi.fn());
+const executionRunStartReply = vi.hoisted(() => vi.fn<(input: unknown) => Promise<unknown>>());
 const outboundMessageAckSpy = vi.hoisted(() => vi.fn<(event: string, payload: unknown) => Promise<unknown>>());
 const pendingHttpSpy = vi.hoisted(() => vi.fn<(path: string, body: unknown) => Promise<Response>>());
 const transcriptPageReply = vi.hoisted(() => vi.fn());
@@ -329,8 +338,7 @@ const themeColors = vi.hoisted(() => ({
   },
 }));
 
-installSessionShellCommonModuleMocks({
-  reactNative: async () => {
+vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock({
       View: 'View',
@@ -339,32 +347,31 @@ installSessionShellCommonModuleMocks({
       ActivityIndicator: 'ActivityIndicator',
       useWindowDimensions: () => windowDimensionsState.current,
     });
-  },
-  unistyles: async () => {
+  });
+vi.mock('react-native-unistyles', async () => {
     const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
     return createUnistylesMock({
       theme: themeColors,
     });
-  },
-  router: async () => {
-    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-    return createExpoRouterMock({
-      pathname: () => pathnameState.current,
-    }).module;
-  },
-  text: async () => {
+  });
+vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock({
       translate: (key: string) => key === 'agentInput.agent.codex' ? 'Codex' : key,
     });
-  },
-  modal: async () => {
+  });
+vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     const modalMock = createModalModuleMock();
     modalMock.spies.alert.mockImplementation((...args) => modalAlertSpy(...args));
     return modalMock.module;
-  },
-});
+  });
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    return createExpoRouterMock({
+      pathname: () => pathnameState.current,
+    }).module;
+  });
 
 vi.mock('@react-navigation/native', () => ({
     ...createReactNavigationNativeMock(),
@@ -491,10 +498,6 @@ vi.mock('@/components/sessions/model/useSessionMachineReachability', async (impo
     useSessionReachableMachineTarget: () => null,
   };
 });
-vi.mock('@/components/sessions/model/useSessionMachineTarget', () => ({
-  useSessionMachineTarget: () => ({ machineId: 'machine-1', basePath: '/tmp' }),
-  useSessionMachineControlTarget: () => ({ machineId: 'machine-1', basePath: '/tmp' }),
-}));
 vi.mock('@/sync/ops/connectedServiceQuotaRecoveryCredits', () => ({
   connectedServiceQuotaRecoveryCreditConsume: connectedServiceQuotaRecoveryCreditConsumeSpy,
 }));
@@ -520,9 +523,13 @@ vi.mock('@/sync/ops', async (importOriginal) => {
     sessionSwitch: vi.fn(async () => true),
   };
 });
-vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
-  createDefaultActionExecutor: (...args: unknown[]) => createDefaultActionExecutorMock(...args),
-}));
+vi.mock('@/sync/ops/actions/defaultActionExecutor', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/sync/ops/actions/defaultActionExecutor')>();
+  return { ...actual, createDefaultActionExecutor: (...args: Parameters<typeof actual.createDefaultActionExecutor>) => {
+    createDefaultActionExecutorMock(...args);
+    return actual.createDefaultActionExecutor(...args);
+  } };
+});
 vi.mock('@/components/sessions/agentInput', () => ({
   AgentInput: (props: any) => React.createElement('AgentInput', { testID: 'session-agent-input', ...props }),
 }));
@@ -596,6 +603,12 @@ installDisconnectedServerSocketBoundary((socket) => {
       expect(carrier.auth.token).toBe(shellCredentials?.token);
       let result: unknown;
       switch (request.method) {
+        case `s1:${SESSION_RPC_METHODS.EXECUTION_RUN_START}`:
+          result = ExecutionRunStartResponseSchema.parse(await executionRunStartReply(ExecutionRunStartRequestSchema.parse(request.params)));
+          break;
+        case `s1:${SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1}`:
+          result = ExecutionRunStartResponseSchema.parse(await executionRunStartReply(ExecutionRunEnsureOrStartRequestSchema.parse(request.params).start));
+          break;
         case `machine-1:${RPC_METHODS.DAEMON_EXTERNAL_SESSION_STATUS_GET}`:
           result = ExternalSessionStatusGetResponseSchema.parse(await machineExternalSessionStatusGetSpy(ExternalSessionStatusGetRequestSchema.parse(request.params)));
           break;
@@ -646,8 +659,6 @@ installDisconnectedServerSocketBoundary((socket) => {
     return { result: 'success', version: wireSession.metadataVersion, metadata: wireSession.metadata };
   });
 });
-// The shared shell helper predates the canonical draft and registry owners.
-// Keep its platform boundaries, but do not replace those deterministic owners.
 vi.doUnmock('@/hooks/session/useDraft');
 vi.doUnmock('@/agents/registry/registryUiBehavior');
 vi.doUnmock('@/sync/domains/state/storage');
@@ -697,6 +708,11 @@ function syncShellStorageStore() {
     },
     settings: { ...settingsDefaults, experiments: true, codexBackendMode: 'acp', ...settingsState.current, ...settingByKeyState.current },
     localSettings: { ...localSettingsDefaults, uiMultiPanePanelsEnabled: true },
+  });
+  // The settled Home inventory, not the legacy active-map fallback, owns
+  // whether an owner's Session still has access to its Machine.
+  shellStorageStore.getState().applyMachines([machine], true, {
+    sourceServerId: storageState.sessions.s1.serverId,
   });
 }
 
@@ -774,7 +790,7 @@ describe('SessionView (direct sessions)', () => {
   }
 
   function readCanonicalSessionDraft() {
-    const document = getSessionDraftSnapshot(canonicalDraftScope, { kind: 'session', sessionId: 's1' })?.document;
+    const document = SessionDraftDocumentV1Schema.parse(getSessionDraftSnapshot(canonicalDraftScope, { kind: 'session', sessionId: 's1' })?.document);
     return document?.target.kind === 'session' ? document : null;
   }
 
@@ -799,7 +815,7 @@ describe('SessionView (direct sessions)', () => {
   }
 
   function clearCanonicalSessionDraft() {
-    deleteSessionDraft({
+    return deleteSessionDraft({
       scope: canonicalDraftScope,
       address: { kind: 'session', sessionId: 's1' },
     });
@@ -857,9 +873,16 @@ describe('SessionView (direct sessions)', () => {
   beforeEach(async () => {
     wireSession = null;
     wireMachine = null;
+    storageState.profile = {
+      connectedServicesV2: [],
+      connectedServiceCredentialRevisionsV1: [],
+    };
     await loadSyncSingletonForTests();
     const features = createRootLayoutFeaturesResponse();
     features.capabilities.session.pendingInput = { protocolVersion: 3 };
+    const accountHttp = createHomeHubArtifactHttpBoundary('account-canonical', () => AccountProfileSchema.parse({
+      ...profileDefaults, id: 'account-canonical', ...storageState.profile,
+    }));
     pendingHttpSpy.mockReset();
     pendingHttpSpy.mockResolvedValue(Response.json({ error: 'Session input refused', code: 'session_input_target_unavailable' }, { status: 409 }));
     const connection = await restoreServerAccountForTest({
@@ -869,7 +892,6 @@ describe('SessionView (direct sessions)', () => {
         if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(features);
         if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
         if (path === '/v2/account/settings') return Response.json({ content: null, version: 0 });
-        if (path === '/v1/account/profile') return Response.json({ ...profileDefaults, id: 'account-canonical', ...storageState.profile });
         if (path === '/v1/machines') return Response.json(wireMachine ? [wireMachine] : []);
         if (path === '/v1/machines/machine-1' && wireMachine) return Response.json({ machine: wireMachine });
         if (path.endsWith('/pending') && init?.method === 'POST') return pendingHttpSpy(path, JSON.parse(String(init.body)));
@@ -892,13 +914,16 @@ describe('SessionView (direct sessions)', () => {
           return Response.json({ session: wireSession });
         }
         if (path.endsWith('/messages')) return Response.json({ messages: [], hasMore: false });
-        return Response.json({ error: 'not_found' }, { status: 404 });
+        return createEmptyAccountBootstrapHttpResponse(path, init) ?? await accountHttp.request(url, init);
       },
     });
     shellCredentials = connection.credentials;
     onTestFinished(() => connection.dispose());
     expect(connection.home.id).toBe('server-canonical');
     await waitForHomeGovernance(() => expect(canonicalStorage.getState().endpointStatus).toBe('online'));
+    await waitForHomeGovernance(() => expect(canonicalStorage.getState()).toMatchObject({
+      isDataReady: true, profile: { id: 'account-canonical' },
+    }));
     const { sync } = await import('@/sync/sync');
     outboundMessageAckSpy.mockReset();
     outboundMessageAckSpy.mockResolvedValue({ ok: true, id: 'committed-user-message', seq: 2, localId: null, didWrite: true });
@@ -1021,10 +1046,6 @@ describe('SessionView (direct sessions)', () => {
     storageState.settings = settingsState.current;
     storageState.artifacts = {};
     storageState.isDataReady = true;
-    storageState.profile = {
-      connectedServicesV2: [],
-      connectedServiceCredentialRevisionsV1: [],
-    };
     storageState.concurrentSessionListCacheByServerId = {};
     storageState.sessionListRowsByServerId = {};
     storageState.ordinarySessionListMembershipByServerId = {};
@@ -1037,6 +1058,7 @@ describe('SessionView (direct sessions)', () => {
       executionRunRequestedAction: { v: 1, kind: 'steer_if_active' },
       setExecutionRunRequestedAction: vi.fn(),
     };
+    await clearCanonicalSessionDraft();
     resetSessionDraftRepositoryForTests();
     showExternalSessionTakeoverDialogSpy.mockResolvedValue({ action: null });
     machineExternalSessionStatusGetSpy.mockResolvedValue({
@@ -1048,15 +1070,15 @@ describe('SessionView (direct sessions)', () => {
       canTakeOverPersist: true,
       canForceStop: false,
     });
-    createDefaultActionExecutorMock.mockReturnValue({
-      execute: vi.fn(),
-    });
+    executionRunStartReply.mockReset();
+    executionRunStartReply.mockResolvedValue(ExecutionRunStartResponseSchema.parse({ runId: 'run-1', callId: 'call-1', sidechainId: 'sidechain-1' }));
   });
 
-  afterEach(() => {
-    standardCleanup();
+  afterEach(async () => {
+    await standardCleanup();
     vi.clearAllTimers();
     vi.useRealTimers();
+    await clearCanonicalSessionDraft();
     vi.clearAllMocks();
   });
 
@@ -1642,7 +1664,7 @@ describe('SessionView (direct sessions)', () => {
   });
 
   it('passes live engine control props directly to AgentInput instead of custom agent picker options', async () => {
-    const session = (await import('@/sync/domains/state/storage')).storage.getState().sessions.s1 as any;
+    const session = storageState.sessions.s1;
     session.access = createSessionAccessFixture('owner');
     session.accessLevel = 'owner';
     session.metadata = {
@@ -1888,6 +1910,7 @@ describe('SessionView (direct sessions)', () => {
       serviceId: 'openai-codex',
       profileId: 'work',
       sourceSnapshotFetchedAtMs: 1,
+      signal: expect.any(AbortSignal),
     });
   });
 
@@ -1986,6 +2009,7 @@ describe('SessionView (direct sessions)', () => {
       serviceId: 'openai-codex',
       profileId: 'work',
       sourceSnapshotFetchedAtMs: 1000,
+      signal: expect.any(AbortSignal),
     });
     expect(sessionUsageLimitConsumeResetCreditSpy).not.toHaveBeenCalled();
   });
@@ -2146,6 +2170,7 @@ describe('SessionView (direct sessions)', () => {
       serviceId: 'openai-codex',
       profileId: 'work',
       sourceSnapshotFetchedAtMs: 2000,
+      signal: expect.any(AbortSignal),
     });
   });
 
@@ -2611,33 +2636,14 @@ describe('SessionView (direct sessions)', () => {
     const screen = await renderSessionViewAndSettle();
 
     const agentInput = findAgentInput(screen);
-    const recipientChip = (agentInput.props.extraActionChips ?? []).find((chip: {
-      key: string;
-      controlId?: string;
-      collapsedOptionsPopover?: {
-        presentation?: 'picker' | 'list';
-        rootStep?: { sections: ReadonlyArray<{ kind: 'static' | 'dynamic'; options?: ReadonlyArray<{ id: string }> }> };
-        selectedOptionId?: string | null;
-        onSelect?: (id: string) => void;
-      };
-    }) => chip.key === 'participants-recipient');
-
-    expect(recipientChip).toEqual(expect.objectContaining({
-      key: 'participants-recipient',
-      controlId: 'recipient',
-    }));
-    expect(recipientChip?.collapsedOptionsPopover?.presentation).toBe('list');
-    const recipientFirstSection = recipientChip?.collapsedOptionsPopover?.rootStep?.sections?.[0];
-    const recipientOptions = recipientFirstSection?.kind === 'static'
-      ? recipientFirstSection.options ?? []
-      : [];
-    expect(recipientOptions.map((option: { id: string }) => option.id)).toEqual([
-      'lead',
-      'member-1',
-      'run-1',
-    ]);
-    expect(recipientChip?.collapsedOptionsPopover?.selectedOptionId).toBe('run-1');
-    expect(typeof recipientChip?.collapsedOptionsPopover?.onSelect).toBe('function');
+    const recipientChip = (agentInput.props.extraActionChips ?? []).find((chip: { key: string }) => chip.key === 'participants-recipient');
+    expect(recipientChip).toEqual(expect.objectContaining({ key: 'participants-recipient', controlId: 'recipient' }));
+    const picker = recipientChip?.collapsedContentPopover?.renderContent({ requestClose: () => {}, maxHeight: 400 });
+    if (!React.isValidElement<{ participants: { targets: ReadonlyArray<{ key: string }>; recipient: unknown } | null }>(picker)) {
+      throw new Error('Expected the session talk picker');
+    }
+    expect(picker.props.participants?.targets.map((target) => target.key)).toEqual(['member-1', 'run-1']);
+    expect(picker.props.participants?.recipient).toEqual({ kind: 'execution_run', runId: 'run-1' });
     expect((agentInput.props.extraActionChips ?? []).map((chip: { key: string }) => chip.key)).toContain('execution-run-requested-action');
   });
 
@@ -2771,7 +2777,8 @@ describe('SessionView (direct sessions)', () => {
     participantTargetsState.current = [];
     const emptyScreen = await renderSessionViewAndSettle();
     const emptyInput = findAgentInput(emptyScreen);
-    expect((emptyInput.props.extraActionChips ?? []).map((chip: { key: string }) => chip.key)).not.toContain('participants-recipient');
+    // The To chip stays on a session's composer (other sessions, Post update) with no roster at all.
+    expect((emptyInput.props.extraActionChips ?? []).map((chip: { key: string }) => chip.key)).toContain('participants-recipient');
     expect((emptyInput.props.extraActionChips ?? []).map((chip: { key: string }) => chip.key)).not.toContain('execution-run-requested-action');
     await act(async () => { emptyScreen.unmount(); });
     recipientStateState.current = {
@@ -2811,11 +2818,13 @@ describe('SessionView (direct sessions)', () => {
       recipient: ParticipantRecipientV1Schema.parse(renderedDelivery.props.recipient),
     })).toEqual({ type: 'session_message', recipient: { kind: 'execution_run', runId: 'run-1' } });
     const recipientChip = (agentInput.props.extraActionChips ?? []).find((chip: { key: string }) => chip.key === 'participants-recipient');
-    const section = recipientChip?.collapsedOptionsPopover?.rootStep?.sections[0];
-    expect(section?.kind).toBe('static');
-    expect(section?.options.map((option: { id: string }) => option.id)).toEqual(['lead']);
+    const picker = recipientChip?.collapsedContentPopover?.renderContent({ requestClose: () => {}, maxHeight: 400 });
+    if (!React.isValidElement<{ participants: { targets: readonly unknown[]; recipient: unknown;
+      onRecipientChange: (next: null) => void } | null }>(picker)) throw new Error('Expected the session talk picker');
+    // Only the way back (This session) is offered for the retained Run recipient: no live roster rows.
+    expect(picker.props.participants?.targets).toEqual([]);
     expect(readCanonicalDraftRecipient()).toEqual({ kind: 'execution_run', runId: 'run-1' });
-    await act(async () => { section.options[0].onSelect(); });
+    await act(async () => { picker.props.participants?.onRecipientChange(null); });
     expect(readCanonicalDraftRecipient()).toBeNull();
   });
 
@@ -3186,12 +3195,13 @@ describe('SessionView (direct sessions)', () => {
   it('admits one pending execution action at a time and releases admission for retry', async () => {
     featureEnabledState['execution.runs'] = true;
     sessionExecutionRunsSupportedState.current = true;
-    const actionExecution = createDeferred<{ ok: true; result: { runId: string } }>();
-    const executeAction = vi.fn(() => actionExecution.promise);
-    createDefaultActionExecutorMock.mockReturnValue({ execute: executeAction });
+    const actionExecution = createDeferred<ReturnType<typeof ExecutionRunStartResponseSchema.parse>>();
+    executionRunStartReply.mockImplementationOnce(() => actionExecution.promise);
     const screen = await renderSessionView();
     const agentInput = findAgentInput(screen);
-    const sendOptions = { inputTextOverride: '/review review this external session' };
+    // Planning exercises the shared execution admission contract without the
+    // separate daemon-owned Review engine inventory prerequisite.
+    const sendOptions = { inputTextOverride: '/h.plan plan changes for this external session' };
 
     await act(async () => {
       agentInput.props.onSend(sendOptions);
@@ -3200,10 +3210,11 @@ describe('SessionView (direct sessions)', () => {
     });
 
     try {
-      expect(executeAction).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(executionRunStartReply, JSON.stringify(modalAlertSpy.mock.calls)).toHaveBeenCalledTimes(1));
+      expect(executionRunStartReply).toHaveBeenCalledWith(expect.objectContaining({ intent: 'plan' }));
     } finally {
       await act(async () => {
-        actionExecution.resolve({ ok: true, result: { runId: 'run-1' } });
+        actionExecution.resolve(ExecutionRunStartResponseSchema.parse({ runId: 'run-1', callId: 'call-1', sidechainId: 'sidechain-1' }));
         await actionExecution.promise;
       });
     }
@@ -3214,7 +3225,7 @@ describe('SessionView (direct sessions)', () => {
       await Promise.resolve();
     });
 
-    expect(executeAction).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(executionRunStartReply, JSON.stringify(modalAlertSpy.mock.calls)).toHaveBeenCalledTimes(2));
   });
 
   it('keeps execution-run dispatch behind external takeover admission', async () => {
@@ -3309,7 +3320,7 @@ describe('SessionView (direct sessions)', () => {
     const pendingReply = createDeferred<Response>();
 
     useCanonicalDraftScope();
-    clearCanonicalSessionDraft();
+    await clearCanonicalSessionDraft();
     writeCanonicalSessionDraft({
       recipient,
       executionRunRequestedAction: { v: 1, kind: 'send_now' },
@@ -3363,7 +3374,7 @@ describe('SessionView (direct sessions)', () => {
       expect(readCanonicalDraftMentions()).toEqual([mention]);
     } finally {
       pendingReply.resolve(Response.json({ code: 'session_input_target_unavailable' }, { status: 409 }));
-      clearCanonicalSessionDraft();
+      await clearCanonicalSessionDraft();
       resetSessionDraftRepositoryForTests();
     }
   });
@@ -3390,7 +3401,7 @@ describe('SessionView (direct sessions)', () => {
     const pendingReply = createDeferred<Response>();
 
     useCanonicalDraftScope();
-    clearCanonicalSessionDraft();
+    await clearCanonicalSessionDraft();
     writeCanonicalSessionDraft({
       recipient: oldRecipient,
       executionRunRequestedAction: { v: 1, kind: 'send_now' },
@@ -3458,7 +3469,7 @@ describe('SessionView (direct sessions)', () => {
       expect(readCanonicalDraftMentions()).toEqual([newMention]);
     } finally {
       pendingReply.resolve(Response.json({ code: 'session_input_target_unavailable' }, { status: 409 }));
-      clearCanonicalSessionDraft();
+      await clearCanonicalSessionDraft();
       resetSessionDraftRepositoryForTests();
     }
   });

@@ -204,6 +204,50 @@ this mount. `active()` and an exact `get(ref)` remain available on generic
 mounts. Always pass the `expectedRevision` you read: the host rejects an apply
 built on a stale draft instead of silently overwriting the person's edits.
 
+## Discussion integration (development)
+
+First-class Home Discussions are an unreleased 0.3 integration. Their composer
+scope is `{ kind: 'discussion', discussionId }` through the same public reference,
+mounted read/apply contract and host lifecycle. It identifies the Discussion under the host's
+captured Home connection; the optional source Session is not its composer
+identity. Treat an unsupported scope or unavailable mounted handle as
+unavailable, and use the host's advertised methods and snapshot capabilities.
+The SDK negotiates Discussion support through the callable
+`readDiscussionComposer` method; `composer.read()` uses it automatically for a
+Discussion reference. Older hosts return `unsupported_method` without sending
+an unknown scope to their existing Session operations.
+
+A structured participant mention carries the selected Account or Session
+identity; display text such as `@Reviewer` does not select an executable
+participant. Applying a draft edit is separate from posting it. Publication
+uses the same admitted `discussion.*` Actions as the product, with current
+grants, source-disclosure checks and any protected question cutoff. A plugin
+cannot choose Agent provenance, bypass a pending approval or keep writing
+through a retired mount.
+
+The external-plugin Discussion fixture and loaded-runtime journey are still
+being validated. Existing Composer contribution availability does not certify
+this additional scope. See the [host Action
+reference](/plugins/api/host-actions) for the generated operation inventory.
+
+For development Discussion and Doc threads, import `ThreadMessage` and
+`ReplyQuote` from `@happier-dev/plugin-ui/components`. Core uses the same
+presentation owners. A quote's `source` is either `available` with admitted
+text and optional navigation, or `unavailable` with a safe reason and no text
+or navigation. These components do not read a source, grant access or turn a
+displayed Task reference into a Discussion reply target; the caller retains
+those decisions.
+
+The development `ExecutableParticipantPicker` component from the same public
+entrypoint renders the host's shared searchable choice list. Supply admitted
+display sections, a controlled single or multiple selection, `canConfirm`,
+labels and callbacks. Keep participant inventory, readiness, native model
+setup and committing the selection in your controller; the component does
+not discover or launch agents. Confirmation can be enabled for a configured
+model even when no Session row is marked. Native and same-realm React Native
+Web surfaces use the same presenter as core; a host without that presenter
+shows an explicit unavailable message rather than a different picker.
+
 ## Staged media
 
 `composer.content.pickMedia(...)` returns an opaque staged handle. Pass it

@@ -10,6 +10,7 @@ import type { SessionSkillReadItemV1 } from '@happier-dev/protocol/prompts/libra
 type WorkspaceWritesPolicyPreparation = (workspaceWrites: 'allow' | 'deny', context: import('@happier-dev/protocol').ActionExecutorContext) => Promise<Readonly<{ ok: true }> | Readonly<{ ok: false; errorCode: string }>>;
 
 export type RunnerMcpSessionContextAccessors = Readonly<{
+  getSessionRoleContext?: () => import('@/session/roles/sessionRoleContext').SessionRoleContext;
   getPluginMcpRuntimeRegistry?: () => import('@/plugins/runtime/resolveExecutablePluginRuntimeRegistry').ResolvedExecutablePluginRuntimeRegistry | null;
   getCurrentSessionSkillItems?: () => readonly SessionSkillReadItemV1[] | null;
   getCurrentResolvedRoles?: () => ResolvedRolesSnapshotV1;
@@ -31,6 +32,7 @@ export type RunnerMcpSessionContextAccessors = Readonly<{
 }>;
 
 export type RunnerMcpSessionWithContext<TSession> = TSession & {
+  getSessionRoleContext?: RunnerMcpSessionContextAccessors['getSessionRoleContext'];
   getPluginMcpRuntimeRegistry?: RunnerMcpSessionContextAccessors['getPluginMcpRuntimeRegistry'];
   getCurrentSessionSkillItems?: RunnerMcpSessionContextAccessors['getCurrentSessionSkillItems'];
   getCurrentResolvedRoles?: () => ResolvedRolesSnapshotV1;
@@ -57,6 +59,7 @@ export function applyRunnerMcpSessionContext<TSession extends object>(
   accessors: RunnerMcpSessionContextAccessors,
 ): RunnerMcpSessionWithContext<TSession> {
   const target = session as RunnerMcpSessionWithContext<TSession>;
+  if (accessors.getSessionRoleContext) target.getSessionRoleContext = accessors.getSessionRoleContext;
   if (accessors.getCurrentSessionSkillItems) target.getCurrentSessionSkillItems = accessors.getCurrentSessionSkillItems;
   if (accessors.getPluginMcpRuntimeRegistry) target.getPluginMcpRuntimeRegistry = accessors.getPluginMcpRuntimeRegistry;
   if (accessors.getCurrentResolvedRoles) target.getCurrentResolvedRoles = accessors.getCurrentResolvedRoles;

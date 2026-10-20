@@ -1,5 +1,21 @@
 import { type Metadata } from '@happier-dev/session-core/state';
 import { readSessionMetadataLayoutVersion } from '@/sync/engine/sessions/parsePlainSessionPayload';
+import { SessionOwnerMetadataV1Schema, type SessionOwnerMetadataEnvelopeV1, type SessionOwnerMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
+
+/** In-memory provenance travels with the Session/list projection, never with wire or warm-cache data. */
+export const SESSION_OWNER_METADATA_PROJECTION = Symbol('sessionOwnerMetadataProjection');
+export type SessionOwnerMetadataProjection = Readonly<{
+  kind: 'owner';
+  ownerMetadataEnvelope: SessionOwnerMetadataEnvelopeV1;
+  ownerMetadata: SessionOwnerMetadataV1;
+  canReuse?: (input: Readonly<{
+    accountMode?: AccountEncryptionCurrentnessResponse['mode'];
+    credentials: object;
+    ownerMetadataEnvelope: unknown;
+  }>) => boolean;
+}>;
 
 type SessionOwnerMetadataViewInput = Readonly<{
   metadataLayoutVersion?: number;
@@ -29,6 +45,9 @@ const NOT_PROJECTED: SessionOwnerMetadataViewRead = Object.freeze({ kind: 'not_p
 const UNSUPPORTED_LAYOUT_VERSION: SessionOwnerMetadataViewRead = Object.freeze({
   kind: 'unsupported_layout_version' as const,
 });
+const ownerViewPreferencesReadSchema = createStoredReadSchema(
+  SessionOwnerMetadataV1Schema.shape.work._zod.def.innerType.shape.viewPreferences,
+);
 
 function readMetadataView(value: unknown): SessionOwnerMetadataViewRead {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -57,4 +76,15 @@ export function readSessionOwnerMetadataView(
 ): Metadata | null {
   const read = resolveSessionOwnerMetadataViewRead(session);
   return read.kind === 'available' ? read.metadata : null;
+}
+
+/** Read only the canonical preference leaf; retained plugin work remains untouched. */
+export function readSessionOwnerMetadataViewPreferences(
+  metadata: unknown,
+): NonNullable<NonNullable<SessionOwnerMetadataV1['work']>['viewPreferences']> | null {
+  if (metadata === null || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+  const work: unknown = Reflect.get(metadata, 'work');
+  if (work === null || typeof work !== 'object' || Array.isArray(work)) return null;
+  const parsed = ownerViewPreferencesReadSchema.safeParse(Reflect.get(work, 'viewPreferences'));
+  return parsed.success ? parsed.data ?? null : null;
 }

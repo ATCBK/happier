@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import { safeParse, type core } from 'zod/mini';
 import { ActionApprovalRequestCreatedResultSchema, type ActionExecuteFailure, type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { ProjectDefinitionInspectOutputSchema } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
 import { ProjectWorkerActionOutputSchemasV1 } from '@happier-dev/protocol/actions/specs/projectWorkers';
@@ -51,14 +51,14 @@ async function readProjectSetupAgentGuidanceCurrent(input: ProjectSetupAgentGuid
                 : resolveCurrentProjectAuthoringReturn(origin).kind !== 'ready'
                     ? { kind: 'unavailable', reason: 'origin_unavailable' } : null;
         async function read<T>(actionId: 'projects.inspect' | 'projects.worker.preferences.get' | 'projects.worker.status' | 'machines.pools.resolve',
-            request: unknown, schema: z.ZodType<T>): Promise<{ ok: true; value: T } | ActionExecuteFailure> {
+            request: unknown, schema: core.$ZodType<T>): Promise<{ ok: true; value: T } | ActionExecuteFailure> {
             const result = await executor.execute(actionId, request, context);
             // Only redacted public diagnostics enter the user prompt, not failure details or transport prose.
             if (!result.ok) return { ok: false, errorCode: result.errorCode, error: result.errorCode };
             if (ActionApprovalRequestCreatedResultSchema.safeParse(result.result).success) {
                 return { ok: false, errorCode: 'approval_required', error: 'approval_required' };
             }
-            const parsed = schema.safeParse(result.result);
+            const parsed = safeParse(schema, result.result);
             return parsed.success ? { ok: true, value: parsed.data }
                 : { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
         }
@@ -130,14 +130,14 @@ function describeSetupAuthoringFacts(guidance: ProjectSetupAgentGuidance): strin
         .map(source => describeProjectCommandSource(source).file)
         .filter(file => file !== null));
     return [
-        [t('projects.authoring.scriptsCount', { count: scriptSources.length }),
-            // A zero count is not an observation the agent needs.
+        // A zero count is not an observation the agent needs; an empty checkout seeds the request alone.
+        [...(scriptSources.length > 0 ? [t('projects.authoring.scriptsCount', { count: scriptSources.length })] : []),
             ...(services.length > 0 ? [t('projects.authoring.servicesCount', { count: services.length })] : []),
             ...(files ? [t('projects.scripts.foundIn', { files })] : [])].join(' · '),
         ...(guidance.detection?.coverage === 'partial' ? [t('projects.scripts.definition.partial')] : []),
         ...('status' in guidance.workerPreferences && guidance.workerPreferences.status === 'ready'
             ? [] : [t('projectWorkers.policyUnavailable')]),
-    ].join('\n');
+    ].filter(line => line.length > 0).join('\n');
 }
 
 /** GUIDE disclosure and ordinary authoring consume this same read-only factual owner. */
@@ -167,7 +167,7 @@ export async function openProjectSetupAuthoring(input: ProjectSetupAuthoringInpu
         }
         const request: SessionAuthoringOpenV1 = { seed: {
             sessionName: t('projects.authoring.draftTitle', { project: resolveWorkspaceRefDisplayName(destination.workspaceRef) }),
-            prompt: `${t('projects.authoring.prompt')}\n\n${describeSetupAuthoringFacts(observed.guidance)}`,
+            prompt: [t('projects.authoring.prompt'), describeSetupAuthoringFacts(observed.guidance)].filter(Boolean).join('\n\n'),
             placement: { kind: 'exactTarget', serverId: input.workspace.serverId,
                 machineId: input.workspace.machineId, directory: input.workspace.rootPath },
             origin,

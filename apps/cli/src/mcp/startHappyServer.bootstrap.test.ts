@@ -7,30 +7,39 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { afterEach, expect, it, vi } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { AccountSettingsSchema, type AccountSettings } from '@happier-dev/protocol';
 import { createDeferred } from '@/testkit/async/deferred';
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { readSessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 
-const daemonCatalogBoundary = vi.hoisted(() => ({ read: vi.fn() }));
+const daemonCatalogBoundary = vi.hoisted(() => ({
+    read: vi.fn(),
+    execute: vi.fn<typeof import('@/daemon/controlClient').requestDaemonPluginActionExecution>(async () => ({ matched: false })),
+}));
+// Vitest may load Zod through either package condition. Both files contain
+// the same error initializer; the control parse below proves observability.
+const isZodErrorsScript = (url: string) => /\/zod\/v4\/core\/errors\.(?:c?js)(?:\?|$)/u.test(url);
 // IPC is outside the Session process; bootstrap, Action policy, MCP registration
 // and both sides of the local HTTP transport remain real. No Agent is launched.
 vi.mock('@/daemon/controlClient', async importOriginal => ({
     ...await importOriginal<typeof import('@/daemon/controlClient')>(),
     readDaemonPluginCatalog: daemonCatalogBoundary.read,
-    // Mirrors an available daemon with no contributed metadata Action. The
-    // Session's actual built-in catalog/Action owner handles the unmatched read.
-    requestDaemonPluginActionExecution: async () => ({ matched: false }),
+    // Unmatched reads stay with the Session's real built-in Action owner.
+    requestDaemonPluginActionExecution: daemonCatalogBoundary.execute,
 }));
 
 import { resolveRunnerMcpServers } from './runtime/resolveRunnerMcpServers';
 import { registerHappierSessionAgentToolRpc } from './startHappyServer';
 
-afterEach(() => { vi.unstubAllEnvs(); daemonCatalogBoundary.read.mockReset(); });
+afterEach(() => {
+    vi.unstubAllEnvs();
+    daemonCatalogBoundary.read.mockReset();
+    daemonCatalogBoundary.execute.mockReset().mockResolvedValue({ matched: false });
+});
 
-function bootstrap(accountSettings: AccountSettings | null = null, session = Object.assign(createMutableApiSessionClientFixture({
+function bootstrap(accountSettings: AccountSettings | null = null, session: Parameters<typeof resolveRunnerMcpServers>[0]['session'] = Object.assign(createMutableApiSessionClientFixture({
     sessionId: 'offline-child-bootstrap', metadataPermissionMode: 'default',
     overrides: { getServerBinding: () => ({ serverId: 'test-home', serverUrl: 'https://test-home.example.test' }) },
 }), {
@@ -50,27 +59,58 @@ function bootstrap(accountSettings: AccountSettings | null = null, session = Obj
     });
 }
 
-it('exposes the Session Action inventory through the actual Agent stdio bridge', async () => {
-    daemonCatalogBoundary.read.mockResolvedValue({ kind: 'available', plugins: [], tools: [] });
+it('discovers and dispatches refreshed long plugin names through the actual Agent stdio bridge', async () => {
+    const originalName = 'acme_' + 'long_'.repeat(10) + 'echo';
+    const tool = {
+        toolId: 'acme.example/echo', actionId: 'acme.example/actions/echo', name: originalName,
+        title: 'Plugin echo', description: 'Echo', inputSchema: { type: 'object', properties: {} },
+        surfaces: ['mcp', 'agent'] as const, expectedContributorOccurrenceId: 'occurrence-one',
+    };
+    let tools = [tool];
+    daemonCatalogBoundary.read.mockImplementation(async () => ({ kind: 'available', plugins: [], tools: structuredClone(tools) }));
+    daemonCatalogBoundary.execute.mockImplementation(async request => request.actionId === 'acme.example/echo'
+        ? { matched: true, result: { ok: true, result: { completed: true } } }
+        : { matched: false });
     const runtime = await bootstrap();
-    const naming = await runtime.resolveMcpToolNaming!({ serverName: 'happier', toolNameMaxLength: 40 });
-    expect(naming).not.toBeNull();
-    const server = naming!.launchConfig;
-    const transport = new StdioClientTransport({
-        command: server.command,
-        args: server.args,
-        env: { ...getDefaultEnvironment(), ...server.env },
-        stderr: 'pipe',
-    });
-    let stderr = '';
-    transport.stderr?.on('data', chunk => { stderr += String(chunk); });
     const client = new Client({ name: 'session-agent-bridge', version: '1.0.0' });
     try {
+        const naming = await runtime.resolveMcpToolNaming!({ serverName: 'happier', toolNameMaxLength: 40 });
+        expect(naming).not.toBeNull();
+        const server = naming!.launchConfig;
+        const transport = new StdioClientTransport({
+            command: server.command,
+            args: server.args ? [...server.args] : undefined,
+            env: { ...getDefaultEnvironment(), ...server.env },
+            stderr: 'pipe',
+        });
+        let stderr = '';
+        transport.stderr?.on('data', chunk => { stderr += String(chunk); });
         await client.connect(transport);
-        const tools = await client.listTools();
-        expect(tools.tools.map(tool => tool.name), stderr).toEqual(expect.arrayContaining([
+        const advertised = await client.listTools();
+        expect(advertised.tools.map(entry => entry.name), stderr).toEqual(expect.arrayContaining([
             'action_execute', 'action_spec_get',
         ]));
+        expect(advertised.tools.every(entry => entry.name.length <= 40), stderr).toBe(true);
+        const projectedName = naming!.tools.find(entry => entry.originalName === originalName)!.projectedName;
+        expect(advertised.tools.map(entry => entry.name)).toContain(projectedName);
+        expect(projectedName).not.toBe(originalName);
+        const result = await client.callTool({ name: projectedName, arguments: {} });
+        expect(result, stderr).toMatchObject({ isError: false, content: [{ type: 'text', text: JSON.stringify({ completed: true }) }] });
+        expect(daemonCatalogBoundary.execute.mock.calls.some(([request]) => request.actionId === 'acme.example/echo'
+            && request.expectedContributorOccurrenceId === 'occurrence-one')).toBe(true);
+
+        // A new daemon occurrence uses the same transport alias and a fresh
+        // host admission fence; no cached naming table owns tool visibility.
+        tools = [{ ...tool, expectedContributorOccurrenceId: 'occurrence-two' }];
+        await client.callTool({ name: projectedName, arguments: {} });
+        expect(daemonCatalogBoundary.execute.mock.calls.at(-1)?.[0]).toMatchObject({
+            actionId: 'acme.example/echo', expectedContributorOccurrenceId: 'occurrence-two',
+        });
+        tools = [];
+        expect((await client.listTools()).tools.map(entry => entry.name)).not.toContain(projectedName);
+        const callsBeforeRemoved = daemonCatalogBoundary.execute.mock.calls.length;
+        await expect(client.callTool({ name: projectedName, arguments: {} })).rejects.toThrow();
+        expect(daemonCatalogBoundary.execute.mock.calls.length).toBe(callsBeforeRemoved);
     } finally {
         await client.close();
         runtime.happierMcpServer.stop();
@@ -101,7 +141,8 @@ it('reads the daemon catalog only on projection changes or a missed-signal recon
         const observed = await client.listTools();
         expect(observed.tools.some(entry => entry.name === 'acme_echo')).toBe(true);
         const naming = await runtime.resolveMcpToolNaming!({ serverName: 'happier', toolNameMaxLength: 40 });
-        expect(naming!.tools.map(entry => entry.originalName)).toEqual(observed.tools.map(entry => entry.name));
+        expect(new Set(naming!.tools.map(entry => entry.originalName))).toEqual(new Set(observed.tools.map(entry => entry.name)));
+        expect(new Set(await runtime.happierMcpServer.readToolNames())).toEqual(new Set(observed.tools.map(entry => entry.name)));
         const before = daemonCatalogBoundary.read.mock.calls.length;
         await client.listTools();
         await client.callTool({ name: 'change_title', arguments: { title: 'Unchanged catalog' } });
@@ -250,7 +291,7 @@ it('keeps absent optional Action policy as cheap as explicit defaults through Se
         const bootstrapMs = performance.now() - started;
         const coverage = await inspector.post('Profiler.takePreciseCoverage');
         const errorFunctions = coverage.result
-            .filter(script => script.url.endsWith('/zod/v4/core/errors.js'))
+            .filter(script => isZodErrorsScript(script.url))
             .flatMap(script => script.functions);
         const errorConstructionCount = errorFunctions
             .filter(fn => fn.functionName === 'initializer')
@@ -269,13 +310,13 @@ it('keeps absent optional Action policy as cheap as explicit defaults through Se
         explicitRuntime = await bootstrap(explicitDefaults);
         const explicitCoverage = await inspector.post('Profiler.takePreciseCoverage');
         const explicitErrorCount = explicitCoverage.result
-            .filter(script => script.url.endsWith('/zod/v4/core/errors.js'))
+            .filter(script => isZodErrorsScript(script.url))
             .flatMap(script => script.functions).filter(fn => fn.functionName === 'initializer')
             .reduce((sum, fn) => sum + (fn.ranges[0]?.count ?? 0), 0);
         console.log('CHILD_MCP_EXPLICIT_DEFAULTS', JSON.stringify({ explicitErrorCount }));
         z.string().safeParse(null);
         const control = await inspector.post('Profiler.takePreciseCoverage');
-        expect(control.result.filter(script => script.url.endsWith('/zod/v4/core/errors.js'))
+        expect(control.result.filter(script => isZodErrorsScript(script.url))
             .flatMap(script => script.functions).filter(fn => fn.functionName === 'initializer')
             .reduce((sum, fn) => sum + (fn.ranges[0]?.count ?? 0), 0)).toBeGreaterThan(0);
         expect(errorConstructionCount).toBe(explicitErrorCount);

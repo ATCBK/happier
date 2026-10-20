@@ -57,7 +57,12 @@ export async function executeMembershipHistoryActionForScope(options: Readonly<{
         if (options.actionId === 'teams.members.history.preparation.get') {
             const page = await createMembershipSessionDataKeyEnvelopeClient(request).fetchPage(null);
             if (page.recipientAccountId !== input.recipientAccountId) throw new SessionAccessApiError('recipient_changed');
-            if (page.status === 'recipient_unavailable') return { status: 'recipient_unavailable', reason: page.contentKey.reason };
+            if (page.status === 'recipient_unavailable') {
+                // The page schema enforces this relationship; its refinement
+                // does not narrow the nested union's inferred TypeScript type.
+                if (page.contentKey.status !== 'unavailable') throw new SessionAccessApiError('invalid_action_output');
+                return { status: 'recipient_unavailable', reason: page.contentKey.reason };
+            }
             if (!page.exceptions) throw new SessionAccessApiError('invalid_action_output');
             return { status: 'ready', actionable: page.items.length > 0 || page.nextCursor !== null, exceptions: page.exceptions };
         }

@@ -1,4 +1,4 @@
-import { appendFile, mkdir, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -6,10 +6,47 @@ import { describe, expect, it } from 'vitest';
 
 import {
   parseAntigravityTranscriptJsonl,
+  pageAntigravityTranscriptLines,
   readAntigravityTranscriptTail,
+  snapshotAntigravityTranscriptSource,
 } from './jsonl.js';
 
 describe('Antigravity cliPrint transcript JSONL', () => {
+  it('fails an oversized backward row without returning a repeating browse cursor', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'antigravity-jsonl-oversized-'));
+    try {
+      const path = join(dir, 'transcript_full.jsonl');
+      await writeFile(path, [
+        { id: 'oldest', type: 'planner_response', text: 'oldest item' },
+        { id: 'oversized', type: 'planner_response', text: '🙂'.repeat(2_100_000) },
+        { id: 'newest', type: 'planner_response', text: 'newest item' },
+      ].map((record) => `${JSON.stringify(record)}\n`).join(''));
+      const source = await snapshotAntigravityTranscriptSource(path);
+      if (!source) throw new Error('Expected an Antigravity transcript source');
+      const request = {
+        path,
+        conversationId: 'oversized-conversation',
+        sourceRevision: source.sourceRevision,
+        maxItems: 1,
+        maxBytes: 64 * 1024,
+      };
+      const first = await pageAntigravityTranscriptLines(request);
+      expect(first).toMatchObject({
+        kind: 'page',
+        records: [{ record: { id: 'newest', text: 'newest item' } }],
+        hasMore: true,
+      });
+      if (first.kind !== 'page' || !first.nextCursor) throw new Error('Expected an Antigravity browse cursor');
+
+      await expect(pageAntigravityTranscriptLines({
+        ...request,
+        cursor: first.nextCursor,
+      })).resolves.toMatchObject({ kind: 'read_failed' });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it('parses complete JSONL records and fails on malformed complete lines', () => {
     expect(parseAntigravityTranscriptJsonl('{"type":"user_input","text":"hi"}\n{"type":"planner_response","text":"hello"}\n'))
       .toEqual([

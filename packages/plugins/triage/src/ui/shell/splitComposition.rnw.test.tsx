@@ -103,7 +103,7 @@ function listResult(): TriageListEntriesResultV1 {
                     level: 'required',
                     fromSourceInstanceId: INSTANCE,
                     reasonId: 'involvement/review-requested',
-                    reasonLabel: 'Your review was requested',
+                    reasonLabel: 'Review requested',
                 },
                 selected: { kind: 'selected', sourceInstanceId: INSTANCE, reason: 'onlyPresent' },
                 observation,
@@ -250,9 +250,11 @@ function collectionNode(): Element | null {
     return document.querySelector('[role="grid"]');
 }
 
-async function closeTheDetail(shell: PluginUiTestkit): Promise<void> {
+// Beside the list Triage's detail header closes it; where the detail is the page (stacked, pushed) the platform's
+// pushed-detail band leads with the one way back instead.
+async function closeTheDetail(shell: PluginUiTestkit, control: 'Close' | 'Back' = 'Close'): Promise<void> {
     await act(async () => {
-        await shell.press(await shell.getByRole('button', { name: 'Close' }));
+        await shell.press(await shell.getByRole('button', { name: control }));
     });
     await act(async () => { await Promise.resolve(); });
 }
@@ -309,7 +311,7 @@ describe('the Triage shell composition under its own measurement', () => {
 
         await openTheRow(shell);
 
-        await expect(shell.getByRole('button', { name: 'Close' })).resolves.toBeDefined();
+        await expect(shell.getByRole('button', { name: 'Back' })).resolves.toBeDefined();
         // §2.1's stacked rule: the selection replaces the list rather than
         // appearing beside it, and the list is not duplicated underneath.
         await expect(shell.queryByRole('button', { name: ENTRY_TITLE })).resolves.toBeUndefined();
@@ -326,7 +328,7 @@ describe('the Triage shell composition under its own measurement', () => {
 
         await openTheRow(shell);
 
-        await expect(shell.getByRole('button', { name: 'Close' })).resolves.toBeDefined();
+        await expect(shell.getByRole('button', { name: 'Back' })).resolves.toBeDefined();
         await expect(shell.queryByRole('button', { name: ENTRY_TITLE })).resolves.toBeUndefined();
     });
 
@@ -338,7 +340,7 @@ describe('the Triage shell composition under its own measurement', () => {
 
         await openTheRow(shell);
 
-        await expect(shell.getByRole('button', { name: 'Close' })).resolves.toBeDefined();
+        await expect(shell.getByRole('button', { name: 'Back' })).resolves.toBeDefined();
         await expect(shell.queryByRole('button', { name: ENTRY_TITLE })).resolves.toBeUndefined();
     });
 
@@ -350,7 +352,7 @@ describe('the Triage shell composition under its own measurement', () => {
 
         await openTheRow(shell);
 
-        await expect(shell.getByRole('button', { name: 'Close' })).resolves.toBeDefined();
+        await expect(shell.getByRole('button', { name: 'Back' })).resolves.toBeDefined();
         await expect(shell.queryByRole('button', { name: ENTRY_TITLE })).resolves.toBeUndefined();
     });
 
@@ -373,7 +375,7 @@ describe('the Triage shell composition under its own measurement', () => {
         // Hidden is hidden: no announcement, no tab stop, nothing to press.
         await expect(shell.queryByRole('button', { name: ENTRY_TITLE })).resolves.toBeUndefined();
 
-        await closeTheDetail(shell);
+        await closeTheDetail(shell, 'Back');
 
         // The reader comes back to the list they left, not a rebuilt one.
         expect(collectionNode()).toBe(collection);
@@ -539,10 +541,10 @@ describe('the Triage entry detail in the host details pane', () => {
         await openTheRow(shell);
 
         expect(detailsPaneNode()).toBeNull();
-        await expect(shell.getByRole('button', { name: 'Close' })).resolves.toBeDefined();
+        await expect(shell.getByRole('button', { name: 'Back' })).resolves.toBeDefined();
         expect(listRegionNode().style.display).toBe('none');
 
-        await closeTheDetail(shell);
+        await closeTheDetail(shell, 'Back');
         await expect(shell.getByRole('button', { name: ENTRY_TITLE })).resolves.toBeDefined();
     });
 
@@ -554,7 +556,7 @@ describe('the Triage entry detail in the host details pane', () => {
 
         // The page's pane host decides where details go; with its pane off there is no second, in-page geometry.
         expect(detailsPaneNode()).toBeNull();
-        await expect(shell.getByRole('button', { name: 'Close' })).resolves.toBeDefined();
+        await expect(shell.getByRole('button', { name: 'Back' })).resolves.toBeDefined();
         expect(listRegionNode().style.display).toBe('none');
         await expect(shell.queryByRole('button', { name: ENTRY_TITLE })).resolves.toBeUndefined();
     });

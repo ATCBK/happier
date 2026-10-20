@@ -42,4 +42,16 @@ describe('machine vitals downsampling', () => {
       records: [minute(now - 120_000), minute(now - 60_000)], livePoints: [minute(now - 60_000, 70)] });
     expect(result.points.filter((point) => point !== null)).toEqual([minute(now - 120_000), minute(now - 60_000, 70)]);
   });
+
+  it('keeps adjacent sampled minutes continuous despite timer jitter, but retains a genuinely missing minute', () => {
+    const start = Date.UTC(2026, 9, 10, 12);
+    const livePoints = [minute(start), minute(start + 60_001), minute(start + 120_000), minute(start + 180_005)];
+    const continuous = downsampleMachineVitalsHistory({ range: '1h', now: start + 180_010, records: [], livePoints });
+    expect(continuous.points.slice(continuous.points.indexOf(livePoints[0]))).toEqual(livePoints);
+
+    const missing = downsampleMachineVitalsHistory({ range: '1h', now: start + 180_010, records: [],
+      livePoints: [livePoints[0], livePoints[2], livePoints[3]] });
+    expect(missing.points.slice(missing.points.indexOf(livePoints[0])))
+      .toEqual([livePoints[0], null, livePoints[2], livePoints[3]]);
+  });
 });

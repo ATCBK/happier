@@ -45,6 +45,7 @@ function useStableValueBySignature<Value>(value: Value, signature: string): Valu
 }
 
 export function useNewSessionMachineRefreshState(params: Readonly<{
+    focused?: boolean;
     capabilityServerId: string;
     selectedMachineId: string | null;
     machines: ReadonlyArray<Machine>;
@@ -66,7 +67,15 @@ export function useNewSessionMachineRefreshState(params: Readonly<{
         (machine: Machine) => isMachineReachable(scope, machine),
         [scope, reachabilityRevision],
     );
+    const manualRefreshLifetime = React.useMemo(() => ({ controller: new AbortController() }), [params.capabilityServerId, params.selectedMachineId, params.focused]);
+    React.useEffect(() => {
+        if (params.focused === false) { manualRefreshLifetime.controller.abort(); return; }
+        if (manualRefreshLifetime.controller.signal.aborted) manualRefreshLifetime.controller = new AbortController();
+        const controller = manualRefreshLifetime.controller;
+        return () => controller.abort();
+    }, [manualRefreshLifetime, params.focused]);
     const refreshMachineData = React.useCallback(() => {
+        if (manualRefreshLifetime.controller.signal.aborted) return;
         fireAndForget(sync.refreshMachinesThrottled({ staleMs: 0, force: true }), { tag: 'NewSessionScreenModel.refreshMachinesThrottled.manual' });
         params.refreshMachineEnvPresence();
 
@@ -76,10 +85,11 @@ export function useNewSessionMachineRefreshState(params: Readonly<{
                 machineId: params.selectedMachineId,
                 serverId: params.capabilityServerId,
                 cacheKeySalt: resolveDaemonCapabilitiesCacheKeySalt(selectedMachine, params.capabilityServerId),
+                signal: manualRefreshLifetime.controller.signal,
                 request: { ...CAPABILITIES_REQUEST_NEW_SESSION, bypassCache: true },
             }), { tag: 'NewSessionScreenModel.prefetchMachineCapabilities' });
         }
-    }, [params.capabilityServerId, params.machines, params.refreshMachineEnvPresence, params.selectedMachineId]);
+    }, [params.capabilityServerId, params.machines, params.refreshMachineEnvPresence, params.selectedMachineId, manualRefreshLifetime]);
 
     const rawRecentMachines = React.useMemo(() => {
         if (params.machines.length === 0) return [];
@@ -113,7 +123,7 @@ export function useNewSessionMachineRefreshState(params: Readonly<{
     const favoriteMachineItems = useStableValueBySignature(rawFavoriteMachineItems, favoriteMachineItemsSignature);
 
     useNewSessionCapabilitiesPrefetch({
-        enabled: params.useEnhancedSessionWizard,
+        enabled: params.useEnhancedSessionWizard && params.focused !== false,
         serverId: params.capabilityServerId,
         machines: params.machines,
         favoriteMachineItems,

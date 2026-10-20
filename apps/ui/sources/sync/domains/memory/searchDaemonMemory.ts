@@ -1,4 +1,5 @@
 import { negotiateMemorySearchV1, type MemorySearchCorpusV1, type MemorySearchMode, type MemorySearchResultV1, type MemorySearchScope } from '@happier-dev/protocol/memory/memorySearch';
+import type { MemoryStatusV1 } from '@happier-dev/protocol/memory/memoryStatus';
 import { RPC_ERROR_CODES, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
@@ -49,6 +50,12 @@ export async function searchDaemonMemory(args: Readonly<{
     }
 
     try {
+        let status: Promise<MemoryStatusV1 | null> | undefined;
+        const readStatus = () => status ??= fetchDaemonMemoryStatus({
+            machineId, serverId, accountId,
+            ...(typeof args.timeoutMs === 'number' ? { timeoutMs: args.timeoutMs } : {}),
+            ...(args.signal ? { signal: args.signal } : {}),
+        });
         const result = await negotiateMemorySearchV1({
             query: {
                 v: 1,
@@ -64,16 +71,14 @@ export async function searchDaemonMemory(args: Readonly<{
                 ...(args.createdAfterMs !== undefined ? { createdAfterMs: args.createdAfterMs } : {}),
                 ...(args.createdBeforeMs !== undefined ? { createdBeforeMs: args.createdBeforeMs } : {}),
             },
-            readDocumentSearchSupport: async () => (await fetchDaemonMemoryStatus({
-                machineId, serverId, accountId,
-                ...(typeof args.timeoutMs === 'number' ? { timeoutMs: args.timeoutMs } : {}),
-                ...(args.signal ? { signal: args.signal } : {}),
-            }))?.documentSearchSupported === true,
+            readDocumentSearchSupport: async () => (await readStatus())?.documentSearchSupported === true,
+            readProjectSearchSupport: async () => (await readStatus())?.projectSearchSupported === true,
             search: async (payload) => await machineRpcWithServerScope<unknown, unknown>({
                 machineId, serverId, accountId, preferScoped: true,
                 method: RPC_METHODS.DAEMON_MEMORY_SEARCH,
                 payload,
-                ...(typeof args.timeoutMs === 'number' ? { timeoutMs: args.timeoutMs } : {}),
+                // Fresh global admission follows the caller's lifetime; setup remains bounded.
+                ...(typeof args.timeoutMs === 'number' ? { timeoutMs: args.timeoutMs } : { operationTimeoutMs: null }),
                 ...(args.signal ? { signal: args.signal } : {}),
             }),
             ...(args.signal ? { signal: args.signal } : {}),

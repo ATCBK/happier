@@ -32,7 +32,7 @@ it('keeps the wire subscription identity authoritative over guest payload and cl
                 },
                 resourcesById: {
                     'acme.preview/status': { id: 'status', pluginId: 'acme.preview', resourceKind: 'config',
-                        path: 'status.json', digest, contentType: 'application/json' },
+                        scope: 'global', path: 'status.json', digest, contentType: 'application/json' },
                 },
             },
         },

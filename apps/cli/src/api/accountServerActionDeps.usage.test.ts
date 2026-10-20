@@ -1,11 +1,12 @@
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import fastify from 'fastify';
 import tweetnacl from 'tweetnacl';
 import { API_TOKEN_FULL_GRANT_V1, createActionExecutor, EXTERNAL_ACTION_EFFECT_ACTION_HEADER,
-  EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER, verifyExternalActionMachineRequestV1, type ActionExecutorDeps } from '@happier-dev/protocol';
+  EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER, verifyExternalActionMachineRequestV1 } from '@happier-dev/protocol';
 import { UsageAnalyticsQueryRequestSchema } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
-import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
+import { getUsageQueryKey, normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { UsageQueryBatchResultSchema } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
 import { UsageFileResultSchema } from '@happier-dev/protocol/usage/usageExport';
 import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
@@ -27,6 +28,7 @@ import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/acco
 import { QualifiedConnectedAccountGroupV4Schema } from '@happier-dev/protocol/connect/qualified-connected-account-projections';
 import { McpServerCatalogRowMutationV1Schema, type McpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { UsageCoachApplyResultSchema } from '@happier-dev/protocol/usage/coach/coachActions';
+import { UsageMcpBindingUsageSchema } from '@happier-dev/protocol/usage/coach/usageMcpBindingUsage';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { createCliMcpServerActionExecuteV1 } from '@/session/actions/cliActionDeps/createCliMcpServerActionDeps';
@@ -47,7 +49,7 @@ let cleanup: (() => void) | undefined;
 afterEach(() => { cleanup?.(); cleanup = undefined; vi.restoreAllMocks(); socketBoundary.mockReset(); resetActiveAccountSettingsSnapshotForTests(); process.exitCode = undefined; });
 
 describe('CLI and MCP personal usage Account transport', () => {
-  it('opens admitted Session intervals and mixed Claude tools through the real HTTP owners and denies keyless E2EE', async () => {
+  it.each(['full', 'summary'] as const)('opens admitted Session intervals and mixed Claude tools through the real HTTP owners and denies keyless E2EE (%s)', async detail => {
     const app = fastify();
     const sessionId = 'c111111111111111111111111';
     let mode: 'plain' | 'e2ee' = 'plain';
@@ -62,9 +64,9 @@ describe('CLI and MCP personal usage Account transport', () => {
         displayName: 'Forge', baseUrl: 'https://github.com', nameWithOwner: 'owner/repo', urlSafety: { allowedSchemes: ['https:'] } },
         number: 7, title: 'Observed outcome', url: 'https://github.com/owner/repo/pull/7', baseBranch: 'main', headBranch: 'feature', state: 'merged' } });
     const { pullRequest: _pullRequest, ...checkpoint } = witness;
-    const mcpUsage = { v: 1, evidenceId: 'mcp-window', sessionId, turnId: 'turn', observedAtMs: 150,
+    const mcpUsage = UsageMcpBindingUsageSchema.parse({ v: 2, evidenceId: 'mcp-window', sessionId, turnId: 'turn', observedAtMs: 150,
       window: { startMs: 100, endMs: 150 }, coverage: 'complete', bindings: [{ serverId: 'docs', bindingId: 'docs-binding',
-        serverRevision: 10, bindingRevision: 20, catalogRevision: 40, toolCallCount: 0, schemaBytes: null }] };
+        serverRevision: 10, bindingRevision: 20, catalogRevision: 40, toolCallCount: 0, schemaBytes: null }] });
     const composition = { v: 1, evidenceId: 'composition', sessionId, turnId: 'turn', inputId: 'input', observedAtMs: 150,
       boundary: 'host_pre_dispatch', deliveryKind: 'newTurn', coverage: 'host_only', components: ['a', 'c'].map(source => ({
         sourceId: source.repeat(64), digest: 'b'.repeat(64), kind: 'instructions', location: 'user', byteLength: 200,
@@ -72,7 +74,7 @@ describe('CLI and MCP personal usage Account transport', () => {
     socketBoundary.mockImplementation(() => createApiSessionSocketStub({ emitWithAck: (event, payload) => {
       if (event !== SOCKET_RPC_EVENTS.CALL) throw new Error('Unexpected socket event');
       const packet = z.object({ method: z.string(), params: z.object({ cwd: z.string(), workEvidence: z.object({ sessionId: z.string() }),
-        state: z.string().optional() }), authorization: z.unknown().optional() }).parse(payload);
+        state: z.optional(z.string()) }), authorization: z.optional(z.unknown()) }).parse(payload);
       expect(packet.params).toMatchObject({ cwd: '/repo', workEvidence: { sessionId } });
       expect(packet.authorization).toMatchObject({ kind: 'session.write', sessionId });
       return { ok: true, result: packet.method.endsWith('scm.branch.list')
@@ -83,7 +85,10 @@ describe('CLI and MCP personal usage Account transport', () => {
     const accounting = { ...response, contributions: [{ id: 'turn-cost', observedAtMs: 150, sessionId,
       turnId: 'turn', agentId: 'claude', modelId: null, machineId: 'machine', projectKey: null, workspaceId: null,
       source: 'session', tokens: response.totals.tokens, cost: response.totals.cost }] };
-    app.post('/v2/usage/query', async (_request, reply) => accountingAvailable ? accounting : reply.code(503).send({ error: 'unavailable' }));
+    app.post('/v2/usage/query', async (request, reply) => {
+      UsageAnalyticsQueryRequestSchema.parse(request.body);
+      return accountingAvailable ? accounting : reply.code(503).send({ error: 'unavailable' });
+    });
     app.get('/v1/account/encryption/currentness', async () => ({ mode, version: 1, signingKeyFingerprint: null,
       contentKeyFingerprint: null, updatedAt: 1 }));
     app.get('/v2/account/settings', async () => ({ content: { t: 'plain', v: {} }, version: 1 }));
@@ -108,6 +113,8 @@ describe('CLI and MCP personal usage Account transport', () => {
     app.get(`/v2/sessions/${sessionId}`, async () => {
       sessionReads += 1;
       return { session: createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain',
+        ...(detail === 'summary' ? { agentState: JSON.stringify({ completedRequests: { permission: { tool: 'Read', arguments: {},
+          turnId: 'turn', createdAt: 100, completedAt: 110, status: 'approved', answeringClientCategory: 'web' } } }) } : {}),
         metadata: JSON.stringify({ path: '/repo', machineId: 'machine', agent: 'claude' }), share: null }) };
     });
     app.get(`/v1/sessions/${sessionId}/turns`, async () => ({ v: 1, sessionId, updatedAt: 180,
@@ -129,18 +136,45 @@ describe('CLI and MCP personal usage Account transport', () => {
     const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'account' })).toString('base64url')}.signature`, encryption: null };
     setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
       settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) });
-    const executor = createActionExecutor({ ...createAccountServerActionDeps({ token: credentials.token, credentials,
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...createAccountServerActionDeps({ token: credentials.token, credentials,
       serverId: 'home', serverHttpBaseUrl: 'http://usage.test' }),
       mcpServerAction: createCliMcpServerActionExecuteV1({ credentials, serverId: 'home', serverHttpBaseUrl: 'http://usage.test',
         callMachineAction: async () => { throw new Error('Binding mutation has no Machine effect'); } }),
-    } as ActionExecutorDeps);
-    const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 }, session: sessionId });
+    });
+    const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 }, session: sessionId,
+      ...(detail === 'summary' ? { includeTranscriptEvidence: false } : {}) });
     const read = async (selected = query) => {
       const result = await executor.execute('usage.query', { queries: [selected] }, { surface: 'cli', serverId: 'home' });
       expect(result.ok, JSON.stringify(result)).toBe(true);
       return UsageQueryBatchResultSchema.parse(result.ok ? result.result : undefined).results[0]!;
     };
     const opened = await read();
+    if (detail === 'summary') {
+      expect(opened.howYouWork).toMatchObject({ intervals: { agentTimeMs: 60, elapsedWaitMs: 10 }, detailStatus: 'partial',
+        permissions: { requestCount: 1, pairedDecisionCount: 1, decisionLatencyMs: 10, byAnsweringClient: { web: 1 } } });
+      expect(opened.howYouWork?.autopsy).toBeUndefined();
+      expect(opened.howYouWork?.inputs).toBeNull();
+      expect(opened.work?.allocations[0]?.reason).toBe('allocated');
+      expect(reads).toContain(`/v1/sessions/${sessionId}/turns`);
+      expect(reads).not.toContain(`/v1/sessions/${sessionId}/messages`);
+      const fullQuery = { ...query, includeTranscriptEvidence: true };
+      const mixed = await executor.execute('usage.query', { queries: [query, fullQuery] }, { surface: 'cli', serverId: 'home' });
+      expect(mixed.ok, JSON.stringify(mixed)).toBe(true);
+      const slices = UsageQueryBatchResultSchema.parse(mixed.ok ? mixed.result : undefined).results;
+      expect(slices.find(slice => slice.key === getUsageQueryKey(query))?.howYouWork?.autopsy).toBeUndefined();
+      expect(slices.find(slice => slice.key === getUsageQueryKey(fullQuery))?.howYouWork?.autopsy?.events)
+        .toEqual(expect.arrayContaining([expect.objectContaining({ evidenceId: 'read' })]));
+      reads.length = 0;
+      expect((await read({ ...query, includeSessionEvidence: false })).work?.allocations[0]?.reason).toBe('allocated');
+      expect(reads).not.toContain(`/v1/sessions/${sessionId}/turns`);
+      expect(reads).not.toContain(`/v1/sessions/${sessionId}/messages`);
+      mode = 'e2ee';
+      const denied = await read();
+      expect(denied.howYouWork?.detailStatus).toBe('unknown');
+      expect(denied.howYouWork?.intervals).toBeNull();
+      await app.close();
+      return;
+    }
     expect(opened.howYouWork).toMatchObject({ intervals: { agentTimeMs: 60 },
       autopsy: { events: expect.arrayContaining([expect.objectContaining({ sessionId, kind: 'read', evidenceId: 'read' })]) } });
     expect(opened.work, JSON.stringify({ sources: opened.sources, socketReads: socketBoundary.mock.calls.length, reads })).toMatchObject({ allocations: [{ reason: 'allocated', outcome: { pullRequest: { number: 7 } } }],
@@ -267,7 +301,7 @@ describe('CLI and MCP personal usage Account transport', () => {
     app.post('/v2/pending/reset-starts/read', async () => ({ entries: [] }));
     cleanup = installAxiosFastifyAdapter({ app, origin: 'http://usage.test' });
     const credentials = { token: 'owner-token', encryption: null };
-    const executor = createActionExecutor({ ...createAccountServerActionDeps({ token: credentials.token, credentials,
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...createAccountServerActionDeps({ token: credentials.token, credentials,
       serverId: 'home', serverHttpBaseUrl: 'http://usage.test' }),
       settingsDeclarationAction: createCliSettingsDeclarationAction({ credentials, serverHttpBaseUrl: 'http://usage.test' }),
       connectedServiceAction: createCliConnectedServiceAction({ credentials, serverId: 'home', serverHttpBaseUrl: 'http://usage.test',
@@ -275,7 +309,7 @@ describe('CLI and MCP personal usage Account transport', () => {
         callMachineAction: async () => { throw new Error('Quota reads have no Machine effect'); },
       }),
       isActionApprovalRequired: () => false,
-    } as ActionExecutorDeps);
+    });
     const read = async () => {
       const result = await executor.execute('usage.query', { queries: [query] }, { surface: 'cli', serverId: 'home' });
       expect(result.ok).toBe(true);
@@ -387,8 +421,8 @@ describe('CLI and MCP personal usage Account transport', () => {
       metadata: { fetchedAt: 100, staleAfterMs: 1000, status: 'ok' }, sources: [source] }));
     app.post('/v2/pending/reset-starts/read', async () => ({ entries: [] }));
     cleanup = installAxiosFastifyAdapter({ app, origin: 'http://usage.test' });
-    const executor = createActionExecutor(createAccountServerActionDeps({ token: 'owner-token', credentials: { token: 'owner-token', encryption: null },
-      serverId: 'home', serverHttpBaseUrl: 'http://usage.test', isCredentialCurrent: () => current }) as ActionExecutorDeps);
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...createAccountServerActionDeps({ token: 'owner-token', credentials: { token: 'owner-token', encryption: null },
+      serverId: 'home', serverHttpBaseUrl: 'http://usage.test', isCredentialCurrent: () => current }) });
     const input = { query: normalizeUsageQuery({}), selectedEvents: [
       { account: source.ref, kind: 'reset', meterId: 'week' }, { account: source.ref, kind: 'renewal' },
     ] };
@@ -435,7 +469,7 @@ describe('CLI and MCP personal usage Account transport', () => {
     });
     cleanup = installAxiosFastifyAdapter({ app, origin: 'http://usage.test' });
     const deps = createAccountServerActionDeps({ token: 'owner-token', serverId: 'home', serverHttpBaseUrl: 'http://usage.test' });
-    const executor = createActionExecutor(deps as ActionExecutorDeps);
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...deps });
     const query = normalizeUsageQuery({ agents: ['b', 'a'], machines: ['machine'], projects: ['project'],
       sources: ['native'], session: ['s2', 's1'], costBasis: 'estimated', breakdown: ['machine'], includeInsights: true });
     const queries = [query, { ...query, agents: ['a', 'b', 'a'] }, { ...query, period: { startMs: 100, endMs: 200 } }];
@@ -484,7 +518,7 @@ describe('CLI and MCP personal usage Account transport', () => {
   it('refuses a retired credential and a different Home before private snapshot disclosure', async () => {
     const deps = createAccountServerActionDeps({ token: 'owner-token', serverId: 'home', serverHttpBaseUrl: 'http://usage.test',
       isCredentialCurrent: () => false });
-    const executor = createActionExecutor(deps as ActionExecutorDeps);
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...deps });
     expect(await executor.execute('usage.query', { queries: [{}] }, { surface: 'mcp', serverId: 'home' }))
       .toMatchObject({ ok: false, errorCode: 'credential_scope_retired' });
     expect(await executor.execute('usage.query', { queries: [{}] }, { surface: 'cli', serverId: 'other' }))
@@ -495,8 +529,8 @@ describe('CLI and MCP personal usage Account transport', () => {
     let current = true;
     app.post('/v2/usage/query', async () => { current = false; return response; });
     cleanup = installAxiosFastifyAdapter({ app, origin: 'http://usage.test' });
-    const executor = createActionExecutor(createAccountServerActionDeps({ token: 'owner-token', serverId: 'home',
-      serverHttpBaseUrl: 'http://usage.test', isCredentialCurrent: () => current }) as ActionExecutorDeps);
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...createAccountServerActionDeps({ token: 'owner-token', serverId: 'home',
+      serverHttpBaseUrl: 'http://usage.test', isCredentialCurrent: () => current }) });
     expect(await executor.execute('usage.query', { queries: [{}] }, { surface: 'mcp', serverId: 'home' }))
       .toMatchObject({ ok: false, errorCode: 'credential_scope_retired' });
     await app.close();
@@ -538,9 +572,14 @@ describe('CLI and MCP personal usage Account transport', () => {
     const deps = createAccountServerActionDeps({ token: 'daemon-token-must-not-cross', serverId: 'home',
       serverIdentityId: 'home', serverHttpBaseUrl: 'http://usage.test', externalActionMachineRequestPrivateKey: signer.secretKey,
       externalActionMachineInstallationId: 'installation' });
-    expect(await deps.usageActions!.query({ queries: [normalizeUsageQuery({ machines: ['selected'] })] }, { surface: 'api',
-      externalActionTarget: target, externalActionExecutionAuthorization: authorization }))
-      .toMatchObject({ ok: false, errorCode: 'not_authenticated' });
+    const query = normalizeUsageQuery({ machines: ['selected'] });
+    const result = UsageQueryBatchResultSchema.parse(await deps.usageActions!.query({ queries: [query] }, { surface: 'api',
+      externalActionTarget: target, externalActionExecutionAuthorization: authorization }));
+    expect(result.results).toMatchObject([{
+      key: getUsageQueryKey(query), requestedQuery: { machines: ['selected'] },
+      sources: expect.arrayContaining([{ source: 'accounting', status: 'error', errorCode: 'credential_scope_denied' }]),
+    }]);
+    expect(result.results[0]?.accounting).toBeUndefined();
     await app.close();
   });
 });

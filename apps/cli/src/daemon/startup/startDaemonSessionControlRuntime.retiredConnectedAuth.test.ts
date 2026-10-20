@@ -9,6 +9,7 @@ import type { StoredCredentials } from '@/persistence';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { logger } from '@/ui/logger';
+import { AgentRuntimeDaemonServiceRequestV1Schema } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
 import { ConnectedServiceRuntimeRegistry } from '../connectedServices/runtimeRegistry/registry';
 import { createDaemonSessionMutationCustody } from '../connectedServices/usageLimitRecovery/createDaemonUsageLimitRecoveryMutationCustody';
 import { startDaemonControlServer } from '../controlServer';
@@ -84,9 +85,11 @@ it.each(['retained', 'removed'] as const)('skips connected credential reconcilia
         register(retiredPid, retiredSessionId);
         if (tracking === 'removed') trackedSessions.delete(retiredPid);
         const control = vi.mocked(startDaemonControlServer).mock.calls.at(-1)?.[0];
-        const mcpClosed = await control!.agentRuntimeDaemonServices!.dispatch({
+        const mcpClosed = await control!.agentRuntimeDaemonServices!.dispatch(AgentRuntimeDaemonServiceRequestV1Schema.parse({
+            v: 1,
+            context: { token: 'a'.repeat(43), sessionId: activeSessionId },
             operation: { kind: 'mcp.request_auth.close', requestId: 'close-mcp', materializationId: 'retired-mcp' },
-        } as Parameters<NonNullable<NonNullable<typeof control>['agentRuntimeDaemonServices']>['dispatch']>[0], {
+        }), {
             sessionId: activeSessionId, trackedSession: active,
             retainedAgent: { pluginId: 'happier.agent.claude' },
         } as Parameters<NonNullable<NonNullable<typeof control>['agentRuntimeDaemonServices']>['dispatch']>[1]);

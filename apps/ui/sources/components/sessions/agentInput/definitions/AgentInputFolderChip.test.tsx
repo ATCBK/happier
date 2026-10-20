@@ -1,8 +1,8 @@
+// @vitest-environment jsdom
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
 import { installAgentInputCommonModuleMocks } from '@/components/sessions/agentInput/agentInputTestHelpers';
 
 const platformBoundary = vi.hoisted(() => ({ os: 'web' }));
@@ -20,10 +20,13 @@ installAgentInputCommonModuleMocks({
     },
 });
 
+// The SDK installs its browser modality listener at import time, after this boundary is configured.
+const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
+const { AgentInputFolderChip } = await import('./AgentInputFolderChip');
+
 type ChipProps = React.ComponentProps<(typeof import('./AgentInputFolderChip'))['AgentInputFolderChip']>;
 
 async function renderChip(overrides: Partial<ChipProps>) {
-    const { AgentInputFolderChip } = await import('./AgentInputFolderChip');
     const onPress = vi.fn();
     const onRemove = vi.fn();
     const props: ChipProps = {
@@ -45,6 +48,14 @@ function flattenStyle(style: unknown): Record<string, unknown> {
     return style && typeof style === 'object' ? { ...style } as Record<string, unknown> : {};
 }
 
+let keyboardFocusTarget: HTMLButtonElement | null = null;
+function establishKeyboardFocus() {
+    keyboardFocusTarget = document.createElement('button');
+    document.body.appendChild(keyboardFocusTarget);
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+    keyboardFocusTarget.focus();
+}
+
 function textsOf(node: { findAll: (predicate: (node: { type?: unknown }) => boolean) => Array<{ props: unknown }> }): unknown[] {
     return node
         .findAll((candidate) => candidate?.type === 'Text')
@@ -52,7 +63,12 @@ function textsOf(node: { findAll: (predicate: (node: { type?: unknown }) => bool
 }
 
 describe('AgentInputFolderChip', () => {
-    afterEach(() => { platformBoundary.os = 'web'; });
+    afterEach(() => {
+        platformBoundary.os = 'web';
+        keyboardFocusTarget?.remove();
+        keyboardFocusTarget = null;
+        document.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+    });
 
     it('reserves no × slot on a touch device: removal stays on the picker row and the screen-reader action', async () => {
         platformBoundary.os = 'ios';
@@ -67,6 +83,7 @@ describe('AgentInputFolderChip', () => {
 
     it('paints the canonical focus ring on the chip and on × for keyboard focus', async () => {
         const { screen } = await renderChip({});
+        establishKeyboardFocus();
         const chip = screen.findByTestId('agent-input-path-chip')!;
         expect(flattenStyle(chip.props.style).outlineStyle).not.toBe('solid');
         await act(async () => { chip.props.onFocus({}); });
@@ -78,6 +95,7 @@ describe('AgentInputFolderChip', () => {
     });
     it('keeps × enabled while keyboard focus moves from the chip onto it, then hides it once focus has gone elsewhere', async () => {
         const { screen } = await renderChip({});
+        establishKeyboardFocus();
         await act(async () => { screen.findByTestId('agent-input-path-chip')!.props.onFocus({}); });
         expect(screen.findByTestId('agent-input-path-chip-remove')!.props.disabled).toBe(false);
         // Tab: the chip blurs before × is focused. A × disabled in between drops focus to <body>.

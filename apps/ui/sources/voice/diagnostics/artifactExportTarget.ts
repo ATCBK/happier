@@ -1,7 +1,7 @@
 import { Platform } from 'react-native';
 
 import { createNativeCacheFileSink, shareNativeCacheFile } from '@/sync/runtime/files/nativeCacheFileSink';
-import type { BulkTransferFileDestination } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/bulkTransferFileDestination';
+import type { BulkTransferFileDestination } from '@/sync/domains/transfers/runtime/transferRuntime';
 
 const MAX_BUFFERED_WEB_EXPORT_BYTES = 128 * 1024 * 1024;
 

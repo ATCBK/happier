@@ -394,6 +394,52 @@ test('build-tauri workflow validates updater pubkey via pipeline script', async 
   );
 });
 
+test('Tauri finalization prepares the bundled WebKit without changing the native candidate build', async () => {
+  const workflow = parse(await readFile(workflowPath, 'utf8'));
+  const actionPath = './.github/actions/install-tauri-linux-dependencies';
+  const buildStep = workflow.jobs.build.steps.find((step) => step.uses === actionPath);
+  assert.notEqual(buildStep?.with?.['bundled-webkit'], 'true');
+  const steps = workflow.jobs.finalize.steps;
+  const sdkIndex = steps.findIndex((step) => step.uses === actionPath);
+  assert.equal(steps[sdkIndex]?.with?.['bundled-webkit'], 'true');
+  assert.ok(sdkIndex < steps.findIndex((step) => step.name === 'Install trusted finalizer dependencies'));
+
+  const action = parse(await loadFile('.github/actions/install-tauri-linux-dependencies/action.yml'));
+  const cache = action.runs.steps.find((step) => step.id === 'webkit-cache');
+  assert.ok(cache?.uses?.startsWith('actions/cache@'));
+  assert.equal(cache.with['restore-keys'], undefined);
+  assert.match(cache.with.key, /jammy.*x64/);
+  assert.match(cache.with.key, /prepare-tauri-webkit/);
+  const installation = action.runs.steps.find((step) => step.name === 'Prepare and install bundled WebKit SDK');
+  assert.ok(installation.run.indexOf('prepare-tauri-webkit.sh') < installation.run.indexOf('sudo cp -a'));
+
+});
+
+test('Tauri Linux jobs populate the CLI-selected linuxdeploy cache entry', async () => {
+  const workflow = parse(await readFile(workflowPath, 'utf8'));
+  const actionPath = './.github/actions/install-tauri-linux-dependencies';
+  for (const jobName of ['build', 'finalize']) {
+    const steps = workflow?.jobs?.[jobName]?.steps;
+    assert.ok(Array.isArray(steps), `workflow should define jobs.${jobName}.steps`);
+    const installStep = steps.find((step) => step?.uses === actionPath);
+    assert.ok(installStep, `${jobName} should use the canonical linuxdeploy action`);
+    assert.equal(installStep.if, "runner.os == 'Linux'");
+  }
+
+  const dependencyAction = parse(await loadFile('.github/actions/install-tauri-linux-dependencies/action.yml'));
+  assert.ok(dependencyAction.runs.steps.some((step) => step.uses === './.github/actions/install-linuxdeploy'));
+  const action = parse(await loadFile('.github/actions/install-linuxdeploy/action.yml'));
+  const installScript = String(action?.runs?.steps?.[0]?.run ?? '');
+  // Installed @tauri-apps/cli 2.12.1: prepare_tools consumes this exact basename.
+  // A different basename leaves the verified upstream tool unused.
+  const cachePath = installScript.match(/^\s*path="([^"]+)"/m)?.[1];
+  assert.equal(
+    cachePath,
+    '${cache_dir}/linuxdeploy-07333c6-x86_64.AppImage',
+    'the verified linuxdeploy must occupy the installed Tauri CLI cache entry',
+  );
+});
+
 test('build-tauri Linux jobs free unused hosted-runner disk before dependency install', async () => {
   const workflow = await readFile(workflowPath, 'utf8');
   const parsed = parse(workflow);

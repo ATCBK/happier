@@ -1,10 +1,10 @@
 import * as z from 'zod/mini';
 import { lazyDefinition } from '../../lazyZodSchema.js';
 import type { MachineVitalsSnapshotV1 } from '../vitals/machineVitalsRpcV1.js';
-import { MachineVitalsHostFactsV1Schema } from '../vitals/machineVitalsSampleV1.js';
+import { MachineMemoryPressureSourceV1Schema, MachineVitalsHostFactsV1Schema } from '../vitals/machineVitalsSampleV1.js';
 import { MachineGuardStateV1Schema } from '../guard/guardStateV1.js';
 
-// V1 read projection. Every boundary is closed; facts cannot grant authority.
+// V1 published summary and attention boundaries are closed; facts cannot grant authority.
 export const MachineResourceReasonV1Schema = lazyDefinition(() => {
     const common = {
         key: z.string(), level: z.enum(['look', 'needs_you']), since: z.number().check(z.gte(0)),
@@ -54,13 +54,15 @@ const resourceTone = () => z.enum(['calm', 'warn', 'crit']);
 const nullableValue = () => z.nullable(z.number().check(z.gte(0)));
 const resourceSeries = () => z.array(z.strictObject({ t: z.number().check(z.gte(0)), y: nullableValue() }));
 
-/** Closed, transient value projection. No values are published in daemonState. */
+/** Transient value projection: memory presentation is additive-open/drop; other boundaries are closed. No values are published in daemonState. */
 export const MachineResourceSummaryV1Schema = lazyDefinition(() => z.strictObject({
     sampledAt: z.number().check(z.gte(0)), stepMs: z.literal(15_000), seriesFrom: nullableValue(),
     cpu: z.strictObject({ busyPct: z.nullable(z.number().check(z.gte(0), z.lte(100))), tone: resourceTone(), series: resourceSeries() }),
-    memory: z.strictObject({
+    memory: z.object({
         availableBytes: nullableValue(), totalBytes: nullableValue(),
-        pressure: z.enum(['calm', 'elevated', 'critical', 'not_reported']), tone: resourceTone(), series: resourceSeries(),
+        // The summary line is percent available; daemon snapshot/history values remain bytes.
+        pressure: z.enum(['calm', 'elevated', 'critical', 'not_reported']),
+        pressureSource: z.optional(MachineMemoryPressureSourceV1Schema), tone: resourceTone(), series: resourceSeries(),
     }),
     disk: z.strictObject({
         volumeId: z.nullable(z.string()), volumeLabel: z.nullable(z.string()),
@@ -87,13 +89,17 @@ export function projectMachineResourceSummaryV1(snapshot: MachineVitalsSnapshotV
     const volumeId = attentionVolume && 'volumeId' in attentionVolume ? attentionVolume.volumeId : homeVolumeId;
     const volume = disk?.volumes.find(candidate => candidate.id === volumeId);
     const times = Object.values(snapshot.series5m).flatMap(series => series.map(point => point.t));
+    const memoryTotal = sample.memory.reported ? sample.memory.totalBytes : null;
     return {
         sampledAt: sample.sampledAt, stepMs: 15_000, seriesFrom: times.length > 0 ? Math.min(...times) : null,
         cpu: { busyPct: sample.cpu.reported ? sample.cpu.busyPct : null, tone: tone('cpu'), series: snapshot.series5m.cpu },
         memory: {
             availableBytes: sample.memory.reported ? sample.memory.availableBytes : null,
-            totalBytes: sample.memory.reported ? sample.memory.totalBytes : null,
-            pressure: sample.memory.reported ? sample.memory.pressure.level : 'not_reported', tone: tone('memory'), series: snapshot.series5m.memory,
+            totalBytes: memoryTotal,
+            pressure: sample.memory.reported ? sample.memory.pressure.level : 'not_reported', tone: tone('memory'),
+            ...(sample.memory.reported ? { pressureSource: sample.memory.pressure.source } : {}),
+            series: snapshot.series5m.memory.map(point => ({ t: point.t,
+                y: point.y !== null && memoryTotal !== null && memoryTotal > 0 ? point.y / memoryTotal * 100 : null })),
         },
         disk: { volumeId: volume?.id ?? null, volumeLabel: volume?.label ?? null, availableBytes: volume?.availableBytes ?? null,
             totalBytes: volume?.totalBytes ?? null, tone: tone('disk'), series: EMPTY_DISK_SERIES },

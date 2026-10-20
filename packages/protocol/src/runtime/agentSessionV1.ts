@@ -1,3 +1,4 @@
+import { maxCodeUnits } from '../strings/maxCodeUnits.js';
 import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
@@ -40,11 +41,11 @@ const EVENT_JSON_BYTES_CANDIDATE_MAX = LIMITS.p0MeasuredCandidates.eventMaxJsonB
 const SEND_JSON_BYTES_CANDIDATE_MAX = LIMITS.p0MeasuredCandidates.sendRequestMaxJsonBytes;
 
 function exactString(max: number) {
-  return z.string().check(z.minLength(1), z.maxLength(max), z.refine((value) => value === value.trim(), 'Identifiers must not contain leading or trailing whitespace'));
+  return z.string().check(z.minLength(1), maxCodeUnits(max), z.refine((value) => value === value.trim(), 'Identifiers must not contain leading or trailing whitespace'));
 }
 
 function opaqueNonBlankString(max: number) {
-  return lazyZodSchema(() => NonBlankOpaqueIdentifierSchema.check(zMini.maxLength(max)));
+  return lazyZodSchema(() => NonBlankOpaqueIdentifierSchema.check(maxCodeUnits(max)));
 }
 
 const HostIdSchema = lazyZodSchema(() => exactString(HOST_ID_MAX));
@@ -242,7 +243,7 @@ const ContextUsageSchema = lazyZodSchema(() => z.strictObject({
   isAutoCompactEnabled: z.nullable(z.boolean()),
   categories: z.nullable(z.array(z.strictObject({
     key: exactString(LIMITS.usage.contextCategoryKeyMaxCodeUnits),
-    label: z.nullable(z.string().check(z.maxLength(LIMITS.usage.contextCategoryLabelMaxCodeUnits))),
+    label: z.nullable(z.string().check(maxCodeUnits(LIMITS.usage.contextCategoryLabelMaxCodeUnits))),
     tokens: SafeIntegerSchema,
   })).check(z.maxLength(LIMITS.usage.contextCategoriesMaxItems))),
   observedAtMs: SafeIntegerSchema,
@@ -353,6 +354,7 @@ const OutputSchemas = [
   })),
   lazyZodSchema(() => z.strictObject({
     ...TurnEventBaseShape, kind: z.literal('mcp-tool-usage'),
+    queuedTurnCount: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
     window: z.strictObject({ startMs: z.number().check(z.int(), z.nonnegative(), z.int()), endMs: z.number().check(z.int(), z.nonnegative(), z.int()) }),
     coverage: z.enum(['complete', 'partial']),
     servers: z.array(z.strictObject({ serverName: exactString(NAME_MAX), toolCallCount: z.number().check(z.int(), z.nonnegative(), z.int()),
@@ -397,7 +399,7 @@ const OutputSchemas = [
     kind: z.literal('transcript-message-committed'),
     messageId: ProviderIdSchema,
     role: z.enum(['user', 'assistant', 'reasoning']),
-    text: z.string().check(z.maxLength(TRANSCRIPT_TEXT_CANDIDATE_MAX)),
+    text: z.string().check(maxCodeUnits(TRANSCRIPT_TEXT_CANDIDATE_MAX)),
     turnId: z.optional(HostIdSchema),
     sidechainId: z.optional(HostIdSchema),
   }))),
@@ -406,11 +408,11 @@ const OutputSchemas = [
     turnId: z.optional(HostIdSchema),
     kind: z.literal('file-edit'),
     editId: ProviderIdSchema,
-    path: z.string().check(z.maxLength(PATH_MAX)),
-    description: z.optional(z.string().check(z.maxLength(DESCRIPTION_MAX))),
-    diff: z.optional(z.string().check(z.maxLength(LIMITS.p0MeasuredCandidates.fileEditMemberMaxCodeUnits))),
-    oldContent: z.optional(z.string().check(z.maxLength(LIMITS.p0MeasuredCandidates.fileEditMemberMaxCodeUnits))),
-    newContent: z.optional(z.string().check(z.maxLength(LIMITS.p0MeasuredCandidates.fileEditMemberMaxCodeUnits))),
+    path: z.string().check(maxCodeUnits(PATH_MAX)),
+    description: z.optional(z.string().check(maxCodeUnits(DESCRIPTION_MAX))),
+    diff: z.optional(z.string().check(maxCodeUnits(LIMITS.p0MeasuredCandidates.fileEditMemberMaxCodeUnits))),
+    oldContent: z.optional(z.string().check(maxCodeUnits(LIMITS.p0MeasuredCandidates.fileEditMemberMaxCodeUnits))),
+    newContent: z.optional(z.string().check(maxCodeUnits(LIMITS.p0MeasuredCandidates.fileEditMemberMaxCodeUnits))),
     sidechainId: z.optional(HostIdSchema),
   }).check(z.refine((value) => jsonByteLength({
       diff: value.diff,
@@ -512,7 +514,7 @@ export const AgentSessionRuntimeEventV1Schema = lazyZodSchema(() => AgentSession
 export const AgentSessionRuntimeEventSchema = AgentSessionRuntimeEventV1Schema;
 
 const AgentSessionInputV1Schema = lazyZodSchema(() => z.strictObject({
-  text: z.string().check(z.maxLength(INPUT_TEXT_CANDIDATE_MAX)),
+  text: z.string().check(maxCodeUnits(INPUT_TEXT_CANDIDATE_MAX)),
   structuredInput: zMini.optional(AgentRuntimeJsonValueV1Schema),
 }));
 
@@ -537,7 +539,7 @@ export const AgentSessionSendRequestV1Schema = lazyZodSchema(() => z.strictObjec
 export const AgentSessionCompactRequestV1Schema = lazyZodSchema(() => z.strictObject({
   compactionId: HostIdSchema,
   trigger: z.literal('manual'),
-  instructions: z.optional(z.string().check(z.maxLength(COMPACT_INSTRUCTIONS_MAX))),
+  instructions: z.optional(z.string().check(maxCodeUnits(COMPACT_INSTRUCTIONS_MAX))),
 }));
 
 const AgentSessionConversationRollbackAffectedTurnV1Schema = lazyZodSchema(() => z.strictObject({

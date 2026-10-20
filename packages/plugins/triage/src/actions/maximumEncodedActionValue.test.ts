@@ -4,13 +4,14 @@ import { AgentRuntimeJsonValueV1Schema } from '@happier-dev/protocol';
 import { PluginSearchQueryV1Schema, PluginSearchResultV1Schema } from '@happier-dev/plugin-sdk';
 import {
     EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES,
+    isExternalActionResultWithinResponseEnvelopeLimitV1,
     measureExternalActionResultResponseEnvelopeUtf8BytesV1,
 } from '@happier-dev/plugin-sdk/actions';
 import type { PluginJsonSchema } from '@happier-dev/plugin-sdk/protocol';
 import {
     buildMaximalSchemaValue,
-    deriveMaximumEncodedBytesByLabel,
     encodedJsonBytes,
+    createTriageSourceV1Fixture,
     type MeasurableSchemaV1,
 } from '@happier-dev/triage-protocol/testing/v1';
 
@@ -21,9 +22,13 @@ import {
     TriageSourceAdministrationActionInputV1Schema,
     TriageSourceAdministrationActionResultV1Schema,
     TriagePullRequestStatusResultV1Schema,
+    TriageEntryRefV1Schema,
+    TriageTaskWriteResultV1Schema,
+    TriageSourcesContributionProtocolV1,
 } from '@happier-dev/triage-protocol/v1';
 
 import { PLUGIN_MANIFEST } from '../manifest.js';
+import { TriageCreateTaskActionInputV1Schema, TriageEditTaskActionInputV1Schema, TriageTransitionTaskActionInputV1Schema, TriageTaskDraftV1Schema } from './tasksProtocol.js';
 import {
     TriageMountedSourceInsertInputV1Schema,
     TriageMountedSourceRevealInputV1Schema,
@@ -71,6 +76,8 @@ import {
 import {
     TriageLinkEntryToSessionActionResultV1Schema,
     TriageLinkEntryToSessionInputV1Schema,
+    TriageReadSourceSessionLinksInputV1Schema,
+    TriageReadSourceSessionLinksResultV1Schema,
 } from './sessionLinksProtocol.js';
 import {
     TriageListPinnedEntriesInputV1Schema,
@@ -101,9 +108,9 @@ import {
  * transport or persistence limit. A future aggregate boundary must be owned
  * and tested at that named boundary rather than inferred from this parser.
  *
- * Nothing here is hand-built: the maximal values come from the one published
- * derivation in `@happier-dev/triage-protocol/testing/v1`, which the source
- * protocol's own maxima are derived with.
+ * Finite maxima come from the public source-protocol derivation. Provider-sized
+ * task facts use explicit finite witnesses and the real host envelope check;
+ * those witnesses do not establish a maximum for an unbounded result.
  */
 
 /**
@@ -111,12 +118,9 @@ import {
  */
 const structurallyBoundedSchemas = {
     mountedUiResult: TriageMountedUiResultV1Schema,
-    searchEntriesInput: PluginSearchQueryV1Schema,
-    searchEntriesResult: PluginSearchResultV1Schema,
     readEntryDetailInput: TriageReadEntryDetailInputV1Schema,
-    readEntryDetailResult: TriageReadEntryDetailResultV1Schema,
     reobserveEntryInput: TriageReobserveEntryInputV1Schema,
-    reobserveEntryResult: TriageReobserveEntryResultV1Schema,
+    transitionTaskInput: TriageTransitionTaskActionInputV1Schema,
     setEntryPinnedInput: TriageSetEntryPinnedInputV1Schema,
     setEntryPinnedResult: TriageSetEntryPinnedResultV1Schema,
     listPinnedEntriesInput: TriageListPinnedEntriesInputV1Schema,
@@ -139,6 +143,7 @@ const structurallyBoundedSchemas = {
     administerSourceInstanceInput: TriageSourceAdministrationActionInputV1Schema,
     administerSourceInstanceResult: TriageSourceAdministrationActionResultV1Schema,
     readConfiguredInstancesInput: TriageReadConfiguredSourceInstancesInputV1Schema,
+    readSourceSessionLinksInput: TriageReadSourceSessionLinksInputV1Schema,
 } as const satisfies Readonly<Record<string, MeasurableSchemaV1>>;
 
 /**
@@ -159,16 +164,6 @@ const ownerBoundedSchemas = {
     administerActionResult: TriageAdministerActionResultV1Schema,
     readSavedViewsResult: TriageReadSavedViewsResultV1Schema,
     administerSavedViewResult: TriageAdministerSavedViewResultV1Schema,
-    /*
-     * The list result joined them when the window gained a per-lane continuation
-     * SET (`PLAN.md` §0a A9). Its structural maximum pairs a full fifty-six-row
-     * window WITH thirty-two maximal frontiers, and those two never co-occur:
-     * `triageListRowBudgetV1` reserves the frontier bytes before the walk, so
-     * the row count a result may carry falls as the lane count rises. The
-     * reachable maximum is therefore the largest point on that curve, and the
-     * whole curve is measured below.
-     */
-    listEntriesResult: TriageListEntriesResultV1Schema,
 } as const satisfies Readonly<Record<string, MeasurableSchemaV1>>;
 
 /**
@@ -176,6 +171,20 @@ const ownerBoundedSchemas = {
  * maximum encoded value cannot be derived without inventing a product quota.
  */
 const structurallyUnboundedSchemas = {
+    // Linked Sessions follow the real relationship set, not a local count quota.
+    readEntryDetailResult: TriageReadEntryDetailResultV1Schema,
+    taskDraftInput: TriageTaskDraftV1Schema,
+    readSourceSessionLinksResult: TriageReadSourceSessionLinksResultV1Schema,
+    // Live task relations/native transitions and write fields follow provider
+    // data. The host envelope, rather than a per-task membership cap, owns size.
+    listEntriesResult: TriageListEntriesResultV1Schema,
+    reobserveEntryResult: TriageReobserveEntryResultV1Schema,
+    createTaskInput: TriageCreateTaskActionInputV1Schema,
+    editTaskInput: TriageEditTaskActionInputV1Schema,
+    taskWriteResult: TriageTaskWriteResultV1Schema,
+    // Universal Search owns unbounded query text and result items; no local quota.
+    searchEntriesInput: PluginSearchQueryV1Schema,
+    searchEntriesResult: PluginSearchResultV1Schema,
     // The fix-PR candidate projection follows real linked Sessions without a count quota.
     readFixPullRequestsResult: TriageReadFixPullRequestsResultV1Schema,
     runConfiguredActionInput: TriageRunConfiguredActionInputV1Schema,
@@ -207,14 +216,30 @@ const structurallyUnboundedSchemas = {
 } as const satisfies Readonly<Record<string, MeasurableSchemaV1>>;
 
 /**
- * The real list-result projection, re-bounded to one point on the row/frontier
- * curve its owner actually produces.
- *
- * It is derived from the real projection, never a copy, so a member added
- * beside `rows` or `continuations` still reaches every measurement below.
+ * A finite witness for task facts, used only to keep the existing independent
+ * row/frontier envelope regression. These example relationships/transitions are
+ * not product bounds or a maximum of the now provider-sized list result.
  */
-function listEntriesResultAt(rows: number, frontiers: number): PluginJsonSchema {
-    const result = TriageListEntriesResultV1Schema.jsonSchema;
+const taskFactsEntryRef = createTriageSourceV1Fixture().detailInput.observation.entryRef;
+function withTaskFactsWitness(fragment: PluginJsonSchema): PluginJsonSchema {
+    return {
+        ...fragment,
+        ...(fragment.anyOf === undefined ? {} : { anyOf: fragment.anyOf.map(withTaskFactsWitness) }),
+        ...(fragment.items === undefined ? {} : { items: withTaskFactsWitness(fragment.items) }),
+        ...(fragment.properties === undefined ? {} : { properties: Object.fromEntries(
+            Object.entries(fragment.properties).map(([key, child]) => [key,
+                key === 'relations' ? { const: {
+                    parent: taskFactsEntryRef, children: { total: 1, completed: 0, entries: [taskFactsEntryRef], complete: true },
+                    blockedBy: [taskFactsEntryRef],
+                } } : key === 'taskCapabilities' ? { const: {
+                    editFields: ['title'], transitions: [{ id: 'start', label: 'Start', state: { presentation: 'active', stage: 'started' } }],
+                } } : withTaskFactsWitness(child),
+            ]),
+        ) }),
+    };
+}
+function listEntriesResultWitnessAt(rows: number, frontiers: number): PluginJsonSchema {
+    const result = withTaskFactsWitness(TriageListEntriesResultV1Schema.jsonSchema);
     const windowProperties = { ...result.properties?.window?.properties };
     if (windowProperties.continuations === undefined || windowProperties.rows === undefined) {
         throw new Error('the list window no longer carries both a row array and a continuation set');
@@ -234,43 +259,19 @@ function listEntriesResultAt(rows: number, frontiers: number): PluginJsonSchema 
     };
 }
 
-function listEntriesResultBytes(rows: number, frontiers: number): number {
-    return encodedJsonBytes(
-        buildMaximalSchemaValue(listEntriesResultAt(rows, frontiers), `listEntriesResult:${rows}:${frontiers}`),
-    );
-}
-
-/** A maximal window, with no frontier set. The schema is the whole bound here. */
-const listEntriesWindowMaximum = listEntriesResultBytes(MAX_TRIAGE_LIST_WINDOW_ROWS_V1, 0);
-
-/**
- * The lane counts the curve is measured at.
- *
- * The budget is a curve, not a number. Building a maximal result is expensive,
- * so the points are the ones that can break: none, one, either side of where
- * the frontier set stops fitting beside a full window, and the maximum a reader
- * can configure. Monotonicity over every count in between is asserted
- * separately and costs no build.
- */
-const MEASURED_LANE_COUNTS: readonly number[] = Object.freeze([
-    0,
-    1,
-    9,
-    10,
-    MAX_TRIAGE_LIST_SOURCE_BATCH_V1 - 1,
-    MAX_TRIAGE_LIST_SOURCE_BATCH_V1,
-]);
-
 const measuredSchemas = {
     ...structurallyBoundedSchemas,
     ...ownerBoundedSchemas,
     ...structurallyUnboundedSchemas,
+    // The built-in source now declares these same public source-role schemas.
+    // Their finite maxima and provider-sized witnesses are exercised by the
+    // protocol owner's maximumEncodedResult suite, not a second local catalog.
+    ...Object.fromEntries(Object.entries(TriageSourcesContributionProtocolV1.operations)
+        .flatMap(([role, operation]) => [
+            [`source/${role}/input`, operation.declaration.input.schema],
+            [`source/${role}/result`, operation.declaration.resultSchema],
+        ])),
 };
-
-const derivedMaxima = deriveMaximumEncodedBytesByLabel({
-    ...structurallyBoundedSchemas,
-    listEntriesResult: TriageListEntriesResultV1Schema,
-});
 
 function admits(value: unknown): boolean {
     return AgentRuntimeJsonValueV1Schema.safeParse(value).success;
@@ -317,23 +318,42 @@ describe('aggregate Action value shapes', () => {
     it('measures every Action schema this plugin declares', () => {
         const measured = new Set(Object.values<MeasurableSchemaV1>(measuredSchemas)
             .map((schema) => JSON.stringify(schema.jsonSchema)));
-        const declared = PLUGIN_MANIFEST.contributes.actions
-            .flatMap((action) => [action.inputSchema, action.resultSchema] as const)
-            .map((schema) => JSON.stringify(schema));
-        const unmeasured = declared.filter((schema) => !measured.has(schema));
+        const unmeasured = PLUGIN_MANIFEST.contributes.actions.flatMap((action) => (
+            [['input', action.inputSchema], ['result', action.resultSchema]] as const
+        ).filter(([, schema]) => !measured.has(JSON.stringify(schema)))
+            .map(([side]) => `${action.id}:${side}`));
 
         expect(unmeasured).toEqual([]);
     });
 
-    it('derives the continuation ceiling from the complete aggregate Action envelope', () => {
+    it('fits a finite task-facts witness with every continuation and derives its first envelope rejection', () => {
+        const reachable = listEntriesResultWitnessAt(MAX_TRIAGE_LIST_WINDOW_ROWS_V1, MAX_TRIAGE_LIST_SOURCE_BATCH_V1);
+        const rows = reachable.properties?.window?.properties?.rows;
+        const row = rows?.items?.properties;
+        if (rows === undefined || row?.otherObservations === undefined || row.observedByCount === undefined) {
+            throw new Error('the list result no longer carries its observation cardinality');
+        }
+        // Every row consumes at least one observation from this invocation's
+        // total budget. A full window spends it all on the primary observations;
+        // the schema-only per-row maximum cannot also be spent on every row.
+        row.otherObservations.maxItems = 0;
+        row.observedByCount.maximum = 1;
         const maximal = buildMaximalSchemaValue(
-            TriageListEntriesResultV1Schema.jsonSchema,
+            reachable,
             'listEntriesResult',
         );
-        expect(measureExternalActionResultResponseEnvelopeUtf8BytesV1(maximal))
+        const parsed = TriageListEntriesResultV1Schema.parse(maximal);
+        expect(parsed.window.rows).toHaveLength(MAX_TRIAGE_LIST_WINDOW_ROWS_V1);
+        expect(parsed.window.rows.reduce((total, item) => total + 1 + item.otherObservations.length, 0))
+            .toBe(triageListRowBudgetV1(MAX_TRIAGE_LIST_SOURCE_BATCH_V1));
+        const maximalBytes = measureExternalActionResultResponseEnvelopeUtf8BytesV1(maximal);
+        expect(maximalBytes)
             .toBeLessThanOrEqual(EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES);
+        expect(isExternalActionResultWithinResponseEnvelopeLimitV1(maximal)).toBe(true);
+        const laneTokenCount = parsed.window.continuations.length;
+        expect(laneTokenCount).toBe(MAX_TRIAGE_LIST_SOURCE_BATCH_V1);
 
-        const widened = structuredClone(TriageListEntriesResultV1Schema.jsonSchema);
+        const widened = structuredClone(reachable);
         const token = widened.properties?.window?.properties?.continuations
             ?.items?.properties?.continuation?.properties?.token;
         if (token?.['x-happier-max-utf8-bytes'] !== MAX_TRIAGE_PAGING_TOKEN_UTF8_BYTES_V1) {
@@ -341,8 +361,27 @@ describe('aggregate Action value shapes', () => {
         }
         token['x-happier-max-utf8-bytes'] = MAX_TRIAGE_PAGING_TOKEN_UTF8_BYTES_V1 + 1;
         const oneByteWiderPerLane = buildMaximalSchemaValue(widened, 'widenedListEntriesResult');
-        expect(measureExternalActionResultResponseEnvelopeUtf8BytesV1(oneByteWiderPerLane))
+        // Measure JSON escaping rather than assuming one token byte costs one
+        // envelope byte. Spend the remaining headroom equally across all lanes.
+        const encodedBytesPerTokenByte = (
+            measureExternalActionResultResponseEnvelopeUtf8BytesV1(oneByteWiderPerLane) - maximalBytes
+        ) / laneTokenCount;
+        expect(encodedBytesPerTokenByte).toBeGreaterThan(0);
+        const headroom = EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES - maximalBytes;
+        const firstRejectedTokenUtf8Bytes = MAX_TRIAGE_PAGING_TOKEN_UTF8_BYTES_V1
+            + Math.floor(headroom / (laneTokenCount * encodedBytesPerTokenByte)) + 1;
+        expect(firstRejectedTokenUtf8Bytes).toBeGreaterThanOrEqual(MAX_TRIAGE_PAGING_TOKEN_UTF8_BYTES_V1);
+        token['x-happier-max-utf8-bytes'] = firstRejectedTokenUtf8Bytes;
+        const oversized = buildMaximalSchemaValue(widened, 'oversizedListEntriesResult');
+        const oversizedBytes = measureExternalActionResultResponseEnvelopeUtf8BytesV1(oversized);
+        expect(oversizedBytes).toBe(maximalBytes
+            + (firstRejectedTokenUtf8Bytes - MAX_TRIAGE_PAGING_TOKEN_UTF8_BYTES_V1)
+                * laneTokenCount * encodedBytesPerTokenByte);
+        expect(oversizedBytes - laneTokenCount * encodedBytesPerTokenByte)
+            .toBeLessThanOrEqual(EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES);
+        expect(oversizedBytes)
             .toBeGreaterThan(EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES);
+        expect(isExternalActionResultWithinResponseEnvelopeLimitV1(oversized)).toBe(false);
     }, 120_000);
 
     it('admits a valid resolved prompt beyond the removed aggregate ceiling', () => {
@@ -361,34 +400,7 @@ describe('aggregate Action value shapes', () => {
         expect(TriageStartEntrySessionInputV1Schema.safeParse(value).success).toBe(true);
     });
 
-    /**
-     * `PLAN.md` §0a A9a, measured rather than asserted.
-     *
-     * A result carries at most one frontier per walked lane, and the frontier
-     * set is never cut — cutting it starves the same tail lanes on every page.
-     * So the ROW budget is what pays for them, and this is the proof that every
-     * point on that curve, at every lane count a reader can configure, fits the
-     * real gate without reserving bytes for a framing consumer that does not
-     * exist.
-     *
-     * It is measured from the real projection at the row count the production
-     * owner chooses, so a mutation that made the budget ignore the lane count
-     * fails here rather than at a user's transport boundary.
-     */
-    it('does not shrink the row page to pay for continuation bytes', () => {
-        for (const laneCount of MEASURED_LANE_COUNTS) {
-            const rows = triageListRowBudgetV1(laneCount);
-            expect(rows, `lane count ${laneCount}`).toBe(MAX_TRIAGE_LIST_WINDOW_ROWS_V1);
-        }
-    }, 120_000);
-
-    /**
-     * The cap stands (`PLAN.md` §0a A9) and the budget is a real bound, not a
-     * decoration. Both are stated: a budget that always returned the cap would
-     * pass the curve above only if the curve stopped being measured, and a
-     * budget that never reached the cap would be a silent restriction on every
-     * reader.
-     */
+    /** `PLAN.md` §0a A9 retains one page size independently of source count. */
     it('keeps the explicit row cap independent of lane count', () => {
         expect(triageListRowBudgetV1(0)).toBe(MAX_TRIAGE_LIST_WINDOW_ROWS_V1);
         expect(triageListRowBudgetV1(1)).toBe(MAX_TRIAGE_LIST_WINDOW_ROWS_V1);
@@ -430,23 +442,6 @@ describe('aggregate Action value shapes', () => {
         }
     });
 
-    /**
-     * Which value binds is the useful fact, because it says where the next
-     * additive field will be paid for. Among the values the schema alone
-     * bounds, a maximal window carries one snapshot per row, and that product —
-     * the row count times the source protocol's own per-entry display bounds —
-     * is four fifths of everything this plugin can return.
-     */
-    it('leaves the list window the binding reachable result', () => {
-        const otherReachableResults = Object.entries(derivedMaxima)
-            .filter(([label]) => label.endsWith('Result') && label in structurallyBoundedSchemas)
-            .map(([, bytes]) => bytes);
-        otherReachableResults.push(MAX_TRIAGE_SAVED_VIEWS_SERIALIZED_UTF8_BYTES_V1 + 1_024);
-        otherReachableResults.push(MAX_TRIAGE_ACTIONS_SERIALIZED_UTF8_BYTES_V1 + 1_024);
-
-        expect(listEntriesWindowMaximum).toBeGreaterThan(Math.max(...otherReachableResults));
-    });
-
     it('admits every finite maximal aggregate Action value as strict JSON', () => {
         for (const [label, schema] of Object.entries<MeasurableSchemaV1>(structurallyBoundedSchemas)) {
             const maximal = schema.parse(buildMaximalSchemaValue(schema.jsonSchema, label));
@@ -460,38 +455,21 @@ describe('aggregate Action value shapes', () => {
         // cleanly. Anything red here is an assertion, never the clock.
     }, 60_000);
 
-    /**
-     * The assertion above is only worth its line if a real breach reaches it.
-     * The list result is the one value whose size is a product of two counts,
-     * so raising the row count is the cheapest true breach — and it has to be
-     * rejected by the real owner without any help from a pinned total.
-     */
-    it('does not treat a larger strict-JSON result as an Action-boundary breach', () => {
-        // Measured on the trimmed projection, because that is the basis the
-        // reachable maximum is built from: breaching the untrimmed one would
-        // start from a structural value the gate already refuses, and the
-        // rejection would prove nothing about the row count.
-        const result = listEntriesResultAt(MAX_TRIAGE_LIST_WINDOW_ROWS_V1, 0);
-        const rows = result.properties?.window?.properties?.rows;
-        if (rows?.maxItems === undefined) {
-            throw new Error('the list result no longer carries a bounded rows array');
-        }
-        const breached: PluginJsonSchema = {
-            ...result,
-            properties: {
-                ...result.properties,
-                window: {
-                    ...result.properties?.window,
-                    properties: {
-                        ...result.properties?.window?.properties,
-                        rows: { ...rows, maxItems: rows.maxItems * 4 },
-                    },
-                },
-            },
-        };
-        const value = buildMaximalSchemaValue(breached, 'breachedListResult');
-
-        expect(encodedJsonBytes(value)).toBeGreaterThan(listEntriesWindowMaximum);
-        expect(admits(value)).toBe(true);
+    it('leaves provider-sized relationships valid while the canonical host rejects an oversized result envelope', () => {
+        const observed = createTriageSourceV1Fixture().getResult;
+        if (observed.kind !== 'present') throw new Error('The public fixture must provide a present entry');
+        // Exercise the same byte boundary with wide valid references, avoiding
+        // the unrelated cost of parsing thousands of tiny fixture objects.
+        const relation = TriageEntryRefV1Schema.parse(buildMaximalSchemaValue(
+            TriageEntryRefV1Schema.jsonSchema, 'oversizedTaskRelation',
+        ));
+        const relationBytes = encodedJsonBytes(relation) + 1;
+        const result = TriageTaskWriteResultV1Schema.parse({
+            kind: 'applied', observation: { ...observed, snapshot: { ...observed.snapshot,
+                relations: { blockedBy: Array.from({ length: Math.ceil(EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES / relationBytes) + 1 }, () => relation) },
+            } },
+        });
+        expect(admits(result)).toBe(true);
+        expect(isExternalActionResultWithinResponseEnvelopeLimitV1(result)).toBe(false);
     });
 });

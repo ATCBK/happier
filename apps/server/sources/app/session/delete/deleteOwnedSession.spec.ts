@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
     createAccountCursorRawQueryTransactionModel,
     createEmptySessionFollowEdgeTransactionModel,
-    createEmptySessionReportsToTransactionModel,
     createInTxHarness,
 } from '@/app/api/testkit/txHarness';
 
@@ -74,8 +73,8 @@ vi.mock('@/storage/inTx', () => {
             accessKey: { deleteMany: deleteAccessKeys },
             ephemeralRunnerActivation: { findFirst: findRunnerActivation },
             sessionFollowEdge: createEmptySessionFollowEdgeTransactionModel(),
-            sessionReportsTo: createEmptySessionReportsToTransactionModel(),
             automation: { findMany: async () => [] },
+            automationTrigger: { findMany: async () => [] },
             userKVStore: { findMany: findSessionDrafts, findUnique: findSessionDraft },
         }));
 
@@ -86,6 +85,7 @@ function seedDeleteTarget(metadataLayoutVersion: 0 | 1, recipientAccountIds: str
     findFirst.mockResolvedValueOnce({
         id: 's1',
         accountId: 'owner',
+        active: false,
         metadataLayoutVersion,
         updatedAt: new Date('2025-01-01T00:00:00.000Z'),
     });
@@ -191,6 +191,27 @@ describe('deleteOwnedSession', () => {
 
         expect(ok).toEqual({ ok: false, error: 'not-found' });
         expect(deleteSession).not.toHaveBeenCalled();
+    });
+
+    it('refuses a caller-initiated delete while the Session is active', async () => {
+        findFirst.mockResolvedValueOnce({
+            id: 's1',
+            accountId: 'owner',
+            active: true,
+            metadataLayoutVersion: 1,
+            updatedAt: new Date('2025-01-01T00:00:00.000Z'),
+        });
+
+        const result = await deleteOwnedSession({
+            sessionId: 's1',
+            ownerAccountId: 'owner',
+            reason: 'user_request',
+        });
+
+        expect(result).toEqual({ ok: false, error: 'active' });
+        expect(claimSession).not.toHaveBeenCalled();
+        expect(deleteSession).not.toHaveBeenCalled();
+        expect(emitUpdate).not.toHaveBeenCalled();
     });
 
     it('merges a sessionWhereGuard into the transactional lookup for retention safety', async () => {
@@ -332,6 +353,7 @@ describe('deleteOwnedSession', () => {
                     { id: 's1' },
                     {
                         accountId: 'owner',
+                        active: false,
                         metadataLayoutVersion: 0,
                     },
                 ],
@@ -355,6 +377,7 @@ describe('deleteOwnedSession', () => {
                     { id: 's1' },
                     {
                         accountId: 'owner',
+                        active: false,
                         metadataLayoutVersion: 1,
                     },
                 ],

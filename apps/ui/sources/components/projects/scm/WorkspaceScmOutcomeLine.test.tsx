@@ -64,7 +64,7 @@ describe('workspace Git outcome consumption', () => {
         await screen.pressByTestIdAsync('session-git-outcome-undo');
         expect(undo).toHaveBeenCalledWith('machine-1', {
             cwd: scope.rootPath, expectedHeadOid: 'a'.repeat(40),
-        }, { serverId: 'home-1' });
+        }, { serverId: 'home-1', onDispatched: expect.any(Function) });
         expect(screen.findHostByTestId('session-git-outcome-needs_input')).not.toBeNull();
         expect(refresh).not.toHaveBeenCalled();
     });

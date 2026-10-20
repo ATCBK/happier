@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { SessionAccessGrantsListRequestV1Schema, SessionAccessGrantsListResponseV1Schema, SetSessionAccessGrantRequestV1Schema, SetSessionAccessGrantResponseV1Schema, RemoveSessionAccessGrantRequestV1Schema, RemoveSessionAccessGrantResponseV1Schema, SetSessionAccessContextRequestV1Schema, SetSessionAccessContextResponseV1Schema, ResolveSessionAccessPrincipalsRequestV1Schema, ResolveSessionAccessPrincipalsResponseV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
 import { ACCOUNT_DISPLAY_PROFILE_SELECT } from "@/app/account/profile/accountDisplayProfile";
 import { createServerFeatureGatedRouteApp } from "@/app/features/catalog/serverFeatureGate";
@@ -33,6 +33,8 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
     const collaborationApp = createServerFeatureGatedRouteApp(app, "sharing.session");
     collaborationApp.post('/v2/sessions/access-candidates/inspect', {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.access.candidates.inspect',
+            restrictedCredentialBinding: { scope: 'session', session: 'body.sessionId', allowSessionRuntime: false } },
         schema: { body: SessionAccessCandidatesInspectRequestV1Schema,
             response: { 200: SessionAccessCandidatesInspectResponseV1Schema, ...errors } },
     }, async (request, reply) => {
@@ -61,11 +63,14 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
     });
     collaborationApp.post("/v2/sessions/access-grants/list", {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.access.grants.list',
+            restrictedCredentialBinding: { scope: 'session', session: 'body.sessionId', allowSessionRuntime: false } },
         schema: { body: SessionAccessGrantsListRequestV1Schema, response: { 200: SessionAccessGrantsListResponseV1Schema, ...errors } },
     }, async (request, reply) => {
         const result = await inspectSessionAccessGrants({
             actorAccountId: request.userId,
             sessionId: request.body.sessionId,
+            ...(request.body.recipientAccountId === undefined ? {} : { recipientAccountId: request.body.recipientAccountId }),
             authentication: readSessionAccessAuthenticationFromRequest(request),
         });
         if (!result.ok) return reply.code(errorStatus(result.error)).send({ error: result.error });
@@ -73,6 +78,8 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
     });
     collaborationApp.post("/v2/sessions/access-grants/set", {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.access.grant.set',
+            restrictedCredentialBinding: { scope: 'session', session: 'body.sessionId', allowSessionRuntime: false } },
         schema: { body: SetSessionAccessGrantRequestV1Schema, response: { 200: SetSessionAccessGrantResponseV1Schema, ...errors } },
     }, async (request, reply) => {
         const { sessionId, subject, accessLevel, canApprovePermissions, accountEnvelopeInput, requiredTeamCredential } = request.body;
@@ -109,7 +116,7 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
                 const recipientAccountId = mutation.directShare.sharedWithUserId;
                 scheduleReleasedDirectShareEvent(tx, {
                     recipientAccountId,
-                    cursor: mutation.effects.accountCursors.get(recipientAccountId) ?? 0,
+                    publication: mutation.effects.accountCursors.get(recipientAccountId),
                     event: projectReleasedDirectShareEvent({
                         recipientAccountId,
                         effects: mutation.effects,
@@ -146,6 +153,8 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
     });
     collaborationApp.post("/v2/sessions/access-grants/remove", {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.access.grant.remove',
+            restrictedCredentialBinding: { scope: 'session', session: 'body.sessionId', allowSessionRuntime: false } },
         schema: { body: RemoveSessionAccessGrantRequestV1Schema, response: { 200: RemoveSessionAccessGrantResponseV1Schema, ...errors } },
     }, async (request, reply) => {
         const result = await inTx(async (tx) => {
@@ -158,7 +167,7 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
                 const recipientAccountId = mutation.removedDirectShare.sharedWithUserId;
                 scheduleReleasedDirectShareEvent(tx, {
                     recipientAccountId,
-                    cursor: mutation.effects.accountCursors.get(recipientAccountId) ?? 0,
+                    publication: mutation.effects.accountCursors.get(recipientAccountId),
                     event: projectReleasedDirectShareEvent({
                         recipientAccountId,
                         effects: mutation.effects,
@@ -175,6 +184,8 @@ export function registerSessionAccessGrantRoutes(app: Fastify) {
     });
     collaborationApp.post("/v2/sessions/access-context/set", {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.access.context.set',
+            restrictedCredentialBinding: { scope: 'session', session: 'body.sessionId', allowSessionRuntime: false } },
         schema: { body: SetSessionAccessContextRequestV1Schema, response: { 200: SetSessionAccessContextResponseV1Schema, ...errors } },
     }, async (request, reply) => {
         const result = await inTx(async (tx) => await setSessionAccessContextInTx(tx, {

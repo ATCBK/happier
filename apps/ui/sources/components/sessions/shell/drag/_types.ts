@@ -249,7 +249,7 @@ export type SessionListDragCommitNoOpReason =
     | 'date-ordering-mode'
     | 'no-change'
     | 'outcome-unknown'
-    /** The owner of the relationship (the server, for `reportsTo`) refused the move. */
+    /** The owner of the relationship (the server, for `manager`) refused the move. */
     | 'refused';
 
 /**

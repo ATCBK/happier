@@ -1,5 +1,7 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import type { AcpBackendDefinitionV1 } from '@happier-dev/protocol/acp/catalog/settingsV1';
 
 import {
     renderScreen,
@@ -9,6 +11,8 @@ import {
 import type { NewSessionResumeSelectionContentProps } from '@/components/sessions/new/components/NewSessionResumeSelectionContent';
 import {
     createNavigationMock,
+    createConfiguredAcpBackendCatalogSettings,
+    createConfiguredAgentRouteParams,
     createProjectionDescribeMock,
     createReviewBotPluginProjectionContributions,
     createRouterMock,
@@ -40,8 +44,9 @@ const featureState = vi.hoisted(() => ({
 }));
 
 const resumeSelectionContentPropsRef = { current: null as NewSessionResumeSelectionContentProps | null };
+let acpDefinitions: AcpBackendDefinitionV1[] = [];
 
-installPickerCommonModuleMocks({
+const picker = installPickerCommonModuleMocks({
     reactNative: async () =>
         (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
             Platform: { OS: 'ios' },
@@ -69,14 +74,10 @@ installPickerCommonModuleMocks({
             }).module,
             useNavigation: () => navigationMock,
         }),
-    storage: async (importOriginal) =>
-        (await import('@/dev/testkit/mocks/storage')).createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                useSettings: () => settingsState.value as any,
-            },
-        }),
-    projectionSeam: { describe: machineContributionRegistryProjectionDescribeMock },
+    projectionSeam: {
+        describe: machineContributionRegistryProjectionDescribeMock,
+        serverProfiles: [{ id: 'server-2', serverUrl: 'https://server-2.example.test' }],
+    },
     tempDataStore: {
         peekTempData: () => null,
     },
@@ -97,6 +98,22 @@ vi.mock('@/hooks/server/useFeatureEnabled', () => ({
     useFeatureEnabled: (featureId: string) => featureId === 'sessions.direct' ? featureState.externalSessionsEnabled : false,
 }));
 
+async function renderResumePicker() {
+    const scope = picker.accountScope;
+    picker.homeBoundary.answer(scope.serverId, ACP_CATALOG_ROWS_ROUTE_V1, {
+        body: AcpCatalogRowReadResponseV1Schema.parse({
+            status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: acpDefinitions } },
+        }),
+    });
+    const { storage } = await import('@/sync/domains/state/storageStore');
+    const { settingsParse } = await import('@/sync/domains/settings/settings');
+    storage.getState().applySettingsLocal(settingsParse(settingsState.value));
+    const { refreshAcpCatalog } = await import('@/sync/engine/settings/acpCatalogEngine');
+    await refreshAcpCatalog(scope);
+    const ResumePickerScreen = (await import('@/app/(app)/new/pick/resume')).default;
+    return renderScreen(React.createElement(ResumePickerScreen));
+}
+
 describe('ResumePickerScreen browse modal', () => {
 
     beforeEach(() => {
@@ -108,6 +125,7 @@ describe('ResumePickerScreen browse modal', () => {
             spawnServerId: 'server-2',
         };
         settingsState.value = {};
+        acpDefinitions = [];
         resumeSelectionContentPropsRef.current = null;
         routerMock.push.mockClear();
         routerMock.back.mockClear();
@@ -133,9 +151,8 @@ describe('ResumePickerScreen browse modal', () => {
             supported: true,
             projection: createSupportedClaudeProjection(),
         });
-        const ResumePickerScreen = (await import('@/app/(app)/new/pick/resume')).default;
-
-        await renderScreen(React.createElement(ResumePickerScreen));
+        await renderResumePicker();
+        await vi.waitFor(() => expect(resumeSelectionContentPropsRef.current?.resumeBrowse).toBeTruthy());
 
         const props = resumeSelectionContentPropsRef.current;
         expect(props?.resumeBrowse).toBeTruthy();
@@ -164,9 +181,8 @@ describe('ResumePickerScreen browse modal', () => {
             supported: true,
             projection: createSupportedClaudeProjection({ resumeOnlySource: true }),
         });
-        const ResumePickerScreen = (await import('@/app/(app)/new/pick/resume')).default;
-
-        await renderScreen(React.createElement(ResumePickerScreen));
+        await renderResumePicker();
+        await vi.waitFor(() => expect(resumeSelectionContentPropsRef.current?.resumeBrowse).toBeTruthy());
 
         const props = resumeSelectionContentPropsRef.current;
         expect(props?.resumeBrowse).toBeTruthy();
@@ -181,10 +197,32 @@ describe('ResumePickerScreen browse modal', () => {
         }));
     });
 
-    it('does not expose resume browse when sessions.direct is disabled', async () => {
-        const ResumePickerScreen = (await import('@/app/(app)/new/pick/resume')).default;
+    it('materializes the declared source from the current Agent setting before opening its resume browser', async () => {
+        featureState.externalSessionsEnabled = true;
+        settingsState.value = { customConfigDir: '/configured/claude' };
+        const projection = createSupportedClaudeProjection();
+        const source = projection.agentsById.claude?.externalSessions?.sources[0];
+        if (!source) throw new Error('Claude browse source fixture unavailable');
+        source.instances = [{ kind: 'default', constants: {} }, {
+            kind: 'agentSettingOverride', settingId: 'customConfigDir', field: 'configDir',
+            normalization: 'configuredPath', constants: {},
+        }];
+        machineContributionRegistryProjectionDescribeMock.mockResolvedValue({ supported: true, projection });
+        await renderResumePicker();
+        await vi.waitFor(() => expect(resumeSelectionContentPropsRef.current?.resumeBrowse).toBeTruthy());
+        const browse = resumeSelectionContentPropsRef.current?.resumeBrowse;
+        await browse?.onBrowse();
 
-        await renderScreen(React.createElement(ResumePickerScreen));
+        expect(openExternalSessionsResumeIdPickerModalMock).toHaveBeenCalledWith(expect.objectContaining({
+            lockScope: expect.objectContaining({
+                providerId: 'claude',
+                source: { kind: 'claudeConfig', configDir: '/configured/claude' },
+            }),
+        }));
+    });
+
+    it('does not expose resume browse when sessions.direct is disabled', async () => {
+        await renderResumePicker();
 
         const props = resumeSelectionContentPropsRef.current;
         expect(props?.resumeBrowse).toBeNull();
@@ -198,42 +236,16 @@ describe('ResumePickerScreen browse modal', () => {
             machineId: 'machine-2',
             spawnServerId: 'server-2',
         };
-        settingsState.value = {
-            acpCatalogSettingsV1: {
-                v: 2,
-                backends: [
-                    {
-                        id: 'review-bot',
-                        name: 'review-bot',
-                        title: 'Review Bot',
-                        launch: { kind: 'command' as const, command: 'custom-acp', args: ['serve'] },
-                        env: {},
-                        transportProfile: 'generic',
-                        capabilities: {
-                            supportsLoadSession: false,
-                            supportsModes: 'unknown',
-                            supportsModels: 'unknown',
-                            supportsConfigOptions: 'unknown',
-                            promptImageSupport: 'unknown',
-                        },
-                        createdAt: 1,
-                        updatedAt: 1,
-                    },
-                ],
-                backendEnabledByTargetKey: {},
-            },
-        };
+        acpDefinitions = createConfiguredAcpBackendCatalogSettings('review-bot').backends;
 
-        const ResumePickerScreen = (await import('@/app/(app)/new/pick/resume')).default;
-
-        await renderScreen(React.createElement(ResumePickerScreen));
+        await renderResumePicker();
 
         const props = resumeSelectionContentPropsRef.current;
         // The canonical agentType state carries the concrete configured carrier
         // id (`getResolvedBackendCatalogEntries` pins `agentId: backend.id` for
         // configured rows); only the retired `customAcp` sentinel must never
         // reappear here.
-        expect(props?.agentType).toBe('review-bot');
+        expect(props?.agentType).toBe('custom-acp');
         expect(props?.agentLabel).toBe('Review Bot');
     });
 
@@ -254,8 +266,8 @@ describe('ResumePickerScreen browse modal', () => {
             supported: true,
             projection: createSupportedClaudeProjection({
                 additionalAgentsById: {
-                    'plugin:review-bot': {
-                        id: 'plugin:review-bot',
+                    'acme.review-bot/review-bot': {
+                        id: 'acme.review-bot/review-bot',
                         title: 'Review Bot Plugin',
                         subtitle: 'plugin agent',
                         channel: 'plugin',
@@ -264,7 +276,6 @@ describe('ResumePickerScreen browse modal', () => {
                             pluginId: 'acme.review-bot',
                             localId: 'review-bot',
                         },
-                        settingsBackendId: 'plugin-review-bot',
                     },
                 },
                 additionalInstalledPackagesById: {
@@ -278,8 +289,7 @@ describe('ResumePickerScreen browse modal', () => {
             }),
         });
 
-        const ResumePickerScreen = (await import('@/app/(app)/new/pick/resume')).default;
-        await renderScreen(React.createElement(ResumePickerScreen));
+        await renderResumePicker();
         await flushHookEffects({ cycles: 10 });
 
         expect(machineContributionRegistryProjectionDescribeMock).toHaveBeenCalledWith(
@@ -312,12 +322,11 @@ describe('ResumePickerScreen browse modal', () => {
             projection: createSupportedClaudeProjection(createReviewBotPluginProjectionContributions()),
         });
 
-        const ResumePickerScreen = (await import('@/app/(app)/new/pick/resume')).default;
-        await renderScreen(React.createElement(ResumePickerScreen));
+        await renderResumePicker();
         // The route candidate only becomes available once the merged projection
         // is ready (account-scope binding → describe → catalog adaptation), so
         // wait for the full async chain to settle before capturing props.
-        await vi.waitFor(() => expect(resumeSelectionContentPropsRef.current?.agentType).toBe('plugin:review-bot'));
+        await vi.waitFor(() => expect(resumeSelectionContentPropsRef.current?.agentType).toBe('acme.review-bot/review-bot'));
 
         const props = resumeSelectionContentPropsRef.current;
         expect(props?.resumeBrowse).toBeTruthy();
@@ -328,7 +337,7 @@ describe('ResumePickerScreen browse modal', () => {
             lockScope: expect.objectContaining({
                 machineId: 'machine-plugin-3',
                 serverId: 'server-2',
-                providerId: 'plugin:review-bot',
+                providerId: 'acme.review-bot/review-bot',
             }),
         }));
         expect(result).toBe('session-picked');
@@ -346,9 +355,7 @@ describe('ResumePickerScreen browse modal', () => {
             ],
         });
 
-        const ResumePickerScreen = (await import('@/app/(app)/new/pick/resume')).default;
-
-        await renderScreen(React.createElement(ResumePickerScreen));
+        await renderResumePicker();
 
         const props = resumeSelectionContentPropsRef.current;
         expect(typeof props?.onSave).toBe('function');
@@ -397,41 +404,17 @@ describe('ResumePickerScreen browse modal', () => {
         settingsState.value = {
             lastUsedAgent: 'codex',
             lastUsedBackendTarget: { kind: 'backend', backendId: 'review-bot', configuredBackendId: 'review-bot', sourceKind: 'configured' },
-            acpCatalogSettingsV1: {
-                v: 2,
-                backends: [
-                    {
-                        id: 'review-bot',
-                        name: 'review-bot',
-                        title: 'Review Bot',
-                        launch: { kind: 'command' as const, command: 'custom-acp', args: ['serve'] },
-                        env: {},
-                        transportProfile: 'generic',
-                        capabilities: {
-                            supportsLoadSession: false,
-                            supportsModes: 'unknown',
-                            supportsModels: 'unknown',
-                            supportsConfigOptions: 'unknown',
-                            promptImageSupport: 'unknown',
-                        },
-                        createdAt: 1,
-                        updatedAt: 1,
-                    },
-                ],
-                backendEnabledByTargetKey: {},
-            },
         };
+        acpDefinitions = createConfiguredAcpBackendCatalogSettings('review-bot').backends;
 
-        const ResumePickerScreen = (await import('@/app/(app)/new/pick/resume')).default;
-
-        await renderScreen(React.createElement(ResumePickerScreen));
+        await renderResumePicker();
 
         const props = resumeSelectionContentPropsRef.current;
         // The stored configured backend target wins over the built-in agent
         // placeholder under the V2 carrier vocabulary (`resolvePreferredBackendTarget`
         // prefers the parseable stored target); the configured label still comes
         // from the resolved backend row.
-        expect(props?.agentType).toBe('review-bot');
+        expect(props?.agentType).toBe('custom-acp');
         expect(props?.agentLabel).toBe('Review Bot');
 
         await props?.onSave?.('session-picked');
@@ -439,12 +422,7 @@ describe('ResumePickerScreen browse modal', () => {
         expect(routerMock.replace).toHaveBeenCalledWith({
             pathname: '/new',
             params: {
-                backendTarget: JSON.stringify({
-                    kind: 'backend',
-                    backendId: 'review-bot',
-                    configuredBackendId: 'review-bot',
-                }),
-                backendTargetKey: 'backend:review-bot:configured:review-bot',
+                ...createConfiguredAgentRouteParams('review-bot'),
                 dataId: 'draft-1',
                 machineId: 'machine-2',
                 spawnServerId: 'server-2',

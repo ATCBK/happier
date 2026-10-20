@@ -60,7 +60,8 @@ export function WalkthroughSavedSettings(props: Readonly<{
     const offline = props.machineAvailability === 'offline';
     const targetUnavailable = props.machineAvailability !== 'online' && !offline;
     const loading = !offline && (!inventory || loadingKey === key);
-    // Without a usable machine there is nothing to list or clear; the header chip is the recovery.
+    // Without a usable machine there is nothing to list or clear: a chosen one is waited for by name, otherwise the
+    // header chip is the recovery.
     const noMachine = targetUnavailable || !props.machineId;
     const clear = async () => {
         const captured = operation.current;
@@ -87,7 +88,7 @@ export function WalkthroughSavedSettings(props: Readonly<{
                 onValueChange={value => { if (!value || props.modelAvailable) props.onPrepareAfterTurn(value); }} />}
             onPress={() => { if (props.prepareAfterTurn || props.modelAvailable) props.onPrepareAfterTurn(!props.prepareAfterTurn); }} />
         <SettingRow setting={SOURCE_CONTROL_SETTINGS.settings.savedWalkthroughs} showChevron={false} subtitleLines={0}
-            subtitle={offline ? t('walkthroughSettings.unavailableData') : noMachine ? t('walkthroughSettings.chooseMachine') : clearFailed ? t('walkthroughSettings.clearFailed') : available
+            subtitle={offline ? t('walkthroughSettings.unavailableData') : noMachine ? (props.machineAvailability === 'unselected' || !props.machineName ? t('walkthroughSettings.chooseMachine') : t('walkthroughSettings.waitingMachine', { machine: props.machineName })) : clearFailed ? t('walkthroughSettings.clearFailed') : available
                 ? t('walkthroughSettings.savedCount', { count: available.count, bytes: formatHappierDataBytes(available.bytes, { kind: 'storage' }) })
                 : loading ? t('common.loading') : t('walkthroughSettings.loadFailed')}
             rightElement={noMachine ? null : !offline && !loading && inventory?.success === false ? <RoundButton title={t('common.retry')} size="small" display="secondary"

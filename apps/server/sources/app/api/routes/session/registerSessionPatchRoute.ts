@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { SESSION_METADATA_LAYOUT_VERSION_V1, SessionMetadataActiveConflictV1Schema, SessionMetadataInactiveModelIntentOwnerPatchV1Schema, SessionMetadataInactiveModelIntentPatchSuccessV1Schema, SessionMetadataInactiveModelIntentPatchV1Schema, SessionMetadataInactiveModelIntentVersionConflictV1Schema, SessionMetadataTuplePatchSuccessV1Schema, SessionMetadataTuplePatchV1Schema, SessionMetadataVersionConflictV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 
 import {
@@ -17,18 +17,19 @@ import { type Fastify } from "../../types";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
 import { SessionTeamCredentialBindingMetadataPatchV1Schema, SessionTeamCredentialBindingMutationRejectionV1Schema } from '@happier-dev/protocol/teams/credentials/sessionBindingV1';
 import { PRESENT_USER_REQUIRED_ERROR } from "@/app/api/utils/apiTokenRouteAdmission";
+import { log } from "@/utils/logging/log";
 
 export function registerSessionPatchRoute(app: Fastify) {
-    const legacyPatchBodySchema = z.object({
-        metadata: z.object({
+    const legacyPatchBodySchema = z.strictObject({
+        metadata: z.optional(z.strictObject({
             ciphertext: z.string(),
-            expectedVersion: z.number().int().min(0),
-        }).strict().optional(),
-        agentState: z.object({
-            ciphertext: z.string().nullable(),
-            expectedVersion: z.number().int().min(0),
-        }).strict().optional(),
-    }).strict();
+            expectedVersion: z.number().check(z.int(), z.minimum(0)),
+        })),
+        agentState: z.optional(z.strictObject({
+            ciphertext: z.nullable(z.string()),
+            expectedVersion: z.number().check(z.int(), z.minimum(0)),
+        })),
+    });
     app.patch('/v2/sessions/:sessionId', {
         preHandler: app.authenticate,
         attachValidation: true,
@@ -49,15 +50,15 @@ export function registerSessionPatchRoute(app: Fastify) {
                     SessionMetadataInactiveModelIntentVersionConflictV1Schema,
                     z.object({
                         success: z.literal(true),
-                        metadata: z.object({ version: z.number() }).optional(),
-                        agentState: z.object({ version: z.number() }).optional(),
+                        metadata: z.optional(z.object({ version: z.number() })),
+                        agentState: z.optional(z.object({ version: z.number() })),
                     }),
                     z.object({
                         success: z.literal(false),
                         error: z.literal("version-mismatch"),
-                        metadataLayoutVersion: z.number().int().nonnegative().optional(),
-                        metadata: z.object({ version: z.number(), value: z.string().nullable() }).optional(),
-                        agentState: z.object({ version: z.number(), value: z.string().nullable() }).optional(),
+                        metadataLayoutVersion: z.optional(z.number().check(z.int(), z.nonnegative())),
+                        metadata: z.optional(z.object({ version: z.number(), value: z.nullable(z.string()) })),
+                        agentState: z.optional(z.object({ version: z.number(), value: z.nullable(z.string()) })),
                     }),
                 ]),
                 400: z.object({ error: z.literal("Invalid parameters") }),
@@ -74,11 +75,11 @@ export function registerSessionPatchRoute(app: Fastify) {
                     }),
                     SessionMetadataVersionConflictV1Schema,
                     SessionMetadataActiveConflictV1Schema,
-                    z.object({
+                    z.strictObject({
                         code: z.literal(
                             "session_publisher_authority_lost",
                         ),
-                    }).strict(),
+                    }),
                     SessionTeamCredentialBindingMutationRejectionV1Schema,
                 ]),
                 426: z.unknown(),
@@ -189,25 +190,10 @@ export function registerSessionPatchRoute(app: Fastify) {
                 return reply.code(500).send({ error: "Failed to update session" });
             }
 
-            const published = await publishSessionCurrentViewUpdates({
-                sessionId,
-                recipientCursors: tupleResult.recipientCursors,
-                source: {
-                    kind: "envelope_tuple_v1",
-                    sessionOwnerId: tupleResult.sessionOwnerId,
-                    ownerAccountMode: tupleResult.ownerAccountMode,
-                    sharedMetadata: tupleResult.sharedMetadata,
-                    ownerMetadata: tupleResult.ownerMetadata,
-                    agentState: tupleResult.agentState,
-                },
-            });
-            if (!published.ok) {
-                return reply.code(500).send({
-                    error: "Failed to update session",
-                });
-            }
-
-            return reply.send({
+            // The tuple and its recipient cursors are committed. Realtime
+            // publication cannot hold or contradict that mutation receipt.
+            log({ module: "session-metadata", sessionId, mode: tupleBody.mode, phase: "committed" }, "Session metadata mutation committed");
+            reply.send({
                 success: true as const,
                 metadataLayoutVersion: tupleResult.metadataLayoutVersion,
                 sharedMetadata: { version: tupleResult.sharedMetadata.version },
@@ -215,6 +201,28 @@ export function registerSessionPatchRoute(app: Fastify) {
                     ? { agentState: { version: tupleResult.agentState.version } }
                     : {}),
             });
+            log({ module: "session-metadata", sessionId, mode: tupleBody.mode, phase: "publication_started" }, "Publishing committed Session metadata");
+            try {
+                const published = await publishSessionCurrentViewUpdates({
+                    sessionId,
+                    recipientCursors: tupleResult.recipientCursors,
+                    source: {
+                        kind: "envelope_tuple_v1",
+                        sessionOwnerId: tupleResult.sessionOwnerId,
+                        ownerAccountMode: tupleResult.ownerAccountMode,
+                        sharedMetadata: tupleResult.sharedMetadata,
+                        ownerMetadata: tupleResult.ownerMetadata,
+                        agentState: tupleResult.agentState,
+                    },
+                });
+                log({ module: "session-metadata", sessionId, mode: tupleBody.mode,
+                    phase: published.ok ? "publication_submitted" : "publication_failed",
+                    ...(published.ok ? {} : { level: "warn" }) },
+                published.ok ? "Submitted committed Session metadata publication" : "Failed to publish committed Session metadata");
+            } catch {
+                log({ module: "session-metadata", level: "warn", sessionId, mode: tupleBody.mode, phase: "publication_failed" }, "Failed to publish committed Session metadata");
+            }
+            return reply;
         }
 
         const conditionedMutation = "inactiveModelIntent" in request.body
@@ -284,53 +292,53 @@ export function registerSessionPatchRoute(app: Fastify) {
             return reply.code(500).send({ error: "Failed to update session" });
         }
 
-        const currentSession = await db.session.findUnique({
-            where: { id: sessionId },
-            select: {
-                accountId: true,
-                metadata: true,
-                metadataVersion: true,
-                metadataLayoutVersion: true,
-                ownerMetadata: true,
-                agentState: true,
-                agentStateVersion: true,
-            },
-        });
-        if (!currentSession) {
-            return reply.code(404).send({
-                error: "Session not found",
-            });
-        }
-        const publishedLegacy = await publishSessionCurrentViewUpdates({
-            sessionId,
-            recipientCursors: result.recipientCursors,
-            source: {
-                kind: "legacy_v0",
-                sessionOwnerId: userId,
-                session: currentSession,
-            },
-        });
-        if (!publishedLegacy.ok) {
-            return reply.code(500).send({ error: "Failed to update session" });
-        }
-
+        const mode = conditionedMutation ? "inactive_model_intent" : "legacy";
+        log({ module: "session-metadata", sessionId, mode, phase: "committed" }, "Session metadata mutation committed");
         if (conditionedMutation) {
             if (!result.metadata) {
                 return reply.code(500).send({
                     error: "Failed to update session",
                 });
             }
-            return reply.send(
+            reply.send(
                 SessionMetadataInactiveModelIntentPatchSuccessV1Schema.parse({
                     success: true as const,
                     metadata: { version: result.metadata.version },
                 }),
             );
+        } else {
+            reply.send({
+                success: true as const,
+                ...(result.metadata ? { metadata: { version: result.metadata.version } } : {}),
+                ...(result.agentState ? { agentState: { version: result.agentState.version } } : {}),
+            });
         }
-        return reply.send({
-            success: true as const,
-            ...(result.metadata ? { metadata: { version: result.metadata.version } } : {}),
-            ...(result.agentState ? { agentState: { version: result.agentState.version } } : {}),
-        });
+        log({ module: "session-metadata", sessionId, mode, phase: "publication_started" }, "Publishing committed Session metadata");
+        try {
+            const currentSession = await db.session.findUnique({
+                where: { id: sessionId },
+                select: {
+                    accountId: true,
+                    metadata: true,
+                    metadataVersion: true,
+                    metadataLayoutVersion: true,
+                    ownerMetadata: true,
+                    agentState: true,
+                    agentStateVersion: true,
+                },
+            });
+            const published = currentSession ? await publishSessionCurrentViewUpdates({
+                sessionId,
+                recipientCursors: result.recipientCursors,
+                source: { kind: "legacy_v0", sessionOwnerId: userId, session: currentSession },
+            }) : { ok: false };
+            log({ module: "session-metadata", sessionId, mode,
+                phase: published.ok ? "publication_submitted" : "publication_failed",
+                ...(published.ok ? {} : { level: "warn" }) },
+            published.ok ? "Submitted committed Session metadata publication" : "Failed to publish committed Session metadata");
+        } catch {
+            log({ module: "session-metadata", level: "warn", sessionId, mode, phase: "publication_failed" }, "Failed to publish committed Session metadata");
+        }
+        return reply;
     });
 }

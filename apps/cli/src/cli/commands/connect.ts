@@ -660,7 +660,7 @@ export async function continueConnectedAccountAuthentication(params: Readonly<{
               code: parsed.code,
               callbackUrl: response.callbackUrl,
               state,
-              ...(parsed.iss ? { iss: parsed.iss } : {}),
+              ...('iss' in parsed && parsed.iss ? { iss: parsed.iss } : {}),
             },
           });
           break;

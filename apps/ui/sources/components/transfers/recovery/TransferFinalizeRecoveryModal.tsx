@@ -8,7 +8,7 @@ import { Typography } from '@/constants/Typography';
 import type { CustomModalInjectedProps } from '@/modal';
 import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import { t } from '@/text';
-import type { TransferFinalizeRecoveryAction } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/directTransferFinalizeRecovery';
+import type { TransferFinalizeRecoveryAction } from '@/sync/domains/transfers/runtime/transferRuntime';
 import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
 
 type Props = CustomModalInjectedProps & Readonly<{

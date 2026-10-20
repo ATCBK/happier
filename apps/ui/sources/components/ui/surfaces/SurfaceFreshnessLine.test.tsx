@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
@@ -22,7 +23,12 @@ describe('SurfaceFreshnessLine recovery', () => {
         const retry = vi.fn(() => deferred.promise);
         const screen = await renderScreen(<SurfaceFreshnessLine testID="stale" reason="Refresh failed" action={{ label: 'Retry', onPress: retry }} />);
         const action = screen.findByTestId('stale-action')!;
-        await act(async () => { action.props.onFocus({}); });
+        const target = { matches: (selector: string) => selector === ':focus-visible' };
+        document.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+        await act(async () => { action.props.onFocus({ target }); });
+        expect(flattenStyle(screen.findByTestId('stale-action')!.props.style({ pressed: false })).outlineStyle).toBeUndefined();
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+        await act(async () => { action.props.onFocus({ target }); });
         expect(flattenStyle(screen.findByTestId('stale-action')!.props.style({ pressed: false })))
             .toMatchObject({ outlineStyle: 'solid', outlineWidth: 2 });
         let pending: unknown;
@@ -77,7 +83,8 @@ describe('SurfaceFreshnessLine chip', () => {
             <SurfaceFreshnessLine testID="chip" presentation="chip" asOf={Date.now()} reason="" action={{ label: 'Retry', onPress: retry, testID: 'chip-retry' }} />,
         );
         const action = behind.findByTestId('chip-retry')!;
-        await act(async () => { action.props.onFocus({}); });
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+        await act(async () => { action.props.onFocus({ target: { matches: (selector: string) => selector === ':focus-visible' } }); });
         expect(flattenStyle(behind.findByTestId('chip-retry')!.props.style({ pressed: false })))
             .toMatchObject({ outlineStyle: 'solid', outlineWidth: 2 });
         await act(async () => { action.props.onPress(); action.props.onPress(); });

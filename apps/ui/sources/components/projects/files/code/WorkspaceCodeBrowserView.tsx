@@ -11,8 +11,8 @@ import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { formatScmHistoryTimestamp } from '@/scm/history/historyPresentation';
-import { ConstrainedScreenContent } from '@/components/ui/layout/ConstrainedScreenContent';
-import { GROUPED_SURFACE_RADIUS_PX } from '@/components/ui/lists/pageListMetrics';
+import { PageFrame } from '@/components/ui/layout/PageFrame';
+import { GROUPED_SURFACE_RADIUS_PX, PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { resolveThemeHairlineBorderStyle } from '@/components/ui/surfaces/resolveThemeHairlineBorderStyle';
@@ -325,7 +325,8 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
     // its bounded viewport; a file continues to hand scrolling to the existing reader.
     const fileMode = location.kind === 'file';
     const page = (
-        <ConstrainedScreenContent style={[styles.column, styles.fileColumn]}>
+        // The Code column (lab `.pj-solo`) is the wide page column: a name, a commit subject and a time.
+        <PageFrame column="wide" content="column" style={styles.fileColumn}>
             {fileMode ? <CodeBrowserBar
                 testID={`${testID}-bar`}
                 scope={props.scope}
@@ -339,7 +340,7 @@ export const WorkspaceCodeBrowserView = React.memo(function WorkspaceCodeBrowser
             {fileMode ? reachabilityLine : null}
             {body}
             {fileMode ? historyFreshness : null}
-        </ConstrainedScreenContent>
+        </PageFrame>
     );
     return <CheckoutReachabilityScope scope={props.scope}>{fileMode ? (
         <ScrollView testID={testID} style={styles.scroll} scrollEnabled={false}
@@ -375,8 +376,8 @@ function CodeListingSkeleton(props: Readonly<{ testID: string }>) {
         <View testID={props.testID} aria-busy>
             {CODE_LISTING_SKELETON_WIDTHS.map((width) => (
                 <View key={width} style={[styles.skeletonRow, { minHeight }]}>
-                    <HappierSkeletonBlock width={16} height={16} radius={4} color={theme.colors.surface.pressedOverlay} reducedMotion={reducedMotion} />
-                    <HappierSkeletonBlock width={width} height={10} radius={5} color={theme.colors.surface.pressedOverlay} reducedMotion={reducedMotion} />
+                    <HappierSkeletonBlock width={16} height={16} radius={4} color={theme.colors.surface.skeleton} reducedMotion={reducedMotion} />
+                    <HappierSkeletonBlock width={width} height={10} radius={5} color={theme.colors.surface.skeleton} reducedMotion={reducedMotion} />
                 </View>
             ))}
         </View>
@@ -460,14 +461,15 @@ const styles = StyleSheet.create((theme) => ({
     scroll: {
         flex: 1,
     },
+    // The page insets every Project tab takes (Overview's `wideColumn`): the sheets' inset and a section gap.
     content: {
-        paddingHorizontal: 32,
-        paddingTop: 22,
-        paddingBottom: 40,
+        paddingHorizontal: PAGE_LIST_METRICS.sheetInsetPx,
+        paddingTop: PAGE_LIST_METRICS.sectionGapPx,
+        paddingBottom: PAGE_LIST_METRICS.pagePaddingBottomPx,
     },
     contentPhone: {
-        paddingHorizontal: 16,
-        paddingTop: 12,
+        paddingHorizontal: PAGE_LIST_METRICS.sheetInsetPx,
+        paddingTop: PAGE_LIST_METRICS.sectionGapPx,
         paddingBottom: 120,
     },
     fileSheet: {
@@ -485,10 +487,6 @@ const styles = StyleSheet.create((theme) => ({
     fileColumn: {
         flex: 1,
         minHeight: 0,
-    },
-    column: {
-        // The Code column (lab `.pj-solo`): wide enough for a name, a commit subject and a time.
-        maxWidth: 944,
     },
     sheet: {
         borderRadius: GROUPED_SURFACE_RADIUS_PX,

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createSessionAccessFixture, createSessionFixture } from '@/dev/testkit';
 import type { Session } from '@/sync/domains/state/storageTypes';
-import { createSessionReportsToEligibilitySnapshot } from '@/sync/ops/relations/sessionReportsToEligibility';
+import { createSessionManagerEligibilitySnapshot } from '@/sync/ops/relations/sessionManagerEligibility';
 
 import { describeSessionListDropReason } from '@/components/sessions/shell/dropPreview/sessionListDropPresentation';
 
@@ -14,13 +14,13 @@ function session(id: string, overrides: Partial<Session> = {}): Session {
 
 describe('buildPutUnderChooserSections (K1c)', () => {
     const sessions = Object.fromEntries([
-        session('self', { reportsTo: { sessionId: 'lead' }, updatedAt: 5 }),
+        session('self', { manager: { sessionId: 'lead' }, updatedAt: 5 }),
         session('lead', { updatedAt: 4 }),
         session('peer', { updatedAt: 3 }),
         session('readonly', { updatedAt: 2 }),
     ].map((item) => [item.id, item]));
-    const facts = createSessionReportsToEligibilitySnapshot({
-        serverId: 'home', accountId: 'account', sessionId: 'self', currentLeadSessionId: 'lead',
+    const facts = createSessionManagerEligibilitySnapshot({
+        serverId: 'home', accountId: 'account', sessionId: 'self', currentManagerSessionId: 'lead',
         candidates: [
             { sessionId: 'lead', allowed: true },
             { sessionId: 'peer', allowed: true },

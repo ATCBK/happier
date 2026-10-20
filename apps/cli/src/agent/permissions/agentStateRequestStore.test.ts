@@ -5,7 +5,15 @@ import { accountSettingsParse } from '@happier-dev/protocol';
 import type { AgentState } from '@/api/types';
 import { logger } from '@/ui/logger';
 import { createSessionNotificationContextFixture } from '@/testkit/backends/sessionFixtures';
-import { AgentStateRequestStore, type PermissionResponseClaim } from './agentStateRequestStore';
+import { AgentStateRequestStore, isSameAgentStateRequestOccurrence, type PermissionResponseClaim } from './agentStateRequestStore';
+import { PermissionRequestCoordinator } from './permissionRequestCoordinator';
+import { AgentStateSchema } from '@happier-dev/session-core';
+import { SessionFollowRuleSourceEvidenceV1Schema, type SessionFollowRuleSourceEvidenceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleOccurrenceV1';
+import type { FollowEventV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+import { captureSemanticSessionFollowRuleSourceEvidence } from '@/agent/runtime/session/follow/sessionFollowRuleSourceEvidence';
+import { notificationSettingsSnapshotFixture } from '@/notifications/activity/activityNotification.testkit';
+import type { SessionActivityChangedResult } from '@/daemon/sessions/sessionActivityChangedContract';
+import { resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 const localPermissionBridgeCoverageOptions = resolveAgentStateRequestCoverageOptions({ kind: 'localPermissionBridge' });
 const LOCAL_PERMISSION_BRIDGE_REQUEST_SOURCE = localPermissionBridgeCoverageOptions.equivalentSources?.[0] ?? '';
@@ -17,6 +25,10 @@ class FakeSession {
         requests: Object.create(null),
         completedRequests: Object.create(null),
     };
+
+    async updateAgentStateRequestSettlement(updater: (state: AgentState) => AgentState): Promise<void> {
+        await this.updateAgentState(updater);
+    }
 
     getAgentStateSnapshot() {
         return this.agentState;
@@ -35,12 +47,395 @@ class AsyncFakeSession extends FakeSession {
     }
 }
 
+class FollowNotificationSession extends FakeSession {
+    notifySessionFollowRuleRequestCommitted: () => Promise<SessionActivityChangedResult | null | void> = async () => {};
+    captureSessionFollowRuleEvidence(event: FollowEventV1) {
+        return captureSemanticSessionFollowRuleSourceEvidence({ serverId: 'home', ownerAccountId: 'alice', origin: { kind: 'none' }, event });
+    }
+}
+
 async function flushMicrotasks(): Promise<void> {
     await Promise.resolve();
     await Promise.resolve();
 }
 
 describe('AgentStateRequestStore', () => {
+    it('joins source-admitted personal request policy at the original notifier before its only send', async () => {
+        let admit!: (value: SessionActivityChangedResult) => void;
+        class SourceSession extends FakeSession {
+            captureSessionFollowRuleEvidence(event: FollowEventV1) {
+                return captureSemanticSessionFollowRuleSourceEvidence({ serverId: 'home', ownerAccountId: 'alice', origin: { kind: 'none' }, event });
+            }
+            notifySessionFollowRuleRequestCommitted() { return new Promise<SessionActivityChangedResult>(resolve => { admit = resolve; }); }
+        }
+        const session = new SourceSession();
+        const sendToAllDevicesAsync = vi.fn(async () => true); // Expo is the external delivery boundary.
+        const settings = notificationSettingsSnapshotFixture({});
+        const store = new AgentStateRequestStore({ session, logPrefix: '[Joined personal request]',
+            getAccountSettings: () => settings, getPushSender: () => ({ sendToAllDevicesAsync,
+                readAccountSessionDeliveryMutedScopes: async () => [],
+                fetchSessionNotificationContext: async sessionId => {
+                    const context = createSessionNotificationContextFixture(sessionId);
+                    return { ...context, viewer: { ...context.viewer!, follow: { follows: true, notificationLevel: 'important' as const, policy: { preset: 'quiet' as const } } } };
+                },
+            }),
+        });
+        try {
+            await store.publishRequestAndWait({ requestId: 'joined', toolName: 'AskUserQuestion', toolInput: {}, createdAt: Date.now() });
+            await new Promise(resolve => setImmediate(resolve));
+            expect(sendToAllDevicesAsync).not.toHaveBeenCalled();
+            admit({ personalFollow: { sourceSessionId: session.sessionId,
+                requests: [{ requestId: 'joined', policies: [{ preset: 'important' }] }] } });
+            await vi.waitFor(() => expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1));
+            expect(session.agentState.requests!.joined.pushNotifiedAt).toEqual(expect.any(Number));
+            store.notifyPermissionRequestPushBestEffort({ permissionId: 'joined', toolName: 'AskUserQuestion', toolInput: {} });
+            await new Promise(resolve => setImmediate(resolve));
+            expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1);
+        } finally { store.dispose(); }
+    });
+    it('keeps the original closed-app request alert when the source daemon is unavailable', async () => {
+        const session = new FollowNotificationSession();
+        session.notifySessionFollowRuleRequestCommitted = async () => { throw new Error('daemon unavailable'); };
+        const sendToAllDevicesAsync = vi.fn(async () => true);
+        const settings = notificationSettingsSnapshotFixture({});
+        const store = new AgentStateRequestStore({ session, logPrefix: '[Unavailable daemon]', getAccountSettings: () => settings,
+            getPushSender: () => ({ sendToAllDevicesAsync, readAccountSessionDeliveryMutedScopes: async () => [],
+                fetchSessionNotificationContext: async id => createSessionNotificationContextFixture(id) }),
+        });
+        try {
+            await store.publishRequestAndWait({ requestId: 'fallback', toolName: 'Write', toolInput: {}, createdAt: Date.now() });
+            await vi.waitFor(() => expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1));
+            expect(session.agentState.requests!.fallback.pushNotifiedAt).toEqual(expect.any(Number));
+        } finally { store.dispose(); }
+    });
+    it('withdraws the native alert when its source owner explicitly rejects currentness', async () => {
+        const session = new FollowNotificationSession();
+        session.notifySessionFollowRuleRequestCommitted = async () => null;
+        const sendToAllDevicesAsync = vi.fn(async () => true);
+        const settings = notificationSettingsSnapshotFixture({});
+        const store = new AgentStateRequestStore({ session, logPrefix: '[Retired source]', getAccountSettings: () => settings,
+            getPushSender: () => ({ sendToAllDevicesAsync, readAccountSessionDeliveryMutedScopes: async () => [],
+                fetchSessionNotificationContext: async id => createSessionNotificationContextFixture(id) }),
+        });
+        try {
+            await store.publishRequestAndWait({ requestId: 'retired', toolName: 'Write', toolInput: {}, createdAt: Date.now() });
+            await new Promise(resolve => setImmediate(resolve));
+            expect(sendToAllDevicesAsync).not.toHaveBeenCalled();
+            expect(session.agentState.requests!.retired.pushNotifiedAt).toBeUndefined();
+        } finally { store.dispose(); }
+    });
+    it('withdraws a pending policy contribution when the handler changes and admits the later pass-up', async () => {
+        const session = new FollowNotificationSession();
+        const admissions: Array<(result: SessionActivityChangedResult) => void> = [];
+        session.notifySessionFollowRuleRequestCommitted = () => new Promise(resolve => { admissions.push(resolve); });
+        const sendToAllDevicesAsync = vi.fn(async () => true);
+        const settings = notificationSettingsSnapshotFixture({});
+        const store = new AgentStateRequestStore({ session, logPrefix: '[Handler admission]', getAccountSettings: () => settings,
+            getPushSender: () => ({ sendToAllDevicesAsync, readAccountSessionDeliveryMutedScopes: async () => [],
+                fetchSessionNotificationContext: async id => createSessionNotificationContextFixture(id) }),
+        });
+        const createdAt = Date.now();
+        try {
+            await store.publishRequestAndWait({ requestId: 'passing', toolName: 'AskUserQuestion', toolInput: {}, createdAt,
+                questionV1: { mode: 'wait', type: 'decision', lasting: false }, currentHandler: { kind: 'person' } });
+            await store.changeQuestionHandler({ requestId: 'passing', expectedCreatedAt: createdAt,
+                expectedHandler: { kind: 'person' }, currentHandler: { kind: 'session', sessionId: 'manager' } });
+            admissions[0]({ personalFollow: { sourceSessionId: session.sessionId,
+                requests: [{ requestId: 'passing', policies: [{ preset: 'important' }] }] } });
+            await new Promise(resolve => setImmediate(resolve));
+            expect(sendToAllDevicesAsync).not.toHaveBeenCalled();
+            expect(session.agentState.requests!.passing.pushNotifiedAt).toBeUndefined();
+            await store.changeQuestionHandler({ requestId: 'passing', expectedCreatedAt: createdAt,
+                expectedHandler: { kind: 'session', sessionId: 'manager' }, currentHandler: { kind: 'person' } });
+            expect(admissions).toHaveLength(2);
+            admissions[1]({ personalFollow: { sourceSessionId: session.sessionId,
+                requests: [{ requestId: 'passing', policies: [{ preset: 'important' }] }] } });
+            await vi.waitFor(() => expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1));
+        } finally { store.dispose(); }
+    });
+    it('retains accepted request notification custody when the original request rejoins another notifier', async () => {
+        const session = new FakeSession();
+        const sendToAllDevicesAsync = vi.fn(async () => true);
+        const settings = notificationSettingsSnapshotFixture({});
+        const params = { session, logPrefix: '[Rejoined notifier]', getAccountSettings: () => settings,
+            getPushSender: () => ({ sendToAllDevicesAsync, readAccountSessionDeliveryMutedScopes: async () => [],
+                fetchSessionNotificationContext: async (id: string) => createSessionNotificationContextFixture(id) }) };
+        const publication = { requestId: 'rejoined', toolName: 'Write', toolInput: {}, createdAt: Date.now() };
+        const first = new AgentStateRequestStore(params);
+        await first.publishRequestAndWait(publication);
+        await vi.waitFor(() => expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1));
+        const acceptedAt = session.agentState.requests!.rejoined.pushNotifiedAt;
+        first.dispose();
+        const rejoined = new AgentStateRequestStore(params);
+        try {
+            await rejoined.publishRequestAndWait(publication);
+            expect(session.agentState.requests!.rejoined.pushNotifiedAt).toBe(acceptedAt);
+            await new Promise(resolve => setImmediate(resolve));
+            expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1);
+        } finally { rejoined.dispose(); }
+    });
+    it('preserves a completed mirrored request even when it appears before the persistence updater runs', async () => {
+        let state: AgentState = { requests: {}, completedRequests: {} };
+        let apply!: () => void;
+        let accept!: () => void;
+        const notifyRequest = vi.fn(); // The push transport is a system boundary.
+        const store = new AgentStateRequestStore({ logPrefix: '[Deferred ACP mirror]', target: {
+            scopeId: 'deferred-mirror', readState: () => state, notifyRequest,
+            updateState: updater => new Promise<void>(resolve => {
+                apply = () => { state = updater(state); };
+                accept = resolve;
+            }),
+        } });
+        store.publishMirroredRequest({ requestId: 'permission', toolName: 'write', toolInput: {}, createdAt: 11 });
+        const completed = { tool: 'write', arguments: {}, createdAt: 7, completedAt: 8, status: 'approved' as const };
+        state = { requests: {}, completedRequests: { permission: completed } };
+        apply();
+        accept();
+        await flushMicrotasks();
+        expect(state).toEqual({ requests: {}, completedRequests: { permission: completed } });
+        expect(notifyRequest).not.toHaveBeenCalled();
+        store.dispose();
+    });
+
+    it('does not notify a withdrawn question after its delayed publication acknowledgement', async () => {
+        let state: AgentState = { requests: {}, completedRequests: {} };
+        let acceptPublication!: () => void;
+        const notifyRequest = vi.fn(); // Notification transport is the external boundary.
+        const store = new AgentStateRequestStore({ logPrefix: '[Late question]', target: {
+            scopeId: 'late-question', readState: () => state, notifyRequest,
+            updateState: updater => {
+                state = updater(state);
+                if (!acceptPublication) return new Promise<void>(resolve => { acceptPublication = resolve; });
+            },
+        } });
+        const publication = store.publishRequestAndWait({ requestId: 'question', toolName: 'AskUserQuestion',
+            toolInput: {}, createdAt: 1, kind: 'user_action' });
+        expect(notifyRequest).not.toHaveBeenCalled();
+        await store.cancelAllRequests({ reason: 'Explicit person Stop', requestIds: [] });
+        acceptPublication();
+        await publication;
+        expect(state.requests).toEqual({});
+        expect(state.completedRequests?.question).toMatchObject({ status: 'canceled', reason: 'Explicit person Stop' });
+        expect(notifyRequest).not.toHaveBeenCalled();
+        store.dispose();
+    });
+
+    it('retains rule evidence on the original question and notifies only its committed live occurrence', async () => {
+        let accept!: () => void;
+        const committed: Array<Readonly<{ requestId: string; createdAt: number; turnId?: string; evidence: SessionFollowRuleSourceEvidenceV1 }>> = [];
+        class SourceSession extends FakeSession {
+            captureSessionFollowRuleEvidence(event: FollowEventV1) {
+                return captureSemanticSessionFollowRuleSourceEvidence({ serverId: 'home', ownerAccountId: 'alice',
+                    origin: { kind: 'none' }, event });
+            }
+            notifySessionFollowRuleRequestCommitted(occurrence: (typeof committed)[number]) { committed.push(occurrence); }
+            override updateAgentState(updater: (state: AgentState) => AgentState): Promise<void> {
+                this.agentState = AgentStateSchema.parse(JSON.parse(JSON.stringify(updater(this.agentState))));
+                return new Promise(resolve => { accept = resolve; });
+            }
+        }
+        const session = new SourceSession();
+        const store = new AgentStateRequestStore({ session, logPrefix: '[Rule request]' });
+        const publication = { requestId: 'question', toolName: 'AskUserQuestion', toolInput: {}, createdAt: 7,
+            turnId: 'turn', kind: 'user_action', questionV1: { mode: 'continue', type: 'blocked', assumption: 'Continue on the current revision', lasting: false },
+            currentHandler: { kind: 'session', sessionId: 'manager' } } as const;
+        const pending = store.publishRequestAndWait(publication);
+        expect(committed).toEqual([]);
+        expect(session.agentState.requests?.question).toMatchObject({ happierFollowRuleEvidenceV1: {
+            event: { kind: 'needs_you', type: 'blocked', mode: 'continue', handling: 'manager' },
+        } });
+        accept();
+        await pending;
+        expect(committed).toEqual([{ requestId: 'question', createdAt: 7, turnId: 'turn',
+            evidence: session.agentState.requests!.question.happierFollowRuleEvidenceV1 }]);
+        const replay = store.publishRequestAndWait(publication);
+        accept();
+        await replay;
+        expect(session.agentState.requests!.question.happierFollowRuleEvidenceV1).toEqual(committed[0].evidence);
+        const withdrawn = store.publishRequestAndWait({ ...publication, requestId: 'withdrawn' });
+        delete session.agentState.requests!.withdrawn;
+        accept();
+        await withdrawn;
+        expect(committed.map(occurrence => occurrence.requestId)).toEqual(['question', 'question']);
+        store.dispose();
+    });
+    it.each([
+        { questionV1: { mode: 'continue', lasting: false } },
+        { currentHandler: { kind: 'session', sessionId: '' } },
+    ])('refuses malformed stored question metadata instead of reopening it as a legacy wait question', (metadata) => {
+        const session = new FakeSession();
+        // Raw persisted bytes are the boundary under test, before the SessionCore schema is applied.
+        Object.assign(session.agentState.requests!, { malformed: { tool: 'AskUserQuestion', kind: 'user_action',
+            arguments: {}, createdAt: 1, ...metadata } });
+        const store = new AgentStateRequestStore({ session, logPrefix: '[Test]' });
+        expect(() => store.readOutstandingRequest('malformed')).toThrow('invalid_question_metadata');
+        const owner = new PermissionRequestCoordinator<string>({ store });
+        expect(() => owner.requestDecision({ requestId: 'malformed', toolName: 'AskUserQuestion', toolInput: {}, createdAt: 1 }))
+            .toThrow('invalid_question_metadata');
+        store.dispose();
+    });
+    it('withdraws questions on archived Session rehydrate before rejoin or response delivery', async () => {
+        class ArchivedSession extends FakeSession {
+            getArchivedAtSnapshot() { return 42; }
+        }
+        const session = new ArchivedSession();
+        session.agentState.requests!.question = { tool: 'AskUserQuestion', kind: 'user_action',
+            arguments: { questions: [{ question: 'Continue?' }] }, createdAt: 1 };
+        session.agentState.completedRequests!.answered = { tool: 'AskUserQuestion', kind: 'user_action',
+            arguments: {}, createdAt: 1, completedAt: 2, status: 'approved', decision: 'approved',
+            responseTarget: { kind: 'test_target' } };
+        const store = new AgentStateRequestStore({ session, logPrefix: '[Archive]' });
+        const delivered = vi.fn(); // Native response delivery is the process boundary.
+        store.registerResponseTargetHandler('test_target', delivered);
+        expect(store.readOutstandingRequest('question')).toBeNull();
+        await vi.waitFor(() => expect(session.agentState.completedRequests!.question)
+            .toMatchObject({ status: 'canceled', reason: 'Session archived' }));
+        expect(session.agentState.requests!.question).toBeUndefined();
+        expect(delivered).not.toHaveBeenCalled();
+        await expect(store.publishRequestAndWait({ requestId: 'new-question', toolName: 'AskUserQuestion',
+            toolInput: {}, createdAt: 3 })).rejects.toThrow('session_archived');
+        store.dispose();
+    });
+
+    it('refuses a live question application immediately after archive, before withdrawal is flushed', async () => {
+        class ArchivingSession extends FakeSession {
+            archivedAt: number | null = null;
+            getArchivedAtSnapshot() { return this.archivedAt; }
+        }
+        const session = new ArchivingSession();
+        const store = new AgentStateRequestStore({ session, logPrefix: '[Archive application]' });
+        const owner = new PermissionRequestCoordinator<string>({ store });
+        const pending = owner.requestDecision({ requestId: 'live-question', toolName: 'AskUserQuestion',
+            toolInput: {}, createdAt: 1 }).catch(() => null);
+        const context = owner.getResponseContext('live-question')!;
+        // The raw archive fact is already authoritative even when its
+        // asynchronous withdrawal has not yet reached AgentState.
+        session.archivedAt = 42;
+        const acknowledge = vi.fn(async () => undefined); // Native application is a process boundary.
+        await expect(owner.completeResponse({ context, completion: { result: 'answer',
+            completedRequest: { status: 'approved', decision: 'approved' } },
+            acknowledgeDecisionApplication: acknowledge })).resolves.toBe(false);
+        expect(acknowledge).not.toHaveBeenCalled();
+        // Store-only/orphan completion must obey the same archive fact.
+        await expect(store.completeRequest({ requestId: 'live-question', status: 'approved', decision: 'approved' }))
+            .resolves.toBe(false);
+        expect(session.agentState.requests?.['live-question']).toBeDefined();
+        await store.reconcileSessionArchive();
+        await owner.cancelAll('Session archived');
+        await pending;
+        expect(session.agentState.completedRequests?.['live-question'])
+            .toMatchObject({ status: 'canceled', reason: 'Session archived' });
+        store.dispose();
+    });
+
+    it('rejoins a manager-handled question without changing its handler and passes up the same request once', async () => {
+        let state: AgentState = { requests: {}, completedRequests: {} };
+        const notifyRequest = vi.fn();
+        const store = new AgentStateRequestStore({ target: {
+            scopeId: 'question-session', readState: () => state,
+            updateState: updater => {
+                // This persistence boundary stores the real producer's JSON bytes.
+                state = JSON.parse(JSON.stringify(updater(state))) as AgentState;
+            },
+            notifyRequest,
+        }, logPrefix: '[Test]' });
+        const questionV1 = { mode: 'continue', assumption: 'Use revision 3', lasting: false } as const;
+        const manager = { kind: 'session', sessionId: 'manager' } as const;
+        const request = { requestId: 'question', toolName: 'AskUserQuestion', kind: 'user_action',
+            toolInput: { questions: [{ question: 'Which revision?' }] }, createdAt: 100,
+            lifetime: 'occurrence', questionV1, currentHandler: manager } as const;
+        const first = new PermissionRequestCoordinator<string>({ store });
+        void first.requestDecision(request);
+        expect(notifyRequest).not.toHaveBeenCalled();
+        const rejoined = new PermissionRequestCoordinator<string>({ store });
+        const answer = rejoined.requestDecision({ ...request, currentHandler: { kind: 'person' } });
+        expect(rejoined.getResponseContext('question')).toMatchObject({ questionV1, currentHandler: manager, createdAt: 100 });
+        store.publishRequest({ ...request, currentHandler: { kind: 'person' } });
+        store.publishRequest({ requestId: request.requestId, toolName: request.toolName,
+            toolInput: request.toolInput, createdAt: request.createdAt, kind: request.kind });
+        expect(store.readOutstandingRequest('question')).toMatchObject({ questionV1, currentHandler: manager });
+        expect(notifyRequest).not.toHaveBeenCalled();
+        const nextManager = { kind: 'session', sessionId: 'next-manager' } as const;
+        await expect(rejoined.changeQuestionHandler({ requestId: 'question', expectedCreatedAt: 100, expectedHandler: manager,
+            currentHandler: nextManager })).resolves.toBe(true);
+        expect(notifyRequest).not.toHaveBeenCalled();
+        await expect(rejoined.changeQuestionHandler({ requestId: 'question', expectedCreatedAt: 100, expectedHandler: manager,
+            currentHandler: { kind: 'person' } })).resolves.toBe(false);
+        await expect(rejoined.changeQuestionHandler({ requestId: 'question', expectedCreatedAt: 100, expectedHandler: nextManager,
+            currentHandler: { kind: 'person' } })).resolves.toBe(true);
+        await expect(rejoined.changeQuestionHandler({ requestId: 'question', expectedCreatedAt: 100, expectedHandler: nextManager,
+            currentHandler: { kind: 'person' } })).resolves.toBe(false);
+        expect(notifyRequest).toHaveBeenCalledTimes(1);
+        expect(state.requests?.question).toMatchObject({ createdAt: 100, questionV1, currentHandler: { kind: 'person' } });
+        expect(isSameAgentStateRequestOccurrence({ ...state.requests?.question, currentHandler: manager }, state.requests?.question)).toBe(true);
+        expect(state.completedRequests).toEqual({});
+        await rejoined.handleResponse({ requestId: 'question', buildCompletion: () => ({
+            result: 'revision-3', completedRequest: { status: 'approved', answeredBy: manager,
+                structuredAnswersV1: { 'Which revision?': ['revision-3'] } },
+        }) });
+        await expect(answer).resolves.toBe('revision-3');
+        expect(state.completedRequests?.question).toMatchObject({ questionV1, currentHandler: { kind: 'person' }, answeredBy: manager,
+            structuredAnswersV1: { 'Which revision?': ['revision-3'] } });
+        expect(AgentStateSchema.parse(state).completedRequests?.question).toMatchObject({ questionV1, answeredBy: manager });
+        await expect(rejoined.changeQuestionHandler({ requestId: 'question', expectedCreatedAt: 100, expectedHandler: { kind: 'person' },
+            currentHandler: manager })).resolves.toBe(false);
+        store.dispose();
+    });
+    it('returns only cancellation subjects from the committed CAS attempt', async () => {
+        class RetriedSession extends FakeSession {
+            override updateAgentState(updater: (state: AgentState) => AgentState) {
+                // The transport discards the first candidate after a version conflict.
+                updater({ requests: { discarded: { tool: 'Bash', arguments: {}, createdAt: 1 } } });
+                this.agentState = updater({ requests: { committed: { tool: 'Bash', arguments: {}, createdAt: 2 } } });
+            }
+        }
+        const session = new RetriedSession();
+        const store = new AgentStateRequestStore({ session, logPrefix: '[Test]' });
+
+        const canceled = await store.cancelAllRequests({ reason: 'Session ended', requestIds: [] });
+
+        expect(canceled).toEqual([
+            { requestId: 'committed', completedRequest: expect.objectContaining({ createdAt: 2, status: 'canceled' }) },
+        ]);
+        expect(session.agentState.requests).toEqual({});
+        expect(session.agentState.completedRequests).not.toHaveProperty('discarded');
+        store.dispose();
+    });
+
+    it('does not report or notify a question pass-up discarded by a terminal-state CAS retry', async () => {
+        const manager = { kind: 'session', sessionId: 'manager' } as const;
+        const pending = { tool: 'AskUserQuestion', kind: 'user_action', arguments: {}, createdAt: 1,
+            questionV1: { mode: 'wait', lasting: false }, currentHandler: manager } as const;
+        const completed = { ...pending, status: 'approved', completedAt: 2 } as const;
+        let state: AgentState = { requests: { question: pending }, completedRequests: {} };
+        const notifyRequest = vi.fn();
+        const store = new AgentStateRequestStore({ target: {
+            scopeId: 'question-session', readState: () => state, notifyRequest,
+            updateState: updater => {
+                updater(state);
+                state = updater({ requests: {}, completedRequests: { question: completed } });
+            },
+        }, logPrefix: '[Test]' });
+        await expect(store.changeQuestionHandler({ requestId: 'question', expectedCreatedAt: 1, expectedHandler: manager,
+            currentHandler: { kind: 'person' } })).resolves.toBe(false);
+        expect(state.requests).toEqual({});
+        expect(state.completedRequests?.question).toEqual(completed);
+        expect(notifyRequest).not.toHaveBeenCalled();
+        store.dispose();
+    });
+
+    it('cannot pass up a replacement question that reused the request id and handler', async () => {
+        const session = new FakeSession();
+        const manager = { kind: 'session', sessionId: 'manager' } as const;
+        session.agentState.requests!.question = { tool: 'AskUserQuestion', kind: 'user_action', arguments: {}, createdAt: 200,
+            questionV1: { mode: 'wait', lasting: true }, currentHandler: manager };
+        const store = new AgentStateRequestStore({ session, logPrefix: '[Test]' });
+        await expect(store.changeQuestionHandler({ requestId: 'question', expectedCreatedAt: 100,
+            expectedHandler: manager, currentHandler: { kind: 'person' } })).resolves.toBe(false);
+        expect(store.readOutstandingRequest('question')).toMatchObject({ createdAt: 200, currentHandler: manager });
+        store.dispose();
+    });
+
     it.each<PermissionResponseClaim>([
         { version: 1, origin: 'automaticPolicy' },
         { version: 1, origin: 'approvalReviewer', turnId: 'turn-1', decision: 'approved', scope: 'request' },
@@ -84,7 +479,8 @@ describe('AgentStateRequestStore', () => {
         const session = new FakeSession();
         const store = new AgentStateRequestStore({ session, logPrefix: '[Test]' });
         const sourceAuthority = { kind: 'mediatedExternal', mediatorPluginId: 'happier.channels', sourceRef: 'binding:ops', sourceRevisionOrEpoch: '42', admittedPermissionCeiling: 'default', remoteApprovalMaxScope: 'session' } as const;
-        session.agentState.requests!.retained = { tool: 'Bash', arguments: {}, createdAt: 1, owner: { kind: 'plugin', pluginId: 'provider.codex', sourceAuthority: { ...sourceAuthority, retired: true } } };
+        const retained = { tool: 'Bash', arguments: {}, createdAt: 1, owner: { kind: 'plugin', pluginId: 'provider.codex', sourceAuthority: { ...sourceAuthority, retired: true } } };
+        session.agentState.requests!.retained = retained;
         expect(store.readOutstandingRequest('retained')?.owner).toEqual({ kind: 'plugin', pluginId: 'provider.codex', sourceAuthority });
         await store.cancelRequestsByOwner({ owner: { kind: 'plugin', pluginId: 'provider.codex' }, reason: 'Plugin stopped', requestIds: ['retained'] });
         expect(session.agentState.requests!.retained).toBeUndefined();
@@ -181,6 +577,7 @@ describe('AgentStateRequestStore', () => {
 
     afterEach(() => {
         vi.restoreAllMocks();
+        resetActiveAccountSettingsSnapshotForTests();
     });
 
     it('publishes and completes a request', () => {
@@ -579,7 +976,8 @@ describe('AgentStateRequestStore', () => {
             session,
             logPrefix: '[Test]',
         });
-        const failedDelivery = vi.fn(async () => false);
+        let available = false;
+        const failedDelivery = vi.fn(async () => available);
         const debug = vi.spyOn(logger, 'debug').mockImplementation(() => undefined);
 
         const unregisterFailedDelivery = store.registerResponseTargetHandler('test_target', failedDelivery);
@@ -599,14 +997,12 @@ describe('AgentStateRequestStore', () => {
 
         expect(failedDelivery).toHaveBeenCalledTimes(1);
         expect(debug).toHaveBeenCalledWith(expect.stringContaining('Response target handler did not deliver'));
-        unregisterFailedDelivery();
-
-        const recoveredDelivery = vi.fn(async () => true as never);
-        const unregisterRecoveredDelivery = store.registerResponseTargetHandler('test_target', recoveredDelivery);
+        available = true;
+        store.replayCompletedResponseTargets();
         await flushMicrotasks();
 
-        expect(recoveredDelivery).toHaveBeenCalledTimes(1);
-        expect(recoveredDelivery).toHaveBeenCalledWith(expect.objectContaining({
+        expect(failedDelivery).toHaveBeenCalledTimes(2);
+        expect(failedDelivery).toHaveBeenLastCalledWith(expect.objectContaining({
             requestId: 'req-recoverable-delivery',
             responseTarget: { kind: 'test_target', requestOwner: 'owner-1' },
             completedRequest: expect.objectContaining({
@@ -615,7 +1011,7 @@ describe('AgentStateRequestStore', () => {
             }),
         }));
 
-        unregisterRecoveredDelivery();
+        unregisterFailedDelivery();
         const repeatDelivery = vi.fn(async () => true as never);
         store.registerResponseTargetHandler('test_target', repeatDelivery);
         await flushMicrotasks();
@@ -642,6 +1038,8 @@ describe('AgentStateRequestStore', () => {
             store.publishRequest({ requestId, turnId, toolName: 'Bash', toolInput: { command: requestId }, createdAt: 1 });
             await store.completeRequest({ requestId, status: 'approved', decision });
         }
+        store.publishRequest({ requestId: 'question-still-open', turnId: 'turn-a', toolName: 'AskUserQuestion',
+            toolInput: { questions: [{ question: 'Continue?' }] }, createdAt: 1 });
 
         await store.retireCompletedRequestsForTurn('turn-a');
 
@@ -651,6 +1049,7 @@ describe('AgentStateRequestStore', () => {
             decision: 'approved_for_session',
         });
         expect(session.agentState.completedRequests?.['current-plain']).toMatchObject({ turnId: 'turn-b' });
+        expect(session.agentState.requests?.['question-still-open']).toMatchObject({ turnId: 'turn-a' });
     });
 
     it('compacts a terminal turn when its in-flight response delivery later succeeds', async () => {

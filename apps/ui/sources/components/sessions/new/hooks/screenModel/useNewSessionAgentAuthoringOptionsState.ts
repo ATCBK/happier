@@ -260,13 +260,15 @@ export function useNewSessionAgentAuthoringOptionsState(params: Readonly<{
         params.hydratedPersistedAuthoringDraft,
     ]);
 
-    const bundledAgentTarget = isBundledAgentId(params.agentType)
-        ? resolveAgentExecutionTargetForBackendTarget({
-            backendTarget: { kind: 'backend', backendId: params.agentType },
-        })
-        : null;
-    const effectiveModelTargetKey = currentBackendTargetKey
-        ?? resolveBackendTargetKeyV2(bundledAgentTarget ?? { kind: 'backend', backendId: params.agentType });
+    const effectiveModelTargetKey = React.useMemo(() => {
+        if (currentBackendTargetKey !== null) return currentBackendTargetKey;
+        const bundledAgentTarget = isBundledAgentId(params.agentType)
+            ? resolveAgentExecutionTargetForBackendTarget({
+                backendTarget: { kind: 'backend', backendId: params.agentType },
+            })
+            : null;
+        return resolveBackendTargetKeyV2(bundledAgentTarget ?? { kind: 'backend', backendId: params.agentType });
+    }, [currentBackendTargetKey, params.agentType]);
     const resolvedModelState = React.useMemo(() => resolveAuthoringModelState({
         ...params,
         agentTargetKey: effectiveModelTargetKey,

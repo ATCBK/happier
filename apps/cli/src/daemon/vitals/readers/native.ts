@@ -19,10 +19,11 @@ export function createNativeMachineVitalsReader(platform: 'darwin' | 'win32', op
         resolveExecutable: () => options.executablePath === undefined ? resolveProcessCustodySupportExecutable(platform) : options.executablePath });
     const cpuDelta = createCounterRateReader();
     const networkDelta = createCounterRateReader();
+    const excludedNetworkDelta = createCounterRateReader();
     const swapDelta = createCounterRateReader();
     let host: MachineVitalsHostFactsV1 | undefined;
     let extrasAt = -Infinity;
-    let extras: { composition?: NativeVitalsSample['memory']['composition']; battery?: MachineVitalsSampleV1['battery'] } = {};
+    let extras: { battery?: MachineVitalsSampleV1['battery'] } = {};
     return { read: async (input) => {
         const readExtras = input.overviewExtras && input.monotonicMs - extrasAt >= 15_000;
         const outcome = await invoke({ command: 'vitals-sample', sampledAt: input.sampledAt, args: readExtras ? ['--extras'] : [], signal: options.signal });
@@ -41,29 +42,23 @@ export function createNativeMachineVitalsReader(platform: 'darwin' | 'win32', op
         const totalDelta = delta ? Object.values(delta.deltas).reduce((sum, value) => sum + value, 0) : 0;
         const perCore = cpu.map((_, index) => delta ? pct(delta.deltas[index * 3] + delta.deltas[index * 3 + 1], delta.deltas[index * 3] + delta.deltas[index * 3 + 1] + delta.deltas[index * 3 + 2]) : null);
         const interfaces = [...raw.interfaces].sort((a, b) => a.id.localeCompare(b.id));
-        const networkCounters = Object.fromEntries(interfaces.flatMap((iface, index) => [[String(index * 2), iface.rxBytes], [String(index * 2 + 1), iface.txBytes], [`id:${iface.id}:${iface.included}`, 0]]));
-        const nd = networkDelta({ monotonicMs: input.monotonicMs, counters: networkCounters }, input.intervalMs);
-        const networkInterfaces = interfaces.map((iface, index) => ({ id: iface.id, label: iface.name, included: iface.included,
-            rxBps: nd ? nd.deltas[index * 2] * 1000 / nd.elapsedMs : null, txBps: nd ? nd.deltas[index * 2 + 1] * 1000 / nd.elapsedMs : null }));
         const included = interfaces.filter((iface) => iface.included);
+        const networkCounters = (entries: typeof interfaces) => Object.fromEntries(entries.flatMap(iface => [[`${iface.id}:rx`, iface.rxBytes], [`${iface.id}:tx`, iface.txBytes]]));
+        const nd = networkDelta({ monotonicMs: input.monotonicMs, counters: networkCounters(included) }, input.intervalMs);
+        const excludedDelta = excludedNetworkDelta({ monotonicMs: input.monotonicMs, counters: networkCounters(interfaces.filter(iface => !iface.included)) }, input.intervalMs);
+        const networkInterfaces = interfaces.map((iface) => {
+            const delta = iface.included ? nd : excludedDelta;
+            return { id: iface.id, label: iface.name, included: iface.included,
+                rxBps: delta ? delta.deltas[`${iface.id}:rx`] * 1000 / delta.elapsedMs : null,
+                txBps: delta ? delta.deltas[`${iface.id}:tx`] * 1000 / delta.elapsedMs : null };
+        });
         const rxBytes = included.reduce((sum, iface) => sum + iface.rxBytes, 0);
         const txBytes = included.reduce((sum, iface) => sum + iface.txBytes, 0);
         const rates = networkInterfaces.filter((iface) => iface.included);
         const busiest = nd ? [...rates].sort((a, b) => (b.rxBps ?? 0) + (b.txBps ?? 0) - (a.rxBps ?? 0) - (a.txBps ?? 0))[0] : undefined;
         const swap = raw.memory.swap;
         const sd = swap?.in !== undefined && swap.out !== undefined ? swapDelta({ monotonicMs: input.monotonicMs, counters: { in: swap.in, out: swap.out } }, input.intervalMs) : null;
-        if (readExtras) { extrasAt = input.monotonicMs; extras = { composition: raw.memory.composition, battery: raw.battery }; }
-        const usedBytes = raw.memory.totalBytes - raw.memory.availableBytes;
-        let composition: NativeVitalsSample['memory']['composition'];
-        if (input.overviewExtras && extras.composition) {
-            let remainder = usedBytes;
-            const segments = extras.composition.filter((segment) => segment.kind !== 'apps').map((segment) => {
-                const bytes = Math.min(remainder, segment.bytes);
-                remainder -= bytes;
-                return { kind: segment.kind, bytes };
-            });
-            composition = [{ kind: 'apps', bytes: remainder }, ...segments];
-        }
+        if (readExtras) { extrasAt = input.monotonicMs; extras = { battery: raw.battery }; }
         const load = platform === 'darwin' ? (options.readLoadAverage ?? loadavg)().map((value) => value / cpu.length) : undefined;
         const sample: MachineVitalsSampleV1 = {
             v: 1, sampledAt: input.sampledAt, intervalMs: input.intervalMs,
@@ -75,7 +70,7 @@ export function createNativeMachineVitalsReader(platform: 'darwin' | 'win32', op
                 ...(raw.memory.lowMemorySignal !== undefined ? { lowMemorySignal: raw.memory.lowMemorySignal } : {}),
                 ...(swap ? { swap: { kind: swap.kind, totalBytes: swap.totalBytes, usedBytes: swap.usedBytes, swapping: sd ? Object.values(sd.deltas).some((value) => value > 0) : false },
                     ...(swap.kind === 'page_file' ? { commitUsedBytes: swap.usedBytes, commitLimitBytes: swap.totalBytes } : {}) } : {}),
-                ...(composition ? { composition } : {}) },
+                ...(raw.memory.composition ? { composition: raw.memory.composition } : {}) },
             disk: { reported: true, volumes: raw.volumes },
             network: { reported: true, rxBps: nd ? rates.reduce((sum, iface) => sum + (iface.rxBps ?? 0), 0) : null, txBps: nd ? rates.reduce((sum, iface) => sum + (iface.txBps ?? 0), 0) : null,
                 interfaces: networkInterfaces, ...(busiest ? { label: busiest.label } : {}) },

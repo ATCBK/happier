@@ -1,3 +1,4 @@
+/** @vitest-environment jsdom */
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -122,6 +123,23 @@ describe('WarningActionBanner', () => {
         });
     });
 
+    it('floats over content on an opaque paper base with the floating rim, and in-flow banners stay flat', async () => {
+        const { WarningActionBanner } = await import('./WarningActionBanner');
+
+        const inFlow = await renderScreen(<WarningActionBanner testID="warning" title="Draft conflict" />);
+        expect(inFlow.findByTestId('warning-floating')).toBeNull();
+        expect(inFlow.findAll((node) => String(node.type) === 'Rect')).toHaveLength(0);
+
+        const floating = await renderScreen(<WarningActionBanner testID="warning" title="Couldn't load" floating />);
+        const frame = floating.findByTestId('warning-floating');
+        // The amber tint stays translucent on the banner; the paper under it is opaque and its own owner's.
+        expect(flattenStyle(frame?.props.style)).toMatchObject({ backgroundColor: lightTheme.colors.edge.floatingFill });
+        expect(flattenStyle(floating.findByTestId('warning')?.props.style)).toMatchObject({
+            backgroundColor: lightTheme.colors.state.warning.background,
+        });
+        expect(floating.findAll((node) => String(node.type) === 'Rect').length).toBeGreaterThan(0);
+    });
+
     it('gives every banner action the shared interaction owner: keyboard focus ring and busy state', async () => {
         const { WarningActionBanner } = await import('./WarningActionBanner');
         const screen = await renderScreen(
@@ -146,7 +164,8 @@ describe('WarningActionBanner', () => {
 
         const secondary = screen.findByTestId('warning-not-now')!;
         expect(flattenStyle(secondary.props.style({ pressed: false })).outlineStyle).not.toBe('solid');
-        await act(async () => { secondary.props.onFocus({}); });
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+        await act(async () => { secondary.props.onFocus({ target: { matches: (selector: string) => selector === ':focus-visible' } }); });
         expect(flattenStyle(screen.findByTestId('warning-not-now')!.props.style({ pressed: false })))
             .toMatchObject({ outlineStyle: 'solid', outlineWidth: 2 });
 

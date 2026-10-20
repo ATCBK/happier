@@ -6,6 +6,7 @@ import { buildApprovalRequestArtifactHeaderV1, decodePlainArtifactStoredContent,
     sealSavedSecretResourceStoredContentV1, tryWriteServerEnabledBitInPlace, StoredApprovalRequestSchema,
     type ApprovalRequestV2, type SavedSecretResourceStoredContentV1 } from '@happier-dev/protocol';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { SharedSavedSecretCreateInputV1Schema, SharedSavedSecretPromoteInputV1Schema,
     SharedSavedSecretUpdateInputV1Schema, SharedSavedSecretGrantsSetInputV1Schema,
     SavedSecretResourceEnvelopeRepairInputV1Schema, SHARED_SAVED_SECRET_ACTION_PATHS_V1 } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
@@ -23,21 +24,23 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { createAccountTokenForTests, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
 import { getSyncSingleton } from '@/sync/runtime/getSyncSingleton';
 import { storage } from '@/sync/domains/state/storage';
 import { encryptDataKeyForRecipientV0 } from '@/sync/encryption/directShareEncryption';
 import { decodeBase64, encodeBase64 } from '@/encryption/base64';
-import type { Artifact, ArtifactCreateRequest, DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
+import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import { resetTeamActionClientForTests, TeamActionApprovalPendingError } from '@/sync/ops/teams/teamActionClient';
 import { createSavedSecretResource, promotePersonalSavedSecretResource, updateSavedSecretResource,
     deleteSavedSecretResource, setSavedSecretResourceGrants, repairCustodiedSavedSecretResourceEnvelopesBestEffort,
     captureSavedSecretReferenceStateInContext, importLegacySavedSecretsInContext } from './savedSecretResourceOperations';
 import { withProfileAccount } from '@/sync/api/account/apiProfileCatalog';
 import { sealPromptLibraryContentV1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
-import { RegistrySourcesRecordV1Schema } from '@happier-dev/protocol/registries/registrySourcesV1';
+import { RegistrySourcesRecordV1Schema } from '@happier-dev/protocol/registries';
 import { prepareConnectedAccountCatalogMutationInContext, readConnectedAccountCatalogInContext } from '@/sync/api/account/apiConnectedAccountCatalog';
 import { ConnectedAccountCatalogRowMutationV1Schema, type ConnectedAccountCatalogRecordV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { renderHook, renderScreen, standardCleanup, createDeferred } from '@/dev/testkit';
@@ -70,7 +73,7 @@ import { normalizeVoiceSettingsServerDelta } from '@/sync/domains/settings/voice
 import { LegacyVoiceCredentialBindingV1Schema } from '@happier-dev/protocol/voice/realtime/providerSettings';
 import { installLocalStorageMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { clearActiveUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
-import { captureActiveServerAccountScopeCurrentness } from '@/sync/domains/scope/activeServerAccountScope';
+import { captureActiveServerAccountScopeCurrentness, getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { NOTIFICATION_CHANNELS_ROUTE_V1, NotificationChannelCatalogRecordV1Schema,
     NotificationChannelCatalogMutationV1Schema, openNotificationChannelCatalogContentV1,
     sealNotificationChannelCatalogContentV1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
@@ -133,12 +136,16 @@ async function openAccount(mode: 'plain' | 'e2ee' = 'plain', options: { ask?: bo
     // Server fixture material remains available when the client deliberately has token-only credentials.
     let serverCredentials = { token: credentials.token, secret: encodeBase64(new Uint8Array(32).fill(24), 'base64url') };
     const actionsSettingsV1 = ActionsSettingsV1Schema.parse({ v: 1, ...(options.ask ? { actions: {
+        'secrets.create': { approvalRequiredSurfaces: ['ui'] },
+        'secrets.update': { approvalRequiredSurfaces: ['ui'] },
+        'secrets.delete': { approvalRequiredSurfaces: ['ui'] },
         'secrets.shared.create': { approvalRequiredSurfaces: ['ui'] },
         'secrets.shared.promote': { approvalRequiredSurfaces: ['ui'] },
         'secrets.shared.update': { approvalRequiredSurfaces: ['ui'] },
         'secrets.shared.delete': { approvalRequiredSurfaces: ['ui'] },
         'secrets.shared.grants.set': { approvalRequiredSurfaces: ['ui'] },
     } } : { approvalWaivedSurfaces: {
+        'secrets.delete': ['ui'],
         'secrets.shared.create': ['ui'], 'secrets.shared.promote': ['ui'], 'secrets.shared.update': ['ui'],
         'secrets.shared.delete': ['ui'], 'secrets.shared.grants.set': ['ui'],
     } }) });
@@ -157,7 +164,7 @@ async function openAccount(mode: 'plain' | 'e2ee' = 'plain', options: { ask?: bo
         voicePresent: boolean }[] = [];
     const censusReads: string[] = [];
     const catalogReadPaths: string[] = [];
-    const artifacts: Artifact[] = [];
+    const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => accountId, encryptionMode: mode });
     let materialReadStatus = 200;
     let beforeMaterialRead: (() => void | Promise<void>) | undefined;
     let beforeCatalogRead: ((path: string) => void | Promise<void>) | undefined;
@@ -182,6 +189,7 @@ async function openAccount(mode: 'plain' | 'e2ee' = 'plain', options: { ask?: bo
         request: async (rawUrl, init) => {
             const path = new URL(String(rawUrl)).pathname;
             if (path === '/health') return Response.json({});
+            if (path === '/v1/account/profile') return Response.json(AccountProfileSchema.parse({ id: accountId }));
             if (path === AUTHORING_MEMORY_ROUTE_V1) return Response.json(AuthoringMemoryListResponseV1Schema.parse({ rows: [] }));
             if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list` && init?.method === 'POST') {
                 return Response.json({ status: 'listed', rows: [], coverage: 'complete' });
@@ -236,14 +244,8 @@ async function openAccount(mode: 'plain' | 'e2ee' = 'plain', options: { ask?: bo
                 await beforeCatalogRead?.(path);
                 return Response.json(catalogRows.get(path) ?? { status: 'absent' });
             }
-            if (path === '/v1/artifacts' && init?.method === 'POST') {
-                const write = JSON.parse(String(init.body)) as ArtifactCreateRequest;
-                const stored: Artifact = { ...write, ownerAccountId: accountId, access: 'owner', encryptionMode: persistedMode,
-                    seq: 1, headerVersion: 1, bodyVersion: 1, createdAt: 1, updatedAt: 1 };
-                artifacts.push(stored);
-                return Response.json(stored);
-            }
-            if (path === '/v1/artifacts') return Response.json(artifacts);
+            const artifactResponse = artifacts.handle(new URL(String(rawUrl)).pathname + new URL(String(rawUrl)).search, init);
+            if (artifactResponse) return await artifactResponse;
             if (path === '/v1/account/saved-secrets/resources/materials') {
                 const response = materialReadStatus === 200
                     ? Response.json({ resources: [...resources.values()] })
@@ -282,10 +284,12 @@ async function openAccount(mode: 'plain' | 'e2ee' = 'plain', options: { ask?: bo
             }
             return Response.json({ error: 'not_found' }, { status: 404 });
         } });
-    if (options.ask) {
-        await vi.waitFor(() => expect(storage.getState().settings.actionsSettingsV1).toEqual(actionsSettingsV1));
-    }
     const scope = { serverId: resolveServerProfileScopeIdForIdentifier(connection.home.id), accountId };
+    await waitForHomeGovernance(() => {
+        expect(getActiveServerAccountScope()).toEqual(scope);
+        expect(storage.getState().settingsScope).toEqual(scope);
+        expect(storage.getState().settings.actionsSettingsV1).toEqual(actionsSettingsV1);
+    });
     function materialRow(resourceId: string, resourceMode: 'plain' | 'e2ee', storedContent: SavedSecretResourceStoredContentV1,
         revision = 3, key?: Uint8Array, relationship: 'owner' | 'recipient' = 'owner') {
         const encryption = getSyncSingleton().encryption;
@@ -302,7 +306,7 @@ async function openAccount(mode: 'plain' | 'e2ee' = 'plain', options: { ask?: bo
         resources.set(resourceId, row);
         return row;
     }
-    return { scope, writes, settingsWriteStacks, sourceReads, censusReads, catalogReadPaths, artifacts, rows, catalogRows, resources, materialRow,
+    return { scope, writes, settingsWriteStacks, sourceReads, censusReads, catalogReadPaths, get artifacts() { return artifacts.list(); }, rows, catalogRows, resources, materialRow,
         get raw() { return raw; }, set raw(value: Record<string, unknown>) { raw = value; },
         get settingsVersion() { return settingsVersion; }, set settingsVersion(value: number) { settingsVersion = value; },
         get referenceGuardRevision() { return referenceGuardRevision; }, set referenceGuardRevision(value: number) { referenceGuardRevision = value; },
@@ -358,6 +362,14 @@ describe('Saved Secret operations through their real Account and Action owners',
     });
     it('private creation approval remains presented by the existing editor without replaying its Action', async () => {
         const account = await openAccount('plain', { ask: true });
+        let resourceRef: string | undefined;
+        account.setEffect((path, body) => {
+            expect(path).toBe(SHARED_SAVED_SECRET_ACTION_PATHS_V1['secrets.shared.create']);
+            const input = SharedSavedSecretCreateInputV1Schema.parse(body);
+            resourceRef = `happier:shared-secret:v1:${input.resourceId}`;
+            account.materialRow(input.resourceId, 'plain', input.storedContent, 1);
+            return Response.json({ resourceId: input.resourceId, revision: 1 });
+        });
         const onCreated = vi.fn();
         const screen = await renderScreen(React.createElement(PrivateSavedSecretCreateHarness, { scope: account.scope, onCreated }));
         await act(async () => {
@@ -373,23 +385,20 @@ describe('Saved Secret operations through their real Account and Action owners',
         const body = decodePlainArtifactStoredContent(artifact.body!);
         if (!body || typeof body !== 'object') throw new Error('Expected actual Plain approval body');
         const request = StoredApprovalRequestSchema.parse(JSON.parse(String(Reflect.get(body, 'body'))));
-        if (request.v !== 2 || !request.actionArgs || typeof request.actionArgs !== 'object') throw new Error('Expected immutable create approval');
-        const resourceId = Reflect.get(request.actionArgs, 'resourceId');
-        if (typeof resourceId !== 'string') throw new Error('Expected the original resource identity');
-        account.materialRow(resourceId, 'plain', sealSavedSecretResourceStoredContentV1({ resourceId, mode: 'plain',
-            content: { v: 1, name: 'Private key', kind: 'apiKey', value: 'private-value' } }), 1);
-        const settledAt = request.createdAtMs + 1;
-        const settled: ApprovalRequestV2 = { ...request, status: 'executed', updatedAtMs: settledAt,
-            decision: { kind: 'approve', decidedAtMs: settledAt },
-            execution: { ok: true, executedAtMs: settledAt, result: { resourceId, revision: 1 } } };
-        // The canonical Artifact store receives the Home's terminal observation;
-        // the real mounted reader/continuation must finish the original gesture.
-        await act(async () => { storage.getState().updateArtifact({ id: artifact.id,
-            header: buildApprovalRequestArtifactHeaderV1(settled), body: JSON.stringify(settled),
-            title: null, headerVersion: 2, bodyVersion: 2, seq: 2, createdAt: 1, updatedAt: 2, isDecrypted: true }); });
-        await vi.waitFor(() => expect(onCreated).toHaveBeenCalledWith(`happier:shared-secret:v1:${resourceId}`, 'personal'));
+        expect(request.actionId).toBe('secrets.create');
+        expect(JSON.stringify(request)).not.toContain('private-value');
+        // The live private-input owner, not a fabricated terminal observation,
+        // executes once after the Inbox commits the actual approval decision.
+        await expect(decideApprovalAsInbox(account.scope.serverId, artifact.id, 'approve')).resolves.toMatchObject({ ok: true });
+        await waitForHomeGovernance(() => {
+            expect(typeof resourceRef).toBe('string');
+            expect(onCreated).toHaveBeenCalledWith(resourceRef, 'personal');
+        });
+        await decideApprovalAsInbox(account.scope.serverId, artifact.id, 'approve');
+        expect(onCreated).toHaveBeenCalledTimes(1);
         expect(account.artifacts).toHaveLength(1);
-        expect(account.writes).toEqual([]);
+        expect(account.writes).toHaveLength(1);
+        expect(account.artifacts[0]?.body).not.toContain('private-value');
     });
     it.each(['with-revisions', 'without-revisions'] as const)('compound catalog save creates every draft credential in one transaction despite unrelated Settings drift (%s)', async receiptShape => {
         const account = await openAccount('plain', { home: `-compound-${receiptShape}`, raw: { userNote: 'initial' } });
@@ -763,7 +772,8 @@ describe('Saved Secret operations through their real Account and Action owners',
                 return Response.json({ status: 'conflict', revision: 1 });
             if (account.settingsVersion !== mutation.sourceSettingsVersion)
                 return Response.json({ status: 'settings-conflict', revision: 0 });
-            if (account.resources.get(signing.resourceId)?.entry.revision !== 9)
+            const entry = account.resources.get(signing.resourceId)?.entry;
+            if (!entry || !('revision' in entry) || entry.revision !== 9)
                 return Response.json({ status: 'references-conflict' });
             account.catalogRows.set(NOTIFICATION_CHANNELS_ROUTE_V1, {
                 status: 'present', revision: 1, content: mutation.content,
@@ -891,7 +901,7 @@ describe('Saved Secret operations through their real Account and Action owners',
             expect(account.writes.filter(write => write.path === '/v2/account/settings/history/4/mutate')).toHaveLength(exact ? 1 : 0);
             expect(account.writes.filter(write => write.path !== '/v2/account/settings'
                 && write.path !== '/v2/account/settings/history/4/mutate')).toEqual([]);
-            expect(account.resources.get(signing.resourceId)?.entry.revision).toBe(3);
+            expect(account.resources.get(signing.resourceId)?.entry).toMatchObject({ revision: 3 });
         } finally { context.dispose(); }
     });
     it('retries signed notification history cleanup after the current source was purged without losing exact Resource proof', async () => {
@@ -1238,6 +1248,7 @@ describe('Saved Secret operations through their real Account and Action owners',
             decision: { kind: 'approve', decidedAtMs: settledAt }, execution: { ok: true, executedAtMs: settledAt,
                 result: { resourceId: input.resourceId, settingsVersion: 23 } } };
         const observation: DecryptedArtifact = { id: artifact.id, header: buildApprovalRequestArtifactHeaderV1(settled),
+            title: buildApprovalRequestArtifactHeaderV1(settled).title,
             body: JSON.stringify(settled), headerVersion: 2, bodyVersion: 2, seq: 2, createdAt: 1, updatedAt: 2, isDecrypted: true };
         expect(await pending.registration.onExecuted(observation)).toBe('consumed');
         expect(succeeded).toHaveBeenCalledWith({ ok: true, settingsVersion: 23,
@@ -1679,7 +1690,9 @@ describe('Saved Secret operations through their real Account and Action owners',
                 credentialBindings: { account: { api_key: personal.id } } }),
         ] } : {}), adapters: { realtime_elevenlabs: { byo: { apiKey } } } };
         const account = await openAccount('plain', { raw: { voice, ...(boundPersonal ? { secrets: [personal] } : {}),
-            untouched: { preserve: true } }, captureSourceTrace: true });
+            untouched: { preserve: true } }, captureSourceTrace: true,
+            historySnapshot: { secrets: [{ ...personal, id: boundPersonal ? personal.id : 'voice:realtime_elevenlabs:api_key' }],
+                preferredLanguage: 'de' } });
         expect(settingsParse(account.raw).secrets).toEqual(expect.arrayContaining([
             expect.objectContaining({ id: boundPersonal ? personal.id : 'voice:realtime_elevenlabs:api_key', encryptedValue: apiKey }),
         ]));
@@ -1718,7 +1731,16 @@ describe('Saved Secret operations through their real Account and Action owners',
         expect(getSavedSecretCatalogSnapshot(account.scope)?.legacyImport).toEqual({ status: 'complete' });
         if (boundPersonal) expect(account.raw.secrets).toEqual([]);
         else expect(account.raw).not.toHaveProperty('secrets');
-        expect(account.writes.map(write => write.path)).toEqual([SHARED_SAVED_SECRET_ACTION_PATHS_V1['secrets.shared.promote']]);
+        expect(account.readHistoryContent()).toEqual({ t: 'plain', v: { secrets: [], preferredLanguage: 'de' } });
+        const historyMutation = AccountSettingsV2HistoryMutationRequestSchema.parse(account.writes.find(write =>
+            write.path === '/v2/account/settings/history/4/mutate')?.body);
+        expect(historyMutation.operation).toMatchObject({ kind: 'normalize', savedSecretTransfers: [{
+            savedSecretId: boundPersonal ? personal.id : 'voice:realtime_elevenlabs:api_key',
+            resourceId: input.resourceId, expectedRevision: 1,
+        }] });
+        expect(account.writes.map(write => write.path)).toEqual([
+            SHARED_SAVED_SECRET_ACTION_PATHS_V1['secrets.shared.promote'], '/v2/account/settings/history/4/mutate',
+        ]);
     });
     it.each([false, true])('catalog importer verifies an already Shared predecessor ElevenLabs origin without creating another resource (source drift: %s)', async sourceDrift => {
         const resourceId = 'already-bound-elevenlabs-resource';
@@ -2332,7 +2354,7 @@ describe('Saved Secret operations through their real Account and Action owners',
             v: 1, id: 'notification-webhook', kind: 'webhook', url: 'https://notifications.example.test/hook',
             topics: {}, signingSecretRef: ref,
         }] });
-        const content = await withProfileAccount(account.scope, undefined, (_context, accountMode, material) =>
+        const content = await withProfileAccount(account.scope, undefined, async (_context, accountMode, material) =>
             sealNotificationChannelCatalogContentV1({ record, mode: accountMode, material }));
         account.catalogRows.set(NOTIFICATION_CHANNELS_ROUTE_V1, status === 'present'
             ? { status, revision: 12, content }
@@ -2359,7 +2381,7 @@ describe('Saved Secret operations through their real Account and Action owners',
         const record = RegistrySourcesRecordV1Schema.parse({ v: 2, disabledSourceIds: [], sources: [{
             id: 'registry:private', title: 'Private', format: 'git', kinds: ['skill'], url: 'https://github.com/acme/private',
             enabled: false, addedAt: 1, token: { secretRef: ref } }] });
-        const content = await withProfileAccount(account.scope, undefined, (_context, accountMode, material) =>
+        const content = await withProfileAccount(account.scope, undefined, async (_context, accountMode, material) =>
             sealPromptLibraryContentV1({ record: { key: 'registry-sources', value: record }, mode: accountMode, material }));
         account.catalogRows.set('/v1/account/entity-rows/prompt-library/registry-sources', { status: 'present', revision: 12, content });
         const captured = await withProfileAccount(account.scope, undefined, (context, accountMode) =>
@@ -2399,7 +2421,7 @@ describe('Saved Secret operations through their real Account and Action owners',
             id: 'captured-host', name: 'Captured host', createdAt: 1, updatedAt: 2, lastUsedAt: null,
             ssh: { target: 'user@host.example.test', authMode: 'password', passwordSecretRef: ref },
         }] });
-        const content = await withProfileAccount(account.scope, undefined, (_context, accountMode, material) =>
+        const content = await withProfileAccount(account.scope, undefined, async (_context, accountMode, material) =>
             sealRemoteHostCatalogContentV1({ record, mode: accountMode, material }));
         account.catalogRows.set(REMOTE_HOST_ROWS_ROUTE_V1, status === 'present'
             ? { status, revision: 14, content }
@@ -2526,10 +2548,12 @@ describe('Saved Secret operations through their real Account and Action owners',
             submission = screen.pressByTestIdAsync('saved-secret-create-submit');
             await vi.waitFor(() => expect(account.resources.size).toBe(1));
             const resource = [...account.resources.values()][0]!;
-            await vi.waitFor(() => expect(screen.findByTestId(`saved-secret:${resource.entry.ref}:header`)).not.toBeNull());
+            if (!('ref' in resource.entry)) throw new Error('Expected a readable created Resource');
+            const resourceRef = resource.entry.ref;
+            await vi.waitFor(() => expect(screen.findByTestId(`saved-secret:${resourceRef}:header`)).not.toBeNull());
             expect(screen.findByTestId('saved-secret:empty')).toBeNull();
             expect(getSavedSecretCatalogSnapshot(account.scope)).toMatchObject({ status: 'ready', stale: false,
-                data: [expect.objectContaining({ ref: resource.entry.ref, materialStatus: 'ready' })] });
+                data: [expect.objectContaining({ ref: resourceRef, materialStatus: 'ready' })] });
         } finally {
             account.setBeforeHistoryRead(undefined);
             releaseHistory();
@@ -2638,6 +2662,7 @@ describe('Saved Secret operations through their real Account and Action owners',
             account.materialRow(input.resourceId, 'plain', input.storedContent, 1);
             for (const mutation of input.profileMutations) {
                 if (mutation.operation !== 'update') throw new Error('Expected an existing Profile update');
+                if (typeof mutation.expectedRevision !== 'number') throw new Error('Expected an existing Profile revision');
                 const row = account.rows.find(candidate => candidate.id === mutation.id);
                 if (!row) throw new Error('Expected the source Profile');
                 Object.assign(row, { content: mutation.content, revision: mutation.expectedRevision + 1 });
@@ -2817,6 +2842,7 @@ describe('Saved Secret operations through their real Account and Action owners',
         const settled: ApprovalRequestV2 = { ...request, status: 'executed', updatedAtMs: settledAt,
             decision: { kind: 'approve', decidedAtMs: settledAt }, execution: { ok: true, executedAtMs: settledAt, result } };
         const observation: DecryptedArtifact = { id: artifact.id, header: buildApprovalRequestArtifactHeaderV1(settled),
+            title: buildApprovalRequestArtifactHeaderV1(settled).title,
             body: JSON.stringify(settled), headerVersion: 2, bodyVersion: 2, seq: 2, createdAt: 1, updatedAt: 2, isDecrypted: true };
         if (operation === 'delete') {
             account.resources.delete('resource-a');

@@ -13,7 +13,7 @@ import { createBrowserAutomationControlService } from '@/sync/domains/browser/au
 
 import { WebIframeEngine } from './WebIframeEngine';
 import { buildInjectedBrowserDiagnosticsScript } from '../../adapters/diagnostics';
-import { buildInjectedBrowserDiagnosticsRuntimeScript } from '@happier-dev/peer-mediation/browser/collector/build';
+import { buildCooperativeNavigationRuntimeScript, buildInjectedBrowserDiagnosticsRuntimeScript } from '@happier-dev/peer-mediation/browser/collector/build';
 
 type TestWindow = Window & typeof globalThis;
 
@@ -139,6 +139,82 @@ describe('WebIframeEngine diagnostics wiring', () => {
         await screen.unmount();
         expect(Reflect.get(frame, '__happierBrowserRuntime')).toBeUndefined();
         expect((await service.executeAction({ ...action, automationRequestId: 'retired' })).status).not.toBe('succeeded');
+    });
+
+    it('reports a relay preview page history across in-frame navigations, obeys back, forward and stop through its document, and reloads the page it is on', async () => {
+        const host = installTestWindow();
+        const navigation = Object.assign(new EventTarget(), { canGoBack: false, canGoForward: false });
+        const history: string[] = [];
+        const posted: string[] = [];
+        const frame = Object.assign(new EventTarget(), {
+            location: { origin: 'https://preview.example.test', href: 'https://preview.example.test/' },
+            navigation, parent: host, stop: () => history.push('stop'),
+            // The parent cannot reach a cross-origin frame's history; only its own document can.
+            history: { back: () => history.push('back'), forward: () => history.push('forward') },
+            postMessage: (data: string) => { posted.push(data); queueMicrotask(() => dispatchMessage(frame, { data, origin: 'https://app.example.test', source: host })); },
+        });
+        host.postMessage = (data: string) => queueMicrotask(() => dispatchMessage(host, { data, origin: 'https://preview.example.test', source: frame as unknown as WindowProxy }));
+        Object.defineProperty(frame, 'document', { get: () => { throw new DOMException('Cross origin', 'SecurityError'); } });
+        const identityFor = (navigationGeneration: number) => ({ browserSessionId: 'browser_session_1', viewId: 'view_1', navigationGeneration, collectorId: 'collector_1', nonce: `nonce_${navigationGeneration}` });
+        const onNavigationStateChange = vi.fn();
+        const service = createBrowserAutomationControlService({ nowMs: Date.now });
+        const element = (generation: number, extra: Readonly<{ navigationKey?: string; navigationCommand?: { commandId: string; kind: 'goBack' | 'goForward' | 'reload' | 'stop' } }> = {}) => {
+            const identity = identityFor(generation);
+            return <WebIframeEngine title="Relay" url="https://preview.example.test/?signed=a%20b" sandbox="allow-scripts allow-same-origin" testID="relay"
+                onNavigationStateChange={onNavigationStateChange}
+                diagnostics={{ ...identity, collectorVersion: '1.0.0', sourceOrigin: 'https://preview.example.test', webPostMessageTargetOrigin: 'https://app.example.test', onEvents: vi.fn() }}
+                automation={{ ...identity, capabilityVersion: '1.0.0', sourceOrigin: 'https://preview.example.test', adapterKind: 'localPreview', supportedActions: ['click'], controlService: service }}
+                {...extra} />;
+        };
+        const screen = await renderScreen(element(6), { createNodeMock: (node) => node.type === 'iframe' ? { contentWindow: frame } : null });
+        const sourceUrl = new URL(screen.findByType('iframe').props.src);
+        // The document the pane loaded with its own identity installs the collector's reporter.
+        const install = (href: string) => {
+            frame.location.href = href;
+            new Function('window', 'document', buildCooperativeNavigationRuntimeScript(JSON.stringify({ ...JSON.parse(sourceUrl.searchParams.get('__happierCollector')!), cooperativePreview: true })))(frame, { readyState: 'complete' });
+        };
+        await act(async () => { install(sourceUrl.href); });
+        expect(onNavigationStateChange).toHaveBeenLastCalledWith({ loading: false, canGoBack: false, canGoForward: false });
+
+        // A report from another pane's identity, window or origin is not navigation truth.
+        const report = { v: 1, kind: 'browser.collector.navigation', ...identityFor(6), loading: true, canGoBack: true, canGoForward: true, url: 'https://preview.example.test/' };
+        onNavigationStateChange.mockClear();
+        await act(async () => {
+            dispatchMessage(host, { data: JSON.stringify({ ...report, nonce: 'other_pane' }), origin: 'https://preview.example.test', source: frame as unknown as WindowProxy });
+            dispatchMessage(host, { data: JSON.stringify(report), origin: 'https://evil.example.test', source: frame as unknown as WindowProxy });
+            dispatchMessage(host, { data: JSON.stringify(report), origin: 'https://preview.example.test', source: host });
+            dispatchMessage(host, { data: JSON.stringify({ ...report, url: 'https://evil.example.test/' }), origin: 'https://preview.example.test', source: frame as unknown as WindowProxy });
+        });
+        expect(onNavigationStateChange).not.toHaveBeenCalled();
+
+        // An in-frame link navigation retires page automation, but the next document still reports history.
+        await act(async () => screen.findByType('iframe').props.onLoad());
+        await act(async () => screen.findByType('iframe').props.onLoad());
+        navigation.canGoBack = true;
+        await act(async () => { install('https://preview.example.test/other?x=1'); });
+        expect(onNavigationStateChange).toHaveBeenLastCalledWith({ loading: false, canGoBack: true, canGoForward: false });
+        await act(async () => { navigation.canGoBack = false; navigation.canGoForward = true; navigation.dispatchEvent(new Event('currententrychange')); });
+        expect(onNavigationStateChange).toHaveBeenLastCalledWith({ loading: false, canGoBack: false, canGoForward: true });
+
+        for (const [kind, expected] of [['goBack', 'back'], ['goForward', 'forward'], ['stop', 'stop']] as const) {
+            await screen.update(element(6, { navigationCommand: { commandId: `command_${kind}`, kind } }));
+            await act(async () => undefined);
+            expect(history.at(-1)).toBe(expected);
+        }
+        expect(posted).toHaveLength(3);
+
+        // Reload keeps the page the preview is on and arrives under the new identity, never at the opening page.
+        await screen.update(element(7, { navigationKey: 'reload_1' }));
+        const reloaded = new URL(screen.findByType('iframe').props.src);
+        expect(reloaded.pathname + reloaded.search.replace(/&__happierCollector=.*/, '')).toBe('/other?x=1');
+        expect(JSON.parse(reloaded.searchParams.get('__happierCollector')!).navigationGeneration).toBe(7);
+
+        // The host derives the reload key from its latest effect only, so the next command (Stop) arrives without it.
+        // That must not remount the frame at the opening page: the reloaded document is still the current one.
+        await screen.update(element(7, { navigationCommand: { commandId: 'command_stop_after_reload', kind: 'stop' } }));
+        const afterStop = new URL(screen.findByType('iframe').props.src);
+        expect(afterStop.pathname + afterStop.search.replace(/&__happierCollector=.*/, '')).toBe('/other?x=1');
+        await screen.unmount();
     });
 
     it.each(['collector_blocked_by_csp', 'runtime_unavailable'] as const)('reports cooperative refusal %s through the authorized metadata-only probe, without admitting an owner', async (state) => {

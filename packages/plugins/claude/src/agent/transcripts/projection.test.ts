@@ -38,6 +38,28 @@ describe('Claude JSONL projection', () => {
         expect(projectClaudeJsonlLineRecord({ fileRelPath: 'session.jsonl', lineStartOffsetBytes: 42, lineValue }))
             .toEqual({ disposition: 'known_non_transcript', items: [] });
     });
+    it('keeps native API request bookkeeping out of the conversation while preserving subsequent assistant text', () => {
+        // Claude 2.1.302, CLAUDETERM c11 native JSONL (2026-10-16): request
+        // shapes and content-addressed blobs record the API input, not new speech.
+        const records = [
+            { type: 'api-request-shape', sessionId: 'native', shapeHash: 'shape', timestamp: '2026-10-16T23:31:08.400Z',
+                version: '2.1.302', shape: { messages: [] } },
+            { type: 'api-request-blob', sessionId: 'native', hash: 'blob',
+                message: { role: 'user', content: [{ type: 'text', text: 'previous private request input' }] } },
+            { type: 'api-request', sessionId: 'native', id: 'request', timestamp: '2026-10-16T23:31:08.400Z',
+                version: '2.1.302', shapeHash: 'shape', params: {}, keep: [], tail: [], cacheControl: [], requestDigest: 'digest' },
+        ];
+        const projected = records.map((lineValue, index) => projectClaudeJsonlLineRecord({
+            fileRelPath: 'session.jsonl', lineStartOffsetBytes: index * 100, lineValue,
+        }));
+        expect(projected).toEqual(records.map(() => ({ disposition: 'known_non_transcript', items: [] })));
+        const reply = projectClaudeJsonlLineRecord({ fileRelPath: 'session.jsonl', lineStartOffsetBytes: 400,
+            lineValue: { type: 'assistant', uuid: 'reply', message: { role: 'assistant', content: [{ type: 'text', text: 'next reply' }] } },
+        });
+        expect(reply.disposition).toBe('mapped');
+        expect(reply.items).toHaveLength(1);
+        expect(reply.items[0]?.raw).toMatchObject({ role: 'agent', content: { data: { type: 'message', message: 'next reply' } } });
+    });
     it.each([
         { type: 'thinking', thinking: null, signature: 'fixture-signature' },
         { type: 'image', source: { type: 'base64', data: 'fixture-image' } },

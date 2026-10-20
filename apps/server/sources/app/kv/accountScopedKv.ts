@@ -16,6 +16,8 @@ import { PROFILE_REFERENCE_GUARD_ACCOUNT_KV_KEY, PROFILE_TRANSFER_ACCOUNT_KV_KEY
 export { PROFILE_ACCOUNT_KV_PREFIX, PROFILE_REFERENCE_GUARD_ACCOUNT_KV_KEY, PROFILE_TRANSFER_ACCOUNT_KV_KEY,
     buildProfilePhysicalKey, parseProfilePhysicalKey } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { QualifiedProjectTrustProjectV1Schema, type QualifiedProjectTrustProjectV1 } from '@happier-dev/protocol/workspaces/projectSetup/projectTrustRowV1';
+import { parseSessionFollowRulePhysicalKeyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
+import { SESSION_FOLLOW_CREATION_PREFERENCES_ACCOUNT_KEY_V1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 
 /**
  * UserKVStore is shared with pre-plugin generic KV, so Account-owned domains
@@ -44,6 +46,8 @@ export type AccountScopedKvKeyClassification =
     | Readonly<{ kind: "pluginAccountStorage"; pluginId: string }>
     | Readonly<{ kind: "pluginDeclarativeSettings"; pluginId: string }>
     | Readonly<{ kind: "accountSessionDraft" }>
+    | Readonly<{ kind: 'accountSessionFollowRule'; ruleId: string }>
+    | Readonly<{ kind: 'accountSessionFollowCreationPreferences' }>
     | Readonly<{ kind: "accountAuthoringMemory"; key: string }>
     | Readonly<{ kind: "accountProjectTrust"; project: QualifiedProjectTrustProjectV1 }>
     | Readonly<{ kind: 'accountProjectRow'; key: ProjectAccountRowKeyV1 }>
@@ -138,6 +142,9 @@ export function decodeAccountScopedKvJson(value: Uint8Array): unknown {
 export function classifyAccountScopedKvKey(
     key: string,
 ): AccountScopedKvKeyClassification {
+    if (key === SESSION_FOLLOW_CREATION_PREFERENCES_ACCOUNT_KEY_V1) return { kind: 'accountSessionFollowCreationPreferences' };
+    const ruleId = parseSessionFollowRulePhysicalKeyV1(key);
+    if (ruleId !== null) return { kind: 'accountSessionFollowRule', ruleId };
     if (key === ACP_CATALOG_ACCOUNT_ROW_KEY_V1) return { kind: 'accountAcpCatalog' };
     if (key === MCP_SERVER_CATALOG_ACCOUNT_KEY_V1) return { kind: 'accountMcpServerCatalog' };
     if (key === PROVIDER_CONNECTIONS_ACCOUNT_KV_KEY_V1) return { kind: 'accountProviderConnections' };

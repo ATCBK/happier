@@ -9,6 +9,7 @@ import type { WidgetSizeV1 } from '@happier-dev/protocol/widgets';
 import { renderScreen } from '@/dev/testkit';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import {
   createHomeGovernanceHarness,
   installHomeGovernanceBoundaries,
@@ -48,7 +49,7 @@ vi.mock('@/modal', async () => {
 });
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
-const { ModalProvider } = await import('@/modal');
+const { Modal, ModalProvider } = await import('@/modal');
 const { AuthProvider } = await import('@/auth/context/AuthContext');
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { machineProcessesStore } =
@@ -120,6 +121,8 @@ async function mount(
     reply?: (rpc: Rpc) => unknown;
     machine?: Partial<Machine>;
     waitFor?: string;
+    workingSession?: boolean;
+    askBeforeStop?: boolean;
   }>,
 ) {
   const serverId = await home.addHome({
@@ -136,7 +139,7 @@ async function mount(
           actionsSettingsV1: {
             v: 1,
             actions: {},
-            approvalWaivedSurfaces: { 'machines.processes.stop': ['ui'] },
+            approvalWaivedSurfaces: options.askBeforeStop ? {} : { 'machines.processes.stop': ['ui'] },
           },
         },
       },
@@ -144,6 +147,8 @@ async function mount(
     },
   });
   storage.setState({
+    sessions: options.workingSession ? { refactor: createSessionFixture({ id: 'refactor', serverId,
+      active: true, activeAt: Date.now(), thinking: true, thinkingAt: Date.now() }) } : {},
     machines: {},
     machineListByServerId: { [serverId]: [machine(options.machine)] },
     machineListStatusByServerId: { [serverId]: 'idle' },
@@ -187,6 +192,8 @@ async function mount(
     });
     await measureMountedCollections(screen, { width: 354 });
   }
+  // Seed the real Account policy, not only an HTTP answer the focused Account may already have read.
+  if (options.askBeforeStop) await act(async () => { await home.requireUiApproval(serverId, 'machines.processes.stop'); });
   return { screen, serverId };
 }
 
@@ -203,6 +210,50 @@ afterEach(async () => {
 });
 
 describe('Using the most widget', () => {
+  it('keeps a working session running until its explicit Ask-first Stop is approved', async () => {
+    const calls: Rpc[] = [];
+    const { screen, serverId } = await mount({ Body: MachineTopConsumersWidget, workingSession: true, askBeforeStop: true,
+      waitFor: 'widget.stop-o:session:refactor', reply: rpc => {
+        if (rpc.method !== RPC_METHODS.MACHINES_PROCESSES_STOP) return undefined;
+        calls.push(rpc);
+        return { status: 'ended', outcomes: [{ ref: 'runner', outcome: 'ended' }] };
+      } });
+    const { decideApprovalAsInbox } = await import('@/dev/testkit/harness/approvalInbox');
+    const { ApprovalRequestV2Schema } = await import('@happier-dev/protocol/approvals/approvalRequestV1');
+    const approvals = home.artifacts(serverId);
+    vi.mocked(Modal.confirm).mockClear();
+    await act(async () => { await screen.pressByTestIdAsync('widget.stop-o:session:refactor'); });
+    await vi.waitFor(() => expect(approvals.list()).toHaveLength(1));
+    const first = approvals.list()[0]!;
+    const request = () => ApprovalRequestV2Schema.parse(JSON.parse(approvals.readPlainBody(first.id)!));
+    expect(request()).toMatchObject({ status: 'open', actionId: 'machines.processes.stop',
+      actionArgs: { targets: [{ ref: 'runner', expect: { owner: { kind: 'session', sessionId: 'refactor' } } }] } });
+    expect(calls).toHaveLength(0);
+    expect(screen.findByTestId('widget.confirm')).toBeNull();
+    expect((await decideApprovalAsInbox(serverId, first.id, 'cancel')).ok).toBe(true);
+    expect(request().status).toBe('canceled');
+    expect(calls).toHaveLength(0);
+    expect(screen.findByTestId('widget.stop-o:session:refactor')).not.toBeNull();
+    await act(async () => { await screen.pressByTestIdAsync('widget.stop-o:session:refactor'); });
+    await vi.waitFor(() => expect(approvals.list()).toHaveLength(2));
+    expect(calls).toHaveLength(0);
+    expect(Modal.confirm).not.toHaveBeenCalled();
+  });
+
+  it('lets Allowed stop a working session without an inline second approval', async () => {
+    const calls: Rpc[] = [];
+    const { screen } = await mount({ Body: MachineTopConsumersWidget, workingSession: true,
+      waitFor: 'widget.stop-o:session:refactor', reply: rpc => {
+        if (rpc.method !== RPC_METHODS.MACHINES_PROCESSES_STOP) return undefined;
+        calls.push(rpc);
+        return { status: 'ended', outcomes: [{ ref: 'runner', outcome: 'ended' }] };
+      } });
+    await act(async () => { await screen.pressByTestIdAsync('widget.stop-o:session:refactor'); });
+    await act(async () => { await vi.waitFor(() => expect(calls).toHaveLength(1)); });
+    expect(screen.findByTestId('widget.confirm')).toBeNull();
+    expect(calls[0]?.payload).toMatchObject({ targets: [{ ref: 'runner', expect: { owner: { kind: 'session', sessionId: 'refactor' } } }] });
+  });
+
   it('stops a service through machines.processes.stop and offers its way back on the row and in the notice', async () => {
     const calls: Rpc[] = [];
     const { screen } = await mount({

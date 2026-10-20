@@ -21,6 +21,7 @@ export type HomeHubLayout = Readonly<{
     isDefault: boolean;
     hiddenSetupStepCount: number;
     status: 'loading' | 'ready' | 'error';
+    hasSnapshot: boolean;
     errorCode?: string;
     retry: () => Promise<void>;
     canCancelFailedIntent: boolean;
@@ -83,12 +84,12 @@ export function useHomeHubLayout(): HomeHubLayout {
         }
     }, [notifyFailure, write]);
     return React.useMemo(() => ({
-        items: resolved.sections.flatMap<WidgetLayoutItemV1>(section => section.kind === 'builtin' ? [] : section.kind === 'group' ? [section.group]
-            : [{ kind: 'widget' as const, instance: section.instance, size: section.size, ...(section.frameStyle ? { frameStyle: section.frameStyle } : {}) }]),
-        order: resolved.order, sections: resolved.sections, available: resolved.available,
+        items: state.hasSnapshot ? resolved.sections.flatMap<WidgetLayoutItemV1>(section => section.kind === 'builtin' ? [] : section.kind === 'group' ? [section.group]
+            : [{ kind: 'widget' as const, instance: section.instance, size: section.size, ...(section.frameStyle ? { frameStyle: section.frameStyle } : {}) }]) : [],
+        order: state.hasSnapshot ? resolved.order : [], sections: state.hasSnapshot ? resolved.sections : [], available: resolved.available,
         isDefault: layout.order.length === 0 && layout.hidden.length === 0 && layout.items.length === 0 && !layout.sections,
         hiddenSetupStepCount: listHiddenHomeSetupSteps(layout).length,
-        status: state.status, ...(state.errorCode ? { errorCode: state.errorCode } : {}), retry: state.retry,
+        status: state.status, hasSnapshot: state.hasSnapshot, ...(state.errorCode ? { errorCode: state.errorCode } : {}), retry: state.retry,
         canCancelFailedIntent: Boolean(state.failedIntent), cancelFailedIntent: state.cancelFailedIntent,
         move: (sectionId, step) => dispatch({ kind: 'move', sectionId, step }),
         moveTo: (sectionId, position) => dispatch({ kind: 'move_to', sectionId, position }),
@@ -110,5 +111,5 @@ export function useHomeHubLayout(): HomeHubLayout {
         setGroup: (instanceId, options) => dispatch({ kind: 'group_set', instanceId, ...options }),
         setGroupInputs: (instanceId, bindings) => dispatch({ kind: 'group_inputs', instanceId, bindings }),
         moveItem: (instanceId, toIndex, groupId) => dispatch({ kind: 'move', instanceId, toIndex, ...(groupId === undefined ? {} : { groupId }) }),
-    }), [dispatch, layout, layoutWidgets, resolved, state.cancelFailedIntent, state.errorCode, state.failedIntent, state.retry, state.status]);
+    }), [dispatch, layout, layoutWidgets, resolved, state.cancelFailedIntent, state.errorCode, state.failedIntent, state.hasSnapshot, state.retry, state.status]);
 }

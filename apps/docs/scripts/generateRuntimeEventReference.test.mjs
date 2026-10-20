@@ -1,29 +1,32 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
+import * as classic from 'zod';
+import * as mini from 'zod/mini';
 
 import { readDiscriminatedMembers, renderRuntimeEventReferenceMarkdown } from './generateRuntimeEventReference.mjs';
 
 test('places every current runtime event in the generated reference', async () => {
-  const { AgentSessionRuntimeEventV1Schema } = await import('../../../packages/protocol/dist/runtime/agentSessionV1.js');
+  const { AGENT_SESSION_RUNTIME_EVENT_KINDS_V1 } = await import('../../../packages/protocol/dist/runtime/agentSessionV1.js');
   const markdown = await renderRuntimeEventReferenceMarkdown();
-  const core = AgentSessionRuntimeEventV1Schema._def.schema ?? AgentSessionRuntimeEventV1Schema;
-  for (const kind of readDiscriminatedMembers(core._def.options[0])) {
+  for (const kind of AGENT_SESSION_RUNTIME_EVENT_KINDS_V1.filter(kind => kind !== 'context-compaction')) {
     assert.ok(markdown.includes(`\`${kind}\``), `missing runtime event ${kind}`);
   }
 });
 
-const literal = (value) => ({ _def: { value } });
-const member = (disc, value) => ({ shape: { [disc]: literal(value) } });
-const union = (disc, values) => ({ _def: { discriminator: disc, options: values.map((v) => member(disc, v)) } });
+for (const [name, z] of [['Classic', classic], ['Mini', mini]]) {
+  test(`reads the literal of each real Zod ${name} union member`, () => {
+    const schema = z.discriminatedUnion('kind', [
+      z.object({ kind: z.literal('turn-start') }),
+      z.object({ kind: z.literal('turn-complete') }),
+    ]);
+    assert.deepEqual(readDiscriminatedMembers(schema), ['turn-start', 'turn-complete']);
+  });
 
-test('reads the literal of each union member', () => {
-  assert.deepEqual(readDiscriminatedMembers(union('kind', ['turn-start', 'turn-complete'])), ['turn-start', 'turn-complete']);
-});
-
-test('refuses a member whose discriminator it cannot read', () => {
-  const broken = { _def: { discriminator: 'kind', options: [{ shape: {} }] } };
-  assert.throws(() => readDiscriminatedMembers(broken), /could not read the "kind" literal/);
-});
+  test(`refuses a Zod ${name} member whose discriminator is not a single literal`, () => {
+    const broken = z.discriminatedUnion('kind', [z.object({ kind: z.string() })]);
+    assert.throws(() => readDiscriminatedMembers(broken), /could not read the "kind" literal/);
+  });
+}
 
 test('refuses to publish when the schema gains a kind no family claims', async () => {
   // The failure this prevents is silent: an unplaced kind simply would not

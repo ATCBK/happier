@@ -21,7 +21,12 @@ import {
 } from '@/sync/ops/teams/teamInvitationOperations';
 import { t } from '@/text';
 
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { homeAdministrationEmailPath } from '@/components/settings/home/governance/homeAdministrationRoutes';
+
 import type { TeamSectionContext } from '../teamSectionContext';
+import { askAdministratorsText } from '../collection/teamsCreateGuidanceText';
+import { useEligibleProviderRecoveryViewer } from '../identity/eligibleProviderAvailability';
 import { teamRoleLabel } from '../teamLabels';
 import { teamMutationFailureLabel } from '../teamMutationPresentation';
 import { historyConsequence, historyLabel } from '../teamPolicyPresentation';
@@ -60,6 +65,10 @@ export const TeamInvitationForm = React.memo(function TeamInvitationForm(props: 
     onIssuedChange?: (issued: boolean) => void;
 }>) {
     const { context } = props;
+    const router = useRouter();
+    // Who can set up email: a Home owner fixes it on the Home's Email page; anyone else is told whom to ask.
+    const fixer = useEligibleProviderRecoveryViewer(context.scope);
+    const ownsHome = fixer.viewerHomeRole === 'owner';
     const [delivery, setDelivery] = React.useState<Delivery>('link');
     const [email, setEmail] = React.useState('');
     const [role, setRole] = React.useState<TeamInvitationAdmissibleRoleV1>('member');
@@ -422,11 +431,14 @@ export const TeamInvitationForm = React.memo(function TeamInvitationForm(props: 
                     <Item
                         testID="team-invite-delivery-link-only"
                         title={t('teams.invitations.sendAs')}
-                        subtitle={t('teams.invitations.emailUnavailable')}
+                        subtitle={`${t('teams.invitations.emailUnavailable')} ${ownsHome
+                            ? t('teams.invitations.emailSetUpOwner')
+                            : askAdministratorsText(fixer.administratorNames ?? [])}`}
                         subtitleLines={0}
                         detail={t('teams.invitations.byLink')}
-                        mode="info"
-                        showChevron={false}
+                        {...(ownsHome
+                            ? { onPress: () => router.push(homeAdministrationEmailPath(context.scope.serverId)) }
+                            : { mode: 'info' as const, showChevron: false })}
                     />
                 ) : null}
 

@@ -1,5 +1,6 @@
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createDeferred } from '@/dev/testkit';
 
 beforeAll(loadSyncSingletonForTests);
 
@@ -26,10 +27,8 @@ import { buildSession, currentPendingEnqueueAck, resetPendingQueueState } from '
  * transcript of 106 rows, which is why `armSession` seeds one: an empty, never-loaded transcript is
  * the session-open state, where the fence must assert nothing at all.
  *
- * The capture point must be the RESPONSE's, not the caller's: a refresh that starts while another
- * refresh for the same scoped session is still running can be answered by that refresh's in-flight
- * GET, because `apiSocket.request` shares one in-flight GET among callers and drops the de-dupe entry
- * only in the FIRST caller's continuation. So:
+ * Each refresh owns its no-store HTTP read and capture point. The owner shares a complete refresh
+ * only while its transcript, pending version, encryption and request context remain unchanged. So:
  *
  *   A / B — the twin is a NEW commit above the mark, applied after the request was issued:
  *           withheld.
@@ -37,7 +36,8 @@ import { buildSession, currentPendingEnqueueAck, resetPendingQueueState } from '
  *           is the durable-coexistence contract; it must not flip.
  *   D     — a second refresh inherits the in-flight mark, but the twin it learns about is OLD news
  *           (sequenced below the mark): republished. Inheritance must not hide a durable row.
- *   E     — the same inheritance with a NEW commit above the mark and one shared response: withheld.
+ *   E     — a NEW commit changes the transcript while the old response is outstanding: a fresh
+ *           post-commit read wins, and the pre-commit response cannot republish the settled row.
  */
 
 const SESSION_ID = 'readdition-session';
@@ -73,7 +73,7 @@ function committedTwin(localId: string | null, seq = LOADED_HEAD_SEQ + 1) {
     } as any;
 }
 
-function queuedRowResponse(localId: string): Response {
+function queuedRowResponse(localId: string, activationHoldReason?: PendingMessage['pendingActivationHoldReason']): Response {
     return new Response(JSON.stringify({
         pending: [{
             localId,
@@ -82,6 +82,7 @@ function queuedRowResponse(localId: string): Response {
                 v: { role: 'user', content: { type: 'text', text: 'hello' }, meta: {} },
             },
             requestedAction: { v: 1, kind: 'enqueue' },
+            activationHoldReason,
             status: 'queued',
             // A genuinely queued server row carries no deliveryState — this repo's parser treats any
             // value outside delivering|external_handoff|blocked as malformed and blocks the row.
@@ -142,6 +143,31 @@ describe('pending snapshot re-addition after a committed twin', () => {
         storage.getState().applyMessagesLoaded(SESSION_ID);
         return { serverId: server.id, accountId: 'account' } as const;
     }
+
+    it('replaces an in-flight access-hold read at the same queue version and rejects its late response', async () => {
+        const scope = await armSession();
+        const oldRead = createDeferred<Response>();
+        const readStarted = createDeferred<void>();
+        let first = true;
+        const request = async () => {
+            if (first) { first = false; readStarted.resolve(); return oldRead.promise; }
+            return queuedRowResponse(LOCAL_ID, 'resume_not_requested');
+        };
+        const params = { sessionId: SESSION_ID, encryption: null, outboxScope: scope, request, isOutboxScopeCurrent: () => true };
+        const older = fetchAndApplyPendingMessagesV2(params);
+        await readStarted.promise;
+        const refreshed = fetchAndApplyPendingMessagesV2({ ...params, invalidateSnapshot: true });
+        // Complete the newer read before releasing the old one. A wake that
+        // only joins the old read cannot publish the updated hold here.
+        try {
+            await vi.waitFor(() => expect(storage.getState().sessionPending[SESSION_ID]?.messages[0]?.pendingActivationHoldReason)
+                .toBe('resume_not_requested'));
+        } finally {
+            oldRead.resolve(queuedRowResponse(LOCAL_ID, 'managed_power_required'));
+            await Promise.all([older, refreshed]);
+        }
+        expect(storage.getState().sessionPending[SESSION_ID]?.messages[0]?.pendingActivationHoldReason).toBe('resume_not_requested');
+    });
 
     /** A — twin committed while the GET is outstanding: withheld. */
     it('withholds a row whose twin commits while the request is outstanding', async () => {
@@ -206,25 +232,19 @@ describe('pending snapshot re-addition after a committed twin', () => {
         expect(publishedPending()).toEqual([REPUBLISHED_ROW]);
     });
 
-    /**
-     * E — the live chain: `apiSocket.request` de-dupes in-flight GETs by URL and only deletes the map
-     * entry in the FIRST caller's continuation, so on a congested thread a refresh that starts AFTER
-     * the committed twin still adopts the response of a GET issued BEFORE it — with no second request
-     * on the wire. The adopting refresh would capture AFTER the twin, taking a mark that already
-     * includes it, so the settled row is republished, unless the adopting refresh inherits the
-     * in-flight refresh's capture point, which is the response's own.
-     */
-    it('withholds a row when a late refresh adopts an in-flight response captured before the twin', async () => {
+    it('withholds a stale in-flight response when a post-commit refresh issues its own read', async () => {
         const scope = await armSession();
         const encryption = await Encryption.create(new Uint8Array(32).fill(6));
 
         let release!: () => void;
         const gate = new Promise<void>((resolve) => { release = resolve; });
-        // One server read, shared by both refreshes — the in-flight de-dupe, modelled.
+        const entered = createDeferred<void>();
+        // The first HTTP response was captured before settlement; the later no-store read is fresh.
         const sharedRead = (async () => { await gate; return queuedRowResponse(LOCAL_ID); })();
         let reads = 0;
-        const dedupedRequest = async (_path: string, init?: RequestInit) => {
+        const request = async (_path: string, init?: RequestInit) => {
             expect(init?.cache).toBe('no-store');
+            entered.resolve();
             return ++reads === 1 ? (await sharedRead).clone() : Response.json({ pending: [] });
         };
 
@@ -233,11 +253,11 @@ describe('pending snapshot re-addition after a committed twin', () => {
             encryption,
             outboxScope: scope,
             isOutboxScopeCurrent: () => true,
-            request: dedupedRequest,
+            request,
         });
-        // The settlement lands while the read is outstanding: twin applied, then the pendingVersion
-        // bump schedules the next refresh, which starts before the first caller's continuation has
-        // run and therefore adopts the very same response.
+        await entered.promise;
+        // The settlement lands while the first read is outstanding. The changed transcript makes
+        // the next refresh issue its own read rather than adopt that pre-settlement response.
         release();
         storage.getState().applyMessages(SESSION_ID, [committedTwin(LOCAL_ID)]);
         const second = fetchAndApplyPendingMessagesV2({
@@ -245,7 +265,7 @@ describe('pending snapshot re-addition after a committed twin', () => {
             encryption,
             outboxScope: scope,
             isOutboxScopeCurrent: () => true,
-            request: dedupedRequest,
+            request,
         });
         await Promise.all([first, second]);
 

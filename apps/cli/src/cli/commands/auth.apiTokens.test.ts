@@ -55,6 +55,8 @@ describe('trusted auth api-tokens commands', () => {
     { authorizeUnattendedTeamAccess: false, json: true },
     { authorizeUnattendedTeamAccess: true, json: true },
   ])('creates through the shared Action and shows the new token once; unattended=$authorizeUnattendedTeamAccess json=$json', async ({ authorizeUnattendedTeamAccess, json }) => {
+    const { publishServerHttpRuntimeOrigin } = await import('@/api/client/serverHttpBaseUrl');
+    const release = publishServerHttpRuntimeOrigin('http://runtime.account.test', 'iroh');
     const app = fastify();
     let capturedRequest: Readonly<{ authorization: string | undefined; body: unknown }> | null = null;
     app.post('/v1/auth/api-tokens/create', async (request) => {
@@ -74,7 +76,7 @@ describe('trusted auth api-tokens commands', () => {
       };
       return { token, apiToken };
     });
-    const restore = installAxiosFastifyAdapter({ app, origin: 'http://account.test' });
+    const restore = installAxiosFastifyAdapter({ app, origin: 'http://runtime.account.test' });
     const output = captureConsoleText();
     try {
       const { writeCredentialsTokenOnly } = await import('@/persistence');
@@ -103,6 +105,7 @@ describe('trusted auth api-tokens commands', () => {
     } finally {
       output.restore();
       restore();
+      release();
       await app.close();
     }
   });

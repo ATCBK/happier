@@ -1,24 +1,22 @@
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 import * as React from 'react';
 import { createNewSessionPromptStore } from '@/components/sessions/new/hooks/screenModel/newSessionPromptStore';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
 import { renderScreen } from '@/dev/testkit';
 import { installNewSessionComponentsCommonModuleMocks } from './newSessionComponentsTestHelpers';
+import type { AttachmentDraft } from '@/components/sessions/attachments/attachmentDraftModel';
+import { clearAllNewSessionAttachmentDrafts, readNewSessionAttachmentDrafts, writeNewSessionAttachmentDrafts } from '../attachments/newSessionAttachmentDraftStore';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const AgentInputMock = vi.fn((_props: any): React.ReactNode => null);
-const attachmentDraftState = vi.hoisted(() => ({
-    drafts: [] as Array<{ id: string }>,
-    hasSendableAttachments: false,
-    agentInputAttachments: [] as Array<unknown>,
-    clearDrafts: vi.fn(),
-    applyDraftPatch: vi.fn(),
-}));
 const uploadAttachmentDraftsToSessionSpy = vi.hoisted(() => vi.fn());
 const formatAttachmentsBlockSpy = vi.hoisted(() => vi.fn(() => ''));
 const followUpSpawnedSessionWithServerScopeSpy = vi.hoisted(() => vi.fn());
+
+afterEach(clearAllNewSessionAttachmentDrafts);
 
 installNewSessionComponentsCommonModuleMocks({
     text: async () => {
@@ -51,14 +49,6 @@ vi.mock('expo-linear-gradient', () => ({
         React.createElement('LinearGradient', props, props.children),
 }));
 
-vi.mock('color', () => {
-    return {
-        default: () => ({
-            alpha: () => ({ rgb: () => ({ string: () => 'rgba(0,0,0,0.08)' }) }),
-        }),
-    };
-});
-
 vi.mock('@/components/sessions/agentInput', () => ({
     AgentInput: AgentInputMock,
 }));
@@ -67,9 +57,6 @@ vi.mock('@/components/sessions/attachments/AttachmentFilePicker', () => ({
     AttachmentFilePicker: () => null,
 }));
 
-const addWebFilesSpy = vi.fn();
-const addPickedAttachmentsSpy = vi.fn();
-
 vi.mock('@/components/sessions/attachments/useAttachmentsUploadConfig', () => ({
     useAttachmentsUploadConfig: () => ({
         uploadLocation: 'workspace',
@@ -77,21 +64,6 @@ vi.mock('@/components/sessions/attachments/useAttachmentsUploadConfig', () => ({
         vcsIgnoreStrategy: 'git_info_exclude',
         vcsIgnoreWritesEnabled: true,
         maxFileBytes: 25 * 1024 * 1024,
-    }),
-}));
-
-vi.mock('@/components/sessions/attachments/useAttachmentDraftManager', () => ({
-    useAttachmentDraftManager: () => ({
-        filePickerRef: { current: null },
-        drafts: attachmentDraftState.drafts,
-        getDraftsSnapshot: () => attachmentDraftState.drafts,
-        hasSendableAttachments: attachmentDraftState.hasSendableAttachments,
-        agentInputAttachments: attachmentDraftState.agentInputAttachments,
-        addWebFiles: addWebFilesSpy,
-        addPickedAttachments: addPickedAttachmentsSpy,
-        removeDraft: vi.fn(),
-        clearDrafts: attachmentDraftState.clearDrafts,
-        applyDraftPatch: attachmentDraftState.applyDraftPatch,
     }),
 }));
 
@@ -126,7 +98,8 @@ vi.mock('@/hooks/server/useFeatureEnabled', () => ({
 }));
 
 vi.mock('@/components/ui/lists/Item', () => ({
-    Item: () => null,
+    Item: (props: { title?: React.ReactNode; subtitle?: React.ReactNode }) =>
+        React.createElement('Item', null, React.createElement('Text', null, props.title), React.createElement('Text', null, props.subtitle)),
 }));
 vi.mock('@/components/ui/lists/ItemGroup', () => ({
     ItemGroup: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
@@ -137,9 +110,6 @@ vi.mock('@/components/sessions/new/components/MachineSelector', () => ({
 }));
 vi.mock('@/components/sessions/new/components/PathSelectionList', () => ({
     PathSelectionList: () => null,
-}));
-vi.mock('@/components/sessions/new/components/WizardSectionHeaderRow', () => ({
-    WizardSectionHeaderRow: () => null,
 }));
 vi.mock('@/components/profiles/ProfilesList', () => ({
     ProfilesList: () => null,
@@ -179,17 +149,7 @@ describe('NewSessionWizard (attachments.uploads)', () => {
         await renderScreen(React.createElement(NewSessionWizard, {
                     popoverBoundaryRef: { current: null } as any,
                     layout: {
-                        theme: {
-                            colors: {
-                                divider: '#ddd',
-                                shadow: { color: '#000' },
-                                groupped: { background: '#fff' },
-                                text: '#000',
-                                textSecondary: '#666',
-                                input: { background: '#fff' },
-                                button: { secondary: { tint: '#000' } },
-                            },
-                        },
+                        theme: createThemeFixture(),
                         styles: {},
                         safeAreaBottom: 0,
                         headerHeight: 44,
@@ -299,17 +259,7 @@ describe('NewSessionWizard (attachments.uploads)', () => {
         const screen = await renderScreen(React.createElement(NewSessionWizard, {
             popoverBoundaryRef: { current: null } as any,
             layout: {
-                theme: {
-                    colors: {
-                        divider: '#ddd',
-                        shadow: { color: '#000' },
-                        groupped: { background: '#fff' },
-                        text: '#000',
-                        textSecondary: '#666',
-                        input: { background: '#fff' },
-                        button: { secondary: { tint: '#000' } },
-                    },
-                },
+                theme: createThemeFixture(),
                 styles: {},
                 safeAreaBottom: 0,
                 headerHeight: 44,
@@ -397,19 +347,7 @@ describe('NewSessionWizard (attachments.uploads)', () => {
         const screen = await renderScreen(React.createElement(NewSessionWizard, {
                     popoverBoundaryRef: { current: null } as any,
                     layout: {
-                        theme: {
-                            colors: {
-                                divider: '#ddd',
-                                shadow: { color: '#000' },
-                                groupped: { background: '#fff' },
-                                text: '#000',
-                                textSecondary: '#666',
-                                input: { background: '#fff' },
-                                button: { secondary: { tint: '#000' } },
-                                warning: '#d97706',
-                                box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
-                            },
-                        },
+                        theme: createThemeFixture(),
                         styles: {},
                         safeAreaBottom: 0,
                         headerHeight: 44,
@@ -539,17 +477,7 @@ describe('NewSessionWizard (attachments.uploads)', () => {
         tree = (await renderScreen(React.createElement(NewSessionWizard, {
                     popoverBoundaryRef: { current: null } as any,
                     layout: {
-                        theme: {
-                            colors: {
-                                divider: '#ddd',
-                                shadow: { color: '#000' },
-                                groupped: { background: '#fff' },
-                                text: '#000',
-                                textSecondary: '#666',
-                                input: { background: '#fff' },
-                                button: { secondary: { tint: '#000' } },
-                            },
-                        },
+                        theme: createThemeFixture(),
                         styles: {},
                         safeAreaBottom: 0,
                         headerHeight: 44,
@@ -655,11 +583,10 @@ describe('NewSessionWizard (attachments.uploads)', () => {
         const { NewSessionWizard } = await import('./NewSessionWizard');
 
         AgentInputMock.mockClear();
-        attachmentDraftState.drafts = [{ id: 'draft-1' }];
-        attachmentDraftState.hasSendableAttachments = true;
-        attachmentDraftState.agentInputAttachments = [{ key: 'draft-1', label: 'notes.txt' }];
-        attachmentDraftState.clearDrafts.mockReset();
-        attachmentDraftState.applyDraftPatch.mockReset();
+        const drafts: AttachmentDraft[] = [{ id: 'draft-1', status: 'pending', source: {
+            kind: 'memory', bytes: new Uint8Array(12), name: 'notes.txt', mimeType: 'text/plain',
+        } }];
+        writeNewSessionAttachmentDrafts('wizard-follow-up', drafts);
         uploadAttachmentDraftsToSessionSpy.mockReset();
         formatAttachmentsBlockSpy.mockReset();
         followUpSpawnedSessionWithServerScopeSpy.mockReset();
@@ -680,17 +607,7 @@ describe('NewSessionWizard (attachments.uploads)', () => {
         await renderScreen(React.createElement(NewSessionWizard, {
                     popoverBoundaryRef: { current: null } as any,
                     layout: {
-                        theme: {
-                            colors: {
-                                divider: '#ddd',
-                                shadow: { color: '#000' },
-                                groupped: { background: '#fff' },
-                                text: '#000',
-                                textSecondary: '#666',
-                                input: { background: '#fff' },
-                                button: { secondary: { tint: '#000' } },
-                            },
-                        },
+                        theme: createThemeFixture(),
                         styles: {},
                         safeAreaBottom: 0,
                         headerHeight: 44,
@@ -759,6 +676,7 @@ describe('NewSessionWizard (attachments.uploads)', () => {
                     },
                     footer: {
                         promptStore: createNewSessionPromptStore('Investigate this bug'),
+                        attachmentFlowId: 'wizard-follow-up',
                         setSessionPrompt: () => {},
                         handleCreateSession,
                         canCreate: true,
@@ -811,6 +729,6 @@ describe('NewSessionWizard (attachments.uploads)', () => {
                 },
             },
         });
-        expect(attachmentDraftState.clearDrafts).toHaveBeenCalledTimes(1);
+        expect(readNewSessionAttachmentDrafts('wizard-follow-up')).toEqual([]);
     });
 });

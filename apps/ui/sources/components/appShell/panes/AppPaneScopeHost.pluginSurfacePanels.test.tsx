@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createMachineFixture, createSessionFixture, renderScreen as renderPanelScreen } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storageStore';
+import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import { installSessionDetailsPanelNonRnModuleMocks } from '@/components/sessions/panes/sessionDetailsPanelNonRnModuleMocks';
 import type { SelectedPaneDestinationV1 } from './model/selectedPaneDestination';
@@ -152,6 +153,7 @@ describe('AppPaneScopeHost plugin destinations', () => {
                     scopeId="scope1"
                     main={<div />}
                     surfaceScope={{
+                        accountLifetime: captureActiveServerAccountScopeLifetime(),
                         targetKind: 'session',
                         sessionId: 'session-1',
                         pluginUiProjection: projectionWith(),
@@ -195,6 +197,7 @@ describe('AppPaneScopeHost plugin destinations', () => {
                 scopeId="scope1"
                 main={<div />}
                 surfaceScope={{
+                    accountLifetime: captureActiveServerAccountScopeLifetime(),
                     targetKind: 'session',
                     sessionId: 'session-1',
                     pluginUiProjection: projection,
@@ -218,6 +221,7 @@ describe('AppPaneScopeHost plugin destinations', () => {
                 scopeId="scope1"
                 main={<div />}
                 surfaceScope={{
+                    accountLifetime: captureActiveServerAccountScopeLifetime(),
                     targetKind: 'session',
                     sessionId: 'session-1',
                     pluginUiProjection: projection,
@@ -253,6 +257,7 @@ describe('AppPaneScopeHost plugin destinations', () => {
                 scopeId="scope1"
                 main={<div />}
                 surfaceScope={{
+                    accountLifetime: captureActiveServerAccountScopeLifetime(),
                     targetKind: 'session',
                     sessionId: 'session-1',
                     pluginUiProjection: projection,
@@ -313,6 +318,7 @@ describe('AppPaneScopeHost plugin destinations', () => {
                 // details chrome simply to deliver the exact open request.
                 detailsPaneEnabled={false}
                 surfaceScope={{
+                    accountLifetime: captureActiveServerAccountScopeLifetime(),
                     targetKind: 'project',
                     projectId: 'project-1',
                     pluginUiProjection: projection,
@@ -356,6 +362,7 @@ describe('AppPaneScopeHost plugin destinations', () => {
                 scopeId="scope1"
                 main={<div />}
                 surfaceScope={{
+                    accountLifetime: captureActiveServerAccountScopeLifetime(),
                     targetKind: 'session',
                     sessionId: 'session-1',
                     pluginUiProjection: projection,
@@ -451,6 +458,7 @@ describe('AppPaneScopeHost plugin destinations', () => {
                 scopeId="scope1"
                 main={<div />}
                 surfaceScope={{
+                    accountLifetime: captureActiveServerAccountScopeLifetime(),
                     targetKind: 'session',
                     sessionId: 'session-1',
                     pluginUiProjection: projection,
@@ -506,6 +514,7 @@ describe('AppPaneScopeHost plugin destinations', () => {
                 scopeId="scope1"
                 main={<div />}
                 surfaceScope={{
+                    accountLifetime: captureActiveServerAccountScopeLifetime(),
                     targetKind: 'session',
                     sessionId: 'session-42',
                     pluginUiProjection: sessionProjection,
@@ -540,6 +549,7 @@ describe('AppPaneScopeHost plugin destinations', () => {
                 scopeId="scope1"
                 main={<div />}
                 surfaceScope={{
+                    accountLifetime: captureActiveServerAccountScopeLifetime(),
                     targetKind: 'session',
                     sessionId: 'session-1',
                     pluginUiProjection: projection,
@@ -573,6 +583,7 @@ describe('AppPaneScopeHost plugin destinations', () => {
                 scopeId="scope1"
                 main={<div />}
                 surfaceScope={{
+                    accountLifetime: captureActiveServerAccountScopeLifetime(),
                     targetKind: 'session',
                     sessionId: 'session-1',
                     pluginUiProjection: projection,
@@ -617,6 +628,7 @@ describe('AppPaneScopeHost plugin destinations', () => {
                 scopeId="scope1"
                 main={<div />}
                 surfaceScope={{
+                    accountLifetime: captureActiveServerAccountScopeLifetime(),
                     targetKind: 'session',
                     sessionId: 'session-1',
                     pluginUiProjection: projection,

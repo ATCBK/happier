@@ -33,6 +33,8 @@ export function ComposerEntityDropTarget(props: Readonly<{
     scope: EntityDragScopeV1;
     refValue: ComposerRefV1;
     bounds: () => WindowBounds | null;
+    /** The composer's whole block (status row and panel): the carried card keeps clear of it. */
+    clearBounds?: () => WindowBounds | null;
     presented: boolean;
     editable: boolean;
     fileScope?: FileSuggestionScope | null;
@@ -66,7 +68,8 @@ export function ComposerEntityDropTarget(props: Readonly<{
         return props.presented && current?.serverId === props.scope.serverId && current.accountId === props.scope.accountId;
     };
     useEntityDropTarget(runtime, {
-        id: props.id, scope: props.scope, acceptedKinds, getBounds: props.bounds, isCurrent,
+        id: props.id, scope: props.scope, acceptedKinds, getBounds: props.bounds,
+        ...(props.clearBounds ? { getClearBounds: props.clearBounds } : {}), isCurrent,
         listDestinations: () => [{ destination: null, label: t('entityDragDrop.composer.addContext') }],
         resolve: ({ item }) => {
             const sessionId = props.refValue.kind === 'session' ? props.refValue.sessionId : null;
@@ -116,6 +119,6 @@ export function ComposerEntityDropTarget(props: Readonly<{
     const snapshot = useEntityDropTargetState(runtime, props.id);
     return snapshot?.phase === 'carrying' && snapshot.admission?.status === 'allowed'
         // The outline takes the composer's own corner, so it lies exactly on the panel.
-        ? <TreeDropOutline visual={{ kind: 'outline', targetId: props.id }} testID="composer-entity-drop-outline" radius={theme.parts.composer.radius}
+        ? <TreeDropOutline visual={{ kind: 'outline', targetId: props.id }} testID="composer-entity-drop-outline" radius={theme.parts.composer.radius} weight="container"
             style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, pointerEvents: 'none' }} /> : null;
 }

@@ -8,7 +8,7 @@ import {
 } from '../../daemon/terminal.js';
 import { TerminalStreamReadRequestSchema, TerminalStreamReadResponseSchema } from '../../terminal/stream.js';
 import { TerminalStreamInputRequestSchema, TerminalStreamInputResponseSchema } from '../../terminal/input.js';
-import type { PreNormalizedActionSpec } from '../actionSpecs.js';
+import type { ApprovalPresentationContext, PreNormalizedActionSpec } from '../actionSpecs.js';
 import { RPC_METHODS } from '../../rpc/methods.js';
 import { readRecord } from '../../inputs/inputRecords.js';
 
@@ -42,19 +42,23 @@ type MachineTerminalSpec<TId extends MachineTerminalActionId> = PreNormalizedAct
   id: TId; inputSchema: (typeof MACHINE_TERMINAL_ACTION_INPUT_SCHEMAS)[TId];
   outputSchema: (typeof MACHINE_TERMINAL_ACTION_OUTPUT_SCHEMAS)[TId];
 }>;
-/** The last folder name of a path on any platform, or null: the approval says where, never a raw key. */
-function terminalFolderName(input: unknown): string | null {
+/**
+ * Where the terminal opens: the presenting app's readable path (`~/work/app`) when it knows the Machine's home,
+ * otherwise the last folder name on any platform, or null. The approval says where, never a raw key.
+ */
+function terminalFolderName(input: unknown, context?: ApprovalPresentationContext): string | null {
   const record = readRecord(input);
   const workspace = readRecord(record.workspace);
   const path = typeof record.cwd === 'string' ? record.cwd : typeof workspace.rootPath === 'string' ? workspace.rootPath : '';
+  if (path.trim() && context?.formatPath) return context.formatPath(path);
   return path.split(/[\\/]/u).filter(Boolean).at(-1) ?? null;
 }
 
 /**
  * What approving will do, in the words a person uses. The Machine is named by its Details row; the raw terminal key and daemon vocabulary stay out of the reading.
  */
-function describeMachineTerminalApprovalSummary(actionId: MachineTerminalActionId, input: unknown): string | null {
-  const folder = terminalFolderName(input);
+function describeMachineTerminalApprovalSummary(actionId: MachineTerminalActionId, input: unknown, context?: ApprovalPresentationContext): string | null {
+  const folder = terminalFolderName(input, context);
   const where = folder ? ` in “${folder}”` : '';
   switch (actionId) {
     case 'machines.terminal.open': return `Open a terminal${where}.`;
@@ -67,10 +71,12 @@ function describeMachineTerminalApprovalSummary(actionId: MachineTerminalActionI
 function row<TId extends MachineTerminalActionId>(actionId: TId, title: string, rpcMethod: string, read = false): MachineTerminalSpec<TId> {
   return {
     id: actionId, approval: actionId === 'machines.terminal.open' || actionId === 'machines.terminal.restart' ? { result: 'required', flow: 'deferred' } : { result: 'required' },
-    // Interactive present-user input uses the PTY's admitted custody. Keep
-    // automation's danger floor and explicit per-surface Ask settings intact.
-    approvalPolicy: actionId === 'machines.terminal.write' ? {} : { uiConfirmation: 'policy' }, title,
-    approvalPresentation: { summary: (input: unknown) => describeMachineTerminalApprovalSummary(actionId, input) },
+    // Opening is reversible, and interactive input uses admitted PTY custody.
+    // Automation's danger floor and explicit per-surface Ask settings still apply.
+    approvalPolicy: { uiConfirmation: actionId === 'machines.terminal.open' || actionId === 'machines.terminal.write' ? 'direct' : 'policy' }, title,
+    // The terminal key is how the daemon finds its terminal and its size is the client's pane; people know the terminal by its folder and Machine.
+    approvalPresentation: { summary: (input: unknown, context?: ApprovalPresentationContext) => describeMachineTerminalApprovalSummary(actionId, input, context),
+      technicalInputPaths: ['terminalKey', 'cols', 'rows'] },
     description: read ? 'Read only the authenticated requester’s current Machine terminals. No Session is required.'
       : 'Operate on a requester-owned Machine terminal through the canonical daemon PTY owner. Project shells retain their accepted checkout. Interactive input and resize remain under admitted terminal custody.',
     safety: read ? 'safe' : 'danger', sideEffectClass: read ? 'read' : 'danger',

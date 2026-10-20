@@ -59,6 +59,18 @@ a per-skill deny. Gemini, Kilo, Cursor, Grok and Oh My Pi remain index-only unti
 their native probes pass. Native roots are read-only discovery inputs, not proof
 that an unprobed launch loads an injected directory.
 
+The Agent's optional `preflightSessionControls.resolveNativeSkillDirectories`
+projects extra launch directories from its exact non-secret Settings and runtime
+descriptor. Runner preparation, live reapply, Session-owned Runs and spawn
+previews scan those directories through the same declared project-root patterns.
+Claude uses its existing launch-settings resolver, including SDK
+`additionalDirectories`; an explicit unified-terminal descriptor supplies no
+SDK-only roots.
+Discovery reads only regular `SKILL.md` files. An unreadable or special entry
+retains failed-root uncertainty, so it cannot unmask a library skill. Found folds
+physical directory aliases and combines their Agent coverage, while retaining
+distinct copies, declared-root failures and plugin ownership/confinement.
+
 Declarative ACP Agents use the same lazy normalizer and one host ACP composer.
 The optional `skills.sessionDelivery` block selects `env_path_list`,
 `defaults_file_env`, or `native_config_skills_dir`; it accompanies a matching
@@ -110,6 +122,29 @@ target reader maps the 0.2 `{ kind: 'configuredAcpBackend', backendId }` selecti
 to this contribution and the same definition id; new requests and writes use the
 strict current target.
 
+Configured definitions can declare `runtime.permissionModeMapping`, using the
+same strict permission-intent mapping schema as authored ACP contributions.
+The Account launch owner projects it through
+`configuredAcpRuntimeConfiguration` into the existing ACP definition; catalog
+edits and transfers preserve it. `runtime.stderrRules` remains optional and
+independent, so a mapping does not require unrelated stderr rules. Older
+definitions still parse without either field. A retained detached input requires
+a concrete native mapping for its resolved intent and refuses before prompting
+when that mapping is absent or null; a default native mode or capability hint
+does not establish permission semantics. This is a 0.3 development-source
+extension of the existing Account catalog, not another policy or runtime owner.
+
+Custom ACP currently declares no Connected Account purposes. In 0.3 development,
+Connected Account discovery and launch options therefore return no compatible
+services for a configured definition; explicitly supplying a binding is refused
+by the qualified-purpose authority before Connected Account credential lookup. The spawn
+result retains `connected_service_qualified_purpose_authority_unavailable` as
+its launch-error code, rather than treating the selection as malformed input.
+A command such as `opencode acp` uses its
+own native authentication configuration. It does not inherit the OpenCode
+Agent contribution's Connected Account purposes or Provider-binding adapter.
+Use the OpenCode Agent target when selecting its supported Connected Accounts.
+
 In 0.3 development, configured definitions carry a typed `launch` (`command`,
 `npm`, `archive`, or `uv`); the stored reader folds predecessor `command`/`args`
 into a command launch. `resolveAcpLaunch` is the single CLI launch owner.
@@ -129,6 +164,13 @@ Machine actor's namespace, including when that actor differs from the custodian.
 Absent admission or unstamped private requester-child custody returns
 `ACP_CATALOG_UNAVAILABLE` before managed acquisition. A damaged retained version
 requires the daemon's guarded repair/removal; Session first use cannot replace it.
+
+Definition install/update jobs refresh the admitted Account catalog before
+capturing the requested pin. Custodian jobs use the installed daemon Account's
+existing hydration owner; guest jobs use their captured requester Account ports.
+An older background catalog observation cannot decide that a just-added
+definition is missing. Uninstall retains its ability to remove an owned managed
+install after the definition has been deleted.
 
 Executable inventories expand contributions through
 `packages/protocol/src/agents/executionTargetV1.ts#listAgentExecutionTargetsV1`.
@@ -150,6 +192,9 @@ predecessor aliases.
 
 The definition id survives picker selection and draft persistence/reopening,
 then the daemon admits the installed contribution and the exact catalog row.
+Admission refreshes that row through the scoped Account catalog owner; a ready
+cached projection is not proof that a definition just saved on another client
+is absent. UI New Session and `session.spawn_new` use this same daemon admission.
 The host's existing runtime descriptor carries the selected definition into the
 runner. `accountConfiguredAcp.ts` owns captured Account custody and configured
 command, arguments, environment, authentication metadata, runtime options and
@@ -195,7 +240,12 @@ failed read or envelope admission must retain its unavailable reason rather than
 publish an empty success.
 
 Retained authored transport semantics use the existing typed ACP `stderrRules`
-contribution seam. The predecessor Kiro recipe's status command/parser is retained
+contribution seam. The CLI reads these facts from the current Agent catalog;
+the UI reads the admitted bundled Agent declaration published by the canonical
+generator. Neither imports an Agent package to translate a retained recipe.
+Missing declarations or rules leave transport translation unavailable rather than
+changing optional bundled-plugin membership. The predecessor Kiro recipe's status
+command/parser is retained
 as closed compatibility data, not promoted into a new executable authentication
 runner. Private SavedSecret references remain under the shared reference and
 resource mutation owner. Consumer cutover and composed runtime validation are
@@ -410,6 +460,32 @@ consume that same environment and include the selected profile identity in their
 In development source, every discovery method validates supplied Connected Account bindings;
 malformed input returns `connected-service-preflight-failed` before credential resolution.
 
+In development source, native execution-run structured-output admission uses that same preflight owner
+with the Run's Connected Account selection and Saved Secret overlay. A retained
+Run probes under its requester Account and plugin occurrence, rather than the
+daemon's foreground credentials. The host-private offered-model request carries
+those selections. A failed or unreadable catalog returns `model_catalog_unavailable`,
+and typed snapshot or transport failures retain their cause; these failures are
+not reported as `model_structured_output_unsupported`. A successful observation
+still requires supported structured output for the selected model. Failed refreshes
+can retain usable last-good capability evidence, as the picker does.
+A launch profile used only for prompt composition does not
+become an independent environment selection for this probe.
+
+In development source, an Agent's optional `preflightSessionControls.prepareLaunchEnvironment`
+reuses its native account preparation after the host admits the exact selected-account operation.
+It receives only that operation's Connected Accounts service and sanitized launch environment;
+ordinary catalog callbacks continue to receive environment presence facts. The host removes
+prepared assets before retiring account materialization. Its complete prepared environment also
+retains explicit key removals; the daemon cannot reintroduce a removed native home. OpenCode uses the same qualified-account
+preparer for this path and Session launch, so pre-start discovery sees its native account config.
+Explicit CLI model probes, including configured ACP definitions, run on the selected Machine.
+
+OpenCode server-mode model discovery reads the managed native server's provider inventory through
+the same client and model normalizer as bound Sessions. Standalone CLI model listings are no longer
+a second discovery source. Runtime-id and equivalent concrete Agent-target probes share one cached
+observation; selected accounts, profiles, runtime variants and configured definitions retain their
+separate scopes. OpenCode ACP discovery uses the host's native Session-controls snapshot instead.
 
 In development source, a declared stdio ACP preflight command also supplies model, mode and
 config-option discovery through the same host process and authentication owner. These reads
@@ -417,6 +493,10 @@ use the initial `session/new` snapshot immediately; command discovery alone wait
 matching `available_commands_update`. Model and mode choices fall back to config options when
 legacy arrays are empty or malformed, using the existing ACP control normalizers. Explicit Agent-owned
 control callbacks override this shared ACP behavior.
+An Agent choosing ACP at runtime can use the optional host
+`probeDeclaredAcpSessionControls` method to consume that same normalized snapshot. Codex uses
+this path for ACP and its native `model/list` reader for App Server; a host without the optional
+method leaves ACP discovery unavailable rather than substituting App Server's catalog.
 Declared control hooks own readiness of their selected executable; mode and config-option discovery
 does not require a separate interactive CLI when those hooks exist. Native probes without a declared
 hook retain their CLI readiness check. The host closes the temporary native session when supported
@@ -464,6 +544,17 @@ selection uses the existing `projectSetModelResponse` seam on the config-option 
 previously observed controls on unselected models. A complete authenticated per-model probe walk
 remains separate follow-up work.
 
+In development source, the generic ACP backend accepts the legacy
+`session/set_model` success response without a repeated model catalog. An empty
+acknowledgement selects the requested model from the already observed catalog,
+preserving its model controls and publishing `current_model_update`. Returned
+model state must still agree with the request; an Agent's explicit response
+projector remains responsible for its own acknowledgement format. This legacy
+response contract has only optional metadata in the
+[ACP v0.10.8 schema](https://github.com/agentclientprotocol/agent-client-protocol/blob/v0.10.8/schema/schema.unstable.json);
+the current protocol prefers
+[session configuration options](https://agentclientprotocol.com/protocol/v1/session-config-options).
+
 In the current development source, daemon model, mode and config probes demand the exact Agent
 registration from the authoritative plugin runtime and retain its lease for the operation.
 `withAgentPreflightCatalog` serves both capability RPCs and in-process Action inventories. The
@@ -493,6 +584,14 @@ Current mode facts come from native observation or accepted application, never a
 The canonical V2 catalog permits an unknown current mode while preserving known selectable
 options. Readers prefer it over retained V1/ACP aliases; the same writer projects strict
 `sessionModesV1` compatibility only when the accepted current mode is known.
+In development source, the host checks an explicit native mode against this observed inventory
+at Session open and before configuration updates. A missing mode returns
+`native_agent_session_mode_unavailable` before prompt delivery; an unobserved inventory or the
+native accepted current mode retains the Agent's authority. A mode named `default` is an explicit
+native identifier, not a host-selected fallback for another Agent's configuration.
+Session-owned Runs carry the same live catalog binding into admission. OpenCode's native
+configuration owner also consumes the shared selection rule for detached execution contexts,
+which have no Session catalog-publication service.
 
 Host-managed ACP Sessions use those same model and mode bindings at startup, on
 resume and for live ACP updates. Initial selections are applied before publishing
@@ -508,6 +607,13 @@ use the exact native Session writers before reporting application. V1 selections
 until the next prompt. A fresh V1 Session seeds only its initial native default from the ordered,
 visible-primary Agent inventory; a resumed Session does not guess that default or treat staged
 intent as accepted current state. V1's local TUI selection is not an ongoing server observation.
+
+OpenCode prompt admission retains its authoritative native user-message identity while its
+storage write is pending. Native idle may project the exact-parent response during that write,
+but successful turn completion waits for admission to settle. An idle already observed at that
+boundary rejoins the existing completion owner, including when the native prompt response has
+no body. Cancellation and native failure keep their existing interruption paths. This is a
+development-source correction; loaded-runtime replay is separate evidence.
 
 In development source, OpenCode publishes native commands through the SDK `available-commands`
 event and the host's existing slash-command metadata owner. Known names use the native command
@@ -559,7 +665,8 @@ The supported 0.2 predecessor also sends the scalar `runtimeKindOverride`. The h
 unchanged through the existing preflight input and cache scope. Agent-owned mode readers interpret
 it without rewriting generic account settings. Codex gives the current descriptor precedence,
 then a valid predecessor scalar, then the account default; its variant and actual probe use that
-same decision. OpenCode's existing CLI catalog is mode-independent and needs no extra mode branch.
+same decision. OpenCode uses its existing backend-mode resolver for both the probe variant and
+native discovery, selecting the managed server or declared ACP Session-controls owner consistently.
 
 The shared runtime model publisher treats a complete Agent snapshot, including an empty list, as
 replacement membership. Canonical and legacy ACP metadata are observations of that same catalog;
@@ -692,6 +799,38 @@ The Claude plugin owns the native JSON-stream Agent SDK protocol integration wit
 the Claude Code CLI. It does not depend on the `@anthropic-ai/claude-agent-sdk`
 npm package; the SDK changelog below documents the upstream message contract.
 
+In 0.3 development, native SDK Sessions and detached runs request Claude Code's
+`--include-partial-messages` output on the existing JSON stream. The SDK codec
+projects genuine text-block starts and text deltas through the existing
+`message-delta` event before committed assistant text; complete assistant/result
+records do not synthesize duplicate text deltas. Replay, sidechain and cancelled
+query text cannot acquire the foreground turn identity. Voice can begin segment
+preparation before the final response, subject to actual provider output and the
+existing Voice segment boundary.
+
+In 0.3 development source, both native terminal launch paths prepare the explicitly
+selected Claude config home before spawning. They seed Claude Code's onboarding-complete
+flag and a missing theme without copying another account's `.claude.json`, changing
+credentials, or granting project trust. Existing native fields and project trust records
+are preserved; unreadable or malformed configuration fails before launch with
+`claude_terminal_config_unavailable`. Workspace trust remains a separate decision under
+the Account's Claude workspace-trust policy.
+
+Unified terminal launches enable Claude's bypass-permissions mode only when the
+user explicitly selects YOLO/bypass. Default, Auto and Plan do not add the native
+`--allow-dangerously-skip-permissions` flag: Claude Code 2.1.296 shows its bypass
+warning for that flag even without starting in bypass mode. A later mode change
+that the running native mode cycle cannot reach remains unapplied and requires
+a restart; it never silently widens the launch mode.
+
+Native startup questions retain their occurrence until an applied answer is
+acknowledged and settled in the Session. Advancing from workspace trust to the
+next native dialog does not cancel the successful trust answer. Occurrence
+disposal and an unanswered dialog replacement still cancel their own question.
+The host admits native decision application through the permission coordinator's
+same completion path. A question already withdrawing its final caller cannot
+apply a stale answer merely because its durable cancellation is still pending.
+
 Managed Provider bindings in 0.3 development carry per-connection Claude helper
 pins through the Agent provider-binding adapter. `fast`, `default`, and
 `strongest` map to `ANTHROPIC_DEFAULT_HAIKU_MODEL`,
@@ -770,6 +909,10 @@ input. This preserves real tool interception changes and permission updates whil
 avoiding Claude's rewrite-specific rule recheck for an unchanged approval.
 `PreToolUse` continues to carry interaction answers in its input. See the
 [Claude hook decision contract](https://code.claude.com/docs/en/hooks#permissionrequest-decision-control).
+Both runtimes also forward the host hook's cancellation signal to the same
+permission engine when the HTTP hook expires or disconnects. The
+[runtime cancellation owner](runtime-core.md) keeps finite transport deadlines
+and exact request retirement separate.
 
 ### 4) App agents catalog: `apps/ui/sources/agents/catalog/catalog.ts`
 
@@ -1070,8 +1213,15 @@ display, but marks inventory error/stale; retained facts do not authorize launch
 Projection RPCs retain the shared connection/setup budget without imposing an
 operation deadline on daemon projection work.
 
-Machine and Agent rows describe aggregate authentication availability: a healthy
-accepted Connected Account can satisfy sign-in while the native CLI is signed out.
+Machine and Agent rows describe the Account's default authentication for a new
+Session. `useMachineAgentAuthentication` reads the admitted purpose-default catalog
+through the same Protocol default-binding reader as the composer and feeds those
+bindings into `machineAgentModel#projectMachineAgentForCredential`. An empty admitted
+catalog uses native authentication; an unread catalog remains unknown. A healthy
+Connected Account satisfies sign-in only when that account, or a pool with that
+active account, is selected by the default. Other healthy accounts remain available
+for recovery without becoming the default. Detailed inventory and passive Home/Machine
+summaries share this projection; default changes do not require another CLI probe.
 `useMachineAgents` evaluates Account health against the exact Machine's cached
 Connected Account declarations through `readConnectedAccountDescriptorProjection`,
 `mergeConnectedAccountDescriptorProjections` and `projectConnectedServiceRegistryEntries`.
@@ -1095,7 +1245,7 @@ Machine-scoped readiness uses only the selected
 Machine's published descriptors, deduplicated by the same projection owner. An
 unanswered or internally conflicted Machine remains unknown; it cannot borrow
 another Machine's authentication modes.
-The New Session launcher instead projects the credential in its emitted binding
+The New Session launcher projects the credential in its emitted binding
 through `machineAgentModel#projectMachineAgentForCredential`, using the same
 inventory sign-in and readiness owners. Native selection uses the retained native
 probe; a selected personal account uses that exact account's health, and an account
@@ -1136,6 +1286,23 @@ that installer and the existing update owner, rather than implementing another i
 It resolves the Agent's `runtimeSpec` from the contribution registry, so declared install
 paths apply to installed plugin Agents as well as bundled Agents.
 
+An Agent's `cli.install.managed` GitHub recipe may declare `releaseTag` to pin
+its supported native release. In current 0.3 development source, managed acquisition
+reads that tag's public GitHub release assets and SHA-256 digests through the shared
+release reader, then downloads the exact asset without a REST API lookup. Missing
+or ambiguous integrity metadata fails closed; an unavailable declared tag never
+falls back to latest. Managed update-version checks derive the version from the
+declared pin without network access. Omission retains
+latest-release behavior. Independently owned native and package-manager installs
+retain their own latest-version source. Bundled and installed Agent plugins
+share this contract.
+
+REST responses reporting an exhausted GitHub rate limit retain a typed
+`rate_limited` install-job failure and the reported reset time in its diagnostic
+message. Agent update inventory reuses its existing cache until that reset time;
+refreshing the inventory cannot bypass the exhausted budget. This source change
+requires a daemon reload; it does not introduce a GitHub token requirement.
+
 A job installs the Agent CLI, its declared executable managed dependencies, and then checks
 that the CLI runs and reports a version. Progress includes step transitions and transferred
 bytes where the source supplies them; an unknown total stays `null`. Antigravity's CLI and
@@ -1165,6 +1332,14 @@ shared-state links. Candidate discovery, exact identity, transcript paging and
 observation use that same root. Project-directory escapes and transcript-file
 symlinks remain refused; a completed turn cannot settle Activity when ordered
 source admission fails.
+
+For a linked Claude store that matches the current configured store, takeover
+preserves the native config environment, including an unset `CLAUDE_CONFIG_DIR`.
+An explicit override retains its value; a different linked store retains its
+pinned root. The plugin's `agent/environment.ts` owns that environment overlay,
+also used by target-state handoff and bundle import. Transcript-location metadata
+remains resolved. These development-source rules do not recover the original
+authentication environment of older links.
 
 The process singleton admits one active built-in job per Agent target; configured
 jobs additionally distinguish the admitted Account and pinned version. Another
@@ -1350,6 +1525,25 @@ Instead:
 - explicit “resume inactive session” is **fail-closed**: if `loadSession` fails, we surface the error instead of silently starting a fresh vendor session
 - ACP capability probing is reserved for opt-in diagnostics, not day-to-day UX
 - the development provider harness `acp_probe_capabilities` scenario validates the negotiated runtime capabilities published by the active session
+
+In 0.3 development source, the host advertises ACP form elicitation only when its
+permission handler implements it. The ACP SDK 1.2.1 `elicitation/create` contract
+is experimental. Native requests retain their active-turn custody and flow
+through the existing Session interaction owner; cancelling a single request
+withdraws its prompt without cancelling the turn. URL elicitation remains
+unsupported.
+
+ACP forms, declared MCP servers, and Session-scoped MCP forms share
+`mcpElicitationForm.ts` for question, confirmation, and answer conversion. The ACP
+boundary translates nullable optional schema fields before strict MCP parsing.
+Optional `__other` companion fields can supply custom answers; required companion
+fields remain independently answerable, and a custom answer retains an existing
+choice ID only when its label or ID unambiguously matches the companion title. Message presentation uses the
+existing interaction limits and marks truncation while retaining the actual
+question. Empty forms request a confirmation through the existing Session
+interaction owner. Native confirmations use the existing single-choice question
+presentation and require an explicit confirm or cancel answer, including in
+full-access permission modes.
 
 After an ACP connection initializes, runtime-only list, fork, close, and delete operations fail closed
 against the capabilities negotiated on that exact connection. Two of them have product consumers.
@@ -1554,6 +1748,13 @@ concrete media files referenced by transcript items through the existing
 exact-file media allowance/adoption path. Roots are never copied into
 `linkData`, persisted or shared state, or transcript records; they grant no
 directory-enumeration or write authority.
+
+In 0.3 development, source admission passes `includeAccountingSource: false`
+to `resolveSource`. Claude, Codex and Pi then resolve the source and media roots
+without enumerating their accounting history. Accounting discovery leaves this
+optional hint unset and retains its file inventory and watch descriptors. Older
+contributions may ignore the hint and return the same valid source with their
+accounting projection; it changes work demand, never source authority.
 
 This is a development/preview authoring contract from the current source tree;
 it does not claim that loaded or packaged release artifacts expose the same

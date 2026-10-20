@@ -27,6 +27,7 @@ import type { ManagedNativeBootstrapIO } from './enrollment';
 import { ManagedMachineControllerError, ManagedMachineNativeEffectGuardRefusal } from './controllerErrors';
 import type { ManagedMachineAcquisitionDriverInput, ManagedMachineControllerClient, ManagedMachineExecutionOptions } from './acquire';
 import { sshPublicKey } from './bootstrapSshPublicKey';
+import { isRetryableHomeOperationError, type HomeOperationRetry } from '@/api/client/retryHomeOperation';
 
 export type ManagedMachineReconciliationInput = Readonly<{
     input: ManagedMachineAcquisitionDriverInput;
@@ -242,132 +243,182 @@ export function createManagedNativeInvocation(params: ManagedMachineReconciliati
             { descriptor: contribution.definition, launch: launch.choices });
     }
     async function invoke(role: keyof typeof contribution.definition.actions | 'exec' | 'putFile' | 'reconcile' | 'cleanup', body: unknown, io?: Readonly<{ signal?: AbortSignal; timeoutMs?: number | null; onStdoutChunk?: (text: string) => void; beforeNativeEffect?: () => Promise<void> }>): Promise<JsonValue | null> {
-        const machine = readMachine();
-        const { executeContributedAction } = await import('@/plugins/runtime/invocation/actions/executeContributedAction');
-        const localId = role === 'reconcile' ? contribution.definition.reconciliation?.action
-            : role === 'cleanup' ? contribution.definition.reconciliation?.cleanup
-            : role === 'exec' || role === 'putFile' ? contribution.definition.bootstrapTransport?.[role] : contribution.definition.actions[role];
-        if (!localId) throw new ManagedMachineControllerError('provider_unavailable');
-        const actionId = buildQualifiedPluginContributionKey({ pluginId: contribution.pluginId, localId });
-        const invocationSignal = io?.signal ?? params.options.signal;
-        const stdoutDecoder = new TextDecoder();
-        let rowCurrent = await params.client.isCurrent(machine, role === 'inspect' || role === 'cleanup' ? 'inspect' : undefined);
-        if (!rowCurrent) throw new ManagedMachineControllerError('intent_changed');
-        const credentials = (machine.launch.credentials ?? []).filter(credential => isMachineProvisionerCredentialPurposeRequiredV1(
-            contribution.definition, credential.purpose.purpose, machine.launch.choices));
-        const configurationCurrent = async () => {
-            if (!credentials.length) return true;
-            const read = params.input.managedProviderOperationAuthority.readCredentialConfigurationRevision;
-            if (!read || credentials.some(credential => credential.configurationRevision === undefined)) return false;
-            try { return (await Promise.all(credentials.map(async credential =>
-                await read(credential.account, invocationSignal ?? new AbortController().signal) === credential.configurationRevision))).every(Boolean); }
-            catch { return false; }
-        };
-        if (!await configurationCurrent()) throw new ManagedMachineControllerError('credential_unavailable');
-        const authorizations = await roleCredentialAuthorization(localId);
-        const activation = await params.input.managedProviderOperationAuthority.activate({
-            identity: { pluginId: contribution.pluginId, localId },
-            operationId: params.options.context?.operationAcceptance?.operationId ?? params.options.requestId,
-            purposes: authorizations.map(authorization => authorization.purpose),
-            purposeBindings: { v: 1, bindings: authorizations.map(authorization => ({ purpose: authorization.purpose,
-                target: { kind: 'account' as const, account: authorization.credential.account } })) },
-            requestAuthUses: [],
-            isCurrent: () => rowCurrent && !invocationSignal?.aborted,
-            managedOperation: { role, isCurrent: (currentRole) => currentRole === role && rowCurrent,
-                credentialConfigurations: credentials.map(credential => ({ account: credential.account,
-                    revision: credential.configurationRevision! })),
-            },
-        });
-        let nativeEffectGuardFailure: Readonly<{ error: unknown }> | undefined;
+        let dispatched = false;
         try {
-            const custody: AdmittedManagedProviderOperationExecutionRequest = {
-                managedId: machine.id, homeId: machine.homeId, intentRevision: machine.intentRevision,
-                controller: machine.controller,
-                contribution: { ...contribution.identity, occurrenceId },
-                role,
-                ...(bootstrapCredentialKind && isMachineProvisionerBootstrapCredentialRoleV1(role)
-                    ? { readBootstrapCredential: async () => {
-                        if (!await params.client.isCurrent(machine)) throw new ManagedMachineControllerError('intent_changed');
-                        const retained = await readBootstrapCredentialValue(params, machine,
-                            readBootstrapCredentialRevision?.() ?? nativeBootstrapCredentialRevision);
-                        nativeBootstrapCredentialRevision = retained.revision;
-                        if (!await params.client.isCurrent(machine)) throw new ManagedMachineControllerError('intent_changed');
-                        return new TextEncoder().encode(retained.value);
-                    } } : {}),
-                ...(role === 'exec' && io?.timeoutMs !== undefined ? { execTimeoutMs: io.timeoutMs } : {}),
-                ...(role === 'exec' && io?.onStdoutChunk ? { onProcessOutput: (output: Parameters<NonNullable<AdmittedManagedProviderOperationExecutionRequest['onProcessOutput']>>[0]) => {
-                    if (output.stream === 'stdout') io.onStdoutChunk?.(stdoutDecoder.decode(output.data, { stream: true }));
-                } } : {}),
-                ...(activation.exactPurposeBindingSubjectId ? { exactPurposeBindingSubjectId: activation.exactPurposeBindingSubjectId } : {}),
-                isCurrent: async () => {
-                    rowCurrent = await params.client.isCurrent(machine, role === 'inspect' || role === 'cleanup' ? 'inspect' : undefined);
-                    if (!rowCurrent || !activation.isCurrent()) {
-                        // Only this host-owned pre-handler check proves that
-                        // an admitted FIN native effect has not been issued.
-                        // Other custody failures and issued IO remain uncertain.
-                        if ((role === 'power' || role === 'destroy') && params.options.context?.externalActionExecutionAuthorization?.binding.workflowActionOrigin) {
-                            nativeEffectGuardFailure = { error: new ManagedMachineNativeEffectGuardRefusal('intent_changed') };
-                        }
-                        return false;
-                    }
-                    if (!await configurationCurrent()) {
-                        nativeEffectGuardFailure = { error: new ManagedMachineControllerError('credential_unavailable') };
-                        rowCurrent = false;
-                        return false;
-                    }
-                    if ((role === 'power' || role === 'destroy') && io?.beforeNativeEffect) {
-                        try { await io.beforeNativeEffect(); }
-                        catch (error) { nativeEffectGuardFailure = { error }; rowCurrent = false; return false; }
-                    }
-                    if ((role === 'power' || role === 'destroy') && params.options.context?.externalActionExecutionAuthorization?.binding.workflowActionOrigin) {
-                        // Credential preparation and final idle confirmation
-                        // both await. Re-read the same Home-issued source only
-                        // after those awaits, immediately before handler IO.
-                        rowCurrent = await params.client.isCurrent(machine);
-                        if (!rowCurrent) {
-                            nativeEffectGuardFailure = { error: new ManagedMachineNativeEffectGuardRefusal('intent_changed') };
-                            return false;
-                        }
-                    }
-                    return true;
-                },
+            const machine = readMachine();
+            const { executeContributedAction } = await import('@/plugins/runtime/invocation/actions/executeContributedAction');
+            const localId = role === 'reconcile' ? contribution.definition.reconciliation?.action
+                : role === 'cleanup' ? contribution.definition.reconciliation?.cleanup
+                : role === 'exec' || role === 'putFile' ? contribution.definition.bootstrapTransport?.[role] : contribution.definition.actions[role];
+            if (!localId) throw new ManagedMachineControllerError('provider_unavailable');
+            const actionId = buildQualifiedPluginContributionKey({ pluginId: contribution.pluginId, localId });
+            const invocationSignal = io?.signal ?? params.options.signal;
+            const stdoutDecoder = new TextDecoder();
+            let rowCurrent = await params.client.readCurrent(machine, role === 'inspect' || role === 'cleanup' ? 'inspect' : undefined) !== null;
+            if (!rowCurrent) throw new ManagedMachineControllerError('intent_changed');
+            const credentials = (machine.launch.credentials ?? []).filter(credential => isMachineProvisionerCredentialPurposeRequiredV1(
+                contribution.definition, credential.purpose.purpose, machine.launch.choices));
+            const configurationCurrent = async () => {
+                if (!credentials.length) return true;
+                const read = params.input.managedProviderOperationAuthority.readCredentialConfigurationRevision;
+                if (!read || credentials.some(credential => credential.configurationRevision === undefined)) return false;
+                try { return (await Promise.all(credentials.map(async credential =>
+                    await read(credential.account, invocationSignal ?? new AbortController().signal) === credential.configurationRevision))).every(Boolean); }
+                catch { return false; }
             };
-            const context = params.options.context;
-            const externalActionContext: PluginExternalActionContext | undefined = context?.externalActionCredential
-                && context.externalActionExecutionAuthorization && context.externalActionTarget && context.serverId ? {
-                    authority: 'account_automation', serverId: context.serverId, serverIdentityId: params.input.homeId,
-                    actionRequestId: context.externalActionExecutionAuthorization.binding.requestId,
-                    externalActionCredential: context.externalActionCredential,
-                    externalActionExecutionAuthorization: context.externalActionExecutionAuthorization,
-                    externalActionTarget: context.externalActionTarget,
-                    signExternalActionApprovalInput: context.signExternalActionApprovalInput,
-                } : undefined;
-            if (context?.externalActionCredential && !externalActionContext) throw new ManagedMachineControllerError('admission_unavailable');
-            // Native SDK transports do not spawn through ExecService. Carry the
-            // same task-owned budget to their declared exec role as well.
-            const nativeInput = role === 'exec' && io?.timeoutMs !== undefined
-                && typeof body === 'object' && body !== null && !Array.isArray(body)
-                ? { ...body, timeoutMs: io.timeoutMs } : body;
-            const attempt = await executeContributedAction({
-                runtimeRegistry: params.input.runtimeRegistry, actionId,
-                input: nativeInput, expectedContributorOccurrenceId: occurrenceId,
-                admittedManagedProviderOperation: custody,
-                context: { surface: 'plugin', invocationSurface: 'plugin', originSurface: 'cli', signal: invocationSignal,
-                    initiatingActionCaller: context?.actionCaller, externalActionContext,
+            if (!await configurationCurrent()) throw new ManagedMachineControllerError('credential_unavailable');
+            const authorizations = await roleCredentialAuthorization(localId);
+            const activation = await params.input.managedProviderOperationAuthority.activate({
+                identity: { pluginId: contribution.pluginId, localId },
+                operationId: params.options.context?.operationAcceptance?.operationId ?? params.options.requestId,
+                purposes: authorizations.map(authorization => authorization.purpose),
+                purposeBindings: { v: 1, bindings: authorizations.map(authorization => ({ purpose: authorization.purpose,
+                    target: { kind: 'account' as const, account: authorization.credential.account } })) },
+                requestAuthUses: [],
+                isCurrent: () => rowCurrent && !invocationSignal?.aborted,
+                managedOperation: { role, isCurrent: (currentRole) => currentRole === role && rowCurrent,
+                    credentialConfigurations: credentials.map(credential => ({ account: credential.account,
+                        revision: credential.configurationRevision! })),
                 },
             });
-            if (nativeEffectGuardFailure) throw nativeEffectGuardFailure.error;
-            if (!attempt.matched) throw new ManagedMachineControllerError('provider_unavailable');
-            if (!attempt.result.ok) throw new ManagedMachineControllerError(attempt.result.errorCode);
-            const remaining = stdoutDecoder.decode();
-            if (remaining) io?.onStdoutChunk?.(remaining);
-            return attempt.result.result;
+            let nativeEffectGuardFailure: Readonly<{ error: unknown }> | undefined;
+            try {
+                const custody: AdmittedManagedProviderOperationExecutionRequest = {
+                    managedId: machine.id, homeId: machine.homeId, intentRevision: machine.intentRevision,
+                    controller: machine.controller,
+                    contribution: { ...contribution.identity, occurrenceId },
+                    role,
+                    ...(bootstrapCredentialKind && isMachineProvisionerBootstrapCredentialRoleV1(role)
+                        ? { readBootstrapCredential: async () => {
+                            if (!await params.client.isCurrent(machine)) throw new ManagedMachineControllerError('intent_changed');
+                            const retained = await readBootstrapCredentialValue(params, machine,
+                                readBootstrapCredentialRevision?.() ?? nativeBootstrapCredentialRevision);
+                            nativeBootstrapCredentialRevision = retained.revision;
+                            if (!await params.client.isCurrent(machine)) throw new ManagedMachineControllerError('intent_changed');
+                            return new TextEncoder().encode(retained.value);
+                        } } : {}),
+                    ...(role === 'exec' && io?.timeoutMs !== undefined ? { execTimeoutMs: io.timeoutMs } : {}),
+                    ...(role === 'exec' && io?.onStdoutChunk ? { onProcessOutput: (output: Parameters<NonNullable<AdmittedManagedProviderOperationExecutionRequest['onProcessOutput']>>[0]) => {
+                        if (output.stream === 'stdout') io.onStdoutChunk?.(stdoutDecoder.decode(output.data, { stream: true }));
+                    } } : {}),
+                    ...(activation.exactPurposeBindingSubjectId ? { exactPurposeBindingSubjectId: activation.exactPurposeBindingSubjectId } : {}),
+                    isCurrent: async () => {
+                        try {
+                            rowCurrent = await params.client.readCurrent(machine, role === 'inspect' || role === 'cleanup' ? 'inspect' : undefined) !== null;
+                            if (!rowCurrent || !activation.isCurrent()) {
+                                // Only this host-owned pre-handler check proves that
+                                // an admitted FIN native effect has not been issued.
+                                // Other custody failures and issued IO remain uncertain.
+                                if ((role === 'power' || role === 'destroy') && params.options.context?.externalActionExecutionAuthorization?.binding.workflowActionOrigin) {
+                                    nativeEffectGuardFailure = { error: new ManagedMachineNativeEffectGuardRefusal('intent_changed') };
+                                } else if (!rowCurrent) {
+                                    nativeEffectGuardFailure = { error: new ManagedMachineControllerError('intent_changed') };
+                                }
+                                return false;
+                            }
+                            if (!await configurationCurrent()) {
+                                nativeEffectGuardFailure = { error: new ManagedMachineControllerError('credential_unavailable') };
+                                rowCurrent = false;
+                                return false;
+                            }
+                            if ((role === 'power' || role === 'destroy') && io?.beforeNativeEffect) {
+                                try { await io.beforeNativeEffect(); }
+                                catch (error) { nativeEffectGuardFailure = { error }; rowCurrent = false; return false; }
+                            }
+                            if ((role === 'power' || role === 'destroy') && params.options.context?.externalActionExecutionAuthorization?.binding.workflowActionOrigin) {
+                                // Credential preparation and final idle confirmation
+                                // both await. Re-read the same Home-issued source only
+                                // after those awaits, immediately before handler IO.
+                                rowCurrent = await params.client.readCurrent(machine) !== null;
+                                if (!rowCurrent) {
+                                    nativeEffectGuardFailure = { error: new ManagedMachineNativeEffectGuardRefusal('intent_changed') };
+                                    return false;
+                                }
+                            }
+                            return true;
+                        } catch (error) {
+                            rowCurrent = false;
+                            // The dispatcher still fails closed; retain only the safe
+                            // domain refusal rather than its generic custody wrapper.
+                            if (error instanceof ManagedMachineControllerError) nativeEffectGuardFailure = {
+                                error: (role === 'power' || role === 'destroy') && params.options.context?.externalActionExecutionAuthorization?.binding.workflowActionOrigin
+                                    ? new ManagedMachineNativeEffectGuardRefusal(error.code, error.status, error.details) : error,
+                            };
+                            return false;
+                        }
+                    },
+                };
+                const context = params.options.context;
+                const externalActionContext: PluginExternalActionContext | undefined = context?.externalActionCredential
+                    && context.externalActionExecutionAuthorization && context.externalActionTarget && context.serverId ? {
+                        authority: 'account_automation', serverId: context.serverId, serverIdentityId: params.input.homeId,
+                        actionRequestId: context.externalActionExecutionAuthorization.binding.requestId,
+                        externalActionCredential: context.externalActionCredential,
+                        externalActionExecutionAuthorization: context.externalActionExecutionAuthorization,
+                        externalActionTarget: context.externalActionTarget,
+                        signExternalActionApprovalInput: context.signExternalActionApprovalInput,
+                    } : undefined;
+                if (context?.externalActionCredential && !externalActionContext) throw new ManagedMachineControllerError('admission_unavailable');
+                // Native SDK transports do not spawn through ExecService. Carry the
+                // same task-owned budget to their declared exec role as well.
+                const nativeInput = role === 'exec' && io?.timeoutMs !== undefined
+                    && typeof body === 'object' && body !== null && !Array.isArray(body)
+                    ? { ...body, timeoutMs: io.timeoutMs } : body;
+                dispatched = true;
+                const attempt = await executeContributedAction({
+                    runtimeRegistry: params.input.runtimeRegistry, actionId,
+                    input: nativeInput, expectedContributorOccurrenceId: occurrenceId,
+                    admittedManagedProviderOperation: custody,
+                    ...(context?.recordOperationCredentialUse
+                        ? { approvalContext: { recordOperationCredentialUse: context.recordOperationCredentialUse } } : {}),
+                    context: { surface: 'plugin', invocationSurface: 'plugin', originSurface: 'cli', signal: invocationSignal,
+                        initiatingActionCaller: context?.actionCaller, externalActionContext,
+                    },
+                });
+                if (nativeEffectGuardFailure) throw nativeEffectGuardFailure.error;
+                if (!attempt.matched) throw new ManagedMachineNativeEffectGuardRefusal('provider_unavailable');
+                if (!attempt.result.ok) throw attempt.result.actionHandlerInvocation === 'notStarted'
+                    ? new ManagedMachineNativeEffectGuardRefusal(attempt.result.errorCode)
+                    : new ManagedMachineControllerError(attempt.result.errorCode);
+                const remaining = stdoutDecoder.decode();
+                if (remaining) io?.onStdoutChunk?.(remaining);
+                return attempt.result.result;
+            } catch (error) {
+                if (nativeEffectGuardFailure) {
+                    const refusal = nativeEffectGuardFailure.error;
+                    throw refusal instanceof ManagedMachineControllerError
+                        ? new ManagedMachineNativeEffectGuardRefusal(refusal.code, refusal.status, refusal.details) : refusal;
+                }
+                throw error;
+            } finally { rowCurrent = false; await activation.cleanup(); }
         } catch (error) {
-            if (nativeEffectGuardFailure) throw nativeEffectGuardFailure.error;
+            // Preparation cannot call plugin/native IO. After dispatch, only
+            // the dispatcher's explicit notStarted/guard evidence is definite.
+            if (!dispatched) throw error instanceof ManagedMachineControllerError
+                ? new ManagedMachineNativeEffectGuardRefusal(error.code, error.status, error.details)
+                : new ManagedMachineNativeEffectGuardRefusal('admission_unavailable');
             throw error;
-        } finally { rowCurrent = false; await activation.cleanup(); }
+        }
     }
     return { contribution, occurrenceId, target, bootstrapCredentialKind, roleCredentialAuthorization, invoke };
+}
+
+/** Read the same submitted acquisition by its retained handle or immutable launch correlation. */
+export async function reconcileManagedAcquisitionIdentity(params: ManagedMachineReconciliationInput,
+    machine: ManagedMachineV1, native: ReturnType<typeof createManagedNativeInvocation>): Promise<ManagedMachineV1> {
+    const retained = machine.nativeOperationRef;
+    if (retained && (retained.contributionRef.pluginId !== machine.launch.provider.pluginId
+        || retained.contributionRef.localId !== machine.launch.provider.localId
+        || retained.schemaVersion !== machine.launch.schemaVersion)) throw new ManagedMachineControllerError('resource_mismatch');
+    if (!native.contribution.definition.reconciliation) throw new ManagedMachineControllerError('provider_unavailable');
+    const reportBound = params.action === 'machines.managed.acquire' || params.action === 'machines.managed.bootstrap.retry'
+        ? await params.client.preparePendingAcquireBoundReport(machine) : null;
+    const result = AcquireResultV1Schema.parse(await native.invoke('reconcile', retained ? { nativeOperation: retained.value }
+        : { correlation: { managedId: machine.id, requestId: params.options.requestId, launch: machine.launch.choices } }));
+    // An unavailable read never proves absence or authorizes another purchase.
+    if (result.kind === 'rejected') throw new ManagedMachineControllerError(result.code);
+    return result.kind === 'bound' && reportBound ? await reportBound(result)
+        : await params.client.row('report', { ...params.client.correlation(machine), result }, null);
 }
 
 export async function reconcileManagedMachine(params: ManagedMachineReconciliationInput): Promise<JsonValue | null> {
@@ -382,8 +433,8 @@ export async function reconcileManagedMachine(params: ManagedMachineReconciliati
     if (params.action !== 'machines.managed.inspect' && (machine.creationState !== 'active' || machine.allocation === 'confirmed-absent'
         || (machine.enrolledMachineId && params.action !== 'machines.managed.bootstrap.retry'))) return null;
     if (machine.enrolledMachineId && params.action === 'machines.managed.bootstrap.retry') {
-        // Ordinary enrolled resources retain their existing no-op retry. Only
-        // a native transport can declare process custody in its carrier below.
+        // Enrolled native guests can update their retained installation; SSH
+        // enrollment recovery retains its existing no-op behavior.
         if (!retainedProvisioner?.definition.bootstrapTransport) return null;
     }
     // Unknown/pending purchase is never submitted again. The durable row keeps
@@ -394,22 +445,9 @@ export async function reconcileManagedMachine(params: ManagedMachineReconciliati
     const continueRetainedAcquisition = !machine.enrolledMachineId && machine.allocation !== 'unsubmitted'
         && contribution.definition.reconciliation?.continueAcquire === true;
     if (!machine.resource && machine.allocation === 'may-exist') {
-        const retained = machine.nativeOperationRef;
-        if (retained && (retained.contributionRef.pluginId !== machine.launch.provider.pluginId
-            || retained.contributionRef.localId !== machine.launch.provider.localId
-            || retained.schemaVersion !== machine.launch.schemaVersion)) throw new ManagedMachineControllerError('resource_mismatch');
-        if (!contribution.definition.reconciliation) throw new ManagedMachineControllerError('provider_unavailable');
-        const reportBound = params.action === 'machines.managed.inspect' ? null
-            : await params.client.preparePendingAcquireBoundReport(machine);
-        const result = AcquireResultV1Schema.parse(await invoke('reconcile', retained ? { nativeOperation: retained.value }
-            : { correlation: { managedId: machine.id, requestId: params.options.requestId, launch: machine.launch.choices } }));
-        // A refused read is not evidence that the submitted purchase is absent.
-        if (result.kind === 'rejected') throw new ManagedMachineControllerError(result.code);
-        // Preserve a known paid identity even if cancellation won during the
-        // read. Only the subsequent creation effects require fresh custody.
-        machine = result.kind === 'bound' && reportBound ? await reportBound(result)
-            : await params.client.row('report', { ...params.client.correlation(machine), result }, null);
-        if (result.kind !== 'bound') return params.action === 'machines.managed.inspect' ? { machine } : null;
+        machine = await reconcileManagedAcquisitionIdentity(params, machine,
+            { contribution, occurrenceId, target, bootstrapCredentialKind, roleCredentialAuthorization, invoke });
+        if (!machine.resource) return params.action === 'machines.managed.inspect' ? { machine } : null;
     }
     if (params.action === 'machines.managed.inspect') {
         if (!machine.resource) return { machine };
@@ -474,7 +512,7 @@ export async function reconcileManagedMachine(params: ManagedMachineReconciliati
         ...(bootstrapCredentialKind === 'ssh' && machine.bootstrapCredentialRef && bootstrapCredential ? { credentialRef: machine.bootstrapCredentialRef,
             bootstrapPublicKey: sshPublicKey(bootstrapCredential.value) } : {}),
     }));
-    if (machine.enrolledMachineId && (carrier.kind !== 'native' || !carrier.guestHome)) return null;
+    if (machine.enrolledMachineId && carrier.kind !== 'native') return null;
     const correlation = ManagedEnrollmentCorrelationV1Schema.parse({ ...params.client.correlation(machine), resource: machine.resource });
     if (!machine.enrolledMachineId) machine = await params.client.row('enrollment-context', correlation);
     const { runManagedMachineEnrollment } = await import('./enrollment');
@@ -506,33 +544,55 @@ export async function reconcileManagedMachine(params: ManagedMachineReconciliati
     const domainRef = { kind: 'managedMachine' as const, id: machine.id,
         controller: correlation.controller, resource: correlation.resource };
     params.options.context?.operationOwnerUpdate?.update({ domainRef });
-    const enrollment = await runManagedMachineEnrollment({ correlation, target, carrier, signal: params.options.signal,
-        onTask: ({ taskId, kind }) => { params.options.context?.operationOwnerUpdate?.update({ domainRef: {
-            ...domainRef, bootstrapTask: { id: taskId, taskKind: kind },
-        } }); },
-        onEvent: (event) => {
-            if (event.type !== 'progress' || !event.message) return;
-            const progress = (event.stepId
-                ? { kind: 'phase', phase: event.stepId, label: event.message }
-                : { kind: 'indeterminate', label: event.message }) satisfies ActionOperationProgressV1;
-            params.options.context?.operationOwnerUpdate?.update({ progress });
-        },
-    }, {
-        readCurrentManagedRow: async () => {
-            params.options.signal?.throwIfAborted();
-            if (params.input.runtimeRegistry.readPluginOccurrenceId?.(contribution.pluginId) !== occurrenceId) {
-                throw new ManagedMachineControllerError('provider_unavailable');
-            }
-            return await params.client.row('current', params.client.correlation(machine));
-        }, native,
-        materializeBootstrapCredential: async (reference) => {
-            if (reference.resourceId !== machine.bootstrapCredentialRef?.resourceId || bootstrapCredentialRevision === undefined) {
-                throw new ManagedMachineControllerError('credential_unavailable');
-            }
-            return await materializeBootstrapCredential(params, machine, bootstrapCredentialRevision);
-        },
-    });
-    machine = await params.client.row('current', params.client.correlation(machine));
-    if (machine.enrolledMachineId !== enrollment.machineId) throw new ManagedMachineControllerError('enrollment_retired');
-    return null;
+    let bootstrapTask: Readonly<{ id: string; taskKind: 'remote.ssh.bootstrapMachine.v1' }> | undefined;
+    let enrollmentLifetime: HomeOperationRetry | undefined;
+    try {
+        const enrollment = await runManagedMachineEnrollment({ correlation, target, carrier, signal: params.options.signal,
+            onTask: ({ taskId, kind }) => {
+                bootstrapTask = { id: taskId, taskKind: kind };
+                params.options.context?.operationOwnerUpdate?.update({ domainRef: { ...domainRef, bootstrapTask } });
+            },
+            // The task's open question rides on the same operation, so the page waiting on it can ask it.
+            onPrompt: (prompt) => {
+                if (!bootstrapTask) return;
+                params.options.context?.operationOwnerUpdate?.update({ domainRef: { ...domainRef,
+                    bootstrapTask: { ...bootstrapTask, ...(prompt ? { prompt } : {}) } } });
+            },
+            onEvent: (event) => {
+                if (event.type !== 'progress' || !event.message) return;
+                const progress = (event.stepId
+                    ? { kind: 'phase', phase: event.stepId, label: event.message }
+                    : { kind: 'indeterminate', label: event.message }) satisfies ActionOperationProgressV1;
+                params.options.context?.operationOwnerUpdate?.update({ progress });
+            },
+        }, {
+            onEnrollmentLifetime: lifetime => {
+                enrollmentLifetime = lifetime;
+                params.client.setHomeOperationRetry(lifetime);
+            },
+            readCurrentManagedRow: async () => {
+                params.options.signal?.throwIfAborted();
+                if (params.input.runtimeRegistry.readPluginOccurrenceId?.(contribution.pluginId) !== occurrenceId) {
+                    throw new ManagedMachineControllerError('provider_unavailable');
+                }
+                return await params.client.row('current', params.client.correlation(machine));
+            }, native,
+            materializeBootstrapCredential: async (reference) => {
+                if (reference.resourceId !== machine.bootstrapCredentialRef?.resourceId || bootstrapCredentialRevision === undefined) {
+                    throw new ManagedMachineControllerError('credential_unavailable');
+                }
+                return await materializeBootstrapCredential(params, machine, bootstrapCredentialRevision);
+            },
+        });
+        machine = await params.client.row('current', params.client.correlation(machine));
+        if (machine.enrolledMachineId !== enrollment.machineId) throw new ManagedMachineControllerError('enrollment_retired');
+        return null;
+    } catch (error) {
+        // A guest may have committed enrollment while Home cannot be read.
+        // Unavailable confirmation never proves that the guest effect failed.
+        if (enrollmentLifetime && !params.options.signal?.aborted && isRetryableHomeOperationError(error)) {
+            throw new ManagedMachineControllerError('action_outcome_unknown');
+        }
+        throw error;
+    } finally { params.client.setHomeOperationRetry(); }
 }

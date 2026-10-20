@@ -858,6 +858,7 @@ describe('current-global External Sessions takeover source resolution', () => {
         readAfterTranscript: async () => ({ outcome: 'already_current' as const }),
       });
       const service = await createCurrentGlobalExternalSessionsAuthorService({
+        resolveCatalogEntry: async () => null,
         agents: [configuredAgent],
         activeServerDir,
         readCredentials: async () => ({ token: 'token', encryption: null }),
@@ -986,6 +987,7 @@ describe('current-global External Sessions takeover source resolution', () => {
         readAfterTranscript: async () => ({ outcome: 'already_current' as const }),
       });
       const service = await createCurrentGlobalExternalSessionsAuthorService({
+        resolveCatalogEntry: async () => null,
         agents: [configuredAgent],
         activeServerDir,
         readCredentials: async () => ({ token: 'token', encryption: null }),
@@ -1114,6 +1116,7 @@ describe('current-global External Sessions takeover source resolution', () => {
         });
       });
       const service = await createCurrentGlobalExternalSessionsAuthorService({
+        resolveCatalogEntry: async () => null,
         agents: [multiSourceConfiguredAgent],
         activeServerDir,
         readCredentials: async () => ({ token: 'token', encryption: null }),
@@ -1372,6 +1375,7 @@ describe('current-global External Sessions follow lifecycle', () => {
       }),
     });
     const service = await createCurrentGlobalExternalSessionsAuthorService({
+      resolveCatalogEntry: async () => null,
       agents: [configuredAgent],
       readCredentials: async () => ({ token: 'token', encryption: null }),
       resolveMachineId: () => 'machine-1',

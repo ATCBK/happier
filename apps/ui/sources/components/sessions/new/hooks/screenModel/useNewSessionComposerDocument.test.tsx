@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushHookEffects, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import {
     PluginProjectionV2Schema,
+    PluginManifestV2Schema,
+    readHappierStructuredInputV1FromMeta,
     type ComposerAttachmentDraftV1,
     DaemonPluginUiComposerSurfaceCatalogEntryV1Schema,
     type DaemonPluginUiComposerSurfaceCatalogEntryV1,
@@ -24,13 +26,17 @@ import {
 import type { NewSessionComposerAttachmentSeedV1 } from '@/sync/domains/state/persistence';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import {
-    getSessionDraftSnapshot,
+    getSessionComposerDraftSnapshot,
     resetSessionDraftRepositoryForTests,
     writeNewSessionDraft,
 } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 
 import { createNewSessionPromptStore } from './newSessionPromptStore';
 import { useNewSessionComposerDocument } from './useNewSessionComposerDocument';
+import { seedAndOpenNewSession } from '../../newSessionSeedComposer';
+import { readNewSessionDraftFromRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
+import { buildComposerSnapshotStructuredInputMetaOverrides } from '@/components/sessions/composer/composerScopeAdapters';
+import { PLUGIN_MANIFEST as APP_CONTEXT_MANIFEST } from '../../../../../../../../packages/plugins/app-context/src/manifest';
 
 const pluginSurfaceHostSpy = vi.hoisted(() => vi.fn());
 
@@ -173,6 +179,50 @@ afterEach(() => {
 });
 
 describe('useNewSessionComposerDocument', () => {
+    it('carries a seeded current screen through the real declared badge and detached send, and removes it without resurrection', async () => {
+        const draftScope = { serverId: 'screen-home', accountId: 'screen-account' };
+        const draftId = 'current-screen-draft';
+        const currentUiContext = { navigation: { area: 'sessions', screen: 'sessions', title: 'Sessions' }, commands: [] };
+        expect(seedAndOpenNewSession({
+            seed: { prompt: 'Explain this page', currentUiContext }, scope: draftScope,
+            createDraftId: () => draftId, isCurrent: () => true, navigateToNewSession: () => {},
+        }).kind).toBe('opened');
+        const draft = readNewSessionDraftFromRepository({ scope: draftScope, draftId });
+        if (!draft) throw new Error('Expected the seeded draft');
+        const definition = PluginManifestV2Schema.parse(APP_CONTEXT_MANIFEST).contributes.composerAttachments?.[0];
+        if (!definition) throw new Error('Current-screen attachment is not declared');
+        const identity = { pluginId: APP_CONTEXT_MANIFEST.id, localId: definition.id };
+        const promptStore = createNewSessionPromptStore(draft.input);
+        const catalog = entriesById({
+            id: `${identity.pluginId}/${identity.localId}`, pluginId: identity.pluginId, identity,
+            occurrenceId: 'current-screen-loaded-occurrence', definition,
+        });
+        const hook = await renderHook(() => useNewSessionComposerDocument({
+            draftId, draftScope, promptStore,
+            persistedAttachments: draft.composerAttachments ?? [], persistedAttachmentSeeds: draft.composerAttachmentSeeds,
+            composerAttachmentEntriesById: catalog, scopeKey: 'screen-home/screen-account',
+            canSubmitRef: { current: true }, isSubmitting: false,
+        }));
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        const submitted = hook.getCurrent().captureSubmissionSnapshot();
+        if (!submitted) throw new Error('Expected the mounted submission snapshot');
+        expect(submitted.text).toBe('Explain this page');
+        expect(submitted.attachments).toMatchObject([{ value: currentUiContext, availability: { status: 'ready' } }]);
+        expect(hook.getCurrent().attachmentRowItems).toMatchObject([{ kind: 'badge', label: 'Sessions' }]);
+        expect(readHappierStructuredInputV1FromMeta(buildComposerSnapshotStructuredInputMetaOverrides(submitted))?.composerAttachments)
+            .toMatchObject([{ attachment: identity, value: currentUiContext }]);
+
+        await act(async () => { hook.getCurrent().attachmentRowItems[0]?.onRemove?.(); });
+        await hook.rerender();
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        const removed = hook.getCurrent().captureSubmissionSnapshot();
+        if (!removed) throw new Error('Expected the editable snapshot after removal');
+        expect(removed.text).toBe('Explain this page');
+        expect(removed.attachments).toEqual([]);
+        expect(readHappierStructuredInputV1FromMeta(buildComposerSnapshotStructuredInputMetaOverrides(removed))?.composerAttachments ?? []).toEqual([]);
+        expect(readNewSessionDraftFromRepository({ scope: draftScope, draftId })?.composerAttachments ?? []).toEqual([]);
+        await hook.unmount();
+    });
     it('flushes pending mounted-input edits before a handoff and releases the retired input', async () => {
         const promptStore = createNewSessionPromptStore('Submitted');
         const hook = await renderHook(() => useNewSessionComposerDocument({
@@ -776,7 +826,7 @@ describe('useNewSessionComposerDocument', () => {
             references: [{ ...sessionMention, start: 9, end: 26 }],
             attachments: [{ instanceId: issueAttachment.instanceId }],
         });
-        expect(getSessionDraftSnapshot(durableScope, { kind: 'newSession', draftId })?.document.composer)
+        expect(getSessionComposerDraftSnapshot(durableScope, { kind: 'newSession', draftId })?.composer)
             .toMatchObject({
                 text: { value: localText },
                 mentions: { value: [expect.objectContaining({ tokenText: sessionMention.token })] },

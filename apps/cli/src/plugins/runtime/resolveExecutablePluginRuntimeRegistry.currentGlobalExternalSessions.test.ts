@@ -46,6 +46,7 @@ function accountProfile(
         id: 'current-global-account',
         timestamp: 0,
         firstName: null,
+        name: null,
         lastName: null,
         username: null,
         avatar: null,
@@ -763,7 +764,7 @@ describe('current global External Sessions publication', () => {
             });
             expect(boundaries.fetchAccountProfile).toHaveBeenCalledOnce();
             await expect(current.list({ agentId: ROUTING_AGENT_ID, cursor: accountAContinuationPage.nextCursor, limit: 1 })).rejects.toMatchObject({
-                code: 'plugin_external_list_query_invalid',
+                code: 'plugin_external_cursor_invalid',
             });
             const accountBPage = await current.list({
                 agentId: ROUTING_AGENT_ID,
@@ -1211,7 +1212,7 @@ describe('current global External Sessions publication', () => {
         });
     }, 240_000);
 
-    it('refreshes source-refusal diagnostics after admitted Account revisions', async () => {
+    it('refreshes source-refusal diagnostics after Connected Services projections', async () => {
         resetActiveAccountSettingsSnapshotForTests();
         const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-current-global-refusals-home-'));
         const pluginRoot = await mkdtemp(join(tmpdir(), 'happier-current-global-refusals-plugin-'));
@@ -1293,11 +1294,11 @@ describe('current global External Sessions publication', () => {
             expect(hasCurrentRefusal()).toBe(false);
 
             connectedProfilePresent = true;
-            publishAccountRevision(2);
+            configuredExternalSessionSourceRevisions.notifyActiveAccountConnectedServicesProjection('current-global-source-refusals');
             await vi.waitFor(() => expect(hasCurrentRefusal()).toBe(true));
 
             connectedProfilePresent = false;
-            publishAccountRevision(3);
+            configuredExternalSessionSourceRevisions.notifyActiveAccountConnectedServicesProjection('current-global-source-refusals');
             await vi.waitFor(() => expect(hasCurrentRefusal()).toBe(false));
         } finally {
             connectedProfilePresent = false;

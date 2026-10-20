@@ -1,49 +1,52 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, expect, it, vi } from 'vitest';
 import { resolveSessionFollowActionRequest } from '@happier-dev/protocol';
 import { renderSettingsView } from '@/dev/testkit/harness/settingsViewHarness';
 import { buildServerFeaturesResponse } from '@/hooks/server/serverFeaturesTestUtils';
 import { getServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
-import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
-import { getStorage } from '@/sync/domains/state/storage';
-import { TokenStorage } from '@/auth/storage/tokenStorage';
-import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
-import { disconnectActiveServerConnection, restoreConnectionToActiveServer } from '@/sync/runtime/orchestration/connectionManager';
-import { SessionAutoFollowPreferencesSection } from './SessionAutoFollowPreferencesSection';
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     return createReactNativeWebMock();
 });
-vi.mock('socket.io-client', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('socket.io-client')>();
-    return {
-        ...actual,
-        io: (...args: Parameters<typeof actual.io>) => {
-            const socket = actual.io(...args);
-            // Keep the real Socket/Sync lifecycle, stopping only the external connection.
-            vi.spyOn(socket, 'connect').mockReturnValue(socket);
-            return socket;
-        },
-    };
-});
+const network = await installSessionOpsNetworkBoundary();
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const { restoreServerAccountForTest } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+const { getStorage } = await import('@/sync/domains/state/storage');
+const { SessionAutoFollowPreferencesSection } = await import('./SessionAutoFollowPreferencesSection');
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 afterEach(async () => {
-    await disconnectActiveServerConnection();
-    vi.restoreAllMocks(); vi.unstubAllGlobals(); resetRuntimeFetch(); resetServerFeaturesClientForTests();
+    await connection?.dispose();
+    connection = undefined;
+    vi.restoreAllMocks(); vi.unstubAllGlobals(); resetServerFeaturesClientForTests();
+    network.resetRequests();
 });
+afterAll(() => network.dispose());
 
-const preferencesPath = resolveSessionFollowActionRequest('session.follow.preferences.get', {}).path;
+type Screen = Awaited<ReturnType<typeof renderSettingsView>>;
+/** Follow automatically is a level per rule (lab P5): Important follows, Off does not. */
+function isOn(screen: Screen, field: string): boolean | undefined {
+    return screen.findByTestId(`session-auto-follow-${field}:important`)?.props.accessibilityState?.checked;
+}
+function choose(screen: Screen, field: string, on: boolean) {
+    screen.findByTestId(`session-auto-follow-${field}:${on ? 'important' : 'off'}`)?.props.onPress();
+}
 
-function setPreferencesFetch(handler: NonNullable<Parameters<typeof setRuntimeFetch>[0]>) {
-    setRuntimeFetch(async (url, init) => {
+const preferencesPath = resolveSessionFollowActionRequest('follow.preferences.get', {}).path;
+
+function setPreferencesFetch(handler: RuntimeFetch) {
+    network.setHttpResponder(async (url, init) => {
         const pathname = new URL(String(url)).pathname;
         if (pathname === '/v1/auth/ping') return new Response('{}', { status: 200 });
         if (pathname === '/v1/features') return globalThis.fetch(url, init);
-        // Other background Sync reads are unavailable in this focused Home fixture.
-        // They must not be counted or mistaken for Follow preferences responses.
-        if (pathname !== preferencesPath) return new Response('{}', { status: 404 });
+        // Preserve the canonical Account bootstrap and Settings transport underneath.
+        if (pathname !== preferencesPath) return createEmptyAccountBootstrapHttpResponse(pathname, init);
         return handler(url, init);
     });
 }
@@ -59,12 +62,11 @@ async function publishFollowFeature(serverId: string, following: boolean) {
 }
 
 async function renderEnabledPreferencesSection(serverUrl: string) {
-    const home = await upsertAndActivateServer({ serverUrl, name: 'Home' });
-    const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'account-a' })).toString('base64url')}.signature` };
-    vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue(credentials);
+    const home = await network.addHome(serverUrl, 'account-a');
     await publishFollowFeature(home.id, true);
     setPreferencesFetch(async () => new Response('{}', { status: 404 }));
-    await restoreConnectionToActiveServer(credentials);
+    connection = await restoreServerAccountForTest({ serverUrl, accountId: 'account-a', request: network.request });
+    await publishFollowFeature(home.id, true);
     expect(getStorage().getState().profileScope).toEqual({ serverId: home.id, accountId: 'account-a' });
     return home;
 }
@@ -82,14 +84,16 @@ it('loads Account preferences on first render and preserves a failed toggle for 
         return new Response(JSON.stringify(preferences), { status: 200 });
     });
     const screen = await renderSettingsView(<SessionAutoFollowPreferencesSection serverId={home.id} />);
-    await flushAsyncWork();
-    expect(screen.findByTestId('session-auto-follow-assigned')?.props.value).toBe(true);
+    await vi.waitFor(() => expect(isOn(screen, 'assigned'), JSON.stringify({
+        content: screen.getTextContent(), scope: getStorage().getState().profileScope,
+        paths: network.httpRequests.map(request => new URL(request.url).pathname),
+    })).toBe(true));
     for (const field of ['assigned', 'direct', 'team', 'group']) {
-        const anchor = `notifications.autoFollow${field[0]!.toUpperCase()}${field.slice(1)}`;
+        const anchor = `coordination.autoFollow${field[0]!.toUpperCase()}${field.slice(1)}`;
         expect(screen.findAll((node) => node.props.nativeID === `setting-${anchor}`).length).toBeGreaterThan(0);
     }
-    await act(async () => { screen.findByTestId('session-auto-follow-direct')?.props.onValueChange(true); });
-    expect(screen.findByTestId('session-auto-follow-direct')?.props.value).toBe(true);
+    await act(async () => { choose(screen, 'direct', true); });
+    expect(isOn(screen, 'direct')).toBe(true);
     expect(preferences.direct).toBe(false);
     expect(screen.findByTestId('session-auto-follow-retry')).not.toBeNull();
     failWrite = false;
@@ -118,7 +122,7 @@ it('coalesces Account-change wakes during a save and reconciles to the Home afte
     await flushAsyncWork();
     expect(reads).toBe(1);
 
-    act(() => { screen.findByTestId('session-auto-follow-direct')?.props.onValueChange(true); });
+    act(() => { choose(screen, 'direct', true); });
     authoritative = { ...initial, team: true };
     act(() => {
         publishHomeAccountChange(home.id);
@@ -128,19 +132,19 @@ it('coalesces Account-change wakes during a save and reconciles to the Home afte
     firstWrite.resolve(new Response(JSON.stringify({ ...initial, direct: true }), { status: 200 }));
     await flushAsyncWork();
     expect(reads).toBe(2);
-    expect(screen.findByTestId('session-auto-follow-direct')?.props.value).toBe(false);
-    expect(screen.findByTestId('session-auto-follow-team')?.props.value).toBe(true);
+    expect(isOn(screen, 'direct')).toBe(false);
+    expect(isOn(screen, 'team')).toBe(true);
 
-    act(() => { screen.findByTestId('session-auto-follow-group')?.props.onValueChange(true); });
+    act(() => { choose(screen, 'group', true); });
     authoritative = { ...initial, assigned: false };
     act(() => { publishHomeAccountChange(home.id); });
     secondWrite.resolve(new Response('{}', { status: 503 }));
     await flushAsyncWork();
     expect(reads).toBe(3);
     // The confirmed Home value is refreshed beneath the failed change…
-    expect(screen.findByTestId('session-auto-follow-assigned')?.props.value).toBe(false);
+    expect(isOn(screen, 'assigned')).toBe(false);
     // …and the change the user asked for, its error and its retry all survive that refresh.
-    expect(screen.findByTestId('session-auto-follow-group')?.props.value).toBe(true);
+    expect(isOn(screen, 'group')).toBe(true);
     expect(screen.findByTestId('session-auto-follow-error')).not.toBeNull();
     expect(screen.findByTestId('session-auto-follow-retry')).not.toBeNull();
 
@@ -148,7 +152,7 @@ it('coalesces Account-change wakes during a save and reconciles to the Home afte
     act(() => { publishHomeAccountChange(home.id); });
     await flushAsyncWork();
     expect(reads).toBe(4);
-    expect(screen.findByTestId('session-auto-follow-group')?.props.value).toBe(true);
+    expect(isOn(screen, 'group')).toBe(true);
     expect(screen.findByTestId('session-auto-follow-retry')).not.toBeNull();
 
     // Retry re-executes that exact intent against the current confirmed value, not a stale
@@ -167,7 +171,7 @@ it('coalesces Account-change wakes during a save and reconciles to the Home afte
     await flushAsyncWork();
     expect(retried).toEqual({ ...initial, assigned: false, group: true });
     expect(screen.findByTestId('session-auto-follow-error')).toBeNull();
-    expect(screen.findByTestId('session-auto-follow-group')?.props.value).toBe(true);
+    expect(isOn(screen, 'group')).toBe(true);
     await screen.unmount();
 });
 
@@ -193,12 +197,12 @@ it('reloads the Home after the Follow feature decision disappears during an outs
     const screen = await renderSettingsView(<SessionAutoFollowPreferencesSection serverId={home.id} />);
     await flushAsyncWork();
     DIAG.push('mounted');
-    act(() => { screen.findByTestId('session-auto-follow-direct')?.props.onValueChange(true); });
+    act(() => { choose(screen, 'direct', true); });
     DIAG.push('toggled');
 
     await act(async () => { await publishFollowFeature(home.id, false); });
     DIAG.push('feature-off');
-    expect(screen.findByTestId('session-auto-follow-direct')).toBeNull();
+    expect(screen.findByTestId('session-auto-follow-direct:important')).toBeNull();
     write.resolve(new Response(JSON.stringify({ assigned: true, direct: true, team: false, group: false }), { status: 200 }));
     await flushAsyncWork();
     DIAG.push('write-settled');
@@ -207,8 +211,8 @@ it('reloads the Home after the Follow feature decision disappears during an outs
     DIAG.push('feature-on');
     await flushAsyncWork();
     expect(reads, DIAG.join(' > ')).toBe(2);
-    expect(screen.findByTestId('session-auto-follow-direct')?.props.value).toBe(false);
-    expect(screen.findByTestId('session-auto-follow-direct')?.props.disabled).toBe(false);
+    expect(isOn(screen, 'direct')).toBe(false);
+    expect(screen.findByTestId('session-auto-follow-direct:important')?.props.accessibilityState?.disabled).toBe(false);
     await screen.unmount();
 });
 
@@ -225,7 +229,7 @@ it('does not start a deferred refresh after the settings lifetime is retired', a
 
     const screen = await renderSettingsView(<SessionAutoFollowPreferencesSection serverId={home.id} />);
     await flushAsyncWork();
-    act(() => { screen.findByTestId('session-auto-follow-direct')?.props.onValueChange(true); });
+    act(() => { choose(screen, 'direct', true); });
     act(() => { publishHomeAccountChange(home.id); });
     await screen.unmount();
     write.resolve(new Response(JSON.stringify({ assigned: true, direct: true, team: false, group: false }), { status: 200 }));

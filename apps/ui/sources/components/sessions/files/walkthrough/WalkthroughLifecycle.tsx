@@ -1,72 +1,15 @@
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { HAPPIER_FRESHNESS_LINE_METRICS } from '@happier-dev/plugin-ui/presentation';
 
-import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
-import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
+import { Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { t } from '@/text';
+import { t, usePreferredLanguage } from '@/text';
 
 import { ScmChangeRow } from '@/components/workspaces/scm/changes/ScmChangeRow';
 import { scmFileStatusFromChange } from '@/scm/scmStatusFiles';
 import type { WalkthroughInventoryRow, WalkthroughOtherChange } from './walkthroughReading';
-
-/**
- * A notice band at the top of the Walkthrough (lab WT2/WT3): one message, its cause, and its next action.
- * It is the freshness line's strip (same metrics, inset fill and hairlines), so every band over a comparison
- * reads as one family; stale or offline reading uses `SurfaceFreshnessLine` itself. `tone` tints only
- * when the band needs the person: `danger` (writing failed) and `warning` (incomplete evidence). A failure
- * is announced as an alert; every other band is a polite status.
- */
-export function WalkthroughNotice(props: Readonly<{
-    testID?: string;
-    tone: 'neutral' | 'warning' | 'danger';
-    icon: IconName;
-    message: React.ReactNode;
-    actions?: React.ReactNode;
-    phone?: boolean;
-}>) {
-    const { theme } = useUnistyles();
-    const palette = props.tone === 'neutral' ? null : theme.colors.state[props.tone];
-    return (
-        <View
-            testID={props.testID}
-            accessibilityRole={props.tone === 'danger' ? 'alert' : 'text'}
-            accessibilityLiveRegion={props.tone === 'danger' ? 'assertive' : 'polite'}
-            style={[styles.notice, props.phone ? styles.noticePhone : null,
-                palette ? { backgroundColor: palette.background, borderColor: palette.border } : null]}
-        >
-            <View style={styles.noticeBody}>
-                <Icon name={props.icon} size={HAPPIER_FRESHNESS_LINE_METRICS.glyphPx} color={palette ? palette.foreground : theme.colors.text.tertiary} />
-                <View style={styles.noticeMessage}>{typeof props.message === 'string' ? <Text style={styles.noticeText}>{props.message}</Text> : props.message}</View>
-            </View>
-            {props.actions ? <View style={[styles.noticeActions, props.phone ? styles.noticeActionsPhone : null]}>{props.actions}</View> : null}
-        </View>
-    );
-}
-
-/** A band's quiet second way forward, written as words ("Undo", "Ask this session instead"). */
-export function WalkthroughNoticeLink(props: Readonly<{ label: string; onPress: () => void; testID?: string }>) {
-    return <TextLinkButton testID={props.testID} tone="strong" label={props.label} onPress={props.onPress} />;
-}
-
-/** A band's recovery (Try again, Refresh): the banner action's step, so bands and banners press alike. */
-export function WalkthroughNoticeButton(props: Readonly<{ label: string; onPress: () => void; icon?: IconName; testID?: string }>) {
-    const { theme } = useUnistyles();
-    return (
-        <RoundButton
-            testID={props.testID}
-            size="mini"
-            display="secondary"
-            title={props.label}
-            leading={props.icon ? <Icon name={props.icon} size={ICON_SIZE.xs} color={theme.colors.text.primary} /> : undefined}
-            onPress={props.onPress}
-        />
-    );
-}
 
 /** Before a word is written: every file in the comparison, its counts, and what the model has read (lab WT2-1). */
 export const WalkthroughInventory = React.memo(function WalkthroughInventory(props: Readonly<{
@@ -74,6 +17,7 @@ export const WalkthroughInventory = React.memo(function WalkthroughInventory(pro
     phone?: boolean;
     onOpenFile?: (path: string) => void;
 }>) {
+    usePreferredLanguage();
     const { theme } = useUnistyles();
     return (
         <View testID="walkthrough-inventory" style={[styles.inventory, props.phone ? styles.inventoryPhone : null]}>
@@ -132,29 +76,6 @@ export const WalkthroughOtherChanges = React.memo(function WalkthroughOtherChang
 });
 
 const styles = StyleSheet.create((theme) => ({
-    notice: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        alignItems: 'center',
-        columnGap: HAPPIER_FRESHNESS_LINE_METRICS.gapPx,
-        rowGap: theme.space.s6,
-        minHeight: HAPPIER_FRESHNESS_LINE_METRICS.minHeightPx,
-        paddingLeft: HAPPIER_FRESHNESS_LINE_METRICS.paddingStartPx,
-        paddingRight: HAPPIER_FRESHNESS_LINE_METRICS.paddingEndPx,
-        paddingVertical: theme.space.s6,
-        backgroundColor: theme.colors.surface.inset,
-        borderTopWidth: StyleSheet.hairlineWidth,
-        borderBottomWidth: StyleSheet.hairlineWidth,
-        borderColor: theme.colors.border.default,
-    },
-    noticePhone: { flexDirection: 'column', alignItems: 'stretch', gap: theme.space.s6, paddingVertical: theme.space.s8 },
-    // The message keeps its natural width as the line's basis, so when it and the actions don't fit one
-    // line the actions wrap under it instead of squeezing the sentence into a one-word column.
-    noticeBody: { flexDirection: 'row', alignItems: 'center', gap: HAPPIER_FRESHNESS_LINE_METRICS.gapPx, flexGrow: 1, flexShrink: 1, flexBasis: 'auto', minWidth: 0 },
-    noticeMessage: { flexGrow: 1, flexShrink: 1, flexBasis: 'auto', minWidth: 0 },
-    noticeText: { ...Typography.default(), ...HAPPIER_FRESHNESS_LINE_METRICS.text, color: theme.colors.text.secondary },
-    noticeActions: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s10, flexShrink: 0, marginLeft: 'auto' },
-    noticeActionsPhone: { alignSelf: 'flex-end' },
     inventory: { paddingTop: 18 },
     inventoryPhone: { paddingHorizontal: theme.space.s16 },
     inventoryTitle: { ...Typography.variant('meta', 'medium'), color: theme.colors.text.secondary, marginBottom: theme.space.s6,  },

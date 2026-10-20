@@ -1,5 +1,5 @@
 import { ACCOUNT_API_TOKEN_ENCRYPTION_ACCESS_HTTP_PATH_V1, AccountApiTokenEncryptionAccessRequestV1Schema, AccountApiTokenEncryptionAccessResponseV1Schema, AccountApiTokenIntrospectionConnectionFailureV1Schema, AccountApiTokenIntrospectionSubjectFailureV1Schema, ACCOUNT_API_TOKENS_CREATE_HTTP_PATH_V1, ACCOUNT_API_TOKENS_LIST_HTTP_PATH_V1, ACCOUNT_API_TOKENS_REVOKE_ALL_HTTP_PATH_V1, ACCOUNT_API_TOKENS_REVOKE_HTTP_PATH_V1, AccountApiTokensCreateActionInputV1Schema, AccountApiTokensCreateActionOutputV1Schema, AccountApiTokensListActionInputV1Schema, AccountApiTokensListActionOutputV1Schema, AccountApiTokensRevokeActionInputV1Schema, AccountApiTokensRevokeActionOutputV1Schema, AccountApiTokensRevokeAllActionInputV1Schema, AccountApiTokensRevokeAllActionOutputV1Schema, AccountApiTokensServerErrorV1Schema, ACCOUNT_API_TOKENS_UPDATE_HTTP_PATH_V1, ACCOUNT_API_TOKEN_CHILDREN_CREATE_HTTP_PATH_V1, ACCOUNT_API_TOKEN_CHILDREN_REVOKE_HTTP_PATH_V1, ACCOUNT_API_TOKEN_SELF_HTTP_PATH_V1, AccountApiTokensUpdateActionInputV1Schema, AccountApiTokensUpdateActionOutputV1Schema, AccountApiTokenChildCreateRequestV1Schema, AccountApiTokenChildRevokeRequestV1Schema, AccountApiTokenSelfV1Schema } from '@happier-dev/protocol/auth/accountApiTokens';
-import { z } from "zod";
+import { z } from "zod/mini";
 import { db } from '@/storage/db';
 
 import {
@@ -158,7 +158,7 @@ export function registerAccountApiTokenManagementRoutes(app: Fastify): void {
             attachValidation: true,
             schema: {
                 body: AccountApiTokensListActionInputV1Schema,
-                querystring: z.object({}).strict(),
+                querystring: z.strictObject({}),
                 response: {
                     200: AccountApiTokensListActionOutputV1Schema,
                     400: AccountApiTokensServerErrorV1Schema,

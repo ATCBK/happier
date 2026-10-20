@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { t } from '@/text';
 
 describe('resolveSystemTaskFailureMessage', () => {
+    it('replaces a remote guest update failure with actionable app copy', async () => {
+        const { resolveSystemTaskFailureMessage } = await import('./resolveSystemTaskFailureMessage');
+        const message = resolveSystemTaskFailureMessage({ code: 'remote_cli_update_required', message: 'legacy daemon diagnostic' });
+        expect(message).not.toBe('legacy daemon diagnostic');
+        expect(message).toBe(t('setupOnboarding.remoteSshChecklist.remoteCliUpdateRequired'));
+    });
+
     it('presents the scoped setup admission conflict in app copy at the start-error boundary', async () => {
         const { readSystemTaskStartErrorMessage } = await import('./systemTaskStartError');
         const error = Object.assign(new Error('system_task_setup_in_progress'), { code: 'system_task_setup_in_progress' });

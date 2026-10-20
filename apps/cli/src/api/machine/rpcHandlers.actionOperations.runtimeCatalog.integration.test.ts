@@ -69,6 +69,9 @@ describe('machine RPC Action operations', () => {
       list: vi.fn(),
       get: vi.fn(),
       cancel: vi.fn(),
+      listV2: vi.fn(),
+      getV2: vi.fn(),
+      claimServiceMoveStart: vi.fn(),
     };
 
     registerMachineRpcHandlers({
@@ -80,6 +83,7 @@ describe('machine RPC Action operations', () => {
       },
       deps: {
         actionOperations: {
+          ...createHostActionOperationRuntime({ machineId: 'machine', resolveAccountId: async () => 'account' }),
           handlers,
           observeExecution: async ({ execute }) => await execute({
             signal: new AbortController().signal,

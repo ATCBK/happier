@@ -34,9 +34,21 @@ export function useSessionBrowserContextProductModel(input: Readonly<{
             },
         };
     }, [sendCommand]);
-    const provider = React.useMemo(() => (machineId
-        ? createManagedChromiumBrowserAnnotationCaptureProvider({ machineId, serverId })
-        : null), [machineId, serverId]);
+    // Capturing another item reconstructs the map without navigating. Keep that
+    // publication from cancelling other captures still using the same page.
+    const navigation = JSON.stringify(runtime?.state.navigationGenerationByViewId ?? {});
+    const captureBinding = React.useMemo(() => {
+        if (!machineId) return null;
+        const lifetime = { controller: new AbortController() };
+        return { lifetime, provider: createManagedChromiumBrowserAnnotationCaptureProvider({ machineId, serverId,
+            get signal() { return lifetime.controller.signal; } }) };
+    }, [machineId, serverId, navigation]);
+    React.useEffect(() => {
+        if (!captureBinding) return;
+        if (captureBinding.lifetime.controller.signal.aborted) captureBinding.lifetime.controller = new AbortController();
+        return () => captureBinding.lifetime.controller.abort();
+    }, [captureBinding]);
+    const provider = captureBinding?.provider;
     const shellContext = runtime?.browserShellContext;
     return React.useMemo(() => {
         if (!shellContext) return shellContext;

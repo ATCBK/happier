@@ -31,15 +31,11 @@ import { TRIAGE_DISPLAY_NAME } from '../../displayName.js';
 import type { TriageSessionLinkedEntryRowV1, TriageSessionLinkedEntrySummaryV1 } from './linkedEntryRows.js';
 import type { TriageSessionLinkedEntryCandidateV1 } from './linkedEntrySearch.js';
 import { linkTriageSessionEntry, useTriageSessionLinkCandidates } from './useSessionLinkCandidates.js';
-import { formatTriageCompactAgeV1, readTriageEntryGlyphV1 } from '../../ui/list/rows.js';
+import { formatTriageCompactAgeV1 } from '../../ui/list/rows.js';
+import { readTriageEntryGlyphV1 } from '../../ui/window/entryDisplay.js';
 import { triageEntryRowKey } from '../../projection/listWindow.js';
 import { TRIAGE_ENTRY_DETAIL_DESTINATION_V1 } from '../../composer/openEntryDetails.js';
-import { useTriageDurableAccount } from '../../ui/durable/accountDurableState.js';
-import {
-    createActionTriageUnlinkTransport,
-    createDirectTriageUnlinkTransport,
-    type TriageUnlinkTransportV1,
-} from './unlinkLinkedEntry.js';
+import { useTriageUnlinkLinkedEntry } from './useUnlinkLinkedEntry.js';
 import { useTriageSessionLinkedEntries } from './useSessionLinkedEntries.js';
 import { openTriageLinkedEntry } from '../../ui/navigation/openLinkedEntry.js';
 import { resolveTriageSourceWorkflowSubjectV1 } from '../../ui/detail/sourceSurface.js';
@@ -70,7 +66,7 @@ import { PullRequestStatus } from './pullRequestStatus.js';
  * The linked PRs and issues of this Session, grouped as Pull requests and Issues, each row showing the item's
  * own words once PRs & Issues knows it (the join: title, state, comments, author, age) and its path until then.
  * Pressing a row opens it in place: calm facts, then Open (the primary; "Fix in this session" waits for a host
- * seam), Open at source and Unlink behind an inline confirm. The header "+" links another through
+ * seam), Open at source and Unlink through the shared Action policy. The header "+" links another through
  * `sessions/link-entry-v1`. Expanded PR status is read through the optional source-owned detail role;
  * scan/get, the retained window, and durable Session links remain their existing owners' concerns.
  */
@@ -240,23 +236,13 @@ function LinkedRowPeek(props: Readonly<{
     const { row, sessionId, onRefresh } = props;
     const text = usePluginTranslation();
     const host = usePluginHostApi();
-    const durable = useTriageDurableAccount();
-    // One owner, two transports. Direct `session-links` when this mount can
-    // reach the Account — which is what keeps Unlink working while no daemon
-    // is — and the published Action otherwise.
-    const transport = React.useMemo<TriageUnlinkTransportV1>(
-        () => durable.collections
-            ? createDirectTriageUnlinkTransport(durable.collections)
-            : createActionTriageUnlinkTransport(host),
-        [durable.collections, host],
-    );
-    const [phase, setPhase] = React.useState<'idle' | 'confirming' | 'removing' | 'failed'>('idle');
+    const title = rowTitle(row, text);
+    const { phase, unlink: unlinkRelationship } = useTriageUnlinkLinkedEntry(onRefresh);
     const [opening, setOpening] = React.useState(false);
     const [openFailed, setOpenFailed] = React.useState(false);
     const presentation = row.presentation;
     const entryRef = presentation.kind === 'linked' ? presentation.entryRef : null;
     const entry = entryOf(row);
-    const title = rowTitle(row, text);
     const updated = useAge(entry?.updatedAtMs ?? null);
     const linked = useAge(row.linkedAtMs > 0 ? row.linkedAtMs : null);
 
@@ -272,25 +258,8 @@ function LinkedRowPeek(props: Readonly<{
 
     const unlink = React.useCallback(() => {
         if (entryRef === null) return;
-        setPhase('removing');
-        void (async () => {
-            try {
-                const result = await transport.unlink({ sessionId, entryRef });
-                // `conflict` means another writer moved the row, so the honest
-                // next step is the same one a removal takes: re-read.
-                if (result.status === 'failed') {
-                    setPhase('failed');
-                    return;
-                }
-                setPhase('idle');
-                onRefresh();
-            } catch {
-                // A mount with no reachable transport at all, or a refused
-                // dispatch. The row says so instead of pretending the link is gone.
-                setPhase('failed');
-            }
-        })();
-    }, [entryRef, onRefresh, sessionId, transport]);
+        void unlinkRelationship({ sessionId, entryRef, ...(row.sourceOwned ? { sourceOwned: true } : {}) });
+    }, [entryRef, sessionId, unlinkRelationship, row.sourceOwned]);
 
     if (entryRef === null || presentation.kind !== 'linked') return null;
     const facts = entry === null
@@ -330,56 +299,30 @@ function LinkedRowPeek(props: Readonly<{
                 : props.statusRead.phase === 'unavailable' ? <FreshnessLine tone="warning" reason={text('plugins.triage.sessionLinks.status.unavailable', 'PR status is unavailable.')}
                     action={{ label: text('plugins.triage.surface.refresh', 'Refresh'), onPress: onRefresh }} />
                     : partial ? <FreshnessLine tone="neutral" reason={text('plugins.triage.sessionLinks.status.partial', 'Some status details could not be read.')} /> : null}
-            {phase === 'confirming' || phase === 'removing' ? (
-                <Stack gap="small">
-                    <Text
-                        variant="micro"
-                        tone="secondary"
-                        value={text(
-                            'plugins.triage.sessionLinks.unlinkConfirm',
-                            '{name} leaves this session. Nothing changes at the source.',
-                            { name: title },
-                        )}
-                    />
-                    <Row gap="small" align="center">
-                        <Button
-                            variant="destructive"
-                            title={text('plugins.triage.sessionLinks.unlink', 'Unlink')}
-                            busy={phase === 'removing'}
-                            disabled={phase === 'removing'}
-                            onPress={unlink}
-                        />
-                        <Button
-                            variant="plain"
-                            title={text('plugins.triage.sessionLinks.cancel', 'Cancel')}
-                            onPress={() => { setPhase('idle'); }}
-                        />
-                    </Row>
-                </Stack>
-            ) : (
-                <Row gap="small" align="center">
-                    <Button
-                        variant="primary"
-                        title={text('plugins.triage.sessionLinks.open', 'Open')}
-                        busy={opening}
-                        onPress={open}
-                    />
-                    {webUrl === null ? null : (
-                        <Button
-                            variant="plain"
-                            title={text('plugins.triage.surface.detail.openAtSource', 'Open at source')}
-                            onPress={() => { void host.openExternalLink(webUrl).catch(() => undefined); }}
-                        />
-                    )}
-                    <Stack grow />
+            <Row gap="small" align="center">
+                <Button
+                    variant="primary"
+                    title={text('plugins.triage.sessionLinks.open', 'Open')}
+                    busy={opening}
+                    onPress={open}
+                />
+                {webUrl === null ? null : (
                     <Button
                         variant="plain"
-                        title={text('plugins.triage.sessionLinks.unlink', 'Unlink')}
-                        accessibilityLabel={text('plugins.triage.sessionLinks.unlinkNamed', 'Unlink {name}', { name: title })}
-                        onPress={() => { setPhase('confirming'); }}
+                        title={text('plugins.triage.surface.detail.openAtSource', 'Open at source')}
+                        onPress={() => { void host.openExternalLink(webUrl).catch(() => undefined); }}
                     />
-                </Row>
-            )}
+                )}
+                <Stack grow />
+                <Button
+                    variant="plain"
+                    title={text('plugins.triage.sessionLinks.unlink', 'Unlink')}
+                    accessibilityLabel={text('plugins.triage.sessionLinks.unlinkNamed', 'Unlink {name}', { name: title })}
+                    busy={phase === 'removing'}
+                    disabled={phase === 'removing'}
+                    onPress={unlink}
+                />
+            </Row>
             {openFailed ? (
                 <Status tone="warning" label={text('plugins.triage.picker.openFailed', 'This entry could not be opened.')} />
             ) : null}

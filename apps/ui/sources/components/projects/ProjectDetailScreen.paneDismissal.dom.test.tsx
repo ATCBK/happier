@@ -4,7 +4,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { applyProjectAccountRowsFixture, createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { installSessionDetailsPanelNonRnModuleMocks } from '@/components/sessions/panes/sessionDetailsPanelNonRnModuleMocks';
@@ -40,6 +41,11 @@ const runtime = installSessionPaneRuntimeTestHarness({
         if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {
             actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'widgets.item.add': ['ui'] } },
         } }, version: 1 });
+        // Adding a checkout-bound widget admits the checkout against the Account's Project rows.
+        if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) return Response.json(createPlainProjectAccountRowListFixture({ workspaceRefs: [{
+            id: 'wr_1', serverId: runtime.serverId, machineId: 'machine-1', rootPath: '/repo',
+            label: 'Project Alpha', projectKey: 'project-alpha', createdAtMs: 1,
+        }] }));
         return artifacts.handle(path, init);
     },
 });

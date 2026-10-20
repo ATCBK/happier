@@ -110,7 +110,7 @@ import {
   resolveMobileReachableServerUrl,
 } from './utils/server/mobile_api_url.mjs';
 import { hasExplicitStackRuntimeModeArg, resolveStackRuntimeMode } from './runtime/shared/runtime_mode.mjs';
-import { isBorrowedExpoConsumer } from './runtime/shared/borrowed_expo.mjs';
+import { isBorrowedExpoConsumer, projectBorrowedExpoWebappEnv } from './runtime/shared/borrowed_expo.mjs';
 
  /**
   * Dev mode stack:
@@ -244,7 +244,7 @@ async function main() {
 
 	  const cliBin = join(cliDir, 'bin', 'happier.mjs');
   const autostart = getDefaultAutostartPaths();
-  const baseEnv = { ...process.env };
+  let baseEnv = { ...process.env };
   baseEnv.HAPPIER_STACK_DEV_AUTO_REFRESH_DEPS = '1';
   const repoDir = getRepoDir(rootDir, baseEnv);
   const parentServerRestartPreflightAlreadyDone = String(
@@ -258,6 +258,14 @@ async function main() {
     consumerStackName: stackName,
     producerStackName: borrowedExpoProducerStackName,
   });
+  if (borrowedExpo) {
+    baseEnv = await projectBorrowedExpoWebappEnv({
+      rootDir,
+      consumerStackName: stackName,
+      producerStackName: borrowedExpoProducerStackName,
+      env: baseEnv,
+    });
+  }
   const startOwnedExpo = Boolean((startUi || startMobile) && !borrowedExpo);
   const devTargetsEnabled = !flags.has('--no-dev-targets');
   const loadedDevTargets = await loadDevTargetsConfig({ stackName, env: baseEnv, allowMissing: true });
@@ -427,7 +435,6 @@ async function main() {
   process.on('SIGTERM', () => dispatchShutdown('SIGTERM'));
   installExitCleanup({ label: 'local', children });
 
-  const buildCli = (baseEnv.HAPPIER_STACK_CLI_BUILD ?? '1').toString().trim() !== '0';
   // Watch mode (interactive only by default): rebuild happier-cli and restart daemon when code changes.
   const watchEnabled = resolveDevWatchEnabled({
     watchRequested: flags.has('--watch'),
@@ -665,7 +672,7 @@ async function main() {
   let serverScript = null;
   let serverProc = null;
   let serverSourceRuntimeLaunchSpec = null;
-  const serverSourceRuntimeOptions = { repoDir, stackBaseDir: autostart.baseDir, signal: startupAbort.signal };
+  const sourceRuntimeOptions = { repoDir, stackBaseDir: autostart.baseDir, signal: startupAbort.signal };
   if (startServer && startupDecision.startServer) {
     ({ serverEnv, serverScript, serverProc, sourceRuntimeLaunchSpec: serverSourceRuntimeLaunchSpec } = await (async () => {
       if (!priorRuntimeServer.admitted) {
@@ -691,7 +698,7 @@ async function main() {
       serverAlreadyRunning,
       restart,
       admitPriorBuildsImmediately: true,
-      sourceRuntimeOptions: serverSourceRuntimeOptions,
+      sourceRuntimeOptions: sourceRuntimeOptions,
       priorRuntimeServerLaunchSpec: priorRuntimeServer.admitted
         ? priorRuntimeServer.launchSpec
         : null,
@@ -808,19 +815,16 @@ async function main() {
     } else {
       await startDevDaemon({
         startDaemon: true,
-        cliDir,
-        buildCli,
         cliBin,
         cliHomeDir,
         internalServerUrl,
         publicServerUrl,
         runtimeStatePath,
         restart,
-        startLastGreen: true,
-        keepServerRunningOnFailure: baseEnv.HAPPIER_STACK_TUI === '1',
         isShuttingDown: () => shuttingDown,
         env: baseEnv,
         stackName,
+        sourceRuntimeOptions,
       });
     }
   }
@@ -859,19 +863,17 @@ async function main() {
       recover: async () => {
         return await startDevDaemon({
           startDaemon: true,
-          cliDir,
-          buildCli,
           cliBin,
           cliHomeDir,
           internalServerUrl,
           publicServerUrl,
           runtimeStatePath,
           restart: false,
-          startLastGreen: true,
           preserveExistingRunning: true,
           isShuttingDown: () => shuttingDown,
           env: baseEnv,
           stackName,
+          sourceRuntimeOptions,
         });
       },
     });
@@ -903,8 +905,6 @@ async function main() {
     const daemonRefreshExecutor = daemonReloadEnabled
       ? createHappyCliReloadExecutor({
         startDaemon: daemonReloadEnabled,
-        buildCli,
-        cliDir,
         cliBin,
         cliHomeDir,
         internalServerUrl,
@@ -913,6 +913,7 @@ async function main() {
         isShuttingDown: () => shuttingDown,
         env: baseEnv,
         stackName,
+        sourceRuntimeOptions,
       })
       : remoteWorkspacePreparationExecutor;
     reloadExecutors.push(daemonRefreshExecutor);
@@ -962,7 +963,7 @@ async function main() {
       serverProcRef,
       isShuttingDown: () => shuttingDown,
       proxyController: proxyPlan.mode === 'proxy' ? proxyPlan.proxyController : null,
-      sourceRuntimeOptions: serverSourceRuntimeOptions,
+      sourceRuntimeOptions: sourceRuntimeOptions,
       sourceRuntimeLaunchSpec: serverSourceRuntimeLaunchSpec,
       priorRuntimeServerLaunchSpec: priorRuntimeServer.admitted
         ? priorRuntimeServer.launchSpec

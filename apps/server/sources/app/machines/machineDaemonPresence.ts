@@ -1,3 +1,5 @@
+import { getUserMachinesSocketRoom } from "@/app/api/socketRooms";
+
 interface MachineDaemonSocketCarrier {
     readonly data?: unknown;
 }
@@ -43,7 +45,7 @@ export function readMachineDaemonSocketIdentity(socketData: unknown): MachineDae
 }
 
 /**
- * Takes one adapter-aware snapshot of the Account room. A transport failure is unknown presence,
+ * Takes one adapter-aware snapshot of the Account's Machine room. A transport failure is unknown presence,
  * distinct from a successfully observed empty room.
  */
 export async function getMachineDaemonPresenceInventory(params: Readonly<{
@@ -52,7 +54,8 @@ export async function getMachineDaemonPresenceInventory(params: Readonly<{
 }>): Promise<MachineDaemonPresenceInventory> {
     let sockets: readonly MachineDaemonSocketCarrier[];
     try {
-        sockets = await params.io.in(`user:${params.accountId}`).fetchSockets();
+        // Ephemeral machine-runtime sockets intentionally do not join this daemon room.
+        sockets = await params.io.in(getUserMachinesSocketRoom(params.accountId)).fetchSockets();
     } catch {
         return { state: "unavailable" };
     }

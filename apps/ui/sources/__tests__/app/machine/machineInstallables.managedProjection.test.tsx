@@ -1,17 +1,12 @@
 import * as React from 'react';
-
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-
-import {
-    flushHookEffects,
-    renderSettingsView,
-} from '@/dev/testkit';
-import {
-    createUseSettingMutableMockFromReader,
-} from '@/dev/testkit/mocks/storage';
-
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createMachineFixture, renderSettingsView, standardCleanup } from '@/dev/testkit';
+import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { installTerminalRouteCommonModuleMocks } from '@/__tests__/routes/(app)/terminal/terminalRouteTestHelpers';
+import { arrangeMachineDetailsHomeForTests, initializeMachineDetailsRuntimeForTests } from './machineDetailsRuntimeHarness';
+import { socketRpcCodec } from '@happier-dev/sync-client';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 const testState = vi.hoisted(() => ({
     alert: vi.fn(),
@@ -20,39 +15,7 @@ const testState = vi.hoisted(() => ({
     projection: null as unknown,
     language: 'en',
 }));
-
-vi.mock('react-native', async () => {
-    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock({
-        ScrollView: 'ScrollView',
-    });
-});
-
-vi.mock('@expo/vector-icons', () => ({
-    Ionicons: 'Ionicons',
-}));
-
-vi.mock('expo-router', async () => {
-    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-    return createExpoRouterMock({
-        params: { id: 'machine-1', serverId: 'server-b' },
-    }).module;
-});
-
-vi.mock('react-native-unistyles', async () => {
-    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-    return createUnistylesMock();
-});
-
-vi.mock('@/text', async () => {
-    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-    // English returns the key; another language prefixes it, so a label shows which language built it.
-    return createTextModuleMock({
-        translate: (key) => (testState.language === 'en' ? key : `${testState.language}:${key}`),
-        getPreferredLanguage: () => testState.language,
-    });
-});
-
+const routerParamsRef = vi.hoisted(() => ({ current: { id: 'machine-1' } as Record<string, string> }));
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     return createModalModuleMock({
@@ -60,58 +23,38 @@ vi.mock('@/modal', async () => {
     }).module;
 });
 
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-    const [
-        { createStorageModuleMock },
-        { createMachineFixture },
-        { settingsDefaults },
-    ] = await Promise.all([
-        import('@/dev/testkit/mocks/storage'),
-        import('@/dev/testkit/fixtures/machineFixtures'),
-        import('@/sync/domains/settings/settings'),
-    ]);
-    return createStorageModuleMock({
-        importOriginal,
-        overrides: {
-            useMachine: () => createMachineFixture(),
-            useSettingMutable: createUseSettingMutableMockFromReader(() => [null, vi.fn()]),
-            useSettings: () => settingsDefaults,
-        },
+vi.mock('@/components/ui/lists/ItemGroup', () => ({
+    ItemGroup: ({ children }: { children?: React.ReactNode }) => React.createElement('ItemGroup', null, children),
+}));
+
+vi.mock('@/components/ui/lists/Item', () => ({
+    Item: (props: Record<string, unknown>) => React.createElement('Item', props),
+}));
+
+vi.mock('@/components/ui/forms/Switch', () => ({
+    Switch: (props: Record<string, unknown>) => React.createElement('Switch', props),
+}));
+installTerminalRouteCommonModuleMocks({
+    text: async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    // English returns the key; another language prefixes it, so a label shows which language built it.
+    return createTextModuleMock({
+        translate: (key) => (testState.language === 'en' ? key : `${testState.language}:${key}`),
+        getPreferredLanguage: () => testState.language,
     });
+},
+    router: async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
+        params: () => routerParamsRef.current,
+    }).module,
 });
 
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>();
-    return {
-        ...actual,
-        getActiveServerId: () => 'server-b',
-        getActiveServerSnapshot: () => ({
-            serverId: 'server-b',
-            serverUrl: 'https://server-b.example.test',
-            generation: 1,
-        }),
-    };
-});
-
-vi.mock('@/utils/sessions/machineUtils', () => ({
-    isMachineOnline: () => testState.online,
-}));
-
-vi.mock('@/agents/backendCatalog/useDaemonMergedProjectionInputs', () => ({
-    useDaemonMergedProjectionInputs: () => ({
-        phase: 'ready',
-        inputs: {
-            pluginProjectionV2: testState.projection,
-        },
-    }),
-}));
-
-vi.mock('@/hooks/server/useMachineCapabilitiesCache', () => ({
-    useMachineCapabilitiesCache: () => ({
-        state: {
-            status: 'loaded',
-            snapshot: {
-                response: {
+const network = await initializeMachineDetailsRuntimeForTests();
+const disposeActionExecutorLoader = await installRealActionExecutorModuleLoader();
+afterAll(disposeActionExecutorLoader);
+const { clearDaemonMergedProjectionCacheForTests } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
+let home: Awaited<ReturnType<typeof arrangeMachineDetailsHomeForTests>> | null = null;
+let machine = createMachineFixture({ id: 'machine-1' });
+const capabilityResponse = { protocolVersion: 1, ...{
                     results: {
                         'dep.antigravity.localharness': {
                             ok: true,
@@ -125,41 +68,22 @@ vi.mock('@/hooks/server/useMachineCapabilitiesCache', () => ({
                             },
                         },
                     },
-                },
-            },
-        },
-        refresh: vi.fn(),
-    }),
-}));
+                } };
 
-vi.mock('@/sync/ops/capabilities', () => ({
-    machineCapabilitiesInvoke: testState.invoke,
-}));
-
-
-
-vi.mock('@/components/ui/lists/ItemGroup', () => ({
-    ItemGroup: ({ children }: { children?: React.ReactNode }) => React.createElement('ItemGroup', null, children),
-}));
-
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: Record<string, unknown>) => React.createElement('Item', props),
-}));
-
-vi.mock('@/components/ui/forms/Switch', () => ({
-    Switch: (props: Record<string, unknown>) => React.createElement('Switch', props),
-}));
-
-/** The Tools sub-page's section for the routed machine and Home (`machine-1` on `server-b`). */
 async function loadMachineInstallablesSection() {
     const { MachineInstallablesSection } = await import('@/components/machines/installables/MachineInstallablesSection');
+    machine = { ...machine, active: testState.online, activeAt: testState.online ? Date.now() : Date.now() - 86400000 };
+    home!.storage.getState().applyMachines([machine], true, {
+        sourceServerId: home!.home.id, sourceAccountId: home!.home.accountId,
+    });
     return function MachineInstallablesScreen() {
-        return <MachineInstallablesSection machineId="machine-1" serverId="server-b" />;
+        return <MachineInstallablesSection machineId={machine.id} serverId={home!.home.id} />;
     };
 }
 
 describe('machine managed installables projection', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
+
         testState.alert.mockReset();
         testState.invoke.mockReset();
         testState.online = true;
@@ -213,62 +137,106 @@ describe('machine managed installables projection', () => {
                 },
             },
         };
+
+        clearDaemonMergedProjectionCacheForTests();
+        machine = createMachineFixture({ id: 'machine-1', active: true, activeAt: Date.now() });
+        home = await arrangeMachineDetailsHomeForTests(network, {
+            serverUrl: 'https://installables.example.test', machines: [machine],
+        });
+        routerParamsRef.current = { id: machine.id, serverId: home.home.id };
+        network.setRpcResponder(async request => {
+            const decoded = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, request.payload, 'rpc');
+            const response = request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE
+                ? { protocolVersion: 1, projection: testState.projection }
+                : request.method === RPC_METHODS.CAPABILITIES_DETECT
+                    ? capabilityResponse
+                    : request.method === RPC_METHODS.CAPABILITIES_INVOKE
+                        ? (await testState.invoke(request.targetId, decoded.params)).response
+                        : {};
+            return await socketRpcCodec.encodeResponse({ mode: 'plain' }, response, decoded.callId);
+        });
+    });
+
+    afterEach(async () => {
+        await standardCleanup();
+        await home?.dispose();
+        home = null;
+        network.resetRequests();
     });
 
     it('shows only the projected managed PyPI descriptor, behind its existing install confirmation', async () => {
-        const MachineInstallablesScreen = await loadMachineInstallablesSection();
-        const screen = await renderSettingsView(<MachineInstallablesScreen />);
+            const MachineInstallablesScreen = await loadMachineInstallablesSection();
+            const screen = await renderSettingsView(home!.element(MachineInstallablesScreen));
 
-        expect(screen.findRowByTitle('Antigravity localharness')).not.toBeNull();
-        expect(screen.findRowByTitle('Antigravity localharness')?.props.subtitle).toBe('Local browser harness • deps.ui.notInstalled');
-        expect(screen.findRowByTitle('common.open')?.props.subtitle).toBe('https://docs.example.test/antigravity/localharness');
-        expect(screen.findRowByTitle('Raw declaration must not become an install action')).toBeNull();
+            await vi.waitFor(() => {
+                expect(screen.findRowByTitle('Antigravity localharness')).not.toBeNull();
+                expect(screen.findRowByTitle('Antigravity localharness')?.props.subtitle).toBe('Local browser harness • deps.ui.notInstalled');
+                expect(screen.findRowByTitle('common.open')?.props.subtitle).toBe('https://docs.example.test/antigravity/localharness');
+                expect(screen.findRowByTitle('Raw declaration must not become an install action')).toBeNull();
+            });
 
-        await act(async () => {
-            screen.pressRowByTitle('common.install');
+            await act(async () => {
+                screen.pressRowByTitle('common.install');
+            });
+            const confirmButtons = testState.alert.mock.calls.find((call) => Array.isArray(call[2]))?.[2];
+            if (!Array.isArray(confirmButtons) || typeof confirmButtons[1]?.onPress !== 'function') {
+                throw new Error('Expected the existing install confirmation action');
+            }
+            // Confirming installs through the front-door `machines.capabilities.install` Action; that path, its Account
+            // scope and the machine RPC are proven in machineDetails.revokeMachine ("installs from the mounted machine row").
+            expect(testState.invoke).not.toHaveBeenCalled();
+
+            await screen.unmount();
         });
-        const confirmButtons = testState.alert.mock.calls.find((call) => Array.isArray(call[2]))?.[2];
-        if (!Array.isArray(confirmButtons) || typeof confirmButtons[1]?.onPress !== 'function') {
-            throw new Error('Expected the existing install confirmation action');
-        }
-        // Confirming installs through the front-door `machines.capabilities.install` Action; that path, its Account
-        // scope and the machine RPC are proven in machineDetails.revokeMachine ("installs from the mounted machine row").
-        expect(testState.invoke).not.toHaveBeenCalled();
-
-        await screen.unmount();
-    });
 
     it('relabels the auto-update choices when the language changes', async () => {
-        testState.language = 'en';
-        const MachineInstallablesScreen = await loadMachineInstallablesSection();
-        const screen = await renderSettingsView(<MachineInstallablesScreen />);
-        const optionLabels = () => screen.findAll((node) => (
-            typeof node.props?.testIDPrefix === 'string'
-            && node.props.testIDPrefix.startsWith('machine-installables-auto-update-')
-            && Array.isArray(node.props.options)
-        ))[0]?.props.options.map((option: { label: string }) => option.label) as string[] | undefined;
-
-        expect(optionLabels()?.length).toBeGreaterThan(0);
-        expect(optionLabels()!.every((label) => !label.startsWith('fr:'))).toBe(true);
-
-        try {
-            testState.language = 'fr';
-            await screen.update(<MachineInstallablesScreen />);
-            expect(optionLabels()!.every((label) => label.startsWith('fr:'))).toBe(true);
-        } finally {
             testState.language = 'en';
-            await screen.unmount();
-        }
-    });
+            const MachineInstallablesScreen = await loadMachineInstallablesSection();
+            const screen = await renderSettingsView(home!.element(MachineInstallablesScreen));
+            const optionLabels = () => screen.findAll((node) => (
+                typeof node.props?.testIDPrefix === 'string'
+                && node.props.testIDPrefix.startsWith('machine-installables-auto-update-')
+                && Array.isArray(node.props.options)
+            ))[0]?.props.options.map((option: { label: string }) => option.label) as string[] | undefined;
+
+            await vi.waitFor(() => {
+                expect(optionLabels()?.length).toBeGreaterThan(0);
+                expect(optionLabels()!.every((label) => !label.startsWith('fr:'))).toBe(true);
+            });
+
+            try {
+                testState.language = 'fr';
+                await screen.update(home!.element(MachineInstallablesScreen));
+                expect(optionLabels()!.every((label) => label.startsWith('fr:'))).toBe(true);
+            } finally {
+                testState.language = 'en';
+                await screen.unmount();
+            }
+        });
 
     it('keeps cached projected metadata read-only while the machine is offline', async () => {
+
+            const MachineInstallablesScreen = await loadMachineInstallablesSection();
+            const screen = await renderSettingsView(home!.element(MachineInstallablesScreen));
+        await vi.waitFor(() => {
+            if (!network.requests.some(request => request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)
+                || !screen.findRowByTitle('Antigravity localharness')) {
+                throw new Error('Online installables metadata has not settled');
+            }
+        });
         testState.online = false;
-        const MachineInstallablesScreen = await loadMachineInstallablesSection();
-        const screen = await renderSettingsView(<MachineInstallablesScreen />);
+        await act(async () => {
+            machine = { ...machine, active: false, activeAt: Date.now() - 86400000 };
+            home!.storage.getState().applyMachines([machine], true, {
+                sourceServerId: home!.home.id, sourceAccountId: home!.home.accountId,
+            });
+        });
 
-        expect(screen.findRowByTitle('Antigravity localharness')).not.toBeNull();
-        expect(screen.findRowByTitle('common.install')?.props.disabled).toBe(true);
+            await vi.waitFor(() => {
+                expect(screen.findRowByTitle('Antigravity localharness')).not.toBeNull();
+                expect(screen.findRowByTitle('common.install')?.props.disabled).toBe(true);
+            });
 
-        await screen.unmount();
-    });
+            await screen.unmount();
+        });
 });

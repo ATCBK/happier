@@ -9,7 +9,7 @@ const metadata = { host: 'worker', platform: 'linux', happyCliVersion: 'dev', ho
 describe('ApiMachine resources policy CAS', () => {
   it('keeps a metadata CAS pending beyond the generic ACK deadline and applies its committed revision', async () => {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => { vi.useRealTimers(); });
     const machine: Machine = { id: 'machine', encryptionMode: 'plain', metadata, metadataVersion: 1, daemonState: null, daemonStateVersion: 0 };
     const changed = { ...metadata, displayName: 'Accepted' };
     let acknowledge!: (answer: unknown) => void;

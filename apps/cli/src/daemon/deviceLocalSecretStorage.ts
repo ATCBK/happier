@@ -4,7 +4,7 @@ import {
   createHmac,
   randomBytes as nodeRandomBytes,
 } from 'node:crypto';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import {
@@ -16,10 +16,10 @@ const DEVICE_LOCAL_KEY_BYTES = 32;
 const DEVICE_LOCAL_NONCE_BYTES = 12;
 const DEVICE_LOCAL_AUTH_TAG_BYTES = 16;
 const DEVICE_LOCAL_CIPHERTEXT_PREFIX = 'v1';
-const DeviceLocalKeyFileSchema = z.object({ version: z.literal(1), key: z.string() }).strict();
+const DeviceLocalKeyFileSchema = z.strictObject({ version: z.literal(1), key: z.string() });
 const DeviceLocalKeyFileStoredReadSchema = createStoredReadSchema(DeviceLocalKeyFileSchema);
 
-export type DeviceLocalSecretPurpose = 'session_respawn_environment' | 'execution_run_worker_update' | 'execution_run_state' | 'usage_accounting_capture';
+export type DeviceLocalSecretPurpose = 'session_respawn_environment' | 'execution_run_worker_update' | 'execution_run_state' | 'usage_accounting_capture' | 'agent_state_request_settlement';
 export type DeviceLocalOpaqueIdentityPurpose =
   'external_session_transcript_refresh_cursor' | 'usage_accounting_identity';
 export type DeviceLocalDerivedSecretKeyPurpose =

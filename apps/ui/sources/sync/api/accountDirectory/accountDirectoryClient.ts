@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import type { z } from 'zod/mini';
 import {
     ACCOUNT_DIRECTORY_HOMES_HTTP_PATH_V1,
     ACCOUNT_DIRECTORY_ME_HTTP_PATH_V1,
@@ -118,7 +118,7 @@ export function createAccountDirectoryClient(
     const { endpoint: baseUrl, serverIdentityId } = normalizeTarget(target);
     const credentialTarget = { endpoint: baseUrl, serverIdentityId };
     const custody = credentialCustody ?? captureAccountDirectoryCredentialCustody(credentialTarget);
-    const request = async <T>(path: string, init: RequestInit | undefined, schema: z.ZodType<T>): Promise<T> => {
+    const request = async <T>(path: string, init: RequestInit | undefined, schema: z.ZodMiniType<T>): Promise<T> => {
         if (!path.startsWith('/v1/account-directory/')) throw new Error('Account Service path is not an Account Directory route');
         const credentials = await custody.read();
         if (!custody.isCurrent()) throw new Error('Account Service credential custody superseded');

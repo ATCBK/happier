@@ -167,7 +167,10 @@ export class ExecutionBudgetRegistry {
 
   tryAcquireExecutionRun(runId: string, intent?: string, attribution?: RequesterWorkAttributionV1): boolean {
     const cls = (typeof intent === 'string' && intent.trim().length > 0) ? intent.trim() : 'execution_run';
-    return this.tryAcquireToken(runId, cls, this.maxConcurrentExecutionRuns, attribution);
+    if (this.inFlightByTokenId.get(runId)?.acquired) return true;
+    if (this.maxConcurrentExecutionRuns !== null
+      && this.getInFlightSnapshot().executionRuns >= this.maxConcurrentExecutionRuns) return false;
+    return this.tryAcquireToken(runId, cls, null, attribution);
   }
 
   releaseExecutionRun(runId: string): void {

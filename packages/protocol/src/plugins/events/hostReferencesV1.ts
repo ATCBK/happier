@@ -128,9 +128,9 @@ export function isRuntimeHostEventIdV1(value: string): value is RuntimeHostEvent
   return RUNTIME_HOST_EVENT_ID_SET_V1.has(value);
 }
 
-export const HostEventIdV1Schema = lazyZodSchema(() => z.string().check(z.refine(isHostEventIdV1, 'Unknown Host Event id')));
+export const HostEventIdV1Schema = lazyZodSchema(() => z.string().apply((base) => base.check(z.refine<z.output<typeof base>>(isHostEventIdV1, 'Unknown Host Event id')) as typeof base & z.ZodMiniType<HostEventIdV1, z.input<typeof base>>));
 
-export const RuntimeHostEventIdV1Schema = lazyZodSchema(() => z.string().check(z.refine(isRuntimeHostEventIdV1, 'Unknown runtime Host Event id')));
+export const RuntimeHostEventIdV1Schema = lazyZodSchema(() => z.string().apply((base) => base.check(z.refine<z.output<typeof base>>(isRuntimeHostEventIdV1, 'Unknown runtime Host Event id')) as typeof base & z.ZodMiniType<RuntimeHostEventIdV1, z.input<typeof base>>));
 
 export const HostEventScopeV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('current-session') }),

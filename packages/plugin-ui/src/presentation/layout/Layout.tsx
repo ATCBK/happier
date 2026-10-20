@@ -1,4 +1,4 @@
-import { useMemo, useRef, type ReactNode } from 'react';
+import { Children, cloneElement, Fragment, isValidElement, useMemo, useRef, type ReactElement, type ReactNode } from 'react';
 import {
   ScrollView,
   View,
@@ -17,6 +17,8 @@ import type {
 import { PluginUiPopoverScrollSourceProvider, useOptionalPluginUiPresentationHost } from '../../presentationHost/context.js';
 import { PluginUiScrollActivityProvider } from '../../presentationHost/scrollActivity.js';
 import { useHappierPageChrome } from './pageChrome.js';
+import { HappierColumnEdgeContext, useHappierColumnEdgePx } from './columnEdge.js';
+import { HAPPIER_PAGE_METRICS } from './pageMetrics.js';
 
 // The semantic gap vocabulary is owned by the RN-free shared module so the
 // public adapter and the host declarative renderer cannot disagree about it.
@@ -96,6 +98,32 @@ export function HappierScreen({ children, controlRef, onLayout, testID, style, s
   );
 }
 
+/**
+ * A labelled control that keeps its own width in a column: a button reads as an operation beside the content, not
+ * as a bar across it. A component opts in with `Component.happierInlineControl = true` (component metadata, so it
+ * holds across separately bundled plugins, like `happierPageOperation`).
+ */
+export function isHappierInlineControl(node: ReactNode): boolean {
+  if (!isValidElement(node)) return false;
+  const component = node.type;
+  return (typeof component === 'function' || (typeof component === 'object' && component !== null))
+    && 'happierInlineControl' in component && component.happierInlineControl === true;
+}
+
+const INLINE_CONTROL_SLOT_STYLE = Object.freeze({ alignItems: 'flex-start' as const });
+
+/** Each labelled control of a stretching column, fragments included, in a slot that keeps its own width. */
+function placeInlineControls(children: ReactNode): ReactNode {
+  return Children.map(children, child => {
+    if (isHappierInlineControl(child)) return <View style={INLINE_CONTROL_SLOT_STYLE}>{child}</View>;
+    if (isValidElement(child) && child.type === Fragment) {
+      const fragment = child as ReactElement<{ children?: ReactNode }>;
+      return cloneElement(fragment, undefined, placeInlineControls(fragment.props.children));
+    }
+    return child;
+  });
+}
+
 export function HappierStack({
   children,
   grow = false,
@@ -128,7 +156,10 @@ export function HappierStack({
         style,
       ]}
     >
-      {children}
+      {/* A stretching column keeps its blocks full width and its labelled controls (buttons) their own width,
+          on its leading edge. A row, or a column the caller aligns, places them as it places everything else. */}
+      {direction === 'horizontal' || (align !== undefined && align !== 'stretch') ? children
+        : placeInlineControls(children)}
     </View>
   );
 }
@@ -147,6 +178,8 @@ export function HappierScrollArea({
   const host = useOptionalPluginUiPresentationHost();
   const pageChrome = useHappierPageChrome();
   const columnMaxWidthPx = scrollProps.horizontal === true ? undefined : pageChrome?.columnMaxWidthPx;
+  // A scroll inside a column that already draws the edge (a detail's body, a menu on the page) adds none.
+  const edgePx = useHappierColumnEdgePx() === 0 ? HAPPIER_PAGE_METRICS.sheetInsetPx : 0;
   const createTracker = host?.createScrollActivityTracker;
   const tracker = useMemo(() => createTracker?.(scrollSourceRef, scrollProps.horizontal === true) ?? null,
     [createTracker, scrollProps.horizontal]);
@@ -176,7 +209,11 @@ export function HappierScrollArea({
         {/* A page's scroll owns its column: every block (a banner, a card, a state), not only the
             sections that centre themselves, sits on the column the page header uses (R-APP-4). */}
         {columnMaxWidthPx === undefined ? children : (
-          <View style={{ alignSelf: 'center', width: '100%', maxWidth: columnMaxWidthPx }}>{children}</View>
+          // The column also owns the page's sheet edge, so a plain block (a line of text, Markdown, a button, a
+          // banner) stands on it instead of the column's side; sheets, page states and titles keep their own edges.
+          <View style={{ alignSelf: 'center', width: '100%', maxWidth: columnMaxWidthPx, paddingHorizontal: edgePx }}>
+            {edgePx === 0 ? children : <HappierColumnEdgeContext.Provider value={edgePx}>{children}</HappierColumnEdgeContext.Provider>}
+          </View>
         )}
       </ScrollView>
       </PluginUiScrollActivityProvider>

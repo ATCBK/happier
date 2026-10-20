@@ -46,10 +46,10 @@ export const DESKTOP_OPEN_HOME_REQUESTED_EVENT = 'desktop_open_home_requested';
 export const DESKTOP_OPEN_SETTINGS_REQUESTED_EVENT = 'desktop_open_settings_requested';
 export const DESKTOP_OPEN_UPDATES_REQUESTED_EVENT = 'desktop_open_updates_requested';
 
-const SCREEN_ROUTES: Record<'updates' | 'settings', string> = {
+const SCREEN_ROUTES = {
     updates: UPDATES_ROUTE,
     settings: SETTINGS_ROUTES.general,
-};
+} as const satisfies Record<'updates' | 'settings', string>;
 
 function useDesktopHostEvent(event: string, onEvent: (payload: unknown) => void): void {
     React.useEffect(() => {

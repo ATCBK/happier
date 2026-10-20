@@ -70,10 +70,13 @@ export function selectBrowserToolbarModel(view: BrowserControlViewState | null):
         };
     }
     const navigation = view.adapterCapabilities.navigation;
+    // An ended relay preview has no page left to act on: its history and address belonged to it.
+    // Reload stays, since it asks the proxy again.
+    const ended = view.loadingState === 'failed' && view.lastError === 'preview_ended';
     return {
-        canNavigate: navigation.canNavigate,
-        canGoBack: navigation.canGoBack && view.canGoBack,
-        canGoForward: navigation.canGoForward && view.canGoForward,
+        canNavigate: navigation.canNavigate && !ended,
+        canGoBack: navigation.canGoBack && view.canGoBack && !ended,
+        canGoForward: navigation.canGoForward && view.canGoForward && !ended,
         canReload: navigation.canReload,
         canStop: navigation.canStop && view.loadingState === 'loading',
         isLoading: view.loadingState === 'loading',

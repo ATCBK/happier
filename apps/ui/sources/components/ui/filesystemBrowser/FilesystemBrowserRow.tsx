@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View, type StyleProp, type ViewStyle } from 'react-native';
+import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { Item, type ItemProps } from '@/components/ui/lists/Item';
@@ -14,7 +14,7 @@ import { isTouchPrimaryPointer } from '@/components/ui/interactiveTargetSize';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { SelectionCheckGlyph, type SelectionCheckState } from '@/components/ui/selection/SelectionCheckGlyph';
 import { useDeviceType } from '@/utils/platform/responsive';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 
 /** How a row hands its actions menu the reveal: open it (a long press) and whether its … is drawn. */
 export type FilesystemBrowserRowActionsControl = Readonly<{
@@ -83,14 +83,14 @@ export type FilesystemBrowserRowProps = Readonly<{
     basePaddingLeft?: number;
     depthIndent?: number;
     paddingRight?: number;
-    style?: StyleProp<ViewStyle>;
+    style?: ItemProps['style'] & React.ComponentProps<typeof HappierTreeRow>['style'];
     onRetryError?: (node: FilesystemBrowserNode) => void | Promise<void>;
     wrapContent?: ((input: FilesystemBrowserWrapContentInput) => React.ReactElement) | null;
 }>;
 
 export function FilesystemBrowserRow(props: FilesystemBrowserRowProps): React.ReactElement {
     const { theme } = useUnistyles();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const phone = useDeviceType() === 'phone';
     const reducedMotion = useReducedMotionPreference();
     const paddingLeft = resolveHappierTreeRowIndentPx(props.node.depth, {

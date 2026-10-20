@@ -57,8 +57,15 @@ export function useNewSessionContainedModalScreenOptions(params: Readonly<{
 }
 
 /**
- * Re-export of the canonical {@link RouteModalPortalScope} under the new-session name
- * so existing `/new` route importers keep a stable path. The portal-scope
- * implementation is shared with settings and any other modally-presented route.
+ * Actual `/new` routes use the canonical route portal owner. An embedded
+ * composer is not another route: it inherits its page's host so withdrawing
+ * the composer cannot also destroy unrelated page dialogs.
  */
-export const NewSessionScreenPortalScope = RouteModalPortalScope;
+export function NewSessionScreenPortalScope(props: Readonly<{
+    presentation?: 'screen' | 'embedded';
+    children: React.ReactNode;
+}>) {
+    return props.presentation === 'embedded'
+        ? <>{props.children}</>
+        : <RouteModalPortalScope>{props.children}</RouteModalPortalScope>;
+}

@@ -4,6 +4,13 @@ The host owns the executable Session and turn lifecycle. An Agent plugin supplie
 
 This page describes **0.3 development source**, not a shipped release or a completed live-validation gate. It is the standing architecture reference; approved plans remain the execution contract for their assigned work.
 
+Codex app-server can finish a native turn while an already-started tool is still running. The
+host records the missing result truthfully. A later result for that exact native
+thread, turn and known tool call corrects the same transcript row through the
+existing source-timestamp and Message revision owner. It does not reopen the
+completed turn or admit another input. Unknown calls, foreign threads and
+duplicate completions cannot introduce another tool effect.
+
 Session capability edits converge through the host's
 [`capabilitySelectionSynchronizer`](../apps/cli/src/agent/runtime/capabilitySelectionSynchronizer.ts).
 It observes the canonical desired selection and applied metadata baselines plus
@@ -13,7 +20,10 @@ context and its resolved server-selection baseline; it does not substitute a lat
 catalog for the launch decision. The
 Session client's content-free `account-change` ingress and change-feed recovery
 refresh the MCP and prompt-library catalogs for the admitted Home and captured
-Account lifetime. They join the existing in-flight hydration and re-observe rows
+Account lifetime. The foreground Session's demanded Active Account MCP catalog
+and an invocation-only Execution Run's captured MCP catalog retain their own
+existing hydration owners; refreshing the Run holder does not refresh the
+foreground Session's rules. They join the existing in-flight hydration and re-observe rows
 after an invalidation. Refreshed rules reach the same synchronizer as Session
 selection edits. The Protocol resolver compares effective selections after
 Session overrides, so unrelated and overridden rule changes do not apply. The startup rule observation
@@ -23,11 +33,48 @@ through the existing captured Account hydrator. An in-flight observation is
 not a completed unavailable read: admission must retain the resolved rule
 context so later Account wakes can compare Machine and Project rule changes.
 Completed unavailable reads retain their typed failure and do not become retries.
+Skill delivery resolves referenced candidates from Reach rules and Session
+overrides, then opens only selected Artifact bodies through the shared skill-plan
+preparer. Startup, Session-owned Runs and live reapply do not enumerate unrelated
+Account Artifacts. Machine previews still supply a complete choice inventory to
+that same preparer; library listing and cache collection retain their inventory owners.
 The synchronizer waits for a settled turn and uses P3's `reapplySessionSkills` for declared library-skill
 live reload. Native-skill overlay changes and MCP changes use the daemon's existing
 restart-with-resume owner with reason `capability_selection_change` and
 `force_current_cli`; they never create a fresh conversation as a fallback.
-Turn/approval busy refusals wait for the next settled turn. Missing resume evidence
+Turn/approval busy refusals wait for the next settled turn.
+Capability replacement, runtime refresh and planned Connected Service switches
+share the daemon's final replacement gate. It closes Run Start, Ensure and
+Ensure-or-Start admission, including aliases declared by their canonical Actions,
+at the receiving Session RPC owner and joins requests
+already received, including authorization and cleanup before a public Run exists.
+The same gate then rechecks child and foreground activity, captures the departing
+process tree and verifies process identity before signalling. Creation cannot
+enter during those asynchronous checks. Unrelated long-lived readers do not hold
+the drain. A refused creation retains typed `noRunCreated` evidence through local
+and transported dispatch. The admission hold remains an in-flight private RPC
+request after a separate readiness response. Existing request cancellation and
+transport retirement reopen admission, without a release-message dependency or
+an expiry timer. A clustered room broadcast can lose cancellation without
+disconnecting the receiver. When creation encounters a closed gate, or a new
+restart attempt encounters an older hold, the receiver checks that exact PID
+and attempt through the existing authenticated local daemon control channel.
+Only a definite retired result releases the hold; an unreadable daemon leaves
+admission closed. The waiting creation registers its cancellation and existing
+deadline before this read. Each read follows both that caller and the hold's
+lifetime; a cancelled or disconnected creation settles as `noRunCreated`
+without entering its handler or releasing an independently live hold. The daemon
+retains the attempt's existing request signal on its tracked runner, without
+persistence, polling or an expiry timer.
+A signalled runner keeps the hold through retirement; normal
+completion of the Connected Service deferral callback does not release it. The daemon
+refuses to signal if that live request is lost during its final checks. The exact
+runner PID and attempt pair readiness with its own hold; a delayed older request
+cannot release or authorize another attempt.
+An older runner without this operation returns `restart_admission_unsupported`
+with the existing Stop-and-Resume recovery, rather than indefinite activity deferral;
+security-driven request-auth source cutover retains its interrupting path.
+Missing resume evidence
 or a launch mode requiring a person's restart leaves the selection pending, with
 an apply-status projection rather than a queue or timer. Effective skill- and MCP-rule
 changes publish that same projection with `source: 'rules'` before waiting for
@@ -39,12 +86,170 @@ or native acknowledgement clears it, and restoring the effective baseline
 withdraws the refusal without reload. Attach preserves the applied baseline;
 actual startup application or live-reload acknowledgement
 clears the corresponding pending marker, as does restoring the known applied
-selection through Undo. Explicit current terminal/Windows-hosted launch facts
+selection through Undo. Positive skill or MCP launch resolution takes precedence
+over an earlier runner's retained rule-pending notice, preventing repeated
+replacement before the first input. An attach's current-rule read alone cannot
+acknowledge that notice. Explicit current terminal/Windows-hosted launch facts
 take precedence over a retained daemon projection when deciding manual restart.
 Host publication records the admitted
 Agent's resume/live-reload facts in `agentRuntimeCapabilitiesV1.capabilitySelection`
-so clients can decide timing without a live Machine round trip. These source paths
+so clients can decide timing without a live Machine round trip. Initial facts use
+the descriptor returned by the admitted native factory, retained through host
+identity decoration; launch options can predate that concrete runtime choice.
+Daemon-started runners resolve these facts from their admitted retained Agent
+catalog entry after native-source preparation. The retained leaf projects the
+same experimental-resume predicate as the ordinary executable catalog, and
+retires it on disposal; a process-global catalog cannot supply a different
+generation's resume decision. Codex app-server therefore keeps its declared
+experimental resume support for capability changes, while unsupported native
+runtime choices continue to fail closed.
+These source paths
 still require the program's composed live journey before certification.
+
+In 0.3 development source, Session input routing uses Pending's committed
+`runtimeMachineTarget` through `readCurrentCommittedSessionInputMachineTargetInTx`.
+Input can therefore reach its existing custody while a planned replacement has
+no live publisher socket. Archive, Account access and current Machine installation
+checks still apply. Runtime effects continue to require a current publisher.
+If an admitted Session runtime effect has no current publisher, the existing
+RPC classifier returns `target_unavailable`; a current publisher lacking the
+method still returns `RPC_METHOD_NOT_AVAILABLE`. A submitted mutation whose
+publisher disappears retains `RPC_OUTCOME_UNKNOWN`, not a retryable absence.
+When the send requests Resume, the daemon consults the existing intended-respawn
+state and signaled-restart PID set for that exact Session, after requester
+validation. A pending replacement retains launch ownership; the replacement
+consumes the canonical Pending row under its existing local-id deduplication.
+This adds no input queue, retry, timer or restart state.
+
+The foreground Pending consumer honours the materialization owner's retry delay
+for the same retained claim until settlement or caller cancellation. Repeated
+uncertain acknowledgements do not exhaust a separate consumer retry allowance
+or require a new Pending event. Results without a retry hint still wait for the
+existing queue, metadata or connection wake; input is never enqueued again to
+recover a lost settlement receipt. This is 0.3 development-source behavior.
+
+Protected Session inputs re-enter that same Pending admission owner after host
+prompt and checkpoint preparation, immediately before a new turn or in-flight
+steer reaches the native Agent. A local queue copy or committed user transcript
+row does not authorize dispatch after the Pending input is discarded. The host
+refuses native delivery when admission is rejected, held or unavailable.
+Protected originals retain independent
+queue entries so one cancellation cannot reject a valid peer. This applies to
+bundled and installed Agents; context-only host inputs retain their existing
+separate admission owner.
+
+The host's native foreground assistant projection waits for Home acknowledgement
+before publishing terminal Turn anchors. The lifecycle joins the exact input's
+existing Pending settlement attempt before reading acknowledged user sequences,
+and captures the terminal assistant snapshot in the ordered per-turn projection,
+before a native successor can replace the Session-global snapshot. A settled
+attempt alone is not commit evidence. The Session client keeps the existing
+outbox and close/cancellation lifetimes; sidechain output retains its own path.
+The [Session result reader](pending-delivery.md#correlated-session-answers-03-development)
+owns observation of retained turns with incomplete anchors.
+
+A host-proven native-mode startup refusal uses that same exact-input outcome
+owner in 0.3 development source. Session creation can be acknowledged before its
+caller offers the first input, so the failed host keeps its existing Pending
+consumer available until ordinary Stop. Later originals receive the terminal
+pre-effect refusal; no native prompt, Ready event or successful startup hook runs.
+The existing retained-settlement owner reoffers a failed terminal-block write on
+its normal connection/materialization wakes, without redelivering input. Generic
+plugin errors, generation retirement and native-resume failures retain their
+normal cleanup behavior. No Pending format or public plugin error contract changes.
+
+In 0.3 development source, Role, prompt Artifact and Session Project association
+preparation classify Home read failures through the shared endpoint policy.
+Network, timeout and retryable HTTP failures publish the existing
+`preparation_pending` issue. During startup,
+the runner exits with failure after publishing that issue and releasing its
+construction resources, so the daemon's existing respawn budget can retry with
+the retained initial input. Definitive Home refusals publish terminal attachment
+failure instead. File diagnostics retain only endpoint classification and status;
+they do not include response bodies or request credentials. Loaded-daemon
+recovery still requires the program's composed live replay.
+
+Session metadata tuple publication uses the same Home endpoint failure policy.
+A retryable HTTP failure may follow a committed write: the existing tuple
+coordinator accepts an exact observed result or retries an unchanged source,
+within its existing attempt budget and publisher-currentness checks. If the
+result remains ambiguous during construction, the host publishes
+`preparation_pending` before cleanup and exits with failure so the daemon can
+retry startup with the retained initial input. This applies to bundled and
+external Agent plugins without a provider-specific retry path.
+
+Bootstrap HTTP 5xx failures from Account-mode/currentness reads, Machine and
+Session admission, and Session/Machine access-key lookup or binding retain their
+Home evidence through the same canonical issue classifier and command reporter.
+Access-key preparation also retains timeout and network failures. During runner
+creation it reuses Session creation's existing retry budget and backoff. Every
+attempt rejoins the same creation tag and Session/Machine tuple;
+a lost binding receipt never overwrites an established key. Exhaustion preserves
+the preparation failure rather than reporting that no durable Session exists.
+After Session custody exists, construction publishes `preparation_pending` before
+cleanup; the runner preserves a nonzero exit for existing daemon recovery.
+Account-mode bootstrap does not reinterpret Home unavailability as missing keys.
+Authentication and definitive client refusals retain their existing disposition;
+native Provider HTTP failures are not classified as Home preparation failures.
+This is 0.3 development source; loaded-runtime recovery requires a separate replay.
+
+Account catalog hydration also distinguishes a retryable Home-currentness read
+failure from missing or mismatched E2EE material. The former retains the existing
+`unreachable` catalog result; no private row is opened without successful
+currentness admission. Optional MCP preparation may omit that unavailable catalog
+with its existing notice. Strict MCP preparation instead publishes
+`preparation_pending` and exits with failure so the daemon's existing respawn
+owner can retry the retained input. Actual missing material remains closed and
+does not acquire this transient recovery disposition.
+
+Metadata PATCH transport uses that mutation's caller lifetime and cancellation,
+including explicit Stop intent and terminal-control retirement. The generic
+Session HTTP read timeout does not shorten a metadata mutation. CLI and UI Stop
+both reach the owning daemon's physical Stop owner; persisting an explicit Stop
+hold must succeed before the CLI issues that physical operation. A lost receipt
+or cancellation after emission remains uncertain and does not prove retirement.
+The daemon uses the admitted runner's matching Account credentials for its own
+Stop metadata and retirement, without rebuilding requester execution services.
+Foreign Account custody retains its existing requester authority checks. Local
+control binds preparation and metadata writes to the request connection; an
+unsettled explicit Stop returns `incomplete / explicit_stop_failed` rather than
+claiming that its runner retired.
+
+Admitted Follow originals retain their server-validated input admission receipt
+through canonical and legacy message projections. A required original's transient
+Home source-read failure uses the same pre-turn preparation wait, retaining the
+exact input until recovery. Definitive Home refusals remain terminal. Optional
+Follow context still omits unavailable content without turning it into required
+input or a runner restart. These are 0.3 development-source contracts; loaded
+original acceptance remains a separate live check.
+
+In 0.3 development source, the daemon's planned-restart activity gate also reads
+child work from the Session's live Execution Run manager. A retained idle Run
+does not prevent replacement; an active child turn defers the signal. The execution
+registry's existing change notifications wake that wait. The daemon lifetime or
+Connected Account deferral owner cancels it before a late signal can escape.
+Only accepted exact foreground-turn custody updates the restart deferral queue;
+legacy transcript notifications without a turn identity retain their downstream
+recovery role but cannot mark the foreground busy or clear a live turn. Busy
+restart results identify the activity source in their existing diagnostics.
+An unavailable child-activity observation refuses replacement with a partial
+failure, rather than claiming that a turn is in progress.
+Refresh completion follows the canonical respawn operation through retirement,
+preparation and its existing spawn budget; a separate handoff timer cannot expire
+a healthy replacement. Equivalent refresh requests keep joining the reserved
+attempt while it waits. The adopted-runner physical exit observer retains its
+existing observation budget. Refresh eligibility
+reflects explicit replacement support; unattested generation freshness remains
+unknown and cannot authorize an automatic `if_stale` refresh.
+Foreground-turn refusals keep their existing retry behavior. Credential retirement,
+request-auth source cutover and other security retirement paths retain their
+interrupting behavior. Refresh and respawn diagnostics retain the caller's reason
+rather than labeling every planned replacement as a Connected Account switch.
+The development `session.runtime.refresh` Action reads the hosting Machine's
+current runner status and uses the banner's guarded `if_stale` request. Both
+surfaces wait under the caller lifetime while the daemon defers replacement;
+they do not impose a shorter client completion deadline.
+Loaded-daemon replay requires the orchestrator's next authorized reload.
 
 ## Native Agent seam
 
@@ -52,7 +257,102 @@ still require the program's composed live journey before certification.
 
 The engine registry's [`runtimeCore.ts`](../apps/cli/src/agent/runtime/registry/engineRegistry/runtimeCore.ts) resolves the admitted Agent runtime and composes host services. Agent code receives the scoped public context, not raw host lifecycle controls. Agent-native configuration in `RuntimeDescriptorV1.agent` is interpreted by its Agent; generic host code must not infer its meaning from an Agent id.
 
+In 0.3 development source, daemon engine resolution carries the executable catalog
+entry already acquired from its runtime lease into native-home and authentication
+service composition. A declaration-only projection cannot supply those executable
+hooks. A retained Session runner keeps its exact admitted contribution and catalog
+entry, so its services remain bound to that generation.
+
+Long-lived Runs retain their native interaction until host settlement under both
+ephemeral and resumable retention. Retention determines recovery after settlement,
+not whether a running conversation accepts another turn. Session-owned Runs
+forward their foreground native tool calls and results through the existing
+Run transcript publisher, which owns sidechain identity and publication custody.
+
+Detached long-lived Runs select the same retained-interaction
+eligibility owner as Session-owned Runs. They open the optional
+`sessions.executionRunContextV1.openConversation` operation, which returns the
+existing scope-neutral `AgentExecutionRunConversationRuntimeV1`. The host admits
+each input, correlates its turn, and settles its output without disposing the
+conversation. Host Run settlement disposes it. Missing conversation support
+refuses that retained operation before native opening; the finite `open` facet
+keeps its single-turn terminal semantics. Bundled and installed Agent factories
+use the same operation discovery. Neither open nor recovery supplies a Happier
+Session identity for a detached Run, and recovery retains canonical credential
+preparation and exact native checkpoint admission.
+
+Detached input admission uses the Run's permission-policy owner for both public
+Actions and Agent input. Public input receives a fresh ceiling from the admitted
+Run mode. Agent input preserves its original causal ceiling while its private
+current caller mode bounds that turn; the host carries that mode through direct
+IPC and input metadata into permission and nested Action admission. It never
+passes the private mode in Agent SDK send options. An idle conversation has no
+active input authority, and lost private authority refuses rather than inheriting
+the opener's ceiling.
+
+The new conversation operation also enforces each input's resolved public
+`permissionIntent` before native input effects. The host derives it through the
+same Run authority owner from the Run mode, original causal ceiling and current
+caller mode; the original causal witness is not rewritten. Claude, Codex and ACP
+use their existing native configuration owners to apply it, or refuse the input
+when enforcement is unsupported. Host approval callbacks alone do not constrain
+native tools running under an unrestricted opener policy. Finite V1 sends do not
+receive this new option.
+
+Claude's canonical `read-only` intent maps to native `plan`, not `dontAsk`:
+allowed native writer rules must still reach the host's read-only decision.
+When the SDK query has a host `canCallTool` callback, stdio retains prompt
+ownership; an advanced custom prompt tool cannot redirect those approvals.
+Standalone queries without that callback retain their custom prompt tool.
+Claude's terminal controls consume that same mapping. Configured ACP requires a
+concrete native permission-mode mapping from the existing Account catalog's
+`runtime.permissionModeMapping` and refuses an unenforceable intent.
+Kilo's launch-only policy can admit only an intent proven to match its canonical
+launch environment; it refuses narrowing or unproven native overrides instead
+of pretending to update the retained conversation.
+
+In 0.3 development source, native Session and Session-owned Run launches share
+[`launchEnvironment.ts`](../apps/cli/src/agent/runtime/launchEnvironment.ts).
+It carries the admitted runner's command-search `PATH` and Windows `PATHEXT`
+alongside explicit launch values, preserving explicit overrides and unsets through
+the existing platform-aware environment composer. Other ambient credentials and
+host controls remain private. Both Claude SDK and Codex isolated launches consume
+this environment; terminal hosts retain their existing environment owner.
+
+Session-owned bounded Runs whose Agent declares new-turn delivery keep the native
+Session available until the host's bounded loop settles. A first native turn can
+require the profile's structured-output repair turn; it does not complete the
+host Run. The existing conversation adapter serves those turns, and host
+settlement disposes the Session, including for ephemeral Runs.
+
 Session-owned child Runs retain their own transcript sidechain and interaction scope. They cannot publish the parent Session's work-state or active-input readiness; those projections belong to the main Session context. Finite and retained child contexts use the same Run-scoped work-state service, which reports Session projection as unavailable.
+
+In 0.3 development source, child contexts compose the same ordered transcript
+follow service and source projector as the main native Session. The retained
+external-session source feeds the child's own native observer; display and user
+source facts use the Run's sidechain writer and its current controller custody.
+The parent supplies the committed-id baseline, not its active follow binding.
+Run disposal releases only that child's source-follow resources.
+
+Claude terminal replies enter the same correlated committed-text channel as SDK
+replies before the host settles a child turn. The codec publishes only current
+primary reply facts admitted by ordered source follow, with their native fact
+identity. If a Stop hook names a reply not yet observed there, its completion
+evidence waits for that reply; it does not start structured-output repair with an
+empty Run buffer. Historical replay and native sidechains do not close that turn.
+
+For main Sessions and Session-owned Runs, the terminal-follow producer uses
+that complete durable baseline for both
+historical replay and fresh initial admission. Native display facts already
+committed through the SDK are not rewritten with a different native-source
+timestamp. Source-observation receipts still reach the current native observer,
+new display facts are published, and later live updates retain their normal
+publication path. Home's same-identity timestamp and provenance checks are
+unchanged.
+The committed local-ID reader pages all Session scopes to completion under the
+containing follow admission's cancellation and deadline, retaining identities
+rather than message bodies. Total committed-history length does not make a
+baseline incomplete; failed reads or a non-progressing cursor still refuse follow.
 
 In 0.3 development source, both Session-derived Run adapters bind hook-server
 and hook-plugin-directory creation to the child invocation lifetime. The child
@@ -70,19 +370,88 @@ over the existing tracked-runner daemon service at
 leases its canonical executable registry and derives admitted profiles and the
 selected child Agent's retained source binding from that same lease. The runner
 loads the child factory through the existing retained-source loader; it does not
-discover another catalog or populate a daemon singleton. Admission prepares profile
+discover another catalog or populate a daemon singleton. Native child tool services
+resolve the verified child's CLI metadata through the canonical Agent CLI resolver;
+they do not inherit a different Agent's captured launcher. An exact captured launch
+keeps its existing binding. Native offered-model evidence is read through that
+snapshot's daemon service, using its admitted Agent catalog and the owning
+Session's Account context. Unknown models still refuse structured-output admission;
+Provider and Team selections cannot borrow a native model's capabilities.
+Continued Review narration uses the controller's retained reader and Agent
+projection; recovered Runs reacquire them through the same snapshot owner.
+Admission prepares profile
 prompt text through the existing daemon contribution service using that lease;
 the Run retains the prepared instructions. Ordinary later resource reads still
 obey publication fences. The existing controller occurrence retains its admitted
 profile catalog for Pending, send, Actions, public projection and terminal hooks,
 so another acquisition cannot replace a live Run's profile decisions.
+Review scope, commit-message repository evidence and the fresh working-tree
+comparison's commit-target witness are prepared over the same
+runner-to-daemon services channel with the retained Run snapshot. The daemon
+selects SCM through that snapshot's executable registry; the runner retains
+profile lifecycle and does not construct an SCM registry. Commit-message
+preparation preserves the requested path scope and the profile's existing
+evidence budgets. The witness uses the existing SCM capture owner rather than
+falling back to an absent runner-local registry. Missing, retired or foreign snapshot custody refuses
+preparation before Run creation.
+Inherited Provider admission and personal-Provider launch preparation also use
+that retained executable registry over the same service. The tracked Session's
+Account reader supplies settings and source currentness; the runner receives the
+existing scoped environment, binding and exact redaction values. The retained
+snapshot owns in-flight preparation and cleanup, including abandoned runner
+exit. Typed incompatible/unverified child-choice details survive the service
+boundary. Existing Team credential preparation keeps its separate authority.
+Review host Action provenance and grant caller references instead read the
+daemon's current registry through the authenticated tracked-runner service;
+they do not turn a retained executable declaration into current write authority.
+Review comment signing and sending await the existing current-source checks.
+Session and Run bridge lifecycle notifications likewise dispatch through the
+existing daemon contribution service, selecting the current registry for each
+event. Child-event metadata does not replace the issuing parent Session's
+transport authority; no runner-local catalog is populated.
+These service consumers require the runner's canonical authority-file
+environment. The daemon launch producer supplies it for daemon children;
+the foreground CLI owns it for its Session lifetime and restores the previous
+values at cleanup. Accepted Profile-secret re-admission refreshes both paths.
+Deferred native preparation reads the accepted claim's current authority path
+while retaining the original bootstrap identity and exact-source checks.
+Loaded-runtime validation still requires a fresh runner after the CLI reload.
+Runner-to-daemon service preparation belongs to the containing invocation,
+including native launch preparation and Project setup or approval. The pending
+working-tree correction binds its service proxy to that invocation's cancellation
+and removes the implicit five-minute transport deadline. This correction is not
+yet committed: the committed service client still defaults to 300,000 ms when no
+timeout is supplied. Do not infer the correction from a fresh runner alone; it
+requires the changed client and invocation binding to land and be loaded together.
+Explicit caller deadlines remain effective. Response loss after dispatch retains
+its unknown effect outcome rather than authorizing replay.
 The bridge binds snapshot release to Run runtime
 cleanup, and the daemon's existing tracked-runner exit cleanup releases abandoned
 leases. New acquisition refuses unavailable or replaced authority with a typed
 result; unknown operations on an older daemon cannot become an empty snapshot.
 Omitted child selection consumes the parent's applied model/auth reader, while
 explicit `agentDefault` and incompatible-Agent choice retain the canonical
-child-selection rules. The daemon's applied-parent reader and Run credential
+child-selection rules. Inheritance joins the Session's internal controls-installation
+notification, then the existing applied-selection registration promise. Complete
+explicit selections for every requested role do not read or wait for the parent.
+In 0.3 development source, ordinary Review Start with no model, credential route,
+role or profile choice requests that existing `agentDefault` selection: the Account's per-Agent target
+model takes precedence, then the Agent's own default. Explicit Review choices
+retain their normal custody. `resolveExecutionRunAgentDefaultSelection` owns the
+Account lookup for launch and for the daemon's `review.engines.list` inventory.
+The inventory's optional `launchModelId` reports a concrete Account-configured
+model; omission leaves the Start engine subline empty for the bare Agent default.
+An explicit Team model suppresses that reviewer's default subline; the existing
+Team picker names the chosen model.
+The UI reads these daemon facts rather than choosing a model itself. This source
+change still needs the composed live Review replay after the updated runtime loads.
+Cancellation, controls withdrawal or replacement,
+and fenced applied authority still refuse with
+`execution_run_parent_selection_unavailable` and `noRunCreated`. Local file
+diagnostics identify the unavailable reader or authority predicate. There is no
+separate public readiness probe or startup deadline; each attempt rechecks applied
+custody. A first parent turn alone does not certify the parallel daemon registration.
+The daemon's applied-parent reader and Run credential
 materialization resolve the accepted runner through canonical tracked Session
 identity, including wrapper launchers. The reader uses that Session's existing
 runtime-registry target; Session exit retires Run credential authority using its
@@ -119,6 +488,11 @@ Resource admission before publishing the serving registry. Slow work remains
 pending under its real occurrence lifetime and can settle without restarting
 the daemon. Elapsed startup time is not a participant failure; real failures
 retain their diagnosed unavailable result.
+In 0.3 development source, the daemon's existing cancellation signal also owns
+pending source preparation during initial and later registry resolution. Abort
+joins the preparation process tree's retirement, prevents targeted fallback and
+initial serving publication, and follows the existing startup cleanup path.
+It does not add a startup deadline or shorten the helper's existing budgets.
 Required synchronous consumers do not receive an incomplete registry merely
 because the starter stopped waiting. See [plugin preparation](plugin-platform.md#generated-ownership).
 
@@ -133,6 +507,66 @@ Applied Connected Account parent selection and Execution Run generation
 currentness reads likewise follow their containing Session or Run operation,
 without the generic control HTTP cutoff. Explicit caller deadlines and
 cancellation remain effective; delayed reads do not prove retired authority.
+
+Execution Run Connected Account materialization also waits for the canonical
+root writer and credential preparation without a default HTTP deadline.
+`HAPPIER_EXECUTION_RUN_CS_MATERIALIZE_TIMEOUT_MS`, when explicitly configured,
+sets the caller's deadline; the control client does not clamp it to ten minutes.
+Elapsed queue or preparation time alone does not establish a failed child Run.
+
+The lazy Run runtime supplies its existing disposal signal to Connected Account
+materialization. The runner control client and daemon HTTP request lifetime carry
+that cancellation into the canonical spawn-auth resolver. The daemon retains
+this request lifetime through response delivery, and the materialization owner
+keeps cancellation bound to the exact returned activation. Cancellation after
+target registration or during delivery releases that activation through the
+existing retained cleanup owner; a queued cancellation cannot release its
+successor. HTTP write completion ends this connection observation; it does not
+prove that the runner received the activation. The runner allocates the existing
+activation identity before dispatch and retains the issuing daemon target. A
+lost, invalid, mismatched or locally cancelled response releases that exact
+activation on that daemon before it can become launch input. Release distinguishes
+an already absent activation from retained cleanup failure; failure is not
+reported as completed cleanup. This describes the 0.3 development-source
+contract, not availability in an already loaded daemon or runner.
+
+The established Connected Account owner admits one materialization snapshot
+under a requester verification at entry and verifies the requester again before
+returning the result. Nested field reads share only that invocation's custody;
+they do not perform another Home/Machine/Session admission. Credential and
+configuration revisions remain checked around the runtime callback, and field
+reads retain cancellation, occurrence and observed configuration-revocation
+checks. Completed materializations cannot lend authority to retained readers.
+Refresh, revoke and other established operations keep their existing fences.
+
+Executable Connected Account launch snapshots use the Agent catalog acquired
+from their existing runtime-registry lease. Cold contribution declarations do
+not contain every request-auth, file or environment launch fact. Reading them
+alone can suppress capability production before the plugin opens; acquiring the
+catalog later in materialization cannot repair that earlier snapshot. The
+daemon's explicit spawn-environment handoff carries the materialized capability
+into native launch without inheriting ambient host authority.
+Retained runners reconstruct those static launch facts from their attested
+source, not the daemon's newer global Agent, and release the activation with the
+retained catalog lease. Hard revocation still refuses acquisition.
+
+Ordinary Connected Account request-auth lookup and quota reporting inherit the
+containing request's cancellation signal in 0.3 development source. Neither the
+host service nor the SDK's generated private transport imposes a default phase
+deadline: valid requester and credential verification can outlive the former
+20-second host and 30-second transport cutoffs. Explicit caller-supplied budgets
+still apply. Authentication recovery keeps its separate provider-recovery budget,
+and capability, purpose, credential revision and currentness checks still run
+before any bearer is disclosed.
+
+Request-auth subjects retain the exact issuing purpose lease's in-memory
+binding and materialization ports. Recovering a Session's requester Account
+runtime can create another purpose owner; that recovery verifies current
+requester custody but cannot replace the issuer's process-local lease map.
+Capability authentication preserves these host-only ports without serializing
+them. Lookup refusal file logs distinguish requester currentness, missing or
+mismatched binding, and HTTP refusal using closed cause codes and HTTP status
+only. Public errors retain their existing redacted envelope.
 
 Plugin-declared MCP servers in 0.3 development source enter
 [`resolveSessionCapabilitiesV1`](../packages/protocol/src/reach/resolveSessionCapabilitiesV1.ts)
@@ -244,13 +678,35 @@ hooks continue to own prompt delivery, cancellation and turn completion.
 
 In 0.3 development source, prompt Artifact preparation uses the admitted Session
 HTTP route for the active Home; a saved descriptor supplies Home identity rather
-than overriding that route with its HTTPS endpoint. Optional prompt entries with
-an unavailable transport are omitted from the current prompt and retained as
-typed unavailable admission facts. The Session prompt-plan producer reports
-`prompt_library_unavailable` through the same committed capability notice, with
-no document or Account identifiers. Required inputs, invalid or locked content,
-and cancellation retain their fail-closed preparation path. Recovery is checked
-on the next preparation.
+than overriding that route with its HTTPS endpoint. An unavailable prompt-entry
+transport keeps preparation pending, including for optional entries; definitive
+absence can omit an optional entry with typed unavailable admission facts.
+Optional plugin augmentation can report `prompt_library_unavailable` through
+the committed capability notice, with no document or Account identifiers.
+Required inputs, invalid or locked content, and cancellation retain their
+fail-closed preparation path. Recovery is checked on the next preparation.
+
+Independent daemon prompt augmentation and Account/Project source preparation
+overlap before composition. The shared Protocol prompt-stack owner likewise
+reads selected document addresses concurrently, then interprets their results
+and failures in authored Account → Profile → Project → Session order. Duplicate
+addresses share reads only within that preparation. Memory-off still admits
+headers before deciding whether to read bodies; it never opens omitted Memory
+bodies. Every document read settles before the stack returns or refuses, and
+the Session plan's final Account and Profile fences still run before publication.
+
+The Session host also prepares skills and MCP concurrently, joining both before
+native open and retaining each owner's captured Account checks and cleanup.
+Each selected OAuth MCP server opens its own capability concurrently; a strict
+refusal waits for all issued siblings before retiring their capabilities.
+Startup phase durations for skills and MCP therefore overlap and are not additive.
+
+An explicit native refusal of startup instructions withdraws that capability for
+the opened runtime incarnation. The replaceable host runtime forwards this fact
+to the prompt loop, which uses its existing complete-plan prefix delivery instead
+of reopening the same unsupported native path. A genuine runtime replacement
+observes support again; no installed-binary capability cache or plugin-id special
+case is involved.
 
 An admitted prompt plan retains its prompt-library snapshot for the current
 dispatch. A same-Account catalog refresh or row revision during preparation
@@ -264,8 +720,8 @@ not withdraw a prepared prompt. The Account snapshot owner retains unchanged
 preference and key identities when accepting a newer revision. Withdrawal
 errors retain `context_source_unavailable` and identify the failed active or
 captured Account, Settings, lifetime or Profile check in their typed `reason`.
-Optional unavailable library content continues to produce the notice above
-rather than blocking startup. These source contracts require a rebuilt CLI
+Optional plugin augmentation retains the notice above; an unavailable selected
+document remains pending. These source contracts require a rebuilt CLI
 closure and fresh runner for loaded-runtime verification.
 
 In current 0.3 development source, the daemon's [admission drain](../apps/cli/src/daemon/lifecycle/admissionDrain.ts) owns fresh-work quiescence. Temporary drain preserves accepted custody, native request-auth and daemon publications; reopening wakes the incumbent Automation claim loop and parked Workflow admission. Fresh turn and managed-process authorization remain closed during drain. Plugin handoff retains its own exclusion and publication custody. Final shutdown closes admission irreversibly and awaits the existing finite-operation owner's actual settlement before disposing native plugin leases, terminals or roots. Unconfirmed Stop retains that custody and keeps observation and explicit repeated Stop reachable; it does not prove settlement. Session-hosted Execution Runs ask that current daemon owner over the scoped control transport before creating a Run; an unavailable admission reply refuses the new start. Retained Run state stays with the [execution registry](../apps/cli/src/daemon/executionRunRegistry.ts), rather than becoming another drain decision or start registry. These source contracts are distinct from loaded-daemon certification.
@@ -276,15 +732,94 @@ POSIX natural-root uncertainty preserves the original exit waiter, cancellation 
 
 ### Session process custody (0.3 development)
 
+The existing owner-metadata `lifecycleState: 'stopped'` and
+`lifecycleStateSince` record a confirmed clean process end. The host Session loop
+publishes them after native disposal for a clean Stop, graceful termination or
+observed terminal exit with code zero, before semantic Session end. The daemon's
+confirmed physical Stop publishes the same fact through its authenticated,
+runner/attachment-fenced metadata retirement path. Startup and Resume restore
+`running`. This is a process fact, separate from archive intent and the durable
+explicit-Stop hold.
+
+Heartbeat expiry, native crashes and lost observation do not publish `stopped`.
+A generic `runtime-ended` event is insufficient: it can report unexpected native
+exit even when host cleanup exits zero. Disconnected status wording uses Stopped
+only when the viewer can read the exact terminal lifecycle value; absent,
+unrecognized or unreadable owner metadata stays Offline (list surfaces may keep
+their Last seen wording). The string field remains tolerant of unknown values;
+historical inactive Sessions are not backfilled from presence.
+
+Several tracked runner generations can coexist while predecessor cleanup settles.
+Private daemon-service ingress selects the generation matching both presented
+capabilities, then performs the existing exact authority and currentness checks.
+A mismatched predecessor is not a veto on its authorized successor and does not
+lend that successor its authority.
+
 The daemon's confirmed runner-exit path, both requested Stop and unexpected exit,
 consumes [`endOwnerRemainder`](../apps/cli/src/daemon/processes/endOwnerRemainder.ts):
 fresh census and the one ownership owner identify the Session's remaining proven
 members for the one tree terminator. Unreadable evidence, replaced generations
 and a resumed owner cannot authorize an older exit's sweep. Likely survivors feed
 the same two-pass Left-behind owner; daemon startup also observes ended-owner
-leftovers. A deliberate process Action stamps the existing Session stop intent
+leftovers. These physical observations use retained requester attribution: they
+never recover unrelated Account contexts or await Home admission/settings reads.
+Native evidence stays fresh, including the final signal authorization; missing
+attribution is not replaced with the custodian's identity. Interactive process
+reads retain the existing requester-recovery path.
+A deliberate process Action stamps the existing Session stop intent
 before the first signal, so exit retirement records a person's kill rather than
-restarting it as a crash. Windows runner-held Jobs survive daemon restart without
+restarting it as a crash. Explicit Stop of an already-dead tracked runner records
+the same intent and awaits the existing exit lifecycle, final presence and inventory
+settlement; physical absence alone is not a successful Stop receipt. An incomplete
+settlement retains custody for an explicit retry. Once the terminal-host descriptor
+is positively absent, historical launch metadata does not retain host custody or
+block final-exit inventory retirement. Unreadable or replaced attachment evidence
+still refuses retirement; Home finality, control-serviceability publication and
+Session remainder cleanup retain their existing obligations.
+
+Development-source durable resume admission has a separate
+[Protocol-owned Stop record](../packages/protocol/src/sessions/metadata/sessionExplicitStopV1.ts).
+Its shared reader distinguishes an absent record from malformed authority and
+returns `eligible`, `held_by_person`, `archived`, `machine_unavailable` or
+`authority_unavailable`; archive takes precedence over a hold. The hold includes
+an admitted lead stopping a Session in its led subtree, with `managerSessionId`
+recording that Stop's admitted creator. A person may resume either kind of hold.
+The Session Action boundary admits led-subtree lifecycle targets for exactly
+`session.stop`, `session.archive` and `session.unarchive`; `session.open` remains
+current-Session-only. The existing `requestInactiveSessionResume` owner retains
+its separate current-manager check and person-only handling of older holds
+without creator evidence; it cannot widen that Action boundary.
+Native launch rechecks the current manager, requester, Home and Machine; Action
+enablement and approval policy still apply. Only successful exact native Resume
+clears the observed hold; a transport acknowledgement cannot clear it.
+Signed Stop metadata phases retain their original Action root for the exact
+Session read and owner tuple. Home admits a Session caller's Stop through the
+same current, readable recursive led-subtree owner used by Session listing.
+Signed Open metadata phases remain bound to the original caller's own Session.
+Ordinary Account access and current publisher admission still apply.
+Clearing compares the observed request identity, so completing an older Resume
+cannot erase a newer Stop. This metadata
+contract does not replace physical Stop settlement or authorize a launch from
+`active: false` alone.
+
+In development source, the hosting daemon can observe pending Session follows
+without a receiver host. The existing exact-Session Account-change callback and
+startup/reconnect visitor use the strict inactive observation and the same
+`shouldWakeForSessionFollowObservation` selector as live intake. The probe checks
+the committed Home, Account, Machine and installation, opens the source under
+the captured requester's Home, and delegates eligible launches to
+`requestInactiveSessionResume`. An unrelated Session change does not start an
+Account rescan. Selection and launch neither clear a Stop hold nor advance source
+progress; the resumed host retains native admission and acceptance ACK ownership.
+Loaded-runtime validation remains separate from these source mechanics.
+
+Fresh positive zombie observations count as exited even if native ownership
+enrichment has disappeared before reaping. Live and unknown members still require
+the same current ownership proof before any signal.
+Runner-bound control retirement may clear that runner's historical hosted
+projection only while the descriptor remains absent and Home metadata still
+matches the departed runner; a retained host or replacement runner refuses it.
+Windows runner-held Jobs survive daemon restart without
 kill-on-close; after holder death, the owner tag and captured tree supply fallback
 evidence. See [machine processes](cli-architecture.md#machine-processes-03-development).
 
@@ -343,6 +878,16 @@ The daemon's [managed activity inventory](../apps/cli/src/daemon/lifecycle/manag
 Concurrent readers share an in-flight inventory observation at the same owner
 invalidation edge. A new edge still captures immediately, invalidated snapshots
 cannot confirm idle, and completed observations are never cached.
+
+In 0.3 development source, the daemon's Workspace Sync runtime compares Project
+scope, WorkspaceRefs and relationships with its successful reconciliation input.
+When no relationship belongs to the local controller and its activity coverage
+is complete and empty, equal refreshes advance Project graph settlement without
+enqueueing material Sync work or resetting the Machine's idle interval. Installed
+local relationships retain native bootstrap and custody reconciliation, including
+while their desired inputs are unchanged. Changed inputs retain normal busy
+admission. Project withdrawal, failed or partial recovery, and supervised sidecar
+replacement require reconciliation even when desired inputs are equal.
 
 Publisher reconnect reads this same inventory through the reserved server-origin
 Machine access-loss receiver. Only attribution matching the current Home, Machine
@@ -534,6 +1079,25 @@ authority and the remaining composed-validation boundary.
 
 ## Session path and owners
 
+In 0.3 development source, `session.status.set_reason {reason}` edits the current
+Session's explanatory annotation through the registered `display.statusReason`
+field. Its binding writes only `work.statusReason` through the existing metadata
+CAS owner; `null` clears it. Host-stamped Session caller context fixes the source
+Session, and the Action accepts no target selector. Runtime lifecycle, thinking,
+process facts and work-item status-reason codes retain their existing owners.
+Authorized readable awareness carries the explanation separately; locked or
+unavailable content omits it. The UI can consume that projection without deriving
+a second runtime status.
+
+In 0.3 development source, an acknowledged Session birth can survive a failed
+first native open without a published Agent runtime identity. Inactive recovery
+uses the canonical qualified-target reader to recover that birth's admitted
+creation target, keeping its existing Session, workspace and Pending custody.
+Initial model and permission choices feed the ordinary snapshot arbitration;
+newer saved intent still wins. An existing Agent identity takes precedence over
+the birth recipe after a cutover. Explicit `session.open` resume and a newly
+authorized Pending activation share this recovery owner.
+
 In 0.3 development source, the Session host's open context retains the admitted
 Session transport's Home id and HTTP endpoint, Account credentials and Account
 lifetime. Prompt, skills, MCP and role preparation consume that context rather
@@ -556,6 +1120,16 @@ owner. Required prompt, Role and admitted-context failures use the host's typed
 `preparation_pending` publication before construction cleanup, without exposing
 private Account or document facts. Loaded-runtime verification remains a
 separate boundary from these source contracts.
+
+OAuth capability issuance refuses an unavailable Connected Account credential
+snapshot without fabricating material or borrowing another Account or Home.
+That per-server `initial_admission` failure is not itself a Session startup
+failure. `materializeMcpServerConfigRecord` owns strict refusal versus optional
+server omission for ordinary, Agent-spawned and recovered Session startup;
+the runner passes safe request-auth failure codes to that owner. Non-strict
+startup skips the server and publishes the existing capability notice. Strict
+MCP policy still refuses startup, and explicitly selected Saved Secrets retain
+their typed refusal even under non-strict policy.
 
 Coding prompt preparation may omit unavailable optional Account library,
 Artifact and automatic plugin-asset augmentation, publishing one private-safe
@@ -650,6 +1224,13 @@ requester-scoped credentials to that invocation's captured Home transport.
 Qualified references must resolve to the same bound Home through the existing
 profile identity owner; saved profiles never supply another Account's material.
 Invocation currentness is checked even when the reader reuses a cached store.
+
+Memory-write and approval-request exposure admission uses the Account Artifact
+store's read-only grants and public-share census, without opening Doc content or
+preparing recipient keys. Both requests retain the original requester's signed
+authority at the captured Home. Home admits only these exact reads under that
+root; exposure inspection grants no content, key-repair or sharing mutation
+authority.
 
 The host's [skills reapply operation](../apps/cli/src/prompts/skills/runtime/reapplySessionSkills.ts)
 reuses that resolver and folder owner. A declared live-reload Agent acknowledges
@@ -793,6 +1374,16 @@ checks remain enforced. A delayed committed user-message sequence can join that
 retained checkpoint after cancellation; reset or disposal retires the join. A
 turn without native checkpoint evidence remains unavailable for rollback.
 
+Repository code rollback has a separate host owner in 0.3 development source.
+The Session runner binds `session.checkpoint_code_rollback` beside the repository
+checkpoint lifecycle, using its Git context and the existing SCM rollback
+executor. The host checks the Session, worktree and checkpoint scope before
+applying the reverse patch and retains a backup checkpoint. Agent runtime facets
+continue to supply native conversation rollback; they do not supply this Git
+effect. The composed source test covers Action execution through the registered
+Session RPC and real Git. Loaded-runner approval and file-state verification
+remain separate evidence.
+
 Claude native task completions use the plugin's existing task-notification
 projector across SDK, terminal and transcript readers. Historical 0.2 metadata
 results are accepted only as one tool result matching the origin's tool-use id;
@@ -818,6 +1409,19 @@ owner under `/tmp`, independent of a potentially overlong caller `TMPDIR`;
 child-process environment and the existing Windows stdio path are unchanged.
 These are development-source contracts, not certification of a loaded runner.
 
+Codex app-server transcript projection also has one owner for native tool
+identity. Typed commands and their raw echoes share that identity; code-mode
+`exec` envelopes are suppressed only by native tools observed while that invocation
+is open. An independently completed raw-only result remains visible when another
+invocation in the same turn produces native tools.
+Native approval subjects carry the tool call identity to the host permission
+owner, while transient interaction custody remains host-stamped. Plain native
+Sessions bind app-server model discovery to the host model publication service;
+the host remains the writer of `sessionModelsV1`. External Provider catalogs
+retain their authorized publication path. Native model display names pass through
+the shared display-name resolver, and unobserved discovery preserves retained
+facts rather than inventing a catalog or a friendly name.
+
 Current development source retains content-free failure diagnostics at the
 existing owners. External Session follow identity admission returns a private
 typed sub-reason and logs one local file record, including closed provider
@@ -831,14 +1435,38 @@ and whether provider start was acknowledged. Unclassified failures remain
 explicitly unclassified; these observations do not authorize input replay or
 change Activity from unknown to idle.
 
+In 0.3 development source, the host's ordered terminal transcript importer waits
+for durable Home publication under the containing follow lifetime. The public
+author-listener deadline does not limit that host work; cancellation and source
+retirement still release its waiter. Post-admission loss travels through the
+existing source-follow handle's failure observation to the Agent's evidence
+ledger. Claude terminal and SDK paths retain unknown observation while the host
+keeps its Activity publisher and Session or Run controls alive. A source failure
+alone neither proves native process exit nor retires Home publisher authority.
+These source contracts require a fresh runner after reload for live validation.
+
 Fresh Claude SDK SessionStart hooks can precede creation of the native transcript.
 In 0.3 development source, ordered history acquisition waits for the existing
 authenticated accepted-prompt transcript proof; its pending observation scope
 keeps Activity unknown. Successful source admission retires only that pending
-scope, preserving real observation loss and outstanding native tasks. Resumed
+scope, preserving real observation loss and outstanding native tasks. Refused
+acquisition leaves the baseline pending rather than marking the native stream
+lost, so later admission of the same binding can settle it. Authenticated native
+restart receipts remain pending for the existing identity-filtered reconciliation
+after actual history admission. Resumed
 histories still acquire their historical baseline at SessionStart. This source
 correction requires a fresh loaded-runtime replay; it does not clear a running
 Session's retained observation loss.
+
+Hosted `SessionStart` and `UserPromptSubmit` forwarders wait for the host hook
+handler's acknowledgement under the native synchronous hook's timeout and process
+lifetime, without a shorter local delivery deadline. Normal native progression
+therefore waits for authenticated transcript grant and follower acquisition.
+Other observational hooks, including qualified external Session hooks, retain
+their fail-silent 500ms attempt. Transport rejection or disconnection still exits
+without a native policy decision; missing transcript proof keeps Activity unknown.
+The [native hook owner](https://code.claude.com/docs/en/hooks#timeouts) retains
+cancellation and timeout behavior. This is a 0.3 development-source contract.
 
 A final successful Claude SDK result retires its still-observed query inventory
 when no background task remains. Intentional query disposal then cannot turn
@@ -880,6 +1508,25 @@ static document/Home remediation, without publishing private references or
 raw error text. Required context remains fail-closed; the issue does not imply
 that an Agent accepted the initial input. This is a development-source contract;
 loaded-runtime failure visibility and explicit recovery need separate validation.
+
+After the live prompt loop has taken input custody, retryable
+`preparation_pending` failures retain that exact input before native dispatch.
+They do not publish a failed Turn or write a provider-rejection block. The existing
+recovery wait observes Session metadata/reconnect or new queue growth. Retained
+preparation also retries using the offline reconnection owner's jittered backoff,
+without an attempt cap, so silent Home recovery can resume the original input.
+Event wakes can retry sooner; each attempt re-runs full preparation and its
+currentness checks. Replay-seed retirement keeps its event-driven wait.
+Required Follow originals preserve classified Home source-read failures through
+the hydrator and reconciler into this same recovery wait. Definitive refusals
+still block the input; optional Follow context retains its omission behavior.
+This recovery adds no Pending row or provider acceptance and changes no HTTP
+timeout.
+Cancellation ends the wait without native delivery, leaving
+durable input recovery with the existing Pending owner. Required context is
+never omitted to make the retry succeed. Permanent preparation refusals retain
+their existing typed rejection and failed-Turn path. This is 0.3 development
+source; the loaded-daemon outage/recovery journey remains a separate check.
 
 The daemon's existing runner-respawn owner reads this retained failed-turn issue
 before automatic recovery. A deterministic primary Session dependency failure
@@ -941,7 +1588,10 @@ Agent-state and Activity writes, transcript/message commits, Pending
 materialization/admission and Follow/Discussion publication in development
 source. Socket connect convergence and credential admission occur before a
 handler's own deadline, so a bounded transaction phase does not bound the full
-ACK wait. Connected shutdown retains the ordinary write lifetime while draining;
+ACK wait. The trusted Discussion post/create handler likewise does not impose
+a shorter timer on the publisher's serialized admission queue; current-publisher
+checks and the transaction owner's resource budgets still apply after admission.
+Connected shutdown retains the ordinary write lifetime while draining;
 offline shutdown cancels it, and accepted-input settlement keeps its separate
 early retirement. Durable transcript delivery follows the selected Session
 handle and its existing outbox custody. Released `session-end` handlers that
@@ -978,6 +1628,8 @@ The [Session prompt-plan producer](../apps/cli/src/agent/prompting/coding/sessio
 
 The host fits retained WorkerUpdates against the current optional context allowance before dispatch. A still-deliverable wake that cannot fit stays with the input consumer until context/source, metadata, admission or user input changes; parking neither commits a transcript event nor acknowledges provider acceptance. Source admission is rechecked before parking, so a withdrawn wake releases custody even if it still cannot fit. User input keeps priority, and the retained wake is reconsidered afterward without selecting its producer again.
 
+In 0.3 development source, every represented WorkerUpdate enters durable transcript custody under its completion identity before provider dispatch, including updates attached to ordinary input or in-flight steering. Context-only wakes use the same event publisher. Failed transcript admission withholds provider dispatch and leaves the producer's existing custody pending; exact provider acceptance retires that custody only after successful admission. Several worker cards may share one native input.
+
 ### Usage-limit reset continuation (0.3 development)
 
 The daemon's [runtime-auth recovery scheduler](../apps/cli/src/daemon/connectedServices/runtimeAuth/RuntimeAuthRecoveryScheduler.ts)
@@ -1002,6 +1654,109 @@ and disabled automatic resume take precedence; the original interrupted input is
 never replayed. This development-source integration still requires composed
 loaded-runtime validation.
 
+### Goals without native controls (0.3 development source)
+
+The Session Goal router retains native Goal controls when available. When no
+native Goal adapter exists, `happierSessionGoalControlAdapter` stores the
+objective as a Happier-origin item in the existing Session work-state field.
+Writes use the target daemon's durable work-state custody; a missing writer
+cannot acknowledge success. Other work-state sources retain their items.
+The Goal control uses that daemon capability for Agents without a native Goal
+declaration, including configured ACP and installed plugin Agents. Keep going
+owns continuation for those Sessions; the host objective adds no native Goal
+capability or second continuation loop.
+
+Inactive Goal Set, Get and Clear from an Action host without work-state custody
+route to the target Machine's registered daemon Goal handler, including when the
+caller runs on that same Machine. Native Get can refresh the persisted work-state
+projection, so it uses that custody too. The daemon invokes the declared inactive
+facet and commits its projection through the existing mutation outbox. These
+controls do not resume the Session unless the caller requests the existing
+Set-with-resume operation.
+
+For an opened native-Goal Agent, the host's native Session input dispatcher
+serializes Set and Clear with new prompt dispatch. A mutation received during
+an active turn waits for that turn's existing completion and publication boundary;
+later queued input follows the mutation. The Goal receipt still waits for the
+Agent's native acknowledgement, and Get reads the canonical work-state projection.
+If that acknowledgement precedes release of the native transport, ordinary
+input remains in the host dispatcher while the Agent's optional passive
+`activeInput.waitForInputReady` observation settles. The host then rechecks
+input custody and Session retirement before authorization and send; the Agent
+does not own another prompt queue.
+Queueing does not publish a synthetic Goal. Session retirement refuses queued
+mutations before they reach the Agent. Loaded-runtime replay remains required
+before this development-source correction is certified.
+
+Native controls demand the existing Session event subscription before reading
+the admitted native identity. Get immediately after Resume can therefore use a
+replayed startup identity even before a transcript subscriber opens.
+The host retains that accepted identity snapshot for the later subscriber;
+observing it does not admit another turn or Goal transition.
+
+Codex's App Server path opens and persists its zero-turn native thread during Session startup,
+including when no startup instructions are supplied. The existing native
+attachment owner makes that thread readable by the separate Goal-control
+client before controls are exposed. This does not submit an ordinary prompt.
+Pre-input Set and immediate Get use the same native Goal codec and host
+work-state publisher as later controls; no pending-objective store is added.
+A missing native thread retains the unavailable result and names the
+`native_effect` failure phase.
+
+On native Codex resume, the Goal source reads `thread/goal/get` before accepting
+empty-state notifications. The resume response has no Goal field, and initial
+absence before that read cannot clear a retained Goal. An explicit `goal: null`
+read or a subsequent native clear publishes an empty source snapshot through
+the same SDK work-state publisher. Missing or malformed Goal payloads leave the
+retained projection intact. This is development-source behavior; the composed
+Stop/Resume replay remains required on the loaded runner.
+
+In 0.3 development source, the Session metadata publication owner and the
+inactive daemon's work-state delivery compare the effective Goal before and after
+the successful work-state commit, including a clear. Both use the same effective-Goal
+comparison. A change appends one content-free `goal-changed` transcript original;
+equal snapshots, usage/progress-only updates and refused writes append none.
+Native reopen/readback compares the final updater's before-and-after Goal, not
+the client's possibly stale or independently refreshed metadata snapshot.
+Follow hydrates that original as a source-linked notice under the shared event
+policy. The daemon uses its existing transcript custody and the same Goal event
+local-ID codec. Its Account-authenticated HTTP append does not supply a live
+publisher's authority; the current server personal-notification path requires that
+authority, so the daemon append alone does not deliver a personal alert. Inactive
+Goal changes remain available to Follow/Voice readers on their next read; no
+separate off-source personal-alert authority is added (R-ORC-3).
+The existing transcript append retries while the process lives. A crash
+between the Goal commit and append may lose that follower notice; the committed
+Goal remains durable and visible. No separate notice receipt or delivery ledger
+is created.
+
+Claude can persist an active Goal sentinel before its native command echo. The
+Goal source joins that sentinel to the exact SDK command UUID through the echo's
+`parentUuid`, then awaits the host publication acknowledgement. Set can settle
+while native work continues; it does not wait for another active attachment or
+provider completion. An unrelated sentinel or echo cannot acknowledge the command.
+When an authenticated SessionStart changes the native Session id, the source
+discards the preceding transcript's learned id before processing the new file.
+The new sentinel can then join its exact command echo even when that idle query
+starts a fresh native conversation.
+Native settlement failures may carry the closed, content-free
+`goalControlFailure.phase` receipt through the SDK, host router, Action result
+and UI Goal operation reader. CLI JSON failure envelopes retain the same facet
+under `error.goalControlFailure` in generic `actions invoke` and the shared
+friendly-command presenter. The standalone CLI's daemon HTTP reader uses the
+canonical Action failure projection to preserve the same strict facets while
+excluding daemon-private top-level fields. The daemon's inactive native-control
+adapter retains the same receipt when a live Session method is unavailable,
+including before a native thread exists. Each projection validates the same closed facet
+and drops malformed diagnostics without discarding the refusal. The runner's
+existing RPC completion record logs that phase once; vendor error text, objective
+content and local paths are excluded from this diagnostic facet.
+
+An active origin Session receives Workflow continuation through its existing
+context-only `workflow_step` queue. Preparing that input authorizes the exact
+Session and workspace but does not resume or reconfigure a live runner.
+Inactive origins still use canonical Session resume before the offer.
+
 ### Roles and managed work (0.3 development source)
 
 Protocol's [role resolver](../packages/protocol/src/prompts/roles/resolveRoleSelectionV1.ts)
@@ -1015,6 +1770,16 @@ bulk application is separate from selecting a role or editing the lead later.
 Context documents remain in the Session Context stack, not a role-memory field.
 Native delegation remains the default where it satisfies the request; explicit
 Happier-managed delegation uses the existing Session/Run start owners.
+
+An authored `configuration.workspaceWrites` ceiling is committed before native
+Session admission in the existing owner metadata's `runtime.workspaceWrites`
+field. Attach retains it. The same Protocol workspace-policy reader combines
+it with the selected Role: either denial wins, and removing or relaxing a Role
+cannot relax an authored denial. An authored `allow` adds no ceiling. Native
+admission refuses an Agent that does not declare enforcement of denial. Claude
+enforces denial through its native launch
+settings; an unchanged ceiling is not a live TUI directive. Happier Actions
+that do not write the workspace keep their ordinary Action approval policy.
 
 Session Role Actions read Account overrides and retained role sources through
 the Session runtime's existing private owner-Account context. The shared prompt
@@ -1032,6 +1797,39 @@ Reporting membership can change without rewriting these facts. The shared start
 policy enforces role engines, permission ceilings and the Account work-depth
 limit; consumers do not infer authority from a tree row or worker result.
 
+Autonomous conversation check-in is separate from that structural start policy.
+The [exchange reducer](../packages/protocol/src/sessions/messages/autonomousExchangeV1.ts)
+counts actual agent-caused new turns, including a `followUp` that starts a turn,
+through the original input's host admission and accepted-turn facts. Selection,
+enqueue, true same-turn steering, quiet context and returned answers do not count.
+The Account setting `coordination.autonomousCheckIn` defaults to five starts;
+`afterTurns: null` means Never pause. Continue, ten more and Stop control held
+continuation through the same original-input owner. They do not reset causal
+work depth, raise a permission ceiling or change an individual Run's turn budget.
+Unavailable authority holds unstarted work; it does not create a host-local
+counter. Cross-Account and exact-Run start integration remain separate validation
+obligations, not guarantees supplied by this reducer.
+
+The [Session reply path](pending-delivery.md#correlated-session-answers-03-development)
+uses that original input's custody for one exact answer or typed terminal outcome.
+An informational return adds no check-in count even when admitted to wake an idle
+asker. The shared
+[receiver decision](../packages/protocol/src/sessions/follow/sessionReceiverDeliveryV1.ts)
+distinguishes wake intent, next-turn context, hold and drop; enqueue or resume
+success alone is not proof of an accepted new turn. Follow and Discussion delivery
+consume these owners rather than maintaining their own conversation caps.
+
+In 0.3 development, the content-free
+[request attribution projection](../packages/protocol/src/actions/actionRequestAttributionV1.ts)
+also remains separate from Session/process ownership and execution credentials.
+Human input derives its requester from the authenticated Session admission receipt,
+not authored labels. Protected machine input can retain that original admitted
+cause; its immediate sender remains the separate protected source Session.
+Queue batches and private native-turn/Action custody retain a copied cause rather
+than a Session-global latest requester. Accepted Workflows retain it inside their
+existing accepted origin. This observational value grants neither execution nor
+approval authority; missing human identity never becomes the Bot owner's identity.
+
 The strict [WorkerUpdate](../packages/protocol/src/sessions/relations/workerUpdateV1.ts)
 envelope carries actual engine facts when available, owner outcome, source
 pointer and optional deliverables. Truncated results require a source pointer.
@@ -1040,6 +1838,35 @@ turn-end review postpones settled delivery; inactive leads are not resumed just
 because a result exists. Source and permission admission remain current at the
 eligible input boundary. Work/Inbox are projections of these owners, not a second
 turn scheduler or permission ledger.
+
+In 0.3 development source, Session Follow progress ACKs use the publisher owner's
+Serializable snapshot path. They validate the exact current publisher, source
+access, accepted input and route frontier in that transaction, without joining
+the socket's heartbeat queue or allocating an Account change cursor. An admission
+deadline or unavailable transaction returns the typed `retryable` refusal. The
+existing reconciler retains the accepted request and retries its ACK at the next
+preparation boundary, suppressing another delivery of that accepted context while
+the refusal persists. Successful or terminally refused requests retire this local
+custody. For admitted originals, the provider-outcome normalizer passes its existing
+Pending acceptance promise to the correlated Follow effect. Native replay custody
+retires immediately; the reconciler joins that write before ACKing. The
+reconciler re-observes the exact admitted receipt for the current publisher
+generation after reconnect or Resume; it keeps the accepted original's represented
+prefix rather than replacing it with newer source progress. A stale generation,
+unverified acceptance or transport loss retains that original's request for the
+next preparation boundary, without another native send. No-original context-only
+wakes retain their existing at-least-once transport recovery behavior. Typed
+semantic refusals and exceptions share the server's structured ACK phase/cause
+diagnostic, without input content.
+This adds no timer or durable delivery history across a host restart.
+
+Quiet originals represented in a natural input retain their own Pending identities.
+The host's exact-input acceptance binding records only the originals selected by
+final Follow preparation, plus required returned-answer context. One primary
+input remains the native Turn and permission witness. Its actual native acceptance
+settles the represented originals through the same Pending writer before the
+primary's write; each Follow ACK joins its own settlement. Neither transport
+completion nor an omitted original earns acceptance.
 
 The approval reviewer is a request-scoped client of the existing permission
 owner. That owner rejects ineligible effects before starting a no-tools review
@@ -1050,9 +1877,27 @@ the reviewer actor and creates no reusable grant or permission-mode change.
 
 Native interaction lifetime is separate from causal turn identity. Ordinary requests default to turn lifetime and retire with the matching terminal turn (including ordinary requests without a turn witness); native Codex asynchronous questions explicitly use occurrence lifetime. Those questions keep their causal turn id after completion and retire when their Session/plugin occurrence retires. The permission coordinator owns this distinction; terminal callbacks do not cancel every request owned by the plugin.
 
+In 0.3 development source, an authored wait-mode question ends its exact host
+turn as `waiting`. The host captures that intent before native cancellation or
+completion and flushes transcript output without publishing a successful or
+cancelled work outcome. Follow consumes the typed waiting turn through its
+existing frontier and acceptance ACK, so later state echoes cannot wake the
+manager again for that same turn. The answer uses the existing correlated
+information-return path and the next admitted turn clears waiting. Explicit
+Stop withdraws the question and settles the exact waiting turn; incidental
+process exit keeps it available for recovery. Loaded-runtime verification
+remains with the coordination program's composed journey.
+
+In 0.3 development source, host-bound occurrence questions can ask for human input
+before an admitted turn exists. The host stamps that question origin; it never
+converts missing causal authority into permission to execute a tool. Claude's native
+terminal dialogs use the existing rich Session permission bridge so their source,
+exact choices, cancellation and terminal-application acknowledgement survive.
+Workspace trust still needs the configured explicit trust policy or a person's answer.
+
 In 0.3 development source, spawn and recipe `allowedTools` seed the existing
 Session permission allowlist. `unlistedTools` defaults to `ask`; `deny` refuses
-unlisted tools and native questions without publishing an approval request.
+unlisted tools and ordinary native tool questions without publishing an approval request.
 The existing permission matcher owns exact tool names, trailing MCP wildcards
 (`mcp__server__*`), shell rules, and absolute scoped Read rules
 (`Read(/attachments/**)`). Scoped reads require realpath containment, so a
@@ -1081,12 +1926,47 @@ also rejected rather than using
 another Account's model-catalog evidence. ACP, daemon-proxy and direct-terminal
 variants without equivalent enforcement do not claim confinement.
 
-Whole-Session permission reset reaches the existing Session request store even when the current coordinator has no local waiters, including after handler replacement. The store cancels pending requests and delivers their response targets. Cancellation waits for in-flight coordinator completion persistence before writing the terminal result; plugin-scoped cancellation retains its owner filter and performs no write for an empty local scope.
+The managed Codex installer pins that same qualified release. Its manifest tag,
+native admission check and sanitized repair guidance share the plugin's
+`agent/cli/supportedRuntime.ts` owner. Unqualified newer system/native installs
+remain usable for ordinary sessions, but confined launches refuse them and name
+the supported version and `machines.agents.install` reinstall Action. Executable
+source preference still applies after installation; verify the selected runtime
+rather than assuming a managed reinstall displaced a system override.
+
+Whole-Session permission reset reaches the existing Session request store even when the current coordinator has no local waiters, including after handler replacement. The store cancels pending requests and delivers their response targets. Cancellation waits for in-flight coordinator completion persistence before writing the terminal result; plugin-scoped cancellation retains its owner filter and performs no write when neither local nor persisted requests match. The store returns the exact occurrences selected by its committed write, so the coordinator also rejects matching provider waiters published while an older completion was draining, without retiring a replacement occurrence.
+
+Cancellation removes only the cached decisions it captured before persistence, so a newer decision created while an older scope stops remains available. A cancellation that starts before a queued native decision applies prevents that new application; recovery of an already-applied native choice retains its existing receipt boundary.
+
+ACP Stop cancels the provider independently of permission-state persistence. A failed permission cancellation retains the request for retry and emits the default file-log event `permission_request_cancellation_persistence_failed` with the error type, without request content or the error payload. At the generic Session Stop entry point, `reset({ scope: 'foreground' })` withdraws foreground prompts, including saved prompts without local waiters, while preserving independently scoped execution-Run prompts and cached decisions. Selection uses the canonical Run request identity at the committed store write; the shared permission store and Session/Run allowlists remain alive. A rejected foreground reset leaves native turn cancellation reachable and records `permission_reset_failed`; a rejected native cancellation records `runtime_cancel_failed` in the default file log. Other reset callers retain the acknowledged-write contract.
+
+Session rebinding republishes the coordinator's admitted request context, including its original creation time, source, turn and native MCP identity. An offline client without a readable snapshot keeps that identity. MCP catalog preparation has not yet admitted a permission request and stays unpublished across rebinding until preparation finishes.
+
+The native permission-hook HTTP owner aborts its callback signal before sending its finite timeout response, and also aborts on a disconnected response. Claude's SDK and unified terminal callbacks forward that signal through the existing permission engine. The final unclaimed waiter withdraws response admission synchronously; the existing observed-retirement path then persists the exact cancellation asynchronously. The HTTP deadline does not await an arbitrary callback or journal write. A failed write retains the exact request for lifecycle retry and keeps it unavailable to late answers. The default file log records `permission_request_cancellation_persistence_failed` with the error type, without request content or the error payload.
+
+When a native terminal dialog has already applied a selected choice, the running Session's request store retains that finalized completion if its acknowledged Agent-state write fails. Reconnection or a later Agent-state write reoffers only the same pending identity; a replacement request, newer claim, cancellation or terminal result wins. The original waiter settles after the completion is acknowledged. A repeated matching answer rejoins that completion, and a competing answer cannot apply another native choice. This recovery does not replay the application callback, ordinary automatic policy decisions, or survive process exit.
+
+Metadata and Agent-state retries use the current managed socket on every attempt. Reconnection can therefore finish the same operation within its existing retry budget.
+
+Terminal Agent-state update failures report `session_agent_state_update_failed` in the normal file log, including when a best-effort caller absorbs the error. This record contains operation context only; it excludes request contents and server error payloads. It does not distinguish transport from local preparation failures and does not imply a replay guarantee.
 
 In development source, a `message-delta` can supply the same stable `messageId` as its
 `transcript-message-committed` event. The host stream bridge uses that identity for live and
-durable rows and separates distinct messages within a turn; Agents without a witness retain
-the existing generated stream identity. OpenCode derives its stable ID through the same
+durable rows and separates distinct messages within a turn. When an unnamed foreground
+stream receives its native committed fact, the writer finalizes that channel's existing
+row under its generated localId, including an already durable checkpoint, with the
+authoritative text and `happierStreamSegmentV1.sourceMessageId`. Assistant and reasoning
+segments remain independent; later outputs in the turn start new segments. Cancellation
+retains the interrupted checkpoint. Named deltas retain their native localId path, and
+Session-scoped output does not acquire this foreground handoff.
+The host's metadata reader recognizes the recorded source identity for both follow/replay
+and cold reconciliation. Follow opens metadata through the existing Session-mode decoder
+and retains both row and source identities in its paged baseline; plugins receive the
+native identity in their existing reconciliation baseline, without a second dedupe owner.
+The projector retains completed native source identities for its Session lifetime:
+a repeated committed fact cannot finalize a later unnamed segment or duplicate a
+Session-scoped row. Stored metadata is read through the canonical tolerant reader.
+OpenCode derives its stable ID through the same
 provider-session/message helper used by history import, so cold reconciliation recognizes
 streamed rows without a second persisted format or native-ID parser.
 
@@ -1098,8 +1978,8 @@ keeps foreground lifecycle, token hooks, change tracking, tool execution and req
 foreground transcript custody separate from this output. Foreground output with a turn
 and no sidechain still requires the active host turn. All output retains strict schema,
 Session identity, sequence and runtime-lifetime admission. Foreground boundaries flush
-only foreground streams; a successful authoritative text commit retires its matching
-stream through the existing stable message identity. Native child turn identifiers stay
+only foreground streams; a successful authoritative text commit retires only its matching
+channel through the named identity or unnamed-segment handoff above. Native child turn identifiers stay
 in provider-owned evidence rather than claiming a host foreground turn.
 
 Both the host and public SDK Session-to-Run projections admit assistant/reasoning
@@ -1124,6 +2004,48 @@ Recipient, missing, malformed or retired callers refuse; they never borrow the
 Machine custodian's Account. Shared requester execution uses its own admitted
 per-Session requester Home and protected credential custody. This owner-only
 guard is not that shared execution channel or loaded-runtime certification.
+
+Retained requester Settings use the existing Account/Home user socket for both
+Session and finite custody. The Settings publication owner applies envelopes to
+the captured snapshot, fetches on version hints or reconnect, and withholds
+Action admission while convergence is pending or unavailable. Action cancellation
+ends only that reader's wait. Explicit demand rejoins this same owner and can
+recover a failed hint. Unchanged policy requires no per-Action Settings,
+Profile or Connected Account catalog refresh; explicit catalog demand retains
+its existing owner. Custody retirement releases its subscription and private
+snapshot. This development-source path still requires loaded-runtime replay.
+
+Explicit requester Settings refresh shares one requester observation across its
+Profile and Connected Account catalog readers and private snapshot commits.
+It uses the existing preparation checkpoint owner, then checks fresh authority
+outside that checkpoint before notifying consumers. A later refresh starts
+fresh; revocation during a catalog read prevents successful publication.
+
+Within one requester credential binding, the first Machine proof discovers the
+authenticated Account identity and Machine-access context. The middle read group
+and the second Machine proof reuse that exact discovery only for this binding;
+both Machine proofs still perform fresh signed Home verification. Discovery is
+matched to the exact Home, credential, attribution and Session and ends with the
+binding. Later invocations discover again.
+
+Action preparation also uses this checkpoint for the bounded Agent-start group:
+Role overrides, built-in Role sources, captured Settings and Agent inventory.
+Prompt Library destination/storage-mode reads, ACP catalog reads and Profile catalog
+admission join nested read-only preparation in an existing bounded observation;
+ordinary and effect checkpoints still start fresh. Migration writes, retained-source/history maintenance and private
+source/catalog publication leave the checkpoint before their existing effect fences.
+Injected preparation/readers and Settings bootstrap also leave that read scope.
+Catalog disclosure and final Agent-start context publication check fresh
+requester authority; cancellation withholds the prepared start context.
+Authorization preparation shares only its initial caller and Profile/encryption
+reads; signed Home minting and final authorization publication retain fresh fences.
+
+The established Connected Account owner also admits read-only status through the
+same bounded snapshot scope as materialization. Nested field reads share its
+Account admission; fresh entry and result-publication checks retain requester
+revocation and cancellation. Credential and configuration revision checks remain
+at the runtime callback boundaries. Later public operations start fresh, and
+refresh, revoke and other effect operations retain their independent admission.
 
 The development requester projection attaches private Account ports to the
 existing `ExternalActionExecutionAuthorizationV1` carrier. Its non-enumerable
@@ -1152,6 +2074,36 @@ foreign Session/run/workflow starts still refuse until their own requester
 bootstrap is available. This is source behavior, not released availability or
 loaded-runtime certification.
 
+The admitted requester bootstrap also owns native Account credential eligibility.
+Only verified requester and Machine-custodian identity equality permits the
+Machine's native Agent login and configuration; UI, CLI and agent origin do not
+change that decision. Workflow startup supplies its accepted Machine binding,
+and recovery reconstructs the binding through the existing authenticated access
+reader and signed Machine verifier. Foreign or missing bindings still require
+an isolated requester home and cannot inherit custodian credentials. Spawn and
+Connected Account refresh consume the same bootstrap decision.
+
+Legacy Sessions without a protected requester file use the same authenticated
+owner recovery whether retained attribution is present or absent. A retained
+Home/Account/Machine/installation tuple must match the freshly verified owner;
+attribution alone grants no custody. Existing foreign, malformed or revoked
+custody remains a refusal. Resume and respawn consume this single recovery owner
+before authorizing native launch.
+
+In 0.3 development, retiring a stopped runner's terminal-control metadata uses
+the daemon's authenticated Account writer when the retained Account, Home and
+Machine all match. Home authorizes the write and the existing metadata tuple
+writer checks Account encryption currentness. This retirement does not recreate
+the departed runner's Settings, secret or Connected Account execution runtime.
+Other requester identities retain their exact requester-custody recovery path.
+
+The durable Session-deletion subscriber calls the existing daemon Stop owner
+before removing managed directories, including when no managed directory was
+allocated. Home inactivity does not prove a respawned runner has exited. Stop
+fences pending automatic launches and retires tracked successors; an incomplete
+Stop leaves the deletion change unacknowledged for the existing cursor retry.
+These source paths require loaded-daemon replay before live certification.
+
 ### Triggers at Session birth (0.3 development)
 
 The strict [`session.spawn_new` input](../packages/protocol/src/sessions/creation/sessionSpawnNewInputV2.ts) accepts `initialTriggers` through the same Session trigger vocabulary as `session.trigger.*`. A birth draft supplies neither a source Session id nor a current-turn identity. The existing [Workflow trigger Action owner](../packages/protocol/src/actions/executor/workflowTriggerActions.ts) validates target and agent-start policy and seals the intent; UI, Agent and MCP callers do not write triggers after spawning.
@@ -1168,6 +2120,48 @@ Its [child-selection owner](../apps/cli/src/agent/runtime/bridges/executionRun/r
 completes omitted model and credential-route choices before materialization.
 Explicit native, Provider, role and Workflow choices keep precedence. Detached
 work retains its independent Account-default contract.
+
+Detached Project launch separately requires admitted requester custody: a
+requester Session bootstrap or signed caller input authorization. A token-only
+installed-CLI start supplies neither and refuses with
+`project_requester_credentials_unavailable` before creating a Run. Account
+defaults select the Agent configuration; they do not supply that launch authority.
+Original authenticated CLI Run starts and cold Ensure/Send operations use the
+existing Home Action admission even for an own local Machine. They reach the
+same captured requester preparation port as app calls; raw token-only RPC stays
+unprivileged.
+
+Cold Project preparation carries admitted requester context through the existing
+Run backend parameters. In 0.3 development source, nested preparation readers
+share one requester authority observation within that preparation checkpoint.
+Native effects, secret release, final launch, and resumption after setup review
+start fresh checkpoints. Local custody retirement and observed Account encryption
+changes still refuse within a checkpoint; no settled observation survives it.
+The Run controller retains setup review with the shared
+Action-operation review continuation; its existing Run id identifies the projected
+operation. Review state is controller-lifetime state, not a second Run registry or
+a persisted credential source. The Machine Action-operation runtime composes this
+domain projection with its incumbent owners, and routes inspection, cancellation
+and consent back to the original producer. For a Session-hosted Run, the daemon
+projects the existing pending native-launch invocation under that same Run id.
+Its lifecycle projection reads the Session Run controller through the existing
+requester-scoped Session transport, and operation cancellation calls that
+controller's Stop. Denying setup therefore settles the original Run rather than
+leaving an independently running daemon projection. Terminal controller facts
+cannot carry setup review, and a late Account decision cannot restart a stopped
+or refused invocation.
+The runner carries the Run's own cwd into snapshot-backed invocation preparation;
+the accepted Account workspace rows decide Project membership for that cwd.
+The parent Session's cwd cannot substitute, and missing Run cwd refuses preparation.
+The Account Action `projects.prepare` with `heldOperationId` authenticates the
+approving Account and resumes that retained invocation and reservation. The
+runner's controller remains the Run lifecycle owner; native authorization does
+not establish Run completion. Run Stop closes the invocation, aborts its review
+and withdraws the projection. The Session-write RPC supplies no human setup
+decision or Account identity. This development-source path requires daemon and
+runner reload for loaded-runtime validation.
+See [Project native environment production](cli-architecture.md#project-native-environment-production-03-development)
+for the development-source launch contract and its remaining qualification limits.
 
 The host-private Session reader combines the model-transition coordinator's
 admitted applied target with the scoped daemon's existing applied Connected
@@ -1283,6 +2277,18 @@ turn authority or materialized credentials. Scoped reads and resume admission
 recover this state at the bridge owner. A live foreign host's record does not
 authorize another bridge to recreate its controller.
 
+Current development readers also recover the registry's former identity-encoded
+sealed basenames. After checking the payload identity, the existing per-Run
+writer publishes the current basename without replacing an existing current
+copy, verifies that copy, then retires the former name. The same ingress handles
+pending WorkerUpdates, so acceptance checkpoints and terminal delivery keep one
+owner. Acceptance retires both validated names under that same per-Run writer;
+an overlapping older scan cannot republish accepted delivery. Unreadable entries
+remain retained and make observation incomplete; the
+registry reports each unavailable entry once and reopens it when its observed
+file, device key or protection state changes. This is retained development-data
+recovery, not a second writer or a released format guarantee.
+
 Existing process supervision records proven host death or PID reuse as
 `execution_run_host_lost`, not transport disconnection or inconclusive process
 recognition. The interrupted input
@@ -1292,6 +2298,34 @@ existing acceptance-ACKed WorkerUpdate path. Neither an unpaired transcript
 call nor a historical `running` result proves current liveness. Resumable control
 state survives marker collection; ephemeral terminal state follows the existing
 terminal visibility lifetime once pending parent delivery is settled.
+
+Development WorkerUpdates classify Session, Execution Run and Workflow outcomes
+through Protocol's `classifyWorkerUpdateEventV1`, using the shared Follow event
+vocabulary. A failed or stopped source cannot become a successful completion
+because its retained scheduling field says `finished`. Workflow attention is
+eligible for intake while current and is withdrawn by the existing revision and
+attention recheck after resolution. Authored Workflow input retains priority.
+
+The development Execution Run and Workflow-origin inboxes ask the shared
+`resolveWorkerUpdateFollowDeliveryV1` policy adapter whether an update may wake.
+New Workflow Runs capture `follow.preferences`'s `runReportPolicy` in the accepted
+snapshot's `resultDelivery` when origin reporting is requested. Direct and trigger
+creation read that choice once; reports and resumed Runs use the frozen policy.
+The origin input port applies its event selection during ordinary preparation and
+its interrupt choice when taking a wake. Custom-off events supply neither input;
+Quiet events remain available for the next natural turn. Historical snapshots
+without a captured policy retain Important: successful results are quiet, while
+failed/stopped results and current attention may wake. Delivery retains its existing
+acceptance ACK; selecting a wake never consumes a different pending result.
+This source implementation is not loaded-runtime certification.
+
+The terminal error carrier reuses `SessionRuntimeIssueV1`: Run errors retain it
+in `error.runtimeIssueV1`, Workflow leaf failures in `progress.reason.runtimeIssueV1`,
+and receiver updates in `WorkerUpdateV1.runtimeIssueV1`. Retention, recovery and
+prompt/card projections preserve source-reported usage-limit recovery details;
+an absent reset time stays absent. Source Session hydration binds the issue to
+the observed failed turn. This adds no error classifier or process-loss detector;
+loaded-runtime validation remains a separate gate.
 
 In current development source, the existing connected-service home reclamation
 scheduler also sweeps execution-run isolation homes. It reads live Run markers
@@ -1314,6 +2348,30 @@ existing orphan age and cleanup tick govern later reclamation, without another
 timer or registry. These source contracts are not loaded-daemon certification.
 
 Reopened retained Run records, control state, public markers and pending WorkerUpdates use the protocol's canonical stored-read projection: additive fields are dropped recursively, while malformed known facts still refuse. Custody comparison and acceptance ACK use that same projection. Device-local sealing, Run identity checks and new writes remain strict; stored-read tolerance does not authorize a new input or a different Run.
+
+In current 0.3 development source, the execution registry names retained state,
+WorkerUpdates and visibility markers with fixed-length identity digests. Exact
+identities remain in their payloads, leaving native filename space for atomic
+publication. WorkerUpdate conflict and acceptance checks still use sealed payload
+identity; unreadable delivery custody prevents garbage collection. The Session
+RPC registration owns one child-Run disposal promise, including idle retained
+Runs. Physical runner retirement starts that disposal alongside foreground native
+cleanup, before a suspended native disposal or Session close can strand children
+from the departing generation. Session close joins the same promise before
+releasing its Account snapshot and handler resources. Mode handoff and runtime
+recovery keep the Session's independent child work; a planned replacement does
+not adopt the retired generation's native children.
+Before an admitted planned signal, the daemon's existing remainder owner captures
+the exact runner process tree, including children tagged to logical Run owners.
+Exit cleanup consumes those native PID/start witnesses before respawn. A live
+replacement does not erase the departing generation's capture or become one of
+its targets. Definitive Stop consumes this same remainder owner and reports its
+physical cleanup outcome. Native cleanup therefore remains possible after the
+old runner's graceful-disposal window ends; it does not depend on plugin disposal
+or terminal publication finishing in that window.
+Stop preserves each retiring generation's captured tree and checks every distinct
+capture's result, reusing an already completed cleanup rather than repeating it.
+These corrections require a fresh runner for loaded-runtime replay.
 
 Current development source projects current execution-run work from the existing public `status`, `runClass` and optional `turnInFlight` through Protocol's `isExecutionRunActive`. A running long-lived handle with an observed `turnInFlight: false` remains available for follow-up without contributing background work. Bounded runs remain active through outcome settlement, while provisioning and older producers without a turn observation remain conservatively active. The bridge publishes work changes through its existing public-state source; the Session observer and roster consume the same classification. Voice work follows its existing setup, turn and lifecycle promises together with the current runtime turn witness. Reachability, retained lifetime and current work remain separate facts.
 

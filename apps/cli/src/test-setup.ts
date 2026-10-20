@@ -21,11 +21,12 @@ import {
 import { resolveYarnCommandInvocation } from '../../../scripts/workspaces/execYarnCommand.mjs'
 import { createWorkspaceChildBuildEnv } from '../../../scripts/workspaces/workspaceChildBuildEnv.mjs'
 import { readBundledPluginPackageNames } from '../scripts/build-owned/bundledPluginMembership'
-import { ensureBuildArtifactsReadyOnce } from './testSetupBuildCoordinator'
+import { ensureBuildArtifactsReadyOnce, withCliTestBuildLock } from './testSetupBuildCoordinator'
 
 export type CliTestBuildMode = 'none' | 'full'
 
 type CliTestSetupDependencies = {
+  platform: NodeJS.Platform
   resolveProjectRoot: () => string
   ensureDistBuiltOnce: (projectRoot: string) => Promise<void>
   runCommand: RunCommand
@@ -112,21 +113,26 @@ async function ensureDistBuiltOnce(projectRoot: string): Promise<void> {
   })
 }
 
-async function ensureNativeCustodyReadyOnce(projectRoot: string, runCommand: RunCommand): Promise<void> {
+export function resolveNativeCustodyTarget(projectRoot: string) {
   const target = resolveCurrentBinaryTarget({ availableTargets: CLI_BINARY_TARGETS })
   const executablePath = join(projectRoot, 'tools', 'unpacked', resolveProcessCustodyRuntimeExecutableName(target))
-  await ensureBuildArtifactsReadyOnce({
+  return { target, executablePath }
+}
+
+export async function prepareNativeCustody(projectRoot: string, runCommand: RunCommand = execOrThrow): Promise<void> {
+  const { target } = resolveNativeCustodyTarget(projectRoot)
+  // Go owns source/module/build-cache currentness. An existing executable is
+  // only an artifact-presence fact, never proof that current source was built.
+  await withCliTestBuildLock({
     lockPath: resolveBuildLockPath(projectRoot),
-    markerPaths: [executablePath],
     lockLabel: 'CLI native process custody',
-    runBuild: async () => {
-      await stageProcessCustodyRuntime({
-        repoRoot: resolveRepoRoot(projectRoot),
-        payloadDir: projectRoot,
-        target,
-        runCommand,
-      })
-    },
+  }, async () => {
+    await stageProcessCustodyRuntime({
+      repoRoot: resolveRepoRoot(projectRoot),
+      payloadDir: projectRoot,
+      target,
+      runCommand,
+    })
   })
 }
 
@@ -186,6 +192,7 @@ export async function setup(options: CliTestSetupOptions = {}) {
   const skipBuild = readSkipBuildOverride()
 
   const dependencies: CliTestSetupDependencies = {
+    platform: process.platform,
     resolveProjectRoot: resolveCliProjectRoot,
     ensureDistBuiltOnce,
     runCommand: execOrThrow,
@@ -195,9 +202,17 @@ export async function setup(options: CliTestSetupOptions = {}) {
   const buildMode = options.buildMode ?? 'full'
   const projectRoot = dependencies.resolveProjectRoot()
 
-  // Source tests exercise native confinement without publishing the full CLI
-  // dist. Prepare that prerequisite through the same staging owner as releases.
-  await ensureNativeCustodyReadyOnce(projectRoot, dependencies.runCommand)
+  // POSIX public dispatch prepares current native source before charging the
+  // test payload. Windows has no such preflight; full/artifact setup retains
+  // its existing producer phase. Source collection itself must not compile.
+  if (buildMode === 'none' && dependencies.platform !== 'win32') {
+    const { executablePath } = resolveNativeCustodyTarget(projectRoot)
+    if (!existsSync(executablePath)) {
+      throw new Error(`CLI source tests require public native preparation: ${executablePath}`)
+    }
+  } else {
+    await prepareNativeCustody(projectRoot, dependencies.runCommand)
+  }
   if (buildMode === 'none') return
 
   await ensureBundledPluginPublicationReady(projectRoot)

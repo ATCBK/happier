@@ -2,11 +2,10 @@ import * as React from 'react';
 import { Pressable, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { joinHappierFacts } from '@happier-dev/plugin-ui/presentation';
+import { HappierSkeletonBlock, joinHappierFacts } from '@happier-dev/plugin-ui/presentation';
 
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { getSessionName } from '@/utils/sessions/sessionUtils';
 import type { Machine, Session } from '@/sync/domains/state/storageTypes';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import {
@@ -24,10 +23,12 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SectionContentRow } from '@/components/ui/lists/SectionContentRow';
 import { readApprovalSessionEndpointLabels } from './approvalEndpointLabels';
 import { useWorkClockSnapshot } from '@/components/sessions/agents/presentation/agentActivityClock';
+import type { ApprovalSessionReadingStatus } from './useApprovalSessionReading';
 import {
     describeApprovalAgent,
     describeApprovalOrigin,
-    describeUnnamedApprovalSession,
+    describeUnnamedApprovalRequester,
+    resolveApprovalHomeSentenceName,
 } from './approvalRequesterLabels';
 
 const ApprovalContextLine = React.memo(function ApprovalContextLine(props: Readonly<{
@@ -65,20 +66,22 @@ export const ApprovalSessionContextCard = React.memo(function ApprovalSessionCon
      * route no longer matches): its exact identity is then the only truthful thing to show.
      */
     homeDisplayId?: string | null;
+    /** The requester's name from `useApprovalSessionReading`, its one readable-name gate; null while locked or unknown. */
+    sessionName: string | null;
     /** The session the request names; when this device does not have it, it reads by where it lives. */
     requesterSessionId?: string | null;
+    requesterStatus?: ApprovalSessionReadingStatus;
     requesterAgentId: string | null;
     requesterSurface: string;
 }>) {
     const router = useRouter();
     const { theme } = useUnistyles();
     const homeName = props.homeName?.trim() || null;
-    const namedSession = props.session && (!props.serverId || props.context?.mayShowDecryptedContent === true)
-        ? getSessionName(props.session, props.serverId)
-        : null;
+    const namedSession = props.sessionName?.trim() || null;
     // A session this device cannot name is never shown by its id: it reads by where it lives.
+    const sentenceHome = homeName ?? resolveApprovalHomeSentenceName(props.serverId);
     const sessionTitle = namedSession
-        ?? (props.requesterSessionId?.trim() ? describeUnnamedApprovalSession(homeName) : null);
+        ?? (props.requesterSessionId?.trim() && props.requesterStatus !== 'resolving' ? describeUnnamedApprovalRequester(props.requesterSurface, sentenceHome) : null);
     const agentLabel = describeApprovalAgent(props.requesterAgentId);
     const originLabel = describeApprovalOrigin(props.requesterSurface);
     const endpointLabels = readApprovalSessionEndpointLabels({
@@ -94,19 +97,22 @@ export const ApprovalSessionContextCard = React.memo(function ApprovalSessionCon
         props.context ? { segments: props.context.segments.filter((segment) => segment.kind !== 'home') } : null,
         { showWorkspace: !pathLabel },
     );
-    const homeLabel = namedSession || !sessionTitle
+    // While the asking session is read, its line is held by a neutral placeholder: nothing claims it is
+    // elsewhere, and nothing else takes the lead only to be replaced when the name lands.
+    const sessionResolving = !namedSession && props.requesterStatus === 'resolving' && Boolean(props.requesterSessionId?.trim());
+    const homeLabel = namedSession || (!sessionTitle && !sessionResolving)
         ? homeName ?? props.homeDisplayId?.trim() ?? null
         // "A session on <Home>" already names the Home.
-        : homeName ? null : props.homeDisplayId?.trim() ?? null;
+        : sentenceHome ? null : props.homeDisplayId?.trim() ?? null;
 
-    if (!sessionTitle && !pathLabel && !machineLabel && !agentLabel && !originLabel && !homeLabel) {
+    if (!sessionTitle && !sessionResolving && !pathLabel && !machineLabel && !agentLabel && !originLabel && !homeLabel) {
         return null;
     }
     // The section always leads with one main line: the session, else the Home that asked (by its
     // name, so it is not also repeated as a "Home: …" fact), else who asked and how.
-    const homeLeads = !sessionTitle && Boolean(homeLabel);
+    const homeLeads = !sessionTitle && !sessionResolving && Boolean(homeLabel);
     const requesterFacts = agentLabel || originLabel ? joinHappierFacts(agentLabel, originLabel) : null;
-    const factsLead = !sessionTitle && !homeLeads;
+    const factsLead = !sessionTitle && !sessionResolving && !homeLeads;
     const mainLine = sessionTitle ?? (homeLeads ? homeLabel : requesterFacts);
 
     return (
@@ -118,9 +124,12 @@ export const ApprovalSessionContextCard = React.memo(function ApprovalSessionCon
         <View style={styles.card}>
             <View style={styles.headerRow}>
                 <View style={styles.titleColumn}>
-                    {mainLine ? <Text testID="approvals.requester-title" style={styles.title}>{mainLine}</Text> : null}
+                    {sessionResolving ? (
+                        <HappierSkeletonBlock testID="approvals.requester-title-resolving" width={180}
+                            height={REQUESTER_TITLE_LINE_PX} color={theme.colors.surface.skeleton} />
+                    ) : mainLine ? <Text testID="approvals.requester-title" numberOfLines={2} style={styles.title}>{mainLine}</Text> : null}
                     {machineLabel || pathLabel ? (
-                        <View style={mainLine ? styles.contextChips : null}>
+                        <View style={mainLine || sessionResolving ? styles.contextChips : null}>
                             <SessionContextChips machineLabel={machineLabel} pathLabel={pathLabel} />
                         </View>
                     ) : null}
@@ -158,6 +167,9 @@ export const ApprovalSessionContextCard = React.memo(function ApprovalSessionCon
         </ItemGroup>
     );
 });
+
+/** The session line's height at its 15 pt title, so the name lands without moving the card. */
+const REQUESTER_TITLE_LINE_PX = 20;
 
 const styles = StyleSheet.create((theme) => ({
     // Sheet content of the "Requested by" section: the section owns the chrome.

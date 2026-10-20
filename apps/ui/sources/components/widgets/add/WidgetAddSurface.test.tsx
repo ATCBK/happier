@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
+import * as Unistyles from 'react-native-unistyles';
 import { HappierInputField, WidgetSizePicker } from '@happier-dev/plugin-ui/presentation';
 import { composeWidgetGroupContextV1, createWidgetSurfaceArtifactPortV1, instantiateWidgetLayoutFragmentGroupV1, resolveConfiguredWidgetInputs, type WidgetLayoutFragmentSummaryV1, type WidgetSizeV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import { createWorkBoardArtifactBoundary } from '../../../../../../packages/protocol/src/boards/workBoardArtifactV1.testkit';
@@ -20,6 +21,7 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { SessionCurrentProjectionRecordV1Schema, SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import { SessionViewerProjectionV1Schema } from '@happier-dev/protocol/sessions/personal/viewer';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { darkTheme, lightTheme } from '@/theme';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -49,6 +51,7 @@ const { selectBuiltinWidgetCandidates } = await import('@/components/widgets/wid
 const { buildHomeWidgetAddSections } = await import('./HomeWidgetAddPopover');
 const { buildBoardWidgetAddContent, buildCompanionWidgetAddSections } = await import('./widgetAddSections');
 const { WidgetAddPanel } = await import('./WidgetAddSurface');
+const { AppShellPluginUiProjectionProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
 const { buildAccountWidgetAddSections } = await import('./accountWidgetAddSections');
 const { storage } = await import('@/sync/domains/state/storage');
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
@@ -104,9 +107,9 @@ async function renderPanel(props: Readonly<{
     composition?: 'split' | 'push';
     ask?: WidgetAddAsk;
     initialEntryId?: string;
-    loading?: boolean;
+    pendingSections?: readonly Readonly<{ id: string; title: string }>[];
     onRequestClose?: () => void;
-}>) {
+}>, options: Parameters<typeof renderScreen>[1] = {}) {
     const screen = await renderScreen(
         <WidgetAddPanel
             testID="add"
@@ -116,12 +119,13 @@ async function renderPanel(props: Readonly<{
             addLabel="Add to Home"
             composition={props.composition ?? 'split'}
             sections={props.sections}
-            {...(props.loading ? { loading: true } : {})}
+            {...(props.pendingSections ? { pendingSections: props.pendingSections } : {})}
             {...(props.ask ? { ask: props.ask } : {})}
             {...(props.initialEntryId ? { initialEntryId: props.initialEntryId } : {})}
             {...(props.serverId ? { serverId: props.serverId } : {})}
             onRequestClose={props.onRequestClose ?? (() => {})}
         />,
+        options,
     );
     await flushHookEffects({ cycles: 2 });
     return screen;
@@ -199,6 +203,29 @@ describe('WidgetAddSurface', () => {
         expect(resolve(persisted.context ?? {})).toMatchObject({ status: 'selection_required', fields: [{ path: 'amount' }] });
         expect(boundary.rows.size).toBe(1);
         expect(fragment).toEqual(original);
+    });
+
+    it('retains the phone setup step and edited inputs through appearance changes', async () => {
+        const rec = recorder();
+        const candidate: WidgetCandidate = { ...SIGNUPS, inputs: { fields: [{ path: 'label', title: 'Label', widget: 'text' }] } };
+        const sections: WidgetAddSection[] = [{ id: 'plugins', title: 'Analytics', entries: [widgetEntry(candidate, rec)] }];
+        const runtime = Unistyles.useUnistyles();
+        const appearance = vi.spyOn(Unistyles, 'useUnistyles').mockReturnValue({ ...runtime, theme: lightTheme });
+        const close = () => {};
+        const scene = () => <WidgetAddPanel testID="add" title="Add to Board" searchPlaceholder="Search widgets"
+            addLabel="Add to Board" composition="push" phone sections={sections} onRequestClose={close} />;
+        try {
+            const screen = await renderScreen(scene());
+            await act(async () => { screen.pressByTestId(`add.entry.${candidate.key}`); });
+            await act(async () => { screen.changeTextByTestId('add.detail.field.label.input', 'Keep this setup'); });
+            for (const theme of [darkTheme, lightTheme]) {
+                appearance.mockReturnValue({ ...runtime, theme });
+                await screen.update(scene());
+                expect(screen.findByTestId('add.detail.field.label.input')?.props.value).toBe('Keep this setup');
+                expect(screen.getTextContent()).toContain(`preview:${candidate.key}`);
+            }
+            expect(rec.submits).toEqual([]);
+        } finally { appearance.mockRestore(); }
     });
 
     it('opens with nothing selected and mounts only the selected widget’s live body', async () => {
@@ -346,16 +373,18 @@ describe('WidgetAddSurface', () => {
         expect(close).toHaveBeenCalledTimes(1);
     });
 
-    it('says Loading, not "No widgets match", while Your widgets are still being read', async () => {
+    it('says no match at once for a local search and marks only the pending Your widgets section', async () => {
         const rec = recorder();
         const screen = await renderPanel({
             sections: [{ id: 'all', title: 'All', entries: [widgetEntry(SIGNUPS, rec)] }],
-            loading: true,
+            pendingSections: [{ id: 'yours', title: 'Your widgets' }],
         });
-        screen.changeTextByTestId('add.search', 'copy');
+        screen.changeTextByTestId('add.search', 'kanban');
         await flushHookEffects({ cycles: 2 });
-        expect(screen.findAllByTestId('add.noMatch')).toHaveLength(0);
-        expect(screen.findAllByTestId('add.loading').length).toBeGreaterThan(0);
+        expect(screen.findAllByTestId('add.noMatch').length).toBeGreaterThan(0);
+        expect(screen.findAllByTestId('add.clearSearch').length).toBeGreaterThan(0);
+        expect(screen.findAllByTestId('add.pending.yours').length).toBeGreaterThan(0);
+        expect(screen.getTextContent()).toContain('Your widgets');
     });
 
     it('narrows by search and offers the ask entry, which drafts and closes', async () => {
@@ -375,8 +404,12 @@ describe('WidgetAddSurface', () => {
         screen.changeTextByTestId('add.search', 'kanban');
         await flushHookEffects({ cycles: 2 });
         expect(screen.findAllByTestId('add.noMatch').length).toBeGreaterThan(0);
-        screen.changeTextByTestId('add.search', '');
+        // An empty search is never a dead end: the ask stays offered, and Clear brings the list back.
+        expect(screen.findAllByTestId('add.entry.ask').length).toBeGreaterThan(0);
+        await act(async () => { screen.pressByTestId('add.clearSearch'); });
         await flushHookEffects({ cycles: 2 });
+        expect(screen.getTextContent()).toContain('Signups this week');
+        expect(screen.findAllByTestId('add.noMatch')).toHaveLength(0);
         await act(async () => { screen.pressByTestId('add.entry.ask'); });
         await flushHookEffects({ cycles: 2 });
         expect(screen.getTextContent()).toContain('Put something on Home that shows');
@@ -479,7 +512,9 @@ describe('WidgetAddSurface', () => {
         const home = { serverId: connection.home.id, accountId: 'me', owner: { kind: 'home' as const } };
         const summary = selectBuiltinWidgetCandidates().find((candidate) => candidate.definition?.kind === 'builtin' && candidate.definition.id === 'session_summary')!;
         const rec = recorder();
-        const screen = await renderPanel({ serverId: home.serverId, sections: [{ id: 'builtins', title: 'Built in', entries: [widgetEntry(summary, rec, { scope: home })] }] });
+        const screen = await renderPanel({ serverId: home.serverId, sections: [{ id: 'builtins', title: 'Built in', entries: [widgetEntry(summary, rec, { scope: home })] }] }, {
+            wrapper: ({ children }) => <AppShellPluginUiProjectionProvider>{children}</AppShellPluginUiProjectionProvider>,
+        });
         await act(async () => { screen.pressByTestId(`add.entry.${summary.key}`); });
         await flushHookEffects({ cycles: 4 });
         const field = () => screen.findAllByType(HappierInputField).find(node => node.props.field.path === 'session')!;

@@ -11,7 +11,7 @@ import { Modal } from '@/modal';
 import { t } from '@/text';
 import { evaluateScmOperationPreflight } from '@/scm/core/operationPolicy';
 import type { ScmCommitStrategy } from '@/scm/settings/commitStrategy';
-import type { ScmPushRejectPolicy, ScmRemoteConfirmPolicy } from '@/scm/settings/preferences';
+import type { ScmPushRejectPolicy } from '@/scm/settings/preferences';
 import { validateCommitMessage } from '@/scm/operations/commitMessage';
 import { trackBlockedScmOperation } from '@/scm/operations/reporting';
 import { tracking } from '@/track';
@@ -28,7 +28,6 @@ export function useFilesScmOperations(input: {
     scmSnapshot: ScmWorkingSnapshot | null;
     scmWriteEnabled: boolean;
     scmCommitStrategy: ScmCommitStrategy;
-    scmRemoteConfirmPolicy: ScmRemoteConfirmPolicy;
     scmPushRejectPolicy: ScmPushRejectPolicy;
     refreshScmData: () => Promise<void>;
     loadCommitHistory: (opts?: { reset?: boolean }) => Promise<void>;
@@ -39,7 +38,6 @@ export function useFilesScmOperations(input: {
         scmSnapshot,
         scmWriteEnabled,
         scmCommitStrategy,
-        scmRemoteConfirmPolicy,
         scmPushRejectPolicy,
         refreshScmData,
         loadCommitHistory,
@@ -109,7 +107,6 @@ export function useFilesScmOperations(input: {
         scmSnapshot,
         scmWriteEnabled,
         scmCommitStrategy,
-        scmRemoteConfirmPolicy,
         scmPushRejectPolicy,
         refreshScmData,
         loadCommitHistory,

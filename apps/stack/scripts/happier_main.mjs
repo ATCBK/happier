@@ -20,7 +20,8 @@ import {
 } from './runtime/launch/resolveCliRuntimeLaunchSpec.mjs';
 import { resolveCliEntrypoint } from './runtime/launch/resolveCliEntrypoint.mjs';
 import { ensureStackDaemonPreflight, requiresStackDaemonPreflight } from './stack/stack_happier_daemon_preflight.mjs';
-import { isPidAlive, readStackRuntimeStateFile } from './utils/stack/runtime_state.mjs';
+import { readActiveStackRuntimeStateFile } from './utils/stack/runtime_state.mjs';
+import { projectBorrowedExpoWebappEnv } from './runtime/shared/borrowed_expo.mjs';
 import {
   assertStackServerProfileReconciled,
   buildStackServerProfileSetArgs,
@@ -228,27 +229,13 @@ async function main() {
   const endpoint = await resolveStackServerEndpoint({ stackName });
   const serverPort = endpoint.port;
   const prefixServerSelection = readPrefixServerSelection(argv);
-  const recordedRuntimeState = await readStackRuntimeStateFile(runtimeStatePath);
-  const recordedRuntimeOwnerPid = Number(recordedRuntimeState?.ownerPid);
-  const activeRuntimeState =
-    String(recordedRuntimeState?.stackName ?? '').trim() === stackName &&
-    Number.isFinite(recordedRuntimeOwnerPid) &&
-    recordedRuntimeOwnerPid > 1 &&
-    isPidAlive(recordedRuntimeOwnerPid)
-      ? recordedRuntimeState
-      : null;
+  const activeRuntimeState = await readActiveStackRuntimeStateFile(runtimeStatePath, { stackName });
   // Bare --runtime follows the running daemon's code basis. An explicit
   // --runtime=built remains an intentional request for a native snapshot.
   const hasLoadedSourceRuntime = Boolean(activeRuntimeState?.sourceRuntimeIdentities?.daemon?.loaded);
   const runtimeArgv = hasLoadedSourceRuntime
     ? wrapperArgv.map(arg => arg === '--runtime' ? '--runtime=source' : arg)
     : wrapperArgv;
-  if (hasLoadedSourceRuntime && !runtimeArgv.includes('--source') && !runtimeArgv.includes('--runtime=built')) {
-    const sourceEntrypoint = activeRuntimeState.sourceRuntimeLaunch?.entrypoint;
-    if (!sourceEntrypoint || !existsSync(sourceEntrypoint)) {
-      throw new Error('[happier] loaded source CLI is unavailable; restore the recorded source runtime before using this stack.');
-    }
-  }
   const runtimeLaunchContext = await resolveStackRuntimeLaunchContext({
     argv: runtimeArgv,
     env: process.env,
@@ -336,6 +323,17 @@ async function main() {
     env.HAPPIER_HOME_DIR = env.HAPPIER_HOME_DIR || cliHomeDir;
   }
 
+  // Bootstrap reloads the stack's authored env and scrubs inherited defaults.
+  // Restore the runtime's selected UI through the same projection as startup.
+  if (isStackScopedInvocation && !prefixServerSelection.hasExplicitSelection && activeRuntimeState?.sourceUi === 'borrowed') {
+    env = await projectBorrowedExpoWebappEnv({
+      rootDir,
+      consumerStackName: stackName,
+      producerStackName: env.HAPPIER_STACK_EXPO_SOURCE_STACK,
+      env,
+    });
+  }
+
   const settingsDefaults =
     !isStackScopedInvocation && !prefixServerSelection.hasExplicitSelection
       ? readActiveServerUrlsFromCliSettings(env.HAPPIER_HOME_DIR)
@@ -362,7 +360,7 @@ async function main() {
       env.HAPPIER_PUBLIC_SERVER_URL = publicServerUrl;
       env.HAPPIER_LOCAL_SERVER_URL = internalServerUrl;
       env.HAPPIER_SERVER_URL = internalServerUrl;
-      env.HAPPIER_WEBAPP_URL = publicServerUrl;
+      env.HAPPIER_WEBAPP_URL = env.HAPPIER_WEBAPP_URL || publicServerUrl;
     } else {
       env.HAPPIER_SERVER_URL = env.HAPPIER_SERVER_URL || internalServerUrl;
       env.HAPPIER_WEBAPP_URL = env.HAPPIER_WEBAPP_URL || publicServerUrl;
@@ -419,7 +417,7 @@ async function main() {
     await ensureStackDaemonPreflight({
       rootDir,
       stackName,
-      env: process.env,
+      env,
       argv: wrapperArgv,
       cliIdentity,
       activeRuntimeState,

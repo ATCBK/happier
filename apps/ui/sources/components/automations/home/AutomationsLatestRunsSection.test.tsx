@@ -232,7 +232,12 @@ describe('Automations · Latest runs on Home', () => {
         screen.pressByTestId('home-automations.open');
         expect(server.pushed).toEqual(['/automations']);
         screen.pressByTestId('home-automations.run.d1');
-        expect(server.pushed.at(-1)).toMatchObject({ params: expect.objectContaining({ runId: 'd1' }) });
+        const destination = new URL(String(server.pushed.at(-1)), 'https://happier.test');
+        expect(destination.pathname).toBe('/workflows/runs/d1');
+        expect(Object.fromEntries(destination.searchParams)).toMatchObject({
+            target: 'occurrence',
+            automationId: 'deps',
+        });
     });
 
     it('reserves its rows until the first read answers, then says what will appear when nothing has run', async () => {

@@ -1,5 +1,5 @@
 import type { ExecutionRunManagedProviderSourceOpener } from '@/agent/runtime/bridges/executionRun/runtime/managedProvider';
-import { createAccountConnectionManagedConsumerSourceOpen } from '@/providers/broker/accountConnectionSource';
+import { createAccountConnectionManagedConsumerSourceOpen, type AccountConnectionManagedConsumerRequest } from '@/providers/broker/accountConnectionSource';
 import type { OpenAccountConnectionProviderBrokerAccess } from '@/providers/broker/accountConnectionClient';
 import type { ProviderConnectionRegistryReader } from '@/providers/broker/providerConnectionSource';
 import type { ManagedProviderExplicitStartCustody } from '@/providers/connections/publicManagedRuntimeStart';
@@ -17,19 +17,19 @@ export function createDaemonAccountConnectionManagedConsumerOpen(input: Readonly
   withRegistry: ProviderConnectionRegistryReader;
   projectModelsForAccount: RuntimeProviderModelManagementServices['projectModelsForAccount'];
   openRemote(request: Parameters<OpenAccountConnectionProviderBrokerAccess>[0],
-    isCurrent: () => Promise<boolean>): Promise<Awaited<ReturnType<OpenAccountConnectionProviderBrokerAccess>> | null>;
+    isCurrent: (signal?: AbortSignal) => Promise<boolean>): Promise<Awaited<ReturnType<OpenAccountConnectionProviderBrokerAccess>> | null>;
 }>): ExecutionRunManagedProviderSourceOpener {
   return async context => {
     const machineId = input.machineId();
-    const isCurrent = async () => !context.signal.aborted && input.isHomeCurrent()
+    const isCurrent = async (signal?: AbortSignal) => !context.signal.aborted && !signal?.aborted && input.isHomeCurrent()
       && input.machineId() === machineId
       && context.accountId === input.accountId
-      && await context.isCurrent();
+      && await context.isCurrent(signal);
     let ownedSnapshot: ActiveAccountSettingsSnapshot | null = null;
-    const admitConsumer = async () => {
-      if (!await isCurrent()) return false;
+    const admitConsumer = async (_request?: AccountConnectionManagedConsumerRequest, signal?: AbortSignal) => {
+      if (!await isCurrent(signal)) return false;
       const snapshot = await context.readAccountSettingsSnapshot();
-      if (!snapshot || snapshot.scopeKey !== context.expectedAccountSettingsScopeKey || !await isCurrent()) {
+      if (!snapshot || snapshot.scopeKey !== context.expectedAccountSettingsScopeKey || !await isCurrent(signal)) {
         ownedSnapshot = null;
         return false;
       }
@@ -45,15 +45,15 @@ export function createDaemonAccountConnectionManagedConsumerOpen(input: Readonly
         targetMachineId: context.targetMachineId, consumer: context.request.consumer,
         ...(context.request.executionRunOccurrenceId ? { executionRunOccurrenceId: context.request.executionRunOccurrenceId } : {}),
         application: context.request.application, signal: context.signal,
-      }, admitConsumer);
+      }, signal => admitConsumer(undefined, signal ?? context.signal));
       if (!opened) return null;
       if (!await admitConsumer()) { await opened.cleanup(); return null; }
       const cleanup = async () => { await opened.cleanup(); };
       return {
         access: opened.access,
-        revalidate: async () => {
-          if (!await admitConsumer()) return false;
-          try { await opened.readHttpBinding(); return await isCurrent(); } catch { return false; }
+        revalidate: async (signal) => {
+          if (!await admitConsumer(undefined, signal)) return false;
+          try { await opened.readHttpBinding(signal); return await isCurrent(signal); } catch { return false; }
         },
         cleanup,
         retire: cleanup,

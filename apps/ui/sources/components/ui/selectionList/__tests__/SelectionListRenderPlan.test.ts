@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { DynamicSectionState } from '../useSelectionListDynamicSections';
+import type { SelectionListOption } from '../_types';
 
 /**
  * R14 — unit coverage for the render-plan synthesizer extracted from the
@@ -14,6 +15,44 @@ import type { DynamicSectionState } from '../useSelectionListDynamicSections';
  * These tests pin the contract independent of the React orchestrator.
  */
 describe('SelectionListRenderPlan (R14 extracted)', () => {
+    it.each(['idle', 'loading', 'error', 'success'] as const)(
+        'activates current descriptor bindings for retained options in the %s state',
+        async (status) => {
+            const { synthesizeSelectionListRenderPlan } = await import('../SelectionListRenderPlan');
+            const { activateSelectionListRow } = await import('../SelectionListRowActivation');
+            const selections: string[] = [];
+            const retainedOptions = [{
+                id: 'directory', label: 'Documents', onSelect: () => { selections.push('retired'); },
+            }] satisfies readonly SelectionListOption[];
+            const currentOptions: readonly SelectionListOption[] = [{
+                ...retainedOptions[0], id: 'directory', label: 'Documents',
+                onSelect: () => { selections.push('current'); },
+            }];
+            const section = {
+                kind: 'dynamic' as const, id: 'directories',
+                resolve: async () => ({ options: retainedOptions }),
+                projectOptions: (_options: readonly SelectionListOption[]) => currentOptions,
+            };
+            const state: DynamicSectionState = {
+                status,
+                options: status === 'idle' || status === 'loading' ? [] : retainedOptions,
+                lastSuccessOptions: retainedOptions,
+                ...(status === 'error' ? { error: new Error('offline') } : {}),
+            };
+            const plan = synthesizeSelectionListRenderPlan({
+                sections: [section], inputValue: '', filterQuery: '',
+                dynamicSectionStates: new Map([['directories', state]]),
+            });
+            const option = plan[0]?.options[0];
+            if (!option) throw new Error('Expected the retained directory to remain available');
+            activateSelectionListRow({ option, onSelect: () => {}, onPushStep: () => {} });
+
+            expect(selections).toEqual(['current']);
+            expect(plan[0]?.options).toBe(currentOptions);
+            expect(retainedOptions[0]?.onSelect).not.toBe(option.onSelect);
+        },
+    );
+
     it('ranks opted-in search results across groups without promoting stale rows or dropping their status', async () => {
         const { synthesizeSelectionListRenderPlan } = await import('../SelectionListRenderPlan');
         const args = {

@@ -45,6 +45,8 @@ import {
 import { requestAcceptedActionOperationStop, type ActionOperationStopResponse, type ActionOperationStopContext, type ActionOperationStopTarget } from './requestActionOperationStop';
 import { useActionOperationStopControl } from './useActionOperationStopControl';
 import { projectActionOperationSourceContext } from './actionOperationSourceContext';
+import { readActionOperationOutputAttachment } from './actionOperationDetailPresentation';
+import { useManagedMachineName } from '@/components/approvals/approvalReferenceReading';
 
 const SECTION_ORDER: readonly ActionOperationSection[] = ['inProgress', 'needsAttention', 'recent'];
 
@@ -70,10 +72,13 @@ const ActionOperationRow = React.memo(function ActionOperationRow(props: Readonl
     const sessionId = snapshot.scope.sessionId ?? null;
     const serverId = props.operation.serverId;
     const session = useSessionListRenderableWithServerScope(serverId, serverId && sessionId ? sessionId : '');
-    const machine = useServerScopedMachine(serverId, serverId ? snapshot.scope.machineId : '');
+    const executionTarget = readActionOperationOutputAttachment(snapshot);
+    const machine = useServerScopedMachine(executionTarget?.serverId ?? serverId,
+        executionTarget?.machineId ?? (serverId ? snapshot.scope.machineId : ''));
     // Row-local, like this row's Session and Machine reads, so a Home observation change repaints
     // only the rows bound to that Home rather than the whole ledger.
     const homeObservations = useSessionListHomeObservations();
+    const managedMachineName = useManagedMachineName(serverId, snapshot.domainRef?.kind === 'managedMachine' ? snapshot.domainRef.id : null);
     const status = resolveActionOperationStatus(snapshot, observation);
     const statusLabel = describeActionOperationStatusLabel(status.label);
     const sourceContext = projectActionOperationSourceContext({
@@ -81,6 +86,7 @@ const ActionOperationRow = React.memo(function ActionOperationRow(props: Readonl
         snapshot,
         session,
         machine,
+        managedMachineName,
         serverProfile: serverId ? getServerProfileById(serverId) : null,
         audienceScope: serverId ? props.audienceScopes.get(serverId) : null,
         homeObservation: serverId ? homeObservations[serverId] ?? null : null,

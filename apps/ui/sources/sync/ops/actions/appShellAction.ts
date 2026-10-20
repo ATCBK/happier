@@ -20,6 +20,7 @@ import { invokeMountedWorkRead } from './mountedWorkReadAction';
 import { sync } from '@/sync/sync';
 import { writeSessionInitialPromptV1 } from '@/sync/domains/sessionInitialPrompt/sessionInitialPromptV1';
 import { navigateToSavedNewSessionDraft } from '@/components/sessions/drafts/newSessionDraftNavigation';
+import { resolveRuntimeFeatureDecisionOrThrow } from '@/sync/domains/features/featureDecisionInputs';
 
 /** Thin projection of the incumbent bulk-acknowledgement and draft-repository owners. */
 export function createAppShellAction(accountContext?: LazyActionAccountContext): NonNullable<ActionExecutorDeps['appShellAction']> {
@@ -82,14 +83,17 @@ export function createAppShellAction(accountContext?: LazyActionAccountContext):
             return { results: result.results.map(({ target, status }) => ({ serverId: target.serverId, sessionId: target.sessionId, status })) };
         }
         const { draftId } = AppShellActionInputSchemas[actionId].parse(input);
+        const unavailable = () => actionId === 'session.draft.delete'
+            ? { ok: false as const, errorCode: 'session_draft_unavailable', error: 'session_draft_unavailable' }
+            : { status: 'unavailable' as const };
         const serverId = context.serverId ?? getActiveServerAccountScope()?.serverId;
-        if (!serverId && !accountContext) return { status: 'unavailable' };
+        if (!serverId && !accountContext) return unavailable();
         const account = accountContext ?? await captureLazyActionAccountContext(serverId!, context.signal);
         try {
             account.assertCurrent();
             const scope = account.accountLifetime.scope;
             if ((context.serverId && !areServerProfileIdentifiersEquivalent(scope.serverId, context.serverId))
-                || (context.runtimeAccountId && scope.accountId !== context.runtimeAccountId)) return { status: 'unavailable' };
+                || (context.runtimeAccountId && scope.accountId !== context.runtimeAccountId)) return unavailable();
             const address = { kind: 'newSession' as const, draftId };
             if (actionId === 'session.draft.open') {
                 if (!getSessionDraftSnapshot(scope, address)) {
@@ -114,27 +118,40 @@ export function createAppShellAction(accountContext?: LazyActionAccountContext):
                 return isNewSessionDraftDeletionBlocked({ draft, accountId: scope.accountId, operations: readAllActionOperations() })
                     ? 'launch_custody' as const : 'deletable' as const;
             };
-            if (areServerAccountScopesEqual(getActiveServerAccountScope(), scope)) {
+            const synchronization = await resolveRuntimeFeatureDecisionOrThrow({ featureId: 'sessions.drafts', serverId: scope.serverId });
+            account.assertCurrent();
+            // A Home without synchronized drafts retains its incumbent local-only deletion.
+            // Otherwise even the focused app must read the exact Account draft before deciding it is missing.
+            if (synchronization.state !== 'enabled' && areServerAccountScopesEqual(getActiveServerAccountScope(), scope)) {
                 const status = disposition();
                 if (status !== 'deletable') return { status };
                 const deleted = await deleteSessionDraft({ scope, address });
                 account.assertCurrent();
-                return { status: deleted ? 'deleted' : 'unavailable' };
+                return deleted ? { status: 'deleted' } : unavailable();
             }
-            const result = await runWithSessionDraftRepositoryScopedRuntime({
-                binding: account.accountLifetime,
-                activeRequest: account.request,
-                operation: async ({ scope, runtime, isCurrent }) => {
-                    await materializeExactSessionDraftWithScopedRuntime({ scope, address, runtime, isCurrent });
-                    const status = disposition();
-                    if (status !== 'deletable') return { status };
-                    const deleted = await deleteSessionDraftWithScopedRuntime({ scope, address, runtime, isCurrent });
-                    account.assertCurrent();
-                    return { status: deleted ? 'deleted' as const : 'unavailable' as const };
-                },
-            });
-            account.assertCurrent();
-            return result ?? { status: 'unavailable' };
+            let deletionStarted = false;
+            try {
+                const result = await runWithSessionDraftRepositoryScopedRuntime({
+                    binding: account.accountLifetime,
+                    activeRequest: account.request,
+                    operation: async ({ scope, runtime, isCurrent }) => {
+                        await materializeExactSessionDraftWithScopedRuntime({ scope, address, runtime, isCurrent });
+                        const status = disposition();
+                        if (status !== 'deletable') return { status };
+                        deletionStarted = true;
+                        const deleted = await deleteSessionDraftWithScopedRuntime({ scope, address, runtime, isCurrent });
+                        account.assertCurrent();
+                        return deleted ? { status: 'deleted' as const }
+                            : { ok: false as const, errorCode: 'session_draft_conflict', error: 'session_draft_conflict' };
+                    },
+                });
+                account.assertCurrent();
+                return result ?? unavailable();
+            } catch (error) {
+                // A transport/currentness/cleanup failure after starting deletion cannot prove no effect.
+                if (deletionStarted) return { ok: false, errorCode: 'outcome_uncertain', error: 'outcome_uncertain' };
+                throw error;
+            }
         } finally {
             if (!accountContext) account.dispose();
         }

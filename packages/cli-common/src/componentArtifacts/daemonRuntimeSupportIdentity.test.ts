@@ -13,8 +13,8 @@ import {
 } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -242,6 +242,56 @@ module.exports = { unpackTools };
 }
 
 describe('daemon runtime support identity', () => {
+  it('emits Latin-1 source chunks and sidecars while preserving Unicode values, legal notices and stack frames', async () => {
+    const root = await makeTempRepo();
+    await createSupportIdentityFixture(root);
+    const license = '/*! @license Fixture 日本語 © 2026 */';
+    await writeFixtureFile(join(root, 'packages/cli-common/package.json'), JSON.stringify({
+      name: '@happier-dev/cli-common',
+      exports: { '.': { 'happier-source': './src/雪.ts', default: './dist/index.js' } },
+    }));
+    await writeFixtureFile(join(root, 'packages/cli-common/src/雪.ts'), `${license}
+export const unicode = { literal: '雪 😀', raw: String.raw\`雪\\n\`, pattern: /\\u96ea/u.test('雪') };
+export function namedUnicodeFailure() { throw new Error('雪 😀'); }
+`);
+    await writeFixtureFile(join(root, 'apps/cli/src/index.ts'), `
+export { unicode, namedUnicodeFailure } from '@happier-dev/cli-common';
+export const readLazy = () => import('./lazy');
+`);
+    await writeFixtureFile(join(root, 'apps/cli/src/lazy.ts'), "export { unicode } from '@happier-dev/cli-common';");
+    await writeFixtureFile(join(root, 'apps/cli/scripts/process_tree.cjs'), "exports.read = async () => (await import('@happier-dev/cli-common')).unicode;");
+    await writeFixtureFile(join(root, 'apps/cli/scripts/statusline_forwarder.cjs'), `${license}\nexports.read = () => String.raw\`雪\\n\`;`);
+    const payloadDir = join(root, 'payload');
+    await buildCliBinaryArtifactCodePayload({
+      repoRoot: root, payloadDir,
+      commandProbe: command => command === 'bun',
+      // The compiler process is the external boundary; exercise the real emitted graph in Node below.
+      compileBinary: async ({ outfile }) => writeFixtureFile(outfile, 'external native compiler'),
+    });
+    const emitted = await import(pathToFileURL(join(payloadDir, 'package-dist/index.mjs')).href);
+    expect(emitted.unicode).toEqual({ literal: '雪 😀', raw: '雪\\n', pattern: true });
+    expect((await emitted.readLazy()).unicode).toBe(emitted.unicode);
+    expect(await createRequire(import.meta.url)(join(payloadDir, 'scripts/process_tree.cjs')).read()).toEqual(emitted.unicode);
+    const standaloneSidecar = join(payloadDir, 'scripts/statusline_forwarder.cjs');
+    expect(createRequire(import.meta.url)(standaloneSidecar).read()).toBe('雪\\n');
+    expect(await readFile(standaloneSidecar, 'utf8')).not.toMatch(/[^\x00-\xFF]/u);
+    try {
+      emitted.namedUnicodeFailure();
+      expect.unreachable('the named fixture must throw');
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe('雪 😀');
+      expect((error as Error).stack).toMatch(/namedUnicodeFailure .*\.js:\d+:\d+/);
+    }
+    const metadata = JSON.parse(await readFile(join(payloadDir, 'package-dist/metafile.json'), 'utf8'));
+    const outputs = Object.keys(metadata.outputs).map(path => resolve(root, path));
+    for (const path of outputs.filter(path => /\.[cm]?js$/.test(path))) {
+      expect(await readFile(path, 'utf8'), path).not.toMatch(/[^\x00-\xFF]/u);
+    }
+    const notices = await Promise.all(outputs.filter(path => path.endsWith('.LEGAL.txt')).map(path => readFile(path, 'utf8')));
+    expect(notices.some(text => text.includes(license))).toBe(true);
+  });
+
   afterEach(async () => {
     await Promise.all(
       tempDirs.splice(0).map(async (path) => {
@@ -647,22 +697,23 @@ describe('daemon runtime support identity', () => {
       join(sourcePackage, 'package.json'),
       JSON.stringify({
         name: '@happier-dev/cli-common',
-        files: ['src', 'dist', 'native'],
+        files: ['src', 'dist', 'native/*.node'],
       }),
     );
     await writeFixtureFile(
       join(sourcePackage, 'src/index.ts'),
       'export const runtime=1;',
     );
-    await writeFixtureFile(
-      join(sourcePackage, 'native/binding.node'),
-      'first native asset',
-    );
     const input = {
       repoRoot: root,
       target: targetForHost(),
       goVersion: 'go version go1.fixture',
     };
+    expect(() => readCliBinaryArtifactSupportIdentity(input)).not.toThrow();
+    await writeFixtureFile(
+      join(sourcePackage, 'native/binding.node'),
+      'first native asset',
+    );
     const initial = readCliBinaryArtifactSupportIdentity(input);
     await writeFixtureFile(
       join(sourcePackage, 'src/index.ts'),
@@ -806,6 +857,13 @@ describe('daemon runtime support identity', () => {
   it('stages only daemon support entries and verifies the same owner-local identity', async () => {
     const root = await makeTempRepo();
     await createSupportIdentityFixture(root);
+    const nativePackage = join(root, 'packages/cli-common');
+    await writeFixtureFile(join(nativePackage, 'package.json'), JSON.stringify({
+      name: '@happier-dev/cli-common', version: '1.0.0', files: ['native/*.node'],
+    }));
+    await writeFixtureFile(join(nativePackage, 'native/binding.node'), 'shippable native bytes');
+    await writeFixtureFile(join(nativePackage, 'native/.private-staging/scripts/build.mjs'), 'in-progress source');
+    await symlink(root, join(nativePackage, 'native/.private-staging/escaping'), process.platform === 'win32' ? 'junction' : 'dir');
     await writeFixtureFile(
       join(
         root,
@@ -839,6 +897,8 @@ describe('daemon runtime support identity', () => {
       processCustodyRuntimeExecutablePath: prebuiltCustodyPath,
     };
     const identity = readCliBinaryArtifactSupportIdentity(identityInput);
+    await writeFixtureFile(join(nativePackage, 'native/.private-staging/scripts/build.mjs'), 'changed private input');
+    expect(readCliBinaryArtifactSupportIdentity(identityInput).fingerprint).toBe(identity.fingerprint);
     const payloadDir = join(
       root,
       'artifacts',
@@ -867,6 +927,9 @@ describe('daemon runtime support identity', () => {
     ).toBe(true);
     expect(existsSync(join(payloadDir, 'scripts'))).toBe(false);
     expect(existsSync(join(payloadDir, 'package-dist'))).toBe(false);
+    const stagedNative = join(payloadDir, 'node_modules/@happier-dev/cli-common/native');
+    expect(await readFile(join(stagedNative, 'binding.node'), 'utf8')).toBe('shippable native bytes');
+    expect(existsSync(join(stagedNative, '.private-staging'))).toBe(false);
     expect(
       existsSync(
         join(payloadDir, 'node_modules', '@happier-dev', 'cli-common', 'dist'),

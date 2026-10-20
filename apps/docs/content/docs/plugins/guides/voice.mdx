@@ -105,6 +105,23 @@ Local voice's speech pipeline. Declare both STT roles only when the same engine
 genuinely serves both, and give independently selectable STT and TTS their own
 contribution ids.
 
+## Compose Voice schemas
+
+The 0.3 development Voice exports are native `zod/mini` schemas. Use functional
+Mini composition when making a field optional or accepting a list:
+
+```ts
+import * as z from 'zod/mini';
+import { VoiceServiceMarkSchema } from '@happier-dev/plugin-sdk/voice';
+
+const MarksSchema = z.optional(z.array(VoiceServiceMarkSchema));
+```
+
+Voice schema declarations expose Mini types, and the SDK's record and
+field-composition helpers also produce native Mini schemas. Update and rebuild
+consumers that used fluent `.optional()` or `.array()` calls when adopting this
+development contract.
+
 ## Build a voice-enabled interface
 
 Same-realm Plugin UI surfaces can use `VoiceMarkArt`, `StatusCell`,

@@ -3,25 +3,38 @@ import { PendingActivationFailureDetailsV1Schema, PendingActivationRuntimeFailur
 import { SpawnSessionErrorCodeSchema } from '@happier-dev/protocol/spawnSession';
 import {
     createAccountCursorRawQueryTransactionModel,
-    createEmptySessionReportsToTransactionModel,
+    createEmptySessionFollowEdgeTransactionModel,
 } from '@/app/api/testkit/txHarness';
 
 import { Prisma } from '@prisma/client';
 import * as storageBoundary from '@/storage/prisma';
-import { installDbModuleMock } from '@/app/api/testkit/dbMocks';
+import { inTxPostgresControlStatementMock, installDbModuleMock } from '@/app/api/testkit/dbMocks';
 
 // Transaction delegates are fixtures; supply the real Prisma metadata without
 // opening a database connection or mocking activation policy.
-installDbModuleMock({ ...storageBoundary, getActivePrismaRuntime: () => Prisma });
+const transaction = vi.fn();
+installDbModuleMock({ ...storageBoundary, getActivePrismaRuntime: () => Prisma, db: { $transaction: transaction } });
 
+const owner = await import('./pendingActivationAuthorization');
+const { inTx } = await import('@/storage/inTx');
+type Tx = import('@/storage/inTx').Tx;
 const {
-    armPendingActivationAuthorizationInTx,
-    clearPendingActivationAuthorizationForPublisherActivityData,
     mapPendingActivationAuthorization,
     mapPendingActivationFailureDetails,
-    markPendingActivationAuthorizationFailedInTx,
-    reconcilePendingActivationAuthorizationForRemovedRequestInTx,
-} = await import('./pendingActivationAuthorization');
+} = owner;
+
+async function runWithTx<T>(fixture: Tx, run: (tx: Tx) => Promise<T>): Promise<T> {
+    transaction.mockImplementationOnce(async (callback: (tx: Tx) => Promise<unknown>) =>
+        callback({ ...inTxPostgresControlStatementMock, ...fixture }));
+    const result = await inTx(async tx => ({ value: await run(tx) }));
+    return result.value;
+}
+const armPendingActivationAuthorizationInTx = (params: Parameters<typeof owner.armPendingActivationAuthorizationInTx>[0]) =>
+    runWithTx(params.tx, tx => owner.armPendingActivationAuthorizationInTx({ ...params, tx }));
+const markPendingActivationAuthorizationFailedInTx = (params: Parameters<typeof owner.markPendingActivationAuthorizationFailedInTx>[0]) =>
+    runWithTx(params.tx, tx => owner.markPendingActivationAuthorizationFailedInTx({ ...params, tx }));
+const reconcilePendingActivationAuthorizationForRemovedRequestInTx = (params: Parameters<typeof owner.reconcilePendingActivationAuthorizationForRemovedRequestInTx>[0]) =>
+    runWithTx(params.tx, tx => owner.reconcilePendingActivationAuthorizationForRemovedRequestInTx({ ...params, tx }));
 
 function createTx(session: Record<string, unknown>, row?: Record<string, unknown>) {
     const publication = () => ({
@@ -33,6 +46,7 @@ function createTx(session: Record<string, unknown>, row?: Record<string, unknown
     });
     const account = { update: vi.fn(async () => ({ seq: 1 })) };
     const accountChange = { upsert: vi.fn(async () => ({})) };
+    const queryAccount = createAccountCursorRawQueryTransactionModel({ account, accountChange });
     const updateMany = vi.fn(async ({ where, data }: any) => {
         if (where.pendingActivationRequestId && where.pendingActivationRequestId !== session.pendingActivationRequestId) return { count: 0 };
         if (where.pendingActivationRequestedAt && where.pendingActivationRequestedAt.getTime() !== (session.pendingActivationRequestedAt as Date)?.getTime()) return { count: 0 };
@@ -51,8 +65,13 @@ function createTx(session: Record<string, unknown>, row?: Record<string, unknown
         },
         account,
         accountChange,
-        $queryRawUnsafe: vi.fn(createAccountCursorRawQueryTransactionModel({ account, accountChange })),
-        sessionReportsTo: createEmptySessionReportsToTransactionModel(),
+        $queryRawUnsafe: vi.fn(async (query: string, ...values: unknown[]) => {
+            if (query === 'SELECT "id" FROM "Session" WHERE "id" = ANY($1::text[]) ORDER BY "id" FOR NO KEY UPDATE') {
+                return [{ id: 's1' }];
+            }
+            return queryAccount(query, ...values);
+        }),
+        sessionFollowEdge: createEmptySessionFollowEdgeTransactionModel(),
         sessionShare: { findMany: vi.fn(async () => []) },
         sessionTeamGrant: { findMany: vi.fn(async () => []) },
         sessionGroupGrant: { findMany: vi.fn(async () => []) },
@@ -101,7 +120,9 @@ describe('pending activation authorization owner', () => {
         expect(mapPendingActivationAuthorization(session)).toEqual({ requestId: 'p1', requestedAt: 101,
             status: 'failed', failureCode: 'runtime_start_failed' });
         expect(mapPendingActivationFailureDetails(session)).toEqual({ reason: 'spawn-rejected', spawnErrorCode: 'SPAWN_VALIDATION_FAILED' });
-        expect(mapPendingActivationFailureDetails({ ...session, lastActiveAt: new Date(102) })).toBeUndefined();
+        expect(mapPendingActivationFailureDetails({ ...session, lastActiveAt: new Date(102) }))
+            .toEqual({ reason: 'spawn-rejected', spawnErrorCode: 'SPAWN_VALIDATION_FAILED' });
+        expect(mapPendingActivationAuthorization({ ...session, pendingActivationFailureCode: 'unknown_future_failure' })).toBeUndefined();
     });
     it('arms an eligible Account-authored send_now beyond the publisher fence', async () => {
         const session = {
@@ -326,19 +347,18 @@ describe('pending activation authorization owner', () => {
         expect(session).toMatchObject({ pendingActivationRequestId: 'new', pendingActivationStatus: 'waiting' });
     });
 
-    it('fences stale authorization at lastActiveAt and supplies an explicit publisher clear', () => {
-        expect(mapPendingActivationAuthorization({
+    it('retains exact authorization after publisher activity until consumption or definite refusal', async () => {
+        const session = {
+            accountId: 'owner',
             lastActiveAt: new Date(102),
             pendingActivationRequestId: 'p1',
             pendingActivationRequestedAt: new Date(101),
             pendingActivationStatus: 'waiting',
             pendingActivationFailureCode: null,
-        })).toBeUndefined();
-        expect(clearPendingActivationAuthorizationForPublisherActivityData()).toMatchObject({
-            pendingActivationRequestId: null,
-            pendingActivationRequestedAt: null,
-            pendingActivationStatus: null,
-            pendingActivationFailureCode: null,
-        });
+        };
+        expect(mapPendingActivationAuthorization(session)).toEqual({ requestId: 'p1', requestedAt: 101, status: 'waiting' });
+        expect(await markPendingActivationAuthorizationFailedInTx({ tx: createTx(session), sessionId: 's1',
+            requestId: 'p1', requestedAt: new Date(101), failureCode: 'runtime_start_failed' })).toBe(true);
+        expect(mapPendingActivationAuthorization(session)).toMatchObject({ requestId: 'p1', status: 'failed' });
     });
 });

@@ -16,6 +16,15 @@ it('reads the declared request effect instead of a stored generic Action descrip
         .toBeNull();
 });
 
+it('keeps captured widget names when rendering a stored removal preview', () => {
+    const actionArgs = { ref: { surface: { serverId: 'home', accountId: 'account', owner: {
+        kind: 'pluginArea', pluginId: 'examples.widget-areas', pageId: 'overview', area: 'pinned',
+    } }, instanceId: 'removed-copy' } };
+    expect(readApprovalPreviewSummary({ summary: 'Remove the widget from Plugin page · Pinned area.',
+        widgetPresentation: { widgetName: 'Directory count', pageName: 'Widget areas', areaName: 'Pinned' } },
+        { actionId: 'widgets.item.remove', actionArgs })).toBe('Remove “Directory count” from Widget areas · Pinned.');
+});
+
 describe('projectApprovalStructuredAnswers', () => {
     it('preserves the exact released scalar question and answer content', () => {
         expect(projectApprovalStructuredAnswers([

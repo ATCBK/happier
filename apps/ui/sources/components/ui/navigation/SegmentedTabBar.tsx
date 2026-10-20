@@ -14,9 +14,11 @@ import {
     HAPPIER_SEGMENTED_METRICS,
     HAPPIER_FIELD_BOX_METRICS,
     isHappierTabSelected,
+    resolveHappierTabGlyphOnly,
     resolveHappierTabKeySelection,
     useHappierMaterialColorResolver,
     happierMaterialGradient,
+    type HappierTabLabels,
 } from '@happier-dev/plugin-ui/presentation';
 
 import { shadowLevelStyle } from '@/shadowElevation';
@@ -155,7 +157,7 @@ export type SegmentedTabBarProps<T extends string = string> = Readonly<{
      * for assistive technology and on hover), so a neighbour can keep its own text. Needs a glyph on
      * every tab. Default `'all'`.
      */
-    labels?: 'all' | 'none';
+    labels?: HappierTabLabels;
     /** Expand each segment to the platform touch-target floor when its consumer owns enough room. */
     targetSize?: 'platform';
     /** Accessible name for the group. */
@@ -508,7 +510,9 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
         const complete = props.tabs.every((tab) => measured[`i:${tab.id}`] !== undefined && measured[`l:${tab.id}`] !== undefined)
             && measured.more !== undefined;
         return resolveSegmentedTabFit({
-            available: complete ? rowWidth : null,
+            // The track's own padding is not room for segments: counting it let a row that "fit" squeeze
+            // every label ("Overvi…") instead of dropping the glyphs first.
+            available: complete && rowWidth !== null ? rowWidth - (plain ? 0 : SEGMENT_TRACK_PADDING_PX * 2) : null,
             withIcons: props.tabs.map((tab) => measured[`i:${tab.id}`] ?? 0),
             labelsOnly: props.tabs.map((tab) => measured[`l:${tab.id}`] ?? 0),
             gap: plain ? HAPPIER_SEGMENTED_METRICS.plain.gapPx : 0,
@@ -516,7 +520,7 @@ function SegmentedTabBarInner<T extends string>(props: SegmentedTabBarProps<T>) 
         });
     }, [measured, overflow, plain, props.tabs, rowWidth]);
     const showIcons = plain && fit.icons;
-    const glyphOnly = plain && props.labels === 'none' && props.tabs.every((tab) => tab.icon != null);
+    const glyphOnly = plain && resolveHappierTabGlyphOnly({ labels: props.labels, tabs: props.tabs });
     const visibleTabs = React.useMemo(() => (overflow ? props.tabs.slice(0, fit.visibleCount) : props.tabs), [fit.visibleCount, overflow, props.tabs]);
     const hiddenTabs = React.useMemo(() => (overflow ? props.tabs.slice(fit.visibleCount) : []), [fit.visibleCount, overflow, props.tabs]);
     const activeHidden = hiddenTabs.some((tab) => isHappierTabSelected(props.activeTabId, tab.id));

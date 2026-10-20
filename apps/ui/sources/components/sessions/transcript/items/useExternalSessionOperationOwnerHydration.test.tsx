@@ -157,7 +157,7 @@ describe('useExternalSessionOperationOwnerHydration', () => {
             sessionId: 'session-1',
             operationId: 'operation-1',
             revision: 4,
-        }, { serverId: 'server-1' });
+        }, { serverId: 'server-1', signal: expect.any(AbortSignal) });
         expect(hook.getCurrent().progress).toEqual(progress4);
 
         await hook.rerender({
@@ -455,7 +455,7 @@ describe('useExternalSessionOperationOwnerHydration', () => {
             sessionId: 'session-1',
             operationId: 'operation-1',
             revision: 4,
-        }, { serverId: 'server-2' });
+        }, { serverId: 'server-2', signal: expect.any(AbortSignal) });
         expect(hook.getCurrent().progress).toBeNull();
 
         scopedRead.resolve({ ok: true, progress: scopedProgress });

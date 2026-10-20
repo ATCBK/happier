@@ -1,5 +1,5 @@
-import { realpathSync, statSync } from 'node:fs';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { lstatSync, realpathSync, statSync } from 'node:fs';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 
 import type {
     ExternalAgentObservationWatchFileChangesV1,
@@ -8,7 +8,14 @@ import { ExternalAgentObservationWatchFileChangesV1Schema } from '@happier-dev/p
 import type {
     AgentExternalSessionsResolvedIdentity,
 } from '@happier-dev/plugin-sdk/sessions/external';
-import { isCanonicalAbsolutePathInsideRoot } from '@/utils/path/expandHomeDirPath';
+import {
+    canonicalAbsolutePathsEqual,
+    isCanonicalAbsolutePathInsideRoot,
+    resolveCanonicalAbsoluteChildPathComparisonIdentity,
+    resolveCanonicalAbsolutePathComparisonIdentity,
+} from '@/utils/path/expandHomeDirPath';
+import type { ConnectedServiceMaterializedStateObservationBinding } from '@/daemon/connectedServices/materialization/materializer';
+import { isSafeConnectedServiceStateSharingEntry } from '@/daemon/connectedServices/stateSharing/connectedServiceStateSharingManifest';
 
 function collectResolvedSourceAbsoluteRoots(value: unknown): string[] {
     if (typeof value === 'string') {
@@ -26,14 +33,37 @@ function collectResolvedSourceAbsoluteRoots(value: unknown): string[] {
 
 function sourceRoots(
     linkedSource: AgentExternalSessionsResolvedIdentity,
+    materializedBinding?: ConnectedServiceMaterializedStateObservationBinding,
 ): readonly Readonly<{ lexical: string; canonical: string }>[] {
-    return collectResolvedSourceAbsoluteRoots(linkedSource.source).map((root) => {
+    const roots = collectResolvedSourceAbsoluteRoots(linkedSource.source).map((root) => {
         try {
             return { lexical: root, canonical: realpathSync(root) };
         } catch {
             return { lexical: root, canonical: root };
         }
     });
+    // Only host-captured, Session-bound materialization may extend a source's
+    // physical roots. A current symlink or plugin declaration alone is no grant.
+    if (!materializedBinding || !roots.some(root => canonicalAbsolutePathsEqual(
+        root.canonical, materializedBinding.nativeHomeRoot,
+    ))) return roots;
+    for (const entry of materializedBinding.entries) {
+        if (!isSafeConnectedServiceStateSharingEntry(entry.entryPath)) continue;
+        const expectedEntry = resolveCanonicalAbsoluteChildPathComparisonIdentity(
+            materializedBinding.nativeHomeRoot, entry.entryPath,
+        );
+        if (!expectedEntry || expectedEntry !== resolveCanonicalAbsolutePathComparisonIdentity(
+            entry.materializedEntryPath,
+        )) continue;
+        try {
+            const canonical = realpathSync(entry.materializedEntryPath);
+            if (!canonicalAbsolutePathsEqual(canonical, entry.sourceEntryRoot)) continue;
+            roots.push({ lexical: entry.materializedEntryPath, canonical });
+        } catch {
+            // Missing or retargeted materialized entries cannot reconstruct authority.
+        }
+    }
+    return roots;
 }
 
 function isAuthorizedBySourceRoot(
@@ -54,15 +84,29 @@ function canonicalizeMissingPathFromSourceRoot(
     lexicalPath: string,
     roots: readonly Readonly<{ lexical: string; canonical: string }>[],
 ): string | null {
-    for (const root of roots) {
-        if (isCanonicalAbsolutePathInsideRoot(root.canonical, lexicalPath)) {
-            return lexicalPath;
+    let ancestor = lexicalPath;
+    while (true) {
+        try {
+            const canonicalAncestor = realpathSync(ancestor);
+            if (!statSync(canonicalAncestor).isDirectory()) return null;
+            const canonicalPath = resolve(canonicalAncestor, relative(ancestor, lexicalPath));
+            return isAuthorizedBySourceRoot(lexicalPath, canonicalPath, roots)
+                ? canonicalPath : null;
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
         }
-        if (isCanonicalAbsolutePathInsideRoot(root.lexical, lexicalPath)) {
-            return resolve(root.canonical, relative(root.lexical, lexicalPath));
+        try {
+            // A dangling link is present, not an absent directory. Its future
+            // target cannot acquire authority from its lexical source spelling.
+            lstatSync(ancestor);
+            return null;
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
         }
+        const parent = dirname(ancestor);
+        if (parent === ancestor) return null;
+        ancestor = parent;
     }
-    return null;
 }
 
 export function validateExternalSessionObservationWatchFileChanges(params: Readonly<{
@@ -70,6 +114,7 @@ export function validateExternalSessionObservationWatchFileChanges(params: Reado
     linkedSource: AgentExternalSessionsResolvedIdentity;
     filesystemReadAllowedPaths: ReadonlySet<string>;
     previouslyAuthorizedFiles?: ReadonlySet<string>;
+    materializedStateObservationBinding?: ConnectedServiceMaterializedStateObservationBinding;
 }>): ExternalAgentObservationWatchFileChangesV1 | null | undefined {
     if (!params.requested) {
         return undefined;
@@ -84,7 +129,7 @@ export function validateExternalSessionObservationWatchFileChanges(params: Reado
         return null;
     }
     const previouslyAuthorizedFiles = params.previouslyAuthorizedFiles ?? new Set();
-    const roots = sourceRoots(params.linkedSource);
+    const roots = sourceRoots(params.linkedSource, params.materializedStateObservationBinding);
     if (roots.length === 0) {
         return null;
     }
@@ -98,10 +143,11 @@ export function validateExternalSessionObservationWatchFileChanges(params: Reado
                 return null;
             }
         } catch {
-            canonicalFile = lexicalFile;
-            if (!previouslyAuthorizedFiles.has(canonicalFile)) {
+            const missingCanonicalFile = canonicalizeMissingPathFromSourceRoot(lexicalFile, roots);
+            if (!missingCanonicalFile || !previouslyAuthorizedFiles.has(missingCanonicalFile)) {
                 return null;
             }
+            canonicalFile = missingCanonicalFile;
         }
         if (!isAuthorizedBySourceRoot(lexicalFile, canonicalFile, roots)) {
             return null;

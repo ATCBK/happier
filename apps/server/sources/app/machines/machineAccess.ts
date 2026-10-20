@@ -9,14 +9,17 @@ import { MachineRecipientKeyEnvelopePageQueryV1Schema, type AccessibleMachineAcc
 import { type PrincipalRefV1 } from '@happier-dev/protocol/teams/principal';
 import { resolveMachineRpcRoutePolicy } from '@happier-dev/protocol/machines/peer/mediation/rpc/routePolicyV1';
 import { isRequesterProjectExecutionActionV1 } from '@happier-dev/protocol/actions/projectActionFamily';
-import { inTx, type Tx } from '@/storage/inTx';
+import { getActionSpec, SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
+import { inTx, TransactionReplayRequiredError, type Tx } from '@/storage/inTx';
+import { getDbProviderFromEnv } from '@/storage/db';
 import { isEffectiveTeamMembership } from '@/app/teams/memberships/effectiveMembership';
 import { isEffectiveTeamGroupMembership } from '@/app/teams/groups/effectiveGroupMembership';
 import { deriveAccountRecipientEnvelopeReadinessFromRow } from '@/app/encryption/accountRecipientEnvelopeReadiness';
 import { projectRecipientContentKey, RECIPIENT_READINESS_SELECT } from '@/app/session/encryption/sessionDataKeyRecipientProjection';
 import { resolveAccountDisplayLabelV1, ACCOUNT_DISPLAY_PROFILE_SELECT } from '@/app/account/profile/accountDisplayProfile';
-import { markAccountsChanged } from '@/app/changes/markAccountChanged';
+import { acquireAccountChangePublicationLocksInTx, assertAccountChangePublicationAudienceInTx, beforeAccountChangePublication, markAccountsChanged } from '@/app/changes/markAccountChanged';
 import { resolveEffectiveAccountEncryptionModeFromAccountRow } from '@/app/encryption/accountEncryptionMode';
+import { captureMachineAccessImpactsInTx, applyMachineAccessImpactsInTx } from './machineAccessEffects';
 
 type MachineActor = Readonly<{ actorAccountId: string; machineId: string }>;
 export interface MachineAccessFacts {
@@ -31,12 +34,15 @@ export interface MachineAccessFacts {
 }
 const refusal = (code: MachineAccessRefusalCode): MachineAccessRefusalV1 => ({ kind: 'refused', code });
 
-async function readFactsInTx(tx: Tx, machineId: string) {
-    return tx.machine.findUnique({ where: { id: machineId }, select: {
+const MACHINE_RESOURCE_FACTS_SELECT = {
         id: true, kind: true, accountId: true, metadata: true, metadataVersion: true,
         daemonState: true, daemonStateVersion: true, dataEncryptionKey: true,
         installationId: true, active: true, revokedAt: true, replacedByMachineId: true,
         account: { select: { ...ACCOUNT_DISPLAY_PROFILE_SELECT, encryptionMode: true, status: true } },
+    } as const;
+
+const MACHINE_ACCESS_FACTS_SELECT = {
+        ...MACHINE_RESOURCE_FACTS_SELECT,
         accountGrants: { select: { accountId: true, accessLevel: true, account: { select: { status: true, ...ACCOUNT_DISPLAY_PROFILE_SELECT } } } },
         teamGrants: { select: { teamId: true, accessLevel: true, team: { select: { name: true, archivedAt: true,
             memberships: { select: { accountId: true, status: true, account: { select: { status: true } } } },
@@ -45,7 +51,10 @@ async function readFactsInTx(tx: Tx, machineId: string) {
             name: true, teamId: true, archivedAt: true, team: { select: { archivedAt: true } },
             memberships: { select: { teamMembership: { select: { accountId: true, status: true, account: { select: { status: true } } } } } },
         } } } },
-    } });
+    } as const;
+
+async function readFactsInTx(tx: Tx, machineId: string) {
+    return tx.machine.findUnique({ where: { id: machineId }, select: MACHINE_ACCESS_FACTS_SELECT });
 }
 type MachineFacts = NonNullable<Awaited<ReturnType<typeof readFactsInTx>>>;
 type Contribution = Readonly<{ principal: PrincipalRefV1; level: 'view' | 'admin'; displayName: string | null; accountIds: readonly string[] }>;
@@ -198,7 +207,41 @@ export interface MachineAdmissionInput extends MachineActor {
     actionId?: string;
 }
 export async function resolveMachineAdmissionInTx(tx: Tx, input: MachineAdmissionInput): Promise<MachineAdmission> {
-    const row = await readFactsInTx(tx, input.machineId);
+    const rows = await readMachineAdmissionFactsInTx(tx, input.actorAccountId, [input.machineId]);
+    return resolveMachineAdmissionFromFactsInTx(tx, rows.get(input.machineId) ?? null, input);
+}
+
+/** Ownership decides the role without reading unrelated foreign grant graphs. */
+async function readMachineAdmissionFactsInTx(tx: Tx, actorAccountId: string, machineIds: readonly string[]): Promise<ReadonlyMap<string, MachineFacts>> {
+    const rows = await tx.machine.findMany({ where: { id: { in: [...machineIds] } }, select: MACHINE_RESOURCE_FACTS_SELECT });
+    const result = new Map<string, MachineFacts>();
+    for (const row of rows) if (row.accountId === actorAccountId) {
+        // Account status, mode, content, installation and lifecycle still reach
+        // the same admission policy. Grants cannot change an owner's role.
+        result.set(row.id, { ...row, accountGrants: [], teamGrants: [], groupGrants: [] });
+    }
+    const foreignIds = rows.filter(row => row.accountId !== actorAccountId).map(row => row.id);
+    if (foreignIds.length > 0) {
+        const foreignRows = await tx.machine.findMany({ where: { id: { in: foreignIds } }, select: MACHINE_ACCESS_FACTS_SELECT });
+        for (const row of foreignRows) result.set(row.id, row);
+    }
+    return result;
+}
+
+/** Set-oriented default-use admission; point and batch readers share every policy decision. */
+export async function resolveMachineAdmissionsInTx(tx: Tx, input: Readonly<{
+    actorAccountId: string; machineIds: readonly string[];
+}>): Promise<ReadonlyMap<string, MachineAdmission>> {
+    const machineIds = [...new Set(input.machineIds)];
+    if (machineIds.length === 0) return new Map();
+    const byId = await readMachineAdmissionFactsInTx(tx, input.actorAccountId, machineIds);
+    const result = new Map<string, MachineAdmission>();
+    for (const machineId of machineIds) result.set(machineId, await resolveMachineAdmissionFromFactsInTx(tx, byId.get(machineId) ?? null,
+        { actorAccountId: input.actorAccountId, machineId }));
+    return result;
+}
+
+async function resolveMachineAdmissionFromFactsInTx(tx: Tx, row: MachineFacts | null, input: MachineAdmissionInput): Promise<MachineAdmission> {
     const access = row && await accessFromFactsInTx(tx, row, input.actorAccountId);
     if (!row || !access) return { kind: 'denied', code: 'access_denied' };
     if (!resourceContentMatchesMode(row, access.encryptionMode)) return { kind: 'denied', code: 'encryption_material_unavailable' };
@@ -206,7 +249,6 @@ export async function resolveMachineAdmissionInTx(tx: Tx, input: MachineAdmissio
     let requiredRole = input.requiredRole ?? 'use';
     let method = input.rpcMethod;
     if (input.actionId && !method) {
-        const { getActionSpec, SignedRootActionIdSchema } = await import('@happier-dev/protocol/actions');
         const actionId = SignedRootActionIdSchema.safeParse(input.actionId);
         const spec = actionId.success ? getActionSpec(actionId.data) : null;
         // Session creation/resume uses admitted requester custody at the Action ingress.
@@ -274,15 +316,49 @@ async function managerInTx(tx: Tx, input: MachineActor, options: Readonly<{ requ
         && !row.revokedAt && !row.replacedByMachineId ? row : null;
 }
 async function mutationImpactInTx(tx: Tx, machineId: string, accountIds: readonly string[]) {
-    const { captureMachineAccessImpactsInTx } = await import('./machineAccessEffects');
     return captureMachineAccessImpactsInTx(tx, { machineIds: [machineId], accountIds });
 }
 async function publishMutationInTx(tx: Tx, impacts: Awaited<ReturnType<typeof mutationImpactInTx>>, changedAccountId?: string) {
-    const { applyMachineAccessImpactsInTx } = await import('./machineAccessEffects');
     await applyMachineAccessImpactsInTx(tx, { impacts: impacts.values(), grantRosterChanged: true, ...(changedAccountId ? { directGrantChangedAccountId: changedAccountId } : {}) });
+}
+/** Fence existing and prospective recipients before authority, key or grant reads. */
+export async function acquireMachineAccessPublicationLocksInTx(tx: Tx, machineId: string, principal?: PrincipalRefV1): Promise<void> {
+    const provider = getDbProviderFromEnv(process.env, 'postgres');
+    if (provider === 'sqlite') return;
+    const readAudience = async () => {
+        const accountIds = await resolveCurrentMachineRecipientAccountIdsInTx(tx, machineId);
+        if (principal?.kind === 'account') accountIds.push(principal.accountId);
+        else if (principal?.kind === 'team') {
+            const team = await tx.team.findUnique({ where: { id: principal.teamId },
+                select: { memberships: { select: { accountId: true } } } });
+            accountIds.push(...team?.memberships.map(member => member.accountId) ?? []);
+        } else if (principal?.kind === 'group') {
+            const group = await tx.teamGroup.findUnique({ where: { id: principal.groupId },
+                select: { memberships: { select: { teamMembership: { select: { accountId: true } } } } } });
+            accountIds.push(...group?.memberships.map(member => member.teamMembership.accountId) ?? []);
+        }
+        return accountIds;
+    };
+    const captured = new Set(await readAudience());
+    await acquireAccountChangePublicationLocksInTx(tx, [...captured], { includeSingleAccount: true });
+    if (provider === 'postgres') {
+        // Content Account admission permits peer Machine writes. Stabilize the
+        // expected content/key basis before grant and recipient-tuple work;
+        // MySQL's existing exclusive Account admission already excludes peers.
+        await tx.$queryRawUnsafe('SELECT "id" FROM "Machine" WHERE "id" = $1 FOR NO KEY UPDATE', machineId);
+    }
+    // ReadCommitted can observe audience growth during the wait. Replay through
+    // inTx rather than extending a sorted lock set with a lower-id recipient.
+    if ((await readAudience()).some(accountId => !captured.has(accountId))) {
+        throw new TransactionReplayRequiredError('transaction-account-audience-changed');
+    }
+    beforeAccountChangePublication(tx, [...captured], async () => {
+        assertAccountChangePublicationAudienceInTx(tx, await readAudience());
+    });
 }
 /** Idempotent per-principal grants; Manage can delegate Manage without replacing custody. */
 export async function setMachineAccessGrantInTx(tx: Tx, input: MachineActor & Readonly<{ principal: PrincipalRefV1; level: 'view' | 'admin' }>): Promise<MachineAccessMutationResultV1> {
+    await acquireMachineAccessPublicationLocksInTx(tx, input.machineId, input.principal);
     const row = await managerInTx(tx, input);
     if (!row) return refusal('access_denied');
     if (row.kind !== 'persistent') return refusal('unsupported_operation');
@@ -334,6 +410,7 @@ export async function setMachineAccessGrantInTx(tx: Tx, input: MachineActor & Re
 
 /** Direct Leave removes only self's direct tuple; surviving inherited contributions remain. */
 export async function removeMachineAccessGrantInTx(tx: Tx, input: MachineActor & Readonly<{ principal: PrincipalRefV1; leave?: boolean }>): Promise<MachineAccessMutationResultV1> {
+    await acquireMachineAccessPublicationLocksInTx(tx, input.machineId, input.principal);
     const row = await readFactsInTx(tx, input.machineId);
     if (!row) return refusal('access_denied');
     const principal = input.principal;
@@ -395,6 +472,7 @@ export async function readMachineRecipientCensusInTx(tx: Tx, input: MachineActor
 }
 /** Atomic opaque tuple commit after current Manage, holder, whole-blob versions and recipient binding recheck. */
 export async function commitMachineRecipientKeyEnvelopesInTx(tx: Tx, input: MachineRecipientKeyEnvelopeCommitInputV1 & Readonly<{ actorAccountId: string }>): Promise<MachineRecipientKeyEnvelopeCommitResponseV1 | MachineAccessRefusalV1> {
+    await acquireMachineAccessPublicationLocksInTx(tx, input.machineId);
     const row = await managerInTx(tx, input, { requireCurrentKeyHolder: true });
     if (!row) return refusal('access_denied');
     const encryptionMode = resourceMode(row);

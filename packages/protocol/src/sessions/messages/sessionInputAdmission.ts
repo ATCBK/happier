@@ -4,6 +4,10 @@ import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 import { z } from 'zod/mini';
 import { CallerInputConstraintsV1Schema } from '../../auth/callerInputConstraintsV1.js';
 import { sha256 } from '@noble/hashes/sha2';
+import { ActionRequestAttributionV1Schema } from '../../actions/actionRequestAttributionV1.js';
+import { isRunFollowOriginalV1, SessionFollowInputV1Schema } from '../follow/sessionFollowInputV1.js';
+import { DiscussionAddressingV1Schema } from '../../discussions/references.js';
+import { SessionFollowSourceOccurrenceWitnessesV1Schema, SessionFollowRelationWitnessesV1Schema } from '../follow/sessionFollowSourceOccurrenceV1.js';
 
 import {
   assertNonEscalatingPermissionMode,
@@ -19,6 +23,8 @@ import { PluginContributionLocalIdSchema } from '../../plugins/contributionIdent
 import { PluginIdSchema } from '../../plugins/pluginId.js';
 import { AgentPermissionIntentV1Schema } from '../../runtime/permissionIntentV1.js';
 import { SessionIdSchema, TurnIdSchema } from '../idsV1.js';
+import { SessionMessageRefV1Schema } from './sessionMessageRefV1.js';
+import { SessionMessageReplyResolvedOutcomeV1Schema } from './sessionMessageReplyV1.js';
 import { SessionWorkDepthV1Schema } from '../creation/sessionCreateOriginV1.js';
 import {
   SessionMutationEqualityBase64UrlSha256V1Schema,
@@ -27,6 +33,7 @@ import {
 } from '../mutations/sessionMutationEqualityV1.js';
 import { PendingLocalIdSchema, readPendingLocalId } from '../pending/pendingLocalId.js';
 import { PendingRequestedActionV1Schema, type PendingRequestedActionV1 } from '../pending/pendingRequestedActionV1.js';
+import { HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1, RawIngressStructuredInputV1Schema } from '../../runtime/input/structuredInputV1.js';
 import { asProtocolZod } from "../../plugins/actions/internalProtocolZodAdapter.js";
 import { preservedBoundedNfcString } from '../../strings/preservedBoundedNfcString.js';
 import { WorkflowInvocationRecordIdSchema } from '../../workflows/workflowIdsV1.js';
@@ -69,11 +76,52 @@ export function serializeSessionInputRequestEqualityIntentV1(params: Readonly<{
   requestedAction: PendingRequestedActionV1;
 }>): string {
   const requestedAction = PendingRequestedActionV1Schema.parse(params.requestedAction);
+  const frame = { v: 1, requestEnvelope: params.requestEnvelope, requestedAction };
+  // Preserve canonical-JSON rejection before a projection can copy descriptors
+  // or omit the transport field. Non-media inputs keep their exact old bytes.
+  const canonical = serializeCanonicalJsonForSessionMutationEqualityV1(frame);
+  const mediaEnvelope = projectStagedMediaRequestEqualityEnvelope(params.requestEnvelope);
+  if (mediaEnvelope === null) return canonical;
   return serializeCanonicalJsonForSessionMutationEqualityV1({
-    v: 1,
-    requestEnvelope: params.requestEnvelope,
-    requestedAction,
+    ...frame,
+    requestEnvelope: mediaEnvelope,
+    // Serializer-owned domain separation prevents malformed caller input with
+    // a missing handle id from colliding with a validated semantic projection.
+    stagedMediaIdentity: 'immutableContentV1',
   });
+}
+
+function projectStagedMediaPlainInputEquality(content: unknown): Record<string, unknown> | null {
+  if (!isRecord(content) || content.t !== 'plain' || !isRecord(content.v)) return null;
+  const record = content.v;
+  if (record.role !== 'user' || !isRecord(record.content) || record.content.type !== 'text'
+    || typeof record.content.text !== 'string' || !isRecord(record.meta)) return null;
+  const meta = record.meta;
+  const structured = meta[HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1];
+  if (!isRecord(structured) || !Array.isArray(structured.composerAttachments)
+    || !RawIngressStructuredInputV1Schema.safeParse(structured).success) return null;
+  let projected = false;
+  const composerAttachments = structured.composerAttachments.map(attachment => {
+    if (!isRecord(attachment) || !isRecord(attachment.content) || attachment.content.kind !== 'stagedMedia'
+      || !isRecord(attachment.content.handle)) return attachment;
+    const { id: _transportId, ...immutableHandle } = attachment.content.handle;
+    projected = true;
+    return { ...attachment, content: { ...attachment.content, handle: immutableHandle } };
+  });
+  return projected ? { ...content, v: { ...record, meta: { ...meta,
+    [HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]: { ...structured, composerAttachments },
+  } } } : null;
+}
+
+function projectStagedMediaRequestEqualityEnvelope(envelope: unknown): Record<string, unknown> | null {
+  const plain = projectStagedMediaPlainInputEquality(envelope);
+  if (plain !== null) return plain;
+  // This is the existing trusted host's E2EE signing carrier. Do not recurse
+  // into arbitrary metadata bags or normalize staged-media lookalikes there.
+  if (!isRecord(envelope) || envelope.v !== 1 || envelope.kind !== 'sessionInputRequest'
+    || typeof envelope.localId !== 'string') return null;
+  const content = projectStagedMediaPlainInputEquality(envelope.content);
+  return content === null ? null : { ...envelope, content };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -222,6 +270,8 @@ const HappierAppProvenanceSchema = lazyZodSchema(() => z.strictObject({
   actor: z.discriminatedUnion('kind', [
     z.strictObject({ kind: z.literal('owner') }),
     z.strictObject({ kind: z.literal('sharedCollaborator') }),
+    /** Host-stamped question answerer; no grant or relationship is inferred. */
+    z.strictObject({ kind: z.literal('person'), accountId: AccountIdSchema }),
   ]),
 }));
 
@@ -382,8 +432,14 @@ const SessionInputCallerV1Schema = lazyZodSchema(() => z.discriminatedUnion('kin
 export const SessionInputSourceSessionV1Schema = lazyZodSchema(() => z.strictObject({
   sourceSessionId: asProtocolZod(SessionIdSchema),
   sourceTurnId: TurnIdSchema,
+  sourceInputId: z.optional(PendingLocalIdSchema),
   via: z.enum(['action', 'mcp']),
-}));
+  /** Host-private question context retained by Action approval/replay, never an authored query authority. */
+  discussionAddressing: z.optional(DiscussionAddressingV1Schema),
+}).check(z.refine(value => !value.discussionAddressing || value.sourceInputId !== undefined
+  && value.discussionAddressing.participantSessionId === value.sourceSessionId, {
+  path: ['discussionAddressing'], message: 'Discussion context must belong to the exact admitted source Session input',
+})));
 export type SessionInputSourceSessionV1 = z.infer<typeof SessionInputSourceSessionV1Schema>;
 
 export const SessionInputSourceAuthorityV1Schema = lazyZodSchema(() => z.strictObject({
@@ -399,19 +455,87 @@ const SessionInputAutomationV1Schema = lazyZodSchema(() => z.strictObject({
   runId: BoundedAutomationRunIdSchema,
 }));
 
+/** Exact human-selected destination; original accepted input retains the request identity. */
+export const SessionInputHumanReplyOriginV1Schema = lazyZodSchema(() => z.strictObject({
+  sessionId: asProtocolZod(SessionIdSchema),
+}));
+export type SessionInputHumanReplyOriginV1 = z.infer<typeof SessionInputHumanReplyOriginV1Schema>;
+
+/** Host-owned intent; agent and human origins never impersonate each other. */
+export const SessionInputReplyIntentV1Schema = lazyZodSchema(() => z.strictObject({
+  mode: z.enum(['wait', 'return']),
+  humanOrigin: z.optional(SessionInputHumanReplyOriginV1Schema),
+}));
+export type SessionInputReplyIntentV1 = z.infer<typeof SessionInputReplyIntentV1Schema>;
+
+/** Original correlation and host-stamped sender; neither grants answer authority. */
+export const SessionInputReturnedAnswerV1Schema = lazyZodSchema(() => z.strictObject({
+  requestSessionId: asProtocolZod(SessionIdSchema),
+  requestLocalId: PendingLocalIdSchema,
+  outcome: z.enum(['answer', 'pass', 'failed', 'cancelled', 'terminal_no_result']),
+  delivery: z.enum(['wake', 'next_turn']),
+  /** Actual return publisher, supplied by the question/input owner even after its turn ends. */
+  senderSessionId: z.optional(asProtocolZod(SessionIdSchema)),
+  answeredBy: z.optional(SessionMessageProvenanceSchema),
+  sourceMessageRef: z.optional(SessionMessageRefV1Schema),
+}));
+export type SessionInputReturnedAnswerV1 = z.infer<typeof SessionInputReturnedAnswerV1Schema>;
+
+/** Protected origin only: display attribution must never select receiver policy. */
+export function readSessionInputSenderSessionIdV1(request: SessionInputRequest | SessionInputAuthority): string | undefined {
+  return request.sourceSession?.sourceSessionId
+    ?? (request.v === 1 ? request.returnedAnswer?.senderSessionId ?? (request.followDeliveryV1
+      && !isRunFollowOriginalV1(request.followDeliveryV1.original)
+        ? request.followDeliveryV1.original.sourceSessionId : undefined) : undefined);
+}
+
 const SessionInputProtectedCommonV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   producer: SessionRoleUserProducerKindV1Schema,
   caller: z.optional(SessionInputCallerV1Schema),
   sourceSession: z.optional(SessionInputSourceSessionV1Schema),
+  discussionAddressing: z.optional(DiscussionAddressingV1Schema),
   sourceAuthority: z.optional(SessionInputSourceAuthorityV1Schema),
   automation: z.optional(SessionInputAutomationV1Schema),
+  replyIntent: z.optional(SessionInputReplyIntentV1Schema),
+  returnedAnswer: z.optional(SessionInputReturnedAnswerV1Schema),
+  followDeliveryV1: z.optional(SessionFollowInputV1Schema),
+  /** Descriptive admitted cause, stamped only by the authenticated host. */
+  actionRequestAttributionV1: z.optional(ActionRequestAttributionV1Schema),
 }));
 
 function refineProtectedInputCommon(
   value: z.infer<typeof SessionInputProtectedCommonV1Schema>,
   context: z.core.$RefinementCtx,
 ): void {
+  if (value.followDeliveryV1) {
+    if (value.returnedAnswer || value.replyIntent && !value.discussionAddressing || value.sourceAuthority || value.automation
+      || value.producer !== 'sessionAction'
+      || value.sourceSession && (isRunFollowOriginalV1(value.followDeliveryV1.original)
+        || value.sourceSession.sourceSessionId !== value.followDeliveryV1.original.sourceSessionId)) {
+      context.addIssue({ code: 'custom', path: ['followDeliveryV1'], message: 'Follow input requires its exact original source and cannot request another effect' });
+    }
+  }
+  if (value.discussionAddressing && (value.replyIntent?.mode !== 'return' || value.returnedAnswer
+    || value.producer !== 'sessionAction' && value.producer !== 'happierMcp')) {
+    context.addIssue({ code: 'custom', path: ['discussionAddressing'], message: 'Discussion addressing requires an original protected return obligation' });
+  }
+  if (value.replyIntent?.humanOrigin && (value.replyIntent.mode !== 'return'
+    || value.sourceSession || value.discussionAddressing || value.caller?.kind !== 'host'
+    || !['happierApp', 'voiceInput', 'cli'].includes(value.producer))) {
+    context.addIssue({ code: 'custom', path: ['replyIntent', 'humanOrigin'], message: 'Human reply origin requires an admitted human input' });
+  }
+  if (value.replyIntent?.mode === 'return' && !value.sourceSession && !value.discussionAddressing && !value.replyIntent.humanOrigin) {
+    context.addIssue({ code: 'custom', path: ['replyIntent'], message: 'Return intent requires an admitted causal Session' });
+  }
+  if (value.replyIntent && value.returnedAnswer) {
+    context.addIssue({ code: 'custom', path: ['returnedAnswer'], message: 'Returned information cannot request another reply' });
+  }
+  if (value.sourceSession && value.returnedAnswer?.senderSessionId
+    && value.sourceSession.sourceSessionId !== value.returnedAnswer.senderSessionId) {
+    context.addIssue({ code: 'custom', path: ['returnedAnswer', 'senderSessionId'],
+      message: 'Returned sender must match the protected source Session when both are present' });
+  }
   const admissionMode = SESSION_ROLE_USER_PRODUCER_ADMISSION_MODES_V1[value.producer];
   if (admissionMode === 'transcriptOnly') {
     context.addIssue({
@@ -518,7 +642,10 @@ const SessionInputProtectedCommonV2Schema = lazyZodSchema(() => z.strictObject({
   caller: z.optional(SessionInputCallerV1Schema),
   sourceSession: z.optional(SessionInputSourceSessionV1Schema),
   sourceAuthority: z.optional(SessionInputSourceAuthorityV1Schema),
+  replyIntent: z.optional(SessionInputReplyIntentV1Schema),
+  discussionAddressing: z.optional(DiscussionAddressingV1Schema),
   workflow: SessionInputWorkflowV2Schema,
+  actionRequestAttributionV1: z.optional(ActionRequestAttributionV1Schema),
 }));
 
 function refineProtectedWorkflowInputCommon(
@@ -527,6 +654,12 @@ function refineProtectedWorkflowInputCommon(
 ): void {
   if (value.caller?.kind === 'plugin') {
     context.addIssue({ code: 'custom', path: ['caller'], message: 'Workflow input is emitted only by the trusted host' });
+  }
+  if (value.replyIntent?.humanOrigin || value.replyIntent?.mode === 'return' && !value.sourceSession) {
+    context.addIssue({ code: 'custom', path: ['replyIntent'], message: 'Workflow returns require an admitted causal Session' });
+  }
+  if (value.discussionAddressing && value.replyIntent?.mode !== 'wait') {
+    context.addIssue({ code: 'custom', path: ['discussionAddressing'], message: 'Workflow Discussion publication observes the original invocation result' });
   }
 }
 
@@ -609,7 +742,11 @@ export function requiresAuthenticatedMachineAdmissionForSessionInputV1(
     || parsed.caller?.kind === 'plugin'
     || parsed.sourceSession !== undefined
     || parsed.sourceAuthority !== undefined
-    || parsed.automation !== undefined;
+    || parsed.automation !== undefined
+    || parsed.replyIntent?.mode === 'return' && parsed.replyIntent.humanOrigin === undefined
+    || parsed.returnedAnswer !== undefined
+    || parsed.discussionAddressing !== undefined
+    || parsed.actionRequestAttributionV1 !== undefined;
 }
 
 export function requiresAuthenticatedMachineAdmissionForSessionInput(
@@ -636,6 +773,8 @@ export function assertSessionInputAdmissionReceiptForRequestV1(params: Readonly<
   ) {
     throw new TypeError('Account admission receipts cannot attest plugin, source, or Automation input');
   }
+  assertFollowInputReceipt(params.request, receipt);
+  assertDiscussionInputReceipt(params.request, receipt);
   return receipt;
 }
 
@@ -648,7 +787,36 @@ export function assertSessionInputAdmissionReceiptForRequest(params: Readonly<{
   if (receipt.issuer === 'authenticatedAccount' && requiresAuthenticatedMachineAdmissionForSessionInput(request)) {
     throw new TypeError('Account admission receipts cannot attest protected Workflow input');
   }
+  if (request.v === 1) assertFollowInputReceipt(request, receipt);
+  assertDiscussionInputReceipt(request, receipt);
   return receipt;
+}
+
+function assertFollowInputReceipt(request: SessionInputRequestV1, receipt: SessionInputAdmissionReceiptV1): void {
+  const requested = request.followDeliveryV1;
+  const admitted = receipt.followSources;
+  if (!requested && !admitted && !receipt.followDeliveryV1) return;
+  const admittedTarget = receipt.admittedTarget;
+  if (!requested || !receipt.followDeliveryV1 || !admittedTarget
+    || receipt.issuer === 'authenticatedAccount' && (receipt.actorAccountId !== admittedTarget.accountId || receipt.sessionRelationship !== 'owner')
+    || serializeCanonicalJsonForSessionMutationEqualityV1(requested) !== serializeCanonicalJsonForSessionMutationEqualityV1(receipt.followDeliveryV1)
+    || admitted?.some(source => source.destinationSessionId !== admittedTarget.sessionId
+      || serializeCanonicalJsonForSessionMutationEqualityV1({ sourceSessionId: source.sourceSessionId,
+        ...(source.sourceMessage ? { sourceMessage: source.sourceMessage } : { sourceRequests: source.sourceRequests }) })
+        !== serializeCanonicalJsonForSessionMutationEqualityV1(requested.original))) {
+    throw new TypeError('Follow input requires its exact authenticated original occurrence receipt');
+  }
+}
+
+function assertDiscussionInputReceipt(request: SessionInputRequest, receipt: SessionInputAdmissionReceiptV1): void {
+  const admitted = receipt.issuer === 'authenticatedMachine' ? receipt.discussionAddressing : undefined;
+  if (!request.discussionAddressing && !admitted) return;
+  if (!request.discussionAddressing || !admitted || receipt.issuer !== 'authenticatedMachine'
+    || receipt.admittedTarget?.sessionId !== admitted.participantSessionId
+    || serializeCanonicalJsonForSessionMutationEqualityV1(request.discussionAddressing)
+      !== serializeCanonicalJsonForSessionMutationEqualityV1(admitted)) {
+    throw new TypeError('Discussion input requires its exact authenticated question and receiver receipt');
+  }
 }
 
 /** Validates the minimal receipt against already-settled immutable authority. */
@@ -656,10 +824,10 @@ export function assertSessionInputAdmissionReceiptForAuthorityV1(params: Readonl
   authority: unknown;
   inputAdmissionReceipt: unknown;
 }>): SessionInputAdmissionReceiptV1 {
-  const authority = SessionInputAuthorityV1Schema.parse(params.authority);
+  const authority = SessionInputAuthoritySchema.parse(params.authority);
   const { admittedPermissionCeiling: _admittedPermissionCeiling, ...requestPermission } = authority.permission;
-  return assertSessionInputAdmissionReceiptForRequestV1({
-    request: SessionInputRequestV1Schema.parse({
+  return assertSessionInputAdmissionReceiptForRequest({
+    request: SessionInputRequestSchema.parse({
       ...authority,
       permission: requestPermission,
     }),
@@ -750,10 +918,18 @@ export const PendingActivationRequestedEphemeralV1Schema = lazyZodSchema(() => z
 }));
 export type PendingActivationRequestedEphemeralV1 = z.infer<typeof PendingActivationRequestedEphemeralV1Schema>;
 
+/** Server-admitted Follow custody, never authored into the public input body. */
+export const SESSION_FOLLOW_INPUT_ADMISSION_FIELDS_V1 = {
+  followSources: z.optional(z.lazy(() => SessionFollowSourceOccurrenceWitnessesV1Schema)),
+  followRelations: z.optional(z.lazy(() => SessionFollowRelationWitnessesV1Schema)),
+  followDeliveryV1: z.optional(z.lazy(() => SessionFollowInputV1Schema)),
+};
+
 export const SessionInputAdmissionReceiptV1Schema = lazyZodSchema(() => z.discriminatedUnion('issuer', [
   z.strictObject({
     v: z.literal(1),
     issuer: z.literal('authenticatedAccount'),
+    ...SESSION_FOLLOW_INPUT_ADMISSION_FIELDS_V1,
     callerInputConstraints: zMini.optional(CallerInputConstraintsV1Schema),
     actorAccountId: AccountIdSchema,
     sessionRelationship: z.enum(['owner', 'sharedEditor', 'sharedAdmin']),
@@ -762,6 +938,8 @@ export const SessionInputAdmissionReceiptV1Schema = lazyZodSchema(() => z.discri
   z.strictObject({
     v: z.literal(1),
     issuer: z.literal('authenticatedMachine'),
+    ...SESSION_FOLLOW_INPUT_ADMISSION_FIELDS_V1,
+    discussionAddressing: z.optional(DiscussionAddressingV1Schema),
     callerInputConstraints: zMini.optional(CallerInputConstraintsV1Schema),
     admittedTarget: z.optional(SessionInputMachineTargetV1Schema),
   }),
@@ -863,7 +1041,8 @@ export type SessionInputRequestEnvelopeDigestV1 = z.infer<typeof SessionInputReq
 export const SessionInputRequestEqualityEvidenceV1Schema = SessionMutationEqualityEvidenceV1Schema;
 export type SessionInputRequestEqualityEvidenceV1 = z.infer<typeof SessionInputRequestEqualityEvidenceV1Schema>;
 
-export const SessionInputAdmissionResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
+/** Initial Pending custody; receiver policy holds belong to later settlement. */
+export const SessionInputEnqueueResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
   z.strictObject({
     status: z.literal('accepted'),
     localId: PendingLocalIdSchema,
@@ -882,6 +1061,16 @@ export const SessionInputAdmissionResultV1Schema = lazyZodSchema(() => z.discrim
     code: preservedBoundedNfcString(128, 'Admission outcome codes'),
   }),
 ]));
+export type SessionInputEnqueueResultV1 = z.infer<typeof SessionInputEnqueueResultV1Schema>;
+
+export const SessionInputAdmissionResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
+  SessionInputEnqueueResultV1Schema,
+  z.strictObject({
+    status: z.literal('held'),
+    localId: PendingLocalIdSchema,
+    code: z.enum(['autonomous_check_in', 'session_input_target_unavailable']),
+  }),
+]));
 export type SessionInputAdmissionResultV1 = z.infer<typeof SessionInputAdmissionResultV1Schema>;
 
 /**
@@ -892,6 +1081,12 @@ export type SessionInputAdmissionResultV1 = z.infer<typeof SessionInputAdmission
  */
 export const SessionMessageSendResultV1Schema = lazyZodSchema(() => z.union([
   SessionInputAdmissionResultV1Schema,
+  z.strictObject({
+    status: z.literal('replied'),
+    localId: PendingLocalIdSchema,
+    inputMessageRef: z.optional(SessionMessageRefV1Schema),
+    outcome: SessionMessageReplyResolvedOutcomeV1Schema,
+  }),
   z.strictObject({
     status: z.literal('failed'),
     localId: PendingLocalIdSchema,

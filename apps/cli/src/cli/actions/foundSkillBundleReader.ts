@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { FoundSkillBundleV1Schema, FoundSkillDownloadRequestV1Schema, type FoundSkillBundleV1 } from '@happier-dev/protocol/prompts/library/skills/foundSkillTransferV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { createTransferRecipientKeyPair, decryptEncryptedTransferChunkEnvelope } from '@happier-dev/transfers/node';
@@ -6,12 +6,12 @@ import { readFoundSkillBundle, type FoundSkillReadOptions } from '@/prompts/skil
 import { canonicalAbsolutePathsEqual } from '@/utils/path/expandHomeDirPath';
 
 export type FoundSkillMachineRpc = (machineId: string, method: string, payload: unknown, signal?: AbortSignal) => Promise<unknown>;
-const failure = z.object({ success: z.literal(false), error: z.string(), code: z.string().optional() }).strict();
-const initResponse = z.union([failure, z.object({ success: z.literal(true), downloadId: z.string().min(1),
-  chunkSizeBytes: z.number().int().positive(), sizeBytes: z.number().int().nonnegative(), name: z.string() }).strict()]);
-const chunkResponse = z.union([failure, z.object({ success: z.literal(true), payloadBase64: z.string(),
-  encryptedDataKeyEnvelopeBase64: z.string(), isLast: z.boolean() }).strict()]);
-const closeResponse = z.union([failure, z.object({ success: z.literal(true) }).strict()]);
+const failure = z.strictObject({ success: z.literal(false), error: z.string(), code: z.optional(z.string()) });
+const initResponse = z.union([failure, z.strictObject({ success: z.literal(true), downloadId: z.string().check(z.minLength(1)),
+  chunkSizeBytes: z.number().check(z.int(), z.positive()), sizeBytes: z.number().check(z.int(), z.nonnegative()), name: z.string() })]);
+const chunkResponse = z.union([failure, z.strictObject({ success: z.literal(true), payloadBase64: z.string(),
+  encryptedDataKeyEnvelopeBase64: z.string(), isLast: z.boolean() })]);
+const closeResponse = z.union([failure, z.strictObject({ success: z.literal(true) })]);
 function fail(code: string): never { throw Object.assign(new Error(code), { code }); }
 
 /** The caller supplies its local identity only after binding it to the selected Home. */

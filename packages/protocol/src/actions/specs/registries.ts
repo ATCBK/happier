@@ -13,12 +13,12 @@ export function readRegistryAgentCliLocatorV1(locator: string): Readonly<{ sourc
   if (separator < 1 || separator === locator.length - 1) throw new Error('Supply a registry item as <source>/<item>.');
   return { sourceId: registrySourceCliId(locator.slice(0, separator)), itemId: locator.slice(separator + 1) };
 }
-function registrySpec<TId extends RegistryActionIdV1>(id:TId,title:string,options:Readonly<{danger?:boolean;confirm?:boolean;write?:boolean}>={}):
+function registrySpec<TId extends RegistryActionIdV1>(id:TId,title:string,options:Readonly<{danger?:boolean;confirm?:boolean;write?:boolean;direct?:boolean}>={}):
   PreNormalizedActionSpec & Readonly<{id:TId;inputSchema:(typeof inputs)[TId];outputSchema:(typeof outputs)[TId]}> {
   const observation=(raw:unknown)=>{const value=readRecord(raw);return Object.fromEntries(
     ['sourceId','kind','existing','removed'].filter(key=>value[key]!==undefined).map(key=>[key,value[key]]));};
   return {id,title,safety:options.danger?'danger':'safe',approval:{result:options.danger?'required':'none'},
-    approvalPolicy:options.confirm?{uiConfirmation:'policy'}:{},sideEffectClass:options.write?'write':'read',
+    approvalPolicy:options.confirm?{uiConfirmation:'policy'}:options.direct?{uiConfirmation:'direct'}:{},sideEffectClass:options.write?'write':'read',
     requiredAuthority:'account_automation',executionPlacement:'account',placements:[],
     // Account-owned registries also execute on the captured Account's daemon.
     originalExecution:{accountRoot:'allowed'},
@@ -55,14 +55,14 @@ export const REGISTRY_ACTION_SPECS_V1=[
     {path:['plugins','marketplace','sources','list'],visibility:'alias' as const}]}},
   {...registrySpec('registries.sources.detect','Detect registry source'),cli:{acceptsServerId:true,commands:[
     {path:['registries','sources','detect'],positionals:['url'],visibility:'canonical' as const},{path:['registries','detect'],positionals:['url'],visibility:'alias' as const}]}},
-  {...registrySpec('registries.sources.create','Add registry source',{danger:true,write:true}),cli:{acceptsServerId:true,
+  {...registrySpec('registries.sources.create','Add registry source',{danger:true,write:true,direct:true}),cli:{acceptsServerId:true,
     inputSchema:z.extend(inputs['registries.sources.create'], {tokenSecret:z.optional(z.string().check(z.minLength(1))),npmProfile:z.optional(z.string().check(z.minLength(1)))})
       .check(z.refine(value=>!(value.tokenSecret!==undefined && value.token!==undefined), {message:'Provide one token source.'}),
         z.refine(value=>!(value.npmProfile!==undefined && value.npmRegistryProfileId!==undefined), {message:'Provide one npm profile source.'})),
     bindInput:(raw:unknown,ctx)=>{const value=readRecord(raw);return ctx.commandPath?.[0]==='plugins'?{...value,kinds:value.kinds??['plugin']}:value;},commands:[
     {path:['registries','sources','create'],positionals:['url'],visibility:'canonical' as const},{path:['registries','add'],positionals:['url'],visibility:'alias' as const},
     {path:['plugins','marketplace','sources','add'],positionals:['url'],visibility:'alias' as const}]}},
-  {...registrySpec('registries.sources.update','Change registry source',{write:true}),cli:{acceptsServerId:true,
+  {...registrySpec('registries.sources.update','Change registry source',{danger:true,write:true,direct:true}),cli:{acceptsServerId:true,
     inputSchema:z.strictObject({sourceId:z.string().check(z.minLength(1)),title:z.optional(z.string().check(z.minLength(1))),enabled:z.optional(z.boolean())}),
     bindInput:(raw:unknown,ctx)=>{const value=readRecord(raw);const command=ctx.commandPath?.at(-1);return {...value,...(command==='enable'?{enabled:true}:command==='disable'?{enabled:false}:{})};},
     commands:[{path:['registries','sources','update'],visibility:'canonical' as const},
@@ -70,7 +70,7 @@ export const REGISTRY_ACTION_SPECS_V1=[
       {path:['registries','enable'],positionals:['sourceId'],visibility:'alias' as const},{path:['registries','disable'],positionals:['sourceId'],visibility:'alias' as const},
       {path:['plugins','marketplace','sources','enable'],positionals:['sourceId'],visibility:'alias' as const},
       {path:['plugins','marketplace','sources','disable'],positionals:['sourceId'],visibility:'alias' as const}]}},
-  {...registrySpec('registries.sources.token.set','Set registry credentials',{danger:true,write:true}),cli:{acceptsServerId:true,
+  {...registrySpec('registries.sources.token.set','Set registry credentials',{danger:true,write:true,direct:true}),cli:{acceptsServerId:true,
     inputSchema:z.extend(inputs['registries.sources.token.set'], {secret:z.optional(z.string().check(z.minLength(1))),clear:z.optional(z.boolean()),
       npmProfile:z.optional(z.string().check(z.minLength(1))),clearNpmProfile:z.optional(z.boolean())})
       .check(z.refine(value=>[value.token!==undefined,value.secret!==undefined,value.clear===true].filter(Boolean).length<=1, {message:'Provide one token change.'}),

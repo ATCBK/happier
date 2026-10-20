@@ -1,4 +1,19 @@
 import { describe, expect, it } from 'vitest';
+import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import { normalizeScmHostingRepositoryIdentity } from '@happier-dev/plugin-sdk/scm';
+import {
+    TriageEntryRepositoryRefV1Schema,
+    TriageGetResultV1Schema,
+    TriageScanResultV1Schema,
+} from '@happier-dev/triage-protocol/v1';
+import {
+    activate,
+    manifest,
+    LEDGER_ACTION_IDS,
+    LEDGER_ACCOUNT_PURPOSE,
+    LEDGER_CONNECTED_ACCOUNT_ID,
+    LEDGER_CONTRIBUTION_LOCAL_ID,
+} from '../../../../tests/fixtures/plugin-platform/out-of-tree-triage-source/src/index.mjs';
 
 import {
     resolveTriageLaunchPlacementV1,
@@ -66,6 +81,65 @@ function project(
 }
 
 describe('launch placement', () => {
+    it('joins an external custom-forge scan and exact read without folding repository case', async () => {
+        const source = await createPluginTestkit({ manifest, module: { activate } });
+        const instance = {
+            v: 1,
+            instance: {
+                source: { pluginId: manifest.id, localId: LEDGER_CONTRIBUTION_LOCAL_ID },
+                sourceInstanceId: '2f1c9c4e-8c1f-4a53-9c2a-4c9a7b1d3e05',
+            },
+            binding: {
+                purpose: LEDGER_ACCOUNT_PURPOSE,
+                account: {
+                    service: { pluginId: manifest.id, localId: LEDGER_CONNECTED_ACCOUNT_ID },
+                    accountId: 'account-1',
+                },
+            },
+            localInstanceKey: 'acme/ledger',
+            configuration: { v: 1, token: 'space=acme/ledger' },
+        };
+        const canonical = normalizeScmHostingRepositoryIdentity({
+            kind: 'custom', deployment: 'https://forge.example.test/Forge', repository: 'Team/Repo',
+        });
+        if (canonical === null) throw new Error('custom_repository_identity_not_canonical');
+        try {
+            const scan = TriageScanResultV1Schema.parse(await source.invokeAction(LEDGER_ACTION_IDS.scan, {
+                v: 1, instance, page: { kind: 'initial', limit: 3 },
+            }));
+            expect(scan.kind).toBe('page');
+            if (scan.kind !== 'page') return;
+            const observed = scan.observations.find((row) => row.localRef.entryId === 'CHG-17');
+            expect(observed?.kind).toBe('present');
+            if (observed?.kind !== 'present') return;
+            const exact = TriageGetResultV1Schema.parse(await source.invokeAction(LEDGER_ACTION_IDS.get, {
+                v: 1, instance, localRef: observed.localRef, lastKnownLocator: observed.locator,
+            }));
+            expect(exact.kind).toBe('present');
+            if (exact.kind !== 'present') return;
+            expect(observed.repository).toEqual(canonical);
+            expect(exact.repository).toEqual(canonical);
+            const projects = [
+                project({ projectId: 'wrong-case', forge: { ...canonical, repository: 'team/repo' } }),
+                project({ projectId: 'matching', forge: canonical }),
+            ];
+            for (const forge of [observed.repository, exact.repository]) {
+                const placement = resolveTriageLaunchPlacementV1({ forge, projects });
+                expect(placement.kind === 'launch' && placement.candidate.projectKey).toEqual({ id: 'matching' });
+                expect(resolveTriageLaunchPlacementV1({ forge, projects: projects.slice(0, 1) }))
+                    .toEqual({ kind: 'prefill', reason: 'noMatch', candidates: [] });
+            }
+        } finally {
+            await source.dispose();
+        }
+    });
+
+    it('admits the canonical unknown hosting kind without inventing a named forge', () => {
+        const repository = { kind: 'unknown', deployment: 'https://forge.example.test', repository: 'Team/Repo' };
+        expect(TriageEntryRepositoryRefV1Schema.parse(repository)).toEqual(repository);
+        expect(TriageEntryRepositoryRefV1Schema.safeParse({ ...repository, kind: 'invented-forge' }).success)
+            .toBe(false);
+    });
     /**
      * The defect this component exists to prevent: two deployments of one forge
      * hold a repository at the same path, and without the deployment component

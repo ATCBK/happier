@@ -10,6 +10,7 @@ import type { VoiceContinuationProvenance } from '@/voice/transcript/voiceTransc
 import type { ServerAccountScope, ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import type { VoiceConversationScopeMetadata } from '@/voice/persistence/voiceConversationScopeMetadata';
+import type { VoiceIdleTarget } from '@/voice/runtime/voiceTargetStore';
 
 type VoiceSessionConversationContext = Readonly<{
   accountScope: ServerAccountScope;
@@ -197,6 +198,9 @@ function normalizeVoiceSessionSnapshot(snapshot: VoiceSessionSnapshot): VoiceSes
     ...snapshot,
     adapterId: normalizeNonEmptyString(snapshot.adapterId),
     sessionId: normalizeNonEmptyString(snapshot.sessionId),
+    // Zustand merges snapshots: omitted capability facts must retire with their owner.
+    canCommitInput: snapshot.canCommitInput,
+    canHoldToTalk: snapshot.canHoldToTalk,
     micMuted: snapshot.micMuted === true ? true : undefined,
     // Ensure optional error fields clear when omitted from a later snapshot.
     errorCode: snapshot.errorCode,
@@ -335,6 +339,19 @@ export function getVoiceSessionPresentedAttemptId(): string | null {
 
 export function getVoiceSessionPresentedBinding(): VoiceSessionBinding | null {
   return activeAttemptBinding;
+}
+
+/** Default restart stays with the presented attempt; explicit Home/composer intents remain explicit. */
+export function getVoiceSessionRestartTarget(providerId: string, accountScope: ServerAccountScope | null): VoiceIdleTarget | null {
+  const ended = endedAttempt;
+  const failed = canDismissVoiceSessionFailedAttempt(lastAttemptSnapshot);
+  const adapterId = ended?.adapterId ?? (failed ? lastAttemptSnapshot.adapterId : null);
+  const scope = ended?.accountScope ?? (failed ? activeAttemptConversationContext?.accountScope : null);
+  if (adapterId !== providerId || !areServerAccountScopesEqual(scope, accountScope)) return null;
+  const target = ended ? ended.targetSessionAddress
+    : activeAttemptBinding ? activeAttemptBinding.targetSessionAddress
+    : activeAttemptConversationContext?.targetSessionAddress ?? null;
+  return target ? { kind: 'session', sessionAddress: target } : { kind: 'global' };
 }
 
 /** The canonical observed start boundary; presentation never starts its own clock on mount. */

@@ -8,11 +8,24 @@ import {
   createActionExecutor,
   createBlockingApprovalCoordinator,
   decodePlainArtifactStoredContent,
+  encodePlainArtifactStoredContent,
   type ActionExecutorDeps,
+  type ActionExecutorContext,
   type ApprovalRequest,
 } from '@happier-dev/protocol';
+import { createConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
 
 import { createCliApprovalsArtifactStore } from './artifactStore';
+import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
+import { createLocalServiceActionConfirmationNonceV1, LocalServiceActionResultV1Schema } from '@happier-dev/protocol/local/services/actions/v1';
+import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
+import { createLocalServiceActionRoutes } from '@/daemon/local/services/actions/routes';
+import { createLocalServiceInventoryRegistry } from '@/daemon/local/services/inventory/registry';
+import { createLocalServicesDaemonFeatureGate } from '@/daemon/local/services/featureGate';
+import { createLocalServicesDaemonRuntimeActionExecutor } from '@/daemon/local/services/actions/runtimeActionExecutor';
+import { createManagedServicesOwner } from '@/plugins/runtime/invocation/services/managedServicesOwner';
+import { createManagedServiceProcessSupervisorHost } from '@/plugins/runtime/invocation/services/managedProcessSupervisor';
+import { authorizeResolvedProjectExecLaunchForHost, createProjectNativeEnvironmentIoForHost } from '@/plugins/runtime/invocation/services/exec';
 
 // Only the Account server's HTTP boundary is replaced. The real Action executor,
 // the real approval Artifact store and its codecs, and the server's versioned
@@ -20,14 +33,18 @@ import { createCliApprovalsArtifactStore } from './artifactStore';
 const http = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
+  request: vi.fn(),
   beforeUpdate: null as null | ((id: string) => void),
   failNextUpdateWith: null as null | Error,
+  failNextUpdateStatus: null as null | number,
+  loseNextUpdateResponse: false as boolean | ((id: string) => void),
 }));
-vi.mock('axios', () => ({ default: { get: http.get, post: http.post } }));
+vi.mock('axios', () => ({ default: { get: http.get, post: http.post, request: http.request } }));
 vi.mock('@/configuration', () => ({ configuration: {
   apiServerUrl: 'http://approval-settlement.invalid',
   activeServerId: 'home-1',
   activeServerDir: '/tmp/happier-cli-approval-settlement-test',
+  happyHomeDir: '/tmp/happier-cli-approval-settlement-test',
 } }));
 
 const rows = new Map<string, Record<string, unknown>>();
@@ -36,8 +53,11 @@ beforeEach(() => {
   rows.clear();
   http.beforeUpdate = null;
   http.failNextUpdateWith = null;
+  http.failNextUpdateStatus = null;
+  http.loseNextUpdateResponse = false;
   http.get.mockReset();
   http.post.mockReset();
+  http.request.mockReset();
   http.get.mockImplementation(async (url: string) => {
     const id = url.split('/').at(-1)!;
     return { status: rows.has(id) ? 200 : 404, data: rows.get(id) };
@@ -54,6 +74,11 @@ beforeEach(() => {
       http.failNextUpdateWith = null;
       throw error;
     }
+    if (http.failNextUpdateStatus !== null) {
+      const status = http.failNextUpdateStatus;
+      http.failNextUpdateStatus = null;
+      return { status, data: { error: 'upstream_error' } };
+    }
     const existing = rows.get(id)!;
     const headerMatches = body.expectedHeaderVersion === undefined || body.expectedHeaderVersion === existing.headerVersion;
     const bodyMatches = body.expectedBodyVersion === undefined || body.expectedBodyVersion === existing.bodyVersion;
@@ -69,6 +94,12 @@ beforeEach(() => {
       headerVersion,
       bodyVersion,
     });
+    if (http.loseNextUpdateResponse) {
+      const alterReceipt = http.loseNextUpdateResponse;
+      http.loseNextUpdateResponse = false;
+      if (typeof alterReceipt === 'function') alterReceipt(id);
+      throw Object.assign(new Error('Committed update response was lost'), { code: 'ECONNRESET' });
+    }
     return { status: 200, data: { success: true, headerVersion, bodyVersion } };
   });
 });
@@ -152,6 +183,345 @@ function storedBody(artifactId: string): string {
 }
 
 describe('approval settlement through the real CLI Artifact store', () => {
+  it.each(['succeeded', 'failed_after_admission', 'materialization_failed', 'rejected'] as const)(
+    'retains the admitted requester and actual personal and Team credential uses when the effect is %s',
+    async outcome => {
+      const store = createStore();
+      const personalService = { pluginId: 'example.credentials', localId: 'personal' };
+      const teamService = { pluginId: 'example.credentials', localId: 'team' };
+      const consumer = { pluginId: 'example.worker', localId: 'publish' };
+      const personalPurpose = { consumer, purpose: 'personal-write' };
+      const teamPurpose = { consumer, purpose: 'team-write' };
+      const personalAccount = { service: personalService, accountId: 'personal-profile' };
+      const teamAccount = { service: teamService, accountId: 'team-source-member' };
+      const materialized: string[] = [];
+      const owner = createConnectedAccountPurposeBindingOwner({
+        credentialOwnerAccountId: 'account-1',
+        // The persisted catalog is empty: only this exact operation's admitted
+        // bindings may select material. The real binding owner enforces them.
+        store: {
+          read: async () => ({ v: 1, bindings: [] }),
+          update: async () => { throw new Error('An operation cannot change saved credential selection'); },
+          subscribe: () => ({ dispose() {} }),
+        },
+        selectTarget: async () => { throw new Error('An approval cannot prompt for another credential'); },
+        resolveTarget: async target => target.kind === 'account'
+          ? { account: target.account, displayName: target.account.accountId === personalAccount.accountId
+              ? 'Personal release account' : 'Disclosed Team member' }
+          : null,
+        materializeAccount: async ({ account }) => {
+          materialized.push(account.accountId);
+          if (outcome === 'materialization_failed') throw new Error('Credential unavailable');
+          return { kind: 'environment', env: { PERSONAL_TOKEN: 'private-personal-material' } };
+        },
+        materializeTeamDirect: async ({ account, captureAdmittedResource }) => {
+          materialized.push(account.accountId);
+          captureAdmittedResource?.({ teamId: 'release-team', displayName: 'Team release account', resourceRevision: 7 });
+          return { kind: 'environment', env: { TEAM_TOKEN: 'private-team-material' } };
+        },
+        projectTargetAccounts: async () => { throw new Error('No credential listing is requested'); },
+        assertTargetAccountMaterializable: async () => { throw new Error('No listed-account selection is requested'); },
+      });
+      const input = { sessionId: 'release-bot', message: 'Publish the approved release' };
+      const attribution = { requestRef: 'original-input', requester: { serverId: 'home-1', accountId: 'account-1' },
+        persona: { serverId: 'home-1', sessionId: input.sessionId }, origin: null };
+      const context: ActionExecutorContext = { ...uiContext, defaultSessionId: input.sessionId,
+        actionRequestAttributionV1: attribution };
+      let effects = 0;
+      const executor = createExecutor(store, {
+        isActionApprovalRequired: id => id === 'session.message.send',
+        // Session transport is the external effect boundary. Credential choice,
+        // exact lease admission and receipt production all run their real owners.
+        sessionSendMessage: async ({ context: admitted }) => {
+          const lease = owner.activatePurposeBindings({
+            subject: { kind: 'operation', operationId: 'credential-effect-1', consumer,
+              sessionId: input.sessionId, isCurrent: () => true },
+            purposes: [personalPurpose, teamPurpose],
+            bindings: [{ purpose: personalPurpose, target: { kind: 'account', account: personalAccount } },
+              { purpose: teamPurpose, target: { kind: 'account', account: teamAccount } }],
+            directMaterialOrigins: [{ purpose: teamPurpose, resourceId: 'private-resource-id', disclosedMember: teamAccount }],
+            recordOperationCredentialUse: admitted.recordOperationCredentialUse,
+          });
+          try {
+            for (const [purpose, service, key] of [[personalPurpose, personalService, 'PERSONAL_TOKEN'],
+              [teamPurpose, teamService, 'TEAM_TOKEN']] as const) {
+              await owner.materialize({ purpose, serviceRefs: [service], exactPurposeBindingSubjectId: lease.subjectId,
+                signal: new AbortController().signal,
+                request: { kind: 'environment', keys: [key] } });
+            }
+            expect(admitted.runtimeAccountId).toBe('account-1');
+            expect(admitted.actionRequestAttributionV1).toEqual(attribution);
+            effects += 1;
+            if (outcome === 'failed_after_admission') throw Object.assign(new Error('Remote outcome unavailable'), { code: 'ECONNRESET' });
+            return { status: 'accepted', localId: 'effect-result' };
+          } finally {
+            lease.dispose();
+          }
+        },
+      });
+      const created = await executor.execute('session.message.send', input, context);
+      expect(created, JSON.stringify(created)).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+      const artifactId = String((created as { result: { artifactId: string } }).result.artifactId);
+      const decided = await executor.execute('approval.request.decide', {
+        artifactId, decision: outcome === 'rejected' ? 'reject' : 'approve',
+      }, uiContext);
+      const persisted = await store.approvalsGet({ artifactId, serverId: null });
+      expect(persisted).toMatchObject({ status: outcome === 'succeeded' ? 'executed' : outcome === 'rejected' ? 'rejected' : 'failed',
+        executionOriginV1: { actionRequestAttributionV1: attribution },
+      });
+      expect(decided).toMatchObject({ ok: true });
+      const uses = [
+        { v: 1, kind: 'connected_account', label: 'Personal release account', owner: { kind: 'account', accountId: 'account-1' },
+          service: personalService, why: { kind: 'purpose_binding', purpose: personalPurpose, target: 'account' },
+          currentness: { kind: 'current_at_materialization' } },
+        { v: 1, kind: 'team_resource', label: 'Team release account', owner: { kind: 'team', teamId: 'release-team' },
+          service: teamService, why: { kind: 'purpose_binding', purpose: teamPurpose, target: 'account' },
+          currentness: { kind: 'current_at_materialization', resourceRevision: 7 } },
+      ];
+      if (outcome === 'succeeded' || outcome === 'failed_after_admission') {
+        expect(materialized).toEqual(['personal-profile', 'team-source-member']);
+        expect(effects).toBe(1);
+        expect(persisted?.execution).toMatchObject({ operationCredentialUses: uses });
+        expect(decided).toMatchObject({ result: { execution: { operationCredentialUses: uses } } });
+      } else {
+        expect(materialized).toEqual(outcome === 'rejected' ? [] : ['personal-profile']);
+        expect(effects).toBe(0);
+        expect(persisted?.execution && 'operationCredentialUses' in persisted.execution).toBeFalsy();
+        expect(JSON.stringify(decided)).not.toContain('operationCredentialUses');
+      }
+      for (const privateValue of ['private-personal-material', 'private-team-material', 'private-resource-id']) {
+        expect(storedBody(artifactId)).not.toContain(privateValue);
+        expect(JSON.stringify(decided)).not.toContain(privateValue);
+      }
+    },
+  );
+
+  it.each(['saved', 'unavailable'] as const)('settles an unavailable Home recheck after the execution claim with its receipt %s', async receipt => {
+    const store = createStore();
+    let artifactId = '';
+    let effects = 0;
+    const executor = createExecutor(store, {
+      isApprovalExecutionOriginCurrent: async () => {
+        const current = artifactId ? await store.approvalsGet({ artifactId, serverId: null }) : null;
+        // The Home evidence boundary becomes unavailable only after the real
+        // Artifact writer has committed its execution claim.
+        if (current?.status === 'executing') {
+          if (receipt === 'unavailable') http.beforeUpdate = () => { http.failNextUpdateStatus = 503; };
+          throw Object.assign(new Error('Home evidence unavailable'), { code: 'project_requester_home_unavailable' });
+        }
+        return true;
+      },
+      homeDomainAction: async () => { effects += 1; return { ok: true }; },
+    });
+    artifactId = await createDeferred(executor, 'identity.providers.secret.replace', providerSecretInput);
+    const deciding = executor.execute('approval.request.decide', { artifactId, decision: 'approve' }, uiContext);
+    if (receipt === 'unavailable') {
+      await expect(deciding).resolves.toMatchObject({ ok: false, errorCode: 'approval_execution_outcome_unknown' });
+      expect(await store.approvalsGet({ artifactId, serverId: null })).toMatchObject({ status: 'executing' });
+      expect(effects).toBe(0);
+      return;
+    }
+    await expect(deciding)
+      .resolves.toMatchObject({ ok: true, result: { status: 'failed', execution: {
+        ok: false, effectAttempted: false, errorCode: 'project_requester_home_unavailable',
+      } } });
+    expect(await store.approvalsGet({ artifactId, serverId: null })).toMatchObject({ status: 'failed', execution: {
+      ok: false, effectAttempted: false, errorCode: 'project_requester_home_unavailable',
+    } });
+    expect(effects).toBe(0);
+    expect(storedBody(artifactId)).not.toContain(PROVIDER_SECRET);
+  });
+
+  it.each(['committed', 'server_refused'] as const)(
+    'settles Session deletion independently of the deleted Session when the terminal write is %s',
+    async terminalWrite => {
+      const store = createStore();
+      const sessionId = 'deleted-session';
+      let sessionExists = true;
+      let deleteCount = 0;
+      http.request.mockImplementation(async ({ method, url }: { method: string; url: string }) => {
+        expect(method).toBe('DELETE');
+        expect(url).toBe(`http://approval-settlement.invalid/v1/sessions/${sessionId}`);
+        deleteCount += 1;
+        sessionExists = false;
+        if (terminalWrite === 'server_refused') {
+          http.post.mockImplementationOnce(async () => ({ status: 403, data: { error: 'permission_denied' } }));
+        }
+        return { status: 200, data: { success: true } };
+      });
+      const executor = createExecutor(store, {
+        isActionApprovalRequired: actionId => actionId === 'session.delete',
+        homeDomainAction: createAccountServerActionDeps({ token: 'synthetic-token', serverId: 'home-1',
+          serverHttpBaseUrl: 'http://approval-settlement.invalid' }).homeDomainAction,
+      });
+      const context = { ...uiContext, surface: 'cli' as const, defaultSessionId: sessionId };
+      const created = await executor.execute('session.delete', { sessionId }, context);
+      expect(created).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+      const artifactId = String((created as { result: { artifactId: string } }).result.artifactId);
+      const decided = await executor.execute('approval.request.decide', { artifactId, decision: 'approve' }, context);
+      expect(sessionExists).toBe(false);
+      expect(deleteCount).toBe(1);
+      const persisted = await store.approvalsGet({ artifactId, serverId: null });
+      if (terminalWrite === 'committed') {
+        expect(decided).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
+        expect(persisted).toMatchObject({ status: 'executed', execution: { ok: true, effectAttempted: true,
+          result: { success: true } }, createdBy: { sessionId } });
+      } else {
+        expect(decided).toMatchObject({ ok: false, errorCode: 'approval_execution_outcome_unknown' });
+        expect(persisted).toMatchObject({ status: 'executing' });
+      }
+      const repeated = await executor.execute('approval.request.decide', { artifactId, decision: 'approve' }, context);
+      expect(repeated).toMatchObject(terminalWrite === 'committed'
+        ? { ok: true, result: { status: 'executed' } }
+        : { ok: false, errorCode: 'approval_execution_outcome_unknown' });
+      expect(deleteCount).toBe(1);
+    },
+  );
+
+  it.each(['committed', 'transport_failure', 'pool_unavailable', 'transaction_failed', 'terminal_receipt_lost', 'cas_conflict', 'decision_receipt_lost', 'decision_write_refused', 'different_decision_receipt'] as const)(
+    'settles a CLI-origin real managed Stop when its persistence outcome is %s',
+    async terminalWrite => {
+      const owner = createManagedServicesOwner({
+        processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon' }),
+        dependencies() { throw new Error('Project services do not use Plugin dependencies'); },
+        resolveScope() { return null; },
+      });
+      const workspace = { id: 'stop-workspace', serverId: 'home-1', machineId: 'stop-machine',
+        rootPath: process.cwd(), createdAtMs: 1 };
+      const declaration = { workspaceRefId: workspace.id, selection: { kind: 'manifest' as const, name: 'worker' } };
+      let nativeStopped = false;
+      let nativeStopCount = 0;
+      const store = createStore();
+      const terminalWriteErrors: string[] = [];
+      const gate = createLocalServicesDaemonFeatureGate({ env: {}, resolveServerFeaturesSnapshot: () => ({
+        status: 'ready', features: FeaturesResponseSchema.parse({ features: { localServices: {
+          enabled: true, inventory: { enabled: true }, actions: { enabled: true }, managed: { enabled: true },
+        } }, capabilities: {} }),
+      }) });
+      await gate.refresh();
+      expect(gate.isEnabled('localServices.actions')).toBe(true);
+      expect(gate.isEnabled('localServices.managed')).toBe(true);
+      try {
+        const handle = await owner.superviseProject({
+          workspace, declaration, cwd: workspace.rootPath,
+          requester: { serverId: workspace.serverId, accountId: 'account-1',
+            machineId: workspace.machineId, installationId: 'stop-installation' },
+          serviceId: 'project:stop-workspace:manifest:worker', specIdentity: 'reviewed-stop-worker',
+          isCurrent: () => true,
+          authorizeLaunch: ({ signal }) => authorizeResolvedProjectExecLaunchForHost({
+            signal, assertCurrent() {},
+            projectLaunch: { status: 'ready', reviewedEffectDigest: 'reviewed-stop-worker',
+              environment: { selection: { kind: 'host' }, root: workspace.rootPath, platform: process.platform,
+                io: createProjectNativeEnvironmentIoForHost({ resolveTool: async () => null }) } },
+            launch: { command: process.execPath, args: [], cwd: workspace.rootPath, env: {} },
+          }),
+          processSpec: { mode: { kind: 'native',
+            instance: { adapter: { pluginId: 'acme.native', localId: 'worker' }, nativeResourceId: 'stop-fixture' },
+            // The only service replacement is native OS/tool inspection and Stop.
+            lifecycle: {
+              inspect: async () => ({ phase: nativeStopped ? 'stopped' : 'running', readiness: 'not_reported', endpoint: null }),
+              stop: async () => {
+                nativeStopCount += 1;
+                nativeStopped = true;
+                if (terminalWrite === 'transport_failure') http.failNextUpdateWith = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+                if (terminalWrite === 'pool_unavailable') http.failNextUpdateStatus = 503;
+                if (terminalWrite === 'transaction_failed') http.failNextUpdateStatus = 500;
+                if (terminalWrite === 'terminal_receipt_lost') http.loseNextUpdateResponse = true;
+                if (terminalWrite === 'cas_conflict') http.beforeUpdate = id => {
+                  http.beforeUpdate = null;
+                  const row = rows.get(id)!;
+                  rows.set(id, { ...row, headerVersion: Number(row.headerVersion) + 1 });
+                };
+                return { status: 'stopped' };
+              },
+            },
+          } },
+        });
+        const routes = createLocalServiceActionRoutes({ machineId: workspace.machineId,
+          inventoryRegistry: createLocalServiceInventoryRegistry(), projectManagedServices: owner,
+          verifyConfirmationNonce: request => request.confirmationNonce === createLocalServiceActionConfirmationNonceV1(request),
+        });
+        const executor = createExecutor(store, {
+          isActionApprovalRequired: id => id === 'localServices.actions.stopManaged',
+          runtimeActionExecute: createLocalServicesDaemonRuntimeActionExecutor({ featureGate: gate, routes: { actionRoutes: routes } }),
+          approvalsUpdate: async args => {
+            const result = await store.approvalsUpdate(args);
+            if (!result.ok) terminalWriteErrors.push(result.errorCode);
+            return result;
+          },
+        });
+        const request = { requestId: 'stop-settlement', action: 'stop_managed' as const, force: false,
+          target: { kind: 'managed_service' as const, managedServiceId: handle.instanceId,
+            machineId: workspace.machineId, workspaceId: workspace.id, cwd: workspace.rootPath, declaration } };
+        const created = await executor.execute('localServices.actions.stopManaged', {
+          ...request, confirmationNonce: createLocalServiceActionConfirmationNonceV1(request),
+        }, { ...uiContext, surface: 'cli' });
+        expect(created).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+        const artifactId = String((created as { result: { artifactId: string } }).result.artifactId);
+        const pending = await store.approvalsGet({ artifactId, serverId: null });
+        expect(pending).toMatchObject({ status: 'open', executionOriginV1: {
+          surface: 'cli', authority: 'present_user', caller: { kind: 'host' },
+        } });
+        expect(pending?.v === 2 && pending.executionOriginV1.originalActionEnvelope).toBeUndefined();
+
+        if (terminalWrite === 'decision_receipt_lost') http.loseNextUpdateResponse = true;
+        if (terminalWrite === 'decision_write_refused') http.failNextUpdateWith = new Error('Write unavailable');
+        if (terminalWrite === 'different_decision_receipt') http.loseNextUpdateResponse = id => {
+          const row = rows.get(id)!;
+          const envelope = decodePlainArtifactStoredContent(String(row.body));
+          if (!envelope || typeof envelope !== 'object' || !('body' in envelope) || typeof envelope.body !== 'string')
+            throw new Error('Fixture approval body unavailable');
+          const approved = ApprovalRequestV2Schema.parse(JSON.parse(envelope.body));
+          if (approved.decision?.kind !== 'approve') throw new Error('Fixture decision unavailable');
+          rows.set(id, { ...row, body: encodePlainArtifactStoredContent({ body: JSON.stringify({ ...approved,
+            decision: { ...approved.decision, decidedAtMs: approved.decision.decidedAtMs + 1 },
+          }) }) });
+        };
+        const decided = await executor.execute('approval.request.decide', { artifactId, decision: 'approve' }, uiContext);
+        const persisted = await store.approvalsGet({ artifactId, serverId: null });
+        const settlementDiagnostic = JSON.stringify({ ok: decided.ok,
+          errorCode: decided.ok ? undefined : decided.errorCode,
+          status: persisted?.status,
+          executionError: persisted?.execution?.ok === false ? persisted.execution.errorCode : undefined,
+          terminalWriteErrors });
+        if (terminalWrite === 'decision_write_refused' || terminalWrite === 'different_decision_receipt') {
+          // A changed decision remains a revision conflict; neither it nor a
+          // refused consent write authorizes an execution claim.
+          expect(decided).toMatchObject({ ok: false, errorCode: terminalWrite === 'different_decision_receipt'
+            ? 'version_mismatch' : 'approval_context_unavailable' });
+          expect(persisted).toMatchObject({ status: terminalWrite === 'decision_write_refused' ? 'open' : 'approved' });
+          expect(persisted?.execution).toBeUndefined();
+          expect(nativeStopped).toBe(false);
+          expect(nativeStopCount).toBe(0);
+          return;
+        }
+        expect(nativeStopped, settlementDiagnostic).toBe(true);
+        expect(nativeStopCount).toBe(1);
+        if (terminalWrite !== 'cas_conflict') {
+          expect(terminalWriteErrors).toEqual(terminalWrite === 'terminal_receipt_lost' || terminalWrite === 'decision_receipt_lost'
+            ? ['version_mismatch'] : []);
+          expect(decided).toMatchObject({ ok: true, result: { status: 'executed' } });
+          expect(persisted).toMatchObject({ status: 'executed', execution: { ok: true } });
+          const output = LocalServiceActionResultV1Schema.parse(persisted?.execution?.ok ? persisted.execution.result : null);
+          expect(output).toMatchObject({ action: 'stop_managed', status: 'succeeded' });
+          await expect(executor.replayApprovedApprovalRequest({ artifactId }))
+            .resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
+        } else {
+          expect(decided).toMatchObject({ ok: false, errorCode: 'approval_execution_outcome_unknown' });
+          expect(persisted).toMatchObject({ status: 'executing' });
+          if (terminalWrite === 'cas_conflict') expect(terminalWriteErrors).toEqual(['version_mismatch']);
+          await expect(executor.replayApprovedApprovalRequest({ artifactId }))
+            .resolves.toMatchObject({ ok: false, errorCode: 'approval_execution_outcome_unknown' });
+        }
+        expect(nativeStopCount).toBe(1);
+      } finally {
+        http.beforeUpdate = null;
+        http.failNextUpdateWith = null;
+        await owner.dispose();
+      }
+    },
+  );
+
   it('keeps retained V1 history readable at its original Home after fail-closed replay', async () => {
     const store = createStore();
     const request = ApprovalRequestV1Schema.parse({
@@ -194,9 +564,12 @@ describe('approval settlement through the real CLI Artifact store', () => {
   it('durably cancels a blocking approval and keeps only the declared input projection', async () => {
     const store = createStore();
     const effect = vi.fn(async () => ({}));
+    const lifetime = new AbortController();
     let artifactId = '';
     const executor = createExecutor(store, {
       homeDomainAction: effect,
+      // Retain the real host waiter: this Action otherwise defaults to deferred custody.
+      hostActionApprovalLifetime: { actionId: 'identity.providers.secret.replace', signal: lifetime.signal },
       approvalsWaitForDecision: async ({ artifactId: waitedArtifactId, request }) => {
         artifactId = waitedArtifactId;
         expect(storedBody(waitedArtifactId)).toContain(PROVIDER_SECRET);
@@ -207,6 +580,7 @@ describe('approval settlement through the real CLI Artifact store', () => {
     const result = await executor.execute('identity.providers.secret.replace', providerSecretInput, {
       ...uiContext,
       surface: 'cli',
+      signal: lifetime.signal,
     });
 
     expect(result).toMatchObject({ ok: false, errorCode: 'approval_canceled' });
@@ -354,13 +728,35 @@ describe('approval settlement through the real CLI Artifact store', () => {
     expect(storedBody(artifactId)).not.toContain(SAVED_SECRET_CIPHERTEXT);
   });
 
-  it('never repeats an effect whose terminal write failed', async () => {
+  it('fresh-reads a committed terminal outcome when its update acknowledgement is lost', async () => {
+    const store = createStore();
+    let effects = 0;
+    const executor = createExecutor(store, {
+      homeDomainAction: async () => {
+        effects += 1;
+        http.loseNextUpdateResponse = true;
+        return { resourceId: 'secret-1', revision: 1 };
+      },
+    });
+    const artifactId = await createDeferred(executor, 'secrets.shared.create', savedSecretInput);
+    const decided = await executor.execute('approval.request.decide', { artifactId, decision: 'approve' }, uiContext);
+
+    expect(decided).toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true } } });
+    await expect(executor.replayApprovedApprovalRequest({ artifactId }))
+      .resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
+    expect(effects).toBe(1);
+    expect(await store.approvalsGet({ artifactId, serverId: null })).toMatchObject({ status: 'executed' });
+  });
+
+  it('never repeats an effect whose terminal write remains unavailable', async () => {
     const store = createStore();
     const effect = vi.fn(async () => ({ resourceId: 'secret-1', revision: 1 }));
     const executor = createExecutor(store, {
       homeDomainAction: async () => {
         const result = await effect();
-        http.failNextUpdateWith = new Error('socket hang up');
+        http.beforeUpdate = () => {
+          http.failNextUpdateWith = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+        };
         return result;
       },
     });

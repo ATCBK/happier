@@ -39,7 +39,7 @@ async function invokeUiPreference<TResult>(operation: () => Promise<TResult>): P
 }
 
 describe('answering-client plugin origin preferences', () => {
-    it('uses real source admission and Account CAS, preserving siblings and rejecting retired choices', async () => {
+    it('uses answering-device Run-on preferences and ignores retired Account pins through registered Actions', async () => {
         installDisconnectedServerSocketBoundary();
         const pluginId = 'acme.origin';
         let version = 1;
@@ -84,6 +84,8 @@ describe('answering-client plugin origin preferences', () => {
         vi.useFakeTimers({ toFake: ['Date'] });
         vi.setSystemTime(admittedAtMs);
         const machine = createMachineFixture({ id: 'machine', active: true, activeAt: Date.now() });
+        const origin = { serverIdentityId: 'srv_origin', sourceRef: { machineId: machine.id, pluginId,
+            sourceCustody: { kind: 'development' as const, registeredRootId: 'root' } } };
         storage.setState({ profileScope: scope, settingsScope: scope, settingsVersion: version, isDataReady: true,
             machines: { machine }, machineListByServerId: { [connection.home.id]: [machine] },
             machineListStatusByServerId: { [connection.home.id]: 'idle' },
@@ -95,6 +97,7 @@ describe('answering-client plugin origin preferences', () => {
             commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [], installedPackagesById: {
                 [pluginId]: { id: pluginId, displayName: 'Source', version: '1.0.0', enabled: true,
                     source: { kind: 'localPath', locator: 'root' }, occurrenceId: 'occurrence',
+                    executionOrigin: origin,
                     sourceCustody: { kind: 'development', registeredRootId: 'root' } },
             }, familiesById: { pluginUi: { family: 'pluginUi', entriesById: { home: {
                 id: 'home', pluginId, occurrenceId: 'occurrence', contributionKind: 'surfacePlacement', descriptorId: 'home',
@@ -113,34 +116,49 @@ describe('answering-client plugin origin preferences', () => {
         const invoke = (actionId: Parameters<typeof owner>[0]['actionId'], input: unknown) => owner({ actionId, input, context: { surface: 'ui' } });
         const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
         const registeredExecutor = createDefaultActionExecutor();
-        const invokeRegistered = async (actionId: keyof typeof PluginExecutionOriginActionOutputSchemas, input: unknown) => {
+        const invokeRegistered = async (actionId: keyof typeof PluginExecutionOriginActionOutputSchemas, input: unknown, surface: 'ui' | 'agent' = 'ui') => {
             const execution = await registeredExecutor.execute(actionId, input, {
-                surface: 'ui', serverId: scope.serverId, expectedAccountId: scope.accountId,
+                surface, serverId: scope.serverId, expectedAccountId: scope.accountId,
             });
             expect(execution.ok).toBe(true);
             if (!execution.ok) throw new Error('Registered plugin Action was not executed');
             return PluginExecutionOriginActionOutputSchemas[actionId].parse(execution.result);
         };
-        const origin = { serverIdentityId: 'srv_origin', sourceRef: { machineId: machine.id, pluginId,
-            sourceCustody: { kind: 'development' as const, registeredRootId: 'root' } } };
         try {
             expect(await invokeRegistered('plugins.execution_origin.list', { pluginId })).toMatchObject({ status: 'available',
-                settingsVersion: 1, candidates: [{ origin, version: '1.0.0', selectable: true }] });
-            expect(await invokeRegistered('plugins.execution_origin.set', { pluginId, origin, expectedSettingsVersion: version }), JSON.stringify({
+                candidates: [{ origin, version: '1.0.0', selectable: true }] });
+            const retainedAccountSettings = structuredClone(raw);
+            expect(await invokeRegistered('plugins.execution_origin.set', { pluginId, origin }), JSON.stringify({
                 requestPaths, scope, currentScope: storage.getState().settingsScope, lifetimeCurrent: lifetime.isCurrent(),
                 machines: storage.getState().machines, machineListStatusByServerId: storage.getState().machineListStatusByServerId, hasSource,
             }))
-                .toEqual({ status: 'applied', settingsVersion: 2 });
-            expect(raw).toMatchObject({ unrelated: { preserved: true }, machineAdministrationSelectionsV1: {
-                pluginExecutionOriginsByPluginId: { [pluginId]: origin, 'other.plugin': { sourceRef: { pluginId: 'other.plugin' } } },
-            } });
-            expect(await invokeRegistered('plugins.execution_origin.clear', { pluginId, expectedSettingsVersion: version }))
-                .toEqual({ status: 'applied', settingsVersion: 3 });
-            expect(raw).toMatchObject({ machineAdministrationSelectionsV1: { pluginExecutionOriginsByPluginId: { 'other.plugin': {} } } });
-            expect(Object.hasOwn((raw.machineAdministrationSelectionsV1 as { pluginExecutionOriginsByPluginId: object }).pluginExecutionOriginsByPluginId, pluginId)).toBe(false);
-            withdrawBeforeMutation = true;
-            expect(await invoke('plugins.execution_origin.set', { pluginId, origin, expectedSettingsVersion: version })).toEqual({ status: 'unavailable' });
-            expect(writes).toBe(2);
+                .toMatchObject({ status: 'applied' });
+            expect(raw).toEqual(retainedAccountSettings);
+            expect(writes).toBe(0);
+            expect(await invokeRegistered('plugins.execution_origin.list', { pluginId })).toMatchObject({
+                status: 'available', selectionSource: 'pinned', selectedOrigin: origin,
+            });
+            expect(Object.values(storage.getState().settings.machineAdministrationTargetsLocalV1))
+                .toContainEqual({ serverIdentityId: 'srv_origin', machineId: 'machine' });
+            expect(await invokeRegistered('plugins.execution_origin.clear', { pluginId }))
+                .toEqual({ status: 'applied' });
+            expect(raw).toEqual(retainedAccountSettings);
+            expect(storage.getState().settings.machineAdministrationTargetsLocalV1).toEqual({});
+            expect(await invokeRegistered('plugins.execution_origin.list', { pluginId })).toMatchObject({
+                status: 'available', selectionSource: 'auto', selectedOrigin: origin,
+            });
+            storage.setState({ settingsVersion: null });
+            expect(await invokeRegistered('plugins.execution_origin.set', { pluginId, origin }, 'agent'))
+                .toEqual({ status: 'applied' });
+            expect(Object.values(storage.getState().settings.machineAdministrationTargetsLocalV1))
+                .toContainEqual({ serverIdentityId: 'srv_origin', machineId: machine.id });
+            expect(raw).toEqual(retainedAccountSettings);
+            expect(await invokeRegistered('plugins.execution_origin.clear', { pluginId }, 'agent'))
+                .toEqual({ status: 'applied' });
+            storage.setState({ settingsVersion: version });
+            hasSource = false;
+            expect(await invoke('plugins.execution_origin.set', { pluginId, origin })).toEqual({ status: 'unavailable' });
+            expect(writes).toBe(0);
             withdrawBeforeMutation = false;
             hasSource = true;
             const hook = await renderHook(() => usePluginMachineExecutionOriginSelection({ pluginId,
@@ -148,21 +166,31 @@ describe('answering-client plugin origin preferences', () => {
                 ...readPluginUiExecutionOriginCandidates({ pluginId, projection }),
                 readSourceCandidates: () => readPluginUiExecutionOriginCandidates({ pluginId, projection: hasSource ? projection : null }).sourceCandidates,
             }));
-            expect(await invokeUiPreference(() => hook.getCurrent().selectOrigin(origin))).toMatchObject({ status: 'applied', settingsVersion: 4 });
-            expect(raw).toMatchObject({ unrelated: { preserved: true }, machineAdministrationSelectionsV1: {
-                pluginExecutionOriginsByPluginId: { [pluginId]: origin, 'other.plugin': { sourceRef: { pluginId: 'other.plugin' } } },
-            } });
+            expect(await invokeUiPreference(() => hook.getCurrent().selectOrigin(origin))).toMatchObject({ status: 'applied' });
+            expect(raw).toEqual(retainedAccountSettings);
             await hook.rerender();
-            expect(await invokeUiPreference(() => hook.getCurrent().clearOrigin())).toMatchObject({ status: 'applied', settingsVersion: 5 });
-            expect(raw).toMatchObject({ unrelated: { preserved: true }, machineAdministrationSelectionsV1: {
-                pluginExecutionOriginsByPluginId: { 'other.plugin': { sourceRef: { pluginId: 'other.plugin' } } },
-            } });
-            expect(Object.hasOwn((raw.machineAdministrationSelectionsV1 as { pluginExecutionOriginsByPluginId: object }).pluginExecutionOriginsByPluginId, pluginId)).toBe(false);
+            const remembered = storage.getState().settings.machineAdministrationTargetsLocalV1;
+            await act(async () => { storage.setState({ settings: { ...storage.getState().settings,
+                machineAdministrationSelectionsV1: { v: 1, pluginExecutionOriginsByPluginId: { [pluginId]: {
+                    serverIdentityId: 'srv_elsewhere', sourceRef: { ...origin.sourceRef, machineId: 'another-device' },
+                } } } } }); });
+            expect(hook.getCurrent().selectedOrigin).toEqual(origin);
+            expect(storage.getState().settings.machineAdministrationTargetsLocalV1).toBe(remembered);
+            const offlineMachine = { ...machine, active: false, activeAt: 0 };
+            await act(async () => { storage.setState({ machines: { machine: offlineMachine },
+                machineListByServerId: { [connection.home.id]: [offlineMachine] } }); });
+            expect(hook.getCurrent().state).toMatchObject({ kind: 'unavailable',
+                storedTarget: { serverIdentityId: 'srv_origin', machineId: machine.id } });
+            expect(hook.getCurrent().resolveExecutionOrigin()).toBeNull();
+            await act(async () => { storage.setState({ machines: { machine },
+                machineListByServerId: { [connection.home.id]: [machine] } }); });
+            expect(await invokeUiPreference(() => hook.getCurrent().clearOrigin())).toMatchObject({ status: 'applied' });
+            expect(raw).toEqual(retainedAccountSettings);
             await hook.rerender();
-            // Another settings writer advances storage after this picker captured its version.
+            // Account CAS changes cannot change this device's Run-on intent.
             version++;
-            expect(await invokeUiPreference(() => hook.getCurrent().selectOrigin(origin))).toEqual({ status: 'conflict', currentSettingsVersion: version });
-            expect(writes).toBe(4);
+            expect(await invokeUiPreference(() => hook.getCurrent().selectOrigin(origin))).toMatchObject({ status: 'applied' });
+            expect(writes).toBe(0);
             const installPolicy = (actions: Record<string, { disabledSurfaces?: readonly ['ui']; approvalRequiredSurfaces?: readonly ['ui'] }>) => {
                 raw = { ...raw, actionsSettingsV1: { v: 1, actions } };
                 version++;
@@ -173,23 +201,23 @@ describe('answering-client plugin origin preferences', () => {
             await hook.rerender();
             expect(await invokeUiPreference(() => hook.getCurrent().selectOrigin(origin))).toMatchObject({ status: 'unavailable' });
             expect(await invokeUiPreference(() => hook.getCurrent().clearOrigin())).toMatchObject({ status: 'unavailable' });
-            expect(writes).toBe(4);
+            expect(writes).toBe(0);
             await act(async () => { installPolicy({ 'plugins.execution_origin.set': { approvalRequiredSurfaces: ['ui'] } }); });
             await hook.rerender();
             const pending = await invokeUiPreference(() => hook.getCurrent().selectOrigin(origin));
             expect(pending).toMatchObject({ status: 'approvalPending' });
-            expect(writes).toBe(4);
+            expect(writes).toBe(0);
             const created = artifacts.list().map(row => ({ id: row.id,
                 request: ApprovalRequestSchema.parse(JSON.parse(artifacts.readPlainBody(row.id) ?? 'null')) }))
                 .find(({ request }) => request.actionId === 'plugins.execution_origin.set');
-            expect(created?.request).toMatchObject({ status: 'open', actionArgs: { pluginId, origin, expectedSettingsVersion: version } });
+            expect(created?.request).toMatchObject({ status: 'open', actionArgs: { pluginId, origin } });
             if (!created) throw new Error('Preference approval missing');
             expect(await invokeUiPreference(() => createDefaultActionExecutor().execute('approval.request.decide', {
                 artifactId: created.id, decision: 'approve',
             }, { surface: 'ui', serverId: scope.serverId, expectedAccountId: scope.accountId })))
                 .toMatchObject({ ok: true, result: { status: 'executed' } });
-            expect(writes).toBe(5);
-            expect(raw).toMatchObject({ machineAdministrationSelectionsV1: { pluginExecutionOriginsByPluginId: { [pluginId]: origin } } });
+            expect(writes).toBe(0);
+            expect(raw.machineAdministrationSelectionsV1).toEqual(retainedAccountSettings.machineAdministrationSelectionsV1);
             const capturedUiSelection = hook.getCurrent().selectOrigin;
             await hook.unmount();
             retireActiveServerAccountScopeLifetime();
@@ -197,8 +225,8 @@ describe('answering-client plugin origin preferences', () => {
             const approvalsBeforeStaleCallback = artifacts.list().length;
             expect(await capturedUiSelection(origin)).toEqual({ status: 'unavailable' });
             expect(artifacts.list()).toHaveLength(approvalsBeforeStaleCallback);
-            await expect(invoke('plugins.execution_origin.clear', { pluginId, expectedSettingsVersion: version })).rejects.toMatchObject({ code: 'action_account_scope_changed' });
-            expect(writes).toBe(5);
+            await expect(invoke('plugins.execution_origin.clear', { pluginId })).rejects.toMatchObject({ code: 'action_account_scope_changed' });
+            expect(writes).toBe(0);
         } finally { account.dispose(); bridge.dispose(); unpublish(); await connection.dispose(); }
     });
 });

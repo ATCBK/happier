@@ -40,6 +40,8 @@ import { seedManagedSessionDirectory } from '@/session/creation/seedManagedSessi
 import { isDefiniteSpawnPreAdmissionRejection } from '@/session/services/spawnPreAdmissionRejection';
 import { readSessionCreationTerminalSpawnErrorDetail } from '@/api/session/sessionCreationTerminalSpawnErrorDetail';
 import { prepareExecuteSpawnSessionRequest } from './prepareExecuteSpawnSessionRequest';
+import { resolveExistingSessionSpawnPreGate } from '../spawn/resolveExistingSessionSpawnPreGate';
+import { probeSessionRunnerPresence } from '../sessions/isSessionRunnerActive';
 import { refreshAccountSettingsForDaemonRequest } from './accountSettingsFreshness';
 import {
     type ProviderSpawnAuthorizationAttempt,
@@ -105,7 +107,7 @@ import {
     resolveLaunchProfileSavedSecretEnvironment,
 } from '../agentRuntime/resolveForegroundProfileSavedSecretEnvironment';
 import type { DaemonPluginChangeService } from '@/plugins/daemon/changeService';
-import { isRequesterLaunchAdmissionCurrent } from '../lifecycle/requesterWorkAttribution';
+import { resolveRequesterLaunchAdmissionFailure } from '../lifecycle/requesterWorkAttribution';
 import type { RequesterSessionRuntimeContext } from '../sessionEncryption/requesterSessionCredentials';
 import { resolveSessionMemoryCeilingBytes } from '../platform/linux/sessionMemoryCeiling';
 
@@ -115,6 +117,7 @@ type SpawnAccountUsageStore = Parameters<typeof resolveConnectedServiceAuthForSp
 type SpawnAuthGroupSwitchCoordinator = Parameters<typeof resolveConnectedServiceAuthForSpawn>[0]['authGroupSwitchCoordinator'];
 type SpawnPredictiveSwitchGuard = Parameters<typeof resolveConnectedServiceAuthForSpawn>[0]['predictiveSwitchGuard'];
 export type ExecuteSpawnSessionRequestParams = Readonly<{
+    signal?: AbortSignal;
     readMachineResourcesPolicy?: import('@/processes/toolIdleTimeouts').MachineResourcesPolicyReader;
     readSpawnFailureLimits?: SpawnFailureLimitsReader;
     checkRegistryUpdates?: () => Promise<void>;
@@ -180,9 +183,14 @@ export async function executeSpawnSessionRequest(
 ): Promise<SpawnSessionResult> {
     const startedAt = performance.now();
     let phaseStartedAt = startedAt;
+    let diagnosticSessionId = params.options.sessionId ?? params.options.existingSessionId
+        ?? params.options.requesterSessionBootstrap?.preparedSessionId;
+    const diagnosticOperationId = params.options.projectSetupOperation?.operationAcceptance?.operationId;
     const recordPreparationPhase = (phase: string): void => {
         const now = performance.now();
-        logger.info('[DAEMON RUN] Spawn preparation phase', {
+        logger.infoFile('[DAEMON RUN] Spawn preparation phase', {
+            ...(diagnosticSessionId ? { sessionId: diagnosticSessionId } : {}),
+            ...(diagnosticOperationId ? { operationId: diagnosticOperationId } : {}),
             phase, durationMs: Math.round(now - phaseStartedAt), elapsedMs: Math.round(now - startedAt),
         });
         phaseStartedAt = now;
@@ -208,10 +216,8 @@ export async function executeSpawnSessionRequest(
             activateSessionPurposeBindings: requesterRuntime.activateSessionPurposeBindings,
             activatePurposeBindings: requesterRuntime.activatePurposeBindings };
     }
-    if (!await isRequesterLaunchAdmissionCurrent(options)) {
-        return { type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
-            errorMessage: 'Requester Machine admission unavailable' };
-    }
+    const requesterAdmissionFailure = await resolveRequesterLaunchAdmissionFailure(options);
+    if (requesterAdmissionFailure) return requesterAdmissionFailure;
     let takeoverAdmission: ReturnType<PersistedTakeoverAdmissionWaiter['getRegistration']> = null;
     try {
         takeoverAdmission = options.persistedTakeoverAdmission
@@ -266,7 +272,9 @@ export async function executeSpawnSessionRequest(
                 }
             };
             await assertCurrent();
-            if (readSnapshot()?.acpCatalog?.status !== 'ready') await refreshActiveAcpCatalog({
+            // A ready projection can predate a definition just saved on another client.
+            // Admission reads the owning Account row, as selected launch profiles do.
+            await refreshActiveAcpCatalog({
                 credentials: params.credentials, operationContext: acpOperationContext,
             });
             await assertCurrent();
@@ -278,12 +286,31 @@ export async function executeSpawnSessionRequest(
                 options,
                 accountSettings: activeAccountSettingsSnapshot?.settings ?? {},
                 readAcpCatalogSnapshot,
+                ...(acpOperationContext ? { operationContext: acpOperationContext } : {}),
             },
             validateEnvVarRecordStrict,
         });
         recordPreparationPhase('request_admission');
         if ('type' in prepared) {
             return prepared;
+        }
+
+        // Recheck through the same admission owner now that persisted native
+        // identity is resolved; an earlier per-Happier-id probe cannot see aliases.
+        if (prepared.effectiveResume) {
+            const admission = await resolveExistingSessionSpawnPreGate({
+                existingSessionId: prepared.normalizedExistingSessionId,
+                providerConversation: { backendTarget: prepared.effectiveBackendTargetV2, resumeId: prepared.effectiveResume },
+                pidToTrackedSession: params.pidToTrackedSession,
+                probeSessionRunnerPresence: async (sessionId) => await probeSessionRunnerPresence({
+                    sessionId, trackedSessions: params.pidToTrackedSession.values(),
+                }),
+                waitForExitTimeoutMs: configuration.daemonSpawnExistingSessionWaitForExitMs,
+                waitForExitPollIntervalMs: configuration.daemonSpawnExistingSessionWaitForExitPollIntervalMs,
+                logDebug: (message, payload) => logger.debug(message, payload),
+                logWarn: (message, payload) => logger.warn(message, payload),
+            });
+            if (admission.shortCircuitResult) return admission.shortCircuitResult;
         }
 
         const profileResolution = resolveSpawnLaunchProfileDefaults({
@@ -333,6 +360,7 @@ export async function executeSpawnSessionRequest(
             environmentVariablesValidation,
             persistedProviderResumeState,
         } = prepared;
+        diagnosticSessionId = sessionId || normalizedExistingSessionId || diagnosticSessionId;
         let directory = preparedDirectory;
         options = {
             ...options,
@@ -342,6 +370,7 @@ export async function executeSpawnSessionRequest(
             ...(prepared.connectedServices ? { connectedServices: prepared.connectedServices } : {}),
             ...(prepared.connectedServicesUpdatedAt !== undefined
                 ? { connectedServicesUpdatedAt: prepared.connectedServicesUpdatedAt } : {}),
+            ...(prepared.teamCredentialBindings ? { teamCredentialBindings: prepared.teamCredentialBindings } : {}),
             ...(prepared.connectedServiceMaterializationIdentityV1
                 ? { connectedServiceMaterializationIdentityV1: prepared.connectedServiceMaterializationIdentityV1 } : {}),
         };
@@ -514,6 +543,7 @@ export async function executeSpawnSessionRequest(
             // runtime, so every refusal this owner can already establish is
             // established first.
             const daemonProviderLaunch = await prepareDaemonProviderLaunch({
+                signal: params.signal,
                 readModelProjection: createAccountScopedProviderModelProjectionReader({
                     serverUrl: requesterRuntime?.bootstrap.savedSecretOperationContext.serverHttpBaseUrl
                         ?? resolveServerHttpBaseUrl(),
@@ -731,10 +761,8 @@ export async function executeSpawnSessionRequest(
             let launchSessionAttachPayload = sessionAttachPayload;
             let launchOptions: SpawnSessionOptions = optionsWithProviderIsolation;
             let committedLaunchSession: CommittedDaemonLaunchSession | null = null;
-            if (!await isRequesterLaunchAdmissionCurrent(options)) return await refuseSpawn({
-                type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
-                errorMessage: 'Requester Machine admission unavailable',
-            });
+            const requesterCommitAdmissionFailure = await resolveRequesterLaunchAdmissionFailure(options);
+            if (requesterCommitAdmissionFailure) return await refuseSpawn(requesterCommitAdmissionFailure);
             if (
                 !normalizedExistingSessionId
                 && daemonLaunchRequiresCommittedSession(optionsWithProviderIsolation)
@@ -751,6 +779,7 @@ export async function executeSpawnSessionRequest(
                 if (!committed.ok) return await refuseSpawn(committed.result);
                 committedLaunchSession = committed.session;
                 launchExistingSessionId = committed.session.sessionId;
+                diagnosticSessionId = committed.session.sessionId;
                 launchSessionAttachPayload = committed.session.attachPayload;
                 launchOptions = committed.session.options;
                 if (committed.session.created) {
@@ -770,6 +799,7 @@ export async function executeSpawnSessionRequest(
                 }
             }
 
+            recordPreparationPhase('session_commit');
             if (requesterRuntime) {
                 const tag = launchOptions.sessionCreationTag;
                 const custody = normalizedExistingSessionId
@@ -780,8 +810,9 @@ export async function executeSpawnSessionRequest(
                 if (!custody) return await refuseSpawn({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
                     errorMessage: 'Requester Session custody unavailable' });
                 launchOptions = { ...launchOptions, requesterSessionCredentialFile: custody.path };
-                launchResourceScope.register({ onFailure: custody.cleanup, onExit: () => requesterRuntime.dispose() });
+                launchResourceScope.register({ onFailure: custody.cleanup, onExit: () => undefined });
             }
+            recordPreparationPhase('requester_custody');
 
             const connectedServices = await prepareDaemonConnectedServices({
                 ...(requesterRuntime ? { accountSettingsSnapshot: requesterRuntime.readAccountSettingsSnapshot(),
@@ -805,7 +836,7 @@ export async function executeSpawnSessionRequest(
                 predictiveSwitchGuard: params.predictiveSwitchGuard,
                 processEnv: params.processEnv ?? process.env,
                 connectedServicesMaterializationBaseDir: params.connectedServicesMaterializationBaseDir,
-                pluginContributions: appliedPluginRuntimeLease.registry.contributes,
+                pluginRuntimeRegistry: appliedPluginRuntimeLease.registry,
                 ...(params.activatePurposeBindings
                     ? { activatePurposeBindings: params.activatePurposeBindings }
                     : {}),
@@ -1116,6 +1147,7 @@ export async function executeSpawnSessionRequest(
                 : await createSessionInitialAccessFile(configuration.happyHomeDir, effectiveOptionsForSpawn.initialAccess);
             if (initialAccessFile) launchResourceScope.register(initialAccessFile.cleanup);
             const spawnLifecycle = await prepareDaemonSpawnLifecycle({
+                ...(effectiveOptionsForSpawn.projectSetupOperation ? { projectSetupOperation: effectiveOptionsForSpawn.projectSetupOperation } : {}),
                 ...(requesterRuntime ? { requesterSessionRuntimeContext: requesterRuntime } : {}),
                 onTrackedSessionRegistered: params.onTrackedSessionRegistered,
                 runnerAgentSessionBootstrap,
@@ -1133,6 +1165,9 @@ export async function executeSpawnSessionRequest(
                 connectedServiceAuthSessionId,
                 sessionDirectory: effectiveOptionsForSpawn.directory,
                 materializationKey,
+                ...(connectedServiceAuth?.materializedStateObservationBinding
+                    ? { materializedStateObservationBinding: connectedServiceAuth.materializedStateObservationBinding }
+                    : {}),
                 ...(connectedServiceMaterializationIdentity
                     ? { connectedServiceMaterializationIdentityV1: connectedServiceMaterializationIdentity }
                     : {}),
@@ -1159,6 +1194,7 @@ export async function executeSpawnSessionRequest(
                 deviceLocalSecretStorage: params.deviceLocalSecretStorage,
             });
             cleanupPendingSessionAttach = spawnLifecycle.cleanupPendingSessionAttach;
+            recordPreparationPhase('launch_custody');
 
             let providerCleanupTransferred = false;
             const revalidateProviderBeforeCommit = providerBindingAttempt
@@ -1177,15 +1213,27 @@ export async function executeSpawnSessionRequest(
                 }
                 : undefined;
 
-            if (!await isRequesterLaunchAdmissionCurrent(options)) return await refuseSpawn({
-                type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
-                errorMessage: 'Requester Machine admission unavailable',
-            });
-            if (options.beforeSessionRunnerLaunch && !await options.beforeSessionRunnerLaunch()) return await refuseSpawn({
-                type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
-                errorMessage: 'Session handoff launch custody unavailable',
-            });
+            const revalidateLaunchAdmission = async (): Promise<SpawnSessionResult | null> => {
+                const requesterFailure = await resolveRequesterLaunchAdmissionFailure(options);
+                const cause = requesterFailure
+                    ? requesterFailure.errorDetail?.kind === 'requester_home_unavailable'
+                        ? 'requester_home_unavailable' : 'requester_machine_admission_unavailable'
+                    : options.beforeSessionRunnerLaunch && !await options.beforeSessionRunnerLaunch()
+                        ? 'session_handoff_launch_custody_unavailable'
+                        : null;
+                if (!cause) return null;
+                logger.infoFile('[DAEMON RUN] Spawn launch admission refused', {
+                    cause, sessionId, elapsedMs: Math.round(performance.now() - startedAt),
+                });
+                return await refuseSpawn(requesterFailure ?? {
+                    type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
+                    errorMessage: 'Session handoff launch custody unavailable',
+                });
+            };
+            const launchAdmissionRefusal = await revalidateLaunchAdmission();
+            if (launchAdmissionRefusal) return launchAdmissionRefusal;
             childLaunchSubmitted = true;
+            recordPreparationPhase('runner_launch');
             const launchResources = params.readMachineResourcesPolicy?.();
             let spawnResult = await routeSpawnModeAndWaitForWebhook({
                 memoryHighBytes: launchResources
@@ -1235,11 +1283,20 @@ export async function executeSpawnSessionRequest(
                 warn: (message) => logger.warn(message),
                 sanitizeDiagnosticText: childEnvironment.sanitizeDiagnosticText,
                 createStreamingSanitizer: childEnvironment.createStreamingSanitizer,
-                revalidateBeforeCommit: revalidateProviderBeforeCommit,
+                revalidateBeforeCommit: async () => {
+                    // Preparation and Provider authorization may outlive Stop or
+                    // requester custody. Reuse their admission at physical commit.
+                    const before = await revalidateLaunchAdmission();
+                    if (before || !revalidateProviderBeforeCommit) return before;
+                    const providerRefusal = await revalidateProviderBeforeCommit();
+                    return providerRefusal ?? await revalidateLaunchAdmission();
+                },
                 onUntrackedHostedChild: () => {
                     retainResourcesForUntrackedHostedChild = true;
                 },
             });
+            if (spawnResult.type === 'success') diagnosticSessionId = spawnResult.sessionId || diagnosticSessionId;
+            recordPreparationPhase('runner_webhook');
             if (spawnResult.type === 'success' && spawnResult.sessionId && managedAllocation && managedDirectoryOwner) {
                 try {
                     await managedDirectoryOwner.bind({ allocationId: managedAllocation.allocationId, sessionId: spawnResult.sessionId });

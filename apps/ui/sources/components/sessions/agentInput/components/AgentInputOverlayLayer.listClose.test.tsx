@@ -78,10 +78,6 @@ vi.mock('./PermissionModePicker', () => ({
     PermissionModePicker: () => null,
 }));
 
-vi.mock('@/sync/domains/permissions/permissionModeOptions', () => ({
-    getPermissionModeTitleForAgentType: () => 'Permissions',
-}));
-
 const baseRootStep: SelectionListStep = {
     id: 'root',
     title: 'Root',

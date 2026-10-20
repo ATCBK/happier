@@ -161,6 +161,25 @@
                               "service"
                             ],
                             "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "purpose": {
+                                "minLength": 1,
+                                "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                "type": "string",
+                                "x-happier-max-utf8-bytes": 128
+                              },
+                              "source": {
+                                "const": "accountData"
+                              }
+                            },
+                            "required": [
+                              "purpose",
+                              "source"
+                            ],
+                            "type": "object"
                           }
                         ]
                       },
@@ -367,6 +386,25 @@
                               "service"
                             ],
                             "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "purpose": {
+                                "minLength": 1,
+                                "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                "type": "string",
+                                "x-happier-max-utf8-bytes": 128
+                              },
+                              "source": {
+                                "const": "accountData"
+                              }
+                            },
+                            "required": [
+                              "purpose",
+                              "source"
+                            ],
+                            "type": "object"
                           }
                         ]
                       },
@@ -567,6 +605,25 @@
                               "purpose",
                               "source",
                               "service"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "purpose": {
+                                "minLength": 1,
+                                "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                "type": "string",
+                                "x-happier-max-utf8-bytes": 128
+                              },
+                              "source": {
+                                "const": "accountData"
+                              }
+                            },
+                            "required": [
+                              "purpose",
+                              "source"
                             ],
                             "type": "object"
                           }
@@ -822,6 +879,25 @@
                               "purpose",
                               "source",
                               "service"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "purpose": {
+                                "minLength": 1,
+                                "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                "type": "string",
+                                "x-happier-max-utf8-bytes": 128
+                              },
+                              "source": {
+                                "const": "accountData"
+                              }
+                            },
+                            "required": [
+                              "purpose",
+                              "source"
                             ],
                             "type": "object"
                           }
@@ -1630,6 +1706,12 @@
                                   },
                                   {
                                     "const": "azure-devops"
+                                  },
+                                  {
+                                    "const": "custom"
+                                  },
+                                  {
+                                    "const": "unknown"
                                   }
                                 ]
                               },
@@ -1862,6 +1944,196 @@
                               "projectionTruncated": {
                                 "const": true
                               },
+                              "relations": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "blockedBy": {
+                                    "items": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "collisionScope": {
+                                          "minLength": 1,
+                                          "pattern": "^[^\\u0000-\\u001f\\u007f]+(?:\\u001f[^\\u0000-\\u001f\\u007f]+)?$",
+                                          "type": "string",
+                                          "x-happier-max-utf8-bytes": 192
+                                        },
+                                        "entryId": {
+                                          "minLength": 1,
+                                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                          "type": "string",
+                                          "x-happier-max-utf8-bytes": 128
+                                        },
+                                        "kindId": {
+                                          "minLength": 1,
+                                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                          "type": "string",
+                                          "x-happier-max-utf8-bytes": 128
+                                        },
+                                        "source": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "localId": {
+                                              "maxLength": 256,
+                                              "minLength": 1,
+                                              "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                              "type": "string"
+                                            },
+                                            "pluginId": {
+                                              "maxLength": 256,
+                                              "minLength": 3,
+                                              "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "pluginId",
+                                            "localId"
+                                          ],
+                                          "type": "object"
+                                        }
+                                      },
+                                      "required": [
+                                        "source",
+                                        "kindId",
+                                        "collisionScope",
+                                        "entryId"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "type": "array"
+                                  },
+                                  "children": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "complete": {
+                                        "const": true
+                                      },
+                                      "completed": {
+                                        "maximum": 9007199254740991,
+                                        "minimum": 0,
+                                        "type": "integer"
+                                      },
+                                      "entries": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "collisionScope": {
+                                              "minLength": 1,
+                                              "pattern": "^[^\\u0000-\\u001f\\u007f]+(?:\\u001f[^\\u0000-\\u001f\\u007f]+)?$",
+                                              "type": "string",
+                                              "x-happier-max-utf8-bytes": 192
+                                            },
+                                            "entryId": {
+                                              "minLength": 1,
+                                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                              "type": "string",
+                                              "x-happier-max-utf8-bytes": 128
+                                            },
+                                            "kindId": {
+                                              "minLength": 1,
+                                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                              "type": "string",
+                                              "x-happier-max-utf8-bytes": 128
+                                            },
+                                            "source": {
+                                              "additionalProperties": false,
+                                              "properties": {
+                                                "localId": {
+                                                  "maxLength": 256,
+                                                  "minLength": 1,
+                                                  "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                                  "type": "string"
+                                                },
+                                                "pluginId": {
+                                                  "maxLength": 256,
+                                                  "minLength": 3,
+                                                  "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "pluginId",
+                                                "localId"
+                                              ],
+                                              "type": "object"
+                                            }
+                                          },
+                                          "required": [
+                                            "source",
+                                            "kindId",
+                                            "collisionScope",
+                                            "entryId"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "type": "array"
+                                      },
+                                      "total": {
+                                        "maximum": 9007199254740991,
+                                        "minimum": 0,
+                                        "type": "integer"
+                                      }
+                                    },
+                                    "required": [
+                                      "total"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "parent": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "collisionScope": {
+                                        "minLength": 1,
+                                        "pattern": "^[^\\u0000-\\u001f\\u007f]+(?:\\u001f[^\\u0000-\\u001f\\u007f]+)?$",
+                                        "type": "string",
+                                        "x-happier-max-utf8-bytes": 192
+                                      },
+                                      "entryId": {
+                                        "minLength": 1,
+                                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                        "type": "string",
+                                        "x-happier-max-utf8-bytes": 128
+                                      },
+                                      "kindId": {
+                                        "minLength": 1,
+                                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                        "type": "string",
+                                        "x-happier-max-utf8-bytes": 128
+                                      },
+                                      "source": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "localId": {
+                                            "maxLength": 256,
+                                            "minLength": 1,
+                                            "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                            "type": "string"
+                                          },
+                                          "pluginId": {
+                                            "maxLength": 256,
+                                            "minLength": 3,
+                                            "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "pluginId",
+                                          "localId"
+                                        ],
+                                        "type": "object"
+                                      }
+                                    },
+                                    "required": [
+                                      "source",
+                                      "kindId",
+                                      "collisionScope",
+                                      "entryId"
+                                    ],
+                                    "type": "object"
+                                  }
+                                },
+                                "type": "object"
+                              },
                               "reviewRevision": {
                                 "additionalProperties": false,
                                 "properties": {
@@ -1906,6 +2178,16 @@
                               "state": {
                                 "additionalProperties": false,
                                 "properties": {
+                                  "completionReason": {
+                                    "anyOf": [
+                                      {
+                                        "const": "completed"
+                                      },
+                                      {
+                                        "const": "canceled"
+                                      }
+                                    ]
+                                  },
                                   "nativeLabel": {
                                     "minLength": 1,
                                     "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
@@ -1930,6 +2212,19 @@
                                         "const": "unknown"
                                       }
                                     ]
+                                  },
+                                  "stage": {
+                                    "anyOf": [
+                                      {
+                                        "const": "backlog"
+                                      },
+                                      {
+                                        "const": "unstarted"
+                                      },
+                                      {
+                                        "const": "started"
+                                      }
+                                    ]
                                   }
                                 },
                                 "required": [
@@ -1942,6 +2237,177 @@
                                 "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                                 "type": "string",
                                 "x-happier-max-utf8-bytes": 512
+                              },
+                              "taskCapabilities": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "createFields": {
+                                    "items": {
+                                      "anyOf": [
+                                        {
+                                          "const": "title"
+                                        },
+                                        {
+                                          "const": "body"
+                                        },
+                                        {
+                                          "const": "assigneeIds"
+                                        },
+                                        {
+                                          "const": "labelIds"
+                                        },
+                                        {
+                                          "const": "scopeId"
+                                        },
+                                        {
+                                          "const": "projectId"
+                                        },
+                                        {
+                                          "const": "priority"
+                                        },
+                                        {
+                                          "const": "dueDate"
+                                        },
+                                        {
+                                          "const": "estimate"
+                                        },
+                                        {
+                                          "const": "parent"
+                                        },
+                                        {
+                                          "const": "blockedBy"
+                                        }
+                                      ]
+                                    },
+                                    "type": "array",
+                                    "uniqueItems": true
+                                  },
+                                  "editFields": {
+                                    "items": {
+                                      "anyOf": [
+                                        {
+                                          "const": "title"
+                                        },
+                                        {
+                                          "const": "body"
+                                        },
+                                        {
+                                          "const": "assigneeIds"
+                                        },
+                                        {
+                                          "const": "labelIds"
+                                        },
+                                        {
+                                          "const": "scopeId"
+                                        },
+                                        {
+                                          "const": "projectId"
+                                        },
+                                        {
+                                          "const": "priority"
+                                        },
+                                        {
+                                          "const": "dueDate"
+                                        },
+                                        {
+                                          "const": "estimate"
+                                        },
+                                        {
+                                          "const": "parent"
+                                        },
+                                        {
+                                          "const": "blockedBy"
+                                        }
+                                      ]
+                                    },
+                                    "type": "array",
+                                    "uniqueItems": true
+                                  },
+                                  "transitions": {
+                                    "items": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "id": {
+                                          "minLength": 1,
+                                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                          "type": "string",
+                                          "x-happier-max-utf8-bytes": 128
+                                        },
+                                        "label": {
+                                          "minLength": 1,
+                                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                          "type": "string",
+                                          "x-happier-max-utf8-bytes": 512
+                                        },
+                                        "state": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "completionReason": {
+                                              "anyOf": [
+                                                {
+                                                  "const": "completed"
+                                                },
+                                                {
+                                                  "const": "canceled"
+                                                }
+                                              ]
+                                            },
+                                            "nativeLabel": {
+                                              "minLength": 1,
+                                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                              "type": "string",
+                                              "x-happier-max-utf8-bytes": 512
+                                            },
+                                            "presentation": {
+                                              "anyOf": [
+                                                {
+                                                  "const": "active"
+                                                },
+                                                {
+                                                  "const": "resolved"
+                                                },
+                                                {
+                                                  "const": "closed"
+                                                },
+                                                {
+                                                  "const": "suppressed"
+                                                },
+                                                {
+                                                  "const": "unknown"
+                                                }
+                                              ]
+                                            },
+                                            "stage": {
+                                              "anyOf": [
+                                                {
+                                                  "const": "backlog"
+                                                },
+                                                {
+                                                  "const": "unstarted"
+                                                },
+                                                {
+                                                  "const": "started"
+                                                }
+                                              ]
+                                            }
+                                          },
+                                          "required": [
+                                            "presentation"
+                                          ],
+                                          "type": "object"
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "label",
+                                        "state"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "type": "array"
+                                  }
+                                },
+                                "type": "object"
                               },
                               "title": {
                                 "minLength": 1,
@@ -2400,6 +2866,12 @@
                                   },
                                   {
                                     "const": "azure-devops"
+                                  },
+                                  {
+                                    "const": "custom"
+                                  },
+                                  {
+                                    "const": "unknown"
                                   }
                                 ]
                               },
@@ -2632,6 +3104,196 @@
                               "projectionTruncated": {
                                 "const": true
                               },
+                              "relations": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "blockedBy": {
+                                    "items": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "collisionScope": {
+                                          "minLength": 1,
+                                          "pattern": "^[^\\u0000-\\u001f\\u007f]+(?:\\u001f[^\\u0000-\\u001f\\u007f]+)?$",
+                                          "type": "string",
+                                          "x-happier-max-utf8-bytes": 192
+                                        },
+                                        "entryId": {
+                                          "minLength": 1,
+                                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                          "type": "string",
+                                          "x-happier-max-utf8-bytes": 128
+                                        },
+                                        "kindId": {
+                                          "minLength": 1,
+                                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                          "type": "string",
+                                          "x-happier-max-utf8-bytes": 128
+                                        },
+                                        "source": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "localId": {
+                                              "maxLength": 256,
+                                              "minLength": 1,
+                                              "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                              "type": "string"
+                                            },
+                                            "pluginId": {
+                                              "maxLength": 256,
+                                              "minLength": 3,
+                                              "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "pluginId",
+                                            "localId"
+                                          ],
+                                          "type": "object"
+                                        }
+                                      },
+                                      "required": [
+                                        "source",
+                                        "kindId",
+                                        "collisionScope",
+                                        "entryId"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "type": "array"
+                                  },
+                                  "children": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "complete": {
+                                        "const": true
+                                      },
+                                      "completed": {
+                                        "maximum": 9007199254740991,
+                                        "minimum": 0,
+                                        "type": "integer"
+                                      },
+                                      "entries": {
+                                        "items": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "collisionScope": {
+                                              "minLength": 1,
+                                              "pattern": "^[^\\u0000-\\u001f\\u007f]+(?:\\u001f[^\\u0000-\\u001f\\u007f]+)?$",
+                                              "type": "string",
+                                              "x-happier-max-utf8-bytes": 192
+                                            },
+                                            "entryId": {
+                                              "minLength": 1,
+                                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                              "type": "string",
+                                              "x-happier-max-utf8-bytes": 128
+                                            },
+                                            "kindId": {
+                                              "minLength": 1,
+                                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                              "type": "string",
+                                              "x-happier-max-utf8-bytes": 128
+                                            },
+                                            "source": {
+                                              "additionalProperties": false,
+                                              "properties": {
+                                                "localId": {
+                                                  "maxLength": 256,
+                                                  "minLength": 1,
+                                                  "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                                  "type": "string"
+                                                },
+                                                "pluginId": {
+                                                  "maxLength": 256,
+                                                  "minLength": 3,
+                                                  "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                                  "type": "string"
+                                                }
+                                              },
+                                              "required": [
+                                                "pluginId",
+                                                "localId"
+                                              ],
+                                              "type": "object"
+                                            }
+                                          },
+                                          "required": [
+                                            "source",
+                                            "kindId",
+                                            "collisionScope",
+                                            "entryId"
+                                          ],
+                                          "type": "object"
+                                        },
+                                        "type": "array"
+                                      },
+                                      "total": {
+                                        "maximum": 9007199254740991,
+                                        "minimum": 0,
+                                        "type": "integer"
+                                      }
+                                    },
+                                    "required": [
+                                      "total"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "parent": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "collisionScope": {
+                                        "minLength": 1,
+                                        "pattern": "^[^\\u0000-\\u001f\\u007f]+(?:\\u001f[^\\u0000-\\u001f\\u007f]+)?$",
+                                        "type": "string",
+                                        "x-happier-max-utf8-bytes": 192
+                                      },
+                                      "entryId": {
+                                        "minLength": 1,
+                                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                        "type": "string",
+                                        "x-happier-max-utf8-bytes": 128
+                                      },
+                                      "kindId": {
+                                        "minLength": 1,
+                                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                        "type": "string",
+                                        "x-happier-max-utf8-bytes": 128
+                                      },
+                                      "source": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "localId": {
+                                            "maxLength": 256,
+                                            "minLength": 1,
+                                            "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                            "type": "string"
+                                          },
+                                          "pluginId": {
+                                            "maxLength": 256,
+                                            "minLength": 3,
+                                            "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "pluginId",
+                                          "localId"
+                                        ],
+                                        "type": "object"
+                                      }
+                                    },
+                                    "required": [
+                                      "source",
+                                      "kindId",
+                                      "collisionScope",
+                                      "entryId"
+                                    ],
+                                    "type": "object"
+                                  }
+                                },
+                                "type": "object"
+                              },
                               "reviewRevision": {
                                 "additionalProperties": false,
                                 "properties": {
@@ -2676,6 +3338,16 @@
                               "state": {
                                 "additionalProperties": false,
                                 "properties": {
+                                  "completionReason": {
+                                    "anyOf": [
+                                      {
+                                        "const": "completed"
+                                      },
+                                      {
+                                        "const": "canceled"
+                                      }
+                                    ]
+                                  },
                                   "nativeLabel": {
                                     "minLength": 1,
                                     "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
@@ -2700,6 +3372,19 @@
                                         "const": "unknown"
                                       }
                                     ]
+                                  },
+                                  "stage": {
+                                    "anyOf": [
+                                      {
+                                        "const": "backlog"
+                                      },
+                                      {
+                                        "const": "unstarted"
+                                      },
+                                      {
+                                        "const": "started"
+                                      }
+                                    ]
                                   }
                                 },
                                 "required": [
@@ -2712,6 +3397,177 @@
                                 "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                                 "type": "string",
                                 "x-happier-max-utf8-bytes": 512
+                              },
+                              "taskCapabilities": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "createFields": {
+                                    "items": {
+                                      "anyOf": [
+                                        {
+                                          "const": "title"
+                                        },
+                                        {
+                                          "const": "body"
+                                        },
+                                        {
+                                          "const": "assigneeIds"
+                                        },
+                                        {
+                                          "const": "labelIds"
+                                        },
+                                        {
+                                          "const": "scopeId"
+                                        },
+                                        {
+                                          "const": "projectId"
+                                        },
+                                        {
+                                          "const": "priority"
+                                        },
+                                        {
+                                          "const": "dueDate"
+                                        },
+                                        {
+                                          "const": "estimate"
+                                        },
+                                        {
+                                          "const": "parent"
+                                        },
+                                        {
+                                          "const": "blockedBy"
+                                        }
+                                      ]
+                                    },
+                                    "type": "array",
+                                    "uniqueItems": true
+                                  },
+                                  "editFields": {
+                                    "items": {
+                                      "anyOf": [
+                                        {
+                                          "const": "title"
+                                        },
+                                        {
+                                          "const": "body"
+                                        },
+                                        {
+                                          "const": "assigneeIds"
+                                        },
+                                        {
+                                          "const": "labelIds"
+                                        },
+                                        {
+                                          "const": "scopeId"
+                                        },
+                                        {
+                                          "const": "projectId"
+                                        },
+                                        {
+                                          "const": "priority"
+                                        },
+                                        {
+                                          "const": "dueDate"
+                                        },
+                                        {
+                                          "const": "estimate"
+                                        },
+                                        {
+                                          "const": "parent"
+                                        },
+                                        {
+                                          "const": "blockedBy"
+                                        }
+                                      ]
+                                    },
+                                    "type": "array",
+                                    "uniqueItems": true
+                                  },
+                                  "transitions": {
+                                    "items": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "id": {
+                                          "minLength": 1,
+                                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                          "type": "string",
+                                          "x-happier-max-utf8-bytes": 128
+                                        },
+                                        "label": {
+                                          "minLength": 1,
+                                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                          "type": "string",
+                                          "x-happier-max-utf8-bytes": 512
+                                        },
+                                        "state": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "completionReason": {
+                                              "anyOf": [
+                                                {
+                                                  "const": "completed"
+                                                },
+                                                {
+                                                  "const": "canceled"
+                                                }
+                                              ]
+                                            },
+                                            "nativeLabel": {
+                                              "minLength": 1,
+                                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                              "type": "string",
+                                              "x-happier-max-utf8-bytes": 512
+                                            },
+                                            "presentation": {
+                                              "anyOf": [
+                                                {
+                                                  "const": "active"
+                                                },
+                                                {
+                                                  "const": "resolved"
+                                                },
+                                                {
+                                                  "const": "closed"
+                                                },
+                                                {
+                                                  "const": "suppressed"
+                                                },
+                                                {
+                                                  "const": "unknown"
+                                                }
+                                              ]
+                                            },
+                                            "stage": {
+                                              "anyOf": [
+                                                {
+                                                  "const": "backlog"
+                                                },
+                                                {
+                                                  "const": "unstarted"
+                                                },
+                                                {
+                                                  "const": "started"
+                                                }
+                                              ]
+                                            }
+                                          },
+                                          "required": [
+                                            "presentation"
+                                          ],
+                                          "type": "object"
+                                        }
+                                      },
+                                      "required": [
+                                        "id",
+                                        "label",
+                                        "state"
+                                      ],
+                                      "type": "object"
+                                    },
+                                    "type": "array"
+                                  }
+                                },
+                                "type": "object"
                               },
                               "title": {
                                 "minLength": 1,
@@ -3531,7 +4387,40 @@
                                   ],
                                   "type": "object"
                                 },
-                                "input": {}
+                                "input": {},
+                                "messageActionReference": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "messageId": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                      "type": "string"
+                                    },
+                                    "observedRevision": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                      "type": "string"
+                                    },
+                                    "sessionId": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                      "type": "string"
+                                    },
+                                    "v": {
+                                      "const": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "v",
+                                    "sessionId",
+                                    "messageId",
+                                    "observedRevision"
+                                  ],
+                                  "type": "object"
+                                }
                               },
                               "required": [
                                 "action"
@@ -3645,6 +4534,12 @@
                         },
                         {
                           "const": "azure-devops"
+                        },
+                        {
+                          "const": "custom"
+                        },
+                        {
+                          "const": "unknown"
                         }
                       ]
                     },
@@ -3877,6 +4772,196 @@
                     "projectionTruncated": {
                       "const": true
                     },
+                    "relations": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "blockedBy": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "collisionScope": {
+                                "minLength": 1,
+                                "pattern": "^[^\\u0000-\\u001f\\u007f]+(?:\\u001f[^\\u0000-\\u001f\\u007f]+)?$",
+                                "type": "string",
+                                "x-happier-max-utf8-bytes": 192
+                              },
+                              "entryId": {
+                                "minLength": 1,
+                                "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                "type": "string",
+                                "x-happier-max-utf8-bytes": 128
+                              },
+                              "kindId": {
+                                "minLength": 1,
+                                "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                "type": "string",
+                                "x-happier-max-utf8-bytes": 128
+                              },
+                              "source": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "localId": {
+                                    "maxLength": 256,
+                                    "minLength": 1,
+                                    "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                    "type": "string"
+                                  },
+                                  "pluginId": {
+                                    "maxLength": 256,
+                                    "minLength": 3,
+                                    "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "pluginId",
+                                  "localId"
+                                ],
+                                "type": "object"
+                              }
+                            },
+                            "required": [
+                              "source",
+                              "kindId",
+                              "collisionScope",
+                              "entryId"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "children": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "complete": {
+                              "const": true
+                            },
+                            "completed": {
+                              "maximum": 9007199254740991,
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            "entries": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "collisionScope": {
+                                    "minLength": 1,
+                                    "pattern": "^[^\\u0000-\\u001f\\u007f]+(?:\\u001f[^\\u0000-\\u001f\\u007f]+)?$",
+                                    "type": "string",
+                                    "x-happier-max-utf8-bytes": 192
+                                  },
+                                  "entryId": {
+                                    "minLength": 1,
+                                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                    "type": "string",
+                                    "x-happier-max-utf8-bytes": 128
+                                  },
+                                  "kindId": {
+                                    "minLength": 1,
+                                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                    "type": "string",
+                                    "x-happier-max-utf8-bytes": 128
+                                  },
+                                  "source": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "localId": {
+                                        "maxLength": 256,
+                                        "minLength": 1,
+                                        "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                        "type": "string"
+                                      },
+                                      "pluginId": {
+                                        "maxLength": 256,
+                                        "minLength": 3,
+                                        "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "pluginId",
+                                      "localId"
+                                    ],
+                                    "type": "object"
+                                  }
+                                },
+                                "required": [
+                                  "source",
+                                  "kindId",
+                                  "collisionScope",
+                                  "entryId"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "total": {
+                              "maximum": 9007199254740991,
+                              "minimum": 0,
+                              "type": "integer"
+                            }
+                          },
+                          "required": [
+                            "total"
+                          ],
+                          "type": "object"
+                        },
+                        "parent": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "collisionScope": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+(?:\\u001f[^\\u0000-\\u001f\\u007f]+)?$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 192
+                            },
+                            "entryId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 128
+                            },
+                            "kindId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 128
+                            },
+                            "source": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "localId": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                  "type": "string"
+                                },
+                                "pluginId": {
+                                  "maxLength": 256,
+                                  "minLength": 3,
+                                  "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "pluginId",
+                                "localId"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "source",
+                            "kindId",
+                            "collisionScope",
+                            "entryId"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "type": "object"
+                    },
                     "reviewRevision": {
                       "additionalProperties": false,
                       "properties": {
@@ -3921,6 +5006,16 @@
                     "state": {
                       "additionalProperties": false,
                       "properties": {
+                        "completionReason": {
+                          "anyOf": [
+                            {
+                              "const": "completed"
+                            },
+                            {
+                              "const": "canceled"
+                            }
+                          ]
+                        },
                         "nativeLabel": {
                           "minLength": 1,
                           "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
@@ -3945,6 +5040,19 @@
                               "const": "unknown"
                             }
                           ]
+                        },
+                        "stage": {
+                          "anyOf": [
+                            {
+                              "const": "backlog"
+                            },
+                            {
+                              "const": "unstarted"
+                            },
+                            {
+                              "const": "started"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -3957,6 +5065,177 @@
                       "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                       "type": "string",
                       "x-happier-max-utf8-bytes": 512
+                    },
+                    "taskCapabilities": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "createFields": {
+                          "items": {
+                            "anyOf": [
+                              {
+                                "const": "title"
+                              },
+                              {
+                                "const": "body"
+                              },
+                              {
+                                "const": "assigneeIds"
+                              },
+                              {
+                                "const": "labelIds"
+                              },
+                              {
+                                "const": "scopeId"
+                              },
+                              {
+                                "const": "projectId"
+                              },
+                              {
+                                "const": "priority"
+                              },
+                              {
+                                "const": "dueDate"
+                              },
+                              {
+                                "const": "estimate"
+                              },
+                              {
+                                "const": "parent"
+                              },
+                              {
+                                "const": "blockedBy"
+                              }
+                            ]
+                          },
+                          "type": "array",
+                          "uniqueItems": true
+                        },
+                        "editFields": {
+                          "items": {
+                            "anyOf": [
+                              {
+                                "const": "title"
+                              },
+                              {
+                                "const": "body"
+                              },
+                              {
+                                "const": "assigneeIds"
+                              },
+                              {
+                                "const": "labelIds"
+                              },
+                              {
+                                "const": "scopeId"
+                              },
+                              {
+                                "const": "projectId"
+                              },
+                              {
+                                "const": "priority"
+                              },
+                              {
+                                "const": "dueDate"
+                              },
+                              {
+                                "const": "estimate"
+                              },
+                              {
+                                "const": "parent"
+                              },
+                              {
+                                "const": "blockedBy"
+                              }
+                            ]
+                          },
+                          "type": "array",
+                          "uniqueItems": true
+                        },
+                        "transitions": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "id": {
+                                "minLength": 1,
+                                "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                "type": "string",
+                                "x-happier-max-utf8-bytes": 128
+                              },
+                              "label": {
+                                "minLength": 1,
+                                "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                "type": "string",
+                                "x-happier-max-utf8-bytes": 512
+                              },
+                              "state": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "completionReason": {
+                                    "anyOf": [
+                                      {
+                                        "const": "completed"
+                                      },
+                                      {
+                                        "const": "canceled"
+                                      }
+                                    ]
+                                  },
+                                  "nativeLabel": {
+                                    "minLength": 1,
+                                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                    "type": "string",
+                                    "x-happier-max-utf8-bytes": 512
+                                  },
+                                  "presentation": {
+                                    "anyOf": [
+                                      {
+                                        "const": "active"
+                                      },
+                                      {
+                                        "const": "resolved"
+                                      },
+                                      {
+                                        "const": "closed"
+                                      },
+                                      {
+                                        "const": "suppressed"
+                                      },
+                                      {
+                                        "const": "unknown"
+                                      }
+                                    ]
+                                  },
+                                  "stage": {
+                                    "anyOf": [
+                                      {
+                                        "const": "backlog"
+                                      },
+                                      {
+                                        "const": "unstarted"
+                                      },
+                                      {
+                                        "const": "started"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "presentation"
+                                ],
+                                "type": "object"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "label",
+                              "state"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "type": "object"
                     },
                     "title": {
                       "minLength": 1,
@@ -3981,6 +5260,206 @@
                   "maximum": 9007199254740991,
                   "minimum": -9007199254740991,
                   "type": "integer"
+                },
+                "taskFields": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "assigneeIds": {
+                      "items": {
+                        "minLength": 1,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                        "type": "string",
+                        "x-happier-max-utf8-bytes": 128
+                      },
+                      "type": "array"
+                    },
+                    "blockedBy": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "collisionScope": {
+                            "minLength": 1,
+                            "pattern": "^[^\\u0000-\\u001f\\u007f]+(?:\\u001f[^\\u0000-\\u001f\\u007f]+)?$",
+                            "type": "string",
+                            "x-happier-max-utf8-bytes": 192
+                          },
+                          "entryId": {
+                            "minLength": 1,
+                            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                            "type": "string",
+                            "x-happier-max-utf8-bytes": 128
+                          },
+                          "kindId": {
+                            "minLength": 1,
+                            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                            "type": "string",
+                            "x-happier-max-utf8-bytes": 128
+                          },
+                          "source": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "localId": {
+                                "maxLength": 256,
+                                "minLength": 1,
+                                "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                "type": "string"
+                              },
+                              "pluginId": {
+                                "maxLength": 256,
+                                "minLength": 3,
+                                "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "pluginId",
+                              "localId"
+                            ],
+                            "type": "object"
+                          }
+                        },
+                        "required": [
+                          "source",
+                          "kindId",
+                          "collisionScope",
+                          "entryId"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "body": {
+                      "type": "string"
+                    },
+                    "dueDate": {
+                      "anyOf": [
+                        {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        {
+                          "const": null
+                        }
+                      ]
+                    },
+                    "estimate": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "const": null
+                        }
+                      ]
+                    },
+                    "labelIds": {
+                      "items": {
+                        "minLength": 1,
+                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                        "type": "string",
+                        "x-happier-max-utf8-bytes": 128
+                      },
+                      "type": "array"
+                    },
+                    "parent": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "collisionScope": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+(?:\\u001f[^\\u0000-\\u001f\\u007f]+)?$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 192
+                            },
+                            "entryId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 128
+                            },
+                            "kindId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string",
+                              "x-happier-max-utf8-bytes": 128
+                            },
+                            "source": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "localId": {
+                                  "maxLength": 256,
+                                  "minLength": 1,
+                                  "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                  "type": "string"
+                                },
+                                "pluginId": {
+                                  "maxLength": 256,
+                                  "minLength": 3,
+                                  "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "pluginId",
+                                "localId"
+                              ],
+                              "type": "object"
+                            }
+                          },
+                          "required": [
+                            "source",
+                            "kindId",
+                            "collisionScope",
+                            "entryId"
+                          ],
+                          "type": "object"
+                        },
+                        {
+                          "const": null
+                        }
+                      ]
+                    },
+                    "priority": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "minLength": 1,
+                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                          "type": "string",
+                          "x-happier-max-utf8-bytes": 128
+                        },
+                        {
+                          "const": null
+                        }
+                      ]
+                    },
+                    "projectId": {
+                      "anyOf": [
+                        {
+                          "minLength": 1,
+                          "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                          "type": "string",
+                          "x-happier-max-utf8-bytes": 128
+                        },
+                        {
+                          "const": null
+                        }
+                      ]
+                    },
+                    "scopeId": {
+                      "minLength": 1,
+                      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                      "type": "string"
+                    },
+                    "title": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
                 },
                 "viewer": {
                   "additionalProperties": false,
@@ -7149,7 +8628,40 @@
                                           ],
                                           "type": "object"
                                         },
-                                        "input": {}
+                                        "input": {},
+                                        "messageActionReference": {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "messageId": {
+                                              "maxLength": 512,
+                                              "minLength": 1,
+                                              "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                              "type": "string"
+                                            },
+                                            "observedRevision": {
+                                              "maxLength": 512,
+                                              "minLength": 1,
+                                              "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                              "type": "string"
+                                            },
+                                            "sessionId": {
+                                              "maxLength": 512,
+                                              "minLength": 1,
+                                              "pattern": "^\\S(?:[\\s\\S]*\\S)?$(?![\\s\\S])",
+                                              "type": "string"
+                                            },
+                                            "v": {
+                                              "const": 1
+                                            }
+                                          },
+                                          "required": [
+                                            "v",
+                                            "sessionId",
+                                            "messageId",
+                                            "observedRevision"
+                                          ],
+                                          "type": "object"
+                                        }
                                       },
                                       "required": [
                                         "action"
@@ -7263,6 +8775,12 @@
                                 },
                                 {
                                   "const": "azure-devops"
+                                },
+                                {
+                                  "const": "custom"
+                                },
+                                {
+                                  "const": "unknown"
                                 }
                               ]
                             },
@@ -7495,6 +9013,196 @@
                             "projectionTruncated": {
                               "const": true
                             },
+                            "relations": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "blockedBy": {
+                                  "items": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "collisionScope": {
+                                        "minLength": 1,
+                                        "pattern": "^[^\\u0000-\\u001f\\u007f]+(?:\\u001f[^\\u0000-\\u001f\\u007f]+)?$",
+                                        "type": "string",
+                                        "x-happier-max-utf8-bytes": 192
+                                      },
+                                      "entryId": {
+                                        "minLength": 1,
+                                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                        "type": "string",
+                                        "x-happier-max-utf8-bytes": 128
+                                      },
+                                      "kindId": {
+                                        "minLength": 1,
+                                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                        "type": "string",
+                                        "x-happier-max-utf8-bytes": 128
+                                      },
+                                      "source": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "localId": {
+                                            "maxLength": 256,
+                                            "minLength": 1,
+                                            "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                            "type": "string"
+                                          },
+                                          "pluginId": {
+                                            "maxLength": 256,
+                                            "minLength": 3,
+                                            "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "pluginId",
+                                          "localId"
+                                        ],
+                                        "type": "object"
+                                      }
+                                    },
+                                    "required": [
+                                      "source",
+                                      "kindId",
+                                      "collisionScope",
+                                      "entryId"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "type": "array"
+                                },
+                                "children": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "complete": {
+                                      "const": true
+                                    },
+                                    "completed": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": 0,
+                                      "type": "integer"
+                                    },
+                                    "entries": {
+                                      "items": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "collisionScope": {
+                                            "minLength": 1,
+                                            "pattern": "^[^\\u0000-\\u001f\\u007f]+(?:\\u001f[^\\u0000-\\u001f\\u007f]+)?$",
+                                            "type": "string",
+                                            "x-happier-max-utf8-bytes": 192
+                                          },
+                                          "entryId": {
+                                            "minLength": 1,
+                                            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                            "type": "string",
+                                            "x-happier-max-utf8-bytes": 128
+                                          },
+                                          "kindId": {
+                                            "minLength": 1,
+                                            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                            "type": "string",
+                                            "x-happier-max-utf8-bytes": 128
+                                          },
+                                          "source": {
+                                            "additionalProperties": false,
+                                            "properties": {
+                                              "localId": {
+                                                "maxLength": 256,
+                                                "minLength": 1,
+                                                "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                                "type": "string"
+                                              },
+                                              "pluginId": {
+                                                "maxLength": 256,
+                                                "minLength": 3,
+                                                "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": [
+                                              "pluginId",
+                                              "localId"
+                                            ],
+                                            "type": "object"
+                                          }
+                                        },
+                                        "required": [
+                                          "source",
+                                          "kindId",
+                                          "collisionScope",
+                                          "entryId"
+                                        ],
+                                        "type": "object"
+                                      },
+                                      "type": "array"
+                                    },
+                                    "total": {
+                                      "maximum": 9007199254740991,
+                                      "minimum": 0,
+                                      "type": "integer"
+                                    }
+                                  },
+                                  "required": [
+                                    "total"
+                                  ],
+                                  "type": "object"
+                                },
+                                "parent": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "collisionScope": {
+                                      "minLength": 1,
+                                      "pattern": "^[^\\u0000-\\u001f\\u007f]+(?:\\u001f[^\\u0000-\\u001f\\u007f]+)?$",
+                                      "type": "string",
+                                      "x-happier-max-utf8-bytes": 192
+                                    },
+                                    "entryId": {
+                                      "minLength": 1,
+                                      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                      "type": "string",
+                                      "x-happier-max-utf8-bytes": 128
+                                    },
+                                    "kindId": {
+                                      "minLength": 1,
+                                      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                      "type": "string",
+                                      "x-happier-max-utf8-bytes": 128
+                                    },
+                                    "source": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "localId": {
+                                          "maxLength": 256,
+                                          "minLength": 1,
+                                          "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                          "type": "string"
+                                        },
+                                        "pluginId": {
+                                          "maxLength": 256,
+                                          "minLength": 3,
+                                          "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "pluginId",
+                                        "localId"
+                                      ],
+                                      "type": "object"
+                                    }
+                                  },
+                                  "required": [
+                                    "source",
+                                    "kindId",
+                                    "collisionScope",
+                                    "entryId"
+                                  ],
+                                  "type": "object"
+                                }
+                              },
+                              "type": "object"
+                            },
                             "reviewRevision": {
                               "additionalProperties": false,
                               "properties": {
@@ -7539,6 +9247,16 @@
                             "state": {
                               "additionalProperties": false,
                               "properties": {
+                                "completionReason": {
+                                  "anyOf": [
+                                    {
+                                      "const": "completed"
+                                    },
+                                    {
+                                      "const": "canceled"
+                                    }
+                                  ]
+                                },
                                 "nativeLabel": {
                                   "minLength": 1,
                                   "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
@@ -7563,6 +9281,19 @@
                                       "const": "unknown"
                                     }
                                   ]
+                                },
+                                "stage": {
+                                  "anyOf": [
+                                    {
+                                      "const": "backlog"
+                                    },
+                                    {
+                                      "const": "unstarted"
+                                    },
+                                    {
+                                      "const": "started"
+                                    }
+                                  ]
                                 }
                               },
                               "required": [
@@ -7575,6 +9306,177 @@
                               "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
                               "type": "string",
                               "x-happier-max-utf8-bytes": 512
+                            },
+                            "taskCapabilities": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "createFields": {
+                                  "items": {
+                                    "anyOf": [
+                                      {
+                                        "const": "title"
+                                      },
+                                      {
+                                        "const": "body"
+                                      },
+                                      {
+                                        "const": "assigneeIds"
+                                      },
+                                      {
+                                        "const": "labelIds"
+                                      },
+                                      {
+                                        "const": "scopeId"
+                                      },
+                                      {
+                                        "const": "projectId"
+                                      },
+                                      {
+                                        "const": "priority"
+                                      },
+                                      {
+                                        "const": "dueDate"
+                                      },
+                                      {
+                                        "const": "estimate"
+                                      },
+                                      {
+                                        "const": "parent"
+                                      },
+                                      {
+                                        "const": "blockedBy"
+                                      }
+                                    ]
+                                  },
+                                  "type": "array",
+                                  "uniqueItems": true
+                                },
+                                "editFields": {
+                                  "items": {
+                                    "anyOf": [
+                                      {
+                                        "const": "title"
+                                      },
+                                      {
+                                        "const": "body"
+                                      },
+                                      {
+                                        "const": "assigneeIds"
+                                      },
+                                      {
+                                        "const": "labelIds"
+                                      },
+                                      {
+                                        "const": "scopeId"
+                                      },
+                                      {
+                                        "const": "projectId"
+                                      },
+                                      {
+                                        "const": "priority"
+                                      },
+                                      {
+                                        "const": "dueDate"
+                                      },
+                                      {
+                                        "const": "estimate"
+                                      },
+                                      {
+                                        "const": "parent"
+                                      },
+                                      {
+                                        "const": "blockedBy"
+                                      }
+                                    ]
+                                  },
+                                  "type": "array",
+                                  "uniqueItems": true
+                                },
+                                "transitions": {
+                                  "items": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "id": {
+                                        "minLength": 1,
+                                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                        "type": "string",
+                                        "x-happier-max-utf8-bytes": 128
+                                      },
+                                      "label": {
+                                        "minLength": 1,
+                                        "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                        "type": "string",
+                                        "x-happier-max-utf8-bytes": 512
+                                      },
+                                      "state": {
+                                        "additionalProperties": false,
+                                        "properties": {
+                                          "completionReason": {
+                                            "anyOf": [
+                                              {
+                                                "const": "completed"
+                                              },
+                                              {
+                                                "const": "canceled"
+                                              }
+                                            ]
+                                          },
+                                          "nativeLabel": {
+                                            "minLength": 1,
+                                            "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                            "type": "string",
+                                            "x-happier-max-utf8-bytes": 512
+                                          },
+                                          "presentation": {
+                                            "anyOf": [
+                                              {
+                                                "const": "active"
+                                              },
+                                              {
+                                                "const": "resolved"
+                                              },
+                                              {
+                                                "const": "closed"
+                                              },
+                                              {
+                                                "const": "suppressed"
+                                              },
+                                              {
+                                                "const": "unknown"
+                                              }
+                                            ]
+                                          },
+                                          "stage": {
+                                            "anyOf": [
+                                              {
+                                                "const": "backlog"
+                                              },
+                                              {
+                                                "const": "unstarted"
+                                              },
+                                              {
+                                                "const": "started"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "presentation"
+                                        ],
+                                        "type": "object"
+                                      }
+                                    },
+                                    "required": [
+                                      "id",
+                                      "label",
+                                      "state"
+                                    ],
+                                    "type": "object"
+                                  },
+                                  "type": "array"
+                                }
+                              },
+                              "type": "object"
                             },
                             "title": {
                               "minLength": 1,
@@ -7599,6 +9501,206 @@
                           "maximum": 9007199254740991,
                           "minimum": -9007199254740991,
                           "type": "integer"
+                        },
+                        "taskFields": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "assigneeIds": {
+                              "items": {
+                                "minLength": 1,
+                                "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                "type": "string",
+                                "x-happier-max-utf8-bytes": 128
+                              },
+                              "type": "array"
+                            },
+                            "blockedBy": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "collisionScope": {
+                                    "minLength": 1,
+                                    "pattern": "^[^\\u0000-\\u001f\\u007f]+(?:\\u001f[^\\u0000-\\u001f\\u007f]+)?$",
+                                    "type": "string",
+                                    "x-happier-max-utf8-bytes": 192
+                                  },
+                                  "entryId": {
+                                    "minLength": 1,
+                                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                    "type": "string",
+                                    "x-happier-max-utf8-bytes": 128
+                                  },
+                                  "kindId": {
+                                    "minLength": 1,
+                                    "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                    "type": "string",
+                                    "x-happier-max-utf8-bytes": 128
+                                  },
+                                  "source": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "localId": {
+                                        "maxLength": 256,
+                                        "minLength": 1,
+                                        "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                        "type": "string"
+                                      },
+                                      "pluginId": {
+                                        "maxLength": 256,
+                                        "minLength": 3,
+                                        "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": [
+                                      "pluginId",
+                                      "localId"
+                                    ],
+                                    "type": "object"
+                                  }
+                                },
+                                "required": [
+                                  "source",
+                                  "kindId",
+                                  "collisionScope",
+                                  "entryId"
+                                ],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            },
+                            "body": {
+                              "type": "string"
+                            },
+                            "dueDate": {
+                              "anyOf": [
+                                {
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                {
+                                  "const": null
+                                }
+                              ]
+                            },
+                            "estimate": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "const": null
+                                }
+                              ]
+                            },
+                            "labelIds": {
+                              "items": {
+                                "minLength": 1,
+                                "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                "type": "string",
+                                "x-happier-max-utf8-bytes": 128
+                              },
+                              "type": "array"
+                            },
+                            "parent": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "collisionScope": {
+                                      "minLength": 1,
+                                      "pattern": "^[^\\u0000-\\u001f\\u007f]+(?:\\u001f[^\\u0000-\\u001f\\u007f]+)?$",
+                                      "type": "string",
+                                      "x-happier-max-utf8-bytes": 192
+                                    },
+                                    "entryId": {
+                                      "minLength": 1,
+                                      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                      "type": "string",
+                                      "x-happier-max-utf8-bytes": 128
+                                    },
+                                    "kindId": {
+                                      "minLength": 1,
+                                      "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                      "type": "string",
+                                      "x-happier-max-utf8-bytes": 128
+                                    },
+                                    "source": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "localId": {
+                                          "maxLength": 256,
+                                          "minLength": 1,
+                                          "pattern": "^[a-z0-9]+(?:[-/][a-z0-9]+)*$(?![\\s\\S])",
+                                          "type": "string"
+                                        },
+                                        "pluginId": {
+                                          "maxLength": 256,
+                                          "minLength": 3,
+                                          "pattern": "^(?!.*(?:^|\\.)(?:__proto__|constructor|prototype)(?:\\.|$))[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$(?![\\s\\S])",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "pluginId",
+                                        "localId"
+                                      ],
+                                      "type": "object"
+                                    }
+                                  },
+                                  "required": [
+                                    "source",
+                                    "kindId",
+                                    "collisionScope",
+                                    "entryId"
+                                  ],
+                                  "type": "object"
+                                },
+                                {
+                                  "const": null
+                                }
+                              ]
+                            },
+                            "priority": {
+                              "anyOf": [
+                                {
+                                  "type": "number"
+                                },
+                                {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
+                                {
+                                  "const": null
+                                }
+                              ]
+                            },
+                            "projectId": {
+                              "anyOf": [
+                                {
+                                  "minLength": 1,
+                                  "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                                  "type": "string",
+                                  "x-happier-max-utf8-bytes": 128
+                                },
+                                {
+                                  "const": null
+                                }
+                              ]
+                            },
+                            "scopeId": {
+                              "minLength": 1,
+                              "pattern": "^[^\\u0000-\\u001f\\u007f]+$",
+                              "type": "string"
+                            },
+                            "title": {
+                              "minLength": 1,
+                              "type": "string"
+                            }
+                          },
+                          "type": "object"
                         },
                         "viewer": {
                           "additionalProperties": false,
@@ -19228,6 +21330,24 @@
                               {
                                 "additionalProperties": false,
                                 "properties": {
+                                  "capturedAt": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "kind": {
+                                    "const": "none"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "capturedAt"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "additionalProperties": false,
+                                "properties": {
                                   "afterContext": {
                                     "items": {
                                       "type": "string"
@@ -20124,6 +22244,24 @@
                           },
                           "snapshot": {
                             "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "capturedAt": {
+                                    "maximum": 9007199254740991,
+                                    "minimum": 0,
+                                    "type": "integer"
+                                  },
+                                  "kind": {
+                                    "const": "none"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "capturedAt"
+                                ],
+                                "type": "object"
+                              },
                               {
                                 "additionalProperties": false,
                                 "properties": {
@@ -21958,6 +24096,24 @@
                           {
                             "additionalProperties": false,
                             "properties": {
+                              "capturedAt": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "kind": {
+                                "const": "none"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "capturedAt"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
                               "afterContext": {
                                 "items": {
                                   "type": "string"
@@ -23770,6 +25926,24 @@
                           {
                             "additionalProperties": false,
                             "properties": {
+                              "capturedAt": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "kind": {
+                                "const": "none"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "capturedAt"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
                               "afterContext": {
                                 "items": {
                                   "type": "string"
@@ -25575,6 +27749,24 @@
                           {
                             "additionalProperties": false,
                             "properties": {
+                              "capturedAt": {
+                                "maximum": 9007199254740991,
+                                "minimum": 0,
+                                "type": "integer"
+                              },
+                              "kind": {
+                                "const": "none"
+                              }
+                            },
+                            "required": [
+                              "kind",
+                              "capturedAt"
+                            ],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
                               "afterContext": {
                                 "items": {
                                   "type": "string"
@@ -26971,6 +29163,7 @@
     "sessionHeaderActions": [],
     "sessionInfoSections": [],
     "settings": [],
+    "skills": [],
     "systemTools": [],
     "targetedPluginContributions": [
       {
@@ -27462,7 +29655,7 @@
             "plugins.triage.sourceSettings.control.restoreLabel": "Restore {title} to PRs & Issues",
             "plugins.triage.sourceSettings.control.update": "Update",
             "plugins.triage.sourceSettings.control.updateLabel": "Update {title} from the provider",
-            "plugins.triage.sourceSettings.empty.description": "Connect a {source} account, then refresh.",
+            "plugins.triage.sourceSettings.empty.description": "Connect your {source} account, then refresh.",
             "plugins.triage.sourceSettings.empty.title": "No {source} scopes to add",
             "plugins.triage.sourceSettings.failure.authentication": "The connected account is no longer authorized. Reconnect it in Connected Accounts.",
             "plugins.triage.sourceSettings.failure.permission": "The connected account cannot see this scope. Grant it access at the provider.",
@@ -27852,7 +30045,7 @@
             "plugins.triage.sourceSettings.control.restoreLabel": "Восстановить {title} в разделе PR и задач",
             "plugins.triage.sourceSettings.control.update": "Обновить",
             "plugins.triage.sourceSettings.control.updateLabel": "Обновить {title} из данных провайдера",
-            "plugins.triage.sourceSettings.empty.description": "Подключите аккаунт {source}, затем обновите страницу.",
+            "plugins.triage.sourceSettings.empty.description": "Подключите свой аккаунт {source}, затем обновите страницу.",
             "plugins.triage.sourceSettings.empty.title": "Нет областей {source}, которые можно добавить",
             "plugins.triage.sourceSettings.failure.authentication": "Подключенный аккаунт больше не авторизован. Переподключите его в разделе «Подключенные аккаунты».",
             "plugins.triage.sourceSettings.failure.permission": "Подключенный аккаунт не видит эту область. Предоставьте ему доступ на стороне провайдера.",
@@ -28242,7 +30435,7 @@
             "plugins.triage.sourceSettings.control.restoreLabel": "Przywróć {title} do sekcji PR-ów i zgłoszeń",
             "plugins.triage.sourceSettings.control.update": "Zaktualizuj",
             "plugins.triage.sourceSettings.control.updateLabel": "Zaktualizuj {title} na podstawie danych dostawcy",
-            "plugins.triage.sourceSettings.empty.description": "Połącz konto {source}, a następnie odśwież.",
+            "plugins.triage.sourceSettings.empty.description": "Połącz swoje konto {source}, a następnie odśwież.",
             "plugins.triage.sourceSettings.empty.title": "Brak zakresów {source} do dodania",
             "plugins.triage.sourceSettings.failure.authentication": "Połączone konto nie jest już autoryzowane. Połącz je ponownie w sekcji Połączone konta.",
             "plugins.triage.sourceSettings.failure.permission": "Połączone konto nie widzi tego zakresu. Przyznaj mu dostęp u dostawcy.",
@@ -28632,7 +30825,7 @@
             "plugins.triage.sourceSettings.control.restoreLabel": "Restaurar {title} en PR e incidencias",
             "plugins.triage.sourceSettings.control.update": "Actualizar",
             "plugins.triage.sourceSettings.control.updateLabel": "Actualizar {title} desde el proveedor",
-            "plugins.triage.sourceSettings.empty.description": "Conecta una cuenta de {source} y, después, actualiza.",
+            "plugins.triage.sourceSettings.empty.description": "Conecta tu cuenta de {source} y, después, actualiza.",
             "plugins.triage.sourceSettings.empty.title": "No hay ámbitos de {source} que añadir",
             "plugins.triage.sourceSettings.failure.authentication": "La cuenta conectada ya no está autorizada. Vuelve a conectarla en Cuentas conectadas.",
             "plugins.triage.sourceSettings.failure.permission": "La cuenta conectada no puede ver este ámbito. Concédele acceso en el proveedor.",
@@ -29022,7 +31215,7 @@
             "plugins.triage.sourceSettings.control.restoreLabel": "Restaurer {title} dans PR et tickets",
             "plugins.triage.sourceSettings.control.update": "Mettre à jour",
             "plugins.triage.sourceSettings.control.updateLabel": "Mettre à jour {title} depuis le fournisseur",
-            "plugins.triage.sourceSettings.empty.description": "Connecte un compte de {source}, puis actualise.",
+            "plugins.triage.sourceSettings.empty.description": "Connecte ton compte {source}, puis actualise.",
             "plugins.triage.sourceSettings.empty.title": "Aucune portée de {source} à ajouter",
             "plugins.triage.sourceSettings.failure.authentication": "Le compte connecté n’est plus autorisé. Reconnecte-le dans Comptes connectés.",
             "plugins.triage.sourceSettings.failure.permission": "Le compte connecté ne voit pas cette portée. Accorde-lui l’accès chez le fournisseur.",
@@ -29412,7 +31605,7 @@
             "plugins.triage.sourceSettings.control.restoreLabel": "Ripristina {title} in PR e segnalazioni",
             "plugins.triage.sourceSettings.control.update": "Aggiorna",
             "plugins.triage.sourceSettings.control.updateLabel": "Aggiorna {title} dal provider",
-            "plugins.triage.sourceSettings.empty.description": "Collega un account di {source}, quindi aggiorna.",
+            "plugins.triage.sourceSettings.empty.description": "Collega il tuo account {source}, quindi aggiorna.",
             "plugins.triage.sourceSettings.empty.title": "Nessun ambito di {source} da aggiungere",
             "plugins.triage.sourceSettings.failure.authentication": "L’account collegato non è più autorizzato. Ricollegalo in Account collegati.",
             "plugins.triage.sourceSettings.failure.permission": "L’account collegato non vede questo ambito. Concedigli l’accesso presso il provider.",
@@ -29802,7 +31995,7 @@
             "plugins.triage.sourceSettings.control.restoreLabel": "Restaurar {title} em PRs e problemas",
             "plugins.triage.sourceSettings.control.update": "Atualizar",
             "plugins.triage.sourceSettings.control.updateLabel": "Atualizar {title} a partir do fornecedor",
-            "plugins.triage.sourceSettings.empty.description": "Conecte uma conta de {source} e depois atualize.",
+            "plugins.triage.sourceSettings.empty.description": "Conecte sua conta de {source} e depois atualize.",
             "plugins.triage.sourceSettings.empty.title": "Não há âmbitos de {source} para adicionar",
             "plugins.triage.sourceSettings.failure.authentication": "A conta conectada já não está autorizada. Reconecte-a em Contas conectadas.",
             "plugins.triage.sourceSettings.failure.permission": "A conta conectada não consegue ver este âmbito. Conceda-lhe acesso no fornecedor.",
@@ -30192,7 +32385,7 @@
             "plugins.triage.sourceSettings.control.restoreLabel": "{title} in PRs & Issues wiederherstellen",
             "plugins.triage.sourceSettings.control.update": "Aktualisieren",
             "plugins.triage.sourceSettings.control.updateLabel": "{title} vom Anbieter aktualisieren",
-            "plugins.triage.sourceSettings.empty.description": "Verbinde ein {source}-Konto und aktualisiere anschließend die Seite.",
+            "plugins.triage.sourceSettings.empty.description": "Verbinde dein {source}-Konto und aktualisiere anschließend die Seite.",
             "plugins.triage.sourceSettings.empty.title": "Keine {source}-Bereiche zum Hinzufügen",
             "plugins.triage.sourceSettings.failure.authentication": "Das verbundene Konto ist nicht mehr autorisiert. Verbinde es unter „Verbundene Konten“ erneut.",
             "plugins.triage.sourceSettings.failure.permission": "Das verbundene Konto hat keinen Zugriff auf diesen Bereich. Gewähre ihm beim Anbieter Zugriff.",
@@ -30582,7 +32775,7 @@
             "plugins.triage.sourceSettings.control.restoreLabel": "Restaura {title} a PR i incidències",
             "plugins.triage.sourceSettings.control.update": "Actualitza",
             "plugins.triage.sourceSettings.control.updateLabel": "Actualitza {title} des del proveïdor",
-            "plugins.triage.sourceSettings.empty.description": "Connecta un compte de {source} i després actualitza.",
+            "plugins.triage.sourceSettings.empty.description": "Connecta el teu compte de {source} i després actualitza.",
             "plugins.triage.sourceSettings.empty.title": "No hi ha cap àmbit de {source} per afegir",
             "plugins.triage.sourceSettings.failure.authentication": "El compte connectat ja no està autoritzat. Torna’l a connectar a Comptes connectats.",
             "plugins.triage.sourceSettings.failure.permission": "El compte connectat no pot veure aquest àmbit. Concedeix-li accés al proveïdor.",
@@ -30972,7 +33165,7 @@
             "plugins.triage.sourceSettings.control.restoreLabel": "将 {title} 恢复到 PR 和问题",
             "plugins.triage.sourceSettings.control.update": "更新",
             "plugins.triage.sourceSettings.control.updateLabel": "从提供方更新 {title}",
-            "plugins.triage.sourceSettings.empty.description": "连接一个 {source} 账户，然后刷新。",
+            "plugins.triage.sourceSettings.empty.description": "连接你的 {source} 账户，然后刷新。",
             "plugins.triage.sourceSettings.empty.title": "没有可添加的 {source} 范围",
             "plugins.triage.sourceSettings.failure.authentication": "该已连接账户不再获得授权。请在“已连接账户”中重新连接。",
             "plugins.triage.sourceSettings.failure.permission": "该已连接账户无法访问此范围。请在提供方处为其授予访问权限。",
@@ -31362,7 +33555,7 @@
             "plugins.triage.sourceSettings.control.restoreLabel": "將 {title} 還原至 PR 與問題",
             "plugins.triage.sourceSettings.control.update": "更新",
             "plugins.triage.sourceSettings.control.updateLabel": "從提供方更新 {title}",
-            "plugins.triage.sourceSettings.empty.description": "連結一個 {source} 帳戶，然後重新整理。",
+            "plugins.triage.sourceSettings.empty.description": "連結你的 {source} 帳戶，然後重新整理。",
             "plugins.triage.sourceSettings.empty.title": "沒有可新增的 {source} 範圍",
             "plugins.triage.sourceSettings.failure.authentication": "此已連結帳戶不再獲得授權。請在「已連結帳戶」中重新連結。",
             "plugins.triage.sourceSettings.failure.permission": "此已連結帳戶無法存取此範圍。請在提供方為其授予存取權。",
@@ -31752,7 +33945,7 @@
             "plugins.triage.sourceSettings.control.restoreLabel": "{title} を PR と課題に復元",
             "plugins.triage.sourceSettings.control.update": "更新",
             "plugins.triage.sourceSettings.control.updateLabel": "プロバイダーの内容で {title} を更新",
-            "plugins.triage.sourceSettings.empty.description": "{source} のアカウントを接続してから更新してください。",
+            "plugins.triage.sourceSettings.empty.description": "ご自身の {source} アカウントを接続してから更新してください。",
             "plugins.triage.sourceSettings.empty.title": "追加できる {source} のスコープがありません",
             "plugins.triage.sourceSettings.failure.authentication": "この接続済みアカウントは認可されていません。「接続済みアカウント」で再接続してください。",
             "plugins.triage.sourceSettings.failure.permission": "この接続済みアカウントはこのスコープを参照できません。プロバイダー側でアクセスを許可してください。",
@@ -31794,6 +33987,7 @@
     "voiceModelPacks": [],
     "voiceProviders": [],
     "webhooks": [],
+    "workItems": [],
     "workflows": []
   },
   "description": "Detects GitLab remotes and provides GitLab repository operations.",

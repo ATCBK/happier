@@ -1,17 +1,21 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { computeWorkspaceSyncPolicyDigest } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { createWorkspaceSyncHarness } from '@/dev/testkit/harness/workspaceSyncHarness';
+import type { WorkspaceRefV1 } from '@/sync/domains/workspaces/workspaceRefModel';
 import { resetWorkspaceSyncStatusStoreForTests, setWorkspaceSyncStatus } from '@/sync/domains/sessionHandoff/workspaceSyncStatusStore';
 
 const routerReplace = vi.hoisted(() => vi.fn());
 const machineRpc = vi.hoisted(() => vi.fn());
-vi.mock('@legendapp/list/react-native', async () => {
+vi.mock('@legendapp/list/react-native', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@legendapp/list/react-native')>();
     const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
-    return createCapturingLegendListMock({ renderItems: true }).module;
+    return createCapturingLegendListMock({ original, renderItems: true }).module;
 });
 
 vi.mock('expo-router', async () => {
@@ -34,10 +38,7 @@ vi.mock('@/text', async () => {
     return createTextModuleMock({ translate: (key) => key });
 });
 
-const refs = [
-    { id: 'wr_1', serverId: 'server-1', machineId: 'machine-1', rootPath: '/repo', label: 'Repo', createdAtMs: 1 },
-    { id: 'wr_2', serverId: 'server-1', machineId: 'machine-2', rootPath: '/peer', label: 'Peer', createdAtMs: 1 },
-];
+let refs: WorkspaceRefV1[] = [];
 const policy = { v: 1 as const, selection: 'git_worktree' as const,
     extraIgnorePatterns: [], extraIncludePatterns: [],
     policyDigest: computeWorkspaceSyncPolicyDigest({ v: 1, selection: 'git_worktree', extraIgnorePatterns: [], extraIncludePatterns: [] }),
@@ -47,20 +48,24 @@ const relationship = { v: 1 as const, relationshipId: 'link-1', controllerMachin
     contentPolicy: policy, enabled: true, createdAtMs: 1, updatedAtMs: 1,
 };
 
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-        useWorkspaceRefs: () => refs,
-        useWorkspaceSyncRelationships: () => [relationship],
-        useLocalSetting: () => undefined,
-        useLocalSettingMutable: () => [undefined, vi.fn()],
-        useMachineDisplayNamesById: () => ({}),
-    });
-});
+const workspace = createWorkspaceSyncHarness(request => machineRpc(request));
+await workspace.ready;
+const { storage } = await import('@/sync/domains/state/storage');
 
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: (input: unknown) => machineRpc(input),
-}));
+beforeEach(async () => {
+    await workspace.reset();
+    refs = [
+        { id: 'wr_1', serverId: workspace.serverId, machineId: 'machine-a', rootPath: '/repo', label: 'Repo', createdAtMs: 1 },
+        { id: 'wr_2', serverId: workspace.serverId, machineId: 'machine-b', rootPath: '/peer', label: 'Peer', createdAtMs: 1 },
+    ];
+    applyProjectAccountRowsFixture(storage, { workspaceRefs: refs,
+        relationships: [{ ...relationship, controllerMachineId: 'machine-a' }] });
+});
+afterEach(async () => {
+    standardCleanup();
+    vi.unstubAllGlobals();
+    await workspace.dispose();
+});
 
 describe('Project cockpit workspace sync navigation', () => {
     it('opens the real conflict row in Details and retains its comparison across companion changes', async () => {
@@ -72,8 +77,8 @@ describe('Project cockpit workspace sync navigation', () => {
             return 1;
         });
         vi.stubGlobal('cancelAnimationFrame', vi.fn());
-        setWorkspaceSyncStatus({ serverId: 'server-1', controllerMachineId: 'machine-1', relationshipId: 'link-1' }, {
-            relationshipId: 'link-1', controllerMachineId: 'machine-1', state: 'conflicted',
+        setWorkspaceSyncStatus({ serverId: workspace.serverId, controllerMachineId: 'machine-a', relationshipId: 'link-1' }, {
+            relationshipId: 'link-1', controllerMachineId: 'machine-a', state: 'conflicted',
             alphaPath: '/repo', betaPath: '/peer', mode: 'keep_both_in_sync',
             endpointStates: { alpha: null, beta: null }, conflictCount: 1, lastCycleObservedAtMs: 2,
         });

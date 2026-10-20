@@ -6,7 +6,7 @@ import { resolveUiPostinstallTasks } from './resolveUiPostinstallTasks.mjs';
 test('dependency-only preparation leaves source artifact compilation to its independent owner', () => {
     const tasks = resolveUiPostinstallTasks({ env: { HAPPIER_UI_POSTINSTALL_DEPENDENCIES_ONLY: '1' } });
     assert.ok(tasks.includes('patch-package'));
-    for (const task of ['vendor-password-kdf-worker', 'prepare-atmosphere-renderers',
+    for (const task of ['vendor-password-kdf-worker', 'vendor-crypto-worker', 'prepare-atmosphere-renderers',
         'vendor-tiptap-webview-bundle', 'vendor-mermaid-webview-bundle']) assert.equal(tasks.includes(task), false);
 });
 
@@ -19,6 +19,11 @@ test('UI prepares the native atmosphere closure even without web assets', () => 
 test('UI postinstall prepares the password worker for web and desktop assets', () => {
     assert.ok(resolveUiPostinstallTasks({ env: {} }).includes('vendor-password-kdf-worker'));
     assert.ok(!resolveUiPostinstallTasks({ env: { HAPPIER_UI_VENDOR_WEB_ASSETS: '0' } }).includes('vendor-password-kdf-worker'));
+});
+
+test('UI prepares the crypto worker for web and desktop assets', () => {
+    assert.ok(resolveUiPostinstallTasks({ env: {} }).includes('vendor-crypto-worker'));
+    assert.ok(!resolveUiPostinstallTasks({ env: { HAPPIER_UI_VENDOR_WEB_ASSETS: '0' } }).includes('vendor-crypto-worker'));
 });
 
 test('UI postinstall installs enriched-markdown web WASM before verifying the patch', () => {

@@ -12,8 +12,10 @@ export async function readPluginMcpServerMetadata() {
   return (registry.mcpServers ?? []).flatMap(entry => {
     if (!entry.pluginId) return [];
     const target = registry.activationTargets.find(target => target.pluginId === entry.pluginId);
+    const displayName = target?.manifest.displayName;
     return [projectMcpPluginItemMetadataV1({ pluginId: entry.pluginId,
-      pluginName: target?.manifest.displayName ?? entry.pluginId, server: entry.definition })];
+      pluginName: typeof displayName === 'string' ? displayName : displayName?.fallback ?? entry.pluginId,
+      server: entry.definition })];
   });
 }
 

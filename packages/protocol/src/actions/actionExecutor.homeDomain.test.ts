@@ -3,8 +3,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { ApprovalRequestV2Schema, type ApprovalRequest } from '../approvals/approvalRequestV1.js';
 import { decideApprovalRequestTransition, settleApprovalRequestActionArgs } from '../approvals/approvalRequestTransition.js';
 import type { HomeAccountRowV1 } from '../home/governance/accounts.js';
-import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
+import { buildApprovalPreviewSummary, createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
+import { getActionSpec } from './actionSpecs.js';
 import { ENCRYPTED_DATA_KEY_ENVELOPE_V1_BYTES } from '../crypto/encryptedDataKeyEnvelopeFormatV1.js';
+import { API_TOKEN_FULL_GRANT_V1 } from '../auth/apiTokenGrant.js';
+import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
+import { ActionsSettingsV1Schema } from './actionSettings.js';
 
 const roleSetInput = { accountId: 'account-2', homeRole: 'admin' } as const;
 
@@ -443,7 +447,7 @@ describe('createActionExecutor (Home governance and Teams)', () => {
         v: 1,
         continuation: expect.objectContaining({ reference: 'explicit-prepared-reference' }),
       },
-      summary: 'Accept Team invitation',
+      summary: buildApprovalPreviewSummary(getActionSpec('teams.invitations.accept'), { v: 1, token }),
       preview: {
         actionId: 'teams.invitations.accept',
         actionArgs: {
@@ -608,7 +612,7 @@ describe('createActionExecutor (Home governance and Teams)', () => {
     }));
   });
 
-  it('refuses directory mutations from API automation without bypassing their present-user authority', async () => {
+  it('admits explicitly waived directory removal from API automation while refusing sibling mutations', async () => {
     const output = {
       v: 1 as const,
       status: 'removed' as const,
@@ -622,9 +626,11 @@ describe('createActionExecutor (Home governance and Teams)', () => {
       },
     };
     const homeDomainAction = vi.fn(async () => output);
+    const settings = ActionsSettingsV1Schema.parse({ v: 1,
+      approvalWaivedSurfaces: { 'teams.directory.sources.remove': ['api'] } });
     const executor = createActionExecutor({
       homeDomainAction,
-      isActionApprovalRequired: () => false,
+      isActionApprovalRequired: (actionId, context) => isApprovalRequiredByActionsSettings(actionId, settings, context),
     } as unknown as ActionExecutorDeps);
 
     await expect(executor.execute('teams.directory.sources.remove', {
@@ -637,7 +643,7 @@ describe('createActionExecutor (Home governance and Teams)', () => {
       serverId: 'home-1',
       runtimeAccountId: 'account-1',
       actionCaller: { kind: 'host' },
-    })).resolves.toEqual({ ok: false, errorCode: 'present_user_required', error: 'present_user_required' });
+    })).resolves.toEqual({ ok: true, result: output });
 
     await expect(executor.execute('teams.directory.sources.sync', {
       v: 1,
@@ -655,7 +661,70 @@ describe('createActionExecutor (Home governance and Teams)', () => {
       error: 'present_user_required',
     });
 
-    expect(homeDomainAction).not.toHaveBeenCalled();
+    expect(homeDomainAction.mock.calls).toHaveLength(1);
+  });
+
+  it.each(['api', 'agent', 'mcp'] as const)('defers directory removal on %s and replays its original principal', async (surface) => {
+    const actionId = 'teams.directory.sources.remove' as const;
+    const input = { v: 1 as const, teamId: 'team-1', sourceId: 'source-1' };
+    let stored: ApprovalRequest | null = null;
+    const effectOrigins: unknown[] = [];
+    const authorization = {
+      v: 1 as const,
+      token: 'invocation-authorization',
+      binding: {
+        serverIdentityId: 'server-1', accountId: 'account-1', principalId: 'account-1',
+        credentialId: 'credential-1', grant: API_TOKEN_FULL_GRANT_V1,
+        machineId: 'machine-1', custodianAccountId: 'account-1', installationId: 'installation-1',
+        actionId, requestId: 'directory-removal-request', requestEnvelopeDigest: 'a'.repeat(43),
+        target: { kind: 'machine' as const, machineId: 'machine-1' },
+      },
+    };
+    const deps = {
+      homeDomainAction: async ({ context }) => {
+        effectOrigins.push(context);
+        return { v: 1, status: 'removed', impact: {
+          teamMembershipsRemoved: 0, groupMembershipsRemoved: 0, groupContributionsRemoved: 0,
+          directoryCreatedGroupsRetained: 0, nativeMembershipsPreserved: 0, nativeGroupContributionsPreserved: 0,
+        } };
+      },
+      approvalsCreate: async ({ request }) => {
+        stored = ApprovalRequestV2Schema.parse(request);
+        return { artifactId: 'directory-removal-approval' };
+      },
+      approvalsGet: async () => stored,
+      approvalsUpdate: async ({ request }) => {
+        const transition = transitionStoredApproval(stored, request);
+        if (!transition.ok) return transition;
+        stored = ApprovalRequestV2Schema.parse(request);
+        return { ok: true };
+      },
+      isApprovalExecutionOriginCurrent: async () => true,
+    } satisfies Pick<ActionExecutorDeps, 'homeDomainAction' | 'approvalsCreate' | 'approvalsGet'
+      | 'approvalsUpdate' | 'isApprovalExecutionOriginCurrent'>;
+    const executor = createActionExecutor(deps as ActionExecutorDeps);
+
+    await expect(executor.execute(actionId, input, {
+      surface, authority: 'account_automation', serverId: 'home-1', runtimeAccountId: 'account-1',
+      actionRequestId: 'directory-removal-request', actionCaller: { kind: 'host' },
+      ...(surface === 'api' ? {
+        externalActionCredential: { accountId: 'account-1', principalId: 'account-1',
+          credentialId: 'credential-1', grant: API_TOKEN_FULL_GRANT_V1 },
+        externalActionTarget: authorization.binding.target,
+        externalActionExecutionAuthorization: authorization,
+        signExternalActionApprovalInput: () => 'a'.repeat(86),
+      } : {}),
+    })).resolves.toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    expect(effectOrigins).toEqual([]);
+    expect(stored).toMatchObject({ actionId, actionArgs: input, approval: { flow: 'deferred', result: 'required' },
+      executionOriginV1: { authority: 'account_automation', surface, accountId: 'account-1' } });
+    if (!stored) throw new Error('Missing directory removal approval');
+    stored = ApprovalRequestV2Schema.parse({ ...stored, status: 'approved', updatedAtMs: 2,
+      decision: { kind: 'approve', decidedAtMs: 2 } });
+    await expect(executor.replayApprovedApprovalRequest({ artifactId: 'directory-removal-approval' }))
+      .resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
+    expect(effectOrigins).toMatchObject([{ authority: 'account_automation', surface,
+      runtimeAccountId: 'account-1', ...(surface === 'api' ? { externalActionExecutionAuthorization: authorization } : {}) }]);
   });
 
   it('returns a transferable invitation bearer to its direct caller but redacts the shared execution observation', async () => {
@@ -748,7 +817,6 @@ describe('createActionExecutor (Home governance and Teams)', () => {
         return { ok: true as const };
       },
       isApprovalExecutionOriginCurrent: async () => true,
-      isActionApprovalRequired: () => false,
     } as unknown as ActionExecutorDeps);
 
     for (const surface of ['agent', 'mcp'] as const) {
@@ -891,6 +959,7 @@ describe('createActionExecutor (Home governance and Teams)', () => {
       },
       approvalsWaitForDecision: async ({ request }: { request: ApprovalRequest }) => ({
         decision: 'approve' as const,
+        decisionAuthority: 'present_user' as const,
         request,
       }),
       isApprovalExecutionOriginCurrent: async () => true,
@@ -903,6 +972,7 @@ describe('createActionExecutor (Home governance and Teams)', () => {
       serverId: 'home-1',
       runtimeAccountId: 'account-1',
       actionRequestId: `request-${actionId}`,
+      defaultSessionMachineId: 'machine-1',
       actionCaller: { kind: 'host' },
     })).resolves.toEqual({ ok: true, result: output });
     expect(homeDomainAction).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ actionId, input }));
@@ -925,6 +995,7 @@ describe('createActionExecutor (Home governance and Teams)', () => {
       },
       approvalsWaitForDecision: async ({ request }: { request: ApprovalRequest }) => ({
         decision: scenario === 'reject' ? 'reject' as const : 'approve' as const,
+        decisionAuthority: 'present_user' as const,
         request,
       }),
       isApprovalExecutionOriginCurrent: async () => scenario !== 'stale',
@@ -942,6 +1013,7 @@ describe('createActionExecutor (Home governance and Teams)', () => {
       serverId: 'home-1',
       runtimeAccountId: 'account-1',
       actionRequestId: `request-${scenario}`,
+      defaultSessionMachineId: 'machine-1',
       actionCaller: { kind: 'host' },
     });
 
@@ -994,6 +1066,7 @@ describe('createActionExecutor (Home governance and Teams)', () => {
     expect(homeDomainAction).toHaveBeenCalledOnce();
     expect(persisted.at(-1)?.execution).toEqual({
       executedAtMs: expect.any(Number),
+      effectAttempted: true,
       ok: true,
       result: { redacted: true },
     });

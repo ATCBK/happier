@@ -252,6 +252,8 @@ describe('createActionExecutor (plugin permission grants)', () => {
       surface: 'plugin',
       serverId: 'server-1',
       actionRequestId: 'permission-revoke-1',
+      // Plugin approvals retain the originating daemon's custody, even for Account effects.
+      defaultSessionMachineId: 'machine-1',
       actionCaller: {
         kind: 'plugin',
         pluginId: 'acme.voice',
@@ -300,7 +302,6 @@ describe('createActionExecutor (plugin permission grants)', () => {
       : { pendingRequest: dismissedPendingRequest });
     const executor = createActionExecutor({ pluginPermissionGrantAction,
       approvalsCreate: async () => ({ artifactId: 'grant-approval' }),
-      isActionApprovalRequired: () => false,
     } as ActionExecutorDeps);
     const pluginContext = {
       surface: 'plugin' as const,
@@ -317,10 +318,14 @@ describe('createActionExecutor (plugin permission grants)', () => {
     } as ActionExecutorDeps);
     for (const actionId of ['plugins.permissions.grants.grant', 'plugins.permissions.grants.dismissRequest'] as const) {
       await expect(withoutApprovalCustody.execute(actionId, { requestId: 'request-1' }, pluginContext))
-        .resolves.toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+        .resolves.toMatchObject({ ok: false, errorCode: 'present_user_required' });
     }
     expect(pluginPermissionGrantAction).not.toHaveBeenCalled();
 
+    const actionsSettings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
+      'plugins.permissions.grants.grant': ['ui'],
+      'plugins.permissions.grants.dismissRequest': ['ui'],
+    } });
     await expect(executor.execute('plugins.permissions.grants.grant', {
       requestId: 'request-1',
     }, pluginContext)).resolves.toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId: 'grant-approval' } });
@@ -335,6 +340,7 @@ describe('createActionExecutor (plugin permission grants)', () => {
       surface: 'ui',
       actionCaller: { kind: 'host' },
       authority: 'present_user',
+      actionsSettings,
     })).resolves.toMatchObject({ ok: true });
     await expect(executor.execute('plugins.permissions.grants.dismissRequest', {
       requestId: 'request-1',
@@ -342,6 +348,7 @@ describe('createActionExecutor (plugin permission grants)', () => {
       surface: 'ui',
       actionCaller: { kind: 'host' },
       authority: 'present_user',
+      actionsSettings,
     })).resolves.toMatchObject({ ok: true });
     expect(pluginPermissionGrantAction).toHaveBeenCalledTimes(2);
   });

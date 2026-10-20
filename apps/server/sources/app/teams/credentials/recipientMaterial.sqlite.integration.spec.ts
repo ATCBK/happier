@@ -274,6 +274,7 @@ describe("Team credential recipient material", () => {
         const concurrentFirstOpens = await Promise.all([readCurrent(), readCurrent(), readCurrent()]);
         expect(concurrentFirstOpens).toEqual(Array.from({ length: 3 }, () => expect.objectContaining({
             ok: true,
+            admittedResource: { displayName: resource.displayName, teamId: team.id },
             sourceVersion,
             recipientMode: "plain",
             recipientContentPublicKeyFingerprint: null,

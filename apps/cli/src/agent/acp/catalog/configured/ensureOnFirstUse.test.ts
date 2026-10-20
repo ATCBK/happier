@@ -8,6 +8,7 @@ import { once } from 'node:events';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { ensureAcpLaunchForSession, getAcpManagedInstallId, resolveAcpLaunch } from './resolveAcpLaunch';
 import { resolveConfiguredAcpBackendFromAccountSettings } from './resolveBackend';
 import { materializeConfiguredAcpEnvironment } from './materializeEnvironment';
@@ -48,7 +49,7 @@ describe('admitted configured ACP launch on first use', () => {
       }] });
       const definition = record.definitions[0]!;
       const params = { accountId: 'alice', definition, platform: process.platform, arch: process.arch,
-        env: { ...process.env, HAPPIER_HOME_DIR: root }, settings: {}, machineId: 'fixture-machine' };
+        env: { ...process.env, HAPPIER_HOME_DIR: root }, settings: accountSettingsParse({}), machineId: 'fixture-machine' };
       const old = await ensureAcpLaunchForSession(params);
       running = spawn(old.command, ['hold'], { stdio: ['pipe', 'pipe', 'pipe'] });
       await once(running, 'spawn');
@@ -81,7 +82,7 @@ describe('admitted configured ACP launch on first use', () => {
           [`${process.platform}-${process.arch}`]: { archiveUrl: 'https://fixture-agent.invalid/agent', executableSubpath: 'agent', kind: 'executable' },
         }, envByPlatform: { [`${process.platform}-${process.arch}`]: { VT_ACP_ENABLED: '1', VT_ACP_ZED_ENABLED: '1' } } },
       }] });
-      const params = { accountId: 'alice', definition: record.definitions[0]!, platform: process.platform, arch: process.arch, env: { ...process.env, HAPPIER_HOME_DIR: root }, settings: {}, machineId: 'fixture-machine' };
+      const params = { accountId: 'alice', definition: record.definitions[0]!, platform: process.platform, arch: process.arch, env: { ...process.env, HAPPIER_HOME_DIR: root }, settings: accountSettingsParse({}), machineId: 'fixture-machine' };
       expect(await resolveAcpLaunch(params)).toMatchObject({ kind: 'needs_install' });
       const launch = await ensureAcpLaunchForSession(params);
       expect(launch.command).toContain(join(root, 'tools', `dep.${getAcpManagedInstallId(params.definition, 'alice')}`, 'current'));
@@ -105,7 +106,7 @@ describe('admitted configured ACP launch on first use', () => {
       launch: { kind: 'npm', package: '@fixture/agent', version: '1.2.3', args: ['--acp'] },
     }] });
     const params = { accountId: 'alice', definition: record.definitions[0]!, platform: process.platform, arch: process.arch,
-      env: { ...process.env, HAPPIER_HOME_DIR: join(root, "home's $literal"), HAPPIER_PNPM_BIN: pnpm, HAPPIER_JS_RUNTIME_PATH: process.execPath }, settings: {}, machineId: 'fixture-machine' };
+      env: { ...process.env, HAPPIER_HOME_DIR: join(root, "home's $literal"), HAPPIER_PNPM_BIN: pnpm, HAPPIER_JS_RUNTIME_PATH: process.execPath }, settings: accountSettingsParse({}), machineId: 'fixture-machine' };
     const launch = await ensureAcpLaunchForSession(params, { installerDeps: {
       // Fake only the external package-manager process; real installer writes
       // and promotes its launcher and workspace around this package output.

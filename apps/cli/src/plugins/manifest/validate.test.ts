@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { PLUGIN_MANIFEST as APP_CONTEXT_MANIFEST } from '@happier-dev/plugins-app-context/manifest';
+import { readBundledPluginManifest } from '../projection/registry/builtIn/locators';
+import { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS } from '../projection/registry/sources/generatedBundledPluginManifests';
 
 import { ingestCanonicalPluginManifest } from './ingest';
 import { validatePluginManifest } from './validate';
@@ -23,6 +26,23 @@ function createManifest(id: string): Record<string, unknown> {
 }
 
 describe('validatePluginManifest', () => {
+  it('admits the bundled App context runtime and rejects its declaration without an executable entrypoint', () => {
+    const options = { manifestAuthority: 'bundled_first_party', sourceProvenance: 'localSource' } as const;
+    const { entrypoints: _entrypoints, ...withoutEntrypoint } = APP_CONTEXT_MANIFEST;
+
+    expect(validatePluginManifest(withoutEntrypoint, options)).toMatchObject({
+      ok: false,
+      diagnostics: [expect.objectContaining({ code: 'plugin_manifest_semantic_invalid' })],
+    });
+    expect(validatePluginManifest(APP_CONTEXT_MANIFEST, options)).toMatchObject({ ok: true });
+    // Source daemon discovery consumes the generator's bundled projection,
+    // before an ignored packaged plugin manifest or runtime exists.
+    const locator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find(({ pluginId }) => pluginId === APP_CONTEXT_MANIFEST.id);
+    if (!locator) throw new Error('Missing bundled App context locator');
+    const bundledManifest = readBundledPluginManifest(locator);
+    expect(validatePluginManifest(bundledManifest, options)).toMatchObject({ ok: true });
+  });
+
   it('accepts a client-executed Voice provider without manufacturing a daemon entrypoint', () => {
     const result = validatePluginManifest({
       schemaVersion: 2,

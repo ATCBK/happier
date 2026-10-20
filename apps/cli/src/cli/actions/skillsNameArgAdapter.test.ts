@@ -1,3 +1,4 @@
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createActionExecutor, type ActionExecutorContext, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
@@ -82,10 +83,10 @@ async function fixture(options: Readonly<{ names?: readonly string[]; unavailabl
         : { removed: ['/skills/review'] };
     },
     isActionApprovalRequired: (actionId: Parameters<typeof isApprovalRequiredByActionsSettings>[0], context: ActionExecutorContext) =>
-      isApprovalRequiredByActionsSettings(actionId, { v: 1, approvalWaivedSurfaces: {
+      isApprovalRequiredByActionsSettings(actionId, normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
         'skills.machine.install': ['cli'], 'skills.machine.uninstall': ['cli'],
         'skills.found.adopt': ['cli'],
-      } }, context),
+      } }), context),
   } satisfies Partial<ActionExecutorDeps>;
   const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), ...ports });
   const captured: Array<Parameters<ActionCliExecutionDeps['createExecutorFn']>[0]> = [];

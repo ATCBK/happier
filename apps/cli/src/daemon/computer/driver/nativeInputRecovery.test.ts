@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
 import { createUnavailableRuntimeActionExecutor } from '@happier-dev/protocol/actions/executor/dispatch';
+import { RuntimeActionIdV1Schema } from '@happier-dev/protocol/actions/actionIds';
 import { native, target, captureResult } from './nativeComputerBoundary.testkit';
 import { createManagedComputerDriver } from './managedComputerDriver';
 import { createComputerCaptureSource } from '../source';
@@ -15,7 +16,7 @@ await import('../../../../../ui/sources/dev/vitestSetup');
 const { useComputerSessionControl } = await import('../../../../../ui/sources/components/computer/useComputerSessionControl');
 const { renderHook } = await import('../../../../../ui/sources/dev/testkit/hooks/renderHook');
 const { createComputerRuntimeActionExecutor } = await import('../../../../../ui/sources/sync/domains/computer/actions/runtimeActionExecutor');
-const { publishComputerStreamInputFailure } = await import('../../../../../ui/sources/sync/domains/computer/computerControlClient');
+const { getComputerSessionProjection, publishComputerStreamInputFailure } = await import('../../../../../ui/sources/sync/domains/computer/computerControlClient');
 
 // Keep lifecycle/admission real beneath the shared stdio process boundary.
 describe.skipIf(process.platform !== 'linux')('native input settlement and recovery', () => {
@@ -24,7 +25,7 @@ describe.skipIf(process.platform !== 'linux')('native input settlement and recov
     let nextCapture = 0;
     // The image-writer's complete 1×1 PNG vector, unlike the parser-only
     // header fixture, is valid through the real capture media persistence path.
-    const persistedPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2ioAAAAASUVORK5CYII=';
+    const persistedPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=';
     native.call.mockImplementation(async ({ name }) => {
       if (name === 'get_window_state') return { ...captureResult(), content: [{ type: 'image', mimeType: 'image/png', data: persistedPng }],
         structuredContent: { ...captureResult().structuredContent, screenshot_width: 1, screenshot_height: 1,
@@ -45,7 +46,7 @@ describe.skipIf(process.platform !== 'linux')('native input settlement and recov
       fallback: createUnavailableRuntimeActionExecutor(),
       executeOnMachine: async ({ actionId, input, sessionId, signal }) => {
         actions.push(actionId);
-        return routes.dispatch(actionId, input, { authority: 'present_user', defaultSessionId: sessionId, signal });
+        return routes.dispatch(RuntimeActionIdV1Schema.parse(actionId), input, { authority: 'present_user', defaultSessionId: sessionId, signal });
       },
     });
     // Unrelated host transports are unavailable; the Action front door, native
@@ -65,6 +66,11 @@ describe.skipIf(process.platform !== 'linux')('native input settlement and recov
     } satisfies ActionExecutorDeps);
     let hook = await renderHook(() => useComputerSessionControl({ scope, execute: executor.execute }));
     try {
+      // Mount starts real native enumeration and permission reads. Await that
+      // owner refresh before exercising physical input against a ready source.
+      await act(async () => { await getComputerSessionProjection(scope, executor.execute).refresh(); });
+      expect(hook.getCurrent().failure).toBeNull();
+      expect(hook.getCurrent().grants).toEqual({ capture: 'granted', input: 'granted' });
       expect(hook.getCurrent().canInput).toBe(true);
       await act(async () => {
         // Native viewer input first acquires the existing takeover owner, then
@@ -75,6 +81,7 @@ describe.skipIf(process.platform !== 'linux')('native input settlement and recov
           .toMatchObject({ status: 'interrupted', completion: 'unknown' });
         publishComputerStreamInputFailure(scope, source.sourceId, 'human_input_interruption_uncertain');
         hook.getCurrent().refresh();
+        await getComputerSessionProjection(scope, executor.execute).refresh();
       });
       expect(hook.getCurrent().failure).toBe('human_input_interruption_uncertain');
       expect(hook.getCurrent().selection?.sourceId).toBe(source.sourceId);
@@ -82,6 +89,7 @@ describe.skipIf(process.platform !== 'linux')('native input settlement and recov
       if (reopened) {
         await hook.unmount();
         hook = await renderHook(() => useComputerSessionControl({ scope, execute: executor.execute }));
+        await act(async () => { await getComputerSessionProjection(scope, executor.execute).refresh(); });
         expect(hook.getCurrent().selection?.sourceId).toBe(source.sourceId);
         expect(hook.getCurrent().presence.kind).toBe('unconfirmed');
         expect(hook.getCurrent().failure).toBeNull();

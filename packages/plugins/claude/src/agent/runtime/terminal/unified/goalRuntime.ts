@@ -83,14 +83,13 @@ export function createClaudeUnifiedGoalRuntime(params: Readonly<{
   backendId: string;
   agentId?: string;
   getCurrentClaudeSessionId: () => string | null;
-  publishWorkStateSnapshot?: (snapshot: SessionWorkStateV1) => void;
+  publishWorkStateSnapshot?: (snapshot: SessionWorkStateV1, afterGoalCommandAdmission?: boolean) => void | Promise<void>;
   injectGoalCommand: ClaudeGoalCommandInjector;
   logError?: (message: string, error: unknown) => void;
 }>): ClaudeUnifiedGoalRuntime {
-  const publishWorkStateSnapshot = (snapshot: SessionWorkStateV1): void => {
+  const publishWorkStateSnapshot = (snapshot: SessionWorkStateV1, afterGoalCommandAdmission?: boolean): void | Promise<void> => {
     if (params.publishWorkStateSnapshot) {
-      params.publishWorkStateSnapshot(snapshot);
-      return;
+      return params.publishWorkStateSnapshot(snapshot, afterGoalCommandAdmission);
     }
     params.logError?.(
       'failed to publish Claude goal work-state snapshot (non-fatal)',
@@ -98,13 +97,44 @@ export function createClaudeUnifiedGoalRuntime(params: Readonly<{
     );
   };
 
-  const source = createClaudeGoalWorkStateSource({
+  const nativeSource = createClaudeGoalWorkStateSource({
     backendId: params.backendId,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     publishWorkStateSnapshot,
     getCurrentClaudeSessionId: params.getCurrentClaudeSessionId,
     ...(params.logError ? { logError: params.logError } : {}),
   });
+
+  const admissions = new Set<Promise<void>>();
+  const source: ClaudeGoalWorkStateSource = {
+    ...nativeSource,
+    observeTranscriptMessage(message) {
+      if (admissions.size === 0) return nativeSource.observeTranscriptMessage(message);
+      // Native evidence can precede its transport ACK. Apply the accepted
+      // control intent before the source decides whether a row is stale replay.
+      return Promise.all([...admissions]).then(() => nativeSource.observeTranscriptMessage(message));
+    },
+  };
+
+  async function deliverGoalCommand(command: string, onDelivered: () => void): Promise<unknown> {
+    let settle!: () => void;
+    const admission = new Promise<void>(resolve => { settle = resolve; });
+    admissions.add(admission);
+    try {
+      let delivery: void | ClaudeGoalCommandDelivery;
+      try {
+        delivery = await params.injectGoalCommand(command);
+      } catch {
+        return stableError('session_goal_control_inject_failed');
+      }
+      if (!reachedAcceptedThreshold(delivery)) return stableError('session_goal_control_inject_failed');
+      try { onDelivered(); } catch { /* Native delivery succeeded; source reconciliation remains best-effort. */ }
+      return undefined;
+    } finally {
+      admissions.delete(admission);
+      settle();
+    }
+  }
 
   return {
     source,
@@ -122,45 +152,14 @@ export function createClaudeUnifiedGoalRuntime(params: Readonly<{
         // keeps the router on the live path and surfaces the failure cleanly.
         return stableError('session_goal_control_objective_required');
       }
-      let delivery: void | ClaudeGoalCommandDelivery;
-      try {
-        delivery = await params.injectGoalCommand(buildClaudeGoalCommand({ type: 'set', objective: trimmed }));
-      } catch {
-        return stableError('session_goal_control_inject_failed');
-      }
-      if (!reachedAcceptedThreshold(delivery)) {
-        return stableError('session_goal_control_inject_failed');
-      }
-      // Record the SET epoch once the `/goal <objective>` inject has been delivered, BEFORE any
-      // provider `goal_status`, so re-setting the SAME objective after a clear is accepted instead of
-      // being suppressed as a stale post-clear replay (G2/QA-CHIP-4). Best-effort: a failure here must
-      // not fail the set itself (the `/goal` was already injected).
-      try {
-        source.recordGoalSetIntent();
-      } catch {
-        // Non-fatal: the `/goal` was sent; the epoch nudge is a best-effort suppression lift.
-      }
-      return undefined;
+      return await deliverGoalCommand(buildClaudeGoalCommand({ type: 'set', objective: trimmed }),
+        () => nativeSource.recordGoalSetIntent());
     },
     clearGoal: async () => {
-      let delivery: void | ClaudeGoalCommandDelivery;
-      try {
-        delivery = await params.injectGoalCommand(buildClaudeGoalCommand({ type: 'clear' }));
-      } catch {
-        return stableError('session_goal_control_inject_failed');
-      }
-      if (!reachedAcceptedThreshold(delivery)) {
-        return stableError('session_goal_control_inject_failed');
-      }
       // The inject succeeded but Claude emits no `goal_status` for a clear (verified live), so remove
       // the work-state goal item directly — otherwise the badge keeps showing the now-stale goal.
-      // Best-effort: a removal failure must not fail the clear itself.
-      try {
-        source.clearGoalWorkState();
-      } catch {
-        // Non-fatal: the `/goal clear` was injected; the metadata reconciliation is a follow-up.
-      }
-      return undefined;
+      return await deliverGoalCommand(buildClaudeGoalCommand({ type: 'clear' }),
+        () => nativeSource.clearGoalWorkState());
     },
   };
 }

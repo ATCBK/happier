@@ -167,7 +167,7 @@ describe('resolveSessionViewHeaderProps owner metadata', () => {
             router: { push: () => {}, navigate: () => {} },
             actionIconColor: '#000', headerTintColor: '#000', statusErrorColor: '#f00',
             externalSessionRuntime: null,
-        };
+        } satisfies Parameters<typeof resolveSessionViewHeaderProps>[0];
         const types = (value: ReturnType<typeof resolveSessionViewHeaderProps>) => React.Children.toArray(
             (value.rightElement as React.ReactElement<{ children?: React.ReactNode }>).props.children,
         ).filter(React.isValidElement).map((child) => child.type);
@@ -188,6 +188,29 @@ describe('resolveSessionViewHeaderProps owner metadata', () => {
         expect(findBoardHeaderButton(resolveSessionViewHeaderProps({ ...input, boardHeaderAction }))).toBeDefined();
         expect(findBoardHeaderButton(resolveSessionViewHeaderProps({ ...input, boardHeaderAction, actionRailVisible: true }))).toBeUndefined();
 
+    });
+
+    it('drops a subtitle that only repeats the title (an unnamed session titled after its folder)', () => {
+        const session = createSessionFixture({ id: 'header-folder-title' });
+        const input = {
+            isDataReady: true, session, sessionId: session.id,
+            sessionInfoHref: '/session/header-folder-title/info',
+            sessionRunsHref: '/session/header-folder-title/runs',
+            sessionAutomationsHref: '/session/header-folder-title/automations',
+            paneScopeId: 'header-folder-title', windowWidth: 1400,
+            sessionAutomationsEnabledCount: 0, sessionExecutionRunsSupported: true,
+            showAutomations: false, shouldShowSubagentsButton: false, subagentActiveCount: 0,
+            navigateWithBlurOnWeb: (action: () => void) => action(),
+            handleHeaderExtraItemSelect: () => false,
+            router: { push: () => {}, navigate: () => {} },
+            actionIconColor: '#000', headerTintColor: '#000', statusErrorColor: '#f00',
+            externalSessionRuntime: null,
+        } satisfies Parameters<typeof resolveSessionViewHeaderProps>[0];
+        const title = resolveSessionViewHeaderProps(input).title;
+        expect(title.length).toBeGreaterThan(0);
+
+        expect(resolveSessionViewHeaderProps({ ...input, workspaceSubtitle: title }).subtitle).toBeUndefined();
+        expect(resolveSessionViewHeaderProps({ ...input, workspaceSubtitle: `~/code/${title}` }).subtitle).toBe(`~/code/${title}`);
     });
 
     it('keeps a deduplicated workspace conflict discoverable from the session header', () => {
@@ -521,7 +544,7 @@ describe('resolveSessionViewHeaderProps owner metadata', () => {
                 placement: { kind: 'reserved_rail' as const, edge: 'trailing' as const, widthPx: 280 },
                 isPhone: false,
             },
-        };
+        } satisfies Parameters<typeof resolveSessionViewHeaderProps>[0];
 
         const rail = findHeaderActionMenu(resolveSessionViewHeaderProps(input));
         const phone = findHeaderActionMenu(resolveSessionViewHeaderProps({

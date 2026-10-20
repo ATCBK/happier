@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
+import { PopoverScrollSourceProvider } from '@/components/ui/popover/PopoverScrollSource';
 import {
     Platform,
     View,
@@ -27,6 +28,7 @@ import { surfaceUsesRim } from '@/components/ui/surfaces/surfaceEdgeTreatment';
 
 import { FLOATING_OVERLAY_METRICS } from './floatingOverlayMetrics';
 import { GlassSurface } from '@/components/ui/glass/GlassSurface';
+import type { FloatingSurfaceRole } from '@/components/ui/glass/glassMaterial';
 import { createBackdropWebStyle } from '@/components/ui/overlays/createBackdropLayerStyle';
 import { useGlassSurfaceBackdropTone, useGlassSurfaceColor } from '@/components/ui/glass/useGlassSurfaceColor';
 import { readSurfaceStyleProperty } from '@/components/ui/surfaces/surfaceStyle';
@@ -133,6 +135,12 @@ interface FloatingOverlayProps {
     /** Selects the existing border/shadow chrome; both variants follow the floating material. */
     surfaceChrome?: 'modal' | 'theme';
     /**
+     * The surface's job on the floating material: `panel` for a large anchored panel (Add widget, About
+     * this widget, run inputs, Board settings) takes the dialogs' heavy coat; `menu` (default) for menus,
+     * pickers and small popovers keeps the hair of tint.
+     */
+    role?: FloatingSurfaceRole;
+    /**
      * Initial visibility for scroll edge fades before measurement.
      * Useful for optimistic trailing-edge fades (e.g., bottom: true for lists
      * that typically have more content below).
@@ -160,6 +168,7 @@ export const FloatingOverlay = React.memo((props: FloatingOverlayProps) => {
         edgeIndicators = false,
         arrow = false,
         surfaceChrome = 'modal',
+        role = 'menu',
         containerStyle,
         scrollViewStyle,
         scrollViewRef,
@@ -231,9 +240,18 @@ export const FloatingOverlay = React.memo((props: FloatingOverlayProps) => {
         }
     }, [arrowCfg?.placement]);
 
+    // The overlay's own scroller is the scroll source of what it holds: a list or menu inside it follows and drives
+    // this scroller, never the page behind the overlay.
+    const scrollerRef = React.useRef<ScrollView | null>(null);
+    const setScroller = React.useCallback((node: ScrollView | null) => {
+        scrollerRef.current = node;
+        if (typeof scrollViewRef === 'function') scrollViewRef(node);
+        else if (scrollViewRef) (scrollViewRef as React.MutableRefObject<ScrollView | null>).current = node;
+    }, [scrollViewRef]);
     const content = scrollEnabled ? (
+        <PopoverScrollSourceProvider scrollSourceRef={scrollerRef}>
         <Animated.ScrollView
-            ref={scrollViewRef}
+            ref={setScroller}
             style={[{ maxHeight, flexShrink: 1 }, scrollViewStyle]}
             keyboardShouldPersistTaps={keyboardShouldPersistTaps}
             showsVerticalScrollIndicator={showScrollIndicator}
@@ -257,6 +275,7 @@ export const FloatingOverlay = React.memo((props: FloatingOverlayProps) => {
         >
             {children}
         </Animated.ScrollView>
+        </PopoverScrollSourceProvider>
     ) : (
         <Animated.View style={[{ maxHeight }, scrollViewStyle]}>
             {children}
@@ -297,7 +316,7 @@ export const FloatingOverlay = React.memo((props: FloatingOverlayProps) => {
             containerStyle,
             containerPaint,
         ]}>
-            <GlassSurface surfaceGroup="floating" style={[
+            <GlassSurface surfaceGroup="floating" floatingRole={role} style={[
                 surfaceChrome === 'theme' ? styles.themedSurfaceClip : styles.modalClipSurface,
                 { maxHeight },
             ]}>

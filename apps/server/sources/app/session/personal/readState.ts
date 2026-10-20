@@ -1,9 +1,12 @@
 import { isSessionPersonallyTrackedV1 } from '@happier-dev/protocol/sessions/personal/tracking';
+import { clearFulfilledAccountSessionFollowOnceInTx } from '@/app/session/follow/accountFollowService';
 import { projectViewerReadStateV1, type ViewerReadStateV1 } from '@happier-dev/protocol/sessions';
 
 import { db } from "@/storage/db";
-import { inTx, type Tx } from "@/storage/inTx";
-import { AccountStatus, getDbProviderFromEnv, prismaRuntime as Prisma } from "@/storage/prisma";
+import { inReadSnapshot, inTx, transactionResult, type TransactionResult, type Tx } from "@/storage/inTx";
+import type { AccountChangePublication } from "@/app/changes/markAccountChanged";
+import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
+import { AccountStatus } from "@/storage/prisma";
 import { assertSessionCapabilityInTx } from "@/app/session/access/sessionAccess";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 import {
@@ -22,10 +25,6 @@ import {
     type SessionReadCursorReadState,
 } from "@/app/session/readCursor/resolveSessionReadCursorOperation";
 import { markAccountChangesForSessionAccounts } from "@/app/session/changeTracking/markAccountChangesForSessionAccounts";
-import {
-    initializeSessionDiscussionCursorsOnTrackingEntriesInTx,
-    initializeSessionDiscussionCursorsOnTrackingEntryInTx,
-} from "@/app/session/discussions/trackingEntry";
 
 import {
     listActivelyFollowingAccountIdsInTx,
@@ -121,37 +120,6 @@ export async function isSessionPersonallyTrackedInTx(
     });
 }
 
-/**
- * Set-oriented form of the same owner-or-active-Follow decision for readers
- * that already hold a page of Accounts and Sessions. It keeps cursor presence
- * out of the eligibility decision while avoiding a per-tuple query loop.
- */
-export async function filterPersonallyTrackedSessionsForAccountsInTx(
-    tx: SessionReader,
-    params: Readonly<{ accountIds: readonly string[]; sessionIds: readonly string[] }>,
-): Promise<ReadonlyMap<string, ReadonlySet<string>>> {
-    const accountIds = [...new Set(params.accountIds)];
-    const sessionIds = [...new Set(params.sessionIds)];
-    const result = new Map<string, Set<string>>(accountIds.map((accountId) => [accountId, new Set()]));
-    if (accountIds.length === 0 || sessionIds.length === 0) return result;
-
-    const [sessions, follows] = await Promise.all([
-        tx.session.findMany({
-            where: { id: { in: sessionIds } },
-            select: { id: true, accountId: true },
-        }),
-        tx.accountSessionFollow.findMany({
-            where: { accountId: { in: accountIds }, sessionId: { in: sessionIds }, following: true },
-            select: { accountId: true, sessionId: true },
-        }),
-    ]);
-    const accountIdSet = new Set(accountIds);
-    for (const session of sessions) {
-        if (accountIdSet.has(session.accountId)) result.get(session.accountId)?.add(session.id);
-    }
-    for (const follow of follows) result.get(follow.accountId)?.add(follow.sessionId);
-    return result;
-}
 
 /**
  * Owner initialization, part of the canonical Session creation transaction. A
@@ -224,103 +192,8 @@ export async function beginViewerReadTrackingOnFollowEntryInTx(params: Readonly<
         accountId: params.accountId,
         sessionId: params.sessionId,
     });
-    await initializeSessionDiscussionCursorsOnTrackingEntryInTx(params.tx, {
-        accountId: params.accountId,
-        sessionId: params.sessionId,
-        authentication: params.authentication,
-    });
 }
 
-/**
- * Set-oriented tracking entry for many Accounts.
- *
- * `wasTrackedByAccountId` is derived by the caller from the canonical
- * owner-or-active-Follow predicate *before* the relation writes and is never
- * trusted from a client. Only genuinely new entries (wasTracked !== true) are
- * seeded, so already-tracked owners/followers keep their frontier and unread
- * while re-entry after tracking stopped seeds fresh at the then-current
- * ceiling. One session-ceiling read plus one bulk session upsert plus one bulk
- * Discussion matrix upsert replaces the per-Account/per-Discussion loops.
- */
-export async function beginViewerReadTrackingOnFollowEntriesInTx(params: Readonly<{
-    tx: Tx;
-    sessionId: string;
-    accountIds: readonly string[];
-    wasTrackedByAccountId: ReadonlyMap<string, boolean>;
-    authentication?: SessionAccessAuthentication;
-}>): Promise<void> {
-    const needsSeeding = [...new Set(params.accountIds)]
-        .filter(accountId => typeof accountId === 'string' && accountId.length > 0)
-        .filter(accountId => params.wasTrackedByAccountId.get(accountId) !== true);
-    if (needsSeeding.length === 0) return;
-    await seedViewerReadStatesAtCurrentCeilingInTx(params.tx, {
-        sessionId: params.sessionId,
-        accountIds: needsSeeding,
-    });
-    await initializeSessionDiscussionCursorsOnTrackingEntriesInTx(params.tx, {
-        sessionId: params.sessionId,
-        accountIds: needsSeeding,
-        authentication: params.authentication,
-    });
-}
-
-/**
- * Bulk session-baseline seeder for the Follow-entry set.
- *
- * One ceiling read plus one bulk upsert (insert or overwrite to the ceiling
- * with unread cleared) replaces per-Account session reads plus per-Account
- * upserts. Chunked to respect provider variable limits; test fixtures settle
- * in one chunk. Atomic per chunk: a concurrent post commits either before the
- * ceiling read (new ceiling) or after (old ceiling, later message unread).
- */
-async function seedViewerReadStatesAtCurrentCeilingInTx(
-    tx: ReadStateClient & SessionReader,
-    params: Readonly<{ sessionId: string; accountIds: readonly string[] }>,
-): Promise<void> {
-    const unique = [...new Set(params.accountIds)].filter(accountId => typeof accountId === 'string' && accountId.length > 0);
-    if (unique.length === 0) return;
-    const session = await (tx as Tx).session.findUnique({
-        where: { id: params.sessionId },
-        select: SESSION_READ_CEILING_SELECT,
-    });
-    if (!session) return;
-    const lastViewedSessionSeq = resolveVisibleSessionSeq(session);
-    const provider = getDbProviderFromEnv(process.env, 'postgres');
-    const CHUNK = 200;
-    for (let offset = 0; offset < unique.length; offset += CHUNK) {
-        const chunk = unique.slice(offset, offset + CHUNK);
-        if (provider === 'mysql') {
-            const existing = await tx.accountSessionReadState.findMany({
-                where: { sessionId: params.sessionId, accountId: { in: chunk } },
-                select: { accountId: true },
-            });
-            const present = new Set(existing.map(row => row.accountId));
-            const missing = chunk.filter(accountId => !present.has(accountId));
-            if (missing.length > 0) {
-                await tx.accountSessionReadState.createMany({
-                    data: missing.map(accountId => ({
-                        accountId,
-                        sessionId: params.sessionId,
-                        lastViewedSessionSeq,
-                        unreadSince: null,
-                    })),
-                    skipDuplicates: true,
-                });
-            }
-            await tx.accountSessionReadState.updateMany({
-                where: { sessionId: params.sessionId, accountId: { in: chunk } },
-                data: { lastViewedSessionSeq, unreadSince: null },
-            });
-        } else {
-            const rows = Prisma.join(chunk.map(accountId => Prisma.sql`(${accountId}, ${params.sessionId}, ${lastViewedSessionSeq}, NULL)`));
-            await (tx as Tx).$executeRaw(Prisma.sql`
-                INSERT INTO "AccountSessionReadState" ("accountId", "sessionId", "lastViewedSessionSeq", "unreadSince")
-                VALUES ${rows}
-                ON CONFLICT("accountId", "sessionId") DO UPDATE SET "lastViewedSessionSeq" = excluded."lastViewedSessionSeq", "unreadSince" = NULL
-            `);
-        }
-    }
-}
 
 /**
  * The guarded non-unread transition (§5.3). It moves only cursors that were
@@ -418,6 +291,11 @@ export type ApplyViewerReadCursorOperationResult =
     }>
     | Readonly<{ ok: false; error: ViewerReadCursorOperationError }>;
 
+type ViewerReadCursorSuccess = Extract<ApplyViewerReadCursorOperationResult, { ok: true }>;
+export type ViewerReadCursorOperationInTxResult =
+    | Extract<ApplyViewerReadCursorOperationResult, { ok: false }>
+    | (Omit<ViewerReadCursorSuccess, "actorChangeCursor"> & TransactionResult<ViewerReadCursorSuccess>);
+
 function isValidOperation(operation: SessionReadCursorOperation): boolean {
     if (operation.kind === "mark-read" || operation.kind === "mark-unread") return true;
     return operation.kind === "advance"
@@ -498,7 +376,7 @@ export async function applyViewerReadCursorOperation(params: Readonly<{
         let latestMainMessageSeq: number | null = null;
         let initialVisibleSeq: number | null = null;
         if (operation.kind === "mark-unread") {
-            const initial = await inTx(async (tx) => await admitViewerReadCursorOperation(tx, { accountId, sessionId, authentication: params.authentication }), { isolationLevel: "Serializable" /* Viewer baseline creation and tracking admission must serialize with Follow and discussion entry. */ });
+            const initial = await inReadSnapshot(async (tx) => await admitViewerReadCursorOperation(tx, { accountId, sessionId, authentication: params.authentication }));
             if (!initial.ok) return initial;
             initialVisibleSeq = resolveVisibleSessionSeq(initial.session);
             latestMainMessageSeq = await findLatestUnreadAffectingMainTranscriptMessageSeq(
@@ -508,6 +386,9 @@ export async function applyViewerReadCursorOperation(params: Readonly<{
         }
 
         return await inTx(async (tx) => {
+            // Follow entry and this reader's frontier share the existing Account
+            // publication fence, acquired before baseline/tracking admission.
+            await acquireSessionAccountCursorLocksInTx(tx, [sessionId], [accountId]);
             if (operation.kind !== "advance") {
                 const admitted = await admitViewerReadCursorOperation(tx, { accountId, sessionId, authentication: params.authentication });
                 if (!admitted.ok) return admitted;
@@ -522,7 +403,7 @@ export async function applyViewerReadCursorOperation(params: Readonly<{
             return await applyViewerReadCursorOperationInTx(tx, {
                 accountId, sessionId, operation, latestMainMessageSeq, initialVisibleSeq, authentication: params.authentication,
             });
-        }, { isolationLevel: "Serializable" /* Viewer baseline creation and tracking admission must serialize with Follow and discussion entry. */ });
+        });
     } catch {
         return { ok: false, error: "internal" };
     }
@@ -546,7 +427,7 @@ export async function applyViewerReadCursorOperationInTx(
         latestMainMessageSeq?: number | null;
         initialVisibleSeq?: number | null;
     }>,
-): Promise<ApplyViewerReadCursorOperationResult> {
+): Promise<ViewerReadCursorOperationInTxResult> {
     const { accountId, sessionId, operation, latestMainMessageSeq = null, initialVisibleSeq = null } = params;
     const admission = await admitViewerReadCursorOperation(tx, { accountId, sessionId, authentication: params.authentication });
     if (!admission.ok) return admission;
@@ -571,38 +452,42 @@ export async function applyViewerReadCursorOperationInTx(
         operation,
     });
     const nextCursor = resolved.nextLastViewedSessionSeq;
+    const onceCleared = operation.kind === 'mark-read'
+        && await clearFulfilledAccountSessionFollowOnceInTx(tx, { accountId, sessionId });
 
     const buildResult = (
         row: ViewerReadStateRow | null,
         didChange: boolean,
-        actorChangeCursor: number | null = null,
-    ): ApplyViewerReadCursorOperationResult => ({
-        ok: true,
-        accountId,
-        lastViewedSessionSeq: row ? Math.min(row.lastViewedSessionSeq, visibleSessionSeq) : null,
-        unreadSince: row?.unreadSince ?? null,
-        didChange,
-        readState: resolved.readState,
-        viewerReadState: projectViewerReadState({ tracked: true, row, visibleSessionSeq }),
-        visibleSessionSeq,
-        actorChangeCursor,
-    });
+        publication?: AccountChangePublication,
+    ): Extract<ViewerReadCursorOperationInTxResult, { ok: true }> => {
+        const result = {
+            ok: true as const,
+            accountId,
+            lastViewedSessionSeq: row ? Math.min(row.lastViewedSessionSeq, visibleSessionSeq) : null,
+            unreadSince: row?.unreadSince ?? null,
+            didChange,
+            readState: resolved.readState,
+            viewerReadState: projectViewerReadState({ tracked: true, row, visibleSessionSeq }),
+            visibleSessionSeq,
+        };
+        return { ...result, ...transactionResult(() => ({ ...result, actorChangeCursor: publication?.resolveCursor() ?? null })) };
+    };
 
     // Actor-private wake. Cross-device convergence for the same Account
     // uses the existing AccountChange/user-room delivery; no other
     // Account's socket learns this frontier (L09B-I4).
-    const markActorChanged = async (nextLastViewedSessionSeq: number): Promise<number | null> => {
-        const [cursor] = await markAccountChangesForSessionAccounts({
+    const markActorChanged = async (nextLastViewedSessionSeq: number): Promise<AccountChangePublication | undefined> => {
+        const [publication] = await markAccountChangesForSessionAccounts({
             tx,
             sessionId,
             accountIds: [accountId],
             hint: { lastViewedSessionSeq: nextLastViewedSessionSeq },
         });
-        return cursor?.cursor ?? null;
+        return publication;
     };
 
     if (!resolved.didChange || typeof nextCursor !== "number") {
-        return buildResult(current, false);
+        return buildResult(current, onceCleared);
     }
 
     const unreadSince = nextCursor >= visibleSessionSeq

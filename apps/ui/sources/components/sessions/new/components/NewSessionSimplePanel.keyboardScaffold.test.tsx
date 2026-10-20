@@ -126,7 +126,8 @@ vi.mock('@/components/sessions/keyboardAvoidance', async (importOriginal) => {
 vi.mock('@/components/sessions/agentInput', () => ({
     AgentInput: (props: Record<string, unknown>) => {
         testState.agentInputProps.push(props);
-        return React.createElement('AgentInput', props);
+        // The status row's trailing actions are part of what the composer draws: render them.
+        return React.createElement('AgentInput', props, props.statusTrailingActions as React.ReactNode);
     },
 }));
 
@@ -242,7 +243,7 @@ describe('NewSessionSimplePanel keyboard scaffold integration', () => {
         }
     });
 
-    it('leaves the surface opaque on web, where the router owns the drawer and its scrim', async () => {
+    it('floats the web composer on its own full-window backdrop, with its leave control in the status row on a phone', async () => {
         testState.platformOs = 'web';
         const { NewSessionSimplePanel } = await import('./NewSessionSimplePanel');
         let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
@@ -250,13 +251,13 @@ describe('NewSessionSimplePanel keyboard scaffold integration', () => {
         try {
             screen = await renderScreen(<NewSessionSimplePanel {...createFloatingPanelProps()} />);
 
-            // Web keeps the router's drawer and its own scrim. Painting a second backdrop inside it
-            // would double the wash.
-            expect(testState.scaffoldRender?.props.surface).not.toBe('transparent');
+            // Web `/new` is a transparent route too: the panel paints one backdrop of its own (a press
+            // closes) and the composer's leave control rides its status row.
+            expect(testState.scaffoldRender?.props.surface).toBe('transparent');
             expect(screen.tree.root.findAll(
                 (node) => node.props?.testID === 'new-session-scrim',
-            )).toHaveLength(0);
-            expect(screen.tree.root.findAllByProps({ testID: 'new-session-composer-close' })).toHaveLength(0);
+            ).length).toBeGreaterThan(0);
+            expect(screen.tree.root.findAllByProps({ testID: 'new-session-composer-close' }).length).toBeGreaterThan(0);
         } finally {
             act(() => {
                 screen?.tree.unmount();
@@ -264,7 +265,7 @@ describe('NewSessionSimplePanel keyboard scaffold integration', () => {
         }
     });
 
-    it('does not vertically center a non-floating web composer behind a blank top spacer', async () => {
+    it('centres a desktop web composer on its backdrop with no capsule: backdrop and Escape close it', async () => {
         testState.platformOs = 'web';
         const { NewSessionSimplePanel } = await import('./NewSessionSimplePanel');
         const props = {
@@ -276,8 +277,9 @@ describe('NewSessionSimplePanel keyboard scaffold integration', () => {
         const scaffoldStyle = testState.scaffoldRender?.props.style;
         const flattened = Object.assign({}, ...(Array.isArray(scaffoldStyle) ? scaffoldStyle : [scaffoldStyle]));
 
-        expect(flattened.justifyContent).toBe('flex-start');
+        expect(flattened.justifyContent).toBe('center');
         expect(flattened.paddingTop).toBe(0);
+        expect(screen.tree.root.findAllByProps({ testID: 'new-session-composer-close' })).toHaveLength(0);
         await screen.unmount();
     });
 

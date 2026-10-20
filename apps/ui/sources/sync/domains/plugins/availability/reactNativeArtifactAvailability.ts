@@ -16,6 +16,7 @@ import {
 import {
     createBundledPluginUiAppExactArtifactSource,
 } from './bundledAppExactArtifactSource';
+import type { PluginAccountHostedArtifactPublicationResult } from './accountHostedArtifactPublication';
 import {
     acquirePluginReactNativeArtifactLease,
     materializePluginReactNativeArtifactLeaseInCache,
@@ -41,6 +42,7 @@ export type PluginReactNativeArtifactAvailabilityHandle = Readonly<{
     isCurrent: () => boolean;
     onRevoke: (listener: () => void) => Readonly<{ dispose: () => void }>;
     dispose: () => void;
+    accountHosting?: Promise<PluginAccountHostedArtifactPublicationResult>;
 }>;
 
 export type PluginReactNativeArtifactAvailability =
@@ -100,10 +102,12 @@ export function createPluginReactNativeArtifactAvailabilityProducer(
 
                 const selected = await acquirePluginReactNativeArtifactLease({
                     reader: input.reader,
+                    executionOrigin: input.executionOrigin,
                     artifactGraph: input.artifactGraph,
                     cacheIdentity: input.cacheIdentity,
                     accountLifetime: input.accountLifetime,
                     ...(input.signal ? { signal: input.signal } : {}),
+                    ...(input.accountHostingSignal ? { accountHostingSignal: input.accountHostingSignal } : {}),
                     appExact: dependencies.appExact,
                     persistent,
                     fetchDaemonArtifactBytes: dependencies.fetchDaemonArtifactBytes,
@@ -111,6 +115,7 @@ export function createPluginReactNativeArtifactAvailabilityProducer(
                         ? { daemonProjectionSelection: input.daemonProjectionSelection }
                         : {}),
                     ...(input.daemon ? { daemon: input.daemon } : {}),
+                    ...(input.daemons ? { daemons: input.daemons } : {}),
                 });
                 if (selected.kind !== 'available') return selected;
                 if (!isCurrent(input)) {
@@ -135,6 +140,7 @@ export function createPluginReactNativeArtifactAvailabilityProducer(
                     isCurrent: materialized.isCurrent,
                     onRevoke: selected.lease.onRevoke,
                     dispose: selected.lease.dispose,
+                    ...(selected.accountHosting ? { accountHosting: selected.accountHosting } : {}),
                 });
             } finally {
                 persistent.release();

@@ -2,6 +2,8 @@
 !Dockerfile
 !package.json
 !yarn.lock
+!patches
+!patches/**
 !.github/feature-policy
 !.github/feature-policy/**
 !apps

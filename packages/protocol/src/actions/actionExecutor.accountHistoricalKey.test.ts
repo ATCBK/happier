@@ -28,7 +28,8 @@ function createDeps(): ActionExecutorDeps {
 }
 
 const actionId: ActionId = 'account.encryption.historicalKey.forget';
-const presentUser = { surface: 'ui' as const, authority: 'present_user' as const, actionCaller: { kind: 'host' as const } };
+const presentUser = { surface: 'ui' as const, authority: 'present_user' as const, actionCaller: { kind: 'host' as const },
+  presentUserConfirmation: { actionId } };
 
 describe('historical Account encryption key Forget Action', () => {
   it('refuses a headless host without a device credential custodian', async () => {
@@ -62,13 +63,14 @@ describe('historical Account encryption key Forget Action', () => {
         isApprovalRequiredByActionsSettings(id, settings, context),
     }));
     const result = await executor.execute(actionId, {}, { surface, authority: 'account_automation', actionCaller: { kind: 'host' } });
-    expect(result).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+    expect(result).toMatchObject({ ok: false, errorCode: 'present_user_required' });
     expect(accountHistoricalEncryptionKeyForgetAction).not.toHaveBeenCalled();
   });
 });
 
 describe('historical Account automation template recovery Action', () => {
   const recoveryActionId: ActionId = 'account.encryption.automationTemplates.recover';
+  const recoveringUser = { ...presentUser, presentUserConfirmation: { actionId: recoveryActionId } };
 
   it('returns per-template custody outcomes through the same client Action boundary', async () => {
     const result = { templates: [
@@ -80,8 +82,8 @@ describe('historical Account automation template recovery Action', () => {
     // The invoking device's credentials and remote template CAS are system boundaries.
     const accountEncryptionAutomationTemplatesRecoverAction = vi.fn(async () => result);
     const executor = createActionExecutor(Object.assign(createDeps(), { accountEncryptionAutomationTemplatesRecoverAction }));
-    await expect(executor.execute(recoveryActionId, {}, presentUser)).resolves.toEqual({ ok: true, result });
-    await expect(executor.execute(recoveryActionId, { accountId: 'other' }, presentUser)).resolves.toMatchObject({
+    await expect(executor.execute(recoveryActionId, {}, recoveringUser)).resolves.toEqual({ ok: true, result });
+    await expect(executor.execute(recoveryActionId, { accountId: 'other' }, recoveringUser)).resolves.toMatchObject({
       ok: false, errorCode: 'invalid_parameters',
     });
     expect(accountEncryptionAutomationTemplatesRecoverAction).toHaveBeenCalledTimes(1);
@@ -90,7 +92,7 @@ describe('historical Account automation template recovery Action', () => {
   it('refuses a headless host without a genuine historical-key custodian', async () => {
     expect(getActionSpec(recoveryActionId)).toMatchObject({ requiredAuthority: 'present_user', executionPlacement: 'client',
       surfaces: { agent: true, mcp: true, plugin: true, api: false }, approval: { result: 'required' } });
-    await expect(createActionExecutor(createDeps()).execute(recoveryActionId, {}, presentUser)).resolves.toMatchObject({
+    await expect(createActionExecutor(createDeps()).execute(recoveryActionId, {}, recoveringUser)).resolves.toMatchObject({
       ok: false, errorCode: 'target_unavailable',
     });
   });
@@ -104,7 +106,7 @@ describe('historical Account automation template recovery Action', () => {
         isApprovalRequiredByActionsSettings(id, settings, context),
     }));
     await expect(executor.execute(recoveryActionId, {}, { surface, authority: 'account_automation', actionCaller: { kind: 'host' } }))
-      .resolves.toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+      .resolves.toMatchObject({ ok: false, errorCode: 'present_user_required' });
     expect(accountEncryptionAutomationTemplatesRecoverAction).not.toHaveBeenCalled();
   });
 });

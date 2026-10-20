@@ -1,4 +1,5 @@
 import type { Session } from '@/sync/domains/state/storageTypes';
+import { readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
 import { readSessionListRowsForServerId, type SessionListRowStateByServerId } from '@/sync/domains/session/listing/sessionListRowStateLookup';
@@ -42,21 +43,21 @@ function normalizeId(value: string | null | undefined): string | null {
 }
 
 /**
- * The Sessions in this Session's `reportsTo` subtree, as the store holds them.
+ * The Sessions in this Session's `manager` subtree, as the store holds them.
  *
  * Shallow-stable: the array keeps its identity until a Session in the subtree changes, joins or leaves,
  * so an unrelated Session's streamed update does not re-project the lead's Work.
  */
 export function selectSessionReportSubtree(
     sessions: Readonly<Record<string, Session>>,
-    leadSessionId: string,
+    managerSessionId: string,
     serverId: string | null,
     rowsByServerId?: SessionListRowStateByServerId,
 ): readonly Session[] {
     if (!serverId?.trim()) return EMPTY_SESSIONS;
     let childrenByLead: Map<string, Session[]> | null = null;
     for (const session of Object.values(selectSessionRelationRecords(sessions, serverId, rowsByServerId))) {
-        const lead = normalizeId(session.reportsTo?.sessionId);
+        const lead = normalizeId(readSessionManagerSessionIdV1(session));
         if (!lead) continue;
         childrenByLead ??= new Map();
         const siblings = childrenByLead.get(lead);
@@ -65,8 +66,8 @@ export function selectSessionReportSubtree(
     }
     if (!childrenByLead) return EMPTY_SESSIONS;
     const subtree: Session[] = [];
-    const visited = new Set<string>([leadSessionId]);
-    const queue = [leadSessionId];
+    const visited = new Set<string>([managerSessionId]);
+    const queue = [managerSessionId];
     while (queue.length > 0) {
         const lead = queue.shift() as string;
         for (const child of childrenByLead.get(lead) ?? []) {

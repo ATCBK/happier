@@ -16,6 +16,18 @@ import {
 } from './sessionsHttp';
 
 describe('sessionControl.sessionsHttp.fetchSessionByIdCompat', () => {
+  it.each([fetchSessionById, fetchSessionByIdCompat])('accepts additive detail fields but still rejects a missing required id (%#)', async reader => {
+    const session = createSessionRecordFixture({ id: 's1' });
+    vi.spyOn(axios, 'get').mockResolvedValueOnce({ status: 200,
+      data: { futureEnvelopeField: { ignored: true }, session: { ...session, futureCoordinationField: { ignored: true } } },
+    }).mockResolvedValueOnce({ status: 200, data: { session: { ...session, id: undefined, futureCoordinationField: true } } });
+    await expect(reader({ token: 't', sessionId: 's1' })).resolves.toMatchObject({ id: 's1' });
+    await expect(reader({ token: 't', sessionId: 's1' })).rejects.toMatchObject({
+      code: 'session_detail_invalid_response',
+      issues: expect.arrayContaining([{ path: ['session', 'id'], code: 'invalid_type' }]),
+    });
+  });
+
   it('rejects a qualified current detail response that omits responsibility', async () => {
     vi.spyOn(axios, 'get').mockResolvedValueOnce({
       status: 200,

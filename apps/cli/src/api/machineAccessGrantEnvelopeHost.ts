@@ -72,6 +72,7 @@ export async function prepareMachineAccessKeyEnvelopes(
           await assertCurrent();
           const client = await ApiClient.create(credentials);
           custodianKey = await client.prepareMachineContentKey(params.machineId, {
+            serverHttpBaseUrl: params.serverHttpBaseUrl,
             signal: params.signal, isCurrent: async () => { await assertCurrent(); return current; },
             request: async request => {
               const requestOptions = { ...await options(request), signal: request.signal };

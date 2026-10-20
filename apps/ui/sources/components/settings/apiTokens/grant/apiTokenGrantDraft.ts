@@ -1,4 +1,10 @@
-import { API_TOKEN_FULL_GRANT_V1, ApiTokenGrantOriginV1Schema, ApiTokenGrantV1Schema, type ApiTokenGrantV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
+import {
+    API_TOKEN_FULL_GRANT_V1,
+    ApiTokenGrantOriginV1Schema,
+    ApiTokenGrantV1Schema,
+    isApiTokenGrantActionAllowedV1,
+    type ApiTokenGrantV1,
+} from '@happier-dev/protocol/auth/apiTokenGrant';
 import type { ActionIdFamilyV1 } from '@happier-dev/protocol/actions/actionIds';
 import type { ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
 
@@ -15,12 +21,13 @@ export const API_TOKEN_LIMITED_GRANT_START_V1: ApiTokenGrantV1 = Object.freeze({
     actions: Object.freeze({ families: [], ids: [] }),
 });
 
-export type ApiTokenGrantDraftIssue = 'actions_required' | 'targets_required' | 'models_required';
+export type ApiTokenGrantDraftIssue = 'actions_required' | 'automations_required' | 'targets_required' | 'models_required';
 
 /** What still blocks sending the grant, in editor order. Empty means the protocol accepts it. */
 export function resolveApiTokenGrantDraftIssues(grant: ApiTokenGrantV1): readonly ApiTokenGrantDraftIssue[] {
     const issues: ApiTokenGrantDraftIssue[] = [];
     if (grant.actions && grant.actions.families.length === 0 && grant.actions.ids.length === 0) issues.push('actions_required');
+    if (grant.automationIds && grant.automationIds.length === 0) issues.push('automations_required');
     if (grant.targets && grant.targets.sessions.length === 0 && grant.targets.machines.length === 0) issues.push('targets_required');
     if (grant.models && grant.models.length === 0) issues.push('models_required');
     return issues;
@@ -112,6 +119,26 @@ export function toggleApiTokenGrantModel(grant: ApiTokenGrantV1, ref: ProviderBo
     return { ...grant, models: toggle(grant.models ?? [], ref, apiTokenGrantModelKey) };
 }
 
+/** The Action whose operand the Automation restriction narrows. */
+export const API_TOKEN_GRANT_RUN_NOW_ACTION_ID = 'workflow.trigger.run_now';
+
+/**
+ * The Automation choice belongs beside the actions while the token can run an Automation now, and
+ * stays while a restriction exists so a person can see and remove it.
+ */
+export function apiTokenGrantOffersAutomations(grant: ApiTokenGrantV1): boolean {
+    return grant.automationIds != null || isApiTokenGrantActionAllowedV1(grant, API_TOKEN_GRANT_RUN_NOW_ACTION_ID);
+}
+
+export function setApiTokenGrantAnyAutomation(grant: ApiTokenGrantV1, any: boolean): ApiTokenGrantV1 {
+    if (any === (grant.automationIds == null)) return grant;
+    return { ...grant, automationIds: any ? null : [] };
+}
+
+export function toggleApiTokenGrantAutomation(grant: ApiTokenGrantV1, automationId: string): ApiTokenGrantV1 {
+    return { ...grant, automationIds: toggle(grant.automationIds ?? [], automationId) };
+}
+
 export function setApiTokenGrantApprove(grant: ApiTokenGrantV1, approve: boolean): ApiTokenGrantV1 {
     return grant.approve === approve ? grant : { ...grant, approve };
 }
@@ -137,6 +164,7 @@ function canonicalGrant(grant: ApiTokenGrantV1) {
         targets: grant.targets ? { sessions: sorted(grant.targets.sessions), machines: sorted(grant.targets.machines) } : null,
         origins: sorted(grant.origins),
         models: grant.models ? sorted(grant.models.map(apiTokenGrantModelKey)) : null,
+        automationIds: grant.automationIds ? sorted(grant.automationIds) : null,
         permissionModes: grant.permissionModes ? sorted(grant.permissionModes) : null,
     };
 }

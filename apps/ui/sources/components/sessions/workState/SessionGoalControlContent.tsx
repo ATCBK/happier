@@ -13,7 +13,7 @@ import { useSessionMetadata } from '@/sync/domains/state/storage';
 import { GoalBudgetDisclosure } from './GoalBudgetDisclosure';
 import { SessionGoalContinuationSection } from './SessionGoalContinuationSection';
 import type { SessionKeepGoingTrigger } from './useSessionKeepGoingTrigger';
-import { SessionGoalActionsMenu, type SessionGoalMenuAction } from './SessionGoalActionsMenu';
+import { BUSY_DIM_OPACITY, SessionGoalActionsMenu, type SessionGoalMenuAction } from './SessionGoalActionsMenu';
 import { GoalUsageMetadata } from './GoalUsageMetadata';
 import { resolveGoalActionCapabilities, resolveGoalPauseResumeAction, resolveGoalStatusLabelKey, type GoalActionCapabilities } from './goalActionVisibility';
 import { ICON_SIZE, Icon } from '@/components/ui/icons/Icon';
@@ -89,6 +89,14 @@ export function SessionGoalControlContent(props: Readonly<{
         setBudgetError(false);
         if (goal) setEditing(false);
     }, [onDraftObjectiveChange, goal]);
+    // Idle: Cancel just leaves editing. While a Save is in flight it also dismisses the surface through
+    // the same onCancel path as the set-first-goal form, releasing the caller wait (the admitted Save may
+    // still commit; the next open shows authoritative state).
+    const { busy, onCancel } = props;
+    const cancelEditAndDismissWhileBusy = React.useCallback(() => {
+        cancelEdit();
+        if (busy) onCancel?.();
+    }, [busy, cancelEdit, onCancel]);
     const budgetChanged = React.useMemo(() => {
         const currentBudget = typeof props.goal?.tokenBudget === 'number' ? Math.trunc(props.goal.tokenBudget) : null;
         if (!budgetEnabled) return currentBudget !== null;
@@ -132,7 +140,7 @@ export function SessionGoalControlContent(props: Readonly<{
                 styles.primaryButton,
                 {
                     backgroundColor: theme.colors.button.primary.background,
-                    opacity: !canSave ? 0.42 : (pressed ? motionTokens.press.opacitySubtle : 1),
+                    opacity: !canSave ? BUSY_DIM_OPACITY : (pressed ? motionTokens.press.opacitySubtle : 1),
                 },
             ]}
         >
@@ -177,8 +185,7 @@ export function SessionGoalControlContent(props: Readonly<{
                                 <Pressable
                                     testID="session-goal-cancel-edit-button"
                                     accessibilityRole="button"
-                                    onPress={cancelEdit}
-                                    disabled={props.busy}
+                                    onPress={cancelEditAndDismissWhileBusy}
                                     style={styles.secondaryButton}
                                 >
                                     <Text style={[styles.secondaryActionText, { color: theme.colors.text.secondary }]}>
@@ -195,7 +202,7 @@ export function SessionGoalControlContent(props: Readonly<{
                                         accessibilityRole="button"
                                         onPress={() => setEditing(true)}
                                         disabled={props.busy}
-                                        style={styles.secondaryButton}
+                                        style={[styles.secondaryButton, props.busy ? styles.busyDimmed : null]}
                                     >
                                         <Text style={[styles.secondaryActionText, { color: theme.colors.text.secondary }]}>
                                             {t('common.edit')}
@@ -297,7 +304,6 @@ export function SessionGoalControlContent(props: Readonly<{
                         testID="session-goal-cancel-button"
                         accessibilityRole="button"
                         onPress={() => props.onCancel?.()}
-                        disabled={props.busy}
                         style={styles.secondaryButton}
                     >
                         <Text style={[styles.secondaryActionText, { color: theme.colors.text.secondary }]}>
@@ -396,6 +402,9 @@ const styles = StyleSheet.create(() => ({
         paddingHorizontal: 16,
         justifyContent: 'center',
         alignItems: 'center',
+    },
+    busyDimmed: {
+        opacity: BUSY_DIM_OPACITY,
     },
     secondaryButton: {
         minHeight: 40,

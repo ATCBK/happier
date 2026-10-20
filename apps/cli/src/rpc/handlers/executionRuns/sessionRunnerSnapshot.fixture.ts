@@ -4,6 +4,9 @@ import { createPluginReloadController } from '@/plugins/runtime/reload/controlle
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import { UserMessageSchema } from '@/api/types';
 import { SessionInputAdmissionResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { DEFAULT_PROVIDER_SETTINGS_V1, ProviderSettingsV1Schema } from '@happier-dev/protocol';
+import { splitProviderSettingsV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { resolveProviderConnectionForMachine } from '@/providers/registry/resolve';
 import type { ExecutionRunAdmittedPendingInputV1, ExecutionRunPendingInputBinding } from '@/api/session/client/transport/sessionClientInteractionApi';
 
 /** Substitute only the parent Session's persisted Pending transport. Host drain,
@@ -64,37 +67,77 @@ export async function createSessionRunSnapshotFixture(happyHomeDir: string) {
   const pluginId = 'acme.snapshot';
   const controller = createPluginReloadController({ happyHomeDir });
   const declaration = (id: string) => ({ id, title: id, runtime: { kind: 'custom' }, primary: 'sessions',
-    capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } } });
-  return await createAuthoredAdmittedPluginRuntimeFixture({ happyHomeDir, controller,
+    cli: { executable: { binaryName: `happier-snapshot-${id}`, sourcePreference: 'system-first',
+      acceptsJavaScriptFileOverride: true, knownUserBinDirSuffixes: null },
+      install: { manual: { kind: 'none' } }, auth: { support: 'unsupported', loginLaunches: [] } },
+    catalog: { agentCliSystemTool: { toolId: 'snapshot-native-cli' } },
+    capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true, workspaceWrites: 'deny' },
+      structuredOutput: { formats: ['json'] } },
+    providerRequirements: { acceptsProtocols: ['openai-responses'], required: { streaming: true },
+      credentialSupport: { supportsNoAuth: true, apiKeyTransports: [] },
+      authIsolation: { suppressConnectedServiceIds: [], ownedEnvKeys: ['SNAPSHOT_PROVIDER_MODEL'] },
+      materialization: 'spawnEnv', applyPolicy: 'restart_session', supportsFreeformModelIds: false } });
+  const fixture = await createAuthoredAdmittedPluginRuntimeFixture({ happyHomeDir, controller,
     plugins: [{ manifest: createPluginManifestV2Fixture({ id: pluginId,
       contributes: { agents: [declaration('parent'), declaration('child')],
+        systemTools: [{ id: 'snapshot-native-cli', title: 'Snapshot native CLI', executableNames: ['happier-snapshot-uninstalled'] }],
+        providers: ['models', 'unverified-models'].map(id => ({ v: 1, id, name: 'Snapshot models', kind: 'cloud',
+          endpointTemplates: [{ id: 'responses', protocol: 'openai-responses', baseUrl: 'https://1.1.1.1/v1',
+            capabilities: { streaming: 'supported', toolRoundTrips: 'supported', reasoningControls: 'supported', statefulResponses: 'supported' } }],
+          catalog: { source: 'static', manualModelPolicy: 'catalog-only', staticModels: [{ id: 'snapshot-provider-model', name: 'Snapshot model' }] },
+          compatibilityOverrides: ['parent', 'child'].map(agent => ({ agentTargetKey: `agent:${pluginId}/${agent}`, protocol: 'openai-responses',
+            status: id === 'models' ? 'verified' : 'experimental', reason: 'Controlled native Agent boundary',
+            evidence: { sourceUrls: ['https://example.test/contract'], verifiedAt: '2026-10-16' } })),
+        })),
         resources: [{ id: 'delegate-text', kind: 'prompt', path: './delegate.md', contentType: 'text/markdown' }],
         promptAssets: [{ id: 'delegate-prompt', kind: 'systemPrompt', resource: 'delegate-text',
           target: { kind: 'agent', agent: 'parent' } }],
         executionRunProfiles: [{ id: 'captured-delegate', intent: 'delegate', title: 'Captured delegate',
           promptAsset: 'delegate-prompt', compatibleAgents: ['parent'],
-          defaults: { retention: 'ephemeral', runClass: 'bounded', io: 'requestResponse' } }],
+          defaults: { retention: 'ephemeral', runClass: 'bounded', io: 'requestResponse' } },
+          { id: 'captured-review', intent: 'review', title: 'Captured review',
+            promptAsset: 'delegate-prompt', compatibleAgents: ['parent'],
+            defaults: { retention: 'ephemeral', runClass: 'bounded', io: 'requestResponse' },
+            actions: [{ kind: 'hostAction', actionId: 'reviews.comments.create' }] },
+          { id: 'captured-retained-review', intent: 'review', title: 'Captured retained review',
+            promptAsset: 'delegate-prompt', compatibleAgents: ['parent'],
+            defaults: { retention: 'resumable', runClass: 'longLived', io: 'streaming' } }],
       } }),
       files: { 'delegate.md': 'Use the daemon-admitted profile instructions.', 'factory.mjs': `
         import { appendFile } from 'node:fs/promises';
         import { join } from 'node:path';
         export function createRuntime({ agent }) {
-          return { sessions: { async open(request) {
+          return { sessions: { async open(request, { services }) {
             let emit;
             let sequence = 0;
+            let nativeChild;
+            const nativeCli = await services.exec.systemTools.resolve({ toolId: 'snapshot-native-cli',
+              purpose: 'Prepare native child skills', cwd: request.cwd });
             await appendFile(join(request.cwd, 'native-opens.jsonl'), JSON.stringify({
               agentId: agent.id, modelId: request.configuration?.model?.value ?? null,
+              nativeCliPath: nativeCli.executablePath,
               sessionId: request.sessionId,
+              providerConnectionId: request.providerBinding?.connectionId ?? null,
+              materializedProviderModel: request.launchEnvironment?.values?.SNAPSHOT_PROVIDER_MODEL ?? null,
             }) + '\\n');
             return { send: async input => {
+              if (input.input.text.includes('retained-snapshot-turn-1')) {
+                nativeChild ??= await services.exec.spawn({ executable: nativeCli.executable,
+                  args: ['--hold'], cwd: { root: 'workspace', relativePath: '' } });
+              }
               await appendFile(join(request.cwd, 'native-inputs.jsonl'), JSON.stringify({
                 agentId: agent.id, text: input.input.text,
               }) + '\\n');
-              if (input.input.text.includes('retained-snapshot-turn') && input.delivery.kind === 'newTurn') {
+              const review = input.input.text.includes('review-host-action-fixture');
+              if ((review || input.input.text.includes('retained-snapshot-turn')) && input.delivery.kind === 'newTurn') {
                 const event = body => emit({ sessionId: request.sessionId, sequence: ++sequence, emittedAtMs: Date.now(), ...body });
                 event({ kind: 'input-accepted', inputIds: input.inputIds, delivery: input.delivery });
                 event({ kind: 'turn-start', turnId: input.delivery.turnId, startedBy: 'host' });
-                event({ kind: 'message-delta', turnId: input.delivery.turnId, channel: 'assistant', text: 'Retained reply' });
+                event({ kind: 'message-delta', turnId: input.delivery.turnId, channel: 'assistant', text: review
+                  ? JSON.stringify({ summary: 'Review fixture', findings: [], proposedComments: [{
+                    findingId: 'snapshot-finding', body: 'Use the current daemon authority.',
+                    anchor: { kind: 'file', filePath: 'native-opens.jsonl' },
+                  }] }) : 'Retained reply' });
                 event({ kind: 'turn-complete', turnId: input.delivery.turnId });
               }
               return { status: 'admitted' };
@@ -108,9 +151,31 @@ export async function createSessionRunSnapshotFixture(happyHomeDir: string) {
         export function activate(api) {
           for (const id of ['parent', 'child']) api.agents.register(id, createRuntime, {
             sessionRunnerFactory: { module: './factory.mjs', export: 'createRuntime', runtimeApiVersion: 1 },
+            preflightSessionControls: { probeModels: () => [
+              { id: 'snapshot-native-review', name: 'Snapshot Review' },
+              { id: 'snapshot-native-unknown', name: 'Snapshot Unknown', capabilities: { structuredOutput: 'unknown' } },
+            ] },
+            providerBinding: { v: 1, adapterVersion: 1,
+              prepare() { return { v: 1, materialization: 'spawnEnv' }; },
+              materialize(input) { return { v: 1, kind: 'spawnEnv', env: [
+                { name: 'SNAPSHOT_PROVIDER_MODEL', value: input.binding.selection.model.id, source: 'provider' }
+              ] }; },
+            },
           });
         }
       ` } }],
     runtimeOptions: { pluginIds: [pluginId] },
   });
+  const initial = ProviderSettingsV1Schema.parse({ ...DEFAULT_PROVIDER_SETTINGS_V1,
+    connections: [['snapshot-provider', 'models'], ['snapshot-unverified-provider', 'unverified-models']].map(([id, localId]) => ({
+      v: 1, id, source: { kind: 'contribution', contributionKey: `${pluginId}/${localId}` },
+      role: 'named', displayName: 'Snapshot Provider', displayNameMode: 'custom', revision: 1, createdAt: 1, updatedAt: 1 })) });
+  const accountGrants = initial.connections.map(connection => {
+    const resolved = resolveProviderConnectionForMachine({ connectionId: connection.id, machineId: 'snapshot-machine',
+      providerSettings: initial, registry: fixture.registry.contributes, dnsEvidenceByEndpointUrl: new Map([['https://1.1.1.1/v1', ['1.1.1.1']]]) });
+    if (resolved.status !== 'resolved') throw new Error('Expected admitted snapshot Provider');
+    return { v: 1, connectionId: connection.id, connectionSecurityFingerprint: resolved.record.connectionSecurityFingerprint, confirmedAt: 1 };
+  });
+  const providerSettings = ProviderSettingsV1Schema.parse({ ...initial, accountGrants });
+  return { ...fixture, providerCatalog: splitProviderSettingsV1(providerSettings).catalog };
 }

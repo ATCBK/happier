@@ -490,7 +490,10 @@ describe('machines domain: sessionListIndex rebuild gating', () => {
         expect(Object.keys(get().machines)).toEqual(['m-b']);
         expect(get().machineListByServerId.server_b?.map((machine: any) => machine.id)).toEqual(['m-b']);
         expect(get().machineListByServerId.server_a?.map((machine: any) => machine.id)).toEqual(['m-a']);
+        expect(get().machineListStatusByServerId.server_a).toBe('loading');
+        domain.markMachineListSettled('server_a');
         expect(get().machineListStatusByServerId.server_a).toBe('idle');
+        expect(get().machineListStatusByServerId.server_b).toBe('idle');
     });
 
     it('keeps the active-server sessionListIndex reference stable for machine activity-only updates', async () => {

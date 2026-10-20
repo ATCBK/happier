@@ -114,7 +114,7 @@ describe('connected-service configuration Action owner', () => {
         const host = { assertCurrent() {}, async request() { throw new Error('unexpected_http'); },
             mutatePurposeBindings: catalog.mutatePurposeBindings, async resolveAgent() { return null; }, async resetQuota() {},
             // The daemon's installed Resource declaration is a genuine machine authority boundary.
-            async admitResourcePurposeTarget(input: unknown) {
+            async admitPurposeTarget(input: unknown) {
                 if (JSON.stringify(input) !== JSON.stringify({ machineId: 'machine', purpose, target: { kind: 'account', account } })) return null;
                 return () => { if (!current) throw Object.assign(new Error('scope-retired'), { code: 'scope-retired' }); };
             },
@@ -421,7 +421,7 @@ describe('connected-service configuration Action owner', () => {
         const input = { account, machineId: 'machine' };
         const spec = getActionSpec('connectedServices.billing.open');
         expect(spec).toMatchObject({ safety: 'safe', sideEffectClass: 'read', executionPlacement: 'client', approval: { result: 'none' },
-            surfaces: { ui: true, agent: true, cli: false, mcp: false } });
+            surfaces: { ui: true, agent: true, cli: true, mcp: true } });
         expect(spec.inputSchema.safeParse({ ...input, url: 'https://attacker.test' }).success).toBe(false);
         expect(await executeConnectedServiceConfigurationActionV1(host, 'connectedServices.billing.open', input))
             .toEqual({ opened: true });
@@ -766,10 +766,13 @@ describe('connected-service configuration Action owner', () => {
         await executeConnectedServiceConfigurationActionV1(host, 'connectedServices.pools.default.set', { group: pool.ref, agentId: 'codex', makeDefault: true });
         deletionAcknowledged = false;
         const beforeRejectedDelete = settings;
-        expect(await executor.execute('connectedServices.pools.delete', { group: pool.ref, ...revision }, context)).toMatchObject({ ok: false });
+        expect(await executor.execute('connectedServices.pools.delete', { group: pool.ref, ...revision }, context))
+            .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+        const confirmedDelete = { ...context, presentUserConfirmation: { actionId: 'connectedServices.pools.delete' as const } };
+        expect(await executor.execute('connectedServices.pools.delete', { group: pool.ref, ...revision }, confirmedDelete)).toMatchObject({ ok: false });
         expect(settings).toBe(beforeRejectedDelete);
         deletionAcknowledged = true;
-        expect(await executor.execute('connectedServices.pools.delete', { group: pool.ref, ...revision }, context)).toEqual({ ok: true, result: { applied: true,
+        expect(await executor.execute('connectedServices.pools.delete', { group: pool.ref, ...revision }, confirmedDelete)).toEqual({ ok: true, result: { applied: true,
             metadataCleanup: { status: 'cleanup-pending', reason: 'connected_metadata_cleanup_pending' } } });
         const deletion = new URL(requests.findLast((request) => request.method === 'DELETE')!.path, 'https://home.test');
         expect(parseQualifiedConnectedAccountV4StructuredQueryValue(QualifiedConnectedAccountGroupRefSchema, deletion.searchParams.get('group')!)).toEqual(pool.ref);

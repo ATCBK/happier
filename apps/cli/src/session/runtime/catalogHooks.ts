@@ -11,6 +11,17 @@ import type {
 } from '@/agent/catalog/types';
 import type { AgentCliSessionCommandBuildInputV1 } from '@happier-dev/plugin-sdk/agents/runtime';
 
+/** Applies the same resume policy to a current catalog or an admitted retained entry. */
+export async function getCatalogEntryVendorResumeSupport(entry: AgentCatalogEntry): Promise<VendorResumeSupportFn> {
+  if (entry.vendorResumeSupport === 'supported') return () => true;
+  if (entry.vendorResumeSupport === 'unsupported') return () => false;
+  if (entry.vendorResumeSupport === 'experimental' && entry.getVendorResumeSupport) {
+    return await entry.getVendorResumeSupport();
+  }
+  if (isRuntimeCheckedExperimentalVendorResume(entry.id)) return () => true;
+  return () => false;
+}
+
 export async function getVendorResumeSupport(
   agentId?: CatalogAgentId | null,
   registry?: ResolvedExecutablePluginRuntimeRegistry,
@@ -19,18 +30,9 @@ export async function getVendorResumeSupport(
   if (!catalogId) return () => false;
   // Demand the current Agent runtime through the shared catalog owner. A
   // declaration-only snapshot does not contain lazily registered predicates.
-  const read = async (entry: AgentCatalogEntry): Promise<VendorResumeSupportFn> => {
-    if (entry.vendorResumeSupport === 'supported') return () => true;
-    if (entry.vendorResumeSupport === 'unsupported') return () => false;
-    if (entry.vendorResumeSupport === 'experimental' && entry.getVendorResumeSupport) {
-      return await entry.getVendorResumeSupport();
-    }
-    if (isRuntimeCheckedExperimentalVendorResume(catalogId)) return () => true;
-    return () => false;
-  };
   return (registry
-    ? await readRegistryCatalogHook(registry, catalogId, read)
-    : await readCurrentCatalogHook(catalogId, read)) ?? (() => false);
+    ? await readRegistryCatalogHook(registry, catalogId, getCatalogEntryVendorResumeSupport)
+    : await readCurrentCatalogHook(catalogId, getCatalogEntryVendorResumeSupport)) ?? (() => false);
 }
 
 export async function resolveProviderSessionRuntimePreferences(

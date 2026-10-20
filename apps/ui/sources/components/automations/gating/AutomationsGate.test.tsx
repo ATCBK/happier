@@ -1,7 +1,11 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { createDeferred, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { storage } from '@/sync/domains/state/storageStore';
@@ -10,6 +14,8 @@ import { installAutomationComponentCommonModuleMocks } from '../automationCompon
 import { AutomationsGate } from './AutomationsGate';
 
 const routerPush = vi.hoisted(() => vi.fn());
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({ router: { push: routerPush } }).module);
 installDisconnectedServerSocketBoundary();
 installAutomationComponentCommonModuleMocks();
@@ -24,31 +30,38 @@ function primeReady() {
 }
 beforeEach(async () => {
     previousState = storage.getState();
+    await home.reset();
     resetServerFeaturesClientForTests();
     featureRequests.length = 0;
     pendingFeatures = null;
     featureResponse = createRootLayoutFeaturesResponse();
     await loadSyncSingletonForTests();
+    const serverId = await home.addHome({ name: 'Automations gate', serverUrl: 'https://automations-gate.test', accountId: 'gate-account' });
+    home.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {} }, version: 1 } });
     connection = await restoreServerAccountForTest({ serverUrl: 'https://automations-gate.test', accountId: 'gate-account',
-        request: async (url) => {
+        request: async (url, init) => {
             const path = new URL(String(url)).pathname;
             if (path === '/v1/features' || path === '/v1/features/authenticated') {
                 featureRequests.push(path);
                 return pendingFeatures?.promise ?? Response.json(featureResponse);
             }
-            if (path === '/health') return Response.json({});
-            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
-            if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
-            return Response.json({ error: 'not_found' }, { status: 404 });
+            return home.request(url, init);
         } });
-    storage.setState({ settings: { ...storage.getState().settings, experiments: true,
-        featureToggles: { ...storage.getState().settings.featureToggles, automations: true } } });
+    await waitForHomeGovernance(() => {
+        const scope = { serverId: connection.serverId, accountId: 'gate-account' };
+        expect(storage.getState().profileScope).toEqual(scope);
+        expect(storage.getState().settingsScope).toEqual(scope);
+        expect(storage.getState().settingsVersion).toBe(1);
+    });
+    storage.getState().applySettingsLocal({ experiments: true,
+        featureToggles: { ...storage.getState().settings.featureToggles, automations: true } });
     primeReady();
 });
 afterEach(async () => {
     standardCleanup();
     pendingFeatures?.resolve(Response.json(featureResponse));
     await connection.dispose();
+    await home.reset();
     resetServerFeaturesClientForTests();
     storage.setState(previousState);
     routerPush.mockClear();
@@ -85,8 +98,8 @@ describe('AutomationsGate', () => {
 });
 describe('AutomationsGate next action', () => {
     it.each([true, false])('links a setting-blocked state to the Features toggle that turns it on (experiments %s)', async (experiments) => {
-        storage.setState({ settings: { ...storage.getState().settings, experiments,
-            featureToggles: { ...storage.getState().settings.featureToggles, automations: false } } });
+        storage.getState().applySettingsLocal({ experiments,
+            featureToggles: { ...storage.getState().settings.featureToggles, automations: false } });
         const screen = await renderScreen(allowed());
         await screen.pressByTestIdAsync('automations-gate-disabled-action');
         expect(routerPush).toHaveBeenCalledWith('/settings/features?setting=features.automations');

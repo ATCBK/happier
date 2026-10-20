@@ -43,9 +43,10 @@ export function createMachineSkillHostService(input: Readonly<{
     const catalog = readAgentCatalogSnapshot();
     const agents = Object.keys(catalog.catalogEntriesById).map(agentId => ({ agentId,
       nativeRoots: resolveAgentSkillsCapability(agentId, catalog).nativeRoots }));
-    const store = createCliApprovalsArtifactStore({ credentials: input.credentials, serverId: input.serverId,
-      ...(input.operationContext ? { operationContext: input.operationContext } : {}) }).promptLibraryStore;
-    return createMachineSkillActions({ store, target: input.target, libraryServerIdentityId: input.target.serverIdentityId,
+    const account = createCliApprovalsArtifactStore({ credentials: input.credentials, serverId: input.serverId, serverHttpBaseUrl: input.serverHttpBaseUrl,
+      ...(input.operationContext ? { operationContext: input.operationContext } : {}) });
+    return createMachineSkillActions({ store: account.promptLibraryStore, readPluginSkills: account.readPluginSkills,
+      target: input.target, libraryServerIdentityId: input.target.serverIdentityId,
       homeDirectory: homedir(), happierHomeDirectory: configuration.happyHomeDir, agents,
       readInstalledAgents: async () => {
         const snapshot = await detectCliSnapshotOnDaemonPath({ requestedCliNames: agents.map(agent => agent.agentId) });

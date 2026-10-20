@@ -1,5 +1,5 @@
 import * as React from 'react';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import { MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
 import type { McpServerToolSettingsPatchV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
 

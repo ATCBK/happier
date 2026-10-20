@@ -1,7 +1,7 @@
 /**
  * An out-of-tree Triage source, authored the way a third party has to author
- * one: only the published `@happier-dev/plugin-sdk` and
- * `@happier-dev/triage-protocol/v1` entry points, arbitrary local Action ids,
+ * one: only published Plugin SDK, Triage protocol and shared source-helper
+ * entry points, arbitrary local Action ids,
  * and no knowledge of any first-party source.
  *
  * If this file needs a repository-internal import, a path alias, an ambient
@@ -9,9 +9,11 @@
  * genuinely authorable and `qa/QA-PROTOCOL.md` QB-01 has failed.
  */
 import { definePlugin } from '@happier-dev/plugin-sdk';
+import { withTriageSourceSettingsTranslationsV1 } from '@happier-dev/triage-sources/translations';
 import {
     TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1,
     TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1,
+    TriageSourceConnectedAccountInputsV1,
     TriageSourcesContributionProtocolV1,
 } from '@happier-dev/triage-protocol/v1';
 
@@ -36,31 +38,23 @@ import {
     readLedgerRow,
 } from './ledger.mjs';
 import { mapLedgerAuthoritativeRead, mapLedgerPage } from './map.mjs';
-
-/** Arbitrary source-local Action ids. The protocol never dictates them. */
-export const LEDGER_ACTION_IDS = Object.freeze({
-    listInstances: 'ledger/discover-spaces',
-    scan: 'ledger/walk-space',
-    get: 'ledger/read-entry',
-});
-
-export const LEDGER_CONTRIBUTION_LOCAL_ID = 'acme-ledger';
-
-/**
- * The Connected Account service this source connects, and the purpose it reads
- * through.
- *
- * They are two identities, not one spelling of the same thing: the service is a
- * contribution local id, while the purpose is the id of the `connectedAccounts`
- * HostAccess request each Action names. The purpose therefore has to be
- * expressible in the Action-to-HostAccess reference dialect — lower-case
- * alphanumeric segments joined by `-` or `/`. A dotted purpose such as
- * `acme.ledger.api` is a valid Triage descriptor identifier and a valid
- * HostAccess request id, but no Action can reference it, so the host refuses
- * `listAccounts` as undeclared and discovery silently returns nothing.
- */
-export const LEDGER_CONNECTED_ACCOUNT_ID = 'acme-ledger-account';
-export const LEDGER_ACCOUNT_PURPOSE = 'acme-ledger-api';
+import {
+    LEDGER_ACTION_IDS,
+    LEDGER_ACCOUNT_PURPOSE,
+    LEDGER_CONNECTED_ACCOUNT_ID,
+    LEDGER_CONTRIBUTION_LOCAL_ID,
+    LEDGER_DISPLAY_NAME,
+    LEDGER_PLUGIN_ID,
+    LEDGER_SETTINGS_PAGE_ID,
+    LEDGER_SETTINGS_RENDERER_ID,
+    LEDGER_SETTINGS_ARTIFACT_ID,
+} from './identity.mjs';
+export {
+    LEDGER_ACTION_IDS,
+    LEDGER_ACCOUNT_PURPOSE,
+    LEDGER_CONNECTED_ACCOUNT_ID,
+    LEDGER_CONTRIBUTION_LOCAL_ID,
+} from './identity.mjs';
 
 /**
  * The input leaf each account-bearing read carries its account in. Declaring it
@@ -211,8 +205,8 @@ async function runGet(input) {
  * Nothing about surface, danger level, or schema is retyped here: a source that
  * copied those literals would drift from the protocol without failing.
  */
-function actionContract(operation) {
-    const declaration = operation.declaration;
+function actionContract(role) {
+    const declaration = sourceOperations[role].declaration;
     if (declaration.input.kind !== 'protocolDefined') {
         throw new TypeError('acme_ledger_expects_protocol_defined_input');
     }
@@ -221,7 +215,10 @@ function actionContract(operation) {
         surfaces: declaration.surfaces,
         execution: { target: 'daemon' },
         dangerLevel: declaration.dangerLevel,
-        inputSchema: declaration.input.schema.jsonSchema,
+        // This source declares only Connected Accounts. Its purpose binding
+        // must name an account in every admitted input arm, so use the public
+        // account-only specialization rather than the generic native union.
+        inputSchema: TriageSourceConnectedAccountInputsV1[role].jsonSchema,
         resultSchema: declaration.resultSchema.jsonSchema,
     };
 }
@@ -229,9 +226,9 @@ function actionContract(operation) {
 const sourceOperations = TriageSourcesContributionProtocolV1.operations;
 
 const plugin = definePlugin({
-    id: 'acme.ledger',
+    id: LEDGER_PLUGIN_ID,
     version: '1.0.0',
-    displayName: 'Acme Ledger',
+    displayName: LEDGER_DISPLAY_NAME,
     runtime: { apiVersion: 1 },
     entrypoints: { daemon: './src/index.mjs' },
     activation: { events: [{ kind: 'startup' }] },
@@ -286,20 +283,20 @@ const plugin = definePlugin({
     actions: {
         [LEDGER_ACTION_IDS.listInstances]: {
             title: 'Discover Acme Ledger spaces',
-            ...actionContract(sourceOperations.listInstances),
+            ...actionContract('listInstances'),
             hostAccess: [LEDGER_ACCOUNT_PURPOSE],
             run: runListInstances,
         },
         [LEDGER_ACTION_IDS.scan]: {
             title: 'Walk one Acme Ledger space',
-            ...actionContract(sourceOperations.scan),
+            ...actionContract('scan'),
             hostAccess: [LEDGER_ACCOUNT_PURPOSE],
             connectedAccountPurposeBindings: INSTANCE_ACCOUNT_BINDINGS,
             run: runScan,
         },
         [LEDGER_ACTION_IDS.get]: {
             title: 'Read one Acme Ledger entry',
-            ...actionContract(sourceOperations.get),
+            ...actionContract('get'),
             hostAccess: [LEDGER_ACCOUNT_PURPOSE],
             connectedAccountPurposeBindings: INSTANCE_ACCOUNT_BINDINGS,
             run: runGet,
@@ -330,7 +327,26 @@ const plugin = definePlugin({
                 kind: 'resource',
                 resourceId: LEDGER_DETAIL_DOCUMENT_RESOURCE_ID,
             },
+        }, {
+            id: LEDGER_SETTINGS_RENDERER_ID,
+            kind: 'reactNative',
+            artifact: LEDGER_SETTINGS_ARTIFACT_ID,
+            requiredHostMethods: ['executeAction', 'openConnectedAccounts'],
         }],
+        settingsGroups: [{
+            id: 'ledger', title: LEDGER_DISPLAY_NAME, icon: 'settings', defaultRank: 40,
+        }],
+        settingsPages: [{
+            id: LEDGER_SETTINGS_PAGE_ID,
+            group: { kind: 'plugin', localId: 'ledger' },
+            title: 'PRs & Issues',
+            subtitle: 'Choose which Acme Ledger spaces appear in PRs & Issues.',
+            keywords: ['ledger', 'changes', 'tickets'],
+            icon: 'settings',
+            defaultRank: 10,
+            renderer: LEDGER_SETTINGS_RENDERER_ID,
+        }],
+        translations: withTriageSourceSettingsTranslationsV1([{ locale: 'en', messages: {} }]),
     },
     contributesTo: {
         [TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1]: {
@@ -339,7 +355,8 @@ const plugin = definePlugin({
                     descriptor: {
                         v: 1,
                         purpose: LEDGER_ACCOUNT_PURPOSE,
-                        displayName: 'Acme Ledger',
+                        displayName: LEDGER_DISPLAY_NAME,
+                        settingsPageId: LEDGER_SETTINGS_PAGE_ID,
                         kinds: [
                             {
                                 id: 'change',

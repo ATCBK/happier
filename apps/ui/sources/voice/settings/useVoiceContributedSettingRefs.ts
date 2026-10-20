@@ -2,8 +2,13 @@ import * as React from 'react';
 import { usePathname } from '@/components/appShell/workspace/destinationRoute';
 import { useProjectedPluginLocalizedTextResolver } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
-import type { SettingRef } from '@/components/settings/catalog/settingDeclarations';
+import type { SettingRef, SettingsPageDeclaration } from '@/components/settings/catalog/settingDeclarations';
 import { getVoiceContributedSettingsDeclarations, voiceSettingsDeclarationRegistry } from './voiceContributedSettingsDeclarations';
+
+export function getVoiceContributedSettingRefs(declarations: readonly SettingsPageDeclaration[], providerId: string): readonly SettingRef[] {
+    const declaration = declarations.find((page) => page.sections[`provider.${providerId}`]);
+    return declaration ? Object.values(declaration.settings) : [];
+}
 
 export function useVoiceContributedSettingsDeclarations(pageId: 'voiceDictation' | 'voiceConversations') {
     const localize = useProjectedPluginLocalizedTextResolver();

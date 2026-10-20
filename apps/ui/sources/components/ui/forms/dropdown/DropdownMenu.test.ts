@@ -15,6 +15,8 @@ const scrollRegistrySpy = vi.fn();
 let uiItemDensitySetting: 'comfortable' | 'cozy' | 'compact' = 'comfortable';
 let reducedMotion = false;
 let selectableSearchQuery = '';
+// The menu model is replaced in this file; a test that reads category headings groups its items by category, as the model does.
+let selectableGroupsByCategory = false;
 
 function flattenStyle(style: unknown): Record<string, unknown> {
     if (Array.isArray(style)) {
@@ -41,7 +43,8 @@ vi.mock('@/components/ui/popover', () => ({
             'Popover',
             props,
             typeof props.children === 'function'
-                ? props.children({ maxHeight: 200, maxWidth: 400, placement: props.placement ?? 'bottom' })
+                // A phone sheet's render props say so, as the real Popover's sheet branch does on a phone.
+                ? props.children({ maxHeight: 200, maxWidth: 400, placement: props.placement ?? 'bottom', presentation: props.phonePresentation === 'sheet' ? 'sheet' : 'anchored' })
                 : props.children,
         );
     },
@@ -54,7 +57,7 @@ vi.mock('@/components/ui/popover', () => ({
 vi.mock('@/components/ui/overlays/FloatingOverlay', () => ({
     FloatingOverlay: (props: any) => {
         const React = require('react');
-        return React.createElement('FloatingOverlay', props, props.children);
+        return React.createElement('FloatingOverlay', props, props.header, props.children);
     },
 }));
 
@@ -64,7 +67,11 @@ vi.mock('@/components/ui/forms/dropdown/useSelectableMenu', () => ({
         return {
             searchQuery: selectableSearchQuery,
             selectedIndex: 0,
-            filteredCategories: [],
+            filteredCategories: selectableGroupsByCategory
+                ? [...new Set((args.items as { category?: string }[]).map((item) => item.category ?? ''))].map((title) => ({
+                    id: title, title, items: (args.items as { category?: string }[]).filter((item) => (item.category ?? '') === title),
+                }))
+                : [],
             inputRef: { current: null },
             setSelectedIndex: () => {},
             handleSearchChange: () => {},
@@ -320,6 +327,15 @@ describe('DropdownMenu', () => {
         expect(onOpenChange).toHaveBeenCalledWith(true);
     });
 
+    it('does not call every empty menu a command list', async () => {
+        const { DropdownMenu } = await import('./DropdownMenu');
+        const screen = await renderScreen(React.createElement(DropdownMenu, {
+            open: true, onOpenChange: vi.fn(), items: [], onSelect: vi.fn(), trigger: React.createElement('View'),
+        }));
+
+        expect(screen.findByType('SelectableMenuResults' as any)?.props?.emptyLabel).toBe('common.noMatches');
+    });
+
     it('closes the menu when an item is selected by default', async () => {
         const scheduled: FrameRequestCallback[] = [];
         vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
@@ -572,6 +588,48 @@ describe('DropdownMenu', () => {
         }));
         expect(capped.findByType('Popover' as any)?.props?.maxHeightCap).toBe(240);
         expect(capped.findByType('Popover' as any)?.props?.placementMinSpace).toBe(240);
+    });
+
+    it('titles a submenu by its own name once, never again as the first heading of its phone sheet', async () => {
+        const { DropdownMenu } = await import('./DropdownMenu');
+        const chooserTitle = 'Move “Client work” to';
+        selectableGroupsByCategory = true;
+        try {
+        const render = async (phone: boolean) => {
+            const screen = await renderScreen(React.createElement(DropdownMenu as any, {
+                open: true,
+                onOpenChange: vi.fn(),
+                ...(phone ? { popoverPhonePresentation: 'sheet' } : {}),
+                items: [{
+                    id: 'move',
+                    title: 'Move to folder…',
+                    submenu: {
+                        title: chooserTitle,
+                        showCategoryTitles: true,
+                        items: [
+                            { id: 'top', title: 'Top level', category: chooserTitle },
+                            { id: 'reviews', title: 'Reviews', category: chooserTitle },
+                        ],
+                    },
+                }],
+                onSelect: vi.fn(),
+                trigger: React.createElement('View'),
+            }));
+            act(() => {
+                screen.findByType('SelectableMenuResults' as any)?.props?.onOpenSubmenu?.('move', {
+                    current: { getBoundingClientRect: () => ({ width: 4, height: 48 }) },
+                });
+            });
+            const popover = screen.findAllByType('Popover' as any)[1];
+            const results = screen.findAllByType('SelectableMenuResults' as any)[1];
+            const seen = { label: popover?.props?.accessibilityLabel, headings: results?.props?.categories?.map((category: { title: string }) => category.title) };
+            act(() => { screen.tree.unmount(); });
+            return seen;
+        };
+        expect(await render(true)).toEqual({ label: chooserTitle, headings: [''] });
+        // A desktop menu has no title of its own, so its chooser keeps the heading.
+        expect(await render(false)).toEqual({ label: chooserTitle, headings: [chooserTitle] });
+        } finally { selectableGroupsByCategory = false; }
     });
 
     it('opens submenu items without selecting the parent row', async () => {
@@ -986,5 +1044,25 @@ describe('DropdownMenu', () => {
         const selectableResults = screen.findByType('SelectableMenuResults' as any);
         expect(input).toBeTruthy();
         expect(selectableResults).toBeTruthy();
+    });
+
+    it('pins the search field in the overlay header, never inside the scrolling results', async () => {
+        const { DropdownMenu } = await import('./DropdownMenu');
+        const { Text } = await import('react-native');
+        const { TextInput } = await import('@/components/ui/text/Text');
+
+        const screen = await renderScreen(React.createElement(DropdownMenu, {
+            open: true,
+            onOpenChange: vi.fn(),
+            items: [{ id: 'a', title: 'A' }],
+            onSelect: () => {},
+            trigger: React.createElement(Text, null, 'Trigger'),
+            search: true,
+        }));
+
+        // A long list scrolled to its current choice must never carry the field out of view.
+        const results = screen.findByType('SelectableMenuResults' as any)!;
+        expect(results.findAllByType(TextInput as any)).toEqual([]);
+        expect(screen.findAllByType(TextInput as any)).toHaveLength(1);
     });
 });

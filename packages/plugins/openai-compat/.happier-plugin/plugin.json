@@ -55,6 +55,7 @@
     "sessionHeaderActions": [],
     "sessionInfoSections": [],
     "settings": [],
+    "skills": [],
     "systemTools": [],
     "targetedPluginContributions": [],
     "tools": [],
@@ -486,6 +487,7 @@
       }
     ],
     "webhooks": [],
+    "workItems": [],
     "workflows": []
   },
   "description": "Batch speech-to-text and text-to-speech through a selected-machine OpenAI-compatible endpoint.",

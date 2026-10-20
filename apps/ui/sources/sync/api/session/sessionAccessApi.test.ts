@@ -58,6 +58,24 @@ async function setup(options?: Readonly<{ accountEncryption?: 'plain' | 'e2ee' }
 }
 
 describe('Session access exact Account transport', () => {
+    it.each([
+        { payload: { error: 'credential_scope_denied' }, code: 'credential_scope_denied' },
+        { payload: { error: 'credential_scope_denied', details: {} }, code: 'session_access_request_failed' },
+    ])('preserves only the strict scope refusal across access and responsibility: $code', async ({ payload, code }) => {
+        const env = await setup();
+        const { executeSessionAccessHttpAction } = await import('./sessionAccessApi');
+        env.request.mockImplementation(async () => Response.json(payload, { status: 403 }));
+        for (const [actionId, input] of [
+            ['session.access.grants.list', { sessionId: 'same' }],
+            ['session.responsibility.candidates.list', { sessionId: 'same', purpose: 'assignment' }],
+            ['session.responsibility.set', { sessionId: 'same', responsibleAccountId: null }],
+            ['session.public_link.get', { sessionId: 'same' }],
+        ] as const) {
+            await expect(executeSessionAccessHttpAction({ scope: { serverId: env.target.id, accountId: 'target-account' },
+                availability: 'available', actionId, input })).rejects.toMatchObject({ code, status: 403 });
+        }
+    });
+
     it('reads the full admitted public visual network consequence across pages, not Board inventory', async () => {
         const env = await setup();
         const { createSessionAccessClient } = await import('./sessionAccessApi');
@@ -724,6 +742,9 @@ describe('Session access exact Account transport', () => {
     it('publishes a public link through the declared Action transport at the exact Home', async () => {
         const env = await setup();
         const { createSessionAccessClient } = await import('./sessionAccessApi');
+        const { Modal } = await import('@/modal');
+        // The public-link Action asks this present user before publishing.
+        vi.spyOn(Modal, 'confirm').mockResolvedValue(true);
         const bodies: Array<Record<string, unknown>> = [];
         env.request.mockImplementation(async (url, init) => {
             const path = new URL(url).pathname;

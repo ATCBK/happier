@@ -32,7 +32,9 @@ export function isWorkspaceScopeReachableFromState(
         machineListByServerId: state.machineListByServerId ?? {},
         machineListStatusByServerId: state.machineListStatusByServerId,
     });
-    if (inventory.status !== 'idle') return false;
+    // A refresh retains live rows and their independently expiring presence.
+    // Loading the inventory does not make a reachable daemon offline.
+    if (inventory.status === 'error' || inventory.status === 'signedOut') return false;
     const machine = inventory.machines?.find(candidate => candidate.id === scope.machineId);
     return machine ? isMachineReachable(selectActiveServerAccountScopeForServer(accountScope, scope.serverId), machine) : false;
 }

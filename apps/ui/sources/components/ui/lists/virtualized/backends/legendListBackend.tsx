@@ -6,6 +6,8 @@ import {
 } from '@legendapp/list/react-native';
 import { Platform, StyleSheet, type ViewStyle } from 'react-native';
 
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+
 import { normalizeVirtualizedListProps } from '../normalizeVirtualizedListProps';
 import type {
     VirtualizedListProps,
@@ -45,8 +47,7 @@ function resolveLegendWebContentStyle(style: ViewStyle): React.CSSProperties | u
 }
 
 /**
- * Legend List backend — the long-term default the abstraction is migrating
- * toward and now the `auto` default on every platform.
+ * Legend List backend — the one list runtime on every platform.
  * `clearMeasurementCache` maps to Legend's `clearCaches`; Legend's imperative
  * scroll methods are async (`Promise<void>`), surfaced as-is through the ref.
  */
@@ -136,7 +137,16 @@ function LegendListBackendInner<T>(
         data: legendShared.data,
     } as unknown as LegendListProps<T>;
 
-    return <LegendList {...legendProps} ref={innerRef} />;
+    // A retained surface that is not being presented is `display: none`: every row measures 0 x 0.
+    // Legend ignores a 0 x 0 viewport but accepts 0 x 0 rows, so a data or renderItem change while
+    // hidden makes every row "fit", the container pool grows a batch per synchronous layout pass, and
+    // React's nested-update limit ends it ("Maximum update depth exceeded" in ContainerLayoutCoordinator).
+    // Hold the last presented props instead; the current ones flow in the render that presents it again.
+    const presented = useLayoutPresentationActive();
+    const presentedPropsRef = React.useRef(legendProps);
+    if (presented) presentedPropsRef.current = legendProps;
+
+    return <LegendList {...presentedPropsRef.current} ref={innerRef} />;
 }
 
 export const LegendListBackend = React.forwardRef(LegendListBackendInner) as <T>(

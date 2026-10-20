@@ -10,6 +10,8 @@ import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { Switch } from '@/components/ui/forms/Switch';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { ITEM_ROW_PADDING_HORIZONTAL } from '@/components/ui/lists/itemDensityMetrics';
+import { useResolvedItemDensity } from '@/components/ui/lists/useResolvedItemDensity';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { Popover } from '@/components/ui/popover';
@@ -21,6 +23,7 @@ import { t } from '@/text';
 import type { BoardCard } from '../model/boardCards';
 import type { BoardHomes } from '../model/useBoardContent';
 import { BoardSessionFilterControl } from './BoardSessionFilterControl';
+import type { WorkBoardUiSaveQueue } from '../model/useWorkBoards';
 
 /**
  * Board settings (lab `boards-B4`), from the header's ⋯: the name; what's on the board — smart sections
@@ -29,7 +32,12 @@ import { BoardSessionFilterControl } from './BoardSessionFilterControl';
  */
 
 const POPOVER_WIDTH_PX = 400;
-const POPOVER_MAX_HEIGHT_PX = 640;
+/**
+ * Tall enough that every setting down to Delete board shows at once on a desktop window (about 740 px,
+ * 800 with the Sessions filter's row), so nothing hides behind an unmarked inner scroll; the popover
+ * still shrinks to a shorter window and scrolls there.
+ */
+const POPOVER_MAX_HEIGHT_PX = 800;
 const SECTIONS: readonly WorkBoardSectionV1[] = ['needs_you', 'running', 'my_machines'];
 
 export const BoardSettingsButton = React.memo(function BoardSettingsButton(props: Readonly<{
@@ -37,7 +45,7 @@ export const BoardSettingsButton = React.memo(function BoardSettingsButton(props
     homes: BoardHomes;
     pickedCards: readonly BoardCard[];
     canvasAvailable: boolean;
-    dispatch: (intent: WorkBoardIntentV1) => void;
+    dispatch: WorkBoardUiSaveQueue['dispatch'];
     /** Removes a pick with the board's live membership, so an item a section still holds keeps its place. */
     onRemoveItem: (ref: BoardItemRefV1) => void;
     onDeleted: () => void;
@@ -76,6 +84,7 @@ export const BoardSettingsButton = React.memo(function BoardSettingsButton(props
                     {({ maxHeight, maxWidth, presentation }) => (
                         <View testID="board-settings.popover">
                             <FloatingOverlay
+                                role="panel"
                                 maxHeight={Math.min(maxHeight, POPOVER_MAX_HEIGHT_PX)}
                                 scrollEnabled={false}
                                 edgeFades={{ top: true, bottom: true, size: 18 }}
@@ -102,8 +111,10 @@ export const BoardSettingsButton = React.memo(function BoardSettingsButton(props
                                         );
                                         if (!confirmed) return;
                                         close();
-                                        props.dispatch({ kind: 'delete', boardId: props.board.id });
-                                        props.onDeleted();
+                                        // This exact Action was just confirmed here. Carry that fact to
+                                        // canonical policy; explicit Ask-first still owns its approval.
+                                        const outcome = await props.dispatch({ kind: 'delete', boardId: props.board.id }, { actionId: 'boards.apply' });
+                                        if (outcome.status === 'applied') props.onDeleted();
                                     }}
                                 />
                             </FloatingOverlay>
@@ -131,6 +142,8 @@ const BoardSettingsContent = React.memo(function BoardSettingsContent(props: Rea
     const { board, dispatch } = props;
     const [name, setName] = React.useState(board.name);
     const [managingPicks, setManagingPicks] = React.useState(false);
+    // The name field stands in for a row, so it starts where the rows' text does.
+    const rowInset = ITEM_ROW_PADDING_HORIZONTAL[useResolvedItemDensity()];
     const commitName = () => {
         const next = name.trim();
         if (next && next !== board.name) dispatch({ kind: 'update', boardId: board.id, patch: { name: next } });
@@ -191,6 +204,7 @@ const BoardSettingsContent = React.memo(function BoardSettingsContent(props: Rea
         <SelectionList
             testID="board-settings.picks"
             rootStep={rootStep}
+            optionPresentation={managingPicks ? undefined : 'section'}
             syncActiveStep={managingPicks ? pickedStep : undefined}
             onActiveStepChange={step => setManagingPicks(step.id === 'picked')}
             selection={managingPicks ? { kind: 'multiple', selectedIds: new Set(props.pickedCards.map(card => card.key)) } : undefined}
@@ -204,7 +218,7 @@ const BoardSettingsContent = React.memo(function BoardSettingsContent(props: Rea
             heightBehavior="content"
             bodyHeader={!managingPicks ? <View style={styles.content}>
             <ItemGroup surface="none">
-                <View style={styles.field}>
+                <View style={[styles.field, { paddingHorizontal: rowInset }]}>
                     <FieldItem label={t('boards.settings.name')}>
                         <FieldTextInput
                             testID="board-settings.name"
@@ -330,7 +344,6 @@ const styles = StyleSheet.create(() => ({
         paddingVertical: 8,
     },
     field: {
-        paddingHorizontal: 16,
         paddingVertical: 8,
     },
 }));

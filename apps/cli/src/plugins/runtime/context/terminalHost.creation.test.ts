@@ -8,7 +8,8 @@ import { describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import { SessionMetadataTuplePatchV1Schema, V2SessionByIdResponseSchema } from '@happier-dev/protocol';
 
-const inventory = vi.hoisted(() => ({ socketPath: '', inheritedSpawns: 0, startedServers: [] as string[] }));
+const inventory = vi.hoisted(() => ({ socketPath: '', inheritedSpawns: 0, startedServers: [] as string[],
+    tmuxEnabled: false, tmuxSessions: new Map<string, string>() }));
 const sessionTransport = vi.hoisted(() => ({ io: vi.fn() }));
 vi.mock('socket.io-client', async original => ({ ...await original<typeof import('socket.io-client')>(), io: sessionTransport.io }));
 vi.mock('@/persistence', async original => ({ ...await original<typeof import('@/persistence')>(), readStoredCredentials: async () => null }));
@@ -20,6 +21,38 @@ vi.mock('node:child_process', async (importOriginal) => {
     return {
         ...await importOriginal<typeof import('node:child_process')>(),
         spawn: vi.fn((_command: string, args: readonly string[], options: { stdio?: unknown }) => {
+            if (_command === 'tmux' && inventory.tmuxEnabled) {
+                const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(),
+                    stdout: new PassThrough(), stderr: new PassThrough(), kill: () => true });
+                setImmediate(() => {
+                    const command = args[0] === '-u' ? args[1] : args[0];
+                    let output = '';
+                    let error = '';
+                    if (command === 'new-session') {
+                        const name = args[args.indexOf('-s') + 1]!;
+                        if (inventory.tmuxSessions.has(name)) error = `duplicate session: ${name}`;
+                        else {
+                            const id = `@${inventory.tmuxSessions.size + 1}`;
+                            inventory.tmuxSessions.set(name, id);
+                            output = `${id}\t${id}\t12345\n`;
+                        }
+                    } else if (command === 'list-sessions') output = [...inventory.tmuxSessions.keys()].join('\n');
+                    else if (command === 'display-message') output = '0|12345|claude';
+                    else if (command === 'capture-pane') output = '> ';
+                    else if (command === 'kill-session') {
+                        const target = args[args.indexOf('-t') + 1];
+                        if (target) inventory.tmuxSessions.delete(target);
+                    }
+                    else if (command === 'kill-window') {
+                        const target = args[args.indexOf('-t') + 1];
+                        for (const [name, id] of inventory.tmuxSessions) if (id === target) inventory.tmuxSessions.delete(name);
+                    }
+                    if (output) child.stdout.write(output);
+                    if (error) child.stderr.write(error);
+                    child.emit('close', error ? 1 : 0);
+                });
+                return child;
+            }
             if (args.includes('server')) {
                 inventory.startedServers.push(args[0] === '--session' ? args[1]! : 'default');
                 return Object.assign(new EventEmitter(), { unref() {} });
@@ -46,7 +79,7 @@ vi.mock('node:child_process', async (importOriginal) => {
                 kill: () => true,
             });
             setImmediate(() => {
-                const error = binary === 'tmux' ? Object.assign(new Error('not installed'), { code: 'ENOENT' }) : null;
+                const error = binary === 'tmux' && !inventory.tmuxEnabled ? Object.assign(new Error('not installed'), { code: 'ENOENT' }) : null;
                 const stdout = binary === 'herdr' && args[0] === '--version'
                     ? 'herdr 0.9.2'
                     : JSON.stringify({ sessions: ['default', 'work', 'explicit', ...inventory.startedServers].map((name) => ({
@@ -60,7 +93,7 @@ vi.mock('node:child_process', async (importOriginal) => {
             return child;
         }), {
             [Symbol.for('nodejs.util.promisify.custom')]: async (binary: string, args: readonly string[]) => {
-                if (binary === 'tmux') throw Object.assign(new Error('not installed'), { code: 'ENOENT' });
+                if (binary === 'tmux' && !inventory.tmuxEnabled) throw Object.assign(new Error('not installed'), { code: 'ENOENT' });
                 return {
                     stdout: binary === 'herdr' && args[0] === '--version'
                         ? 'herdr 0.9.2'
@@ -94,15 +127,139 @@ import { createPlainSessionFixture, createAccountEncryptionCurrentnessFixture, c
 import { createSessionHooksService } from '@/plugins/runtime/hooks/session/service';
 import { createEventsFixture, createPluginContextFixture } from '../../../../../../packages/plugins/claude/src/agent/runtime/engine.testkit';
 import { createClaudeUnifiedTerminalTurnOperations } from '../../../../../../packages/plugins/claude/src/agent/runtime/terminal/unified/turnOperations';
+import { createClaudeNativeSessionRuntimeFromOperations } from '../../../../../../packages/plugins/claude/src/agent/runtime/nativeRuntime';
 import { createProviderCliAttachSurface } from '@/session/attach/providerCliAttach';
 import { resolveOpenCodeAttachTarget, createOpenCodeAttachArgs } from '../../../../../../packages/plugins/opencode/src/agent/surfaces/sessions/attach/descriptor';
 import { executeTerminalHostDisposition } from '@/terminal/attachment/terminalHostDisposition';
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
+import { createExternalContributionFixtures } from '@/agent/runtime/registry/engineRegistry/nativeAgentSession.testkit';
+import { resolveBackendRuntimeCore } from '@/agent/runtime/registry/engineRegistry/runtimeCore';
+import { resolveBackendRuntimeOwner } from '@/agent/runtime/registry/engineRegistry/runtimeOwnerResolution';
+import { createEmptyBackendExecutionSurfaces } from '@/agent/runtime/registry/engineRegistryTypes';
+import type { ExecutionRunHostRuntime } from '@/agent/runtime/bridges/executionRun/executionRunHostRuntime';
+import { buildExecutionRunConfiguration } from '@/agent/runtime/bridges/executionRun/runtime/openInputs';
+import { ProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/handler';
 
-import { createDefaultPluginTerminalHostService, createDefaultPreparedTerminalHostOwner, createPluginTerminalHostService } from './terminalHost';
+import { createDefaultPluginTerminalHostService, createDefaultPreparedTerminalHostOwner, createPluginTerminalHostService, installAgentChildLaunchEnvironmentTransformerForTerminalHost } from './terminalHost';
+import { createStablePluginExecService } from '../invocation/services/exec';
 
 describe('plugin terminal-host creation rollback', () => {
+    it.skipIf(process.platform === 'win32')('opens explicit-model Claude child tmux hosts without colliding with their parent or sibling Run', async () => {
+        await withTempDir('plugin-run-tmux-', async happyHomeDir => {
+            inventory.tmuxEnabled = true;
+            inventory.tmuxSessions.clear();
+            const sessionId = 'tmux-parent';
+            const runtimes: ReturnType<typeof createClaudeUnifiedTerminalTurnOperations>[] = [];
+            const children: ExecutionRunHostRuntime[] = [];
+            const session = createMutableApiSessionClientFixture({ sessionId, metadata: createTestMetadata({ path: happyHomeDir }) });
+            const open = async (executionRunId?: string) => {
+                if (executionRunId) {
+                    const fixture = createExternalContributionFixtures('external.terminal');
+                    const agent = { ...fixture.agent, richDefinition: { ...fixture.agent.richDefinition, definition: {
+                        ...fixture.agent.richDefinition.definition, capabilities: {
+                            ...fixture.agent.richDefinition.definition.capabilities, surfaces: ['terminal' as const],
+                        },
+                    } } };
+                    let opened: Awaited<ReturnType<typeof runtimes[number]['startProviderSession']>> | undefined;
+                    const adapter = await resolveBackendRuntimeCore({ backend: fixture.backend, agent,
+                        runtimeOwner: resolveBackendRuntimeOwner({ backend: fixture.backend, agent,
+                            runnerAgentSessionRuntimeSource: true, manifestOnlyPluginRuntime: false }),
+                        executionSurfaces: createEmptyBackendExecutionSurfaces(), runtimeRegistry: null, happyHomeDir,
+                        nativeAgentRuntimeIdentity: { pluginId: agent.pluginId, pluginVersion: '1.0.0', agentId: agent.id,
+                            localAgentId: agent.id, occurrenceId: executionRunId, isCurrent: () => true,
+                            runtimeAuthority: { runtimeCapabilities: ['terminalHost', 'sessionHooks'] } },
+                        nativeAgentRuntime: { sessions: { async open(request, context) {
+                            expect(request.sessionId).toBe(sessionId);
+                            const initialModelId = request.providerBinding?.model.id ?? request.configuration?.model.value ?? null;
+                            expect(initialModelId).toBe('claude-haiku-4-5');
+                            const operations = createClaudeUnifiedTerminalTurnOperations({
+                                ctx: createPluginContextFixture(context.session.services.terminalHost!, createEventsFixture().service,
+                                    { sessionHooks: context.session.services.sessionHooks }),
+                                directory: happyHomeDir, happierSessionId: request.sessionId, hostPreference: 'tmux',
+                                initialModelId, launchEnv: { HAPPIER_CLAUDE_PATH: process.execPath }, permissionMode: 'read_only',
+                            });
+                            opened = await operations.startProviderSession();
+                            return createClaudeNativeSessionRuntimeFromOperations(operations, request, context);
+                        } } },
+                    });
+                    const child = adapter?.runtimeCore.createExecutionRunBackend({ cwd: happyHomeDir, runId: executionRunId,
+                        controllerOccurrenceId: `controller-${executionRunId}`,
+                        scope: 'session_owned', backendId: agent.id, modelId: 'claude-haiku-4-5', permissionMode: 'read_only',
+                        ...buildExecutionRunConfiguration({ backendTarget: { kind: 'builtInAgent', agentId: agent.id },
+                            modelId: 'claude-haiku-4-5', permissionMode: 'read_only', updatedAtMs: 1 }),
+                        start: { intent: 'scm_diff_summary', runClass: 'long_lived', retentionPolicy: 'resumable', ioMode: 'streaming' },
+                        sessionInteractionHost: { session, machineId: 'fixture-machine',
+                            permissionHandler: new ProviderEnforcedPermissionHandler(session, { logPrefix: '[Run terminal fixture]' }) },
+                    });
+                    if (!child) throw new Error('Native child Run factory unavailable');
+                    children.push(child);
+                    await child.provisionRuntime();
+                    return opened;
+                }
+                const service = createDefaultPluginTerminalHostService({ happyHomeDir,
+                    hasCapability: capability => capability === 'terminalHost', readSessionId: () => sessionId,
+                    ...(executionRunId ? { executionRunId } : {}) });
+                const operations = createClaudeUnifiedTerminalTurnOperations({
+                    ctx: createPluginContextFixture(service, createEventsFixture().service), directory: happyHomeDir,
+                    happierSessionId: sessionId, hostPreference: 'tmux', initialModelId: 'claude-haiku-4-5',
+                    launchEnv: { HAPPIER_CLAUDE_PATH: process.execPath }, permissionMode: 'read_only',
+                });
+                runtimes.push(operations);
+                return await operations.startProviderSession();
+            };
+            try {
+                await expect(open()).resolves.toMatchObject({ hostKind: 'tmux' });
+                const parent = await readTerminalHostAttachmentInfo({ happyHomeDir, sessionId });
+                await expect(open('run-explicit-one')).resolves.toMatchObject({ hostKind: 'tmux' });
+                await expect(open('run-explicit-two')).resolves.toMatchObject({ hostKind: 'tmux' });
+                expect(inventory.tmuxSessions.size).toBe(3);
+                expect(await readTerminalHostAttachmentInfo({ happyHomeDir, sessionId })).toEqual(parent);
+                await children[0]!.dispose();
+                await vi.waitFor(() => expect(inventory.tmuxSessions.size).toBe(2));
+                expect(inventory.tmuxSessions.size).toBe(2);
+                expect(inventory.tmuxSessions.has(`happier-claude-${sessionId}`)).toBe(true);
+                expect(await readTerminalHostAttachmentInfo({ happyHomeDir, sessionId })).toEqual(parent);
+            } finally {
+                await Promise.all(children.map(child => child.dispose()));
+                await vi.waitFor(() => expect([...inventory.tmuxSessions.keys()].filter(name => name !== `happier-claude-${sessionId}`)).toEqual([]));
+                await Promise.all(runtimes.map(runtime => runtime.disposeProviderSession('session_closed')));
+                await session.close();
+                inventory.tmuxEnabled = false;
+                inventory.tmuxSessions.clear();
+            }
+        });
+    });
+    it.skipIf(process.platform === 'win32')('isolates a child Run terminal from its live parent attachment and retires only the child', async () => {
+        await withTempDir('plugin-run-terminal-', async happyHomeDir => await withHerdrApi(async api => {
+            inventory.socketPath = api.socketPath;
+            const sessionId = 'parent-with-explicit-child';
+            api.panes.add('parent-provider');
+            const parent = await writeTerminalHostAttachmentInfo({ happyHomeDir, sessionId, lifecycle: 'owned', handle: {
+                kind: 'herdr', sessionName: 'work', socketPath: api.socketPath, terminalId: 'parent-provider', paneId: 'parent-provider',
+                attachMetadata: { attachStrategy: 'terminal_host', topology: 'shared', locality: 'same_machine', liveProbe: 'required' },
+            } });
+            const params = { happyHomeDir, hasCapability: (capability: string) => capability === 'terminalHost',
+                readSessionId: () => sessionId, executionRunId: 'run-explicit-selector',
+                readSessionMetadata: () => ({ terminal: buildTerminalMetadataFromHostHandle(parent.handle) }),
+                currentTerminalMetadata: { terminal: buildTerminalMetadataFromHostHandle(parent.handle) } };
+            const service = createDefaultPluginTerminalHostService(params);
+            const operations = createClaudeUnifiedTerminalTurnOperations({
+                ctx: createPluginContextFixture(service, createEventsFixture().service), directory: happyHomeDir,
+                happierSessionId: sessionId, hostPreference: 'herdr', initialModelId: 'claude-haiku-4-5',
+                launchEnv: { HAPPIER_CLAUDE_PATH: process.execPath }, permissionMode: 'read_only',
+            });
+            try {
+                await expect(operations.startProviderSession()).resolves.toMatchObject({ hostKind: 'herdr' });
+                expect(inventory.inheritedSpawns).toBe(0);
+                expect(await readTerminalHostAttachmentInfo({ happyHomeDir, sessionId })).toEqual(parent);
+                expect(api.requests.filter(request => request.method === 'layout.apply')).toHaveLength(1);
+            } finally { await operations.disposeProviderSession('session_closed'); }
+            expect(api.panes.has('parent-provider')).toBe(true);
+            expect(api.panes.has('managed')).toBe(false);
+            expect(await readTerminalHostAttachmentInfo({ happyHomeDir, sessionId })).toEqual(parent);
+        }));
+    });
     it.each(['current', 'predecessor', 'ordinary', 'borrowed', 'mismatched', 'unreadable', 'absent', 'retired', 'snapshot-unavailable', 'plain-current', 'plain-predecessor', 'missing-current', 'missing-predecessor', 'fresh'] as const)('preserves the exact retained provider through real headless initialization and adoption (%s)', async (format) => {
         await withTempDir('retained-startup-', async happyHomeDir => await withHerdrApi(async api => {
             inventory.socketPath = api.socketPath;
@@ -242,6 +399,13 @@ describe('plugin terminal-host creation rollback', () => {
             inventory.socketPath = api.socketPath;
             const owner = createDefaultPreparedTerminalHostOwner({ happyHomeDir, readSessionId: () => 'cleanup-session',
                 herdrRuntime: { herdrSessionName: 'work', herdrSocketPath: api.socketPath } });
+            const exec = createStablePluginExecService({
+                allowedExecutables: [], signal: new AbortController().signal, isOccurrenceCurrent: () => true,
+                resolveExecutable: async () => { throw new Error('Prepared Agent must not resolve another executable'); },
+                resolvePath: async () => happyHomeDir,
+                prepareAgentNativeLaunch: async () => { throw new Error('Prepared launch must not evaluate the Project twice'); },
+            });
+            const binding = installAgentChildLaunchEnvironmentTransformerForTerminalHost(owner.service, environment => environment, { exec });
             const created = await owner.createPreparedHost({ preference: 'herdr', sessionName: 'work', workingDirectory: happyHomeDir,
                 spawnArgv: [process.execPath, '--version'], spawnEnv: {} });
             const extra = join(dirname(created.launch.specPath), 'retained.fixture');
@@ -255,6 +419,7 @@ describe('plugin terminal-host creation rollback', () => {
                 expect(api.requests.filter(request => request.method === 'pane.close')).toHaveLength(1);
                 expect(await readTerminalHostAttachmentInfo({ happyHomeDir, sessionId: 'cleanup-session' })).toBeNull();
             } finally {
+                binding.dispose();
                 await unlink(extra).catch(() => undefined);
                 await created.launch.discard();
             }

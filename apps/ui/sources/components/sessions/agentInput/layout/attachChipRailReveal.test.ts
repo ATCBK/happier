@@ -68,4 +68,56 @@ describe('attachChipRailReveal', () => {
         expect(node.scrollLeft).toBe(420);
         cleanup();
     });
+
+    it('holds the reveal of a pointer-focused chip until the press is released, so the click still lands on that chip', () => {
+        const { node, chips } = railWithChips([[420, 500], [510, 590], [600, 680], [690, 770]]);
+        document.body.appendChild(node);
+        const cleanup = attachChipRailReveal({ node, onScroll: () => {} });
+        chips[0]!.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+        chips[0]!.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+        // The chip must not move under the pointer between press and release: a click needs both on one chip.
+        expect(node.scrollLeft).toBe(500);
+        chips[0]!.dispatchEvent(new Event('pointerup', { bubbles: true }));
+        expect(node.scrollLeft).toBe(420);
+        cleanup();
+        node.remove();
+    });
+
+    it('leaves the rail at rest when the pressed chip is whole, even beside a cut neighbour', () => {
+        const { node, chips } = railWithChips([[420, 500], [510, 590], [600, 680], [690, 770]]);
+        document.body.appendChild(node);
+        const cleanup = attachChipRailReveal({ node, onScroll: () => {} });
+        chips[1]!.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+        chips[1]!.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+        chips[1]!.dispatchEvent(new Event('pointerup', { bubbles: true }));
+        expect(node.scrollLeft).toBe(500);
+        cleanup();
+        node.remove();
+    });
+
+    it('scrolls a pressed chip clear of the trailing scroll indicator, where the rail mask would hide it', () => {
+        // Rail scrolled to 500: the third chip ends exactly at the viewport edge, under the trailing indicator.
+        const { node, chips } = railWithChips([[520, 600], [610, 700], [710, 800], [810, 900]]);
+        document.body.appendChild(node);
+        const cleanup = attachChipRailReveal({ node, onScroll: () => {} });
+        chips[2]!.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+        chips[2]!.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+        chips[2]!.dispatchEvent(new Event('pointerup', { bubbles: true }));
+        expect(node.scrollLeft).toBe(524);
+        cleanup();
+        node.remove();
+    });
+
+    it('leaves a rail the person dragged where it was dropped instead of revealing the pressed chip', () => {
+        const { node, chips } = railWithChips([[420, 500], [510, 590], [600, 680], [690, 770]]);
+        document.body.appendChild(node);
+        const cleanup = attachChipRailReveal({ node, onScroll: () => {} });
+        chips[0]!.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+        chips[0]!.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+        node.scrollLeft = 460;
+        chips[0]!.dispatchEvent(new Event('pointerup', { bubbles: true }));
+        expect(node.scrollLeft).toBe(460);
+        cleanup();
+        node.remove();
+    });
 });

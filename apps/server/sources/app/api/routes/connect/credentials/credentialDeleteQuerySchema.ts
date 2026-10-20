@@ -9,6 +9,6 @@ function parseBooleanQueryFlag(value: unknown): unknown {
 }
 
 export const ConnectedServiceCredentialDeleteQuerySchema = z.strictObject({
-    cleanupGroupReferences: z.pipe(z.transform(parseBooleanQueryFlag), z.optional(z.boolean())),
+    cleanupGroupReferences: (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(parseBooleanQueryFlag), z.optional(z.boolean())),
     expectedCredentialRevision: z.optional(ConnectedServiceCredentialRevisionV1Schema),
 });

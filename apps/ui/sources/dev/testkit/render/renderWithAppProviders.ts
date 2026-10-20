@@ -54,8 +54,10 @@ export async function renderWithAppProviders(
 
     await act(async () => {
         tree = renderer.create(applyWrapper(element, options.wrapper), rendererOptions);
+        // Creation establishes cleanup ownership even if the SDK's initial
+        // async flush later rejects or the containing test reaches its deadline.
+        registerStandardCleanupTarget(tree);
     });
-    registerStandardCleanupTarget(tree);
     await flushHookEffects(options.flushOptions);
 
     return {

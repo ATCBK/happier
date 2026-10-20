@@ -104,6 +104,7 @@ describe('deriveLocalVoiceSessionSnapshot', () => {
             status: 'connected',
             mode: 'listening',
             canStop: true,
+            canCommitInput: true,
         });
     });
 

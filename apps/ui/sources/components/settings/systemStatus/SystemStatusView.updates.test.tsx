@@ -1,8 +1,10 @@
 import * as React from 'react';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createRootLayoutFeaturesResponse, flushHookEffects, pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 (
     globalThis as typeof globalThis & {
@@ -10,42 +12,27 @@ import { pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/tes
     }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
-const useUpdatesMock = vi.hoisted(() => vi.fn());
-const useNativeUpdateMock = vi.hoisted(() => vi.fn());
 const reloadAppMock = vi.hoisted(() => vi.fn(async () => {}));
-const checkForUpdatesMock = vi.hoisted(() => vi.fn(async () => {}));
+const checkForUpdatesMock = vi.hoisted(() => vi.fn(async () => ({ isAvailable: false })));
+const expoUpdatesState = vi.hoisted(() => ({
+    isUpdateAvailable: false,
+    isUpdatePending: false,
+    downloadProgress: undefined as number | undefined,
+    lastCheckForUpdateTimeSinceRestart: undefined as Date | undefined,
+}));
 
 afterEach(() => {
     standardCleanup();
-    useUpdatesMock.mockReset();
-    useNativeUpdateMock.mockReset();
     reloadAppMock.mockReset();
     checkForUpdatesMock.mockReset();
-});
-
-vi.mock('react-native-mmkv', () => {
-    class MMKV {
-        #store = new Map<string, string>();
-
-        public getString(key: string): string | undefined {
-            return this.#store.get(key);
-        }
-
-        public set(key: string, value: string): void {
-            this.#store.set(key, value);
-        }
-
-        public delete(key: string): void {
-            this.#store.delete(key);
-        }
-    }
-
-    return { MMKV };
+    checkForUpdatesMock.mockResolvedValue({ isAvailable: false });
+    storage.setState(initialStorageState, true);
+    vi.unstubAllGlobals();
 });
 
 vi.mock('react-native', async () => {
-    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock();
+    const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeNativeMock({ platformOS: 'ios' });
 });
 
 vi.mock('react-native-unistyles', async () => {
@@ -74,101 +61,70 @@ vi.mock('@/modal', async () => {
 });
 
 vi.mock('expo-constants', () => ({
-    default: { expoConfig: { version: '0.0.0-test' }, deviceName: 'test-device' },
+    default: { expoConfig: { version: '1.2.3' }, deviceName: 'test-device' },
 }));
+
+vi.mock('expo-application', () => ({
+    nativeApplicationVersion: '1.2.0', nativeBuildVersion: '101', applicationId: 'dev.happier.app',
+}));
+
+vi.mock('expo-updates', async () => {
+    const base = (await import('@/dev/testkit/mocks/expoUpdates')).createExpoUpdatesMock();
+    return {
+        ...base,
+        channel: 'preview', updateId: 'update-123', runtimeVersion: '18',
+        createdAt: new Date('2026-04-06T12:34:56.000Z'),
+        useUpdates: () => ({ ...base.useUpdates(), currentlyRunning: { isEmbeddedLaunch: true }, ...expoUpdatesState }),
+        checkForUpdateAsync: checkForUpdatesMock,
+        reloadAsync: reloadAppMock,
+    };
+});
 
 vi.mock('expo-clipboard', () => ({
     setStringAsync: vi.fn(async () => {}),
 }));
 
-vi.mock('@/constants/Typography', () => ({
-    FontWeights: {
-        regular: '400',
-        semiBold: '500',
-        bold: '600',
-    },
-    Typography: new Proxy({}, {
-        get: () => () => ({}),
-    }),
-}));
+const network = await installSessionOpsNetworkBoundary();
+const { storage } = await import('@/sync/domains/state/storage');
+const { profileDefaults } = await import('@/sync/domains/profiles/profile');
+const { SystemStatusView } = await import('./SystemStatusView');
+const initialStorageState = storage.getState();
 
-vi.mock('@/hooks/server/useActiveServerSnapshot', () => ({
-    useActiveServerSnapshot: () => ({ generation: 1, serverId: 'srv_1', serverUrl: 'http://example.local' }),
-}));
-
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
-    const { createPartialServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
-    return createPartialServerProfilesModuleMock(importOriginal, { profiles: [] });
-});
-
-vi.mock('@/sync/runtime/readCurrentAppRuntimeInfo', () => ({
-    readCurrentAppRuntimeInfo: () => ({
-        appVersion: '1.2.3',
-        nativeApplicationVersion: '1.2.0',
-        nativeBuildVersion: '101',
-        applicationId: 'dev.happier.app',
-        updateChannel: 'preview',
-        updateId: 'update-123',
-        runtimeVersion: '18',
-        updateCreatedAt: '2026-04-06T12:34:56.000Z',
-        launchSource: 'ota',
-    }),
-}));
-
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-        useProfile: () => ({ id: 'prof_1', username: 'u1', connectedServices: [] }),
-        useIsDataReady: () => true,
-        useRealtimeStatus: () => 'connected',
-        useSocketStatus: () => ({ status: 'connected', lastError: null, lastErrorAt: null }),
-        useLastSyncAt: () => null,
-        // The active Home connection health reads these (another program's `useConnectionHealth` change).
-        useEndpointConnectivity: () => ({ status: 'online', reason: null, attempt: 1, nextRetryAt: null, lastConnectedAt: null, lastDisconnectedAt: null, lastErrorMessage: null }),
-        useSyncError: () => null,
-        useMachineListForServer: () => [],
-        useMachineListStatusForServer: () => 'loaded',
-        useMachineListByServerId: () => ({}),
-        useMachineListStatusByServerId: () => ({}),
+beforeEach(async () => {
+    network.resetRequests();
+    network.setHttpResponder(async input => {
+        const path = new URL(String(input)).pathname;
+        return path === '/v1/features' || path === '/v1/features/authenticated'
+            ? Response.json(createRootLayoutFeaturesResponse()) : null;
     });
+    const home = await network.addHome('http://example.local', 'prof_1', {
+        credentials: { token: createAccountTokenForTests('prof_1', { currentAccount: true }) },
+    });
+    const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
+    await setActiveServerId(home.id);
+    const state = storage.getState();
+    state.applyProfile({ ...profileDefaults, id: 'prof_1', username: 'u1' });
+    state.applyReady();
+    state.setSocketStatus('connected');
+    state.setEndpointConnectivity({ status: 'online', reason: null, attempt: 1, nextRetryAt: null,
+        lastConnectedAt: null, lastDisconnectedAt: null, lastErrorMessage: null });
+    state.applyMachines([], true, { sourceServerId: home.id });
 });
-
-vi.mock('@/utils/sessions/machineUtils', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/utils/sessions/machineUtils')>(),
-    isMachineOnline: () => false,
-}));
-
-vi.mock('@/hooks/inbox/useUpdates', () => ({
-    useUpdates: () => useUpdatesMock(),
-}));
-
-vi.mock('@/hooks/ui/useNativeUpdate', () => ({
-    useNativeUpdate: () => useNativeUpdateMock(),
-}));
+afterAll(async () => { await network.dispose(); });
 
 describe('SystemStatusView OTA section', () => {
     it('is diagnostics only: it reports the OTA state and sends the person to the one Updates entry (plan R13 (e))', async () => {
-        useNativeUpdateMock.mockReturnValue('https://example.test/update');
-        useUpdatesMock.mockReturnValue({
-            otaUpdatesEnabled: true,
-            otaRuntimeSupported: true,
-            updateAvailable: true,
-            isChecking: false,
-            isDownloading: false,
-            isRestarting: false,
+        vi.stubGlobal('__DEV__', false);
+        storage.getState().applyNativeUpdateStatus({ available: true, updateUrl: 'https://example.test/update' });
+        Object.assign(expoUpdatesState, {
             isUpdateAvailable: true,
             isUpdatePending: true,
             downloadProgress: 1,
-            checkError: undefined,
-            downloadError: undefined,
             lastCheckForUpdateTimeSinceRestart: new Date('2026-04-07T09:00:00.000Z'),
-            checkForUpdates: checkForUpdatesMock,
-            reloadApp: reloadAppMock,
-            currentlyRunning: { isEmbeddedLaunch: true },
         });
 
-        const { SystemStatusView } = await import('./SystemStatusView');
         const screen = await renderScreen(<SystemStatusView />);
+        await flushHookEffects({ cycles: 10 });
 
         // No second place applies, checks or opens the store: those actions live in Settings › Updates.
         expect(screen.findAll((node) => (
@@ -183,27 +139,17 @@ describe('SystemStatusView OTA section', () => {
     });
 
     it('hides OTA action rows when OTA runtime support is unavailable', async () => {
-        useNativeUpdateMock.mockReturnValue(null);
-        useUpdatesMock.mockReturnValue({
-            otaUpdatesEnabled: true,
-            otaRuntimeSupported: false,
-            updateAvailable: false,
-            isChecking: false,
-            isDownloading: false,
-            isRestarting: false,
+        vi.stubGlobal('__DEV__', true);
+        storage.getState().applyNativeUpdateStatus(null);
+        Object.assign(expoUpdatesState, {
             isUpdateAvailable: false,
             isUpdatePending: false,
             downloadProgress: undefined,
-            checkError: undefined,
-            downloadError: undefined,
             lastCheckForUpdateTimeSinceRestart: undefined,
-            checkForUpdates: checkForUpdatesMock,
-            reloadApp: reloadAppMock,
-            currentlyRunning: { isEmbeddedLaunch: true },
         });
 
-        const { SystemStatusView } = await import('./SystemStatusView');
         const screen = await renderScreen(<SystemStatusView />);
+        await flushHookEffects({ cycles: 10 });
 
         expect(screen.findAllByProps({ title: 'updateBanner.checkNowTitle' })).toHaveLength(0);
         expect(screen.findAllByProps({ title: 'updateBanner.lastCheckedTitle' })).toHaveLength(0);

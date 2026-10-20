@@ -44,8 +44,13 @@ Bundled and externally installed plugins reach these Actions through the same `a
 
 ### Input guidance
 
+- `tokenId` (text, required): Token id
 - `label` (text, required): Label
 - `expiresAt` (text): Expiry
+- `grant` (json): Access grant (omitted means full access)
+- `encryption` (json): Encryption access (omitted means none)
+- `authorizeUnattendedTeamAccess` (boolean): Authorize unattended Team access
+- `embedConfig` (json): Embed configuration
 
 ## `account.apiTokens.list`
 
@@ -102,6 +107,9 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `tokenId` (text, required): Token id
+- `label` (text): Label
+- `grant` (json): Access grant
+- `embedConfig` (json): Embed configuration
 
 ## `account.credentials.forgetAll`
 
@@ -111,7 +119,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -127,7 +135,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -326,7 +334,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -418,7 +426,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `action.options.resolve`
 
-**Resolve action options** — Resolve valid options for an action field, including dynamic options sources.
+**Resolve action options** — Resolve valid options for one Action field or one declared workflow/widget input. Provide actionId and fieldPath, consumer and fieldPath, or a direct optionsSourceId. A consumer always requires fieldPath.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
@@ -428,17 +436,19 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-- `actionId` (text): Action id — Optional when optionsSourceId is provided directly.
-- `fieldPath` (text): Field path — Dot-path for the action input field.
+- `actionId` (text): Action id — Optional when consumer or optionsSourceId is provided directly.
+- `consumer` (json): Input consumer — The schema-defined workflow or widget consumer reference. Workflow consumers identify kind workflow and a workflow reference; supply that workflow input name in fieldPath.
+- `fieldPath` (text): Field path — Required with actionId or consumer. Use the Action input dot-path, or the declared workflow input name without an inputs prefix. A known workflow with an unknown name returns availableFields in its refusal details.
 - `optionsSourceId` (text): Options source id — Direct options source lookup when known.
 - `sessionId` (text): Session id — Omit to use the current invoking Session. Set only for an intentional authorized cross-Session target.
 - `draftInput` (json): Partial action input — Partial input for dependent options, for example &#123;"backendTargetKeys":["agent:pi"]&#125; when resolving a model, configuration, or connected service.
 - `query` (text): Query filter — Optional search text to filter the returned options.
 - `limit` (text): Limit — Maximum number of options to return.
+- `values` (json): Values — Return only the options for these values, to check a picked value without reading the whole inventory. A source that can answer directly does; any other is read in full and narrowed.
 
 ## `action.spec.get`
 
-**Get action spec** — Get one Happier action spec with input hints and examples.
+**Get action spec** — Get a Happier action spec, hints, examples and invoking Session context. Agent, MCP and CLI results reference named schemaSections: retrieve any section with the same id and schemaPath. Nothing is truncated. Section-local # references resolve against the original inputSchema or outputSchema root. Set includeOutputSchema:true for outputs. UI/API keep full schemas. Session Board actions fill omitted sessionId from the invoking Session; widget Actions require a qualified surface: use invocationContext.widgetSurface for this Session Board, changing only owner to &#123;kind:"home"&#125; for Home. Never guess serverId/accountId.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
@@ -449,6 +459,8 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `id` (text, required): Action id — The exact Happier action id.
+- `includeOutputSchema` (boolean): Include output schema — Include the complete output schema. Defaults to false for Agent, MCP and CLI discovery; true on other surfaces.
+- `schemaPath` (text): Schema section — Read a schemaSections path from the same Action. JSON Pointer into the original inputSchema/outputSchema; named definitions are complete and local references keep their original root.
 
 ## `action.spec.search`
 
@@ -464,6 +476,52 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 - `query` (text): Query — Natural-language search text.
 - `limit` (text): Limit — Maximum number of action specs to return.
+
+## `actions.policy.get`
+
+**Read Action policy** — Read or change one exact Action audience preference. Default and reset restore inherited policy; global Off and neighbouring preferences remain intact. Policy changes require human authority.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `voice`, `rpc`, `api`.
+
+### Input guidance
+
+- `actionId` (text, required): Action id
+- `audience` (text, required): Audience
+
+## `actions.policy.reset`
+
+**Reset Action policy** — Read or change one exact Action audience preference. Default and reset restore inherited policy; global Off and neighbouring preferences remain intact. Policy changes require human authority.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
+- Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `voice`, `rpc`.
+
+### Input guidance
+
+- `actionId` (text, required): Action id
+- `audience` (text, required): Audience
+
+## `actions.policy.set`
+
+**Change Action policy** — Read or change one exact Action audience preference. Default and reset restore inherited policy; global Off and neighbouring preferences remain intact. Policy changes require human authority.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
+- Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
+- Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `voice`, `rpc`.
+
+### Input guidance
+
+- `actionId` (text, required): Action id
+- `audience` (text, required): Audience
+- `mode` (text, required): Policy
 
 ## `agents.acp.backends.delete`
 
@@ -620,7 +678,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -634,7 +692,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -648,7 +706,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -662,7 +720,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -676,7 +734,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -690,7 +748,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -735,7 +793,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `rpc`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `rpc`, `api`.
 
 ### Input guidance
 
@@ -749,7 +807,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `rpc`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `rpc`, `api`.
 
 ### Input guidance
 
@@ -946,7 +1004,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `cli`, `rpc`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `cli`, `rpc`, `agent`, `mcp`, `voice`, `api`.
 
 ### Input guidance
 
@@ -1086,7 +1144,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `cli`, `rpc`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `cli`, `rpc`, `agent`, `mcp`, `voice`, `api`.
 
 ### Input guidance
 
@@ -1773,7 +1831,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `api`.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
 
 ### Input guidance
 
@@ -1787,7 +1845,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `api`.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
 
 ### Input guidance
 
@@ -1801,7 +1859,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `api`.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
 
 ### Input guidance
 
@@ -1815,7 +1873,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `api`.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
 
 ### Input guidance
 
@@ -1829,7 +1887,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `api`.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
 
 ### Input guidance
 
@@ -1843,7 +1901,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `api`.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
 
 ### Input guidance
 
@@ -1857,7 +1915,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `api`.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
 
 ### Input guidance
 
@@ -1871,7 +1929,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `api`.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
 
 ### Input guidance
 
@@ -1885,7 +1943,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `api`.
+- Also surfaced on: `ui`, `agent`, `cli`, `api`.
 
 ### Input guidance
 
@@ -2207,7 +2265,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -3038,7 +3096,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `connectedServices.purposes.default.set`
 
-**Choose Resource connected-account default** — Choose the active personal account or pool for one purpose declared by the installed Resource on the selected machine.
+**Choose default connected account** — Choose the active personal account or pool for one purpose declared by an installed Resource or Action on the selected machine.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -3049,7 +3107,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `machineId` (text, required): Declaration machine
-- `purpose` (json, required): Qualified Resource purpose
+- `purpose` (json, required): Qualified consumer purpose
 - `target` (json, required): Qualified account or pool
 
 ## `connectedServices.quota.get`
@@ -3605,6 +3663,417 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 No field hints are published. Use the typed input accepted by `execute`.
 
+## `discussion.access.grants.list`
+
+**Inspect discussion sharing** — Read the Discussion’s effective access and explicit Account, Team and Group grants through the shared resource grant owner.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `discussionId` (text, required): Discussion id
+
+## `discussion.access.grants.remove`
+
+**Remove discussion sharing** — Remove an explicit resource grant through the same shared resource grant owner and current access checks.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `discussionId` (text, required): Discussion id
+- `principal` (json, required): Account, Team or Group
+
+## `discussion.access.grants.set`
+
+**Share a discussion** — Set an explicit resource grant using the shared PrincipalRef and view/edit/admin policy. Source grants remain separate.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `discussionId` (text, required): Discussion id
+- `principal` (json, required): Account, Team or Group
+- `accessLevel` (text, required): Access level
+
+## `discussion.archive`
+
+**Archive a discussion** — Archive one human discussion. It stays readable and restorable; new posts and title changes stop.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
+- Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`.
+
+### Input guidance
+
+- `discussionId` (text, required): Discussion id
+
+## `discussion.candidates.list`
+
+**Find discussion participants** — Search eligible people or page accessible Sessions on this Home. Models project only supplied ordinary authoring selections; this read never probes, starts or invites a participant.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `source` (text, required): Candidate source
+- `discussionId` (text): Existing discussion
+- `query` (text): People search
+- `cursor` (text): Source continuation
+- `options` (json): Selected ordinary model setups
+
+## `discussion.create`
+
+**Start a Discussion** — Start one human discussion with its title and first message in a single atomic write. Agent and MCP callers request present-user approval.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
+- Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`.
+
+### Input guidance
+
+- `title` (text, required): Title
+- `firstMessage` (json, required): First message
+
+## `discussion.get`
+
+**Read one Discussion** — Read one human discussion’s opened title, activity, capabilities and the caller’s private unread facts. It returns no message bodies.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `discussionId` (text, required): Discussion id
+
+## `discussion.invite`
+
+**Invite a participant to a discussion** — Invite a person, bind an existing Session, or reserve a model slot and start its ordinary Session without an initial prompt. Retain the same slot on an uncertain start. This grants no access to an anchored source.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `discussionId` (text, required): Discussion id
+- `participant` (json, required): Participant to invite
+- `answerPolicy` (text): Session answer policy
+
+## `discussion.leave`
+
+**Leave a discussion** — Remove only the present person’s direct invitation. An owner must transfer ownership or choose the existing archive operation; inherited access is not removed.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
+- Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`.
+
+### Input guidance
+
+- `discussionId` (text, required): Discussion id
+
+## `discussion.list`
+
+**List Discussions** — List the human discussions in the captured Home, newest activity first. Titles are opened locally; unread and mention counts are the caller’s own private facts.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `state` (text): State
+- `cursor` (text): Page cursor
+- `limit` (integer): Page size
+
+## `discussion.owner.transfer`
+
+**Transfer discussion ownership** — The current owner transfers ownership to an eligible person in the same grant transaction. Cancelling approval preserves ownership.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
+- Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`.
+
+### Input guidance
+
+- `discussionId` (text, required): Discussion id
+- `accountId` (text, required): Successor Account id
+
+## `discussion.participant.policy.set`
+
+**Set a discussion participant answer policy** — Choose when addressed, reads only, private drafts for review, or watch and speak up. Watching spends model turns even when the agent stays silent. Changing Action confirmation does not waive private draft review.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `discussionId` (text, required): Discussion id
+- `participant` (json, required): Agent participant
+- `answerPolicy` (text, required): Answer policy
+
+## `discussion.participant.remove`
+
+**Remove a discussion invitation** — Remove a person’s direct grant, detach an existing Session, or archive a Discussion-owned model Session through ordinary Session lifecycle. Inherited Team and Group access remains explicit.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `discussionId` (text, required): Discussion id
+- `participant` (json, required): Participant to remove
+
+## `discussion.participants.list`
+
+**List discussion participants** — Inspect the authorized Discussion roster through its current grants. Membership and private Follow choices remain separate.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `discussionId` (text, required): Discussion id
+
+## `discussion.pass`
+
+**Pass on the current Discussion question** — Settle the current participant’s exact admitted Discussion question with a typed pass, without posting an authored substitute message.
+
+- Safety: `safe`; side effect: `external`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `discussionId` (text, required): Discussion id
+
+## `discussion.post`
+
+**Post a discussion message** — Post one authored message to a human discussion. Every currently admitted Discussion reader sees it. An Agent posts under its own authenticated execution Account with visible “via agent” attribution; it never posts as the person who asked.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `discussionId` (text, required): Discussion id
+- `content` (json, required): Message
+- `mentionedAccountIds` (text_list): Mentioned Account ids
+- `mentionedSessionIds` (text_list): Mentioned Session ids
+
+## `discussion.read`
+
+**Read discussion messages** — Read one bounded page of a discussion’s authored human messages, opened locally. Reading never advances the caller’s private read cursor.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `discussionId` (text, required): Discussion id
+- `beforeSeq` (integer): Before sequence
+- `afterSeq` (integer): After sequence
+- `limit` (integer): Page size
+
+## `discussion.read_state.set`
+
+**Mark a discussion read** — Advance the executing Account’s own private read position in a discussion. Agent and MCP callers request present-user approval.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
+- Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`.
+
+### Input guidance
+
+- `discussionId` (text, required): Discussion id
+- `lastReadSeq` (integer, required): Last read sequence
+
+## `discussion.rename`
+
+**Rename a discussion** — Change one human discussion’s title. It does not reorder the discussion or touch its messages.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
+- Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`.
+
+### Input guidance
+
+- `discussionId` (text, required): Discussion id
+- `title` (text, required): Title
+
+## `discussion.reply`
+
+**Reply in a discussion** — Reply to one committed message in this Discussion through the same admitted message writer. Replying does not grant source access or start an agent turn.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `discussionId` (text, required): Discussion id
+- `content` (json, required): Reply
+- `replyTarget` (json, required): Reply target
+- `localId` (text): Durable message identity for retry
+
+## `discussion.restore`
+
+**Restore a discussion** — Restore one archived human discussion so it accepts posts again.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
+- Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`.
+
+### Input guidance
+
+- `discussionId` (text, required): Discussion id
+
+## `discussion.second_opinion.start`
+
+**Get a second opinion** — Preview the quoted source and actual source access, then explicitly Ask one ordinary reviewer in an anchored Discussion. Retry retains the original create, quote, question and participant identities. Multiple reviewers require Fresh opinions and report unavailable while that Workflow producer is unavailable.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
+- Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`.
+
+### Input guidance
+
+- `intent` (select, required): Preview or Ask
+- `source` (json, required): Exact source
+- `title` (text, required): Discussion title
+- `question` (textarea, required): Question
+- `reviewers` (json, required): Reviewers
+- `retry` (json, required): Retained retry identities
+- `confirmedPreview` (json): Confirmed access preview
+
+## `doc.comment.reply`
+
+**Comment on a document passage** — Post a passage comment or reply through the canonical Discussion owner. The exact revision-qualified passage and original local retry identity are retained; a comment does not edit document text.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `doc.edit.accept`
+
+**Accept a document edit** — Ask the present entitled person to accept the exact stored proposal against the full expected document revision. Approval waivers never supply person authority. The caller cannot provide replacement text.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
+- Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `rpc`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `doc.edit.decline`
+
+**Decline a document edit** — Ask the present entitled person to decline the stored proposal. Declining settles the Discussion message without writing the document body; approval waivers never supply person authority.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
+- Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `rpc`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `doc.edit.propose`
+
+**Propose a document edit** — Post an immutable before/after proposal in the existing Discussion. The proposal keeps its exact passage and full base revision and never changes document text.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `doc.read`
+
+**Read document** — Read an authorized prose Doc through the canonical Artifact reader. A supplied full revision must still be current. An unavailable comment count is explicit. Reading does not mark a Discussion read.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `rpc`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
 ## `execution.run.action`
 
 **Apply execution run action** — Apply an action to one execution run in the selected scope. A nonempty sessionId selects that exact authorized Session. Omitting sessionId inherits the current Action Session, or selects detached scope when none exists. sessionId:null selects detached scope even inside a current Session.
@@ -3849,6 +4318,135 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `sessionId` (text): Session id — Use a nonempty value for an exact authorized Session. Omit it to inherit the current Action Session, or to select detached scope when no current Session exists. Set null to select detached scope even inside a current Session.
 - `runId` (text, required): Run id
 - `timeoutSeconds` (text): Timeout seconds (optional)
+
+## `follow.get`
+
+**Get Session Follow** — Get Session Follow for the authenticated Account.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `follow.list`
+
+**List followed sessions** — List the sessions whose updates are included with this session's next turn.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `receiver` (json): Receiver
+- `source` (json): Source
+- `direction` (text, required): Direction
+
+## `follow.preferences.get`
+
+**Get Follow defaults** — Get Follow defaults for the authenticated Account.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `follow.preferences.set`
+
+**Set Follow defaults** — Set Follow defaults for the authenticated Account.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `follow.preview`
+
+**Preview Follow rule** — Preview the authorized matching corpus without creating Follow enrollments.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `receiver` (json, required): Receiver
+- `filter` (json, required): Filter
+
+## `follow.remove`
+
+**Remove Session Follow** — Remove Session Follow for the authenticated Account.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `follow.set`
+
+**Set Session Follow** — Set Session Follow for the authenticated Account.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `friends.add`
+
+**Request or accept friendship** — Send a friend request or accept an incoming request on this Home.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `uid` (text, required): Account id
+
+## `friends.remove`
+
+**Remove or decline friendship** — Remove a friend, decline an incoming request or cancel your outgoing request on this Home.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `uid` (text, required): Account id
 
 ## `home.accounts.delete`
 
@@ -5001,7 +5599,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `rpc`, `api`.
 
 ### Input guidance
 
@@ -5580,7 +6178,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -5913,8 +6511,8 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 - `homeId` (text, required): Home
 - `managedId` (text, required): Managed machine id
-- `when` (text, required): When
-- `intent` (text, required): Requested effect
+- `when` (select, required): When
+- `intent` (select, required): Requested effect
 - `expectedRevision` (integer): Expected revision
 - `afterMs` (number): Idle delay (milliseconds)
 - `reviewedDependencies` (boolean, required): Dependencies reviewed
@@ -5978,8 +6576,8 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 - `homeId` (text, required): Home
 - `managedId` (text, required): Managed machine id
-- `when` (text, required): When
-- `intent` (text, required): Requested effect
+- `when` (select, required): When
+- `intent` (select, required): Requested effect
 - `expectedRevision` (integer): Expected revision
 - `afterMs` (number): Idle delay (milliseconds)
 
@@ -6435,6 +7033,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 - `homeId` (text, required): Home
 - `controller` (json): Controller
+- `contribution` (json): Provisioner
 
 ## `machines.provisioners.options`
 
@@ -7243,6 +7842,20 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 - `machineId` (text, required): Machine id
 
+## `memory.decision.save`
+
+**Save a decision** — Save a decision with an explicit reason and exact committed source-message reference through the same memory target, duplicate review, full-revision CAS and lazy attachment owner as remember. The server admits source read and disclosure to the destination Artifact before writing. Human approval is host-derived; agent or waived saves record no human approval. Expiry is Never or a date. Missing source support returns an explicit unavailable or unsupported failure.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
 ## `memory.ensure_up_to_date`
 
 **Ensure memory up to date** — Trigger the daemon to sync memory hints for a session (or all active sessions).
@@ -7322,7 +7935,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `memory.remember`
 
-**Remember a fact** — Remember sanitized text in the index or an optional topic. Target a reviewed document, a Session, or an explicit Account or qualified Project scope without a Session. A missing scope document is created and attached lazily. A Bot defaults to its own memory; an ordinary Session uses Project memory when present, else Account memory. Private writes are allowed; shared writes ask first and retain the reviewed document and revision without rebasing.
+**Remember a fact** — Remember sanitized text in the index or an optional topic. Related active facts return memory_duplicate_choice_required before writing or requesting approval. Resubmit the exact reviewed target and revision with an explicit duplicateChoice: update or replace the selected fact with archived history, or keep_both. Target a reviewed document, a Session, or an explicit Account or qualified Project scope without a Session. A missing scope document is created and attached lazily. A Bot defaults to its own memory; an ordinary Session uses Project memory when present, else Account memory. Private writes are allowed; shared writes ask first and retain the reviewed document and revision without rebasing.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `optional` result; `deferred` flow.
@@ -7336,7 +7949,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `memory.search`
 
-**Search memory** — Search the local daemon memory index.
+**Search memory** — Search the selected daemon memory index by global, Session, or qualified Project scope. Project search requires explicit support from that daemon and never falls back to global search.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
@@ -7366,7 +7979,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `memory.update`
 
-**Update a remembered fact** — Replace a fact at the reviewed Artifact revision and move its replacement to the optional destination topic (omitted means index). Preserve the previous fact in archive with host-derived provenance. With topic archive and restore true, move an archived fact unchanged into restoreTopic (omitted means index), retaining its original id and source; refuse if a replacement still references it. Conflicts return the current version without rebasing.
+**Update a remembered fact** — Correct a fact at the reviewed Artifact revision and move its replacement to the optional destination topic (omitted means index). Other related active facts require explicit duplicateChoice at that same revision. Preserve the previous fact in archive with host-derived provenance. Unchanged-wording renewal preserves approval; changed decision wording retains its source and reason but clears prior approval unless the host witnesses a new approval. With topic archive and restore true, restore into restoreTopic (omitted means index), retaining the original id and source when keeping both. Related active facts require the same explicit duplicate choice; update or replace archives the selected active fact. Refuse if a replacement still references the archived source. Conflicts return the current version without rebasing.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `optional` result; `deferred` flow.
@@ -7819,6 +8432,65 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 No field hints are published. Use the typed input accepted by `execute`.
 
+## `plugins.account.cache.clear`
+
+**Clear downloaded plugin artifacts on this device** — Use the answering app’s Account Availability selector, intent CAS, exact hosted artifact removal and device download cache owners.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `pluginId` (text, required): Plugin
+
+## `plugins.account.hosting.remove`
+
+**Disable and remove hosted plugin artifacts** — Use the answering app’s Account Availability selector, intent CAS, exact hosted artifact removal and device download cache owners.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `pluginId` (text, required): Plugin
+
+## `plugins.account.hosting.set`
+
+**Set plugin Account hosting** — Use the answering app’s Account Availability selector, intent CAS, exact hosted artifact removal and device download cache owners.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `pluginId` (text, required): Plugin
+- `enabled` (boolean, required): Enable Account hosting
+
+## `plugins.account.release.select`
+
+**Select a plugin release for your Account** — Use the answering app’s Account Availability selector, intent CAS, exact hosted artifact removal and device download cache owners.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `pluginId` (text, required): Plugin
+- `version` (text, required): Exact release version
+- `daemon` (json): Exact candidate daemon source
+
 ## `plugins.change.status`
 
 **Get plugin change status** — Read one daemon-issued pending plugin change without creating or deciding it.
@@ -7835,7 +8507,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `plugins.dev.build`
 
-**Build plugin author source** — Build an external plugin-author source through the managed runtime.
+**Build plugin** — Build an external plugin-author source through the managed runtime.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `optional` result; `deferred` flow.
@@ -7849,7 +8521,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `plugins.dev.install`
 
-**Prepare plugin author dependencies** — Prepare external plugin-author dependencies through the managed runtime.
+**Install plugin dependencies** — Prepare external plugin-author dependencies through the managed runtime.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `optional` result; `deferred` flow.
@@ -7863,7 +8535,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `plugins.dev.submit`
 
-**Submit plugin development snapshot** — Register a local plugin source with the daemon-owned development cycle, which watches and applies source changes.
+**Start plugin development** — Register a local plugin source with the daemon-owned development cycle, which watches and applies source changes.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `optional` result; `deferred` flow.
@@ -7877,7 +8549,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `plugins.dev.test`
 
-**Test plugin author source** — Run the external plugin-author test command through the managed runtime.
+**Test plugin** — Run the external plugin-author test command through the managed runtime.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `optional` result; `deferred` flow.
@@ -7891,7 +8563,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `plugins.dev.typecheck`
 
-**Typecheck plugin author source** — Run the managed TypeScript check for an external plugin-author source.
+**Typecheck plugin** — Run the managed TypeScript check for an external plugin-author source.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `optional` result; `deferred` flow.
@@ -7917,9 +8589,23 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 No field hints are published. Use the typed input accepted by `execute`.
 
+## `plugins.disable`
+
+**Disable plugin** — Disable an installed plugin, preserving the daemon’s retained-resource review.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
 ## `plugins.doctor`
 
-**Diagnose plugin author source** — Evaluate and diagnose an external plugin-author source.
+**Diagnose plugin** — Evaluate and diagnose an external plugin-author source.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `optional` result; `deferred` flow.
@@ -7931,9 +8617,23 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 No field hints are published. Use the typed input accepted by `execute`.
 
+## `plugins.enable`
+
+**Enable plugin** — Enable an installed and trusted plugin through its machine lifecycle owner.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
 ## `plugins.execution_origin.clear`
 
-**Clear plugin execution origin preference** — Use the answering app’s exact plugin origin selector for Account preferences or an addressed mounted contextual choice.
+**Clear plugin execution origin preference** — Read or change where a plugin runs on the answering device and Home, or an addressed mounted contextual choice. clientId selects an exact connected app; unselected mutations refuse when several apps can answer. List returns answeringClientId for subsequent calls. An unavailable explicit Machine blocks its operations; source custody is resolved for each operation.
 
 - Safety: `safe`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -7944,12 +8644,12 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `pluginId` (text, required): Plugin
+- `clientId` (text): Exact answering client
 - `contextualTarget` (json): Mounted contextual target
-- `expectedSettingsVersion` (number): Settings version for Account preferences
 
 ## `plugins.execution_origin.list`
 
-**List plugin execution origins** — Use the answering app’s exact plugin origin selector for Account preferences or an addressed mounted contextual choice.
+**List plugin execution origins** — Read or change where a plugin runs on the answering device and Home, or an addressed mounted contextual choice. clientId selects an exact connected app; unselected mutations refuse when several apps can answer. List returns answeringClientId for subsequent calls. An unavailable explicit Machine blocks its operations; source custody is resolved for each operation.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
@@ -7960,12 +8660,13 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `pluginId` (text, required): Plugin
+- `clientId` (text): Exact answering client
 - `contextualTarget` (json): Mounted contextual target
 - `contextual` (boolean): Discover mounted contextual targets
 
 ## `plugins.execution_origin.set`
 
-**Choose where a plugin runs** — Use the answering app’s exact plugin origin selector for Account preferences or an addressed mounted contextual choice.
+**Choose where a plugin runs** — Read or change where a plugin runs on the answering device and Home, or an addressed mounted contextual choice. clientId selects an exact connected app; unselected mutations refuse when several apps can answer. List returns answeringClientId for subsequent calls. An unavailable explicit Machine blocks its operations; source custody is resolved for each operation.
 
 - Safety: `safe`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -7976,18 +8677,18 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `pluginId` (text, required): Plugin
+- `clientId` (text): Exact answering client
 - `contextualTarget` (json): Mounted contextual target
 - `origin` (json, required): Exact execution origin
-- `expectedSettingsVersion` (number): Settings version for Account preferences
 
 ## `plugins.install`
 
-**Install plugin** — Install an exact marketplace or local plugin through daemon-owned review; headless callers receive the pending review.
+**Install plugin** — Request approval to install and trust an exact marketplace or local plugin; the daemon retains custody of the install effect.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `optional` result; `deferred` flow.
-- Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
-- Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
 - Also surfaced on: `ui`, `agent`, `mcp`, `cli`.
 
 ### Input guidance
@@ -8016,6 +8717,124 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 No field hints are published. Use the typed input accepted by `execute`.
+
+## `plugins.npm_registry_profiles.add`
+
+**Add npm registry profile** — Manage the exact selected Machine’s revisioned npm registry profiles. Sign-in credentials are acquired privately by the answering app.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `target` (json, required): Exact Machine and Home identity
+- `profileId` (text, required): Registry profile
+- `expectedRevision` (number, required): Snapshot revision
+- `mutationId` (text, required): Mutation identifier
+- `profile` (json, required): Registry profile settings
+
+## `plugins.npm_registry_profiles.list`
+
+**List npm registry profiles** — Manage the exact selected Machine’s revisioned npm registry profiles. Sign-in credentials are acquired privately by the answering app.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `target` (json, required): Exact Machine and Home identity
+
+## `plugins.npm_registry_profiles.login`
+
+**Sign in to npm registry** — Manage the exact selected Machine’s revisioned npm registry profiles. Sign-in credentials are acquired privately by the answering app.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `target` (json, required): Exact Machine and Home identity
+- `profileId` (text, required): Registry profile
+- `expectedRevision` (number, required): Snapshot revision
+- `mutationId` (text, required): Mutation identifier
+
+## `plugins.npm_registry_profiles.logout`
+
+**Sign out of npm registry** — Manage the exact selected Machine’s revisioned npm registry profiles. Sign-in credentials are acquired privately by the answering app.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `target` (json, required): Exact Machine and Home identity
+- `profileId` (text, required): Registry profile
+- `expectedRevision` (number, required): Snapshot revision
+- `mutationId` (text, required): Mutation identifier
+
+## `plugins.npm_registry_profiles.remove`
+
+**Remove npm registry profile** — Manage the exact selected Machine’s revisioned npm registry profiles. Sign-in credentials are acquired privately by the answering app.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `target` (json, required): Exact Machine and Home identity
+- `profileId` (text, required): Registry profile
+- `expectedRevision` (number, required): Snapshot revision
+- `mutationId` (text, required): Mutation identifier
+
+## `plugins.npm_registry_profiles.test`
+
+**Test npm registry profile** — Manage the exact selected Machine’s revisioned npm registry profiles. Sign-in credentials are acquired privately by the answering app.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `target` (json, required): Exact Machine and Home identity
+- `profileId` (text, required): Registry profile
+- `expectedRevision` (number, required): Snapshot revision
+- `mutationId` (text, required): Mutation identifier
+
+## `plugins.npm_registry_profiles.update`
+
+**Update npm registry profile** — Manage the exact selected Machine’s revisioned npm registry profiles. Sign-in credentials are acquired privately by the answering app.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `target` (json, required): Exact Machine and Home identity
+- `profileId` (text, required): Registry profile
+- `expectedRevision` (number, required): Snapshot revision
+- `mutationId` (text, required): Mutation identifier
+- `profile` (json, required): Registry profile settings
 
 ## `plugins.pack`
 
@@ -8067,7 +8886,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `rpc`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `rpc`, `api`.
 
 ### Input guidance
 
@@ -8092,10 +8911,10 @@ No field hints are published. Use the typed input accepted by `execute`.
 **Revoke plugin permission** — Manage durable user-approved optional plugin permission grants.
 
 - Safety: `danger`; side effect: `write`.
-- Approval: `none` result; `deferred` flow.
+- Approval: `optional` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `rpc`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `rpc`.
 
 ### Input guidance
 
@@ -8115,6 +8934,20 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 No field hints are published. Use the typed input accepted by `execute`.
 
+## `plugins.rollback`
+
+**Roll back plugin** — Restore the previous installed plugin version through its machine lifecycle owner.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
 ## `plugins.scaffold`
 
 **Scaffold plugin** — Create a local plugin scaffold from the first-party template.
@@ -8123,7 +8956,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `optional` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `agent`, `mcp`, `cli`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -8137,7 +8970,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `optional` result; `deferred` flow.
 - Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
 - Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
-- Also surfaced on: `agent`, `mcp`, `rpc`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `rpc`.
 
 ### Input guidance
 
@@ -8151,7 +8984,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `optional` result; `deferred` flow.
 - Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
 - Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
-- Also surfaced on: `agent`, `mcp`, `rpc`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `rpc`.
 
 ### Input guidance
 
@@ -8165,7 +8998,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `optional` result; `deferred` flow.
 - Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
 - Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
-- Also surfaced on: `agent`, `mcp`, `rpc`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `rpc`.
 
 ### Input guidance
 
@@ -8179,7 +9012,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `rpc`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `rpc`, `api`.
 
 ### Input guidance
 
@@ -8193,7 +9026,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `optional` result; `deferred` flow.
 - Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
 - Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
-- Also surfaced on: `agent`, `mcp`, `rpc`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `rpc`.
 
 ### Input guidance
 
@@ -8311,6 +9144,20 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 No field hints are published. Use the typed input accepted by `execute`.
 
+## `plugins.trust.forget`
+
+**Forget plugin trust** — Remove the machine’s retained trust for an installed plugin.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
 ## `plugins.uninstall`
 
 **Uninstall plugin** — Remove a plugin installed from a local folder on a machine.
@@ -8319,7 +9166,21 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `optional` result; `deferred` flow.
 - Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
 - Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
-- Also surfaced on: `agent`, `mcp`, `cli`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `plugins.update_policy.set`
+
+**Set plugin update policy** — Change whether an installed plugin admits explicit updates.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -8508,6 +9369,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `skipForInvocation` (boolean): Skip for this invocation
 - `expectedEffectDigest` (text): Reviewed setup effect
 - `consentScope` (json): Setup consent scope
+- `heldOperationId` (text): Held operation
 
 ## `projects.script.run`
 
@@ -8935,10 +9797,10 @@ No field hints are published. Use the typed input accepted by `execute`.
 **Install prompt registry skill** — Import a skill bundle from a registry into the Happier library.
 
 - Safety: `danger`; side effect: `external`.
-- Approval: `none` result; `deferred` flow.
+- Approval: `optional` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
 
 ### Input guidance
 
@@ -8954,7 +9816,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -8964,6 +9826,21 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `behavior` (text): Insertion behavior
 - `allowArgs` (boolean): Allow arguments
 - `availableIn` (text): Availability
+
+## `prompts.invocation.delete`
+
+**Delete a prompt shortcut** — Remove an existing slash shortcut at its observed catalog revision. The prompt document remains in the library. Conflicts are not retried.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `invocationId` (text, required): Shortcut id
+- `expectedRevision` (number, required): Catalog revision
 
 ## `prompts.invocation.resolve`
 
@@ -8979,6 +9856,27 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 - `invocationId` (text, required): Invocation id
 - `argsText` (text): Arguments
+
+## `prompts.invocation.update`
+
+**Edit a prompt shortcut** — Update an existing slash shortcut at its observed catalog revision. Read prompts.invocations.list for its target and revision; conflicts are not retried.
+
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `invocationId` (text, required): Shortcut id
+- `expectedRevision` (number, required): Catalog revision
+- `token` (text, required): Slash shortcut
+- `title` (text, required): Title
+- `target` (json, required): Prompt document reference
+- `behavior` (text): Insertion behavior
+- `allowArgs` (boolean): Allow arguments
+- `availableIn` (text): Availability
 
 ## `prompts.invocations.list`
 
@@ -9601,8 +10499,8 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Change registry source** — No additional description is published.
 
-- Safety: `safe`; side effect: `write`.
-- Approval: `none` result; `deferred` flow.
+- Safety: `danger`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
 - Also surfaced on: `ui`, `cli`, `agent`, `mcp`, `rpc`, `api`.
@@ -10342,6 +11240,20 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 - `key` (json, required): Exact trusted host key
 
+## `remote_hosts.tunnel.list`
+
+**List active SSH tunnels** — No additional description is published.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
 ## `remote_hosts.tunnel.stop`
 
 **Stop SSH tunnel** — No additional description is published.
@@ -10473,7 +11385,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Bulk transition review comments** — Operate on durable review comments through the shared review-comment substrate.
 
-- Safety: `danger`; side effect: `write`.
+- Safety: `safe`; side effect: `write`.
 - Approval: `none` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -10488,7 +11400,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 **Claim review comment publication dispatch** — Operate on durable review comments through the shared review-comment substrate.
 
 - Safety: `danger`; side effect: `write`.
-- Approval: `none` result; `deferred` flow.
+- Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
 - Also surfaced on: `ui`, `rpc`, `api`.
@@ -10515,7 +11427,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Edit review comment** — Operate on durable review comments through the shared review-comment substrate.
 
-- Safety: `danger`; side effect: `write`.
+- Safety: `safe`; side effect: `write`.
 - Approval: `none` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -10571,7 +11483,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Reply to review comment** — Operate on durable review comments through the shared review-comment substrate.
 
-- Safety: `danger`; side effect: `write`.
+- Safety: `safe`; side effect: `write`.
 - Approval: `none` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -10599,7 +11511,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Transition review comment** — Operate on durable review comments through the shared review-comment substrate.
 
-- Safety: `danger`; side effect: `write`.
+- Safety: `safe`; side effect: `write`.
 - Approval: `none` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -10669,7 +11581,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `roles.override.reset`
 
-**Reset a built-in role** — No additional description is published.
+**Reset role settings** — No additional description is published.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -10683,7 +11595,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `roles.override.set`
 
-**Change a built-in role** — No additional description is published.
+**Change role settings** — No additional description is published.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -10782,7 +11694,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `scm.branch.merge`
 
-**Branch merge** — Branch merge in the explicitly selected source-control repository.
+**Merge branch** — Branch merge in the explicitly selected source-control repository.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -10797,7 +11709,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `scm.branch.operation.abort`
 
-**Branch operation abort** — Branch operation abort in the explicitly selected source-control repository.
+**Abort in-progress operation** — Branch operation abort in the explicitly selected source-control repository.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -10827,7 +11739,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `scm.branch.operation.skip`
 
-**Branch operation skip** — Branch operation skip in the explicitly selected source-control repository.
+**Skip this step** — Branch operation skip in the explicitly selected source-control repository.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -10842,7 +11754,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `scm.branch.rebase`
 
-**Branch rebase** — Branch rebase in the explicitly selected source-control repository.
+**Rebase branch** — Branch rebase in the explicitly selected source-control repository.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -10857,7 +11769,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `scm.change.discard`
 
-**Change discard** — Change discard in the explicitly selected source-control repository.
+**Discard changes** — Change discard in the explicitly selected source-control repository.
 
 - Safety: `danger`; side effect: `danger`.
 - Approval: `required` result; `blocking` flow.
@@ -11601,7 +12513,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `scm.remote.pull`
 
-**Remote pull** — Remote pull in the explicitly selected source-control repository.
+**Pull changes** — Remote pull in the explicitly selected source-control repository.
 
 - Safety: `danger`; side effect: `external`.
 - Approval: `required` result; `blocking` flow.
@@ -11619,7 +12531,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `scm.remote.push`
 
-**Remote push** — Remote push in the explicitly selected source-control repository.
+**Push commits** — Remote push in the explicitly selected source-control repository.
 
 - Safety: `danger`; side effect: `external`.
 - Approval: `required` result; `blocking` flow.
@@ -11767,7 +12679,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `scm.stash.drop`
 
-**Stash drop** — Stash drop in the explicitly selected source-control repository.
+**Delete stash** — Stash drop in the explicitly selected source-control repository.
 
 - Safety: `danger`; side effect: `danger`.
 - Approval: `required` result; `blocking` flow.
@@ -11860,7 +12772,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `scm.worktree.prune`
 
-**Worktree prune** — Worktree prune in the explicitly selected source-control repository.
+**Prune worktrees** — Worktree prune in the explicitly selected source-control repository.
 
 - Safety: `danger`; side effect: `danger`.
 - Approval: `required` result; `blocking` flow.
@@ -11874,7 +12786,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `scm.worktree.remove`
 
-**Worktree remove** — Worktree remove in the explicitly selected source-control repository.
+**Remove worktree** — Worktree remove in the explicitly selected source-control repository.
 
 - Safety: `danger`; side effect: `danger`.
 - Approval: `required` result; `blocking` flow.
@@ -12112,6 +13024,34 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 - `limit` (text): Limit
 
+## `session.access.accounts.search`
+
+**Find Session access recipients** — No additional description is published.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `session.access.candidates.inspect`
+
+**Inspect Session access candidates** — No additional description is published.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
 ## `session.access.context.set`
 
 **Set the Team a Session belongs to** — No additional description is published.
@@ -12157,6 +13097,20 @@ No field hints are published. Use the typed input accepted by `execute`.
 ## `session.access.grants.list`
 
 **List Session access** — No additional description is published.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `session.access.principals.resolve`
+
+**Resolve Session access recipients** — No additional description is published.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `none` result; `deferred` flow.
@@ -12218,7 +13172,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `session.archive`
 
-**Archive session** — Archive the specified session.
+**Archive session** — Archive the specified session, optionally also archiving its unarchived direct reports. Each report retains its own rights and approval requirements; results include partial outcomes.
 
 - Safety: `safe`; side effect: not classified.
 - Approval: `none` result; `deferred` flow.
@@ -12229,6 +13183,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `sessionId` (text, required): Session id
+- `alsoArchiveReports` (boolean): Also archive direct sub-sessions
 
 ## `session.attention.set`
 
@@ -12238,7 +13193,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `none` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `cli`, `voice`, `agent`, `api`.
+- Also surfaced on: `ui`, `cli`, `voice`, `agent`, `mcp`, `api`.
 
 ### Input guidance
 
@@ -12345,125 +13300,6 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `sessionId` (text, required): Session id
 - `bot` (json, required): Bot marker, or null for a regular session
 
-## `session.canvas.tabs.activate`
-
-**Activate Session canvas tab** — Operate on the answering mounted Session canvas in the exact Home, Account and workspace. Opening keeps existing Sessions; an unavailable canvas performs no effect.
-
-- Safety: `safe`; side effect: `external`.
-- Approval: `required` result; `blocking` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-- `scope` (json, required): Exact Home and Account
-- `canvasKey` (text, required): Mounted Session canvas key
-- `tabId` (text, required): Canvas tab id
-
-## `session.canvas.tabs.close`
-
-**Close Session canvas tab** — Operate on the answering mounted Session canvas in the exact Home, Account and workspace. Opening keeps existing Sessions; an unavailable canvas performs no effect.
-
-- Safety: `safe`; side effect: `external`.
-- Approval: `required` result; `blocking` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-- `scope` (json, required): Exact Home and Account
-- `canvasKey` (text, required): Mounted Session canvas key
-- `tabId` (text, required): Canvas tab id
-
-## `session.canvas.tabs.list`
-
-**List Session canvas tabs** — Operate on the answering mounted Session canvas in the exact Home, Account and workspace. Opening keeps existing Sessions; an unavailable canvas performs no effect.
-
-- Safety: `safe`; side effect: `read`.
-- Approval: `required` result; `blocking` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-- `scope` (json, required): Exact Home and Account
-- `canvasKey` (text, required): Mounted Session canvas key
-
-## `session.canvas.tabs.move`
-
-**Move Session canvas tab** — Operate on the answering mounted Session canvas in the exact Home, Account and workspace. Opening keeps existing Sessions; an unavailable canvas performs no effect.
-
-- Safety: `safe`; side effect: `external`.
-- Approval: `required` result; `blocking` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-- `scope` (json, required): Exact Home and Account
-- `canvasKey` (text, required): Mounted Session canvas key
-- `tabId` (text, required): Canvas tab id
-- `targetLeafId` (text, required): Destination pane id
-- `placement` (select): Placement
-- `beforeTabId` (text): Insert before tab (null appends)
-
-## `session.canvas.tabs.open`
-
-**Open Session canvas tab** — Operate on the answering mounted Session canvas in the exact Home, Account and workspace. Opening keeps existing Sessions; an unavailable canvas performs no effect.
-
-- Safety: `safe`; side effect: `external`.
-- Approval: `required` result; `blocking` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-- `scope` (json, required): Exact Home and Account
-- `canvasKey` (text, required): Mounted Session canvas key
-- `sessionId` (text, required): Session id
-- `leafId` (text, required): Destination pane id
-- `placement` (select): Placement
-- `beforeTabId` (text): Insert before tab (null appends)
-
-## `session.canvas.tabs.pin`
-
-**Pin Session canvas tab** — Operate on the answering mounted Session canvas in the exact Home, Account and workspace. Opening keeps existing Sessions; an unavailable canvas performs no effect.
-
-- Safety: `safe`; side effect: `external`.
-- Approval: `required` result; `blocking` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-- `scope` (json, required): Exact Home and Account
-- `canvasKey` (text, required): Mounted Session canvas key
-- `tabId` (text, required): Canvas tab id
-- `pinned` (boolean, required): Keep pinned
-
-## `session.canvas.tabs.reorder`
-
-**Reorder Session canvas tab** — Operate on the answering mounted Session canvas in the exact Home, Account and workspace. Opening keeps existing Sessions; an unavailable canvas performs no effect.
-
-- Safety: `safe`; side effect: `external`.
-- Approval: `required` result; `blocking` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-- `scope` (json, required): Exact Home and Account
-- `canvasKey` (text, required): Mounted Session canvas key
-- `tabId` (text, required): Canvas tab id
-- `beforeTabId` (text, required): Insert before tab (null appends)
-
 ## `session.capabilities.get`
 
 **List session capabilities** — No additional description is published.
@@ -12504,7 +13340,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `optional` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `rpc`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `rpc`, `api`.
 
 ### Input guidance
 
@@ -12535,7 +13371,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `optional` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
 
 ### Input guidance
 
@@ -12551,7 +13387,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `optional` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
 
 ### Input guidance
 
@@ -12559,7 +13395,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `session.context.update`
 
-**Update session context** — Apply one context-entry or inherited-entry switch intent against its reviewed metadata revision.
+**Update session context** — Apply one context-entry, inherited-entry switch or Plan Doc selection intent against its reviewed metadata revision.
 
 - Safety: `safe`; side effect: `write`.
 - Approval: `none` result; `deferred` flow.
@@ -12605,6 +13441,40 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `backendTarget` (text, required): Backend target
 - `replay` (textarea, required): Replay seed
 
+## `session.control.switch`
+
+**Switch Session control** — Switch between local terminal and remote control through the active Session terminal owner.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `rpc`, `api`.
+
+### Input guidance
+
+- `sessionId` (text): Session id
+- `to` (select, required): Control
+
+## `session.coordinator.enable`
+
+**Make coordinator** — Configure this session through existing role, Bot, pin, manager and Important Follow rule Actions; returns each effect separately.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `sessionId` (text, required): Session
+- `roleId` (text, required): Role
+- `keep` (select, required): Where to keep it
+- `answersWorkerQuestions` (boolean): Answers its workers’ questions
+- `managedBy` (json): Manager and reviewed current manager
+- `ruleSuggestions` (json, required): Selected rule intents
+
 ## `session.delete`
 
 **Delete session** — Permanently delete a session. Its daemon removes managed folders through the durable deletion lifecycle.
@@ -12619,150 +13489,49 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 - `sessionId` (text, required): Session id
 
-## `session.discussion.archive`
+## `session.delivery.mute.list`
 
-**Archive a discussion** — Archive one human discussion. It stays readable and restorable; new posts and title changes stop.
-
-- Safety: `safe`; side effect: `write`.
-- Approval: `optional` result; `deferred` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `cli`, `api`.
-
-### Input guidance
-
-- `sessionId` (text): Session id
-- `discussionId` (text, required): Discussion id
-
-## `session.discussion.create`
-
-**Start a Session discussion** — Start one human discussion with its title and first message in a single atomic write. Agent and MCP management surfaces remain disabled.
-
-- Safety: `safe`; side effect: `write`.
-- Approval: `optional` result; `deferred` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `cli`, `api`.
-
-### Input guidance
-
-- `sessionId` (text): Session id
-- `title` (text, required): Title
-- `firstMessage` (json, required): First message
-
-## `session.discussion.get`
-
-**Read one Session discussion** — Read one human discussion’s opened title, activity, capabilities and the caller’s private unread facts. It returns no message bodies.
+**List receiver delivery mutes** — Inspect or change exact sender and Follow-source suppression for one receiver on this Home.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
-- `sessionId` (text): Session id
-- `discussionId` (text, required): Discussion id
+- `receiver` (json, required): Receiver
 
-## `session.discussion.list`
+## `session.delivery.mute.remove`
 
-**List Session discussions** — List the human discussions attached to a Session, newest activity first. Titles are opened locally; unread and mention counts are the caller’s own private facts.
+**Unmute deliveries to a receiver** — Inspect or change exact sender and Follow-source suppression for one receiver on this Home.
 
-- Safety: `safe`; side effect: `read`.
-- Approval: `required` result; `blocking` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-- `sessionId` (text): Session id
-- `state` (text): State
-- `cursor` (text): Page cursor
-- `limit` (integer): Page size
-
-## `session.discussion.post`
-
-**Post a discussion message** — Post one authored message to a human discussion. Every Session collaborator sees it. An Agent posts under its own authenticated execution Account with visible “via agent” attribution; it never posts as the person who asked.
-
-- Safety: `danger`; side effect: `danger`.
+- Safety: `danger`; side effect: `write`.
 - Approval: `optional` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
-- `sessionId` (text): Session id
-- `discussionId` (text, required): Discussion id
-- `content` (json, required): Message
-- `mentionedAccountIds` (text_list): Mentioned Account ids
+- `receiver` (json, required): Receiver
+- `scope` (json, required): Mute scope
 
-## `session.discussion.read`
+## `session.delivery.mute.set`
 
-**Read discussion messages** — Read one bounded page of a discussion’s authored human messages, opened locally. Reading never advances the caller’s private read cursor.
+**Mute deliveries to a receiver** — Inspect or change exact sender and Follow-source suppression for one receiver on this Home.
 
-- Safety: `safe`; side effect: `read`.
-- Approval: `required` result; `blocking` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-- `sessionId` (text): Session id
-- `discussionId` (text, required): Discussion id
-- `beforeSeq` (integer): Before sequence
-- `afterSeq` (integer): After sequence
-- `limit` (integer): Page size
-
-## `session.discussion.read_state.set`
-
-**Mark a discussion read** — Advance the caller’s own private read position in a discussion. Agent and MCP callers cannot acknowledge a person’s read position.
-
-- Safety: `safe`; side effect: `write`.
+- Safety: `danger`; side effect: `write`.
 - Approval: `optional` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `cli`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
-- `sessionId` (text): Session id
-- `discussionId` (text, required): Discussion id
-- `lastReadSeq` (integer, required): Last read sequence
-
-## `session.discussion.rename`
-
-**Rename a discussion** — Change one human discussion’s title. It does not reorder the discussion or touch its messages.
-
-- Safety: `safe`; side effect: `write`.
-- Approval: `optional` result; `deferred` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `cli`, `api`.
-
-### Input guidance
-
-- `sessionId` (text): Session id
-- `discussionId` (text, required): Discussion id
-- `title` (text, required): Title
-
-## `session.discussion.restore`
-
-**Restore a discussion** — Restore one archived human discussion so it accepts posts again.
-
-- Safety: `safe`; side effect: `write`.
-- Approval: `optional` result; `deferred` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `cli`, `api`.
-
-### Input guidance
-
-- `sessionId` (text): Session id
-- `discussionId` (text, required): Discussion id
+- `receiver` (json, required): Receiver
+- `scope` (json, required): Mute scope
 
 ## `session.draft.append`
 
@@ -12827,7 +13596,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Get session events** — Inspect raw session events (tool calls, tool results, token counts, lifecycle, permission, stream, session events) for diagnostics. Use session_transcript_get for normal transcript reading.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -12838,6 +13607,23 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `sessionId` (text, required): Session id
 - `limit` (text): Limit
 - `cursor` (text): Cursor
+
+## `session.exchange.control`
+
+**Control autonomous exchange** — Continue, continue ten more turns, or stop work rooted in one original input.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `sessionId` (text, required): Session id
+- `originInputLocalId` (text, required): Original input id
+- `decision` (select, required): Control
+- `additionalTurns` (number): Additional turns
 
 ## `session.folder.set`
 
@@ -12880,7 +13666,8 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `folderId` (text, required): Folder ID
+- `assignmentBehavior` (select): Assignment behavior
 
 ## `session.folders.list`
 
@@ -12909,120 +13696,6 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 No field hints are published. Use the typed input accepted by `execute`.
-
-## `session.follow.get`
-
-**Get Session Follow** — Get Session Follow for the authenticated Account.
-
-- Safety: `safe`; side effect: `read`.
-- Approval: `required` result; `blocking` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-No field hints are published. Use the typed input accepted by `execute`.
-
-## `session.follow.preferences.get`
-
-**Get Follow defaults** — Get Follow defaults for the authenticated Account.
-
-- Safety: `safe`; side effect: `read`.
-- Approval: `required` result; `blocking` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-No field hints are published. Use the typed input accepted by `execute`.
-
-## `session.follow.preferences.set`
-
-**Set Follow defaults** — Set Follow defaults for the authenticated Account.
-
-- Safety: `safe`; side effect: `write`.
-- Approval: `optional` result; `deferred` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-No field hints are published. Use the typed input accepted by `execute`.
-
-## `session.follow.remove`
-
-**Remove Session Follow** — Remove Session Follow for the authenticated Account.
-
-- Safety: `safe`; side effect: `write`.
-- Approval: `optional` result; `deferred` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-No field hints are published. Use the typed input accepted by `execute`.
-
-## `session.follow.set`
-
-**Set Session Follow** — Set Session Follow for the authenticated Account.
-
-- Safety: `safe`; side effect: `write`.
-- Approval: `optional` result; `deferred` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-No field hints are published. Use the typed input accepted by `execute`.
-
-## `session.follow.sources.list`
-
-**List followed sessions** — List the sessions whose updates are included with this session's next turn.
-
-- Safety: `safe`; side effect: not classified.
-- Approval: `none` result; `deferred` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-- `destinationSessionId` (text, required): Destination session id
-
-## `session.follow.sources.remove`
-
-**Stop updates from another session** — Stop including another session's updates. Following again later starts from the current state.
-
-- Safety: `danger`; side effect: not classified.
-- Approval: `optional` result; `deferred` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-- `destinationSessionId` (text, required): Destination session id
-- `sourceSessionId` (text, required): Source session id
-
-## `session.follow.sources.set`
-
-**Send updates from another session** — Include another authorized session's updates as context on this session's next turn.
-
-- Safety: `danger`; side effect: not classified.
-- Approval: `optional` result; `deferred` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-- `destinationSessionId` (text, required): Destination session id
-- `sourceSessionId` (text, required): Source session id
 
 ## `session.fork`
 
@@ -13058,7 +13731,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Get session goal** — Get the editable session goal when the provider supports native goals.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -13090,11 +13763,11 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Hand off session** — Move the current session to another machine or another directory on the same machine while keeping the same session id. Select target storage and workspace transfer behavior explicitly when needed.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `write`.
 - Approval: `optional` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `rpc`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `rpc`, `api`.
 
 ### Input guidance
 
@@ -13108,7 +13781,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Get session handoff status** — Read scalar status for an in-progress session handoff.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -13122,7 +13795,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Get session history** — DEPRECATED: use session_events_get. Returns diagnostic session events with cleaner pagination.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -13230,6 +13903,22 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `maxBytes` (text): Maximum bytes
 - `offset` (text): File offset
 
+## `session.manager.set`
+
+**Set Session manager** — No additional description is published.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `sessionId` (text): Session
+- `managerSessionId` (text): Manager session — Leave empty to detach it from its manager.
+- `expectedManagerSessionId` (text): Expected current manager
+
 ## `session.memory.set`
 
 **Use memory in this session** — Save the Session memory choice without creating or editing documents.
@@ -13246,6 +13935,22 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `serverId` (text, required): Home id
 - `expectedMetadataRevision` (number, required): Reviewed metadata revision
 - `enabled` (json, required): Use memory
+
+## `session.message.reply`
+
+**Reply to a Session request** — Publish an answer or pass for one exact admitted request in the receiving Session.
+
+- Safety: `safe`; side effect: `external`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `rpc`, `api`.
+
+### Input guidance
+
+- `sessionId` (text, required): Receiving Session
+- `requestLocalId` (text, required): Original input id
+- `reply` (json, required): Answer or pass
 
 ## `session.message.send`
 
@@ -13265,6 +13970,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `permissionModeOverride` (text): Permission mode override (optional)
 - `modelOverride` (text): Model override (optional)
 - `providerConnectionId` (text): Provider connection id (optional)
+- `reply` (select): Reply mode (optional) — none sends information; wait observes the exact answer; return hands off its answer to the original Session.
 - `wait` (boolean): Wait for message completion (optional)
 - `timeoutSeconds` (text): Timeout seconds (optional)
 
@@ -13272,7 +13978,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Get recent messages** — DEPRECATED: use session_transcript_get. Returns semantic transcript items with cleaner pagination.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -13331,6 +14037,28 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 - `sessionId` (text, required): Session id
 
+## `session.needs_you.raise`
+
+**Ask the user** — Ask one structured question request in the current session, or withdraw a request you raised.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `optional` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `rpc`, `api`.
+
+### Input guidance
+
+- `sessionId` (text): Session
+- `mode` (select): Wait or continue
+- `type` (select): Question type
+- `title` (text): Title
+- `questions` (json): Questions
+- `assumption` (text): Continue-mode assumption
+- `lasting` (boolean): Lasting decision
+- `requestId` (text): Request to withdraw
+- `withdraw` (text): Withdrawal reason
+
 ## `session.notes.set`
 
 **Set Session notes** — No additional description is published.
@@ -13348,7 +14076,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `session.open`
 
-**Open session** — Open or resume a session. Explicit fresh-folder consent lets the daemon recover a missing managed folder.
+**Open session** — Open or resume a session, including Files, Walkthrough or pending-only Commits for an SCM comparison. Explicit fresh-folder consent lets the daemon recover a missing managed folder.
 
 - Safety: `safe`; side effect: `external`.
 - Approval: `optional` result; `deferred` flow.
@@ -13365,7 +14093,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `session.organization.move`
 
-**Move Session organization item** — Move a Session, folder or workspace through the mounted Session list organization owner. Current membership, Home, Account and ordering policy are revalidated before writing. Session reporting relationships use session.reports_to.set.
+**Move Session organization item** — Move a Session, folder or workspace through the mounted Session list organization owner. Current membership, Home, Account and ordering policy are revalidated before writing. Session reporting relationships use session.manager.set.
 
 - Safety: `safe`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -13401,6 +14129,53 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `sessionId` (text, required): Session
 - `pinned` (boolean, required): Pinned
 - `surface` (select): Pin surface
+
+## `session.pending.action.set`
+
+**Update queued message action** — Change the requested action or explicitly resume the exact queued input through its existing pending owner.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `rpc`, `api`.
+
+### Input guidance
+
+- `sessionId` (text, required): Session id
+- `localId` (text, required): Pending message id
+- `requestedAction` (json, required): Requested action
+- `resumeWhenAvailable` (boolean): Resume when available
+
+## `session.pending.dismiss`
+
+**Dismiss uncertain pending delivery** — Archive the exact uncertain Pending input without claiming it was accepted or sending it again.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `rpc`, `api`.
+
+### Input guidance
+
+- `sessionId` (text, required): Session id
+- `localId` (text, required): Pending message id
+
+## `session.pending.markHandled`
+
+**Mark pending delivery handled** — Resolve historical uncertain input you have confirmed was handled, without sending it again.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `rpc`, `api`.
+
+### Input guidance
+
+- `sessionId` (text, required): Session id
+- `localId` (text, required): Pending message id
 
 ## `session.pending.next`
 
@@ -13465,6 +14240,21 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `localId` (text, required): Pending message id
 - `reset` (json, required): Qualified accepted reset witness
 
+## `session.pending.sendAsNew`
+
+**Send pending delivery as new** — Replace the exact uncertain input with a new server-owned Pending identity; the agent may have seen the original.
+
+- Safety: `danger`; side effect: `danger`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `rpc`, `api`.
+
+### Input guidance
+
+- `sessionId` (text, required): Session id
+- `localId` (text, required): Pending message id
+
 ## `session.pending.withdraw`
 
 **Withdraw queued message** — Remove an exact pending message before delivery; delivered or uncertain input cannot be moved back.
@@ -13504,7 +14294,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `none` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `cli`, `rpc`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `rpc`, `api`.
 
 ### Input guidance
 
@@ -13520,7 +14310,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `none` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `cli`, `rpc`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `rpc`, `api`.
 
 ### Input guidance
 
@@ -13652,28 +14442,12 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `none` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
 - `sessionId` (text, required): Session id
 - `state` (text, required): Read state
-
-## `session.reports_to.set`
-
-**Set Session lead** — No additional description is published.
-
-- Safety: `danger`; side effect: `danger`.
-- Approval: `optional` result; `deferred` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-- `sessionId` (text): Session
-- `leadSessionId` (text): Lead session — Leave empty to detach it from its lead.
-- `expectedLeadSessionId` (text): Expected current lead
 
 ## `session.responsibility.candidates.list`
 
@@ -13732,7 +14506,8 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `sessionId` (text, required): Session id
-- `roleId` (text, required): Role id
+- `roleId` (text): Role id
+- `answersWorkerQuestions` (boolean): Answers its workers’ questions
 
 ## `session.roles.add`
 
@@ -13828,11 +14603,27 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 - `sessionId` (text): Session id
 
+## `session.runtime.refresh`
+
+**Refresh Session runtime** — Refresh a stale Session runner on its hosting machine through the same planned restart used by the Session banner. Active child work defers replacement.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `sessionId` (text, required): Session id
+- `machineId` (text, required): Hosting machine id
+- `serverId` (text): Home id
+
 ## `session.skill_catalog.list`
 
 **List session skills** — List provider-visible skills available to the session.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -13880,18 +14671,33 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `session.status.get`
 
-**Get session status** — Get summary status for a session, optionally refreshing live agent state.
+**Get session status** — Get summary status for a session, optionally refreshing live agent state or inspecting current execution prerequisites.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
 - `sessionId` (text, required): Session id
 - `live` (boolean): Live
+- `readiness` (boolean): Inspect execution readiness
+
+## `session.status.set_reason`
+
+**Explain session status** — Set or clear an explanation for the current session without changing its runtime status.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `reason` (json, required): Explanation, or null to clear
 
 ## `session.stop`
 
@@ -13933,7 +14739,8 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `tagId` (text, required): Tag ID
+- `assignmentBehavior` (select): Assignment behavior
 
 ## `session.tags.list`
 
@@ -14006,6 +14813,21 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `sessionIds` (text_list, required): Session ids
+
+## `session.targets.resolve`
+
+**Preview session targets** — Inspect the complete authorized target selection for an Action without executing it. Final invocation prepares its own current selection.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `rpc`, `api`.
+
+### Input guidance
+
+- `target` (json, required): Session target
+- `actionId` (text, required): Action
 
 ## `session.terminalComposer.clear`
 
@@ -14315,7 +15137,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `sessionId` (text, required): Session
 
 ## `session.trigger.remove`
 
@@ -14372,6 +15194,20 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `sessionId` (text, required): Session id
+
+## `session.update.post`
+
+**Post an update** — No additional description is published.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `rpc`, `api`.
+
+### Input guidance
+
+- `summary` (text, required): Update
 
 ## `session.usageLimit.checkNow`
 
@@ -14481,7 +15317,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **List session vendor plugins** — List provider-owned vendor plugins available to the session.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -14491,21 +15327,6 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 - `sessionId` (text, required): Session id
 - `cwd` (text): Working directory
-
-## `session.view.toolCalls.set`
-
-**Show or hide session tool calls** — Save a transcript view choice; null restores the session default. Automation asks first unless the user changes the Action policy.
-
-- Safety: `safe`; side effect: `write`.
-- Approval: `required` result; `blocking` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-- `sessionId` (text, required): Session id
-- `showToolCalls` (json, required): Show tool calls, or null to use the default
 
 ## `session.voice.preference.set`
 
@@ -14557,7 +15378,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Get session work state** — Get the normalized current goal, task, and todo snapshot for a session.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -14566,20 +15387,6 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `sessionId` (text, required): Session id
-
-## `session.worker.publish`
-
-**Publish a worker report** — No additional description is published.
-
-- Safety: `safe`; side effect: `write`.
-- Approval: `required` result; `blocking` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `agent`, `mcp`, `api`.
-
-### Input guidance
-
-- `summary` (text, required): Report
 
 ## `sessions.external.backgroundFollow.set`
 
@@ -14822,7 +15629,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `settings.get`
 
-**Read a declared setting** — Discover declared settings, read or change bound preferences, or request a declared operation through its canonical owner. Operations retain their human interaction and credential trust requirements. Local preferences belong to the answering client.
+**Read a setting** — Discover settings, read or change their values, or request a settings operation through its owner. Operations retain their human interaction and credential trust requirements. Local preferences belong to the answering client.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
@@ -14836,7 +15643,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `settings.invoke`
 
-**Invoke a declared settings operation** — Discover declared settings, read or change bound preferences, or request a declared operation through its canonical owner. Operations retain their human interaction and credential trust requirements. Local preferences belong to the answering client.
+**Run a settings operation** — Discover settings, read or change their values, or request a settings operation through its owner. Operations retain their human interaction and credential trust requirements. Local preferences belong to the answering client.
 
 - Safety: `safe`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -14850,7 +15657,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `settings.list`
 
-**List declared settings** — Discover declared settings, read or change bound preferences, or request a declared operation through its canonical owner. Operations retain their human interaction and credential trust requirements. Local preferences belong to the answering client.
+**List settings** — Discover settings, read or change their values, or request a settings operation through its owner. Operations retain their human interaction and credential trust requirements. Local preferences belong to the answering client.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
@@ -14864,7 +15671,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `settings.reset`
 
-**Reset a declared setting** — Discover declared settings, read or change bound preferences, or request a declared operation through its canonical owner. Operations retain their human interaction and credential trust requirements. Local preferences belong to the answering client.
+**Reset a setting** — Discover settings, read or change their values, or request a settings operation through its owner. Operations retain their human interaction and credential trust requirements. Local preferences belong to the answering client.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -14878,7 +15685,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `settings.set`
 
-**Change a declared setting** — Discover declared settings, read or change bound preferences, or request a declared operation through its canonical owner. Operations retain their human interaction and credential trust requirements. Local preferences belong to the answering client.
+**Change a setting** — Discover settings, read or change their values, or request a settings operation through its owner. Operations retain their human interaction and credential trust requirements. Local preferences belong to the answering client.
 
 - Safety: `danger`; side effect: `write`.
 - Approval: `required` result; `blocking` flow.
@@ -15211,9 +16018,98 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `connectedServices` (json): Connected services (json) — Optional blanket connected-services selection for every target. Attached omission inherits the parent choice; independent starts use Account defaults. Use "native" to suppress connected accounts. An exact connectedServicesByBackendTargetKey entry overrides it.
 - `connectedServicesByBackendTargetKey` (textarea): Connected services per target (json) — Optional connected-services selection per backend target key. Accepts "native", a per-service string ("&lt;service&gt;:group:&lt;id&gt;", "&lt;service&gt;:&lt;profileId&gt;", "&lt;service&gt;:native"), an array, or the full object; omitted targets use the blanket selection, attached inheritance, or independent Account defaults. Enumerate valid selections via the shared session-spawn options source.
 
+## `tasks.internal.create`
+
+**Create personal Happier task** — Create one task in the authenticated Account. An uncertain result must not be replayed blindly.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `tasks.internal.edit`
+
+**Edit personal Happier task** — Apply supported fields to the current task, preserving concurrent fields and Session links.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `tasks.internal.list`
+
+**List personal Happier tasks** — Read the authenticated Account task records and current ordering.
+
+- Safety: `safe`; side effect: `read`.
+- Approval: `none` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
+## `tasks.internal.reorder`
+
+**Reorder unfinished task** — Move an undone todo relative to current undone membership. Does not change completion status.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `scope` (json, required): Home and Account
+- `sourceId` (text, required): Item
+- `position` (json, required): Current anchor
+
+## `tasks.internal.session.link`
+
+**Link accepted Session to task** — Associate an accepted, qualified Session with the current Happier task. Retry safely; does not create a Session or change human-owned Done.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+- `scope` (json, required): Task Home and Account
+- `taskId` (text, required): Task
+- `session` (json, required): Accepted Session identity
+- `linked` (boolean): Linked (false to unlink)
+
+## `tasks.internal.transition`
+
+**Change personal Happier task state** — Apply the task state through its canonical completion and ordering owner.
+
+- Safety: `safe`; side effect: `write`.
+- Approval: `required` result; `blocking` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
+
+### Input guidance
+
+No field hints are published. Use the typed input accepted by `execute`.
+
 ## `teams.archive`
 
-**Archive Team** — Archive a Team, ending ordinary member access to its work until it is restored.
+**Archive Team** — Archive a Team, ending ordinary member access until it is restored. Waiting invitations are permanently revoked.
 
 - Safety: `danger`; side effect: `danger`.
 - Approval: `required` result; `deferred` flow.
@@ -15669,9 +16565,9 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 - Safety: `danger`; side effect: `danger`.
 - Approval: `required` result; `deferred` flow.
-- Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
-- Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -15683,9 +16579,9 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 - Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
-- Request admission: `human_approval` — eligible host Agent, MCP and plugin callers may request human approval; API-token callers receive `present_user_required`.
-- Decision/effect authority: `present_user` — approval and the authorized effect require host-stamped present-user authority; request admission does not authorize self-approval.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -16475,38 +17371,6 @@ No field hints are published. Use the typed input accepted by `execute`.
 - `name` (text): Team name
 - `description` (textarea): Description
 
-## `todos.reorder`
-
-**Reorder undone todo** — Move an undone todo relative to current undone membership. Does not change completion status.
-
-- Safety: `safe`; side effect: `write`.
-- Approval: `required` result; `blocking` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-- `scope` (json, required): Home and Account
-- `sourceId` (text, required): Item
-- `position` (json, required): Current anchor
-
-## `todos.session.link`
-
-**Link accepted Session to task** — Associate an accepted, qualified Session with the current Zen task. Retry safely; does not create a Session or change human-owned Done.
-
-- Safety: `safe`; side effect: `write`.
-- Approval: `required` result; `blocking` flow.
-- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
-- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
-
-### Input guidance
-
-- `scope` (json, required): Task Home and Account
-- `taskId` (text, required): Task
-- `session` (json, required): Accepted Session identity
-
 ## `transcript.follow`
 
 **Follow session transcript** — Create or refresh a retained bounded transcript follow lease.
@@ -17118,7 +17982,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -17132,7 +17996,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -17146,7 +18010,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -17160,7 +18024,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -17912,7 +18776,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `surface` (json, required): Widget surface — Qualified target with serverId, accountId and owner. For a named area layout, include owner.layoutId; discover layouts with widgets.area.layout.list.
-- `instance` (json, required): Configured widget — Complete v1 instance with a unique id, definition reference and bindings.
+- `instance` (json, required): Configured widget — Complete v1 instance with a unique id, definition reference and bindings. A value binding must satisfy the widget’s inputSchema from widgets.catalog.list; use a picked Session, Machine or checkout exactly as action_options_resolve returns it (consumer widget, fieldPath = the input path).
 - `area` (select): Project area — For Project layouts, choose the main area or aside in the same document.
 - `size` (select): Widget size — Choose a size declared by this widget and supported by the target surface; inspect widgets.catalog.list for available sizes.
 - `toIndex` (integer): Insertion index — Zero-based widget position in the current view.
@@ -17976,7 +18840,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `ref` (json, required): Widget or group — Qualified surface and instanceId from widgets.item.list. A group uses its group id as instanceId.
-- `bindings` (json, required): Input bindings — Bindings by declared field path: value, context or viewer intent. Viewer intent uses the current viewer’s existing Connected Account purpose selection.
+- `bindings` (json, required): Input bindings — Bindings by declared field path: value, context or viewer intent. A value must satisfy the widget’s inputSchema from widgets.catalog.list. Viewer intent uses the current viewer’s existing Connected Account purpose selection.
 - `paths` (text_list): Input paths — Only change these declared field paths. Omit to replace or reset the complete binding set.
 
 ## `widgets.item.inputs.validate`
@@ -17992,7 +18856,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `ref` (json, required): Widget or group — Qualified surface and instanceId from widgets.item.list. A group uses its group id as instanceId.
-- `bindings` (json, required): Input bindings — Bindings by declared field path: value, context or viewer intent. Viewer intent uses the current viewer’s existing Connected Account purpose selection.
+- `bindings` (json, required): Input bindings — Bindings by declared field path: value, context or viewer intent. A value must satisfy the widget’s inputSchema from widgets.catalog.list. Viewer intent uses the current viewer’s existing Connected Account purpose selection.
 
 ## `widgets.item.list`
 
@@ -18518,7 +19382,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `rpc`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `rpc`, `api`.
 
 ### Input guidance
 
@@ -18572,17 +19436,22 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ## `workflow.run.start`
 
-**Start workflow Run** — Start workflow Run through the canonical workflow Action owner.
+**Start workflow Run** — Start an ordinary workflow from a built-in/plugin catalog, a saved definition, or an inline definition. A Session caller supplies the origin Session and its Machine/workspace through authenticated Action context. inputs contains only declared workflow input values; machineId and directory inside inputs do not select a run target. executionTarget selects the leaf execution kind, not the Machine/workspace. Retain runId when a response is uncertain. Run again uses source.replay.runId to reopen the accepted graph, runtime and participants; Another round adds source.replay.intent="another_round" and the owner reads authorized prior outcomes into its declared previousRoundContext input. Another round retains all accepted inputs and participants; unavailable context or targets requires repair before starting. It uses the ordinary start approval; contained Actions keep their own approval and authority.
 
 - Safety: `safe`; side effect: `write`.
 - Approval: `optional` result; `deferred` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `agent`, `mcp`, `cli`, `rpc`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `rpc`, `api`.
 
 ### Input guidance
 
+- `runId` (text, required): New Run id — Allocate a UUID for this new start; reuse it to reconcile a lost response.
 - `source.workflow` (select): Workflow
+- `source.replay.runId` (text): Accepted Run to repeat — With an inline source, reopens this authorized Run and preserves its accepted graph and concrete participants.
+- `source.replay.intent` (select): Continuation — Omit for ordinary Run again. Another round retains accepted inputs and supplies authorized outcomes as previousRoundContext; that JSON input must be declared by the workflow.
+- `inputs` (json): Workflow inputs — Values keyed by declared workflow input names. Resolve input choices with action.options.resolve using a workflow consumer and the declared input name as fieldPath. Machine/workspace routing comes from Action context, not this object. Another round inherits the completed Run inputs; it never substitutes current picker defaults.
+- `executionTarget` (json): Step execution kind — Optional leaf execution kind: session or detached_run. This does not select a Machine or directory; a Session caller inherits those from its authenticated context.
 
 ## `workflow.run.summaries`
 
@@ -18668,7 +19537,10 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-No field hints are published. Use the typed input accepted by `execute`.
+- `workflow` (select): Workflow — Choose a workflow, an Account scope, or an Automation with Review.
+- `scope` (select): Account scope
+- `review` (boolean): Review retained Automation
+- `automationId` (text): Automation
 
 ## `workflow.trigger.remove`
 
@@ -18727,10 +19599,9 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 - `automationId` (text, required): Automation
 - `expectedRevision` (number, required): Reviewed revision
+- `triggerId` (text): Trigger
+- `patch` (json, required): Changes — For a reviewed legacy conversion, include the reviewed target and project, and optionally enabled.
 - `confirmLegacyConversion` (boolean, required): Store reviewed workflow without end-to-end encryption
-- `patch.target` (json, required): Reviewed workflow
-- `patch.project` (json, required): Reviewed project
-- `patch.enabled` (boolean): Enable after conversion
 
 ## `workflow.validate`
 
@@ -18773,7 +19644,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -18787,7 +19658,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -18801,7 +19672,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -18815,7 +19686,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -18830,7 +19701,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -18842,7 +19713,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **Inspect workspace sync conflict** — Inspect the current endpoint versions of a linked workspace path. Reads current bytes, not history; coverage can be partial.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -18878,7 +19749,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 **List workspace sync conflicts** — Read one bounded conflict page for a linked workspace relationship. Pages keep their cursor; coverage can be partial.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -18887,12 +19758,12 @@ No field hints are published. Use the typed input accepted by `execute`.
 ### Input guidance
 
 - `controllerMachineId` (text, required): Controller machine id
-- `relationshipId` (text, required): Relationship id
+- `relationshipId` (text, required): Linked folders id
 - `limit` (text): Limit
 
 ## `workspace.sync.relationship.create`
 
-**Add machine to workspace** — Link a selected Workspace to a folder on another machine. Attaching an existing folder preserves its contents; creating from this Workspace replaces them.
+**Add machine to workspace** — Link a workspace to a folder on the machine you choose, which can be the one it is on. Attaching an existing folder preserves its contents; creating from this workspace replaces them.
 
 - Safety: `danger`; side effect: not classified.
 - Approval: `required` result; `deferred` flow.
@@ -18902,18 +19773,78 @@ No field hints are published. Use the typed input accepted by `execute`.
 
 ### Input guidance
 
-- `sourceWorkspaceRefId` (text, required): Source workspace ref id
+- `sourceWorkspaceRefId` (text, required): Source workspace id
 - `targetMachineId` (text, required): Target machine id
 - `targetPath` (text, required): Target folder
 - `mode` (select, required): Sync mode
 - `destinationIntent` (select, required): Destination
-- `contentPolicy` (json, required): Content policy
+- `contentPolicy` (select, required): Content policy
+
+## `workspace.sync.relationship.disable`
+
+**Pause workspace sync** — Pause automatic syncing between two linked folders.
+
+- Safety: `danger`; side effect: not classified.
+- Approval: `required` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+- `controllerMachineId` (text, required): Controller machine id
+- `relationshipId` (text, required): Linked folders id
+
+## `workspace.sync.relationship.enable`
+
+**Resume workspace sync** — Resume automatic syncing between two linked folders.
+
+- Safety: `danger`; side effect: not classified.
+- Approval: `required` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+- `controllerMachineId` (text, required): Controller machine id
+- `relationshipId` (text, required): Linked folders id
+
+## `workspace.sync.relationship.flush`
+
+**Sync workspace now** — Run one synchronization cycle between two linked folders.
+
+- Safety: `danger`; side effect: not classified.
+- Approval: `required` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+- `controllerMachineId` (text, required): Controller machine id
+- `relationshipId` (text, required): Linked folders id
+
+## `workspace.sync.relationship.terminate`
+
+**Stop workspace sync** — Permanently stop syncing two linked folders without deleting either one.
+
+- Safety: `danger`; side effect: not classified.
+- Approval: `required` result; `deferred` flow.
+- Request admission: `account_automation` — subject to surface, access, grant and approval policy.
+- Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
+- Also surfaced on: `ui`, `agent`, `mcp`, `api`.
+
+### Input guidance
+
+- `controllerMachineId` (text, required): Controller machine id
+- `relationshipId` (text, required): Linked folders id
 
 ## `workspace.sync.relationships.list`
 
 **List linked workspace relationships** — List linked workspace relationships and their current sync status on the exact controller. Missing status stays unknown, never zero.
 
-- Safety: `safe`; side effect: not classified.
+- Safety: `safe`; side effect: `read`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
@@ -18932,7 +19863,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -18946,7 +19877,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -18960,7 +19891,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -18974,7 +19905,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -18988,7 +19919,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -19002,7 +19933,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -19016,7 +19947,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -19030,7 +19961,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -19044,7 +19975,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -19060,7 +19991,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -19080,7 +20011,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -19095,7 +20026,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 
@@ -19109,7 +20040,7 @@ No field hints are published. Use the typed input accepted by `execute`.
 - Approval: `required` result; `blocking` flow.
 - Request admission: `account_automation` — subject to surface, access, grant and approval policy.
 - Decision/effect authority: `account_automation` — subject to applicable approval and target decision authority.
-- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `api`.
+- Also surfaced on: `ui`, `voice`, `agent`, `mcp`, `cli`, `api`.
 
 ### Input guidance
 

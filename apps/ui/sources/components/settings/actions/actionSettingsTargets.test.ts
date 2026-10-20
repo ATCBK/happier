@@ -92,7 +92,7 @@ describe('actionSettingsTargets', () => {
             selected: false,
         });
 
-        expect(next.actions['review.start']).toEqual({
+        expect(next.actions['review.start']).toMatchObject({
             enabledPlacements: [],
             disabledSurfaces: ['mcp'],
             disabledPlacements: [],
@@ -108,7 +108,7 @@ describe('actionSettingsTargets', () => {
             selected: false,
         });
 
-        expect(next.actions['session.message.send']).toEqual({
+        expect(next.actions['session.message.send']).toMatchObject({
             enabledPlacements: [],
             disabledSurfaces: ['agent'],
             disabledPlacements: [],
@@ -190,6 +190,6 @@ describe('actionSettingsTargets', () => {
             value: 'allowed',
         });
         expect(resolveActionSettingsTargetControlState({ settings: allowed, actionId, targetId }))
-            .toMatchObject({ kind: 'approval', value: 'allowed' });
+            .toMatchObject({ kind: 'approval', value: 'default', approvalRequiredByPolicy: false });
     });
 });

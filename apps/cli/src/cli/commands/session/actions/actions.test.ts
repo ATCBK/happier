@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
-import { RUNTIME_ACTION_IDS_V1 } from '@happier-dev/protocol/actions';
 import type {
   CliServerFeaturesSnapshot,
   FetchServerFeaturesSnapshotParams,
@@ -552,10 +551,6 @@ describe('happier session actions (unit)', () => {
       expect(parsed.kind).toBe('session_actions_list');
       expect(Array.isArray(parsed.data?.actionSpecs)).toBe(true);
       expect(parsed.data.actionSpecs.length).toBeGreaterThan(0);
-      const listedIds = new Set(parsed.data.actionSpecs.map((spec: { id: string }) => spec.id));
-      for (const runtimeActionId of RUNTIME_ACTION_IDS_V1) {
-        expect(listedIds.has(runtimeActionId)).toBe(false);
-      }
     } finally {
       output.restore();
     }

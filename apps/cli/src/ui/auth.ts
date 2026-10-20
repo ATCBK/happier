@@ -6,6 +6,7 @@ import { displayQRCode } from "./qrcode";
 import { delay, delayUnrefAbortable } from "@/utils/time";
 import {
     readStoredCredentials,
+    readStoredCredentialsForServerId,
     readSettings,
     updateSettings,
     type StoredCredentials,
@@ -727,7 +728,9 @@ async function waitForAuthentication(
                             return null;
                         }
                         await writeCredentialsTokenOnly({ token });
-                        return { encryption: null, token };
+                        const persisted = await readStoredCredentialsForServerId(configuration.activeServerId);
+                        if (!persisted || persisted.token !== token) throw new Error('Stored credential changed during terminal enrollment');
+                        return persisted;
                     }
 
                     const publicKeyBytes = tweetnacl.box.keyPair.fromSecretKey(opened.key).publicKey;
@@ -989,6 +992,14 @@ export async function ensureMachineIdForCredentials(
     credentials: StoredCredentials,
     opts?: { forceNew?: boolean },
 ): Promise<{ machineId: string }> {
+    // Session commands can enter here directly after reading private requester
+    // custody. Their admitted Machine never selects the custodian's global one.
+    const requester = credentials.requesterSessionCredentialScope?.requesterSession;
+    if (requester) return { machineId: requester.attribution.machineId };
+    if (process.env.HAPPIER_SESSION_REQUESTER_CREDENTIAL_FILE !== undefined) {
+        throw new Error('requester_session_credentials_unavailable');
+    }
+
     const accountId = readAccountIdFromToken(credentials.token);
 
     let previousAccountId: string | null = null;
@@ -1044,6 +1055,14 @@ async function authAndPrepareMachineIfNeeded(
     let credentials: StoredCredentials | null = await readStoredCredentials();
     let machineSetup: Readonly<{ machineId: string }> | null = null;
     let accountMaterialRecoveryRequired = false;
+
+    if (process.env.HAPPIER_SESSION_REQUESTER_CREDENTIAL_FILE !== undefined) {
+        // The private-custody reader already validates this child's exact Home
+        // and Session. It runs on the admitted Machine, without selecting or
+        // registering a new requester Machine in the custodian's settings.
+        if (!credentials) throw new Error('requester_session_credentials_unavailable');
+        return { credentials, ...await ensureMachineIdForCredentials(credentials) };
+    }
 
     if (credentials && opts.requireAccountMaterial === true) {
         const authenticatedCredentials = credentials;

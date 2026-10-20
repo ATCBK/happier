@@ -21,6 +21,8 @@ export interface VoiceFixtureMetadata {
     readonly durationMs: number;
     readonly sha256: string;
     readonly expectedTranscriptSubstrings: readonly string[];
+    readonly expectedTranscript?: string;
+    readonly acceptanceGates?: readonly string[];
     readonly timelineMs: readonly VoiceFixtureTimelineEntry[];
     readonly scenarios: readonly string[];
     readonly provenance: Readonly<{
@@ -36,6 +38,10 @@ export interface VoiceFixtureMetadata {
         voice?: string;
         algorithmVersion?: string;
         seed?: string;
+        sourceFile?: string;
+        sourceFileSha256?: string;
+        attribution?: string;
+        adaptation?: string;
     }>;
 }
 
@@ -117,22 +123,42 @@ function parseProvenance(value: unknown, requiresSpeechSource: boolean): VoiceFi
             || !URL.canParse(value.sourceUrl)
             || !isNonEmptyString(value.sourceArchiveSha256)
             || !sha256Pattern.test(value.sourceArchiveSha256)
-            || !isNonEmptyString(value.engineLicense)
             || !isNonEmptyString(value.outputLicenseEvidence)
             || !URL.canParse(value.outputLicenseEvidence)
-            || !isNonEmptyString(value.voice)
             || value.algorithmVersion !== undefined
             || value.seed !== undefined
         ) {
             throw new Error('invalid voice fixture provenance');
         }
-        return Object.freeze({
+        const source = {
             ...base,
             sourceVersion: value.sourceVersion,
             sourceUrl: value.sourceUrl,
             sourceArchiveSha256: value.sourceArchiveSha256,
-            engineLicense: value.engineLicense,
             outputLicenseEvidence: value.outputLicenseEvidence,
+        };
+        if (value.speechEngine === 'human recording') {
+            if (
+                !isNonEmptyString(value.sourceFile)
+                || !isNonEmptyString(value.sourceFileSha256)
+                || !sha256Pattern.test(value.sourceFileSha256)
+                || !isNonEmptyString(value.attribution)
+                || !isNonEmptyString(value.adaptation)
+            ) throw new Error('invalid voice fixture provenance');
+            return Object.freeze({
+                ...source,
+                sourceFile: value.sourceFile,
+                sourceFileSha256: value.sourceFileSha256,
+                attribution: value.attribution,
+                adaptation: value.adaptation,
+            });
+        }
+        if (!isNonEmptyString(value.engineLicense) || !isNonEmptyString(value.voice)) {
+            throw new Error('invalid voice fixture provenance');
+        }
+        return Object.freeze({
+            ...source,
+            engineLicense: value.engineLicense,
             voice: value.voice,
         });
     }
@@ -183,7 +209,9 @@ export function parseVoiceFixtureManifest(value: unknown): VoiceFixtureManifestV
             || entry.durationMs <= 0
             || !isNonEmptyString(entry.sha256)
             || !sha256Pattern.test(entry.sha256)
-            || !isStringArray(entry.expectedTranscriptSubstrings, entry.sourceText === null)
+            || !isStringArray(entry.expectedTranscriptSubstrings, entry.sourceText === null || isNonEmptyString(entry.expectedTranscript))
+            || (entry.expectedTranscript !== undefined && !isNonEmptyString(entry.expectedTranscript))
+            || (entry.acceptanceGates !== undefined && !isStringArray(entry.acceptanceGates, false))
             || !isStringArray(entry.scenarios, false)
         ) {
             throw new Error('invalid voice fixture entry');
@@ -195,6 +223,12 @@ export function parseVoiceFixtureManifest(value: unknown): VoiceFixtureManifestV
         files.add(entry.file);
 
         const timelineMs = parseTimeline(entry.timelineMs, entry.durationMs);
+        const provenance = parseProvenance(entry.provenance, entry.sourceText !== null);
+        if (provenance.speechEngine === 'human recording' && (
+            entry.expectedTranscript !== entry.sourceText
+            || !Array.isArray(entry.acceptanceGates)
+            || !entry.acceptanceGates.includes('recognition-accuracy')
+        )) throw new Error('invalid voice fixture recognition contract');
         if (entry.sourceText !== null) {
             if (entry.language === null) throw new Error('invalid voice fixture entry');
             const trailingWindow = timelineMs.at(-1);
@@ -219,9 +253,11 @@ export function parseVoiceFixtureManifest(value: unknown): VoiceFixtureManifestV
             durationMs: entry.durationMs,
             sha256: entry.sha256,
             expectedTranscriptSubstrings: Object.freeze([...entry.expectedTranscriptSubstrings]),
+            ...(isNonEmptyString(entry.expectedTranscript) ? { expectedTranscript: entry.expectedTranscript } : {}),
+            ...(isStringArray(entry.acceptanceGates, false) ? { acceptanceGates: Object.freeze([...entry.acceptanceGates]) } : {}),
             timelineMs,
             scenarios: Object.freeze([...entry.scenarios]),
-            provenance: parseProvenance(entry.provenance, entry.sourceText !== null),
+            provenance,
         });
     });
     return Object.freeze({ schemaVersion: 1, fixtures: Object.freeze(fixtures) });
@@ -252,10 +288,13 @@ export function normalizeVoiceFixtureTranscript(value: string): string {
 }
 
 export function matchesVoiceFixtureTranscript(
-    metadata: Pick<VoiceFixtureMetadata, 'expectedTranscriptSubstrings'>,
+    metadata: Pick<VoiceFixtureMetadata, 'expectedTranscriptSubstrings' | 'expectedTranscript'>,
     transcript: string,
 ): boolean {
     const normalizedTranscript = normalizeVoiceFixtureTranscript(transcript);
+    if (metadata.expectedTranscript) {
+        return normalizedTranscript === normalizeVoiceFixtureTranscript(metadata.expectedTranscript);
+    }
     if (metadata.expectedTranscriptSubstrings.length === 0) return normalizedTranscript.length === 0;
     return metadata.expectedTranscriptSubstrings.every((substring) =>
         normalizedTranscript.includes(normalizeVoiceFixtureTranscript(substring)),

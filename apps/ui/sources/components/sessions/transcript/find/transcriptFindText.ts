@@ -4,6 +4,7 @@ import { resolveTranscriptMessageDisplayText, type TranscriptMessageDisplayOptio
 import type { StructuredFindTextBlock, StructuredFindTextContext } from '../structured/structuredFindText';
 import { projectStructuredMessageFindText } from '../structured/StructuredMessageBlock';
 import { deriveToolMessageDisplay } from '../toolCalls/deriveToolMessageDisplay';
+import { projectReviewToolMessage } from '@/components/sessions/reviews/messages/projectReviewToolMessage';
 import {
     projectMarkdownFindText,
     projectPlainFindText,
@@ -40,6 +41,7 @@ export function projectTranscriptFindText(message: Message, context?: Transcript
         return [{ id: 'text', kind: 'markdown', sourceText: text, ...projectMarkdownFindText(text) }];
     }
     if (message.kind === 'tool-call') {
+        message = projectReviewToolMessage(message);
         const structured = projectStructuredMessageFindText(message, context);
         const display = deriveToolMessageDisplay({
             tool: message.tool,

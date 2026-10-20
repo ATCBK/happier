@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { RPC_ERROR_CODES, RpcError } from '@happier-dev/protocol/rpcErrors';
+import { MACHINE_RPC_TIMEOUT_ERROR_CODE, RPC_ERROR_CODES, RpcError } from '@happier-dev/protocol/rpcErrors';
+import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { MachineVitalsGetInputV1Schema, MachineVitalsSnapshotV1Schema } from '@happier-dev/protocol/machines/vitals/machineVitalsRpcV1';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -22,7 +23,69 @@ beforeEach(async () => {
     await homes.reset(); await loadSyncSingletonForTests(); network.execute.mockReset();
     key.serverId = await homes.addHome({ name: 'Vitals', serverUrl: 'https://vitals-read.test', accountId: 'owner', currentAccount: true });
 });
-afterEach(async () => { await homes.reset(); });
+afterEach(async () => { vi.useRealTimers(); await homes.reset(); });
+
+it.each([true, false])('recovers demanded Vitals after consecutive transport deadlines and a renderer stall (changed=%s)', async changed => {
+    vi.useFakeTimers();
+    vi.setSystemTime(60_000);
+    const { createMachineResourceStore } = await import('./machineResourceStore');
+    const initial = MachineVitalsSnapshotV1Schema.parse({ state: 'reporting', sample: {
+        v: 1, sampledAt: Date.now(), intervalMs: 2_000, cpu: { reported: true, busyPct: 20 },
+        memory: { reported: true, totalBytes: 100, availableBytes: 80, usedBytes: 20, pressure: { level: 'calm', source: 'psi' } },
+        disk: { reported: true, volumes: [] }, network: { reported: true, rxBps: 12, txBps: 3 },
+    }, series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] } });
+    const pending: Array<{ payload: unknown; signal?: AbortSignal; reply(value: unknown): void }> = [];
+    // Only the authenticated machine transport is replaced. Real Action admission, parsing,
+    // error classification, resource state and the shared watch lifecycle remain composed.
+    network.execute.mockImplementation((request: {
+        method: string; payload: unknown; timeoutMs?: number; signal?: AbortSignal; onDispatched?: () => void;
+    }) => {
+        if (request.method === RPC_METHODS.MACHINES_VITALS_GET) return Promise.resolve(initial);
+        return new Promise<unknown>((resolve, reject) => {
+            const deadline = setTimeout(() => reject(new RpcError('Watch deadline elapsed', MACHINE_RPC_TIMEOUT_ERROR_CODE)), request.timeoutMs);
+            const finish = (value: unknown) => { clearTimeout(deadline); resolve(value); };
+            request.signal?.addEventListener('abort', () => { clearTimeout(deadline); reject(new Error('cancelled')); }, { once: true });
+            pending.push({ payload: request.payload, signal: request.signal, reply: finish });
+            request.onDispatched?.();
+        });
+    });
+    const store = createMachineResourceStore({ snapshotClient: fetchMachineVitalsViaMachineRpc,
+        watchClient: watchMachineVitalsViaMachineRpc, historyClient: fetchMachineVitalsHistoryViaMachineRpc });
+    const input = { ...key, expectedAccountId: 'owner', view: 'overview' as const };
+    const release = store.demand(input);
+    try {
+        await vi.waitFor(() => expect(pending).toHaveLength(1));
+        const held = store.getState(input);
+        const budget = MACHINE_WATCH_WINDOW_MS + 10_000;
+        for (let attempt = 0; attempt < 3; attempt++) {
+            // Synchronous advancement delivers the deadline before promise continuations run,
+            // modelling a blocked renderer resuming with an overdue transport callback.
+            vi.advanceTimersByTime(attempt === 0 ? 60_000 : budget);
+            await vi.waitFor(() => expect(pending).toHaveLength(attempt + 2));
+            expect(store.getState(input)).toMatchObject({ status: attempt === 0 ? 'slow' : 'error',
+                errorCode: MACHINE_RPC_TIMEOUT_ERROR_CODE, stale: true, snapshot: held.snapshot, summary: held.summary });
+            expect(pending.at(-1)?.payload).toMatchObject({ sinceSampledAt: 60_000 });
+            expect(vi.getTimerCount()).toBe(1); // Only the currently parked transport deadline.
+        }
+        if (!changed) {
+            pending.at(-1)!.reply({ changed: false });
+            await vi.waitFor(() => expect(pending).toHaveLength(5));
+            expect(store.getState(input)).toMatchObject({ status: 'ready', stale: true });
+            expect(store.getState(input)).not.toHaveProperty('errorCode');
+        }
+        const fresh = { ...initial.sample!, sampledAt: Date.now() };
+        pending.at(-1)!.reply({ changed: true, samples: [fresh] });
+        await vi.waitFor(() => expect(store.getState(input).snapshot?.sample?.sampledAt).toBe(fresh.sampledAt));
+        expect(store.getState(input)).toMatchObject({ status: 'ready', stale: false });
+        expect(store.getState(input)).not.toHaveProperty('errorCode');
+        const count = pending.length;
+        release();
+        expect(pending.at(-1)?.signal?.aborted).toBe(true);
+        await vi.advanceTimersByTimeAsync(budget * 2);
+        expect(pending).toHaveLength(count);
+        expect(vi.getTimerCount()).toBe(0);
+    } finally { release(); store.reset(); }
+});
 
 it('recognizes unavailable predecessor vitals operations on reads, history, and parked watches', async () => {
     for (const code of [RPC_ERROR_CODES.METHOD_NOT_AVAILABLE, RPC_ERROR_CODES.METHOD_NOT_FOUND]) {
@@ -83,6 +146,21 @@ it('reads a reporting machine through the real Action wiring with its exact Home
     const request = network.execute.mock.calls.find(([request]) => request.method === RPC_METHODS.MACHINES_VITALS_GET)?.[0];
     expect(request).toMatchObject({ serverId: key.serverId, accountId: 'owner', machineId: key.machineId });
     expect(MachineVitalsGetInputV1Schema.parse(request.payload)).toEqual({ serverId: key.serverId, machineId: key.machineId, view: 'summary' });
+});
+
+it('warms an implicit active-Home target into the same Account-qualified store key', async () => {
+    const { setActiveServer } = await import('@/sync/domains/server/serverRuntime');
+    const { warmMachineResourceSummaries } = await import('./warmMachineResourceSummaries');
+    const { machineResourceStore } = await import('./machineResourceStore');
+    await setActiveServer({ serverId: key.serverId });
+    const snapshot = MachineVitalsSnapshotV1Schema.parse({ state: 'reporting', sample: null,
+        series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] } });
+    network.execute.mockResolvedValue(snapshot);
+    try {
+        await warmMachineResourceSummaries([{ machineId: key.machineId }]);
+        expect(machineResourceStore.getState({ ...key, expectedAccountId: 'owner' }).snapshot).toEqual(snapshot);
+        expect(network.execute.mock.calls[0]?.[0]).toMatchObject({ serverId: key.serverId, accountId: 'owner' });
+    } finally { machineResourceStore.reset(); }
 });
 
 it('keeps the Action admission refusal code before any machine request leaves the client', async () => {

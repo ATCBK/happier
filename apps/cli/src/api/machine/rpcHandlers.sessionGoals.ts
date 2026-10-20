@@ -53,6 +53,7 @@ import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { readRuntimeAuthUsageLimitRecoveryAttemptId, type CheckRuntimeAuthUsageLimitRecovery } from '@/session/usageLimitRecoveryControls/runtimeAuthUsageLimitRecoveryControl';
 
 import type { RpcHandlerContext, RpcHandlerRegistrar } from '../rpc/types';
+import { logger } from '@/ui/logger';
 
 type RegisterMachineSessionGoalRpcHandlersDeps = Readonly<{
   readStoredCredentials?: () => Promise<StoredCredentials | null>;
@@ -75,6 +76,7 @@ type RegisterMachineSessionGoalRpcHandlersDeps = Readonly<{
   stageWorkStateMutation?: (input: Readonly<{
     mutation: DaemonWorkStateFieldMutation;
     rawSession: RawSessionRecord;
+    signal?: AbortSignal;
   }>) => Promise<void>;
 }>;
 
@@ -114,6 +116,14 @@ async function resolveActionDeps(params: Readonly<{
   | Readonly<{ ok: true; sessionId: string; actionDeps: ReturnType<NonNullable<RegisterMachineSessionGoalRpcHandlersDeps['createCliActionDeps']>> }>
   | Readonly<{ ok: false; result: unknown }>
 > {
+  const startedAt = performance.now();
+  let phaseStartedAt = startedAt;
+  const phase = (name: 'requester_currentness' | 'credentials' | 'session_transport' | 'action_dependencies') => {
+    const now = performance.now();
+    logger.debug('[SessionGoal] Daemon preparation phase', { sessionId: params.sessionId, phase: name,
+      durationMs: Math.round(now - phaseStartedAt), elapsedMs: Math.round(now - startedAt) });
+    phaseStartedAt = now;
+  };
   params.context?.signal.throwIfAborted();
   const requester = params.context?.requesterSessionBootstrap;
   const machineAdmission = params.context?.machineAdmission;
@@ -121,7 +131,9 @@ async function resolveActionDeps(params: Readonly<{
     || !requester && machineAdmission && machineAdmission.actorAccountId !== machineAdmission.custodianAccountId) {
     return { ok: false, result: { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' } };
   }
+  phase('requester_currentness');
   const credentials = requester?.credentials ?? await (params.deps?.readStoredCredentials ?? readStoredCredentials)();
+  phase('credentials');
   if (!credentials) return { ok: false, result: notAuthenticated() };
 
   const transport = await (params.deps?.resolveSessionTransportContext ?? resolveSessionTransportContext)({
@@ -129,6 +141,7 @@ async function resolveActionDeps(params: Readonly<{
     idOrPrefix: params.sessionId,
     ...(params.context ? { signal: params.context.signal } : {}),
   });
+  phase('session_transport');
   if (!transport.ok) return { ok: false, result: transportError(transport) };
   const stageDaemonWorkStateMutation = params.deps?.stageWorkStateMutation;
   const common = {
@@ -136,10 +149,11 @@ async function resolveActionDeps(params: Readonly<{
     credentials,
     sessionId: transport.sessionId,
     rawSession: transport.rawSession,
+    initialSessionGoalTransport: transport,
     ...(params.deps?.machineActionDirectTargetTransport ? { machineActionDirectTargetTransport: params.deps.machineActionDirectTargetTransport } : {}),
     ...(stageDaemonWorkStateMutation
-      ? { stageWorkStateMutation: (mutation: DaemonWorkStateFieldMutation) =>
-          stageDaemonWorkStateMutation({ mutation, rawSession: transport.rawSession }) }
+      ? { stageWorkStateMutation: (mutation: DaemonWorkStateFieldMutation, options?: Readonly<{ signal?: AbortSignal }>) =>
+          stageDaemonWorkStateMutation({ mutation, rawSession: transport.rawSession, signal: options?.signal }) }
       : {}),
   };
   const actionDeps = transport.mode === 'plain'
@@ -153,6 +167,7 @@ async function resolveActionDeps(params: Readonly<{
         mode: transport.mode,
         ctx: transport.ctx,
       });
+  phase('action_dependencies');
   return { ok: true, sessionId: transport.sessionId, actionDeps };
 }
 

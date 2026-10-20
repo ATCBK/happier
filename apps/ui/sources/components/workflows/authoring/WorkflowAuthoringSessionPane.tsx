@@ -3,7 +3,7 @@ import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 import { View } from 'react-native';
 import type { SessionInPaneProps } from '@/components/sessions/panes/SessionInPane';
 
-const SessionInPane = retryableLazy(() => import('@/components/sessions/panes/SessionInPane').then((module) => ({ default: module.SessionInPane })));
+const SessionInPane = retryableLazy<SessionInPaneProps>(() => import('@/components/sessions/panes/SessionInPane').then((module) => ({ default: module.SessionInPane })));
 
 /** Hidden Agent tabs mount neither the Session graph nor its transcript/composer subscriptions. */
 export function WorkflowAuthoringSessionPane(props: SessionInPaneProps) {

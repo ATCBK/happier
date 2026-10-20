@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { chmod, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { safeBashSingleQuote } from '@happier-dev/cli-common/ssh';
 
 import type {
     ParsedPluginEventContributionV1,
@@ -900,6 +901,7 @@ describe('production invocation service owners', () => {
             getPluginUiResourceCapability: () => Object.freeze({ readable: false, dynamic: false }),
             getPluginBrandAsset: () => undefined,
             bind: () => unavailableResources,
+            preparePlugin: async () => {},
             bindForResource: async () => unavailableResources,
             applySessionAccessWitness: () => {},
             retirePlugin,
@@ -1252,7 +1254,7 @@ process.stdin.on('data', (chunk) => {
         const workspace = await mkdtemp(join(tmpdir(), 'happier-agent-operation-'));
         const executable = { kind: 'systemTool' as const, id: 'fixture.node' };
         const systemToolPath = join(workspace, 'fixture-tool');
-        await writeFile(systemToolPath, '#!/bin/sh\nexit 0\n', 'utf8');
+        await writeFile(systemToolPath, `#!/bin/sh\nexec ${safeBashSingleQuote(process.execPath)} "$@"\n`, 'utf8');
         await chmod(systemToolPath, 0o755);
         const agentCli = createPluginAgentCliReadinessService({
             processEnv: {
@@ -1279,7 +1281,7 @@ process.stdin.on('data', (chunk) => {
                     expect(pluginId).toBe('acme.agent');
                     return systemTools;
                 },
-                resolveExecutable: async () => ({ command: process.execPath }),
+                resolveExecutable: async () => { throw new Error('Agent operation must use its selected system tool'); },
                 resolvePath: async () => { throw new Error('static path resolver must not own operation cwd'); },
             },
         });

@@ -18,21 +18,31 @@ export type ProseDiffSides = Readonly<{ old: readonly ProseDiffLine[]; new: read
 export function buildProseDiffSides(lines: readonly CodeLine[]): ProseDiffSides {
   const old: ProseDiffLine[] = [];
   const next: ProseDiffLine[] = [];
+  // A hunk boundary becomes a gap on a side only between two lines that side shows.
+  let gap: string | null = null;
+  const pending = { old: false, new: false };
+  const push = (side: 'old' | 'new', line: ProseDiffLine) => {
+    const target = side === 'old' ? old : next;
+    if (pending[side] && gap !== null && target.length > 0) {
+      target.push({ id: `${gap}:${side}`, kind: 'gap', number: null, text: '' });
+    }
+    pending[side] = false;
+    target.push(line);
+  };
   for (const line of lines) {
     if (line.kind === 'header') {
-      if (old.length > 0 || next.length > 0) {
-        old.push({ id: `${line.id}:old`, kind: 'gap', number: null, text: '' });
-        next.push({ id: `${line.id}:new`, kind: 'gap', number: null, text: '' });
-      }
+      gap = line.id;
+      pending.old = true;
+      pending.new = true;
       continue;
     }
     if (line.kind === 'remove') {
-      old.push({ id: line.id, kind: 'changed', number: line.oldLine, text: line.renderCodeText });
+      push('old', { id: line.id, kind: 'changed', number: line.oldLine, text: line.renderCodeText });
     } else if (line.kind === 'add') {
-      next.push({ id: line.id, kind: 'changed', number: line.newLine, text: line.renderCodeText });
+      push('new', { id: line.id, kind: 'changed', number: line.newLine, text: line.renderCodeText });
     } else if (line.kind === 'context') {
-      old.push({ id: `${line.id}:old`, kind: 'same', number: line.oldLine, text: line.renderCodeText });
-      next.push({ id: `${line.id}:new`, kind: 'same', number: line.newLine, text: line.renderCodeText });
+      push('old', { id: `${line.id}:old`, kind: 'same', number: line.oldLine, text: line.renderCodeText });
+      push('new', { id: `${line.id}:new`, kind: 'same', number: line.newLine, text: line.renderCodeText });
     }
   }
   return { old, new: next };

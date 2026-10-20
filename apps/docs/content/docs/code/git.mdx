@@ -185,6 +185,11 @@ fresh acceptance of the remaining work. An unknown outcome must be resolved
 before continuing; recovery does not automatically replay a commit or resume
 the remaining sequence.
 
+Landed groups keep their SHA and actual message and cannot be edited. After a
+stopped or failed application releases its lock, any unlanded groups can still be
+edited before fresh acceptance. A completed proposal has no move or edit controls;
+left-out work remains pending in the repository.
+
 ## Remote operations
 
 The remote-actions area covers routine network operations without leaving the session.

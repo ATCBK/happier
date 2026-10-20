@@ -37,6 +37,7 @@ function waitForProviderModelLoadOrLocalCancellation(
 }
 
 export function useProviderModelLoadAction(input: Readonly<{
+    active?: boolean;
     machineId: string | null;
     serverId: string | null;
     refresh: (connectionId: string, modelId: string) => Promise<boolean>;
@@ -48,6 +49,7 @@ export function useProviderModelLoadAction(input: Readonly<{
     const [loadingModelKey, setLoadingModelKey] = React.useState<string | null>(null);
     const [cancelledProviderMayContinue, setCancelledProviderMayContinue] = React.useState(false);
     const inFlight = React.useRef(false);
+    const pendingCancellation = React.useRef<AbortController | null>(null);
     const active = React.useRef<Readonly<{
         connectionId: string;
         modelId: string;
@@ -65,6 +67,16 @@ export function useProviderModelLoadAction(input: Readonly<{
     }, []);
 
     React.useEffect(() => {
+        setLoadingModelKey(null);
+        setCancelledProviderMayContinue(false);
+        return () => {
+            active.current?.controller.abort();
+            pendingCancellation.current?.abort();
+            pendingCancellation.current = null;
+        };
+    }, [accountLifetime, input.active, input.machineId, input.serverId]);
+
+    React.useEffect(() => {
         const registration = accountLifetime?.onRetire(() => {
             active.current?.controller.abort();
             if (!mounted.current) return;
@@ -78,6 +90,7 @@ export function useProviderModelLoadAction(input: Readonly<{
         connectionId: string,
         modelId: string,
     ): Promise<ProviderModelLoadUiResult> => {
+        if (input.active === false) return { status: 'cancelled', providerMayContinue: true };
         const operationAccountLifetime = accountLifetime;
         const accountStillCurrent = (): boolean => (
             currentAccountLifetime.current === operationAccountLifetime
@@ -199,7 +212,7 @@ export function useProviderModelLoadAction(input: Readonly<{
             if (active.current === operation) active.current = null;
             if (mounted.current && accountStillCurrent()) setLoadingModelKey(null);
         }
-    }, [accountLifetime, loadProviderModel, input.machineId, input.refresh, input.resolveExecutionTarget, input.serverId]);
+    }, [accountLifetime, loadProviderModel, input.active, input.machineId, input.refresh, input.resolveExecutionTarget, input.serverId]);
 
     const cancel = React.useCallback(async (): Promise<ProviderModelLoadUiResult | null> => {
         const operation = active.current;
@@ -211,21 +224,26 @@ export function useProviderModelLoadAction(input: Readonly<{
             operation.controller.abort();
             return { status: 'cancelled', providerMayContinue: true };
         }
-        const pendingCancellation = cancelProviderModelLoad({
+        pendingCancellation.current?.abort();
+        const controller = new AbortController();
+        pendingCancellation.current = controller;
+        const cancellation = cancelProviderModelLoad({
             machineId: operation.executionTarget.machineId,
             serverId: operation.executionTarget.serverId,
             connectionId: operation.connectionId,
             modelId: operation.modelId,
-        });
+        }, { signal: controller.signal });
         operation.controller.abort();
         if (mounted.current) setCancelledProviderMayContinue(true);
         try {
-            const result = await pendingCancellation;
+            const result = await cancellation;
             return result.status === 'cancelled'
                 ? result
                 : { status: 'cancelled', providerMayContinue: true };
         } catch {
             return { status: 'cancelled', providerMayContinue: true };
+        } finally {
+            if (pendingCancellation.current === controller) pendingCancellation.current = null;
         }
     }, [cancelProviderModelLoad]);
 

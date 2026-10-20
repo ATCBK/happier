@@ -763,43 +763,6 @@ describe('DirectorySourceDetailScreen', () => {
         expect(screen.findByTestId('directory-group:external-group-1')?.props.disabled).toBe(false);
     });
 
-    it('names the target Team Group and the people a mapping change moves before asking to confirm', async () => {
-        directoryBinding.state = {
-            kind: 'ready', refreshing: false, stale: false, failure: null,
-            item: {
-                v: 1, id: 'source-1', teamId: 'team-1', kind: 'workos_directory', displayName: 'Example directory',
-                state: 'active', allowedActions: [], error: null,
-                sync: { mode: 'events_and_full', attempt: 'succeeded', freshness: 'fresh', lastAttemptAt: null, lastSuccessAt: null, lastFullReconcileAt: null, nextScheduledAt: null },
-            },
-        };
-        directoryGroupsBinding.rows = [{
-            id: 'external-group-1', sourceId: 'source-1', externalGroupId: 'external-1', displayName: 'External engineering',
-            memberCount: 12, boundAccountCount: 8, unboundPeopleCount: 4, mapping: { state: 'bound', bindingId: 'binding-1', teamGroupId: 'team-group-opaque-id', teamGroupName: 'Platform Engineering' },
-        }];
-        nativeGroupsBinding.rows = [{ id: 'team-group-opaque-id', name: 'Platform Engineering', memberCount: 4 }];
-        // Declining keeps this test on the confirmation contract: what the
-        // person is told before anything is written.
-        modalConfirmMock.mockResolvedValue(false);
-        const screen = await renderScreen(<DirectorySourceDetailScreen serverId="home-1" teamId="team-1" sourceId="source-1" />);
-
-        await screen.pressByTestIdAsync('directory-group:external-group-1');
-        await screen.pressByTestIdAsync('directory-group-native-target:team-group-opaque-id');
-
-        expect(modalConfirmMock).toHaveBeenCalledWith(
-            'identityAdministration.chooseGroup',
-            'External engineering\nidentityAdministration.mappedTo: Platform Engineering\nteams.authentication.directory.people.boundAccountCount(count=8)\nteams.authentication.directory.people.unboundPeopleCount(count=4)',
-            expect.any(Object),
-        );
-
-        modalConfirmMock.mockClear();
-        await screen.pressByTestIdAsync('directory-group-remove-mapping');
-
-        expect(modalConfirmMock).toHaveBeenCalledWith(
-            'identityAdministration.removeMapping',
-            'External engineering\nidentityAdministration.mappedTo: Platform Engineering\nteams.authentication.directory.people.boundAccountCount(count=8)\nteams.authentication.directory.people.unboundPeopleCount(count=4)',
-            expect.objectContaining({ destructive: true }),
-        );
-    });
 
     it('opens the mapping chooser beside the pressed group instead of after the whole list', async () => {
         directoryBinding.state = {

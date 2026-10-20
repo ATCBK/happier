@@ -3,11 +3,12 @@ import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { link, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, join, relative } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import type { build as EsbuildBuild } from 'esbuild';
+import { build as buildWithEsbuild } from 'esbuild';
 import { describe, expect, it } from 'vitest';
 import { bundlePluginDaemonRuntime as bundlePluginDaemonRuntimeImplementation, stagePluginDaemonRuntime as stagePluginDaemonRuntimeImplementation, PluginAuthorBundlerUnavailableError, regularFilesMayAlias, resolvePluginAuthorBundlerMainPath } from './bundleDaemonRuntime';
 import { PLUGIN_DAEMON_OUTPUT_MANIFEST_RELATIVE_PATH } from './daemonOutputManifest';
@@ -555,6 +556,84 @@ describe('bundlePluginDaemonRuntime', () => {
       await expect(readFile(join(projectRoot, 'dist', 'index.js'), 'utf8')).resolves.not.toContain('stale output');
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('stages real Zod Mini virtual inputs while retaining English errors and portable labels', async ({ skip }) => {
+    const parentRoot = await mkdtemp(join(tmpdir(), 'happier-plugin-zod-virtual-'));
+    const sourceRoot = join(parentRoot, process.platform === 'win32' ? 'plugin' : 'plugin:source');
+    const stagedRoot = join(parentRoot, 'staged');
+    await mkdir(join(sourceRoot, 'node_modules'), { recursive: true });
+    await mkdir(stagedRoot, { recursive: true });
+    await writeFile(join(sourceRoot, 'index.ts'), [
+      "import { string } from 'zod/mini';",
+      'export function activate() { return string().safeParse(42).error?.issues[0].message; }',
+    ].join('\n'), 'utf8');
+    try {
+      try {
+        await symlink(
+          dirname(createRequire(import.meta.url).resolve('zod/package.json')),
+          join(sourceRoot, 'node_modules', 'zod'),
+          process.platform === 'win32' ? 'junction' : 'dir',
+        );
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException | null)?.code;
+        if (code === 'EPERM' || code === 'EACCES' || code === 'ENOTSUP' || code === 'ENOSYS') {
+          skip('directory symlinks/junctions are unavailable on this host');
+          return;
+        }
+        throw error;
+      }
+      await stagePluginDaemonRuntime({
+        sourceRootPath: sourceRoot, sourceEntryPath: join(sourceRoot, 'index.ts'),
+        stagedRootPath: stagedRoot, daemonEntrypoint: './dist/index.mjs',
+      });
+      const outputPath = join(stagedRoot, 'dist', 'index.mjs');
+      const runtime = await import(pathToFileURL(outputPath).href);
+      expect(runtime.activate()).toMatch(/expected string/iu);
+      expect(await readFile(outputPath, 'utf8')).not.toContain(parentRoot);
+    } finally {
+      await rm(parentRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['contained', 'escaping'] as const)('validates %s physical imports through an opaque Windows-shaped virtual input', async (placement) => {
+    const parentRoot = await mkdtemp(join(tmpdir(), 'happier-plugin-virtual-containment-'));
+    const sourceRoot = join(parentRoot, 'plugin');
+    const stagedRoot = join(parentRoot, 'staged');
+    await mkdir(sourceRoot, { recursive: true });
+    await mkdir(stagedRoot, { recursive: true });
+    const dependencyPath = join(placement === 'contained' ? sourceRoot : parentRoot, 'marker.ts');
+    await writeFile(dependencyPath, "export const marker = 'physical-marker';\n", 'utf8');
+    await writeFile(join(sourceRoot, 'index.ts'), "import { marker } from './virtual';\nexport function activate() { return marker; }\n", 'utf8');
+    const build: typeof EsbuildBuild = (options) => buildWithEsbuild({
+      ...options,
+      plugins: [...(options.plugins ?? []), {
+        name: 'fixture-virtual-input',
+        setup(pluginBuild) {
+          pluginBuild.onResolve({ filter: /^\.\/virtual$/ }, () => ({
+            path: 'C:\\fixture\\wrapper.js', namespace: 'fixture-virtual-input',
+          }));
+          pluginBuild.onLoad({ filter: /.*/, namespace: 'fixture-virtual-input' }, () => ({
+            contents: `export { marker } from ${JSON.stringify(dependencyPath)};`, loader: 'js', resolveDir: sourceRoot,
+          }));
+        },
+      }],
+    });
+    try {
+      const staging = stagePluginDaemonRuntime({
+        sourceRootPath: sourceRoot, sourceEntryPath: join(sourceRoot, 'index.ts'),
+        stagedRootPath: stagedRoot, daemonEntrypoint: './dist/index.mjs',
+      }, { build });
+      if (placement === 'escaping') {
+        await expect(staging).rejects.toThrow(/source import.*outside the package root/u);
+      } else {
+        await expect(staging).resolves.toEqual({ outputRelativePaths: ['dist/index.mjs'] });
+        const runtime = await import(pathToFileURL(join(stagedRoot, 'dist', 'index.mjs')).href);
+        expect(runtime.activate()).toBe('physical-marker');
+      }
+    } finally {
+      await rm(parentRoot, { recursive: true, force: true });
     }
   });
 

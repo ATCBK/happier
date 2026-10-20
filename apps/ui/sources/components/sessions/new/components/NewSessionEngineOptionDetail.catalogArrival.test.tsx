@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { flushHookEffects, renderScreen } from '@/dev/testkit';
 import { installCapabilitiesOpsModuleMock } from '@/dev/testkit/mocks/capabilities';
+import { createResolvedAgentCatalogEntryFixture } from '@/dev/testkit/fixtures/agentCatalogFixtures';
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import { buildDynamicModelProbeCacheKey } from '@/sync/domains/models/dynamicModelProbeCacheKey';
 import {
@@ -11,6 +12,11 @@ import {
     writeDynamicModelProbeCacheSuccess,
 } from '@/sync/domains/models/dynamicModelProbeCache';
 import { installNewSessionComponentsCommonModuleMocks } from './newSessionComponentsTestHelpers';
+import { settingsDefaults } from '@/sync/domains/settings/settings';
+import {
+    normalizeNewSessionCapabilityProbeContextCacheKeySuffixParts,
+    resolveNewSessionModelCapabilityProbeContext,
+} from '@/components/sessions/new/modules/newSessionCapabilityProbeContext';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -31,11 +37,52 @@ vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOrigin
 });
 
 const { NewSessionEngineOptionDetail } = await import('./NewSessionEngineOptionDetail');
+const { buildSessionAgentPickerDetailContent } = await import('@/components/sessions/agentPicker/buildSessionAgentPickerDetailContent');
 
 describe('NewSessionEngineOptionDetail Codex catalog arrival', () => {
     beforeEach(() => {
         machineRpc.mockReset();
         resetDynamicModelProbeCacheForTests();
+    });
+
+    it('names the selected native account or pool through the shared Agent detail builder', async () => {
+        machineRpc.mockImplementation(() => new Promise(() => undefined));
+        const backendTarget = { kind: 'backend' as const, backendId: 'codex' };
+        const probeContext = resolveNewSessionModelCapabilityProbeContext({
+            backendTarget,
+            settings: settingsDefaults,
+            connectedServices: null,
+        });
+        const cacheKey = buildDynamicModelProbeCacheKey({
+            machineId: 'machine-58f6',
+            targetKey: resolveBackendTargetKeyV2(backendTarget),
+            providerConnectionId: null,
+            serverId: 'server-main',
+            cwd: '/workspace',
+            extraKeySuffixParts: normalizeNewSessionCapabilityProbeContextCacheKeySuffixParts(probeContext),
+        });
+        expect(cacheKey).not.toBeNull();
+        writeDynamicModelProbeCacheSuccess(cacheKey!, {
+            availableModels: [{ id: 'gpt-6-luna', name: 'GPT 6 Luna' }],
+            supportsFreeform: true,
+        });
+        const sourceLabel = 'Codex · Work pool';
+        const screen = await renderScreen(buildSessionAgentPickerDetailContent({
+            backendTarget,
+            agentCatalogEntry: createResolvedAgentCatalogEntryFixture({ agentId: 'codex' }),
+            selectedMachineId: 'machine-58f6',
+            capabilityServerId: 'server-main',
+            cwd: '/workspace',
+            settings: settingsDefaults,
+            connectedServices: null,
+            nativeSourceLabel: sourceLabel,
+            selection: { modelId: 'default', modelSelection: null, sessionModeId: 'default', configOverrides: {} },
+            onSelectionChange: () => {},
+        }));
+        await flushHookEffects();
+
+        expect(screen.findByTestId('model-picker-overlay-option:["agent:happier.agent.codex/codex",null,"gpt-6-luna"]')).not.toBeNull();
+        expect(screen.findAll((node) => typeof node.type === 'string' && node.children.includes(sourceLabel))).not.toHaveLength(0);
     });
 
     it('keeps the real picker stable when the Codex model catalog arrives asynchronously', async () => {

@@ -9,7 +9,7 @@ import { SESSION_RUNTIME_ACTIVITY_SNAPSHOT_EVENT, SessionRuntimeActivitySnapshot
 import { projectSessionMetadataForWire, normalizeSessionMetadataForRead } from '@happier-dev/protocol/sessions/metadata/terminalMetadata';
 
 type AckableSocket = {
-    emitWithAck: (event: string, ...args: any[]) => Promise<any>;
+    emitWithAck(event: string, ...args: unknown[]): Promise<unknown>;
     connected?: boolean;
     timeout?: (ms: number) => AckableSocket;
 };
@@ -55,6 +55,7 @@ function readLoggedCurrentModeId(metadata: Record<string, unknown> | null | unde
 
 export async function updateSessionMetadataWithAck(opts: {
     socket: AckableSocket;
+    getSocket?: () => AckableSocket;
     signal?: AbortSignal;
     sessionId: string;
     getMetadata: () => Metadata | null;
@@ -104,7 +105,7 @@ export async function updateSessionMetadataWithAck(opts: {
                 )));
         const submittedAttempt = attempt ??= { metadata: updated, payload: metadataPayload, expectedVersion: opts.getMetadataVersion(), uncertain: false };
         const answer = await emitSocketWithAck<any>({
-            socket: opts.socket,
+            socket: opts.getSocket ? opts.getSocket() : opts.socket,
             event: 'update-metadata',
             timeoutMs: null,
             signal: opts.signal,
@@ -181,6 +182,7 @@ export async function updateSessionMetadataWithAck(opts: {
 
 export async function updateSessionAgentStateWithAck(opts: {
     socket: AckableSocket;
+    getSocket?: () => AckableSocket;
     signal?: AbortSignal;
     sessionId: string;
     ownerActivityDelivery?: 'rich_sender' | 'home_required';
@@ -222,7 +224,7 @@ export async function updateSessionAgentStateWithAck(opts: {
                 : {}),
         };
         const answer = await emitSocketWithAck<any>({
-            socket: opts.socket,
+            socket: opts.getSocket ? opts.getSocket() : opts.socket,
             event: 'update-state',
             timeoutMs: null,
             signal: opts.signal,
@@ -277,6 +279,13 @@ export async function updateSessionAgentStateWithAck(opts: {
             'agent_state_update_failed',
             false,
         );
+    }).catch((error: unknown) => {
+        logger.infoFile('[API] session_agent_state_update_failed', {
+            phase: 'terminal_failure',
+            operation: 'update-state',
+            sessionId: opts.sessionId,
+        });
+        throw error;
     });
 }
 

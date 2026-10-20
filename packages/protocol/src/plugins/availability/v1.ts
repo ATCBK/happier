@@ -6,7 +6,9 @@ import { asProtocolZod } from "../actions/internalProtocolZodAdapter.js";
 
 import { createCanonicalJsonSigningInput } from '../../crypto/canonicalJson.js';
 import { SERVER_IDENTITY_ID_PATTERN } from '../../features/payload/capabilities/serverIdentityCapabilities.js';
-import { PluginCollectionContractRefV1Schema } from '../data/collectionContractRefV1.js';
+import { PluginCollectionContractRefV1Schema, pluginCollectionContractKeyV1 as collectionContractKey } from '../data/collectionContractRefV1.js';
+import { PluginAccountPluginIntentV1Schema, type PluginAccountPluginIntentV1 } from './accountIntentV1.js';
+export { PluginAccountPluginIntentV1Schema, type PluginAccountPluginIntentV1 } from './accountIntentV1.js';
 import { PluginPortableReleaseManifestV1Schema } from './compatibilityProjectionV1.js';
 export {
   PluginPortableReleaseManifestV1Schema,
@@ -93,10 +95,6 @@ export const PluginUiReleaseSlotV1Schema = lazyZodSchema(() => z.strictObject({
   }
 })));
 export type PluginUiReleaseSlotV1 = z.infer<typeof PluginUiReleaseSlotV1Schema>;
-
-function collectionContractKey(value: z.infer<typeof PluginCollectionContractRefV1Schema>): string {
-  return `${value.pluginId}\u0000${value.collectionId}`;
-}
 
 function uiSlotKey(value: Readonly<{
   contributionId: string;
@@ -234,36 +232,6 @@ export function pluginReleaseFactsEqualV1(
   return createCanonicalJsonSigningInput(normalizePluginReleaseFactsV1(left))
     === createCanonicalJsonSigningInput(normalizePluginReleaseFactsV1(right));
 }
-
-export const PluginAccountPluginIntentV1Schema = lazyZodSchema(() => z.strictObject({
-  pluginId: asProtocolZod(PluginIdSchema),
-  desiredVersion: zMini.nullable(PluginReleaseVersionV1Schema),
-  enabled: z.boolean(),
-  offlineUiHosting: z.enum(['disabled', 'enabled']),
-  writableCollections: z.array(PluginCollectionContractRefV1Schema),
-  revision: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
-}).check(z.superRefine((value, context) => {
-  const keys = new Set<string>();
-  value.writableCollections.forEach((contract, index) => {
-    if (contract.pluginId !== value.pluginId) {
-      context.addIssue({
-        code: "custom",
-        path: ['writableCollections', index, 'pluginId'],
-        message: 'Intent writable collections must belong to the selected plugin.',
-      });
-    }
-    const key = collectionContractKey(contract);
-    if (keys.has(key)) {
-      context.addIssue({
-        code: "custom",
-        path: ['writableCollections', index],
-        message: 'Intent writable collections must be unique by plugin and collection.',
-      });
-    }
-    keys.add(key);
-  });
-})));
-export type PluginAccountPluginIntentV1 = z.infer<typeof PluginAccountPluginIntentV1Schema>;
 
 export const PluginUiArtifactHostingCapabilityV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ enabled: z.literal(false) }),

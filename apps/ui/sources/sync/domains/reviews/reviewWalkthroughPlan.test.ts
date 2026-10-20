@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ReviewStartInputSchema } from '@happier-dev/protocol/reviews/reviewStart';
+import { projectMachineAgent } from '@/agents/machineAgents/machineAgentModel';
 
 import { buildReviewStartWithWalkthroughInput, resolveReviewWalkthroughPlan, type ReviewWalkthroughEngine } from './reviewWalkthroughPlan';
 
@@ -9,6 +10,30 @@ const RABBIT: ReviewWalkthroughEngine = { engineId: 'coderabbit', label: 'CodeRa
 const ENGINES = [CLAUDE, CODEX, RABBIT];
 
 describe('resolveReviewWalkthroughPlan', () => {
+    it('excludes an unavailable plugin engine from selection and narration using canonical credential readiness', () => {
+        const agent = (id: string, healthy: boolean) => projectMachineAgent({ agentId: id, title: id,
+            facts: { agentId: id, title: id, installed: true, version: null, latestVersion: null, update: { supported: false, command: null },
+                signIn: { status: 'signedOut', loginSupport: 'login_terminal' }, platform: { supported: true },
+                install: { available: false, mode: 'none', sizeBytes: null, guideUrl: null }, dependencies: [] },
+            checking: false, stale: false, job: null,
+            connectedServices: [{ serviceId: 'acme.accounts/oauth', title: 'Work account', connected: true, healthy,
+                profileLabel: null, profiles: [{ profileId: 'work', healthy, profileLabel: null }] }],
+            credentialSelection: { credentialBindings: { v: 2, bindingsByServiceId: {
+                'acme.accounts/oauth': { source: 'connected', selection: 'profile', profileId: 'work' },
+            } } },
+        });
+        const engines = [
+            { ...CLAUDE, engineId: 'acme.review/first', machineAgent: agent('acme.review/first', false) },
+            { ...CODEX, engineId: 'acme.review/second', machineAgent: agent('acme.review/second', true) },
+        ];
+        const plan = resolveReviewWalkthroughPlan({ engines, selectedEngineIds: engines.map(engine => engine.engineId),
+            walkthrough: true, narratorEngineId: engines[0]!.engineId });
+        expect(plan.selected.map(engine => engine.engineId)).toEqual(['acme.review/second']);
+        expect(plan.narrator).toBeNull();
+        const missing = resolveReviewWalkthroughPlan({ engines: [{ ...CLAUDE, machineAgent: null }],
+            selectedEngineIds: [CLAUDE.engineId], walkthrough: false, narratorEngineId: null });
+        expect(missing.canStart).toBe(false);
+    });
     it('lets one capable engine write its own walkthrough with no narrator to choose', () => {
         const plan = resolveReviewWalkthroughPlan({ engines: ENGINES, selectedEngineIds: ['codex'], walkthrough: true, narratorEngineId: null });
         expect(plan.narrator).toBeNull();

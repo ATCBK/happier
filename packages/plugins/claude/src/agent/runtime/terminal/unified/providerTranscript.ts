@@ -48,6 +48,7 @@ export type ClaudeUnifiedProviderTranscriptPublisher = Readonly<{
 export type ClaudeUnifiedProviderTranscriptPublisherParams = Readonly<{
   ctx: ProviderTranscriptContext;
   historicalProviderSessionId?: string;
+  onSourceFollowFailure?: () => void;
   onPublishPayload?: (payload: ClaudeProviderTranscriptPayload) => void | Promise<void>;
   /**
    * Optional observer invoked for EVERY parsed raw transcript row, BEFORE the
@@ -65,6 +66,7 @@ export type ClaudeUnifiedProviderTranscriptPublisherParams = Readonly<{
       transcriptPath: string;
       historicalReplay: boolean;
       phase?: 'initial_replay';
+      orderedSource?: true;
       projectedTaskResult?: RawJSONLines;
     }>,
   ) => void | Promise<void>;
@@ -74,10 +76,14 @@ type TranscriptBinding = Readonly<{
   providerSessionId: string;
   transcriptPath: string;
   queuedCommandEvidence: NativeQueuedCommandEvidenceState;
+  localCommandCaveatUuids: Set<string>;
+  localShellInputUuids: Set<string>;
   observedSourceIds: Set<string>;
   taskNotificationProjector: ReturnType<typeof createClaudeTaskNotificationToolResultProjector>;
   sourceReplay: 'historical' | 'fresh';
 }> & {
+  sourceMaterialized: boolean;
+  sourceFollowFailed: boolean;
   sourceFollowHandle: Readonly<{ dispose(): Promise<void> }> | null;
   sourceFollowInFlight: Promise<void> | null;
 };
@@ -128,6 +134,11 @@ type TranscriptFileFollowStartAtV1 = AgentTranscriptFileFollowInput['startAt'];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+export function isClaudeUnifiedPrimaryTranscriptRow(row: Readonly<Record<string, unknown>>, providerSessionId: string): boolean {
+  return (readClaudeProviderIdentityValue(row.session_id) ?? readClaudeProviderIdentityValue(row.sessionId)) === providerSessionId
+    && row.isSidechain !== true && !isSidechainSessionHook(row);
 }
 
 function readString(value: unknown): string | null {
@@ -396,7 +407,7 @@ export function projectClaudeTranscriptRowToProviderPayload(params: Readonly<{
     });
   }
 
-  if (classification.lifecycle.kind === 'text') {
+  if (classification.lifecycle.kind === 'text' || classification.lifecycle.kind === 'shell_input') {
     return withOptionalTurnId(normalizedRow, {
       ...base,
       kind: 'text',
@@ -435,15 +446,20 @@ export function createClaudeUnifiedProviderTranscriptPublisher(
   }
 
   async function observeRawRow(activeBinding: TranscriptBinding, row: RawJSONLines): Promise<void> {
-    if (!params.onObserveRow) return;
     try {
-      await params.onObserveRow(row, {
+      await params.onObserveRow?.(row, {
         providerSessionId: activeBinding.providerSessionId,
         transcriptPath: activeBinding.transcriptPath,
         historicalReplay: initialFileReplayBindings.has(activeBinding),
       });
     } catch (error) {
       params.ctx.logger.debug('[ClaudeUnifiedTerminal] transcript row observer failed (non-fatal)', { error });
+    }
+    if (isClaudeUnifiedPrimaryTranscriptRow(row, activeBinding.providerSessionId)) {
+      // The native row observer publishes the proven identity before the host's
+      // ordered source reader admits that exact committed identity.
+      activeBinding.sourceMaterialized = true;
+      await ensureSourceFollow(activeBinding);
     }
   }
 
@@ -511,7 +527,8 @@ export function createClaudeUnifiedProviderTranscriptPublisher(
   }>): Promise<void> {
     const activeBinding = binding;
     if (
-      disposed || !activeBinding || (!activeBinding.sourceFollowHandle && !activeBinding.sourceFollowInFlight)
+      disposed || !activeBinding || activeBinding.sourceFollowFailed
+      || (!activeBinding.sourceFollowHandle && !activeBinding.sourceFollowInFlight)
       || input.providerSessionId !== activeBinding.providerSessionId
       || !input.sourceId || activeBinding.observedSourceIds.has(input.sourceId)
       || !isRecord(input.row)
@@ -550,12 +567,37 @@ export function createClaudeUnifiedProviderTranscriptPublisher(
     await params.onObserveRow?.(row, {
       providerSessionId: activeBinding.providerSessionId, transcriptPath: activeBinding.transcriptPath,
       historicalReplay: false,
+      orderedSource: true,
       ...(projectedTaskResult ? { projectedTaskResult } : {}),
     });
     if (fact) {
       if (fact.subtype === 'task_notification' || projectedTaskResult) {
         activeBinding.observedSourceIds.add(input.sourceId);
         return;
+      }
+    }
+    const classification = classifyClaudeNativeTranscriptRow(row);
+    if (!classification.sidechain && classification.lifecycle.kind === 'local_command_caveat') {
+      const uuid = readString(row.uuid);
+      if (uuid) activeBinding.localCommandCaveatUuids.add(uuid);
+    }
+    if (!classification.sidechain && classification.lifecycle.kind === 'shell_input') {
+      const uuid = readString(row.uuid);
+      const parentUuid = readString(row.parentUuid);
+      // The no-query caveat is the native input's exact parent. Without it, shell output
+      // may be followed by inference and must retain the ordinary provider lifecycle.
+      if (uuid && parentUuid && activeBinding.localCommandCaveatUuids.delete(parentUuid)) {
+        activeBinding.localShellInputUuids.add(uuid);
+      }
+    }
+    if (!classification.sidechain && classification.lifecycle.kind === 'shell_output') {
+      const parentUuid = readString(row.parentUuid);
+      if (parentUuid && activeBinding.localShellInputUuids.has(parentUuid)) {
+        await emitPayload(withOptionalTurnId(row, {
+          ...createBasePayload({ providerSessionId: activeBinding.providerSessionId, row }),
+          kind: 'local_command_completed',
+        }));
+        activeBinding.localShellInputUuids.delete(parentUuid);
       }
     }
     const payload = projectClaudeTranscriptRowToProviderPayload({
@@ -629,6 +671,9 @@ export function createClaudeUnifiedProviderTranscriptPublisher(
   }
 
   async function ensureSourceFollow(activeBinding: TranscriptBinding): Promise<void> {
+    // Fresh SessionStart precedes Claude's first JSONL row. Its first prompt must
+    // be writable before source admission can consume a proven native identity.
+    if (activeBinding.sourceReplay === 'fresh' && !activeBinding.sourceMaterialized) return;
     if (activeBinding.sourceFollowHandle) return;
     if (activeBinding.sourceFollowInFlight) return await activeBinding.sourceFollowInFlight;
     const followSource = params.ctx.agentRuntime.transcripts.followSource;
@@ -643,10 +688,19 @@ export function createClaudeUnifiedProviderTranscriptPublisher(
         return;
       }
       activeBinding.sourceFollowHandle = handle;
+      const noteSourceLost = (): void => {
+        if (disposed || binding !== activeBinding || activeBinding.sourceFollowHandle !== handle) return;
+        activeBinding.sourceFollowFailed = true;
+        params.onSourceFollowFailure?.();
+      };
+      void handle.failure?.then(noteSourceLost, noteSourceLost);
     });
     activeBinding.sourceFollowInFlight = acquisition;
     try {
       await acquisition;
+    } catch (error) {
+      if (!disposed && binding === activeBinding) params.onSourceFollowFailure?.();
+      throw error;
     } finally {
       activeBinding.sourceFollowInFlight = null;
     }
@@ -715,10 +769,14 @@ export function createClaudeUnifiedProviderTranscriptPublisher(
       providerSessionId: trustedProviderSessionId,
       transcriptPath,
       queuedCommandEvidence: createNativeQueuedCommandEvidenceState(),
+      localCommandCaveatUuids: new Set(),
+      localShellInputUuids: new Set(),
       observedSourceIds: new Set<string>(),
       taskNotificationProjector: createClaudeTaskNotificationToolResultProjector(),
       sourceReplay: input.initialResumeCatchUp || trustedProviderSessionId === params.historicalProviderSessionId
         ? 'historical' : 'fresh',
+      sourceMaterialized: false,
+      sourceFollowFailed: false,
       sourceFollowHandle: null,
       sourceFollowInFlight: null,
     };
@@ -810,7 +868,8 @@ export function createClaudeUnifiedProviderTranscriptPublisher(
 
   return {
     readSourceFollowReadiness() {
-      return binding ? (binding.sourceFollowHandle ? 'ready' : 'pending') : 'unbound';
+      if (!binding || (binding.sourceReplay === 'fresh' && !binding.sourceMaterialized)) return 'unbound';
+      return binding.sourceFollowHandle && !binding.sourceFollowFailed ? 'ready' : 'pending';
     },
     bindFromSessionHook,
     bindKnownLiveTranscript,

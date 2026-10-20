@@ -106,6 +106,7 @@ function isTurnScopedEvent(event: AgentSessionRuntimeEvent): boolean {
     if (isSessionScopedRuntimeTranscriptEvent(event)) return false;
     if (event.kind === 'transcript-message-committed'
         || event.kind === 'usage-observed'
+        || event.kind === 'skill-usage'
         || event.kind === 'context-compaction') {
         return readTurnId(event) !== null;
     }

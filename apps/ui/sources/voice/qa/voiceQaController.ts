@@ -6,6 +6,9 @@ import { buildVoiceInitialContext } from '@/voice/context/buildVoiceInitialConte
 import { captureAssistantTextMessageBaseline } from '@/voice/runtime/waitForNextAssistantTextMessage';
 import { registerSessionRealtimeTranscriptConsumer } from '@/sync/runtime/sessionRealtimeTranscriptConsumers';
 import type { VoiceSessionSnapshot } from '@/voice/session/types';
+import { getVoiceConversationRuntimeSnapshot } from '@/voice/runtime/machine/voiceConversationRuntimeStore';
+import { deriveLocalVoiceSessionSnapshot } from '@/voice/runtime/machine/deriveLocalVoiceSessionSnapshot';
+import { getVoiceAdapterRegistry } from '@/voice/session/voiceAdapterRegistry';
 import {
   submitDurableVoiceTextTurn,
   type VoiceTextTurnPendingPort,
@@ -158,9 +161,21 @@ export function createVoiceQaController(
           const adapterId = snapshot.adapterId ?? 'none';
           const errorCode = snapshot.errorCode ?? 'none';
           const errorReason = snapshot.errorMessage ?? 'none';
-          throw new Error(
+          const failure = new Error(
             `voice_qa_media_session_not_started:adapter=${adapterId},status=${snapshot.status},mode=${snapshot.mode},error=${errorCode},reason=${errorReason}`,
           );
+          const runtime = getVoiceConversationRuntimeSnapshot();
+          const adapter = snapshot.adapterId ? getVoiceAdapterRegistry().get(snapshot.adapterId) : null;
+          const projected = adapter?.engineKind === 'local'
+            ? deriveLocalVoiceSessionSnapshot(adapter.id, adapter.engineKind, runtime)
+            : null;
+          if (runtime.error && projected?.sessionId === snapshot.sessionId
+            && projected.errorMessage === snapshot.errorMessage) {
+            // Keep the canonical local failure (and its private transport cause)
+            // available to explicit QA callers without adding it to public state.
+            Object.defineProperty(failure, 'cause', { value: runtime.error, enumerable: false });
+          }
+          throw failure;
         }
 
         activeMediaSession = {

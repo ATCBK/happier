@@ -1,7 +1,7 @@
 import type { Socket } from "socket.io";
-import { z } from "zod";
+import { z } from "zod/mini";
 
-const UiFocusStateSchema = z.object({ computer: z.boolean(), focused: z.boolean() }).strict();
+const UiFocusStateSchema = z.strictObject({ computer: z.boolean(), focused: z.boolean() });
 
 /** Focus belongs to this live sync socket; disconnect removes it with the socket. */
 export function registerUiFocusSocketEvent(socket: Socket, admission?: Promise<boolean>): void {

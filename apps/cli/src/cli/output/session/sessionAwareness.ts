@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { isAgentStateRequestCoveredByCompletedRequests, resolveAgentStateRequestCoverageOptions } from '@happier-dev/agents';
 import { projectSessionAwarenessV1 } from '@happier-dev/protocol/sessions/awareness/projectV1';
 import { resolveAgentRequestKind } from '@happier-dev/protocol/activity/agentRequestSummary';
@@ -42,13 +42,13 @@ function readText(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
-const AgentStatePendingEvidenceSchema = z.object({
-  requests: z.record(z.string(), z.object({
-    tool: z.string().trim().min(1),
-    kind: z.unknown().optional(),
-  }).passthrough()),
-  completedRequests: z.record(z.string(), z.unknown()).nullish(),
-}).passthrough();
+const AgentStatePendingEvidenceSchema = z.looseObject({
+  requests: z.record(z.string(), z.looseObject({
+    tool: z.string().check(z.trim(), z.minLength(1)),
+    kind: z.optional(z.unknown()),
+  })),
+  completedRequests: z.nullish(z.record(z.string(), z.unknown())),
+});
 
 const requestCoverageOptions = resolveAgentStateRequestCoverageOptions({ kind: 'localPermissionBridge' });
 
@@ -143,8 +143,8 @@ function buildCliSessionAwarenessInputFromPresentationV1(
     nowMs: params.nowMs,
     sessionId: row.id.trim(),
     origin: row.origin,
-    ...(row.reportsTo !== undefined ? { reportsTo: row.reportsTo } : {}),
-    ...(row.reports !== undefined ? { reports: row.reports } : {}),
+    ...(row.manager !== undefined ? { manager: row.manager } : {}),
+    ...(row.managedSessions !== undefined ? { managedSessions: row.managedSessions } : {}),
     ...(row.pendingReviewRuns !== undefined ? { pendingReviewRuns: row.pendingReviewRuns } : {}),
     title: readText(summary?.text) ?? readText(metadata?.name),
     lifecycle,

@@ -201,6 +201,8 @@ export function describeTriageEntrySessionPhaseV1(
             case 'none':
             case 'accepted':
             case 'alreadyAccepted':
+            case 'held':
+            case 'replied':
               return settled;
           }
         default:

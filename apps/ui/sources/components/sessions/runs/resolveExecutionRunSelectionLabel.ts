@@ -1,5 +1,9 @@
 import type { ExecutionRunResolvedSelection } from '@happier-dev/protocol/execution/runs/requestedConfiguration';
 
+import { readBackendTargetRefV2, type BackendTargetRefV2Input } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+
+import { isBundledAgentId } from '@/agents/catalog/catalog';
+import { resolveSessionModelLabel } from '@/sync/domains/models/modelOptions';
 import { t } from '@/text';
 
 const PROVENANCE_KEY = {
@@ -19,10 +23,16 @@ export function resolveExecutionRunSelectionLabel(
   connectionLabel: (connectionId: string) => string | null,
   /** Display only, from the canonical Connected/Team route presenter for this resolved selection. */
   resolvedSourceLabel?: string | null,
+  /** The Agent catalog's title for one of its own models; a Provider or Team model id is already its name. */
+  nativeModelLabel?: (modelId: string) => string | null,
 ): string | null {
   if (!selection) return null;
   const connectionId = selection.modelSelection?.providerConnectionId ?? null;
+  const nativeModelId = connectionId || selection.teamCredentialModel
+    ? null
+    : selection.modelSelection?.modelId ?? selection.modelId ?? null;
   const model =
+    (nativeModelId ? nativeModelLabel?.(nativeModelId) : null) ??
     selection.modelSelection?.modelId ??
     selection.teamCredentialModel?.modelId ??
     selection.modelId ??
@@ -34,4 +44,20 @@ export function resolveExecutionRunSelectionLabel(
   ]
     .filter((part): part is string => Boolean(part))
     .join(' · ');
+}
+
+/**
+ * The native-model title resolver for a Run's recorded Agent: the same catalog lookup every
+ * Session surface uses, null for a configured backend or an unknown id (callers keep the id then).
+ */
+export function resolveRunNativeModelLabel(backendTarget: BackendTargetRefV2Input | null | undefined) {
+  let agentId: string | null = null;
+  try {
+    const target = backendTarget ? readBackendTargetRefV2(backendTarget) : null;
+    agentId = target && !target.configuredBackendId ? target.backendId : null;
+  } catch {
+    agentId = null;
+  }
+  return (modelId: string): string | null =>
+    agentId && isBundledAgentId(agentId) ? resolveSessionModelLabel(agentId, null, modelId) : null;
 }

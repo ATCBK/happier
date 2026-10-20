@@ -29,6 +29,7 @@ import { resolveStackProcessKindOverrideForSessionSpawn } from './resolveStackPr
 import { persistAcceptedSpawnMarker } from './persistAcceptedSpawnMarker';
 import type { DeviceLocalSecretStorage } from '../deviceLocalSecretStorage';
 import type { RequesterSessionRuntimeContext } from '../sessionEncryption/requesterSessionCredentials';
+import type { ConnectedServiceMaterializedStateObservationBinding } from '../connectedServices/materialization/materializer';
 
 type SpawnResourceCleanup = () => void | Promise<void>;
 
@@ -66,6 +67,7 @@ export async function prepareDaemonSpawnLifecycle(input: Readonly<{
     sessionDirectory?: string;
     materializationKey: string;
     connectedServiceMaterializationIdentityV1?: ConnectedServiceMaterializationIdentityV1;
+    materializedStateObservationBinding?: ConnectedServiceMaterializedStateObservationBinding;
     hasConnectedServiceAuth: boolean;
     activateConnectedAccountSessionBindingOnCanonicalSession?: (
         sessionId: string,
@@ -81,6 +83,7 @@ export async function prepareDaemonSpawnLifecycle(input: Readonly<{
     onTrackedSessionRegistered?: () => void;
     deviceLocalSecretStorage?: DeviceLocalSecretStorage;
     requesterSessionRuntimeContext?: RequesterSessionRuntimeContext;
+    projectSetupOperation?: SpawnSessionOptions['projectSetupOperation'];
 }>): Promise<Readonly<{
     extraEnvForChildWithMessage: Record<string, string>;
     unsetEnvKeys: readonly string[];
@@ -141,6 +144,9 @@ export async function prepareDaemonSpawnLifecycle(input: Readonly<{
         ...(input.connectedServiceAuthSessionId ? { sessionId: input.connectedServiceAuthSessionId } : {}),
         sessionDirectory: input.sessionDirectory,
         materializationKey: input.materializationKey,
+        ...(input.materializedStateObservationBinding
+            ? { materializedStateObservationBinding: input.materializedStateObservationBinding }
+            : {}),
         ...(input.connectedServiceMaterializationIdentityV1
             ? { connectedServiceMaterializationIdentityV1: input.connectedServiceMaterializationIdentityV1 }
             : {}),
@@ -179,6 +185,7 @@ export async function prepareDaemonSpawnLifecycle(input: Readonly<{
         getSpawnResourceCleanupOnExit: input.getSpawnResourceCleanupOnExit,
         onSpawnResourceCleanupArmed: input.onSpawnResourceCleanupArmed,
         onTrackedSessionRegistered: input.onTrackedSessionRegistered,
+        projectSetupOperation: input.projectSetupOperation,
         spawnResourceCleanupByPid: input.spawnResourceCleanupByPid,
         getSessionAttachCleanup: () => sessionAttachCleanup,
         setSessionAttachCleanup: (cleanup) => {

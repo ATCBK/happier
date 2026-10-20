@@ -29,7 +29,7 @@ import { configuration } from '@/configuration';
 import { resolveBackendIsolationBundle } from '@/packagedRuntime/isolation/resolveBackendIsolationBundle';
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { assertBackendEnabledByAccountSettings } from '@/settings/backendEnabled';
-import { SavedSecretOperationAdmissionError } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { SavedSecretOperationAdmissionError } from "@/settings/secrets/savedSecretCatalogRead";
 import {
     LaunchSecretReferenceOverlayError,
     readLaunchSecretReferenceOverlayProviderErrorCodeV1,
@@ -44,6 +44,7 @@ import { normalizeUnsetEnvKeys, stripUnsetEnvironmentVariables } from '@/utils/p
 
 import { withExecutionRunHostRuntimeCleanup } from '../hostRuntime/cleanup';
 import { createLazyExecutionRunHostRuntime } from '../hostRuntime/lazy';
+import { sanitizeExecutionRunError } from '../errors';
 import {
     hasConnectedExecutionRunBinding,
     resolveExecutionRunConnectedServicesEnv,
@@ -55,6 +56,7 @@ import { buildExecutionRunConfiguration } from './openInputs';
 import {
     prepareExecutionRunProviderLaunch,
     type ExecutionRunTeamCredentialProviderBindingPreparer,
+    type ExecutionRunProviderLaunchServices,
     type PreparedExecutionRunProviderLaunch,
 } from './providerLaunch';
 
@@ -150,6 +152,9 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
     callId?: string;
     sidechainId?: string;
     scope: ExecutionRunRetainedInteractionScope;
+    projectLaunchContext?: CreateCliExecutionRunBackendParams['projectLaunchContext'];
+    projectSetupOperation?: CreateCliExecutionRunBackendParams['projectSetupOperation'];
+    resolveProjectSetupOperation?: CreateCliExecutionRunBackendParams['resolveProjectSetupOperation'];
     getPermissionRequestStore?: ExecutionRunPermissionRequestStoreProvider;
     backendId: string;
     backendTarget?: BackendTargetRefV2Input;
@@ -186,6 +191,7 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
     resolveManagedPurposeBindingIntent?: ResolveManagedProviderPurposeBindingIntent;
     readModelProjection?: ProviderRuntimeModelProjectionReader;
     prepareManagedEndpoint?: DirectManagedProviderEndpointPreparer;
+    providerLaunch?: ExecutionRunProviderLaunchServices;
     resolveAccountSettingsSnapshot?: import('@/settings/accountSettings/activeAccountSettingsSnapshot').AccountSettingsSnapshotResolver;
 }>): LazyExecutionRunRuntimeShellConfig {
     let resolvedBackendPromise: Promise<ExecutionRunHostRuntime> | null = null;
@@ -194,7 +200,8 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
     // reject, including attempts replaced by existing rejected-start recovery.
     const providerResources = createProviderLaunchResourceScope();
 
-    const resolveBackend = async (): Promise<ExecutionRunHostRuntime> => {
+    const resolveBackend = async (signal: AbortSignal): Promise<ExecutionRunHostRuntime> => {
+        signal.throwIfAborted();
         if (resolvedBackendPromise) return await resolvedBackendPromise;
         resolvedBackendPromise = (async () => {
             const engineResolution = opts.engineRegistry
@@ -247,6 +254,7 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
             const connectedServicesSelection =
                 await resolveExecutionRunConnectedServicesSelection({
                     backendId: engineResolution.backendId,
+                    signal,
                     backendSourceKind:
                         opts.backendSourceKind ?? 'built_in',
                     ...(opts.connectedServices !== undefined
@@ -272,7 +280,19 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
                     !opts.modelSelection
                     || opts.modelSelection.providerConnectionId === null
                     || await opts.resolveProvidersFeatureEnabled?.() === true;
-                providerLaunch = await prepareExecutionRunProviderLaunch({
+                const accountSettingsSnapshot = await opts.resolveAccountSettingsSnapshot?.() ?? null;
+                if (opts.providerLaunch && opts.modelSelection?.providerConnectionId) {
+                    if (!accountSettingsSnapshot?.scopeKey) throw Object.assign(new Error('provider_connection_not_found'), { code: 'provider_connection_not_found' });
+                    providerLaunch = await opts.providerLaunch.prepareLaunch({
+                        selection: opts.modelSelection, backendTarget: effectiveBackendTarget,
+                        agentId: engineResolution.agentId, runId: String(opts.runId ?? '').trim(),
+                        ...(opts.controllerOccurrenceId ? { controllerOccurrenceId: opts.controllerOccurrenceId } : {}),
+                        connectedServices: connectedServicesSelection?.bindings ?? null,
+                        expectedAccountSettingsScopeKey: accountSettingsSnapshot.scopeKey,
+                    }, signal);
+                    if (providerLaunch.cleanupOnExit) providerResources.register(providerLaunch.cleanupOnExit);
+                } else providerLaunch = await prepareExecutionRunProviderLaunch({
+                    signal,
                     ...(opts.modelSelection ? { selection: opts.modelSelection } : {}),
                     ...(opts.teamCredentialModel ? { teamCredentialModel: opts.teamCredentialModel } : {}),
                     backendTarget: effectiveBackendTarget,
@@ -284,8 +304,7 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
                     featureEnabled,
                     happyHomeDir:
                         opts.happyHomeDir ?? configuration.happyHomeDir,
-                    accountSettingsSnapshot:
-                        await opts.resolveAccountSettingsSnapshot?.() ?? null,
+                    accountSettingsSnapshot,
                     ...(opts.resolveManagedPurposeBindingIntent ? { resolveManagedPurposeBindingIntent: opts.resolveManagedPurposeBindingIntent } : {}),
                     ...(opts.readModelProjection ? { readModelProjection: opts.readModelProjection } : {}),
                     ...(opts.prepareManagedEndpoint ? { prepareManagedEndpoint: opts.prepareManagedEndpoint } : {}),
@@ -334,6 +353,7 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
                     });
                 }
                 connectedServicesEnv = await resolveExecutionRunConnectedServicesEnv({
+                    signal,
                     runId: connectedServicesRunKey,
                     backendId: engineResolution.backendId,
                     backendSourceKind: opts.backendSourceKind ?? 'built_in',
@@ -353,6 +373,7 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
                     modelId: boundedOpenInputs?.configuration.model.value ?? opts.modelSelection?.modelId ?? opts.modelId,
                 });
                 activeConnectedServicesEnv = connectedServicesEnv;
+                signal.throwIfAborted();
                 if (connectedServicesEnv && opts.onConnectedServicesRegistration) {
                     await opts.onConnectedServicesRegistration(connectedServicesEnv.registration);
                 }
@@ -444,6 +465,9 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
                 };
             };
             const runtimeOpts = {
+                ...(opts.projectLaunchContext ? { projectLaunchContext: opts.projectLaunchContext } : {}),
+                ...(opts.projectSetupOperation ? { projectSetupOperation: opts.projectSetupOperation } : {}),
+                ...(opts.resolveProjectSetupOperation ? { resolveProjectSetupOperation: opts.resolveProjectSetupOperation } : {}),
                 cwd: opts.cwd,
                 scope: opts.scope,
                 ...(opts.machineId ? { machineId: opts.machineId } : {}),
@@ -513,7 +537,7 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
 
             let runtime: ExecutionRunHostRuntime;
             try {
-                const providerCurrent = await providerLaunch?.revalidateBeforeCommit();
+                const providerCurrent = await providerLaunch?.revalidateBeforeCommit(signal);
                 if (providerCurrent && !providerCurrent.ok) {
                     const error = Object.assign(
                         new Error(providerCurrent.error.code),
@@ -528,20 +552,13 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
                 }
                 await connectedServicesEnv?.cleanup();
                 await providerLaunch?.cleanupOnExit?.();
-                if ((providerLaunch || secretReferenceRedaction) && error instanceof Error) {
-                    const sanitized = new Error(
-                        secretReferenceRedaction?.redact(
-                            providerLaunch?.sanitizeDiagnosticText(error.message) ?? error.message,
-                        ) ?? providerLaunch?.sanitizeDiagnosticText(error.message) ?? error.message,
-                    ) as Error & { code?: string };
-                    sanitized.name = error.name;
-                    if ('code' in error && typeof error.code === 'string') {
-                        sanitized.code = error.code;
-                    }
+                if (providerLaunch || secretReferenceRedaction) {
+                    const sanitized = sanitizeExecutionRunError(error, value => secretReferenceRedaction?.redact(
+                        providerLaunch?.sanitizeDiagnosticText(value) ?? value,
+                    ) ?? providerLaunch?.sanitizeDiagnosticText(value) ?? value);
                     secretReferenceRedaction?.close();
                     throw sanitized;
                 }
-                secretReferenceRedaction?.close();
                 throw error;
             }
 
@@ -604,6 +621,9 @@ function createEngineExecutionRunRuntimeShellConfig(opts: Readonly<{
 }
 
 export function createExecutionRunRuntime(opts: Readonly<{
+    projectLaunchContext?: CreateCliExecutionRunBackendParams['projectLaunchContext'];
+    projectSetupOperation?: CreateCliExecutionRunBackendParams['projectSetupOperation'];
+    resolveProjectSetupOperation?: CreateCliExecutionRunBackendParams['resolveProjectSetupOperation'];
     cwd: string;
     runId?: string;
     controllerOccurrenceId?: string;
@@ -642,6 +662,7 @@ export function createExecutionRunRuntime(opts: Readonly<{
     resolveManagedPurposeBindingIntent?: ResolveManagedProviderPurposeBindingIntent;
     readModelProjection?: ProviderRuntimeModelProjectionReader;
     prepareManagedEndpoint?: DirectManagedProviderEndpointPreparer;
+    providerLaunch?: ExecutionRunProviderLaunchServices;
     resolveAccountSettingsSnapshot?: import('@/settings/accountSettings/activeAccountSettingsSnapshot').AccountSettingsSnapshotResolver;
 }>): ExecutionRunHostRuntime {
     const resolvedBackendTarget = resolveExecutionRunCompatBackendTarget(opts.backendTarget);
@@ -673,6 +694,9 @@ export function createExecutionRunRuntime(opts: Readonly<{
         }
         : resolvedBackendTarget?.canonical;
     const runtimeShellConfig = createEngineExecutionRunRuntimeShellConfig({
+            ...(opts.projectLaunchContext ? { projectLaunchContext: opts.projectLaunchContext } : {}),
+            ...(opts.projectSetupOperation ? { projectSetupOperation: opts.projectSetupOperation } : {}),
+            ...(opts.resolveProjectSetupOperation ? { resolveProjectSetupOperation: opts.resolveProjectSetupOperation } : {}),
             cwd: opts.cwd,
             scope: opts.scope,
             runId: opts.runId,
@@ -742,6 +766,7 @@ export function createExecutionRunRuntime(opts: Readonly<{
             ...(opts.resolveManagedPurposeBindingIntent ? { resolveManagedPurposeBindingIntent: opts.resolveManagedPurposeBindingIntent } : {}),
             ...(opts.readModelProjection ? { readModelProjection: opts.readModelProjection } : {}),
             ...(opts.prepareManagedEndpoint ? { prepareManagedEndpoint: opts.prepareManagedEndpoint } : {}),
+            ...(opts.providerLaunch ? { providerLaunch: opts.providerLaunch } : {}),
         });
     const runtime = createLazyExecutionRunHostRuntime(runtimeShellConfig);
     return opts.modelSelection?.providerConnectionId

@@ -35,12 +35,14 @@ async function renderBody(
   ) => Promise<Readonly<{ itemId: string; then?: 'close' | 'stay' }>>,
   catalogOverrides: Readonly<Record<string, unknown>> = {},
   footerOverrides: Readonly<Record<string, unknown>> = {},
+  configOverrides: Readonly<Record<string, unknown>> = {},
 ) {
   const { CapabilityAddModalBody } = await import('./CapabilityAddModal');
   const { buildCapabilityCollectionAnatomy } =
     await import('@/components/capabilities/row/buildCapabilityCollectionAnatomy');
   const onClose = vi.fn();
   const onAdded = vi.fn();
+  const setChrome = vi.fn();
   const config = {
     title: 'Add a skill',
     modes: [
@@ -77,9 +79,10 @@ async function renderBody(
     }),
     onAdded,
     testID: 'add',
+    ...configOverrides,
   };
   const screen = await renderScreen(
-    <CapabilityAddModalBody config={config as never} onClose={onClose} />,
+    <CapabilityAddModalBody config={config as never} onClose={onClose} setChrome={setChrome} />,
   );
   const nodes = (testID: string) =>
     screen.findAll((node) => node.props?.testID === testID);
@@ -113,7 +116,7 @@ async function renderBody(
       await button.props.onPress();
     });
   };
-  return { screen, nodes, select, pressPrimary, press, onClose, onAdded };
+  return { screen, nodes, select, pressPrimary, press, onClose, onAdded, setChrome };
 }
 
 describe('CapabilityAddModalBody', () => {
@@ -197,6 +200,23 @@ describe('CapabilityAddModalBody', () => {
     const collection = screen.findAll((node) => node.props?.testID === 'add:collection' && 'empty' in (node.props ?? {}))[0];
     expect(JSON.stringify(collection?.props.empty?.props?.children?.[0]?.props?.title)).toBe('"Acme · Token rejected"');
     expect(screen.findAll((node) => node.props?.testID === 'add:sourceFailure:acme')).not.toHaveLength(0);
+  });
+
+  it('takes the Registries header back off when the person returns from Registries', async () => {
+    const { Pressable } = await import('react-native');
+    const sources = {
+      renderSelect: ({ openRegistries }: { openRegistries: (intent: 'manage' | 'add') => void }) => (
+        <Pressable testID="open-registries" onPress={() => openRegistries('manage')} />
+      ),
+      renderRegistriesView: ({ back }: { back: () => void }) => <Pressable testID="registries-back" onPress={back} />,
+      registriesHeader: { title: 'Registries', subtitle: 'Where Browse looks for skills.' },
+    };
+    const { press, setChrome } = await renderBody(async () => ({ itemId: 'x' }), {}, {}, { sources });
+    await press('open-registries');
+    expect(setChrome.mock.calls.at(-1)![0]).toMatchObject({ title: 'Registries', subtitle: 'Where Browse looks for skills.' });
+    await press('registries-back');
+    // The chrome owner merges patches over what it has; the root frame must say "no back link, no subtitle" itself.
+    expect(setChrome.mock.calls.at(-1)![0]).toMatchObject({ title: 'Add a skill', leading: null, subtitle: null });
   });
 
   it('lets Escape close the details before the dialog, whatever has focus', async () => {

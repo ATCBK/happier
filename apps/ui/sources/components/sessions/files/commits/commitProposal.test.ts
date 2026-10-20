@@ -77,6 +77,18 @@ describe('buildCommitProposal', () => {
         expect(proposal.groups.every((group) => group.state === 'editable')).toBe(true);
         expect(proposal.outcome).toBeNull();
         expect(proposal.locked).toBe(false);
+        expect(proposal.editable).toBe(true);
+    });
+
+    it('offers no moves, including from Left out, after the accepted plan completes', () => {
+        const proposal = buildCommitProposal({ comparison: COMPARISON, plan: PLAN, application: application({
+            status: 'complete', nextGroupIndex: 2,
+            steps: [{ groupId: 'g1', state: 'published', commitSha: LANDED }, { groupId: 'g2', state: 'published', commitSha: 'c'.repeat(40) }],
+        }) });
+        expect(proposal.leftOut).toHaveLength(1);
+        expect(proposal.locked).toBe(false);
+        expect(proposal.editable).toBe(false);
+        expect(proposal.groups.every(group => !group.editable)).toBe(true);
     });
 
     it('locks every group while applying and reports per-commit state', () => {

@@ -11,11 +11,11 @@ import type { TriageFixPullRequestsStateV1 } from './useTriageFixPullRequests.js
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-async function mount(state: TriageFixPullRequestsStateV1) {
+async function mount(state: TriageFixPullRequestsStateV1, pickable: React.ComponentProps<typeof TriageFixPullRequests>['pickable'] = []) {
   return createPluginUiTestkit({
     identity: { instanceId: 'fix-pr-state', mountNonce: 'fix-pr-state-mount' },
     authorPlugin: { id: 'happier.triage', version: '0.0.0' },
-    surface: defineUiSurface(() => <TriageFixPullRequests state={state} pickable={[]} />),
+    surface: defineUiSurface(() => <TriageFixPullRequests state={state} pickable={pickable} />),
     surfaceContext: createSurfaceContextFixture(),
     adapter: createPluginUiRnwSemanticSurfaceAdapter(),
   });
@@ -54,5 +54,19 @@ describe('fix-PR relationship read states', () => {
       expect(step?.textContent).toContain('Merged');
       await expect(ready.getByRole('button', { name: 'Unlink Round totals on the server' })).resolves.toBeDefined();
     } finally { await ready.dispose(); }
+  });
+
+  it('keeps the fix as the story\'s second step before one is linked, offering the link there', async () => {
+    const entryRef = { source: { pluginId: 'happier.example.source', localId: 'example-forge' }, kindId: 'pull-request', collisionScope: 'example/repository', entryId: '2490' };
+    const empty = await mount({
+      kind: 'ready', candidates: [], primary: null, incomplete: false, busy: false, refusal: null,
+      link: () => undefined, unlink: () => undefined,
+    }, [{ entryRef, title: 'Round totals on the server', scopeLabel: 'example/repository' }]);
+    try {
+      const step = document.querySelector('[data-testid="triage-story-fix-pr"]');
+      expect(step?.textContent).toContain('Fix pull request');
+      expect(step?.textContent).toContain('No pull request is linked as the fix yet.');
+      await expect(empty.getByRole('button', { name: 'Link fix PR' })).resolves.toBeDefined();
+    } finally { await empty.dispose(); }
   });
 });

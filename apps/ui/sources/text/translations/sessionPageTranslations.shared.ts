@@ -13,7 +13,7 @@ export const english = {
             continueDescription: 'Start new work from where this session is.',
             organizeTitle: 'Organize',
             organizeDescription: 'Where this session shows up in your lists.',
-            activityDescription: 'What the agent is doing, and whether you hear about it.',
+            activityDescription: 'What the agent is doing now.',
             detailsTitle: 'Details',
             detailsDescription: 'Identifiers and history, for support and scripts.',
             environmentTitle: 'Environment',

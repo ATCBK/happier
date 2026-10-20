@@ -4,11 +4,15 @@ import { createDeferred, createMachineFixture, renderHook, standardCleanup } fro
 import type { MachineAgentInventoryItem, PluginProjectionV2 } from '@happier-dev/protocol';
 import { FeaturesResponseSchema, PluginProjectionV2Schema } from '@happier-dev/protocol';
 import { AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { QualifiedConnectedAccountGroupV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
+import type { QualifiedConnectedAccountPurposeBindingTargetV1 } from '@happier-dev/protocol/connect/connected-account-purpose-bindings';
 import { isMachineAgentReady } from './resolveMachineAgentState';
+import { resolveMachineAgentStatus } from '@/components/machines/agents/machineAgentPresentation';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 
 // Install physical HTTP/Socket.IO before loading the real scoped-RPC owner.
 const network = await installSessionOpsNetworkBoundary();
+const { isAgentSelectableForNewSession } = await import('@/components/sessions/new/modules/newSessionAgentSelection');
 // This responder supplies daemon ACK bodies; it never replaces internal RPC logic.
 const rpc = vi.fn();
 const { storage } = await import('@/sync/domains/state/storageStore');
@@ -18,11 +22,12 @@ const { primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } = await
 const { installConnectedAccountDescriptorProjection, retireConnectedAccountDescriptorProjection } = await import('@/sync/domains/connectedServices/connectedServiceRegistry');
 const { loadDaemonMergedProjectionInputs } = await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs');
 const { publishMachineContributionRegistryProjectionInvalidation } = await import('@/sync/ops/machineContributionRegistryProjectionRevision');
-const { refreshMachineAgents, useMachineAgents, useMachineAgentsByMachine } = await import('./useMachineAgents');
+const { refreshMachineAgents, useMachineAgents, useMachineAgentsByMachine, useRefreshMachineAgents } = await import('./useMachineAgents');
 const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
 const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
 const { clearMachineRequestReachabilityForTest, recordMachineRequestFailed } = await import('@/sync/domains/machines/reachability/machineReachability');
 const { applyAcpCatalogSnapshot } = await import('@/sync/store/settings/acpCatalogSnapshot');
+const { applyConnectedAccountCatalogSnapshot } = await import('@/sync/store/settings/connectedAccountCatalogSnapshot');
 
 const item: MachineAgentInventoryItem = { agentId: 'review', title: 'Review', installed: true, version: '1', latestVersion: '1', update: { supported: false, command: null }, signIn: { status: 'signedIn', loginSupport: 'status_only' }, platform: { supported: true }, install: { available: false, mode: 'manual', sizeBytes: null, guideUrl: null }, dependencies: [] };
 const emptyProjection: PluginProjectionV2 = { v: 2, generation: 1, installedPackagesById: {}, agentsById: {}, actionsById: {}, familiesById: {}, toolsById: {}, commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [] };
@@ -47,6 +52,246 @@ afterEach(async () => {
 afterAll(() => network.dispose());
 
 describe('machine inventory lifecycle boundary', () => {
+    it('keeps an installed external Agent selectable across unrelated probe failures and reopening', async () => {
+        const server = await network.addHome('https://isolated-inventory-facts.example.test', 'inventory-account');
+        const scope = { serverId: server.id, accountId: 'inventory-account' };
+        const accountLifetime = { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) };
+        const machine = createMachineFixture({ id: 'isolated-inventory-machine', active: true, activeAt: Date.now() });
+        storage.setState({ machineListByServerId: { [server.id]: [machine] }, profileScope: scope });
+        applyAcpCatalogSnapshot(scope, { status: 'ready', revision: 1, record: { v: 1, definitions: [] } }, true);
+        const projection = PluginProjectionV2Schema.parse({ ...emptyProjection, agentsById: Object.fromEntries(
+            ['review', 'other-agent'].map(id => [id, { id, title: id, identity: { pluginId: 'acme.review', localId: id },
+                capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } } }]),
+        ) });
+        let ownAnswer = 'cli.foreign-agent';
+        rpc.mockImplementation(async ({ method }: { method: string }) => {
+            if (method.includes('contributionRegistryProjection.describe')) return { protocolVersion: 1, projection };
+            if (method === 'capabilities.detect') return { protocolVersion: 1, results: {
+                [ownAnswer]: { ok: true, checkedAt: Date.now(), data: { ...item,
+                    signIn: { status: 'unknown', loginSupport: 'login_terminal' } } },
+                'cli.other-agent': { ok: false, checkedAt: Date.now(), error: { code: 'probe_failed', message: 'Unavailable' } },
+                'tool.acpAgentInventory': { ok: true, checkedAt: Date.now(), data: { items: [] } },
+            } };
+            return { jobs: [] };
+        });
+        const target = { serverId: server.id, machineId: machine.id, accountLifetime };
+        await refreshMachineAgents(target);
+        const key = serverAccountScopedResourceKey(scope, 'machine-agents', machine.id);
+        // A healthy answer wired to a different Agent cannot certify Review.
+        const unanswered = Object.fromEntries(machineAgentInventoryStore.read(key).agents.map(agent => [agent.agentId, agent]));
+        expect(unanswered.review).toMatchObject({ installed: false, stale: true, unavailableReason: { reason: 'missing_result' } });
+        expect(isAgentSelectableForNewSession({ agentId: 'review', machineAgentsById: unanswered })).toBe(false);
+        ownAnswer = 'cli.review';
+        await refreshMachineAgents({ ...target, force: true });
+        const read = () => useMachineAgents({ serverId: server.id, machineId: machine.id, load: false });
+        const assertEligibility = (snapshot: ReturnType<typeof read>) => {
+            const agents = Object.fromEntries(snapshot.agents.map(agent => [agent.agentId, agent]));
+            expect(snapshot.status).toBe('ready');
+            expect(agents.review).toMatchObject({ installed: true, stale: false, signIn: { status: 'unknown' } });
+            expect(isAgentSelectableForNewSession({ agentId: 'review', machineAgentsById: agents })).toBe(true);
+            expect(agents['other-agent']).toMatchObject({ state: 'unknown', stale: true,
+                unavailableReason: { reason: 'probe_failed', errorCode: 'probe_failed' } });
+            expect(isAgentSelectableForNewSession({ agentId: 'other-agent', machineAgentsById: agents })).toBe(false);
+        };
+        const initial = await renderHook(read);
+        try { assertEligibility(initial.getCurrent()); } finally { await initial.unmount(); }
+        const reopened = await renderHook(read);
+        try { assertEligibility(reopened.getCurrent()); } finally { await reopened.unmount(); }
+    });
+
+    it.each(['selected', 'picker'] as const)('rechecks a failed %s Agent probe on the next inventory read and admits only the matching successful answer', async (surface) => {
+        const server = await network.addHome(`https://probe-recovery-${surface}.example.test`, 'inventory-account');
+        const scope = { serverId: server.id, accountId: 'inventory-account' };
+        const accountLifetime = { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) };
+        const machine = createMachineFixture({ id: `probe-recovery-${surface}`, active: true, activeAt: Date.now() });
+        storage.setState({ machineListByServerId: { [server.id]: [machine] }, profileScope: scope });
+        applyAcpCatalogSnapshot(scope, { status: 'ready', revision: 1, record: { v: 1, definitions: [] } }, true);
+        const projection = PluginProjectionV2Schema.parse({ ...emptyProjection, agentsById: { review: {
+            id: 'review', title: 'Review', capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+        } } });
+        const checkedAt = Date.now();
+        let answer: 'failed' | 'foreign' | 'ready' = 'failed';
+        rpc.mockImplementation(async ({ method }: { method: string }) => {
+            if (method.includes('contributionRegistryProjection.describe')) return { protocolVersion: 1, projection };
+            if (method === 'capabilities.detect') return { protocolVersion: 1, results: {
+                [answer === 'foreign' ? 'cli.other-agent' : 'cli.review']: answer === 'failed'
+                    ? { ok: false, checkedAt, error: { code: 'probe_failed', message: 'Probe temporarily unavailable' } }
+                    : { ok: true, checkedAt, data: item },
+                'tool.acpAgentInventory': { ok: true, checkedAt, data: { items: [] } },
+            } };
+            return { jobs: [] };
+        });
+        const target = { serverId: server.id, machineId: machine.id, accountLifetime,
+            ...(surface === 'selected' ? { agentId: 'review' } : {}) };
+        await loadDaemonMergedProjectionInputs(target);
+        const key = serverAccountScopedResourceKey(scope, 'machine-agents', machine.id);
+        const readAgent = () => machineAgentInventoryStore.read(key).agents.find(agent => agent.agentId === 'review');
+        const selectable = () => isAgentSelectableForNewSession({ agentId: 'review', machineAgentsById: { review: readAgent() } });
+        await refreshMachineAgents(target);
+        expect(machineAgentInventoryStore.read(key).status).toBe('ready');
+        expect(readAgent()).toMatchObject({ state: 'unknown', stale: true, unavailableReason: { reason: 'probe_failed' } });
+        expect(resolveMachineAgentStatus(readAgent() ?? null).kind).toBe('unknown');
+        expect(selectable()).toBe(false);
+
+        // A healthy answer for another Agent cannot recover this Agent's eligibility.
+        answer = 'foreign';
+        await refreshMachineAgents(target);
+        expect(selectable()).toBe(false);
+        answer = 'ready';
+        await refreshMachineAgents(target);
+        expect(readAgent()).toMatchObject({ state: 'ready', installed: true, stale: false });
+        expect(readAgent()?.unavailableReason).toBeUndefined();
+        expect(selectable()).toBe(true);
+    });
+
+    it('releases a demanded inventory refresh on unmount and admits the next refresh of the same machine', async () => {
+        const server = await network.addHome('https://cancel-inventory.example.test', 'inventory-account');
+        const scope = { serverId: server.id, accountId: 'inventory-account' };
+        const machine = createMachineFixture({ id: 'cancel-inventory-machine', active: true, activeAt: Date.now() });
+        storage.setState({ machineListByServerId: { [server.id]: [machine] }, profileScope: scope });
+        rpc.mockImplementationOnce(() => new Promise(() => {}));
+        const hook = await renderHook(() => useRefreshMachineAgents(server.id));
+        const pending = hook.getCurrent()(machine.id);
+        let settled = false;
+        void pending.then(() => { settled = true; });
+        await vi.waitFor(() => expect(rpc).toHaveBeenCalledTimes(1));
+        await hook.unmount();
+        await vi.waitFor(() => expect(settled).toBe(true));
+        rpc.mockResolvedValueOnce({ protocolVersion: 1, projection: emptyProjection });
+        const reopened = await renderHook(() => useRefreshMachineAgents(server.id));
+        try {
+            await reopened.getCurrent()(machine.id);
+            expect(rpc).toHaveBeenCalledTimes(2);
+        } finally { await reopened.unmount(); }
+    });
+
+    it('projects Account purpose defaults into single-machine and fleet sign-in, including changes without a CLI probe', async () => {
+        const server = await network.addHome('https://default-auth-inventory.example.test', 'inventory-account');
+        const scope = { serverId: server.id, accountId: 'inventory-account' };
+        const lifetime = { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) };
+        const machine = createMachineFixture({ id: 'default-auth-machine', active: true, activeAt: Date.now() });
+        const service = { pluginId: 'acme.review', localId: 'account' };
+        const identity = { pluginId: 'acme.review', localId: 'review' };
+        const descriptor = {
+            id: 'account', serviceId: 'account', pluginId: service.pluginId, title: 'Review account', provenance: 'external', sourceKind: 'installed',
+            authentication: { defaultModeId: 'oauth', modes: [{ id: 'oauth', kind: 'oauthAuthorizationCode', callbackUrl: 'http://127.0.0.1:4000/auth/callback', pkce: 'required', outcomeReconciliation: 'providerCheck' }] },
+            capabilities: [], availability: { state: 'available', reason: 'resolved' }, diagnostics: [],
+        } satisfies NonNullable<PluginProjectionV2['familiesById']['connectedAccounts']>['entriesById'][string];
+        const projection = PluginProjectionV2Schema.parse({ ...emptyProjection,
+            familiesById: { connectedAccounts: { family: 'connectedAccounts', entriesById: { 'acme.review/account': descriptor } } },
+            agentsById: { review: { id: 'review', identity, title: 'Review', connectedAccounts: [{ purpose: 'primary', service, credentialKinds: ['oauth'] }],
+                capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } } } },
+        });
+        storage.setState({ machineListByServerId: { [server.id]: [machine] }, profileScope: scope, profile: {
+            ...storage.getState().profile,
+            connectedAccountsV4: [{ ref: { service, accountId: 'work' }, revisionSemantics: 'revisioned', credentialRevision: 'revision-1',
+                status: 'connected', kind: 'oauth', authenticationModeId: 'oauth', configurationReady: true, configurationRevision: null,
+                displayName: 'Work account', scopes: [] }],
+        } });
+        primeServerFeaturesSnapshot({ serverId: server.id, snapshot: { status: 'ready', features: FeaturesResponseSchema.parse({
+            features: {}, capabilities: { connectedServices: { qualifiedAccounts: { protocolVersion: 4 } } },
+        }) } });
+        rpc.mockImplementation(async ({ method }: { method: string }) => method.includes('contributionRegistryProjection.describe')
+            ? { protocolVersion: 1, projection }
+            : method === 'capabilities.detect' ? { protocolVersion: 1, results: { 'cli.review': { ok: true, checkedAt: 12,
+                data: { ...item, signIn: { status: 'signedOut', loginSupport: 'login_terminal' }, isLoggedIn: false,
+                    authStatus: { state: 'logged_out', checkedAt: 12 } } } } } : { jobs: [] });
+        await refreshMachineAgents({ serverId: server.id, machineId: machine.id, accountLifetime: lifetime });
+        const accountTarget: QualifiedConnectedAccountPurposeBindingTargetV1 = { kind: 'account', account: { service, accountId: 'work' } };
+        const publishDefaults = (revision: number, target: QualifiedConnectedAccountPurposeBindingTargetV1 | null) => applyConnectedAccountCatalogSnapshot(scope, 'purposes', {
+            status: 'ready', revision, record: { key: 'purposes', value: { v: 1, bindings: target ? [{
+                purpose: { consumer: identity, purpose: 'primary' }, target,
+            }] : [] } },
+        }, true);
+        publishDefaults(1, null);
+        const hook = await renderHook(() => ({
+            inventory: useMachineAgents({ serverId: server.id, machineId: machine.id, load: false }),
+            fleet: useMachineAgentsByMachine({ serverId: server.id, machineIds: [machine.id], load: false }),
+        }));
+        try {
+            const rows = () => [hook.getCurrent().inventory.agents[0], hook.getCurrent().fleet.get(machine.id)?.agents[0]];
+            await vi.waitFor(() => { for (const row of rows()) expect(row).toMatchObject({ signIn: { status: 'signedOut', via: null } }); });
+            network.requests.length = 0;
+            await act(async () => publishDefaults(2, accountTarget));
+            await vi.waitFor(() => { for (const row of rows()) expect(row).toMatchObject({ signIn: {
+                status: 'signedIn', via: { kind: 'connected', profileLabel: 'Work account' },
+            } }); });
+            const key = serverAccountScopedResourceKey(scope, 'machine-agents', machine.id);
+            await act(async () => machineAgentInventoryStore.publishJobs(key, new Map()));
+            expect(machineAgentInventoryStore.read(key).agents[0]?.signIn.status).toBe('signedIn');
+            const group = QualifiedConnectedAccountGroupV4Schema.parse({ v: 1, ref: { service, groupId: 'pool' },
+                incarnation: 'pool:1', displayName: 'Pool', generation: 1, runtimeStateRevision: 1, policy: {},
+                activeConnectedAccountId: 'work', state: {}, members: [{ v: 1, connectedAccountId: 'work', state: {}, createdAt: 0, updatedAt: 0 }],
+                createdAt: 0, updatedAt: 0 });
+            await act(async () => {
+                storage.setState({ profile: { ...storage.getState().profile, connectedAccountGroupsV4: [group] } });
+                publishDefaults(3, { kind: 'group', service, groupId: 'pool' });
+            });
+            await vi.waitFor(() => { for (const row of rows()) expect(row?.signIn.status).toBe('signedIn'); });
+            await act(async () => storage.setState({ profile: { ...storage.getState().profile,
+                connectedAccountGroupsV4: [{ ...group, activeConnectedAccountId: null }] } }));
+            await vi.waitFor(() => { for (const row of rows()) expect(row?.signIn.status).toBe('signedOut'); });
+            await act(async () => applyConnectedAccountCatalogSnapshot(scope, 'purposes', { status: 'unavailable', reason: 'unauthorized' }, true));
+            await vi.waitFor(() => { for (const row of rows()) expect(row).toMatchObject({ state: 'unknown', signIn: { status: 'unknown', via: null } }); });
+            // An authored Session choice remains independent of unread Account defaults.
+            const { projectMachineAgentForCredential } = await import('./machineAgentModel');
+            expect(projectMachineAgentForCredential(rows()[0], { credentialBindings: { v: 2, bindingsByServiceId: {
+                'acme.review/account': { source: 'connected', selection: 'profile', profileId: 'work' },
+            } } })).toMatchObject({ state: 'ready', signIn: { status: 'signedIn' } });
+            await act(async () => publishDefaults(4, null));
+            await vi.waitFor(() => { for (const row of rows()) expect(row).toMatchObject({ signIn: { status: 'signedOut', via: null } }); });
+            expect(network.requests.filter(({ method }) => method === 'capabilities.detect')).toEqual([]);
+        } finally { await hook.unmount(); resetServerFeaturesClientForTests(); }
+    });
+    it.each(['signedIn', 'signedOut', 'unavailable'] as const)('keeps an untouched embedded Agent idle and settles its demanded probe to %s', async (outcome) => {
+        const server = await network.addHome(`https://embedded-agent-${outcome}.example.test`, 'inventory-account');
+        const scope = { serverId: server.id, accountId: 'inventory-account' };
+        const machine = createMachineFixture({ id: `embedded-agent-${outcome}`, active: true, activeAt: Date.now() });
+        storage.setState({ machineListByServerId: { [server.id]: [machine] }, profileScope: scope });
+        const projection = PluginProjectionV2Schema.parse({ ...emptyProjection, agentsById: { review: {
+            id: 'review', title: 'Review', capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+        } } });
+        const probe = createDeferred<unknown>();
+        let probing = false;
+        rpc.mockImplementation(async ({ method }: { method: string }) => {
+            if (method.includes('contributionRegistryProjection.describe')) return { protocolVersion: 1, projection };
+            if (method === 'capabilities.detect') { probing = true; return probe.promise; }
+            return { jobs: [] };
+        });
+        const hook = await renderHook(({ demanded }: { demanded: boolean }) => useMachineAgents({
+            serverId: server.id, machineId: machine.id, agentId: 'review', load: demanded,
+        }), { initialProps: { demanded: false } });
+        try {
+            expect(hook.getCurrent().status).toBe('idle');
+            expect(hook.getCurrent().agents.some(agent => agent.state === 'checking')).toBe(false);
+            expect(resolveMachineAgentStatus(hook.getCurrent().agents[0] ?? null, undefined, hook.getCurrent().status).kind).toBe('unknown');
+            expect(network.requests).toEqual([]);
+            // Another surface may describe the machine before this composer is used.
+            // Catalog metadata alone does not mean a capability probe is pending.
+            const accountLifetime = { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) };
+            await act(async () => { await loadDaemonMergedProjectionInputs({ serverId: server.id, machineId: machine.id, accountLifetime }); });
+            await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ status: 'idle', agents: [{ state: 'unknown' }] }));
+            expect(network.requests.filter(({ method }) => method === 'capabilities.detect')).toEqual([]);
+            await hook.rerender({ demanded: true });
+            await vi.waitFor(() => expect(probing).toBe(true));
+            expect(hook.getCurrent()).toMatchObject({ status: 'loading', agents: [{ state: 'checking' }] });
+            const signedIn = outcome === 'signedIn';
+            await act(async () => {
+                probe.resolve({ protocolVersion: 1, results: { 'cli.review': outcome === 'unavailable'
+                    ? { ok: false, checkedAt: 12, error: { code: 'probe_failed', message: 'Agent unavailable' } }
+                    : { ok: true, checkedAt: 12, data: { ...item,
+                        signIn: { status: outcome, loginSupport: 'status_only' }, isLoggedIn: signedIn,
+                        authStatus: { state: signedIn ? 'logged_in' : 'logged_out', checkedAt: 12 },
+                    } },
+                } });
+            });
+            await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ status: 'ready', agents: [{
+                state: outcome === 'signedIn' ? 'ready' : outcome === 'signedOut' ? 'needsSignIn' : 'unknown',
+                stale: outcome === 'unavailable',
+            }] }));
+        } finally { probe.resolve({ protocolVersion: 1, results: {} }); await hook.unmount(); }
+    });
+
     it('detects caller catalog definitions separately and clears them only for a ready-empty catalog', async () => {
         const server = await network.addHome('https://definition-inventory.example.test', 'inventory-account');
         const scope = { serverId: server.id, accountId: 'inventory-account' };
@@ -94,6 +339,68 @@ describe('machine inventory lifecycle boundary', () => {
         expect(machineAgentInventoryStore.read(key).status).toBe('offline');
         await refreshMachineAgents({ serverId: server.id, machineId: machine.id, accountLifetime, force: true });
         expect(machineAgentInventoryStore.read(key).status).toBe('ready');
+    });
+    it('retries one machine inventory from the all-machine summary without probing on mount or trusting fresh cached facts', async () => {
+        const server = await network.addHome('https://summary-agent-retry.example.test', 'inventory-account');
+        const scope = { serverId: server.id, accountId: 'inventory-account' };
+        const accountLifetime = { scope, isCurrent: () => true, onRetire: () => ({ dispose() {} }) };
+        const machines = ['retry-machine', 'untouched-machine'].map(id => createMachineFixture({ id, active: true, activeAt: Date.now() }));
+        storage.setState({ machineListByServerId: { [server.id]: machines }, profileScope: scope });
+        const projection = PluginProjectionV2Schema.parse({ ...emptyProjection, agentsById: { review: {
+            id: 'review', title: 'Review', capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+        } } });
+        let installed = true;
+        let checkedAt = 12;
+        let projectionFailed = false;
+        rpc.mockImplementation(async ({ method }: { method: string }) => {
+            if (method.includes('contributionRegistryProjection.describe')) {
+                if (projectionFailed) throw new Error('transport disconnected');
+                return { protocolVersion: 1, projection };
+            }
+            if (method === 'capabilities.detect') return { protocolVersion: 1, results: { 'cli.review': { ok: true, checkedAt, data: { ...item, installed } } } };
+            return { jobs: [] };
+        });
+        for (const machine of machines) await refreshMachineAgents({ serverId: server.id, machineId: machine.id, accountLifetime });
+        projectionFailed = true;
+        publishMachineContributionRegistryProjectionInvalidation({ serverId: server.id, machineId: machines[0].id });
+        await refreshMachineAgents({ serverId: server.id, machineId: machines[0].id, accountLifetime });
+        network.requests.length = 0;
+        const hook = await renderHook(() => ({
+            snapshots: useMachineAgentsByMachine({ serverId: server.id, machineIds: machines.map(machine => machine.id), load: false }),
+            refresh: useRefreshMachineAgents(server.id),
+        }));
+        try {
+            await vi.waitFor(() => expect(hook.getCurrent().snapshots.get(machines[1].id)?.status).toBe('ready'));
+            expect(hook.getCurrent().snapshots.get(machines[0].id)).toMatchObject({ status: 'error', lastCheckedAt: 12,
+                agents: [{ installed: true, stale: true }] });
+            const untouched = hook.getCurrent().snapshots.get(machines[1].id);
+            expect(network.requests).toEqual([]);
+            installed = false;
+            checkedAt = 24;
+            projectionFailed = false;
+            await act(async () => hook.getCurrent().refresh(machines[0].id));
+            expect(hook.getCurrent().snapshots.get(machines[0].id)).toMatchObject({ status: 'ready', lastCheckedAt: 24,
+                agents: [{ installed: false, stale: false, state: 'notInstalled' }] });
+            expect(hook.getCurrent().snapshots.get(machines[1].id)).toBe(untouched);
+            expect(network.requests.filter(({ method }) => method === 'capabilities.detect')).toEqual([
+                expect.objectContaining({ serverUrl: server.serverUrl, token: server.token, targetId: machines[0].id }),
+            ]);
+            installed = true;
+            checkedAt = 36;
+            network.requests.length = 0;
+            await act(async () => hook.getCurrent().refresh(machines[0].id));
+            expect(hook.getCurrent().snapshots.get(machines[0].id)).toMatchObject({ status: 'ready', lastCheckedAt: 36,
+                agents: [{ installed: true, stale: false }] });
+            expect(hook.getCurrent().snapshots.get(machines[1].id)).toBe(untouched);
+            expect(network.requests.filter(({ method }) => method === 'capabilities.detect')).toEqual([
+                expect.objectContaining({ targetId: machines[0].id, payload: expect.objectContaining({ bypassCache: true }) }),
+            ]);
+            const refresh = hook.getCurrent().refresh;
+            await hook.unmount();
+            network.requests.length = 0;
+            await refresh(machines[0].id);
+            expect(network.requests).toEqual([]);
+        } finally { await hook.unmount(); }
     });
     it('retains locked machine inventory without requesting executable Agent facts', async () => {
         const server = await network.addHome('https://locked-inventory.example.test', 'inventory-account');
@@ -161,6 +468,42 @@ describe('machine inventory lifecycle boundary', () => {
         } finally { await hook.unmount(); errors.mockRestore(); }
     });
 
+    it.each(['detail', 'summary'] as const)('keeps one store snapshot stable when the presence grace expires between clock reads (%s)', async mode => {
+        const server = await network.addHome(`https://presence-boundary-${mode}-inventory.example.test`, 'inventory-account');
+        const scope = { serverId: server.id, accountId: 'inventory-account' };
+        vi.stubEnv('EXPO_PUBLIC_HAPPIER_MACHINE_ONLINE_GRACE_MS', '1000');
+        const clock = vi.spyOn(Date, 'now').mockReturnValue(10_000);
+        const machine = createMachineFixture({ id: `presence-boundary-${mode}-machine`, active: true, activeAt: 10_000 });
+        storage.setState({ machineListByServerId: { [server.id]: [machine] }, profileScope: scope });
+        machineAgentInventoryStore.publish(serverAccountScopedResourceKey(scope, 'machine-agents', machine.id),
+            { status: 'ready', items: [item], lastCheckedAt: 12 });
+        const errors = vi.spyOn(console, 'error');
+        let crossed = false;
+        const hook = await renderHook(({ crossBoundary }: { crossBoundary: boolean }) => {
+            if (crossBoundary && !crossed) {
+                crossed = true;
+                // A monotonic OS-clock boundary, with no intervening store write.
+                clock.mockReturnValueOnce(10_000).mockReturnValue(11_001);
+            }
+            return mode === 'detail'
+                ? useMachineAgents({ serverId: server.id, machineId: machine.id, load: false })
+                : useMachineAgentsByMachine({ serverId: server.id, machineIds: [machine.id], load: false }).get(machine.id);
+        }, { initialProps: { crossBoundary: false } });
+        try {
+            expect(hook.getCurrent()?.status).not.toBe('offline');
+            await hook.rerender({ crossBoundary: true });
+            expect(errors.mock.calls.filter(args => args.some(value => String(value).includes('getSnapshot should be cached')))).toEqual([]);
+            // Reusing one observation must not hide a later expired presence read.
+            await hook.rerender({ crossBoundary: false });
+            await vi.waitFor(() => expect(hook.getCurrent()?.status).toBe('offline'));
+        } finally {
+            await hook.unmount();
+            errors.mockRestore();
+            clock.mockRestore();
+            vi.unstubAllEnvs();
+        }
+    });
+
     it('loads selected Agent readiness without waiting for vendor updates and expands the same inventory when the picker opens', async () => {
         const server = await network.addHome('https://selected-agent-inventory.example.test', 'inventory-account');
         const scope = { serverId: server.id, accountId: 'inventory-account' };
@@ -187,7 +530,11 @@ describe('machine inventory lifecycle boundary', () => {
             return { jobs: [] };
         });
         const initialProps: { agentId?: string } = { agentId: 'review' };
-        const hook = await renderHook(({ agentId }: { agentId?: string }) => useMachineAgents({ serverId: server.id, machineId: machine.id, agentId }),
+        let renders = 0;
+        const hook = await renderHook(({ agentId }: { agentId?: string }) => {
+            if (++renders > 100) throw new Error('Selected Agent inventory did not settle within 100 renders');
+            return useMachineAgents({ serverId: server.id, machineId: machine.id, agentId });
+        },
             { initialProps });
         try {
             await vi.waitFor(() => expect(isMachineAgentReady(hook.getCurrent().agents.find(agent => agent.agentId === 'review'))).toBe(true));
@@ -339,7 +686,8 @@ describe('machine inventory lifecycle boundary', () => {
             familiesById: { connectedAccounts: { family: 'connectedAccounts', entriesById: { 'acme.review/account': descriptor } } },
             agentsById: {
                 review: {
-                    id: 'review', title: 'Review', connectedAccounts: [{ purpose: 'primary', service, credentialKinds: ['oauth'] }],
+                    id: 'review', identity: { pluginId: 'acme.review', localId: 'review' }, title: 'Review',
+                    connectedAccounts: [{ purpose: 'primary', service, credentialKinds: ['oauth'] }],
                     capabilities: { surfaces: [], sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
                 },
             },
@@ -361,6 +709,8 @@ describe('machine inventory lifecycle boundary', () => {
         }
         rpc.mockClear();
         try {
+            applyConnectedAccountCatalogSnapshot(scope, 'purposes', { status: 'ready', revision: 1,
+                record: { key: 'purposes', value: { v: 1, bindings: [] } } }, true);
             const { projectMachineAgentForCredential } = await import('./machineAgentModel');
             const credentialBindings = { v: 2 as const, bindingsByServiceId: {
                 'acme.review/account': { source: 'connected' as const, selection: 'profile' as const, profileId: 'work' },

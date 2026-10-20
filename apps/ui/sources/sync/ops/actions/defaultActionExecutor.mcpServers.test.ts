@@ -19,6 +19,7 @@ import { PluginProjectionV2Schema } from '@happier-dev/protocol';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE } from '@/dev/testkit/fixtures/pluginProviderDaemonProjection';
 import { MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
+import { parseMcpServerImportV1 } from '@happier-dev/protocol/mcp/servers/import/parseMcpServerImportV1';
 import { act } from 'react-test-renderer';
 
 const projectionRpc = vi.hoisted(() => vi.fn());
@@ -123,6 +124,40 @@ async function prepareToolFactsHome(includeMachine = true, installedAgentIds = O
 }
 
 describe('UI MCP per-Agent tool facts', () => {
+    it.each([false, true])('keeps sign-in on the MCP target used by Test (explicit=%s)', async explicit => {
+        const home = await prepareToolFactsHome(true, [], undefined, undefined, { catalog: () => ({ v: 1, bindings: [],
+            servers: [{ id: 'server', name: 'server', transport: 'http', remote: { url: 'https://mcp.fixture.test/mcp',
+                headers: {}, auth: { kind: 'oauth' } }, env: {}, createdAt: 1, updatedAt: 1 }] }) });
+        const selected = createMachineFixture({ id: 'mcp-machine', active: true, activeAt: explicit ? 1 : Date.now() });
+        const state = getStorage().getState();
+        const machines = [...Object.values(state.machines), selected];
+        getStorage().setState({ machines: Object.fromEntries(machines.map(machine => [machine.id, machine])),
+            machineListByServerId: { [home.id]: machines }, settings: { ...state.settings,
+                machineAdministrationTargetsLocalV1: {
+                    'mcpServers.settings': { serverIdentityId: home.serverIdentityId!, machineId: explicit ? 'facts-machine' : selected.id },
+                    'connectedAccounts.settings': { serverIdentityId: home.serverIdentityId!, machineId: 'facts-machine' },
+                } } });
+        const { captureLazyActionAccountContext } = await import('./actionAccountContext');
+        const { createUiMcpServerActionExecuteV1 } = await import('./mcpServerActionDeps');
+        const account = await captureLazyActionAccountContext(home.id);
+        // Only the daemon RPC is replaced. The captured Account, inventory,
+        // preference resolution and MCP Action owner all remain real.
+        projectionRpc.mockImplementation(async request => request.method === RPC_METHODS.DAEMON_MCP_SERVERS_TEST
+            ? { ok: true, toolCount: 1, durationMs: 1 }
+            : { status: 'unavailable', code: 'connected_account_service_unavailable' });
+        try {
+            const execute = createUiMcpServerActionExecuteV1(account);
+            const context = { serverId: home.id, surface: 'ui' as const, authority: 'present_user' as const,
+                actionCaller: { kind: 'host' as const },
+                ...(explicit ? { externalActionTarget: { kind: 'machine' as const, machineId: selected.id } } : {}) };
+            expect(await execute({ actionId: 'mcp.servers.test', input: { t: 'byId', serverId: 'server',
+                machineId: selected.id, directory: '/' }, context })).toMatchObject({ ok: true, result: { ok: true } });
+            expect(await execute({ actionId: 'mcp.servers.signIn.start', input: { serverId: 'server' }, context }))
+                .toMatchObject({ ok: false, errorCode: 'mcp_sign_in_not_supported' });
+            expect(projectionRpc.mock.calls.map(([request]) => request.machineId)).toEqual([selected.id, selected.id]);
+        } finally { account.dispose(); }
+    });
+
     it.each(['active', 'inactive'] as const)('lists valid neighbors from real %s partial authority while refusing tools', async authority => {
         const incomplete = { v: 1, servers: [{ id: 'server', name: 'server', transport: 'stdio',
             stdio: { command: 'mcp-tool', args: [] }, env: {}, createdAt: 1, updatedAt: 1 },
@@ -508,8 +543,18 @@ describe('UI MCP Actions through captured Home persistence', () => {
         vi.stubGlobal('crypto', undefined);
         expect(await executor.execute('mcp.servers.create', { entry, expectedRevision: 1 }, context))
             .toEqual({ ok: true, result: { status: 'updated', revision: 2, cursor: 2 } });
-        expect(await executor.execute('mcp.servers.read', { serverId: 'server' }, context)).toMatchObject({ ok: true,
-            result: { status: 'present', server: entry, revision: 2, complete: true, authority: 'active' } });
+        const read = await executor.execute('mcp.servers.read', { serverId: 'server' }, context);
+        expect(read).toMatchObject({ ok: true,
+            result: { status: 'present', server: entry, revision: 2, complete: true, authority: 'active', installLink: expect.any(String) } });
+        const output = MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1['mcp.servers.read'].parse(read.ok ? read.result : null);
+        if (!('installLink' in output) || typeof output.installLink !== 'string') throw new Error('Missing install link');
+        expect(new URL(output.installLink).origin).toBe('https://mcp-action-home.test');
+        const imported = parseMcpServerImportV1(output.installLink);
+        expect(imported.errors).toEqual([]);
+        expect(imported.servers).toMatchObject([{ name: 'server', stdio: { command: 'mcp-tool', args: [] }, env: {
+            TOKEN: { t: 'input', inputId: 'server:env:TOKEN' },
+        } }]);
+        expect(JSON.stringify(imported)).not.toContain('private');
         expect(writes).toEqual(['/v1/account/entity-rows/mcp']);
         expect(catalog.bindings).toMatchObject([{ serverId: 'server', enabled: true, target: { t: 'allMachines' } }]);
     });

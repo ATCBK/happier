@@ -28,10 +28,24 @@ export function scopedHomeActionExecutor(
     const existing = executorsByScope.get(key);
     if (existing && !options) return existing;
 
-    const execute = createFrontDoorActionExecute(createDefaultActionExecutor({
+    const executorOptions = {
         homeDomainAction: createHomeDomainActionExecutorForScope(scope),
         ...options,
-    }));
+    };
+    const ordinary = createFrontDoorActionExecute(createDefaultActionExecutor(executorOptions));
+    const execute: typeof ordinary = Object.assign(async (...args: Parameters<typeof ordinary>) => {
+        const [actionId, input, context] = args;
+        // Only host-owned page controls lend their ephemeral page-follow values
+        // and mount signal. Settings Ask must retain that exact invocation,
+        // including when a native surface supplies this shared scoped executor.
+        if (context?.surface === 'ui' && context.authority === 'present_user'
+            && context.actionCaller?.kind === 'host' && context.widgetAreaContext && context.signal) {
+            return createFrontDoorActionExecute(createDefaultActionExecutor({ ...executorOptions,
+                hostActionApprovalLifetime: { actionId, signal: context.signal, surface: 'ui' },
+            }))(actionId, input, context);
+        }
+        return ordinary(...args);
+    }, { prepare: ordinary.prepare });
     if (!options) executorsByScope.set(key, execute);
     return execute;
 }

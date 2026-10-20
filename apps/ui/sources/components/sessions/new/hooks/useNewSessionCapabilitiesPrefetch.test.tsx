@@ -19,18 +19,95 @@ afterEach(() => { standardCleanup(); machineRpc.mockReset(); vi.useRealTimers();
 const request = { requests: [{ id: 'tool.tmux' as const }] };
 
 describe('new-session capability prefetch', () => {
+    it('cancels stranded work on cleanup and retries when prefetch is enabled again', async () => {
+        vi.useFakeTimers();
+        const machine = createMachineFixture({ id: 'prefetch-cleanup', activeAt: Date.now() });
+        const serverId = 'prefetch-cleanup-home';
+        let signal: AbortSignal | undefined;
+        machineRpc.mockImplementationOnce((args: { signal?: AbortSignal }) => {
+            signal = args.signal;
+            return new Promise(() => {});
+        });
+        const machines = [machine];
+        const empty: typeof machines = [];
+        const hook = await renderHook(({ enabled }: { enabled: boolean }) => useNewSessionCapabilitiesPrefetch({
+            enabled, serverId, machines, favoriteMachineItems: empty, recentMachines: empty,
+            selectedMachineId: machine.id, isMachineOnline, staleMs: 60_000, request, prefetchMachineCapabilitiesIfStale,
+        }), { initialProps: { enabled: true }, flushOptions: { cycles: 0 } });
+        await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+        expect(getMachineCapabilitiesCacheState(machine.id, serverId, 0)?.status).toBe('loading');
+        await hook.rerender({ enabled: false });
+        expect(signal?.aborted).toBe(true);
+        expect(getMachineCapabilitiesCacheState(machine.id, serverId, 0)?.status).toBe('idle');
+        machineRpc.mockResolvedValueOnce({ protocolVersion: 1, results: { 'tool.tmux': { ok: true, checkedAt: 12, data: { available: true } } } });
+        await hook.rerender({ enabled: true });
+        await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+        expect(getMachineCapabilitiesCacheState(machine.id, serverId, 0)?.status).toBe('loaded');
+        await hook.unmount();
+    });
+
+    it('preserves another mounted reader when a prefetch owner leaves', async () => {
+        vi.useFakeTimers();
+        const machine = createMachineFixture({ id: 'prefetch-shared-cleanup', activeAt: Date.now() });
+        const serverId = 'prefetch-shared-cleanup-home';
+        let signal: AbortSignal | undefined;
+        let respond!: (response: unknown) => void;
+        machineRpc.mockImplementationOnce((args: { signal?: AbortSignal }) => {
+            signal = args.signal;
+            return new Promise(resolve => { respond = resolve; });
+        });
+        const machines = [machine];
+        const empty: typeof machines = [];
+        const render = () => renderHook(() => useNewSessionCapabilitiesPrefetch({
+            enabled: true, serverId, machines, favoriteMachineItems: empty, recentMachines: empty,
+            selectedMachineId: machine.id, isMachineOnline, staleMs: 60_000, request, prefetchMachineCapabilitiesIfStale,
+        }), { flushOptions: { cycles: 0 } });
+        const first = await render();
+        const second = await render();
+        await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+        await first.unmount();
+        expect(signal?.aborted).toBe(false);
+        respond({ protocolVersion: 1, results: { 'tool.tmux': { ok: true, checkedAt: 12, data: { available: true } } } });
+        await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+        expect(getMachineCapabilitiesCacheState(machine.id, serverId, 0)?.status).toBe('loaded');
+        await second.unmount();
+    });
+
+    it('keeps a pending request alive across machine heartbeat and array churn', async () => {
+        vi.useFakeTimers();
+        const machine = createMachineFixture({ id: 'prefetch-pending-churn', activeAt: Date.now() });
+        let signal: AbortSignal | undefined;
+        let respond!: (response: unknown) => void;
+        machineRpc.mockImplementationOnce((args: { signal?: AbortSignal }) => {
+            signal = args.signal;
+            return new Promise(resolve => { respond = resolve; });
+        });
+        const hook = await renderHook(({ version }: { version: number }) => useNewSessionCapabilitiesPrefetch({
+            enabled: true, serverId: 'prefetch-pending-churn-home', machines: [{ ...machine, daemonStateVersion: version }],
+            favoriteMachineItems: [], recentMachines: [], selectedMachineId: machine.id, isMachineOnline,
+            staleMs: 60_000, request, prefetchMachineCapabilitiesIfStale,
+        }), { initialProps: { version: 1 }, flushOptions: { cycles: 0 } });
+        await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+        await hook.rerender({ version: 2 });
+        expect(signal?.aborted).toBe(false);
+        respond({ protocolVersion: 1, results: { 'tool.tmux': { ok: true, checkedAt: 12, data: { available: true } } } });
+        await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+        expect(getMachineCapabilitiesCacheState(machine.id, 'prefetch-pending-churn-home', 0)?.status).toBe('loaded');
+        await hook.unmount();
+    });
+
     it('does not lose the selected prefetch when rerender precedes its web deferral', async () => {
         vi.useFakeTimers();
         const machine = createMachineFixture({ id: 'prefetch-deferred', activeAt: Date.now() });
         machineRpc.mockResolvedValue({ protocolVersion: 1, results: { 'tool.tmux': { ok: true, checkedAt: 12, data: { available: true } } } });
         const hook = await renderHook(({ churn }: { churn: number }) => useNewSessionCapabilitiesPrefetch({
-            enabled: true, serverId: 'prefetch-deferred-home', machines: [{ ...machine, seq: machine.seq + churn }],
+            enabled: true, serverId: 'prefetch-deferred-home', machines: [{ ...machine, daemonStateVersion: churn }],
             favoriteMachineItems: [], recentMachines: [], selectedMachineId: machine.id, isMachineOnline,
             staleMs: 60_000, request, prefetchMachineCapabilitiesIfStale,
         }), { initialProps: { churn: 0 }, flushOptions: { cycles: 0 } });
         expect(machineRpc).not.toHaveBeenCalled();
         await hook.rerender({ churn: 1 });
-        await act(async () => vi.advanceTimersByTimeAsync(0));
+        await act(async () => { await vi.advanceTimersByTimeAsync(0); });
         expect(getMachineCapabilitiesCacheState(machine.id, 'prefetch-deferred-home', 0)).toMatchObject({ status: 'loaded' });
         await hook.unmount();
     });

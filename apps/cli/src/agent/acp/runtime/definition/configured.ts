@@ -13,6 +13,7 @@ export function configuredAcpRuntimeConfiguration(backend: ResolvedConfiguredAcp
   return {
     mcp: { policy: 'pass_through' as const },
     ...(backend.runtime?.stderrRules ? { stderrRules: backend.runtime.stderrRules } : {}),
+    ...(backend.runtime?.permissionModeMapping ? { permissionModeMapping: backend.runtime.permissionModeMapping } : {}),
   };
 }
 

@@ -1,12 +1,12 @@
 import { basename, dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import type { StorageReasonV1 } from '@happier-dev/protocol/storage/storageV1';
 import { WORKTREE_RELATIVE_PARENT_DIR } from '@happier-dev/protocol/scm/worktreeName';
 import { canonicalAbsolutePathsEqual } from '@/utils/path/expandHomeDirPath';
-import { directoriesAtDepth, check, item, unavailableDirectory, contains } from './filesystem';
+import { directoriesAtDepth, check, item, unavailableDirectory, contains, opaqueItemTitle } from './filesystem';
 import { StorageCategoryAdapterError, type StorageCategoryAdapter, type StorageCategoryDefinition, type StorageCategoryContext, type StorageCategoryCatalogDeps, type StorageWorktree, type StorageCategoryItem } from './types';
 import { worktreeVerdict } from '../worktrees/worktreeVerdicts';
 import { assertStoragePathIdentity, readStoragePathIdentity } from '../trash/removeStoragePath';
@@ -16,9 +16,9 @@ function roots(context: StorageCategoryContext) {
     const repos = [...context.projects.map(project => project.repositoryRoot), ...context.worktrees.map(worktree => worktree.repositoryRoot)];
     return [...new Set(repos)].map(root => join(root, WORKTREE_RELATIVE_PARENT_DIR));
 }
-const OwnerData = z.object({ v: z.literal(1), repositoryRoot: z.string().min(1), worktreePath: z.string().min(1),
-    retentionSupported: z.boolean(), retentionKind: z.enum(['main', 'common', 'orphan']).optional(),
-    referenceOwnerData: StrictJsonValueSchema.optional() }).strict();
+const OwnerData = z.strictObject({ v: z.literal(1), repositoryRoot: z.string().check(z.minLength(1)), worktreePath: z.string().check(z.minLength(1)),
+    retentionSupported: z.boolean(), retentionKind: z.optional(z.enum(['main', 'common', 'orphan'])),
+    referenceOwnerData: z.optional(StrictJsonValueSchema) });
 const StoredOwnerData = createStoredReadSchema(OwnerData);
 function adapter(raw: unknown, deps: StorageCategoryCatalogDeps): StorageCategoryAdapter {
     const parsed = StoredOwnerData.safeParse(raw);
@@ -120,7 +120,8 @@ export const worktrees: StorageCategoryDefinition = {
                 ? canonicalAbsolutePathsEqual(project.repositoryRoot, worktree.repositoryRoot)
                 : contains(join(project.repositoryRoot, WORKTREE_RELATIVE_PARENT_DIR), path))
                 .flatMap(project => project.projectId ? [project.projectId] : []))].sort();
-            if (!worktree) return { ...item('worktrees', path, check, { kind: 'worktree', evidence: ['worktree_parent', 'registration_unavailable'] }), projectIds };
+            if (!worktree) return { ...item('worktrees', path, check, { kind: 'worktree', title: opaqueItemTitle(path, 'Worktree'),
+                evidence: ['worktree_parent', 'registration_unavailable'] }), projectIds };
             const sessions = context.sessions.filter(session => !session.archived && contains(path, session.cwd));
             const drafts = await Promise.all(sessions.map(session => context.deps.readSessionDraftPresence?.(session.sessionId)
                 ?? Promise.resolve({ status: 'unknown' as const })));
@@ -150,7 +151,7 @@ export const worktrees: StorageCategoryDefinition = {
             const fingerprint = worktree.fingerprint && (!worktree.isMain || loses && references)
                 ? references ? `sha256:${createHash('sha256').update(JSON.stringify([worktree.fingerprint, references.fingerprint])).digest('hex')}`
                     : worktree.fingerprint : undefined;
-            return { ...item('worktrees', path, verdict, { kind: 'worktree', ...(worktree.title ? { title: worktree.title } : {}),
+            return { ...item('worktrees', path, verdict, { kind: 'worktree', title: worktree.title || opaqueItemTitle(path, 'Worktree'),
                 ...(worktree.facts?.lastActivityAt !== undefined ? { lastUsedAt: worktree.facts.lastActivityAt } : {}),
                 evidence: [retirementKind === 'orphan' ? 'scm_orphan_back_reference' : 'scm_registered_worktree'] }),
                 ...(loses ? { loses } : {}), projectIds, repositoryRoot: worktree.repositoryRoot, fingerprintRequired: true,
@@ -158,7 +159,7 @@ export const worktrees: StorageCategoryDefinition = {
                 ...(retirementKind ? { retirementKind } : {}), ...(references ? { referenceOwnerData: references.ownerData } : {}),
                 ...(fingerprint ? { fingerprint, ownFingerprint: fingerprint } : {}) };
         }));
-        return result.map(parent => {
+        return result.map((parent): StorageCategoryItem => {
             if (parent.retirementKind === 'main' || parent.retirementKind === 'common') return parent;
             const nested = result.filter(child => !canonicalAbsolutePathsEqual(parent.path, child.path) && contains(parent.path, child.path));
             if (!nested.length) return parent;
@@ -169,7 +170,7 @@ export const worktrees: StorageCategoryDefinition = {
                 : unknown ? check
                     : unsafe ? { verdict: 'keep' as const, collectable: true,
                         reason: { code: 'contains' as const, detail: { count: nested.length } } } : {};
-            return { ...parent, nestedWorktreePaths: nested.map(child => child.path),
+            return { ...parent, ownVerdict: parent, nestedWorktreePaths: nested.map(child => child.path),
                 fingerprint: knownFingerprints ? `sha256:${createHash('sha256').update(JSON.stringify([parent.ownFingerprint,
                     nested.map(child => [child.path, child.fingerprint, child.verdict, child.reason]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))])).digest('hex')}` : undefined,
                 ...nestedVerdict,

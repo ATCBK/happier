@@ -17,6 +17,8 @@ import { collectStructuredMessageReviewRunIds, structuredMessageFindUsesSessionM
 import { useWorkflowRunForToolUseId, resolveWorkflowRunHeadlineForToolUseId } from '@/components/sessions/workState/useSessionWorkflowActivity';
 import type { WorkflowRunDetailState } from '@/components/sessions/workState/sessionWorkflowActivityTypes';
 import type { SessionTranscriptSource } from '../source/types';
+import type { ChatTranscriptListItem } from '../chatListTypes';
+import { collectTranscriptNavigationMessageIdsForItem } from '../viewport/lifecycle/transcriptRowClassification';
 import { useSessionTranscriptAgentAttributionIndex } from '../attribution/SessionTranscriptAgentAttributionContext';
 import type { TranscriptFindCorpus, TranscriptFindModel } from './useTranscriptFind';
 import { TranscriptFindProvider } from './TranscriptFindContext';
@@ -31,6 +33,8 @@ type Props = Readonly<{
     serverId: string | null;
     focused: boolean;
     viewportRef: React.RefObject<React.ElementRef<typeof View> | null>;
+    /** Canonical list items before viewport windowing, including collapsed groups. */
+    items: readonly ChatTranscriptListItem[];
     loadedMessages: readonly Message[];
     publishCorpus(corpus: TranscriptFindCorpus): void;
     /** Where a message's row sits in the list content (the list's own layout; no row is mounted). */
@@ -38,6 +42,12 @@ type Props = Readonly<{
     contentHeight: number;
     /** Reports the top band the open inline capsule covers (0 when closed or seated on a phone). */
     onClearanceChange?(clearancePx: number): void;
+    /**
+     * The list's older-page read failed. While Find is open its note says so, with the list's own Retry,
+     * and the transcript's failure banner stands down (one truthful line, never two stacked notices).
+     */
+    olderLoadFailed?: boolean;
+    onRetryOlderLoad?(): void;
     children: React.ReactNode;
 }>;
 
@@ -159,10 +169,13 @@ function TranscriptFindActive(props: Props & Readonly<{
     }, []);
     const messages = React.useMemo(() => {
         const sourceIds = new Set(ids);
+        const transcriptIds = new Set(props.items.flatMap(collectTranscriptNavigationMessageIdsForItem));
         // Ancestor rows supplied by the canonical list retain their source identity.
+        // The list also owns pending crossover: a queued card's committed twin has
+        // no transcript row to reveal or mark until that crossover completes.
         return [...props.loadedMessages.filter((message) => !sourceIds.has(message.id)),
-            ...ids.flatMap((id) => byId[id] ? [byId[id]] : [])];
-    }, [byId, ids, props.loadedMessages]);
+            ...ids.flatMap((id) => transcriptIds.has(id) && byId[id] ? [byId[id]] : [])];
+    }, [byId, ids, props.items, props.loadedMessages]);
     const workflowMessages = React.useMemo(() => messages.filter((message): message is Extract<Message, {kind:'tool-call'}> =>
         props.source.kind === 'app' && message.kind === 'tool-call'
         && resolveWorkflowRunHeadlineForToolUseId(metadata, message.tool.id) !== null), [messages, metadata, props.source.kind]);
@@ -234,8 +247,13 @@ function TranscriptFindActive(props: Props & Readonly<{
             // One quiet note under the bar (Find lab ST): what is being searched, why the count is not
             // everything, and its one way forward; Stop takes the action's place while older pages load.
             note={snapshot.status.kind === 'searching' ? { icon: 'history', text: t('find.note.searchingOlder') }
-                : coverage === 'partialErrors' ? { icon: 'info', text: t('transcriptFind.partialErrors') }
+                : coverage === 'partialErrors' ? { icon: 'info', text: t('transcriptFind.partialErrors'),
+                    ...(history.hasOlder && connection !== 'offline' ? {
+                        action: { label: t('common.retry'), onPress: props.model.searchOlder, testID: 'transcript-find-retry' },
+                    } : {}) }
                 : connection === 'offline' ? { icon: 'offline', text: t('find.note.offlineOlder') }
+                : props.olderLoadFailed && props.onRetryOlderLoad ? { icon: 'info', text: t('session.transcript.olderLoadFailedTitle'),
+                    action: { label: t('common.retry'), onPress: props.onRetryOlderLoad, testID: 'transcript-find-older-load-retry' } }
                 : history.hasOlder && snapshot.query && snapshot.status.kind === 'results' ? {
                     icon: 'history',
                     text: t('transcriptFind.olderRemaining'),

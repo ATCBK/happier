@@ -136,6 +136,15 @@ describe('Prepare walkthrough preference', () => {
         await screen.unmount();
     });
 
+    it('waits for a chosen machine by name instead of asking to choose one', async () => {
+        const screen = await renderSettingsView(<WalkthroughSavedSettings machineId={null} serverId={null} machineName="Studio Mac"
+            machineAvailability="missing" prepareAfterTurn={false} onPrepareAfterTurn={() => {}} modelAvailable />);
+        expect(screen.getTextContent()).toContain(t('walkthroughSettings.waitingMachine', { machine: 'Studio Mac' }));
+        expect(screen.getTextContent()).not.toContain(t('walkthroughSettings.chooseMachine'));
+        expect(screen.findHostByTestId('settings.sourceControl.savedWalkthroughs.clear')).toBeNull();
+        await screen.unmount();
+    });
+
     it('allows opting out with an unavailable model but refuses opting in', async () => {
         function Controlled() {
             const [enabled, setEnabled] = React.useState(true);

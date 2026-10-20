@@ -70,7 +70,7 @@ function projectExternalActionContext(
   if (
     context.authority !== 'account_automation'
     || !authorization
-    || !credential
+    || ('grant' in authorization.binding && !credential)
     || !target
     || (!signer && !allowMissingApprovalSigner)
     || typeof serverId !== 'string'
@@ -84,7 +84,7 @@ function projectExternalActionContext(
     serverId,
     serverIdentityId,
     actionRequestId,
-    externalActionCredential: credential,
+    ...(credential ? { externalActionCredential: credential } : {}),
     externalActionExecutionAuthorization: authorization,
     externalActionTarget: target,
     ...(signer ? { signExternalActionApprovalInput: signer } : {}),
@@ -103,7 +103,7 @@ export function createCommittedContributedActionInvoker(input: Readonly<{
   }>) => boolean | Promise<boolean>;
 }> = {}): NonNullable<ActionExecutorDeps['invokeContributedAction']> {
   const acquire = input.acquireRuntimeRegistryLease ?? acquireAuthoritativePluginRuntimeRegistryLease;
-  return async ({ action, input: actionInput, context, approvalExecutionOrigin, requiredDangerLevel, signal }) => {
+  return async ({ action, input: actionInput, messageActionReference, context, approvalExecutionOrigin, requiredDangerLevel, signal }) => {
     const invocationSignal = signal ?? context.signal ?? new AbortController().signal;
     invocationSignal.throwIfAborted();
     const surface = readSurface(context.surface) ?? input.defaultInvocationSurface;
@@ -119,10 +119,6 @@ export function createCommittedContributedActionInvoker(input: Readonly<{
     if (!await isWorkflowCurrent()) return {
       ok: false, errorCode: 'workflow_authorization_not_current', error: 'workflow_authorization_not_current',
     };
-    // The accepted owner-authored effect has a background origin. Agent
-    // authored Runs retain their agent confirmation and capability surface.
-    const invocationSurface = surface === 'agent'
-      && workflowCaller?.authorization.principal.kind === 'host' ? 'background' : surface;
     const externalActionContext = projectExternalActionContext(
       context,
       approvalExecutionOrigin !== undefined,
@@ -140,13 +136,14 @@ export function createCommittedContributedActionInvoker(input: Readonly<{
         runtimeRegistry: lease.registry,
         actionId: buildQualifiedPluginContributionKey(action),
         input: actionInput,
+        ...(messageActionReference ? { messageActionReference } : {}),
         ...(requiredDangerLevel ? { requiredDangerLevel } : {}),
         approvalContext: context,
         ...(approvalExecutionOrigin ? { approvalExecutionOrigin } : {}),
         ...(input.requestCurrentIntent ? { requestCurrentIntent: input.requestCurrentIntent } : {}),
         context: {
           surface,
-          invocationSurface,
+          invocationSurface: surface,
           initiatingActionCaller: context.actionCaller ?? { kind: 'host' },
           ...(workflowCaller ? { beforeHandlerInvocation: async () => {
             if (!await isWorkflowCurrent()) throw new PluginError({

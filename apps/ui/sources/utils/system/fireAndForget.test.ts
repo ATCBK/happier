@@ -58,32 +58,35 @@ describe('fireAndForget', () => {
         expect(onError).toHaveBeenCalledWith(error);
     });
 
-    it('logs to console.error when a tag is provided', async () => {
+    it('keeps unexpected background failures in diagnostics instead of the development error toast', async () => {
         const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const diagnostic = vi.spyOn(console, 'info').mockImplementation(() => {});
         try {
             const error = new Error('boom');
-            fireAndForget(Promise.reject(error), { tag: 'test.tag' });
+            const onError = vi.fn();
+            fireAndForget(Promise.reject(error), { tag: 'test.tag', onError });
             await new Promise((resolve) => setTimeout(resolve, 0));
-            expect(consoleError).toHaveBeenCalled();
-            expect(consoleError.mock.calls[0]?.[0]).toContain('[fireAndForget]');
-            expect(consoleError.mock.calls[0]?.[0]).toContain('test.tag');
+            expect(consoleError).not.toHaveBeenCalled();
+            expect(diagnostic).toHaveBeenCalledWith('[fireAndForget] test.tag', error);
+            expect(onError).toHaveBeenCalledWith(error);
         } finally {
             consoleError.mockRestore();
+            diagnostic.mockRestore();
         }
     });
 
     it('can log only the tag without dumping the rejected error object', async () => {
-        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const diagnostic = vi.spyOn(console, 'info').mockImplementation(() => {});
         try {
             const error = Object.assign(new Error('network failed'), {
                 config: { headers: { Authorization: 'Bearer SECRET' } },
             });
             fireAndForget(Promise.reject(error), { tag: 'test.safe', logError: false });
             await new Promise((resolve) => setTimeout(resolve, 0));
-            expect(consoleError).toHaveBeenCalledWith('[fireAndForget] test.safe');
-            expect(JSON.stringify(consoleError.mock.calls)).not.toContain('SECRET');
+            expect(diagnostic).toHaveBeenCalledWith('[fireAndForget] test.safe');
+            expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('SECRET');
         } finally {
-            consoleError.mockRestore();
+            diagnostic.mockRestore();
         }
     });
 

@@ -49,8 +49,8 @@ export const AccountServiceMethodStrip = React.memo(function AccountServiceMetho
                 accessibilityElementsHidden
                 importantForAccessibility="no-hide-descendants"
             >
-                <HappierSkeletonBlock color={theme.colors.surface.pressedOverlay} width={168} height={SKELETON_BUTTON_HEIGHT_PX} radius={10} reducedMotion={reducedMotion} />
-                <HappierSkeletonBlock color={theme.colors.surface.pressedOverlay} width={110} height={SKELETON_BUTTON_HEIGHT_PX} radius={10} reducedMotion={reducedMotion} />
+                <HappierSkeletonBlock color={theme.colors.surface.skeleton} width={168} height={SKELETON_BUTTON_HEIGHT_PX} radius={10} reducedMotion={reducedMotion} />
+                <HappierSkeletonBlock color={theme.colors.surface.skeleton} width={110} height={SKELETON_BUTTON_HEIGHT_PX} radius={10} reducedMotion={reducedMotion} />
             </View>
         );
     }

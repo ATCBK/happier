@@ -16,7 +16,6 @@ import { machineUpdateHandler } from "@/app/api/socket/machineUpdateHandler";
 import { createFakeSocket, getSocketHandler } from "@/app/api/testkit/socketHarness";
 import { applySessionTurnMutation, createSessionMessage } from "@/app/session/sessionWriteService";
 import { resolveSessionAccessForOperation } from "@/app/session/access/sessionAccess";
-import { createSessionDiscussion, postSessionDiscussionMessage } from "@/app/session/discussions/mutations";
 
 describe("personal event recipients", () => {
     let harness: LightSqliteHarness;
@@ -63,7 +62,7 @@ describe("personal event recipients", () => {
                 if (!mutation.ok || !mutation.directShare) throw new Error("Grant fixture was not admitted");
                 scheduleReleasedDirectShareEvent(tx, {
                     recipientAccountId: reader.id,
-                    cursor: mutation.effects.accountCursors.get(reader.id) ?? 0,
+                    publication: mutation.effects.accountCursors.get(reader.id),
                     event: projectReleasedDirectShareEvent({ recipientAccountId: reader.id, effects: mutation.effects,
                         directShare: mutation.directShare, directShareRemoved: false }),
                     sharedByUser: null,
@@ -193,56 +192,6 @@ describe("personal event recipients", () => {
         } finally { eventRouter.clearIo(); }
     });
 
-    it("publishes committed Discussion message identities without replay or duplicate mention alerts", async () => {
-        const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
-        const follower = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
-        const mentioned = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
-        const session = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: "{}", encryptionMode: "plain" } });
-        await db.sessionShare.createMany({ data: [follower, mentioned].map(account => ({
-            sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: account.id, accessLevel: "view" as const,
-        })) });
-        const authentication = { env: process.env, authority: "present_user" as const, authenticationEvidence: [] };
-        const delivered: Array<{ target: string; payload: unknown }> = [];
-        eventRouter.setIo({
-            in: rooms => ({ fetchSockets: async () => [owner, follower, mentioned]
-                .filter(account => (Array.isArray(rooms) ? rooms : [rooms]).includes(`user-scoped:${account.id}`))
-                .map(account => ({ id: account.id, data: { userId: account.id, clientType: "user-scoped",
-                    authAuthority: "present_user", authTokenAuthenticationEvidence: [] } })) }),
-            to: target => ({ disconnectSockets: () => {}, emit: (kind, payload) => {
-                if (kind === "ephemeral" && typeof payload === "object" && payload !== null
-                    && "type" in payload && payload.type === "session-personal-event") delivered.push({ target: String(target), payload });
-            } }),
-        });
-        try {
-            const creation = { actorAccountId: owner.id, sessionId: session.id, authentication, request: {
-                creationLocalId: "discussion-creation", titleContent: { t: "plain" as const, v: { v: 1, title: "Review" } },
-                firstMessage: { localId: "first-message", content: { t: "plain" as const, v: { v: 1, parts: [{ t: "text", text: "Review this" }] } }, mentionedAccountIds: [mentioned.id] },
-            } };
-            const created = await createSessionDiscussion(creation);
-            expect(created).toMatchObject({ ok: true });
-            if (!created.ok) throw new Error("Discussion fixture was not admitted");
-            const message = { sequenceDomain: "discussion", discussionId: created.value.discussion.id, messageSeq: 1 };
-            await vi.waitFor(() => expect(delivered).toHaveLength(2));
-            expect(delivered.map(row => row.target).sort()).toEqual([owner.id, follower.id].sort());
-            expect(delivered.map(row => row.payload)).toEqual([owner, follower].map(() => ({
-                type: "session-personal-event", sessionId: session.id, eventId: created.value.firstMessage.id,
-                event: "human_message", message, sourceAccountId: owner.id,
-            })));
-            expect(await createSessionDiscussion(creation)).toMatchObject({ ok: true });
-            expect(delivered).toHaveLength(2);
-            const posted = await postSessionDiscussionMessage({ actorAccountId: owner.id, sessionId: session.id,
-                discussionId: created.value.discussion.id, authentication, producer: { v: 1, kind: "agent", sessionId: session.id },
-                request: { localId: "agent-message", content: { t: "plain", v: { v: 1, parts: [{ t: "text", text: "Result" }] } }, mentionedAccountIds: [] },
-            });
-            expect(posted).toMatchObject({ ok: true });
-            if (!posted.ok) throw new Error("Agent Discussion fixture was not admitted");
-            await vi.waitFor(() => expect(delivered).toHaveLength(5));
-            expect(delivered.slice(2).map(row => row.payload)).toEqual([owner, follower, mentioned].map(() => ({
-                type: "session-personal-event", sessionId: session.id, eventId: posted.value.message.id,
-                event: "message", message: { ...message, messageSeq: 2 },
-            })));
-        } finally { eventRouter.clearIo(); }
-    });
 
     it.each(["fail", "cancel"] as const)("publishes only a committed %s occurrence, never a replay", async (action) => {
         const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
@@ -301,13 +250,38 @@ describe("personal event recipients", () => {
             event: "ready",
         });
         expect(contentFreeCandidates.every((candidate) => (
-            Object.keys(candidate).every((key) => key === "accountId" || key === "reason")
+            Object.keys(candidate).every((key) => key === "accountId" || key === "reason" || key === "follow")
         ))).toBe(true);
+        for (const candidate of contentFreeCandidates) expect(candidate.follow).toEqual({
+            event: { kind: 'finished' }, policies: [{ preset: 'important' }],
+        });
         await db.sessionShare.deleteMany({ where: { sessionId: session.id, sharedWithUserId: follower.id } });
         expect((await listSessionPersonalEventRecipients({ sessionId: session.id, event: "ready" })).map(row => row.accountId))
             .toEqual([owner.id]);
         await db.account.update({ where: { id: owner.id }, data: { status: "suspended" } });
         expect(await listSessionPersonalEventRecipients({ sessionId: session.id, event: "ready" })).toEqual([]);
+    });
+
+    it('suppresses only the muted Account receiver from future source alerts without removing Follow', async () => {
+        const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
+        const [muted, other] = await Promise.all([0, 1].map(() => db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } })));
+        const session = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: '{}', encryptionMode: 'plain' } });
+        await db.sessionShare.createMany({ data: [muted, other].map(account => ({ sessionId: session.id,
+            sharedByUserId: owner.id, sharedWithUserId: account.id, accessLevel: 'view' as const })) });
+        await db.accountSessionFollow.createMany({ data: [muted, other].map(account => ({ sessionId: session.id,
+            accountId: account.id, following: true, notificationLevel: 'important' as const })) });
+        const before = await listSessionPersonalEventRecipients({ sessionId: session.id, event: 'ready' });
+        expect(before.map(row => row.accountId).sort()).toEqual([owner.id, muted.id, other.id].sort());
+        await db.account.update({ where: { id: muted.id }, data: { deliveryMutes: JSON.stringify([
+            { kind: 'sender_session', sessionId: session.id },
+        ]) } });
+        const after = await listSessionPersonalEventRecipients({ sessionId: session.id, event: 'ready' });
+        expect(after.map(row => row.accountId).sort()).toEqual([owner.id, other.id].sort());
+        await db.account.update({ where: { id: muted.id }, data: { deliveryMutes: '{corrupt' } });
+        expect((await listSessionPersonalEventRecipients({ sessionId: session.id, event: 'ready' }))
+            .map(row => row.accountId).sort()).toEqual([owner.id, other.id].sort());
+        expect(await db.accountSessionFollow.findUnique({ where: { accountId_sessionId: { accountId: muted.id, sessionId: session.id } } }))
+            .toMatchObject({ following: true });
     });
 
     /**

@@ -713,6 +713,65 @@ describe('sync.sendMessage wake-after-send', () => {
         expect(storage.getState().sessionPending[sessionId]?.messages[0]?.deliveryStatus).toBe('accepted');
     });
 
+    it('cancels pending Composer preparation before enqueue when the sending view retires, then permits retry', async () => {
+        const sessionId = 's_composer_view_cancellation';
+        storage.getState().applySessions([{ ...createPlainSession({ sessionId }), active: true, pendingVersion: 2 }]);
+        const attachment = {
+            v: 1, instanceId: 'issue-42', attachment: { pluginId: 'acme.issues', localId: 'issue' },
+            key: '42', value: {}, presentation: { label: 'Issue #42', typeLabel: 'Issue' },
+        } as const;
+        const controller = new AbortController();
+        let requestSignal: AbortSignal | undefined;
+        const rpc = vi.spyOn(apiSocket, 'sessionRPC').mockImplementation(async (_id, method, _payload, options) => {
+            if (method !== SESSION_RPC_METHODS.SESSION_PENDING_MESSAGE_COMPOSER_ADMISSION_PREPARE_V1) return { ok: true };
+            requestSignal = options?.signal;
+            return new Promise((_resolve, reject) => requestSignal?.addEventListener('abort', () => reject(Object.assign(new Error('cancelled'), { name: 'AbortError' })), { once: true }));
+        });
+        const request = vi.spyOn(apiSocket, 'request').mockImplementation(async (_path, init) => currentPendingEnqueueAck(init));
+        const { sync } = await import('./sync');
+        const input = { happierStructuredInputV1: { v: 1, composerAttachments: [attachment] } };
+        const submit = sync.enqueuePendingMessage(sessionId, 'queue', undefined, input, { localId: 'cancelled-composer', signal: controller.signal });
+        const settlement = submit.catch(error => error);
+        await vi.waitFor(() => expect(rpc).toHaveBeenCalledTimes(1));
+        controller.abort();
+        expect(requestSignal?.aborted).toBe(true);
+        await expect(settlement).resolves.toMatchObject({ name: 'AbortError' });
+        expect(request).not.toHaveBeenCalled();
+        rpc.mockImplementation(async (_id, method) => method === SESSION_RPC_METHODS.SESSION_PENDING_MESSAGE_COMPOSER_ADMISSION_PREPARE_V1
+            ? { ok: true, text: 'queue', structuredInput: input.happierStructuredInputV1, stagedMediaHandles: [] } : { ok: true });
+        await expect(sync.enqueuePendingMessage(sessionId, 'queue', undefined, input, { localId: 'cancelled-composer', signal: new AbortController().signal }))
+            .resolves.toMatchObject({ accepted: true });
+    });
+
+    it('retires background Composer settlement on a Home credential change while preserving accepted Pending custody', async () => {
+        const sessionId = 's_composer_settlement_retirement';
+        storage.getState().applySessions([{ ...createPlainSession({ sessionId }), active: true, pendingVersion: 2 }]);
+        const attachment = {
+            v: 1, instanceId: 'issue-42', attachment: { pluginId: 'acme.issues', localId: 'issue' },
+            key: '42', value: {}, presentation: { label: 'Issue #42', typeLabel: 'Issue' },
+        } as const;
+        const structuredInput = { v: 1, composerAttachments: [attachment] };
+        let settlementIssued = false;
+        let settlementSignal: AbortSignal | undefined;
+        vi.spyOn(apiSocket, 'sessionRPC').mockImplementation(async (_id, method, _payload, options) => {
+            if (method === SESSION_RPC_METHODS.SESSION_PENDING_MESSAGE_COMPOSER_ADMISSION_PREPARE_V1)
+                return { ok: true, text: 'queue', structuredInput, stagedMediaHandles: [] };
+            settlementIssued = true;
+            settlementSignal = options?.signal;
+            return new Promise((_resolve, reject) => settlementSignal?.addEventListener('abort', () => reject(Object.assign(new Error('cancelled'), { name: 'AbortError' })), { once: true }));
+        });
+        vi.spyOn(apiSocket, 'request').mockImplementation(async (_path, init) => currentPendingEnqueueAck(init));
+        const { sync } = await import('./sync');
+        const submit = sync.enqueuePendingMessage(sessionId, 'queue', undefined, { happierStructuredInputV1: structuredInput }, { localId: 'settlement-local' });
+        await vi.waitFor(() => expect(settlementIssued).toBe(true));
+        const active = getActiveServerSnapshot();
+        expect(await TokenStorage.setCredentialsForServerUrl(active.serverUrl, { serverId: active.serverId }, {
+            token: `e30.${Buffer.from(JSON.stringify({ sub: 'replacement-account' })).toString('base64url')}.signature`,
+        })).toBe(true);
+        expect(settlementSignal?.aborted).toBe(true);
+        await expect(submit).resolves.toMatchObject({ accepted: true });
+    });
+
     it.each([
         [true, null], [false, null], [true, 'prepare'], [true, 'enqueue'],
     ] as const)('prepares typed Queue attachments and fences settlement (reachable=%s, retiredAt=%s)', async (reachable, retiredAt) => {

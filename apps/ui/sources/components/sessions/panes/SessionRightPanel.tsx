@@ -49,10 +49,10 @@ import { PluginReactNativeUnavailable } from '@/components/plugins/reactNative/P
 import { PaneLoadingFallback } from '@/components/ui/panels/PaneLoadingFallback';
 import { RetainedPanelSurface } from '@/components/ui/panels/RetainedPanelSurface';
 import { SessionPaneErrorBoundary, SessionPaneLazyLoader } from './SessionPaneLazyLoader';
-import { SessionWorkViewWithTriggers } from '@/components/workflows/triggers/SessionWorkViewWithTriggers';
+import { SessionWorkView } from '@/components/sessions/work/SessionWorkView';
 import { useSessionWorkSources } from '@/components/sessions/work/sessionWorkSources';
 import { readWorkWorkingCount } from '@/components/sessions/work/workProjection';
-import { readSessionReportsPresentationV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
+import { readSessionManagedSessionsPresentationV1 } from '@happier-dev/protocol/sessions/awareness/presentationV1';
 import { SessionBoardPane } from '@/components/sessions/board/SessionBoardPane';
 import { SessionTranscriptNavigationPane } from '@/components/sessions/panes/SessionTranscriptNavigationPane';
 import { getPreferredLanguage, t } from '@/text';
@@ -82,9 +82,7 @@ import { useDeviceType } from '@/utils/platform/responsive';
 import { createPluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
 import { createSessionBoardDetailsTab } from './details/sessionDetailsTabBuilders';
 import { useSessionViewShellSession } from '@/components/sessions/shell/sessionViewStableSession';
-import { useSessionProjectScmIsRepo } from '@/sync/store/hooks';
-import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
-import { readSessionDirectoryKind } from '@happier-dev/protocol/sessions/metadata/directory';
+import { useSessionSourceControlAvailability } from '@/hooks/session/sourceControl/sessionSourceControlAvailability';
 import type { SessionBoardPrimaryMountResolver } from '@/sync/domains/session/board';
 import { useMountedSessionBoardController } from '@/components/sessions/board/SessionBoardControllerProvider';
 
@@ -240,10 +238,7 @@ function useSessionRightSidebarModel(props: SessionRightPanelProps & SessionRigh
         [pluginLocale, pluginRuntime.pluginUiProjection],
     );
     const appTabInputs = useAppRightSidebarTabInputs();
-    // A no-folder session shows Git only once its private folder is a repository.
-    const withoutFolder = readSessionDirectoryKind(session ? readSessionOwnerMetadataView(session) : null) === 'managed';
-    const folderIsRepo = useSessionProjectScmIsRepo(withoutFolder ? props.sessionId : null, pluginRuntime.serverId);
-    const sourceControlTabAvailable = !withoutFolder || folderIsRepo === true;
+    const sourceControlTabAvailable = useSessionSourceControlAvailability(props.sessionId, pluginRuntime.serverId);
     // The Session's accepted Project checkout, when it works in one: Scripts beside the transcript (lab `s-agent` PANE).
     const projectCheckout = useSessionProjectCheckout(session, pluginRuntime.serverId);
     const rightPanelTabs = React.useMemo(() => resolveSessionRightSidebarTabs({
@@ -541,7 +536,7 @@ const SessionRightPanelContent = React.memo((props: SessionRightPanelProps) => {
                             testID={resolveOptionalSessionScreenTestId(sessionScreenTestIdsEnabled, 'session-rightpanel-surface-agents')}
                         >
                             <React.Suspense fallback={<PaneLoadingFallback />}>
-                                <SessionWorkViewWithTriggers
+                                <SessionWorkView
                                     sessionId={props.sessionId}
                                     scopeId={props.scopeId}
                                     serverId={props.paneSurfaceScope?.serverId ?? parseSessionPaneScopeId(props.scopeId)?.address?.serverId}
@@ -713,7 +708,7 @@ export const SessionActionRail = React.memo(() => {
     // header strip shows, read from the one owner the Session host mounted — never a second count.
     const workProjection = useSessionWorkSources()?.projection;
     const outstandingCount = workProjection?.summary.outstanding ?? 0;
-    const workStatus = workProjection ? readSessionReportsPresentationV1({
+    const workStatus = workProjection ? readSessionManagedSessionsPresentationV1({
         working: readWorkWorkingCount(workProjection.summary),
         needsYou: workProjection.summary.needsYou,
         stalled: workProjection.summary.stalled,

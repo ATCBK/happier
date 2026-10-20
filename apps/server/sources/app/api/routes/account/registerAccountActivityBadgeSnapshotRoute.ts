@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { type Fastify } from "../../types";
 import { computeAuthenticatedAccountActivityBadgeCount } from "@/app/activity/accountActivityBadge";
 import { readSessionAccessAuthenticationFromRequest } from "@/app/session/access/sessionAccessAuthentication";
@@ -10,7 +10,7 @@ export function registerAccountActivityBadgeSnapshotRoute(app: Fastify): void {
             schema: {
                 response: {
                     200: z.object({
-                        badgeCount: z.number().int().nonnegative(),
+                        badgeCount: z.number().check(z.int(), z.nonnegative()),
                     }),
                 },
             },

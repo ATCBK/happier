@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { chmod, mkdir, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { connect as netConnect, createServer, type Server, type Socket } from 'node:net';
+import { readWebLatencyTracePoint, timeWebLatencyPhase, withWebLatencyTrace, type WebLatencyTracePoint } from '@/daemon/externalActions/webLatencyTrace';
 
 import {
   startProcessCustodySecurePipeRelay,
@@ -14,6 +15,7 @@ import {
   BrokerProtocolError,
   createBrokerHelloOkProof,
   createBrokerHelloProof,
+  deriveWorkspaceSyncEndpointId,
   encodeBrokerCommandFrame,
   encodeBrokerControlFrame,
   isBrokerTerminalErrorCode,
@@ -24,6 +26,7 @@ import {
   type MutagenControlCommandV1,
   verifyBrokerProof,
   WORKSPACE_SYNC_BROKER_ATTACH_TTL_MS,
+  WORKSPACE_SYNC_BROKER_MAX_MESSAGE_BYTES,
   WORKSPACE_SYNC_BROKER_MAX_REQUEST_FRAME_BYTES,
 } from './workspaceSyncBrokerProtocol';
 
@@ -166,6 +169,9 @@ type PendingCommand = {
   resolve: (result: unknown) => void;
   reject: (error: Error) => void;
   abortCleanup?: () => void;
+  endpointIds?: readonly string[];
+  openError?: BrokerProtocolError;
+  trace?: WebLatencyTracePoint;
 };
 
 function closeServer(server: Server | undefined): Promise<void> {
@@ -189,10 +195,16 @@ async function settleCleanup(work: readonly (Promise<void> | undefined)[]): Prom
 
 function typedError(error: unknown, fallback: BrokerTerminalErrorCode, message: string): BrokerProtocolError {
   if (error instanceof BrokerProtocolError) return error;
-  if (typeof error === 'object' && error !== null && 'code' in error && isBrokerTerminalErrorCode(error.code)) {
-    return new BrokerProtocolError(error.code, error instanceof Error ? error.message : message);
+  // Carrier/native and HTTP errors need not use broker codes. Keep their
+  // reason without serializing the error object or its private boundary data.
+  let reason = error instanceof Error && error.message ? error.message : message;
+  if (Buffer.byteLength(reason, 'utf8') > WORKSPACE_SYNC_BROKER_MAX_MESSAGE_BYTES) {
+    reason = new TextDecoder().decode(Buffer.from(reason, 'utf8').subarray(0, WORKSPACE_SYNC_BROKER_MAX_MESSAGE_BYTES), { stream: true });
   }
-  return new BrokerProtocolError(fallback, message);
+  if (typeof error === 'object' && error !== null && 'code' in error && isBrokerTerminalErrorCode(error.code)) {
+    return new BrokerProtocolError(error.code, reason);
+  }
+  return new BrokerProtocolError(fallback, reason);
 }
 
 function errorFromFrame(frame: Extract<BrokerControlV1, { t: 'error' }>): BrokerProtocolError {
@@ -320,46 +332,54 @@ export class WorkspaceSyncBroker {
 
   command(
     command: MutagenControlCommandV1,
-    options: Readonly<{ signal?: AbortSignal }> = {},
+    options: Readonly<{ signal?: AbortSignal; operationId?: string }> = {},
   ): Promise<unknown> {
-    const control = this.authenticatedControl;
-    if (!control || control.destroyed) {
-      return Promise.reject(new BrokerProtocolError('agent_unavailable', 'workspace sync sidecar unavailable'));
-    }
-    if (this.commands.has(command.requestId)) {
-      return Promise.reject(new BrokerProtocolError('protocol_error', 'duplicate command request id'));
-    }
-    if (options.signal?.aborted) {
-      return Promise.reject(new BrokerProtocolError('cancelled', 'command cancelled'));
-    }
-    return new Promise<unknown>((resolve, reject) => {
-      let dispatched = false;
-      const fail = (error: Error, sendCancel: boolean) => {
-        const pending = this.commands.get(command.requestId);
-        if (!pending) return;
-        this.commands.delete(command.requestId);
-        pending.abortCleanup?.();
-        if (sendCancel && this.authenticatedControl === control && !control.destroyed) {
-          this.send(control, { t: 'cancel', requestId: command.requestId });
-        }
-        reject(error);
-      };
-      const abort = () => fail(
-        new BrokerProtocolError(
-          dispatched ? 'indeterminate' : 'cancelled',
-          dispatched ? 'sidecar command outcome is unknown after cancellation' : 'command cancelled',
-        ),
-        dispatched,
-      );
-      const abortCleanup = options.signal ? () => options.signal?.removeEventListener('abort', abort) : undefined;
-      options.signal?.addEventListener('abort', abort, { once: true });
-      this.commands.set(command.requestId, { resolve, reject, abortCleanup });
-      try {
-        control.write(encodeBrokerCommandFrame(command));
-        dispatched = true;
-      } catch (error) {
-        fail(typedError(error, 'agent_unavailable', 'workspace sync sidecar unavailable'), false);
+    return timeWebLatencyPhase(`workspaceSync.broker.command.${command.t}`, () => {
+      const control = this.authenticatedControl;
+      if (!control || control.destroyed) {
+        return Promise.reject(new BrokerProtocolError('agent_unavailable', 'workspace sync sidecar unavailable'));
       }
+      if (this.commands.has(command.requestId)) {
+        return Promise.reject(new BrokerProtocolError('protocol_error', 'duplicate command request id'));
+      }
+      if (options.signal?.aborted) {
+        return Promise.reject(new BrokerProtocolError('cancelled', 'command cancelled'));
+      }
+      return new Promise<unknown>((resolve, reject) => {
+        let dispatched = false;
+        const fail = (error: Error, sendCancel: boolean) => {
+          const pending = this.commands.get(command.requestId);
+          if (!pending) return;
+          this.commands.delete(command.requestId);
+          pending.abortCleanup?.();
+          if (sendCancel && this.authenticatedControl === control && !control.destroyed) {
+            this.send(control, { t: 'cancel', requestId: command.requestId });
+          }
+          reject(error);
+        };
+        const abort = () => fail(
+          new BrokerProtocolError(
+            dispatched ? 'indeterminate' : 'cancelled',
+            dispatched ? 'sidecar command outcome is unknown after cancellation' : 'command cancelled',
+          ),
+          dispatched,
+        );
+        const abortCleanup = options.signal ? () => options.signal?.removeEventListener('abort', abort) : undefined;
+        options.signal?.addEventListener('abort', abort, { once: true });
+        this.commands.set(command.requestId, { resolve, reject, abortCleanup,
+          trace: readWebLatencyTracePoint(),
+          ...(options.operationId ? { endpointIds: [
+            deriveWorkspaceSyncEndpointId(options.operationId, 'alpha'),
+            deriveWorkspaceSyncEndpointId(options.operationId, 'beta'),
+          ] } : {}),
+        });
+        try {
+          control.write(encodeBrokerCommandFrame(command));
+          dispatched = true;
+        } catch (error) {
+          fail(typedError(error, 'agent_unavailable', 'workspace sync sidecar unavailable'), false);
+        }
+      });
     });
   }
 
@@ -582,13 +602,34 @@ export class WorkspaceSyncBroker {
     message: Extract<BrokerControlV1, { t: 'open_data' }>,
   ): Promise<void> {
     const socket = stream.control;
+    const failExternal = (failure: BrokerProtocolError): void => {
+      if (stream.closed) return;
+      if (stream.attached) {
+        void this.closePending(stream);
+        return;
+      }
+      // Native .11 drops broker refusal codes in brokerResponseError and sends
+      // engine_unavailable from Resume. Retain only this pending operation's
+      // own refusal; no prose parsing or error history survives settlement.
+      // Remove this recovery once supported engines preserve broker codes.
+      for (const command of this.commands.values()) {
+        if (command.endpointIds?.includes(message.endpointId)) command.openError ??= failure;
+      }
+      this.failPending(stream, failure.code, failure.message);
+    };
     try {
-      const external = await this.config.openExternalStream({
+      // Native OPEN_DATA arrives on an existing socket, outside the Action's
+      // async context. The pending command already owns exact endpoint ids.
+      const traces = [...this.commands.values()].filter(command => command.endpointIds?.includes(message.endpointId))
+        .flatMap(command => command.trace ? [command.trace] : []);
+      const source = traces.length === 1 ? traces[0] : undefined;
+      const external = await withWebLatencyTrace(source?.requestId ?? message.requestId,
+        () => timeWebLatencyPhase('workspaceSync.carrier.openExternalStream', () => this.config.openExternalStream({
         endpointId: message.endpointId,
         requestId: message.requestId,
         expiresAtMs: message.expiresAtMs,
         signal: stream.openController.signal,
-      });
+      }), source));
       clearTimeout(stream.openTimer);
       if (stream.closed) {
         if ('destroy' in external && typeof external.destroy === 'function') external.destroy();
@@ -596,13 +637,17 @@ export class WorkspaceSyncBroker {
       }
       stream.external = external;
       external.once('error', (error: unknown) => {
-        if (stream.attached) {
-          void this.closePending(stream);
-          return;
-        }
-        const failure = typedError(error, 'peer_unavailable', 'external stream failed');
-        this.failPending(stream, failure.code, failure.message);
+        failExternal(typedError(error, 'peer_unavailable', 'external stream failed'));
       });
+      // A peer may retire after acquisition but before the sidecar attaches.
+      // Own close from acquisition onward so that attach cannot acknowledge a
+      // destroyed carrier whose terminal event has already been consumed.
+      const externalClosed = () => failExternal(new BrokerProtocolError('peer_unavailable', 'external stream closed'));
+      external.once('close', externalClosed);
+      if ('destroyed' in external && external.destroyed === true) {
+        externalClosed();
+        return;
+      }
       // Darwin's sockaddr_un path ceiling is only 104 bytes and its temporary
       // directory prefix is long. The stream UUID is broker-generated, so a
       // 64-bit filename token remains ample for the bounded active-stream set
@@ -642,9 +687,7 @@ export class WorkspaceSyncBroker {
       stream.attachTimer.unref();
     } catch (error) {
       clearTimeout(stream.openTimer);
-      if (stream.closed) return;
-      const failure = typedError(error, 'peer_unavailable', 'external stream unavailable');
-      this.failPending(stream, failure.code, failure.message);
+      failExternal(typedError(error, 'peer_unavailable', 'external stream unavailable'));
     }
   }
 
@@ -706,7 +749,6 @@ export class WorkspaceSyncBroker {
     data.once('end', () => { if (typeof external.end === 'function') external.end(); });
     external.once('end', () => { if (!data.destroyed) data.end(); });
     data.once('close', () => { void this.closePending(stream); });
-    external.once('close', () => { void this.closePending(stream); });
   }
 
   private sendError(socket: Socket, requestId: string | undefined, code: string, message: string): void {
@@ -778,7 +820,10 @@ export class WorkspaceSyncBroker {
     if (!command) return;
     this.commands.delete(requestId);
     command.abortCleanup?.();
-    if (error) command.reject(error); else command.resolve(result);
+    if (error) {
+      command.reject(error instanceof BrokerProtocolError && error.code === 'engine_unavailable'
+        ? command.openError ?? error : error);
+    } else command.resolve(result);
   }
 
   private failCommands(error: Error): void {

@@ -161,12 +161,17 @@ export function VoiceSessionRuntime(): React.ReactElement | null {
 
   // Ensure adapters are registered before the user can interact with voice controls.
   React.useLayoutEffect(() => {
+    const retiringController = getVoiceSessionLifecycleController();
+    const retirement = new AbortController();
+    const retiringAttempt = retiringController?.dispose(retirement.signal);
     const assembly = createBuiltinVoiceAdapterAssembly({
       ...(currentUiContext ? { currentUiContext } : {}),
     });
     registerVoiceAdapters(assembly.adapters);
     const continuation = createVoiceContinuationProjection();
     const controller = createVoiceSessionLifecycleController({
+      retiringAttempt,
+      cancelRetiringAttempt: () => retirement.abort(),
       acquireConnectivityLease: () => sync.acquireUserRequestLease(),
       onSyncedConversationMessages: (address, messages) => {
         const observed = continuation.observe(address, messages);
@@ -180,6 +185,7 @@ export function VoiceSessionRuntime(): React.ReactElement | null {
       ? createNativeAudioSessionLifecycleBridge({ coordinator: audioSessionCoordinator, controller })
       : null;
     controllerRef.current = controller;
+    let boundCarrierSessionId: string | null = null;
     const syncPublishedSnapshot = () => {
       const snapshot = controller.getSnapshot();
       // Persisted bindings describe other clients' control slots. Only a binding
@@ -187,6 +193,7 @@ export function VoiceSessionRuntime(): React.ReactElement | null {
       const binding = snapshot.sessionId ? voiceConversationBindingResolver.resolveByControlSessionId({
         controlSessionId: snapshot.sessionId, adapterId: snapshot.adapterId,
       }) : null;
+      boundCarrierSessionId = binding?.conversationSessionId ?? null;
       const session = binding ? storage.getState().sessions[binding.conversationSessionId] : null;
       const lifetime = captureActiveServerAccountScopeLifetime();
       const exactHome = binding && session?.serverId === binding.conversationSessionAddress.serverId
@@ -212,6 +219,17 @@ export function VoiceSessionRuntime(): React.ReactElement | null {
     };
     const unsubscribe = controller.subscribe(syncPublishedSnapshot);
     const unsubscribeBinding = voiceSessionBindingStore.subscribe(syncPublishedSnapshot);
+    // Equivalent binding refreshes are silent; scope and sequence are carrier
+    // facts. Select only the fields this publication reads from that Session.
+    const unsubscribeCarrier = storage.subscribe((state, previous) => {
+      if (!boundCarrierSessionId) return;
+      const session = state.sessions[boundCarrierSessionId];
+      const previousSession = previous.sessions[boundCarrierSessionId];
+      if (session?.metadata === previousSession?.metadata
+        && session?.seq === previousSession?.seq
+        && session?.serverId === previousSession?.serverId) return;
+      syncPublishedSnapshot();
+    });
     setVoiceSessionLifecycleController(controller);
     controller.setCurrentUiContextToolSetEnabled(currentUiContextToolSetEnabledRef.current);
     currentUiContextToolSetSyncRef.current = {
@@ -225,6 +243,7 @@ export function VoiceSessionRuntime(): React.ReactElement | null {
       }
       unsubscribe();
       unsubscribeBinding();
+      unsubscribeCarrier();
       nativeAudioLifecycleBridge?.dispose();
       const controllerDisposal = controller.dispose();
       void (async () => {

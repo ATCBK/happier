@@ -575,7 +575,11 @@ export async function runVoiceAgentTurnWithTools(params: Readonly<{
           ? { onUserTranscriptAccepted: noteUserTranscriptAccepted }
           : {}),
         userTranscript: turnIndex === 0
-          ? { mode: 'persist' as const, localId: params.durableLocalId }
+          // Pending already owns this durable input. A second native write
+          // under the same localId has different metadata/sidechain and makes
+          // Pending's exact-envelope settlement conflict. Keep the id for
+          // provider correlation; the acceptance callback settles the sole row.
+          ? { mode: 'suppress' as const, localId: params.durableLocalId }
           : { mode: 'suppress' as const },
       },
     );

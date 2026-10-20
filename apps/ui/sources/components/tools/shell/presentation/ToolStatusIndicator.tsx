@@ -3,6 +3,7 @@ import { View } from 'react-native';
 import { ToolCall } from "@happier-dev/session-core/messages";
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { resolveToolStatusIndicatorKind } from '@/components/tools/shell/presentation/resolveToolStatusIndicatorKind';
+import { resolveToolActionFailure } from '@/components/tools/shell/presentation/resolveToolActionFailure';
 import type { UnistylesThemes } from 'react-native-unistyles';
 import { ActivitySpinner, iconMatchedSpinnerSize } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
@@ -40,6 +41,9 @@ function StatusIndicator({ tool, theme }: { tool: ToolCall; theme: Theme }) {
             // Done is quiet: the check stays in the ink.
             return <Icon name="check-circle" size={TOOL_STATUS_ICON_SIZE_PX} color={workStatusGlyphColor(theme.colors, 'neutral')} />;
         case 'error':
+            if (resolveToolActionFailure(tool)?.outcome === 'refused') {
+                return <Icon name="minus-circle" size={TOOL_STATUS_ICON_SIZE_PX} color={theme.colors.text.secondary} />;
+            }
             return <Icon name="x-circle" size={TOOL_STATUS_ICON_SIZE_PX} color={workStatusGlyphColor(theme.colors, 'danger')} />;
         case 'none':
         default:

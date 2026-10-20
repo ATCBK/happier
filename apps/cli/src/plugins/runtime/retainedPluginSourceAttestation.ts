@@ -39,6 +39,14 @@ function resolveRunnerPathSourceRoot(runnerSnapshotIdentity: string): string | n
     return dirname(dirname(runtimeRoot));
 }
 
+/** Only bundled development leaves execute from the runner's source publication. */
+export function isRunnerPinnedDevelopmentAgentSource(
+    binding: Pick<AgentSessionRunnerBindingV1, 'pluginId' | 'sourceCustody'>,
+): boolean {
+    return binding.sourceCustody.kind === 'development'
+        && BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.some(({ pluginId }) => pluginId === binding.pluginId);
+}
+
 /** A retained runner publication may supersede a daemon-current bootstrap source. */
 export function runnerPinnedBundledCustodyCanSupersedeBootstrap(
     bootstrapCustody: PluginSourceCustodyV1,
@@ -72,11 +80,7 @@ export async function attestFreshRunnerAgentBinding(params: Readonly<{
     const snapshotId = params.runnerSnapshotIdentity.startsWith('snapshot:')
         ? params.runnerSnapshotIdentity.slice('snapshot:'.length)
         : '';
-    const isBundledFirstPartyDevelopmentSource =
-        custody.kind === 'development'
-        && BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.some(
-            ({ pluginId }) => pluginId === params.binding.pluginId,
-        );
+    const isBundledFirstPartyDevelopmentSource = isRunnerPinnedDevelopmentAgentSource(params.binding);
     const isPinnedBundledSource = custody.kind === 'bundled_first_party'
         && custody.packagedRuntime.kind === 'pinned_runner_snapshot';
     if (!isBundledFirstPartyDevelopmentSource && !isPinnedBundledSource) {
@@ -159,9 +163,11 @@ export function retainedAgentSourceMatchesRunner(
 ): boolean {
     const custody = binding.sourceCustody;
     if (custody.kind === 'development') {
+        // External development roots are attested by the current registry
+        // occurrence; they do not live inside the host runner's source tree.
+        if (!isRunnerPinnedDevelopmentAgentSource(binding)) return true;
         const sourceRoot = resolveRunnerPathSourceRoot(runnerSnapshotIdentity);
         return sourceRoot !== null
-            && BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.some(({ pluginId }) => pluginId === binding.pluginId)
             && isCanonicalAbsolutePathInsideRoot(sourceRoot, custody.registeredRootId);
     }
     if (custody.kind !== 'bundled_first_party') return true;
@@ -183,8 +189,7 @@ export function currentAgentBindingMatchesRetainedRunner(params: Readonly<{
     const currentCustody = params.currentBinding.sourceCustody;
     const retainedCustody = params.retainedBinding.sourceCustody;
     if ((currentCustody.kind === 'bundled_first_party' && retainedCustody.kind === 'bundled_first_party')
-        || (retainedCustody.kind === 'development'
-            && BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.some(({ pluginId }) => pluginId === params.retainedBinding.pluginId))) {
+        || isRunnerPinnedDevelopmentAgentSource(params.retainedBinding)) {
         return params.currentBinding.pluginId === params.retainedBinding.pluginId
             && params.currentBinding.agentId === params.retainedBinding.agentId
             && params.currentBinding.localAgentId === params.retainedBinding.localAgentId;
@@ -361,10 +366,10 @@ export async function attestRetainedPluginSource(params: Readonly<{
         manifest: manifest.manifest,
         managedGeneration: generation,
         assertStillAvailable: async () => {
-            if (generation) {
+            if (params.custody.kind === 'managed') {
                 const current = await readPreparedImmutablePluginGeneration({
                     paths: params.paths,
-                    immutableGenerationId: generation.record.immutableGenerationId,
+                    immutableGenerationId: params.custody.immutableGenerationId,
                 });
                 if (current.record.pluginId !== params.pluginId) {
                     throw new Error('Retained plugin source custody identity changed during attestation');

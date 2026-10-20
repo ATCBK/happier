@@ -763,7 +763,7 @@ describe('sectioned composer suggestions (EU-3)', () => {
             ['file with a space in its path', '@my', [file('my file.ts')], undefined, undefined],
             ['plugin', '@gma', [], undefined, undefined],
             ['plugin whose name looks like a path', '@acme', [], [{ ...GMAIL_PLUGIN, name: 'acme/formatter', vendorPluginRef: 'plugin://acme' }], undefined],
-            ['skill', '$rev', [], undefined, [{ name: 'review', path: '/s/review.md' }]],
+            ['skill', '$rev', [], undefined, [{ name: 'review', path: '/s/review.md', origin: 'vendor' }]],
         ])('round-trips a %s token', async (_label, query, files, vendorPlugins, skills) => {
             searchFilesMock.mockImplementation(async (_scope, search) =>
                 (files as FileItem[]).filter((item) => item.fullPath.includes(search.split('/')[0]!)));
@@ -951,11 +951,10 @@ describe('sectioned composer suggestions (EU-3)', () => {
                 COMPOSER_SUGGESTION_TRIGGERS,
                 resolveComposerSuggestionTriggersForKind,
             } = await import('./composerSuggestionGrammar');
-            // A human discussion's composer offers only its own kind, and no agent composer
-            // offers it, so the two sets never mount rows together: each is bounded on its own.
-            const discussionKinds: readonly string[] = DISCUSSION_COMPOSER_SUGGESTION_KINDS;
+            // People are Discussion-only; Session references also appear in agent composers.
+            // Bound each host's actual eligible set, retaining Session rows in both.
             const composableKindSets = [
-                COMPOSER_SUGGESTION_KIND_IDS.filter((id) => !discussionKinds.includes(id)),
+                COMPOSER_SUGGESTION_KIND_IDS.filter((id) => id !== 'accountMention'),
                 DISCUSSION_COMPOSER_SUGGESTION_KINDS,
             ];
 
@@ -1328,13 +1327,13 @@ describe('sectioned composer suggestions (EU-3)', () => {
 
     describe('R-9 — host eligible-kind subsets', () => {
         it('returns no skills for a host that does not offer the skill kind', async () => {
-            seedCatalogs({ skills: [{ name: 'review', path: '/s/review.md' }] });
+            seedCatalogs({ skills: [{ name: 'review', path: '/s/review.md', origin: 'vendor' }] });
             const { getSuggestions } = await importSuggestions();
 
             const withSkills = await getSuggestions('s1', '$rev', { kinds: ['file', 'vendorPlugin', 'skill', 'slashCommand'] });
             const withoutSkills = await getSuggestions('s1', '$rev', { kinds: ['file', 'vendorPlugin', 'slashCommand'] });
 
-            expect(withSkills.map((suggestion) => suggestion.key)).toEqual(['skill-/s/review.md:review']);
+            expect(withSkills.map((suggestion) => suggestion.key)).toEqual(['skill-vendor:/s/review.md:review']);
             expect(withoutSkills).toEqual([]);
         });
 

@@ -70,7 +70,7 @@ describe('public ApprovalPendingNotice', () => {
         mounted.container.querySelector('[data-testid="line.subject"]')
           ?.textContent,
       ).toBe('DeepSeek V4 Pro');
-      expect(line?.textContent).toContain('· Waiting for approval');
+      expect(line?.textContent).toMatch(/DeepSeek V4 Pro\s*·\s*Waiting for approval/);
       expect(line?.textContent?.indexOf('DeepSeek V4 Pro')).toBeLessThan(
         line?.textContent?.indexOf('Waiting') ?? -1,
       );

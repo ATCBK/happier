@@ -8,12 +8,26 @@ import { SkillRuleV1Schema } from '../../../reach/reachRuleV1.js';
 import { ArtifactRevisionV1Schema } from '../../../artifacts/artifactRevisionV1.js';
 import { SkillTrustV1Schema } from './skillTrustV1.js';
 import { SkillCostV1Schema } from './skillCostV1.js';
+import { buildQualifiedPluginContributionKey, type PluginContributionIdentityV1 } from '../../../plugins/contributionIdentity.js';
+
+/** Declaration identity survives occurrence replacement without colliding with personal Artifacts. */
+export function pluginSkillIdV1(identity: PluginContributionIdentityV1): string {
+  return `plugin:${buildQualifiedPluginContributionKey(identity)}`;
+}
+
+/** The declaration namespace remains host-owned after its source is retired. */
+export function isPluginSkillIdV1(skillId: string): boolean {
+  return skillId.startsWith('plugin:');
+}
 
 export type SkillLibraryItemV1 = Readonly<{
   skillId: string; name: string; digest: string; description: string;
   disableModelInvocation: boolean; userInvocable: boolean; updatedAt?: number;
 }>;
 
+export const PluginSkillProvenanceV1Schema = lazyZodSchema(() => z.strictObject({
+  kind: z.literal('plugin'), pluginId: z.string().check(z.minLength(1)), occurrenceId: z.string().check(z.minLength(1)),
+}));
 export const SkillProvenanceV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('registry'), registry: RegistryProvenanceV1Schema }),
   z.strictObject({ kind: z.literal('link'), url: z.string().check(z.minLength(1)), ref: RegistryContentRefV1Schema }),
@@ -21,8 +35,33 @@ export const SkillProvenanceV1Schema = lazyZodSchema(() => z.discriminatedUnion(
   z.strictObject({ kind: z.literal('upload'), importedAt: z.number().check(z.int(), z.nonnegative()) }),
   z.strictObject({ kind: z.literal('written') }),
   z.strictObject({ kind: z.literal('first_party') }),
+  PluginSkillProvenanceV1Schema,
 ]));
 export type SkillProvenanceV1 = z.infer<typeof SkillProvenanceV1Schema>;
+
+/** Shared Add identity: registry listings know their key; resolved imports also know their source/content. */
+export function findHeldSkillV1<T extends Readonly<{ skillId: string; provenance: SkillProvenanceV1; name?: string; digest?: string }>>(
+  items: readonly T[],
+  candidate: Readonly<{ registry: Readonly<{ sourceId: string; itemId: string }> }>
+    | Readonly<{ provenance: SkillProvenanceV1; name: string; digest: string }>,
+): T | null {
+  const provenance = 'provenance' in candidate ? candidate.provenance : null;
+  const registry = 'registry' in candidate ? candidate.registry : provenance?.kind === 'registry' ? provenance.registry : null;
+  const ref = provenance?.kind === 'registry' ? provenance.registry.ref : provenance?.kind === 'link' ? provenance.ref : null;
+  return items.find(item => {
+    if (registry && item.provenance.kind === 'registry'
+      && item.provenance.registry.sourceId === registry.sourceId && item.provenance.registry.itemId === registry.itemId) return true;
+    const heldRef = item.provenance.kind === 'registry' ? item.provenance.registry.ref : item.provenance.kind === 'link' ? item.provenance.ref : null;
+    if (ref?.kind === 'gitTree' && heldRef?.kind === 'gitTree') return ref.repo === heldRef.repo && ref.path === heldRef.path;
+    // Uploads have no stable source key. Compare current content, never the historical imported digest.
+    return 'provenance' in candidate && provenance?.kind === 'upload'
+      && item.name === candidate.name && item.digest === candidate.digest;
+  }) ?? null;
+}
+export type ReadOnlySkillProvenanceV1 = Extract<SkillProvenanceV1, { kind: 'first_party' | 'plugin' }>;
+export function isReadOnlySkillProvenanceV1(provenance: SkillProvenanceV1): provenance is ReadOnlySkillProvenanceV1 {
+  return provenance.kind === 'first_party' || provenance.kind === 'plugin';
+}
 export const SkillLockV1Schema = lazyZodSchema(() => z.strictObject({ provenance: SkillProvenanceV1Schema,
   importedDigest: z.optional(z.string().check(z.minLength(1))), updatePolicy: z.enum(['manual', 'auto', 'pinned']), upstream: z.optional(RegistryUpstreamV1Schema) }));
 export type SkillLockV1 = z.infer<typeof SkillLockV1Schema>;
@@ -31,7 +70,7 @@ export function readSkillLockV1(header: unknown): SkillLockV1 {
   const raw = header && typeof header === 'object' && 'skillLock' in header ? header.skillLock : undefined;
   if (raw === undefined) return { provenance: { kind: 'written' }, updatePolicy: 'manual' };
   const parsed = SkillLockStoredV1Schema.safeParse(raw);
-  if (!parsed.success || parsed.data.provenance.kind === 'first_party') throw Object.assign(new Error('invalid_skill_lock'), { code: 'invalid_skill_lock' });
+  if (!parsed.success || isReadOnlySkillProvenanceV1(parsed.data.provenance)) throw Object.assign(new Error('invalid_skill_lock'), { code: 'invalid_skill_lock' });
   return parsed.data;
 }
 export function isSkillModifiedV1(lock: SkillLockV1, currentDigest: string): boolean {
@@ -57,10 +96,11 @@ export const SkillListItemV1Schema = lazyZodSchema(() => z.strictObject({
   lastUsedAt: z.optional(z.number().check(z.int(), z.nonnegative())), createdAt: z.number().check(z.int(), z.nonnegative()), migratedFromContext: z.boolean(), userInvocable: z.boolean(), folderId: z.nullable(z.string()),
 }));
 export type SkillListItemV1 = z.infer<typeof SkillListItemV1Schema>;
+export const SkillUnavailableReasonV1Schema = lazyZodSchema(() => z.enum(['skill_content_unavailable', 'not_found', 'invalid_skill_lock']));
 /** Identity and public title remain knowable when a single stored skill cannot be opened. */
 export const SkillUnavailableItemV1Schema = lazyZodSchema(() => z.strictObject({
   skillId: z.string().check(z.minLength(1)), title: z.nullable(z.string().check(z.minLength(1))),
-  reason: z.enum(['skill_content_unavailable', 'not_found', 'invalid_skill_lock']),
+  reason: SkillUnavailableReasonV1Schema,
 }));
 export type SkillUnavailableItemV1 = z.infer<typeof SkillUnavailableItemV1Schema>;
 
@@ -154,4 +194,13 @@ export function writeSkillFrontmatterV1(markdown: string, fields: Readonly<{ nam
     if (!SkillFrontmatterV1Schema.safeParse(opened.document.toJS()).success) return null;
     return `---\n${opened.document.toString()}---\n${opened.body}`;
   } catch { return null; }
+}
+
+/**
+ * The skill folders in an uploaded file set: the set itself when it has a root `SKILL.md`, else each folder holding
+ * one (`''` is the root). The one reading of an upload's roots, shared by the install preview and the upload reader.
+ */
+export function readSkillUploadRootsV1(paths: readonly string[]): string[] {
+  if (paths.includes('SKILL.md')) return [''];
+  return paths.filter(path => path.endsWith('/SKILL.md')).map(path => path.slice(0, -'/SKILL.md'.length));
 }

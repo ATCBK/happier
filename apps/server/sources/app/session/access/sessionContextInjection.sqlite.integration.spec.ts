@@ -6,6 +6,10 @@ import { inTx, type Tx } from "@/storage/inTx";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { createPresentUserSessionAccessAuthentication } from "./sessionAccessAuthentication.testkit";
 import * as contextInjection from "./sessionContextInjection";
+import { artifactGrantStorageAdapter } from '@/app/artifacts/artifactGrantStorageAdapter';
+import { resolveResourceGrantAccessInTx } from '@/app/teams/resourceGrantAccess';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol';
+import * as privacyKit from 'privacy-kit';
 
 const authentication = createPresentUserSessionAccessAuthentication({ env: {} });
 
@@ -57,9 +61,75 @@ describe("ordinary authenticated Follow context admission", () => {
         await db.machine.deleteMany();
         await db.session.deleteMany();
         await db.team.deleteMany();
+        await db.artifact.deleteMany();
         await db.account.deleteMany();
     });
     afterAll(async () => harness?.close());
+
+    it('admits resource quotes only for the full current destination audience in both directions', async () => {
+        const owner = await createAccount();
+        const reader = await createAccount();
+        const source = await createSession(owner.id);
+        const destination = await createSession(owner.id);
+        const resourceRow = await db.artifact.create({ data: {
+            id: randomUUID(), accountId: owner.id,
+            header: privacyKit.decodeBase64(encodePlainArtifactStoredContent({ kind: 'workflow-definition.v1' })),
+            body: privacyKit.decodeBase64(encodePlainArtifactStoredContent({})),
+            dataEncryptionKey: privacyKit.decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER),
+        } });
+        // Exercise the generic resource port with the real existing storage adapter.
+        // Lane A binds Discussion tables to this same grant port; no policy is mocked.
+        const resource = { kind: 'resource' as const, resourceId: resourceRow.id, adapter: {
+            ...artifactGrantStorageAdapter,
+            // Artifact's real grant policy, under this test's verified present-user authentication.
+            resolveConfigurerAccessInTx: (tx: Tx, input: Readonly<{ resourceId: string; actorAccountId: string }>) =>
+                resolveResourceGrantAccessInTx(tx, artifactGrantStorageAdapter, input),
+        } };
+        const quote = () => inTx(tx => contextInjection.mayInjectResourceContextInTx(tx, {
+            configuringAccountId: owner.id, authentication,
+            source: { kind: 'session', sessionId: source.id }, destination: resource,
+        }));
+        const invite = () => inTx(tx => contextInjection.mayInjectResourceContextInTx(tx, {
+            configuringAccountId: owner.id, authentication,
+            source: resource, destination: { kind: 'session', sessionId: destination.id },
+        }));
+        expect(await quote()).toEqual({ ok: true });
+        expect(await invite()).toEqual({ ok: true });
+        expect(await inTx(tx => contextInjection.mayInjectResourceContextInTx(tx, {
+            configuringAccountId: reader.id, authentication,
+            source: { kind: 'session', sessionId: source.id }, destination: resource,
+        }))).toEqual({ ok: false, reason: 'configurer_not_allowed' });
+        const publication = await db.publicSessionShare.create({ data: {
+            sessionId: destination.id, tokenHash: randomBytes(32), createdByUserId: owner.id,
+        } });
+        expect(await invite()).toEqual({ ok: false, reason: 'destination_public' });
+        await db.publicSessionShare.delete({ where: { id: publication.id } });
+        const differentRuntime = await createSession(reader.id);
+        await grant(differentRuntime, owner.id, 'edit');
+        const inviteOtherRuntime = () => inTx(tx => contextInjection.mayInjectResourceContextInTx(tx, {
+            configuringAccountId: owner.id, authentication,
+            source: resource, destination: { kind: 'session', sessionId: differentRuntime.id },
+        }));
+        expect(await inviteOtherRuntime()).toEqual({ ok: false, reason: 'destination_runtime_not_allowed' });
+        await db.artifactAccountGrant.create({ data: {
+            artifactId: resourceRow.id, accountId: reader.id, accessLevel: 'view', createdByAccountId: owner.id,
+        } });
+        expect(await inviteOtherRuntime()).toEqual({ ok: true });
+        expect(await quote()).toEqual({ ok: false, reason: 'destination_audience_broader' });
+        await grant(source, reader.id, 'view');
+        expect(await quote()).toEqual({ ok: true });
+        expect(await inTx(tx => contextInjection.mayInjectResourceContextInTx(tx, {
+            configuringAccountId: reader.id, authentication,
+            source: { kind: 'session', sessionId: source.id }, destination: resource,
+        }))).toEqual({ ok: false, reason: 'configurer_not_allowed' });
+        await grant(destination, reader.id, 'view');
+        expect(await invite()).toEqual({ ok: true });
+        await db.artifactAccountGrant.deleteMany({ where: { artifactId: resourceRow.id, accountId: reader.id } });
+        expect(await invite()).toEqual({ ok: false, reason: 'destination_audience_broader' });
+        expect(await inviteOtherRuntime()).toEqual({ ok: false, reason: 'destination_runtime_not_allowed' });
+        await db.artifact.delete({ where: { id: resourceRow.id } });
+        expect(await quote()).toEqual({ ok: false, reason: 'unavailable' });
+    });
 
     it("does not reauthorize a historical configuring actor, but rechecks the current audience on every admission", async () => {
         const runtime = await createAccount();
@@ -183,6 +253,25 @@ describe("ordinary authenticated Follow context admission", () => {
             await db.teamMembership.update({ where: { id: membership.id }, data: { sessionAccessStartsAt: null } });
         }
         expect(await inTx(tx => admitRuntime(tx, input))).toEqual({ ok: true, destinationRuntimeAccountId: runtime.id });
+    });
+
+    it('admits same-session content disclosure through current authority while Follow still refuses a self-link', async () => {
+        const owner = await createAccount();
+        const outsider = await createAccount();
+        const session = await createSession(owner.id);
+        const disclose = (accountId: string) => inTx(tx => contextInjection.mayInjectResourceContextInTx(tx, {
+            configuringAccountId: accountId, authentication,
+            source: { kind: 'session', sessionId: session.id }, destination: { kind: 'session', sessionId: session.id },
+        }));
+        expect(await disclose(owner.id)).toEqual({ ok: true });
+        expect(await disclose(outsider.id)).toEqual({ ok: false, reason: 'configurer_not_allowed' });
+        expect(await inTx(tx => contextInjection.mayInjectSessionContextInTx(tx, {
+            configuringAccountId: owner.id, authentication, sourceSessionId: session.id, destinationSessionId: session.id,
+        }))).toEqual({ ok: false, reason: 'same_session' });
+        await db.publicSessionShare.create({ data: {
+            sessionId: session.id, tokenHash: randomBytes(32), createdByUserId: owner.id,
+        } });
+        expect(await disclose(owner.id)).toEqual({ ok: false, reason: 'destination_public' });
     });
 
     it("denies same-session and missing-session pairs without manufacturing custody", async () => {

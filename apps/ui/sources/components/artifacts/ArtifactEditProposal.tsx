@@ -1,0 +1,433 @@
+import * as React from 'react';
+import {
+  HappierDocEditProposal,
+  type HappierDocEditProposalButtonProps,
+  type HappierDocEditProposalDiffProps,
+  type HappierDocEditProposalLine,
+  type HappierDocEditProposalMark,
+  type HappierDocEditProposalMarkProps,
+  type HappierDocEditProposalState,
+  type HappierDocEditProposalTextProps,
+  type HappierDocEditProposalTone,
+} from '@happier-dev/plugin-ui/components';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import type { DocEditProposalV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationV1';
+import type { DocEditProposalDispositionV1 } from '@happier-dev/protocol/discussions/models';
+import type { DiscussionMessageRefV1 } from '@happier-dev/protocol/discussions/messageRefs';
+
+import { useRouter } from '@/components/appShell/workspace/destinationRoute';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { ProseDiffViewer } from '@/components/ui/code/diff/prose/ProseDiffViewer';
+import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { Icon, ICON_SIZE, type IconName } from '@/components/ui/icons/Icon';
+import { resolveThemeHairlineBorderStyle } from '@/components/ui/surfaces/resolveThemeHairlineBorderStyle';
+import { Text } from '@/components/ui/text/Text';
+import { getStorage } from '@/sync/domains/state/storage';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
+import { t } from '@/text';
+
+import { publishPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
+import { readViewportClass } from '@/utils/platform/useViewportClass';
+import type { ArtifactActionsClient } from './artifactActionsClient';
+import { artifactViewRoute } from './artifactBrowserModel';
+import { showArtifactHistorySheet } from './ArtifactHistorySheet';
+
+type Revision = Readonly<{ headerVersion: number; bodyVersion: number }>;
+type Currency = 'unknown' | 'current' | 'movedOn';
+type Busy = 'accept' | 'decline' | 'undo' | null;
+type DocReadValue = Extract<Awaited<ReturnType<ArtifactActionsClient['readDoc']>>, { ok: true }>['value'];
+export type AdmittedDocRead = Readonly<{ status: 'loading' | 'unavailable' }>
+  | Readonly<{ status: 'ready'; value: DocReadValue }>;
+
+/** The Action's typed refusal when the Doc is no longer at the revision the person reviewed. */
+const VERSION_MISMATCH = 'version_mismatch';
+
+const sameRevision = (left: Revision, right: Revision) =>
+  left.headerVersion === right.headerVersion &&
+  left.bodyVersion === right.bodyVersion;
+
+/**
+ * A suggested edit in its passage thread (C5 L8 / lab K1): the reviewed before/after through the one
+ * prose diff owner, why it was suggested, the revision it is based on, and Accept / Decline for the
+ * person reading it. The stored disposition (C3) is the authority for accepted/declined; a decision
+ * shows as settled only once the Home acknowledges it, and a stale basis says nothing was applied.
+ */
+export function ArtifactEditProposal(
+  props: Readonly<{
+    testID?: string;
+    client: ArtifactActionsClient;
+    /** Present on a Doc view even while loading/unavailable; absent only for a standalone thread. */
+    docRead?: AdmittedDocRead;
+    /** The committed proposal message; `null` while the post is still local. */
+    proposalRef: DiscussionMessageRefV1 | null;
+    proposal: DocEditProposalV1;
+    disposition: DocEditProposalDispositionV1 | undefined;
+    viewerAccountId: string | null;
+    resolveAccountLabel: (accountId: string) => string | null;
+    /** Who suggested the edit, as the thread names and mentions them; Ask to redo addresses them. */
+    proposer?: ProposalAuthor | null;
+  }>,
+): React.ReactElement {
+  const { theme } = useUnistyles();
+  const router = useRouter();
+  const styles = stylesheet;
+  const testID = props.testID ?? 'artifact-edit-proposal';
+  const { client, proposal, proposalRef } = props;
+  const artifactId = proposal.target.ref.artifactId;
+  const base = proposal.baseRevision;
+
+  // The Home's acknowledgement stands in until the thread's own disposition catches up with it.
+  const [acknowledged, setAcknowledged] =
+    React.useState<DocEditProposalDispositionV1 | null>(null);
+  const disposition =
+    props.disposition && props.disposition.state !== 'open'
+      ? props.disposition
+      : (acknowledged ?? props.disposition ?? { state: 'open' as const });
+  // The Doc's revision as the app already holds it (kept current by sync, as the Doc page reads it): when
+  // another edit lands, this suggestion's currency is read again rather than left as it was on mount.
+  const docRevisionKey = getStorage()((state) => {
+    if (!areServerAccountScopesEqual(state.profileScope, client.scope)) return '';
+    const stored = state.artifacts[artifactId];
+    return stored ? `${stored.headerVersion}.${stored.bodyVersion ?? ''}` : '';
+  });
+  const [standaloneRead, setStandaloneRead] = React.useState<Readonly<{
+    client: ArtifactActionsClient; artifactId: string; read: AdmittedDocRead;
+  }> | null>(null);
+  const docRead = props.docRead ?? (standaloneRead?.client === client && standaloneRead.artifactId === artifactId
+    ? standaloneRead.read : undefined);
+  const admitted = docRead?.status === 'ready'
+    && docRead.value.ref.artifactId === artifactId
+    && areServerProfileIdentifiersEquivalent(docRead.value.ref.serverId, client.scope.serverId)
+      ? docRead.value.artifact : null;
+  const [refusal, setRefusal] = React.useState<
+    'movedOn' | 'cantEdit' | 'failed' | null
+  >(null);
+  const [busy, setBusy] = React.useState<Busy>(null);
+  const currency: Currency = refusal === 'movedOn' ? 'movedOn'
+    : admitted ? sameRevision(admitted.revision, base) ? 'current' : 'movedOn' : 'unknown';
+  const [undo, setUndo] = React.useState<
+    | Readonly<{ state: 'done'; revision: Revision }>
+    | Readonly<{ state: 'conflict' | 'failed' }>
+    | null
+  >(null);
+
+  React.useEffect(() => {
+    if (props.docRead !== undefined || disposition.state !== 'open') return;
+    let live = true;
+    setStandaloneRead({ client, artifactId, read: { status: 'loading' } });
+    // The Doc lives in this thread's Home (C5 §4), which the client is already bound to; its stored
+    // label may be another device's name for that Home, so the read names only the document.
+    void client.readDoc({ ref: { kind: 'doc', artifactId } }).then((read) => {
+      if (!live) return;
+      // A reader is told who can accept up front rather than after pressing Accept.
+      if (read.ok && read.value.artifact.access === 'view') setRefusal('cantEdit');
+      setStandaloneRead({ client, artifactId, read: read.ok
+        ? { status: 'ready', value: read.value } : { status: 'unavailable' } });
+    });
+    return () => {
+      live = false;
+    };
+  }, [client, artifactId, base, disposition.state, docRevisionKey, props.docRead]);
+
+  const decide = React.useCallback(
+    async (kind: 'accept' | 'decline') => {
+      if (!proposalRef || busy) return;
+      setBusy(kind);
+      setRefusal(null);
+      const outcome =
+        kind === 'accept'
+          ? await client.acceptEdit({ proposalRef, expectedRevision: base })
+          : await client.declineEdit({ proposalRef });
+      setBusy(null);
+      if ('approvalId' in outcome) return;
+      if (outcome.ok) {
+        const decided = outcome.value.docEditProposalDispositionV1;
+        setAcknowledged(decided);
+        // On a phone the receipt scrolls away with the thread; the app's one notice confirms the new
+        // version and keeps Undo in reach (lab K1-Rp). Wider layouts show the receipt in place.
+        if (decided.state === 'accepted' && readViewportClass() === 'compact')
+          announceAccepted(client, artifactId, base.bodyVersion, decided.acceptedRevision);
+        return;
+      }
+      const code = outcome.failure.code;
+      if (code === VERSION_MISMATCH) {
+        setRefusal('movedOn');
+        return;
+      }
+      setRefusal(
+        code === 'doc_edit_proposal_edit_access_required'
+          ? 'cantEdit'
+          : 'failed',
+      );
+    },
+    [base, busy, client, proposalRef],
+  );
+
+  const undoAccepted = React.useCallback(async () => {
+    if (disposition.state !== 'accepted' || busy) return;
+    setBusy('undo');
+    const outcome = await client.restoreRevision({
+      artifactId,
+      bodyVersion: base.bodyVersion,
+      expectedRevision: disposition.acceptedRevision,
+    });
+    setBusy(null);
+    if ('approvalId' in outcome) return;
+    setUndo(
+      outcome.ok
+        ? { state: 'done', revision: outcome.value.revision }
+        : outcome.failure.code === VERSION_MISMATCH
+          ? { state: 'conflict' }
+          : { state: 'failed' },
+    );
+  }, [artifactId, base.bodyVersion, busy, client, disposition]);
+
+  const docTitle = typeof admitted?.header.title === 'string' ? admitted.header.title : null;
+  const readOnly = refusal === 'cantEdit' || admitted?.access === 'view';
+  // Compare: the version the suggestion was reviewed against beside the current text, in History.
+  const compare = React.useCallback(() => showArtifactHistorySheet({
+    artifactId, client, currentDoc: admitted ?? undefined,
+    name: docTitle || t('artifacts.untitled'), canRestore: !readOnly, compareFromBodyVersion: base.bodyVersion,
+  }), [admitted, artifactId, base.bodyVersion, client, docTitle, readOnly]);
+  const proposer = props.proposer ?? null;
+  const askable = proposalRef !== null && proposer !== null
+    && !('accountId' in proposer.mention && proposer.mention.accountId === props.viewerAccountId);
+  // Ask to redo prepares an addressed reply in this thread; the person still reads and sends it.
+  const askToRedo = React.useCallback(() => {
+    if (!proposalRef || !proposer) return;
+    const mention = `@${proposer.label}`;
+    router.push(client.beginProposalReply({
+      proposalRef,
+      text: `${mention} ${t('artifacts.browser.proposal.redoRequest')}`,
+      mentions: [{ start: 0, end: mention.length, ...proposer.mention }],
+    }) as never);
+  }, [client, proposalRef, proposer, router]);
+
+  const openDocument = React.useCallback(
+    () => router.push(artifactViewRoute(artifactId) as never),
+    [artifactId, router],
+  );
+  const decider = (accountId: string) =>
+    accountId === props.viewerAccountId
+      ? null
+      : (props.resolveAccountLabel(accountId) ??
+        t('artifacts.browser.proposal.someone'));
+
+  const decision = ((): HappierDocEditProposalState => {
+    if (disposition.state === 'accepted') {
+      const who = decider(disposition.decidedBy.accountId);
+      const n = disposition.acceptedRevision.bodyVersion;
+      const lines: HappierDocEditProposalLine[] = [];
+      if (undo?.state === 'done') lines.push({
+        testID: `${testID}.undone`, mark: 'undone',
+        text: t('artifacts.browser.proposal.undone', { n: undo.revision.bodyVersion }),
+      });
+      if (undo?.state === 'conflict') lines.push({
+        testID: `${testID}.undoConflict`, mark: 'warning', tone: 'warning',
+        text: t('artifacts.browser.proposal.undoConflict'),
+        action: { label: t('artifacts.browser.proposal.openDocument'), onPress: openDocument },
+      });
+      if (undo?.state === 'failed') lines.push({
+        testID: `${testID}.undoFailed`, mark: 'failed', tone: 'danger', text: t('artifacts.browser.proposal.failed'),
+      });
+      return {
+        state: 'settled',
+        receipt: {
+          testID: `${testID}.accepted`, mark: 'accepted',
+          text: who ? t('artifacts.browser.proposal.acceptedBy', { who, n }) : t('artifacts.browser.proposal.acceptedByYou', { n }),
+          action: undo?.state === 'done' ? undefined : {
+            label: t('artifacts.browser.proposal.undo'), busy: busy === 'undo',
+            onPress: () => void undoAccepted(), testID: `${testID}.undo`,
+          },
+        },
+        lines,
+      };
+    }
+    if (disposition.state === 'declined') {
+      const who = decider(disposition.decidedBy.accountId);
+      return {
+        state: 'settled',
+        receipt: {
+          testID: `${testID}.declined`, mark: 'declined',
+          text: who ? t('artifacts.browser.proposal.declinedBy', { who }) : t('artifacts.browser.proposal.declinedByYou'),
+        },
+      };
+    }
+    const decline = proposalRef ? {
+      testID: `${testID}.decline`, label: t('artifacts.browser.proposal.decline'),
+      disabled: busy !== null, onPress: () => void decide('decline'),
+    } : undefined;
+    const open = {
+      state: 'open' as const,
+      title: t('artifacts.browser.proposal.title'),
+      basedOn: t('artifacts.browser.proposal.basedOn', { n: base.bodyVersion }),
+      reason: proposal.reason,
+    };
+    if (currency === 'movedOn' || refusal === 'movedOn') {
+      // Two ways forward (lab K1-ST): see what changed, or ask for a fresh suggestion. A suggestion
+      // that can no longer apply can still be declined; that needs no Doc rewrite.
+      return { ...open, footer: {
+        kind: 'stale',
+        line: {
+          testID: `${testID}.movedOn`, mark: 'warning', tone: 'warning',
+          text: refusal === 'failed' ? t('artifacts.browser.proposal.failed') : t('artifacts.browser.proposal.movedOn'),
+        },
+        compare: { testID: `${testID}.compare`, label: t('artifacts.browser.proposal.compare'), onPress: compare },
+        decline: decline && !readOnly ? { ...decline, busy: busy === 'decline' } : undefined,
+        askRedo: askable ? {
+          testID: `${testID}.askRedo`, label: t('artifacts.browser.proposal.askRedo'),
+          disabled: busy !== null, onPress: askToRedo,
+        } : undefined,
+      } };
+    }
+    if (readOnly) {
+      return { ...open, footer: { kind: 'note', line: {
+        testID: `${testID}.cantEdit`, mark: 'locked', text: t('artifacts.browser.proposal.cantEdit'),
+      } } };
+    }
+    return { ...open, footer: {
+      kind: 'decide',
+      status: busy === 'accept' || busy === 'decline'
+        ? { indicator: 'busy', text: busy === 'accept' ? t('artifacts.browser.proposal.accepting') : t('artifacts.browser.proposal.declining') }
+        : refusal === 'failed' ? { text: t('artifacts.browser.proposal.failed') }
+          : currency === 'current'
+            ? { indicator: 'current', testID: `${testID}.current`, text: t('artifacts.browser.proposal.current', { n: base.bodyVersion }) }
+            : undefined,
+      decline,
+      accept: proposalRef ? {
+        testID: `${testID}.accept`, label: t('artifacts.browser.proposal.accept'),
+        disabled: busy !== null, busy: busy === 'accept', onPress: () => void decide('accept'),
+      } : undefined,
+    } };
+  })();
+
+  return (
+    <HappierDocEditProposal
+      testID={testID}
+      before={proposal.before}
+      after={proposal.after}
+      labels={{ before: t('artifacts.browser.proposal.before'), after: t('artifacts.browser.proposal.after') }}
+      decision={decision}
+      Text={ProposalText}
+      Mark={ProposalMark}
+      Button={ProposalButton}
+      Diff={ProposalDiff}
+      Spinner={ProposalSpinner}
+      style={styles.card}
+      space={theme.space}
+    />
+  );
+}
+
+export type ProposalAuthor = Readonly<{
+  label: string;
+  mention: Readonly<{ accountId: string }> | Readonly<{ sessionId: string }>;
+}>;
+
+const MARK: Readonly<Record<HappierDocEditProposalMark, IconName>> = {
+  proposal: 'pencil-simple', reason: 'arrow-elbow-down-right', current: 'check', accepted: 'check', declined: 'x',
+  undone: 'clock-counter-clockwise', warning: 'warning', failed: 'warning-circle', locked: 'lock',
+};
+
+function toneColor(theme: ReturnType<typeof useUnistyles>['theme'], tone: HappierDocEditProposalTone | undefined): string {
+  return tone === 'warning' ? theme.colors.state.warning.foreground
+    : tone === 'danger' ? theme.colors.text.destructive
+      : tone === 'muted' ? theme.colors.text.tertiary : theme.colors.text.secondary;
+}
+
+function ProposalMark(props: HappierDocEditProposalMarkProps) {
+  const { theme } = useUnistyles();
+  return <Icon name={MARK[props.mark]} size={ICON_SIZE.sm} color={toneColor(theme, props.tone)} />;
+}
+
+function ProposalText(props: HappierDocEditProposalTextProps) {
+  const { theme } = useUnistyles();
+  const styles = stylesheet;
+  if (props.role === 'title') {
+    return <Text variant="label" emphasis="semiBold" style={styles.title}>{props.children}</Text>;
+  }
+  if (props.role === 'meta') {
+    return <Text testID={props.testID} variant="meta" style={styles.meta} numberOfLines={props.numberOfLines}>{props.children}</Text>;
+  }
+  if (props.role === 'reason') return <Text variant="body" style={styles.reasonText}>{props.children}</Text>;
+  // A receipt reads in primary ink; a status line takes its tone's colour.
+  const color = props.role === 'receipt' ? theme.colors.text.primary : toneColor(theme, props.tone);
+  return (
+    <Text variant="meta" emphasis={props.role === 'receipt' ? 'medium' : undefined} style={[styles.lineText, { color }]}>
+      {props.children}
+    </Text>
+  );
+}
+
+function ProposalButton(props: HappierDocEditProposalButtonProps) {
+  const { theme } = useUnistyles();
+  return (
+    <RoundButton
+      testID={props.testID}
+      size="small"
+      display={props.emphasis === 'primary' ? undefined : 'inverted'}
+      title={props.label}
+      textStyle={props.emphasis === 'secondary' ? { color: theme.colors.text.secondary } : undefined}
+      loading={props.busy}
+      disabled={props.disabled}
+      onPress={props.onPress}
+    />
+  );
+}
+
+function ProposalDiff(props: HappierDocEditProposalDiffProps) {
+  return (
+    <ProseDiffViewer
+      mode="text"
+      testID={props.testID}
+      oldText={props.before}
+      newText={props.after}
+      contextLines={0}
+      prose={{ oldLabel: props.beforeLabel, newLabel: props.afterLabel }}
+    />
+  );
+}
+
+function ProposalSpinner() {
+  return <ActivitySpinner size="small" />;
+}
+
+const stylesheet = StyleSheet.create((theme) => ({
+  card: {
+    marginTop: theme.space.s8,
+    padding: theme.space.s12,
+    borderRadius: theme.borderRadius.lg,
+    backgroundColor: theme.colors.surface.inset,
+    ...resolveThemeHairlineBorderStyle(theme.colors.border.subtle),
+  },
+  title: { color: theme.colors.text.primary },
+  meta: { color: theme.colors.text.tertiary, fontVariant: ['tabular-nums'] },
+  reasonText: { color: theme.colors.text.secondary },
+  // The receipt text wraps inside itself, so its action stays at the end of the line even in a
+  // narrow Doc margin (lab K1-R).
+  lineText: { minWidth: 0 },
+}));
+
+const ACCEPTED_NOTICE_KEY = 'artifacts.proposal.accepted';
+
+/** The accepted-edit notice; its Undo restores the base version unless the Doc moved on since. */
+function announceAccepted(client: ArtifactActionsClient, artifactId: string, baseBodyVersion: number, accepted: Revision): void {
+  publishPresentationNotice({
+    key: ACCEPTED_NOTICE_KEY,
+    severity: 'info',
+    message: t('artifacts.browser.passage.acceptedToast', { n: accepted.bodyVersion }),
+    undo: {
+      label: t('artifacts.browser.proposal.undo'),
+      run: () => {
+        void client.restoreRevision({ artifactId, bodyVersion: baseBodyVersion, expectedRevision: accepted }).then((outcome) => {
+          if ('approvalId' in outcome) return;
+          publishPresentationNotice(outcome.ok
+            ? { key: ACCEPTED_NOTICE_KEY, severity: 'info', message: t('artifacts.browser.proposal.undone', { n: outcome.value.revision.bodyVersion }) }
+            : { key: ACCEPTED_NOTICE_KEY, severity: 'warning', message: outcome.failure.code === VERSION_MISMATCH
+              ? t('artifacts.browser.proposal.undoConflict') : t('artifacts.browser.proposal.failed') });
+        });
+      },
+    },
+  });
+}

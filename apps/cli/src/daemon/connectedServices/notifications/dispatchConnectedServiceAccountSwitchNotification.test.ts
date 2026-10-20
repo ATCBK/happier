@@ -1,10 +1,36 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { accountSettingsParse } from '@happier-dev/protocol';
+import { NotificationChannelRecordV1Schema } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
+
+import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 import { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from '../accountGroups/quotas/ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore';
 import { dispatchConnectedServiceAccountSwitchNotificationAsync } from './dispatchConnectedServiceAccountSwitchNotification';
 
 describe('dispatchConnectedServiceAccountSwitchNotificationAsync', () => {
+    let settings: ReturnType<typeof accountSettingsParse>;
+
+    beforeEach(() => {
+        settings = accountSettingsParse({});
+        setActiveAccountSettingsSnapshot({
+            settings,
+            source: 'network',
+            settingsVersion: 1,
+            loadedAtMs: 1,
+            settingsSecretsReadKeys: [],
+            notificationChannelCatalog: {
+                status: 'ready',
+                revision: 1,
+                diagnostics: [],
+                channels: [NotificationChannelRecordV1Schema.parse({
+                    v: 1, id: 'push', kind: 'expo_push', enabled: true, topics: {},
+                })],
+            },
+        });
+    });
+
+    afterEach(() => resetActiveAccountSettingsSnapshotForTests());
+
     it('uses the session title and enriches switch notifications with profile labels and usage percentages', async () => {
         const sendToAllDevicesAsync = vi.fn(async () => { return true; });
         const runtimeQuotaSnapshots = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
@@ -66,7 +92,7 @@ describe('dispatchConnectedServiceAccountSwitchNotificationAsync', () => {
         });
 
         await dispatchConnectedServiceAccountSwitchNotificationAsync({
-            settings: accountSettingsParse({}),
+            settings,
             expoPushSender: { sendToAllDevicesAsync },
             settingsSecretsReadKeys: [],
             runtimeQuotaSnapshots,
@@ -117,7 +143,7 @@ describe('dispatchConnectedServiceAccountSwitchNotificationAsync', () => {
             profiles: [{ profileId: 'primary', providerEmail: 'private@example.test' }],
         }));
         await dispatchConnectedServiceAccountSwitchNotificationAsync({
-            settings: accountSettingsParse({}),
+            settings,
             expoPushSender: { sendToAllDevicesAsync },
             settingsSecretsReadKeys: [],
             runtimeQuotaSnapshots: new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore(),
@@ -151,7 +177,7 @@ describe('dispatchConnectedServiceAccountSwitchNotificationAsync', () => {
         const runtimeQuotaSnapshots = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
 
         await dispatchConnectedServiceAccountSwitchNotificationAsync({
-            settings: accountSettingsParse({}),
+            settings,
             expoPushSender: { sendToAllDevicesAsync },
             settingsSecretsReadKeys: [],
             runtimeQuotaSnapshots,
@@ -188,7 +214,7 @@ describe('dispatchConnectedServiceAccountSwitchNotificationAsync', () => {
         const runtimeQuotaSnapshots = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
 
         await dispatchConnectedServiceAccountSwitchNotificationAsync({
-            settings: accountSettingsParse({}),
+            settings,
             expoPushSender: { sendToAllDevicesAsync },
             settingsSecretsReadKeys: [],
             runtimeQuotaSnapshots,
@@ -220,7 +246,7 @@ describe('dispatchConnectedServiceAccountSwitchNotificationAsync', () => {
         const runtimeQuotaSnapshots = new ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore();
 
         await dispatchConnectedServiceAccountSwitchNotificationAsync({
-            settings: accountSettingsParse({}),
+            settings,
             expoPushSender: { sendToAllDevicesAsync },
             settingsSecretsReadKeys: [],
             runtimeQuotaSnapshots,

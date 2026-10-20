@@ -1,15 +1,28 @@
 import * as React from 'react';
 import { Pressable } from 'react-native';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PluginManifestV2Schema } from '@happier-dev/protocol';
 import type { PluginPortableReleaseManifestV1 } from '@happier-dev/protocol/plugins/availability';
+import { PluginAccountAvailabilityIntentReadResponseV1Schema, PluginAvailabilityActionHttpPathsV1,
+    PluginAvailabilityIntentsListActionOutputV1Schema, PluginAvailabilityMaterializationsReadActionOutputV1Schema } from '@happier-dev/protocol/plugins/availability';
+import { PluginAccountSettingsMutationRequestV1Schema, PluginAccountSettingsMutationResponseV1Schema,
+    PluginAccountSettingsReadResponseV1Schema, PluginAccountSettingsValuesV1Schema } from '@happier-dev/protocol/plugins/settings/accountSettingsV1';
+import { PluginSettingsContributionV2Schema, type PluginSettingFieldV2 } from '@happier-dev/protocol/plugins/contributions/settings';
+import { PluginProjectionV2Schema, projectPluginSettingsContributionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { AccountSettingsV2UpdateRequestSchema, type AccountSettingsV2UpdateRequest } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
+import { applyAccountSettingsSavedSecretMutation, resolveAccountSettingsPluginSecretBinding, resolveAccountSettingsPluginSecret } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
+import type { HomeDomainAnswer } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { parseToken } from '@/utils/auth/parseToken';
+import type { InvalidateSync } from '@/utils/sessions/sync';
 
 import type {
     PluginProjectionEditableSettingField,
     PluginProjectionEntry,
 } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
-import { createDeferred, flattenTestStyle, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createDeferred, createMachineFixture, flattenTestStyle, renderScreen, standardCleanup } from '@/dev/testkit';
 import type {
     MachinePluginSecretDeleteResult,
     MachinePluginSecretSetResult,
@@ -21,18 +34,16 @@ import type {
     ScopedPluginDaemonSecretReadInput,
     ScopedPluginDaemonSecretWriteResult,
     ScopedPluginDaemonSecretWriteInput,
+    ScopedPluginSettingsReadResult,
+    ScopedPluginSettingsWriteResult,
 } from '@/sync/domains/plugins/settings/scopedPluginSettingsAdapter';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-
-import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
 const machinePluginSettingsGetMock = vi.hoisted(() => vi.fn());
 const machinePluginSettingsSetMock = vi.hoisted(() => vi.fn());
 const machinePluginSecretStatusMock = vi.hoisted(() => vi.fn());
 const machinePluginSecretSetMock = vi.hoisted(() => vi.fn());
 const machinePluginSecretDeleteMock = vi.hoisted(() => vi.fn());
-const accountPluginSecretReadMock = vi.hoisted(() => vi.fn());
-const accountPluginSecretWriteMock = vi.hoisted(() => vi.fn());
 const modalShowMock = vi.hoisted(() => vi.fn());
 const modalConfirmMock = vi.hoisted(() => vi.fn(async () => true));
 const scopedSettingsWatchMock = vi.hoisted(() => vi.fn());
@@ -41,7 +52,6 @@ const scopedSettingsWriteMock = vi.hoisted(() => vi.fn());
 const scopedDaemonSecretReadMock = vi.hoisted(() => vi.fn());
 const scopedDaemonSecretWriteMock = vi.hoisted(() => vi.fn());
 const routerPushSpy = vi.hoisted(() => vi.fn());
-const emitPluginSettingChangedEventMock = vi.hoisted(() => vi.fn());
 const platformEnvironment = vi.hoisted(() => ({
     platform: 'web' as 'web' | 'ios' | 'android',
 }));
@@ -49,122 +59,290 @@ const activeAccountLifetimeState = vi.hoisted(() => ({
     current: null as ActiveServerAccountScopeLifetime | null,
 }));
 
-installSettingsViewCommonModuleMocks({
-    modal: async () => {
-        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock({ spies: { show: modalShowMock, confirm: modalConfirmMock } }).module;
-    },
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            Platform: {
-                get OS() {
-                    return platformEnvironment.platform;
+await vi.hoisted(async () => {
+    const { installSettingsViewCommonModuleMocks } = await import('../../settingsViewTestHelpers');
+    installSettingsViewCommonModuleMocks({
+        storage: 'real',
+        modal: async () => {
+            const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+            return createModalModuleMock({ spies: { show: modalShowMock, confirm: modalConfirmMock } }).module;
+        },
+        reactNative: async () => {
+            const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+            return createReactNativeWebMock({
+                Platform: {
+                    get OS() {
+                        return platformEnvironment.platform;
+                    },
                 },
-            },
-        });
-    },
-    text: async () => {
-        const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        // Keys render as themselves. The secret-deletion prompt is the one
-        // exception: its interpolated name carries the record-owner label under
-        // test, so that single key keeps its argument.
-        return createTextModuleMock({
-            translate: (key, params) => {
-                const name = (params as Readonly<{ name?: unknown }> | undefined)?.name;
-                return key === 'secrets.prompts.deleteConfirm' && typeof name === 'string'
-                    ? `${key}:${name}`
-                    : key;
-            },
-        });
-    },
-    router: async () => {
-        const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-        return createExpoRouterMock({ router: { push: routerPushSpy } }).module;
-    },
+            });
+        },
+        text: async () => {
+            const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+            // Keys render as themselves. The secret-deletion prompt is the one
+            // exception: its interpolated name carries the record-owner label under
+            // test, so that single key keeps its argument.
+            return createTextModuleMock({
+                translate: (key, params) => {
+                    const name = (params as Readonly<{ name?: unknown }> | undefined)?.name;
+                    return key === 'secrets.prompts.deleteConfirm' && typeof name === 'string'
+                        ? `${key}:${name}`
+                        : key;
+                },
+            });
+        },
+        router: async () => {
+            const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+            return createExpoRouterMock({ router: { push: routerPushSpy } }).module;
+        },
+    });
 });
 
-vi.mock('@/components/appShell/plugins/AppShellPluginUiProjection', () => ({
-    useProjectedPluginLocalizedTextResolver: () => (_pluginId: string, value: unknown) => {
-        if (typeof value === 'string') return value;
-        if (value && typeof value === 'object' && 'fallback' in value) {
-            const fallback = (value as { fallback?: unknown }).fallback;
-            return typeof fallback === 'string' ? fallback : '';
-        }
-        return '';
-    },
-}));
+const { createProviderSettingsAccountHarness } = await import('@/dev/testkit/harness/providerSettingsHarness');
+const { installDisconnectedServerSocketBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+const account = createProviderSettingsAccountHarness();
+const { installRealActionExecutorModuleLoader, createAccountSettingsHttpBoundary } = await import('@/dev/testkit/harness/actionHomesHttpHarness');
+const disposeActionExecutorLoader = await installRealActionExecutorModuleLoader();
+afterAll(disposeActionExecutorLoader);
+const pluginSettingsAnalytics = await import('@/track/settingsAnalytics/emitPluginSettingChangedEvent');
+const emitPluginSettingChangedEventMock = vi.spyOn(pluginSettingsAnalytics, 'emitPluginSettingChangedEvent');
+const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+const { projectScopedPluginSettingsFields } = await import('@/sync/domains/plugins/settings/scopedPluginSettingsProjection');
+const accountRecordPaths = new Set<string>();
+const accountSettingsWrites: AccountSettingsV2UpdateRequest[] = [];
+let accountSettingsHttp: ReturnType<typeof createAccountSettingsHttpBoundary>;
+let accountSettingsPost: ((input: AccountSettingsV2UpdateRequest, next: () => Promise<HomeDomainAnswer>) => Promise<HomeDomainAnswer>) | null = null;
+let persistedAccountSettings: Readonly<Record<string, unknown>> = {};
+let daemonProjection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, agentsById: {}, actionsById: {}, toolsById: {},
+    commandsById: {}, resourcesById: {}, settingsById: {}, installedPackagesById: {}, diagnostics: [] });
 
-vi.mock('@/track/settingsAnalytics/emitPluginSettingChangedEvent', () => ({
-    emitPluginSettingChangedEvent: (...args: unknown[]) => emitPluginSettingChangedEventMock(...args),
-}));
+async function publishSettingsDeclaration(projection: PluginProjectionEntry | null) {
+    if (!projection) return;
+    const definitions = projection.editableSettingsGroups.map(group => PluginSettingsContributionV2Schema.parse({
+            id: group.id, title: group.title, scope: group.scope.kind,
+            target: group.target, presentation: group.presentation,
+            fields: [...group.fields.map(field => ({ id: field.key, title: field.title, schema: field.valueSchema,
+                ...(field.subtitle ? { description: field.subtitle } : {}),
+                ...(field.secretCustody ? { secret: { custody: field.secretCustody,
+                    ...(field.managedServiceOrigin ? { managedServiceOrigin: field.managedServiceOrigin } : {}) } }
+                    : field.defaultValue !== undefined || field.defaultBooleanValue !== undefined
+                        ? { default: field.defaultValue ?? field.defaultBooleanValue } : {}),
+                ...(field.presentation ? { presentation: field.presentation } : {}),
+                ...(field.availability ? { availability: field.availability } : {}),
+                ...(field.analytics ? { analytics: field.analytics } : {}),
+            })), ...group.fields.flatMap((field): PluginSettingFieldV2[] => {
+                const binding = field.presentation?.binding;
+                return binding?.kind === 'perActiveServer' && !group.fields.some(candidate => candidate.key === binding.byServerIdSettingId) ? [{
+                    id: binding.byServerIdSettingId, title: `${field.title} overrides`,
+                    schema: { type: 'object', additionalProperties: field.valueSchema }, presentation: { hidden: true },
+                }] : binding?.kind === 'direct' && binding.settingId !== undefined && binding.settingId !== field.key
+                    && !group.fields.some(candidate => candidate.key === binding.settingId) ? [{
+                    id: binding.settingId, title: `${field.title} storage`, schema: field.valueSchema,
+                    presentation: { hidden: true }, ...(field.secretCustody ? { secret: { custody: field.secretCustody } } : {}),
+                }] : [];
+            })],
+        }));
+    const settings = definitions.map(definition => projectPluginSettingsContributionV2({ pluginId: projection.pluginId, definition }));
+    daemonProjection = PluginProjectionV2Schema.parse({ ...daemonProjection, generation: projection.generation,
+        settingsById: Object.fromEntries(settings.map(setting => [setting.id, setting])),
+        installedPackagesById: { [projection.pluginId]: { id: projection.pluginId, displayName: projection.title,
+            version: projection.version, enabled: projection.enabled, source: { kind: 'localPath', locator: '/fixture/plugin' },
+            occurrenceId: projection.occurrenceId } },
+    });
+    const response = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({ availabilityCursor: 1,
+        hostingCapability: { enabled: true, maxArtifactBytes: 1024, maxAccountBytes: 2048 },
+        intent: { pluginId: projection.pluginId, desiredVersion: projection.version, enabled: true,
+            offlineUiHosting: 'enabled', writableCollections: [], revision: 'settings-fixture' },
+        release: { ref: { pluginId: projection.pluginId, version: projection.version },
+            archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
+            normalizedManifest: PluginManifestV2Schema.parse({ schemaVersion: 2, id: projection.pluginId, version: projection.version,
+                displayName: projection.title, engines: { happier: '^1.0.0' }, runtime: { apiVersion: 1 },
+                contributes: { settings: definitions } }), collectionContracts: [], uiSlots: [],
+            packageAssetArchive: { archiveDigestSha256: `sha256:${'c'.repeat(64)}`, resources: [] } },
+        packageAssets: [], uiArtifacts: [],
+    });
+    account.home.answer(account.serverId, PluginAvailabilityActionHttpPathsV1['account.plugins.availability.materializations.read'], {
+        body: PluginAvailabilityMaterializationsReadActionOutputV1Schema.parse({ availabilityCursor: 1, snapshots: [] }),
+    });
+    account.home.answer(account.serverId, PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list'], {
+        body: PluginAvailabilityIntentsListActionOutputV1Schema.parse({ availabilityCursor: 1, pluginIds: [projection.pluginId],
+            intentReads: [{ pluginId: projection.pluginId, response }], failedPluginIds: [] }),
+    });
+    const { sync } = await import('@/sync/sync');
+    const queue = Reflect.get(sync, 'pluginAvailabilitySync') as Pick<InvalidateSync, 'invalidate' | 'awaitQueue'>;
+    queue.invalidate();
+    await queue.awaitQueue();
+    installAccountPluginSettingsRow(projection);
+}
 
-vi.mock('@/sync/ops/machineContributionRegistryProjection', () => ({
-    getMachineContributionRegistryProjectionRevision: () => 0,
-    subscribeMachineContributionRegistryProjectionInvalidation: () => () => {},
-    machinePluginSettingsGet: (...args: unknown[]) => machinePluginSettingsGetMock(...args),
-    machinePluginSettingsSet: (...args: unknown[]) => machinePluginSettingsSetMock(...args),
-    machinePluginSecretStatus: (...args: unknown[]) => machinePluginSecretStatusMock(...args),
-    machinePluginSecretSet: (...args: unknown[]) => machinePluginSecretSetMock(...args),
-    machinePluginSecretDelete: (...args: unknown[]) => machinePluginSecretDeleteMock(...args),
-}));
-
-vi.mock('@/sync/domains/plugins/settings/scopedPluginSettingsRuntime', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/domains/plugins/settings/scopedPluginSettingsRuntime')>();
-    return {
-        ...actual,
-        resolveScopedPluginSettingsServerIdentity: () => 'server-identity-1',
-        scopedPluginSettingsAdapter: {
-            ...actual.scopedPluginSettingsAdapter,
-            read: (...args: Parameters<typeof actual.scopedPluginSettingsAdapter.read>) => {
-                const result = scopedSettingsReadMock(...args);
-                return result === undefined
-                    ? actual.scopedPluginSettingsAdapter.read(...args)
-                    : result;
-            },
-            write: (...args: Parameters<typeof actual.scopedPluginSettingsAdapter.write>) => {
-                const result = scopedSettingsWriteMock(...args);
-                return result === undefined
-                    ? actual.scopedPluginSettingsAdapter.write(...args)
-                    : result;
-            },
-            daemonSecret: {
-                read: (...args: Parameters<NonNullable<typeof actual.scopedPluginSettingsAdapter.daemonSecret>['read']>) => {
-                    const result = scopedDaemonSecretReadMock(...args);
-                    return result === undefined
-                        ? actual.scopedPluginSettingsAdapter.daemonSecret!.read(...args)
-                        : result;
-                },
-                write: (...args: Parameters<NonNullable<typeof actual.scopedPluginSettingsAdapter.daemonSecret>['write']>) => {
-                    const result = scopedDaemonSecretWriteMock(...args);
-                    return result === undefined
-                        ? actual.scopedPluginSettingsAdapter.daemonSecret!.write(...args)
-                        : result;
-                },
-            },
-            watch: (...args: unknown[]) => scopedSettingsWatchMock(...args),
-        },
-        scopedPluginAccountSecretSettingsAdapter: {
-            read: (...args: unknown[]) => accountPluginSecretReadMock(...args),
-            write: (...args: unknown[]) => accountPluginSecretWriteMock(...args),
-        },
+function installAccountPluginSettingsRow(projection: PluginProjectionEntry) {
+    const path = `/v1/account/plugin-settings/${encodeURIComponent(projection.pluginId)}`;
+    if (accountRecordPaths.has(path)) return;
+    accountRecordPaths.add(path);
+    const readInput = { pluginId: projection.pluginId, scope: { kind: 'account' as const },
+        target: { kind: 'account' as const, serverIdentityId: 'srv_settings' },
+        fields: projectScopedPluginSettingsFields(projection.editableSettingsGroups.filter(group => group.scope.kind === 'account')
+            .flatMap(group => group.fields)),
     };
-});
+    const rows = new Map<string, Readonly<{ revision: number; values: Readonly<Record<string, unknown>> }>>();
+    function accountOf(init: RequestInit | undefined) {
+        const authorization = new Headers(init?.headers).get('Authorization');
+        if (!authorization?.startsWith('Bearer ')) return null;
+        try { return parseToken(authorization.slice('Bearer '.length)); } catch { return null; }
+    }
+    account.home.answer(account.serverId, `GET ${path}`, { select: async (_input, request) => {
+        const accountId = accountOf(request.init);
+        if (!accountId) return { status: 401 };
+        let row = rows.get(accountId);
+        if (!row) {
+            const reply: ScopedPluginSettingsReadResult | undefined = await scopedSettingsReadMock(readInput);
+            if (reply) {
+                if (reply.status !== 'ready' || reply.snapshot.revision.kind !== 'account'
+                    || typeof reply.snapshot.revision.value !== 'number') return { status: 503 };
+                row = { revision: reply.snapshot.revision.value, values: reply.snapshot.values };
+            } else {
+                row = { revision: 1, values: {} };
+            }
+            rows.set(accountId, row);
+        }
+        return { body: PluginAccountSettingsReadResponseV1Schema.parse({ status: 'present', revision: row.revision,
+            content: { t: 'plain', v: { v: 1, values: row.values } } }) };
+    } });
+    account.home.answer(account.serverId, `POST ${path}`, { select: async (input, request) => {
+        const accountId = accountOf(request.init);
+        if (!accountId) return { status: 401 };
+        const row = rows.get(accountId);
+        const mutation = PluginAccountSettingsMutationRequestV1Schema.parse(input);
+        const reply: ScopedPluginSettingsWriteResult | undefined = await scopedSettingsWriteMock(mutation);
+        if (!row || mutation.expectedRevision !== row.revision) return { body:
+            PluginAccountSettingsMutationResponseV1Schema.parse({ status: 'conflict', revision: row?.revision ?? 0 }) };
+        if (mutation.content?.t !== 'plain') throw new Error('Generic Settings fixture requires its Plain Account envelope');
+        const updated = { revision: row.revision + 1, values: PluginAccountSettingsValuesV1Schema.parse(mutation.content.v).values };
+        rows.set(accountId, updated);
+        if (reply && reply.status !== 'ready' && reply.status !== 'applied') {
+            if (reply.status === 'outcomeUnknown') return { dispatchThenFail: true };
+            return { status: 503 };
+        }
+        return { body: PluginAccountSettingsMutationResponseV1Schema.parse({ status: 'updated', revision: updated.revision }) };
+    } });
+}
 
-vi.mock('@/hooks/server/useActiveServerSnapshot', () => ({
-    useActiveServerSnapshot: () => ({
-        serverId: 'server-1',
-        serverUrl: 'https://server-1.example.test',
-        generation: 1,
-    }),
-}));
+function installGenericSettingsSocketBoundary() {
+    const replies = new Map<string, typeof machinePluginSettingsGetMock>([
+        [RPC_METHODS.DAEMON_PLUGIN_SETTINGS_GET, machinePluginSettingsGetMock],
+        [RPC_METHODS.DAEMON_PLUGIN_SETTINGS_SET, machinePluginSettingsSetMock],
+        [RPC_METHODS.DAEMON_PLUGIN_SECRET_STATUS, machinePluginSecretStatusMock],
+        [RPC_METHODS.DAEMON_PLUGIN_SECRET_SET, machinePluginSecretSetMock],
+        [RPC_METHODS.DAEMON_PLUGIN_SECRET_DELETE, machinePluginSecretDeleteMock],
+    ]);
+    installDisconnectedServerSocketBoundary(socket => {
+        socket.connect = vi.fn<typeof socket.connect>(() => {
+            socket.connected = true;
+            for (const listener of socket.listeners('connect')) listener();
+            return socket;
+        });
+        socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event: string, packet: unknown) => {
+            if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
+            if (!packet || typeof packet !== 'object' || !('method' in packet) || typeof packet.method !== 'string'
+                || !('params' in packet) || !packet.params || typeof packet.params !== 'object') {
+                throw new Error('Malformed Generic Settings Socket request');
+            }
+            const separator = packet.method.indexOf(':');
+            const method = packet.method.slice(separator + 1);
+            if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
+                return { ok: true, result: { protocolVersion: 1, projection: daemonProjection } };
+            }
+            if (method === RPC_METHODS.DAEMON_PLUGIN_SETTINGS_WATCH) {
+                return { ok: true, result: await scopedSettingsWatchMock(packet.params) };
+            }
+            if ('canonicalOrigin' in packet.params && (method === RPC_METHODS.DAEMON_PLUGIN_SECRET_STATUS
+                || method === RPC_METHODS.DAEMON_PLUGIN_SECRET_SET || method === RPC_METHODS.DAEMON_PLUGIN_SECRET_DELETE)) {
+                const params = packet.params as Readonly<Record<string, unknown>>;
+                const input = { target: { kind: 'daemon', serverId: resolveServerProfileScopeIdForIdentifier(account.serverId),
+                    serverIdentityId: params.serverIdentityId, machineId: params.machineId },
+                    pluginId: params.pluginId, secretId: params.secretId, canonicalOrigin: params.canonicalOrigin,
+                    ...(method === RPC_METHODS.DAEMON_PLUGIN_SECRET_STATUS ? {} : { expectedRevision: params.expectedRevision,
+                        mutation: method === RPC_METHODS.DAEMON_PLUGIN_SECRET_SET ? { kind: 'set', value: params.value } : { kind: 'delete' } }),
+                };
+                const response: unknown = await (method === RPC_METHODS.DAEMON_PLUGIN_SECRET_STATUS
+                    ? scopedDaemonSecretReadMock(input) : scopedDaemonSecretWriteMock(input));
+                if (response && typeof response === 'object' && 'status' in response) {
+                    if (response.status !== 'ready' || !('snapshot' in response) || !response.snapshot
+                        || typeof response.snapshot !== 'object') return { ok: true, result: null };
+                    const snapshot = response.snapshot as Readonly<Record<string, unknown>>;
+                    return { ok: true, result: { protocolVersion: 1, pluginId: snapshot.pluginId, secretId: snapshot.secretId,
+                        state: snapshot.state, revision: snapshot.revision } };
+                }
+            }
+            const reply = replies.get(method);
+            if (!reply) throw new Error(`Unexpected Generic Settings Socket method: ${method}`);
+            const params = { ...packet.params } as Record<string, unknown>;
+            delete params.machineId;
+            delete params.scope;
+            const response: unknown = await reply(packet.method.slice(0, separator), {
+                ...params, serverId: resolveServerProfileScopeIdForIdentifier(account.serverId),
+            });
+            if (!response || typeof response !== 'object' || !('supported' in response) || !response.supported) {
+                return { ok: true, result: null };
+            }
+            return { ok: true, result: 'snapshot' in response ? response.snapshot : 'result' in response ? response.result : null };
+        });
+    });
+}
 
-vi.mock('@/sync/domains/scope/activeServerAccountScope', () => ({
-    captureActiveServerAccountScopeLifetime: () => activeAccountLifetimeState.current,
-}));
+function seededAccountSecrets() {
+    let settings: Record<string, unknown> = {};
+    for (const localId of ['apiToken', 'accountToken']) {
+        const id = `saved-${localId}`;
+        settings = applyAccountSettingsSavedSecretMutation(settings, { kind: 'add', secret: {
+            id, name: `Existing ${localId}`, kind: 'token',
+            // Synthetic legacy ingress; Plain Accounts have no client encryption key.
+            encryptedValue: { _isSecretValue: true, value: 'must-not-render' }, createdAt: 1, updatedAt: 1,
+        } }).settings;
+        settings = applyAccountSettingsSavedSecretMutation(settings, { kind: 'bindPluginSecret',
+            target: { pluginId: PLUGIN_ID, localId }, expectedSecretId: null, expectedSecretUpdatedAt: null, secretId: id,
+        }).settings;
+    }
+    return settings;
+}
+
+async function restoreTestAccount(accountId = 'account-a', settings = seededAccountSecrets()) {
+    installGenericSettingsSocketBoundary();
+    await account.restore({ accountId, currentAccount: true, serverIdentityId: 'srv_settings',
+        settings,
+        machines: [createMachineFixture({ activeAt: Date.now() }), createMachineFixture({ id: 'machine-2', activeAt: Date.now() })] });
+    const home = account.home.findByServerUrl('https://provider-settings-account.test');
+    if (!home) throw new Error('Generic Settings requires its restored HTTP Home');
+    const settingsHttp = createAccountSettingsHttpBoundary({ serverUrl: home.serverUrl,
+        initialAccounts: [{ accountId, snapshot: { version: 1, content: { t: 'plain', v: settings } } }],
+    });
+    accountSettingsHttp = settingsHttp;
+    persistedAccountSettings = settings;
+    account.home.answer(account.serverId, '/v2/account/settings', { select: async (input, request) => {
+        const next = async (): Promise<HomeDomainAnswer> => {
+            const response = settingsHttp.handle(request.url, request.init);
+            if (!response) throw new Error('Missing Generic Settings Account HTTP route');
+            const body: unknown = await response.json();
+            if (input && typeof body === 'object' && body !== null && 'success' in body && body.success === true) {
+                const mutation = AccountSettingsV2UpdateRequestSchema.parse(input);
+                if (mutation.content?.t === 'plain') persistedAccountSettings = mutation.content.v;
+            }
+            return { status: response.status, body };
+        };
+        if (request.init?.method !== 'POST') return next();
+        const mutation = AccountSettingsV2UpdateRequestSchema.parse(input);
+        accountSettingsWrites.push(mutation);
+        return accountSettingsPost ? accountSettingsPost(mutation, next) : next();
+    } });
+    const lifetime = captureActiveServerAccountScopeLifetime();
+    if (!lifetime) throw new Error('Generic Settings fixture requires its real applied Account lifetime');
+    activeAccountLifetimeState.current = lifetime;
+    return lifetime;
+}
 
 const PLUGIN_ID = 'acme.hooks';
-const GROUP_ID = 'acme.hooks.settings';
+const GROUP_ID = 'settings';
 const OPENCODE_PLUGIN_ID = 'happier.agent.opencode';
 const OPENCODE_GROUP_ID = 'agent-settings';
 const OPENCODE_SERVER_PASSWORD_SETTING_ID = 'opencodeServerPassword';
@@ -518,49 +696,11 @@ function scopedDaemonSecretReady(input: Readonly<{
     };
 }
 
-function createTestAccountLifetime(params: Readonly<{ accountId?: string }> = {}): ActiveServerAccountScopeLifetime {
-    return Object.freeze({
-        scope: Object.freeze({ serverId: 'server-1', accountId: params.accountId ?? 'account-1' }),
-        isCurrent: () => true,
-        onRetire: () => Object.freeze({ dispose(): void {} }),
-    });
-}
-
-function createRetirableTestAccountLifetime(accountId = 'account-a'): Readonly<{
-    lifetime: ActiveServerAccountScopeLifetime;
-    invalidate(): void;
-    retire(): void;
-}> {
-    let current = true;
-    const cancellations = new Set<() => void>();
-    const lifetime = Object.freeze({
-        scope: Object.freeze({ serverId: 'server-1', accountId }),
-        isCurrent: () => current,
-        onRetire: (cancel: () => void) => {
-            cancellations.add(cancel);
-            return Object.freeze({
-                dispose: () => cancellations.delete(cancel),
-            });
-        },
-    });
-    return Object.freeze({
-        lifetime,
-        invalidate: () => {
-            current = false;
-        },
-        retire: () => {
-            current = false;
-            for (const cancel of cancellations) cancel();
-            cancellations.clear();
-        },
-    });
-}
-
 function readyOpenCodeAccountSettings(
     selectedEndpoint: string,
     target: Readonly<{ kind: 'account'; serverIdentityId: string }> = {
         kind: 'account',
-        serverIdentityId: 'server-identity-1',
+        serverIdentityId: 'srv_settings',
     },
 ) {
     return {
@@ -572,7 +712,7 @@ function readyOpenCodeAccountSettings(
             values: {
                 opencodeServerBaseUrl: 'https://fallback.example.test',
                 opencodeServerBaseUrlByServerIdV1: {
-                    'server-identity-1': selectedEndpoint,
+                    'srv_settings': selectedEndpoint,
                 },
             },
         },
@@ -615,6 +755,7 @@ async function renderSection(
         presentation?: Readonly<{ kind: 'disclosures'; title: string }>;
     }> = {},
 ) {
+    await publishSettingsDeclaration(projection);
     const { PluginDetailGenericSettingsSection } = await import('./PluginDetailGenericSettingsSection');
     const pluginId = projection?.pluginId ?? PLUGIN_ID;
     const element = (
@@ -623,13 +764,13 @@ async function renderSection(
             projection={projection}
             accountSettingsDeclaration={options.accountSettingsDeclaration}
             machineId={options.machineId === undefined ? 'machine-1' : options.machineId}
-            serverId={options.serverId === undefined ? 'server-1' : options.serverId}
-            accountServerIdentityId="server-identity-1"
+            serverId={options.serverId === undefined ? account.serverId : options.serverId}
+            accountServerIdentityId="srv_settings"
             daemonServerIdentityId={options.daemonServerIdentityId === undefined
-                ? 'server-identity-1'
+                ? 'srv_settings'
                 : options.daemonServerIdentityId}
             perActiveServerIdentityId={options.perActiveServerIdentityId === undefined
-                ? 'server-identity-1'
+                ? 'srv_settings'
                 : options.perActiveServerIdentityId}
             daemonOperationsAvailable={options.daemonOperationsAvailable ?? true}
             isDaemonTargetCurrent={options.isDaemonTargetCurrent}
@@ -663,10 +804,14 @@ function hasPressableTestIdAncestor(
     return false;
 }
 
+// Initialize the real screen after the declared platform boundaries during
+// collection, outside individual interaction-test deadlines.
+await import('./PluginDetailGenericSettingsSection');
+
 describe('PluginDetailGenericSettingsSection', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
         platformEnvironment.platform = 'web';
-        activeAccountLifetimeState.current = createTestAccountLifetime();
+        accountRecordPaths.clear();
         machinePluginSettingsGetMock.mockReset();
         machinePluginSettingsSetMock.mockReset();
         machinePluginSecretStatusMock.mockReset();
@@ -676,43 +821,31 @@ describe('PluginDetailGenericSettingsSection', () => {
         machinePluginSecretSetMock.mockResolvedValue(secretSetResult('configured', 'origin-1'));
         machinePluginSecretDeleteMock.mockResolvedValue(secretDeleteResult('missing', 'origin-2'));
         scopedSettingsWatchMock.mockReset();
-        scopedSettingsWatchMock.mockReturnValue({ dispose: vi.fn() });
+        // A parked daemon watch owns no timer here; the real caller's retirement cancels it.
+        scopedSettingsWatchMock.mockImplementation(() => new Promise(() => {}));
         scopedSettingsReadMock.mockReset();
         scopedSettingsWriteMock.mockReset();
         scopedDaemonSecretReadMock.mockReset();
         scopedDaemonSecretWriteMock.mockReset();
         routerPushSpy.mockReset();
-        emitPluginSettingChangedEventMock.mockReset();
+        emitPluginSettingChangedEventMock.mockClear();
         machinePluginSettingsGetMock.mockResolvedValue(settingsResult({
             endpoint: 'https://api.example.test',
             apiToken: 'must-not-render',
             enabled: true,
         }));
-        accountPluginSecretReadMock.mockReset();
-        accountPluginSecretWriteMock.mockReset();
+        accountSettingsWrites.length = 0;
+        accountSettingsPost = null;
         modalShowMock.mockReset();
         modalConfirmMock.mockReset();
         modalConfirmMock.mockResolvedValue(true);
-        accountPluginSecretReadMock.mockResolvedValue({
-            status: 'ready',
-            snapshot: {
-                scope: { kind: 'account' },
-                target: { kind: 'account', serverIdentityId: 'server-identity-1' },
-                revision: { kind: 'account-secret', value: 5 },
-                values: {},
-                secretStates: { apiToken: 'configured', accountToken: 'configured' },
-            },
-        });
-        accountPluginSecretWriteMock.mockResolvedValue({
-            status: 'ready',
-            snapshot: {
-                scope: { kind: 'account' },
-                target: { kind: 'account', serverIdentityId: 'server-identity-1' },
-                revision: { kind: 'account-secret', value: 6 },
-                values: {},
-                secretStates: { apiToken: 'configured', accountToken: 'configured' },
-            },
-        });
+        await restoreTestAccount();
+    });
+
+    afterEach(async () => {
+        await standardCleanup();
+        await account.reset();
+        activeAccountLifetimeState.current = null;
     });
 
     it('draws no section for a settings group with nothing the user can set', async () => {
@@ -767,18 +900,9 @@ describe('PluginDetailGenericSettingsSection', () => {
             [],
             revision,
         )));
-        scopedSettingsWatchMock.mockImplementation((input: Readonly<{ onInvalidated(): void }>) => {
-            invalidate = input.onInvalidated;
-            return { dispose: vi.fn() };
-        });
-        // Load the declarative surface before the generic section. This file's
-        // manual `scopedPluginSettingsRuntime` mock resolves through
-        // `importOriginal`, and that actual module reaches
-        // `@/components/plugins/surfaces` through `@/sync/sync`. Vitest skips a
-        // manual mock for a module requested while the mocked id is already on
-        // its import callstack, so whichever Settings consumer is first reached
-        // that way binds the unmocked runtime — a different adapter object and
-        // identity resolver — and can no longer join this record at all.
+        scopedSettingsWatchMock.mockImplementation(() => new Promise(resolve => {
+            invalidate = () => resolve({ status: 'changed', revision });
+        }));
         const { DeclarativePluginSurface } = await import('@/components/plugins/surfaces/DeclarativePluginSurface');
         const { PluginDetailGenericSettingsSection } = await import('./PluginDetailGenericSettingsSection');
         const declarativeSettings = ['endpoint', 'region'].map((id) => Object.freeze({
@@ -799,10 +923,10 @@ describe('PluginDetailGenericSettingsSection', () => {
                     pluginId={PLUGIN_ID}
                     projection={createProjection(1, [SETTINGS_FIELDS[0]!])}
                     machineId="machine-1"
-                    serverId="server-1"
-                    accountServerIdentityId="server-identity-1"
-                    daemonServerIdentityId="server-identity-1"
-                    perActiveServerIdentityId="server-identity-1"
+                    serverId={account.serverId}
+                    accountServerIdentityId="srv_settings"
+                    daemonServerIdentityId="srv_settings"
+                    perActiveServerIdentityId="srv_settings"
                     daemonOperationsAvailable
                 />
                 <DeclarativePluginSurface
@@ -854,7 +978,7 @@ describe('PluginDetailGenericSettingsSection', () => {
                         },
                     }}
                     machineId="machine-1"
-                    serverId="server-1"
+                    serverId={account.serverId}
                     accountLifetime={activeAccountLifetimeState.current}
                     interactionEnabled={true}
                     daemonInteractionEnabled={true}
@@ -965,7 +1089,7 @@ describe('PluginDetailGenericSettingsSection', () => {
     });
 
     it('renders an external notification channel through the canonical Account Plugin Settings record', async () => {
-        const accountTarget = { kind: 'account' as const, serverIdentityId: 'server-identity-1' };
+        const accountTarget = { kind: 'account' as const, serverIdentityId: 'srv_settings' };
         scopedSettingsReadMock.mockImplementation((input: Readonly<{ scope?: Readonly<{ kind?: string }> }>) => (
             input.scope?.kind === 'account'
                 ? Promise.resolve({
@@ -1018,24 +1142,17 @@ describe('PluginDetailGenericSettingsSection', () => {
         });
 
         expect(scopedSettingsWriteMock).toHaveBeenCalledWith(expect.objectContaining({
-            pluginId: EXTERNAL_NOTIFICATION_PLUGIN_ID,
-            scope: { kind: 'account' },
-            target: accountTarget,
-            fieldId: EXTERNAL_NOTIFICATION_ENDPOINT_FIELD_ID,
-            mutation: { kind: 'set', value: 'https://review.example.test/hooks/updated' },
-            expectedRevision: { kind: 'account', value: 4 },
+            content: { t: 'plain', v: { v: 1, values: {
+                [EXTERNAL_NOTIFICATION_ENDPOINT_FIELD_ID]: 'https://review.example.test/hooks/updated',
+            } } },
+            expectedRevision: 4,
         }));
     });
 
     it('renders an Account-custodied field through SavedSecret without exposing its value', async () => {
         const { screen } = await renderSection(createProjection(1, [ACCOUNT_SECRET_FIELD], 'account'));
 
-        expect(accountPluginSecretReadMock).toHaveBeenCalledWith({
-            pluginId: PLUGIN_ID,
-            scope: { kind: 'account' },
-            target: { kind: 'account', serverIdentityId: 'server-identity-1' },
-            fields: [expect.objectContaining({ key: 'accountToken', redacted: true })],
-        });
+        expect(resolveAccountSettingsPluginSecretBinding(persistedAccountSettings, { pluginId: PLUGIN_ID, localId: 'accountToken' })).not.toBeNull();
         expect(screen.findByTestId(ACCOUNT_SECRET_INPUT_ID)).not.toBeNull();
         expect(screen.findByTestId(ACCOUNT_SECRET_INPUT_ID)?.props.value).toBe('');
         expect(screen.findByTestId(ACCOUNT_SECRET_INPUT_ID)?.props.accessibilityLabel).toBe('Account token');
@@ -1050,15 +1167,13 @@ describe('PluginDetailGenericSettingsSection', () => {
             screen.pressByTestId(ACCOUNT_SECRET_SAVE_ID);
             await Promise.resolve();
         });
+        await flushAsync();
 
-        expect(accountPluginSecretWriteMock).toHaveBeenCalledWith(expect.objectContaining({
-            pluginId: PLUGIN_ID,
-            scope: { kind: 'account' },
-            target: { kind: 'account', serverIdentityId: 'server-identity-1' },
-            fieldId: 'accountToken',
-            mutation: { kind: 'set', value: 'account-secret-value' },
-            expectedRevision: { kind: 'account-secret', value: 5 },
-        }));
+        expect(accountSettingsWrites).toHaveLength(1);
+        expect(accountSettingsWrites[0]?.expectedVersion).toBe(1);
+        expect(resolveAccountSettingsPluginSecret(persistedAccountSettings, { pluginId: PLUGIN_ID, localId: 'accountToken' })?.secret.encryptedValue)
+            .toMatchObject({ _isSecretValue: true, value: 'account-secret-value' });
+        expect(JSON.stringify(screen.tree.toJSON())).not.toContain('account-secret-value');
         expect(machinePluginSettingsGetMock).not.toHaveBeenCalled();
         expect(machinePluginSettingsSetMock).not.toHaveBeenCalled();
     });
@@ -1066,18 +1181,12 @@ describe('PluginDetailGenericSettingsSection', () => {
     it('routes a daemon-scoped Account-custodied secret through SavedSecret', async () => {
         const { screen } = await renderSection(createProjection(1, [ACCOUNT_SECRET_FIELD], 'daemon'));
 
-        expect(accountPluginSecretReadMock).toHaveBeenCalledWith({
-            pluginId: PLUGIN_ID,
-            scope: { kind: 'account' },
-            target: { kind: 'account', serverIdentityId: 'server-identity-1' },
-            fields: [expect.objectContaining({ key: 'accountToken', redacted: true })],
-        });
+        expect(resolveAccountSettingsPluginSecretBinding(persistedAccountSettings, { pluginId: PLUGIN_ID, localId: 'accountToken' })).not.toBeNull();
         expect(machinePluginSettingsGetMock).not.toHaveBeenCalled();
 
         // The SavedSecret projection settles independently of the daemon
         // Settings section, so wait for its owner-bound revision before save.
         await flushAsync();
-        expect(accountPluginSecretReadMock).toHaveBeenCalledOnce();
         expect(screen.findByTestId(ACCOUNT_SECRET_STATUS_ID)).not.toBeNull();
         expect(screen.findByTestId(ACCOUNT_SECRET_SAVE_ID)?.props.disabled).toBe(true);
 
@@ -1090,15 +1199,11 @@ describe('PluginDetailGenericSettingsSection', () => {
             screen.pressByTestId(ACCOUNT_SECRET_SAVE_ID);
             await Promise.resolve();
         });
+        await flushAsync();
 
-        expect(accountPluginSecretWriteMock).toHaveBeenCalledWith(expect.objectContaining({
-            pluginId: PLUGIN_ID,
-            scope: { kind: 'account' },
-            target: { kind: 'account', serverIdentityId: 'server-identity-1' },
-            fieldId: 'accountToken',
-            mutation: { kind: 'set', value: 'portable-account-secret' },
-            expectedRevision: { kind: 'account-secret', value: 5 },
-        }));
+        expect(accountSettingsWrites).toHaveLength(1);
+        expect(resolveAccountSettingsPluginSecret(persistedAccountSettings, { pluginId: PLUGIN_ID, localId: 'accountToken' })?.secret.encryptedValue)
+            .toMatchObject({ _isSecretValue: true, value: 'portable-account-secret' });
         expect(machinePluginSettingsSetMock).not.toHaveBeenCalled();
     });
 
@@ -1119,15 +1224,15 @@ describe('PluginDetailGenericSettingsSection', () => {
         expect(scopedDaemonSecretReadMock).toHaveBeenCalledWith(expect.objectContaining({
             target: {
                 kind: 'daemon',
-                serverId: 'server-1',
-                serverIdentityId: 'server-identity-1',
+                serverId: resolveServerProfileScopeIdForIdentifier(account.serverId),
+                serverIdentityId: 'srv_settings',
                 machineId: 'machine-1',
             },
             pluginId: OPENCODE_PLUGIN_ID,
             secretId: OPENCODE_SERVER_PASSWORD_SETTING_ID,
             canonicalOrigin: 'https://opencode.example.test',
         }));
-        expect(accountPluginSecretReadMock).not.toHaveBeenCalled();
+        expect(accountSettingsWrites).toHaveLength(0);
         expect(screen.findByTestId(OPENCODE_SECRET_INPUT_ID)?.props.value).toBe('');
         await flushAsync();
         expect(screen.findByTestId(OPENCODE_SECRET_SAVE_ID)?.props.disabled).toBe(true);
@@ -1146,8 +1251,8 @@ describe('PluginDetailGenericSettingsSection', () => {
         expect(scopedDaemonSecretWriteMock).toHaveBeenCalledWith(expect.objectContaining({
             target: {
                 kind: 'daemon',
-                serverId: 'server-1',
-                serverIdentityId: 'server-identity-1',
+                serverId: resolveServerProfileScopeIdForIdentifier(account.serverId),
+                serverIdentityId: 'srv_settings',
                 machineId: 'machine-1',
             },
             pluginId: OPENCODE_PLUGIN_ID,
@@ -1161,7 +1266,7 @@ describe('PluginDetailGenericSettingsSection', () => {
         expect(machinePluginSecretDeleteMock).not.toHaveBeenCalled();
         expect(machinePluginSettingsGetMock).not.toHaveBeenCalled();
         expect(machinePluginSettingsSetMock).not.toHaveBeenCalled();
-        expect(accountPluginSecretWriteMock).not.toHaveBeenCalled();
+        expect(accountSettingsWrites).toHaveLength(0);
         await screen.unmount();
         // Let the aborted status effect settle before the next test resets the
         // shared transport spies; a late aborted call is not current-origin work.
@@ -1227,9 +1332,6 @@ describe('PluginDetailGenericSettingsSection', () => {
     });
 
     it('does not settle an origin-bound daemon-secret write into a replacement Account with the same origin and daemon target', async () => {
-        const accountA = createRetirableTestAccountLifetime();
-        const accountB = createTestAccountLifetime({ accountId: 'account-b' });
-        activeAccountLifetimeState.current = accountA.lifetime;
         const pendingWrite = createDeferred<ScopedPluginDaemonSecretWriteResult>();
         const writeInputs: ScopedPluginDaemonSecretWriteInput[] = [];
         scopedSettingsReadMock.mockImplementation((input: Readonly<{
@@ -1271,8 +1373,7 @@ describe('PluginDetailGenericSettingsSection', () => {
         // Active Account scope can change before this React consumer recaptures
         // its lifetime and dispatches the synchronous retirement callbacks.
         // A late daemon-secret settlement must still consult currentness.
-        activeAccountLifetimeState.current = accountB;
-        accountA.invalidate();
+        await act(async () => { await restoreTestAccount('account-b'); });
         await act(async () => {
             pendingWrite.resolve({
                 status: 'outcomeUnknown',
@@ -1294,14 +1395,14 @@ describe('PluginDetailGenericSettingsSection', () => {
             .not.toContain('settingsProviders.errors.mutationOutcomeUnknownDescription');
 
         await act(async () => {
-            screen.tree.update(React.cloneElement(element));
+            await screen.update(React.cloneElement(element));
             await Promise.resolve();
         });
         await flushAsync();
 
         expect(scopedSettingsReadMock).toHaveBeenCalledWith(expect.objectContaining({
             scope: { kind: 'account' },
-            target: { kind: 'account', serverIdentityId: 'server-identity-1' },
+            target: { kind: 'account', serverIdentityId: 'srv_settings' },
         }));
         expect(screen.findByTestId(OPENCODE_SECRET_INPUT_ID)?.props.value).toBe('');
         expect(screen.findByTestId(OPENCODE_SECRET_STATUS_ID)).toBeNull();
@@ -1310,9 +1411,6 @@ describe('PluginDetailGenericSettingsSection', () => {
     });
 
     it('clears an Account-A managed daemon-secret presentation when the Account lifetime retires', async () => {
-        const accountA = createRetirableTestAccountLifetime();
-        const accountB = createTestAccountLifetime({ accountId: 'account-b' });
-        activeAccountLifetimeState.current = accountA.lifetime;
         let secretReadCount = 0;
         scopedSettingsReadMock.mockImplementation((input: Readonly<{
             scope?: Readonly<{ kind?: string }>;
@@ -1346,8 +1444,7 @@ describe('PluginDetailGenericSettingsSection', () => {
         expect(screen.findByTestId(OPENCODE_SECRET_INPUT_ID)?.props.value).toBe('account-a-secret');
 
         await act(async () => {
-            activeAccountLifetimeState.current = accountB;
-            accountA.retire();
+            await restoreTestAccount('account-b');
             await Promise.resolve();
         });
         await flushAsync();
@@ -1373,7 +1470,7 @@ describe('PluginDetailGenericSettingsSection', () => {
         expect(machinePluginSecretSetMock).not.toHaveBeenCalled();
         expect(machinePluginSettingsGetMock).not.toHaveBeenCalled();
         expect(machinePluginSettingsSetMock).not.toHaveBeenCalled();
-        expect(accountPluginSecretReadMock).not.toHaveBeenCalled();
+        expect(accountSettingsWrites).toHaveLength(0);
     });
 
     it('uses current release declarations for offline Account recovery without presenting daemon-custodied secrets', async () => {
@@ -1387,12 +1484,9 @@ describe('PluginDetailGenericSettingsSection', () => {
 
         expect(screen.findByTestId(RECOVERY_SECRET_INPUT_ID)).not.toBeNull();
         expect(screen.findByTestId(RECOVERY_DAEMON_SECRET_INPUT_ID)).toBeNull();
-        expect(accountPluginSecretReadMock).toHaveBeenCalledWith({
-            pluginId: PLUGIN_ID,
-            scope: { kind: 'account' },
-            target: { kind: 'account', serverIdentityId: 'server-identity-1' },
-            fields: [expect.objectContaining({ key: 'apiToken', redacted: true })],
-        });
+        expect(screen.findByTestId(RECOVERY_SECRET_INPUT_ID)?.props.accessibilityHint)
+            .toBe('memorySearchSettings.embeddings.secretSet');
+        expect(JSON.stringify(screen.tree.toJSON())).not.toContain('must-not-render');
         expect(machinePluginSettingsGetMock).not.toHaveBeenCalled();
         expect(machinePluginSettingsSetMock).not.toHaveBeenCalled();
     });
@@ -1414,11 +1508,9 @@ describe('PluginDetailGenericSettingsSection', () => {
         });
         await flushAsync();
 
-        expect(accountPluginSecretWriteMock).toHaveBeenNthCalledWith(1, expect.objectContaining({
-            fieldId: 'accountToken',
-            mutation: { kind: 'set', value: '' },
-            expectedRevision: { kind: 'account-secret', value: 5 },
-        }));
+        expect(accountSettingsWrites).toHaveLength(1);
+        expect(resolveAccountSettingsPluginSecret(persistedAccountSettings, { pluginId: PLUGIN_ID, localId: 'accountToken' })?.secret.encryptedValue)
+            .toMatchObject({ _isSecretValue: true, value: '' });
         expect(screen.findByTestId(ACCOUNT_SECRET_DELETE_ID)).not.toBeNull();
 
         await act(async () => {
@@ -1427,21 +1519,16 @@ describe('PluginDetailGenericSettingsSection', () => {
         });
         await flushAsync();
 
-        // The prompt names the Account record that loses the secret, in the
-        // person's language rather than a hardcoded English scope word.
-        expect(modalConfirmMock).toHaveBeenCalledWith(
-            'secrets.prompts.deleteTitle',
-            `secrets.prompts.deleteConfirm:${PLUGIN_ID} · Account token · settings.account`,
-            { destructive: true, confirmText: 'common.delete', cancelText: 'common.cancel' },
-        );
-        expect(accountPluginSecretWriteMock).toHaveBeenNthCalledWith(2, expect.objectContaining({
-            fieldId: 'accountToken',
-            mutation: { kind: 'delete' },
-            expectedRevision: { kind: 'account-secret', value: 6 },
-        }));
+        expect(modalConfirmMock).not.toHaveBeenCalled();
+        expect(accountSettingsWrites).toHaveLength(2);
+        expect(resolveAccountSettingsPluginSecretBinding(persistedAccountSettings, { pluginId: PLUGIN_ID, localId: 'accountToken' })).toBeNull();
     });
 
     it('binds an existing SavedSecret through the host picker and can explicitly unbind it', async () => {
+        await restoreTestAccount('account-a', applyAccountSettingsSavedSecretMutation(seededAccountSecrets(), {
+            kind: 'add', secret: { id: 'saved-secret-owned-by-user', name: 'User key', kind: 'token',
+                encryptedValue: { _isSecretValue: true, value: 'user-private-material' }, createdAt: 1, updatedAt: 1 },
+        }).settings);
         const { screen } = await renderSection(createProjection(1, [ACCOUNT_SECRET_FIELD], 'account'));
 
         const bindExistingSecret = screen.findByProps({
@@ -1481,14 +1568,9 @@ describe('PluginDetailGenericSettingsSection', () => {
         });
         await flushAsync();
 
-        expect(accountPluginSecretWriteMock).toHaveBeenNthCalledWith(1, expect.objectContaining({
-            pluginId: PLUGIN_ID,
-            scope: { kind: 'account' },
-            target: { kind: 'account', serverIdentityId: 'server-identity-1' },
-            fieldId: 'accountToken',
-            mutation: { kind: 'bind', savedSecretId: 'saved-secret-owned-by-user' },
-            expectedRevision: { kind: 'account-secret', value: 5 },
-        }));
+        expect(accountSettingsWrites).toHaveLength(1);
+        expect(resolveAccountSettingsPluginSecretBinding(persistedAccountSettings, { pluginId: PLUGIN_ID, localId: 'accountToken' })?.savedSecretId)
+            .toBe('saved-secret-owned-by-user');
         expect(screen.findByTestId(ACCOUNT_SECRET_INPUT_ID)?.props.value).toBe('');
         expect(screen.getTextContent()).not.toContain('saved-secret-owned-by-user');
         expect(JSON.stringify(screen.tree.toJSON())).not.toContain('saved-secret-owned-by-user');
@@ -1504,88 +1586,60 @@ describe('PluginDetailGenericSettingsSection', () => {
         });
         await flushAsync();
 
-        expect(accountPluginSecretWriteMock).toHaveBeenNthCalledWith(2, expect.objectContaining({
-            fieldId: 'accountToken',
-            mutation: { kind: 'unbind' },
-            expectedRevision: { kind: 'account-secret', value: 6 },
-        }));
+        expect(accountSettingsWrites).toHaveLength(2);
+        expect(resolveAccountSettingsPluginSecretBinding(persistedAccountSettings, { pluginId: PLUGIN_ID, localId: 'accountToken' })).toBeNull();
     });
 
     it('adopts a rejected Account-secret CAS snapshot without replaying the draft', async () => {
-        accountPluginSecretWriteMock
-            .mockResolvedValueOnce({
-                status: 'conflict',
-                snapshot: {
-                    scope: { kind: 'account' },
-                    target: { kind: 'account', serverIdentityId: 'server-identity-1' },
-                    revision: { kind: 'account-secret', value: 6 },
-                    values: {},
-                    secretStates: { accountToken: 'missing' },
-                },
-            })
-            .mockResolvedValueOnce({
-                status: 'ready',
-                snapshot: {
-                    scope: { kind: 'account' },
-                    target: { kind: 'account', serverIdentityId: 'server-identity-1' },
-                    revision: { kind: 'account-secret', value: 7 },
-                    values: {},
-                    secretStates: { accountToken: 'configured' },
-                },
-            });
         const { screen } = await renderSection(createProjection(1, [ACCOUNT_SECRET_FIELD], 'account'));
+        const winner = applyAccountSettingsSavedSecretMutation(seededAccountSecrets(), { kind: 'unbindPluginSecret',
+            target: { pluginId: PLUGIN_ID, localId: 'accountToken' }, expectedSecretId: 'saved-accountToken', expectedSecretUpdatedAt: 1,
+        }).settings;
+        accountSettingsHttp.replaceAccountSettings('account-a', { version: 2, content: { t: 'plain', v: winner } });
 
         act(() => {
             screen.changeTextByTestId(ACCOUNT_SECRET_INPUT_ID, 'draft-that-needs-explicit-retry');
         });
-        act(() => {
+        await act(async () => {
             screen.pressByTestId(ACCOUNT_SECRET_SAVE_ID);
         });
-        expect(accountPluginSecretWriteMock).toHaveBeenCalledTimes(1);
-        await act(async () => {
-            await accountPluginSecretWriteMock.mock.results[0]!.value;
-        });
+        await flushAsync();
+        expect(accountSettingsWrites).toHaveLength(1);
 
         expect(screen.findByTestId(ACCOUNT_SECRET_INPUT_ID)?.props.value).toBe('draft-that-needs-explicit-retry');
         expect(screen.findByTestId(ACCOUNT_SECRET_SAVE_ID)?.props.accessibilityLabel).toBe('common.retry: Account token');
         expect(screen.findByTestId(ACCOUNT_SECRET_DELETE_ID)).toBeNull();
 
-        act(() => {
+        await act(async () => {
             screen.pressByTestId(ACCOUNT_SECRET_SAVE_ID);
         });
-        expect(accountPluginSecretWriteMock).toHaveBeenCalledTimes(2);
-        await act(async () => {
-            await accountPluginSecretWriteMock.mock.results[1]!.value;
-        });
-
-        expect(accountPluginSecretWriteMock).toHaveBeenNthCalledWith(2, expect.objectContaining({
-            mutation: { kind: 'set', value: 'draft-that-needs-explicit-retry' },
-            expectedRevision: { kind: 'account-secret', value: 6 },
-        }));
+        await flushAsync();
+        expect(accountSettingsWrites).toHaveLength(2);
+        expect(accountSettingsWrites.map(write => write.expectedVersion)).toEqual([1, 2]);
+        expect(resolveAccountSettingsPluginSecret(persistedAccountSettings, { pluginId: PLUGIN_ID, localId: 'accountToken' })?.secret.encryptedValue)
+            .toMatchObject({ value: 'draft-that-needs-explicit-retry' });
     });
 
     it('keeps an Account SavedSecret draft ambiguous after its safe snapshot and requires an explicit retry', async () => {
-        accountPluginSecretWriteMock.mockResolvedValueOnce({
-            status: 'outcomeUnknown',
-            snapshot: {
-                scope: { kind: 'account' },
-                target: { kind: 'account', serverIdentityId: 'server-identity-1' },
-                revision: { kind: 'account-secret', value: 6 },
-                values: {},
-                secretStates: { accountToken: 'configured' },
-            },
-        });
+        accountSettingsPost = async (_input, next) => {
+            accountSettingsPost = null;
+            await next();
+            return { dispatchThenFail: true };
+        };
         const { screen } = await renderSection(createProjection(1, [ACCOUNT_SECRET_FIELD], 'account'));
 
         act(() => {
             screen.changeTextByTestId(ACCOUNT_SECRET_INPUT_ID, 'possibly-applied-account-secret');
         });
-        act(() => {
+        await act(async () => {
             screen.pressByTestId(ACCOUNT_SECRET_SAVE_ID);
         });
         await flushAsync();
+        await flushAsync();
 
-        expect(accountPluginSecretWriteMock).toHaveBeenCalledOnce();
+        expect(accountSettingsWrites).toHaveLength(1);
+        expect(resolveAccountSettingsPluginSecret(persistedAccountSettings, { pluginId: PLUGIN_ID, localId: 'accountToken' })?.secret.encryptedValue)
+            .toMatchObject({ value: 'possibly-applied-account-secret' });
         expect(screen.findByTestId(ACCOUNT_SECRET_INPUT_ID)?.props.value)
             .toBe('possibly-applied-account-secret');
         expect(screen.findByTestId(ACCOUNT_SECRET_SAVE_ID)?.props.accessibilityLabel)
@@ -1596,17 +1650,8 @@ describe('PluginDetailGenericSettingsSection', () => {
     });
 
     it('keeps an Account-secret draft across custody changes and retires it when its occurrence is replaced', async () => {
-        const pendingWrite = createDeferred<{
-            status: 'conflict';
-            snapshot: {
-                scope: { kind: 'account' };
-                target: { kind: 'account'; serverIdentityId: string };
-                revision: { kind: 'account-secret'; value: number };
-                values: Record<string, never>;
-                secretStates: Record<string, 'configured' | 'missing'>;
-            };
-        }>();
-        accountPluginSecretWriteMock.mockReturnValueOnce(pendingWrite.promise);
+        const pendingWrite = createDeferred<void>();
+        accountSettingsPost = async (_input, next) => { await pendingWrite.promise; return next(); };
         const firstProjection = createProjection(1, [ACCOUNT_SECRET_FIELD], 'account');
         const secondProjection = {
             ...createProjection(1, [ACCOUNT_SECRET_FIELD], 'account'),
@@ -1621,21 +1666,22 @@ describe('PluginDetailGenericSettingsSection', () => {
         act(() => {
             screen.changeTextByTestId(ACCOUNT_SECRET_INPUT_ID, 'generation-one-account-secret');
         });
-        act(() => {
+        await act(async () => {
             screen.pressByTestId(ACCOUNT_SECRET_SAVE_ID);
         });
-        expect(accountPluginSecretWriteMock).toHaveBeenCalledOnce();
+        await flushAsync();
+        expect(accountSettingsWrites).toHaveLength(1);
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <PluginDetailGenericSettingsSection
                     pluginId={PLUGIN_ID}
                     projection={secondProjection}
                     machineId="machine-1"
-                    serverId="server-1"
-                    accountServerIdentityId="server-identity-1"
-                    daemonServerIdentityId="server-identity-1"
-                    perActiveServerIdentityId="server-identity-1"
+                    serverId={account.serverId}
+                    accountServerIdentityId="srv_settings"
+                    daemonServerIdentityId="srv_settings"
+                    perActiveServerIdentityId="srv_settings"
                     daemonOperationsAvailable
                 />,
             );
@@ -1646,15 +1692,15 @@ describe('PluginDetailGenericSettingsSection', () => {
             .toBe('generation-one-account-secret');
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <PluginDetailGenericSettingsSection
                     pluginId={PLUGIN_ID}
                     projection={thirdProjection}
                     machineId="machine-1"
-                    serverId="server-1"
-                    accountServerIdentityId="server-identity-1"
-                    daemonServerIdentityId="server-identity-1"
-                    perActiveServerIdentityId="server-identity-1"
+                    serverId={account.serverId}
+                    accountServerIdentityId="srv_settings"
+                    daemonServerIdentityId="srv_settings"
+                    perActiveServerIdentityId="srv_settings"
                     daemonOperationsAvailable
                 />,
             );
@@ -1664,16 +1710,7 @@ describe('PluginDetailGenericSettingsSection', () => {
         expect(screen.findByTestId(ACCOUNT_SECRET_INPUT_ID)?.props.value).toBe('');
 
         await act(async () => {
-            pendingWrite.resolve({
-                status: 'conflict',
-                snapshot: {
-                    scope: { kind: 'account' },
-                    target: { kind: 'account', serverIdentityId: 'server-identity-1' },
-                    revision: { kind: 'account-secret', value: 6 },
-                    values: {},
-                    secretStates: { accountToken: 'configured' },
-                },
-            });
+            pendingWrite.resolve();
             await pendingWrite.promise;
         });
 
@@ -1683,34 +1720,22 @@ describe('PluginDetailGenericSettingsSection', () => {
     });
 
     it('clears an Account SavedSecret presentation and ignores its late settlement when the same lifetime retires', async () => {
-        const accountA = createRetirableTestAccountLifetime();
-        const accountB = createTestAccountLifetime({ accountId: 'account-b' });
-        activeAccountLifetimeState.current = accountA.lifetime;
-        const pendingWrite = createDeferred<{
-            status: 'conflict';
-            snapshot: {
-                scope: { kind: 'account' };
-                target: { kind: 'account'; serverIdentityId: string };
-                revision: { kind: 'account-secret'; value: number };
-                values: Record<string, never>;
-                secretStates: Record<string, 'configured' | 'missing'>;
-            };
-        }>();
-        accountPluginSecretWriteMock.mockReturnValueOnce(pendingWrite.promise);
+        const pendingWrite = createDeferred<void>();
+        accountSettingsPost = async (_input, next) => { await pendingWrite.promise; return next(); };
         const { screen } = await renderSection(createProjection(1, [ACCOUNT_SECRET_FIELD], 'account'));
 
         expect(screen.findByTestId(ACCOUNT_SECRET_STATUS_ID)).not.toBeNull();
         act(() => {
             screen.changeTextByTestId(ACCOUNT_SECRET_INPUT_ID, 'account-a-raw-secret');
         });
-        act(() => {
+        await act(async () => {
             screen.pressByTestId(ACCOUNT_SECRET_SAVE_ID);
         });
-        expect(accountPluginSecretWriteMock).toHaveBeenCalledOnce();
+        await flushAsync();
+        expect(accountSettingsWrites).toHaveLength(1);
 
         await act(async () => {
-            activeAccountLifetimeState.current = accountB;
-            accountA.retire();
+            await restoreTestAccount('account-b', {});
             await Promise.resolve();
         });
 
@@ -1721,16 +1746,7 @@ describe('PluginDetailGenericSettingsSection', () => {
         expect(screen.getTextContent()).not.toContain('settingsPlugins.genericSettingsSaveError');
 
         await act(async () => {
-            pendingWrite.resolve({
-                status: 'conflict',
-                snapshot: {
-                    scope: { kind: 'account' },
-                    target: { kind: 'account', serverIdentityId: 'server-identity-1' },
-                    revision: { kind: 'account-secret', value: 6 },
-                    values: {},
-                    secretStates: { accountToken: 'configured' },
-                },
-            });
+            pendingWrite.resolve();
             await pendingWrite.promise;
         });
 
@@ -1756,15 +1772,15 @@ describe('PluginDetailGenericSettingsSection', () => {
         });
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <PluginDetailGenericSettingsSection
                     pluginId={PLUGIN_ID}
                     projection={replacementProjection}
                     machineId="machine-1"
-                    serverId="server-1"
-                    accountServerIdentityId="server-identity-1"
-                    daemonServerIdentityId="server-identity-1"
-                    perActiveServerIdentityId="server-identity-1"
+                    serverId={account.serverId}
+                    accountServerIdentityId="srv_settings"
+                    daemonServerIdentityId="srv_settings"
+                    perActiveServerIdentityId="srv_settings"
                     daemonOperationsAvailable
                 />,
             );
@@ -1773,9 +1789,10 @@ describe('PluginDetailGenericSettingsSection', () => {
 
         expect(screen.findByTestId(SECRET_INPUT_ID)?.props.value).toBe('');
 
-        act(() => {
+        await act(async () => {
             screen.pressByTestId(SECRET_SAVE_ID);
         });
+        await flushAsync();
         await flushAsync();
 
         expect(machinePluginSettingsSetMock).not.toHaveBeenCalled();
@@ -1803,15 +1820,15 @@ describe('PluginDetailGenericSettingsSection', () => {
         });
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <PluginDetailGenericSettingsSection
                     pluginId={PLUGIN_ID}
                     projection={replacementProjection}
                     machineId="machine-1"
-                    serverId="server-1"
-                    accountServerIdentityId="server-identity-1"
-                    daemonServerIdentityId="server-identity-1"
-                    perActiveServerIdentityId="server-identity-1"
+                    serverId={account.serverId}
+                    accountServerIdentityId="srv_settings"
+                    daemonServerIdentityId="srv_settings"
+                    perActiveServerIdentityId="srv_settings"
                     daemonOperationsAvailable
                 />,
             );
@@ -1820,9 +1837,10 @@ describe('PluginDetailGenericSettingsSection', () => {
 
         expect(screen.findByTestId(SECRET_INPUT_ID)?.props.value).toBe('');
 
-        act(() => {
+        await act(async () => {
             screen.pressByTestId(SECRET_SAVE_ID);
         });
+        await flushAsync();
         await flushAsync();
 
         expect(machinePluginSettingsSetMock).not.toHaveBeenCalled();
@@ -1846,21 +1864,22 @@ describe('PluginDetailGenericSettingsSection', () => {
         act(() => {
             screen.changeTextByTestId(SECRET_INPUT_ID, 'generation-one-daemon-secret');
         });
-        act(() => {
+        await act(async () => {
             screen.pressByTestId(SECRET_SAVE_ID);
         });
+        await flushAsync();
         expect(machinePluginSecretSetMock).toHaveBeenCalledOnce();
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <PluginDetailGenericSettingsSection
                     pluginId={PLUGIN_ID}
                     projection={secondProjection}
                     machineId="machine-1"
-                    serverId="server-1"
-                    accountServerIdentityId="server-identity-1"
-                    daemonServerIdentityId="server-identity-1"
-                    perActiveServerIdentityId="server-identity-1"
+                    serverId={account.serverId}
+                    accountServerIdentityId="srv_settings"
+                    daemonServerIdentityId="srv_settings"
+                    perActiveServerIdentityId="srv_settings"
                     daemonOperationsAvailable
                 />,
             );
@@ -1871,15 +1890,15 @@ describe('PluginDetailGenericSettingsSection', () => {
             .toBe('generation-one-daemon-secret');
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <PluginDetailGenericSettingsSection
                     pluginId={PLUGIN_ID}
                     projection={thirdProjection}
                     machineId="machine-1"
-                    serverId="server-1"
-                    accountServerIdentityId="server-identity-1"
-                    daemonServerIdentityId="server-identity-1"
-                    perActiveServerIdentityId="server-identity-1"
+                    serverId={account.serverId}
+                    accountServerIdentityId="srv_settings"
+                    daemonServerIdentityId="srv_settings"
+                    perActiveServerIdentityId="srv_settings"
                     daemonOperationsAvailable
                 />,
             );
@@ -1941,7 +1960,7 @@ describe('PluginDetailGenericSettingsSection', () => {
         expect(screen.getTextContent()).toContain('Connect this machine before changing the endpoint.');
     });
 
-    it('names the exact machine that loses a daemon-custodied secret', async () => {
+    it('leaves daemon-secret confirmation to the admitted Action owner', async () => {
         modalConfirmMock.mockResolvedValue(false);
         machinePluginSecretStatusMock.mockResolvedValue(secretStatusResult('configured'));
         const { screen } = await renderSection();
@@ -1952,11 +1971,7 @@ describe('PluginDetailGenericSettingsSection', () => {
         });
         await flushAsync();
 
-        expect(modalConfirmMock).toHaveBeenCalledWith(
-            'secrets.prompts.deleteTitle',
-            `secrets.prompts.deleteConfirm:${PLUGIN_ID} · API token · settings.mcpServersBindingTargetMachine`,
-            { destructive: true, confirmText: 'common.delete', cancelText: 'common.cancel' },
-        );
+        expect(modalConfirmMock).not.toHaveBeenCalled();
     });
 
     it('keeps generic text controls at the native touch floor on phones (44 pt iOS, 48 dp Android)', async () => {
@@ -1974,15 +1989,15 @@ describe('PluginDetailGenericSettingsSection', () => {
         expect(machinePluginSettingsGetMock).toHaveBeenCalledTimes(1);
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <PluginDetailGenericSettingsSection
                     pluginId={PLUGIN_ID}
                     projection={projection}
                     machineId="machine-1"
-                    serverId="server-1"
-                    accountServerIdentityId="server-identity-1"
-                    daemonServerIdentityId="server-identity-1"
-                    perActiveServerIdentityId="server-identity-1"
+                    serverId={account.serverId}
+                    accountServerIdentityId="srv_settings"
+                    daemonServerIdentityId="srv_settings"
+                    perActiveServerIdentityId="srv_settings"
                     daemonOperationsAvailable
                 />,
             );
@@ -1998,15 +2013,15 @@ describe('PluginDetailGenericSettingsSection', () => {
         expect(screen.findByTestId(ENDPOINT_INPUT_ID)?.props.value).toBe('https://api.example.test');
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <PluginDetailGenericSettingsSection
                     pluginId={PLUGIN_ID}
                     projection={createProjection(1)}
                     machineId="machine-1"
-                    serverId="server-1"
-                    accountServerIdentityId="server-identity-1"
-                    daemonServerIdentityId="server-identity-1"
-                    perActiveServerIdentityId="server-identity-1"
+                    serverId={account.serverId}
+                    accountServerIdentityId="srv_settings"
+                    daemonServerIdentityId="srv_settings"
+                    perActiveServerIdentityId="srv_settings"
                     daemonOperationsAvailable={false}
                 />,
             );
@@ -2035,15 +2050,15 @@ describe('PluginDetailGenericSettingsSection', () => {
             enabled: false,
         }));
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <PluginDetailGenericSettingsSection
                     pluginId={PLUGIN_ID}
                     projection={createProjection(1)}
                     machineId="machine-1"
-                    serverId="server-1"
-                    accountServerIdentityId="server-identity-1"
-                    daemonServerIdentityId="server-identity-1"
-                    perActiveServerIdentityId="server-identity-1"
+                    serverId={account.serverId}
+                    accountServerIdentityId="srv_settings"
+                    daemonServerIdentityId="srv_settings"
+                    perActiveServerIdentityId="srv_settings"
                     daemonOperationsAvailable
                 />,
             );
@@ -2063,9 +2078,10 @@ describe('PluginDetailGenericSettingsSection', () => {
         act(() => {
             screen.changeTextByTestId(ENDPOINT_INPUT_ID, 'https://pending.example.test');
         });
-        act(() => {
+        await act(async () => {
             screen.pressByTestId(ENDPOINT_SAVE_ID);
         });
+        await flushAsync();
         expect(machinePluginSettingsSetMock).toHaveBeenCalledTimes(1);
         expect(machinePluginSettingsSetMock).toHaveBeenCalledWith('machine-1', expect.objectContaining({
             fieldId: 'endpoint',
@@ -2073,15 +2089,15 @@ describe('PluginDetailGenericSettingsSection', () => {
         }));
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <PluginDetailGenericSettingsSection
                     pluginId={PLUGIN_ID}
                     projection={createProjection(1)}
                     machineId="machine-1"
-                    serverId="server-1"
-                    accountServerIdentityId="server-identity-1"
-                    daemonServerIdentityId="server-identity-1"
-                    perActiveServerIdentityId="server-identity-1"
+                    serverId={account.serverId}
+                    accountServerIdentityId="srv_settings"
+                    daemonServerIdentityId="srv_settings"
+                    perActiveServerIdentityId="srv_settings"
                     daemonOperationsAvailable={false}
                 />,
             );
@@ -2112,8 +2128,8 @@ describe('PluginDetailGenericSettingsSection', () => {
         expect(isDaemonTargetCurrent).toHaveBeenCalledWith({
             kind: 'daemon',
             machineId: 'machine-1',
-            serverId: 'server-1',
-            serverIdentityId: 'server-identity-1',
+            serverId: account.serverId,
+            serverIdentityId: 'srv_settings',
         });
         expect(machinePluginSettingsSetMock).not.toHaveBeenCalled();
     });
@@ -2136,14 +2152,15 @@ describe('PluginDetailGenericSettingsSection', () => {
         expect(screen.findByTestId(ENDPOINT_SAVE_ID)?.props.accessibilityLabel)
             .toBe('common.save: Endpoint URL');
 
-        act(() => {
+        await act(async () => {
             screen.pressByTestId(ENDPOINT_SAVE_ID);
         });
+        await flushAsync();
 
         expect(machinePluginSettingsSetMock).toHaveBeenCalledTimes(1);
         expect(machinePluginSettingsSetMock).toHaveBeenNthCalledWith(1, 'machine-1', {
-            serverId: 'server-1',
-            serverIdentityId: 'server-identity-1',
+            serverId: resolveServerProfileScopeIdForIdentifier(account.serverId),
+            serverIdentityId: 'srv_settings',
             pluginId: PLUGIN_ID,
             fieldId: 'endpoint',
             mutation: { kind: 'set', value: 'https://api.first.test' },
@@ -2209,8 +2226,8 @@ describe('PluginDetailGenericSettingsSection', () => {
         await flushAsync();
 
         expect(machinePluginSettingsSetMock).toHaveBeenCalledWith('machine-1', {
-            serverId: 'server-1',
-            serverIdentityId: 'server-identity-1',
+            serverId: resolveServerProfileScopeIdForIdentifier(account.serverId),
+            serverIdentityId: 'srv_settings',
             pluginId: PLUGIN_ID,
             fieldId: 'endpoint',
             mutation: { kind: 'set', value: 'https://api.repaired.test' },
@@ -2231,9 +2248,10 @@ describe('PluginDetailGenericSettingsSection', () => {
         act(() => {
             screen.changeTextByTestId(ENDPOINT_INPUT_ID, 'https://api.first.test');
         });
-        act(() => {
+        await act(async () => {
             screen.pressByTestId(ENDPOINT_SAVE_ID);
         });
+        await flushAsync();
         act(() => {
             screen.changeTextByTestId(ENDPOINT_INPUT_ID, 'https://api.newer.test');
         });
@@ -2310,9 +2328,10 @@ describe('PluginDetailGenericSettingsSection', () => {
         act(() => {
             screen.changeTextByTestId(SECRET_INPUT_ID, 'possibly-applied-daemon-secret');
         });
-        act(() => {
+        await act(async () => {
             screen.pressByTestId(SECRET_SAVE_ID);
         });
+        await flushAsync();
         await flushAsync();
 
         expect(machinePluginSecretSetMock).toHaveBeenCalledOnce();
@@ -2356,9 +2375,10 @@ describe('PluginDetailGenericSettingsSection', () => {
         expect(screen.getTextContent()).toContain('settingsPlugins.genericSettingsSaveError');
         expect(screen.getTextContent()).not.toContain('retry-secret');
 
-        act(() => {
+        await act(async () => {
             screen.pressByTestId(SECRET_SAVE_ID);
         });
+        await flushAsync();
         act(() => {
             screen.changeTextByTestId(SECRET_INPUT_ID, 'newer-secret');
         });
@@ -2426,20 +2446,21 @@ describe('PluginDetailGenericSettingsSection', () => {
         act(() => {
             screen.changeTextByTestId(ENDPOINT_INPUT_ID, 'https://old-scope-draft.test');
         });
-        act(() => {
+        await act(async () => {
             screen.pressByTestId(ENDPOINT_SAVE_ID);
         });
+        await flushAsync();
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <PluginDetailGenericSettingsSection
                     pluginId={PLUGIN_ID}
                     projection={secondProjection}
                     machineId="machine-1"
-                    serverId="server-1"
-                    accountServerIdentityId="server-identity-1"
-                    daemonServerIdentityId="server-identity-1"
-                    perActiveServerIdentityId="server-identity-1"
+                    serverId={account.serverId}
+                    accountServerIdentityId="srv_settings"
+                    daemonServerIdentityId="srv_settings"
+                    perActiveServerIdentityId="srv_settings"
                     daemonOperationsAvailable
                 />,
             );
@@ -2478,15 +2499,15 @@ describe('PluginDetailGenericSettingsSection', () => {
         }, ['apiToken'], '2', replacementPluginId));
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <PluginDetailGenericSettingsSection
                     pluginId={replacementPluginId}
                     projection={replacementProjection}
                     machineId="machine-1"
-                    serverId="server-1"
-                    accountServerIdentityId="server-identity-1"
-                    daemonServerIdentityId="server-identity-1"
-                    perActiveServerIdentityId="server-identity-1"
+                    serverId={account.serverId}
+                    accountServerIdentityId="srv_settings"
+                    daemonServerIdentityId="srv_settings"
+                    perActiveServerIdentityId="srv_settings"
                     daemonOperationsAvailable
                 />,
             );
@@ -2548,7 +2569,7 @@ describe('PluginDetailGenericSettingsSection', () => {
                 status: 'ready',
                 snapshot: {
                     scope: { kind: 'account' },
-                    target: { kind: 'account', serverIdentityId: 'server-identity-1' },
+                    target: { kind: 'account', serverIdentityId: 'srv_settings' },
                     revision: { kind: 'account', value: 1 },
                     values: { endpoint: 'https://account.example.test', enabled: true },
                 },
@@ -2581,15 +2602,15 @@ describe('PluginDetailGenericSettingsSection', () => {
             screen.changeTextByTestId(ENDPOINT_INPUT_ID, 'https://local-draft.test');
         });
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <PluginDetailGenericSettingsSection
                     pluginId={PLUGIN_ID}
                     projection={createProjection(2)}
                     machineId="machine-1"
-                    serverId="server-1"
-                    accountServerIdentityId="server-identity-1"
-                    daemonServerIdentityId="server-identity-1"
-                    perActiveServerIdentityId="server-identity-1"
+                    serverId={account.serverId}
+                    accountServerIdentityId="srv_settings"
+                    daemonServerIdentityId="srv_settings"
+                    perActiveServerIdentityId="srv_settings"
                     daemonOperationsAvailable
                 />,
             );
@@ -2650,9 +2671,10 @@ describe('PluginDetailGenericSettingsSection', () => {
         expect(machinePluginSettingsSetMock).toHaveBeenCalledTimes(1);
         expect(findSwitch(screen)?.props.disabled).toBe(true);
 
-        act(() => {
+        await act(async () => {
             screen.pressByTestId(SWITCH_ID);
         });
+        await flushAsync();
         expect(machinePluginSettingsSetMock).toHaveBeenCalledTimes(1);
         expect(findSwitch(screen)?.props.value).toBe(true);
 
@@ -2709,19 +2731,20 @@ describe('PluginDetailGenericSettingsSection', () => {
         const fieldsWithoutSwitch = SETTINGS_FIELDS.filter((field) => field.key !== 'enabled');
         const { PluginDetailGenericSettingsSection, screen } = await renderSection(createProjection(1));
 
-        act(() => {
+        await act(async () => {
             screen.pressByTestId(SWITCH_ID);
         });
+        await flushAsync();
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <PluginDetailGenericSettingsSection
                     pluginId={PLUGIN_ID}
                     projection={createProjection(2, fieldsWithoutSwitch)}
                     machineId="machine-1"
-                    serverId="server-1"
-                    accountServerIdentityId="server-identity-1"
-                    daemonServerIdentityId="server-identity-1"
-                    perActiveServerIdentityId="server-identity-1"
+                    serverId={account.serverId}
+                    accountServerIdentityId="srv_settings"
+                    daemonServerIdentityId="srv_settings"
+                    perActiveServerIdentityId="srv_settings"
                     daemonOperationsAvailable
                 />,
             );
@@ -2730,15 +2753,15 @@ describe('PluginDetailGenericSettingsSection', () => {
         expect(findSwitch(screen)).toBeNull();
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <PluginDetailGenericSettingsSection
                     pluginId={PLUGIN_ID}
                     projection={createProjection(3)}
                     machineId="machine-1"
-                    serverId="server-1"
-                    accountServerIdentityId="server-identity-1"
-                    daemonServerIdentityId="server-identity-1"
-                    perActiveServerIdentityId="server-identity-1"
+                    serverId={account.serverId}
+                    accountServerIdentityId="srv_settings"
+                    daemonServerIdentityId="srv_settings"
+                    perActiveServerIdentityId="srv_settings"
                     daemonOperationsAvailable
                 />,
             );
@@ -2779,20 +2802,21 @@ describe('PluginDetailGenericSettingsSection', () => {
         act(() => {
             screen.changeTextByTestId(ENDPOINT_INPUT_ID, 'https://old-machine-draft.test');
         });
-        act(() => {
+        await act(async () => {
             screen.pressByTestId(ENDPOINT_SAVE_ID);
         });
+        await flushAsync();
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <PluginDetailGenericSettingsSection
                     pluginId={PLUGIN_ID}
                     projection={projection}
                     machineId="machine-2"
-                    serverId="server-1"
-                    accountServerIdentityId="server-identity-1"
-                    daemonServerIdentityId="server-identity-1"
-                    perActiveServerIdentityId="server-identity-1"
+                    serverId={account.serverId}
+                    accountServerIdentityId="srv_settings"
+                    daemonServerIdentityId="srv_settings"
+                    perActiveServerIdentityId="srv_settings"
                     daemonOperationsAvailable
                 />,
             );
@@ -2861,7 +2885,7 @@ describe('PluginDetailGenericSettingsSection', () => {
         expect(findSwitch(screen)?.props.disabled).toBe(false);
     });
 
-    it('renders a per-active-server field from canonical presentation and writes its hidden backing map', async () => {
+    it('renders a per-active-server Account field from canonical presentation and writes its hidden backing map', async () => {
         const boundFields: readonly PluginProjectionEditableSettingField[] = [{
             key: 'serverUrl',
             control: 'text',
@@ -2890,15 +2914,14 @@ describe('PluginDetailGenericSettingsSection', () => {
             clearWhenEmpty: 'persist',
             presentation: { control: 'json', hidden: true },
         }];
-        machinePluginSettingsGetMock.mockResolvedValueOnce(settingsResult({
-            serverUrl: 'https://fallback.example',
-            serverUrlByServerId: { 'server-identity-1': 'https://scoped.example' },
-        }, []));
-        machinePluginSettingsSetMock.mockResolvedValueOnce(settingsSetResult({
-            serverUrl: 'https://fallback.example',
-            serverUrlByServerId: { 'server-identity-1': 'https://updated.example' },
-        }, [], '1'));
-        const { screen } = await renderSection(createProjection(1, boundFields));
+        scopedSettingsReadMock.mockResolvedValueOnce({ status: 'ready', snapshot: {
+            scope: { kind: 'account' }, target: { kind: 'account', serverIdentityId: 'srv_settings' },
+            revision: { kind: 'account', value: 1 }, values: {
+                serverUrl: 'https://fallback.example',
+                serverUrlByServerId: { 'srv_settings': 'https://scoped.example' },
+            },
+        } });
+        const { screen } = await renderSection(createProjection(1, boundFields, 'account'));
         const inputId = `settings.plugins.detail.${PLUGIN_ID}.settings.${GROUP_ID}.serverUrl.input`;
         const saveId = `settings.plugins.detail.${PLUGIN_ID}.settings.${GROUP_ID}.serverUrl.save`;
 
@@ -2912,10 +2935,12 @@ describe('PluginDetailGenericSettingsSection', () => {
             await Promise.resolve();
         });
 
-        expect(machinePluginSettingsSetMock).toHaveBeenCalledWith('machine-1', expect.objectContaining({
-            fieldId: 'serverUrlByServerId',
-            mutation: { kind: 'set', value: { 'server-identity-1': 'https://updated.example' } },
+        expect(scopedSettingsWriteMock).toHaveBeenCalledWith(expect.objectContaining({
+            expectedRevision: 1, content: { t: 'plain', v: { v: 1, values: {
+                serverUrl: 'https://fallback.example', serverUrlByServerId: { 'srv_settings': 'https://updated.example' },
+            } } },
         }));
+        expect(machinePluginSettingsSetMock).not.toHaveBeenCalled();
     });
 
     it('keeps the active Account record target while binding a per-active-server field to the exact Administration server identity', async () => {
@@ -2947,7 +2972,7 @@ describe('PluginDetailGenericSettingsSection', () => {
             clearWhenEmpty: 'persist',
             presentation: { control: 'json', hidden: true },
         }];
-        const accountTarget = { kind: 'account' as const, serverIdentityId: 'server-identity-1' };
+        const accountTarget = { kind: 'account' as const, serverIdentityId: 'srv_settings' };
         scopedSettingsReadMock.mockImplementation((input: Readonly<{ scope?: Readonly<{ kind?: string }> }>) => (
             input.scope?.kind === 'account'
                 ? Promise.resolve({
@@ -2959,8 +2984,8 @@ describe('PluginDetailGenericSettingsSection', () => {
                         values: {
                             serverUrl: 'https://fallback.example.test',
                             serverUrlByServerId: {
-                                'server-identity-1': 'https://active-account.example.test',
-                                'server-identity-b': 'https://selected-administration.example.test',
+                                'srv_settings': 'https://active-account.example.test',
+                                'srv_settings_admin': 'https://selected-administration.example.test',
                             },
                         },
                     },
@@ -2976,16 +3001,16 @@ describe('PluginDetailGenericSettingsSection', () => {
                 values: {
                     serverUrl: 'https://fallback.example.test',
                     serverUrlByServerId: {
-                        'server-identity-1': 'https://active-account.example.test',
-                        'server-identity-b': 'https://updated-administration.example.test',
+                        'srv_settings': 'https://active-account.example.test',
+                        'srv_settings_admin': 'https://updated-administration.example.test',
                     },
                 },
             },
         });
 
         const { screen } = await renderSection(createProjection(1, boundFields, 'account'), {
-            daemonServerIdentityId: 'server-identity-b',
-            perActiveServerIdentityId: 'server-identity-b',
+            daemonServerIdentityId: 'srv_settings_admin',
+            perActiveServerIdentityId: 'srv_settings_admin',
         });
         const inputId = `settings.plugins.detail.${PLUGIN_ID}.settings.${GROUP_ID}.serverUrl.input`;
         const saveId = `settings.plugins.detail.${PLUGIN_ID}.settings.${GROUP_ID}.serverUrl.save`;
@@ -3006,16 +3031,13 @@ describe('PluginDetailGenericSettingsSection', () => {
         });
 
         expect(scopedSettingsWriteMock).toHaveBeenCalledWith(expect.objectContaining({
-            scope: { kind: 'account' },
-            target: accountTarget,
-            fieldId: 'serverUrlByServerId',
-            mutation: {
-                kind: 'set',
-                value: {
-                    'server-identity-1': 'https://active-account.example.test',
-                    'server-identity-b': 'https://updated-administration.example.test',
+            content: { t: 'plain', v: { v: 1, values: {
+                serverUrl: 'https://fallback.example.test',
+                serverUrlByServerId: {
+                    'srv_settings': 'https://active-account.example.test',
+                    'srv_settings_admin': 'https://updated-administration.example.test',
                 },
-            },
+            } } },
         }));
     });
 
@@ -3048,7 +3070,7 @@ describe('PluginDetailGenericSettingsSection', () => {
             clearWhenEmpty: 'persist',
             presentation: { control: 'json', hidden: true },
         }];
-        const accountTarget = { kind: 'account' as const, serverIdentityId: 'server-identity-1' };
+        const accountTarget = { kind: 'account' as const, serverIdentityId: 'srv_settings' };
         scopedSettingsReadMock.mockImplementation((input: Readonly<{ scope?: Readonly<{ kind?: string }> }>) => (
             input.scope?.kind === 'account'
                 ? Promise.resolve({
@@ -3060,7 +3082,7 @@ describe('PluginDetailGenericSettingsSection', () => {
                         values: {
                             serverUrl: 'https://account-default.example.test',
                             serverUrlByServerId: {
-                                'offline-selected-identity': 'https://offline-selected.example.test',
+                                'srv_offline_selected': 'https://offline-selected.example.test',
                             },
                         },
                     },
@@ -3076,7 +3098,7 @@ describe('PluginDetailGenericSettingsSection', () => {
                 values: {
                     serverUrl: 'https://account-default.example.test',
                     serverUrlByServerId: {
-                        'offline-selected-identity': 'https://updated-offline-selected.example.test',
+                        'srv_offline_selected': 'https://updated-offline-selected.example.test',
                     },
                 },
             },
@@ -3087,7 +3109,7 @@ describe('PluginDetailGenericSettingsSection', () => {
             serverId: null,
             daemonServerIdentityId: null,
             daemonOperationsAvailable: false,
-            perActiveServerIdentityId: 'offline-selected-identity',
+            perActiveServerIdentityId: 'srv_offline_selected',
         });
         const inputId = `settings.plugins.detail.${PLUGIN_ID}.settings.${GROUP_ID}.serverUrl.input`;
         const saveId = `settings.plugins.detail.${PLUGIN_ID}.settings.${GROUP_ID}.serverUrl.save`;
@@ -3102,19 +3124,14 @@ describe('PluginDetailGenericSettingsSection', () => {
         });
 
         expect(scopedSettingsWriteMock).toHaveBeenCalledWith(expect.objectContaining({
-            scope: { kind: 'account' },
-            target: accountTarget,
-            fieldId: 'serverUrlByServerId',
-            mutation: {
-                kind: 'set',
-                value: {
-                    'offline-selected-identity': 'https://updated-offline-selected.example.test',
+            content: { t: 'plain', v: { v: 1, values: {
+                serverUrl: 'https://account-default.example.test',
+                serverUrlByServerId: {
+                    'srv_offline_selected': 'https://updated-offline-selected.example.test',
                 },
-            },
+            } } },
         }));
-        expect(scopedSettingsWriteMock).not.toHaveBeenCalledWith(expect.objectContaining({
-            fieldId: 'serverUrl',
-        }));
+        expect(scopedSettingsWriteMock).toHaveBeenCalledOnce();
     });
 
 });

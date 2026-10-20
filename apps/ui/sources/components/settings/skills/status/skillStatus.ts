@@ -2,6 +2,7 @@ import { deriveSkillAccountStatusesV1 } from '@happier-dev/protocol/prompts/libr
 import type { SkillListItemV1, SkillUnavailableItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 
 import type { CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
+import { describeCapabilityNoticeReason, readCapabilityNoticeReason } from '@/components/capabilities/status/capabilityNoticeReason';
 import type { SessionSkillPlanV1 } from '@happier-dev/protocol/prompts/library/skills/resolveSessionSkillPlanV1';
 import type { SessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 
@@ -27,9 +28,14 @@ export function skillStatus(
   });
   for (const notice of session?.notices ?? []) for (const fact of notice.items) {
     if (session && fact.kind === 'skill' && fact.itemId === skillId) statuses.push({ kind: 'error', machineName: session.machineName,
-      detail: fact.detail ?? fact.code, fix: { kind: 'try_again', onPress: session.onFix } });
+      ...readableNoticeDetail(fact), fix: { kind: 'try_again', onPress: session.onFix } });
   }
   return statuses;
+}
+
+function readableNoticeDetail(fact: SessionCapabilityNoticeV1['items'][number]): { detail?: string } {
+  const reason = readCapabilityNoticeReason(fact);
+  return reason ? { detail: describeCapabilityNoticeReason(reason) } : {};
 }
 
 /**

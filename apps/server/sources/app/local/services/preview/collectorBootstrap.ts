@@ -4,13 +4,15 @@ import { createGunzip, createInflate, createBrotliDecompress } from 'node:zlib';
 import { parse, type DefaultTreeAdapterMap } from 'parse5';
 import { INJECTED_CONSOLE_TEXT_MAX_LENGTH, INJECTED_OWNER_VALUE_MAX_LENGTH } from '@happier-dev/protocol/browser/diagnostics/egress/classifier';
 import { SAFE_TELEMETRY_HEADER_NAMES } from '@happier-dev/protocol/browser/diagnostics/egress/headers';
-import { buildInjectedBrowserDiagnosticsRuntimeScript } from '@happier-dev/peer-mediation/browser/collector/build';
+import { buildCooperativeNavigationRuntimeScript, buildInjectedBrowserDiagnosticsRuntimeScript } from '@happier-dev/peer-mediation/browser/collector/build';
 import {
     COOPERATIVE_COLLECTOR_QUERY, COOPERATIVE_COLLECTOR_STATE_QUERY, COOPERATIVE_COLLECTOR_LOADER_PATH,
-    parseCooperativeCollectorConfig, stripCooperativeCollectorQuery, buildCooperativeCollectorNavigationUrl,
+    COOPERATIVE_COLLECTOR_NAVIGATION_QUERY, COOPERATIVE_COLLECTOR_BINDING_COOKIE,
+    type CooperativeCollectorConfig, parseCooperativeCollectorConfig, stripCooperativeCollectorQuery, buildCooperativeCollectorNavigationUrl,
 } from '@happier-dev/peer-mediation/browser/collector/cooperative';
 import type { LocalServicePreviewHttpResponseHeaders } from '@happier-dev/peer-mediation/localServices/preview/httpAdapter';
 import type { ProxyLocalServicePreviewHttpRequestInput } from './httpAdapter';
+import { scopedLocalServiceViewerTokenCookie } from '../viewerCookie';
 
 function header(headers: LocalServicePreviewHttpResponseHeaders, name: string): string {
     const value = headers[name];
@@ -78,13 +80,44 @@ async function decodeBody(chunks: Uint8Array[], encoding: string, maxBytes: numb
     return Buffer.concat(bytes);
 }
 
+/**
+ * An in-frame document request carries no per-navigation query. The pane's binding cookie, set by the
+ * document that did, names the pane it belongs to; only an iframe document request is eligible.
+ */
+function readBoundCollectorConfig(input: ProxyLocalServicePreviewHttpRequestInput): CooperativeCollectorConfig | null {
+    if (input.request.method !== 'GET' || input.preview.originMode !== 'host' || input.request.headers['sec-fetch-dest'] !== 'iframe') return null;
+    const cookies = input.request.headers.cookie;
+    for (const entry of (typeof cookies === 'string' ? cookies : (cookies ?? []).join(';')).split(';')) {
+        const [name, ...value] = entry.trim().split('=');
+        if (name !== COOPERATIVE_COLLECTOR_BINDING_COOKIE) continue;
+        try { return parseCooperativeCollectorConfig(decodeURIComponent(value.join('='))); } catch { return null; }
+    }
+    return null;
+}
+
+/**
+ * A refusal the preview route answers before the proxy (no such preview, no admission) is still the
+ * pane's state probe's typed answer: the ended state rests on it. Only the parent origin the probe's
+ * own collector identity names, and that sent the request, may read it; the body names a refusal and
+ * no page content. Any other request gets no CORS grant.
+ */
+export function cooperativeProbeRefusalHeaders(search: string, headers: Readonly<Record<string, unknown>>): Readonly<Record<string, string>> | null {
+    const query = new URLSearchParams(search);
+    if (query.get(COOPERATIVE_COLLECTOR_STATE_QUERY) !== '1') return null;
+    const config = parseCooperativeCollectorConfig(query.get(COOPERATIVE_COLLECTOR_QUERY));
+    const origin = headers.origin;
+    if (!config || typeof origin !== 'string' || origin !== config.webPostMessageTargetOrigin) return null;
+    return { 'access-control-allow-origin': origin, 'access-control-allow-credentials': 'true', vary: 'Origin' };
+}
+
 /** Called only after the existing preview route has admitted access; configuration is not a grant. */
 export async function prepareCooperativePreview(input: ProxyLocalServicePreviewHttpRequestInput): Promise<ProxyLocalServicePreviewHttpRequestInput | null> {
     const query = new URLSearchParams(input.request.search);
     const probe = query.get(COOPERATIVE_COLLECTOR_STATE_QUERY) === '1';
     const hasCollectorConfig = query.has(COOPERATIVE_COLLECTOR_QUERY);
-    if (!hasCollectorConfig && !probe) return input;
-    const config = parseCooperativeCollectorConfig(query.get(COOPERATIVE_COLLECTOR_QUERY));
+    const boundConfig = hasCollectorConfig || probe ? null : readBoundCollectorConfig(input);
+    if (!hasCollectorConfig && !probe && !boundConfig) return input;
+    const config = boundConfig ?? parseCooperativeCollectorConfig(query.get(COOPERATIVE_COLLECTOR_QUERY));
     const respond = async (status: number, body: string, headers: LocalServicePreviewHttpResponseHeaders) => {
         input.response.writeHead(status, STATUS_CODES[status] ?? '', { 'cache-control': 'no-store', ...headers });
         await input.response.write(Buffer.from(body));
@@ -99,11 +132,14 @@ export async function prepareCooperativePreview(input: ProxyLocalServicePreviewH
             await respond(400, JSON.stringify({ state: 'collector_mismatch' }), { 'content-type': 'application/json' });
             return null;
         }
-        const script = buildInjectedBrowserDiagnosticsRuntimeScript(JSON.stringify({
+        const runtimeConfig = JSON.stringify({
             ...config, cooperativePreview: true,
             ...(config.ownerConsoleValueCapture ? { consoleTextMaxLength: INJECTED_CONSOLE_TEXT_MAX_LENGTH } : {}),
             ...(config.ownerDiagnosticsValueCapture ? { ownerValueMaxLength: INJECTED_OWNER_VALUE_MAX_LENGTH, safeTelemetryHeaderNames: [...SAFE_TELEMETRY_HEADER_NAMES] } : {}),
-        }).replace(/</g, '\\u003c'));
+        }).replace(/</g, '\\u003c');
+        const script = query.get(COOPERATIVE_COLLECTOR_NAVIGATION_QUERY) === '1'
+            ? buildCooperativeNavigationRuntimeScript(runtimeConfig)
+            : buildInjectedBrowserDiagnosticsRuntimeScript(runtimeConfig);
         await respond(200, script, { 'content-type': 'application/javascript; charset=utf-8', 'x-content-type-options': 'nosniff' });
         return null;
     }
@@ -125,11 +161,16 @@ export async function prepareCooperativePreview(input: ProxyLocalServicePreviewH
         await respond(400, JSON.stringify({ state: 'runtime_unavailable' }), { 'content-type': 'application/json' });
         return null;
     }
-    const origin = new URL(`${input.request.externalProtocol ?? 'http'}://${host}`).origin;
+    // The loader is requested from the document it is injected into, so the tag carries a root-relative
+    // URL and no scheme to derive. The document's own origin is only what the CSP admission compares with:
+    // a per-resource preview origin is https by construction (`resolveLocalServiceHostOrigin`).
+    const origin = new URL(`https://${host}`).origin;
     const loader = new URL(COOPERATIVE_COLLECTOR_LOADER_PATH, origin);
     if (config) {
         loader.searchParams.set('n', config.collector.nonce);
         loader.searchParams.set(COOPERATIVE_COLLECTOR_QUERY, JSON.stringify(config));
+        // An in-frame document reports and obeys navigation only; the pane's own document keeps the full collector.
+        if (boundConfig) loader.searchParams.set(COOPERATIVE_COLLECTOR_NAVIGATION_QUERY, '1');
     }
     let status = 0;
     let message = '';
@@ -154,7 +195,7 @@ export async function prepareCooperativePreview(input: ProxyLocalServicePreviewH
                         if (next.origin === origin) {
                             // Redirects within the admitted preview retain this navigation's identity;
                             // an external destination must never receive it.
-                            const admitted = new URL(config ? buildCooperativeCollectorNavigationUrl(next.href, config) : next.href);
+                            const admitted = new URL(config && !boundConfig ? buildCooperativeCollectorNavigationUrl(next.href, config) : next.href);
                             if (probe) {
                                 admitted.search += `${admitted.search ? '&' : '?'}${COOPERATIVE_COLLECTOR_STATE_QUERY}=1`;
                                 probeRedirect = admitted.pathname + admitted.search + admitted.hash;
@@ -184,7 +225,7 @@ export async function prepareCooperativePreview(input: ProxyLocalServicePreviewH
                         const admission = htmlAdmission(html, header(headers, 'content-security-policy'), loader);
                         state = admission.allowed ? 'collector_available' : 'collector_blocked_by_csp';
                         if (admission.allowed) {
-                            const tag = `<script defer src="${loader.href.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></script>`;
+                            const tag = `<script defer src="${(loader.pathname + loader.search).replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></script>`;
                             output = Buffer.from(html.slice(0, admission.offset) + tag + html.slice(admission.offset));
                         }
                     }
@@ -205,6 +246,12 @@ export async function prepareCooperativePreview(input: ProxyLocalServicePreviewH
                     for (const name of ['content-encoding', 'content-length', 'etag', 'content-md5', 'digest']) delete nextHeaders[name];
                     nextHeaders['content-type'] = 'text/html; charset=utf-8';
                     nextHeaders['cache-control'] = 'no-store';
+                    // The pane's own document binds later in-frame documents to this identity.
+                    if (config && hasCollectorConfig) {
+                        const binding = scopedLocalServiceViewerTokenCookie({ name: COOPERATIVE_COLLECTOR_BINDING_COOKIE, path: '/', value: JSON.stringify(config) });
+                        const existing = nextHeaders['set-cookie'];
+                        nextHeaders['set-cookie'] = [...(Array.isArray(existing) ? existing : existing ? [existing] : []), binding];
+                    }
                 }
                 input.response.writeHead(status, message, nextHeaders);
                 await input.response.write(output ?? Buffer.concat(chunks));

@@ -8,6 +8,7 @@ import { GlassSurface } from '@/components/ui/glass/GlassSurface';
 import type { GlassSurfaceGroup } from '@/components/ui/glass/glassMaterial';
 import { appShellColumnSurface } from './appRail/appShellColumnSurface';
 import { APP_RAIL_WIDTH_PX } from './appRail/appRailMetrics';
+import { RetainedPanelSurface } from '@/components/ui/panels/RetainedPanelSurface';
 
 /**
  * The sheet that holds the column and the page lies on the window's canvas, inset from the window's
@@ -127,7 +128,9 @@ export function AppShellMaterialFrame(props: Readonly<{
         {/* The atmosphere's picture lies under every plane; route changes only change the content coat. */}
         <AtmosphereLayer sheetRadius={CONTENT_SHEET_RADIUS_PX} chrome={props.showChrome} />
         {props.titleStrip ? <AppShellMaterialPlane group="chrome" color={theme.colors.background.canvas} translucentColor={theme.colors.surface.selected} style={styles.chromePlane}>
-            {props.titleStrip}
+            <RetainedPanelSurface isActive={props.showChrome}>
+                {props.titleStrip}
+            </RetainedPanelSurface>
         </AppShellMaterialPlane> : null}
         <View key="shell-body" style={styles.body}>
             {props.showChrome ? <>

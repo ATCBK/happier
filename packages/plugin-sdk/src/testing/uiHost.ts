@@ -541,6 +541,7 @@ export type PluginUiTestkitHostHandlers = Readonly<{
         input: Readonly<{ enrichment: PluginUiContextEnrichmentV1 | null; signal: AbortSignal }>,
     ) => void | Promise<void>;
     executeAction?: (input: PluginUiTestkitExecuteActionInput) => JsonValue | Promise<JsonValue>;
+    admitAction?: (input: Readonly<{ action: PluginReference; input?: JsonValue; signal: AbortSignal }>) => boolean | Promise<boolean>;
     selectActionInput?: (
         input: PluginUiTestkitSelectActionInputInput,
     ) => SelectActionInputResult | Promise<SelectActionInputResult>;
@@ -644,6 +645,7 @@ const hostMethodPolicies = {
     publishCurrentUiContext: 'publishCurrentUiContext',
     watchContext: 'fixture',
     executeAction: 'executeAction',
+    admitAction: 'admitAction',
     readResource: 'readResource',
     statOpenableContent: 'statOpenableContent',
     readOpenableContent: 'readOpenableContent',
@@ -662,6 +664,7 @@ const hostMethodPolicies = {
     settleEphemeralInput: 'settleEphemeralInput',
     activeComposer: 'activeComposer',
     readComposer: 'readComposer',
+    readDiscussionComposer: 'readComposer',
     watchComposer: 'watchComposer',
     applyComposer: 'applyComposer',
     focusComposer: 'focusComposer',
@@ -1125,6 +1128,7 @@ async function createPluginUiTestkitInternal<TSurface>(
                 code: failure.code,
                 message: failure.message,
                 ...(failure.retryable ? { retryable: true } : {}),
+                ...(failure.diagnostics === undefined ? {} : { diagnostics: [...failure.diagnostics] }),
             },
         });
     }
@@ -1385,10 +1389,14 @@ async function createPluginUiTestkitInternal<TSurface>(
                 if (!result.success) throw fixtureError('invalid_payload', 'activeComposer result is invalid.');
                 return requireTransportJson(result.data, 'activeComposer result');
             }
-            case 'readComposer': {
+            case 'readComposer':
+            case 'readDiscussionComposer': {
                 if (!handlers.readComposer) throw fixtureError('unsupported_method', 'readComposer is not installed.');
                 const payload = PluginUiReadComposerRequestV1Schema.safeParse(message.payload);
                 if (!payload.success) throw fixtureError('invalid_payload', 'readComposer payload is invalid.');
+                if (message.method === 'readDiscussionComposer' && payload.data.ref.kind !== 'discussion') {
+                    throw fixtureError('invalid_payload', 'readDiscussionComposer requires a Discussion scope.');
+                }
                 const result = PluginUiReadComposerResultV1Schema.safeParse(
                     await handlers.readComposer({ ref: payload.data.ref, signal }),
                 );
@@ -1554,6 +1562,14 @@ async function createPluginUiTestkitInternal<TSurface>(
                     signal,
                 });
                 return undefined;
+            }
+            case 'admitAction': {
+                if (!handlers.admitAction) throw fixtureError('unsupported_method', 'admitAction is not installed.');
+                const payload = PluginUiExecuteActionRequestV1Schema.safeParse(message.payload);
+                if (!payload.success) throw fixtureError('invalid_payload', 'admitAction payload is invalid.');
+                const admitted = await handlers.admitAction({ ...payload.data, signal });
+                if (typeof admitted !== 'boolean') throw fixtureError('invalid_payload', 'admitAction must resolve a boolean.');
+                return { admitted };
             }
             case 'confirm': {
                 if (!handlers.confirm) throw fixtureError('unsupported_method', 'confirm is not installed.');

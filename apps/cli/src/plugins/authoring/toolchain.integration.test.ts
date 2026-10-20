@@ -94,6 +94,7 @@ describe('runPluginAuthorToolchain', () => {
           '@happier-dev/plugin-ui': '0.0.0',
           '@happier-dev/channels-protocol': '0.0.0',
           '@happier-dev/triage-protocol': '0.0.0',
+          '@happier-dev/triage-sources': '0.0.0',
         },
       }), 'utf8');
 
@@ -123,6 +124,7 @@ describe('runPluginAuthorToolchain', () => {
       const installedUiRoot = join(projectRoot, 'node_modules', '@happier-dev', 'plugin-ui');
       const installedChannelsProtocolRoot = join(projectRoot, 'node_modules', '@happier-dev', 'channels-protocol');
       const installedTriageProtocolRoot = join(projectRoot, 'node_modules', '@happier-dev', 'triage-protocol');
+      const installedTriageSourcesRoot = join(projectRoot, 'node_modules', '@happier-dev', 'triage-sources');
       await expect(readFile(join(installedSdkRoot, 'package.json'), 'utf8'))
         .resolves.toContain('"@happier-dev/plugin-sdk"');
       await expect(readFile(join(installedUiRoot, 'package.json'), 'utf8'))
@@ -131,8 +133,19 @@ describe('runPluginAuthorToolchain', () => {
         .resolves.toContain('"@happier-dev/channels-protocol"');
       await expect(readFile(join(installedTriageProtocolRoot, 'package.json'), 'utf8'))
         .resolves.toContain('"@happier-dev/triage-protocol"');
+      await expect(readFile(join(installedTriageSourcesRoot, 'package.json'), 'utf8'))
+        .resolves.toContain('"@happier-dev/triage-sources"');
 
       const authorRequire = createRequire(join(projectRoot, 'package.json'));
+      const triageSourcesRequire = createRequire(join(installedTriageSourcesRoot, 'package.json'));
+      // Shared helpers must consume the author's SDK/UI/protocol identities,
+      // rather than a nested second copy in the public feature package.
+      for (const packageName of ['plugin-sdk', 'plugin-ui', 'triage-protocol']) {
+        const specifier = `@happier-dev/${packageName}`;
+        expect(await realpath(triageSourcesRequire.resolve(specifier)))
+          .toBe(await realpath(authorRequire.resolve(specifier)));
+      }
+      expect((await lstat(authorRequire.resolve('@happier-dev/triage-sources/ui'))).isFile()).toBe(true);
       const installedSdkRequire = createRequire(join(installedSdkRoot, 'package.json'));
       const composer = await import(pathToFileURL(authorRequire.resolve('@happier-dev/plugin-sdk/ui')).href);
       const protocolUiClient = await import(pathToFileURL(

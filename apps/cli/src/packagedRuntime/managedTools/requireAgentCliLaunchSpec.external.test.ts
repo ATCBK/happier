@@ -1,268 +1,98 @@
 import { mkdir } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PluginAgentContributionV2Schema } from '@happier-dev/protocol';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
 
-import type { AgentCliRuntimeDescriptor } from '@happier-dev/cli-common/agents';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-
-import { writeExecutableShim } from '../../testkit/fs/executableShim';
-import { createTempDir, removeTempDir } from '../../testkit/fs/tempDir';
-
-const { getResolvedContributionRegistry, getRuntimeRegistryState, isRuntimeRegistryCurrent } = vi.hoisted(() => ({
-  getResolvedContributionRegistry: vi.fn(),
-  getRuntimeRegistryState: vi.fn<() => { activeRegistry: object | null }>(
-    () => ({ activeRegistry: null }),
-  ),
-  isRuntimeRegistryCurrent: vi.fn(() => true),
-}));
-
-vi.mock('@/plugins/projection/registry/createResolvedContributionRegistry', () => ({
-  getResolvedContributionRegistry,
-}));
-vi.mock('@/plugins/runtime/reload/singleton', () => ({
-  pluginReloadController: {
-    getState: getRuntimeRegistryState,
-    isRuntimeRegistryCurrent,
-  },
-}));
-
-import {
-  requireAgentCliLaunchSpec,
-} from './requireAgentCliLaunchSpec';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { projectManifestAgentContribution } from '@/plugins/projection/registry/projectManifestAgentContribution';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { writeExecutableShim } from '@/testkit/fs/executableShim';
+import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { detectCliSnapshotOnDaemonPath } from '@/capabilities/snapshots/cliSnapshot';
+import { requireAgentCliLaunchSpec } from './requireAgentCliLaunchSpec';
 
 const tempDirs = new Set<string>();
+const envScope = createEnvKeyScope(['PATH']);
 
-afterEach(async () => {
-  getResolvedContributionRegistry.mockReset();
-  getRuntimeRegistryState.mockReset();
-  getRuntimeRegistryState.mockReturnValue({ activeRegistry: null });
-  isRuntimeRegistryCurrent.mockReset();
-  isRuntimeRegistryCurrent.mockReturnValue(true);
-  for (const dir of tempDirs) {
-    await removeTempDir(dir);
-  }
-  tempDirs.clear();
-});
-
-function externalRuntimeSpec(binaryName: string): AgentCliRuntimeDescriptor {
-  return Object.freeze({
-    id: 'acme-agent',
-    title: 'Acme Agent CLI',
-    binaryName,
-    knownUserBinDirSuffixes: null,
-    sourcePreferenceDefault: 'system-first',
-    managedInstall: null,
-    manualInstallKind: 'none',
-    manualInstallRecipes: null,
-    acceptsJavaScriptFileOverride: false,
+function externalAgent(binaryName?: string) {
+  return projectManifestAgentContribution({
+    pluginId: 'acme.launch', provenance: 'external', source: { kind: 'path' },
+    definition: PluginAgentContributionV2Schema.parse({
+      id: 'agent', title: 'Acme Agent', runtime: { kind: 'custom' }, primary: 'sessions',
+      capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } },
+      ...(binaryName ? { cli: {
+        executable: { binaryName, sourcePreference: 'system-first', knownUserBinDirSuffixes: null },
+        install: { managed: null, manual: { kind: 'none' } },
+        auth: { support: 'status_only', environmentVariables: ['ACME_AGENT_KEY'], loginLaunches: [] },
+      } } : {}),
+    }),
   });
 }
 
+async function publishAgents(agents: ReturnType<typeof externalAgent>[]) {
+  // Lookup never activates plugins. Project real declarations and publish them
+  // through the registry lifecycle rather than mocking catalog internals.
+  const registry = await resolveExecutablePluginRuntimeRegistry({
+    pluginIds: [],
+    contributes: createResolvedContributionRegistry({ agents, activationTargets: [] }),
+    currentGlobalExternalSessionsRouter: pluginReloadController.currentGlobalExternalSessions,
+    targetedContributions: pluginReloadController.getTargetedContributionsOwner(),
+  });
+  await pluginReloadController.adoptPreparedRuntimeRegistry({
+    registry, changedPluginIds: [], runningSessionDisposition: 'retainRunningSessions',
+  });
+}
+
+afterEach(async () => {
+  envScope.restore();
+  await publishAgents([]);
+  for (const dir of tempDirs) await removeTempDir(dir);
+  tempDirs.clear();
+});
+afterAll(async () => { await pluginReloadController.shutdown(); });
+
 describe('requireAgentCliLaunchSpec external Agent metadata', () => {
-  it('resolves the active contribution registry runtime descriptor for an external Agent', async () => {
-    const root = await createTempDir('happier-external-agent-launch-', tmpdir());
+  it('resolves the active manifest contribution for an external Agent', async () => {
+    const root = await createTempDir('happier-external-agent-launch-');
     tempDirs.add(root);
-    const pathDir = join(root, 'bin');
-    await mkdir(pathDir, { recursive: true });
-    const executable = await writeExecutableShim({
-      dir: pathDir,
-      fileName: 'acme-cli',
-      contents: '#!/bin/sh\necho ok\n',
-    });
-
-    getResolvedContributionRegistry.mockReturnValue({
-      agentDefinitionsById: new Map([
-        ['acme-agent', { runtimeSpec: externalRuntimeSpec('acme-cli') }],
-      ]),
-    });
-
-    expect(requireAgentCliLaunchSpec('acme-agent', {
-      processEnv: { PATH: pathDir },
-    })).toEqual({
-      source: 'system',
-      resolvedPath: executable,
-      command: executable,
-      args: [],
+    const agent = externalAgent('acme-cli');
+    const executable = await writeExecutableShim({ dir: root, fileName: 'acme-cli', contents: '#!/bin/sh\necho ok\n' });
+    await publishAgents([agent]);
+    expect(requireAgentCliLaunchSpec(agent.id, { processEnv: { PATH: root } })).toEqual({
+      source: 'system', resolvedPath: executable, command: executable, args: [], providerExitOwnership: 'direct',
     });
   });
 
-  it('fails closed when an active Agent contribution has no runtime descriptor', () => {
-    getResolvedContributionRegistry.mockReturnValue({
-      agentDefinitionsById: new Map([
-        ['metadata-only', { runtimeSpec: null }],
-      ]),
-    });
-
-    expect(() => requireAgentCliLaunchSpec('metadata-only', {
-      processEnv: { PATH: '' },
-    })).toThrow("Missing agent CLI runtime metadata for 'metadata-only'");
+  it('fails closed when an active Agent contribution has no runtime descriptor', async () => {
+    const agent = externalAgent();
+    await publishAgents([agent]);
+    expect(() => requireAgentCliLaunchSpec(agent.id, { processEnv: { PATH: '' } }))
+      .toThrow(`Missing agent CLI runtime metadata for '${agent.id}'`);
   });
 
-  it('detects an external Agent through the real daemon snapshot entry point', async () => {
-    const root = await createTempDir('happier-external-agent-snapshot-', tmpdir());
+  it('detects an external Agent added after the catalog was primed and follows its replacement', async () => {
+    const root = await createTempDir('happier-external-agent-snapshot-');
     tempDirs.add(root);
     const pathDir = join(root, 'bin');
     await mkdir(pathDir, { recursive: true });
-    const executable = await writeExecutableShim({
-      dir: pathDir,
-      fileName: 'acme-cli',
-      contents: '#!/bin/sh\necho "acme 1.2.3"\n',
-    });
-    const runtimeSpec = externalRuntimeSpec('acme-cli');
-    getResolvedContributionRegistry.mockReturnValue({
-      agentDefinitionsById: new Map([
-        ['acme-agent', { runtimeSpec }],
-      ]),
-      catalogEntriesById: {
-        'acme-agent': {
-          id: 'acme-agent',
-          getCliDetect: async () => ({
-            versionArgsToTry: [['--version']],
-            loginStatusArgs: null,
-          }),
-          getCliAuthSpec: async () => ({
-            binaryNames: ['acme-cli'],
-          }),
-        },
-      },
-    });
-    const previousPath = process.env.PATH;
-    process.env.PATH = pathDir;
-    try {
-      const snapshot = await detectCliSnapshotOnDaemonPath({
-        requestedCliNames: ['acme-agent'],
-        bypassCache: true,
+    await publishAgents([]);
+    const { AGENTS } = await import('@/agent/catalog/registry');
+    const agent = externalAgent('acme-cli');
+    expect(AGENTS).not.toHaveProperty(agent.id);
+    envScope.patch({ PATH: pathDir });
+    for (const [binaryName, version] of [['acme-cli', '1.2.3'], ['current-acme', '2.3.4']] as const) {
+      const currentAgent = externalAgent(binaryName);
+      const executable = await writeExecutableShim({
+        dir: pathDir, fileName: binaryName, contents: `#!/bin/sh\necho "acme ${version}"\n`,
       });
-      expect(snapshot.clis['acme-agent']).toMatchObject({
-        available: true,
-        resolvedPath: executable,
-        resolutionSource: 'system',
-        version: '1.2.3',
+      await publishAgents([currentAgent]);
+      expect(requireAgentCliLaunchSpec(currentAgent.id)).toMatchObject({ source: 'system', resolvedPath: executable });
+      const snapshot = await detectCliSnapshotOnDaemonPath({ requestedCliNames: [currentAgent.id], bypassCache: true });
+      expect(snapshot.clis[currentAgent.id]).toMatchObject({
+        available: true, resolvedPath: executable, resolutionSource: 'system', version,
       });
-    } finally {
-      if (previousPath === undefined) delete process.env.PATH;
-      else process.env.PATH = previousPath;
     }
-  });
-
-  it('detects an external Agent added to the current registry after the cold catalog cache was primed', async () => {
-    const root = await createTempDir('happier-current-external-agent-snapshot-', tmpdir());
-    tempDirs.add(root);
-    const pathDir = join(root, 'bin');
-    await mkdir(pathDir, { recursive: true });
-    const executable = await writeExecutableShim({
-      dir: pathDir,
-      fileName: 'current-acme',
-      contents: '#!/bin/sh\necho "current-acme 1.2.3"\n',
-    });
-    const runtimeSpec = externalRuntimeSpec('current-acme');
-    const coldRegistry = {
-      agentDefinitionsById: new Map(),
-      catalogEntriesById: {},
-    };
-    getResolvedContributionRegistry.mockReturnValue(coldRegistry);
-
-    expect(Object.keys((await import('@/agent/catalog/registry')).AGENTS)).toEqual([]);
-
-    getRuntimeRegistryState.mockReturnValue({
-      activeRegistry: {
-        contributes: {
-          agentDefinitionsById: new Map([
-            ['acme-agent', { runtimeSpec }],
-          ]),
-          catalogEntriesById: {
-            'acme-agent': {
-              id: 'acme-agent',
-              getCliDetect: async () => ({
-                versionArgsToTry: [['--version']],
-                loginStatusArgs: null,
-              }),
-              getCliAuthSpec: async () => ({
-                binaryNames: ['current-acme'],
-              }),
-            },
-          },
-        },
-      },
-    });
-
-    const previousPath = process.env.PATH;
-    process.env.PATH = pathDir;
-    try {
-      const snapshot = await detectCliSnapshotOnDaemonPath({
-        requestedCliNames: ['acme-agent'],
-        bypassCache: true,
-      });
-      expect(snapshot.clis['acme-agent']).toMatchObject({
-        available: true,
-        resolvedPath: executable,
-        resolutionSource: 'system',
-        version: '1.2.3',
-      });
-    } finally {
-      if (previousPath === undefined) delete process.env.PATH;
-      else process.env.PATH = previousPath;
-    }
-  });
-
-  it('prefers the current daemon runtime contribution over a stale cold registry snapshot', async () => {
-    const root = await createTempDir('happier-current-external-agent-', tmpdir());
-    tempDirs.add(root);
-    const pathDir = join(root, 'bin');
-    await mkdir(pathDir, { recursive: true });
-    const executable = await writeExecutableShim({
-      dir: pathDir,
-      fileName: 'current-acme',
-      contents: '#!/bin/sh\necho ok\n',
-    });
-    getResolvedContributionRegistry.mockReturnValue({
-      agentDefinitionsById: new Map(),
-    });
-    getRuntimeRegistryState.mockReturnValue({
-      activeRegistry: {
-        contributes: {
-          agentDefinitionsById: new Map([
-            ['acme-agent', { runtimeSpec: externalRuntimeSpec('current-acme') }],
-          ]),
-        },
-      },
-    });
-
-    expect(requireAgentCliLaunchSpec('acme-agent', {
-      processEnv: { PATH: pathDir },
-    })).toMatchObject({
-      source: 'system',
-      resolvedPath: executable,
-    });
-  });
-
-  it('does not admit runtime metadata from a registry whose generation is no longer current', async () => {
-    const root = await createTempDir('happier-stale-external-agent-', tmpdir());
-    tempDirs.add(root);
-    const pathDir = join(root, 'bin');
-    await mkdir(pathDir, { recursive: true });
-    await writeExecutableShim({
-      dir: pathDir,
-      fileName: 'stale-acme',
-      contents: '#!/bin/sh\necho ok\n',
-    });
-    getResolvedContributionRegistry.mockReturnValue({
-      agentDefinitionsById: new Map(),
-    });
-    getRuntimeRegistryState.mockReturnValue({
-      activeRegistry: {
-        contributes: {
-          agentDefinitionsById: new Map([
-            ['acme-agent', { runtimeSpec: externalRuntimeSpec('stale-acme') }],
-          ]),
-        },
-      },
-    });
-    isRuntimeRegistryCurrent.mockReturnValue(false);
-
-    expect(() => requireAgentCliLaunchSpec('acme-agent', {
-      processEnv: { PATH: pathDir },
-    })).toThrow("Missing agent CLI runtime metadata for 'acme-agent'");
   });
 });

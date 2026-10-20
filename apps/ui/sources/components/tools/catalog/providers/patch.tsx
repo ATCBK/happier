@@ -1,7 +1,7 @@
 import type { Metadata } from '@happier-dev/session-core/state';
 import type { ToolCall } from "@happier-dev/session-core/messages";
 import { resolvePath } from '@/utils/path/pathUtils';
-import * as z from 'zod';
+import * as z from 'zod/mini';
 import { t } from '@/text';
 import { ICON_EDIT } from '../icons';
 import type { KnownToolDefinition } from '../_types';
@@ -36,33 +36,33 @@ export const providerPatchTools = {
         },
         icon: ICON_EDIT,
         isMutable: true,
-        input: z.object({
-            path: z.string().describe('The file path to edit'),
-            oldText: z.string().describe('The text to replace'),
-            newText: z.string().describe('The new text'),
-            type: z.string().optional().describe('Type of edit (diff)')
-        }).partial().passthrough()
+        input: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.partial(z.object({
+            path: z.string().check(z.describe('The file path to edit')),
+            oldText: z.string().check(z.describe('The text to replace')),
+            newText: z.string().check(z.describe('The new text')),
+            type: z.optional(z.string()).check(z.describe('Type of edit (diff)'))
+        })))
     },
     'CodexPatch': {
         title: t('tools.names.applyChanges'),
         icon: ICON_EDIT,
         minimal: true,
         hideDefaultError: true,
-        input: z.object({
-            auto_approved: z.boolean().optional().describe('Whether changes were auto-approved'),
-            changes: z.record(z.string(), z.object({
-                add: z.object({
+        input: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.partial(z.object({
+            auto_approved: z.optional(z.boolean()).check(z.describe('Whether changes were auto-approved')),
+            changes: z.record(z.string(), z.looseObject({
+                add: z.optional(z.object({
                     content: z.string()
-                }).optional(),
-                modify: z.object({
+                })),
+                modify: z.optional(z.object({
                     old_content: z.string(),
                     new_content: z.string()
-                }).optional(),
-                delete: z.object({
+                })),
+                delete: z.optional(z.object({
                     content: z.string()
-                }).optional()
-            }).passthrough()).describe('File changes to apply')
-        }).partial().passthrough(),
+                }))
+            })).check(z.describe('File changes to apply'))
+        }))),
         extractSubtitle: (opts: { metadata: Metadata | null, tool: ToolCall }) => {
             // Show the first file being modified
             if (opts.tool.input?.changes && typeof opts.tool.input.changes === 'object') {
@@ -103,21 +103,21 @@ export const providerPatchTools = {
         minimal: true,
         hideDefaultError: true,
         isMutable: true,
-        input: z.object({
-            auto_approved: z.boolean().optional().describe('Whether changes were auto-approved'),
-            changes: z.record(z.string(), z.object({
-                add: z.object({
+        input: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.partial(z.object({
+            auto_approved: z.optional(z.boolean()).check(z.describe('Whether changes were auto-approved')),
+            changes: z.record(z.string(), z.looseObject({
+                add: z.optional(z.object({
                     content: z.string()
-                }).optional(),
-                modify: z.object({
+                })),
+                modify: z.optional(z.object({
                     old_content: z.string(),
                     new_content: z.string()
-                }).optional(),
-                delete: z.object({
+                })),
+                delete: z.optional(z.object({
                     content: z.string()
-                }).optional()
-            }).passthrough()).describe('File changes to apply')
-        }).partial().passthrough(),
+                }))
+            })).check(z.describe('File changes to apply'))
+        }))),
         extractSubtitle: (opts: { metadata: Metadata | null, tool: ToolCall }) => {
             // Show the first file being modified
             if (opts.tool.input?.changes && typeof opts.tool.input.changes === 'object') {

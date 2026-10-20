@@ -187,6 +187,7 @@ export function resolveSessionAwarenessLifecycleV1(
     case 'completed':
       return 'ready';
     case 'in_progress':
+    case 'waiting':
       return 'active';
     default:
       return 'unknown';
@@ -207,6 +208,7 @@ export function projectSessionAwarenessRuntimeV1(
   const presence = runtime.presence === 'unknown' && runtime.active === false ? 'offline' : runtime.presence;
 
   const archived = normalizeAwarenessTimestampV1(lifecycle.archivedAtMs) !== null;
+  const waitingForAction = !archived && lifecycle.latestTurnStatus === 'waiting';
   const hasTerminalPrimaryTurnProjection = hasTerminalPrimaryTurnStatusV1(lifecycle.latestTurnStatus);
   const terminalStatus = hasTerminalPrimaryTurnProjection ? lifecycle.latestTurnStatus ?? null : null;
   const unservable = runtime.controlServiceability === 'recoverable_unservable';
@@ -221,7 +223,7 @@ export function projectSessionAwarenessRuntimeV1(
   const freshThinking = runtime.thinking === true
     && live
     && isFreshAwarenessTimestampV1(runtime.thinkingAtMs, nowMs, SESSION_AWARENESS_RUNTIME_STALE_SIGNAL_MS)
-    && !hasTerminalPrimaryTurnProjection;
+    && !hasTerminalPrimaryTurnProjection && !waitingForAction;
   const freshOptimisticPendingInput = queuedInput
     && live
     && isFreshAwarenessTimestampV1(
@@ -229,7 +231,7 @@ export function projectSessionAwarenessRuntimeV1(
       nowMs,
       SESSION_AWARENESS_OPTIMISTIC_PENDING_INPUT_MS,
     )
-    && !hasTerminalPrimaryTurnProjection;
+    && !hasTerminalPrimaryTurnProjection && !waitingForAction;
 
   // A resume request is in flight whenever the Session carries the marker. It only counts as
   // work-in-progress while no terminal turn projection contradicts it — resuming a completed
@@ -239,7 +241,7 @@ export function projectSessionAwarenessRuntimeV1(
   const working = projectedTurnInProgress
     || freshThinking
     || freshOptimisticPendingInput
-    || (resuming && !hasTerminalPrimaryTurnProjection);
+    || (resuming && !hasTerminalPrimaryTurnProjection && !waitingForAction);
 
   const hasProviderRuntimeActivity = !archived
     && runtime.activityState === 'active'
@@ -259,9 +261,9 @@ export function projectSessionAwarenessRuntimeV1(
     && !unservable
     && runtime.active === true
     && runtime.presence !== 'offline';
-  const freshActionRequired = pending.hasPendingUserActionRequests === true
+  const freshActionRequired = waitingForAction || (pending.hasPendingUserActionRequests === true
     && potentiallyLive
-    && (working || hasFreshPendingRequest);
+    && (working || hasFreshPendingRequest));
   const freshPermissionRequired = pending.hasPendingPermissionRequests === true
     && potentiallyLive
     && (working || hasFreshPendingRequest);
@@ -286,6 +288,7 @@ export function projectSessionAwarenessRuntimeV1(
     if (unservable) return 'offline';
     if (runtimeEvidenceUnavailable || presence === 'unknown') return 'unknown';
     if (presence === 'offline') return 'offline';
+    if (waitingForAction) return 'waiting';
     if (working) return 'working';
     if (backgroundActive) return 'background_active';
     if (freshPermissionRequired || freshActionRequired) return 'waiting';
@@ -339,6 +342,7 @@ export function hasSessionAwarenessReadyEvidenceV1(
 ): boolean {
   if (evidenceUnavailable) return false;
   if (lifecycle.latestTurnStatus === 'in_progress'
+    || lifecycle.latestTurnStatus === 'waiting'
     || lifecycle.latestTurnStatus === 'failed'
     || lifecycle.latestTurnStatus === 'cancelled'
     || normalizeAwarenessTimestampV1(lifecycle.archivedAtMs) !== null) return false;

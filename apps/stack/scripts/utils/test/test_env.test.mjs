@@ -47,11 +47,15 @@ test('sanitizeStackTestRunnerEnv seeds isolated stack roots when requested', () 
   );
 
   assert.equal(env.HAPPIER_STACK_HOME_DIR, join(root, 'home'));
+  assert.equal(env.HAPPIER_HOME_DIR, join(root, 'cli'));
+  assert.equal(env.HAPPIER_STACK_CLI_HOME_DIR, join(root, 'cli'));
   assert.equal(env.HAPPIER_STACK_STORAGE_DIR, join(root, 'stacks'));
   assert.equal(env.HAPPIER_STACK_WORKSPACE_DIR, join(root, 'workspace'));
   assert.equal(env.HAPPIER_STACK_RUNTIME_DIR, join(root, 'runtime'));
   assert.equal(env.HAPPIER_STACK_CANONICAL_HOME_DIR, join(root, 'canonical-home'));
-  assert.equal(env.HOME, '/Users/example');
+  assert.equal(env.HOME, join(root, 'user'));
+  assert.equal(env.USERPROFILE, join(root, 'user'));
+  assert.equal(env.HAPPIER_SELF_HOST_CONFIG_DIR, undefined);
   assert.equal(env.HAPPIER_STACK_CLI_ROOT_DISABLE, '1');
 });
 
@@ -122,5 +126,6 @@ test('sanitizeStackTestRunnerEnv preserves sanitizer-owned isolation across nest
   assert.equal(nested.HAPPIER_STACK_WORKSPACE_DIR, join(root, 'workspace'));
   assert.equal(nested.HAPPIER_STACK_RUNTIME_DIR, join(root, 'runtime'));
   assert.equal(nested.HAPPIER_STACK_REPO_DIR, '/workspace/happier');
-  assert.equal(nested.HOME, '/Users/example');
+  assert.equal(nested.HOME, join(root, 'user'));
+  assert.equal(nested.USERPROFILE, join(root, 'user'));
 });

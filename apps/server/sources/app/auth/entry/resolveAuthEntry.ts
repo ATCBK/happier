@@ -804,6 +804,7 @@ export async function resolveAuthEntry(
     if (input.scope.kind === 'native_email_verification') {
         const verificationToken = input.scope.token;
         const home = await resolveJoinScreenHomeIdentity(context.env);
+        const emailDeliveryReady = context.emailDeliveryReady ?? await isAuthEmailDeliveryReady({ env: context.env });
         return await inTx(async (tx) => {
             const operation = await readNativeAuthOneTimeOperation(tx, {
                 purpose: 'verify_native_email',
@@ -818,7 +819,7 @@ export async function resolveAuthEntry(
                         tx,
                         invitation,
                         context.env,
-                        context.emailDeliveryReady ?? await isAuthEmailDeliveryReady({ env: context.env }),
+                        emailDeliveryReady,
                         context.principal ?? null,
                         home,
                     )
@@ -827,14 +828,14 @@ export async function resolveAuthEntry(
             if (operation.consumer.kind !== 'fresh_account') return unavailableInvitationProjection('entry_not_available');
             const homeMethods = await resolveEffectiveHomeAuthMethodsInTx(tx, {
                 env: context.env,
-                emailDeliveryReady: context.emailDeliveryReady ?? await isAuthEmailDeliveryReady({ env: context.env }),
+                emailDeliveryReady,
             });
             if (homeMethods.status !== 'ready') return projectUnavailableHomeAuthEntry('authentication_policy_unavailable');
             return projectHomeAuthEntryProjection(homeMethods, {
                 env: context.env,
                 principal: context.principal ?? null,
                 ...(context.requestIp === undefined ? {} : { requestIp: context.requestIp }),
-                emailDeliveryReady: context.emailDeliveryReady ?? await isAuthEmailDeliveryReady({ env: context.env }),
+                emailDeliveryReady,
             }, false);
         });
     }

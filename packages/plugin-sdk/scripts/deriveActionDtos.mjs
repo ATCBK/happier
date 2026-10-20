@@ -15,6 +15,8 @@ const flags = ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.UseStructural
   | ts.TypeFormatFlags.UseSingleQuotesForStringLiteralType;
 
 const supportBindings = [
+  ...['SessionTargetV1', 'SessionTargetSelectorV1', 'ActionSessionTargetDeclarationV1'].map(name => ['actions/sessionTargetV1.ts', name]),
+  ['actions/filesystemActionFamily.ts', 'FilesystemTreeNode'],
   // Host finding author values share the existing Action-result DTO projection.
   ['usage/coach/coachFinding.ts', 'UsageCoachFinding'],
   ['usage/coach/coachFinding.ts', 'UsageCoachEvaluation'],
@@ -23,10 +25,11 @@ const supportBindings = [
   // Public barrel exports remain roots even when schema inference inlines their use.
   ...['PluginAgentExternalSessionLinkDataArray', 'PluginAgentExternalSessionLinkDataObject', 'PluginAgentExternalSessionLinkDataValue'].map(name => ['plugins/contributions/agentExternalSessions.ts', name]),
   ['actions/actionUiPlacements.ts', 'ActionUiPlacement'],
-  ...['SessionUsageLimitCheckNowRequestV1Input', 'SessionUsageLimitConsumeResetCreditRequestV1Input'].map(name => ['sessions/work/state/sessionWorkStateRpc.ts', name]),
+  ...['SessionUsageLimitCheckNowRequestV1Input', 'SessionUsageLimitConsumeResetCreditRequestV1Input', 'SessionGoalControlFailureV1'].map(name => ['sessions/work/state/sessionWorkStateRpc.ts', name]),
   ...['SessionTranscriptGetExternalShareableInputV1', 'SessionTranscriptGetExternalShareableResultV1'].map(name => ['actions/actionSpecs.ts', name]),
   ...['ActionInputFieldHint', 'ActionInputHints', 'ActionInputOption', 'ActionInputOptionValue', 'ActionInputPredicate', 'EffectiveActionInputField'].map(name => ['actions/actionInputHintsRuntime.ts', name]),
   ...['ActionApprovalRequestCreatedResult', 'ActionExecuteResult'].map(name => ['actions/actionExecutionResult.ts', name]),
+  ...['ExecutionRunChildChoiceV1', 'ExecutionRunStartFailureDetailsV1'].map(name => ['execution/runs/responseSchemas.ts', name]),
   ['machines/administration/pluginMachineExecutionOriginV1.ts', 'PluginMachineExecutionOriginV1'],
   ...['PluginActionContributionV2', 'PluginToolContributionV2'].map(name => ['plugins/actions/v2.ts', name]),
   ['plugins/contributions/v2.ts', 'PluginCommandContributionV2'],
@@ -75,7 +78,7 @@ function selectSchemaRows(protocol, keys, readSource) {
     }
     return null;
   };
-  const property = (path, expression, key) => {
+  const property = (path, expression, key, bindings = new Map()) => {
     let node = unwrapped(expression);
     if (ts.isIdentifier(node)) {
       const found = variable(path, node.text);
@@ -86,13 +89,32 @@ function selectSchemaRows(protocol, keys, readSource) {
       const create = node.arguments[0];
       if (create && ts.isArrowFunction(create) && !ts.isBlock(create.body)) return property(path, create.body, key);
     }
+    // A metadata-only helper may supply the id while its enclosing row owns schemas.
+    if (key === 'id' && ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+      const helper = source(path).statements.find(statement => ts.isFunctionDeclaration(statement)
+        && statement.name?.text === node.expression.text && statement.body);
+      const returns = helper?.body.statements.filter(statement => ts.isReturnStatement(statement) && statement.expression);
+      if (returns?.length === 1) {
+        const argumentsByName = new Map(bindings);
+        helper.parameters.forEach((parameter, index) => {
+          if (ts.isIdentifier(parameter.name) && node.arguments[index]) {
+            argumentsByName.set(parameter.name.text, { path, node: unwrapped(node.arguments[index]) });
+          }
+        });
+        // Inspect the declared return object only; runtime metadata never executes.
+        return property(path, returns[0].expression, key, argumentsByName);
+      }
+    }
     if (!ts.isObjectLiteralExpression(node)) return null;
     // Object spreads use ordinary last-write semantics.
     for (const member of [...node.properties].reverse()) {
       if (ts.isSpreadAssignment(member)) {
-        const found = property(path, member.expression, key);
+        const found = property(path, member.expression, key, bindings);
         if (found) return found;
-      } else if (ts.isPropertyAssignment(member) && member.name.text === key) return { path, node: member.initializer };
+      } else if ((ts.isPropertyAssignment(member) || ts.isShorthandPropertyAssignment(member)) && member.name.text === key) {
+        const value = ts.isShorthandPropertyAssignment(member) ? member.name : member.initializer;
+        return ts.isIdentifier(value) && bindings.has(value.text) ? bindings.get(value.text) : { path, node: value };
+      }
     }
     return null;
   };
@@ -261,15 +283,15 @@ function selectSchemaRows(protocol, keys, readSource) {
         }
       }
       if (ts.isObjectLiteralExpression(node)) {
-        const id = node.properties.find(n => ts.isPropertyAssignment(n) && n.name.text === 'id');
-        if (id && ts.isStringLiteral(id.initializer) && keys.includes(id.initializer.text) && !selected.has(id.initializer.text)) {
+        const id = property(path, node, 'id');
+        if (id && ts.isStringLiteral(id.node) && keys.includes(id.node.text) && !selected.has(id.node.text)) {
           const input = property(path, node, 'inputSchema');
           const output = property(path, node, 'outputSchema');
           const surface = property(path, node, 'surfaceBindings');
           const plugin = surface && property(surface.path, surface.node, 'plugin');
           const pluginInput = plugin && property(plugin.path, plugin.node, 'inputSchema');
           const pluginOutput = plugin && property(plugin.path, plugin.node, 'outputSchema');
-          if (input && output) selected.set(id.initializer.text, [pluginInput ?? input, pluginOutput ?? output]);
+          if (input && output) selected.set(id.node.text, [pluginInput ?? input, pluginOutput ?? output]);
         }
       }
       ts.forEachChild(node, visit);
@@ -278,6 +300,9 @@ function selectSchemaRows(protocol, keys, readSource) {
   }
   for (const key of keys) if (!selected.has(key)) throw Error(`No canonical schema expression for Action ${key}`);
   for (const [key, rows] of selected) selected.set(key, rows.map(row => {
+    if (ts.isElementAccessExpression(row.node) && ts.isStringLiteral(row.node.argumentExpression)) {
+      row = property(row.path, row.node.expression, row.node.argumentExpression.text) ?? row;
+    }
     if (!ts.isIdentifier(row.node)) return row;
     const found = variable(row.path, row.node.text);
     return found ? { path: found.path, node: found.node.parent.name } : row;
@@ -444,6 +469,14 @@ export function captureActionSchemaInputs(repoRoot) {
     if (!inputs.has(key)) inputs.set(key, read(path));
     return inputs.get(key);
   };
+  // The frozen host must also recognize the logical declaration paths used by
+  // package resolution before TypeScript canonicalizes dependency symlinks.
+  const realpath = host.realpath?.bind(host);
+  if (realpath) host.realpath = path => {
+    const canonical = realpath(path);
+    if (canonical !== path) host.readFile(path);
+    return canonical;
+  };
   readActionCatalog(repoRoot, () => {}, host.readFile);
   const protocol = resolve(repoRoot, 'packages/protocol/src');
   const roots = ['actions/actionSpecs.ts', ...supportBindings.map(([path]) => path),
@@ -521,7 +554,15 @@ function deriveProgram({ repoRoot, keys, bindings, extraNames = [], extraInputNa
         }
         return selected.has(statement) ? [statement.getText(full)] : [];
       });
-      if (!statements.some(text => /import \{ z \} from ['"]zod(?:\/mini)?['"]/u.test(text))) statements.unshift("import { z } from 'zod';");
+      const hasZodBinding = full.statements.some(statement => {
+        if (!ts.isImportDeclaration(statement) || !['zod', 'zod/mini'].includes(statement.moduleSpecifier.text)
+          || statement.importClause?.isTypeOnly || !needed.has('z')) return false;
+        const binding = statement.importClause.namedBindings;
+        return binding && (ts.isNamespaceImport(binding) && binding.name.text === 'z'
+          || ts.isNamedImports(binding) && binding.elements.some(element =>
+            !element.isTypeOnly && element.name.text === 'z' && (element.propertyName ?? element.name).text === 'z'));
+      });
+      if (!hasZodBinding) statements.unshift("import { z } from 'zod/mini';");
       overlays.set(path, statements.join('\n') + '\n');
     }
     const rootPath = resolve(protocol, 'actions/actionDtoDerivation.ts');

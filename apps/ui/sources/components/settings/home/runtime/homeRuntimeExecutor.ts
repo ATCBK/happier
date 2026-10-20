@@ -1,7 +1,7 @@
 import * as React from 'react';
 import type { SystemTaskResult } from '@happier-dev/protocol/system/tasks/spec';
 import { REMOTE_HOST_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/remoteHosts/remoteHostActionsV1';
-import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { ActionApprovalRequestCreatedResultSchema, isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { HomeRuntimeRestartOutputV1Schema } from '@happier-dev/protocol/home/runtime/actionsV1';
 import { readRpcRequestDisposition } from '@happier-dev/sync-client';
 import { awaitActionApprovalResult, createActionApprovalContinuation, type ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
@@ -133,7 +133,7 @@ export async function restartHomeRuntime(
                             return { approvalPending: true };
                         },
                         succeeded: value => ({ kind: 'completed', value }),
-                        failed: code => code === 'approval_rejected' || code === 'approval_canceled'
+                        failed: code => isActionApprovalDeclinedErrorCode(code)
                             ? { kind: 'cancelled' } : { kind: 'failed', message: code },
                         aborted: () => ({ kind: 'cancelled' }),
                         ...(context.signal ? { signal: context.signal } : {}),
@@ -191,7 +191,7 @@ export async function restartHomeRuntime(
                             return { approvalPending: true };
                         },
                         succeeded: value => ({ kind: 'completed', value }),
-                        failed: code => code === 'approval_rejected' || code === 'approval_canceled'
+                        failed: code => isActionApprovalDeclinedErrorCode(code)
                             ? { kind: 'cancelled' } : { kind: 'failed', message: code },
                         aborted: () => ({ kind: 'cancelled' }),
                         ...(context.signal ? { signal: context.signal } : {}),
@@ -211,7 +211,7 @@ export async function restartHomeRuntime(
         }
     } catch (error) {
         if (error instanceof Error && 'code' in error
-            && (error.code === 'approval_canceled' || error.code === 'approval_rejected')) return { kind: 'cancelled' };
+            && isActionApprovalDeclinedErrorCode(error.code)) return { kind: 'cancelled' };
         if (taskId || readRpcRequestDisposition(error) === 'outcomeUnknown') {
             return { kind: 'outcome_unknown', ...(taskId ? { taskId } : {}), ...(result ? { result } : {}) };
         }

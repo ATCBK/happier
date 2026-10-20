@@ -8,10 +8,11 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { getStorage } from '@/sync/domains/state/storageStore';
 import type { TranscriptNavigationEntry } from '../../../navigation/transcriptNavigationTypes';
 import { clearTranscriptNavigationVisibilityStore, getTranscriptNavigationVisibilityStore } from '../../visibility/transcriptNavigationVisibilityStore';
-import { createTranscriptJumpHostTestHarness, restoreTranscriptJumpEnvironment } from './transcriptJumpHostTestHarness';
+import type { restoreTranscriptJumpEnvironment as RestoreTranscriptJumpEnvironment } from './transcriptJumpHostTestHarness';
 
 installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
+const { createTranscriptJumpHostTestHarness, restoreTranscriptJumpEnvironment } = await import('./transcriptJumpHostTestHarness');
 
 const SESSION_ID = 'session-landing';
 const FIRST = SESSION_ID + ':user-turn:7';
@@ -37,7 +38,7 @@ function entry(id: string, seq: number): TranscriptNavigationEntry {
         responsePreview: null, createdAtMs: seq, pinned: false, pinnedAtMs: null, loaded: true };
 }
 const ENTRIES = [entry(FIRST, 7), entry(SECOND, 12)];
-let environment: Awaited<ReturnType<typeof restoreTranscriptJumpEnvironment>>;
+let environment: Awaited<ReturnType<typeof RestoreTranscriptJumpEnvironment>>;
 
 describe('transcript jump landing owns the navigation anchor', () => {
     beforeEach(async () => {

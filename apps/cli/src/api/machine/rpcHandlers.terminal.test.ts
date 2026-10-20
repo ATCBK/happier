@@ -20,7 +20,7 @@ import { registerMachineTerminalRpcHandlers } from './rpcHandlers.terminal';
 import { registerMachineRpcHandlers } from './rpcHandlers';
 import * as ptyBoundary from '@/terminal/pty/provider';
 import * as processBoundary from '@happier-dev/cli-common/process';
-import * as processKillBoundary from '@/agent/runtime/process/killProcessTree';
+import * as processTerminationBoundary from '@/processes/terminate/terminateProcessTree';
 import { createTerminalPtySessionManager, type TerminalPtySessionManager } from '@/terminal/pty/sessions';
 import type { PtyProcess, PtyProvider, PtySpawnParams } from '@/terminal/pty/provider';
 import type { RpcHandler, RpcHandlerContext } from '@/api/rpc/types';
@@ -267,7 +267,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
       reloadConfiguration();
       const h = await finiteHarness({ observeInteractiveStop: true, homeServerId: homeId });
       const runtime = { ...h.runtime, serverId: profileId };
-      const handlers = new Map<string, RpcHandler<unknown, unknown>>();
+      const handlers = new Map<string, RpcHandler>();
       const registration = registerMachineTerminalRpcHandlers({
         rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler); } },
         deps: { serverId: profileId, env: {}, workingDirectory: h.root, sessionManager: h.sessionManager,
@@ -331,7 +331,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
     const context: RpcHandlerContext = { ...h.ingress, callerInputAuthorization: authorization,
       machineAdmission: { ...h.ingress.machineAdmission!, actorAccountId: 'bob', custodianAccountId: 'alice', role: 'use' },
       verifyMachineAdmissionCurrent: async () => live };
-    const handlers = new Map<string, RpcHandler<unknown, unknown>>();
+    const handlers = new Map<string, RpcHandler>();
     const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler); } },
       deps: { serverId: 'home', env: {}, workingDirectory: h.root, sessionManager: h.sessionManager, accountReadRuntime: async () => runtime, projectFiniteRuntime: async () => runtime } });
     const input = { terminalKey: 'bob-shell', workspace: { serverId: 'home', workspaceId: 'accepted', machineId: 'machine', rootPath: h.root } };
@@ -372,7 +372,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
         }
         return { status: 200, data: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
       });
-      const sessionHandlers = new Map<string, RpcHandler<unknown, unknown>>();
+      const sessionHandlers = new Map<string, RpcHandler>();
       const sessionRegistration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { sessionHandlers.set(method, handler); } },
         deps: { serverId: 'home', env: {}, sessionManager: h.sessionManager, accountReadRuntime: async () => runtime } });
       disposeOwnSession = sessionRegistration.dispose;
@@ -399,7 +399,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
   });
   it('reads retained machine setup output only through the exact admitted machine custody', async () => {
     const h = await finiteHarness();
-    const handlers = new Map<string, RpcHandler<unknown, unknown>>();
+    const handlers = new Map<string, RpcHandler>();
     const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler); } },
       deps: { serverId: 'home', env: {}, sessionManager: h.sessionManager } });
     try {
@@ -417,8 +417,8 @@ describe('registerMachineTerminalRpcHandlers', () => {
   });
   it.each([RPC_METHODS.DAEMON_TERMINAL_ENSURE, RPC_METHODS.DAEMON_TERMINAL_RESTART])('prepares fresh Project shells before %s and refuses without a host fallback', async method => {
     const h = await finiteHarness({ setup: true });
-    const handlers = new Map<string, RpcHandler<unknown, unknown>>();
-    const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(id, handler) { handlers.set(id, handler as RpcHandler<unknown, unknown>); } },
+    const handlers = new Map<string, RpcHandler>();
+    const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(id, handler) { handlers.set(id, handler); } },
       deps: { env: {}, sessionManager: h.sessionManager, accountReadRuntime: async () => h.runtime, projectFiniteRuntime: async () => h.runtime } });
     const input = { terminalKey: 'shell', workspace: { serverId: 'home', workspaceId: 'accepted', machineId: 'machine', rootPath: h.root } };
     try {
@@ -427,7 +427,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
       await writeFile(join(h.root, '.happier/project.json'), JSON.stringify({ version: 1, environment: { kind: 'toolchain', tool: 'mise', configPath: 'mise.toml' } }));
       await writeFile(join(h.root, 'mise.toml'), '[env]\nVALUE = "native"\n');
       const unavailable = { ...h.runtime, nativeIo: { resolveTool: async () => null } };
-      const missingRegistration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(id, handler) { handlers.set(id, handler as RpcHandler<unknown, unknown>); } },
+      const missingRegistration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(id, handler) { handlers.set(id, handler); } },
         deps: { env: {}, sessionManager: h.sessionManager, accountReadRuntime: async () => unavailable, projectFiniteRuntime: async () => unavailable } });
       await expect(handlers.get(method)!(input, h.ingress)).resolves.toMatchObject({ ok: false, error: 'native_tool_unavailable' });
       await writeFile(join(h.root, '.happier/project.json'), JSON.stringify({ version: 1, devcontainer: {} }));
@@ -456,14 +456,14 @@ describe('registerMachineTerminalRpcHandlers', () => {
     const reviewed = await reviewProjectSetupEffect({ workspace, projectAssociation: { workspace, project: { serverId: 'home', projectId: 'project' } },
       requester: { credentials: runtime.credentials, serverHttpBaseUrl: runtime.serverHttpBaseUrl }, purpose: 'setup', platform: { os: 'linux', arch: 'x64' }, nativeIo });
     if (reviewed.kind !== 'reviewed') throw new Error('Native review must resolve');
-    const rows = await h.post(`https://home.example${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`);
+    const rows = await axios.post(`https://home.example${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`);
     h.post.mockImplementation(async url => String(url).endsWith('/project-trust/read')
       ? { status: 200, data: { status: 'present', revision: 1, content: { t: 'plain', v: { project: reviewed.plan.project, reviewedEffectDigest: reviewed.plan.reviewedEffectDigest, approvedAtMs: 1 } } } }
       : rows);
     await createProjectSetupSuccessStore({ homeDir: runtime.successHomeDir! }).recordCompletion({ serverId: 'home', machineId: 'machine', workspaceRefId: 'accepted' },
       { v: 1, workspaceRefId: 'accepted', ...reviewed.plan.successBasis, completedAtMs: 1 });
-    const handlers = new Map<string, RpcHandler<unknown, unknown>>();
-    const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(id, handler) { handlers.set(id, handler as RpcHandler<unknown, unknown>); } },
+    const handlers = new Map<string, RpcHandler>();
+    const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(id, handler) { handlers.set(id, handler); } },
       deps: { env: { REMOVE: 'ambient' }, sessionManager: h.sessionManager, accountReadRuntime: async () => runtime, projectFiniteRuntime: async () => runtime } });
     const input = { terminalKey: 'native-shell', workspace: { serverId: 'home', workspaceId: 'accepted', machineId: 'machine', rootPath: h.root } };
     try {
@@ -488,7 +488,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
     const reviewed = await reviewProjectSetupEffect({ workspace, projectAssociation: { workspace, project: { serverId: 'home', projectId: 'project' } },
       requester: { credentials: h.runtime.credentials, serverHttpBaseUrl: h.runtime.serverHttpBaseUrl }, purpose: 'setup', platform: { os: 'linux', arch: 'x64' }, nativeIo: h.runtime.nativeIo });
     if (reviewed.kind !== 'reviewed') throw new Error('Setup review must resolve');
-    const rows = await h.post(`https://home.example${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`);
+    const rows = await axios.post(`https://home.example${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`);
     h.post.mockImplementation(async url => String(url).endsWith('/project-trust/read')
       ? { status: 200, data: { status: 'present', revision: 1, content: { t: 'plain', v: { project: reviewed.plan.project, reviewedEffectDigest: reviewed.plan.reviewedEffectDigest, approvedAtMs: 1 } } } }
       : rows);
@@ -496,7 +496,10 @@ describe('registerMachineTerminalRpcHandlers', () => {
     try {
       const opened = h.handlers.get(RPC_METHODS.DAEMON_TERMINAL_ENSURE)!({ terminalKey: 'after-setup',
         workspace: { serverId: 'home', workspaceId: 'accepted', machineId: 'machine', rootPath: h.root } }, h.ingress);
-      await started;
+      await expect(Promise.race([
+        started.then(() => ({ kind: 'setup_started' })),
+        Promise.resolve(opened).then(result => ({ kind: 'completed', result })),
+      ])).resolves.toEqual({ kind: 'setup_started' });
       expect(h.provider.spawned).toHaveLength(1);
       expect(h.provider.spawned[0]!.params.args).toContain('echo setup');
       h.provider.spawned[0]!.pty.exit(0);
@@ -540,8 +543,8 @@ describe('registerMachineTerminalRpcHandlers', () => {
       return { key, revision: 1, content: { t: 'plain', v: { key, value: { ...ref, serverId: 'home', machineId: 'machine', rootPath: h.root, createdAtMs: 1 } } } };
     });
     h.post.mockResolvedValue({ status: 200, data: { status: 'listed', coverage: 'complete', rows } });
-    const handlers = new Map<string, RpcHandler<unknown, unknown>>();
-    const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler as RpcHandler<unknown, unknown>); } },
+    const handlers = new Map<string, RpcHandler>();
+    const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler); } },
       deps: { serverId: 'home', env: {}, workingDirectory: h.root, sessionManager: manager,
         accountReadRuntime: async () => h.runtime, projectFiniteRuntime: async () => ({ ...h.runtime, terminalSessions: manager }) } });
     try {
@@ -580,8 +583,8 @@ describe('registerMachineTerminalRpcHandlers', () => {
   it('refuses fresh Machine terminal starts and restarts during drain while preserving attached control', async () => {
     const h = await finiteHarness({ observeInteractiveStop: true });
     const admissionDrain = createDaemonAdmissionDrain();
-    const handlers = new Map<string, RpcHandler<unknown, unknown>>();
-    const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler as RpcHandler<unknown, unknown>); } },
+    const handlers = new Map<string, RpcHandler>();
+    const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler); } },
       deps: { serverId: 'home', env: {}, workingDirectory: h.root, sessionManager: h.sessionManager, admissionDrain,
         accountReadRuntime: async () => h.runtime, projectFiniteRuntime: async () => h.runtime } });
     const input = { terminalKey: 'attached', workspace: { serverId: 'home', workspaceId: 'accepted', machineId: 'machine', rootPath: h.root } };
@@ -612,8 +615,8 @@ describe('registerMachineTerminalRpcHandlers', () => {
       config: { bufferMaxBytes: 1000, bufferMaxEvents: 10,
         bufferRetentionMs: 60_000, urlParseBufferLimit: 1000, maxWriteChunkBytes: 1000, defaultCols: 80, defaultRows: 24 },
       stopProcessTree: async () => { await new Promise<void>(resolve => { releaseStop = resolve; }); provider.spawned[0]!.pty.exit(0); } });
-    const handlers = new Map<string, RpcHandler<unknown, unknown>>();
-    const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler as RpcHandler<unknown, unknown>); } },
+    const handlers = new Map<string, RpcHandler>();
+    const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler); } },
       deps: { serverId: 'home', env: {}, workingDirectory: h.root, sessionManager: manager, admissionDrain,
         accountReadRuntime: async () => ({ ...h.runtime, isCurrent: async () => credentialCurrent }), projectFiniteRuntime: async () => ({ ...h.runtime, terminalSessions: manager, isCurrent: async () => credentialCurrent }) } });
     try {
@@ -649,8 +652,8 @@ describe('registerMachineTerminalRpcHandlers', () => {
       effectiveAccess: { v: 1, level: owner ? 'owner' : 'view', sources: owner ? [{ kind: 'owner' }] : [{ kind: 'direct', shareId: 'share' }],
         capabilities: projectSessionAccessCapabilitiesV1({ owner, grants: owner ? [] : [{ accessLevel: 'view', canApprovePermissions: false }] }) },
     } } } : { status: 200, data: { mode: 'plain', updatedAt: 1 } });
-    const handlers = new Map<string, RpcHandler<unknown, unknown>>();
-    const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler as RpcHandler<unknown, unknown>); } },
+    const handlers = new Map<string, RpcHandler>();
+    const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler); } },
       deps: { serverId: 'home', env: {}, workingDirectory: h.root, sessionManager: h.sessionManager,
         accountReadRuntime: async () => h.runtime } });
     try {
@@ -731,8 +734,8 @@ describe('registerMachineTerminalRpcHandlers', () => {
   it('admits a standalone accepted Project shell and rejects guessed ids and next operations after revoke', async () => {
     const h = await finiteHarness({ waived: true });
     try {
-      const handlers = new Map<string, RpcHandler<unknown, unknown>>();
-      registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler as RpcHandler<unknown, unknown>); } },
+      const handlers = new Map<string, RpcHandler>();
+      registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler); } },
         deps: { serverId: 'home', env: {}, workingDirectory: h.root, sessionManager: h.sessionManager,
           accountReadRuntime: async () => h.runtime, projectFiniteRuntime: async () => h.runtime } });
       const workspace = { serverId: 'home', workspaceId: 'accepted', machineId: 'machine', rootPath: h.root };
@@ -776,8 +779,8 @@ describe('registerMachineTerminalRpcHandlers', () => {
       { platform: 'darwin' as const, home: '/Users/alice', accepted: '/Users/alice/repo/', requested: '/Users/alice/repo', sibling: '/Users/alice2/repo', cwd: '~/repo' },
     ]) {
       const h = await finiteHarness({ acceptedRoot: entry.accepted, unenriched: true });
-      const handlers = new Map<string, RpcHandler<unknown, unknown>>();
-      const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler as RpcHandler<unknown, unknown>); } },
+      const handlers = new Map<string, RpcHandler>();
+      const registration = registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler); } },
         deps: { env: { HOME: entry.home, USERPROFILE: entry.home }, platform: entry.platform, workingDirectory: entry.home,
           accessPolicy: { kind: 'restrictedRoots', roots: [entry.home] }, sessionManager: h.sessionManager,
           accountReadRuntime: async () => h.runtime, projectFiniteRuntime: async () => h.runtime } });
@@ -860,7 +863,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
     const ingress: RpcHandlerContext = { signal: new AbortController().signal, transportRequestId: 'mounted-request', callerAuthority: 'account_automation',
       machineAdmission: { actorAccountId: 'owner', custodianAccountId: 'owner', machineId: 'machine', installationId: 'installation', role: 'manage', encryptionMode: 'plain' },
       verifyMachineAdmissionCurrent: async () => current };
-    const handlers = new Map<string, RpcHandler<unknown, unknown>>();
+    const handlers = new Map<string, RpcHandler>();
     const actionsSettingsProvider = { getActionsSettings: () => normalizeActionsSettingsV1({ v: 1, actions: {},
       approvalWaivedSurfaces: { ...(options.waived ? { 'projects.script.run': ['api'] } : {}),
         ...(options.setupWaived ? { 'projects.prepare': ['api'] } : {}) } }) };
@@ -868,24 +871,25 @@ describe('registerMachineTerminalRpcHandlers', () => {
       // PTY spawning and process-group liveness are the native OS boundary.
       vi.spyOn(ptyBoundary, 'createNodePtyProvider').mockReturnValue(provider);
       vi.spyOn(processBoundary, 'probeProcessGroupLiveness').mockImplementation(probeProcessGroup);
-      vi.spyOn(processKillBoundary, 'killProcessTree').mockImplementation(async ({ pid }) => {
+      vi.spyOn(processTerminationBoundary, 'terminateProcessTree').mockImplementation(async ({ pid }) => {
         provider.spawned.find(entry => entry.pty.pid === pid)?.pty.exit(0);
       });
     }
     // This in-memory transport erases callback generics only; admission,
     // composition, preparation and operation settlement remain real.
-    const registrar = { registerHandler(method: string, handler: RpcHandler<unknown, unknown>) { handlers.set(method, handler); } };
+    const registrar = { registerHandler(method: string, handler: RpcHandler) { handlers.set(method, handler); } };
     const registration = options.machineComposition ? registerMachineRpcHandlers({
       rpcHandlerManager: registrar as unknown as RpcHandlerManager,
-      handlers: { spawnSession: async () => ({ type: 'error', errorCode: 'unknown', errorMessage: 'not installed' }),
+      handlers: { spawnSession: async () => ({ type: 'error', errorCode: 'UNEXPECTED', errorMessage: 'not installed' }),
         stopSession: async () => true, requestShutdown() {} },
       deps: { currentMachineId: 'machine', currentServerId: 'home', workingDirectory: root,
         actionOperations: operationRuntime, actionsSettingsProvider,
+        accountReadRuntime: async () => runtime,
         createProjectFiniteRuntime: async ports => ({ ...runtime, ...ports }),
       },
-    }) : registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler as RpcHandler<unknown, unknown>); } },
+    }) : registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler); } },
       deps: { env: {}, workingDirectory: root, sessionManager, admissionDrain, accountReadRuntime: async () => runtime, projectFiniteRuntime: async () => runtime,
-        projectScriptExecutor: (boundRuntime, context) => createCliActionExecutorHarness({ token: runtime.credentials.token, credentials: runtime.credentials,
+        projectScriptExecutor: (boundRuntime, context) => createCliActionExecutorHarness({ token: runtime.credentials.token, credentials: runtime.credentials, mode: 'plain', ctx: null,
           isCredentialCurrent: async () => current,
           sessionId: 'cli-global', serverId: runtime.serverId, serverHttpBaseUrl: runtime.serverHttpBaseUrl,
           actionsSettingsProvider,
@@ -983,7 +987,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
         const sessionManager = createTerminalPtySessionManager({ ptyProvider: provider, env, platform,
           config: { bufferMaxBytes: 1000, bufferMaxEvents: 10,
             bufferRetentionMs: 60_000, urlParseBufferLimit: 1000, maxWriteChunkBytes: 1000, defaultCols: 80, defaultRows: 24 } });
-        const registered = new Map<string, RpcHandler<unknown, unknown>>();
+        const registered = new Map<string, RpcHandler>();
         registerMachineTerminalRpcHandlers({ rpcHandlerManager: { registerHandler: (method: string, handler: (params: unknown) => Promise<unknown>) => registered.set(method, handler) } as unknown as RpcHandlerManager,
           deps: { env, platform, workingDirectory: root, sessionManager } });
         const ensure = registered.get(RPC_METHODS.DAEMON_TERMINAL_ENSURE)!;
@@ -1018,11 +1022,11 @@ describe('registerMachineTerminalRpcHandlers', () => {
         bufferRetentionMs: 60_000, urlParseBufferLimit: 1000, maxWriteChunkBytes: 1000, defaultCols: 80, defaultRows: 24 } });
     sessionManager.ensure({ terminalKey: 'one', cwd: '/one', sessionId: 'session-one' });
     sessionManager.ensure({ terminalKey: 'two', cwd: '/two', sessionId: 'session-two' });
-    let restart: RpcHandler<unknown, unknown> | undefined;
+    let restart: RpcHandler | undefined;
     const register = (requiredSessionId?: string) => {
-      const registered = new Map<string, RpcHandler<unknown, unknown>>();
+      const registered = new Map<string, RpcHandler>();
       registerMachineTerminalRpcHandlers({ rpcHandlerManager: {
-        registerHandler: (method: string, handler: (params: unknown) => Promise<unknown>) => registered.set(method, handler as RpcHandler<unknown, unknown>),
+        registerHandler: (method: string, handler: (params: unknown) => Promise<unknown>) => registered.set(method, handler),
       } as unknown as RpcHandlerManager, deps: { env: {}, sessionManager, requiredSessionId } });
       restart = registered.get(RPC_METHODS.DAEMON_TERMINAL_RESTART);
       return registered.get('daemon.terminal.list');
@@ -1044,9 +1048,9 @@ describe('registerMachineTerminalRpcHandlers', () => {
   });
 
   it('returns an empty list before the PTY owner has been created', async () => {
-    const registered = new Map<string, RpcHandler<unknown, unknown>>();
+    const registered = new Map<string, RpcHandler>();
     registerMachineTerminalRpcHandlers({ rpcHandlerManager: {
-      registerHandler: (method: string, handler: (params: unknown) => Promise<unknown>) => registered.set(method, handler as RpcHandler<unknown, unknown>),
+      registerHandler: (method: string, handler: (params: unknown) => Promise<unknown>) => registered.set(method, handler),
     } as unknown as RpcHandlerManager, deps: { env: {} } });
     await expect(registered.get('daemon.terminal.list')!({})).resolves.toEqual({ ok: true, terminals: [] });
   });
@@ -1057,7 +1061,7 @@ describe('registerMachineTerminalRpcHandlers', () => {
       config: { bufferMaxBytes: 1000, bufferMaxEvents: 10,
         bufferRetentionMs: 60_000, urlParseBufferLimit: 1000, maxWriteChunkBytes: 1000, defaultCols: 80, defaultRows: 24 } });
     const register = (requiredSessionId?: string) => {
-      const registered = new Map<string, RpcHandler<unknown, unknown>>();
+      const registered = new Map<string, RpcHandler>();
       registerMachineTerminalRpcHandlers({ rpcHandlerManager: {
         // The RPC registrar is the boundary; invoke its generic handler with wire input.
         registerHandler: (method, handler) => registered.set(method, async params => {
@@ -1079,9 +1083,9 @@ describe('registerMachineTerminalRpcHandlers', () => {
     } finally { sessionManager.dispose(); }
   });
   it('fails closed when explicitly disabled', async () => {
-    const registered = new Map<string, RpcHandler<unknown, unknown>>();
+    const registered = new Map<string, RpcHandler>();
     const rpcHandlerManager = {
-      registerHandler: (method: string, handler: RpcHandler<unknown, unknown>) => registered.set(method, handler),
+      registerHandler: (method: string, handler: RpcHandler) => registered.set(method, handler),
     } as unknown as RpcHandlerManager;
 
     registerMachineTerminalRpcHandlers({
@@ -1146,9 +1150,9 @@ describe('registerMachineTerminalRpcHandlers', () => {
       },
     });
 
-    const registered = new Map<string, RpcHandler<unknown, unknown>>();
+    const registered = new Map<string, RpcHandler>();
     const rpcHandlerManager = {
-      registerHandler: (method: string, handler: RpcHandler<unknown, unknown>) => registered.set(method, handler),
+      registerHandler: (method: string, handler: RpcHandler) => registered.set(method, handler),
     } as unknown as RpcHandlerManager;
 
     registerMachineTerminalRpcHandlers({
@@ -1194,9 +1198,9 @@ describe('registerMachineTerminalRpcHandlers', () => {
       },
     });
 
-    const registered = new Map<string, RpcHandler<unknown, unknown>>();
+    const registered = new Map<string, RpcHandler>();
     const rpcHandlerManager = {
-      registerHandler: (method: string, handler: RpcHandler<unknown, unknown>) => registered.set(method, handler),
+      registerHandler: (method: string, handler: RpcHandler) => registered.set(method, handler),
     } as unknown as RpcHandlerManager;
 
     registerMachineTerminalRpcHandlers({
@@ -1235,10 +1239,10 @@ describe('registerMachineTerminalRpcHandlers', () => {
         defaultRows: 24,
       },
     });
-    const registered = new Map<string, RpcHandler<unknown, unknown>>();
+    const registered = new Map<string, RpcHandler>();
     registerMachineTerminalRpcHandlers({
       rpcHandlerManager: {
-        registerHandler: (method: string, handler: RpcHandler<unknown, unknown>) => registered.set(method, handler),
+        registerHandler: (method: string, handler: RpcHandler) => registered.set(method, handler),
       } as unknown as RpcHandlerManager,
       deps: {
         env: {},
@@ -1281,9 +1285,9 @@ describe('registerMachineTerminalRpcHandlers', () => {
       },
     });
 
-    const registered = new Map<string, RpcHandler<unknown, unknown>>();
+    const registered = new Map<string, RpcHandler>();
     const rpcHandlerManager = {
-      registerHandler: (method: string, handler: RpcHandler<unknown, unknown>) => registered.set(method, handler),
+      registerHandler: (method: string, handler: RpcHandler) => registered.set(method, handler),
     } as unknown as RpcHandlerManager;
 
     registerMachineTerminalRpcHandlers({
@@ -1332,9 +1336,9 @@ describe('registerMachineTerminalRpcHandlers', () => {
       },
     });
 
-    const registered = new Map<string, RpcHandler<unknown, unknown>>();
+    const registered = new Map<string, RpcHandler>();
     const rpcHandlerManager = {
-      registerHandler: (method: string, handler: RpcHandler<unknown, unknown>) => registered.set(method, handler),
+      registerHandler: (method: string, handler: RpcHandler) => registered.set(method, handler),
     } as unknown as RpcHandlerManager;
 
     registerMachineTerminalRpcHandlers({
@@ -1391,9 +1395,9 @@ describe('registerMachineTerminalRpcHandlers', () => {
         defaultRows: 24,
       },
     });
-    const registered = new Map<string, RpcHandler<unknown, unknown>>();
+    const registered = new Map<string, RpcHandler>();
     const rpcHandlerManager = {
-      registerHandler: (method: string, handler: (params: unknown) => Promise<unknown>) => registered.set(method, handler as RpcHandler<unknown, unknown>),
+      registerHandler: (method: string, handler: (params: unknown) => Promise<unknown>) => registered.set(method, handler),
     } as unknown as RpcHandlerManager;
 
     registerMachineTerminalRpcHandlers({
@@ -1461,12 +1465,12 @@ describe('registerMachineTerminalRpcHandlers', () => {
         defaultRows: 24,
       },
     });
-    const registered = new Map<string, RpcHandler<unknown, unknown>>();
+    const registered = new Map<string, RpcHandler>();
 
     try {
       registerMachineTerminalRpcHandlers({
         rpcHandlerManager: {
-          registerHandler: (method: string, handler: (params: unknown) => Promise<unknown>) => registered.set(method, handler as RpcHandler<unknown, unknown>),
+          registerHandler: (method: string, handler: (params: unknown) => Promise<unknown>) => registered.set(method, handler),
         } as unknown as RpcHandlerManager,
         deps: {
           env: {},
@@ -1510,9 +1514,9 @@ describe('registerMachineTerminalRpcHandlers', () => {
     const sessionManager = createTerminalPtySessionManager({ ptyProvider: provider, env: { ComSpec: 'cmd.exe' }, platform: 'win32', stopProcessTree: async () => {},
       config: { bufferMaxBytes: 1000, bufferMaxEvents: 10,
         bufferRetentionMs: 60_000, urlParseBufferLimit: 1000, maxWriteChunkBytes: 1000, defaultCols: 80, defaultRows: 24 } });
-    const registered = new Map<string, RpcHandler<unknown, unknown>>();
+    const registered = new Map<string, RpcHandler>();
     const registration = registerMachineTerminalRpcHandlers({
-      rpcHandlerManager: { registerHandler(method, handler) { registered.set(method, handler as RpcHandler<unknown, unknown>); } },
+      rpcHandlerManager: { registerHandler(method, handler) { registered.set(method, handler); } },
       deps: { env: {}, sessionManager },
     });
     try {
@@ -1530,9 +1534,9 @@ describe('registerMachineTerminalRpcHandlers', () => {
     const sessionManager = createTerminalPtySessionManager({ ptyProvider: provider, env: { SHELL: '/bin/bash' }, platform: 'linux', stopProcessTree: async () => {},
       config: { bufferMaxBytes: 1000, bufferMaxEvents: 10,
         bufferRetentionMs: 60_000, urlParseBufferLimit: 1000, maxWriteChunkBytes: 1000, defaultCols: 80, defaultRows: 24 } });
-    const registered = new Map<string, RpcHandler<unknown, unknown>>();
+    const registered = new Map<string, RpcHandler>();
     const registration = registerMachineTerminalRpcHandlers({
-      rpcHandlerManager: { registerHandler(method, handler) { registered.set(method, handler as RpcHandler<unknown, unknown>); } },
+      rpcHandlerManager: { registerHandler(method, handler) { registered.set(method, handler); } },
       deps: { env: {}, sessionManager },
     });
     try {

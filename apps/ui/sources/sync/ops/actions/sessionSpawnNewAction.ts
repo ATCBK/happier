@@ -1,8 +1,17 @@
-import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
-import { SessionCreationKeyV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
+import { RPC_ERROR_CODES, readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
+import { deriveSessionCreationTagV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
+import { SessionLookupByTagsResponseV2Schema } from '@happier-dev/protocol/sessions/control/contract';
+import { SessionMessageV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessagesPageV1';
+import { normalizeSessionCreationOrganizationPlacementV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
 import { SessionSpawnNewResultV1Schema, type SessionSpawnNewInitialInputDispositionV1, type SessionSpawnNewResultV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { projectSessionFollowSourceKeyPreparationAfterSetV1, type SessionFollowSourceKeyPreparationResultV1, SessionFollowSourceKeyPreparationResultV1Schema, SESSION_FOLLOW_SOURCE_KEY_PREPARATION_WAITING_ACTION_ERROR_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceKeyPreparationV1';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/actionExecutor';
+import { SessionCreationTargetPreparationResultV1Schema, needsSessionCreationDirectoryApprovalPreflightV1,
+    projectSessionCreationDirectoryApprovalV1,
+} from '@happier-dev/protocol/sessions/creation/sessionCreationTargetPreparationV1';
+import type { ActionOperationFailureV1, ActionOperationSnapshotV1 } from '@happier-dev/protocol/actions/operations/v1';
+import { ApprovalStaleFailureDetailsSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import type { UiActionExecutorContext } from './defaultActionExecutor';
 import type { SessionSpawnNewInputV2 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
 import type { SessionRequesterBootstrapV1, SessionRequesterBootstrapRpcRequestV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
@@ -19,13 +28,17 @@ import {
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { readSpawnSessionRpcTimeoutMsFromEnv } from '@/sync/domains/session/spawn/spawnSessionRpcTimeout';
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
-import { isMachineRpcTimeoutError } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcTimeoutError';
-import { isSocketIoAckTimeoutError } from '@happier-dev/sync-client';
+import { isMachineRpcTimeoutError, MACHINE_RPC_TIMEOUT_ERROR_CODE } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcTimeoutError';
+import { isSocketIoAckTimeoutError, readRpcRequestDisposition } from '@happier-dev/sync-client';
 import { parseToken } from '@/utils/auth/parseToken';
 
-import { createFrontDoorActionExecute } from './frontDoorRuntimeActionExecutor';
+import { createFrontDoorActionExecute, requireActionSuccess } from './frontDoorRuntimeActionExecutor';
+import { captureLazyActionAccountContext, withActionAccountRequestSignal, type LazyActionAccountContext } from './actionAccountContext';
 import { prepareSessionFollowSourceKey } from '@/components/sessions/follow/prepareSessionFollowSourceKey';
 import { t } from '@/text';
+import { buildManualSessionCreationKey, readManualSessionSpawnOperation, readManualSessionSpawnOperationDetails } from '@/sync/domains/session/spawn/manualSessionSpawnOperation';
+import { recordBugReportUserAction } from '@/utils/system/bugReportActionTrail';
+export { buildManualSessionCreationKey } from '@/sync/domains/session/spawn/manualSessionSpawnOperation';
 
 export type StrictSessionSpawnNewInput = SessionSpawnNewInputV2 & Readonly<{
     creationKey: NonNullable<SessionSpawnNewInputV2['creationKey']>;
@@ -34,6 +47,31 @@ export type StrictSessionSpawnNewInput = SessionSpawnNewInputV2 & Readonly<{
 export type SessionSpawnNewActionResult =
     | Readonly<{ ok: true; result: SessionSpawnNewResultV1 }>
     | Extract<ActionExecuteResult, Readonly<{ ok: false }>>;
+
+/** Read-only target preparation precedes the UI Artifact, as it does for CLI approvals. */
+export function createUiSessionSpawnNewDirectoryApprovalPreflight(
+    account: LazyActionAccountContext | null,
+): NonNullable<ActionExecutorDeps['sessionSpawnNewDirectoryApprovalPreflight']> {
+    return async ({ input, signal }) => {
+        if (!needsSessionCreationDirectoryApprovalPreflightV1(input)) return { type: 'not_required' };
+        if (!account) return { type: 'error', result: { type: 'error', code: 'permission_denied', retryable: false } };
+        account.assertCurrent();
+        const raw = await withActionAccountRequestSignal(account, signal, ownedSignal => machineRpcWithServerScope<unknown, { directory: SessionSpawnNewInputV2['directory'] }>({
+            serverId: input.executionTarget.serverId, accountId: account.accountId,
+            machineId: input.executionTarget.machineId, method: RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT,
+            payload: { directory: input.directory }, signal: ownedSignal,
+        }));
+        account.assertCurrent();
+        const prepared = SessionCreationTargetPreparationResultV1Schema.safeParse(raw);
+        if (!prepared.success) return { type: 'error', result: { type: 'error', code: 'incompatible_target', retryable: false,
+            incompatibleTarget: { reason: 'target_preparation_invalid_result' } } };
+        if (!prepared.data.ok) return { type: 'error', result: { type: 'error',
+            code: prepared.data.code === 'invalid_directory' ? 'invalid_input' : 'spawn_failed',
+            retryable: prepared.data.code !== 'invalid_directory' } };
+        const approval = projectSessionCreationDirectoryApprovalV1(input.executionTarget, prepared.data);
+        return approval ? { type: 'approval_required', approval } : { type: 'not_required' };
+    };
+}
 
 export type ManualSessionSpawnNewActionCustody = PersistedSpawnAttempt;
 
@@ -81,6 +119,8 @@ export type SessionSpawnNewActionFailureMessageKey =
     | 'newSession.failedToStart';
 
 export type SessionSpawnNewResultFailureMessageKey =
+    | 'connectedServices.diagnostics.body.connected_service_credential_reconnect_required'
+    | 'connectedServices.diagnostics.body.connected_service_credential_refresh_unavailable'
     | 'newSession.launchStillPendingBody'
     | 'newSession.daemonRpcUnavailableBody'
     | 'session.access.repairBody'
@@ -114,15 +154,20 @@ export function resolveSessionSpawnNewActionFailureMessageKey(
 
 /**
  * Projects the strict action result without discarding its originating typed
- * outcome. `machine_offline` is the strict result's target-transport or
- * daemon-preparation failure class; all other typed rejections stay neutral
- * rather than claiming the daemon is absent.
+ * outcome. Only an explicit `machine_offline` result claims unavailable
+ * daemon transport; a caller deadline is a neutral spawn failure.
  */
 export function resolveSessionSpawnNewResultFailureMessageKey(
     result: Exclude<SessionSpawnNewResultV1, Readonly<{ type: 'success' }>>,
 ): SessionSpawnNewResultFailureMessageKey {
     if (result.type === 'pending') {
         return 'newSession.launchStillPendingBody';
+    }
+    if (result.code === 'spawn_failed' && result.launchError?.code === 'connected_service_credential_reconnect_required') {
+        return 'connectedServices.diagnostics.body.connected_service_credential_reconnect_required';
+    }
+    if (result.code === 'spawn_failed' && result.launchError?.code === 'connected_service_credential_refresh_unavailable') {
+        return 'connectedServices.diagnostics.body.connected_service_credential_refresh_unavailable';
     }
     if (
         result.code === 'recipient_key_unavailable'
@@ -154,8 +199,13 @@ export function resolveSessionSpawnNewActionFailureMessage(
     const key = resolveSessionSpawnNewActionFailureMessageKey(result);
     const message = t(key);
     return key === 'newSession.failedToStart'
-        ? t('errors.errorWithCode', { message, code: result.errorCode })
+        ? t('errors.errorWithCode', { message, code: sessionSpawnFailureDisplayCode(result) })
         : message;
+}
+
+function sessionSpawnFailureDisplayCode(failure: Readonly<{ errorCode: string; details?: unknown }>): string {
+    const stale = failure.errorCode === 'approval_stale' ? ApprovalStaleFailureDetailsSchema.safeParse(failure.details) : null;
+    return stale?.success ? `${failure.errorCode}:${stale.data.reason}` : failure.errorCode;
 }
 
 export function resolveSessionSpawnNewResultFailureMessage(
@@ -166,6 +216,16 @@ export function resolveSessionSpawnNewResultFailureMessage(
     return result.type !== 'pending' && key === 'newSession.failedToStart'
         ? t('errors.errorWithCode', { message, code: result.code })
         : message;
+}
+
+/** Present a terminal operation failure through the same localized spawn-failure owner as the direct Action path. */
+export function resolveSessionSpawnNewOperationFailureMessage(
+    failure: ActionOperationFailureV1,
+): string {
+    return t('errors.errorWithCode', {
+        message: t('newSession.failedToStart'),
+        code: sessionSpawnFailureDisplayCode(failure),
+    });
 }
 
 /** First-input admission is separate from creation; retain its diagnostic without claiming rejection. */
@@ -188,6 +248,7 @@ export async function executeSessionSpawnNewAction(
 ): Promise<SessionSpawnNewActionResult> {
     const result = await createFrontDoorActionExecute(executor)('session.spawn_new', input, context);
     if (!result.ok) return result;
+    requireActionSuccess(result);
     return {
         ok: true,
         result: SessionSpawnNewResultV1Schema.parse(result.result),
@@ -213,12 +274,23 @@ export async function dispatchSessionSpawnNewToMachine(params: Readonly<{
     requesterBootstrap?: SessionRequesterBootstrapV1;
     signal?: AbortSignal;
 }>): Promise<SessionSpawnNewResultV1> {
+    const startedAtMs = Date.now();
     let issued = false;
+    let issuedAtMs: number | undefined;
+    const readPhaseTiming = () => {
+        const nowMs = Date.now();
+        return {
+            phase: issued ? 'response' : 'setup',
+            issued,
+            elapsedMs: Math.max(0, nowMs - startedAtMs),
+            phaseElapsedMs: Math.max(0, nowMs - (issuedAtMs ?? startedAtMs)),
+        };
+    };
     try {
         const payload: SessionSpawnNewInputV2 | SessionRequesterBootstrapRpcRequestV1 = params.requesterBootstrap
             ? { kind: 'requester_session_bootstrap_v1', input: params.payload, requesterBootstrap: params.requesterBootstrap }
             : params.payload;
-        return await machineRpcWithServerScope<SessionSpawnNewResultV1, typeof payload>({
+        const result = await machineRpcWithServerScope<SessionSpawnNewResultV1, typeof payload>({
             serverId: params.payload.executionTarget.serverId,
             machineId: params.payload.executionTarget.machineId,
             method: RPC_METHODS.SESSION_SPAWN_NEW,
@@ -231,33 +303,62 @@ export async function dispatchSessionSpawnNewToMachine(params: Readonly<{
             } : {}),
             timeoutMs: readSpawnSessionRpcTimeoutMsFromEnv(),
             signal: params.signal,
-            onIssued: () => { issued = true; },
+            onIssued: () => { issued = true; issuedAtMs = Date.now(); },
         });
+        if (result?.type === 'error') {
+            const refusal = SessionSpawnNewResultV1Schema.safeParse(result);
+            if (refusal.success && refusal.data.type === 'error') {
+                recordBugReportUserAction('session.spawn_new.daemon_refusal', {
+                    metadata: { ...readPhaseTiming(), resultCode: refusal.data.code },
+                });
+            }
+        }
+        return result;
     } catch (error) {
-        if (isSocketIoAckTimeoutError(error) || isMachineRpcTimeoutError(error)) {
+        const record = error && typeof error === 'object' ? error as Readonly<Record<string, unknown>> : null;
+        const code = readRpcErrorCode(error) ?? record?.code;
+        // Only known diagnostic constants may enter the existing local trail.
+        // Messages, stacks, payloads and arbitrary token-shaped names/codes stay private.
+        const errorCode = Object.values(RPC_ERROR_CODES).some(value => value === code)
+            || code === MACHINE_RPC_TIMEOUT_ERROR_CODE || code === 'MACHINE_RPC_ABORTED' || code === 'SOCKET_RPC_ABORTED'
+            ? String(code) : 'unknown';
+        const errorName = typeof record?.name === 'string'
+            && ['Error', 'RpcError', 'AbortError', 'TimeoutError', 'TypeError', 'RangeError', 'AxiosError'].includes(record.name)
+            ? record.name : 'unknown';
+        recordBugReportUserAction('session.spawn_new.transport_failure', {
+            metadata: {
+                ...readPhaseTiming(), errorName, errorCode,
+                requestDisposition: readRpcRequestDisposition(error) ?? 'unknown',
+                transportScope: record?.scope === 'active' || record?.scope === 'scoped' ? record.scope : 'unknown',
+            },
+        });
+        // A scoped-rpc socket recycled after the emit clears the acknowledgement with
+        // RPC_OUTCOME_UNKNOWN: like a timeout, the daemon may already be creating the Session.
+        if (isSocketIoAckTimeoutError(error) || isMachineRpcTimeoutError(error) || code === RPC_ERROR_CODES.OUTCOME_UNKNOWN) {
             return issued
                 ? { type: 'pending', retryWithSameCreationKey: true, outcome: 'unknown' }
-                : { type: 'error', code: 'machine_offline', retryable: true };
+                : { type: 'error', code: 'spawn_failed', retryable: true };
         }
         throw error;
     }
 }
 
 /** The durable creation result remains explicit when the attached lead's private material cannot be prepared. */
-export async function dispatchSessionSpawnNewWithReportsToPreparation(params: Readonly<{
+export async function dispatchSessionSpawnNewWithManagerPreparation(params: Readonly<{
     payload: SessionSpawnNewInputV2;
     requesterBootstrap?: SessionRequesterBootstrapV1;
     signal?: AbortSignal;
 }>): Promise<SessionSpawnNewResultV1 | Extract<ActionExecuteResult, Readonly<{ ok: false }>>> {
     const committed = await dispatchSessionSpawnNewToMachine(params);
-    const reportsTo = params.payload.reportsTo;
-    if (committed.type !== 'success' || !reportsTo) return committed;
+    const manager = params.payload.manager;
+    if (committed.type !== 'success' || !manager) return committed;
     let preparation: SessionFollowSourceKeyPreparationResultV1;
     try {
         preparation = await prepareSessionFollowSourceKey({
             serverId: params.payload.executionTarget.serverId,
             sourceSessionId: committed.sessionId,
-            destinationSessionId: reportsTo.sessionId,
+            destinationSessionId: manager.sessionId,
+            signal: params.signal,
         });
     } catch {
         preparation = { kind: 'waiting', reason: 'runner_unreachable' };
@@ -266,14 +367,78 @@ export async function dispatchSessionSpawnNewWithReportsToPreparation(params: Re
     return 'ok' in projected ? projected : committed;
 }
 
+/** The operation, rather than Session existence, owns accepted startup and first-input settlement. */
+export function projectManualSessionSpawnOperationResult(operation: ActionOperationSnapshotV1): SessionSpawnNewActionResult {
+    if (operation.state === 'succeeded') {
+        return { ok: true, result: SessionSpawnNewResultV1Schema.parse(operation.result) };
+    }
+    if (operation.state === 'failed' || operation.state === 'cancelled') {
+        return { ok: false, errorCode: operation.error?.errorCode ?? 'action_cancelled', error: operation.error?.error ?? 'action_cancelled',
+            ...(operation.error?.details ? { details: operation.error.details } : {}) };
+    }
+    return { ok: true, result: { type: 'pending', retryWithSameCreationKey: true, outcome: 'accepted' } };
+}
+
 /**
- * Namespaces one present-user click without conflating it with the transport
- * nonce retained by the existing manual-launch custody store.
+ * Reconcile an acknowledgement, never create or re-admit input. The authenticated
+ * owner-only tag read proves this attempt's committed Session; its first-input
+ * local id separately proves admission. A missing input receipt stays unknown.
  */
-export function buildManualSessionCreationKey(userAttemptId: string) {
-    const normalized = userAttemptId.trim();
-    if (!normalized) throw new Error('Manual Session user-attempt identity is unavailable');
-    return SessionCreationKeyV1Schema.parse(`manual:${normalized}`);
+async function reconcileManualSessionCreation(
+    input: StrictSessionSpawnNewInput,
+    custody: PersistedSpawnAttempt,
+    sourceAccountLifetime?: Pick<ServerAccountScopeLifetime, 'isCurrent'>,
+): Promise<SessionSpawnNewActionResult | null> {
+    let account: LazyActionAccountContext | undefined;
+    const isSourceCurrent = () => sourceAccountLifetime?.isCurrent() !== false;
+    try {
+        if (!isSourceCurrent()) return null;
+        account = await captureLazyActionAccountContext(custody.scope.serverId);
+        if (account.accountId !== custody.scope.accountId || !isSourceCurrent()) return null;
+        const response = await account.request('/v2/sessions/lookup-by-tags', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tags: [deriveSessionCreationTagV1({
+                callerCreationNamespace: 'user', creationKey: input.creationKey,
+            })] }),
+        }, { retry: 'none' });
+        if (!response.ok) return null;
+        const lookup = SessionLookupByTagsResponseV2Schema.safeParse(await response.json());
+        account.assertCurrent();
+        if (!isSourceCurrent() || !lookup.success || lookup.data.sessions.length !== 1) return null;
+        const session = lookup.data.sessions[0]!;
+        if (session.archivedAt != null) return null;
+        let initialInput: SessionSpawnNewInitialInputDispositionV1 = { status: 'notRequested' };
+        if (input.initialInput) {
+            initialInput = { status: 'outcomeUnknown', localId: custody.firstTurnLocalId, code: 'session_input_admission_outcome_unknown' };
+            try {
+                const receipt = await account.request(`/v2/sessions/${encodeURIComponent(session.id)}/messages/by-local-id/${encodeURIComponent(custody.firstTurnLocalId)}`,
+                    undefined, { retry: 'none' });
+                if (receipt.ok) {
+                    const body: unknown = await receipt.json();
+                    const message = SessionMessageV1Schema.safeParse(body && typeof body === 'object' && 'message' in body ? body.message : null);
+                    if (message.success && message.data.localId === custody.firstTurnLocalId && message.data.messageRole === 'user') {
+                        initialInput = { status: 'alreadyAccepted', localId: custody.firstTurnLocalId };
+                    }
+                }
+            } catch {
+                // A first-input read cannot undo the independently proven create.
+            }
+        }
+        account.assertCurrent();
+        if (!isSourceCurrent()) return null;
+        return { ok: true, result: SessionSpawnNewResultV1Schema.parse({
+            type: 'success', disposition: 'rejoined', sessionId: session.id,
+            executionTarget: input.executionTarget,
+            organizationPlacement: normalizeSessionCreationOrganizationPlacementV1(input.organizationPlacement),
+            initialInput,
+        }) };
+    } catch {
+        // Unavailable evidence preserves the original Action outcome and custody.
+        return null;
+    } finally {
+        account?.dispose();
+    }
 }
 
 /**
@@ -332,15 +497,27 @@ export async function executeManualSessionSpawnNewAction(
         return { status: 'custody_unavailable', reason: 'lock_unavailable' };
     }
 
-    // Custody acquisition may outlive the originating draft's Account authority.
-    // Fence admission here; once issued, the Action owns truthful effect receipts.
+    const observedOperation = acquired.reused ? readManualSessionSpawnOperation(params.scope, userAttemptId) : null;
+    const operation = observedOperation
+        ? await readManualSessionSpawnOperationDetails(params.scope, observedOperation,
+            () => params.sourceAccountLifetime?.isCurrent() !== false)
+        : null;
+    const observed = operation ? projectManualSessionSpawnOperationResult(operation) : null;
+    const reconciled = !observed && acquired.reused && acquired.record.submissionState === 'submitted'
+        ? await reconcileManualSessionCreation(input, submitted, params.sourceAccountLifetime)
+        : null;
+    // Custody acquisition and reconciliation may outlive the originating draft's
+    // Account authority. Fence actual issuance after those reads have settled.
     const sourceAdmissionRetired = params.sourceAccountLifetime !== undefined && !params.sourceAccountLifetime.isCurrent();
-    const action: SessionSpawnNewActionResult = sourceAdmissionRetired
+    let action: SessionSpawnNewActionResult = sourceAdmissionRetired
         ? { ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' }
-        : await (params.executeAction ?? executeSessionSpawnNewAction)(input, {
+        : observed ?? reconciled ?? await (params.executeAction ?? executeSessionSpawnNewAction)(input, {
             ...context,
             expectedAccountId: params.scope.accountId,
         });
+    if (!observed && ((!action.ok && action.errorCode === 'action_failed') || (action.ok && action.result.type === 'pending' && action.result.outcome === 'unknown'))) {
+        action = await reconcileManualSessionCreation(input, submitted, params.sourceAccountLifetime) ?? action;
+    }
     let custody = submitted;
     const committed = readCommittedSessionSpawnNewActionResult(action);
     if (committed

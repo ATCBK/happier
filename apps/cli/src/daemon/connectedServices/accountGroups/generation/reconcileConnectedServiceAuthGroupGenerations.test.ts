@@ -49,9 +49,9 @@ describe('live connected-service projection reconciliation', () => {
         sessionId: 'live-session',
         agentId: 'live-agent',
         connectedServicesBindingsRaw: {
-          v: 1,
+          v: 2,
           bindingsByServiceId: {
-            'openai-codex': {
+            'happier.agent.codex/openai-codex': {
               source: 'connected', selection: 'group', groupId: 'team', profileId: 'old',
             },
           },
@@ -60,7 +60,7 @@ describe('live connected-service projection reconciliation', () => {
       },
       consumer,
       listCurrentGroups: vi.fn(async () => [{
-        serviceId: 'openai-codex' as const,
+        serviceId: 'happier.agent.codex/openai-codex' as const,
         groupId: 'team',
         activeProfileId: 'new',
         generation: 3,
@@ -93,15 +93,15 @@ describe('live connected-service projection reconciliation', () => {
           id: 'csm_fresh_session',
         },
         connectedServicesBindingsRaw: {
-          v: 1,
+          v: 2,
           bindingsByServiceId: {
-            'openai-codex': {
+            'happier.agent.codex/openai-codex': {
               source: 'connected', selection: 'group', groupId: 'team', profileId: 'current',
             },
           },
         },
         activeBindings: [{
-          serviceId: 'openai-codex',
+          serviceId: 'happier.agent.codex/openai-codex',
           groupId: 'team',
           profileId: 'current',
           generation: 3,
@@ -110,7 +110,7 @@ describe('live connected-service projection reconciliation', () => {
       },
       consumer,
       listCurrentGroups: vi.fn(async () => [{
-        serviceId: 'openai-codex' as const,
+        serviceId: 'happier.agent.codex/openai-codex' as const,
         groupId: 'team',
         activeProfileId: 'current',
         generation: 3,
@@ -126,7 +126,7 @@ describe('live connected-service projection reconciliation', () => {
   it('settles a durable exact provider-adoption proof without re-applying the provider effect', async () => {
     const { consumer, applyCommittedGeneration, clearAdoptedGeneration } = createConsumer();
     const providerAdoptedTarget = {
-      serviceId: 'openai-codex' as const,
+      serviceId: 'happier.agent.codex/openai-codex' as const,
       groupId: 'team',
       profileId: 'current',
       generation: 3,
@@ -143,15 +143,15 @@ describe('live connected-service projection reconciliation', () => {
         sessionId: 'durably-adopted-session',
         agentId: 'codex',
         connectedServicesBindingsRaw: {
-          v: 1,
+          v: 2,
           bindingsByServiceId: {
-            'openai-codex': {
+            'happier.agent.codex/openai-codex': {
               source: 'connected', selection: 'group', groupId: 'team', profileId: 'previous',
             },
           },
         },
         activeBindings: [{
-          serviceId: 'openai-codex',
+          serviceId: 'happier.agent.codex/openai-codex',
           groupId: 'team',
           profileId: 'previous',
           generation: 2,
@@ -161,7 +161,7 @@ describe('live connected-service projection reconciliation', () => {
       providerAdoptedTargets: [providerAdoptedTarget],
       consumer,
       listCurrentGroups: vi.fn(async () => [{
-        serviceId: 'openai-codex' as const,
+        serviceId: 'happier.agent.codex/openai-codex' as const,
         groupId: 'team',
         activeProfileId: 'current',
         generation: 3,
@@ -188,15 +188,15 @@ describe('live connected-service projection reconciliation', () => {
           id: 'csm_legacy_session',
         },
         connectedServicesBindingsRaw: {
-          v: 1,
+          v: 2,
           bindingsByServiceId: {
-            anthropic: {
+            'happier.agent.claude/anthropic': {
               source: 'connected', selection: 'group', groupId: 'team', profileId: 'current',
             },
           },
         },
         activeBindings: [{
-          serviceId: 'anthropic',
+          serviceId: 'happier.agent.claude/anthropic',
           groupId: 'team',
           profileId: 'current',
           generation: 3,
@@ -205,7 +205,7 @@ describe('live connected-service projection reconciliation', () => {
       },
       consumer,
       listCurrentGroups: vi.fn(async () => [{
-        serviceId: 'anthropic' as const,
+        serviceId: 'happier.agent.claude/anthropic' as const,
         groupId: 'team',
         activeProfileId: 'current',
         generation: 3,
@@ -228,15 +228,15 @@ describe('live connected-service projection reconciliation', () => {
           id: 'csm_missing_credential_session',
         },
         connectedServicesBindingsRaw: {
-          v: 1,
+          v: 2,
           bindingsByServiceId: {
-            anthropic: {
+            'happier.agent.claude/anthropic': {
               source: 'connected', selection: 'group', groupId: 'team', profileId: 'current',
             },
           },
         },
         activeBindings: [{
-          serviceId: 'anthropic',
+          serviceId: 'happier.agent.claude/anthropic',
           groupId: 'team',
           profileId: 'current',
           generation: 3,
@@ -245,7 +245,7 @@ describe('live connected-service projection reconciliation', () => {
       },
       consumer,
       listCurrentGroups: vi.fn(async () => [{
-        serviceId: 'anthropic' as const,
+        serviceId: 'happier.agent.claude/anthropic' as const,
         groupId: 'team',
         activeProfileId: 'current',
         generation: 3,
@@ -267,15 +267,15 @@ describe('live connected-service projection reconciliation', () => {
           id: 'csm_stale_revision_session',
         },
         connectedServicesBindingsRaw: {
-          v: 1,
+          v: 2,
           bindingsByServiceId: {
-            anthropic: {
+            'happier.agent.claude/anthropic': {
               source: 'connected', selection: 'group', groupId: 'team', profileId: 'current',
             },
           },
         },
         activeBindings: [{
-          serviceId: 'anthropic',
+          serviceId: 'happier.agent.claude/anthropic',
           groupId: 'team',
           profileId: 'current',
           generation: 3,
@@ -284,7 +284,7 @@ describe('live connected-service projection reconciliation', () => {
       },
       consumer,
       listCurrentGroups: vi.fn(async () => [{
-        serviceId: 'anthropic' as const,
+        serviceId: 'happier.agent.claude/anthropic' as const,
         groupId: 'team',
         activeProfileId: 'current',
         generation: 3,
@@ -312,9 +312,9 @@ describe('live connected-service projection reconciliation', () => {
       target: {
         sessionId: 'live-session',
         connectedServicesBindingsRaw: {
-          v: 1,
+          v: 2,
           bindingsByServiceId: {
-            'openai-codex': {
+            'happier.agent.codex/openai-codex': {
               source: 'connected', selection: 'group', groupId: 'team', profileId: 'old',
             },
           },
@@ -330,7 +330,7 @@ describe('live connected-service projection reconciliation', () => {
 
     expect(enforceGroupUnavailable).toHaveBeenCalledWith({
       sessionId: 'live-session',
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       groupId: 'team',
     });
   });
@@ -339,16 +339,16 @@ describe('live connected-service projection reconciliation', () => {
     const applyLiveCredentialRevision = vi.fn(async () => {});
     await expect(reconcileConnectedServiceDirectCredentialRevisions({
       credentialRevisions: [{
-        serviceId: 'openai-codex',
+        serviceId: 'happier.agent.codex/openai-codex',
         profileId: 'direct',
         credentialRevision: 'csr_aaaaaaaaaaaaaaaaaaaaaa',
       }],
       listRuntimeTargets: () => [{
         sessionId: 'live-session',
         connectedServicesBindingsRaw: {
-          v: 1,
+          v: 2,
           bindingsByServiceId: {
-            'openai-codex': { source: 'connected', profileId: 'direct' },
+            'happier.agent.codex/openai-codex': { source: 'connected', profileId: 'direct' },
           },
         },
         activeBindings: [],
@@ -373,10 +373,10 @@ describe('live connected-service projection reconciliation', () => {
       listRuntimeTargets: () => [{
         sessionId: 'live-session',
         connectedServicesBindingsRaw: {
-          v: 1,
+          v: 2,
           bindingsByServiceId: {
-            'openai-codex': { source: 'connected', profileId: 'deleted' },
-            anthropic: { source: 'connected', profileId: 'legacy' },
+            'happier.agent.codex/openai-codex': { source: 'connected', profileId: 'deleted' },
+            'happier.agent.claude/anthropic': { source: 'connected', profileId: 'legacy' },
           },
         },
         activeBindings: [],
@@ -386,7 +386,7 @@ describe('live connected-service projection reconciliation', () => {
     })).resolves.toEqual({ acknowledgeable: true, pendingSessionCount: 0, appliedBindingCount: 1 });
 
     expect(applyLiveCredentialRevision).toHaveBeenCalledWith({
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       profileId: 'deleted',
       credentialPresence: { status: 'absent' },
       executionAuthority,

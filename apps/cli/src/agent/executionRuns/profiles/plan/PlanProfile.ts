@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { PlanOutputV1Schema } from '@happier-dev/protocol/messages/structured/planOutputV1';
 import type { BackendTargetRefV1 } from '@happier-dev/protocol';
@@ -45,19 +45,19 @@ function normalizePlanBoundedCompletion(params: Readonly<{
 }>): ExecutionRunProfileBoundedCompleteResult {
   const trimmed = params.rawText.trim();
   const parsedJson: any = parseTrailingJsonObject(trimmed);
-  const ModelOutputSchema = z.object({
-    summary: z.string().min(1),
-    sections: z.array(z.object({
-      title: z.string().min(1),
-      items: z.array(z.string().min(1)),
-    }).passthrough()),
-    risks: z.array(z.string().min(1)).optional(),
-    milestones: z.array(z.object({
-      title: z.string().min(1),
-      details: z.string().optional(),
-    }).passthrough()).optional(),
-    recommendedBackendId: z.string().optional(),
-  }).passthrough();
+  const ModelOutputSchema = z.looseObject({
+    summary: z.string().check(z.minLength(1)),
+    sections: z.array(z.looseObject({
+      title: z.string().check(z.minLength(1)),
+      items: z.array(z.string().check(z.minLength(1))),
+    })),
+    risks: z.optional(z.array(z.string().check(z.minLength(1)))),
+    milestones: z.optional(z.array(z.looseObject({
+      title: z.string().check(z.minLength(1)),
+      details: z.optional(z.string()),
+    }))),
+    recommendedBackendId: z.optional(z.string()),
+  });
   const parsedModel = ModelOutputSchema.safeParse(parsedJson);
   if (!parsedModel.success) {
     const loose =

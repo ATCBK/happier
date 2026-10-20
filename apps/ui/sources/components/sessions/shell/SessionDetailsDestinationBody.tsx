@@ -32,6 +32,9 @@ import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPan
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { SessionBoardControllerProvider } from '@/components/sessions/board/SessionBoardControllerProvider';
 import { useSessionBoardPrimaryMountResolver } from '@/components/sessions/board/useSessionBoardPrimaryMountHost';
+import { useSessionCockpitChromeRegister } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
+import { useSessionTerminalAvailability } from '@/components/sessions/terminal/useSessionTerminalAvailability';
+import type { SessionMobileSurface } from '@/components/workspaceCockpit/session/sessionCockpitState';
 
 type SessionDetailsRouteParamsShape = Partial<ReturnType<typeof buildActiveDetailsRouteParams>> & Readonly<{ sourceSurface?: string }>;
 
@@ -83,6 +86,8 @@ export function SessionDetailsDestinationBody() {
     const sessionHydrated = isSessionRouteHydrationAvailable(routeHydrationState);
     const mobileExperience = useMobileWorkspaceExperienceState();
     const cockpitEnabled = instanceKey === null && mobileExperience.cockpitEnabled;
+    const registerCockpitChrome = useSessionCockpitChromeRegister();
+    const { sidebarTabAvailable: terminalTabAvailable } = useSessionTerminalAvailability(routeScope.serverId);
     const scopeId = createSessionPaneScopeId(sessionId, routeScope.serverId, instanceKey);
     const pane = useAppPaneScope(scopeId);
     const detailsState = pane.scopeState?.details ?? null;
@@ -124,18 +129,31 @@ export function SessionDetailsDestinationBody() {
         sourceSurface: params.sourceSurface,
         fallbackHref: resolveSessionRoutePathForSurface(sessionId, 'chat', { serverId: routeScope.serverId }),
     }), [params.sourceSurface, routeScope, sessionId]);
+    const retireDetailsPresentation = React.useCallback((surface: SessionMobileSurface) => {
+        pane.closeDetails();
+        // Retire the pane before the returning Chat mounts its web URL writer.
+        if (surface === 'chat') pane.closeRight();
+    }, [pane.closeDetails, pane.closeRight]);
     const returnToSession = React.useCallback(() => {
         // Responsive pane presentation replaces the Session route with Details;
         // its previous history entry need not be this Session.
         const returnSurface = normalizeSessionDetailsSourceSurface(params.sourceSurface) ?? 'chat';
-        pane.closeDetails();
-        // Retire Git's presentation before Chat mounts its web pane URL writer;
-        // otherwise retained right-pane state can immediately navigate back to Git.
-        if (returnSurface === 'chat') pane.closeRight();
+        retireDetailsPresentation(returnSurface);
         persistSessionSurface(sessionId, returnSurface, routeScope.serverId);
         // The canonical Session route owner emits only registered Session hrefs.
         router.replace(fallbackDetailsHref as Href);
-    }, [fallbackDetailsHref, pane.closeDetails, pane.closeRight, params.sourceSurface, persistSessionSurface, routeScope.serverId, router, sessionId]);
+    }, [fallbackDetailsHref, retireDetailsPresentation, params.sourceSurface, persistSessionSurface, routeScope.serverId, router, sessionId]);
+    React.useEffect(() => {
+        if (!instanceKey || !mobileExperience.cockpitEnabled || !isFocused || !visible) return;
+        // Hosted Details has no nested cockpit navigator. Its retained pane still
+        // owns presentation and must retire it before the outer chrome changes routes.
+        return registerCockpitChrome({
+            sessionId, serverId: routeScope.serverId, activeSurface: 'tabs',
+            terminalTabAvailable, openDetailsTabCount: detailsSelection.tabs.length,
+            switchSurface: surface => { if (surface !== 'tabs') retireDetailsPresentation(surface); },
+        });
+    }, [detailsSelection.tabs.length, instanceKey, isFocused, mobileExperience.cockpitEnabled,
+        registerCockpitChrome, retireDetailsPresentation, routeScope.serverId, sessionId, terminalTabAvailable, visible]);
     const openDestinationTab = React.useCallback((tab: DetailsTab) => {
         const selection = buildActiveDetailsRouteParams([tab], tab.key);
         const query = new URLSearchParams();
@@ -211,9 +229,9 @@ export function SessionDetailsDestinationBody() {
                             scopeId={scopeId}
                             presentation="screen"
                             routeServerId={routeHydrationState.serverId ?? routeScope.serverId}
-                            presented={isFocused && visible}
+                            presented={visible && (instanceKey !== null || isFocused)}
                             onRequestClose={instanceKey ? returnToSession : onRequestClose}
-                            {...(instanceKey ? { destinationTab, destinationActive: isFocused && visible,
+                            {...(instanceKey ? { destinationTab, destinationActive: visible,
                                 detailsDestinationKey: destinationTab?.key ?? null, onOpenDestinationTab: openDestinationTab } : {})}
                         />
                 )

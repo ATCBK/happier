@@ -50,7 +50,7 @@ export function TerminalScreenRoute() {
     const initializedRightPaneSessionRef = React.useRef<string | null>(null);
 
     const { cockpitEnabled } = useMobileWorkspaceExperienceState();
-    const { sidebarTabAvailable: terminalTabAvailable } = useSessionTerminalAvailability(routeScope.serverId);
+    const { terminalEnabled, dockLocation, sidebarTabAvailable: terminalTabAvailable } = useSessionTerminalAvailability(routeScope.serverId);
 
     const detailsState = pane.scopeState?.details ?? null;
     const detailsSelection = React.useMemo(() => resolveFullscreenDetailsRouteSelection({
@@ -60,15 +60,18 @@ export function TerminalScreenRoute() {
     }), [detailsState?.activeTabKey, detailsState?.groups, detailsState?.tabs]);
     const detailsIsOpen = detailsState?.isOpen ?? false;
 
-    // Navigate back if terminal tab is unavailable (feature disabled or docked elsewhere)
+    // A desktop Terminal entry addresses the same destination's bottom dock,
+    // not whichever scene happens to precede this child route in history.
     React.useEffect(() => {
         if (!isFocused) return;
         if (!sessionId) return;
         if (!sessionHydrated) return;
-        if (!terminalTabAvailable) {
+        if (terminalEnabled && dockLocation === 'bottom') {
+            router.replace({ pathname: '/session/[id]', params: routeScope.withParams({ id: sessionId, bottom: 'terminal' }) });
+        } else if (!terminalEnabled) {
             safeRouterBack({ router, navigation, fallbackHref: routeScope.buildHref(sessionId) });
         }
-    }, [isFocused, navigation, routeScope, router, sessionId, sessionHydrated, terminalTabAvailable]);
+    }, [isFocused, navigation, routeScope, router, sessionId, sessionHydrated, terminalEnabled, dockLocation]);
 
     React.useEffect(() => {
         if (!isFocused) return;

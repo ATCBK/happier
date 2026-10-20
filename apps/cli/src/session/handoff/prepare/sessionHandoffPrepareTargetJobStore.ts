@@ -3,7 +3,7 @@ import { lstat, mkdir, readdir, readFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { SessionHandoffPrepareTargetRequestSchema, SessionHandoffPrepareTargetResultGetSuccessResponseSchema } from '@happier-dev/protocol/sessions/control/handoff/handoffSchemas';
@@ -23,27 +23,25 @@ const SESSION_HANDOFF_PREPARE_TARGET_JOB_SCHEMA_VERSION_V2 = 2 as const;
 const SessionHandoffPrepareTargetJobRecordV1Schema = z
   .object({
     schemaVersion: z.literal(SESSION_HANDOFF_PREPARE_TARGET_JOB_SCHEMA_VERSION_V1),
-    jobId: z.string().min(1),
-    handoffId: z.string().min(1),
-    createdAtMs: z.number().int().min(0),
-    updatedAtMs: z.number().int().min(0),
-    cancelRequestedAtMs: z.number().int().min(0).optional(),
-    abortedAtMs: z.number().int().min(0).optional(),
-    completedAtMs: z.number().int().min(0).optional(),
-    failedAtMs: z.number().int().min(0).optional(),
-    lastErrorMessage: z.string().min(1).optional(),
-    lastErrorCode: z.string().min(1).optional(),
+    jobId: z.string().check(z.minLength(1)),
+    handoffId: z.string().check(z.minLength(1)),
+    createdAtMs: z.number().check(z.int(), z.minimum(0)),
+    updatedAtMs: z.number().check(z.int(), z.minimum(0)),
+    cancelRequestedAtMs: z.optional(z.number().check(z.int(), z.minimum(0))),
+    abortedAtMs: z.optional(z.number().check(z.int(), z.minimum(0))),
+    completedAtMs: z.optional(z.number().check(z.int(), z.minimum(0))),
+    failedAtMs: z.optional(z.number().check(z.int(), z.minimum(0))),
+    lastErrorMessage: z.optional(z.string().check(z.minLength(1))),
+    lastErrorCode: z.optional(z.string().check(z.minLength(1))),
     status: SessionHandoffStatusSchema,
     // Persist the validated prepare-target request so the daemon can resume/restart the job after a restart,
     // even when callers keep polling status/result without issuing a second PREPARE_TARGET call.
     prepareTargetRequest: z.optional(SessionHandoffPrepareTargetRequestSchema),
     prepareTargetResult: z.optional(SessionHandoffPrepareTargetResultGetSuccessResponseSchema),
-  })
-  .strip()
-  .superRefine((record, ctx) => {
+  }).check(z.superRefine((record, ctx) => {
     if (record.status.handoffId !== record.handoffId) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['status', 'handoffId'],
         message: 'Prepare-target job status must use the same handoffId as the record',
       });
@@ -51,7 +49,7 @@ const SessionHandoffPrepareTargetJobRecordV1Schema = z
 
     if (record.status.jobId && record.status.jobId !== record.jobId) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['status', 'jobId'],
         message: 'Prepare-target job status.jobId must match the record jobId',
       });
@@ -59,7 +57,7 @@ const SessionHandoffPrepareTargetJobRecordV1Schema = z
 
     if (record.prepareTargetResult && record.prepareTargetResult.handoffId !== record.handoffId) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['prepareTargetResult', 'handoffId'],
         message: 'Prepare-target job result must use the same handoffId as the record',
       });
@@ -70,105 +68,105 @@ const SessionHandoffPrepareTargetJobRecordV1Schema = z
       && record.prepareTargetResult.status.handoffId !== record.handoffId
     ) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['prepareTargetResult', 'status', 'handoffId'],
         message: 'Prepare-target job result status must use the same handoffId as the record',
       });
     }
-  });
+  }));
 
-const SessionHandoffPrepareRecoveryAttemptFenceV2Schema = z.object({
-  attemptId: z.string().min(1).max(256),
-  acceptedAtMs: z.number().int().min(0),
-  acceptedRevision: z.number().int().min(0),
-}).strict();
+const SessionHandoffPrepareRecoveryAttemptFenceV2Schema = z.strictObject({
+  attemptId: z.string().check(z.minLength(1), z.maxLength(256)),
+  acceptedAtMs: z.number().check(z.int(), z.minimum(0)),
+  acceptedRevision: z.number().check(z.int(), z.minimum(0)),
+});
 
 const SessionHandoffPrepareRecoveryStateV2Schema = z.discriminatedUnion('status', [
-  z.object({ status: z.literal('not_attempted') }).strict(),
-  z.object({
+  z.strictObject({ status: z.literal('not_attempted') }),
+  z.strictObject({
     status: z.literal('awaiting_user_resume'),
     // Observation after a crashed accepted attempt remains passive, but retains the original
     // fence so that the identical request can rejoin without granting a replacement implicitly.
-    interruptedAttempt: SessionHandoffPrepareRecoveryAttemptFenceV2Schema.optional(),
-  }).strict(),
-  z.object({
+    interruptedAttempt: z.optional(SessionHandoffPrepareRecoveryAttemptFenceV2Schema),
+  }),
+  z.strictObject({
     status: z.literal('attempted'),
     ...SessionHandoffPrepareRecoveryAttemptFenceV2Schema.shape,
-  }).strict(),
+  }),
 ]);
 
 const SessionHandoffRuntimeResumeStateV2Schema = z.discriminatedUnion('status', [
-  z.object({ status: z.literal('not_attempted') }).strict(),
-  z.object({ status: z.literal('preexisting_unowned') }).strict(),
-  z.object({
+  z.strictObject({ status: z.literal('not_attempted') }),
+  z.strictObject({ status: z.literal('preexisting_unowned') }),
+  z.strictObject({
     status: z.literal('attempted'),
-    attemptId: z.string().min(1),
-    acceptedAtMs: z.number().int().min(0),
-  }).strict(),
-  z.object({
+    attemptId: z.string().check(z.minLength(1)),
+    acceptedAtMs: z.number().check(z.int(), z.minimum(0)),
+  }),
+  z.strictObject({
     status: z.literal('confirmed'),
-    attemptId: z.string().min(1),
-    acceptedAtMs: z.number().int().min(0),
-    confirmedAtMs: z.number().int().min(0),
-  }).strict(),
+    attemptId: z.string().check(z.minLength(1)),
+    acceptedAtMs: z.number().check(z.int(), z.minimum(0)),
+    confirmedAtMs: z.number().check(z.int(), z.minimum(0)),
+  }),
 ]);
 
 const SessionHandoffTerminalStateV2Schema = z.discriminatedUnion('status', [
-  z.object({ status: z.literal('open') }).strict(),
-  z.object({
+  z.strictObject({ status: z.literal('open') }),
+  z.strictObject({
     status: z.literal('aborting'),
-    operationId: z.string().min(1),
-    claimedRevision: z.number().int().min(0),
-  }).strict(),
-  z.object({
+    operationId: z.string().check(z.minLength(1)),
+    claimedRevision: z.number().check(z.int(), z.minimum(0)),
+  }),
+  z.strictObject({
     status: z.literal('aborted'),
-    operationId: z.string().min(1),
-    completedRevision: z.number().int().min(0),
-  }).strict(),
-  z.object({
+    operationId: z.string().check(z.minLength(1)),
+    completedRevision: z.number().check(z.int(), z.minimum(0)),
+  }),
+  z.strictObject({
     status: z.literal('completed'),
-    operationId: z.string().min(1),
-    completedRevision: z.number().int().min(0),
-  }).strict(),
+    operationId: z.string().check(z.minLength(1)),
+    completedRevision: z.number().check(z.int(), z.minimum(0)),
+  }),
 ]);
 
 const SessionHandoffTargetCleanupV2Schema = z.discriminatedUnion('status', [
-  z.object({ status: z.literal('legacy_cleanup_unavailable') }).strict(),
-  z.object({ status: z.literal('not_applicable'), reason: z.literal('source_only') }).strict(),
-  z.object({ status: z.literal('not_required') }).strict(),
-  z.object({ status: z.literal('pending') }).strict(),
-  z.object({
+  z.strictObject({ status: z.literal('legacy_cleanup_unavailable') }),
+  z.strictObject({ status: z.literal('not_applicable'), reason: z.literal('source_only') }),
+  z.strictObject({ status: z.literal('not_required') }),
+  z.strictObject({ status: z.literal('pending') }),
+  z.strictObject({
     status: z.literal('proved_absent'),
     proof: z.enum(['stopped', 'already_inactive']),
-    provedAtMs: z.number().int().min(0),
-  }).strict(),
-  z.object({
+    provedAtMs: z.number().check(z.int(), z.minimum(0)),
+  }),
+  z.strictObject({
     status: z.literal('not_owned'),
     reason: z.enum(['resume_not_attempted', 'preexisting_or_adopted']),
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     status: z.literal('failed'),
     reason: z.enum(['failed', 'unreachable', 'ambiguous']),
-    attemptedAtMs: z.number().int().min(0),
-  }).strict(),
+    attemptedAtMs: z.number().check(z.int(), z.minimum(0)),
+  }),
 ]);
 
 const sessionHandoffPrepareTargetJobV2CommonShape = {
-  jobId: z.string().min(1),
-  handoffId: z.string().min(1),
-  createdAtMs: z.number().int().min(0),
-  updatedAtMs: z.number().int().min(0),
-  cancelRequestedAtMs: z.number().int().min(0).optional(),
-  abortedAtMs: z.number().int().min(0).optional(),
-  completedAtMs: z.number().int().min(0).optional(),
-  failedAtMs: z.number().int().min(0).optional(),
-  lastErrorMessage: z.string().min(1).optional(),
-  lastErrorCode: z.string().min(1).optional(),
+  jobId: z.string().check(z.minLength(1)),
+  handoffId: z.string().check(z.minLength(1)),
+  createdAtMs: z.number().check(z.int(), z.minimum(0)),
+  updatedAtMs: z.number().check(z.int(), z.minimum(0)),
+  cancelRequestedAtMs: z.optional(z.number().check(z.int(), z.minimum(0))),
+  abortedAtMs: z.optional(z.number().check(z.int(), z.minimum(0))),
+  completedAtMs: z.optional(z.number().check(z.int(), z.minimum(0))),
+  failedAtMs: z.optional(z.number().check(z.int(), z.minimum(0))),
+  lastErrorMessage: z.optional(z.string().check(z.minLength(1))),
+  lastErrorCode: z.optional(z.string().check(z.minLength(1))),
   status: SessionHandoffStatusSchema,
   prepareTargetRequest: z.optional(SessionHandoffPrepareTargetRequestSchema),
   prepareTargetResult: z.optional(SessionHandoffPrepareTargetResultGetSuccessResponseSchema),
-  transitionRevision: z.number().int().min(0),
-  prepareRecovery: SessionHandoffPrepareRecoveryStateV2Schema.default({ status: 'not_attempted' }),
+  transitionRevision: z.number().check(z.int(), z.minimum(0)),
+  prepareRecovery: z._default(SessionHandoffPrepareRecoveryStateV2Schema, { status: 'not_attempted' }),
   terminal: SessionHandoffTerminalStateV2Schema,
 } as const;
 
@@ -176,27 +174,27 @@ const SessionHandoffPreparedTargetJobRecordV2Schema = z.object({
   schemaVersion: z.literal(SESSION_HANDOFF_PREPARE_TARGET_JOB_SCHEMA_VERSION_V2),
   recordKind: z.literal('prepared_target'),
   ...sessionHandoffPrepareTargetJobV2CommonShape,
-  sessionId: z.string().min(1),
+  sessionId: z.string().check(z.minLength(1)),
   resume: SessionHandoffRuntimeResumeStateV2Schema,
   targetCleanup: SessionHandoffTargetCleanupV2Schema,
-}).strip();
+});
 
 const SessionHandoffLegacyTargetJobRecordV2Schema = z.object({
   schemaVersion: z.literal(SESSION_HANDOFF_PREPARE_TARGET_JOB_SCHEMA_VERSION_V2),
   recordKind: z.literal('legacy_target'),
   ...sessionHandoffPrepareTargetJobV2CommonShape,
-  resume: z.object({ status: z.literal('legacy_unknown') }).strict(),
-  targetCleanup: z.object({ status: z.literal('legacy_cleanup_unavailable') }).strict(),
-}).strip();
+  resume: z.strictObject({ status: z.literal('legacy_unknown') }),
+  targetCleanup: z.strictObject({ status: z.literal('legacy_cleanup_unavailable') }),
+});
 
 const SessionHandoffSourceOnlyJobRecordV2Schema = z.object({
   schemaVersion: z.literal(SESSION_HANDOFF_PREPARE_TARGET_JOB_SCHEMA_VERSION_V2),
   recordKind: z.literal('source_only'),
   ...sessionHandoffPrepareTargetJobV2CommonShape,
-  sessionId: z.string().min(1).optional(),
-  resume: z.object({ status: z.literal('not_applicable') }).strict(),
-  targetCleanup: z.object({ status: z.literal('not_applicable'), reason: z.literal('source_only') }).strict(),
-}).strip();
+  sessionId: z.optional(z.string().check(z.minLength(1))),
+  resume: z.strictObject({ status: z.literal('not_applicable') }),
+  targetCleanup: z.strictObject({ status: z.literal('not_applicable'), reason: z.literal('source_only') }),
+});
 
 const SessionHandoffPrepareTargetJobRecordV2Schema = z.discriminatedUnion('recordKind', [
   SessionHandoffPreparedTargetJobRecordV2Schema,

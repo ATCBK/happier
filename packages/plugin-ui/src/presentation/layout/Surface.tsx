@@ -42,9 +42,16 @@ export function useHappierMaterialColorResolver() {
   }, [role, resolver, defaultTranslucentColor]);
 }
 
+/**
+ * A floating surface's job: a `panel` (a dialog, sheet or large anchored panel) carries the page at a
+ * heavy coat; a `menu` (the default: menus, tooltips, small popovers) keeps a hair of tint.
+ */
+export type HappierFloatingRole = 'menu' | 'panel';
+
 export type HappierMaterialSurfaceRender = (input: Readonly<{
   role: HappierMaterialRole;
   finishRole?: HappierSurfaceFinishRole;
+  floatingRole?: HappierFloatingRole;
   nested?: boolean;
   children?: ReactNode;
   style?: HappierStyleProp;
@@ -71,7 +78,7 @@ export function HappierMaterialSurface(props: Omit<HappierSurfaceProps, 'onPress
     ? { backgroundColor: happierMaterialBackgroundColor(flat.backgroundColor, props.materialRole, Platform.OS === 'web', nested) }
     : undefined;
   const body = props.materialRole && renderMaterial
-    ? renderMaterial({ role: props.materialRole, finishRole, gradient, nested, children: props.children, style: props.style, testID: props.testID, onLayout: props.onLayout, accessibilityLabel: props.accessibilityLabel })
+    ? renderMaterial({ role: props.materialRole, finishRole, floatingRole: props.floatingRole, gradient, nested, children: props.children, style: props.style, testID: props.testID, onLayout: props.onLayout, accessibilityLabel: props.accessibilityLabel })
     : <View testID={props.testID} onLayout={props.onLayout} accessibilityLabel={props.accessibilityLabel} style={[props.style, materialStyle, happierSurfaceFinishLift(gradient, finishRole, dark, Platform.OS === 'web'), Platform.OS === 'web' ? happierSurfaceGradientWebStyle(gradient, !dark) : null]}>
         <HappierSurfaceGradientLayer gradient={gradient} borderRadius={typeof flat?.borderRadius === 'number' ? flat.borderRadius : undefined} />
         {props.children}
@@ -102,6 +109,8 @@ export type HappierSurfaceProps = Readonly<{
   /** An independently floating plane does not inherit its containing surface's coat. */
   nested?: boolean;
   finishRole?: HappierSurfaceFinishRole;
+  /** Only a `floating` material reads it: the host decides the coat of a menu or a panel. */
+  floatingRole?: HappierFloatingRole;
   gradient?: HappierSurfaceGradient | null;
   /** A core adapter binds its existing material owner without installing unrelated plugin services. */
   renderMaterialSurface?: HappierMaterialSurfaceRender;
@@ -125,6 +134,7 @@ export function HappierSurface({
   materialRole,
   nested,
   finishRole,
+  floatingRole,
   gradient: suppliedGradient,
   renderMaterialSurface,
   onLayout,
@@ -133,7 +143,7 @@ export function HappierSurface({
   pressedStyle,
   frameStyle,
 }: HappierSurfaceProps) {
-  const content = <HappierMaterialSurface materialRole={materialRole} nested={nested} finishRole={finishRole} gradient={suppliedGradient} renderMaterialSurface={renderMaterialSurface} disabled={disabled} style={style}>{children}</HappierMaterialSurface>;
+  const content = <HappierMaterialSurface materialRole={materialRole} nested={nested} finishRole={finishRole} floatingRole={floatingRole} gradient={suppliedGradient} renderMaterialSurface={renderMaterialSurface} disabled={disabled} style={style}>{children}</HappierMaterialSurface>;
 
   if (!onPress) {
     return <View testID={testID} onLayout={onLayout} accessibilityLabel={accessibilityLabel} style={frameStyle}>{content}</View>;
@@ -147,7 +157,7 @@ export function HappierSurface({
       onPress={onPress}
       style={({ pressed }) => [frameStyle, pressableStyle, pressed ? pressedStyle : undefined]}
     >
-      {state => <HappierMaterialSurface materialRole={materialRole} nested={nested} finishRole={finishRole} gradient={suppliedGradient} renderMaterialSurface={renderMaterialSurface} state={state} style={style}>{children}</HappierMaterialSurface>}
+      {state => <HappierMaterialSurface materialRole={materialRole} nested={nested} finishRole={finishRole} floatingRole={floatingRole} gradient={suppliedGradient} renderMaterialSurface={renderMaterialSurface} state={state} style={style}>{children}</HappierMaterialSurface>}
     </HappierPressable>
   );
 }

@@ -31,8 +31,10 @@ import {
     flushSessionDraft,
     writeExistingSessionDraft,
     writeNewSessionDraft,
+    executionRunLauncherDraftFieldPath,
     type SessionDraftCurrentness,
 } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
+import { getSessionDraftDocumentField } from '@/sync/ops/sessionDrafts/sessionDraftDocumentFields';
 
 const CAPABILITIES: ComposerCapabilitiesV1 = Object.freeze({
     text: true,
@@ -59,19 +61,24 @@ type RepositoryComposerDocumentRead = Readonly<{
 function readRepositoryComposerDocument(
     scope: ServerAccountScope,
     address: Extract<SessionDraftAddressV2, { kind: 'session' | 'run' | 'newSession' }>,
+    launcherDraftKey?: string,
 ): RepositoryComposerDocumentRead {
     const snapshot = getSessionDraftSnapshot(scope, address);
     if (!snapshot) return { document: EMPTY_DOCUMENT, repositoryRevision: 0 };
 
-    const text = typeof snapshot.document.composer.text.value === 'string'
-        ? snapshot.document.composer.text.value
+    const value = (field: 'text' | 'mentions' | 'attachments') => launcherDraftKey
+        ? getSessionDraftDocumentField(snapshot.document, executionRunLauncherDraftFieldPath(launcherDraftKey, field))?.value
+        : getSessionDraftDocumentField(snapshot.document, { kind: 'composer', field })?.value;
+    const text = typeof value('text') === 'string'
+        ? String(value('text'))
         : '';
     const mentions = parseComposerStructuredInputMentionsForText(
-        snapshot.document.composer.mentions.value,
+        value('mentions'),
         text,
     );
-    const attachments = Array.isArray(snapshot.document.composer.attachments.value)
-        ? snapshot.document.composer.attachments.value.flatMap((value) => {
+    const attachmentValue = value('attachments');
+    const attachments = Array.isArray(attachmentValue)
+        ? attachmentValue.flatMap((value) => {
             const parsed = ComposerAttachmentDraftV1Schema.safeParse(value);
             return parsed.success ? [parsed.data] : [];
         })
@@ -107,6 +114,10 @@ export function createRepositoryComposerDocumentOwner(input: Readonly<{
      * `{ kind: 'run' }` draft address.
      */
     address?: Extract<SessionDraftAddressV2, { kind: 'session' | 'run' | 'newSession' }>;
+    /** A rowless launcher uses its own fields on the real parent Session draft. */
+    launcherDraftKey?: string;
+    /** Actual composer mutations only; hydration and repository echoes never call this. */
+    onDocumentEdit?: () => void;
     isCurrent?: () => boolean;
 }>): MutableComposerDocumentOwner {
     const address = input.address ?? (input.ref.kind === 'session'
@@ -117,8 +128,15 @@ export function createRepositoryComposerDocumentOwner(input: Readonly<{
     if (address === null) {
         throw new Error('A participant composer requires an explicit synchronized draft address');
     }
-    const projectsRepositoryRevision = address.kind !== 'newSession';
-    const initial = readRepositoryComposerDocument(input.scope, address);
+    if (input.launcherDraftKey && address.kind !== 'session') throw new Error('A launcher draft belongs to its parent Session');
+    const fieldId = (field: 'text' | 'mentions' | 'attachments') => input.launcherDraftKey
+        ? `extensions.happier.${executionRunLauncherDraftFieldPath(input.launcherDraftKey, field).fieldId}`
+        : `composer.${field}`;
+    const fieldIds = (['text', 'mentions', 'attachments'] as const).map(fieldId);
+    // A mounted launcher owns a participant instance, like New Session. Parent
+    // composer edits must not invalidate that independent document's revision.
+    const projectsRepositoryRevision = address.kind !== 'newSession' && !input.launcherDraftKey;
+    const initial = readRepositoryComposerDocument(input.scope, address, input.launcherDraftKey);
     let observed = {
         document: initial.document,
         revision: projectsRepositoryRevision ? initial.repositoryRevision : 0,
@@ -126,7 +144,7 @@ export function createRepositoryComposerDocumentOwner(input: Readonly<{
     const repositoryCurrentnessByCapture = new WeakMap<ComposerDraftFieldCurrentness, SessionDraftCurrentness>();
 
     const refresh = () => {
-        const next = readRepositoryComposerDocument(input.scope, address);
+        const next = readRepositoryComposerDocument(input.scope, address, input.launcherDraftKey);
         const changes = readComposerDraftDocumentChanges(observed.document, next.document);
         const documentChanged = changes.text
             || changes.structuredInputMentions
@@ -175,7 +193,7 @@ export function createRepositoryComposerDocumentOwner(input: Readonly<{
                     scope: input.scope,
                     sessionId: address.sessionId,
                     ...(address.kind === 'run' ? { runId: address.runId } : {}),
-                    patch,
+                    patch: input.launcherDraftKey ? { executionRunLauncher: { key: input.launcherDraftKey, patch } } : patch,
                     materializationIntent: 'userEdit',
                 });
             } else {
@@ -186,6 +204,7 @@ export function createRepositoryComposerDocumentOwner(input: Readonly<{
                     materializationIntent: 'userEdit',
                 });
             }
+            input.onDocumentEdit?.();
             return { status: 'applied', revision: refresh().revision };
         },
         captureCurrentness: () => {
@@ -199,7 +218,7 @@ export function createRepositoryComposerDocumentOwner(input: Readonly<{
             repositoryCurrentnessByCapture.set(currentness, captureSessionDraftCurrentness({
                 scope: input.scope,
                 address,
-                fieldIds: ['composer.text', 'composer.mentions', 'composer.attachments'],
+                fieldIds,
             }));
             return currentness;
         },
@@ -221,7 +240,6 @@ export function createRepositoryComposerDocumentOwner(input: Readonly<{
             if (!sameComposerDocumentRef(input.ref, currentness.ref)) return noChange();
             const repositoryCurrentness = repositoryCurrentnessByCapture.get(currentness);
             if (!repositoryCurrentness) return noChange();
-            const fieldIds = ['composer.text', 'composer.mentions', 'composer.attachments'] as const;
             // References are text-bound, matching the ephemeral document owner:
             // mentions clear exactly when the accepted text clears, and a text
             // edited after capture keeps its still-binding mentions while the
@@ -231,23 +249,25 @@ export function createRepositoryComposerDocumentOwner(input: Readonly<{
                 address,
                 fieldIds: [...fieldIds],
             });
-            const capturedTextMutationId = repositoryCurrentness.mutationIds['composer.text'];
+            const capturedTextMutationId = repositoryCurrentness.mutationIds[fieldId('text')];
             const textCurrent = capturedTextMutationId !== undefined
-                && current.mutationIds['composer.text'] === capturedTextMutationId;
-            const capturedAttachmentsMutationId = repositoryCurrentness.mutationIds['composer.attachments'];
+                && current.mutationIds[fieldId('text')] === capturedTextMutationId;
+            const capturedAttachmentsMutationId = repositoryCurrentness.mutationIds[fieldId('attachments')];
             const attachmentsCurrent = capturedAttachmentsMutationId !== undefined
-                && current.mutationIds['composer.attachments'] === capturedAttachmentsMutationId;
+                && current.mutationIds[fieldId('attachments')] === capturedAttachmentsMutationId;
             const beforeClear = refresh().document;
             if (!textCurrent && !attachmentsCurrent) return noChange();
             const clearFieldIds = [
-                ...(textCurrent ? ['composer.text' as const] : []),
-                ...(textCurrent ? ['composer.mentions' as const] : []),
-                ...(attachmentsCurrent ? ['composer.attachments' as const] : []),
+                ...(textCurrent ? [fieldId('text'), fieldId('mentions')] : []),
+                ...(attachmentsCurrent ? [fieldId('attachments')] : []),
             ];
             clearSessionDraftCurrentnessLocal({
                 scope: input.scope,
                 address,
-                currentness: repositoryCurrentness,
+                currentness: input.launcherDraftKey && textCurrent
+                    ? { ...repositoryCurrentness, mutationIds: { ...repositoryCurrentness.mutationIds,
+                        ...(current.mutationIds[fieldId('mentions')] ? { [fieldId('mentions')]: current.mutationIds[fieldId('mentions')]! } : {}) } }
+                    : repositoryCurrentness,
                 fieldIds: clearFieldIds,
                 clearComposerReferencesWithCurrentText: true,
             });
@@ -266,6 +286,12 @@ export function createRepositoryComposerDocumentOwner(input: Readonly<{
         },
         clear: () => {
             if (input.isCurrent?.() === false) return;
+            if (input.launcherDraftKey) {
+                clearSessionDraftCurrentnessLocal({ scope: input.scope, address,
+                    currentness: captureSessionDraftCurrentness({ scope: input.scope, address, fieldIds }) });
+                void flushSessionDraft({ scope: input.scope, address });
+                return;
+            }
             void deleteSessionDraft({ scope: input.scope, address });
         },
         replaceDocument: (document) => {

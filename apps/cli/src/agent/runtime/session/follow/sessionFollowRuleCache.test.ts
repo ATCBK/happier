@@ -1,0 +1,142 @@
+import { describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
+import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import { sealSessionFollowRuleContentV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleContentCodecV1';
+import { createSessionFollowRuleCache } from './sessionFollowRuleCache';
+import { createAccountSessionFollowRuleCache } from './accountSessionFollowRuleCache';
+import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
+import { SESSION_FOLLOW_ZERO_FRONTIER_V1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
+
+const definition = { v: 1 as const, enabled: true, filter: normalizeSessionListFilterV1({ homeServerIds: ['home'] }),
+  policy: { preset: 'important' as const } };
+const receiver = { kind: 'account' as const };
+const row = { ruleId: 'rule', receiver, version: 1,
+  sources: [{ sourceSessionId: 'current-source', delivered: SESSION_FOLLOW_ZERO_FRONTIER_V1 }], content: sealSessionFollowRuleContentV1({
+  ruleId: 'rule', receiver, definition, mode: 'plain', material: null }) };
+
+describe('Account Follow rule cache', () => {
+  it('withdraws a private Bob read retired during HTTP, without borrowing the installed Account', async () => {
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'bob' })).toString('base64url')}.signature`;
+    let current = true;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const reads: Readonly<{ url: string; authorization: unknown }>[] = [];
+    const http = vi.spyOn(axios, 'get').mockImplementation(async (url, config) => {
+      reads.push({ url: String(url), authorization: config?.headers?.Authorization });
+      if (String(url).endsWith('/v1/account/encryption/currentness')) return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
+      if (String(url).endsWith('/v2/account/session-follow-preferences')) return { status: 200,
+        data: { assigned: true, direct: false, team: false, group: false } };
+      if (String(url).endsWith('/v2/account/session-follow-rules')) {
+        await gate;
+        return { status: 200, data: { rules: [row] } };
+      }
+      return { status: 404, data: {} };
+    });
+    const cache = createAccountSessionFollowRuleCache({ accountId: 'bob', credentials: { token, encryption: null },
+      serverHttpBaseUrl: 'https://bob-follow.test', signal: new AbortController().signal,
+      isCurrent: async () => current, subscribeInvalidation: () => () => {} });
+    try {
+      const pending = cache.read();
+      await vi.waitFor(() => expect(reads.some(read => read.url.endsWith('/session-follow-rules'))).toBe(true));
+      current = false;
+      release();
+      expect(await pending).toMatchObject({ status: 'unavailable' });
+      expect(await cache.read()).toMatchObject({ status: 'unavailable' });
+      expect(reads.every(read => read.url.startsWith('https://bob-follow.test/') && read.authorization === `Bearer ${token}`)).toBe(true);
+    } finally { release(); cache.dispose(); http.mockRestore(); }
+  });
+  it('keeps personal default preferences in the same invalidated Account snapshot', async () => {
+    let invalidate = () => {};
+    let preferences = { assigned: true, direct: false, team: false, group: false };
+    const cache = createSessionFollowRuleCache({ signal: new AbortController().signal, isCurrent: () => true,
+      subscribeInvalidation: listener => { invalidate = listener; return () => {}; },
+      read: async () => ({ mode: 'plain', material: null, rules: [row], defaultPreferences: preferences }) });
+    expect(await cache.read()).toMatchObject({ status: 'available', defaultPreferences: preferences });
+    preferences = { ...preferences, team: true };
+    invalidate();
+    expect(await cache.read()).toMatchObject({ status: 'available', defaultPreferences: preferences });
+    cache.dispose();
+  });
+  it('refreshes progress once at a catchup range boundary without publishing an older pending read', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let reads = 0;
+    const fresh = { ...row, sources: [{ sourceSessionId: 'current-source',
+      delivered: { ...SESSION_FOLLOW_ZERO_FRONTIER_V1, transcriptSeq: 4 } }] };
+    const cache = createSessionFollowRuleCache({ signal: new AbortController().signal, isCurrent: () => true,
+      subscribeInvalidation: () => () => {}, read: async () => {
+        reads++;
+        if (reads === 1) { await gate; return { mode: 'plain', material: null, rules: [row] }; }
+        return { mode: 'plain', material: null, rules: [fresh] };
+      } });
+    try {
+      const older = cache.read();
+      const current = cache.read({ refresh: true });
+      release();
+      expect(await older).toMatchObject({ status: 'unavailable', reason: 'rules-changed' });
+      expect(await current).toMatchObject({ status: 'available', rules: [{ sources: fresh.sources }] });
+      expect(await cache.read()).toBe(await current);
+      expect(reads).toBe(2);
+    } finally { release(); cache.dispose(); }
+  });
+  it('reads and validates defaults on the captured Account transport beside private rules', async () => {
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'bob' })).toString('base64url')}.signature`;
+    const preferences = { assigned: true, direct: false, team: true, group: false };
+    let valid = true;
+    let invalidate = () => {};
+    const http = vi.spyOn(axios, 'get').mockImplementation(async (url, config) => {
+      expect(String(url)).toMatch(/^https:\/\/bob-follow\.test\//);
+      expect(config?.headers?.Authorization).toBe(`Bearer ${token}`);
+      if (String(url).endsWith('/v1/account/encryption/currentness')) return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
+      if (String(url).endsWith('/v2/account/session-follow-rules')) return { status: 200, data: { rules: [row] } };
+      if (String(url).endsWith('/v2/account/session-follow-preferences')) return { status: 200, data: valid ? preferences : { assigned: true } };
+      return { status: 404, data: {} };
+    });
+    const cache = createAccountSessionFollowRuleCache({ accountId: 'bob', credentials: { token, encryption: null },
+      serverHttpBaseUrl: 'https://bob-follow.test', signal: new AbortController().signal, isCurrent: () => true,
+      subscribeInvalidation: listener => { invalidate = listener; return () => {}; } });
+    try {
+      expect(await cache.read()).toMatchObject({ status: 'available', defaultPreferences: preferences });
+      valid = false;
+      invalidate();
+      expect(await cache.read()).toMatchObject({ status: 'unavailable' });
+    } finally { cache.dispose(); http.mockRestore(); }
+  });
+  it('opens once, shares concurrent demand, and reloads only after the existing change feed invalidates', async () => {
+    let reads = 0;
+    let invalidate = () => {};
+    const cache = createSessionFollowRuleCache({ signal: new AbortController().signal, isCurrent: () => true,
+      subscribeInvalidation: listener => { invalidate = listener; return () => {}; },
+      read: async () => { reads++; return { mode: 'plain', material: null, rules: [row] }; } });
+    const [first, second] = await Promise.all([cache.read(), cache.read()]);
+    expect(first).toMatchObject({ status: 'available', rules: [{ definition, sources: row.sources }] });
+    expect(second).toBe(first);
+    await cache.read();
+    expect(reads).toBe(1);
+    invalidate();
+    await cache.read();
+    expect(reads).toBe(2);
+    cache.dispose();
+  });
+
+  it('does not reinterpret missing E2EE material or a mismatched mode as an empty rule set', async () => {
+    const material = { type: 'legacy' as const, secret: new Uint8Array(32).fill(4) };
+    const encrypted = { ...row, content: sealSessionFollowRuleContentV1({ ruleId: row.ruleId, receiver,
+      definition, mode: 'e2ee', material }) };
+    const cache = createSessionFollowRuleCache({ signal: new AbortController().signal, isCurrent: () => true,
+      subscribeInvalidation: () => () => {}, read: async () => ({ mode: 'e2ee', material: null, rules: [encrypted] }) });
+    expect(await cache.read()).toMatchObject({ status: 'unavailable', reason: 'encryption-material-unavailable' });
+    cache.dispose();
+  });
+
+  it('withdraws a read that finishes after Account retirement or rule invalidation', async () => {
+    let finish!: (value: { mode: 'plain'; material: null; rules: typeof row[] }) => void;
+    const lifetime = new AbortController();
+    const cache = createSessionFollowRuleCache({ signal: lifetime.signal, isCurrent: () => true,
+      subscribeInvalidation: () => () => {}, read: async () => await new Promise(resolve => { finish = resolve; }) });
+    const pending = cache.read();
+    lifetime.abort();
+    finish({ mode: 'plain', material: null, rules: [row] });
+    expect(await pending).toMatchObject({ status: 'unavailable', reason: 'account-retired' });
+  });
+});

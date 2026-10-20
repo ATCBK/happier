@@ -12,7 +12,6 @@ installHomeGovernanceBoundaries(homes);
 installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
 const { storage } = await import('@/sync/domains/state/storage');
-const { createServerFetchAtEndpoint } = await import('@/sync/http/client');
 const { createAppShellAction } = await import('./appShellAction');
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
 const { captureLazyActionAccountContext } = await import('./actionAccountContext');
@@ -27,11 +26,7 @@ beforeEach(async () => {
     await homes.reset();
     serverId = await homes.addHome({ name: 'Draft destination', serverUrl: 'https://draft-destination.test', accountId: 'alice' });
     connection = await restoreServerAccountForTest({ serverUrl: 'https://draft-destination.test', accountId: 'alice',
-        request: async (url, init) => {
-            const endpoint = new URL(String(url));
-            const token = new Headers(init?.headers).get('Authorization')?.replace(/^Bearer /, '');
-            return createServerFetchAtEndpoint({ endpointUrl: endpoint.origin, ...(token ? { credentials: { token } } : {}) })(`${endpoint.pathname}${endpoint.search}`, init);
-        } });
+        request: homes.request });
     storage.getState().activateProfileScope({ serverId, accountId: 'alice' });
     await storage.getState().activateSettingsScope({ serverId, accountId: 'alice' });
     homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });

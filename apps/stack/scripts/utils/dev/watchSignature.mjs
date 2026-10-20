@@ -51,9 +51,14 @@ export function createWatchSourceObserver(paths) {
   const observations = new Map();
   const directories = new Set();
   const invalidate = path => {
+    // A native event is authoritative even when the filesystem clock did not advance.
+    forgetCachedFileDigest(path);
     observations.delete(path);
     if (directories.has(path)) {
-      for (const cached of observations.keys()) if (containsPath(path, cached)) observations.delete(cached);
+      for (const cached of observations.keys()) if (containsPath(path, cached)) {
+        forgetCachedFileDigest(cached);
+        observations.delete(cached);
+      }
     }
   };
   const observer = {
@@ -80,6 +85,7 @@ export function createWatchSourceObserver(paths) {
     },
     observe(event) {
       if (!event?.watchPath || event.filename == null || event.eventType === 'recrawl') {
+        for (const path of observations.keys()) forgetCachedFileDigest(path);
         observations.clear();
         return;
       }

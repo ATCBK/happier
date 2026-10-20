@@ -3,7 +3,7 @@ import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue'
 import type { StoreGet, StoreSet } from './_shared';
 
 function retainOpenedContent(previous: DecryptedArtifact | undefined, incoming: DecryptedArtifact): DecryptedArtifact {
-  if (!previous?.isDecrypted || !incoming.isDecrypted || incoming.body !== undefined || previous.body === undefined
+  if (!previous?.isDecrypted || !incoming.isDecrypted
     || incoming.bodyVersion === undefined || incoming.bodyVersion !== previous.bodyVersion
     || incoming.headerVersion !== previous.headerVersion || incoming.storageMode !== previous.storageMode
     || incoming.access === undefined || incoming.access !== previous.access
@@ -14,7 +14,13 @@ function retainOpenedContent(previous: DecryptedArtifact | undefined, incoming: 
     && incoming.storageIdentity !== undefined && previous.storageIdentity !== undefined
     && sameStrictJsonValue(incoming.storageIdentity, previous.storageIdentity));
   if (!sameCustody) return incoming;
-  return { ...incoming, body: previous.body };
+  // Omitted attribution was not demanded by this background index. An explicit
+  // undefined from a reader that opened it still clears removed private metadata.
+  const retainBody = incoming.body === undefined && previous.body !== undefined;
+  const retainProvenance = !Object.hasOwn(incoming, 'provenance') && previous.provenance !== undefined;
+  if (!retainBody && !retainProvenance) return incoming;
+  return { ...incoming, ...(retainBody ? { body: previous.body } : {}),
+    ...(retainProvenance ? { provenance: previous.provenance } : {}) };
 }
 
 function reconcileArtifacts(
@@ -25,6 +31,11 @@ function reconcileArtifacts(
   let storageChanged = false;
   for (const incomingArtifact of incoming) {
     const before = next[incomingArtifact.id];
+    // HTTP body/list reads can finish after a newer socket settlement. Admit
+    // revisions here for every writer, so an older snapshot cannot reopen it.
+    if (before && (incomingArtifact.headerVersion < before.headerVersion
+      || (incomingArtifact.bodyVersion !== undefined && before.bodyVersion !== undefined
+        && incomingArtifact.bodyVersion < before.bodyVersion))) continue;
     // Content-only socket events have no grant projection. Only HTTP/grant
     // producers can replace known access; content must neither erase nor grant it.
     const missingKnownAccess = before && (
@@ -48,10 +59,11 @@ function reconcileArtifacts(
 
 export type ArtifactsDomain = {
   artifacts: Record<string, DecryptedArtifact>;
+  /** A complete Account inventory was published; targeted body reads do not set this. */
   artifactsLoaded: boolean;
   /** Invalidates the storage projection, not local hydration or grant-only changes. */
   artifactsStorageRevision: number;
-  applyArtifacts: (artifacts: DecryptedArtifact[]) => void;
+  applyArtifacts: (artifacts: DecryptedArtifact[], inventoryReadStartedWith?: Readonly<Record<string, DecryptedArtifact>>) => void;
   addArtifact: (artifact: DecryptedArtifact) => void;
   updateArtifact: (artifact: DecryptedArtifact) => void;
   deleteArtifact: (artifactId: string) => void;
@@ -67,15 +79,31 @@ export function createArtifactsDomain<S extends ArtifactsDomain>({
     artifacts: {},
     artifactsLoaded: false,
     artifactsStorageRevision: 0,
-    applyArtifacts: (artifacts) =>
+    applyArtifacts: (artifacts, inventoryReadStartedWith) =>
       set((state) => {
-        const merged = reconcileArtifacts(state.artifacts, artifacts);
-        if (merged.artifacts === state.artifacts && state.artifactsLoaded) return state;
+        // The immutable map captured before the read distinguishes a missing
+        // inventory member from a socket/create/update that raced that read.
+        const admitted = inventoryReadStartedWith ? artifacts.filter(artifact =>
+          !(inventoryReadStartedWith[artifact.id] && !state.artifacts[artifact.id])) : artifacts;
+        const merged = reconcileArtifacts(state.artifacts, admitted);
+        let reconciled = merged.artifacts;
+        let removed = false;
+        if (inventoryReadStartedWith) {
+          const members = new Set(artifacts.map(artifact => artifact.id));
+          for (const [id, artifact] of Object.entries(state.artifacts)) {
+            if (members.has(id) || artifact !== inventoryReadStartedWith[id]) continue;
+            if (reconciled === state.artifacts) reconciled = { ...reconciled };
+            delete reconciled[id];
+            removed = true;
+          }
+        }
+        const loaded = state.artifactsLoaded || inventoryReadStartedWith !== undefined;
+        if (reconciled === state.artifacts && loaded === state.artifactsLoaded) return state;
         return {
           ...state,
-          artifacts: merged.artifacts,
-          artifactsLoaded: true,
-          artifactsStorageRevision: state.artifactsStorageRevision + Number(merged.storageChanged),
+          artifacts: reconciled,
+          artifactsLoaded: loaded,
+          artifactsStorageRevision: state.artifactsStorageRevision + Number(merged.storageChanged || removed),
         };
       }),
     addArtifact: (artifact) =>

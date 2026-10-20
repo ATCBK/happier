@@ -15,7 +15,7 @@ import type { SessionInstructionsAuthoringDraft } from '@/sync/domains/state/ses
 
 type SessionAuthoringDraftBase = Readonly<Omit<
     SessionAuthoringValueV1,
-    'targetType' | 'checkoutCreationDraft' | 'modelSelection' | 'capabilitySelection' | 'windowsRemoteSessionLaunchMode' | 'windowsTerminalWindowName' | 'runtimeDescriptorV1' | 'sessionConfigOptionOverrides' | 'automation'
+    'targetType' | 'checkoutCreationDraft' | 'modelSelection' | 'capabilitySelection' | 'windowsRemoteSessionLaunchMode' | 'windowsTerminalWindowName' | 'runtimeDescriptorV1' | 'sessionConfigOptionOverrides' | 'automation' | 'promptStack'
 > & {
     targetType: SessionAuthoringValueV1['targetType'];
     checkoutCreationDraft: SessionAuthoringCheckoutCreationDraftV1 | null;

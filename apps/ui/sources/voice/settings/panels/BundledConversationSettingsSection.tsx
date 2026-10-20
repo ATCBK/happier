@@ -39,6 +39,7 @@ import { VoiceProviderSettingsActions } from './realtime/VoiceProviderSettingsAc
 import { SettingAnchor } from '@/components/settings/shell/SettingRow';
 import { useVoiceContributedSettingRefs } from '@/voice/settings/useVoiceContributedSettingRefs';
 import { useProjectedPluginLocalizedTextResolver } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { useVoiceSettingsSearchPrerequisite } from '@/voice/settings/VoiceSettingsSearchPrerequisite';
 
 const providerRegistry = createDefaultVoiceProviderRegistry();
 
@@ -67,6 +68,7 @@ export function BundledConversationSettingsSection(props: Readonly<{
    */
   accountLead?: React.ReactNode;
 }>) {
+  const searchPrerequisite = useVoiceSettingsSearchPrerequisite();
   const voice = React.useMemo(() => voiceSettingsParse(props.voice), [props.voice]);
   const accountLeadOnly = props.accountLead ? (
     <ItemGroup
@@ -145,7 +147,8 @@ export function BundledConversationSettingsSection(props: Readonly<{
   const declaredRows = React.useMemo(() => sessionChoice?.declaration
     ? readDeclaredVoiceSettingsCatalog(sessionChoice.declaration) : null, [sessionChoice?.declaration]);
   const { catalog, requestCatalog, resetCatalog } = useRealtimeVoiceCatalog({
-    client: bundledUi?.client ?? null, credentialUsable, targetKey: sessionChoice?.targetKey ?? credentialTargetKey,
+    providerId,
+    catalogAvailable: Boolean(bundledUi?.client), credentialUsable, targetKey: sessionChoice?.targetKey ?? credentialTargetKey,
     declaredRows,
   });
 
@@ -186,7 +189,16 @@ export function BundledConversationSettingsSection(props: Readonly<{
       typeof rawUrl === 'string' ? [{ kind, url: rawUrl }] : []
     ))
     : [];
-  if (!primarySettingsVisible && visibleLinks.length === 0) return accountLeadOnly;
+  const hiddenSettings = descriptor.fields.filter((field) => !visibleDescriptor.fields.includes(field))
+    .flatMap((field) => [settingRef(field.path), settingRef(`${field.path}.preview`), settingRef(`${field.path}.stopPreview`),
+      ...(field.kind === 'server_vad' && Array.isArray(field.subfields) ? field.subfields.flatMap((raw: unknown) => {
+        const subfield = record(raw);
+        return typeof subfield?.path === 'string' ? [settingRef(subfield.path)] : [];
+      }) : [])]);
+  const ownAccount = providerEntry?.selectionOptions?.find((option) => option.modeId === 'byo');
+  const prerequisite = ownAccount && !byoActive ? searchPrerequisite({ settings: [...hiddenSettings, ...(!credentialSettingsVisible ? [settingRef('credential')] : []),
+      ...(!credentialSourceVisible ? [settingRef('credentialSource')] : [])], reason: t('settingsVoice.pages.search.select', { choice: tLoose(ownAccount.titleKey), control: t('settingsVoice.pages.conversations.payWithTitle') }), group: true }) : null;
+  if (!primarySettingsVisible && visibleLinks.length === 0) return <>{accountLeadOnly}{prerequisite}</>;
 
   const credentialControls = <>
       {!credentialSourceVisible || !contribution || !credentialDeclaration || !credentialProviderDeclaration ? null : <VoiceCredentialSourceField
@@ -250,6 +262,7 @@ export function BundledConversationSettingsSection(props: Readonly<{
   };
 
   return <>
+    {prerequisite}
     {!primarySettingsVisible ? accountLeadOnly : groups.map((group, index) => {
       const fields = visibleDescriptor.fields.filter((field) => group.fieldPaths.includes(field.path));
       const finalGroup = index === groups.length - 1;

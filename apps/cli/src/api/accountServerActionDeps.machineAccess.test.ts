@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import fastify, { type FastifyInstance } from 'fastify';
 import nacl from 'tweetnacl';
-import { createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
+import { ActionsSettingsV1Schema, createActionExecutor, type ActionExecutorDeps } from '@happier-dev/protocol';
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
 import { computeMachineOwnerEnvelopeFingerprintV1 } from '@happier-dev/protocol/machines/machineOwnerEnvelopeFingerprintV1';
@@ -14,12 +14,83 @@ import { listBuiltInHappierTools } from '@/agent/tools/happierTools/listBuiltInH
 import { dispatchBuiltInHappierTool } from '@/agent/tools/happierTools/dispatchBuiltInHappierTool';
 import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
 import { createChangeTitleToolHandler } from '@/agent/tools/happierTools/createChangeTitleToolHandler';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { withTempDir } from '@/testkit/fs/tempDir';
+import { reloadConfiguration } from '@/configuration';
+import { addServerProfile, getServerProfile, resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
+import { readStoredCredentials, readStoredCredentialsForServerId, updateSettings, writeCredentialsTokenOnlyForServerId } from '@/persistence';
+import { resolveActionCliCredentialTarget } from '@/cli/actions/actionServerTarget';
+import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 
 let app: FastifyInstance | undefined;
 let restore: (() => void) | undefined;
 afterEach(async () => { restore?.(); restore = undefined; await app?.close(); app = undefined; });
 
 describe('Machine access headless Action transport', () => {
+  it.each(['https', 'local-dial-alias'] as const)('admits a portable Home target after preparing a restored profile without a saved descriptor (%s)', async basis => {
+    await withTempDir('requester-machine-access-home-', async home => {
+      const scope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL']);
+      try {
+        scope.patch({ HAPPIER_HOME_DIR: home, HAPPIER_ACTIVE_SERVER_ID: undefined, HAPPIER_SERVER_URL: undefined, HAPPIER_WEBAPP_URL: undefined });
+        reloadConfiguration();
+        const serverUrl = basis === 'https' ? 'https://access.test' : 'http://happier-agent-qa-l12-c.localhost:3019';
+        const dialUrl = basis === 'https' ? serverUrl : 'http://127.0.0.1:49933';
+        const profile = await addServerProfile({ name: 'restored-profile', serverUrl, webappUrl: serverUrl,
+          ...(dialUrl !== serverUrl ? { localServerUrl: dialUrl } : {}), use: true });
+        const token = `header.${Buffer.from(JSON.stringify({ sub: 'requester', session: 'fixture-restored-account' })).toString('base64url')}.signature`;
+        await writeCredentialsTokenOnlyForServerId(profile.id, { token });
+        reloadConfiguration();
+        expect(await resolveServerProfileHomeIdentityId(profile.id)).toBeNull();
+        vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (input, init) => {
+          expect(String(input)).toBe(`${dialUrl}/v1/features/authenticated`);
+          expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${token}`);
+          return Response.json({ features: {},
+          capabilities: { serverIdentity: { serverIdentityId: 'srv_requester_home' } },
+          homeConnectionDescriptor: { v: 1, homeServerIdentityId: 'srv_requester_home', canonicalServerUrl: serverUrl,
+            revision: 1, endpoints: [{ kind: 'https', url: serverUrl }] } });
+        }));
+        const prepared = await resolveActionCliCredentialTarget({ requestedServerId: null, deps: {
+          readCredentialsFn: readStoredCredentials, readCredentialsForServerIdFn: readStoredCredentialsForServerId,
+          getServerProfileFn: getServerProfile,
+        } });
+        expect(prepared.serverIdentityId).toBe('srv_requester_home');
+        expect(await resolveServerProfileHomeIdentityId(profile.id)).toBe('srv_requester_home');
+        app = fastify();
+        let reads = 0;
+        app.get('/v1/machines/machine/access', async request => {
+          expect(request.headers.authorization).toBe(`Bearer ${token}`);
+          reads++;
+          return { machineId: 'machine', custodian: { accountId: 'alice', displayName: 'Alice' },
+            access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'use', resourceMode: 'plain', accessState: 'ready' },
+            canManage: false, grants: [], ownDirectGrant: true, ownAccessSources: [] };
+        });
+        await app.ready();
+        restore = installAxiosFastifyAdapter({ app, origin: dialUrl });
+        const executor = createCliActionExecutorFromCredentials({ credentials: prepared.credentials!,
+          serverId: profile.id, serverIdentityId: prepared.serverIdentityId, serverApiUrl: dialUrl,
+          pluginActionExecutionOwner: 'current_process',
+          actionsSettingsProvider: { getActionsSettings: () => ActionsSettingsV1Schema.parse({ v: 1 }) },
+        });
+        for (const serverId of [profile.id, 'srv_requester_home']) {
+          const result = await executor.execute('machines.access.grants.list', { serverId: 'srv_requester_home', machineId: 'machine' },
+            { surface: 'cli', authority: 'present_user', serverId });
+          expect(result, JSON.stringify(result))
+            .toMatchObject({ ok: true, result: { machineId: 'machine', canManage: false, access: { role: 'use', accessState: 'ready' } } });
+        }
+        expect(reads).toBe(2);
+        expect(await executor.execute('machines.access.grants.list', { serverId: 'srv_other_home', machineId: 'machine' },
+          { surface: 'cli', authority: 'present_user', serverId: profile.id }))
+          .toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+        await updateSettings(settings => ({ ...settings, servers: { ...settings.servers,
+          [profile.id]: { ...settings.servers![profile.id], homeConnectionDescriptor: undefined, homeConnectionDescriptorAuthority: undefined },
+        } }));
+        expect(await executor.execute('machines.access.grants.list', { serverId: 'srv_requester_home', machineId: 'machine' },
+          { surface: 'cli', authority: 'present_user', serverId: profile.id }))
+          .toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+        expect(reads).toBe(2);
+      } finally { vi.unstubAllGlobals(); scope.restore(); reloadConfiguration(); }
+    });
+  });
   it('returns qualified accessible inventory through the incumbent captured-endpoint owner', async () => {
     app = fastify();
     app.get('/v1/machines', async request => {
@@ -52,7 +123,9 @@ describe('Machine access headless Action transport', () => {
       { value: 'shared', label: 'shared' },
     ] } });
     expect(await runWithServerHttpBaseUrl('http://access.test', () => deps.machinesList({ serverId: 'home', refresh: true })))
-      .toMatchObject({ items: [{ serverId: 'home', machineId: 'shared', active: false, access: { accessState: 'key_pending' } }] });
+      .toMatchObject({ items: expect.arrayContaining([
+        expect.objectContaining({ serverId: 'home', machineId: 'shared', active: false, access: expect.objectContaining({ accessState: 'key_pending' }) }),
+      ]) });
   });
   it('executes grant/set/remove and self leave through the declared qualified route', async () => {
     app = fastify();

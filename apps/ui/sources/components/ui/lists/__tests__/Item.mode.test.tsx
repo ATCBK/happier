@@ -69,7 +69,7 @@ vi.mock('expo-clipboard', () => ({
     setStringAsync: vi.fn(),
 }));
 
-vi.mock('@/sync/store/hooks', () => ({
+vi.mock('@/sync/store/settingsReadHooks', () => ({
     useLocalSetting: (key: string) => {
         if (key === 'uiItemDensity') return uiItemDensitySetting;
         if (key === 'uiFontScale') return 1;
@@ -77,9 +77,11 @@ vi.mock('@/sync/store/hooks', () => ({
     },
 }));
 
+// Density and platform are read at render time, so cases share one real component graph.
+await import('../Item');
+
 describe('Item mode prop', () => {
     beforeEach(() => {
-        vi.resetModules();
         uiItemDensitySetting = 'comfortable';
     });
 

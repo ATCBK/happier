@@ -1,12 +1,13 @@
 import * as React from 'react';
 import { WORK_BOARD_ARTIFACT_KIND_V1, type WorkBoardArtifactTransportV1 } from '@happier-dev/protocol/boards/workBoardArtifactV1';
 import { WorkBoardActionOutputSchemasV1 } from '@happier-dev/protocol/boards/actionsV1';
+import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { WorkBoardIntentV1, WorkBoardV1, WorkBoardsV1 } from '@happier-dev/protocol/boards/workBoardV1';
 import { useOptionalAuth } from '@/auth/context/AuthContext';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
-import { storage, useActiveServerAccountScope, useIsDataReady } from '@/sync/domains/state/storage';
-import { captureActiveServerAccountScopeLifetime, type ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { storage, useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
+import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { getActiveServerHomeCarrier, getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { apiSocket } from '@/sync/api/session/apiSocket';
@@ -20,6 +21,11 @@ import { t } from '@/text';
 import { createWorkBoardUiActionPort, type WorkBoardEntityContext } from './workBoardEntityDrop';
 import { createWorkBoardAccountStore } from './workBoardAccountStore';
 import { projectDisplayedWorkBoards, type WorkBoardSaveOutcome, type WorkBoardSaveQueue, type WorkBoardSaveState } from './workBoardSaveQueue';
+import type { ActionExecutorContext } from '@happier-dev/protocol/actions';
+
+export type WorkBoardUiSaveQueue = Omit<WorkBoardSaveQueue, 'dispatch'> & Readonly<{
+    dispatch(intent: WorkBoardIntentV1, confirmation?: ActionExecutorContext['presentUserConfirmation']): Promise<WorkBoardSaveOutcome>;
+}>;
 
 type MountedBoards = ReturnType<typeof createWorkBoardAccountStore> & Readonly<{ retain(demand: string): () => void; isCurrent(): boolean }>;
 const stores = new WeakMap<ActiveServerAccountScopeLifetime, WeakMap<AuthCredentials, MountedBoards>>();
@@ -29,14 +35,14 @@ const unavailable = createWorkBoardAccountStore({ read: refuse, list: refuse, cr
 /** All mounted Board surfaces share one projection/queue in the canonical active Account lifetime. */
 function useBoardStore(bodyDemand = 'headers') {
     const credentials = useOptionalAuth()?.credentials ?? null;
-    const scope = useActiveServerAccountScope();
-    const ready = useIsDataReady();
+    const lifetime = useActiveServerAccountScopeLifetime();
+    const scope = lifetime?.scope ?? null;
     const server = useActiveServerSnapshot(credentials !== null);
-    const lifetime = captureActiveServerAccountScopeLifetime();
     let store: MountedBoards | typeof unavailable = unavailable;
     let accountId: string | null = null;
     try { if (credentials) accountId = parseToken(credentials.token); } catch { /* No Account identity can be established. */ }
-    if (ready && credentials && scope && lifetime && accountId === scope.accountId
+    // Session-index readiness does not govern this Account Artifact reader.
+    if (credentials && scope && lifetime && accountId === scope.accountId
         && scope.serverId === server.serverId && server.serverUrl) {
         let byCredentials = stores.get(lifetime);
         if (!byCredentials) { byCredentials = new WeakMap(); stores.set(lifetime, byCredentials); }
@@ -106,10 +112,10 @@ function useBoardStore(bodyDemand = 'headers') {
 }
 
 /** Present-user capability ingress; the Account's raw queue remains below Action admission. */
-export function useWorkBoardSaveQueue(context?: Omit<WorkBoardEntityContext, 'scope'>): WorkBoardSaveQueue {
+export function useWorkBoardSaveQueue(context?: Omit<WorkBoardEntityContext, 'scope'>): WorkBoardUiSaveQueue {
     const store = useBoardStore();
-    const scope = useActiveServerAccountScope();
-    const lifetime = captureActiveServerAccountScopeLifetime();
+    const lifetime = useActiveServerAccountScopeLifetime();
+    const scope = lifetime?.scope ?? null;
     const latestContext = React.useRef(context); latestContext.current = context;
     return React.useMemo(() => {
         const queue = store.queue;
@@ -118,7 +124,7 @@ export function useWorkBoardSaveQueue(context?: Omit<WorkBoardEntityContext, 'sc
             const current = latestContext.current;
             return isCurrent() && scope && current && current.board.id === boardId ? { ...current, scope } : null;
         }, queue, store.readBoardAccess, () => isCurrent() ? projectDisplayedWorkBoards(store.getBoards(), queue.getState().pending) : null) });
-        const dispatch = async (intent: WorkBoardIntentV1): Promise<WorkBoardSaveOutcome> => {
+        const dispatch: WorkBoardUiSaveQueue['dispatch'] = async (intent, confirmation) => {
             if (!isCurrent() || !scope) return { status: 'refused', code: 'board_scope_retired' };
             const previousFailure = queue.getState().failure;
             let result: Awaited<ReturnType<typeof executor.execute>>;
@@ -130,17 +136,18 @@ export function useWorkBoardSaveQueue(context?: Omit<WorkBoardEntityContext, 'sc
                         serverId: scope.serverId, expectedAccountId: scope.accountId, surface: 'ui', authority: 'present_user',
                         actionCaller: { kind: 'host' }, actionRequestId: randomUUID(),
                     })
-                    : await executor.execute('boards.apply', { intent }, { serverId: scope.serverId, expectedAccountId: scope.accountId, surface: 'ui' });
+                    : await executor.execute('boards.apply', { intent }, { serverId: scope.serverId, expectedAccountId: scope.accountId, surface: 'ui',
+                        ...(confirmation ? { presentUserConfirmation: confirmation } : {}) });
             } catch {
                 if (isCurrent()) queue.recordFailure(intent, 'unavailable');
                 return { status: 'refused', code: isCurrent() ? 'board_action_unavailable' : 'board_scope_retired' };
             }
             const sizeOutcome = intent.kind === 'widget_size' ? classifyWidgetDefinitionCommandResult('widgets.item.size.set', result) : null;
-            if (sizeOutcome?.kind === 'approvalPending' && intent.kind === 'widget_size') {
+            if (sizeOutcome?.kind === 'approvalPending' || !sizeOutcome && result.ok && ActionApprovalRequestCreatedResultSchema.safeParse(result.result).success) {
                 queue.dismissFailure();
-                publishPresentationNotice({ key: `${intent.boardId}:${intent.ref.instanceId}:size`, severity: 'info',
+                publishPresentationNotice({ key: intent.kind === 'widget_size' ? `${intent.boardId}:${intent.ref.instanceId}:size` : 'board:approval', severity: 'info',
                     message: t('widgetAdd.areaApprovalPending') });
-                // Approval owns the request now; no optimistic or persisted size acknowledgement is fabricated.
+                // Approval owns the request now; no optimistic or persisted acknowledgement is fabricated.
                 return { status: 'pending', code: 'approval_required' };
             }
             if (sizeOutcome?.kind === 'applied' || !sizeOutcome && result.ok && WorkBoardActionOutputSchemasV1['boards.apply'].safeParse(result.result).success)
@@ -149,7 +156,8 @@ export function useWorkBoardSaveQueue(context?: Omit<WorkBoardEntityContext, 'sc
             const unknown = code === 'outcome_unknown' || code === 'approval_execution_outcome_unknown';
             if (isCurrent() && queue.getState().failure === previousFailure) queue.recordFailure(intent, code === 'board_not_found' ? 'not_found'
                 : code === 'invalid_parameters' || code === 'widget_inputs_invalid' ? 'invalidValue' : 'unavailable');
-            return { status: unknown ? 'unknown' : 'refused', code: unknown ? 'board_write_unknown' : code };
+            const details = !result.ok && !unknown ? result.details : undefined;
+            return { status: unknown ? 'unknown' : 'refused', code: unknown ? 'board_write_unknown' : code, ...(details !== undefined ? { details } : {}) };
         };
         return { ...queue, dispatch, retry: () => {
             const failure = queue.getState().failure;
@@ -158,10 +166,11 @@ export function useWorkBoardSaveQueue(context?: Omit<WorkBoardEntityContext, 'sc
     }, [store, scope?.serverId, scope?.accountId, lifetime]);
 }
 
-export function useWorkBoardReadState() {
+export function useWorkBoardReadState(boardId?: string) {
     const store = useBoardStore();
-    const state = React.useSyncExternalStore(store.subscribe, store.getReadState, store.getReadState);
-    const retry = React.useCallback(() => { store.invalidateBodies(); return store.refresh(); }, [store]);
+    const snapshot = React.useCallback(() => boardId ? store.getBoardReadState(boardId) : store.getReadState(), [store, boardId]);
+    const state = React.useSyncExternalStore(store.subscribe, snapshot, snapshot);
+    const retry = React.useCallback(() => { store.invalidateBodies(boardId ? [boardId] : undefined); return store.refresh(); }, [store, boardId]);
     return { ...state, retry };
 }
 
@@ -193,7 +202,7 @@ export function useWorkBoard(boardId: string | null): WorkBoardV1 | null {
     return React.useSyncExternalStore(subscribe, snapshot, snapshot);
 }
 
-export function useDispatchWorkBoardIntent(context?: Omit<WorkBoardEntityContext, 'scope'>): (intent: WorkBoardIntentV1) => Promise<WorkBoardSaveOutcome> {
+export function useDispatchWorkBoardIntent(context?: Omit<WorkBoardEntityContext, 'scope'>): WorkBoardUiSaveQueue['dispatch'] {
     return useWorkBoardSaveQueue(context).dispatch;
 }
 

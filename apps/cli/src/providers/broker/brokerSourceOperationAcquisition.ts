@@ -3,6 +3,7 @@ import type {
   ManagedProviderExplicitStartCustodyRequest,
 } from '@/providers/connections/publicManagedRuntimeStart';
 import type { SharedManagedProviderGatewayBinding } from '@/plugins/runtime/invocation/services/managedServicesAdapter';
+import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 
 type AcquiredBrokerSourceOperation = Readonly<{
   projection: NonNullable<Awaited<ReturnType<ManagedProviderExplicitStartCustody['acquire']>>>;
@@ -76,14 +77,18 @@ export async function acquireBrokerSourceOperation(input: Readonly<{
     return authorizationCurrent;
   };
   let retired = false;
+  let refreshInFlight: Promise<boolean> | null = null;
   let retireInFlight: Promise<void> | null = null;
   const retire = (): Promise<void> => {
     if (retired) return Promise.resolve();
-    retireInFlight ??= input.custody.retire({
-      identity: input.identity,
-      operationClaim: input.operationClaim,
-      ...(input.sharedGateway ? { sharedGateway: input.sharedGateway } : {}),
-    }).then(
+    retireInFlight ??= (async () => {
+      await refreshInFlight;
+      await input.custody.retire({
+        identity: input.identity,
+        operationClaim: input.operationClaim,
+        ...(input.sharedGateway ? { sharedGateway: input.sharedGateway } : {}),
+      });
+    })().then(
       () => {
         retired = true;
         retireInFlight = null;
@@ -96,7 +101,7 @@ export async function acquireBrokerSourceOperation(input: Readonly<{
     return retireInFlight;
   };
   const revalidateOperationAuthorization = input.revalidateOperationAuthorization;
-  const projection = await input.custody.acquire({
+  const acquireProjection = (signal: AbortSignal) => input.custody.acquire({
     ...(input.sharedGateway ? { sharedGateway: input.sharedGateway } : {}),
     ...(input.retirementGroup ? { retirementGroup: input.retirementGroup } : {}),
     contributionKey: input.contributionKey,
@@ -117,16 +122,52 @@ export async function acquireBrokerSourceOperation(input: Readonly<{
         }
       : {}),
     operationClaim: input.operationClaim,
-    signal: input.callerSignal,
+    signal,
   });
-  if (!projection || input.callerSignal.aborted || !await revalidateAuthorization()) {
-    if (projection) {
+  const acquired = await acquireProjection(input.callerSignal);
+  if (!acquired || input.callerSignal.aborted || !await revalidateAuthorization()) {
+    if (acquired) {
       if (!input.callerSignal.aborted && lastSourceRead !== 'unknown') {
         await retire().catch(() => undefined);
       }
-      await Promise.resolve(projection.cleanup()).catch(() => undefined);
+      await Promise.resolve(acquired.cleanup()).catch(() => undefined);
     }
     return null;
   }
-  return Object.freeze({ projection, isAuthorizationCurrent, revalidateAuthorization, retire });
+  if (!input.sharedGateway) return Object.freeze({ projection: acquired, isAuthorizationCurrent, revalidateAuthorization, retire });
+  let projection = acquired;
+  // A surviving consumer retains authority, not a dead physical endpoint.
+  // Rejoin the exact existing explicit-Start claim before dispatch, never
+  // after a request has reached the upstream transport.
+  const ensureProjection = async (signal: AbortSignal = input.callerSignal): Promise<boolean> => {
+    if (retired || retireInFlight || !await revalidateAuthorization(signal)) return false;
+    if (projection.isCurrent()) return true;
+    refreshInFlight ??= (async () => {
+      // Keep this source opening's lifetime, not one forwarded HTTP request's
+      // cancellation. Local consumers retain an opening; the carrier opens a
+      // fresh source for each admitted stream against the same custody claim.
+      const replacement = await acquireProjection(input.callerSignal);
+      if (!replacement) return false;
+      const previous = projection;
+      projection = replacement;
+      await previous.cleanup();
+      return !retired && !retireInFlight && replacement.isCurrent();
+    })().finally(() => { refreshInFlight = null; });
+    return await refreshInFlight;
+  };
+  const retainedProjection = Object.freeze({
+    access: Object.freeze({
+      endpointUrl: (endpointTemplateId: string) => projection.access.endpointUrl(endpointTemplateId),
+      async request(request: Parameters<typeof projection.access.request>[0]) {
+        if (retired || retireInFlight || !isAuthorizationCurrent()
+          || !projection.isCurrent() && !await ensureProjection(request.signal)) {
+          throw createProviderErrorV1('provider_endpoint_unavailable', { connectionId: input.sharedGateway?.connectionId });
+        }
+        return await projection.access.request(request);
+      },
+    }),
+    isCurrent: () => !retired && !retireInFlight && projection.isCurrent(),
+    cleanup: async () => await projection.cleanup(),
+  });
+  return Object.freeze({ projection: retainedProjection, isAuthorizationCurrent, revalidateAuthorization: ensureProjection, retire });
 }

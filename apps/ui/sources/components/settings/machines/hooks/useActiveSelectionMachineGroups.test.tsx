@@ -49,6 +49,8 @@ describe('useActiveSelectionMachineGroups', () => {
         expect(latest.visibleMachineGroups).toHaveLength(1);
         expect(latest.visibleMachineGroups[0].machines.map((m: any) => m.id)).toEqual(['m-ok']);
         expect(latest.hasAnyVisibleMachines).toBe(true);
+        // Warm/socket rows are not a completed fleet census; preset pins must wait for the list reader.
+        expect(latest.visibleMachineGroups[0].status).toBe('loading');
     });
 
     it('reports no visible machines when all are revoked', async () => {
@@ -124,6 +126,7 @@ describe('useActiveSelectionMachineGroups', () => {
             expect.objectContaining({
                 serverId: 'srv_identity_active',
                 serverName: 'Server A',
+                status: 'idle',
                 machines: [expect.objectContaining({ id: 'm-identity' })],
             }),
         ]);

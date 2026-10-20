@@ -134,7 +134,7 @@ export function teamSignInReturnPath(params: Readonly<{
     carrier?: string | null;
     serverId?: string | null;
     postAuthInvitation?: boolean;
-}>): string {
+}>): `/teams/${string}/sign-in` | `/teams/${string}/sign-in?${string}` {
     const query = new URLSearchParams();
     const carrier = String(params.carrier ?? '').trim();
     const serverId = String(params.serverId ?? '').trim();
@@ -142,5 +142,6 @@ export function teamSignInReturnPath(params: Readonly<{
     if (serverId) query.set('serverId', serverId);
     if (params.postAuthInvitation) query.set('postAuthInvitation', '1');
     const search = query.toString();
-    return `/teams/${encodeURIComponent(params.teamId)}/sign-in${search ? `?${search}` : ''}`;
+    const pathname: `/teams/${string}/sign-in` = `/teams/${encodeURIComponent(params.teamId)}/sign-in`;
+    return search ? `${pathname}?${search}` : pathname;
 }

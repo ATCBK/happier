@@ -17,6 +17,7 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { Icon } from '@/components/ui/icons/Icon';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
+import { useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { storage } from '@/sync/domains/state/storage';
@@ -25,7 +26,7 @@ import { useSessionSelector, useServerScopedMachine } from '@/sync/store/hooks';
 import { selectProjectLastAuthoringSessionId } from '@/sync/store/selectProjectLastAuthoringSessionId';
 import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { t } from '@/text';
-import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 
@@ -154,7 +155,7 @@ function useProjectSetupDraftTarget(origin: PluginUiNewSessionSeedOriginV1) {
     project: scripts.destination.kind === 'ready'
       ? resolveWorkspaceRefDisplayName(scripts.destination.workspaceRef)
       : resolveWorkspacePathBasenameV1(origin.workspace.rootPath) ?? origin.workspace.rootPath,
-    machine: getMachineDisplayName(machine) ?? origin.workspace.machineId,
+    machine: machine ? getMachineSentenceName(machine) : origin.workspace.machineId,
   };
 }
 
@@ -200,9 +201,11 @@ export const ProjectSetupDraftFootnote = React.memo(
   ) {
     const { theme } = useUnistyles();
     const target = useProjectSetupDraftTarget(props.origin);
+    // The composer's own column: the note starts where the composer's text and the header above it start.
+    const column = useLayoutMaxWidthStyle();
     if (!target) return null;
     return (
-      <View testID="project-setup-draft-footnote" style={styles.footnote}>
+      <View testID="project-setup-draft-footnote" style={[styles.footnote, column]}>
         <Icon name="info" size={14} color={theme.colors.text.tertiary} />
         <Text style={[styles.footnoteText, { color: theme.colors.text.tertiary }]}>
           {t('projects.authoring.draftFootnote', { workspace: target.project, machine: target.machine })}
@@ -217,7 +220,7 @@ const styles = StyleSheet.create(() => ({
   draftHeader: { paddingBottom: 16 },
   eyebrow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: HAPPIER_PAGE_METRICS.pageTextInsetPx, paddingTop: HAPPIER_PAGE_METRICS.pageHeaderPaddingTopPx },
   eyebrowText: { ...Typography.default('regular'), ...happierPageTextMetrics('meta') },
-  footnote: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, paddingTop: 12, paddingHorizontal: HAPPIER_PAGE_METRICS.pageTextInsetPx },
+  footnote: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, paddingTop: 12, paddingHorizontal: HAPPIER_PAGE_METRICS.pageTextInsetPx, width: '100%', alignSelf: 'center' },
   authored: { flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8 },
   authoredSession: { ...Typography.default('semiBold') },
   authoredText: { ...Typography.default('regular'), ...happierPageTextMetrics('meta'), flex: 1, minWidth: 0 },

@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { once } from 'node:events';
+import { createRequire } from 'node:module';
 import { chmod, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -130,19 +131,24 @@ async function createFakeToolchain(
 }
 
 async function resolveWrapperFixturePath(caseItem: WrapperCase, toolDir: string, toolScriptPath: string): Promise<string> {
-  if (caseItem.name !== 'apps-ui-run-vitest-shards') return resolve(repoRootDir(), caseItem.scriptPath);
+  if (caseItem.name !== 'apps-ui-run-vitest-shards' && caseItem.name !== 'apps-cli-run-vitest-shards') {
+    return resolve(repoRootDir(), caseItem.scriptPath);
+  }
 
-  // This wrapper resolves its Vitest executable from its own package, not PATH. Keep its
+  // These wrappers resolve their Vitest executable from their own package, not PATH. Keep their
   // internal implementation real and replace only the external package in the fixture tree.
   const fixtureRoot = join(toolDir, 'workspace');
   const sources = [
     caseItem.scriptPath,
-    'apps/ui/scripts/withNodeHeapLimit.mjs',
+    join(dirname(caseItem.scriptPath), 'withNodeHeapLimit.mjs'),
     'scripts/testing/process/managedChildLifecycle.mjs',
     'scripts/testing/process/processTree.mjs',
+    'scripts/testing/vitestNodeCommand.mjs',
     'scripts/testing/vitestShardCollection.mjs',
     'scripts/testing/vitestShardOutcomes.mjs',
+    'scripts/testing/vitestWorkers.ts',
     'scripts/workspaces/execYarnCommand.mjs',
+    'packages/cli-common/windowsCommandInvocation.mjs',
   ];
   await Promise.all(sources.map(async (source) => {
     const destination = join(fixtureRoot, source);
@@ -152,9 +158,12 @@ async function resolveWrapperFixturePath(caseItem: WrapperCase, toolDir: string,
   const vitestDir = join(fixtureRoot, 'node_modules', 'vitest');
   await mkdir(vitestDir, { recursive: true });
   await writeFile(join(vitestDir, 'package.json'), JSON.stringify({
-    name: 'vitest', type: 'module', exports: { './vitest.mjs': './vitest.mjs' },
+    name: 'vitest', type: 'module', exports: { './vitest.mjs': './vitest.mjs', './node': './node.mjs' },
   }));
   await writeFile(join(vitestDir, 'vitest.mjs'), `import ${JSON.stringify(pathToFileURL(toolScriptPath).href)};\n`);
+  // Retain Vitest's real argument parser; only its executable process is the OS boundary.
+  const vitestNode = createRequire(import.meta.url).resolve('vitest/node');
+  await writeFile(join(vitestDir, 'node.mjs'), `export { parseCLI } from ${JSON.stringify(pathToFileURL(vitestNode).href)};\n`);
   return join(fixtureRoot, caseItem.scriptPath);
 }
 

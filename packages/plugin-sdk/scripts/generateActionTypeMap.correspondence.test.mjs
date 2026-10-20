@@ -6,6 +6,7 @@ import test from 'node:test';
 import ts from 'typescript';
 
 import { resolveTypeScriptCliInvocation } from '../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
+import { runApiSurfaceSourceHarnessForTests } from './apiSurfaceCli.mjs';
 
 function publicProjectionSource(protocol) {
   // Exercise the real private compiler owner, not a second test-only mapper.
@@ -15,10 +16,53 @@ function publicProjectionSource(protocol) {
   const declarations = file.statements.filter(node => ts.isTypeAliasDeclaration(node) && helpers.has(node.name.text));
   assert.equal(declarations.length, helpers.size);
   const printer = ts.createPrinter();
-  return `import type { z } from 'zod';\nimport type { JsonValue } from '${protocol}/json/strictJsonValue.js';\nimport type { PluginJsonValueV2 } from '${protocol}/plugins/contributions/jsonSchema.js';\n`
+  return `import type { z } from 'zod/mini';\nimport type { JsonValue } from '${protocol}/json/strictJsonValue.js';\nimport type { PluginJsonValueV2 } from '${protocol}/plugins/contributions/jsonSchema.js';\n`
     + declarations.map(node => (['PublicValue', 'Failures'].includes(node.name.text) ? 'export ' : '')
       + printer.printNode(ts.EmitHint.Unspecified, node, file)).join('\n');
 }
+
+test('Session exchange author input matches both public runtime carriers and refuses host revisions', t => {
+  const repoRoot = process.cwd();
+  const protocol = resolve(repoRoot, 'packages/protocol/src');
+  const cache = resolve(repoRoot, 'packages/protocol/node_modules/.cache');
+  mkdirSync(cache, { recursive: true });
+  const root = mkdtempSync(resolve(cache, 'happier-exchange-correspondence-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  writeFileSync(resolve(root, 'publicProjection.ts'), publicProjectionSource(protocol));
+  const fixture = resolve(root, 'exchange.ts');
+  writeFileSync(fixture, `
+    import type { z } from 'zod/mini';
+    import type { PublicValue } from './publicProjection.js';
+    import type { PLUGIN_ACTION_INPUT_SCHEMAS, PUBLIC_ACTION_INPUT_SCHEMAS, PluginActionInputById, PublicActionInputById } from '${protocol}/actions/actionSpecs.js';
+    import type { PluginActionInputById as DtoInputs } from '${repoRoot}/packages/plugin-sdk/src/actions/actionTypeMap.generated.js';
+    type Input = PluginActionInputById['session.exchange.control'];
+    type PluginInput = z.input<(typeof PLUGIN_ACTION_INPUT_SCHEMAS)['session.exchange.control']>;
+    type PublicInput = z.input<(typeof PUBLIC_ACTION_INPUT_SCHEMAS)['session.exchange.control']>;
+    type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+    type Assert<T extends true> = T;
+    type PluginCarrierExact = Assert<Equal<PluginInput, Input>>;
+    type PublicCarrierExact = Assert<Equal<PublicInput, PublicActionInputById['session.exchange.control']>>;
+    declare const canonical: PublicValue<Input, true>;
+    declare const dto: DtoInputs['session.exchange.control'];
+    const forward: typeof dto = canonical;
+    const reverse: typeof canonical = dto;
+    const pluginCarrier: PluginInput = dto;
+    const publicCarrier: PublicInput = dto;
+    const authored: typeof dto = { sessionId: 'session-1', originInputLocalId: 'input-1', decision: 'continue_more', additionalTurns: 10 };
+    // @ts-expect-error Host observations are refused by the strict public transport.
+    const hostObservation: typeof dto = { ...authored, observedRevision: 'session-message-row-revision:v1:3' };
+    // @ts-expect-error The public runtime carrier must not advertise host-only authority either.
+    const publicObservation: PublicInput = { ...authored, observedRevision: 'session-message-row-revision:v1:3' };
+  `);
+  const invocation = resolveTypeScriptCliInvocation({ repoRoot, workspaceDir: repoRoot });
+  const result = spawnSync(invocation.command, [...invocation.argsPrefix,
+    '--ignoreConfig', '--strict', '--skipLibCheck', '--target', 'ES2022',
+    '--module', 'ESNext', '--moduleResolution', 'Bundler', '--types', 'node', '--noEmit',
+    resolve(protocol, 'auth/tr46.d.ts'), fixture,
+  ], { cwd: repoRoot, encoding: 'utf8' });
+  assert.equal(result.status, 0, JSON.stringify({ signal: result.signal, error: result.error?.message })
+    + '\n' + result.stdout + result.stderr);
+});
 
 test('public manifest input references admit qualified machine fields and match Protocol host references', (t) => {
   const repoRoot = process.cwd();
@@ -62,7 +106,7 @@ test('public Action correspondence preserves empty objects, primitives, brands a
   writeFileSync(resolve(root, 'publicProjection.ts'), publicProjectionSource(protocol));
   const fixture = resolve(root, 'leaves.ts');
   writeFileSync(fixture, `
-    import type { z } from 'zod';
+    import type { z } from 'zod/mini';
     import type { Failures, PublicValue } from './publicProjection.js';
     import type { JsonValue } from '${protocol}/json/strictJsonValue.js';
     import type { PluginJsonValueV2 } from '${protocol}/plugins/contributions/jsonSchema.js';
@@ -79,7 +123,7 @@ test('public Action correspondence preserves empty objects, primitives, brands a
     type ReadonlyJson = Assert<Equal<PublicValue<JsonValue, true>, JsonValue>>;
     type InputJson = Assert<Equal<PublicValue<PluginJsonValueV2, true>, JsonValue>>;
     type ResultJson = Assert<Equal<PublicValue<PluginJsonValueV2, false>, PluginJsonValueV2>>;
-    type OpaqueSchema = Assert<Equal<PublicValue<z.ZodType, true>, unknown>>;
+    type OpaqueSchema = Assert<Equal<PublicValue<z.ZodMiniType, true>, unknown>>;
     // Deliberately invalid boundary declarations: the prior producer rejected whole-map any/unknown.
     type RejectDtoAny = Assert<Equal<Failures<{ action: { count: number } }, { action: any }, false>, 'action'>>;
     type RejectSchemaAny = Assert<Equal<Failures<{ action: any }, { action: { count: number } }, false>, 'action'>>;
@@ -127,6 +171,15 @@ test('named declarative Action DTO matches the canonical Protocol document gramm
   ], { cwd: repoRoot, encoding: 'utf8' });
   assert.equal(result.status, 0, JSON.stringify({ signal: result.signal, error: result.error?.message })
     + '\n' + result.stdout + result.stderr);
+});
+
+test('filesystem recursive Action DTO support closes through the author inventory', async () => {
+  const report = await runApiSurfaceSourceHarnessForTests({
+    packageRoot: resolve(process.cwd(), 'packages/plugin-sdk'),
+  });
+  assert.ok(report.inventory.symbols.some(symbol => symbol.specifier === './actions'
+    && symbol.exportName === 'FilesystemTreeNode' && symbol.kind === 'type'),
+  'the recursive directory-tree result must publish its named author dependency');
 });
 
 // Deliberately separate from dependency builds: drift fails this explicit gate only.

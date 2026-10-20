@@ -1,7 +1,6 @@
 import { cp, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { createRequire } from 'node:module';
-import { dirname, extname, join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { performance } from 'node:perf_hooks';
 
@@ -296,16 +295,14 @@ async function prepareSourceWebUiInputsInWorker({ repoDir, outputDir, env, signa
 
 /** Live Metro and finite exports share source artifact construction. Only a
  * finite export captures inputs; interactive Expo intentionally reads live source. */
-export async function prepareSourcePluginUiInventory({ repoDir, inputRepoDir = repoDir, outputDir, inventoryPath, env = process.env, signal,
+export async function prepareSourcePluginUiInventory({ repoDir, inputRepoDir = repoDir, outputDir, inventoryPath, retainedInventoryPath, artifactStoreDir, env = process.env, signal,
   stdoutStream = process.stdout }) {
   await runSourceBuildCommand({ repoDir, scriptPath: fileURLToPath(import.meta.url),
-    args: [JSON.stringify({ repoDir: inputRepoDir, outputDir, inventoryPath })], env, signal, captureStdout: false, captureStderr: true, stdoutStream });
+    args: [JSON.stringify({ repoDir: inputRepoDir, outputDir, inventoryPath, retainedInventoryPath, artifactStoreDir })], env, signal, captureStdout: false, captureStderr: true, stdoutStream });
 }
 
-async function prepareSourceWebUiInputs({ repoDir, outputDir, inventoryPath }) {
+async function prepareSourceWebUiInputs({ repoDir, outputDir, inventoryPath, retainedInventoryPath, artifactStoreDir }) {
   const uiProjectDir = join(repoDir, 'apps/ui');
-  const requireFromUi = createRequire(join(uiProjectDir, 'package.json'));
-  const { build, transform, stop } = requireFromUi('esbuild');
   const packages = await readWorkspacePackages(repoDir);
   const uiPackage = JSON.parse(await readFile(join(uiProjectDir, 'package.json'), 'utf8'));
   const cliPackage = JSON.parse(await readFile(join(repoDir, 'apps/cli/package.json'), 'utf8'));
@@ -319,59 +316,23 @@ async function prepareSourceWebUiInputs({ repoDir, outputDir, inventoryPath }) {
   await mkdir(inputsDir);
   const toolsDir = join(outputDir, 'tools');
   await mkdir(toolsDir);
-  // Preparation tooling resolves installed third-party support from each real
-  // importer. Served web output has no dependency or first-party source links.
+  // The canonical source loader resolves each manifest on demand inside the
+  // compiler's per-plugin failure boundary. A static aggregate import would
+  // abort every plugin before that boundary on one malformed declaration.
   const preparationPath = join(toolsDir, 'prepare.mjs');
   const source = [
     `import { prepareSourcePluginUiArtifacts } from ${JSON.stringify(join(uiProjectDir, 'scripts/prepareSourcePluginUiArtifacts.mjs'))};`,
     `import { readWorkspacePackages, resolveWorkspaceSource } from ${JSON.stringify(join(repoDir, 'packages/cli-common/sourceRuntimeEntries.mjs'))};`,
-    ...plugins.map(([name], index) => `import { PLUGIN_MANIFEST as manifest${index} } from ${JSON.stringify(`${name}/manifest`)};`),
+    `import { pathToFileURL } from 'node:url';`,
     `const workspaces = await readWorkspacePackages(${JSON.stringify(repoDir)});`,
-    `await prepareSourcePluginUiArtifacts({repoRoot:${JSON.stringify(repoDir)},outputDir:${JSON.stringify(inputsDir)},outputPath:${JSON.stringify(inventoryPath)},resolveSourceImport(specifier) { const name = specifier.split('/').slice(0,specifier.startsWith('@') ? 2 : 1).join('/'); if (workspaces.has(name) || specifier.startsWith('@happier-dev/')) return resolveWorkspaceSource(workspaces,specifier); },plugins:[${plugins.map(([name], index) => (
-      `{directory:${JSON.stringify(name.slice('@happier-dev/plugins-'.length))},manifest:manifest${index},uiArtifacts:${Boolean(uiPackage.dependencies?.[name] && listBundledPluginUiArtifactExports(packages.get(name).manifest).length > 0)}}`
+    `await prepareSourcePluginUiArtifacts({repoRoot:${JSON.stringify(repoDir)},outputDir:${JSON.stringify(inputsDir)},outputPath:${JSON.stringify(inventoryPath)},retainedInventoryPath:${JSON.stringify(retainedInventoryPath)},artifactStoreDir:${JSON.stringify(artifactStoreDir)},resolveSourceImport(specifier) { const name = specifier.split('/').slice(0,specifier.startsWith('@') ? 2 : 1).join('/'); if (workspaces.has(name) || specifier.startsWith('@happier-dev/')) return resolveWorkspaceSource(workspaces,specifier); },plugins:[${plugins.map(([name]) => (
+      `{directory:${JSON.stringify(name.slice('@happier-dev/plugins-'.length))},loadManifest:async()=> (await import(pathToFileURL(resolveWorkspaceSource(workspaces,${JSON.stringify(`${name}/manifest`)})).href)).PLUGIN_MANIFEST,uiArtifacts:${Boolean(uiPackage.dependencies?.[name] && listBundledPluginUiArtifactExports(packages.get(name).manifest).length > 0)}}`
     )).join(',')}]});`,
   ].join('\n');
-  const toolStartedAt = performance.now();
-  try {
-    const preparation = await build({
-      stdin: { contents: source, resolveDir: uiProjectDir, sourcefile: 'source-ui-preparation.mjs' },
-      outfile: preparationPath, bundle: true, platform: 'node', format: 'esm',
-      conditions: ['happier-source'], metafile: true,
-      banner: { js: "import { createRequire as createSourceRequire } from 'node:module'; const require = createSourceRequire(import.meta.url);" },
-      plugins: [{ name: 'source-ui-workspace-inputs', setup(builder) {
-        builder.onLoad({ filter: /\.[cm]?[jt]sx?$/ }, async ({ path }) => {
-          const contents = await readFile(path, 'utf8');
-          if (!contents.includes('import.meta.url')) return undefined;
-          const loader = ['.ts', '.mts', '.cts'].includes(extname(path)) ? 'ts' : extname(path) === '.tsx' ? 'tsx' : extname(path) === '.jsx' ? 'jsx' : 'js';
-          const transformed = await transform(contents, {
-            loader, format: 'esm', jsx: 'automatic',
-            define: { 'import.meta.url': JSON.stringify(pathToFileURL(path).href) },
-          });
-          return { contents: transformed.code, resolveDir: dirname(path), loader: 'js' };
-        });
-        builder.onResolve({ filter: /^[^./#]/ }, async (args) => {
-          if (args.pluginData?.installedSupport) return undefined;
-          const name = args.path.split('/').slice(0, args.path.startsWith('@') ? 2 : 1).join('/');
-          if (packages.has(name) || args.path.startsWith('@happier-dev/')) {
-            return { path: resolveWorkspaceSource(packages, args.path) };
-          }
-          const resolved = await builder.resolve(args.path, {
-            resolveDir: args.resolveDir, kind: args.kind, pluginData: { installedSupport: true },
-          });
-          return resolved.errors.length ? { errors: resolved.errors, warnings: resolved.warnings }
-            : { path: resolved.path, external: true };
-        });
-      } }],
-    });
-    await writeFile(join(toolsDir, 'metafile.json'), JSON.stringify(preparation.metafile));
-  } finally {
-    // The caller sequences source builders before UI preparation. Release
-    // this completed tool compiler before the independent SDK/Metro phases.
-    stop();
-  }
-  console.log(`[source-ui] phase=tool-bundle elapsedMs=${Math.round(performance.now() - toolStartedAt)}`);
+  await writeFile(preparationPath, source);
   const preparationStartedAt = performance.now();
-  await run(process.execPath, [preparationPath], { cwd: uiProjectDir, env: process.env });
+  await run(process.execPath, ['--import', join(repoDir, 'packages/cli-common/registerSourceRuntime.mjs'), preparationPath],
+    { cwd: uiProjectDir, env: process.env });
   console.log(`[source-ui] phase=plugin-ui-preparation elapsedMs=${Math.round(performance.now() - preparationStartedAt)} plugins=${plugins.length}`);
 }
 

@@ -9,7 +9,7 @@ import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCata
 import { PresentUserRequiredResponseSchema, requirePresentUser } from '@/app/api/utils/requirePresentUser';
 import { enforceProfilePreservingSettingsWriterCompatibilityForHttpRequest } from '@/app/clientCompatibility/accountStoredContentCompatibility';
 import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorContext';
-import { inTx } from '@/storage/inTx';
+import { inReadSnapshot } from '@/storage/inTx';
 import { mutateConnectedAccountCatalogRow, readConnectedAccountCatalogRowInTx } from './configurationRows';
 
 const params = z.strictObject({ key: asServerProtocolZod(ConnectedAccountCatalogKeyV1Schema) });
@@ -21,7 +21,7 @@ export function registerConnectedAccountConfigurationRowsRoutes(app: Fastify): v
     app.get(`${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/:key`, { preHandler: app.authenticate, config,
         schema: { params, response: { 200: asServerProtocolZod(ConnectedAccountCatalogRowReadResponseV1Schema), 500: internal } },
     }, async (request, reply) => {
-        try { return reply.send(await inTx(tx => readConnectedAccountCatalogRowInTx(tx, { accountId: request.userId, key: request.params.key }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true })); }
+        try { return reply.send(await inReadSnapshot(tx => readConnectedAccountCatalogRowInTx(tx, { accountId: request.userId, key: request.params.key }))); }
         catch { return reply.code(500).send({ error: 'internal' }); }
     });
     app.post(`${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/:key`, { preHandler: app.authenticate, config,

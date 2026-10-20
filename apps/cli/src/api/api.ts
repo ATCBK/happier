@@ -10,7 +10,7 @@ import { ManagedEnrollmentCorrelationV1Schema, type ManagedEnrollmentCorrelation
 import { deriveManagedDevcontainerChildProjectionV1 } from '@happier-dev/protocol/machines/managed/devcontainerV1';
 import { readSessionCreationInitialTriggerError } from './session/sessionCreationInitialTriggerError';
 import { pickSessionCreateOriginFields } from '@/session/shared/sessionCreateOrigin';
-import { SESSION_CREATION_AUTHORIZATION_HEADER_V1 } from '@happier-dev/protocol/auth/accountApiTokens';
+import { postSessionCreationRequest } from '@/session/transport/http/sessionsHttp';
 import { PROVIDER_BROKER_MODEL_CATALOG_AUTHORIZE_HTTP_PATH_V1, PROVIDER_BROKER_READINESS_AUTHORIZE_HTTP_PATH_V1, PROVIDER_BROKER_REQUEST_ADMISSION_HTTP_PATH_V1, ProviderBrokerModelCatalogAuthorizationV1Schema, ProviderBrokerModelCatalogAuthorizationResponseV1Schema, ProviderBrokerRequestAdmissionV1Schema, ProviderBrokerRequestAdmissionResponseV1Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import type { ProviderBrokerOpenRequestV1, ProviderBrokerOpenResponseV1, ProviderBrokerModelCatalogAuthorizationV1, ProviderBrokerModelCatalogAuthorizationResponseV1, ProviderBrokerRequestAdmissionV1, ProviderBrokerRequestAdmissionResponseV1 } from '@happier-dev/protocol';
 import { RunnerBrokerReadinessResponseV1Schema } from '@happier-dev/protocol/teams/credentials/readinessV1';
@@ -22,7 +22,7 @@ import {
   buildCurrentAccountStoredContentCompatibilityHttpHeaders,
   readCliClientUpgradeRequired,
 } from '@/api/clientCompatibility/cliClientCompatibility';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { logger } from '@/ui/logger'
 import type {
   AgentState,
@@ -62,7 +62,7 @@ import type { BrowserAutomationRoutes } from '@/daemon/browser/automation/routes
 import type { ProvisionBrowserAutomationRuntime } from '@/daemon/browser/actions/runtimeActionExecutor';
 import type { BrowserDiagnosticsActionRoutes } from '@/daemon/browser/diagnostics/actionRoutes';
 import type { BrowserRecordingRoutes } from '@/daemon/browser/recording/routes';
-import { createDaemonRuntimeActionExecutor, type BrowserUiAutomationRouteOwner } from '@/daemon/runtimeActionExecutor';
+import { createDaemonRuntimeActionExecutor, type BrowserUiAutomationRouteOwner, type CreateDaemonRuntimeActionExecutorInput } from '@/daemon/runtimeActionExecutor';
 import type {
   BrowserRecordingComposerAttachInput,
   BrowserRecordingComposerAttachResult,
@@ -92,6 +92,7 @@ import {
 } from './client/encryptionKey';
 import { serializeAxiosErrorForLog } from './client/serializeAxiosErrorForLog';
 import { logServerEndpointFailure } from './client/serverEndpointFailureLog';
+import { classifyServerEndpointError } from './client/classifyServerEndpointError';
 import { resolveServerHttpBaseUrl } from './client/serverHttpBaseUrl';
 import { readAccountEncryptionModeOnce } from './client/accountEncryptionMode';
 import { resolveConnectedServicesServerApiTimeoutMs } from './client/connectedServicesServerApiTimeout';
@@ -117,6 +118,7 @@ import {
 } from './client/connectedServiceCredentialApi';
 export { ConnectedServiceCredentialUnsupportedFormatError } from './client/connectedServiceCredentialApi';
 import { createHttpStatusError, HttpStatusError, readHttpStatus } from './client/httpStatusError';
+import { readHomeDomainConfirmedRollbackV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
 import {
   createConnectedServiceQuotaApiError,
   createConnectedServiceQuotaHttpStatusError,
@@ -148,7 +150,7 @@ export {
 import { ConnectedServiceCredentialHealthV1Schema, ConnectedServiceCredentialCompatibleMutationResponseV1Schema, ConnectedServiceCredentialMutationResponseV1Schema, ConnectedServiceCredentialRevisionV1Schema, SealedConnectedServiceQuotaSnapshotV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
 import { parseBuiltInLegacyConnectedServiceQuotaSnapshotV1, projectBuiltInLegacyConnectedServiceCredentialRecordV1 } from '@happier-dev/protocol/connect/legacyConnectedServiceCompatibility';
 import { StoredJsonContentEnvelopeSchema } from '@happier-dev/protocol/storage/storedJsonContentEnvelope';
-import { MACHINE_PLAIN_DATA_KEY_MARKER, decodePlainMachineStoredContent, encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
+import { MACHINE_PLAIN_DATA_KEY_MARKER, isPlainMachineDataKeyMarker, decodePlainMachineStoredContent, encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
 import { SESSION_METADATA_LAYOUT_VERSION_V1, StoredSessionOwnerMetadataEnvelopeV1Schema, StoredSessionSharedMetadataV1Schema, projectSessionOwnerCompatibilityViewV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { SessionOrganizationPlacementV1Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
 import { sessionCreationCorrespondenceMatchesV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
@@ -178,7 +180,7 @@ import {
 } from '@/session/metadata/buildSessionMetadataEnvelopeCreateFields';
 export { SessionMetadataPrivacyUpgradeRequiredError } from '@/session/metadata/buildSessionMetadataEnvelopeCreateFields';
 import { fetchSessionById } from '@/session/transport/http/sessionsHttp';
-import { SessionReportsToV1Schema } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
+import { SessionManagerV1Schema } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { SessionAwarenessOriginV1Schema } from '@happier-dev/protocol/sessions/awareness/projectionV1';
 
 type PublishedMachineRow = import('@happier-dev/protocol/machines/machineContentKeyTransitionV1').MachinePublishedRowV1;
@@ -257,6 +259,13 @@ function normalizeLocalMachineId(value: string | null | undefined): string | nul
   return trimmed.length > 0 ? trimmed : null;
 }
 
+// Only a structured refusal code is exposed; response bodies and Axios
+// configuration can contain private material and must not enter broker errors.
+const PeerMediationRouteGrantRefusalSchema = z.object({
+  ok: z.literal(false),
+  reasonCode: z.string().check(z.regex(/^[a-z][a-z0-9_]*$/u)),
+});
+
 export class ApiClient {
 
   static async create(credential: StoredCredentials) {
@@ -290,7 +299,7 @@ export class ApiClient {
 
   private constructor(credential: StoredCredentials) {
     this.credential = credential
-    this.pushClient = new PushNotificationClient(credential.token, resolveServerHttpBaseUrl())
+    this.pushClient = new PushNotificationClient(credential.token)
     this.connectedServiceCredentialApi = createConnectedServiceCredentialApi(credential)
   }
 
@@ -370,8 +379,9 @@ export class ApiClient {
    * invocation. Plugin registries survive route replacement and plugin reloads, so capturing a
    * route object here would make the Plugin action surface stale.
    */
-  createBrowserRuntimeActionExecutor(): RuntimeActionExecute {
+  createBrowserRuntimeActionExecutor(options: Pick<CreateDaemonRuntimeActionExecutorInput, 'observeExecution'> = {}): RuntimeActionExecute {
     return createDaemonRuntimeActionExecutor({
+      ...options,
       env: process.env,
       resolveRouteOwners: () => ({
         computer: this.getComputerRoutes?.() ?? null,
@@ -489,7 +499,7 @@ export class ApiClient {
     organizationPlacement?: import('@happier-dev/protocol').SessionOrganizationPlacementV1,
     initialAccess?: import('@happier-dev/protocol').SessionInitialAccessDraftV1,
     initialTriggers?: readonly import('@happier-dev/protocol').SessionInitialTriggerAdmissionV1[],
-    reportsTo?: import('@happier-dev/protocol').SessionReportsToV1,
+    manager?: import('@happier-dev/protocol').SessionManagerV1,
     primaryTeamId?: string | null,
     teamCredentialBindings?: import('@happier-dev/protocol/teams').SessionTeamCredentialBindingIntentListV1,
     creationAuthorizationToken?: string,
@@ -534,6 +544,16 @@ export class ApiClient {
         return null;
       }
 
+      if (terminalAuthStatus !== null && terminalAuthStatus >= 500) {
+        const rollback = axios.isAxiosError(error)
+          ? readHomeDomainConfirmedRollbackV1(terminalAuthStatus, error.response?.data)
+          : null;
+        // A responding Home is a server failure. Preserve only its bounded
+        // rollback receipt and status, never Axios request credentials.
+        throw createHttpStatusError(terminalAuthStatus,
+          'Failed to get or create session: Happier server could not complete Session creation', rollback?.code);
+      }
+
       throw new Error(`Failed to get or create session: ${error instanceof Error ? error.message : 'Unknown error'}`);
     };
 
@@ -541,7 +561,7 @@ export class ApiClient {
     const encryptionModeResolution = await resolveSessionCreateEncryptionMode({
       token: this.credential.token,
       serverBaseUrl,
-      accountTimeoutMs: 10_000,
+      ...(opts.signal ? { signal: opts.signal } : {}),
     });
     if (encryptionModeResolution.status === 'currentness_unavailable') {
       // The read failed before any Session request; classify the transport
@@ -612,9 +632,13 @@ export class ApiClient {
       await sleep(e2eCreateSessionDelayMs);
     }
 
-    // Create session (retry transient 5xx, but do not enter offline mode for 5xx).
+    // The same creation tag reconciles a lost receipt as well as transient 5xx.
+    // A later failed attempt cannot prove that an earlier ambiguous birth rolled back.
+    let unresolvedCreationError: Error | null = null;
     for (let attempt = 1; attempt <= retryMaxAttempts; attempt += 1) {
+      if (opts.signal?.aborted && unresolvedCreationError) throw unresolvedCreationError;
       opts.signal?.throwIfAborted();
+      let preparingMachineAccess = false;
       try {
         const metadataEnvelopeFields = desiredSessionEncryptionMode === 'plain'
           ? buildSessionMetadataEnvelopeCreateFields({
@@ -639,12 +663,13 @@ export class ApiClient {
               });
             })();
 
-        const response = await axios.post<CreateSessionResponse>(
-          sessionsUrl,
-          {
+        const response = await postSessionCreationRequest<CreateSessionResponse>({
+          serverUrl: serverBaseUrl,
+          token: this.credential.token,
+          body: {
             tag: opts.tag,
             ...pickSessionCreateOriginFields(opts),
-            ...(opts.reportsTo !== undefined ? { reportsTo: opts.reportsTo } : {}),
+            ...(opts.manager !== undefined ? { manager: opts.manager } : {}),
             ...materializedInitialAccessCreateFields,
             ...(opts.initialTriggers !== undefined ? { initialTriggers: opts.initialTriggers } : {}),
             ...metadataEnvelopeFields,
@@ -658,21 +683,13 @@ export class ApiClient {
             ...(opts.organizationPlacement ? { organizationPlacement: opts.organizationPlacement } : {}),
             ...(opts.teamCredentialBindings !== undefined ? { teamCredentialBindings: opts.teamCredentialBindings } : {}),
           },
-          {
-            headers: {
-              ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
-              ...(opts.creationAuthorizationToken ? { [SESSION_CREATION_AUTHORIZATION_HEADER_V1]: opts.creationAuthorizationToken } : {}),
-              'Authorization': `Bearer ${this.credential.token}`,
-              'Content-Type': 'application/json'
-            },
-            timeout: 60000, // 1 minute timeout for very bad network connections
-            ...(opts.signal ? { signal: opts.signal } : {}),
-          }
-        )
+          ...(opts.creationAuthorizationToken ? { creationAuthorizationToken: opts.creationAuthorizationToken } : {}),
+          ...(opts.signal ? { signal: opts.signal } : {}),
+        });
 
         logger.debug(`Session created/loaded: ${response.data.session.id} (tag: ${opts.tag})`)
         let raw = response.data.session;
-        const reportsTo = SessionReportsToV1Schema.safeParse(raw.reportsTo);
+        const manager = SessionManagerV1Schema.safeParse(raw.manager);
         const origin = SessionAwarenessOriginV1Schema.safeParse(raw.origin);
         const parsedOrganizationPlacement = SessionOrganizationPlacementV1Schema.safeParse(
           response.data.organizationPlacement,
@@ -688,12 +705,14 @@ export class ApiClient {
           if (!this.localMachineId) return;
           // Machine admission may begin as soon as creation settles. The
           // Session socket also ensures this binding, but can connect later.
+          preparingMachineAccess = true;
           await ensureSessionMachineAccessKeyBinding({
             serverUrl: serverBaseUrl,
             token: this.credential.token,
             sessionId: raw.id,
             machineId: this.localMachineId,
           });
+          preparingMachineAccess = false;
         };
 
         const sessionEncryptionMode: 'e2ee' | 'plain' =
@@ -752,11 +771,13 @@ export class ApiClient {
             ownerMetadata,
           );
           await ensureLocalMachineAccess();
+          opts.signal?.throwIfAborted();
           return {
             id: raw.id,
             seq: raw.seq,
+            ...(raw.archivedAt === undefined ? {} : { archivedAt: raw.archivedAt }),
             workDepth: typeof raw.workDepth === 'number' ? raw.workDepth : 0,
-            ...(reportsTo.success ? { reportsTo: reportsTo.data } : {}),
+            ...(manager.success ? { manager: manager.data } : {}),
             ...(origin.success ? { origin: origin.data } : {}),
             encryptionMode: 'plain' as const,
             metadata: runtimeMetadata,
@@ -811,6 +832,7 @@ export class ApiClient {
           ...(opts.signal ? { signal: opts.signal } : {}),
         });
         await ensureLocalMachineAccess();
+        opts.signal?.throwIfAborted();
         const agentState = raw.agentState
           ? decrypt(
               sessionEncryptionKey,
@@ -822,8 +844,9 @@ export class ApiClient {
         return {
           id: raw.id,
           seq: raw.seq,
+          ...(raw.archivedAt === undefined ? {} : { archivedAt: raw.archivedAt }),
           workDepth: typeof raw.workDepth === 'number' ? raw.workDepth : 0,
-          ...(reportsTo.success ? { reportsTo: reportsTo.data } : {}),
+          ...(manager.success ? { manager: manager.data } : {}),
           ...(origin.success ? { origin: origin.data } : {}),
           encryptionMode: 'e2ee' as const,
           encryptionKey: sessionEncryptionKey,
@@ -843,8 +866,10 @@ export class ApiClient {
           ...(sessionCreationOutcome ? { sessionCreationOutcome } : {}),
         };
       } catch (error) {
+        const outcomeUnknown = error instanceof Error && 'code' in error && error.code === 'outcome_unknown';
+        if (outcomeUnknown) unresolvedCreationError ??= error;
         if (opts.signal?.aborted) {
-          throw opts.signal.reason ?? error;
+          throw unresolvedCreationError ?? opts.signal.reason ?? error;
         }
         if (error instanceof SessionCreationCorrespondenceConflictError) {
           throw error;
@@ -856,6 +881,7 @@ export class ApiClient {
           && upgradeRequired.requirement.kind
             === 'account-stored-content'
         ) {
+          if (unresolvedCreationError) throw unresolvedCreationError;
           throw Object.assign(
             new Error(
               'Session creation requires a stored-content-compatible server',
@@ -871,20 +897,26 @@ export class ApiClient {
         const initialTriggerError = axios.isAxiosError(error) && typeof status === 'number'
           ? readSessionCreationInitialTriggerError(error.response?.data, status)
           : null;
-        if (initialTriggerError) throw initialTriggerError;
+        if (initialTriggerError) throw unresolvedCreationError ?? initialTriggerError;
         const initialAccessServerError = axios.isAxiosError(error) && typeof status === 'number'
           ? readSessionInitialAccessServerError(error.response?.data, status)
           : null;
-        if (initialAccessServerError) throw initialAccessServerError;
+        if (initialAccessServerError) throw unresolvedCreationError ?? initialAccessServerError;
         const isRetryable5xx = typeof status === 'number' && status >= 500 && status < 600;
-        if (isRetryable5xx && attempt < retryMaxAttempts) {
+        // A Session already exists here. An access-key receipt can be lost
+        // after commit; the same Session/Machine tuple is reconciled by the
+        // incumbent creation retry owner, never the generic offline/null path.
+        const retryableMachineAccessFailure = preparingMachineAccess && classifyServerEndpointError(error).retryable;
+        if ((outcomeUnknown || isRetryable5xx || retryableMachineAccessFailure) && attempt < retryMaxAttempts) {
           // Do not log raw Axios errors: they can contain bearer tokens or vendor keys.
-          logger.debug('[API] [WARN] getOrCreateSession transient server error, retrying:', serializeAxiosErrorForLog(error));
+          logger.debug('[API] [WARN] getOrCreateSession creation receipt unavailable, retrying the same tag:', serializeAxiosErrorForLog(error));
           const delayMs = Math.min(retryMaxDelayMs, retryBaseDelayMs * Math.pow(2, attempt - 1));
-          await sleep(delayMs);
+          await sleep(delayMs).catch((cause: unknown) => { throw unresolvedCreationError ?? cause; });
           continue;
         }
 
+        if (unresolvedCreationError) throw unresolvedCreationError;
+        if (retryableMachineAccessFailure) throw error;
         return settleGetOrCreateSessionFailure(error);
       }
     }
@@ -1020,6 +1052,7 @@ export class ApiClient {
     signal?: AbortSignal;
     /** A captured Home/Account transport, including private Action continuation authority. */
     request?: (request: Readonly<{ method: 'GET' | 'POST'; path: string; body?: unknown; signal?: AbortSignal }>) => Promise<Readonly<{ status: number; data: unknown }>>;
+    serverHttpBaseUrl?: string;
     isCurrent?: () => boolean | Promise<boolean>;
   }>): Promise<Machine> {
     const assertCurrent = async () => {
@@ -1043,13 +1076,19 @@ export class ApiClient {
     };
     options?.signal?.throwIfAborted();
     const boundAccountMode = options?.request ? await readAccountEncryptionModeOnce({
+      ...(options.serverHttpBaseUrl ? { scope: { token: this.credential.token, serverBaseUrl: options.serverHttpBaseUrl, signal: options.signal } } : {}),
       request: () => request('GET', '/v1/account/encryption', undefined, options.signal),
     }) : null;
     const accountMode = boundAccountMode
       ? boundAccountMode.kind === 'resolved' ? boundAccountMode.mode : 'unknown'
       : await this.getAccountEncryptionMode({ signal: options?.signal });
+    if (accountMode === 'unknown') throw new MachineContentKeyUnavailableError(machineId);
     const observe = async (signal?: AbortSignal): Promise<PublishedMachineRow> => {
-      const response = await request('GET', `/v1/machines/${encodeURIComponent(machineId)}`, undefined, signal);
+      // Ordinary plain readers lock historical ciphertext. Only its custodian
+      // recovery snapshot may open it with genuinely retained predecessor material.
+      const path = `/v1/machines/${encodeURIComponent(machineId)}`
+        + (accountMode === 'plain' ? '/content-key/transition' : '');
+      const response = await request('GET', path, undefined, signal);
       if (response.status !== 200) throw new MachineContentKeyUnavailableError(machineId);
       if (!response.data || typeof response.data !== 'object' || !('machine' in response.data)) throw new MachineContentKeyUnavailableError(machineId);
       return MachinePublishedRowV1Schema.parse(response.data.machine);
@@ -1058,7 +1097,7 @@ export class ApiClient {
     if (!custodianAccountId) throw new MachineContentKeyUnavailableError(machineId);
     try {
       return await prepareMachineContentKeyV1({ machineId,
-        custodianAccountId, material: this.credential.encryption,
+        custodianAccountId, targetMode: accountMode, material: this.credential.encryption,
         ...(this.credential.encryption?.type === 'dataKey' ? { dataKeyPublicKey: this.credential.encryption.publicKey } : {}),
         randomBytes: getRandomBytes, observe, signal: options?.signal, isCurrent: options?.isCurrent,
         open: raw => this.decodePublishedMachine(machineId, raw, accountMode),
@@ -1097,9 +1136,20 @@ export class ApiClient {
         headers: { Authorization: `Bearer ${this.credential.token}`, 'Content-Type': 'application/json' },
         ...(options?.signal ? { signal: options.signal } : {}),
       },
-    );
+    ).catch((error: unknown) => {
+      if (axios.isAxiosError(error) && error.response
+        && PeerMediationRouteGrantRefusalSchema.safeParse(error.response.data).success) {
+        return error.response;
+      }
+      throw error;
+    });
     if (response.data?.ok !== true || response.data.grant === undefined) {
-      throw new Error('Peer mediation route grant is unavailable');
+      const refusal = PeerMediationRouteGrantRefusalSchema.safeParse(response.data);
+      const reasonCode = refusal.success ? refusal.data.reasonCode : undefined;
+      throw Object.assign(new Error(`Peer mediation route grant is unavailable${reasonCode ? `: ${reasonCode}` : ''}`), {
+        code: 'peer_unavailable' as const,
+        ...(reasonCode ? { reasonCode } : {}),
+      });
     }
     return response.data.grant;
   }
@@ -1263,7 +1313,14 @@ export class ApiClient {
     const accountMode = await this.getAccountEncryptionMode({ throwOnTransportError: true });
     if (accountMode === 'unknown') throw new MachineContentKeyUnavailableError(opts.machineId);
     const machineStorageMode = accountMode === 'plain' ? 'plain' : 'e2ee';
-    const incumbentRow = await this.readPublishedMachineRow(opts.machineId);
+    let incumbentRow = await this.readPublishedMachineRow(opts.machineId);
+    if (incumbentRow && accountMode === 'plain'
+      && !isPlainMachineDataKeyMarker(incumbentRow.dataEncryptionKey)) {
+      if (!this.credential.encryption) throw new MachineContentKeyUnavailableError(opts.machineId);
+      const recovered = await this.prepareMachineContentKey(opts.machineId);
+      if (recovered.encryptionMode !== 'plain') throw new MachineContentKeyUnavailableError(opts.machineId);
+      incumbentRow = await this.readPublishedMachineRow(opts.machineId);
+    }
     const incumbent = incumbentRow ? this.decodePublishedMachine(opts.machineId, incumbentRow, accountMode) : null;
     if (incumbent?.access && incumbent.access.custodian.accountId !== readAccountIdFromToken(this.credential.token)) {
       throw new MachineContentKeyUnavailableError(opts.machineId);
@@ -1286,7 +1343,7 @@ export class ApiClient {
     };
     const registrationIdentity = opts.registrationIdentity
       ? MachineRegistrationIdentitySchema.parse(opts.registrationIdentity)
-      : await this.resolveMachineRegistrationIdentity(opts.machineId);
+      : await this.resolveMachineRegistrationIdentity(opts.machineId, machineStorageMode);
     const metadata = devcontainerChild
       ? parseMachinePublishedMetadataV1({ ...(incumbent?.metadata ?? opts.metadata), devcontainerChild })
       : parseMachinePublishedMetadataV1(opts.metadata);
@@ -1434,12 +1491,12 @@ export class ApiClient {
     }
   }
 
-  private async resolveMachineRegistrationIdentity(machineId: string): Promise<MachineRegistrationIdentity | undefined> {
+  private async resolveMachineRegistrationIdentity(machineId: string, storageMode: 'plain' | 'e2ee'): Promise<MachineRegistrationIdentity | undefined> {
     if (!configuration.installationIdentityFile) return undefined;
     const identity = await resolveMachineRegistrationIdentity({
       machineId,
       token: this.credential.token,
-      contentPublicKey: this.credential.encryption?.type === 'dataKey'
+      contentPublicKey: storageMode === 'e2ee' && this.credential.encryption?.type === 'dataKey'
         ? this.credential.encryption.publicKey
         : undefined,
     });
@@ -1799,8 +1856,8 @@ export class ApiClient {
         fetchedAt: z.number(),
         staleAfterMs: z.number(),
         status: z.enum(['ok', 'unavailable', 'estimated', 'error']),
-        refreshRequestedAt: z.number().optional(),
-        materialFingerprint: z.string().optional(),
+        refreshRequestedAt: z.optional(z.number()),
+        materialFingerprint: z.optional(z.string()),
       }).safeParse((raw as any).metadata);
 
       if (!metadataParsed.success) {
@@ -1880,8 +1937,8 @@ export class ApiClient {
         fetchedAt: z.number(),
         staleAfterMs: z.number(),
         status: z.enum(['ok', 'unavailable', 'estimated', 'error']),
-        refreshRequestedAt: z.number().optional(),
-        materialFingerprint: z.string().optional(),
+        refreshRequestedAt: z.optional(z.number()),
+        materialFingerprint: z.optional(z.string()),
       }).safeParse((raw as any).metadata);
 
       if (!metadataParsed.success) {
@@ -1947,7 +2004,7 @@ export class ApiClient {
       acquired: z.boolean(),
       leaseUntil: z.number(),
       credentialRevision: ConnectedServiceCredentialRevisionV1Schema,
-      ownerId: z.string().trim().min(1),
+      ownerId: z.string().check(z.trim(), z.minLength(1)),
     });
     const parsed = schema.safeParse(response.data);
     if (!parsed.success) {

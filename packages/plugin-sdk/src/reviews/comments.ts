@@ -35,7 +35,7 @@ import {
     defineProtocolString,
     defineProtocolUnion,
     type ProtocolComposableSchema,
-} from '../protocol/index.js';
+} from '../protocol/protocolFacade.js';
 
 export type ReviewCommentPublicationTargetExpectationV1 = (
     | Readonly<{ configuredAccountId: string }>
@@ -117,6 +117,10 @@ const publicationAnchor = defineProtocolUnion([
 ]);
 const publicationTextLines = defineProtocolArray(defineProtocolString());
 const publicationSnapshot = defineProtocolUnion([
+    defineProtocolObject({
+        kind: defineProtocolLiteral('none'),
+        capturedAt: defineProtocolNumber({ integer: true, minimum: 0 }),
+    }, { policy: 'closed' }),
     defineProtocolObject({
         kind: defineProtocolLiteral('text'),
         selectedLines: publicationTextLines,

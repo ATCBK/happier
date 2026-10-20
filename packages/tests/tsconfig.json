@@ -31,6 +31,7 @@
     "src/**/*.d.mts",
     "src/**/*.d.cts",
     "suites/**/*.ts",
+    "fixtures/request-settlement-runtime.ts",
     "scripts/**/*.d.ts",
     "scripts/**/*.d.mts",
     "scripts/**/*.d.cts",

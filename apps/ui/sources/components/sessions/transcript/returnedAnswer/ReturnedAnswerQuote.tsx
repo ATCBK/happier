@@ -1,0 +1,153 @@
+import * as React from 'react';
+import { useUnistyles } from 'react-native-unistyles';
+import {
+  HappierReturnedAnswerQuote,
+  type HappierReturnedAnswerQuestion,
+  type HappierReturnedAnswerQuoteActionProps,
+  type HappierReturnedAnswerQuoteLabels,
+  type HappierReturnedAnswerQuoteTextProps,
+} from '@happier-dev/plugin-ui/components';
+import type { Message } from '@happier-dev/session-core/messages';
+import {
+  readSessionInputAuthority,
+  type SessionInputReturnedAnswerV1,
+} from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+
+import { useSelectedSessionMessageReply } from '@/components/sessions/transcript/references/useSelectedSessionMessageReply';
+import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
+import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
+import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
+import { ICON_SIZE, Icon } from '@/components/ui/icons/Icon';
+import { Text } from '@/components/ui/text/Text';
+import { useActiveServerAccountScope } from '@/sync/store/hooks';
+import { useSessionDisplayNameSource } from '@/sync/domains/state/storage';
+import { getSessionName } from '@/utils/sessions/sessionUtils';
+import { t } from '@/text';
+
+/** The protected return facts on an answer that came back to this session, if it is one. */
+export function readReturnedAnswer(
+  message: Message,
+): SessionInputReturnedAnswerV1 | null {
+  if (message.kind !== 'user-text') return null;
+  const authority = readSessionInputAuthority(message.meta, 'stored');
+  return authority?.v === 1 ? (authority.returnedAnswer ?? null) : null;
+}
+
+function readLabels(): HappierReturnedAnswerQuoteLabels {
+  return {
+    outcome: {
+      answer: t('session.returnedAnswer.answered'),
+      pass: t('session.returnedAnswer.passed'),
+      failed: t('session.returnedAnswer.failed'),
+      cancelled: t('session.returnedAnswer.cancelled'),
+      terminal_no_result: t('session.returnedAnswer.noResult'),
+    },
+    open: t('session.returnedAnswer.open'),
+    information: t('session.returnedAnswer.asInformation'),
+    yourQuestion: t('session.returnedAnswer.yourQuestion'),
+    loading: t('common.loading'),
+    askedFromHere: t('session.returnedAnswer.askedFromHere'),
+    openQuestion: t('session.returnedAnswer.openQuestion'),
+    questionUnavailable: t('session.returnedAnswer.questionUnavailable'),
+    retry: t('common.retry'),
+  };
+}
+
+/**
+ * An answer another session returned to an Ask from here (coordination lab T1q), drawn by the shared
+ * plugin-ui quote external authors use. The host admits the answer, names the answering session from
+ * the transcript's Home, routes, and reads the exact question only while "Your question" is open.
+ */
+export function ReturnedAnswerQuote(
+  props: Readonly<{
+    message: Message;
+    answer: SessionInputReturnedAnswerV1;
+    sessionId: string;
+    serverId?: string | null;
+    children: React.ReactNode;
+  }>,
+) {
+  const { theme } = useUnistyles();
+  const transcriptSource = useSessionTranscriptSource();
+  const senderId =
+    props.answer.senderSessionId ??
+    props.answer.sourceMessageRef?.session.sessionId ??
+    null;
+  // The transcript's own Home qualifies the sender, as the provenance label does.
+  const serverId = props.serverId ?? transcriptSource.serverId ?? null;
+  const sender = useSessionDisplayNameSource(senderId ?? '', serverId);
+  const senderName = sender
+    ? getSessionName(sender, serverId)
+    : t('message.provenanceSession');
+  const navigate = transcriptSource.navigate;
+  const [questionOpen, setQuestionOpen] = React.useState(false);
+  // One exact read, only while the question is open; never one per transcript row.
+  const scope = useActiveServerAccountScope(serverId);
+  const [refreshKey, retry] = React.useReducer((value: number) => value + 1, 0);
+  const reply = useSelectedSessionMessageReply({
+    scope,
+    sessionId: props.sessionId,
+    message: props.message,
+    active: questionOpen,
+    refreshKey,
+  });
+  const question = React.useMemo((): HappierReturnedAnswerQuestion => {
+    if (reply.status === 'loading') return { status: 'loading' };
+    if (reply.status !== 'ready') return { status: 'unavailable' };
+    if (reply.model.reply.status !== 'available') return { status: 'unavailable', onRetry: retry };
+    const requestRef = reply.model.requestRef;
+    return {
+      status: 'asked',
+      onOpen: requestRef && navigate
+        ? () => navigate(buildScopedSessionRouteHref({
+            sessionId: requestRef.session.sessionId,
+            serverId: requestRef.session.serverId,
+          }))
+        : undefined,
+    };
+  }, [reply, navigate]);
+  const labels = readLabels();
+
+  return (
+    <HappierReturnedAnswerQuote
+      testID={`transcript-returned-answer:${props.message.id}`}
+      answerer={senderName}
+      outcome={props.answer.outcome}
+      onOpenAnswerer={senderId && navigate
+        ? () => navigate(buildScopedSessionRouteHref({ sessionId: senderId, serverId }))
+        : undefined}
+      question={{ open: questionOpen, onToggle: () => setQuestionOpen((open) => !open), state: question }}
+      labels={labels}
+      informationMark={<Icon name="info" size={ICON_SIZE.xs} color={theme.colors.text.secondary} />}
+      Text={QuoteText}
+      Action={QuoteAction}
+      colors={{
+        text: theme.colors.text.primary,
+        secondaryText: theme.colors.text.secondary,
+        danger: theme.colors.status.error,
+        border: theme.colors.border.default,
+      }}
+      space={theme.space}
+    >
+      {props.children}
+    </HappierReturnedAnswerQuote>
+  );
+}
+
+function QuoteText(props: HappierReturnedAnswerQuoteTextProps) {
+  return (
+    <Text
+      testID={props.testID}
+      variant="meta"
+      emphasis={props.role === 'answerer' ? 'semiBold' : undefined}
+      numberOfLines={props.numberOfLines}
+      style={{ color: props.color }}
+    >
+      {props.children}
+    </Text>
+  );
+}
+
+function QuoteAction(props: HappierReturnedAnswerQuoteActionProps) {
+  return <TextLinkButton {...props} size="meta" />;
+}

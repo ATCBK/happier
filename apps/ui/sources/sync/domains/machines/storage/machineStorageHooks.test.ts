@@ -5,7 +5,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createAccountTokenForTests, createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
@@ -20,7 +20,6 @@ const { useMachineStorageSummary } = await import('./useMachineStorageSummary');
 const { useMachineStorageCategory } = await import('./useMachineStorageCategory');
 const { useMachineStoragePile } = await import('./useMachineStoragePile');
 const { useMachineStorageScan } = await import('./useMachineStorageScan');
-const { TokenStorage } = await import('@/auth/storage/tokenStorage');
 const { upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { readMachineStatusNextRefreshAtMs } = await import('@/utils/sessions/machineUtils');
@@ -150,15 +149,21 @@ describe('machine storage hooks', () => {
         expect(hook.getCurrent().summary?.revision).toBe(1);
         const known = hook.getCurrent().summary;
         const held = createDeferred<void>();
-        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockImplementationOnce(async () => {
-            await held.promise;
-            return { token: createAccountTokenForTests('owner'), secret: 'credential-boundary' };
-        });
+        const requestLock = navigator.locks.request.bind(navigator.locks);
+        // Let the profile transaction finish, then hold the credential recheck at the device lock boundary.
+        const credentialRead = vi.spyOn(navigator.locks, 'request')
+            .mockImplementationOnce(requestLock)
+            .mockImplementationOnce(async (...args: Parameters<typeof requestLock>) => {
+                await held.promise;
+                return await requestLock(...args);
+            });
         try {
             await act(async () => { await upsertServerProfile({ serverUrl, name: 'Renamed Home' }); });
+            expect(credentialRead.mock.calls.length).toBeGreaterThan(1);
             expect(hook.getCurrent().summary).toBe(known);
         } finally {
             await act(async () => { held.resolve(); });
+            credentialRead.mockRestore();
             await hook.unmount();
         }
     });

@@ -149,6 +149,22 @@ function sameBinding(left: WorkflowStoredContentBindingV1, right: WorkflowStored
 export function validateWorkflowStoredEnvelopeOuterForModeV1(params: Readonly<{
   mode: 'plain' | 'e2ee'; binding: WorkflowStoredContentBindingV1; envelope: unknown;
 }>): WorkflowStoredContentOuterValidationV1 {
+  const validated = readWorkflowStoredEnvelopeOuterForModeV1(params);
+  return validated.kind === 'available'
+    ? { kind: 'available', envelope: validated.envelope }
+    : validated;
+}
+
+type ReadWorkflowStoredEnvelopeOuterV1 =
+  | Readonly<{ kind: 'available'; envelope: Extract<WorkflowStoredContentEnvelopeV1, { t: 'plain' }>; bytes: null }>
+  | Readonly<{ kind: 'available'; envelope: Extract<WorkflowStoredContentEnvelopeV1, { t: 'encrypted' }>; bytes: Uint8Array }>
+  | Exclude<WorkflowStoredContentOuterValidationV1, { kind: 'available' }>;
+
+// Keep the validated ciphertext with this read so opening does not decode and
+// re-encode it again. The public outer-only validator still returns no bytes.
+function readWorkflowStoredEnvelopeOuterForModeV1(params: Readonly<{
+  mode: 'plain' | 'e2ee'; binding: WorkflowStoredContentBindingV1; envelope: unknown;
+}>): ReadWorkflowStoredEnvelopeOuterV1 {
   const binding = WorkflowStoredContentBindingV1Schema.safeParse(params.binding);
   const envelope = createStoredReadSchema(WorkflowStoredContentEnvelopeV1Schema).safeParse(params.envelope);
   if (!binding.success || !envelope.success) return { kind: 'contentInvalid' };
@@ -157,13 +173,14 @@ export function validateWorkflowStoredEnvelopeOuterForModeV1(params: Readonly<{
     return { kind: 'modeMismatch' };
   }
   if (envelope.data.t === 'encrypted') {
-    return readWorkflowRunCiphertext(envelope.data.c)
-      ? { kind: 'available', envelope: envelope.data } : { kind: 'contentInvalid' };
+    const bytes = readWorkflowRunCiphertext(envelope.data.c);
+    return bytes
+      ? { kind: 'available', envelope: envelope.data, bytes } : { kind: 'contentInvalid' };
   }
   const payload = parsePayloadForBinding(binding.data, envelope.data.v, true);
   if (!payload) return { kind: 'contentInvalid' };
   return sameBinding(payload.binding, binding.data)
-    ? { kind: 'available', envelope: envelope.data }
+    ? { kind: 'available', envelope: envelope.data, bytes: null }
     : { kind: 'bindingMismatch' };
 }
 
@@ -195,16 +212,15 @@ function openWorkflowStoredEnvelopeV1(params: Readonly<{
 }>): Readonly<{ kind: 'available'; content: unknown }> | WorkflowStoredContentOpenFailureV1 {
   const binding = WorkflowStoredContentBindingV1Schema.safeParse(params.binding);
   if (!binding.success) return { kind: 'contentInvalid' };
-  const outer = validateWorkflowStoredEnvelopeOuterForModeV1({ ...params, binding: binding.data });
+  const outer = readWorkflowStoredEnvelopeOuterForModeV1({ ...params, binding: binding.data });
   if (outer.kind !== 'available') return outer;
   let rawPayload: unknown;
-  if (outer.envelope.t === 'plain') {
+  if (outer.bytes === null) {
     rawPayload = outer.envelope.v;
   } else {
     if (params.runDataKey === undefined) return { kind: 'materialUnavailable' };
     if (!isWorkflowRunDataKey(params.runDataKey)) return { kind: 'contentInvalid' };
-    const bytes = readWorkflowRunCiphertext(outer.envelope.c);
-    if (!bytes) return { kind: 'contentInvalid' };
+    const bytes = outer.bytes;
     const opened = tweetnacl.secretbox.open(bytes.subarray(tweetnacl.secretbox.nonceLength),
       bytes.subarray(0, tweetnacl.secretbox.nonceLength), params.runDataKey);
     if (!opened) return { kind: 'contentInvalid' };

@@ -24,7 +24,7 @@ import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessL
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useHomeEmailSettings } from '@/hooks/home/useHomeEmailSettings';
 import { Modal } from '@/modal';
-import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
+import type { HomeActionFailure as HomeDomainFailure } from '@/sync/ops/home/homeActionOutcome';
 import {
     readHomeSettingsInvalidFailure,
     sendHomeTestEmail,

@@ -14,6 +14,7 @@ export type StreamedTranscriptSegmentRuntime = {
   kind: StreamedTranscriptSegmentKind;
   sidechainId: string | null;
   segmentLocalId: string;
+  sourceMessageId?: string;
   startedAtMs: number;
   accumulatedText: string;
   textVersion: number;
@@ -24,6 +25,7 @@ export type StreamedTranscriptSegmentRuntime = {
   lastCheckpointTextLen: number;
   lastCommittedTextVersion: number;
   lastCommittedState: StreamedTranscriptSegmentState | null;
+  lastCommittedDelivered: boolean;
   lastCommitFailedAtMs: number;
   durableCommitFailure: DurableCommitFailureIncident | null;
   durableRetryNotBeforeMs: number;

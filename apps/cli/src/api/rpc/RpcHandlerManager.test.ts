@@ -23,6 +23,7 @@ import { computeWorkspaceSyncPolicyDigest } from '@happier-dev/protocol';
 import axios from 'axios';
 import tweetnacl from 'tweetnacl';
 import { prepareRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
+import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import type { PrepareExternalActionRequesterAccountContext } from '@/daemon/externalActions/executeExternalAction';
 import { openExternalActionRequesterAccountContextV1, sealExternalActionRequesterAccountContextV1,
   type ExternalActionRequesterInvocationV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
@@ -39,9 +40,145 @@ import { isDeepStrictEqual } from 'node:util';
 import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
 import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
 import { buildActionExecutorContextForRpc } from '@/rpc/handlers/_actionDispatchAdapter';
+import { readExecutionRunStartRunCreation, withExecutionRunStartFailureDetails } from '@happier-dev/protocol/execution/runs/responseSchemas';
+
+it('closes selected receiving admission while existing creation drains, then reopens on release', async () => {
+  const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger: () => {} });
+  let releaseCreation!: () => void;
+  const held = new Promise<void>(resolve => { releaseCreation = resolve; });
+  let starts = 0;
+  rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_START, async () => { starts++; await held; return { runId: 'run' }; });
+  rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_LIST, async () => ({ runs: [] }));
+  const creating = rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {});
+  const reopen = rpc.pauseRequestAdmission([SESSION_RPC_METHODS.EXECUTION_RUN_START], {
+    details: withExecutionRunStartFailureDetails(undefined, 'noRunCreated'),
+  });
+  const idle = rpc.waitForIdle(undefined, [SESSION_RPC_METHODS.EXECUTION_RUN_START]);
+  try {
+    const late = rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {});
+    expect(starts).toBe(1);
+    const transported = await rpc.handleRequest({ method: `session:${SESSION_RPC_METHODS.EXECUTION_RUN_START}`, params: {} });
+    expect(transported).toMatchObject({ errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE });
+    expect(readExecutionRunStartRunCreation(transported.details)).toBe('noRunCreated');
+    releaseCreation();
+    await creating;
+    await idle;
+    const refused = await late as { errorCode: string; details?: unknown };
+    expect(refused).toMatchObject({ errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE });
+    expect(readExecutionRunStartRunCreation(refused.details)).toBe('noRunCreated');
+    await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_LIST, {})).resolves.toEqual({ runs: [] });
+    reopen();
+    await expect(rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {})).resolves.toEqual({ runId: 'run' });
+  } finally { releaseCreation(); reopen(); await creating; }
+});
+
+it('preserves closed-gate no-Run evidence through the bound encrypted transport codec', async () => {
+  const key = new Uint8Array(32).fill(9);
+  const content: SocketRpcContent = { mode: 'e2ee', cipher: {
+    encryptRaw: async value => encodeBase64(encrypt(key, 'legacy', value)),
+    decryptRaw: async value => decrypt(key, 'legacy', decodeBase64(value)),
+  } };
+  const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'e2ee', encryptionKey: key, encryptionVariant: 'legacy', logger: () => {} });
+  const method = `session:${SESSION_RPC_METHODS.EXECUTION_RUN_START}`;
+  const callId = '0123456789abcdef0123456789abcdef';
+  const handler = vi.fn(async () => ({ runId: 'unexpected' }));
+  rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_START, handler);
+  const reopen = rpc.pauseRequestAdmission([SESSION_RPC_METHODS.EXECUTION_RUN_START], {
+    details: withExecutionRunStartFailureDetails(undefined, 'noRunCreated'),
+  });
+  try {
+    const params = await socketRpcCodec.encodeParams(content, {}, { method, callId });
+    const result = await rpc.handleRequest({ method, params });
+    const decoded = await socketRpcCodec.decodeResult(content, { ok: true, result }, callId) as { details?: unknown };
+    expect(readExecutionRunStartRunCreation(decoded.details)).toBe('noRunCreated');
+    expect(handler).not.toHaveBeenCalled();
+  } finally { reopen(); }
+});
 
 const bindingCallId = '0123456789abcdef0123456789abcdef';
 const boundWorkspaceModel = ProviderBoundModelRefSchema.parse({ agentTargetKey: 'codex', providerConnectionId: null, modelId: 'bound-model' });
+
+it.each(['source-owner', 'controller-owner'])('admits finite prepare-between on installed SOURCE routing with a retained worker packet (%s)', async controllerCustodian => {
+  const [{ PROJECT_ACTION_INPUT_SCHEMAS_V1 }, { ExternalActionRequestEnvelopeV1Schema }, signing, installedContent,
+    { computeExternalActionRequestEnvelopeDigestV1 }] = await Promise.all([
+    import('@happier-dev/protocol/actions/projectActionFamily'), import('@happier-dev/protocol/actions/externalActionApi'),
+    import('@/api/externalActionExecutionAuthorization'), import('./workspaceSyncTargetContent'),
+    import('@happier-dev/protocol/actions/externalActionExecutionAuthorization'),
+  ]);
+  const controller = tweetnacl.sign.keyPair();
+  const worker = tweetnacl.sign.keyPair();
+  const admission = { actorAccountId: 'borrower', custodianAccountId: 'source-owner', machineId: 'source',
+    installationId: 'source-installation', role: 'use' as const, encryptionMode: 'plain' as const };
+  const input = PROJECT_ACTION_INPUT_SCHEMAS_V1['projects.script.run'].parse({ workspace: { serverId: 'home',
+    workspaceId: 'source-ref', machineId: 'source', rootPath: '/source' }, selection: { kind: 'named', name: 'test' } });
+  const envelope = ExternalActionRequestEnvelopeV1Schema.parse({ v: 1, requestId: 'run', input,
+    target: { kind: 'machine', machineId: 'worker' } });
+  const root = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'finite-root', binding: {
+    accountId: 'borrower', custodianAccountId: 'worker-owner', authentication: { kind: 'terminal', tokenEpoch: 1 },
+    accountEncryptionMode: 'plain', serverIdentityId: 'home', machineId: 'worker', installationId: 'worker-installation',
+    actionId: 'projects.script.run', requestId: 'run', requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
+    target: envelope.target,
+  } });
+  const source = WorkspaceSyncSourceRoutingV1Schema.parse({ v: 1, phase: 'prepare', operationId: 'sync-run',
+    accountServerId: 'home', sourceMachineId: 'source', sourceRootPath: '/source', originalActionEnvelope: envelope,
+    sourceContext: { machineAdmission: admission, callerAuthority: 'account_automation', workspaceWrites: 'allow' } });
+  const destination = { machineId: 'controller', installationId: 'controller-installation',
+    installationPublicKey: encodeBase64(controller.publicKey, 'base64url') };
+  const method = `controller:${RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN}`;
+  const content = installedContent.createWorkspaceSyncTargetContent({ destination, method, routing: source });
+  const params = { sourceWorkspaceRefId: 'source-ref', targetWorkspaceRefId: 'worker-ref' };
+  const encoded = await socketRpcCodec.encodeParams(content, params, { method, callId: bindingCallId });
+  const packet = WorkspaceSyncSourceExecutionV1Schema.parse({ method, requestId: 'packet', params: encoded,
+    externalActionExecution: signing.createExternalActionMachineRpcExecution({ context: {
+      externalActionExecutionAuthorization: root, externalActionTarget: root.binding.target }, effectActionId: root.binding.actionId,
+      installationId: root.binding.installationId, method, requestId: 'packet', params: encoded,
+      privateKey: worker.secretKey, workspaceSyncSourceRouting: source }) });
+  const identity = vi.spyOn(installationStore, 'readInstallationIdentityIfExistsSync').mockReturnValue({ version: 1,
+    installationId: destination.installationId, createdAt: 1,
+    publicKey: destination.installationPublicKey, privateKey: encodeBase64(controller.secretKey, 'base64url') });
+  const post = vi.spyOn(axios, 'post').mockImplementation(async (_url, raw) => {
+    const body = raw as { proof: Parameters<typeof verifyMachineInstallationProof>[0]['proof'] };
+    expect(verifyMachineInstallationProof({ publicKey: controller.publicKey, proof: body.proof,
+      payload: { version: 1, machineId: 'controller', installationId: destination.installationId,
+        accountId: controllerCustodian, rpcAdmission: { context: admission, method, callerInputAuthorization: root,
+          workspaceSyncSourceRouting: source, workspaceSyncSourceExecution: packet } } })).toBe(true);
+    return { status: 200, data: { v: 1, ok: true } };
+  });
+  const rpc = new RpcHandlerManager({ scopePrefix: 'controller', localMachineId: 'controller', encryptionMode: 'plain',
+    logger: () => {}, authorizeRequest: request => authorizeMachineRpcRequest(request, { machineId: 'controller',
+      resolveCustodianAccountId: async () => controllerCustodian, resolveInstallationId: () => destination.installationId,
+      verifyMachineAdmission: received => verifyMachineRpcAdmissionCurrent({ ...received, privateKey: controller.secretKey,
+        daemonToken: 'controller-token', serverHttpBaseUrl: 'https://home.invalid',
+        workspaceSyncSourceReceiver: { machineId: 'controller', installationId: destination.installationId, accountId: controllerCustodian } }) }) });
+  let effects = 0;
+  rpc.registerHandler(RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN, (body, context) => {
+    expect(body).toEqual(params);
+    expect(context?.callerInputAuthorization?.binding).toEqual(root.binding);
+    expect(context?.workspaceSyncSourceExecution).toEqual(packet);
+    effects += 1;
+    return { prepared: true };
+  });
+  const request = { method, params: encoded, machineAdmission: admission, callerAuthority: 'account_automation' as const,
+    callerInputAuthorization: root, workspaceSyncSourceRouting: source, workspaceSyncSourceExecution: packet };
+  const invoke = async (value: typeof request) => {
+    const result = await rpc.handleRequest(value);
+    if (result && typeof result === 'object' && 'errorCode' in result) return result;
+    return socketRpcCodec.decodeResult(content, { ok: true, result }, bindingCallId);
+  };
+  try {
+    expect(await invoke(request)).toEqual({ prepared: true });
+    const changed = await socketRpcCodec.encodeParams(content, { ...params, sourceWorkspaceRefId: 'other-source' },
+      { method, callId: bindingCallId });
+    const changedPacket = WorkspaceSyncSourceExecutionV1Schema.parse({ ...packet, params: changed,
+      externalActionExecution: signing.createExternalActionMachineRpcExecution({ context: {
+        externalActionExecutionAuthorization: root, externalActionTarget: root.binding.target }, effectActionId: root.binding.actionId,
+        installationId: root.binding.installationId, method, requestId: 'packet', params: changed,
+        privateKey: worker.secretKey, workspaceSyncSourceRouting: source }) });
+    expect(await invoke({ ...request, params: changed, workspaceSyncSourceExecution: changedPacket }))
+      .toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
+    expect(effects).toBe(1);
+  } finally { post.mockRestore(); identity.mockRestore(); }
+});
 
 it('admits only the installed Project seed purpose with the original SOURCE actor and retained proofs', async () => {
   const [{ OpenProjectInputV1Schema }, { ExternalActionRequestEnvelopeV1Schema }, signing, installedContent] = await Promise.all([
@@ -138,8 +275,8 @@ it('admits only the installed Project seed purpose with the original SOURCE acto
     expect(await invoke({ callerInputAuthorization: { ...root, token: 'forged-root' } })).toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
     expect(await invoke({ workspaceSyncSourceExecution: { ...packet, params: 'substituted-source-packet' } }))
       .toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
-    expect(await invoke({ workspaceSyncSeedRouting: { ...seed, sourceWriterTarget: { ...sourceWriterTarget,
-      source: { ...source, sourceRootPath: '/substituted/source' } } } }))
+    expect(await invoke({ workspaceSyncSeedRouting: { ...seed, sourceWriterTarget: WorkspaceSyncSourceWriterTargetRoutingV1Schema.parse({ ...sourceWriterTarget,
+      source: { ...source, sourceRootPath: '/substituted/source' } }) } }))
       .toMatchObject({ errorCode: RPC_ERROR_CODES.UPDATE_REQUIRED });
     expect(await invoke({ method: `${writer.machineId}:${RPC_METHODS.DAEMON_DIRECT_TRANSFER_EXPORT_RELEASE}` }))
       .toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
@@ -295,6 +432,7 @@ it.each(['ordinary Account-codec baseline', 'installation-sealed request', 'phys
       },
     } };
     const sealed = await socketRpcCodec.encodeParams(installedContent, params, { method, callId: bindingCallId });
+    if (typeof sealed !== 'string') throw new Error('The installed request fixture was not encrypted');
     const sealedFrame: unknown = JSON.parse(sealed);
     if (!sealedFrame || typeof sealedFrame !== 'object' || !('ciphertext' in sealedFrame)
       || typeof sealedFrame.ciphertext !== 'string') throw new Error('The installed request fixture was not sealed');
@@ -512,6 +650,7 @@ it.each(['plain', 'e2ee'] as const)('admits arbitrary %s requester custody throu
       requestId: 'relay-request', machineAdmission, callerAuthority: 'present_user', callerInputAuthorization: root });
     return mode === 'plain' ? response : await openRpcResponse(machineKey, response);
   };
+  const channel = await createRequesterCurrentnessSocketHarness();
   try {
     expect(await run()).toMatchObject({ ok: true, result: { machines: [] } });
     expect(await retired?.()).toBe(false);
@@ -551,7 +690,7 @@ it.each(['plain', 'e2ee'] as const)('admits arbitrary %s requester custody throu
     expect(get).not.toHaveBeenCalled();
     current = false;
     expect(await run()).toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
-  } finally { get.mockRestore(); post.mockRestore(); }
+  } finally { await channel.close(); get.mockRestore(); post.mockRestore(); }
 });
 
 it('refuses unverified physical TARGET routing before exposing the existing preflight receiver', async () => {
@@ -796,37 +935,52 @@ it('preserves a Home-stamped Session Action origin and rejects malformed or user
   expect(await rpc.handleRequest(malformed)).toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
 });
 
-it('binds the Home-issued input proof to the exact opaque RPC before opening it', async () => {
+it.each([
+  { method: SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND, actionId: 'session.message.send' as const, input: { text: 'hello' } },
+  { method: RPC_METHODS.SESSION_USER_ACTION_ANSWER, actionId: 'session.user_action.answer' as const,
+    input: { id: 'question-one', approved: true, answers: { Branch: ['Alpha, Beta'] } } },
+])('binds the Home-issued input proof to the exact opaque RPC before opening it ($actionId)', async ({ method, actionId, input }) => {
   const encryptionKey = new Uint8Array(32).fill(17);
   const rpc = new RpcHandlerManager({ scopePrefix: 'session-a', localMachineId: 'machine-a',
     encryptionKey, encryptionVariant: 'dataKey', logger: () => {} });
   const effect = vi.fn(async (_input: unknown, context?: RpcHandlerContext) => ({
     proof: context?.callerInputAuthorization, constraints: context?.callerInputConstraints,
   }));
-  rpc.registerHandler(SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND, effect);
+  rpc.registerHandler(method, effect);
   const target = { kind: 'session' as const, sessionId: 'session-a' };
-  const request = { method: `session-a:${SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND}`,
-    requestId: 'rpc-input-1', params: await sealRpcRequest(encryptionKey, `session-a:${SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND}`, { text: 'hello' }) };
+  const request = { method: `session-a:${method}`,
+    requestId: 'rpc-input-1', params: await sealRpcRequest(encryptionKey, `session-a:${method}`, input) };
   // The authenticated Home transport is the boundary here; downstream HTTP validates its signed token.
-  const proof: ExternalActionExecutionAuthorizationV1 = { v: 1, token: 'home-issued-token', binding: {
+  const proof = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-issued-token', binding: {
     accountId: 'account-a', principalId: 'principal-a', credentialId: 'credential-a',
     serverIdentityId: 'server-a', machineId: 'machine-a', custodianAccountId: 'account-a',
-    installationId: 'installation-a', actionId: 'session.message.send',
+    installationId: 'installation-a', actionId,
     requestId: request.requestId, target,
     grant: { ...API_TOKEN_FULL_GRANT_V1, permissionModes: ['read-only'] },
     requestEnvelopeDigest: computeExternalActionSocketRpcRequestDigestV1({ ...request, target }),
-  } };
+  } });
   const admitted = { ...request, callerInputAuthorization: proof,
     callerInputConstraints: { models: null, permissionModes: null } };
   expect(await openRpcResponse(encryptionKey, await rpc.handleRequest(admitted))).toEqual({
     proof, constraints: { models: null, permissionModes: ['read-only'] },
   });
+  const otherMethod = method === SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND
+    ? RPC_METHODS.SESSION_USER_ACTION_ANSWER : SESSION_RPC_METHODS.SESSION_USER_MESSAGE_SEND;
+  const otherActionId = actionId === 'session.message.send' ? 'session.user_action.answer' : 'session.message.send';
+  rpc.registerHandler(otherMethod, effect);
+  const changedMethod = { ...request, method: `session-a:${otherMethod}`,
+    params: await sealRpcRequest(encryptionKey, `session-a:${otherMethod}`, input) };
   for (const refused of [
     { ...admitted, params: 'not-valid-ciphertext' },
+    { ...admitted, params: await sealRpcRequest(encryptionKey, request.method, { ...input, changed: true }) },
     { ...admitted, requestId: 'rpc-input-2' },
     { ...admitted, callerInputAuthorization: { ...proof, binding: { ...proof.binding, target: { kind: 'session' as const, sessionId: 'session-b' } } } },
     { ...admitted, callerInputAuthorization: { ...proof, binding: { ...proof.binding, machineId: 'machine-b' } } },
     { ...admitted, callerInputAuthorization: { ...proof, binding: { ...proof.binding, actionId: 'session.goal.set' } } },
+    { ...admitted, callerInputAuthorization: { ...proof, binding: { ...proof.binding, actionId: otherActionId } } },
+    { ...admitted, ...changedMethod, callerInputAuthorization: { ...proof, binding: { ...proof.binding,
+      requestEnvelopeDigest: computeExternalActionSocketRpcRequestDigestV1({ ...changedMethod, target }),
+    } } },
   ]) {
     expect(await openRpcResponse(encryptionKey, await rpc.handleRequest(refused)))
       .toMatchObject({ errorCode: RPC_ERROR_CODES.FORBIDDEN });
@@ -847,12 +1001,12 @@ it('retains the Home-admitted original Session proof at exact Project Machine in
     source: { kind: 'folder', path: '/target/project' }, materialization: { kind: 'attach' } });
   const envelope = ExternalActionRequestEnvelopeV1Schema.parse({ v: 1, requestId: origin.requestId,
     target: { kind: 'machine', machineId: 'target' }, input });
-  const proof: ExternalActionExecutionAuthorizationV1 = { v: 1, token: 'home-issued-token', binding: {
+  const proof = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-issued-token', binding: {
     accountId: 'requester', authentication: { kind: 'account', tokenEpoch: 1 }, serverIdentityId: 'home',
     machineId: 'target', custodianAccountId: 'custodian', installationId: 'target-install', actionId: 'projects.open',
     requestId: origin.requestId, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope), target: envelope.target,
     sessionActionOrigin: origin, sessionActionSource: { machineId: 'source', installationId: 'source-install' },
-  } };
+  } });
   const targetKey = tweetnacl.sign.keyPair();
   const method = `target:${RPC_METHODS.PROJECTS_OPEN}`;
   const post = vi.spyOn(axios, 'post').mockImplementation(async (url, raw) => {
@@ -973,7 +1127,6 @@ describe('RpcHandlerManager registration receipts', () => {
     async (clientType) => {
       const rpc = new RpcHandlerManager({ scopePrefix: 'owner-1', encryptionMode: 'plain', logger: () => {} });
       const sessionMethods = [
-        'execution.run.start',
         'execution.run.brokerAuthority.resolve.v1',
         'session.permission.respond',
         'session.user_action.answer',
@@ -983,6 +1136,9 @@ describe('RpcHandlerManager registration receipts', () => {
         'abort',
       ];
       const machineMethods = [
+        SESSION_RPC_METHODS.EXECUTION_RUN_START,
+        SESSION_RPC_METHODS.EXECUTION_RUN_GET,
+        SESSION_RPC_METHODS.EXECUTION_RUN_STOP,
         RPC_METHODS.BASH,
         RPC_METHODS.STOP_SESSION,
         RPC_METHODS.SESSION_AGENT_TRANSITION,
@@ -1233,6 +1389,19 @@ describe('RpcHandlerManager.invokeLocal', () => {
     } };
     await expect(rpc.invokeLocal('demo.resume', {}, options)).resolves.toEqual({ ok: true, accountId: 'bob',
       authority: 'account_automation', permissionModes: ['read-only'] });
+    const { callerInputConstraints, ...admittedAuthority } = options.rpcContext;
+    await expect(rpc.invokeLocal('demo.resume', {}, { rpcContext: admittedAuthority,
+      localActionContext: { callerInputConstraints },
+    })).resolves.toEqual({ ok: true, accountId: 'bob', authority: 'account_automation', permissionModes: ['read-only'] });
+    await expect(rpc.invokeLocal('demo.resume', { callerInputConstraints }, { rpcContext: admittedAuthority }))
+      .resolves.toEqual({ ok: true, accountId: 'bob', authority: 'account_automation', permissionModes: undefined });
+    await expect(rpc.invokeLocal('demo.resume', {}, { ...options,
+      localActionContext: { callerInputConstraints: { models: null, permissionModes: null } },
+    })).resolves.toEqual({ ok: true, accountId: 'bob', authority: 'account_automation', permissionModes: ['read-only'] });
+    rpc.registerHandler('demo.ceiling', async (_input, context) => context?.callerInputConstraints ?? null);
+    await expect(rpc.invokeLocal('demo.ceiling', {}, { localActionContext: { callerInputConstraints } }))
+      .resolves.toEqual(callerInputConstraints);
+    await expect(rpc.invokeLocal('demo.ceiling', { callerInputConstraints })).resolves.toBeNull();
     current = false;
     await expect(rpc.invokeLocal('demo.resume', {}, options)).resolves.toEqual({ ok: false });
     await expect(rpc.invokeLocal('demo.resume', { machineAdmission }, { localActionContext: { surface: 'ui', authority: 'present_user' } })).resolves.toEqual({ ok: false });
@@ -1900,6 +2069,62 @@ describe('RpcHandlerManager in-flight request tracking', () => {
     await idlePromise;
 
     expect(idleResolved).toBe(true);
+  });
+
+  it('cancels only the idle observer while an admitted request keeps its custody', async () => {
+    const handler = createDeferredVoid();
+    const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger: () => {} });
+    rpc.registerHandler('demo.preparing', async () => { await handler.promise; return { ok: true }; });
+    const request = rpc.invokeLocal('demo.preparing', {});
+    const cancellation = new AbortController();
+    const cancelled = rpc.waitForIdle(cancellation.signal);
+    const retired = new Error('observer retired');
+    const rejection = expect(cancelled).rejects.toBe(retired);
+    const incumbent = rpc.waitForIdle();
+    cancellation.abort(retired);
+    try {
+      await rejection;
+      expect(rpc.getInFlightRequestCount()).toBe(1);
+    } finally { handler.resolve(); await request; await incumbent; }
+    await expect(rpc.waitForIdle(cancellation.signal)).rejects.toBe(cancellation.signal.reason);
+  });
+
+  it('observes selected Run admission custody without waiting for an unrelated long-lived reader', async () => {
+    const reader = createDeferredVoid();
+    const admission = createDeferredVoid();
+    const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger: () => {} });
+    rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_START, async () => { await admission.promise; return { runId: 'run' }; });
+    rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_WAIT, async () => { await reader.promise; return {}; });
+    const read = rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_WAIT, {});
+    const start = rpc.invokeLocal(SESSION_RPC_METHODS.EXECUTION_RUN_START, {});
+    let settled = false;
+    const idle = rpc.waitForIdle(undefined, [SESSION_RPC_METHODS.EXECUTION_RUN_START]).then(() => { settled = true; });
+    try {
+      await Promise.resolve(); expect(settled).toBe(false);
+      admission.resolve(); await start; await idle;
+      expect(rpc.getInFlightRequestCount()).toBe(1);
+      expect(settled).toBe(true);
+    } finally { admission.resolve(); reader.resolve(); await start; await read; await idle; }
+  });
+
+  it('retains selected Run-start custody while receiving-host authorization is still pending', async () => {
+    const authorization = createDeferredVoid();
+    const entered = createDeferredVoid();
+    const rpc = new RpcHandlerManager({ scopePrefix: 'session', encryptionMode: 'plain', logger: () => {},
+      authorizeRequest: async () => { entered.resolve(); await authorization.promise; return { ok: true }; } });
+    const handler = vi.fn(async () => ({ runId: 'admitted-run' }));
+    rpc.registerHandler(SESSION_RPC_METHODS.EXECUTION_RUN_START, handler);
+    const request = rpc.handleRequest({ method: `session:${SESSION_RPC_METHODS.EXECUTION_RUN_START}`, params: {} });
+    await entered.promise;
+    let settled = false;
+    const idle = rpc.waitForIdle(undefined, [SESSION_RPC_METHODS.EXECUTION_RUN_START]).then(() => { settled = true; });
+    try {
+      await Promise.resolve();
+      expect(handler).not.toHaveBeenCalled();
+      expect(settled).toBe(false);
+    } finally { authorization.resolve(); await request; await idle; }
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(true);
   });
 });
 

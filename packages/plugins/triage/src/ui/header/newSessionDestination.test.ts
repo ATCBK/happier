@@ -310,11 +310,13 @@ describe('seeding the new-Session surface', () => {
             placement: {
                 kind: 'pinned',
                 target: { serverId: 'server-1', machineId: 'machine-b' },
+                candidates: [],
             },
         })).toEqual({
             profileId: 'profile-repair',
             executionTarget: { serverId: 'server-1', machineId: 'machine-b' },
             checkoutIntent: 'reuseWorkspace',
+            candidates: [],
         });
     });
 

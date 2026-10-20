@@ -1,8 +1,8 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MemoryScopeTargetV1 } from '@happier-dev/protocol/actions/executor/types';
-import { MemoryDocBodyV1Schema, type MemoryDocBodyV1, type MemoryFactV1 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
-import { MemoryDocReadResultV1Schema } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
+import { MEMORY_ARCHIVE_TOPIC_TITLE_V1, MemoryDocBodyV1Schema, type MemoryDocBodyV1, type MemoryFactV1 } from '@happier-dev/protocol/prompts/library/memoryDocV1';
+import { MemoryDocReadResultV1Schema, type MemoryDuplicateChoiceRequiredV1 } from '@happier-dev/protocol/prompts/library/memoryActionsV1';
 import type { PromptDocArtifactRefV1 } from '@happier-dev/protocol/prompts/library/promptArtifactRefsV1';
 import {
     PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryCatalogKeyV1Schema, PromptLibraryRowMutationV1Schema,
@@ -13,9 +13,10 @@ import {
 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { V2SessionRecordSchema } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { awaitPendingArtifactInventory } from '@/sync/engine/artifacts/syncArtifacts';
 import { SessionCurrentProjectionRecordV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import { SessionTurnsProjectionV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
 
@@ -30,6 +31,7 @@ import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { HappierDisclosure } from '@happier-dev/plugin-ui/presentation';
 import { readPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import { setReducedMotionPreferenceOverride } from '@/hooks/ui/useReducedMotionPreference';
@@ -52,7 +54,8 @@ vi.mock('@/text', async () => {
 });
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock().module;
+    // The forget/Undo cases explicitly accept the canonical destructive-action dialog.
+    return createModalModuleMock({ confirmResult: true }).module;
 });
 
 // HTTP, persistence, device credentials and the reachable cold Socket transport are the boundaries.
@@ -114,8 +117,10 @@ afterEach(async () => {
 
 const fact = (id: string, text: string): MemoryFactV1 => ({ id, text, createdAtMs: 1_000, sourceSessionRef: null });
 
-function selectSummaryDaemon(homeId: string, serverIdentityId: string) {
+function selectSummaryDaemon(homeId: string, serverIdentityId: string, accountId = 'account-a') {
     const machine = createMachineFixture({ id: 'memory-machine', activeAt: Date.now() });
+    // Real inventory refresh must retain the same explicitly selected daemon.
+    homes.answer(homeId, '/v1/machines', { body: [createPlainMachineRowFixture({ id: machine.id, accountId })] });
     storage.setState(state => ({ isDataReady: true,
         ...(homeId === serverId ? { machines: { [machine.id]: machine } } : {}),
         machineListByServerId: { ...state.machineListByServerId, [homeId]: [machine] },
@@ -143,6 +148,11 @@ async function seedDocument(body: MemoryDocBodyV1): Promise<PromptDocArtifactRef
     homes.answer(serverId, '/v1/public-shares?' + new URLSearchParams({ subjectKind: 'artifact', subjectId: artifactId }), { body: { publicShares: [] } });
     return { kind: 'doc', serverId, artifactId };
 }
+async function settleInitialArtifactInventory() {
+    await settled(() => expect(storage.getState().artifactsLoaded).toBe(true));
+    if (!connection) throw new Error('Expected the admitted Memory Account fixture');
+    await awaitPendingArtifactInventory({ scope: { serverId, accountId: 'account-a' }, credentials: connection.credentials });
+}
 function storedBody(ref: PromptDocArtifactRefV1): MemoryDocBodyV1 {
     return MemoryDocBodyV1Schema.parse(JSON.parse(homes.artifacts(serverId).readPlainBody(ref.artifactId) ?? 'null'));
 }
@@ -152,12 +162,15 @@ function Host(props: Readonly<{
     sessionTarget?: Parameters<typeof MemoryDocumentBody>[0]['sessionTarget'];
     scopeTarget?: MemoryScopeTargetV1;
     onCreatedMemory?: Parameters<typeof MemoryDocumentBody>[0]['onCreatedMemory'];
+    onDuplicateReview?: Parameters<typeof MemoryDocumentBody>[0]['onDuplicateReview'];
+    preparationBasis?: string;
 }>) {
     const [composing, setComposing] = React.useState(props.composing ?? false);
     const source = useMemoryDocument({ ref: props.documentRef ?? null, serverId, topic: props.topic });
     return <MemoryDocumentBody testID="memory" source={source} serverId={serverId}
         collapsedFactCount={props.collapsed} composing={composing} onComposingChange={setComposing}
-        sessionTarget={props.sessionTarget} scopeTarget={props.scopeTarget} onCreatedMemory={props.onCreatedMemory} emptyText="empty" />;
+        sessionTarget={props.sessionTarget} scopeTarget={props.scopeTarget} onCreatedMemory={props.onCreatedMemory}
+        onDuplicateReview={props.onDuplicateReview} preparationBasis={props.preparationBasis} emptyText="empty" />;
 }
 
 function boundaryDiagnostic() {
@@ -196,12 +209,26 @@ async function savedDraft(screen: Awaited<ReturnType<typeof renderScreen>>) {
     expect(Boolean(screen.findByTestId('memory.draft')), boundaryDiagnostic()).toBe(false);
     expect(vi.mocked(Modal.alert).mock.calls, boundaryDiagnostic()).toEqual([]);
 }
+async function forgetOutcome(screen: Awaited<ReturnType<typeof renderScreen>>) {
+    // A pending approval or refusal is terminal too; report it rather than hiding it
+    // behind the case deadline while waiting for a notice that cannot arrive.
+    await settled(() => expect(Boolean(readPresentationNotice()?.undo
+        || screen.findByTestId('memory.pending') || screen.findByTestId('memory.refused')
+        || screen.findByTestId('memory.conflict') || vi.mocked(Modal.alert).mock.calls.length)).toBe(true));
+    expect(screen.findByTestId('memory.pending'), boundaryDiagnostic()).toBeNull();
+    expect(screen.findByTestId('memory.refused'), boundaryDiagnostic()).toBeNull();
+    expect(screen.findByTestId('memory.conflict'), boundaryDiagnostic()).toBeNull();
+    expect(vi.mocked(Modal.alert).mock.calls, boundaryDiagnostic()).toEqual([]);
+}
 /** A fact's place in the list: `expanded` false while its row collapses after an accepted forget. */
 function factSlot(screen: Awaited<ReturnType<typeof renderScreen>>, id: string) {
     return screen.findAllByType(HappierDisclosure).find(node => node.props.testID === `memory.fact.${id}.slot`) ?? null;
 }
 async function renderDocument(ref: PromptDocArtifactRefV1, props: Omit<React.ComponentProps<typeof Host>, 'documentRef'> = {}) {
-    const screen = await renderScreen(<Host documentRef={ref} {...props} />);
+    if (!connection) throw new Error('Expected the admitted Memory Account fixture');
+    const screen = await renderScreen(<InjectedAuthProvider credentials={connection.credentials}>
+        <Host documentRef={ref} {...props} />
+    </InjectedAuthProvider>);
     await settled(() => expect(screen.findByType(MemoryDocumentBody).props.source.status).toBe('ready'));
     return screen;
 }
@@ -211,6 +238,111 @@ async function readMemory(ref: PromptDocArtifactRefV1, topic?: string) {
     if (!result.ok) throw new Error(result.error);
     return MemoryDocReadResultV1Schema.parse(result.result);
 }
+
+it.each(['private', 'grant', 'public', 'unknown'] as const)('publishes the admitted Memory audience (%s) without inferring privacy from ownership', async audience => {
+    // Measure the display read, not the separate cold inventory hydration that changes its refresh basis.
+    await settleInitialArtifactInventory();
+    const ref = await seedDocument({ v: 1, index: [fact('one', 'Verify payment signatures.')], topics: [] });
+    if (audience === 'grant') homes.artifacts(serverId).seedAccountGrant(ref.artifactId, 'teammate', 'view');
+    if (audience === 'public') homes.artifacts(serverId).replaceStoredRow({
+        ...homes.artifacts(serverId).read(ref.artifactId)!, publicAudience: 'retained',
+    });
+    if (audience === 'unknown') homes.answer(serverId, `/v1/artifacts/${ref.artifactId}/access/grants`, {
+        status: 503, body: { error: 'database_connection_unavailable' },
+    });
+    const requestStart = homes.requests.length;
+    const hook = await renderHook(() => useMemoryDocument({ ref, serverId }));
+    await settled(() => expect(hook.getCurrent().status).toBe('ready'));
+    expect(hook.getCurrent().view).toMatchObject({ access: 'owner', shared: audience === 'unknown' ? null : audience !== 'private' });
+    expect(homes.requests.slice(requestStart).filter(request => request.path === `/v1/artifacts/${ref.artifactId}`)).toHaveLength(1);
+    expect(hook.getCurrent().view).toMatchObject({ audience: audience === 'unknown' ? null : {
+        shared: audience !== 'private', team: null, publicLink: audience === 'public',
+        grants: audience === 'grant' ? [expect.objectContaining({ principal: { kind: 'account', accountId: 'teammate' } })] : [],
+    } });
+    expect(hook.getCurrent().target === null).toBe(audience === 'unknown');
+    await hook.unmount();
+});
+
+it.each(['Build', MEMORY_ARCHIVE_TOPIC_TITLE_V1])('reads %s facts and their audience from one admitted body', async topic => {
+    await settleInitialArtifactInventory();
+    const ref = await seedDocument({ v: 1, index: [], topics: [
+        { title: topic, summary: 'Saved topic', facts: [fact('topic-fact', 'Use the reviewed topic fact.')] },
+    ] });
+    const requestStart = homes.requests.length;
+    const hook = await renderHook(() => useMemoryDocument({ ref, serverId, topic }));
+    await settled(() => expect(hook.getCurrent().status).toBe('ready'));
+    expect(hook.getCurrent().view).toMatchObject({
+        facts: [expect.objectContaining({ id: 'topic-fact' })], topic: { title: topic },
+        access: 'owner', audience: { shared: false },
+    });
+    expect(homes.requests.slice(requestStart).filter(request => request.path === `/v1/artifacts/${ref.artifactId}`)).toHaveLength(1);
+    await hook.unmount();
+});
+
+it('does not claim the Project Team holds an individually shared Memory grant', async () => {
+    const ref = await seedDocument({ v: 1, index: [fact('one', 'Verify signatures.')], topics: [] });
+    homes.artifacts(serverId).seedAccountGrant(ref.artifactId, 'bob', 'view');
+    if (!connection) throw new Error('Expected Account fixture');
+    const project = { name: 'Payments', teamName: 'Unrelated Team',
+        searchScope: { type: 'project' as const, projectRef: { serverId, projectKey: 'payments' } }, href: () => '/projects/payments/memory' };
+    const screen = await renderScreen(<InjectedAuthProvider credentials={connection.credentials}>
+        <MemoryDocumentScreen artifactId={ref.artifactId} serverId={serverId} project={project} />
+    </InjectedAuthProvider>);
+    await settled(() => expect(screen.findByType(MemoryDocumentBody).props.source.status).toBe('ready'));
+    const { PageHeader } = await import('@/components/ui/layout/PageHeader');
+    const audience = screen.findAllByType(PageHeader).flatMap(node => node.props.meta ?? [])
+        .find(entry => entry.testID === 'memory-document.audience');
+    expect(audience?.text).toBe('memoryContext.memory.accessShared');
+});
+
+it('refreshes the admitted Memory audience after a grant-only Account change', async () => {
+    const ref = await seedDocument({ v: 1, index: [fact('one', 'Verify payment signatures.')], topics: [] });
+    const hook = await renderHook(() => useMemoryDocument({ ref, serverId }));
+    await settled(() => expect(hook.getCurrent().status).toBe('ready'));
+    expect(hook.getCurrent().view?.shared).toBe(false);
+    homes.artifacts(serverId).seedAccountGrant(ref.artifactId, 'teammate', 'view');
+    const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+    await React.act(async () => { publishHomeAccountChange(serverId, [ref.artifactId], { changeKinds: ['artifact'] }); });
+    await settled(() => expect(hook.getCurrent().view?.shared).toBe(true));
+    await hook.unmount();
+});
+
+it('does not adopt a successor read across replacement credentials for the same Account', async () => {
+    if (!connection) throw new Error('Expected the admitted Memory Account fixture');
+    const ref = await seedDocument({ v: 1, index: [fact('one', 'Keep the original custody.')], topics: [] });
+    const hook = await renderHook(() => useMemoryDocument({ ref, serverId }));
+    await settled(() => expect(hook.getCurrent().status).toBe('ready'));
+    const originalTarget = hook.getCurrent().target;
+    expect(originalTarget).toBeTruthy();
+    const path = '/v1/artifacts/' + ref.artifactId;
+    const response = await homes.artifacts(serverId).handle(path, { method: 'GET' });
+    if (!response) throw new Error('Expected the real Artifact boundary response');
+    let release!: () => void;
+    const held = new Promise<void>(resolve => { release = resolve; });
+    homes.answer(serverId, path, { body: await response.json(), respondAfter: held });
+    const reads = () => homes.requests.filter(request => request.path === path && request.input === null).length;
+    const before = reads();
+    let first!: ReturnType<ReturnType<typeof useMemoryDocument>['refresh']>;
+    let successor!: ReturnType<ReturnType<typeof useMemoryDocument>['refresh']>;
+    try {
+        await React.act(async () => { first = hook.getCurrent().refresh(); });
+        await settled(() => expect(reads()).toBeGreaterThan(before));
+        const afterFirst = reads();
+        await React.act(async () => { successor = hook.getCurrent().refresh(); });
+        await settled(() => expect(reads()).toBeGreaterThan(afterFirst));
+        await React.act(async () => {
+            expect(await TokenStorage.setCredentialsForServerUrl('https://memory-body.test', { serverId }, {
+                ...connection!.credentials, token: `${connection!.credentials.token}-replacement`,
+            })).toBe(true);
+        });
+    } finally { release(); }
+    expect(await first).toBeNull();
+    expect(await successor).toBeNull();
+    expect(originalTarget?.isCurrent()).toBe(false);
+    await settled(() => expect(hook.getCurrent().status).toBe('ready'));
+    expect(hook.getCurrent().target?.accountId).toBe('account-a');
+    await hook.unmount();
+});
 
 it('reads document content through memory.read admission instead of bypassing a disabled UI Action', async () => {
     const settings = { ...baseline.settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1,
@@ -228,15 +360,64 @@ it('shows unavailable preparation rather than fabricating counts from the open i
         topics: [{ title: 'detail', summary: 'More facts', facts: [fact('three', 'Three')] }] });
     const screen = await renderDocument(ref);
     const rendered = screen.getTextContent();
-    expect(rendered).toContain('common.unavailable');
+    expect(rendered).toContain('memoryContext.memory.countsUnavailable');
+    expect(rendered).not.toContain('common.unavailable');
     expect(rendered).not.toContain('2 facts');
     await screen.unmount();
 });
 
-it('opens a qualified fact source before its Session is loaded on this client', async () => {
+it('shows unavailable counts instead of a permanent skeleton when the selected daemon never answers', async () => {
+    const ref = await seedDocument({ v: 1, index: [fact('one', 'One')], topics: [] });
+    await setServerProfileIdentityForUrl('https://memory-body.test', 'srv_memory_body');
+    selectSummaryDaemon(serverId, 'srv_memory_body');
+    await sync.refreshMachines();
+    machineRpc.mockReturnValue(new Promise(() => {}));
+    const screen = await renderDocument(ref);
+    await settled(() => expect(machineRpc).toHaveBeenCalled());
+    const rendered = screen.getTextContent();
+    expect(rendered).not.toContain('common.loading');
+    expect(screen.findByTestId('memory.summaryUnavailable')).toBeTruthy();
+    expect(screen.findByTestId('memory.summary')).toBeNull();
+    expect(rendered).not.toContain('memoryContext.memory.alwaysRemembered');
+    await screen.unmount();
+});
+
+it('keeps last-known counts for the same document while a later status read has no answer', async () => {
+    const ref = await seedDocument({ v: 1, index: [fact('one', 'One')], topics: [] });
+    await setServerProfileIdentityForUrl('https://memory-body.test', 'srv_memory_body');
+    selectSummaryDaemon(serverId, 'srv_memory_body');
+    await sync.refreshMachines();
+    const response = summaryStatus(ref, { headerVersion: 1, bodyVersion: 1 });
+    const initial = { ...response, documents: { ...response.documents, facts: response.documents.facts.slice(1) } };
+    let refreshing = false;
+    machineRpc.mockImplementation(() => refreshing ? new Promise(() => {}) : Promise.resolve(initial));
+    const screen = await renderDocument(ref, { preparationBasis: 'initial' });
+    const statusReads = () => machineRpc.mock.calls.filter(([request]) => request.method === RPC_METHODS.DAEMON_MEMORY_STATUS);
+    await settled(() => expect(statusReads().length).toBeGreaterThan(0));
+    await flushHookEffects();
+    const view = screen.findByType(MemoryDocumentBody).props.source.view;
+    expect(screen.getTextContent(), JSON.stringify({ ref: view?.ref, revision: view?.revision,
+        response: initial.documents, requests: machineRpc.mock.calls.map(([request]) => ({
+            serverId: request.serverId, method: request.method, payload: request.payload,
+        })) })).toContain('7 facts');
+    const readsBeforeRefresh = statusReads().length;
+    refreshing = true;
+    await screen.update(<InjectedAuthProvider credentials={connection!.credentials}>
+        <Host documentRef={ref} preparationBasis="changed" />
+    </InjectedAuthProvider>);
+    await settled(() => expect(statusReads().length).toBeGreaterThan(readsBeforeRefresh));
+    expect(screen.getTextContent()).toContain('7 facts');
+    expect(screen.findByTestId('memory.summaryUnavailable')).toBeNull();
+    await screen.unmount();
+});
+
+it.each([false, true])('opens a qualified fact source before its Session is loaded on this client (decision: %s)', async decision => {
+    if (!connection) throw new Error('Expected the Memory Home connection fixture');
     const source = { serverId, sessionId: 'unloaded-source-session' };
     const ref = await seedDocument({ v: 1, index: [
-        { ...fact('from-session', 'Use the shared build script.'), sourceSessionRef: source },
+        { ...fact('from-session', 'Use the shared build script.'), sourceSessionRef: source,
+          ...(decision ? { decision: { reason: 'Exact committed source', approvedBy: null,
+            sourceMessageRef: { kind: 'session' as const, session: source, messageId: 'committed-source' } } } : {}) },
         fact('manual', 'Keep release notes concise.'),
     ], topics: [] });
     expect(storage.getState().sessions[source.sessionId]).toBeUndefined();
@@ -249,7 +430,7 @@ it('opens a qualified fact source before its Session is loaded on this client', 
     await screen.pressByTestIdAsync('memory-document.fact.from-session.source');
     // The real navigation owner must carry the fact's Home, not require a loaded Session/title.
     expect(navigation.navigate).toHaveBeenCalledWith(
-        `/session/${source.sessionId}?serverId=${encodeURIComponent(serverId)}`, expect.anything(),
+        `/session/${source.sessionId}${decision ? '/message/server%3Acommitted-source' : ''}?serverId=${encodeURIComponent(serverId)}`, expect.anything(),
     );
     await screen.unmount();
 });
@@ -278,9 +459,10 @@ function serveAccountContext(conflict = false, entries: Extract<PromptLibraryRec
 }
 
 /** Personal Project row HTTP/CAS boundary, retaining its neighboring organization fields. */
-function serveProjectContext(conflict = false, withWorkspace = false) {
+function serveProjectContext(conflict = false, withWorkspace = false,
+    entries: Extract<PromptLibraryRecordV1, { key: 'coding' }>['value']['entries'] = []) {
     const key = { kind: 'project-organization' as const, serverId, projectKey: 'project' };
-    let value = ProjectAccountOrganizationV1Schema.parse({ pinned: true, hidden: true, promptStack: [] });
+    let value = ProjectAccountOrganizationV1Schema.parse({ pinned: true, hidden: true, promptStack: entries });
     let revision = 4;
     homes.answer(serverId, 'POST ' + PROJECT_ACCOUNT_ROWS_ROUTE_V1 + '/list', { select: () => ({ body:
         createPlainProjectAccountRowListFixture({ organizations: [{ key, value, revision }],
@@ -288,7 +470,7 @@ function serveProjectContext(conflict = false, withWorkspace = false) {
         }) }) });
     homes.answer(serverId, 'POST ' + PROJECT_ACCOUNT_ROWS_ROUTE_V1 + '/mutate', { select: input => {
         const mutation = ProjectAccountRowMutationRequestV1Schema.parse(input).mutations[0]!;
-        if (conflict || mutation.expectedRevision !== revision) return { status: 409, body: { status: 'conflict', key, revision: revision + 1 } };
+        if (conflict || mutation.expectedRevision !== revision) return { body: { status: 'conflict', key, revision: revision + 1 } };
         if (mutation.content?.t !== 'plain' || !mutation.content.v || typeof mutation.content.v !== 'object' || !('value' in mutation.content.v)) {
             throw new Error('Expected plain Project organization');
         }
@@ -300,6 +482,33 @@ function serveProjectContext(conflict = false, withWorkspace = false) {
 }
 
 describe('MemoryDocumentBody', () => {
+    it.each(['session', 'account', 'project'] as const)('uses the admitted shared audience in the %s Memory access label', async surface => {
+        if (!connection) throw new Error('Missing admitted Account fixture');
+        const ref = await seedDocument({ v: 1, index: [fact('shared-note', 'Verify payment signatures.')], topics: [] });
+        homes.artifacts(serverId).seedAccountGrant(ref.artifactId, 'teammate', 'view');
+        const entry = { id: surface === 'session' ? 'session.memory' : 'account.memory', ref, enabled: true, placement: 'system_append' as const };
+        serveAccountContext(false, [entry]);
+        let element: React.ReactElement;
+        if (surface === 'session') {
+            const base = createSessionFixture();
+            if (!base.metadata) throw new Error('Missing owner metadata');
+            const session = createSessionFixture({ id: 's1', serverId, metadataVersion: 9,
+                metadata: { ...base.metadata, bot: { kind: 'bot' }, work: { memoryEnabled: true, promptStack: [entry] } } });
+            element = <SessionMemorySection session={session} serverId={serverId} />;
+        } else if (surface === 'account') {
+            const { PromptStackEditorScreen } = await import('@/components/settings/prompts/stacks/PromptStackEditorScreen');
+            element = <PromptStackEditorScreen surface="coding" title="Context" />;
+        } else {
+            serveProjectContext(false, false, [entry]);
+            const { ProjectContextBody } = await import('@/components/projects/context/ProjectContextBody');
+            element = <ProjectContextBody workspaceRef={{ id: 'workspace', serverId, projectKey: 'project', machineId: 'machine', rootPath: '/repo', createdAtMs: 1 }} />;
+        }
+        const screen = await renderScreen(<InjectedAuthProvider credentials={connection.credentials}>{element}</InjectedAuthProvider>);
+        await settled(() => expect(screen.findByType(MemoryDocumentBody).props.source.status).toBe('ready'));
+        expect(screen.findByType(MemoryDocumentBody).props.footer).toContain('memoryContext.memory.accessShared');
+        expect(screen.findByType(MemoryDocumentBody).props.footer).not.toContain('memoryContext.memory.accessPrivate');
+        await screen.unmount();
+    });
     it('keeps foreign Context navigation on its admitted Home while its write target is withdrawn', async () => {
         const original = await seedDocument({ v: 1, index: Array.from({ length: 5 }, (_, i) => fact('f' + i, 'Foreign fact ' + i)),
             topics: [{ title: 'releases', summary: 'Release details', facts: [] }] });
@@ -390,7 +599,7 @@ describe('MemoryDocumentBody', () => {
             ? 'memoryContext.memory.writesAskFirst' : 'memoryContext.memory.writesWithoutAsking');
         await screen.unmount();
         machineRpc.mockClear();
-        selectSummaryDaemon(foreignHome, 'srv_foreign_memory');
+        selectSummaryDaemon(foreignHome, 'srv_foreign_memory', 'foreign-a');
         const page = await renderScreen(<InjectedAuthProvider credentials={connection.credentials}>
             <MemoryDocumentScreen artifactId={ref.artifactId} serverId={foreignHome} />
         </InjectedAuthProvider>);
@@ -616,7 +825,7 @@ describe('MemoryDocumentBody', () => {
         await screen.pressByTestIdAsync('session-work-memory.doc.draft.save');
         await settled(() => expect(!screen.findByTestId('session-work-memory.doc.draft') || vi.mocked(Modal.alert).mock.calls.length > 0).toBe(true));
         expect(vi.mocked(Modal.alert).mock.calls, boundaryDiagnostic()).toEqual([]);
-        expect(screen.findByTestId('session-work-memory.doc.conflict'), boundaryDiagnostic()).toBeTruthy();
+        expect(screen.findByTestId('session-work-memory.doc.conflict'), boundaryDiagnostic()).toBeNull();
         await flushHookEffects();
         expect(screen.findByType(MemoryDocumentBody).props.source.status).toBe('ready');
         const rows = homes.artifacts(serverId).list();
@@ -648,7 +857,7 @@ describe('MemoryDocumentBody', () => {
                 <SessionMemorySection session={session} serverId={serverId} />
             </InjectedAuthProvider>);
         });
-        await flushHookEffects();
+        await settled(() => expect(screen.findByType(MemoryDocumentBody).props.source.status).not.toBe('loading'));
         expect(screen.findByType(MemoryDocumentBody).props.source.status, boundaryDiagnostic()).toBe('none');
         expect(Boolean(screen.findByTestId('session-work-memory.doc.fact.' + firstFact.id))).toBe(false);
         expect(screen.findByType(MemoryDocumentBody) === mountedBody).toBe(true);
@@ -715,7 +924,39 @@ describe('MemoryDocumentBody', () => {
             title: 'reviews', facts: [{ id: expect.any(String), text: 'Ana reviews sync changes.', sourceSessionRef: null }],
         } });
         expect(storedBody(ref)).toMatchObject({ index: [], topics: [{ title: 'reviews', facts: [{ text: 'Ana reviews sync changes.' }] }] });
-        expect(Boolean(screen.findByTestId('memory.topic.reviews'))).toBe(true);
+        await settled(() => expect(Boolean(screen.findByTestId('memory.topic.reviews'))).toBe(true));
+    });
+
+    it('keeps the typed draft open when the real write owner requires a duplicate choice', async () => {
+        const ref = await seedDocument({ v: 1, index: [fact('existing', 'Use PostgreSQL for storage')], topics: [] });
+        const reviews: MemoryDuplicateChoiceRequiredV1[] = [];
+        const screen = await renderDocument(ref, { composing: true, onDuplicateReview: review => { reviews.push(review); } });
+        const before = storedBody(ref);
+        await React.act(async () => { screen.changeTextByTestId('memory.draft', 'Prefer PostgreSQL for storage'); });
+        await screen.pressByTestIdAsync('memory.draft.save');
+        await settled(() => expect(reviews).toHaveLength(1));
+        expect(reviews[0]).toMatchObject({ ref, candidates: [{ factId: 'existing', match: 'related' }] });
+        await settled(() => expect(screen.findByTestId('memory.draft')?.props.value).toBe('Prefer PostgreSQL for storage'));
+        expect(storedBody(ref)).toEqual(before);
+        expect(vi.mocked(Modal.alert).mock.calls).toEqual([]);
+        // The same form leads with the saved fact and asks for the effect; Replace supersedes it.
+        expect(Boolean(screen.findByTestId('memory.draft.duplicate.candidate.existing'))).toBe(true);
+        // Saved vs New in one comparison: the New line is the draft as it is now, and the effect line
+        // follows the chosen option.
+        expect(screen.findByTestId('memory.draft.duplicate.new')?.props.children).toBe('Prefer PostgreSQL for storage');
+        await React.act(async () => { screen.changeTextByTestId('memory.draft', 'Prefer PostgreSQL 17 for storage'); });
+        expect(screen.findByTestId('memory.draft.duplicate.new')?.props.children).toBe('Prefer PostgreSQL 17 for storage');
+        const effect = () => screen.findByTestId('memory.draft.duplicate.effect')?.props.children;
+        const updateEffect = effect();
+        expect(typeof updateEffect).toBe('string');
+        await screen.pressByTestIdAsync('memory.draft.duplicate.choice:replace');
+        expect(effect()).not.toBe(updateEffect);
+        await React.act(async () => { screen.changeTextByTestId('memory.draft', 'Prefer PostgreSQL for storage'); });
+        await screen.pressByTestIdAsync('memory.draft.save');
+        await savedDraft(screen);
+        const after = storedBody(ref);
+        expect(after.index.map(entry => entry.text)).toEqual(['Prefer PostgreSQL for storage']);
+        expect(after.index[0]?.supersedes).toBe('existing');
     });
 
     it('with no document yet, the first fact reaches the Session target and its Account attachment', async () => {
@@ -764,7 +1005,7 @@ describe('MemoryDocumentBody', () => {
             // Exercise that canonical Action rather than manually keeping the original active ID.
             expect(await memoryDocumentActions.update(target, { factId: 'f1', text: 'Concurrent fact' })).toMatchObject({ ok: true });
         });
-        await React.act(async () => { screen.changeTextByTestId('memory.draft', 'A newer fact'); });
+        await React.act(async () => { screen.changeTextByTestId('memory.draft', 'Updated preference'); });
         await screen.pressByTestIdAsync('memory.draft.save');
         await settled(() => {
             expect(Boolean(screen.findByTestId('memory.conflict'))).toBe(true);
@@ -776,7 +1017,7 @@ describe('MemoryDocumentBody', () => {
         expect(current.index[0]?.id).not.toBe('f1');
         expect(current.topics.find(section => section.title === 'archive')?.facts).toEqual([fact('f1', 'Old fact')]);
         expect(Boolean(screen.findByTestId(`memory.fact.${current.index[0]!.id}`))).toBe(true);
-        expect(screen.findByTestId('memory.draft')?.props.value).toBe('A newer fact');
+        expect(screen.findByTestId('memory.draft')?.props.value).toBe('Updated preference');
         await screen.pressByTestIdAsync('memory.draft.cancel');
         expect(Boolean(screen.findByTestId('memory.draft'))).toBe(false);
         expect(storedBody(ref)).toEqual(current);
@@ -801,6 +1042,7 @@ describe('MemoryDocumentBody', () => {
         const before = screen.findByType(MemoryDocumentBody).props.source.view.revision;
         const actions: readonly ItemAction[] = screen.findByType(ItemRowActions).props.actions;
         await React.act(async () => { actions.find(action => action.id === 'forget')!.onPress!(); });
+        await forgetOutcome(screen);
         await settled(() => {
             // The accepted forget collapses the row in place (lab `c-mem` Motion); it leaves once closed.
             expect(factSlot(screen, 'original')?.props.expanded).toBe(false);
@@ -838,12 +1080,32 @@ describe('MemoryDocumentBody', () => {
         expect([...persisted.index, ...persisted.topics.flatMap(section => section.facts)]).toEqual([original]);
     });
 
+    it('an Undo that meets a related saved fact asks the duplicate choice in place and restores with it', async () => {
+        const ref = await seedDocument({ v: 1, index: [fact('kept', 'Use PostgreSQL for storage'), fact('gone', 'Prefer PostgreSQL for storage')], topics: [] });
+        const screen = await renderDocument(ref);
+        const actions: readonly ItemAction[] = screen.findAllByType(ItemRowActions)[1]!.props.actions;
+        await React.act(async () => { actions.find(action => action.id === 'forget')!.onPress!(); });
+        await forgetOutcome(screen);
+        await settled(() => expect(readPresentationNotice()?.undo).toBeTruthy());
+        await React.act(async () => { readPresentationNotice()!.undo!.run(); });
+        // The restore found the related fact: the same comparison opens, naming the fact coming back.
+        await settled(() => expect(Boolean(screen.findByTestId('memory.restore.duplicate'))).toBe(true));
+        expect(screen.findByTestId('memory.restore.duplicate.new')?.props.children).toBe('Prefer PostgreSQL for storage');
+        expect(Boolean(screen.findByTestId('memory.restore.duplicate.candidate.kept'))).toBe(true);
+        expect(storedBody(ref).index.map(entry => entry.id)).toEqual(['kept']);
+        await screen.pressByTestIdAsync('memory.restore.duplicate.choice:keep_both');
+        await screen.pressByTestIdAsync('memory.restore.save');
+        await settled(() => expect(Boolean(screen.findByTestId('memory.restore.duplicate'))).toBe(false));
+        expect(storedBody(ref).index.map(entry => entry.id).sort()).toEqual(['gone', 'kept']);
+    });
+
     it('under reduced motion a forgotten fact leaves at once and its neighbours stay', async () => {
         setReducedMotionPreferenceOverride(true);
         const ref = await seedDocument({ v: 1, index: [fact('gone', 'Forget me.'), fact('kept', 'Keep me.')], topics: [] });
         const screen = await renderDocument(ref);
         const actions: readonly ItemAction[] = screen.findAllByType(ItemRowActions)[0]!.props.actions;
         await React.act(async () => { actions.find(action => action.id === 'forget')!.onPress!(); });
+        await forgetOutcome(screen);
         await settled(() => {
             expect(readPresentationNotice()?.undo).toBeTruthy();
             expect(factSlot(screen, 'gone')).toBeNull();
@@ -876,6 +1138,7 @@ describe('MemoryDocumentBody', () => {
         const screen = await renderDocument(ref);
         const actions: readonly ItemAction[] = screen.findByType(ItemRowActions).props.actions;
         await React.act(async () => { actions.find(action => action.id === 'forget')!.onPress!(); });
+        await forgetOutcome(screen);
         await settled(() => {
             expect(factSlot(screen, 'original')?.props.expanded).toBe(false);
             expect(readPresentationNotice()?.undo).toBeTruthy();
@@ -916,6 +1179,7 @@ describe('MemoryDocumentBody', () => {
         const screen = await renderDocument(ref);
         const actions: readonly ItemAction[] = screen.findByType(ItemRowActions).props.actions;
         await React.act(async () => { actions.find(action => action.id === 'forget')!.onPress!(); });
+        await forgetOutcome(screen);
         await settled(() => {
             expect(readPresentationNotice()?.undo).toBeTruthy();
             expect(screen.findByType(MemoryDocumentBody).props.source.status).toBe('ready');
@@ -997,8 +1261,8 @@ describe('MemoryDocumentBody', () => {
         const attached = (account?.read() ?? project?.read().promptStack ?? []).find(entry => entry.id === scope + '.memory');
         expect(attached).toBeTruthy();
         if (!attached || attached.ref.kind !== 'doc') throw new Error('Missing scope memory attachment');
-        expect(created).toHaveBeenCalledWith({ ref: attached.ref, attachment: 'attached' });
         const attachedRef: PromptDocArtifactRefV1 = { ...attached.ref, kind: attached.ref.kind };
+        expect(created).toHaveBeenCalledWith({ ref: attached.ref, attachment: 'attached', factId: storedBody(attachedRef).index[0]!.id });
         expect(await readMemory(attachedRef)).toMatchObject({ body: { index: [{ text: 'Use the shared build script.', sourceSessionRef: null }] } });
         expect(storedBody(attachedRef).index).toMatchObject([{ text: 'Use the shared build script.' }]);
         if (project) expect(project.read()).toMatchObject({ pinned: true, hidden: true });
@@ -1013,14 +1277,14 @@ describe('MemoryDocumentBody', () => {
         await React.act(async () => { screen.changeTextByTestId('memory.draft', 'A durable unattached fact.'); });
         await screen.pressByTestIdAsync('memory.draft.save');
         await settled(() => {
-            expect(Boolean(screen.findByTestId('memory.conflict'))).toBe(true);
+            expect(Boolean(screen.findByTestId('memory.conflict'))).toBe(false);
             expect(Boolean(screen.findByTestId('memory.draft'))).toBe(false);
         });
         expect(account?.read() ?? project?.read().promptStack).toEqual([]);
         const rows = homes.artifacts(serverId).list();
         expect(rows).toHaveLength(1);
         const ref = { kind: 'doc' as const, serverId, artifactId: rows[0]!.id };
-        expect(created).toHaveBeenCalledWith({ ref, attachment: 'conflict' });
+        expect(created).toHaveBeenCalledWith({ ref, attachment: 'conflict', factId: storedBody(ref).index[0]!.id });
         expect(await readMemory(ref)).toMatchObject({ body: { index: [{ text: 'A durable unattached fact.' }] } });
         expect(storedBody(ref).index).toMatchObject([{ text: 'A durable unattached fact.' }]);
     });
@@ -1039,7 +1303,7 @@ describe('MemoryDocumentBody', () => {
         await React.act(async () => { screen.changeTextByTestId('context.memory.draft', 'Preserve the exact saved document.'); });
         await screen.pressByTestIdAsync('context.memory.draft.save');
         await settled(() => {
-            expect(Boolean(screen.findByTestId('context.memory.conflict'))).toBe(true);
+            expect(Boolean(screen.findByTestId('context.memory.conflict'))).toBe(false);
             expect(Boolean(screen.findByTestId('context.memory.draft'))).toBe(false);
             expect(screen.findByType(MemoryDocumentBody).props.source.status).toBe('ready');
         });

@@ -409,7 +409,7 @@ describe('runVoiceAgentTurnWithTools permission shortcuts', () => {
     expectOnlyOrdinaryTurnRpc();
     expect(wireTurns).toHaveLength(1);
     expect(wireTurns[0]).toMatchObject({ displayMessage: userText,
-      userTranscript: { mode: 'persist', localId: ' opaque-permission-id ' } });
+      userTranscript: { mode: 'suppress', localId: ' opaque-permission-id ' } });
     expect(accepted).toHaveBeenCalledTimes(1);
   });
 

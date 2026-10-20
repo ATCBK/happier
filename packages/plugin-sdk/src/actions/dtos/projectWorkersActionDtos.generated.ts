@@ -185,6 +185,7 @@ export type ProjectWorkersActionInputById = {
                 sourceWorkspaceRefId: string;
                 targetWorkspaceRefId: string;
             } | undefined;
+            committedAtMs?: number | null | undefined;
         };
         targetMachineId: string;
         targetWorkspaceRefId: string;
@@ -217,6 +218,7 @@ export type ProjectWorkersActionInputById = {
                 sourceWorkspaceRefId: string;
                 targetWorkspaceRefId: string;
             } | undefined;
+            committedAtMs?: number | null | undefined;
         };
         removeTargetCopy?: {
             workspaceRefId: string;
@@ -554,6 +556,7 @@ export type ProjectWorkersActionResultById = {
                         };
                     };
                 } | undefined;
+                execution?: 'primary' | 'portable' | undefined;
                 serviceState?: 'running' | 'starting' | 'stopped' | 'detecting' | 'healthy' | 'unhealthy' | 'stopping' | 'failed' | undefined;
                 readiness?: 'ready' | 'not_ready' | 'not_reported' | undefined;
                 endpointUrl?: string | undefined;
@@ -564,6 +567,7 @@ export type ProjectWorkersActionResultById = {
                 kind?: string | undefined;
                 commandPreview?: string | undefined;
                 unavailableReason?: string | undefined;
+                unavailableMachineId?: string | undefined;
                 browserTarget?: {
                     targetId: string;
                     kind: 'localServicePreview';
@@ -576,6 +580,36 @@ export type ProjectWorkersActionResultById = {
                         tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                     } | undefined;
                     sessionId?: string | undefined;
+                    serviceTarget?: {
+                        kind: 'managed_service';
+                        machineId: string;
+                        cwd: string;
+                        managedServiceId: string;
+                        declaration: {
+                            workspaceRefId: string;
+                            selection: {
+                                kind: 'manifest';
+                                name: string;
+                            } | {
+                                kind: 'native';
+                                source: {
+                                    kind: 'native';
+                                    tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                    file: string;
+                                    target: string;
+                                } | {
+                                    kind: 'pluginNative';
+                                    adapter: {
+                                        pluginId: string;
+                                        localId: string;
+                                    };
+                                    file: string;
+                                    target: string;
+                                };
+                            };
+                        };
+                        workspaceId?: string | undefined;
+                    } | undefined;
                 } | {
                     targetId: string;
                     kind: 'hostedPluginWeb';
@@ -697,6 +731,7 @@ export type ProjectWorkersActionResultById = {
                         };
                     };
                 } | undefined;
+                execution?: 'primary' | 'portable' | undefined;
                 serviceState?: 'running' | 'starting' | 'stopped' | 'detecting' | 'healthy' | 'unhealthy' | 'stopping' | 'failed' | undefined;
                 readiness?: 'ready' | 'not_ready' | 'not_reported' | undefined;
                 endpointUrl?: string | undefined;
@@ -707,6 +742,7 @@ export type ProjectWorkersActionResultById = {
                 kind?: string | undefined;
                 commandPreview?: string | undefined;
                 unavailableReason?: string | undefined;
+                unavailableMachineId?: string | undefined;
                 browserTarget?: {
                     targetId: string;
                     kind: 'localServicePreview';
@@ -719,6 +755,36 @@ export type ProjectWorkersActionResultById = {
                         tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                     } | undefined;
                     sessionId?: string | undefined;
+                    serviceTarget?: {
+                        kind: 'managed_service';
+                        machineId: string;
+                        cwd: string;
+                        managedServiceId: string;
+                        declaration: {
+                            workspaceRefId: string;
+                            selection: {
+                                kind: 'manifest';
+                                name: string;
+                            } | {
+                                kind: 'native';
+                                source: {
+                                    kind: 'native';
+                                    tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                    file: string;
+                                    target: string;
+                                } | {
+                                    kind: 'pluginNative';
+                                    adapter: {
+                                        pluginId: string;
+                                        localId: string;
+                                    };
+                                    file: string;
+                                    target: string;
+                                };
+                            };
+                        };
+                        workspaceId?: string | undefined;
+                    } | undefined;
                 } | {
                     targetId: string;
                     kind: 'hostedPluginWeb';
@@ -768,7 +834,11 @@ export type ProjectWorkersActionResultById = {
                 } | undefined;
             }[];
         } | {
-            status: 'absent' | 'unavailable';
+            status: 'absent';
+        } | {
+            status: 'unavailable';
+            machineId?: string | undefined;
+            reasonCode?: 'workspace_unavailable' | 'observation_changed' | 'topology_unavailable' | 'machine_unavailable' | 'snapshot_invalid' | 'snapshot_machine_mismatch' | 'binding_invalid' | 'observation_unavailable' | 'account_rows_unavailable' | 'external_observation_unsupported' | undefined;
         };
     } | {
         status: 'unavailable' | 'locked' | 'invalid';

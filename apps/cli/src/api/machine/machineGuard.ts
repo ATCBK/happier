@@ -1,4 +1,4 @@
-import { getActionSpec } from '@happier-dev/protocol/actions';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ActionApprovalRequestCreatedResultSchema, ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { MACHINE_GUARD_ACTION_INPUT_SCHEMAS, MACHINE_GUARD_ACTION_OUTPUT_SCHEMAS, type MachineGuardActionId } from '@happier-dev/protocol/actions/specs/machineGuard';
 import { executeCapturedMachineAction } from './capturedMachineAction';

@@ -9,7 +9,6 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { Modal } from '@/modal';
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 import { isTeamActionApprovalPendingError } from '@/sync/ops/teams/teamActionClient';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -86,6 +85,12 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
     props: Readonly<{ scope: ServerAccountScope; source: TeamCredentialSourceLocatorV1 }>,
 ) {
     const router = useRouter();
+    const scope = React.useMemo(() => ({
+        serverId: props.scope.serverId,
+        accountId: props.scope.accountId,
+    }), [props.scope.serverId, props.scope.accountId]);
+    const sourceKey = teamCredentialSourceLocatorKeyV1(props.source);
+    const source = React.useMemo(() => props.source, [sourceKey]);
     const [rows, setRows] = React.useState<readonly TeamCredentialSourceResourceAdministrationV1[] | null>(null);
     const [error, setError] = React.useState<string | null>(null);
     const [pendingId, setPendingId] = React.useState<string | null>(null);
@@ -97,12 +102,13 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
     // The ref also withdraws admission before React commits the disabled controls.
     const rowsCurrentRef = React.useRef(false);
     const generation = React.useRef(0);
+    const actionLifetime = React.useRef<AbortController | null>(null);
 
     const reload = React.useCallback(async () => {
         const requestGeneration = ++generation.current;
         rowsCurrentRef.current = false;
         setRowsCurrent(false);
-        const outcome = await listTeamCredentialSourceResources(props);
+        const outcome = await listTeamCredentialSourceResources({ scope, source });
         if (generation.current !== requestGeneration) return;
         if (outcome.kind === 'succeeded') {
             setRows(outcome.value.resources);
@@ -113,13 +119,13 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
         } else {
             setError(credentialFailureMessage(outcome.failure));
         }
-    }, [props.scope, props.source]);
+    }, [scope, source]);
     const loadMore = React.useCallback(async () => {
         if (!nextCursor || !rowsCurrentRef.current) return;
         const requestGeneration = generation.current;
         setLoadingMore(true);
         try {
-            const outcome = await listTeamCredentialSourceResources({ ...props, cursor: nextCursor });
+            const outcome = await listTeamCredentialSourceResources({ scope, source, cursor: nextCursor });
             if (generation.current !== requestGeneration) return;
             if (outcome.kind === 'succeeded') {
                 setRows((current) => [...(current ?? []), ...outcome.value.resources.filter(
@@ -128,7 +134,7 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
                 setNextCursor(readSourceResourceNextCursor(outcome.value));
             } else setError(credentialFailureMessage(outcome.failure));
         } finally { setLoadingMore(false); }
-    }, [nextCursor, props.scope, props.source]);
+    }, [nextCursor, scope, source]);
     const approval = useActionApprovalContinuation({
         scopeKey: `${props.scope.serverId}:${props.scope.accountId}:credential-source:${teamCredentialSourceLocatorKeyV1(props.source)}`,
         serverId: props.scope.serverId,
@@ -136,11 +142,14 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
     });
 
     React.useEffect(() => {
+        const controller = new AbortController();
+        actionLifetime.current = controller;
         setRows(null);
         setError(null);
         setNextCursor(null);
         void reload();
         return () => {
+            controller.abort();
             generation.current += 1;
             rowsCurrentRef.current = false;
         };
@@ -152,6 +161,8 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
         expectedRevision = row.revision,
     ): Promise<boolean> => {
         if (!rowsCurrentRef.current) return false;
+        const signal = actionLifetime.current?.signal;
+        if (!signal || signal.aborted) return false;
         setPendingId(row.id);
         try {
             const outcome = await updateTeamCredentialResource({
@@ -159,8 +170,9 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
                 resourceId: row.id,
                 expectedRevision,
                 ...patch,
-                ...(patch.enabled === false ? { confirmedByPresentUser: true as const } : {}),
+                signal,
             });
+            if (signal.aborted) return false;
             if (outcome.kind === 'failed') {
                 await reload();
                 setError(credentialFailureMessage(outcome.failure));
@@ -169,6 +181,7 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
             fireAndForget(reload(), { tag: 'SharedWithTeamsSourceAdministration.revalidate' });
             return true;
         } catch (cause) {
+            if (signal.aborted) return false;
             if (isTeamActionApprovalPendingError(cause)) approval.requestApproval(cause.registration);
             await reload();
             if (!isTeamActionApprovalPendingError(cause)) setError(t('teams.errors.generic'));
@@ -219,7 +232,6 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
                             title={t('common.disable')}
                             disabled={!rowsCurrent || pendingId === row.id || approval.approvalPending}
                             onPress={async () => {
-                                if (!await Modal.confirm(t('common.disable'), t('teams.credentials.delete.body'), { confirmText: t('common.disable'), destructive: true })) return;
                                 await update(row, { enabled: false });
                             }}
                             showChevron={false}
@@ -242,11 +254,12 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
                             disabled={!rowsCurrent || pendingId === row.id || approval.approvalPending}
                             onPress={async () => {
                                 if (!rowsCurrentRef.current) return;
-                                if (!await Modal.confirm(t('teams.credentials.delete.title', { name: row.displayName }), t('teams.credentials.delete.body'), { confirmText: t('teams.credentials.delete.action'), destructive: true })) return;
-                                if (!rowsCurrentRef.current) return;
+                                const signal = actionLifetime.current?.signal;
+                                if (!signal || signal.aborted) return;
                                 setPendingId(row.id);
                                 try {
-                                    const outcome = await deleteTeamCredentialResource({ scope: props.scope, resourceId: row.id, expectedRevision: row.revision, confirmedByPresentUser: true });
+                                    const outcome = await deleteTeamCredentialResource({ scope: props.scope, resourceId: row.id, expectedRevision: row.revision, signal });
+                                    if (signal.aborted) return;
                                     if (outcome.kind === 'failed') {
                                         await reload();
                                         setError(credentialFailureMessage(outcome.failure));
@@ -254,6 +267,7 @@ export const SharedWithTeamsSourceAdministration = React.memo(function SharedWit
                                         fireAndForget(reload(), { tag: 'SharedWithTeamsSourceAdministration.revalidate' });
                                     }
                                 } catch (cause) {
+                                    if (signal.aborted) return;
                                     if (isTeamActionApprovalPendingError(cause)) approval.requestApproval(cause.registration);
                                     await reload();
                                     if (!isTeamActionApprovalPendingError(cause)) setError(t('teams.errors.generic'));

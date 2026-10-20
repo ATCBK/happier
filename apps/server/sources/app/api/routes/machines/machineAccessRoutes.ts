@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { omit } from 'zod/mini';
 import { MachineAccessGrantSetInputV1Schema, MachineAccessGrantRemoveInputV1Schema, MachineAccessGrantsListResultV1Schema, MachineAccessMutationResultV1Schema, MachineAccessRecipientCensusResponseV1Schema, MachineAccessRefusalV1Schema, MachineRecipientKeyEnvelopeCommitInputV1Schema, MachineRecipientKeyEnvelopeCommitResponseV1Schema, MachineRecipientKeyEnvelopePageQueryV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import {
@@ -11,11 +11,11 @@ import {
 import { inTx } from '@/storage/inTx';
 import type { Fastify } from '../../types';
 
-const params = z.object({ id: z.string().min(1) }).strict();
+const params = z.strictObject({ id: z.string().check(z.minLength(1)) });
 const setBody = omit(MachineAccessGrantSetInputV1Schema, { serverId: true, machineId: true });
 const removeBody = z.union([
     omit(MachineAccessGrantRemoveInputV1Schema, { serverId: true, machineId: true }),
-    z.object({}).strict(),
+    z.strictObject({}),
 ]);
 
 /** Strict HTTP adapters; the Machine owner decides membership, readiness and mutation effects. */
@@ -32,10 +32,7 @@ export function registerMachineAccessRoutes(app: Fastify) {
         schema: { params, body: setBody, response: { 200: MachineAccessMutationResultV1Schema } },
     }, async (request) => inTx((tx) => setMachineAccessGrantInTx(tx, {
         actorAccountId: request.userId, machineId: request.params.id, ...request.body,
-    }), {
-        // Grant readiness and effective-recipient census precede distinct grant writes.
-        isolationLevel: "Serializable",
-    }));
+    })));
 
     app.delete('/v1/machines/:id/access', {
         preHandler: app.authenticate,
@@ -46,10 +43,7 @@ export function registerMachineAccessRoutes(app: Fastify) {
         ...('principal' in request.body
             ? { principal: request.body.principal }
             : { principal: { kind: 'account' as const, accountId: request.userId }, leave: true as const }),
-    }), {
-        // Alternative-grant removal and effective-loss census must serialize across grant writers.
-        isolationLevel: "Serializable",
-    }));
+    })));
 
     app.get('/v1/machines/:id/data-key-envelopes', {
         preHandler: app.authenticate,
@@ -74,8 +68,5 @@ export function registerMachineAccessRoutes(app: Fastify) {
         },
     }, async (request) => inTx((tx) => commitMachineRecipientKeyEnvelopesInTx(tx, {
         actorAccountId: request.userId, machineId: request.params.id, ...request.body,
-    }), {
-        // Recipient mode/key and current grant checks precede envelope upserts.
-        isolationLevel: "Serializable",
-    }));
+    })));
 }

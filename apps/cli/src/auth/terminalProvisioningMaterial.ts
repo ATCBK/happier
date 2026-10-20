@@ -1,4 +1,6 @@
 import tweetnacl from 'tweetnacl';
+import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
+import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { resolveTerminalProvisioningVariantV2 } from '@happier-dev/protocol/crypto/terminalProvisioningV2';
 
@@ -22,35 +24,40 @@ function publicKeyMatchesMachineKey(publicKey: Uint8Array, machineKey: Uint8Arra
   return difference === 0;
 }
 
-/**
- * One canonical CLI material decision for authenticated terminal/QR v3
- * provisioning, owned by the shared protocol variant policy. The CLI supplies
- * only its authoritative persisted credential shape; the requester's
- * token-only capability is admission at the caller and never a mode authority.
- * Keyed credentials — data-key or legacy-secret — resolve the same Account
- * content private key; legacy secrets derive it through the protocol
- * derivation owner instead of minting a second formula.
- */
-export function resolveTerminalProvisioningMaterial(credentials: StoredCredentials): TerminalProvisioningMaterial {
-  const variant = resolveTerminalProvisioningVariantV2({
-    encryptionMode: credentials.encryption ? 'e2ee' : 'plain',
-  });
+/** Persisted authenticated Account mode controls issuance; retained keys are only custody. */
+export function resolveTerminalProvisioningMaterial(
+  credentials: StoredCredentials,
+  currentness: Pick<AccountEncryptionCurrentnessResponse, 'mode' | 'contentKeyFingerprint'> | null,
+): TerminalProvisioningMaterial {
+  const encryptionMode = currentness?.mode;
+  if (encryptionMode !== 'plain' && encryptionMode !== 'e2ee') {
+    throw new Error('Authenticated Account encryption mode is unavailable');
+  }
+  const variant = resolveTerminalProvisioningVariantV2({ encryptionMode });
   if (variant === 'tokenOnly') return { kind: 'tokenOnly' };
 
   const encryption = credentials.encryption;
   if (!encryption) {
-    // Unreachable with the resolver input above; kept fail-closed for
-    // invariant safety rather than inferring material.
-    throw new Error('Invalid E2EE provisioning policy result');
+    throw new Error('Account encryption material is unavailable on this device');
   }
+  let contentPrivateKey: Uint8Array;
   if (encryption.type === 'dataKey') {
+    if (encryption.machineKey.length !== 32 || encryption.publicKey.length !== 32) {
+      throw new Error('Stored account encryption material has an invalid length');
+    }
     if (!publicKeyMatchesMachineKey(encryption.publicKey, encryption.machineKey)) {
       throw new Error('Stored account encryption material is inconsistent with its public key');
     }
-    return { kind: 'dataKey', contentPrivateKey: encryption.machineKey };
+    contentPrivateKey = encryption.machineKey;
+  } else {
+    if (encryption.secret.length !== 32) {
+      throw new Error('Stored legacy recovery-secret material has an invalid length');
+    }
+    contentPrivateKey = deriveAccountMachineKeyFromRecoverySecret(encryption.secret);
   }
-  if (encryption.secret.length !== 32) {
-    throw new Error('Stored legacy recovery-secret material has an invalid length');
+  const fingerprint = computeAccountEncryptionMigrateKeyFingerprintV1(tweetnacl.box.keyPair.fromSecretKey(contentPrivateKey).publicKey);
+  if (!currentness?.contentKeyFingerprint || currentness.contentKeyFingerprint !== fingerprint) {
+    throw new Error('Account encryption material does not match the current Account content key');
   }
-  return { kind: 'dataKey', contentPrivateKey: deriveAccountMachineKeyFromRecoverySecret(encryption.secret) };
+  return { kind: 'dataKey', contentPrivateKey };
 }

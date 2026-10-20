@@ -294,7 +294,7 @@ export const LOCAL_SERVICES_RUNTIME_ACTION_OUTPUT_SCHEMAS = Object.freeze({
   'localServices.publicPreview.revoke': DaemonLocalServicePublicPreviewRevokeResponseV1Schema,
   'localServices.publicPreview.copyUrl': DaemonLocalServicePublicPreviewCopyUrlResponseV1Schema,
   'localServices.actions.copyUrl': LocalServiceActionResultV1Schema,
-  'localServices.actions.openPreview': LocalServiceActionResultV1Schema,
+  'localServices.actions.openPreview': DaemonLocalServicePreviewOpenOrCreateResponseV1Schema,
   'localServices.actions.forget': LocalServiceActionResultV1Schema,
   'localServices.actions.stopManaged': LocalServiceActionResultV1Schema,
   'localServices.actions.restartManaged': LocalServiceActionResultV1Schema,

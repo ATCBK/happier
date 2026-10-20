@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema, defineStoredReadProjection } from '@happier-dev/protocol/json/storedReadSchema';
 import { createProtocolStoredReadSchema, isProtocolComposableSchema } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
 
@@ -13,24 +13,23 @@ type HostProtocolSchema<TValue> = Readonly<{
  * Parsing and normalization remain owned by the public validator-neutral
  * Protocol value; this adapter adds no second schema semantics.
  */
-function composeHostProtocolZod<TValue>(schema: HostProtocolSchema<TValue>): z.ZodType<TValue> {
-    return z.unknown().transform((value, context): TValue => {
+function composeHostProtocolZod<TValue>(schema: HostProtocolSchema<TValue>): z.ZodMiniType<TValue> {
+    return z.pipe(z.unknown(), z.transform((value, context): TValue => {
         const parsed = schema.safeParse(value);
         if (parsed.success) return parsed.data;
-        context.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: 'Value does not match the canonical Protocol schema.',
-        });
+        context.issues.push({
+            code: "custom",
+            message: 'Value does not match the canonical Protocol schema.', input: context.value });
         return z.NEVER as TValue;
-    });
+    }));
 }
 
-export function asHostProtocolZod<TValue>(schema: HostProtocolSchema<TValue>): z.ZodType<TValue> {
+export function asHostProtocolZod<TValue>(schema: HostProtocolSchema<TValue>): z.ZodMiniType<TValue> {
     return defineStoredReadProjection(composeHostProtocolZod(schema), () => {
         const stored = isProtocolComposableSchema<unknown, TValue>(schema)
             ? createProtocolStoredReadSchema(schema)
             : schema instanceof z.core.$ZodType
-                ? createStoredReadSchema(schema as z.core.$ZodType<TValue>)
+                ? createStoredReadSchema(schema)
                 : schema;
         return composeHostProtocolZod(stored);
     });

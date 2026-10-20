@@ -37,7 +37,7 @@ import { authorizeTrackedRunnerAgentDaemonServiceOperation } from '../agentRunti
 import { createAgentSessionRunnerFactoryBinding } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
 import { readOrCreateInstallationIdentity } from '../identity/store';
 import type { TrackedSession } from '../types';
-import { AccountSettingsSchema } from '@happier-dev/protocol';
+import { AccountProfileSchema, AccountSettingsSchema } from '@happier-dev/protocol';
 import { buildApprovalExecutionOriginV1 } from '@happier-dev/protocol/actions/actionExecutor';
 import { signExternalActionApprovalInputV1, verifyExternalActionApprovalInputV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -45,9 +45,10 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import { refreshTerminalPresentUserPolicy } from '@/settings/accountSettings/resolveEffectiveTerminalPresentUserPolicy';
 import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { decodePlainArtifactStoredContent, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
-import { StoredApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { StoredApprovalRequestSchema, requiresExactDaemonApprovalReplay } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
+import { SessionCreationKeyV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
 import { AccountEncryptionModeResponseSchema } from '@happier-dev/protocol/account/encryptionMode';
 import { loadPromptLibraryCatalogV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { PromptLibraryRowsListResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
@@ -64,6 +65,12 @@ import { executeManagedMachinePolicyAction } from './managedMachinePolicyAction'
 import { fixture as nativeFixture } from '@/plugins/runtime/invocation/actions/managedCustody.testkit';
 import { createCliActionExecutor } from '@/session/actions/createCliActionExecutor';
 import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
+import { createDaemonManagedMachinePolicyRuntime, readManagedMachinePolicyCensus } from './managedMachinePolicyRuntime';
+import { ManagedWakeTargetV1Schema } from '@happier-dev/protocol/machines/managed/managedIntentV1';
+import { getSharedBlockingApprovalCoordinator } from '@happier-dev/protocol/actions/blockingApprovalCoordinator';
+import { resolveApprovalRequestExecutionInput } from '@happier-dev/protocol/approvals/approvalRequestTransition';
+import { logger } from '@/ui/logger';
+import { ManagedPendingActivationFailureRequestV1Schema, PendingActivationAuthorizationV1Schema } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
 
 const approvalWire = vi.hoisted(() => {
     const sockets: Array<{ wake(): void }> = [];
@@ -130,6 +137,198 @@ function adapter(withAuthority = true, executeSessionStart?: Parameters<typeof c
 }
 
 describe('daemon managed Machine Action factory', () => {
+    it.each([
+        ['cleanup', false], ['cleanup', true], ['rearmed-wake', false], ['rearmed-wake', true], ['denied-wake', false], ['retired-wake', false],
+    ] as const)('resumes %s from a separate approving client through exact daemon replay (missing coordinator: %s)', async (purpose, missingCoordinator) => {
+        const wake = purpose !== 'cleanup';
+        const denied = purpose === 'denied-wake';
+        const retired = purpose === 'retired-wake';
+        vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
+        const diagnostics = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => undefined);
+        const token = `fixture.${Buffer.from(JSON.stringify({ sub: 'account', tokenEpoch: 0,
+            provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.signature`;
+        const ownCredentials = { token, encryption: null, credentialProvenance: 'stored_session' as const };
+        setActiveAccountSettingsSnapshot({ source: 'network', settings: AccountSettingsSchema.parse({}), rawSettings: {},
+            settingsVersion: 1, loadedAtMs: Date.now(), settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(ownCredentials) });
+        const signing = nacl.sign.keyPair();
+        const effects: string[] = [];
+        const native = nativeFixture({ privateNative: true, supportedIntents: ['start', 'delete'],
+            nativeRoleResults: wake ? { inspect: { observedAt: Date.now(), availability: 'present', power: 'running', storage: 'retained' } } : {},
+            onNativeRole: role => { effects.push(role); } });
+        let machine = ManagedMachineV1Schema.parse({ id: 'managed', homeId: 'srv_home', custodianAccountId: 'account',
+            controller: { machineId: 'controller', installationId: 'installation' },
+            launch: { provider: { pluginId: 'acme.compute', localId: 'vm' }, schemaVersion: 1, name: 'Guest', choices: {} },
+            allocation: 'bound', resource: { contributionRef: { pluginId: 'acme.compute', localId: 'vm' }, schemaVersion: 1, value: {} },
+            creationState: wake ? 'active' : 'canceled', desired: wake ? 'stop' : 'delete', desiredWhen: 'now', intentRevision: 1,
+            ...(wake ? { enrolledMachineId: 'guest', observation: { observedAt: Date.now(), availability: 'present', power: 'stopped' } } : {}),
+            retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: wake });
+        const target = ManagedWakeTargetV1Schema.parse({ homeId: machine.homeId, managedId: machine.id, enrolledMachineId: 'guest',
+            controller: machine.controller, expectedIntentRevision: 1, reason: 'admitted-work',
+            origin: { kind: 'session-input', session: { homeId: machine.homeId, sessionId: 'retained-session' },
+                pendingRequestId: 'original-input', requestedAt: Date.now() } });
+        let rearmed = false;
+        let failedActivation: ReturnType<typeof PendingActivationAuthorizationV1Schema.parse> | undefined;
+        type ArtifactWire = { id: string; header: string; body: string; dataEncryptionKey: string;
+            headerVersion: number; bodyVersion: number; seq: number; createdAt: number; updatedAt: number; provenance?: unknown };
+        let artifact: ArtifactWire | undefined;
+        const storedApproval = () => {
+            if (!artifact) throw new Error('Cleanup approval was not persisted');
+            const content = decodePlainArtifactStoredContent(artifact.body);
+            return StoredApprovalRequestSchema.parse(JSON.parse(String(content && typeof content === 'object' ? Reflect.get(content, 'body') : null)));
+        };
+        let waiting!: () => void;
+        const held = new Promise<void>(resolve => { waiting = resolve; });
+        const controllerPaths: string[] = [];
+        // Home/Artifact HTTP and the update socket are the substituted boundaries.
+        // Action policy, the two executors, replay, operation and native owner stay real.
+        vi.spyOn(axios, 'get').mockImplementation(async url => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+            if (path === ACCOUNT_SECURITY_PATH_V1) return { status: 200, data: AccountSecurityGetResponseV1Schema.parse({ v: 1,
+                encryptionMode: 'plain', terminalPresentUserPolicy: 'allowed', nativeEmail: null,
+                password: { status: 'not_enrolled', revision: null } }) };
+            if (artifact && path === `/v1/artifacts/${artifact.id}`) {
+                if (storedApproval().status === 'open') waiting();
+                return { status: 200, data: { ...artifact, ownerAccountId: 'account', access: 'owner', encryptionMode: 'plain', publicAudience: 'none' } };
+            }
+            throw new Error(`Unexpected cleanup GET ${path}`);
+        });
+        vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+            const path = new URL(String(url)).pathname;
+            if (path === '/v1/artifacts' || artifact && path === `/v1/artifacts/${artifact.id}`) {
+                const record = body as { id?: string; header: string; body: string; dataEncryptionKey?: string;
+                    expectedHeaderVersion?: number; expectedBodyVersion?: number; provenance?: unknown };
+                if (path === '/v1/artifacts') {
+                    if (!record.id || !record.dataEncryptionKey) throw new Error('Missing canonical approval Artifact fields');
+                    artifact = { id: record.id, header: record.header, body: record.body, dataEncryptionKey: record.dataEncryptionKey,
+                        headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1, provenance: record.provenance };
+                    return { status: 200, data: { id: record.id, headerVersion: 1, bodyVersion: 1 } };
+                }
+                if (!artifact) throw new Error('No cleanup Artifact to update');
+                expect(record.expectedHeaderVersion).toBe(artifact.headerVersion);
+                expect(record.expectedBodyVersion).toBe(artifact.bodyVersion);
+                artifact = { ...artifact, header: record.header, body: record.body, provenance: record.provenance,
+                    headerVersion: artifact.headerVersion + 1, bodyVersion: artifact.bodyVersion + 1, seq: artifact.seq + 1, updatedAt: artifact.updatedAt + 1 };
+                for (const socket of approvalWire.sockets) socket.wake();
+                return { status: 200, data: { success: true, headerVersion: artifact.headerVersion, bodyVersion: artifact.bodyVersion } };
+            }
+            controllerPaths.push(path);
+            if (path.endsWith('/activation-failed')) {
+                const report = ManagedPendingActivationFailureRequestV1Schema.parse(body);
+                expect(report.target).toEqual(target);
+                failedActivation = PendingActivationAuthorizationV1Schema.parse({ requestId: target.origin.kind === 'session-input' ? target.origin.pendingRequestId : '',
+                    requestedAt: target.origin.kind === 'session-input' ? target.origin.requestedAt : 0,
+                    status: 'failed', failureCode: report.failureCode, managedWakeTargetV1: target });
+                return { status: 200, data: { ok: true, didFail: true } };
+            }
+            if (path.endsWith('/policies')) return { status: 200, data: { machines: [machine], targets: rearmed ? [target] : [] } };
+            if (path.endsWith('/actions/get')) return { status: 200, data: machine };
+            if (path.endsWith('/prepare-policy')) return { status: 200, data: { machine: wake ? { ...machine, desired: 'start' } : machine } };
+            if (path.endsWith('/admit-policy')) machine = ManagedMachineV1Schema.parse({ ...machine, desired: wake ? 'start' : 'delete', intentRevision: 2 });
+            if (path.endsWith('/submit-intent')) return { status: 200, data: { machine, submitted: true } };
+            if (path.endsWith('/report-intent')) machine = ManagedMachineV1Schema.parse({ ...machine,
+                ...(wake ? { observation: { observedAt: Date.now(), availability: 'present', power: 'running', storage: 'retained' } }
+                    : { allocation: 'confirmed-absent', observation: { observedAt: Date.now(), availability: 'absent' } }) });
+            return { status: 200, data: { machine, ...(path.endsWith('/admit-policy') ? { requestId: 'cleanup', replayed: false } : {}) } };
+        });
+        const currentness = createDaemonApprovalExecutionOriginCurrentness({ accountId: 'account', machineId: 'controller', serverId: configuration.activeServerId,
+            resolveCurrentMachineExecutionOriginContext: createCurrentMachineExecutionOriginContextResolver({ serverUrl, resolveCurrentMachineId: () => 'controller' }),
+            resolveTarget: createDaemonExternalActionTargetResolver({ credentials: ownCredentials }), isAccountCurrent: async () => true, listAccountApiTokens: async () => ({ tokens: [] }) });
+        const operations = createHostActionOperationRuntime({ machineId: 'controller', resolveAccountId: async () => 'account', generateOperationId: () => 'cleanup-operation' });
+        const executorParams = { sessionId: 'cleanup', token, credentials: ownCredentials, serverId: configuration.activeServerId,
+            serverIdentityId: 'srv_home', serverHttpBaseUrl: serverUrl, mode: 'plain' as const, ctx: null,
+            pluginActionExecutionOwner: 'current_process' as const, isApprovalExecutionOriginCurrent: currentness,
+            runActionOperation: operations.runActionOperation };
+        const managed = createDaemonManagedMachineActionAdapter({ credentials: ownCredentials, machineId: 'controller', serverBaseUrl: serverUrl,
+            serverId: configuration.activeServerId, installationIdentity: { installationId: 'installation', privateKey: signing.secretKey },
+            managedProviderOperationAuthority: authority,
+            resolveCurrentMachineExecutionOriginContext: createCurrentMachineExecutionOriginContextResolver({ serverUrl, resolveCurrentMachineId: () => 'controller' }),
+            acquireRuntimeRegistryLease: async () => ({ registry: native.runtimeRegistry, source: 'active', durableRevision: 1, release: async () => {} }),
+            observeActionExecution: request => operations.observeExecution(request),
+            executeManagedPolicyAction: (current, context, runApproved) => executeManagedMachinePolicyAction({ machine: current, runApproved,
+                context: wake ? context : { ...context, surface: 'cli', runtimeAccountId: 'account', serverIdentityId: 'srv_home', defaultSessionMachineId: 'controller' },
+                serverId: configuration.activeServerId, createExecutor: overrides => wake
+                    ? createCliActionExecutorFromCredentials({ ...executorParams, serverApiUrl: serverUrl, machineId: 'controller',
+                        readCredentials: async () => ownCredentials, ...overrides })
+                    : createCliActionExecutor({ ...executorParams, ...overrides }) }),
+        });
+        // Deliberately omit the shared wait/resolve binding in one composition;
+        // detached replay must refuse the lost live invocation before effects.
+        const daemonReplay = missingCoordinator
+            ? createActionExecutor({ ...createCliActionDeps(executorParams), managedMachineAction: managed,
+                runActionOperation: operations.runActionOperation, isApprovalExecutionOriginCurrent: currentness })
+            : createCliActionExecutor({ ...executorParams, managedMachineAction: managed });
+        const app = createActionExecutor({ ...createCliActionDeps(executorParams),
+            isApprovalExecutionOriginCurrent: currentness,
+            approvalRequestApprovedReplay: async ({ artifactId, request, signal }) => {
+                expect(requiresExactDaemonApprovalReplay(request)).toBe(true);
+                return await daemonReplay.replayApprovedApprovalRequest({ artifactId, ...(signal ? { signal } : {}), callerAuthority: 'present_user' });
+            },
+        });
+        let execution: Promise<ActionExecuteResult> = Promise.resolve({ ok: true });
+        const runtime = wake ? createDaemonManagedMachinePolicyRuntime({
+            readCensus: signal => readManagedMachinePolicyCensus({ homeId: machine.homeId, controller: machine.controller,
+                custodianAccountId: 'account', privateKey: signing.secretKey, token, serverUrl, signal }),
+            executePolicy: request => { execution = managed.executePolicy(request); return execution; },
+        }) : null;
+        if (runtime) {
+            // Home HTTP is the boundary: the failed authorization has no wake
+            // target until the original input is explicitly rearmed.
+            runtime.notifyChanged();
+            await vi.waitFor(() => expect(controllerPaths).toContain('/v1/machines/managed/controller/policies'));
+            expect(artifact).toBeUndefined();
+            rearmed = true;
+            runtime.notifyChanged();
+            await held;
+        } else execution = managed.executePolicy({ machine, purpose: { kind: 'creation-cleanup' } });
+        const settled = execution.then(result => ({ result }), error => ({ error }));
+        try {
+            expect(await Promise.race([held.then(() => 'held' as const), settled])).toBe('held');
+            expect(storedApproval()).toMatchObject({ status: 'open', approval: { flow: 'blocking' },
+                executionOriginV1: { authority: 'account_automation', surface: 'cli', machineId: 'controller', caller: { kind: 'host' } } });
+            expect(effects).toEqual([]);
+            expect(controllerPaths.some(path => path.endsWith('/admit-policy'))).toBe(false);
+            if (!artifact) throw new Error('Missing cleanup Artifact');
+            const asked = storedApproval();
+            if (wake) {
+                expect(asked.actionArgs).toEqual({ homeId: machine.homeId, managedId: machine.id, intent: 'start', when: 'now', expectedRevision: 1 });
+                expect(resolveApprovalRequestExecutionInput(asked)).toEqual({ ok: true, input: asked.actionArgs });
+                expect(getSharedBlockingApprovalCoordinator().getLiveWaiterCount(artifact.id)).toBe(1);
+                expect(diagnostics).toHaveBeenCalledWith('[web-latency]', expect.objectContaining({
+                    phase: 'approval.wait', status: 'started', artifactId: artifact.id,
+                    operationId: 'cleanup-operation', executionRequestId: asked.v === 2 ? asked.executionOriginV1.requestId : undefined,
+                    signalMatchesHostLifetime: true,
+                }));
+                const later = Date.now() + 180_000;
+                vi.spyOn(Date, 'now').mockReturnValue(later);
+                runtime!.notifyChanged();
+                await vi.waitFor(() => expect(controllerPaths.filter(path => path.endsWith('/policies'))).toHaveLength(3));
+                expect(getSharedBlockingApprovalCoordinator().getLiveWaiterCount(artifact.id)).toBe(1);
+            }
+            const replay = retired ? await operations.handlers.cancel({ operationId: 'cleanup-operation' })
+                : await app.execute('approval.request.decide', { artifactId: artifact.id, decision: denied ? 'reject' : 'approve' }, {
+                surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, runtimeAccountId: 'account',
+                serverId: configuration.activeServerId, serverIdentityId: 'srv_home', actionRequestId: 'separate-approval' });
+            if (!retired) expect(replay).toMatchObject({ ok: true });
+            const outcome = await settled;
+            expect(outcome, JSON.stringify({ outcome, effects, controllerPaths })).toMatchObject({ result: retired ? { ok: false, errorCode: 'cancelled' }
+                : denied ? { ok: false, errorCode: 'approval_rejected' } : missingCoordinator
+                ? { ok: false, errorCode: 'approval_stale', details: { reason: 'live_invocation_unavailable' } } : { ok: true } });
+            expect(effects).toEqual(missingCoordinator || denied || retired ? [] : [wake ? 'power' : 'destroy']);
+            if (wake && (denied || missingCoordinator || retired)) {
+                expect(failedActivation).toMatchObject({ status: 'failed', failureCode: denied ? 'managed_start_denied' : 'managed_start_failed' });
+            } else expect(failedActivation).toBeUndefined();
+            if (!retired) expect(storedApproval()).toMatchObject(denied ? { status: 'rejected' } : missingCoordinator
+                ? { status: 'failed', execution: { ok: false, errorCode: 'approval_stale', effectAttempted: false } }
+                : { status: 'executed', execution: { ok: true } });
+            expect(await operations.handlers.getV2({ operationId: 'cleanup-operation', waitForTerminal: true }))
+                .toMatchObject({ kind: 'found', operation: { state: retired ? 'cancelled' : missingCoordinator || denied ? 'failed' : 'succeeded' } });
+        } finally {
+            await operations.handlers.cancel({ operationId: 'cleanup-operation' });
+            await settled;
+            await runtime?.stop();
+        }
+    });
     it.each(['signed-ui', 'local-host'] as const)('consumes exact requester-owned recorded setup execution instead of treating Ask as setup success (%s)', async origin => {
         const token = `fixture.${Buffer.from(JSON.stringify({ sub: 'account', tokenEpoch: 0, provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.signature`;
         const ownCredentials = { token, encryption: null, credentialProvenance: 'stored_session' as const };
@@ -317,7 +516,7 @@ describe('daemon managed Machine Action factory', () => {
             features: {}, capabilities: { serverIdentity: { serverIdentityId: 'srv_home' } },
         })), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     });
-    afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
+    afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); resetActiveAccountSettingsSnapshotForTests(); });
 
     it.each([
         ['turn-ended-during-mint', 'machines.managed.acquire'], ['natural-end', 'machines.managed.acquire'],
@@ -362,7 +561,9 @@ describe('daemon managed Machine Action factory', () => {
         let homeCurrent = true;
         // Network and the marker filesystem are substituted; lifecycle,
         // retained-source admission, permission/causal policy and proof verification stay real.
-        vi.spyOn(axios, 'get').mockImplementation(async url => String(url).endsWith('/encryption/currentness')
+        vi.spyOn(axios, 'get').mockImplementation(async url => String(url).endsWith('/v1/account/profile')
+            ? { status: 200, data: AccountProfileSchema.parse({ id: 'account' }) }
+            : String(url).endsWith('/encryption/currentness')
             ? { status: 200, data: { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } }
             : { status: 200, data: { session: createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', share: null,
                 metadata: JSON.stringify({ machineId: 'controller', path: '/repo', permissionMode: currentPermission }) }) } });
@@ -521,7 +722,7 @@ describe('daemon managed Machine Action factory', () => {
                     accountId: 'account', authentication: { kind: 'account', tokenEpoch: 0 },
                     serverIdentityId: 'srv_home', machineId: controller.machineId, custodianAccountId: 'account',
                     installationId: controller.installationId, actionId, requestId: 'session-acquire',
-                    target, accountEncryptionMode: 'plain', sessionActionOrigin,
+                    target, accountEncryptionMode: 'plain', sessionActionOrigin: request.sessionActionOrigin,
                     sessionActionSource: { machineId: 'controller', installationId: 'installation' },
                     requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(request.envelope),
                 } } };
@@ -567,7 +768,7 @@ describe('daemon managed Machine Action factory', () => {
         });
         const result = await execute({ kind: 'action.execute', actionId, requestId: 'session-acquire', input,
             witness: { turnId: 'turn', inputId: 'input', userMessageSeq: 1, userMessageSeqs: [1], workDepth: 2,
-                callerPermissionMode: 'yolo', causalPermissionAuthority: null,
+                callerPermissionMode: 'yolo',
                 agentStartCaller: { kind: 'session', sessionId: 'lead', starterDepth: 1, turnDepth: 2 } } },
         { sessionId: 'lead', isCurrent: async () => true });
         if (policy === 'foreign-controller') {
@@ -719,7 +920,7 @@ describe('daemon managed Machine Action factory', () => {
         });
         const currentness = createDaemonApprovalExecutionOriginCurrentness({ accountId: 'account', machineId: 'controller', serverId: configuration.activeServerId,
             resolveCurrentMachineExecutionOriginContext: createCurrentMachineExecutionOriginContextResolver({ serverUrl, resolveCurrentMachineId: () => 'controller' }),
-            resolveTarget: createDaemonExternalActionTargetResolver({ credentials: ownCredentials }), listAccountApiTokens: unavailable,
+            resolveTarget: createDaemonExternalActionTargetResolver({ credentials: ownCredentials }), isAccountCurrent: async () => true, listAccountApiTokens: unavailable,
             externalActionMachinePublicKey: signing.publicKey,
             verifyExternalExecutionAuthorization: args => verifyExternalActionExecutionAuthorizationCurrent({ ...args,
                 privateKey: signing.secretKey, installationId: 'installation', serverHttpBaseUrl: serverUrl }) });
@@ -769,13 +970,13 @@ describe('daemon managed Machine Action factory', () => {
         // HTTP is the real remote Machine availability boundary. A missing
         // guest must not be replaced by the locally available controller.
         const readMachine = vi.spyOn(axios, 'get').mockResolvedValue({ status: 404, data: {} });
-        const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId: 'lead' });
-        const result = await deps.sessionSpawnNew({ creationKey: 'guest-start',
+        const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId: 'lead', mode: 'plain', ctx: null });
+        const result = await deps.sessionSpawnNew({ creationKey: SessionCreationKeyV1Schema.parse('guest-start'),
             sessionCreationTag: deriveSessionCreationTagV1({ callerCreationNamespace: 'user', creationKey: 'guest-start' }),
             executionTarget: { serverId: configuration.activeServerId, machineId: 'actual-guest' },
             directory: { kind: 'managed' },
             agentTarget: { kind: 'agent', identity: { pluginId: 'acme.agent', localId: 'coding' } },
-            actionCaller: { kind: 'session', sessionId: 'lead' },
+            actionCaller: { kind: 'session', sessionId: 'lead', starterDepth: 0, turnDepth: 0 },
         });
         expect(result).toMatchObject({ type: 'error', code: 'incompatible_target' });
         expect(readMachine.mock.calls.map(([url]) => String(url))).toEqual([
@@ -799,12 +1000,12 @@ describe('daemon managed Machine Action factory', () => {
         // Ordinary spawn's daemon/network boundary is substituted; schema,
         // permission and Agent-start admission are the real Action executor.
         const started: unknown[] = [];
-        const executor = createActionExecutor({ sessionSpawnNew: async (input: Parameters<ActionExecutorDeps['sessionSpawnNew']>[0]) => {
+        const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), sessionSpawnNew: async (input: Parameters<ActionExecutorDeps['sessionSpawnNew']>[0]) => {
             started.push(input);
             return { type: 'success', disposition: 'created', sessionId: 'session', executionTarget: input.executionTarget,
                 organizationPlacement: { folderId: null, tagIds: [] }, initialInput: { status: 'accepted', localId: 'message' } };
-        } } as unknown as ActionExecutorDeps);
-        const start = { creationKey: 'start', directory: { kind: 'managed' as const },
+        } });
+        const start = { creationKey: SessionCreationKeyV1Schema.parse('start'), directory: { kind: 'managed' as const },
             agentTarget: { kind: 'agent' as const, identity: { pluginId: 'acme.agent', localId: 'coding' } }, initialInput: { text: 'Private task' } };
         const managedMachineAction = adapter(true, (input, context) => executor.execute('session.spawn_new', input, context));
         const operations = createHostActionOperationRuntime({ machineId: 'controller', resolveAccountId: async () => 'account', generateOperationId: () => 'operation' });
@@ -1003,6 +1204,7 @@ describe('daemon managed Machine Action factory', () => {
                 serverId: configuration.activeServerId,
                 resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'srv_home', machineId: 'actual-guest' }),
                 resolveTarget: createDaemonExternalActionTargetResolver({ credentials: sourceCredentials }),
+                isAccountCurrent: async () => true,
                 listAccountApiTokens: async () => AccountApiTokensListActionOutputV1Schema.parse({ tokens: [] }),
                 externalActionMachinePublicKey: guestKeys.publicKey,
                 verifyExternalExecutionAuthorization: args => verifyExternalActionExecutionAuthorizationCurrent({ ...args,
@@ -1131,7 +1333,7 @@ describe('daemon managed Machine Action factory', () => {
             expect(original).not.toBeNull();
             const managed = adapter(true, (spawnInput, context, machine) => dispatchManagedSessionStart({ authorization: original!, input: spawnInput,
                 continuation: { managedId: machine.id, creationRequestId: sessionActionOrigin.requestId, expectedIntentRevision: machine.intentRevision },
-                serverId: configuration.activeServerId, serverHttpBaseUrl: serverUrl, installationId: 'installation', privateKey: controllerKeys.secretKey,
+                serverHttpBaseUrl: serverUrl, installationId: 'installation', privateKey: controllerKeys.secretKey,
                 signal: context.signal }), async context => Boolean(context.externalActionExecutionAuthorization?.requesterHttpProjection),
                 controllerKeys.secretKey, sourceCredentials, createManagedSessionStartApprovalObserver({ credentials: sourceCredentials,
                     machineId: 'controller', observeRecordedApprovalExecution: args => sourceExecutor.observeRecordedApprovalExecution(args) }));
@@ -1231,7 +1433,7 @@ describe('daemon managed Machine Action factory', () => {
 
     it('refuses a known continuation without its operation observation owner before admitting compute', async () => {
         const post = vi.spyOn(axios, 'post');
-        const spawn = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials, sessionId: '' }));
+        const spawn = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials, sessionId: '', mode: 'plain', ctx: null }));
         await expect(adapter(true, (input, context) => spawn.execute('session.spawn_new', input, context))({
             actionId: 'machines.managed.acquire', input: {
                 selection: { kind: 'one-off', homeId: 'srv_home', controller: { machineId: 'controller', installationId: 'installation' },

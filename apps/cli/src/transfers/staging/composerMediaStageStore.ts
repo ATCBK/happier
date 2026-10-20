@@ -15,11 +15,11 @@ import {
 } from 'node:fs/promises';
 import { isAbsolute, join, relative, sep } from 'node:path';
 
-import { ComposerContentHandleV1Schema } from '@happier-dev/protocol/runtime/input/composerContentV1';
+import { ComposerContentHandleV1Schema, ComposerContentClaimantV1Schema, type ComposerContentClaimantV1 } from '@happier-dev/protocol/runtime/input/composerContentV1';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { createProtocolStoredReadSchema } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
 import { ComposerInstanceIdSchema } from '@happier-dev/protocol/runtime/input/composerAttachmentV1';
-import type { ComposerContentHandleV1, ComposerContentMediaKindV1, ComposerContentMimeTypeV1, ComposerRefV1, PluginContributionIdentityV1, SessionExecutionTargetV1 } from '@happier-dev/protocol';
+import type { ComposerContentHandleV1, ComposerContentMediaKindV1, ComposerContentMimeTypeV1, PluginContributionIdentityV1, SessionExecutionTargetV1 } from '@happier-dev/protocol';
 import { ComposerRefV1Schema } from '@happier-dev/protocol/plugins/ui/composerRef';
 import { PendingLocalIdSchema } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
@@ -50,12 +50,11 @@ type ComposerMediaStageManifest = Readonly<{
   v: typeof MANIFEST_VERSION;
   createdAtMs: number;
   handle: ComposerContentHandleV1;
+  /** Internal producer fact; ordinary mutable uploads omit it. */
+  custody?: 'submission';
 }>;
 
-export type ComposerMediaStageClaimant = Readonly<{
-  composer: ComposerRefV1;
-  attachmentInstanceId: string;
-}>;
+export type ComposerMediaStageClaimant = ComposerContentClaimantV1;
 
 type ComposerMediaStageFailureCode =
   | 'invalid_metadata'
@@ -84,6 +83,7 @@ export type ComposerMediaStageInspection =
       name: string;
       sizeBytes: number;
       sha256: string;
+      isSubmissionSnapshot?: true;
     }>
   | Readonly<{
       status: 'unavailable';
@@ -166,11 +166,6 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function hasExactKeys(value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean {
-  const actualKeys = Object.keys(value);
-  return actualKeys.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
-}
-
 function readManifest(value: unknown): ComposerMediaStageManifest | null {
   if (!isRecord(value)) return null;
   if (value.v !== MANIFEST_VERSION) return null;
@@ -178,16 +173,22 @@ function readManifest(value: unknown): ComposerMediaStageManifest | null {
   if (typeof createdAtMs !== 'number' || !Number.isSafeInteger(createdAtMs) || createdAtMs < 0) return null;
   const handle = createStoredReadSchema(ComposerContentHandleV1Schema).safeParse(value.handle);
   if (!handle.success) return null;
+  if (value.custody !== undefined && value.custody !== 'submission') return null;
   return {
     v: MANIFEST_VERSION,
     createdAtMs,
     handle: handle.data,
+    ...(value.custody === 'submission' ? { custody: 'submission' } : {}),
   };
 }
 
 function readClaimant(value: unknown, stored = false): ComposerMediaStageClaimant | null {
-  if (!isRecord(value) || (!stored && !hasExactKeys(value, ['composer', 'attachmentInstanceId']))) return null;
-  const composer = (stored ? ComposerRefV1StoredSchema : ComposerRefV1Schema).safeParse(value.composer);
+  if (!stored) {
+    const parsed = ComposerContentClaimantV1Schema.safeParse(value);
+    return parsed.success ? parsed.data : null;
+  }
+  if (!isRecord(value)) return null;
+  const composer = ComposerRefV1StoredSchema.safeParse(value.composer);
   const attachmentInstanceId = ComposerInstanceIdSchema.safeParse(value.attachmentInstanceId);
   return composer.success && attachmentInstanceId.success
     ? { composer: composer.data, attachmentInstanceId: attachmentInstanceId.data }
@@ -590,6 +591,7 @@ export function createComposerMediaStageStore(input: Readonly<{
       name: manifest.handle.name,
       sizeBytes: manifest.handle.sizeBytes,
       sha256: manifest.handle.sha256,
+      ...(manifest.custody === 'submission' ? { isSubmissionSnapshot: true as const } : {}),
     };
   };
 
@@ -641,49 +643,31 @@ export function createComposerMediaStageStore(input: Readonly<{
   };
 
   const forkClaimForSubmission: ComposerMediaStageStore['forkClaimForSubmission'] = async (request) => {
+    const sourceHandle = ComposerContentHandleV1Schema.safeParse(request.handle);
     const sourceClaimant = readClaimant(request.sourceClaimant);
     const destinationClaimant = readClaimant(request.destinationClaimant);
     const messageLocalId = PendingLocalIdSchema.safeParse(request.messageLocalId);
-    if (!sourceClaimant || !destinationClaimant || !messageLocalId.success) return unavailable('corrupt');
-    if (sameClaimant(sourceClaimant, destinationClaimant)) {
-      // A same-document capture must still submit against its own fork. Keeping
-      // the original handle here would let a concurrent draft removal delete the
-      // exact bytes this submission captured between inspection and Session
-      // persistence. Rejoin (or acquire) the source claim idempotently, then
-      // fork below like every other submission snapshot.
-      const claimed = await claim({
-        handle: request.handle,
-        executionTarget: request.executionTarget,
-        owner: request.owner,
-        claimant: sourceClaimant,
-      });
-      if (claimed.status !== 'claimed') return claimed;
-    }
-
-    const sourceInspection = await inspectStage({ ...request, claimant: sourceClaimant });
-    if (sourceInspection.status !== 'ready') return sourceInspection;
-    const sourceClaim = await readStageClaim(stageDirectory(input.rootDirectory, sourceInspection.handle.id));
-    if (sourceClaim === 'corrupt') return unavailable('corrupt');
-    if (!sourceClaim || sourceClaim === 'unattachedRelease' || !sameClaimant(sourceClaim, sourceClaimant)) {
-      return unavailable('claimedElsewhere');
-    }
+    if (!sourceHandle.success || !sourceClaimant || !destinationClaimant || !messageLocalId.success) return unavailable('corrupt');
+    if (!sameExecutionTarget(request.executionTarget, input.executionTarget)
+      || !sameExecutionTarget(sourceHandle.data.executionTarget, input.executionTarget)) return unavailable('targetMismatch');
+    if (!sameOwner(request.owner, sourceHandle.data.owner)) return unavailable('ownerMismatch');
 
     const forkId = deterministicStageId(createCanonicalJsonSigningInput({
       domain: 'composer-media-stage-submission-fork-v1',
-      sourceHandle: sourceInspection.handle,
+      sourceHandle: sourceHandle.data,
       sourceClaimant,
       destinationClaimant,
       messageLocalId: messageLocalId.data,
     }));
     const forkHandle = createCanonicalHandle({
       id: forkId,
-      executionTarget: sourceInspection.handle.executionTarget,
-      owner: sourceInspection.handle.owner,
-      mediaKind: sourceInspection.handle.mediaKind,
-      mimeType: sourceInspection.handle.mimeType,
-      name: sourceInspection.handle.name,
-      sizeBytes: sourceInspection.handle.sizeBytes,
-      sha256: sourceInspection.handle.sha256,
+      executionTarget: sourceHandle.data.executionTarget,
+      owner: sourceHandle.data.owner,
+      mediaKind: sourceHandle.data.mediaKind,
+      mimeType: sourceHandle.data.mimeType,
+      name: sourceHandle.data.name,
+      sizeBytes: sourceHandle.data.sizeBytes,
+      sha256: sourceHandle.data.sha256,
     });
     if (!forkHandle) return unavailable('corrupt');
 
@@ -704,6 +688,22 @@ export function createComposerMediaStageStore(input: Readonly<{
     }
     if (existingFork.reason !== 'notFound') return existingFork;
 
+    // A retry rejoins the verified deterministic fork above even after the
+    // mutable draft releases its original. Only a first capture needs source custody.
+    if (sameClaimant(sourceClaimant, destinationClaimant)) {
+      const claimed = await claim({
+        handle: sourceHandle.data, executionTarget: request.executionTarget, owner: request.owner, claimant: sourceClaimant,
+      });
+      if (claimed.status !== 'claimed') return claimed;
+    }
+    const sourceInspection = await inspectStage({ ...request, claimant: sourceClaimant });
+    if (sourceInspection.status !== 'ready') return sourceInspection;
+    const sourceClaim = await readStageClaim(stageDirectory(input.rootDirectory, sourceInspection.handle.id));
+    if (sourceClaim === 'corrupt') return unavailable('corrupt');
+    if (!sourceClaim || sourceClaim === 'unattachedRelease' || !sameClaimant(sourceClaim, sourceClaimant)) {
+      return unavailable('claimedElsewhere');
+    }
+
     const pendingStageDirectory = join(pendingDirectory, randomUUID());
     try {
       await mkdir(pendingDirectory, { recursive: true });
@@ -719,6 +719,7 @@ export function createComposerMediaStageStore(input: Readonly<{
         v: MANIFEST_VERSION,
         createdAtMs: now(),
         handle: forkHandle,
+        custody: 'submission',
       };
       await writeFile(join(pendingStageDirectory, MANIFEST_FILE_NAME), JSON.stringify(manifest), {
         encoding: 'utf8',

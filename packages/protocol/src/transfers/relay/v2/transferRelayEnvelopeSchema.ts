@@ -11,7 +11,7 @@ const MAX_TRANSFER_ABORT_REASON_LENGTH = 1024;
 const MAX_USER_ID_LENGTH = 256;
 const MAX_MACHINE_ID_LENGTH = 256;
 
-function boundedString(maxLength: number): z.ZodMiniString {
+function boundedString(maxLength: number): z.ZodMiniString<string> {
   return z.string().check(z.minLength(1), z.maxLength(maxLength));
 }
 

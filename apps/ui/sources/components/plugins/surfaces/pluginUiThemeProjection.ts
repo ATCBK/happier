@@ -1,3 +1,4 @@
+import * as React from 'react';
 import type { PluginUiThemeV1 } from '@happier-dev/plugin-sdk/ui';
 import type {
     HappierFontFace,
@@ -11,6 +12,7 @@ import type { TextStyle } from 'react-native';
 import { HAPPIER_TYPE_SCALE, HAPPIER_TYPE_WEIGHT } from '@happier-dev/plugin-ui/presentation';
 import { getMonoFont, Typography } from '@/constants/Typography';
 import { resolveThemeControlEdge, resolveThemeGloss, resolveThemeSurfaceFinish } from '@/components/ui/surfaces/themeRaisedEdge';
+import { useGlassBackedInk } from '@/components/ui/glass/glassBackedInk';
 import { shadowLevelStyle } from '@/shadowElevation';
 import type { Theme } from '@/theme';
 import type { ThemeColorTokenId } from '@/theme/tokens/themeColorTokenDefinitions';
@@ -45,6 +47,8 @@ export const PLUGIN_UI_THEME_COLOR_TOKEN_IDS = Object.freeze({
     focus: 'border.focus',
     accent: 'control.button.primary.background',
     onAccent: 'control.button.primary.foreground',
+    // Charts and meters share Usage's signature accent, so a plugin's unnamed series and Usage read as one palette.
+    dataAccent: 'text.link',
     success: 'state.success.foreground',
     warning: 'state.warning.foreground',
     // "Needs you": Brand's attention amber (the host's one attention owner), never the system warning.
@@ -145,6 +149,25 @@ export function readPluginUiHostTypography(): HappierUiTypography {
 }
 
 /**
+ * The plugin UI theme a render draws with: the current theme's projection, on the material it is drawn on. Plugin UI
+ * reads its faint inks from this snapshot rather than through core `Text`, so on glass with a picture behind it (a Home
+ * widget card: a table's column headers, a metric's caption, a snapshot's meta) the snapshot carries the containing
+ * material's stronger faint ink (DESIGN.md → Materials), the same step core text takes there. Elsewhere it is the
+ * projection itself. Render code takes its plugin theme here; `projectPluginUiTheme` is the pure projection.
+ */
+export function usePluginUiTheme(theme: Theme, spinner?: PluginUiThemeV1['spinner']): PluginUiThemeV1 {
+    const projected = React.useMemo(() => projectPluginUiTheme(theme, spinner), [theme, spinner]);
+    const faintInk = useGlassBackedInk();
+    return React.useMemo(() => {
+        const secondaryText = faintInk(projected.colors.secondaryText) ?? projected.colors.secondaryText;
+        const mutedText = faintInk(projected.colors.mutedText) ?? projected.colors.mutedText;
+        return secondaryText === projected.colors.secondaryText && mutedText === projected.colors.mutedText
+            ? projected
+            : Object.freeze({ ...projected, colors: Object.freeze({ ...projected.colors, secondaryText, mutedText }) });
+    }, [faintInk, projected]);
+}
+
+/**
  * Project the canonical Happier theme into the public plugin theme snapshot.
  *
  * Total by construction: every field reads a typed path off `Theme` or a
@@ -180,6 +203,7 @@ export function projectPluginUiTheme(theme: Theme, spinner?: PluginUiThemeV1['sp
             focus: theme.colors.border.focus,
             accent: theme.colors.button.primary.background,
             onAccent: theme.colors.button.primary.tint,
+            dataAccent: theme.colors.text.link,
             success: theme.colors.state.success.foreground,
             warning: theme.colors.state.warning.foreground,
             attention: theme.colors.state.attention.foreground,
@@ -253,7 +277,7 @@ export function projectPluginUiHostPalette(theme: Theme): HappierUiPalette {
         navigationSelected: colors.surface.elevated,
         navigationHover: colors.surface.pressed,
         inset: colors.surface.inset,
-        skeleton: colors.surface.ripple,
+        skeleton: colors.surface.skeleton,
         versionControlAdded: colors.versionControl.added.foreground,
         versionControlRemoved: colors.versionControl.removed.foreground,
         searchFieldRadiusPx: theme.borderRadius.lg,

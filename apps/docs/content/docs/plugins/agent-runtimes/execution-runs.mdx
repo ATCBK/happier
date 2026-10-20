@@ -145,6 +145,13 @@ assignment, replay, terminalization, cancellation, and cleanup. The plugin owns
 Session opening and its Agent-native event/checkpoint mapping; it does not
 register a parallel execution-run lifecycle.
 
+The optional detached `executionRunContextV1.openConversation` facet enables
+retained multi-turn interaction. When a Session Agent exposes only the finite
+`open` facet, the host uses it for completed-turn work such as fresh Workflow
+Judge checks. Session `newTurn` support alone does not assert that the Agent
+implements detached retained conversations. This selection applies equally to
+bundled and installed Agent plugins in development source.
+
 An execution-run-only custom Agent has no Session runner locator. Use the
 explicit finite Run seam only for Agents whose work is inherently bounded and
 does not have an interactive Session runtime.

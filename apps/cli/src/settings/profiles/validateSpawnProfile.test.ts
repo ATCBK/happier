@@ -24,7 +24,7 @@ describe('validateSpawnProfileEnvironment', () => {
     const profile = getBuiltInBackendProfile('gemini-api-key');
     if (!profile) throw new Error('Missing canonical builtin fixture');
     const profileCatalog = { ...activeAuthority, status: 'ready' as const, records: [{ revision: 1, record: {
-      v: 1 as const, id: profile.id, enabled: true, promptStack: [], secretBindings: {},
+      v: 1 as const, id: profile.id, enabled: true, promptStack: [], skillSeeds: [], secretBindings: {},
       definition: { kind: 'legacy' as const, profile },
     } }], diagnostics: [], referenceGuardRevision: 1 };
     expect(resolveCanonicalSpawnProfile({ rawSettings: { profileEnabledById: { [profile.id]: false } },
@@ -37,7 +37,7 @@ describe('validateSpawnProfileEnvironment', () => {
   it('binds foreground admission to the captured private row revision, not the Settings revision', () => {
     const input = { rawSettings: {}, profileId: slim.id, expectedProfileRecordRevision: 4,
       profileCatalog: { ...activeAuthority, status: 'ready' as const, records: [{ revision: 4, record: { v: 1 as const, id: slim.id,
-        definition: { kind: 'inline' as const, profile: slim }, enabled: true, promptStack: [], secretBindings: {} } }],
+        definition: { kind: 'inline' as const, profile: slim }, enabled: true, promptStack: [], skillSeeds: [], secretBindings: {} } }],
       diagnostics: [], referenceGuardRevision: 4 } };
     expect(resolveCanonicalSpawnProfile(input)).toMatchObject({ ok: true, kind: 'slim' });
     expect(resolveCanonicalSpawnProfile({ ...input, expectedProfileRecordRevision: 3 }))
@@ -47,7 +47,7 @@ describe('validateSpawnProfileEnvironment', () => {
   });
   it('admits only the ready destination definition and refuses disabled or incomplete rows', () => {
     const row = { revision: 4, record: { v: 1 as const, id: slim.id,
-      definition: { kind: 'inline' as const, profile: slim }, enabled: true, promptStack: [], secretBindings: {} } };
+      definition: { kind: 'inline' as const, profile: slim }, enabled: true, promptStack: [], skillSeeds: [], secretBindings: {} } };
     const catalog = { ...activeAuthority, status: 'ready' as const, records: [row], diagnostics: [], referenceGuardRevision: 4 };
     const input = { rawSettings: { profiles: [{ ...slim, extraEnvironmentVariables: [{ name: 'TEAM_FLAG', value: 'stale' }] }] },
       profileId: slim.id, profileCatalog: catalog, providedEnvironmentVariables: { TEAM_FLAG: '1' }, reservedEnvironmentVariableNames: new Set<string>() };

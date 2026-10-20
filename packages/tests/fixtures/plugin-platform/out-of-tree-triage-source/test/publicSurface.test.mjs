@@ -80,7 +80,10 @@ test('QB-01: every shipped fixture module imports only published entry points', 
         // media type and builder the detail body needs, and both are declared
         // realm `any`, so a daemon-side document producer may use them.
         '@happier-dev/plugin-sdk/ui',
+        '@happier-dev/plugin-sdk/scm',
         '@happier-dev/triage-protocol/v1',
+        '@happier-dev/triage-sources/ui',
+        '@happier-dev/triage-sources/translations',
     ]);
     const imported = [];
 
@@ -109,7 +112,10 @@ test('QB-01: every shipped fixture module imports only published entry points', 
         [
             '@happier-dev/plugin-sdk',
             '@happier-dev/plugin-sdk/ui',
+            '@happier-dev/plugin-sdk/scm',
             '@happier-dev/triage-protocol/v1',
+            '@happier-dev/triage-sources/ui',
+            '@happier-dev/triage-sources/translations',
         ],
     );
 });
@@ -119,15 +125,19 @@ test('QB-01: the fixture is packaged as an external author would package it', as
 
     assert.equal(packageJson.private, true);
     assert.equal(packageJson.main, './src/index.mjs');
-    assert.deepEqual(packageJson.exports, { '.': './src/index.mjs' });
+    assert.deepEqual(packageJson.exports, {
+        '.': './src/index.mjs',
+        './happier-plugin-ui/ledger-sources-native': './src/settings.mjs',
+    });
     assert.equal(packageJson.dependencies['@happier-dev/plugin-sdk'], '>=0.0.0 <1.0.0');
     assert.equal(packageJson.dependencies['@happier-dev/triage-protocol'], '>=0.0.0 <1.0.0');
+    assert.equal(packageJson.dependencies['@happier-dev/triage-sources'], '>=0.0.0 <1.0.0');
     assert.equal(packageJson.dependencies['@happier-dev/protocol'], undefined);
     assert.equal(
         Object.values(packageJson.dependencies).some((range) => range.startsWith('workspace:')),
         false,
     );
-    assert.deepEqual(packageJson.files, ['.happier-plugin/plugin.json', 'src']);
+    assert.deepEqual(packageJson.files, ['.happier-plugin/plugin.json', 'dist/happier-plugin-ui', 'src']);
 });
 
 test('QB-08: exactly one plugin package declares the Triage sources contribution point', async () => {

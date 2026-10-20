@@ -79,8 +79,18 @@ describe('Session widget provenance', () => {
             surfaces: [{ pluginId: 'acme.review', localId: 'review-status-widget', title: 'Review status' }],
             installed: { 'acme.review': 'Review Assistant' },
         }));
-        expect(provenance.label).toContain('Review status');
-        expect(provenance.label).toContain('Review Assistant');
+        // The item's own title already says which widget it is; the source line says only whose it is.
+        expect(provenance.label).toBe('Review Assistant');
+    });
+
+    it('calls a posted snapshot a snapshot, not the note its frozen document is stored as', () => {
+        const frozen: SessionSurfaceItemV1['source'] = { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Frozen' } } };
+        expect(resolveBoardWidgetProvenance(frozen, null, { snapshot: true }).label).toBe('Snapshot');
+        expect(resolveBoardWidgetProvenance(frozen, null).label).toBe('Note');
+        const snapshot = { asOf: '2026-10-19T08:00:00.000Z', provenance: [], postedByAccountId: 'poster' };
+        expect(resolveBoardWidgetProvenance(frozen, null, { snapshot, viewerAccountId: 'poster' }).label).toBe('Snapshot by you');
+        expect(resolveBoardWidgetProvenance(frozen, null, { snapshot, viewerAccountId: 'viewer', posterDisplayName: 'Morgan' }).label).toBe('Snapshot by Morgan');
+        expect(resolveBoardWidgetProvenance(frozen, null, { snapshot, viewerAccountId: 'viewer' }).label).toBe('Snapshot');
     });
 
     it('names the plugin id when the plugin is not installed here', () => {
@@ -99,20 +109,5 @@ describe('Session widget provenance', () => {
         const provenance = resolveBoardWidgetProvenance(installedSource, projection);
         expect(provenance.accessibilityLabel).toContain('acme.review');
         expect(provenance.accessibilityLabel).not.toBe(provenance.label);
-    });
-
-    it('contributes no contribution title when the surface resolves ambiguously', () => {
-        // Projection order must not appoint a name any more than it appoints a
-        // mount: the plugin name alone is the truthful answer.
-        const provenance = resolveBoardWidgetProvenance(installedSource, projectionWith({
-            surfaces: [{ pluginId: 'acme.review', localId: 'review-status-widget', title: 'Review status' }],
-            installed: { 'acme.review': 'Review Assistant' },
-        }));
-        expect(provenance.label).toContain('Review status');
-
-        const absent = resolveBoardWidgetProvenance(installedSource, projectionWith({
-            installed: { 'acme.review': 'Review Assistant' },
-        }));
-        expect(absent.label).toBe('Review Assistant');
     });
 });

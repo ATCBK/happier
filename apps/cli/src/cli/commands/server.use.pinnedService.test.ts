@@ -39,6 +39,7 @@ describe('happier server use <Home with its own background service>', () => {
     'HAPPIER_PUBLIC_SERVER_URL',
     'HAPPIER_DAEMON_SERVICE_PLATFORM',
     'HAPPIER_DAEMON_SERVICE_USER_HOME_DIR',
+    'HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR',
     'HAPPIER_DAEMON_SERVICE_TARGET_MODE',
   ]);
   let root = '';
@@ -57,6 +58,7 @@ describe('happier server use <Home with its own background service>', () => {
       HAPPIER_PUBLIC_SERVER_URL: undefined,
       HAPPIER_DAEMON_SERVICE_PLATFORM: 'linux',
       HAPPIER_DAEMON_SERVICE_USER_HOME_DIR: userHomeDir,
+      HAPPIER_DAEMON_SERVICE_HAPPIER_HOME_DIR: happierHomeDir,
       HAPPIER_DAEMON_SERVICE_TARGET_MODE: undefined,
     });
     reloadConfiguration();

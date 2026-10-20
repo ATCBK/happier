@@ -11,7 +11,7 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createCliProfileStore, createCliProfileStoreForOperation } from './profileStore';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent,
   LaunchProfileArtifactV1Schema, buildLaunchProfileArtifactHeaderV1, FeaturesResponseSchema,
   SavedSecretResourceMaterialsResponseV1Schema, sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol';
@@ -278,7 +278,7 @@ it.each(['plain', 'e2ee'] as const)('preserves inherited inline bytes on %s edit
   const material = { type: 'legacy' as const, secret: new Uint8Array(32).fill(7) };
   const credentials = { token: 'retained-profile-edit', encryption: mode === 'e2ee' ? material : null };
   const id = `  legacy/branch\\資料/😀-${'x'.repeat(300)}  `;
-  const record = { v: 1, id, enabled: false, promptStack: [], secretBindings: {}, definition: { kind: 'inline', profile: {
+  const record = { v: 1, id, enabled: false, promptStack: [], skillSeeds: [], secretBindings: {}, definition: { kind: 'inline', profile: {
     v: 2, id, name: `  ${'n'.repeat(96)}  `, description: 'Retained source definition',
     extraEnvironmentVariables: Array.from({ length: 257 }, (_, index) => ({ name: `CONFIG_${index}`, value: `value-${index}`, isSecret: false })),
     defaultPermissionModeByTargetKey: {}, defaultPersistenceModeByTargetKey: {}, compatibilityByTargetKey: {}, createdAt: 1, updatedAt: 2,

@@ -10,7 +10,8 @@ import type { WorkflowProgressEnvelopeV1, WorkflowRunInvocationIndexV1, Workflow
 import type { WorkflowRunAcceptedContextV1, WorkflowRunGetResultV1 } from '@happier-dev/protocol/workflows/actionsV1';
 import { matchesWorkflowAcceptedDefinitionV1 } from '@happier-dev/protocol/workflows/workflowValidationV1';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { workflowRunDetailActions } from '@/sync/domains/workflows/workflowRunDetailActions';
+import { createWorkflowRunDetailActions } from '@/sync/domains/workflows/workflowRunDetailActions';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { buildWorkflowPlanReviewSeed, deriveWorkflowPlanRunId, readWorkflowPlanResult,
     validateWorkflowPlanProposal } from '@/sync/domains/workflows/workflowPlanReview';
 import type { WorkflowReviewedRunSeed } from '@/sync/domains/workflows/workflowReviewedRunSeed';
@@ -46,6 +47,7 @@ export function WorkflowInvocationReview(props: Readonly<{
     stepTitle?: string;
     stepSubtitle?: string | null;
     viewerAccountId: string | null;
+    accountLifetime?: ServerAccountScopeLifetime | null;
     current: () => boolean;
     onSettled: (run: WorkflowRunSummaryV1) => void;
     onOpenDraft: (seed: WorkflowReviewedRunSeed) => void;
@@ -57,6 +59,8 @@ export function WorkflowInvocationReview(props: Readonly<{
     acknowledgeUncertainPriorEffects?: Readonly<{ recordId: string; contentRevision: string }>;
 }>): React.ReactElement {
     const { invocation, progress, buffers } = props;
+    const accountLifetime = props.accountLifetime === undefined ? captureActiveServerAccountScopeLifetime() : props.accountLifetime;
+    const workflowRunDetailActions = React.useMemo(() => createWorkflowRunDetailActions({ accountLifetime }), [accountLifetime]);
     const waitIdentity = React.useMemo(() => {
         if (progress.blockKind !== 'wait') return undefined;
         const block = resolveWorkflowInvocationBlock({ definition: props.definition,
@@ -114,7 +118,7 @@ export function WorkflowInvocationReview(props: Readonly<{
     const draftOwner = React.useRef({ props, contract, contractResult, changeDraft });
     draftOwner.current = { props, contract, contractResult, changeDraft };
     React.useLayoutEffect(() => {
-        const lifetime = captureActiveServerAccountScopeLifetime();
+        const lifetime = accountLifetime;
         if (!lifetime) return;
         return registerMountedWorkflowDraftOwner({
             kind: 'review',
@@ -147,19 +151,19 @@ export function WorkflowInvocationReview(props: Readonly<{
                 return { status: 'applied' };
             },
         });
-    }, [props.run.id, invocation.id, props.active, invocation.lifecycle]);
+    }, [accountLifetime, props.run.id, invocation.id, props.active, invocation.lifecycle]);
 
     React.useEffect(() => {
         if (!props.active || plan === null || shown === undefined) return;
         const controller = new AbortController();
         let current = true;
-        void validateWorkflowPlanProposal(shown, controller.signal).then((definition) => {
+        void validateWorkflowPlanProposal(shown, controller.signal, accountLifetime).then((definition) => {
             if (current && props.current()) setValidated({ value: shown, proposal: definition });
         }).catch((cause: unknown) => {
             if (current && props.current()) setError(resolveWorkflowProblemPresentation(cause));
         });
         return () => { current = false; controller.abort(); };
-    }, [props.active, props.current, plan !== null, shown]);
+    }, [accountLifetime, props.active, props.current, plan !== null, shown]);
 
     const isPlan = plan !== null;
     React.useEffect(() => {
@@ -183,11 +187,11 @@ export function WorkflowInvocationReview(props: Readonly<{
             }
         })().catch(() => { /* An unavailable exact read is not evidence that admission never happened. */ });
         return () => { current = false; controller.abort(); };
-    }, [props.active, props.current, isPlan, invocation.id, props.run.id, proposal]);
+    }, [props.active, props.current, isPlan, invocation.id, props.run.id, proposal, workflowRunDetailActions]);
 
     const perform = async (operation: (current: () => boolean) => Promise<void>) => {
         if (busy.current || !props.callerAccess.canEdit || !props.active || !props.confirmed || !props.current()) return;
-        const lifetime = captureActiveServerAccountScopeLifetime();
+        const lifetime = accountLifetime;
         if (!lifetime) return;
         const current = () => mounted.current && lifetime.isCurrent() && props.current();
         busy.current = true;

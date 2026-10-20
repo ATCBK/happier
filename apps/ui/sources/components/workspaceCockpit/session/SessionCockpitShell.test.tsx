@@ -112,9 +112,6 @@ vi.mock('@/components/sessions/localServices', () => ({
     LocalServicesSurfaceHost: (props: Record<string, unknown>) => React.createElement('DetectedLocalServicesPane', props),
 }));
 
-vi.mock('@/components/appShell/plugins/AppShellPluginUiProjection', () => ({
-    useAppShellPluginUiProjection: () => pluginProjectionState.value,
-}));
 
 vi.mock('@/components/sessions/plugins/useSessionPluginRuntime', () => ({
     useSessionPluginRuntime: (input: Readonly<{ address: { serverId: string } | null }>) => ({
@@ -243,7 +240,7 @@ describe('SessionCockpitSurfaceScreen', () => {
                     bottom: { isOpen: false, activeTabId: null, tabState: {} },
                 },
             },
-            sessionLastMobileSurfaceBySessionId: null,
+            sessionLastMobileSurfaceBySessionId: {},
         });
 
         const { SessionCockpitSurfaceScreen } = await import('./SessionCockpitSurfaceScreen');
@@ -302,7 +299,7 @@ describe('SessionCockpitSurfaceScreen', () => {
                     bottom: { isOpen: false, activeTabId: null, tabState: {} },
                 },
             },
-            sessionLastMobileSurfaceBySessionId: null,
+            sessionLastMobileSurfaceBySessionId: {},
         });
 
         const { SessionCockpitSurfaceScreen } = await import('./SessionCockpitSurfaceScreen');
@@ -382,7 +379,7 @@ describe('SessionCockpitSurfaceScreen', () => {
                     bottom: { isOpen: false, activeTabId: null, tabState: {} },
                 },
             },
-            sessionLastMobileSurfaceBySessionId: null,
+            sessionLastMobileSurfaceBySessionId: {},
         });
 
         const { SessionCockpitSurfaceScreen } = await import('./SessionCockpitSurfaceScreen');
@@ -434,7 +431,7 @@ describe('SessionCockpitSurfaceScreen', () => {
                     bottom: { isOpen: false, activeTabId: null, tabState: {} },
                 },
             },
-            sessionLastMobileSurfaceBySessionId: null,
+            sessionLastMobileSurfaceBySessionId: {},
         });
 
         const { SessionCockpitSurfaceScreen } = await import('./SessionCockpitSurfaceScreen');
@@ -474,7 +471,7 @@ describe('SessionCockpitSurfaceScreen', () => {
                     bottom: { isOpen: false, activeTabId: null, tabState: {} },
                 },
             },
-            sessionLastMobileSurfaceBySessionId: null,
+            sessionLastMobileSurfaceBySessionId: {},
         });
 
         const { SessionCockpitSurfaceScreen } = await import('./SessionCockpitSurfaceScreen');
@@ -515,7 +512,7 @@ describe('SessionCockpitSurfaceScreen', () => {
                     bottom: { isOpen: false, activeTabId: null, tabState: {} },
                 },
             },
-            sessionLastMobileSurfaceBySessionId: null,
+            sessionLastMobileSurfaceBySessionId: {},
         });
 
         const { SessionCockpitSurfaceScreen } = await import('./SessionCockpitSurfaceScreen');
@@ -550,7 +547,7 @@ describe('SessionCockpitSurfaceScreen', () => {
                     bottom: { isOpen: false, activeTabId: null, tabState: {} },
                 },
             },
-            sessionLastMobileSurfaceBySessionId: null,
+            sessionLastMobileSurfaceBySessionId: {},
         });
 
         const { SessionCockpitSurfaceScreen } = await import('./SessionCockpitSurfaceScreen');
@@ -591,7 +588,7 @@ describe('SessionCockpitSurfaceScreen', () => {
                     bottom: { isOpen: false, activeTabId: null, tabState: {} },
                 },
             },
-            sessionLastMobileSurfaceBySessionId: null,
+            sessionLastMobileSurfaceBySessionId: {},
         });
 
         const { SessionCockpitSurfaceScreen } = await import('./SessionCockpitSurfaceScreen');
@@ -631,7 +628,7 @@ describe('SessionCockpitSurfaceScreen', () => {
                     bottom: { isOpen: false, activeTabId: null, tabState: {} },
                 },
             },
-            sessionLastMobileSurfaceBySessionId: null,
+            sessionLastMobileSurfaceBySessionId: {},
         });
 
         const { SessionCockpitSurfaceScreen } = await import('./SessionCockpitSurfaceScreen');
@@ -712,7 +709,7 @@ describe('SessionCockpitSurfaceScreen', () => {
                     bottom: { isOpen: false, activeTabId: null, tabState: {} },
                 },
             },
-            sessionLastMobileSurfaceBySessionId: null,
+            sessionLastMobileSurfaceBySessionId: {},
         });
 
         const { SessionCockpitSurfaceScreen } = await import('./SessionCockpitSurfaceScreen');
@@ -763,7 +760,7 @@ describe('SessionCockpitSurfaceScreen', () => {
                     bottom: { isOpen: false, activeTabId: null, tabState: {} },
                 },
             },
-            sessionLastMobileSurfaceBySessionId: null,
+            sessionLastMobileSurfaceBySessionId: {},
         });
 
         const { SessionCockpitSurfaceScreen } = await import('./SessionCockpitSurfaceScreen');
@@ -814,7 +811,7 @@ describe('SessionCockpitSurfaceScreen', () => {
                     bottom: { isOpen: false, activeTabId: null, tabState: {} },
                 },
             },
-            sessionLastMobileSurfaceBySessionId: null,
+            sessionLastMobileSurfaceBySessionId: {},
         });
 
         const { SessionCockpitSurfaceScreen } = await import('./SessionCockpitSurfaceScreen');
@@ -865,7 +862,7 @@ describe('SessionCockpitSurfaceScreen', () => {
                     bottom: { isOpen: false, activeTabId: null, tabState: {} },
                 },
             },
-            sessionLastMobileSurfaceBySessionId: null,
+            sessionLastMobileSurfaceBySessionId: {},
         });
 
         const { SessionCockpitSurfaceScreen } = await import('./SessionCockpitSurfaceScreen');
@@ -924,7 +921,7 @@ describe('SessionCockpitSurfaceScreen', () => {
                     bottom: { isOpen: false, activeTabId: null, tabState: {} },
                 },
             },
-            sessionLastMobileSurfaceBySessionId: null,
+            sessionLastMobileSurfaceBySessionId: {},
         });
 
         const { SessionCockpitSurfaceScreen } = await import('./SessionCockpitSurfaceScreen');

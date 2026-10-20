@@ -27,7 +27,7 @@ import { REGISTRY_ACTION_OUTPUT_SCHEMAS_V1 } from '../../registries/registryActi
 import { RegistryItemPointerV1Schema } from '../../registries/registryItemsV1.js';
 import { ValueRefV1Schema } from '../../valueRefs/valueRefV1.js';
 import { mapMcpRegistryServerV1 } from './registry/mapMcpRegistryServerV1.js';
-import { parseMcpServerImportV1 } from './import/parseMcpServerImportV1.js';
+import { encodeMcpServerInstallLinkV1, parseMcpServerImportV1 } from './import/parseMcpServerImportV1.js';
 import { McpImportPreviewV1Schema, McpImportCommitV1Schema, McpImportValuesV1Schema, McpImportValueChoiceV1Schema,
   prepareMcpServerImportV1, prepareDetectedMcpServerImportV1, materializeMcpServerImportV1 } from './import/mcpServerImportV1.js';
 import { PERSONAL_SAVED_SECRET_ACTION_OUTPUT_SCHEMAS_V1 } from '../../account/settings/personalSavedSecretActionsV1.js';
@@ -71,6 +71,7 @@ const readResult = lazyZodSchema(() => z.union([
   McpServerCatalogSnapshotV1Schema,
   z.strictObject({ status: z.literal('present'), server: McpServerCatalogEntryV1Schema,
     bindings: z.array(McpServerRuleV1Schema), revision: catalogRevision,
+    installLink: z.optional(z.url()),
     authority: z.enum(['active', 'inactive']), complete: z.boolean(), diagnostics: z.array(McpServerCatalogDiagnosticV1Schema) }),
   z.strictObject({ status: z.literal('not-found'), serverId: identity, revision: catalogRevision }),
 ]));
@@ -97,12 +98,10 @@ export const MCP_SERVER_ACTION_INPUT_SCHEMAS_V1 = {
   'mcp.servers.tools.set': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(McpServerToolSettingsPatchV1Schema, { serverId: identity }))),
   'mcp.servers.create': serverCreate,
   'mcp.servers.update': serverUpdate,
-  'mcp.servers.duplicate': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(createItem, { expectedRevision: catalogRevision, serverId: identity }))),
+  'mcp.servers.duplicate': lazyZodSchema(() => z.strictObject({ serverId: identity })),
   'mcp.servers.delete': lazyZodSchema(() => z.strictObject({ expectedRevision: catalogRevision,
     serverId: identity, removeBindings: z.boolean() })),
-  'mcp.servers.test': lazyZodSchema(() => z.union([
-    (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(DaemonMcpServersTestAuthoringRequestSchema._zod.def.options[0]), (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(DaemonMcpServersTestAuthoringRequestSchema._zod.def.options[1]),
-  ])),
+  'mcp.servers.test': DaemonMcpServersTestAuthoringRequestSchema,
   'mcp.found.list': lazyZodSchema(() => z.extend((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(DaemonMcpServersDetectRequestSchema), { machineId: z.optional(identity) })),
   'mcp.servers.import': lazyZodSchema(() => z.strictObject({ expectedRevision: z.optional(catalogRevision),
     source: z.discriminatedUnion('kind', [z.strictObject({ kind: z.literal('paste'), text: z.string() }),
@@ -122,7 +121,7 @@ export const MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 = {
   })),
   'mcp.servers.create': McpServerCatalogRowMutationResponseV1Schema,
   'mcp.servers.update': McpServerCatalogRowMutationResponseV1Schema,
-  'mcp.servers.duplicate': McpServerCatalogRowMutationResponseV1Schema,
+  'mcp.servers.duplicate': lazyZodSchema(() => z.strictObject({ serverId: identity })),
   'mcp.servers.delete': lazyZodSchema(() => z.union([McpServerCatalogRowMutationResponseV1Schema,
     (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(McpServerCatalogRowMutationResponseV1Schema._zod.def.options[0], { signOut: z.union([
       z.strictObject({ status: z.literal('revoked'), remoteStatus: z.enum(['remoteRevoked', 'remoteUnsupported', 'remoteNotAttempted']) }),
@@ -141,6 +140,8 @@ export type McpServerActionRequestV1 = Readonly<{ actionId: McpServerActionIdV1 
 export type McpServerToolAgentFactV1 = Readonly<{ agentId: string }>
   & Pick<PluginAgentToolsCapabilityV2, 'mcpToolControl' | 'mcpToolLoading'>;
 export type McpServerActionPortsV1 = Readonly<{
+  /** Application hosts supply their canonical web-app URL; plugin metadata has no installable definition. */
+  resolveWebappUrl?(context: ActionExecutorContext): string | Promise<string>;
   registryActionExecute?: ActionExecutorDeps['registryActionExecute'];
   personalSavedSecretActionExecute?: ActionExecutorDeps['personalSavedSecretActionExecute'];
   readImportLink?(url: string, context: ActionExecutorContext): Promise<string>;
@@ -164,7 +165,7 @@ const catalogFailureCodes = new Set<string>([
   ...McpServerCatalogSnapshotV1Schema._zod.def.options[1].shape.reason.options,
   'invalid-mutation', 'reference-conflict', 'outcome_unknown', 'server_scope_mismatch',
   'not_authenticated', 'permission_denied', 'admission_unavailable', 'invalid_action_output',
-  'machine_unreachable', 'mcp_catalog_unavailable',
+  'machine_unreachable', 'mcp_catalog_unavailable', 'database_transaction_conflict_exhausted',
   'no_machine_online', 'mcp_server_not_found', 'mcp_sign_in_not_supported', 'client_refused', 'mcp_oauth_resource_requires_https', 'mcp_oauth_endpoints_require_https',
   'connected_account_configuration_target_unavailable',
   'mcp_catalog_conflict',
@@ -282,7 +283,9 @@ export function createMcpServerActionExecuteV1(ports: McpServerActionPortsV1) {
         const plugin = !server && (await ports.readPluginItems?.(context))?.find(item => item.id === serverId);
         if (plugin) { result = { status: 'plugin', server: plugin, bindings: snapshot.catalog.bindings.filter(rule => rule.serverId === serverId),
           settings: snapshot.catalog.pluginServers?.[serverId], revision: snapshot.revision }; break; }
+        const webappUrl = server ? await ports.resolveWebappUrl?.(context) : undefined;
         result = server ? { status: 'present', server, bindings: snapshot.catalog.bindings.filter(binding => binding.serverId === serverId),
+          ...(webappUrl ? { installLink: encodeMcpServerInstallLinkV1(server, webappUrl) } : {}),
           revision: snapshot.revision, authority: snapshot.authority, complete: snapshot.status === 'ready', diagnostics: snapshot.diagnostics }
           : snapshot.status === 'partial' || snapshot.authority !== 'active' ? snapshot
             : { status: 'not-found', serverId, revision: snapshot.revision };
@@ -427,8 +430,24 @@ export function createMcpServerActionExecuteV1(ports: McpServerActionPortsV1) {
           duplicates: prepared.duplicates, movedSecrets: prepared.movedSecrets }; break;
       }
       case 'mcp.servers.duplicate': {
-        const { expectedRevision, entry, serverId, where } = MCP_SERVER_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input);
-        result = await ports.mutate({ kind: 'server-duplicate', serverId, entry, rules: createRules(entry.id, where) }, expectedRevision, context); break;
+        const { serverId } = MCP_SERVER_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input);
+        const snapshot = await ports.readCatalog(context);
+        if (snapshot.status !== 'ready' || snapshot.authority !== 'active') return projectMcpServerActionFailureV1({ code: 'mcp_catalog_unavailable' });
+        const source = snapshot.catalog.servers.find(server => server.id === serverId);
+        if (!source) return projectMcpServerActionFailureV1({ code: 'mcp_server_not_found' });
+        const ctx = ports.ruleWriteContext?.() ?? { nowMs: Date.now(), newId: () => globalThis.crypto.randomUUID() };
+        const names = new Set(snapshot.catalog.servers.map(server => server.name));
+        let name = `${source.name}_copy`;
+        for (let index = 2; names.has(name); index += 1) name = `${source.name}_copy_${index}`;
+        // Only configuration lives on the catalog entry. OAuth grants and
+        // attempts belong to Connected Accounts under the source id.
+        const entry = { ...source, id: ctx.newId(), name,
+          ...(source.title ? { title: `${source.title} copy` } : {}), createdAt: ctx.nowMs, updatedAt: ctx.nowMs };
+        context.signal?.throwIfAborted();
+        const receipt = await ports.mutate({ kind: 'server-duplicate', serverId, entry, rules: createRules(entry.id) }, snapshot.revision, context);
+        if (receipt.status !== 'updated') return projectMcpServerActionFailureV1({ code: receipt.status === 'conflict' || receipt.status === 'settings-conflict'
+          ? 'mcp_catalog_conflict' : receipt.status });
+        result = { serverId: entry.id }; break;
       }
       case 'mcp.servers.delete': {
         const { expectedRevision, ...change } = MCP_SERVER_ACTION_INPUT_SCHEMAS_V1[actionId].parse(input);

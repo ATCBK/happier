@@ -20,6 +20,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { fixNodePtyPackageSpawnHelperPermissions } from '../../nodePtySpawnHelperPermissions.cjs';
 import type { BinaryTarget } from './targets.js';
 import { PUBLIC_SDK_GENERATED_GOVERNANCE_RECORDS } from '../workspaces/index.js';
+import { resolveInstalledRuntimePackage } from '../../workspaceRuntimeDependencies.mjs';
 
 const AUDITED_DUPLICATE_PACKAGE_PAIRS = [
   { duplicate: '@happier-dev/agents/node_modules/zod', survivor: 'zod' },
@@ -150,13 +151,26 @@ function resolveSherpaTargetOptionalPackageName(target: BinaryTarget): string {
 }
 
 async function assertTargetOptionalPackages(params: Readonly<{
-  directory: string;
+  consumerDirectory: string;
+  nodeModulesDirectory: string;
   packageNames: readonly string[];
   scope: string;
   target: BinaryTarget;
 }>): Promise<void> {
-  const installed = new Set((await readDirectories(params.directory)).map((entry) => entry.name));
-  const missing = params.packageNames.filter((name) => !installed.has(name));
+  const missing = params.packageNames.filter((name) => {
+    let installed: ReturnType<typeof resolveInstalledRuntimePackage>;
+    try {
+      installed = resolveInstalledRuntimePackage({
+        packageName: params.scope ? `${params.scope}/${name}` : name,
+        resolveFromPackageJsonPath: join(params.consumerDirectory, 'package.json'),
+      });
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'MODULE_NOT_FOUND') return true;
+      throw error;
+    }
+    const path = relative(params.nodeModulesDirectory, installed.packageDir);
+    return path === '..' || path.startsWith(`..${sep}`) || isAbsolute(path);
+  });
   if (missing.length > 0) {
     throw new Error(
       `[component-artifacts] missing target optional runtime package(s) for ${params.target.os}-${params.target.arch}: ${missing.map((name) => `${params.scope}/${name}`).join(', ')}; install dependencies with --ignore-platform before building cross-target artifacts`,
@@ -175,7 +189,7 @@ function shouldKeepTargetOptionalPackage(directory: string, target: BinaryTarget
 
   if (parent === '@img' && (
     /^sharp(?:-libvips)?-(?:darwin|linux|linuxmusl|win32)-(?:x64|arm64|arm|ia32|ppc64|riscv64|s390x)$/.test(name)
-    || name === 'sharp-wasm32'
+    || /^sharp-(?:(?:freebsd|webcontainers)-)?wasm32$/.test(name)
   )) {
     // The release install materializes every locked optional package. Linux
     // artifacts support both glibc and musl, so retain both libc variants.
@@ -189,7 +203,7 @@ function shouldKeepTargetOptionalPackage(directory: string, target: BinaryTarget
   return null;
 }
 
-async function projectNativePackage(directory: string, target: BinaryTarget): Promise<boolean> {
+async function projectNativePackage(directory: string, target: BinaryTarget, nodeModulesDirectory: string): Promise<boolean> {
   const platform = target.os === 'windows' ? 'win32' : target.os;
   const name = basename(directory);
   const parent = basename(dirname(directory));
@@ -206,7 +220,8 @@ async function projectNativePackage(directory: string, target: BinaryTarget): Pr
   }
   if (name === 'sharp' && parent === 'node_modules') {
     await assertTargetOptionalPackages({
-      directory: join(directory, 'node_modules', '@img'),
+      consumerDirectory: directory,
+      nodeModulesDirectory,
       packageNames: resolveSharpTargetOptionalPackageNames(target),
       scope: '@img',
       target,
@@ -214,7 +229,8 @@ async function projectNativePackage(directory: string, target: BinaryTarget): Pr
   }
   if (name === 'sherpa-onnx-node' && parent === 'node_modules') {
     await assertTargetOptionalPackages({
-      directory: join(directory, 'node_modules'),
+      consumerDirectory: directory,
+      nodeModulesDirectory,
       packageNames: [resolveSherpaTargetOptionalPackageName(target)],
       scope: '',
       target,
@@ -301,8 +317,8 @@ async function projectNativePackage(directory: string, target: BinaryTarget): Pr
   return true;
 }
 
-async function projectNativePackages(directory: string, target: BinaryTarget): Promise<void> {
-  if (!await projectNativePackage(directory, target)) return;
+async function projectNativePackages(directory: string, target: BinaryTarget, nodeModulesDirectory: string): Promise<void> {
+  if (!await projectNativePackage(directory, target, nodeModulesDirectory)) return;
   const entries = await readdir(directory, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
     if (error.code === 'ENOENT') return [];
     throw error;
@@ -311,7 +327,7 @@ async function projectNativePackages(directory: string, target: BinaryTarget): P
   await Promise.all(entries.map(async (entry) => {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) {
-      await projectNativePackages(path, target);
+      await projectNativePackages(path, target, nodeModulesDirectory);
     }
   }));
 }
@@ -663,7 +679,7 @@ export async function finalizeRuntimeArtifactPayload(
   }
   if (target) {
     await projectAuditedDuplicatePackages(join(payloadDir, 'node_modules'));
-    await projectNativePackages(join(payloadDir, 'node_modules'), target);
+    await projectNativePackages(join(payloadDir, 'node_modules'), target, join(payloadDir, 'node_modules'));
     await projectCliRuntimeTools(payloadDir, target);
     await projectPublicSdkGovernanceFiles(payloadDir);
     await projectRuntimeMetadata(join(payloadDir, 'package-dist'), {

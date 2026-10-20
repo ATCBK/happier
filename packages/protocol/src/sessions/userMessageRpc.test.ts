@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
+import { PUBLIC_ACTION_INPUT_SCHEMAS } from '../actions/actionSpecs.js';
 
 import {
   SessionPendingMessageComposerAdmissionAcceptedRequestV1Schema,
   SessionPendingMessageComposerAdmissionPrepareRequestV1Schema,
+  SessionPendingMessageComposerAdmissionPrepareResponseV1Schema,
+  SessionPendingMessageComposerAdmissionAbandonedRequestV1Schema,
   readAttachmentEnvelopeLocalImagePaths,
   sanitizeSessionUserMessageSendMeta,
   SessionUserMessageSendRequestSchema,
@@ -74,6 +77,40 @@ describe('SessionUserMessageSendResponseSchema', () => {
 });
 
 describe('SessionUserMessageSendRequestSchema', () => {
+  it('retains issued handles through attachment-only public Action and Session RPC admission', () => {
+    const handle = { v: 1, sessionId: 'target-session', id: 'upload-1' };
+    const structuredInput = { v: 1, sessionAttachments: [handle] };
+    const action = PUBLIC_ACTION_INPUT_SCHEMAS['session.message.send'].parse({
+      sessionId: 'target-session', message: '', structuredInput,
+    });
+    const request = SessionUserMessageSendRequestSchema.parse({ text: action.message,
+      meta: { happierStructuredInputV1: action.structuredInput },
+    });
+    expect(request.meta.happierStructuredInputV1).toEqual(structuredInput);
+    expect(sanitizeSessionUserMessageSendMeta({ happierStructuredInputV1: structuredInput }))
+      .toEqual({ happierStructuredInputV1: structuredInput });
+    for (const sessionAttachments of [[], [{ ...handle, path: '/etc/passwd' }], null]) {
+      expect(SessionUserMessageSendRequestSchema.safeParse({ text: '',
+        meta: { happierStructuredInputV1: { v: 1, sessionAttachments } },
+      }).success).toBe(false);
+    }
+  });
+
+  it('retains typed source review context until admission alongside staged media', () => {
+    const reviewComments = { sessionId: 'source-session', comments: [{
+      id: 'comment-1', filePath: 'src/index.ts', source: 'file',
+      anchor: { kind: 'line', filePath: 'src/index.ts', line: 2 },
+      snapshot: { selectedLines: ['const value = 1;'], beforeContext: [], afterContext: [] },
+      body: 'Keep this exact context', createdAt: 1,
+    }] };
+    const request = SessionUserMessageSendRequestSchema.parse({ text: 'Review this', meta: {
+      happierStructuredInputV1: { v: 1, reviewComments, composerAttachments: [stagedImageAttachment] },
+    } });
+    expect(request.meta).toEqual({ happierStructuredInputV1: {
+      v: 1, reviewComments, composerAttachments: [stagedImageAttachment],
+    } });
+  });
+
   it('permits attachment-only sends only after canonical structured-input admission', () => {
     const attachmentOnly = SessionUserMessageSendRequestSchema.safeParse({
       text: '',
@@ -367,6 +404,29 @@ describe('SessionUserMessageSendRequestSchema', () => {
 });
 
 describe('SessionPendingMessageComposerAdmissionPrepareRequestV1Schema', () => {
+  it('retains the exact source Composer while rejecting caller-private metadata and malformed refs', () => {
+    const request = {
+      localId: 'successor-1',
+      text: 'Review this',
+      structuredInput: { v: 1, composerAttachments: [pluginAttachment] },
+      sourceComposerRef: { kind: 'pendingMessage', sessionId: 'source-session', localId: 'original-pending' },
+    };
+    expect(SessionPendingMessageComposerAdmissionPrepareRequestV1Schema.parse(request))
+      .toEqual(request);
+    for (const sourceComposerRef of [
+      { kind: 'pendingMessage', sessionId: 'source-session' },
+      { kind: 'session', sessionId: 'source-session', privateMeta: {} },
+      { kind: 'unknown', sessionId: 'source-session' },
+    ]) {
+      expect(SessionPendingMessageComposerAdmissionPrepareRequestV1Schema.safeParse({
+        ...request, sourceComposerRef,
+      }).success).toBe(false);
+    }
+    expect(SessionPendingMessageComposerAdmissionPrepareRequestV1Schema.safeParse({
+      ...request, meta: { __happierComposerSourceRefV1: request.sourceComposerRef },
+    }).success).toBe(false);
+  });
+
   it('carries one stable Message identity and the complete draft attachment input', () => {
     const parsed = SessionPendingMessageComposerAdmissionPrepareRequestV1Schema.parse({
       localId: 'successor-1',
@@ -386,6 +446,47 @@ describe('SessionPendingMessageComposerAdmissionPrepareRequestV1Schema', () => {
 });
 
 describe('SessionPendingMessageComposerAdmissionAcceptedRequestV1Schema', () => {
+  it('carries exact source and child release intents through prepare and both settlement outcomes', () => {
+    const stagedMediaReleaseIntents = [
+      { kind: 'session', sessionId: 'target-session' },
+      { kind: 'pendingMessage', sessionId: 'source-session', localId: 'original-pending' },
+    ].map((composer, index) => ({
+      handle: { ...stagedMediaHandle, id: `snapshot-${index}` },
+      executionTarget: stagedMediaHandle.executionTarget,
+      owner: stagedMediaHandle.owner,
+      claimant: { composer, attachmentInstanceId: pluginAttachment.instanceId },
+    }));
+    const payload = {
+      structuredInput: { v: 1, composerAttachments: [pluginAttachment] },
+      stagedMediaHandles: stagedMediaReleaseIntents.map(({ handle }) => handle),
+      stagedMediaReleaseIntents,
+    };
+    const prepared = SessionPendingMessageComposerAdmissionPrepareResponseV1Schema.parse({
+      ok: true, text: 'Review', ...payload,
+    });
+    expect(prepared).toMatchObject({ stagedMediaReleaseIntents });
+    const accepted = { sessionId: 'target-session', localId: 'successor-1', ...payload };
+    expect(SessionPendingMessageComposerAdmissionAcceptedRequestV1Schema.parse(accepted)).toEqual(accepted);
+    expect(SessionPendingMessageComposerAdmissionAbandonedRequestV1Schema.parse({
+      ...accepted,
+      sessionMediaCleanup: { workingDirectory: '/workspace', createdWorkspaceRelativePaths: [] },
+    })).toMatchObject({ stagedMediaReleaseIntents });
+    expect(SessionPendingMessageComposerAdmissionAcceptedRequestV1Schema.safeParse({
+      ...accepted,
+      stagedMediaHandles: Array.from({ length: 128 }, (_, index) => ({ ...stagedMediaHandle, id: `handle-${index}` })),
+      stagedMediaReleaseIntents: Array.from({ length: 128 }, (_, index) => ({
+        ...stagedMediaReleaseIntents[0], handle: { ...stagedMediaHandle, id: `handle-${index}` },
+      })),
+    }).success).toBe(true);
+    expect(SessionPendingMessageComposerAdmissionAcceptedRequestV1Schema.safeParse({
+      ...accepted, stagedMediaReleaseIntents: Array.from({ length: 129 }, () => stagedMediaReleaseIntents[0]),
+    }).success).toBe(false);
+    expect(SessionPendingMessageComposerAdmissionAcceptedRequestV1Schema.safeParse({
+      ...accepted,
+      stagedMediaReleaseIntents: [{ ...stagedMediaReleaseIntents[0], callerPrivateMeta: {} }],
+    }).success).toBe(false);
+  });
+
   it('accepts only the canonical accepted fact, never UI-asserted draft and admitted attachment lists', () => {
     const accepted = {
       sessionId: 'session-1',

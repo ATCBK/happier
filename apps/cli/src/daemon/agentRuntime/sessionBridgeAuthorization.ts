@@ -3,7 +3,7 @@ import type { Dirent } from 'node:fs';
 import { chmod, lstat, mkdir, readdir, realpath } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { resolveReleaseRingScopedBasename } from '@/cli/runtime/publicReleaseChannel';
@@ -47,21 +47,21 @@ import {
 
 type PublicReleaseRing = Parameters<typeof resolveReleaseRingScopedBasename>[1];
 
-const AgentRuntimeDaemonServiceAuthorityDocumentV2Schema = z.object({
+const AgentRuntimeDaemonServiceAuthorityDocumentV2Schema = z.strictObject({
   v: z.literal(2),
   sessionId: asHostProtocolZod(SessionIdSchema),
-  runner: z.object({
-    pid: z.number().int().positive(),
-    processStartTimeMs: z.number().int().nonnegative(),
-    processCommandHash: z.string().regex(/^[a-f0-9]{64}$/u),
-    snapshotIdentity: z.string().trim().min(1).max(2_048),
-  }).strict(),
+  runner: z.strictObject({
+    pid: z.number().check(z.int(), z.positive()),
+    processStartTimeMs: z.number().check(z.int(), z.nonnegative()),
+    processCommandHash: z.string().check(z.regex(/^[a-f0-9]{64}$/u)),
+    snapshotIdentity: z.string().check(z.trim(), z.minLength(1), z.maxLength(2_048)),
+  }),
   pluginHardRevocationRevision:
-    z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
   retainedAgent: AgentSessionRunnerBindingV1Schema,
-  httpPort: z.number().int().min(1).max(65_535),
-  capability: z.string().regex(/^[A-Za-z0-9_-]{43}$/u),
-}).strict();
+  httpPort: z.number().check(z.int(), z.minimum(1), z.maximum(65_535)),
+  capability: z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/u)),
+});
 
 export type AgentRuntimeDaemonServiceAuthorityDocumentV2 = z.infer<
   typeof AgentRuntimeDaemonServiceAuthorityDocumentV2Schema

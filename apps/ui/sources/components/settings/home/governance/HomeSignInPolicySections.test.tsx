@@ -78,6 +78,7 @@ async function renderEditor(input: Readonly<{
     authentication?: Authentication;
     revision?: number;
     refresh?: () => void;
+    mutationsAvailable?: boolean;
 }> = {}) {
     const { SignInPolicyEditor } = await import('./HomeSignInPolicySections');
     const serverId = await harness.addHome({ name: 'Home A', serverUrl: 'https://home-a.example', accountId: 'owner' });
@@ -94,7 +95,7 @@ async function renderEditor(input: Readonly<{
         scope: { serverId, accountId: 'owner' },
         homeName: 'Home A',
         projection,
-        mutationsAvailable: true,
+        mutationsAvailable: input.mutationsAvailable ?? true,
         approvalPending: false,
         refresh: input.refresh ?? vi.fn(),
     };
@@ -133,6 +134,13 @@ function textUnder(node: RenderedNode | null): string {
 const CARD_WAIT = { timeout: 5_000, interval: 20 } as const;
 
 describe('SignInPolicyEditor', () => {
+    it('disables the inherited admission selector when Home mutations are unavailable', async () => {
+        const { screen } = await renderEditor({ authentication: { status: 'inherited' }, mutationsAvailable: false });
+        expect(renderedControlIsDisabled(screen.findHostByTestId('home-policy-auth-admission-trigger'))).toBe(true);
+        await screen.pressByTestIdAsync('home-policy-auth-admission-trigger');
+        expect(screen.findByTestId('home-policy-auth-save')).toBeNull();
+    });
+
     it('saves a narrowing in one revision-guarded write without asking', async () => {
         const { screen, serverId, projection } = await renderEditor();
         harness.answer(serverId, POLICY_PATH, { body: { ...projection.policy, revision: 7 } });

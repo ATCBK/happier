@@ -1,3 +1,4 @@
+import { maxCodeUnits } from '../../../strings/maxCodeUnits.js';
 import { z } from 'zod/mini';
 import { sha256 } from '@noble/hashes/sha2';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils';
@@ -101,6 +102,8 @@ export const WorkspaceSyncRelationshipV1Schema = lazyZodSchema(() => z.strictObj
     mode: WorkspaceSyncPersistentModeV1Schema,
     contentPolicy: WorkspaceContentPolicyV1Schema,
     provenance: OptionalWorkspaceSyncWorkerCopyProvenanceV1Schema,
+    // null is new, never-committed intent; absent legacy rows retain possible native custody.
+    committedAtMs: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)))),
     enabled: z.boolean(),
     createdAtMs: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
     updatedAtMs: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
@@ -771,7 +774,7 @@ const WorkspaceSyncFileSizeV1Schema = lazyZodSchema(() => z.number().check(z.int
 export const ReadWorkspaceSyncFileResultV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
   z.strictObject({
     status: z.literal('text'),
-    text: z.string().check(z.maxLength(WORKSPACE_SYNC_FILE_PREVIEW_MAX_BYTES)),
+    text: z.string().check(maxCodeUnits(WORKSPACE_SYNC_FILE_PREVIEW_MAX_BYTES)),
     digest: WorkspaceSyncFileDigestV1Schema,
     size: WorkspaceSyncFileSizeV1Schema,
   }),

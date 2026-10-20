@@ -2,11 +2,12 @@ import {
     defineProtocolArray, defineProtocolLiteral, defineProtocolNumber,
     defineProtocolObject, defineProtocolString, defineProtocolUnion,
     ProtocolCollectionOpaqueCursorV1Schema,
+    type PluginJsonSchema,
 } from '@happier-dev/plugin-sdk/protocol';
 import { PLUGIN_COLLECTION_QUERY_MAX_ROWS_V1 } from '@happier-dev/plugin-sdk/collections';
 import { ConversationBindingIdV1Schema, ConversationConnectionIdV1Schema, ConversationCollectionRowRevisionV1ProtocolSchema } from '../identity.js';
 import { ConversationProviderDiagnosticV1Schema } from '../diagnostics.js';
-import { CONVERSATION_PROVIDER_FAILURE_REASONS_V1, CONVERSATION_PROVIDER_READINESS_ATTENTION_CODES_V1 } from '../bounds.js';
+import { CONVERSATION_NON_ADMISSION_REASONS_V1, CONVERSATION_PROVIDER_FAILURE_REASONS_V1, CONVERSATION_PROVIDER_READINESS_ATTENTION_CODES_V1 } from '../bounds.js';
 import { ConversationSessionLastDeliveryOutcomeV1Schema } from './sessionConversations.js';
 
 function values<const T extends readonly [string, string, ...string[]]>(entries: T) {
@@ -38,7 +39,7 @@ export const ConversationDeliveryReadInputV1Schema = defineProtocolObject({ cust
 
 const pollEvidence = defineProtocolUnion([
     defineProtocolObject({ kind: defineProtocolLiteral('provider'), reason: values(CONVERSATION_PROVIDER_FAILURE_REASONS_V1) }, closed),
-    defineProtocolObject({ kind: defineProtocolLiteral('action'), code: text }, closed),
+    defineProtocolObject({ kind: defineProtocolLiteral('action'), code: text, message: text.optional() }, closed),
 ]);
 const pollFailure = defineProtocolUnion([
     defineProtocolObject({ phase: defineProtocolLiteral('retryDue'), attemptCount: integer, retryNotBeforeMs: integer, evidence: pollEvidence }, closed),
@@ -82,7 +83,8 @@ const ingressIdentity = { obligationId: custodyId, revision, connectionId: Conve
     bindingId: ConversationBindingIdV1Schema.optional(), updatedAt: integer };
 export const ConversationIngressAttentionResultV1Schema = defineProtocolObject({ obligations: defineProtocolArray(defineProtocolUnion([
     defineProtocolObject({ ...ingressIdentity, kind: defineProtocolLiteral('blocked'), attemptCount: integer }, closed),
-    defineProtocolObject({ ...ingressIdentity, kind: defineProtocolLiteral('terminal'), category: values(['informational', 'recoverable']) }, closed),
+    defineProtocolObject({ ...ingressIdentity, kind: defineProtocolLiteral('terminal'), category: values(['informational', 'recoverable']),
+        reason: values(CONVERSATION_NON_ADMISSION_REASONS_V1).optional() }, closed),
     defineProtocolObject({ kind: defineProtocolLiteral('occurrenceConflict'), censusId: custodyId, revision, connectionId: ConversationConnectionIdV1Schema }, closed),
 ])), nextCursor }, closed);
 const createdThreadEndpointRequired = defineProtocolObject({ parentId: text }, closed).optional();
@@ -102,3 +104,16 @@ export const ConversationDeliveryReadResultV1Schema = defineProtocolUnion([
         lastOutcome: ConversationSessionLastDeliveryOutcomeV1Schema, createdThreadEndpointRequired,
     }, closed) }, closed),
 ]);
+
+export const ConversationConnectionListInputV1JsonSchema: PluginJsonSchema = ConversationConnectionListInputV1Schema.jsonSchema;
+export const ConversationConnectionListResultV1JsonSchema: PluginJsonSchema = ConversationConnectionListResultV1Schema.jsonSchema;
+export const ConversationConnectionManagementRowV1JsonSchema: PluginJsonSchema = ConversationConnectionManagementRowV1Schema.jsonSchema;
+export const ConversationBindingListInputV1JsonSchema: PluginJsonSchema = ConversationBindingListInputV1Schema.jsonSchema;
+export const ConversationBindingListResultV1JsonSchema: PluginJsonSchema = ConversationBindingListResultV1Schema.jsonSchema;
+export const ConversationBindingManagementRowV1JsonSchema: PluginJsonSchema = ConversationBindingManagementRowV1Schema.jsonSchema;
+export const ConversationIngressAttentionInputV1JsonSchema: PluginJsonSchema = ConversationIngressAttentionInputV1Schema.jsonSchema;
+export const ConversationIngressAttentionResultV1JsonSchema: PluginJsonSchema = ConversationIngressAttentionResultV1Schema.jsonSchema;
+export const ConversationDeliveryAttentionInputV1JsonSchema: PluginJsonSchema = ConversationDeliveryAttentionInputV1Schema.jsonSchema;
+export const ConversationDeliveryAttentionResultV1JsonSchema: PluginJsonSchema = ConversationDeliveryAttentionResultV1Schema.jsonSchema;
+export const ConversationDeliveryReadInputV1JsonSchema: PluginJsonSchema = ConversationDeliveryReadInputV1Schema.jsonSchema;
+export const ConversationDeliveryReadResultV1JsonSchema: PluginJsonSchema = ConversationDeliveryReadResultV1Schema.jsonSchema;

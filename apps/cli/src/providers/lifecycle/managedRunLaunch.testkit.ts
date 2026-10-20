@@ -18,25 +18,31 @@ import { createSharedGatewayRegistryTestkit } from '@/plugins/runtime/sharedGate
 
 /** Real committed plugin/Agent/Provider source. Only endpoint transport is
  * supplied by each test; no authorization, registry or materializer is mocked. */
-export async function createManagedRunLaunchFixture(input: Readonly<{ directory?: string; controller?: PluginReloadController; remote?: boolean; probeCatalog?: boolean; physicalGateway?: boolean; materializationUrl?: string }> = {}) {
+export async function createManagedRunLaunchFixture(input: Readonly<{ directory?: string; happyHomeDir?: string; controller?: PluginReloadController; remote?: boolean; probeCatalog?: boolean; physicalGateway?: boolean; materializationUrl?: string; signedOutAgentCli?: boolean;
+  catalogModels?: Parameters<typeof createSharedGatewayRegistryTestkit>[0]['catalogModels'];
+  holdResponseForInput?: string;
+  resolveAccountTarget?: Parameters<typeof createSharedGatewayRegistryTestkit>[0]['resolveAccountTarget'] }> = {}) {
   const directory = input.directory ?? await mkdtemp(join(tmpdir(), 'happier-managed-run-'));
   const pluginId = 'acme.managed-run';
   const agentId = `${pluginId}/agent`;
   const agentTargetKey = `agent:${agentId}`;
   const gateway = input.physicalGateway ? createSharedGatewayRegistryTestkit({ directory,
+    ...(input.happyHomeDir ? { happyHomeDir: input.happyHomeDir } : {}),
+    ...(input.catalogModels ? { catalogModels: input.catalogModels } : {}),
+    ...(input.holdResponseForInput ? { holdResponseForInput: input.holdResponseForInput } : {}),
     ...(input.controller ? { controller: input.controller } : {}),
     ...(input.probeCatalog ? { catalog: { source: 'static+probe' as const, manualModelPolicy: 'catalog-only' as const,
       staticModels: [{ id: 'example', name: 'Example' }], sourceRegistryVersion: 'fixture-registry:v1',
-      probes: [{ endpointTemplateId: 'api', path: '/models', parser: 'openai-models' as const }] } } : {}),
+      probes: [{ endpointTemplateId: 'api', path: '/v1/models', parser: 'openai-models' as const }] } } : {}),
     credential: { kind: 'apiKey', required: false, slotId: 'apiKey', transports: [{ id: 'bearer',
       protocols: ['openai-responses'], uses: ['runtime'], destination: { kind: 'httpHeader', name: 'authorization', format: 'bearer' } }] },
     compatibilityOverrides: [{ agentTargetKey, protocol: 'openai-responses', status: 'verified', reason: 'Fixture endpoint contract',
       evidence: { sourceUrls: ['https://example.test'], verifiedAt: '2026-10-09' } }],
-    resolveAccountTarget: async (target, signal) => {
+    resolveAccountTarget: input.resolveAccountTarget ?? (async (target, signal) => {
       signal.throwIfAborted();
       if (target.kind !== 'account') throw new Error('Expected exact Account target');
       return { account: target.account, displayName: 'Fixture account' };
-    },
+    }),
   }) : null;
   const happyHomeDir = gateway?.happyHomeDir ?? directory;
   const machineId = gateway ? 'machine' : 'worker';
@@ -48,6 +54,11 @@ export async function createManagedRunLaunchFixture(input: Readonly<{ directory?
     engines: { happier: '^0.2.0' }, runtime: { apiVersion: 1 }, entrypoints: { daemon: './daemon.mjs' },
     contributes: {
       agents: [{ id: 'agent', title: 'Run Agent', runtime: { kind: 'custom' }, primary: 'sessions',
+        ...(input.signedOutAgentCli ? { cli: {
+          executable: { binaryName: 'managed-run-agent', sourcePreference: 'system-first', knownUserBinDirSuffixes: null },
+          install: { manual: { kind: 'none' } },
+          auth: { support: 'status_only', environmentVariables: ['RUN_NATIVE_API_KEY'], missingCredentialState: 'logged_out', loginLaunches: [] },
+        } } : {}),
         capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true,
           executionRunContext: { versions: [1] } } },
         providerRequirements: { acceptsProtocols: ['openai-responses'], required: { streaming: true },

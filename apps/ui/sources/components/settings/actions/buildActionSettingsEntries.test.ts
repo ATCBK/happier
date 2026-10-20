@@ -56,7 +56,8 @@ describe('buildActionSettingsEntries', () => {
                 });
                 const waived = applyActionSettingsTargetControlState({ ...input, settings, value: 'allowed' });
                 expect(resolveActionSettingsTargetControlState({ ...input, settings: waived })).toMatchObject({
-                    value: 'allowed', approvalRequiredByPolicy: false,
+                    // Choosing the inherited answer restores Default rather than storing a redundant override.
+                    value: required ? 'allowed' : 'default', approvalRequiredByPolicy: false,
                 });
                 const reset = applyActionSettingsTargetControlState({ ...input, settings: waived, value: 'default' });
                 expect(resolveActionSettingsTargetControlState({ ...input, settings: reset })).toMatchObject({
@@ -88,6 +89,33 @@ describe('buildActionSettingsEntries', () => {
             const personFacing = spec.inputHints?.description;
             if (personFacing && byId.has(spec.id)) expect(byId.get(spec.id)?.description).toBe(personFacing);
         }
+    });
+
+    it('consumes one normalized settings document without reparsing it for every target', async () => {
+        const { buildActionSettingsEntries } = await import('./buildActionSettingsEntries');
+        const normalized = ActionsSettingsV1Schema.parse({ v: 1, actions: {} });
+        let versionReads = 0;
+        const settings = new Proxy(normalized, {
+            get(target, property, receiver) {
+                if (property === 'v') versionReads += 1;
+                return Reflect.get(target, property, receiver);
+            },
+        });
+
+        const entries = buildActionSettingsEntries({
+            query: '',
+            settings,
+            availability: {
+                executionRunsEnabled: true,
+                memorySearchEnabled: true,
+                voiceEnabled: true,
+                sessionHandoffEnabled: true,
+                voiceShareDeviceInventory: true,
+            },
+        });
+
+        expect(entries.length).toBeGreaterThan(0);
+        expect(versionReads).toBe(0);
     });
 
     it('marks inventory voice surfaces unavailable when device inventory sharing is disabled', async () => {

@@ -1,7 +1,7 @@
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { SessionReportsV1Schema, type SessionReportsV1 } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
+import { SessionManagedSessionsV1Schema, type SessionManagedSessionsV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
@@ -16,7 +16,7 @@ import {
   SessionRowReportsDisclosure,
 } from './SessionRowReportsChip';
 
-const REPORTS: SessionReportsV1 = { total: 3, needsYou: 1, working: 1, stalled: 0 };
+const REPORTS: SessionManagedSessionsV1 = { total: 3, needsYou: 1, working: 1, stalled: 0 };
 
 describe('SessionRowReportsChip', () => {
   afterEach(() => {
@@ -25,15 +25,15 @@ describe('SessionRowReportsChip', () => {
 
   it('agrees with real Work projection for the same offline in-progress list facts', async () => {
     const now = Date.now();
-    const child = createSessionFixture({ id: 'child', serverId: 'home', reportsTo: { sessionId: 'lead' },
-      active: false, activeAt: now, presence: 'offline', latestTurnStatus: 'in_progress', latestTurnStatusObservedAt: now });
+    const child = createSessionFixture({ id: 'child', serverId: 'home', manager: { sessionId: 'lead' },
+      active: false, activeAt: now, presence: 0, latestTurnStatus: 'in_progress', latestTurnStatusObservedAt: now });
     const row = buildSessionListRenderableFromSession(child);
     const reports = selectSessionReportSubtree({}, 'lead', 'home', { home: { child: row } });
     const status = readSessionAwarenessWorkStatusV1({ awareness: readSessionWorkStatusFacts(row, now).awareness });
     const stalled = readSessionWorkStalled(row, now);
-    const counts = SessionReportsV1Schema.parse({ total: 1, working: Number(status.bucket === 'working'), needsYou: Number(status.bucket === 'needs_you'), stalled: Number(stalled) });
+    const counts = SessionManagedSessionsV1Schema.parse({ total: 1, working: Number(status.bucket === 'working'), needsYou: Number(status.bucket === 'needs_you'), stalled: Number(stalled) });
     const work = projectWork({ sessionId: 'lead', reportSessions: reports.map(session => ({
-      sessionId: session.id, leadSessionId: 'lead', title: 'Payment retries', agentId: null, facts: [],
+      sessionId: session.id, managerSessionId: 'lead', title: 'Payment retries', agentId: null, facts: [],
       statusFacts: readSessionWorkStatusFacts(session, now), stalled: readSessionWorkStalled(session, now), archived: false,
     })), agentEntries: [], workflowHeadlineRuns: [], managedRuns: [], ownTriggerRunIds: new Set(),
       describeAgentStatus: () => '', describeProgress: () => '' });
@@ -62,6 +62,17 @@ describe('SessionRowReportsChip', () => {
     );
     // Settled reports no longer hide behind an absent chip once they are folded away.
     expect(settled.findByTestId('session-row-reports-chip:bot')).not.toBeNull();
+  });
+
+  it('counts only the sub-sessions that are not archived, and says nothing when every report is archived', async () => {
+    const counted = await renderScreen(
+      <SessionRowReportsChip sessionId="bot" reports={{ total: 3, needsYou: 0, working: 0, stalled: 0, archived: 1 }} collapsed />,
+    );
+    expect(counted.findByTestId('session-row-reports-chip:bot')?.props.accessibilityLabel).toContain('2');
+    const archivedOnly = await renderScreen(
+      <SessionRowReportsChip sessionId="bot" reports={{ total: 1, needsYou: 0, working: 0, stalled: 0, archived: 1 }} collapsed />,
+    );
+    expect(archivedOnly.findByTestId('session-row-reports-chip:bot')).toBeNull();
   });
 
   it('writes the explicit opposite of the current fold for its own list node', async () => {

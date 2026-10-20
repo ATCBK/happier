@@ -1,31 +1,121 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import Ajv2020 from 'ajv/dist/2020.js';
 import { z } from 'zod/mini';
 import * as m from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { AutomationDefinitionCreateRequestSchema } from '../automations/automationApiV3.js';
-import { listActionSpecs } from './actionSpecs.js';
-import { compileActionInputJsonSchema } from './actionInputJsonSchemaValidation.js';
+import { getActionSpec, listActionSpecs } from './actionSpecs.js';
+import { actionSpecToActionDefinitionV1 } from './actionCatalog.js';
+import { RawIngressStructuredInputV1Schema } from '../runtime/input/structuredInputV1.js';
+import { compileActionInputJsonSchema, supportsSessionMessageInputJsonSchema } from './actionInputJsonSchemaValidation.js';
 import { compilePluginJsonSchema, createPluginJsonSchemaZodObjectAdapter } from '../plugins/actions/jsonSchemaValidation.js';
 
 import {
   ActionJsonSchemaProjectionError,
+  forEachJsonSchemaChild,
   zodSchemaToJsonSchemaObject,
 } from './actionInputJsonSchema.js';
 
 describe('actionInputJsonSchema', () => {
-  it('publishes Project Action schemas when the Project owner is imported before the Action catalog', async () => {
-    vi.resetModules();
-    await import('../projects/projectContextV1.js');
-    const { getActionSpec } = await import('./actionSpecs.js');
-    for (const id of ['projects.context.update', 'projects.visibility.set'] as const) {
-      const spec = getActionSpec(id);
-      expect(spec.inputSchema, id).toBeDefined();
-      expect(spec.outputSchema, id).toBeDefined();
-      expect(zodSchemaToJsonSchemaObject(spec.inputSchema, { target: 'draft-7' }), id)
-        .toMatchObject({ type: 'object', required: expect.arrayContaining(['target', 'expectedRevision']) });
+  it('requires declared remote support for each supplied nonnullable structured Session member', () => {
+    const fields = {
+      reviewComments: { sessionId: 'source', comments: [] },
+      composerAttachments: [],
+      browserContext: {
+        contexts: [{ v: 1, kind: 'browserPageReference', contextId: 'context', sourceViewId: 'view',
+          sourceAdapterKind: 'chromiumSidecar', fidelity: 'cdp', capturedAtMs: 1, navigationGeneration: 1,
+          lifecycleState: 'available', redactionLevel: 'metadataOnly' }],
+        attachments: [{ v: 1, attachmentId: 'attachment', contextId: 'context', sourceViewId: 'view',
+          capturedNavigationGeneration: 1, currentNavigationGeneration: 1, state: 'available' }],
+      },
+      imageInputs: [], mentions: [], vendorPluginMentions: [], skillMentions: [],
+      discussionSelectionSourceV1: { kind: 'discussion', serverId: 'home', discussionId: 'discussion', messageIds: ['message'] },
+      sessionAttachments: [],
+    };
+    const current = actionSpecToActionDefinitionV1(getActionSpec('session.message.send')).inputSchema;
+    const object = (value: unknown): value is Record<string, unknown> => value !== null
+      && typeof value === 'object' && !Array.isArray(value);
+    for (const [field, value] of Object.entries(fields)) {
+      const structuredInput = RawIngressStructuredInputV1Schema.parse({ v: 1, [field]: value });
+      expect(RawIngressStructuredInputV1Schema.safeParse({ v: 1, [field]: null }).success, field).toBe(false);
+      const input = { sessionId: 'target', message: 'Inspect the selected context.', structuredInput };
+      const predecessor = structuredClone(current);
+      let removed = 0;
+      const omitMember = (node: unknown): void => {
+        if (!object(node)) return;
+        if (object(node.properties) && 'composerAttachments' in node.properties && 'browserContext' in node.properties) {
+          expect(node.properties).toHaveProperty(field);
+          delete node.properties[field];
+          // The predecessor still parses the structured envelope, but does not
+          // understand this newer member in its existing additive object.
+          node.additionalProperties = true;
+          removed++;
+        }
+        forEachJsonSchemaChild(node, omitMember);
+      };
+      omitMember(predecessor);
+      expect(removed, field).toBe(1);
+      const validatePredecessor = compileActionInputJsonSchema(predecessor);
+      expect(validatePredecessor(input), field).toBe(true);
+      expect(validatePredecessor({ ...input, structuredInput: { ...structuredInput, [field]: null } }), field).toBe(true);
+      expect(supportsSessionMessageInputJsonSchema(predecessor, input), field).toBe(false);
+      expect(supportsSessionMessageInputJsonSchema(current, input), field).toBe(true);
     }
+    // The additive envelope still accepts unknown, ignorable extension values;
+    // this is not a requirement that every nested member reject null.
+    expect(supportsSessionMessageInputJsonSchema(current, { sessionId: 'target', message: 'Plain message.',
+      structuredInput: { v: 1, futureContext: null } })).toBe(true);
   });
+
+  it.each([
+    { field: 'modelOverride', value: 'model-1', schema: { anyOf: [{ type: 'string' }, { type: 'null' }] } },
+    { field: 'providerConnectionId', value: 'connection-1', schema: { anyOf: [{ type: 'string' }, { type: 'null' }] } },
+    { field: 'attachments', value: [], schema: { type: 'array' } },
+    { field: 'source', value: {}, schema: { type: 'object' } },
+    { field: 'idempotencyKey', value: 'request-1', schema: { type: 'string', minLength: 1 } },
+  ])('requires declared remote support for supplied Session operand $field', ({ field, value, schema }) => {
+    // Remote boundary projections deliberately differ only in whether the
+    // authored operand is parsed or silently accepted as an unknown property.
+    const base = { type: 'object', properties: { message: { type: 'string' } }, additionalProperties: true };
+    const input = { message: 'Inspect it.', [field]: value };
+    expect(supportsSessionMessageInputJsonSchema(base, input)).toBe(false);
+    expect(supportsSessionMessageInputJsonSchema({ ...base, properties: { ...base.properties, [field]: schema } }, input)).toBe(true);
+  });
+
+  it('preserves nullable input contracts through strict Plugin admission', () => {
+    const schema = z.strictObject({ label: z.nullable(z.string()), count: z.nullable(z.number()) });
+    const validate = compilePluginJsonSchema(zodSchemaToJsonSchemaObject(schema, { target: 'draft-7' }));
+    expect(validate({ label: null, count: 2 })).toBe(true);
+    expect(validate({ label: 'kept', count: null })).toBe(true);
+    expect(validate({ label: 42, count: null })).toBe(false);
+    expect(validate({ label: null, count: 'invalid' })).toBe(false);
+  });
+
+  it('preserves conjunctive constraints and literal JSON while projecting type unions', () => {
+    const literal = { type: ['number', 'null'], format: 'starts_with' };
+    const schema = z.unknown().check(z.meta({
+      type: ['string', 'null'],
+      anyOf: [{ type: 'string', pattern: '^k' }, { type: 'null' }],
+      allOf: [{ not: { const: 'knot' } }],
+      default: literal,
+      examples: [literal],
+      $defs: { literal: { enum: [literal] } },
+    }));
+    const projected = zodSchemaToJsonSchemaObject(schema);
+    const validate = compileActionInputJsonSchema(projected);
+    expect(validate('kept')).toBe(true);
+    expect(validate(null)).toBe(true);
+    for (const invalid of ['else', 'knot', 42]) expect(validate(invalid)).toBe(false);
+    expect(projected.default).toEqual(literal);
+    expect(projected.examples).toEqual([literal]);
+    expect(projected.$defs).toEqual({ literal: { enum: [literal] } });
+    // Plugin admission remains deliberately narrower than standard JSON Schema.
+    const { $schema: _dialect, examples: _examples, ...pluginSchema } = projected;
+    const validatePlugin = compilePluginJsonSchema(pluginSchema);
+    expect(validatePlugin('kept')).toBe(true);
+    for (const invalid of ['else', 'knot', 42]) expect(validatePlugin(invalid)).toBe(false);
+  });
+
   it('compacts repeated Action schemas without weakening their advertised inputs', () => {
     const target = z.strictObject({ kind: z.literal('workspace'), path: z.string().check(z.minLength(1)) });
     const schema = z.strictObject({ source: target, destination: target,
@@ -40,16 +130,19 @@ describe('actionInputJsonSchema', () => {
     expect(advertised({ source: { kind: 'workspace', path: '/a' }, destination: { kind: 'project', path: '/b' } })).toBe(false);
     expect(advertised({ source: { kind: 'workspace', path: '/a', secret: true }, destination: { kind: 'workspace', path: '/b' } })).toBe(false);
   });
-  it('projects the MCP input and output for every advertised Action from the real registry', async () => {
-    const { listActionSpecs } = await import('./actionSpecs.js');
+  it('projects the MCP input and output for every advertised Action from the real registry', () => {
     for (const spec of listActionSpecs().filter(spec => spec.surfaces.mcp)) {
       // MCP eagerly registers every advertised input; a missing export must
       // fail this census rather than being skipped and aborting initialize.
       expect(spec.inputSchema, spec.id).toBeDefined();
-      for (const schema of [spec.inputSchema, spec.agentInputSchema, spec.outputSchema]) {
+      for (const [kind, schema] of Object.entries({ input: spec.inputSchema, agentInput: spec.agentInputSchema, output: spec.outputSchema })) {
         if (!schema) continue;
-        const projected = zodSchemaToJsonSchemaObject(schema, { target: 'draft-7' });
-        expect(JSON.parse(JSON.stringify(projected))).toEqual(projected);
+        try {
+          const projected = zodSchemaToJsonSchemaObject(schema, { target: 'draft-7' });
+          expect(JSON.parse(JSON.stringify(projected))).toEqual(projected);
+        } catch (error) {
+          throw new Error(`Action ${spec.id} ${kind} schema projection failed`, { cause: error });
+        }
       }
     }
   });

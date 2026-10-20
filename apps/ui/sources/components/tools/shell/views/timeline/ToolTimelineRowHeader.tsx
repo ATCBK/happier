@@ -39,11 +39,23 @@ export const ToolTimelineRowHeader = React.memo(function ToolTimelineRowHeader(p
     findBlocks?: TranscriptFindRowSnapshot['blocks'];
     findRevealBlockId?: string;
     subtitle?: string | null;
+    /**
+     * The subtitle is a sentence to read whole (a Happier Action's own line): when it does not fit beside the
+     * title it drops to its own line under it instead of ending in a one-word ellipsis.
+     */
+    subtitleWraps?: boolean;
     statusText?: string | null;
+    /** Why a refused or failed call ended, in words: its own quiet line under the title, so a narrow row never clips it. */
+    causeText?: string | null;
     onPress?: (() => void) | null;
     canOpen?: boolean;
     onOpen?: (() => void) | null;
     rightElement?: React.ReactNode | null;
+    /**
+     * How the call ended (failed, refused, blocked). It closes the row after the reveal slots, so every
+     * row's outcome sits in one column that lines up with the group header's own status.
+     */
+    terminalStatus?: React.ReactNode | null;
     /**
      * Hover-revealed row action (the pin). It owns its own reveal slot so a
      * pinned row can keep the pin visible without dragging the open-details
@@ -93,6 +105,7 @@ export const ToolTimelineRowHeader = React.memo(function ToolTimelineRowHeader(p
         disclosure?.state === 'expanded' ? 'caret-up' : disclosure?.state === 'collapsed' ? 'caret-down' : null;
 
     return (
+        <>
         <View style={styles.container}>
             <Pressable
                 testID={props.testID}
@@ -137,7 +150,7 @@ export const ToolTimelineRowHeader = React.memo(function ToolTimelineRowHeader(p
                         <ToolTimelineIconFrame icon={props.icon} />
                     )}
                 </View>
-                <View style={styles.text}>
+                <View style={[styles.text, props.subtitleWraps ? styles.textWrapping : null]}>
                     <Text
                         style={[styles.title, props.density === 'compact' ? styles.titleCompact : null]}
                         numberOfLines={props.findRevealBlockId === 'tool-title' ? undefined : 1}
@@ -145,7 +158,7 @@ export const ToolTimelineRowHeader = React.memo(function ToolTimelineRowHeader(p
                         {findRanges('tool-title')?.length ? <FindHighlightedText text={props.title} ranges={findRanges('tool-title')} /> : props.title}
                     </Text>
                     {showSubtitleInline ? (
-                        <Text style={styles.subtitleInline} numberOfLines={props.findRevealBlockId === 'tool-subtitle' ? undefined : 1}>
+                        <Text style={styles.subtitleInline} numberOfLines={props.findRevealBlockId === 'tool-subtitle' ? undefined : props.subtitleWraps ? 3 : 1}>
                             {findRanges('tool-subtitle')?.length ? <FindHighlightedText text={props.subtitle!} ranges={findRanges('tool-subtitle')} /> : props.subtitle}
                         </Text>
                     ) : null}
@@ -195,7 +208,21 @@ export const ToolTimelineRowHeader = React.memo(function ToolTimelineRowHeader(p
                     ) : null}
                 </View>
             ) : null}
+            {props.terminalStatus ? (
+                <Pressable
+                    testID="tool-timeline-row-status-slot"
+                    onPress={props.onPress ?? undefined}
+                    disabled={!props.onPress}
+                    style={styles.terminalStatusSlot}
+                >
+                    {props.terminalStatus}
+                </Pressable>
+            ) : null}
         </View>
+        {props.causeText ? (
+            <Text testID="tool-timeline-row-cause" style={styles.cause}>{props.causeText}</Text>
+        ) : null}
+        </>
     );
 });
 
@@ -204,6 +231,18 @@ const styles = StyleSheet.create((theme, _runtime) => ({
         flexDirection: 'row',
         alignItems: 'center',
         gap: theme.space.s6,
+    },
+    terminalStatusSlot: {
+        flexShrink: 0,
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+    },
+    cause: {
+        ...Typography.variant('meta'),
+        color: theme.colors.text.secondary,
+        // Under the title: the icon column and its gap, so the cause reads as part of the row.
+        paddingLeft: 18 + theme.space.s6,
+        paddingBottom: theme.space.s4,
     },
     row: {
         flex: 1,
@@ -258,6 +297,10 @@ const styles = StyleSheet.create((theme, _runtime) => ({
         justifyContent: 'flex-start',
         gap: theme.space.s8,
         fontSize: 13,
+    },
+    textWrapping: {
+        flexWrap: 'wrap',
+        rowGap: 0,
     },
     title: {
         ...Typography.variant('body', 'semiBold'),

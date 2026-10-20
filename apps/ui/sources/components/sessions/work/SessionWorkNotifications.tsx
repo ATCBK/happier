@@ -1,17 +1,16 @@
 import * as React from 'react';
-import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { useShallow } from 'zustand/react/shallow';
-import type { WorkflowTriggerSetV1 } from '@happier-dev/protocol';
-
-import { buildTriggerDefinition, buildTriggerTarget, readTriggerThen } from '@/components/workflows/triggers/sessionTriggerForm';
-import { useSessionTriggers, type SessionTriggersRead } from '@/components/workflows/triggers/useSessionTriggers';
+import type { PersonalFollowOnceV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
+import { useAccountSessionFollowController } from '@/components/sessions/follow/useAccountSessionFollowController';
+import { useSessionInProgressTurnId } from '@/components/sessions/follow/useSessionInProgressTurnId';
+import type { AccountSessionFollowEditorSnapshot } from '@/components/sessions/follow/accountSessionFollowController';
+import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useActiveServerAccountScope } from '@/sync/store/hooks';
 import { getStorage } from '@/sync/domains/state/storage';
-import type { WorkflowActionExecute } from '@/sync/domains/workflows/callWorkflowAction';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { t } from '@/text';
-import { WorkNotificationOperation } from './WorkNotificationOperation';
+import { WorkNotificationGroup, WorkNotificationOperationView } from './WorkNotificationOperation';
 
 const stylesheet = StyleSheet.create(() => ({
     // On the Work sheet's own row inset, like the Role and Goal rows above it: an extra inset narrowed
@@ -23,52 +22,47 @@ const stylesheet = StyleSheet.create(() => ({
 export function SessionWorkNotifications(props: Readonly<{ sessionId: string; serverId?: string | null }>) {
     const scope = useActiveServerAccountScope();
     if (!scope || (props.serverId && !areServerProfileIdentifiersEquivalent(props.serverId, scope.serverId))) return null;
-    return <SessionWorkNotificationsForAccount key={`${scope.serverId}:${scope.accountId}:${props.sessionId}`} {...props} />;
+    return <SessionWorkNotificationsForAccount key={`${scope.serverId}:${scope.accountId}:${props.sessionId}`}
+        sessionId={props.sessionId} serverId={scope.serverId} />;
 }
 
-function SessionWorkNotificationsForAccount(props: Readonly<{ sessionId: string; serverId?: string | null }>) {
+function SessionWorkNotificationsForAccount(props: Readonly<{ sessionId: string; serverId: string }>) {
+    const enabled = useFeatureEnabled('sessions.following', { scopeKind: 'spawn', serverId: props.serverId });
+    const { controller, state } = useAccountSessionFollowController(props, enabled);
     // Exact-turn binding reads the turn identity itself, not the shell's intentionally
     // coarser presentation signature (two in-progress turns have the same status).
+    const turnId = useSessionInProgressTurnId(props);
     const source = getStorage()(useShallow((state) => {
         const session = state.sessions[props.sessionId];
-        return { available: Boolean(session), archived: session?.archivedAt != null,
-            turnId: session?.latestTurnStatus === 'in_progress' ? session.latestTurnId ?? null : null };
+        return { available: Boolean(session), archived: session?.archivedAt != null };
     }));
-    const read = useSessionTriggers(props.sessionId);
-    if (!source.available || source.archived) return null;
-    return <SessionWorkNotifyOperation sessionId={props.sessionId} sourceTurnId={source.turnId} read={read} />;
+    if (!enabled || !source.available || source.archived) return null;
+    return <SessionWorkNotifyOperation sessionId={props.sessionId} sourceTurnId={turnId} state={state} onOnce={controller.setOnce} />;
 }
 
-/** The public trigger command and its projection are the only state behind the quiet operation. */
-export function SessionWorkNotifyOperation(props: Readonly<{ sessionId: string; sourceTurnId: string | null; read: SessionTriggersRead; execute?: WorkflowActionExecute }>) {
-    return <View style={stylesheet.operations}>
-        {props.sourceTurnId === null ? null : <NotificationChoice key={props.sourceTurnId} {...props} mode="turn" />}
-        <NotificationChoice {...props} mode="attention" />
-    </View>;
-}
-
-function NotificationChoice(props: Readonly<{ sessionId: string; sourceTurnId: string | null; read: SessionTriggersRead; mode: 'turn' | 'attention'; execute?: WorkflowActionExecute }>) {
-    const message = props.mode === 'turn' ? t('sessionWork.notify.turnFinished') : t('sessionWork.notify.needsYou');
-    const match = (set: WorkflowTriggerSetV1) => {
-        const then = set.target ? readTriggerThen(set.target) : null;
-        if (!set.enabled || set.health !== 'available' || then?.kind !== 'notifyMe') return null;
-        return set.triggers.find((trigger) => trigger.kind === 'sessionLifecycle' && trigger.enabled
-            && trigger.status.state === 'waiting' && trigger.remainingOccurrences !== 0
-            && trigger.sourceSessionId === props.sessionId
-            && (props.mode === 'turn'
-                ? trigger.policy.kind === 'currentTurn' && trigger.policy.sourceTurnId === props.sourceTurnId
-                : trigger.policy.kind === 'firstMatch' && trigger.events.length === 1 && trigger.events[0] === 'userActionRequired'))?.id ?? null;
+/** Personal convenience changes only Account Follow and never an authored Habit. */
+export function SessionWorkNotifyOperation(props: Readonly<{
+    sessionId: string;
+    sourceTurnId: string | null;
+    state: AccountSessionFollowEditorSnapshot;
+    onOnce: (once: PersonalFollowOnceV1 | null) => Promise<void>;
+}>) {
+    const once = props.state.projection?.follow?.once;
+    const disabled = !props.state.online || props.state.saving || props.state.projection?.capabilities.manageFollow !== true;
+    const choice = (mode: 'turn' | 'attention') => {
+        const armed = mode === 'turn' ? once?.kind === 'turn_finished' && once.sourceTurnId === props.sourceTurnId
+            : once?.kind === 'first_needs_you';
+        if (props.state.error && !props.state.projection && !armed) return null;
+        return <WorkNotificationOperationView key={mode === 'turn' ? props.sourceTurnId : mode}
+            sourceId={props.sessionId} testIDPrefix={`notify-${mode}`}
+            title={mode === 'turn' ? t('sessionWork.notify.turn') : t('sessionWork.notify.attention')}
+            armed={armed} pending={props.state.saving} disabled={disabled} error={props.state.error !== null}
+            onChange={async enabled => { await props.onOnce(enabled
+                ? mode === 'turn' ? { kind: 'turn_finished', sourceTurnId: props.sourceTurnId! } : { kind: 'first_needs_you' }
+                : null); }} />;
     };
-    const add = async () => {
-        const trigger = buildTriggerDefinition({ sessionId: props.sessionId, enabled: true,
-            when: props.mode === 'turn' ? { kind: 'turnEnds', sourceTurnId: props.sourceTurnId! } : { kind: 'needsYou' } });
-        const target = buildTriggerTarget({ kind: 'notifyMe', message, title: '', channels: [] });
-        if (!trigger || !target || trigger.kind !== 'sessionLifecycle') throw new Error('Invalid notification trigger');
-        return props.read.add({ target,
-            trigger: props.mode === 'attention' ? { ...trigger, policy: { kind: 'firstMatch' } } : trigger });
-    };
-    return <WorkNotificationOperation sourceId={props.sessionId} testIDPrefix={`notify-${props.mode}`}
-        title={props.mode === 'turn' ? t('sessionWork.notify.turn') : t('sessionWork.notify.attention')}
-        sets={props.read.sets} status={props.read.status} machineId={props.read.machineId}
-        match={match} add={add} remove={props.read.remove} execute={props.execute} />;
+    return <WorkNotificationGroup sourceId={props.sessionId} style={stylesheet.operations}>
+        {props.sourceTurnId === null ? null : choice('turn')}
+        {choice('attention')}
+    </WorkNotificationGroup>;
 }

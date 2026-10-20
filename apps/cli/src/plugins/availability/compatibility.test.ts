@@ -68,6 +68,26 @@ function projectionWithCanonicalIngestionInvalidManifest(
 }
 
 describe('evaluatePluginCompatibilityProjection', () => {
+  it('refuses a described appPage requiring a newer engine through canonical compatibility admission', () => {
+    const candidate = {
+      version: 1,
+      manifest: {
+        schemaVersion: 2, id: 'acme.described-page', version: '1.0.0', displayName: 'Described page',
+        engines: { happier: '>=999.0.0' }, runtime: { apiVersion: 1 },
+        contributes: { ui: {
+          views: [{ id: 'reviews', container: 'appPage', target: { kind: 'app' }, renderer: 'page',
+            description: { key: 'reviews.purpose', fallback: 'Review incoming work.' } }],
+          renderers: [{ id: 'page', kind: 'declarative', root: { kind: 'text', text: 'Reviews' } }],
+        } },
+      },
+      uiArtifacts: { version: 2, entries: [] },
+    };
+    expect(evaluatePluginCompatibilityProjection(candidate)).toMatchObject({
+      kind: 'incompatible',
+      diagnostics: [{ code: 'plugin_manifest_invalid', message: 'Plugin manifest requires a compatible Happier CLI version' }],
+    });
+  });
+
   it('reports one bounded non-echoing diagnostic for malformed generated metadata', () => {
     const untrustedUnknownKey = `unexpected-${'x'.repeat(32_769)}`;
     const evaluation = evaluatePluginCompatibilityProjection({ [untrustedUnknownKey]: true });

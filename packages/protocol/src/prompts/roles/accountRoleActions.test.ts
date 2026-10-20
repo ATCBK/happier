@@ -88,6 +88,58 @@ function createHarness(readError?: Error, guidanceSource?: Readonly<Record<strin
 const context = { surface: 'ui', authority: 'present_user' } as const;
 
 describe('Account Role Action refusal projection', () => {
+  it('overlaps independent source reads while preserving the complete ordered Role inventory', async () => {
+    const rawSettings = { executionRunsGuidanceEntries: [
+      { id: 'retained', description: 'Original retained guidance' },
+      { id: 'legacy-only', description: 'Current legacy guidance' },
+    ] };
+    const [retained, legacyOnly] = readLegacyRoleInventoryV1(rawSettings, 'account').entries;
+    if (!retained || !legacyOnly) throw new Error('Expected legacy Role identities');
+    let releaseArtifacts!: () => void;
+    let releaseSettings!: () => void;
+    const artifactsPending = new Promise<void>(resolve => { releaseArtifacts = resolve; });
+    const settingsPending = new Promise<void>(resolve => { releaseSettings = resolve; });
+    const started: string[] = [];
+    // Only the independent Artifact/settings persistence ports are held. The
+    // source reader, stored Role parser, pagination and legacy merge stay real.
+    const read = createRoleSourceReaderV1({ accountId: 'account',
+      readRawAccountSettings: async () => { started.push('settings'); await settingsPending; return rawSettings; },
+      artifactStore: {
+        list: async options => {
+          started.push('artifact');
+          await artifactsPending;
+          return options.cursor ? { items: [{ artifactId: retained.artifactId, header: { kind: 'role.v1', migratedFromV0_2: true },
+            access: 'owner', ownerAccountId: 'account', headerVersion: 4, updatedAt: 1,
+            ...(options.includeBody ? { body: JSON.stringify(BUILT_IN_ROLES_V1.reviewer), bodyVersion: 5 } : {}) }] }
+            : { items: [{ artifactId: 'first-role', header: { kind: 'role.v1' }, access: 'view', ownerAccountId: 'other',
+              headerVersion: 2, updatedAt: 1,
+              ...(options.includeBody ? { body: JSON.stringify(BUILT_IN_ROLES_V1.builder), bodyVersion: 3 } : {}) }], nextCursor: 'second-page' };
+        },
+        read: async () => { throw new Error('Role catalog must consume its body page'); },
+      },
+    });
+    const pending = read();
+    let inventory: Awaited<typeof pending>;
+    try {
+      await Promise.resolve();
+      expect([...started].sort()).toEqual(['artifact', 'settings']);
+    } finally {
+      releaseSettings();
+      releaseArtifacts();
+      inventory = await pending;
+    }
+    expect(inventory).toEqual({ status: 'ready', diagnostics: [], entries: [
+      ...Object.entries(BUILT_IN_ROLES_V1).map(([roleId, role]) => ({
+        roleId, role, shared: false, viewOnly: false, migratedFromV0_2: false,
+      })),
+      { roleId: 'first-role', role: BUILT_IN_ROLES_V1.builder, revision: { headerVersion: 2, bodyVersion: 3 },
+        shared: true, viewOnly: true, migratedFromV0_2: false },
+      { roleId: retained.artifactId, role: BUILT_IN_ROLES_V1.reviewer, revision: { headerVersion: 4, bodyVersion: 5 },
+        shared: false, viewOnly: false, migratedFromV0_2: true },
+      { roleId: legacyOnly.artifactId, role: legacyOnly.role, shared: false, viewOnly: false, migratedFromV0_2: true },
+    ] });
+  });
+
   it('lists Role documents and revisions from the Artifact body page without serial rereads', async () => {
     const read = createRoleSourceReaderV1({ artifactStore: {
       list: async options => ({ items: [
@@ -108,6 +160,25 @@ describe('Account Role Action refusal projection', () => {
       { roleId: 'second-role', role: BUILT_IN_ROLES_V1.reviewer, revision: { headerVersion: 4, bodyVersion: 5 },
         shared: true, viewOnly: true, migratedFromV0_2: false },
     ]) });
+  });
+
+  it('keeps partial Artifact page coverage incomplete while serving known Roles', async () => {
+    const artifactStore: Pick<RoleArtifactStoreV1, 'list' | 'read'> = {
+      list: async options => options.cursor ? { items: [], coverage: 'complete' }
+        : { items: [{ artifactId: 'known-role', header: { kind: 'role.v1' }, access: 'owner', ownerAccountId: 'account',
+          headerVersion: 2, bodyVersion: 3, updatedAt: 1, body: JSON.stringify(BUILT_IN_ROLES_V1.reviewer) }],
+          coverage: 'partial', nextCursor: 'last-page' },
+      read: async () => { throw new Error('Role catalog must consume its body page'); },
+    };
+    const read = createRoleSourceReaderV1({ artifactStore });
+    expect(await read()).toMatchObject({ status: 'partial', diagnostics: [], entries: expect.arrayContaining([
+      expect.objectContaining({ roleId: 'known-role', role: BUILT_IN_ROLES_V1.reviewer }),
+    ]) });
+    const execute = createAccountRoleActionExecutorV1({ readRoleSources: read, generateId: () => 'unused' });
+    expect(await execute({ actionId: 'roles.get', input: { roleId: 'known-role' }, context }))
+      .toMatchObject({ roleId: 'known-role', role: BUILT_IN_ROLES_V1.reviewer });
+    await expect(execute({ actionId: 'roles.get', input: { roleId: 'unknown-role' }, context }))
+      .rejects.toThrow('role_source_incomplete');
   });
 
   it('lists plugin role documents as read-only and refuses replacing their instructions', async () => {
@@ -227,7 +298,7 @@ describe('Account Role Action refusal projection', () => {
 });
 
 const role = { name: 'Reviewer', instructions: 'Review the change', runsAs: { kind: 'session' },
-  workspaceWrites: 'deny', secondOpinion: 'off', enabled: true } as const;
+  workspaceWrites: 'deny', secondOpinion: 'off', canDelegateToOtherRoles: true, enabled: true } as const;
 
 describe('Account Role artifact attribution', () => {
   it.each(['missing', 'non-text', 'invalid-json', 'invalid-role'] as const)(

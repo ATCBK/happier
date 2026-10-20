@@ -27,7 +27,7 @@ import { rmDirSafeSync } from './rmDirSafe.mjs';
 import { runPkgrollBuild } from './runPkgrollBuild.mjs';
 
 const INCREMENTAL_SOURCE_DIR = '.tmp.hstack-cli-build-source.incremental';
-const BUILD_SOURCE_PATHS = ['package.json', 'tsconfig.json', 'tsconfig.build.json', 'src'];
+const BUILD_SOURCE_PATHS = ['package.json', 'tsconfig.json', 'tsconfig.build.json', 'src', 'scripts/native_process_exit.cjs', 'scripts/native_process_exit.d.cts'];
 const CLI_DIST_WORKER_FLAG = '--happier-cli-dist-build-worker';
 
 function authenticatedCliPublicationLease(lockPath, env) {

@@ -31,19 +31,23 @@ import type {
  */
 export type RpcLocalActionContext = Readonly<Partial<Pick<
     ActionExecutorContext,
-    'surface' | 'authority' | 'callerPermissionMode' | 'causalPermissionAuthority' | 'actionRequestId'
+    'surface' | 'authority' | 'callerPermissionMode' | 'causalPermissionAuthority' | 'callerInputConstraints' | 'actionRequestId'
     | 'externalActionExecutionAuthorization'
     | 'agentStartContext' | 'agentStartWorkDepth' | 'agentStartWorkspaceWrites' | 'sessionAgentSpawnPolicyV1'
 >> & {
+    /** Admitted headless Resume invocation, retained only through the in-process native launcher. */
+    resumeActionContext?: ActionExecutorContext;
     /** Exact Workflow invocation store, admitted only by an in-process host. */
     executionRunPermissionRequestStore?: unknown;
     executionRunWorkflowObservationSink?: unknown;
     /** Identity from the admitted in-process Workflow caller; never transported in RPC input. */
     executionRunWorkflowRunId?: string;
+    executionRunWorkflowScope?: ActionExecutorContext['executionRunWorkflowScope'];
     /** Accepted Workflow Machine ceiling from the in-process host, never RPC input. */
-    executionRunTargetMachineId?: string;
+    executionRunTargetMachineId?: ActionExecutorContext['executionRunTargetMachineId'];
     operationProgress?: ActionExecutorContext['operationProgress'];
     operationAcceptance?: ActionExecutorContext['operationAcceptance'];
+    runActionOperation?: ActionExecutorContext['runActionOperation'];
     operationOwnerUpdate?: ActionExecutorContext['operationOwnerUpdate'];
     operationCancellation?: ActionExecutorContext['operationCancellation'];
     operationReview?: import('@/daemon/actionOperations/actionOperationTypes').ActionOperationReviewContinuation;
@@ -51,6 +55,8 @@ export type RpcLocalActionContext = Readonly<Partial<Pick<
 }>;
 
 export type RpcHandlerContext = Readonly<{
+    /** Exact present-person decision admitted by the installed Session transport owner. */
+    requesterApprovalDecision?: ActionExecutorContext['requesterApprovalDecision'];
     signal: AbortSignal;
     /** Host receipt time, so a domain budget includes request admission/decryption. */
     requestStartedAtMs?: number;
@@ -158,6 +164,14 @@ type RpcHandlerCommonConfig = {
     scopePrefix: string;
     /** Actual local runtime Machine, independently of Session metadata. */
     localMachineId?: string | null;
+    /** Opens only the owner Session's existing codec after live Home admission. */
+    resolveSessionDecisionContext?: (input: Readonly<{
+        authorization: import('@happier-dev/protocol/socketRpc').SocketRpcSessionPermissionRespondAuthorizationContext;
+        signal: AbortSignal;
+    }>) => Promise<Readonly<{
+        content: import('@happier-dev/sync-client').SocketRpcContent;
+        isCurrent: () => Promise<boolean>;
+    }> | null>;
     authorizeRequest?: (request: Readonly<{
         method: string;
         params: unknown;

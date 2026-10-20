@@ -158,7 +158,7 @@ vi.mock('../TeamSection', () => ({
     }),
 }));
 
-import { IdentityConnectionDetailScreen } from './IdentityConnectionDetailScreen';
+import { IdentityConnectionDetailContent, IdentityConnectionDetailScreen } from './IdentityConnectionDetailScreen';
 
 beforeEach(() => {
     standardCleanup();
@@ -885,53 +885,38 @@ describe('IdentityConnectionDetailScreen test return', () => {
         );
     });
 
-    it('names the target Team Group and the people a Group mapping moves before asking to confirm', async () => {
-        // The external Group id alone never said where those people were about
-        // to land, or how many of them there are. Both facts are already on the
-        // rows behind the confirmation.
-        groupBindingRowsMock.current = [{
-            id: 'binding-1',
-            externalGroupId: 'external-engineering',
-            target: { teamGroupId: 'team-group-opaque-id', name: 'Platform Engineering', archivedAt: null },
-        }];
-        nativeGroupsMock.current = [{ id: 'team-group-opaque-id', name: 'Platform Engineering', memberCount: 12 }];
-        const { Modal } = await import('@/modal');
-        vi.mocked(Modal.confirm).mockClear();
-        // Declining keeps this test on the confirmation contract: what the
-        // person is told before anything is written.
-        vi.mocked(Modal.confirm).mockResolvedValue(false);
-        const screen = await renderScreen(<IdentityConnectionDetailScreen
-            serverId="home-1"
-            teamId="team-1"
-            connectionId="connection-1"
-        />);
+    it('names the Teams that accept a Home sign-in connection, and says so when none do', async () => {
+        const homeWorkos = {
+            ...identityStateMock.current.items[0]!,
+            teamId: null,
+            provider: { id: 'provider-workos', kind: 'workos_sso' as const, displayName: 'Northwind' },
+            externalReference: { v: 1 as const, kind: 'workos_sso' as const, organizationId: 'organization-1', connectionId: 'workos-connection-1' },
+            settings: { v: 1 as const, kind: 'workos_sso' as const },
+            lastObservation: null,
+        };
+        const render = async (teamsUsingIt?: { teamId: string; name: string }[]) => {
+            identityStateMock.current.items[0] = { ...homeWorkos, ...(teamsUsingIt ? { teamsUsingIt } : {}) } as unknown as TeamIdentityConnectionV1;
+            return renderScreen(<IdentityConnectionDetailContent
+                scope={{ serverId: 'home-1', accountId: 'account-1' } as never}
+                teamId={null}
+                connectionId="connection-1"
+                mutationsAvailable
+            />);
+        };
+        const used = await render([{ teamId: 'platform', name: 'Platform' }, { teamId: 'design', name: 'Design' }]);
+        const row = used.findByTestId('identity-connection-teams-using-it');
+        expect(row).not.toBeNull();
+        expect(findTestInstanceByTypeContainingText(row!, 'Text', 'Platform, Design')).toBeDefined();
+        await used.unmount();
 
-        await screen.pressByTestIdAsync('identity-group-binding:binding-1');
+        const unused = await render([]);
+        expect(findTestInstanceByTypeContainingText(unused.findByTestId('identity-connection-teams-using-it')!, 'Text',
+            t('identityAdministration.homeTeamsUsingItNone'))).toBeDefined();
+        await unused.unmount();
 
-        expect(Modal.confirm).toHaveBeenCalledWith(
-            t('identityAdministration.removeMapping'),
-            ['external-engineering',
-                `${t('identityAdministration.mappedTo')}: Platform Engineering`,
-                t('teams.groups.memberCount', { count: 12 })].join('\n'),
-            expect.objectContaining({ destructive: true }),
-        );
-
-        vi.mocked(Modal.confirm).mockClear();
-        screen.changeTextByTestId('identity-external-group-id', 'external-design');
-        await screen.pressByTestIdAsync('identity-group-map-existing');
-        await screen.pressByTestIdAsync('identity-group-native-target:team-group-opaque-id');
-
-        expect(Modal.confirm).toHaveBeenCalledWith(
-            t('identityAdministration.chooseGroup'),
-            ['external-design',
-                `${t('identityAdministration.mappedTo')}: Platform Engineering`,
-                t('teams.groups.memberCount', { count: 12 })].join('\n'),
-            expect.any(Object),
-        );
-        expect(executeBindingMock).not.toHaveBeenCalledWith(
-            'teams.externalGroupBindings.set',
-            expect.anything(),
-            expect.anything(),
-        );
+        // An older Home that does not project usage is unknown, not "none".
+        const unknown = await render(undefined);
+        expect(unknown.findByTestId('identity-connection-teams-using-it')).toBeNull();
     });
+
 });

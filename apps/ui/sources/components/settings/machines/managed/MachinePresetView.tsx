@@ -164,7 +164,7 @@ function MachinePresetViewBody(props: Readonly<{ serverId: string; presetId: str
             : teamState ? t('machinePresets.purposeTeam', { what, team: teamState.team.name }) : what,
         meta: [{ key: 'home', text: homeName }, { key: 'owner', text: visiblePreset.owner.kind === 'account' ? t('machinePresets.ownerPersonal') : ownerTitle }],
         audience: { title: ownerTitle, description: visiblePreset.owner.kind === 'account' ? t('machinePresets.audiencePersonalHelp')
-            : teamState && presentation.title ? t('machinePresets.audienceTeamHelp', { team: teamState.team.name, provider: presentation.title }) : undefined, leading: <Icon name={visiblePreset.owner.kind === 'team' ? 'users' : 'user'} color={theme.colors.text.secondary} />,
+            : teamState && presentation.title ? t('machinePresets.audienceTeamHelp', { team: teamState.team.name, provider: presentation.title }) : undefined, leading: <Icon name={visiblePreset.owner.kind === 'team' ? 'users' : 'user-circle'} color={theme.colors.text.secondary} />,
             subtitle: [canUse ? t('machinePresets.canUse') : null, canManage ? t('machinePresets.canManage') : null].filter(Boolean).join(' · ') },
         limit: { description: t('machinePresets.limitHelp'), row: canManage
             ? managedPresetLimitRow({ limit: visiblePreset.simultaneousLimit?.maximum, disabled: busy,

@@ -13,6 +13,8 @@ export type DiscoveryActionInputById = {
     readonly "action.spec.get": {
         [x: string]: unknown;
         id: string;
+        includeOutputSchema?: boolean | undefined;
+        schemaPath?: string | undefined;
     };
     readonly "action.options.resolve": {
         [x: string]: unknown;
@@ -106,13 +108,14 @@ export type DiscoveryActionInputById = {
                                 hostType: 'usageQuery';
                                 field?: 'period' | 'session' | undefined;
                             } | {
-                                hostType: 'session' | 'workspace' | 'machine';
+                                hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                             } | undefined;
                             contextMode?: 'follow' | 'own' | undefined;
                             required?: boolean | undefined;
                             requireExplicitSelection?: boolean | undefined;
                             listSeparator?: 'comma' | 'newline' | undefined;
                             maxSelections?: number | undefined;
+                            defaultValue?: unknown;
                             visibleWhen?: unknown;
                             visibleWhenContextSlot?: string | undefined;
                             requiredWhen?: unknown;
@@ -126,6 +129,7 @@ export type DiscoveryActionInputById = {
                             options?: readonly {
                                 value: unknown;
                                 label: string;
+                                labelKey?: string | undefined;
                                 description?: string | undefined;
                                 disabled?: boolean | undefined;
                             }[] | undefined;
@@ -160,6 +164,7 @@ export type DiscoveryActionInputById = {
         sessionId?: string | undefined;
         limit?: number | undefined;
         query?: string | undefined;
+        values?: unknown[] | undefined;
         draftInput?: Record<string, unknown> | undefined;
     };
     readonly "action.invoke": Omit<{
@@ -168,6 +173,12 @@ export type DiscoveryActionInputById = {
             localId: string;
         };
         input?: JsonValue;
+        messageActionReference?: {
+            v: 1;
+            sessionId: string;
+            messageId: string;
+            observedRevision: string;
+        };
     }, 'input'> & {
         input?: unknown;
     };
@@ -202,13 +213,14 @@ export type DiscoveryActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
                     requireExplicitSelection?: boolean | undefined;
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
+                    defaultValue?: JsonValue | undefined;
                     visibleWhen?: InputPredicate | undefined;
                     visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
@@ -222,6 +234,7 @@ export type DiscoveryActionResultById = {
                     options?: readonly {
                         value: JsonValue;
                         label: string;
+                        labelKey?: string | undefined;
                         description?: string | undefined;
                         disabled?: boolean | undefined;
                     }[] | undefined;
@@ -269,6 +282,10 @@ export type DiscoveryActionResultById = {
             contextualDefaults?: {
                 sessionId?: 'current_session' | undefined;
                 machineId?: 'current_session_machine' | undefined;
+            } | undefined;
+            sessionTarget?: {
+                field: string;
+                cardinality: 'one' | 'many';
             } | undefined;
             outputSchema?: Record<string, unknown> | undefined;
             sideEffectClass?: 'read' | 'none' | 'danger' | 'write' | 'external' | undefined;
@@ -322,13 +339,14 @@ export type DiscoveryActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'period' | 'session' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                     contextMode?: 'follow' | 'own' | undefined;
                     required?: boolean | undefined;
                     requireExplicitSelection?: boolean | undefined;
                     listSeparator?: 'comma' | 'newline' | undefined;
                     maxSelections?: number | undefined;
+                    defaultValue?: JsonValue | undefined;
                     visibleWhen?: InputPredicate | undefined;
                     visibleWhenContextSlot?: string | undefined;
                     requiredWhen?: InputPredicate | undefined;
@@ -342,6 +360,7 @@ export type DiscoveryActionResultById = {
                     options?: readonly {
                         value: JsonValue;
                         label: string;
+                        labelKey?: string | undefined;
                         description?: string | undefined;
                         disabled?: boolean | undefined;
                     }[] | undefined;
@@ -392,6 +411,10 @@ export type DiscoveryActionResultById = {
                 sessionId?: 'current_session' | undefined;
                 machineId?: 'current_session_machine' | undefined;
             } | undefined;
+            sessionTarget?: {
+                field: string;
+                cardinality: 'one' | 'many';
+            } | undefined;
             outputSchema?: Record<string, unknown> | undefined;
             sideEffectClass?: 'read' | 'none' | 'danger' | 'write' | 'external' | undefined;
             operation?: {
@@ -415,6 +438,49 @@ export type DiscoveryActionResultById = {
             } | undefined;
             compatibility?: Record<string, unknown> | undefined;
         };
+        schemaSections?: {
+            path: string;
+            description: string;
+        }[] | undefined;
+        schemaSection?: {
+            path: string;
+            schema: Record<string, unknown>;
+        } | undefined;
+        invocationContext?: {
+            sessionId?: string | undefined;
+            widgetSurface?: {
+                serverId: string;
+                accountId: string;
+                owner: {
+                    kind: 'home';
+                } | {
+                    kind: 'sessionBoard';
+                    sessionId: string;
+                } | {
+                    kind: 'companion';
+                    sessionId: string;
+                } | {
+                    kind: 'workBoard';
+                    boardId: string;
+                } | {
+                    kind: 'project';
+                    projectId: string;
+                    layoutId?: string | undefined;
+                } | {
+                    kind: 'pluginArea';
+                    pluginId: string;
+                    pageId: string;
+                    area: string;
+                    layoutId?: string | undefined;
+                } | {
+                    kind: 'corePage';
+                    pageId: string;
+                    area: string;
+                    layoutId?: string | undefined;
+                };
+                artifactId?: string | undefined;
+            } | undefined;
+        } | undefined;
     };
     readonly "action.options.resolve": {
         actionId: string | null;
@@ -423,6 +489,7 @@ export type DiscoveryActionResultById = {
         options: readonly {
             value: JsonValue;
             label: string;
+            labelKey?: string | undefined;
             description?: string | undefined;
             disabled?: boolean | undefined;
         }[];
@@ -550,6 +617,35 @@ export type DiscoveryActionResultById = {
                         };
                         loadState: 'unknown' | 'loaded' | 'unloaded';
                         visibility: 'visible' | 'hidden_agent' | 'hidden_all_agents' | 'hidden_current_selection';
+                        gatewaySlots?: {
+                            purpose: {
+                                consumer: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                purpose: string;
+                            };
+                            target: {
+                                kind: 'account';
+                                account: {
+                                    service: {
+                                        pluginId: string;
+                                        localId: string;
+                                    };
+                                    accountId: string;
+                                };
+                            } | {
+                                kind: 'group';
+                                service: {
+                                    pluginId: string;
+                                    localId: string;
+                                } | {
+                                    pluginId: 'happier';
+                                    localId: 'mcp-sign-in';
+                                };
+                                groupId: string;
+                            };
+                        }[] | undefined;
                         application?: {
                             agentTargetKey: string;
                             implementationIdentity: {

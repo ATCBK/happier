@@ -1,4 +1,4 @@
-import { z } from 'zod'
+import { z } from 'zod/mini'
 import { z as mini } from 'zod/mini'
 import { UsageSchema } from './usage'
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
@@ -6,9 +6,20 @@ import type { SocketRpcRequestPayload as ProtocolSocketRpcRequestPayload } from 
 import { ACCEPTED_PENDING_SETTLEMENT_EVENT_V1 } from '@happier-dev/protocol/sessions/pending/acceptedPendingSettlementV1';
 import { StoredMachinePublishedMetadataV1Schema, MachinePublishedDaemonStateV1Schema, MachinePublishedTransferListenerV1Schema, MachinePublishedTransferRuntimeV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 import { CallerInputConstraintsV1Schema } from '@happier-dev/protocol/auth/callerInputConstraintsV1';
+import { SessionInputAdmissionReceiptV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { ActionRequestAttributionV1Schema } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 import type { SessionCapabilityMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
 import { SESSION_PENDING_ADMISSION_SETTLEMENT_EVENT_V1 } from '@happier-dev/protocol/sessions/messages/sessionPendingAdmissionSettlementV1';
 import { SESSION_PENDING_EXECUTION_RUN_MATERIALIZE_NEXT_EVENT_V2, SESSION_PENDING_EXECUTION_RUN_ACCEPTED_EVENT_V2, SESSION_PENDING_EXECUTION_RUN_BLOCK_EVENT_V2 } from '@happier-dev/protocol/sessions/messages/sessionPendingExecutionRunMachineAdmissionV2';
+import { DISCUSSION_AGENT_POST_EVENT_V1, type DiscussionAgentPublisherPublicationV1, type DiscussionAgentPublisherResponseV1 } from '@happier-dev/protocol/discussions/api';
+import {
+  SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1,
+  SESSION_MESSAGE_REPLY_RELEASE_SOURCE_TURN_EVENT_V1,
+  type SessionMessageReplyMutationV1,
+  type SessionMessageReplyMutationResultV1,
+  type SessionMessageReplySourceTurnReleaseV1,
+  type SessionMessageReplySourceTurnReleaseResultV1,
+} from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 import { SentFromSchema } from '@happier-dev/protocol/sentFrom';
 import type {
   AcceptedPendingSettlementRequestV1,
@@ -21,6 +32,7 @@ import type {
   PrimaryTurnStatusV1,
   SessionOwnerMetadataEnvelopeV1,
   SessionOwnerMetadataV1,
+  SessionOwnerCompatibilityViewV1,
   SessionPendingAdmissionSettlementRequestV1,
   SessionPendingAdmissionSettlementResponseV1,
   SessionWorkspaceLocationV1,
@@ -126,11 +138,11 @@ export type SessionMessageContent = SessionStoredMessageContent
 /**
  * Update events
  */
-export const UpdateBodySchema: z.ZodType<ProtocolUpdateBody> =
+export const UpdateBodySchema: z.ZodMiniType<ProtocolUpdateBody> =
   ProtocolUpdateBodySchema
 export type UpdateBody = ProtocolUpdateBody
 
-export const UpdateSchema: z.ZodType<ProtocolUpdateContainer> =
+export const UpdateSchema: z.ZodMiniType<ProtocolUpdateContainer> =
   ProtocolUpdateContainerSchema
 export type Update = ProtocolUpdateContainer
 
@@ -171,6 +183,18 @@ export interface ServerToClientEvents {
  * Socket events from client to server
  */
 export interface ClientToServerEvents {
+  [DISCUSSION_AGENT_POST_EVENT_V1]: (
+    data: DiscussionAgentPublisherPublicationV1,
+    cb: (answer: DiscussionAgentPublisherResponseV1) => void,
+  ) => void;
+  [SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1]: (
+    data: SessionMessageReplyMutationV1,
+    cb: (answer: SessionMessageReplyMutationResultV1) => void,
+  ) => void;
+  [SESSION_MESSAGE_REPLY_RELEASE_SOURCE_TURN_EVENT_V1]: (
+    data: SessionMessageReplySourceTurnReleaseV1,
+    cb: (answer: SessionMessageReplySourceTurnReleaseResultV1) => void,
+  ) => void;
   'machine-update-metadata': (
     data: import('@happier-dev/protocol/machines/metadataUpdate').MachineUpdateMetadataRequest,
     cb?: (answer: import('@happier-dev/protocol/machines/metadataUpdate').MachineUpdateMetadataResponse) => void,
@@ -320,7 +344,8 @@ export interface ClientToServerEvents {
  */
 type SessionSharedFields = Readonly<{
   id: string;
-  reportsTo?: import('@happier-dev/protocol').SessionReportsToV1;
+  archivedAt?: number | null;
+  manager?: import('@happier-dev/protocol').SessionManagerV1;
   origin?: import('@happier-dev/protocol').SessionAwarenessOriginV1;
   workDepth?: number;
   seq: number;
@@ -370,13 +395,13 @@ export { StoredMachinePublishedMetadataV1Schema as MachineMetadataSchema } from 
 export type MachineMetadata = z.infer<typeof StoredMachinePublishedMetadataV1Schema>
 
 export const MachineRegistrationIdentitySchema = z.object({
-  installationId: z.string().trim().min(1),
+  installationId: z.string().check(z.trim(), z.minLength(1)),
   installationPublicKey: MachineInstallationPublicKeySchema,
   installationProof: MachineInstallationProofV1Schema,
-  replacesMachineId: z.string().trim().min(1).optional(),
+  replacesMachineId: z.optional(z.string().check(z.trim(), z.minLength(1))),
   replacementReason: mini.optional(MachineReplacementReasonSchema),
   contentPublicKeyFingerprint: mini.optional(ContentPublicKeyFingerprintSchema),
-  replacementCandidateAccountId: z.string().trim().min(1).optional(),
+  replacementCandidateAccountId: z.optional(z.string().check(z.trim(), z.minLength(1))),
 })
 
 export type MachineRegistrationIdentity = Readonly<
@@ -443,22 +468,22 @@ export type Machine = MachineCommon & (
 /**
  * Session message from API
  */
-export const SessionMessageSchema = z.object({
+export const SessionMessageSchema = z.looseObject({
   content: SessionMessageContentSchema,
   createdAt: z.number(),
   id: z.string(),
-  localId: z.string().nullable(),
+  localId: z.nullable(z.string()),
   seq: z.number(),
-  sidechainId: z.string().nullable(),
+  sidechainId: z.nullable(z.string()),
   updatedAt: z.number()
-}).passthrough()
+})
 
 export type SessionMessage = z.infer<typeof SessionMessageSchema>
 
 /**
  * Message metadata schema
  */
-export const MessageMetaSchema = z.object({
+export const MessageMetaSchema = z.looseObject({
   sentFrom: mini.optional(SentFromSchema), // Source identifier
   /**
    * High-level origin of the message. This is used to prevent reliability features
@@ -467,15 +492,15 @@ export const MessageMetaSchema = z.object({
    *
    * Forward-compatible: unknown strings are allowed.
    */
-  source: z.union([z.enum(['cli', 'ui']), z.string()]).optional(),
-  permissionMode: createSessionPermissionModeSchema(z).optional(), // Permission mode for this message
-  model: z.string().nullable().optional(), // Model name for this message (null = reset)
-  fallbackModel: z.string().nullable().optional(), // Fallback model for this message (null = reset)
-  customSystemPrompt: z.string().nullable().optional(), // Custom system prompt for this message (null = reset)
-  appendSystemPrompt: z.string().nullable().optional(), // Append to system prompt for this message (null = reset)
-  allowedTools: z.array(z.string()).nullable().optional(), // Allowed tools for this message (null = reset)
-  disallowedTools: z.array(z.string()).nullable().optional() // Disallowed tools for this message (null = reset)
-}).passthrough()
+  source: z.optional(z.union([z.enum(['cli', 'ui']), z.string()])),
+  permissionMode: z.optional(createSessionPermissionModeSchema(z)), // Permission mode for this message
+  model: z.optional(z.nullable(z.string())), // Model name for this message (null = reset)
+  fallbackModel: z.optional(z.nullable(z.string())), // Fallback model for this message (null = reset)
+  customSystemPrompt: z.optional(z.nullable(z.string())), // Custom system prompt for this message (null = reset)
+  appendSystemPrompt: z.optional(z.nullable(z.string())), // Append to system prompt for this message (null = reset)
+  allowedTools: z.optional(z.nullable(z.array(z.string()))), // Allowed tools for this message (null = reset)
+  disallowedTools: z.optional(z.nullable(z.array(z.string()))) // Disallowed tools for this message (null = reset)
+})
 
 export type MessageMeta = z.infer<typeof MessageMetaSchema>
 
@@ -483,53 +508,58 @@ export type MessageMeta = z.infer<typeof MessageMetaSchema>
  * API response types
  */
 export const CreateSessionResponseSchema = z.object({
-  created: z.boolean().optional(),
+  created: z.optional(z.boolean()),
   organizationPlacement: mini.optional(SessionOrganizationPlacementV1Schema),
-  session: z.object({
+  session: z.looseObject({
     id: z.string(),
     tag: z.string(),
     seq: z.number(),
     createdAt: z.number(),
     updatedAt: z.number(),
+    archivedAt: z.optional(z.nullable(z.number())),
     metadata: z.string(),
     metadataVersion: z.number(),
-    agentState: z.string().nullable(),
+    agentState: z.nullable(z.string()),
     agentStateVersion: z.number(),
-    dataEncryptionKey: z.string().nullable().optional(),
-  }).passthrough(),
+    dataEncryptionKey: z.optional(z.nullable(z.string())),
+  }),
 })
 
 export type CreateSessionResponse = z.infer<typeof CreateSessionResponseSchema>
 
-export const UserMessageSchema = z.object({
+export const UserMessageSchema = z.looseObject({
+  /** Native transport overwrites authored values; never carried inside Session content. */
+  inputAdmissionReceipt: mini.optional(SessionInputAdmissionReceiptV1Schema),
   callerInputConstraints: mini.optional(CallerInputConstraintsV1Schema),
+  /** Host transport overwrites authored values before parsing this delivery envelope. */
+  actionRequestAttributionV1: mini.optional(ActionRequestAttributionV1Schema),
   role: z.literal('user'),
-  content: z.object({
+  content: z.looseObject({
     type: z.literal('text'),
     text: z.string()
-  }).passthrough(),
+  }),
   /**
    * Server-created timestamp for this message (ms since epoch).
    *
    * This is *not* part of the encrypted message body; it is attached by the transport layer
    * so consumers (CLI backends) can make timestamped precedence decisions (e.g. permissions).
    */
-  createdAt: z.number().optional(),
-  localId: z.string().nullish().optional(),
-  localKey: z.string().optional(), // Mobile messages include this
-  meta: MessageMetaSchema.optional()
-}).passthrough()
+  createdAt: z.optional(z.number()),
+  localId: z.optional(z.nullish(z.string())),
+  localKey: z.optional(z.string()), // Mobile messages include this
+  meta: z.optional(MessageMetaSchema)
+})
 
 export type UserMessage = z.infer<typeof UserMessageSchema>
 
-export const AgentMessageSchema = z.object({
+export const AgentMessageSchema = z.looseObject({
   role: z.literal('agent'),
-  content: z.object({
+  content: z.looseObject({
     type: z.literal('output'),
     data: z.any()
-  }).passthrough(),
-  meta: MessageMetaSchema.optional()
-}).passthrough()
+  }),
+  meta: z.optional(MessageMetaSchema)
+})
 
 export type AgentMessage = z.infer<typeof AgentMessageSchema>
 
@@ -591,7 +621,11 @@ export type SessionHandoffMetadataV1 = {
  */
 export type SessionOptionOverrideRuleV1 = AgentModelOptionOverrideRule;
 
-export type Metadata = Readonly<Partial<RuntimeDescriptorMetadataCarrier>> & Readonly<SessionIdentityAdditions> & SessionCapabilityMetadataV1 & {
+export type Metadata = Readonly<Partial<RuntimeDescriptorMetadataCarrier>> & Readonly<SessionIdentityAdditions>
+  & SessionCapabilityMetadataV1
+  & Pick<NonNullable<SessionOwnerMetadataV1['system']>, 'attestedContext'>
+  & Pick<NonNullable<SessionOwnerMetadataV1['runtime']>, 'allowedTools' | 'unlistedTools' | 'workspaceWrites' | 'agentRuntimeCapabilitiesV1' | 'agentRuntimeFacetsV1'>
+  & Pick<SessionOwnerCompatibilityViewV1, 'actionConfirmationsV1'> & {
   path: string,
   host: string,
   version?: string,
@@ -867,6 +901,7 @@ export type Metadata = Readonly<Partial<RuntimeDescriptorMetadataCarrier>> & Rea
 export type InFlightSteerUnavailableReason = 'backend_unsupported' | 'unsafe_window' | 'turn_settling' | 'user_terminal_draft';
 
 export type AgentState = {
+  currentSessionPresentationV1?: import('@happier-dev/protocol/sessions/presentation/currentSessionPresentationV1').CurrentSessionPresentationStateV1
   controlledByUser?: boolean | null | undefined
   localControl?: {
     attached?: boolean | null | undefined
@@ -877,6 +912,8 @@ export type AgentState = {
   } | null | undefined
   capabilities?: {
     askUserQuestionAnswersInPermission?: boolean | null | undefined
+    /** The receiver registers the strict lossless 0.2 structured-question RPC. */
+    structuredQuestionAnswersV1Supported?: boolean | null | undefined
     inFlightSteer?: boolean | null | undefined
     inFlightSteerSupported?: boolean | null | undefined
     inFlightSteerAvailable?: boolean | null | undefined
@@ -916,6 +953,10 @@ export type AgentState = {
           mcpTool?: import('@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1').ResolvedMcpToolIdentityV1
           /** Exact host-stamped parent turn that owns this request. */
           turnId?: string
+          /** Occurrence requests outlive incidental retirement of their producing turn. */
+          lifetime?: 'turn' | 'occurrence'
+          questionV1?: import('@happier-dev/protocol/sessions/permissions/v1').SessionQuestionContextV1
+          currentHandler?: import('@happier-dev/protocol/sessions/permissions/v1').SessionQuestionHandlerV1
           /**
            * Optional provider-provided permission suggestions for this request.
            * (e.g. Claude Agent SDK `permission_suggestions`).
@@ -943,6 +984,8 @@ export type AgentState = {
            * is projected; callers must treat it as opaque.
            */
           permissionResponseClaimV1?: unknown
+          /** Shared source facts captured when this request was first published. */
+          happierFollowRuleEvidenceV1?: unknown
         }
       }
       completedRequests?: {
@@ -954,6 +997,10 @@ export type AgentState = {
         completedAt: number,
         turnId?: string,
         answeringClientCategory?: import('@happier-dev/protocol/sessions/permissions/respondRpcParamsV1').SessionPermissionAnsweringClientCategoryV1,
+        questionV1?: import('@happier-dev/protocol/sessions/permissions/v1').SessionQuestionContextV1,
+        currentHandler?: import('@happier-dev/protocol/sessions/permissions/v1').SessionQuestionHandlerV1,
+        answeredBy?: import('@happier-dev/protocol/sessions/permissions/v1').SessionQuestionHandlerV1,
+        structuredAnswersV1?: import('@happier-dev/protocol/tools/structuredQuestionAnswersV1').StructuredQuestionAnswersV1,
         status: 'canceled' | 'denied' | 'approved',
       reason?: string,
       mode?: PermissionMode,

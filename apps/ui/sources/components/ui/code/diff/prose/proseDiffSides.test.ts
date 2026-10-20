@@ -26,6 +26,12 @@ describe('prose diff sides', () => {
     expect(old.some((line) => line.text.startsWith('@@'))).toBe(false);
   });
 
+  it('puts a gap only between two lines a side shows, never at its start or end', () => {
+    const { old, new: next } = sides('Escalate if more than one row.', 'Escalate, with the ID, if more than one row.', 0);
+    expect(old.map((line) => line.kind)).toEqual(['changed']);
+    expect(next.map((line) => line.kind)).toEqual(['changed']);
+  });
+
   it('marks nothing changed when the two texts are the same', () => {
     const same = sides('same\nlines\n', 'same\nlines\n');
     expect([...same.old, ...same.new].some((line) => line.kind === 'changed')).toBe(false);

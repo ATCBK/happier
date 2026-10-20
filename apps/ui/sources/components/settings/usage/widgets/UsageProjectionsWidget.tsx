@@ -23,6 +23,8 @@ import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
+import { useCurrentUiContextLocalCommands } from '@/components/appShell/currentUiContext/CurrentUiContextCommands';
+import { useUsageChartDetails } from './usageMountedControls';
 import { usageSignatureAccent } from '../usageAccent';
 import {
   leadingUsageRows,
@@ -170,12 +172,12 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
   const rangeColor = theme.colors.text.tertiary;
   const ghostColor = theme.colors.border.default;
   const earlier = React.useMemo(
-    () => (focus ? projectUsageEarlierCurves(focus.account, focus.window.meterId) : null),
-    [focus],
+    () => (focus && !list ? projectUsageEarlierCurves(focus.account, focus.window.meterId) : null),
+    [focus, list],
   );
   const series = React.useMemo(
     () =>
-      focus
+      focus && !list
         ? buildBurnUp(
             focus,
             nowMs,
@@ -189,7 +191,7 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
             earlier?.status === 'available' && !tile ? { curves: earlier.curves, color: ghostColor } : undefined,
           )
         : [],
-    [focus, nowMs, accent, rangeColor, earlier, tile, ghostColor],
+    [focus, nowMs, accent, rangeColor, earlier, tile, ghostColor, list],
   );
   // Ghost points join the plot after the current ones, so the axis names the plot's real first and last moment.
   const axisTicks = React.useMemo(() => {
@@ -206,6 +208,17 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
       })),
     [paced, nameOf, nowMs],
   );
+  const selectWindow = React.useCallback((key: string): boolean => {
+    if (!paced.some(entry => entry.window.key === key)) return false;
+    setPickerOpen(false);
+    setPickedKey(key);
+    return true;
+  }, [paced]);
+  useCurrentUiContextLocalCommands(!list && paced.length > 1 ? pickerItems.map(item => ({
+    key: item.id, title: `${t(`usage.widgets.${props.id}`)}: ${t('usage.board.plans.windowPicker')}: ${item.title}`,
+    invoke: () => selectWindow(item.id),
+  })) : []);
+  const details = useUsageChartDetails(t(`usage.widgets.${props.id}`), !list && Boolean(focus?.window.pace));
   // Beside other widgets the body is a list of meters. Until every account has answered once it holds the
   // list's room (the rows its accounts are expected to report, the pace alert and the notes under them), so
   // reads fill the room instead of growing the page under the reader; a re-read after that never reserves.
@@ -310,15 +323,9 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
               : t('usage.board.plans.paceSharedReasonSome', { count: repeatedCount, reason: quietReason })}
           </Text>
         ) : null}
-        {lead.rows.length < rows.length || expanded ? (
-          <UsageShowAllRows testID={`${props.testID}.showAll`} total={rows.length} expanded={expanded}
-            onToggle={() => setExpanded((value) => !value)} />
-        ) : null}
-        {unreported.length ? (
-          <Text style={[styles.quiet, text.detail]} testID={`${props.testID}.unreported`}>
-            {t('usage.board.plans.unreportedWindows', { count: unreported.length })}
-          </Text>
-        ) : null}
+        <UsageShowAllRows label={t(`usage.widgets.${props.id}`)} testID={`${props.testID}.showAll`} total={rows.length}
+          hidden={lead.hidden} expanded={expanded} onToggle={() => setExpanded((value) => !value)}
+          unlisted={unreported.length ? t('usage.board.plans.unreportedWindows', { count: unreported.length }) : null} />
         {/* A window still without a pace may gain one and run out while reads arrive: the alert's line is held
             until they settle, then let go, so a list that never gets an alert keeps no blank line. */}
         {depletingNote ?? (!settled && rows.some(row => !row.window.pace)
@@ -344,10 +351,7 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
               selectedId={focus.window.key}
               matchTriggerWidth={false}
               items={pickerItems}
-              onSelect={(id) => {
-                setPickerOpen(false);
-                setPickedKey(id);
-              }}
+              onSelect={selectWindow}
               trigger={({ toggle, open }) => (
                 <HappierPressable
                   testID={`${props.testID}.windowPicker.trigger`}
@@ -380,6 +384,7 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
             testID={`${props.testID}.headline`}
           />
           <BurnUpChart
+            {...details}
             testID={`${props.testID}.burnUp`}
             theme={chartTheme}
             size={tile ? 'tile' : 'full'}
@@ -436,7 +441,7 @@ export function UsageProjectionsWidget(props: UsageBodyProps) {
               nowMs={nowMs}
               color={accent}
               basis={stacked ? '47%' : '31%'}
-              onPick={setPickedKey}
+              onPick={selectWindow}
               testID={`${props.testID}.multiple.${entry.account.accountId}.${entry.window.meterId}`}
             />
           ))}

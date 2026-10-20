@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   PLUGIN_COLLECTION_REVISION_MAX,
-  PluginMachineExecutionOriginV1JsonSchema,
 } from '@happier-dev/plugin-sdk/collections';
 import { QualifiedConnectedAccountRefJsonSchema } from '@happier-dev/plugin-sdk/connected-accounts';
-import { PluginContributionIdentityV1JsonSchema, compilePluginJsonSchema, isValidPluginJsonSchemaValue } from '@happier-dev/plugin-sdk/manifest';
+import { PluginContributionIdentityV1JsonSchema, compilePluginJsonSchema, isValidPluginJsonSchemaValue, parsePluginManifest } from '@happier-dev/plugin-sdk/manifest';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 import { PluginWebhookEndpointIdV1JsonSchema } from '@happier-dev/plugin-sdk/webhooks';
 import type { PluginJsonSchema } from '@happier-dev/plugin-sdk/protocol';
@@ -28,6 +28,7 @@ import {
   isCanonicalChannelStateRecordIdentity,
 } from './collections.js';
 import { collectionMigrations, PLUGIN_MANIFEST } from './manifest.js';
+import { ConversationConnectionTransportOriginV1JsonSchema } from './connectionLifecycle.js';
 import { createCurrentConversationConnectionFixture } from './testkit/currentConnectionFixture.js';
 
 /**
@@ -38,6 +39,18 @@ import { createCurrentConversationConnectionFixture } from './testkit/currentCon
 const CHANNEL_ACCOUNT_COLLECTION_DECLARATIONS =
   PLUGIN_MANIFEST.contributes?.accountCollections ?? [];
 const CHANNEL_ACCOUNT_COLLECTION_MIGRATIONS = collectionMigrations;
+// Exact published declaration from 6386879ac0, before FIX-REV3 widened the
+// freshness bounds. This fixture never follows the current generated manifest.
+const retainedManifest = parsePluginManifest({
+  ...PLUGIN_MANIFEST,
+  contributes: { ...PLUGIN_MANIFEST.contributes, accountCollections: [
+    JSON.parse(readFileSync(new URL('./testkit/fixtures/channelStateV5.json', import.meta.url), 'utf8')).collection,
+  ] },
+});
+if (!retainedManifest.ok) throw new Error('Historical Channels v5 declaration must be admitted by the manifest owner.');
+// The public manifest parser validated this schema; its generic contribution
+// projection intentionally exposes the field as unknown to author callers.
+const RETAINED_STATE_V5_SCHEMA = retainedManifest.manifest.contributes.accountCollections![0]!.schema as PluginJsonSchema;
 
 function containsSchemaReference(
   schema: PluginJsonSchema,
@@ -86,6 +99,38 @@ function findChannelStateRecordPayload(recordKind: string): PluginJsonSchema | u
 }
 
 describe('Channels collection declarations', () => {
+  it('migrates the provenance-pinned v6 declaration and admits exact source custody only at v7', async () => {
+    const retained = JSON.parse(readFileSync(new URL('./testkit/fixtures/channelStateV6.json', import.meta.url), 'utf8'));
+    const parsed = parsePluginManifest({ ...PLUGIN_MANIFEST, contributes: {
+      ...PLUGIN_MANIFEST.contributes, accountCollections: [retained.collection],
+    } });
+    if (!parsed.ok) throw new Error('Historical Channels v6 declaration must be admitted.');
+    const oldSchema = parsed.manifest.contributes.accountCollections![0]!.schema as PluginJsonSchema;
+    const pinnedV7 = JSON.parse(readFileSync(new URL('./testkit/fixtures/channelStateV7.json', import.meta.url), 'utf8'));
+    const materialized = pinnedV7.connection;
+    const historical = compilePluginJsonSchema(oldSchema);
+    expect(isValidPluginJsonSchemaValue(historical, materialized)).toBe(true);
+    const migration = CHANNEL_ACCOUNT_COLLECTION_MIGRATIONS['channel-state']?.find(edge => edge.fromSchemaVersion === 6);
+    expect(migration).toMatchObject({ toSchemaVersion: 7 });
+    const migrated = await migration!.migrate(materialized, { currentRevision: 1 });
+    expect(migrated).toEqual(materialized);
+    const current = compilePluginJsonSchema(CHANNEL_STATE_COLLECTION.schema);
+    const v7ToV8 = CHANNEL_ACCOUNT_COLLECTION_MIGRATIONS['channel-state']!.find(edge => edge.fromSchemaVersion === 7)!;
+    const v8ToV9 = CHANNEL_ACCOUNT_COLLECTION_MIGRATIONS['channel-state']!.find(edge => edge.fromSchemaVersion === 8)!;
+    expect(isValidPluginJsonSchemaValue(current, await v8ToV9.migrate(await v7ToV8.migrate(migrated, { currentRevision: 1 }), { currentRevision: 1 }))).toBe(true);
+    const source = { ...materialized, payload: { ...materialized.payload, transportOrigin: {
+      serverIdentityId: 'srv_example', sourceRef: {
+        pluginId: 'happier.channel.example', machineId: 'machine-1',
+        sourceCustody: { kind: 'development', registeredRootId: '/runtime-1/provider' },
+      },
+    } } };
+    expect(isValidPluginJsonSchemaValue(historical, source)).toBe(false);
+    expect(isValidPluginJsonSchemaValue(compilePluginJsonSchema(pinnedV7.collection.schema), source)).toBe(true);
+    expect(isValidPluginJsonSchemaValue(current, await v8ToV9.migrate(await v7ToV8.migrate(source, { currentRevision: 1 }), { currentRevision: 1 }))).toBe(true);
+    expect(isValidPluginJsonSchemaValue(current, { ...source, payload: { ...source.payload,
+      transportOrigin: { ...source.payload.transportOrigin, ...materialized.payload.transportOrigin },
+    } })).toBe(false);
+  });
   it.each([
     { principalCount: 1, inboundDebounceMs: 5_001 },
     { principalCount: 257, inboundDebounceMs: 0 },
@@ -124,19 +169,29 @@ describe('Channels collection declarations', () => {
         integrationPrincipal: { id: 'principal-1' }, authorityEpoch: 1,
       },
     });
+    const { configurationRevision: _currentConfigurationRevision, ...historicalPayload } = current.payload;
     // Serialize through the same plain JSON boundary as a retained logical row.
     const retained = JSON.parse(JSON.stringify({ ...current, payload: {
-      ...current.payload, providerContributionSelection: { contributionId: 'telegram', immutableGenerationId: 'retired-generation' },
+      ...historicalPayload, providerContributionSelection: { contributionId: 'telegram', immutableGenerationId: 'retired-generation' },
+      transportOrigin: { serverIdentityId: 'srv_account_one', materializationRef: {
+        pluginId: 'happier.channel.telegram', machineId: 'machine-1', materializationId: 'retained-materialization',
+      } },
     } })) as Readonly<Record<string, JsonValue>>;
     const migration = CHANNEL_ACCOUNT_COLLECTION_MIGRATIONS['channel-state']?.find((edge) => edge.fromSchemaVersion === 3);
     expect(migration).toBeDefined();
-    const migrated = await migration?.migrate(retained);
-    expect(migrated).toEqual(current);
-    expect(isValidPluginJsonSchemaValue(compilePluginJsonSchema(CHANNEL_STATE_COLLECTION.schema), migrated)).toBe(true);
+    const migrated = await migration?.migrate(retained, { currentRevision: 1 });
+    expect(migrated).toEqual({ ...current, payload: { ...historicalPayload, transportOrigin: (retained.payload as Readonly<Record<string, JsonValue>>).transportOrigin } });
+    const v7ToV8 = CHANNEL_ACCOUNT_COLLECTION_MIGRATIONS['channel-state']!.find(edge => edge.fromSchemaVersion === 7)!;
+    const routing = await v7ToV8.migrate(migrated!, { currentRevision: 1 });
+    expect(routing).toEqual({ ...current, payload: historicalPayload });
+    const v8ToV9 = CHANNEL_ACCOUNT_COLLECTION_MIGRATIONS['channel-state']!.find(edge => edge.fromSchemaVersion === 8)!;
+    const configured = await v8ToV9.migrate(routing, { currentRevision: 1 });
+    expect(configured).toEqual(current);
+    expect(isValidPluginJsonSchemaValue(compilePluginJsonSchema(CHANNEL_STATE_COLLECTION.schema), configured)).toBe(true);
     expect(retained).toMatchObject({ payload: { providerContributionSelection: { immutableGenerationId: 'retired-generation' } } });
   });
 
-  it('migrates retained v4 connection and binding rows unchanged into the expanded state contract', async () => {
+  it.each([4, 5])('migrates retained v%i connection and binding rows unchanged into the current state contract', async (sourceVersion) => {
     // Logical JSON rows accepted by the retained channel-state v4 contract
     // WcyeFW11n9ycj-viSm2YvRbT2qpNbK8pyXA5nr0l1dQ on agent-qa-channels.
     const connection = createCurrentConversationConnectionFixture({
@@ -167,15 +222,26 @@ describe('Channels collection declarations', () => {
         enabled: true, deletionState: 'none',
       },
     };
-    const migration = CHANNEL_ACCOUNT_COLLECTION_MIGRATIONS['channel-state']?.find((edge) => edge.fromSchemaVersion === 4);
-    expect(migration).toMatchObject({ toSchemaVersion: 5 });
+    const { configurationRevision: _currentConfigurationRevision, ...historicalConnectionPayload } = connection.payload;
+    const historicalConnection = { ...connection, payload: historicalConnectionPayload };
+    const migration = CHANNEL_ACCOUNT_COLLECTION_MIGRATIONS['channel-state']?.find((edge) => edge.fromSchemaVersion === sourceVersion);
+    expect(migration).toMatchObject({ toSchemaVersion: sourceVersion + 1 });
     const target = compilePluginJsonSchema(CHANNEL_STATE_COLLECTION.schema);
-    for (const source of [connection, binding]) {
-      const retained = JSON.parse(JSON.stringify(source)) as Readonly<Record<string, JsonValue>>;
+    for (const source of [historicalConnection, binding]) {
+      const historical = source['record-kind'] === 'connection'
+        ? { ...source, payload: { ...source.payload, transportOrigin: { serverIdentityId: 'srv_account_one', materializationRef: {
+          pluginId: 'happier.channel.telegram', machineId: 'machine-1', materializationId: 'retained-materialization',
+        } } } } : source;
+      const retained = JSON.parse(JSON.stringify(historical)) as Readonly<Record<string, JsonValue>>;
+      expect(isValidPluginJsonSchemaValue(compilePluginJsonSchema(RETAINED_STATE_V5_SCHEMA), retained)).toBe(true);
       const before = JSON.stringify(retained);
-      const migrated = await migration?.migrate(retained);
+      const migrated = await migration!.migrate(retained, { currentRevision: 1 });
       expect(migrated).toEqual(retained);
-      expect(isValidPluginJsonSchemaValue(target, migrated)).toBe(true);
+      let current = migrated;
+      for (const edge of CHANNEL_ACCOUNT_COLLECTION_MIGRATIONS['channel-state']!) {
+        if (edge.fromSchemaVersion > sourceVersion) current = await edge.migrate(current, { currentRevision: 1 });
+      }
+      expect(isValidPluginJsonSchemaValue(target, current)).toBe(true);
       expect(JSON.stringify(retained)).toBe(before);
     }
   });
@@ -208,7 +274,7 @@ describe('Channels collection declarations', () => {
     expect(migration).toMatchObject({ toSchemaVersion: 3 });
     expect(CHANNEL_DELIVERIES_COLLECTION.schemaVersion).toBe(3);
     expect(CHANNEL_DELIVERIES_COLLECTION.readableSchemaVersions).toEqual([1, 2]);
-    const migrated = await migration?.migrate(retained);
+    const migrated = await migration?.migrate(retained, { currentRevision: 1 });
     expect(migrated).toEqual({ ...retained, payload: {
       ...(retained.payload as Readonly<Record<string, JsonValue>>), content: fixture.targetContent,
     } });
@@ -235,7 +301,7 @@ describe('Channels collection declarations', () => {
   it('composes canonical Protocol identity JSON Schemas instead of redefining them', () => {
     expect(containsSchemaReference(
       CHANNEL_STATE_COLLECTION.schema,
-      PluginMachineExecutionOriginV1JsonSchema,
+      ConversationConnectionTransportOriginV1JsonSchema,
     )).toBe(true);
     expect(containsSchemaReference(
       CHANNEL_STATE_COLLECTION.schema,
@@ -374,7 +440,7 @@ describe('Channels collection declarations', () => {
     ]);
   });
 
-  it('declares the V5 expanded state contract and its ordered retained-row migrations', () => {
+  it('declares the V8 routing state contract and its ordered retained-row migrations', () => {
     const censusPayload = findChannelStateRecordPayload(
       CHANNEL_STATE_RECORD_KIND.ingressCensus,
     );
@@ -399,8 +465,8 @@ describe('Channels collection declarations', () => {
       },
     } as const;
 
-    expect(CHANNEL_STATE_COLLECTION.schemaVersion).toBe(5);
-    expect(CHANNEL_STATE_COLLECTION.readableSchemaVersions).toEqual([1, 2, 3, 4]);
+    expect(CHANNEL_STATE_COLLECTION.schemaVersion).toBe(9);
+    expect(CHANNEL_STATE_COLLECTION.readableSchemaVersions).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(JSON.parse(JSON.stringify(CHANNEL_ACCOUNT_COLLECTION_DECLARATIONS)))
       .toEqual(CHANNEL_ACCOUNT_COLLECTION_DECLARATIONS);
     expect(staticDeclaration?.migrations).toEqual([{
@@ -419,6 +485,18 @@ describe('Channels collection declarations', () => {
       id: 'channel-state-v4-to-v5',
       fromSchemaVersion: 4,
       toSchemaVersion: 5,
+    }, {
+      id: 'channel-state-v5-to-v6',
+      fromSchemaVersion: 5,
+      toSchemaVersion: 6,
+    }, {
+      id: 'channel-state-v6-to-v7',
+      fromSchemaVersion: 6,
+      toSchemaVersion: 7,
+    }, {
+      id: 'channel-state-v7-to-v8', fromSchemaVersion: 7, toSchemaVersion: 8,
+    }, {
+      id: 'channel-state-v8-to-v9', fromSchemaVersion: 8, toSchemaVersion: 9,
     }]);
     expect(staticDeclaration).not.toHaveProperty('migrations.0.migrate');
     expect(censusPayload?.required).toContain('conflict');
@@ -428,13 +506,13 @@ describe('Channels collection declarations', () => {
       fromSchemaVersion: 1,
       toSchemaVersion: 2,
     });
-    expect(v1ToV2?.migrate(source)).toEqual({
+    expect(v1ToV2?.migrate(source, { currentRevision: 1 })).toEqual({
       ...source,
       attention: false,
       payload: { ...source.payload, conflict: null, compacted: null },
     });
     const retainedV3 = { ...source, attention: false, payload: { ...source.payload, conflict: null, compacted: null } };
-    expect(v3ToV4?.migrate(retainedV3)).toEqual(retainedV3);
+    expect(v3ToV4?.migrate(retainedV3, { currentRevision: 1 })).toEqual(retainedV3);
     expect(v2ToV3?.migrate({
       id: 'connection-1',
       'record-kind': 'connection',
@@ -460,7 +538,7 @@ describe('Channels collection declarations', () => {
           },
         },
       },
-    })).toEqual({
+    }, { currentRevision: 1 })).toEqual({
       id: 'connection-1',
       'record-kind': 'connection',
       v: 1,
@@ -496,7 +574,7 @@ describe('Channels collection declarations', () => {
           },
         },
       },
-    })).toEqual({
+    }, { currentRevision: 1 })).toEqual({
       id: 'obligation-1',
       'record-kind': 'ingress-obligation',
       v: 1,
@@ -563,7 +641,8 @@ describe('Channels collection declarations', () => {
 
     expect(connectionPayload?.required).toContain('pendingOldTransportStop');
     expect(pendingOldTransportStop?.anyOf).toHaveLength(2);
-    const frozenSlot = pendingOldTransportStop?.anyOf?.find((branch) => branch.type === 'object');
+    const custody = pendingOldTransportStop?.anyOf?.find((branch) => branch.anyOf !== undefined);
+    const frozenSlot = custody?.anyOf?.find((branch) => branch.properties?.stopRequest !== undefined);
     expect(frozenSlot).toMatchObject({
       type: 'object',
       additionalProperties: false,
@@ -586,8 +665,11 @@ describe('Channels collection declarations', () => {
     });
     expect(frozenSlot?.properties?.endpointRetarget).toEqual({
       type: 'string',
-      enum: ['notRequired', 'pending'],
+      const: 'notRequired',
     });
+    const endpointIntent = custody?.anyOf?.find((branch) => branch.properties?.kind?.const === 'endpointRetarget');
+    expect(endpointIntent?.required).toEqual(['kind', 'webhookEndpointId', 'webhookContributionRef', 'webhookSourceInstanceId', 'targetMaterialization', 'transferAuthorityEpoch']);
+    expect(endpointIntent?.additionalProperties).toBe(false);
     expect(frozenSlot?.properties?.predecessorCheckpointedPollInvocation).toMatchObject({
       type: 'object',
       additionalProperties: false,

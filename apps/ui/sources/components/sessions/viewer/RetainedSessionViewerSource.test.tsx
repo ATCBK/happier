@@ -28,7 +28,7 @@ describe('retained Session source lifetime', () => {
         function Harness(props: Readonly<{ mount: string }>) {
             const lifetime = React.useMemo(() => captureActiveServerAccountScopeLifetime(), [props.mount]);
             return <RetainedPresentationSlotsProvider store={store}>
-                <RetainedSessionViewerSource slotId="same-source-slot" serverId="viewer-home" accountLifetime={lifetime}>
+                <RetainedSessionViewerSource sessionId="session-a" slotId="same-source-slot" serverId="viewer-home" accountLifetime={lifetime}>
                     <SourceBody />
                 </RetainedSessionViewerSource>
             </RetainedPresentationSlotsProvider>;
@@ -57,7 +57,7 @@ describe('retained Session source lifetime', () => {
         const previousAvailable = isAppliedActiveServerRuntimeAvailable();
         storage.getState().activateProfileScope({ serverId: 'viewer-home', accountId: 'viewer-account' });
         publishAppliedActiveServerSnapshot({ serverId: 'viewer-home', serverUrl: 'https://viewer.example.test', generation: 1 });
-        const screen = await renderScreen(<RetainedSessionViewerSource slotId="inline-source" serverId="viewer-home" accountLifetime={captureActiveServerAccountScopeLifetime()}>
+        const screen = await renderScreen(<RetainedSessionViewerSource sessionId="session-a" slotId="inline-source" serverId="viewer-home" accountLifetime={captureActiveServerAccountScopeLifetime()}>
             {React.createElement('InlineSourceDemand')}
         </RetainedSessionViewerSource>);
         try {
@@ -83,7 +83,7 @@ describe('retained Session source lifetime', () => {
         const lifetime = captureActiveServerAccountScopeLifetime();
         function Harness() {
             return <RetainedPresentationSlotsProvider store={store}>
-                <RetainedSessionViewerSource slotId="viewer-home:session-a:computer" serverId="viewer-home" accountLifetime={lifetime}>
+                <RetainedSessionViewerSource sessionId="session-a" slotId="viewer-home:session-a:computer" serverId="viewer-home" accountLifetime={lifetime}>
                     {React.createElement('BoundSourceDemand')}
                 </RetainedSessionViewerSource>
             </RetainedPresentationSlotsProvider>;
@@ -122,7 +122,7 @@ describe('retained Session source lifetime', () => {
         }
         function Harness(props: Readonly<{ shell: 'pane' | 'floating' | 'closed' }>) {
             return <RetainedPresentationSlotsProvider store={store}>
-                {props.shell !== 'closed' ? <RetainedSessionViewerSource key={props.shell} slotId="viewer-home:session-a:computer" serverId="viewer-home" accountLifetime={lifetime}>
+                {props.shell !== 'closed' ? <RetainedSessionViewerSource key={props.shell} sessionId="session-a" slotId="viewer-home:session-a:computer" serverId="viewer-home" accountLifetime={lifetime}>
                     <SourceBody />
                 </RetainedSessionViewerSource> : null}
             </RetainedPresentationSlotsProvider>;
@@ -171,11 +171,12 @@ describe('retained Session source lifetime', () => {
             const { binding } = useServerCredentialAccountScopeBinding(homeB.id);
             return <RetainedPresentationSlotsProvider store={store}>
                 {React.createElement('HomeBindingProbe', { account: binding?.scope.accountId ?? null })}
-                <RetainedSessionViewerSource slotId="home-a-source" serverId={homeA.id} accountLifetime={homeALifetime}>
+                <RetainedSessionViewerSource sessionId="session-a" slotId="home-a-source" serverId={homeA.id} accountLifetime={homeALifetime}>
                     <SourceBody home={homeA.id} />
                 </RetainedSessionViewerSource>
                 <SessionViewerSourceAccountScopeProvider accountLifetime={binding}>
                     {props.showPane && binding ? <RetainedSessionViewerSource
+                        sessionId="session-a"
                         slotId="home-b-source" serverId={props.nullableHome ? null : homeB.id}
                     >
                         <SourceBody home={homeB.id} />

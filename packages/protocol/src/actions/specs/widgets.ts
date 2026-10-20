@@ -1,4 +1,4 @@
-import type { PreNormalizedActionSpec } from '../actionSpecs.js';
+import type { ApprovalPresentationContext, PreNormalizedActionSpec } from '../actionSpecs.js';
 import type { InputFieldHint } from '../../inputs/inputFields.js';
 import { WIDGET_SIZE_ORDER_V1, WidgetGroupWidthV1Schema, WidgetProjectAreaV1Schema } from '../../widgets/widgetPresentationV1.js';
 import {
@@ -79,7 +79,7 @@ const accountField = { path: 'account', title: 'Library Account', widget: 'json'
 const artifactField = { path: 'artifactId', title: 'Library item id', widget: 'text', required: true,
   description: 'Artifact id from the library list, or a new unique id when creating an item.' } as const satisfies InputFieldHint;
 const bindingsField = { path: 'bindings', title: 'Input bindings', widget: 'json', required: true,
-  description: 'Bindings by declared field path: value, context or viewer intent. Viewer intent uses the current viewer’s existing Connected Account purpose selection.' } as const satisfies InputFieldHint;
+  description: 'Bindings by declared field path: value, context or viewer intent. A value must satisfy the widget’s inputSchema from widgets.catalog.list. Viewer intent uses the current viewer’s existing Connected Account purpose selection.' } as const satisfies InputFieldHint;
 const pathsField = { path: 'paths', title: 'Input paths', widget: 'text_list', listSeparator: 'newline',
   description: 'Only change these declared field paths. Omit to replace or reset the complete binding set.' } as const satisfies InputFieldHint;
 const revisionField = { path: 'expectedRevision', title: 'Current layout revision', widget: 'json', required: true,
@@ -109,13 +109,14 @@ function quote(value: string): string {
   return `“${value}”`;
 }
 
-function widgetSurfaceApprovalLabel(surface: ReturnType<typeof readWidgetActionSurfaceV1>): string {
+function widgetSurfaceApprovalLabel(surface: ReturnType<typeof readWidgetActionSurfaceV1>, presentation?: ApprovalPresentationContext['widgetPresentation']): string {
   if (!surface) return 'the selected surface';
   const owner = surface.owner;
   if (owner.kind === 'corePage') {
     return `${sentenceCaseIdentifier(owner.pageId, 'Page')} · ${sentenceCaseIdentifier(owner.area, 'Main')} area`;
   }
   if (owner.kind === 'pluginArea') {
+    if (presentation?.pageName?.trim()) return `${presentation.pageName.trim()} · ${presentation.areaName?.trim() || sentenceCaseIdentifier(owner.area, 'Main')}`;
     return `Plugin page · ${sentenceCaseIdentifier(owner.area, 'Main')} area`;
   }
   if (owner.kind === 'project') return owner.layoutId ? 'Project dashboard' : 'Project · Overview';
@@ -153,15 +154,15 @@ function widgetGroupApprovalContents(raw: unknown): string {
 }
 
 /** Domain-owned approval sentence for widget mutations; raw structured operands stay in Details. */
-function describeWidgetActionApprovalSummary(actionId: WidgetInstanceActionIdV1, input: unknown): string | null {
+function describeWidgetActionApprovalSummary(actionId: WidgetInstanceActionIdV1, input: unknown, context?: ApprovalPresentationContext): string | null {
   const value = readRecord(input);
   const surface = readWidgetActionSurfaceV1(input);
-  const target = widgetSurfaceApprovalLabel(surface);
+  const target = widgetSurfaceApprovalLabel(surface, context?.widgetPresentation);
   const instance = readRecord(value.instance);
   const group = readRecord(value.group);
   const capture = readRecord(value.capture);
   const captureSurface = readWidgetActionSurfaceV1({ surface: capture.surface });
-  const item = widgetApprovalPhrase(instance);
+  const item = context?.widgetPresentation?.widgetName?.trim() ? quote(context.widgetPresentation.widgetName.trim()) : widgetApprovalPhrase(instance);
   const groupName = sentenceCaseIdentifier(value.title ?? group.title, 'group');
   const size = typeof value.size === 'string' ? value.size : null;
   const width = typeof value.width === 'string' ? `${value.width} width` : null;
@@ -199,7 +200,7 @@ const WIDGET_INSTANCE_ACTION_FIELDS = {
     description: 'Optional Home-qualified Session supplying widget discovery context. Selecting it grants no access.' }],
   'widgets.item.list': [surfaceField],
   'widgets.item.add': [surfaceField, { path: 'instance', title: 'Configured widget', widget: 'json', required: true,
-    description: 'Complete v1 instance with a unique id, definition reference and bindings.' }, areaField, sizeField, indexField,
+    description: 'Complete v1 instance with a unique id, definition reference and bindings. A value binding must satisfy the widget’s inputSchema from widgets.catalog.list; use a picked Session, Machine or checkout exactly as action_options_resolve returns it (consumer widget, fieldPath = the input path).' }, areaField, sizeField, indexField,
     { path: 'placement', title: 'Session Board placement', widget: 'json', description: 'Owner-native Session Board tab, view and placement options.' }, groupIdField],
   'widgets.item.remove': [refField],
   'widgets.item.move': [refField, { ...indexField, requiredWhen: { op: 'not', predicate: { op: 'truthy', path: 'to' } },
@@ -280,12 +281,22 @@ export const WIDGET_INSTANCE_ACTION_SPECS_V1: readonly (PreNormalizedActionSpec 
   const refresh = id.endsWith('.refresh');
   return {
     id, approvalPolicy: {
-      ...(id.startsWith('widgets.item.') && !read && !refresh ? { uiConfirmationForInput: (input: unknown) => {
-        const surface = readWidgetActionSurfaceV1(input);
-        const destination = id === 'widgets.item.move' ? readWidgetActionDestinationV1(input) : null;
-        return id === 'widgets.item.remove' || !surface || surface.owner.kind === 'sessionBoard' || destination?.owner.kind === 'sessionBoard';
-      } } : { uiConfirmation: 'policy' }),
-    }, approval: { result: 'required' }, title: WIDGET_INSTANCE_ACTION_COPY[id][0], description: id === 'widgets.area.layout.reset'
+      uiConfirmation: id === 'widgets.area.layout.delete'
+        || id === 'widgets.item.network.set' ? 'policy' : 'direct',
+      // Session removal deletes shared source content. Other surfaces classify
+      // referenced placements versus groups/inline content at admitted read time.
+      ...(id === 'widgets.item.remove' ? { uiConfirmationForInput: (input: unknown) =>
+        !readWidgetActionSurfaceV1(input) || readWidgetActionSurfaceV1(input)?.owner.kind === 'sessionBoard' } : {}),
+      ...(id === 'widgets.item.move' ? { uiConfirmationForInput: (input: unknown) => {
+        const source = readWidgetActionSurfaceV1(input);
+        const destination = readWidgetActionDestinationV1(input);
+        // Entering a different Session publishes to that Session's audience.
+        // Reordering within the same Session remains a reversible edit.
+        return destination?.owner.kind === 'sessionBoard' && (source?.owner.kind !== 'sessionBoard'
+          || source.serverId !== destination.serverId || source.owner.sessionId !== destination.owner.sessionId);
+      } } : {}),
+    },
+    approval: { result: 'required' }, title: WIDGET_INSTANCE_ACTION_COPY[id][0], description: id === 'widgets.area.layout.reset'
       ? 'Restore the host-declared area preset immediately and return a guarded Undo for the acknowledged change.'
       : id === 'widgets.area.layout.undo'
       ? 'Restore the layout preceding a preset Reset only while that Reset remains the current acknowledged revision.'
@@ -319,7 +330,7 @@ export const WIDGET_INSTANCE_ACTION_SPECS_V1: readonly (PreNormalizedActionSpec 
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: true },
     toolExposure: { agent: 'discoverable_only', mcp: 'discoverable_only' },
     inputSchema: WidgetInstanceActionInputSchemasV1[id], outputSchema: WidgetInstanceActionOutputSchemasV1[id],
-    approvalPresentation: { summary: input => describeWidgetActionApprovalSummary(id, input) },
+    approvalPresentation: { summary: (input, context) => describeWidgetActionApprovalSummary(id, input, context) },
     inputHints: { description: WIDGET_INSTANCE_ACTION_COPY[id][1], fields: WIDGET_INSTANCE_ACTION_FIELDS[id] },
     cli: { acceptsServerId: true, commands: [{ path: id.split('.'), visibility: 'canonical' }] },
   } as const satisfies PreNormalizedActionSpec;
@@ -340,7 +351,15 @@ export const WIDGET_DEFINITION_ACTION_SPECS_V1: readonly (PreNormalizedActionSpe
 }>)[] = WIDGET_DEFINITION_ACTION_IDS_V1.map(id => {
   const read = id === 'widgets.definition.list' || id === 'widgets.definition.get';
   return {
-    id, approvalPolicy: { uiConfirmation: 'policy' }, approval: { result: 'required' }, title: WIDGET_DEFINITION_ACTION_COPY[id][0],
+    id, approvalPolicy: {
+      uiConfirmation: id === 'widgets.definition.delete' ? 'policy' : 'direct',
+      ...(id === 'widgets.definition.update' ? { uiConfirmationForInput: (input: unknown) => {
+        const update = WidgetDefinitionActionInputSchemasV1['widgets.definition.update'].safeParse(input);
+        // Names and content are reversible edits; changing the guest network
+        // retains review even when the definition is otherwise editable directly.
+        return !update.success || update.data.patch.networkOverride !== undefined;
+      } } : {}),
+    }, approval: { result: 'required' }, title: WIDGET_DEFINITION_ACTION_COPY[id][0],
     description: id === 'widgets.definition.list'
       ? 'List reusable Account widget summaries. Each definition may include author (kind: person, agent, or plugin) and createdAt (creation timestamp); definitions saved before these provenance facts existed omit them.'
       : id === 'widgets.definition.update'
@@ -392,7 +411,7 @@ export const WIDGET_LAYOUT_FRAGMENT_ACTION_SPECS_V1: readonly (PreNormalizedActi
 }>)[] = WIDGET_LAYOUT_FRAGMENT_ACTION_IDS_V1.map(id => {
   const read = id.endsWith('.list') || id.endsWith('.get');
   return {
-    id, approvalPolicy: { uiConfirmation: 'policy' }, approval: { result: 'required' }, title: WIDGET_LAYOUT_FRAGMENT_ACTION_COPY[id][0], description: 'Read or author an Account saved group through its mode-aware Artifact owner. Adding it makes independent copies.',
+    id, approvalPolicy: { uiConfirmation: id === 'widgets.fragment.delete' ? 'policy' : 'direct' }, approval: { result: 'required' }, title: WIDGET_LAYOUT_FRAGMENT_ACTION_COPY[id][0], description: 'Read or author an Account saved group through its mode-aware Artifact owner. Adding it makes independent copies.',
     safety: id.endsWith('.update') || id.endsWith('.delete') ? 'danger' : 'safe',
     sideEffectClass: read ? 'read' : 'write', executionPlacement: 'account', requiredAuthority: 'account_automation',
     placements: [], bindings: { mcpToolName: id.replaceAll('.', '_'), rpcMethod: id },

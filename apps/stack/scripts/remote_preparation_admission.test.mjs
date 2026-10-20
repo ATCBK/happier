@@ -83,9 +83,9 @@ esac
       const stack = fixture.path('stack');
       await mkdir(join(stack, 'mutagen/data'), { recursive: true });
       const config = join(stack, 'dev-targets.json');
-      await writeFile(config, '{}\n');
+      await writeFile(config, '{"version":1,"targets":[]}\n');
       await writeFile(join(stack, 'dev-target-exec-v1.sh'), [
-        "HSTACK_EXEC_PROJECTION_VERSION='2'", `projection_repo_root='${checkout}'`,
+        "HSTACK_EXEC_PROJECTION_VERSION='2'", `projection_repo_root='${checkout}'`, `projection_config_path='${config}'`,
         `projection_mutagen_data_dir='${stack}/mutagen/data'`,
         `projection_mutagen_ssh_path='${stack}/mutagen/ssh'`,
         "command_mode='auto'", "include_local='0'", "fallback_mode='error'",
@@ -164,7 +164,7 @@ async function createPublisherPlacementFixture(t, capacityKiB = 19922944) {
   await Promise.all([mkdir(join(stack, 'mutagen/data'), { recursive: true }),
     mkdir(join(checkout, 'packages/protocol'), { recursive: true })]);
   const config = join(stack, 'dev-targets.json');
-  await writeFile(config, '{}\n');
+  await writeFile(config, '{"version":1,"targets":[]}\n');
   const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`,
     HAPPIER_EXEC_CONFIG_PATH: config, HAPPIER_STACK_STORAGE_DIR: fixture.path('stacks'),
     HAPPIER_DEV_TARGET_EXECUTION: '', HAPPIER_HSTACK_EXECUTION: '', HAPPIER_HSTACK_DISPATCH_CONTROL: '',
@@ -172,7 +172,7 @@ async function createPublisherPlacementFixture(t, capacityKiB = 19922944) {
     HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '', HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '',
     HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '', DISPATCHED: dispatched };
   await writeFile(join(stack, 'dev-target-exec-v1.sh'), [
-    "HSTACK_EXEC_PROJECTION_VERSION='2'", `projection_repo_root='${checkout}'`,
+    "HSTACK_EXEC_PROJECTION_VERSION='2'", `projection_repo_root='${checkout}'`, `projection_config_path='${config}'`,
     `projection_mutagen_data_dir='${stack}/mutagen/data'`, `projection_mutagen_ssh_path='${stack}/mutagen/ssh'`,
     "command_mode='auto'", "include_local='0'", "fallback_mode='error'",
     "load_ttl_seconds='15'", "unavailable_ttl_seconds='120'", "target_count='1'",

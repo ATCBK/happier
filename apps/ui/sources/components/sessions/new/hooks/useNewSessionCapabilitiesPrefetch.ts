@@ -20,8 +20,21 @@ export function useNewSessionCapabilitiesPrefetch(params: Readonly<{
         cacheKeySalt?: string | number | null;
         staleMs: number;
         request: any;
+        signal?: AbortSignal;
     }) => Promise<any> | void;
 }>): void {
+    const currentParamsRef = React.useRef(params);
+    currentParamsRef.current = params;
+    // Heartbeats and rebuilt list wrappers do not retire a still-current read.
+    // Reachability and the registry namespace do change the requested target.
+    const machinesKey = JSON.stringify(params.machines.map(machine => [machine.id,
+        resolveDaemonCapabilitiesCacheKeySalt(machine, params.serverId), params.isMachineOnline(machine)]));
+    const favoritesKey = JSON.stringify(params.favoriteMachineItems.map(machine => machine.id));
+    const recentKey = JSON.stringify(params.recentMachines.map(machine => machine.id));
+    const selectedMachine = params.machines.find(machine => machine.id === params.selectedMachineId);
+    const selectedMachineKey = JSON.stringify([params.selectedMachineId,
+        selectedMachine ? resolveDaemonCapabilitiesCacheKeySalt(selectedMachine, params.serverId) : null,
+        selectedMachine ? params.isMachineOnline(selectedMachine) : false]);
     // One-time prefetch of machine capabilities for the wizard machine list.
     // This keeps machine glyphs responsive (cache-only in the list) without
     // triggering per-row auto-detect work during taps.
@@ -30,6 +43,7 @@ export function useNewSessionCapabilitiesPrefetch(params: Readonly<{
         completedKey: string | null;
     }>({ scheduledKey: null, completedKey: null });
     React.useEffect(() => {
+        const params = currentParamsRef.current;
         if (!params.enabled) return;
         const nextKey = String(params.serverId ?? '');
         if (wizardGlyphsPrefetchStateRef.current.completedKey === nextKey) return;
@@ -37,6 +51,8 @@ export function useNewSessionCapabilitiesPrefetch(params: Readonly<{
 
         wizardGlyphsPrefetchStateRef.current.scheduledKey = nextKey;
         let didRun = false;
+        let didFinish = false;
+        const controller = new AbortController();
 
         const cancel = runAfterInteractionsWithFallback(() => {
             didRun = true;
@@ -59,27 +75,32 @@ export function useNewSessionCapabilitiesPrefetch(params: Readonly<{
 
                 // Limit to avoid a thundering herd on iOS.
                 const toPrefetch = unique.slice(0, 12);
+                const pending: Promise<unknown>[] = [];
                 for (const machineId of toPrefetch) {
                     const machine = params.machines.find((m) => m.id === machineId);
                     if (!machine) continue;
                     if (!params.isMachineOnline(machine)) continue;
-                    fireAndForget(
-                        Promise.resolve().then(() => params.prefetchMachineCapabilitiesIfStale({
+                    pending.push(Promise.resolve().then(() => params.prefetchMachineCapabilitiesIfStale({
                             machineId,
                             serverId: params.serverId,
                             cacheKeySalt: resolveDaemonCapabilitiesCacheKeySalt(machine, params.serverId),
                             staleMs: params.staleMs,
                             request: params.request,
-                        })),
-                        { tag: `useNewSessionCapabilitiesPrefetch.prefetchWizardMachineGlyphs:${machineId}` },
-                    );
+                            signal: controller.signal,
+                        })));
                 }
+                fireAndForget(Promise.allSettled(pending).then(() => { didFinish = true; }),
+                    { tag: 'useNewSessionCapabilitiesPrefetch.prefetchWizardMachineGlyphs' });
             } catch {
                 // best-effort prefetch only
             }
         });
         return () => {
             cancel();
+            controller.abort();
+            if (!didFinish && wizardGlyphsPrefetchStateRef.current.completedKey === nextKey) {
+                wizardGlyphsPrefetchStateRef.current.completedKey = null;
+            }
             if (!didRun && wizardGlyphsPrefetchStateRef.current.scheduledKey === nextKey) {
                 wizardGlyphsPrefetchStateRef.current.scheduledKey = null;
             }
@@ -87,10 +108,9 @@ export function useNewSessionCapabilitiesPrefetch(params: Readonly<{
     }, [
         params.enabled,
         params.serverId,
-        params.favoriteMachineItems,
-        params.recentMachines,
-        params.machines,
-        params.isMachineOnline,
+        favoritesKey,
+        recentKey,
+        machinesKey,
         params.prefetchMachineCapabilitiesIfStale,
         params.request,
         params.staleMs,
@@ -104,6 +124,7 @@ export function useNewSessionCapabilitiesPrefetch(params: Readonly<{
         completedKey: string | null;
     }>({ scheduledKey: null, completedKey: null });
     React.useEffect(() => {
+        const params = currentParamsRef.current;
         if (!params.enabled) return;
         if (!params.selectedMachineId) return;
         const machine = params.machines.find((m) => m.id === params.selectedMachineId);
@@ -120,6 +141,8 @@ export function useNewSessionCapabilitiesPrefetch(params: Readonly<{
 
         selectedMachinePrefetchStateRef.current.scheduledKey = nextKey;
         let didRun = false;
+        let didFinish = false;
+        const controller = new AbortController();
 
         const cancel = runAfterInteractionsWithFallback(() => {
             didRun = true;
@@ -134,15 +157,20 @@ export function useNewSessionCapabilitiesPrefetch(params: Readonly<{
                     cacheKeySalt: resolveDaemonCapabilitiesCacheKeySalt(machine, params.serverId),
                     staleMs: params.staleMs,
                     request: params.request,
-                })),
+                    signal: controller.signal,
+                })).finally(() => { didFinish = true; }),
                 { tag: `useNewSessionCapabilitiesPrefetch.prefetchSelectedMachine:${params.selectedMachineId}` },
             );
         });
         return () => {
             cancel();
+            controller.abort();
+            if (!didFinish && selectedMachinePrefetchStateRef.current.completedKey === nextKey) {
+                selectedMachinePrefetchStateRef.current.completedKey = null;
+            }
             if (!didRun && selectedMachinePrefetchStateRef.current.scheduledKey === nextKey) {
                 selectedMachinePrefetchStateRef.current.scheduledKey = null;
             }
         };
-    }, [params.enabled, params.machines, params.selectedMachineId, params.serverId, params.isMachineOnline, params.prefetchMachineCapabilitiesIfStale, params.request, params.staleMs]);
+    }, [params.enabled, selectedMachineKey, params.serverId, params.prefetchMachineCapabilitiesIfStale, params.request, params.staleMs]);
 }

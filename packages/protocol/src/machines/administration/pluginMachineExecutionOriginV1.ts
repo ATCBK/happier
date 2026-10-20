@@ -10,6 +10,7 @@ import {
 import type { PluginJsonSchemaV2 } from '../../plugins/contributions/publicTypes.js';
 import { PluginIdSchema } from '../../plugins/pluginId.js';
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
+import { defineProtocolObject, defineProtocolString } from '../../plugins/actions/protocolComposableSchema.js';
 import { PluginSourceCustodyV1Schema, PluginSourceCustodyV1ProtocolSchema, pluginSourceCustodyV1Equal } from '../../plugins/runtime/sourceCustody.js';
 
 const PluginMachineSourceRefV1Schema = lazyZodSchema(() => z.strictObject({
@@ -34,6 +35,32 @@ export const PluginMachineExecutionOriginV1Schema = lazyZodSchema(() => z.union(
 })]));
 
 export type PluginMachineExecutionOriginV1 = z.infer<typeof PluginMachineExecutionOriginV1Schema>;
+
+/** Placement follows the currently admitted implementation, independently of source custody. */
+export const PluginMachineExecutionRoutingV1Schema = defineProtocolObject({
+  serverIdentityId: defineProtocolString({ pattern: SERVER_IDENTITY_ID_PATTERN.source }),
+  machineId: defineProtocolString(PluginMachineMaterializationRefV1JsonSchema.properties.machineId),
+  pluginId: PluginIdSchema,
+}, { policy: 'closed' });
+export type PluginMachineExecutionRoutingV1 = ReturnType<typeof PluginMachineExecutionRoutingV1Schema.parse>;
+
+export function getPluginMachineExecutionRouting(
+  origin: PluginMachineExecutionOriginV1,
+): PluginMachineExecutionRoutingV1 {
+  const ref = getPluginMachineExecutionOriginRef(origin);
+  return { serverIdentityId: origin.serverIdentityId, machineId: ref.machineId, pluginId: ref.pluginId };
+}
+
+export function arePluginMachineExecutionRoutingsEqual(
+  left: PluginMachineExecutionRoutingV1,
+  right: PluginMachineExecutionRoutingV1,
+): boolean {
+  return left.serverIdentityId === right.serverIdentityId
+    && left.machineId === right.machineId
+    && left.pluginId === right.pluginId;
+}
+
+export const PluginMachineExecutionRoutingV1JsonSchema: PluginJsonSchemaV2 = PluginMachineExecutionRoutingV1Schema.jsonSchema;
 
 export function getPluginMachineExecutionOriginRef(
   origin: PluginMachineExecutionOriginV1,
@@ -108,3 +135,49 @@ export const PluginMachineExecutionOriginV1JsonSchema: PluginJsonSchemaV2 = {
     additionalProperties: false,
   }],
 };
+
+/** Domain owners supply identity/content; only admitted current supplies can disagree. */
+export function resolveFleetSupplyAgreement<T>(params: Readonly<{
+    supplies: readonly Readonly<{ value: T; selectable: boolean }>[];
+    identity: (value: T) => string;
+    content: (value: T) => string;
+}>): Readonly<{
+    variantsByIdentity: ReadonlyMap<string, ReadonlyMap<string, T>>;
+    conflictingIdentities: readonly string[];
+}> {
+    const variantsByIdentity = new Map<string, Map<string, T>>();
+    for (const supply of params.supplies) {
+        if (!supply.selectable) continue;
+        const identity = params.identity(supply.value);
+        const variants = variantsByIdentity.get(identity) ?? new Map<string, T>();
+        const content = params.content(supply.value);
+        if (!variants.has(content)) variants.set(content, supply.value);
+        variantsByIdentity.set(identity, variants);
+    }
+    return {
+        variantsByIdentity,
+        conflictingIdentities: [...variantsByIdentity].filter(([, variants]) => variants.size > 1).map(([identity]) => identity),
+    };
+}
+
+/** Byte supply uses content agreement, never permission to execute a plugin on another Machine. */
+export function resolvePluginContentSuppliesV1<T>(params: Readonly<{
+  supplies: readonly Readonly<{
+    value: T;
+    origin: PluginMachineExecutionOriginV1 | null;
+    version: string;
+    contentKey: string;
+    available: boolean;
+  }>[];
+  selectedOrigin?: PluginMachineExecutionOriginV1 | null;
+}>): Readonly<{ kind: 'ready'; supplies: readonly T[] }> | Readonly<{ kind: 'conflict' | 'unavailable' }> {
+  const selected = params.selectedOrigin;
+  const candidates = selected ? params.supplies.filter(supply => supply.origin && arePluginMachineExecutionOriginsEqual(supply.origin, selected))
+    : params.supplies;
+  const available = candidates.filter(supply => supply.available);
+  if (!available.length) return { kind: 'unavailable' };
+  const agreement = resolveFleetSupplyAgreement({ supplies: available.map(value => ({ value, selectable: true })),
+    identity: () => 'pluginContent', content: supply => JSON.stringify([supply.version, supply.contentKey]) });
+  return agreement.conflictingIdentities.length ? { kind: 'conflict' }
+    : { kind: 'ready', supplies: available.map(supply => supply.value) };
+}

@@ -13,6 +13,12 @@ export type ManagedIdentityProviderKind = ManagedIdentityProviderKindV1;
 
 const NonEmptyStringSchema = z.string().check(z.trim(), z.minLength(1));
 const StringListSchema = z.array(NonEmptyStringSchema);
+const OidcAllowRulesSchema = z.strictObject({
+    usersAllowlist: StringListSchema,
+    emailDomains: StringListSchema,
+    groupsAny: StringListSchema,
+    groupsAll: StringListSchema,
+});
 
 const OidcProviderConfigSchema = z.strictObject({
     v: z.literal(1),
@@ -27,12 +33,7 @@ const OidcProviderConfigSchema = z.strictObject({
         email: NonEmptyStringSchema,
         groups: NonEmptyStringSchema,
     }),
-    allow: z.pipe(z.strictObject({
-        usersAllowlist: StringListSchema,
-        emailDomains: StringListSchema,
-        groupsAny: StringListSchema,
-        groupsAll: StringListSchema,
-    }), z.transform(normalizeOidcAllowRules)),
+    allow: z.pipe(OidcAllowRulesSchema, z.transform((allow: z.infer<typeof OidcAllowRulesSchema>) => normalizeOidcAllowRules(allow))),
     fetchUserInfo: z.boolean(),
     storeRefreshToken: z.boolean(),
     ui: z.strictObject({

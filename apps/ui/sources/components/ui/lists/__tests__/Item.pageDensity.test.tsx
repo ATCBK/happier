@@ -24,15 +24,21 @@ vi.mock('@/components/ui/layout/layout', () => ({
 vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn() }));
 
 // The list-density preference is device-local storage: the one boundary this test controls.
-vi.mock('@/sync/store/hooks', async importOriginal => ({
-    ...await importOriginal<typeof import('@/sync/store/hooks')>(),
+vi.mock('@/sync/store/settingsReadHooks', async importOriginal => ({
+    ...await importOriginal<typeof import('@/sync/store/settingsReadHooks')>(),
     useLocalSetting: (key: string) => (key === 'uiItemDensity' ? densityState.preferred : key === 'uiFontScale' ? densityState.fontScale : null),
 }));
+
+// Density and font scale are live boundary inputs, so module reloads are unnecessary.
+await import('../Item');
+await import('../ItemGroup');
+await import('../listPresentation');
+await import('@/components/settings/connectedServices/ConnectedServiceMark');
+await import('@/components/ui/icons/Icon');
 
 afterEach(() => {
     densityState.fontScale = 1;
     standardCleanup();
-    vi.resetModules();
 });
 
 type Screen = Awaited<ReturnType<typeof renderScreen>>;
@@ -133,7 +139,6 @@ describe('Item page rows follow the list-density preference', () => {
                 titleSize: flattenTestStyle(textNode(screen, 'Theme').props.style).fontSize as number,
             };
             standardCleanup();
-            vi.resetModules();
         }
         for (const key of ['twoLine', 'oneLine', 'list'] as const) {
             expect(heights.comfortable[key]).toBeGreaterThan(heights.cozy[key]);
@@ -160,7 +165,6 @@ describe('Item page rows follow the list-density preference', () => {
             expect(gap, density).toBeGreaterThanOrEqual(2);
             expect(gap, density).toBeLessThanOrEqual(8);
             standardCleanup();
-            vi.resetModules();
         }
     });
 });

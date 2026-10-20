@@ -47,7 +47,7 @@ it('retains the answered pool order during refresh and failed reads, but not aft
   };
   const query = normalizeUsageQuery({});
   const pool = { group, memberAccountIds: ['work'], activeAccountId: null,
-    selection: { status: 'available' as const, machineId: 'machine', value: answer(1) } };
+    selection: { status: 'error' as const, machineId: 'machine', errorCode: 'MACHINE_RPC_TIMEOUT' } };
   let slice = resolveUsagePageAggregation({ queries: [query], pools: [{ query, value: [pool] }] }).results[0]!;
   let hook = await renderHook(() => useUsagePoolSelections(slice));
   const key = `${group.service.pluginId}/${group.service.localId}:${group.groupId}`;
@@ -55,7 +55,10 @@ it('retains the answered pool order during refresh and failed reads, but not aft
     slice = { ...slice, pools: [{ ...pool, memberAccountIds: members, selection }] };
     await hook.rerender();
   };
+  expect(hook.getCurrent().get(key)).toBe('failed');
+  await update({ status: 'available', machineId: 'machine', value: answer(1) });
   expect(hook.getCurrent().get(key)).toMatchObject({ observedAtMs: 1 });
+  expect(hook.getCurrent().get(key)).not.toHaveProperty('refreshError');
   expect.soft(hook.getCurrent().get(key)).toMatchObject({ memberStatus: 'none_known' });
   const excluded = answer(1);
   excluded.selection.excluded = [{ profileId: 'work', reason: 'disabled' }];
@@ -156,42 +159,40 @@ it('refreshes the displayed Usage Resource and creates no independent quota poll
     const cold = hook.getCurrent();
     expect.soft(cold.nameOf(cold.projection.accounts[0]!).title).toBe('Studio account');
     expect.soft(cold.projection.pools[0]).toMatchObject({ name: 'Studio pool' });
-    expect(cold.nameOf(cold.projection.accounts[1]!).serviceLabel).toBe(t('connectedServices.fallbackName'));
+    expect(cold.projection.accounts.map(account => account.accountId)).toEqual(['work']);
     await act(async () => installConnectedAccountDescriptorProjection({ scopeKey: 'plans', status: 'ready', conflicts: [], errorReason: null,
       descriptors: [{ id: 'email', serviceId: 'email', pluginId: 'acme.email', title: 'Email IMAP + SMTP', provenance: 'external',
         sourceKind: 'installed', authentication: { defaultModeId: 'manual', modes: [{ id: 'manual', kind: 'manual',
           outcomeReconciliation: 'none', fields: [] }] }, capabilities: [], availability: { state: 'available', reason: 'resolved' }, diagnostics: [] }] },
     captureActiveServerAccountScopeLifetime()!));
     await hook.rerender();
-    expect(hook.getCurrent().nameOf(hook.getCurrent().projection.accounts[1]!).serviceLabel).toBe('Email IMAP + SMTP');
+    expect(hook.getCurrent().projection.accounts.map(account => account.accountId)).toEqual(['work']);
     expect(hook.getCurrent().projection.pools[0]).toMatchObject({ name: 'Studio pool' });
-    // Catalog identity is already known even if this service's Usage read has
-    // never answered. A sleeping catalog machine must not erase that identity.
+    // An unavailable catalog must not admit an ineligible service.
     await act(async () => installConnectedAccountDescriptorProjection({ scopeKey: 'plans-offline', status: 'loading',
       conflicts: [], errorReason: null, descriptors: [] }, captureActiveServerAccountScopeLifetime()!));
     const offline = await renderHook(() => useUsagePlans(slice, model), {
       wrapper: ({ children }) => React.createElement(InjectedAuthProvider, { credentials, children }),
     });
-    expect.soft(offline.getCurrent().nameOf(offline.getCurrent().projection.accounts[1]!).serviceLabel).toBe('Email IMAP + SMTP');
+    expect.soft(offline.getCurrent().projection.accounts.map(account => account.accountId)).toEqual(['work']);
     await offline.unmount();
     await act(async () => installConnectedAccountDescriptorProjection({ scopeKey: 'plans', status: 'ready', conflicts: [], errorReason: null,
       descriptors: [{ id: 'email', serviceId: 'email', pluginId: 'acme.email', title: 'Email IMAP + SMTP', provenance: 'external',
         sourceKind: 'installed', authentication: { defaultModeId: 'manual', modes: [{ id: 'manual', kind: 'manual',
           outcomeReconciliation: 'none', fields: [] }] }, capabilities: [], availability: { state: 'available', reason: 'resolved' }, diagnostics: [] }] },
     captureActiveServerAccountScopeLifetime()!));
-    // Once the account's read answers, the already-hydrated service title can be shown.
+    // A source response does not grant a service the Usage capability.
     slice = { ...slice, sources: slice.sources.map(state => state.source === `quota:${JSON.stringify({ bindingKind: 'account', ref: email })}`
       ? { ...state, status: 'partial' } : state) };
     await hook.rerender();
-    expect(hook.getCurrent().nameOf(hook.getCurrent().projection.accounts[1]!).serviceLabel).toBe('Email IMAP + SMTP');
+    expect(hook.getCurrent().projection.accounts.map(account => account.accountId)).toEqual(['work']);
     await hook.unmount();
-    // Email can answer without an allowance observation. Its named presentation
-    // still belongs to this Account when a different route starts a new batch.
+    // Starting a new batch must not turn a named Email account into Usage evidence.
     slice = { ...slice, sources: slice.sources.map(state => ({ ...state, status: 'pending' })) };
     const warm = await renderHook(() => useUsagePlans(slice, model), {
       wrapper: ({ children }) => React.createElement(InjectedAuthProvider, { credentials, children }),
     });
-    expect(warm.getCurrent().nameOf(warm.getCurrent().projection.accounts[1]!).serviceLabel).toBe('Email IMAP + SMTP');
+    expect(warm.getCurrent().projection.accounts.map(account => account.accountId)).toEqual(['work']);
     expect(warm.getCurrent().projection.pools[0]).toMatchObject({ name: 'Studio pool' });
     await act(async () => {
       const presentation = ConnectedPresentationRecordV1Schema.parse({ v: 1, entries: [
@@ -214,7 +215,7 @@ it('refreshes the displayed Usage Resource and creates no independent quota poll
     await act(async () => installConnectedAccountDescriptorProjection({ scopeKey: 'plans-refresh', status: 'ready', conflicts: [],
       errorReason: null, descriptors: [] }, captureActiveServerAccountScopeLifetime()!));
     await warm.rerender();
-    expect(warm.getCurrent().nameOf(warm.getCurrent().projection.accounts[1]!).serviceLabel).toBe('Email IMAP + SMTP');
+    expect(warm.getCurrent().projection.accounts.map(account => account.accountId)).toEqual(['work']);
     // A retained Resource snapshot can outlive the authoritative group definition.
     // A same-id group from another service must not keep the deleted pool alive.
     await act(async () => storage.setState({ profile: { ...profile, connectedAccountGroupsV4: [
@@ -229,6 +230,6 @@ it('refreshes the displayed Usage Resource and creates no independent quota poll
     const retired = await renderHook(() => useUsagePlans(slice, model), {
       wrapper: ({ children }) => React.createElement(InjectedAuthProvider, { credentials, children }),
     });
-    expect(retired.getCurrent().nameOf(retired.getCurrent().projection.accounts[1]!).serviceLabel).toBe(t('connectedServices.fallbackName'));
+    expect(retired.getCurrent().projection.accounts.map(account => account.accountId)).toEqual(['work']);
   } finally { features.resolve(featureResponse()); }
 });

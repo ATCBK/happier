@@ -13,6 +13,7 @@ import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { PermissionMode } from '@/api/types';
 import {
   BasePermissionHandler,
+  resolvePermissionRequestOwner,
   type PermissionRequestPushSender,
   type PendingRequest,
   type PermissionResult,
@@ -28,11 +29,11 @@ import {
 } from '../permissionTaxonomy';
 import { shouldDenyAgentSessionTitleToolCall } from '../codingPromptTitlePermission';
 import { normalizePermissionRequestOwner, type PermissionRequestOwner } from '../permissionRequestOwner';
-import { resolveAgentRequestKind } from '../requestKind';
+import { isHostOccurrenceQuestion, resolveAgentRequestKind } from '../requestKind';
 import { resolveCausalPermissionMode } from '../causalPermissionMode';
 import { isWorkspaceWriteDeniedByRole } from '../workspaceWritePolicy';
 import type { PermissionRequestCoordinatorContext } from '../permissionRequestCoordinator';
-import { resolveMcpToolIdentity, type McpToolPolicyContext } from '@/mcp/runtime/resolveMcpToolIdentity';
+import { prepareMcpToolCatalog, resolveMcpToolIdentity, type McpToolPolicyContext } from '@/mcp/runtime/resolveMcpToolIdentity';
 import { parseAgentPermissionIntentV1Alias } from '@happier-dev/protocol/runtime/permissionIntentV1';
 import { parseSessionPermissionModeAlias } from '@happier-dev/protocol/sessions/metadata/permission-modes';
 import { resolveEffectivePermissionMode } from '@happier-dev/protocol/actions/permissionPrivilege';
@@ -218,6 +219,9 @@ export class ProviderEnforcedPermissionHandler extends BasePermissionHandler {
     input: unknown,
     context?: AcpPermissionCallContext,
   ): PermissionResult | null {
+    // Publishing a host-bound question asks for human input; it grants no tool
+    // authority. Startup has no admitted turn, and must still reach the person.
+    if (isHostOccurrenceQuestion(toolName, context)) return null;
     if (this.isUnlistedToolDenied(toolName, input)) return { decision: 'denied' };
     const effective = resolveCausalPermissionMode({
       currentPermissionMode: this.currentPermissionMode,
@@ -286,6 +290,8 @@ export class ProviderEnforcedPermissionHandler extends BasePermissionHandler {
     owner: PermissionRequestOwner | null,
     context?: AcpPermissionCallContext & Readonly<{ source?: string | null }>,
   ): PermissionResult | null {
+    // A question always needs an answer, never an automatic tool/session grant.
+    if (isHostOccurrenceQuestion(toolName, context)) return null;
     const immediate = this.getImmediateDecision(toolCallId, toolName, input, context);
     if (immediate) return immediate;
 
@@ -326,6 +332,31 @@ export class ProviderEnforcedPermissionHandler extends BasePermissionHandler {
       throw new Error('Permission request aborted');
     }
     const owner = normalizePermissionRequestOwner(options?.owner);
+    const catalogPreparation = prepareMcpToolCatalog({ toolName,
+      context: options?.mcpToolPolicy ? options.mcpToolPolicy.readContext() : this.getMcpToolContext() });
+    if (catalogPreparation) {
+      let abortPreparation!: (error: Error) => void;
+      const cancellation = new Promise<never>((_, reject) => { abortPreparation = reject; });
+      const preparationOwner = resolvePermissionRequestOwner({ owner, causalPermissionContext: options });
+      // Use the existing request cancellation lifetime before waiting on shared work.
+      const request: PendingRequest = { toolName, input,
+        ...(preparationOwner ? { owner: preparationOwner } : {}),
+        ...(options ? { causalPermissionContext: options } : {}),
+        resolve: () => abortPreparation(new Error('Permission request aborted')),
+        reject: abortPreparation };
+      this.pendingRequests.set(toolCallId, request);
+      const onAbort = () => abortPreparation(new Error('Permission request aborted'));
+      options?.signal?.addEventListener('abort', onAbort, { once: true });
+      if (options?.signal?.aborted) onAbort();
+      try {
+        await Promise.race([catalogPreparation, cancellation]);
+        if (this.pendingRequests.get(toolCallId) !== request || options?.signal?.aborted)
+          throw new Error('Permission request aborted');
+      } finally {
+        options?.signal?.removeEventListener('abort', onAbort);
+        if (this.pendingRequests.get(toolCallId) === request) this.pendingRequests.delete(toolCallId);
+      }
+    }
     const source = typeof options?.source === 'string' ? options.source.trim() : '';
     const persistedSource = source || (
       options?.origin === 'host_acp_fs_write'

@@ -11,7 +11,7 @@ describe('resolveCommittedGenerationFromRuntimeAuthRecovery', () => {
     ['superseded_after_apply', true],
   ] as const)('resolves the authoritative %s target', (status, sourceRequiresConvergence) => {
     const resolved = resolveCommittedGenerationFromRuntimeAuthRecovery({
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       groupId: 'group-a',
       recovery: {
         status: 'switch_attempted',
@@ -28,7 +28,7 @@ describe('resolveCommittedGenerationFromRuntimeAuthRecovery', () => {
       committedGeneration: expect.objectContaining({
         provenance: 'hard_limit',
         decisionCommittedTarget: {
-          serviceId: 'openai-codex',
+          serviceId: 'happier.agent.codex/openai-codex',
           groupId: 'group-a',
           profileId: status === 'superseded_after_apply' ? 'profile-c' : 'profile-b',
           generation: status === 'superseded_after_apply' ? 3 : 2,
@@ -43,7 +43,7 @@ describe('resolveCommittedGenerationFromRuntimeAuthRecovery', () => {
     'excludes the source only with exact matching target-adoption proof for %s',
     (status) => {
       const resolved = resolveCommittedGenerationFromRuntimeAuthRecovery({
-        serviceId: 'openai-codex',
+        serviceId: 'happier.agent.codex/openai-codex',
         groupId: 'group-a',
         recovery: {
           status: 'switch_attempted',
@@ -53,13 +53,13 @@ describe('resolveCommittedGenerationFromRuntimeAuthRecovery', () => {
             generation: 2,
             credentialRevision,
             verificationByServiceId: {
-              'openai-codex': {
+              'happier.agent.codex/openai-codex': {
                 status: 'verified',
                 proofStrength: 'exact',
                 providerAccountId: 'provider-account-b',
                 credentialRevision,
                 generationApplication: {
-                  serviceId: 'openai-codex',
+                  serviceId: 'happier.agent.codex/openai-codex',
                   groupId: 'group-a',
                   profileId: 'profile-b',
                   generation: 2,
@@ -80,19 +80,19 @@ describe('resolveCommittedGenerationFromRuntimeAuthRecovery', () => {
     ['weak proof', { status: 'weakly_verified', proofStrength: 'weak', providerAccountId: 'provider-account-b' }],
     ['mismatched target', {
       status: 'verified', proofStrength: 'exact', providerAccountId: 'provider-account-b',
-      generationApplication: { serviceId: 'openai-codex', groupId: 'group-a', profileId: 'profile-other', generation: 2, credentialRevision, credentialFingerprint: 'other' },
+      generationApplication: { serviceId: 'happier.agent.codex/openai-codex', groupId: 'group-a', profileId: 'profile-other', generation: 2, credentialRevision, credentialFingerprint: 'other' },
     }],
   ] as const)('keeps the source when adoption has %s', (_label, verification) => {
     expect(resolveCommittedGenerationFromRuntimeAuthRecovery({
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       groupId: 'group-a',
-      recovery: { status: 'switch_attempted', result: { status: 'switched', activeProfileId: 'profile-b', generation: 2, credentialRevision, verificationByServiceId: { 'openai-codex': verification } } },
+      recovery: { status: 'switch_attempted', result: { status: 'switched', activeProfileId: 'profile-b', generation: 2, credentialRevision, verificationByServiceId: { 'happier.agent.codex/openai-codex': verification } } },
     })?.sourceRequiresConvergence).toBe(true);
   });
 
   it('keeps an omitted predecessor revision unknown', () => {
     const resolved = resolveCommittedGenerationFromRuntimeAuthRecovery({
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       groupId: 'group-a',
       recovery: {
         status: 'switch_attempted',
@@ -109,7 +109,7 @@ describe('resolveCommittedGenerationFromRuntimeAuthRecovery', () => {
 
   it('uses the exact credential revision in the decision identity', () => {
     const resolveRevision = (revision: string) => resolveCommittedGenerationFromRuntimeAuthRecovery({
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       groupId: 'group-a',
       recovery: {
         status: 'switch_attempted',
@@ -136,7 +136,7 @@ describe('resolveCommittedGenerationFromRuntimeAuthRecovery', () => {
     { status: 'switch_attempted', result: { status: 'switched', activeProfileId: 'profile-b', generation: 2, credentialRevision: 'invalid' } },
   ])('fails closed without an authoritative target', (recovery) => {
     expect(resolveCommittedGenerationFromRuntimeAuthRecovery({
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       groupId: 'group-a',
       recovery,
     })).toBeNull();

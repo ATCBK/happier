@@ -3,7 +3,14 @@ import type { DaemonLocallyPersistedState } from '@/persistence';
 import { readDaemonState } from '@/persistence';
 import { logger } from '@/ui/logger';
 import { spawnDetachedDaemonStartSync } from '@/daemon/runtime/spawnDetachedDaemonStartSync';
+import type { DetachedDaemonStartProcess } from '@/daemon/runtime/spawnDetachedDaemonStartSync';
 import { buildDaemonControlHttpHeaders } from '@/daemon/controlHttp';
+import {
+  hasObservableDaemonStartProcessExited,
+  hasObservableDaemonStartProcessRunning,
+  waitForDaemonRunningWithinBudget,
+  type DaemonStartProcessObservation,
+} from '@/daemon/waitForDaemonRunningWithinBudget';
 
 export type RequestDaemonSelfRestartResult =
   | { status: 'exited' }
@@ -12,7 +19,7 @@ export type RequestDaemonSelfRestartResult =
 
 type SpawnDetachedDaemonStartSync = (
   options?: Parameters<typeof spawnDetachedDaemonStartSync>[0],
-) => Promise<{ unref?: () => void }>;
+) => Promise<Partial<DetachedDaemonStartProcess>>;
 type ReadDaemonState = () => Promise<DaemonLocallyPersistedState | null>;
 type ConfirmReplacementDaemonState = (state: DaemonLocallyPersistedState) => Promise<boolean>;
 
@@ -70,6 +77,7 @@ export async function waitForReplacementDaemon(params: Readonly<{
   timeoutMs: number;
   deadlineAtMs?: number;
   pollMs: number;
+  startupProcess?: DaemonStartProcessObservation;
   readDaemonStateImpl?: ReadDaemonState;
   confirmReplacementStateImpl?: ConfirmReplacementDaemonState;
 }>): Promise<boolean> {
@@ -90,33 +98,51 @@ export async function waitForReplacementDaemon(params: Readonly<{
     runtimeId?: string;
     reason: string;
   }> | null = null;
-  while (Date.now() < deadline) {
-    const daemonState = await readDaemonStateImpl();
-    if (daemonState) {
-      const observed = {
-        pid: daemonState.pid,
-        startedWithCliVersion: daemonState.startedWithCliVersion,
-        runtimeId: daemonState.runtimeId,
-      };
-      if (daemonState.pid === ownPid) {
-        lastObserved = { ...observed, reason: 'own_pid' };
-      } else if (normalizedExpectedCliVersion && daemonState.startedWithCliVersion !== normalizedExpectedCliVersion) {
-        lastObserved = { ...observed, reason: 'version_mismatch' };
-      } else if (normalizedExpectedRuntimeId && daemonState.runtimeId !== normalizedExpectedRuntimeId) {
-        lastObserved = { ...observed, reason: 'runtime_mismatch' };
-      } else if (normalizedExpectedRuntimeId && !hasAuthenticatedPingDetails(daemonState)) {
-        lastObserved = { ...observed, reason: 'authenticated_ping_unavailable' };
-      } else if (await confirmReplacementStateImpl(daemonState)) {
-        return true;
-      } else {
-        lastObserved = { ...observed, reason: 'confirmation_failed' };
-      }
-    } else {
-      lastObserved = null;
-    }
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
-  }
-  logger.debug('[DAEMON RUN] Replacement daemon confirmation timed out', {
+  const isStillStarting = () => params.startupProcess !== undefined
+    && hasObservableDaemonStartProcessRunning(params.startupProcess);
+  const replacementConfirmed = (Date.now() < deadline || isStillStarting())
+    && await waitForDaemonRunningWithinBudget({
+      isRunning: async () => {
+        const daemonState = await readDaemonStateImpl();
+        if (daemonState) {
+          const observed = {
+            pid: daemonState.pid,
+            startedWithCliVersion: daemonState.startedWithCliVersion,
+            runtimeId: daemonState.runtimeId,
+          };
+          if (daemonState.pid === ownPid) {
+            lastObserved = { ...observed, reason: 'own_pid' };
+          } else if (normalizedExpectedCliVersion && daemonState.startedWithCliVersion !== normalizedExpectedCliVersion) {
+            lastObserved = { ...observed, reason: 'version_mismatch' };
+          } else if (normalizedExpectedRuntimeId && daemonState.runtimeId !== normalizedExpectedRuntimeId) {
+            lastObserved = { ...observed, reason: 'runtime_mismatch' };
+          } else if (normalizedExpectedRuntimeId && !hasAuthenticatedPingDetails(daemonState)) {
+            lastObserved = { ...observed, reason: 'authenticated_ping_unavailable' };
+          } else if (await confirmReplacementStateImpl(daemonState)) {
+            return true;
+          } else {
+            lastObserved = { ...observed, reason: 'confirmation_failed' };
+          }
+        } else {
+          lastObserved = null;
+        }
+        return false;
+      },
+      shouldAbort: () => (
+        lastObserved?.pid === (params.startupProcess?.detachedDaemonPid ?? params.startupProcess?.pid)
+        && (lastObserved?.reason === 'version_mismatch' || lastObserved?.reason === 'runtime_mismatch')
+      ) || (
+        params.startupProcess !== undefined
+        && hasObservableDaemonStartProcessExited(params.startupProcess)
+      ),
+      isStillStarting,
+      onStillStarting: () => logger.debug('[DAEMON RUN] Replacement daemon is still starting; waiting for authenticated readiness'),
+      timeoutMs,
+      initialTimeoutMs: Math.max(0, deadline - Date.now()),
+      pollMs,
+    });
+  if (replacementConfirmed) return true;
+  logger.debug('[DAEMON RUN] Replacement daemon confirmation ended without authenticated readiness', {
     expectedCliVersion: normalizedExpectedCliVersion || undefined,
     expectedRuntimeId: normalizedExpectedRuntimeId || undefined,
     lastObserved,
@@ -161,7 +187,7 @@ export async function requestDaemonSelfRestart(params: Readonly<{
     ...(takeover ? { HAPPIER_DAEMON_TAKEOVER: '1' } : {}),
   };
 
-  let spawned: { unref?: () => void } | null = null;
+  let spawned: Partial<DetachedDaemonStartProcess>;
   try {
     spawned = await spawnDetachedDaemonStartSyncImpl({
       startupSource: 'self-restart',
@@ -180,11 +206,12 @@ export async function requestDaemonSelfRestart(params: Readonly<{
     timeoutMs,
     ...(params.deadlineAtMs === undefined ? {} : { deadlineAtMs: params.deadlineAtMs }),
     pollMs,
+    startupProcess: spawned,
     readDaemonStateImpl,
     confirmReplacementStateImpl,
   });
   if (!replacementConfirmed) {
-    logger.debug('[DAEMON RUN] Replacement daemon was not confirmed before timeout. Keeping current daemon alive.');
+    logger.debug('[DAEMON RUN] Replacement daemon was not confirmed. Keeping current daemon alive.');
     return { status: 'replacement_not_confirmed' };
   }
 

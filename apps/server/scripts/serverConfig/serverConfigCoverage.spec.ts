@@ -60,6 +60,52 @@ describe('checkServerConfigCoverage', () => {
         expect(report.unresolved.map((item) => [item.expression, item.line])).toEqual([['env[IMPORTED_KEY_CONSTANT]', 2]]);
     });
 
+    it('ignores embedded JavaScript data while checking executable reads in the same generated file', () => {
+        const report = checkServerConfigCoverage({
+            registry: FIXTURE_REGISTRY,
+            indirection: { featureEnvKeys: {}, constants: {} },
+            files: [{
+                file: 'publicShareViewerBundle.generated.ts',
+                source: [
+                    `export const bundle = ${JSON.stringify('process.env.NODE_DEBUG; env[EMBEDDED_KEY]; "HAPPIER_EMBEDDED_KEY";')};`,
+                    "const example = 'process.env.HAPPIER_DATA_ONLY';",
+                    'const template = `process.env.NODE_DEBUG ${process.env.TEMPLATE_READ}`;',
+                    'const actual = process.env.ACTUAL_READ;',
+                    'const indexed = env["INDEXED_READ"];',
+                    'const helper = readTrimmed(env, "HELPER_READ");',
+                    'const key = "HAPPIER_LITERAL_KEY";',
+                    'const unresolved = env[UNKNOWN_KEY];',
+                ].join('\n'),
+            }],
+        });
+        expect(report.undeclared.map((read) => [read.name, read.line])).toEqual([
+            ['TEMPLATE_READ', 3],
+            ['ACTUAL_READ', 4],
+            ['INDEXED_READ', 5],
+            ['HELPER_READ', 6],
+            ['HAPPIER_LITERAL_KEY', 7],
+        ]);
+        expect(report.unresolved.map((item) => [item.expression, item.line])).toEqual([['env[UNKNOWN_KEY]', 8]]);
+    });
+
+    it('keeps executable env reads separated by comments', () => {
+        const report = checkServerConfigCoverage({
+            registry: FIXTURE_REGISTRY,
+            indirection: { featureEnvKeys: {}, constants: {} },
+            files: [{ file: 'comments.ts', source: [
+                'const actual = process.env /* note */ .ACTUAL_READ;',
+                'const indexed = env[ /* note */ "INDEXED_READ"];',
+                'const helper = readTrimmed(env, /* note */ "HELPER_READ");',
+            ].join('\n') }],
+        });
+        expect(report.undeclared.map((read) => [read.name, read.line])).toEqual([
+            ['ACTUAL_READ', 1],
+            ['INDEXED_READ', 2],
+            ['HELPER_READ', 3],
+        ]);
+        expect(report.unresolved).toEqual([]);
+    });
+
     it('finds every env key server source reads in the registry', () => {
         const report = checkServerConfigCoverage({
             registry: SERVER_CONFIG_REGISTRY,

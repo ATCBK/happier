@@ -93,7 +93,9 @@ describe('Project Changes destination', () => {
         expect(picker().props.current).toMatchObject({ kind: 'turnCheckpoint', turnId: 'turn-s2' });
         expect(picker().props.options.some((option: { evidenceSessionId?: string }) => option.evidenceSessionId === 's2')).toBe(false);
         expect(fixture.requests.filter(request => request.method === 'scm.diffSummary.capture')).toHaveLength(captures);
-        expect(screen.findByTestId('scm-comparison-start-review')?.props.disabled).toBe(true);
+        const { SourceControlUnavailableState } = await import('@/components/workspaces/scm/states/SourceControlUnavailableState');
+        expect(screen.findAllByType(SourceControlUnavailableState)).toHaveLength(1);
+        expect(screen.findByTestId('scm-comparison-start-review')).toBeNull();
     });
     it('restores the chosen file after Git and page/companion remount without accepting hidden-list scroll requests', async () => {
         const entries = ['src/a.ts', 'src/b.ts'].map((path) => ({ path, previousPath: null, kind: 'modified' as const,

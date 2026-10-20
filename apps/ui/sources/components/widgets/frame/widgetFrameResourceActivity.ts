@@ -4,6 +4,11 @@ import type { PluginUiResourceEntry, PluginUiResourceStore } from '@happier-dev/
 // Header projection only: Resource stores remain the owners of pending work and cancellation.
 export const WidgetFrameResourceActivityContext = React.createContext<((key: symbol, refreshing: boolean) => void) | null>(null);
 
+/** Background work with an admitted result stays quiet; an explicit Retry may speak. */
+export function isWidgetResourceQuietRefresh(hasResult: boolean, retrying = false): boolean {
+    return hasResult && !retrying;
+}
+
 /** Lend the actual body's Resource pending fact to its nearest shared frame, without another read. */
 export function useWidgetFrameResourceActivity(refreshing: boolean): void {
     const report = React.useContext(WidgetFrameResourceActivityContext);

@@ -1,4 +1,5 @@
 import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaqueIdentifier';
+import { readRunScopedExecutionPermissionRequestIdentity } from '@happier-dev/protocol/execution/runs/runPrimitives';
 import {
     NO_SESSION_AGENT_ACTIVITY_ATTENTION,
     SESSION_AGENT_ACTIVITY_ATTENTION_KINDS,
@@ -37,6 +38,7 @@ type SidechainMessageLike = Readonly<{
 
 type PermissionStateLike = Readonly<{
     status?: string | null;
+    kind?: string | null;
 }> | null;
 
 type SidechainStateLike = Readonly<{
@@ -160,12 +162,23 @@ type PendingPromptScanParams = Readonly<{
 function scanPendingPrompts(params: PendingPromptScanParams): PendingPromptMap {
     const found: PendingPromptMap = new Map();
 
+    // Startup prompts precede a child turn and live in the parent Session's request table,
+    // not its sidechain. The producer's identity binds them to exactly this Run.
+    if (params.subagent.kind === 'execution_run' && params.subagent.runRef) {
+        for (const [id, state] of params.reducerState?.permissions ?? []) {
+            if (readRunScopedExecutionPermissionRequestIdentity(id)?.runId !== params.subagent.runRef.runId) continue;
+            const permission = { ...state, id };
+            const kind = readPendingAttentionKind({ permission, reducerState: params.reducerState });
+            if (kind) recordPending(found, permission, kind);
+        }
+    }
+
     const sidechainId = readNonBlankOpaqueIdentifier(params.subagent.transcript.sidechainId);
     const sidechainMessages = sidechainId ? params.reducerState?.sidechains?.get(sidechainId) : null;
 
     if (Array.isArray(sidechainMessages) && sidechainMessages.length > 0) {
-        // The loaded sidechain is the complete record for this subagent, so it answers on its own —
-        // walking the parent transcript as well would double-count a prompt already seen here.
+        // Sidechain prompts complement the parent-owned startup requests above. Walking the
+        // parent tool children as well would double-count the sidechain's own prompts.
         for (const sidechainMessage of sidechainMessages) {
             const permission = sidechainMessage?.tool?.permission ?? null;
             const kind = readPendingAttentionKind({

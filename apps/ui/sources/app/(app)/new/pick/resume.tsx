@@ -20,6 +20,8 @@ import { readBackendNewSessionOptionStateByTargetKey } from '@/utils/sessions/ba
 import { peekTempData, type NewSessionData } from '@/utils/sessions/tempDataStore';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { useSettings } from '@/sync/domains/state/storage';
+import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import { getConnectedMetadataCatalog } from '@/sync/store/settings/connectedMetadataCatalogSnapshot';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { useProfile as useAccountProfile } from '@/sync/store/hooks';
 import type { PersistedBackendTargetRefV2 } from '@happier-dev/protocol';
@@ -260,12 +262,16 @@ export default function ResumePickerScreen() {
                     enabled: true,
                     onBrowse: async () => {
                         if (!effectiveMachineId || !operationalAgentId) return null;
+                        const accountScope = getActiveServerAccountScope();
                         const source = resolveExternalSessionBrowseLockedSource({
+                            accountScope,
+                            serverId: effectiveServerId,
                             providerId: operationalAgentId,
                             machineId: effectiveMachineId,
                             agentOptionState,
                             profile: accountProfile,
-                            settings,
+                            agentSettings: settings,
+                            labelsByKey: getConnectedMetadataCatalog(accountScope).labelsByKey,
                             projection: daemonMergedProjectionInputs?.pluginProjectionV2,
                             interaction: 'pickRemoteSessionId',
                         });

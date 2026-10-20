@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { usePluginHostApi, usePluginTranslation } from '@happier-dev/plugin-ui';
+import { isPluginError } from '@happier-dev/plugin-sdk';
+import { usePluginHostApi, usePluginHostReadiness, usePluginTranslation } from '@happier-dev/plugin-ui';
 
 import type { TriageListLoadMoreV1 } from '../../projection/listWindowStore.js';
 import type { TriageListDisplayRowV1 } from './pinnedRows.js';
@@ -114,6 +115,7 @@ function noticeFor(
 export function useTriagePinnedEntries(): TriageMountedPinsV1 {
   const hostApi = usePluginHostApi();
   const durable = useTriageDurableAccount();
+  const readiness = usePluginHostReadiness(durable.collections === null);
   const text = usePluginTranslation();
   // One owner, two transports. Direct Account Collections when this mount can
   // reach the Account — which is what keeps Pin working while no daemon is —
@@ -121,7 +123,7 @@ export function useTriagePinnedEntries(): TriageMountedPinsV1 {
   // which one it got.
   const transport = useMemo<TriageMarksTransportV1>(
     () => durable.collections
-      ? createDirectTriageMarksTransport(durable.collections)
+      ? createDirectTriageMarksTransport(durable.collections, hostApi)
       : createActionTriageMarksTransport(hostApi),
     [durable.collections, hostApi],
   );
@@ -212,10 +214,11 @@ export function useTriagePinnedEntries(): TriageMountedPinsV1 {
   }, [text, transport]);
 
   useEffect(() => {
+    if (readiness.pending) return;
     const controller = new AbortController();
     void read(controller.signal, demand);
     return () => { controller.abort(); };
-  }, [demand, read]);
+  }, [demand, read, readiness.pending, readiness.revision]);
 
   const loadMorePins = useCallback((): void => {
     if (reading) return;
@@ -242,12 +245,17 @@ export function useTriagePinnedEntries(): TriageMountedPinsV1 {
     void (async () => {
       try {
         const result = await transport.write(intentFor(row), { signal: controller.signal });
+        if (result === null) return;
         setNotice(noticeFor(result.status, text));
         // Re-read at the depth the reader has already loaded, not the newest
         // page alone: unpinning from a deeper page must not fold the section
         // back to its first one.
         await read(controller.signal, { ...demand, appending: false });
-      } catch {
+      } catch (error) {
+        if (isPluginError(error) && error.code === 'denied') {
+          setNotice({ tone: 'warning', message: text('happier.plugin-ui.action.error.denied', 'This isn’t allowed here.') });
+          return;
+        }
         setUnavailableReason(text('plugins.triage.surface.pin.unavailable', UNAVAILABLE_REASON));
       } finally {
         setBusyKey(null);
@@ -270,10 +278,10 @@ export function useTriagePinnedEntries(): TriageMountedPinsV1 {
    * it: a row can never offer a press its owner refuses.
    */
   const loadMore = useMemo<TriageListLoadMoreV1>(() => {
-    if (reading) return Object.freeze({ kind: 'loading' });
+    if (reading || readiness.pending) return Object.freeze({ kind: 'loading' });
     if (appendFailed) return Object.freeze({ kind: 'failed' });
     return more ? Object.freeze({ kind: 'available' }) : Object.freeze({ kind: 'exhausted' });
-  }, [appendFailed, more, reading]);
+  }, [appendFailed, more, reading, readiness.pending]);
 
   return useMemo(() => Object.freeze({
     pins,
@@ -281,9 +289,9 @@ export function useTriagePinnedEntries(): TriageMountedPinsV1 {
     loadMore,
     loadMorePins,
     busyKey,
-    unavailableReason,
+    unavailableReason: readiness.pending ? null : unavailableReason,
     notice,
     setPinned,
     retry,
-  }), [busyKey, loadMore, loadMorePins, more, notice, pins, retry, setPinned, unavailableReason]);
+  }), [busyKey, loadMore, loadMorePins, more, notice, pins, retry, setPinned, unavailableReason, readiness.pending]);
 }

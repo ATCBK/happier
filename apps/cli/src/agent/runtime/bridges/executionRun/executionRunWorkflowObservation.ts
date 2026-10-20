@@ -10,6 +10,12 @@ import { appendExecutionRunControllerHostBarrier } from '@/agent/executionRuns/c
 
 export type ExecutionRunWorkflowObservation =
   | Readonly<{
+      kind: 'project_setup';
+      runId: string;
+      localInputId: string;
+      operation: import('@happier-dev/protocol/actions').ActionOperationSnapshotV1;
+    }>
+  | Readonly<{
       kind: 'input_accepted';
       runId: string;
       localInputId: string;

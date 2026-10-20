@@ -314,15 +314,20 @@ export async function resolveWorkflowWorkspace(input: Readonly<{
   recorded?: Readonly<{ creationIntent?: WorkflowWorkspaceCreationIntent; workspace?: WorkflowWorkspaceDescriptor }>;
   deps: Dependencies;
 }>): Promise<WorkflowWorkspaceResolution> {
+  // A reused Session's authenticated cwd is already on its own Machine. It
+  // grants no remote filesystem operations or worktree creation to this Run.
+  const remoteSessionWorkspace = input.selection.kind === 'inherit' && input.conversationWorkspace
+    && input.conversationWorkspace.machineId !== input.projectWorkspace.machineId
+    ? input.conversationWorkspace : undefined;
   if (input.recorded?.workspace) {
-    const verification = await input.deps.verifyRecordedWorkspace?.(
+    if (input.conversationWorkspace && !sameWorkspace(input.conversationWorkspace, input.recorded.workspace)) {
+      return { ok: false, code: 'conversation_workspace_mismatch' };
+    }
+    const verification = remoteSessionWorkspace ? 'available' : await input.deps.verifyRecordedWorkspace?.(
       input.recorded.workspace,
       input.recorded.creationIntent,
     ) ?? 'available';
     if (verification !== 'available') return { ok: false, code: verification === 'missing' ? 'workspace_unavailable' : 'workspace_conflict' };
-    if (input.conversationWorkspace && !sameWorkspace(input.conversationWorkspace, input.recorded.workspace)) {
-      return { ok: false, code: 'conversation_workspace_mismatch' };
-    }
     return { ok: true, workspace: input.recorded.workspace };
   }
 
@@ -351,11 +356,13 @@ export async function resolveWorkflowWorkspace(input: Readonly<{
   }
   const sourceWorkspace = source.descriptor;
 
-  if (sourceWorkspace.machineId !== input.projectWorkspace.machineId) {
+  if (sourceWorkspace.machineId !== input.projectWorkspace.machineId
+    && (!remoteSessionWorkspace || !sameWorkspace(remoteSessionWorkspace, sourceWorkspace) || selection.kind === 'new_worktree')) {
     return { ok: false, code: 'workspace_conflict' };
   }
 
-  const sourceVerification = await input.deps.verifyRecordedWorkspace?.(sourceWorkspace, source.creationIntent) ?? 'available';
+  const sourceVerification = remoteSessionWorkspace ? 'available'
+    : await input.deps.verifyRecordedWorkspace?.(sourceWorkspace, source.creationIntent) ?? 'available';
   if (sourceVerification !== 'available') {
     return {
       ok: false,
@@ -426,6 +433,9 @@ export function createCoordinatorWorkspaceResolver(input: Readonly<{
     const selection: WorkflowWorkspaceSelection = params.step.execution?.workspace ?? { kind: 'inherit' };
     const defaultSelection: WorkflowWorkspaceSelection = params.definition.defaults.workspace ?? { kind: 'project_checkout' };
     const frameProject = params.invocation.blockKind === 'workflow';
+    const conversationWorkspace = params.conversationWorkspace
+      ?? ((params.invocation.execution?.kind === 'session' || params.invocation.execution?.kind === 'session_ready')
+        ? params.invocation.workspace?.descriptor : undefined);
     const workspaceProgress = (owner: WorkflowCoordinatorInvocation, selectedProject: boolean) => selectedProject
       ? owner.container?.kind === 'body' ? owner.container.frameProjectWorkspace : undefined
       : owner.workspace;
@@ -498,13 +508,13 @@ export function createCoordinatorWorkspaceResolver(input: Readonly<{
     // A leaf's recorded correspondence is exact, even if its lazy default or
     // producer has since changed. Known missing paths are never rematerialized.
     if (workspaceProgress(params.invocation, frameProject)?.descriptor) {
-      return await resolveForOwner(params.invocation, selection, defaultSelection, {}, params.conversationWorkspace, frameProject);
+      return await resolveForOwner(params.invocation, selection, defaultSelection, {}, conversationWorkspace, frameProject);
     }
-    if (selection.kind === 'new_worktree' && params.conversationWorkspace) {
+    if (selection.kind === 'new_worktree' && conversationWorkspace) {
       return { ok: false, code: 'conversation_workspace_mismatch' };
     }
 
-    if (selection.kind === 'inherit' && params.useConversationWorkspace && params.conversationWorkspace) {
+    if (selection.kind === 'inherit' && params.useConversationWorkspace && conversationWorkspace) {
       const conversation = params.step.execution?.conversation ?? params.definition.defaults.conversation;
       let source: WorkflowWorkspaceSource;
       if (conversation?.kind === 'from_step') {
@@ -519,15 +529,19 @@ export function createCoordinatorWorkspaceResolver(input: Readonly<{
         source = { descriptor: record.workspace.descriptor,
           ...(record.workspace.creationIntent ? { creationIntent: record.workspace.creationIntent } : {}) };
       } else {
-        const directory = params.conversationWorkspace.directory;
-        const inspected = await (input.scm?.inspectLocation ?? inspectWorkspaceLocationWithScmWorkspace)({ candidatePath: directory });
+        const directory = conversationWorkspace.directory;
+        // Remote reuse retains only the Session's cwd. The cwd is the
+        // descriptor's scope; no coordinator-side SCM root is inferred.
+        const inspected = conversationWorkspace.machineId === input.projectWorkspace.machineId
+          ? await (input.scm?.inspectLocation ?? inspectWorkspaceLocationWithScmWorkspace)({ candidatePath: directory })
+          : null;
         const checkoutRootPath = inspected?.inspection.rootPath ?? directory;
         source = { descriptor: {
-          machineId: params.conversationWorkspace.machineId, directory, checkoutRootPath,
+          machineId: conversationWorkspace.machineId, directory, checkoutRootPath,
         } };
       }
       return await resolveForOwner(params.invocation, selection, { kind: 'project_checkout' },
-        { inheritedWorkspace: source }, params.conversationWorkspace, frameProject);
+        { inheritedWorkspace: source }, conversationWorkspace, frameProject);
     }
 
     const needsDefault = defaultSelection.kind === 'new_worktree' && (
@@ -540,7 +554,7 @@ export function createCoordinatorWorkspaceResolver(input: Readonly<{
       const owner = await input.store.read(params.defaultWorkspaceOwner?.key ?? rootKey);
       if (!owner) return { ok: false, code: 'workspace_unavailable' };
       const resolved = await resolveForOwner(owner, defaultSelection, { kind: 'project_checkout' }, {},
-        selection.kind === 'inherit' ? params.conversationWorkspace : undefined);
+        selection.kind === 'inherit' ? conversationWorkspace : undefined);
       if (!resolved.ok) return resolved;
       const recorded = await input.store.read(owner.key);
       workflowWorkspace = {
@@ -553,6 +567,6 @@ export function createCoordinatorWorkspaceResolver(input: Readonly<{
       {
         ...(workflowWorkspace ? { workflowWorkspace } : {}),
         ...(workflowWorkspace && selection.kind === 'inherit' ? { inheritedWorkspace: workflowWorkspace } : {}),
-      }, params.conversationWorkspace, frameProject);
+      }, conversationWorkspace, frameProject);
   };
 }

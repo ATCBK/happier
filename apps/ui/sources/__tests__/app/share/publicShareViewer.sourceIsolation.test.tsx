@@ -3,6 +3,9 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { createDeferred, createSessionFixture, createSessionMessagesFixture, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installShippedNativeFrameScheduler } from '@/dev/testkit/legend/shippedNativeLegendRuntime';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
@@ -34,7 +37,7 @@ await initializeAuthRouteRuntimeForTests();
 
 // The installed Legend web build owns its div refs. jsdom supplies DOM behavior,
 // while this OS/layout boundary supplies the geometry a headless renderer lacks.
-function createMeasuredWebNode(element: React.ReactElement): HTMLElement {
+function createMeasuredWebNode(element: Parameters<NonNullable<NonNullable<Parameters<typeof renderScreen>[1]>['createNodeMock']>>[0]): HTMLElement {
     const node = document.createElement('div');
     const props = element.props as { style?: React.CSSProperties };
     const style = props.style;

@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { CollectionDraftTitleScope, useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
+
 import { createProviderErrorV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -157,6 +159,12 @@ const [{ Item }, { Switch }, { ShimmerView }] = await Promise.all([
     import('@/components/ui/lists/Item'), import('@/components/ui/forms/Switch'),
     import('@/components/ui/feedback/ShimmerView'),
 ]);
+
+function DraftTitlePublisher(props: Readonly<{ title: string }>) {
+    const titles = useCollectionDraftTitle();
+    React.useEffect(() => { titles.publish(props.title); }, [props.title, titles]);
+    return null;
+}
 
 describe('ProviderConnectionsSettingsScreen', () => {
     afterEach(async () => {
@@ -858,13 +866,13 @@ describe('ProviderConnectionsSettingsScreen', () => {
     it('shows the new provider as a selected draft row while its editor is open', async () => {
         navigationState.pathname = '/settings/providers/new';
         const { ProviderConnectionsSettingsScreen } = await import('./ProviderConnectionsSettingsScreen');
-        const { publishProviderDraftTitle } = await import('./collection/providerDraftTitle');
-        const screen = await renderScreen(<ProviderConnectionsSettingsScreen variant="rail" />);
+        const element = (title: string) => <CollectionDraftTitleScope><DraftTitlePublisher title={title} />
+            <ProviderConnectionsSettingsScreen variant="rail" /></CollectionDraftTitleScope>;
+        const screen = await renderScreen(element(''));
         expect(screen.findAllByType(Item).find((item) => item.props.testID === 'settings-providers-draft')?.props.title).toBe('settingsProvidersCollection.newTitle');
-        await React.act(async () => { publishProviderDraftTitle('Company gateway'); });
+        await screen.update(element('Company gateway'));
         expect(screen.findAllByType(Item).find((item) => item.props.testID === 'settings-providers-draft')?.props.title).toBe('Company gateway');
         expect(screen.findAllByType(Item).find((item) => item.props.testID === 'settings-providers-draft')?.props.selected).toBe(true);
-        await React.act(async () => { publishProviderDraftTitle(''); });
     });
 
     it('keeps collection rows to identity and state: no switch beside a connection', async () => {

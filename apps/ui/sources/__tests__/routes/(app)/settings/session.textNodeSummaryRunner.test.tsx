@@ -3,15 +3,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
     collectUnexpectedRawTextNodes,
 } from '@/dev/testkit/render/renderScreen';
-import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { renderScreen as renderBaseScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit';
-import { createStorageModuleMock } from '@/dev/testkit/mocks/storage';
+import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { LlmTaskRunnerConfigV1BackendModelPicker } from '@/components/settings/llmTasks/LlmTaskRunnerConfigV1BackendModelPicker';
 import {
     installSessionSettingsEntryModuleMocks,
     resetSessionSettingsEntryState,
     sessionSettingsEntryState,
 } from './sessionSettingsEntryTestHelpers';
-import { createUseSettingMock } from '@/dev/testkit/mocks/storage';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -51,8 +53,12 @@ installSessionSettingsEntryModuleMocks({
             },
         });
     },
-    featureEnabled: (featureId) => featureId === 'execution.runs',
 });
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary();
+let account: Awaited<ReturnType<typeof createSecretSettingsTestHarness>> | undefined;
 
 vi.mock('expo-clipboard', () => ({
     setStringAsync: vi.fn(async () => {}),
@@ -62,43 +68,8 @@ vi.mock('@/agents/hooks/useEnabledAgentIds', () => ({
     useEnabledAgentIds: () => ['claude'],
 }));
 
-vi.mock('@/agents/catalog/catalog', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/agents/catalog/catalog')>()),
-    DEFAULT_AGENT_ID: 'claude',
-    isBundledAgentId: (value: unknown) => value === 'claude',
-    getAgentCore: () => ({ displayNameKey: 'agents.claude.displayName' }),
-}));
-
-vi.mock('@/sync/store/hooks', () => ({
-    useAllMachines: () => [],
-    useLocalSetting: () => 1,
-}));
-
 vi.mock('@/components/settings/pickers/resolvePreferredMachineId', () => ({
     resolvePreferredMachineId: () => null,
-}));
-
-vi.mock('@/sync/domains/state/storage', async (importOriginal) => await createStorageModuleMock({
-    importOriginal,
-    overrides: {
-        useSettingMutable: (key: string) => [
-            key in sessionSettingsEntryState.settingsState ? sessionSettingsEntryState.settingsState[key] : null,
-            (next: any) => {
-                sessionSettingsEntryState.settingsState[key] = next;
-            },
-        ] as any,
-        useLocalSettingMutable: (key: string) => [
-            key in sessionSettingsEntryState.settingsState ? sessionSettingsEntryState.settingsState[key] : null,
-            (next: any) => {
-                sessionSettingsEntryState.settingsState[key] = next;
-            },
-        ] as any,
-        useSetting: createUseSettingMock({ fallback: () => null }),
-    },
-}));
-
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot: () => ({ serverId: 'server-a' }),
 }));
 
 vi.mock('@/components/sessions/new/hooks/screenModel/useNewSessionPreflightModelsState', () => ({
@@ -108,14 +79,12 @@ vi.mock('@/components/sessions/new/hooks/screenModel/useNewSessionPreflightModel
     }),
 }));
 
-vi.mock('@/utils/system/fireAndForget', () => ({
-    fireAndForget: (promise: unknown) => promise,
-}));
-
 sessionSettingsEntryState.settingsState = settingsState;
 
-afterEach(() => {
-    standardCleanup();
+afterEach(async () => {
+    await standardCleanup();
+    await account?.dispose();
+    account = undefined;
     resetSessionSettingsEntryState();
 });
 
@@ -124,7 +93,11 @@ describe('Session resume settings (summary runner text-node guard)', () => {
         const mod = await import('@/app/(app)/settings/session/resume');
         const SessionResumeSettingsScreen = mod.default;
 
-        const screen = await renderScreen(React.createElement(SessionResumeSettingsScreen));
+        account = await createSecretSettingsTestHarness({ settings: settingsParse({
+            ...settingsState, experiments: true, featureToggles: { 'execution.runs': true },
+        }), sharedEnabled: false });
+        const screen = await renderBaseScreen(React.createElement(SessionResumeSettingsScreen));
+        expect(screen.findAllByType(LlmTaskRunnerConfigV1BackendModelPicker)).toHaveLength(1);
         const badNodes = collectUnexpectedRawTextNodes(screen.tree.toJSON());
         expect(badNodes).toEqual([]);
     });

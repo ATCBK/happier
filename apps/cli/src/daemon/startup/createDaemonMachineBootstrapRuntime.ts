@@ -9,10 +9,10 @@ import type { ConnectedServiceQuotasLoopHandle } from '../connectedServices/quot
 import type { MachineLiveStreamControlLeaseV1, WorkspaceSyncRuntimeReadinessV1, WorkspaceSyncStatusV1 } from '@happier-dev/protocol';
 import { doesRunnerBrokerReadinessResponseMatchRequestV1 } from '@happier-dev/protocol/teams/credentials/readinessV1';
 import { logger } from '@/ui/logger';
-import { startAutomationWorker, type AutomationWorkerHandle } from '../automation/automationWorker';
-import { startMemoryWorker, type MemoryWorkerHandle } from '../memory/memoryWorker';
-import { startVoiceInferenceWorker, type VoiceInferenceWorkerHandle } from '../voiceInference/voiceInferenceWorker';
-import { createDaemonPublicVoiceModelPackRuntime, type DaemonPublicVoiceModelPackRuntime } from '../voiceInference/publicModelPacks/runtime';
+import type { AutomationWorkerHandle, startAutomationWorker } from '../automation/automationWorker';
+import type { MemoryWorkerHandle } from '../memory/memoryWorker';
+import type { VoiceInferenceWorkerHandle } from '../voiceInference/voiceInferenceWorker';
+import type { DaemonPublicVoiceModelPackRuntime } from '../voiceInference/publicModelPacks/runtime';
 import { resolveVoiceInferencePaths } from '../voiceInference/voiceInferencePaths';
 import { configuration } from '@/configuration';
 import { watchLastCliUpdateResult } from '@happier-dev/cli-common/firstPartyRuntime';
@@ -23,7 +23,7 @@ import {
   type MachineLiveStreamCaptureRegistry,
 } from '../peer/mediation/stream';
 import type { DaemonPeerMediationObservabilityEmitter } from '../peer/mediation/observability/events';
-import { readStoredCredentialsForServerId, sameStoredCredentials, type StoredCredentials } from '@/persistence';
+import type { StoredCredentials } from '@/persistence';
 import type { NormalizedLocalServiceInventorySnapshot } from '../local/services/inventory/scanner';
 import type { LocalServicesDaemonRuntime } from '../local/services/runtime';
 import type { MachineResourceSummary } from '../resources/machineResourceSummary';
@@ -37,10 +37,9 @@ import type {
   ExternalSessionHostOperationSet,
 } from '@/session/external/hostOperationOwner';
 import type { DeviceLocalSecretStorage } from '../deviceLocalSecretStorage';
-import { MemorySettingsSecretsUnavailableError } from '@/settings/memorySettings';
+import { MemorySettingsSecretsUnavailableError } from '@/settings/memorySettingsErrors';
 import type { DaemonSessionMutationCustody } from '../connectedServices/usageLimitRecovery/createDaemonUsageLimitRecoveryMutationCustody';
 import type { ExternalActionIngressOwner } from '@/rpc/handlers/externalAction';
-import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
 import type { WorkspaceSyncHandoffAdapter } from '@/workspaces/sync/workspaceSyncHandoffAdapter';
 import type { createProductionWorkflowRunCoordinator } from '@/daemon/workflows/production';
 import type { WorkflowRecoveryTrigger } from '@/daemon/workflows/recovery';
@@ -53,15 +52,13 @@ import type { DirectRouteGrantTrustRoot } from '../peer/mediation/verifyDirectRo
 import type { ManagedActivityRpcOwner } from '@/api/machine/rpcHandlers.managedActivity';
 import type { RpcHandlerContext } from '@/api/rpc/types';
 import type { ProjectFiniteActionRuntime } from '@/workspaces/projectSetup/projectFiniteAction';
-import { ProjectDefinitionInspectOutputSchema } from '@happier-dev/protocol/actions/projectDefinitionActionFamily';
-import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
-import { buildActionExecutorContextForRpc } from '@/rpc/handlers/_actionDispatchAdapter';
 import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { createMachineSkillHostService, resolveMachineSkillInstallTarget } from '@/prompts/skills/machineInstall/machineSkillHost';
 import { readInstallationIdentityIfExistsSync } from '../identity/store';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import type { RequesterWorkAttributionV1 } from '../lifecycle/requesterWorkAttribution';
-import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
+import type { prepareRequesterSessionBootstrap } from '../sessionEncryption/requesterSessionCredentials';
+import { readRequesterHomeWithinActionLifetime } from '../sessionEncryption/requesterCurrentness';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
 /** The installed host's passive source Action composition; it never reads a remote OS path. */
 export function createProjectFiniteSourceManifestInspector(params: Readonly<{
@@ -74,6 +71,15 @@ export function createProjectFiniteSourceManifestInspector(params: Readonly<{
   isCurrent(): Promise<boolean>;
 }>): NonNullable<ProjectFiniteActionRuntime['inspectSourceProjectManifest']> {
   return async ({ source, signal }) => {
+    const [
+      { isServerProfileHomeIdentity, resolveServerProfileHomeIdentityId },
+      { ProjectDefinitionInspectOutputSchema },
+      { buildActionExecutorContextForRpc },
+    ] = await Promise.all([
+      import('@/server/serverProfiles'),
+      import('@happier-dev/protocol/actions/projectDefinitionActionFamily'),
+      import('@/rpc/handlers/_actionDispatchAdapter'),
+    ]);
     const sourceSignal = AbortSignal.any([params.ingress.signal, signal]);
     const assertSourceCurrent = async () => {
       if (sourceSignal.aborted) throw Object.assign(new Error('cancelled'), { code: 'cancelled' });
@@ -97,9 +103,12 @@ export function createProjectFiniteSourceManifestInspector(params: Readonly<{
       }
     };
     await assertSourceCustody();
+    const serverIdentityId = await resolveServerProfileHomeIdentityId(params.serverId);
+    const { createCliActionExecutorFromCredentials } = await import('@/session/actions/createCliActionExecutorFromCredentials');
     const executor = createCliActionExecutorFromCredentials({
       credentials: params.credentials, serverId: params.serverId,
       serverApiUrl: params.serverHttpBaseUrl, machineId: source.machineId,
+      ...(serverIdentityId ? { serverIdentityId } : {}),
       pluginActionExecutionOwner: 'current_process',
       readCredentials: async () => { await assertSourceCurrent(); return params.credentials; },
     });
@@ -153,12 +162,14 @@ type MachineSyncRuntime = Parameters<typeof startDaemonMachineRegistration>[0]['
 export function createDaemonMachineBootstrapRuntime(
   params: Readonly<{
     api: ApiClient;
+    controlPort: number;
     credentials: StoredCredentials;
     requesterServerId?: BootstrapRuntime['requesterServerId'];
     resolveCurrentMachineExecutionOriginContext?: BootstrapRuntime['resolveCurrentMachineExecutionOriginContext'];
     resolveRequesterSessionRuntimeContext?: BootstrapRuntime['resolveRequesterSessionRuntimeContext'];
     readRequesterSessionCredentialBindings?: BootstrapRuntime['readRequesterSessionCredentialBindings'];
     releaseRequesterSessionRuntimeContext?: BootstrapRuntime['releaseRequesterSessionRuntimeContext'];
+    dispatchSessionFollowOccurrence?: BootstrapRuntime['dispatchSessionFollowOccurrence'];
     stopRequesterSessionForHandoff?: (sessionId: string, expectedSpawnNonce: string) => Promise<'stopped' | 'already_inactive' | 'failed'>;
     daemonSessionMutationCustody?: DaemonSessionMutationCustody;
     deviceLocalSecretStorage?: DeviceLocalSecretStorage;
@@ -189,6 +200,7 @@ export function createDaemonMachineBootstrapRuntime(
       attachApiMachine: (connectedApiMachine: NonNullable<MachineSyncRuntime['apiMachine']>) => Promise<void>;
     }> | null;
     spawnSession: BootstrapRuntime['spawnSession'];
+    spawnSessionForInternalResume: BootstrapRuntime['spawnSessionForInternalResume'];
     onActivationRejected?: BootstrapRuntime['onActivationRejected'];
     stopSession: BootstrapRuntime['stopSession'];
     sessionRunnerStatus?: BootstrapRuntime['sessionRunnerStatus'];
@@ -235,8 +247,9 @@ export function createDaemonMachineBootstrapRuntime(
     readLocalServiceInventorySnapshot?: () => Promise<NormalizedLocalServiceInventorySnapshot | null>;
     localServiceSummary?: Pick<LocalServicesDaemonRuntime, 'getSummary' | 'subscribeSummary' | 'refreshInventoryNow'>;
     machineResourceSummary?: MachineResourceSummary;
-    managedCatalogRuntime?: BootstrapRuntime['managedCatalogRuntime'];
     resolveManagedPurposeBindingIntent?: BootstrapRuntime['resolveManagedPurposeBindingIntent'];
+    resolveManagedPurposeBindingIntentSelection?: BootstrapRuntime['resolveManagedPurposeBindingIntentSelection'];
+    mcpServers?: BootstrapRuntime['mcpServers'];
     openTeamDirect?: BootstrapRuntime['openTeamDirect'];
     prepareRunTeamCredentialProviderBinding?: ExecutionRunTeamCredentialProviderBindingPreparer;
     openAccountConnectionManagedConsumerSource?: ExecutionRunManagedProviderSourceOpener;
@@ -253,6 +266,7 @@ export function createDaemonMachineBootstrapRuntime(
     installExternalSessionHostOperations?: (
       operations: ExternalSessionHostOperationSet,
     ) => Promise<ExternalSessionHostOperationInstallation>;
+    readMaterializedStateObservationBinding?: BootstrapRuntime['readMaterializedStateObservationBinding'];
     externalActionIngressOwner?: ExternalActionIngressOwner;
     createWorkflowRunCoordinatorForMachine?: (input: Readonly<{
       machineId: string;
@@ -263,6 +277,7 @@ export function createDaemonMachineBootstrapRuntime(
     createWorkflowRecoveryForMachine?: (input: Readonly<{
       machineId: string;
       machineAdmissionTransport: NonNullable<Parameters<typeof startAutomationWorker>[0]['machineAdmissionTransport']>;
+      machineActionDirectTargetTransport: import('@/session/actions/createCliActionDeps').MachineActionDirectTargetTransport;
     }>) => (trigger: WorkflowRecoveryTrigger) => Promise<void>;
     /** Starts the provider-broker application against the authoritative
      * registered Machine identity. A successful installation — never a
@@ -356,6 +371,8 @@ export function createDaemonMachineBootstrapRuntime(
       ? { readRequesterSessionCredentialBindings: params.readRequesterSessionCredentialBindings } : {}),
     ...(params.releaseRequesterSessionRuntimeContext
       ? { releaseRequesterSessionRuntimeContext: params.releaseRequesterSessionRuntimeContext } : {}),
+    ...(params.dispatchSessionFollowOccurrence
+      ? { dispatchSessionFollowOccurrence: params.dispatchSessionFollowOccurrence } : {}),
     ...(params.daemonSessionMutationCustody
       ? { daemonSessionMutationCustody: params.daemonSessionMutationCustody }
       : {}),
@@ -382,6 +399,7 @@ export function createDaemonMachineBootstrapRuntime(
       ? { openAccountConnectionManagedConsumerSource: params.openAccountConnectionManagedConsumerSource }
       : {}),
     isShuttingDown: params.isShuttingDown,
+    ...(params.mcpServers ? { mcpServers: params.mcpServers } : {}),
     ...(params.machineIrohRuntime ? { machineIrohRuntime: params.machineIrohRuntime } : {}),
     ...(params.prepareServerTransportForReconnect
       ? { prepareServerTransportForReconnect: params.prepareServerTransportForReconnect }
@@ -399,6 +417,7 @@ export function createDaemonMachineBootstrapRuntime(
       ? { resolvePeerMediationTrustRoots: params.resolvePeerMediationTrustRoots }
       : {}),
     createConnectedApiMachine: async (registeredMachine) => {
+      const { createMachineSkillHostService, resolveMachineSkillInstallTarget } = await import('@/prompts/skills/machineInstall/machineSkillHost');
       const workspaceRuntime = params.createWorkspaceSyncRuntime
           ? await params.createWorkspaceSyncRuntime({
             machineId: registeredMachine.id,
@@ -426,12 +445,14 @@ export function createDaemonMachineBootstrapRuntime(
             serviceManaged: params.startupSource === 'background-service',
             ...(params.serviceLabel ? { serviceLabel: params.serviceLabel } : null),
           }, {
+            controlPort: params.controlPort,
             isDaemonQuiescing: params.isPublicationQuiescing ?? params.isShuttingDown,
             readSpawnFailureLimits: params.readSpawnFailureLimits,
             ownerRemainder: params.ownerRemainder,
             ...(machineSkillTarget ? { machineSkillInstalls: {
               target: machineSkillTarget, libraryServerIdentityId: machineSkillTarget.serverIdentityId,
               refresh: async ({ signal, artifactIds }) => {
+                const { readStoredCredentialsForServerId, sameStoredCredentials } = await import('@/persistence');
                 signal.throwIfAborted();
                 if (params.isShuttingDown() || !sameStoredCredentials(params.credentials,
                   await readStoredCredentialsForServerId(automationHomeId))) return;
@@ -510,6 +531,10 @@ export function createDaemonMachineBootstrapRuntime(
         machineId: registeredMachine.id,
         machineAdmissionTransport: async (request, options) =>
           await apiMachine.enqueueSessionPendingByMachine(request, options),
+        machineActionDirectTargetTransport: {
+          machineId: registeredMachine.id,
+          invoke: async (method, request, options) => await apiMachine.invokeLocalMachineAction(method, request, options),
+        },
       });
       workflowRecovery = recoverWorkflowRuns
         ? async (trigger) => {
@@ -557,26 +582,65 @@ export function createDaemonMachineBootstrapRuntime(
       if (!params.transferRuntimeStatePublisher) return;
       await params.transferRuntimeStatePublisher.attachApiMachine(connectedApiMachine);
     },
-    startAutomationWorkerForMachine: (runtimeMachineId) => {
+    startAutomationWorkerForMachine: async (runtimeMachineId) => {
+      const { startAutomationWorker } = await import('../automation/automationWorker');
+      if (params.isShuttingDown()) return null;
       const automationApiMachine = connectedApiMachine;
       const requesterWorkAttributionV1 = automationApiMachine && automationAccountId && automationInstallationId
         ? Object.freeze({ serverId: automationHomeId, accountId: automationAccountId,
           machineId: runtimeMachineId, installationId: automationInstallationId }) : undefined;
       const coordinateWorkflowRun = automationApiMachine && params.createWorkflowRunCoordinatorForMachine
-        ? params.createWorkflowRunCoordinatorForMachine({
+        ? async (claim: Parameters<ReturnType<typeof createProductionWorkflowRunCoordinator>>[0]) => {
+          const { readStoredCredentialsForServerId, sameStoredCredentials } = await import('@/persistence');
+          // Each claim owns its requester lifetime, including parallel leaves.
+          // Ordinary local controls remain unprivileged; only this captured
+          // Workflow transport can carry freshly verified Account custody.
+          let requester: ReturnType<typeof prepareRequesterSessionBootstrap> | undefined;
+          let authorizationCurrent: ((signal?: AbortSignal) => Promise<boolean>) | undefined;
+          const isCurrent = async () => Boolean(requesterWorkAttributionV1
+            && connectedApiMachine === automationApiMachine && !params.isShuttingDown()
+            && configuration.activeServerId === automationHomeId
+            && readInstallationIdentityIfExistsSync()?.installationId === automationInstallationId
+            && sameStoredCredentials(params.credentials, await readStoredCredentialsForServerId(automationHomeId))
+            && authorizationCurrent && await authorizationCurrent(claim.signal));
+          const coordinate = params.createWorkflowRunCoordinatorForMachine!({
             machineId: runtimeMachineId,
             ...(requesterWorkAttributionV1 ? { requesterWorkAttributionV1 } : {}),
             machineAdmissionTransport: async (request, options) =>
               await automationApiMachine.enqueueSessionPendingByMachine(request, options),
             machineActionDirectTargetTransport: {
               machineId: runtimeMachineId,
-              invoke: async (method, request, options) => await automationApiMachine.invokeLocalMachineAction(
-                method,
-                request,
-                options,
-              ),
+              invoke: async (method, request, options) => {
+                const local = options?.localActionContext;
+                if (!local?.executionRunWorkflowRunId) return await automationApiMachine.invokeLocalMachineAction(method, request, options);
+                const { withExecutionRunStartFailureDetails } = await import('@happier-dev/protocol/execution/runs/responseSchemas');
+                const unavailable = { ok: false, errorCode: 'project_requester_credentials_unavailable',
+                  error: 'Workflow requester authority unavailable',
+                  ...(method === SESSION_RPC_METHODS.EXECUTION_RUN_START
+                    ? { details: withExecutionRunStartFailureDetails(undefined, 'noRunCreated') } : {}) };
+                const stamp = local.requesterWorkAttributionV1;
+                if (!requesterWorkAttributionV1 || local.executionRunWorkflowRunId !== claim.runId
+                  || stamp?.accountId !== requesterWorkAttributionV1.accountId || stamp.serverId !== automationHomeId
+                  || stamp.machineId !== runtimeMachineId || stamp.installationId !== automationInstallationId
+                  || !await isCurrent()) return unavailable;
+                const { prepareRequesterSessionBootstrap } = await import('../sessionEncryption/requesterSessionCredentials');
+                requester ??= readRequesterHomeWithinActionLifetime(() => prepareRequesterSessionBootstrap({ credentials: params.credentials, attribution: requesterWorkAttributionV1,
+                  boundary: { serverId: automationHomeId, serverHttpBaseUrl: machineSkillHomeUrl, happyHomeDir: configuration.happyHomeDir },
+                  verifyMachineAdmissionCurrent: isCurrent, ...(claim.signal ? { signal: claim.signal } : {}) }), claim.signal);
+                const prepared = await requester;
+                if (!prepared || !await prepared.admitted.isCurrent()) return unavailable;
+                return await automationApiMachine.invokeLocalMachineAction(method, request, { ...options,
+                  rpcContext: { requesterSessionBootstrap: prepared.admitted, callerAuthority: 'account_automation',
+                    verifyMachineAdmissionCurrent: isCurrent } });
+              },
             },
-          })
+          });
+          try { return await coordinate({ ...claim, registerAuthorizationCurrentnessCheck: check => {
+            authorizationCurrent = check;
+            claim.registerAuthorizationCurrentnessCheck?.(check);
+          } }); }
+          finally { await (await requester)?.cleanupOnFailure(); }
+        }
         : null;
       const worker = startAutomationWorker({
         admissionDrain: params.admissionDrain,
@@ -607,6 +671,7 @@ export function createDaemonMachineBootstrapRuntime(
     },
     startMemoryWorkerForMachine: async (runtimeMachineId) => {
       try {
+        const { startMemoryWorker } = await import('../memory/memoryWorker');
         return await startMemoryWorker({
           credentials: params.credentials,
           machineId: runtimeMachineId,
@@ -620,6 +685,7 @@ export function createDaemonMachineBootstrapRuntime(
       }
     },
     startVoiceInferenceWorkerForMachine: async (runtimeMachineId, accountId) => {
+      const { resolveCliFeatureDecision } = await import('@/features/featureDecisionService');
       if (resolveCliFeatureDecision({
         featureId: 'voice.daemonInference',
         env: process.env,
@@ -629,6 +695,10 @@ export function createDaemonMachineBootstrapRuntime(
         return null;
       }
       try {
+        const [{ startVoiceInferenceWorker }, { createDaemonPublicVoiceModelPackRuntime }] = await Promise.all([
+          import('../voiceInference/voiceInferenceWorker'),
+          import('../voiceInference/publicModelPacks/runtime'),
+        ]);
         const publicModelPacks = accountId ? createDaemonPublicVoiceModelPackRuntime({
           accountId, machineId: runtimeMachineId, happyHomeDir: configuration.happyHomeDir,
           paths: resolveVoiceInferencePaths(),
@@ -644,6 +714,7 @@ export function createDaemonMachineBootstrapRuntime(
       }
     },
     spawnSession: params.spawnSession,
+    spawnSessionForInternalResume: params.spawnSessionForInternalResume,
     ...(params.onActivationRejected ? { onActivationRejected: params.onActivationRejected } : {}),
     stopSession: params.stopSession,
     ...(params.sessionRunnerStatus ? { sessionRunnerStatus: params.sessionRunnerStatus } : {}),
@@ -724,14 +795,14 @@ export function createDaemonMachineBootstrapRuntime(
     ...(params.readLocalServiceInventorySnapshot
       ? { readLocalServiceInventorySnapshot: params.readLocalServiceInventorySnapshot }
       : {}),
-    ...(params.managedCatalogRuntime
-      ? { managedCatalogRuntime: params.managedCatalogRuntime }
-      : {}),
     ...(params.resolveManagedPurposeBindingIntent
       ? {
           resolveManagedPurposeBindingIntent:
             params.resolveManagedPurposeBindingIntent,
         }
+      : {}),
+    ...(params.resolveManagedPurposeBindingIntentSelection
+      ? { resolveManagedPurposeBindingIntentSelection: params.resolveManagedPurposeBindingIntentSelection }
       : {}),
     ...(params.createAgentCatalogObservation
       ? { createAgentCatalogObservation: params.createAgentCatalogObservation }
@@ -753,6 +824,9 @@ export function createDaemonMachineBootstrapRuntime(
           installExternalSessionHostOperations:
             params.installExternalSessionHostOperations,
         }
+      : {}),
+    ...(params.readMaterializedStateObservationBinding
+      ? { readMaterializedStateObservationBinding: params.readMaterializedStateObservationBinding }
       : {}),
     ...(params.externalActionIngressOwner
       ? { externalActionIngressOwner: params.externalActionIngressOwner }

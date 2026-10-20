@@ -1,5 +1,6 @@
 import type { ChatListItem } from '@/components/sessions/chatListItems';
 import type { TranscriptTurn } from '@/components/sessions/transcript/turnGrouping/buildTranscriptTurns';
+import type { WorkflowOriginRunFold } from '@/components/sessions/transcript/turnGrouping/workflowTranscriptTurns';
 import type { TranscriptToolGroupUnitItem } from '@/components/sessions/transcript/turnGrouping/buildTranscriptTurnUnits';
 import type { TranscriptWindowGapItem } from '@/components/sessions/transcript/viewport/window/transcriptTargetWindowTypes';
 import {
@@ -38,6 +39,8 @@ export type TranscriptRowShellItem =
         kind: 'turn';
         id: string;
         turn: TranscriptTurn;
+        /** The one folded row of a run that continued this session (05 §5.2). */
+        workflowRun?: WorkflowOriginRunFold;
     }
     | TranscriptToolGroupUnitItem
     | TranscriptWindowGapItem;

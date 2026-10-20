@@ -62,9 +62,9 @@ const styles = StyleSheet.create((theme) => ({
         flexShrink: 0,
     },
     value: {
+        // The id beside its body label: the meta role in the one mono face.
+        ...Typography.variant('meta'),
         ...Typography.mono(),
-        fontSize: 12.5,
-        lineHeight: 18,
         color: theme.colors.text.secondary,
         flexShrink: 1,
         minWidth: 0,

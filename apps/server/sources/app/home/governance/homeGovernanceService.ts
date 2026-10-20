@@ -11,7 +11,6 @@ import {
     type AccountAdministrationAuthenticationProjection,
 } from "@/app/auth/methods/effectiveAccountLoginMethods";
 import { resolveAllowedAccountProvisionModes, resolveRecommendedAccountProvisionMode } from "@/app/auth/methods/accountProvisionModes";
-import { isAuthEmailDeliveryReady } from "@/app/auth/email/resolveAuthEmailDelivery";
 import { resolveWorkosPlatformRuntimeMetadata } from "@/app/integrations/workos/workosPlatform";
 import { resolveAuthProviderInstancesFromEnv } from "@/app/auth/providers/oidc/oidcProviderConfig";
 import { buildAccountTextPrefixFilter } from "@/app/account/accountTextPrefixFilter";
@@ -40,7 +39,7 @@ import {
 } from "@/app/home/audit/homeAdministrationEvents";
 import { persistentMachineWhere } from "@/app/machines/machineSelection";
 import { listTeamMembershipsForAccountInTx } from "@/app/teams/memberships/memberAdministration";
-import { publishHomeGovernanceChangedInTx } from "./governanceChanges";
+import { acquireHomeGovernanceAdmissionInTx, publishHomeGovernanceChangedInTx } from "./governanceChanges";
 import {
     HOME_ANONYMOUS_SIGNUP_KEY,
     HOME_AUTH_METHOD_ENABLE_KEYS,
@@ -171,6 +170,7 @@ function projectHomeIdentityDeploymentServicesV1(
 async function projectHomeAuthenticationOptionsV1(
     tx: Tx,
     env: NodeJS.ProcessEnv,
+    emailDeliveryReady: boolean,
 ): Promise<HomeAuthenticationOptionsV1> {
     // The choices are what this Home could offer if it turned everything on that the deployment
     // leaves unset (§3.4: both directions within the env locks); the persisted-Home decision supplies
@@ -178,7 +178,6 @@ async function projectHomeAuthenticationOptionsV1(
     // parallel availability formulas. A method that can never run here stays in the list as fixed
     // (its enable key is set by the deployment) or unavailable (a prerequisite is missing), so the
     // console can say why instead of hiding it.
-    const emailDeliveryReady = await isAuthEmailDeliveryReady({ env, tx });
     const stored = (await readHomeGovernancePolicyInTx(tx)).authentication;
     const ceilingEnv = homeAuthenticationCeilingEnv(env);
     const ceiling = await resolveEffectiveHomeAuthMethodsInTx(tx, {
@@ -262,6 +261,7 @@ export async function readHomeGovernanceProjectionInTx(tx: Tx, input: Readonly<{
     viewerAccountId: string;
     teamsEnabled: boolean;
     env: NodeJS.ProcessEnv;
+    emailDeliveryReady: boolean;
 }>): Promise<HomeGovernanceResult<HomeGovernanceProjectionV1>> {
     // Ownerless Homes are a deployment-recovery state, not an authorization
     // opportunity. Return only the typed setup signal before reading policy,
@@ -278,7 +278,7 @@ export async function readHomeGovernanceProjectionInTx(tx: Tx, input: Readonly<{
     const viewer = await readHomeGovernanceAccountInTx(tx, input.viewerAccountId);
     if (!viewer) return { status: "rejected", code: "home_account_not_found" };
     const policy = await readHomeGovernancePolicyInTx(tx);
-    const authenticationOptions = await projectHomeAuthenticationOptionsV1(tx, input.env);
+    const authenticationOptions = await projectHomeAuthenticationOptionsV1(tx, input.env, input.emailDeliveryReady);
     return { status: "ok", result: {
         identityServices: projectHomeIdentityDeploymentServicesV1(input.env),
         viewer: { accountId: viewer.accountId, homeRole: viewer.homeRole, status: viewer.status },
@@ -419,6 +419,7 @@ async function projectHomeAccountRowForViewerInTx(tx: Tx, input: Readonly<{
     teamOwnershipAllowsErasure?: boolean;
     authentication?: AccountAdministrationAuthenticationProjection;
     env: NodeJS.ProcessEnv;
+    emailDeliveryReady: boolean;
     row: HomeAccountRow;
 }>): Promise<HomeAccountRowV1 | null> {
     const actor = input.actor ?? await readHomeGovernanceAccountInTx(tx, input.actorAccountId);
@@ -430,6 +431,7 @@ async function projectHomeAccountRowForViewerInTx(tx: Tx, input: Readonly<{
     const authentication = input.authentication ?? (await readHomeAccountAuthenticationByIdInTx(tx, {
         accountIds: [input.row.id],
         env: input.env,
+        emailDeliveryReady: input.emailDeliveryReady,
     })).get(input.row.id) ?? { signInEmail: null, usableMethodIds: [], linkedProviderIds: [] };
     return projectHomeAccountRowV1(input.row, {
         actor,
@@ -441,11 +443,11 @@ async function projectHomeAccountRowForViewerInTx(tx: Tx, input: Readonly<{
 
 async function readHomeAccountAuthenticationByIdInTx(
     tx: Tx,
-    input: Readonly<{ accountIds: readonly string[]; env: NodeJS.ProcessEnv }>,
+    input: Readonly<{ accountIds: readonly string[]; env: NodeJS.ProcessEnv; emailDeliveryReady: boolean }>,
 ): Promise<ReadonlyMap<string, AccountAdministrationAuthenticationProjection>> {
     const effective = await resolveEffectiveHomeAuthMethodsInTx(tx, {
         env: input.env,
-        emailDeliveryReady: await isAuthEmailDeliveryReady({ env: input.env, tx }),
+        emailDeliveryReady: input.emailDeliveryReady,
     });
     return await readAccountAdministrationAuthenticationByIdInTx(tx, {
         accountIds: input.accountIds,
@@ -493,6 +495,7 @@ function decodeHomeAccountCursor(cursor: string): HomeAccountCursor | null {
 export async function listHomeAccountsInTx(tx: Tx, input: Readonly<{
     actorAccountId: string;
     env: NodeJS.ProcessEnv;
+    emailDeliveryReady: boolean;
     cursor?: string | null;
     limit?: number;
 }>): Promise<HomeGovernanceResult<HomeAccountListResultV1>> {
@@ -570,6 +573,7 @@ export async function listHomeAccountsInTx(tx: Tx, input: Readonly<{
     const authenticationByAccountId = await readHomeAccountAuthenticationByIdInTx(tx, {
         accountIds: page.map((row) => row.id),
         env: input.env,
+        emailDeliveryReady: input.emailDeliveryReady,
     });
     return {
         status: "ok",
@@ -584,6 +588,7 @@ export async function listHomeAccountsInTx(tx: Tx, input: Readonly<{
                     authentication: authenticationByAccountId.get(row.id)
                         ?? { signInEmail: null, usableMethodIds: [], linkedProviderIds: [] },
                     env: input.env,
+                    emailDeliveryReady: input.emailDeliveryReady,
                     row,
                 });
                 if (!projected) throw new Error("home_governance_actor_disappeared_in_transaction");
@@ -712,7 +717,10 @@ export async function setHomeRoleInTx(tx: Tx, input: Readonly<{
     targetAccountId: string;
     homeRole: HomeRoleV1;
     env: NodeJS.ProcessEnv;
+    emailDeliveryReady: boolean;
 }>): Promise<HomeGovernanceResult<HomeRoleSetOutcome>> {
+    await acquireHomeGovernanceAdmissionInTx(tx,
+        { accountIds: [input.actorAccountId, input.targetAccountId], intent: "exclusive" });
     const admission = await authorizeHomeGovernanceMutationInTx(tx, {
         actorAccountId: input.actorAccountId,
         request: {
@@ -757,6 +765,7 @@ export async function setHomeRoleInTx(tx: Tx, input: Readonly<{
     const account = await projectHomeAccountRowForViewerInTx(tx, {
         actorAccountId: input.actorAccountId,
         env: input.env,
+        emailDeliveryReady: input.emailDeliveryReady,
         row,
     });
     if (!account) return { status: "rejected", code: "home_governance_forbidden" };
@@ -766,12 +775,13 @@ export async function setHomeRoleInTx(tx: Tx, input: Readonly<{
 /** Reads one Account row with capabilities for the currently authenticated actor. */
 export async function readHomeAccountRowInTx(
     tx: Tx,
-    input: Readonly<{ actorAccountId: string; accountId: string; env?: NodeJS.ProcessEnv }>,
+    input: Readonly<{ actorAccountId: string; accountId: string; env: NodeJS.ProcessEnv; emailDeliveryReady: boolean }>,
 ): Promise<HomeAccountRowV1 | null> {
     const row = await tx.account.findUnique({ where: { id: input.accountId }, select: HOME_ACCOUNT_ROW_SELECT });
     return row ? await projectHomeAccountRowForViewerInTx(tx, {
         actorAccountId: input.actorAccountId,
-        env: input.env ?? process.env,
+        env: input.env,
+        emailDeliveryReady: input.emailDeliveryReady,
         row,
     }) : null;
 }
@@ -789,6 +799,7 @@ export async function readHomeAccountDetailInTx(tx: Tx, input: Readonly<{
     actorAccountId: string;
     accountId: string;
     env: NodeJS.ProcessEnv;
+    emailDeliveryReady: boolean;
 }>): Promise<HomeGovernanceResult<HomeAccountDetailV1>> {
     const actor = await readHomeGovernanceAccountInTx(tx, input.actorAccountId);
     if (!actor || !resolveHomeGovernanceAuthority(actor).viewAdministration) {
@@ -800,11 +811,13 @@ export async function readHomeAccountDetailInTx(tx: Tx, input: Readonly<{
     const authentication = (await readHomeAccountAuthenticationByIdInTx(tx, {
         accountIds: [row.id],
         env: input.env,
+        emailDeliveryReady: input.emailDeliveryReady,
     })).get(row.id) ?? { signInEmail: null, usableMethodIds: [], linkedProviderIds: [] };
     const account = await projectHomeAccountRowForViewerInTx(tx, {
         actorAccountId: input.actorAccountId,
         actor,
         env: input.env,
+        emailDeliveryReady: input.emailDeliveryReady,
         row,
         authentication,
     });

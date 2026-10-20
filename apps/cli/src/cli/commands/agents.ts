@@ -598,7 +598,11 @@ export async function handleAgentsCommand(args: string[], options: Readonly<{ si
                 if (!row?.runtimeSpec) throw new Error(`Agent '${agentId}' does not publish a CLI installation recipe.`);
                 results.push({ agentId, ...await runAgentsInstallDryRun(row.runtimeSpec, flags) });
             }
-            if (json) await printJsonEnvelope({ ok: results.every(result => result.ok), kind, data: { agents: results } });
+            if (json) {
+                const allOk = results.every(result => result.ok);
+                await printJsonEnvelope(allOk ? { ok: true, kind, data: { agents: results } }
+                    : { ok: false, kind, error: { code: 'install_failed', agents: results } });
+            }
             else for (const result of results) console.log(result.ok
                 ? `Dry run: would install ${result.agentId} via ${result.plan?.installMode ?? 'its catalog recipe'}.`
                 : result.errorMessage);

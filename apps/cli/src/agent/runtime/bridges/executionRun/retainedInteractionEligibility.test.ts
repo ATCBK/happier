@@ -17,6 +17,7 @@ function input(overrides: Partial<ExecutionRunSessionAdapterInput> = {}): Execut
         scope: 'session_owned',
         hasParentSessionCustody: true,
         agentExposesSessionRuntime: true,
+        agentExposesDetachedConversation: true,
         sessionCapabilities: sessionCapable,
         intent: 'delegate',
         runClass: 'long_lived',
@@ -38,24 +39,29 @@ describe('selectExecutionRunSessionAdapter', () => {
             'retained_agent_session',
         ],
         [
-            'a bounded streaming Review stays finite',
+            'a bounded Review keeps its Session available for host repair turns',
             input({ intent: 'review', runClass: 'bounded', retentionPolicy: 'ephemeral' }),
-            'finite_agent_session',
+            'retained_agent_session',
         ],
         [
-            'a long-lived but ephemeral run stays finite',
+            'a long-lived ephemeral run retains input until host settlement',
             input({ retentionPolicy: 'ephemeral' }),
-            'finite_agent_session',
+            'retained_agent_session',
         ],
         [
-            'a resumable bounded run stays finite',
+            'a detached long-lived ephemeral run retains its conversation',
+            input({ scope: 'detached', hasParentSessionCustody: false, retentionPolicy: 'ephemeral' }),
+            'retained_agent_conversation',
+        ],
+        [
+            'a resumable bounded run keeps its Session until host settlement',
             input({ runClass: 'bounded' }),
-            'finite_agent_session',
+            'retained_agent_session',
         ],
         [
             'a detached long-lived run retains its provider-native Session without parent custody',
             input({ scope: 'detached', hasParentSessionCustody: false }),
-            'retained_agent_session',
+            'retained_agent_conversation',
         ],
         [
             'a Session-owned long-lived run without exact parent custody stays finite',
@@ -65,7 +71,12 @@ describe('selectExecutionRunSessionAdapter', () => {
         [
             'a detached run never consumes accidentally supplied parent custody',
             input({ scope: 'detached', hasParentSessionCustody: true }),
-            'retained_agent_session',
+            'retained_agent_conversation',
+        ],
+        [
+            'a finite-only detached facet completes work without requiring a retained conversation',
+            input({ scope: 'detached', hasParentSessionCustody: false, agentExposesDetachedConversation: false }),
+            'finite_agent_session',
         ],
         [
             'an Agent without declared Session capabilities cannot be retained',
@@ -104,7 +115,7 @@ describe('selectExecutionRunSessionAdapter', () => {
         // The former Voice-only special case must not come back as a longer list of
         // intent names: lifecycle plus declared capability is the whole rule.
         expect(selectExecutionRunSessionAdapter(input({ intent: 'voice_agent', runClass: 'bounded' })))
-            .toBe('finite_agent_session');
+            .toBe('retained_agent_session');
         expect(selectExecutionRunSessionAdapter(input({ intent: 'scm_commit_message', runClass: 'long_lived' })))
             .toBe('retained_agent_session');
     });

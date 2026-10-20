@@ -16,8 +16,9 @@ import { sameTriageEntryRefV1, type TriageSurfaceSelectionV1 } from '../state/su
  *   another connection drops what was held, and clearing the selection drops it
  *   outright. There is no set, no eviction policy and nothing to page.
  * - **Presentation only.** It is derived per render from the selection and the
- *   window, so it neither persists, survives the mount, nor answers anybody but
- *   the detail header. It is not a second corpus and cannot be read as one.
+ *   window and does not persist or survive the mount. It keeps the selected
+ *   detail's identity mounted, including starts already confirmed against pinned
+ *   evidence, but cannot admit a new source operation. It is not a second corpus.
  * - **Never current.** What it holds was true when the window last published
  *   it. The header says so; nothing here upgrades a retained fact into a live
  *   one, and no source detail is read from it.

@@ -1,5 +1,6 @@
 import {
     resolveTriageLaunchPlacementV1,
+    resolveTriageLaunchCandidatesV1,
     type TriageForgeIdentityV1,
     type TriageLaunchPlacementV1,
     type TriageProjectCandidateV1,
@@ -104,6 +105,7 @@ export type TriageActionPlacementV1 =
         kind: 'pinned';
         target: Readonly<{ serverId: string; machineId: string }>;
         directory?: string;
+        candidates: Extract<TriageLaunchPlacementV1, { kind: 'prefill' }>['candidates'];
     }>
     /** The join resolved exactly one reachable checkout. */
     | Readonly<{ kind: 'launch'; candidate: Extract<TriageLaunchPlacementV1, { kind: 'launch' }>['candidate'] }>
@@ -143,11 +145,12 @@ export function resolveTriageActionPlacementV1(input: Readonly<{
         return {
             kind: 'pinned',
             target: preference.fixed,
+            candidates: resolveTriageLaunchCandidatesV1(input),
             ...(preference.directory === undefined ? {} : { directory: preference.directory }),
         };
     }
 
-    if (preference === 'ask') return { kind: 'prefill', reason: 'profileAsk', candidates: [] };
+    if (preference === 'ask') return { kind: 'prefill', reason: 'profileAsk', candidates: resolveTriageLaunchCandidatesV1(input) };
 
     const placement = resolveTriageLaunchPlacementV1({
         ...(input.forge === undefined ? {} : { forge: input.forge }),

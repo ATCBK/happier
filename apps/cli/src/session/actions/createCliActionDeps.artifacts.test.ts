@@ -30,8 +30,15 @@ import { clearActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } 
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { ARTIFACT_HTML_BUNDLE_MIME_V1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
+import tweetnacl from 'tweetnacl';
+import { DOC_EDIT_PROPOSAL_HTTP_PATHS_V1 } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
+import { EXTERNAL_ACTION_EFFECT_ACTION_HEADER, EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER,
+  EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, type ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
+import { verifyExternalActionMachineRequestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
+import { DiscussionMessageRefV1Schema } from '@happier-dev/protocol/discussions/messageRefs';
 
-const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), delete: vi.fn(), request: vi.fn(), isCancel: () => false }));
+const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn(), request: vi.fn(), isCancel: () => false }));
 vi.mock('axios', () => ({ default: http }));
 
 describe('Account Artifact Actions through the real CLI host composition', () => {
@@ -40,7 +47,7 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'cli-artifact-actions-'));
     await mkdir(join(root, 'workspace'));
-    http.get.mockReset(); http.post.mockReset(); http.delete.mockReset(); http.request.mockReset();
+    http.get.mockReset(); http.post.mockReset(); http.put.mockReset(); http.delete.mockReset(); http.request.mockReset();
     // Machine identity is persistent machine-local configuration, a system boundary.
     await persistence.writeSettings({ schemaVersion: persistence.SUPPORTED_SCHEMA_VERSION,
       onboardingCompleted: true, machineIdByServerId: { [configuration.activeServerId]: 'local-machine' } });
@@ -64,6 +71,116 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
         isApprovalRequiredByActionsSettings(actionId, settings, context, undefined, undefined, input),
     });
   }
+  it('uses the captured Doc decision proof for read-only Artifact preparation and the encoded decision packet', async () => {
+    const keyPair = tweetnacl.sign.keyPair();
+    const accountId = 'doc-owner';
+    const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
+    const target = { kind: 'machine' as const, machineId: 'executor-machine' };
+    const authorization = { v: 1, token: 'captured-root-proof', binding: {
+      serverIdentityId: 'physical-home', accountId, authentication: { kind: 'account', tokenEpoch: 0 },
+      machineId: target.machineId, custodianAccountId: accountId, installationId: 'installation',
+      actionId: 'doc.edit.accept', requestId: 'accept-request', requestEnvelopeDigest: 'd'.repeat(43), target,
+    } } satisfies ExternalActionExecutionAuthorizationV1;
+    const proposalRef = DiscussionMessageRefV1Schema.parse({ kind: 'discussion', discussion: { serverId: 'home', discussionId: 'thread' }, messageId: 'proposal' });
+    const expectedRevision = { headerVersion: 1, bodyVersion: 1 };
+    const result = { proposalRef, docEditProposalDispositionV1: { state: 'accepted', acceptedRevision: { headerVersion: 1, bodyVersion: 2 },
+      decidedBy: { accountId, atMs: 1 } } };
+    http.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      if (url.endsWith(`/v1/artifacts/${artifactId}`)) return { status: 200, data: {
+        id: artifactId, ownerAccountId: accountId, access: 'owner', encryptionMode: 'plain', publicAudience: 'none',
+        header: encodePlainArtifactStoredContent({ title: 'Doc' }), body: encodePlainArtifactStoredContent({ body: 'Passage' }),
+        dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 } };
+      throw new Error(`Unexpected read ${new URL(url).pathname}`);
+    });
+    http.post.mockResolvedValue({ status: 200, data: result });
+    const host = createCliActionDeps({ token, credentials: { token, encryption: null }, sessionId: '', mode: 'plain', ctx: null,
+      serverId: 'home', serverIdentityId: 'physical-home', serverHttpBaseUrl: 'https://doc-home.test',
+      externalActionMachineRequestPrivateKey: keyPair.secretKey, externalActionMachineInstallationId: 'installation' });
+    const context = { surface: 'cli' as const, authority: 'present_user' as const, serverId: 'home',
+      externalActionExecutionAuthorization: authorization, externalActionTarget: target };
+    expect(await host.artifactAction!({ actionId: 'artifact.get', input: { artifactId }, readOnly: true, context }))
+      .toMatchObject({ artifact: { artifactId, body: 'Passage' } });
+    expect(await host.artifactAction!({ actionId: 'doc.edit.accept', input: { proposalRef, expectedRevision,
+      preparation: { doc: { ref: { kind: 'doc', artifactId, serverId: 'home' }, revision: expectedRevision }, body: 'Accepted passage' } }, context })).toEqual(result);
+    const requests = [...http.get.mock.calls.map(([url, config]) => ({ method: 'GET', url, body: undefined, config })),
+      ...http.post.mock.calls.map(([url, body, config]) => ({ method: 'POST', url, body, config }))];
+    expect(requests.some(request => new URL(request.url).pathname === '/v1/account/encryption')).toBe(false);
+    expect(requests.at(-1)?.url).toBe(`https://doc-home.test${DOC_EDIT_PROPOSAL_HTTP_PATHS_V1.accept}`);
+    for (const request of requests) {
+      const headers = request.config.headers;
+      expect(headers.Authorization).toBeUndefined();
+      expect(headers[EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]).toBe(authorization.token);
+      const effectActionId = request.method === 'POST' ? 'doc.edit.accept' : 'artifact.get';
+      expect(headers[EXTERNAL_ACTION_EFFECT_ACTION_HEADER]).toBe(effectActionId);
+      expect(verifyExternalActionMachineRequestV1({ authorizationToken: authorization.token, effectActionId,
+        target, installationId: 'installation', requestId: 'accept-request', method: request.method,
+        path: new URL(request.url).pathname, body: request.body, publicKey: keyPair.publicKey,
+        signature: headers[EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER] })).toBe(true);
+    }
+    // The real composition narrows an ordinary bearer at the incumbent HTTP
+    // authority boundary too; a lower invocation never borrows its user's floor.
+    http.post.mockImplementation(async (_url, _body, config) => config.headers[AUTHORITY_CEILING_HEADER_V1] === 'account_automation'
+      ? { status: 403, data: { error: 'present_user_required' } } : { status: 200, data: result });
+    expect(await host.artifactAction!({ actionId: 'doc.edit.decline', input: { proposalRef },
+      context: { surface: 'cli', authority: 'account_automation', serverId: 'home' } }))
+      .toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    expect(http.post.mock.lastCall?.[2].headers).toMatchObject({ Authorization: `Bearer ${token}`,
+      [AUTHORITY_CEILING_HEADER_V1]: 'account_automation' });
+  });
+  it('keeps source grants and their reads under the original signed second-opinion invocation', async () => {
+    const keyPair = tweetnacl.sign.keyPair();
+    const accountId = 'source-owner';
+    const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
+    const target = { kind: 'machine' as const, machineId: 'executor-machine' };
+    const authorization = { v: 1, token: 'second-opinion-root-proof', binding: {
+      serverIdentityId: 'physical-home', accountId, authentication: { kind: 'account', tokenEpoch: 0 },
+      machineId: target.machineId, custodianAccountId: accountId, installationId: 'installation',
+      actionId: 'discussion.second_opinion.start', requestId: 'opinion-request', requestEnvelopeDigest: 'd'.repeat(43), target,
+    } } satisfies ExternalActionExecutionAuthorizationV1;
+    const grant = { artifactId, principal: { kind: 'account' as const, accountId: 'reviewer' }, accessLevel: 'view' as const };
+    http.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      if (url.endsWith(`/v1/artifacts/${artifactId}`)) return { status: 200, data: {
+        id: artifactId, ownerAccountId: accountId, access: 'owner', encryptionMode: 'plain', publicAudience: 'none',
+        header: encodePlainArtifactStoredContent({ title: 'Source' }), body: encodePlainArtifactStoredContent({ body: 'Passage' }),
+        dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 } };
+      throw new Error(`Unexpected source read ${new URL(url).pathname}`);
+    });
+    const granted = { artifactId, ownerAccountId: accountId, access: 'owner', changed: true, grants: [] };
+    http.put.mockResolvedValue({ status: 200, data: granted });
+    const host = createCliActionDeps({ token, credentials: { token, encryption: null }, sessionId: '', mode: 'plain', ctx: null,
+      serverId: 'home', serverIdentityId: 'physical-home', serverHttpBaseUrl: 'https://source-home.test',
+      externalActionMachineRequestPrivateKey: keyPair.secretKey, externalActionMachineInstallationId: 'installation' });
+    const context = { surface: 'cli' as const, authority: 'present_user' as const, serverId: 'home',
+      externalActionExecutionAuthorization: authorization, externalActionTarget: target };
+    await expect(host.artifactAccessAction!({ actionId: 'artifact.access.grants.set', input: grant, context })).resolves.toEqual(granted);
+    expect(http.put.mock.calls[0]?.[1]).toEqual(grant);
+    const requests = [...http.get.mock.calls.map(([url, config]) => ({ method: 'GET', url, body: undefined, config })),
+      ...http.put.mock.calls.map(([url, body, config]) => ({ method: 'PUT', url, body, config }))];
+    expect(requests.some(request => new URL(request.url).pathname === '/v1/account/encryption')).toBe(false);
+    for (const request of requests) {
+      const headers = request.config.headers;
+      expect(headers.Authorization).toBeUndefined();
+      expect(headers[EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]).toBe(authorization.token);
+      expect(headers[EXTERNAL_ACTION_EFFECT_ACTION_HEADER]).toBe('artifact.access.grants.set');
+      expect(verifyExternalActionMachineRequestV1({ authorizationToken: authorization.token, effectActionId: 'artifact.access.grants.set',
+        target, installationId: 'installation', requestId: 'opinion-request', method: request.method,
+        path: new URL(request.url).pathname, body: request.body, publicKey: keyPair.publicKey,
+        signature: headers[EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER] })).toBe(true);
+    }
+    http.get.mockClear(); http.put.mockClear();
+    const unsignedHost = createCliActionDeps({ token, credentials: { token, encryption: null }, sessionId: '', mode: 'plain', ctx: null,
+      serverId: 'home', serverIdentityId: 'physical-home', serverHttpBaseUrl: 'https://source-home.test' });
+    await expect(unsignedHost.artifactAccessAction!({ actionId: 'artifact.access.grants.set', input: grant, context }))
+      .rejects.toMatchObject({ code: 'execution_not_authorized' });
+    expect(http.get).not.toHaveBeenCalled();
+    expect(http.put).not.toHaveBeenCalled();
+  });
   it('creates the same host-derived editable guide starter through CLI Action admission without caller provenance', async () => {
     const accountId = 'cli-guide-starter';
     const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
@@ -185,22 +302,36 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
       items: [{ kind: 'widget', instance, size: 'medium', frameStyle: 'plain' }] });
     const wireRow = (id: string, header: Readonly<Record<string, unknown>>, body?: string) => ({ id,
       header: encodePlainArtifactStoredContent(header), ...(body ? { body: encodePlainArtifactStoredContent({ body }) } : {}),
-      dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, ownerAccountId: accountId, access: 'owner', encryptionMode: 'plain',
+      dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, ownerAccountId: accountId, access: 'owner', encryptionMode: 'plain', publicAudience: 'none',
       headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
+    let inventoryReads = 0;
     http.get.mockImplementation(async (url: string) => {
       if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
-      if (new URL(url).pathname === '/v1/artifacts') return { status: 200,
-        data: [wireRow(artifactId, buildWidgetDefinitionArtifactHeaderV1(definition))] };
+      if (new URL(url).pathname === '/v1/artifacts') {
+        inventoryReads += 1;
+        return { status: 200, data: [wireRow(artifactId, buildWidgetDefinitionArtifactHeaderV1(definition))] };
+      }
+      if (new URL(url).pathname === `/v1/artifacts/${artifactId}/access/grants`) return { status: 200,
+        data: { artifactId, ownerAccountId: accountId, access: 'owner', grants: [] } };
+      if (new URL(url).pathname === `/v1/artifacts/${artifactId}/access/recipients`) return { status: 200,
+        data: { artifactId, ownerAccountId: accountId, access: 'owner', encryptionMode: 'plain',
+          dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER, callerDataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+          provenanceDataEncryptionKey: null, callerProvenanceDataEncryptionKey: null, recipients: [] } };
+      if (url.endsWith(`/v1/artifacts/${artifactId}`)) return { status: 200,
+        data: wireRow(artifactId, buildWidgetDefinitionArtifactHeaderV1(definition), JSON.stringify(definition)) };
       if (url.endsWith(`/v1/artifacts/${homeArtifactId}`)) return { status: 200,
         data: wireRow(homeArtifactId, { kind: HOME_HUB_ARTIFACT_KIND_V1, v: 1 }, JSON.stringify(layout)) };
       throw new Error(`unexpected_get:${url}`);
     });
     const executor = createActionExecutor(createCliActionDeps({ token, credentials: { token, encryption: null },
       sessionId: 'cli-global', mode: 'plain', ctx: null, serverId: 'authored-home', serverHttpBaseUrl: 'https://authored-home.test' }));
-    expect(await executor.execute('home.hub.layout.get', {}, { surface: 'cli', bypassApprovals: true }))
+    const described = await executor.execute('home.hub.layout.get', {}, { surface: 'cli', bypassApprovals: true });
+    expect(described, JSON.stringify(described))
       .toMatchObject({ ok: true, result: { layout, sections: expect.arrayContaining([
         expect.objectContaining({ id: instance.id, size: 'wide', frameStyle: 'plain' }),
       ]) } });
+    // Describing Home reads the definitions it places by id; the Account's whole artifact inventory is not paged for it.
+    expect(inventoryReads).toBe(0);
     const catalog = await executor.execute('widgets.catalog.list', { surface: { serverId: 'authored-home', accountId, owner: { kind: 'home' } } },
       { surface: 'cli', bypassApprovals: true });
     expect(catalog.ok).toBe(true);
@@ -208,7 +339,7 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
     const entries = WidgetInstanceActionOutputSchemasV1['widgets.catalog.list'].parse(catalog.result).entries;
     expect(entries.find(entry => entry.definition.kind === 'artifact' && entry.definition.artifactId === artifactId))
       .toMatchObject({ definition: { kind: 'artifact', artifactId }, availability: 'available', instanceCount: 1 });
-    expect(http.post).not.toHaveBeenCalled();
+    expect(http.post.mock.calls.filter(([url]) => !String(url).endsWith('/v2/sessions/lookup-by-tags'))).toEqual([]);
   });
   it.each(['widget-area-layout.v1', 'home-hub-layout.v1'])('refuses approved agent public publication of %s before transport', async kind => {
     http.get.mockImplementation(async (url: string) => ({ status: 200, data: url.endsWith('/v1/account/encryption')
@@ -425,6 +556,7 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
       });
       http.get.mockImplementation(async (url: string) => {
         const path = new URL(url).pathname;
+        if (path === '/v1/account/profile') return { status: 200, data: { id: accountId } };
         if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
         if (path === '/v1/account/encryption/currentness') return { status: 200, data: AccountEncryptionCurrentnessResponseSchema.parse({
           mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
@@ -528,9 +660,10 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
         })).toMatchObject({ ok: false, errorCode: 'present_user_required' });
         expect(readApproval()).toEqual(pending);
         expect(publicWrites).toEqual([]);
-        expect(await executor.execute('approval.request.decide', decideInput, {
+        const approved = await executor.execute('approval.request.decide', decideInput, {
           ...context, presentUserConfirmation: { actionId },
-        })).toMatchObject({ ok: true, result: { status: 'executed' } });
+        });
+        expect(approved, JSON.stringify(approved)).toMatchObject({ ok: true, result: { status: 'executed' } });
         expect(readApproval().status).toBe('executed');
         expect(publicWrites).toHaveLength(1);
       } else {
@@ -709,6 +842,6 @@ describe('Account Artifact Actions through the real CLI host composition', () =>
       rawSession: { machineId: 'remote-machine', path: join(root, 'workspace') } });
     await expect(foreign.artifactAction?.({ actionId: 'artifact.publish_from_file', input: { path: 'result.txt' }, context }))
       .resolves.toMatchObject({ ok: false, errorCode: 'artifact_source_unavailable' });
-    expect(http.post).not.toHaveBeenCalled();
+    expect(http.post.mock.calls.filter(([url]) => !String(url).endsWith('/v2/sessions/lookup-by-tags'))).toEqual([]);
   });
 });

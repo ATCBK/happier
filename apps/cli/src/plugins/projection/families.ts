@@ -44,14 +44,14 @@ export type PluginProjectionFamilyContextV2 = Readonly<{
     }>) => void;
 }>;
 
-export type PluginProjectionFamilyDescriptorV2 = Readonly<{
-    family: string;
-    project: (context: PluginProjectionFamilyContextV2) => PluginProjectedFamilyV2;
+export type PluginProjectionFamilyDescriptorV2<Family extends PluginProjectedFamilyV2 = PluginProjectedFamilyV2> = Readonly<{
+    family: Family['family'];
+    project: (context: PluginProjectionFamilyContextV2) => Family;
 }>;
 
-export function definePluginProjectionFamilyV2(
-    descriptor: PluginProjectionFamilyDescriptorV2,
-): PluginProjectionFamilyDescriptorV2 {
+export function definePluginProjectionFamilyV2<Family extends PluginProjectedFamilyV2>(
+    descriptor: PluginProjectionFamilyDescriptorV2<Family>,
+): PluginProjectionFamilyDescriptorV2<Family> {
     return Object.freeze(descriptor);
 }
 
@@ -73,11 +73,11 @@ function freezeProjectedFamilyV2<Family extends PluginProjectedFamilyV2>(
     occurrenceIdsByPluginId: ResolvedContributionRegistry['occurrenceIdsByPluginId'],
     onInvalidEntry: PluginProjectionFamilyContextV2['onInvalidEntry'],
 ): Family {
-    const familySchema = PluginProjectedFamilyV2Schema.options.find((schema) => (
-        schema.shape.family.value === projected.family
+    const familySchema = PluginProjectedFamilyV2Schema._zod.def.options.find((schema) => (
+        schema.shape.family._zod.def.values.some((family) => family === projected.family)
     ));
     if (!familySchema) throw new Error(`Missing canonical schema for projection family '${projected.family}'`);
-    const entrySchema = familySchema.shape.entriesById.unwrap().valueType;
+    const entrySchema = familySchema.shape.entriesById._zod.def.innerType._zod.def.valueType;
     const entriesById = Object.fromEntries(Object.entries(projected.entriesById).flatMap(([entryId, entry]) => {
         const pluginId = typeof entry.pluginId === 'string' ? entry.pluginId : null;
         const occurrenceId = pluginId ? occurrenceIdsByPluginId?.[pluginId] : undefined;
@@ -104,23 +104,24 @@ function freezeProjectedFamilyV2<Family extends PluginProjectedFamilyV2>(
     }) as Family;
 }
 
+export function buildPluginProjectionFamilyV2<Family extends PluginProjectedFamilyV2>(
+    context: PluginProjectionFamilyContextV2,
+    descriptor: PluginProjectionFamilyDescriptorV2<Family>,
+): Family {
+    const projected = descriptor.project(context);
+    if (projected.family !== descriptor.family) {
+        throw new Error(`Plugin projection family descriptor '${descriptor.family}' returned '${projected.family}'`);
+    }
+    return freezeProjectedFamilyV2(projected, context.registry.occurrenceIdsByPluginId, context.onInvalidEntry);
+}
+
 export function buildPluginProjectionFamiliesByIdV2(
     context: PluginProjectionFamilyContextV2,
     descriptors: readonly PluginProjectionFamilyDescriptorV2[],
 ): Readonly<Record<string, PluginProjectedFamilyV2>> {
     const familiesById: Record<string, PluginProjectedFamilyV2> = {};
     for (const descriptor of definePluginProjectionFamilyCatalogV2(descriptors)) {
-        const projected = descriptor.project(context);
-        if (projected.family !== descriptor.family) {
-            throw new Error(
-                `Plugin projection family descriptor '${descriptor.family}' returned '${projected.family}'`,
-            );
-        }
-        familiesById[descriptor.family] = freezeProjectedFamilyV2(
-            projected,
-            context.registry.occurrenceIdsByPluginId,
-            context.onInvalidEntry,
-        );
+        familiesById[descriptor.family] = buildPluginProjectionFamilyV2(context, descriptor);
     }
     return Object.freeze(familiesById);
 }

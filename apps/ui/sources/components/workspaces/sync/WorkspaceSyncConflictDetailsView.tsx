@@ -247,6 +247,13 @@ export const WorkspaceSyncConflictDetailsView = React.memo(function WorkspaceSyn
     const returnedPathRef = React.useRef<string | null>(null);
     const listRef = React.useRef<VirtualizedListRef | null>(null);
     const listScrollOffsetRef = React.useRef(0);
+    const resolutionControllerRef = React.useRef<AbortController | null>(null);
+
+    React.useEffect(() => {
+        setResolving(false);
+        setActionPhase(null);
+        return () => resolutionControllerRef.current?.abort();
+    }, [inspectionScopeKey, selectedPath]);
 
     React.useEffect(() => {
         if (previousScopeKeyRef.current === inspectionScopeKey) return;
@@ -447,6 +454,11 @@ export const WorkspaceSyncConflictDetailsView = React.memo(function WorkspaceSyn
             `${endpointLabel(alternative.source.workspaceRefId)} · ${entryLabel(alternative.source.expected)} → ${endpointLabel(alternative.destination.workspaceRefId)} · ${alternative.destination.path}`,
             ...consequenceLines(alternative.consequence),
         ]) : [];
+        resolutionControllerRef.current?.abort();
+        const controller = new AbortController();
+        resolutionControllerRef.current = controller;
+        const isCurrentRequest = () => !controller.signal.aborted
+            && resolutionControllerRef.current === controller && activeScopeKeyRef.current === requestedScopeKey;
         const confirmed = await Modal.confirm(
             t('workspaceSync.review.confirmTitle'),
             [request.path, `${endpointLabel(workspaceRefId)} · ${entryLabel(request.source.expected)}`, ...reviewedTargets, ...preserved,
@@ -455,7 +467,7 @@ export const WorkspaceSyncConflictDetailsView = React.memo(function WorkspaceSyn
                 ...(untouched.some((endpoint) => endpoint.outcome !== 'observed') ? [t('workspaceSync.review.confirmScope')] : [])].join('\n'),
             { cancelText: t('common.cancel'), confirmText: t(strategy === 'keep_both' ? 'workspaceSync.review.keepAlternatives' : 'workspaceSync.review.useVersion'), destructive: true, focusReturnRef: actionRef },
         );
-        if (!confirmed || activeScopeKeyRef.current !== requestedScopeKey) return;
+        if (!confirmed || !isCurrentRequest()) return;
         setResolving(true);
         setActionPhase('requesting_approval');
         setResolveError(null);
@@ -463,19 +475,20 @@ export const WorkspaceSyncConflictDetailsView = React.memo(function WorkspaceSyn
             const result = await resolveWorkspaceSyncConflict({
                 controllerMachineId: currentControllerMachineId,
                 serverId: currentServerId,
+                signal: controller.signal,
                 request,
-                onPhase: setActionPhase,
+                onPhase: phase => { if (isCurrentRequest()) setActionPhase(phase); },
             });
-            if (activeScopeKeyRef.current !== requestedScopeKey) return;
+            if (!isCurrentRequest()) return;
             setOutcome(result);
             refresh();
         } catch (error: unknown) {
-            if (activeScopeKeyRef.current !== requestedScopeKey) return;
+            if (!isCurrentRequest()) return;
             const code = error && typeof error === 'object' && 'code' in error ? error.code : null;
             setResolveError(code === 'conflict_changed' ? 'changed' : 'failed');
             if (code === 'conflict_changed') refresh();
         } finally {
-            if (activeScopeKeyRef.current === requestedScopeKey) {
+            if (isCurrentRequest()) {
                 setResolving(false);
                 setActionPhase(null);
             }
@@ -725,7 +738,7 @@ export const WorkspaceSyncConflictDetailsView = React.memo(function WorkspaceSyn
                     const mode = resolveWorkspaceSyncModeTranslationKey(summary.relationship.mode);
                     const error = summary.status?.errorCode ? resolveWorkspaceSyncErrorTranslationKey(summary.status.errorCode) : null;
                     return <Item key={summary.relationshipId}
-                        title={`${summary.alpha.label} · ${summary.beta.label}`}
+                        title={`${summary.alpha.name} · ${summary.beta.name}`}
                         subtitle={[summary.relationshipId === props.resource.initialRelationshipId ? t('workspaceSync.error.needsAttention') : null,
                             mode ? t(mode) : t('workspaceSync.unknownMode'), t(resolveWorkspaceSyncRelationshipStateLabel({
                             enabled: summary.relationship.enabled,

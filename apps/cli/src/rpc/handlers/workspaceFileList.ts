@@ -141,6 +141,9 @@ export function registerWorkspaceFileListHandler(
                 };
             } catch (error) {
                 if (context?.signal?.aborted || isAbortError(error)) throw error;
+                if (error instanceof Error && 'code' in error && error.code === 'WORKSPACE_ROOT_NOT_FOUND') {
+                    return { ok: false, errorCode: 'root_not_found' };
+                }
                 return { ok: false, errorCode: 'ripgrep_unavailable' };
             }
         },

@@ -1,0 +1,91 @@
+import type { SessionQuestionContextV1 } from '@happier-dev/protocol/sessions/permissions/questionV1';
+import type { SessionQuestionHandlerV1 } from '@happier-dev/protocol/sessions/permissions/v1';
+import type { TranscriptAccountActor } from '@happier-dev/session-core/messages';
+
+import { t } from '@/text';
+import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
+import { areServerAccountScopesEqual, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+
+/** Answer identity is a separate, host-stamped actor, never the worker's requester. */
+export function resolveAskUserQuestionAnsweredByLabel(input: Readonly<{
+  answeredBy: SessionQuestionHandlerV1 | null | undefined;
+  answeringSession?: Readonly<{ sessionId: string; name: string | null }>;
+  serverId?: string | null;
+  viewerScope?: ServerAccountScope | null;
+  answeringAccountActor?: TranscriptAccountActor | null;
+}>): string | null {
+  const { answeredBy } = input;
+  if (answeredBy?.kind === 'session') {
+    const name = input.answeringSession?.sessionId === answeredBy.sessionId ? input.answeringSession.name?.trim() : null;
+    return t('workflows.run.answeredBy', { name: name || t('message.provenanceSession') });
+  }
+  if (answeredBy?.kind !== 'person') return null;
+  const scope = answeredBy.accountId && input.serverId ? { serverId: input.serverId, accountId: answeredBy.accountId } : null;
+  const actor = areServerAccountScopesEqual(scope, input.answeringAccountActor) ? input.answeringAccountActor : null;
+  if (actor && actor.profile === null) return t('workflows.run.answeredBy', { name: t('message.accountActorFormerMember') });
+  if (areServerAccountScopesEqual(scope, input.viewerScope)) return t('workflows.run.answeredByYou');
+  const name = actor?.profile ? formatAccountDisplayName(actor.profile) : null;
+  return name ? t('workflows.run.answeredBy', { name }) : t('workflows.run.answeredByPerson');
+}
+
+/** The handling manager as the card may show it: a display name and its current reachability. */
+export type AskUserQuestionHandler = Readonly<{
+  name: string;
+  availability: 'online' | 'offline' | 'stopped';
+}>;
+
+export type AskUserQuestionLead =
+  | Readonly<{ kind: 'not_blocking'; assumption: string }>
+  | Readonly<{
+      kind: 'handler';
+      name: string;
+      away: 'offline' | 'stopped' | null;
+    }>;
+
+/**
+ * The one line above the questions. A manager handling the question speaks first (quietly while it can
+ * answer, as the person's turn when it cannot); otherwise a non-blocking question names the assumption the
+ * agent is acting on. An ordinary waiting question needs no line: the card itself is the request.
+ */
+export function resolveAskUserQuestionLead(
+  input: Readonly<{
+    questionV1: SessionQuestionContextV1 | undefined;
+    handler: AskUserQuestionHandler | null;
+  }>,
+): AskUserQuestionLead | null {
+  if (input.handler) {
+    return {
+      kind: 'handler',
+      name: input.handler.name,
+      away:
+        input.handler.availability === 'online'
+          ? null
+          : input.handler.availability,
+    };
+  }
+  if (input.questionV1?.mode === 'continue' && input.questionV1.assumption) {
+    return { kind: 'not_blocking', assumption: input.questionV1.assumption };
+  }
+  return null;
+}
+
+export type AskUserQuestionFooterHint =
+  | Readonly<{ kind: 'progress'; answered: number; total: number }>
+  | Readonly<{ kind: 'starts_next_turn' }>
+  | Readonly<{ kind: 'next_step' }>;
+
+/** Progress while a multi-question form is incomplete, then the consequence of answering. */
+export function resolveAskUserQuestionFooterHint(
+  input: Readonly<{
+    mode: SessionQuestionContextV1['mode'] | undefined;
+    total: number;
+    answered: number;
+  }>,
+): AskUserQuestionFooterHint {
+  if (input.total > 1 && input.answered < input.total) {
+    return { kind: 'progress', answered: input.answered, total: input.total };
+  }
+  return input.mode === 'continue'
+    ? { kind: 'next_step' }
+    : { kind: 'starts_next_turn' };
+}

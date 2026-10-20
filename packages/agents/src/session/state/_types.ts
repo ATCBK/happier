@@ -132,6 +132,8 @@ export type SessionStateWrite<F extends SessionStateFieldId> = Readonly<{
 export interface SessionStateBinding<F extends SessionStateFieldId> {
   read(metadata: SessionMetadata): SessionStateStoredValue<F>;
   write(metadata: SessionMetadata, update: SessionStateWrite<F>): SessionMetadata;
+  /** Person-facing edits reapply only while this field's first-read basis is unchanged. */
+  readMutationBasis?(metadata: SessionMetadata): unknown;
 }
 
 export type SessionStateFieldDescriptor<F extends SessionStateFieldId = SessionStateFieldId> = Readonly<{

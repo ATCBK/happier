@@ -21,6 +21,7 @@ import {
   normalizeGithubRepositoryEventForAutomation,
   type GithubAutomationEventCheckpointedPullObserver,
 } from './githubAutomationEventObserver.js';
+import { parseGithubRepositoryEventsCursor } from './githubRepositoryEventsCursor.js';
 import {
   GITHUB_AUTOMATION_REPOSITORY_EVENT_BACKGROUND_SERVICE_ID,
   GITHUB_AUTOMATION_REPOSITORY_SOURCE_ATTEMPT_ACTION_ID,
@@ -337,8 +338,12 @@ function sourceAttemptContext(
     services: {
       ...context.services,
       events: context.services.events ?? {
+        plugin: {
+          emit: async () => { throw new Error('Unexpected plugin event emission'); },
+          subscribe: () => { throw new Error('Unexpected plugin event subscription'); },
+        },
         host: { subscribe: vi.fn(() => ({ dispose() {} })) },
-      } as BackgroundServiceContext['services']['events'],
+      },
       actions: {
         ...context.services.actions,
         execute: async (actionId: unknown, input: unknown, options?: unknown): Promise<unknown> => {
@@ -3037,7 +3042,7 @@ describe('GitHub Automation Event checkpointed-pull observer', () => {
         sourceReadCount += 1;
         if (invalidateDuringRead && sourceReadCount === 1) invalidate();
         return {
-          kind: 'page', revision: sources.length ? '8' : '7', definitions: sources, nextCursor: null,
+          kind: 'page', revision: sources.length ? '8' : '7', definitions: [...sources], nextCursor: null,
         } satisfies PluginActionResultById['automation.event.sources.list'];
       }
       if (actionId === 'automation.event.source.status.report') return {};
@@ -3070,9 +3075,7 @@ describe('GitHub Automation Event checkpointed-pull observer', () => {
       const baseline = checkpoints.read(createGithubAutomationEventCheckpointRowId({
         automationId: source.automationId, sourceSelectorId: source.sourceSelectorId,
       }));
-      const cursor = baseline?.value.payload.cursor;
-      if (cursor === null || typeof cursor !== 'object' || Array.isArray(cursor)
-        || typeof cursor.observedAtMs !== 'number') throw new Error('Expected a completed GitHub baseline');
+      const cursor = parseGithubRepositoryEventsCursor(baseline?.value.payload.cursor);
       // waitFor advances fake time: measure from the retained observation, not wait completion.
       const untilPoll = cursor.observedAtMs + 17_000 - Date.now();
       expect(untilPoll).toBeGreaterThan(0);

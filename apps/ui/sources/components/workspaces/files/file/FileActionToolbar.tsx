@@ -386,17 +386,22 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
         const contentActions = props.contentActions;
         const rawLabel = t('settingsSourceControl.page.editor.raw');
         const copyLabel = t('common.copy');
-        if (useCompactLayout) {
-            menuActions.push({ id: 'raw', title: rawLabel, testID: 'file-details-raw',
-                onSelect: contentActions.onRaw, disabled: contentActions.rawDisabled, loading: contentActions.rawBusy });
-            menuActions.push({ id: 'copy-content', title: copyLabel, testID: 'file-details-copy-content',
-                onSelect: contentActions.onCopy, disabled: contentActions.copyDisabled, loading: contentActions.copyBusy });
-        } else {
-            buttons.push({ label: rawLabel, testID: 'file-details-raw', onPress: contentActions.onRaw,
-                disabled: contentActions.rawDisabled, busy: contentActions.rawBusy });
-            buttons.push({ label: copyLabel, testID: 'file-details-copy-content', onPress: contentActions.onCopy,
-                disabled: contentActions.copyDisabled, busy: contentActions.copyBusy });
-        }
+        // Quietest first: the header folds buttons into `⋯` in this order when its row runs out of room.
+        buttons.push({ label: rawLabel, testID: 'file-details-raw', onPress: () => { void contentActions.onRaw(); },
+            disabled: contentActions.rawDisabled, busy: contentActions.rawBusy });
+        buttons.push({ label: copyLabel, testID: 'file-details-copy-content', onPress: () => { void contentActions.onCopy(); },
+            disabled: contentActions.copyDisabled, busy: contentActions.copyBusy });
+    }
+    // Starting a line selection is one of the file's actions, on the header's row rather than a row of its own.
+    const startLineSelection = scmWriteEnabled && canUseSelectionActions && canStartLineSelection && onStartLineSelection && !isLineSelectionActive
+        ? onStartLineSelection : null;
+    if (startLineSelection) {
+        buttons.push({
+            label: t('files.fileActions.selectLines'),
+            onPress: startLineSelection,
+            disabled: actionBusy,
+            testID: hasAppliedPartialLineSelection ? 'file-details-edit-line-selection' : 'file-details-select-lines',
+        });
     }
     if (showFileEditorActions && displayMode === 'file' && isEditingFile) {
         buttons.push({
@@ -484,8 +489,8 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
         </View>
     );
 
-    const lineSelectionBar = isLineSelectionActive || hasSelectedLines || showEmptyLineSelectionActions || hasAppliedPartialLineSelection
-        || (scmWriteEnabled && canUseSelectionActions && canStartLineSelection && onStartLineSelection) ? (
+    const selectionHintShown = scmWriteEnabled && canUseSelectionActions && diffMode === 'both' && !hasSelectedLines;
+    const lineSelectionBar = isLineSelectionActive || hasSelectedLines || showEmptyLineSelectionActions || selectionHintShown ? (
         <View
             testID="file-details-change-actions"
             style={{
@@ -500,34 +505,12 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
                 borderBottomColor: theme.colors.border.subtle,
             }}
         >
-            {lineSelectionEnabled ? (
-                <View
-                    testID="file-details-line-selection-available"
-                    style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }}
-                />
-            ) : null}
-            {isLineSelectionActive && lineSelectionEnabled ? (
-                <View
-                    testID="file-details-line-selection-active"
-                    style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }}
-                />
-            ) : null}
             {isLineSelectionActive && lineSelectionEnabled && onStartRangeSelection ? (
                 <ToolbarButton
                     onPress={onStartRangeSelection}
                     testID="file-details-range-selection"
                     label={t('files.fileActions.rangeSelection')}
                     active={isRangeSelectionActive}
-                />
-            ) : null}
-            {scmWriteEnabled && canUseSelectionActions && canStartLineSelection && onStartLineSelection && !isLineSelectionActive ? (
-                <ToolbarButton
-                    disabled={actionBusy}
-                    onPress={onStartLineSelection}
-                    testID={hasAppliedPartialLineSelection ? 'file-details-edit-line-selection' : 'file-details-select-lines'}
-                    label={t('files.fileActions.selectLines')}
-                    size="md"
-                    style={selectionActionStyle}
                 />
             ) : null}
             {showEmptyLineSelectionActions ? (
@@ -539,7 +522,7 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
                     style={selectionActionStyle}
                 />
             ) : null}
-            {scmWriteEnabled && canUseSelectionActions && diffMode === 'both' && !hasSelectedLines ? (
+            {selectionHintShown ? (
                 <Text style={{ ...Typography.variant('meta'), color: theme.colors.text.secondary,  }}>
                     {t('files.fileActions.selectionHint')}
                 </Text>
@@ -586,6 +569,18 @@ export function FileActionToolbar(props: FileActionToolbarProps) {
 
     return (
         <View testID="file-action-toolbar" onLayout={onToolbarLayout}>
+            {lineSelectionEnabled ? (
+                <View
+                    testID="file-details-line-selection-available"
+                    style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }}
+                />
+            ) : null}
+            {isLineSelectionActive && lineSelectionEnabled ? (
+                <View
+                    testID="file-details-line-selection-active"
+                    style={{ position: 'absolute', width: 1, height: 1, opacity: 0, pointerEvents: 'none' }}
+                />
+            ) : null}
             <DetailsTabHeader
                 testID="file-details-header"
                 title={props.hostNamesFile ? '' : pathName || pathDir || ''}

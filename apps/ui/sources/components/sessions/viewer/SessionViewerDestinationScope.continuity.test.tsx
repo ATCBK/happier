@@ -21,7 +21,7 @@ import {
     type SessionViewerPresence,
 } from './SessionViewerController';
 import { SessionViewerControllerProvider } from './SessionViewerControllerProvider';
-import { SessionViewerDestinationScope, useSessionViewerDestinationScope } from './SessionViewerDestinationScope';
+import { SessionViewerDestinationScope, useSessionDestinationAccountBinding, useSessionViewerDestinationScope } from './SessionViewerDestinationScope';
 import { RetainedSessionViewerSource } from './RetainedSessionViewerSource';
 import { SessionViewerHost } from './SessionViewerHost';
 import { SessionViewerStickySlot } from './SessionViewerStickySlot';
@@ -34,6 +34,39 @@ const presence: SessionViewerPresence = {
 };
 
 describe('Session viewer destination continuity', () => {
+    it('keeps unresolved destination custody distinct from an absent or differently addressed owner', async () => {
+        const home = await upsertServerProfileOnly({ serverUrl: 'https://session-destination-authority.test', name: 'Session authority' });
+        await TokenStorage.setCredentialsForServerUrl(home.serverUrl, { serverId: home.id }, {
+            token: `e30.${Buffer.from(JSON.stringify({ sub: 'session-account' })).toString('base64url')}.signature`,
+        });
+        const observed: Array<ReturnType<typeof useSessionDestinationAccountBinding>> = [];
+        function Probe() {
+            const binding = useSessionDestinationAccountBinding('session-a', home.id);
+            observed.push(binding);
+            return React.createElement('DestinationAuthorityProbe', {
+                binding,
+                otherSession: useSessionDestinationAccountBinding('session-b', home.id),
+                otherHome: useSessionDestinationAccountBinding('session-a', 'other-home'),
+            });
+        }
+        const screen = await renderScreen(<SessionViewerDestinationScope sessionId="session-a" serverId={home.id}>
+            <Probe />
+        </SessionViewerDestinationScope>);
+        try {
+            expect(observed[0]).toBeNull();
+            const { binding, otherSession, otherHome } = screen.root.findByType('DestinationAuthorityProbe').props;
+            expect(binding?.isCurrent()).toBe(true);
+            expect(otherSession).toBeUndefined();
+            expect(otherHome).toBeUndefined();
+            await screen.update(<Probe />);
+            expect(screen.root.findByType('DestinationAuthorityProbe').props.binding).toBeUndefined();
+            expect(binding.isCurrent()).toBe(false);
+        } finally {
+            await screen.unmount();
+            await TokenStorage.removeCredentialsForServerUrl(home.serverUrl, { serverId: home.id });
+        }
+    });
+
     it('keeps the live source and presence presented through phone-to-1440 shell remounts, restore and close', async () => {
         const home = await upsertServerProfileOnly({ serverUrl: 'https://viewer-continuity.test', name: 'Viewer continuity' });
         // Secure credential storage is the external boundary; real parsing/binding owns the lifetime.
@@ -55,7 +88,7 @@ describe('Session viewer destination continuity', () => {
             observed.bound = destination !== null;
             return <>
                 {isSessionViewerPresenting(controller, 'computer') && destination ? (
-                    <RetainedSessionViewerSource slotId="continuity-source" serverId={home.id} accountLifetime={destination.accountLifetime}>
+                    <RetainedSessionViewerSource sessionId="session-a" slotId="continuity-source" serverId={home.id} accountLifetime={destination.accountLifetime}>
                         <Source />
                     </RetainedSessionViewerSource>
                 ) : null}

@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { View } from 'react-native';
 import { act } from 'react-test-renderer';
 import type { ReactTestInstance } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,7 +7,6 @@ import type {
     PluginProjectedComposerAttachmentEntryV1,
 } from '@happier-dev/protocol';
 
-import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { installAgentInputCommonModuleMocks } from '../agentInputTestHelpers';
 
 import type { AgentInputAttachmentsRowItem } from '../agentInputContracts';
@@ -73,6 +71,12 @@ vi.mock('@/components/sessions/attachments/preview/AttachmentImagePreviewModal',
     AttachmentImagePreviewModal: () => null,
 }));
 
+// Configure the native SDK boundary before renderer consumers import it, and
+// collect the component graph before entering any timed mounted interaction.
+const { View } = await import('react-native');
+const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
+const { AgentInputAttachmentsRow } = await import('./AgentInputAttachmentsRow');
+
 function flattenStyle(style: unknown): Record<string, unknown> {
     if (!style) return {};
     if (Array.isArray(style)) {
@@ -97,7 +101,6 @@ describe('AgentInputAttachmentsRow', () => {
 
     it('uses disjoint 48dp Android frames for preview and removal instead of overlapping hit slop', async () => {
         attachmentRowPlatform.os = 'android';
-        const { AgentInputAttachmentsRow } = await import('./AgentInputAttachmentsRow');
         const screen = await renderScreen(
             <AgentInputAttachmentsRow
                 items={[
@@ -149,7 +152,6 @@ describe('AgentInputAttachmentsRow', () => {
     });
 
     it('renders a host-projected staged-media thumbnail without requiring a direct image URI', async () => {
-        const { AgentInputAttachmentsRow } = await import('./AgentInputAttachmentsRow');
         const onPreview = vi.fn();
 
         const screen = await renderScreen(
@@ -172,7 +174,6 @@ describe('AgentInputAttachmentsRow', () => {
     });
 
     it('moves focus to a surviving attachment and then the Composer after host removal', async () => {
-        const { AgentInputAttachmentsRow } = await import('./AgentInputAttachmentsRow');
         const focusComposer = vi.fn();
 
         function Harness(): React.ReactElement {
@@ -217,7 +218,6 @@ describe('AgentInputAttachmentsRow', () => {
     });
 
     it('gives each plugin attachment removal a distinct localized name without opening its preview', async () => {
-        const { AgentInputAttachmentsRow } = await import('./AgentInputAttachmentsRow');
         const { projectComposerAttachmentRowItems } = await import('../../composer/composerAttachmentProjection');
         const onRemove = vi.fn();
         const onPreview = vi.fn();
@@ -274,8 +274,10 @@ describe('AgentInputAttachmentsRow', () => {
         ));
 
         expect(removals).toHaveLength(2);
+        const { resolveMinimumInteractiveTargetSize } = await import('@/components/ui/interactiveTargetSize');
+        const touchFloor = resolveMinimumInteractiveTargetSize('web');
         for (const remove of removals) {
-            expect(flattenStyle(remove.props.style)).toMatchObject({ minHeight: 44, minWidth: 44 });
+            expect(flattenStyle(remove.props.style)).toMatchObject({ minHeight: touchFloor, minWidth: touchFloor });
             act(() => {
                 remove.props.onPress?.({} as never);
             });
@@ -288,7 +290,6 @@ describe('AgentInputAttachmentsRow', () => {
     });
 
     it('keeps compact badge/media/surface items in one rail and puts a content surface in the row-owned band', async () => {
-        const { AgentInputAttachmentsRow } = await import('./AgentInputAttachmentsRow');
         const onRemove = vi.fn();
         const items = [
             { kind: 'badge', key: 'browser', label: 'Browser context', testID: 'row-badge' },
@@ -334,7 +335,6 @@ describe('AgentInputAttachmentsRow', () => {
     });
 
     it('mounts only visible content surface bodies while every host header remains reachable in the bounded attachment viewport', async () => {
-        const { AgentInputAttachmentsRow } = await import('./AgentInputAttachmentsRow');
         const items = Array.from({ length: 64 }, (_value, index) => ({
             kind: 'surface' as const,
             key: `native-content-${index}`,
@@ -375,7 +375,7 @@ describe('AgentInputAttachmentsRow', () => {
         expect(screen.findAllByTestId('native-content-body:63')).toHaveLength(0);
 
         await act(async () => {
-            screen.tree.update(render(63 * 48));
+            await screen.update(render(63 * 48));
         });
 
         expect(screen.findAllByTestId('native-content-body:0')).toHaveLength(0);
@@ -383,7 +383,6 @@ describe('AgentInputAttachmentsRow', () => {
     });
 
     it('requires the compact rail viewport as well as the attachment viewport before mounting compact surface bodies', async () => {
-        const { AgentInputAttachmentsRow } = await import('./AgentInputAttachmentsRow');
         const items = [
             {
                 kind: 'surface',
@@ -439,7 +438,6 @@ describe('AgentInputAttachmentsRow', () => {
     });
 
     it('keeps host-owned removal labelled, reachable, and minimum-sized for every row arm', async () => {
-        const { AgentInputAttachmentsRow } = await import('./AgentInputAttachmentsRow');
         const removeBadge = vi.fn();
         const removeMedia = vi.fn();
         const removeSurface = vi.fn();
@@ -480,20 +478,21 @@ describe('AgentInputAttachmentsRow', () => {
             ['row-remove-surface-remove', 'Remove incident summary', removeSurface],
         ] as const;
 
+        const { resolveMinimumInteractiveTargetSize } = await import('@/components/ui/interactiveTargetSize');
+        const touchFloor = resolveMinimumInteractiveTargetSize('web');
         for (const [testID, label, handler] of removals) {
             const remove = screen.findByTestId(testID);
             expect(remove?.props.accessibilityRole).toBe('button');
             expect(remove?.props.accessibilityLabel).toBe(label);
             const style = flattenStyle(remove?.props.style);
-            expect(Math.max(Number(style.minHeight ?? 0), Number(style.height ?? 0))).toBeGreaterThanOrEqual(44);
-            expect(Math.max(Number(style.minWidth ?? 0), Number(style.width ?? 0))).toBeGreaterThanOrEqual(44);
+            expect(Math.max(Number(style.minHeight ?? 0), Number(style.height ?? 0))).toBeGreaterThanOrEqual(touchFloor);
+            expect(Math.max(Number(style.minWidth ?? 0), Number(style.width ?? 0))).toBeGreaterThanOrEqual(touchFloor);
             await screen.pressByTestIdAsync(testID);
             expect(handler).toHaveBeenCalledTimes(1);
         }
     });
 
     it('keeps host removal available while an upload is in progress', async () => {
-        const { AgentInputAttachmentsRow } = await import('./AgentInputAttachmentsRow');
         const onRemove = vi.fn();
         const screen = await renderScreen(
             <AgentInputAttachmentsRow
@@ -517,7 +516,6 @@ describe('AgentInputAttachmentsRow', () => {
     });
 
     it('does not activate an attachment preview when its host removal is pressed', async () => {
-        const { AgentInputAttachmentsRow } = await import('./AgentInputAttachmentsRow');
         const onPress = vi.fn();
         const onRemove = vi.fn();
         const onFallbackPress = vi.fn();
@@ -561,7 +559,6 @@ describe('AgentInputAttachmentsRow', () => {
     });
 
     it('hands a modal attachment action the real badge origin for focus return', async () => {
-        const { AgentInputAttachmentsRow } = await import('./AgentInputAttachmentsRow');
         const onPress = vi.fn();
         const screen = await renderScreen(
             <AgentInputAttachmentsRow items={[{
@@ -581,7 +578,6 @@ describe('AgentInputAttachmentsRow', () => {
     });
 
     it('uses host preview affordances for adapter media and custom surfaces while retaining error feedback', async () => {
-        const { AgentInputAttachmentsRow } = await import('./AgentInputAttachmentsRow');
         const onMediaPreview = vi.fn();
         const onSurfacePreview = vi.fn();
         const screen = await renderScreen(
@@ -624,7 +620,6 @@ describe('AgentInputAttachmentsRow', () => {
     });
 
     it('announces unavailable or invalid attachments while retaining their localized removal affordance', async () => {
-        const { AgentInputAttachmentsRow } = await import('./AgentInputAttachmentsRow');
         const onRemove = vi.fn();
         const screen = await renderScreen(
             <AgentInputAttachmentsRow
@@ -672,7 +667,6 @@ describe('AgentInputAttachmentsRow', () => {
     });
 
     it('closes a contentless attachment preview through dismissal and host removal', async () => {
-        const { AgentInputAttachmentsRow } = await import('./AgentInputAttachmentsRow');
         const onRemove = vi.fn();
         const renderPreviewPopover = vi.fn((ctx: Readonly<{
             open: boolean;
@@ -723,7 +717,6 @@ describe('AgentInputAttachmentsRow', () => {
     });
 
     it('retires an open preview when the exact renderer interaction is replaced', async () => {
-        const { AgentInputAttachmentsRow } = await import('./AgentInputAttachmentsRow');
         const renderPreviewPopoverA = vi.fn((ctx: Readonly<{
             open: boolean;
             anchorRef: React.RefObject<any>;

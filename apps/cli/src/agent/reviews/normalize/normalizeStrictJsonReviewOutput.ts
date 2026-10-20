@@ -4,6 +4,7 @@ import { ReviewFindingSchema } from '@happier-dev/protocol/reviews/ReviewFinding
 import { ReviewQuestionSchema } from '@happier-dev/protocol/reviews/ReviewQuestion';
 import { ReviewCommentProposalsV1Schema } from '@happier-dev/protocol/reviews/comments/proposals';
 import { ReviewFindingsV2Schema } from '@happier-dev/protocol/messages/structured/reviewFindingsV2';
+import { firstMarkdownProse } from '@happier-dev/protocol/messages/markdownPlainText';
 import { ScmComparisonSchema } from '@happier-dev/protocol/scm/comparison';
 
 import type {
@@ -17,6 +18,11 @@ function parseModelFinding(value: unknown) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return ReviewFindingSchema.safeParse(value);
   // Persisted references are attached only by the host ReviewComment owner.
   const { comment: _modelComment, ...finding } = value as Record<string, unknown>;
+  // Models use an empty patch to report that no replacement was proposed.
+  if (finding.patch === '') delete finding.patch;
+  for (const [key, schema] of Object.entries(ReviewFindingSchema.shape)) {
+    if (finding[key] === null && schema.safeParse(undefined).success) delete finding[key];
+  }
   return ReviewFindingSchema.safeParse(finding);
 }
 
@@ -105,7 +111,7 @@ export function normalizeStrictJsonReviewOutput(params: Readonly<{
         generatedAtMs: params.finishedAtMs,
       },
     };
-    const summary = answerMarkdownRaw.split('\n')[0]?.trim() || 'Review follow-up completed.';
+    const summary = firstMarkdownProse(answerMarkdownRaw) || 'Review follow-up completed.';
     return {
       status: 'succeeded',
       summary,
@@ -207,8 +213,9 @@ export function normalizeStrictJsonReviewOutput(params: Readonly<{
     ? comparison.inventory as Record<string, unknown> : {};
   const limits = parsedRecord.limits && typeof parsedRecord.limits === 'object'
     ? parsedRecord.limits as Record<string, unknown> : {};
-  const reviewOutcome = parsedRecord.status === 'failed' ? 'failed'
-    : parsedRecord.status === 'partial' || limits.findingsTruncated === true
+  // A findings array reports findings, not whether inspection succeeded.
+  const reviewOutcome = parsedRecord.status === 'failed' || parsedRecord.reviewOutcome === 'failed' ? 'failed'
+    : parsedRecord.status === 'partial' || parsedRecord.reviewOutcome !== 'complete' || limits.findingsTruncated === true
       || (inventory.state !== undefined && inventory.state !== 'complete') ? 'partial' : 'complete';
   const { triage: _triage, publication: _publication, commentIds: _commentIds,
     materialization: _materialization, materializationFailures: _materializationFailures,

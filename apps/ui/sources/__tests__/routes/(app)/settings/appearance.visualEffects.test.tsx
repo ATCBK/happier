@@ -2,8 +2,16 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { renderSettingsView, standardCleanup } from '@/dev/testkit';
-import { installSessionSettingsEntryModuleMocks, resetSessionSettingsEntryState, sessionSettingsEntryState } from './sessionSettingsEntryTestHelpers';
+import { renderSettingsView as renderBaseSettingsView, standardCleanup } from '@/dev/testkit';
+import 'fake-indexeddb/auto';
+import { InjectedAuthProvider } from '@/auth/context/AuthContext';
+import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { localSettingsParse } from '@/sync/domains/settings/localSettings';
+import { storage } from '@/sync/domains/state/storageStore';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { resetSessionSettingsEntryState, sessionSettingsEntryState } from './sessionSettingsEntryTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -18,60 +26,58 @@ const shared = vi.hoisted(() => ({
     } as Record<string, unknown>,
 }));
 
-type MutableSettingHook = (key: string) => [unknown, (next: unknown) => void];
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+installDisconnectedServerSocketBoundary();
+const initialStorage = storage.getState();
+let account: Awaited<ReturnType<typeof createSecretSettingsTestHarness>> | undefined;
 
-const createMutableSettingHook = (settingsState: Record<string, unknown>): MutableSettingHook => {
-    return (key: string) => [
-        Object.prototype.hasOwnProperty.call(settingsState, key) ? settingsState[key] : null,
-        (next: unknown) => {
-            settingsState[key] = next;
+async function renderSettingsView(element: React.ReactElement, options?: Parameters<typeof renderBaseSettingsView>[1]) {
+    account = await createSecretSettingsTestHarness({ token: createAccountTokenForTests('account-a', { currentAccount: true }),
+        sharedEnabled: false, settings: settingsParse(shared.settingsState) });
+    storage.setState({ localSettings: localSettingsParse(shared.settingsState) });
+    const credentials = account.credentials;
+    const wrapper = ({ children }: React.PropsWithChildren) => <InjectedAuthProvider credentials={credentials}>{children}</InjectedAuthProvider>;
+    return renderBaseSettingsView(element, { ...options, wrapper });
+}
+
+await vi.hoisted(async () => {
+    const { installSessionSettingsEntryModuleMocks } = await import('./sessionSettingsEntryTestHelpers');
+    installSessionSettingsEntryModuleMocks({
+        reactNative: async () => {
+            const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+            const viewport = { width: 1200, height: 900, scale: 1, fontScale: 1 };
+            return createReactNativeWebMock({
+                Appearance: { getColorScheme: () => 'light' },
+                Dimensions: { get: () => viewport },
+                useWindowDimensions: () => viewport,
+            });
         },
-    ];
-};
-
-installSessionSettingsEntryModuleMocks({
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            Appearance: { getColorScheme: () => 'light' },
-        });
-    },
-    unistyles: async () => {
-        const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-        return createUnistylesMock({
-            theme: {
-                colors: {
-                    accent: { blue: '#00f', orange: '#f90', indigo: '#6366f1' },
-                    status: { connecting: '#09f' },
+        unistyles: async () => {
+            const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+            return createUnistylesMock({
+                theme: {
+                    colors: {
+                        accent: { blue: '#00f', orange: '#f90', indigo: '#6366f1' },
+                        status: { connecting: '#09f' },
+                    },
                 },
-            },
-            runtime: {
-                setAdaptiveThemes: vi.fn(),
-                setTheme: vi.fn(),
-                setRootViewBackgroundColor: vi.fn(),
-            },
-        });
-    },
-    textModule: async () => {
-        const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        return {
-            ...createTextModuleMock(),
-            getLanguageNativeName: () => 'English',
-            SUPPORTED_LANGUAGES: { en: true },
-        };
-    },
-    storageModule: async (importOriginal) => {
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        const mutableSetting = createMutableSettingHook(shared.settingsState);
-        return createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                useSettingMutable: mutableSetting as typeof import('@/sync/domains/state/storage')['useSettingMutable'],
-                useLocalSettingMutable: mutableSetting as typeof import('@/sync/domains/state/storage')['useLocalSettingMutable'],
-            },
-        });
-    },
-    useDeviceType: 'desktop',
+                runtime: {
+                    setAdaptiveThemes: vi.fn(),
+                    setTheme: vi.fn(),
+                    setRootViewBackgroundColor: vi.fn(),
+                },
+            });
+        },
+        textModule: async () => {
+            const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+            return {
+                ...createTextModuleMock(),
+                getLanguageNativeName: () => 'English',
+                SUPPORTED_LANGUAGES: { en: true },
+            };
+        },
+    });
 });
 
 vi.mock('expo-localization', () => ({ getLocales: () => [{ languageTag: 'en-US' }] }));
@@ -81,8 +87,11 @@ vi.mock('expo-system-ui', () => ({ setBackgroundColorAsync: vi.fn() }));
 await import('@/app/(app)/settings/appearance');
 await import('@/app/(app)/settings/appearance/motion');
 
-afterEach(() => {
+afterEach(async () => {
     standardCleanup();
+    await account?.dispose();
+    account = undefined;
+    storage.setState(initialStorage, true);
     resetSessionSettingsEntryState();
     shared.settingsState.visualEffectsLevel = 'full';
     shared.settingsState.animatedNumbers = true;
@@ -102,7 +111,7 @@ describe('Appearance settings — Visual Effects section', () => {
         expect(badgeRow()).not.toHaveLength(0);
         const toggle = badgeRow()[0]?.props.rightElement;
         await act(async () => { toggle.props.onValueChange(false); });
-        expect(shared.settingsState.tabBarFriendsBadgeEnabled).toBe(false);
+        await vi.waitFor(() => expect(account?.persistedSettings.tabBarFriendsBadgeEnabled).toBe(false));
     });
 
     it('renders the effects-level selector and persists a new level', async () => {
@@ -117,7 +126,7 @@ describe('Appearance settings — Visual Effects section', () => {
         await act(async () => {
             levelSelect.props.onChange('minimal');
         });
-        expect(shared.settingsState.visualEffectsLevel).toBe('minimal');
+        await vi.waitFor(() => expect(account?.persistedSettings.visualEffectsLevel).toBe('minimal'));
     });
 
     it('renders the animated-numbers toggle and persists changes', async () => {
@@ -133,7 +142,7 @@ describe('Appearance settings — Visual Effects section', () => {
         await act(async () => {
             switchNode.props.onValueChange(false);
         });
-        expect(shared.settingsState.animatedNumbers).toBe(false);
+        await vi.waitFor(() => expect(account?.persistedSettings.animatedNumbers).toBe(false));
     });
 
     it('renders the context-display selector and persists a new style', async () => {
@@ -148,7 +157,7 @@ describe('Appearance settings — Visual Effects section', () => {
         await act(async () => {
             contextSelect.props.onChange('hidden');
         });
-        expect(shared.settingsState.contextGaugeStyle).toBe('hidden');
+        await vi.waitFor(() => expect(account?.persistedSettings.contextGaugeStyle).toBe('hidden'));
     });
 
     it('renders the always-show-context-size toggle and persists changes', async () => {
@@ -164,7 +173,7 @@ describe('Appearance settings — Visual Effects section', () => {
         await act(async () => {
             switchNode.props.onValueChange(true);
         });
-        expect(shared.settingsState.alwaysShowContextSize).toBe(true);
+        await vi.waitFor(() => expect(account?.persistedSettings.alwaysShowContextSize).toBe(true));
     });
 });
 

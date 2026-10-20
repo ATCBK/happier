@@ -53,6 +53,41 @@ function PortalBinder(props: Readonly<{ slotId: string; label: string }>): React
 }
 
 describe('browser presentation portal (UX-6 webview-above-router)', () => {
+    it('keeps the last measured placement while a replacement visible binder awaits nonzero geometry', async () => {
+        const store = createRetainedPresentationSlotsStore();
+        let measured = { x: 20, y: 30, width: 640, height: 400 };
+        function Harness(props: Readonly<{ phone: boolean; shown?: boolean }>) {
+            return <RetainedPresentationSlotsProvider store={store}>
+                {props.shown !== false ? <RetainedPresentationSlotBinder key={props.phone ? 'phone' : 'wide'} slotId="reflow" enabled>
+                    <MountCountingWebview label="picture" />
+                </RetainedPresentationSlotBinder> : null}
+            </RetainedPresentationSlotsProvider>;
+        }
+        const screen = await renderScreen(<Harness phone={false} />, {
+            // Native/window measurement is the boundary; the binder, registry and portal are real.
+            createNodeMock: () => ({ measureInWindow: (callback: (x: number, y: number, width: number, height: number) => void) => callback(measured.x, measured.y, measured.width, measured.height) }),
+        });
+        const placement = () => StyleSheet.flatten(screen.findHostByTestId('browser-presentation-portal-slot-reflow')!.props.style);
+        const measure = async () => { await act(async () => {
+            invokeTestInstanceHandler(screen.findByTestId('browser-keepalive-placeholder-reflow'), 'onLayout', {});
+        }); };
+        try {
+            await measure();
+            expect(placement()).toMatchObject({ width: 640, height: 400 });
+            await screen.update(<Harness phone />);
+            expect(placement()).toMatchObject({ width: 640, height: 400 });
+            measured = { x: 0, y: 0, width: 0, height: 0 };
+            await measure();
+            expect(placement()).toMatchObject({ width: 640, height: 400 });
+            measured = { x: 16, y: 120, width: 358, height: 224 };
+            await measure();
+            expect(placement()).toMatchObject({ width: 358, height: 224 });
+            await screen.update(<Harness phone={false} />);
+            expect(placement()).toMatchObject({ width: 358, height: 224 });
+            await screen.update(<Harness phone={false} shown={false} />);
+            expect(placement().opacity).toBe(0);
+        } finally { await screen.unmount(); }
+    });
     it('parks an ordinary hidden pane without an explicit visible prop and preserves its source state', async () => {
         const store = createRetainedPresentationSlotsStore();
         function SourceBody() {
@@ -79,7 +114,8 @@ describe('browser presentation portal (UX-6 webview-above-router)', () => {
             expect(store.getPortalSnapshot()[0]).toMatchObject({ visible: true, geometry: { x: 10, y: 20, width: 320, height: 480 } });
             await screen.pressByTestIdAsync('ordinary-pane-change-page');
             await screen.update(<Harness active={false} />);
-            expect(store.getPortalSnapshot()[0]).toMatchObject({ visible: false, geometry: null });
+            expect(store.getPortalSnapshot()[0]?.visible).toBe(false);
+            expect(StyleSheet.flatten(screen.findHostByTestId('browser-presentation-portal-slot-ordinary-pane')!.props.style).opacity).toBe(0);
             expect(screen.findHostByTestId('browser-presentation-portal-slot-ordinary-pane')?.props.pointerEvents).toBe('none');
             expect(screen.findHostByTestId('ordinary-pane-source')?.props.accessibilityLabel).toBe('retained-page');
             await screen.update(<Harness active />);

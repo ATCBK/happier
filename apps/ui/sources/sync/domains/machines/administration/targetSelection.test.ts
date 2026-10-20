@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { t } from '@/text';
 
 import {
+    areMachineAdministrationInventoriesKnown,
     buildMachineAdministrationTargetRouteParams,
     isMachineAdministrationCandidateExplicitlySelectable,
     isMachineAdministrationCandidateSelectable,
@@ -66,18 +67,31 @@ describe('resolveMachineAdministrationTargetLabel', () => {
         expect(resolveMachineAdministrationTargetLabel({
             target: { serverIdentityId: 'srv_two', machineId: 'machine-shared' },
             candidates: [onSrvOne, onSrvTwo],
-        })).toEqual({ machine: 'Build box', server: 'Server Two' });
+        })).toEqual({ machine: 'Build box', machineParts: { name: 'Build box', hint: null }, server: 'Server Two' });
         expect(resolveMachineAdministrationTargetLabel({
             target: { serverIdentityId: 'srv_one', machineId: 'machine-shared' },
             candidates: [onSrvOne, onSrvTwo],
-        })).toEqual({ machine: 'Laptop', server: 'Server One' });
+        })).toEqual({ machine: 'Laptop', machineParts: { name: 'Laptop', hint: null }, server: 'Server One' });
+    });
+
+    it('hands back a same-named machine in its two parts so a one-line label can keep the telling suffix', () => {
+        const twin: MachineAdministrationCandidateV1 = {
+            ...candidate({ serverIdentityId: 'srv_one', machineId: 'machine-twin' }),
+            displayName: 'Build box · 3ca2',
+            displayNameParts: { name: 'Build box', hint: '3ca2' },
+            serverLabel: 'Server One',
+        };
+        expect(resolveMachineAdministrationTargetLabel({ target: twin.target, candidates: [twin] })).toMatchObject({
+            machine: 'Build box · 3ca2',
+            machineParts: { name: 'Build box', hint: '3ca2' },
+        });
     });
 
     it('keeps the machine target identity and uses a human label for an unknown Home', () => {
         expect(resolveMachineAdministrationTargetLabel({
             target: { serverIdentityId: 'srv_gone', machineId: 'machine-gone' },
             candidates: [candidate({ serverIdentityId: 'srv_one', machineId: 'machine-a' })],
-        })).toEqual({ machine: t('machine.unlistedMachine'), server: t('settingsAccount.thisHomeTitle') });
+        })).toEqual({ machine: t('machine.unlistedMachine'), machineParts: { name: t('machine.unlistedMachine'), hint: null }, server: t('settingsAccount.thisHomeTitle') });
         expect(resolveMachineAdministrationTargetLabel({
             target: null,
             candidates: [candidate({ serverIdentityId: 'srv_one', machineId: 'machine-a' })],
@@ -140,6 +154,33 @@ describe('resolveMachineAdministrationTargetState', () => {
             storedTarget: null,
             candidates: [only],
         })).toEqual({ kind: 'online', target: only.target, machine: only });
+    });
+
+    it('selects the only live online machine when the others are away, and still asks between two live ones', () => {
+        // Live 2026-10-16 (PLUGVIS 2h): a fresh device asked "Choose a machine in the header" while exactly one
+        // of the Account's machines was online; the offline ones cannot run anything, so there is no choice yet.
+        const online = candidate({ serverIdentityId: 'srv_one', machineId: 'machine-online' });
+        const offline = candidate({ serverIdentityId: 'srv_one', machineId: 'machine-away', availability: 'offline' });
+        const stale = candidate({ serverIdentityId: 'srv_two', machineId: 'machine-stale', observation: 'stale' });
+        const secondOnline = candidate({ serverIdentityId: 'srv_two', machineId: 'machine-online-b' });
+
+        expect(resolveMachineAdministrationTargetState({ storedTarget: null, candidates: [offline, online, stale] }))
+            .toEqual({ kind: 'online', target: online.target, machine: online });
+        expect(resolveMachineAdministrationTargetState({ storedTarget: null, candidates: [offline, online, secondOnline] }))
+            .toEqual({ kind: 'unselected', candidates: [offline, online, secondOnline] });
+        expect(resolveMachineAdministrationTargetState({ storedTarget: null, candidates: [offline, online], allowSoleCandidate: false }))
+            .toMatchObject({ kind: 'unselected' });
+    });
+
+    it('waits for every Home that can supply machines, but not for a Home this device never identified', () => {
+        // Live 2026-10-16 (PLUGVIS 2h): a stack-default Home profile this device never reached (no identity, so
+        // no sign-in) kept the sole-online pre-pick waiting forever.
+        const resolved = { kind: 'resolved', accountId: null, profileId: 'p1', serverIdentityId: 'srv_one', serverName: 'Studio',
+            observation: 'live', machines: [] } as const;
+        const unidentified = { kind: 'missingIdentity', profileId: 'p2', serverName: 'Laptop', machines: [] } as const;
+        const loading = { kind: 'unknown', profileId: 'p3', serverIdentityId: 'srv_three', serverName: 'Office', machines: [] } as const;
+        expect(areMachineAdministrationInventoriesKnown([resolved, unidentified])).toBe(true);
+        expect(areMachineAdministrationInventoriesKnown([resolved, loading])).toBe(false);
     });
 
     it('leaves a sole candidate unselected when its consumer requires an explicit choice', () => {

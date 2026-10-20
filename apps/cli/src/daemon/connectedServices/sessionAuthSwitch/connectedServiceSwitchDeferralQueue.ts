@@ -29,7 +29,7 @@ type ConnectedServiceSwitchRequest = Readonly<{
     policy: ConnectedServiceSwitchDeferralPolicy;
     source: ConnectedServiceSwitchSource;
     target: ConnectedServiceSwitchTarget;
-    runSwitch: () => Promise<unknown>;
+    runSwitch: (signal?: AbortSignal) => Promise<unknown>;
 }>;
 
 type ConnectedServiceSwitchDeferralQueueParams = Readonly<{
@@ -49,7 +49,8 @@ type PendingSwitch = {
     policy: ConnectedServiceSwitchDeferralPolicy;
     source: ConnectedServiceSwitchSource;
     target: ConnectedServiceSwitchTarget;
-    runSwitch: () => Promise<unknown>;
+    runSwitch: (signal?: AbortSignal) => Promise<unknown>;
+    executionCancellation: AbortController;
     requestedAtMs: number;
     timer: ReturnType<typeof setTimeout> | null;
     requests: DeferredRequest[];
@@ -200,6 +201,7 @@ export function createConnectedServiceSwitchDeferralQueue(
     const settlePending = (pending: PendingSwitch, action: 'resolve' | 'reject', error?: unknown): void => {
         if (pending.settled) return;
         pending.settled = true;
+        pending.executionCancellation.abort();
         clearPendingTimer(pending);
         if (pendingBySessionId.get(pending.sessionId) === pending) {
             pendingBySessionId.delete(pending.sessionId);
@@ -246,6 +248,7 @@ export function createConnectedServiceSwitchDeferralQueue(
         // reuses the existing wire reason 'aborted_after_timeout' — no new wire enum member.
         const executionDeadline = setTimeout(() => {
             if (pending.settled) return;
+            pending.executionCancellation.abort();
             void (async () => {
                 try {
                     admitPendingEvent(pending, {
@@ -264,7 +267,7 @@ export function createConnectedServiceSwitchDeferralQueue(
             })();
         }, timeoutMs);
         try {
-            pending.selectedResult = await pending.runSwitch();
+            pending.selectedResult = await pending.runSwitch(pending.executionCancellation.signal);
             pending.effectApplied = true;
             if (pending.settled) return;
             admitPendingEvent(pending, {
@@ -287,6 +290,7 @@ export function createConnectedServiceSwitchDeferralQueue(
         reason: Extract<ConnectedServiceSwitchDeferralCompletionReason, 'session_terminated' | 'daemon_shutdown'>,
     ): Promise<void> => {
         if (pending.settled) return;
+        pending.executionCancellation.abort();
         admitPendingEvent(pending, {
             type: 'connected_service_account_switch_deferral_completed',
             policy: pending.policy,
@@ -302,6 +306,7 @@ export function createConnectedServiceSwitchDeferralQueue(
 
     const rejectSupersededPending = async (pending: PendingSwitch): Promise<void> => {
         if (pending.settled) return;
+        pending.executionCancellation.abort();
         admitPendingEvent(pending, {
             type: 'connected_service_account_switch_deferral_completed',
             policy: pending.policy,
@@ -363,6 +368,7 @@ export function createConnectedServiceSwitchDeferralQueue(
                 source: input.source,
                 target,
                 runSwitch: input.runSwitch,
+                executionCancellation: new AbortController(),
                 requestedAtMs: nowMs(),
                 timer: null,
                 requests: [deferred.request],
@@ -406,6 +412,7 @@ export function createConnectedServiceSwitchDeferralQueue(
             source: input.source,
             target,
             runSwitch: input.runSwitch,
+            executionCancellation: new AbortController(),
             requestedAtMs: nowMs(),
             timer: null,
             requests: [deferred.request],

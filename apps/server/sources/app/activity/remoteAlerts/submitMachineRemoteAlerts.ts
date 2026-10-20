@@ -63,6 +63,15 @@ export async function submitMachineRemoteAlerts(params: Readonly<{
         const serverId = await getOrCreateServerIdentityId(process.env);
         const deliveries: AccountPushDelivery[] = [];
         const recoveryClaims: string[] = [];
+        if (params.phase === 'recovered') {
+            // Consume this return even when current delivery policy suppresses
+            // it; a later outage must not revive an earlier one-shot request.
+            for (const machine of machines) {
+                const key = recoveryRequestKey(machine.accountId, machine.id);
+                const claimed = await db.simpleCache.updateMany({ where: { key, value: 'pending' }, data: { value: 'submitted' } });
+                if (claimed.count === 1) recoveryClaims.push(key);
+            }
+        }
         for (const account of accounts) {
             const current = resolveAccountRemoteAlertPolicyCurrentness(account.remoteAlertPolicy, account.settingsVersion);
             if (current.status !== 'current') continue;
@@ -85,11 +94,8 @@ export async function submitMachineRemoteAlerts(params: Readonly<{
                     devicePolicy: token.remoteAlerts, event: 'machine_offline', now }) }));
             for (const machine of enrolled) {
                 const key = recoveryRequestKey(account.id, machine.id);
-                // Alive writes are batched: claim this one-shot marker atomically
-                // before submission so concurrent/repeated alive cannot alert twice.
-                const notifyReturn = params.phase === 'recovered'
-                    && (await db.simpleCache.updateMany({ where: { key, value: 'pending' }, data: { value: 'submitted' } })).count === 1;
-                if (notifyReturn) recoveryClaims.push(key);
+                // The atomic claim above also handles batched/concurrent alive.
+                const notifyReturn = recoveryClaims.includes(key);
                 if (notifyReturn && computerMuted === undefined) computerMuted = await readComputerMuted();
                 for (const { token, decision } of deviceDecisions) {
                     if (!decision || (params.phase === 'offline' && decision.delivery === 'suppress')) continue;

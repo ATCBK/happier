@@ -1,9 +1,9 @@
 import type { Tx } from "@/storage/inTx";
+import { acquireTeamMembershipAccountAdmissionInTx } from "../memberships/membershipService";
 import {
     withTeamSessionAccessEffectsInTx,
     type TeamSessionAccessImpacts,
 } from "../memberships/sessionAccessEffects";
-import type { SessionAccessMembershipOrigin } from "@/app/session/access/sessionAccessMembershipImpact";
 import type { SessionHistoryAccess } from "@/storage/enums.generated";
 import { readTransactionDatabaseTime } from "@/storage/transactionDatabaseTime";
 import { mintSessionAccessStartsAt } from "../memberships/sessionHistory";
@@ -71,22 +71,6 @@ async function readContributionStateInTx(
     };
 }
 
-function classifyContributionImpactOrigin(
-    existing: ContributionState,
-    input: Readonly<{ contribution: TeamGroupContribution; desired: "present" | "absent" }>,
-): SessionAccessMembershipOrigin {
-    if (input.desired === "present") {
-        return existing === null ? "relationship_change" : "retained_lifecycle";
-    }
-    if (existing === null) return "retained_lifecycle";
-
-    const removesLastContribution = input.contribution.kind === "native"
-        ? existing.nativeContribution && existing.externalBindingIds.length === 0
-        : !existing.nativeContribution
-            && existing.externalBindingIds.length === 1
-            && existing.externalBindingIds[0] === input.contribution.externalGroupBindingId;
-    return removesLastContribution ? "relationship_change" : "retained_lifecycle";
-}
 
 export async function applyTeamGroupContributionInTx(
     tx: Tx,
@@ -101,13 +85,14 @@ export async function applyTeamGroupContributionInTx(
         sessionAccessImpacts?: TeamSessionAccessImpacts;
     }>,
 ): Promise<TeamGroupContributionResult> {
+    await acquireTeamMembershipAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [], membershipIds: [input.teamMembershipId],
+        membershipChange: { kind: "teamGroupMembership", teamId: input.teamId, teamGroupIds: [input.teamGroupId] } });
     const key = { teamGroupId: input.teamGroupId, teamMembershipId: input.teamMembershipId };
     const existing = await readContributionStateInTx(tx, key);
     const member = await tx.teamMembership.findUnique({ where: { id: input.teamMembershipId }, select: { accountId: true } });
     return withTeamSessionAccessEffectsInTx(tx, {
         teamId: input.teamId,
         teamGroupId: input.teamGroupId,
-        origin: classifyContributionImpactOrigin(existing, input),
         accountIds: member ? [member.accountId] : [], sessionAccessImpacts: input.sessionAccessImpacts,
     }, async () => {
         if (input.desired === "present") {

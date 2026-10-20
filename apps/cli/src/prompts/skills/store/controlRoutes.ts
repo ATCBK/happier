@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { EnsureSkillSessionDirInputSchema, EnsureSkillSessionDirResultSchema, type SkillStore } from './skillStore';
 import { SessionStartedSuccessReportSchema } from '@/daemon/sessions/sessionStartedReportSchema';
 import { bindTrackedSessionIdentity, adoptTrackedSessionRunnerIdentity, resolveSessionReportTrackedCorrelation } from '@/daemon/sessions/sessionReportCorrelation';
@@ -11,16 +11,15 @@ import type { SkillUsageRecorder } from './skillUsage';
 
 export const SKILL_SESSION_DIR_PATH = '/skills/session-dir';
 export const SKILL_USAGE_PATH = '/skills/usage';
-export const RecordSkillUseInputSchema = z.object({
-    skillIds: z.array(z.string().min(1)),
-    account: z.object({ accountId: z.string().min(1), serverHttpBaseUrl: z.string().url() }).strict(),
-}).strict();
-export const RecordSkillUseResultSchema = z.object({ ok: z.literal(true) }).strict();
-export const SkillSessionStartupIdentitySchema = SessionStartedSuccessReportSchema.pick({ metadata: true })
-    .extend({ pid: z.number().int().positive() }).strict();
-export const SkillSessionDirControlRequestSchema = EnsureSkillSessionDirInputSchema.extend({
-    startupIdentity: SkillSessionStartupIdentitySchema.optional(),
-}).strict();
+export const RecordSkillUseInputSchema = z.strictObject({
+    skillIds: z.array(z.string().check(z.minLength(1))),
+    account: z.strictObject({ accountId: z.string().check(z.minLength(1)), serverHttpBaseUrl: z.string().check(z.url()) }),
+});
+export const RecordSkillUseResultSchema = z.strictObject({ ok: z.literal(true) });
+export const SkillSessionStartupIdentitySchema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.pick(SessionStartedSuccessReportSchema, { metadata: true }), { pid: z.number().check(z.int(), z.positive()) }));
+export const SkillSessionDirControlRequestSchema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(EnsureSkillSessionDirInputSchema, {
+    startupIdentity: z.optional(SkillSessionStartupIdentitySchema),
+}));
 export function registerSkillControlRoutes(app: FastifyInstance, input: Readonly<{
     skillStore?: SkillStore;
     skillUsageRecorder?: SkillUsageRecorder;
@@ -31,7 +30,7 @@ export function registerSkillControlRoutes(app: FastifyInstance, input: Readonly
 }>): void {
     app.withTypeProvider<ZodTypeProvider>().post(SKILL_USAGE_PATH, {
         schema: { body: RecordSkillUseInputSchema, response: { 200: RecordSkillUseResultSchema,
-            503: z.object({ errorCode: z.literal('skills_unavailable') }).strict() } },
+            503: z.strictObject({ errorCode: z.literal('skills_unavailable') }) } },
         preHandler: input.requireAuth,
     }, async (request, reply) => {
         if (input.isShuttingDown() || !input.skillUsageRecorder) return reply.code(503).send({ errorCode: 'skills_unavailable' });
@@ -40,7 +39,7 @@ export function registerSkillControlRoutes(app: FastifyInstance, input: Readonly
     });
     app.withTypeProvider<ZodTypeProvider>().post(SKILL_SESSION_DIR_PATH, {
         schema: { body: SkillSessionDirControlRequestSchema, response: { 200: EnsureSkillSessionDirResultSchema,
-            503: z.object({ errorCode: z.literal('skills_unavailable') }).strict() } },
+            503: z.strictObject({ errorCode: z.literal('skills_unavailable') }) } },
         preHandler: input.requireAuth,
     }, async (request, reply) => {
         if (input.isShuttingDown() || !input.skillStore) return reply.code(503).send({ errorCode: 'skills_unavailable' });

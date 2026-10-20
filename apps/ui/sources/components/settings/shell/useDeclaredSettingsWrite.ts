@@ -1,8 +1,10 @@
 import * as React from 'react';
 import { SettingsDeclarationActionOutputSchemasV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import type { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import type { SettingRef, SettingValue } from '@/components/settings/catalog/settingDeclarations';
+import { presentActionTurnedOffNoticeIfOff } from '@/sync/ops/actions/actionTurnedOffNotice';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 
@@ -16,7 +18,8 @@ export function useDeclaredSettingsWrite(execution: Pick<ReturnType<typeof useMo
             const result = await execute('settings.set', { anchor: setting.anchor, value });
             if (!isCurrent()) return false;
             if (!result.ok) {
-                if (result.errorCode === 'action_account_scope_changed') return false;
+                if (result.errorCode === 'action_account_scope_changed' || isActionApprovalDeclinedErrorCode(result.errorCode)) return false;
+                if (presentActionTurnedOffNoticeIfOff(result, 'settings.set')) return false;
                 throw new Error(result.error);
             }
             SettingsDeclarationActionOutputSchemasV1['settings.set'].parse(result.result);

@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
+import { readWorkflowRunTarget } from '@/sync/domains/workflows/workflowRunRoute';
 import { useShallow } from 'zustand/react/shallow';
 import { stripGroupSegmentsFromPath } from 'expo-router/build/matchers';
 import { parseQueryParams } from 'expo-router/build/fork/getStateFromPath-forks';
@@ -41,10 +43,14 @@ import { useWorkflowsDestinationAccess } from '@/components/workflows/gating/wor
 import { useInboxAvailable } from '@/hooks/inbox/useInboxAvailable';
 import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import { useFriendsEnabled } from '@/hooks/server/useFriendsEnabled';
+import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
+import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
+import { useSessionContentDemand } from '@/sync/domains/session/useSessionContentDemand';
 import type { KeyboardCommandId } from '@/keyboard/types';
 import { selectPluginRightSidebarTabPlacements } from '@/sync/domains/plugins/ui/surfacePlacementSelectors';
 import { getStorage, selectSessionDisplayNameSource, useActiveServerAccountScopeLifetime, useSessionDisplayNameProjections } from '@/sync/domains/state/storage';
-import { t, type TranslationKeyNoParams } from '@/text';
+import { t, tLoose, type TranslationKeyNoParams } from '@/text';
+import { BUILTIN_WORKFLOW_CATALOG_V1 } from '@happier-dev/protocol/workflows/builtins/catalog';
 import { UNIVERSAL_SEARCH_ROUTE } from '@/components/appShell/search/universalSearchRoutePresentation';
 import {
     buildPluginPanelsRoute,
@@ -56,10 +62,11 @@ import { useOpenAppRightSidebarTab } from '@/components/appShell/rightSidebar/ap
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { createSessionPaneDetailsTab, parseSessionPaneUrlState, serializeSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
+import { resolveSessionRoutePathForSurface } from '@/components/workspaceCockpit/session/sessionCockpitState';
 import { resolveSettingsRouteTitleKey } from '@/components/settings/navigation/settingsRouteRegistry';
 import { readSessionDisplayTitle, sessionDisplayTitle } from '@/utils/sessions/sessionDisplayTitle';
-import { readSessionDiscussionTitle, useSessionDiscussionTitleProjections } from '@/sync/ops/sessionDiscussions/useSessionDiscussionRepositorySnapshot';
-import { matchWorkspaceDestinationRoute, registeredWorkspaceRoutes } from '@/components/appShell/workspace/workspaceRoutes';
+import { readDiscussionTitle, useDiscussionTitleProjections } from '@/sync/ops/discussions/useDiscussionRepositorySnapshot';
+import { matchWorkspaceDestinationRoute, registeredWorkspaceRoutes, workspaceRouteHref } from '@/components/appShell/workspace/workspaceRoutes';
 import { useOptionalWorkspaceNavigation, type WorkspaceDestinationTitle } from '@/components/appShell/workspace/WorkspaceNavigationContext';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { formatWorkflowRunDisplayName, resolveWorkflowRunDisplayName } from '@/components/workflows/presentation/workflowRunDisplayName';
@@ -74,6 +81,13 @@ import { describeAccountProviderConnectionV1 } from '@happier-dev/protocol/provi
 import { composeProviderSettingsV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { readAccountProviderDeclarations } from '@/providers/catalog/accountProviderDeclarations';
 import { presentProviderConnectionIdentity } from '@/providers/connection/presentation';
+import { isApprovalArtifactKindV1 } from '@happier-dev/protocol/approvals/approvalArtifactKindV1';
+import { ApprovalRequestV2StatusSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { readApprovalArtifactTitleInput, resolveApprovalRequestTitle } from '@/components/approvals/approvalRequestTitle';
+import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import { formatApprovalStatusLabel, readApprovalArtifactDisplayStatus } from '@/components/approvals/approvalStatusLabel';
+import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import { buildDiscussionsRouteHref } from '@/components/discussions/discussionRoutes';
 
 /**
  * The one catalog of shell destinations (user ruling U1, 2026-09-28): the app's own destinations and
@@ -92,13 +106,14 @@ export const SEARCH_DESTINATION_ID = 'search';
 export const PLUGINS_DESTINATION_ID = 'plugins';
 /** The destination every route without a more specific one belongs to. */
 export const SESSIONS_DESTINATION_ID = 'sessions';
+export const DISCUSSIONS_DESTINATION_ID = 'discussions';
 
 /**
  * The columns this host can stand beside a page. `AppShellColumn` renders each through one table
  * typed against this list, so a column id without a renderer is a type error. A placement naming any
  * other column falls back to the rail.
  */
-export const BUILTIN_APP_SHELL_COLUMN_IDS = ['sessions', 'projects', 'workflows', 'boards', 'plugins', 'settings', 'machines'] as const;
+export const BUILTIN_APP_SHELL_COLUMN_IDS = ['sessions', 'discussions', 'projects', 'workflows', 'boards', 'plugins', 'settings', 'machines'] as const;
 export type BuiltinAppShellColumnId = typeof BUILTIN_APP_SHELL_COLUMN_IDS[number];
 
 export function isBuiltinAppShellColumnId(value: string): value is BuiltinAppShellColumnId {
@@ -166,6 +181,8 @@ export type CompactAppBuiltinDestination = CompactAppDestinationCommon & Readonl
      * not list it again; it stays a visible destination for the command palette and location.
      */
     railControl?: 'footer';
+    /** Reuse this resource on ordinary navigation; explicit new-tab/split intents remain independent. */
+    workspaceNavigationIdentity?: Readonly<{ resourceParam: string; scopeParams: readonly string[] }>;
     availability: 'available' | 'unavailable';
 }>;
 
@@ -204,6 +221,7 @@ export type DestinationRef = Readonly<{
 export type AppBuiltinDestinationAvailability = Readonly<{
     externalSessions: boolean;
     inbox: boolean;
+    discussions?: boolean;
     /** The Workflows destination is discoverable (`useWorkflowsDestinationAccess`). */
     workflows: boolean;
     friends: boolean;
@@ -228,6 +246,7 @@ type BuiltinDestinationRow = Readonly<{
     signal?: 'inboxCount';
     suggested?: true;
     railControl?: 'footer';
+    workspaceNavigationIdentity?: CompactAppBuiltinDestination['workspaceNavigationIdentity'];
     available?: (availability: AppBuiltinDestinationAvailability) => boolean;
     activationAvailable?: (availability: AppBuiltinDestinationAvailability) => boolean;
     visibility?: CompactAppDestinationVisibility;
@@ -254,6 +273,13 @@ function readBuiltinDestinationRows(): readonly BuiltinDestinationRow[] {
         id: 'inbox', titleKey: 'tabs.inbox', icon: 'tray', placement: { kind: 'rail', region: 'app' },
         activation: 'navigate', routePath: '/inbox', currentRoutePatterns: ['/inbox/[...rest]'], signal: 'inboxCount',
         available: (availability) => availability.inbox,
+    },
+    {
+        id: DISCUSSIONS_DESTINATION_ID, titleKey: 'session.collaboration.discussion.title', icon: 'chats-circle',
+        placement: { kind: 'rail', region: 'app' }, column: 'discussions', activation: 'navigate', routePath: '/discussions',
+        currentRoutePatterns: ['/discussions/[...rest]'],
+        workspaceNavigationIdentity: { resourceParam: 'discussionId', scopeParams: ['serverId'] },
+        available: (availability) => availability.discussions === true,
     },
     {
         id: 'projects', titleKey: 'tabs.projects', icon: 'folder', placement: { kind: 'rail', region: 'app' },
@@ -311,6 +337,7 @@ function readBuiltinDestinationRows(): readonly BuiltinDestinationRow[] {
         id: 'machines', titleKey: 'settings.machines', icon: 'desktop', placement: { kind: 'rail', region: 'account' },
         column: 'machines', activation: 'navigate', routePath: '/machines',
         currentRoutePatterns: ['/machines/[...rest]'], railControl: 'footer',
+        workspaceNavigationIdentity: { resourceParam: 'id', scopeParams: ['serverId'] },
     },
     {
         id: 'settings', titleKey: 'settings.title', icon: 'gear', placement: { kind: 'rail', region: 'account' },
@@ -402,6 +429,7 @@ export function resolveCompactAppDestinations(input: Readonly<{
             ...(row.signal === undefined ? {} : { signal: row.signal }),
             ...(row.suggested === undefined ? {} : { suggested: row.suggested }),
             ...(row.railControl === undefined ? {} : { railControl: row.railControl }),
+            ...(row.workspaceNavigationIdentity === undefined ? {} : { workspaceNavigationIdentity: row.workspaceNavigationIdentity }),
             ...(row.visibility === undefined ? {} : { visibility: row.visibility }),
             availability: row.activationAvailable && !row.activationAvailable(input.builtins) ? 'unavailable' : 'available',
         }));
@@ -421,7 +449,8 @@ export function resolveCompactAppDestinations(input: Readonly<{
             activation: 'navigate',
             ...(page.badge === undefined ? {} : { badge: page.badge }),
             ...(page.rankHint === undefined ? {} : { rankHint: page.rankHint }),
-            ...(page.columnPlacement ? { ownColumn: true as const } : {}),
+            // An unavailable page mounts no column renderer, so it has no column to reserve or peek.
+            ...(page.columnPlacement && unavailableReason === null ? { ownColumn: true as const } : {}),
             routePath: page.routePath,
             availability: unavailableReason === null ? 'available' : 'unavailable',
             ...(unavailableReason === null ? {} : { unavailableReason }),
@@ -613,6 +642,10 @@ export function resolveDestinationRefFromHref(
         query[key] = value;
     }
     delete query.workspacePathname;
+    const canonicalHref = workspaceRouteHref(path, { ...query, ...route?.params });
+    if (canonicalHref.split('?')[0] !== path) {
+        return resolveDestinationRefFromHref(catalog, `${canonicalHref}${url.hash}`);
+    }
     if (url.hash.length > 1) {
         const anchor = decodeSegment(url.hash.slice(1));
         if (anchor === null) return null;
@@ -623,7 +656,11 @@ export function resolveDestinationRefFromHref(
         if (third === 'details') {
             if (rest.length > 0) return null;
             const details = parseSessionPaneUrlState(query)?.details;
-            if (!details) return null;
+            // Without an addressed resource, Details presents the Session's retained workspace.
+            // Keep its instance (and contributed tabs) instead of falling back to an Expo scope.
+            if (!details) return query.details ? null : {
+                kind: 'session', params: { ...query, id: second, mobileSurface: 'tabs' },
+            };
             return { kind: 'sessionDetails', params: {
                 id: second,
                 ...(query.serverId ? { serverId: query.serverId } : {}),
@@ -700,6 +737,10 @@ export function hrefForDestinationRef(
         return appendQuery(params.workspacePathname, params, ['workspacePathname', ...Object.keys(route.params)]);
     }
     if (ref.kind === 'session' && params.id) {
+        if (params.mobileSurface === 'tabs') {
+            const { id, serverId, mobileSurface: _mobileSurface, ...query } = params;
+            return resolveSessionRoutePathForSurface(id, 'tabs', { serverId, query });
+        }
         return appendQuery(`/session/${encodedSegment(params.id)}`, params, ['id']);
     }
     if (ref.kind === 'sessionDetails' && params.id && params.details) {
@@ -749,6 +790,7 @@ function useAppBuiltinDestinationAvailability(owners: AppDestinationActivationOw
     // The same decision the Sessions list reads for its external sessions (`useSessionListStorageKind`).
     const externalSessions = useFeatureDecision('sessions.direct')?.state === 'enabled';
     const inbox = useInboxAvailable();
+    const discussions = useFeatureDecision('sessions.conversations')?.state === 'enabled';
     // Listed while discoverable, including a local-policy disablement whose repair it leads to.
     const workflows = useWorkflowsDestinationAccess().discoverable;
     const friends = useFriendsEnabled();
@@ -756,8 +798,8 @@ function useAppBuiltinDestinationAvailability(owners: AppDestinationActivationOw
     const botsRosterRuntime = useOptionalBotsRosterRuntime();
     const botsRoster = (owners.openBotsRoster ?? botsRosterRuntime?.open) !== undefined;
     return React.useMemo(
-        () => ({ externalSessions, inbox, workflows, friends, botsRoster }),
-        [externalSessions, friends, inbox, workflows, botsRoster],
+        () => ({ externalSessions, inbox, discussions, workflows, friends, botsRoster }),
+        [externalSessions, friends, inbox, discussions, workflows, botsRoster],
     );
 }
 
@@ -843,7 +885,9 @@ export function useActivateAppDestination(activationOwners: AppDestinationActiva
             if (result !== true) fireAndForget(result, { tag: 'AppDestination.activatePluginPage' });
             return;
         }
-        const result = runGuardedNavigation(() => owners.router.push(destination.routePath as never));
+        const home = destination.id === DISCUSSIONS_DESTINATION_ID ? getActiveServerAccountScope() : null;
+        const routePath = home ? buildDiscussionsRouteHref(home) : destination.routePath;
+        const result = runGuardedNavigation(() => owners.router.push(routePath as never));
         if (result !== true) fireAndForget(result, { tag: 'AppDestination.activate' });
     }, []);
 }
@@ -878,7 +922,7 @@ function resolveStaticInstanceTitle(catalog: readonly CompactAppDestination[], r
     const href = hrefForDestinationRef(catalog, ref);
     if (!href) return null;
     const pathname = href.split(/[?#]/, 1)[0]!;
-    if (matchWorkspaceDestinationRoute(pathname)?.routeKey === 'inbox/approvals/[id]') return t('approvals.title');
+    if (isApprovalInstanceRef(ref)) return t('approvals.title');
     if (ref.kind === 'settings') {
         // Entity pages supply their current identity after hydration. The route's
         // generic native-header title must not stand in for that identity.
@@ -909,8 +953,38 @@ function resolveProjectInstanceTitle(ref: DestinationRef, workspaceRefs: readonl
 
 /** One fallback rule for live chrome and synchronous history/drag snapshots. */
 function resolvePublishedOrStaticInstanceTitle(catalog: readonly CompactAppDestination[], ref: DestinationRef, options?: DestinationInstanceTitleOptions, storedTitle?: string | null): string | null {
-    if (options?.publishedTitle?.ref === ref) return options.publishedTitle.title;
-    return resolveStaticInstanceTitle(catalog, ref) ?? storedTitle ?? resolveSavedInstanceTitle(catalog, ref, options?.fallbackTitle);
+    const href = hrefForDestinationRef(catalog, ref);
+    const pathname = href?.split(/[?#]/, 1)[0];
+    const redirectSource = options?.publishedTitle?.ref === ref ? options.publishedTitle.redirectSource : undefined;
+    if (ref.kind === 'settings' && redirectSource?.kind === 'settings') {
+        const sourcePath = hrefForDestinationRef(catalog, redirectSource)?.split(/[?#]/, 1)[0];
+        const collectionTitle = resolveStaticInstanceTitle(catalog, redirectSource);
+        if (sourcePath && pathname?.startsWith(`${sourcePath}/`) && collectionTitle) return collectionTitle;
+    }
+    // Home's greeting is content, while the shell catalog calls its rail Sessions.
+    if (ref.kind === SESSIONS_DESTINATION_ID && pathname === '/') return t('common.home');
+    const staticTitle = resolveStaticInstanceTitle(catalog, ref);
+    const destination = pathname ? resolveCurrentAppDestination(catalog, pathname) : null;
+    // Collection/status headlines and automatically selected detail panels do not
+    // rename their destination. Explicit entity routes have no static identity here.
+    if (staticTitle && (ref.kind === 'settings'
+        || (destination?.kind === 'builtin' && pathname === destination.routePath))) return staticTitle;
+    // Approval history stays open by workspace policy. Its live index lifecycle,
+    // including header-only socket updates, must supersede the page's earlier title.
+    if (isApprovalInstanceRef(ref) && storedTitle) return storedTitle;
+    const title = options?.publishedTitle?.ref === ref
+        ? options.publishedTitle.title
+        : staticTitle ?? storedTitle ?? resolveSavedInstanceTitle(catalog, ref, options?.fallbackTitle);
+    if (title) return title;
+    // Restored/background tabs need not mount their pages. A missing publication
+    // is an unnamed destination, not evidence that a title fetch is still running.
+    if (!href) return null;
+    if (isSessionTitleRef(ref)) return t('session.untitled');
+    if (ref.kind === 'settings') {
+        const key = resolveSettingsRouteTitleKey(href.split(/[?#]/, 1)[0]);
+        if (key) return t(key);
+    }
+    return resolveCurrentAppDestination(catalog, href)?.title ?? t('common.unavailable');
 }
 
 /**
@@ -931,10 +1005,14 @@ export function readDestinationInstanceTitle(catalog: readonly CompactAppDestina
         const session = readSessionDisplayTitle({ sessionId: ref.params.id, serverId: ref.params.serverId ?? null });
         if (session) return session;
     }
+    if (ref.kind === DISCUSSIONS_DESTINATION_ID && ref.params.discussionId) {
+        const discussion = readDiscussionTitle({ serverId: ref.params.serverId ?? null, discussionId: ref.params.discussionId });
+        if (discussion) return discussion;
+    }
     if (ref.kind === 'sessionDetails' && ref.params.id) {
         const details = parseSessionPaneUrlState(ref.params)?.details;
         if (details?.kind === 'discussion') {
-            const discussion = readSessionDiscussionTitle({ sessionId: ref.params.id, serverId: ref.params.serverId ?? null, discussionId: details.discussionId });
+            const discussion = readDiscussionTitle({ serverId: ref.params.serverId ?? null, discussionId: details.discussionId });
             if (discussion) return discussion;
         }
     }
@@ -944,6 +1022,11 @@ export function readDestinationInstanceTitle(catalog: readonly CompactAppDestina
 function isSessionTitleRef(ref: DestinationRef): boolean {
     return ref.kind === 'session' || (ref.kind === 'sessions'
         && matchWorkspaceDestinationRoute(ref.params.workspacePathname ?? '')?.routeKey === 'session/[id]/info');
+}
+
+function isApprovalInstanceRef(ref: DestinationRef): boolean {
+    return ref.kind === 'inbox'
+        && matchWorkspaceDestinationRoute(ref.params.workspacePathname ?? '')?.routeKey === 'inbox/approvals/[id]';
 }
 
 function readSettingsEntityTitleDemand(ref: DestinationRef) {
@@ -986,6 +1069,13 @@ function subscribeSettingsEntityTitles(listener: () => void): () => void {
     return () => disposers.forEach(dispose => dispose());
 }
 
+/** A built-in Workflow is a protocol catalog entry, never an Account artifact: its tab names the entry. */
+function resolveBuiltinWorkflowTitle(ref: DestinationRef): string | null {
+    if (ref.kind !== 'workflow' || !ref.params.id) return null;
+    const entry = BUILTIN_WORKFLOW_CATALOG_V1.find((candidate) => candidate.id === ref.params.id);
+    return entry ? tLoose(entry.titleKey) : null;
+}
+
 /** Absence is settled by a retirement or a complete owner census, never a scoped cache miss. */
 function resolveKnownMissingInstanceTitle(ref: DestinationRef, state: ReturnType<typeof readRegisteredStorageState>): string | null {
     if (!state?.profileScope || (ref.params.serverId
@@ -1001,7 +1091,7 @@ function resolveKnownMissingInstanceTitle(ref: DestinationRef, state: ReturnType
         return resolution.kind !== 'resolved' && resolution.kind !== 'ambiguous' && isProjectAccountRowsCensusComplete(rows)
             ? t('projects.detail.notFoundTitle') : null;
     }
-    if ((ref.kind === 'workflow' || ref.kind === 'artifacts') && ref.params.id
+    if ((ref.kind === 'workflow' || ref.kind === 'artifacts') && ref.params.id && !resolveBuiltinWorkflowTitle(ref)
         && !state.artifacts[ref.params.id] && state.artifactsLoaded) {
         return t(ref.kind === 'artifacts' ? 'artifacts.notFound' : 'common.unavailable');
     }
@@ -1013,11 +1103,26 @@ function resolveStoredInstanceTitle(ref: DestinationRef, state: ReturnType<typeo
     if (readSettingsEntityTitleDemand(ref)) return resolveSettingsEntityInstanceTitle(ref, state);
     if (!state?.profileScope || (ref.params.serverId
         && !areServerProfileIdentifiersEquivalent(state.profileScope.serverId, ref.params.serverId))) return null;
+    if (isApprovalInstanceRef(ref) && ref.params.id) {
+        const artifact = state.artifacts[ref.params.id];
+        if (!artifact) return null;
+        if (!artifact.isDecrypted) return t('common.unavailable');
+        if (!isApprovalArtifactKindV1(artifact.header?.kind)) return null;
+        const parsed = typeof artifact.body === 'string' ? approvalArtifactBodyMatchesHeaderV1(artifact.header ?? {}, artifact.body) : null;
+        const title = resolveApprovalRequestTitle(readApprovalArtifactTitleInput(artifact, parsed, artifact.sessions ?? [])).title;
+        const status = ApprovalRequestV2StatusSchema.safeParse(readApprovalArtifactDisplayStatus(artifact));
+        return status.success ? `${title} · ${formatApprovalStatusLabel(status.data)}` : title;
+    }
     if (ref.kind === 'workflowRun' && ref.params.runId) {
-        const run = state.workflowRunsById[ref.params.runId];
+        if (readWorkflowRunTarget(ref.params)?.kind !== 'managed') return fallbackTitle ?? t('workflows.run.title');
+        const scope = state.profileScope;
+        const inScope = scope && (!ref.params.serverId || areServerProfileIdentifiersEquivalent(ref.params.serverId, scope.serverId));
+        const run = inScope ? state.workflowRunsById[workflowRunStoreKey(ref.params.runId, scope)] : undefined;
         return run ? formatWorkflowRunDisplayName(resolveWorkflowRunDisplayName(run.metadata))
             : fallbackTitle ?? formatWorkflowRunDisplayName(resolveWorkflowRunDisplayName(null));
     }
+    const builtinWorkflowTitle = resolveBuiltinWorkflowTitle(ref);
+    if (builtinWorkflowTitle) return builtinWorkflowTitle;
     if ((ref.kind === 'workflow' || ref.kind === 'artifacts') && ref.params.id) {
         const artifact = state.artifacts[ref.params.id];
         if (artifact) return artifact.isDecrypted ? artifact.title ?? t('common.unavailable') : t('common.unavailable');
@@ -1030,7 +1135,8 @@ function resolveStoredInstanceTitle(ref: DestinationRef, state: ReturnType<typeo
  * The live title of each open destination instance (workspace lab T: "its title comes from the
  * destination"): a session's current name, a Details target's own name, a settings page or plugin
  * page title. One resolver for every tab bar, keyed by the caller's tab key; a key is absent when the
- * instance cannot be named yet, so the caller shows loading/unavailable.
+ * instance is unknown/unavailable. Unnamed registered destinations use an honest
+ * category fallback until live data or their page can name them.
  * Project names and page/checkout qualification come from the Project display owners.
  */
 export function useDestinationInstanceTitles(
@@ -1073,9 +1179,9 @@ export function useDestinationInstanceTitles(
     const missingTitles = getStorage()(useShallow(state => entries.map(entry => resolveKnownMissingInstanceTitle(entry.ref, state))));
     const unreadRunIdsKey = getStorage()(state => JSON.stringify([...new Set(entries.flatMap(entry => {
         const { ref } = entry;
-        if (ref.kind !== 'workflowRun' || !ref.params.runId || !state.profileScope
+        if (ref.kind !== 'workflowRun' || readWorkflowRunTarget(ref.params)?.kind !== 'managed' || !ref.params.runId || !state.profileScope
             || (ref.params.serverId && !areServerProfileIdentifiersEquivalent(ref.params.serverId, state.profileScope.serverId))
-            || state.workflowRunsById[ref.params.runId]) return [];
+            || state.workflowRunsById[workflowRunStoreKey(ref.params.runId)]) return [];
         return [ref.params.runId];
     }))].sort()));
     React.useEffect(() => {
@@ -1094,13 +1200,23 @@ export function useDestinationInstanceTitles(
         sessionId: entry.ref.params.id!, serverId: entry.ref.params.serverId ?? null,
     })), [sessionEntries]);
     const sessionTitles = useSessionDisplayNameProjections(addresses, sessionDisplayTitle);
+    // A restored tab's page is not mounted, so its Session is named from content nobody has demanded yet.
+    const activeServerId = useActiveServerSnapshot(addresses.some(address => !address.serverId)).serverId;
+    const demandedSessions = React.useMemo(() => addresses.flatMap(address => {
+        const demanded = normalizeSessionAddress(address.serverId ?? activeServerId, address.sessionId);
+        return demanded ? [demanded] : [];
+    }), [addresses, activeServerId]);
+    useSessionContentDemand(demandedSessions, { tag: 'workspace.hydrateSessionTabs', hydrate: 'unsettled' });
     const discussionEntries = React.useMemo(() => entries.flatMap(entry => {
+        if (entry.ref.kind === DISCUSSIONS_DESTINATION_ID && entry.ref.params.discussionId) {
+            return [{ key: entry.key, serverId: entry.ref.params.serverId ?? null, discussionId: entry.ref.params.discussionId }];
+        }
         if (entry.ref.kind !== 'sessionDetails' || !entry.ref.params.id) return [];
         const details = parseSessionPaneUrlState(entry.ref.params)?.details;
         return details?.kind === 'discussion' ? [{ key: entry.key, serverId: entry.ref.params.serverId ?? null,
-            sessionId: entry.ref.params.id!, discussionId: details.discussionId }] : [];
+            discussionId: details.discussionId }] : [];
     }), [entries]);
-    const discussionTitles = useSessionDiscussionTitleProjections(discussionEntries);
+    const discussionTitles = useDiscussionTitleProjections(discussionEntries);
     return React.useMemo(() => {
         const titles = new Map<string, string>();
         for (const [index, entry] of entries.entries()) {

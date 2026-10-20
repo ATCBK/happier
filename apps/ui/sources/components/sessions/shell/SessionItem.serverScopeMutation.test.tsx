@@ -161,6 +161,23 @@ async function importSessionItem() {
 }
 
 describe('SessionItem server-scoped mutations', () => {
+    it('stops directly through the shared Action policy without a local confirmation', async () => {
+        const SessionItem = await importSessionItem();
+        const screen = await renderScreen(<SessionItem
+            session={createSessionFixture({ id: 'sess_direct_stop', active: true })}
+            serverId="server_a" serverName="Server A" showServerBadge={true}
+            selected={false} isFirst={true} isLast={true} isSingle={true}
+            variant="default" compact={false}
+        />);
+        const menu = screen.root.findAll(node => String(node.type) === 'ContextMenu').find(node =>
+            Array.isArray(node.props.items) && node.props.items.some((item: { id?: string }) => item.id === SESSION_ACTION_STOP_ID));
+        expect(menu).toBeTruthy();
+        await act(async () => { await menu!.props.onSelect(SESSION_ACTION_STOP_ID); });
+        expectStopRequest('sess_direct_stop');
+        expect(modalConfirmSpy).not.toHaveBeenCalled();
+        expect(modalAlertSpy).not.toHaveBeenCalled();
+    });
+
     beforeEach(() => {
         previousState = storage.getState();
         network.resetRequests();
@@ -230,15 +247,7 @@ describe('SessionItem server-scoped mutations', () => {
             );
         });
 
-        expect(modalConfirmSpy).toHaveBeenCalledWith(
-            'sessionInfo.archiveSession',
-            'sessionInfo.archiveSessionConfirm',
-            {
-                cancelText: 'common.cancel',
-                confirmText: 'sessionInfo.archiveSession',
-                destructive: true,
-            },
-        );
+        expect(modalConfirmSpy).not.toHaveBeenCalled();
         expect(modalAlertSpy).not.toHaveBeenCalled();
 
         expectStopRequest('sess_1');
@@ -293,15 +302,7 @@ describe('SessionItem server-scoped mutations', () => {
             );
         });
 
-        expect(modalConfirmSpy).toHaveBeenCalledWith(
-            'sessionInfo.archiveSession',
-            'sessionInfo.archiveSessionConfirm',
-            {
-                cancelText: 'common.cancel',
-                confirmText: 'sessionInfo.archiveSession',
-                destructive: true,
-            },
-        );
+        expect(modalConfirmSpy).not.toHaveBeenCalled();
         expect(modalAlertSpy).not.toHaveBeenCalled();
 
         expectArchiveRequests('sess_2');
@@ -357,15 +358,7 @@ describe('SessionItem server-scoped mutations', () => {
             );
         });
 
-        expect(modalConfirmSpy).toHaveBeenCalledWith(
-            'sessionInfo.archiveSession',
-            'sessionInfo.archiveSessionConfirm',
-            {
-                cancelText: 'common.cancel',
-                confirmText: 'sessionInfo.archiveSession',
-                destructive: true,
-            },
-        );
+        expect(modalConfirmSpy).not.toHaveBeenCalled();
         expect(modalAlertSpy).not.toHaveBeenCalled();
         expectStopRequest('sess_stale_inactive');
         expectArchiveRequests('sess_stale_inactive', 2);
@@ -420,15 +413,7 @@ describe('SessionItem server-scoped mutations', () => {
             );
         });
 
-        expect(modalConfirmSpy).toHaveBeenCalledWith(
-            'sessionInfo.archiveSession',
-            'sessionInfo.archiveSessionConfirm',
-            {
-                cancelText: 'common.cancel',
-                confirmText: 'sessionInfo.archiveSession',
-                destructive: true,
-            },
-        );
+        expect(modalConfirmSpy).not.toHaveBeenCalled();
         expect(modalAlertSpy).not.toHaveBeenCalled();
 
         expectStopRequest('sess_3');
@@ -485,15 +470,7 @@ describe('SessionItem server-scoped mutations', () => {
             moreMenu!.props.onSelect(SESSION_ACTION_ARCHIVE_ID);
         });
 
-        expect(modalConfirmSpy).toHaveBeenCalledWith(
-            'sessionInfo.archiveSession',
-            'sessionInfo.archiveSessionConfirm',
-            {
-                cancelText: 'common.cancel',
-                confirmText: 'sessionInfo.archiveSession',
-                destructive: true,
-            },
-        );
+        expect(modalConfirmSpy).not.toHaveBeenCalled();
         expect(modalAlertSpy).not.toHaveBeenCalled();
 
         expectStopRequest('sess_active_archive');
@@ -550,15 +527,7 @@ describe('SessionItem server-scoped mutations', () => {
             );
         });
 
-        expect(modalConfirmSpy).toHaveBeenCalledWith(
-            'sessionInfo.archiveSession',
-            'sessionInfo.archiveSessionConfirm',
-            {
-                cancelText: 'common.cancel',
-                confirmText: 'sessionInfo.archiveSession',
-                destructive: true,
-            },
-        );
+        expect(modalConfirmSpy).not.toHaveBeenCalled();
         expect(modalAlertSpy).not.toHaveBeenCalled();
 
         expectStopRequest('sess_4');

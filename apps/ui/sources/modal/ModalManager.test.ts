@@ -74,6 +74,49 @@ describe('Modal.prompt', () => {
         await expect(promise).resolves.toBe(true);
     });
 
+    it('dismisses an invocation-owned confirmation on iOS when that invocation retires', async () => {
+        const { Modal } = await import('./ModalManager');
+        const { Alert } = await import('react-native');
+        vi.mocked(Alert.alert).mockClear();
+        const visible = new Set<string>();
+        const unregister = Modal.registerProvider({
+            showModal: () => { visible.add('owned-confirm'); return 'owned-confirm'; },
+            hideModal: id => { visible.delete(id); },
+            hideAllModals: () => { visible.clear(); },
+            updateCustomModalProps: () => {},
+        });
+        const controller = new AbortController();
+        try {
+            const pending = Modal.confirm('Install agent', '', { confirmText: 'Install', signal: controller.signal });
+            expect(Alert.alert).not.toHaveBeenCalled();
+            expect(visible.has('owned-confirm')).toBe(true);
+            controller.abort();
+            await expect(pending).resolves.toBe(false);
+            expect(visible.size).toBe(0);
+            Modal.resolveConfirm('owned-confirm', true);
+        } finally { unregister(); }
+    });
+
+    it('does not show an already retired confirmation or dismiss an accepted one on later retirement', async () => {
+        const { Modal } = await import('./ModalManager');
+        platformState.os = 'web';
+        const showModal = vi.fn(() => 'accepted-confirm');
+        const hideModal = vi.fn();
+        const unregister = Modal.registerProvider({ showModal, hideModal, hideAllModals: () => {}, updateCustomModalProps: () => {} });
+        try {
+            const retired = new AbortController();
+            retired.abort();
+            await expect(Modal.confirm('Install agent', '', { signal: retired.signal })).resolves.toBe(false);
+            expect(showModal).not.toHaveBeenCalled();
+            const controller = new AbortController();
+            const pending = Modal.confirm('Install agent', '', { signal: controller.signal });
+            Modal.resolveConfirm('accepted-confirm', true);
+            await expect(pending).resolves.toBe(true);
+            controller.abort();
+            expect(hideModal).not.toHaveBeenCalled();
+        } finally { unregister(); }
+    });
+
     it('keeps structured irreversible consequences in the app confirmation on iOS', async () => {
         const { Modal } = await import('./ModalManager');
         const { Alert } = await import('react-native');

@@ -34,14 +34,14 @@ export const CodeEntryHistoryCells = React.memo(function CodeEntryHistoryCells(p
     const commit = state.kind === 'commit' ? state.commit : null;
 
     const subject = pending ? (
-        <HappierSkeletonBlock width="46%" height={8} radius={4} color={theme.colors.surface.pressedOverlay} reducedMotion={reducedMotion} />
+        <HappierSkeletonBlock width="46%" height={8} radius={4} color={theme.colors.surface.skeleton} reducedMotion={reducedMotion} />
     ) : commit ? (
         <Text numberOfLines={1} style={styles.subject}>{commit.subject}</Text>
     ) : state.kind === 'none' ? (
         <Text numberOfLines={1} style={styles.none}>{t('projects.code.noEntryCommit')}</Text>
     ) : null;
     const time = pending ? (
-        <HappierSkeletonBlock width={44} height={8} radius={4} color={theme.colors.surface.pressedOverlay} reducedMotion={reducedMotion} />
+        <HappierSkeletonBlock width={44} height={8} radius={4} color={theme.colors.surface.skeleton} reducedMotion={reducedMotion} />
     ) : commit ? (
         <Text
             numberOfLines={1}

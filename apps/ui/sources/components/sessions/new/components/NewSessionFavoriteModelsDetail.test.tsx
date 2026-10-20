@@ -1,10 +1,9 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import type { AgentId } from '@/agents/catalog/catalog';
-import { createResolvedAgentCatalogEntryFixture } from '@/dev/testkit/fixtures/agentCatalogFixtures';
 import { renderScreen } from '@/dev/testkit';
 import { createReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
@@ -18,10 +17,9 @@ import {
     type BackendTargetRefV2,
 } from '@happier-dev/protocol';
 import { FavoriteModelSelectionV1Schema } from '@/sync/domains/models/favoriteModelSelections';
-import { SelectionList } from '@/components/ui/selectionList';
-import { AgentCatalogIdentityIcon } from '@/agents/presentation/AgentCatalogIdentityIcon';
-import { ProviderErrorItems } from '@/components/settings/providers/ProviderErrorItems';
 import { createProviderErrorV1 } from '@happier-dev/protocol';
+import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, ProviderConnectionsCatalogV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { createProviderSettingsHarness, createProviderSettingsAccountHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
 
 import { installNewSessionComponentsCommonModuleMocks } from './newSessionComponentsTestHelpers';
 
@@ -65,6 +63,16 @@ installNewSessionComponentsCommonModuleMocks({
     text: () => createTextModuleMock({ translate: (key) => key }),
     unistyles: () => createUnistylesMock(),
 });
+
+const rpc = createProviderSettingsHarness();
+installProviderSettingsRpcBoundary(rpc);
+const account = createProviderSettingsAccountHarness();
+afterEach(() => account.reset());
+
+const { createResolvedAgentCatalogEntryFixture } = await import('@/dev/testkit/fixtures/agentCatalogFixtures');
+const { SelectionList } = await import('@/components/ui/selectionList');
+const { AgentCatalogIdentityIcon } = await import('@/agents/presentation/AgentCatalogIdentityIcon');
+const { ProviderErrorItems } = await import('@/components/settings/providers/ProviderErrorItems');
 
 vi.mock('@/components/sessions/pickers/OptionPickerOverlay', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/components/sessions/pickers/OptionPickerOverlay')>();
@@ -379,9 +387,7 @@ describe('NewSessionFavoriteModelsDetail', () => {
         const screen = await renderScreen(renderDetail());
         const rootStepBefore = screen.findByType(SelectionList).props.rootStep;
 
-        await act(async () => {
-            screen.tree.update(renderDetail());
-        });
+        await screen.update(renderDetail());
 
         expect(screen.findByType(SelectionList).props.rootStep).toBe(rootStepBefore);
     });
@@ -553,8 +559,8 @@ describe('NewSessionFavoriteModelsDetail', () => {
         />);
 
         expect(optionPickerOverlayProps.at(-1)?.options.map((option) => option.accessibilityLabel)).toEqual([
-            'Gateway A, Work, Shared model',
-            'Gateway B, Work, Shared model',
+            'Gateway A · Work, Shared model',
+            'Gateway B · Work, Shared model',
         ]);
     });
 
@@ -628,12 +634,15 @@ describe('NewSessionFavoriteModelsDetail', () => {
         const visibilityKey = serializeModelVisibilityRefV1({
             scope: 'agent', agentTargetKey: 'agent:codex', providerConnectionId: null, modelId: 'hidden-native',
         });
-        const hiddenSettings = settingsParse({
-            providerSettingsV1: {
-                ...DEFAULT_PROVIDER_SETTINGS_V1,
+        const scope = await account.restore({
+            machines: [],
+            catalog: ProviderConnectionsCatalogV1Schema.parse({
+                ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
                 modelVisibilityByRef: { [visibilityKey]: 'hidden' },
-            },
+            }),
         });
+        const { refreshProviderCatalog } = await import('@/sync/engine/settings/providerCatalogEngine');
+        await refreshProviderCatalog(scope);
         const onSelectFavoriteModel = vi.fn();
         const { NewSessionFavoriteModelsDetail } = await import('./NewSessionFavoriteModelsDetail');
 
@@ -643,9 +652,9 @@ describe('NewSessionFavoriteModelsDetail', () => {
             selectedBackendTargetKey="agent:codex"
             selectedModelId="default"
             selectedMachineId="machine-1"
-            capabilityServerId="server-1"
+            capabilityServerId={scope.serverId}
             projectionCurrent
-            settings={hiddenSettings}
+            settings={settings}
             onSelectFavoriteModel={onSelectFavoriteModel}
             onToggleFavoriteModel={vi.fn()}
             onRemoveFavoriteModelSelection={vi.fn()}

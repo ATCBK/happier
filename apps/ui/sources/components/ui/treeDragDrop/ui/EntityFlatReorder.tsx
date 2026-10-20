@@ -147,6 +147,7 @@ export function EntityFlatReorderList(props: Readonly<{
     const viewportHeight = useSharedValue(0);
     const scrollOffsetY = useSharedValue(0);
     const contentHeight = useSharedValue(0);
+    const viewportBounds = React.useRef<WindowBounds | null>(null);
     const registry = useTreeDropRegistry(runtime.refresh);
     const [organizing, setOrganizing] = React.useState(props.initialOrganizing === true);
     const inheritedScroll = usePopoverScrollSourceRef();
@@ -158,7 +159,7 @@ export function EntityFlatReorderList(props: Readonly<{
         const scroll = scrollRef?.current;
         const dom = webScrollNode(scroll);
         const viewport = await measureWindowBounds(dom ?? scroll ?? null);
-        if (viewport) { viewportTopY.value = viewport.y; viewportHeight.value = viewport.height; }
+        if (viewport) { viewportBounds.current = viewport; viewportTopY.value = viewport.y; viewportHeight.value = viewport.height; }
         if (typeof dom?.scrollTop === 'number') scrollOffsetY.value = dom.scrollTop;
         else if (latest.current.scrollMetrics) scrollOffsetY.value = latest.current.scrollMetrics.offsetY.value;
         else if (typeof latest.current.scrollOffsetY === 'number') scrollOffsetY.value = latest.current.scrollOffsetY;
@@ -185,16 +186,32 @@ export function EntityFlatReorderList(props: Readonly<{
     }, [measure, scrollRef]);
     useTreeDropAutoscroll({ isActive, pointerY, viewportTopY, viewportHeight, scrollOffsetY, contentHeight, scrollToOffset });
     React.useEffect(() => {
+        // An admitted place in this list engages the edge zones. They stay engaged over the scroller's own trailing
+        // space (padding, a row after the list, a header), which is no drop place, until the carry ends, leaves the
+        // viewport, or lands on another list's place or one this list refuses.
+        let engaged = false;
         const update = () => {
             const snapshot = runtime.getSnapshot();
-            isActive.value = snapshot.phase === 'carrying' && props.binding.items.some(item => rowSourceId({ id }, item.id) === snapshot.sourceId);
-            pointerY.value = isActive.value ? runtime.getPointer()?.y ?? null : null;
+            const inList = snapshot.targetId !== null
+                && latest.current.binding.items.some(item => rowTargetId({ id }, item.id) === snapshot.targetId);
+            if (snapshot.phase !== 'carrying') engaged = false;
+            else if (inList) engaged = snapshot.admission?.status === 'allowed';
+            else if (snapshot.targetId !== null) engaged = false;
+            const pointer = runtime.getPointer();
+            const viewport = viewportBounds.current;
+            const inTrailingSpace = engaged && !inList && pointer !== null && viewport !== null
+                && pointer.x >= viewport.x && pointer.x <= viewport.x + viewport.width
+                && pointer.y >= viewport.y && pointer.y <= viewport.y + viewport.height;
+            isActive.value = engaged && (inList || inTrailingSpace);
+            // A selected place's runtime callback supplies the pointer; only trailing space reads it directly.
+            if (!isActive.value) pointerY.value = null;
+            else if (inTrailingSpace) pointerY.value = pointer.y;
         };
         update();
         const semantic = runtime.subscribe(update);
-        const pointer = runtime.subscribePointer(update);
-        return () => { semantic(); pointer(); isActive.value = false; pointerY.value = null; };
-    }, [runtime, id, props.binding.items, isActive, pointerY]);
+        const frames = runtime.subscribePointer(update);
+        return () => { semantic(); frames(); isActive.value = false; pointerY.value = null; };
+    }, [runtime, id, isActive, pointerY]);
     React.useEffect(() => {
         if (Platform.OS !== 'web' || typeof window === 'undefined') return;
         const refresh = () => { void measure(); };

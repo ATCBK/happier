@@ -358,6 +358,8 @@ export async function readCodexSessionMetaFromRollout(
     bounds: CodexExternalSessionInvocationBounds = {},
 ): Promise<CodexSessionMetaPayload | null> {
     throwIfCodexExternalSessionInvocationStopped(bounds);
+    if (bounds.preparation) return await bounds.preparation.readSessionIdentity(filePath,
+        () => readCodexSessionMetaFromRollout(filePath, { ...bounds, preparation: undefined }));
     try {
         const fh = await open(filePath, 'r');
         try {

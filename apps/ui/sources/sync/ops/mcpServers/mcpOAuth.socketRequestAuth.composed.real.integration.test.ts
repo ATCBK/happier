@@ -7,8 +7,8 @@ import {
     closeMcpOAuthSocketRequestAuthFixture,
 } from '../../../../../cli/src/mcp/oauth/mcpOAuthSocketRequestAuth.testkit.mjs';
 
-beforeAll(prepareMcpOAuthSocketRequestAuthFixture);
+beforeAll(() => prepareMcpOAuthSocketRequestAuthFixture({ encryptionMode: 'e2ee' }));
 afterEach(closeMcpOAuthSocketRequestAuthFixture);
 
-it('composes authenticated sign-in, registered OAuth Test snapshot persistence and per-request bridge credentials',
+it('composes E2EE CLI sign-in and reconnect, registered OAuth Test persistence and consecutive Session tool calls',
     exerciseMcpOAuthMachineTest);

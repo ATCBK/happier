@@ -19,6 +19,7 @@ import {
 import { storage, useSessionListRenderableWithServerScope } from '@/sync/domains/state/storage';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { useSessionCollaborationAvailability } from '@/hooks/session/useSessionCollaborationAvailability';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 export type SessionResponsibilityAvailability =
     /** No cached scoped Session exists yet; preserve the section's row geometry. */
@@ -71,7 +72,7 @@ const NO_APPROVAL_REFRESH = () => {};
  * outcomes a direct execution uses.
  */
 function readApprovalSettlementFailure(code: string): SessionResponsibilityMutationFailure | null {
-    if (code === 'approval_rejected' || code === 'approval_canceled') return null;
+    if (isActionApprovalDeclinedErrorCode(code)) return null;
     if (code === 'approval_execution_outcome_unknown' || code === 'outcome_unknown') return 'unknown';
     return readResponsibilityFailureCode(code);
 }

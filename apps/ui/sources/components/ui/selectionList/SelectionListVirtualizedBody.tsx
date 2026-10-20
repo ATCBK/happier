@@ -149,6 +149,7 @@ export type SelectionListBodyVirtualizedItem =
           rowKey: string;
           sectionId: string;
           label: string;
+          retry?: Readonly<{ label: string; onPress: () => void }>;
       }>
     | Readonly<{
           kind: 'not-found';
@@ -161,6 +162,8 @@ export type SelectionListBodyVirtualizedItem =
           rowKey: string;
           sectionId: string;
           hint: string;
+          /** The line a section that names its first load shows while it loads. */
+          loading?: boolean;
       }>
     | Readonly<{
           kind: 'result-hint';
@@ -216,6 +219,7 @@ export function flattenRenderPlanForVirtualizedList(
                     rowKey: `${sectionPlan.id}::loadingHint`,
                     sectionId: sectionPlan.id,
                     hint: sectionPlan.hint,
+                    loading: true,
                 });
             }
             for (let i = 0; i < skeletonCount; i += 1) {
@@ -250,6 +254,7 @@ export function flattenRenderPlanForVirtualizedList(
                 rowKey: `${sectionPlan.id}::error`,
                 sectionId: sectionPlan.id,
                 label,
+                ...(sectionPlan.retry ? { retry: sectionPlan.retry } : {}),
             });
             // Stale options below the error row, matching the per-section
             // renderer's behavior.
@@ -529,6 +534,7 @@ function renderVirtualizedListRow(
                 label={item.label}
                 testID={measureMode ? undefined : selectionListTestId(sectionTestId, 'error')}
                 measureMode={measureMode}
+                retry={item.retry}
             />
         ), ctx.a11yPattern);
     }
@@ -549,6 +555,7 @@ function renderVirtualizedListRow(
         return renderFlatListboxSectionGroup((
             <SelectionListEmptyHintRow
                 hint={item.hint}
+                loading={item.loading}
                 testID={measureMode ? undefined : selectionListTestId(sectionTestId, 'emptyHint')}
             />
         ), ctx.a11yPattern);
@@ -867,6 +874,7 @@ function renderDirectVirtualizedSourceItem(
                 <SelectionListSectionHeader
                     testID={ctx.measureMode ? undefined : headerTestId}
                     title={header.title}
+                    monoTitle={header.monoTitle}
                     count={header.count}
                     rightAccessory={renderSelectionListAccessory(header.rightAccessory)}
                 />

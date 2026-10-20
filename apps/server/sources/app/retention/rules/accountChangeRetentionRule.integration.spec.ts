@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { changesRoutes } from '@/app/api/routes/changes/changesRoutes';
 import { withAuthenticatedTestApp } from '@/app/api/testkit/sqliteFastify';
 import { markAccountChanged } from '@/app/changes/markAccountChanged';
-import { db } from '@/storage/db';
+import { db, withSqliteReadSnapshot } from '@/storage/db';
 import { inTx } from '@/storage/inTx';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
 
@@ -133,14 +133,16 @@ function isChangesCursorRead(args: unknown, accountId: string): boolean {
 }
 
 /** Pauses the route after its first (now potentially stale) cursor read. */
-function installPauseAfterChangesCursorRead(accountId: string): Readonly<{
+async function installPauseAfterChangesCursorRead(accountId: string): Promise<Readonly<{
     reached: Promise<void>;
     release: () => void;
     restore: () => void;
-}> {
+}>> {
     const cursorRead = deferred();
     const releaseRead = deferred();
-    const delegate = db.account;
+    // Read-only inTx uses the storage-owned DEFERRED snapshot connection,
+    // not Prisma's IMMEDIATE interactive write transaction/client.
+    const delegate = await withSqliteReadSnapshot(async reader => reader.account);
     const originalFindUnique = delegate.findUnique.bind(delegate);
     let paused = false;
     let restored = false;
@@ -416,7 +418,7 @@ describe('accountChangeRetentionRule', () => {
                     revision: 2,
                     rowIds: ['task-1'],
                 },
-            }));
+            })).then(publication => publication.resolveCursor());
             exactChange.then(
                 () => { exactCommitted = true; },
                 () => undefined,
@@ -507,7 +509,7 @@ describe('accountChangeRetentionRule', () => {
             },
         });
 
-        const pause = installPauseAfterChangesCursorRead(account.id);
+        const pause = await installPauseAfterChangesCursorRead(account.id);
         let response: Readonly<{
             statusCode: number;
             json: () => unknown;
@@ -552,7 +554,7 @@ describe('accountChangeRetentionRule', () => {
                     revision: 2,
                     rowIds: ['task-1'],
                 },
-            }))).resolves.toBe(2);
+            })).then(publication => publication.resolveCursor())).resolves.toBe(2);
 
             pause.release();
             await poll;

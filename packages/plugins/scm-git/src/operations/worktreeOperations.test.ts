@@ -59,7 +59,10 @@ describe('git worktree operations', () => {
             .mockResolvedValueOnce({ success: true, stdout: '/repo-linked\n', stderr: '' })
             .mockResolvedValueOnce({ success: true, stdout: '/repo/.git\n', stderr: '' })
             .mockResolvedValueOnce({ success: true, stdout: 'abc123\n', stderr: '' })
+            // Each attempt first lists registered worktrees, so a path Git still lists as deleted is overridden.
+            .mockResolvedValueOnce({ success: true, stdout: '', stderr: '' })
             .mockResolvedValueOnce({ success: false, stdout: '', stderr: 'already exists' })
+            .mockResolvedValueOnce({ success: true, stdout: '', stderr: '' })
             .mockResolvedValueOnce({ success: true, stdout: '', stderr: '' })
             .mockResolvedValue({ success: true, stdout: '/repo/.dev/worktree/feature-auth-2\n', stderr: '' });
         mkdirMock.mockResolvedValue(undefined);
@@ -85,7 +88,7 @@ describe('git worktree operations', () => {
         });
         expect(mkdirMock).toHaveBeenCalledWith('/repo/.dev/worktree', { recursive: true });
         expect(runScmCommandMock).toHaveBeenNthCalledWith(
-            5,
+            6,
             expect.objectContaining({
                 command: 'git',
                 cwd: '/repo',
@@ -93,7 +96,7 @@ describe('git worktree operations', () => {
             }),
         );
         expect(runScmCommandMock).toHaveBeenNthCalledWith(
-            6,
+            8,
             expect.objectContaining({
                 command: 'git',
                 cwd: '/repo',

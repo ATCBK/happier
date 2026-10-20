@@ -471,9 +471,10 @@ export async function waitForServerReachable(params: Readonly<{
     // Admission consumes the same transport selection/start operation as socket
     // owners and leases. Omitted hints preserve selection; explicit direct hints
     // re-probe instead of borrowing a verdict for the previous transport.
-    const startup = startServerReachabilitySupervisor(params);
+    const startupLifetime = new AbortController();
+    const startup = startServerReachabilitySupervisor({ ...params, signal: startupLifetime.signal });
     const homeIdentityId = params.homeIdentityId?.trim() || null;
-    await waitForState({
+    const waiting = waitForState({
         entry,
         startup,
         signal: params.signal,
@@ -494,6 +495,14 @@ export async function waitForServerReachable(params: Readonly<{
             }
         },
     });
+    try {
+        await waiting;
+    } finally {
+        // The wait's existing deadline/cancellation owns this startup demand.
+        // A timed-out observer must not keep an unanswered probe alive forever.
+        startupLifetime.abort();
+        await startup.catch(() => {});
+    }
 }
 
 export async function invalidateServerReachabilitySupervisor(params: Readonly<{
@@ -514,14 +523,35 @@ export async function invalidateServerReachabilitySupervisor(params: Readonly<{
     }
 
     const now = Date.now();
-    // Avoid repeated stop/start loops when multiple callers attempt to "force reconnect" at once.
+    // Coalesce simultaneous foreground and transport-failure revalidation.
     if (now - entry.lastInvalidateAt < 250) {
         return;
     }
     entry.lastInvalidateAt = now;
 
     const run = (async () => {
-        if (entry.state.phase === 'online' || entry.state.phase === 'connecting' || entry.state.phase === 'offline') {
+        if (entry.state.phase === 'online') {
+            // A request to recheck reachability is not an outage verdict. Stopping
+            // the synthetic supervisor here disconnects healthy request sockets
+            // before the probe can answer, including leased RPCs on foreground return.
+            const scope = entry.supervisor.captureProbeReportScope?.();
+            if (!scope) return;
+            const probe = await probeServerReadiness({
+                endpoint: entry.runtimeOrigin ?? entry.serverUrl,
+                token: entry.token,
+                homeCarrier: entry.homeCarrier,
+            });
+            if (!networkAllowed || entry.supervisor.captureProbeReportScope?.().generation !== scope.generation) return;
+            if (probe.status !== 'ready') {
+                entry.supervisor.reportProbeResult?.(probe, scope);
+            } else {
+                // A disconnected socket still needs the fresh online observation
+                // to dial again; healthy sockets keep their existing transport.
+                entry.subscribers.forEach((listener) => listener(entry.state));
+            }
+            return;
+        }
+        if (entry.state.phase === 'connecting' || entry.state.phase === 'offline') {
             // Explicit invalidation is used after out-of-band evidence such as a Socket.IO transport drop.
             // Force a fresh probe even if the synthetic reachability transport still thinks it is online.
             await entry.supervisor.stop();
@@ -637,11 +667,14 @@ export async function startServerReachabilitySupervisor(params: Readonly<{
     runtimeOrigin?: string;
     /** Semantic carrier for a Home with no reachable URL origin (browser Iroh). */
     homeCarrier?: HomeCarrier | null;
+    signal?: AbortSignal;
 }>): Promise<void> {
+    throwIfAborted(params.signal);
     const entry = getOrCreateEntry(params.serverUrl, params.token);
     entry.pendingStartCount += 1;
-    try {
+    const startup = (async () => {
         await entry.stopInFlight;
+        throwIfAborted(params.signal);
         const tokenChanged = entry.token !== params.token;
         const runtimeOriginRaw = String(params.runtimeOrigin ?? '').trim();
         const canonicalRuntimeOrigin = runtimeOriginRaw ? canonicalizeServerUrl(runtimeOriginRaw) : null;
@@ -674,10 +707,20 @@ export async function startServerReachabilitySupervisor(params: Readonly<{
             await entry.supervisor.start();
         } else if (transportChanged || (entry.state.phase === 'auth_failed' && tokenChanged)) {
             await entry.supervisor.stop();
+            throwIfAborted(params.signal);
             await entry.supervisor.start();
         }
+    })();
+    try {
+        // Startup may be parked on a transport that does not settle after abort.
+        // This caller owns demand, not the shared probe's eventual completion.
+        // Reuse the state waiter's cancellation fence so retired demand releases
+        // its count and the last consumer can stop/evict the stalled supervisor.
+        if (params.signal) await waitForState({ entry, startup, signal: params.signal, predicate: () => true });
+        else await startup;
     } finally {
         entry.pendingStartCount = Math.max(0, entry.pendingStartCount - 1);
+        if (params.signal?.aborted) await stopEntryIfUnused(entry);
     }
 }
 
@@ -688,13 +731,16 @@ export async function acquireServerReachabilitySupervisor(params: Readonly<{
     token: string | null;
     runtimeOrigin?: string;
     homeCarrier?: HomeCarrier | null;
+    signal?: AbortSignal;
 }>): Promise<ServerReachabilityLease> {
+    throwIfAborted(params.signal);
     const entry = getOrCreateEntry(params.serverUrl, params.token);
     entry.ownerCount += 1;
     try {
         await startServerReachabilitySupervisor(params);
     } catch (error) {
         entry.ownerCount = Math.max(0, entry.ownerCount - 1);
+        await stopEntryIfUnused(entry);
         throw error;
     }
     let released = false;

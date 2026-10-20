@@ -19,6 +19,7 @@ import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSa
 import { configuration } from '@/configuration';
 import { SESSION_CAPABILITY_NOTICE_SIDECAR_KEY, SessionCapabilityNoticeV1Schema } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 import { logger } from '@/ui/logger';
+import { isSessionAgentChangeTitleToolAvailable } from '@/agent/tools/happierTools/resolveSessionNativeToolBridge';
 
 type PromptPreparationAccountSnapshot = ReturnType<typeof getActiveAccountSettingsSnapshot>;
 
@@ -28,13 +29,18 @@ export type SessionPromptPlanWithdrawalReason = 'plan-unprepared' | 'account-lif
   | `active-${PromptPreparationAccountChange}` | `captured-${PromptPreparationAccountChange}`
   | 'prepared-settings-changed' | 'profile-selection-changed';
 
-function readPromptPreparationSettingsBasis(settings: Record<string, unknown> | null | undefined, profileId: string | null) {
+function readPromptPreparationSettingsBasis(settings: Record<string, unknown> | null | undefined,
+  profileId: string | null, behavior: CodingPromptBehaviorV1) {
   // These preferences feed the coding composer and its selected Profile. UI,
   // Voice and creation-only defaults cannot withdraw an existing Session's plan.
   const enabledById = settings?.profileEnabledById;
   return {
     codingPromptBehaviorV1: settings?.codingPromptBehaviorV1,
-    actionsSettingsV1: settings?.actionsSettingsV1,
+    // Actions policy contributes only title-tool guidance to this plan. Other
+    // Actions (including their approval policy) remain live at their own owner.
+    sessionTitleToolAvailable: isSessionAgentChangeTitleToolAvailable({
+      accountSettings: settings ?? {}, codingPromptBehavior: behavior,
+    }),
     profiles: profileId ? settings?.profiles : undefined,
     profileEnabled: profileId && enabledById && typeof enabledById === 'object'
       ? Reflect.get(enabledById, profileId) : undefined,
@@ -58,15 +64,16 @@ function readPromptPreparationProfileBasis(snapshot: NonNullable<PromptPreparati
 }
 
 function readPromptPreparationAccountChange(prepared: PromptPreparationAccountSnapshot,
-  current: PromptPreparationAccountSnapshot, profileId: string | null): PromptPreparationAccountChange | null {
+  current: PromptPreparationAccountSnapshot, profileId: string | null,
+  behavior: CodingPromptBehaviorV1): PromptPreparationAccountChange | null {
   if (prepared === current) return null;
   if (!prepared || !current) return 'account-snapshot-unavailable';
   if (prepared.scopeKey !== current.scopeKey) return 'account-scope-changed';
   // First network confirmation of equal Settings is hydration, not retirement.
   // Losing previously admitted availability still withdraws the plan.
   if (prepared.source !== 'none' && current.source === 'none') return 'account-availability-changed';
-  if (!isDeepStrictEqual(readPromptPreparationSettingsBasis(prepared.settings, profileId),
-    readPromptPreparationSettingsBasis(current.settings, profileId))) return 'account-settings-changed';
+  if (!isDeepStrictEqual(readPromptPreparationSettingsBasis(prepared.settings, profileId, behavior),
+    readPromptPreparationSettingsBasis(current.settings, profileId, behavior))) return 'account-settings-changed';
   if (!isDeepStrictEqual(prepared.settingsSecretsReadKeys, current.settingsSecretsReadKeys)) return 'account-keys-changed';
   if (!isDeepStrictEqual(readPromptPreparationProfileBasis(prepared, profileId),
     readPromptPreparationProfileBasis(current, profileId))) return 'account-profile-changed';
@@ -147,22 +154,32 @@ export function createSessionPromptPlanResolver(params: Readonly<{
       featureIds, ...(excludePluginIds ? { excludePluginIds } : {}), signal,
     };
     let optionalPromptAssetsUnavailable = false;
-    const promptContributions = params.daemonBridge
-      ? await params.daemonBridge.resolvePrompt(scope)
-      : {
-          promptAssetBlocks: await resolvePluginPromptAssetBlocks({ ...scope, agentId: params.agentId,
-            onOptionalUnavailable: () => { optionalPromptAssetsUnavailable = true; } }),
-          optionalPromptAssetsUnavailable,
-          toolPromptContributions: await resolvePluginToolPromptContributions(
-            excludePluginIds ? { excludePluginIds } : undefined,
-          ),
-        };
-    const preparedStack = await prepareSessionPromptStackInputs({
-      credentials: params.opts.credentials, metadata: params.session.getMetadataSnapshot(), sessionId: params.session.sessionId,
-      machineId: params.machineId, directory: params.directory, signal, serverId,
-      operationContext,
-      accountContext: { ...accountContext, settings: params.opts.accountSettingsContext?.settings ?? null },
-    });
+    // Plugin augmentation and Account/Project source admission have independent
+    // transports. Join them before composition, retaining the final Account
+    // fences rather than serializing these reads or reusing an older plan.
+    const [promptPreparation, stackPreparation] = await Promise.allSettled([
+      (async () => params.daemonBridge
+        ? await params.daemonBridge.resolvePrompt(scope)
+        : {
+            promptAssetBlocks: await resolvePluginPromptAssetBlocks({ ...scope, agentId: params.agentId,
+              onOptionalUnavailable: () => { optionalPromptAssetsUnavailable = true; } }),
+            optionalPromptAssetsUnavailable,
+            toolPromptContributions: await resolvePluginToolPromptContributions(
+              excludePluginIds ? { excludePluginIds } : undefined,
+            ),
+          })(),
+      prepareSessionPromptStackInputs({
+        credentials: params.opts.credentials, metadata: params.session.getMetadataSnapshot(), sessionId: params.session.sessionId,
+        machineId: params.machineId, directory: params.directory, signal, serverId,
+        operationContext,
+        accountContext: { ...accountContext, settings: params.opts.accountSettingsContext?.settings ?? null },
+      }),
+    ]);
+    // Do not leave an independent source read running after a failed IPC reply.
+    if (promptPreparation.status === 'rejected') throw promptPreparation.reason;
+    if (stackPreparation.status === 'rejected') throw stackPreparation.reason;
+    const promptContributions = promptPreparation.value;
+    const preparedStack = stackPreparation.value;
     const { accountSnapshot: currentAccount, assertCurrentAccount, ...stackInputs } = preparedStack;
     const { settings, profileId } = stackInputs;
     const skills = params.readSessionSkills?.();
@@ -202,7 +219,7 @@ export function createSessionPromptPlanResolver(params: Readonly<{
       throw Object.assign(new Error('context_source_unavailable'), { code: 'context_source_unavailable', reason: 'scope-retired' });
     }
     const unavailable = promptContributions.optionalPromptAssetsUnavailable === true
-      || plan.admittedEntries.some(entry => entry.outcome === 'unavailable' && entry.reason === 'unavailable');
+      || plan.admittedEntries.some(entry => entry.outcome === 'unavailable');
     if (unavailable && !optionalLibraryUnavailable) {
       const notice = SessionCapabilityNoticeV1Schema.parse({ v: 1, items: [
         { kind: 'prompt_library', name: 'Prompt library', code: 'prompt_library_unavailable' },
@@ -241,16 +258,17 @@ export function createSessionPromptPlanResolver(params: Readonly<{
     const capturedAccount = preparedBehavior.operationContext?.readSnapshot();
     if (accountScopeKey) {
       if (getActiveAccountSettingsSnapshotLifetimeToken() !== accountLifetimeToken) return 'account-lifetime-changed';
-      const activeChange = readPromptPreparationAccountChange(preparedBehavior.activeAccountSnapshot, activeAccount, preparedBehavior.profileId);
+      const activeChange = readPromptPreparationAccountChange(preparedBehavior.activeAccountSnapshot, activeAccount,
+        preparedBehavior.profileId, preparedBehavior.behavior);
       if (activeChange) return `active-${activeChange}`;
       const capturedChange = readPromptPreparationAccountChange(preparedBehavior.accountSnapshot,
-        preparedBehavior.operationContext ? capturedAccount ?? null : activeAccount, preparedBehavior.profileId);
+        preparedBehavior.operationContext ? capturedAccount ?? null : activeAccount, preparedBehavior.profileId, preparedBehavior.behavior);
       if (capturedChange) return `captured-${capturedChange}`;
     }
     const currentSettings = preparedBehavior.operationContext ? capturedAccount?.settings
       : accountScopeKey ? activeAccount?.settings : params.opts.accountSettingsContext?.settings ?? null;
-    if (!isDeepStrictEqual(readPromptPreparationSettingsBasis(preparedBehavior.settings, preparedBehavior.profileId),
-      readPromptPreparationSettingsBasis(currentSettings, preparedBehavior.profileId))) return 'prepared-settings-changed';
+    if (!isDeepStrictEqual(readPromptPreparationSettingsBasis(preparedBehavior.settings, preparedBehavior.profileId, preparedBehavior.behavior),
+      readPromptPreparationSettingsBasis(currentSettings, preparedBehavior.profileId, preparedBehavior.behavior))) return 'prepared-settings-changed';
     if (preparedBehavior.profileId !== (params.session.getMetadataSnapshot()?.profileId ?? null)) return 'profile-selection-changed';
     return null;
   };

@@ -16,8 +16,6 @@ import {
     readActiveConfiguredSourceRows,
 } from '../corpus/configuration/readConfiguredSourceRows.js';
 import type { CorpusCollectionHandleV1 } from '../corpus/collections/handles.js';
-import type { CorpusRowV1 } from '../corpus/collections/rowCodec.js';
-import type { CorpusSourceInstanceRowV1 } from '../corpus/collections/rows.js';
 import { renderSourceQualifiedId } from '../corpus/identity/components.js';
 import {
     CORPUS_DEFAULT_SMART_POLICY_V1,
@@ -103,7 +101,10 @@ export type TriageListEntriesDepsV1 = Readonly<{
     readAdmittedSources: (options?: PluginCancellationOptions) => Promise<readonly TriageAdmittedSourceV1[]>;
     executeScan: TriageAdmittedOperationExecutorV1;
     nowMs: () => number;
+    logger?: Pick<PluginInvocationContext['services']['logger'], 'warn'>;
     signal?: AbortSignal;
+    /** Tasks is a lens over this same scan/window owner. */
+    taskOnly?: boolean;
 }>;
 
 function lensFrom(
@@ -131,6 +132,12 @@ function lensFrom(
 function selectionAdmits(input: TriageListEntriesInputV1, sourceInstanceId: string): boolean {
     return input.sources.kind === 'allConfigured'
         || input.sources.sourceInstanceIds.includes(sourceInstanceId);
+}
+
+function walkAdmits(input: TriageListEntriesInputV1, sourceInstanceId: string): boolean {
+    return selectionAdmits(input, sourceInstanceId)
+        && (input.sources.kind !== 'allConfigured' || input.resume === undefined
+            || input.resume.some((frontier) => frontier.sourceInstanceId === sourceInstanceId));
 }
 
 /**
@@ -178,33 +185,30 @@ export async function assembleTriageListPass(
 ): Promise<TriageAssembledListPassV1> {
     const options: PluginCancellationOptions | undefined = deps.signal ? { signal: deps.signal } : undefined;
     const resumeByInstance = resumeByInstanceId(input);
-    const admittedPromise = deps.readAdmittedSources(options);
     const sources = input.sources;
-    let configuredRows: readonly CorpusSourceInstanceRowV1[];
-    let configuredRecords: readonly CorpusRowV1<CorpusSourceInstanceRowV1>[];
-    let configuredSourcesStatus: 'complete' | 'truncated';
-    let configuredSourcesNextCursor: string | undefined;
-    if (sources.kind === 'allConfigured') {
-        const page = await readActiveConfiguredSourceRowPage(deps.sourceInstances, {
-            limit: MAX_TRIAGE_LIST_SOURCE_BATCH_V1,
-            ...(sources.cursor === undefined ? {} : { cursor: sources.cursor }),
-        }, options);
-        configuredRows = page.rows;
-        configuredRecords = page.records;
-        configuredSourcesStatus = page.status;
-        configuredSourcesNextCursor = page.nextCursor;
-    } else {
-        const configured = await readActiveConfiguredSourceRows(deps.sourceInstances, options);
-        configuredRows = configured.rows.filter((row) => sources.sourceInstanceIds.includes(
+    // Own both rejections before yielding: admission can fail during plugin
+    // retirement while Account storage is pending, and either read can fail first.
+    const [configured, admitted] = await Promise.all([
+        sources.kind === 'allConfigured'
+            ? readActiveConfiguredSourceRowPage(deps.sourceInstances, {
+                limit: MAX_TRIAGE_LIST_SOURCE_BATCH_V1,
+                ...(sources.cursor === undefined ? {} : { cursor: sources.cursor }),
+            }, options)
+            : readActiveConfiguredSourceRows(deps.sourceInstances, options),
+        deps.readAdmittedSources(options),
+    ]);
+    const configuredRows = sources.kind === 'allConfigured'
+        ? configured.rows
+        : configured.rows.filter((row) => sources.sourceInstanceIds.includes(
             row.configured.instance.sourceInstanceId,
         ));
-        configuredRecords = configured.records.filter((record) => sources.sourceInstanceIds.includes(
+    const configuredRecords = sources.kind === 'allConfigured'
+        ? configured.records
+        : configured.records.filter((record) => sources.sourceInstanceIds.includes(
             record.value.configured.instance.sourceInstanceId,
         ));
-        configuredSourcesStatus = 'complete';
-        configuredSourcesNextCursor = undefined;
-    }
-    const admitted = await admittedPromise;
+    const configuredSourcesStatus = configured.status;
+    const configuredSourcesNextCursor = 'nextCursor' in configured ? configured.nextCursor : undefined;
 
     const admittedByQualifiedId = indexTriageAdmittedSourcesV1(admitted);
 
@@ -241,7 +245,11 @@ export async function assembleTriageListPass(
                 : { displayLabel: row.configured.locator.displayLabel }),
             available,
         });
-        if (input.limit === 0 || !selectionAdmits(input, row.configured.instance.sourceInstanceId)) continue;
+        if (input.limit === 0 || !walkAdmits(input, row.configured.instance.sourceInstanceId)) continue;
+        const selectedKindIds = deps.taskOnly
+            ? contribution?.descriptor.kinds.filter((kind) => kind.task === true).map((kind) => kind.id)
+            : undefined;
+        if (selectedKindIds?.length === 0) continue;
         // Selected, so this window is answering for it either way. A source that
         // cannot be invoked becomes an unfinished lane rather than a silent
         // absence, which is what keeps the coverage claim about what was asked.
@@ -256,6 +264,7 @@ export async function assembleTriageListPass(
             sourceInstanceId: row.configured.instance.sourceInstanceId,
             source,
             declaredKindIds,
+            ...(selectedKindIds === undefined ? {} : { selectedKindIds }),
             configured: row.configured,
             ...(resume === undefined
                 ? {}
@@ -278,11 +287,22 @@ export async function assembleTriageListPass(
         1,
         Math.floor(lens.limit / Math.max(lanes.length, 1)),
     );
+    // An explicitly selected new lane starts before existing walks deepen.
+    // Other unfinished lanes keep the rotation order returned by scanPass;
+    // configured-row ordering must not restart the rotation on every window.
+    const orderedLanes = input.resume === undefined ? lanes : [
+        ...lanes.filter((lane) => !resumeByInstance.has(lane.sourceInstanceId)),
+        ...[...resumeByInstance.keys()].flatMap((sourceInstanceId) => {
+            const lane = lanes.find((candidate) => candidate.sourceInstanceId === sourceInstanceId);
+            return lane === undefined ? [] : [lane];
+        }),
+    ];
     const pass = await runTriageScanPass({
-        lanes,
+        lanes: orderedLanes,
         pageLimit,
         observationBudget: lens.limit,
         nowMs: deps.nowMs,
+        logger: deps.logger,
         ...(deps.signal ? { signal: deps.signal } : {}),
     });
 
@@ -345,7 +365,9 @@ export async function assembleTriageListPass(
                 : { displayLabel: row.configured.locator.displayLabel }),
             available,
         });
-        if (input.limit > 0 && selectionAdmits(input, row.configured.instance.sourceInstanceId)) {
+        const hasSelectedKinds = !deps.taskOnly || contribution === undefined
+            || contribution.descriptor.kinds.some((kind) => kind.task === true);
+        if (hasSelectedKinds && input.limit > 0 && walkAdmits(input, row.configured.instance.sourceInstanceId)) {
             settledIntended.push({ sourceInstanceId: row.configured.instance.sourceInstanceId, source });
         }
     }
@@ -415,7 +437,7 @@ export async function listTriageEntries(
  * invocation context the host supplies and adds no dispatch, cache or registry
  * of its own.
  */
-export function createTriageListEntriesActionHandler(): ActionHandler<
+export function createTriageListEntriesActionHandler(lens?: Readonly<{ taskOnly?: boolean }>): ActionHandler<
     TriageListEntriesInputV1,
     TriageListEntriesResultV1
 > {
@@ -436,6 +458,8 @@ export function createTriageListEntriesActionHandler(): ActionHandler<
         executeScan: async (operation, scanInput, options) => await context.services.actions
             .executeAdmittedTargetedOperation(operation, scanInput, options ?? {}),
         nowMs: () => Date.now(),
+        taskOnly: lens?.taskOnly,
+        logger: context.services.logger,
         signal: context.signal,
     });
 }

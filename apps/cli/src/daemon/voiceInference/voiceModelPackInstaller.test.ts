@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer as createHttpsServer, request as httpsRequest, type RequestOptions } from 'node:https';
@@ -10,6 +10,7 @@ import { fetchVoiceModelPackManifest, installVoiceModelPack, readInstalledVoiceM
 import type { PinnedHttpStreamTransport } from '../../network/pinnedHttp';
 import { openPinnedHttpStream } from '../../network/pinnedHttp';
 import { createEphemeralTlsServerFixture } from '../../../../../packages/tests/src/testkit/tls/ephemeralTlsServerFixture.mjs';
+import { bindProcessLogger, Logger } from '../../ui/logger';
 
 const manifestFixture = (packId: string) => ({
   packId,
@@ -42,6 +43,29 @@ async function withLegacyFetchFixture<T>(
 }
 
 describe('voiceModelPackInstaller packId filesystem safety', () => {
+  it.each(['corrupt', 'unreadable'] as const)('logs %s receipt fallback locally without contents and keeps missing receipts quiet', async (failure) => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-receipt-warning-'));
+    const packId = 'receipt-warning';
+    const logPath = join(root, 'warning.log');
+    await writeFile(logPath, '');
+    const log = new Logger({ logFilePath: logPath, pruneCurrentProcessLogs: false, allowDangerousRemoteLogging: false });
+    const restore = bindProcessLogger(log);
+    const privateContents = 'private_receipt_contents';
+    try {
+      expect(await readInstalledVoiceModelPackManifest({ packsRootDir: root, packId })).toBeNull();
+      log.flushSync();
+      expect(await readFile(logPath, 'utf8')).toBe('');
+      await mkdir(join(root, packId));
+      if (failure === 'corrupt') await writeFile(join(root, packId, 'pack.json'), privateContents);
+      else await mkdir(join(root, packId, 'pack.json'));
+      expect(await readInstalledVoiceModelPackManifest({ packsRootDir: root, packId })).toBeNull();
+      log.flushSync();
+      const content = await readFile(logPath, 'utf8');
+      expect(content).toContain('[WARN]');
+      expect(content).not.toContain(privateContents);
+    } finally { restore(); await rm(root, { recursive: true, force: true }); }
+  });
+
   it('drops retired installed manifest fields recursively and keeps known frontend validation', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-stored-voice-manifest-'));
     const packId = 'stored-manifest';

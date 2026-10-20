@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import {
     type TeamDirectoryActionIdV1,
     type TeamDirectoryGroupsListInputV1,
@@ -49,7 +49,7 @@ import type { HomeIdentityActionIdV1, HomeIdentityConnectionListResultV1 } from 
 
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { homeDomainFailureCode } from '@/sync/api/home/homeDomainActions';
-import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
+import type { HomeActionFailure as HomeDomainFailure } from '@/sync/ops/home/homeActionOutcome';
 import { scopedHomeActionExecutor } from '@/sync/ops/actions/scopedHomeActionExecutor';
 import { classifyHomeActionOutcome } from '@/sync/ops/home/homeActionOutcome';
 import { resolveApprovalSettledReadFailure, resolveIdentityAdministrationFailureRetryable } from '@/components/settings/identity/identityAdministrationFailure';
@@ -132,7 +132,9 @@ type TeamExternalGroupBindingActionOutputMap = Readonly<{
 }>;
 
 /** The same connection presentation is consumed by its Home or Team owner. */
-export type ScopedIdentityConnectionV1 = import('@happier-dev/protocol/teams').IdentityConnectionV1;
+export type ScopedIdentityConnectionV1 = import('@happier-dev/protocol/teams').IdentityConnectionV1
+    // A Home connection also says which Teams accept it; omitted means an older Home that does not know.
+    & Readonly<{ teamsUsingIt?: import('@happier-dev/protocol/home').HomeIdentityConnectionV1['teamsUsingIt'] }>;
 type ScopedIdentityOutput<T> = T extends import('@happier-dev/protocol/teams').TeamIdentityConnectionV1
     ? ScopedIdentityConnectionV1
     : T extends readonly (infer TItem)[] ? ScopedIdentityOutput<TItem>[]

@@ -77,6 +77,7 @@ function ports(overrides: Partial<SessionPresentationPorts> = {}): SessionPresen
             canReadItem: () => true,
         },
         returnToChat: () => ({ status: 'applied' }),
+        showItemInChat: () => ({ status: 'applied' }),
         openFullSurface: () => ({ status: 'applied' }),
         publishNotice: () => {},
         noticeKeyPrefix: 'server-a:session-1',
@@ -85,6 +86,29 @@ function ports(overrides: Partial<SessionPresentationPorts> = {}): SessionPresen
 }
 
 const intent = (value: CurrentSessionPresentationIntentV1) => value;
+
+describe('chat.item.show', () => {
+    it('runs a readable item in its Chat reply, announces it once, and refuses a target it cannot read', () => {
+        const showItemInChat = vi.fn(() => ({ status: 'applied' as const }));
+        const publishNotice = vi.fn();
+        expect(applySessionPresentationIntent(ports({ showItemInChat, publishNotice }), { kind: 'chat.item.show', widgetId: 'visual-1' }))
+            .toEqual({ status: 'applied' });
+        expect(showItemInChat).toHaveBeenCalledWith('visual-1');
+        expect(publishNotice).toHaveBeenCalledTimes(1);
+
+        const unread = ports({ showItemInChat, board: { ...ports().board, canReadItem: () => false } });
+        showItemInChat.mockClear();
+        expect(applySessionPresentationIntent(unread, { kind: 'chat.item.show', widgetId: 'visual-1' })).toEqual({ status: 'invalidTarget' });
+        expect(showItemInChat).not.toHaveBeenCalled();
+    });
+
+    it('is typed unavailable when no reply that draws the item is on screen', () => {
+        expect(applySessionPresentationIntent(
+            ports({ showItemInChat: () => ({ status: 'unavailable' }) }),
+            { kind: 'chat.item.show', widgetId: 'visual-1' },
+        )).toEqual({ status: 'unavailable' });
+    });
+});
 
 describe('applySessionPresentationIntent', () => {
     it('routes semantic viewer operations through the exact mounted viewer owner', () => {

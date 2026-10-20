@@ -117,14 +117,14 @@ describe('rightSidebarTabRegistry', () => {
         scope: 'session',
         terminalTabAvailable: true,
       }).map((tab) => tab.id),
-    ).toEqual(['git', 'files', 'agents', 'navigation', 'terminal', 'services']);
+    ).toEqual(['git', 'files', 'agents', 'collaboration', 'navigation', 'terminal', 'services']);
 
     expect(
       resolveRightSidebarTabs({
         scope: 'session',
         terminalTabAvailable: false,
       }).map((tab) => tab.id),
-    ).toEqual(['git', 'files', 'agents', 'navigation', 'services']);
+    ).toEqual(['git', 'files', 'agents', 'collaboration', 'navigation', 'services']);
 
     // Mobile keeps the full-screen Browser surface tab.
     expect(
@@ -137,6 +137,7 @@ describe('rightSidebarTabRegistry', () => {
       'git',
       'files',
       'agents',
+      'collaboration',
       'navigation',
       'terminal',
       'browser',
@@ -151,7 +152,7 @@ describe('rightSidebarTabRegistry', () => {
         terminalTabAvailable: false,
         sessionProjectCheckoutAvailable: true,
       }).map((tab) => tab.id),
-    ).toEqual(['git', 'files', 'scripts', 'agents', 'navigation', 'services']);
+    ).toEqual(['git', 'files', 'scripts', 'agents', 'collaboration', 'navigation', 'services']);
     expect(
       resolveRightSidebarTabs({
         scope: 'session',
@@ -175,7 +176,7 @@ describe('rightSidebarTabRegistry', () => {
         terminalTabAvailable: false,
         boardFeatureEnabled: true,
       }).map((tab) => tab.id),
-    ).toEqual(['git', 'files', 'agents', 'navigation', 'board', 'services']);
+    ).toEqual(['git', 'files', 'agents', 'collaboration', 'navigation', 'board', 'services']);
   });
 
   it('orders project built-in tabs without session-only entries', () => {
@@ -185,8 +186,17 @@ describe('rightSidebarTabRegistry', () => {
         scope: 'project',
         terminalTabAvailable: true,
       }).map((tab) => tab.id),
-    ).toEqual(['git', 'files', 'scripts', 'terminal', 'browser', 'services']);
+    ).toEqual([
+      'git',
+      'files',
+      'scripts',
+      'widgets',
+      'terminal',
+      'browser',
+      'services',
+    ]);
 
+    // A phone reads the Project's widgets on its Project page, below the checkout.
     expect(
       resolveRightSidebarTabs({
         scope: 'project',
@@ -471,6 +481,7 @@ describe('rightSidebarTabRegistry', () => {
       'git',
       'files',
       'agents',
+      'collaboration',
       'navigation',
       'services',
       `plugin:${REVIEW_PLUGIN_ID}:review-panel`,

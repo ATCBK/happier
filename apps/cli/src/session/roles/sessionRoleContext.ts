@@ -1,35 +1,66 @@
 import { BUILT_IN_ROLES_V1 } from '@happier-dev/protocol/prompts/roles/builtInRolesV1';
+import { readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { readSessionRolesV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
 import { readSessionWorkspaceWritesV1, resolveRoleSelectionV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
 import type { RoleEngineV1, ResolvedRolesSnapshotV1, SessionRolePromptContextV1, V2SessionByIdResponse } from '@happier-dev/protocol';
 import type { RoleSelectionRefusalV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
 import type { AccountRoleOverridesReadV1 } from '@happier-dev/protocol/prompts/roles/roleOverrideRecordV1';
 import type { RoleSourceReader } from './roleSources';
+import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { classifyHomeReadPreparationError } from '@/agent/prompts/library/homeReadPreparationError';
+
+/** Loading is a phase of the existing demand, never an empty override set. */
+export async function readPreparedAccountRoleOverrides(params: Readonly<{
+  read: () => AccountRoleOverridesReadV1;
+  prepare?: (signal?: AbortSignal) => Promise<void>;
+}>, signal?: AbortSignal): Promise<AccountRoleOverridesReadV1> {
+  signal?.throwIfAborted();
+  let read = params.read();
+  if (read.status !== 'ready' && (read.reason === 'loading' || read.reason === 'catalog-unobserved')) {
+    await params.prepare?.(signal);
+    signal?.throwIfAborted();
+    read = params.read();
+  }
+  return read;
+}
 
 /** One live role resolver for the Session prompt plan, native ceilings and child snapshots. */
 export function createSessionRoleContext(params: Readonly<{
   readMetadata: () => unknown;
-  readOrganization: (signal?: AbortSignal) => Promise<Pick<V2SessionByIdResponse['session'], 'reportsTo' | 'origin'>>;
+  readOrganization: (signal?: AbortSignal) => Promise<Pick<V2SessionByIdResponse['session'], 'manager' | 'origin'>>;
   readRoleSources: RoleSourceReader;
   readAccountRoleOverrides: () => AccountRoleOverridesReadV1;
   prepareAccountRoleOverrides?: (signal?: AbortSignal) => Promise<void>;
+  readOperationContext?: () => SavedSecretOperationContextV1 | undefined;
   readDefaultEngine?: () => RoleEngineV1;
 }>) {
   let roleSourceInventory: Awaited<ReturnType<RoleSourceReader>> | undefined;
   let resolvedRoles: Readonly<{ status: 'ready' | 'partial'; roles: ResolvedRolesSnapshotV1; selectedRefusal?: RoleSelectionRefusalV1 }> = { status: 'partial', roles: {} };
+  let preparing: Promise<void> | undefined;
   const prepare = async (signal?: AbortSignal, freshInventory = false) => {
     signal?.throwIfAborted();
     const sessionRoles = readSessionRolesV1(params.readMetadata());
     if (!freshInventory && sessionRoles?.roleId && sessionRoles.sessionRoles[sessionRoles.roleId]) return;
-    await params.prepareAccountRoleOverrides?.(signal);
+    if (!preparing) {
+      preparing = (async () => { await params.prepareAccountRoleOverrides?.(signal); })();
+    }
+    const pending = preparing;
+    try { await pending; }
+    finally { if (preparing === pending) preparing = undefined; }
     signal?.throwIfAborted();
   };
+  const readAccountOverrides = (signal?: AbortSignal) => readPreparedAccountRoleOverrides({
+    read: params.readAccountRoleOverrides, prepare: signal => prepare(signal, true),
+  }, signal);
   const resolveCurrentRoles = async (signal?: AbortSignal, complete = true) => {
     await prepare(signal, complete);
-    const source = await params.readRoleSources(signal);
+    const source = await params.readRoleSources(signal).catch((error: unknown) => {
+      signal?.throwIfAborted();
+      throw classifyHomeReadPreparationError(error);
+    });
     signal?.throwIfAborted();
     if (complete && source.status !== 'ready') throw Object.assign(new Error('role_source_incomplete'), { code: 'role_source_incomplete' });
-    const overrides = params.readAccountRoleOverrides();
+    const overrides = await readAccountOverrides(signal);
     if (overrides.status !== 'ready') throw Object.assign(new Error('role_overrides_unavailable'), {
       code: 'role_overrides_unavailable', reason: overrides.reason,
     });
@@ -56,7 +87,7 @@ export function createSessionRoleContext(params: Readonly<{
     signal?.throwIfAborted();
     const before = params.readMetadata();
     const beforeRoles = readSessionRolesV1(before);
-    if (!beforeRoles?.roleId && !beforeRoles?.notes && !organization.reportsTo) return null;
+    if (!beforeRoles?.roleId && !beforeRoles?.notes && !readSessionManagerSessionIdV1(organization)) return null;
     const inherited = beforeRoles?.roleId ? beforeRoles.sessionRoles[beforeRoles.roleId] : undefined;
     let roles: ResolvedRolesSnapshotV1;
     let selectedRefusal: RoleSelectionRefusalV1 | undefined;
@@ -81,7 +112,7 @@ export function createSessionRoleContext(params: Readonly<{
       const code = selectedRefusal?.code ?? 'role_target_unavailable';
       throw Object.assign(new Error(code), { code });
     }
-    const leadSessionId = organization.reportsTo?.sessionId;
+    const leadSessionId = readSessionManagerSessionIdV1(organization);
     if (!role && !leadSessionId && !sessionRoles?.notes) return null;
     return {
       ...(role ? { role } : {}), availableRoles: Object.values(roles),
@@ -91,7 +122,9 @@ export function createSessionRoleContext(params: Readonly<{
     };
   };
   return {
-    resolvePromptContext, resolveRoles, prepare,
+    resolvePromptContext, resolveRoles, prepare, readAccountOverrides,
+    readRoleSources: params.readRoleSources,
+    readOperationContext: params.readOperationContext,
     readResolvedRoles: () => {
       if (resolvedRoles.status !== 'ready' || params.readAccountRoleOverrides().status !== 'ready') {
         throw Object.assign(new Error('role_source_incomplete'), { code: 'role_source_incomplete' });
@@ -109,3 +142,5 @@ export function createSessionRoleContext(params: Readonly<{
     },
   };
 }
+
+export type SessionRoleContext = ReturnType<typeof createSessionRoleContext>;

@@ -27,7 +27,7 @@ export type ProjectOpenControllerOptions = Readonly<{
     initialDraft?: OpenProjectDraftSelectionV1;
     seedIfMissing?: boolean;
     repository: Pick<SessionDraftRepository, 'getSessionDraftSnapshot' | 'subscribeSessionDraft' | 'writeProjectOpenDraft'
-        | 'flushProjectOpenDraftLocally' | 'flushProjectOpenDraftForAdmission' | 'captureSessionDraftCurrentness'>;
+        | 'flushSessionDraftLocally' | 'flushProjectOpenDraftForAdmission' | 'captureSessionDraftCurrentness'>;
     scope: ServerAccountScope;
     draftId: string;
     executor: Readonly<{ execute(id: 'projects.open' | 'projects.sources.read' | 'action.operations.get', input: OpenProjectInputV1 | ProjectSourcesReadInputV1 | ActionOperationActionInputV1,
@@ -158,7 +158,7 @@ export function createProjectOpenController(options: ProjectOpenControllerOption
                     if (result.kind === 'opened' && (!areServerProfileIdentifiersEquivalent(result.workspace.serverId, input.serverId)
                         || result.workspace.machineId !== input.machineId)) return;
                     write({ uncertainInputs: [], ...(selectionIsOriginal ? { result } : { result: null, retiredAttempt: { input, result } }) });
-                    await repository.flushProjectOpenDraftLocally({ scope, draftId });
+                    await repository.flushSessionDraftLocally({ scope });
                     if (isCurrent() && selectionIsOriginal && result.kind === 'opened') await options.onOpened(result, isCurrent);
                 } catch {
                     // A missing/retired/unavailable observation never authorizes replay or deletion.
@@ -265,7 +265,7 @@ export function createProjectOpenController(options: ProjectOpenControllerOption
                     write({ ...(!unknown ? { uncertainInputs: [] } : {}),
                         ...(isCurrent() ? { result: 'kind' in result ? result : null }
                             : 'kind' in result ? { retiredAttempt: { input, result } } : {}) });
-                    await repository.flushProjectOpenDraftLocally({ scope, draftId });
+                    await repository.flushSessionDraftLocally({ scope });
                 } catch {
                     if (issued) {
                         result = { kind: 'outcomeUnknown' };

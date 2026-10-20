@@ -1,1547 +1,762 @@
-import React from 'react';
-import renderer, { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
-import { encodeBase64 } from '@/encryption/base64';
-import type { pairingStatus } from '@/sync/api/account/apiPairingAuth';
-import type { HomeConnectionDescriptorReconciliationResult } from '@/sync/domains/server/serverProfiles';
+import { act } from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+    computeHomeQrBindingProofV2,
+    deriveHomeQrRendezvousVerifierV2,
+    FeaturesResponseSchema,
+    HomeConnectionDescriptorV1Schema,
+    tryWriteServerEnabledBitInPlace,
+    type FeaturesResponse,
+    type HomeConnectionDescriptorV1,
+    type HomeQrInviteV2,
+} from '@happier-dev/protocol';
 
-/**
- * The hook consumes only the reconciliation discriminant and its conflict code, so the
- * module-boundary mock declares exactly that rather than a whole persisted profile.
- */
-type ReconciliationOutcomeMock = Readonly<{
-    kind: HomeConnectionDescriptorReconciliationResult['kind'];
-    code?: string;
-    profile?: Readonly<{ id: string }> | null;
+import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
+import { installLocalStorageMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
+import { initializeRealAppRuntimeForTests } from '@/dev/testkit/harness/realAppRuntimeHarness';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { waitForNetworkResponseForTests } from '@/dev/testkit/mocks/runtimeFetch';
+import { decodeBase64, encodeBase64 } from '@/encryption/base64';
+
+const appState = vi.hoisted(() => ({ currentState: 'active' }));
+installTokenStorageWebPlatformMocks({
+    reactNative: async () => {
+        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+        return createReactNativeWebMock({ AppState: { get currentState() { return appState.currentState; } } });
+    },
+});
+
+// Load the real auth/profile/Sync graph once, with only platform ports replaced.
+const { createDeferred, flushHookEffects, renderHook, standardCleanup } = await import('@/dev/testkit');
+await initializeRealAppRuntimeForTests();
+const { createAccountTokenForTests, createHomeGovernanceHarness, waitForHomeGovernance } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+const profiles = await import('@/sync/domains/server/serverProfiles');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+const { resetServerFeaturesClientForTests, getCachedServerFeaturesSnapshot, getServerFeaturesSnapshot } = await import('@/sync/api/capabilities/serverFeaturesClient');
+const { parseHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
+const { usePairingSession } = await import('./usePairingSession');
+
+type HttpRequest = Readonly<{
+    origin: string;
+    path: string;
+    method: string;
+    body: unknown;
+    token: string | null;
+    signal?: AbortSignal | null;
 }>;
+type HttpReply = (request: HttpRequest) => Promise<Response>;
+type PairingHome = Readonly<{
+    profileId: string;
+    serverId: string;
+    serverUrl: string;
+    accountId: string;
+    token: string;
+    descriptor: HomeConnectionDescriptorV1;
+    features: FeaturesResponse;
+    authenticatedFeatures: ReturnType<typeof vi.fn<HttpReply>>;
+}>;
+type PairingHook = Awaited<ReturnType<typeof mountPairing>>;
 
-const appState = vi.hoisted(() => ({ currentState: 'active' as string }));
-const enrollmentTransportCloseMock = vi.hoisted(() => vi.fn(async () => {}));
+const homes = createHomeGovernanceHarness();
+const servedHomes = new Map<string, PairingHome>();
+const requests: HttpRequest[] = [];
+const http = {
+    start: vi.fn<HttpReply>(),
+    status: vi.fn<HttpReply>(),
+    consume: vi.fn<HttpReply>(),
+    complete: vi.fn<HttpReply>(),
+    currentness: vi.fn<HttpReply>(),
+};
+const previousScope = process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE;
+let localStorage: ReturnType<typeof installLocalStorageMock> | null = null;
+let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
+let expiresAt = '';
 
-vi.mock('react-native', async () => {
-    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock(
-        {
-                Platform: { OS: 'web' },
-                AppState: {
-                    get currentState() {
-                        return appState.currentState;
-                    },
-                },
-            }
-    );
-});
+function json(status: number, body: unknown): Response {
+    return Response.json(body, { status });
+}
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+function bodyRecord(request: HttpRequest): Record<string, unknown> {
+    if (!request.body || typeof request.body !== 'object' || Array.isArray(request.body)) {
+        throw new Error('Expected a JSON request object');
+    }
+    return request.body as Record<string, unknown>;
+}
 
-vi.mock('@/auth/pairing/pairingSecret', () => ({
-    createPairingSecret: vi.fn(async () => ({
-        secret: encodeBase64(new Uint8Array(32).fill(7), 'base64url'),
-        secretHash: 'hash_test',
-    })),
-}));
+function requestsFor(path: string): HttpRequest[] {
+    return requests.filter(request => request.path.split('?')[0] === path);
+}
 
-let defaultPairingExpiresAt = '';
-const pairingStartMock = vi.fn(async (..._args: unknown[]) => {
-    defaultPairingExpiresAt = new Date(Date.now() + 60_000).toISOString();
-    return { ok: true, data: { pairId: 'pair_123', expiresAt: defaultPairingExpiresAt } };
-});
-const pairingStatusMock = vi.fn<typeof pairingStatus>(
-    async () => ({ ok: true, data: { state: 'pending', pairId: 'pair_123', expiresAt: defaultPairingExpiresAt } }),
-);
-const pairingConsumeMock = vi.fn(async () => ({ ok: true as const }));
-vi.mock('@/sync/api/account/apiPairingAuth', () => ({
-    pairingStart: pairingStartMock,
-    pairingStatus: pairingStatusMock,
-    pairingConsume: pairingConsumeMock,
-}));
-
-const endpointFetchMock = vi.hoisted(
-    () => vi.fn<(path: string, init?: RequestInit) => Promise<Response>>(async () => new Response(null, { status: 200 })),
-);
-const endpointRequestContextMock = vi.hoisted(() => vi.fn());
-vi.mock('@/sync/http/client', () => ({
-    createServerFetchAtEndpoint: (context: unknown) => {
-        endpointRequestContextMock(context);
-        return endpointFetchMock;
-    },
-    serverFetch: vi.fn(() => { throw new Error('Focused Home request is forbidden'); }),
-}));
-
-const getCredentialsForServerUrlMock = vi.hoisted(() => vi.fn(async () => ({ token: 'captured-home-token' })));
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/auth/storage/tokenStorage')>();
-    return {
-        ...actual,
-        TokenStorage: {
-            ...actual.TokenStorage,
-            getCredentialsForServerUrl: getCredentialsForServerUrlMock,
-        },
+const request: Parameters<typeof setRuntimeFetch>[0] = async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    const bearer = new Headers(init?.headers).get('Authorization');
+    const observed: HttpRequest = {
+        origin: url.origin,
+        path: url.pathname + url.search,
+        method: init?.method ?? 'GET',
+        body: init?.body ? JSON.parse(String(init.body)) as unknown : null,
+        token: bearer?.startsWith('Bearer ') ? bearer.slice(7) : null,
+        signal: init?.signal,
     };
-});
+    requests.push(observed);
+    const home = servedHomes.get(url.origin);
+    if (!home) return json(404, {});
+    let pending: Promise<Response>;
+    if (url.pathname === '/health' || url.pathname === '/v1/auth/ping') return json(200, {});
+    if (url.pathname === '/v1/features') return json(200, home.features);
+    if (url.pathname === '/v1/features/authenticated') pending = home.authenticatedFeatures(observed);
+    else if (url.pathname === '/v1/account/encryption/currentness') pending = http.currentness(observed);
+    else if (url.pathname === '/v1/auth/pairing/start') pending = http.start(observed);
+    else if (url.pathname === '/v1/auth/pairing/status') pending = http.status(observed);
+    else if (url.pathname === '/v1/auth/pairing/consume') pending = http.consume(observed);
+    else if (url.pathname === '/v1/auth/account/response') pending = http.complete(observed);
+    else return createEmptyAccountBootstrapHttpResponse(observed.path, init) ?? homes.request(input, init);
+    return await waitForNetworkResponseForTests(pending, init?.signal);
+};
 
-/**
- * Hoisted because the storage singleton now reads the active-Home snapshot while the
- * module graph is still being evaluated, i.e. before this file's own bindings exist.
- */
-const activeServer = vi.hoisted(() => ({
-    serverUrl: 'http://localhost:53288',
-    shareableServerUrl: null as string | null,
-    shareableServerUrlValidatedAgainstServerUrl: null as string | null,
-    runtimeOrigin: null as string | null,
-}));
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot: () => ({
-        serverId: 'srv-a',
-        serverUrl: activeServer.serverUrl,
-        activeShareableServerUrl: activeServer.shareableServerUrl,
-        activeShareableServerUrlValidatedAgainstServerUrl: activeServer.shareableServerUrlValidatedAgainstServerUrl,
-        runtimeOrigin: activeServer.runtimeOrigin,
-        generation: 0,
-    }),
-}));
-
-let cachedCanonicalServerUrl: string | null = null;
-let cachedServerIdentityId: string | null = null;
-let cachedSnapshotOnlyUnscoped = false;
-let boundQrV2Enabled = true;
-let profileReady = true;
-let descriptorOverride: import('@happier-dev/protocol').HomeConnectionDescriptorV1 | null = null;
-const serverProfileMocks = vi.hoisted(() => ({
-    getServerProfileById: vi.fn(() => profileReady ? ({ id: 'srv-a' }) : null),
-    buildHomeConnectionDescriptorForProfile: vi.fn(),
-    reconcileServerProfileHomeConnectionDescriptor: vi.fn<
-        (...args: unknown[]) => Promise<ReconciliationOutcomeMock>
-    >(async () => ({ kind: 'applied' as const, profile: { id: 'srv-a' } })),
-}));
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    // `sync/store/domains/settings.ts` reads the persisted Home view at store construction;
-    // this suite has no Home view, which is the module's own `null` answer.
-    loadHomeViewState: () => null,
-    getServerProfileById: serverProfileMocks.getServerProfileById,
-    buildHomeConnectionDescriptorForProfile: serverProfileMocks.buildHomeConnectionDescriptorForProfile,
-    reconcileServerProfileHomeConnectionDescriptor: serverProfileMocks.reconcileServerProfileHomeConnectionDescriptor,
-}));
-const observeAuthenticatedServerFeaturesFreshMock = vi.hoisted(() => vi.fn());
-vi.mock('@/sync/api/capabilities/serverFeaturesClient', () => ({
-    getCachedServerFeaturesSnapshot: (params?: { serverId?: string }) =>
-        cachedSnapshotOnlyUnscoped && params?.serverId
-            ? null
-            :
-        cachedCanonicalServerUrl
-            ? {
-                status: 'ready',
-                serverIdentityId: cachedServerIdentityId,
-                features: {
-                    features: { auth: { pairing: { boundQrV2: { enabled: boundQrV2Enabled } } } },
-                    capabilities: { server: { canonicalServerUrl: cachedCanonicalServerUrl } },
-                },
-            }
-            : null,
-    getServerFeaturesSnapshot: async () => {
-        profileReady = true;
-        return cachedCanonicalServerUrl
-            ? {
-                status: 'ready',
-                serverIdentityId: cachedServerIdentityId,
-                features: {
-                    features: { auth: { pairing: { boundQrV2: { enabled: boundQrV2Enabled } } } },
-                    capabilities: { server: { canonicalServerUrl: cachedCanonicalServerUrl } },
-                },
-            }
-            : { status: 'error', reason: 'network' };
-    },
-    observeAuthenticatedServerFeaturesFresh: observeAuthenticatedServerFeaturesFreshMock,
-}));
-
-vi.mock('@/auth/enrollment/homeEnrollmentTransport', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/auth/enrollment/homeEnrollmentTransport')>();
-    return {
-        ...actual,
-        resolveHomeEnrollmentTransport: async (
-            ...args: Parameters<typeof actual.resolveHomeEnrollmentTransport>
-        ) => {
-            const result = await actual.resolveHomeEnrollmentTransport(...args);
-            if (!result.ok) return result;
-            return {
-                ok: true as const,
-                transport: {
-                    ...result.transport,
-                    close: async () => {
-                        await enrollmentTransportCloseMock();
-                        await result.transport.close();
-                    },
-                },
-            };
-        },
-    };
-});
-
-describe('usePairingSession (pairing deep link server URL)', () => {
-    beforeEach(() => {
-        pairingStartMock.mockReset();
-        pairingStartMock.mockImplementation(async () => {
-            defaultPairingExpiresAt = new Date(Date.now() + 60_000).toISOString();
-            return { ok: true, data: { pairId: 'pair_123', expiresAt: defaultPairingExpiresAt } };
-        });
-        pairingStatusMock.mockReset();
-        pairingStatusMock.mockImplementation(async () => ({
-            ok: true,
-            data: { state: 'pending', pairId: 'pair_123', expiresAt: defaultPairingExpiresAt },
-        }));
-        pairingConsumeMock.mockClear();
-        endpointFetchMock.mockReset();
-        endpointFetchMock.mockResolvedValue(new Response(null, { status: 200 }));
-        endpointRequestContextMock.mockClear();
-        getCredentialsForServerUrlMock.mockClear();
-        enrollmentTransportCloseMock.mockClear();
-        cachedCanonicalServerUrl = null;
-        cachedServerIdentityId = null;
-        cachedSnapshotOnlyUnscoped = false;
-        boundQrV2Enabled = true;
-        profileReady = true;
-        activeServer.serverUrl = 'http://localhost:53288';
-        activeServer.shareableServerUrl = null;
-        activeServer.shareableServerUrlValidatedAgainstServerUrl = null;
-        activeServer.runtimeOrigin = null;
-        descriptorOverride = null;
-        serverProfileMocks.getServerProfileById.mockClear();
-        serverProfileMocks.reconcileServerProfileHomeConnectionDescriptor.mockReset();
-        serverProfileMocks.reconcileServerProfileHomeConnectionDescriptor.mockResolvedValue({ kind: 'applied', profile: { id: 'srv-a' } });
-        serverProfileMocks.buildHomeConnectionDescriptorForProfile.mockReset();
-        serverProfileMocks.buildHomeConnectionDescriptorForProfile.mockImplementation(() => {
-            if (descriptorOverride) return descriptorOverride;
-            if (!cachedCanonicalServerUrl || !cachedServerIdentityId) return null;
-            const endpointUrl = activeServer.shareableServerUrl
-                && activeServer.shareableServerUrlValidatedAgainstServerUrl === activeServer.serverUrl
-                ? activeServer.shareableServerUrl
-                : cachedCanonicalServerUrl.replace(/^https:\/\/[^@]+@/u, 'https://');
-            return {
-                v: 1,
-                homeServerIdentityId: cachedServerIdentityId,
-                canonicalServerUrl: cachedCanonicalServerUrl.replace(/^https:\/\/[^@]+@/u, 'https://'),
-                revision: 1,
-                endpoints: [{ kind: 'https', url: endpointUrl }],
-            };
-        });
-        serverProfileMocks.getServerProfileById.mockImplementation(() => {
-            if (!profileReady) return null;
-            return {
-                id: 'srv-a',
-                homeConnectionDescriptor: serverProfileMocks.buildHomeConnectionDescriptorForProfile(),
-            };
-        });
-        observeAuthenticatedServerFeaturesFreshMock.mockReset();
-        observeAuthenticatedServerFeaturesFreshMock.mockImplementation(async () => {
-            const descriptor = serverProfileMocks.buildHomeConnectionDescriptorForProfile();
-            return descriptor
-                ? {
-                    status: 'ready',
-                    serverIdentityId: descriptor.homeServerIdentityId,
-                    features: {
-                        features: { auth: { pairing: { boundQrV2: { enabled: boundQrV2Enabled } } } },
-                        capabilities: { server: { canonicalServerUrl: descriptor.canonicalServerUrl } },
-                        homeConnectionDescriptor: descriptor,
-                    },
-                }
-                : { status: 'error', reason: 'network' };
-        });
-        appState.currentState = 'active';
+beforeEach(async () => {
+    vi.useRealTimers();
+    process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = 'pairing_hook_' + crypto.randomUUID();
+    localStorage = installLocalStorageMock();
+    await homes.reset();
+    servedHomes.clear();
+    requests.length = 0;
+    appState.currentState = 'active';
+    resetServerFeaturesClientForTests();
+    http.start.mockReset().mockImplementation(async () => {
+        expiresAt = new Date(Date.now() + 60_000).toISOString();
+        return json(200, { pairId: 'pair_123', expiresAt });
     });
+    http.status.mockReset().mockImplementation(async () => json(200, { state: 'pending', pairId: 'pair_123', expiresAt }));
+    http.consume.mockReset().mockImplementation(async () => json(200, { success: true }));
+    http.complete.mockReset().mockImplementation(async () => json(200, {}));
+    http.currentness.mockReset().mockImplementation(async () => json(200, createPlainAccountEncryptionCurrentnessFixture()));
+    setRuntimeFetch(request);
+});
 
+afterEach(async () => {
+    standardCleanup();
+    vi.useRealTimers();
+    await connection?.dispose();
+    connection = null;
+    await homes.reset();
+    localStorage?.restore();
+    localStorage = null;
+    if (previousScope === undefined) delete process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE;
+    else process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = previousScope;
+    vi.restoreAllMocks();
+});
+
+async function addHome(options: Readonly<{
+    serverUrl?: string;
+    identity?: string | null;
+    descriptor?: HomeConnectionDescriptorV1;
+    retainDescriptor?: boolean;
+    boundQrV2?: boolean;
+    canonicalObservation?: string;
+    accountId?: string;
+}> = {}): Promise<PairingHome> {
+    const serverUrl = options.serverUrl ?? 'https://home-a.test';
+    const identity = options.identity === undefined ? 'srv_home_a' : options.identity;
+    const descriptor = HomeConnectionDescriptorV1Schema.parse(options.descriptor ?? {
+        v: 1, homeServerIdentityId: identity ?? 'srv_unverified', canonicalServerUrl: serverUrl,
+        revision: 1, endpoints: [{ kind: 'https', url: serverUrl }],
+    });
+    const accountId = options.accountId ?? 'trusted-account';
+    const token = createAccountTokenForTests(accountId, { currentAccount: true });
+    const profileId = await homes.addHome({
+        name: 'Pairing Home', serverUrl, accountId, currentAccount: true,
+        credentials: { token }, active: false, ...(identity ? { serverIdentityId: identity } : {}),
+    });
+    if (identity && options.retainDescriptor !== false) {
+        await profiles.adoptHomeProfile({ descriptor, source: 'qr', descriptorAuthority: 'current_connection_observation' });
+    }
+    const features = createRootLayoutFeaturesResponse();
+    features.capabilities.serverIdentity.serverIdentityId = identity;
+    features.capabilities.server.canonicalServerUrl = options.canonicalObservation ?? descriptor.canonicalServerUrl;
+    if (!tryWriteServerEnabledBitInPlace(features, 'auth.pairing.boundQrV2', options.boundQrV2 !== false)) {
+        throw new Error('Pairing feature fixture could not enable its canonical bit');
+    }
+    const exactFeatures = FeaturesResponseSchema.parse({ ...features, ...(identity ? { homeConnectionDescriptor: descriptor } : {}) });
+    const home: PairingHome = {
+        profileId,
+        serverId: profiles.resolveServerProfileScopeIdForIdentifier(profileId),
+        serverUrl,
+        accountId,
+        token,
+        descriptor,
+        features: exactFeatures,
+        authenticatedFeatures: vi.fn(async () => json(200, exactFeatures)),
+    };
+    servedHomes.set(new URL(serverUrl).origin, home);
+    for (const endpoint of descriptor.endpoints) {
+        if (endpoint.kind === 'https') servedHomes.set(new URL(endpoint.url).origin, home);
+    }
+    setRuntimeFetch(request);
+    return home;
+}
+
+async function restoreFocused(home: PairingHome): Promise<void> {
+    connection = await restoreServerAccountForTest({
+        serverUrl: home.serverUrl, serverIdentityId: home.descriptor.homeServerIdentityId,
+        accountId: home.accountId, credentials: { token: home.token }, request,
+    });
+    setRuntimeFetch(request);
+}
+
+async function mountPairing(home: PairingHome, focused = false) {
+    return renderHook(({ enabled }: { enabled: boolean }) => usePairingSession({
+        enabled, isAuthenticated: true, ...(focused ? {} : { targetProfileId: home.profileId }),
+    }), { initialProps: { enabled: true } });
+}
+
+async function start(hook: PairingHook): Promise<void> {
+    let result: unknown;
+    await act(async () => { result = await hook.getCurrent().startPairing(); });
+    expect(result, JSON.stringify({
+        presentation: hook.getCurrent().presentation.phase === 'invalid_request'
+            ? hook.getCurrent().presentation : { phase: hook.getCurrent().presentation.phase },
+        paths: requests.map(observed => observed.path.split('?')[0]),
+    })).toEqual({ ok: true });
+}
+
+function inviteFor(hook: PairingHook): HomeQrInviteV2 {
+    const parsed = parseHomeQrInviteDeepLink(hook.getCurrent().deepLink ?? '');
+    if (!parsed) throw new Error('Expected a current strict V2 Home invite');
+    return parsed.invite;
+}
+
+function boundRequest(invite: HomeQrInviteV2, override: Record<string, unknown> = {}) {
+    const publicKey = new Uint8Array(32).fill(9);
+    return {
+        state: 'requested', pairId: invite.pairId, expiresAt: new Date(invite.expiresAtMs).toISOString(),
+        requestedPublicKey: encodeBase64(publicKey), requestedDeviceLabel: 'Phone',
+        homeServerIdentityId: invite.home.homeServerIdentityId,
+        bindingProof: computeHomeQrBindingProofV2({
+            direction: invite.direction, qrSecret: decodeBase64(invite.qrSecretBase64Url, 'base64url'),
+            pairId: invite.pairId, homeServerIdentityId: invite.home.homeServerIdentityId,
+            requesterPublicKey: publicKey, expiresAtMs: invite.expiresAtMs,
+        }),
+        ...override,
+    };
+}
+
+/** Hold only the network response, then bind it to the real random invite the hook produced. */
+async function requestedPair(hook: PairingHook, override: Record<string, unknown> = {}) {
+    const ready = createDeferred<ReturnType<typeof boundRequest>>();
+    http.status.mockImplementation(async () => json(200, await ready.promise));
+    await start(hook);
+    const invite = inviteFor(hook);
+    return {
+        invite,
+        release: async () => { await act(async () => { ready.resolve(boundRequest(invite, override)); }); },
+    };
+}
+
+describe('usePairingSession through real Home enrollment owners', () => {
     it('issues the direct QR from the freshly authenticated exact descriptor instead of the retained profile descriptor', async () => {
-        cachedCanonicalServerUrl = 'https://home-a.test';
-        cachedServerIdentityId = 'srv_home_a';
-        activeServer.serverUrl = cachedCanonicalServerUrl;
-        descriptorOverride = {
-            v: 1,
-            homeServerIdentityId: 'srv_home_a',
-            canonicalServerUrl: cachedCanonicalServerUrl,
-            revision: 1,
+        const retained = HomeConnectionDescriptorV1Schema.parse({
+            v: 1, homeServerIdentityId: 'srv_home_a', canonicalServerUrl: 'https://home-a.test', revision: 1,
             endpoints: [{ kind: 'https', url: 'https://old-ingress.example.test' }],
-        };
-        const freshDescriptor = {
-            ...descriptorOverride,
-            revision: 2,
-            endpoints: [{ kind: 'https' as const, url: 'https://new-ingress.example.test' }],
-        };
-        observeAuthenticatedServerFeaturesFreshMock.mockResolvedValueOnce({
-            status: 'ready',
-            serverIdentityId: 'srv_home_a',
-            features: {
-                features: { auth: { pairing: { boundQrV2: { enabled: true } } } },
-                capabilities: { server: { canonicalServerUrl: cachedCanonicalServerUrl } },
-                homeConnectionDescriptor: freshDescriptor,
-            },
         });
-
-        const { parseHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() { hookApi = usePairingSession({ enabled: true, isAuthenticated: true }); return null; }
-        const screen = await renderScreen(<Probe />);
-        try {
-            await act(async () => {
-                await expect(hookApi!.startPairing()).resolves.toEqual({ ok: true });
-            });
-
-            expect(observeAuthenticatedServerFeaturesFreshMock).toHaveBeenCalledWith({ request: expect.any(Function) });
-            expect(endpointRequestContextMock).toHaveBeenCalledWith(expect.objectContaining({
-                endpointUrl: cachedCanonicalServerUrl,
-                serverId: 'srv_home_a',
-                credentials: { token: 'captured-home-token' },
-            }));
-            expect(serverProfileMocks.reconcileServerProfileHomeConnectionDescriptor).toHaveBeenCalledWith({
-                serverUrl: cachedCanonicalServerUrl,
-                observedServerIdentityId: 'srv_home_a',
-                descriptor: freshDescriptor,
-                observation: 'exact',
-            });
-            expect(parseHomeQrInviteDeepLink(hookApi!.deepLink ?? '')?.invite.home).toEqual(freshDescriptor);
-            expect(pairingStartMock).toHaveBeenCalledWith(
-                expect.anything(),
-                expect.objectContaining({ descriptor: freshDescriptor }),
-                expect.anything(),
-            );
-        } finally {
-            act(() => screen.tree.unmount());
-        }
+        const home = await addHome({ descriptor: retained });
+        const fresh = { ...retained, revision: 2, endpoints: [{ kind: 'https' as const, url: 'https://new-ingress.example.test' }] };
+        servedHomes.set('https://new-ingress.example.test', home);
+        home.authenticatedFeatures.mockImplementation(async () => json(200, { ...home.features, homeConnectionDescriptor: fresh }));
+        const hook = await mountPairing(home);
+        await start(hook);
+        expect(inviteFor(hook).home).toEqual(fresh);
+        expect(profiles.getServerProfileById(home.profileId)?.homeConnectionDescriptor).toEqual(fresh);
+        expect(requestsFor('/v1/auth/pairing/start')).toMatchObject([{
+            origin: 'https://new-ingress.example.test', token: home.token,
+        }]);
     });
 
-    it.each([
-        {
-            name: 'the authenticated observation is unavailable',
-            observation: { status: 'error', reason: 'network' },
-        },
-        {
-            name: 'the observation exposes only the public descriptor projection',
-            observation: {
-                status: 'ready',
-                serverIdentityId: 'srv_home_a',
-                features: {
-                    features: { auth: { pairing: { boundQrV2: { enabled: true } } } },
-                    capabilities: { server: { canonicalServerUrl: 'https://home-a.test' } },
-                },
-            },
-        },
-        {
-            name: 'the authenticated descriptor identity contradicts the focused Home',
-            observation: {
-                status: 'ready',
-                serverIdentityId: 'srv_other_home',
-                features: {
-                    features: { auth: { pairing: { boundQrV2: { enabled: true } } } },
-                    capabilities: { server: { canonicalServerUrl: 'https://home-a.test' } },
-                    homeConnectionDescriptor: {
-                        v: 1,
-                        homeServerIdentityId: 'srv_other_home',
-                        canonicalServerUrl: 'https://home-a.test',
-                        revision: 2,
-                        endpoints: [{ kind: 'https', url: 'https://home-a.test' }],
-                    },
-                },
-            },
-        },
-    ])('fails closed before direct QR creation when $name', async ({ observation }) => {
-        cachedCanonicalServerUrl = 'https://home-a.test';
-        cachedServerIdentityId = 'srv_home_a';
-        activeServer.serverUrl = cachedCanonicalServerUrl;
-        observeAuthenticatedServerFeaturesFreshMock.mockResolvedValueOnce(observation);
-
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() { hookApi = usePairingSession({ enabled: true, isAuthenticated: true }); return null; }
-        const screen = await renderScreen(<Probe />);
-        try {
-            await act(async () => {
-                await expect(hookApi!.startPairing()).resolves.toEqual({ ok: false, status: 412 });
+    it.each(['unavailable', 'public descriptor only', 'contradictory Home identity'])(
+        'fails closed before direct QR creation when the authenticated observation is %s', async kind => {
+            const home = await addHome();
+            home.authenticatedFeatures.mockImplementation(async () => {
+                if (kind === 'unavailable') return json(503, {});
+                if (kind === 'public descriptor only') {
+                    const { homeConnectionDescriptor: _descriptor, ...publicOnly } = home.features;
+                    return json(200, publicOnly);
+                }
+                return json(200, {
+                    ...home.features,
+                    capabilities: { ...home.features.capabilities, serverIdentity: { serverIdentityId: 'srv_other_home' } },
+                    homeConnectionDescriptor: { ...home.descriptor, homeServerIdentityId: 'srv_other_home', revision: 2 },
+                });
             });
-            expect(pairingStartMock).not.toHaveBeenCalled();
-            expect(hookApi!.deepLink).toBeNull();
-        } finally {
-            act(() => screen.tree.unmount());
-        }
-    });
+            const hook = await mountPairing(home);
+            await act(async () => { await expect(hook.getCurrent().startPairing()).resolves.toEqual({ ok: false, status: 412 }); });
+            expect(http.start).not.toHaveBeenCalled();
+            expect(hook.getCurrent().deepLink).toBeNull();
+        },
+    );
 
     it('fails closed before direct QR creation when the exact descriptor contradicts retained profile authority', async () => {
-        cachedCanonicalServerUrl = 'https://home-a.test';
-        cachedServerIdentityId = 'srv_home_a';
-        activeServer.serverUrl = cachedCanonicalServerUrl;
-        serverProfileMocks.reconcileServerProfileHomeConnectionDescriptor.mockResolvedValueOnce({
-            kind: 'conflict',
-            code: 'equal_revision_conflict',
-            profile: { id: 'srv-a' },
-        });
-
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() { hookApi = usePairingSession({ enabled: true, isAuthenticated: true }); return null; }
-        const screen = await renderScreen(<Probe />);
-        try {
-            await act(async () => {
-                await expect(hookApi!.startPairing()).resolves.toEqual({ ok: false, status: 412 });
-            });
-            expect(pairingStartMock).not.toHaveBeenCalled();
-            expect(hookApi!.deepLink).toBeNull();
-            expect(hookApi!.presentation).toEqual({ phase: 'invalid_request', cause: 'home_identity_unverified' });
-        } finally {
-            act(() => screen.tree.unmount());
-        }
+        const home = await addHome();
+        home.authenticatedFeatures.mockImplementation(async () => json(200, {
+            ...home.features, homeConnectionDescriptor: {
+                ...home.descriptor, endpoints: [{ kind: 'https', url: 'https://conflicting-ingress.test' }],
+            },
+        }));
+        const hook = await mountPairing(home);
+        await act(async () => { await expect(hook.getCurrent().startPairing()).resolves.toEqual({ ok: false, status: 412 }); });
+        expect(profiles.getServerProfileById(home.profileId)?.homeConnectionDescriptor).toEqual(home.descriptor);
+        expect(http.start).not.toHaveBeenCalled();
+        expect(hook.getCurrent().presentation).toEqual({ phase: 'invalid_request', cause: 'home_identity_unverified' });
     });
 
     it('says the device is signed out of the Home when it holds no credential for it', async () => {
-        cachedCanonicalServerUrl = 'https://home-a.test';
-        cachedServerIdentityId = 'srv_home_a';
-        activeServer.serverUrl = cachedCanonicalServerUrl;
-        getCredentialsForServerUrlMock.mockResolvedValueOnce(null as never);
-
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() { hookApi = usePairingSession({ enabled: true, isAuthenticated: true }); return null; }
-        const screen = await renderScreen(<Probe />);
-        try {
-            await act(async () => {
-                await expect(hookApi!.startPairing()).resolves.toEqual({ ok: false, status: 412 });
-            });
-            expect(pairingStartMock).not.toHaveBeenCalled();
-            expect(hookApi!.presentation).toEqual({ phase: 'invalid_request', cause: 'signed_out' });
-        } finally {
-            act(() => screen.tree.unmount());
-        }
+        const home = await addHome();
+        expect(await TokenStorage.removeCredentialsForServerUrl(home.serverUrl, { serverId: home.serverId })).toBe(true);
+        const hook = await mountPairing(home);
+        await act(async () => { await expect(hook.getCurrent().startPairing()).resolves.toEqual({ ok: false, status: 412 }); });
+        expect(http.start).not.toHaveBeenCalled();
+        expect(hook.getCurrent().presentation).toEqual({ phase: 'invalid_request', cause: 'signed_out' });
     });
 
     it('starts from the ready active runtime snapshot when no profile-scoped cache entry exists', async () => {
-        cachedCanonicalServerUrl = 'http://localhost:53288';
-        cachedServerIdentityId = 'srv_home_a';
-        cachedSnapshotOnlyUnscoped = true;
-        activeServer.runtimeOrigin = 'http://localhost:53288';
-
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() { hookApi = usePairingSession({ enabled: true, isAuthenticated: true }); return null; }
-        const screen = await renderScreen(<Probe />);
-        try {
-            await act(async () => {
-                await expect(hookApi!.startPairing()).resolves.toEqual({ ok: true });
-            });
-            expect(pairingStartMock).toHaveBeenCalledOnce();
-            expect(hookApi!.presentation).toMatchObject({ phase: 'ready' });
-        } finally {
-            act(() => screen.tree.unmount());
-        }
+        const home = await addHome();
+        await restoreFocused(home);
+        resetServerFeaturesClientForTests();
+        expect(getCachedServerFeaturesSnapshot({ serverId: home.profileId })).toBeNull();
+        const hook = await mountPairing(home, true);
+        await start(hook);
+        expect(http.start).toHaveBeenCalledOnce();
+        expect(hook.getCurrent().presentation.phase).toBe('ready');
     });
 
     it('waits for canonical feature refresh to reconcile the active Home profile before starting', async () => {
-        cachedCanonicalServerUrl = 'http://localhost:53288';
-        cachedServerIdentityId = 'srv_home_a';
-        cachedSnapshotOnlyUnscoped = true;
-        profileReady = false;
-        activeServer.runtimeOrigin = 'http://localhost:53288';
-
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() { hookApi = usePairingSession({ enabled: true, isAuthenticated: true }); return null; }
-        const screen = await renderScreen(<Probe />);
-        try {
-            await act(async () => {
-                await expect(hookApi!.startPairing()).resolves.toEqual({ ok: true });
-            });
-            expect(pairingStartMock).toHaveBeenCalledOnce();
-            expect(hookApi!.presentation).toMatchObject({ phase: 'ready' });
-        } finally {
-            act(() => screen.tree.unmount());
-        }
+        const home = await addHome({ retainDescriptor: false });
+        expect(profiles.buildHomeConnectionDescriptorForProfile(profiles.getServerProfileById(home.profileId)!)).toBeNull();
+        await restoreFocused(home);
+        // Authenticated reconciliation and public readiness have separate caches.
+        // Drive the public refresh this fixture promises before starting the QR.
+        const publicSnapshot = await getServerFeaturesSnapshot({ serverId: home.profileId, force: true });
+        expect(publicSnapshot.status).toBe('ready');
+        await waitForHomeGovernance(() => expect(profiles.getServerProfileById(home.profileId)?.homeConnectionDescriptor).toEqual(home.descriptor));
+        const hook = await mountPairing(home, true);
+        await start(hook);
+        expect(inviteFor(hook).home).toEqual(home.descriptor);
     });
 
     it('preserves the canonical profile descriptor revision and Iroh endpoint', async () => {
-        cachedCanonicalServerUrl = 'http://localhost:53288';
-        cachedServerIdentityId = 'srv_home_a';
-        activeServer.runtimeOrigin = 'http://127.0.0.1:59111';
-        descriptorOverride = {
-            v: 1,
-            homeServerIdentityId: 'srv_home_a',
-            canonicalServerUrl: 'http://localhost:53288',
-            revision: 7,
-            endpoints: [{
-                kind: 'iroh',
-                endpointId: 'a'.repeat(64),
-                relayUrls: ['https://relay.example.test'],
-            }],
-        };
-
-        const { parseHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
-        const { usePairingSession } = await import('./usePairingSession');
-
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() {
-            hookApi = usePairingSession({ enabled: true, isAuthenticated: true });
-            return null;
-        }
-
-        const screen = await renderScreen(<Probe />);
-        try {
-            await act(async () => {
-                await expect(hookApi!.startPairing()).resolves.toEqual({ ok: true });
-            });
-
-            expect(serverProfileMocks.buildHomeConnectionDescriptorForProfile).toHaveBeenCalled();
-            expect(parseHomeQrInviteDeepLink(hookApi!.deepLink ?? '')?.invite.home).toEqual(descriptorOverride);
-        } finally {
-            act(() => screen.tree.unmount());
-        }
+        const descriptor = HomeConnectionDescriptorV1Schema.parse({
+            v: 1, homeServerIdentityId: 'srv_home_a', canonicalServerUrl: 'https://home-a.test', revision: 7,
+            endpoints: [
+                { kind: 'iroh', endpointId: 'a'.repeat(64), relayUrls: ['https://relay.example.test'] },
+                { kind: 'https', url: 'https://home-a.test' },
+            ],
+        });
+        const home = await addHome({ descriptor });
+        // The user's standard-transport policy chooses HTTPS without rewriting the advertised Iroh endpoint.
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.setState({ localSettings: { ...storage.getState().localSettings, homeApplicationCarrierEligibility: 'standard_only' } });
+        const hook = await mountPairing(home);
+        await start(hook);
+        expect(inviteFor(hook).home).toEqual(descriptor);
     });
 
     it('keeps the pairing live with the exact secret-bearing link when a valid invite exceeds QR capacity', async () => {
-        const longRelayUrls = Array.from({ length: 4 }, (_, index) =>
-            `https://relay-${index}.example.test/${'a'.repeat(470)}`,
-        );
-        const homeServerIdentityId = 'srv_home_a';
-        cachedCanonicalServerUrl = 'https://home-a.test';
-        cachedServerIdentityId = homeServerIdentityId;
-        activeServer.serverUrl = cachedCanonicalServerUrl;
-        descriptorOverride = {
-            v: 1,
-            homeServerIdentityId,
-            canonicalServerUrl: cachedCanonicalServerUrl,
-            revision: 1,
+        const home = await addHome({ descriptor: HomeConnectionDescriptorV1Schema.parse({
+            v: 1, homeServerIdentityId: 'srv_home_a', canonicalServerUrl: 'https://home-a.test', revision: 1,
             endpoints: [
-                {
-                    kind: 'iroh',
-                    endpointId: 'a'.repeat(64),
-                    relayUrls: longRelayUrls,
-                    directAddresses: ['192.0.2.10:443', '192.0.2.11:443'],
-                },
+                { kind: 'iroh', endpointId: 'a'.repeat(64),
+                    relayUrls: Array.from({ length: 4 }, (_, index) => 'https://relay-' + index + '.example.test/' + 'a'.repeat(470)),
+                    directAddresses: ['192.0.2.10:443', '192.0.2.11:443'] },
                 { kind: 'https', url: 'https://public.example.test' },
             ],
-        };
-
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() { hookApi = usePairingSession({ enabled: true, isAuthenticated: true }); return null; }
-        const screen = await renderScreen(<Probe />);
-        try {
-            await act(async () => {
-                await expect(hookApi!.startPairing()).resolves.toEqual({ ok: true });
-            });
-            expect(pairingConsumeMock).not.toHaveBeenCalled();
-            const { parseHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
-            expect(parseHomeQrInviteDeepLink(hookApi!.deepLink ?? '')?.invite.home).toEqual(descriptorOverride);
-            expect(hookApi!.presentation).toMatchObject({ phase: 'ready', qrAvailable: false });
-            expect(hookApi!.completionState).toBe('pending');
-            // The pairing lifecycle stays live and remains cancellable.
-            await vi.waitFor(() => expect(pairingStatusMock).toHaveBeenCalled());
-            await act(async () => {
-                await expect(hookApi!.cancelPairing()).resolves.toEqual({ ok: true });
-            });
-        } finally {
-            act(() => screen.tree.unmount());
-        }
+        }) });
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.setState({ localSettings: { ...storage.getState().localSettings, homeApplicationCarrierEligibility: 'standard_only' } });
+        const hook = await mountPairing(home);
+        await start(hook);
+        expect(inviteFor(hook).home).toEqual(home.descriptor);
+        expect(hook.getCurrent().presentation).toMatchObject({ phase: 'ready', qrAvailable: false });
+        expect(hook.getCurrent().completionState).toBe('pending');
+        expect(http.consume).not.toHaveBeenCalled();
+        await vi.waitFor(() => expect(http.status).toHaveBeenCalled());
+        await act(async () => { await expect(hook.getCurrent().cancelPairing()).resolves.toEqual({ ok: true }); });
     });
 
     it('cancels with a typed invalid invite when the invite cannot be encoded at all', async () => {
-        const homeServerIdentityId = 'srv_home_a';
-        cachedCanonicalServerUrl = 'https://home-a.test';
-        cachedServerIdentityId = homeServerIdentityId;
-        activeServer.serverUrl = cachedCanonicalServerUrl;
-        descriptorOverride = {
-            v: 1,
-            homeServerIdentityId,
-            canonicalServerUrl: cachedCanonicalServerUrl,
-            revision: 1,
+        const home = await addHome({ descriptor: HomeConnectionDescriptorV1Schema.parse({
+            v: 1, homeServerIdentityId: 'srv_home_a', canonicalServerUrl: 'https://home-a.test', revision: 1,
             endpoints: [
-                {
-                    kind: 'iroh',
-                    endpointId: 'b'.repeat(64),
-                    relayUrls: [`https://relay.example.test/${'r'.repeat(12_400)}`],
-                },
+                { kind: 'iroh', endpointId: 'b'.repeat(64), relayUrls: Array.from({ length: 34 }, (_, index) =>
+                    `https://relay-${index}.example.test/${'r'.repeat(470)}`) },
                 { kind: 'https', url: 'https://public.example.test' },
             ],
-        };
-        pairingStartMock.mockResolvedValueOnce({
-            ok: true,
-            data: { pairId: 'pair_123', expiresAt: new Date(Date.now() + 60_000).toISOString() },
+        }) });
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.setState({ localSettings: { ...storage.getState().localSettings, homeApplicationCarrierEligibility: 'standard_only' } });
+        const hook = await mountPairing(home);
+        await act(async () => {
+            await expect(hook.getCurrent().startPairing()).resolves.toEqual({ ok: false, status: 422, reason: 'invalid_invite' });
         });
-
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() { hookApi = usePairingSession({ enabled: true, isAuthenticated: true }); return null; }
-        const screen = await renderScreen(<Probe />);
-        try {
-            await act(async () => {
-                await expect(hookApi!.startPairing()).resolves.toEqual({
-                    ok: false,
-                    status: 422,
-                    reason: 'invalid_invite',
-                });
-            });
-            expect(pairingConsumeMock).toHaveBeenCalledWith(
-                { pairId: 'pair_123', intent: 'cancel' },
-                expect.objectContaining({ descriptor: descriptorOverride }),
-                expect.objectContaining({ signal: expect.any(AbortSignal) }),
-            );
-            expect(hookApi!.presentation).toEqual({ phase: 'invalid_request', cause: 'invite_too_large' });
-            expect(hookApi!.deepLink).toBeNull();
-            expect(enrollmentTransportCloseMock).toHaveBeenCalledTimes(2);
-        } finally {
-            act(() => screen.tree.unmount());
-        }
+        expect(http.consume).toHaveBeenCalledOnce();
+        expect(bodyRecord(http.consume.mock.calls[0]![0])).toEqual({ pairId: 'pair_123', intent: 'cancel' });
+        expect(hook.getCurrent().presentation).toEqual({ phase: 'invalid_request', cause: 'invite_too_large' });
+        expect(hook.getCurrent().deepLink).toBeNull();
     });
 
     it('uses the post-start timestamp for the forward invite issuance window', async () => {
-        cachedCanonicalServerUrl = 'https://home-a.test';
-        cachedServerIdentityId = 'srv_home_a';
-        activeServer.serverUrl = 'https://home-a.test';
-        let nowMs = 1_000_000;
-        const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => nowMs);
-        pairingStartMock.mockImplementationOnce(async () => {
-            nowMs += 1_500;
-            defaultPairingExpiresAt = new Date(nowMs + 600_000).toISOString();
-            return {
-                ok: true,
-                data: { pairId: 'pair_123', expiresAt: defaultPairingExpiresAt },
-            };
+        const home = await addHome();
+        vi.useFakeTimers({ now: 1_000_000 });
+        http.start.mockImplementationOnce(async () => {
+            vi.setSystemTime(1_001_500);
+            expiresAt = new Date(Date.now() + 600_000).toISOString();
+            return json(200, { pairId: 'pair_123', expiresAt });
         });
-
-        const { parseHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
-        const { usePairingSession } = await import('./usePairingSession');
-
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() {
-            hookApi = usePairingSession({ enabled: true, isAuthenticated: true });
-            return null;
-        }
-
-        const screen = await renderScreen(<Probe />);
-        try {
-            await act(async () => {
-                await expect(hookApi!.startPairing()).resolves.toEqual({ ok: true });
-            });
-
-            const invite = parseHomeQrInviteDeepLink(hookApi!.deepLink ?? '')?.invite;
-            expect(invite?.issuedAtMs).toBe(1_001_500);
-            expect((invite?.expiresAtMs ?? 0) - (invite?.issuedAtMs ?? 0)).toBe(600_000);
-        } finally {
-            nowSpy.mockRestore();
-            act(() => screen.tree.unmount());
-        }
+        const hook = await mountPairing(home);
+        await start(hook);
+        const invite = inviteFor(hook);
+        expect(invite.issuedAtMs).toBe(1_001_500);
+        expect(invite.expiresAtMs - invite.issuedAtMs).toBe(600_000);
     });
 
     it('builds the production Add Phone payload as one strict V2 Home invite and targets that Home', async () => {
-        cachedCanonicalServerUrl = 'https://home-a.test';
-        cachedServerIdentityId = 'srv_home_a';
-        activeServer.serverUrl = 'https://home-a.test';
-
-        const { parseHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
-        const { usePairingSession } = await import('./usePairingSession');
-
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() {
-            hookApi = usePairingSession({ enabled: true, isAuthenticated: true });
-            return null;
-        }
-
-        const screen = await renderScreen(<Probe />);
-        try {
-            await act(async () => {
-                await expect(hookApi!.startPairing()).resolves.toEqual({ ok: true });
-            });
-
-            const parsed = parseHomeQrInviteDeepLink(hookApi!.deepLink ?? '');
-            expect(parsed?.invite).toMatchObject({
-                v: 2,
-                intent: 'home_device',
-                pairId: 'pair_123',
-                home: {
-                    v: 1,
-                    homeServerIdentityId: 'srv_home_a',
-                    canonicalServerUrl: 'https://home-a.test',
-                },
-            });
-            expect(pairingStartMock).toHaveBeenCalledWith(
-                expect.objectContaining({ secretHash: expect.any(String) }),
-                expect.objectContaining({
-                    endpointUrl: 'https://home-a.test',
-                    serverId: 'srv-a',
-                    descriptor: expect.objectContaining({ homeServerIdentityId: 'srv_home_a' }),
-                }),
-                expect.objectContaining({ signal: expect.any(AbortSignal) }),
-            );
-        } finally {
-            act(() => screen.tree.unmount());
-        }
+        const home = await addHome();
+        const hook = await mountPairing(home);
+        await start(hook);
+        const invite = inviteFor(hook);
+        expect(invite).toMatchObject({ v: 2, intent: 'home_device', pairId: 'pair_123', home: home.descriptor });
+        expect(http.start).toHaveBeenCalledOnce();
+        const issued = http.start.mock.calls[0]![0];
+        expect(issued.origin).toBe(home.serverUrl);
+        expect(issued.token).toBe(home.token);
+        expect(bodyRecord(issued)).toEqual({
+            direction: 'trusted_home_displays',
+            secretHash: encodeBase64(deriveHomeQrRendezvousVerifierV2(decodeBase64(invite.qrSecretBase64Url, 'base64url')), 'base64url'),
+        });
     });
 
     it('fails closed when the focused Home has no verified stable identity', async () => {
-        // A reachable Home with no identity is distinct from a network failure.
-        cachedCanonicalServerUrl = 'https://home-a.test';
-        const { usePairingSession } = await import('./usePairingSession');
-
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() {
-            hookApi = usePairingSession({ enabled: true, isAuthenticated: true });
-            return null;
-        }
-
-        let tree: renderer.ReactTestRenderer | null = null;
-        tree = (await renderScreen(<Probe />)).tree;
-        try {
-            await act(async () => {
-                const res = await hookApi!.startPairing();
-                expect(res).toEqual({ ok: false, status: 412 });
-            });
-
-            expect(hookApi!.deepLink).toBeNull();
-            expect(pairingStartMock).not.toHaveBeenCalled();
-            expect(hookApi!.isStarting).toBe(false);
-            expect(hookApi!.presentation).toEqual({ phase: 'invalid_request', cause: 'home_identity_unverified' });
-
-            await act(async () => {
-                hookApi!.clearSession();
-            });
-        } finally {
-            act(() => {
-                tree?.unmount();
-            });
-        }
+        const home = await addHome({ identity: null });
+        const hook = await mountPairing(home);
+        await act(async () => { await expect(hook.getCurrent().startPairing()).resolves.toEqual({ ok: false, status: 412 }); });
+        expect(http.start).not.toHaveBeenCalled();
+        expect(hook.getCurrent().deepLink).toBeNull();
+        expect(hook.getCurrent().isStarting).toBe(false);
+        expect(hook.getCurrent().presentation).toEqual({ phase: 'invalid_request', cause: 'home_identity_unverified' });
+        await act(async () => { hook.getCurrent().clearSession(); });
     });
 
     it('does not start or create a secret-bearing link when the Home lacks bound QR v2', async () => {
-        cachedCanonicalServerUrl = 'https://preview-home.example.test';
-        cachedServerIdentityId = 'srv_preview';
-        boundQrV2Enabled = false;
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() {
-            hookApi = usePairingSession({ enabled: true, isAuthenticated: true });
-            return null;
-        }
-        const screen = await renderScreen(<Probe />);
-        try {
-            let result: unknown = null;
-            await act(async () => {
-                result = await hookApi!.startPairing();
-            });
-            expect(result).toEqual({ ok: false, status: 426, reason: 'update_required' });
-            expect(pairingStartMock).not.toHaveBeenCalled();
-            expect(hookApi!.deepLink).toBeNull();
-            expect(hookApi!.completionState).toBe('update_required');
-            expect(hookApi!.presentation).toEqual({ phase: 'update_required' });
-        } finally {
-            act(() => screen.tree.unmount());
-        }
+        const home = await addHome({ boundQrV2: false });
+        const hook = await mountPairing(home);
+        await act(async () => {
+            await expect(hook.getCurrent().startPairing()).resolves.toEqual({ ok: false, status: 426, reason: 'update_required' });
+        });
+        expect(http.start).not.toHaveBeenCalled();
+        expect(hook.getCurrent().deepLink).toBeNull();
+        expect(hook.getCurrent().completionState).toBe('update_required');
+        expect(hook.getCurrent().presentation).toEqual({ phase: 'update_required' });
     });
 
     it('prefers a canonical server URL when available', async () => {
-        cachedCanonicalServerUrl = 'https://api.example.test';
-        cachedServerIdentityId = 'srv_home_a';
-
-        const { usePairingSession } = await import('./usePairingSession');
-
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() {
-            hookApi = usePairingSession({ enabled: true, isAuthenticated: true });
-            return null;
-        }
-
-        let tree: renderer.ReactTestRenderer | null = null;
-        tree = (await renderScreen(<Probe />)).tree;
-        try {
-            await act(async () => {
-                const res = await hookApi!.startPairing();
-                expect(res).toEqual({ ok: true });
-            });
-
-            const { parseHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
-            const parsed = parseHomeQrInviteDeepLink(hookApi!.deepLink ?? '');
-            expect(parsed?.invite.home).toMatchObject({
-                homeServerIdentityId: 'srv_home_a',
-                canonicalServerUrl: 'https://api.example.test',
-            });
-
-            await act(async () => {
-                hookApi!.clearSession();
-            });
-        } finally {
-            act(() => {
-                tree?.unmount();
-            });
-        }
+        const home = await addHome({ serverUrl: 'https://api.example.test' });
+        const hook = await mountPairing(home);
+        await start(hook);
+        expect(inviteFor(hook).home.canonicalServerUrl).toBe('https://api.example.test');
     });
 
     it('sanitizes credentials out of canonical server URLs before embedding', async () => {
-        cachedCanonicalServerUrl = 'https://user:pass@api.example.test';
-        cachedServerIdentityId = 'srv_home_a';
-        activeServer.serverUrl = 'https://active.example.test';
-
-        const { usePairingSession } = await import('./usePairingSession');
-
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() {
-            hookApi = usePairingSession({ enabled: true, isAuthenticated: true });
-            return null;
-        }
-
-        let tree: renderer.ReactTestRenderer | null = null;
-        tree = (await renderScreen(<Probe />)).tree;
-        try {
-            await act(async () => {
-                const res = await hookApi!.startPairing();
-                expect(res.ok).toBe(true);
-            });
-
-            const { parseHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
-            const parsed = parseHomeQrInviteDeepLink(hookApi!.deepLink ?? '');
-            expect(parsed?.invite.home.canonicalServerUrl).toBe('https://api.example.test');
-        } finally {
-            act(() => {
-                tree?.unmount();
-            });
-        }
+        const home = await addHome({ serverUrl: 'https://api.example.test',
+            canonicalObservation: 'https://user:pass@api.example.test' });
+        const hook = await mountPairing(home);
+        await start(hook);
+        expect(inviteFor(hook).home.canonicalServerUrl).toBe('https://api.example.test');
+        expect(requestsFor('/v1/auth/pairing/start').map(observed => observed.origin)).toEqual(['https://api.example.test']);
     });
 
-    it('prefers an active shareable relay URL over the canonical server URL', async () => {
-        cachedCanonicalServerUrl = 'https://api.example.test';
-        cachedServerIdentityId = 'srv_home_a';
-        activeServer.serverUrl = 'https://active.example.test';
-        activeServer.shareableServerUrl = 'https://relay.example.ts.net';
-        activeServer.shareableServerUrlValidatedAgainstServerUrl = 'https://active.example.test';
-
-        const { usePairingSession } = await import('./usePairingSession');
-
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() {
-            hookApi = usePairingSession({ enabled: true, isAuthenticated: true });
-            return null;
-        }
-
-        let tree: renderer.ReactTestRenderer | null = null;
-        tree = (await renderScreen(<Probe />)).tree;
-        try {
-            await act(async () => {
-                const res = await hookApi!.startPairing();
-                expect(res.ok).toBe(true);
-            });
-
-            const { parseHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
-            const parsed = parseHomeQrInviteDeepLink(hookApi!.deepLink ?? '');
-            expect(parsed?.invite.home).toMatchObject({
-                canonicalServerUrl: 'https://api.example.test',
-                endpoints: [{ kind: 'https', url: 'https://relay.example.ts.net' }],
-            });
-        } finally {
-            act(() => {
-                tree?.unmount();
-            });
-        }
+    it('prefers the Home-published shareable relay endpoint over the canonical server URL', async () => {
+        const home = await addHome({ descriptor: HomeConnectionDescriptorV1Schema.parse({
+            v: 1, homeServerIdentityId: 'srv_home_a', canonicalServerUrl: 'https://home-a.test', revision: 1,
+            endpoints: [{ kind: 'https', url: 'https://relay.example.ts.net' }],
+        }) });
+        await profiles.setServerProfileShareableUrl(home.profileId, 'https://relay.example.ts.net', {
+            validatedAgainstServerUrl: home.serverUrl,
+        });
+        const hook = await mountPairing(home);
+        await start(hook);
+        expect(inviteFor(hook).home.endpoints).toEqual([{ kind: 'https', url: 'https://relay.example.ts.net' }]);
+        expect(requestsFor('/v1/auth/pairing/start').map(observed => observed.origin)).toEqual(['https://relay.example.ts.net']);
     });
 
     it('ignores an active shareable relay URL that was validated for a different upstream', async () => {
-        cachedCanonicalServerUrl = 'https://api.example.test';
-        cachedServerIdentityId = 'srv_home_a';
-        activeServer.serverUrl = 'https://active.example.test';
-        activeServer.shareableServerUrl = 'https://relay.example.ts.net';
-        activeServer.shareableServerUrlValidatedAgainstServerUrl = 'https://other.example.test';
-
-        const { usePairingSession } = await import('./usePairingSession');
-
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() {
-            hookApi = usePairingSession({ enabled: true, isAuthenticated: true });
-            return null;
-        }
-
-        let tree: renderer.ReactTestRenderer | null = null;
-        tree = (await renderScreen(<Probe />)).tree;
-        try {
-            await act(async () => {
-                const res = await hookApi!.startPairing();
-                expect(res.ok).toBe(true);
-            });
-
-            const { parseHomeQrInviteDeepLink } = await import('@/auth/pairing/pairingUrl');
-            const parsed = parseHomeQrInviteDeepLink(hookApi!.deepLink ?? '');
-            expect(parsed?.invite.home.endpoints).toEqual([{ kind: 'https', url: 'https://api.example.test' }]);
-        } finally {
-            act(() => {
-                tree?.unmount();
-            });
-        }
+        const home = await addHome();
+        await profiles.setServerProfileShareableUrl(home.profileId, 'https://wrong-relay.example.ts.net', {
+            validatedAgainstServerUrl: 'https://other.example.test',
+        });
+        const hook = await mountPairing(home);
+        await start(hook);
+        expect(inviteFor(hook).home.endpoints).toEqual(home.descriptor.endpoints);
+        expect(requestsFor('/v1/auth/pairing/start').map(observed => observed.origin)).toEqual([home.serverUrl]);
     });
 
     it('does not publish a start that resolves after the session is disabled', async () => {
-        cachedCanonicalServerUrl = 'https://home-a.test';
-        cachedServerIdentityId = 'srv_home_a';
-        let startSignal: AbortSignal | undefined;
-        pairingStartMock.mockImplementationOnce((...args: unknown[]) => new Promise((_resolve, reject) => {
-            const options = args[2] as Readonly<{ signal?: AbortSignal }> | undefined;
-            startSignal = options?.signal;
-            startSignal?.addEventListener('abort', () => {
-                reject(Object.assign(new Error('cancelled'), { name: 'AbortError' }));
-            }, { once: true });
-        }));
-
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe(props: Readonly<{ enabled: boolean }>) {
-            hookApi = usePairingSession({ enabled: props.enabled, isAuthenticated: true });
-            return null;
-        }
-
-        const screen = await renderScreen(<Probe enabled />);
-        let startPromise!: ReturnType<ReturnType<typeof usePairingSession>['startPairing']>;
+        const home = await addHome();
+        const held = createDeferred<Response>();
+        http.start.mockImplementationOnce(async () => held.promise);
+        const hook = await mountPairing(home);
+        let starting: ReturnType<ReturnType<typeof usePairingSession>['startPairing']> | undefined;
+        await act(async () => { starting = hook.getCurrent().startPairing(); });
+        await vi.waitFor(() => expect(http.start).toHaveBeenCalledOnce());
+        const signal = http.start.mock.calls[0]![0].signal;
+        await hook.rerender({ enabled: false });
+        expect(signal?.aborted).toBe(true);
         await act(async () => {
-            startPromise = hookApi!.startPairing();
-            await Promise.resolve();
+            held.resolve(json(200, { pairId: 'late-pair', expiresAt: new Date(Date.now() + 60_000).toISOString() }));
+            await expect(starting).resolves.toEqual({ ok: false, status: 409 });
         });
-        await vi.waitFor(() => expect(pairingStartMock).toHaveBeenCalledTimes(1));
-
-        await act(async () => {
-            screen.tree.update(<Probe enabled={false} />);
-        });
-        expect(startSignal?.aborted).toBe(true);
-        expect(hookApi!.deepLink).toBeNull();
-
-        await act(async () => {
-            await expect(startPromise).resolves.toEqual({ ok: false, status: 409 });
-        });
-
-        expect(hookApi!.deepLink).toBeNull();
-        expect(hookApi!.status).toBeNull();
-        expect(hookApi!.pairingContext).toBeNull();
-        expect(hookApi!.isStarting).toBe(false);
-        expect(enrollmentTransportCloseMock).toHaveBeenCalledTimes(2);
-        act(() => screen.tree.unmount());
+        expect(hook.getCurrent()).toMatchObject({ deepLink: null, status: null, pairingContext: null, isStarting: false });
     });
 
     it('pauses pairing status polling while backgrounded', async () => {
+        const home = await addHome();
         vi.useFakeTimers();
-        const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
-        let observedNowMs = Date.now();
-        const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => observedNowMs++);
-        cachedCanonicalServerUrl = 'https://api.example.test';
-        cachedServerIdentityId = 'srv_home_a';
+        vi.spyOn(Math, 'random').mockReturnValue(0);
+        appState.currentState = 'background';
+        const hook = await mountPairing(home);
+        await start(hook);
+        await act(async () => { await vi.advanceTimersByTimeAsync(1_100); });
+        expect(http.status).not.toHaveBeenCalled();
+        expect(http.consume).not.toHaveBeenCalled();
+        expect(hook.getCurrent().completionState).toBe('pending');
         appState.currentState = 'active';
-        const globalWithDocument = globalThis as unknown as { document?: { visibilityState?: string } };
-        const previousDocument = globalWithDocument.document;
-        const documentStub: { visibilityState: DocumentVisibilityState } = { visibilityState: 'hidden' };
-        globalWithDocument.document = documentStub;
-
-        const { usePairingSession } = await import('./usePairingSession');
-
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() {
-            hookApi = usePairingSession({ enabled: true, isAuthenticated: true });
-            return null;
-        }
-
-        let tree: renderer.ReactTestRenderer | null = null;
-        tree = (await renderScreen(<Probe />)).tree;
-        try {
-            await act(async () => {
-                const res = await hookApi!.startPairing();
-                expect(res.ok).toBe(true);
-            });
-
-            await act(async () => {
-                await vi.advanceTimersByTimeAsync(1_100);
-            });
-
-            expect(pairingStatusMock).toHaveBeenCalledTimes(0);
-            expect(pairingConsumeMock).toHaveBeenCalledTimes(0);
-            expect(hookApi!.completionState).toBe('pending');
-
-            documentStub.visibilityState = 'visible';
-            await act(async () => {
-                // The hidden poll is classified as a transient attempt by the
-                // canonical lifecycle, so its next slot uses the second
-                // bounded-backoff step (2s with deterministic zero jitter).
-                await vi.advanceTimersByTimeAsync(2_100);
-            });
-
-            expect(pairingStatusMock).toHaveBeenCalled();
-        } finally {
-            act(() => {
-                tree?.unmount();
-            });
-            nowSpy.mockRestore();
-            randomSpy.mockRestore();
-            vi.useRealTimers();
-            globalWithDocument.document = previousDocument;
-        }
+        await act(async () => { await vi.advanceTimersByTimeAsync(2_100); });
+        expect(http.status).toHaveBeenCalled();
     });
 
     it('allows only one status request in flight and schedules the next poll after settlement', async () => {
+        const home = await addHome();
         vi.useFakeTimers();
-        cachedCanonicalServerUrl = 'https://api.example.test';
-        cachedServerIdentityId = 'srv_home_a';
-        const pendingResult = {
-            ok: true as const,
-            data: { state: 'pending' as const, pairId: 'pair_123', expiresAt: new Date(Date.now() + 60_000).toISOString() },
-        };
-        let resolveFirst!: () => void;
-        pairingStatusMock.mockImplementationOnce(() => new Promise((resolve) => {
-            resolveFirst = () => resolve(pendingResult);
-        }));
-
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() {
-            hookApi = usePairingSession({ enabled: true, isAuthenticated: true });
-            return null;
-        }
-
-        const screen = await renderScreen(<Probe />);
-        try {
-            await act(async () => {
-                await expect(hookApi!.startPairing()).resolves.toEqual({ ok: true });
-            });
-            await vi.waitFor(() => expect(pairingStatusMock).toHaveBeenCalledTimes(1));
-
-            await act(async () => {
-                await vi.advanceTimersByTimeAsync(5_000);
-            });
-            expect(pairingStatusMock).toHaveBeenCalledTimes(1);
-
-            await act(async () => {
-                resolveFirst();
-                await Promise.resolve();
-            });
-            await act(async () => {
-                await vi.advanceTimersByTimeAsync(999);
-            });
-            expect(pairingStatusMock).toHaveBeenCalledTimes(1);
-            await act(async () => {
-                await vi.advanceTimersByTimeAsync(1);
-            });
-            expect(pairingStatusMock).toHaveBeenCalledTimes(2);
-        } finally {
-            act(() => screen.tree.unmount());
-            vi.useRealTimers();
-        }
+        vi.spyOn(Math, 'random').mockReturnValue(0);
+        const held = createDeferred<Response>();
+        http.status.mockImplementationOnce(async () => held.promise);
+        const hook = await mountPairing(home);
+        await start(hook);
+        await vi.waitFor(() => expect(http.status).toHaveBeenCalledOnce());
+        await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+        expect(http.status).toHaveBeenCalledOnce();
+        await act(async () => { held.resolve(json(200, { state: 'pending', pairId: 'pair_123', expiresAt })); });
+        await act(async () => { await vi.advanceTimersByTimeAsync(999); });
+        expect(http.status).toHaveBeenCalledOnce();
+        await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+        expect(http.status).toHaveBeenCalledTimes(2);
     });
 
     it('uses bounded backoff after a transient status failure', async () => {
+        const home = await addHome();
         vi.useFakeTimers();
-        const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.999);
-        cachedCanonicalServerUrl = 'https://api.example.test';
-        cachedServerIdentityId = 'srv_home_a';
-        pairingStatusMock
-            .mockRejectedValueOnce(new Error('offline'))
-            .mockResolvedValue({
-                ok: true,
-                data: { state: 'pending', pairId: 'pair_123', expiresAt: new Date(Date.now() + 60_000).toISOString() },
-            });
-
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() { hookApi = usePairingSession({ enabled: true, isAuthenticated: true }); return null; }
-        const screen = await renderScreen(<Probe />);
-        try {
-            await act(async () => { await expect(hookApi!.startPairing()).resolves.toEqual({ ok: true }); });
-            await vi.waitFor(() => expect(pairingStatusMock).toHaveBeenCalledTimes(1));
-
-            await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
-            expect(pairingStatusMock).toHaveBeenCalledTimes(1);
-            await act(async () => { await vi.advanceTimersByTimeAsync(249); });
-            expect(pairingStatusMock).toHaveBeenCalledTimes(2);
-        } finally {
-            act(() => screen.tree.unmount());
-            randomSpy.mockRestore();
-            vi.useRealTimers();
-        }
+        vi.spyOn(Math, 'random').mockReturnValue(0.999);
+        http.status.mockImplementationOnce(async () => json(503, {}));
+        const hook = await mountPairing(home);
+        await start(hook);
+        await vi.waitFor(() => expect(http.status).toHaveBeenCalledOnce());
+        await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+        expect(http.status).toHaveBeenCalledOnce();
+        await act(async () => { await vi.advanceTimersByTimeAsync(249); });
+        expect(http.status).toHaveBeenCalledTimes(2);
     });
 
     it('expires locally at the hard TTL ceiling without another status request', async () => {
+        const home = await addHome();
         vi.useFakeTimers();
-        cachedCanonicalServerUrl = 'https://api.example.test';
-        cachedServerIdentityId = 'srv_home_a';
-        const expiresAt = new Date(Date.now() + 500).toISOString();
-        pairingStartMock.mockResolvedValueOnce({ ok: true, data: { pairId: 'pair_123', expiresAt } });
-        pairingStatusMock.mockRejectedValue(new Error('offline'));
-
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() { hookApi = usePairingSession({ enabled: true, isAuthenticated: true }); return null; }
-        const screen = await renderScreen(<Probe />);
-        try {
-            await act(async () => { await expect(hookApi!.startPairing()).resolves.toEqual({ ok: true }); });
-            await vi.waitFor(() => expect(pairingStatusMock).toHaveBeenCalledTimes(1));
-            await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-
-            expect(hookApi!.completionState).toBe('expired');
-            expect(hookApi!.deepLink).toBeNull();
-            expect(pairingStatusMock).toHaveBeenCalledTimes(1);
-            expect(enrollmentTransportCloseMock).toHaveBeenCalledTimes(2);
-        } finally {
-            act(() => screen.tree.unmount());
-            vi.useRealTimers();
-        }
+        http.start.mockImplementationOnce(async () => {
+            expiresAt = new Date(Date.now() + 500).toISOString();
+            return json(200, { pairId: 'pair_123', expiresAt });
+        });
+        http.status.mockImplementation(async () => json(503, {}));
+        const hook = await mountPairing(home);
+        await start(hook);
+        await vi.waitFor(() => expect(http.status).toHaveBeenCalledOnce());
+        await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+        expect(hook.getCurrent().completionState).toBe('expired');
+        expect(hook.getCurrent().deepLink).toBeNull();
+        expect(http.status).toHaveBeenCalledOnce();
     });
 
     it('terminalizes a non-transient status rejection instead of polling again', async () => {
+        const home = await addHome();
         vi.useFakeTimers();
-        cachedCanonicalServerUrl = 'https://api.example.test';
-        cachedServerIdentityId = 'srv_home_a';
-        pairingStatusMock.mockResolvedValue({ ok: false, reason: 'invalid_target', status: 403 });
-
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() { hookApi = usePairingSession({ enabled: true, isAuthenticated: true }); return null; }
-        const screen = await renderScreen(<Probe />);
-        try {
-            await act(async () => { await expect(hookApi!.startPairing()).resolves.toEqual({ ok: true }); });
-            await vi.waitFor(() => expect(hookApi!.completionState).toBe('invalid_request'));
-            await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
-            expect(pairingStatusMock).toHaveBeenCalledTimes(1);
-            expect(hookApi!.deepLink).toBeNull();
-        } finally {
-            act(() => screen.tree.unmount());
-            vi.useRealTimers();
-        }
+        http.status.mockImplementation(async () => json(403, {}));
+        const hook = await mountPairing(home);
+        await start(hook);
+        await vi.waitFor(() => expect(hook.getCurrent().completionState).toBe('invalid_request'));
+        await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+        expect(http.status).toHaveBeenCalledOnce();
+        expect(hook.getCurrent().deepLink).toBeNull();
     });
 
     it('ignores a stale status completion and cancels future polling when disabled', async () => {
+        const home = await addHome();
         vi.useFakeTimers();
-        cachedCanonicalServerUrl = 'https://api.example.test';
-        cachedServerIdentityId = 'srv_home_a';
-        const staleExpiresAt = new Date(Date.now() + 60_000).toISOString();
-        const staleRequesterPublicKey = new Uint8Array(32).fill(9);
-        const { computeHomeQrBindingProofV2 } = await import('@happier-dev/protocol');
-        const staleResult = {
-            ok: true as const,
-            data: {
-                state: 'requested' as const,
-                pairId: 'pair_123',
-                expiresAt: staleExpiresAt,
-                requestedPublicKey: encodeBase64(staleRequesterPublicKey),
-                requestedDeviceLabel: null,
-                homeServerIdentityId: 'srv_home_a',
-                bindingProof: computeHomeQrBindingProofV2({
-                    direction: 'trusted_home_displays',
-                    qrSecret: new Uint8Array(32).fill(7),
-                    pairId: 'pair_123',
-                    homeServerIdentityId: 'srv_home_a',
-                    requesterPublicKey: staleRequesterPublicKey,
-                    expiresAtMs: Date.parse(staleExpiresAt),
-                }),
-            },
-        };
-        let resolveStatus!: () => void;
-        pairingStatusMock.mockImplementationOnce(() => new Promise((resolve) => {
-            resolveStatus = () => resolve(staleResult);
-        }));
-
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe(props: Readonly<{ enabled: boolean }>) {
-            hookApi = usePairingSession({ enabled: props.enabled, isAuthenticated: true });
-            return null;
-        }
-
-        const screen = await renderScreen(<Probe enabled />);
-        try {
-            await act(async () => {
-                await expect(hookApi!.startPairing()).resolves.toEqual({ ok: true });
-            });
-            await vi.waitFor(() => expect(pairingStatusMock).toHaveBeenCalledTimes(1));
-            await act(async () => {
-                screen.tree.update(<Probe enabled={false} />);
-            });
-            await act(async () => {
-                resolveStatus();
-                await vi.advanceTimersByTimeAsync(5_000);
-            });
-
-            expect(pairingStatusMock).toHaveBeenCalledTimes(1);
-            expect(hookApi!.deepLink).toBeNull();
-            expect(hookApi!.status).toBeNull();
-        } finally {
-            act(() => screen.tree.unmount());
-            vi.useRealTimers();
-        }
+        const hook = await mountPairing(home);
+        const pairing = await requestedPair(hook);
+        await vi.waitFor(() => expect(http.status).toHaveBeenCalledOnce());
+        await hook.rerender({ enabled: false });
+        await pairing.release();
+        await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+        expect(http.status).toHaveBeenCalledOnce();
+        expect(http.complete).not.toHaveBeenCalled();
+        expect(hook.getCurrent()).toMatchObject({ deepLink: null, status: null });
     });
 
     it('automatically completes the first valid bound request once and stops polling without creating a successor QR', async () => {
+        const home = await addHome();
         vi.useFakeTimers();
-        cachedCanonicalServerUrl = 'https://home-a.test';
-        cachedServerIdentityId = 'srv_home_a';
-        activeServer.serverUrl = 'https://home-a.test';
-        const requestedPublicKey = new Uint8Array(32).fill(9);
-        const expiresAt = new Date(Date.now() + 60_000).toISOString();
-        pairingStartMock.mockResolvedValueOnce({ ok: true, data: { pairId: 'pair_123', expiresAt } });
-        const { computeHomeQrBindingProofV2 } = await import('@happier-dev/protocol');
-        pairingStatusMock.mockResolvedValue({
-            ok: true,
-            data: {
-                state: 'requested',
-                pairId: 'pair_123',
-                expiresAt,
-                requestedPublicKey: encodeBase64(requestedPublicKey),
-                requestedDeviceLabel: 'Phone',
-                homeServerIdentityId: 'srv_home_a',
-                bindingProof: computeHomeQrBindingProofV2({
-                    direction: 'trusted_home_displays',
-                    qrSecret: new Uint8Array(32).fill(7),
-                    pairId: 'pair_123',
-                    homeServerIdentityId: 'srv_home_a',
-                    requesterPublicKey: requestedPublicKey,
-                    expiresAtMs: Date.parse(expiresAt),
-                }),
-            },
+        const hook = await mountPairing(home);
+        const pairing = await requestedPair(hook);
+        await pairing.release();
+        await vi.waitFor(() => expect(hook.getCurrent().completionState).toBe('completed'));
+        expect(http.complete).toHaveBeenCalledOnce();
+        expect(http.complete.mock.calls[0]![0]).toMatchObject({ origin: home.serverUrl, token: home.token });
+        expect(bodyRecord(http.complete.mock.calls[0]![0])).toMatchObject({
+            pairId: 'pair_123', homeServerIdentityId: home.descriptor.homeServerIdentityId, responseKind: 'tokenOnly',
         });
-
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() {
-            hookApi = usePairingSession({ enabled: true, isAuthenticated: true });
-            return null;
-        }
-
-        const screen = await renderScreen(<Probe />);
-        try {
-            await act(async () => {
-                await expect(hookApi!.startPairing()).resolves.toEqual({ ok: true });
-            });
-            await vi.waitFor(() => expect(endpointFetchMock).toHaveBeenCalledTimes(1));
-            expect(hookApi!.completionState).toBe('completed');
-            expect(hookApi!.deepLink).toBeNull();
-            expect(getCredentialsForServerUrlMock).toHaveBeenCalledWith(
-                'https://home-a.test',
-                { serverId: 'srv-a' },
-            );
-            await act(async () => {
-                await vi.advanceTimersByTimeAsync(5_000);
-            });
-            expect(pairingStatusMock).toHaveBeenCalledTimes(1);
-            expect(endpointFetchMock).toHaveBeenCalledTimes(1);
-            expect(pairingStartMock).toHaveBeenCalledTimes(1);
-        } finally {
-            act(() => screen.tree.unmount());
-            vi.useRealTimers();
-        }
+        expect(hook.getCurrent().deepLink).toBeNull();
+        await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+        expect(http.status).toHaveBeenCalledOnce();
+        expect(http.complete).toHaveBeenCalledOnce();
+        expect(http.start).toHaveBeenCalledOnce();
     });
 
     it('does not dispatch credential completion after the displaying screen unmounts', async () => {
-        cachedCanonicalServerUrl = 'https://home-a.test';
-        cachedServerIdentityId = 'srv_home_a';
-        activeServer.serverUrl = 'https://home-a.test';
-        const requestedPublicKey = new Uint8Array(32).fill(9);
-        const expiresAt = new Date(Date.now() + 60_000).toISOString();
-        pairingStartMock.mockResolvedValueOnce({ ok: true, data: { pairId: 'pair_123', expiresAt } });
-        const { computeHomeQrBindingProofV2 } = await import('@happier-dev/protocol');
-        pairingStatusMock.mockResolvedValueOnce({
-            ok: true,
-            data: {
-                state: 'requested', pairId: 'pair_123', expiresAt,
-                requestedPublicKey: encodeBase64(requestedPublicKey), requestedDeviceLabel: 'Phone',
-                homeServerIdentityId: 'srv_home_a',
-                bindingProof: computeHomeQrBindingProofV2({
-                    direction: 'trusted_home_displays',
-                    qrSecret: new Uint8Array(32).fill(7), pairId: 'pair_123',
-                    homeServerIdentityId: 'srv_home_a', requesterPublicKey: requestedPublicKey,
-                    expiresAtMs: Date.parse(expiresAt),
-                }),
-            },
-        });
-        let resolveCredentials!: () => void;
-        getCredentialsForServerUrlMock
-            .mockResolvedValueOnce({ token: 'captured-home-token' })
-            .mockImplementationOnce(() => new Promise((resolve) => {
-                resolveCredentials = () => resolve({ token: 'captured-home-token' });
-            }));
-
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() { hookApi = usePairingSession({ enabled: true, isAuthenticated: true }); return null; }
-        const screen = await renderScreen(<Probe />);
-        await act(async () => { await hookApi!.startPairing(); });
-        await vi.waitFor(() => expect(getCredentialsForServerUrlMock).toHaveBeenCalledTimes(2));
-
-        act(() => screen.tree.unmount());
-        resolveCredentials();
-        await vi.waitFor(() => expect(enrollmentTransportCloseMock).toHaveBeenCalledTimes(2));
-        expect(endpointFetchMock).not.toHaveBeenCalled();
+        const home = await addHome();
+        const held = createDeferred<Response>();
+        const entered = createDeferred<void>();
+        http.currentness.mockImplementationOnce(async () => { entered.resolve(); return held.promise; });
+        const hook = await mountPairing(home);
+        const pairing = await requestedPair(hook);
+        await pairing.release();
+        await entered.promise;
+        await hook.unmount();
+        await act(async () => { held.resolve(json(200, createPlainAccountEncryptionCurrentnessFixture())); });
+        await flushHookEffects();
+        expect(http.currentness.mock.calls[0]![0].signal?.aborted).toBe(true);
+        expect(http.complete).not.toHaveBeenCalled();
     });
 
     it('treats already_completed as successful completion', async () => {
-        cachedCanonicalServerUrl = 'https://home-a.test';
-        cachedServerIdentityId = 'srv_home_a';
-        activeServer.serverUrl = 'https://home-a.test';
-        endpointFetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'already_completed' }), {
-            status: 409,
-            headers: { 'Content-Type': 'application/json' },
-        }));
-        const requestedPublicKey = new Uint8Array(32).fill(9);
-        const expiresAt = new Date(Date.now() + 60_000).toISOString();
-        pairingStartMock.mockResolvedValueOnce({ ok: true, data: { pairId: 'pair_123', expiresAt } });
-        const { computeHomeQrBindingProofV2 } = await import('@happier-dev/protocol');
-        pairingStatusMock.mockResolvedValueOnce({
-            ok: true,
-            data: {
-                state: 'requested', pairId: 'pair_123', expiresAt,
-                requestedPublicKey: encodeBase64(requestedPublicKey), requestedDeviceLabel: null,
-                homeServerIdentityId: 'srv_home_a',
-                bindingProof: computeHomeQrBindingProofV2({
-                    direction: 'trusted_home_displays',
-                    qrSecret: new Uint8Array(32).fill(7), pairId: 'pair_123',
-                    homeServerIdentityId: 'srv_home_a', requesterPublicKey: requestedPublicKey,
-                    expiresAtMs: Date.parse(expiresAt),
-                }),
-            },
-        });
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() { hookApi = usePairingSession({ enabled: true, isAuthenticated: true }); return null; }
-        const screen = await renderScreen(<Probe />);
-        try {
-            await act(async () => { await hookApi!.startPairing(); });
-            await vi.waitFor(() => expect(hookApi!.completionState).toBe('completed'));
-        } finally {
-            act(() => screen.tree.unmount());
-        }
+        const home = await addHome();
+        http.complete.mockImplementationOnce(async () => json(409, { error: 'already_completed' }));
+        const hook = await mountPairing(home);
+        const pairing = await requestedPair(hook);
+        await pairing.release();
+        await vi.waitFor(() => expect(hook.getCurrent().completionState).toBe('completed'));
+        expect(http.complete).toHaveBeenCalledOnce();
     });
 
     it.each([
         ['wrong Home', { homeServerIdentityId: 'srv_home_b' }],
         ['wrong pair', { pairId: 'pair_other' }],
-        ['wrong expiry', { expiresAt: new Date(Date.now() + 30_000).toISOString() }],
+        ['wrong expiry', { expiresAt: 'different' }],
         ['invalid requester key', { requestedPublicKey: encodeBase64(new Uint8Array(31)) }],
         ['wrong proof', { bindingProof: encodeBase64(new Uint8Array(32).fill(4), 'base64url') }],
-    ])('rejects %s before credential response and exposes one new-QR recovery', async (_label, override) => {
-        cachedCanonicalServerUrl = 'https://home-a.test';
-        cachedServerIdentityId = 'srv_home_a';
-        activeServer.serverUrl = 'https://home-a.test';
-        const requestedPublicKey = new Uint8Array(32).fill(9);
-        const expiresAt = new Date(Date.now() + 60_000).toISOString();
-        pairingStartMock.mockResolvedValueOnce({ ok: true, data: { pairId: 'pair_123', expiresAt } });
-        const { computeHomeQrBindingProofV2 } = await import('@happier-dev/protocol');
-        pairingStatusMock.mockResolvedValueOnce({
-            ok: true,
-            data: {
-                state: 'requested', pairId: 'pair_123', expiresAt,
-                requestedPublicKey: encodeBase64(requestedPublicKey), requestedDeviceLabel: null,
-                homeServerIdentityId: 'srv_home_a',
-                bindingProof: computeHomeQrBindingProofV2({
-                    direction: 'trusted_home_displays',
-                    qrSecret: new Uint8Array(32).fill(7), pairId: 'pair_123',
-                    homeServerIdentityId: 'srv_home_a', requesterPublicKey: requestedPublicKey,
-                    expiresAtMs: Date.parse(expiresAt),
-                }),
-                ...override,
-            },
-        });
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() { hookApi = usePairingSession({ enabled: true, isAuthenticated: true }); return null; }
-        const screen = await renderScreen(<Probe />);
-        try {
-            await act(async () => { await hookApi!.startPairing(); });
-            await vi.waitFor(() => expect(hookApi!.completionState).toBe('invalid_request'));
-            expect(endpointFetchMock).not.toHaveBeenCalled();
-            expect(getCredentialsForServerUrlMock).toHaveBeenCalledWith(
-                'https://home-a.test',
-                { serverId: 'srv_home_a' },
-            );
-            expect(pairingConsumeMock).toHaveBeenCalledTimes(1);
-            expect(hookApi!.pairingContext).toBeNull();
-            expect(hookApi!.deepLink).toBeNull();
-        } finally {
-            act(() => screen.tree.unmount());
-        }
+    ] as const)('rejects %s before credential response and exposes one new-QR recovery', async (_label, override) => {
+        const home = await addHome();
+        const hook = await mountPairing(home);
+        const pairing = await requestedPair(hook, 'expiresAt' in override && override.expiresAt === 'different'
+            ? { expiresAt: new Date(Date.now() + 30_000).toISOString() }
+            : override);
+        await pairing.release();
+        await vi.waitFor(() => expect(hook.getCurrent().completionState).toBe('invalid_request'));
+        expect(http.complete).not.toHaveBeenCalled();
+        expect(http.consume).toHaveBeenCalledOnce();
+        expect(bodyRecord(http.consume.mock.calls[0]![0])).toEqual({ pairId: pairing.invite.pairId, intent: 'reject' });
+        expect(hook.getCurrent()).toMatchObject({ pairingContext: null, deepLink: null });
+        // A deliberate new code is the only recovery; no background successor is created.
+        expect(http.start).toHaveBeenCalledOnce();
     });
 
     it('retries the same verified bound request after a transient completion failure', async () => {
+        const home = await addHome();
         vi.useFakeTimers();
-        const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0);
-        cachedCanonicalServerUrl = 'https://home-a.test';
-        cachedServerIdentityId = 'srv_home_a';
-        activeServer.serverUrl = 'https://home-a.test';
-        endpointFetchMock
-            .mockRejectedValueOnce(new Error('offline'))
-            .mockResolvedValueOnce(new Response(null, { status: 200 }));
-        const requestedPublicKey = new Uint8Array(32).fill(9);
-        const expiresAt = new Date(Date.now() + 60_000).toISOString();
-        pairingStartMock.mockResolvedValueOnce({ ok: true, data: { pairId: 'pair_123', expiresAt } });
-        const { computeHomeQrBindingProofV2 } = await import('@happier-dev/protocol');
-        const requested = {
-            state: 'requested' as const, pairId: 'pair_123', expiresAt,
-            requestedPublicKey: encodeBase64(requestedPublicKey), requestedDeviceLabel: null,
-            homeServerIdentityId: 'srv_home_a',
-            bindingProof: computeHomeQrBindingProofV2({
-                direction: 'trusted_home_displays',
-                qrSecret: new Uint8Array(32).fill(7), pairId: 'pair_123',
-                homeServerIdentityId: 'srv_home_a', requesterPublicKey: requestedPublicKey,
-                expiresAtMs: Date.parse(expiresAt),
-            }),
-        };
-        pairingStatusMock.mockResolvedValue({ ok: true, data: requested });
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() { hookApi = usePairingSession({ enabled: true, isAuthenticated: true }); return null; }
-        const screen = await renderScreen(<Probe />);
-        try {
-            await act(async () => { await hookApi!.startPairing(); });
-            await act(async () => {
-                await vi.waitFor(() => expect(hookApi!.completionState).toBe('retrying'));
-            });
-            await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
-            await act(async () => {
-                await vi.waitFor(() => expect(hookApi!.completionState).toBe('completed'));
-            });
-            expect(endpointFetchMock).toHaveBeenCalledTimes(2);
-            expect(endpointFetchMock.mock.calls[1]?.[0]).toBe('/v1/auth/account/response');
-            const firstBody = JSON.parse(String((endpointFetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.body));
-            const retryBody = JSON.parse(String((endpointFetchMock.mock.calls[1]?.[1] as RequestInit | undefined)?.body));
-            expect(retryBody).toMatchObject({
-                pairId: firstBody.pairId,
-                publicKey: firstBody.publicKey,
-                homeServerIdentityId: firstBody.homeServerIdentityId,
-                responseKind: firstBody.responseKind,
-            });
-            expect(pairingStartMock).toHaveBeenCalledTimes(1);
-        } finally {
-            act(() => screen.tree.unmount());
-            randomSpy.mockRestore();
-            vi.useRealTimers();
-        }
+        vi.spyOn(Math, 'random').mockReturnValue(0);
+        http.complete.mockImplementationOnce(async () => { throw new Error('offline'); });
+        const hook = await mountPairing(home);
+        const pairing = await requestedPair(hook);
+        await pairing.release();
+        await vi.waitFor(() => expect(hook.getCurrent().completionState).toBe('retrying'));
+        await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+        await vi.waitFor(() => expect(hook.getCurrent().completionState).toBe('completed'));
+        expect(http.complete).toHaveBeenCalledTimes(2);
+        const first = bodyRecord(http.complete.mock.calls[0]![0]);
+        const retry = bodyRecord(http.complete.mock.calls[1]![0]);
+        expect(retry).toMatchObject({
+            pairId: first.pairId, publicKey: first.publicKey, homeServerIdentityId: first.homeServerIdentityId,
+            responseKind: first.responseKind,
+        });
+        expect(http.start).toHaveBeenCalledOnce();
     });
 
     it('allows cancellation only while pending and never submits a credential response', async () => {
-        cachedCanonicalServerUrl = 'https://home-a.test';
-        cachedServerIdentityId = 'srv_home_a';
-        activeServer.serverUrl = 'https://home-a.test';
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() { hookApi = usePairingSession({ enabled: true, isAuthenticated: true }); return null; }
-        const screen = await renderScreen(<Probe />);
-        try {
-            await act(async () => { await hookApi!.startPairing(); });
-            await act(async () => { await expect(hookApi!.cancelPairing()).resolves.toEqual({ ok: true }); });
-            expect(pairingConsumeMock).toHaveBeenCalledWith(
-                { pairId: 'pair_123', intent: 'cancel' },
-                expect.objectContaining({ descriptor: expect.objectContaining({ homeServerIdentityId: 'srv_home_a' }) }),
-                expect.objectContaining({ signal: expect.any(AbortSignal) }),
-            );
-            expect(endpointFetchMock).not.toHaveBeenCalled();
-            expect(hookApi!.deepLink).toBeNull();
-        } finally {
-            act(() => screen.tree.unmount());
-        }
+        const home = await addHome();
+        const hook = await mountPairing(home);
+        await start(hook);
+        await act(async () => { await expect(hook.getCurrent().cancelPairing()).resolves.toEqual({ ok: true }); });
+        expect(http.consume).toHaveBeenCalledOnce();
+        expect(bodyRecord(http.consume.mock.calls[0]![0])).toEqual({ pairId: 'pair_123', intent: 'cancel' });
+        expect(http.consume.mock.calls[0]![0]).toMatchObject({ origin: home.serverUrl, token: home.token });
+        expect(http.complete).not.toHaveBeenCalled();
+        expect(hook.getCurrent().deepLink).toBeNull();
+        await act(async () => { await expect(hook.getCurrent().cancelPairing()).resolves.toEqual({ ok: false, status: 409 }); });
     });
 
     it('honors a pending cancellation intent when requested status arrives concurrently', async () => {
-        cachedCanonicalServerUrl = 'https://home-a.test';
-        cachedServerIdentityId = 'srv_home_a';
-        activeServer.serverUrl = 'https://home-a.test';
-        const requestedPublicKey = new Uint8Array(32).fill(9);
-        const expiresAt = new Date(Date.now() + 60_000).toISOString();
-        pairingStartMock.mockResolvedValueOnce({ ok: true, data: { pairId: 'pair_123', expiresAt } });
-        const { computeHomeQrBindingProofV2 } = await import('@happier-dev/protocol');
-        let resolveStatus!: () => void;
-        pairingStatusMock.mockImplementationOnce(() => new Promise((resolve) => {
-            resolveStatus = () => resolve({
-                ok: true,
-                data: {
-                    state: 'requested', pairId: 'pair_123', expiresAt,
-                    requestedPublicKey: encodeBase64(requestedPublicKey), requestedDeviceLabel: null,
-                    homeServerIdentityId: 'srv_home_a',
-                    bindingProof: computeHomeQrBindingProofV2({
-                        direction: 'trusted_home_displays',
-                        qrSecret: new Uint8Array(32).fill(7), pairId: 'pair_123',
-                        homeServerIdentityId: 'srv_home_a', requesterPublicKey: requestedPublicKey,
-                        expiresAtMs: Date.parse(expiresAt),
-                    }),
-                },
-            });
-        }));
-        let resolveCancel!: () => void;
-        pairingConsumeMock.mockImplementationOnce(() => new Promise((resolve) => {
-            resolveCancel = () => resolve({ ok: true });
-        }));
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() { hookApi = usePairingSession({ enabled: true, isAuthenticated: true }); return null; }
-        const screen = await renderScreen(<Probe />);
-        try {
-            await act(async () => { await hookApi!.startPairing(); });
-            await vi.waitFor(() => expect(pairingStatusMock).toHaveBeenCalledTimes(1));
-            let cancellation!: ReturnType<ReturnType<typeof usePairingSession>['cancelPairing']>;
-            await act(async () => {
-                cancellation = hookApi!.cancelPairing();
-                await Promise.resolve();
-            });
-            await act(async () => { resolveStatus(); await Promise.resolve(); });
-            expect(endpointFetchMock).not.toHaveBeenCalled();
-            await act(async () => { resolveCancel(); await expect(cancellation).resolves.toEqual({ ok: true }); });
-            expect(endpointFetchMock).not.toHaveBeenCalled();
-        } finally {
-            act(() => screen.tree.unmount());
-        }
+        const home = await addHome();
+        const cancelReply = createDeferred<Response>();
+        http.consume.mockImplementationOnce(async () => cancelReply.promise);
+        const hook = await mountPairing(home);
+        const pairing = await requestedPair(hook);
+        await vi.waitFor(() => expect(http.status).toHaveBeenCalledOnce());
+        let cancelling: ReturnType<ReturnType<typeof usePairingSession>['cancelPairing']> | undefined;
+        await act(async () => { cancelling = hook.getCurrent().cancelPairing(); });
+        await pairing.release();
+        expect(http.complete).not.toHaveBeenCalled();
+        await act(async () => {
+            cancelReply.resolve(json(200, { success: true }));
+            await expect(cancelling).resolves.toEqual({ ok: true });
+        });
+        expect(http.complete).not.toHaveBeenCalled();
     });
 
     it('does not retry a terminal completion response and requires a new QR', async () => {
+        const home = await addHome();
         vi.useFakeTimers();
-        cachedCanonicalServerUrl = 'https://home-a.test';
-        cachedServerIdentityId = 'srv_home_a';
-        activeServer.serverUrl = 'https://home-a.test';
-        endpointFetchMock.mockResolvedValue(new Response(null, { status: 403 }));
-        const requestedPublicKey = new Uint8Array(32).fill(9);
-        const expiresAt = new Date(Date.now() + 60_000).toISOString();
-        pairingStartMock.mockResolvedValueOnce({ ok: true, data: { pairId: 'pair_123', expiresAt } });
-        const { computeHomeQrBindingProofV2 } = await import('@happier-dev/protocol');
-        pairingStatusMock.mockResolvedValue({ ok: true, data: {
-            state: 'requested', pairId: 'pair_123', expiresAt,
-            requestedPublicKey: encodeBase64(requestedPublicKey), requestedDeviceLabel: null,
-            homeServerIdentityId: 'srv_home_a',
-            bindingProof: computeHomeQrBindingProofV2({
-                direction: 'trusted_home_displays',
-                qrSecret: new Uint8Array(32).fill(7), pairId: 'pair_123',
-                homeServerIdentityId: 'srv_home_a', requesterPublicKey: requestedPublicKey,
-                expiresAtMs: Date.parse(expiresAt),
-            }),
-        } });
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() { hookApi = usePairingSession({ enabled: true, isAuthenticated: true }); return null; }
-        const screen = await renderScreen(<Probe />);
-        try {
-            await act(async () => { await hookApi!.startPairing(); });
-            await vi.waitFor(() => expect(hookApi!.completionState).toBe('completion_failed'));
-            await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
-            expect(endpointFetchMock).toHaveBeenCalledTimes(1);
-            expect(hookApi!.deepLink).toBeNull();
-            expect(hookApi!.pairingContext).toBeNull();
-        } finally {
-            act(() => screen.tree.unmount());
-            vi.useRealTimers();
-        }
+        http.complete.mockImplementation(async () => json(403, {}));
+        const hook = await mountPairing(home);
+        const pairing = await requestedPair(hook);
+        await pairing.release();
+        await vi.waitFor(() => expect(hook.getCurrent().completionState).toBe('completion_failed'));
+        await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+        expect(http.complete).toHaveBeenCalledOnce();
+        expect(hook.getCurrent()).toMatchObject({ deepLink: null, pairingContext: null });
     });
+
     it('pairs against an explicitly targeted saved Home instead of the focused one', async () => {
-        cachedCanonicalServerUrl = 'https://home-b.test';
-        cachedServerIdentityId = 'srv_home_b';
-        activeServer.serverUrl = 'https://home-a.test';
-
-        const { usePairingSession } = await import('./usePairingSession');
-        let hookApi: ReturnType<typeof usePairingSession> | null = null;
-        function Probe() {
-            hookApi = usePairingSession({ enabled: true, isAuthenticated: true, targetProfileId: 'srv-b' });
-            return null;
-        }
-        const screen = await renderScreen(<Probe />);
-        try {
-            await act(async () => {
-                await expect(hookApi!.startPairing()).resolves.toEqual({ ok: true });
-            });
-
-            expect(serverProfileMocks.getServerProfileById).toHaveBeenCalledWith('srv-b');
-            expect(pairingStartMock).toHaveBeenCalledWith(
-                expect.anything(),
-                expect.objectContaining({ serverId: 'srv-b' }),
-                expect.anything(),
-            );
-        } finally {
-            act(() => screen.tree.unmount());
-        }
+        const focused = await addHome();
+        await restoreFocused(focused);
+        const target = await addHome({ serverUrl: 'https://home-b.test', identity: 'srv_home_b', accountId: 'target-account' });
+        const focusedId = profiles.getActiveServerId();
+        const hook = await mountPairing(target);
+        const pairing = await requestedPair(hook);
+        await pairing.release();
+        await vi.waitFor(() => expect(hook.getCurrent().completionState).toBe('completed'));
+        expect(http.start).toHaveBeenCalledOnce();
+        expect(http.start.mock.calls[0]![0]).toMatchObject({ origin: target.serverUrl, token: target.token });
+        expect(http.start.mock.calls[0]![0].token).not.toBe(focused.token);
+        expect(http.complete).toHaveBeenCalledOnce();
+        expect(http.complete.mock.calls[0]![0]).toMatchObject({ origin: target.serverUrl, token: target.token });
+        expect(profiles.getActiveServerId()).toBe(focusedId);
+        expect(pairing.invite.home.homeServerIdentityId).toBe('srv_home_b');
     });
 });

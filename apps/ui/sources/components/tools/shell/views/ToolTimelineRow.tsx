@@ -1,4 +1,3 @@
-import { Typography } from '@/constants/Typography';
 import { useSessionTranscriptSource, useTranscriptVisualContext } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import { useTranscriptRowContentDemand } from '@/components/sessions/transcript/viewport/visibility/TranscriptRowContentDemand';
 import * as React from 'react';
@@ -47,13 +46,14 @@ import { resolvePermissionRequestId } from '@/components/tools/renderers/core/re
 import { ApprovalPromptCard } from '../approvals/ApprovalPromptCard';
 import { resolveInactiveSessionToolCallFailure } from '../permissions/resolveInactiveSessionToolCallFailure';
 import { navigateWithBlurOnWeb } from '@/utils/platform/navigateWithBlurOnWeb';
-import { Text } from '@/components/ui/text/Text';
 import { resolveToolErrorSummary } from '@/components/tools/shell/presentation/resolveToolErrorSummary';
+import { ToolOutcomeStatus } from '@/components/tools/shell/presentation/ToolOutcomeStatus';
+import { readHappierActionCallId } from '@/components/sessions/transcript/references/happierActionToolResult';
+import { resolveToolActionFailure } from '@/components/tools/shell/presentation/resolveToolActionFailure';
 import { ActivitySpinner, iconMatchedSpinnerSize } from '@/components/ui/feedback/ActivitySpinner';
 import { buildApprovalToolCallLocation, doesApprovalMatchToolCall } from './toolApprovalPromptMatching';
 import { isAskUserQuestionToolName } from '@happier-dev/protocol/activity/agentRequestSummary';
 import { resolveToolPermissionTerminalErrorMessage } from '@/components/tools/shell/permissions/resolveToolPermissionTerminalErrorMessage';
-import { Icon } from '@/components/ui/icons/Icon';
 import {
     TranscriptRowSeqProvider,
     useHistoricalTranscriptAgentId,
@@ -314,6 +314,9 @@ const ToolTimelineRowContent = React.memo((props: ToolTimelineRowProps & { displ
     const [headerActions, setHeaderActions] = React.useState<React.ReactNode | null>(null);
     const showTaskRunningIndicator = isSubAgentTranscriptTool;
     const statusKind = resolveToolStatusIndicatorKind(toolForRendering);
+    const actionFailure = statusKind === 'error' ? resolveToolActionFailure(toolForRendering) : null;
+    // A refusal is the product working as designed: its mark stays in the quiet ink, never the failure rose.
+    const isRefusal = actionFailure?.outcome === 'refused';
     const terminalStatusSummary =
         statusKind === 'error'
             ? (resolveToolErrorSummary(toolForRendering) ?? t('common.error'))
@@ -327,30 +330,18 @@ const ToolTimelineRowContent = React.memo((props: ToolTimelineRowProps & { displ
                     }) ?? t('errors.permissionDenied')
                 )
                 : null;
-    const headerStatusIndicator =
-        terminalStatusSummary
-            ? (
-                <View
-                    testID={statusKind === 'permission_blocked' ? 'tool-timeline-row-permission-blocked' : 'tool-timeline-row-error'}
-                    accessible={true}
-                    accessibilityLabel={terminalStatusSummary}
-                    style={styles.headerTerminalStatus}
-                >
-                    <Icon
-                        name={statusKind === 'permission_blocked' ? 'minus-circle' : 'warning-circle'}
-                        size={16}
-                        color={theme.colors.state.danger.foreground}
-                    />
-                    <Text style={styles.headerTerminalStatusText} numberOfLines={1}>
-                        {terminalStatusSummary}
-                    </Text>
-                </View>
-            )
-            : showTaskRunningIndicator && toolForRendering.state === 'running'
-                ? <ActivitySpinner size={iconMatchedSpinnerSize(18)} color={theme.colors.text.secondary} />
-                : null;
-    const headerPrimaryActions = headerActions ?? null;
-    const headerRightElements = [headerStatusIndicator, headerPrimaryActions].filter(Boolean);
+    const headerTerminalStatus = terminalStatusSummary ? (
+        <ToolOutcomeStatus
+            testID={statusKind === 'permission_blocked' ? 'tool-timeline-row-permission-blocked' : 'tool-timeline-row-error'}
+            label={terminalStatusSummary}
+            glyph={statusKind === 'permission_blocked' || isRefusal ? 'minus-circle' : 'warning-circle'}
+            tone={isRefusal ? 'quiet' : 'danger'}
+        />
+    ) : null;
+    const headerRunningIndicator = !headerTerminalStatus && showTaskRunningIndicator && toolForRendering.state === 'running'
+        ? <ActivitySpinner size={iconMatchedSpinnerSize(18)} color={theme.colors.text.secondary} />
+        : null;
+    const headerRightElements = [headerRunningIndicator, headerActions ?? null].filter(Boolean);
     const headerRightElement =
         headerRightElements.length > 1 ? (
             <View style={styles.headerRightContent}>
@@ -466,11 +457,14 @@ const ToolTimelineRowContent = React.memo((props: ToolTimelineRowProps & { displ
         findBlocks: find?.blocks,
         findRevealBlockId: find?.reveal?.blockId,
         subtitle: headerSubtitle,
+        subtitleWraps: readHappierActionCallId(toolForRendering.name, toolForRendering.input) !== null,
         statusText: headerStatusText,
+        causeText: actionFailure?.summary ?? null,
         onPress: onPress,
         canOpen: canOpen,
         onOpen: handleOpen,
         rightElement: headerRightElement,
+        terminalStatus: headerTerminalStatus,
         revealAction: props.headerAction?.node ?? null,
         revealActionSticky: props.headerAction?.pinned === true,
         disclosure: disclosure,
@@ -571,16 +565,5 @@ const styles = StyleSheet.create((theme) => ({
         flexDirection: 'row',
         alignItems: 'center',
         gap: theme.space.s6,
-    },
-    headerTerminalStatus: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: theme.space.s6,
-        minWidth: 0,
-    },
-    headerTerminalStatusText: {
-        color: theme.colors.state.danger.foreground,
-        ...Typography.variant('meta', 'semiBold'),
-        maxWidth: 220,
     },
 }));

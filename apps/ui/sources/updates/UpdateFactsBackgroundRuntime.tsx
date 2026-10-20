@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import { ensureMachineUpdateFactsBackground } from '@/capabilities/ensureAgentInstallablesBackground';
+import { useMachineUpdateFactsBackground } from './useMachineUpdateFactsBackground';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
 import { useActiveServerAccountScope, useAllMachines } from '@/sync/domains/state/storage';
 import { isMachineSelectableForFleet } from '@/sync/domains/machines/administration/fleetUnion';
@@ -25,9 +25,7 @@ export function UpdateFactsBackgroundRuntime(props: Readonly<{ enabled: boolean 
         () => machines.filter((machine) => isMachineSelectableForFleet(accountScope, machine, presenceNowMs)).map((machine) => machine.id).sort().join('\u0000'),
         [machines, accountScope, reachabilityRevision, presenceNowMs],
     );
-    React.useEffect(() => {
-        if (!props.enabled || !onlineKey) return;
-        void ensureMachineUpdateFactsBackground({ serverId, machineIds: onlineKey.split('\u0000') });
-    }, [onlineKey, props.enabled, serverId]);
+    useMachineUpdateFactsBackground({ serverId, accountId: accountScope?.accountId,
+        machineIds: onlineKey ? onlineKey.split('\u0000') : [], enabled: props.enabled });
     return null;
 }

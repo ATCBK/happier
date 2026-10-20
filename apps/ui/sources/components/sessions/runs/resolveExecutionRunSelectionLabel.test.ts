@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { describe, expect, it } from 'vitest';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
 
 import { t } from '@/text';
 import { resolveExecutionRunSelectionLabel } from './resolveExecutionRunSelectionLabel';
@@ -15,7 +16,7 @@ describe('resolveExecutionRunSelectionLabel', () => {
           source: 'inherited',
           modelSelection: {
             agentTargetKey: 'agent:codex',
-            providerConnectionId: 'pc_gateway',
+            providerConnectionId: ProviderConnectionIdSchema.parse('pc_gateway'),
             modelId: 'fable-5.1',
           },
         },
@@ -33,7 +34,7 @@ describe('resolveExecutionRunSelectionLabel', () => {
           source: 'explicit',
           modelSelection: {
             agentTargetKey: 'agent:codex',
-            providerConnectionId: 'pc_deleted',
+            providerConnectionId: ProviderConnectionIdSchema.parse('pc_deleted'),
             modelId: 'gpt-6.1-luna',
           },
         },
@@ -53,6 +54,30 @@ describe('resolveExecutionRunSelectionLabel', () => {
         'happier.connected-service.claude/claude-subscription': { source: 'connected', ...binding },
       } },
     }, label, 'Claude · Work')).toBe(`${t('runPage.menu.selectionInherited')} · Claude · Work · sonnet`);
+  });
+
+  it('names a native model by its catalog title and leaves Provider and Team model ids as they are', () => {
+    const catalog = (modelId: string) => (modelId === 'claude-haiku-4-5' ? 'Haiku 4.5' : null);
+    expect(resolveExecutionRunSelectionLabel({
+      source: 'inherited',
+      modelSelection: { agentTargetKey: 'agent:claude', providerConnectionId: null, modelId: 'claude-haiku-4-5' },
+    }, label, 'Work pool', catalog)).toBe(`${t('runPage.menu.selectionInherited')} · Work pool · Haiku 4.5`);
+    expect(resolveExecutionRunSelectionLabel({ source: 'explicit', modelId: 'claude-haiku-4-5' }, label, null, catalog))
+      .toBe(`${t('runPage.menu.selectionExplicit')} · Haiku 4.5`);
+    // A Provider route names its own model; the Agent's catalog must not rename it.
+    expect(resolveExecutionRunSelectionLabel({
+      source: 'inherited',
+      modelSelection: {
+        agentTargetKey: 'agent:claude', providerConnectionId: ProviderConnectionIdSchema.parse('pc_gateway'),
+        modelId: 'claude-haiku-4-5',
+      },
+    }, label, null, catalog)).toBe(`${t('runPage.menu.selectionInherited')} · Main gateway · claude-haiku-4-5`);
+    expect(resolveExecutionRunSelectionLabel({
+      source: 'inherited', teamCredentialModel: {
+        kind: 'team_credential_provider_model', teamId: 'team-work', resourceId: 'resource-work',
+        expectedResourceRevision: 2, deliveryMode: 'brokered', agentTargetKey: 'agent:claude', modelId: 'claude-haiku-4-5',
+      },
+    }, label, 'Work Team', catalog)).toBe(`${t('runPage.menu.selectionInherited')} · Work Team · claude-haiku-4-5`);
   });
 
   it('names a Team resource from its recipient-safe identity', () => {

@@ -31,6 +31,8 @@ export type MachineResourceComposerSuggestion = Readonly<{
 export type MachineResourceSuggestionFacts = Readonly<{
     machine: MachineResourceSuggestionMachine;
     online: boolean;
+    /** A resource sample retained by this app session, not just a daemon publication. */
+    hasLastReport?: boolean;
     memoryPressure?: MachineResourceSummaryV1['memory']['pressure'];
     disk?: Readonly<Pick<MachineResourceSummaryV1['disk'], 'availableBytes' | 'totalBytes' | 'tone'>>;
     happierStorageBytes?: number | null;
@@ -41,8 +43,15 @@ export type MachineResourceSuggestionFacts = Readonly<{
     automationsEnabled?: boolean;
 }>;
 
-/** Exactly three prompts for the current report. No reads, watches, timers or side effects. */
-export function deriveMachineResourceSuggestions(facts: MachineResourceSuggestionFacts): readonly MachineResourceComposerSuggestion[] {
+/** Three current-report prompts online; offline, only prompts backed by retained reports. No side effects. */
+export function deriveMachineResourceSuggestions(
+    facts: MachineResourceSuggestionFacts,
+    previous?: readonly MachineResourceComposerSuggestion[],
+): readonly MachineResourceComposerSuggestion[] {
+    // Compare the complete three-slot output, after priority and formatting. Raw facts can change
+    // without changing a shown prompt; machine placement, language and fill intent still invalidate it.
+    const retain = (next: readonly MachineResourceComposerSuggestion[]) =>
+        previous && JSON.stringify(previous) === JSON.stringify(next) ? previous : next;
     const machine = facts.machine;
     const placement: HomeComposerSuggestionPlacement | null = facts.online
         ? { serverId: machine.serverId, machineId: machine.machineId, directory: machine.directory }
@@ -57,12 +66,12 @@ export function deriveMachineResourceSuggestions(facts: MachineResourceSuggestio
         // The block's description already says the machine is offline: its tiles do not repeat the cause.
         const reason = '';
         const notifyTitle = t('machineResources.askSuggestions.prompts.notifyWhenBack', { machine: machine.name });
-        return [
-            make('lastReport', t('machineResources.askSuggestions.prompts.lastReport', { machine: machine.name }), reason),
-            make('lastStorageReport', t('machineResources.askSuggestions.prompts.lastStorageReport', { machine: machine.name }), reason),
+        return retain([
+            ...(facts.hasLastReport ? [make('lastReport', t('machineResources.askSuggestions.prompts.lastReport', { machine: machine.name }), reason)] : []),
+            ...(facts.happierStorageBytes != null ? [make('lastStorageReport', t('machineResources.askSuggestions.prompts.lastStorageReport', { machine: machine.name }), reason)] : []),
             make('notifyWhenBack', notifyTitle, reason,
                 `${notifyTitle}. ${t('machineResources.askSuggestions.prompts.notifyWhenBackConsent', { machine: machine.name })}\nsettings.set ${JSON.stringify({ anchor: 'notifications.machineOffline', key: machine.machineId, value: true })}`),
-        ];
+        ]);
     }
 
     const suggestions: MachineResourceComposerSuggestion[] = [];
@@ -97,5 +106,5 @@ export function deriveMachineResourceSuggestions(facts: MachineResourceSuggestio
     }
     suggestions.push(make('processes', t('machineResources.askSuggestions.prompts.processes', { machine: machine.name }), reason));
     // The Ask block has three suggestion slots (AGW-11); this is presentation, not a cleanup-set limit.
-    return suggestions.slice(0, 3);
+    return retain(suggestions.slice(0, 3));
 }

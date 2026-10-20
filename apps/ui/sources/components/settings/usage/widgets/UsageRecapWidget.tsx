@@ -16,6 +16,7 @@ import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/ac
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import {
   UsageBodyInsufficient,
+  UsageBodyNoUsage,
   usagePeriodPhrase,
   useUsageAnalyticsView,
   type UsageBodyProps,
@@ -146,7 +147,14 @@ export function UsageRecapWidget(props: UsageBodyProps): React.ReactElement {
       },
     });
   }, [viewModel, filters, shownQuery, sessionId, openComposer]);
-  if (!viewModel || !hasRecap)
+  if (!viewModel)
+    return (
+      <View style={styles.root}>
+        <UsageBodyNoUsage slice={props.slice} testID={props.testID} onRetry={props.model.refresh} />
+        <UsageWorkAutopsy {...props} testID={`${props.testID}.autopsy`} />
+      </View>
+    );
+  if (!hasRecap)
     return (
       <View style={styles.root}>
         <UsageBodyInsufficient

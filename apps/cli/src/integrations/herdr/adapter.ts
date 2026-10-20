@@ -164,6 +164,7 @@ export function createHerdrTerminalHostAdapter(params: Readonly<{
             startupTimeoutMs: params.startupTimeoutMs,
           });
       await admitHerdrServer(launchClient);
+      if (opts.prepareLaunch) opts = { ...opts, ...await opts.prepareLaunch() };
       let launch: Awaited<ReturnType<typeof createHerdrLaunchSpec>>;
       try {
         launch = opts.preparedLaunch ?? await createHerdrLaunchSpec(opts);

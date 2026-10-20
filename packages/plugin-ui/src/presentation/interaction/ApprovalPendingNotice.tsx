@@ -45,8 +45,9 @@ const renderDefaultText: HappierNoticeLineTextRender = (input) => (
 );
 
 /**
- * One compact status line: glyph, subject · status, and one way forward. It never wraps: the subject
- * truncates first, then the status.
+ * One compact status line: glyph, subject · status, and one way forward. On one line when it fits;
+ * when it does not, the status drops beneath the subject rather than squeezing the subject to a stub
+ * (each part still truncates alone if it is wider than the line).
  */
 export function HappierNoticeLine(props: HappierNoticeLineProps) {
   const typography = useOptionalHappierUiTypography();
@@ -62,39 +63,57 @@ export function HappierNoticeLine(props: HappierNoticeLineProps) {
       accessibilityLiveRegion="polite"
       style={{
         flexDirection: 'row',
-        alignItems: 'center',
+        alignItems: 'flex-start',
         gap: LINE_GAP,
         minHeight: LINE_MIN_HEIGHT,
       }}
     >
-      {props.icon}
       <View
-        style={{ flex: 1, minWidth: 0, flexDirection: 'row', gap: SUBJECT_GAP }}
+        style={{
+          minHeight: LINE_MIN_HEIGHT,
+          justifyContent: 'center',
+        }}
+      >
+        {props.icon}
+      </View>
+      <View
+        style={{
+          flex: 1,
+          minWidth: 0,
+          minHeight: LINE_MIN_HEIGHT,
+          flexDirection: 'row',
+          flexWrap: 'wrap',
+          alignContent: 'center',
+          columnGap: SUBJECT_GAP,
+        }}
       >
         {subject
           ? renderText({
               role: 'subject',
               text: subject,
               testID: props.testID ? `${props.testID}.subject` : undefined,
-              // The subject gives way to the status that follows it.
-              style: [
-                textStyle,
-                { flexGrow: 0, flexShrink: 1, flexBasis: 'auto', minWidth: 0 },
-              ],
+              style: [textStyle, { flexShrink: 1, maxWidth: '100%' }],
+            })
+          : null}
+        {/* The separator is its own item so a status that drops beneath the subject never starts a line with it. */}
+        {subject
+          ? renderText({
+              role: 'title',
+              text: '·',
+              style: [textStyle, { flexShrink: 0 }],
             })
           : null}
         {renderText({
           role: 'title',
-          text: subject ? `· ${props.title}` : props.title,
-          style: [
-            textStyle,
-            subject
-              ? { flexGrow: 0, flexShrink: 0, flexBasis: 'auto' }
-              : { flex: 1, minWidth: 0 },
-          ],
+          text: props.title,
+          style: [textStyle, { flexShrink: 1, maxWidth: '100%' }],
         })}
       </View>
-      {props.action ?? null}
+      {props.action ? (
+        <View style={{ minHeight: LINE_MIN_HEIGHT, justifyContent: 'center' }}>
+          {props.action}
+        </View>
+      ) : null}
     </View>
   );
 }

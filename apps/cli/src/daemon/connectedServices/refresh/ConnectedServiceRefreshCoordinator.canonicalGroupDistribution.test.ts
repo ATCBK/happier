@@ -1,14 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  buildConnectedServiceCredentialRecord,
   ConnectedServiceCredentialRevisionV1Schema,
-  type ConnectedServiceCredentialRecordV1,
   type QualifiedConnectedAccountGroupV4,
 } from '@happier-dev/protocol';
 
 import type { ApiClient } from '@/api/api';
-import type { Credentials } from '@/persistence';
 import {
   HAPPIER_CONNECTED_SERVICE_SELECTIONS_ENV_KEY,
   type ConnectedServiceChildSelection,
@@ -19,13 +16,13 @@ import {
   ConnectedServiceRefreshCoordinator,
   type QualifiedConnectedAccountRefreshRuntime,
 } from './ConnectedServiceRefreshCoordinator';
+import { createBuiltInQualifiedRefreshHarness } from './ConnectedServiceRefreshCoordinator.qualifiedRefresh.testkit';
 
 const sourceRevision = ConnectedServiceCredentialRevisionV1Schema.parse(
   'csr_aaaaaaaaaaaaaaaaaaaaaa',
 );
-const refreshedRevision = ConnectedServiceCredentialRevisionV1Schema.parse(
-  'csr_bbbbbbbbbbbbbbbbbbbbbb',
-);
+
+afterEach(() => vi.unstubAllGlobals());
 
 function selectionEnv(
   selections: ReadonlyArray<ConnectedServiceChildSelection>,
@@ -159,57 +156,7 @@ describe('ConnectedServiceRefreshCoordinator canonical group distribution', () =
   });
 
   it('reports refresh failure when a registered group target cannot read canonical group state', async () => {
-    const now = 3_000_000;
-    const credentials: Credentials = {
-      token: 'happy-token',
-      encryption: { type: 'legacy', secret: new Uint8Array(32).fill(9) },
-    };
-    let credentialRevision = sourceRevision;
-    let record: ConnectedServiceCredentialRecordV1 =
-      buildConnectedServiceCredentialRecord({
-        now,
-        serviceId: 'openai-codex',
-        profileId: 'work',
-        kind: 'oauth',
-        expiresAt: now - 1,
-        oauth: {
-          accessToken: 'source-access',
-          refreshToken: 'source-refresh',
-          idToken: null,
-          scope: null,
-          tokenType: null,
-          providerAccountId: 'account-work',
-          providerEmail: null,
-        },
-      });
-    const api = {
-      getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
-      getConnectedServiceCredentialPlain: vi.fn(async () => ({
-        revisionSemantics: 'revisioned' as const,
-        credentialRevision,
-        content: { t: 'plain' as const, v: record },
-      })),
-      getConnectedServiceCredentialSealed: vi.fn(async () => null),
-      acquireConnectedServiceRefreshLease: vi.fn(async () => ({
-        acquired: true,
-        leaseUntil: now + 60_000,
-        ownerId: 'current-daemon',
-        credentialRevision: sourceRevision,
-      })),
-      registerConnectedServiceCredentialPlain: vi.fn(async (input: {
-        content: { v: ConnectedServiceCredentialRecordV1 };
-      }) => {
-        record = input.content.v;
-        credentialRevision = refreshedRevision;
-        return {
-          success: true as const,
-          credentialRevision: refreshedRevision,
-        };
-      }),
-      updateConnectedServiceCredentialHealth: vi.fn(async () => ({
-        success: true as const,
-      })),
-    } as unknown as ApiClient;
+    const credentialRevision = ConnectedServiceCredentialRevisionV1Schema.parse('csr_abcdefghijklmnopqrstuv');
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
         access_token: 'refreshed-access',
         refresh_token: 'refreshed-refresh',
@@ -243,63 +190,37 @@ describe('ConnectedServiceRefreshCoordinator canonical group distribution', () =
         fallbackProfileId: 'backup',
         generation: 7,
         policy: null,
-        credentialRevision: sourceRevision,
+        credentialRevision,
       }]),
     });
-    const coordinator = new ConnectedServiceRefreshCoordinator({
-      api,
-      credentials,
-      machineIdProvider: () => 'current-daemon',
-      activeServerDir:
-        '/tmp/happier-dev-canonical-group-distribution-server',
-      baseDir: '/tmp/happier-dev-canonical-group-distribution',
-      refreshWindowMs: 60_000,
-      refreshLeaseMs: 30_000,
-      now: () => now,
+    const harness = await createBuiltInQualifiedRefreshHarness({
       runtimeRegistry,
-      // This fixture exercises the released revisioned V2/V3 OAuth-refresh
-      // compatibility path. The plugin-owned V4 authority is deliberately
-      // unreachable for that peer class.
-      qualifiedConnectedAccountRuntime: {
-        resolvePeerClass: () => 'revisioned_v2_v3',
-        establishedRuntimeOwner: {
-          invokeWithReceipt: vi.fn(async () => {
-            throw new Error('revisioned V2/V3 fixture cannot invoke a V4 plugin leaf');
-          }),
-        },
-        mutateCredentialHealth: vi.fn(async () => {
-          throw new Error('revisioned V2/V3 fixture cannot mutate V4 credential health');
-        }),
-        readCredential: vi.fn(async () => {
-          throw new Error('revisioned V2/V3 fixture cannot read a V4 credential');
-        }),
-        acquireRefreshLease: vi.fn(async () => {
-          throw new Error('revisioned V2/V3 fixture cannot acquire a V4 refresh lease');
-        }),
-        mutateCredential: vi.fn(async () => {
-          throw new Error('revisioned V2/V3 fixture cannot mutate a V4 credential');
-        }),
-      } as unknown as QualifiedConnectedAccountRefreshRuntime,
+      readGroup: async () => { throw new Error('canonical group unavailable'); },
     });
 
-    await expect(
-      coordinator.refreshConnectedServiceCredentialForSpawnPreflight({
-        serviceId: 'openai-codex',
-        profileId: 'work',
-      }),
-    ).resolves.toMatchObject({
-      status: 'refresh_failed',
-      diagnostic: {
-        providerErrorCode: 'canonical_group_state_unavailable',
-      },
-    });
-    expect(
-      runtimeRegistry
-        .getByPid(505)
-        ?.activeBindings.find(
-          (binding) => binding.serviceId === 'happier.agent.codex/openai-codex',
-        )
-        ?.credentialRevision,
-    ).toBe(sourceRevision);
+    try {
+      await expect(
+        harness.coordinator.refreshConnectedServiceCredentialForSpawnPreflight({
+          serviceId: 'openai-codex',
+          profileId: 'work',
+          force: true,
+        }),
+      ).resolves.toMatchObject({
+        status: 'refresh_failed',
+        diagnostic: {
+          providerErrorCode: 'canonical_group_state_unavailable',
+        },
+      });
+      expect(
+        runtimeRegistry
+          .getByPid(505)
+          ?.activeBindings.find(
+            (binding) => binding.serviceId === 'happier.agent.codex/openai-codex',
+          )
+          ?.credentialRevision,
+      ).toBe(credentialRevision);
+    } finally {
+      await harness.dispose();
+    }
   });
 });

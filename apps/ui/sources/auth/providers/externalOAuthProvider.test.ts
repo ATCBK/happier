@@ -7,26 +7,8 @@ import { resetServerReachabilitySupervisors } from '@/sync/runtime/connectivity/
 import { createExternalOAuthProvider } from './externalOAuthProvider';
 import type { ExternalOAuthEndpointRequest } from './types';
 
-vi.mock('@/sync/domains/server/serverConfig', () => ({
-    getServerUrl: () => 'https://api.example.test',
-}));
-
-vi.mock('@/utils/timing/time', () => ({
-    backoff: async <T>(fn: () => Promise<T>) => await fn(),
-}));
-
-type MockFetchResponse = {
-    ok: boolean;
-    status: number;
-    json: () => Promise<unknown>;
-};
-
-function jsonResponse(params: { ok: boolean; status: number; body: unknown }): MockFetchResponse {
-    return {
-        ok: params.ok,
-        status: params.status,
-        json: async () => params.body,
-    };
+function jsonResponse(params: { ok: boolean; status: number; body: unknown }): Response {
+    return Response.json(params.body, { status: params.status });
 }
 
 function stubFetch(
@@ -35,10 +17,10 @@ function stubFetch(
     const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async (input, init) => {
         const url = String(input);
         if (url.endsWith('/health') || url.endsWith('/v1/auth/ping')) {
-            return jsonResponse({ ok: true, status: 200, body: { ok: true } }) as Response;
+            return jsonResponse({ ok: true, status: 200, body: { ok: true } });
         }
         const result = await handler(url, init);
-        return jsonResponse(result) as Response;
+        return jsonResponse(result);
     });
     setRuntimeFetch(fetchMock);
     vi.stubGlobal('fetch', fetchMock);

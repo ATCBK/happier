@@ -6,7 +6,7 @@ import { serializerCompiler, validatorCompiler, type ZodTypeProvider } from "fas
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
-import { applySessionReadCursorOperation, updateSessionMetadata } from "@/app/session/sessionWriteService";
+import { applySessionReadCursorOperation, applySessionTurnMutation, updateSessionAgentState, updateSessionMetadata } from "@/app/session/sessionWriteService";
 import { createLegacyLayout0SessionInTx } from "@/app/session/create/createLegacyLayout0Session";
 import { writeSessionTranscriptMessageInTx } from "@/app/session/sessionTranscriptWrite";
 import { registerSessionReadStateRoutes } from "@/app/api/routes/session/registerSessionReadStateRoutes";
@@ -25,6 +25,8 @@ import {
     stampViewerUnreadEntryInTx,
 } from "./readState";
 import { loadSessionViewerProjection } from "./projection";
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER } from "@happier-dev/protocol";
+import { decodeBase64 } from "privacy-kit";
 
 const authentication = createPresentUserSessionAccessAuthentication();
 
@@ -44,8 +46,8 @@ describe("private viewer read state (SQLite integration)", () => {
 
     afterEach(async () => {
         await harness.resetDbTables([
-            () => db.sessionDiscussionReadState.deleteMany(),
-            () => db.sessionDiscussion.deleteMany(),
+            () => db.discussionReadState.deleteMany(),
+            () => db.discussion.deleteMany(),
             () => db.accountSessionReadState.deleteMany(),
             () => db.sessionShare.deleteMany(),
             () => db.accountChange.deleteMany(),
@@ -86,6 +88,68 @@ describe("private viewer read state (SQLite integration)", () => {
         });
         return { owner, collaborator, session };
     }
+
+    it.each(["message", "finished_with_message", "failed", "request"] as const)(
+        "represents an app-closed owner's committed %s effect through the real personal projection without enrollment",
+        async kind => {
+            const owner = await db.account.create({ data: { publicKey: crypto.randomUUID(), encryptionMode: "plain" } });
+            const session = await inTx(tx => createLegacyLayout0SessionInTx(tx, {
+                accountId: owner.id, tag: crypto.randomUUID(), metadata: "{}", agentState: null,
+                encryptionMode: "plain", requestedStorageState: undefined, dataEncryptionKey: null,
+            }));
+            const read = () => loadSessionViewerProjection({ accountId: owner.id, sessionId: session.id, authentication });
+            expect(await read()).toMatchObject({ readState: { state: "tracking", lastViewedSessionSeq: 0 },
+                attention: { needsAttention: false } });
+            const appendOriginal = async () => {
+                expect(await inTx(tx => writeSessionTranscriptMessageInTx(tx, {
+                    sessionId: session.id, writeAuthority: "hosted", sessionEncryptionMode: "plain", storagePolicy: "optional",
+                    content: { t: "plain", v: kind === "finished_with_message"
+                        ? { role: "agent", content: { type: "acp", agentId: "codex", data: { type: "task_complete", id: session.id } } }
+                        : { role: "user", content: { type: "text", text: "Original source material" } } },
+                    localId: crypto.randomUUID(), sidechainId: null, messageRole: kind === "finished_with_message" ? "event" : "user", createdAt: new Date(100),
+                }))).toMatchObject({ ok: true });
+            };
+            if (kind === "message") await appendOriginal();
+            else {
+                const turnId = crypto.randomUUID();
+                const original = { v: 1, sessionId: session.id, turnId };
+                expect(await applySessionTurnMutation({ actorUserId: owner.id, authentication,
+                    mutation: { ...original, action: "begin", mutationId: crypto.randomUUID(), observedAt: 100 },
+                })).toMatchObject({ ok: true, didApply: true });
+                if (kind === "finished_with_message") {
+                    await appendOriginal();
+                    expect(await db.sessionMessage.findFirst({ where: { sessionId: session.id } })).toMatchObject({
+                        content: { t: "plain", v: { role: "agent", content: { type: "acp", data: { type: "task_complete" } } } },
+                    });
+                }
+                if (kind === "request") {
+                    const requestId = crypto.randomUUID();
+                    expect(await updateSessionAgentState({ actorUserId: owner.id, sessionId: session.id, expectedVersion: 0,
+                        agentStateCiphertext: JSON.stringify({ requests: { [requestId]: {
+                            kind: "user_action", tool: "AskUserQuestion", arguments: {}, createdAt: 150,
+                        } } }), pendingUserActionRequestCount: 1,
+                        userActionRequiredOccurrences: [{ sourceTurnId: turnId, requestId, requestKind: "user_action", occurredAt: 150 }],
+                    })).toMatchObject({ ok: true });
+                } else {
+                    const mutation = { ...original, mutationId: crypto.randomUUID(), observedAt: 200 };
+                    expect(await applySessionTurnMutation({ actorUserId: owner.id, authentication,
+                        mutation: kind === "finished_with_message" ? { ...mutation, action: "complete" } : { ...mutation, action: "fail",
+                            issue: { v: 1, scope: "primary_session", status: "failed", code: "test_failure", source: "unknown", occurredAt: 200 } },
+                    })).toMatchObject({ ok: true, didApply: true });
+                }
+            }
+            const reason = kind === "message" || kind === "finished_with_message" ? "unread"
+                : kind === "failed" ? "failed" : "user_action_required";
+            expect(await read()).toMatchObject({ attention: { needsAttention: true, reasons: expect.arrayContaining([reason]) } });
+            expect(await db.accountSessionFollow.count({ where: { accountId: owner.id, sessionId: session.id } })).toBe(0);
+            if (kind === "message" || kind === "finished_with_message") {
+                expect(await applyViewerReadCursorOperation({ accountId: owner.id, sessionId: session.id,
+                    operation: { kind: "mark-read" }, authentication })).toMatchObject({ ok: true });
+                // This source-backed representation is current attention, not historical delivery custody.
+                expect(await read()).toMatchObject({ attention: { needsAttention: false } });
+            }
+        },
+    );
 
     it("lets a tracked view-only reader change its own frontier without changing another Account", async () => {
         const { owner, collaborator, session } = await createSharedSession({ seq: 5 });
@@ -151,9 +215,10 @@ describe("private viewer read state (SQLite integration)", () => {
     it("seeds only the main frontier when an untracked reader marks a Session that has Discussions", async () => {
         const { owner, collaborator, session } = await createSharedSession({ seq: 5 });
         await db.sessionShare.updateMany({ where: { sessionId: session.id, sharedWithUserId: collaborator.id }, data: { accessLevel: "view" } });
-        await db.sessionDiscussion.create({
+        await db.discussion.create({
             data: {
-                sessionId: session.id,
+                ownerAccountId: owner.id, encryptionMode: "plain", dataEncryptionKey: decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER),
+                anchorSessionId: session.id, anchorV1: { kind: "session", sessionId: session.id },
                 creationLocalId: crypto.randomUUID(),
                 creationEqualityEvidenceV1: { kind: "plainDigest", digest: crypto.randomUUID() },
                 createdByAccountId: owner.id,
@@ -171,10 +236,9 @@ describe("private viewer read state (SQLite integration)", () => {
         });
 
         expect(marked).toMatchObject({ ok: true, didChange: true, lastViewedSessionSeq: 4 });
-        // A cursor-only mark is not an inactive-to-active tracking transition, so the
-        // Discussion baseline owner — reserved for Follow entry — must not run.
-        expect(await db.sessionDiscussionReadState.count({
-            where: { accountId: collaborator.id, discussion: { sessionId: session.id } },
+        // Session read operations cannot enroll an independent Discussion reader.
+        expect(await db.discussionReadState.count({
+            where: { accountId: collaborator.id, discussion: { anchorSessionId: session.id } },
         })).toBe(0);
     });
 

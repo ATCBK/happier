@@ -467,7 +467,7 @@ describe('handleDaemonCliCommand: daemon restart', () => {
             mode: 'if_stale',
             dryRun: true,
             reason: 'daemon_restart_session_runners_command',
-        });
+        }, { signal: undefined });
         expect(restartSessionRunnerMock).not.toHaveBeenCalled();
         expect(exitSpy).toHaveBeenCalledWith(0);
     });
@@ -493,7 +493,7 @@ describe('handleDaemonCliCommand: daemon restart', () => {
             mode: 'force_current_cli',
             dryRun: true,
             reason: 'daemon_restart_session_runners_command',
-        });
+        }, { signal: undefined });
         expect(restartAllSessionRunnersMock).not.toHaveBeenCalled();
         expect(exitSpy).toHaveBeenCalledWith(0);
     });

@@ -1,4 +1,4 @@
-import { ExecutionRunScmCommitMessageInputV1Schema } from '@happier-dev/protocol/execution/runs/startRequest';
+import { ExecutionRunScmCommitMessageInputV1Schema, EXECUTION_RUN_KIND_BY_INTENT } from '@happier-dev/protocol/execution/runs/startRequest';
 import type { ExecutionRunIntentProfile } from '@/agent/executionRuns/profiles/ExecutionRunIntentProfile';
 
 import { buildCommitMessagePrompt } from './buildCommitMessagePrompt';
@@ -9,9 +9,9 @@ export const ScmCommitMessageProfile: ExecutionRunIntentProfile = {
   intent: 'scm_commit_message',
   supportsDetached: true,
   transcriptMaterialization: 'none',
-  prepareStartParams: async ({ request, cwd }) => {
+  prepareStartParams: async ({ request, cwd, loadScmCommitMessageContext: loadContext = loadScmCommitMessageContext }) => {
     const input = ExecutionRunScmCommitMessageInputV1Schema.parse(request.intentInput ?? {});
-    const context = await loadScmCommitMessageContext({
+    const context = await loadContext({
       workingDirectory: cwd,
       maxFiles: typeof input.maxFiles === 'number' ? input.maxFiles : 20,
       maxTotalDiffChars: typeof input.maxTotalDiffChars === 'number' ? input.maxTotalDiffChars : 60_000,
@@ -43,7 +43,7 @@ export const ScmCommitMessageProfile: ExecutionRunIntentProfile = {
           error: { code: 'invalid_output', message: 'Empty output' },
         },
         structuredMeta: {
-          kind: 'scm_commit_message.v1',
+          kind: EXECUTION_RUN_KIND_BY_INTENT.scm_commit_message,
           payload: {
             errorCode: 'invalid_output',
           },
@@ -63,7 +63,7 @@ export const ScmCommitMessageProfile: ExecutionRunIntentProfile = {
       summary: 'Commit message generated.',
       toolResultOutput: result,
       structuredMeta: {
-        kind: 'scm_commit_message.v1',
+        kind: EXECUTION_RUN_KIND_BY_INTENT.scm_commit_message,
         payload: result,
       },
     };

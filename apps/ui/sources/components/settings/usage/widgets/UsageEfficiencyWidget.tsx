@@ -40,6 +40,8 @@ import {
 
 /** Below this width the mix is the dot waffle (lab `kitcharts`: "waffle on tile and phone"). */
 const WAFFLE_BELOW_PX = 360;
+/** From this width the four figures share one row (a full-width band); narrower, they pair up two a row. */
+const FOUR_ACROSS_FROM_PX = 720;
 
 /**
  * "Efficiency": cache hit rate and cost per million tokens beside the token mix they come from.
@@ -59,10 +61,13 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
     presentation?.footprint.width === 'compact' ||
     (presentation?.geometry?.width ?? Number.POSITIVE_INFINITY) <
       WAFFLE_BELOW_PX;
+  const cellStyle = !phone && (presentation?.geometry?.width ?? 0) >= FOUR_ACROSS_FROM_PX
+    ? styles.cellInRow
+    : styles.cell;
   if (!view) {
     // Its ratios beside the mix they come from: the skeleton holds that shape while the read answers.
     if (isUsageReadOutstanding(props.slice, ['accounting'])) return <UsageBodyReading testID={`${props.testID}.loading`} shape={{ kind: 'mix' }} />;
-    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} />;
+    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} onRetry={props.model.refresh} />;
   }
   const { composition } = view;
   const totalTokens = props.slice.accounting?.totals.tokens.total ?? 0;
@@ -80,6 +85,8 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
         1e6
       : null;
   const perMtokComparison = usageComparison(efficiency.costPerMtokUsd, previousPerMtok);
+  // A candidate basis whose amount is unavailable: some usage has neither a reported cost nor a model price.
+  const unpriced = view.pageCost.selection != null && view.pageCost.amountUsd === null;
   const hasRatios =
     efficiency.cacheHitRatePct !== null || efficiency.costPerMtokUsd !== null;
   // Work evidence is not part of this widget's own read: the figure names a merged PR only when the slice carries it.
@@ -94,14 +101,14 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
       <UsageBodyInsufficient
         testID={`${props.testID}.noBasis`}
         title={t('usage.board.page.efficiencyNoBasisTitle')}
-        reason={t('usage.board.page.efficiencyNoBasisReason')}
+        reason={t(unpriced ? 'usage.board.page.efficiencyUnpricedReason' : 'usage.board.page.efficiencyNoBasisReason')}
       />
     );
   return (
     <View style={styles.body} testID={`${props.testID}.efficiency`}>
       {/* The lab's four figures keep their slots: an unknown is a quiet dash with its reason beneath. */}
       <View style={styles.grid}>
-        <View style={styles.cell}>
+        <View style={cellStyle}>
           <HappierDataMetric
             testID={`${props.testID}.cacheHit`}
             theme={chartTheme}
@@ -123,7 +130,7 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
             }
           />
         </View>
-        <View style={styles.cell}>
+        <View style={cellStyle}>
           <HappierDataMetric
             testID={`${props.testID}.perMtok`}
             theme={chartTheme}
@@ -133,7 +140,9 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
             value={efficiency.costPerMtokUsd ?? UNKNOWN_VALUE}
             caption={
               efficiency.costPerMtokUsd === null
-                ? t('common.unavailable')
+                ? unpriced
+                  ? t('usage.board.page.costUnpricedCaption')
+                  : t('common.unavailable')
                 : view.pageCost.selection
                   ? usageCostKindPhrase(view.pageCost.selection.kind)
                   : undefined
@@ -152,7 +161,7 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
                 : {})}
           />
         </View>
-        <View style={styles.cell}>
+        <View style={cellStyle}>
           <HappierDataMetric
             testID={`${props.testID}.perMergedPr`}
             theme={chartTheme}
@@ -170,7 +179,7 @@ export function UsageEfficiencyWidget(props: UsageBodyProps) {
             }
           />
         </View>
-        <View style={styles.cell}>
+        <View style={cellStyle}>
           <HappierDataMetric
             testID={`${props.testID}.noKeptChange`}
             theme={chartTheme}
@@ -245,4 +254,5 @@ const styles = StyleSheet.create((theme) => ({
   grid: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 24, rowGap: 16 },
   // Two figures a row whenever the card can hold two; a narrower one stacks them.
   cell: { flexGrow: 1, flexBasis: '40%', minWidth: 120 },
+  cellInRow: { flexGrow: 1, flexBasis: '20%', minWidth: 120 },
 }));

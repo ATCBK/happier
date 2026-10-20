@@ -12,6 +12,12 @@ vi.mock('expo-clipboard', () => ({
     setStringAsync: vi.fn(),
 }));
 
+// Collect the real component graph once; presentation is supplied through its provider.
+await import('../Item');
+await import('../ItemGroup');
+await import('../SegmentedChoiceItem');
+await import('@/components/ui/buttons/RoundButton');
+
 afterEach(() => {
     standardCleanup();
 });
@@ -76,7 +82,6 @@ describe('Item page accessory layout', () => {
         const ordinaryAccessory = flattenTestStyle(ordinarySection.props.style);
         const ordinaryRow = flattenTestStyle(nearestHostView(ordinarySection).props.style);
 
-        vi.resetModules();
         const split = await renderPageRow({ split: true, accessoryLayout: 'stacked' });
         const splitAccessory = flattenTestStyle(accessorySection(hostByTestID(split, 'control')).props.style);
 
@@ -91,7 +96,9 @@ describe('Item page accessory layout', () => {
         const split = await renderPageRow({ split: true, accessoryLayout: 'inline' });
         const splitAccessory = flattenTestStyle(accessorySection(hostByTestID(split, 'control')).props.style);
         expect(splitAccessory.flexDirection).toBe('row');
-        expect(splitAccessory.maxWidth).toBe('50%');
+        // A page operation is measured like an adaptive accessory: beside the label it takes what it
+        // needs; only the stacked composition stretches under the label.
+        expect(splitAccessory.alignSelf).not.toBe('stretch');
     });
 });
 
@@ -133,12 +140,7 @@ describe('Item adaptive accessory', () => {
                 <Item testID="row" title="Restore memory by" accessoryLayout="adaptive" rightElement={<View testID="control" />} />
             </ListPresentationProvider>,
         );
-        const accessoryHost = () => {
-            let node: ReactTestInstance | null = hostByTestID(screen, 'control');
-            while (node && !(flattenTestStyle(node.props.style ?? {}).maxWidth)) node = node.parent;
-            if (!node) throw new Error('Expected the accessory section');
-            return node;
-        };
+        const accessoryHost = () => accessorySection(hostByTestID(screen, 'control'));
         const withLayout = (from: ReactTestInstance) => {
             const found: ReactTestInstance[] = [];
             let node: ReactTestInstance | null = from;
@@ -156,11 +158,13 @@ describe('Item adaptive accessory', () => {
         expect(rowMeasure, 'adaptive rows measure their containing surface').toBeDefined();
         await act(async () => { rowMeasure.props.onLayout(layoutEvent(700)); });
         await act(async () => { controlMeasure.props.onLayout(layoutEvent(200)); });
-        expect(flattenTestStyle(accessoryHost().props.style).maxWidth).toBe('50%');
+        // Fitting its half, the control stays beside the label and takes what it needs.
+        expect(flattenTestStyle(accessoryHost().props.style)).toMatchObject({ flexDirection: 'row' });
+        expect(flattenTestStyle(accessoryHost().props.style).alignSelf).not.toBe('stretch');
 
         // A bar of long labels does not fit its half: it moves beneath the label instead of overflowing.
         await act(async () => { controlMeasure.props.onLayout(layoutEvent(420)); });
-        expect(flattenTestStyle(accessoryHost().props.style).maxWidth).toBe('100%');
+        expect(flattenTestStyle(accessoryHost().props.style)).toMatchObject({ flexDirection: 'column', alignSelf: 'stretch' });
     });
 
     it.each([
@@ -237,17 +241,18 @@ describe('Item leading mark on a page', () => {
     });
 
     it('fits an oversized identity mark outside page presentation when its caller declares the leading slot size', async () => {
-        vi.resetModules();
         const box = await leadingBox('grouped', 36);
         expect(box.width).toBe(36);
         expect(box.height).toBe(36);
     });
 
     it('keeps the fixed glyph box outside page presentation when no slot size is declared', async () => {
-        vi.resetModules();
         const box = await leadingBox('grouped');
         const { ITEM_ICON_BOX_SIZE } = await import('../itemDensityMetrics');
-        expect(box.width).toBe(ITEM_ICON_BOX_SIZE.cozy);
+        // The density box is the leading slot's minimum; a wider mark takes its own width (a tree row's
+        // disclosure + glyph) instead of overhanging the title.
+        expect(box.width).toBe('auto');
+        expect(box.minWidth).toBe(ITEM_ICON_BOX_SIZE.cozy);
         expect(box.height).toBe(ITEM_ICON_BOX_SIZE.cozy);
     });
 });

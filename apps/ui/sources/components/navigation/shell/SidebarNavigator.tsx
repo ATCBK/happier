@@ -40,7 +40,7 @@ const PEEK_SCROLL_PROPS = Platform.OS === 'web'
     : {};
 const renderPeekColumn = (column: AppShellColumnModel) => (
     <View style={{ flex: 1, minHeight: 0 }} {...PEEK_SCROLL_PROPS}>
-        <AppShellColumn column={column} />
+        <AppShellColumn column={column} peeked />
     </View>
 );
 
@@ -207,7 +207,7 @@ export const SidebarNavigator = React.memo(() => {
     // Responsive chrome changes geometry, never the route navigator or its ancestry.
     return (
         <AppShellColumnContext.Provider value={appShellState}>
-        <WorkspaceBarGeometryContext.Provider value={showSidebar ? workspaceBarGeometry : null}>
+        <WorkspaceBarGeometryContext.Provider value={workspaceBarGeometry}>
         <AppShellPeekProvider enabled={showSidebar} currentId={column.kind === 'none' ? null : location.railEntryId} columnShown={columnShown}>
         <InboxSummaryProvider>
         <AppShellMaterialFrame
@@ -215,7 +215,7 @@ export const SidebarNavigator = React.memo(() => {
             dragEnabled={showSidebar && Platform.OS === 'web' && isDesktopHost()}
             leftOffsetPx={shellLeftPx}
             sidebarWidth={sidebarWidth}
-            titleStrip={showSidebar ? (
+            titleStrip={showSidebar || workspace?.active ? (
                 <AppShellTitleStrip key="title-strip" columnVisible={columnShown}
                     columnToggleAvailable={column.kind !== 'none'} onToggleColumn={handleToggleColumn}
                     navigation={workspace?.active ? workspace : undefined}

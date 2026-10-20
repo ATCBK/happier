@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import { EventEmitter } from 'node:events';
 import { createSocketTransportAdapter } from '@happier-dev/sync-client';
+import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 
 const boundaries = vi.hoisted(() => ({
   discard: vi.fn(),
@@ -21,8 +22,14 @@ vi.mock('@/api/session/sockets', () => ({
     return { socket, transport: createSocketTransportAdapter(socket) };
   },
 }));
-vi.mock('@/session/transport/http/sessionsHttp', () => ({ fetchSessionById: boundaries.fetchSession }));
-vi.mock('@/api/client/connectedServiceCredentialApi', () => ({ fetchAccountEncryptionCurrentness: boundaries.fetchAccountCurrentness }));
+vi.mock('@/session/transport/http/sessionsHttp', async importOriginal => ({
+  ...await importOriginal<typeof import('@/session/transport/http/sessionsHttp')>(),
+  fetchSessionById: boundaries.fetchSession,
+}));
+vi.mock('@/api/client/connectedServiceCredentialApi', async importOriginal => ({
+  ...await importOriginal<typeof import('@/api/client/connectedServiceCredentialApi')>(),
+  fetchAccountEncryptionCurrentness: boundaries.fetchAccountCurrentness,
+}));
 vi.mock('@/session/transport/rpc/sessionRpc', () => ({ callSessionRpc: boundaries.rpc }));
 
 import { cancelSessionInput } from './cancelSessionInput';
@@ -39,7 +46,8 @@ describe('cancelSessionInput', () => {
     vi.clearAllMocks();
     boundaries.fetchAccountCurrentness.mockResolvedValue({ mode: 'plain', version: 1,
       signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
-    boundaries.fetchSession.mockResolvedValue({ id: sessionId, active: true, activeAt: 1, encryptionMode: 'plain', metadata: {} });
+    boundaries.fetchSession.mockResolvedValue(createSessionRecordFixture({ id: sessionId, active: true,
+      activeAt: 1, encryptionMode: 'plain', metadata: JSON.stringify({ machineId: 'machine', path: '/repo' }) }));
   });
   it('retires an exact pending input without cancelling a whole Session', async () => {
     boundaries.discard.mockResolvedValueOnce(1);
@@ -88,6 +96,7 @@ describe('cancelSessionInput', () => {
       kind: 'happier.workflow-progress.v1' as const, blockKind: 'step' as const,
       invocationPath: { blockId: 'step', scope: [] }, attempt: '0', logicalInvocationRecordId: 'invocation',
       execution: { kind: 'session' as const, sessionId, localInputId: 'local-1' },
+      workspace: { descriptor: { machineId: 'machine', directory: '/repo', checkoutRootPath: '/repo' } },
     };
     const observing = createDeferred<void>();
     let executionStarted = false;
@@ -106,7 +115,7 @@ describe('cancelSessionInput', () => {
       actionExecutor: { execute: async () => { throw new Error('Session recovery cannot invoke an Action'); } },
     });
     await expect(recover({ progress: invocation, terminalParent: false, cancellationRequested: true }))
-      .resolves.toEqual({ kind: 'unresolved', code: 'session-not-found' });
+      .resolves.toMatchObject({ kind: 'unresolved', code: 'session-not-found' });
 
     const controller = new AbortController();
     const execute = createWorkflowSessionStepExecutor({

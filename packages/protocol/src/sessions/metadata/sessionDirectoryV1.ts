@@ -12,7 +12,9 @@ export const SessionDirectoryV1ReadSchema = createStoredReadSchema(SessionDirect
 
 export function readSessionDirectoryKind(metadata: unknown): 'path' | 'managed' {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return 'path';
-  return SessionDirectoryV1ReadSchema.safeParse(
-    (metadata as Record<string, unknown>).sessionDirectoryV1,
-  ).success ? 'managed' : 'path';
+  const marker = (metadata as Record<string, unknown>).sessionDirectoryV1;
+  // Most Sessions have no managed-directory marker. Absence is already a
+  // complete classification and must not allocate a Zod failure per selector.
+  if (marker === null || marker === undefined) return 'path';
+  return SessionDirectoryV1ReadSchema.safeParse(marker).success ? 'managed' : 'path';
 }

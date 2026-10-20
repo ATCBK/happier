@@ -8,6 +8,9 @@ import { activatePluginRuntimeRegistry } from '@/plugins/runtime/lifecycle/manag
 import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
 
 import { buildPluginProjectionV2 } from './v2';
+import { readDeclaredConnectedAccountPurposeV1 } from '@happier-dev/protocol/connect/connectedAccountPurposeSelectionV1';
+import { projectLoadedPluginContributes } from '../resolvePluginContributions';
+import { createResolvedContributionRegistry } from '../createResolvedContributionRegistry';
 
 /**
  * UI-T28 — configuration reachability.
@@ -20,7 +23,7 @@ import { buildPluginProjectionV2 } from './v2';
  */
 const PLUGIN_ID = 'acme.tracker';
 
-function ingestManifest() {
+function ingestManifest(withPurpose = false) {
     const ingested = ingestCanonicalPluginManifest({
         schemaVersion: 2,
         id: PLUGIN_ID,
@@ -30,7 +33,12 @@ function ingestManifest() {
         runtime: { apiVersion: 1 },
         entrypoints: { daemon: './daemon.mjs' },
         activation: { events: [{ kind: 'startup' }] },
+        ...(withPurpose ? { hostAccess: { required: [{ id: 'tracker-api', capability: 'connectedAccounts', reason: 'Read tracker spaces',
+            scope: { serviceRefs: ['tracker-account'], operations: ['use'] } }], optional: [] } } : {}),
         contributes: {
+            ...(withPurpose ? { connectedAccountDescriptors: [{ id: 'tracker-account', title: 'Tracker account', authentication: {
+                defaultModeId: 'manual', modes: [{ id: 'manual', kind: 'manual', outcomeReconciliation: 'none', fields: [] }],
+            } }] } : {}),
             actions: [{
                 id: 'sync',
                 title: 'Sync',
@@ -39,6 +47,7 @@ function ingestManifest() {
                 execution: { target: 'daemon' },
                 placementBindings: ['primary'],
                 dangerLevel: 'safe',
+                ...(withPurpose ? { hostAccess: ['tracker-api'] } : {}),
             }],
         },
     }, { sourceProvenance: 'registryCustodied' });
@@ -124,6 +133,24 @@ function createContributes(manifest: ReturnType<typeof ingestManifest>): Resolve
 }
 
 describe('UI-T28 configuration reachability after a failed activation', () => {
+    it('projects a source discovery Action purpose through the same declaration reader as setup', () => {
+        const manifest = ingestManifest(true);
+        const registry = { ...createResolvedContributionRegistry(projectLoadedPluginContributes({ provenance: 'external', loadResult: {
+            diagnosticsByPluginId: {}, loadedPlugins: [{ pluginId: PLUGIN_ID, pluginRootPath: '/plugins/acme-tracker',
+                manifestPath: '/plugins/acme-tracker/happier.plugin.json', daemonEntryPath: '/plugins/acme-tracker/daemon.mjs',
+                devDaemonEntryPath: null, manifest,
+                sourceSpec: { kind: 'path', locator: '/plugins/acme-tracker', trustPolicy: 'local_trusted', installPolicy: 'link' },
+            }],
+        } })), occurrenceIdsByPluginId: { [PLUGIN_ID]: 'acme-tracker-occurrence-1' } };
+        const projection = PluginProjectionV2Schema.parse(buildPluginProjectionV2({ registry, generation: 4 }));
+        const purpose = { consumer: { pluginId: PLUGIN_ID, localId: 'sync' }, purpose: 'tracker-api' };
+        expect(readDeclaredConnectedAccountPurposeV1({ purpose, projection })).toEqual({
+            consumerKind: 'action', purpose: 'tracker-api', serviceRefs: [{ pluginId: PLUGIN_ID, localId: 'tracker-account' }],
+        });
+        expect(readDeclaredConnectedAccountPurposeV1({ purpose: { ...purpose, purpose: 'undeclared' }, projection })).toBeNull();
+        expect(readDeclaredConnectedAccountPurposeV1({ purpose, projection: { ...projection, actionsById: {} } })).toBeNull();
+    });
+
     it('keeps declared settings and Connected Account setup projected when activation throws', async () => {
         const manifest = ingestManifest();
         const contributes = createContributes(manifest);

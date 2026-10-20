@@ -292,9 +292,33 @@ export function resolveAdmittedPluginSettingsPage(params: Readonly<{
             && candidate.entry.pluginId === params.pluginId
             && candidate.pageId === params.pageId
         ));
-    return matches.length === 1
-        ? Object.freeze({ page: matches[0]!.entry, title: matches[0]!.title })
-        : null;
+    if (matches.length !== 1) return null;
+    const match = matches[0]!;
+    return Object.freeze({ page: match.entry, title: resolveSolePluginGroupTitle(params.projection, match, params.locale) ?? match.title });
+}
+
+/**
+ * A plugin group with one page is one destination named by its plugin ("Sentry", not its generic page
+ * title "PRs & Issues", which names a different page). The Settings row and the opened page (tab, header)
+ * both read this one rule.
+ */
+function resolveSolePluginGroupTitle(
+    projection: PluginUiProjectionModel,
+    candidate: PluginSettingsPageCandidate,
+    locale: string,
+): string | null {
+    const group = candidate.group;
+    if (group.kind !== 'plugin') return null;
+    const groups = Object.values(projection.settingsGroupsById)
+        .map((entry) => readPluginSettingsGroupCandidate({ entry, projection, locale }))
+        .filter((entry): entry is PluginSettingsGroupCandidate => entry !== null
+            && entry.pluginId === group.pluginId && entry.localId === group.localId);
+    if (groups.length !== 1) return null;
+    const pagesInGroup = Object.values(projection.settingsPagesById)
+        .map((entry) => readPluginSettingsPageCandidate({ entry, projection, locale }))
+        .filter((entry) => entry !== null && entry.group.kind === 'plugin'
+            && entry.group.pluginId === group.pluginId && entry.group.localId === group.localId);
+    return pagesInGroup.length === 1 ? groups[0]!.title : null;
 }
 
 /** A plugin row leads with the plugin's own mark; its declared icon stands in until the mark arrives. */

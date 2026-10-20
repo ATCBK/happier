@@ -1,12 +1,15 @@
+import { z } from 'zod/mini';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ActionApprovalRequestCreatedResult } from '@happier-dev/protocol/actions';
 import { EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES } from '@happier-dev/protocol/actions/externalActionLimits';
 import { EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES_V2, ExternalActionHttpErrorSchema, ExternalActionHttpErrorV1Schema, ExternalActionRequestIdV1Schema, ExternalActionTargetV1Schema, parseExternalActionResponseEnvelopeV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { parseSessionListQueryActionResultV1, SESSION_LIST_QUERY_UPDATE_REQUIRED_ERROR_CODE } from '@happier-dev/protocol/sessions/awareness/action';
-import { PUBLIC_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol/actions/actionSpecs';
+import { PUBLIC_ACTION_INPUT_SCHEMAS, PUBLIC_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol/actions/actionSpecs';
+import { readCompleteActionSpecV1, supportsSessionMessageInputJsonSchema } from '@happier-dev/protocol/actions/actionInputJsonSchemaValidation';
 import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import { sealExternalActionRequestV2, openExternalActionResponseV2 } from '@happier-dev/protocol/actions/externalActionEncryption';
 import { SessionListActionInputV1Schema } from '@happier-dev/protocol/actions/actionSpecs';
+import { projectExternalActionRunNowIdempotencyKeyV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { ACCOUNT_API_TOKEN_ENCRYPTION_ACCESS_HTTP_PATH_V1, ACCOUNT_API_TOKEN_CHILDREN_CREATE_HTTP_PATH_V1, ACCOUNT_API_TOKEN_CHILDREN_REVOKE_HTTP_PATH_V1, ACCOUNT_API_TOKEN_SELF_HTTP_PATH_V1, AccountApiTokenChildCreateRequestV1Schema, AccountApiTokenChildRevokeRequestV1Schema, AccountApiTokenSelfV1Schema, AccountApiTokensCreateActionOutputV1Schema, AccountApiTokensRevokeActionOutputV1Schema, AccountApiTokensServerErrorV1Schema } from '@happier-dev/protocol/auth/accountApiTokens';
 import type { AccountApiTokenChildCreateRequestV1, AccountApiTokenSelfV1, AccountApiTokensCreateActionOutputV1, AccountApiTokensRevokeActionOutputV1 } from '@happier-dev/protocol/auth/accountApiTokens';
 import { SessionIdSchema } from '@happier-dev/protocol/sessions/idsV1';
@@ -22,6 +25,7 @@ import { HappierActionError, HappierClientClosedError, HappierTransportError } f
 import { createSessionController } from './live/sessionController.js';
 import { createSessionContentEncryption, openSessionDataKey } from './live/openSessionDataKey.js';
 import { createEmbed, type HappierEmbed } from './fluent/embed.js';
+import { correspondenceOptions } from './fluent/boundActionCall.js';
 import type { HappierSessionLiveOptions } from './live/types.js';
 import {
   createMachineSessions,
@@ -326,7 +330,7 @@ export type HappierApiTokens = Readonly<{
   self: (options?: Readonly<{ signal?: AbortSignal }>) => Promise<AccountApiTokenSelfV1>;
 }>;
 
-const ChildTokenCreateInputSchema = AccountApiTokenChildCreateRequestV1Schema.omit({ tokenId: true });
+const ChildTokenCreateInputSchema = z.omit(AccountApiTokenChildCreateRequestV1Schema, { tokenId: true });
 
 export type HappierClient = Readonly<{
   actions: HappierActions;
@@ -581,16 +585,18 @@ function createClient(
     if (response.statusCode < 200 || response.statusCode >= 300) {
       // Protected clients expose only the Protocol's bounded error vocabulary,
       // never arbitrary server strings or response details containing content.
-      throw new HappierTransportError(`The Happier API returned HTTP ${response.statusCode}.`, {
-        code: transportErrorCode(
-          body,
-          params.protectedResponse || (params.protectedResponse === false && credential.encryption)
-            ? 'protected_action'
-            : credential.encryption
-              ? 'credential_bootstrap'
-              : 'ordinary',
-          params.requestId,
-        ),
+      const code = transportErrorCode(
+        body,
+        params.protectedResponse || (params.protectedResponse === false && credential.encryption)
+          ? 'protected_action'
+          : credential.encryption
+            ? 'credential_bootstrap'
+            : 'ordinary',
+        params.requestId,
+      );
+      throw new HappierTransportError(
+        `The Happier API returned HTTP ${response.statusCode}${code ? ` (${code})` : ''}.`, {
+        code,
         status: response.statusCode,
         ...(credential.encryption ? {} : { details: body }),
         requestId: params.requestId,
@@ -656,12 +662,32 @@ function createClient(
       ? SessionListActionInputV1Schema.parse(input)
       : undefined;
     const requestInput = sessionListInput ?? input;
+    const idempotencyKey = projectExternalActionRunNowIdempotencyKeyV1(actionId, requestInput);
     const requiresSessionListQueryProof = sessionListInput?.query !== undefined;
     const requestId = options.requestId === undefined
       ? (credential.encryption || MUTATING_PUBLIC_ACTION_IDS.has(actionId) ? globalThis.crypto.randomUUID() : undefined)
       : requireExternalActionRequestId(options.requestId);
+    const requiresReplySupport = requestInput !== null && typeof requestInput === 'object'
+      && 'reply' in requestInput && requestInput.reply !== undefined && requestInput.reply !== 'none';
+    const requiresStructuredInputSupport = requestInput !== null && typeof requestInput === 'object'
+      && 'structuredInput' in requestInput && requestInput.structuredInput !== undefined;
+    if (actionId === 'session.message.send' && (requiresReplySupport || requiresStructuredInputSupport)) {
+      const parsed = PUBLIC_ACTION_INPUT_SCHEMAS['session.message.send'].safeParse(requestInput);
+      if (!parsed.success) throw new HappierActionError('invalid_parameters', 'Invalid Session message input.', undefined, requestId);
+      // Discovery reaches the same endpoint and execution target as the send.
+      // A predecessor passthrough schema accepting an unknown field proves no
+      // support: its declared parser must reject an invalid value for that field.
+      const definition = await readCompleteActionSpecV1({
+        actionId: 'session.message.send', signal: options.signal,
+        read: async discoveryInput => await executeRequest('action.spec.get', discoveryInput,
+          correspondenceOptions(options), allowAfterClose, false),
+      });
+      const supported = supportsSessionMessageInputJsonSchema(definition.inputSchema, parsed.data);
+      if (!supported) throw new HappierActionError('unsupported', 'This endpoint does not support the requested Session message input.', undefined, requestId);
+    }
     const requestBody = {
       v: 1 as const,
+      ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
       ...(requestId === undefined ? {} : { requestId }),
       ...((options.target ?? defaultTarget) === undefined ? {} : { target: options.target ?? defaultTarget }),
       input: requestInput,

@@ -13,6 +13,7 @@ import { isE2eePasswordCredentialBoundToAccount } from "@/app/auth/password/e2ee
 import {
     acquireAccountSessionOwnerMetadataFenceInTx,
     AccountSessionOwnerMetadataFenceAccountNotFoundError,
+    type AccountAdmissionIntent,
 } from "@/app/encryption/accountSessionOwnerMetadataFence";
 import type { Tx } from "@/storage/inTx";
 import { publishAccountEncryptionCurrentnessAfterTx } from './accountEncryptionCurrentness';
@@ -39,9 +40,10 @@ export type AccountEncryptionTransitionFenceResult =
 export async function acquireAccountEncryptionTransitionFenceInTx(
     tx: Tx,
     accountId: string,
+    intent: AccountAdmissionIntent,
 ): Promise<AccountEncryptionTransitionFenceResult> {
     try {
-        await acquireAccountSessionOwnerMetadataFenceInTx(tx, accountId);
+        await acquireAccountSessionOwnerMetadataFenceInTx(tx, accountId, intent);
     } catch (error) {
         if (error instanceof AccountSessionOwnerMetadataFenceAccountNotFoundError) {
             return { status: "account_not_found" };
@@ -146,6 +148,11 @@ export async function applyAccountEncryptionTransitionInTx(
     const sourceMode = resolveEffectiveAccountEncryptionModeFromAccountRow(source);
     if (sourceMode.status === "inconsistent") {
         throw new Error("account_encryption_inconsistent");
+    }
+    // Every ingress, including the empty-only and staged paths, must leave
+    // independently owned resources in the target mode before the Account flips.
+    if (await tx.discussion.count({ where: { ownerAccountId: params.accountId, encryptionMode: { not: params.toMode } } }) > 0) {
+        throw new Error("discussion_encryption_transition_incomplete");
     }
     const currentCredential = source.AccountPasswordCredential;
     const replacement = params.passwordCredential;

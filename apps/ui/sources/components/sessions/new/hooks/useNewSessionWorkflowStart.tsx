@@ -2,9 +2,10 @@ import * as React from 'react';
 import { Pressable, View } from 'react-native';
 import type { JsonValue, RoleOverrideV1 } from '@happier-dev/protocol';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
-import { createExecutionRunStartContentChip } from '@/components/sessions/runs/launcher/executionRunStartChips';
+import { createWorkflowRunActionChip } from '@/components/sessions/agentInput/sessionActions/createWorkflowRunActionChip';
 import { WorkflowStartPicker, type WorkflowStartSelection } from '@/components/workflows/run/WorkflowStartPicker';
 import { WorkflowRunComposer, type WorkflowRunComposerProps } from '@/components/workflows/run/WorkflowRunComposer';
+import { findWorkflowMainInput } from '@/components/workflows/presentation/workflowBuiltinInputPresentation';
 import { useWorkflowRunNowController } from '@/components/workflows/run/useWorkflowRunNowController';
 import type { AgentInputExtraActionChip } from '@/components/sessions/agentInput/agentInputContracts';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -12,6 +13,7 @@ import { randomUUID } from '@/platform/randomUUID';
 import { t } from '@/text';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { createWorkflowRunRoute } from '@/sync/domains/workflows/workflowRunRoute';
 import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import type { NewSessionSimplePanelProps } from '../components/NewSessionSimplePanel';
@@ -21,6 +23,7 @@ export function useNewSessionWorkflowStart(params: Readonly<{ panelProps: NewSes
     const { panelProps: props, prompt } = params;
     const router = useRouter();
     const runNow = useWorkflowRunNowController();
+    const { clearRefusal } = runNow;
     const scope = useActiveServerAccountScope();
     const workflowDecision = useFeatureDecision('workflows', props.targetServerId
         ? { scopeKind: 'spawn', serverId: props.targetServerId } : { scopeKind: 'runtime' });
@@ -39,18 +42,18 @@ export function useNewSessionWorkflowStart(params: Readonly<{ panelProps: NewSes
     const pendingRunId = React.useRef<string | null>(null);
     const select = React.useCallback((next: WorkflowStartSelection) => {
         setSelection({ value: next, lifetime: captureActiveServerAccountScopeLifetime() });
-        setValues({}); setRawTextValues({}); pendingRunId.current = null;
-    }, []);
+        setValues({}); setRawTextValues({}); pendingRunId.current = null; clearRefusal();
+    }, [clearRefusal]);
     const remove = React.useCallback(() => {
-        setSelection(null); setValues({}); setRawTextValues({}); pendingRunId.current = null;
-    }, []);
+        setSelection(null); setValues({}); setRawTextValues({}); pendingRunId.current = null; clearRefusal();
+    }, [clearRefusal]);
     const chip = React.useMemo<AgentInputExtraActionChip>(() => {
-        const base = createExecutionRunStartContentChip({
-            key: 'workflow-start-definition', icon: 'git-branch', label: selection?.name ?? t('workflows.start.workflow'),
+        const base = createWorkflowRunActionChip({
+            label: selection?.name ?? t('workflows.start.workflow'),
             title: t('workflows.start.workflow'), testID: 'new-session-workflow-chip',
             renderContent: ({ requestClose, maxHeight }) => <WorkflowStartPicker onSelect={select} onRequestClose={requestClose} maxHeight={maxHeight} />,
         });
-        return { ...base, controlId: 'workflow', collapsedContentPopover: { ...base.collapsedContentPopover!, scrollEnabled: false },
+        return { ...base,
             render: (context) => <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 {base.render(context)}
                 {selection ? <Pressable testID="new-session-workflow-remove" accessibilityRole="button"
@@ -59,7 +62,7 @@ export function useNewSessionWorkflowStart(params: Readonly<{ panelProps: NewSes
                 </Pressable> : null}
             </View> };
     }, [remove, select, selection]);
-    const main = selection?.definition.inputs.find((input) => input.valueType === 'string');
+    const main = selection ? findWorkflowMainInput(selection.definition.inputs) : undefined;
     const changeRawTextValues = React.useCallback((next: Readonly<Record<string, string>>) => {
         if (main && next[main.name] !== undefined) props.setSessionPrompt(next[main.name]);
         setRawTextValues(next);
@@ -77,10 +80,12 @@ export function useNewSessionWorkflowStart(params: Readonly<{ panelProps: NewSes
             ...(roleOverrides === undefined ? {} : { roleOverrides: [...roleOverrides] }),
             project: { machineId: props.selectedMachineId, directory: props.selectedPath },
             isInvocationCurrent: () => lifetime.isCurrent() && selectionRef.current === selection,
+            // New keeps its start form in place and says why beside Start (lab T4-ST).
+            refusal: 'inline',
         });
         if (!admitted || !lifetime.isCurrent() || selectionRef.current !== selection) return;
         pendingRunId.current = null;
-        router.push({ pathname: '/workflows/runs/[runId]', params: { runId: admitted.run.id } } as never);
+        router.push(createWorkflowRunRoute(admitted.run.id, lifetime.scope.serverId) as never);
     }, [props.selectedMachineId, props.selectedPath, router, runNow, selection, targetIsCurrent, workflowDecision?.state]);
     const composer = selection === null ? null : <WorkflowRunComposer key={selection.id}
         surfaceGroup={params.surfaceGroup}
@@ -90,12 +95,13 @@ export function useNewSessionWorkflowStart(params: Readonly<{ panelProps: NewSes
             : selection.source.kind === 'catalog' ? { kind: 'workflow', workflow: selection.source.workflow } : undefined}
         onChangeValues={setValues} rawTextValues={main ? { ...rawTextValues, [main.name]: prompt } : rawTextValues}
         onChangeRawTextValues={changeRawTextValues} workflowName={selection.name} preview={selection.description}
-        workflowChip={chip} retainedText={main ? undefined : prompt} machineId={props.selectedMachineId}
+        workflowChip={chip} retainedText={main ? undefined : prompt} machineId={props.selectedMachineId} directory={props.selectedPath}
         serverId={props.targetServerId} onRun={(inputs, roleOverrides) => { void submit(inputs, roleOverrides); }} onCancel={remove}
         startDisabled={!props.selectedMachineId || !props.selectedPath || props.isCreating
             || !targetIsCurrent || workflowDecision?.state !== 'enabled'}
         pending={runNow.isPending(pendingRunId.current ?? '')}
         reconciling={runNow.stateFor(pendingRunId.current ?? '') === 'reconciling'}
+        startProblem={runNow.refusal?.message ?? null}
         authoringControls={{ machineName: props.machineName, machinePopover: props.machinePopover,
             currentPath: props.selectedPath, folderChipState: props.folderChipState,
             onRemoveFolder: props.onRemoveFolder, pathPopover: props.pathPopover }}

@@ -1,13 +1,10 @@
 import * as React from 'react';
-import { Platform } from 'react-native';
-import { useUnistyles } from 'react-native-unistyles';
-import { PluginUiHostPresentationScope, type PluginUiPresentationHost } from '@happier-dev/plugin-ui/advanced';
-import { projectHappierUiEnvironment } from '@happier-dev/plugin-ui/environment';
+import { View } from 'react-native';
+import { HAPPIER_PAGE_METRICS, HappierColumnEdgeContext, useHappierPageSection } from '@happier-dev/plugin-ui/presentation';
 
-import { usePluginSurfaceEnvironment } from '@/components/plugins/surfaces/pluginSurfaceContext';
-import { resolvePluginUiFrameworkTranslations } from '@/components/plugins/surfaces/pluginUiFrameworkTranslations';
-import { createPluginUiPrivatePresentationHost } from '@/components/plugins/surfaces/pluginUiPrivatePresentationHost';
-import { projectPluginUiHostPalette } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { CorePluginUiPresentationScope } from '@/components/plugins/surfaces/CorePluginUiPresentationScope';
+import { BareRowBleedContext, useBareRowBleedPx } from '@/components/ui/lists/bareRowBleed';
+import { useListPresentation, usePageListInsets } from '@/components/ui/lists/listPresentation';
 
 /**
  * Happier core's binding of the public `Collection` on a core page: the environment, host renderers and facts a
@@ -22,23 +19,27 @@ export const CoreCollectionScope = React.memo(function CoreCollectionScope(props
     renderPageScroller?: (children: React.ReactNode) => React.ReactNode;
     children: React.ReactNode;
 }>) {
-    const { theme } = useUnistyles();
-    const surface = usePluginSurfaceEnvironment(Platform.OS);
-    const environment = React.useMemo(
-        () => projectHappierUiEnvironment({ ...surface, translations: resolvePluginUiFrameworkTranslations() }),
-        [surface],
-    );
-    const { renderPageScroller } = props;
-    const presentationHost = React.useMemo((): PluginUiPresentationHost => ({
-        ...createPluginUiPrivatePresentationHost(undefined, {
-            direction: surface.direction,
-            palette: projectPluginUiHostPalette(theme),
-        }),
-        ...(renderPageScroller === undefined ? {} : { renderPageScroller }),
-    }) as unknown as PluginUiPresentationHost, [renderPageScroller, surface.direction, theme]);
-    return (
-        <PluginUiHostPresentationScope environment={environment} presentationHost={presentationHost}>
+    // Mounted on a core page's column, the page's own sections already sit on the sheet edge (the Collection a
+    // page scroller opens starts its own presentation scope, so it is not here). Public sections inside add no
+    // second inset; the column edge is told once, here, instead of each consumer cancelling it. Inside a sheet's
+    // row (an expanded row's body) there is no column edge: its content draws its own.
+    const inSheet = useHappierPageSection() !== null;
+    const onPageColumn = useListPresentation() === 'page' && usePageListInsets() === 'standard' && !inSheet;
+    const inner = (
+        <CorePluginUiPresentationScope renderPageScroller={props.renderPageScroller}>
             {props.children}
-        </PluginUiHostPresentationScope>
+        </CorePluginUiPresentationScope>
     );
+    const scope = onPageColumn
+        ? <HappierColumnEdgeContext.Provider value={HAPPIER_PAGE_METRICS.sheetInsetPx}>{inner}</HappierColumnEdgeContext.Provider>
+        : inner;
+    // A Collection owns its edge on the page (its sheet inset, its resting list on the page's edges). A bare
+    // section's bleed is for its own rows, so a Collection inside one gets the inset back like any free content,
+    // and the sections it draws in its header start unbled.
+    const bleedPx = useBareRowBleedPx();
+    return bleedPx > 0 ? (
+        <BareRowBleedContext.Provider value={0}>
+            <View style={{ paddingHorizontal: bleedPx }}>{scope}</View>
+        </BareRowBleedContext.Provider>
+    ) : scope;
 });

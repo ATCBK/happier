@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
+import * as linkedSessionMetadata from '@happier-dev/protocol/sessions/external/linked-metadata';
+import { readExternalSessionLink } from '@/sync/domains/session/external/readExternalSessionLink';
 
 import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
@@ -420,6 +422,10 @@ describe('session list row subscription cost across three Homes', () => {
                     id: sessionId,
                     seq: index,
                     latestTurnStatus: 'in_progress',
+                    metadata: { path: '/repo', host: 'localhost', externalSessionV1: {
+                        v: 1, agentId: 'codex', machineId: `machine-${home}`, remoteSessionId: sessionId,
+                        source: { kind: 'codexHome', home: 'user' },
+                    } },
                 });
                 membership.push(sessionId);
                 addresses.push({ serverId, sessionId });
@@ -435,12 +441,14 @@ describe('session list row subscription cost across three Homes', () => {
         const { rowsByServerId, membershipByServerId, addresses } = buildMeasurementCorpus();
         const renderCounts = new Map<string, number>();
         const latestProjection = new Map<string, SessionListRenderableSession | null>();
+        const parse = vi.spyOn(linkedSessionMetadata, 'readNonAuthoritativeLinkedExternalSessionV1FromMetadata');
 
         function MeasuredRow(props: Readonly<{ serverId: string; sessionId: string }>) {
             const projected = useSessionListRenderableWithServerScope(props.serverId, props.sessionId);
             const key = qualifiedRowKey(props.serverId, props.sessionId);
             renderCounts.set(key, (renderCounts.get(key) ?? 0) + 1);
             latestProjection.set(key, projected);
+            expect(readExternalSessionLink(projected?.metadata)?.remoteSessionId).toBe(props.sessionId);
             return null;
         }
         const expectedIdByKey = new Map(
@@ -481,6 +489,24 @@ describe('session list row subscription cost across three Homes', () => {
             expect(addresses).toHaveLength(HOME_COUNT * ROWS_PER_HOME);
             expect(renderCounts.size).toBe(addresses.length);
             expect([...renderCounts.values()].every((count) => count === 1)).toBe(true);
+            const initialParses = parse.mock.calls.length;
+            expect(initialParses).toBe(addresses.length);
+
+            let unchangedPublications = 0;
+            const stopUnchanged = storage.subscribe(() => { unchangedPublications += 1; });
+            try {
+                await act(async () => {
+                    for (const [serverId, rows] of Object.entries(rowsByServerId)) {
+                        storage.getState().applyServerScopedSessionListRows(serverId,
+                            Object.values(rows).map((row) => ({ ...row })),
+                            { source: 'rowOnly', mode: 'append' });
+                    }
+                });
+            } finally {
+                stopUnchanged();
+            }
+            expect(unchangedPublications).toBe(0);
+            expect([...renderCounts.values()].every((count) => count === 1)).toBe(true);
 
             const target = addresses[HOME_COUNT * ROWS_PER_HOME - 20];
             const targetKey = qualifiedRowKey(target.serverId, target.sessionId);
@@ -490,20 +516,11 @@ describe('session list row subscription cost across three Homes', () => {
 
             const patchStartedAt = performance.now();
             await act(async () => {
-                storage.setState((state) => ({
-                    ...state,
-                    sessionListRowsByServerId: {
-                        ...state.sessionListRowsByServerId,
-                        [target.serverId]: {
-                            ...state.sessionListRowsByServerId[target.serverId],
-                            [target.sessionId]: {
-                                ...rowsByServerId[target.serverId][target.sessionId],
-                                latestTurnStatus: 'completed',
-                                hasUnreadMessages: false,
-                            },
-                        },
-                    },
-                }));
+                storage.getState().applyServerScopedSessionListRows(target.serverId, [{
+                    ...rowsByServerId[target.serverId][target.sessionId],
+                    latestTurnStatus: 'completed',
+                    hasUnreadMessages: false,
+                }], { source: 'rowOnly', mode: 'append' });
             });
             const singlePatchMs = performance.now() - patchStartedAt;
 
@@ -546,6 +563,7 @@ describe('session list row subscription cost across three Homes', () => {
             const rerenderedAfterRapidChanges = [...unrelatedProjectionsBefore.keys()]
                 .filter((key) => renderCounts.get(key) !== 1);
             expect(rerenderedAfterRapidChanges).toEqual([]);
+            expect(parse).toHaveBeenCalledTimes(initialParses);
 
             const totalRowRenders = [...renderCounts.values()].reduce((sum, count) => sum + count, 0);
             console.info([
@@ -558,6 +576,7 @@ describe('session list row subscription cost across three Homes', () => {
                 `platform ${process.platform}/${process.arch}`,
             ].join(', '));
         } finally {
+            parse.mockRestore();
             if (tree) {
                 const mounted = tree as renderer.ReactTestRenderer;
                 await act(async () => {

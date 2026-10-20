@@ -12,6 +12,10 @@ import { storage } from '@/sync/domains/state/storage';
 import { ChangedFilesReviewFindButton, ChangedFilesReviewFindCount, ChangedFilesReviewFindSurface } from './ChangedFilesReviewFind';
 import { createChangedFilesReviewFind, type ReviewFindTarget } from './useChangedFilesReviewFind';
 import { createChangedFilesReviewDiffStateSource } from './ChangedFilesReviewDiffStore';
+import { ChangedFilesReviewDiffBlock } from './ChangedFilesReviewDiffBlock';
+import { useUnistyles } from 'react-native-unistyles';
+import { executeFindAction } from '@/keyboard/findActionRuntime';
+import { UiFindOutputSchema } from '@happier-dev/protocol/actions/findActionSpecs';
 
 // Focus, keyboard propagation and toolbar activation require the actual RNW DOM boundary.
 vi.mock('react-native', async () => await import('react-native-web'));
@@ -20,6 +24,61 @@ const patch = '@@ -1 +1 @@\n-needle needle\n+needle';
 const lines = buildCodeLinesFromUnifiedDiff({ unifiedDiff: patch, hideFilePrelude: true });
 
 describe('mounted review Find', () => {
+    it('refolds a revealed context match through the Action and button without changing Find or preferences', async () => {
+        const settings = storage.getState().settings;
+        storage.setState({ settings: { ...settings, filesDiffFoldingEnabled: true,
+            filesDiffFoldingContextThreshold: 4, filesDiffFoldingContextRadius: 1, filesDiffRendererMode: 'happier' } });
+        const container = document.createElement('div'); document.body.appendChild(container);
+        const root = createRoot(container);
+        const source = createChangedFilesReviewDiffStateSource();
+        const diff = ['@@ -1,11 +1,11 @@', ...Array.from({ length: 10 }, (_, index) => ` context ${index}`), '-old', '+new'].join('\n');
+        source.setDiffState('a.ts', { status: 'loaded', diff, error: null });
+        const model = createChangedFilesReviewFind();
+        function Review() {
+            const { theme } = useUnistyles();
+            const surfaceRef = React.useRef<View | null>(null);
+            const [target, reveal] = React.useState<ReviewFindTarget | null>(null);
+            const snapshot = React.useSyncExternalStore(model.subscribe, model.getSnapshot);
+            React.useEffect(() => model.connect({ paths: ['a.ts'], diffStateSource: source, reveal }), []);
+            return <View ref={surfaceRef}>
+                <ChangedFilesReviewDiffBlock theme={theme} sessionId="s1" snapshotSignature={null} filePath="a.ts"
+                    diffStateSource={source} reviewCommentsEnabled={false} reviewCommentDrafts={[]}
+                    findModel={model} findActive={snapshot.open} scrollToLineId={target?.lineId} />
+                <ChangedFilesReviewFindSurface model={model} surfaceId="review:refold" surfaceRef={surfaceRef} presented />
+            </View>;
+        }
+        const execute = (op: 'read' | 'refold' | 'step') => executeFindAction({ actionId: 'ui.find',
+            input: { op, target: 'review:refold', ...(op === 'step' ? { direction: 1 } : {}) }, context: { surface: 'agent' } });
+        try {
+            await act(async () => { root.render(<KeyboardShortcutProvider handlers={{}}>
+                <PluginSurfaceFocusEligibilityProvider active><Review /></PluginSurfaceFocusEligibilityProvider>
+            </KeyboardShortcutProvider>); });
+            await act(async () => { model.open(); model.setOptions({ regex: true, matchCase: false }); model.setQuery('context [56]'); });
+            const mark = () => container.querySelector('[data-testid="find-match-current"]');
+            const markedText = () => Array.from(container.querySelectorAll('[data-testid="find-match-current"]')).map(node => node.textContent).join('');
+            expect(markedText()).toBe('context 5');
+            const before = await execute('read');
+            let result: Awaited<ReturnType<typeof execute>> | undefined;
+            await act(async () => { result = await execute('refold'); });
+            expect(UiFindOutputSchema.safeParse(result?.ok ? result.result : null).success).toBe(true);
+            expect(result).toEqual(before);
+            expect(mark()).toBeNull();
+            expect(container.querySelector('[data-testid="diff-find-fold-again"]')).toBeNull();
+            expect(model.query).toBe('context [56]');
+            expect(model.getSnapshot().open).toBe(true);
+            expect(model.getFileSnapshot('a.ts').ranges.size).toBe(2);
+            await act(async () => { await execute('step'); });
+            expect(markedText()).toBe('context 6');
+            const afterStep = await execute('read');
+            await act(async () => { container.querySelector<HTMLElement>('[data-testid="diff-find-fold-again"]')!.click(); });
+            expect(mark()).toBeNull();
+            expect(await execute('read')).toEqual(afterStep);
+            expect(await execute('refold')).toEqual({ ok: true, result: { status: 'unavailable', reason: 'noRevealedFold' } });
+            expect(storage.getState().settings.filesDiffFoldingEnabled).toBe(true);
+            expect(storage.getState().settings.filesDiffFoldingContextThreshold).toBe(4);
+            expect(storage.getState().settings.filesDiffFoldingContextRadius).toBe(1);
+        } finally { await act(async () => { root.unmount(); }); container.remove(); storage.setState({ settings }); }
+    });
     it.each(['binary', 'unreadable'] as const)('explains incomplete zero-hit results from a %s file', async (kind) => {
         const container = document.createElement('div'); document.body.appendChild(container);
         const root = createRoot(container);

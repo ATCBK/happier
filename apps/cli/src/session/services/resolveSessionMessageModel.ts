@@ -4,7 +4,7 @@ import {
 } from '@happier-dev/agents';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import type { ModelSelectionApplyPolicy, SessionModelSelectionV1 } from '@happier-dev/protocol';
-import { ProviderBoundModelRefSchema, SessionModelSelectionResolutionError, SessionModelSelectionV1Schema } from '@happier-dev/protocol/providers/model-selection';
+import { isNativeAutomaticModelSelectionInputV1, ProviderBoundModelRefSchema, SessionModelSelectionResolutionError, SessionModelSelectionV1Schema } from '@happier-dev/protocol/providers/model-selection';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
 
 import { resolveBackendTargetFromSessionMetadata } from '@/session/backendTargets/resolveBackendTargetFromSessionMetadata';
@@ -48,6 +48,13 @@ export function resolveSessionMessageModel(params: Readonly<{
     && params.modelSelectionInput === undefined
     && params.legacyModelOverride === undefined
   ) {
+    return { modelId: '', selection: null };
+  }
+  // Every sender shares the native reset semantics before ambient Provider
+  // completion. A reset has no per-message structured ref; an explicitly named
+  // Provider can still publish a literal model called `default`.
+  if (params.modelSelectionInput !== undefined
+    && isNativeAutomaticModelSelectionInputV1(params.modelSelectionInput)) {
     return { modelId: '', selection: null };
   }
   const backendTarget = resolveBackendTargetFromSessionMetadata(metadata);
@@ -99,7 +106,7 @@ export function resolveSessionMessageModel(params: Readonly<{
 
   if (params.legacyModelOverride !== undefined) {
     const modelId = params.legacyModelOverride?.trim() ?? '';
-    return { modelId: modelId === 'default' ? '' : modelId, selection: null };
+    return { modelId: isNativeAutomaticModelSelectionInputV1({ modelId }) ? '' : modelId, selection: null };
   }
 
   if (!agentTargetKey) {

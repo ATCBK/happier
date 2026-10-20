@@ -13,6 +13,7 @@ import {
   TriageSourceAdministrationActionInputV1Schema,
   TriageSourceAdministrationActionResultV1Schema,
   TriagePullRequestStatusResultV1Schema,
+  TriageTaskWriteResultV1Schema,
 } from '@happier-dev/triage-protocol/v1';
 
 import { createTriageAdministerSourceInstanceActionHandler } from './actions/administerSourceInstanceAction.js';
@@ -29,6 +30,15 @@ import {
 } from './actions/entryDetailProtocol.js';
 
 import { createTriageListEntriesActionHandler } from './actions/listEntries.js';
+import { createTriageCreateTaskActionHandler, createTriageEditTaskActionHandler, createTriageTransitionTaskActionHandler } from './actions/tasks.js';
+import {
+  TRIAGE_TASKS_LIST_ACTION_LOCAL_ID_V1, TRIAGE_TASKS_CREATE_ACTION_LOCAL_ID_V1,
+  TRIAGE_TASKS_EDIT_ACTION_LOCAL_ID_V1, TRIAGE_TASKS_TRANSITION_ACTION_LOCAL_ID_V1,
+  TRIAGE_TASKS_LINK_ACTION_LOCAL_ID_V1,
+  TRIAGE_TASKS_OPEN_CREATE_ACTION_LOCAL_ID_V1, TriageTaskDraftV1Schema,
+  TriageCreateTaskActionInputV1Schema, TriageEditTaskActionInputV1Schema,
+  TriageTransitionTaskActionInputV1Schema,
+} from './actions/tasksProtocol.js';
 import { TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1, TriageMountedUiInputV1Schema, TriageMountedUiResultV1Schema, TriageMountedSourceRevealInputV1Schema, TriageMountedSourceInsertInputV1Schema } from './actions/mountedUiProtocol.js';
 import { TRIAGE_SOURCE_PANEL_REVEAL_ACTION_V1, TRIAGE_SOURCE_PANEL_INSERT_ACTION_V1 } from '@happier-dev/triage-sources/runtime';
 import {
@@ -89,11 +99,14 @@ import {
   TriageUnlinkEntryFromSessionActionInputV1Schema,
   TriageUnlinkEntryFromSessionActionResultV1Schema,
 } from './actions/entrySessionProtocol.js';
-import { createTriageLinkEntryToSessionActionHandler } from './actions/sessionLinks.js';
+import { createTriageLinkEntryToSessionActionHandler, createTriageReadSourceSessionLinksActionHandler } from './actions/sessionLinks.js';
 import {
   TRIAGE_LINK_ENTRY_TO_SESSION_ACTION_LOCAL_ID_V1,
   TriageLinkEntryToSessionActionResultV1Schema,
   TriageLinkEntryToSessionInputV1Schema,
+  TRIAGE_READ_SOURCE_SESSION_LINKS_ACTION_LOCAL_ID_V1,
+  TriageReadSourceSessionLinksInputV1Schema,
+  TriageReadSourceSessionLinksResultV1Schema,
 } from './actions/sessionLinksProtocol.js';
 import {
   createTriageAdministerActionActionHandler,
@@ -125,7 +138,7 @@ import {
   TRIAGE_ENTRY_ATTACHMENT_LOCAL_ID_V1,
   TriageComposerEntryAttachmentValueV1Schema,
 } from './composer/attachmentValue.js';
-import { TRIAGE_APP_PAGE_LOCAL_ID_V1 } from './composer/openEntryDetails.js';
+import { TRIAGE_APP_PAGE_LOCAL_ID_V1, TRIAGE_TASKS_PAGE_LOCAL_ID_V1 } from './composer/openEntryDetails.js';
 import {
   CORPUS_SESSION_LINKS_COLLECTION,
   CORPUS_SOURCE_INSTANCES_COLLECTION,
@@ -147,6 +160,7 @@ import {
 } from './ui/list/entryDragDrop.js';
 import { TRIAGE_UI_TRANSLATION_BUNDLES } from './ui/translations.js';
 import { PLUGIN_TARGETED_CONTRIBUTION_POINT_DEFINITIONS } from './targetedContributions.js';
+import { INTERNAL_TASK_ACTIONS_V1, INTERNAL_TASK_CONTRIBUTION_V1 } from './internalTasks/contribution.js';
 import { ScmComparisonSourceProtocolSchema } from '@happier-dev/plugin-sdk/scm';
 
 export { TRIAGE_DISPLAY_NAME };
@@ -169,7 +183,7 @@ function createTriagePlugin() {
   return definePlugin({
     id: TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1,
     version: '0.0.0',
-    displayName: TRIAGE_DISPLAY_NAME,
+    displayName: 'PRs, Issues & Tasks',
     description: 'Aggregates pull requests, issues and error groups from configured sources into one reviewable surface.',
     brand: { iconResourceId: 'brand-icon', monochrome: true },
     resources: {
@@ -197,6 +211,7 @@ function createTriagePlugin() {
       optional: [],
     },
     contributionPoints: PLUGIN_TARGETED_CONTRIBUTION_POINT_DEFINITIONS,
+    contributesTo: { 'happier.triage': { sources: { internal: INTERNAL_TASK_CONTRIBUTION_V1 } } },
     accountCollections: {
       [CORPUS_SOURCE_INSTANCES_COLLECTION_ID]: CORPUS_SOURCE_INSTANCES_COLLECTION,
       [CORPUS_SESSION_LINKS_COLLECTION_ID]: CORPUS_SESSION_LINKS_COLLECTION,
@@ -221,6 +236,69 @@ function createTriagePlugin() {
       },
     },
     actions: {
+      ...INTERNAL_TASK_ACTIONS_V1,
+      [TRIAGE_TASKS_LIST_ACTION_LOCAL_ID_V1]: {
+        title: 'List tasks',
+        description: 'Reads the current task kinds from configured sources through the shared list window.',
+        surfaces: ['ui', 'voice', 'agent', 'mcp', 'cli'], placementBindings: [],
+        inputSchema: TriageListEntriesInputV1Schema,
+        resultSchema: TriageListEntriesResultV1Schema,
+        hostAccess: ['account-storage'],
+        run: createTriageListEntriesActionHandler({ taskOnly: true }),
+      },
+      [TRIAGE_TASKS_CREATE_ACTION_LOCAL_ID_V1]: {
+        title: 'Create a task',
+        description: 'Creates a task at the selected configured source using its declared create Action.',
+        surfaces: ['ui', 'voice', 'agent', 'mcp', 'cli'], placementBindings: [],
+        dangerLevel: 'writesRemote',
+        confirmation: { title: 'Create this task?', body: 'This creates a task in the selected source.', confirmLabel: 'Create task' },
+        inputSchema: TriageCreateTaskActionInputV1Schema,
+        resultSchema: TriageTaskWriteResultV1Schema,
+        hostAccess: ['account-storage'],
+        run: createTriageCreateTaskActionHandler(),
+      },
+      [TRIAGE_TASKS_OPEN_CREATE_ACTION_LOCAL_ID_V1]: {
+        title: { key: 'plugins.triage.tasks.create', fallback: 'Create task' },
+        description: 'Choose where the task belongs, then review and create it.',
+        slash: { tokens: ['/task'] }, surfaces: ['ui', 'voice', 'agent', 'mcp', 'cli'],
+        scopes: ['global', 'message'],
+        placementBindings: ['composer.slash', 'commandPalette', 'message.menu'],
+        execution: { target: 'client', client: { artifactId: 'triage-mounted-ui-action-native', exportName: 'activate' }, platforms: ['web', 'ios', 'android'] },
+        inputSchema: TriageTaskDraftV1Schema, resultSchema: TriageMountedUiResultV1Schema,
+      },
+      [TRIAGE_TASKS_EDIT_ACTION_LOCAL_ID_V1]: {
+        title: 'Edit a task',
+        description: 'Edits supported task fields through the selected source’s declared edit Action.',
+        surfaces: ['ui', 'voice', 'agent', 'mcp', 'cli'], placementBindings: [],
+        dangerLevel: 'writesRemote',
+        confirmation: { title: 'Save these task changes?', body: 'This changes the task in its source.', confirmLabel: 'Save changes' },
+        inputSchema: TriageEditTaskActionInputV1Schema,
+        resultSchema: TriageTaskWriteResultV1Schema,
+        hostAccess: ['account-storage'],
+        run: createTriageEditTaskActionHandler(),
+      },
+      [TRIAGE_TASKS_TRANSITION_ACTION_LOCAL_ID_V1]: {
+        title: 'Change a task’s status',
+        description: 'Applies a provider-native task transition through the selected source’s declared Action.',
+        surfaces: ['ui', 'voice', 'agent', 'mcp', 'cli'], placementBindings: [],
+        dangerLevel: 'writesRemote',
+        confirmation: { title: 'Change this task’s status?', body: 'This applies the selected status transition in its source.', confirmLabel: 'Change status' },
+        inputSchema: TriageTransitionTaskActionInputV1Schema,
+        resultSchema: TriageTaskWriteResultV1Schema,
+        hostAccess: ['account-storage'],
+        run: createTriageTransitionTaskActionHandler(),
+      },
+      [TRIAGE_TASKS_LINK_ACTION_LOCAL_ID_V1]: {
+        title: 'Link a task to a session',
+        description: 'Records task work through the existing entry-to-session relation owner.',
+        surfaces: ['ui', 'voice', 'agent', 'mcp', 'cli'], placementBindings: [],
+        dangerLevel: 'writesLocal',
+        confirmation: { title: 'Link this task to the session?', body: 'This records the task as work for the selected session in this Happier Account.', confirmLabel: 'Link task' },
+        inputSchema: TriageLinkEntryToSessionInputV1Schema,
+        resultSchema: TriageLinkEntryToSessionActionResultV1Schema,
+        hostAccess: ['account-storage'],
+        run: createTriageLinkEntryToSessionActionHandler(),
+      },
       [TRIAGE_SOURCE_PANEL_REVEAL_ACTION_V1]: {
         title: 'Reveal selected occurrence user details',
         description: 'Reveals user details already read by the addressed active source panel. Concealment uses the ordinary mounted Action.',
@@ -229,7 +307,7 @@ function createTriagePlugin() {
           title: { key: 'plugins.triage.sourcePanel.revealTitle', fallback: 'Show event user details' },
           body: { key: 'plugins.triage.sourcePanel.revealConfirmation', fallback: 'Event user details may include names, email addresses and IP addresses.' },
         },
-        execution: { target: 'client', client: { artifactId: 'triage-mounted-ui-action-native', exportName: 'createTriageMountedSourceRevealActionHandler' }, platforms: ['web', 'ios', 'android'] },
+        execution: { target: 'client', client: { artifactId: 'triage-mounted-ui-action-native', exportName: 'activate' }, platforms: ['web', 'ios', 'android'] },
         inputSchema: TriageMountedSourceRevealInputV1Schema, resultSchema: TriageMountedUiResultV1Schema,
       },
       [TRIAGE_SOURCE_PANEL_INSERT_ACTION_V1]: {
@@ -240,7 +318,7 @@ function createTriagePlugin() {
           title: { key: 'plugins.triage.sourcePanel.insertTitle', fallback: 'Add selected occurrence to message' },
           body: { key: 'plugins.triage.sourcePanel.insertConfirmation', fallback: 'The selected occurrence will be attached to this message. Its title, stack frames, source context, breadcrumbs and allowed tags may be sent to the agent when you send the message. User fields, frame local variables and raw request data are excluded.' },
         },
-        execution: { target: 'client', client: { artifactId: 'triage-mounted-ui-action-native', exportName: 'createTriageMountedSourceInsertActionHandler' }, platforms: ['web', 'ios', 'android'] },
+        execution: { target: 'client', client: { artifactId: 'triage-mounted-ui-action-native', exportName: 'activate' }, platforms: ['web', 'ios', 'android'] },
         inputSchema: TriageMountedSourceInsertInputV1Schema, resultSchema: TriageMountedUiResultV1Schema,
       },
       [TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1]: {
@@ -249,7 +327,7 @@ function createTriagePlugin() {
         description: 'Control the addressed mounted page, including detail, tabs, linked-session selection/paging, views, lenses, bulk selection, refresh, entry/pin paging and active source occurrence selection/ordering/paging. On an addressed entry picker, attach or remove an entry from its exact Composer draft without sending. Read current UI context for its mountId and available commands. Sensitive reveal and insertion use their separate named Actions.',
         surfaces: ['ui', 'voice', 'agent', 'mcp', 'cli'],
         placementBindings: [],
-        execution: { target: 'client', client: { artifactId: 'triage-mounted-ui-action-native', exportName: 'createTriageMountedUiActionHandler' }, platforms: ['web', 'ios', 'android'] },
+        execution: { target: 'client', client: { artifactId: 'triage-mounted-ui-action-native', exportName: 'activate' }, platforms: ['web', 'ios', 'android'] },
         inputSchema: TriageMountedUiInputV1Schema,
         resultSchema: TriageMountedUiResultV1Schema,
       },
@@ -286,7 +364,7 @@ function createTriagePlugin() {
           target: 'client',
           client: {
             artifactId: 'triage-search-action-native',
-            exportName: 'createTriageSearchEntriesActionHandler',
+            exportName: 'activate',
           },
           platforms: ['web', 'ios', 'android'],
         },
@@ -365,6 +443,15 @@ function createTriagePlugin() {
         hostAccess: ['account-storage'],
         run: createTriageLinkEntryToSessionActionHandler(),
       },
+      [TRIAGE_READ_SOURCE_SESSION_LINKS_ACTION_LOCAL_ID_V1]: {
+        title: 'Read source session links',
+        description: 'Reads relationships owned by configured sources for the selected session.',
+        surfaces: ['ui', 'agent', 'mcp', 'cli'], placementBindings: [],
+        inputSchema: TriageReadSourceSessionLinksInputV1Schema,
+        resultSchema: TriageReadSourceSessionLinksResultV1Schema,
+        hostAccess: ['account-storage'],
+        run: createTriageReadSourceSessionLinksActionHandler(),
+      },
       [TRIAGE_START_ENTRY_SESSION_ACTION_LOCAL_ID_V1]: {
         title: 'Start a session on an entry',
         description: 'Creates or rejoins one session for a pull request, issue or error group, records the link, and opens it.',
@@ -417,7 +504,7 @@ function createTriagePlugin() {
         resultSchema: TriageRunConfiguredActionResultV1Schema,
         execution: {
           target: 'client',
-          client: { artifactId: 'triage-configured-action-native', exportName: 'createTriageRunConfiguredActionHandler' },
+          client: { artifactId: 'triage-configured-action-native', exportName: 'activate' },
           platforms: ['web', 'ios', 'android'],
         },
       },
@@ -591,6 +678,9 @@ function createTriagePlugin() {
      */
     ui: {
       translations: TRIAGE_UI_TRANSLATION_BUNDLES,
+      settingsGroups: [{ id: 'internal-tasks-group', title: 'Tasks', icon: 'settings', defaultRank: 40 }],
+      settingsPages: [{ id: 'internal-tasks', group: { kind: 'plugin', localId: 'internal-tasks-group' }, title: 'Happier tasks',
+        subtitle: 'Keep personal work in your Happier Account.', keywords: ['tasks', 'personal'], icon: 'settings', defaultRank: 10, renderer: 'internal-task-settings' }],
       views: [{
         // The one full-page destination. `View details` in the Composer picker
         // opens exactly this local id, which is why the constant is imported
@@ -599,9 +689,17 @@ function createTriagePlugin() {
         container: 'appPage',
         target: { kind: 'app' },
         renderer: 'list-page',
+        // The list page's Collection toolbar leads with the page's name; the host's loading identity says it the same way.
+        headerStyle: 'toolbar',
         title: TRIAGE_DISPLAY_NAME,
         icon: 'change-open',
         placement: { kind: 'rail' },
+      }, {
+        id: TRIAGE_TASKS_PAGE_LOCAL_ID_V1,
+        container: 'appPage', target: { kind: 'app' }, renderer: 'tasks-page', headerStyle: 'toolbar',
+        title: { key: 'plugins.triage.tasks.title', fallback: 'Tasks' },
+        description: { key: 'plugins.triage.tasks.description', fallback: 'Your work, and the agents working with you.' },
+        icon: 'list', placement: { kind: 'rail' },
       }, { sizeDeclaration: { sizes: ['small', 'medium', 'wide', 'full', 'tall', 'large'], defaultSize: 'medium' },
         id: 'latest',
         container: 'widget',
@@ -610,6 +708,11 @@ function createTriagePlugin() {
         title: { key: 'plugins.triage.widget.latest', fallback: 'New in PRs & Issues' },
         icon: 'change-open',
         home: { default: 'shown' },
+      }, {
+        id: 'my-tasks', container: 'widget', target: { kind: 'app' }, renderer: 'tasks-widget',
+        title: { key: 'plugins.triage.tasks.myTasks', fallback: 'My tasks' }, icon: 'list',
+        sizeDeclaration: { sizes: ['small', 'medium', 'wide', 'full', 'tall', 'large'], defaultSize: 'medium' },
+        home: { default: 'available' },
       }, {
         // One Session-targeted contribution, mounted by the incumbent
         // right-sidebar Registry entry. Triage declares no mobile view, cockpit
@@ -623,6 +726,16 @@ function createTriagePlugin() {
         icon: 'change-open',
       }],
       renderers: [{
+        id: 'internal-task-detail', kind: 'reactNative', artifact: 'triage-internal-task-detail-native', requiredHostMethods: ['executeAction'],
+      }, {
+        id: 'internal-task-settings', kind: 'reactNative', artifact: 'triage-internal-task-settings-native', requiredHostMethods: ['executeAction'],
+      }, {
+        id: 'tasks-page', kind: 'reactNative', artifact: 'triage-tasks-page-native',
+        requiredHostMethods: ['executeAction', 'publishCurrentUiContext'],
+      }, {
+        id: 'tasks-widget', kind: 'reactNative', artifact: 'triage-tasks-widget-native',
+        requiredHostMethods: ['executeAction', 'openSurface'],
+      }, {
         id: 'list-page',
         kind: 'reactNative',
         artifact: 'triage-list-page-native',

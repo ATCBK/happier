@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, readFile, readdir, realpath, rm } from 'node:fs/promises';
-import { basename, dirname, join, normalize, resolve } from 'node:path';
+import { dirname, join, normalize, resolve } from 'node:path';
 
 import { getPathRemainderWithinBase } from '@/session/handoff/paths/sessionHandoffPathNormalization';
 import { writeJsonAtomic } from '@/utils/fs/writeJsonAtomic';
+import { realpathWithAbsentSuffix } from '@/utils/path/physicalAncestorPath';
 import { inspectWorkspaceLocationWithScmWorkspace } from '@/scm/workspace/workspaceLocationInspection';
 import { realizeWorkspaceCheckoutWithScmWorkspace } from '@/scm/workspace/workspaceCheckoutOperations';
 import type { ScmWorkspaceIntegrationWorkspaceCheckoutRealizationResult } from '@/scm/workspace/workspaceCheckoutRealization';
@@ -11,6 +12,7 @@ import { normalizeSessionHandoffWorkspaceRootPath } from '@happier-dev/protocol/
 import type { HandoffTargetReplacementApprovalV1 } from '@happier-dev/protocol';
 import type { WorkspaceRootOwnershipHandle, WorkspaceRootOwnershipManager } from './workspaceSyncRootOwnership';
 import {
+  abortWorkspaceTargetMaterializationAfterFailure,
   beginWorkspaceTargetMaterialization,
   recoverInterruptedWorkspaceTargetMaterialization,
   rehydrateWorkspaceTargetMaterializationFromReceiptPath,
@@ -311,7 +313,7 @@ export async function prepareWorkspaceSyncGitTarget(input: Readonly<{
     }, { inspectWorkspaceLocation: dependencies.inspectWorkspaceLocation });
     return targetMaterialization.custody;
   } catch (error) {
-    await targetMaterialization.custody.abort();
+    await abortWorkspaceTargetMaterializationAfterFailure(targetMaterialization.custody, error);
     throw error;
   }
 }
@@ -351,7 +353,7 @@ export async function rehydrateWorkspaceSyncTargetBootstrap(input: Readonly<{
   }
   const canonicalRootCandidate = existingBeforeRecovery
     ? await realpath(requested)
-    : await realpath(dirname(requested)).then((parent) => normalize(join(parent, basename(requested)))).catch(() => null);
+    : await realpathWithAbsentSuffix(requested).catch(() => null);
   if (typeof canonicalRootCandidate !== 'string' || canonicalRootCandidate === resolve('/')) {
     throw bootstrapError('workspace_root_unsafe', 'workspace sync target parent is unavailable');
   }
@@ -363,6 +365,12 @@ export async function rehydrateWorkspaceSyncTargetBootstrap(input: Readonly<{
     deferRootIdentityBinding: true,
   });
   if ('kind' in ownership) {
+    // The relationship's own running sync already fences this root, directly or as the shared hub
+    // workspace of this endpoint, so there is no bootstrap custody left to rebuild; only a foreign
+    // operation is a conflict.
+    if (ownership.existing.operation === 'sync'
+      && (ownership.existing.ownerId === input.relationshipId
+        || ownership.existing.ownerId === input.targetWorkspaceRefId)) return null;
     throw bootstrapError('workspace_root_in_use', 'Workspace sync target root overlaps an active operation');
   }
   const materializationCustody = await (dependencies.rehydrateMaterializationFromReceiptPath
@@ -498,7 +506,7 @@ export async function workspaceSyncTargetBootstrap(
   }
   const canonicalRootCandidate = existingBeforeFence
     ? await realpath(requested)
-    : await realpath(dirname(requested)).then((parent) => normalize(join(parent, basename(requested)))).catch(() => null);
+    : await realpathWithAbsentSuffix(requested).catch(() => null);
   if (typeof canonicalRootCandidate !== 'string' || canonicalRootCandidate === resolve('/')) {
     throw bootstrapError('workspace_root_unsafe', 'workspace sync target parent is unavailable');
   }
@@ -645,6 +653,14 @@ export async function workspaceSyncTargetBootstrap(
     await rm(readyPath, { force: true });
     if (!existingBeforeFence && !input.createIfMissing) {
       throw bootstrapError('target_bootstrap_required', 'workspace sync target root does not exist');
+    }
+    if (!existingBeforeFence && input.createIfMissing) {
+      // Preflight is read-only. Only the admitted bootstrap creates the missing
+      // parent chain, under the same physical target fence as materialization.
+      await mkdir(dirname(canonicalRoot), { recursive: true });
+      if (await realpath(dirname(requested)) !== dirname(canonicalRoot)) {
+        throw bootstrapError('root_changed', 'workspace sync target parent changed before materialization');
+      }
     }
     if (existingBeforeFence) {
       const recoveredCanonicalRoot = await realpath(requested);

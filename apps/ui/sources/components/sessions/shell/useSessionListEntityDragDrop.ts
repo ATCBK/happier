@@ -27,9 +27,9 @@ import { getStorage } from '@/sync/domains/state/storage';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import {
-    loadSessionReportsToEligibility,
-    type SessionReportsToEligibilitySnapshot,
-} from '@/sync/ops/relations/sessionReportsToEligibility';
+    loadSessionManagerEligibility,
+    type SessionManagerEligibilitySnapshot,
+} from '@/sync/ops/relations/sessionManagerEligibility';
 import { useActiveServerAccountScope } from '@/sync/store/hooks';
 import type { SessionOrganizationMutationScope } from '@/sync/ops/sessionOrganization';
 import { t } from '@/text';
@@ -63,7 +63,7 @@ import type { UseSessionInlineDragResolvedDrop } from './useSessionInlineDrag';
  *
  * The list is one mounted drop target for the active Home: its pointer geometry (tree thirds and
  * container zones) selects a semantic intent, the Session domain resolver admits it, and the owner's
- * canonical Actions (`session.reports_to.set`, `session.organization.move`) execute it. A row carry
+ * canonical Actions (`session.manager.set`, `session.organization.move`) execute it. A row carry
  * is a source the list registers for exactly as long as it is carried. Feedback leaves read the
  * owner's snapshot; only refusal-free targets draw a line or outline.
  */
@@ -171,7 +171,7 @@ function previewForDestination(intent: Pick<SessionListDragIntent, 'instructionK
 }
 
 function previewForAdmission(admission: Extract<SessionListDragAdmission, { ok: true }>) {
-    if (admission.effect === 'reports-to') return describeSessionListDropPreview({ kind: 'put-under', leadName: rowName(admission.lead) });
+    if (admission.effect === 'manager') return describeSessionListDropPreview({ kind: 'put-under', leadName: rowName(admission.lead) });
     const instruction = admission.result.instruction;
     const target = 'targetId' in instruction ? admission.tree.rowMetadataById.get(instruction.targetId) ?? null : null;
     return previewForDestination({ instructionKind: instruction.kind }, target);
@@ -198,7 +198,7 @@ export function useSessionListEntityDragDrop(input: UseSessionListEntityDragDrop
     inputRef.current = input;
     const scopeRef = React.useRef(scope);
     scopeRef.current = scope;
-    const factsRef = React.useRef<SessionReportsToEligibilitySnapshot | null>(null);
+    const factsRef = React.useRef<SessionManagerEligibilitySnapshot | null>(null);
     const pointerVisualRef = React.useRef<TreeDropVisualGeometry>(NO_GEOMETRY);
     /** The topology the current carry started from (pointer or keyboard). */
     const carriedSnapshotRef = React.useRef<SessionListDragSnapshot | null>(null);
@@ -211,12 +211,12 @@ export function useSessionListEntityDragDrop(input: UseSessionListEntityDragDrop
         return {
             ...inputRef.current.getCommitContext(mutationScope),
             scope: current,
-            resolvePutSessionUnder: ({ serverId, sessionId, leadSessionId }) => {
-                const verdict = resolvePutUnderEligibility(sessionsRecord(current.serverId), sessionId, leadSessionId, factsRef.current, {
+            resolvePutSessionUnder: ({ serverId, sessionId, managerSessionId }) => {
+                const verdict = resolvePutUnderEligibility(sessionsRecord(current.serverId), sessionId, managerSessionId, factsRef.current, {
                     serverId,
                     accountId: current.accountId,
                 });
-                return verdict.allowed ? { allowed: true, expectedLeadSessionId: verdict.expectedLeadSessionId } : { allowed: false, reason: verdict.reason };
+                return verdict.allowed ? { allowed: true, expectedManagerSessionId: verdict.expectedManagerSessionId } : { allowed: false, reason: verdict.reason };
             },
         };
     }, []);
@@ -276,7 +276,7 @@ export function useSessionListEntityDragDrop(input: UseSessionListEntityDragDrop
             context: commitContext,
             preview: admitted => {
                 if (context.input === 'keyboard') {
-                    const visual: TreeInstructionVisual = admitted.effect === 'reports-to'
+                    const visual: TreeInstructionVisual = admitted.effect === 'manager'
                         ? { kind: 'outline', targetId: admitted.lead.rowId } : admitted.result.visual;
                     inputRef.current.onKeyboardGeometry?.(inputRef.current.resolveKeyboardGeometry?.(visual) ?? NO_GEOMETRY);
                 }
@@ -316,6 +316,7 @@ export function useSessionListEntityDragDrop(input: UseSessionListEntityDragDrop
     }, [buildContext, execute, resolve, runtime, scope, targetId]);
 
     const prepareSource = React.useCallback((request: SessionListDragSnapshot | Readonly<{ sourceRowId: string }>) => {
+        if (runtime.getSnapshot().phase === 'pending') return null;
         sourceRef.current?.dispose();
         const current = scopeRef.current;
         if (!current) return null;
@@ -372,7 +373,7 @@ export function useSessionListEntityDragDrop(input: UseSessionListEntityDragDrop
             const candidateSessionIds = Object.values(sessionsRecord(item.address.serverId))
                 .filter((session) => session.id !== item.address.sessionId)
                 .map((session) => session.id);
-            void loadSessionReportsToEligibility({ serverId: item.address.serverId, sessionId: item.address.sessionId,
+            void loadSessionManagerEligibility({ serverId: item.address.serverId, sessionId: item.address.sessionId,
                 candidateSessionIds, signal: abort.signal }).then((facts) => {
                 if (abort.signal.aborted || carriedSnapshotRef.current !== snapshot) { facts?.dispose(); return; }
                 factsRef.current = facts;
@@ -434,9 +435,12 @@ export function useSessionListEntityDragDrop(input: UseSessionListEntityDragDrop
                 await adapter.end(success, pointer);
                 source.dispose();
             },
-            cancel: () => { adapter.cancel(); source.dispose(); },
+            cancel: () => adapter.cancel(),
         };
     }, [prepareSource, runtime, targetId]);
 
-    return { runtime, scope, targetId, beginCarry, prepareSource };
+    // Row callbacks depend on this binding. Unchanged list refreshes must not
+    // invalidate every mounted row merely by allocating a new binding object.
+    return React.useMemo(() => ({ runtime, scope, targetId, beginCarry, prepareSource }),
+        [runtime, scope, targetId, beginCarry, prepareSource]);
 }

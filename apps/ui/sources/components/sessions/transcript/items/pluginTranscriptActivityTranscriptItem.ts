@@ -124,8 +124,8 @@ function sameDerivedItem(
  * tail only. These rows deliberately have no `seq`, no wall-clock placement,
  * and never enter history/window/anchor ownership.
  */
-export function appendPluginTranscriptActivityTranscriptItems(
-    base: readonly ChatTranscriptListItem[],
+export function appendPluginTranscriptActivityTranscriptItems<Base extends readonly ChatTranscriptListItem[]>(
+    base: Base,
     input: Readonly<{
         sessionId: string;
         activities: readonly PluginTranscriptActivityLiveRow[];
@@ -135,7 +135,7 @@ export function appendPluginTranscriptActivityTranscriptItems(
         /** A mount-local cache that preserves unchanged synthetic item identity. */
         cache?: PluginTranscriptActivityTranscriptItemsCache;
     }>,
-): ChatTranscriptListItem[] {
+): Base | ChatTranscriptListItem[] {
     const nextItemsByIdentity = new Map<string, PluginTranscriptActivityTranscriptItem>();
     const nextCurrentItemsByIdentity = new Map<string, PluginTranscriptActivityTranscriptItem>();
     const sortedActivities = input.activities
@@ -209,5 +209,5 @@ export function appendPluginTranscriptActivityTranscriptItems(
                 ...nextCurrentItemsByIdentity,
             ]);
     }
-    return [...base, ...rows];
+    return rows.length === 0 ? base : [...base, ...rows];
 }

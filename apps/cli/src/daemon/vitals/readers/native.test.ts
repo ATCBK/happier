@@ -13,13 +13,64 @@ const output = (offset: number) => JSON.stringify({ v: 1, t: 'vitals-sample', sa
 } });
 
 describe('native vitals reader contract', () => {
-    it('reads macOS AC power on the canonical tick without exposing battery extras', async () => {
+    it('measures Darwin composition with each Overview memory read and never reuses failed VM output', async () => {
+        let usedBytes = 22_000;
+        let wiredPages = 2;
+        let vmStat = true;
+        const execFile = vi.fn<ProcessCustodyExecFile>().mockImplementation(async (command) => {
+            if (command === '/helper') {
+                const raw = JSON.parse(output(0));
+                raw.sample.memory.availableBytes = raw.sample.memory.totalBytes - usedBytes;
+                return { stdout: JSON.stringify(raw), stderr: '' };
+            }
+            if (command === '/usr/bin/vm_stat') {
+                if (!vmStat) throw new Error('VM statistics unavailable');
+                return { stdout: `Mach Virtual Memory Statistics: (page size of 4096 bytes)\nPages wired down: ${wiredPages}.\nPages occupied by compressor: 1.\nFile-backed pages: 1.\n`, stderr: '' };
+            }
+            return { stdout: '', stderr: '' };
+        });
+        const reader = createDarwinMachineVitalsReader({ executablePath: '/helper', execFile });
+        const read = (t: number, overview = true) => reader.read({ sampledAt: t, monotonicMs: t, intervalMs: 2_000, overview, overviewExtras: t === 0 });
+        expect(await read(0)).toMatchObject({ sample: { memory: { usedBytes: 22_000, composition: [
+            { kind: 'apps', bytes: 5_616 }, { kind: 'wired', bytes: 8_192 }, { kind: 'compressed', bytes: 4_096 }, { kind: 'cached_files', bytes: 4_096 },
+        ] } } });
+        usedBytes = 24_000;
+        wiredPages = 3;
+        const next = await read(2_000);
+        expect(next).toMatchObject({ sample: { memory: { usedBytes: 24_000, composition: [
+            { kind: 'apps', bytes: 3_520 }, { kind: 'wired', bytes: 12_288 }, { kind: 'compressed', bytes: 4_096 }, { kind: 'cached_files', bytes: 4_096 },
+        ] } } });
+        vmStat = false;
+        const failed = await read(4_000);
+        expect(failed.state).toBe('reporting');
+        if (failed.state === 'reporting') expect(failed.sample.memory).not.toHaveProperty('composition');
+        vmStat = true;
+        const recovered = await read(6_000);
+        if (recovered.state !== 'reporting' || !recovered.sample.memory.reported) throw new Error('Memory unavailable');
+        expect(recovered.sample.memory.composition?.reduce((sum, part) => sum + part.bytes, 0)).toBe(usedBytes);
+        const hidden = await read(8_000, false);
+        if (hidden.state === 'reporting') expect(hidden.sample.memory).not.toHaveProperty('composition');
+        expect(execFile.mock.calls.filter(([command]) => command === '/usr/bin/vm_stat')).toHaveLength(4);
+    });
+    it.each([2_000, 15_000, 60_000])('spawns no macOS battery tool without a power consumer at %s ms cadence', async (intervalMs) => {
+        const execFile = vi.fn<ProcessCustodyExecFile>().mockImplementation(async (command) => ({
+            stdout: command === '/helper' ? output(0) : "Now drawing from 'AC Power'\n", stderr: '',
+        }));
+        const reader = createDarwinMachineVitalsReader({ executablePath: '/helper', execFile });
+        for (const t of [0, intervalMs, 60_000, 120_000]) {
+            const result = await reader.read({ sampledAt: t, monotonicMs: t, intervalMs, overviewExtras: false });
+            expect(result.state).toBe('reporting');
+            if (result.state === 'reporting') expect(result.sample.power).toBeUndefined();
+        }
+        expect(execFile.mock.calls.filter(([command, args]) => command === '/usr/bin/pmset' && args[1] === 'batt')).toHaveLength(0);
+    });
+    it('reads demanded macOS AC power on the canonical tick without exposing battery extras', async () => {
         let power = "Now drawing from 'AC Power'\n";
         const execFile = vi.fn<ProcessCustodyExecFile>().mockImplementation(async (command) => ({
             stdout: command === '/helper' ? output(0) : command === '/usr/bin/pmset' ? power : '', stderr: '',
         }));
         const reader = createDarwinMachineVitalsReader({ executablePath: '/helper', execFile });
-        const read = (t: number) => reader.read({ sampledAt: t, monotonicMs: t, intervalMs: 60_000, overviewExtras: false });
+        const read = (t: number) => reader.read({ sampledAt: t, monotonicMs: t, intervalMs: 60_000, power: true, overviewExtras: false });
         expect(await read(0)).toMatchObject({ state: 'reporting', sample: { power: { onAC: true } } });
         power = "Now drawing from 'Battery Power'\n -InternalBattery-0 80%; discharging; 2:00 remaining\n";
         const result = await read(60_000);
@@ -35,7 +86,7 @@ describe('native vitals reader contract', () => {
             stdout: command === '/helper' ? output(0) : command === '/usr/bin/pmset' ? power : '', stderr: '',
         }));
         const reader = createDarwinMachineVitalsReader({ executablePath: '/helper', execFile });
-        const read = (t: number, overviewExtras = false) => reader.read({ sampledAt: t, monotonicMs: t, intervalMs, overviewExtras });
+        const read = (t: number, power = true) => reader.read({ sampledAt: t, monotonicMs: t, intervalMs, power, overviewExtras: false });
         for (let t = 0; t < 60_000; t += intervalMs) {
             expect(await read(t)).toMatchObject({ state: 'reporting', sample: { power: { onAC: true } } });
         }
@@ -43,6 +94,11 @@ describe('native vitals reader contract', () => {
         power = "Now drawing from 'Battery Power'\n -InternalBattery-0 80%; discharging; 2:00 remaining\n";
         expect(await read(60_000)).toMatchObject({ state: 'reporting', sample: { power: { onAC: false } } });
         expect(execFile.mock.calls.filter(([command, args]) => command === '/usr/bin/pmset' && args[1] === 'batt')).toHaveLength(2);
+        const undemanded = await read(120_000, false);
+        if (undemanded.state === 'reporting') expect(undemanded.sample.power).toBeUndefined();
+        expect(execFile.mock.calls.filter(([command, args]) => command === '/usr/bin/pmset' && args[1] === 'batt')).toHaveLength(2);
+        expect(await read(120_000)).toMatchObject({ state: 'reporting', sample: { power: { onAC: false } } });
+        expect(execFile.mock.calls.filter(([command, args]) => command === '/usr/bin/pmset' && args[1] === 'batt')).toHaveLength(3);
     });
     it('shares Overview battery reads with the existing extras cadence and reports the next power edge', async () => {
         let power = "Now drawing from 'AC Power'\n -InternalBattery-0 80%; charging; 1:00 remaining\n";
@@ -79,26 +135,61 @@ describe('native vitals reader contract', () => {
             pressure: { level: 'not_reported', source: 'none' }, lowMemorySignal: true, commitUsedBytes: 30_000, commitLimitBytes: 64_000,
         } } });
         expect(await read(2000)).toMatchObject({ state: 'reporting', sample: { cpu: { busyPct: 50, userPct: 30, systemPct: 20 }, network: { rxBps: 100, txBps: 50 } } });
-        // A cadence change/sleep must not manufacture a large rate from an old baseline.
-        expect(await read(20_000)).toMatchObject({ state: 'reporting', sample: { cpu: { busyPct: null }, network: { rxBps: null } } });
+        expect(await read(20_000)).toMatchObject({ state: 'reporting', sample: { cpu: { busyPct: 50 }, network: { rxBps: 200 / 18 } } });
+        expect(await read(140_001)).toMatchObject({ state: 'reporting', sample: { cpu: { busyPct: null }, network: { rxBps: null } } });
+    });
+    it.each(['darwin', 'win32'] as const)('keeps %s counted rates independent of excluded interface churn', async (platform) => {
+        let t = 0;
+        let excluded = true;
+        const execFile = vi.fn<ProcessCustodyExecFile>().mockImplementation(async (command) => {
+            if (command !== '/helper') return { stdout: '', stderr: '' };
+            const raw = JSON.parse(output(t));
+            if (!excluded) raw.sample.interfaces.pop();
+            return { stdout: JSON.stringify(raw), stderr: '' };
+        });
+        const options = { executablePath: '/helper', execFile,
+            readCpuTimes: () => [{ user: 3_000 + t * 3, system: 2_000 + t * 2, idle: 9_000 + t * 5 }] };
+        const reader = platform === 'darwin' ? createDarwinMachineVitalsReader(options) : createWindowsMachineVitalsReader(options);
+        const read = () => reader.read({ sampledAt: t, monotonicMs: t, intervalMs: 2_000, overviewExtras: false });
+        await read();
+        for (const next of [4_600, 15_600]) {
+            t = next;
+            excluded = !excluded;
+            expect(await read()).toMatchObject({ sample: { cpu: { busyPct: 50 }, network: { rxBps: 2_000, txBps: 1_000 } } });
+        }
     });
     it('reports a missing helper without a spawn', async () => {
         const execFile = vi.fn<ProcessCustodyExecFile>();
         expect(await createWindowsMachineVitalsReader({ executablePath: null, execFile }).read({ sampledAt: 0, monotonicMs: 0, intervalMs: 60_000, overviewExtras: false })).toEqual({ state: 'unavailable', reason: 'helper_missing' });
         expect(execFile).not.toHaveBeenCalled();
     });
-    it('reconciles cached composition with current used memory without waking extras tools', async () => {
+    it('uses only the current native memory composition, including base reads, without inventing app bytes', async () => {
         let calls = 0;
         const execFile = vi.fn<ProcessCustodyExecFile>().mockImplementation(async () => {
             const raw = JSON.parse(output(0));
             raw.sample.memory.availableBytes = calls++ === 0 ? 10_000 : 8_000;
-            if (calls === 1) raw.sample.memory.composition = [{ kind: 'apps', bytes: 12_000 }, { kind: 'system', bytes: 4_000 }, { kind: 'cached_files', bytes: 6_000 }];
+            raw.sample.memory.composition = calls === 1
+                ? [{ kind: 'apps', bytes: 12_000 }, { kind: 'system', bytes: 4_000 }, { kind: 'cached_files', bytes: 6_000 }]
+                : [{ kind: 'apps', bytes: 10_000 }, { kind: 'system', bytes: 5_000 }, { kind: 'cached_files', bytes: 9_000 }];
             return { stdout: JSON.stringify(raw), stderr: '' };
         });
         const reader = createWindowsMachineVitalsReader({ executablePath: '/helper', execFile });
         await reader.read({ sampledAt: 0, monotonicMs: 0, intervalMs: 2000, overviewExtras: true });
-        const result = await reader.read({ sampledAt: 2000, monotonicMs: 2000, intervalMs: 2000, overviewExtras: true });
-        expect(result).toMatchObject({ state: 'reporting', sample: { memory: { usedBytes: 24_000, composition: [{ kind: 'apps', bytes: 14_000 }, { kind: 'system', bytes: 4_000 }, { kind: 'cached_files', bytes: 6_000 }] } } });
+        const result = await reader.read({ sampledAt: 2000, monotonicMs: 2000, intervalMs: 2000, overviewExtras: false });
+        expect(result).toMatchObject({ state: 'reporting', sample: { memory: { usedBytes: 24_000, composition: [{ kind: 'apps', bytes: 10_000 }, { kind: 'system', bytes: 5_000 }, { kind: 'cached_files', bytes: 9_000 }] } } });
         expect(execFile.mock.calls.filter(([command]) => command === '/helper').map(([, args]) => args)).toEqual([['vitals-sample', '--extras'], ['vitals-sample']]);
+    });
+    it('does not reuse a previous composition when a native memory reading lacks it', async () => {
+        let calls = 0;
+        const execFile = vi.fn<ProcessCustodyExecFile>().mockImplementation(async () => {
+            const raw = JSON.parse(output(0));
+            if (calls++ === 0) raw.sample.memory.composition = [{ kind: 'apps', bytes: 22_000 }];
+            return { stdout: JSON.stringify(raw), stderr: '' };
+        });
+        const reader = createWindowsMachineVitalsReader({ executablePath: '/helper', execFile });
+        await reader.read({ sampledAt: 0, monotonicMs: 0, intervalMs: 2000, overviewExtras: true });
+        const next = await reader.read({ sampledAt: 2000, monotonicMs: 2000, intervalMs: 2000, overviewExtras: true });
+        expect(next.state).toBe('reporting');
+        if (next.state === 'reporting') expect(next.sample.memory).not.toHaveProperty('composition');
     });
 });

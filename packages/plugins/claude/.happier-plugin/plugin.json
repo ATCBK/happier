@@ -8,7 +8,31 @@
         "execution": {
           "target": "daemon"
         },
+        "hostAccess": [
+          "claude-session-runtime-control"
+        ],
         "id": "subagent-team-launch",
+        "inputHints": {
+          "fields": [
+            {
+              "path": "teamId",
+              "required": true,
+              "title": {
+                "fallback": "Team name",
+                "key": "session.subagents.launch.teamName"
+              },
+              "widget": "text"
+            },
+            {
+              "path": "description",
+              "title": {
+                "fallback": "Description",
+                "key": "session.subagents.launch.description"
+              },
+              "widget": "textarea"
+            }
+          ]
+        },
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
@@ -36,7 +60,9 @@
         ],
         "surfaces": [
           "ui",
-          "agent"
+          "agent",
+          "cli",
+          "mcp"
         ],
         "title": "Create agent team"
       },
@@ -46,7 +72,41 @@
         "execution": {
           "target": "daemon"
         },
+        "hostAccess": [
+          "claude-session-runtime-control"
+        ],
         "id": "subagent-member-launch",
+        "inputHints": {
+          "fields": [
+            {
+              "path": "teamId",
+              "required": true,
+              "title": {
+                "fallback": "Team name",
+                "key": "session.subagents.launch.teamName"
+              },
+              "widget": "text"
+            },
+            {
+              "path": "memberLabel",
+              "required": true,
+              "title": {
+                "fallback": "Teammate name",
+                "key": "session.subagents.launch.teammateName"
+              },
+              "widget": "text"
+            },
+            {
+              "path": "instructions",
+              "required": true,
+              "title": {
+                "fallback": "Instructions",
+                "key": "session.subagents.launch.instructions"
+              },
+              "widget": "textarea"
+            }
+          ]
+        },
         "inputSchema": {
           "additionalProperties": false,
           "properties": {
@@ -81,7 +141,9 @@
         ],
         "surfaces": [
           "ui",
-          "agent"
+          "agent",
+          "cli",
+          "mcp"
         ],
         "title": "Launch teammate"
       }
@@ -281,7 +343,7 @@
                       "-Command",
                       "irm https://claude.ai/install.ps1 | iex"
                     ],
-                    "cmd": "powershell"
+                    "cmd": "powershell.exe"
                   }
                 ]
               }
@@ -1095,11 +1157,16 @@
               "name": "Sonnet 4.6"
             },
             {
+              "costTier": "low",
               "description": "Claude Haiku model for lighter tasks and lower-latency replies.",
               "id": "claude-haiku-5-5",
               "name": "Haiku 5.5"
             },
             {
+              "aliases": [
+                "claude-haiku-4-5-20251001"
+              ],
+              "costTier": "low",
               "description": "Fastest Claude option for lighter tasks and lower-latency replies.",
               "id": "claude-haiku-4-5",
               "name": "Haiku 4.5"
@@ -2144,6 +2211,7 @@
         "version": 1
       }
     ],
+    "skills": [],
     "systemTools": [
       {
         "executableNames": [
@@ -2164,18 +2232,30 @@
           "root": {
             "children": [
               {
-                "action": "subagent-team-launch",
-                "kind": "action",
-                "label": "Create team",
-                "variant": "primary"
+                "kind": "text",
+                "text": {
+                  "fallback": "Start a team of Claude agents on one task, or add a teammate to a team.",
+                  "key": "session.subagents.launch.intro"
+                }
               },
               {
-                "action": "subagent-member-launch",
-                "kind": "action",
-                "label": "Launch teammate"
+                "children": [
+                  {
+                    "action": "subagent-team-launch",
+                    "kind": "action",
+                    "label": "Create team",
+                    "variant": "primary"
+                  },
+                  {
+                    "action": "subagent-member-launch",
+                    "kind": "action",
+                    "label": "Launch teammate"
+                  }
+                ],
+                "kind": "actionPanel"
               }
             ],
-            "kind": "actionPanel"
+            "kind": "stack"
           }
         },
         {
@@ -2210,6 +2290,11 @@
           "locale": "en",
           "messages": {
             "agentInput.connectedServiceLabel.claude": "Claude Code",
+            "session.subagents.launch.description": "Description",
+            "session.subagents.launch.instructions": "Instructions",
+            "session.subagents.launch.intro": "Start a team of Claude agents on one task, or add a teammate to a team.",
+            "session.subagents.launch.teamName": "Team name",
+            "session.subagents.launch.teammateName": "Teammate name",
             "session.subagents.panel.claudeTeamTitle": "Claude team",
             "session.subagents.panel.launchClaudeTeamsSubtitle": "Start a team or add a teammate",
             "settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle": "Use Happier attribution for new Claude sessions, including Agent SDK runs. Off keeps runtime defaults.",
@@ -2224,6 +2309,11 @@
           "locale": "de",
           "messages": {
             "agentInput.connectedServiceLabel.claude": "Claude Code",
+            "session.subagents.launch.description": "Beschreibung",
+            "session.subagents.launch.instructions": "Anweisungen",
+            "session.subagents.launch.intro": "Starte ein Team aus Claude-Agents für eine Aufgabe oder füge einem Team ein Teammitglied hinzu.",
+            "session.subagents.launch.teamName": "Teamname",
+            "session.subagents.launch.teammateName": "Name des Teammitglieds",
             "session.subagents.panel.claudeTeamTitle": "Claude-Team",
             "session.subagents.panel.launchClaudeTeamsSubtitle": "Ein Team starten oder ein Teammitglied hinzufügen",
             "settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle": "Happier-Zuordnung für neue Claude-Sitzungen verwenden, auch mit dem Agent SDK. Aus behält die Laufzeitstandards bei.",
@@ -2238,6 +2328,11 @@
           "locale": "ru",
           "messages": {
             "agentInput.connectedServiceLabel.claude": "Claude Code",
+            "session.subagents.launch.description": "Описание",
+            "session.subagents.launch.instructions": "Инструкции",
+            "session.subagents.launch.intro": "Создайте команду агентов Claude для одной задачи или добавьте участника в команду.",
+            "session.subagents.launch.teamName": "Название команды",
+            "session.subagents.launch.teammateName": "Имя участника",
             "session.subagents.panel.claudeTeamTitle": "Команда Claude",
             "session.subagents.panel.launchClaudeTeamsSubtitle": "Создайте команду или добавьте участника",
             "settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle": "Использовать идентификацию Happier для новых сессий Claude, включая Agent SDK. При отключении сохраняются настройки среды по умолчанию.",
@@ -2252,6 +2347,11 @@
           "locale": "pl",
           "messages": {
             "agentInput.connectedServiceLabel.claude": "Claude Code",
+            "session.subagents.launch.description": "Opis",
+            "session.subagents.launch.instructions": "Instrukcje",
+            "session.subagents.launch.intro": "Uruchom zespół agentów Claude do jednego zadania albo dodaj członka do zespołu.",
+            "session.subagents.launch.teamName": "Nazwa zespołu",
+            "session.subagents.launch.teammateName": "Nazwa członka zespołu",
             "session.subagents.panel.claudeTeamTitle": "Zespół Claude",
             "session.subagents.panel.launchClaudeTeamsSubtitle": "Utwórz zespół lub dodaj członka zespołu",
             "settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle": "Używaj identyfikacji Happier dla nowych sesji Claude, także z Agent SDK. Wyłączenie zachowuje domyślne ustawienia środowiska.",
@@ -2266,6 +2366,11 @@
           "locale": "es",
           "messages": {
             "agentInput.connectedServiceLabel.claude": "Claude Code",
+            "session.subagents.launch.description": "Descripción",
+            "session.subagents.launch.instructions": "Instrucciones",
+            "session.subagents.launch.intro": "Crea un equipo de agentes de Claude para una tarea o añade un compañero a un equipo.",
+            "session.subagents.launch.teamName": "Nombre del equipo",
+            "session.subagents.launch.teammateName": "Nombre del compañero",
             "session.subagents.panel.claudeTeamTitle": "Equipo de Claude",
             "session.subagents.panel.launchClaudeTeamsSubtitle": "Crea un equipo o añade un compañero",
             "settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle": "Usar la atribución de Happier para nuevas sesiones de Claude, incluidas las del Agent SDK. Desactivado conserva los valores predeterminados.",
@@ -2280,6 +2385,11 @@
           "locale": "fr",
           "messages": {
             "agentInput.connectedServiceLabel.claude": "Claude Code",
+            "session.subagents.launch.description": "Description",
+            "session.subagents.launch.instructions": "Instructions",
+            "session.subagents.launch.intro": "Lancez une équipe d’agents Claude sur une tâche, ou ajoutez un coéquipier à une équipe.",
+            "session.subagents.launch.teamName": "Nom de l’équipe",
+            "session.subagents.launch.teammateName": "Nom de l’équipier",
             "session.subagents.panel.claudeTeamTitle": "Équipe Claude",
             "session.subagents.panel.launchClaudeTeamsSubtitle": "Crée une équipe ou ajoute un équipier",
             "settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle": "Utiliser l’attribution Happier pour les nouvelles sessions Claude, y compris avec l’Agent SDK. Désactivé conserve les valeurs par défaut.",
@@ -2294,6 +2404,11 @@
           "locale": "it",
           "messages": {
             "agentInput.connectedServiceLabel.claude": "Claude Code",
+            "session.subagents.launch.description": "Descrizione",
+            "session.subagents.launch.instructions": "Istruzioni",
+            "session.subagents.launch.intro": "Avvia un team di agenti Claude su un compito, oppure aggiungi un compagno a un team.",
+            "session.subagents.launch.teamName": "Nome del team",
+            "session.subagents.launch.teammateName": "Nome del compagno",
             "session.subagents.panel.claudeTeamTitle": "Team Claude",
             "session.subagents.panel.launchClaudeTeamsSubtitle": "Crea un team o aggiungi un compagno",
             "settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle": "Usa l’attribuzione Happier per le nuove sessioni Claude, incluse quelle Agent SDK. Disattivato mantiene le impostazioni predefinite.",
@@ -2308,6 +2423,11 @@
           "locale": "pt",
           "messages": {
             "agentInput.connectedServiceLabel.claude": "Claude Code",
+            "session.subagents.launch.description": "Descrição",
+            "session.subagents.launch.instructions": "Instruções",
+            "session.subagents.launch.intro": "Inicie uma equipe de agentes Claude em uma tarefa ou adicione um colega a uma equipe.",
+            "session.subagents.launch.teamName": "Nome da equipa",
+            "session.subagents.launch.teammateName": "Nome do colega",
             "session.subagents.panel.claudeTeamTitle": "Equipe Claude",
             "session.subagents.panel.launchClaudeTeamsSubtitle": "Crie uma equipe ou adicione um colega",
             "settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle": "Usar a atribuição de Happier para novas sessões Claude, incluindo as do Agent SDK. Desativado mantém os padrões de execução.",
@@ -2322,6 +2442,11 @@
           "locale": "ca",
           "messages": {
             "agentInput.connectedServiceLabel.claude": "Claude Code",
+            "session.subagents.launch.description": "Descripció",
+            "session.subagents.launch.instructions": "Instruccions",
+            "session.subagents.launch.intro": "Crea un equip d’agents de Claude per a una tasca o afegeix un company a un equip.",
+            "session.subagents.launch.teamName": "Nom de l’equip",
+            "session.subagents.launch.teammateName": "Nom del company",
             "session.subagents.panel.claudeTeamTitle": "Equip de Claude",
             "session.subagents.panel.launchClaudeTeamsSubtitle": "Crea un equip o afegeix un company",
             "settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle": "Utilitza l’atribució de Happier per a les sessions noves de Claude, incloses les de l’Agent SDK. Desactivat conserva els valors predeterminats.",
@@ -2336,6 +2461,11 @@
           "locale": "zh-Hans",
           "messages": {
             "agentInput.connectedServiceLabel.claude": "Claude Code",
+            "session.subagents.launch.description": "描述",
+            "session.subagents.launch.instructions": "指令",
+            "session.subagents.launch.intro": "为同一任务启动一个 Claude 智能体团队，或向团队添加一名队友。",
+            "session.subagents.launch.teamName": "团队名称",
+            "session.subagents.launch.teammateName": "队友名称",
             "session.subagents.panel.claudeTeamTitle": "Claude 团队",
             "session.subagents.panel.launchClaudeTeamsSubtitle": "创建团队或添加队友",
             "settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle": "将新的 Claude 会话标记为 Happier 来源，包括 Agent SDK 会话。关闭时保留运行时默认值。",
@@ -2350,6 +2480,11 @@
           "locale": "zh-Hant",
           "messages": {
             "agentInput.connectedServiceLabel.claude": "Claude Code",
+            "session.subagents.launch.description": "描述",
+            "session.subagents.launch.instructions": "指示",
+            "session.subagents.launch.intro": "為同一項任務啟動一個 Claude 代理團隊，或為團隊新增一位隊友。",
+            "session.subagents.launch.teamName": "團隊名稱",
+            "session.subagents.launch.teammateName": "隊友名稱",
             "session.subagents.panel.claudeTeamTitle": "Claude 團隊",
             "session.subagents.panel.launchClaudeTeamsSubtitle": "建立團隊或新增隊友",
             "settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle": "將新的 Claude 工作階段標記為 Happier 來源，包括 Agent SDK 工作階段。關閉時保留執行環境預設值。",
@@ -2364,6 +2499,11 @@
           "locale": "ja",
           "messages": {
             "agentInput.connectedServiceLabel.claude": "Claude Code",
+            "session.subagents.launch.description": "説明",
+            "session.subagents.launch.instructions": "指示",
+            "session.subagents.launch.intro": "1つのタスクに取り組む Claude エージェントのチームを作成するか、チームにチームメイトを追加します。",
+            "session.subagents.launch.teamName": "チーム名",
+            "session.subagents.launch.teammateName": "チームメイト名",
             "session.subagents.panel.claudeTeamTitle": "Claude チーム",
             "session.subagents.panel.launchClaudeTeamsSubtitle": "チームを作成するか、チームメイトを追加します",
             "settingsAgents.plugins.claude.fields.claudeCodeIncludeInNativeHistory.subtitle": "Agent SDK を含む新しい Claude セッションを Happier として識別します。オフでは実行環境の既定値を維持します。",
@@ -2397,6 +2537,7 @@
     "voiceModelPacks": [],
     "voiceProviders": [],
     "webhooks": [],
+    "workItems": [],
     "workflows": []
   },
   "description": "Claude Code coding agent.",

@@ -106,7 +106,7 @@ describe('external author semantic proof', () => {
         readViewerValues: async () => ({ values: {} }),
         validateValue: async (field, value) => field.inputType && 'hostType' in field.inputType
           && field.inputType.hostType === 'workspace'
-          ? validateWidgetWorkspaceInputV1({ value, serverId: surface.serverId, contextValues: [checkout] })
+          ? validateWidgetWorkspaceInputV1({ value, serverId: surface.serverId, workspaceRefs: [checkout] })
           : { status: 'valid' },
         resolveOptions: async () => [],
       }),
@@ -121,7 +121,8 @@ describe('external author semantic proof', () => {
         ...(localId === sourceWidget.id ? { source: { kind: 'context' as const, slot: 'project' } } : {}) },
     });
     const checkoutInstance = instance(widget.id);
-    expect(await execute('widgets.item.add', { surface, area: 'main', instance: checkoutInstance })).toMatchObject({ ok: true });
+    const checkoutAdded = await execute('widgets.item.add', { surface, area: 'main', instance: checkoutInstance });
+    expect(checkoutAdded, JSON.stringify(checkoutAdded)).toMatchObject({ ok: true });
     const admitted = await execute('widgets.item.inputs.validate', {
       ref: { surface, instanceId: checkoutInstance.id }, bindings: checkoutInstance.bindings,
     });
@@ -554,6 +555,10 @@ describe('external author semantic proof', () => {
 
     try {
       await expect(fixture.getByRole('form')).resolves.toMatchObject({ role: 'form' });
+      await fixture.press(await fixture.getByRole('button', { name: 'Submit external review form' }));
+      await expect(fixture.getByRole('status', {
+        name: 'External review form submitted: {"enabled":false,"note":"","name":"Release review","count":0}',
+      })).resolves.toBeDefined();
       await expect(fixture.getByRole('button', { name: 'External review filter: Current review' })).resolves.toEqual({
         role: 'button',
         name: 'External review filter: Current review',

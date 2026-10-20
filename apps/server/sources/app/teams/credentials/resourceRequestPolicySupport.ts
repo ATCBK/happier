@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { z } from 'zod/mini';
 import { TeamCredentialBrokerPlacementV1Schema, TeamCredentialRequestPolicySupportOutputV1Schema, type TeamCredentialBrokerPlacementV1, type TeamCredentialRequestPolicyModelSupportV1, type TeamCredentialRequestPolicyV1, type TeamCredentialRequestPolicySupportOutputV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import { TeamCredentialSourceBindingV1Schema, type TeamCredentialSourceBindingV1 } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
@@ -153,7 +154,7 @@ export async function prepareTeamCredentialRequestPolicySupportInTx(
                 return TeamCredentialSourceBindingV1Schema.safeParse(null);
             }
         })();
-        const parsedPlacement = TeamCredentialBrokerPlacementV1Schema.nullable().safeParse(
+        const parsedPlacement = z.nullable(TeamCredentialBrokerPlacementV1Schema).safeParse(
             resource.brokerMachineId !== null && resource.brokerPoolId === null
                 ? { kind: "machine", machineId: resource.brokerMachineId }
                 : resource.brokerPoolId !== null && resource.brokerMachineId === null

@@ -1,7 +1,8 @@
 import * as React from 'react';
+import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen, withPopoverWebGlobals } from '@/dev/testkit';
+import { renderScreen, reportPopoverContentLayout, withPopoverWebGlobals } from '@/dev/testkit';
 import type { MachineDisplayRenderable } from '@/sync/domains/machines/machineDisplayRenderable';
 import type { MachineAdministrationCandidateV1 } from '@/sync/domains/machines/administration/targetSelection';
 import type { MachineAdministrationTargetSelectionV1 } from '@/sync/domains/machines/administration/useTargetSelection';
@@ -103,6 +104,7 @@ describe('MachineAdministrationTargetSelector', () => {
         expect(screen.findHostByTestId('header.target.picker-list')).toBeNull();
 
         await screen.pressByTestIdAsync('header.target.chip');
+        await act(async () => { reportPopoverContentLayout(screen.tree, { width: 320, height: 400 }); });
         expect(screen.findHostByTestId('header.target.picker-list')).not.toBeNull();
         const row = screen.findHostByTestId(option);
         expect(row?.props.disabled ?? row?.props.accessibilityState?.disabled ?? row?.props['aria-disabled']).not.toBe(true);
@@ -253,6 +255,9 @@ describe('MachineAdministrationTargetSelector', () => {
         const screen = await renderScreen(<DraftBroker />);
         const trigger = `broker.target.${presentation === 'chip' ? 'chip' : 'current'}`;
         await screen.pressByTestIdAsync(trigger);
+        if (presentation === 'chip') {
+            await act(async () => { reportPopoverContentLayout(screen.tree, { width: 320, height: 400 }); });
+        }
         await screen.pressByTestIdAsync('broker.target.picker-option:machine-b');
         const current = screen.findHostByTestId(trigger);
         expect(current?.props.accessibilityLabel ?? current?.props['aria-label']).toContain('Machine B');

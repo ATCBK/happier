@@ -1,4 +1,4 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
@@ -20,7 +20,7 @@ describe('happier session voice-agent start command', () => {
   const requests: { actionId: string; envelope: ExternalActionRequestEnvelopeV1 }[] = [];
   const envKeys = ['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL'] as const;
   let envScope = createEnvKeyScope(envKeys);
-  let app: ReturnType<typeof Fastify>;
+  let app: FastifyInstance;
   let homeDir = '';
 
   beforeEach(async () => {
@@ -44,7 +44,9 @@ describe('happier session voice-agent start command', () => {
           : actionId === 'voice_agent.start'
             ? { results: [{ key: 'agent:com.acme.agent/acme' }] }
             : (() => { throw new Error('Unexpected Action: ' + actionId); })();
-      const parsedResult = getActionSpec(ActionIdSchema.parse(actionId)).outputSchema.parse(result);
+      const outputSchema = getActionSpec(ActionIdSchema.parse(actionId)).outputSchema;
+      if (!outputSchema) throw new Error('Expected a declared Action output schema');
+      const parsedResult = outputSchema.parse(result);
       return ExternalActionResponseEnvelopeV1Schema.parse({
         v: 1, actionId,
         ...(envelope.requestId ? { requestId: envelope.requestId } : {}),

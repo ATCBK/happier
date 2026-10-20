@@ -2,7 +2,8 @@ import type { SecretFillSettlementV1 } from '@happier-dev/protocol/computer/v1';
 import type { ActionExecutorDeps } from '@happier-dev/protocol';
 import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createSavedSecretMaterializerFromSnapshotV1, type SavedSecretResolutionFailureStatusV1 } from '@/settings/secrets/savedSecretCatalog';
-import { refreshSavedSecretCatalogForOperation, SavedSecretOperationAdmissionError, savedSecretOperationAdmissionStatus } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { refreshSavedSecretCatalogForOperation, savedSecretOperationAdmissionStatus } from "@/settings/secrets/hydrateSavedSecretCatalog";
+import { SavedSecretOperationAdmissionError } from "@/settings/secrets/savedSecretCatalogRead";
 import type { CurrentMachineExecutionOriginContext } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
 
 /** A verified physical target retained only by the current confidential invocation. */

@@ -42,7 +42,8 @@ describe('OptionPickerOverlay', () => {
                 notes={selected === 'model-b' ? ['Discovery is unavailable'] : []} />;
         }
         const screen = await renderScreen(<Picker />);
-        expect(screen.findByTestId('model-picker-overlay-notes')).not.toBeNull();
+        // With nothing to say the grid keeps no status slot: the rows own the whole pane down to its edge.
+        expect(screen.findByTestId('model-picker-overlay-notes')).toBeNull();
         expect(screen.findByTestId('model-picker-overlay-title-row')).toBeNull();
         await screen.pressByTestIdAsync('model-picker-overlay-option:model-b');
         const text = screen.getTextContent();
@@ -1046,7 +1047,7 @@ describe('OptionPickerOverlay', () => {
         expect(screen.findByTestId('model-picker-overlay-custom-input')).toBeTruthy();
 
         await act(async () => {
-            screen.tree.update(renderOverlay());
+            await screen.update(renderOverlay());
         });
 
         expect(screen.findByTestId('model-picker-overlay-custom-input')).toBeTruthy();
@@ -1077,13 +1078,13 @@ describe('OptionPickerOverlay', () => {
         const rootStepBefore = screen.findByType(SelectionList).props.rootStep;
 
         await act(async () => {
-            screen.tree.update(renderOverlay('Model 0 · refreshed'));
+            await screen.update(renderOverlay('Model 0 · refreshed'));
         });
 
         expect(screen.findByType(SelectionList).props.rootStep).toBe(rootStepBefore);
 
         await act(async () => {
-            screen.tree.update(renderOverlay('Model 0 · refreshed', [
+            await screen.update(renderOverlay('Model 0 · refreshed', [
                 ...options,
                 { value: 'model-100', label: 'Model 100' },
             ]));
@@ -1123,13 +1124,13 @@ describe('OptionPickerOverlay', () => {
         const rootStepBefore = screen.findByType(SelectionList).props.rootStep;
 
         await act(async () => {
-            screen.tree.update(renderOverlay('Model 0 · refreshed'));
+            await screen.update(renderOverlay('Model 0 · refreshed'));
         });
 
         expect(screen.findByType(SelectionList).props.rootStep).toBe(rootStepBefore);
 
         await act(async () => {
-            screen.tree.update(renderOverlay('Model 0 · refreshed', [{
+            await screen.update(renderOverlay('Model 0 · refreshed', [{
                 ...sections[0]!,
                 options: [
                     ...sections[0]!.options,
@@ -1168,7 +1169,7 @@ describe('OptionPickerOverlay', () => {
         expect(screen.findByTestId('model-picker-overlay-custom-input')).toBeTruthy();
 
         await act(async () => {
-            screen.tree.update(renderOverlay([
+            await screen.update(renderOverlay([
                 { value: 'default', label: 'Default', description: '' },
                 { value: 'openai-codex/gpt-5.5', label: 'gpt-5.5', description: 'OpenAI' },
             ]));

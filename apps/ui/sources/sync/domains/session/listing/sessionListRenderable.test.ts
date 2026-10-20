@@ -131,13 +131,13 @@ describe('preserveSessionListRenderableStaleFields', () => {
             latestReadyEventAt: null,
             responsibleAccountId: 'account-alice',
             responsibleAccount: {
-                kind: 'account', accountId: 'account-alice', firstName: 'Alice', lastName: null, username: 'alice', avatarUrl: null,
+                kind: 'account', accountId: 'account-alice', name: 'Alice', firstName: 'Alice', lastName: null, username: 'alice', avatarUrl: null,
             },
         }));
         const next = {
             ...previous,
             responsibleAccount: {
-                kind: 'account', accountId: 'account-alice', firstName: 'Alicia', lastName: null, username: 'alice', avatarUrl: null,
+                kind: 'account', accountId: 'account-alice', name: 'Alicia', firstName: 'Alicia', lastName: null, username: 'alice', avatarUrl: null,
             },
         } satisfies SessionListRenderableSession;
 

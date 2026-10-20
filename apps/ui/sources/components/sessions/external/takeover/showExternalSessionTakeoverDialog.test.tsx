@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 
@@ -38,6 +38,13 @@ const target = {
 } as const;
 
 describe('ExternalSessionTakeoverDialog accessibility', () => {
+    beforeEach(() => {
+        // These accessibility cases assert the 44px touch floor. A precise
+        // desktop pointer has a separate, intentionally smaller canonical floor.
+        vi.stubGlobal('navigator', { maxTouchPoints: 1 });
+    });
+    afterEach(() => vi.unstubAllGlobals());
+
     it('names every takeover choice and cancel action as a button', async () => {
         const onResolve = vi.fn();
         const { ExternalSessionTakeoverDialog } = await import('./showExternalSessionTakeoverDialog');

@@ -5,7 +5,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ActionOperationSnapshotV1Schema, ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
 import { ProjectCommandActionOutputV1Schema } from '@happier-dev/protocol/actions/actionCompletion';
 import { ExternalActionMachineBootstrapV1Schema, ExternalActionExecutionAuthorizationRequestV1Schema,
-    ExternalActionExecutionAuthorizationV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+    ExternalActionExecutionAuthorizationV1Schema, ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { createProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
@@ -15,8 +15,12 @@ import type { IModal } from '@/modal/types';
 import { buildLocalServiceInventoryState } from '@/dev/testkit/fixtures/localServices';
 import { pressTestInstanceAsync, renderScreen, flushHookEffects } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { decideApprovalAsInbox, installOwnMachineApprovalReplayBoundary } from '@/dev/testkit/harness/approvalInbox';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import {
     applyLocalServicePublicPreviewSnapshot,
     createLocalServicePublicPreviewState,
@@ -25,7 +29,9 @@ import {
 // Real Account lifetime beneath genuine network/device-credential boundaries;
 // signed-out fixtures cannot dispatch through the mounted Services host.
 const home = createHomeGovernanceHarness();
+installDisconnectedServerSocketBoundary();
 installHomeGovernanceBoundaries(home);
+await loadSyncSingletonForTests();
 const { applyLocalServiceLauncherSnapshot, createLocalServiceLauncherState } = await import('@/sync/domains/local/services/launch');
 const { ProjectRightPanelServicesView } = await import('./ProjectRightPanelServicesView');
 const { createFrontDoorRuntimeActionExecutor } = await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
@@ -35,6 +41,8 @@ const { settingsParse } = await import('@/sync/domains/settings/settings');
 const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
 
 const rpc = vi.hoisted(() => ({ machine: vi.fn() }));
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 const navigation = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
     router: { push: navigation.push },
@@ -154,6 +162,7 @@ describe('ProjectRightPanelServicesView', () => {
         rpc.machine.mockImplementation(async () => { throw new Error('unexpected_machine_rpc'); });
         const scope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'project-account' };
         storage.setState({ profileScope: scope, settingsScope: scope });
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
         storage.getState().applySettingsForScope(scope, settingsParse({ actionsSettingsV1: { v: 1,
             approvalWaivedSurfaces: { 'localServices.launcher.start': ['ui'], 'localServices.publicPreview.create': ['ui'] },
         } }), 1);
@@ -188,7 +197,10 @@ describe('ProjectRightPanelServicesView', () => {
             })} />);
         try {
             screen.pressByTestId('project-rightpanel-services-row:declared:web-start');
-            await vi.waitFor(() => expect(home.artifacts(serverId).list()).toHaveLength(1));
+            await vi.waitFor(() => expect(home.artifacts(serverId).list(), JSON.stringify({
+                requests: home.requests.map(({ path, input }) => ({ path, input })),
+                alerts: modalAlertMock.mock.calls, machineCalls: rpc.machine.mock.calls,
+            })).toHaveLength(1));
             const artifactId = home.artifacts(serverId).list()[0]!.id;
             expect(navigation.push).toHaveBeenCalledWith(expect.stringContaining(`/inbox/approvals/${artifactId}`));
             expect(rpc.machine.mock.calls.filter(([request]) => request.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_START)).toHaveLength(0);
@@ -264,7 +276,7 @@ describe('ProjectRightPanelServicesView', () => {
         // Native Start includes preparation/review; the caller's lifetime owns it, as for Scripts.
         expect(startRequest).toMatchObject({ operationTimeoutMs: null, signal: expect.any(AbortSignal) });
         expect(home.requestsFor('/v1/actions/projects.prepare').map(request =>
-            ExternalActionExecutionAuthorizationRequestV1Schema.parse(request.input).envelope.input))
+            ExternalActionRequestEnvelopeV1Schema.parse(ExternalActionExecutionAuthorizationRequestV1Schema.parse(request.input).envelope).input))
             .toEqual([{ workspace: { ...workspace, serverId: serverIdentityId }, phase: 'setup' }]);
         await screen.unmount();
     });

@@ -2,7 +2,7 @@ import { NATIVE_AUTH_EMAIL_VERIFY_PREVIEW_PATH_V1, NATIVE_AUTH_EMAIL_VERIFY_REQU
 import { NATIVE_AUTH_PASSWORD_RESET_SUBMIT_PATH_V1, PlainPasswordResetSubmitRequestV1Schema, PlainPasswordResetSubmitResponseV1Schema } from '@happier-dev/protocol/auth/accountSecurity';
 import type { TeamInvitationAccountAdmissionV1 } from '@happier-dev/protocol/auth/accountAdmission';
 import { maskEmailForNativeAuthPreview } from '@happier-dev/protocol/auth/nativeAuthOneTimeOperation';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { ServerFetch } from '@/sync/http/client';
 import { HappyError } from '@/utils/errors/errors';

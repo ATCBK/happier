@@ -27,6 +27,8 @@ import { createWorkspaceState, reduceWorkspaceState } from '@/components/appShel
 import type { WorkspaceNavigationContextValue } from '@/components/appShell/workspace/WorkspaceNavigationContext';
 import { resolveWorkspaceEntityDrop, WORKSPACE_ENTITY_KINDS } from '@/components/appShell/workspace/workspaceEntityDrop';
 import { presentPaneDropAdmission } from '@/components/appShell/splitCanvas/presentation/paneDropPresentation';
+import { t } from '@/text';
+import { useSessionListRowMoveActionHandlers } from './useSessionListRowMoveActionHandlers';
 
 vi.mock('react-native', async () => await vi.importActual('react-native-web'));
 vi.mock('react-native-unistyles', async () => {
@@ -45,7 +47,7 @@ vi.mock('react-native-worklets', () => ({
 }));
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-    return createExpoRouterMock().module;
+    return createExpoRouterMock({ router: { navigate: vi.fn() } }).module;
 });
 vi.mock('@expo/vector-icons', () => ({ Ionicons: 'span', Octicons: 'span' }));
 vi.mock('expo-image', () => ({ Image: 'img' }));
@@ -61,14 +63,67 @@ afterEach(async () => {
 });
 
 // jsdom has neither layout nor pointer capture. Supply these OS boundaries while keeping
-// the real RNW row, GestureDetector, Pan recognizer and semantic callbacks in the path.
+// the real RNW row, browser drag binding and semantic callbacks in the path.
 function pointer(target: Element, type: string, x: number, y: number) {
     const event = new MouseEvent(type, { bubbles: true, clientX: x, clientY: y, button: 0, buttons: type === 'pointerup' ? 0 : 1 });
     Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: 'mouse' } });
     target.dispatchEvent(event);
 }
 
+function drag(target: Element, type: string, x: number, y: number) {
+    const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y });
+    target.dispatchEvent(event);
+    return event;
+}
+
 describe('SessionListRow real web gesture', () => {
+    it.each(['folder', 'project'] as const)('opens the real %s movement menu before hover and delivers both actions', async headerKind => {
+        // jsdom supplies no layout; keep the real dropdown, portal and row handlers underneath it.
+        vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 300, 40));
+        const writes: Array<{ direction: 'up' | 'down'; key: string }> = [];
+        const item: Extract<SessionListIndexItem, { type: 'header' }> = {
+            type: 'header', title: 'Planning', headerKind, folderId: 'planning', serverId: 'server_a',
+            groupKey: `${headerKind}:planning`, workspaceKey: 'workspace_a',
+            workspace: { t: 'workspaceRef', serverId: 'server_a', workspaceRefId: 'workspace_a' },
+            workspaceScopeHint: { serverId: 'server_a', machineId: 'machine_a', rootPath: '/repo' },
+        };
+        function MovementHeader() {
+            const getRowMoveActionHandlers = useSessionListRowMoveActionHandlers({
+                openMoveSheetForTreeRow: async () => {},
+                moveTreeRowToWorkspaceRoot: () => {},
+                moveTreeRowByKeyboard: (rowId, _label, direction) => { writes.push({ direction, key: rowId }); },
+            });
+            return (
+            <SessionListHeaderItem item={item} collapsedKeys={{}} projectHeaderViewModelByGroupKey={new Map()}
+                hasMultipleMachines={false} onOpenProject={() => {}} onCreateSessionFromWorkspaceScope={() => {}}
+                onAddFolderToWorkspace={() => {}} onRenameWorkspace={() => {}} onResetWorkspaceName={() => {}} onToggleCollapse={() => {}}
+                getRowMoveActionHandlers={getRowMoveActionHandlers}
+                overlayShared={{ overlayVisible: makeMutable(0), overlayKind: makeMutable(0), overlayTop: makeMutable(0),
+                    overlayHeight: makeMutable(0), overlayLeft: makeMutable(0), overlayRight: makeMutable(0), overlayDepth: makeMutable(0) }}
+                onFolderDragStart={() => null} onFolderDropResult={() => {}}
+                resolveDropResult={() => ({ result: { instruction: { kind: 'idle' }, visual: { kind: 'none' } }, geometry: { kind: 'none' } })} />
+            );
+        }
+        container = document.createElement('div'); document.body.append(container); root = createRoot(container);
+        await act(async () => root?.render(<InjectedAuthProvider credentials={{ token: 'test-token' }}>
+            <MovementHeader />
+        </InjectedAuthProvider>));
+        const click = async (node: Element) => act(async () => {
+            node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+        });
+        const trigger = [...container.querySelectorAll('[aria-label]')].find(node => node.getAttribute('aria-label') === t('common.moreActions'));
+        expect(trigger).toBeDefined();
+        for (const direction of ['up', 'down'] as const) {
+            await click(trigger!);
+            const optionId = headerKind === 'folder' ? `move-${direction}` : direction === 'up' ? 'moveUp' : 'moveDown';
+            await vi.waitFor(() => expect(document.querySelector(`[data-testid="dropdown-option-${optionId}"]`)).not.toBeNull());
+            await click(document.querySelector(`[data-testid="dropdown-option-${optionId}"]`)!);
+            await vi.waitFor(() => expect(writes.at(-1)?.direction).toBe(direction));
+        }
+        const key = headerKind === 'folder' ? treeRowId.folder(item.serverId!, item.folderId!) : treeRowId.workspaceRoot(item.groupKey!);
+        expect(writes).toEqual([{ direction: 'up', key }, { direction: 'down', key }]);
+    });
+
     it.each(['session', 'session-folder', 'session-workspace'] as const)('carries the real %s gesture through list interactions and pane registration', async (sourceKind) => {
         const scope = { serverId: 'server_a', accountId: 'account_a' };
         const session = createSessionFixture({ id: 'sess_pointer', serverId: scope.serverId });
@@ -111,6 +166,7 @@ describe('SessionListRow real web gesture', () => {
         const controlsRef: { current: SplitCanvasHostControls | null } = { current: null };
         const execute = createWorkspaceActionAdapter({ getState: () => state, navigation, readCanvas: () => controlsRef.current, createId: () => `id:${++sequence}` });
         const actions: string[] = [];
+        const onToggleCollapse = vi.fn();
         let paneMount = 0;
         let runtime: ReturnType<typeof useEntityDragDropRuntime>;
         function ComposedRowAndPane() {
@@ -139,7 +195,7 @@ describe('SessionListRow real web gesture', () => {
                 : <SessionListHeaderItem item={sourceKind === 'session-folder' ? folder : project}
                     collapsedKeys={{}} projectHeaderViewModelByGroupKey={new Map()} hasMultipleMachines={false}
                     onOpenProject={() => {}} onCreateSessionFromWorkspaceScope={() => {}} onAddFolderToWorkspace={() => {}}
-                    onRenameWorkspace={() => {}} onResetWorkspaceName={() => {}} onToggleCollapse={() => {}}
+                    onRenameWorkspace={() => {}} onResetWorkspaceName={() => {}} onToggleCollapse={onToggleCollapse}
                     dataIndex={sourceKind === 'session-folder' ? 1 : 0} overlayShared={interactions.dropOverlayShared}
                     onRegisterTreeRowBounds={interactions.registerTreeRowBounds} onUnregisterTreeRowBounds={interactions.unregisterTreeRowBounds}
                     onFolderDragStart={interactions.handleDragStart} onFolderDropResult={interactions.handleTreeDropResult}
@@ -172,11 +228,30 @@ describe('SessionListRow real web gesture', () => {
             : sourceKind === 'session-folder' ? 'session-folder-header-planning' : 'session-list-project-header:group';
         const row = container.querySelector(`[data-testid="${sourceTestId}"]`)!;
         expect(row).not.toBeNull();
-        await act(async () => pointer(row, 'pointerdown', 50, 30));
-        expect(captured.has(1)).toBe(true);
+        const body = row.querySelector('[data-entity-drag-body="true"]') ?? row;
+        if (sourceKind !== 'session') {
+            const collapse = sourceKind === 'session-folder'
+                ? row.querySelector('[data-testid="session-folder-collapse-planning"]')! : body;
+            await act(async () => {
+                pointer(collapse, 'pointerdown', 50, 30);
+                pointer(collapse, 'pointerup', 50, 30);
+                collapse.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+            });
+            expect(captured.size).toBe(0);
+            expect(onToggleCollapse).toHaveBeenCalledTimes(1);
+            expect(runtime!.getSnapshot().phase).not.toBe('carrying');
+            if (sourceKind === 'session-folder') {
+                const rejected = drag(collapse, 'dragstart', 50, 30);
+                expect(rejected.defaultPrevented).toBe(true);
+                expect(runtime!.getSnapshot().phase).not.toBe('carrying');
+            }
+        }
+        await act(async () => pointer(body, 'pointerdown', 50, 30));
+        expect(captured.has(1)).toBe(false);
+        await act(async () => drag(body, 'dragstart', 50, 30));
         // Separate pointer frames permit the real carrying-state row rerender before leaving the list.
         for (const [x, y] of [[80, 30], [120, 30], [600, 380], [1000, 380], [1380, 380]] as const) {
-            await act(async () => pointer(row, 'pointermove', x, y));
+            await act(async () => drag(row, 'dragover', x, y));
         }
         expect(runtime!.getSnapshot()).toMatchObject({ phase: 'carrying', item: { kind: sourceKind } });
         if (sourceKind === 'session') expect(runtime!.getSnapshot().admission).toEqual(expect.objectContaining({ status: 'allowed' }));
@@ -187,13 +262,13 @@ describe('SessionListRow real web gesture', () => {
         const remountedHost = container.querySelector<HTMLElement>('[data-testid="split-canvas-host"]')!;
         const remountedLayout = Reflect.get(remountedHost, '__reactLayoutHandler') as (event: unknown) => void;
         await act(async () => remountedLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 1080, height: 600 } } }));
-        await act(async () => pointer(row, 'pointermove', 1380, 380));
+        await act(async () => drag(row, 'dragover', 1380, 380));
         if (sourceKind !== 'session') {
             // Folder/workspace references travel outside the list through the same owner,
             // but a Workspace pane does not declare either kind as an openable destination.
             expect(runtime!.getSnapshot()).toMatchObject({ phase: 'carrying', item: { kind: sourceKind }, targetId: null, admission: null });
             expect(runtime!.getPointer()).toEqual({ x: 1380, y: 380 });
-            await act(async () => pointer(row, 'pointercancel', 1380, 380));
+            await act(async () => drag(row, 'dragend', 1380, 380));
             expect(runtime!.getSnapshot().phase).toBe('idle');
             expect(actions).toEqual([]);
             expect(state.root.kind).toBe('leaf');
@@ -202,13 +277,13 @@ describe('SessionListRow real web gesture', () => {
         expect(runtime!.getSnapshot()).toMatchObject({ phase: 'carrying', item: { kind: 'session' },
             admission: { status: 'allowed', effect: { actionId: 'workspace.tabs.open', input: { mode: 'splitRight' } } } });
         expect(container.querySelector('[data-testid="split-canvas-drop-overlay-group:1-right"]')).not.toBeNull();
-        await act(async () => pointer(row, 'pointerup', 1380, 380));
-        expect(actions).toEqual(['workspace.tabs.open']);
+        await act(async () => drag(remountedHost, 'drop', 1380, 380));
+        await vi.waitFor(() => expect(actions).toEqual(['workspace.tabs.open']));
         expect(state.root.kind).toBe('split');
         expect(Object.values(state.tabs).map(tab => tab.target.params.id)).toEqual(['existing', session.id]);
     });
 
-    it.each(['pointerup', 'pointercancel'])('captures a desktop carry and settles %s outside the row', async (terminalEvent) => {
+    it.each(['drop', 'dragend'])('keeps pointer clicks uncaptured and settles desktop %s outside the row', async (terminalEvent) => {
         const captured = new Set<number>();
         Object.defineProperties(HTMLElement.prototype, {
             setPointerCapture: { configurable: true, value: (id: number) => captured.add(id) },
@@ -227,7 +302,11 @@ describe('SessionListRow real web gesture', () => {
         cancelCarry = () => { stopBoundary(); retire(); };
         const onOpened = vi.fn();
         let carry: ReturnType<typeof createEntityDragGestureAdapter> | undefined;
-        const onDragStart = vi.fn(() => { carry = createEntityDragGestureAdapter(runtime.begin('press-source')!); });
+        const onDragStart = vi.fn(() => {
+            const handle = runtime.begin('press-source')!;
+            carry = createEntityDragGestureAdapter(handle);
+            return handle;
+        });
         const onDropResult = vi.fn(async () => { await carry?.end(true); });
         const onDragCancel = vi.fn(() => { carry?.cancel(); });
         const resolveDropResult = vi.fn((event: { pointer: { x: number; y: number } | null }) => {
@@ -257,19 +336,19 @@ describe('SessionListRow real web gesture', () => {
         const row = container.querySelector('[data-testid="session-list-item-sess_pointer"]');
         expect(row).not.toBeNull();
         await act(async () => { pointer(row!, 'pointerdown', 50, 30); });
-        expect(captured.has(1)).toBe(true);
+        expect(captured.has(1)).toBe(false);
         expect(onDragStart).not.toHaveBeenCalled();
-        await act(async () => { pointer(row!, 'pointermove', 80, 30); pointer(row!, 'pointermove', 120, 30); });
+        await act(async () => { drag(row!, 'dragstart', 50, 30); drag(row!, 'dragover', 120, 30); });
         expect(onDragStart).toHaveBeenCalledWith('sess_pointer');
         await act(async () => {
-            pointer(row!, 'pointermove', 800, 30);
-            pointer(row!, 'pointermove', 1000, 30);
-            pointer(row!, terminalEvent, 1000, 30);
+            drag(row!, 'dragover', 800, 30);
+            drag(row!, 'dragover', 1000, 30);
+            if (terminalEvent === 'drop') await runtime.release();
+            drag(row!, 'dragend', 1000, 30);
         });
         expect(resolveDropResult).toHaveBeenLastCalledWith(expect.objectContaining({ pointer: { x: 1000, y: 30 } }));
-        expect(onDropResult).toHaveBeenCalledTimes(terminalEvent === 'pointerup' ? 1 : 0);
-        expect(onDragCancel).toHaveBeenCalledTimes(terminalEvent === 'pointercancel' ? 1 : 0);
-        if (terminalEvent === 'pointerup') expect(captured.has(1)).toBe(false);
+        expect(runtime.getSnapshot().phase).not.toBe('carrying');
+        expect(captured.has(1)).toBe(false);
         // Real browsers synthesize click after the Pan's captured pointer release.
         // Keep the real SessionItem Pressable in the path: the drop must not open it.
         await act(async () => row!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 })));

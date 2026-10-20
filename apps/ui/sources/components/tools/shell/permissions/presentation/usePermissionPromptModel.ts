@@ -1,5 +1,5 @@
 import * as React from 'react';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import type { Metadata } from '@happier-dev/session-core/state';
 import { ResolvedMcpToolIdentityV1Schema } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
 import { MCP_SERVER_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';

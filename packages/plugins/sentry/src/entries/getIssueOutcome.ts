@@ -18,8 +18,9 @@
  */
 
 import { SENTRY_FAILURE_CODES, type SentryFailureV1 } from '../sentryContracts.js';
-import type { SentryApiOutcomeV1 } from '../api/sentryApiClient.js';
+import type { SentryApiClientV1, SentryApiOutcomeV1 } from '../api/sentryApiClient.js';
 import { classifySentryFailure } from '../api/sentryFailure.js';
+import { buildSentryIssueUrl } from '../api/sentryRoutes.js';
 import {
   resolveSentryInvokedScope,
   type SentryInvokedInstanceV1,
@@ -41,7 +42,13 @@ export type SentryGetOutcomeInputV1 = Readonly<{
 }>;
 
 export type SentryGetOutcomeV1 =
-  | Readonly<{ kind: 'present'; localRef: SentryLocalRefV1; snapshot: SentryIssueSnapshotV1 }>
+  | Readonly<{
+      kind: 'present'; localRef: SentryLocalRefV1; snapshot: SentryIssueSnapshotV1;
+      /** Source-private confirming facts, never forwarded with the observation. */
+      nativeStatus: string;
+      nativeSubstatus: string | null;
+      assignedTo: Readonly<{ type: 'user' | 'team'; id: string }> | null | undefined;
+    }>
   | Readonly<{ kind: 'merged'; localRef: SentryLocalRefV1; successor: SentryLocalRefV1 }>
   | Readonly<{ kind: 'unresolved'; localRef: SentryLocalRefV1; failure: SentryFailureV1 }>;
 
@@ -127,9 +134,32 @@ export function resolveSentryGetOutcome(input: SentryGetOutcomeInputV1): SentryG
       }));
   }
 
+  const assignedTo: Extract<SentryGetOutcomeV1, { kind: 'present' }>['assignedTo'] = body.assignedTo === null ? null : (
+    isRecord(body.assignedTo)
+    && (body.assignedTo.type === 'user' || body.assignedTo.type === 'team')
+    && typeof body.assignedTo.id === 'string'
+      ? { type: body.assignedTo.type, id: body.assignedTo.id }
+      : undefined
+  );
   return Object.freeze({
     kind: 'present' as const,
     localRef: mapped.snapshot.localRef,
     snapshot: mapped.snapshot,
+    nativeStatus: typeof body.status === 'string' ? body.status : '',
+    nativeSubstatus: typeof body.substatus === 'string' ? body.substatus : null,
+    assignedTo,
+  });
+}
+
+/** Shared exact-issue reader for get, write preflight, and write confirmation. */
+export async function readSentryIssue(
+  client: SentryApiClientV1,
+  configured: SentryInvokedInstanceV1,
+  requestedEntryId: string,
+): Promise<SentryGetOutcomeV1> {
+  const requestUrl = buildSentryIssueUrl({ instance: configured, entryId: requestedEntryId });
+  return resolveSentryGetOutcome({
+    requestedEntryId, configured, requestUrl, organizationSlug: null, nowMs: Date.now(),
+    outcome: await client.request({ url: requestUrl, operation: 'issue' }),
   });
 }

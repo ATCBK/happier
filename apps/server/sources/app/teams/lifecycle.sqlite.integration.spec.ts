@@ -409,7 +409,7 @@ describe("Team lifecycle (SQLite integration)", () => {
             }))).toEqual({ ok: false, error: "team_not_found" });
         });
 
-        it("withdraws every capability from a suspended member and an inactive Account", async () => {
+        it("retains only self-leave for a suspended native member and hides an inactive Account", async () => {
             const { owner, teamId } = await ownedTeam();
             const member = await account();
             await db.teamMembership.create({ data: { teamId, accountId: member.id, role: "admin" } });
@@ -418,8 +418,12 @@ describe("Team lifecycle (SQLite integration)", () => {
                 where: { teamId, accountId: member.id },
                 data: { status: "suspended" },
             });
-            expect(await inTx(tx => readTeamSummaryForActorInTx(tx, { teamId, actorAccountId: member.id })))
-                .toEqual({ ok: false, error: "team_not_found" });
+            const suspended = await inTx(tx => readTeamSummaryForActorInTx(tx, { teamId, actorAccountId: member.id }));
+            expect(suspended).toMatchObject({ ok: true, team: { id: teamId, viewerRole: "admin", counts: null, recovery: null } });
+            if (!suspended.ok) return;
+            expect(Object.entries(suspended.team.capabilities)
+                .filter(([, allowed]) => allowed)
+                .map(([capability]) => capability)).toEqual(["leave"]);
 
             await db.account.update({ where: { id: owner.id }, data: { status: "suspended" } });
             expect(await inTx(tx => readTeamSummaryForActorInTx(tx, { teamId, actorAccountId: owner.id })))

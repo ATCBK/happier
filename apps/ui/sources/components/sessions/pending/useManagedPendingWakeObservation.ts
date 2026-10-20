@@ -6,20 +6,30 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 
+type ManagedPendingWakeObservation = Readonly<
+    | { kind: 'loading'; machine: null }
+    | { kind: 'read'; machine: ManagedMachineV1 | null }
+>;
+
 /** Rereads the canonical protected row on its incumbent Home invalidation edge. */
 export function useManagedPendingWakeObservation(input: Readonly<{
     sessionId: string;
     authorization: PendingActivationAuthorizationV1 | null | undefined;
     accountLifetime: ServerAccountScopeLifetime | null;
     reconnectSignal: string | number | null;
-}>): ManagedMachineV1 | null {
+}>): ManagedPendingWakeObservation {
     const target = input.authorization?.managedWakeTargetV1;
     const qualified = target?.origin.kind === 'session-input'
         && target.origin.session.sessionId === input.sessionId
         && target.origin.session.homeId === target.homeId
         && target.origin.pendingRequestId === input.authorization?.requestId
         && target.origin.requestedAt === input.authorization?.requestedAt;
-    const [machine, setMachine] = React.useState<ManagedMachineV1 | null>(null);
+    const identityKey = qualified && target ? `${target.homeId}:${target.managedId}:${target.enrolledMachineId}` : null;
+    const [read, setRead] = React.useState<Readonly<{
+        identityKey: string | null;
+        lifetime: ServerAccountScopeLifetime;
+        machine: ManagedMachineV1 | null;
+    }> | null>(null);
     const actionExecutor = React.useMemo(() => createDefaultActionExecutor(), []);
     const [invalidated, invalidate] = React.useReducer((value: number) => value + 1, 0);
     React.useEffect(() => {
@@ -30,12 +40,14 @@ export function useManagedPendingWakeObservation(input: Readonly<{
             if (event.entityIds === undefined || event.entityIds.includes(target.managedId)) invalidate();
         });
     }, [input.accountLifetime, qualified, target]);
+    // A reread (change edge, reconnect) keeps the incumbent observation until its answer arrives; only
+    // another target or lifetime starts from nothing, and a failed read leaves the fact unknown.
     React.useEffect(() => {
         const lifetime = input.accountLifetime;
-        setMachine(null);
         if (!qualified || !target || !lifetime?.isCurrent()) return;
         const controller = new AbortController();
-        const retirement = lifetime.onRetire(() => { controller.abort(); setMachine(null); });
+        const retirement = lifetime.onRetire(() => { controller.abort(); setRead(null); });
+        const settle = (machine: ManagedMachineV1 | null) => setRead({ identityKey, lifetime, machine });
         void (async () => {
             try {
                 const result = await actionExecutor.execute('machines.managed.get', {
@@ -44,18 +56,19 @@ export function useManagedPendingWakeObservation(input: Readonly<{
                     serverId: lifetime.scope.serverId, expectedAccountId: lifetime.scope.accountId,
                     surface: 'ui', signal: controller.signal,
                 });
-                if (controller.signal.aborted || !lifetime.isCurrent() || !result.ok) return;
-                const parsed = ManagedMachineV1Schema.safeParse(result.result);
-                if (!parsed.success) return;
-                const row = parsed.data;
-                if (row.homeId !== target.homeId || row.id !== target.managedId
-                    || row.enrolledMachineId !== target.enrolledMachineId || row.creationState !== 'active') return;
-                setMachine(row);
+                if (controller.signal.aborted || !lifetime.isCurrent()) return;
+                const parsed = result.ok ? ManagedMachineV1Schema.safeParse(result.result) : null;
+                const row = parsed?.success ? parsed.data : null;
+                settle(row && row.homeId === target.homeId && row.id === target.managedId
+                    && row.enrolledMachineId === target.enrolledMachineId && row.creationState === 'active' ? row : null);
             } catch {
                 // A failed protected read is unknown, never native absence or a power request.
+                if (!controller.signal.aborted && lifetime.isCurrent()) settle(null);
             }
         })();
         return () => { controller.abort(); retirement.dispose(); };
-    }, [actionExecutor, input.accountLifetime, input.reconnectSignal, invalidated, qualified, target]);
-    return machine;
+    }, [actionExecutor, identityKey, input.accountLifetime, input.reconnectSignal, invalidated, qualified, target]);
+    if (!qualified || input.accountLifetime && !input.accountLifetime.isCurrent()) return { kind: 'read', machine: null };
+    if (!read || read.identityKey !== identityKey || read.lifetime !== input.accountLifetime) return { kind: 'loading', machine: null };
+    return { kind: 'read', machine: read.machine };
 }

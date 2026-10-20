@@ -3,6 +3,8 @@ import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { resolveVitestNodeCommand } from '../../../scripts/testing/vitestNodeCommand.mjs';
+
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = resolve(packageRoot, '../..');
 const siblingArgument = process.argv[2];
@@ -17,7 +19,6 @@ function run(command, args, cwd, env = process.env) {
 
 function runLocalCanonicalWriterContract() {
   const serverRoot = resolve(repoRoot, 'apps/server');
-  const vitestEntrypoint = resolve(repoRoot, 'node_modules/vitest/vitest.mjs');
   const remoteProtocolOwner = resolve(
     repoRoot,
     'packages/protocol/src/sessionRuntimeActivity/projection.ts',
@@ -37,13 +38,14 @@ function runLocalCanonicalWriterContract() {
   if (hasRemoteTopology === hasDevTopology) {
     throw new Error('Runtime Activity topology is missing or ambiguous');
   }
+  const vitestCommand = resolveVitestNodeCommand(repoRoot);
 
   if (hasRemoteTopology) {
     if (!existsSync(remoteOwnerTest)) {
       throw new Error(`Remote canonical Runtime Activity writer contract is missing: ${remoteOwnerTest}`);
     }
-    return run(process.execPath, [
-      vitestEntrypoint,
+    return run(vitestCommand.command, [
+      ...vitestCommand.argsPrefix,
       'run',
       '--isolate',
       '-c',
@@ -55,8 +57,8 @@ function runLocalCanonicalWriterContract() {
     throw new Error(`Dev canonical Runtime Activity writer contract is missing: ${devOwnerTest}`);
   }
   if (hasDevTopology) {
-    return run(process.execPath, [
-      vitestEntrypoint,
+    return run(vitestCommand.command, [
+      ...vitestCommand.argsPrefix,
       'run',
       '--isolate',
       '-c',

@@ -34,6 +34,12 @@ function manifest() {
         contributes: {
             projectNativeAdapters: [{ id: 'pixi', files: ['pixi.toml'], roles: ['resolveCommand', 'produceEnvironment'] }],
             backgroundServices: [{ id: 'account-supervisor' }],
+            composerReferences: [{ id: 'account-reference', title: 'Account', description: 'Find Account context', icon: 'search', triggers: ['@'] }],
+            composerAttachments: [{ id: 'account-attachment', title: 'Account', icon: 'search', cardinality: 'many', valueSchema: { type: 'object' } }],
+            requestInterceptors: [{ id: 'account-interceptor', origins: ['https://example.test'] }],
+            events: [{ id: 'account-event', kind: 'subscription', target: { kind: 'plugin', event: 'changed' } }],
+            mcp: { servers: [{ id: 'account-tools', title: 'Account', kind: 'dynamic' }],
+                discoverySources: [{ id: 'account-discovery', title: 'Account', loadedInHappierSessions: true }] },
             notificationChannels: [{
                 id: 'account-notifier',
                 kind: 'plugin',
@@ -129,6 +135,12 @@ describe('resolveManifestHostAccessRequests', () => {
                 id: 'account',
                 qualifiedId: 'acme.accounts/connectedAccountDescriptors/account',
             },
+            { id: 'account-reference', qualifiedId: 'acme.accounts/composerReferences/account-reference' },
+            { id: 'account-attachment', qualifiedId: 'acme.accounts/composerAttachments/account-attachment' },
+            { id: 'account-interceptor', qualifiedId: 'acme.accounts/requestInterceptors/account-interceptor' },
+            { id: 'account-event', qualifiedId: 'acme.accounts/events/account-event' },
+            { id: 'account-tools', qualifiedId: 'acme.accounts/mcp.servers/account-tools' },
+            { id: 'account-discovery', qualifiedId: 'acme.accounts/mcp.discoverySources/account-discovery' },
         ]) {
             expect(resolveManifestHostAccessRequestsForQualifiedContribution({
                 manifest: pluginManifest,

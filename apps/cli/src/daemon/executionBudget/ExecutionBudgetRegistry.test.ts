@@ -134,12 +134,16 @@ describe('ExecutionBudgetRegistry', () => {
     expect(observations).toHaveLength(4);
   });
 
-  it('enforces maxConcurrentExecutionRuns', () => {
+  it('enforces maxConcurrentExecutionRuns across intents and releases capacity for reacquisition', () => {
     const registry = new ExecutionBudgetRegistry({ maxConcurrentExecutionRuns: 1, maxConcurrentOneShotTasks: 1 });
-    expect(registry.tryAcquireExecutionRun('run1')).toBe(true);
-    expect(registry.tryAcquireExecutionRun('run2')).toBe(false);
+    expect(registry.tryAcquireExecutionRun('run1', 'review')).toBe(true);
+    expect(registry.tryAcquireExecutionRun('run1', 'review')).toBe(true);
+    expect(registry.tryAcquireExecutionRun('run2', 'delegate')).toBe(false);
+    expect(registry.tryAcquireOneShotTask('task1', 'automation')).toBe(true);
+    expect(registry.tryAcquireOneShotTask('task2', 'scm_commit_message')).toBe(false);
     registry.releaseExecutionRun('run1');
-    expect(registry.tryAcquireExecutionRun('run2')).toBe(true);
+    expect(registry.tryAcquireExecutionRun('run2', 'delegate')).toBe(true);
+    expect(registry.getInFlightSnapshot()).toEqual({ executionRuns: 1, oneShotTasks: 1 });
   });
 
   it('allows unlimited execution runs when maxConcurrentExecutionRuns is unset', () => {
@@ -185,7 +189,7 @@ describe('ExecutionBudgetRegistry', () => {
   it('enforces per-class caps when configured', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test exercises forward-compatible constructor shape
     const registry = new ExecutionBudgetRegistry({
-      maxConcurrentExecutionRuns: 10,
+      maxConcurrentExecutionRuns: null,
       maxConcurrentOneShotTasks: 10,
       maxConcurrentByClass: {
         review: 1,
@@ -198,6 +202,7 @@ describe('ExecutionBudgetRegistry', () => {
     expect((registry as any).tryAcquireExecutionRun('run2', 'review')).toBe(false);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test exercises forward-compatible overload
     expect((registry as any).tryAcquireExecutionRun('run3', 'plan')).toBe(true);
+    expect(registry.tryAcquireExecutionRun('run4', 'delegate')).toBe(true);
   });
 
   it('enforces a global cap when configured', () => {

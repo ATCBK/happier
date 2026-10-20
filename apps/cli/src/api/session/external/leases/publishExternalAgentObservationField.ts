@@ -8,6 +8,8 @@ import type { ExternalAgentObservationSnapshotV1, SessionMetadata } from '@happi
 
 import { getSessionNotificationTitle } from '@/agent/runtime/notifications/sessionNotificationContext';
 import { dispatchActivityNotificationAsync } from '@/notifications/activity/dispatchActivityNotification';
+import { readAccountSessionDeliveryMutedScopes } from '@/api/sessionDeliveryMuteTransport';
+import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { readStoredCredentials } from '@/persistence';
 import { updateSessionMetadataForTarget } from '@/session/services/updateSessionMetadataForTarget';
 import {
@@ -86,6 +88,9 @@ async function dispatchExternalSessionReadyNotification(
     await dispatchActivityNotificationAsync({
         settings: settings.settings,
         settingsSecretsReadKeys: settings.settingsSecretsReadKeys,
+        readAccountSessionDeliveryMutedScopes: () => readAccountSessionDeliveryMutedScopes({
+            token: home.token, serverHttpBaseUrl: home.serverUrl, accountId: readAccountIdFromToken(home.token) ?? '',
+        }),
         fetchSessionNotificationContext: (sessionId) => fetchSessionById({
             ...home, sessionId, accessProjectionVersion: 1,
         }),

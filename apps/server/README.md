@@ -182,6 +182,14 @@ METRICS_PORT=9090
 # HAPPIER_INSTANCE_ID=api-1
 ```
 
+Development 0.3 supports AWS web identity (including EKS IRSA): omit both
+`S3_ACCESS_KEY` and `S3_SECRET_KEY` and set `AWS_ROLE_ARN` and
+`AWS_WEB_IDENTITY_TOKEN_FILE`. MinIO obtains and refreshes temporary STS
+credentials for the shared public/private S3 client. Set `AWS_REGION` for regional
+STS, including GovCloud; `S3_REGION` remains the S3 signing region. Setting either
+static key still requires both. See the [environment reference](../docs/content/docs/self-hosting/env.mdx#s3-credentials-from-aws-web-identity)
+for configuration and private-bucket permissions.
+
 ### Example `.env` (light flavor, self-hosting)
 
 ```bash

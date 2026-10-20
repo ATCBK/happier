@@ -37,8 +37,8 @@ export function readPendingLocalId(value: unknown): string | null {
   return isPendingLocalId(value) ? value : null;
 }
 
-export const PendingLocalIdSchema = lazyZodSchema(() => z.string().check(z.refine(isPendingLocalId, {
+export const PendingLocalIdSchema = lazyZodSchema(() => z.string().apply((base) => base.check(z.refine<z.output<typeof base>>(isPendingLocalId, {
   message: 'Pending localId must not be blank',
-})));
+})) as typeof base & z.ZodMiniType<string, z.input<typeof base>>));
 
 export type PendingLocalId = z.infer<typeof PendingLocalIdSchema>;

@@ -1,8 +1,10 @@
-import type { SessionAwarenessProjectionV1 } from '@happier-dev/protocol';
+import type { SessionAwarenessProjectionV1, SessionStatusResult } from '@happier-dev/protocol';
+import { AgentStateSchema } from '@happier-dev/session-core/state';
+import { listPendingRequests, readSharedMetadataActionConfirmationState } from '@happier-dev/session-core/pending';
 import { projectCliSessionAwarenessV1 } from '@/cli/output/session/sessionAwareness';
 import type { StoredCredentials } from '@/persistence';
 import { summarizeSessionRecord, type SessionSummary } from '@/cli/output/session/sessionSummary';
-import { decryptSessionPayload } from '@/session/transport/encryption/sessionEncryptionContext';
+import { decryptSessionPayload, readSessionPresentationContent } from '@/session/transport/encryption/sessionEncryptionContext';
 import {
   readLatestAgentStateSummaryViaSocket,
   summarizeAgentState,
@@ -11,9 +13,15 @@ import {
 
 import { resolveSessionTransportContext } from './resolveSessionTransportContext';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
+import { readSessionReadiness, type SessionReadinessInventoryReader, type SessionReadinessCredentialReader } from './readSessionReadiness';
+import type { SessionReadinessV1 } from '@happier-dev/protocol/sessions/control/sessionReadinessV1';
+import type { QualifiedConnectedAccountPurposeV1 } from '@happier-dev/protocol/connect/connectedAccountPurposeIdentity';
+import type { QualifiedConnectedAccountPurposeTeamResourceSelectionV1 } from '@happier-dev/protocol/connect/connectedAccountPurposeBindings';
+import type { ExternalActionExecutionAuthorizationV1 } from '@happier-dev/protocol/actions/externalActionApi';
 
 export type GetSessionStatusResult =
-  | Readonly<{ ok: true; session: SessionSummary; agentState: AgentStateSummary | null; awareness: SessionAwarenessProjectionV1 }>
+  | Readonly<{ ok: true; session: SessionSummary; agentState: AgentStateSummary | null; awareness: SessionAwarenessProjectionV1; readiness?: SessionReadinessV1;
+      pendingRequests: SessionStatusResult['pendingRequests'] }>
   | Readonly<{ ok: false; code: 'session_not_found' | 'session_id_ambiguous' | 'session_lookup_timeout' | 'unsupported' | 'encryption_material_unavailable'; candidates?: string[] }>;
 
 function readSessionAgentState(params: Readonly<{
@@ -51,11 +59,23 @@ export async function getSessionStatus(params: Readonly<{
   credentials: StoredCredentials;
   idOrPrefix: string;
   live: boolean;
+  readiness?: boolean;
+  operation?: 'conversation' | 'credential';
+  credentialPurpose?: QualifiedConnectedAccountPurposeV1;
+  credentialTeamSelection?: QualifiedConnectedAccountPurposeTeamResourceSelectionV1;
+  readReadinessInventory?: SessionReadinessInventoryReader;
+  readReadinessCredential?: SessionReadinessCredentialReader;
+  serverHttpBaseUrl?: string;
+  signal?: AbortSignal;
+  authorization?: ExternalActionExecutionAuthorizationV1;
+  resolveAuthorizationHeaders?: Parameters<typeof resolveSessionTransportContext>[0]['resolveAuthorizationHeaders'];
   serverFeaturesSnapshot?: CliServerFeaturesSnapshot;
 }>): Promise<GetSessionStatusResult> {
   const sessionTarget = await resolveSessionTransportContext({
     credentials: params.credentials,
     idOrPrefix: params.idOrPrefix,
+    ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
     ...(params.serverFeaturesSnapshot ? { serverFeaturesSnapshot: params.serverFeaturesSnapshot } : {}),
   });
   if (!sessionTarget.ok) {
@@ -77,7 +97,9 @@ export async function getSessionStatus(params: Readonly<{
     };
   let agentStateSummary = snapshotAgentState === null ? null : summarizeAgentState(snapshotAgentState);
 
-  if (params.live) {
+  // External Actions retain their admitted HTTP projection. The ordinary live
+  // socket uses the host token and cannot stand in for requester authority.
+  if (params.live && !params.authorization) {
     try {
       const liveSummary = await readLatestAgentStateSummaryViaSocket({
         token: params.credentials.token,
@@ -97,6 +119,27 @@ export async function getSessionStatus(params: Readonly<{
     }
   }
 
+  const openedAgentState = AgentStateSchema.safeParse(agentStateEvidence?.value);
+  const presentation = readSessionPresentationContent({
+    credentials: params.credentials,
+    accountEncryptionMode: sessionTarget.accountEncryptionCurrentness.mode,
+    recipientEnvelopeReadiness: sessionTarget.accountEncryptionCurrentness.recipientEnvelopeReadiness,
+    rawSession: sessionTarget.rawSession,
+  });
+  const pendingRequests = openedAgentState.success ? listPendingRequests({
+    sessionId: sessionTarget.sessionId,
+    active: sessionTarget.rawSession.active,
+    agentState: openedAgentState.data,
+    actionConfirmations: readSharedMetadataActionConfirmationState(presentation.metadata, sessionTarget.rawSession.metadataLayoutVersion),
+    presentationCompletedRequests: null,
+    projected: null,
+  }).map(request => ({
+    requestId: request.id,
+    ...(request.turnId ? { turnId: request.turnId } : {}),
+    kind: request.kind,
+    tool: request.tool,
+  })) : null;
+
   return {
     ok: true,
     session: summarizeSessionRecord({
@@ -105,6 +148,7 @@ export async function getSessionStatus(params: Readonly<{
       session: sessionTarget.rawSession,
     }),
     agentState: agentStateSummary,
+    pendingRequests,
     awareness: projectCliSessionAwarenessV1({
       credentials: params.credentials,
       accountEncryption: sessionTarget.accountEncryptionCurrentness,
@@ -112,5 +156,15 @@ export async function getSessionStatus(params: Readonly<{
       nowMs: Date.now(),
       ...(agentStateEvidence ? { agentState: agentStateEvidence } : {}),
     }),
+    ...(params.readiness === true ? { readiness: await readSessionReadiness({
+      credentials: params.credentials, target: sessionTarget,
+      ...(params.operation ? { operation: params.operation } : {}), ...(params.credentialPurpose ? { credentialPurpose: params.credentialPurpose } : {}),
+      ...(params.credentialTeamSelection ? { credentialTeamSelection: params.credentialTeamSelection } : {}),
+      ...(params.readReadinessInventory ? { readInventory: params.readReadinessInventory } : {}),
+      ...(params.readReadinessCredential ? { readCredential: params.readReadinessCredential } : {}),
+      ...(params.serverHttpBaseUrl ? { serverHttpBaseUrl: params.serverHttpBaseUrl } : {}),
+      ...(params.signal ? { signal: params.signal } : {}),
+      ...(params.authorization ? { authorization: params.authorization } : {}),
+    }) } : {}),
   };
 }

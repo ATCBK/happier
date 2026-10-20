@@ -1,5 +1,7 @@
 import {
+  resolveAgentExecutionTargetFromSessionMetadata,
   resolveSessionMetadataAgentIdentity,
+  parsePermissionIntentAlias,
 } from '@happier-dev/agents';
 import { AgentExecutionTargetV1Schema, CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '@happier-dev/protocol/agents/executionTargetV1';
 import { SessionCreationCorrespondenceV1ReadSchema } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
@@ -94,24 +96,20 @@ export function resolveSessionPersistedRuntimeIdentity(metadata: Record<string, 
     metadata.sessionCreationCorrespondenceV1,
   );
   const linked = resolveLinkedExternalSessionMetadataV1(metadata, 'stored');
-  const parsedAgentTarget = AgentExecutionTargetV1Schema.safeParse(
-    correspondence.success
-      ? correspondence.data.recipe.agentTarget
-      : linked.ok && linked.linkedSession.qualifiedIdentity
-        ? { kind: 'agent', identity: linked.linkedSession.qualifiedIdentity.agent }
-        : undefined,
-  );
+  const agentTarget = correspondence.success || linked.ok && linked.linkedSession.qualifiedIdentity
+    ? resolveAgentExecutionTargetFromSessionMetadata(metadata)
+    : null;
 
   // Creation correspondence is immutable provenance. Its qualified target can
   // still address the current Agent, but must not override a later cutover's
-  // persisted target. Preserve the recipe while resolving the current identity.
-  if (parsedAgentTarget.success
+  // persisted target. Before the first native open publishes an Agent identity,
+  // the admitted qualified birth target is already sufficient to retry it.
+  if (agentTarget
     && backendTarget?.sourceKind !== 'configured'
-    && identity.agentId
-    && agentRoutingIdAddressesContributionIdentityV1(identity.agentId, parsedAgentTarget.data.identity)) {
+    && !identity.ambiguousVendorResumeKeys) {
     if (runtimeDescriptorV1 && runtimeDescriptorV1.agentId !== identity.agentId) return null;
     return {
-      agentTarget: parsedAgentTarget.data,
+      agentTarget,
       ...(runtimeDescriptorV1 ? { runtimeDescriptorV1 } : {}),
     };
   }
@@ -167,6 +165,19 @@ export function buildInactiveSessionResumeSpawnOptions(
   const parsedCorrespondence = SessionCreationCorrespondenceV1ReadSchema.safeParse(rawCorrespondence);
   if (rawCorrespondence !== undefined && !parsedCorrespondence.success) return null;
   const correspondence = parsedCorrespondence.success ? parsedCorrespondence.data : null;
+  // No native identity has been published for a failed first open. Recover its
+  // admitted initial choices, then let the ordinary snapshot owner arbitrate
+  // newer persisted or explicitly authored intent. A later Agent cutover must
+  // never inherit these original-Agent launch choices.
+  const initialRecipe = resolveSessionMetadataAgentIdentity(params.metadata).basis === 'none'
+    ? correspondence?.recipe
+    : undefined;
+  const initialPermissionMode = initialRecipe?.requestedPermissionMode
+    ? parsePermissionIntentAlias(initialRecipe.requestedPermissionMode)
+    : null;
+  if (initialRecipe?.requestedPermissionMode && !initialPermissionMode) return null;
+  const createdAt = typeof rawSession.createdAt === 'number' && Number.isFinite(rawSession.createdAt)
+    ? rawSession.createdAt : 0;
 
   const persistedDirectory = selectCanonicalPersistedDirectory(rawDirectory, metadataDirectory);
   const machineId = rawMachineId ?? metadataMachineId ?? readNonEmptyString(params.fallbackMachineId);
@@ -188,6 +199,9 @@ export function buildInactiveSessionResumeSpawnOptions(
         machineId,
         directory,
         directoryKind,
+        ...(initialRecipe?.modelSelection ? { modelSelection: initialRecipe.modelSelection } : {}),
+        ...(initialPermissionMode ? { permissionMode: initialPermissionMode,
+          permissionModeUpdatedAt: initialRecipe?.configuration?.permissionIntent.updatedAtMs ?? createdAt } : {}),
         ...(correspondence
           ? {
               sessionCreationTag: correspondence.sessionCreationTag,

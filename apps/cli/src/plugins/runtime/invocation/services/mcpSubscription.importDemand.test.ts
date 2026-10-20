@@ -51,7 +51,7 @@ async function subscriptionFixture(revalidateFinalPolicy?: StablePluginMcpFinalP
         contribution: { id: 'read', qualifiedId: 'fixture.caller/actions/read' },
         occurrenceId: 'fixture-occurrence', correlationId: 'fixture-request', surface: 'agent',
         signal: new AbortController().signal, isOccurrenceCurrent: () => true,
-    }, [{ serverRefs: [ref], discoverySourceRefs: [], operations: ['connect', 'listTools'] }]);
+    }, [{ serverRefs: [ref], discoverySourceRefs: [], operations: ['listTools'] }]);
     const client = await service.connect(ref, { elicitation: { mode: 'reject' } });
     const listener = vi.fn();
     const subscription = await client.subscribeResource('file:///guide', listener);

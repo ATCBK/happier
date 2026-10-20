@@ -3,8 +3,8 @@ import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMachineFixture, renderScreen, standardCleanup } from '@/dev/testkit';
 import { serveActionHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
-import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
+import { applyProjectAccountRowsFixture, createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { AppPaneProvider, useAppPaneContext } from '@/components/appShell/panes/AppPaneProvider';
 import { storage } from '@/sync/domains/state/storage';
 import { readSessionTerminalWorkspaceForScope, registerSessionTerminalSplitMeasurements, setSessionTerminalPendingActionApproval } from '@/components/sessions/terminal/sessionTerminalWorkspaceRuntime';
 import { invokeSessionTerminalAction } from '@/components/sessions/terminal/sessionTerminalActions';
@@ -14,11 +14,20 @@ import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { createEmptyTerminalSurfaceState, readTerminalSurfaceState, replaceTerminalSurfaceState } from '@/components/sessions/terminal/terminalSurfaceStateCache';
 import { buildProjectTerminalKey } from '../projectTerminalScope';
-import { buildProjectAccountRowPhysicalKeyV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { buildProjectAccountRowPhysicalKeyV1, PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { WorkspaceEmbeddedTerminalPane } from '@/components/projects/panes/details/views/WorkspaceEmbeddedTerminalPane';
 import { EmbeddedTerminalPane } from '@/components/terminal/embedded/EmbeddedTerminalPane';
+import { ProjectCommandOutputHost, useProjectCommandOutputOpener } from '@/components/inbox/actionOperations/projectCommandOutputHost';
+import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
+import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { readVisibleSessionTerminalTabsForScope } from '@/components/sessions/terminal/sessionTerminalWorkspaceRuntime';
+import { ACTION_OPERATION_RPC_METHODS_V2, ActionOperationSnapshotV1Schema } from '@happier-dev/protocol/actions/operations/v1';
 
-afterEach(() => { standardCleanup(); vi.useRealTimers(); });
+// Machine RPC is the external boundary; operation validation, Actions, pane admission and rendering stay real.
+const outputRpc = vi.hoisted(() => vi.fn());
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: outputRpc }));
+
+afterEach(() => { standardCleanup(); vi.useRealTimers(); outputRpc.mockReset(); });
 
 async function invoke(input: Parameters<typeof invokeSessionTerminalAction>[0]) {
     const outcome: { result?: Awaited<ReturnType<typeof invokeSessionTerminalAction>> } = {};
@@ -38,7 +47,74 @@ vi.mock('@/components/terminal/xterm/XtermTerminalView.web', () => ({
     XtermTerminalView: React.forwardRef((_props, _ref) => React.createElement('XtermBoundary')),
 }));
 
+function ActiveProjectPane(props: React.PropsWithChildren<{ scopeId: string }>) {
+    const { dispatch } = useAppPaneContext();
+    React.useEffect(() => { dispatch({ type: 'activateScope', scopeId: props.scopeId }); }, [dispatch, props.scopeId]);
+    return <>{props.children}</>;
+}
+
 describe('Project terminal through the incumbent pane workspace', () => {
+    it('docks actual worker output from a subdirectory and retains its checkout across hide/reopen', async () => {
+        const serverId = 'srv_output_checkout';
+        const source = { id: 'source-ref', serverId, machineId: 'source-machine', rootPath: '/source', projectKey: 'project', createdAtMs: 1 };
+        const worker = { ...source, id: 'worker-ref', machineId: 'worker-machine', rootPath: '/worker' };
+        const unrelated = { ...worker, id: 'other-project', projectKey: 'other', rootPath: '/other' };
+        const home = await serveActionHomes({ homes: [{ key: 'project', serverUrl: 'https://output-checkout.test', accountId: 'bob', serverIdentityId: serverId }],
+            route: request => request.path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`
+                ? Response.json(createPlainProjectAccountRowListFixture({ workspaceRefs: [source, worker, unrelated] })) : undefined });
+        try {
+            publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+            applyProjectAccountRowsFixture(storage, { workspaceRefs: [source, worker, unrelated] });
+            const scopeId = buildProjectPaneScopeId(source.id, serverId);
+            const workspace = { serverId, workspaceId: source.id, machineId: source.machineId, rootPath: source.rootPath };
+            const screen = await renderScreen(<AppPaneProvider><ActiveProjectPane scopeId={scopeId}><ProjectTerminalSurface scopeId={scopeId}
+                workspaceRefId={source.id} machineId={source.machineId} rootPath={source.rootPath} serverId={serverId} workspace={workspace} /></ActiveProjectPane></AppPaneProvider>);
+            const opener = await renderHook(useProjectCommandOutputOpener, { wrapper: ({ children }) =>
+                <ProjectCommandOutputHost scopeId={scopeId}>{children}</ProjectCommandOutputHost> });
+            const operation: ActionOperationProjection = { serverId, observation: 'available', isUnavailableProjection: false,
+                snapshot: ActionOperationSnapshotV1Schema.parse({ version: 1, operationId: 'worker-run', revision: 1, actionId: 'projects.script.run', state: 'running',
+                    scope: { accountId: 'bob', machineId: worker.machineId }, title: 'Check', createdAt: 1, startedAt: 1, cancellation: 'supported',
+                    domainRef: { kind: 'projectCommand', purpose: 'script', serverId, machineId: worker.machineId,
+                        workspaceRefId: worker.id, cwd: '/worker/packages/check', terminalId: 'worker-pty' } }) };
+            let current = operation.snapshot;
+            outputRpc.mockImplementation(async (request: { method: string; payload: unknown }) => {
+                expect(request.method).toBe(ACTION_OPERATION_RPC_METHODS_V2.get);
+                expect(request.payload).toEqual({ operationId: operation.snapshot.operationId });
+                return { kind: 'found', operation: current };
+            });
+            const staleOperation = { ...operation, snapshot: { ...operation.snapshot,
+                domainRef: { kind: 'projectCommand' as const, purpose: 'setup' as const, serverId, machineId: source.machineId,
+                    workspaceRefId: source.id, cwd: source.rootPath, terminalId: 'source-pty' } } };
+            let opened = false;
+            await act(async () => { opened = await opener.getCurrent().open(staleOperation, { title: 'Check', fallbackToDetail: false }); });
+            expect(opened, JSON.stringify({ opensInTerminal: opener.getCurrent().opensInTerminal,
+                rpc: outputRpc.mock.calls.map(([request]) => ({ method: request.method, machineId: request.machineId })),
+                profileScope: storage.getState().profileScope,
+                rowsStatus: storage.getState().projectAccountRows?.status,
+                paths: home.requests.map(request => request.path),
+            })).toBe(true);
+            const output = screen.findAllByType(WorkspaceEmbeddedTerminalPane).find(node => node.props.attachedTerminalId === 'worker-pty');
+            expect(output?.props).toMatchObject({ machineId: worker.machineId, workspaceRefId: worker.id,
+                rootPath: '/worker/packages/check', workspace: { serverId, workspaceId: worker.id, machineId: worker.machineId, rootPath: worker.rootPath } });
+            const tabs = readVisibleSessionTerminalTabsForScope(scopeId);
+            expect(tabs).toHaveLength(1);
+            const outputMember = tabs[0]!.terminals[0]!;
+            expect(await invoke({ actionId: 'session.terminals.open_in_details', input: { scopeId, terminalId: outputMember.id } })).toMatchObject({ ok: true });
+            expect(readVisibleSessionTerminalTabsForScope(scopeId)).toEqual([]);
+            await act(async () => { opened = await opener.getCurrent().open(operation, { title: 'Check', fallbackToDetail: false }); });
+            expect(opened).toBe(true);
+            expect(readVisibleSessionTerminalTabsForScope(scopeId)[0]?.terminals[0]?.id).toBe(outputMember.id);
+            const wrongProject = { ...operation, snapshot: { ...operation.snapshot,
+                domainRef: { kind: 'projectCommand' as const, purpose: 'script' as const,
+                    serverId, machineId: worker.machineId, workspaceRefId: unrelated.id, cwd: unrelated.rootPath, terminalId: 'unrelated-pty' } } };
+            current = wrongProject.snapshot;
+            await act(async () => { opened = await opener.getCurrent().open(wrongProject, { title: 'Other', fallbackToDetail: false }); });
+            expect(opened).toBe(false);
+            expect(readSessionTerminalWorkspaceForScope(scopeId)?.tabs).toHaveLength(1);
+            await opener.unmount();
+            await screen.unmount();
+        } finally { await home.dispose(); }
+    });
     it('shows unreachable at silent heartbeat expiry and keeps its admitted terminal identity', async () => {
         const home = await serveActionHomes({ homes: [{ key: 'project', serverUrl: 'https://project-terminal-expiry.test', accountId: 'bob' }],
             route: () => undefined });
@@ -66,15 +142,18 @@ describe('Project terminal through the incumbent pane workspace', () => {
     });
 
     it('opens an admitted shell without a Session, then preserves labels, split identity and borrowed-view close', async () => {
-        const home = await serveActionHomes({ homes: [{ key: 'project', serverUrl: 'https://project-terminal-pane.test', accountId: 'bob', settings: {
+        const serverIdentityId = 'srv_project_terminal_pane';
+        const ref = { id: 'accepted', serverId: serverIdentityId, machineId: 'machine', rootPath: '/accepted', projectKey: 'project', createdAtMs: 1 };
+        const checkout = { ...ref, id: 'selected-checkout', rootPath: '/accepted-worktree' };
+        const home = await serveActionHomes({ homes: [{ key: 'project', serverUrl: 'https://project-terminal-pane.test', accountId: 'bob', serverIdentityId, settings: {
             actionsSettingsV1: { v: 1, actions: {}, approvalWaivedSurfaces: { 'session.terminals.open': ['ui'] } },
-        } }], route: () => undefined });
+        } }], route: request => request.path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`
+            ? Response.json(createPlainProjectAccountRowListFixture({ workspaceRefs: [ref, checkout] })) : undefined });
         let retireMeasurements: (() => void) | undefined;
         try {
             publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
             const serverId = home.homes.project!.id;
-            const ref = { id: 'accepted', serverId, machineId: 'machine', rootPath: '/accepted', projectKey: 'project', createdAtMs: 1 };
-            const checkout = { ...ref, id: 'selected-checkout', rootPath: '/accepted-worktree' };
+            expect(serverId).toBe(serverIdentityId);
             const workspace = { serverId, workspaceId: checkout.id, machineId: checkout.machineId, rootPath: checkout.rootPath };
             applyProjectAccountRowsFixture(storage, { workspaceRefs: [ref, checkout] });
             const scopeId = buildProjectPaneScopeId(ref.id, serverId);
@@ -87,12 +166,16 @@ describe('Project terminal through the incumbent pane workspace', () => {
             await screen.update(<AppPaneProvider><ProjectTerminalSurface scopeId={scopeId}
                 workspaceRefId={ref.id} machineId={ref.machineId} rootPath={ref.rootPath} serverId={serverId}
                 workspace={workspace} /></AppPaneProvider>);
-            expect(screen.findByTestId('project-terminal-workspace-root')).not.toBeNull();
+            expect(screen.findByTestId('project-terminal-workspace-root'), JSON.stringify({
+                content: screen.getTextContent(), profileScope: storage.getState().profileScope,
+                rows: storage.getState().projectAccountRows,
+                testIds: screen.tree.findAll(node => typeof node.type === 'string' && typeof node.props.testID === 'string').map(node => node.props.testID),
+            })).not.toBeNull();
             await screen.pressByTestIdAsync('project-terminal-workspace-strip-new');
             await vi.waitFor(() => expect(readSessionTerminalWorkspaceForScope(scopeId)?.tabs).toHaveLength(1));
             // The genuine UI intent remains lazy until the renderer is ready;
             // it must not be mistaken for an external caller needing admission now.
-            expect(home.requests.filter(request => request.path === '/v1/artifacts')).toEqual([]);
+            expect(home.requests.filter(request => request.path === '/v1/artifacts' && request.method === 'POST')).toEqual([]);
             const original = readSessionTerminalWorkspaceForScope(scopeId)!.tabs[0].terminals[0];
             expect(original.target).toMatchObject({ kind: 'workspace_shell', workspace });
             expect(storage.getState().sessions).toBe(sessions);

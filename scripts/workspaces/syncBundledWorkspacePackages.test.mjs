@@ -105,6 +105,67 @@ test('transactional fallback leaves the previous package untouched when vendorin
   }
 });
 
+test('CLI and SDK nested consumers retain usable exports on rejected preparation and resolve current exports after publication', async () => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'happier-nested-protocol-publication-'));
+  const sourceDir = resolve(repoRoot, 'packages', 'protocol');
+  const hostPackageDirs = [resolve(repoRoot, 'apps', 'cli'), resolve(repoRoot, 'packages', 'sdk')];
+  const writeSource = (generation) => {
+    mkdirSync(resolve(sourceDir, 'dist', 'actions'), { recursive: true });
+    writeFileSync(resolve(sourceDir, 'package.json'), JSON.stringify({
+      name: '@happier-dev/protocol', version: '0.0.0', type: 'module',
+      exports: { './plugins/actions/policy': `./dist/actions/policy-${generation}.js` },
+      ...(generation === 'current' ? { dependencies: { 'fixture-protocol-runtime': '1.0.0' } } : {}),
+    }));
+    writeFileSync(resolve(sourceDir, 'dist', 'actions', `policy-${generation}.js`),
+      generation === 'current' ? 'export { generation } from "fixture-protocol-runtime";\n'
+        : `export const generation = ${JSON.stringify(generation)};\n`);
+    writeFileSync(resolve(sourceDir, 'dist', 'actions', 'actionApprovalPresentation.d.ts'),
+      generation === 'current' ? 'export interface Presentation { height?: number }\n'
+        : 'export interface Presentation { width?: number }\n');
+  };
+  const readConsumer = async (hostDir) => {
+    // Published manifests can change their export targets. A new consumer must
+    // resolve them without this test process's module/manifest resolver cache.
+    const generation = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '--eval',
+      'const { generation } = await import("@happier-dev/protocol/plugins/actions/policy"); process.stdout.write(JSON.stringify(generation));'],
+    { cwd: hostDir, env: { ...process.env, NODE_OPTIONS: '' }, encoding: 'utf8' }));
+    const declaration = readFileSync(resolve(hostDir, 'node_modules', '@happier-dev', 'protocol',
+      'dist', 'actions', 'actionApprovalPresentation.d.ts'), 'utf8');
+    return { generation, declaration };
+  };
+  try {
+    for (const hostDir of hostPackageDirs) {
+      mkdirSync(hostDir, { recursive: true });
+      writeFileSync(resolve(hostDir, 'package.json'), JSON.stringify({ type: 'module' }));
+    }
+    writeSource('previous');
+    syncBundledWorkspacePackages({ repoRoot, packages: ['protocol'], hostPackageDirs, pruneStale: true });
+    writeSource('current');
+    for (const hostDir of hostPackageDirs) {
+      assert.throws(() => syncBundledWorkspacePackages({
+        repoRoot, packages: ['protocol'], hostPackageDirs: [hostDir], pruneStale: true,
+      }), /fixture-protocol-runtime/);
+      assert.deepEqual(await readConsumer(hostDir), {
+        generation: 'previous', declaration: 'export interface Presentation { width?: number }\n',
+      });
+    }
+    const runtimeDir = resolve(sourceDir, 'node_modules', 'fixture-protocol-runtime');
+    mkdirSync(runtimeDir, { recursive: true });
+    writeFileSync(resolve(runtimeDir, 'package.json'), JSON.stringify({
+      name: 'fixture-protocol-runtime', version: '1.0.0', type: 'module', main: './index.js',
+    }));
+    writeFileSync(resolve(runtimeDir, 'index.js'), 'export const generation = "current";\n');
+    syncBundledWorkspacePackages({ repoRoot, packages: ['protocol'], hostPackageDirs, pruneStale: true });
+    for (const hostDir of hostPackageDirs) {
+      assert.deepEqual(await readConsumer(hostDir), {
+        generation: 'current', declaration: 'export interface Presentation { height?: number }\n',
+      });
+    }
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
 test('bootstrap publication preserves conditional package imports without compiled cli-common', async () => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'workspace-imports-bootstrap-'));
   const sourceRepoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -125,7 +186,11 @@ test('bootstrap publication preserves conditional package imports without compil
     mkdirSync(resolve(sourceDir, 'runtime'), { recursive: true });
     mkdirSync(resolve(sourceDir, 'src/private'), { recursive: true });
     const imports = { '#http': { 'happier-source': './src/http.js', node: './runtime/node.js', default: './dist/fetch.js' }, '#fs': 'fs', '#disabled': null };
-    writeFileSync(resolve(sourceDir, 'package.json'), JSON.stringify({ name: '@happier-dev/sdk', version: '0.0.0', type: 'module', exports: { '.': { 'happier-source': './src/connect.js', default: './dist/connect.js' } }, imports }));
+    writeFileSync(resolve(sourceDir, 'package.json'), JSON.stringify({ name: '@happier-dev/sdk', version: '0.0.0', type: 'module', exports: {
+      '.': { 'happier-source': './src/connect.js', default: './dist/connect.js' },
+      // Only an exported runtime source tree belongs in the prepared package.
+      './source-runtime': './src/index.js',
+    }, imports }));
     mkdirSync(resolve(sourceDir, 'src'), { recursive: true });
     writeFileSync(resolve(sourceDir, 'src/connect.js'), 'export { transport } from "./private.js";\n');
     writeFileSync(resolve(sourceDir, 'src/http.js'), 'export { transport } from "./private.js";\n');

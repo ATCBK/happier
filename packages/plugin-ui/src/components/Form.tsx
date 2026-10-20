@@ -8,6 +8,7 @@ import {
   normalizeActionInputByFieldHints,
   readActionInputOptionValue,
   resolveEffectiveActionInputFields,
+  seedInputByFieldHints,
   type ActionInputOptionValue,
 } from '@happier-dev/plugin-sdk/actions';
 
@@ -298,8 +299,8 @@ export type SelectProps = Readonly<{
   /**
    * `inline` (the default) lays every option out as its own control — right
    * for a form where comparing a few described choices is the task. `menu`
-   * shows one compact trigger naming the field and its current choice, and
-   * opens the options in the shared menu — right for toolbar pickers such as
+   * shows one compact trigger naming the field and its current choice (quiet
+   * words with a caret), and opens the options in the shared menu — right for toolbar pickers such as
    * a view, a sort order or a filter facet. `field` is a settings-page row's
    * select: a field box showing the chosen option (or asking for one) that
    * opens the same menu; the row's title names the field, so `label` is only
@@ -314,6 +315,11 @@ export type SelectProps = Readonly<{
    * keeps its label. The control keeps its height, its radio-group semantics and its keys.
    */
   compact?: boolean;
+  /**
+   * Segmented only: take the container's whole width, the options sharing it equally (a panel's
+   * level choice that leads what follows). Without it the track is as wide as its labels.
+   */
+  fill?: boolean;
   /** Logical focus target transferred to the first enabled option in this field. */
   focusTarget?: PluginUiFocusTarget;
   testID?: string;
@@ -396,12 +402,16 @@ function SelectMenu(props: SelectProps & Readonly<{ appearance: 'menu' | 'field'
       open={open}
       onOpenChange={setOpen}
       trigger={trigger}
-      triggerAppearance="control"
+      // A field draws its own box around the control trigger; a toolbar menu is quiet words with a caret, the
+      // same form as the toolbar's other pickers (a view, a filter), so a sort order is not a button face.
+      {...(props.appearance === 'field'
+        ? { triggerAppearance: 'control' as const }
+        : { triggerAppearance: 'text' as const, triggerDisclosure: true })}
       triggerAccessibilityLabel={accessibilityLabel}
-      disabled={props.disabled}
+      disabled={props.disabled || items.length === 0}
       {...(props.testID === undefined ? {} : { testID: props.testID })}
       items={items}
-      {...(props.multiple
+      {...(props.multiple || items.length === 0
         ? {}
         : {
             radioGroups: [{
@@ -473,6 +483,7 @@ function SelectSegmented(props: SelectProps): ReactElement {
       }}
       disabled={props.disabled}
       iconOnly={props.compact === true}
+      fill={props.fill === true}
       colors={{
         track: palette.segmentTrack,
         thumb: palette.segmentThumb,
@@ -585,10 +596,19 @@ function readActionInputSelectionForPresentation(
 function FormRoot(props: FormProps): ReactElement {
   const hints = props.hints;
   const spec = { inputHints: hints };
-  const fields = resolveEffectiveActionInputFields(spec, props.value);
+  // Defaults describe the opening draft. Later author replacements, including
+  // clearing the form, stay authoritative rather than being seeded again.
+  const [opening, setOpening] = useState<{ source: string; value: Record<string, unknown> } | null>(() => ({
+    source: JSON.stringify(props.value),
+    value: seedInputByFieldHints(spec, props.value),
+  }));
+  const useOpening = opening !== null && opening.source === JSON.stringify(props.value);
+  if (opening !== null && !useOpening) setOpening(null);
+  const value = useOpening ? opening.value : props.value;
+  const fields = resolveEffectiveActionInputFields(spec, value);
   const submission = useHappierFormSubmission(props.busy);
   const formDisabled = props.disabled === true || submission.pending;
-  const patch = (path: string, value: unknown) => props.onChange(writeHappierActionInputPath(props.value, path, value));
+  const patch = (path: string, next: unknown) => props.onChange(writeHappierActionInputPath(value, path, next));
   const translate = usePluginTranslation();
   const theme = usePluginTheme();
   const submitLabel = hints.submitLabel
@@ -602,13 +622,13 @@ function FormRoot(props: FormProps): ReactElement {
       {hints.title ? <Heading value={hints.title} level={2} /> : null}
       {hints.description ? <Text value={hints.description} tone="secondary" /> : null}
       {fields.map((field) => {
-        const value = readHappierActionInputPath(props.value, field.path);
+        const fieldValue = readHappierActionInputPath(value, field.path);
         return (
           <HappierInputField<FormOptionValue>
             key={field.path}
             field={field}
-            value={value}
-            selection={readActionInputSelectionForPresentation(field, value)}
+            value={fieldValue}
+            selection={readActionInputSelectionForPresentation(field, fieldValue)}
             options={(field.options ?? []).map((option) => ({
               value: option.value,
               label: option.label,
@@ -630,7 +650,7 @@ function FormRoot(props: FormProps): ReactElement {
           busy={submission.pending}
           disabled={formDisabled}
           onPress={() => submission.submit(() => props.onSubmit(
-            normalizeActionInputByFieldHints(spec, { ...props.value }),
+            normalizeActionInputByFieldHints(spec, { ...value }),
           ))}
         />
         {props.onCancel ? <Button title={cancelLabel} variant="secondary" disabled={props.disabled} onPress={props.onCancel} /> : null}

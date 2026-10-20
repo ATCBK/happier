@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
 import { PUSH_NOTIFICATION_ANDROID_CHANNEL_IDS } from '@happier-dev/protocol';
 import type { RenderScreenResult } from '@/dev/testkit';
-import { createUseLocalSettingMock } from '@/dev/testkit/mocks/storage';
 import type {
     DesktopWindowChromePolicy,
     DesktopWindowState,
@@ -14,20 +13,15 @@ import { installRouteRootCommonModuleMocks } from './routeRootTestHelpers';
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const loadAsyncMock = vi.fn();
-const syncRestoreMock = vi.fn(async () => {});
-const restoreConnectionToActiveServerMock = vi.fn(async () => {});
 const hideAsyncMock = vi.fn(async () => {});
 let mockedPlatformOS: string = 'web';
 let mockedPathname = '/';
 let mockedConfigVariant: string = '';
-let sidebarNavigatorRenderMode: 'default' | 'tab-state-probe' = 'default';
 const sentryInitMock = vi.fn();
 const sentryMobileReplayIntegrationMock = vi.fn(() => ({ name: 'mobileReplayIntegration' }));
 const sentryWrapMock = vi.fn((Component: any) => Component);
 const routerPushMock = vi.fn();
-const bootCredentialsState = vi.hoisted(() => ({
-    value: null as null | { token: string; secret: string },
-}));
+const bootCredentialsState = vi.hoisted(() => ({ authenticated: false }));
 const shellChromeState = vi.hoisted(() => ({
     isDesktopHost: false,
     isTablet: true,
@@ -37,6 +31,9 @@ const desktopOverlayWindowState = vi.hoisted(() => ({
 }));
 const notificationNativeState = vi.hoisted(() => ({
     unavailable: false,
+}));
+const desktopSecureStorageState = vi.hoisted(() => ({
+    boundary: null as null | ReturnType<typeof import('@/dev/testkit/mocks/desktopSecureStorage').createDesktopSecureStorageBoundary>,
 }));
 const desktopWindowBridgeState = vi.hoisted(() => ({
     getDesktopWindowChromePolicy: vi.fn<() => Promise<DesktopWindowChromePolicy>>(async () => ({ strategy: 'none' })),
@@ -48,7 +45,7 @@ const desktopWindowBridgeState = vi.hoisted(() => ({
     startDesktopWindowDragging: vi.fn(async () => {}),
 }));
 
-const { fromModuleMock, trackingState, fontAwesomeFontMock, ioniconsFontMock, mainAppTabStateShim } = vi.hoisted(() => ({
+const { fromModuleMock, trackingState, fontAwesomeFontMock, ioniconsFontMock } = vi.hoisted(() => ({
     fromModuleMock: vi.fn(),
     trackingState: {
         client: null as null | {
@@ -59,10 +56,10 @@ const { fromModuleMock, trackingState, fontAwesomeFontMock, ioniconsFontMock, ma
     },
     fontAwesomeFontMock: { FontAwesome: 101 },
     ioniconsFontMock: { Ionicons: 202 },
-    mainAppTabStateShim: {
-        useMainAppTabState: null as null | (() => { activeTab: string; setActiveTab: () => Promise<void>; isLoading: boolean }),
-    },
 }));
+
+vi.mock('socket.io-client', async importOriginal => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+vi.mock('expo-file-system', async () => (await import('@/dev/testkit/mocks/expoFileSystem')).createExpoFileSystemFileMock().module);
 
 vi.mock('react-native-quick-base64', () => ({}));
 // Metro owns route discovery; Node does not implement require.context.
@@ -99,6 +96,9 @@ vi.mock('@/config', () => ({
         get variant() {
             return mockedConfigVariant;
         },
+        get postHogKey() {
+            return trackingState.client ? 'root-layout-test-project' : '';
+        },
     },
 }));
 
@@ -114,14 +114,11 @@ vi.mock('expo-splash-screen', () => ({
     hideAsync: hideAsyncMock,
 }));
 
-const consumeRestartBugReportIntentMock = vi.fn(async (..._args: unknown[]) => false);
-vi.mock('@/utils/system/restartBugReportIntent', () => ({
-    consumeRestartBugReportIntent: consumeRestartBugReportIntentMock,
-}));
-
 vi.mock('expo-font', () => ({
     loadAsync: loadAsyncMock,
 }));
+// Applying the native root-view background is an Expo SDK effect.
+vi.mock('expo-system-ui', () => ({ setBackgroundColorAsync: vi.fn(async () => {}) }));
 
 vi.mock('expo-asset', () => ({
     Asset: {
@@ -141,43 +138,28 @@ vi.mock('expo-notifications', () => {
     };
 });
 
-vi.mock('@expo/vector-icons', () => ({
-    FontAwesome: { font: fontAwesomeFontMock },
-    Ionicons: { font: ioniconsFontMock },
-}));
+vi.mock('@expo/vector-icons', async () => {
 
-vi.mock('@/auth/storage/tokenStorage', () => ({
-    TokenStorage: {
-        getCredentials: vi.fn(async () => null),
-    },
-    isLegacyAuthCredentials: (credentials: unknown) => Boolean(credentials),
-}));
+    const { createExpoVectorIconsMock } = await import('@/dev/testkit/mocks/icons');
 
-vi.mock('@/boot/resolveBootCredentials', () => ({
-    resolveBootCredentials: vi.fn(async () => bootCredentialsState.value),
-}));
+    const icons = createExpoVectorIconsMock();
+    const Icon = (props: Record<string, unknown>) => React.createElement('Icon', props);
+    return { ...icons, FontAwesome: Object.assign(Icon, { font: fontAwesomeFontMock }),
+        Ionicons: Object.assign((props: Record<string, unknown>) => React.createElement('Icon', props), { font: ioniconsFontMock }) };
+});
 
 vi.mock('@/utils/platform/desktopHost', () => ({
     isDesktopHost: () => shellChromeState.isDesktopHost,
     desktopHostKind: () => shellChromeState.isDesktopHost ? 'tauri' : null,
-    invokeDesktopHost: vi.fn(),
-    listenDesktopHostEvent: vi.fn(),
+    invokeDesktopHost: vi.fn(async (command: string, args?: Readonly<Record<string, unknown>>) => {
+        if (!desktopSecureStorageState.boundary) throw new Error('Desktop secure-storage fixture is not installed');
+        return await desktopSecureStorageState.boundary.invoke(command, args) ?? null;
+    }),
+    listenDesktopHostEvent: vi.fn(async () => () => {}),
 }));
 
-vi.mock('@/desktop/window/isDesktopOverlayWindowContext', () => ({
-    isDesktopOverlayWindowContext: () => desktopOverlayWindowState.value,
-}));
-
-vi.mock('@/activity/adapters/desktop/runtime/isDesktopActivityOverlayWindowContext', () => ({
-    isDesktopActivityOverlayWindowContext: () =>
-        desktopOverlayWindowState.value && mockedPathname === '/desktop/activity-overlay',
-}));
-
-vi.mock('@/utils/platform/responsive', () => ({
-    useIsTablet: () => shellChromeState.isTablet,
-}));
-
-vi.mock('@/utils/platform/desktopWindowBridge', () => ({
+vi.mock('@/utils/platform/desktopWindowBridge', async importOriginal => ({
+    ...await importOriginal<typeof import('@/utils/platform/desktopWindowBridge')>(),
     getDesktopWindowChromePolicy: () => desktopWindowBridgeState.getDesktopWindowChromePolicy(),
     getDesktopWindowState: () => desktopWindowBridgeState.getDesktopWindowState(),
     listenDesktopWindowState: (handler: (state: { isMaximized: boolean }) => void) =>
@@ -186,55 +168,6 @@ vi.mock('@/utils/platform/desktopWindowBridge', () => ({
     toggleDesktopWindowMaximize: () => desktopWindowBridgeState.toggleDesktopWindowMaximize(),
     closeDesktopWindow: () => desktopWindowBridgeState.closeDesktopWindow(),
     startDesktopWindowDragging: () => desktopWindowBridgeState.startDesktopWindowDragging(),
-}));
-
-vi.mock('@/hooks/ui/useTabState', () => ({
-    useTabState: () => ({
-        activeTab: 'sessions',
-        setActiveTab: vi.fn(async () => {}),
-        isLoading: false,
-    }),
-}));
-
-vi.mock('@/components/navigation/mobile/chrome/MainAppTabStateProvider', async () => {
-    const React = await import('react');
-    const Context = React.createContext<{
-        activeTab: string;
-        setActiveTab: () => Promise<void>;
-        isLoading: boolean;
-    } | null>(null);
-
-    const useMainAppTabState = () => {
-        const value = React.useContext(Context);
-        if (!value) {
-            throw new Error('useMainAppTabState must be used within MainAppTabStateProvider');
-        }
-        return value;
-    };
-
-    mainAppTabStateShim.useMainAppTabState = useMainAppTabState;
-
-    return {
-        MainAppTabStateProvider: ({ children }: { children: React.ReactNode }) =>
-            React.createElement(
-                Context.Provider,
-                {
-                    value: {
-                        activeTab: 'sessions',
-                        setActiveTab: async () => {},
-                        isLoading: false,
-                    },
-                },
-                children,
-            ),
-        useMainAppTabState,
-    };
-});
-
-vi.mock('@/components/appShell/currentUiContext/CurrentUiContextProvider', () => ({
-    CurrentUiContextProvider: ({ children }: { children: React.ReactNode }) => (
-        React.createElement('CurrentUiContextProvider', null, children)
-    ),
 }));
 
 installRouteRootCommonModuleMocks({
@@ -252,6 +185,8 @@ installRouteRootCommonModuleMocks({
                     select: (options: any) =>
                         options?.[mockedPlatformOS] ?? options?.default ?? options?.ios ?? options?.android,
                 },
+                useWindowDimensions: () => ({ width: shellChromeState.isTablet ? 1280 : 480,
+                    height: 900, scale: 1, fontScale: 1 }),
             },
         );
     },
@@ -263,66 +198,9 @@ installRouteRootCommonModuleMocks({
         });
         return expoRouterMock.module;
     },
-    storage: async (importOriginal) => {
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        const useLocalSetting = createUseLocalSettingMock({ fallback: () => undefined });
-
-        return createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                useLocalSetting,
-            },
-        });
-    },
-    unistyles: async () => {
-        const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-        return createUnistylesMock({
-            theme: {
-                dark: false,
-                colors: {
-                    groupped: { background: '#fff' },
-                    divider: '#ddd',
-                    surface: '#fff',
-                    text: '#111',
-                    textSecondary: '#777',
-                    header: { tint: '#111' },
-                    button: { primary: { background: '#111', tint: '#fff' } },
-                    accent: { indigo: '#55f' },
-                    success: '#0a0',
-                    warningCritical: '#f80',
-                },
-            },
-        });
-    },
 });
 
-vi.mock('@/auth/context/AuthContext', () => {
-    const React = require('react');
-    return {
-        AuthProvider: ({ children }: { children: React.ReactNode }) => React.createElement('AuthProvider', null, children),
-        useAuth: () => {
-            const isAuthenticated = Boolean(bootCredentialsState.value);
-            return {
-                isAuthenticated,
-                credentials: isAuthenticated ? bootCredentialsState.value : null,
-                login: vi.fn(async () => {}),
-                loginWithCredentials: vi.fn(async () => {}),
-                logout: vi.fn(async () => {}),
-                refreshFromActiveServer: vi.fn(async () => {}),
-            };
-        },
-    };
-});
-
-vi.mock('@react-navigation/native', () => {
-    const React = require('react');
-    return {
-        ThemeProvider: ({ children, ...props }: { children: React.ReactNode } & Record<string, unknown>) =>
-            React.createElement('ThemeProvider', props, children),
-        DarkTheme: { colors: {} },
-        DefaultTheme: { colors: {} },
-    };
-});
+vi.mock('@react-navigation/native', async () => (await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock());
 
 vi.mock('react-native-keyboard-controller', () => {
     const React = require('react');
@@ -338,141 +216,120 @@ vi.mock('react-native-gesture-handler', () => {
     };
 });
 
-vi.mock('@/components/navigation/shell/SidebarNavigator', () => {
-    const React = require('react');
-    return {
-        SidebarNavigator: () => {
-            if (sidebarNavigatorRenderMode === 'tab-state-probe') {
-                const tabState = mainAppTabStateShim.useMainAppTabState?.();
-                if (!tabState) {
-                    throw new Error('missing main app tab state shim');
-                }
-                return React.createElement('SidebarNavigator', {
-                    testID: 'sidebar-navigator-tabstate-probe',
-                    activeTab: tabState.activeTab,
-                });
-            }
-
-            return React.createElement('SidebarNavigator', { testID: 'sidebar-navigator' });
-        },
-    };
-});
-
-vi.mock('@/components/navigation/desktopWindowChrome/DesktopMainContentDragSurface', () => {
-    const React = require('react');
-    return {
-        DesktopMainContentDragSurface: (props: Record<string, unknown>) =>
-            React.createElement('DesktopMainContentDragSurface', {
-                ...props,
-                testID: 'desktop-main-content-drag-surface',
-            }, props.children),
-    };
-});
-
-vi.mock('@/components/appShell/AppCrashRecoveryBoundary', () => {
-    const React = require('react');
-    return {
-        AppCrashRecoveryBoundary: ({ children }: { children: React.ReactNode }) =>
-            React.createElement('AppCrashRecoveryBoundary', { testID: 'app-crash-recovery-boundary' }, children),
-    };
-});
-
-vi.mock('@/encryption/libsodium.lib', () => ({
-    default: {
-        ready: Promise.resolve(),
-    },
-}));
-
 vi.mock('posthog-react-native', () => {
     const React = require('react');
     return {
+        default: class PostHog {
+            identify = trackingState.client?.identify ?? vi.fn();
+            group = trackingState.client?.group ?? vi.fn();
+            capture = trackingState.client?.capture ?? vi.fn();
+            optIn = vi.fn(async () => {});
+            optOut = vi.fn(async () => {});
+            flush = vi.fn(async () => {});
+            getAnonymousId = vi.fn(() => 'root-layout-anonymous');
+            register = vi.fn();
+            screen = vi.fn();
+            reset = vi.fn();
+        },
         PostHogProvider: ({ children, ...props }: { children: React.ReactNode } & Record<string, unknown>) =>
             React.createElement('PostHogProvider', { testID: 'posthog-provider', ...props }, children),
     };
 });
 
-vi.mock('@/track/tracking', () => ({
-    get tracking() {
-        return trackingState.client;
-    },
-}));
-
-vi.mock('@/track/settingsAnalytics/SettingsAnalyticsRuntime', () => {
-    const React = require('react');
-    return {
-        SettingsAnalyticsRuntime: () => React.createElement('SettingsAnalyticsRuntime', { testID: 'settings-analytics-runtime' }),
-    };
-});
-
-vi.mock('@/sync/sync', () => ({
-    syncRestore: syncRestoreMock,
-}));
-
-vi.mock('@/sync/runtime/orchestration/connectionManager', () => ({
-    restoreConnectionToActiveServer: restoreConnectionToActiveServerMock,
-}));
-
-vi.mock('@/track/useTrackScreens', () => ({
-    useTrackScreens: () => {},
-}));
-
-vi.mock('@/realtime/RealtimeProvider', () => {
-    const React = require('react');
-    return {
-        RealtimeProvider: ({ children }: { children: React.ReactNode }) => React.createElement(
-            'RealtimeProvider',
-            null,
-            React.createElement('VoiceSessionRuntime'),
-            children,
-        ),
-    };
-});
-
-vi.mock('@/components/web/FaviconPermissionIndicator', () => {
-    const React = require('react');
-    return {
-        FaviconPermissionIndicator: () => React.createElement('FaviconPermissionIndicator'),
-    };
-});
-
-vi.mock('@/components/appShell/commandPalette/CommandPaletteProvider', () => {
-    const React = require('react');
-    return {
-        CommandPaletteProvider: ({ children }: { children: React.ReactNode }) => React.createElement('CommandPaletteProvider', null, children),
-    };
-});
-
-vi.mock('@/components/personalHome/bootstrap', () => {
-    const React = require('react');
-    return {
-        PersonalHomeBootstrapRuntimeMount: ({ children }: { children: React.ReactNode }) => children,
-    };
-});
-
-vi.mock('@/components/ui/layout/StatusBarProvider', () => ({
-    StatusBarProvider: () => null,
-}));
-
-vi.mock('@/components/updates/UpdatesPopoverButton', () => {
-    const React = require('react');
-    return {
-        UpdatesEntry: () => React.createElement('UpdatesEntry'),
-    };
-});
-
-vi.mock('@/updates/useUpdatesSummary', () => {
-    const React = require('react');
-    return {
-        UpdatesSummaryProvider: (props: { children?: unknown }) => React.createElement('UpdatesSummaryProvider', null, props.children),
-    };
-});
-
-vi.mock('@/utils/system/remoteLogger', () => ({
-    monkeyPatchConsoleForRemoteLoggingForFasterAiAutoDebuggingOnlyInLocalBuilds: vi.fn(),
-}));
+// Source transformation is collection setup, not part of a boot assertion's
+// deadline. Retire this graph before cases: font state and Sentry's static
+// environment/platform captures must still be evaluated afresh in every case.
+{
+    const browser = await (await import('@/dev/testkit/harness/browserRuntimeHarness')).installBrowserRuntimeForTests({
+        url: 'https://root.example.test/',
+    });
+    let homes: ReturnType<typeof import('@/dev/testkit/harness/homeGovernanceHarness').createHomeGovernanceHarness> | undefined;
+    let bridge: Awaited<ReturnType<typeof import('@/dev/testkit/harness/syncSingletonLoader').loadSyncSingletonForTests>> | undefined;
+    try {
+        const { createHomeGovernanceHarness, installHomeGovernanceBoundaries } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+        homes = createHomeGovernanceHarness();
+        installHomeGovernanceBoundaries(homes);
+        (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).installDisconnectedServerSocketBoundary();
+        desktopSecureStorageState.boundary = (await import('@/dev/testkit/mocks/desktopSecureStorage')).createDesktopSecureStorageBoundary();
+        bridge = await (await import('@/dev/testkit/harness/syncSingletonLoader')).loadSyncSingletonForTests();
+        await import('@/app/_layout');
+    } finally {
+        try {
+            if (bridge) await (await import('@/sync/runtime/orchestration/connectionManager')).disconnectActiveServerConnection();
+        } finally {
+            try { await homes?.reset(); }
+            finally {
+                bridge?.dispose();
+                browser.restore();
+                delete (globalThis as Record<string, unknown>).__HAPPIER_SENTRY_INIT__;
+                vi.resetModules();
+                vi.clearAllMocks();
+            }
+        }
+    }
+}
 
 describe('app/_layout init resilience', () => {
-    beforeEach(() => { vi.stubGlobal('indexedDB', new IDBFactory()); });
+    let homes: ReturnType<typeof import('@/dev/testkit/harness/homeGovernanceHarness').createHomeGovernanceHarness>;
+    let syncBridge: Awaited<ReturnType<typeof import('@/dev/testkit/harness/syncSingletonLoader').loadSyncSingletonForTests>> | undefined;
+    let hasHomeFixture = false;
+    let components: Awaited<ReturnType<typeof loadRootComponents>>;
+    let homeId: string;
+    let fixtureReady = false;
+    let retainDomOnNative = false;
+    let browser: Awaited<ReturnType<typeof import('@/dev/testkit/harness/browserRuntimeHarness').installBrowserRuntimeForTests>> | undefined;
+
+    beforeEach(async () => {
+        browser = await (await import('@/dev/testkit/harness/browserRuntimeHarness')).installBrowserRuntimeForTests({
+            url: 'https://root.example.test/',
+        });
+        retainDomOnNative = false;
+        vi.stubGlobal('indexedDB', new IDBFactory());
+        loadAsyncMock.mockReset().mockResolvedValue(undefined);
+        fromModuleMock.mockReset();
+        fixtureReady = false;
+        desktopSecureStorageState.boundary = (await import('@/dev/testkit/mocks/desktopSecureStorage')).createDesktopSecureStorageBoundary();
+    });
+
+    async function prepareRootFixture() {
+        if (fixtureReady) return;
+        // Native boot cases intentionally have no DOM. The one misreported
+        // Platform case below explicitly retains its real browser environment.
+        if (mockedPlatformOS !== 'web' && !retainDomOnNative) {
+            browser?.restore();
+            browser = undefined;
+        }
+        const { createHomeGovernanceHarness, installHomeGovernanceBoundaries } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+        const { installDisconnectedServerSocketBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+        homes = createHomeGovernanceHarness();
+        hasHomeFixture = true;
+        installHomeGovernanceBoundaries(homes);
+        installDisconnectedServerSocketBoundary();
+        syncBridge = await (await import('@/dev/testkit/harness/syncSingletonLoader')).loadSyncSingletonForTests();
+        homeId = await homes.addHome({ name: 'Root fixture Home', serverUrl: 'https://root.example.test',
+            serverIdentityId: 'srv_root_layout', accountId: null });
+        homes.answer(homeId, '/v1/kv/bulk', { body: { values: [] } });
+        fixtureReady = true;
+    }
+
+    async function disposeRootFixture() {
+        try {
+            if (syncBridge) {
+                await (await import('@/sync/runtime/orchestration/connectionManager')).disconnectActiveServerConnection();
+            }
+        } finally {
+            try {
+                // addHome may fail before fixtureReady; its installed ports still need disposal.
+                if (hasHomeFixture) await homes.reset();
+            } finally {
+                syncBridge?.dispose();
+                syncBridge = undefined;
+                hasHomeFixture = false;
+                fixtureReady = false;
+            }
+        }
+    }
+
     const previousSentryDsn = process.env.EXPO_PUBLIC_SENTRY_DSN;
     const previousSentryLogs = process.env.EXPO_PUBLIC_SENTRY_ENABLE_LOGS;
     const previousSentryReplay = process.env.EXPO_PUBLIC_SENTRY_ENABLE_REPLAY;
@@ -480,15 +337,20 @@ describe('app/_layout init resilience', () => {
     const previousSentryReplayOnErrorRate = process.env.EXPO_PUBLIC_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE;
 
     afterEach(async () => {
-        const { standardCleanup } = await import('@/dev/testkit');
-        standardCleanup();
+        try {
+            const { standardCleanup } = await import('@/dev/testkit');
+            standardCleanup();
+        } finally {
+            await disposeRootFixture();
+        }
+        browser?.restore();
+        browser = undefined;
         // Ensure no test leaks fake timers into subsequent tests.
         vi.useRealTimers();
-        sidebarNavigatorRenderMode = 'default';
         mockedPlatformOS = 'web';
         mockedPathname = '/';
         mockedConfigVariant = '';
-        bootCredentialsState.value = null;
+        bootCredentialsState.authenticated = false;
         shellChromeState.isDesktopHost = false;
         shellChromeState.isTablet = true;
         desktopOverlayWindowState.value = false;
@@ -516,7 +378,6 @@ describe('app/_layout init resilience', () => {
         sentryMobileReplayIntegrationMock.mockClear();
         sentryWrapMock.mockClear();
         routerPushMock.mockClear();
-        consumeRestartBugReportIntentMock.mockClear();
         if (previousSentryDsn === undefined) delete process.env.EXPO_PUBLIC_SENTRY_DSN;
         else process.env.EXPO_PUBLIC_SENTRY_DSN = previousSentryDsn;
         if (previousSentryLogs === undefined) delete process.env.EXPO_PUBLIC_SENTRY_ENABLE_LOGS;
@@ -528,14 +389,60 @@ describe('app/_layout init resilience', () => {
         if (previousSentryReplayOnErrorRate === undefined) delete process.env.EXPO_PUBLIC_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE;
         else process.env.EXPO_PUBLIC_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE = previousSentryReplayOnErrorRate;
         trackingState.client = null;
+        vi.restoreAllMocks();
         vi.resetModules();
         vi.clearAllMocks();
     });
 
+    async function loadRootComponents() {
+        const [crash, currentUi, actions, realtime, voice, sidebar, favicon, updates, summary, analytics, drag] = await Promise.all([
+            import('@/components/appShell/AppCrashRecoveryBoundary'),
+            import('@/components/appShell/currentUiContext/CurrentUiContextProvider'),
+            import('@/components/appShell/runtime/ClientActionReverseRuntime'),
+            import('@/realtime/RealtimeProvider'),
+            import('@/voice/session/VoiceSessionRuntime'),
+            import('@/components/navigation/shell/SidebarNavigator'),
+            import('@/components/web/FaviconPermissionIndicator'),
+            import('@/components/updates/UpdatesPopoverButton'),
+            import('@/updates/useUpdatesSummary'),
+            import('@/track/settingsAnalytics/SettingsAnalyticsRuntime'),
+            import('@/components/navigation/desktopWindowChrome/DesktopMainContentDragSurface'),
+        ]);
+        return {
+            AppCrashRecoveryBoundary: crash.AppCrashRecoveryBoundary,
+            CurrentUiContextProvider: currentUi.CurrentUiContextProvider,
+            ClientActionReverseRuntime: actions.ClientActionReverseRuntime,
+            RealtimeProvider: realtime.RealtimeProvider,
+            VoiceSessionRuntime: voice.VoiceSessionRuntime,
+            UpdatesSummaryProvider: summary.UpdatesSummaryProvider,
+            SettingsAnalyticsRuntime: analytics.SettingsAnalyticsRuntime,
+            // React's host renderer exposes the inner type of simple memo components.
+            SidebarNavigator: Reflect.get(sidebar.SidebarNavigator, 'type'),
+            FaviconPermissionIndicator: Reflect.get(favicon.FaviconPermissionIndicator, 'type'),
+            UpdatesEntry: Reflect.get(updates.UpdatesEntry, 'type'),
+            DesktopMainContentDragSurface: Reflect.get(drag.DesktopMainContentDragSurface, 'type'),
+        };
+    }
+
+    async function importRootLayout() {
+
+        await prepareRootFixture();
+
+        const root = await import('@/app/_layout');
+        return root;
+    }
+
     async function renderRootLayout(): Promise<RenderScreenResult> {
-        const RootLayout = (await import('@/app/_layout')).default;
+        await prepareRootFixture();
+        if (bootCredentialsState.authenticated) await homes.switchAccount(homeId, 'root-layout-account');
+        if (desktopOverlayWindowState.value) {
+            browser?.reconfigureUrl(`https://root.example.test${mockedPathname}`);
+        }
+        const RootLayout = (await importRootLayout()).default;
+        components = await loadRootComponents();
         const { renderScreen } = await import('@/dev/testkit');
-        return renderScreen(React.createElement(RootLayout), { flushOptions: { cycles: 0 } });
+        const screen = await renderScreen(React.createElement(RootLayout), { flushOptions: { cycles: 0 } });
+        return screen;
     }
 
     async function renderSettledRootLayout(): Promise<RenderScreenResult> {
@@ -549,14 +456,14 @@ describe('app/_layout init resilience', () => {
 
     it('wraps the root layout with Sentry.wrap', async () => {
         process.env.EXPO_PUBLIC_SENTRY_DSN = 'https://examplePublicKey@o0.ingest.sentry.io/0';
-        await import('@/app/_layout');
+        await importRootLayout();
         expect(sentryWrapMock).toHaveBeenCalledTimes(1);
         expect(typeof sentryWrapMock.mock.calls[0]?.[0]).toBe('function');
     });
 
     it('does not wrap the root layout with Sentry.wrap when EXPO_PUBLIC_SENTRY_DSN is unset', async () => {
         delete process.env.EXPO_PUBLIC_SENTRY_DSN;
-        await import('@/app/_layout');
+        await importRootLayout();
         expect(sentryWrapMock).toHaveBeenCalledTimes(0);
     });
 
@@ -564,19 +471,16 @@ describe('app/_layout init resilience', () => {
         mockedPlatformOS = 'android';
         notificationNativeState.unavailable = true;
 
-        await expect(import('@/app/_layout')).resolves.toHaveProperty('default');
+        await expect(importRootLayout()).resolves.toHaveProperty('default');
     });
 
     it('provides the main app tab state to the root sidebar shell', async () => {
-        sidebarNavigatorRenderMode = 'tab-state-probe';
-
         const screen = await renderSettledRootLayout();
 
-        const probes = screen.tree.findAll((node) =>
-            node.props?.testID === 'sidebar-navigator-tabstate-probe' && node.props?.activeTab === 'sessions',
-        );
-        expect(probes).toHaveLength(1);
-        expect(screen.findAllByType('RealtimeProvider' as any)).toHaveLength(1);
+        const { readCurrentUiContextActionReader } = await import('@/components/appShell/currentUiContext/currentUiContextActionRuntime');
+        const reader = readCurrentUiContextActionReader({ surface: 'ui', signal: new AbortController().signal });
+        expect(reader?.readCurrentUiContext()?.navigation).toEqual(expect.objectContaining({ screen: 'tab.sessions' }));
+        expect(screen.findAllByType(components.RealtimeProvider)).toHaveLength(1);
     });
 
     for (const platform of ['web', 'ios', 'android'] as const) {
@@ -584,15 +488,28 @@ describe('app/_layout init resilience', () => {
             mockedPlatformOS = platform;
             const screen = await renderSettledRootLayout();
 
-            const currentUiProvider = screen.findByType('CurrentUiContextProvider' as any);
-            expect(currentUiProvider.findAllByType('RealtimeProvider' as any)).toHaveLength(1);
-            expect(currentUiProvider.findAllByType('VoiceSessionRuntime' as any)).toHaveLength(1);
+            const currentUiProvider = screen.findByType(components.CurrentUiContextProvider);
+            expect(currentUiProvider.findAllByType(components.RealtimeProvider)).toHaveLength(1);
+            expect(currentUiProvider.findAllByType(components.VoiceSessionRuntime)).toHaveLength(1);
         });
     }
 
+    it('publishes the pre-auth root current UI context without an authenticated reverse Action runtime', async () => {
+        const screen = await renderSettledRootLayout();
+
+        const { readCurrentUiContextActionReader } = await import('@/components/appShell/currentUiContext/currentUiContextActionRuntime');
+        const reader = readCurrentUiContextActionReader({ surface: 'ui', signal: new AbortController().signal });
+        expect(reader?.readCurrentUiContext()).toEqual(expect.objectContaining({
+            navigation: expect.objectContaining({ area: 'app', screen: 'tab.sessions' }),
+            commands: [],
+        }));
+        const currentUiProvider = screen.findByType(components.CurrentUiContextProvider);
+        expect(currentUiProvider.findAllByType(components.ClientActionReverseRuntime)).toHaveLength(0);
+    });
+
     it('configures separate Android notification channels for permission/action request pushes', async () => {
         mockedPlatformOS = 'android';
-        await import('@/app/_layout');
+        await importRootLayout();
 
         const Notifications = await import('expo-notifications');
         expect((Notifications as any).setNotificationChannelAsync).toHaveBeenCalledWith(
@@ -671,8 +588,8 @@ describe('app/_layout init resilience', () => {
         const screen = await renderSettledRootLayout();
 
         expect(loadAsyncMock).toHaveBeenCalledTimes(1);
-        expect(syncRestoreMock).not.toHaveBeenCalled();
-        expect(screen.findByTestId('app-crash-recovery-boundary')).not.toBeNull();
+        expect(homes.requestsFor('/v1/account/profile')).toHaveLength(0);
+        expect(screen.findAllByType(components.SidebarNavigator)).toHaveLength(1);
         consoleErrorSpy.mockRestore();
     });
 
@@ -681,14 +598,15 @@ describe('app/_layout init resilience', () => {
         mockedPathname = '/desktop/activity-overlay';
         shellChromeState.isDesktopHost = true;
         desktopOverlayWindowState.value = true;
-        bootCredentialsState.value = { token: 'overlay-token', secret: 'overlay-secret' };
+        bootCredentialsState.authenticated = true;
 
         const screen = await renderSettledRootLayout();
 
-        expect(screen.findAllByType('RealtimeProvider' as any)).toHaveLength(0);
-        expect(screen.findAllByType('VoiceSessionRuntime' as any)).toHaveLength(0);
-        expect(screen.findAllByType('CurrentUiContextProvider' as any)).toHaveLength(1);
-        expect(syncRestoreMock).not.toHaveBeenCalled();
+        expect(screen.findAllByType(components.RealtimeProvider)).toHaveLength(0);
+        expect(screen.findAllByType(components.VoiceSessionRuntime)).toHaveLength(0);
+        expect(screen.findAllByType(components.CurrentUiContextProvider)).toHaveLength(1);
+        expect(screen.findAllByType(components.ClientActionReverseRuntime)).toHaveLength(0);
+        expect(homes.requestsFor('/v1/account/profile')).toHaveLength(0);
     });
 
     it('restores synced pet state while keeping the pet overlay free of realtime runtimes', async () => {
@@ -696,21 +614,21 @@ describe('app/_layout init resilience', () => {
         mockedPathname = '/desktop/pet-overlay';
         shellChromeState.isDesktopHost = true;
         desktopOverlayWindowState.value = true;
-        bootCredentialsState.value = { token: 'overlay-token', secret: 'overlay-secret' };
+        bootCredentialsState.authenticated = true;
 
         const screen = await renderSettledRootLayout();
 
-        expect(screen.findAllByType('RealtimeProvider' as any)).toHaveLength(0);
-        expect(screen.findAllByType('SidebarNavigator' as any)).toHaveLength(1);
-        expect(restoreConnectionToActiveServerMock).toHaveBeenCalledTimes(1);
-        expect(restoreConnectionToActiveServerMock).toHaveBeenCalledWith(bootCredentialsState.value);
-        expect(syncRestoreMock).not.toHaveBeenCalled();
+        expect(screen.findAllByType(components.RealtimeProvider)).toHaveLength(0);
+        expect(screen.findAllByType(components.SidebarNavigator)).toHaveLength(1);
+        const { storage } = await import('@/sync/domains/state/storage');
+        await vi.waitFor(() => expect(storage.getState().profile?.id).toBe('root-layout-account'));
+        expect(homes.requestsFor('/v1/account/profile').some(request => request.serverId === homeId)).toBe(true);
     });
 
     it('does not mount desktop fallback shell chrome inside the dedicated desktop overlay window', async () => {
         mockedPlatformOS = 'web';
         mockedPathname = '/desktop/activity-overlay';
-        bootCredentialsState.value = { token: 'overlay-token', secret: 'overlay-secret' };
+        bootCredentialsState.authenticated = true;
         shellChromeState.isDesktopHost = true;
         shellChromeState.isTablet = false;
         desktopOverlayWindowState.value = true;
@@ -720,19 +638,20 @@ describe('app/_layout init resilience', () => {
 
         expect(screen.findAllByTestId('desktop-narrow-shell-chrome')).toHaveLength(0);
         expect(screen.findAllByTestId('desktop-focus-mode-shell-chrome')).toHaveLength(0);
-        expect(screen.findAllByType('UpdatesEntry' as any)).toHaveLength(0);
+        expect(screen.findAllByType(components.UpdatesEntry)).toHaveLength(0);
     });
 
     it('uses a transparent navigation background inside the dedicated desktop overlay window', async () => {
         mockedPlatformOS = 'web';
         mockedPathname = '/desktop/activity-overlay';
-        bootCredentialsState.value = { token: 'overlay-token', secret: 'overlay-secret' };
+        bootCredentialsState.authenticated = true;
         shellChromeState.isDesktopHost = true;
         desktopOverlayWindowState.value = true;
 
         const screen = await renderSettledRootLayout();
 
-        const themeProvider = screen.findByType('ThemeProvider' as any);
+        const { ThemeProvider } = await import('@react-navigation/native');
+        const themeProvider = screen.findByType(ThemeProvider);
         expect(themeProvider?.props?.value?.colors?.background).toBe('transparent');
     });
 
@@ -752,7 +671,7 @@ describe('app/_layout init resilience', () => {
         mockedPlatformOS = 'ios';
         const screen = await renderSettledRootLayout();
 
-        expect(screen.findByTestId('app-crash-recovery-boundary')).toBeTruthy();
+        expect(screen.findAllByType(components.AppCrashRecoveryBoundary)[0] ?? null).toBeTruthy();
     });
 
     it('mounts favicon permission signaling inside AppCrashRecoveryBoundary for ordinary routes', async () => {
@@ -760,27 +679,27 @@ describe('app/_layout init resilience', () => {
         mockedPathname = '/';
         const screen = await renderSettledRootLayout();
 
-        const boundary = screen.findByTestId('app-crash-recovery-boundary');
+        const boundary = screen.findAllByType(components.AppCrashRecoveryBoundary)[0] ?? null;
         expect(boundary).toBeTruthy();
-        expect(boundary!.findAllByType('FaviconPermissionIndicator' as any)).toHaveLength(1);
+        expect(boundary!.findAllByType(components.FaviconPermissionIndicator)).toHaveLength(1);
     });
 
     it('keeps the shell navigator mounted while hiding the shell Updates entry for terminal-connect routes', async () => {
         mockedPathname = '/terminal/connect';
         const screen = await renderSettledRootLayout();
 
-        expect(screen.findAllByType('SidebarNavigator' as any)).toHaveLength(1);
-        expect(screen.findAllByType('UpdatesEntry' as any)).toHaveLength(0);
-        expect(screen.findAllByType('FaviconPermissionIndicator' as any)).toHaveLength(0);
+        expect(screen.findAllByType(components.SidebarNavigator)).toHaveLength(1);
+        expect(screen.findAllByType(components.UpdatesEntry)).toHaveLength(0);
+        expect(screen.findAllByType(components.FaviconPermissionIndicator)).toHaveLength(0);
     });
 
     it('adds no floating update chrome on ordinary routes and computes the one shared Updates summary', async () => {
         mockedPathname = '/';
         const screen = await renderSettledRootLayout();
 
-        expect(screen.findAllByType('SidebarNavigator' as any)).toHaveLength(1);
-        expect(screen.findAllByType('UpdatesEntry' as any)).toHaveLength(0);
-        expect(screen.findAllByType('UpdatesSummaryProvider' as any)).toHaveLength(1);
+        expect(screen.findAllByType(components.SidebarNavigator)).toHaveLength(1);
+        expect(screen.findAllByType(components.UpdatesEntry)).toHaveLength(0);
+        expect(screen.findAllByType(components.UpdatesSummaryProvider)).toHaveLength(1);
     });
 
     it('does not mount a root-shell Updates entry for unauthenticated desktop flows owned by the pre-auth host', async () => {
@@ -789,31 +708,31 @@ describe('app/_layout init resilience', () => {
 
         const screen = await renderSettledRootLayout();
 
-        expect(screen.findAllByType('SidebarNavigator' as any)).toHaveLength(1);
-        expect(screen.findAllByType('UpdatesEntry' as any)).toHaveLength(0);
+        expect(screen.findAllByType(components.SidebarNavigator)).toHaveLength(1);
+        expect(screen.findAllByType(components.UpdatesEntry)).toHaveLength(0);
         expect(screen.findAllByTestId('desktop-focus-mode-shell-chrome')).toHaveLength(0);
         expect(screen.findAllByTestId('desktop-narrow-shell-chrome')).toHaveLength(0);
-        const dragSurface = screen.findByTestId('desktop-main-content-drag-surface');
+        const dragSurface = screen.findByType(components.DesktopMainContentDragSurface);
         expect(dragSurface?.props.enabled).toBe(true);
         expect(dragSurface?.props.leftOffsetPx).toBe(0);
     });
 
     it('preserves the navigation subtree when desktop chrome moves between wide and narrow hosts', async () => {
-        bootCredentialsState.value = { token: 'token', secret: 'secret' };
+        bootCredentialsState.authenticated = true;
         shellChromeState.isDesktopHost = true;
         const screen = await renderSettledRootLayout();
-        const navigator = screen.tree.findByType('SidebarNavigator' as any);
-        const RootLayout = (await import('@/app/_layout')).default;
+        const navigator = screen.tree.findByType(components.SidebarNavigator);
+        const RootLayout = (await importRootLayout()).default;
         for (const isTablet of [false, true]) {
             shellChromeState.isTablet = isTablet;
             await screen.update(React.createElement(RootLayout));
-            expect(screen.tree.findByType('SidebarNavigator' as any) === navigator).toBe(true);
+            expect(screen.tree.findByType(components.SidebarNavigator) === navigator).toBe(true);
         }
     });
 
     it('keeps desktop shell chrome inside the sidebar host for authenticated wide desktop flows', async () => {
         mockedPathname = '/';
-        bootCredentialsState.value = { token: 'token', secret: 'secret' };
+        bootCredentialsState.authenticated = true;
         shellChromeState.isDesktopHost = true;
         shellChromeState.isTablet = true;
         desktopWindowBridgeState.getDesktopWindowChromePolicy.mockResolvedValue({ strategy: 'native-macos-traffic-lights' });
@@ -822,13 +741,13 @@ describe('app/_layout init resilience', () => {
 
         expect(screen.findAllByTestId('desktop-focus-mode-shell-chrome')).toHaveLength(0);
         expect(screen.findAllByTestId('desktop-narrow-shell-chrome')).toHaveLength(0);
-        expect(screen.findByTestId('desktop-main-content-drag-surface')?.props.enabled).toBe(false);
-        expect(screen.findAllByType('SidebarNavigator' as any)).toHaveLength(1);
+        expect(screen.findByType(components.DesktopMainContentDragSurface).props.enabled).toBe(false);
+        expect(screen.findAllByType(components.SidebarNavigator)).toHaveLength(1);
     });
 
     it('renders an explicit narrow-desktop fallback host instead of folding it into focus-mode fallback', async () => {
         mockedPathname = '/';
-        bootCredentialsState.value = { token: 'token', secret: 'secret' };
+        bootCredentialsState.authenticated = true;
         shellChromeState.isDesktopHost = true;
         shellChromeState.isTablet = false;
         desktopWindowBridgeState.getDesktopWindowChromePolicy.mockResolvedValue({ strategy: 'native-macos-traffic-lights' });
@@ -838,7 +757,7 @@ describe('app/_layout init resilience', () => {
         expect(screen.findHostByTestId('desktop-narrow-shell-chrome')).toBeTruthy();
         expect(screen.findAllHostsByTestId('desktop-focus-mode-shell-chrome')).toHaveLength(0);
         expect(screen.findHostByTestId('desktop-window-controls-slot')).toBeTruthy();
-        const dragSurface = screen.findHostByTestId('desktop-main-content-drag-surface');
+        const dragSurface = screen.findByType(components.DesktopMainContentDragSurface);
         expect(dragSurface?.props.enabled).toBe(true);
         expect(dragSurface?.props.leftOffsetPx).toBe(0);
     });
@@ -858,42 +777,40 @@ describe('app/_layout init resilience', () => {
             throw new Error('expected PostHogProvider to be present');
         }
         expect(provider.props.autocapture).toEqual({ captureScreens: false });
-        expect(screen.findByTestId('settings-analytics-runtime')).toBeTruthy();
+        expect(screen.findByType(components.SettingsAnalyticsRuntime)).toBeTruthy();
     });
 
     it('navigates to the bug report screen on boot when a restart bug report intent is present', async () => {
         mockedPlatformOS = 'ios';
-        consumeRestartBugReportIntentMock.mockResolvedValueOnce(true);
+        const { persistRestartBugReportIntent } = await import('@/utils/system/restartBugReportIntent');
+        await persistRestartBugReportIntent({ v: 1, createdAtMs: Date.now(), reason: 'crash' });
 
         await renderSettledRootLayout();
 
         expect(routerPushMock).toHaveBeenCalledWith('/(app)/settings/report-issue');
     });
 
-    it('keeps web startup pending until every injected font family load settles', async () => {
+    it('keeps web startup usable while every injected font family load settles in the background', async () => {
         mockedPlatformOS = 'web';
         fromModuleMock.mockImplementation(() => ({ uri: 'https://example.com/font.ttf' }));
 
-        const appended: any[] = [];
-        const appendChild = vi.fn((node: any) => {
+        const appended: Node[] = [];
+        const append = document.head.appendChild.bind(document.head);
+        const appendChild = vi.spyOn(document.head, 'appendChild').mockImplementation(node => {
             appended.push(node);
+            return append(node);
         });
         const fontLoadResolvers: Array<() => void> = [];
         const fontLoadMock = vi.fn(() => new Promise<FontFace[]>((resolve) => {
             fontLoadResolvers.push(() => resolve([]));
         }));
 
-        Object.defineProperty(globalThis, 'document', {
-            value: {
-                getElementById: vi.fn(() => null),
-                createElement: vi.fn(() => ({ textContent: '', id: '' })),
-                head: { appendChild },
-                fonts: { load: fontLoadMock },
-            },
+        Object.defineProperty(document, 'fonts', {
+            value: { load: fontLoadMock },
             configurable: true,
         });
 
-        const screen = await renderRootLayout();
+        const screen = await renderSettledRootLayout();
         const { flushHookEffects } = await import('@/dev/testkit');
         await flushHookEffects({ cycles: 1 });
 
@@ -901,13 +818,13 @@ describe('app/_layout init resilience', () => {
         expect(fontLoadMock).toHaveBeenCalledTimes(10);
         expect(fontLoadMock).toHaveBeenCalledWith('1em "Inter-Regular"');
         expect(fontLoadMock).toHaveBeenCalledWith('1em "IBMPlexMono-Regular"');
-        expect(screen.findByTestId('app-crash-recovery-boundary')).toBeNull();
+        expect(screen.findAllByType(components.SidebarNavigator)).toHaveLength(1);
 
         for (const resolveFontLoad of fontLoadResolvers.slice(0, -1)) {
             resolveFontLoad();
         }
         await flushHookEffects({ cycles: 1 });
-        expect(screen.findByTestId('app-crash-recovery-boundary')).toBeNull();
+        expect(screen.findAllByType(components.SidebarNavigator)).toHaveLength(1);
 
         fontLoadResolvers.at(-1)?.();
         await flushHookEffects();
@@ -918,7 +835,7 @@ describe('app/_layout init resilience', () => {
         expect(texts.some((t) => t.includes('@font-face'))).toBe(true);
         expect(texts.some((t) => t.includes('Inter-Regular'))).toBe(true);
         expect(texts.some((t) => t.includes('example.com/font.ttf'))).toBe(true);
-        expect(screen.findByTestId('app-crash-recovery-boundary')).not.toBeNull();
+        expect(screen.findAllByType(components.SidebarNavigator)).toHaveLength(1);
     });
 
     it('continues web startup after injected font family loads fail', async () => {
@@ -928,58 +845,46 @@ describe('app/_layout init resilience', () => {
             throw new Error('font unavailable');
         });
 
-        Object.defineProperty(globalThis, 'document', {
-            value: {
-                getElementById: vi.fn(() => null),
-                createElement: vi.fn(() => ({ textContent: '', id: '' })),
-                head: { appendChild: vi.fn() },
-                fonts: { load: fontLoadMock },
-            },
+        Object.defineProperty(document, 'fonts', {
+            value: { load: fontLoadMock },
             configurable: true,
         });
 
         const screen = await renderSettledRootLayout();
 
         expect(fontLoadMock).toHaveBeenCalledTimes(10);
-        expect(screen.findByTestId('app-crash-recovery-boundary')).not.toBeNull();
+        expect(screen.findAllByType(components.SidebarNavigator)).toHaveLength(1);
     });
 
     it('continues web startup when FontFaceSet is unavailable', async () => {
         mockedPlatformOS = 'web';
         fromModuleMock.mockImplementation(() => ({ uri: 'https://example.com/font.ttf' }));
 
-        Object.defineProperty(globalThis, 'document', {
-            value: {
-                getElementById: vi.fn(() => null),
-                createElement: vi.fn(() => ({ textContent: '', id: '' })),
-                head: { appendChild: vi.fn() },
-            },
+        Object.defineProperty(document, 'fonts', {
+            value: undefined,
             configurable: true,
         });
 
         const screen = await renderSettledRootLayout();
 
         expect(loadAsyncMock).not.toHaveBeenCalled();
-        expect(screen.findByTestId('app-crash-recovery-boundary')).not.toBeNull();
+        expect(screen.findAllByType(components.SidebarNavigator)).toHaveLength(1);
     });
 
     it('continues web startup when the font-face stylesheet cannot be injected', async () => {
         mockedPlatformOS = 'web';
         fromModuleMock.mockImplementation(() => ({ uri: 'https://example.com/font.ttf' }));
         const fontLoadMock = vi.fn(async () => []);
-        const appendChild = vi.fn((node: { id?: string }) => {
-            if (node.id === 'happier-web-font-faces') {
+        const append = document.head.appendChild.bind(document.head);
+        const appendChild = vi.spyOn(document.head, 'appendChild').mockImplementation(node => {
+            if (node instanceof HTMLElement && node.id === 'happier-web-font-faces') {
                 throw new Error('stylesheet unavailable');
             }
+            return append(node);
         });
 
-        Object.defineProperty(globalThis, 'document', {
-            value: {
-                getElementById: vi.fn(() => null),
-                createElement: vi.fn(() => ({ textContent: '', id: '' })),
-                head: { appendChild },
-                fonts: { load: fontLoadMock },
-            },
+        Object.defineProperty(document, 'fonts', {
+            value: { load: fontLoadMock },
             configurable: true,
         });
 
@@ -989,22 +894,18 @@ describe('app/_layout init resilience', () => {
             id: 'happier-web-font-faces',
         }));
         expect(fontLoadMock).not.toHaveBeenCalled();
-        expect(screen.findByTestId('app-crash-recovery-boundary')).not.toBeNull();
+        expect(screen.findAllByType(components.SidebarNavigator)).toHaveLength(1);
     });
 
     it('does not surface font loading timeouts as errors in web automation contexts', async () => {
         // Playwright (and other automation) sets navigator.webdriver=true. In that context, expo-font's
         // web FontFaceObserver path can time out even when font files are reachable (headless quirks).
         // We should not show startup error overlays for that case.
-        Object.defineProperty(globalThis, 'navigator', {
-            value: { webdriver: true, userAgent: 'HeadlessChrome' },
-            configurable: true,
+        Object.defineProperties(navigator, {
+            webdriver: { value: true, configurable: true },
+            userAgent: { value: 'HeadlessChrome', configurable: true },
         });
-        const addEventListenerSpy = vi.fn();
-        Object.defineProperty(globalThis, 'window', {
-            value: { addEventListener: addEventListenerSpy },
-            configurable: true,
-        });
+        const addEventListenerSpy = vi.spyOn(window, 'addEventListener');
 
         const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
         loadAsyncMock.mockRejectedValueOnce(new Error('6000ms timeout exceeded'));
@@ -1014,7 +915,7 @@ describe('app/_layout init resilience', () => {
         // In automation contexts, skip expo-font on web entirely to avoid FontFaceObserver's
         // timeout behavior surfacing as dev overlays (uncaught errors / unhandled rejections).
         expect(loadAsyncMock).toHaveBeenCalledTimes(0);
-        expect(screen.findByTestId('app-crash-recovery-boundary')).not.toBeNull();
+        expect(screen.findAllByType(components.SidebarNavigator)).toHaveLength(1);
 
         // Verify we install a suppression handler for FontFaceObserver's timeout behavior, since
         // other font loads (e.g. icon fonts) may still trigger it in automation.
@@ -1090,11 +991,7 @@ describe('app/_layout init resilience', () => {
     });
 
     it('does not surface font loading timeouts as errors on web startup', async () => {
-        const addEventListenerSpy = vi.fn();
-        Object.defineProperty(globalThis, 'window', {
-            value: { addEventListener: addEventListenerSpy },
-            configurable: true,
-        });
+        const addEventListenerSpy = vi.spyOn(window, 'addEventListener');
 
         const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
         loadAsyncMock.mockRejectedValueOnce(new Error('6000ms timeout exceeded'));
@@ -1105,7 +1002,7 @@ describe('app/_layout init resilience', () => {
         // timeout and can surface uncaught errors / unhandled rejections). Web fonts are injected
         // via `@font-face` rules instead.
         expect(loadAsyncMock).toHaveBeenCalledTimes(0);
-        expect(screen.findByTestId('app-crash-recovery-boundary')).not.toBeNull();
+        expect(screen.findAllByType(components.SidebarNavigator)).toHaveLength(1);
         // Non-automation web startup should not install global error suppression handlers.
         // Other web-only runtime helpers (viewport/safe-area) may still register resize listeners.
         const installedEvents = addEventListenerSpy.mock.calls.map((call) => call[0]);
@@ -1119,15 +1016,11 @@ describe('app/_layout init resilience', () => {
     });
 
     it('does not install FontFaceObserver timeout suppression listeners on non-automation web startup', async () => {
-        const addEventListenerSpy = vi.fn();
-        Object.defineProperty(globalThis, 'window', {
-            value: { addEventListener: addEventListenerSpy },
-            configurable: true,
-        });
+        const addEventListenerSpy = vi.spyOn(window, 'addEventListener');
 
         const screen = await renderSettledRootLayout();
 
-        expect(screen.findByTestId('app-crash-recovery-boundary')).not.toBeNull();
+        expect(screen.findAllByType(components.SidebarNavigator)).toHaveLength(1);
         const installedEvents = addEventListenerSpy.mock.calls.map((call) => call[0]);
         expect(installedEvents).not.toContain('error');
         expect(installedEvents).not.toContain('unhandledrejection');
@@ -1141,7 +1034,7 @@ describe('app/_layout init resilience', () => {
 
         const screen = await renderSettledRootLayout();
 
-        expect(screen.findByTestId('app-crash-recovery-boundary')).not.toBeNull();
+        expect(screen.findAllByType(components.SidebarNavigator)).toHaveLength(1);
         expect(loadAsyncMock).toHaveBeenCalledTimes(0);
         const fontInitErrors = consoleErrorSpy.mock.calls.filter(
             (call) => call[0] === 'Failed to load fonts during init, continuing startup:'
@@ -1153,8 +1046,7 @@ describe('app/_layout init resilience', () => {
         // In some web builds/environments, Platform.OS can be surprising. If we're running with a DOM,
         // don't block startup on expo-font, since its FontFaceObserver path can time out.
         mockedPlatformOS = 'ios';
-        Object.defineProperty(globalThis, 'document', { value: {}, configurable: true });
-        Object.defineProperty(globalThis, 'window', { value: {}, configurable: true });
+        retainDomOnNative = true;
 
         const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
         loadAsyncMock.mockRejectedValueOnce(new Error('6000ms timeout exceeded'));
@@ -1162,7 +1054,7 @@ describe('app/_layout init resilience', () => {
         const screen = await renderSettledRootLayout();
 
         expect(loadAsyncMock).toHaveBeenCalledTimes(0);
-        expect(screen.findByTestId('app-crash-recovery-boundary')).not.toBeNull();
+        expect(screen.findAllByType(components.SidebarNavigator)).toHaveLength(1);
 
         const fontInitErrors = consoleErrorSpy.mock.calls.filter(
             (call) => call[0] === 'Failed to load fonts during init, continuing startup:'

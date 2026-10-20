@@ -1,5 +1,6 @@
 import { z } from 'zod/mini';
 import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
+import { MessageActionReferenceV1ProtocolSchema } from '../sessions/messages/messageActionReferenceV1.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 import { defineProtocolJsonValue, defineProtocolObject, type ProtocolSchemaInput, type ProtocolSchemaOutput } from '../plugins/actions/protocolComposableSchema.js';
 
@@ -7,6 +8,7 @@ import { defineProtocolJsonValue, defineProtocolObject, type ProtocolSchemaInput
 export const ActionInvokeInputProtocolSchema = defineProtocolObject({
   action: PluginContributionIdentityV1Schema,
   input: defineProtocolJsonValue().optional(),
+  messageActionReference: MessageActionReferenceV1ProtocolSchema.optional(),
 }, { policy: 'closed' });
 export type ActionInvokeInput = ProtocolSchemaOutput<typeof ActionInvokeInputProtocolSchema>;
 // Dynamic invocation admits untrusted author input at the existing host boundary;

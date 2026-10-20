@@ -1,10 +1,30 @@
-import * as React from 'react';
-import { vi } from 'vitest';
+import { afterEach, beforeEach, vi } from 'vitest';
+import type { PropsWithChildren, ReactElement } from 'react';
+import type { RenderWithAppProvidersOptions } from '@/dev/testkit/render/renderWithAppProviders';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+
+/** Mounted app Settings entry, unlike the generic layout/search-only renderer. */
+export async function renderSessionSettingsEntryView(element: ReactElement, options: RenderWithAppProvidersOptions = {}) {
+    await loadSyncSingletonForTests();
+    const React = await import('react');
+    const { AuthProvider, useOptionalAuth } = await import('@/auth/context/AuthContext');
+    const { renderSettingsView } = await import('@/dev/testkit/harness/settingsViewHarness');
+    const CallerWrapper = options.wrapper;
+    function EntryAuthBoundary({ children }: PropsWithChildren) {
+        const auth = useOptionalAuth();
+        // Account fixtures retain their own real provider and captured lifetime.
+        return auth ? React.createElement(React.Fragment, null, children)
+            : React.createElement(AuthProvider, { initialCredentials: null, children });
+    }
+    function EntryProviders({ children }: PropsWithChildren) {
+        const content = React.createElement(EntryAuthBoundary, { children });
+        return CallerWrapper ? React.createElement(CallerWrapper, { children: content }) : content;
+    }
+    const screen = await renderSettingsView(element, { ...options, wrapper: EntryProviders });
+    return screen;
+}
 
 type SettingsEntryModuleFactory = () => unknown | Promise<unknown>;
-type MockImportOriginal = <T = unknown>() => Promise<T>;
-type StorageModuleFactory = (importOriginal: MockImportOriginal) => unknown | Promise<unknown>;
-type FeatureEnabledResolver = (featureId: string) => boolean;
 
 type InstallSessionSettingsEntryModuleMocksOptions = Readonly<{
     reactNative?: SettingsEntryModuleFactory;
@@ -12,9 +32,6 @@ type InstallSessionSettingsEntryModuleMocksOptions = Readonly<{
     routerModule?: SettingsEntryModuleFactory;
     textModule?: SettingsEntryModuleFactory;
     modalModule?: SettingsEntryModuleFactory;
-    useDeviceType?: 'desktop' | 'tablet';
-    storageModule?: StorageModuleFactory;
-    featureEnabled?: FeatureEnabledResolver;
 }>;
 
 const sessionSettingsEntryState = vi.hoisted(() => ({
@@ -30,9 +47,6 @@ const sessionSettingsEntryState = vi.hoisted(() => ({
         routerModule: undefined as SettingsEntryModuleFactory | undefined,
         textModule: undefined as SettingsEntryModuleFactory | undefined,
         modalModule: undefined as SettingsEntryModuleFactory | undefined,
-        storageModule: undefined as StorageModuleFactory | undefined,
-        featureEnabled: undefined as FeatureEnabledResolver | undefined,
-        useDeviceType: 'desktop' as 'desktop' | 'tablet',
     },
 }));
 
@@ -43,17 +57,22 @@ export function resetSessionSettingsEntryState() {
         uiMultiPanePanelsEnabled: false,
         sessionListOrderingModeV1: 'custom',
     };
-    sessionSettingsEntryState.options = {
-        reactNative: undefined,
-        unistyles: undefined,
-        routerModule: undefined,
-        textModule: undefined,
-        modalModule: undefined,
-        storageModule: undefined,
-        featureEnabled: undefined,
-        useDeviceType: 'desktop',
-    };
+    // SDK factories belong to the installed file fixture, not one mounted
+    // screen. Re-importing a route must retain its declared viewport/native ports.
 }
+
+// Register before consumer hooks, including suites which configure SDK options
+// in their own beforeEach. Reverse teardown leaves the ports up for Account disposal.
+let browser: Awaited<ReturnType<typeof import('@/dev/testkit/harness/browserRuntimeHarness')['installBrowserRuntimeForTests']>> | undefined;
+beforeEach(async () => {
+    browser = await (await import('@/dev/testkit/harness/browserRuntimeHarness')).installBrowserRuntimeForTests({
+        url: 'https://ui.fixture.test/settings',
+    });
+});
+afterEach(() => {
+    browser?.restore();
+    browser = undefined;
+});
 
 export function installSessionSettingsEntryModuleMocks(
     options: InstallSessionSettingsEntryModuleMocksOptions = {},
@@ -64,9 +83,6 @@ export function installSessionSettingsEntryModuleMocks(
         routerModule: options.routerModule,
         textModule: options.textModule,
         modalModule: options.modalModule,
-        storageModule: options.storageModule,
-        featureEnabled: options.featureEnabled,
-        useDeviceType: options.useDeviceType ?? 'desktop',
     };
 
     vi.mock('react-native', async () => {
@@ -79,9 +95,8 @@ export function installSessionSettingsEntryModuleMocks(
         return createReactNativeWebMock();
     });
 
-    vi.mock('@expo/vector-icons', () => ({
-        Ionicons: 'Ionicons',
-    }));
+    vi.mock('@expo/vector-icons', async () =>
+        (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 
     vi.mock('react-native-unistyles', async () => {
         if (sessionSettingsEntryState.options.unistyles) {
@@ -106,57 +121,6 @@ export function installSessionSettingsEntryModuleMocks(
         }).module;
     });
 
-    vi.mock('@/components/ui/lists/ItemList', () => ({
-        ItemList: (props: any) => React.createElement('ItemList', props, props.children),
-    }));
-
-    vi.mock('@/components/ui/lists/ItemGroup', () => ({
-        ItemGroup: (props: any) => React.createElement('ItemGroup', props, props.children),
-    }));
-
-    vi.mock('@/components/ui/lists/Item', () => ({
-        Item: (props: any) => React.createElement('Item', props),
-    }));
-
-    vi.mock('@/components/ui/forms/Switch', () => ({
-        Switch: 'Switch',
-    }));
-
-    vi.mock('@/components/settings/llmTasks/LlmTaskRunnerConfigV1BackendModelPicker', () => ({
-        LlmTaskRunnerConfigV1BackendModelPicker: (props: any) =>
-            React.createElement('LlmTaskRunnerConfigV1BackendModelPicker', props),
-    }));
-
-    vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-        DropdownMenu: (props: any) =>
-            React.createElement(
-                'DropdownMenu',
-                props,
-                props.itemTrigger
-                    ? React.createElement('Item', {
-                          title: props.itemTrigger.title,
-                          subtitle: props.itemTrigger.subtitle,
-                          onPress: () => props.onOpenChange?.(!props.open),
-                          disabled: props.itemTrigger?.itemProps?.disabled,
-                          testID: props.itemTrigger?.itemProps?.testID,
-                      })
-                    : typeof props.trigger === 'function'
-                      ? props.trigger({
-                            open: props.open,
-                            toggle: () => props.onOpenChange?.(!props.open),
-                            openMenu: () => props.onOpenChange?.(true),
-                            closeMenu: () => props.onOpenChange?.(false),
-                            selectedItem: null,
-                        })
-                      : null,
-            ),
-    }));
-
-    vi.mock('@/components/ui/text/Text', () => ({
-        Text: 'Text',
-        TextInput: 'TextInput',
-    }));
-
     vi.mock('@/text', async () => {
         if (sessionSettingsEntryState.options.textModule) {
             return await sessionSettingsEntryState.options.textModule();
@@ -173,54 +137,6 @@ export function installSessionSettingsEntryModuleMocks(
         return createModalModuleMock().module;
     });
 
-    vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-        if (sessionSettingsEntryState.options.storageModule) {
-            return await sessionSettingsEntryState.options.storageModule(importOriginal as MockImportOriginal);
-        }
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        const original = await (importOriginal as MockImportOriginal)<typeof import('@/sync/domains/state/storage')>();
-        return createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                // Boundary fixture: the read-only reader answers from the same keyed settings as the
-                // mutable one (pages also read derived state, such as the effective list layout, this way).
-                useSetting: ((key: string) => (
-                    key in sessionSettingsEntryState.settingsState
-                        ? sessionSettingsEntryState.settingsState[key]
-                        : original.useSetting(key as never)
-                )) as unknown as typeof import('@/sync/domains/state/storage')['useSetting'],
-                // Boundary fixture: route settings tests only need keyed mutable storage semantics.
-                useSettingMutable: ((key: string) => [
-                    key in sessionSettingsEntryState.settingsState
-                        ? sessionSettingsEntryState.settingsState[key]
-                        : null,
-                    (next: unknown) => {
-                        sessionSettingsEntryState.settingsState[key] = next;
-                    },
-                ]) as unknown as typeof import('@/sync/domains/state/storage')['useSettingMutable'],
-                // Boundary fixture: route settings tests only need keyed mutable storage semantics.
-                useLocalSettingMutable: ((key: string) => [
-                    key in sessionSettingsEntryState.settingsState
-                        ? sessionSettingsEntryState.settingsState[key]
-                        : null,
-                    (next: unknown) => {
-                        sessionSettingsEntryState.settingsState[key] = next;
-                    },
-                ]) as unknown as typeof import('@/sync/domains/state/storage')['useLocalSettingMutable'],
-            },
-        });
-    });
-
-    vi.mock('@/utils/platform/responsive', () => ({
-        useDeviceType: () => sessionSettingsEntryState.options.useDeviceType,
-    }));
-
-    if (sessionSettingsEntryState.options.featureEnabled) {
-        vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-            useFeatureEnabled: (featureId: string) =>
-                sessionSettingsEntryState.options.featureEnabled?.(featureId) ?? false,
-        }));
-    }
 }
 
 export { sessionSettingsEntryState };

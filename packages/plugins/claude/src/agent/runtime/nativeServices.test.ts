@@ -143,7 +143,7 @@ describe('createClaudeNativeAgentSdkContext', () => {
     const context = { workState: { publisher } } as unknown as AgentSessionRuntimeContext;
     const publishGoal = createClaudeNativeGoalWorkStatePublisher(context);
 
-    publishGoal({
+    await publishGoal({
       v: 1,
       backendId: 'claude',
       agentId: 'claude',
@@ -180,6 +180,18 @@ describe('createClaudeNativeAgentSdkContext', () => {
         updatedAtMs: 123,
       }],
     });
+  });
+
+  it('does not acknowledge a refused native goal work-state publication', async () => {
+    const publish = vi.fn(async () => ({ status: 'unavailable' as const,
+      diagnostic: { code: 'agent_work_state_host_unavailable', severity: 'error' as const } }));
+    // The plugin's public host publisher is the boundary; the Goal source and
+    // native control remain real in the composed host registration regression.
+    const context = { workState: { publisher: () => ({ publish }) },
+      services: { logger: { warn: vi.fn() } } } as unknown as AgentSessionRuntimeContext;
+    await expect(createClaudeNativeGoalWorkStatePublisher(context)({
+      v: 1, backendId: 'claude', agentId: 'claude', updatedAt: 123, primaryItemId: null, items: [],
+    })).rejects.toThrow('agent_work_state_host_unavailable');
   });
 
   it('refreshes runtime auth through the native host capability without general Session access or Agent identity', async () => {

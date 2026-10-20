@@ -122,7 +122,6 @@ test.describe('ui e2e: SCM partial staging + commit + discard', () => {
       EXPO_PUBLIC_DEBUG: '1',
       EXPO_PUBLIC_HAPPY_SERVER_URL: '',
       EXPO_PUBLIC_HAPPY_STORAGE_SCOPE: `e2e-${run.runId}`,
-      EXPO_PUBLIC_HAPPIER_FILES_PREVIEW_READ_TIMEOUT_MS: '5000',
       HAPPIER_E2E_UI_WEB_SCRIPT_FETCH_TIMEOUT_MS:
         process.env.HAPPIER_E2E_UI_WEB_SCRIPT_FETCH_TIMEOUT_MS
         ?? process.env.HAPPIER_E2E_UI_WEB_BEFORE_ALL_MIN_TIMEOUT_MS

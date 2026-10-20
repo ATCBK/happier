@@ -1,6 +1,6 @@
 import * as zMini from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 import { NonBlankOpaqueIdentifierSchema } from '../strings/opaqueIdentifier.js';
@@ -8,8 +8,8 @@ import { ProviderConnectionIdSchema, ProviderContributionKeySchema } from '../pr
 import { UsageModelPriceCatalogSchema } from './usageModelPriceSchemas.js';
 import { QualifiedConnectedAccountRefSchema } from '../connect/qualifiedConnectedAccountPersistence.js';
 
-const NonNegativeNumberSchema = lazyZodSchema(() => z.number().finite().min(0));
-const OptionalNonEmptyStringSchema = lazyZodSchema(() => z.string().trim().min(1).optional().nullable());
+const NonNegativeNumberSchema = lazyZodSchema(() => z.number().check(z.minimum(0)));
+const OptionalNonEmptyStringSchema = lazyZodSchema(() => z.nullable(z.optional(z.string().check(z.trim(), z.minLength(1)))));
 
 export const UsageObservationScopeSchema = lazyZodSchema(() => z.enum([
   'turn_delta',
@@ -18,91 +18,91 @@ export const UsageObservationScopeSchema = lazyZodSchema(() => z.enum([
 ]));
 export type UsageObservationScope = z.infer<typeof UsageObservationScopeSchema>;
 
-export const UsageObservationTokensSchema = lazyZodSchema(() => z.object({
+export const UsageObservationTokensSchema = lazyZodSchema(() => z.strictObject({
   input: NonNegativeNumberSchema,
   output: NonNegativeNumberSchema,
   reasoning: NonNegativeNumberSchema,
   cacheRead: NonNegativeNumberSchema,
   cacheWrite: NonNegativeNumberSchema,
   total: NonNegativeNumberSchema,
-}).strict());
+}));
 export type UsageObservationTokens = z.infer<typeof UsageObservationTokensSchema>;
 
-export const UsageObservationCostSchema = lazyZodSchema(() => z.object({
+export const UsageObservationCostSchema = lazyZodSchema(() => z.strictObject({
   reportedUsd: NonNegativeNumberSchema,
   estimatedUsd: NonNegativeNumberSchema,
   /** Query projection only; never the authority for vendor-reported or stored estimated costs. */
-  apiEquivalentUsd: NonNegativeNumberSchema.optional(),
-  pricingSource: z.string().trim().min(1).optional(),
+  apiEquivalentUsd: z.optional(NonNegativeNumberSchema),
+  pricingSource: z.optional(z.string().check(z.trim(), z.minLength(1))),
   /** Query-only overlap witness: this row's fallback money is covered by that reported total. */
-  reportedTotalId: z.string().trim().min(1).optional(),
+  reportedTotalId: z.optional(z.string().check(z.trim(), z.minLength(1))),
   /** Query-only scope of a money-only reported total; subsets cannot apportion this charge. */
-  reportedTotalContributionIds: z.array(z.string().trim().min(1)).optional(),
-  invoiceUsd: NonNegativeNumberSchema.optional(),
-  billingContext: z.enum([
+  reportedTotalContributionIds: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
+  invoiceUsd: z.optional(NonNegativeNumberSchema),
+  billingContext: z.optional(z.enum([
     'api_usage',
     'subscription_included',
     'subscription_with_possible_overage',
     'unknown',
-  ]).optional(),
-  costSource: z.enum([
+  ])),
+  costSource: z.optional(z.enum([
     'provider_reported',
     'provider_reported_api_equivalent',
     'pricing_estimate',
     'invoice',
     'none',
-  ]).optional(),
-  currency: z.string().trim().min(1),
-  breakdown: z.record(z.string(), NonNegativeNumberSchema).optional(),
-  effectiveUsd: NonNegativeNumberSchema.optional(),
-}).strict());
+  ])),
+  currency: z.string().check(z.trim(), z.minLength(1)),
+  breakdown: z.optional(z.record(z.string(), NonNegativeNumberSchema)),
+  effectiveUsd: z.optional(NonNegativeNumberSchema),
+}));
 export type UsageObservationCost = z.infer<typeof UsageObservationCostSchema>;
 
-export const UsageObservationContextSchema = lazyZodSchema(() => z.object({
-  usedTokens: NonNegativeNumberSchema.nullable().optional(),
-  windowTokens: NonNegativeNumberSchema.nullable().optional(),
-}).strict());
+export const UsageObservationContextSchema = lazyZodSchema(() => z.strictObject({
+  usedTokens: z.optional(z.nullable(NonNegativeNumberSchema)),
+  windowTokens: z.optional(z.nullable(NonNegativeNumberSchema)),
+}));
 export type UsageObservationContext = z.infer<typeof UsageObservationContextSchema>;
 
 /** Device-keyed identifiers identify native accounting without disclosing source paths. */
-export const UsageNativeAccountingSubjectSchema = lazyZodSchema(() => z.object({
+export const UsageNativeAccountingSubjectSchema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('native'),
-  machineId: z.string().trim().min(1),
+  machineId: z.string().check(z.trim(), z.minLength(1)),
   agent: asProtocolZod(PluginContributionIdentityV1Schema),
   sourceRootKey: NonBlankOpaqueIdentifierSchema,
   nativeSessionKey: NonBlankOpaqueIdentifierSchema,
-  linkedSessionId: z.string().trim().min(1).optional(),
-}).strict());
+  linkedSessionId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+}));
 export type UsageNativeAccountingSubject = z.infer<typeof UsageNativeAccountingSubjectSchema>;
 
 /** Explicit native evidence; lineage and correlation authority remain server-owned. */
-export const UsageNativeAccountingEvidenceSchema = lazyZodSchema(() => UsageAccountingMetadataSchema.pick({
+export const UsageNativeAccountingEvidenceSchema = lazyZodSchema(() => (<T extends zMini.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as zMini.ZodMiniObject<T['shape'], zMini.core.$strict>)(z.extend(z.pick(UsageAccountingMetadataSchema, {
   historyComplete: true, asOfMs: true, counterEpoch: true, inputIncludesCache: true, outputIncludesReasoning: true,
-}).extend({
+}), {
   status: z.enum(['available', 'partial']),
   inferenceKey: zMini.optional(NonBlankOpaqueIdentifierSchema),
-}).strict());
+})));
 export type UsageNativeAccountingEvidence = z.infer<typeof UsageNativeAccountingEvidenceSchema>;
 
-export const UsageNativeHistoryDeleteRequestSchema = lazyZodSchema(() => z.object({
-  machineId: z.string().trim().min(1),
+export const UsageNativeHistoryDeleteRequestSchema = lazyZodSchema(() => z.strictObject({
+  machineId: z.string().check(z.trim(), z.minLength(1)),
   sourceRootKey: NonBlankOpaqueIdentifierSchema,
-  dateRange: z.object({
-    startMs: z.number().int().min(0).optional(),
-    endMs: z.number().int().min(0).optional(),
-  }).strict().refine((range) => range.startMs === undefined || range.endMs === undefined || range.startMs <= range.endMs).optional(),
-}).strict());
+  dateRange: z.optional(z.strictObject({
+    startMs: z.optional(z.number().check(z.int(), z.minimum(0))),
+    endMs: z.optional(z.number().check(z.int(), z.minimum(0))),
+  }).check(z.refine((range) => range.startMs === undefined || range.endMs === undefined || range.startMs <= range.endMs))),
+}));
 export type UsageNativeHistoryDeleteRequest = z.infer<typeof UsageNativeHistoryDeleteRequestSchema>;
 
 /** Host-captured request source; never reconstructed from current Session metadata. */
-export const UsageRequestAttributionSchema = lazyZodSchema(() => z.object({
+export const UsageRequestAttributionSchema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
-  turnId: z.string().trim().min(1),
+  turnId: z.string().check(z.trim(), z.minLength(1)),
   source: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('native'), connectedAccount: zMini.nullable(asProtocolZod(QualifiedConnectedAccountRefSchema)) }).strict(),
-    z.object({ kind: z.literal('provider'), providerId: zMini.nullable(ProviderContributionKeySchema), providerConnectionId: ProviderConnectionIdSchema }).strict(),
+    z.strictObject({ kind: z.literal('native'), connectedAccount: zMini.nullable(asProtocolZod(QualifiedConnectedAccountRefSchema)) }),
+    z.strictObject({ kind: z.literal('provider'), providerId: zMini.nullable(ProviderContributionKeySchema), providerConnectionId: ProviderConnectionIdSchema }),
   ]),
-}).strict());
+}));
 export type UsageRequestAttribution = z.infer<typeof UsageRequestAttributionSchema>;
 
 export function readUsageRequestAttribution(metadata: unknown): UsageRequestAttribution | null {
@@ -110,28 +110,28 @@ export function readUsageRequestAttribution(metadata: unknown): UsageRequestAttr
   return parsed.success ? parsed.data : null;
 }
 
-export const UsageEventIngestRequestSchema = lazyZodSchema(() => z.object({
-  sessionId: z.string().trim().min(1).optional(),
-  subject: UsageNativeAccountingSubjectSchema.optional(),
-  accounting: UsageNativeAccountingEvidenceSchema.optional(),
-  attribution: UsageRequestAttributionSchema.optional(),
-  observedAt: z.number().int().min(0),
-  agentId: z.string().trim().min(1),
+export const UsageEventIngestRequestSchema = lazyZodSchema(() => z.strictObject({
+  sessionId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  subject: z.optional(UsageNativeAccountingSubjectSchema),
+  accounting: z.optional(UsageNativeAccountingEvidenceSchema),
+  attribution: z.optional(UsageRequestAttributionSchema),
+  observedAt: z.number().check(z.int(), z.minimum(0)),
+  agentId: z.string().check(z.trim(), z.minLength(1)),
   backendMode: OptionalNonEmptyStringSchema,
   modelId: OptionalNonEmptyStringSchema,
   projectKey: OptionalNonEmptyStringSchema,
   workspaceId: OptionalNonEmptyStringSchema,
   machineId: OptionalNonEmptyStringSchema,
-  source: z.string().trim().min(1),
+  source: z.string().check(z.trim(), z.minLength(1)),
   scope: UsageObservationScopeSchema,
   externalKey: OptionalNonEmptyStringSchema,
   turnId: OptionalNonEmptyStringSchema,
   isCumulative: z.boolean(),
   tokens: UsageObservationTokensSchema,
   cost: UsageObservationCostSchema,
-  context: UsageObservationContextSchema.optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-}).strict().superRefine((request, ctx) => {
+  context: z.optional(UsageObservationContextSchema),
+  metadata: z.optional(z.record(z.string(), z.unknown())),
+}).check(z.superRefine((request, ctx) => {
   if (request.attribution && (request.subject || request.scope !== 'turn_delta' || request.isCumulative || request.turnId !== request.attribution.turnId)) {
     ctx.addIssue({ code: 'custom', path: ['attribution'], message: 'Request attribution requires a matching runtime turn delta.' });
   }
@@ -145,7 +145,7 @@ export const UsageEventIngestRequestSchema = lazyZodSchema(() => z.object({
     if (request.agentId !== request.subject.agent.localId && request.agentId !== `${request.subject.agent.pluginId}/${request.subject.agent.localId}`) ctx.addIssue({ code: 'custom', path: ['agentId'], message: 'Agent identity must agree with the subject.' });
   }
   if (request.accounting && !request.subject) ctx.addIssue({ code: 'custom', path: ['accounting'], message: 'Native evidence requires a native subject.' });
-}));
+})));
 export type UsageEventIngestRequest = z.infer<typeof UsageEventIngestRequestSchema>;
 
 export const UsageAnalyticsGranularitySchema = lazyZodSchema(() => z.enum([
@@ -171,192 +171,192 @@ export const UsageAnalyticsBreakdownDimensionSchema = lazyZodSchema(() => z.enum
 ]));
 export type UsageAnalyticsBreakdownDimension = z.infer<typeof UsageAnalyticsBreakdownDimensionSchema>;
 
-export const UsageAnalyticsQueryFiltersSchema = lazyZodSchema(() => z.object({
-  sessionIds: z.array(z.string().trim().min(1)).optional(),
-  agentIds: z.array(z.string().trim().min(1)).optional(),
-  modelIds: z.array(z.string().trim().min(1)).optional(),
-  projectKeys: z.array(z.string().trim().min(1)).optional(),
-  workspaceIds: z.array(z.string().trim().min(1)).optional(),
-  backendModes: z.array(z.string().trim().min(1)).optional(),
-  sources: z.array(z.string().trim().min(1)).optional(),
-  machineIds: z.array(z.string().trim().min(1)).optional(),
-}).strict());
+export const UsageAnalyticsQueryFiltersSchema = lazyZodSchema(() => z.strictObject({
+  sessionIds: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
+  agentIds: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
+  modelIds: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
+  projectKeys: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
+  workspaceIds: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
+  backendModes: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
+  sources: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
+  machineIds: z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))),
+}));
 export type UsageAnalyticsQueryFilters = z.infer<typeof UsageAnalyticsQueryFiltersSchema>;
 
-export const UsageAnalyticsQueryRequestSchema = lazyZodSchema(() => z.object({
-  dateRange: z.object({
-    startMs: z.number().int().min(0).optional(),
-    endMs: z.number().int().min(0).optional(),
-  }).strict().optional(),
-  granularity: UsageAnalyticsGranularitySchema.default('day'),
-  timeZoneOffsetMinutes: z.number().int().min(-840).max(840).default(0),
-  costMode: UsageAnalyticsCostModeSchema.optional(),
-  breakdowns: z.array(UsageAnalyticsBreakdownDimensionSchema).max(8).optional(),
-  filters: UsageAnalyticsQueryFiltersSchema.optional(),
-  includeSeries: z.boolean().default(true),
-  includeInsights: z.boolean().optional(),
-  includeActivity: z.boolean().optional(),
-  includeLeaders: z.boolean().optional(),
-  includeModelTimeline: z.boolean().optional(),
-  includeMessageStats: z.boolean().optional(),
-  activityResolution: z.enum(['calendar', 'weekdayHour', 'both']).optional(),
-  topLimit: z.number().int().min(1).max(100).default(20),
-}).strict());
+export const UsageAnalyticsQueryRequestSchema = lazyZodSchema(() => z.strictObject({
+  dateRange: z.optional(z.strictObject({
+    startMs: z.optional(z.number().check(z.int(), z.minimum(0))),
+    endMs: z.optional(z.number().check(z.int(), z.minimum(0))),
+  })),
+  granularity: z._default(UsageAnalyticsGranularitySchema, 'day'),
+  timeZoneOffsetMinutes: z._default(z.number().check(z.int(), z.minimum(-840), z.maximum(840)), 0),
+  costMode: z.optional(UsageAnalyticsCostModeSchema),
+  breakdowns: z.optional(z.array(UsageAnalyticsBreakdownDimensionSchema).check(z.maxLength(8))),
+  filters: z.optional(UsageAnalyticsQueryFiltersSchema),
+  includeSeries: z._default(z.boolean(), true),
+  includeInsights: z.optional(z.boolean()),
+  includeActivity: z.optional(z.boolean()),
+  includeLeaders: z.optional(z.boolean()),
+  includeModelTimeline: z.optional(z.boolean()),
+  includeMessageStats: z.optional(z.boolean()),
+  activityResolution: z.optional(z.enum(['calendar', 'weekdayHour', 'both'])),
+  topLimit: z._default(z.number().check(z.int(), z.minimum(1), z.maximum(100)), 20),
+}));
 export type UsageAnalyticsQueryRequest = z.infer<typeof UsageAnalyticsQueryRequestSchema>;
 
-export const UsageAnalyticsTotalsSchema = lazyZodSchema(() => z.object({
-  eventCount: z.number().int().min(0),
+export const UsageAnalyticsTotalsSchema = lazyZodSchema(() => z.strictObject({
+  eventCount: z.number().check(z.int(), z.minimum(0)),
   /** Number of admitted inference requests; omitted for legacy/personal responses. */
-  requestCount: z.number().int().min(0).optional(),
+  requestCount: z.optional(z.number().check(z.int(), z.minimum(0))),
   tokens: UsageObservationTokensSchema,
   cost: UsageObservationCostSchema,
-  context: UsageObservationContextSchema.optional(),
-}).strict());
+  context: z.optional(UsageObservationContextSchema),
+}));
 export type UsageAnalyticsTotals = z.infer<typeof UsageAnalyticsTotalsSchema>;
 
-export const UsageAnalyticsSeriesBucketSchema = lazyZodSchema(() => z.object({
-  bucketStartMs: z.number().int().min(0),
-  bucketEndMs: z.number().int().min(0),
-  eventCount: z.number().int().min(0),
-  requestCount: z.number().int().min(0).optional(),
+export const UsageAnalyticsSeriesBucketSchema = lazyZodSchema(() => z.strictObject({
+  bucketStartMs: z.number().check(z.int(), z.minimum(0)),
+  bucketEndMs: z.number().check(z.int(), z.minimum(0)),
+  eventCount: z.number().check(z.int(), z.minimum(0)),
+  requestCount: z.optional(z.number().check(z.int(), z.minimum(0))),
   tokens: UsageObservationTokensSchema,
   cost: UsageObservationCostSchema,
-  context: UsageObservationContextSchema.optional(),
-}).strict());
+  context: z.optional(UsageObservationContextSchema),
+}));
 export type UsageAnalyticsSeriesBucket = z.infer<typeof UsageAnalyticsSeriesBucketSchema>;
 
-export const UsageAnalyticsBreakdownEntrySchema = lazyZodSchema(() => z.object({
-  key: z.string().trim().min(1),
-  label: z.string().trim().min(1).optional(),
-  eventCount: z.number().int().min(0),
-  requestCount: z.number().int().min(0).optional(),
+export const UsageAnalyticsBreakdownEntrySchema = lazyZodSchema(() => z.strictObject({
+  key: z.string().check(z.trim(), z.minLength(1)),
+  label: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  eventCount: z.number().check(z.int(), z.minimum(0)),
+  requestCount: z.optional(z.number().check(z.int(), z.minimum(0))),
   tokens: UsageObservationTokensSchema,
   cost: UsageObservationCostSchema,
-  context: UsageObservationContextSchema.optional(),
-  latestContextUsedTokens: NonNegativeNumberSchema.optional(),
-  latestContextWindowTokens: NonNegativeNumberSchema.optional(),
-}).strict());
+  context: z.optional(UsageObservationContextSchema),
+  latestContextUsedTokens: z.optional(NonNegativeNumberSchema),
+  latestContextWindowTokens: z.optional(NonNegativeNumberSchema),
+}));
 export type UsageAnalyticsBreakdownEntry = z.infer<typeof UsageAnalyticsBreakdownEntrySchema>;
 
-export const UsageAnalyticsBreakdownsSchema = lazyZodSchema(() => z.object({
-  agent: z.array(UsageAnalyticsBreakdownEntrySchema).optional(),
-  model: z.array(UsageAnalyticsBreakdownEntrySchema).optional(),
-  session: z.array(UsageAnalyticsBreakdownEntrySchema).optional(),
-  project: z.array(UsageAnalyticsBreakdownEntrySchema).optional(),
-  workspace: z.array(UsageAnalyticsBreakdownEntrySchema).optional(),
-  backendMode: z.array(UsageAnalyticsBreakdownEntrySchema).optional(),
-  source: z.array(UsageAnalyticsBreakdownEntrySchema).optional(),
-  machine: z.array(UsageAnalyticsBreakdownEntrySchema).optional(),
-}).strict());
+export const UsageAnalyticsBreakdownsSchema = lazyZodSchema(() => z.strictObject({
+  agent: z.optional(z.array(UsageAnalyticsBreakdownEntrySchema)),
+  model: z.optional(z.array(UsageAnalyticsBreakdownEntrySchema)),
+  session: z.optional(z.array(UsageAnalyticsBreakdownEntrySchema)),
+  project: z.optional(z.array(UsageAnalyticsBreakdownEntrySchema)),
+  workspace: z.optional(z.array(UsageAnalyticsBreakdownEntrySchema)),
+  backendMode: z.optional(z.array(UsageAnalyticsBreakdownEntrySchema)),
+  source: z.optional(z.array(UsageAnalyticsBreakdownEntrySchema)),
+  machine: z.optional(z.array(UsageAnalyticsBreakdownEntrySchema)),
+}));
 export type UsageAnalyticsBreakdowns = z.infer<typeof UsageAnalyticsBreakdownsSchema>;
 
-const UsageAnalyticsKeyedLabelSchema = lazyZodSchema(() => z.object({
-  key: z.string().trim().min(1),
-  label: z.string().trim().min(1),
-}).strict());
+const UsageAnalyticsKeyedLabelSchema = lazyZodSchema(() => z.strictObject({
+  key: z.string().check(z.trim(), z.minLength(1)),
+  label: z.string().check(z.trim(), z.minLength(1)),
+}));
 
-const UsageAnalyticsActivityCalendarDaySchema = lazyZodSchema(() => z.object({
-  date: z.string().trim().min(1),
-  eventCount: z.number().int().min(0),
-}).strict());
+const UsageAnalyticsActivityCalendarDaySchema = lazyZodSchema(() => z.strictObject({
+  date: z.string().check(z.trim(), z.minLength(1)),
+  eventCount: z.number().check(z.int(), z.minimum(0)),
+}));
 
-const UsageAnalyticsActivityWeekdayHourBucketSchema = lazyZodSchema(() => z.object({
-  weekday: z.number().int().min(0).max(6),
-  hour: z.number().int().min(0).max(23),
-  eventCount: z.number().int().min(0),
-}).strict());
+const UsageAnalyticsActivityWeekdayHourBucketSchema = lazyZodSchema(() => z.strictObject({
+  weekday: z.number().check(z.int(), z.minimum(0), z.maximum(6)),
+  hour: z.number().check(z.int(), z.minimum(0), z.maximum(23)),
+  eventCount: z.number().check(z.int(), z.minimum(0)),
+}));
 
-const UsageAnalyticsActivitySchema = lazyZodSchema(() => z.object({
-  calendarDays: z.array(UsageAnalyticsActivityCalendarDaySchema).optional(),
-  weekdayHourBuckets: z.array(UsageAnalyticsActivityWeekdayHourBucketSchema).optional(),
-}).strict());
+const UsageAnalyticsActivitySchema = lazyZodSchema(() => z.strictObject({
+  calendarDays: z.optional(z.array(UsageAnalyticsActivityCalendarDaySchema)),
+  weekdayHourBuckets: z.optional(z.array(UsageAnalyticsActivityWeekdayHourBucketSchema)),
+}));
 
-const UsageAnalyticsInsightsSchema = lazyZodSchema(() => z.object({
-  activeDays: z.number().int().min(0),
-  longestStreakDays: z.number().int().min(0),
-  sessionsUsed: z.number().int().min(0),
-  messagesUsed: z.number().int().min(0),
-  modelsTried: z.number().int().min(0),
-  favoriteModel: UsageAnalyticsKeyedLabelSchema.optional(),
-  favoriteModelChangeCount: z.number().int().min(0),
-  busiestMonth: UsageAnalyticsKeyedLabelSchema.optional(),
-  busiestDay: UsageAnalyticsKeyedLabelSchema.optional(),
-  busiestHour: UsageAnalyticsKeyedLabelSchema.optional(),
-  cacheSavingsUsd: NonNegativeNumberSchema.optional(),
-}).strict());
+const UsageAnalyticsInsightsSchema = lazyZodSchema(() => z.strictObject({
+  activeDays: z.number().check(z.int(), z.minimum(0)),
+  longestStreakDays: z.number().check(z.int(), z.minimum(0)),
+  sessionsUsed: z.number().check(z.int(), z.minimum(0)),
+  messagesUsed: z.number().check(z.int(), z.minimum(0)),
+  modelsTried: z.number().check(z.int(), z.minimum(0)),
+  favoriteModel: z.optional(UsageAnalyticsKeyedLabelSchema),
+  favoriteModelChangeCount: z.number().check(z.int(), z.minimum(0)),
+  busiestMonth: z.optional(UsageAnalyticsKeyedLabelSchema),
+  busiestDay: z.optional(UsageAnalyticsKeyedLabelSchema),
+  busiestHour: z.optional(UsageAnalyticsKeyedLabelSchema),
+  cacheSavingsUsd: z.optional(NonNegativeNumberSchema),
+}));
 
 /** Capture path and execution attribution are independent; native replay can be linked to Happier. */
-export const UsageAnalyticsSourceContextSchema = lazyZodSchema(() => z.object({
+export const UsageAnalyticsSourceContextSchema = lazyZodSchema(() => z.strictObject({
   path: z.enum(['runtime', 'native', 'legacy', 'unknown']),
   execution: z.enum(['happier', 'outside', 'unknown']),
-}).strict());
+}));
 export type UsageAnalyticsSourceContext = z.infer<typeof UsageAnalyticsSourceContextSchema>;
 
-export const UsageAnalyticsTimelineSourceSchema = lazyZodSchema(() => UsageAnalyticsSourceContextSchema.extend({
-  source: z.string().trim().min(1),
-  eventCount: z.number().int().min(0),
+export const UsageAnalyticsTimelineSourceSchema = lazyZodSchema(() => (<T extends zMini.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as zMini.ZodMiniObject<T['shape'], zMini.core.$strict>)(z.extend(UsageAnalyticsSourceContextSchema, {
+  source: z.string().check(z.trim(), z.minLength(1)),
+  eventCount: z.number().check(z.int(), z.minimum(0)),
   tokens: UsageObservationTokensSchema,
   cost: UsageObservationCostSchema,
-}).strict());
+})));
 export type UsageAnalyticsTimelineSource = z.infer<typeof UsageAnalyticsTimelineSourceSchema>;
 
-const UsageAnalyticsLeaderSchema = lazyZodSchema(() => z.object({
-  key: z.string().trim().min(1),
-  label: z.string().trim().min(1).optional(),
-  eventCount: z.number().int().min(0),
-  tokens: UsageObservationTokensSchema.optional(),
-  cost: UsageObservationCostSchema.optional(),
+const UsageAnalyticsLeaderSchema = lazyZodSchema(() => z.strictObject({
+  key: z.string().check(z.trim(), z.minLength(1)),
+  label: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  eventCount: z.number().check(z.int(), z.minimum(0)),
+  tokens: z.optional(UsageObservationTokensSchema),
+  cost: z.optional(UsageObservationCostSchema),
   /** Only timeline leaders carry source partitions; older responses may omit them. */
-  sources: z.array(UsageAnalyticsTimelineSourceSchema).optional(),
-}).strict());
+  sources: z.optional(z.array(UsageAnalyticsTimelineSourceSchema)),
+}));
 
-const UsageAnalyticsLeadersSchema = lazyZodSchema(() => z.object({
-  agents: z.array(UsageAnalyticsLeaderSchema).optional(),
-  models: z.array(UsageAnalyticsLeaderSchema).optional(),
-  sessions: z.array(UsageAnalyticsLeaderSchema).optional(),
-  projects: z.array(UsageAnalyticsLeaderSchema).optional(),
-  workspaces: z.array(UsageAnalyticsLeaderSchema).optional(),
-  engines: z.array(UsageAnalyticsLeaderSchema).optional(),
-}).strict());
+const UsageAnalyticsLeadersSchema = lazyZodSchema(() => z.strictObject({
+  agents: z.optional(z.array(UsageAnalyticsLeaderSchema)),
+  models: z.optional(z.array(UsageAnalyticsLeaderSchema)),
+  sessions: z.optional(z.array(UsageAnalyticsLeaderSchema)),
+  projects: z.optional(z.array(UsageAnalyticsLeaderSchema)),
+  workspaces: z.optional(z.array(UsageAnalyticsLeaderSchema)),
+  engines: z.optional(z.array(UsageAnalyticsLeaderSchema)),
+}));
 
-const UsageAnalyticsTimelineLeaderBucketSchema = lazyZodSchema(() => z.object({
-  bucketStartMs: z.number().int().min(0),
-  bucketEndMs: z.number().int().min(0),
+const UsageAnalyticsTimelineLeaderBucketSchema = lazyZodSchema(() => z.strictObject({
+  bucketStartMs: z.number().check(z.int(), z.minimum(0)),
+  bucketEndMs: z.number().check(z.int(), z.minimum(0)),
   leaders: z.array(UsageAnalyticsLeaderSchema),
-}).strict());
+}));
 
-const UsageAnalyticsMessageStatsSchema = lazyZodSchema(() => z.object({
+const UsageAnalyticsMessageStatsSchema = lazyZodSchema(() => z.strictObject({
   /** Usage-contributing sessions selected by the query; identical to insights.sessionsUsed when insights are present. */
-  sessionCount: z.number().int().min(0),
+  sessionCount: z.number().check(z.int(), z.minimum(0)),
   /** Messages created in those sessions within the query's date window. */
-  messageCount: z.number().int().min(0),
-}).strict());
+  messageCount: z.number().check(z.int(), z.minimum(0)),
+}));
 
-const UsageAnalyticsCostPresentationSchema = lazyZodSchema(() => z.object({
+const UsageAnalyticsCostPresentationSchema = lazyZodSchema(() => z.strictObject({
   mode: UsageAnalyticsCostModeSchema,
   effectiveUsd: NonNegativeNumberSchema,
-  currency: z.string().trim().min(1),
-  source: z.string().trim().min(1),
-}).strict());
+  currency: z.string().check(z.trim(), z.minLength(1)),
+  source: z.string().check(z.trim(), z.minLength(1)),
+}));
 
-export const UsageAccountingMetadataSchema = lazyZodSchema(() => z.object({
-  path: z.enum(['runtime', 'native', 'legacy', 'unknown']).optional(),
-  status: z.enum(['available', 'partial', 'unknown', 'unsupported', 'pending', 'error']).optional(),
-  historyComplete: z.boolean().optional(),
-  asOfMs: z.number().int().min(0).optional(),
-  nativeSessionId: z.string().trim().min(1).optional(),
-  inferenceId: z.string().trim().min(1).optional(),
-  counterEpoch: z.string().trim().min(1).optional(),
-  inputIncludesCache: z.boolean().optional(),
-  outputIncludesReasoning: z.boolean().optional(),
-}).strict());
+export const UsageAccountingMetadataSchema = lazyZodSchema(() => z.strictObject({
+  path: z.optional(z.enum(['runtime', 'native', 'legacy', 'unknown'])),
+  status: z.optional(z.enum(['available', 'partial', 'unknown', 'unsupported', 'pending', 'error'])),
+  historyComplete: z.optional(z.boolean()),
+  asOfMs: z.optional(z.number().check(z.int(), z.minimum(0))),
+  nativeSessionId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  inferenceId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  counterEpoch: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  inputIncludesCache: z.optional(z.boolean()),
+  outputIncludesReasoning: z.optional(z.boolean()),
+}));
 export type UsageAccountingMetadata = z.infer<typeof UsageAccountingMetadataSchema>;
 
 /** Stored diagnostic read projection: drop extras, never infer admission authority. */
 export function readUsageAccountingMetadata(metadata: unknown): UsageAccountingMetadata | null {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
   const value = Reflect.get(metadata, 'usageAccounting');
-  const result = UsageAccountingMetadataSchema.strip().safeParse(value);
+  const result = lazyZodSchema(() => (<T extends zMini.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: undefined }) as zMini.ZodMiniObject<T['shape'], zMini.core.$strip>)(UsageAccountingMetadataSchema)).safeParse(value);
   return result.success ? result.data : null;
 }
 
@@ -373,122 +373,122 @@ export const UsageAnalyticsCostFactKindSchema = lazyZodSchema(() => z.enum([
 export type UsageAnalyticsCostFactKind = z.infer<typeof UsageAnalyticsCostFactKindSchema>;
 
 /** Monetary truth independent of the private accounting source identity. */
-export const UsageAnalyticsCostFactValueSchema = lazyZodSchema(() => z.object({
+export const UsageAnalyticsCostFactValueSchema = lazyZodSchema(() => z.strictObject({
   kind: UsageAnalyticsCostFactKindSchema,
-  currency: z.string().trim().min(1),
-  amountUsd: NonNegativeNumberSchema.nullable(),
+  currency: z.string().check(z.trim(), z.minLength(1)),
+  amountUsd: z.nullable(NonNegativeNumberSchema),
   tokens: UsageObservationTokensSchema,
-  eventCount: z.number().int().min(0),
-  asOfMs: z.number().int().min(0),
+  eventCount: z.number().check(z.int(), z.minimum(0)),
+  asOfMs: z.number().check(z.int(), z.minimum(0)),
   complete: z.boolean(),
-}).strict().superRefine((fact, ctx) => {
+}).check(z.superRefine((fact, ctx) => {
   if ((fact.kind === 'unpriced') !== (fact.amountUsd === null)) {
     ctx.addIssue({ code: 'custom', path: ['amountUsd'], message: 'Unpriced facts require null money; monetary facts require an amount' });
   }
-}));
-export const UsageAnalyticsCostFactSchema = lazyZodSchema(() => UsageAnalyticsCostFactValueSchema.safeExtend({
-  source: z.string().trim().min(1),
+})));
+export const UsageAnalyticsCostFactSchema = lazyZodSchema(() => z.safeExtend(UsageAnalyticsCostFactValueSchema, {
+  source: z.string().check(z.trim(), z.minLength(1)),
 }));
 export type UsageAnalyticsCostFact = z.infer<typeof UsageAnalyticsCostFactSchema>;
 
 /** Server-queryable provenance contains witnessed identities, never machine names or filesystem locations. */
-export const UsageAnalyticsSourceCoverageSchema = lazyZodSchema(() => z.object({
-    source: z.string().trim().min(1),
+export const UsageAnalyticsSourceCoverageSchema = lazyZodSchema(() => z.strictObject({
+    source: z.string().check(z.trim(), z.minLength(1)),
     path: z.enum(['runtime', 'native', 'legacy', 'unknown']),
     status: z.enum(['available', 'partial', 'unknown', 'unsupported', 'pending', 'error']),
-    machineId: z.string().trim().min(1).optional(),
-    captureKind: z.enum(['measured', 'from_logs', 'not_added']).optional(),
-    asOfMs: z.number().int().min(0).optional(),
-    eventCount: z.number().int().min(0),
-    historyComplete: z.boolean().optional(),
-}).strict());
+    machineId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    captureKind: z.optional(z.enum(['measured', 'from_logs', 'not_added'])),
+    asOfMs: z.optional(z.number().check(z.int(), z.minimum(0))),
+    eventCount: z.number().check(z.int(), z.minimum(0)),
+    historyComplete: z.optional(z.boolean()),
+}));
 
-export const UsageAnalyticsCoverageSchema = lazyZodSchema(() => z.object({
+export const UsageAnalyticsCoverageSchema = lazyZodSchema(() => z.strictObject({
   status: z.enum(['complete', 'partial', 'unknown']),
   reasons: z.array(UsageAccountingCoverageReasonSchema),
   sources: z.array(UsageAnalyticsSourceCoverageSchema),
   missingDimensions: z.array(UsageAnalyticsBreakdownDimensionSchema),
-  range: z.object({
-    startMs: z.number().int().min(0).optional(),
-    endMs: z.number().int().min(0).optional(),
+  range: z.strictObject({
+    startMs: z.optional(z.number().check(z.int(), z.minimum(0))),
+    endMs: z.optional(z.number().check(z.int(), z.minimum(0))),
     complete: z.boolean(),
-  }).strict(),
-  ranked: z.array(z.object({
+  }),
+  ranked: z.array(z.strictObject({
     dimension: UsageAnalyticsBreakdownDimensionSchema,
-    totalEntries: z.number().int().min(0),
-    returnedEntries: z.number().int().min(0),
+    totalEntries: z.number().check(z.int(), z.minimum(0)),
+    returnedEntries: z.number().check(z.int(), z.minimum(0)),
     complete: z.boolean(),
-  }).strict()),
-}).strict());
+  })),
+}));
 export type UsageAnalyticsCoverage = z.infer<typeof UsageAnalyticsCoverageSchema>;
 
-export const UsageAnalyticsContributionSchema = lazyZodSchema(() => z.object({
-  id: z.string().trim().min(1),
-  eventCount: z.number().int().min(0).optional(),
-  context: UsageObservationContextSchema.optional(),
-  observedAtMs: z.number().int().min(0),
-  sessionId: z.string().trim().min(1).nullable(),
-  turnId: z.string().trim().min(1).nullable(),
-  agentId: z.string().trim().min(1).nullable(),
-  modelId: z.string().trim().min(1).nullable(),
+export const UsageAnalyticsContributionSchema = lazyZodSchema(() => z.strictObject({
+  id: z.string().check(z.trim(), z.minLength(1)),
+  eventCount: z.optional(z.number().check(z.int(), z.minimum(0))),
+  context: z.optional(UsageObservationContextSchema),
+  observedAtMs: z.number().check(z.int(), z.minimum(0)),
+  sessionId: z.nullable(z.string().check(z.trim(), z.minLength(1))),
+  turnId: z.nullable(z.string().check(z.trim(), z.minLength(1))),
+  agentId: z.nullable(z.string().check(z.trim(), z.minLength(1))),
+  modelId: z.nullable(z.string().check(z.trim(), z.minLength(1))),
   // Applied model-source identity, never inferred from Agent or model labels.
-  backendMode: z.string().trim().min(1).nullable().optional(),
+  backendMode: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
   providerId: zMini.optional(zMini.nullable(ProviderContributionKeySchema)),
   providerConnectionId: zMini.optional(zMini.nullable(zMini.pipe(ProviderConnectionIdSchema, zMini.transform(value => String(value))))),
   /** Missing older responses remain unknown, including a null connection dimension. */
   /** Response-bound source certainty; absent and current-metadata-only dimensions are unknown. */
-  providerAttribution: z.enum(['known', 'unknown']).optional(),
-  providerSource: z.enum(['native', 'provider', 'unknown']).optional(),
+  providerAttribution: z.optional(z.enum(['known', 'unknown'])),
+  providerSource: z.optional(z.enum(['native', 'provider', 'unknown'])),
   connectedAccount: zMini.optional(zMini.nullable(asProtocolZod(QualifiedConnectedAccountRefSchema))),
-  machineId: z.string().trim().min(1).nullable(),
-  projectKey: z.string().trim().min(1).nullable(),
-  workspaceId: z.string().trim().min(1).nullable(),
-  source: z.string().trim().min(1).nullable(),
-  sourceContext: UsageAnalyticsSourceContextSchema.optional(),
+  machineId: z.nullable(z.string().check(z.trim(), z.minLength(1))),
+  projectKey: z.nullable(z.string().check(z.trim(), z.minLength(1))),
+  workspaceId: z.nullable(z.string().check(z.trim(), z.minLength(1))),
+  source: z.nullable(z.string().check(z.trim(), z.minLength(1))),
+  sourceContext: z.optional(UsageAnalyticsSourceContextSchema),
   tokens: UsageObservationTokensSchema,
-  tokenCategories: UsageObservationTokensSchema.optional(),
+  tokenCategories: z.optional(UsageObservationTokensSchema),
   cost: UsageObservationCostSchema,
-}).strict());
+}));
 export type UsageAnalyticsContribution = z.infer<typeof UsageAnalyticsContributionSchema>;
 
-export const UsageAnalyticsQueryResponseSchema = lazyZodSchema(() => z.object({
+export const UsageAnalyticsQueryResponseSchema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   totals: UsageAnalyticsTotalsSchema,
-  series: z.array(UsageAnalyticsSeriesBucketSchema).optional(),
-  breakdowns: UsageAnalyticsBreakdownsSchema.optional(),
-  insights: UsageAnalyticsInsightsSchema.optional(),
-  activity: UsageAnalyticsActivitySchema.optional(),
-  leaders: UsageAnalyticsLeadersSchema.optional(),
-  modelTimeline: z.array(UsageAnalyticsTimelineLeaderBucketSchema).optional(),
-  engineTimeline: z.array(UsageAnalyticsTimelineLeaderBucketSchema).optional(),
-  messageStats: UsageAnalyticsMessageStatsSchema.optional(),
-  costPresentation: UsageAnalyticsCostPresentationSchema.optional(),
-  costFacts: z.array(UsageAnalyticsCostFactSchema).optional(),
+  series: z.optional(z.array(UsageAnalyticsSeriesBucketSchema)),
+  breakdowns: z.optional(UsageAnalyticsBreakdownsSchema),
+  insights: z.optional(UsageAnalyticsInsightsSchema),
+  activity: z.optional(UsageAnalyticsActivitySchema),
+  leaders: z.optional(UsageAnalyticsLeadersSchema),
+  modelTimeline: z.optional(z.array(UsageAnalyticsTimelineLeaderBucketSchema)),
+  engineTimeline: z.optional(z.array(UsageAnalyticsTimelineLeaderBucketSchema)),
+  messageStats: z.optional(UsageAnalyticsMessageStatsSchema),
+  costPresentation: z.optional(UsageAnalyticsCostPresentationSchema),
+  costFacts: z.optional(z.array(UsageAnalyticsCostFactSchema)),
   priceCatalog: zMini.optional(UsageModelPriceCatalogSchema),
-  coverage: UsageAnalyticsCoverageSchema.optional(),
-  contributions: z.array(UsageAnalyticsContributionSchema).optional(),
-  tokenCategories: UsageObservationTokensSchema.optional(),
-}).strict());
+  coverage: z.optional(UsageAnalyticsCoverageSchema),
+  contributions: z.optional(z.array(UsageAnalyticsContributionSchema)),
+  tokenCategories: z.optional(UsageObservationTokensSchema),
+}));
 export type UsageAnalyticsQueryResponse = z.infer<typeof UsageAnalyticsQueryResponseSchema>;
 
 /** Opened machine labels belong to authorized client reads, never the server accounting response. */
-export const UsageQueryAccountingSchema = lazyZodSchema(() => UsageAnalyticsQueryResponseSchema.extend({
-  coverage: UsageAnalyticsCoverageSchema.extend({ sources: z.array(UsageAnalyticsSourceCoverageSchema.extend({
-    displayLocation: z.string().trim().min(1).optional(),
-  }).strict()) }).strict().optional(),
+export const UsageQueryAccountingSchema = lazyZodSchema(() => z.extend(UsageAnalyticsQueryResponseSchema, {
+  coverage: z.optional((<T extends zMini.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as zMini.ZodMiniObject<T['shape'], zMini.core.$strict>)(z.extend(UsageAnalyticsCoverageSchema, { sources: z.array((<T extends zMini.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as zMini.ZodMiniObject<T['shape'], zMini.core.$strict>)(z.extend(UsageAnalyticsSourceCoverageSchema, {
+    displayLocation: z.optional(z.string().check(z.trim(), z.minLength(1))),
+  }))) }))),
 }));
 
-export const ServerUsageAnalyticsCapabilitiesSchema = lazyZodSchema(() => z.object({
+export const ServerUsageAnalyticsCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
   version: z.literal(1),
-  eventsIngest: z.object({
-    path: z.string().trim().min(1),
-  }).strict(),
-  query: z.object({
-    path: z.string().trim().min(1),
-  }).strict(),
-  legacy: z.object({
-    usageReportsPath: z.string().trim().min(1),
-    usageQueryPath: z.string().trim().min(1),
-  }).strict(),
-}).strict());
+  eventsIngest: z.strictObject({
+    path: z.string().check(z.trim(), z.minLength(1)),
+  }),
+  query: z.strictObject({
+    path: z.string().check(z.trim(), z.minLength(1)),
+  }),
+  legacy: z.strictObject({
+    usageReportsPath: z.string().check(z.trim(), z.minLength(1)),
+    usageQueryPath: z.string().check(z.trim(), z.minLength(1)),
+  }),
+}));
 export type ServerUsageAnalyticsCapabilities = z.infer<typeof ServerUsageAnalyticsCapabilitiesSchema>;

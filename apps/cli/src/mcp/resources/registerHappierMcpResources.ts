@@ -1,8 +1,13 @@
 import type { ActionId, ActionSurfaces } from '@happier-dev/protocol';
 import { listActionSpecsForCatalogSurface, serializeActionSpec } from '@happier-dev/protocol/actions/actionCatalog';
-import { registerMcpWatchSubscriptions, type McpWatchOptions } from './watchSubscriptions';
+import { MCP_WATCH_TOOL_NAME, registerMcpWatchSubscriptions, type McpWatchOptions } from './watchSubscriptions';
 
 export const HAPPIER_MCP_ACTION_SPECS_RESOURCE_URI = 'happier://action-specs/catalog';
+
+/** Include the resource-backed tools registered by both MCP factories. */
+export function listHappierMcpToolNames(actionToolNames: readonly string[]): string[] {
+  return [MCP_WATCH_TOOL_NAME, ...actionToolNames];
+}
 
 type ResourceRegistrar = Readonly<{
   registerResource: (

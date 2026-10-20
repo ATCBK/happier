@@ -238,9 +238,15 @@ export async function resolveEngineAdapterResolutionFromRegistry(params: Readonl
     const engineEntry = runtimeRegistry
         ? readRuntimeRegistryBackendEngineEntry(runtimeRegistry, backend)
         : undefined;
-    const entry = runtimeRegistry?.acquireAgentCatalogEntry
+    const entry = !runnerRuntimeSource && runtimeRegistry?.acquireAgentCatalogEntry
         ? await runtimeRegistry.acquireAgentCatalogEntry(agent.id)
         : agent.catalogEntry ?? null;
+    // Declaration projections do not carry executable catalog hooks. Bind the
+    // entry acquired from this runtime lease before composing native services;
+    // a retained runner keeps its exact admitted contribution instead.
+    const resolvedAgent = !runnerRuntimeSource && entry
+        ? Object.freeze({ ...agent, catalogEntry: entry })
+        : agent;
     const runtimeOwner = resolveBackendRuntimeOwner({
         backend,
         agent,
@@ -302,7 +308,7 @@ export async function resolveEngineAdapterResolutionFromRegistry(params: Readonl
         : null;
     const engineAdapter = await resolveBackendRuntimeCore({
         backend,
-        agent,
+        agent: resolvedAgent,
         executionSurfaces,
         runtimeOwner,
         engineEntry,
@@ -336,7 +342,7 @@ export async function resolveEngineAdapterResolutionFromRegistry(params: Readonl
             ),
         runtimeOwner,
         backend,
-        agent,
+        agent: resolvedAgent,
         engineAdapter: engineAdapter ?? createMissingCliEngineAdapter({ backend }),
         executionSurfaces,
         diagnostics: Object.freeze(diagnostics),

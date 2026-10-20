@@ -10,8 +10,9 @@ import type { SocketRpcMachineAdmissionContextV1 } from '@happier-dev/protocol/m
 import { configuration } from '@/configuration';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 import { commitActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import { createRequesterSessionCredentialCustody, resolveRequesterSessionBootstrap } from '../sessionEncryption/requesterSessionCredentials';
+import { createRequesterSessionCredentialCustody, resolveRequesterSessionBootstrap, resolveRequesterSessionBootstrapFromCustody } from '../sessionEncryption/requesterSessionCredentials';
 import { withRealForegroundAdmissionFixture } from './foregroundAdmission.testkit';
 import { createExternalConnectedAccountForegroundFixture, createForegroundPurposeOwnerFixture } from './prepareForegroundAdmission.connectedServices.testkit';
 import type { PrepareForegroundAgentRuntimeAdmissionDependencies } from './prepareForegroundAdmission';
@@ -24,6 +25,8 @@ import { readSessionMarkerForPid, writeSessionMarker } from '../sessionRegistry'
 import type { TrackedSession } from '../types';
 import { resolveAgentCliLaunchSpec } from '@/packagedRuntime/managedTools/requireAgentCliLaunchSpec';
 import { ProfileRecordV1Schema, sealProfileRecordContentV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
+import { ACCOUNT_SECURITY_PATH_V1, AccountSecurityGetResponseV1Schema } from '@happier-dev/protocol/auth/accountSecurity';
+import { createRequesterSessionControlRuntimeFixture } from '../testkit/requesterSessionControlRuntimeFixture';
 
 describe('foreground requester Account admission through protected custody', () => {
   it('claims Bob Profile material without publishing Bob as Alice, and refuses lost admission before claiming material', async () => {
@@ -78,6 +81,10 @@ describe('foreground requester Account admission through protected custody', () 
       app.get('/v1/features', async () => features);
       app.get('/v1/features/authenticated', async () => features);
       app.get('/v1/account/profile', async () => ({ id: 'bob' }));
+      app.get(ACCOUNT_SECURITY_PATH_V1, async () => AccountSecurityGetResponseV1Schema.parse({
+        v: 1, encryptionMode: 'plain', terminalPresentUserPolicy: 'allowed', nativeEmail: null,
+        password: { status: 'not_enrolled', revision: null },
+      }));
       app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 1 }));
       app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1, updatedAt: 1,
         signingKeyFingerprint: null, contentKeyFingerprint: null }));
@@ -115,7 +122,7 @@ describe('foreground requester Account admission through protected custody', () 
       await app.ready();
       const restore = installAxiosFastifyAdapter({ app, origin });
       const originalFetch = globalThis.fetch;
-      // Only the Home HTTP transport is replaced; Profile, Saved Secret and installation admission owners stay real.
+      // Home HTTP and socket transports are redirected; Profile, Saved Secret and installation admission owners stay real.
       vi.stubGlobal('fetch', async (input: string | URL | Request, init?: RequestInit) => {
         const url = new URL(input instanceof Request ? input.url : String(input));
         expect(url.origin).toBe(origin);
@@ -123,11 +130,15 @@ describe('foreground requester Account admission through protected custody', () 
           headers: Object.fromEntries(new Headers(init?.headers).entries()) });
         return new Response(response.body, { status: response.statusCode, headers: { 'content-type': 'application/json' } });
       });
+      let channel: Awaited<ReturnType<typeof createRequesterCurrentnessSocketHarness>> | null = null;
+      let disposeBootstrap: (() => Promise<void>) | undefined;
       try {
+        channel = await createRequesterCurrentnessSocketHarness();
         await createRequesterSessionCredentialCustody({ happyHomeDir: fixture.home, sessionId, attribution, credentials });
         const bootstrap = await resolveRequesterSessionBootstrap({ happyHomeDir: fixture.home, sessionId, attribution,
           serverHttpBaseUrl: origin, machineAdmissionBoundary: { machineId: 'machine-1', daemonToken: 'alice-daemon',
             isHomeCurrent: () => true, readInstallation: () => ({ installationId: 'install-1', privateKey: keyPair.secretKey }) } });
+        disposeBootstrap = bootstrap?.dispose;
         expect(bootstrap).not.toBeNull();
         if (!bootstrap) throw new Error('Real Bob bootstrap unavailable');
         const alice = commitActiveAccountSettingsSnapshot({ source: 'network', scopeKey: 'alice-account-scope',
@@ -169,67 +180,95 @@ describe('foreground requester Account admission through protected custody', () 
         if (!pending.ok) throw new Error('Current Bob foreground preparation failed');
         const homeFeatures = await fetchServerFeaturesSnapshot({ serverUrl: origin, token: credentials.token, projection: 'authenticated' });
         const trackedSessions = new Map<number, TrackedSession>();
-        const runtime = await createRequesterSessionRuntimeContext({ bootstrap,
-          activeServerDir: fixture.home, connectedServicesMaterializationBaseDir: join(fixture.home, 'bob-runtime-materialized'),
-          resolveQualifiedConnectedAccountV4Support: () => resolveQualifiedConnectedAccountAtomicV4Negotiation(homeFeatures), coordinatorInput: {
-            machineId: 'machine-1', machineIdProvider: () => 'machine-1', runtimeId: 'foreground-runtime', happyHomeDir: fixture.home,
-            logger: { debug: () => {}, info: () => {}, warn: () => {} }, processEnv: {
-              HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED: '0', HAPPIER_CONNECTED_SERVICES_QUOTAS_ENABLED: '0' },
-            pidToTrackedSession: trackedSessions, connectedServiceRuntimeRegistry: new ConnectedServiceRuntimeRegistry(),
-            connectedServiceAuthGroupPreTurnSwitchCoordinator: undefined,
-          } });
-        if (!runtime) throw new Error('Real requester runtime unavailable');
+        // The runtime owns its bootstrap; foreground preparation keeps its independent acquisition current.
+        const runtimeBootstrap = await resolveRequesterSessionBootstrapFromCustody({ happyHomeDir: fixture.home,
+          serverId: attribution.serverId, sessionId, serverHttpBaseUrl: origin, expectedAttribution: attribution,
+          machineAdmissionBoundary: { machineId: 'machine-1', daemonToken: 'alice-daemon', isHomeCurrent: () => true,
+            readInstallation: () => ({ installationId: 'install-1', privateKey: keyPair.secretKey }) } });
+        if (!runtimeBootstrap) throw new Error('Real requester runtime bootstrap unavailable');
+        let runtime: Awaited<ReturnType<typeof createRequesterSessionRuntimeContext>> = null;
+        let host: Awaited<ReturnType<typeof createRequesterSessionControlRuntimeFixture>> | null = null;
+        const runtimeRegistry = new ConnectedServiceRuntimeRegistry();
         try {
-        const tracked: TrackedSession = { pid: fixture.foregroundPid, happySessionId: sessionId,
-          startedBy: 'happy directly - likely by user from terminal',
-          processStartTimeMs: claim.authority.runner.processStartTimeMs,
-          processCommandHash: claim.authority.runner.processCommandHash };
-        trackedSessions.set(tracked.pid, tracked);
-        await writeSessionMarker({ pid: tracked.pid, happySessionId: sessionId, startedBy: 'terminal',
-          processStartTimeMs: tracked.processStartTimeMs, processCommandHash: tracked.processCommandHash });
-        const promotion = { happyHomeDir: fixture.home, publicReleaseRing: configuration.publicReleaseRing,
-          trackedSessions, canonicalSessionId: sessionId, foregroundPid: fixture.foregroundPid,
-          authorityFilePath: prepared.prepared.authorization.authorityFilePath,
-          retainedAgent: claim.authority.retainedAgent, runner: claim.authority.runner,
-          capabilityDigest: claim.authority.capabilityDigest, invocationContext: claim.invocationContext,
-          requesterSessionRuntimeContext: runtime };
-        expect(await promoteForegroundDaemonServiceAuthority(promotion)).toBe(true);
-        expect(tracked.requesterSessionRuntimeContext).toBe(runtime);
-        expect(tracked.requesterWorkAttributionV1).toEqual(attribution);
-        const promotedMarker = await readSessionMarkerForPid(tracked.pid);
-        expect(promotedMarker).toMatchObject({ happySessionId: sessionId,
-          agentRuntimeDaemonServiceAuthorityFilePath: promotion.authorityFilePath,
-          requesterWorkAttributionV1: attribution });
-        expect(promotedMarker).not.toHaveProperty('requesterSessionRuntimeContext');
-        expect(JSON.stringify(promotedMarker)).not.toContain(credentials.token);
-        expect(JSON.stringify(promotedMarker)).not.toContain(Buffer.from(keyPair.secretKey).toString('base64'));
-        await runtime.dispose();
-        expect(await bootstrap.isCurrent()).toBe(true);
-        expect(await promoteForegroundDaemonServiceAuthority(promotion)).toBe(false);
-        expect(await fixture.prepare({ ...request, attemptId: 'disposed-runtime' }, {
-          ...dependencies, requesterSessionRuntimeContext: runtime,
-        })).toMatchObject({ ok: false, error: { code: 'provider_authorization_changed' } });
-        granted = false;
-        expect(await pending.prepared.claim({ canonicalSessionId: sessionId, httpPort: 43127,
-          foregroundSatisfiedProfileSecretRequirementNames: [] })).toMatchObject({ ok: false });
-        expect(await fixture.prepare({ ...request, attemptId: 'lost-grant-before-prepare' }, dependencies)).toMatchObject({ ok: false });
-        expect(getActiveAccountSettingsSnapshot()).toBe(alice);
-        for (const read of reads) {
-          const path = new URL(read.path, origin).pathname;
-          if (path === '/v1/machines/machine-1/admission/verify') {
-            // This exact signed installation check is the custodian daemon's
-            // boundary; all requester-private Home reads below belong to Bob.
-            expect(read.bearer, path).toBe('Bearer alice-daemon');
-          } else if (path === '/v1/features') {
-            // The canonical public feature observation is intentionally
-            // anonymous (serverFeaturesClient), not an Account disclosure.
-            expect([undefined, `Bearer ${credentials.token}`], path).toContain(read.bearer);
-          } else {
-            expect(read.bearer, path).toBe(`Bearer ${credentials.token}`);
+          host = await createRequesterSessionControlRuntimeFixture({ happyHomeDir: fixture.home,
+            activeServerDir: fixture.home, serverId: attribution.serverId, serverHttpBaseUrl: origin,
+            machineId: attribution.machineId, custodianAccountId: 'alice',
+            credentials: { token: 'alice-daemon', encryption: null },
+            connectedServicesMaterializationBaseDir: join(fixture.home, 'alice-runtime-materialized'),
+            registry: runtimeRegistry, trackedSessions, getRequester: () => runtime,
+            resolveQualifiedConnectedAccountV4Support: () => resolveQualifiedConnectedAccountAtomicV4Negotiation(homeFeatures) });
+          runtime = await createRequesterSessionRuntimeContext({ bootstrap: runtimeBootstrap,
+            activeServerDir: fixture.home, connectedServicesMaterializationBaseDir: join(fixture.home, 'bob-runtime-materialized'),
+            resolveQualifiedConnectedAccountV4Support: () => resolveQualifiedConnectedAccountAtomicV4Negotiation(homeFeatures), coordinatorInput: {
+              machineId: 'machine-1', machineIdProvider: () => 'machine-1', runtimeId: 'foreground-runtime', happyHomeDir: fixture.home,
+              logger: { debug: () => {}, info: () => {}, warn: () => {} }, processEnv: {
+                HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED: '0', HAPPIER_CONNECTED_SERVICES_QUOTAS_ENABLED: '0' },
+              pidToTrackedSession: trackedSessions, connectedServiceRuntimeRegistry: runtimeRegistry,
+              connectedServiceAuthGroupPreTurnSwitchCoordinator: host.runtime.connectedServiceAuthGroupPreTurnSwitchCoordinator,
+            } });
+          if (!runtime) throw new Error('Real requester runtime unavailable');
+          const tracked: TrackedSession = { pid: fixture.foregroundPid, happySessionId: sessionId,
+            startedBy: 'happy directly - likely by user from terminal',
+            processStartTimeMs: claim.authority.runner.processStartTimeMs,
+            processCommandHash: claim.authority.runner.processCommandHash };
+          trackedSessions.set(tracked.pid, tracked);
+          await writeSessionMarker({ pid: tracked.pid, happySessionId: sessionId, startedBy: 'terminal',
+            processStartTimeMs: tracked.processStartTimeMs, processCommandHash: tracked.processCommandHash });
+          const promotion = { happyHomeDir: fixture.home, publicReleaseRing: configuration.publicReleaseRing,
+            trackedSessions, canonicalSessionId: sessionId, foregroundPid: fixture.foregroundPid,
+            authorityFilePath: prepared.prepared.authorization.authorityFilePath,
+            retainedAgent: claim.authority.retainedAgent, runner: claim.authority.runner,
+            capabilityDigest: claim.authority.capabilityDigest, invocationContext: claim.invocationContext,
+            requesterSessionRuntimeContext: runtime };
+          expect(await promoteForegroundDaemonServiceAuthority(promotion)).toBe(true);
+          expect(tracked.requesterSessionRuntimeContext).toBe(runtime);
+          expect(tracked.requesterWorkAttributionV1).toEqual(attribution);
+          const promotedMarker = await readSessionMarkerForPid(tracked.pid);
+          expect(promotedMarker).toMatchObject({ happySessionId: sessionId,
+            agentRuntimeDaemonServiceAuthorityFilePath: promotion.authorityFilePath,
+            requesterWorkAttributionV1: attribution });
+          expect(promotedMarker).not.toHaveProperty('requesterSessionRuntimeContext');
+          expect(JSON.stringify(promotedMarker)).not.toContain(credentials.token);
+          expect(JSON.stringify(promotedMarker)).not.toContain(Buffer.from(keyPair.secretKey).toString('base64'));
+          await runtime.dispose();
+          expect(await bootstrap.isCurrent()).toBe(true);
+          expect(await promoteForegroundDaemonServiceAuthority(promotion)).toBe(false);
+          expect(await fixture.prepare({ ...request, attemptId: 'disposed-runtime' }, {
+            ...dependencies, requesterSessionRuntimeContext: runtime,
+          })).toMatchObject({ ok: false, error: { code: 'provider_authorization_changed' } });
+          granted = false;
+          expect(await pending.prepared.claim({ canonicalSessionId: sessionId, httpPort: 43127,
+            foregroundSatisfiedProfileSecretRequirementNames: [] })).toMatchObject({ ok: false });
+          expect(await fixture.prepare({ ...request, attemptId: 'lost-grant-before-prepare' }, dependencies)).toMatchObject({ ok: false });
+          expect(getActiveAccountSettingsSnapshot()).toBe(alice);
+          for (const read of reads) {
+            const path = new URL(read.path, origin).pathname;
+            if (path === '/v1/machines/machine-1/admission/verify' || path === ACCOUNT_SECURITY_PATH_V1) {
+              // This exact signed installation check is the custodian daemon's
+              // boundary; all requester-private Home reads below belong to Bob.
+              expect(read.bearer, path).toBe('Bearer alice-daemon');
+            } else if (path === '/v1/features') {
+              // The canonical public feature observation is intentionally
+              // anonymous (serverFeaturesClient), not an Account disclosure.
+              expect([undefined, `Bearer ${credentials.token}`], path).toContain(read.bearer);
+            } else {
+              expect(read.bearer, path).toBe(`Bearer ${credentials.token}`);
+            }
+          }
+        } finally {
+          try { await runtime?.dispose(); }
+          finally {
+            try { await host?.dispose(); }
+            finally { await runtimeBootstrap.dispose(); }
           }
         }
-        } finally { await runtime.dispose(); }
-      } finally { restore(); vi.stubGlobal('fetch', originalFetch); await app.close(); }
+      } finally {
+        try { await disposeBootstrap?.(); }
+        finally {
+          try { await channel?.close(); }
+          finally { restore(); vi.stubGlobal('fetch', originalFetch); await app.close(); }
+        }
+      }
     });
   });
 });

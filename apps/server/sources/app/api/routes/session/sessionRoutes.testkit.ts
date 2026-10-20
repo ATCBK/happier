@@ -130,15 +130,14 @@ const sessionDbMocks = createDbMocks({
     sessionMessage: ["findMany", "findFirst", "findUnique"],
     sessionPendingMessage: ["count"],
     sessionTurn: ["findFirst", "findMany"],
-    sessionDiscussion: ["aggregate", "findMany"],
-    sessionDiscussionMessage: ["findMany"],
-    sessionDiscussionReadState: ["findMany"],
+    discussion: ["aggregate", "findMany"],
+    discussionMessage: ["findMany"],
+    discussionReadState: ["findMany"],
 } as const);
 
 const txDbMocks = createDbMocks({
     automationRun: ["groupBy"],
     automationTrigger: ["findMany"],
-    sessionReportsTo: ["findMany", "findUnique"],
     homeSettings: ["findUnique"],
     homeGovernancePolicy: ["findUnique"],
     identityProviderInstance: ["findMany"],
@@ -146,7 +145,7 @@ const txDbMocks = createDbMocks({
     sessionTeamGrant: ["findMany"],
     sessionGroupGrant: ["findMany"],
     accountSessionFollow: ["updateMany"],
-    sessionFollowEdge: ["findMany"],
+    sessionFollowEdge: ["findMany", "findUnique"],
     account: ["findMany", "findUnique"],
     accessKey: ["findUnique"],
     ephemeralRunnerActivation: ["findFirst"],
@@ -164,9 +163,9 @@ const txDbMocks = createDbMocks({
     sessionOrganizationLabel: ["count", "findMany", "updateMany", "upsert"],
     sessionOrganizationCheckpoint: ["findUnique", "upsert"],
     sessionSystemRecord: ["create", "findUnique", "findMany", "findFirst", "update", "updateMany", "deleteMany"],
-    sessionDiscussion: ["aggregate", "findMany"],
-    sessionDiscussionMessage: ["findMany"],
-    sessionDiscussionReadState: ["findMany"],
+    discussion: ["aggregate", "findMany"],
+    discussionMessage: ["findMany"],
+    discussionReadState: ["findMany"],
 } as const);
 export const txExecuteRawUnsafe = vi.fn(async () => 1);
 export const dbQueryRaw = vi.fn(async () => [] as Array<{ sessionId: string }>);
@@ -277,10 +276,10 @@ export const sessionMessageFindUnique = sessionDbMocks.db.sessionMessage.findUni
 export const sessionPendingMessageCount = sessionDbMocks.db.sessionPendingMessage.count;
 export const sessionTurnFindMany = sessionDbMocks.db.sessionTurn.findMany;
 export const sessionShareFindMany = sessionDbMocks.db.sessionShare.findMany;
-export const sessionDiscussionAggregate = sessionDbMocks.db.sessionDiscussion.aggregate;
-export const sessionDiscussionFindMany = sessionDbMocks.db.sessionDiscussion.findMany;
-export const sessionDiscussionMessageFindMany = sessionDbMocks.db.sessionDiscussionMessage.findMany;
-export const sessionDiscussionReadStateFindMany = sessionDbMocks.db.sessionDiscussionReadState.findMany;
+export const discussionAggregate = sessionDbMocks.db.discussion.aggregate;
+export const discussionFindMany = sessionDbMocks.db.discussion.findMany;
+export const discussionMessageFindMany = sessionDbMocks.db.discussionMessage.findMany;
+export const discussionReadStateFindMany = sessionDbMocks.db.discussionReadState.findMany;
 
 export const txAccountFindMany = txDbMocks.db.account.findMany;
 export const txAccessKeyFindUnique = txDbMocks.db.accessKey.findUnique;
@@ -336,10 +335,10 @@ export const txSessionSystemRecordUpdate = txDbMocks.db.sessionSystemRecord.upda
 export const txSessionSystemRecordUpdateMany = txDbMocks.db.sessionSystemRecord.updateMany;
 export const txSessionSystemRecordDeleteMany = txDbMocks.db.sessionSystemRecord.deleteMany;
 export const txAccountFindUnique = txDbMocks.db.account.findUnique;
-export const txSessionDiscussionAggregate = txDbMocks.db.sessionDiscussion.aggregate;
-export const txSessionDiscussionFindMany = txDbMocks.db.sessionDiscussion.findMany;
-export const txSessionDiscussionMessageFindMany = txDbMocks.db.sessionDiscussionMessage.findMany;
-export const txSessionDiscussionReadStateFindMany = txDbMocks.db.sessionDiscussionReadState.findMany;
+export const txDiscussionAggregate = txDbMocks.db.discussion.aggregate;
+export const txDiscussionFindMany = txDbMocks.db.discussion.findMany;
+export const txDiscussionMessageFindMany = txDbMocks.db.discussionMessage.findMany;
+export const txDiscussionReadStateFindMany = txDbMocks.db.discussionReadState.findMany;
 
 interface MaterializedRunnerCurrentnessFixtureOverrides {
     readonly activation?: Readonly<{ id: string }> | null;
@@ -519,7 +518,7 @@ type SessionDeleteMockResult =
     | Readonly<{ ok: true }>
     | Readonly<{
         ok: false;
-        error: "not-found" | "conflict" | "client-upgrade-required";
+        error: "not-found" | "active" | "conflict" | "client-upgrade-required";
     }>;
 export const sessionDelete = vi.fn<(
     ctx: Readonly<{ uid: string }>,
@@ -546,8 +545,11 @@ vi.mock("@/app/account/profile/accountDisplayProfile", async (importOriginal) =>
     ACCOUNT_DISPLAY_PROFILE_SELECT: {},
     toShareUserProfile: vi.fn(),
 }));
-vi.mock("@/storage/inTx", () => ({
+vi.mock("@/storage/inTx", async (importOriginal) => ({
+    ...await importOriginal<typeof import("@/storage/inTx")>(),
     inTx: vi.fn(async (fn: any) => await fn(txDb)),
+    // Snapshot reads share this DB-boundary fixture; route tests do not model isolation.
+    inReadSnapshot: vi.fn(async (fn: (tx: typeof txDb) => Promise<unknown>) => await fn(txDb)),
     afterTx: vi.fn(),
 }));
 
@@ -565,8 +567,8 @@ export function resetSessionRouteMocks(): void {
     // fixture has neither pending review runs nor Reports-to edges.
     txDb.automationRun.groupBy.mockResolvedValue([]);
     txDb.automationTrigger.findMany.mockResolvedValue([]);
-    txDb.sessionReportsTo.findMany.mockResolvedValue([]);
-    txDb.sessionReportsTo.findUnique.mockResolvedValue(null);
+    txDb.sessionFollowEdge.findMany.mockResolvedValue([]);
+    txDb.sessionFollowEdge.findUnique.mockResolvedValue(null);
     txDb.teamMembership.findMany.mockResolvedValue([]);
     // No persisted Home overrides: exercise the real deployment-inheriting overlay.
     sessionDbMocks.db.homeSettings.findUnique.mockResolvedValue(null);
@@ -635,10 +637,10 @@ export function resetSessionRouteMocks(): void {
     sessionPendingMessageCount.mockResolvedValue(0);
     sessionTurnFindMany.mockResolvedValue([]);
     sessionShareFindMany.mockResolvedValue([]);
-    sessionDiscussionAggregate.mockResolvedValue({ _max: { lastMessageAt: null } });
-    sessionDiscussionFindMany.mockResolvedValue([]);
-    sessionDiscussionMessageFindMany.mockResolvedValue([]);
-    sessionDiscussionReadStateFindMany.mockResolvedValue([]);
+    discussionAggregate.mockResolvedValue({ _max: { lastMessageAt: null } });
+    discussionFindMany.mockResolvedValue([]);
+    discussionMessageFindMany.mockResolvedValue([]);
+    discussionReadStateFindMany.mockResolvedValue([]);
     txSessionFindMany.mockReset();
     txAccessKeyFindUnique.mockResolvedValue(null);
     txEphemeralRunnerActivationFindFirst.mockResolvedValue(null);
@@ -661,10 +663,10 @@ export function resetSessionRouteMocks(): void {
     txSessionTurnFindFirst.mockResolvedValue(null);
     txSessionTurnFindMany.mockResolvedValue([]);
     txAccountFindUnique.mockReset();
-    txSessionDiscussionAggregate.mockResolvedValue({ _max: { lastMessageAt: null } });
-    txSessionDiscussionFindMany.mockResolvedValue([]);
-    txSessionDiscussionMessageFindMany.mockResolvedValue([]);
-    txSessionDiscussionReadStateFindMany.mockResolvedValue([]);
+    txDiscussionAggregate.mockResolvedValue({ _max: { lastMessageAt: null } });
+    txDiscussionFindMany.mockResolvedValue([]);
+    txDiscussionMessageFindMany.mockResolvedValue([]);
+    txDiscussionReadStateFindMany.mockResolvedValue([]);
     txSessionCreate.mockImplementation(async () => {
         throw new Error("txSessionCreate not configured for test");
     });

@@ -1,8 +1,8 @@
-import { UiBrowserAutomationDispatchRequestV1Schema, UiBrowserAutomationDispatchResultV1Schema } from '@happier-dev/protocol/browser/automation/reverseDispatchV1';
+import { UiBrowserAutomationDispatchRequestV1Schema, UiBrowserAutomationDispatchResultV1Schema, MOUNTED_BROWSER_DIAGNOSTICS_ACTION_IDS } from '@happier-dev/protocol/browser/automation/reverseDispatchV1';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 
 import { createBrowserRuntimeActionExecutor } from '../actions/runtimeActionExecutor';
-import { readRegisteredBrowserRuntimeAutomationAdapter, readRegisteredBrowserRuntimeControlAdapter } from '../actions/runtimeControlRegistry';
+import { readRegisteredBrowserRuntimeAutomationAdapter, readRegisteredBrowserRuntimeControlAdapter, readRegisteredBrowserRuntimeDiagnosticsAdapter } from '../actions/runtimeControlRegistry';
 
 const unavailable = { ok: false, errorCode: 'runtime_action_disabled', error: 'runtime_action_disabled:browser:browser_view_unavailable' } as const;
 const invalid = { ok: false, errorCode: 'invalid_parameters', error: 'invalid_parameters' } as const;
@@ -24,9 +24,11 @@ export async function handleUiBrowserAutomationDispatchRequest(
   const currentView = control.readState()?.viewsById[view.viewId];
   if (!currentView || currentView.browserSessionId !== view.browserSessionId) return unavailable;
   const automation = readRegisteredBrowserRuntimeAutomationAdapter(view.browserSessionId, view.viewId);
-  if (!automation?.controlService) return unavailable;
+  const isDiagnostics = (MOUNTED_BROWSER_DIAGNOSTICS_ACTION_IDS as readonly string[]).includes(request.data.actionId);
+  const diagnostics = isDiagnostics ? readRegisteredBrowserRuntimeDiagnosticsAdapter(view.browserSessionId, view.viewId) : null;
+  if (isDiagnostics ? !diagnostics : request.data.actionId !== 'browser.view.openExternal' && !automation?.controlService) return unavailable;
   if (options?.signal?.aborted) return unavailable;
-  const execute = createBrowserRuntimeActionExecutor({ control, automation });
+  const execute = createBrowserRuntimeActionExecutor({ control, ...(automation ? { automation } : {}), ...(diagnostics ? { diagnostics } : {}) });
   const result = await execute({ actionId: request.data.actionId, input: parsed.data, context: {
     surface: 'agent', authority: request.data.authority, defaultSessionId: request.data.sessionId, signal: options?.signal,
   } });

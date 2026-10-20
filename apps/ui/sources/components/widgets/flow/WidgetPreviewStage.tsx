@@ -5,7 +5,7 @@ import { StyleSheet } from 'react-native-unistyles';
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import { getWidgetSizeFootprintV1, type WidgetSizeV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 
-import { CARD_GRID } from '@/components/ui/cardGrid/cardGridMetrics';
+import { CARD_GRID, resolveCardGridColumns } from '@/components/ui/cardGrid/cardGridMetrics';
 import { EmptySlot } from '@/components/ui/empty/EmptySlot';
 import { PAGE_COLUMN_MAX_WIDTH_PX } from '@/components/ui/layout/contentWidthMode';
 import { resolveItemGroupContentHorizontalInsetPx } from '@/components/ui/lists/itemGroupSpacing';
@@ -66,15 +66,22 @@ export function WidgetPreviewStage(props: Readonly<{
         const next = Math.round(event.nativeEvent.layout.height);
         setHeight((previous) => (previous === next ? previous : next));
     }, []);
-    const footprint = props.footprint ?? (props.surface && props.size ? getWidgetSizeFootprintV1(props.surface, props.size) : undefined);
-    const surfaceWidth = footprint ? referenceSurfaceWidthPx() : Math.max(room, 1);
+    const declared = props.footprint ?? (props.surface && props.size ? getWidgetSizeFootprintV1(props.surface, props.size) : undefined);
+    // A stage narrower than the surface's columns (the Add surface in a Session's pane) is that surface
+    // as it really lays out at this width: the grid drops columns, so the card is drawn at real size across
+    // the room it will have, never a scaled thumbnail of a wider page beside an empty cell.
+    const fitColumns = declared && room > 0 ? resolveCardGridColumns(room, declared.columns) : declared?.columns;
+    const collapsed = declared !== undefined && fitColumns !== undefined && fitColumns < declared.columns;
+    const footprint = collapsed ? { ...declared, columns: fitColumns, columnSpan: Math.max(1, Math.round(declared.columnSpan * fitColumns / declared.columns)) } : declared;
+    const surfaceWidth = collapsed ? room : footprint ? referenceSurfaceWidthPx() : Math.max(room, 1);
     // The whole surface fits the room both ways: a tall one (a group of several widgets) is shown
     // smaller, never cut at the stage's foot.
     // A group staged alone is real widgets, not a footprint comparison: it lays out at its width on the
     // surface or the stage's room, whichever is narrower, at full size, and the stage grows to hold it
     // (the pane scrolls), so its titles and rows read as they will on the surface.
-    const real = props.alone === true && footprint !== undefined;
-    const laidWidth = real ? Math.min(cardWidthOf(footprint, referenceSurfaceWidthPx()), Math.max(room, 1)) : surfaceWidth;
+    const real = (props.alone === true || collapsed) && footprint !== undefined;
+    const laidWidth = collapsed ? surfaceWidth
+        : real ? Math.min(cardWidthOf(footprint, referenceSurfaceWidthPx()), Math.max(room, 1)) : surfaceWidth;
     // The scale the card would have if only the width limited it, and the room that scale asks for (up to
     // a readable glance): the stage claims it, so a pane that scrolls its inputs above never squeezes the
     // card to a thumbnail.
@@ -84,7 +91,7 @@ export function WidgetPreviewStage(props: Readonly<{
     const scale = real ? 1 : room > 0 ? Math.min(widthScale, height > 0 && roomHeightLimit > 0 ? roomHeightLimit / height : 1) : 1;
     const gap = CARD_GRID.gapPx;
     const column = footprint ? (surfaceWidth - gap * (footprint.columns - 1)) / footprint.columns : surfaceWidth;
-    const cardWidth = real ? laidWidth : footprint ? column * footprint.columnSpan + gap * (footprint.columnSpan - 1) : surfaceWidth;
+    const cardWidth = real && !collapsed ? laidWidth : footprint ? column * footprint.columnSpan + gap * (footprint.columnSpan - 1) : surfaceWidth;
     const rest = footprint && !props.alone ? surfaceWidth - cardWidth - gap : 0;
     // Choosing another size morphs the one card to its new footprint and fades the body in inside it
     // (lab `widget-add` KM): no second card, and only the chosen body is mounted. The first layout and

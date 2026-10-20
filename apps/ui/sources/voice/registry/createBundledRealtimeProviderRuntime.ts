@@ -546,6 +546,7 @@ export function createBundledRealtimeProviderRuntime(
         adapterId: providerId,
         controlSessionId: input.controlSessionId,
         requestedTargetSessionAddress: targetSessionAddress,
+        signal: input.signal,
       });
       abortIfRequested(input.signal);
       beginTranscriptProjection(input);

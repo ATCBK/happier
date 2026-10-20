@@ -3,6 +3,8 @@ import type { PluginDeclarativeToneV2 as DtoPluginDeclarativeToneV2, PluginDecla
 import type { PluginDeclarativeNodeV2, PluginLocalizedStringV2 } from './actions/dtos/pluginActionDtoSupport.generated.js';
 import type { PluginDeclarativeDataNodeV1 as DtoPluginDeclarativeDataNodeV1 } from './actions/dtos/pluginActionDtoSupport.generated.js';
 import { compilePluginJsonSchema as canonicalCompilePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
+import type { PluginAvailabilityDescriptor } from './availability.js';
+export type { PluginAvailabilityDescriptor } from './availability.js';
 import { createPluginContributionIdentity as canonicalCreatePluginContributionIdentity, PluginContributionIdentityV1JsonSchema as canonicalPluginContributionIdentityV1JsonSchema, PluginContributionIdentityV1Schema as canonicalPluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugins/contribution-identity';
 import { ingestPluginManifestV2, validatePublicPluginManifestPolicy } from '@happier-dev/protocol/plugins/manifest/ingest';
 import { isValidPluginJsonSchemaValue as canonicalIsValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
@@ -11,7 +13,7 @@ import type {
   ComposerContentMediaKindV1,
   ComposerContentMimeTypeV1,
 } from './composer.js';
-import type { JsonValue, PluginJsonSchema, PluginJsonValueV2 } from './identity.js';
+import type { JsonValue, PluginContributionLocalId, PluginJsonSchema, PluginJsonValueV2 } from './identity.js';
 import type { ProtocolComposableSchema } from './protocol/protocolFacade.js';
 import { projectProtocolValue } from './protocol/projectProtocolValue.js';
 import type {
@@ -23,6 +25,7 @@ import type { WorkflowsActionResultById } from './actions/dtos/workflowsActionDt
 import type { PluginDragSourceContributionV1, PluginDropTargetContributionV1 } from '@happier-dev/protocol';
 import type { MachineProvisionerContributionV1 } from './machineProvisioners.js';
 import type { PluginProjectNativeAdapterContributionV1 } from '@happier-dev/protocol/plugins/contributions/projectNativeAdapters';
+import type { PluginWorkItemsContributionV1 } from '@happier-dev/protocol/plugins/contributions/workItems';
 export type { PluginDragSourceContributionV1, PluginDropTargetContributionV1 } from '@happier-dev/protocol';
 export type { PluginProjectNativeAdapterContributionV1 } from '@happier-dev/protocol/plugins/contributions/projectNativeAdapters';
 
@@ -37,7 +40,7 @@ export type PluginWorkflowContributionV1 = Readonly<{
 /** Typed input declarations use the incumbent Resource and UI-view families. */
 export type PluginInputTypeReferenceV1 =
   | Readonly<{ hostType: 'usageQuery'; field?: 'period' | 'session' }>
-  | Readonly<{ hostType: 'session' | 'workspace' | 'machine' }>
+  | Readonly<{ hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant' }>
   | Readonly<{ pluginId: string; localId: string }>;
 
 export type PluginInputTypeContributionV1 = Readonly<{
@@ -60,6 +63,12 @@ export type PluginRegistrySourceContributionV1 = Readonly<{
   url: string;
   path?: string;
   ref?: string;
+}>;
+
+/** Read-only packaged skill; metadata is derived from its SKILL.md. */
+export type PluginSkillContributionV1 = Readonly<{
+  id: PluginContributionLocalId;
+  directory: string;
 }>;
 
 /** Data-only author contract; the Protocol manifest owns runtime admission. */
@@ -437,7 +446,6 @@ export const PluginIdSchema: ProtocolComposableSchema<string> = canonicalPluginI
 // affect assignability, so no author or host call site changes meaning.
 export type { PluginLocalizedStringV2 } from './actions/dtos/pluginActionDtoSupport.generated.js';
 
-export type PluginAvailabilityDescriptor = unknown;
 export type PluginContributionReference = DtoPluginContributionReference;
 export type PluginHttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'HEAD' | 'OPTIONS';
 
@@ -497,8 +505,8 @@ export interface PluginManifest {
   readonly runtime: Readonly<{ apiVersion: 1 }>;
   readonly entrypoints?: Readonly<{ daemon?: string; development?: string }>;
   readonly brand?: Readonly<{ iconResourceId: string; monochrome?: boolean }>;
-  /** Prefer the admitted supplying installation, after an explicit user choice. */
-  readonly executionTarget?: Readonly<{ default: 'installation' }>;
+  /** Run-on defaults to automatic placement; false asks when several Machines are eligible. */
+  readonly executionTarget?: Readonly<{ default?: 'installation'; autoPick?: boolean }>;
   readonly activation?: Readonly<{ events?: readonly Readonly<{ kind: 'startup' }>[] }>;
   readonly hostAccess?: Readonly<{
     required?: readonly Readonly<{
@@ -596,7 +604,9 @@ export interface PluginManifest {
     inputTypes?: readonly PluginInputTypeContributionV1[];
     atmospherePictures?: readonly PluginAtmospherePictureContributionV1[];
     registrySources?: readonly PluginRegistrySourceContributionV1[];
+    skills?: readonly PluginSkillContributionV1[];
     dragSources?: readonly PluginDragSourceContributionV1[];
+    workItems?: readonly PluginWorkItemsContributionV1[];
     dropTargets?: readonly PluginDropTargetContributionV1[];
     /** Read-only role sources, overridable through the host's Roles settings. */
     roles?: readonly Readonly<{
@@ -611,6 +621,7 @@ export interface PluginManifest {
       profileId?: string;
       workspaceWrites: 'allow' | 'deny';
       secondOpinion: 'off' | 'encouraged';
+      canDelegateToOtherRoles?: boolean;
       enabled: boolean;
     }>[];
     promptAssets?: readonly (Readonly<{
@@ -715,7 +726,9 @@ export type PluginContributes = Readonly<{
   inputTypes: NonNullable<NonNullable<PluginManifest['contributes']>['inputTypes']>;
   atmospherePictures: NonNullable<NonNullable<PluginManifest['contributes']>['atmospherePictures']>;
   registrySources: NonNullable<NonNullable<PluginManifest['contributes']>['registrySources']>;
+  skills: NonNullable<NonNullable<PluginManifest['contributes']>['skills']>;
   dragSources: NonNullable<NonNullable<PluginManifest['contributes']>['dragSources']>;
+  workItems: NonNullable<NonNullable<PluginManifest['contributes']>['workItems']>;
   dropTargets: NonNullable<NonNullable<PluginManifest['contributes']>['dropTargets']>;
   notifications: NonNullable<NonNullable<PluginManifest['contributes']>['notifications']>;
   notificationChannels: NonNullable<NonNullable<PluginManifest['contributes']>['notificationChannels']>;

@@ -14,6 +14,8 @@ export {
   type CursorGoneError,
 };
 
+export const DEFAULT_ACCOUNT_CHANGES_PAGE_LIMIT = 200;
+
 export async function fetchChangesAccountId(opts: {
   token: string;
   serverHttpBaseUrl?: string;
@@ -61,7 +63,7 @@ export async function fetchChanges(opts: { token: string; after: number; limit?:
   error: unknown;
 }> {
   const after = Number.isFinite(opts.after) && opts.after >= 0 ? Math.floor(opts.after) : 0;
-  const limit = typeof opts.limit === 'number' && opts.limit > 0 ? Math.min(Math.floor(opts.limit), 500) : 200;
+  const limit = typeof opts.limit === 'number' && opts.limit > 0 ? Math.min(Math.floor(opts.limit), 500) : DEFAULT_ACCOUNT_CHANGES_PAGE_LIMIT;
   const serverUrl = resolveServerHttpBaseUrl();
 
   try {

@@ -1,6 +1,8 @@
 import { PluginAgentAcpTransportSchema } from '@happier-dev/protocol/plugins/contributions/agentAcpTransport';
 import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaqueIdentifier';
-import { buildQualifiedPluginContributionKey, isGenericSubAgentToolName, type PluginAgentAcpTransport } from '@happier-dev/protocol';
+import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
+import { isGenericSubAgentToolName } from '@happier-dev/protocol/tools/v2/subAgentFamilies';
+import type { PluginAgentAcpTransport } from '@happier-dev/protocol';
 import { AgentLaunchEnvironmentV1Schema, AgentRuntimeJsonValueV1Schema, AgentSessionConfigurationSnapshotV1Schema, AgentSessionConfigurationUpdateV1Schema, AgentSessionProviderCheckpointV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
 import {
   isWorkflowInteractionCapacityError,
@@ -15,6 +17,7 @@ import type {
   AgentAcpRuntimeOptions,
   AgentExecutionRunConversationEventV1,
   AgentExecutionRunConversationRuntimeV1,
+  AgentExecutionRunConversationSendOptionsV1,
   AgentExecutionRunOpenRequest,
   AgentExecutionRunRuntime,
   AgentSessionCancelResult,
@@ -34,6 +37,7 @@ import type {
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { SessionMediaService } from '@happier-dev/plugin-sdk/sessions';
 import type { JsonValue, PluginDiagnosticData } from '@happier-dev/plugin-sdk';
+import type { ExecService } from '@happier-dev/plugin-sdk/exec';
 import type { ContentBlock, PromptRequest } from '@agentclientprotocol/sdk';
 import {
   type AgentSessionPreAdmissionBuffer,
@@ -77,7 +81,8 @@ import {
   type NativeSessionConfigDelivery,
 } from '@/agent/acp/runtime/definition/nativeSessionConfig';
 import { prepareAcpSessionSkills } from '@/agent/acp/runtime/definition/skillsSessionDelivery';
-import { buildScopedProcessEnv } from '@/utils/processEnv/buildScopedProcessEnv';
+import { buildScopedProcessEnv, stripUnsetEnvironmentVariables } from '@/utils/processEnv/buildScopedProcessEnv';
+import { authorizeResolvedAgentNativeExecLaunchForHost, type HostAuthorizedPluginExecLaunch } from '@/plugins/runtime/invocation/services/exec';
 import { buildAcpToolNameResolverInput, createAcpToolIdentity } from '@/agent/acp/toolCalls';
 import { canonicalizeToolNameV2 } from '@/agent/tools/normalization';
 import { importAcpReplayHistoryV1 } from '@/agent/acp/history/importAcpReplayHistory';
@@ -121,6 +126,9 @@ export type PublicAcpComposerDependencies = Readonly<{
   isCurrent(): boolean;
   systemTools: PublicAcpSystemTools;
   managedDependencies?: PublicAcpManagedDependencies;
+  /** The host invocation's Exec owner; never supplied by the Agent declaration. */
+  exec?: ExecService;
+  nativeLaunch?: NonNullable<Parameters<ExecService['spawn']>[1]>['nativeLaunch'];
   interactions: PluginCurrentSessionInteractionsService;
   media: SessionMediaService;
   models: AgentSessionHostServices['models'];
@@ -601,14 +609,22 @@ async function createPublicAcpConversationFromAwaitableAdapter(
   let skillsDelivery: NativeSessionConfigDelivery | null = null;
   let skillsDelivered = false;
   let launchReleased = false;
-  const releaseLaunch = (): void => {
+  let transportReleased = false;
+  let finalizedRelease: HostAuthorizedPluginExecLaunch['release'] | undefined;
+  const releaseResolvedTransport = (): void => {
+    if (transportReleased) return;
+    transportReleased = true;
+    if (resolvedLaunch.kind === 'stdio') resolvedLaunch.release?.();
+  };
+  const releaseLaunch = async (): Promise<void> => {
     if (launchReleased) return;
     launchReleased = true;
     nativeMcpDelivery?.cleanup();
     skillsDelivery?.cleanup();
-    if (resolvedLaunch.kind === 'stdio') resolvedLaunch.release?.();
+    if (finalizedRelease) await finalizedRelease();
+    else releaseResolvedTransport();
   };
-  let launch = resolvedLaunch;
+  let launch: PublicAcpResolvedTransport & Readonly<{ cwd?: string; hostFinalizedLaunch?: true; windowsVerbatimArguments?: boolean }> = resolvedLaunch;
   try {
     const nativeSessionConfig = options.definition?.mcp.nativeSessionConfig;
     const skillsDeclaration = request.skills ? options.definition?.skills?.sessionDelivery : undefined;
@@ -654,8 +670,26 @@ async function createPublicAcpConversationFromAwaitableAdapter(
       launch = Object.freeze({ ...resolvedLaunch, env: Object.freeze({ ...resolvedLaunch.env, ...env }),
         unsetEnv: Object.freeze(resolvedLaunch.unsetEnv.filter(key => !Object.hasOwn(env, key))) });
     }
+    if (launch.kind === 'stdio' && dependencies.exec) {
+      // Cold Session/Run composition alone qualifies this effect. The shared
+      // transport resolver also serves readonly session/list and stays passive.
+      const finalized = await authorizeResolvedAgentNativeExecLaunchForHost(dependencies.exec, {
+        command: launch.command, args: launch.args, cwd: request.cwd,
+        env: stripUnsetEnvironmentVariables(buildScopedProcessEnv({
+          baseEnv: process.env, explicitEnv: launch.env, unsetEnvKeys: launch.unsetEnv,
+        }), []),
+        release: releaseResolvedTransport,
+      }, dependencies.signal, dependencies.nativeLaunch);
+      finalizedRelease = finalized.release;
+      assertComposerCurrent(dependencies);
+      launch = Object.freeze({ ...launch, command: finalized.command, args: finalized.args,
+        cwd: finalized.cwd, env: finalized.env,
+        unsetEnv: Object.freeze([]), hostFinalizedLaunch: true,
+        windowsVerbatimArguments: finalized.windowsVerbatimArguments,
+      });
+    }
   } catch (error) {
-    releaseLaunch();
+    await releaseLaunch();
     throw error;
   }
   try {
@@ -821,7 +855,7 @@ async function createPublicAcpConversationFromAwaitableAdapter(
           terminalizeForPublicationFailure(failure.diagnostic);
         },
       });
-  const conversationHistory: AgentExecutionRunConversationEventV1[] = [];
+  let openingConversationEvents: AgentExecutionRunConversationEventV1[] | null = [];
   const conversationListeners = new Set<Parameters<AgentExecutionRunConversationRuntimeV1['watch']>[0]>();
 
   const publish = <Event extends UnsequencedAgentSessionRuntimeEvent>(event: Event): void => {
@@ -831,7 +865,7 @@ async function createPublicAcpConversationFromAwaitableAdapter(
     if (executionRunRequest) {
       // The host stamps the only field the scope-neutral SDK event leaves optional.
       const normalized = Object.freeze(Object.assign({}, event, { emittedAtMs })) as unknown as AgentExecutionRunConversationEventV1;
-      conversationHistory.push(normalized);
+      openingConversationEvents?.push(normalized);
       for (const listener of Array.from(conversationListeners)) listener(normalized);
       return;
     }
@@ -1222,13 +1256,15 @@ async function createPublicAcpConversationFromAwaitableAdapter(
   const authenticationSetupFailure = options.definition?.auth?.setupFailure;
   const backendOptions: CreateAcpBackendOptions = {
     agentName: dependencies.agentId,
-    cwd: request.cwd,
+    cwd: launch.kind === 'stdio' ? launch.cwd ?? request.cwd : request.cwd,
     ...(launch.kind === 'stdio'
       ? {
           command: launch.command,
           args: [...launch.args],
           env: { ...launch.env },
           unsetEnv: launch.unsetEnv,
+          ...(launch.hostFinalizedLaunch ? { hostFinalizedLaunch: true } : {}),
+          ...(launch.windowsVerbatimArguments === undefined ? {} : { windowsVerbatimArguments: launch.windowsVerbatimArguments }),
           ...(dependencies.transformAgentChildLaunchEnvironment
             ? {
                 transformAgentChildLaunchEnvironment:
@@ -1564,7 +1600,12 @@ async function createPublicAcpConversationFromAwaitableAdapter(
     bufferedMessages?.dispose();
   });
 
-  const disposeOnAbort = (): void => { void session.dispose(); };
+  const disposeOnAbort = (): void => {
+    // Observe the callback rejection without replacing the retained disposal
+    // promise. Startup's catch (or explicit disposal) still joins that promise
+    // and propagates incomplete cleanup.
+    void Promise.resolve(session.dispose()).catch(() => undefined);
+  };
   const conversationRollback = options.definition?.history?.createConversationRollback?.(
     Object.freeze({
       getProviderSessionId: () => providerSessionId,
@@ -1751,9 +1792,12 @@ async function createPublicAcpConversationFromAwaitableAdapter(
   const session: PublicAcpSessionRuntime = Object.freeze({
     ...(!executionRunRequest && request.skills ? {
       skillsDelivered,
-      async refreshSkills(update: Parameters<NonNullable<AgentSessionRuntime['refreshSkills']>>[0]) {
+      async refreshSkills(
+        _update: Parameters<NonNullable<AgentSessionRuntime['refreshSkills']>>[0],
+        options?: Parameters<NonNullable<AgentSessionRuntime['refreshSkills']>>[1],
+      ) {
         assertComposerCurrent(dependencies);
-        update.signal?.throwIfAborted();
+        options?.signal?.throwIfAborted();
         return { kind: 'restart_required' as const, reason: 'launch_path_unsupported' as const };
       },
     } : {}),
@@ -1822,13 +1866,47 @@ async function createPublicAcpConversationFromAwaitableAdapter(
       const response = await backend.requestExtension(method, parsedParams, extensionOptions);
       return AgentRuntimeJsonValueV1Schema.parse(response);
     },
-    async send(sendRequest: AgentSessionSendRequest): Promise<AgentSessionSendResult> {
+    async send(
+      sendRequest: AgentSessionSendRequest,
+      sendOptions?: AgentExecutionRunConversationSendOptionsV1,
+    ): Promise<AgentSessionSendResult> {
       if (disposed || runtimeEnded || dependencies.signal.aborted || !dependencies.isCurrent()) {
         return {
           status: 'unavailable' as const,
           diagnostic: publicationFailureDiagnostic ?? diagnostic('acp_runtime_unavailable'),
           retryable: false,
         };
+      }
+      if (executionRunRequest && sendOptions?.permissionIntent !== undefined) {
+        const mappedMode = options.definition?.permissionModeMapping?.[sendOptions.permissionIntent];
+        if (typeof mappedMode !== 'string' || mappedMode.trim().length === 0) {
+          return { status: 'unsupported', retryable: false,
+            diagnostic: diagnostic('execution_run_permission_intent_unsupported',
+              'ACP cannot apply the admitted input permission policy.') };
+        }
+        const permissionIntent = sendOptions.permissionIntent;
+        const apply = async () => {
+          const previous = currentConfiguration ?? {
+            mode: { value: null, updatedAtMs: 0 }, model: { value: null, updatedAtMs: 0 },
+            permissionIntent: { value: null, updatedAtMs: 0 }, options: {},
+          };
+          const updatedAtMs = Math.max(Date.now(), previous.mode.updatedAtMs + 1,
+            previous.permissionIntent.updatedAtMs + 1);
+          const update = { ...previous, mode: { value: null, updatedAtMs },
+            permissionIntent: { value: permissionIntent, updatedAtMs },
+          };
+          const result = await applyConfigurationControls(update, previous, { signal: sendOptions.signal });
+          if (result.status === 'applied') currentConfiguration = mergeConfigurationSnapshot(previous, update);
+          return result;
+        };
+        const pending = configurationUpdateTail.then(apply);
+        configurationUpdateTail = pending.then(() => undefined, () => undefined);
+        const result = await pending;
+        if (result.status !== 'applied') {
+          return { status: result.status === 'unsupported' ? 'unsupported' : 'rejected', retryable: false,
+            diagnostic: ('diagnostic' in result ? result.diagnostic : undefined)
+              ?? diagnostic('execution_run_permission_intent_rejected') };
+        }
       }
       if (sendRequest.delivery.kind === 'steer') {
         const turn = activeTurn;
@@ -2251,8 +2329,10 @@ async function createPublicAcpConversationFromAwaitableAdapter(
     },
     watch(listener: Parameters<AgentSessionRuntime['watch']>[0]) {
       if (executionRunRequest) {
-        for (const event of conversationHistory) listener(event as AgentSessionRuntimeEvent);
+        const openingEvents = openingConversationEvents;
+        openingConversationEvents = null;
         conversationListeners.add(listener as Parameters<AgentExecutionRunConversationRuntimeV1['watch']>[0]);
+        for (const event of openingEvents ?? []) listener(event as AgentSessionRuntimeEvent);
         return Object.freeze({
           dispose() {
             conversationListeners.delete(listener as Parameters<AgentExecutionRunConversationRuntimeV1['watch']>[0]);
@@ -2269,6 +2349,7 @@ async function createPublicAcpConversationFromAwaitableAdapter(
         // listener is itself waiting for this session retirement to complete.
         if (sessionStream) void sessionStream.dispose();
         conversationListeners.clear();
+        openingConversationEvents = null;
         activeTurn = null;
         bufferedMessages?.dispose();
         bufferedMessages = null;
@@ -2284,7 +2365,7 @@ async function createPublicAcpConversationFromAwaitableAdapter(
           await Promise.all(sidechainImports);
           await backend.dispose();
         } finally {
-          releaseLaunch();
+          await releaseLaunch();
         }
         await publicationFailureDisposePromise;
         await backendMessageProjectionTail;
@@ -2295,6 +2376,8 @@ async function createPublicAcpConversationFromAwaitableAdapter(
   });
 
   try {
+    dependencies.signal.addEventListener('abort', disposeOnAbort, { once: true });
+    assertComposerCurrent(dependencies);
     let replay: ReadonlyArray<unknown> | null = null;
     const openFork = async (): Promise<Readonly<{ sessionId: string }>> => {
       if (request.kind !== 'fork') {
@@ -2391,7 +2474,7 @@ async function createPublicAcpConversationFromAwaitableAdapter(
         const failure = 'diagnostic' in result
           ? result.diagnostic
           : diagnostic('acp_initial_configuration_not_applied');
-        throw new Error(failure.message ?? failure.code);
+        throw Object.assign(new Error(failure.message ?? failure.code), { code: failure.code });
       }
       currentConfiguration = mergeConfigurationSnapshot(null, initialConfiguration);
     }
@@ -2401,24 +2484,20 @@ async function createPublicAcpConversationFromAwaitableAdapter(
     if (backend.getSessionModeState() && modeObservedAt === 0) modeObservedAt = Date.now();
     if (backend.getSessionModeState()) publishProviderModes();
     publish({ kind: 'provider-session-id', providerSessionId: opened.sessionId });
-    if (dependencies.signal.aborted) await session.dispose();
-    else dependencies.signal.addEventListener('abort', disposeOnAbort, { once: true });
     return session;
   } catch (error) {
+    dependencies.signal.removeEventListener('abort', disposeOnAbort);
     discardPendingExtensionNotifications();
-    disposed = true;
-    await modelBinding.dispose();
-    await modeBinding.dispose();
     try {
-      await backend.dispose();
-    } finally {
-      releaseLaunch();
+      await session.dispose();
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], 'ACP Session startup failed and cleanup is incomplete');
     }
     if (sessionStream) await sessionStream.dispose();
     throw error;
   }
   } catch (error) {
-    releaseLaunch();
+    await releaseLaunch();
     throw error;
   }
 }
@@ -2466,15 +2545,24 @@ export async function createPublicAcpExecutionRun(
   return await createExecutionRunHostBackendFromConversationRuntime({
     request,
     async openConversation() {
-      return await createPublicAcpConversationFromAwaitableAdapter(
-        request,
-        options,
-        dependencies,
-        Object.freeze({}),
-      ) as PublicAcpConversationRuntime;
+      return await createPublicAcpExecutionRunConversation(request, options, dependencies);
     },
     readCheckpointId(event) {
       return event.kind === 'provider-session-id' ? event.providerSessionId : null;
     },
   });
+}
+
+/** Opens the canonical ACP conversation without submitting or terminalizing a turn. */
+export async function createPublicAcpExecutionRunConversation(
+  request: AgentExecutionRunOpenRequest,
+  options: AgentAcpRuntimeOptions,
+  dependencies: PublicAcpComposerDependencies,
+): Promise<AgentExecutionRunConversationRuntimeV1> {
+  if (request.kind === 'fork') {
+    throw new Error('ACP execution-run V1 cannot derive a provider checkpoint from a source Run id');
+  }
+  return await createPublicAcpConversationFromAwaitableAdapter(
+    request, options, dependencies, Object.freeze({}),
+  ) as PublicAcpConversationRuntime;
 }

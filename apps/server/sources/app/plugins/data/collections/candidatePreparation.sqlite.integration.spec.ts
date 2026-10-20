@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Prisma } from "@prisma/client";
 import { buildPluginDomainAccountChangeEntityId } from "@happier-dev/protocol";
 
@@ -15,6 +15,7 @@ import {
 import { readPluginCollectionAccountActivationUsageInTx } from "./quota";
 import { mutatePluginCollection } from "./mutation";
 import { getPluginCollection, queryPluginCollection } from "./uiQuery";
+import * as collectionContracts from "./contracts";
 import { createPluginAvailabilityOperations } from "@/app/plugins/availability/operations";
 import { readPluginsFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { db } from "@/storage/db";
@@ -423,6 +424,7 @@ describe("plugin Collection candidate preparation", () => {
     });
 
     afterEach(async () => {
+        vi.restoreAllMocks();
         harness.resetEnv();
         await harness.resetDbTables([
             () => db.accountChange.deleteMany(),
@@ -640,6 +642,9 @@ describe("plugin Collection candidate preparation", () => {
             orderBy: { id: "asc" },
         })).resolves.toEqual(indexEntriesBefore);
 
+        // Transparent counter: reconstruction recomputes and validates the entire
+        // contract. An identical reader/writer ref needs that work once per read.
+        const reconstruct = vi.spyOn(collectionContracts, "readMaterializedPluginCollectionContract");
         const targetGet = await getPluginCollection({
             accountId: ACCOUNT_ID,
             request: {
@@ -650,6 +655,11 @@ describe("plugin Collection candidate preparation", () => {
             },
         });
         expect(targetGet.row).toMatchObject({ rowId: "task-optional-private", revision: rowBefore.revision });
+        try {
+            expect(reconstruct).toHaveBeenCalledTimes(1);
+        } finally {
+            reconstruct.mockRestore();
+        }
         await expect(getPluginCollection({
             accountId: ACCOUNT_ID,
             request: {

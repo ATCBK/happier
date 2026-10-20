@@ -27,6 +27,7 @@ import {
 } from './workflowTriggerDraft';
 import { useWorkflowTriggerSets } from './useWorkflowTriggerSets';
 import type { WorkflowActionCallerContext } from '@/sync/domains/workflows/callWorkflowAction';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 export type WorkflowTriggerEditing = Readonly<{
     set: WorkflowTriggerSetV1 | null;
@@ -57,11 +58,13 @@ export function useWorkflowTriggerEditing(params: Readonly<{
     sourceKey: string;
     /** The editor's Where, which seeds the set's one machine when its first trigger is added. */
     projectTarget: WorkflowProjectTargetV1 | null;
+    accountLifetime?: ServerAccountScopeLifetime | null;
 }>): WorkflowTriggerEditing {
     const request = React.useMemo(() => params.definitionId === null ? null : { workflow: params.definitionId }, [params.definitionId]);
-    const { sets, status, retry } = useWorkflowTriggerSets(request);
+    const { sets, status, retry } = useWorkflowTriggerSets(request, params.accountLifetime);
     const listedSet = params.definitionId === null ? null : sets[0] ?? null;
-    const scope = useActiveServerAccountScope();
+    const activeScope = useActiveServerAccountScope();
+    const scope = params.accountLifetime === undefined ? activeScope : params.accountLifetime?.scope ?? null;
     const scopeKey = scope ? serverAccountScopeKeySuffix(scope) : null;
     const identity = React.useMemo(() => ({}), [params.sourceKey, scopeKey]);
     const identityRef = React.useRef(identity);
@@ -115,8 +118,8 @@ export function useWorkflowTriggerEditing(params: Readonly<{
     const save = React.useCallback<WorkflowTriggerEditing['save']>(async (workflow, isCurrent, caller) => {
         const captured = stateRef.current;
         const capturedIdentities = identitiesRef.current;
-        const lifetime = captureActiveServerAccountScopeCurrentness();
-        const current = () => mounted.current && identityRef.current === captured.identity && lifetime.isCurrent() && isCurrent();
+        const lifetime = params.accountLifetime === undefined ? captureActiveServerAccountScopeCurrentness() : params.accountLifetime;
+        const current = () => mounted.current && identityRef.current === captured.identity && lifetime?.isCurrent() === true && isCurrent();
         if (!current()) return 'stale';
         if (!isWorkflowTriggerDraftDirty(captured.draft)) return 'saved';
         let previousSet = captured.set;
@@ -124,7 +127,8 @@ export function useWorkflowTriggerEditing(params: Readonly<{
         pendingSave.current = pending;
         // Bind this invocation's admitted caller to the existing trigger writer.
         // Parent approval/confirmation is absent; each child Action owns its policy.
-        const options = caller === undefined ? {} : { context: caller, signal: caller.signal };
+        const options = { ...(caller === undefined ? {} : { context: caller, signal: caller.signal }),
+            ...(params.accountLifetime === undefined ? {} : { accountLifetime: params.accountLifetime }) };
         const writer: WorkflowTriggerWriter = {
             add: (request) => addWorkflowTrigger(request, options),
             update: (request) => updateWorkflowTrigger(request, options),
@@ -156,7 +160,7 @@ export function useWorkflowTriggerEditing(params: Readonly<{
         }).finally(() => { if (pendingSave.current === pending) pendingSave.current = null; });
         if (!current()) return 'stale';
         return outcome.kind;
-    }, []);
+    }, [params.accountLifetime]);
 
     const summary = React.useMemo(
         () => {

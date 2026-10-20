@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { usePluginTranslation } from '@happier-dev/plugin-ui';
+import { isPluginError } from '@happier-dev/plugin-sdk';
+import { usePluginHostApi, usePluginTranslation } from '@happier-dev/plugin-ui';
 
 import { readActiveConfiguredSourceRows } from '../../corpus/configuration/readConfiguredSourceRows.js';
 import { removeConfiguredSourceInstance } from '../../corpus/configuration/administerConfiguredSourceInstance.js';
-import { useTriageDurableAccount } from '../durable/accountDurableState.js';
-import type { TriageConfiguredSourceInstanceV1 } from '@happier-dev/triage-protocol/v1';
+import { useTriageDurableAccount, type TriageDurableAccountV1 } from '../durable/accountDurableState.js';
+import { TRIAGE_SOURCES_ADMINISTER_ACTION_LOCAL_ID_V1, type TriageConfiguredSourceInstanceV1 } from '@happier-dev/triage-protocol/v1';
 
 export type TriageMountedConfiguredSourceV1 = Readonly<{
   sourceInstanceId: string;
@@ -16,6 +17,8 @@ export type TriageMountedConfiguredSourceV1 = Readonly<{
 
 export type TriageMountedConfiguredSourcesV1 = Readonly<{
   sources: readonly TriageMountedConfiguredSourceV1[];
+  /** A complete read succeeded for this Account; an empty initial value is not absence. */
+  loaded: boolean;
   busySourceInstanceId: string | null;
   notice: TriageConfiguredSourcesNoticeV1 | null;
   unavailableReason: string | null;
@@ -23,12 +26,20 @@ export type TriageMountedConfiguredSourcesV1 = Readonly<{
 }>;
 
 export type TriageConfiguredSourcesNoticeV1 = Readonly<{
-  kind: 'conflict' | 'missing';
+  kind: 'conflict' | 'missing' | 'refused';
   message: string;
 }>;
 
 const UNAVAILABLE_REASON =
   'Happier cannot reach your account right now, so configured sources cannot be changed.';
+const EMPTY_SOURCES: readonly TriageMountedConfiguredSourceV1[] = Object.freeze([]);
+
+type ConfiguredSourceRead = Readonly<{
+  collections: TriageDurableAccountV1['collections'];
+  sources: readonly TriageMountedConfiguredSourceV1[];
+  loaded: boolean;
+  unavailableReason: string | null;
+}>;
 
 /**
  * Triage's configured source rows over the mounted Account Collection.
@@ -40,13 +51,29 @@ const UNAVAILABLE_REASON =
  * speculative change or replay intent.
  */
 export function useTriageConfiguredSources(): TriageMountedConfiguredSourcesV1 {
+  const host = usePluginHostApi();
   const durable = useTriageDurableAccount();
   const text = usePluginTranslation();
-  const [sources, setSources] = useState<readonly TriageMountedConfiguredSourceV1[]>([]);
+  const [acceptedRead, setAcceptedRead] = useState<ConfiguredSourceRead | null>(null);
   const [busySourceInstanceId, setBusySourceInstanceId] = useState<string | null>(null);
   const [notice, setNotice] = useState<TriageConfiguredSourcesNoticeV1 | null>(null);
-  const [unavailableReason, setUnavailableReason] = useState<string | null>(null);
+  // Never carry one Account's configured rows through a replacement Data client,
+  // including the render before its new read effect commits.
+  const currentRead = acceptedRead?.collections === durable.collections ? acceptedRead : null;
+  const sources = currentRead?.sources ?? EMPTY_SOURCES;
+  const loaded = currentRead?.loaded ?? false;
+  const unavailableReason = durable.collections === null
+    ? text('plugins.triage.surface.sources.unavailable', UNAVAILABLE_REASON)
+    : currentRead?.unavailableReason ?? null;
   const generation = useRef(0);
+  const setUnavailableReason = useCallback((reason: string) => {
+    setAcceptedRead(current => ({
+      collections: durable.collections,
+      sources: current?.collections === durable.collections ? current.sources : EMPTY_SOURCES,
+      loaded: current?.collections === durable.collections && current.loaded,
+      unavailableReason: reason,
+    }));
+  }, [durable.collections]);
 
   const read = useCallback(async (signal: AbortSignal): Promise<boolean> => {
     generation.current += 1;
@@ -61,22 +88,22 @@ export function useTriageConfiguredSources(): TriageMountedConfiguredSourcesV1 {
         { signal },
       );
       if (signal.aborted || generation.current !== current) return false;
-      setSources(Object.freeze(result.rows.map((row) => Object.freeze({
+      const sources = Object.freeze(result.rows.map((row) => Object.freeze({
         sourceInstanceId: row.configured.instance.sourceInstanceId,
         configured: row.configured,
         displayLabel: row.configured.locator?.displayLabel ?? row.configured.localInstanceKey,
         ...(row.configured.locator?.displayPath === undefined
           ? {}
           : { displayPath: row.configured.locator.displayPath }),
-      }))));
-      setUnavailableReason(null);
+      })));
+      setAcceptedRead({ collections: durable.collections, sources, loaded: true, unavailableReason: null });
       return true;
     } catch {
       if (signal.aborted || generation.current !== current) return false;
       setUnavailableReason(text('plugins.triage.surface.sources.unavailable', UNAVAILABLE_REASON));
       return false;
     }
-  }, [durable.collections, text]);
+  }, [durable.collections, setUnavailableReason, text]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -85,13 +112,15 @@ export function useTriageConfiguredSources(): TriageMountedConfiguredSourcesV1 {
   }, [read]);
 
   const remove = useCallback(async (sourceInstanceId: string): Promise<boolean> => {
-    if (durable.collections === null || busySourceInstanceId !== null || unavailableReason !== null) {
+    if (!loaded || durable.collections === null || busySourceInstanceId !== null || unavailableReason !== null) {
       return false;
     }
     const controller = new AbortController();
     setBusySourceInstanceId(sourceInstanceId);
     setNotice(null);
     try {
+      if (!await host.admitAction(TRIAGE_SOURCES_ADMINISTER_ACTION_LOCAL_ID_V1,
+        { v: 1, kind: 'remove', sourceInstanceId }, { signal: controller.signal })) return false;
       const result = await removeConfiguredSourceInstance({
         collections: durable.collections,
         sourceInstanceId,
@@ -120,19 +149,24 @@ export function useTriageConfiguredSources(): TriageMountedConfiguredSourcesV1 {
         return false;
       }
       return await read(controller.signal);
-    } catch {
+    } catch (error) {
+      if (isPluginError(error) && error.code === 'denied') {
+        setNotice({ kind: 'refused', message: text('happier.plugin-ui.action.error.denied', 'This isn’t allowed here.') });
+        return false;
+      }
       setUnavailableReason(text('plugins.triage.surface.sources.unavailable', UNAVAILABLE_REASON));
       return false;
     } finally {
       setBusySourceInstanceId(null);
     }
-  }, [busySourceInstanceId, durable.collections, read, text, unavailableReason]);
+  }, [busySourceInstanceId, durable.collections, host, loaded, read, setUnavailableReason, text, unavailableReason]);
 
   return useMemo(() => Object.freeze({
     sources,
+    loaded,
     busySourceInstanceId,
     notice,
     unavailableReason,
     remove,
-  }), [busySourceInstanceId, notice, remove, sources, unavailableReason]);
+  }), [busySourceInstanceId, loaded, notice, remove, sources, unavailableReason]);
 }

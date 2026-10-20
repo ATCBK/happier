@@ -9,9 +9,51 @@ import {
 } from '../corpus/testkit/corpusCollections.test-support.js';
 import { testkitEntryRef, testkitLocator } from '../corpus/testkit/observations.test-support.js';
 import { linkEntryToSession, unlinkEntryFromSession } from './entrySessionLinks.js';
+import { reconcileMergedSuccessor } from './reconcileMergedSuccessor.js';
+import { readTriageSessionLinksPageV1 } from './readEntrySessionLinks.js';
 import { TESTKIT_LINK_DISPLAY } from './testkit/entrySessionTestkit.test-support.js';
 
 const NOW_MS = 1_760_000_900_000;
+
+describe('current relationships after merge retargeting', () => {
+    it('collapses into an already retargeted successor relationship', async () => {
+        const { collections } = createTestkitCorpusCollections();
+        const a = testkitEntryRef();
+        const b = testkitEntryRef({ entryId: '41' });
+        const successor = testkitEntryRef({ entryId: '42' });
+        for (const entryRef of [a, b]) await linkEntryToSession({ collections, entryRef,
+            display: TESTKIT_LINK_DISPLAY, sessionId: 'session-a', nowMs: NOW_MS });
+        await reconcileMergedSuccessor({ collections, entryRef: b, successorEntryRef: successor });
+        await reconcileMergedSuccessor({ collections, entryRef: a, successorEntryRef: successor });
+        const page = await readTriageSessionLinksPageV1(collections.sessionLinks, { relation: { entryRef: successor } });
+        expect(page.links).toHaveLength(1);
+        expect(page.links[0]?.identityEntryRef).toEqual(b);
+    });
+    it.each(['link', 'unlink'] as const)('resolves the retained identity for %s through the successor reference', async (operation) => {
+        const { collections } = createTestkitCorpusCollections({ accountEncryptionMode: 'e2ee' });
+        const original = testkitEntryRef();
+        const successor = testkitEntryRef({ entryId: '42' });
+        const link = (entryRef: typeof original) => linkEntryToSession({
+            collections, entryRef, display: TESTKIT_LINK_DISPLAY, sessionId: 'session-a', nowMs: NOW_MS,
+        });
+        const first = await link(original);
+        expect(first.status).toBe('linked');
+        await reconcileMergedSuccessor({ collections, entryRef: original, successorEntryRef: successor });
+        if (operation === 'link') {
+            expect(await link(successor)).toEqual(first);
+        } else {
+            expect(await unlinkEntryFromSession({ collections, entryRef: successor, sessionId: 'session-a' }))
+                .toEqual({ ...first, status: 'unlinked' });
+            expect((await readTriageSessionLinksPageV1(collections.sessionLinks, { relation: { entryRef: successor } })).links)
+                .toHaveLength(0);
+            expect((await link(successor)).status).toBe('linked');
+        }
+        const page = await readTriageSessionLinksPageV1(collections.sessionLinks, { relation: { entryRef: successor } });
+        expect(page.links).toHaveLength(1);
+        expect(page.links[0]).toMatchObject({ entryRef: successor, sessionId: 'session-a' });
+        if (operation === 'link') expect(page.links[0]?.identityEntryRef).toEqual(original);
+    });
+});
 
 describe('linkEntryToSession', () => {
     it('writes one link row from the projected facts, with no durable entry row anywhere', async () => {

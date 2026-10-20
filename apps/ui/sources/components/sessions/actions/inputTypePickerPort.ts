@@ -4,7 +4,7 @@ import {
     type PluginContributionIdentityV1,
 } from '@happier-dev/protocol/plugins/contribution-identity';
 import { readActionInputOptionValue } from '@happier-dev/protocol/actions/actionInputHintsRuntime';
-import type { InputOption, InputTypeReferenceV1 } from '@happier-dev/protocol/inputs';
+import type { InputFieldHint, InputOption, InputTypeReferenceV1 } from '@happier-dev/protocol/inputs';
 import {
     invokeInputTypePicker,
     type InputTypePickerHostV1,
@@ -15,12 +15,14 @@ import { t } from '@/text';
 
 export type InputTypePickerPortHost = Readonly<{
     /** The current admitted type for this identity, read anew on every call so a replaced plugin is seen. */
-    resolveType: (identity: PluginContributionIdentityV1) => ResolvedInputTypeV1 | null;
+    resolveType: (identity: PluginContributionIdentityV1, field?: Pick<InputFieldHint, 'path'>) => ResolvedInputTypeV1 | null;
     /** Whether the host can mount this declared picker renderer now. */
-    canOpenPicker: (picker: PluginContributionIdentityV1, type: ResolvedInputTypeV1) => boolean;
+    canOpenPicker: (picker: PluginContributionIdentityV1, type: ResolvedInputTypeV1, field?: Pick<InputFieldHint, 'path'>) => boolean;
     /** The incumbent ephemeral plugin-surface mount; it owns the renderer, its lifetime and disposal. */
-    openPicker: InputTypePickerHostV1['openPicker'];
-    openHostPicker?: InputTypePickerHostV1['openHostPicker'];
+    openPicker: (request: Parameters<InputTypePickerHostV1['openPicker']>[0], field?: Pick<InputFieldHint, 'path'>) => ReturnType<InputTypePickerHostV1['openPicker']>;
+    openHostPicker?: (request: Parameters<NonNullable<InputTypePickerHostV1['openHostPicker']>>[0], field: InputFieldHint) => ReturnType<NonNullable<InputTypePickerHostV1['openHostPicker']>>;
+    /** A host reference is only offered when its demanded picker surface exists. */
+    canOpenHostPicker?: (reference: Extract<InputTypeReferenceV1, { hostType: string }>) => boolean;
 }>;
 
 /**
@@ -30,30 +32,32 @@ export type InputTypePickerPortHost = Readonly<{
  * This adapter only says whether a picker is offered and puts the outcome in the reader's words.
  */
 export function createInputTypePickerPort(host: InputTypePickerPortHost): HappierInputPickerPort {
-    const pickerFor = (identity: InputTypeReferenceV1 | undefined): PluginContributionIdentityV1 | null => {
+    const pickerFor = (identity: InputTypeReferenceV1 | undefined, field: Pick<InputFieldHint, 'path'>): PluginContributionIdentityV1 | null => {
         if (identity === undefined) return null;
         if ('hostType' in identity) return null;
-        const type = host.resolveType(identity);
+        const type = host.resolveType(identity, field);
         const picker = type?.definition.picker;
         if (type === null || picker === undefined) return null;
         const qualified = qualifyPluginContributionReferenceV1(picker, type.identity.pluginId);
-        return host.canOpenPicker(qualified, type) ? qualified : null;
+        return host.canOpenPicker(qualified, type, field) ? qualified : null;
     };
     return {
         describe: (field) => (field.inputType && 'hostType' in field.inputType
             // A Usage field (the Period, the Session) offers its choices in place from its type's own
             // source; only a whole Usage query opens the host's dialog. The field is named by its type,
             // because a group saved before its choices were declared still carries the older hint.
-            ? field.inputType.hostType === 'usageQuery' && host.openHostPicker !== undefined
-                && field.inputType.field === undefined && field.optionsSourceId === undefined && field.options === undefined
-            : pickerFor(field.inputType) !== null) ? {
+            ? host.openHostPicker !== undefined && (
+                field.inputType.hostType === 'agentParticipant' && host.canOpenHostPicker?.(field.inputType) === true
+                || field.inputType.hostType === 'usageQuery' && field.inputType.field === undefined
+                    && field.optionsSourceId === undefined && field.options === undefined)
+            : pickerFor(field.inputType, field) !== null) ? {
             label: t('inputPicker.browse'),
             accessibilityLabel: t('inputPicker.browseField', { field: field.title }),
         } : null,
         pick: async (request): Promise<HappierInputPickerResult> => {
             const inputType = request.field.inputType;
             if (inputType === undefined) return { status: 'error', message: describePickerError('input_type_unavailable') };
-            const field = { ...request.field, widget: 'select' as const };
+            const field = { ...request.field, widget: request.field.widget === 'multiselect' ? 'multiselect' as const : 'select' as const };
             const options = request.options?.flatMap((option): InputOption[] => {
                 const value = readActionInputOptionValue(option.value);
                 return value === undefined ? [] : [{
@@ -74,10 +78,10 @@ export function createInputTypePickerPort(host: InputTypePickerPortHost): Happie
                 ...(current === undefined ? {} : { value: current }),
                 signal: request.signal,
                 host: {
-                    resolveType: async (identity) => host.resolveType(identity),
+                    resolveType: async (identity) => host.resolveType(identity, field),
                     resolveOptions: async () => options ?? { errorCode: 'input_type_options_unavailable' },
-                    openPicker: host.openPicker,
-                    ...(host.openHostPicker ? { openHostPicker: host.openHostPicker } : {}),
+                    openPicker: picker => host.openPicker(picker, field),
+                    ...(host.openHostPicker ? { openHostPicker: (pickerRequest: Parameters<NonNullable<InputTypePickerHostV1['openHostPicker']>>[0]) => host.openHostPicker!(pickerRequest, field) } : {}),
                 },
             });
             if (result.status === 'selected') return { status: 'selected', value: result.value };

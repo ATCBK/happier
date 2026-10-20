@@ -1,4 +1,5 @@
 import type { JsonValue } from '@happier-dev/plugin-sdk';
+import { resolveModelDisplayName } from '@happier-dev/plugin-sdk/agents';
 
 import { isCodexAppServerFastServiceTier } from '../serviceTier.js';
 import {
@@ -70,22 +71,6 @@ function normalizeString(value: unknown): string | null {
     return trimmed.length > 0 ? trimmed : null;
 }
 
-function normalizeCodexModelDisplayName(value: string): string {
-    const normalizedSeparators = value.replace(/[_-]+/g, ' ').trim();
-    if (!normalizedSeparators) return value;
-
-    return normalizedSeparators
-        .split(/\s+/)
-        .map((token) => {
-            if (/^gpt$/i.test(token)) return 'GPT';
-            if (/^[a-z]+$/.test(token)) {
-                return token.charAt(0).toUpperCase() + token.slice(1);
-            }
-            return token;
-        })
-        .join(' ');
-}
-
 function asRecord(value: unknown): MetadataRecord | null {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     return value as MetadataRecord;
@@ -118,7 +103,9 @@ function normalizeReasoningEffortLabel(value: string): string {
         case 'max':
             return 'Max';
         default:
-            return value;
+            // Codex adds levels over time (for example `ultra`); a level without a word here still
+            // reads as a name rather than a raw value.
+            return value.length > 0 ? value.charAt(0).toUpperCase() + value.slice(1) : value;
     }
 }
 
@@ -287,9 +274,9 @@ function normalizeSessionModelMasks(params: Readonly<{
         const record = asRecord(entry);
         if (!record) continue;
         const id = normalizeString(record.id) ?? normalizeString(record.slug);
-        const rawName = normalizeString(record.displayName) ?? normalizeString(record.name) ?? normalizeString(record.label) ?? id;
-        const name = rawName ? normalizeCodexModelDisplayName(rawName) : null;
-        if (!id || !name) continue;
+        if (!id) continue;
+        const rawName = normalizeString(record.displayName) ?? normalizeString(record.name) ?? normalizeString(record.label);
+        const name = resolveModelDisplayName({ id, ...(rawName ? { name: rawName } : {}) }, []);
         const description = normalizeString(record.description)
             ?? (() => {
                 const reasoningEffort = normalizeString(record.reasoning_effort);

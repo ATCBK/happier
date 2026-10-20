@@ -149,6 +149,7 @@ describe('Voice run caller-turn admission', () => {
         // The Home descriptor/Machine observation is the network boundary.
         resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'home-identity', machineId: 'voice-machine' }),
         resolveTarget: async () => { throw new Error('Global Voice must not resolve a Session replay target'); },
+        isAccountCurrent: async () => true,
         listAccountApiTokens: async () => ({ tokens: [] }),
         resolveCurrentSessionAgentSpawnPolicyV1: async () => DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1,
       }),

@@ -81,14 +81,14 @@ describe('qualified Session surface entity drops', () => {
                 to: { surface: { ...scope, owner: { kind: 'companion', sessionId: address.sessionId } }, index: 2 },
             } } });
     });
-    it('moves configured Board placements through the widget Action with an explicit destination tab and native index', () => {
+    it('moves configured Board placements through the Board layout owner with current view anchors', () => {
         const admission = resolveSessionBoardEntityDrop({ item, scope, address, board: board(true), viewId: 'a', anchor: { side: 'after', itemId: 'two' }, preview });
-        const surface = { ...scope, owner: { kind: 'sessionBoard', sessionId: address.sessionId } };
-        expect(admission).toMatchObject({ status: 'allowed', effect: { actionId: 'widgets.item.move', input: {
-            ref: { surface, instanceId: 'configured-one' }, to: { surface, tabId: 'a', index: 1 },
+        expect(admission).toMatchObject({ status: 'allowed', effect: { actionId: 'session.board.layout.update', input: {
+            expectedLayoutRevision: revision,
+            operation: { op: 'item.move', itemId: 'one', fromTabId: 'a', toTabId: 'a', anchor: { side: 'after', itemId: 'two' } },
         } } });
-        expect(resolveSessionBoardEntityDrop({ item, scope, address, board: board(true), viewId: 'b', preview })).toMatchObject({ status: 'allowed', effect: { input: {
-            to: { surface, tabId: 'b', index: 1 },
+        expect(resolveSessionBoardEntityDrop({ item, scope, address, board: board(true), viewId: 'b', preview })).toMatchObject({ status: 'allowed', effect: { actionId: 'session.board.layout.update', input: {
+            operation: { op: 'item.move', itemId: 'one', fromTabId: 'a', toTabId: 'b' },
         } } });
     });
     it('moves the placement through the existing layout operation, retaining item content and current anchors', () => {

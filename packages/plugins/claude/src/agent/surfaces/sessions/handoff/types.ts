@@ -1,25 +1,22 @@
 import type { HandoffImportResultV1 } from '@happier-dev/plugin-sdk/agents/runtime';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { hasClaudeProviderIdentityValue } from '../../../../protocol/providerIdentity.js';
 import type { ClaudeExternalSessionSource } from '../external/source.js';
 
-export const ClaudeSessionBundleSchema = z.object({
+export const ClaudeSessionBundleSchema = z.strictObject({
     agentId: z.literal('claude'),
-    remoteSessionId: z.string().refine(hasClaudeProviderIdentityValue, {
+    remoteSessionId: z.string().check(z.refine(hasClaudeProviderIdentityValue, {
         message: 'Claude handoff bundle requires a vendor session id',
-    }),
-    transcriptBase64: z.string().optional(),
-    transcriptFile: z.object({
+    })),
+    transcriptBase64: z.optional(z.string()),
+    transcriptFile: z.optional(z.strictObject({
         t: z.literal('happier.handoff.file.v1'),
-        filePath: z.string().min(1),
-        offsetBytes: z.number().int().nonnegative(),
-        sizeBytes: z.number().int().nonnegative(),
-    }).strict().optional(),
-}).strict().refine(
-    (bundle) => Boolean(bundle.transcriptBase64) !== Boolean(bundle.transcriptFile),
-    { message: 'Claude handoff bundle requires exactly one transcript source' },
-);
+        filePath: z.string().check(z.minLength(1)),
+        offsetBytes: z.number().check(z.int(), z.nonnegative()),
+        sizeBytes: z.number().check(z.int(), z.nonnegative()),
+    })),
+}).check(z.refine((bundle) => Boolean(bundle.transcriptBase64) !== Boolean(bundle.transcriptFile), { message: 'Claude handoff bundle requires exactly one transcript source' }));
 
 export type ClaudeHandoffBundleFile = Readonly<{
     t: 'happier.handoff.file.v1';

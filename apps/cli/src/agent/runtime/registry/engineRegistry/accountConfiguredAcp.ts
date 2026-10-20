@@ -8,12 +8,9 @@ import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
 import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import {
-  refreshSavedSecretCatalogForOperation,
-  SavedSecretOperationAdmissionError,
-  savedSecretOperationAdmissionStatus,
-  type SavedSecretOperationContextV1,
-} from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { savedSecretOperationAdmissionStatus } from '@/settings/secrets/savedSecretCatalog';
+import { SavedSecretOperationAdmissionError } from "@/settings/secrets/savedSecretCatalogRead";
+import { type SavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { SavedSecretResolutionError } from '@/settings/secrets/savedSecretCatalog';
 import { refreshActiveAcpCatalog } from '@/agent/acp/catalog/hydrateAcpCatalog';
 import { materializeConfiguredAcpEnvironment } from '@/agent/acp/catalog/configured/materializeEnvironment';
@@ -90,6 +87,7 @@ export async function resolveAccountConfiguredAcpLaunch(
       .flatMap(value => listValueRefSecretIdsV1(value).map(ref => ({ ref })));
     if (references.length > 0) {
       try {
+        const { refreshSavedSecretCatalogForOperation } = await import('@/settings/secrets/hydrateSavedSecretCatalog');
         const refresh = () => refreshSavedSecretCatalogForOperation({
           expectedScopeKey: scopeKey, references, operationContext: savedSecretOperationContext,
         });

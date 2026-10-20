@@ -1,4 +1,8 @@
+export type { GitTemporaryIndexCommand, GitTemporaryIndexCommandResult, GitTemporaryIndexCommandAdapter, GitTemporaryIndexSeed, GitTemporaryIndex, GitTemporaryIndexFailure, GitFileLineage } from './nativeAdapters.js';
+export { createGitTemporaryIndex, resolveGitIndexPath, parseGitComparisonOutput } from './nativeAdapters.js';
 export type { PluginScmRegistrationApi } from './projections.js';
+export { ScmHostingProviderKindProtocolSchema } from './projections.js';
+export type { ProtocolScmHostingProviderKind } from './projections.js';
 export type { ScmWorktreeRetireRequest, ScmWorktreeReinstateRequest } from './projections.js';
 export type { ScmEntryHistoryV1, ScmHistoryEntriesInputV1, ScmHistoryEntriesOutputV1, ScmHistoryEntriesRequest, ScmHistoryEntriesResponse } from './projections.js';
 export { ScmHistoryEntriesInputV1Schema, ScmHistoryEntriesResponseSchema } from './projections.js';

@@ -374,7 +374,7 @@ describe('Channels chunk producer to registered native-handler fixture seam', ()
         const retryNotBefore = 1_700_000_000_000 + 90_000_000;
         expect(nativeResults).toEqual([{ kind: 'notDelivered', retry: 'after', retryAfterMs: 90_000_000 }]);
         expect(result).toMatchObject({ kind: 'settled', custody: { state: 'retryDue', retryNotBefore } });
-        expect(deliveries.writes.at(-1)?.payload).toMatchObject({ state: 'retryDue', retryNotBefore });
+        expect(deliveries.writes.at(-1)).toMatchObject({ payload: { state: 'retryDue' }, 'retry-not-before': retryNotBefore });
         expect(nativeMessages).toHaveLength(1);
         expect(consumerRefusals).toEqual([]);
         return;

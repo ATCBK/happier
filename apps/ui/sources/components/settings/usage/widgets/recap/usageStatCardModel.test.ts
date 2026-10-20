@@ -46,6 +46,30 @@ function composed(
 }
 
 describe('private stat card model', () => {
+  it('does not promote raw whole-report money into unavailable scoped spend or repeat a Work highlight', async () => {
+    const { buildUsageStatCardModel } = await import('./usageStatCardModel');
+    const model = buildUsageStatCardModel(composed(['dollars', 'work', 'highlights'], {
+      dollars: { basis: 'auto', selected: null, facts: [{ kind: 'reported', amountUsd: 35.61,
+        currency: 'USD', tokens, eventCount: 1, asOfMs: periodEnd, complete: false }] },
+      work: { linkedOutcomes: 7, allocatedContributions: 7, unallocatedContributions: 0 },
+      highlights: [{ kind: 'linked_outcomes', count: 7 }],
+    }));
+    // An unknown selected total is not drawn as a bare dash: nothing priced is simply absent.
+    expect(model.stats.filter(stat => stat.id === 'dollars')).toEqual([]);
+    expect(model.stats.filter(stat => stat.id === 'linkedOutcomes' || stat.id === 'highlightOutcomes')).toHaveLength(1);
+  });
+  it('lets the comparisons lead when the selected total is unknown', async () => {
+    const { buildUsageStatCardModel } = await import('./usageStatCardModel');
+    const model = buildUsageStatCardModel(composed(['dollars'], {
+      dollars: { basis: 'auto', selected: null, facts: [
+        { kind: 'estimated', amountUsd: 28.61, currency: 'USD', tokens, eventCount: 2, asOfMs: periodEnd, complete: false },
+        { kind: 'unpriced', amountUsd: null, currency: 'USD', tokens, eventCount: 1, asOfMs: periodEnd, complete: false },
+      ] },
+    }));
+    const money = model.stats.filter(stat => stat.id === 'dollars');
+    expect(money.map(stat => stat.tier)).toEqual(['comparison', 'comparison']);
+    expect(money[0]!.value).toMatch(/28\.61/);
+  });
   it('keeps cache-only and highlight-only selections in the card facts', async () => {
     const { buildUsageStatCardModel } = await import('./usageStatCardModel');
     const cache = buildUsageStatCardModel(composed(['cache'], { cache: { readTokens: 12345, writeTokens: 6789 } }));
@@ -102,8 +126,8 @@ describe('private stat card model', () => {
       value: '1.9B',
       unit: 'usage.board.recap.tokensUnit',
     });
-    expect(model.mix.map((row) => row.label)).toEqual([null, null]);
-    expect(model.mix.map((row) => Math.round(row.share * 100))).toEqual([
+    expect(model.mixGroups[0]!.rows.map((row) => row.label)).toEqual([null, null]);
+    expect(model.mixGroups[0]!.rows.map((row) => Math.round(row.share * 100))).toEqual([
       63, 37,
     ]);
     expect(model.stats.map((stat) => stat.id)).toEqual([
@@ -130,6 +154,7 @@ describe('private stat card model', () => {
       ],
       dollars: {
         basis: 'auto',
+        selected: { kind: 'api_equivalent', currency: 'USD', amountUsd: 1555 },
         facts: [
           {
             kind: 'api_equivalent',
@@ -149,18 +174,24 @@ describe('private stat card model', () => {
             asOfMs: periodEnd,
             complete: false,
           },
+          { kind: 'invoice', currency: 'EUR', amountUsd: 12,
+            tokens, eventCount: 1, asOfMs: periodEnd, complete: true },
         ],
       },
     });
     const model = buildUsageStatCardModel(result);
-    expect(model.mix.map((row) => row.label)).toEqual(['Claude', 'Codex']);
+    expect(model.mixGroups[0]!.rows.map((row) => row.label)).toEqual(['Claude', 'Codex']);
     const money = model.stats.filter((stat) => stat.id === 'dollars');
     expect(money.map((stat) => stat.label)).toEqual([
-      'usage.board.recap.money_api_equivalent',
-      'usage.board.recap.money_unpriced',
+      'usage.board.recap.money_api_equivalent · USD',
+      'usage.board.page.factInvoice · EUR',
+      'usage.board.recap.money_unpriced · USD',
     ]);
+    // The selected total is the one lead; every other money kind is a quieter comparison beneath it.
+    expect(money.map((stat) => stat.tier)).toEqual(['lead', 'comparison', 'comparison']);
     expect(money[0]!.value).toMatch(/1,555/);
-    expect(money[1]!.value).not.toMatch(/\$|0\.00/);
+    expect(money[1]!.value).toContain('€12');
+    expect(money[2]!.value).not.toMatch(/\$|0\.00/);
   });
 
   it('labels the exact composed period, not the time it was opened', async () => {

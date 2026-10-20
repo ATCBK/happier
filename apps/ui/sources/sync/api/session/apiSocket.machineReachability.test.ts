@@ -21,6 +21,21 @@ afterEach(() => { apiSocket.disconnect(); owner.clearMachineRequestReachabilityF
 afterAll(() => boundary.dispose());
 
 describe('Machine reachability through the authenticated socket ingress', () => {
+    it('keeps a request-scoped Forbidden response from poisoning Machine reachability through the real scoped RPC owner', async () => {
+        const { machineRpcWithServerScope } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc');
+        const { RPC_ERROR_CODES, RPC_METHODS } = await import('@happier-dev/protocol/rpc');
+        const scope = { serverId: home.id, accountId: 'account-a' };
+        boundary.setRpcAckResponder(async request => request.method === RPC_METHODS.CAPABILITIES_DESCRIBE
+            ? { ok: false, error: 'Forbidden', errorCode: RPC_ERROR_CODES.FORBIDDEN }
+            : { ok: true, result: { available: true } });
+        const call = (method: string) => machineRpcWithServerScope({ ...scope, machineId: 'machine', method,
+            payload: {}, preferScoped: true, onIssued: () => {} });
+        await expect(call(RPC_METHODS.CAPABILITIES_DESCRIBE)).rejects.toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.FORBIDDEN });
+        expect(owner.readMachineRequestReachabilityObservation(scope, 'machine')).toBeNull();
+        expect(owner.isMachineReachable(scope, { id: 'machine', active: true })).toBe(true);
+        await expect(call(RPC_METHODS.DAEMON_MEMORY_STATUS)).resolves.toEqual({ available: true });
+        expect(owner.readMachineRequestReachabilityObservation(scope, 'machine')?.outcome).toBe('succeeded');
+    });
     it('preserves heartbeat failures and heals only the re-established socket Home and Account', () => {
         const socket = boundary.socketBoundaries.at(-1)!;
         const scope = { serverId: home.id, accountId: 'account-a' };

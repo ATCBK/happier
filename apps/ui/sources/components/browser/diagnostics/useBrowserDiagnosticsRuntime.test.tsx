@@ -1,5 +1,6 @@
 import type { BrowserDiagnosticEventV1, BrowserDiagnosticsSnapshotV1 } from '@happier-dev/protocol';
 import { act } from 'react-test-renderer';
+import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
@@ -12,7 +13,36 @@ import type { BrowserControlViewState } from '@/sync/domains/browser/control';
 import { selectBrowserDiagnosticsForView } from '@/sync/domains/browser/diagnostics/store';
 import type { BrowserDiagnosticsSnapshotClientResult } from '@/sync/domains/browser/diagnostics/machineRpc';
 
-import { useBrowserDiagnosticsRuntime } from './useBrowserDiagnosticsRuntime';
+import { useBrowserDiagnosticsRuntime as useRuntime, type UseBrowserDiagnosticsRuntimeInput } from './useBrowserDiagnosticsRuntime';
+import { createActionExecutor } from '@happier-dev/protocol';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit';
+import { createDefaultRuntimeActionExecutor } from '@/sync/ops/actions/defaultRuntimeActionExecutor';
+import { clearBrowserRuntimeControlRegistryForTests, registerBrowserRuntimeControlAdapter } from '@/sync/domains/browser/actions/runtimeControlRegistry';
+import { createBrowserControlState } from '@/sync/domains/browser/control/reducer';
+import { handleUiBrowserAutomationDispatchRequest } from '@/sync/domains/browser/automation/reverseDispatchHandler';
+import { loadBrowserDaemonRuntimeForTests } from '@/dev/testkit/harness/browserDaemonRuntime';
+import { BrowserDiagnosticsEvalResultV1Schema, BrowserDiagnosticsElementPickerResultV1Schema, FeaturesResponseSchema } from '@happier-dev/protocol';
+import { uiBrowserAutomationDispatchMethod } from '@happier-dev/protocol/browser/automation/reverseDispatchV1';
+
+// Keep all hook tests on real admission and default mounted-owner composition. Only the
+// network snapshot transport above and the engine callbacks supplied by each test are boundaries.
+const executor = createActionExecutor(createActionExecutorBoundaryFixture({ runtimeActionExecute: createDefaultRuntimeActionExecutor() }));
+function useBrowserDiagnosticsRuntime(input: UseBrowserDiagnosticsRuntimeInput) {
+    const runtime = useRuntime({ ...input, actionExecute: input.actionExecute ?? executor.execute,
+        actionContext: { surface: 'ui', authority: 'present_user', bypassApprovals: true, ...input.actionContext } });
+    const current = React.useRef(input.view);
+    current.current = input.view;
+    React.useEffect(() => {
+        const view = current.current;
+        if (!view) return;
+        return registerBrowserRuntimeControlAdapter({ browserSessionId: view.browserSessionId,
+            control: { readState: () => ({ ...createBrowserControlState(), viewsById: current.current ? { [current.current.viewId]: current.current } : {} }),
+                applyDispatchResult: () => {} },
+            ...(runtime?.runtimeAdapter ? { diagnostics: runtime.runtimeAdapter } : {}),
+        });
+    }, [input.view?.browserSessionId, runtime?.runtimeAdapter]);
+    return runtime;
+}
 
 // The RPC adapter is the network boundary; deterministic snapshot/store/collector logic stays real.
 vi.mock('@/sync/domains/browser/diagnostics/machineRpc', () => ({
@@ -22,6 +52,7 @@ vi.mock('@/sync/domains/browser/diagnostics/machineRpc', () => ({
 afterEach(() => {
     standardCleanup();
     vi.unstubAllGlobals();
+    clearBrowserRuntimeControlRegistryForTests();
 });
 
 function stubCryptoRandomUuid(): void {
@@ -163,6 +194,171 @@ function createDaemonDiagnosticsSnapshot(
 }
 
 describe('useBrowserDiagnosticsRuntime', () => {
+    it('retains an Ask-first console invocation until approval and receives the actual mounted engine result', async () => {
+        stubCryptoRandomUuid();
+        const decision = createDeferred<void>();
+        let waitingForDecision = false;
+        const lifetime = new AbortController();
+        const retained = createActionExecutor(createActionExecutorBoundaryFixture({
+            runtimeActionExecute: createDefaultRuntimeActionExecutor(),
+            hostActionApprovalLifetime: { actionId: 'browser.diagnostics.eval', surface: 'ui', signal: lifetime.signal },
+            isActionApprovalRequired: () => true,
+            isApprovalExecutionOriginCurrent: async () => true,
+            approvalsCreate: async () => ({ artifactId: 'diagnostics_approval' }),
+            approvalsUpdate: async () => ({ ok: true }),
+            approvalsWaitForDecision: async ({ request }) => {
+                waitingForDecision = true;
+                await decision.promise;
+                return { decision: 'approve' as const, request, decisionAuthority: 'present_user' as const };
+            },
+        }));
+        const view = createLocalPreviewView({ engineKind: 'nativeWebView' });
+        const hook = await renderHook(() => useBrowserDiagnosticsRuntime({ view, enabled: true, actionExecute: retained.execute,
+            actionContext: { surface: 'ui', authority: 'present_user', bypassApprovals: false,
+                serverId: 'home_1', defaultSessionId: 'session_1', actionRequestId: 'diagnostics_ask', signal: lifetime.signal } }));
+        await act(async () => hook.getCurrent()?.interaction?.onEnableInteraction?.());
+        await act(async () => { hook.getCurrent()?.requestEval({ expression: 'document.title' }); });
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        expect(waitingForDecision).toBe(true);
+        expect(hook.getCurrent()?.bridge?.evalRequest).toBeUndefined();
+        expect(hook.getCurrent()?.interaction?.evalConsole?.entries).toEqual([]);
+        await act(async () => decision.resolve());
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        const request = hook.getCurrent()?.bridge?.evalRequest;
+        expect(request, JSON.stringify(hook.getCurrent()?.interaction?.evalConsole?.entries)).toMatchObject({ expression: 'document.title' });
+        await act(async () => hook.getCurrent()?.bridge?.onEvalResult?.(BrowserDiagnosticsEvalResultV1Schema.parse({
+            v: 1, evalRequestId: request!.evalRequestId, viewId: view.viewId, navigationGeneration: view.navigationGeneration,
+            tier: 'injectedPage', audited: true, status: 'completed', result: { type: 'string', value: 'approved mounted page' },
+        })));
+        expect(hook.getCurrent()?.interaction?.evalConsole?.entries).toMatchObject([{ status: 'completed', result: { value: 'approved mounted page' } }]);
+    });
+    it('keeps disabled Actions away from the engine and settles console/property presentation', async () => {
+        stubCryptoRandomUuid();
+        const denied = createActionExecutor(createActionExecutorBoundaryFixture({
+            runtimeActionExecute: createDefaultRuntimeActionExecutor(), isActionEnabled: () => false,
+        }));
+        const view = createLocalPreviewView({ engineKind: 'nativeWebView' });
+        const hook = await renderHook(() => useBrowserDiagnosticsRuntime({ view, enabled: true, actionExecute: denied.execute }));
+        await act(async () => hook.getCurrent()?.interaction?.onEnableInteraction?.());
+        await act(async () => {
+            hook.getCurrent()?.requestEval({ expression: 'document.title' });
+            hook.getCurrent()?.interaction?.evalConsole?.onExpandObject('object_1', 'group_1');
+            hook.getCurrent()?.interaction?.onStartElementPicker?.();
+        });
+        expect(hook.getCurrent()?.bridge?.evalRequest).toBeUndefined();
+        expect(hook.getCurrent()?.bridge?.getPropertiesRequest).toBeUndefined();
+        expect(hook.getCurrent()?.bridge?.elementPickerRequest).toBeUndefined();
+        expect(hook.getCurrent()?.interaction?.evalConsole?.entries).toMatchObject([{ status: 'blocked' }]);
+        expect(hook.getCurrent()?.interaction?.evalConsole?.objectProperties.object_1).toMatchObject({ status: 'failed' });
+        expect(hook.getCurrent()?.interaction?.pickerState).toBe('idle');
+    });
+
+    it('delivers concurrent console requests in order and ignores late results after navigation', async () => {
+        stubCryptoRandomUuid();
+        const view = createLocalPreviewView({ engineKind: 'nativeWebView' });
+        const hook = await renderHook(({ currentView }: { currentView: BrowserControlViewState }) =>
+            useBrowserDiagnosticsRuntime({ view: currentView, enabled: true }), { initialProps: { currentView: view } });
+        await act(async () => hook.getCurrent()?.interaction?.onEnableInteraction?.());
+        await act(async () => {
+            hook.getCurrent()?.requestEval({ expression: 'first()' });
+            hook.getCurrent()?.requestEval({ expression: 'second()' });
+        });
+        const firstBridge = hook.getCurrent()!.bridge!;
+        expect(firstBridge.evalRequest?.expression).toBe('first()');
+        const result = BrowserDiagnosticsEvalResultV1Schema.parse({ v: 1, evalRequestId: firstBridge.evalRequest!.evalRequestId,
+            viewId: view.viewId, navigationGeneration: view.navigationGeneration, tier: 'injectedPage', audited: true,
+            status: 'completed', result: { type: 'number', value: 1 } });
+        await act(async () => firstBridge.onEvalResult?.(result));
+        expect(hook.getCurrent()?.bridge?.evalRequest?.expression).toBe('second()');
+        await hook.rerender({ currentView: { ...view, navigationGeneration: view.navigationGeneration + 1 } });
+        await act(async () => firstBridge.onEvalResult?.(result));
+        expect(hook.getCurrent()?.bridge?.evalRequest).toBeUndefined();
+        expect(hook.getCurrent()?.interaction?.state).toBe('disabled');
+        await act(async () => hook.getCurrent()?.interaction?.onEnableInteraction?.());
+        expect(hook.getCurrent()?.interaction?.evalConsole?.entries).toEqual([]);
+    });
+    it.each(['nativeWebView', 'desktopWebView'] as const)('routes admitted Agent diagnostics to the exact mounted %s engine and returns its strict results', async engineKind => {
+        stubCryptoRandomUuid();
+        const view = createLocalPreviewView({ engineKind, adapterKind: 'externalUrl' });
+        const otherView = createLocalPreviewView({ engineKind, adapterKind: 'externalUrl', viewId: 'other_view' });
+        const mounted = await renderHook(() => useBrowserDiagnosticsRuntime({ view, enabled: true }));
+        const other = await renderHook(() => useBrowserDiagnosticsRuntime({ view: otherView, enabled: true }));
+        await act(async () => mounted.getCurrent()?.interaction?.onEnableInteraction?.());
+        await act(async () => other.getCurrent()?.interaction?.onEnableInteraction?.());
+        const boundView = { browserSessionId: view.browserSessionId, viewId: view.viewId, sessionId: 'invoking_session' };
+        const answeringViews = new Map([
+            [uiBrowserAutomationDispatchMethod(view), boundView],
+            [uiBrowserAutomationDispatchMethod(otherView), { ...boundView, viewId: otherView.viewId }],
+        ]);
+        const { createDaemonRuntimeActionExecutor, createBrowserAutomationReverseDispatcher } = await loadBrowserDaemonRuntimeForTests();
+        const runtimeActionExecute = createDaemonRuntimeActionExecutor({ env: { NODE_ENV: 'test' },
+            resolveRouteOwners: () => ({ browserUiAutomation: { ownsAutomationView: () => false,
+                uiAutomation: createBrowserAutomationReverseDispatcher({ getMachineClient: () => ({
+                    hasConnectedClientRpcHandler: method => answeringViews.has(method),
+                    callConnectedClientRpc: async (method, payload, options) => {
+                        const answeringView = answeringViews.get(method);
+                        if (!answeringView) throw new Error('No mounted view owns the addressed reverse RPC room');
+                        options?.onIssued?.();
+                        return { ok: true, result: await handleUiBrowserAutomationDispatchRequest(payload, answeringView, { signal: options?.signal }) };
+                    },
+                }) }),
+            } }),
+            resolveServerFeaturesSnapshot: () => ({ status: 'ready', features: FeaturesResponseSchema.parse({ features: {
+                browser: { enabled: true, diagnostics: { enabled: true }, viewTargets: { enabled: true }, internal: { enabled: true }, sidecar: { enabled: true } },
+            } }) }),
+        });
+        const agent = createActionExecutor(createActionExecutorBoundaryFixture({ runtimeActionExecute }));
+        const context = { surface: 'agent', authority: 'account_automation', defaultSessionId: boundView.sessionId, bypassApprovals: true,
+            externalActionTarget: { kind: 'machine', machineId: 'machine_1' } } as const;
+        const input = { v: 1, browserSessionId: view.browserSessionId, viewId: view.viewId, navigationGeneration: view.navigationGeneration,
+            tier: 'injectedPage', diagnosticsInteractionEnabled: true, evalRequestId: 'agent_eval', expression: 'document.title', objectGroupId: 'agent_group' };
+        let evalResult!: ReturnType<typeof agent.execute>;
+        await act(async () => { evalResult = agent.execute('browser.diagnostics.eval', input, context); });
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        expect(mounted.getCurrent()?.bridge?.evalRequest).toMatchObject({ evalRequestId: 'agent_eval', expression: 'document.title' });
+        expect(other.getCurrent()?.bridge?.evalRequest).toBeUndefined();
+        const result = BrowserDiagnosticsEvalResultV1Schema.parse({ v: 1, evalRequestId: 'agent_eval', viewId: view.viewId,
+            navigationGeneration: view.navigationGeneration, tier: 'injectedPage', audited: true, status: 'completed', result: { type: 'string', value: 'mounted page' } });
+        await act(async () => mounted.getCurrent()?.bridge?.onEvalResult?.(result));
+        // Explicit, admitted eval results retain the sidecar Action contract. Passive diagnostic
+        // events separately use their destination-aware owner-only field classifier.
+        expect(await evalResult).toMatchObject({ ok: true, result });
+        expect(mounted.getCurrent()?.interaction?.evalConsole?.entries[0]?.result).toEqual(result.result);
+        const pickerInput = { v: 1, browserSessionId: view.browserSessionId, viewId: view.viewId, navigationGeneration: view.navigationGeneration,
+            tier: 'injectedPage', diagnosticsInteractionEnabled: true, pickerRequestId: 'agent_picker', action: 'start' };
+        let pickerResult!: ReturnType<typeof agent.execute>;
+        await act(async () => { pickerResult = agent.execute('browser.diagnostics.elementPicker.start', pickerInput, context); });
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        expect(mounted.getCurrent()?.bridge?.elementPickerRequest).toMatchObject({ pickerRequestId: 'agent_picker', action: 'start' });
+        expect(other.getCurrent()?.bridge?.elementPickerRequest).toBeUndefined();
+        const picked = BrowserDiagnosticsElementPickerResultV1Schema.parse({ v: 1, pickerRequestId: 'agent_picker', viewId: view.viewId,
+            navigationGeneration: view.navigationGeneration, tier: 'injectedPage', audited: true, status: 'selected', selectorPath: '#mounted' });
+        await act(async () => mounted.getCurrent()?.bridge?.onElementPickerResult?.(picked));
+        expect(await pickerResult).toMatchObject({ ok: true, result: picked });
+        expect(await agent.execute('browser.diagnostics.eval', input, { ...context, defaultSessionId: 'wrong_session' })).toMatchObject({ ok: false });
+        await mounted.unmount();
+        expect(await agent.execute('browser.diagnostics.eval', input, context)).toMatchObject({ ok: false });
+    });
+    it('admits mounted console and picker UI through the real Action executor and default runtime composition', async () => {
+        stubCryptoRandomUuid();
+        const execute = createDefaultRuntimeActionExecutor();
+        const admitted: string[] = [];
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+            runtimeActionExecute: async args => { admitted.push(args.actionId); return execute(args); },
+        }));
+        const hook = await renderHook(() => useBrowserDiagnosticsRuntime({
+            view: createLocalPreviewView({ engineKind: 'nativeWebView' }), enabled: true,
+            actionExecute: executor.execute,
+            actionContext: { surface: 'ui', authority: 'present_user', bypassApprovals: true },
+        }));
+        await act(async () => hook.getCurrent()?.interaction?.onEnableInteraction?.());
+        await act(async () => { hook.getCurrent()?.requestEval({ expression: 'document.title' }); });
+        expect(admitted).toEqual(['browser.diagnostics.eval']);
+        expect(hook.getCurrent()?.bridge?.evalRequest).toMatchObject({ expression: 'document.title', viewId: 'view_1' });
+        await act(async () => hook.getCurrent()?.interaction?.onStartElementPicker?.());
+        expect(admitted).toEqual(['browser.diagnostics.eval', 'browser.diagnostics.elementPicker.start']);
+        expect(hook.getCurrent()?.bridge?.elementPickerRequest).toMatchObject({ action: 'start', viewId: 'view_1' });
+    });
     it('collects event updates without re-rendering the producer host after availability is established', async () => {
         stubCryptoRandomUuid();
         const view = createLocalPreviewView({ engineKind: 'nativeWebView' });
@@ -318,6 +514,30 @@ describe('useBrowserDiagnosticsRuntime', () => {
             fidelity: 'injectedPage',
             trusted: false,
         }));
+    });
+
+    it('drops the previous document\'s events when the view moves to a new navigation generation, and ignores its late stragglers', async () => {
+        stubCryptoRandomUuid();
+        const view = createLocalPreviewView({ engineKind: 'nativeWebView' });
+        const hook = await renderHook(({ currentView }: { currentView: BrowserControlViewState }) =>
+            useBrowserDiagnosticsRuntime({ view: currentView, enabled: true }), { initialProps: { currentView: view } });
+        const bridge = hook.getCurrent()!.bridge!;
+        const consoleEvent = (generation: number, eventId: string): BrowserDiagnosticEventV1 => ({
+            v: 1, eventId, browserSessionId: bridge.browserSessionId, viewId: bridge.viewId, navigationGeneration: generation, capturedAtMs: 2_000,
+            family: 'console', kind: 'console.entry', fidelity: 'injectedPage', trusted: false,
+            collector: { collectorId: bridge.collectorId, nonce: bridge.nonce, version: bridge.collectorVersion },
+            data: { level: 'info', argCount: 1, textAvailable: true },
+            redaction: { level: 'metadataOnly', queryRedacted: true, headersRedacted: true, truncated: false },
+        });
+        const eventCount = () => selectBrowserDiagnosticsForView(hook.getCurrent()!.state, { browserSessionId: view.browserSessionId, viewId: view.viewId }).eventCount;
+        await act(async () => bridge.onEvents([consoleEvent(7, 'evt_old_1'), consoleEvent(7, 'evt_old_2')]));
+        expect(eventCount()).toBe(2);
+
+        // An external page carries no collector, so nothing ever replaces the old events; the drawer must not keep counting them.
+        await hook.rerender({ currentView: { ...view, adapterKind: 'externalUrl', engineKind: 'webIframe', navigationGeneration: 8, currentUrl: 'https://example.com/' } });
+        expect(eventCount()).toBe(0);
+        await act(async () => bridge.onEvents([consoleEvent(7, 'evt_late')]));
+        expect(eventCount()).toBe(0);
     });
 
     it('does not create a fake injected bridge for local-preview web iframes but still ingests daemon snapshots', async () => {

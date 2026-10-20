@@ -436,7 +436,7 @@ describe("automationClaimService (integration)", () => {
         }))).toMatchObject({ run: { id: run.id, attempt: 2, workflowAcceptedSnapshotEnvelope: currentEnvelope } });
     });
 
-    it("claims a direct Workflow Run without an Automation relation", async () => {
+    it("claims and reclaims a direct Workflow Run without an Automation relation", async () => {
         const machineId = "machine-direct-workflow-claim";
         const { accountId } = await createAccountWithMachine(machineId, "plain");
         const runId = randomUUID();
@@ -511,6 +511,34 @@ describe("automationClaimService (integration)", () => {
             },
             automation: null,
         });
+        const initialLease = await db.automationRun.findUniqueOrThrow({ where: { id: runId }, select: { leaseExpiresAt: true } });
+        expect(claimed.run).toHaveProperty("leaseExpiresAt", initialLease.leaseExpiresAt!.getTime());
+
+        // A daemon/storage interruption keeps the same direct Run available
+        // to the existing lease owner, even with no Automation assignment row.
+        await db.automationRun.update({
+            where: { id: runId },
+            data: { leaseExpiresAt: new Date(Date.now() - 1_000) },
+        });
+        const reclaimed = toAutomationV3WorkerClaimResponse(await claimAutomationRun({
+            accountId,
+            machineId,
+            leaseDurationMs: 30_000,
+            recipeFeaturePolicy: { workflowsEnabled: true },
+        }));
+        expect(reclaimed).toMatchObject({
+            run: {
+                id: runId,
+                automationId: null,
+                origin: { kind: "direct" },
+                workflowAcceptedSnapshotEnvelope: acceptedSnapshotEnvelope,
+                attempt: 2,
+                revision: 2,
+            },
+            automation: null,
+        });
+        const reclaimedLease = await db.automationRun.findUniqueOrThrow({ where: { id: runId }, select: { leaseExpiresAt: true } });
+        expect(reclaimed.run).toHaveProperty("leaseExpiresAt", reclaimedLease.leaseExpiresAt!.getTime());
     });
 
     async function createLeasedRetirementRun(params: Readonly<{
@@ -931,6 +959,7 @@ describe("automationClaimService (integration)", () => {
             where: { id: claimedRunId },
             select: { attempt: true, revision: true, leaseExpiresAt: true },
         });
+        expect(firstResponse.run).toHaveProperty("leaseExpiresAt", claimedBeforeReplay!.leaseExpiresAt!.getTime());
         const responseLossReplay = await claimAutomationRun({
             accountId,
             machineId,
@@ -943,12 +972,14 @@ describe("automationClaimService (integration)", () => {
         expect(toAutomationV3WorkerClaimResponse(responseLossReplay).run).toMatchObject({
             id: claimedRunId,
             attempt: claimedBeforeReplay!.attempt,
+            leaseExpiresAt: claimedBeforeReplay!.leaseExpiresAt!.getTime(),
         });
         await db.automationRun.update({
             where: { id: claimedRunId },
             data: {
                 state: "running",
                 startedAt: new Date(),
+                leaseExpiresAt: new Date(claimedBeforeReplay!.leaseExpiresAt!.getTime() + 30_000),
                 revision: { increment: 1 },
             },
         });
@@ -968,6 +999,7 @@ describe("automationClaimService (integration)", () => {
             select: { attempt: true, revision: true, leaseExpiresAt: true },
         })).resolves.toEqual({
             ...claimedBeforeReplay,
+            leaseExpiresAt: new Date(claimedBeforeReplay!.leaseExpiresAt!.getTime() + 30_000),
             revision: claimedBeforeReplay!.revision + 1,
         });
         expect([firstRun.id, secondRun.id]).toContain(claimedRunId);

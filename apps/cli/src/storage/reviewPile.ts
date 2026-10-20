@@ -34,14 +34,44 @@ export function storageSizeFromMeasurement(value: NativeDiskMeasurement['perPath
         sharedExtentsUnmeasured: value.sharedExtentsUnmeasured, atLeast: value.atLeast,
         ...(value.freesUpToBytes === undefined ? {} : { freesUpToBytes: value.freesUpToBytes }) };
 }
-export type PileChildFact = Readonly<{ ref: PileItemRefV1; item: StorageCategoryItem; ownFingerprint?: string }>;
-type PileExpectFacts = Readonly<{ ref: PileItemRefV1; ownFingerprint?: string; children: readonly PileChildFact[] }>;
-export function pileFactsExpect(facts: PileExpectFacts, completedChildren: ReadonlySet<string> = new Set()): string {
+type PileClassification = Awaited<ReturnType<PileReviewDeps['classify']>>;
+export type PileChildFact = Readonly<{ ref: PileItemRefV1; item: StorageCategoryItem; ownFingerprint?: string; ownVerdict: PileClassification }>;
+type PileExpectFacts = Readonly<{ ref: PileItemRefV1; item: StorageCleanupItem; ownFingerprint?: string; ownVerdict: PileClassification;
+    ownClassification: PileClassification; children: readonly PileChildFact[] }>;
+function intrinsicItem<T extends StorageCleanupItem>(item: T): T {
+    return item.ownVerdict ? { ...item, ...item.ownVerdict, loses: item.ownVerdict.loses } : item;
+}
+export function pileFactsExpect(facts: PileExpectFacts, completedChildren: ReadonlySet<string> = new Set(),
+    reviewedFacts: Pick<PileExpectFacts, 'children' | 'ownVerdict' | 'ownClassification'> = facts): string {
     const identity = (ref: PileItemRefV1) => [ref.itemId, ref.path, ref.identity.dev, ref.identity.ino ?? ref.identity.fileId, ref.identity.kind];
+    const completedPaths = reviewedFacts.children.filter(child => completedChildren.has(child.ref.itemId)).map(child => child.ref.path);
+    // Keep's primary reason is a presentation choice from the complete loss set.
+    // Reordering unchanged holders must not invalidate their reviewed identities.
+    const reasons = (classification: PileClassification) => classification.loses?.length ? classification.loses : [classification.reason];
+    const completedReasons = new Set(reasons(reviewedFacts.ownClassification).filter(reason => {
+        const path = reason.detail?.path;
+        return typeof path === 'string' && completedPaths.some(completed => pilePathContains(completed, path));
+    }).map(reason => JSON.stringify(reason)));
+    const verdict = (own: PileClassification, classified: PileClassification, expectedOwn = own) => {
+        const ownReasons = new Set(reasons(own).map(reason => JSON.stringify(reason)));
+        // Physical classification includes descendant holders too. Retire only the
+        // exact contribution of children this apply successfully moved, retaining
+        // the intrinsic verdict and every other current loss/holder fact.
+        const extraReasons = reasons(classified).map(reason => JSON.stringify(reason))
+            .filter(reason => !completedReasons.has(reason) && !ownReasons.has(reason));
+        return [expectedOwn.verdict, [...new Set(reasons(expectedOwn).map(reason => JSON.stringify(reason)))].sort(), [...new Set(extraReasons)].sort()];
+    };
+    // Moving our owned children can turn the generic unknown-content fallback
+    // into an empty container. Only that owner-derived change is expected; a
+    // reviewed protection/loss classification disappearing must still go stale.
+    const ownVerdict = completedPaths.length && reviewedFacts.ownVerdict.verdict === 'caution'
+        && reviewedFacts.ownVerdict.reason.code === 'not_rebuildable' && !reviewedFacts.ownVerdict.loses?.length
+        && facts.ownVerdict.verdict === 'safe' && facts.item.evidence.includes('empty_folder_relisted')
+        ? reviewedFacts.ownVerdict : facts.ownVerdict;
     return createHash('sha256').update(JSON.stringify([
-        identity(facts.ref), facts.ownFingerprint ?? null,
+        identity(facts.ref), facts.ownFingerprint ?? null, verdict(facts.ownVerdict, facts.ownClassification, ownVerdict),
         facts.children.filter(child => !completedChildren.has(child.ref.itemId))
-            .map(child => [identity(child.ref), child.ownFingerprint ?? null, child.item.verdict, child.item.reason])
+            .map(child => [identity(child.ref), child.ownFingerprint ?? null, verdict(child.ownVerdict, child.item)])
             .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
     ])).digest('hex');
 }
@@ -62,7 +92,8 @@ export async function readPileFacts(ref: PileItemRefV1, deps: PileReviewDeps) {
             throw new PileFactError('facts_unavailable', resolved.item.reason.code === 'unsupported' ? resolved.item.reason : undefined);
         const canonicalPath = await physicalPathWithoutFollowingLeaf(resolve(resolved.item.path));
         if (!canonicalAbsolutePathsEqual(path, canonicalPath) || resolved.item.itemId !== ref.itemId) throw new PileFactError('changed_since_review');
-        const ownClassification = await current.classify(path, resolved.item);
+        const ownVerdict = intrinsicItem(resolved.item);
+        const ownClassification = await current.classify(path, ownVerdict);
         const freshRef: PileItemRefV1 = { ...ref, path, title: resolved.item.title, identity: { ...identity, ...(resolved.fingerprint ? { fingerprint: resolved.fingerprint } : {}) } };
         const children: PileChildFact[] = [];
         for (const item of resolved.retirementChildren ?? []) {
@@ -71,9 +102,10 @@ export async function readPileFacts(ref: PileItemRefV1, deps: PileReviewDeps) {
             const childIdentity = await readStoragePathIdentity(childPath);
             const childFingerprint = item.ownFingerprint ?? item.fingerprint;
             if (item.fingerprintRequired && !childFingerprint) throw new PileFactError('facts_unavailable');
-            const classification = await current.classify(childPath, item);
+            const ownItem = intrinsicItem(item);
+            const classification = await current.classify(childPath, ownItem);
             children.push({ item: { ...item, ...classification,
-                loses: classification.loses ? [...classification.loses] : item.loses }, ownFingerprint: childFingerprint,
+                loses: classification.loses ? [...classification.loses] : ownItem.loses }, ownFingerprint: childFingerprint, ownVerdict: ownItem,
                 ref: { itemId: item.itemId, path: childPath, title: item.title, identity: childIdentity, collectedAt: ref.collectedAt, collectedBy: ref.collectedBy } });
         }
         const classification = foldStorageDescendantVerdicts({ ...ownClassification, collectable: resolved.item.collectable,
@@ -82,7 +114,7 @@ export async function readPileFacts(ref: PileItemRefV1, deps: PileReviewDeps) {
             const limitation = await current.cleanupLimitation?.(path, [resolved.item, ...children.map(child => child.item)]);
             if (limitation) throw new PileFactError('facts_unavailable', limitation);
         }
-        const facts = { ref: freshRef, item: resolved.item, identity, classification, ownFingerprint, children };
+        const facts = { ref: freshRef, item: resolved.item, identity, classification, ownVerdict, ownClassification, ownFingerprint, children };
         return { ...facts, expect: pileFactsExpect(facts) };
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new PileFactError('missing');

@@ -52,7 +52,7 @@ describe('Work conversation voice source', () => {
     const hook = await renderHook(() => useBundledConversationProviderSettings(voice));
     const choice = hook.getCurrent().sessionChoice;
     expect(choice).toMatchObject({ providerId: 'happier.voice.builtin/local-neural',
-      providerTitleKey: 'settingsVoice.local.localNeuralTts.title', config: { voiceId: 'af_heart' },
+      providerTitleKey: 'settingsVoice.local.localNeuralTts.provider.title', config: { voiceId: 'af_heart' },
       declaration: { kind: 'speech', catalogs: [{ kind: 'voices', settingFieldId: 'voiceId' }] } });
     expect(readLocalConversationVoiceSettings(voice)).toEqual({ ...cfg, tts: { ...cfg.tts, provider: 'local_neural',
       localNeural: { ...cfg.tts.localNeural, voiceId: 'af_heart', speed: 1.2 } } });

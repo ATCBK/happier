@@ -50,6 +50,7 @@ const renderSurface = createTriageSourceSettingsSurface({
   pluginId: PLUGIN_ID,
   listInstancesLocalActionId: LIST_INSTANCES_LOCAL_ACTION_ID,
   connectedAccountServiceLocalId: CONNECTED_ACCOUNT_SERVICE_LOCAL_ID,
+  connectedAccountPurpose: PURPOSE,
   sourceDisplayName: SOURCE_DISPLAY_NAME,
 });
 
@@ -230,7 +231,7 @@ describe('the mounted PRs & Issues source settings page', () => {
     const nativeDraft = { v: 1, binding: nativeBinding, localInstanceKey: 'native-scope', keyStability: 'stable', configuration: { v: 1, token: 'scope:native' }, locator: { v: 1, displayLabel: 'local-user' } };
     const surface = createTriageSourceSettingsSurface({
       pluginId: PLUGIN_ID, listInstancesLocalActionId: LIST_INSTANCES_LOCAL_ACTION_ID,
-      connectedAccountServiceLocalId: CONNECTED_ACCOUNT_SERVICE_LOCAL_ID, sourceDisplayName: SOURCE_DISPLAY_NAME,
+      connectedAccountServiceLocalId: CONNECTED_ACCOUNT_SERVICE_LOCAL_ID, connectedAccountPurpose: PURPOSE, sourceDisplayName: SOURCE_DISPLAY_NAME,
       nativeLoginLabel: { key: 'example.nativeLogin', fallback: 'Use this machine’s CLI login' },
       nativeAuthenticationFailureLabel: { key: 'example.nativeRepair', fallback: 'Sign in on this machine.' },
     });
@@ -251,6 +252,7 @@ describe('the mounted PRs & Issues source settings page', () => {
 
     expect(harness.connectedAccountsRequests).toEqual([{
       service: { pluginId: PLUGIN_ID, localId: CONNECTED_ACCOUNT_SERVICE_LOCAL_ID },
+      purpose: { consumer: { pluginId: PLUGIN_ID, localId: LIST_INSTANCES_LOCAL_ACTION_ID }, purpose: PURPOSE },
     }]);
   });
 
@@ -265,6 +267,7 @@ describe('the mounted PRs & Issues source settings page', () => {
       pluginId: PLUGIN_ID,
       listInstancesLocalActionId: LIST_INSTANCES_LOCAL_ACTION_ID,
       connectedAccountServiceLocalId: CONNECTED_ACCOUNT_SERVICE_LOCAL_ID,
+      connectedAccountPurpose: PURPOSE,
       sourceDisplayName: SOURCE_DISPLAY_NAME,
       DraftEditor: Editor,
     });
@@ -311,6 +314,7 @@ describe('the mounted PRs & Issues source settings page', () => {
       pluginId: PLUGIN_ID,
       listInstancesLocalActionId: LIST_INSTANCES_LOCAL_ACTION_ID,
       connectedAccountServiceLocalId: CONNECTED_ACCOUNT_SERVICE_LOCAL_ID,
+      connectedAccountPurpose: PURPOSE,
       sourceDisplayName: SOURCE_DISPLAY_NAME,
       DraftEditor: Editor,
     });
@@ -436,12 +440,12 @@ describe('the mounted PRs & Issues source settings page', () => {
   });
 
   it('says a refused read once, in words, and never shows the bare refusal code', async () => {
-    const refusal = () => Promise.reject(Object.assign(new Error('stale_surface'), { code: 'stale_surface' }));
+    const refusal = () => Promise.reject(Object.assign(new Error('unavailable'), { code: 'unavailable' }));
     const harness = createHarness({ discovery: refusal, configured: refusal });
     const page = await mountSettings(harness);
 
     await expect(page.getByText(`${SOURCE_DISPLAY_NAME} could not be read`)).resolves.toBeDefined();
-    await expect(page.queryByText('stale_surface')).resolves.toBeUndefined();
+    await expect(page.queryByText('unavailable')).resolves.toBeUndefined();
     // Both reads failed for one reason; the page says it once, where the rows would be.
     await expect(page.queryByText('What is already configured could not be read')).resolves.toBeUndefined();
   });
@@ -762,6 +766,7 @@ describe('the mounted PRs & Issues source settings page', () => {
       pluginId: PLUGIN_ID,
       listInstancesLocalActionId: LIST_INSTANCES_LOCAL_ACTION_ID,
       connectedAccountServiceLocalId: CONNECTED_ACCOUNT_SERVICE_LOCAL_ID,
+      connectedAccountPurpose: PURPOSE,
       sourceDisplayName: SOURCE_DISPLAY_NAME,
     }, {
       discoveryDeadlineMs: 5,

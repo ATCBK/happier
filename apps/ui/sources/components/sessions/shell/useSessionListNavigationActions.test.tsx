@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { SessionSkillSelectionV1Schema } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -210,7 +211,7 @@ describe('useSessionListNavigationActions', () => {
             acpSessionModeId: 'plan',
             sessionConfigOptionOverrides: { v: 1, updatedAt: 101, overrides: { effort: { updatedAt: 101, value: 'high' } } },
             runtimeDescriptorV1: { v: 1, agentId: 'codex', agent: { backendMode: 'appServer' } },
-            capabilitySelection: { mcp: { v: 1, managedServersEnabled: false, forceIncludeServerIds: ['portable'], forceExcludeServerIds: [] } },
+            capabilitySelection: { skills: SessionSkillSelectionV1Schema.parse({}), mcp: { v: 1, managedServersEnabled: false, forceIncludeServerIds: ['portable'], forceExcludeServerIds: [] } },
             backendNewSessionOptionStateByTargetKey: { 'agent:happier.agent.codex/codex': {
                 connectedServices: { v: 1, bindingsByServiceId: { github: { source: 'connected' } } },
             } },

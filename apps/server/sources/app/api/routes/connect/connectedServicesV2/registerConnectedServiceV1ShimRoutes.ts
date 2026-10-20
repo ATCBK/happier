@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import type { Fastify } from "../../../types";
 import { ConnectedServiceIdSchema, type ConnectedServiceId } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { SealedConnectedServiceCredentialV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
@@ -27,12 +27,12 @@ export function registerConnectedServiceV1ShimRoutes(app: Fastify, params: Reado
       }),
       body: z.object({
         sealed: SealedConnectedServiceCredentialV1Schema,
-        metadata: z.object({
+        metadata: z.optional(z.object({
           kind: z.enum(["oauth", "token"]),
-          providerEmail: z.string().min(1).nullable().optional(),
-          providerAccountId: z.string().min(1).nullable().optional(),
-          expiresAt: z.number().int().nonnegative().nullable().optional(),
-        }).optional(),
+          providerEmail: z.optional(z.nullable(z.string().check(z.minLength(1)))),
+          providerAccountId: z.optional(z.nullable(z.string().check(z.minLength(1)))),
+          expiresAt: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+        })),
       }),
       response: {
         200: z.object({ success: z.literal(true), credentialRevision: z.string() }),
@@ -90,13 +90,13 @@ export function registerConnectedServiceV1ShimRoutes(app: Fastify, params: Reado
       }),
       response: {
         200: z.object({
-          credentialRevision: z.string().optional(),
+          credentialRevision: z.optional(z.string()),
           sealed: SealedConnectedServiceCredentialV1Schema,
           metadata: z.object({
             kind: z.enum(["oauth", "token"]),
-            providerEmail: z.string().nullable().optional(),
-            providerAccountId: z.string().nullable().optional(),
-            expiresAt: z.number().int().nonnegative().nullable().optional(),
+            providerEmail: z.optional(z.nullable(z.string())),
+            providerAccountId: z.optional(z.nullable(z.string())),
+            expiresAt: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
           }),
         }),
         404: z.union([NotFoundSchema, z.object({ error: z.literal("connect_credential_not_found") })]),

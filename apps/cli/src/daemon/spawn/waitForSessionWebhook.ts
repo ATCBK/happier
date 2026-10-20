@@ -5,6 +5,7 @@ import type { TrackedSession } from '../types';
 import type { PersistedTakeoverAdmissionWaitRegistration } from './persistedTakeoverAdmission';
 import { DEFAULT_SESSION_WEBHOOK_TIMEOUT_MS } from '@happier-dev/protocol/sessions/creation/sessionSpawnBudget';
 import { logger } from '@/ui/logger';
+import { formatChildExitBeforeWebhookMessage } from './childStderrDiagnostic';
 
 export { DEFAULT_SESSION_WEBHOOK_TIMEOUT_MS };
 const SESSION_WEBHOOK_TIMEOUT_ENV_KEY = 'HAPPIER_DAEMON_SESSION_WEBHOOK_TIMEOUT_MS';
@@ -130,7 +131,7 @@ export function armSessionWebhookStartupCustody(
       if (!completion.isPending()) return;
       const failure: Extract<SpawnSessionResult, { type: 'error' }> = {
         type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.CHILD_EXITED_BEFORE_WEBHOOK,
-        errorMessage: `Child process exited before session webhook (pid=${completion.getCurrentPid()}, reason=${exit.reason})`,
+        errorMessage: formatChildExitBeforeWebhookMessage({ pid: completion.getCurrentPid(), ...exit }),
       };
       tracked.spawnStartupReadinessFailure ??= failure;
       completion.settleFailure(failure);

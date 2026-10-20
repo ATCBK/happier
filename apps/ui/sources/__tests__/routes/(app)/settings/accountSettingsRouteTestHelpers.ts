@@ -4,7 +4,7 @@ type AccountSettingsRouteModuleFactory = () => unknown | Promise<unknown>;
 type AccountSettingsRouteImportOriginal = <T = unknown>() => Promise<T>;
 type AccountSettingsRouteStorageModuleFactory = (
     importOriginal: AccountSettingsRouteImportOriginal,
-) => unknown | Promise<unknown>;
+) => object | Promise<object>;
 
 type InstallAccountSettingsRouteModuleMocksOptions = Readonly<{
     routerModule?: AccountSettingsRouteModuleFactory;
@@ -70,16 +70,9 @@ export function installAccountSettingsRouteModuleMocks(
         return modalMock.module;
     });
 
-    vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
-        if (accountSettingsRouteModuleState.options.storageModule) {
-            return await accountSettingsRouteModuleState.options.storageModule(
-                importOriginal as AccountSettingsRouteImportOriginal,
-            );
-        }
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleMock({
-            importOriginal,
-            overrides: {},
-        });
-    });
+    if (options.storageModule) {
+        const storageModule = options.storageModule;
+        vi.doMock('@/sync/domains/state/storage', (importOriginal) =>
+            storageModule(importOriginal as AccountSettingsRouteImportOriginal));
+    }
 }

@@ -12,6 +12,8 @@ export type TriageConfiguredActionRunHostV1 = TriageBulkHostV1 & TriageStartHost
 export type TriageConfiguredActionRunRequestV1 = Readonly<{
     actionId: string;
     entries: TriageBulkSessionsRequestV1['entries'];
+    /** Original addressed identities, including unavailable/refused rows, on retained continuation. */
+    selectedEntries?: TriageRunConfiguredActionInputV1['entries'];
     unavailableKeys?: readonly string[];
     destination: 'single' | TriageBulkSessionsRequestV1['destination'];
     settlements?: readonly unknown[];
@@ -45,7 +47,7 @@ export async function runTriageConfiguredActionV1(
     if (options?.signal?.aborted) return { v: 1, status: 'cancelled' };
     if (resolved.status !== 'resolved') return refuse(resolved.reason);
     const action = resolved.action;
-    const selectedEntries = request.entries.map((entry) => ({ entryRef: entry.entryRef, sourceInstanceId: entry.sourceInstance.sourceInstanceId }));
+    const selectedEntries = request.selectedEntries ?? request.entries.map((entry) => ({ entryRef: entry.entryRef, sourceInstanceId: entry.sourceInstance.sourceInstanceId }));
     const recovery = request.resumeStart;
     if (recovery !== undefined) {
         const matchesEntries = recovery.entries.length === selectedEntries.length && recovery.entries.every((retained, index) => {
@@ -60,10 +62,10 @@ export async function runTriageConfiguredActionV1(
                 && triageEntryRowKey(state.input.entryRef) === triageEntryRowKey(selectedEntries[0]!.entryRef)
             : request.destination === state.destination && state.action.actionId === action.actionId;
         if (!matchesEntries || !matchesStart || request.resumeReview !== undefined) {
-            return { v: 1, status: 'unavailable', reason: 'startContinuationMismatch' };
+            return refuse('startContinuationMismatch');
         }
     }
-    if (request.destination === 'single') {
+    if (request.destination === 'single' && recovery === undefined && request.resumeReview === undefined) {
         const entry = request.entries.length === 1 ? request.entries[0] : undefined;
         if (entry === undefined) return refuse('singleEntryRequired');
         if (entry.workflowSubject === null || planTriageOfferedActionsV1([action], entry.workflowSubject).length === 0) {
@@ -85,13 +87,13 @@ export async function runTriageConfiguredActionV1(
     };
     if (request.resumeReview !== undefined) {
         const { result, instructions } = request.resumeReview;
-        const entry = request.entries.length === 1 ? request.entries[0] : undefined;
+        const entry = selectedEntries.length === 1 ? selectedEntries[0] : undefined;
         if (request.destination !== 'single' || action.target.kind !== 'reviewStart'
-            || action.workspaceMode !== 'pull_request' || entry?.workflowSubject !== 'pullRequest'
+            || action.workspaceMode !== 'pull_request' || entry === undefined
             || (result.type !== 'linked' && result.type !== 'opened') || result.review === undefined
             || triageEntryRowKey(result.review.entryRef) !== triageEntryRowKey(entry.entryRef)
-            || result.review.instance.instance.sourceInstanceId !== entry.sourceInstance?.sourceInstanceId) {
-            return { v: 1, status: 'unavailable', reason: 'reviewContinuationMismatch' };
+            || result.review.instance.instance.sourceInstanceId !== entry.sourceInstanceId) {
+            return refuse('reviewContinuationMismatch');
         }
         // Retained facts are input, not authority: the incumbent final Review Action
         // rereads the source/workspace and admits the canonical review.start request.
@@ -99,7 +101,7 @@ export async function runTriageConfiguredActionV1(
     }
     if (request.destination === 'single') {
         const entry = request.entries.length === 1 ? request.entries[0] : undefined;
-        if (entry === undefined) return { v: 1, status: 'unavailable', reason: 'singleEntryRequired' };
+        if (entry === undefined) return refuse('singleEntryRequired');
         const singleHost: TriageStartHostV1 = options?.signal === undefined ? host : {
             ...host,
             executeAction: (id, input, executionOptions) => host.executeAction(id, input, { ...executionOptions, signal: options.signal }),
@@ -130,7 +132,7 @@ export async function runTriageConfiguredActionV1(
     options?.signal?.addEventListener('abort', cancel, { once: true });
     try {
         if (recovery?.state.kind === 'bulk') {
-            if (!owner.restore(recovery.state, request.entries)) return { v: 1, status: 'unavailable', reason: 'startContinuationMismatch' };
+            if (!owner.restore(recovery.state, request.entries)) return refuse('startContinuationMismatch');
             owner.getSnapshot().retry();
         } else owner.getSnapshot().run({ action, entries: request.entries, destination: request.destination, unavailableKeys: request.unavailableKeys,
             settlementForEntries: (entries) => request.settlements?.[
@@ -149,7 +151,7 @@ export async function runTriageConfiguredActionV1(
         if (phase.kind === 'seeded') return { v: 1, status: 'seeded', entries: [...phase.outcomes],
             refusals: phase.refusals.map((refusal) => ({ entryRef: refusal.entry.entryRef, reason: refusal.reason })),
         };
-        if (phase.kind === 'unavailable') return { v: 1, status: 'unavailable', reason: phase.reason };
+        if (phase.kind === 'unavailable') return refuse(phase.reason);
         return { v: 1, status: 'cancelled' };
     } finally {
         options?.signal?.removeEventListener('abort', cancel);

@@ -6,11 +6,12 @@ const modal = vi.hoisted(() => ({ show: vi.fn(() => 'modal-id') }));
 
 vi.mock('@/modal', async () => createModalModuleMock({ spies: { show: modal.show } }).module);
 
+const { openWorkspaceSyncRelationshipDetails } = await import('./openWorkspaceSyncRelationshipDetails');
+
 describe('openWorkspaceSyncRelationshipDetails', () => {
     beforeEach(() => modal.show.mockClear());
 
-    it('leaves scrolling to the existing details view for narrow and large-text layouts', async () => {
-        const { openWorkspaceSyncRelationshipDetails } = await import('./openWorkspaceSyncRelationshipDetails');
+    it('leaves scrolling to the existing details view for narrow and large-text layouts', () => {
         openWorkspaceSyncRelationshipDetails({
             relationshipId: 'relationship-1',
             relationship: {
@@ -25,8 +26,8 @@ describe('openWorkspaceSyncRelationshipDetails', () => {
                 createdAtMs: 1,
                 updatedAtMs: 1,
             },
-            alpha: { workspaceRefId: 'workspace-a', workspaceRef: null, label: 'A', machineName: 'Machine A' },
-            beta: { workspaceRefId: 'workspace-b', workspaceRef: null, label: 'B', machineName: 'Machine B' },
+            alpha: { workspaceRefId: 'workspace-a', workspaceRef: null, label: 'A', name: 'A', machineName: 'Machine A' },
+            beta: { workspaceRefId: 'workspace-b', workspaceRef: null, label: 'B', name: 'B', machineName: 'Machine B' },
             status: null,
         });
 

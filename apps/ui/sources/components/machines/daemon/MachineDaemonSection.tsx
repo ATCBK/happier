@@ -14,6 +14,8 @@ import { t } from '@/text';
 import { tryShowDaemonUnavailableAlertForRpcError } from '@/utils/errors/daemonUnavailableAlert';
 import { useMachinePresenceSummary } from '@/components/sessions/model/useMachinePresenceSummary';
 import { MACHINE_PAGE_ACTION_OUTPUT_SCHEMAS } from '@happier-dev/protocol/actions/specs/machineConnection';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { resolveActionExecutionFailureMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 
 const styles = StyleSheet.create((theme) => ({
     identifier: {
@@ -48,7 +50,11 @@ export const MachineDaemonSection = React.memo(function MachineDaemonSection(pro
             setIsStoppingDaemon(true);
             try {
                 const execution = await stopExecution.execute('machines.daemon.stop', { serverId: machineServerId, machineId });
-                if (!execution.ok) throw new Error(execution.error);
+                if (!execution.ok) {
+                    if (execution.errorCode === 'cancelled' || isActionApprovalDeclinedErrorCode(execution.errorCode)) return;
+                    Modal.alert(t('common.error'), resolveActionExecutionFailureMessage(execution, t('machine.stopDaemonFailed')) ?? t('machine.stopDaemonFailed'));
+                    return;
+                }
                 const result = MACHINE_PAGE_ACTION_OUTPUT_SCHEMAS['machines.daemon.stop'].parse(execution.result);
                 Modal.alert(t('machine.daemonStoppedTitle'), result.message);
                 // Refresh to get updated metadata

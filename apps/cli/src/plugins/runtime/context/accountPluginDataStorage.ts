@@ -1,8 +1,8 @@
 import axios from 'axios';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { randomBytes as nodeRandomBytes } from 'node:crypto';
+import { randomBytes as nodeRandomBytes, randomUUID } from 'node:crypto';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
-import { computePluginUiArtifactSha256DigestV1 } from '@happier-dev/protocol/plugins/ui';
+import { computePluginUiArtifactSha256DigestV1 } from '@happier-dev/protocol/plugins/ui/artifactIntegrity';
 
 import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityCollectionWritersClaimActionOutputV1Schema } from '@happier-dev/protocol/plugins/availability/actions';
 import { convertContentPublicKeyFingerprintToAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
@@ -13,7 +13,7 @@ import { PLUGIN_COLLECTION_CANDIDATE_PREPARATION_RETIRE_HTTP_PATH_V1, PLUGIN_COL
 import { PLUGIN_COLLECTION_LIMITS_V1 } from '@happier-dev/protocol/plugins/data/collectionLimitsV1';
 import { PluginAccountCollectionContributionV1Schema, resolvePluginCollectionMigrationChainV1 } from '@happier-dev/protocol/plugins/data/collectionContributionV1';
 import { PluginCollectionRowIdV1Schema } from '@happier-dev/protocol/plugins/data/collectionUiQueryWireV1';
-import { compilePluginJsonSchema, createPluginJsonSchemaZodValueAdapter } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
+import { compilePluginJsonSchema, createPluginJsonSchemaZodValueAdapter, preparePluginJsonSchema } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { isValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
 import { decodePluginCollectionLogicalRowV1, encodePluginCollectionLogicalValueV1, preparePluginCollectionLogicalMutationRequestV1 } from '@happier-dev/protocol/plugins/data/collectionLogicalCodecV1';
@@ -59,6 +59,7 @@ import { requireAccountSettingsEncryptionCredentials } from '@/settings/accountS
 import { resolveAccountSettingsHttpBaseUrl } from '@/settings/accountSettings/resolveAccountSettingsHttpBaseUrl';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import type { CanonicalPluginManifest } from '@/plugins/manifest/types';
+import { runTracedExternalActionInnerStage, traceExternalActionInnerStage } from '@/daemon/externalActions/externalActionPhase';
 
 import type { StablePluginAccountStorageHost } from './storage';
 import {
@@ -306,6 +307,9 @@ function requestConfig(credentials: StoredCredentials, signal: AbortSignal): Rea
             Authorization: `Bearer ${credentials.token}`,
             'Content-Type': 'application/json',
         },
+        // POST bodies have already passed the owning serializer. Axios's
+        // default string transform would parse the same bytes again.
+        transformRequest: [],
         validateStatus: () => true,
         signal,
     };
@@ -556,7 +560,7 @@ function mergeLogicalRow<TValue extends PluginAccountCollectionValue<PluginAccou
 
 function isLogicalCollectionValue<TValue extends PluginAccountCollectionValue<PluginAccountCollectionDefinition>>(
     validate: ReturnType<typeof compilePluginJsonSchema>,
-    value: Readonly<Record<string, JsonValue>>,
+    value: JsonValue,
 ): value is TValue {
     return isValidPluginJsonSchemaValue(validate, value);
 }
@@ -577,8 +581,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
 } & AccountPluginDataStorageHostDependencies>): AccountPluginDataStorageHost {
     const contractsByPluginAndCollection = new Map<string, {
         contract: NormalizedPluginAccountCollectionContractV1;
-        validate?: BoundCollection['validate'];
-        storedValueSchema?: BoundCollection['storedValueSchema'];
+        prepared?: BoundCollection;
         definitions: WeakMap<PluginAccountCollectionDefinition, BoundCollection>;
     }>();
     for (const contract of params.contracts) {
@@ -623,11 +626,16 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
         occurrenceId: string | undefined;
         accountLifetimeToken: number;
         availabilityChangeKey: string;
+        diagnosticClaimAttemptId?: string;
         result: Promise<PluginError | null>;
     }>;
     const writerClaimsByScope = new Map<string, WriterClaim>();
-    // Admitted manifests are immutable. Hash once per projection, not once per Collection operation.
-    const declarationDigests = new WeakMap<CanonicalPluginManifest, string>();
+    // Admitted manifests are immutable. Prepare their digest and wire bytes
+    // once per projection; retry/currentness state remains with writerClaimsByScope.
+    const preparedDeclarations = new WeakMap<CanonicalPluginManifest, Readonly<{
+        digest: string;
+        encodedClaim: string | null;
+    }>>();
 
     const readKnownCollectionLimits = (): PluginDataCollectionsCapabilities | undefined => {
         try {
@@ -678,7 +686,8 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
         }>> => {
             const signal = signalFor(operationSignal);
             try {
-                const currentness = await resolveAccountEncryptionCurrentness(current, signal);
+                const currentness = await runTracedExternalActionInnerStage('collection.encryption.currentness', () =>
+                    resolveAccountEncryptionCurrentness(current, signal));
                 await assertCurrentAccount(current, operationSignal);
                 if (currentness.mode === 'plain') {
                     return Object.freeze({ mode: 'plain', material: null });
@@ -728,9 +737,13 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
             operationSignal?: AbortSignal;
             parseError: (value: unknown, status: number) => PluginError | null;
             unavailableMessage: string;
+            diagnosticClaimAttemptId?: string;
+            encodedBody?: string | null;
         }>): Promise<unknown> => {
             const signal = signalFor(input.operationSignal);
-            const encodedBody = serializeRequestBody(input.body);
+            const encodedBody = input.encodedBody === undefined
+                ? serializeRequestBody(input.body)
+                : input.encodedBody;
             if (encodedBody === null) {
                 throw dataError(
                     COLLECTION_INVALID_VALUE_CODE,
@@ -739,11 +752,24 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
             }
             await assertCurrentAccount(input.credentials, input.operationSignal);
             try {
-                const response = await http.post(
-                    `${resolveBaseUrl()}${input.path}`,
-                    encodedBody,
-                    requestConfig(input.credentials, signal),
-                );
+                const operation = input.path === COLLECTION_WRITERS_CLAIM_HTTP_PATH ? 'claim'
+                    : input.path === PLUGIN_COLLECTION_GET_HTTP_PATH_V1 ? 'get'
+                    : input.path === PLUGIN_COLLECTION_QUERY_HTTP_PATH_V1 ? 'query'
+                    : input.path === PLUGIN_COLLECTION_MUTATION_HTTP_PATH_V1 ? 'mutation'
+                    : input.path === PLUGIN_COLLECTION_FORGET_HTTP_PATH_V1 ? 'forget'
+                    : 'candidate';
+                const diagnostic: { httpStatus?: number; claimAttemptId?: string } = {
+                    ...(input.diagnosticClaimAttemptId ? { claimAttemptId: input.diagnosticClaimAttemptId } : {}),
+                };
+                const response = await runTracedExternalActionInnerStage(`collection.http.${operation}`, async () => {
+                    const result = await http.post(
+                        `${resolveBaseUrl()}${input.path}`,
+                        encodedBody,
+                        requestConfig(input.credentials, signal),
+                    );
+                    diagnostic.httpStatus = result.status;
+                    return result;
+                }, diagnostic);
                 if (input.kind !== 'mutation') {
                     await assertCurrentAccount(input.credentials, input.operationSignal);
                 }
@@ -782,20 +808,37 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
             const scopeKey = currentAccountScopeKey();
             if (!manifest || scopeKey === null) return;
             const key = `${scopeKey}\u0000${lifecycle.pluginId}`;
-            let declarationDigest = declarationDigests.get(manifest);
-            if (!declarationDigest) {
-                declarationDigest = computePluginUiArtifactSha256DigestV1(new TextEncoder().encode(createCanonicalJsonSigningInput(manifest)));
-                declarationDigests.set(manifest, declarationDigest);
+            let declaration = preparedDeclarations.get(manifest);
+            if (!declaration || declaration.encodedClaim === null) {
+                declaration = Object.freeze({
+                    digest: declaration?.digest
+                        ?? computePluginUiArtifactSha256DigestV1(new TextEncoder().encode(createCanonicalJsonSigningInput(manifest))),
+                    encodedClaim: serializeRequestBody({ manifest }),
+                });
+                preparedDeclarations.set(manifest, declaration);
             }
+            const declarationDigest = declaration.digest;
             const availabilityChangeKey = readPluginAccountAvailabilityChangeKey(scopeKey, lifecycle.pluginId);
             let claim = writerClaimsByScope.get(key);
             if (!claim || claim.declarationDigest !== declarationDigest
                 || claim.occurrenceId !== lifecycle.occurrenceId
                 || claim.accountLifetimeToken !== lifecycle.accountLifetimeToken
                 || claim.availabilityChangeKey !== availabilityChangeKey) {
+                // A background publication can start the promise another Action later awaits.
+                // This diagnostic-only id joins those records without exposing claim inputs.
+                const diagnosticClaimAttemptId = process.env.HAPPIER_WEB_LATENCY_TRACE === '1' ? randomUUID() : undefined;
+                traceExternalActionInnerStage('collection.writer_claim.start', {
+                    ...(diagnosticClaimAttemptId ? { claimAttemptId: diagnosticClaimAttemptId } : {}),
+                    claimAbsent: claim === undefined,
+                    declarationChanged: claim !== undefined && claim.declarationDigest !== declarationDigest,
+                    occurrenceChanged: claim !== undefined && claim.occurrenceId !== lifecycle.occurrenceId,
+                    accountChanged: claim !== undefined && claim.accountLifetimeToken !== lifecycle.accountLifetimeToken,
+                    availabilityChanged: claim !== undefined && claim.availabilityChangeKey !== availabilityChangeKey,
+                });
                 const claimOnce = (prepare?: true) => post({
                     path: COLLECTION_WRITERS_CLAIM_HTTP_PATH,
                     body: { manifest, ...(prepare ? { prepare } : {}) },
+                    ...(prepare ? {} : { encodedBody: declaration.encodedClaim }),
                     credentials,
                     ...(operationSignal ? { operationSignal } : {}),
                     parseError: (value, status) => {
@@ -808,6 +851,7 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                             : null;
                     },
                     unavailableMessage: 'Account Collection writer claim',
+                    ...(diagnosticClaimAttemptId ? { diagnosticClaimAttemptId } : {}),
                 });
                 const result: Promise<PluginError | null> = (async () => {
                     try {
@@ -853,10 +897,13 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                     return null;
                 });
                 claim = { declarationDigest, occurrenceId: lifecycle.occurrenceId,
-                    accountLifetimeToken: lifecycle.accountLifetimeToken, availabilityChangeKey, result };
+                    accountLifetimeToken: lifecycle.accountLifetimeToken, availabilityChangeKey, result,
+                    ...(diagnosticClaimAttemptId ? { diagnosticClaimAttemptId } : {}) };
                 writerClaimsByScope.set(key, claim);
             }
-            const refusal = await claim.result;
+            const retainedClaim = claim;
+            const refusal = await runTracedExternalActionInnerStage('collection.writer_claim.wait', () => retainedClaim.result,
+                retainedClaim.diagnosticClaimAttemptId ? { claimAttemptId: retainedClaim.diagnosticClaimAttemptId } : {});
             await assertBoundCurrent(lifecycle, operationSignal);
             if (refusal) throw refusal;
         };
@@ -1203,7 +1250,16 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                         let targetValue = logical.value;
                         for (const migration of chain) {
                             await assertBoundCurrent(lifecycle);
-                            targetValue = await migration.migrate(targetValue);
+                            try {
+                                targetValue = await migration.migrate(targetValue, Object.freeze({ currentRevision: sourceRow.revision }));
+                            } catch (error) {
+                                await assertBoundCurrent(lifecycle);
+                                if (isPluginError(error)) throw error;
+                                throw dataError(
+                                    COLLECTION_INVALID_VALUE_CODE,
+                                    'Collection candidate migration rejected the retained row',
+                                );
+                            }
                             await assertBoundCurrent(lifecycle);
                         }
 
@@ -1716,10 +1772,15 @@ export function createAccountPluginDataStorageHost(params: Readonly<{
                         // Channels reconciliation enters with a fresh Action
                         // binding on each pass. Preparing at the binding lifetime
                         // recompiles its large static schema on the event loop.
-                        admitted.validate ??= compilePluginJsonSchema(admitted.contract.schema);
-                        admitted.storedValueSchema ??= createStoredReadSchema(createPluginJsonSchemaZodValueAdapter(admitted.contract.schema));
-                        collection = Object.freeze({ contract: admitted.contract, validate: admitted.validate,
-                            storedValueSchema: admitted.storedValueSchema });
+                        if (!admitted.prepared) {
+                            const schema = preparePluginJsonSchema(admitted.contract.schema);
+                            admitted.prepared = Object.freeze({
+                                contract: admitted.contract,
+                                validate: schema.validate,
+                                storedValueSchema: createStoredReadSchema(createPluginJsonSchemaZodValueAdapter(schema.jsonSchema)),
+                            });
+                        }
+                        collection = admitted.prepared;
                         admitted.definitions.set(definition, collection);
                     }
                 } catch {

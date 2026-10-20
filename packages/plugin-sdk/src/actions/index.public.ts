@@ -1,4 +1,9 @@
 export type { ActionContract } from './service.js';
+export type { FilesystemTreeNode } from './actionTypeMap.generated.js';
+export type { BoardItemRefV1 } from './dtos/pluginActionDtoSupport.generated.js';
+export type { SessionTargetV1, SessionTargetSelectorV1, ActionSessionTargetDeclarationV1 } from './dtos/pluginActionDtoSupport.generated.js';
+export type { FollowPolicyV1, FollowEventMapV1, FollowEventDeliveryV1 } from './dtos/pluginActionDtoSupport.generated.js';
+export type { ExecutionRunChildChoiceV1, ExecutionRunStartFailureDetailsV1 } from './dtos/pluginActionDtoSupport.generated.js';
 export type { UsageCoachFinding, UsageCoachEvaluation } from './dtos/pluginActionDtoSupport.generated.js';
 export type { InputTypePickerLaunchInputV1 } from './inputHints.js';
 export { readInputTypePickerLaunchInput } from './inputHints.js';
@@ -9,6 +14,8 @@ export type { ManagedSessionMcpPortabilityV1, ManagedSessionMcpReasonCodeV1 } fr
 export type { AccountCreationOperand, AccountOperand, BoundedLegacyJsonValue, PluginSettingFieldSchemaV2, SystemTaskJsonArray, SystemTaskJsonObject, SystemTaskJsonPrimitive, SystemTaskJsonValue, WorkflowSelectionEdit } from './dtos/pluginActionDtoSupport.generated.js';
 export type { BuiltinWidgetIdV1, WidgetDefinitionBodyV1, WidgetDefinitionBodyV1Input, SessionBoardItemUpsertSchemaInputV1 } from './dtos/pluginActionDtoSupport.generated.js';
 /** Named dependencies of the canonical host Action input/result maps. */
+export type { NpmRegistryProfilesActionInputById, NpmRegistryProfilesActionResultById } from './dtos/npmRegistryProfilesActionDtos.generated.js';
+export type { PluginAccountAdministrationActionInputById, PluginAccountAdministrationActionResultById } from './dtos/pluginAccountAdministrationActionDtos.generated.js';
 export type { AccountLifecycleActionInputById, AccountLifecycleActionResultById } from './dtos/accountLifecycleActionDtos.generated.js';
 export type { AccountProfileActionInputById, AccountProfileActionResultById } from './dtos/accountProfileActionDtos.generated.js';
 export type { BugReportSubmissionActionInputById, BugReportSubmissionActionResultById } from './dtos/bugReportSubmissionActionDtos.generated.js';
@@ -70,6 +77,7 @@ export type { IntentStartActionInputById, IntentStartActionResultById } from './
 export type { InventoryActionInputById, InventoryActionResultById } from './dtos/inventoryActionDtos.generated.js';
 export type { LaunchProfilesActionInputById, LaunchProfilesActionResultById } from './dtos/launchProfilesActionDtos.generated.js';
 export type { ListReorderActionInputById, ListReorderActionResultById } from './dtos/listReorderActionDtos.generated.js';
+export type { InternalTasksActionInputById, InternalTasksActionResultById } from './dtos/internalTasksActionDtos.generated.js';
 export type { LocalDaemonServicesActionInputById, LocalDaemonServicesActionResultById } from './dtos/localDaemonServicesActionDtos.generated.js';
 export type { LocalServicesActionsActionInputById, LocalServicesActionsActionResultById } from './dtos/localServicesActionsActionDtos.generated.js';
 export type { LocalServicesInventoryActionInputById, LocalServicesInventoryActionResultById } from './dtos/localServicesInventoryActionDtos.generated.js';
@@ -119,7 +127,8 @@ export type { SessionAttentionActionInputById, SessionAttentionActionResultById 
 export type { SessionAuthoringActionInputById, SessionAuthoringActionResultById } from './dtos/sessionAuthoringActionDtos.generated.js';
 export type { SessionBoardActionInputById, SessionBoardActionResultById } from './dtos/sessionBoardActionDtos.generated.js';
 export type { SessionControlActionInputById, SessionControlActionResultById } from './dtos/sessionControlActionDtos.generated.js';
-export type { SessionDiscussionActionInputById, SessionDiscussionActionResultById } from './dtos/sessionDiscussionActionDtos.generated.js';
+export type { DiscussionActionInputById, DiscussionActionResultById } from './dtos/discussionActionDtos.generated.js';
+export type { DocCollaborationActionInputById, DocCollaborationActionResultById } from './dtos/docCollaborationActionDtos.generated.js';
 export type { SessionFollowActionInputById, SessionFollowActionResultById } from './dtos/sessionFollowActionDtos.generated.js';
 export type { SessionLifecycleActionInputById, SessionLifecycleActionResultById } from './dtos/sessionLifecycleActionDtos.generated.js';
 export type { SessionOrganizationMoveActionInputById, SessionOrganizationMoveActionResultById } from './dtos/sessionOrganizationMoveActionDtos.generated.js';
@@ -157,6 +166,13 @@ export type { AdmittedTargetedOperationExecutionOptions } from './service.js';
 export type { AdmittedTargetedOperationExecutionWithOriginOptions } from './service.js';
 export type { PluginMachineExecutionOriginV1 } from './executionOrigin.js';
 export { PluginMachineExecutionOriginV1Schema } from './executionOrigin.js';
+export type { PluginMachineExecutionRoutingV1 } from './executionOrigin.js';
+export {
+    PluginMachineExecutionRoutingV1Schema,
+    PluginMachineExecutionRoutingV1JsonSchema,
+    getPluginMachineExecutionRouting,
+    arePluginMachineExecutionRoutingsEqual,
+} from './executionOrigin.js';
 export type { ActionContribution } from './service.js';
 export type { ActionApprovalRequestCreatedResult } from './service.js';
 export type { ActionExecuteResult } from './service.js';
@@ -222,3 +238,4 @@ export { isSameActionInputOptionValue } from './inputHints.js';
 export { normalizeActionInputByFieldHints } from './inputHints.js';
 export { readActionInputOptionValue } from './inputHints.js';
 export { resolveEffectiveActionInputFields } from './inputHints.js';
+export { seedInputByFieldHints } from './inputHints.js';

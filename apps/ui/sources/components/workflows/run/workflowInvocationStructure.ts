@@ -8,6 +8,7 @@ import type {
     WorkflowRunInvocationIndexV1,
 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import type { WorkflowInvocationCoverageKind } from '@/components/workflows/presentation/workflowLifecyclePresentation';
+import { t } from '@/text';
 import {
     indexWorkflowFlowRunStates,
     resolveWorkflowFlowScopedNodeId,
@@ -37,6 +38,31 @@ export type WorkflowOccurrenceCoordinate =
     | Readonly<{ kind: 'workflow'; blockId: string }>
     | Readonly<{ kind: 'item'; blockId: string; index: number; displayLabel?: string }>
     | Readonly<{ kind: 'iteration'; blockId: string; index: number }>;
+
+/** Shared wording for Map, Steps and conversation-row occurrence previews. */
+export function formatWorkflowOccurrenceLabel(
+    occurrence: readonly WorkflowOccurrenceCoordinate[],
+    projection: WorkflowFlowProjection | null,
+    scope: 'full' | 'repetition' = 'full',
+): string | undefined {
+    const workflowPath: string[] = [];
+    const parts = occurrence.map((coordinate) => {
+        if (coordinate.kind === 'branch') {
+            return projection?.nodesById.get(resolveWorkflowFlowScopedNodeId(`${coordinate.blockId}#${coordinate.branchId}`, workflowPath))?.label
+                ?? coordinate.branchId;
+        }
+        if (coordinate.kind === 'workflow') {
+            const label = projection?.nodesById.get(resolveWorkflowFlowScopedNodeId(coordinate.blockId, workflowPath))?.label;
+            workflowPath.push(coordinate.blockId);
+            return label ?? t('workflows.page.blocks.menuRun');
+        }
+        const number = String(coordinate.index + 1);
+        return coordinate.kind === 'item'
+            ? coordinate.displayLabel ?? t('workflows.run.occurrenceItem', { number })
+            : t('workflows.run.occurrenceRound', { number });
+    }).filter((_, index) => scope === 'full' || occurrence[index]?.kind === 'item' || occurrence[index]?.kind === 'iteration');
+    return parts.length === 0 ? undefined : parts.join(' · ');
+}
 
 export type WorkflowInvocationStructureEntry = Readonly<{
     invocationId: string;

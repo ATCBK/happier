@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { ExternalSessionsCandidatesListResponseSchema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
 import type {
     ExternalSessionActivityV1,
@@ -22,6 +23,8 @@ export type ExternalSessionBrowseCandidate = Readonly<{
     remoteSessionId: string;
     candidateKey?: string;
     title?: string;
+    cwd?: string;
+    messageCount?: number;
     updatedAtMs: number;
     activity?: ExternalSessionActivityV1;
     /** Present only for one of the Agent's internal threads. */
@@ -59,8 +62,6 @@ export function readExternalSessionBrowseCandidatePath(
 }
 
 const CANDIDATES_PAGE_LIMIT = 50;
-const MAX_CANDIDATE_INDEX_PREPARATION_REQUESTS = 250;
-const MAX_EMPTY_FULL_SEARCH_PAGE_REQUESTS = 20;
 
 /**
  * `republish` is the completed-full-search arm: the served page is authoritative
@@ -102,6 +103,8 @@ function mergeExternalSessionBrowseCandidate(
         remoteSessionId: current.remoteSessionId,
         candidateKey: next.candidateKey ?? current.candidateKey,
         title: hasCandidateTitle(next) ? next.title : current.title,
+        cwd: next.cwd ?? current.cwd,
+        messageCount: next.messageCount,
         updatedAtMs: Math.max(current.updatedAtMs, next.updatedAtMs),
         activity: next.activity ?? current.activity,
         thread: next.thread ?? current.thread,
@@ -200,13 +203,14 @@ export function useExternalSessionBrowseCandidates(params: Readonly<{
     includeThreads?: boolean;
     enabled?: boolean;
 }>) {
+    const presentationActive = useLayoutPresentationActive();
     const { accountLifetime, machineId, providerId, searchTerm, source, serverId } = params;
     const accountScope = accountLifetime?.scope;
     const execute = React.useMemo(() => createFrontDoorActionExecute(), []);
     const includeThreads = params.includeThreads === true;
     const normalizedSearchTerm = typeof searchTerm === 'string' ? searchTerm.trim() : '';
     const effectiveSearchTerm = normalizedSearchTerm;
-    const enabled = params.enabled !== false
+    const enabled = presentationActive && params.enabled !== false
         && (!accountLifetime || accountLifetime.isCurrent());
     const currentScopeKey = React.useMemo(() => JSON.stringify({
         machineId,
@@ -452,6 +456,7 @@ export function useExternalSessionBrowseCandidates(params: Readonly<{
 
         const shouldStartWithFastSearch = !append && !requestedContinuation && normalizedSearchTerm.length > 0;
         let requestObservedPreparation = false;
+        let preparationRowsServed = false;
         const requestCandidates = async (
             searchMode?: CandidateSearchMode,
             cursor: string | null = requestedCursor,
@@ -494,10 +499,11 @@ export function useExternalSessionBrowseCandidates(params: Readonly<{
                 }
                 if (!append) setCandidateDeleteSupported(false);
                 setPreparation(null);
+                if (preparationRowsServed) setPreparationStopped(true);
                 if (!append) setAutoLinkPolicyScope(null);
                 setError(resolveExternalSessionBrowseRpcErrorMessage(result.errorCode, 'list'));
                 if (!append) {
-                    if (!preserveExistingCandidatesOnFailure) {
+                    if (!preserveExistingCandidatesOnFailure && !preparationRowsServed) {
                         setCandidates([]);
                         setAnnotationsIncomplete(false);
                     }
@@ -510,6 +516,8 @@ export function useExternalSessionBrowseCandidates(params: Readonly<{
                 remoteSessionId: candidate.remoteSessionId,
                 candidateKey: candidate.candidateKey,
                 title: candidate.title,
+                cwd: candidate.cwd,
+                messageCount: candidate.messageCount,
                 updatedAtMs: candidate.updatedAtMs,
                 activity: candidate.activity,
                 thread: candidate.thread,
@@ -600,11 +608,12 @@ export function useExternalSessionBrowseCandidates(params: Readonly<{
             prepared: boolean;
         }> | null> => {
             let prepared = false;
-            let preparationRequestCount = 0;
             let lastPreparationScanned: number | null = null;
             let lastServedPreparationResult:
                 ExternalSessionsCandidatesListResponse | null = null;
-            while (preparationRequestCount < MAX_CANDIDATE_INDEX_PREPARATION_REQUESTS) {
+            // The daemon owns each preparation work slice and signals completion by
+            // omitting preparation. Keep advancing until then, a stall, or cancellation.
+            while (true) {
                 const result = await requestCandidates(searchMode, cursor);
                 if (
                     abortController.signal.aborted
@@ -616,7 +625,6 @@ export function useExternalSessionBrowseCandidates(params: Readonly<{
                 if (!result.ok || !result.preparation || append || cursor !== null) {
                     return { result, prepared };
                 }
-                preparationRequestCount += 1;
                 const previousScanned = lastPreparationScanned;
                 lastPreparationScanned = result.preparation.scanned;
                 /**
@@ -634,9 +642,13 @@ export function useExternalSessionBrowseCandidates(params: Readonly<{
                         || (previousScanned !== null && result.preparation.scanned < previousScanned));
                 if (generationRestarted) {
                     lastServedPreparationResult = null;
+                    preparationRowsServed = false;
                     setCandidatesAuthoritative(false);
                 }
-                if (result.candidates.length > 0) lastServedPreparationResult = result;
+                if (result.candidates.length > 0) {
+                    lastServedPreparationResult = result;
+                    preparationRowsServed = true;
+                }
                 /**
                  * A crawl that stopped advancing is only a failure while the index has
                  * nothing to show. With served rows in hand it is a stop-polling
@@ -668,11 +680,6 @@ export function useExternalSessionBrowseCandidates(params: Readonly<{
                 setLoading(true);
                 setSearchAugmenting(false);
             }
-            if (lastServedPreparationResult) {
-                setPreparationStopped(true);
-                return { result: lastServedPreparationResult, prepared };
-            }
-            throw new Error(t('externalSessions.browseFailedToLoad'));
         };
 
         try {
@@ -712,13 +719,11 @@ export function useExternalSessionBrowseCandidates(params: Readonly<{
                 let augmentedPageResult = await requestCandidatePage('full');
                 if (!augmentedPageResult) return;
                 const observedEmptySearchCursors = new Set<string>();
-                let fullSearchPageRequests = 1;
                 while (
                     augmentedPageResult.result.ok
                     && augmentedPageResult.result.searchIncomplete
                     && augmentedPageResult.result.candidates.length === 0
                     && augmentedPageResult.result.nextCursor
-                    && fullSearchPageRequests < MAX_EMPTY_FULL_SEARCH_PAGE_REQUESTS
                 ) {
                     const continuationCursor = augmentedPageResult.result.nextCursor;
                     if (observedEmptySearchCursors.has(continuationCursor)) {
@@ -728,7 +733,6 @@ export function useExternalSessionBrowseCandidates(params: Readonly<{
                     const continuationPage = await requestCandidatePage('full', continuationCursor);
                     if (!continuationPage) return;
                     augmentedPageResult = continuationPage;
-                    fullSearchPageRequests += 1;
                 }
                 const fullSearchIsComplete = augmentedPageResult.result.ok
                     && !augmentedPageResult.result.searchIncomplete
@@ -778,9 +782,10 @@ export function useExternalSessionBrowseCandidates(params: Readonly<{
             loadedScopeKeyRef.current = currentScopeKey;
             setLoadedScopeKey(currentScopeKey);
             setPreparation(null);
+            if (preparationRowsServed) setPreparationStopped(true);
             setError(resolveExternalSessionBrowseThrownErrorMessage(loadError, 'list'));
             if (!append) {
-                if (!preserveExistingCandidatesOnFailure) {
+                if (!preserveExistingCandidatesOnFailure && !preparationRowsServed) {
                     setCandidates([]);
                     setAnnotationsIncomplete(false);
                 }

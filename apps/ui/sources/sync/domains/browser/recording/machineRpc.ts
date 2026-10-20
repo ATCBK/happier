@@ -43,6 +43,7 @@ export type BrowserRecordingMachineRpcFailureReason =
 export type BrowserRecordingMachineRpcInputBase = Readonly<{
     machineId: string;
     serverId?: string | null;
+    signal?: AbortSignal;
 }>;
 
 export type BrowserRecordingStartClientInput = BrowserRecordingMachineRpcInputBase & Readonly<{
@@ -88,6 +89,7 @@ async function callBrowserRecordingMachineRpc<TPayload>(
             serverId: input.serverId,
             method: input.method,
             payload: input.payload,
+            signal: input.signal,
         });
         if (isRpcMethodNotFoundResult(raw)) {
             return { ok: false, reason: 'unavailable' };
@@ -141,6 +143,7 @@ export async function startBrowserRecordingViaMachineRpc(
         serverId: input.serverId,
         method: RPC_METHODS.DAEMON_BROWSER_RECORDING_START,
         payload,
+        signal: input.signal,
     });
     if (!raw.ok) return raw;
 
@@ -169,6 +172,7 @@ export async function stopBrowserRecordingViaMachineRpc(
         serverId: input.serverId,
         method: RPC_METHODS.DAEMON_BROWSER_RECORDING_STOP,
         payload,
+        signal: input.signal,
     });
     if (!raw.ok) return raw;
 
@@ -196,6 +200,7 @@ export async function cancelBrowserRecordingViaMachineRpc(
         serverId: input.serverId,
         method: RPC_METHODS.DAEMON_BROWSER_RECORDING_CANCEL,
         payload,
+        signal: input.signal,
     });
     if (!raw.ok) return raw;
 
@@ -221,6 +226,7 @@ export async function fetchBrowserRecordingStatusViaMachineRpc(
         serverId: input.serverId,
         method: RPC_METHODS.DAEMON_BROWSER_RECORDING_STATUS,
         payload,
+        signal: input.signal,
     });
     if (!raw.ok) return raw;
 
@@ -246,6 +252,7 @@ export async function listBrowserRecordingsForViewViaMachineRpc(
         serverId: input.serverId,
         method: RPC_METHODS.DAEMON_BROWSER_RECORDING_LIST,
         payload,
+        signal: input.signal,
     });
     if (!raw.ok) return raw;
 
@@ -269,6 +276,7 @@ export async function cleanupBrowserRecordingsViaMachineRpc(
         serverId: input.serverId,
         method: RPC_METHODS.DAEMON_BROWSER_RECORDING_CLEANUP,
         payload,
+        signal: input.signal,
     });
     if (!raw.ok) return raw;
 

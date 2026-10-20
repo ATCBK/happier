@@ -161,10 +161,17 @@ export function createMarketplaceIndexService(params?: Readonly<{
       const binding = await resolveExactMarketplaceSourceBinding({ sourceId, readRegistrySources });
       if (!binding.ok) return binding;
       const source = binding.source;
+      const profileStateBeforeFetch = await registryProfiles.snapshot().catch(() => ({ revision: -1, profiles: [] }));
+      // A source binding can reuse its registry's explicit network permission
+      // only for that same origin. Remote catalog fields never select it.
+      const allowPrivateNetwork = profileStateBeforeFetch.profiles.some(profile =>
+        profile.profileId === source.registryProfileId && profile.allowPrivateNetwork === true
+        && profile.origin === new URL(source.sourceUrl).origin);
       let snapshot: LoadedMarketplaceIndexSource;
       try {
         snapshot = await loadMarketplaceIndexSource({ happyHomeDir: params?.happyHomeDir,
           registrySource: source.registrySource,
+          allowPrivateNetwork,
           source: { id: source.id, title: source.title, sourceUrl: source.sourceUrl, kind: source.origin },
           query: { text: source.origin === 'community-npm' && !exact.packageName ? pluginId : '',
             ...(exact.packageName ? { exactPackageName: exact.packageName } : {}),

@@ -1,5 +1,1 @@
-import { ZenAdd } from '@/components/zen/screens/ZenAdd';
-
-export default function NewZenTodoScreen() {
-    return <ZenAdd />;
-}
+export { ZenTasksRedirect as default } from '@/components/zen/navigation/ZenTasksRedirect';

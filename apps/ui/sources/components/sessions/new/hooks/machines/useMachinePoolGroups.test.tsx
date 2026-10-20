@@ -243,6 +243,7 @@ describe('useMachinePoolGroups', () => {
             activeAt: Date.now(),
         };
         expect(buildMachineDestinationModel({
+            scopesByServerId: new Map([[boundary.serverId, { serverId: boundary.serverId, accountId: 'account-a' }]]),
             groups: [{
                 serverId: boundary.serverId,
                 machines: [onlyMachine],

@@ -88,6 +88,24 @@ const run = (id: string, state: 'running' | 'failed' | 'succeeded' = 'running') 
 const waitLoaded = (hook: { getCurrent(): { status: string } }) => waitForHomeGovernance(() => expect(hook.getCurrent().status).toBe('loaded'));
 
 describe('Workflow library reads through real Account Actions and HTTP', () => {
+    it('keeps an addressed trigger picker on B while the active library shows the same id from A', async () => {
+        await saved(definitionId, 'A workflow');
+        const serverB = await home.addHome({ name: 'B library', serverUrl: 'https://workflow-library-b.test',
+            accountId: 'account-b', active: false, currentAccount: true });
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        home.answer(serverB, '/v3/automations', { body: { automations: [], nextCursor: null } });
+        const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+        const account = await captureLazyActionAccountContext(serverB);
+        try {
+            await createWorkflowDefinition({ definitionId, definition: content, metadata: { title: 'B workflow' }, accountLifetime: account.accountLifetime });
+            const active = await renderHook(() => useWorkflowDefinitionLibrary());
+            const addressed = await renderHook(() => useWorkflowDefinitionLibrary({ accountLifetime: account.accountLifetime }));
+            await waitLoaded(active); await waitLoaded(addressed);
+            expect(active.getCurrent().definitions[0]?.metadata?.title).toBe('A workflow');
+            expect(addressed.getCurrent().definitions[0]?.metadata?.title).toBe('B workflow');
+            expect(storage.getState().profileScope).toEqual({ serverId, accountId: 'account-a' });
+        } finally { account.dispose(); }
+    });
     it('settles a missing Account destination instead of inventing a pending read', async () => {
         storage.setState({ profileScope: null });
         const hook = await renderHook(() => useWorkflowRunWindow('destination:stopped-session'));
@@ -331,7 +349,10 @@ describe('Workflow Run windows through real Account storage', () => {
         expect(home.requestsFor(route)[0]?.input).toMatchObject({ request: { targetSessionId: 'bot-session', states: ['queued', 'claimed', 'running', 'pause_requested', 'paused', 'interrupted'] } });
         await act(async () => pending.resolve()); await waitLoaded(first);
         expect(first.getCurrent().runIds).toEqual(['writes-here']); expect(second.getCurrent().runIds).toBe(first.getCurrent().runIds);
-        expect(storage.getState().workflowRunsById['writes-here']?.summary?.origin).toEqual(summary.origin);
+        expect(first.getCurrent().rows[0]?.summary?.origin).toEqual(summary.origin);
+        const windowSnapshot = first.getCurrent();
+        await first.rerender();
+        expect(first.getCurrent()).toBe(windowSnapshot);
         const ids = first.getCurrent().runIds; const before = renders;
         await act(async () => storage.getState().upsertWorkflowRuns([workflowRunRowFromSummary(run('unrelated'))]));
         expect(first.getCurrent().runIds).toBe(ids); expect(renders).toBe(before);

@@ -59,7 +59,7 @@ describe('native Workflow Session target geometry', () => {
         await act(async () => { carry.move({ x: 50, y: 250 }); });
         expect(runtime.getSnapshot().admission?.status).toBe('allowed');
         y = 400;
-        await act(async () => { expect(await carry.release()).toBeNull(); });
+        await act(async () => { expect(await carry.release()).toMatchObject({ status: 'refused', reason: { code: 'target-missing' } }); });
         expect(draft).toBe(original);
         let current!: NonNullable<ReturnType<typeof runtime.begin>>;
         await act(async () => { current = runtime.begin('workflow-geometry-source')!; });

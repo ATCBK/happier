@@ -6,6 +6,7 @@ import { resolveIdentityRuntimeById } from "@/app/auth/providers/identityProvide
 import { observeLoginEligibilityStage, recordLoginEligibilityCache } from "@/app/monitoring/metrics/authMetrics";
 import { inTx } from "@/storage/inTx";
 import { log } from "@/utils/logging/log";
+import type { VerifiedAuthToken } from "@/app/auth/auth";
 
 const DEFAULT_LOGIN_ELIGIBILITY_CACHE_TTL_MS = 1_000;
 const DEFAULT_LOGIN_ELIGIBILITY_CACHE_MAX_ENTRIES = 20_000;
@@ -55,10 +56,12 @@ export async function enforceLoginEligibility(params: {
     accountId: string;
     env: NodeJS.ProcessEnv;
     now?: Date;
+    /** The canonical verifier result from this admission only; never a cached caller projection. */
+    verifiedCredential?: VerifiedAuthToken;
 }): Promise<LoginEligibilityResult> {
     const startedAt = Date.now();
     const accountId = params.accountId.toString().trim();
-    if (!accountId) {
+    if (!accountId || (params.verifiedCredential && params.verifiedCredential.userId !== accountId)) {
         observeLoginEligibilityStage({
             stage: "total",
             result: "error",
@@ -67,54 +70,57 @@ export async function enforceLoginEligibility(params: {
         return { ok: false, statusCode: 401, error: "invalid-token" };
     }
 
-    // Lifecycle facts are never cached: another replica may disable or erase
-    // this Account while a provider eligibility result remains hot.
-    let account: { id: string; status: AccountStatusV1 } | null = null;
-    const accountLookupStartedAt = Date.now();
-    try {
-        account = await inTx(tx => tx.account.findUnique({
-            where: { id: accountId },
-            select: { id: true, status: true },
-        }), { readOnly: true });
-        observeLoginEligibilityStage({
-            stage: "account_lookup",
-            result: "ok",
-            durationMs: Date.now() - accountLookupStartedAt,
-        });
-    } catch (error) {
-        observeLoginEligibilityStage({
-            stage: "account_lookup",
-            result: "error",
-            durationMs: Date.now() - accountLookupStartedAt,
-        });
-        log(
-            { module: "auth-login-eligibility", level: "error" },
-            "Failed to look up account for eligibility enforcement",
-            { accountId, error },
-        );
-        observeLoginEligibilityStage({
-            stage: "total",
-            result: "error",
-            durationMs: Date.now() - startedAt,
-        });
-        return { ok: false, statusCode: 503, error: "upstream_error" };
-    }
-    if (!account) {
-        observeLoginEligibilityStage({
-            stage: "total",
-            result: "error",
-            durationMs: Date.now() - startedAt,
-        });
-        return { ok: false, statusCode: 401, error: "invalid-token" };
-    }
+    // Token verification already reads current Account lifecycle (and signed-token epoch).
+    // Reuse that same-admission fact; standalone login callers still read lifecycle even
+    // while the provider result is hot. Neither path caches Account lifecycle.
+    if (!params.verifiedCredential) {
+        let account: { id: string; status: AccountStatusV1 } | null = null;
+        const accountLookupStartedAt = Date.now();
+        try {
+            account = await inTx(tx => tx.account.findUnique({
+                where: { id: accountId },
+                select: { id: true, status: true },
+            }), { readOnly: true });
+            observeLoginEligibilityStage({
+                stage: "account_lookup",
+                result: "ok",
+                durationMs: Date.now() - accountLookupStartedAt,
+            });
+        } catch (error) {
+            observeLoginEligibilityStage({
+                stage: "account_lookup",
+                result: "error",
+                durationMs: Date.now() - accountLookupStartedAt,
+            });
+            log(
+                { module: "auth-login-eligibility", level: "error" },
+                "Failed to look up account for eligibility enforcement",
+                { accountId, error },
+            );
+            observeLoginEligibilityStage({
+                stage: "total",
+                result: "error",
+                durationMs: Date.now() - startedAt,
+            });
+            return { ok: false, statusCode: 503, error: "upstream_error" };
+        }
+        if (!account) {
+            observeLoginEligibilityStage({
+                stage: "total",
+                result: "error",
+                durationMs: Date.now() - startedAt,
+            });
+            return { ok: false, statusCode: 401, error: "invalid-token" };
+        }
 
-    if (!isActiveHomeAccountStatus(account.status)) {
-        observeLoginEligibilityStage({
-            stage: "total",
-            result: "error",
-            durationMs: Date.now() - startedAt,
-        });
-        return { ok: false, statusCode: 403, error: "account-disabled" };
+        if (!isActiveHomeAccountStatus(account.status)) {
+            observeLoginEligibilityStage({
+                stage: "total",
+                result: "error",
+                durationMs: Date.now() - startedAt,
+            });
+            return { ok: false, statusCode: 403, error: "account-disabled" };
+        }
     }
 
     const positiveCache = getLoginEligibilityPositiveCache(params.env);

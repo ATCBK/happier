@@ -38,7 +38,7 @@ describe('Popover phone-sheet focus return', () => {
             });
             return <>
                 <View ref={(node) => { anchorRef.current = node; drag.dragTargetRef(node); }}
-                    dataSet={{ glanceHandle: 'true' }} {...drag.pointerHandlers}>
+                    {...{ dataSet: { glanceHandle: 'true' } }} {...drag.pointerHandlers}>
                     <Pressable testID="pointer-glance-opener" accessibilityRole="button"
                         onPress={() => { if (!drag.shouldSuppressPress()) setOpen(true); }}>
                         <Text>Voice options</Text>

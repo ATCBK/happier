@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { test } from 'vitest';
-import { createFixtureStore, createCredentialIssuer, createLeadChat } from './fixture.mjs';
+import { buildFixtureHappierUrl, createFixtureStore, createCredentialIssuer, createLeadChat } from './fixture.mjs';
 import { actionSchemas } from './leads-fixture/contracts.mjs';
 import { activate, manifest } from './leads-fixture/index.ts';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
@@ -11,6 +12,23 @@ const spawnTokenId = '11111111-1111-4111-8111-111111111111';
 const sessionTokenId = '22222222-2222-4222-8222-222222222222';
 const expiredTokenId = '33333333-3333-4333-8333-333333333333';
 const leadSessionId = 'northstar-session';
+
+test('the development fixture starts against current workspace SDK source', async () => {
+  const packageJson = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8'));
+  assert.match(packageJson.scripts.start, /(?:^|\s)--conditions=happier-source(?:\s|$)/);
+  assert.match(packageJson.scripts.start, /(?:^|\s)--import\s+tsx(?:\s|$)/);
+});
+
+test('the fixture selects its SDK Home in every embed frame URL', () => {
+  const url = new URL(buildFixtureHappierUrl(
+    'http://happier-agent-qa-embed.localhost:19364/?happier_hmr=0&server=https%3A%2F%2Fstale.example',
+    'http://happier-agent-qa-embed.localhost:19361',
+  ));
+  assert.equal(url.origin, 'http://happier-agent-qa-embed.localhost:19364');
+  assert.equal(url.searchParams.get('happier_hmr'), '0');
+  assert.equal(url.searchParams.get('server'), 'http://happier-agent-qa-embed.localhost:19361');
+});
+
 function ownedStore() {
   const store = createFixtureStore();
   store.attachLeadSession('salesperson', 'northstar', leadSessionId);
@@ -120,6 +138,26 @@ test('lead initialization owns the session before sending notes and retains it o
   assert.notEqual(sendOptions[0].requestId, creationInputs[0].options.requestId);
   assert.deepEqual(sendOptions[1], sendOptions[0]);
   await assert.rejects(createLeadChat({ happier, store, userId: 'other-salesperson', leadId: 'northstar' }), /lead_forbidden/);
+});
+
+test('lead creation identity is stable for retries but fresh after fixture state restarts', async () => {
+  const observedRequestIds = [];
+  const createHappier = () => ({ embed: { async createSession(_input, options) {
+    observedRequestIds.push(options.requestId);
+    throw new Error('session_spawn_failed');
+  } }, sessions: { get() { throw new Error('Unexpected retained Session'); } } });
+
+  const firstStore = createFixtureStore();
+  await assert.rejects(createLeadChat({ happier: createHappier(), store: firstStore,
+    userId: 'salesperson', leadId: 'northstar' }), /session_spawn_failed/);
+  await assert.rejects(createLeadChat({ happier: createHappier(), store: firstStore,
+    userId: 'salesperson', leadId: 'northstar' }), /session_spawn_failed/);
+  const replacementStore = createFixtureStore();
+  await assert.rejects(createLeadChat({ happier: createHappier(), store: replacementStore,
+    userId: 'salesperson', leadId: 'northstar' }), /session_spawn_failed/);
+
+  assert.equal(observedRequestIds[0], observedRequestIds[1]);
+  assert.notEqual(observedRequestIds[2], observedRequestIds[0]);
 });
 
 test('a created credential retry keeps attribution and establishes renewal ownership only after verified mint', async () => {

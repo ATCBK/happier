@@ -155,6 +155,52 @@ describe('useSimulatorRelayIngestion', () => {
         if (platformOsDescriptor) Object.defineProperty(Platform, 'OS', platformOsDescriptor);
     });
 
+    it.each(['hide/show', 'retry'] as const)('orders a reused stream behind a delayed start and its final Stop: %s', async (transition) => {
+        const fake = createFakeTransport();
+        const live = new Set<string>();
+        let finishFirst!: () => void;
+        let starts = 0;
+        const transport: SimulatorRelayTransport = {
+            ...fake.transport,
+            send: (event, envelope) => {
+                fake.transport.send(event, envelope);
+                if (envelope.message.kind === 'control' && envelope.message.control.kind === 'stop') {
+                    live.delete(envelope.message.control.streamId);
+                }
+            },
+        };
+        const input: UseSimulatorRelayIngestionInput = {
+            ...baseInput(transport),
+            startDaemonRelay: async ({ startRequest }) => {
+                starts += 1;
+                live.add(startRequest.streamId);
+                if (starts === 1) await new Promise<void>(resolve => { finishFirst = resolve; });
+                return { ok: true, streamId: startRequest.streamId };
+            },
+        };
+        const hook = await renderHook((props: UseSimulatorRelayIngestionInput) => useSimulatorRelayIngestion(props), { initialProps: input });
+        expect(live.has(STREAM_ID)).toBe(true);
+        await act(async () => fake.deliver(frameEnvelope(imageFrame(1))));
+        const held = hook.getCurrent().playerStatesBySimulatorId[SIMULATOR_ID]?.lastFrameUrl;
+        if (transition === 'hide/show') {
+            await hook.rerender({ ...input, enabled: false });
+            await hook.rerender(input);
+        } else {
+            await act(async () => hook.getCurrent().retry());
+        }
+        await act(async () => { finishFirst(); });
+        // The daemon's Stop addresses the current entry by id, so a late Stop must
+        // finish before a replacement with that id can become active.
+        expect(live.has(STREAM_ID)).toBe(true);
+        expect(starts).toBe(2);
+        expect(hook.getCurrent().playerStatesBySimulatorId[SIMULATOR_ID]).toMatchObject({ phase: 'reconnecting', lastFrameUrl: held });
+        await act(async () => fake.deliver(frameEnvelope(imageFrame(2, { payloadBase64: 'BAUG' }))));
+        expect(hook.getCurrent().playerStatesBySimulatorId[SIMULATOR_ID]?.phase).toBe('playing');
+        await hook.unmount();
+        expect(live.size).toBe(0);
+        expect(fake.listenerCount()).toBe(0);
+    });
+
     it('retries the same source on its existing transport, retaining the frame until fresh pixels arrive', async () => {
         const fake = createFakeTransport();
         const openedSources: (string | undefined)[] = [];
@@ -462,7 +508,7 @@ describe('useSimulatorRelayIngestion', () => {
         })]);
     });
 
-    it('preserves the last frame and marks reconnecting when the transport reconnects', async () => {
+    it('clears the last frame when a new logical transport replaces the subscriber', async () => {
         const fake = createFakeTransport();
         const hook = await renderHook(
             (props: UseSimulatorRelayIngestionInput) => useSimulatorRelayIngestion(props),
@@ -479,8 +525,8 @@ describe('useSimulatorRelayIngestion', () => {
         const reconnected = await hook.rerender({ ...baseInput(nextFake.transport) });
 
         const stream = reconnected.playerStatesBySimulatorId[SIMULATOR_ID];
-        expect(stream?.phase).toBe('reconnecting');
-        expect(stream?.lastFrameUrl).toBe('data:image/jpeg;base64,AQID');
+        expect(stream?.phase).toBe('opening');
+        expect(stream?.lastFrameUrl).toBeUndefined();
         expect(fake.sent).toEqual([expect.objectContaining({
             message: {
                 kind: 'control',
@@ -533,6 +579,43 @@ describe('useSimulatorRelayIngestion', () => {
         expect(switched.playerStatesBySimulatorId[SIMULATOR_ID]).toBeUndefined();
     });
 
+    it('keeps the source picture through a socket replacement, but clears it for another logical transport', async () => {
+        const fake = createFakeTransport();
+        const input = { ...baseInput(fake.transport), viewerSocketId: 'viewer-old' };
+        let replacingTransport: SimulatorRelayTransport | null = null;
+        const replacementFrames: Array<string | undefined> = [];
+        const hook = await renderHook(
+            (props: UseSimulatorRelayIngestionInput) => {
+                const result = useSimulatorRelayIngestion(props);
+                if (props.transport === replacingTransport) replacementFrames.push(result.playerStatesBySimulatorId[SIMULATOR_ID]?.lastFrameUrl);
+                return result;
+            },
+            { initialProps: input },
+        );
+        await act(async () => fake.deliver(frameEnvelope(imageFrame(1))));
+        const heldFrame = hook.getCurrent().playerStatesBySimulatorId[SIMULATOR_ID]?.lastFrameUrl;
+        expect(heldFrame).toBeTruthy();
+        await hook.rerender({ ...input, enabled: false, streamId: '', viewerSocketId: '' });
+        expect(hook.getCurrent().playerStatesBySimulatorId[SIMULATOR_ID]?.lastFrameUrl).toBe(heldFrame);
+        await hook.rerender({ ...input, streamId: 'stream-reconnected', viewerSocketId: 'viewer-new' });
+        expect(hook.getCurrent().playerStatesBySimulatorId[SIMULATOR_ID]).toMatchObject({
+            phase: 'reconnecting', streamId: 'stream-reconnected', lastFrameUrl: heldFrame,
+        });
+        await act(async () => fake.deliver(frameEnvelope(imageFrame(2, { payloadBase64: 'AAAA' }))));
+        expect(hook.getCurrent().playerStatesBySimulatorId[SIMULATOR_ID]?.lastFrameUrl).toBe(heldFrame);
+        await act(async () => fake.deliver(frameEnvelope(imageFrame(3, { streamId: 'stream-reconnected', payloadBase64: 'BAUG' }))));
+        expect(hook.getCurrent().playerStatesBySimulatorId[SIMULATOR_ID]?.lastFrameUrl).toBe('data:image/jpeg;base64,BAUG');
+        // Account replacement gets another logical transport even when the Machine
+        // and source labels happen to match; it must not inherit this picture.
+        const replacement = createFakeTransport();
+        replacingTransport = replacement.transport;
+        await hook.rerender({ ...input, transport: replacement.transport,
+            streamId: 'stream-reconnected', viewerSocketId: 'viewer-new' });
+        expect(hook.getCurrent().playerStatesBySimulatorId[SIMULATOR_ID]?.lastFrameUrl).toBeUndefined();
+        expect(replacementFrames.length).toBeGreaterThan(0);
+        expect(replacementFrames.every(frame => frame === undefined)).toBe(true);
+    });
+
     it('returns no player state when disabled', async () => {
         const fake = createFakeTransport();
         const hook = await renderHook(() => useSimulatorRelayIngestion({
@@ -546,17 +629,22 @@ describe('useSimulatorRelayIngestion', () => {
 
     it.each([
         { serverId: 'different-home' },
+        { simulatorId: 'different-viewer-source' },
+        { sourceMachineId: 'different-source-machine' },
+        { targetMachineId: 'different-target-machine' },
+        { streamFamily: 'different-family' },
+        { sourceId: 'different-source' },
         { sourceOccurrenceId: 'different-capture' },
     ])('does not retain a hidden frame across a changed source scope: %j', async (scope) => {
         const fake = createFakeTransport();
-        const input = baseInput(fake.transport);
+        const input = { ...baseInput(fake.transport), viewerSocketId: 'viewer-old' };
         const hook = await renderHook(
             (props: UseSimulatorRelayIngestionInput) => useSimulatorRelayIngestion(props),
             { initialProps: input },
         );
         await act(async () => fake.deliver(frameEnvelope(imageFrame(1))));
         expect(hook.getCurrent().playerStatesBySimulatorId[SIMULATOR_ID]?.lastFrameUrl).toBeTruthy();
-        const hidden = await hook.rerender({ ...input, ...scope, enabled: false });
+        const hidden = await hook.rerender({ ...input, ...scope, enabled: false, streamId: '', viewerSocketId: '' });
         expect(fake.listenerCount()).toBe(0);
         expect(hidden.playerStatesBySimulatorId).toEqual({});
     });

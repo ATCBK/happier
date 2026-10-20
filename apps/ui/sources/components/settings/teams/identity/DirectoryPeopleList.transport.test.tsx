@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TEAMS_ACCOUNT_CHANGE_ENTITY_ID_V1, TeamDirectoryPersonV1Schema } from '@happier-dev/protocol';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
@@ -16,6 +16,7 @@ installSettingsViewCommonModuleMocks({
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
 const { DirectoryPeopleList } = await import('./DirectoryPeopleList');
+beforeEach(() => installHomeGovernanceBoundaries(harness));
 afterEach(async () => { standardCleanup(); routerPush.mockReset(); await harness.reset(); });
 
 const path = '/v1/teams/team-1/directory-sources/source-1/people?limit=50';

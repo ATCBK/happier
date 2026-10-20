@@ -1,7 +1,7 @@
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { createPluginContributionIdentity } from '@happier-dev/protocol/plugins/contribution-identity';
 import { derivePluginDaemonContributionRegistrationRights } from '@happier-dev/protocol/plugins/contributions/catalog';
-import { PluginActionConfirmationV2Schema } from '@happier-dev/protocol/plugins/actions/v2';
+import { PluginActionConfirmationV2Schema, PluginActionConfirmationWhenV2Schema } from '@happier-dev/protocol/plugins/actions/v2';
 import { PluginActionDangerLevelV2Schema } from '@happier-dev/protocol/plugins/actions/vocabulary';
 import { ActionOperationDeclarationV1Schema } from '@happier-dev/protocol/actions/operations/v1';
 import type { PluginActionPresentUserGatePolicy, PluginSourceCustodyV1 } from '@happier-dev/protocol';
@@ -92,6 +92,7 @@ function readTargetDefinition(value: unknown): TargetActionDefinition {
     return Object.freeze({
         id: value.id,
         dangerLevel: PluginActionDangerLevelV2Schema.parse(value.dangerLevel),
+        ...(value.confirmationWhen === undefined ? {} : { confirmationWhen: PluginActionConfirmationWhenV2Schema.parse(value.confirmationWhen) }),
         scopes,
         surfaces,
         ...(value.confirmation === undefined
@@ -141,6 +142,7 @@ export function buildTargetActionInvocationRegistry(params: Readonly<{
     resolveHostBinding: ResolveTargetActionHostBinding;
     resolveHostPolicy: ResolveTargetActionHostPolicy;
     createServices: CreatePluginInvocationServices;
+    prepareInvocationServices?(input: Readonly<{ pluginId: string; localId: string }>): Promise<void>;
     beginDiagnosticScope?: BeginPluginInvocationDiagnosticScope;
     redactDiagnosticText?: (
         scope: Readonly<{ pluginId: string; occurrenceId: string; correlationId: string }>,
@@ -280,7 +282,11 @@ export function buildTargetActionInvocationRegistry(params: Readonly<{
     ): ResolvedTargetAction | null => {
         const actionRegistryKey = buildQualifiedPluginContributionKey(createPluginContributionIdentity({ pluginId, localId }));
         const resolvedAction = params.contributes.actionsById?.get(actionRegistryKey);
-        let catalogAction: Pick<ReturnType<typeof readActions>[number], 'definition' | 'occurrenceId' | 'sourceCustody'> | undefined;
+        let catalogAction: Readonly<{
+            definition: TargetActionDefinition;
+            occurrenceId: string;
+            sourceCustody: PluginSourceCustodyV1;
+        }> | undefined;
         if (resolvedAction) {
             // Discovery consumes admitted declarations. Daemon handlers activate
             // on invocation; client handlers belong to the answering UI.
@@ -323,6 +329,7 @@ export function buildTargetActionInvocationRegistry(params: Readonly<{
             occurrenceId: catalogAction.occurrenceId,
             sourceCustody: catalogAction.sourceCustody,
             dangerLevel: catalogAction.definition.dangerLevel,
+            ...(catalogAction.definition.confirmationWhen === undefined ? {} : { confirmationWhen: catalogAction.definition.confirmationWhen }),
             scopes: catalogAction.definition.scopes,
             surfaces: catalogAction.definition.surfaces,
             hostAccessRequests: catalogAction.definition.hostAccessRequests ?? [],
@@ -358,6 +365,7 @@ export function buildTargetActionInvocationRegistry(params: Readonly<{
         resolveAuthorizationFacts: params.resolveAuthorizationFacts,
         resolveHostBinding: params.resolveHostBinding,
         createServices: params.createServices,
+        ...(params.prepareInvocationServices ? { prepareInvocationServices: params.prepareInvocationServices } : {}),
         ...(params.beginDiagnosticScope
             ? { beginDiagnosticScope: params.beginDiagnosticScope }
             : {}),
@@ -475,6 +483,7 @@ export function buildTargetActionInvocationRegistry(params: Readonly<{
                 },
                 purposes: snapshot.purposes,
                 bindings: snapshot.bindings,
+                ...(input.recordOperationCredentialUse ? { recordOperationCredentialUse: input.recordOperationCredentialUse } : {}),
             });
             if (!input.isCurrent()) {
                 lease.dispose();

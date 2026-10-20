@@ -70,7 +70,8 @@ describe('daemon control client: foreground Agent runtime admission', () => {
       foregroundPid: process.pid,
       pluginId: 'p'.repeat(256),
       agentId,
-      generation: 'generation-1',
+      occurrenceId: 'occurrence-1',
+      sourceCustody: { kind: 'development' as const, registeredRootId: 'registered-root-1' },
       capability: 'capability-1',
       foregroundSatisfiedProfileSecretRequirementNames: [],
     };
@@ -103,7 +104,7 @@ describe('daemon control client: foreground Agent runtime admission', () => {
         sourceKind: 'built_in' as const,
       },
       connectedServices: {
-        v: 1 as const,
+        v: 2 as const,
         bindingsByServiceId: {
           'happier.agent.codex/openai-codex': {
             source: 'connected' as const,

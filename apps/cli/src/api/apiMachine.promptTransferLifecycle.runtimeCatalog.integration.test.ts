@@ -14,7 +14,8 @@ import type { Machine } from '@/api/types';
 import { createTransferRecipientKeyPair } from '@happier-dev/transfers/node';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { accountSettingsParse } from '@happier-dev/protocol';
-import { setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { clearActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import type { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 
 import { ApiMachineClient } from './apiMachine';
 
@@ -76,7 +77,7 @@ describe('ApiMachineClient prompt transfer lifecycle', () => {
       await mkdir(join(homeDir, '.agents', 'skills', 'reviewer'), { recursive: true });
       await writeFile(join(homeDir, '.agents', 'skills', 'reviewer', 'SKILL.md'), '---\nname: reviewer\n---\n# Reviewer\n', 'utf8');
       client.setRPCHandlers({
-        spawnSession: async () => ({ type: 'error', errorCode: 'unknown', errorMessage: 'Unavailable fixture Agent' }),
+        spawnSession: async () => ({ type: 'error', errorCode: 'SPAWN_FAILED', errorMessage: 'Unavailable fixture Agent' }),
         stopSession: async () => true, requestShutdown: () => {},
       });
       const lifecycle = getMachineRpcLifecycleRegistration(client);
@@ -116,7 +117,7 @@ describe('ApiMachineClient prompt transfer lifecycle', () => {
       git(repo, ['commit', '-m', 'init']);
 
       client.setRPCHandlers({
-        spawnSession: async () => ({ type: 'error', errorCode: 'unknown', errorMessage: 'not implemented' }) as any,
+        spawnSession: async () => ({ type: 'error', errorCode: 'SPAWN_FAILED', errorMessage: 'not implemented' }),
         stopSession: async () => true,
         requestShutdown: () => {},
       }, {
@@ -154,63 +155,74 @@ describe('ApiMachineClient prompt transfer lifecycle', () => {
     } finally {
       await client.shutdown().catch(() => undefined);
       await rm(repo, { recursive: true, force: true });
-      setActiveAccountSettingsSnapshot(null);
+      clearActiveAccountSettingsSnapshot();
       await rm(happierHomeDir, { recursive: true, force: true });
     }
   });
 
   it('waits for active local prompt transfer RPC handlers before disposing lifecycle stores', async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), 'happier-machine-active-found-home-'));
+    fixtureHome.mockReturnValue(homeDir);
     const client = new ApiMachineClient('token', createMachine());
     const handlerStarted = createDeferredVoid();
     const releaseHandler = createDeferredVoid();
 
     try {
+      await mkdir(join(homeDir, '.agents', 'skills', 'reviewer'), { recursive: true });
+      await writeFile(join(homeDir, '.agents', 'skills', 'reviewer', 'SKILL.md'), '---\nname: reviewer\n---\n# Reviewer\n', 'utf8');
       client.setRPCHandlers({
-        spawnSession: async () => ({ type: 'error', errorCode: 'unknown', errorMessage: 'not implemented' }) as any,
+        spawnSession: async () => ({ type: 'error', errorCode: 'SPAWN_FAILED', errorMessage: 'not implemented' }),
         stopSession: async () => true,
         requestShutdown: () => {},
       });
 
       const lifecycle = getMachineRpcLifecycleRegistration(client);
       expect(lifecycle).toBeTruthy();
-      const store = lifecycle.promptAssetTransfers.transferSessionStore;
-      const rpc = client.getPeerMediationMachineRpcHandlerManager();
-      const upload = await rpc.invokeLocal(RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_INIT, { sizeBytes: 4 });
-      expect(upload).toMatchObject({ success: true, uploadId: expect.any(String) });
-      if (!upload || typeof upload !== 'object' || !('uploadId' in upload) || typeof upload.uploadId !== 'string') {
-        throw new Error('Prompt asset upload did not return its transfer identity');
+      const store = lifecycle.promptAssetTransfers.downloadStore;
+      const handlerManager = (client as unknown as { rpcHandlerManager: RpcHandlerManager }).rpcHandlerManager;
+      const rpc = handlerManager;
+      const recipient = createTransferRecipientKeyPair();
+      const download = await rpc.invokeLocal(RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_INIT, {
+        path: join(homeDir, '.agents', 'skills', 'reviewer'),
+        recipientPublicKeyBase64: recipient.recipientPublicKeyBase64,
+      });
+      expect(download).toMatchObject({ success: true, downloadId: expect.any(String) });
+      if (!download || typeof download !== 'object' || !('downloadId' in download) || typeof download.downloadId !== 'string') {
+        throw new Error('Found download did not return its transfer identity');
       }
-      const uploadSession = store.getUploadSession(upload.uploadId);
-      expect(uploadSession).toBeTruthy();
+      const downloadSession = store.getDownloadSession(download.downloadId);
+      expect(downloadSession).toBeTruthy();
 
-      (client as any).rpcHandlerManager.registerHandler(
-        RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_INIT,
+      handlerManager.registerHandler(
+        RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_CHUNK,
         async () => {
           handlerStarted.resolve();
           await releaseHandler.promise;
-          return { success: true, uploadId: 'slow-local-upload' };
+          return { success: true, downloadId: download.downloadId };
         },
       );
 
-      const invokePromise = rpc.invokeLocal(RPC_METHODS.DAEMON_PROMPT_ASSETS_UPLOAD_INIT, {});
+      const invokePromise = rpc.invokeLocal(RPC_METHODS.DAEMON_PROMPT_ASSETS_DOWNLOAD_CHUNK, { downloadId: download.downloadId });
       await handlerStarted.promise;
 
       const shutdownPromise = client.shutdown();
       await Promise.resolve();
       await Promise.resolve();
 
-      expect(store.getUploadSession(upload.uploadId)).toBe(uploadSession);
-      await expect(access(uploadSession.tempPath)).resolves.toBeUndefined();
+      expect(store.getDownloadSession(download.downloadId)).toBe(downloadSession);
+      await expect(access(downloadSession.filePath)).resolves.toBeUndefined();
 
       releaseHandler.resolve();
       await invokePromise;
       await shutdownPromise;
 
-      expect(store.getUploadSession(upload.uploadId)).toBeNull();
-      await expectPathMissing(uploadSession.tempPath);
+      expect(store.getDownloadSession(download.downloadId)).toBeNull();
+      await expectPathMissing(downloadSession.filePath);
     } finally {
       releaseHandler.resolve();
       await client.shutdown().catch(() => undefined);
+      fixtureHome.mockReset();
+      await rm(homeDir, { recursive: true, force: true });
     }
   });
 });

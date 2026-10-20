@@ -248,7 +248,7 @@ describe('buildWalkthroughReading', () => {
         expect(reading.stopIdsByHunk.get('yarn.lock')).toEqual([[]]);
     });
 
-    it('assigns Explain notes once at the first file hunk, preserving secondary order and empty hunks', () => {
+    it('gives each stop one full Explain note at its first hunk; later files get its title only', () => {
         const reading = buildWalkthroughReading(input({
             walkthrough: { state: 'complete', value: { ...WALKTHROUGH, stops: [
                 { ...WALKTHROUGH.stops[0]!, changeRefs: ['a1', 'a0', 'b0'] },
@@ -261,7 +261,7 @@ describe('buildWalkthroughReading', () => {
             [{ key: 'stop-hook', stop: reading.stops[1], secondary: true }],
         ]);
         expect(reading.explainNotesByHunk.get('src/b.ts')).toEqual([
-            [{ key: 'stop-why', stop: reading.stops[0], secondary: false }],
+            [{ key: 'stop-why', stop: reading.stops[0], secondary: true }],
         ]);
         expect(reading.explainNotesByHunk.get('yarn.lock')).toEqual([
             [{ key: 'none:0', stop: null, secondary: false }],
@@ -286,5 +286,22 @@ describe('buildWalkthroughReading', () => {
         }));
         const grouped = buildWalkthroughReading(input({ comparison: { ...COMPARISON, inventory: { ...COMPARISON.inventory, files: many } }, walkthrough: null }));
         expect(grouped.codeMap.map((group) => group.path)).toEqual(['pkg0', 'pkg1']);
+    });
+
+    it('lays the overview out in reading order: by the first stop that explains each file, then by natural path order', () => {
+        const folders = [1, 10, 11, 2, 3];
+        const many = folders.flatMap((folder) => Array.from({ length: 9 }, (_, index) => {
+            const path = `changes/group-${folder}/entry-${index}.ts`;
+            return { path, changeKind: 'added', binary: false, generated: false, lockfile: false,
+                evidence: { state: 'available' as const, unifiedDiff: `diff --git a/${path} b/${path}\n@@ -0,0 +1 @@\n+x` },
+                occurrences: [{ id: `o${folder}-${index}`, alias: `c${folder}-${index}`, path, before: range(0, 0), after: range(1, 1), position: 0 }] };
+        }));
+        const walkthrough = { title: 'Groups', intro: '', otherChangeRefs: [], stops: [
+            { id: 'second', title: 'Group 2', explanationMarkdown: 'Two.', changeRefs: ['o2-0'] },
+            { id: 'first', title: 'Group 10', explanationMarkdown: 'Ten.', changeRefs: ['o10-0'] },
+        ] };
+        const reading = buildWalkthroughReading(input({ comparison: { ...COMPARISON, inventory: { ...COMPARISON.inventory, files: many } },
+            walkthrough: { state: 'complete', value: walkthrough } }));
+        expect(reading.codeMap.map((group) => group.label)).toEqual(['group-2', 'group-10', 'group-1', 'group-3', 'group-11']);
     });
 });

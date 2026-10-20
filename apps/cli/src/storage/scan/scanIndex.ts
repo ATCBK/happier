@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, open, readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { STORAGE_CHART_MAX_DRAWABLE_NODES, DiskNodeV1Schema, DiskScanStateV1Schema, type DiskNodeV1, type DiskScanStateV1, type DiskScanViewV1, type MachineStorageScanGetResultV1 } from '@happier-dev/protocol/storage/storageV1';
 import { openProtectedSqliteDatabaseSync, type SqliteDatabaseSync } from '@/daemon/persistence/sqliteSync';
@@ -14,7 +14,7 @@ export type ScanAdmission = Readonly<{ volumeId: string; root: string; target: D
     usedBytes: number; reservedBytes?: number; apfsContainerId?: string; fullDiskAccess: DiskScanStateV1['fullDiskAccess']; resume?: boolean; relistOnly?: boolean }>;
 export type TrustedDiskNode = Readonly<{ volumeId: string; scanId: string; path: string; pathBytes?: Buffer; node: DiskNodeV1; complete: boolean; materialized: boolean; summarized: boolean; scannedAt: number }>;
 const valueRow = z.object({ value: z.string() });
-const nodeRow = z.object({ id: z.string(), parent: z.string().nullable(), data: z.string() });
+const nodeRow = z.object({ id: z.string(), parent: z.nullable(z.string()), data: z.string() });
 const dirRow = z.object({ id: z.string(), complete: z.number(), scanned: z.number(), threshold: z.number(), unknown: z.number(), months3: z.number(), months6: z.number(), months12: z.number() });
 const pathRow = z.object({ path: z.string() });
 type AllocationFact = NonNullable<Extract<NativeDiskScanRecord, { type: 'dir' }>['allocationFacts']>[number];
@@ -243,7 +243,7 @@ function ingestDirectory(db: SqliteDatabaseSync, record: Extract<NativeDiskScanR
     }
     if (record.enumerated ?? record.complete) pruneUnseenEntries(db, record.id);
     const existing = db.prepare('SELECT parent,visible FROM nodes WHERE id=?').get(record.id);
-    const previous = existing ? z.object({ parent: z.string().nullable(), visible: z.number() }).parse(existing) : undefined;
+    const previous = existing ? z.object({ parent: z.nullable(z.string()), visible: z.number() }).parse(existing) : undefined;
     const selectedRootParent = record.id === metadata(db, 'root') ? metadata(db, 'rootParent') : undefined;
     const self = nodeFromNative({ ...record, kind: 'folder' }, record.parent ?? previous?.parent ?? (selectedRootParent || undefined));
     const count = db.prepare("SELECT COUNT(*) AS count FROM nodes WHERE parent=? AND visible=1 AND kind NOT IN ('small-items','hidden-space','reserved')").get(record.id);
@@ -403,7 +403,7 @@ export function createStorageScanIndex(deps: Readonly<{ activeServerDir: string;
             }
             return transaction(db, () => {
                 const priorRoot = db.prepare('SELECT parent FROM nodes WHERE id=?').get(input.root);
-                saveMetadata(db, 'rootParent', priorRoot ? z.object({ parent: z.string().nullable() }).parse(priorRoot).parent ?? '' : '');
+                saveMetadata(db, 'rootParent', priorRoot ? z.object({ parent: z.nullable(z.string()) }).parse(priorRoot).parent ?? '' : '');
                 if (metadata(db, 'completeState') && !metadata(db, 'baselineState')) {
                     for (const table of dataTables) {
                         db.exec(`DROP TABLE IF EXISTS baseline_${table}; CREATE TABLE baseline_${table} AS SELECT * FROM ${table}`);
@@ -516,7 +516,7 @@ export function createStorageScanIndex(deps: Readonly<{ activeServerDir: string;
             const selection = selected(input.scanId); if (!selection) return { state: null, nodes: [], coverage: [] };
             const { db, state, volumeId } = selection; attachPrevious(volumeId, db);
             const view = input.view ?? { tab: 'folders', depth: 1 }; const pageSize = view.pageSize ?? STORAGE_CHART_MAX_DRAWABLE_NODES;
-            const offset = view.cursor ? z.number().int().nonnegative().parse(Number(Buffer.from(view.cursor, 'base64url').toString())) : 0;
+            const offset = view.cursor ? z.number().check(z.int(), z.nonnegative()).parse(Number(Buffer.from(view.cursor, 'base64url').toString())) : 0;
             const root = view.nodeId ?? metadata(db, 'root')!; const args: unknown[] = [];
             const table = view.tab === 'large' || view.tab === 'old' ? 'files' : 'nodes';
             let where = view.tab === 'folders' ? `id IN (WITH RECURSIVE drawn(id,depth) AS (SELECT id,1 FROM nodes WHERE parent=? AND visible=1 UNION ALL SELECT n.id,d.depth+1 FROM nodes n JOIN drawn d ON n.parent=d.id WHERE n.visible=1 AND d.depth<?) SELECT id FROM drawn)` : '1';
@@ -572,7 +572,7 @@ export function createStorageScanIndex(deps: Readonly<{ activeServerDir: string;
                 ...(state.previousScanAt === undefined ? {} : { previousScanAt: state.previousScanAt }), ...(hasMore ? { nextCursor: Buffer.from(String(offset + pageSize)).toString('base64url') } : {}) };
             if (view.tab === 'find') {
                 const threshold = db.prepare('SELECT MAX(threshold) AS threshold FROM dirs').get();
-                result.findCoverageMinBytes = threshold ? z.object({ threshold: z.number().nullable() }).parse(threshold).threshold ?? 0 : 0;
+                result.findCoverageMinBytes = threshold ? z.object({ threshold: z.nullable(z.number()) }).parse(threshold).threshold ?? 0 : 0;
             }
             if (view.tab === 'insights') {
                 const distinct = db.prepare(`SELECT n.id,n.parent,n.data FROM nodes n WHERE n.kind='folder' AND n.id<>? AND n.id IN
@@ -647,13 +647,13 @@ export function createStorageScanIndex(deps: Readonly<{ activeServerDir: string;
             try {
                 handle = await open(path, 'wx', 0o600);
                 for (const value of db.prepare(priorDirectories).iterate(...(options.relistOnly ? [root, root] : [root]))) {
-                const row = z.object({ id: z.string(), allocated: z.number().int().nonnegative().safe() }).parse(value);
+                const row = z.object({ id: z.string(), allocated: z.number().check(z.int(), z.nonnegative(), z.int()) }).parse(value);
                 await handle.write(`${JSON.stringify({ v: 1, type: 'prior-dir', id: row.id, allocatedBytes: row.allocated })}\n`);
             }
                 if (options.relistOnly) for (const value of db.prepare(`SELECT n.id,n.data,d.unknown,d.months3,d.months6,d.months12,
                     (SELECT key FROM observations o WHERE o.owner=n.id AND o.path=n.id AND o.ageIncluded=0 ORDER BY key LIMIT 1) AS identityKey
                     FROM nodes n LEFT JOIN dirs d ON d.id=n.id WHERE n.parent=? AND n.kind IN ('folder','package')`).iterate(root)) {
-                    const row = z.object({ id: z.string(), data: z.string(), unknown: z.number().nullable(), months3: z.number().nullable(), months6: z.number().nullable(), months12: z.number().nullable(), identityKey: z.string().nullable() }).parse(value);
+                    const row = z.object({ id: z.string(), data: z.string(), unknown: z.nullable(z.number()), months3: z.nullable(z.number()), months6: z.nullable(z.number()), months12: z.nullable(z.number()), identityKey: z.nullable(z.string()) }).parse(value);
                     if (!row.identityKey) continue;
                     const node = StoredDiskNodeV1Schema.parse(JSON.parse(row.data) as unknown);
                     await handle.write(`${JSON.stringify({ v: 1, type: 'prior-child', id: row.id, identityKey: row.identityKey,
@@ -662,7 +662,7 @@ export function createStorageScanIndex(deps: Readonly<{ activeServerDir: string;
                         ageGroupBytes: { unknown: row.unknown ?? 0, months3: row.months3 ?? 0, months6: row.months6 ?? 0, months12: row.months12 ?? 0 } })}\n`);
                 }
                 if (options.resume) for (const value of db.prepare(`SELECT path,key,MAX(allocated) AS allocated FROM observations WHERE owner IN (${scope('nodes')}) GROUP BY path,key`).iterate(root)) {
-                    const row = z.object({ path: z.string(), key: z.string(), allocated: z.number().int().nonnegative().safe() }).parse(value);
+                    const row = z.object({ path: z.string(), key: z.string(), allocated: z.number().check(z.int(), z.nonnegative(), z.int()) }).parse(value);
                     await handle.write(`${JSON.stringify({ v: 1, type: 'prior-observation', id: row.path, key: row.key, allocatedBytes: row.allocated })}\n`);
                 }
                 if (options.resume) for (const value of db.prepare(runnableFrontier).iterate()) {

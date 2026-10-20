@@ -14,20 +14,15 @@ type Benefit = Readonly<{ icon: 'magnifying-glass' | 'key' | 'device-mobile'; ti
 const BENEFIT_COLUMN_MIN_WIDTH_PX = 160;
 
 /**
- * What the account service is, in one sentence under its mark. The section keeps it in every
- * signed-out and trouble state, so the section never loses its reason to exist.
+ * What the account service is, in one sentence beside its mark. The section keeps it in every
+ * signed-out and trouble state, so the section never loses its reason to exist. The mark sits in the
+ * section row's leading column (`SectionContentRow` `leading`), so this text starts on the rows' edge.
  */
-export const AccountServiceInvitationIntro = React.memo(function AccountServiceInvitationIntro(props: Readonly<{
-    serviceMark: React.ReactNode;
-}>) {
+export const AccountServiceInvitationIntro = React.memo(function AccountServiceInvitationIntro() {
     return (
-        <View style={styles.intro}>
-            {/* The service mark centres on the title and description it introduces. */}
-            <View style={styles.mark}>{props.serviceMark}</View>
-            <View style={styles.introText}>
-                <Text style={styles.title}>{t('settingsAccount.accountServiceInviteTitle')}</Text>
-                <Text style={styles.body}>{t('settingsAccount.accountServiceInviteBody')}</Text>
-            </View>
+        <View>
+            <Text style={styles.title}>{t('settingsAccount.accountServiceInviteTitle')}</Text>
+            <Text style={styles.body}>{t('settingsAccount.accountServiceInviteBody')}</Text>
         </View>
     );
 });
@@ -73,18 +68,6 @@ export const AccountServiceBenefits = React.memo(function AccountServiceBenefits
 });
 
 const styles = StyleSheet.create((theme) => ({
-    intro: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: theme.space.s12,
-    },
-    mark: {
-        flexShrink: 0,
-    },
-    introText: {
-        flex: 1,
-        minWidth: 0,
-    },
     title: {
         ...Typography.default('medium'),
         color: theme.colors.text.primary,

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ToolCall } from "@happier-dev/session-core/messages";
 import { makeToolCall, makeToolViewProps, standardCleanup, createSessionFixture } from '@/dev/testkit';
 import { createTestSessionTranscriptSource, pressTestInstanceAsync, renderWithSessionTranscriptSource, renderScreen, wrapWithSessionTranscriptSource } from '@/dev/testkit';
+import type { RenderWithAppProvidersOptions } from '@/dev/testkit';
 import { setPendingNavigationLanding } from '@/activity/source/pendingNavigationRuntime';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
@@ -20,7 +21,7 @@ function PaneWrapper(props: Readonly<{ children?: React.ReactNode }>) {
     return <AppPaneProvider>{props.children}</AppPaneProvider>;
 }
 
-function hasHostTestId(element: React.ReactElement, testID: string): boolean {
+function hasHostTestId(element: Parameters<NonNullable<RenderWithAppProvidersOptions['createNodeMock']>>[0], testID: string): boolean {
     if (React.isValidElement<{ testID?: string }>(element)) return element.props.testID === testID;
     // react-test-renderer may pass a plain native host descriptor to createNodeMock.
     const props: unknown = element.props;

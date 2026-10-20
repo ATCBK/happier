@@ -17,6 +17,7 @@ import { resolveSessionProjectPromptStack } from './sessionProjectPromptStack';
 import { withCliPromptLibraryArtifactReader } from '@/agent/prompts/library/resolveCliPromptStackSystemAppendBlocks';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { logger } from '@/ui/logger';
+import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 
 /** Birth copies Session memory attachments, not document bodies or the lead's instructions/identity.
  * Account/Profile/Project context continues to resolve through the worker's own composition. */
@@ -42,7 +43,7 @@ export async function prepareSessionMemoryInheritance(input: Readonly<{
     for (const entry of entries) {
       const ref = { ...entry.ref, serverId: entry.ref.serverId ?? scope.serverId };
       // Birth inheritance is same-Home/Account only. Never select saved credentials for another Home.
-      if (ref.serverId !== scope.serverId) throw new PromptStackPreparationError('unavailable', ref);
+      if (!await isServerProfileHomeIdentity(scope.serverId, ref.serverId)) throw new PromptStackPreparationError('unavailable', ref);
       const artifact = await reader.readArtifactHeader(ref);
       if (!artifact) throw new PromptStackPreparationError('unavailable', ref);
       assertPromptStackArtifactHeaderV1(ref, artifact.header, { layer: 'session', entryId: entry.id, memoryEnabled });

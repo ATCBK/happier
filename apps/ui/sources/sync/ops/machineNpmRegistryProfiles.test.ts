@@ -67,4 +67,23 @@ describe('machine npm registry profile ops', () => {
             mutationId: 'mutation-login-not-issued',
         }, { serverId: 'server-a' })).rejects.toThrow('not issued');
     });
+
+    it('fences the exact admitted target again at transport issue without reporting an unknown effect', async () => {
+        let current = true;
+        let emitted = false;
+        machineRpcWithServerScopeMock.mockImplementationOnce(async (input) => {
+            current = false;
+            input.onIssued?.();
+            emitted = true;
+            return { status: 'success', snapshot: { protocolVersion: 1, revision: 1, profiles: [], pausedSources: [] } };
+        });
+        const { machineNpmRegistryProfilesMutate } = await import('./machineNpmRegistryProfiles');
+        const options = { serverId: 'server-a', assertCurrent: () => {
+            if (!current) throw new Error('npm_registry_target_not_current');
+        } };
+        await expect(machineNpmRegistryProfilesMutate('machine-a', {
+            action: 'remove', machineId: 'machine-a', profileId: 'registry_acme', expectedRevision: 0, mutationId: 'remove-current',
+        }, options)).rejects.toThrow('npm_registry_target_not_current');
+        expect(emitted).toBe(false);
+    });
 });

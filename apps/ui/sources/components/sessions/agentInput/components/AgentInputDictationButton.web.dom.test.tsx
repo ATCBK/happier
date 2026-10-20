@@ -26,6 +26,7 @@ let container: HTMLDivElement | null = null;
 let root: Root | null = null;
 
 afterEach(() => {
+    vi.unstubAllGlobals();
     act(() => { root?.unmount(); });
     container?.remove();
     root = null;
@@ -33,6 +34,11 @@ afterEach(() => {
 });
 
 async function renderDictationButton(onPress: () => void): Promise<HTMLElement> {
+    // The full-size box is the touch floor: a finger is the primary pointer here, as on a phone browser.
+    vi.stubGlobal('matchMedia', (query: string) => ({
+        matches: query === '(pointer: coarse)' || query === '(hover: none)',
+        media: query,
+    }));
     const { AgentInputDictationButton } = await import('./AgentInputDictationButton');
     container = document.createElement('div');
     document.body.appendChild(container);

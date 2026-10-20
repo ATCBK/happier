@@ -1,17 +1,21 @@
 import * as React from 'react';
 import renderer from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { installMachinesSettingsCommonModuleMocks } from '@/components/settings/machines/machinesSettingsTestHelpers';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
+import { getActiveServerId, getServerProfileById, removeServerProfile, setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 
 type WizardPrimaryState = {
     onPress: (() => void) | (() => Promise<void>);
     disabled: boolean;
 } | null;
 
-const setActiveServerShareableUrlSpy = vi.hoisted(() => vi.fn());
-const setServerProfileShareableUrlSpy = vi.hoisted(() => vi.fn());
+let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | undefined;
+let previousServerId = '';
+let activeProfileId = '';
+let candidateProfileId = '';
 
 (
     globalThis as typeof globalThis & {
@@ -50,21 +54,21 @@ installMachinesSettingsCommonModuleMocks({
     },
 });
 
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot: () => ({
-        serverId: 'server-1',
-        serverUrl: 'https://relay.example.test',
-        activeShareableServerUrl: null,
-        generation: 0,
-    }),
-    setActiveShareableServerUrl: (value: string | null, options?: { validatedAgainstServerUrl?: string | null }) =>
-        setActiveServerShareableUrlSpy(value, options),
-    setServerProfileShareableUrl: (
-        serverProfileId: string,
-        value: string | null,
-        options?: { validatedAgainstServerUrl?: string | null },
-    ) => setServerProfileShareableUrlSpy(serverProfileId, value, options),
-}));
+beforeEach(async () => {
+    browser = await installBrowserRuntimeForTests({ url: 'https://app.example.test' });
+    previousServerId = getActiveServerId();
+    activeProfileId = (await upsertServerProfile({ serverUrl: 'https://relay.example.test', name: 'Active Home' })).id;
+    candidateProfileId = (await upsertServerProfile({ serverUrl: 'http://127.0.0.1:3005', name: 'Candidate Home' })).id;
+    await setActiveServerId(activeProfileId);
+});
+afterEach(async () => {
+    standardCleanup();
+    await setActiveServerId(previousServerId);
+    await removeServerProfile(candidateProfileId);
+    await removeServerProfile(activeProfileId);
+    browser?.restore();
+    browser = undefined;
+});
 
 function createRunnerHarness() {
     return import('@/components/systemTasks/createSystemTaskRunner').then(async ({ createSystemTaskRunner }) => {
@@ -117,7 +121,7 @@ describe('relay access wizard detail steps', () => {
             React.createElement(RelayAccessLanUrlStep, {
                 runner: harness.runner,
                 upstreamUrl: 'http://127.0.0.1:3005/',
-                serverProfileId: 'candidate-relay',
+                serverProfileId: candidateProfileId,
                 onWizardPrimaryChange: (state) => {
                     primary = state as typeof primary;
                 },
@@ -125,6 +129,7 @@ describe('relay access wizard detail steps', () => {
             }),
         );
 
+        await vi.waitFor(() => expect(harness.listeners.has('task_1:relay.access.status.v1')).toBe(true));
         await renderer.act(async () => {
             harness.listeners.get('task_1:relay.access.status.v1')?.onResult({
                 protocolVersion: SYSTEM_TASK_PROTOCOL_VERSION,
@@ -155,9 +160,6 @@ describe('relay access wizard detail steps', () => {
     });
 
     it('persists the LAN share URL onto the candidate relay profile', async () => {
-        setActiveServerShareableUrlSpy.mockClear();
-        setServerProfileShareableUrlSpy.mockClear();
-
         const { SYSTEM_TASK_PROTOCOL_VERSION } = await import('@happier-dev/protocol');
         const { RelayAccessLanUrlStep } = await import('./RelayAccessLanUrlStep');
         const harness = await createRunnerHarness();
@@ -167,7 +169,7 @@ describe('relay access wizard detail steps', () => {
             React.createElement(RelayAccessLanUrlStep, {
                 runner: harness.runner,
                 upstreamUrl: 'http://127.0.0.1:3005/',
-                serverProfileId: 'candidate-relay',
+                serverProfileId: candidateProfileId,
                 onWizardPrimaryChange: (state) => {
                     primary = state as typeof primary;
                 },
@@ -239,10 +241,12 @@ describe('relay access wizard detail steps', () => {
         });
         await renderer.act(async () => {});
 
-        expect(setServerProfileShareableUrlSpy).toHaveBeenCalledWith('candidate-relay', 'https://relay.lan.example.test', {
-            validatedAgainstServerUrl: 'http://127.0.0.1:3005/',
+        expect(getServerProfileById(candidateProfileId)).toMatchObject({
+            shareableServerUrl: 'https://relay.lan.example.test',
+            shareableServerUrlValidatedAgainstServerUrl: 'http://127.0.0.1:3005',
         });
-        expect(setActiveServerShareableUrlSpy).not.toHaveBeenCalled();
+        expect(getActiveServerId()).toBe(activeProfileId);
+        expect(getServerProfileById(activeProfileId)?.shareableServerUrl ?? null).toBeNull();
     });
 
     it('advances after saving the LAN relay access URL', async () => {
@@ -256,7 +260,7 @@ describe('relay access wizard detail steps', () => {
             React.createElement(RelayAccessLanUrlStep, {
                 runner: harness.runner,
                 upstreamUrl: 'http://127.0.0.1:3005/',
-                serverProfileId: 'candidate-relay',
+                serverProfileId: candidateProfileId,
                 onWizardPrimaryChange: (state) => {
                     primary = state as typeof primary;
                 },
@@ -322,7 +326,7 @@ describe('relay access wizard detail steps', () => {
             React.createElement(RelayAccessCloudflareNamedTunnelStep, {
                 runner: harness.runner,
                 upstreamUrl: 'http://127.0.0.1:3005/',
-                serverProfileId: 'candidate-relay',
+                serverProfileId: candidateProfileId,
                 onWizardPrimaryChange: (state) => {
                     primary = state as typeof primary;
                 },
@@ -330,6 +334,7 @@ describe('relay access wizard detail steps', () => {
             }),
         );
 
+        await vi.waitFor(() => expect(harness.listeners.has('task_1:relay.access.status.v1')).toBe(true));
         await renderer.act(async () => {
             harness.listeners.get('task_1:relay.access.status.v1')?.onResult({
                 protocolVersion: SYSTEM_TASK_PROTOCOL_VERSION,
@@ -363,9 +368,6 @@ describe('relay access wizard detail steps', () => {
     });
 
     it('persists the Cloudflare share URL onto the candidate relay profile', async () => {
-        setActiveServerShareableUrlSpy.mockClear();
-        setServerProfileShareableUrlSpy.mockClear();
-
         const { SYSTEM_TASK_PROTOCOL_VERSION } = await import('@happier-dev/protocol');
         const { RelayAccessCloudflareNamedTunnelStep } = await import('./RelayAccessCloudflareNamedTunnelStep');
         const harness = await createRunnerHarness();
@@ -375,7 +377,7 @@ describe('relay access wizard detail steps', () => {
             React.createElement(RelayAccessCloudflareNamedTunnelStep, {
                 runner: harness.runner,
                 upstreamUrl: 'http://127.0.0.1:3005/',
-                serverProfileId: 'candidate-relay',
+                serverProfileId: candidateProfileId,
                 onWizardPrimaryChange: (state) => {
                     primary = state as typeof primary;
                 },
@@ -447,9 +449,11 @@ describe('relay access wizard detail steps', () => {
         });
         await renderer.act(async () => {});
 
-        expect(setServerProfileShareableUrlSpy).toHaveBeenCalledWith('candidate-relay', 'https://relay.example.com', {
-            validatedAgainstServerUrl: 'http://127.0.0.1:3005/',
+        expect(getServerProfileById(candidateProfileId)).toMatchObject({
+            shareableServerUrl: 'https://relay.example.com',
+            shareableServerUrlValidatedAgainstServerUrl: 'http://127.0.0.1:3005',
         });
-        expect(setActiveServerShareableUrlSpy).not.toHaveBeenCalled();
+        expect(getActiveServerId()).toBe(activeProfileId);
+        expect(getServerProfileById(activeProfileId)?.shareableServerUrl ?? null).toBeNull();
     });
 });

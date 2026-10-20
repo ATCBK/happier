@@ -6,7 +6,12 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { getActionSpec, ProjectWorkerActionInputSchemasV1 } from '@happier-dev/protocol';
 import { act } from 'react-test-renderer';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
-import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { decideApprovalAsInbox, installOwnMachineApprovalReplayBoundary } from '@/dev/testkit/harness/approvalInbox';
+import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { PROJECT_ACCOUNT_ROWS_ROUTE_V1, ProjectAccountRowV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { computeWorkspaceSyncPolicyDigest, WorkspaceSyncRelationshipV1Schema,
+  WorkspaceSyncRelationshipsListRpcResultV1Schema } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 
 const rpc = vi.hoisted(() => ({ machine: vi.fn() }));
 // Only the addressed daemon network is replaced; Account capture and Action policy stay real.
@@ -22,12 +27,56 @@ const { executeProjectWorkerActionV1 } = await import('./projectWorkerActions');
 let serverId = 'home';
 beforeEach(async () => {
   await homes.reset(); await loadSyncSingletonForTests(); rpc.machine.mockReset();
-  serverId = await homes.addHome({ name: 'Worker Home', serverUrl: 'https://worker-actions.test', accountId: 'owner' });
+  serverId = await homes.addHome({ name: 'Worker Home', serverUrl: 'https://worker-actions.test',
+    serverIdentityId: 'srv_worker_actions', accountId: 'owner', currentAccount: true });
+  publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
 });
 afterEach(async () => { await homes.reset(); });
 
 describe('worker Actions through the captured UI Home', () => {
+  it.each(['ui', 'agent'] as const)('lists Sync relationships from the %s Action surface on the exact controller', async surface => {
+    const result = WorkspaceSyncRelationshipsListRpcResultV1Schema.parse({ controllerMachineId: 'controller', sets: [], relationships: [], remoteRelationships: [],
+      membership: { workspaceRefId: null, found: null }, discoveryAvailable: true });
+    rpc.machine.mockResolvedValueOnce(result);
+    expect(await createDefaultActionExecutor().execute('workspace.sync.relationships.list', { controllerMachineId: 'controller' }, {
+      serverId, expectedAccountId: 'owner', surface,
+    })).toEqual({ ok: true, result });
+    expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({ serverId: 'srv_worker_actions', machineId: 'controller',
+      method: 'daemon.workspaceSync.relationships.list.v1', payload: {} }));
+  });
+
+  it.each(['linked', 'unlinked'] as const)('resolves a %s member through the captured Account graph and refuses a contradictory controller before transport', async state => {
+    const fields = { v: 1 as const, selection: 'all_files' as const, extraIgnorePatterns: [], extraIncludePatterns: [] };
+    const definition = WorkspaceSyncRelationshipV1Schema.parse({ v: 1, relationshipId: 'worker-link', controllerMachineId: 'controller',
+      alphaWorkspaceRefId: 'source', betaWorkspaceRefId: 'worker', mode: 'keep_synced',
+      contentPolicy: { ...fields, policyDigest: computeWorkspaceSyncPolicyDigest(fields) }, enabled: false, createdAtMs: 1, updatedAtMs: 1 });
+    const refs = [{ id: 'source', serverId, machineId: 'controller', rootPath: '/source', createdAtMs: 1 },
+      { id: 'worker', serverId, machineId: 'worker-machine', rootPath: '/worker', createdAtMs: 1 }];
+    const graphKey = { kind: 'relationship-graph' as const };
+    homes.answer(serverId, `POST ${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`, { body: { status: 'listed', coverage: 'complete', rows: [
+      ...refs.map(ref => { const key = { kind: 'workspace-ref' as const, serverId, id: ref.id };
+        return ProjectAccountRowV1Schema.parse({ key, revision: 1, content: { t: 'plain', v: { key, value: ref } } }); }),
+      ProjectAccountRowV1Schema.parse({ key: graphKey, revision: 1, content: { t: 'plain', v: { key: graphKey, value: { relationships: state === 'linked' ? [definition] : [] } } } }),
+    ] } });
+    const result = WorkspaceSyncRelationshipsListRpcResultV1Schema.parse({ controllerMachineId: 'controller', sets: [], relationships: [],
+      remoteRelationships: [], membership: { workspaceRefId: 'worker', found: false }, discoveryAvailable: true });
+    rpc.machine.mockResolvedValueOnce(result);
+    const owner = createDefaultActionExecutor();
+    const context = { serverId, expectedAccountId: 'owner', surface: 'ui' as const };
+    expect(await owner.execute('workspace.sync.relationships.list', { workspaceRefId: 'worker' }, context)).toEqual({ ok: true, result });
+    expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({ serverId: 'srv_worker_actions', accountId: 'owner', machineId: state === 'linked' ? 'controller' : 'worker-machine',
+      method: 'daemon.workspaceSync.relationships.list.v1', payload: { workspaceRefId: 'worker' } }));
+    rpc.machine.mockClear();
+    expect(await owner.execute('workspace.sync.relationships.list', { workspaceRefId: 'worker', controllerMachineId: 'wrong' }, context))
+      .toMatchObject({ ok: false, errorCode: 'relationship_changed' });
+    expect(rpc.machine).not.toHaveBeenCalled();
+    rpc.machine.mockResolvedValueOnce({ errorCode: 'controller_unavailable', error: 'Controller unavailable' });
+    expect(await owner.execute('workspace.sync.relationships.list', { controllerMachineId: 'controller' }, context))
+      .toMatchObject({ ok: false, errorCode: 'controller_unavailable' });
+  });
+
   it('returns the native conflict observation after Ask-first worker preference approval', async () => {
+    await homes.requireUiApproval(serverId, 'projects.worker.preferences.set');
     const preference = { enabled: false, unavailable: 'fail', allowAdHoc: true, scriptOverrides: {} } as const;
     homes.answer(serverId, '/v1/projects/execution/config/read', { body: {
       status: 'present', revision: 4, content: { t: 'plain', v: { ...preference, services: {} } },
@@ -71,6 +120,7 @@ describe('worker Actions through the captured UI Home', () => {
   });
 
   it('continues a real Ask-first retirement and returns its approved receipt without replaying the effect', async () => {
+    await homes.requireUiApproval(serverId, 'projects.worker.copy.retire');
     const disposeExecutor = await installRealActionExecutorModuleLoader();
     const { useActionApprovalContinuation } = await import('@/components/approvals/useActionApprovalContinuation');
     const hook = await renderHook(() => useActionApprovalContinuation({ serverId, scopeKey: serverId, onExecuted: () => {} }));
@@ -78,6 +128,7 @@ describe('worker Actions through the captured UI Home', () => {
       JSON.parse(getActionSpec('projects.worker.copy.retire').examples!.voice!.argsExample!),
     );
     const request = { ...example, workspace: { ...example.workspace, serverId } };
+    await installOwnMachineApprovalReplayBoundary({ harness: homes, serverId, accountId: 'owner', machineId: request.machineId });
     const lifetime = new AbortController();
     let pending: ReturnType<typeof executeProjectWorkerActionV1<'projects.worker.copy.retire'>>;
     await act(async () => {
@@ -110,7 +161,7 @@ describe('worker Actions through the captured UI Home', () => {
     const owner = createDefaultActionExecutor();
     const context = { serverId, expectedAccountId: 'owner', surface: 'ui' as const };
     expect(await owner.execute('projects.worker.status', input, context)).toEqual({ ok: true, result: status });
-    expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({ serverId, machineId: 'worker', accountId: 'owner',
+    expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({ serverId: 'srv_worker_actions', machineId: 'worker', accountId: 'owner',
       method: 'projects.worker.status', payload: input }));
     const denied = { ok: false, errorCode: 'project_worker_access_denied', error: 'project_worker_access_denied' };
     rpc.machine.mockResolvedValueOnce(denied);

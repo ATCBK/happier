@@ -10,7 +10,7 @@ import { createPersonalHomeBackup } from './backup.js';
 import { createPersonalHomeArchive, extractVerifiedPersonalHomeArchive, extractVerifiedPersonalHomeArchiveSnapshot, PERSONAL_HOME_BACKUP_QUICK_INSPECTION_MAX_HEADERS, PERSONAL_HOME_BACKUP_QUICK_INSPECTION_MAX_MANIFEST_BYTES, readPersonalHomeArchiveManifestMetadata, verifyPersonalHomeArchive, verifyPersonalHomeArchiveSnapshot, withPrivatePersonalHomeArchiveSnapshot } from './archive.js';
 import { resolvePersonalHomeRuntimeLayout } from './layout.js';
 import { finalizePersonalHomeRestoreWithLease, hasMeaningfulPersonalHomeData, inspectPersonalHomeRestoreRecovery, recoverPersonalHomeRestoreWithLease, restorePersonalHomeBackup as restorePersonalHomeBackupOwner } from './restore.js';
-import { parsePersonalHomeBackupManifest } from './manifest.js';
+import { isAllowedPersonalHomeBackupDirectoryPath, parsePersonalHomeBackupManifest } from './manifest.js';
 import { preparePersonalHomeSanitizedConfiguration } from './productionAdapters.js';
 import { assertStablePersonalHomeSqliteSnapshot, PersonalHomeSqliteSnapshotError } from './sqliteSnapshot.js';
 import type { PersonalHomeRestorableConfigurationV1 } from './configuration.js';
@@ -559,6 +559,24 @@ describe('Personal Home backup and restore owner', () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  it.each([
+    ['COM¹', false], ['CONIN$', false], ['CONOUT$', false], ['report?.txt', false], ['a<b.txt', false],
+    ['COM1-not-device.txt', true], ['CONIN-report.txt', true], ['report.txt', true], ['a-b.txt', true],
+  ])('uses portable segment admission for backup file and directory %s', (name, accepted) => {
+    const hash = createHash('sha256').update('').digest('hex');
+    const path = `files/public/${name}`;
+    const parse = () => parsePersonalHomeBackupManifest({
+      format: 'happier-personal-home-backup', version: 1, createdAt: new Date(0).toISOString(), happierVersion: '0',
+      schemaVersion: '1', homeServerIdentityId: 'home-identity', masterSecretFingerprint: hash,
+      databaseProvider: 'sqlite', filesProvider: 'local', sourcePlatform: 'linux', sourceRuntimeMode: 'user',
+      entries: ['database/home.sqlite', 'secrets/handy-master-secret.txt', 'configuration/home.env.json', path]
+        .map((entryPath) => ({ path: entryPath, size: 0, sha256: hash })),
+    });
+    if (accepted) expect(parse().entries).toContainEqual({ path, size: 0, sha256: hash });
+    else expect(parse).toThrow(/Invalid Personal Home backup path/u);
+    expect(isAllowedPersonalHomeBackupDirectoryPath(`${path}/`)).toBe(accepted);
   });
 
   it('rejects archive paths beyond the portable filesystem path boundary while retaining long valid v1 paths', () => {

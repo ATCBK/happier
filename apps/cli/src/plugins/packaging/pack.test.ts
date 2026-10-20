@@ -197,6 +197,30 @@ async function writeBundledFirstPartyDescriptorPackFixture(repoRoot: string): Pr
 }
 
 describe('packLocalPlugin', () => {
+  it('keeps explicit manifest locators cold when a package also contains author source', async () => {
+    const parent = await mkdtemp(join(tmpdir(), 'happier-explicit-manifest-pack-'));
+    const root = join(parent, 'plugin');
+    try {
+      await mkdir(join(root, '.happier-plugin'), { recursive: true });
+      const manifest = createPluginManifestV2Fixture({ id: 'acme.explicit-manifest', entrypoints: undefined });
+      const manifestPath = join(root, '.happier-plugin', 'plugin.json');
+      await writeFile(manifestPath, JSON.stringify(manifest), 'utf8');
+      await writeFile(join(root, 'index.ts'), "throw new Error('Explicit manifest packing must not evaluate author source');\n", 'utf8');
+      await writeFile(join(root, 'package.json'), JSON.stringify({
+        name: 'happier-plugin-explicit-manifest', version: manifest.version,
+        keywords: ['happier-plugin'], happier: { manifest: '.happier-plugin/plugin.json' },
+        files: ['.happier-plugin/plugin.json'],
+      }), 'utf8');
+
+      for (const [index, locator] of [manifestPath, join(root, '.happier-plugin')].entries()) {
+        expect(await packLocalPlugin({ locator, outPath: join(parent, `explicit-${index}.tgz`) }))
+          .toMatchObject({ ok: true, pluginId: manifest.id });
+      }
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
   it('removes only manifest-owned outputs from a descriptor-only pack copy before archive traversal', async () => {
     const parent = await mkdtemp(join(tmpdir(), 'happier-descriptor-transition-pack-'));
     const root = join(parent, 'plugin');

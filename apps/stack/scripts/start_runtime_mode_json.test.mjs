@@ -78,6 +78,61 @@ test('source snapshot preview defaults to borrowed dev Expo without owning Metro
   await assert.rejects(stat(join(fixture.stackDir, 'source-runtime')), { code: 'ENOENT' });
 });
 
+for (const placement of ['plain-local', 'prepared-local', 'prepared-remote']) {
+  test(`borrowed source handoff admits ${placement} through the real environment loader`, async t => {
+    const rootDir = stackRootDirFromMeta(import.meta.url);
+    const fixture = await createRuntimeSnapshotFixture(t, { stackName: `handoff-${placement}` });
+    await appendFile(join(fixture.stackDir, 'env'), 'HAPPIER_STACK_EXPO_SOURCE_STACK=producer\n');
+    const prepared = placement !== 'plain-local';
+    const origin = 'http://happier-borrowed.localhost:19364';
+    const result = await runNode([join(rootDir, 'scripts/run.mjs'), '--json', '--runtime=source',
+      '--ui=borrowed', '--no-dev-targets', `--prepared-borrowed-webapp-origin=${origin}`,
+      ...(prepared ? ['--restart', '--reuse-source-runtime'] : []),
+    ], { cwd: rootDir, env: {
+      ...process.env,
+      HAPPIER_STACK_STACK: fixture.stackName,
+      HAPPIER_STACK_STORAGE_DIR: fixture.storageDir,
+      HAPPIER_STACK_ENV_FILE: join(fixture.stackDir, 'env'),
+      HAPPIER_STACK_REPO_DIR: rootDir,
+      HAPPIER_STACK_PREPARED_SOURCE_RELOAD: prepared ? '1' : '',
+      HAPPIER_DEV_TARGET_EXECUTION: placement === 'prepared-remote' ? '1' : '',
+    } });
+    assert.equal(result.code, 0, result.stderr);
+    const preview = JSON.parse(result.stdout);
+    assert.equal(preview.launchMode, 'source-snapshot');
+    assert.equal(preview.sourceUi, 'borrowed');
+    assert.equal(preview.serveUi, false);
+    assert.equal(preview.startOwnedExpo, false);
+    await assert.rejects(stat(join(fixture.stackDir, 'source-runtime')), { code: 'ENOENT' });
+  });
+}
+
+test('source handoff rejects unprepared local reuse and invalid borrowed origins', async t => {
+  const rootDir = stackRootDirFromMeta(import.meta.url);
+  const fixture = await createRuntimeSnapshotFixture(t, { stackName: 'handoff-rejections' });
+  const env = { ...process.env, HAPPIER_STACK_STACK: fixture.stackName,
+    HAPPIER_STACK_STORAGE_DIR: fixture.storageDir, HAPPIER_STACK_ENV_FILE: join(fixture.stackDir, 'env'),
+    HAPPIER_STACK_REPO_DIR: rootDir, HAPPIER_STACK_PREPARED_SOURCE_RELOAD: '', HAPPIER_DEV_TARGET_EXECUTION: '' };
+  const args = [join(rootDir, 'scripts/run.mjs'), '--json', '--runtime=source'];
+  const unprepared = await runNode([...args, '--no-dev-targets', '--reuse-source-runtime'], { cwd: rootDir, env });
+  assert.notEqual(unprepared.code, 0, unprepared.stdout);
+  assert.match(unprepared.stderr, /runtime reuse is restricted/u);
+  const misplaced = await runNode([...args, '--reuse-source-runtime'], { cwd: rootDir,
+    env: { ...env, HAPPIER_STACK_PREPARED_SOURCE_RELOAD: '1' } });
+  assert.notEqual(misplaced.code, 0, misplaced.stdout);
+  assert.match(misplaced.stderr, /runtime reuse is restricted/u);
+  for (const origin of ['file:///fixture', 'http://fixture.invalid/path', 'http://user:password@fixture.invalid']) {
+    const result = await runNode([...args, '--no-dev-targets', `--prepared-borrowed-webapp-origin=${origin}`], { cwd: rootDir, env });
+    assert.notEqual(result.code, 0, result.stdout);
+    assert.match(result.stderr, /handoff must be an HTTP\(S\) origin/u);
+  }
+  const nonSource = await runNode([join(rootDir, 'scripts/run.mjs'), '--json', '--runtime', '--restart',
+    '--prepared-borrowed-webapp-origin=http://fixture.invalid'], { cwd: rootDir, env });
+  assert.notEqual(nonSource.code, 0, nonSource.stdout);
+  assert.match(nonSource.stderr, /borrowed webapp origin handoff is restricted/u);
+  await assert.rejects(stat(join(fixture.stackDir, 'source-runtime')), { code: 'ENOENT' });
+});
+
 test('source QA frozen export is explicit and headless source workers do not need Expo', async t => {
   const rootDir = stackRootDirFromMeta(import.meta.url);
   const fixture = await createRuntimeSnapshotFixture(t, { stackName: 'source-ui-choice' });

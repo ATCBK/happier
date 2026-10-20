@@ -1,8 +1,9 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { performance } from 'node:perf_hooks';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
     ExternalSessionProviderFailureError,
@@ -38,6 +39,7 @@ async function findCandidateIndexPath(activeServerDir: string): Promise<string> 
 async function readBuildingRecord(activeServerDir: string): Promise<Readonly<{
     state: string;
     scanned: number;
+    indexGeneration?: string;
     validation?: unknown;
     candidates: readonly Readonly<{ remoteSessionId: string }>[];
 }>> {
@@ -46,6 +48,7 @@ async function readBuildingRecord(activeServerDir: string): Promise<Readonly<{
     ) as Readonly<{
         state: string;
         scanned: number;
+        indexGeneration?: string;
         validation?: unknown;
         candidates: readonly Readonly<{ remoteSessionId: string }>[];
     }>;
@@ -99,6 +102,7 @@ const CHUNK_LIMIT = 6;
 
 describe('External Sessions candidate index head arrivals', () => {
     afterEach(async () => {
+        vi.restoreAllMocks();
         await Promise.all(roots.splice(0).map(async (root) => {
             await rm(root, { recursive: true, force: true });
         }));
@@ -151,7 +155,11 @@ describe('External Sessions candidate index head arrivals', () => {
     it('completes a generation whose crawl absorbed a head arrival, and serves the arrival next', async () => {
         const activeServerDir = await mkdtemp(join(tmpdir(), 'happier-candidate-head-completes-'));
         roots.push(activeServerDir);
-        const corpus = createCorpus(15_000);
+        // Exercise checkpointing independently of host speed. One continuation
+        // per work slice leaves room for both crawl and validation in 60 rounds.
+        let elapsedMs = 0;
+        vi.spyOn(performance, 'now').mockImplementation(() => elapsedMs += 1000);
+        const corpus = createCorpus(1200);
         const listCandidates = createHeadAnchoredSource(corpus);
         const query = () => executeExternalSessionCandidateQuery({
             activeServerDir,
@@ -206,12 +214,14 @@ describe('External Sessions candidate index head arrivals', () => {
         const completed = await readBuildingRecord(activeServerDir);
         expect(completed.state).toBe('complete');
 
-        // A completed generation absorbs nothing, so the arrival ahead of its
-        // published head opens the next generation, which serves it in order.
-        const superseded = await query();
-        expect(superseded.preparation?.kind).toBe('building_candidate_index');
-        const republished = await driveToCompletion();
+        // The completed owner replaces its head through the existing watermark
+        // refresh, publishing the next generation without rebuilding its tail.
+        const republished = await query();
+        expect(republished.preparation).toBeUndefined();
         expect(republished.candidates[0]?.remoteSessionId).toBe('row-arrival');
+        const refreshed = await readBuildingRecord(activeServerDir);
+        expect(refreshed.state).toBe('complete');
+        expect(refreshed.indexGeneration).not.toBe(completed.indexGeneration);
     }, 120_000);
 
     it('treats an in-progress already-scanned head mutation as a move-ahead', async () => {

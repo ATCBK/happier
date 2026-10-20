@@ -1,34 +1,32 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { invalidateAccountEncryptionModeCache } from '@/sync/api/account/apiAccountEncryptionMode';
+import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
+import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { encodeAutomationTemplateCiphertextForAccount } from './encodeAutomationTemplateCiphertextForAccount';
 
-const serverFetchSpy = vi.fn(async (..._args: unknown[]) => ({
-  ok: true,
-  status: 200,
-  json: async () => ({ mode: 'plain', updatedAt: 1 }),
-}));
-
-vi.mock('@/sync/http/client', () => ({
-  serverFetch: (...args: unknown[]) => serverFetchSpy(...args),
-}));
+let accountMode: 'plain' | 'e2ee' = 'plain';
 
 describe('encodeAutomationTemplateCiphertextForAccount', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     invalidateAccountEncryptionModeCache();
-    serverFetchSpy.mockClear();
+    accountMode = 'plain';
+    // Replace only the external HTTP port; focused request authority stays real.
+    setRuntimeFetch(async input => {
+      const path = new URL(String(input)).pathname;
+      if (path === '/health' || path === '/v1/auth/ping') return Response.json({ ok: true });
+      if (path === '/v1/account/encryption') return Response.json({ mode: accountMode, updatedAt: 1 });
+      throw new Error(`Unexpected automation HTTP: ${path}`);
+    });
+    await upsertAndActivateServer({ serverUrl: 'https://automation-template.test', scope: 'device' });
   });
+  afterEach(resetRuntimeFetch);
 
   it('returns plaintext envelope for plain accounts without calling encryptRaw', async () => {
     const encryptRaw = vi.fn(async () => 'ciphertext-base64');
-    serverFetchSpy.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      json: async () => ({ mode: 'plain', updatedAt: 1 }),
-    });
 
     const templateCiphertext = await encodeAutomationTemplateCiphertextForAccount({
-      credentials: { token: 't' } as any,
+      credentials: { token: 't' },
       template: { directory: '/tmp/project', prompt: 'Hi', transcriptStorage: 'direct', existingSessionId: 'session-1' },
       encryptRaw,
     });
@@ -41,14 +39,10 @@ describe('encodeAutomationTemplateCiphertextForAccount', () => {
 
   it('returns encrypted envelope for e2ee accounts and calls encryptRaw', async () => {
     const encryptRaw = vi.fn(async () => 'ciphertext-base64');
-    serverFetchSpy.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      json: async () => ({ mode: 'e2ee', updatedAt: 1 }),
-    });
+    accountMode = 'e2ee';
 
     const templateCiphertext = await encodeAutomationTemplateCiphertextForAccount({
-      credentials: { token: 't' } as any,
+      credentials: { token: 't' },
       template: { directory: '/tmp/project', prompt: 'Hi', existingSessionId: 'session-1' },
       encryptRaw,
     });

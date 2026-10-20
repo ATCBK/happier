@@ -80,6 +80,8 @@ export const reviewCommentLabelsFixture = {
     reopen: 'Reopen',
     redact: 'Redact',
     reply: 'Reply',
+    showMore: 'Show more',
+    showLess: 'Show less',
     replyUnavailable: 'Reply unavailable',
     bulkResolve: 'Resolve visible',
     bulkDismiss: 'Dismiss visible',

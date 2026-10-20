@@ -2,12 +2,13 @@ import axios from 'axios';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AutomationV3SettingsSchema, type AutomationV3Settings } from '@happier-dev/protocol/automations/automationApiV3';
 
-import { createCliSettingsDeclarationAction } from './settingsDeclarationAction';
+import { createCliSettingsDeclarationActionFixture as createCliSettingsDeclarationAction } from './settingsDeclarationAction.test-support';
 
 afterEach(() => vi.restoreAllMocks());
 
 describe('headless Automation setting declarations', () => {
     const baseUrl = 'https://automation-owner.test';
+    const home = { serverId: 'automation-owner', serverHttpBaseUrl: baseUrl };
     const credentials = { token: 'automation-account', encryption: null };
     const capAnchor = 'settings.workflowRuns.maxActiveRunsPerMachine';
     const retentionAnchor = 'settings.workflowRuns.runRetention';
@@ -29,7 +30,7 @@ describe('headless Automation setting declarations', () => {
             persisted = AutomationV3SettingsSchema.parse(body);
             return { data: persisted };
         });
-        const action = createCliSettingsDeclarationAction({ credentials, serverHttpBaseUrl: baseUrl });
+        const action = createCliSettingsDeclarationAction({ credentials, ...home });
         expect(await action({ actionId: 'settings.set', input: { anchor, value }, context: { surface: 'cli' } }))
             .toEqual({ anchor, value });
         expect(persisted).toEqual(expected);
@@ -43,7 +44,7 @@ describe('headless Automation setting declarations', () => {
     ])('rejects invalid $anchor without reading or writing the server', async input => {
         const read = vi.spyOn(axios, 'get');
         const write = vi.spyOn(axios, 'put');
-        const action = createCliSettingsDeclarationAction({ credentials, serverHttpBaseUrl: baseUrl });
+        const action = createCliSettingsDeclarationAction({ credentials, ...home });
         expect(await action({ actionId: 'settings.set', input, context: { surface: 'cli' } }))
             .toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
         expect(read).not.toHaveBeenCalled();
@@ -57,7 +58,7 @@ describe('headless Automation setting declarations', () => {
     ] as const)('rejects Account preference version/reversal semantics for $actionId', async request => {
         const read = vi.spyOn(axios, 'get');
         const write = vi.spyOn(axios, 'put');
-        const action = createCliSettingsDeclarationAction({ credentials, serverHttpBaseUrl: baseUrl });
+        const action = createCliSettingsDeclarationAction({ credentials, ...home });
         expect(await action({ ...request, context: { surface: 'cli' } }))
             .toMatchObject({ ok: false, errorCode: 'setting_conditional_mutation_unsupported' });
         expect(read).not.toHaveBeenCalled();
@@ -71,7 +72,7 @@ describe('headless Automation setting declarations', () => {
             return { data: { maxActiveRunsPerMachine: 7, runRetention: 'keepForever' } };
         });
         const write = vi.spyOn(axios, 'put');
-        const action = createCliSettingsDeclarationAction({ credentials, serverHttpBaseUrl: baseUrl,
+        const action = createCliSettingsDeclarationAction({ credentials, ...home,
             isCredentialCurrent: () => current });
         expect(await action({ actionId: 'settings.set', input: { anchor: capAnchor, value: 3 }, context: { surface: 'cli' } }))
             .toMatchObject({ ok: false, errorCode: 'credential_scope_retired' });
@@ -85,7 +86,7 @@ describe('headless Automation setting declarations', () => {
             return { data: { maxActiveRunsPerMachine: 7, runRetention: 'keepForever' } };
         });
         const write = vi.spyOn(axios, 'put');
-        const action = createCliSettingsDeclarationAction({ credentials, serverHttpBaseUrl: baseUrl });
+        const action = createCliSettingsDeclarationAction({ credentials, ...home });
         await expect(action({ actionId: 'settings.set', input: { anchor: capAnchor, value: 3 },
             context: { surface: 'cli', signal: controller.signal } })).rejects.toMatchObject({ name: 'AbortError' });
         expect(write).not.toHaveBeenCalled();
@@ -100,7 +101,7 @@ describe('headless Automation setting declarations', () => {
             current = false;
             return { data: persisted };
         });
-        const action = createCliSettingsDeclarationAction({ credentials, serverHttpBaseUrl: baseUrl,
+        const action = createCliSettingsDeclarationAction({ credentials, ...home,
             isCredentialCurrent: async () => current });
         expect(await action({ actionId: 'settings.set', input: { anchor: capAnchor, value: 3 }, context: { surface: 'cli' } }))
             .toMatchObject({ ok: false, errorCode: 'credential_scope_retired' });
@@ -111,7 +112,7 @@ describe('headless Automation setting declarations', () => {
         const refusal = Object.assign(new Error('automation feature disabled'), { response: { status: 404 } });
         vi.spyOn(axios, 'get').mockRejectedValue(refusal);
         const write = vi.spyOn(axios, 'put');
-        const action = createCliSettingsDeclarationAction({ credentials, serverHttpBaseUrl: baseUrl });
+        const action = createCliSettingsDeclarationAction({ credentials, ...home });
         await expect(action({ actionId: 'settings.set', input: { anchor: capAnchor, value: 3 }, context: { surface: 'cli' } }))
             .rejects.toBe(refusal);
         expect(write).not.toHaveBeenCalled();
@@ -120,7 +121,7 @@ describe('headless Automation setting declarations', () => {
     it('rejects malformed full records before disclosing a setting or replacing a sibling', async () => {
         vi.spyOn(axios, 'get').mockResolvedValue({ data: { maxActiveRunsPerMachine: 7, runRetention: 'invented' } });
         const write = vi.spyOn(axios, 'put');
-        const action = createCliSettingsDeclarationAction({ credentials, serverHttpBaseUrl: baseUrl });
+        const action = createCliSettingsDeclarationAction({ credentials, ...home });
         await expect(action({ actionId: 'settings.get', input: { anchor: capAnchor }, context: { surface: 'cli' } }))
             .rejects.toBeDefined();
         await expect(action({ actionId: 'settings.set', input: { anchor: capAnchor, value: 3 }, context: { surface: 'cli' } }))

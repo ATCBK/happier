@@ -21,6 +21,7 @@ import { resolveTrackedSessionExitSettlementEvidence } from './resolveTrackedSes
 import { stageObservedExit } from './stageObservedExit';
 import type { SkillStore } from '@/prompts/skills/store/skillStore';
 import { readRetainedPlainRunnerExitMarker } from './retireTerminalControlServiceability';
+import { releaseUnretainedRequesterSessionRuntimeContext } from '../sessionEncryption/requesterSessionCredentials';
 
 export type ChildExit = {
   reason: string;
@@ -129,7 +130,8 @@ export function createOnChildExited(params: Readonly<{
   }>;
   spawnResourceCleanupByPid: Map<number, () => void | Promise<void>>;
   sessionAttachCleanupByPid: Map<number, () => Promise<void>>;
-  getApiMachineForSessions: () => ApiMachineClient | null;
+  getApiMachineForSessions: () => Pick<ApiMachineClient,
+    'enqueueDaemonTerminalExactTurnEnd' | 'captureMachineSessionTerminal' | 'finalizeMachineSessionTerminal'> | null;
   beforeUnexpectedExitSettlement?: (
     trackedSession: TrackedSession,
     exit: ChildExit,
@@ -288,6 +290,21 @@ export function createOnChildExited(params: Readonly<{
         sessionAttachCleanupByPid,
       });
       if (!cleanupComplete || !isCurrentPidOwner()) return;
+      const requester = tracked.requesterSessionRuntimeContext;
+      // Consume only this PID's custody once its dependents have finished.
+      // Another PID may still share it, including during overlapping cleanup.
+      delete tracked.requesterSessionRuntimeContext;
+      try {
+        // Recovery may replace the launch-time requester. The observed runner
+        // exit retires the current pointer after its dependent PID resources.
+        if (requester) await releaseUnretainedRequesterSessionRuntimeContext(requester,
+          [...pidToTrackedSession.values()].map(candidate => candidate.requesterSessionRuntimeContext));
+      } catch (error) {
+        if (requester && !tracked.requesterSessionRuntimeContext) tracked.requesterSessionRuntimeContext = requester;
+        logger.warn('[DAEMON RUN] Requester retirement incomplete; retaining exit custody', { pid, error });
+        return;
+      }
+      if (!isCurrentPidOwner()) return;
       if (typeof tracked.stopRequestedAtMs === 'number') {
         logger.infoFile('[DAEMON STOP] Runner exit resources completed', {
           sessionId: tracked.happySessionId, pid, elapsedMs: Date.now() - resourceCleanupStartedAtMs,
@@ -339,7 +356,7 @@ export function createOnChildExited(params: Readonly<{
         }
         if (!isCurrentPidOwner()) return;
       }
-      if (shouldReportSessionEnd && finalSessionId && params.ownerRemainder) {
+      if ((shouldReportSessionEnd || tracked.ownerRemainderCapture?.scope === 'subtree') && finalSessionId && params.ownerRemainder) {
         const remainderStartedAtMs = Date.now();
         const remainder = await params.ownerRemainder.end({ kind: 'session', sessionId: finalSessionId }, tracked.ownerRemainderCapture);
         tracked.ownerRemainderResult = remainder;

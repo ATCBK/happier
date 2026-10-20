@@ -50,7 +50,10 @@ const capturingLegendListMock = createCapturingLegendListMock({
     },
 });
 
-vi.mock('@legendapp/list/react-native', () => capturingLegendListMock.module);
+vi.mock('@legendapp/list/react-native', async (importOriginal) => ({
+    ...await importOriginal<typeof import('@legendapp/list/react-native')>(),
+    ...capturingLegendListMock.module,
+}));
 
 function VisibleNestedToolContent() {
     rowMutationEvents.push('tool-visible');

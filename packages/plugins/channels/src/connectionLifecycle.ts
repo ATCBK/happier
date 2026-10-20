@@ -13,41 +13,84 @@ import {
 } from '@happier-dev/channels-protocol/v1';
 import {
   arePluginMachineExecutionOriginsEqual,
+  getPluginMachineExecutionOriginRef,
   type PluginInvocationCaller,
   type PluginMachineMaterializationRefV1,
 } from '@happier-dev/plugin-sdk';
-import type { PluginMachineExecutionOriginV1 } from '@happier-dev/plugin-sdk/actions';
+import { PluginMachineExecutionOriginV1JsonSchema } from '@happier-dev/plugin-sdk/collections';
+import { PluginWebhookEndpointIdV1JsonSchema } from '@happier-dev/plugin-sdk/webhooks';
+import { PluginContributionIdentityV1JsonSchema } from '@happier-dev/plugin-sdk/manifest';
+import {
+  PluginMachineExecutionOriginV1Schema,
+  PluginMachineExecutionRoutingV1JsonSchema,
+  PluginMachineExecutionRoutingV1Schema,
+  getPluginMachineExecutionRouting,
+  type PluginMachineExecutionOriginV1,
+  type PluginMachineExecutionRoutingV1,
+} from '@happier-dev/plugin-sdk/actions';
+import { compilePluginJsonSchema, isValidPluginJsonSchemaValue } from '@happier-dev/plugin-sdk/manifest';
+import type { PluginJsonSchema } from '@happier-dev/plugin-sdk/protocol';
 
-/** Channels transport custody requires an exact host-stamped materialization. */
-export type ConversationConnectionTransportOriginV1 = Extract<
-  PluginMachineExecutionOriginV1,
-  Readonly<{ materializationRef: PluginMachineMaterializationRefV1 }>
->;
+/** A retained connection follows the current admitted provider at this placement. */
+export type ConversationConnectionTransportOriginV1 = Readonly<Pick<PluginMachineExecutionRoutingV1, 'serverIdentityId' | 'machineId'>>;
+
+export const ConversationConnectionTransportOriginV1JsonSchema: PluginJsonSchema = {
+  type: 'object',
+  properties: {
+    serverIdentityId: PluginMachineExecutionRoutingV1JsonSchema.properties!.serverIdentityId!,
+    machineId: PluginMachineExecutionRoutingV1JsonSchema.properties!.machineId!,
+  },
+  required: ['serverIdentityId', 'machineId'],
+  additionalProperties: false,
+};
+const placementValidator = compilePluginJsonSchema(ConversationConnectionTransportOriginV1JsonSchema);
+export const ConversationConnectionTransportOriginV1Schema = {
+  parse(value: unknown): ConversationConnectionTransportOriginV1 {
+    if (!isValidPluginJsonSchemaValue(placementValidator, value)) throw new Error('Invalid Channels transport placement.');
+    return value as ConversationConnectionTransportOriginV1;
+  },
+  safeParse(value: unknown) {
+    try { return { success: true as const, data: this.parse(value) }; }
+    catch (error) { return { success: false as const, error }; }
+  },
+};
+
+export function getConversationConnectionTransportOrigin(origin: PluginMachineExecutionOriginV1): ConversationConnectionTransportOriginV1 {
+  const { serverIdentityId, machineId } = getPluginMachineExecutionRouting(origin);
+  return Object.freeze({ serverIdentityId, machineId });
+}
+
+export function getConversationConnectionExecutionRouting(origin: ConversationConnectionTransportOriginV1, providerPluginId: string): PluginMachineExecutionRoutingV1 {
+  return PluginMachineExecutionRoutingV1Schema.parse({ ...origin, pluginId: providerPluginId });
+}
+
+export function areConversationConnectionTransportOriginsEqual(left: ConversationConnectionTransportOriginV1, right: ConversationConnectionTransportOriginV1): boolean {
+  return left.serverIdentityId === right.serverIdentityId && left.machineId === right.machineId;
+}
 
 import type { PersistedConversationProviderContributionSelection } from './collections.js';
 
-type SelfStampedPluginCaller = Extract<PluginInvocationCaller, Readonly<{ kind: 'plugin' }>>;
-type MaterializedSelfStampedPluginCaller = SelfStampedPluginCaller & Readonly<{
-  materialization: PluginMachineMaterializationRefV1;
-}>;
-
 /**
- * Whether a host-stamped caller's materialization names the caller's own
- * plugin. Ingress admission and reconciliation projection both start from this
- * one rule instead of each restating the self-consistency check; what each then
- * compares the proven ref against stays with its own owner.
- *
- * The materialization is re-checked as a value because a malformed direct
- * invocation must fail closed here rather than throw one level down.
+ * Read only a complete host-stamped origin whose identity agrees with the
+ * immediate caller. The candidate uses the stamp's own Home/Machine evidence,
+ * never facts copied from a retained connection or mutable Action input.
  */
-export function isSelfStampedPluginCaller(
+export function getSelfStampedPluginCallerExecutionOrigin(
   caller: PluginInvocationCaller | undefined,
-): caller is MaterializedSelfStampedPluginCaller {
-  if (caller?.kind !== 'plugin') return false;
-  const materialization: unknown = caller.materialization;
-  return materialization !== null
-    && typeof materialization === 'object'
-    && (materialization as PluginMachineMaterializationRefV1).pluginId === caller.pluginId;
+): PluginMachineExecutionOriginV1 | undefined {
+  if (caller?.kind !== 'plugin') return undefined;
+  const origin = PluginMachineExecutionOriginV1Schema.safeParse(caller.executionOrigin);
+  if (!origin.success) return undefined;
+  const ref = getPluginMachineExecutionOriginRef(origin.data);
+  const candidate = PluginMachineExecutionOriginV1Schema.safeParse('sourceRef' in origin.data
+    ? { serverIdentityId: origin.data.serverIdentityId, sourceRef: {
+      machineId: ref.machineId, pluginId: caller.pluginId, sourceCustody: caller.sourceCustody,
+    } }
+    : { serverIdentityId: origin.data.serverIdentityId, materializationRef: caller.materialization });
+  return ref.pluginId === caller.pluginId && candidate.success
+    && arePluginMachineExecutionOriginsEqual(origin.data, candidate.data)
+    ? origin.data
+    : undefined;
 }
 
 /**
@@ -144,7 +187,7 @@ export type ConversationPendingEndpointRetargetV1 = 'notRequired' | 'pending';
  * authority for a later stop settlement. It is not a retry ledger, mutable
  * selector, or a carrier for replacement setup input.
  */
-export type ConversationPendingOldTransportStopV1 = Readonly<{
+export type ConversationPendingProviderStopV1 = Readonly<{
   /** Exact predecessor facts that authorize a captured checkpointed poll. */
   predecessorCheckpointedPollInvocation: ConversationCheckpointedPollInvocationBasisV1;
   transportOrigin: ConversationConnectionTransportOriginV1;
@@ -162,6 +205,38 @@ export type ConversationPendingOldTransportStopV1 = Readonly<{
   overlapSafety: ConversationConnectionOverlapSafetyV1;
   acceptedPossibleLoss: boolean;
 }>;
+
+/** Account endpoint convergence has no provider process or poll to stop. */
+export type ConversationPendingEndpointRetargetIntentV1 = Readonly<{
+  kind: 'endpointRetarget';
+  webhookEndpointId: string;
+  webhookContributionRef: Readonly<{ pluginId: string; localId: string }>;
+  webhookSourceInstanceId: string;
+  targetMaterialization: PluginMachineMaterializationRefV1;
+  transferAuthorityEpoch: number;
+}>;
+export type ConversationPendingOldTransportStopV1 = ConversationPendingProviderStopV1 | ConversationPendingEndpointRetargetIntentV1;
+export const ConversationPendingEndpointRetargetIntentV1JsonSchema: PluginJsonSchema = {
+  type: 'object',
+  properties: {
+    kind: { const: 'endpointRetarget' },
+    webhookEndpointId: PluginWebhookEndpointIdV1JsonSchema,
+    webhookContributionRef: PluginContributionIdentityV1JsonSchema,
+    webhookSourceInstanceId: { type: 'string', minLength: 1, maxLength: 256 },
+    targetMaterialization: PluginMachineExecutionOriginV1JsonSchema.anyOf![0]!.properties!.materializationRef!,
+    transferAuthorityEpoch: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
+  },
+  required: ['kind', 'webhookEndpointId', 'webhookContributionRef', 'webhookSourceInstanceId', 'targetMaterialization', 'transferAuthorityEpoch'],
+  additionalProperties: false,
+};
+const endpointIntentValidator = compilePluginJsonSchema(ConversationPendingEndpointRetargetIntentV1JsonSchema);
+export function readConversationPendingEndpointRetargetIntent(value: unknown): ConversationPendingEndpointRetargetIntentV1 {
+  if (!isValidPluginJsonSchemaValue(endpointIntentValidator, value)) throw new Error('Invalid Channels endpoint-retarget intent.');
+  return freezeJsonValue(value as ConversationJsonValueV1) as ConversationPendingEndpointRetargetIntentV1;
+}
+export function isConversationPendingEndpointRetarget(pending: unknown): pending is ConversationPendingEndpointRetargetIntentV1 {
+  return pending !== null && typeof pending === 'object' && 'kind' in pending && pending.kind === 'endpointRetarget';
+}
 
 /** A frozen delete request is the only delete transition input. */
 export type ConversationDeleteStopRequestV1 = Readonly<
@@ -185,7 +260,7 @@ export type ConversationPendingOldTransportStopDeleteStartV1 = Readonly<{
   predecessorTransportKind: ConversationTransportKindV1;
 }>;
 
-export type ConversationPendingOldTransportStopTransferStartV1 = Readonly<{
+export type ConversationPendingOldTransportStopTransferStartV1 = ConversationPendingEndpointRetargetIntentV1 | Readonly<{
   predecessorCheckpointedPollInvocation: ConversationCheckpointedPollInvocationBasisV1;
   transportOrigin: ConversationConnectionTransportOriginV1;
   providerContributionSelection: PersistedConversationProviderContributionSelection;
@@ -312,14 +387,7 @@ function freezeJsonValue(value: ConversationJsonValueV1): ConversationJsonValueV
 export function freezeConversationConnectionTransportOrigin(
   origin: ConversationConnectionTransportOriginV1,
 ): ConversationConnectionTransportOriginV1 {
-  return Object.freeze({
-    serverIdentityId: origin.serverIdentityId,
-    materializationRef: Object.freeze({
-      pluginId: origin.materializationRef.pluginId,
-      machineId: origin.materializationRef.machineId,
-      materializationId: origin.materializationRef.materializationId,
-    }),
-  });
+  return Object.freeze({ ...ConversationConnectionTransportOriginV1Schema.parse(origin) });
 }
 
 function freezeCheckpointedPollInvocationBasis(
@@ -403,7 +471,7 @@ export function freezeConversationPendingOldTransportStop(input: Readonly<{
   endpointRetarget: ConversationPendingEndpointRetargetV1;
   overlapSafety: ConversationConnectionOverlapSafetyV1;
   acceptedPossibleLoss: boolean;
-}>): ConversationPendingOldTransportStopV1 {
+}>): ConversationPendingProviderStopV1 {
   return Object.freeze({
     predecessorCheckpointedPollInvocation: freezeCheckpointedPollInvocationBasis(
       input.predecessorCheckpointedPollInvocation,
@@ -422,14 +490,14 @@ export function freezeConversationPendingOldTransportStop(input: Readonly<{
 
 function hasCurrentCheckpointedPollInvocationBasis(input: Readonly<{
   currentAuthorityEpoch: number;
-  pendingOldTransportOrigin: PluginMachineExecutionOriginV1;
+  pendingOldTransportOrigin: ConversationConnectionTransportOriginV1;
   basis: ConversationCheckpointedPollInvocationBasisV1;
 }>): boolean {
   return Number.isSafeInteger(input.basis.connectionRevision)
     && input.basis.connectionRevision >= 1
     && Number.isSafeInteger(input.basis.authorityEpoch)
     && input.basis.authorityEpoch === input.currentAuthorityEpoch
-    && arePluginMachineExecutionOriginsEqual(
+    && areConversationConnectionTransportOriginsEqual(
       input.basis.transportOrigin,
       input.pendingOldTransportOrigin,
     );
@@ -444,14 +512,12 @@ function hasCurrentCheckpointedPollInvocationBasis(input: Readonly<{
 export function hasUnsettledDestructiveOldTransportStop(input: Readonly<{
   authorityEpoch: number;
   deletionState: ConversationConnectionDeletionStateV1;
-  pendingOldTransportStop: Readonly<
-    Pick<ConversationPendingOldTransportStopV1, 'overlapSafety' | 'acceptedPossibleLoss'> & {
-      stopRequest: Readonly<Pick<ConversationProviderConnectionStopInputV1, 'reason' | 'authorityEpoch'>>;
-    }
-  > | null;
+  pendingOldTransportStop: ConversationPendingOldTransportStopV1 | null;
 }>): boolean {
   return input.deletionState === 'none'
-    && input.pendingOldTransportStop?.overlapSafety === 'destructive'
+    && input.pendingOldTransportStop !== null
+    && !isConversationPendingEndpointRetarget(input.pendingOldTransportStop)
+    && input.pendingOldTransportStop.overlapSafety === 'destructive'
     && (!input.pendingOldTransportStop.acceptedPossibleLoss
       || !hasAcceptedConversationTransferLoss(input));
 }
@@ -462,25 +528,14 @@ export function hasUnsettledDestructiveOldTransportStop(input: Readonly<{
  * That obligation is an idempotent target change on an Account endpoint
  * Happier itself owns — not a foreign consumer that may still be running and
  * observing. It is discharged by repairing it, by a later transfer that names a
- * newer desired target the same repair converges on, or by a delete that drops
- * the endpoint reference altogether. None of those is an accepted loss, so the
+ * newer desired target the same repair converges on. Delete waits for repair.
+ * None of those is an accepted loss, so the
  * slot never becomes a permanent mistarget disclosure.
  */
 export function owesOnlyConversationEndpointRetarget(
-  pendingOldTransportStop: Readonly<
-    Pick<
-      ConversationPendingOldTransportStopV1,
-      'predecessorTransportKind' | 'endpointRetarget' | 'acceptedPossibleLoss'
-    > & {
-      stopRequest: Readonly<Pick<ConversationProviderConnectionStopInputV1, 'reason'>>;
-    }
-  > | null,
-): boolean {
-  return pendingOldTransportStop !== null
-    && pendingOldTransportStop.stopRequest.reason === 'transfer'
-    && pendingOldTransportStop.predecessorTransportKind === 'durablePush'
-    && pendingOldTransportStop.endpointRetarget === 'pending'
-    && !pendingOldTransportStop.acceptedPossibleLoss;
+  pending: ConversationPendingOldTransportStopV1 | null,
+): pending is ConversationPendingEndpointRetargetIntentV1 {
+  return isConversationPendingEndpointRetarget(pending);
 }
 
 /**
@@ -491,15 +546,13 @@ export function owesOnlyConversationEndpointRetarget(
 export function hasAcceptedConversationTransferLoss(input: Readonly<{
   authorityEpoch: number;
   deletionState: ConversationConnectionDeletionStateV1;
-  pendingOldTransportStop: Readonly<
-    Pick<ConversationPendingOldTransportStopV1, 'acceptedPossibleLoss'> & {
-      stopRequest: Readonly<Pick<ConversationProviderConnectionStopInputV1, 'reason' | 'authorityEpoch'>>;
-    }
-  > | null;
+  pendingOldTransportStop: ConversationPendingOldTransportStopV1 | null;
 }>): boolean {
   const pending = input.pendingOldTransportStop;
   return input.deletionState === 'none'
-    && pending?.stopRequest.reason === 'transfer'
+    && pending !== null
+    && !isConversationPendingEndpointRetarget(pending)
+    && pending.stopRequest.reason === 'transfer'
     && pending.acceptedPossibleLoss
     // The abandon CAS first establishes E+1 for the frozen E request. Later
     // ordinary policy writes may advance the connection epoch again, but must
@@ -539,15 +592,19 @@ function decideRetainedOldTransportCustodyReplacement(input: Readonly<{
 }>): 'allowed' | 'oldTransportStopPending' | 'endpointRetargetRepairRequired' {
   const pending = input.current.pendingOldTransportStop;
   if (pending === null) return 'allowed';
-  if (pending.stopRequest.connectionId !== input.connectionId) return 'oldTransportStopPending';
+  if (!isConversationPendingEndpointRetarget(pending)
+    && pending.stopRequest.connectionId !== input.connectionId) return 'oldTransportStopPending';
   if (hasAcceptedConversationTransferLoss(input.current)) return 'allowed';
   if (!owesOnlyConversationEndpointRetarget(pending)) return 'oldTransportStopPending';
 
   if (input.replacement.kind === 'transfer'
-    && pending.stopRequest.authorityEpoch === input.current.authorityEpoch
-    && input.replacement.pendingOldTransportStop.predecessorTransportKind === 'durablePush'
-    && input.replacement.pendingOldTransportStop.endpointRetarget === 'pending'
-    && input.replacement.pendingOldTransportStop.stopRequest.authorityEpoch > pending.stopRequest.authorityEpoch) {
+    && pending.transferAuthorityEpoch === input.current.authorityEpoch
+    && isConversationPendingEndpointRetarget(input.replacement.pendingOldTransportStop)
+    && input.replacement.pendingOldTransportStop.webhookEndpointId === pending.webhookEndpointId
+    && input.replacement.pendingOldTransportStop.webhookSourceInstanceId === pending.webhookSourceInstanceId
+    && input.replacement.pendingOldTransportStop.webhookContributionRef.pluginId === pending.webhookContributionRef.pluginId
+    && input.replacement.pendingOldTransportStop.webhookContributionRef.localId === pending.webhookContributionRef.localId
+    && input.replacement.pendingOldTransportStop.transferAuthorityEpoch > pending.transferAuthorityEpoch) {
     return 'allowed';
   }
   return 'endpointRetargetRepairRequired';
@@ -715,7 +772,7 @@ export function startConversationConnectionTransfer(input: Readonly<{
   }
   const custodyDecision = decideRetainedOldTransportCustodyReplacement({
     current,
-    connectionId: input.pendingOldTransportStop.stopRequest.connectionId,
+    connectionId: isConversationPendingEndpointRetarget(input.pendingOldTransportStop) ? '' : input.pendingOldTransportStop.stopRequest.connectionId,
     replacement: {
       kind: 'transfer',
       pendingOldTransportStop: input.pendingOldTransportStop,
@@ -728,17 +785,18 @@ export function startConversationConnectionTransfer(input: Readonly<{
     return { kind: 'rejected', code: 'authorityEpochExhausted' };
   }
   const replacementAuthorityEpoch = current.authorityEpoch + 1;
-  if (input.pendingOldTransportStop.stopRequest.reason !== 'transfer'
-    || input.pendingOldTransportStop.stopRequest.authorityEpoch !== replacementAuthorityEpoch
+  const pending = input.pendingOldTransportStop;
+  const endpointIntent = isConversationPendingEndpointRetarget(pending);
+  if (endpointIntent ? pending.transferAuthorityEpoch !== replacementAuthorityEpoch : (pending.stopRequest.reason !== 'transfer'
+    || pending.stopRequest.authorityEpoch !== replacementAuthorityEpoch
     // Only a retired durable-push transport owns an Account endpoint whose
     // target can still be moved; nothing else may commit that obligation.
-    || (input.pendingOldTransportStop.endpointRetarget === 'pending'
-      && input.pendingOldTransportStop.predecessorTransportKind !== 'durablePush')
+    || pending.endpointRetarget !== 'notRequired'
     || !hasCurrentCheckpointedPollInvocationBasis({
       currentAuthorityEpoch: current.authorityEpoch,
-      pendingOldTransportOrigin: input.pendingOldTransportStop.transportOrigin,
-      basis: input.pendingOldTransportStop.predecessorCheckpointedPollInvocation,
-    })) {
+      pendingOldTransportOrigin: pending.transportOrigin,
+      basis: pending.predecessorCheckpointedPollInvocation,
+    }))) {
     return { kind: 'rejected', code: 'stopRequestInvalid' };
   }
   return {
@@ -748,8 +806,8 @@ export function startConversationConnectionTransfer(input: Readonly<{
       authorityEpoch: replacementAuthorityEpoch,
       enabled: input.replacement.enabled,
       overlapSafety: input.replacement.overlapSafety,
-      pendingOldTransportStop: freezeConversationPendingOldTransportStop({
-        ...input.pendingOldTransportStop,
+      pendingOldTransportStop: endpointIntent ? readConversationPendingEndpointRetargetIntent(pending) : freezeConversationPendingOldTransportStop({
+        ...pending,
         overlapSafety: current.overlapSafety,
         acceptedPossibleLoss: false,
       }),
@@ -790,6 +848,7 @@ export function confirmConversationConnectionStop(input: Readonly<{
   const { current, reportedAuthorityEpoch } = input;
   const pending = current.pendingOldTransportStop;
   if (pending === null
+    || isConversationPendingEndpointRetarget(pending)
     || pending.acceptedPossibleLoss
     || pending.stopRequest.authorityEpoch !== reportedAuthorityEpoch
     || current.authorityEpoch !== reportedAuthorityEpoch) {
@@ -835,6 +894,7 @@ export function finalizeConversationConnectionDeleteWithoutProviderStop(input: R
     current.deletionState !== 'pendingStopReconciliation'
     || current.enabled
     || pending === null
+    || isConversationPendingEndpointRetarget(pending)
     || pending.acceptedPossibleLoss
     || pending.stopRequest.reason !== 'delete'
     || pending.predecessorTransportKind !== 'durablePush'
@@ -867,17 +927,12 @@ export function finalizeConversationConnectionTransferWithoutProviderStop(input:
 }>> | Readonly<{ kind: 'staleAuthority' }> {
   const { current } = input;
   const pending = current.pendingOldTransportStop;
-  if (
-    current.deletionState !== 'none'
-    || pending === null
-    || pending.acceptedPossibleLoss
-    || pending.stopRequest.reason !== 'transfer'
-    || pending.stopRequest.authorityEpoch !== current.authorityEpoch
-    || pending.predecessorTransportKind !== 'durablePush'
-    || input.provenEndpointRetarget !== (pending.endpointRetarget === 'pending')
-  ) {
-    return { kind: 'staleAuthority' };
-  }
+  if (current.deletionState !== 'none' || pending === null) return { kind: 'staleAuthority' };
+  if (isConversationPendingEndpointRetarget(pending)) {
+    if (!input.provenEndpointRetarget || pending.transferAuthorityEpoch !== current.authorityEpoch) return { kind: 'staleAuthority' };
+  } else if (pending.acceptedPossibleLoss || pending.stopRequest.reason !== 'transfer'
+    || pending.stopRequest.authorityEpoch !== current.authorityEpoch || pending.predecessorTransportKind !== 'durablePush'
+    || input.provenEndpointRetarget) return { kind: 'staleAuthority' };
   return {
     kind: 'transportStopConfirmed',
     connection: {
@@ -900,18 +955,13 @@ export function abandonConversationConnectionStop(input: Readonly<{
     return { kind: 'rejoined', connection: current };
   }
   const pending = current.pendingOldTransportStop;
+  if (isConversationPendingEndpointRetarget(pending)) return { kind: 'rejected', code: 'endpointRetargetRepairRequired' };
   if (pending?.stopRequest.reason === 'transfer'
     && current.deletionState === 'none') {
     if (pending.acceptedPossibleLoss) {
       return hasAcceptedConversationTransferLoss(current)
         ? { kind: 'rejoined', connection: current }
         : { kind: 'staleAuthority' };
-    }
-    if (owesOnlyConversationEndpointRetarget(pending)) {
-      // There is no foreign consumer to accept a loss from: the owed move is
-      // this Account's own endpoint, and marking it accepted would freeze a
-      // mistarget instead of disclosing one. The caller repairs it.
-      return { kind: 'rejected', code: 'endpointRetargetRepairRequired' };
     }
     if (!hasAuthoritySteps(current.authorityEpoch, 1)) {
       return { kind: 'rejected', code: 'authorityEpochExhausted' };
@@ -936,6 +986,7 @@ export function abandonConversationConnectionStop(input: Readonly<{
     current.deletionState !== 'pendingStopReconciliation'
     || current.enabled
     || pending === null
+    || isConversationPendingEndpointRetarget(pending)
     || pending.stopRequest.reason !== 'delete'
   ) {
     return { kind: 'staleAuthority' };

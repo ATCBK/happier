@@ -11,6 +11,7 @@ import { readAiLaunchProfileCollection } from '@happier-dev/protocol/profiles/re
 import type { ProfileCatalogSnapshotV1 } from '@happier-dev/protocol/profiles/profileCatalogV1';
 import { buildMemoryRecallGuidanceBlockV1 } from '@happier-dev/protocol/prompts/memoryRecallGuidanceV1';
 import { PromptStackEntryV1Schema } from '@happier-dev/protocol/prompts/library/promptStacksV1';
+import { readSessionInputPromptUserTextV1 } from '@happier-dev/protocol/prompts/systemPromptBaseV1';
 
 import {
   resolveAgentCompositionPromptText,
@@ -48,6 +49,15 @@ function createCredentials(): DataKeyCredentials {
 }
 
 describe('resolveEffectiveCodingPromptText', () => {
+  it('keeps unreproducible prepared plugin plans inspectable in a native user echo', async () => {
+    const result = await resolveEffectiveCodingPromptPlan({ toolDelivery: 'native_mcp', settings: {}, profileId: null,
+      memoryRecallGuidanceEnabled: false,
+      promptAssetBlocks: [{ id: 'plugin_prompt_asset.acme.reviewer/context', scope: 'first_turn',
+        text: 'Arbitrary external plugin instructions. Unicode: 🐈. Decomposed accent: e\u0301.' }],
+    });
+    const input = `${result.text}\n\nReview the release branch`;
+    expect(readSessionInputPromptUserTextV1(input)).toBe(input);
+  });
   it('projects duplicate instruction injections as opaque non-overlapping bytes rather than retaining their text or source path', async () => {
     const text = 'PRIVATE duplicate instruction 🦉 /private/repo';
     const result = await resolveEffectiveCodingPromptPlan({ toolDelivery: 'native_mcp', settings: {}, profileId: null,
@@ -69,9 +79,9 @@ describe('resolveEffectiveCodingPromptText', () => {
   it.each(['native_mcp', 'shell_bridge'] as const)('withdraws automatic memory guidance from the canonical %s base and tool appendix when Session memory is off', async toolDelivery => {
     const args = { settings: {}, profileId: null, memoryRecallGuidanceEnabled: true,
       toolDelivery, toolDeliverySessionId: 'memory-choice', toolDeliveryDirectory: '/repo' };
-    const enabled = await resolveEffectiveCodingPromptPlan({ toolDelivery: 'native_mcp', ...args, memoryEnabled: true });
+    const enabled = await resolveEffectiveCodingPromptPlan({ ...args, memoryEnabled: true });
     expect(enabled.text).toContain(buildMemoryRecallGuidanceBlockV1('generic'));
-    const disabled = await resolveEffectiveCodingPromptPlan({ toolDelivery: 'native_mcp', ...args, memoryEnabled: false });
+    const disabled = await resolveEffectiveCodingPromptPlan({ ...args, memoryEnabled: false });
     expect(disabled.text).not.toContain(buildMemoryRecallGuidanceBlockV1('generic'));
     expect(disabled.plan.blocks.some(block => block.id === 'coding.memory_recall')).toBe(false);
     if (toolDelivery === 'shell_bridge') {
@@ -131,11 +141,12 @@ describe('resolveEffectiveCodingPromptText', () => {
     const profileCatalog = { status: 'ready', source: 'destination', authority: 'active', controlRevision: 1,
       control: { revision: 1, record: { v: 1, phase: 'active', sourceSettingsVersion: 1, migratedLogicalRevision: 1, inventory: [] } },
       records: [{ revision: 4,
-      record: { v: 1, id: profile.id, enabled: true, promptStack: [], secretBindings: {},
+      record: { v: 1, id: profile.id, enabled: true, promptStack: [], skillSeeds: [], secretBindings: {},
         definition: { kind: 'inline', profile } } }], referenceGuardRevision: 4, diagnostics: [] } satisfies ProfileCatalogSnapshotV1;
     const args = { settings: { codingPromptBehaviorV1: { v: 1, sessionTitleUpdates: 'initial', responseOptions: 'agent' },
       profiles: [{ ...profile, codingPromptBehaviorOverrides: { sessionTitleUpdates: 'disabled' } }] },
-      profileId: profile.id, profileCatalog, baseOverride: null, memoryRecallGuidanceEnabled: false };
+      profileId: profile.id, profileCatalog, baseOverride: null, memoryRecallGuidanceEnabled: false,
+      toolDelivery: 'native_mcp' } satisfies ResolveEffectiveCodingPromptArgs;
     const plan = await resolveEffectiveCodingPromptPlan(args);
     expect(plan.codingPromptBehavior).toEqual({ v: 1, sessionTitleUpdates: 'initial', responseOptions: 'disabled' });
   });
@@ -149,8 +160,8 @@ describe('resolveEffectiveCodingPromptText', () => {
       roles: { builder: selected.selection }, notes: 'Stay in the assigned files.' });
     const context = createSessionRoleContext({
       readMetadata: () => ({ work: { sessionRolesV1: { ...snapshot, roleId: 'builder' } } }),
-      readOrganization: async () => ({ reportsTo: { sessionId: 'lead' } }),
-      readRoleSources: async () => [],
+      readOrganization: async () => ({ manager: { sessionId: 'lead' } }),
+      readRoleSources: async () => ({ status: 'ready', entries: [], diagnostics: [] }),
       readAccountRoleOverrides: () => ({ status: 'ready', overrides: {
         builder: { roleId: 'builder', instructionsOverride: 'Changed Account instructions.' },
       } }),
@@ -205,6 +216,7 @@ describe('resolveEffectiveCodingPromptText', () => {
         id: 'retained-private-instructions',
         ref: { kind: 'doc', artifactId: 'private-prompt' },
         enabled: true,
+        required: true,
         placement: 'system_append',
       })],
       profileId: null,
@@ -288,8 +300,9 @@ describe('resolveEffectiveCodingPromptText', () => {
       executionRunsFeatureEnabled: false,
     });
 
-    expect(first).toBe('BASE\n\nHello from coding\n\nHello from profile');
-    expect(second).toBe('BASE\n\nCurrent coding text\n\nHello from profile');
+    expect(first).toContain('BASE\n\nHello from coding\n\nHello from profile');
+    expect(second).toContain('BASE\n\nCurrent coding text\n\nHello from profile');
+    expect(second).not.toContain('Hello from coding');
   });
 
   it('appends memory recall guidance when explicitly enabled', async () => {
@@ -490,7 +503,7 @@ describe('resolveEffectiveCodingPromptText', () => {
       },
     };
 
-    const out = await resolveEffectiveCodingPromptText({ toolDelivery: 'native_mcp',
+    const out = await resolveEffectiveCodingPromptText({
       credentials,
       settings: {},
       profileId: null,
@@ -588,6 +601,7 @@ describe('resolveEffectiveCodingPromptText', () => {
     const credentials = createCredentials();
 
     const out = await resolveEffectiveCodingPromptText({
+      toolDelivery: 'native_mcp',
       credentials,
       settings: {
         codingPromptBehaviorV1: {

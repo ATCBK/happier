@@ -474,9 +474,6 @@ export type TeamsActionInputById = {
         } | null | undefined;
         authenticationPolicy?: {
             v: 1;
-            mode: 'inherit';
-        } | {
-            v: 1;
             mode: 'restricted';
             accepted: ({
                 kind: 'home_method';
@@ -485,6 +482,9 @@ export type TeamsActionInputById = {
                 kind: 'team_connection';
                 connectionId: string;
             })[];
+        } | {
+            v: 1;
+            mode: 'inherit';
         } | null | undefined;
     };
     readonly "teams.archive": {
@@ -1961,7 +1961,7 @@ export type TeamsActionResultById = {
         mediaType: string;
         fileName: string;
         base64: string;
-        fields: ('totals' | 'coverage' | 'series' | 'breakdowns' | 'insights' | 'activity' | 'leaders' | 'modelTimeline' | 'engineTimeline' | 'messageStats' | 'costPresentation' | 'costFacts' | 'priceCatalog' | 'tokenCategories' | 'contributions' | 'resets' | 'renewals')[];
+        fields: ('totals' | 'coverage' | 'series' | 'breakdowns' | 'insights' | 'activity' | 'leaders' | 'modelTimeline' | 'engineTimeline' | 'messageStats' | 'costPresentation' | 'costFacts' | 'priceCatalog' | 'contributions' | 'tokenCategories' | 'resets' | 'renewals')[];
         asOfMs: number | null;
     };
     readonly "teams.members.history.preparation.get": {

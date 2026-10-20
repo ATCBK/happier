@@ -156,26 +156,6 @@ describe('SessionListVirtualizedContent virtualization', () => {
         expect(virtualizationState.legendListProps.getItemType(project, 1)).toBe('header:project');
     });
 
-    it('renders the canonical priority prefix before the inactive section on web', async () => {
-        const active = {
-            id: buildSessionListIndexNodeId({ type: 'header', title: 'Active', headerKind: 'active', groupKey: 'server:home|active' }),
-            kind: 'header' as const,
-            headerKind: 'active' as const,
-        };
-        const inactive = {
-            id: buildSessionListIndexNodeId({ type: 'header', title: 'Inactive', headerKind: 'inactive', groupKey: 'server:home|inactive' }),
-            kind: 'header' as const,
-            headerKind: 'inactive' as const,
-        };
-        const sessions = Array.from({ length: 21 }, (_, index) => ({
-            id: buildSessionListIndexNodeId({ type: 'session', sessionId: `s${index}`, serverId: 'home' }),
-            kind: 'session' as const,
-        }));
-        await renderVirtualizedContent({ nodes: [active, ...sessions.slice(0, 20), inactive, ...sessions.slice(20)] });
-
-        expect(virtualizationState.flatListProps.initialNumToRender).toBe(21);
-    });
-
     it('classifies qualified headers by their domain kind even when their keys contain delimiters', async () => {
         virtualizationState.platformOS = 'ios';
         const nodes = (['active', 'project', 'inactive'] as const).map((headerKind) => ({
@@ -188,70 +168,45 @@ describe('SessionListVirtualizedContent virtualization', () => {
             .toEqual(['header:active', 'header:project', 'header:inactive']);
     });
 
-    it('fills the web priority prefix before the inactive section with qualified header keys', async () => {
-        const header = (headerKind: 'active' | 'inactive') => ({
-            id: buildSessionListIndexNodeId({ type: 'header', headerKind, title: headerKind, groupKey: `https://home.test:8443/${headerKind}` }),
-            kind: 'header' as const,
-            headerKind,
-        });
-        const priorityRows = buildNodes(17).slice(1);
-        await renderVirtualizedContent({
-            nodes: [header('active'), ...priorityRows, header('inactive'), ...buildNodes(97).slice(17)],
-        });
-        expect(virtualizationState.flatListProps.initialNumToRender).toBe(1 + priorityRows.length);
+    it('keeps web lists of every size on the canonical Legend-backed VirtualizedList', async () => {
+        // React Native Web's FlatList caches each cell's offset from its own resize notifications, and a
+        // browser reports a size change only. When the header grew or rows above hydrated, the cached offsets
+        // of unchanged cells went stale and the My work list rendered nothing across a scroll range.
+        // Legend derives positions from measured sizes, so every web list uses it, small or large.
+        for (const count of [3, 120, 121, 300]) {
+            virtualizationState.flatListProps = null;
+            virtualizationState.legendListProps = null;
+            await renderVirtualizedContent({ nodes: buildNodes(count) });
+
+            expect(virtualizationState.flatListProps).toBeNull();
+            expect(virtualizationState.legendListProps).toBeTruthy();
+            expect(virtualizationState.legendListProps.disableVirtualization).toBeUndefined();
+            expect(virtualizationState.legendListProps.scrollEventThrottle).toBe(32);
+            expect(typeof virtualizationState.legendListProps.onWheel).toBe('function');
+            expect(typeof virtualizationState.legendListProps.onTouchMove).toBe('function');
+        }
     });
 
-    it('keeps small web lists on non-virtualized React Native Web FlatList', async () => {
-        await renderVirtualizedContent({
-            nodes: buildNodes(120),
-        });
-
-        expect(virtualizationState.flatListProps).toBeTruthy();
-        expect(virtualizationState.legendListProps).toBeNull();
-        expect(virtualizationState.flatListProps.disableVirtualization).toBe(true);
-        expect(virtualizationState.flatListProps.scrollEventThrottle).toBe(32);
-        expect(typeof virtualizationState.flatListProps.onWheel).toBe('function');
-        expect(typeof virtualizationState.flatListProps.onTouchMove).toBe('function');
-    });
-
-    it('keeps large web session lists on the virtualized FlatList backend', async () => {
-        await renderVirtualizedContent({
-            nodes: buildNodes(121),
-        });
-
-        // A real 300+ row web account reproduced React's nested-update crash
-        // inside Legend's container-layout coordinator. Large lists still need
-        // virtualization; the bounded web escape hatch is therefore FlatList
-        // with virtualization enabled, not the all-rows small-list mode.
-        expect(virtualizationState.flatListProps).toBeTruthy();
-        expect(virtualizationState.legendListProps).toBeNull();
-        expect(virtualizationState.flatListProps.disableVirtualization).toBeUndefined();
-        expect(virtualizationState.flatListProps.scrollEventThrottle).toBe(32);
-        expect(typeof virtualizationState.flatListProps.onWheel).toBe('function');
-        expect(typeof virtualizationState.flatListProps.onTouchMove).toBe('function');
-    });
-
-    it('preserves the mounted web list when pagination crosses the virtualization threshold', async () => {
+    it('preserves the mounted web list when pagination adds rows', async () => {
         const { SessionListVirtualizedContent } = await import('./sessionListVirtualizedContent');
         const screen = await renderVirtualizedContent({ nodes: buildNodes(120) });
-        const firstList = screen.root.findByType('FlatList');
+        const firstList = screen.root.findByType('LegendList');
 
         await screen.update(React.createElement(
             SessionListVirtualizedContent as any,
             buildVirtualizedContentProps({ nodes: buildNodes(121) }),
         ));
 
-        expect(screen.root.findByType('FlatList')).toBe(firstList);
-        expect(virtualizationState.flatListProps.disableVirtualization).toBeUndefined();
+        expect(screen.root.findByType('LegendList')).toBe(firstList);
     });
 
-    it('keeps the FlatList viewability callback stable while dispatching to the latest handler', async () => {
+    it('keeps the list viewability callback stable while dispatching to the latest handler', async () => {
         const firstHandler = vi.fn();
         const latestHandler = vi.fn();
         const screen = await renderVirtualizedContent({
             onViewableItemsChanged: firstHandler,
         });
-        const initialCallback = virtualizationState.flatListProps.onViewableItemsChanged;
+        const initialCallback = virtualizationState.legendListProps.onViewableItemsChanged;
         const { SessionListVirtualizedContent } = await import('./sessionListVirtualizedContent');
 
         await screen.update(React.createElement(
@@ -259,7 +214,7 @@ describe('SessionListVirtualizedContent virtualization', () => {
             buildVirtualizedContentProps({ onViewableItemsChanged: latestHandler }),
         ));
 
-        const currentCallback = virtualizationState.flatListProps.onViewableItemsChanged;
+        const currentCallback = virtualizationState.legendListProps.onViewableItemsChanged;
         expect(currentCallback).toBe(initialCallback);
 
         const info = { viewableItems: [] };
@@ -268,16 +223,16 @@ describe('SessionListVirtualizedContent virtualization', () => {
         expect(latestHandler).toHaveBeenCalledWith(info);
     });
 
-    it('hands the same list the same viewability handler and config across row changes, as FlatList requires', async () => {
+    it('hands the same list the same viewability handler and config across row changes', async () => {
         const { SessionListVirtualizedContent } = await import('./sessionListVirtualizedContent');
         const screen = await renderVirtualizedContent({
             nodes: buildNodes(4),
             onViewableItemsChanged: vi.fn(),
             viewabilityConfig: { itemVisiblePercentThreshold: 1 },
         });
-        const firstList = screen.root.findByType('FlatList');
-        const firstHandler = virtualizationState.flatListProps.onViewableItemsChanged;
-        const firstConfig = virtualizationState.flatListProps.viewabilityConfig;
+        const firstList = screen.root.findByType('LegendList');
+        const firstHandler = virtualizationState.legendListProps.onViewableItemsChanged;
+        const firstConfig = virtualizationState.legendListProps.viewabilityConfig;
 
         for (const count of [6, 3, 8]) {
             await screen.update(React.createElement(
@@ -288,9 +243,9 @@ describe('SessionListVirtualizedContent virtualization', () => {
                     viewabilityConfig: { itemVisiblePercentThreshold: 1 },
                 }),
             ));
-            expect(screen.root.findByType('FlatList')).toBe(firstList);
-            expect(virtualizationState.flatListProps.onViewableItemsChanged).toBe(firstHandler);
-            expect(virtualizationState.flatListProps.viewabilityConfig).toBe(firstConfig);
+            expect(screen.root.findByType('LegendList')).toBe(firstList);
+            expect(virtualizationState.legendListProps.onViewableItemsChanged).toBe(firstHandler);
+            expect(virtualizationState.legendListProps.viewabilityConfig).toBe(firstConfig);
         }
     });
 

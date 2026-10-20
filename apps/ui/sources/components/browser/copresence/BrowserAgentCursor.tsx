@@ -1,6 +1,7 @@
 import {
     HappierAgentCursor,
     type HappierAgentPageRect,
+    type HappierAgentPoint,
     type HappierAgentTarget,
 } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
@@ -20,6 +21,8 @@ import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreferenc
  */
 export function BrowserAgentCursor(props: Readonly<{
     target: HappierAgentTarget | null;
+    /** The agent's latest pointer action, so a short one is still shown (see `HappierAgentPoint`). */
+    point?: HappierAgentPoint | null;
     /** The drawn page inside this layer, when it does not fill it (a fitted stream). */
     pageRect?: HappierAgentPageRect | null;
     agentId?: string | null;
@@ -39,6 +42,7 @@ export function BrowserAgentCursor(props: Readonly<{
     return (
         <HappierAgentCursor
             target={props.target}
+            point={props.point}
             pageRect={props.pageRect}
             renderAgentMark={renderAgentMark}
             renderGlyph={CORE_CAPSULE_HOST.renderGlyph}

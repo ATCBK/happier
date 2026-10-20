@@ -19,7 +19,9 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
-import { Text } from '@/components/ui/text/Text';
+import { EmptyState } from '@/components/ui/empty/EmptyState';
+import type { IconName } from '@/components/ui/icons/Icon';
+import { MENU_ROW_METRICS } from '@/components/ui/lists/itemDensityMetrics';
 import { t } from '@/text';
 
 import {
@@ -44,6 +46,7 @@ import { SkeletonRows } from '@/components/ui/lists/SkeletonRows';
 import { SelectionListVirtualizedSection } from './SelectionListVirtualizedSection';
 import { SelectionListScrollOffsetFrame } from './SelectionListScrollOffsetFrame';
 import { selectionListTestId } from './_shared';
+import { SelectionListOptionPresentationContext } from './SelectionListOptionPresentationContext';
 import type {
     SelectionListOption,
     SelectionListSection,
@@ -53,22 +56,9 @@ import type {
 
 export const SELECTION_LIST_STALE_OPTIONS_OPACITY = 0.6;
 
-const dynamicRowStyles = StyleSheet.create((theme) => ({
-    // A failed group says so in one quiet line on the group's text edge (Find lab ST "one line, no red"),
-    // never a filled band that reads as a selected row.
-    errorRow: {
-        paddingHorizontal: theme.space.s16,
-        paddingVertical: theme.space.s10,
-    },
-    errorText: {
-        color: theme.colors.text.secondary,
-    },
-    emptyHintRow: {
-        paddingHorizontal: theme.space.s16,
-        paddingVertical: theme.space.s10,
-    },
-    emptyHintText: {
-        color: theme.colors.text.secondary,
+const dynamicRowStyles = StyleSheet.create(() => ({
+    menuLine: {
+        marginHorizontal: MENU_ROW_METRICS.insetPx,
     },
     staleSection: {
         opacity: SELECTION_LIST_STALE_OPTIONS_OPACITY,
@@ -124,60 +114,87 @@ export function SelectionListLoadingSkeletonGroup(props: Readonly<{
 }
 
 /**
- * Error row — visually identical between the per-section and flat paths. The
- * caller decides whether to render the `role="alert"` aria spread (full
- * rendering) or omit it (measure mode mirror).
+ * A section's state lines (failed, not found, empty, still loading, result coverage) are the app's one
+ * in-list line (`EmptyState layout="line"`): one quiet sentence on the rows' edge. A failed group says so
+ * in that line with the warning glyph (Find lab ST "one line, no red"), never a filled band that reads as a
+ * selected row. The caller decides whether the live-region aria spread renders (full rendering) or not
+ * (measure-mode mirror).
  */
+export function SelectionListStateLine(props: Readonly<{
+    label: string;
+    testID: string | undefined;
+    aria?: Record<string, unknown>;
+    loading?: boolean;
+    iconName?: IconName;
+    /** A quiet inline link after the sentence (a failed group's Retry). */
+    retry?: Readonly<{ label: string; onPress: () => void }>;
+}>): React.ReactElement | null {
+    // A menu insets its rows from the surface edge; its lines take the same inset so they stay on the rows' edge.
+    const inMenu = React.useContext(SelectionListOptionPresentationContext) === 'menu';
+    // A line with nothing to say (a step that declares an empty label) takes no space.
+    if (props.label === '' && !props.loading && props.iconName === undefined) return null;
+    const line = (
+        <EmptyState
+            layout="line"
+            testID={props.testID}
+            title={props.label}
+            lineLoading={props.loading}
+            lineDensity={inMenu ? 'menu' : undefined}
+            iconName={props.iconName}
+            primaryAction={props.retry ? {
+                label: props.retry.label,
+                onPress: props.retry.onPress,
+                testID: props.testID ? `${props.testID}:retry` : undefined,
+            } : undefined}
+        />
+    );
+    if (props.aria === undefined && !inMenu) return line;
+    return <View {...props.aria} style={inMenu ? dynamicRowStyles.menuLine : undefined}>{line}</View>;
+}
+
+/** Error row — `role="alert"` unless rendered as the identity-free measure mirror. */
 export function SelectionListErrorRow(props: Readonly<{
     label: string;
     testID: string | undefined;
     measureMode: boolean;
+    retry?: Readonly<{ label: string; onPress: () => void }>;
 }>): React.ReactElement {
-    const styles = dynamicRowStyles;
-    const aria = props.measureMode
-        ? {}
-        : ({ role: 'alert', 'aria-live': 'polite' } as Record<string, unknown>);
     return (
-        <View testID={props.testID} style={styles.errorRow} {...aria}>
-            <Text style={styles.errorText}>{props.label}</Text>
-        </View>
+        <SelectionListStateLine
+            label={props.label}
+            testID={props.testID}
+            iconName="warning"
+            retry={props.retry}
+            aria={props.measureMode ? undefined : { role: 'alert', 'aria-live': 'polite' }}
+        />
     );
 }
 
-/**
- * Not-found row (resolver verdict). Same visual as the empty-hint row but
- * carries `role="status"` so AT announces the path-resolution result.
- */
+/** Not-found row (resolver verdict): `role="status"` so AT announces the path-resolution result. */
 export function SelectionListNotFoundRow(props: Readonly<{
     label: string;
     testID: string | undefined;
     measureMode: boolean;
 }>): React.ReactElement {
-    const styles = dynamicRowStyles;
-    const aria = props.measureMode
-        ? {}
-        : ({ role: 'status', 'aria-live': 'polite' } as Record<string, unknown>);
     return (
-        <View testID={props.testID} style={styles.emptyHintRow} {...aria}>
-            <Text style={styles.emptyHintText}>{props.label}</Text>
-        </View>
+        <SelectionListStateLine
+            label={props.label}
+            testID={props.testID}
+            aria={props.measureMode ? undefined : { role: 'status', 'aria-live': 'polite' }}
+        />
     );
 }
 
 /**
- * Empty-hint row — descriptor-provided "no matches" message. No role/aria-
- * live announcement (parity with the per-section renderer).
+ * Empty-hint row — descriptor-provided "no matches" message, or the line a section that names its first
+ * load shows while it loads (`loading`). No role/aria-live announcement.
  */
 export function SelectionListEmptyHintRow(props: Readonly<{
     hint: string;
     testID: string | undefined;
+    loading?: boolean;
 }>): React.ReactElement {
-    const styles = dynamicRowStyles;
-    return (
-        <View testID={props.testID} style={styles.emptyHintRow}>
-            <Text style={styles.emptyHintText}>{props.hint}</Text>
-        </View>
-    );
+    return <SelectionListStateLine label={props.hint} testID={props.testID} loading={props.loading} />;
 }
 
 /** Visible result-coverage hint; SelectionList's canonical status region announces it. */
@@ -186,15 +203,7 @@ export function SelectionListResultHintRow(props: Readonly<{
     testID: string | undefined;
     measureMode: boolean;
 }>): React.ReactElement {
-    const styles = dynamicRowStyles;
-    return (
-        <View
-            testID={props.testID}
-            style={styles.emptyHintRow}
-        >
-            <Text style={styles.emptyHintText}>{props.hint}</Text>
-        </View>
-    );
+    return <SelectionListStateLine label={props.hint} testID={props.testID} />;
 }
 
 const sectionWrapStyles = StyleSheet.create(() => ({
@@ -341,6 +350,7 @@ function renderSelectionListSectionElement(
                 {skeletonCount === 0 && sectionPlan.hint && sectionPlan.isStale !== true ? (
                     <SelectionListEmptyHintRow
                         hint={sectionPlan.hint}
+                        loading
                         testID={measureMode ? undefined : selectionListTestId(sectionTestId, 'loading', 'hint')}
                     />
                 ) : null}
@@ -390,6 +400,7 @@ function renderSelectionListSectionElement(
                     label={errorLabel}
                     testID={measureMode ? undefined : selectionListTestId(sectionTestId, 'error')}
                     measureMode={measureMode}
+                    retry={sectionPlan.retry}
                 />
                 {sectionPlan.options.length > 0 ? (
                     <View style={dynStyles.staleSection}>

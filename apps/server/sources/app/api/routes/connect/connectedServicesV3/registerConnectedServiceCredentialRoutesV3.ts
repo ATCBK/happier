@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import type { Fastify } from "../../../types";
 import { CONNECTED_SERVICE_ERROR_CODES } from '@happier-dev/protocol/connect/connectedServiceErrors';
 import { ConnectedServiceCredentialMutationSupersededV1Schema, ConnectedServiceCredentialHealthV1Schema, ConnectedServiceCredentialRecordV1Schema } from '@happier-dev/protocol/connect/connected-service-schemas';
@@ -43,13 +43,13 @@ export function registerConnectedServiceCredentialRoutesV3(app: Fastify): void {
                 serviceId: ConnectedServiceIdSchema,
                 profileId: ConnectedServiceProfileIdSchema,
             }),
-            body: z.object({
+            body: z.strictObject({
                 content: StoredJsonContentEnvelopeSchema,
-                reconnect: z.object({
-                    allowProviderIdentityChange: z.boolean().optional().default(false),
-                }).optional(),
+                reconnect: z.optional(z.object({
+                    allowProviderIdentityChange: z._default(z.optional(z.boolean()), false),
+                })),
                 ...connectedServiceCredentialMutationGuardFields,
-            }).strict().superRefine(validateConnectedServiceCredentialMutationGuard),
+            }).check(z.superRefine(validateConnectedServiceCredentialMutationGuard)),
             response: {
                 200: z.object({ success: z.literal(true), credentialRevision: z.string() }),
                 400: z.union([
@@ -61,7 +61,7 @@ export function registerConnectedServiceCredentialRoutesV3(app: Fastify): void {
                     z.object({
                         error: z.literal(CONNECTED_SERVICE_ERROR_CODES.credentialMutationSuperseded),
                         reason: z.enum(["revision_mismatch", "refresh_lease_lost"]),
-                        credentialRevision: z.string().nullable(),
+                        credentialRevision: z.nullable(z.string()),
                     }),
                 ]),
             },
@@ -147,13 +147,13 @@ export function registerConnectedServiceCredentialRoutesV3(app: Fastify): void {
                 serviceId: ConnectedServiceIdSchema,
                 profileId: ConnectedServiceProfileIdSchema,
             }),
-            body: z.object({
+            body: z.strictObject({
                 health: ConnectedServiceCredentialHealthV1Schema,
-                expectedCredentialRevision: z.string().trim().min(1).max(128).optional(),
-            }).strict(),
+                expectedCredentialRevision: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(128))),
+            }),
             response: {
                 200: z.object({ success: z.literal(true), credentialRevision: z.string() }),
-                400: z.object({ error: z.literal("invalid-params") }).strict(),
+                400: z.strictObject({ error: z.literal("invalid-params") }),
                 404: z.union([NotFoundSchema, z.object({ error: z.literal("connect_credential_not_found") })]),
                 409: z.union([
                     z.object({ error: z.literal("connect_credential_unsupported_format") }),
@@ -207,7 +207,7 @@ export function registerConnectedServiceCredentialRoutesV3(app: Fastify): void {
             }),
             response: {
                 200: z.object({
-                    credentialRevision: z.string().optional(),
+                    credentialRevision: z.optional(z.string()),
                     content: StoredJsonContentEnvelopeSchema,
                 }),
                 404: z.union([NotFoundSchema, z.object({ error: z.literal("connect_credential_not_found") })]),
@@ -292,7 +292,7 @@ export function registerConnectedServiceCredentialRoutesV3(app: Fastify): void {
             querystring: ConnectedServiceCredentialDeleteQuerySchema,
             response: {
                 200: z.object({ success: z.literal(true) }),
-                400: z.object({ error: z.literal("invalid-params") }).strict(),
+                400: z.strictObject({ error: z.literal("invalid-params") }),
                 404: z.union([NotFoundSchema, z.object({ error: z.literal("connect_credential_not_found") })]),
                 409: z.union([
                     z.object({ error: z.literal("connect_credential_referenced_by_group") }),

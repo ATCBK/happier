@@ -11,6 +11,7 @@ import { RoundButtonSizeScope } from '@/components/ui/buttons/RoundButton';
 import { GlassSurface } from '@/components/ui/glass/GlassSurface';
 import { ContainedPageScopeProvider } from '@/components/ui/lists/listPresentation';
 import { ModalCardBody } from './ModalCardBody';
+import { PopoverScrollSourceProvider, usePopoverScrollSourceRef } from '@/components/ui/popover/PopoverScrollSource';
 import { ModalCardHeader } from './ModalCardHeader';
 import { SheetGrabber, useSheetDismiss, useSheetDrag } from './sheetDragDismiss';
 import { useModalCardDimensions, type ModalCardDimensionOptions, type ModalCardSizePreset } from './useModalCardDimensions';
@@ -24,6 +25,8 @@ type ModalCardFrameProps = Readonly<{
     material?: 'glass' | 'solid';
     /** `none`: no title band; the content is the top of the card. The title remains the accessible name. */
     header?: 'band' | 'none';
+    /** `wide`: the band's text and close stand on the content's 24 edge (a phone keeps the page gutter). */
+    headerInset?: 'wide';
     leading?: React.ReactNode;
     title?: React.ReactNode;
     subtitle?: React.ReactNode;
@@ -128,6 +131,9 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
     const bounded = framed && scrollHost === 'bounded' && !fullscreen;
     const fixedHeight = framed && (scrollHost === 'body' || fullscreen);
     const reducedMotion = useReducedMotionPreference();
+    // A card that scrolls its own body is the scroll source of the lists inside it; otherwise they keep the modal's.
+    const bodyScrollRef = React.useRef<ScrollView | null>(null);
+    const inheritedScrollSource = usePopoverScrollSourceRef();
     const dimensions = useModalCardDimensions({
         ...props.dimensions,
         size: props.size ?? props.dimensions?.size,
@@ -176,7 +182,7 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
                 props.style,
             ]}
         >
-            <GlassSurface surfaceGroup="floating" dialog enabled={framed && !fullscreen && props.material !== 'solid'}
+            <GlassSurface surfaceGroup="floating" floatingRole="panel" enabled={framed && !fullscreen && props.material !== 'solid'}
                 finishRole={framed ? undefined : null}
                 solidColor={!framed ? 'transparent' : fullscreen ? theme.colors.surface.base : undefined} style={[
                 framed ? (fullscreen ? styles.fullscreenSurface : styles.clipSurface) : null,
@@ -197,6 +203,7 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
                         subtitle={props.subtitle}
                         actions={props.actions}
                         onClose={props.onClose}
+                        inset={props.headerInset}
                         titleTestID={props.titleTestID}
                         subtitleTestID={props.subtitleTestID}
                         closeButtonTestID={props.closeButtonTestID}
@@ -208,6 +215,7 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
                 <ContainedPageScopeProvider contained={framed && !fullscreen}>
                     {/* One body parent: chrome and scroll changes must not retire pending input custody. */}
                     <ScrollView
+                        ref={bodyScrollRef}
                         testID={bodyScroll === 'auto' ? 'modal-card-body-scroll' : undefined}
                         style={bodyScroll === 'auto' ? styles.bodyScrollView
                             // A fixed-height card whose content owns its scrolling (a catalog list beside its
@@ -219,16 +227,19 @@ export function ModalCardFrame(props: ModalCardFrameProps) {
                         keyboardShouldPersistTaps="handled"
                         nestedScrollEnabled={bodyScroll === 'auto'}
                     >
-                        <ModalCardBody fill={framed && bodyScroll !== 'auto'} style={props.bodyStyle}>
-                            {props.children}
-                        </ModalCardBody>
+                        <PopoverScrollSourceProvider scrollSourceRef={bodyScroll === 'auto' ? bodyScrollRef : inheritedScrollSource}>
+                            <ModalCardBody fill={framed && bodyScroll !== 'auto'} style={props.bodyStyle}>
+                                {props.children}
+                            </ModalCardBody>
+                        </PopoverScrollSourceProvider>
                     </ScrollView>
                 </ContainedPageScopeProvider>
 
                 {framed && props.footer != null ? (
                     <View testID="modal-card-footer" style={[styles.footer, props.footerStyle]}>
-                        {/* Dialog actions are the `normal` tier: the same `label` words a WebAlert action uses. */}
-                        <RoundButtonSizeScope size="normal">{props.footer}</RoundButtonSizeScope>
+                        {/* Dialog actions are one `normal`-tier family: primary, secondary and destructive all take
+                            the same `label` words and geometry a WebAlert action uses. */}
+                        <RoundButtonSizeScope size="normal" presentation="uniform">{props.footer}</RoundButtonSizeScope>
                     </View>
                 ) : null}
                 {framed && !fullscreen ? <SurfaceRim role="floating" radius={theme.borderRadius.modalCard} border="modal" /> : null}

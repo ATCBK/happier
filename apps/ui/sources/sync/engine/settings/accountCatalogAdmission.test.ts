@@ -88,7 +88,7 @@ describe('private catalog Account admission', () => {
         applyProviderCatalogSnapshot(scope, { status: 'ready', revision: 3, catalog: provider }, true);
         applyConnectedAccountCatalogSnapshot(scope, 'configurations', { status: 'ready', revision: 3, record: configurations }, true);
         applyConnectedAccountCatalogSnapshot(scope, 'purposes', { status: 'ready', revision: 3, record: purposes }, true);
-        applyNotificationChannelCatalogSnapshot(scope, { catalog: { status: 'ready', revision: 3, channels: [channel] }, rawSettings: {}, sourceSettingsVersion: 0 }, true);
+        applyNotificationChannelCatalogSnapshot(scope, { catalog: { status: 'ready', revision: 3, channels: [channel], diagnostics: [] }, rawSettings: {}, sourceSettingsVersion: 0 }, true);
         applyConnectedMetadataCatalogSnapshot(scope, {
             presentation: { status: 'ready', revision: 3, entries: [{ v: 1, subject: { kind: 'account', account: { service, accountId: 'private-account' } }, label: 'Private label' }], diagnostics: [] },
             acknowledgements: { status: 'ready', revision: 3, entries: [{ v: 1, subject: { kind: 'warning', warningId: 'private-warning', scope: { kind: 'account' } }, acknowledged: true }], diagnostics: [] }, disclosure: [],

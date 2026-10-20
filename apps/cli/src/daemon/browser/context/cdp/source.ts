@@ -520,11 +520,16 @@ export function createCdpBrowserContextSource(input: CdpBrowserContextSourceInpu
                     SNAPSHOT_MAX_INTERACTIVE_ELEMENTS,
                 );
 
-                // Full accessibility tree (bounded `{ role, name }[]`).
+                // AX owns current text values. One DOM metadata read classifies all fields;
+                // never read a field's value from HTML attributes or issue a request per field.
                 await dispatch(handle, 'Accessibility.enable', undefined, view);
                 const ax = parseAxNodes(
                     await dispatch(handle, 'Accessibility.getFullAXTree', undefined, view),
                     SNAPSHOT_MAX_AX_NODES,
+                    await dispatch(handle, 'DOM.getDocument', { depth: -1, pierce: true }, view).catch((error: unknown) => {
+                        if (view.signal?.aborted) throw error;
+                        return null;
+                    }),
                 );
 
                 // Console summary from the redacted diagnostics ring (never a live DOM query).

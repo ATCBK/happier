@@ -145,10 +145,10 @@ describe('session reminder viewing', () => {
     it('restores a failed clear, reports it, and retries on the next opening', async () => {
         setRecord(1000);
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token: 'token', secret: 'secret' });
-        const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const diagnosticLog = vi.spyOn(console, 'info').mockImplementation(() => {});
         api.setSessionAttentionStanding.mockRejectedValueOnce(new Error('offline'));
         open();
-        await vi.waitFor(() => expect(errorLog).toHaveBeenCalledWith(
+        await vi.waitFor(() => expect(diagnosticLog).toHaveBeenCalledWith(
             '[fireAndForget] sessionReminderViewing.clearDueReminder', expect.objectContaining({ message: 'offline' }),
         ));
         expect(store.getState().sessionOrganizationAttentionStandingsBySessionKey[KEY]?.remindAt).toBe(1000);
@@ -161,7 +161,7 @@ describe('session reminder viewing', () => {
         const credentials = { token: 'token', secret: 'secret' };
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue(credentials);
         const clearResponse = createDeferred<{ standing: null }>();
-        vi.spyOn(console, 'error').mockImplementation(() => {});
+        vi.spyOn(console, 'info').mockImplementation(() => {});
         api.setSessionAttentionStanding.mockReturnValueOnce(clearResponse.promise);
         open();
         await vi.waitFor(() => expect(api.setSessionAttentionStanding).toHaveBeenCalledTimes(1));

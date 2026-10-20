@@ -22,7 +22,7 @@ describe('session.attention.set (ORC R-10)', () => {
     );
     expect(spec.inputSchema).toBe(SessionAttentionSetInputV1Schema);
     expect(spec.requiredAuthority).toBe('account_automation');
-    expect(spec.surfaces).toMatchObject({ ui: true, cli: true, voice: true, agent: true, mcp: false, plugin: true, api: true });
+    expect(spec.surfaces).toMatchObject({ ui: true, cli: true, voice: true, agent: true, mcp: true, plugin: true, api: true });
     expect(isPluginSurfaceExcludedActionId(spec.id)).toBe(false);
   });
 

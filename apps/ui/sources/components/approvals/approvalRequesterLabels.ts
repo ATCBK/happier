@@ -1,3 +1,4 @@
+import type { ApprovalRequest } from '@happier-dev/protocol';
 import { getAgentCore } from '@/agents/catalog/catalog';
 import { formatAgentLikeIdForDisplay } from '@/agents/catalog/formatAgentLikeIdForDisplay';
 import { resolveHomeDisplayName } from '@/components/settings/server/homeDisplayName';
@@ -19,7 +20,25 @@ export function resolveApprovalHomeName(
   return id ? resolveHomeDisplayName(getServerProfileById(id)) : null;
 }
 
-/** A session this device cannot name: it says where the session lives instead of showing its id. */
+/**
+ * The Home as a sentence names it: its own name, else "this Home" for a Home this device is signed in
+ * to but never named, else null for a Home this device has no profile for.
+ */
+export function resolveApprovalHomeSentenceName(
+  serverId: string | null | undefined,
+): string | null {
+  const id = serverId?.trim();
+  if (!id) return null;
+  return (
+    resolveApprovalHomeName(id) ??
+    (getServerProfileById(id) ? t('settingsAccount.thisHome') : null)
+  );
+}
+
+/**
+ * A session this device cannot name: it says where the session lives instead of showing its id. Only
+ * a Home this device has no profile for is "not on this device".
+ */
 export function describeUnnamedApprovalSession(
   homeName: string | null | undefined,
 ): string {
@@ -27,6 +46,38 @@ export function describeUnnamedApprovalSession(
   return home
     ? t('detailPages.approval.sessionOnHome', { home })
     : t('detailPages.approval.sessionElsewhere');
+}
+
+/**
+ * The surface a request arrived through, read once for every approval surface: a current built-in
+ * request records it on its immutable execution origin, an older one as its requested surface, and
+ * any other family on its creator. The host stamps the agent surface on a Workflow Run's own Action,
+ * so that caller reads as the Run, never as an agent that was not involved.
+ */
+export function readApprovalRequesterSurface(
+  request: ApprovalRequest | Readonly<{ createdBy: Readonly<{ surface?: string }> }> | null,
+  builtIn: boolean,
+): string {
+  if (!request) return '';
+  if (!builtIn) return request.createdBy.surface ?? '';
+  const approval = request as ApprovalRequest;
+  if (approval.v !== 2) return approval.requestedSurface ?? '';
+  return approval.executionOriginV1.caller.kind === 'workflowRun'
+    ? 'workflow_run'
+    : approval.executionOriginV1.surface;
+}
+
+/**
+ * The requester line for a session this device cannot name. A request the person made themselves
+ * from the app is theirs, so it reads as "You" rather than as a session they did not ask through.
+ */
+export function describeUnnamedApprovalRequester(
+  surface: string | null | undefined,
+  homeName: string | null | undefined,
+): string {
+  return surface?.trim() === 'ui'
+    ? t('detailPages.approval.requesterYou')
+    : describeUnnamedApprovalSession(homeName);
 }
 
 const ORIGIN_LABEL_KEYS = {
@@ -38,6 +89,7 @@ const ORIGIN_LABEL_KEYS = {
   ui: 'detailPages.approval.origin.ui',
   api: 'detailPages.approval.origin.api',
   plugin: 'detailPages.approval.origin.plugin',
+  workflow_run: 'detailPages.approval.origin.workflowRun',
   system: 'detailPages.approval.origin.system',
 } as const;
 

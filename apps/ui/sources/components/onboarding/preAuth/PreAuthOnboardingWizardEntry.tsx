@@ -45,7 +45,7 @@ import { readJourneyReplayBeatId, readWebQueryParam } from '@/components/onboard
 import { useOnboardingJourneySessionActive } from '@/components/onboarding/tour/state/journeySession';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Text } from '@/components/ui/text/Text';
-import { useLocalSetting } from '@/sync/store/hooks';
+import { useLocalSetting } from '@/sync/store/settingsReadHooks';
 import { executeHomeAuthentication } from '@/auth/flows/executeHomeAuthentication';
 import { resolveHomeAuthenticationTarget } from '@/auth/flows/resolveHomeAuthenticationTarget';
 import { presentEmailPasswordAuthentication } from '@/components/account/auth/emailPassword/presentEmailPasswordAuthentication';

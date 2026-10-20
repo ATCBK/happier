@@ -4,13 +4,13 @@ import { accountSettingsParse } from '@happier-dev/protocol/account/settings/acc
 import { emptyPromptLibraryRecordV1, loadPromptLibraryCatalogV1, readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { PromptLibraryCatalogKeyV1Schema, PromptLibraryRowMutationV1Schema, PromptLibraryRowsListResponseV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { beginActivePromptLibraryCatalogRefresh, clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests,
-  setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { beginActivePromptLibraryCatalogRefresh, commitActivePromptLibraryCatalog, clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests,
+  setActiveAccountSettingsSnapshot, subscribeActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createDeferred } from '@/testkit/async/deferred';
-import { prepareActiveAccountRoleOverrides, refreshActivePromptLibraryCatalog } from './hydratePromptLibraryCatalog';
+import { prepareActiveAccountRoleOverrides, prepareActivePromptLibraryRecord, readActiveMachineSkillInstallArtifactIds, refreshActivePromptLibraryCatalog } from './hydratePromptLibraryCatalog';
 import { getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createCliPromptLibraryStore } from './promptLibraryStore';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
 import { sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
@@ -26,11 +26,11 @@ function seedAccount(token: string) {
   return credentials;
 }
 
-function listed(revision: number) {
+function listed(revision: number, includeBuilder = true) {
   return { status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision,
     content: { t: 'plain', v: key === 'role-overrides' ? { key, value: { v: 1, overrides: {
-      builder: { roleId: 'builder', workspaceWrites: revision === 1 ? 'allow' : 'deny' },
-    } } } : emptyPromptLibraryRecordV1(key) } })) };
+      ...(includeBuilder ? { builder: { roleId: 'builder', workspaceWrites: revision === 1 ? 'allow' : 'deny' } } : {}),
+    } } } : emptyPromptLibraryRecordV1(key, 1) } })) };
 }
 
 function readPublishedRole() {
@@ -39,6 +39,98 @@ function readPublishedRole() {
 }
 
 describe('CLI prompt catalog acknowledged mutation publication', () => {
+  it('retains confirmed database rollback through prompt catalog hydration', async () => {
+    const credentials = seedAccount('prompt-read-rollback');
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      if (new URL(String(url)).pathname === '/v1/account/encryption/currentness') return { status: 200, data: {
+        mode: 'plain', version: 1, settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      return { status: 503, data: { error: 'database_transaction_conflict_exhausted', statusCode: 503 } };
+    });
+    expect(await refreshActivePromptLibraryCatalog({ credentials })).toMatchObject({
+      status: 'unavailable', reason: 'database_transaction_conflict_exhausted' });
+  });
+  it.each([
+    { status: 500, body: { error: 'database_transaction_conflict_exhausted' }, code: 'outcome_unknown' },
+    { status: 503, body: { error: 'database_transaction_conflict_exhausted', statusCode: 503 }, code: 'database_transaction_conflict_exhausted' },
+    { status: 503, body: { error: 'database_transaction_conflict_exhausted' }, code: 'outcome_unknown' },
+  ])('preserves prompt mutation disposition for HTTP $status / $code', async ({ status, body, code }) => {
+    const credentials = seedAccount('prompt-rollback');
+    vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { mode: 'plain', version: 1,
+      settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } });
+    vi.spyOn(axios, 'post').mockImplementation(async (url, mutation) => {
+      expect(new URL(String(url)).pathname).toBe('/v1/account/entity-rows/prompt-library/skill-rules');
+      expect(PromptLibraryRowMutationV1Schema.parse(mutation)).toMatchObject({ expectedRevision: 4 });
+      return { status, data: body };
+    });
+    await expect(createCliPromptLibraryStore({ credentials }).writeRecord({ expectedRevision: 4,
+      record: { key: 'skill-rules', value: { v: 1, rules: [] } } })).rejects.toMatchObject({ code });
+  });
+
+  it('does not read retained skill install links without an observed raw Settings snapshot', () => {
+    const credentials = seedAccount('unobserved-skill-install-source');
+    const snapshot = getActiveAccountSettingsSnapshot();
+    if (!snapshot) throw new Error('Missing Account fixture');
+    // A fresh Account lifetime has no catalog to inherit from the seed helper.
+    resetActiveAccountSettingsSnapshotForTests();
+    setActiveAccountSettingsSnapshot({ ...snapshot, source: 'cache', rawSettings: undefined, promptLibraryCatalog: undefined });
+    expect(getActiveAccountSettingsSnapshot()?.rawSettings).toBeUndefined();
+    expect(getActiveAccountSettingsSnapshot()?.promptLibraryCatalog).toBeUndefined();
+    expect(readActiveMachineSkillInstallArtifactIds({ token: credentials.token,
+      machineInstallDemand: { target: { serverIdentityId: 'a'.repeat(64), machineId: 'machine-a' },
+        libraryServerIdentityId: 'a'.repeat(64) } })).toEqual([]);
+  });
+
+  it('admits captured invocation Role reads before optional retained-source maintenance', async () => {
+    const credentials = seedAccount('captured-role-read');
+    const snapshot = getActiveAccountSettingsSnapshot()!;
+    let current = true;
+    const operationContext = createInvocationSavedSecretOperationContextV1({ credentials,
+      snapshot: { ...snapshot, promptLibraryCatalog: { status: 'loading' } },
+      serverHttpBaseUrl: 'https://captured-role.test', isCurrent: async () => current });
+    const source = createDeferred<void>();
+    const sourceIssued = createDeferred<void>();
+    const rows = createDeferred<void>();
+    let rowReads = 0;
+    let rowRevision = 1;
+    vi.spyOn(axios, 'get').mockImplementation(async input => {
+      const path = new URL(String(input)).pathname;
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+        mode: 'plain', version: 1, settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      if (path === '/v1/account/entity-rows/prompt-library') { rowReads++; await rows.promise; return { status: 200, data: listed(rowRevision) }; }
+      if (path === '/v2/account/settings') { sourceIssued.resolve(); await source.promise;
+        return { status: 200, data: { content: { t: 'plain', v: {} }, version: 7 } }; }
+      if (path === '/v1/account/entity-rows/profiles/transfer') return { status: 200, data: { status: 'absent' } };
+      if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
+      throw new Error(`Unexpected captured Role boundary: ${path}`);
+    });
+    let admitted = false;
+    const preparation = prepareActiveAccountRoleOverrides({ credentials, operationContext,
+      scopeKey: snapshot.scopeKey!, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() })
+      .then(result => { admitted = result.status === 'ready'; return result; });
+    const coding = prepareActivePromptLibraryRecord({ credentials, operationContext, key: 'coding',
+      scopeKey: snapshot.scopeKey!, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() });
+    try {
+      rows.resolve();
+      await sourceIssued.promise;
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(admitted).toBe(true);
+      expect(await preparation).toMatchObject({ status: 'ready', overrides: { builder: { workspaceWrites: 'allow' } } });
+      expect(await coding).toMatchObject({ status: 'ready' });
+      expect(rowReads).toBe(1);
+      expect(await prepareActiveAccountRoleOverrides({ credentials, operationContext,
+        scopeKey: snapshot.scopeKey!, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() })).toMatchObject({ status: 'ready' });
+      expect(rowReads).toBe(1);
+      rowRevision = 2;
+      expect(await prepareActiveAccountRoleOverrides({ credentials, operationContext, refresh: true,
+        scopeKey: snapshot.scopeKey!, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() }))
+        .toMatchObject({ status: 'ready', overrides: { builder: { workspaceWrites: 'deny' } } });
+      expect(rowReads).toBe(2);
+      current = false;
+      await expect(prepareActiveAccountRoleOverrides({ credentials, operationContext,
+        scopeKey: snapshot.scopeKey!, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() }))
+        .resolves.toEqual({ status: 'unavailable', reason: 'scope-retired' });
+    } finally { rows.resolve(); source.resolve(); await Promise.allSettled([preparation, coding]); }
+  });
   it('sends current private-resource proofs only for a token-bearing registry row',async()=>{
     const base='https://registry-proof-home.example.invalid';
     const credentials=runWithServerHttpBaseUrl(base,()=>seedAccount('proof-owner'));
@@ -66,7 +158,7 @@ describe('CLI prompt catalog acknowledged mutation publication', () => {
     await store.writeRecord({expectedRevision:2,record:{key:'registry-sources',value:{v:2,disabledSourceIds:[],sources:[]}}});
     expect(sent[1]).not.toHaveProperty('referencedSavedSecretIds');expect(sent[1]).not.toHaveProperty('savedSecretRevisions');
   });
-  it('requires a new Role row observation after invalidation during source maintenance', async () => {
+  it.each(['invalidation', 'refresh'] as const)('requires a new Role row observation after %s during source maintenance', async demand => {
     const credentials = seedAccount('prompt-refresh-during-maintenance');
     const incumbent = getActiveAccountSettingsSnapshot()!;
     const bound = { scopeKey: incumbent.scopeKey!, lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() };
@@ -82,7 +174,7 @@ describe('CLI prompt catalog acknowledged mutation publication', () => {
         mode: 'plain', version: 1, settingsVersion: 7, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
       if (path === '/v1/account/entity-rows/prompt-library') {
         if (rowsUnavailable) throw new Error('Home unavailable');
-        return { status: 200, data: listed(revision) };
+        return { status: 200, data: listed(revision, revision !== 3) };
       }
       if (path === '/v2/account/settings') { sourceIssued.resolve(); await source.promise;
         return { status: 200, data: { content: { t: 'plain', v: {} }, version: 7 } }; }
@@ -91,21 +183,31 @@ describe('CLI prompt catalog acknowledged mutation publication', () => {
       throw new Error(`Unexpected refresh boundary: ${path}`);
     });
     const maintenance = refreshActivePromptLibraryCatalog({ credentials });
+    const coalesced = prepareActiveAccountRoleOverrides({ credentials, ...bound, refresh: true });
     let recovery: ReturnType<typeof prepareActiveAccountRoleOverrides> | undefined;
     try {
       await sourceIssued.promise;
+      expect(await coalesced).toMatchObject({ status: 'ready', overrides: { builder: { workspaceWrites: 'allow' } } });
       expect(await prepareActiveAccountRoleOverrides({ credentials, ...bound })).toMatchObject({
         status: 'ready', overrides: { builder: { workspaceWrites: 'allow' } } });
-      beginActivePromptLibraryCatalogRefresh(bound);
+      if (demand === 'invalidation') beginActivePromptLibraryCatalogRefresh(bound);
       rowsUnavailable = true;
-      recovery = prepareActiveAccountRoleOverrides({ credentials, ...bound });
-      source.resolve();
+      recovery = prepareActiveAccountRoleOverrides({ credentials, ...bound, refresh: demand === 'refresh' });
+      if (demand === 'invalidation') source.resolve();
       expect(await recovery).toMatchObject({ status: 'unavailable', reason: 'unreachable' });
       expect(readPublishedRole()).toMatchObject({ status: 'unavailable', reason: 'unreachable' });
       rowsUnavailable = false;
       revision = 2;
-      expect(await prepareActiveAccountRoleOverrides({ credentials, ...bound })).toMatchObject({
+      expect(await prepareActiveAccountRoleOverrides({ credentials, ...bound, refresh: demand === 'refresh' })).toMatchObject({
         status: 'ready', overrides: { builder: { workspaceWrites: 'deny' } } });
+      revision = 3;
+      expect(await prepareActiveAccountRoleOverrides({ credentials, ...bound, refresh: true })).toEqual({
+        status: 'ready', overrides: {} });
+      source.resolve();
+      await maintenance;
+      expect(readPublishedRole()).toMatchObject({ status: 'ready', revision: 3,
+        record: { value: { overrides: {} } } });
+      expect(await prepareActiveAccountRoleOverrides({ credentials, ...bound })).toEqual({ status: 'ready', overrides: {} });
       expect(getActiveAccountSettingsSnapshot()?.settingsVersion).toBe(7);
     } finally { source.resolve(); await recovery; await maintenance; }
   });
@@ -130,8 +232,11 @@ describe('CLI prompt catalog acknowledged mutation publication', () => {
     if (equalRowRefresh) {
       const catalog = await loadPromptLibraryCatalogV1({ mode: 'plain', material: null,
         readRows: async () => PromptLibraryRowsListResponseV1Schema.parse(listed(1)) });
-      setActiveAccountSettingsSnapshot({ ...getActiveAccountSettingsSnapshot()!, promptLibraryCatalog: catalog });
+      commitActivePromptLibraryCatalog({ scopeKey: incumbent.scopeKey!,
+        lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(), catalog });
     }
+    const notification = vi.fn();
+    const unsubscribe = subscribeActiveAccountSettingsSnapshot(notification);
     const maintenance = equalRowRefresh ? refreshActivePromptLibraryCatalog({ credentials }) : undefined;
     const preparation = prepareActiveAccountRoleOverrides({ credentials, scopeKey: incumbent.scopeKey!,
       lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken() });
@@ -139,7 +244,8 @@ describe('CLI prompt catalog acknowledged mutation publication', () => {
       await sourceIssued.promise;
       expect(readPublishedRole()).toMatchObject({ status: 'ready', revision: 1 });
       expect(await preparation).toMatchObject({ status: 'ready', overrides: { builder: { workspaceWrites: 'allow' } } });
-    } finally { source.resolve(); await preparation; await maintenance; await refreshActivePromptLibraryCatalog({ credentials }); }
+      if (equalRowRefresh) expect(notification).not.toHaveBeenCalled();
+    } finally { unsubscribe(); source.resolve(); await preparation; await maintenance; await refreshActivePromptLibraryCatalog({ credentials }); }
   });
   it('admits an actually observed empty Settings version zero for a fresh keyless Account', async () => {
     const token = `e30.${Buffer.from(JSON.stringify({ sub: 'fresh-prompt-account' })).toString('base64url')}.signature`;
@@ -166,7 +272,7 @@ describe('CLI prompt catalog acknowledged mutation publication', () => {
     setActiveAccountSettingsSnapshot({ ...incumbent, settings: accountSettingsParse(raw), rawSettings: raw, settingsVersion: 8 });
     let sourceVersion = remoteCleaned ? 9 : 8;
     let sourceRaw: Readonly<Record<string, unknown>> = remoteCleaned ? { preferredLanguage: 'de' } : raw;
-    let replacement: ReturnType<typeof getActiveAccountSettingsSnapshot>;
+    let replacement: ReturnType<typeof getActiveAccountSettingsSnapshot> = null;
     // Home HTTP is the only boundary replacement; source CAS and Account publication owners remain real.
     vi.spyOn(axios, 'get').mockImplementation(async input => {
       const path = new URL(String(input)).pathname;

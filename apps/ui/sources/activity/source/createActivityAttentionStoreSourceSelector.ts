@@ -14,6 +14,7 @@ import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionLis
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { StorageState } from '@/sync/store/types';
 import { readProjectWorkspaceRefs } from '@/sync/store/domains/projectAccountRows';
+import { readProjectAccountWorkspaceRefs } from '@/sync/domains/workspaces/projectAccountRows';
 import { readSessionDisplayTitleField } from '@/sync/state/selectors';
 import {
     readPendingAgentStateCompletedRequestSignature,
@@ -22,6 +23,9 @@ import {
 import { isVoiceConversationCustodySessionMetadata } from '@/voice/persistence/voiceConversationSystemSessionLookup';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { readSessionContentAvailability, type SessionContentAvailabilitySubject } from '@/sync/domains/session/encryptedContentAvailability';
+import { buildSessionListRowFilterFacts } from '@/sync/domains/session/listing/sessionListWorkFilter';
+import { buildSessionOrganizationSessionKey } from '@/sync/domains/session/organization';
+import { listSessionListLookupServerSessions } from '@/sync/domains/session/listing/sessionListLookupState';
 
 import type { ActivityAttentionSource } from './activityAttentionSourceTypes';
 import { collectRecordIds, forEachRecordValue } from './recordIteration';
@@ -37,6 +41,8 @@ type StoreActivityAttentionSource = Pick<
     | 'sessionsById'
     | 'workspacePathDisplayModeV1'
     | 'workspaceRefsV1'
+    | 'followRuleWorkspaceRefsV1'
+    | 'followRuleTagAssignmentsBySessionKey'
 >;
 
 type SignatureCacheEntry<T> = Readonly<{
@@ -66,17 +72,41 @@ function joinSignatureParts(parts: readonly unknown[]): string {
     }).join('');
 }
 
-function buildWorkspaceDisplaySettingsSignature(state: StorageState): string {
+function buildWorkspaceDisplaySettingsSignature(state: StorageState, includeFollowRuleFacts: boolean): string {
+    const ruleWorkspaceRefs = includeFollowRuleFacts ? readProjectAccountWorkspaceRefs(state) : undefined;
     return joinSignatureParts([
         state.settings.workspacePathDisplayModeV1,
+        includeFollowRuleFacts ? ruleWorkspaceRefs === undefined ? 'unavailable' : 'available' : '',
         ...readProjectWorkspaceRefs(state).map((ref) => joinSignatureParts([
             ref.id,
             ref.serverId,
             ref.machineId,
             ref.rootPath,
             ref.label,
+            includeFollowRuleFacts ? ref.projectKey : '',
         ])),
     ]);
+}
+
+function readFollowRuleFactsSignature(row: Session | SessionListRenderableSession, serverId: string): string {
+    return JSON.stringify([
+        buildSessionListRowFilterFacts(row, serverId, { nowMs: 0, includeStatus: false }),
+        row.ownerAccountId, row.origin, row.viewer?.follow, row.viewer?.relevance, row.viewer?.readState,
+    ]);
+}
+
+function buildFollowRuleTagsSignature(state: StorageState, personalMembershipByServerId: Readonly<Record<string, readonly string[]>>): string {
+    const keys = new Set<string>();
+    forEachRecordValue(state.sessions, session => {
+        if (session.serverId) keys.add(buildSessionOrganizationSessionKey(session.serverId, session.id));
+    });
+    for (const entry of listSessionListLookupServerSessions(state)) {
+        keys.add(buildSessionOrganizationSessionKey(entry.serverId, entry.session.id));
+    }
+    for (const [serverId, ids] of Object.entries(personalMembershipByServerId)) {
+        for (const id of ids) keys.add(buildSessionOrganizationSessionKey(serverId, id));
+    }
+    return JSON.stringify([...keys].sort().map(key => [key, state.sessionOrganizationTagAssignmentsBySessionKey[key]?.tagIds ?? null]));
 }
 
 function readRuntimeIssueSignature(issue: SessionRuntimeIssueV1 | null | undefined): string {
@@ -406,6 +436,7 @@ function buildActivityRowsSignature(
     state: StorageState,
     cache: Map<string, SignatureCacheEntry<SessionListRenderableSession>>,
     personalMembershipByServerId: Readonly<Record<string, readonly string[]>>,
+    includeFollowRuleFacts: boolean,
 ): string {
     const addressesByKey = new Map<string, Readonly<{ serverId: string; sessionId: string }>>();
     for (const membershipByServerId of [
@@ -426,7 +457,9 @@ function buildActivityRowsSignature(
         const row = state.sessionListRowsByServerId?.[serverId]?.[sessionId];
         if (!row) return joinSignatureParts([serverId, sessionId, '']);
         const cached = cache.get(key);
-        const signature = cached?.value === row ? cached.signature : buildRenderableActivitySignature(row);
+        const signature = cached?.value === row ? cached.signature : joinSignatureParts([
+            buildRenderableActivitySignature(row), includeFollowRuleFacts ? readFollowRuleFactsSignature(row, serverId) : '',
+        ]);
         if (cached?.value !== row) cache.set(key, { signature, value: row });
         return joinSignatureParts([serverId, sessionId, signature]);
     }));
@@ -435,6 +468,7 @@ function buildActivityRowsSignature(
 function buildSourceFromState(
     state: StorageState,
     includeSessionMessages: boolean,
+    includeFollowRuleFacts: boolean,
 ): StoreActivityAttentionSource {
     return {
         isDataReady: state.isDataReady,
@@ -446,13 +480,15 @@ function buildSourceFromState(
             state.concurrentSessionListCacheByServerId ?? EMPTY_CONCURRENT_CACHE_BY_SERVER_ID,
         ...(includeSessionMessages ? { sessionMessagesById: state.sessionMessages } : {}),
         workspaceRefsV1: readProjectWorkspaceRefs(state),
+        ...(includeFollowRuleFacts ? { followRuleWorkspaceRefsV1: readProjectAccountWorkspaceRefs(state),
+            followRuleTagAssignmentsBySessionKey: state.sessionOrganizationTagAssignmentsBySessionKey } : {}),
         workspacePathDisplayModeV1: state.settings.workspacePathDisplayModeV1,
     };
 }
 
 export function createActivityAttentionStoreSourceSelector(
     personalMembershipByServerId: Readonly<Record<string, readonly string[]>> = {},
-    options: Readonly<{ includeSessionMessages?: boolean }> = {},
+    options: Readonly<{ includeSessionMessages?: boolean; includeFollowRuleFacts?: boolean }> = {},
 ): (state: StorageState) => StoreActivityAttentionSource {
     const sessionSignatureCache = new Map<string, SignatureCacheEntry<Session>>();
     const renderableSignatureCache = new Map<string, SignatureCacheEntry<SessionListRenderableSession>>();
@@ -460,12 +496,13 @@ export function createActivityAttentionStoreSourceSelector(
     let previousSignature: string | null = null;
     let previousSource: StoreActivityAttentionSource | null = null;
     let previousInputs: StoreActivityAttentionSource | null = null;
-    const signatures = { sessions: '', rows: '', index: '', cache: '', messages: '', workspace: '' };
+    const signatures = { sessions: '', rows: '', index: '', cache: '', messages: '', workspace: '', tags: '' };
     let potentialSessionIds: readonly string[] = [];
     const includeSessionMessages = options.includeSessionMessages !== false;
+    const includeFollowRuleFacts = options.includeFollowRuleFacts === true;
 
     return (state) => {
-        const inputs = buildSourceFromState(state, includeSessionMessages);
+        const inputs = buildSourceFromState(state, includeSessionMessages, includeFollowRuleFacts);
         const sessionsChanged = !previousInputs || previousInputs.sessionsById !== inputs.sessionsById;
         const membershipChanged = !previousInputs
             || previousInputs.ordinarySessionListMembershipByServerId !== inputs.ordinarySessionListMembershipByServerId;
@@ -473,13 +510,16 @@ export function createActivityAttentionStoreSourceSelector(
         const indexChanged = !previousInputs || previousInputs.sessionListIndexByServerId !== inputs.sessionListIndexByServerId;
         const cacheChanged = !previousInputs
             || previousInputs.concurrentSessionListCacheByServerId !== inputs.concurrentSessionListCacheByServerId;
+        const tagsChanged = includeFollowRuleFacts && (!previousInputs
+            || previousInputs.followRuleTagAssignmentsBySessionKey !== inputs.followRuleTagAssignmentsBySessionKey);
         const messagesChanged = includeSessionMessages && (sessionsChanged || membershipChanged
             || previousInputs?.sessionMessagesById !== inputs.sessionMessagesById);
         const workspaceChanged = !previousInputs || previousInputs.workspaceRefsV1 !== inputs.workspaceRefsV1
+            || previousInputs.followRuleWorkspaceRefsV1 !== inputs.followRuleWorkspaceRefsV1
             || previousInputs.workspacePathDisplayModeV1 !== inputs.workspacePathDisplayModeV1;
         if (previousSource && previousInputs?.isDataReady === inputs.isDataReady
             && !sessionsChanged && !membershipChanged && !rowsChanged && !indexChanged
-            && !cacheChanged && !messagesChanged && !workspaceChanged) {
+            && !cacheChanged && !messagesChanged && !workspaceChanged && !tagsChanged) {
             return previousSource;
         }
 
@@ -488,16 +528,26 @@ export function createActivityAttentionStoreSourceSelector(
         if (includeSessionMessages && (sessionsChanged || membershipChanged)) {
             potentialSessionIds = collectPotentialSessionIds(state);
         }
-        if (sessionsChanged) signatures.sessions = buildCachedRecordSignature(state.sessions, sessionSignatureCache, buildSessionActivitySignature);
-        if (rowsChanged || membershipChanged) signatures.rows = buildActivityRowsSignature(state, renderableSignatureCache, personalMembershipByServerId);
+        if (sessionsChanged) signatures.sessions = buildCachedRecordSignature(state.sessions, sessionSignatureCache, session => {
+            const serverId = session.serverId ?? state.profileScope?.serverId;
+            return joinSignatureParts([
+                buildSessionActivitySignature(session),
+                includeFollowRuleFacts && serverId ? readFollowRuleFactsSignature(session, serverId) : '',
+            ]);
+        });
+        if (rowsChanged || membershipChanged) signatures.rows = buildActivityRowsSignature(state, renderableSignatureCache, personalMembershipByServerId, includeFollowRuleFacts);
         if (indexChanged) signatures.index = buildSessionListIndexSignature(state.sessionListIndexByServerId);
         if (cacheChanged) signatures.cache = buildConcurrentCacheSignature(state.concurrentSessionListCacheByServerId);
         if (messagesChanged) signatures.messages = buildSessionMessagesRecordSignature(potentialSessionIds, state.sessionMessages, sessionMessagesSignatureCache);
-        if (workspaceChanged) signatures.workspace = buildWorkspaceDisplaySettingsSignature(state);
+        if (workspaceChanged) signatures.workspace = buildWorkspaceDisplaySettingsSignature(state, includeFollowRuleFacts);
+        if (includeFollowRuleFacts && (tagsChanged || sessionsChanged || membershipChanged || rowsChanged || cacheChanged)) {
+            signatures.tags = buildFollowRuleTagsSignature(state, personalMembershipByServerId);
+        }
         previousInputs = inputs;
         const signature = joinSignatureParts([
             inputs.isDataReady === true ? 1 : 0,
             signatures.sessions, signatures.rows, signatures.index, signatures.cache, signatures.messages, signatures.workspace,
+            signatures.tags,
         ]);
 
         if (previousSource && previousSignature === signature) {

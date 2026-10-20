@@ -64,10 +64,15 @@ describe('the shared detail story for an error group', () => {
       await expect(page.getByText(label!)).resolves.toBeDefined();
     }
     await expect(page.getByText('Last 24 hours')).resolves.toBeDefined();
-    // The trend is one image whose label names every point, so its data is never shape-only.
-    const chart = document.querySelector('[role="img"]')?.getAttribute('aria-label') ?? '';
-    expect(chart).toContain('Events per hour');
-    expect(chart).toContain('44');
+    // The interactive chart exposes every exact value through its shared Details table.
+    await act(async () => { await page.press(await page.getByRole('button', { name: 'Details' })); });
+    const chart = document.querySelector('[role="table"][aria-label="Events per hour"]');
+    expect(chart).not.toBeNull();
+    const rows = [...chart!.querySelectorAll('[role="row"][aria-label]')];
+    expect(rows).toHaveLength(3);
+    for (const [index, count] of [3, 9, 44].entries()) {
+      expect(rows[index]!.getAttribute('aria-label')).toMatch(new RegExp(`, Events per hour: ${count}$`));
+    }
   });
 
   it('draws no spread at all when the source stated none of its facts', async () => {

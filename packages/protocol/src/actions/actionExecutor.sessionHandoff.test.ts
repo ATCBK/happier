@@ -59,7 +59,7 @@ describe('createActionExecutor (session.handoff)', () => {
     expect(await executor.execute('session.handoff', copying, { surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
   });
 
-  it('carries existing-state policy through the public Action and preserves target absence', async () => {
+  it.each(['ui', 'cli', 'voice'] as const)('carries existing-state policy through %s and preserves target absence', async (surface) => {
     const sessionHandoffStart = vi.fn(async () => ({ ok: false as const, errorCode: 'existing_session_state_unavailable', error: 'Turn on session data transfer' }));
     const executor = createActionExecutor(createDeps({
       sessionHandoffStart,
@@ -67,7 +67,7 @@ describe('createActionExecutor (session.handoff)', () => {
     }));
     const result = await executor.execute('session.handoff', {
       sessionId: 'session_1', targetMachineId: 'target', stateTransfer: 'existing', workspaceAction: { kind: 'none' },
-    }, { surface: 'ui', authority: 'present_user' });
+    }, { surface, authority: 'present_user' });
     expect(result).toEqual({ ok: false, errorCode: 'existing_session_state_unavailable', error: 'Turn on session data transfer' });
     expect(sessionHandoffStart).toHaveBeenCalledWith(expect.objectContaining({ stateTransfer: 'existing' }));
   });
@@ -89,8 +89,9 @@ describe('createActionExecutor (session.handoff)', () => {
     });
   });
 
-  it('delegates to sessionHandoffStart with the resolved session and server ids', async () => {
-    const sessionHandoffStart = vi.fn(async () => ({ handoffId: 'handoff_1', status: { handoffId: 'handoff_1', status: 'pending', phase: 'preparing', recoveryActions: [] }, workspace: { kind: 'none' as const } }));
+  it.each(['ui', 'cli', 'voice'] as const)('preserves a pending handoff and exact Home through %s', async (surface) => {
+    const pending = { handoffId: 'handoff_1', status: { handoffId: 'handoff_1', status: 'pending', phase: 'preparing', recoveryActions: [] }, workspace: { kind: 'none' as const } };
+    const sessionHandoffStart = vi.fn(async () => pending);
     const deps = createDeps({
       sessionHandoffStart,
       sessionHandoffTargetReplacementApprovalPreflight: vi.fn(async () => ({ type: 'not_required' as const })),
@@ -102,10 +103,10 @@ describe('createActionExecutor (session.handoff)', () => {
     const result = await executor.execute(
       'session.handoff',
       { targetMachineId: 'machine_2' },
-      { surface: 'ui', authority: 'present_user', defaultSessionId: 'sess_1', signal },
+      { surface, authority: 'present_user', defaultSessionId: 'sess_1', signal },
     );
 
-    expect(result.ok).toBe(true);
+    expect(result).toEqual({ ok: true, result: pending });
     expect(sessionHandoffStart).toHaveBeenCalledWith({
       sessionId: 'sess_1',
       targetMachineId: 'machine_2',
@@ -238,6 +239,9 @@ describe('createActionExecutor (session.handoff)', () => {
     }, { surface: 'ui', authority: 'present_user', serverId: 'server_a' });
     expect(decision).toMatchObject({ ok: true, result: { execution: { ok: true } } });
     expect(preflight).toHaveBeenCalledTimes(2);
+    expect(preflight).toHaveBeenCalledWith(expect.objectContaining({
+      effectActionId: 'session.handoff',
+    }));
     expect(sessionHandoffStart).toHaveBeenCalledWith(expect.objectContaining({
       actionRequestId: 'handoff-action-1',
       handoffTargetReplacementApproval: approval,

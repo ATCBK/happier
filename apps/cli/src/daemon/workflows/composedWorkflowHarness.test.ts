@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import axios from 'axios';
 import {
   admitAgentStartV1,
@@ -14,6 +14,7 @@ import {
   AutomationTriggerIdSchema,
   AutomationStoredWorkflowDefinitionV2Schema,
   AutomationDefinitionDetailSchema,
+  AutomationV3WorkerClaimResponseSchema,
   DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1,
   DEFAULT_AUTOMATION_V3_MAX_ACTIVE_RUNS_PER_MACHINE,
   getActionSpec,
@@ -44,6 +45,7 @@ import {
   type WorkflowStep,
 } from '@happier-dev/protocol';
 import type { SessionInputResultV1 } from '@/session/services/sendSessionMessage';
+import type { ActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
 import type { AvailableAutomationAccountEncryptionV1 } from '@/plugins/runtime/automations/automationAccountCurrentness';
 import type { StoredCredentials } from '@/persistence';
 import type { AutomationDefinitionDetail, AutomationDefinitionReconcileRequest } from '@happier-dev/protocol';
@@ -52,7 +54,19 @@ import { WorkflowTriggerWriteResultV1Schema } from '@happier-dev/protocol/workfl
 import { AUTOMATION_TEMPLATE_V02_EXISTING_ENCRYPTED, AUTOMATION_TEMPLATE_V02_EXISTING_PLAIN } from '../../../../../packages/protocol/src/automations/automationTemplateV02.testFixtures';
 import { createAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import { createAccountEncryptionCurrentnessFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { buildCommittedLaunchMetadata } from '@/agent/runtime/createSessionMetadata';
+import { SpawnDaemonSessionRequestSchema } from '@/rpc/handlers/spawnSessionOptionsContract';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import * as machineRpc from '@/session/transport/rpc/machineRpc';
+import { ApiMachineClient } from '@/api/apiMachine';
+import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
+import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
+import { SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1, SessionPendingEnqueueByMachineRequestV1Schema,
+  SessionPendingEnqueueByMachineResponseV1Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingMachineAdmissionV1';
+import { buildSessionTurnsProjectionV1, SessionTurnsProjectionV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
+import type { TranscriptRow } from '@/api/session/fetchEncryptedTranscriptWindow';
+import type { TranscriptMessageLookupResult } from '@/api/session/transcriptMessageLookup';
+import type { SessionTurnV1 } from '@happier-dev/protocol';
 
 const nativeLaunchBoundary = vi.hoisted(() => ({ child: null as ChildProcess | null,
   cancel: null as import('../spawn/startupLaunchCancellation').CancelStartupLaunch | null }));
@@ -72,12 +86,23 @@ vi.mock('../platform/windows/spawnHappyCliVisibleConsole', () => ({
 
 // Machine RPC is the process-launch boundary. Keep authorization, persisted
 // Agent resume selection and readiness-before-input ownership real.
-vi.mock('@/session/transport/rpc/machineRpc', () => {
+vi.mock('@/session/transport/rpc/machineRpc', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/session/transport/rpc/machineRpc')>();
   const launch = async ({ method, request }: {
     method: string; request: { sessionId?: string; spawnNonce?: string };
   }) => {
     if (method === RPC_METHODS.SPAWN_HAPPY_SESSION && !request.sessionId && freshSessionBoundary) {
-      return freshSessionBoundary(request);
+      const response = await freshSessionBoundary(request);
+      if (response && typeof response === 'object' && 'sessionId' in response && typeof response.sessionId === 'string') {
+        const spawn = SpawnDaemonSessionRequestSchema.parse(request);
+        if (spawn.sessionCreationTag) freshSessionCreationTags.set(spawn.sessionCreationTag, response.sessionId);
+        const existing = freshSessionRecords.get(response.sessionId);
+        const birth = buildCommittedLaunchMetadata({ options: spawn, directory: spawn.directory, accountSettings: {} });
+        freshSessionRecords.set(response.sessionId, existing?.metadataLayoutVersion === 1 ? existing : existing ? { ...existing,
+          metadata: JSON.stringify({ ...JSON.parse(existing.metadata ?? '{}'), sessionCreationCorrespondenceV1: birth.sessionCreationCorrespondenceV1 }) }
+          : createSessionRecordFixture({ id: response.sessionId, encryptionMode: 'plain', metadata: JSON.stringify(birth) }));
+      }
+      return response;
     }
     if (method === RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE_BY_NONCE && freshSessionNonceBoundary) {
       return freshSessionNonceBoundary(request);
@@ -97,7 +122,7 @@ vi.mock('@/session/transport/rpc/machineRpc', () => {
     }
     return { status: 'not_found' };
   };
-  return { callMachineRpc: launch, callExactMachineRpc: launch };
+  return { ...actual, callMachineRpc: launch, callExactMachineRpc: launch };
 });
 
 import { executeClaimedRun } from '@/daemon/automation/automationRunExecutor';
@@ -106,17 +131,22 @@ import { createAutomationClaimClient } from '@/daemon/automation/automationClaim
 import { dispatchActionFromRpc } from '@/rpc/handlers/_actionDispatchAdapter';
 import { createWorkflowActionExecutor } from '@/session/actions/workflowActionExecutor';
 import { createWorkflowDefinitionActions } from '@happier-dev/protocol/actions/executor/workflowDefinitions';
+import { createWorkflowDefinitionActions as createCliWorkflowDefinitionActions } from '@/session/actions/workflowDefinitions';
 import { createWorkflowRunActionOwner } from '@/session/actions/workflowRunActions';
-import { workflowInvocationKey, WORKFLOW_CANCEL_REQUESTED_ABORT_REASON } from './coordinator';
+import { workflowInvocationKey, WORKFLOW_CANCEL_REQUESTED_ABORT_REASON, WorkflowRuntimeInterruption } from './coordinator';
 import { createInMemoryWorkflowCoordinatorStore } from './workflowCoordinator.testkit';
-import { createWorkflowInvocationRecoveryObserver, resolveWorkflowSessionConversation } from './daemonRuntime';
+import { createProductionDaemonWorkflowRuntime, createWorkflowInvocationRecoveryObserver, resolveWorkflowSessionConversation } from './daemonRuntime';
 import { createWorkflowRunRecoveryReader } from './recovery';
 import { createGitWorkflowWorkspaceTestDependencies } from './workflowWorkspace.testkit';
 
 import { createWorkflowProducerBinding } from './workflowScopeBinding';
 import { bindAutomationWorkflowInputs, isWorkflowJsonObject } from './input';
 import { createProductionWorkflowRunCoordinator } from './production';
-import { createWorkflowSessionStepExecutor } from './sessionStepExecutor';
+import { createWorkflowSessionStepExecutor, type WorkflowSessionStartup } from './sessionStepExecutor';
+import { runObservedWorkflowSessionStartup } from './workflowSessionStartup';
+import { createHostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
+import { createMachineSessionSpawnRpcHandler } from '@/session/actions/sessionLifecycleActions';
+import { awaitTrackedRunnerAgentSessionOpen } from '@/daemon/agentRuntime/runnerAgentSessionOpenAttestation';
 import { createWorkflowOriginContextInputPort } from '@/agent/runtime/session/contextOnly/workflowOriginInput';
 import * as cliSpawn from '@/utils/spawnHappyCLI';
 import { spawnRegularProcessAndWaitForWebhook } from '../spawn/spawnRegularProcessAndWaitForWebhook';
@@ -170,6 +200,7 @@ const agentTarget = { kind: 'agent' as const, identity: { pluginId: 'happier.age
 const temporaryDirectories: string[] = [];
 const authorizedConversations = new Map<string, string>();
 const freshSessionRecords = new Map<string, ReturnType<typeof createSessionRecordFixture>>();
+const freshSessionCreationTags = new Map<string, string>();
 let freshSessionBoundary: ((request: unknown) => unknown) | null = null;
 let freshSessionNonceBoundary: ((request: unknown) => unknown) | null = null;
 let readinessCurrentness: AvailableAutomationAccountEncryptionV1['witness'] = currentness;
@@ -194,6 +225,13 @@ async function writeSessionReadiness(url: string, body: unknown) {
     || !('tags' in body) || !Array.isArray(body.tags) || typeof body.tags[0] !== 'string') {
     throw new Error(`Unexpected Session readiness write: ${url}`);
   }
+  if (body.tags[0].startsWith('create:v1:')) {
+    const tags = body.tags;
+    return { status: 200, data: { sessions: [...freshSessionCreationTags].flatMap(([tag, id]) => {
+      const session = freshSessionRecords.get(id);
+      return tags.includes(tag) && session ? [session] : [];
+    }) } };
+  }
   const response = await readSessionReadiness(`/v2/sessions/${body.tags[0]}`);
   if (!('session' in response.data)) throw new Error('Session readiness response missing record');
   return { status: 200, data: { sessions: [response.data.session] } };
@@ -202,6 +240,7 @@ async function writeSessionReadiness(url: string, body: unknown) {
 beforeEach(() => {
   authorizedConversations.clear();
   freshSessionRecords.clear();
+  freshSessionCreationTags.clear();
   freshSessionBoundary = null;
   freshSessionNonceBoundary = null;
   readinessCurrentness = currentness;
@@ -247,6 +286,7 @@ async function sealDirectAccepted(input: Readonly<{
   directory: string;
   deliverResult?: boolean;
   runCrypto?: WorkflowRunDataKeyV1;
+  actionRequestAttributionV1?: ActionRequestAttributionV1;
 }>): Promise<string> {
   const runCrypto = input.runCrypto ?? { mode: 'plain' as const };
   const sealMode = runCrypto.mode === 'e2ee'
@@ -261,12 +301,13 @@ async function sealDirectAccepted(input: Readonly<{
       machineId,
       executionTarget: { kind: 'session' },
       workspaceTarget: { project: { machineId, directory: input.directory, checkoutRootPath: input.directory } },
-      origin: { kind: 'direct', ...(input.deliverResult ? { originSessionId: sessionId } : {}) },
+      origin: { kind: 'direct', ...(input.deliverResult ? { originSessionId: sessionId } : {}),
+        ...(input.actionRequestAttributionV1 ? { actionRequestAttributionV1: input.actionRequestAttributionV1 } : {}) },
       authorization,
       ...(input.deliverResult ? { resultDelivery: { kind: 'originating_session' as const, originSessionId: sessionId } } : {}),
     },
   });
-  if (!materialized.ok) throw new Error(materialized.error.code);
+  if (!materialized.ok) throw new Error(JSON.stringify(materialized.error));
   return serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({
     ...sealMode,
     binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId: input.runId },
@@ -323,13 +364,15 @@ function sessionInputBoundary(
  */
 function workflowDaemonProcess(input: Readonly<{
   storage: Readonly<{ execute: WorkflowRunStorageTestkit['execute'] }>;
-  sessionInput: ReturnType<typeof sessionInputBoundary>;
+  sessionInput?: ReturnType<typeof sessionInputBoundary>;
+  machineAdmissionTransport?: Parameters<typeof createProductionWorkflowRunCoordinator>[0]['execution']['machineAdmissionTransport'];
   directory: string;
   encryption?: AvailableAutomationAccountEncryptionV1;
   credentials?: StoredCredentials;
   conversationSessionId?: string;
   readActualConversation?: boolean;
   onReviewEntered?: (entry: Readonly<{ runId: string }>) => Promise<void>;
+  sessionStartup?: WorkflowSessionStartup;
 }>) {
   authorizedConversations.set(input.conversationSessionId ?? sessionId, input.directory);
   readinessCurrentness = input.encryption?.witness ?? currentness;
@@ -366,12 +409,13 @@ function workflowDaemonProcess(input: Readonly<{
     execution: {
       credentials: input.credentials ?? { token: 'token', encryption: null },
       serverId: 'server-1',
+      ...(input.sessionStartup ? { sessionStartup: input.sessionStartup } : {}),
 
-      machineAdmissionTransport: vi.fn(async () => ({ status: 'accepted' as const, localId: 'local-1' })) as never,
+      machineAdmissionTransport: input.machineAdmissionTransport ?? vi.fn(async () => ({ status: 'accepted' as const, localId: 'local-1' })) as never,
       resolveExistingSessionConversation: input.readActualConversation
         ? async params => await resolveWorkflowSessionConversation({ ...params, credentials: input.credentials ?? { token: 'token', encryption: null } })
         : async () => ({ sessionId: input.conversationSessionId ?? sessionId, machineId, directory: input.directory, agentTarget }),
-      sessionInput: input.sessionInput as never,
+      ...(input.sessionInput ? { sessionInput: input.sessionInput as never } : {}),
       detachedRun: { actionExecutor: unusedRunActions as never, buildActionContext: actionContext as never },
     },
     // The daemon-applied plugin process is a real boundary. Exercise its real
@@ -446,6 +490,703 @@ function fanOutDefinition(failurePolicy: 'collect_outcomes' | 'fail_stop'): Work
     finalOutput: { kind: 'result', producer: { blockId: 'summary', scope: { kind: 'current' } }, path: [] },
   };
 }
+
+it.each(['ordinary', 'claim-lost-during-startup'] as const)('delivers a saved three-step Test through Session spawn, Machine admission and exact-turn observation (%s)', async mode => {
+  const channel = await createRequesterCurrentnessSocketHarness();
+  onTestFinished(() => channel.close());
+  const runId = '44444444-4444-4444-8444-444444444444';
+  const childId = 'c444444444444444444444444';
+  const directory = await projectDirectory();
+  const credentials = { token: 'token', encryption: null };
+  const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: { agentTarget, connectedServices: {
+    v: 2, bindingsByServiceId: { 'happier.agent.claude/claude-subscription': { source: 'native' },
+      'happier.agent.claude/anthropic': { source: 'native' } },
+  } }, blocks: [
+    step('first', { document: { text: 'FX44_FIRST', references: [], attachments: [] } }),
+    step('producer', { document: { text: 'FX44_PRODUCE', references: [], attachments: [] },
+      result: { kind: 'json', schema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'], additionalProperties: false } } }),
+    step('consumer', { document: { text: 'FX44_CONSUME', references: [], attachments: [] },
+      input: [{ kind: 'result', producer: { blockId: 'producer', scope: { kind: 'current' } }, path: ['name'] }] }),
+  ] };
+  const definitionId = '44444444-5555-4444-8444-444444444444';
+  let artifact: Record<string, unknown> = {};
+  const transcripts: TranscriptMessageLookupResult[] = [];
+  const turns: SessionTurnV1[] = [];
+  const prompts: string[] = [];
+  vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 200 })));
+  vi.spyOn(axios, 'get').mockImplementation(async url => {
+    const parsed = new URL(String(url));
+    if (parsed.pathname.endsWith(`/v1/artifacts/${definitionId}/access/recipients`)) return { status: 200, data: {
+      artifactId: definitionId, ownerAccountId: accountId, access: 'owner', encryptionMode: 'plain',
+      dataEncryptionKey: null, callerDataEncryptionKey: null, recipients: [] } };
+    if (parsed.pathname.endsWith(`/v1/artifacts/${definitionId}`)) return { status: 200, data: artifact };
+    if (parsed.pathname.endsWith(`/v1/sessions/${childId}/turns`)) return { status: 200,
+      data: SessionTurnsProjectionV1Schema.parse(buildSessionTurnsProjectionV1({ sessionId: childId, updatedAt: Date.now(), turns })) };
+    if (parsed.pathname.includes('/messages/by-local-id/')) return { status: 200, data: { message:
+      transcripts.find(row => row.localId === decodeURIComponent(parsed.pathname.split('/').at(-1)!)) } };
+    if (parsed.pathname.endsWith(`/v1/sessions/${childId}/messages`)) return { status: 200, data: {
+      messages: transcripts.filter(row => row.seq > Number(parsed.searchParams.get('afterSeq') ?? 0)) satisfies TranscriptRow[] } };
+    return await readSessionReadiness(String(url));
+  });
+  vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+    if (!String(url).endsWith('/v1/artifacts')) return await writeSessionReadiness(String(url), body);
+    if (!body || typeof body !== 'object') throw new Error('Invalid Artifact HTTP write');
+    artifact = { ...body, id: definitionId, ownerAccountId: accountId, access: 'owner', encryptionMode: 'plain',
+      headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
+    return { status: 200, data: artifact };
+  });
+  const artifactStore = createAccountArtifactStore({ credentials, getAccountEncryptionMode: async () => 'plain' });
+  await artifactStore.create({ artifactId: definitionId, header: { kind: 'workflow-definition.v1', definitionId,
+    revision: { headerVersion: 1, bodyVersion: 1 }, metadata: { title: 'QA44 Session Test' } },
+    savedBy: { kind: 'person', accountId }, body: JSON.stringify({ kind: 'workflow-definition.v1', definition }) });
+  const kit = createWorkflowRunStorageTestkit({ runId, machineId, origin: { kind: 'direct' } });
+  const owner = createWorkflowRunActionOwner({ resolveAccountId: async () => accountId, storage: kit,
+    definitions: createCliWorkflowDefinitionActions({ artifactStore }),
+    resolveEncryption: async () => ({ kind: 'available', witness: currentness }),
+    resolveMaterializationContext: async () => ({ effects: { resolveTargetAvailability: async () => true } }),
+    prepareWorkspace: async () => ({ ok: true, workspaceTarget: { project: { machineId, directory, checkoutRootPath: directory } } }),
+  });
+  const actions = createWorkflowActionExecutor({ isWorkflowFeatureEnabled: async () => true,
+    definitions: createCliWorkflowDefinitionActions({ artifactStore }), runs: owner });
+  const admitted = await actions({ actionId: 'workflow.run.start', input: { runId,
+    source: { kind: 'saved', definitionId, revision: { headerVersion: 1, bodyVersion: 1 } } },
+    context: { surface: 'rpc', authority: 'account_automation', callerPermissionMode: 'safe-yolo',
+      causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'safe-yolo' },
+      externalActionTarget: { kind: 'machine', machineId, project: { machineId, directory } } } });
+  expect(admitted).toMatchObject({ admission: 'created' });
+  let launches = 0;
+  const workerLifetime = new AbortController();
+  const scope = { accountId, machineId };
+  const operations = createHostActionOperationRuntime({ machineId, resolveAccountId: async () => accountId,
+    generateOperationId: () => 'retained-startup' });
+  let interrupted = false;
+  const spawnHandler = createMachineSessionSpawnRpcHandler({ handlers: { spawnSession: async options => {
+    launches++;
+    const metadata = buildCommittedLaunchMetadata({ options, directory, accountSettings: {} });
+    freshSessionRecords.set(childId, createSessionRecordFixture({ id: childId, active: true, encryptionMode: 'plain', machineId,
+      metadata: JSON.stringify({ ...metadata, machineId, permissionMode: 'default',
+        runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} } }), origin: { kind: 'run_step', runId }, workDepth: 1 }));
+    return { type: 'success', sessionId: childId, sessionCreationOutcome: {
+      disposition: 'created', organizationPlacement: { folderId: null, tagIds: [] } } };
+  } }, awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ ...input, getTrackedSessions: () => [{
+    pid: 101, startedBy: 'daemon', happySessionId: childId,
+    agentRuntimeDaemonServiceAuthorityFilePath: '/private/authority.json',
+    agentRuntimeDaemonServiceSessionOpenAttestation: {
+      request: { kind: 'create', sessionId: childId, cwd: directory }, providerSessionId: 'native',
+    },
+  }] }) });
+  freshSessionBoundary = async raw => await spawnHandler(raw);
+  const sessionStartup: WorkflowSessionStartup = input => runObservedWorkflowSessionStartup({ ...input,
+    onObservation: async operation => {
+      await input.onObservation?.(operation);
+      if (mode === 'claim-lost-during-startup' && !interrupted) {
+        interrupted = true;
+        // The real executor forwards worker/lease loss with this same bare abort.
+        // Losing observation after the durable startup fact cannot abort its owner.
+        workerLifetime.abort();
+      }
+    },
+  }, { serverId: 'server-1', machineId, observeExecution: operations.observeExecution, rpcContext: {},
+    transport: operation => ({ spawn: (request, options) => spawnHandler(request, { ...options, localActionContext: operation }),
+      resolveSpawnSessionByNonce: async () => { throw new Error('No replacement startup'); } }),
+    observeOperation: (target, options) => operations.handlers.getV2({ operationId: target.operationId,
+      ...(options.waitForTerminal ? { waitForTerminal: true } : {}) }, options.signal ? { signal: options.signal } : undefined),
+    cancelOperation: async target => operations.runner.cancel(scope, target.operationId), cleanupOnFailure: async () => {},
+  });
+  const machine = new ApiMachineClient('token', { id: machineId, encryptionMode: 'plain', metadata: null,
+    metadataVersion: 0, daemonState: null, daemonStateVersion: 0, dataEncryptionKey: 'plain' });
+  const socket = createApiSessionSocketStub({ connected: true, emitWithAck: (event, payload) => {
+    if (event !== SESSION_PENDING_ENQUEUE_BY_MACHINE_EVENT_V1) throw new Error(`Unexpected Machine event: ${event}`);
+    const request = SessionPendingEnqueueByMachineRequestV1Schema.parse(payload);
+    expect(request.targetMachineId).toBe(machineId);
+    expect(request.sessionId).toBe(childId);
+    if (request.content.t !== 'plain') throw new Error('Unexpected encrypted Session input');
+    const record = request.content.v;
+    expect(record).toMatchObject({ meta: { happierInputRequestV1: { v: 2, producer: 'workflow',
+      caller: { kind: 'host' }, workflow: { purpose: 'invocation', runId } },
+      happierProvenanceV1: { v: 2, kind: 'workflow_invocation', runId } } });
+    if (!record || typeof record !== 'object' || Array.isArray(record) || !('content' in record)
+      || !record.content || typeof record.content !== 'object' || Array.isArray(record.content)
+      || !('text' in record.content) || typeof record.content.text !== 'string') throw new Error('Missing provider input');
+    const text = record.content.text;
+    prompts.push(text);
+    const reply = text.startsWith('FX44_PRODUCE') ? '{"name":"FX44_NAMED_VALUE"}'
+      : text.startsWith('FX44_CONSUME') ? text.includes('FX44_NAMED_VALUE') ? 'FX44_CONSUMED' : 'FX44_MISSING_VALUE' : 'FX44_STARTED';
+    const now = Date.now();
+    const seq = transcripts.length + 1;
+    transcripts.push({ id: `message-${seq}`, seq, localId: request.localId, sidechainId: null, createdAt: now, updatedAt: now, content: request.content });
+    transcripts.push({ id: `message-${seq + 1}`, seq: seq + 1, localId: null, sidechainId: null, createdAt: now + 1, updatedAt: now + 1,
+      content: { t: 'plain', v: { role: 'agent', content: { type: 'output', data: { type: 'assistant', message: {
+        role: 'assistant', content: [{ type: 'text', text: reply }], stop_reason: 'end_turn' } } } } } });
+    turns.push({ turnId: `turn-${seq}`, status: 'completed', startedAt: now, updatedAt: now + 1, terminalAt: now + 1,
+      transcriptAnchors: { startUserMessageSeq: seq, userMessageSeqs: [seq], finalAssistantMessageSeq: seq + 1, endSeqInclusive: seq + 1 } });
+    return SessionPendingEnqueueByMachineResponseV1Schema.parse({ v: 1, result: { status: 'accepted', localId: request.localId } });
+  } });
+  // Install only the Socket.IO network boundary. ApiMachine admission, the
+  // Session sender, exact-input observer and all Workflow owners remain real.
+  Reflect.set(machine, 'socket', socket);
+  try {
+    const coordinate = workflowDaemonProcess({ storage: kit, directory, credentials, readActualConversation: true, sessionStartup,
+      machineAdmissionTransport: (request, options) => machine.enqueueSessionPendingByMachine(request, options) });
+    if (mode === 'claim-lost-during-startup') {
+      await executeClaimedRun({ machineId, heartbeatMs: 5_000, leaseDurationMs: 30_000, signal: workerLifetime.signal,
+        claimClient: createAutomationClaimClient({ token: 'token', createPublisherHeader: async () => null }),
+        coordinateWorkflowRun: coordinate,
+        claimed: { protocol: 'v3', automation: null, accountCurrentness: currentness,
+          run: { id: runId, automationId: null, attempt: 0, leaseExpiresAt: Date.now() + 120_000, revision: kit.run().revision,
+            origin: { kind: 'direct' }, triggerId: null, workflowAcceptedSnapshotEnvelope: kit.acceptedEnvelope()! } } });
+      expect(await operations.handlers.getV2({ operationId: 'retained-startup', waitForTerminal: true }))
+        .toMatchObject({ kind: 'found', operation: { state: 'succeeded', result: { sessionId: childId } } });
+      expect(prompts).toEqual([]);
+    }
+    const result = await coordinate({ runId, attempt: 0, expectedRevision: kit.run().revision,
+      accountCurrentness: currentness, acceptedEnvelope: kit.acceptedEnvelope()! });
+    expect(result, JSON.stringify(kit.rows().map(row => openRowProgress(kit, row.index)))).toMatchObject({ state: 'succeeded' });
+    expect(launches).toBe(1);
+    expect(prompts.map(text => text.split('\n')[0])).toEqual(['FX44_FIRST', 'FX44_PRODUCE', 'FX44_CONSUME']);
+    expect(prompts[2]).toContain('FX44_NAMED_VALUE');
+    expect(openRowProgress(kit, rowFor(kit, 'first')!).result).toBe('FX44_STARTED');
+    expect(openRowProgress(kit, rowFor(kit, 'producer')!).result).toEqual({ name: 'FX44_NAMED_VALUE' });
+    expect(openRowProgress(kit, rowFor(kit, 'consumer')!).result).toBe('FX44_CONSUMED');
+  } finally { await machine.shutdown(); }
+}, 30_000);
+
+it.each(['missing', 'materialized'] as const)('surfaces reclaimed admission without an observed input instead of waiting forever (%s)', async evidence => {
+  const channel = await createRequesterCurrentnessSocketHarness();
+  onTestFinished(() => channel.close());
+  const directory = await projectDirectory();
+  const runId = '59595959-5959-4595-8595-595959595959';
+  const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: retainedConversationDefaults(),
+    blocks: [step('first'), ...(evidence === 'missing' ? [step('must-not-admit')] : [])] };
+  const acceptedEnvelope = await sealDirectAccepted({ runId, definition, directory });
+  const kit = createWorkflowRunStorageTestkit({ runId, machineId, origin: { kind: 'direct' }, acceptedEnvelope });
+  let lost = false;
+  const coordinate = workflowDaemonProcess({ directory, readActualConversation: true, storage: {
+    execute: async (operation, options) => {
+      const response = await kit.execute(operation, options);
+      if (!lost && operation.operation === 'invocations.fact' && operation.lifecycle === 'admitting') {
+        lost = true;
+        // The persisted admission is not proof that the following send ran.
+        throw new WorkflowRuntimeInterruption();
+      }
+      return response;
+    },
+  }, machineAdmissionTransport: async () => { throw new Error('Ambiguous admission must not replay input'); } });
+  await expect(coordinate({ runId, attempt: 0, expectedRevision: 0, accountCurrentness: currentness, acceptedEnvelope }))
+    .rejects.toBeInstanceOf(WorkflowRuntimeInterruption);
+  expect(rowFor(kit, 'first')?.lifecycle).toBe('admitting');
+  expect(openRowProgress(kit, rowFor(kit, 'first')!)).not.toHaveProperty('execution');
+  const controller = new AbortController();
+  let interruptWait: ReturnType<typeof setImmediate> | undefined;
+  let inputReads = 0;
+  let observedInputId = '';
+  const inputMessage = () => ({ id: 'observed-workflow-input', seq: 1, localId: observedInputId,
+    createdAt: 1, updatedAt: 1, content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'first' } } } });
+  vi.spyOn(axios, 'get').mockImplementation(async url => {
+    if (String(url).includes('/messages/by-local-id/')) {
+      inputReads++;
+      if (evidence === 'materialized') {
+        observedInputId = decodeURIComponent(String(url).split('/').at(-1)!);
+        return { status: 200, data: { message: inputMessage() } };
+      }
+      throw Object.assign(new Error('Message not found'), { isAxiosError: true,
+        response: { status: 404, data: { error: 'Message not found' } } });
+    }
+    if (String(url).endsWith('/turns')) return { status: 200, data: buildSessionTurnsProjectionV1({ sessionId, updatedAt: 2,
+      turns: [{ turnId: 'observed-workflow-turn', status: inputReads === 1 ? 'in_progress' : 'completed', startedAt: 1, updatedAt: 2,
+        ...(inputReads === 1 ? {} : { terminalAt: 2 }),
+        transcriptAnchors: { startUserMessageSeq: 1, userMessageSeqs: [1], startSeqInclusive: 1,
+          ...(inputReads === 1 ? {} : { finalAssistantMessageSeq: 2, endSeqInclusive: 2 }) } }] }) };
+    if (String(url).includes('/messages?')) return { status: 200, data: { messages: [inputMessage(),
+      ...(inputReads === 1 ? [] : [{ id: 'observed-workflow-result', seq: 2, localId: null, createdAt: 2, updatedAt: 2,
+        content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'original input completed' } } } }])]
+      .filter(row => row.seq > Number(new URL(String(url)).searchParams.get('afterSeq') ?? 0)) } };
+    if (String(url).includes('/pending')) {
+      // End an incorrect unbounded observer at its first event wait, allowing
+      // RED to assert the missing visible result without a test timeout.
+      interruptWait = setImmediate(() => controller.abort());
+      return { status: 200, data: { pending: [] } };
+    }
+    return await readSessionReadiness(String(url));
+  });
+  try {
+    const result = coordinate({ runId, attempt: 0, expectedRevision: kit.run().revision,
+      accountCurrentness: currentness, acceptedEnvelope, signal: controller.signal });
+    await expect(result).resolves.toMatchObject(evidence === 'missing'
+      ? { state: 'interrupted', reason: 'workflow_admission_ack_uncertain' } : { state: 'succeeded' });
+    expect(inputReads).toBeGreaterThan(0);
+    expect(rowFor(kit, 'first')?.lifecycle).toBe(evidence === 'missing' ? 'needs_attention' : 'completed');
+    expect(openRowProgress(kit, rowFor(kit, 'first')!)).toMatchObject(evidence === 'missing'
+      ? { reason: { code: 'workflow_admission_ack_uncertain' } } : { result: 'original input completed' });
+    expect(rowFor(kit, 'must-not-admit')).toBeUndefined();
+  } finally { if (interruptWait) clearImmediate(interruptWait); controller.abort(); }
+});
+
+it.each(['success', 'failure', 'already-stopped', 'foreign-session', 'success-during-recovery'] as const)('keeps cancelled cold startup custody until its original operation answers (%s)', async outcome => {
+  const directory = await projectDirectory();
+  const runId = '61616161-6161-4161-8161-616161616161';
+  const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: { agentTarget, connectedServices: null },
+    blocks: [step('launch'), step('must-not-admit')] };
+  const acceptedEnvelope = await sealDirectAccepted({ runId, definition, directory });
+  const kit = createWorkflowRunStorageTestkit({ runId, machineId, origin: { kind: 'direct' }, acceptedEnvelope });
+  const scope = { accountId, machineId };
+  // The installed spawn owner can refuse cancellation while its native launch is pending.
+  const operations = createHostActionOperationRuntime({ machineId, resolveAccountId: async () => accountId,
+    generateOperationId: () => 'late-start' });
+  let release!: () => void;
+  const nativeOpen = new Promise<void>(resolve => { release = resolve; });
+  let started!: () => void;
+  const launching = new Promise<void>(resolve => { started = resolve; });
+  let launches = 0;
+  const handler = createMachineSessionSpawnRpcHandler({ handlers: { spawnSession: async options => {
+    launches++;
+    started();
+    await nativeOpen;
+    if (outcome === 'failure') return { type: 'error', errorCode: 'DAEMON_RPC_UNAVAILABLE', errorMessage: 'native launch refused' };
+    if (options.sessionCreationTag) freshSessionCreationTags.set(options.sessionCreationTag, 'late-child');
+    freshSessionRecords.set('late-child', createSessionRecordFixture({ id: 'late-child', encryptionMode: 'plain',
+      active: outcome !== 'already-stopped',
+      metadata: JSON.stringify({ ...buildCommittedLaunchMetadata({ options, directory, accountSettings: {} }),
+        machineId: outcome === 'foreign-session' ? 'foreign-machine' : machineId }) }));
+    authorizedConversations.set('late-child', directory);
+    return { type: 'success', sessionId: 'late-child', sessionCreationOutcome: {
+      disposition: 'created', organizationPlacement: { folderId: null, tagIds: [] } } };
+  } }, awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ getTrackedSessions: () => [{
+    pid: 101, startedBy: 'daemon', happySessionId: 'late-child',
+    agentRuntimeDaemonServiceAuthorityFilePath: '/private/authority.json',
+    agentRuntimeDaemonServiceSessionOpenAttestation: {
+      request: { kind: 'create', sessionId: 'late-child', cwd: directory }, providerSessionId: 'native',
+    },
+  }], ...input }) });
+  const sessionStartup: WorkflowSessionStartup = input => runObservedWorkflowSessionStartup(input, {
+    serverId: 'server-1', machineId, observeExecution: operations.observeExecution, rpcContext: {},
+    transport: operation => ({ spawn: async (request, options) => {
+      operation.operationAcceptance?.accept({});
+      return await handler(request, { ...options, localActionContext: operation });
+    }, resolveSpawnSessionByNonce: async () => { throw new Error('must_not_replace_startup'); } }),
+    observeOperation: async (target, options) => operations.handlers.getV2({ operationId: target.operationId,
+      ...(options.waitForTerminal ? { waitForTerminal: true } : {}),
+      ...(options.includeSetupReview ? { includeSetupReview: true } : {}) }, options.signal ? { signal: options.signal } : undefined),
+    cancelOperation: async target => operations.runner.cancel(scope, target.operationId), cleanupOnFailure: async () => {},
+  });
+  const sessionInput = sessionInputBoundary();
+  const stops: string[] = [];
+  let startupWaitAttached = false;
+  const invoke = async (method: string, request: unknown, options?: Readonly<{ signal?: AbortSignal }>) => {
+    if (method.endsWith('actionOperation.list.v2')) return await operations.handlers.listV2(request, options);
+    if (method.endsWith('actionOperation.get.v2')) {
+      if (request && typeof request === 'object' && 'waitForTerminal' in request && request.waitForTerminal === true) startupWaitAttached = true;
+      return await operations.handlers.getV2(request, options);
+    }
+    if (method.endsWith('actionOperation.cancel.v1')) return await operations.handlers.cancel(request, options);
+    throw new Error(`Unexpected retained-operation RPC: ${method}`);
+  };
+  vi.spyOn(machineRpc, 'callExactMachineRpc').mockImplementation(async request =>
+    await invoke(request.method, request.request, request.signal ? { signal: request.signal } : undefined));
+  vi.spyOn(machineRpc, 'callMachineRpc').mockImplementation(async request => {
+    if (request.method !== RPC_METHODS.STOP_SESSION || request.machineId !== machineId
+      || !request.request || typeof request.request !== 'object' || !('sessionId' in request.request)
+      || request.request.sessionId !== 'late-child') throw new Error('Wrong Session Stop wiring');
+    const session = freshSessionRecords.get('late-child')!;
+    stops.push(session.id);
+    if (!session.active) return { status: 'not_found' };
+    freshSessionRecords.set(session.id, { ...session, active: false });
+    return { status: 'stopped' };
+  });
+  let claimed = false;
+  let staleRecoveryRead = outcome === 'success-during-recovery';
+  let releaseRecoveryRead = () => {};
+  let recoveryReadStarted = () => {};
+  const recoveryReadPending = new Promise<void>(resolve => { releaseRecoveryRead = resolve; });
+  const recoveryReading = new Promise<void>(resolve => { recoveryReadStarted = resolve; });
+  vi.spyOn(axios, 'get').mockImplementation(async url => {
+    if (url.endsWith('/v3/automations/worker/assignments')) return { data: { assignments: [],
+      settings: { maxActiveRunsPerMachine: DEFAULT_AUTOMATION_V3_MAX_ACTIVE_RUNS_PER_MACHINE } } };
+    if (url.endsWith('/v3/automations/worker/run-lifecycle')) return { data: { sources: [] } };
+    return await readSessionReadiness(url);
+  });
+  vi.spyOn(axios, 'post').mockImplementation(async (url, body: unknown) => {
+    if (url.endsWith('/discard') && url.includes('/v2/sessions/late-child/pending/')) {
+      // This startup has not admitted an input. The real Pending owner returns
+      // exact absence; physical Stop still has to confirm the child is stopped.
+      throw Object.assign(new Error('not-found'), { isAxiosError: true, response: { status: 404, data: { error: 'not-found' } } });
+    }
+    if (url.endsWith('/v3/automations/runs/workflow-storage') && body && typeof body === 'object' && 'operation' in body) {
+      if (body.operation === 'recovery.list' && staleRecoveryRead) {
+        staleRecoveryRead = false;
+        recoveryReadStarted();
+        await recoveryReadPending;
+        return { status: 200, data: { candidates: [] } };
+      }
+      return { status: 200, data: body.operation === 'recovery.list'
+        ? { candidates: [{ run: kit.run(), parentAttempt: 1 }] }
+        : await kit.execute(body as WorkflowRunStorageTestkitOperation) };
+    }
+    if (!url.endsWith('/v3/automations/runs/claim')) return await writeSessionReadiness(url, body);
+    if (claimed) return { data: { run: null, automation: null, accountCurrentness: null } };
+    claimed = true;
+    return { data: AutomationV3WorkerClaimResponseSchema.parse({ run: { id: runId, automationId: null, attempt: 1, leaseExpiresAt: Date.now() + 120_000, revision: 0,
+      recipeKind: 'workflow-v2', triggerRetired: false,
+      origin: { kind: 'direct' }, triggerId: null,
+      workflowAcceptedSnapshotEnvelope: acceptedEnvelope }, automation: null, accountCurrentness: currentness }) };
+  });
+  const recoveryController = new AbortController();
+  const recover = createProductionDaemonWorkflowRuntime({ credentials: { token: 'token', encryption: null },
+    accountId, serverId: 'server-1' }).createRecoveryForMachine({ machineId,
+      machineAdmissionTransport: async () => { throw new Error('No new input'); },
+      machineActionDirectTargetTransport: { machineId, invoke } });
+  const worker = startAutomationWorker({ token: 'token', credentials: { token: 'token', encryption: null }, machineId,
+    coordinateWorkflowRun: workflowDaemonProcess({ storage: kit, sessionInput, directory, sessionStartup }),
+    recoverWorkflowRuns: async () => await recover('control', recoveryController.signal) });
+  try {
+    const stalePass = outcome === 'success-during-recovery' ? recover('startup', recoveryController.signal) : undefined;
+    if (stalePass) await recoveryReading;
+    await worker.refreshAssignments();
+    worker.handleServerUpdate({ id: 'queued', seq: 1, createdAt: 1, body: {
+      t: 'automation-run-updated', runId, automationId: null, state: 'queued', scheduledAt: 1,
+      startedAt: null, finishedAt: null, updatedAt: 1, machineId: null, targetMachineId: machineId,
+    } });
+    await launching;
+    kit.requestControl('cancel_requested');
+    worker.handleServerUpdate({ id: 'cancel', seq: 2, createdAt: 2, body: {
+      t: 'automation-run-updated', runId, automationId: null, state: 'running', scheduledAt: 1,
+      startedAt: 1, finishedAt: null, updatedAt: 2, machineId, targetMachineId: machineId,
+      attempt: 1, workflowControl: 'cancel_requested',
+    } });
+    await expect.poll(async () => (await worker.liveWorkProducer.read()).items.length).toBe(0);
+    releaseRecoveryRead();
+    await stalePass;
+    expect(operations.store.list(scope).items[0]).toMatchObject({ state: 'running', cancellation: 'unsupported' });
+    expect(rowFor(kit, 'launch')).toMatchObject({ lifecycle: 'cancel_requested' });
+    expect(kit.run().workflowCustodyState).toBe('pending');
+    expect(sessionInput.enqueue).not.toHaveBeenCalled();
+    expect(rowFor(kit, 'must-not-admit')).toBeUndefined();
+    expect(launches).toBe(1);
+    await expect.poll(() => startupWaitAttached).toBe(true);
+    release();
+    await operations.handlers.getV2({ operationId: 'late-start', waitForTerminal: true });
+    if (outcome === 'foreign-session') {
+      await recover('control', recoveryController.signal);
+      expect(kit.run().workflowCustodyState).toBe('pending');
+      expect(rowFor(kit, 'launch')?.lifecycle).toBe('cancel_requested');
+      expect(stops).toEqual([]);
+      expect(freshSessionRecords.get('late-child')?.active).toBe(true);
+    } else {
+      // No second control hint or explicit recovery call after the active claim releases.
+      await expect.poll(() => kit.run().workflowCustodyState).toBe('settled');
+      expect(kit.run().state).toBe('cancelled');
+      expect(rowFor(kit, 'launch')?.lifecycle).toBe(outcome === 'failure' ? 'failed' : 'cancelled');
+      expect([...new Set(stops)]).toEqual(outcome === 'failure' ? [] : ['late-child']);
+      if (outcome !== 'failure') expect(openRowProgress(kit, rowFor(kit, 'launch')!)).toMatchObject({
+        execution: { kind: 'session_ready', sessionId: 'late-child' }, reason: { code: 'workflow_startup_session_stopped' },
+      });
+    }
+    expect(sessionInput.enqueue).not.toHaveBeenCalled();
+    expect(rowFor(kit, 'must-not-admit')).toBeUndefined();
+    expect(launches).toBe(1);
+  } finally {
+    worker.stop();
+    recoveryController.abort();
+    releaseRecoveryRead();
+    release();
+    await operations.handlers.getV2({ operationId: 'late-start', waitForTerminal: true });
+  }
+});
+
+it.each(['fresh', 'retained', 'rejoined', 'lost-claim', 'lost-claim-root', 'terminal-write-lost', 'terminal-expired', 'miswired'] as const)('settles a proven cold startup failure through its original operation (%s)', async mode => {
+  const directory = await projectDirectory();
+  const runId = '41414141-4141-4141-8141-414141414143';
+  const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: { agentTarget, connectedServices: null },
+    blocks: [step('launch'), step('must-not-admit')] };
+  const acceptedEnvelope = await sealDirectAccepted({ runId, definition, directory });
+  const kit = createWorkflowRunStorageTestkit({ runId, machineId, origin: { kind: 'direct' }, acceptedEnvelope });
+  const scope = { accountId, machineId };
+  const operations = createHostActionOperationRuntime({ machineId, resolveAccountId: async () => accountId,
+    generateOperationId: () => 'failed-start' });
+  const refusalMessage = 'Request failed with status code 409';
+  const refuse = () => { throw Object.assign(new Error(refusalMessage), {
+    code: 'ERR_BAD_REQUEST', response: { status: 409, data: { error: 'currentness_conflict' } },
+  }); };
+  const creationKey = `workflow:${runId}:`;
+  let rejoined = false;
+  let expired = false;
+  let launches = 0;
+  // Native launch is the substituted boundary; the operation producer, strict
+  // operation reader, Session adapter and parent coordinator remain real.
+  const handler = createMachineSessionSpawnRpcHandler({ handlers: { spawnSession: async () => {
+    launches++;
+    return refuse();
+  } }, awaitAgentSessionOpen: async () => { throw new Error('No child was created'); } });
+  const sessionStartup: WorkflowSessionStartup = async input => {
+    if (mode === 'retained' && !rejoined) {
+      rejoined = true;
+      await operations.observeExecution({ actionId: 'session.spawn_new', actionRequestId: input.creationKey,
+        input: {}, execute: async () => refuse() }).catch(() => undefined);
+    }
+    return runObservedWorkflowSessionStartup({ ...input,
+    ...(mode === 'retained' ? { retainedOperation: { key: 'startup', serverId: 'server-1', machineId, operationId: 'failed-start' } } : {}),
+  }, {
+    serverId: 'server-1', machineId, observeExecution: async request => {
+      expect(request.actionRequestId?.startsWith(creationKey)).toBe(true);
+      if (mode === 'rejoined' && !rejoined) {
+        rejoined = true;
+        await operations.observeExecution({ ...request, execute: async () => refuse() }).catch(() => undefined);
+      }
+      return operations.observeExecution(request);
+    }, rpcContext: {},
+    transport: operation => ({ spawn: (request, options) => handler(request, { ...options, localActionContext: operation }),
+      resolveSpawnSessionByNonce: async () => { throw new Error('must_not_replace_startup'); } }),
+    observeOperation: async (target, options) => expired ? { kind: 'not_found' } : operations.handlers.getV2({
+      operationId: mode === 'miswired' ? 'foreign-operation' : target.operationId,
+      ...(options.waitForTerminal ? { waitForTerminal: true } : {}),
+    }, options.signal ? { signal: options.signal } : undefined),
+    cancelOperation: async target => operations.runner.cancel(scope, target.operationId), cleanupOnFailure: async () => {},
+    });
+  };
+  const sessionInput = sessionInputBoundary();
+  const interrupted = new AbortController();
+  let rejectCorrespondence = mode === 'lost-claim' || mode === 'lost-claim-root';
+  let rejectTerminalWrite = mode === 'terminal-write-lost' || mode === 'terminal-expired';
+  const coordinate = workflowDaemonProcess({ storage: { ...kit, execute: async (operation, options) => {
+    if (rejectTerminalWrite && operation.operation === 'invocations.fact' && operation.lifecycle === 'failed'
+      && operation.invocationId === rowFor(kit, 'launch')?.id) {
+      rejectTerminalWrite = false;
+      throw Object.assign(new Error('storage_unavailable'), { code: 'storage_unavailable' });
+    }
+    if (rejectCorrespondence && operation.operation === 'invocations.fact' && operation.lifecycle === 'running'
+      && (mode === 'lost-claim'
+        ? operation.invocationId === rowFor(kit, 'launch')?.id
+        : operation.invocationId !== rowFor(kit, 'launch')?.id && rowFor(kit, 'launch')?.lifecycle === 'running')) {
+      rejectCorrespondence = false;
+      interrupted.abort(new WorkflowRuntimeInterruption());
+      return refuse();
+    }
+    return kit.execute(operation, options);
+  } }, sessionInput, directory, sessionStartup });
+  if (mode === 'terminal-write-lost' || mode === 'terminal-expired') {
+    await expect(coordinate({ runId, attempt: 0, expectedRevision: 0, accountCurrentness: currentness,
+      acceptedEnvelope })).rejects.toThrow('storage_unavailable');
+    expect(rowFor(kit, 'launch')?.lifecycle).toBe('running');
+    expired = mode === 'terminal-expired';
+  }
+  if (mode === 'lost-claim' || mode === 'lost-claim-root') {
+    await expect(coordinate({ runId, attempt: 0, expectedRevision: 0, accountCurrentness: currentness,
+      acceptedEnvelope, signal: interrupted.signal })).rejects.toBeInstanceOf(WorkflowRuntimeInterruption);
+    expect(rowFor(kit, 'launch')?.lifecycle).toBe(mode === 'lost-claim' ? 'pending' : 'running');
+    const execution = openRowProgress(kit, rowFor(kit, 'launch')!).execution;
+    if (mode === 'lost-claim') expect(execution).toBeUndefined();
+    else expect(execution).toMatchObject({ kind: 'action', actionId: 'session.spawn_new', output: { operation: { state: 'running' } } });
+    expect(await operations.handlers.getV2({ operationId: 'failed-start' })).toMatchObject({ kind: 'found', operation: {
+      state: 'failed', error: { errorCode: 'ERR_BAD_REQUEST', error: refusalMessage },
+    } });
+  }
+  const coordinating = coordinate({
+    runId, attempt: 0, expectedRevision: kit.run().revision, accountCurrentness: currentness, acceptedEnvelope });
+  if (mode === 'miswired') await expect(coordinating).rejects.toThrow('workflow_invocation_fact_conflict');
+  else {
+    await expect(coordinating).resolves.toMatchObject({ state: 'interrupted', reason: 'ERR_BAD_REQUEST' });
+    const leaf = rowFor(kit, 'launch')!;
+    expect(leaf.lifecycle).toBe('failed');
+    expect(openRowProgress(kit, leaf)).toMatchObject({ reason: { code: 'ERR_BAD_REQUEST', message: refusalMessage }, execution: {
+      kind: 'action', actionId: 'session.spawn_new', awaitedOperations: [{ operationId: 'failed-start', machineId }],
+      output: { operation: { state: 'failed', error: { errorCode: 'ERR_BAD_REQUEST' } } },
+    } });
+  }
+  expect(sessionInput.enqueue).not.toHaveBeenCalled();
+  expect(rowFor(kit, 'must-not-admit')).toBeUndefined();
+  expect(launches).toBe(mode === 'fresh' || mode === 'terminal-write-lost' || mode === 'terminal-expired' ? 1 : 0);
+});
+
+it('retains the original cold Session setup operation in durable Workflow progress until native open', async () => {
+  const directory = await projectDirectory();
+  const runId = '41414141-4141-4141-8141-414141414142';
+  const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: { agentTarget, connectedServices: null },
+    blocks: [step('launch')] };
+  const acceptedEnvelope = await sealDirectAccepted({ runId, definition, directory });
+  const kit = createWorkflowRunStorageTestkit({ runId, machineId, origin: { kind: 'direct' }, acceptedEnvelope });
+  const scope = { accountId, machineId };
+  const operations = createHostActionOperationRuntime({ machineId, resolveAccountId: async () => accountId,
+    generateOperationId: () => 'original-start', supportsCoreCancellation: () => true });
+  const tracked: TrackedSession = { pid: 101, startedBy: 'daemon', happySessionId: 'setup-child',
+    agentRuntimeDaemonServiceAuthorityFilePath: '/private/authority.json' };
+  let launches = 0;
+  // The native process is the sole substituted boundary. Startup ownership,
+  // Project review, native-open observation and durable Workflow storage are real.
+  const handler = createMachineSessionSpawnRpcHandler({ handlers: { spawnSession: async options => {
+    launches++;
+    if (options.sessionCreationTag) freshSessionCreationTags.set(options.sessionCreationTag, 'setup-child');
+    freshSessionRecords.set('setup-child', createSessionRecordFixture({ id: 'setup-child', encryptionMode: 'plain',
+      metadata: JSON.stringify(buildCommittedLaunchMetadata({ options, directory, accountSettings: {} })) }));
+    const operation = options.projectSetupOperation;
+    if (!operation?.operationReview) throw new Error('missing_original_startup_operation');
+    operation.operationOwnerUpdate.update({ domainRef: { kind: 'projectCommand', purpose: 'setup',
+      serverId: 'server-1', machineId, workspaceRefId: 'workspace', cwd: directory } });
+    const review = { kind: 'pendingApproval' as const, code: 'project_setup_consent_required' as const,
+      reviewedEffectDigest: 'setup', reviewedEffect: { commands: [] } };
+    void operation.operationReview.waitForResume(review, {
+      review: async decision => decision?.reviewedEffectDigest === 'setup' ? null : review,
+    }).then(() => { tracked.agentRuntimeDaemonServiceSessionOpenAttestation = {
+      request: { kind: 'create', sessionId: 'setup-child', cwd: directory }, providerSessionId: 'native',
+    }; }, () => undefined);
+    authorizedConversations.set('setup-child', directory);
+    return { type: 'success', sessionId: 'setup-child', sessionCreationOutcome: {
+      disposition: 'created', organizationPlacement: { folderId: null, tagIds: [] },
+    } };
+  } }, awaitAgentSessionOpen: input => awaitTrackedRunnerAgentSessionOpen({ getTrackedSessions: () => [tracked], ...input }) });
+  let notifyHeld!: () => void;
+  const heldReady = new Promise<void>(resolve => { notifyHeld = resolve; });
+  const sessionStartup: WorkflowSessionStartup = input => runObservedWorkflowSessionStartup({ ...input,
+    onObservation: async operation => {
+      await input.onObservation?.(operation);
+      if (operation.setupReview) notifyHeld();
+    },
+  }, {
+    serverId: 'server-1', machineId, observeExecution: operations.observeExecution, rpcContext: {},
+    transport: operation => ({ spawn: (request, options) => handler(request, { ...options, localActionContext: operation }),
+      resolveSpawnSessionByNonce: async () => { throw new Error('must_not_replace_startup'); } }),
+    observeOperation: async (target, options) => operations.handlers.getV2({ operationId: target.operationId,
+      ...(options.waitForTerminal ? { waitForTerminal: true } : {}),
+      ...(options.includeSetupReview ? { includeSetupReview: true } : {}) }, options.signal ? { signal: options.signal } : undefined),
+    cancelOperation: async target => operations.runner.cancel(scope, target.operationId), cleanupOnFailure: async () => {},
+  });
+  const sessionInput = sessionInputBoundary({}, { sessionId: 'setup-child' });
+  const controller = new AbortController();
+  const coordination = workflowDaemonProcess({ storage: kit, sessionInput, directory, sessionStartup })({
+    runId, attempt: 0, expectedRevision: 0, accountCurrentness: currentness, acceptedEnvelope, signal: controller.signal });
+  const settled = coordination.catch(error => error);
+  try {
+    await Promise.race([heldReady, coordination.then(result => {
+      throw new Error(`Workflow settled before setup hold: ${JSON.stringify(result)}`);
+    })]);
+    const held = rowFor(kit, 'launch')!;
+    expect(held.lifecycle).toBe('needs_attention');
+    const progress = openRowProgress(kit, held);
+    expect(progress).toMatchObject({ reason: { code: 'project_setup_consent_required' }, execution: {
+      kind: 'action', actionId: 'session.spawn_new', awaitedOperations: [{ operationId: 'original-start', machineId }],
+    } });
+    expect(sessionInput.enqueue).not.toHaveBeenCalled();
+    expect(operations.store.list(scope).items).toHaveLength(1);
+    await operations.runner.decideSetupReview(scope, 'original-start', { serverId: 'server-1', machineId,
+      workspaceId: 'workspace', rootPath: directory }, 'setup', { reviewedEffectDigest: 'setup', skipForInvocation: false });
+    await expect(coordination).resolves.toMatchObject({ state: 'succeeded' });
+    expect(rowFor(kit, 'launch')).toMatchObject({ id: held.id, lifecycle: 'completed' });
+    expect(sessionInput.enqueue).toHaveBeenCalledTimes(1);
+    expect(launches).toBe(1);
+  } finally { controller.abort(new WorkflowRuntimeInterruption()); operations.runner.cancel(scope, 'original-start'); await settled; }
+});
+
+it('reclaims a pending Agent leaf after its input persisted but the root projection write rolled back', async () => {
+  const directory = await projectDirectory();
+  const runId = '41414141-4141-4141-8141-414141414141';
+  const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: retainedConversationDefaults(),
+    blocks: [step('first'), step('next')] };
+  const acceptedEnvelope = await sealDirectAccepted({ runId, definition, directory });
+  const kit = createWorkflowRunStorageTestkit({ runId, machineId, state: 'claimed',
+    origin: { kind: 'direct' }, acceptedEnvelope });
+  const sessionInput = sessionInputBoundary();
+  let rejectedProjection = false;
+  // Storage HTTP is the system boundary. Match the R41 durable state: the
+  // first leaf's authored input is committed, but no workspace/input effect is.
+  const storage = { execute: async (operation: WorkflowRunStorageTestkitOperation) => {
+    const first = rowFor(kit, 'first');
+    const root = rowFor(kit, '$root');
+    if (!rejectedProjection && operation.operation === 'invocations.fact'
+      && operation.invocationId === root?.id && first
+      && openRowProgress(kit, first).input !== undefined) {
+      rejectedProjection = true;
+      throw Object.assign(new Error('database_transaction_conflict_exhausted'), {
+        response: { status: 500, data: { error: 'database_transaction_conflict_exhausted' } },
+      });
+    }
+    return await kit.execute(operation);
+  } };
+  const claim = { runId, attempt: 1, expectedRevision: 0, accountCurrentness: currentness, acceptedEnvelope };
+  await expect(workflowDaemonProcess({ storage, sessionInput, directory })(claim))
+    .rejects.toThrow('database_transaction_conflict_exhausted');
+  expect(rejectedProjection).toBe(true);
+  const pending = rowFor(kit, 'first')!;
+  expect(pending.lifecycle).toBe('pending');
+  expect(openRowProgress(kit, pending)).toMatchObject({ input: { document: { text: 'first' } } });
+  expect(openRowProgress(kit, pending)).not.toHaveProperty('execution');
+  expect(sessionInput.enqueue).not.toHaveBeenCalled();
+
+  // The server's existing expired-lease claim preserves sealed rows and
+  // advances the parent attempt. Rebuild all daemon owners over those bytes.
+  await kit.execute({ operation: 'transition', runId, expectedRevision: kit.run().revision,
+    state: 'claimed', checkpointEnvelope: kit.checkpointEnvelope()! });
+  await expect(workflowDaemonProcess({ storage: kit, sessionInput, directory })({ ...claim,
+    attempt: 2, expectedRevision: kit.run().revision })).resolves.toMatchObject({ state: 'succeeded' });
+  expect(kit.run()).toMatchObject({ state: 'succeeded', workflowCustodyState: 'settled' });
+  expect(rowFor(kit, 'first')).toMatchObject({ id: pending.id, attempt: '0', lifecycle: 'completed' });
+  expect(rowFor(kit, 'next')?.lifecycle).toBe('completed');
+  expect(sessionInput.enqueue.mock.calls.map(([request]) => leafLabel(request.text))).toEqual(['first', 'next']);
+});
+
+it('preserves JSON and If progress when reclaim finds an admitting reply with no input receipt', async () => {
+  const channel = await createRequesterCurrentnessSocketHarness();
+  onTestFinished(() => channel.close());
+  const directory = await projectDirectory();
+  const runId = '59595959-5959-4595-8595-595959595960';
+  const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: retainedConversationDefaults(), blocks: [
+    step('named-ready', { result: { kind: 'json', schema: { type: 'object', properties: { ready: { type: 'boolean' } },
+      required: ['ready'], additionalProperties: false } } }),
+    { kind: 'if', id: 'ready-branch', when: { kind: 'compare', operator: 'eq',
+      left: { kind: 'result', producer: { blockId: 'named-ready', scope: { kind: 'current' } }, path: ['ready'] },
+      right: { kind: 'literal', value: true } }, then: [step('if-reply')], otherwise: [step('wrong-branch')] },
+    step('must-not-admit'),
+  ] };
+  const acceptedEnvelope = await sealDirectAccepted({ runId, definition, directory });
+  const kit = createWorkflowRunStorageTestkit({ runId, machineId, origin: { kind: 'direct' }, acceptedEnvelope });
+  const firstInput = sessionInputBoundary({ 'named-ready': { kind: 'final_text', text: '{"ready":true}' } });
+  const interrupted = new AbortController();
+  let lost = false;
+  const coordinate = workflowDaemonProcess({ directory, sessionInput: firstInput, storage: {
+    execute: async (operation, options) => {
+      const response = await kit.execute(operation, options);
+      if (!lost && operation.operation === 'invocations.fact' && operation.lifecycle === 'admitting'
+        && operation.invocationId === rowFor(kit, 'if-reply')?.id) {
+        lost = true;
+        interrupted.abort();
+        throw new WorkflowRuntimeInterruption();
+      }
+      return response;
+    },
+  } });
+  await expect(coordinate({ runId, attempt: 0, expectedRevision: 0, accountCurrentness: currentness,
+    acceptedEnvelope, signal: interrupted.signal })).rejects.toBeInstanceOf(WorkflowRuntimeInterruption);
+  const completed = rowFor(kit, 'named-ready')!;
+  const admitting = rowFor(kit, 'if-reply')!;
+  expect(completed.lifecycle).toBe('completed');
+  expect(openRowProgress(kit, completed).result).toEqual({ ready: true });
+  expect(admitting.lifecycle).toBe('admitting');
+  expect(openRowProgress(kit, admitting)).not.toHaveProperty('execution');
+  expect(firstInput.enqueue.mock.calls.map(([request]) => leafLabel(request.text))).toEqual(['named-ready']);
+
+  const reclaimed = new AbortController();
+  let interruptWait: ReturnType<typeof setImmediate> | undefined;
+  vi.spyOn(axios, 'get').mockImplementation(async url => {
+    if (String(url).includes('/messages/by-local-id/')) return { status: 200, data: { message: null } };
+    if (String(url).includes('/pending')) {
+      // Only an incorrectly unbounded observer reaches an event wait. Retire
+      // that wait without inventing a product deadline or a test sleep.
+      interruptWait = setImmediate(() => reclaimed.abort());
+      return { status: 200, data: { pending: [] } };
+    }
+    return await readSessionReadiness(String(url));
+  });
+  const resumed = workflowDaemonProcess({ storage: kit, directory, readActualConversation: true,
+    machineAdmissionTransport: async () => { throw new Error('Reclaim must not dispatch the ambiguous input'); } });
+  try {
+    await expect(resumed({ runId, attempt: 0, expectedRevision: kit.run().revision,
+      accountCurrentness: currentness, acceptedEnvelope, signal: reclaimed.signal }))
+      .resolves.toMatchObject({ state: 'interrupted', reason: 'workflow_admission_ack_uncertain' });
+    expect(rowFor(kit, 'named-ready')).toMatchObject({ id: completed.id, lifecycle: 'completed', contentRevision: completed.contentRevision });
+    expect(rowFor(kit, 'if-reply')).toMatchObject({ id: admitting.id, attempt: '0', lifecycle: 'needs_attention' });
+    expect(openRowProgress(kit, rowFor(kit, 'if-reply')!)).toMatchObject({ reason: { code: 'workflow_admission_ack_uncertain' } });
+    expect(rowFor(kit, 'wrong-branch')).toBeUndefined();
+    expect(rowFor(kit, 'must-not-admit')).toBeUndefined();
+  } finally { if (interruptWait) clearImmediate(interruptWait); reclaimed.abort(); }
+});
 
 describe('composed Workflow front door and claimed execution', () => {
   it.skipIf(process.platform === 'win32').each(['direct', 'nonce', 'foreign_nonce', 'hosted', 'hosted_incomplete', 'hosted_window_only', 'hosted_runner_alive', 'hosted_foreign_nonce', 'hosted_miswired', 'windows', 'windows_incomplete', 'windows_foreign_nonce', 'windows_miswired'] as const)('requires exact retired launch custody before failing an Agent leaf (%s)', async transport => {
@@ -697,7 +1438,8 @@ describe('composed Workflow front door and claimed execution', () => {
         permissionMode: 'default', runtimeDescriptorV1,
         launchControlMetadata: captured,
       }).metadata : null;
-      const published = { ...(produced ?? { path: directory, machineId, permissionMode: 'default',
+      const published = { ...buildCommittedLaunchMetadata({ options: SpawnDaemonSessionRequestSchema.parse(raw), directory, accountSettings: {} }),
+        ...(produced ?? { path: directory, machineId, permissionMode: 'default',
         runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} }, connectedServices: request.connectedServices,
         ...(retainedConfig ? { sessionConfigOptionOverridesV1: retainedConfig } : {}) }),
         ...(catalog ? { sessionModesV2: { v: 2, agentId: 'claude', updatedAt: 1, currentModeId: appliedMode,
@@ -752,6 +1494,32 @@ describe('composed Workflow front door and claimed execution', () => {
     expect(openRowProgress(kit, rowFor(kit, 'three')!).result).toBe('QA_FIN28_THREE');
     expect(kit.run()).toMatchObject({ state: 'succeeded', workflowCustodyState: 'settled', attentionRequired: false });
     expect(titles.get(freshThird ? 'fresh-2' : 'fresh-1')).toBe(freshThird ? '3 · Name' : '1 · One');
+  });
+
+  it('carries the stored accepted requester through production Workflow wiring to protected machine admission', async () => {
+    const runId = '17171717-1717-4717-8717-171717171717';
+    const directory = await projectDirectory();
+    const attribution = { requestRef: 'accepted-input', requester: { serverId: 'home', accountId: 'bob' },
+      persona: { serverId: 'home', sessionId: 'release-bot' }, origin: null };
+    const acceptedEnvelope = await sealDirectAccepted({ runId, directory, actionRequestAttributionV1: attribution,
+      definition: { version: 1, inputs: [], defaults: retainedConversationDefaults(), blocks: [step('work')] } });
+    attribution.requester.accountId = 'carol';
+    const kit = createWorkflowRunStorageTestkit({ runId, machineId, origin: { kind: 'direct' }, acceptedEnvelope });
+    const requests: unknown[] = [];
+    const result = await workflowDaemonProcess({ storage: kit, directory, readActualConversation: true,
+      machineAdmissionTransport: async request => {
+        requests.push(SessionPendingEnqueueByMachineRequestV1Schema.parse(request));
+        // The authenticated Machine transport is the genuine boundary. Refuse
+        // input here so this admission test never needs a synthetic native turn.
+        return { status: 'rejected', code: 'session_input_invalid' };
+      },
+    })({ runId, attempt: 0, expectedRevision: 0, accountCurrentness: currentness, acceptedEnvelope });
+    expect(result).toMatchObject({ state: 'interrupted' });
+    expect(requests).toEqual([expect.objectContaining({ content: { t: 'plain', v: expect.objectContaining({
+      meta: expect.objectContaining({ happierInputRequestV1: expect.objectContaining({
+        actionRequestAttributionV1: { ...attribution, requester: { serverId: 'home', accountId: 'bob' } },
+      }) }),
+    }) } })]);
   });
 
   it('settles a successful Run with no selected final output while origin delivery remains unacknowledged', async () => {
@@ -837,6 +1605,51 @@ describe('composed Workflow front door and claimed execution', () => {
     });
   });
 
+  it('keeps an admitted Session input through a transient heartbeat error and subsequent confirmed renewal', async () => {
+    const directory = await projectDirectory();
+    vi.useFakeTimers();
+    let finish = () => {};
+    try {
+      const runId = '12121212-1212-4212-8212-121212121212';
+      const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: retainedConversationDefaults(), blocks: [step('active')] };
+      const kit = createWorkflowRunStorageTestkit({ runId, machineId, origin: { kind: 'direct' },
+        acceptedEnvelope: await sealDirectAccepted({ runId, definition, directory }) });
+      let observationStarted = () => {};
+      const started = new Promise<void>(resolve => { observationStarted = resolve; });
+      const resultReady = new Promise<void>(resolve => { finish = resolve; });
+      const sessionInput = sessionInputBoundary();
+      let inputSignal: AbortSignal | undefined;
+      sessionInput.observe.mockImplementationOnce(async request => {
+        inputSignal = request.signal;
+        observationStarted();
+        await resultReady;
+        return { ok: true, sessionId, localId: request.localId, result: { kind: 'final_text', text: 'completed after renewal' } };
+      });
+      let renewals = 0;
+      let renewedAfterFailure = false;
+      const running = executeClaimedRun({ machineId, heartbeatMs: 1_000, leaseDurationMs: 30_000,
+        claimClient: { heartbeatRun: async () => {
+          if (++renewals === 2) throw Object.assign(new Error('lost heartbeat response'), { code: 'ECONNABORTED' });
+          if (renewals > 2) renewedAfterFailure = true;
+          return Date.now() + 30_000;
+        }, failRun: async () => { throw new Error('An admitted direct Run cannot be failed through Automation settlement'); } },
+        coordinateWorkflowRun: workflowDaemonProcess({ storage: kit, sessionInput, directory }),
+        claimed: { protocol: 'v3', automation: null, accountCurrentness: currentness,
+          run: { id: runId, automationId: null, attempt: 0, leaseExpiresAt: Date.now() + 30_000, revision: kit.run().revision, origin: { kind: 'direct' },
+            workflowAcceptedSnapshotEnvelope: kit.acceptedEnvelope()!, triggerId: null } },
+      });
+      await started;
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(inputSignal?.aborted).toBe(false);
+      expect(renewedAfterFailure).toBe(true);
+      finish();
+      await running;
+      expect(kit.run().state).toBe('succeeded');
+      expect(sessionInput.enqueue).toHaveBeenCalledOnce();
+      expect(sessionInput.cancel).not.toHaveBeenCalled();
+    } finally { finish(); vi.useRealTimers(); }
+  });
+
   it('propagates persisted live cancellation on the existing heartbeat into the exact Session leaf once', async () => {
     const directory = await projectDirectory();
     vi.useFakeTimers();
@@ -866,7 +1679,10 @@ describe('composed Workflow front door and claimed execution', () => {
       sessionInput.observe.mockImplementationOnce(async () => ({ ok: false as const, code: 'session_input_result_read_failed' }));
       const claimClient = {
         startRun: vi.fn(),
-        heartbeatRun: vi.fn(async () => { kit.requestControl('cancel_requested'); }),
+        heartbeatRun: vi.fn(async (request: { leaseDurationMs: number }) => {
+          if (sessionInput.observe.mock.calls.length > 0) kit.requestControl('cancel_requested');
+          return Date.now() + request.leaseDurationMs;
+        }),
         succeedRun: vi.fn(), failRun: vi.fn(),
       };
       const running = executeClaimedRun({
@@ -875,14 +1691,13 @@ describe('composed Workflow front door and claimed execution', () => {
         coordinateWorkflowRun: workflowDaemonProcess({ storage: kit, sessionInput, directory }) as never,
         claimed: {
           protocol: 'v3', automation: null, accountCurrentness: currentness,
-          run: { id: runId, automationId: null, attempt: 0, revision: kit.run().revision, origin: { kind: 'direct' }, workflowAcceptedSnapshotEnvelope: kit.acceptedEnvelope()!, triggerId: null },
+          run: { id: runId, automationId: null, attempt: 0, leaseExpiresAt: Date.now() + 120_000, revision: kit.run().revision, origin: { kind: 'direct' }, workflowAcceptedSnapshotEnvelope: kit.acceptedEnvelope()!, triggerId: null },
         } as never,
       });
       await started;
       await vi.advanceTimersByTimeAsync(1_000);
       await expect(running).resolves.toBeUndefined();
 
-      expect(claimClient.heartbeatRun).toHaveBeenCalledOnce();
       expect(sessionInput.cancel).toHaveBeenCalledOnce();
       expect(sessionInput.cancel).toHaveBeenCalledWith(expect.objectContaining({ sessionId, localId: 'active' }));
       expect(sessionInput.enqueue.mock.calls.map(([request]) => leafLabel(request.text))).toEqual(['active']);
@@ -975,11 +1790,11 @@ describe('composed Workflow front door and claimed execution', () => {
         automation: null,
         accountCurrentness: currentness,
         run: {
-          id: runId, automationId: null, attempt: 0, revision: kit.run().revision, origin: { kind: 'direct' },
+          id: runId, automationId: null, attempt: 0, leaseExpiresAt: Date.now() + 120_000, revision: kit.run().revision, origin: { kind: 'direct' },
           workflowAcceptedSnapshotEnvelope: acceptedEnvelope!, triggerId: null,
         },
       } as never;
-      const claimClient = { startRun: vi.fn(), heartbeatRun: vi.fn(async () => {}), succeedRun: vi.fn(), failRun: vi.fn() };
+      const claimClient = { startRun: vi.fn(), heartbeatRun: vi.fn(async (request: { leaseDurationMs: number }) => Date.now() + request.leaseDurationMs), succeedRun: vi.fn(), failRun: vi.fn() };
       const executeClaim = async () => await executeClaimedRun({
         machineId, claimClient,
         heartbeatMs: 60_000, leaseDurationMs: 120_000, coordinateWorkflowRun: coordinate as never, claimed,
@@ -1057,7 +1872,7 @@ describe('composed Automation workflow claim and optional receipt', () => {
         evidence: { v: 1, kind: 'schedule', scheduledFor: 60_001 } }) });
     const row = stored;
     vi.spyOn(axios, 'post').mockImplementation(async (url, body) => url.endsWith('/v3/automations/runs/claim')
-      ? { status: 200, data: { run: { id: runId, automationId: row.id, attempt: 1, revision: 0,
+      ? { status: 200, data: { run: { id: runId, automationId: row.id, attempt: 1, leaseExpiresAt: Date.now() + 120_000, revision: 0,
         recipeKind: 'workflow-v2', triggerId: added.triggerId, triggerRetired: false, cause: occurrence, causeWorkDepth: 0,
         executionInputEnvelope: JSON.stringify(recipe.workflow), automationEvidenceEnvelope: null },
         automation: { id: row.id, name: row.name, enabled: true, scopeSessionId: null }, accountCurrentness: currentness } }
@@ -1119,7 +1934,7 @@ describe('composed Automation workflow claim and optional receipt', () => {
       if (claimed) return { data: { run: null, automation: null, accountCurrentness: null } };
       claimed = true;
       return { data: {
-        run: { id: habitRunId, automationId: 'habit', attempt: claim.attempt, revision: 0, recipeKind: 'workflow-v2',
+        run: { id: habitRunId, automationId: 'habit', attempt: claim.attempt, leaseExpiresAt: Date.now() + 120_000, revision: 0, recipeKind: 'workflow-v2',
           triggerId: null, triggerRetired: false, cause: claim.automationCause, causeWorkDepth: 0,
           executionInputEnvelope: claim.definitionEnvelope, automationEvidenceEnvelope: null },
         automation: { id: 'habit', name: 'Quiet habit', enabled: false, scopeSessionId: sessionId },
@@ -1237,12 +2052,12 @@ describe('composed Automation workflow claim and optional receipt', () => {
       origin: { kind: 'manual', invokedAt: 1, ...(extraStoredFields ? { retiredOriginField: true } : {}) } });
     const kit = createWorkflowRunStorageTestkit({ runId, machineId, state: 'claimed', origin: { kind: 'automation', automationId: 'automation-old' } });
     const sessionInput = sessionInputBoundary({}, { sessionId: retainedSessionId });
-    const claimClient = { startRun: vi.fn(), heartbeatRun: async () => {}, succeedRun: vi.fn(), failRun: vi.fn() };
+    const claimClient = { startRun: vi.fn(), heartbeatRun: async (request: { leaseDurationMs: number }) => Date.now() + request.leaseDurationMs, succeedRun: vi.fn(), failRun: vi.fn() };
     await executeClaimedRun({ machineId, claimClient, heartbeatMs: 60_000, leaseDurationMs: 120_000,
       coordinateWorkflowRun: workflowDaemonProcess({ storage: kit, sessionInput, directory, conversationSessionId: retainedSessionId }),
       claimed: { protocol: 'v3', accountCurrentness: currentness,
         automation: { id: 'automation-old', name: 'Changed', enabled: true, workflowDefinitionId: 'must-not-read', scopeSessionId: 'must-not-use' },
-        run: { id: runId, automationId: 'automation-old', attempt: 2, revision: 0, recipeKind: 'legacy', triggerId: null, cause: { kind: 'manual', invokedAt: 1 },
+        run: { id: runId, automationId: 'automation-old', attempt: 2, leaseExpiresAt: Date.now() + 120_000, revision: 0, recipeKind: 'legacy', triggerId: null, cause: { kind: 'manual', invokedAt: 1 },
           causeWorkDepth: 0, resultDelivery: { kind: 'none' }, executionInputEnvelope: frozen } },
     });
     expect(kit.run()).toMatchObject({ state: 'succeeded' });
@@ -1273,13 +2088,13 @@ describe('composed Automation workflow claim and optional receipt', () => {
     const kit = createWorkflowRunStorageTestkit({ runId, machineId, state: 'claimed', origin: { kind: 'automation', automationId: 'automation-old' } });
     const sessionInput = sessionInputBoundary();
     const failRun = vi.fn();
-    await executeClaimedRun({ machineId, claimClient: { heartbeatRun: async () => {}, failRun },
+    await executeClaimedRun({ machineId, claimClient: { heartbeatRun: async (request: { leaseDurationMs: number }) => Date.now() + request.leaseDurationMs, failRun },
       resolveAutomationAccountEncryption: async () => ({ kind: 'available', witness: currentness }),
       heartbeatMs: 60_000, leaseDurationMs: 120_000,
       coordinateWorkflowRun: workflowDaemonProcess({ storage: kit, sessionInput, directory }),
       claimed: { protocol: 'v3', accountCurrentness: currentness,
         automation: { id: 'automation-old', name: 'Already saved as plain', enabled: true },
-        run: { id: runId, automationId: 'automation-old', attempt: 1, revision: 0, recipeKind: 'legacy', triggerId: null,
+        run: { id: runId, automationId: 'automation-old', attempt: 1, leaseExpiresAt: Date.now() + 120_000, revision: 0, recipeKind: 'legacy', triggerId: null,
           cause: { kind: 'manual', invokedAt: 1 }, causeWorkDepth: 0, resultDelivery: { kind: 'none' }, executionInputEnvelope: frozen } },
     });
     expect(kit.acceptedEnvelope()).toBeNull();
@@ -1336,13 +2151,13 @@ describe('composed Automation workflow claim and optional receipt', () => {
     const kit = createWorkflowRunStorageTestkit({ runId, machineId, state: 'claimed',
       origin: { kind: 'automation', automationId: row.id } });
     const sessionInput = sessionInputBoundary({}, { sessionId: retainedSessionId });
-    const claimClient = { startRun: vi.fn(), heartbeatRun: async () => {}, succeedRun: vi.fn(), failRun: vi.fn() };
+    const claimClient = { startRun: vi.fn(), heartbeatRun: async (request: { leaseDurationMs: number }) => Date.now() + request.leaseDurationMs, succeedRun: vi.fn(), failRun: vi.fn() };
     await executeClaimedRun({ machineId, claimClient,
       heartbeatMs: 60_000, leaseDurationMs: 120_000,
       coordinateWorkflowRun: workflowDaemonProcess({ storage: kit, sessionInput, directory, conversationSessionId: retainedSessionId }),
       claimed: { protocol: 'v3', accountCurrentness: currentness,
         automation: { id: row.id, name: row.name, enabled: true, workflowDefinitionId: null, scopeSessionId: null },
-        run: { id: runId, automationId: row.id, attempt: 1, revision: 0, recipeKind: 'workflow-v2', triggerId: null,
+        run: { id: runId, automationId: row.id, attempt: 1, leaseExpiresAt: Date.now() + 120_000, revision: 0, recipeKind: 'workflow-v2', triggerId: null,
           cause: { kind: 'manual', invokedAt: 1 }, causeWorkDepth: 0, resultDelivery: { kind: 'none' },
           executionInputEnvelope: JSON.stringify(saved.workflow), automationEvidenceEnvelope: null } },
     });
@@ -1377,7 +2192,7 @@ describe('composed Automation workflow claim and optional receipt', () => {
     });
     const sessionInput = sessionInputBoundary();
     const coordinate = workflowDaemonProcess({ storage: kit, sessionInput, directory });
-    const claimClient = { startRun: vi.fn(), heartbeatRun: vi.fn(async () => {}), succeedRun: vi.fn(), failRun: vi.fn() };
+    const claimClient = { startRun: vi.fn(), heartbeatRun: vi.fn(async (request: { leaseDurationMs: number }) => Date.now() + request.leaseDurationMs), succeedRun: vi.fn(), failRun: vi.fn() };
     await executeClaimedRun({
       machineId, claimClient,
       heartbeatMs: 60_000, leaseDurationMs: 120_000, coordinateWorkflowRun: coordinate as never,
@@ -1388,7 +2203,7 @@ describe('composed Automation workflow claim and optional receipt', () => {
         run: {
           id: runId,
           automationId: 'automation-1',
-          attempt: 0,
+          attempt: 0, leaseExpiresAt: Date.now() + 120_000,
           revision: 0,
           causeWorkDepth: 0,
           origin: { kind: 'automation', automationId: 'automation-1' },
@@ -1423,7 +2238,7 @@ describe('composed Automation workflow claim and optional receipt', () => {
   });
 
   it.each([['plain', false], ['e2ee', false], ['plain', true], ['e2ee', true]] as const)(
-    'settles a scheduled fieldless Wait after Continue and a fresh daemon claim (%s; saved=%s)', async (mode, savedSource) => {
+    'settles a scheduled fieldless Wait across Account cursor writes and a fresh daemon claim (%s; saved=%s)', async (mode, savedSource) => {
     const runId = '98989898-9898-4989-8989-989898989898';
     const directory = await projectDirectory();
     const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {}, blocks: [
@@ -1493,7 +2308,7 @@ describe('composed Automation workflow claim and optional receipt', () => {
         : { t: 'plain', v: payload });
       let parentAttempt = 1;
       readClaimResponse = () => ({
-        run: { id: runId, attempt: parentAttempt, revision: kit.run().revision, automationId: 'automation-1',
+        run: { id: runId, attempt: parentAttempt, leaseExpiresAt: Date.now() + 120_000, revision: kit.run().revision, automationId: 'automation-1',
           recipeKind: 'workflow-v2', executionInputEnvelope: definitionEnvelope,
           ...(kit.acceptedEnvelope() === null ? {} : { workflowAcceptedSnapshotEnvelope: kit.acceptedEnvelope() }),
           causeWorkDepth: 0, cause, automationEvidenceEnvelope: null, triggerId: cause.triggerId, triggerRetired: false },
@@ -1507,9 +2322,13 @@ describe('composed Automation workflow claim and optional receipt', () => {
         if (claimed.run === null || claimed.automation === null || claimed.accountCurrentness === undefined) {
           throw new Error('claim_boundary_invalid_response');
         }
+        // The Home claim response and the subsequent Account read have
+        // different seq values when another publisher commits in between.
+        const currentEncryption = structuredClone(encryption);
+        currentEncryption.witness.version += parentAttempt;
         await executeClaimedRun({ machineId, claimClient,
           heartbeatMs: 60_000, leaseDurationMs: 120_000, claimed,
-          coordinateWorkflowRun: workflowDaemonProcess({ storage: kit, sessionInput, directory, encryption, credentials }),
+          coordinateWorkflowRun: workflowDaemonProcess({ storage: kit, sessionInput, directory, credentials, encryption: currentEncryption }),
         });
       };
       await executeClaim();
@@ -1583,7 +2402,7 @@ describe('composed Automation workflow claim and optional receipt', () => {
     });
     const sessionInput = sessionInputBoundary();
     const coordinate = workflowDaemonProcess({ storage: kit, sessionInput, directory });
-    const claimClient = { startRun: vi.fn(), heartbeatRun: vi.fn(async () => {}), succeedRun: vi.fn(), failRun: vi.fn() };
+    const claimClient = { startRun: vi.fn(), heartbeatRun: vi.fn(async (request: { leaseDurationMs: number }) => Date.now() + request.leaseDurationMs), succeedRun: vi.fn(), failRun: vi.fn() };
     await executeClaimedRun({
       machineId, claimClient,
       heartbeatMs: 60_000, leaseDurationMs: 120_000, coordinateWorkflowRun: coordinate as never,
@@ -1594,7 +2413,7 @@ describe('composed Automation workflow claim and optional receipt', () => {
         run: {
           id: runId,
           automationId: 'automation-1',
-          attempt: 0,
+          attempt: 0, leaseExpiresAt: Date.now() + 120_000,
           revision: 0,
           causeWorkDepth: 0,
           origin: { kind: 'automation', automationId: 'automation-1' },
@@ -1641,6 +2460,11 @@ describe.each(['plain', 'e2ee'] as const)('composed exact result live/recovery p
       observed: { kind: 'terminal_no_result', reason: 'missing_final_assistant_text', usage: { inputTokens: 8 } } },
     { name: 'provider rejection', contract: { kind: 'text' }, valid: false,
       observed: { kind: 'failed', message: 'Provider rejected the required step input', usage: { inputTokens: 8 } } },
+    ...[1_900_000_000_000, null].map(resetAtMs => ({ name: `usage-limit reset ${resetAtMs}`, contract: { kind: 'text' }, valid: false,
+      observed: { kind: 'failed', message: 'Usage limit reached', runtimeIssueV1: {
+        v: 1, scope: 'primary_session', status: 'failed', code: 'usage_limit', source: 'usage_limit', occurredAt: 100,
+        usageLimit: { v: 1, resetAtMs, retryAfterMs: null, quotaScope: 'account', recoverability: 'wait' },
+      } } } as const)),
   ])('$name commits the same exact fact before the successor can run', async ({ contract, observed, valid }) => {
     const runId = '89898989-8989-4989-8989-898989898989';
     const directory = await projectDirectory();
@@ -1674,6 +2498,11 @@ describe.each(['plain', 'e2ee'] as const)('composed exact result live/recovery p
       .resolves.toMatchObject({ state: valid ? 'succeeded' : 'interrupted' });
     const ordinaryIndex = rowFor(ordinary, 'first', runCrypto)!;
     const ordinaryFact = openRowProgress(ordinary, ordinaryIndex, runCrypto);
+    if (observed.kind === 'failed' && 'runtimeIssueV1' in observed) {
+      expect(ordinaryFact.reason).toMatchObject({ code: 'session_input_failed', runtimeIssueV1: observed.runtimeIssueV1 });
+    } else {
+      expect(ordinaryFact.reason ?? {}).not.toHaveProperty('runtimeIssueV1');
+    }
     expect(Boolean(rowFor(ordinary, 'successor', runCrypto))).toBe(valid);
 
     const restarted = makeKit();

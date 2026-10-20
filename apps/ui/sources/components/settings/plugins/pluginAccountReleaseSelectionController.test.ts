@@ -6,7 +6,7 @@ import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/acti
 import { createPluginAccountAvailabilityReader, type PluginAccountAvailabilityReader } from '@/sync/domains/plugins/availability/reader';
 
 import {
-    createPluginAccountReleaseSelectionController,
+    createPluginAccountReleaseAdministration as createPluginAccountReleaseSelectionController,
     type PluginAccountReleaseSelectionControllerDependencies,
 } from './pluginAccountReleaseSelectionController';
 
@@ -210,24 +210,29 @@ describe('Plugin Account release selection controller', () => {
                 revision: 'intent-2',
             },
         }));
-        const reader = {
-            readCurrentReleaseSelection: () => Object.freeze({
-                kind: 'available' as const,
-                availabilityCursor: 4,
-                intent: {
-                    pluginId,
-                    desiredVersion: '1.0.0',
-                    enabled: true,
-                    offlineUiHosting: 'enabled' as const,
-                    writableCollections: [],
-                    revision: 'intent-current',
-                },
-                release: {
-                    ref: { pluginId, version: '1.0.0' },
-                    normalizedManifest: facts.normalizedManifest,
-                },
-            }),
-        } as unknown as PluginAccountAvailabilityReader;
+        const sourceRelease = PluginReleaseFactsV1Schema.parse({
+            ...facts,
+            ref: { pluginId, version: '1.0.0' },
+            normalizedManifest: { ...facts.normalizedManifest, version: '1.0.0' },
+        });
+        const reader = createPluginAccountAvailabilityReader({
+            scope: active.lifetime.scope,
+            snapshot: {
+                availabilityCursor: 4, materializations: [], snapshots: [],
+                intentReads: [{ pluginId, response: {
+                    availabilityCursor: 4, hostingCapability: { enabled: false },
+                    intent: {
+                        pluginId,
+                        desiredVersion: '1.0.0',
+                        enabled: true,
+                        offlineUiHosting: 'enabled' as const,
+                        writableCollections: [],
+                        revision: 'intent-current',
+                    },
+                    release: sourceRelease, uiArtifacts: [], packageAssets: [],
+                } }],
+            },
+        });
         const controller = createPluginAccountReleaseSelectionController(dependencies({
             lifetime: active.lifetime,
             select,

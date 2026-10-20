@@ -1,8 +1,9 @@
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path';
 import { isBuiltin } from 'node:module';
 import cliDistBuildManifest from '../../../../../packages/cli-common/cliDistBuildManifest.cjs';
 import { readWorkspacePackages, workspaceSourcePackageClosure } from '../../../../../packages/cli-common/sourceRuntimeEntries.mjs';
+import { readBundledPluginPackageNames } from '../../../../cli/scripts/build-owned/bundledPluginMembership.ts';
 
 const SOURCE_ROOTS = ['src', 'sources', 'scripts'];
 const TEST_DIRECTORY_NAMES = new Set(['__fixtures__', '__snapshots__', '__tests__', 'fixtures', 'test', 'testkit', 'tests', 'test-support']);
@@ -55,7 +56,7 @@ export function resolveSourcePluginUiBuildInputPaths(repoDir) {
 /** Plugin UI can bundle declared build dependencies as well as runtime ones.
  * Host applications are not plugin source inputs; their test dependencies must
  * not make a CLI-only edit rebuild every UI artifact. */
-export async function readSourcePluginUiBuildInputs({ repoDir, pluginDirectory, compiler = false, packages }) {
+export async function readSourcePluginUiBuildInputs({ repoDir, pluginDirectory, compiler = false, packages, includeDirectories = false }) {
   packages ??= await readWorkspacePackages(repoDir);
   const roots = compiler ? ['@happier-dev/plugin-sdk'] : [`@happier-dev/plugins-${pluginDirectory}`];
   // Remove host nodes before traversal: a CLI test dependency must not visit
@@ -65,7 +66,7 @@ export async function readSourcePluginUiBuildInputs({ repoDir, pluginDirectory, 
   const files = new Set();
   for (const name of closure) {
     const { root } = packages.get(name);
-    for (const path of readWorkspaceBuildInputs(root, { excludeGeneratedPluginArtifacts: true })) {
+    for (const path of readWorkspaceBuildInputs(root, { excludeGeneratedPluginArtifacts: true, includeDirectories })) {
       files.add(relative(repoDir, join(root, path)).split(sep).join('/'));
     }
   }
@@ -89,6 +90,9 @@ export async function readSourceComponentBuildInputs({ repoDir, component }) {
   const roots = [...packages].filter(([, { root }]) =>
     [`apps/${project}`, 'apps/stack', 'packages/cli-common', ...(component === 'expo' ? ['packages/plugin-sdk'] : [])]
       .includes(relative(repoDir, root).replaceAll('\\', '/'))).map(([name]) => name);
+  // Generated CLI entries use discovered shippable membership, which can be
+  // newer than package.json's projected dependency list.
+  if (component === 'daemon' || component === 'expo') roots.push(...readBundledPluginPackageNames(repoDir));
   if (component === 'expo') {
     const cli = [...packages.values()].find(({ root }) => relative(repoDir, root).replaceAll('\\', '/') === 'apps/cli');
     roots.push(...(cli?.manifest.bundledDependencies ?? []));
@@ -110,10 +114,14 @@ export async function readSourceComponentBuildInputs({ repoDir, component }) {
       includeShippedFiles: path.startsWith('packages/'),
       excludeGeneratedPluginArtifacts: path.startsWith('packages/plugins/'),
       sourceRoots: component === 'daemon' && path === 'apps/ui' ? ['scripts'] : SOURCE_ROOTS,
-      additionalInputPaths: root === repoDir ? ['apps/cli/scripts/buildPublication.mjs']
-        : path === 'apps/ui' && component === 'expo' ? ['index.ts', 'public', 'plugins', 'modules', 'sources/dev/testkit']
+      additionalInputPaths: root === repoDir ? ['apps/cli/scripts/buildPublication.mjs',
+        'apps/cli/scripts/build-owned/bundledPluginMembership.ts']
+        // Expo preparation imports the authored tools tree, including nested
+        // postinstall modules. Capture and invalidate it with the same owner.
+        : path === 'apps/ui' && component === 'expo' ? ['index.ts', 'public', 'plugins', 'modules', 'tools', 'sources/dev/testkit']
           : path === 'apps/cli' ? ['native/processcustody', 'assets']
-            : path === 'apps/server' ? ['prisma'] : [],
+            : path === 'apps/server' ? ['prisma']
+              : component === 'daemon' && path.startsWith('packages/plugins/') ? ['managed-runtime'] : [],
     };
     const inputs = readWorkspaceBuildInputs(root, options);
     for (const input of inputs) {
@@ -202,7 +210,7 @@ export function readWorkspaceBuildInputs(packageDir, {
   sourceRoots = SOURCE_ROOTS,
 } = {}) {
   const inputs = new Set();
-  const visit = (path, { ignoreTests = true } = {}) => {
+  const visit = (path, { ignoreTests = true, matches } = {}) => {
     const relativePath = relative(packageDir, path).split(sep).join('/');
     const generated = excludeGeneratedPluginArtifacts && isGeneratedPluginArtifactPath(relativePath);
     if (generated && relativePath !== '.happier-plugin' && relativePath !== '.happier-plugin/ui') return;
@@ -217,10 +225,10 @@ export function readWorkspaceBuildInputs(packageDir, {
     }
     if (entryStat.isDirectory()) {
       if (includeDirectories && !generated) inputs.add(relativePath);
-      for (const childName of readDir(path)) visit(join(path, childName), { ignoreTests });
+      for (const childName of readDir(path)) visit(join(path, childName), { ignoreTests, matches });
       return;
     }
-    if (!generated) inputs.add(relativePath);
+    if (!generated && (!matches || matches(relativePath))) inputs.add(relativePath);
   };
 
   let entries = [];
@@ -247,10 +255,20 @@ export function readWorkspaceBuildInputs(packageDir, {
       if (
         typeof entry !== 'string' || !entry || entry.includes('\\') || entry.startsWith('/')
         || entry.split('/').some((segment) => !segment || segment === '.' || segment === '..')
-        || /[*?{}[\]]/.test(entry)
       ) throw new Error(`[workspace-build] invalid shipped package file: ${entry}`);
       if (entry === 'dist' || entry.startsWith('dist/') || entry === 'package.json') continue;
-      visit(join(packageDir, entry), { ignoreTests: isWorkspaceBuildSourcePath(entry) });
+      // npm `files` accepts globs: walk the literal directory prefix and keep only matching files.
+      const segments = entry.split('/');
+      const globAt = segments.findIndex((segment) => /[*?{}[\]]/.test(segment));
+      if (globAt === -1) {
+        visit(join(packageDir, entry), { ignoreTests: isWorkspaceBuildSourcePath(entry) });
+        continue;
+      }
+      const prefix = segments.slice(0, globAt).join('/');
+      visit(join(packageDir, prefix), {
+        ignoreTests: isWorkspaceBuildSourcePath(entry),
+        matches: (relativePath) => posix.matchesGlob(relativePath, entry),
+      });
     }
   }
   // A config excluded as a test-only root can still be a consumed build input

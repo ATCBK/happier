@@ -2,7 +2,6 @@ import { describe, expect, it, vi, type MockInstance } from 'vitest';
 import { createOpenAiVoiceRuntimeEnvironment } from '@/dev/testkit/harness/openAiVoiceRuntime';
 import { installVoiceWebRtcBrowserBoundary } from '@/dev/testkit/harness/voiceWebRtcHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { storage } from '@/sync/domains/state/storage';
 import { writeVoiceProviderSettingsConfig } from '@/sync/domains/settings/voiceSettings';
@@ -28,7 +27,11 @@ import { createWebSocketPcmMedia as createNativeWebSocketPcmMedia } from '@/voic
 vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 const vendor = vi.hoisted(() => ({ platform: 'web' as 'web' | 'ios', startSession: vi.fn(), setAudioModeAsync: vi.fn(async (_mode: unknown) => {}), requestRecordingPermissionsAsync: vi.fn(async () => ({ granted: true, canAskAgain: true })) }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({ Platform: { get OS() { return vendor.platform; } } }));
-const nativeAudio = createNativeVoicePcmCaptureHarness();
+// Native discovery is process-owned and may run during the first static import.
+const nativeAudio = await vi.hoisted(async () => {
+  const { createNativeVoicePcmCaptureHarness } = await import('@/dev/testkit/harness/nativeVoicePcmCapture');
+  return createNativeVoicePcmCaptureHarness();
+});
 vi.mock('expo-modules-core', async original => {
   const actual = await original<typeof import('expo-modules-core')>();
   return { ...actual, requireOptionalNativeModule: (name: string) => name === 'HappierAudioStreamNative' ? nativeAudio.nativeModule : actual.requireOptionalNativeModule(name) };

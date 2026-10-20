@@ -1,4 +1,5 @@
 import type { Metadata } from '@/api/types';
+import type { DaemonControlRequestOptions } from '@/daemon/controlClient';
 import { readCapabilityLaunchRestartFromMetadataV1, readSessionCapabilityAgentFactsV1, resolveCapabilityApplyTimingV1, type CapabilityApplyTimingInputV1 } from '@happier-dev/protocol/reach/capabilityApplyTimingV1';
 import type { RestartSessionRunnerRequestV1, RestartSessionRunnerResultV1 } from '@happier-dev/protocol';
 import type { SessionSkillsReapplyRunner } from '@/prompts/skills/runtime/reapplySessionSkills';
@@ -34,7 +35,7 @@ export type CapabilitySelectionSynchronizerInput = Readonly<{
   readMcpRules?: () => RunnerMcpRuleObservation | null;
   /** Bound through the host's incumbent captured Account subscription. */
   subscribeAccountSettings?: (observe: () => void) => () => void;
-  requestRestart?: (request: RestartSessionRunnerRequestV1) => Promise<RestartSessionRunnerResultV1>;
+  requestRestart?: (request: RestartSessionRunnerRequestV1, options: Pick<DaemonControlRequestOptions, 'signal'>) => Promise<RestartSessionRunnerResultV1>;
 }>;
 
 export function createCapabilitySelectionSynchronizer(input: CapabilitySelectionSynchronizerInput) {
@@ -48,7 +49,7 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
   let metadataApplyScheduled = false;
   let observedAgentFacts = readSessionCapabilityAgentFactsV1(initialMetadata);
   let lastSettledTurnId: string | undefined;
-  let disposed = false;
+  const lifetime = new AbortController();
 
   const ruleSelection = (observation: SkillRuleObservation, selection: SessionCapabilitySelectionV1) => {
     const ids = new Set([...observation.rules.map(rule => rule.skillId), ...(selection.skills?.forceIncludeSkillIds ?? [])]);
@@ -58,8 +59,14 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
     return JSON.stringify(resolved.skills.items.filter(item => item.selected).map(item => item.id).sort());
   };
   const initialRules = input.initialSkillRules ?? input.readSkillRules?.();
-  // A preserved-process attach cannot infer native application from today's rules.
-  let appliedSkillRules = initialRules && !readPendingCapabilityRuleApplyV1(initialMetadata, 'skills') ? ruleSelection(initialRules, applied) : null;
+  // Explicit launch resolution is positive evidence even if an earlier runner's
+  // pending status survives. A preserved-process attach reading today's rules
+  // still cannot infer native application from that observation alone.
+  const appliedRuleBaseline = (kind: 'mcp' | 'skills', launch: string | null, observed: string | null = null) =>
+    launch ?? (readPendingCapabilityRuleApplyV1(initialMetadata, kind) ? null : observed);
+  let appliedSkillRules = appliedRuleBaseline('skills',
+    input.initialSkillRules ? ruleSelection(input.initialSkillRules, applied) : null,
+    initialRules ? ruleSelection(initialRules, applied) : null);
   let desiredSkillRules = initialRules ? ruleSelection(initialRules, desired) : appliedSkillRules;
   let skillRulesAvailable = initialRules != null;
   const mcpRuleSelection = (observation: RunnerMcpRuleObservation, selection: SessionCapabilitySelectionV1) => {
@@ -72,8 +79,9 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
   const initialMcpRules = input.initialMcpRules;
   // Only the launch resolver establishes the applied server set. In particular,
   // an unavailable launch or preserved-process refusal is not today's empty set.
-  const appliedMcpRules = initialMcpRules && !readPendingCapabilityRuleApplyV1(initialMetadata, 'mcp')
-    ? JSON.stringify([...initialMcpRules.selectedServerIds].sort()) : null;
+  // A retained pending status cannot invalidate that positive launch evidence.
+  const appliedMcpRules = appliedRuleBaseline('mcp', initialMcpRules
+    ? JSON.stringify([...initialMcpRules.selectedServerIds].sort()) : null);
   let desiredMcpRules = initialMcpRules ? mcpRuleSelection(initialMcpRules, desired) : appliedMcpRules;
   let mcpRulesAvailable = initialMcpRules != null;
 
@@ -131,11 +139,17 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
 
   const apply = async () => {
     observe();
-    if (disposed || !input.isStarted() || restartAccepted) return;
+    if (lifetime.signal.aborted || !input.isStarted() || restartAccepted) return;
     const captured = desired;
     const capturedSkillRules = desiredSkillRules;
     const agent = readSessionCapabilityAgentFactsV1(input.session.getMetadataSnapshot()) ?? input.agent;
     const kinds = pending();
+    const changes = {
+      mcpSelection: !areSessionCapabilitySelectionsEquivalentV1({ mcp: applied.mcp }, { mcp: captured.mcp }),
+      skillsSelection: !areSessionCapabilitySelectionsEquivalentV1({ skills: applied.skills }, { skills: captured.skills }),
+      mcpRules: mcpRulesAvailable && desiredMcpRules !== appliedMcpRules,
+      skillRules: skillRulesAvailable && desiredSkillRules !== appliedSkillRules,
+    };
     // Restoration can withdraw a refusal while a busy request awaits its next
     // settlement. It never acknowledges an unavailable observation.
     for (const kind of ['mcp', 'skills'] as const) {
@@ -188,9 +202,16 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
     }
     // The daemon rechecks active turns and approvals immediately before signaling.
     const requestRestart = input.requestRestart ?? (await import('@/daemon/controlClient')).requestDaemonSessionRunnerRestart;
+    if (lifetime.signal.aborted) return;
+    logger.infoFile('[CapabilitySelection] Requesting runner refresh', {
+      sessionId: input.session.sessionId,
+      changes: { mcpSelection: kinds.mcp && changes.mcpSelection, skillsSelection: kinds.skills && changes.skillsSelection,
+        mcpRules: kinds.mcp && changes.mcpRules, skillRules: kinds.skills && changes.skillRules },
+    });
     const result = await requestRestart({
       sessionId: input.session.sessionId, mode: 'force_current_cli', reason: 'capability_selection_change',
-    });
+    }, { signal: lifetime.signal });
+    if (lifetime.signal.aborted) return;
     if (result.ok && result.status === 'restarted') {
       restartAccepted = true;
       return;
@@ -212,7 +233,7 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
       // A settlement wake may arrive while the earlier busy-turn publication
       // is finishing. Drain that work, then apply the still-pending change.
       const kinds = pending();
-      if (!disposed && input.isStarted() && input.isSettled() && !blocked && !restartAccepted
+      if (!lifetime.signal.aborted && input.isStarted() && input.isSettled() && !blocked && !restartAccepted
         && !waitForNextSettlement && (kinds.mcp || kinds.skills)) return flush();
       return undefined;
     });
@@ -220,11 +241,12 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
     const attemptedSkillRules = desiredSkillRules;
     const attemptedMcpRules = desiredMcpRules;
     applying = apply().catch(async () => {
+      if (lifetime.signal.aborted) return;
       blocked = true;
       await publishReason(desired, pending(), { reason: 'apply_failed' });
     }).finally(() => {
       applying = null;
-      if (!disposed && !blocked && !waitForNextSettlement && !restartAccepted && input.isSettled()
+      if (!lifetime.signal.aborted && !blocked && !waitForNextSettlement && !restartAccepted && input.isSettled()
         && (!areSessionCapabilitySelectionsEquivalentV1(attemptedSelection, desired) || attemptedSkillRules !== desiredSkillRules
           || attemptedMcpRules !== desiredMcpRules)) {
         void flush();
@@ -233,7 +255,7 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
     return applying;
   };
   const syncFromMetadata = () => {
-    if (disposed) return;
+    if (lifetime.signal.aborted) return;
     observe();
     if (!input.isStarted() || metadataApplyScheduled) return;
     metadataApplyScheduled = true;
@@ -245,7 +267,7 @@ export function createCapabilitySelectionSynchronizer(input: CapabilitySelection
   const unsubscribeAccountSettings = input.subscribeAccountSettings?.(syncFromMetadata);
   return {
     syncFromMetadata,
-    dispose: async () => { disposed = true; unsubscribeAccountSettings?.(); },
+    dispose: async () => { lifetime.abort(new Error('Capability selection synchronizer disposed')); unsubscribeAccountSettings?.(); },
     flushBeforeTurn: () => waitForNextSettlement ? Promise.resolve() : flush(),
     flushAfterSettledTurn: (turnId?: string) => {
       if (!input.isSettled()) return Promise.resolve();

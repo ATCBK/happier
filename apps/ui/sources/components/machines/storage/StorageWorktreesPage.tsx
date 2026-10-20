@@ -18,7 +18,8 @@ import { Typography } from '@/constants/Typography';
 import { useMachineStorageCleanup } from '@/sync/domains/machines/storage/useMachineStorageCleanup';
 import { useMachineStorageItems } from '@/sync/domains/machines/storage/useMachineStorageItems';
 import { useMachineStorageSummary } from '@/sync/domains/machines/storage/useMachineStorageSummary';
-import { getPreferredLanguage, t } from '@/text';
+import { t } from '@/text';
+import { usePreferredLanguage } from '@/text/usePreferredLanguage';
 import { formatRelativeTime } from '@/utils/time/formatShortRelativeTime';
 
 import { StoragePageHead, StorageSayLine } from './StoragePageHead';
@@ -29,7 +30,7 @@ import {
 } from './StorageCollectToggle';
 import { StorageItemRow } from './StorageItemRow';
 import { StoragePileDock } from './StoragePileDock';
-import { describeStorageVerdict } from './storageReasonPresentation';
+import { describeStorageVerdict, storageEvidenceLabel } from './storageReasonPresentation';
 import { toStorageItemRef } from '@/sync/domains/machines/storage/pileRef';
 import { StorageVolumeRow } from './StorageVolumes';
 import { selectStorageHeadlineVolume } from './storageViewModel';
@@ -64,6 +65,7 @@ export const StorageWorktreesPage = React.memo(function StorageWorktreesPage(
     onBack: () => void;
   }>,
 ) {
+  const language = usePreferredLanguage();
   const layout = useMachineTabCompactLayout();
   const target = { machineId: props.machineId, serverId: props.serverId };
   const summary = useMachineStorageSummary(target);
@@ -93,7 +95,7 @@ export const StorageWorktreesPage = React.memo(function StorageWorktreesPage(
         (filter === 'all' || (filter === 'canDelete') === canDelete(item)) &&
         (!needle ||
           item.title.toLowerCase().includes(needle) ||
-          item.evidence.some((line) => line.toLowerCase().includes(needle))),
+          item.evidence.some((line) => storageEvidenceLabel(line).toLowerCase().includes(needle))),
     );
     const order = (a: StorageItemV1, b: StorageItemV1) =>
       sort === 'name'
@@ -114,7 +116,7 @@ export const StorageWorktreesPage = React.memo(function StorageWorktreesPage(
         bytes: rows.reduce((sum, row) => sum + row.size.allocatedBytes, 0),
       }))
       .sort((a, b) => b.bytes - a.bytes);
-  }, [filter, items, query, sort]);
+  }, [filter, items, language, query, sort]);
   const largest = items.reduce(
     (max, item) => Math.max(max, item.size.allocatedBytes),
     0,
@@ -132,7 +134,7 @@ export const StorageWorktreesPage = React.memo(function StorageWorktreesPage(
     [cleanup, list],
   );
   const number = (value: number) =>
-    value.toLocaleString(getPreferredLanguage());
+    value.toLocaleString(language);
 
   return (
     <View testID="machine-storage-worktrees" onLayout={layout.onLayout}>
@@ -199,7 +201,8 @@ export const StorageWorktreesPage = React.memo(function StorageWorktreesPage(
             testID="machine-storage-worktrees-offline"
             kind="unavailable"
             size="line"
-            title={t('machineStorage.states.offlineEmpty', { machine: props.machineName })}
+            title={t('machineStorage.states.offlineTitle', { machine: props.machineName })}
+              reason={t('machineStorage.states.offlineReason')}
           />
         </ItemGroup>
       ) : !list.page ? (
@@ -328,7 +331,7 @@ const WorktreeGroup = React.memo(function WorktreeGroup(
       {shown.map((row, index) => {
         const used = row.lastUsedAt ?? row.lastChangedAt;
         const evidence = [
-          ...row.evidence,
+          ...row.evidence.map(storageEvidenceLabel),
           ...(used !== undefined
             ? [
                 t('machineStorage.page.used', {

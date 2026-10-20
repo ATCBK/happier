@@ -229,6 +229,7 @@ export type PluginInvocationServicesFactoryParams = Readonly<{
         ) => ReturnType<Parameters<typeof createStablePluginExecService>[0]['resolveExecutable']>;
         resolvePath: Parameters<typeof createStablePluginExecService>[0]['resolvePath'];
         environment?: Readonly<Record<string, string>>;
+        prepareAgentNativeLaunch?: import('./exec').HostAgentNativeLaunchPreparation;
         agentCli?: Parameters<typeof createStablePluginExecService>[0]['agentCli'];
         systemTools?: ExecSystemToolServiceV1;
         systemToolsForPlugin?: (
@@ -693,6 +694,7 @@ export const PLUGIN_SERVICE_DESCRIPTORS = Object.freeze({
         },
         createAvailable({ seed, params }): ActionsService | null {
             if (params.actionExecutor === undefined || params.invokeContributedAction === undefined) return null;
+            const actionRequestAttributionV1 = seed.actionRequestAttributionV1 ?? seed.approvalContext?.actionRequestAttributionV1;
             return createPluginInvocationActionsService({
                 seed: Object.freeze({
                     plugin: seed.plugin,
@@ -712,6 +714,7 @@ export const PLUGIN_SERVICE_DESCRIPTORS = Object.freeze({
                     ...(seed.externalActionContext
                         ? { externalActionContext: seed.externalActionContext }
                         : {}),
+                    ...(seed.approvalContext ? { approvalContext: seed.approvalContext } : {}),
                     ...(seed.resolveCurrentPluginMaterializationRef
                         ? {
                             resolveCurrentPluginMaterializationRef:
@@ -720,6 +723,9 @@ export const PLUGIN_SERVICE_DESCRIPTORS = Object.freeze({
                         : {}),
                     ...(seed.selectedActionInputCarrier
                         ? { selectedActionInputCarrier: seed.selectedActionInputCarrier }
+                        : {}),
+                    ...(seed.resolveCurrentPluginExecutionOrigin
+                        ? { resolveCurrentPluginExecutionOrigin: seed.resolveCurrentPluginExecutionOrigin }
                         : {}),
                     ...(seed.isMountedCallerCurrent
                         ? { isMountedCallerCurrent: seed.isMountedCallerCurrent }
@@ -731,6 +737,9 @@ export const PLUGIN_SERVICE_DESCRIPTORS = Object.freeze({
                     // silently strips both and makes every Agent Action fail closed.
                     ...(seed.readActiveTurnAdmissionWitness
                         ? { readActiveTurnAdmissionWitness: seed.readActiveTurnAdmissionWitness }
+                        : {}),
+                    ...(actionRequestAttributionV1
+                        ? { actionRequestAttributionV1 }
                         : {}),
                     signal: seed.signal,
                     isOccurrenceCurrent: seed.isOccurrenceCurrent,
@@ -943,6 +952,9 @@ export function createPluginInvocationServicesFromDescriptors(
         }) satisfies ManagedProviderRuntimeOperationBinding
         : null;
     const execAvailable = binding.processExecutables !== undefined && params.exec !== undefined;
+    const systemTools = execAvailable
+        ? params.exec?.systemTools ?? params.exec?.systemToolsForPlugin?.(seed.plugin.id)
+        : undefined;
     const exec = execAvailable
         ? createStablePluginExecService({
             readSpawnFailureLimits: params.exec?.readSpawnFailureLimits,
@@ -955,22 +967,40 @@ export function createPluginInvocationServicesFromDescriptors(
             isOccurrenceCurrent: seed.isOccurrenceCurrent,
             ...(binding.execOutputObserver ? { observeProcessOutput: binding.execOutputObserver } : {}),
             ...(binding.execInvocationTimeoutMs === undefined ? {} : { invocationTimeoutMs: binding.execInvocationTimeoutMs }),
-            resolveExecutable: (executable) => params.exec!.resolveExecutable(
-                executable,
-                seed.plugin.id,
-                managedProviderRuntime
-                    ? Object.freeze({
-                        kind: 'managedProviderRuntime' as const,
-                        pluginId: seed.plugin.id,
-                        providerLocalId:
-                            managedProviderRuntime.providerLocalId,
-                        contributionQualifiedId:
-                            seed.contribution.qualifiedId,
-                        occurrenceId: seed.occurrenceId,
-                        isCurrent: managedProviderRuntime.isCurrent,
-                    })
-                    : undefined,
-            ),
+            async resolveExecutable(executable) {
+                const localToolId = executable.kind === 'systemTool'
+                    ? typeof executable.id === 'string' ? executable.id
+                        : executable.id.pluginId === seed.plugin.id ? executable.id.localId : null
+                    : null;
+                if (systemTools && localToolId !== null) {
+                    // A declarative spawn must consume the same invocation
+                    // selection as systemTools.resolve, including Agent CLI
+                    // managed installs and overrides. Never reselect on PATH.
+                    const grant = await systemTools.resolve({
+                        toolId: localToolId, purpose: 'Execute a plugin-declared system tool',
+                    });
+                    return {
+                        command: grant.launch.executablePath,
+                        ...(grant.launch.args ? { args: grant.launch.args } : {}),
+                        ...(grant.launch.env ? { env: grant.launch.env } : {}),
+                        ...(grant.allowedArguments ? { allowedArguments: grant.allowedArguments } : {}),
+                    };
+                }
+                return await params.exec!.resolveExecutable(
+                    executable,
+                    seed.plugin.id,
+                    managedProviderRuntime
+                        ? Object.freeze({
+                            kind: 'managedProviderRuntime' as const,
+                            pluginId: seed.plugin.id,
+                            providerLocalId: managedProviderRuntime.providerLocalId,
+                            contributionQualifiedId: seed.contribution.qualifiedId,
+                            occurrenceId: seed.occurrenceId,
+                            isCurrent: managedProviderRuntime.isCurrent,
+                        })
+                        : undefined,
+                );
+            },
             ...(managedProviderRuntime?.isPhysicalOccurrenceCurrent ? {
                 resolveManagedExecutable: (executable: ManagedExecutableRef, isCurrent: () => boolean) => params.exec!.resolveExecutable(
                     executable, seed.plugin.id, Object.freeze({
@@ -986,12 +1016,9 @@ export function createPluginInvocationServicesFromDescriptors(
             resolvePath: params.exec!.resolvePath,
             recordDisclosureMismatch: createHostAccessDisclosureMismatchRecorder(seed, params),
             ...(params.exec!.agentCli ? { agentCli: params.exec!.agentCli } : {}),
-            ...(params.exec!.systemTools
-                ? { systemTools: params.exec!.systemTools }
-                : params.exec!.systemToolsForPlugin
-                ? { systemTools: params.exec!.systemToolsForPlugin(seed.plugin.id) }
-                : {}),
+            ...(systemTools ? { systemTools } : {}),
             ...(params.exec!.environment ? { environment: params.exec!.environment } : {}),
+            ...(params.exec!.prepareAgentNativeLaunch ? { prepareAgentNativeLaunch: params.exec!.prepareAgentNativeLaunch } : {}),
             ...(params.recordRuntimeLimitMeasurement
                 ? { recordRuntimeLimitMeasurement: params.recordRuntimeLimitMeasurement }
                 : {}),

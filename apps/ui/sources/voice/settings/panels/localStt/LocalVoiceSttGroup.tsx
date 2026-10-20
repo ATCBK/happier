@@ -13,9 +13,17 @@ import type { VoiceDaemonRouteDiagnosticReason } from '@/voice/settings/voicePro
 import { Icon } from '@/components/ui/icons/Icon';
 import { SettingAnchor } from '@/components/settings/shell/SettingRow';
 import { VOICE_CONVERSATIONS_SETTINGS } from '@/voice/settings/voiceSettingsDeclarations';
+import { useVoiceSettingsSearchPrerequisite } from '@/voice/settings/VoiceSettingsSearchPrerequisite';
+import { getVoiceContributedSettingRefs, useVoiceContributedSettingsDeclarations } from '@/voice/settings/useVoiceContributedSettingRefs';
+import { getVoiceLocalNeuralSttSettingRefs } from '@/voice/settings/useVoiceSttSettingRefs';
+
+export const VOICE_LOCAL_STT_SETTINGS = [VOICE_CONVERSATIONS_SETTINGS.settings.sttProvider,
+  ...getVoiceLocalNeuralSttSettingRefs(VOICE_CONVERSATIONS_SETTINGS.settings)];
 
 export function LocalVoiceSttGroup(props: {
   cfgStt: VoiceLocalSttSettings | any;
+  /** A shared speech contribution's fields may already be drawn by Speak. */
+  otherSpeechProviderId?: string;
   setStt: (next: VoiceLocalSttSettings | any) => void;
   voice: VoiceSettings;
   setVoice: (next: VoiceSettings) => void;
@@ -24,8 +32,10 @@ export function LocalVoiceSttGroup(props: {
   /** Rows of the Hear section that follow the recognizer (how you talk, interrupting). */
   children?: React.ReactNode;
 }) {
+  const searchPrerequisite = useVoiceSettingsSearchPrerequisite();
   const { theme } = useUnistyles();
   const providerSpecs = useLocalSttProviderSpecs();
+  const declarations = useVoiceContributedSettingsDeclarations('voiceConversations');
   const [openMenu, setOpenMenu] = React.useState<null | 'sttProvider'>(null);
 
   const normalized = React.useMemo(() => {
@@ -83,6 +93,12 @@ export function LocalVoiceSttGroup(props: {
       ) : (
         <Item title={t('common.unavailable')} />
       )}
+      {providerSpecs.filter((spec) => spec.id !== providerSpec?.id).map((spec) => (
+        searchPrerequisite({ settings: [
+            ...(spec.id === props.otherSpeechProviderId ? [] : getVoiceContributedSettingRefs(declarations, spec.id)),
+            ...(spec.id === 'local_neural' ? getVoiceLocalNeuralSttSettingRefs(VOICE_CONVERSATIONS_SETTINGS.settings) : []),
+          ], reason: t('settingsVoice.pages.search.select', { choice: spec.title, control: t('settingsVoice.pages.conversations.speechRecognitionTitle') }) })
+      ))}
       {props.children}
     </ItemGroup>
   );

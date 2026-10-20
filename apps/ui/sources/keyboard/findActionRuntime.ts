@@ -27,6 +27,12 @@ export async function executeFindAction(request: FindActionRequest): Promise<Act
             break;
         case 'step': controller.step(input.direction); break;
         case 'stop': controller.stop(); break;
+        case 'refold': {
+            const outcome = controller.refold?.() ?? 'unsupported';
+            if (outcome !== 'refolded') return { ok: true, result: { status: 'unavailable',
+                reason: outcome === 'unsupported' ? 'unsupportedOperation' : 'noRevealedFold' } };
+            break;
+        }
         case 'close': controller.close(); break;
     }
     if (surface.engineOwnsFind) {

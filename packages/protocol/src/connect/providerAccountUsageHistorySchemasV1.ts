@@ -2,11 +2,11 @@ import { z } from 'zod/mini';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { ProviderAccountUsageRecordIdSchema, ProviderAccountUsageSnapshotV1Schema, ProviderAccountUsageHistoryCursorV1Schema, ProviderAccountUsageHistoryWitnessV1Schema } from './providerAccountUsagePrimitives.js';
 import { QualifiedConnectedServiceUsageSourceV4Schema, QualifiedProviderAccountUsageRecordResponseV4Schema } from './qualifiedConnectedAccountProjectionsV4.js';
-import { ProviderAccountUsagePaceV1Schema, ProviderAccountUsageUnusedCapacityV1Schema } from './deriveProviderAccountUsagePace.js';
+import { ProviderAccountUsagePaceV1Schema, ProviderAccountUsageUnusedCapacityV1Schema, ProviderAccountUsageEarlierWindowCurvesV1Schema, ProviderAccountUsagePaceWindowV1Schema } from './deriveProviderAccountUsagePace.js';
 import { UsagePacingTargetsV1Schema } from '../account/settings/usagePacingPreferencesV1.js';
 import { PendingResetStartReadinessV1Schema } from '../sessions/pending/pendingResetStartReadinessV1.js';
 import { PendingResetStartsReadResultV1Schema } from '../sessions/pending/pendingRequestedActionV1.js';
-import { ProviderAccountUsagePageProjectionDemandV1Schema, PackedProviderAccountUsagePageProjectionV1Schema } from './providerAccountUsagePageProjection.js';
+import { ProviderAccountUsagePageProjectionDemandV1Schema, ProviderAccountUsagePageProjectionCoverageV1Schema, PackedProviderAccountUsagePageProjectionV1Schema } from './providerAccountUsagePageProjection.js';
 
 // New operation envelopes and their nested range/cursor identities are closed.
 // pageSize is caller-selected paging, with no retention horizon or invented cap.
@@ -22,7 +22,8 @@ export const ProviderAccountUsageHistoryRequestV1Schema = lazyZodSchema(() => z.
 export const QualifiedProviderAccountUsageHistoryRequestV4Schema = lazyZodSchema(() => z.union([
   z.strictObject({ recordId: ProviderAccountUsageRecordIdSchema, history: ProviderAccountUsageHistoryRequestV1Schema }),
   z.strictObject({ recordId: ProviderAccountUsageRecordIdSchema, witness: ProviderAccountUsageHistoryWitnessV1Schema }),
-  z.strictObject({ recordId: ProviderAccountUsageRecordIdSchema, projection: ProviderAccountUsagePageProjectionDemandV1Schema }),
+  z.strictObject({ recordId: ProviderAccountUsageRecordIdSchema, projection: ProviderAccountUsagePageProjectionDemandV1Schema,
+    heldProjection: z.optional(ProviderAccountUsagePageProjectionCoverageV1Schema) }),
 ]));
 export const QualifiedProviderAccountUsageHistoryResponseV4Schema = lazyZodSchema(() => z.strictObject({
   entries: z.array(z.strictObject({ id: z.string().check(z.minLength(1)), observedAtMs: z.number().check(z.int(), z.nonnegative()), record: QualifiedProviderAccountUsageRecordResponseV4Schema })),
@@ -46,6 +47,13 @@ export const ConnectedServiceQuotaGetResultV1Schema = lazyZodSchema(() => z.stri
   current: z.nullable(ProviderAccountUsageSnapshotV1Schema),
   history: z.optional(OpenedProviderAccountUsageHistoryPageV1Schema),
   pageProjection: z.optional(PackedProviderAccountUsagePageProjectionV1Schema),
+  /** Page facts, derived at B before crossing the Resource boundary. Exact history stays at B. */
+  pageFacts: z.optional(z.strictObject({
+    historyStatus: z.enum(['complete', 'partial']),
+    earlierCurves: z.array(z.strictObject({ meterId: z.string().check(z.minLength(1)), value: ProviderAccountUsageEarlierWindowCurvesV1Schema })),
+    resetWitness: z.nullable(OpenedProviderAccountUsageHistoryPageV1Schema.shape.entries._zod.def.element),
+    witnessedResets: z.array(ProviderAccountUsagePaceWindowV1Schema),
+  })),
   pace: z.array(z.strictObject({ meterId: z.string().check(z.minLength(1)), value: ProviderAccountUsagePaceV1Schema })),
   unusedCapacity: z.optional(ProviderAccountUsageUnusedCapacityV1Schema),
   targets: UsagePacingTargetsV1Schema,

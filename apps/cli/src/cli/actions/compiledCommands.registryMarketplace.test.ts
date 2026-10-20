@@ -6,6 +6,11 @@ describe('marketplace spellings compile through registry Actions', () => {
   it.each([
     [['plugins', 'install'], ['/workspace/plugin'], 'plugins.install', { path: '/workspace/plugin' }],
     [['plugins', 'uninstall'], ['acme.plugin'], 'plugins.uninstall', { pluginId: 'acme.plugin' }],
+    [['plugins', 'enable'], ['acme.plugin', '--machine', 'machine-1'], 'plugins.enable', { pluginId: 'acme.plugin', machineId: 'machine-1' }],
+    [['plugins', 'disable'], ['acme.plugin', '--machine', 'machine-1'], 'plugins.disable', { pluginId: 'acme.plugin', machineId: 'machine-1' }],
+    [['plugins', 'rollback'], ['acme.plugin', '--machine', 'machine-1'], 'plugins.rollback', { pluginId: 'acme.plugin', machineId: 'machine-1' }],
+    [['plugins', 'trust', 'forget'], ['acme.plugin', '--machine', 'machine-1'], 'plugins.trust.forget', { pluginId: 'acme.plugin', machineId: 'machine-1' }],
+    [['plugins', 'update-policy', 'set'], ['acme.plugin', '--policy', 'pinned', '--machine', 'machine-1'], 'plugins.update_policy.set', { pluginId: 'acme.plugin', machineId: 'machine-1', policy: 'pinned' }],
     [['plugins', 'marketplace', 'install'], ['marketplace:team', 'acme.plugin', '--version', '1.0.0', '--machine-id', 'machine-1'], 'plugins.install', { machineId: 'machine-1', source: { kind: 'marketplace', sourceId: 'marketplace:team', pluginId: 'acme.plugin', version: '1.0.0' } }],
     [['plugins', 'marketplace', 'sources', 'list'], [], 'registries.sources.list', { kind: 'plugin' }],
     [['registries', 'sources', 'list'], ['--kind', 'agent'], 'registries.sources.list', { kind: 'agent' }],

@@ -3,7 +3,27 @@ title: Plugins
 description: Build Happier plugins, agents, UI surfaces, tools, hooks, and runtime integrations.
 ---
 
-Happier plugins extend the local runtime without changing Happier core source code. A plugin can contribute actions, tools, commands, hooks, UI surfaces, settings, MCP integrations, SCM integrations, and AI Agents.
+Build your first plugin by creating a package, opening its page in Happier, and
+invoking one Action. The [Quickstart](/plugins/quickstart) takes you through
+create → dev → test → pack with the default declarative page.
+
+## Start here
+
+<Cards>
+  <Card title="Quickstart" href="/plugins/quickstart" description="Create a visible page with one Action, develop it, test it, and pack it." />
+  <Card title="Choose a task" href="/plugins/guides" description="Start from the capability you need rather than from an API inventory." />
+  <Card title="What you can build today" href="/plugins/manifest/availability" description="Every family and service with its current availability, generated from the capability matrix." />
+</Cards>
+
+The author packages are currently on a prepublication hold. These guides describe
+the 0.3 development-source Developer Preview contract; see the
+[preview authoring rules](#preview-authoring-rules) below.
+
+## How plugins fit together
+
+Happier plugins extend the local runtime without changing Happier core source
+code. A plugin can contribute Actions, tools, commands, hooks, UI surfaces,
+settings, MCP integrations, SCM integrations, and AI Agents.
 
 Code-defined authoring source is the development authority. `definePlugin(...)`
 projects the cold `.happier-plugin/plugin.json` manifest during packing, so
@@ -44,23 +64,13 @@ Start from the thing you need to add, not from a broad API inventory:
   <Card title="Use invocation services" href="/plugins/guides/invocation-services" />
 </Cards>
 
-## Start here
-
-<Cards>
-  <Card title="Quickstart" href="/plugins/quickstart" description="Create, develop, test, pack and install a minimal plugin." />
-  <Card title="Choose a task" href="/plugins/guides" description="Start from the capability you need rather than from an API inventory." />
-  <Card title="What you can build today" href="/plugins/manifest/availability" description="Every family and service with its current availability, generated from the capability matrix." />
-</Cards>
-
 Read [Plugin concepts](/plugins/concepts) for the ownership boundaries the rest
 of this section assumes, and [Glossary](/plugins/glossary) when a term is doing
 more work than it looks like it is.
 
-Before any of that, [What ships in the box](/plugins/bundled) is worth two
-minutes: every coding agent, model provider, voice engine, version-control
-backend and hosting forge Happier ships is itself a plugin, built through this
-same SDK. They are the best-worked examples available, and reading one beats
-reading a guide about one.
+For larger examples, see [What ships in the box](/plugins/bundled): every
+coding agent, model provider, voice engine, version-control backend and hosting
+forge Happier ships is itself a plugin, built through this same SDK.
 
 ## The whole section
 
@@ -114,7 +124,7 @@ security disclosure, or documentation.
 
 Daemon plugin code runs through `entrypoints.daemon` or, in the development loop, `entrypoints.development`. React Native plugin UI runs as trusted code in a supported client realm. Packaged hosted web availability is per host: each host reports the one frame adapter it can construct, or a typed reason when it cannot, so the surface is available on some hosts and unavailable on others — see [Hosted web UI](/plugins/ui/hosted-web#build-and-runtime-availability). Declarative UI is rendered by the host. Installation is a whole-package trust decision across these surfaces.
 
-## Related docs
+## Related
 
 - [Runtime architecture](/development/architecture/runtime)
 - [Happier tools and actions](/extending/happier-tools)

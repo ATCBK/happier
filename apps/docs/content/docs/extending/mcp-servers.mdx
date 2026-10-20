@@ -21,6 +21,8 @@ Open **Settings → MCP servers**, then use **+**. The development add flow offe
 
 Manual configuration supports a **Local command** (`stdio`), **Remote HTTP** (Streamable HTTP), or **Remote SSE**. A local command has arguments, environment values and an optional working directory. Remote configuration has a URL and optional headers. Per-machine differences can override configuration without changing which places enable the server.
 
+To adjust a copy, choose **Duplicate** from a saved server's menu. Happier opens the new server with a unique name and the same configuration. Its reach starts at Everywhere, and an OAuth server needs its own sign-in.
+
 ### Paste a config
 
 Paste a supported host JSON snippet or install link. Happier parses the definitions and asks you to supply values such as API keys and environment variables before adding them. Imported definitions use the same catalog and controls as a manually added server.
@@ -113,6 +115,7 @@ The catalog, rules, sign-in and tool controls use the same [host Actions](/plugi
 
 ```bash
 happier mcp servers list
+happier mcp servers duplicate docs
 happier mcp servers add docs --transport http --url https://mcp.example.com
 happier mcp servers test docs --machine <machine-id>
 happier mcp servers sign-in docs

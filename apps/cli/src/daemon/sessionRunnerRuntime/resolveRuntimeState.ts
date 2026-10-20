@@ -4,6 +4,7 @@ import type { SessionRunnerDaemonEntrypointSourceV1 } from '@happier-dev/protoco
 import {
   isGenerationAttestedComparableId,
   resolveSessionRunnerEntrypointIdentityFromProcessCommand,
+  readTrackedSessionRunnerProcessCommand,
 } from './resolveRunnerEntrypointIdentity';
 import { readSessionRunnerStartingModeFromProcessCommand } from './readSessionRunnerStartingMode';
 import { resolveSessionRunnerRestartEligibility } from './resolveRestartEligibility';
@@ -16,6 +17,19 @@ import type {
 
 function normalizeString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+export type SessionRunnerActivityRefusal = Readonly<{
+  reasonCode: SessionRunnerRestartDisabledReason;
+  diagnostics?: Record<string, unknown>;
+}>;
+
+export function resolveTrackedSessionRunnerActivity(tracked: TrackedSession | null | undefined): SessionRunnerActivityRefusal | null {
+  const turnId = normalizeString(tracked?.activeTurnId)
+    || normalizeString(tracked?.reattachedInterruptedTurnId);
+  return turnId ? { reasonCode: 'turn_in_progress', diagnostics: {
+    busySource: normalizeString(tracked?.activeTurnId) ? 'foreground_turn' : 'interrupted_foreground_turn', turnId,
+  } } : null;
 }
 
 function readStartedBy(value: unknown): 'daemon' | 'local' | 'unknown' {
@@ -34,21 +48,6 @@ function readDaemonEntrypointSource(
 
 function resolveDisabledReason(tracked: TrackedSession | null): SessionRunnerRestartDisabledReason | null {
   return resolveSessionRunnerRestartEligibility(tracked).disabledReason;
-}
-
-function resolveIdentityDisabledReason(input: Readonly<{
-  runnerIdentity: SessionRunnerEntrypointIdentity;
-  currentIdentity: SessionRunnerEntrypointIdentity;
-}>): SessionRunnerRestartDisabledReason | null {
-  if (input.currentIdentity.status !== 'known') return 'current_entrypoint_unknown';
-  if (input.runnerIdentity.status !== 'known') return 'runner_entrypoint_unknown';
-  if (
-    input.runnerIdentity.comparableId === input.currentIdentity.comparableId
-    && !isGenerationAttestedComparableId(input.runnerIdentity.comparableId)
-  ) {
-    return 'runner_generation_unattested';
-  }
-  return null;
 }
 
 function resolveVersionState(input: Readonly<{
@@ -87,12 +86,13 @@ export function resolveSessionRunnerRuntimeState(params: Readonly<{
 }>): SessionRunnerRuntimeState {
   const tracked = params.tracked ?? null;
   const sessionId = normalizeString(params.sessionId) || normalizeString(tracked?.happySessionId);
+  const runnerCommand = tracked ? readTrackedSessionRunnerProcessCommand(tracked) : undefined;
   const runnerIdentity = tracked
-    ? resolveSessionRunnerEntrypointIdentityFromProcessCommand(tracked.processCommand)
+    ? resolveSessionRunnerEntrypointIdentityFromProcessCommand(runnerCommand)
     : { status: 'unknown', source: 'unknown', reason: 'empty_command' } satisfies SessionRunnerEntrypointIdentity;
   const disabledReason =
     resolveDisabledReason(tracked) ??
-    resolveIdentityDisabledReason({ runnerIdentity, currentIdentity: params.currentIdentity }) ??
+    (params.currentIdentity.status !== 'known' ? 'current_entrypoint_unknown' : null) ??
     params.agentRuntimeRestartUnavailableReason ??
     (sessionId ? params.resolveActivityDisabledReason?.(sessionId) ?? null : null);
   const versionState = params.agentRuntimeVersionState === 'unknown'
@@ -121,7 +121,7 @@ export function resolveSessionRunnerRuntimeState(params: Readonly<{
       processCommandHash: normalizeString(tracked?.processCommandHash) || null,
       entrypointSource: runnerIdentity.status === 'known' ? runnerIdentity.source : 'unknown',
       startedBy: readStartedBy(tracked?.startedBy),
-      startingMode: readSessionRunnerStartingModeFromProcessCommand(tracked?.processCommand),
+      startingMode: readSessionRunnerStartingModeFromProcessCommand(runnerCommand),
     },
     daemon: {
       cliVersion: params.currentIdentity.status === 'known'

@@ -1,3 +1,5 @@
+import { lazyZodSchema } from '@happier-dev/protocol/lazyZodSchema';
+import * as z from 'zod/mini';
 import Fastify from 'fastify';
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -1141,7 +1143,7 @@ fs.writeFileSync(path.join(process.env.UV_TOOL_BIN_DIR,'fast-agent-acp'),'#!/bin
             expect(envelope).toMatchObject({ ok: true });
             if (!envelope || typeof envelope !== 'object' || !('data' in envelope)) throw new Error('Expected a CLI success envelope');
             // The shared CLI success presenter removes the inner domain `ok` bit.
-            return SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.create'].omit({ ok: true }).parse(envelope.data);
+            return lazyZodSchema(() => z.omit(SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.create'], { ok: true })).parse(envelope.data);
         };
         try {
             await mkdir(join(directory, 'scripts'));

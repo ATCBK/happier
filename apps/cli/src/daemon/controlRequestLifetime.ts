@@ -10,11 +10,11 @@ export function createDaemonControlRequestLifetime(request: FastifyRequest, repl
   const signal = controller.signal;
   const abort = () => controller.abort(new Error('Daemon control request ended'));
   const abortIfResponseDidNotFinish = () => {
-    if (!reply.raw.writableEnded) abort();
+    if (!reply.raw.writableFinished) abort();
   };
   request.raw.once('aborted', abort);
   reply.raw.once('close', abortIfResponseDidNotFinish);
-  if (request.raw.aborted || (reply.raw.destroyed && !reply.raw.writableEnded)) abort();
+  if (request.raw.aborted || (reply.raw.destroyed && !reply.raw.writableFinished)) abort();
   return {
     signal,
     // Shared policy refreshes must continue for other callers. Stop this waiter

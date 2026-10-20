@@ -24,7 +24,7 @@ import java.util.concurrent.Executors
  * loaded. Process liveness is deliberately not used as a proxy for handler
  * availability.
  *
- * Recognized Activity and offline Machine alerts are presented (by the app process when it accepts
+ * Recognized Activity and visible Machine alerts are presented (by the app process when it accepts
  * the handoff, otherwise by the isolated fallback), and the Home's content-free
  * `session_changed` wake only runs the app process's registered wake task. A
  * wake has nothing to present, so it carries no fallback.

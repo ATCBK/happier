@@ -138,6 +138,18 @@ function exactOpaqueCodeUnits(maximum: number): string {
     return "external::/%?=+#[]@!$&'()*+,;🙂".padEnd(maximum, 'x');
 }
 
+it('admits bounded source diagnostics on a truncated transcript page without accepting extra diagnostic fields', async () => {
+    const diagnostic = { code: 'external_sessions_source_identity_changed', severity: 'required', count: 1, positions: [] };
+    const wrapped = createWrapper({ contribution: contributionWith(() => ({ ok: true,
+        value: { items: [], nextCursor: null, truncated: true, diagnostics: [diagnostic] } })) });
+    await expect(wrapped.pageTranscript(requestFor('pageTranscript'))).resolves.toMatchObject({
+        ok: true, value: { truncated: true, diagnostics: [diagnostic] },
+    });
+    const rejected = createWrapper({ contribution: contributionWith(() => ({ ok: true,
+        value: { items: [], nextCursor: null, diagnostics: [{ ...diagnostic, privatePath: '/private' }] } })) });
+    await expect(rejected.pageTranscript(requestFor('pageTranscript'))).resolves.toMatchObject({ ok: false, code: 'agent_error' });
+});
+
 function contributionWith(
     implementation: (method: MethodName, request: ContributionRequest) => AgentExternalSessionsResult<unknown> | Promise<AgentExternalSessionsResult<unknown>>,
 ): AgentExternalSessionsContribution {
@@ -196,6 +208,17 @@ function createWrapper(params?: Readonly<{
 }
 
 describe('bounded Agent External Sessions invocation', () => {
+    it.each([
+        [{ items: {}, nextCursor: null }, 'transcript_page_envelope'],
+        [{ items: [{ id: 'bad', createdAtMs: 0, raw: {} }], nextCursor: null }, 'transcript_page_item'],
+        [{ items: [], nextCursor: null, hasMore: true }, 'transcript_page_continuation'],
+        [{ items: [], nextCursor: null, diagnostics: [{ code: 'bad', severity: 'other' }] }, 'transcript_page_diagnostics'],
+    ] as const)('names the rejecting strict transcript-page branch', async (value, reason) => {
+        const wrapped = createWrapper({ contribution: contributionWith(() => ({ ok: true, value })) });
+        await expect(wrapped.pageTranscript(requestFor('pageTranscript'))).resolves.toMatchObject({
+            ok: false, code: 'agent_error', message: `external_sessions_${reason}`,
+        });
+    });
     it('admits source-wide accounting through the existing services and rejects transcript data', async () => {
         const observations = [{ nativeSessionId: 'native-1', observedAt: 10,
             observation: { provider: 'fixture', source: 'native', scope: 'turn_delta' as const,
@@ -220,6 +243,68 @@ describe('bounded Agent External Sessions invocation', () => {
             readAccounting: async () => ({ ok: true, value: { outcome: 'advanced', observations: [], nextCursor: 'next', coverage: { complete: true }, transcript: 'private text' } }),
         } });
         await expect(malformed.readAccounting!({ source, signal: new AbortController().signal })).resolves.toMatchObject({ ok: false, code: 'agent_error' });
+    });
+
+    it('retains an operation exception class without its private message', async () => {
+        const wrapped = createWrapper({ contribution: contributionWith(() => {
+            throw new TypeError('/private/native-file: transcript-secret');
+        }) });
+        await expect(wrapped.listCandidates(requestFor('listCandidates'))).resolves.toEqual({
+            ok: false, code: 'agent_error', retryable: false,
+            message: 'external_sessions_operation_type_error',
+        });
+    });
+
+    it('explains cursor admission failure without disclosing the native cursor', async () => {
+        const wrapped = createWrapper({ contribution: contributionWith(method => method === 'pageTranscript'
+            ? { ok: true, value: { items: [], nextCursor: 'private-native-state' + 'x'.repeat(
+                EXTERNAL_SESSIONS_INVOCATION_POLICY.pageTranscript.maxSerializedBytes,
+            ) } }
+            : successFor(method)) });
+        await expect(wrapped.pageTranscript(requestFor('pageTranscript'))).resolves.toEqual({
+            ok: false, code: 'agent_error', retryable: false,
+            message: 'external_sessions_transcript_page_byte_budget',
+        });
+    });
+
+    it('round-trips a candidate continuation larger than the transcript cursor limit within its reply budget', async () => {
+        const cursor = 'native-discovery-facts'.repeat(300);
+        const seen: string[] = [];
+        const wrapped = createWrapper({ contribution: contributionWith((method, request) => {
+            if (method !== 'listCandidates') return successFor(method);
+            const inputCursor = 'cursor' in request ? request.cursor : undefined;
+            if (typeof inputCursor === 'string') seen.push(inputCursor);
+            return { ok: true, value: { candidates: [], nextCursor: inputCursor ? null : cursor } };
+        }) });
+        const first = await wrapped.listCandidates(requestFor('listCandidates'));
+        expect(first).toMatchObject({ ok: true, value: { nextCursor: expect.stringMatching(/^happier_external_cursor_v1:/) } });
+        if (!first.ok || !first.value.nextCursor) throw new Error('Expected a resumable candidate page');
+        expect(JSON.stringify(first).length).toBeLessThan(EXTERNAL_SESSIONS_INVOCATION_POLICY.listCandidates.maxSerializedBytes);
+        await expect(wrapped.listCandidates({ ...requestFor('listCandidates'), cursor: first.value.nextCursor }))
+            .resolves.toMatchObject({ ok: true, value: { candidates: [], nextCursor: null } });
+        expect(seen).toEqual([cursor]);
+        const bounded = createWrapper({ contribution: contributionWith(() => ({ ok: true, value: { candidates: [], nextCursor: cursor } })) });
+        const bytes = new TextEncoder().encode(JSON.stringify(first)).byteLength;
+        await expect(bounded.listCandidates({ ...requestFor('listCandidates'), maxSerializedBytes: bytes }))
+            .resolves.toEqual(first);
+        await expect(bounded.listCandidates({ ...requestFor('listCandidates'), maxSerializedBytes: bytes - 1 }))
+            .resolves.toMatchObject({ ok: false, code: 'agent_error', message: 'external_sessions_result_byte_budget' });
+        await expect(wrapped.listCandidates({ ...requestFor('listCandidates'),
+            cursor: 'x'.repeat(EXTERNAL_SESSIONS_INVOCATION_POLICY.listCandidates.maxSerializedBytes + 1) }))
+            .resolves.toMatchObject({ ok: false, code: 'invalid_request' });
+        expect(seen).toEqual([cursor]);
+    });
+
+    it.each([false, true])('preserves caller deadline cancellation before admission=%s', async beforeAdmission => {
+        const caller = new AbortController();
+        const deadline = () => caller.abort(Object.assign(new Error('private timeout detail'), { code: 'RPC_REQUEST_TIMEOUT' }));
+        if (beforeAdmission) deadline();
+        const wrapped = createWrapper({ contribution: contributionWith(method => {
+            deadline();
+            return successFor(method);
+        }) });
+        await expect(wrapped.listCandidates(requestFor('listCandidates', caller.signal)))
+            .resolves.toMatchObject({ ok: false, code: 'timeout', retryable: true });
     });
 
     it('reports older accounting facets unsupported and fences cancelled or retired accounting', async () => {
@@ -291,6 +376,47 @@ describe('bounded Agent External Sessions invocation', () => {
         await expect(wrapped.pageTranscript({ ...requestFor('pageTranscript'), maxSerializedBytes: 1_048_576 })).resolves.toMatchObject({ ok: true, value: { items } });
     });
 
+    it.each(['pageTranscript', 'readAfterTranscript'] as const)(
+        'repages %s within the caller budget after qualifying native cursors without losing rows', async (method) => {
+            const maxSerializedBytes = 2_048;
+            const wrapped = createWrapper({ contribution: contributionWith((_method, request) => {
+                const cursor = 'cursor' in request ? request.cursor : undefined;
+                const start = cursor ? Number(cursor.split(':')[0]) : 0;
+                const rows: unknown[] = [];
+                const resultFor = (items: unknown[]) => {
+                    const next = start + items.length;
+                    const hasMore = next < 30;
+                    const nextCursor = `${next}:${'x'.repeat(100)}`;
+                    return { ok: true, value: method === 'pageTranscript'
+                        ? { items, nextCursor: hasMore ? nextCursor : null, tailCursor: 'native-tail', hasMore }
+                        : { outcome: 'advanced', items, nextCursor, boundary: `item-${next}`, hasMore } };
+                };
+                for (let index = start; index < 30; index += 1) {
+                    const row = { id: `item-${index}`, createdAtMs: 1, raw: { role: 'user', content: { type: 'text', text: '🙂'.repeat(30) } } };
+                    if (Buffer.byteLength(JSON.stringify(resultFor([...rows, row]))) > request.maxSerializedBytes!) break;
+                    rows.push(row);
+                }
+                return resultFor(rows) as AgentExternalSessionsResult<unknown>;
+            }) });
+            const ids: string[] = [];
+            let cursor: string | undefined = method === 'readAfterTranscript' ? '0:start' : undefined;
+            do {
+                const result = method === 'pageTranscript'
+                    ? await wrapped.pageTranscript({ ...requestFor(method), maxSerializedBytes, cursor })
+                    : await wrapped.readAfterTranscript({ ...requestFor(method), maxSerializedBytes, cursor: cursor! });
+                expect(result).toMatchObject({ ok: true });
+                expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(maxSerializedBytes);
+                if (!result.ok) throw new Error('Expected a bounded page');
+                const value = result.value;
+                const rows = 'items' in value ? value.items : [];
+                expect(rows.length).toBeGreaterThan(0);
+                ids.push(...rows.map(row => row.id));
+                cursor = 'hasMore' in value && value.hasMore === false ? undefined : 'nextCursor' in value ? value.nextCursor ?? undefined : undefined;
+            } while (cursor && ids.length <= 30);
+            expect(ids).toEqual(Array.from({ length: 30 }, (_, index) => `item-${index}`));
+        },
+    );
+
     it('runs packaged ripgrep on the source file set and cancels it with the invocation', async () => {
         const started = deferred<AbortSignal>();
         const run = vi.spyOn(packagedRipgrep, 'run').mockImplementation(async (_args, options) => {
@@ -312,8 +438,8 @@ describe('bounded Agent External Sessions invocation', () => {
                 expect(result.ok).toBe(true);
                 throw new Error('Contribution settled before packaged ripgrep started');
             })()]);
-            expect(run.mock.calls[0]?.[0]).toEqual(['--files-with-matches', '--fixed-strings', '--', 'body phrase', '/source/session.jsonl']);
-            expect(run.mock.calls[0]?.[1]).toMatchObject({ maxStdoutBytes: EXTERNAL_SESSIONS_INVOCATION_POLICY.listCandidates.maxSerializedBytes, terminateOnStdoutLimit: true });
+            expect(run.mock.calls[0]?.[0]).toEqual(['--files-with-matches', '--fixed-strings', '--', 'body phrase']);
+            expect(run.mock.calls[0]?.[1]).toMatchObject({ paths: ['/source/session.jsonl'], maxStdoutBytes: EXTERNAL_SESSIONS_INVOCATION_POLICY.listCandidates.maxSerializedBytes, terminateOnStdoutLimit: true });
             caller.abort();
             await expect(pending).resolves.toMatchObject({ ok: false, code: 'cancelled' });
             expect(processSignal.aborted).toBe(true);
@@ -579,7 +705,7 @@ describe('bounded Agent External Sessions invocation', () => {
         await expect(wrapped.listCandidates(requestFor('listCandidates'))).resolves.toEqual({
             ok: false,
             code: 'agent_error',
-            retryable: false,
+            retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
         });
     });
 
@@ -912,7 +1038,7 @@ describe('bounded Agent External Sessions invocation', () => {
         await expect(invoke(wrapped, method)).resolves.toEqual({
             ok: false,
             code: 'agent_error',
-            retryable: false,
+            retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
         });
     });
 
@@ -939,7 +1065,7 @@ describe('bounded Agent External Sessions invocation', () => {
         await expect(rejected.readAfterTranscript(requestFor('readAfterTranscript'))).resolves.toEqual({
             ok: false,
             code: 'agent_error',
-            retryable: false,
+            retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
         });
     });
 
@@ -960,7 +1086,7 @@ describe('bounded Agent External Sessions invocation', () => {
             await expect(rejected.pageTranscript(requestFor('pageTranscript'))).resolves.toEqual({
                 ok: false,
                 code: 'agent_error',
-                retryable: false,
+                retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
             });
         }
     });
@@ -1017,7 +1143,7 @@ describe('bounded Agent External Sessions invocation', () => {
             await expect(call(`${exact}x`)).resolves.toEqual({
                 ok: false,
                 code: 'agent_error',
-                retryable: false,
+                retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
             });
         },
     );
@@ -1096,7 +1222,7 @@ describe('bounded Agent External Sessions invocation', () => {
             await expect(call(`${exact}x`)).resolves.toEqual({
                 ok: false,
                 code: 'agent_error',
-                retryable: false,
+                retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
             });
         },
     );
@@ -1110,7 +1236,7 @@ describe('bounded Agent External Sessions invocation', () => {
         'accepts the exact %s item %s code-unit bound and rejects first-over',
         async (method, field) => {
             const exact = exactOpaqueCodeUnits(EXTERNAL_SESSIONS_INVOCATION_POLICY.idMaxCodeUnits);
-            const call = async (value: string) => {
+            const call = async (value: string | null) => {
                 const item = {
                     id: 'item-1',
                     createdAtMs: 1,
@@ -1143,8 +1269,11 @@ describe('bounded Agent External Sessions invocation', () => {
             await expect(call(`${exact}x`)).resolves.toEqual({
                 ok: false,
                 code: 'agent_error',
-                retryable: false,
+                retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
             });
+            await expect(call(null)).resolves.toMatchObject(field === 'localId'
+                ? { ok: true, value: { items: [{ localId: null }] } }
+                : { ok: false, code: 'agent_error' });
         },
     );
 
@@ -1193,12 +1322,12 @@ describe('bounded Agent External Sessions invocation', () => {
             await expect(call(`${sidechainId}s`)).resolves.toEqual({
                 ok: false,
                 code: 'agent_error',
-                retryable: false,
+                retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
             });
             await expect(call('')).resolves.toEqual({
                 ok: false,
                 code: 'agent_error',
-                retryable: false,
+                retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
             });
         },
     );
@@ -1329,7 +1458,7 @@ describe('bounded Agent External Sessions invocation', () => {
             )).resolves.toEqual({
                 ok: false,
                 code: 'agent_error',
-                retryable: false,
+                retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
             });
         });
 
@@ -1347,12 +1476,12 @@ describe('bounded Agent External Sessions invocation', () => {
                 await expect(callWithRaw('pageTranscript', raw)).resolves.toEqual({
                     ok: false,
                     code: 'agent_error',
-                    retryable: false,
+                    retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
                 });
                 await expect(callWithRaw('readAfterTranscript', raw)).resolves.toEqual({
                     ok: false,
                     code: 'agent_error',
-                    retryable: false,
+                    retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
                 });
             },
         );
@@ -1381,7 +1510,7 @@ describe('bounded Agent External Sessions invocation', () => {
             )).resolves.toEqual({
                 ok: false,
                 code: 'agent_error',
-                retryable: false,
+                retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
             });
         });
 
@@ -1409,7 +1538,7 @@ describe('bounded Agent External Sessions invocation', () => {
             )).resolves.toEqual({
                 ok: false,
                 code: 'agent_error',
-                retryable: false,
+                retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
             });
         });
 
@@ -1423,7 +1552,7 @@ describe('bounded Agent External Sessions invocation', () => {
             })).resolves.toEqual({
                 ok: false,
                 code: 'agent_error',
-                retryable: false,
+                retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
             });
         });
 
@@ -1480,7 +1609,7 @@ describe('bounded Agent External Sessions invocation', () => {
                 await expect(callWithRaw('pageTranscript', raw)).resolves.toEqual({
                     ok: false,
                     code: 'agent_error',
-                    retryable: false,
+                    retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
                 });
             }
         });
@@ -1516,7 +1645,7 @@ describe('bounded Agent External Sessions invocation', () => {
             await expect(call(`${exact}x`)).resolves.toEqual({
                 ok: false,
                 code: 'agent_error',
-                retryable: false,
+                retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
             });
         },
     );
@@ -1578,26 +1707,24 @@ describe('bounded Agent External Sessions invocation', () => {
         await expect(call(`${exact}x`)).resolves.toEqual({
             ok: false,
             code: 'agent_error',
-            retryable: false,
+            retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
         });
     });
 
     it.each([
-        ['listCandidates', 'nextCursor'],
         ['pageTranscript', 'nextCursor'],
         ['pageTranscript', 'tailCursor'],
         ['readAfterTranscript', 'nextCursor'],
     ] as const)(
-        'accepts an exact native %s %s and rejects first-over',
+        'admits semantic %s %s cursors within the whole qualified response budget',
         async (method, field) => {
-            const exact = exactOpaqueCodeUnits(EXTERNAL_SESSIONS_INVOCATION_POLICY.nativeCursorMaxCodeUnits);
+            const cursor = 'native-semantic-facts'.repeat(30_000);
+            const maxSerializedBytes = EXTERNAL_SESSIONS_INVOCATION_POLICY[method].maxSerializedBytes * 2;
             const call = async (cursor: string) => {
                 const wrapped = createWrapper({
                     contribution: contributionWith(() => ({
                         ok: true,
-                        value: method === 'listCandidates'
-                            ? { candidates: [], nextCursor: cursor }
-                            : method === 'pageTranscript'
+                        value: method === 'pageTranscript'
                                 ? { items: [], nextCursor: null, [field]: cursor }
                                 : {
                                     outcome: 'advanced',
@@ -1608,25 +1735,38 @@ describe('bounded Agent External Sessions invocation', () => {
                                 },
                     })),
                 });
-                return await invoke(wrapped, method);
+                return method === 'pageTranscript'
+                    ? await wrapped.pageTranscript({ ...requestFor(method), maxSerializedBytes })
+                    : await wrapped.readAfterTranscript({ ...requestFor(method), maxSerializedBytes });
             };
 
-            await expect(call(exact)).resolves.toMatchObject({
+            const first = await call(cursor);
+            expect(first).toMatchObject({
                 ok: true,
                 value: { [field]: expect.stringMatching(/^happier_external_cursor_v1:/) },
             });
-            await expect(call(`${exact}x`)).resolves.toEqual({
-                ok: false,
-                code: 'agent_error',
-                retryable: false,
-            });
+            const bytes = Buffer.byteLength(JSON.stringify(first), 'utf8');
+            // Exercise the actual resource boundary, including qualification
+            // overhead, rather than a second arbitrary native-cursor ceiling.
+            const bounded = createWrapper({ contribution: contributionWith(() => ({ ok: true,
+                value: method === 'pageTranscript' ? { items: [], nextCursor: null, [field]: cursor }
+                    : { outcome: 'advanced', hasMore: false,
+                        items: [{ id: 'item-1', createdAtMs: 1, raw: canonicalTranscriptRaw }], nextCursor: cursor, boundary: 'item-1' },
+            })) });
+            const withBytes = (maxSerializedBytes: number) => method === 'pageTranscript'
+                ? bounded.pageTranscript({ ...requestFor(method), maxSerializedBytes })
+                : bounded.readAfterTranscript({ ...requestFor(method), maxSerializedBytes });
+            await expect(withBytes(bytes)).resolves.toEqual(first);
+            await expect(withBytes(bytes - 1)).resolves.toMatchObject({ ok: false, code: 'agent_error',
+                message: 'external_sessions_transcript_page_byte_budget' });
         },
     );
 
-    it.each(['listCandidates', 'pageTranscript', 'readAfterTranscript'] as const)(
-        'passes an exact native %s cursor through opaquely and rejects first-over before leaf admission',
+    it.each(['pageTranscript', 'readAfterTranscript'] as const)(
+        'uses the %s response resource budget for coarse opaque input admission',
         async (method) => {
-            const exact = exactOpaqueCodeUnits(EXTERNAL_SESSIONS_INVOCATION_POLICY.nativeCursorMaxCodeUnits);
+            const maxSerializedBytes = EXTERNAL_SESSIONS_INVOCATION_POLICY[method].maxSerializedBytes * 2;
+            const exact = exactOpaqueCodeUnits(maxSerializedBytes);
             const observed = vi.fn();
             const wrapped = createWrapper({
                 contribution: contributionWith((calledMethod, request) => {
@@ -1634,11 +1774,9 @@ describe('bounded Agent External Sessions invocation', () => {
                     return successFor(calledMethod);
                 }),
             });
-            const call = async (cursor: string) => method === 'listCandidates'
-                ? await wrapped.listCandidates({ ...requestFor('listCandidates'), cursor })
-                : method === 'pageTranscript'
-                    ? await wrapped.pageTranscript({ ...requestFor('pageTranscript'), cursor })
-                    : await wrapped.readAfterTranscript({ ...requestFor('readAfterTranscript'), cursor });
+            const call = async (cursor: string) => method === 'pageTranscript'
+                    ? await wrapped.pageTranscript({ ...requestFor('pageTranscript'), cursor, maxSerializedBytes })
+                    : await wrapped.readAfterTranscript({ ...requestFor('readAfterTranscript'), cursor, maxSerializedBytes });
 
             await expect(call(exact)).resolves.toMatchObject({ ok: true });
             expect(observed).toHaveBeenCalledWith(method, expect.objectContaining({ cursor: exact }));
@@ -1682,7 +1820,7 @@ describe('bounded Agent External Sessions invocation', () => {
         await expect(call({ items: [], nextCursor: null })).resolves.toEqual({
             ok: false,
             code: 'agent_error',
-            retryable: false,
+            retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
         });
         await expect(call({ outcome: 'already_current' })).resolves.toEqual({
             ok: true,
@@ -1697,7 +1835,7 @@ describe('bounded Agent External Sessions invocation', () => {
         })).resolves.toEqual({
             ok: false,
             code: 'agent_error',
-            retryable: false,
+            retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
         });
         await expect(call({
             outcome: 'advanced',
@@ -1730,7 +1868,7 @@ describe('bounded Agent External Sessions invocation', () => {
         })).resolves.toEqual({
             ok: false,
             code: 'agent_error',
-            retryable: false,
+            retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
         });
     });
 
@@ -1758,7 +1896,7 @@ describe('bounded Agent External Sessions invocation', () => {
             await expect(wrapped.pageTranscript(requestFor('pageTranscript'))).resolves.toEqual({
                 ok: false,
                 code: 'agent_error',
-                retryable: false,
+                retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
             });
             expect(pageTranscript).toHaveBeenCalledOnce();
         },
@@ -1794,7 +1932,7 @@ describe('bounded Agent External Sessions invocation', () => {
         })).resolves.toEqual({
             ok: false,
             code: 'agent_error',
-            retryable: false,
+            retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
         });
     });
 
@@ -1834,7 +1972,7 @@ describe('bounded Agent External Sessions invocation', () => {
             })),
         });
         await expect(returnedUntrimmedKind.resolveSource(requestFor('resolveSource')))
-            .resolves.toEqual({ ok: false, code: 'agent_error', retryable: false });
+            .resolves.toEqual({ ok: false, code: 'agent_error', retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u), });
     });
 
     it('counts strict failure envelopes and rejects oversized source input before leaf admission', async () => {
@@ -1849,7 +1987,7 @@ describe('bounded Agent External Sessions invocation', () => {
         await expect(failure.resolveSource({
             ...requestFor('resolveSource'),
             maxSerializedBytes: 64,
-        })).resolves.toEqual({ ok: false, code: 'agent_error', retryable: false });
+        })).resolves.toEqual({ ok: false, code: 'agent_error', retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u), });
 
         const called = vi.fn();
         const oversizedSource = createWrapper({
@@ -1875,7 +2013,7 @@ describe('bounded Agent External Sessions invocation', () => {
         await expect(invoke(wrapped, method)).resolves.toEqual({
             ok: false,
             code: 'agent_error',
-            retryable: false,
+            retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
         });
     });
 
@@ -1892,7 +2030,7 @@ describe('bounded Agent External Sessions invocation', () => {
             await expect(invoke(wrapped, method)).resolves.toEqual({
                 ok: false,
                 code: 'agent_error',
-                retryable: false,
+                retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
             });
         },
     );
@@ -1973,7 +2111,7 @@ describe('bounded Agent External Sessions invocation', () => {
             await expect(wrapped.resolveSource(requestFor('resolveSource'))).resolves.toEqual({
                 ok: false,
                 code: 'agent_error',
-                retryable: false,
+                retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
             });
         }
 
@@ -1987,7 +2125,7 @@ describe('bounded Agent External Sessions invocation', () => {
         await expect(wrapped.resolveSource(requestFor('resolveSource'))).resolves.toEqual({
             ok: false,
             code: 'agent_error',
-            retryable: false,
+            retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
         });
     });
 
@@ -2019,7 +2157,7 @@ describe('bounded Agent External Sessions invocation', () => {
             await expect(invoke(invalid, method)).resolves.toEqual({
                 ok: false,
                 code: 'agent_error',
-                retryable: false,
+                retryable: false, message: expect.stringMatching(/^external_sessions_[a-z_]+$/u),
             });
         },
     );
@@ -2040,11 +2178,13 @@ describe('bounded Agent External Sessions invocation', () => {
             ok: false,
             code: 'agent_error',
             retryable: false,
+            message: 'external_sessions_operation_rejected',
         });
         await expect(asyncFailure.resolveSource(requestFor('resolveSource'))).resolves.toEqual({
             ok: false,
             code: 'agent_error',
             retryable: false,
+            message: 'external_sessions_operation_rejected',
         });
     });
 
@@ -2128,7 +2268,7 @@ describe('bounded Agent External Sessions invocation', () => {
         })).resolves.toEqual({ ok: false, code: 'invalid_request', retryable: false });
         await expect(wrapped.listCandidates({
             ...requestFor('listCandidates'),
-            cursor: 'x'.repeat(EXTERNAL_SESSIONS_INVOCATION_POLICY.nativeCursorMaxCodeUnits + 1),
+            cursor: 'x'.repeat(EXTERNAL_SESSIONS_INVOCATION_POLICY.listCandidates.maxSerializedBytes + 1),
         })).resolves.toEqual({ ok: false, code: 'invalid_request', retryable: false });
         expect(observed).toHaveBeenCalledTimes(3);
     });

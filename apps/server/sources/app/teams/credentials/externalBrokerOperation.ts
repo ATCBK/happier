@@ -1,17 +1,17 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { TeamCredentialSourceBindingV1Schema } from '@happier-dev/protocol/teams/credentials/sourceBindingV1';
 import { ProviderBrokerRouteGrantPayloadV1Schema } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 
 import type { Tx } from "@/storage/inTx";
 
 /** Private custody on the existing key; neither usage history nor readiness owns its lifetime. */
-const ExternalBrokerOperationSchema = z.object({
+const ExternalBrokerOperationSchema = z.strictObject({
     v: z.literal(1),
-    operationId: z.string().uuid(),
-    brokerMachineId: z.string().min(1),
+    operationId: z.string().check(z.uuid()),
+    brokerMachineId: z.string().check(z.minLength(1)),
     brokerPlacementFingerprint: ProviderBrokerRouteGrantPayloadV1Schema.shape.brokerPlacementFingerprint,
-    sourceBindingJson: z.string().min(1),
-}).strict();
+    sourceBindingJson: z.string().check(z.minLength(1)),
+});
 
 export type ExternalBrokerOperation = z.infer<typeof ExternalBrokerOperationSchema>;
 

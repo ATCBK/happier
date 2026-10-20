@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { ProcessEnvInput } from '@/utils/processEnv/buildScopedProcessEnv';
 import { ExecFileTerminationError } from '@happier-dev/cli-common/process';
 import { hasAgentCliManagedInstallForRuntime, installAgentCliForRuntime, removeAgentCliManagedInstallForRuntime, resolvePlatformFromNodePlatform, type AgentInstallProgressCallback } from '@happier-dev/cli-common/agents';
 import { DaemonAgentInstallStartRequestSchema, DaemonAgentInstallReadRequestSchema, DaemonAgentInstallCancelRequestSchema } from '@happier-dev/protocol/daemon/agent-install-jobs';
@@ -34,7 +35,7 @@ export type AgentInstallJobRegistry = Readonly<{
 export type AgentInstallJobOwnerOptions = Readonly<{
   accountId?: string;
   readRegistry?: () => AgentInstallJobRegistry;
-  env?: NodeJS.ProcessEnv;
+  env?: ProcessEnvInput;
   platform?: NodeJS.Platform;
   arch?: string;
   installerDeps?: Parameters<typeof installAgentCliForRuntime>[0]['deps'];
@@ -64,6 +65,7 @@ function failureCode(code: string): AgentInstallJobFailureCode {
     case 'no-recipe': return 'install_not_available';
     case 'install-not-available': return 'install_not_available';
     case 'download-failed': return 'download_failed';
+    case 'rate-limited': return 'rate_limited';
     case 'verification-failed':
     case 'update-not-verified': return 'verification_failed';
     case 'command-timed-out': return 'timeout';

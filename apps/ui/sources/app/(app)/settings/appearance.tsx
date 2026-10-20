@@ -84,6 +84,8 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
     const panelsSupported = Platform.OS === 'web' || deviceType === 'tablet';
     const [avatarStyle, setAvatarStyle] = useSettingMutable('avatarStyle');
     const [showFlavorIcons, setShowFlavorIcons] = useSettingMutable('showFlavorIcons');
+    const [showChatCodeBlockWrapControls, setShowChatCodeBlockWrapControls] = useSettingMutable('showChatCodeBlockWrapControls');
+    const [wrapChatCodeBlocks, setWrapChatCodeBlocks] = useSettingMutable('wrapChatCodeBlocks');
     const [themePreference] = useLocalSettingMutable('themePreference');
     const [themeProfiles] = useLocalSettingMutable('themeProfiles');
     const [uiFontScale, setUiFontScale] = useLocalSettingMutable('uiFontScale');
@@ -247,7 +249,7 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
         if (!confirmed) return;
         const defaults = resolveAppearanceDefaults();
         // Custom themes are the user's own content; only which theme each mode uses goes back.
-        await applyThemeSelection(defaults.themePreference, clearActiveThemeProfiles(safeThemeProfiles));
+        if (!await applyThemeSelection(defaults.themePreference, clearActiveThemeProfiles(safeThemeProfiles))) return;
         applyLocalSettings(defaults.local);
         applySettings(defaults.account);
     }, [applyLocalSettings, applySettings, applyThemeSelection, safeThemeProfiles]);
@@ -396,6 +398,33 @@ export const WorkspaceRouteBody = React.memo(function AppearanceSettingsScreen()
                     />
                 </SettingAnchor>
             </ItemGroup>
+
+            <SettingSection section={APPEARANCE_SETTINGS.sectionRefs.chatCodeBlocks}>
+                <ItemGroup title={t('settingsAppearance.chatCodeBlocks.title')}>
+                    <SettingRow
+                        setting={APPEARANCE_SETTINGS.settings.showChatCodeBlockWrapControls}
+                        rightElement={
+                            <Switch
+                                testID="settings-appearance-showChatCodeBlockWrapControls-switch"
+                                value={showChatCodeBlockWrapControls}
+                                onValueChange={setShowChatCodeBlockWrapControls}
+                            />
+                        }
+                        showChevron={false}
+                    />
+                    <SettingRow
+                        setting={APPEARANCE_SETTINGS.settings.wrapChatCodeBlocks}
+                        rightElement={
+                            <Switch
+                                testID="settings-appearance-wrapChatCodeBlocks-switch"
+                                value={wrapChatCodeBlocks}
+                                onValueChange={setWrapChatCodeBlocks}
+                            />
+                        }
+                        showChevron={false}
+                    />
+                </ItemGroup>
+            </SettingSection>
 
             {/* Layout. Pane and sidebar settings only exist where panes exist (web and tablet). */}
             {/* The pane rows exist on web and tablets only; on a phone the section answers for them. */}

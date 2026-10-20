@@ -15,6 +15,7 @@ import {
     SourceControlUpdateSection,
     type SourceControlUpdateTheme,
 } from './SourceControlUpdateControls';
+import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 
 export function SourceControlBranchIntegrationSection(props: Readonly<{
     theme: SourceControlUpdateTheme;
@@ -37,10 +38,6 @@ export function SourceControlBranchIntegrationSection(props: Readonly<{
     }, []);
     const latestSnapshotRef = React.useRef(props.snapshot);
     latestSnapshotRef.current = props.snapshot;
-    const latestRootPathRef = React.useRef(props.rootPath);
-    latestRootPathRef.current = props.rootPath;
-    const latestWriteEnabledRef = React.useRef(props.writeEnabled);
-    latestWriteEnabledRef.current = props.writeEnabled;
     const operationState = props.snapshot?.operationState ?? null;
     const capabilities = props.snapshot?.capabilities;
     const hasSourceRef = sourceRef.trim().length > 0;
@@ -82,7 +79,7 @@ export function SourceControlBranchIntegrationSection(props: Readonly<{
     const showFailure = React.useCallback((fallback: string, response: ScmMutationResponse) => {
         // The shared mutation owner reconciles and publishes rich results to the pane's one outcome line.
         // An unstarted operation (for example a held lock) has no log result and still needs feedback here.
-        if (response.outcome || response.success) return;
+        if (response.outcome || response.success || isScmActionNotRun(response)) return;
         Modal.alert(t('common.error'), response.error || fallback);
     }, []);
 
@@ -113,36 +110,6 @@ export function SourceControlBranchIntegrationSection(props: Readonly<{
     const runControl = React.useCallback((kind: 'continue' | 'abort' | 'skip') => {
         void (async () => {
             if (!operationState) return;
-            if (kind === 'abort') {
-                const confirmed = await Modal.confirm(
-                    t('files.sourceControlOperations.update.branchIntegration.abort'),
-                    t('files.sourceControlOperations.update.branchIntegration.operationInProgress', {
-                        operation: operationState.kind,
-                        source: operationState.sourceRef ?? t('status.unknown'),
-                    }),
-                    {
-                        confirmText: t('files.sourceControlOperations.update.branchIntegration.abort'),
-                        cancelText: t('common.cancel'),
-                        destructive: true,
-                    },
-                );
-                if (!confirmed) return;
-
-                const nextSnapshot = latestSnapshotRef.current;
-                const nextOperationState = nextSnapshot?.operationState ?? null;
-                const nextAbortPreflight = evaluateScmOperationPreflight({
-                    intent: 'branch_operation_abort',
-                    scmWriteEnabled: latestWriteEnabledRef.current === true,
-                    sessionPath: latestRootPathRef.current,
-                    snapshot: nextSnapshot,
-                    operation: nextOperationState?.kind ?? null,
-                });
-                if (!nextAbortPreflight.allowed) {
-                    Modal.alert(t('common.error'), nextAbortPreflight.message);
-                    return;
-                }
-                if (!nextOperationState) return;
-            }
             setBusy(true);
             try {
                 const currentOperationState = latestSnapshotRef.current?.operationState ?? operationState;

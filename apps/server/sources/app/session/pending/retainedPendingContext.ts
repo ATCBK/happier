@@ -1,0 +1,25 @@
+import type { CurrentSessionPublisherAuthority } from '@/app/presence/sessionPublisherPresence';
+import { isSessionInputTargetCurrentForPublisherInTx, readStoredSessionInputAdmissionReceipt } from '@/app/session/messages/sessionInputAdmission';
+import type { Tx } from '@/storage/inTx';
+
+/** Claimed information may stay queued while a natural input omits it from context. */
+export async function isRetainedPendingContextForPublisherInTx(
+    tx: Tx,
+    row: Readonly<{
+        status: string;
+        targetExecutionRunId: string | null;
+        deliveryState: string | null;
+        deliveryBlockedReason: string | null;
+        inputAdmissionReceipt: unknown;
+        autonomousExchangeCause: string | null;
+    }>,
+    publisher: CurrentSessionPublisherAuthority,
+): Promise<boolean> {
+    const receipt = readStoredSessionInputAdmissionReceipt(row.inputAdmissionReceipt);
+    return row.status === 'queued'
+        && row.targetExecutionRunId === null
+        && (row.deliveryState === 'delivering' || (row.deliveryState === 'blocked'
+            && row.deliveryBlockedReason === 'delivery_outcome_uncertain'))
+        && (receipt?.followDeliveryV1?.delivery === 'next_turn' || row.autonomousExchangeCause === 'returned_answer')
+        && await isSessionInputTargetCurrentForPublisherInTx(tx, row.inputAdmissionReceipt, publisher);
+}

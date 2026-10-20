@@ -211,8 +211,7 @@ describe('resolveSessionIdOrPrefix', () => {
     }
   });
 
-  it('reports a lookup timeout instead of not-found when a full-id fallback lookup cannot complete', async () => {
-    vi.useFakeTimers();
+  it('preserves caller cancellation while a full-id fallback lookup remains pending', async () => {
     const { reloadConfiguration } = await import('@/configuration');
     const originalServerUrl = process.env.HAPPIER_SERVER_URL;
     const originalWebappUrl = process.env.HAPPIER_WEBAPP_URL;
@@ -228,9 +227,13 @@ describe('resolveSessionIdOrPrefix', () => {
       }
       throw new Error(`unexpected url: ${url}`);
     });
+    const cancellation = new AbortController();
+    let notifyFallbackRequested!: () => void;
+    const fallbackRequested = new Promise<void>(resolve => { notifyFallbackRequested = resolve; });
     mockAxiosPost.mockImplementation(async (_url: string, _body: unknown, config?: { signal?: AbortSignal }) => {
       return await new Promise((_resolve, reject) => {
         config?.signal?.addEventListener('abort', () => reject(new Error('request aborted')), { once: true });
+        notifyFallbackRequested();
       });
     });
 
@@ -242,15 +245,16 @@ describe('resolveSessionIdOrPrefix', () => {
           encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
         },
         idOrPrefix: 'c000000000000000000000000',
+        signal: cancellation.signal,
       });
 
-      await vi.advanceTimersByTimeAsync(25_000);
-
-      await expect(resultPromise).resolves.toEqual({ ok: false, code: 'session_lookup_timeout' });
+      const rejected = expect(resultPromise).rejects.toThrow('request aborted');
+      await fallbackRequested;
+      cancellation.abort();
+      await rejected;
       expect(mockAxiosGet).toHaveBeenCalledOnce();
       expect(mockAxiosPost).toHaveBeenCalledOnce();
     } finally {
-      vi.useRealTimers();
       if (originalServerUrl === undefined) delete process.env.HAPPIER_SERVER_URL;
       else process.env.HAPPIER_SERVER_URL = originalServerUrl;
       if (originalWebappUrl === undefined) delete process.env.HAPPIER_WEBAPP_URL;

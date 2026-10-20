@@ -11,6 +11,21 @@ const names = Object.fromEntries(USAGE_WIDGET_PRESET_IDS.map(id => [id, id])) as
 const surface: WidgetSurfaceRefV1 = { serverId: 'home', accountId: 'account', owner: { kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'overview' } };
 
 describe('Usage host fragment presets', () => {
+    it('admits the Sources inventory above period-scoped Coverage and Unpriced through the shared area owner', async () => {
+        const presets = createUsageWidgetPresets(names).map(preset => WidgetAreaPresetV1Schema.parse(preset));
+        const sources = presets.find(preset => preset.id === 'sources')!;
+        expect(flattenWidgetLayoutWidgetsV1(sources.items).map(row => row.instance.definition)).toEqual([
+            { kind: 'builtin', id: 'usage_sources' }, { kind: 'builtin', id: 'usage_source_coverage' }, { kind: 'builtin', id: 'usage_unpriced' },
+        ]);
+        const port = createWidgetSurfaceArtifactPortV1({ read: async () => null,
+            create: async () => { throw new Error('unexpected_write'); }, update: async () => { throw new Error('unexpected_write'); } },
+            { surface: { ...surface, owner: { kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'sources' } }, presets, isCurrent: () => true });
+        expect((await port.readState()).layout.items).toEqual(sources.items);
+        for (const row of flattenWidgetLayoutWidgetsV1(sources.items).slice(1)) {
+            expect(row.instance.bindings.period).toEqual({ kind: 'context', slot: 'period' });
+            expect(row.instance.bindings.metric).toBeUndefined();
+        }
+    });
     it('initializes legacy Overview presentation without overwriting other host presets', () => {
         const presets = createUsageWidgetPresets(names, { initialMetric: 'cost' }).map(preset => WidgetAreaPresetV1Schema.parse(preset));
         for (const row of flattenWidgetLayoutWidgetsV1(presets.find(preset => preset.id === 'overview')!.items)) {
@@ -43,21 +58,33 @@ describe('Usage host fragment presets', () => {
         const read = await owner.readState();
         expect(read.kind).toBe('missing');
         expect(read.layout.items).toEqual(presets[0]!.items);
-        // One Card · Lines group: the tall daily bars pack left of the period summary and capacity.
+        // One Card · Lines group: the period's figures lead as one band, then the tall daily bars beside capacity.
         const first = read.layout.items[0]!;
         expect(first).toMatchObject({ kind: 'group', width: 'full' });
         expect(first.kind === 'group' ? first.children.slice(0, 3) : []).toMatchObject([
+            { size: 'full', instance: { definition: { id: 'usage_period_summary' } } },
             { size: 'tall', instance: { definition: { id: 'usage_daily' } } },
-            { size: 'medium', instance: { definition: { id: 'usage_period_summary' } } },
             { size: 'medium', instance: { definition: { id: 'usage_capacity' } } }]);
-        // The group packs Overview without a half-empty column: the Projections list beside Efficiency over Rhythm.
-        const children = first.kind === 'group' ? first.children : [];
-        const nameOf = (id: string) => children.find(child => child.instance.id === id)?.instance.definition;
-        const bands = packWidgetGroupBands(resolveWidgetGroupCells('corePage', children.map(child => ({ id: child.instance.id, size: child.size }))), 2);
-        const last = bands[bands.length - 1]!;
-        expect(last.kind).toBe('columns');
-        expect(last.kind === 'columns' ? last.columns.map(column => column.map(cell => nameOf(cell.id)?.kind === 'builtin' ? nameOf(cell.id)!.id : '')) : [])
-            .toEqual([['usage_projections'], ['usage_efficiency', 'usage_rhythm']]);
+        // Overview: the Projections list beside Efficiency over Rhythm, so neither column ends in a half-empty cell.
+        // Costs: the daily cost bars beside Breakdowns over Efficiency, so the chart gets a real plot height (lab d2views-COST 2-up).
+        const bandsOf = (presetId: string) => {
+            const group = presets.find(preset => preset.id === presetId)!.items[0]!;
+            const kids = group.kind === 'group' ? group.children : [];
+            const nameOf = (id: string) => {
+                const definition = kids.find(child => child.instance.id === id)?.instance.definition;
+                return definition?.kind === 'builtin' ? definition.id : '';
+            };
+            return packWidgetGroupBands(resolveWidgetGroupCells('corePage', kids.map(child => ({ id: child.instance.id, size: child.size }))), 2)
+                .map(band => band.kind === 'row' ? [[nameOf(band.cell.id)]] : band.kind === 'columns' ? band.columns.map(column => column.map(cell => nameOf(cell.id))) : []);
+        };
+        // Overview: Daily shares its band with Capacity alone (lab d2views-OV), so the chart's cell is not
+        // held open by a two-widget column beside it.
+        expect(bandsOf('overview').slice(0, 2)).toEqual([[['usage_period_summary']], [['usage_daily'], ['usage_capacity']]]);
+        expect(bandsOf('overview').slice(-1)).toEqual([[['usage_projections'], ['usage_efficiency', 'usage_rhythm']]]);
+        expect(bandsOf('costs')).toEqual([[['usage_cost_facts']], [['usage_daily'], ['usage_breakdowns', 'usage_efficiency']],
+            [['usage_plan_fit']], [['usage_outcomes']]]);
+        // Plans: Capacity, then Projections and Plan fit stack beside the longer Resets list instead of leaving a column empty.
+        expect(bandsOf('plans')).toEqual([[['usage_capacity']], [['usage_projections', 'usage_plan_fit'], ['usage_resets']]]);
     });
 
     it('uses declared Usage inputs for every definition; Home owns values and Project follows only projects', () => {
@@ -66,7 +93,8 @@ describe('Usage host fragment presets', () => {
         const ids = new Set(presets.flatMap(preset => flattenWidgetLayoutWidgetsV1(preset.items).map(row => row.instance.definition.kind === 'builtin' ? row.instance.definition.id : '')));
         expect([...ids].sort()).toEqual(['usage_daily', 'usage_period_summary', 'usage_cost_facts', 'usage_flow', 'usage_efficiency',
             'usage_breakdowns', 'usage_capacity', 'usage_projections', 'usage_resets', 'usage_plan_fit', 'usage_project_ledger', 'usage_session_value',
-            'usage_outcomes', 'usage_coach', 'usage_rhythm', 'usage_parallel', 'usage_human_loop', 'usage_night_shift', 'usage_recap', 'usage_sources'].sort());
+            'usage_outcomes', 'usage_coach', 'usage_rhythm', 'usage_parallel', 'usage_human_loop', 'usage_night_shift', 'usage_recap', 'usage_sources',
+            'usage_source_coverage', 'usage_unpriced'].sort());
         for (const preset of presets) for (const row of flattenWidgetLayoutWidgetsV1(preset.items)) {
             const descriptor = readBuiltinWidgetDescriptorV1(row.instance.definition)!;
             expect(descriptor).not.toBeNull();

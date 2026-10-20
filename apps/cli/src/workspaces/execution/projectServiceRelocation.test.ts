@@ -7,6 +7,9 @@ import { createActionOperationStore } from '@/daemon/actionOperations/actionOper
 import type { PluginProcessHandle, PluginProcessResult } from '@happier-dev/plugin-sdk/exec';
 import { createProjectServiceRelocation, type ProjectServiceRelocationPorts } from './projectServiceRelocation';
 import { assertActionOutputContract } from '@/testkit/actionOutputContract';
+import type { ManagedServiceSnapshot } from '@happier-dev/plugin-sdk/managed-services';
+import { RpcError, RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
+import { ActionOperationGetV1ResponseSchema } from '@happier-dev/protocol/actions/operations/v1';
 
 const declaration = { workspaceRefId: 'old-ref', selection: { kind: 'manifest' as const, name: 'worker' } };
 const oldTarget = { kind: 'managed_service' as const, managedServiceId: 'old-native', machineId: 'old', workspaceId: 'old-ref', cwd: '/old', declaration };
@@ -59,6 +62,7 @@ async function harness(stopStatus: 'stopped' | 'accepted' | 'unsupported' | 'ter
       revision: 1, provenance: 'saved' }),
     stopService: async (_target, signal) => await handle.stop({ signal }),
     revalidateDestination: async () => ({ status: 'admitted' }),
+    reviewDestinationSetup: async () => ({ status: 'admitted' }),
     handoffPrepareBetween: async () => { effects.push('prepare'); return { ok: true, traversed: [] }; },
     startService: async () => { effects.push('start'); return { status: 'succeeded', currentTarget: replacementTarget }; },
   };
@@ -66,6 +70,80 @@ async function harness(stopStatus: 'stopped' | 'accepted' | 'unsupported' | 'ter
 }
 
 describe('confirmed service relocation', () => {
+  it.each(['revalidation', 'preparation'] as const)('retains the typed %s failure in the stopped operation snapshot', async stage => {
+    const h = await harness();
+    const fault = new RpcError('Destination refused Authorization: Bearer synthetic-private-token', RPC_ERROR_CODES.FORBIDDEN);
+    if (stage === 'preparation') h.ports.handoffPrepareBetween = async () => { throw fault; };
+    else h.ports.revalidateDestination = async () => {
+      if (h.handle.snapshot().state === 'stopped') throw fault;
+      return { status: 'admitted' };
+    };
+    const store = createActionOperationStore();
+    const scope = { accountId: 'requester', machineId: 'source' };
+    const runner = createActionOperationRunner({ store, generateOperationId: () => 'diagnostic-move',
+      resolveAction: actionId => ({ actionId, title: 'Move', operation: { version: 1, visibility: 'activity', progress: 'reported', presentation: { onStart: 'activity' } } }) });
+    await runner.observe({ actionId: 'projects.service.relocate', scope, input: h.request,
+      execute: createProjectServiceRelocation(h.ports).bind(undefined, h.request) });
+    const operation = await runner.waitForTerminal(scope, 'diagnostic-move');
+    expect(operation).toMatchObject({ state: 'failed', progress: { phase: stage === 'preparation' ? 'copying' : 'stopped' },
+      error: { errorCode: RPC_ERROR_CODES.FORBIDDEN, error: expect.stringContaining('Destination refused') } });
+    expect(JSON.stringify(operation)).not.toContain('synthetic-private-token');
+    expect(ActionOperationGetV1ResponseSchema.safeParse({ kind: 'found', operation }).success).toBe(true);
+    expect(h.handle.snapshot().state).toBe('stopped');
+    expect(h.effects).not.toContain('start');
+  });
+  it('keeps the incumbent running when the destination refuses admission before Stop', async () => {
+    const h = await harness();
+    h.ports.revalidateDestination = async () => ({ status: 'refused', reasonCode: 'target_unavailable' });
+    await expect(createProjectServiceRelocation(h.ports)(h.request)).resolves.toMatchObject({ ok: false, errorCode: 'target_unavailable' });
+    expect(h.handle.snapshot().state).toBe('running');
+    expect(h.effects).toEqual([]);
+  });
+  it.each(['starting', 'stopping', 'failed'] as const)('refuses a %s native observation before persisting placement or stopping', async state => {
+    const h = await harness();
+    const read = h.ports.readService;
+    // readService is the admitted native IO boundary; the coordinator and supervisor stay real.
+    h.ports.readService = async (input, signal) => {
+      const observed = await read(input, signal);
+      return observed.status === 'resolved' ? { ...observed, snapshot: { ...observed.snapshot, state } } : observed;
+    };
+    h.ports.saveDesiredPlacement = async () => { h.effects.push('save'); return { status: 'unavailable' }; };
+    await expect(createProjectServiceRelocation(h.ports)(h.request)).resolves.toMatchObject({ ok: false, errorCode: 'service_not_running' });
+    expect(h.effects).toEqual([]);
+  });
+
+  it.each(['running', 'detecting', 'healthy', 'unhealthy'] as const)('moves the exact native binding with a %s observation', async state => {
+    const h = await harness();
+    const read = h.ports.readService;
+    h.ports.readService = async (input, signal) => {
+      const observed = await read(input, signal);
+      return observed.status === 'resolved' ? { ...observed, snapshot: { ...observed.snapshot, state } } : observed;
+    };
+    const output = await createProjectServiceRelocation(h.ports)(h.request);
+    expect(output).toMatchObject({ ok: true, result: { status: 'moved', currentTarget: h.newTarget } });
+    expect(h.effects).toEqual(['stop', 'prepare', 'start']);
+    if (!output.ok) throw new Error('Move did not settle');
+    assertActionOutputContract('projects.service.relocate', output.result);
+  });
+
+  it('rechecks running state after placement is saved and before native Stop', async () => {
+    const h = await harness();
+    const read = h.ports.readService;
+    let state: ManagedServiceSnapshot['state'] = 'healthy';
+    h.ports.readService = async (input, signal) => {
+      const observed = await read(input, signal);
+      return observed.status === 'resolved' ? { ...observed, snapshot: { ...observed.snapshot, state } } : observed;
+    };
+    const save = h.ports.saveDesiredPlacement;
+    h.ports.saveDesiredPlacement = async (input, signal) => {
+      const result = await save(input, signal);
+      state = 'stopping';
+      return result;
+    };
+    await expect(createProjectServiceRelocation(h.ports)(h.request)).resolves.toMatchObject({ ok: false, errorCode: 'service_not_running' });
+    expect(h.effects).toEqual([]);
+  });
+
   it.each(['stopped', 'accepted'] as const)('emits the registered relocation result or refusal from real native supervision (%s)', async nativeStop => {
     const h = await harness(nativeStop);
     const output = await createProjectServiceRelocation(h.ports)(h.request);
@@ -163,6 +241,9 @@ describe('confirmed service relocation', () => {
       }
       let phaseBeforeRevalidation: string | undefined;
       ports.revalidateDestination = async () => {
+        // Initial admission precedes Stop; this scenario changes admission only
+        // after the old owner has authoritatively confirmed its stop.
+        if (handle.snapshot().state !== 'stopped') return { status: 'admitted' };
         const progress = store.get(scope, operationId)?.progress;
         phaseBeforeRevalidation = progress?.kind === 'phase' ? progress.phase : undefined;
         if (outcome === 'cancel_during_revalidation') runner.cancel(scope, operationId);
@@ -334,11 +415,11 @@ describe('confirmed service relocation', () => {
   });
   it.each([
     { status: 'succeeded' as const },
-    { status: 'denied' as const, reasonCode: 'plugin_operation_aborted' },
+    { status: 'failed' as const, reasonCode: 'plugin_operation_aborted' },
   ])('retains uncertain exact start custody when the actual starter reports $status without a fresh binding', async outcome => {
     const { effects, ports, request } = await harness();
     // The destination native starter is a Machine IO boundary. Its real public outcome
-    // cannot establish no-launch merely from denied after an effect was dispatched.
+    // cannot establish no-launch from failure after establishment was dispatched.
     ports.startService = async (_input, selected) => {
       expect(selected).toEqual(destination);
       effects.push('start');

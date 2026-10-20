@@ -33,7 +33,6 @@
     "test:local": "vitest run"
   },
   "dependencies": {
-    "@happier-dev/cli-common": "0.0.0",
     "@happier-dev/plugin-sdk": "0.0.0"
   },
   "devDependencies": {

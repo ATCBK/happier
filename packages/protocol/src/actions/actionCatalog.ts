@@ -1,4 +1,6 @@
 import type { ActionId } from './actionIds.js';
+import type { JsonValue } from '../json/strictJsonValue.js';
+import { pluginJsonValuesEqual } from '../plugins/contributions/jsonSchemaValues.js';
 import {
   getActionSpec,
   isActionSpecSurfacedOn,
@@ -20,6 +22,8 @@ import {
   type ActionDefinitionV1,
 } from './actionDefinitionV1.js';
 import { ActionJsonSchemaProjectionError, zodSchemaToJsonSchemaObject, type JsonSchemaObject } from './actionInputJsonSchema.js';
+
+export { readCompleteActionSpecV1 } from './actionSpecSections.js';
 
 export type SerializedActionSpec = ActionDefinitionSummaryV1;
 
@@ -127,6 +131,7 @@ function actionSearchScore(
 
 type ActionCatalogSurfaceParams = Readonly<{
   surface?: keyof ActionSurfaces | null;
+  includeOutputSchema?: boolean;
 }>;
 
 function resolveActionCatalogSurfaceProjection(
@@ -147,7 +152,7 @@ function resolveActionCatalogSurfaceProjection(
 
 /** Optional output metadata must not hide otherwise discoverable Actions. */
 export function projectActionOutputJsonSchema(
-  schema: ActionSpec['outputSchema'],
+  schema: Parameters<typeof zodSchemaToJsonSchemaObject>[0] | undefined,
   options?: Parameters<typeof zodSchemaToJsonSchemaObject>[1],
 ): JsonSchemaObject | undefined {
   if (!schema) return undefined;
@@ -172,8 +177,9 @@ function projectSerializedActionOutput(
   spec: ActionSpec,
   params?: ActionCatalogSurfaceParams,
 ): SerializedActionSpec {
+  if (params?.includeOutputSchema === false) return metadata;
   const projection = resolveActionCatalogSurfaceProjection(spec, params?.surface);
-  const outputSchema = projectActionOutputJsonSchema(projection.outputSchema, { target: 'draft-7' });
+  const outputSchema = projectActionOutputJsonSchema(projection.outputSchema, { target: 'draft-7', reused: 'ref' });
   return { ...metadata, ...(outputSchema ? { outputSchema } : {}) };
 }
 
@@ -199,6 +205,7 @@ function serializeActionSpecMetadata(
     ...(spec.toolExposure ? { toolExposure: spec.toolExposure } : {}),
     ...(spec.prompting ? { prompting: spec.prompting } : {}),
     ...(spec.contextualDefaults ? { contextualDefaults: spec.contextualDefaults } : {}),
+    ...(spec.sessionTarget ? { sessionTarget: spec.sessionTarget } : {}),
     ...(spec.execution ? { execution: spec.execution } : {}),
     ...(spec.sideEffectClass ? { sideEffectClass: spec.sideEffectClass } : {}),
     ...(spec.operation ? { operation: spec.operation } : {}),
@@ -213,7 +220,7 @@ export function actionSpecToActionDefinitionV1(
   return {
     kindVersion: 1,
     ...serializeActionSpec(spec, params),
-    inputSchema: zodSchemaToJsonSchemaObject(projection.inputSchema, { target: 'draft-7' }),
+    inputSchema: zodSchemaToJsonSchemaObject(projection.inputSchema, { target: 'draft-7', reused: 'ref' }),
   };
 }
 
@@ -550,20 +557,21 @@ export function serializeActionFieldOptions(field: ActionInputFieldHint): readon
 
 export function filterResolvedActionOptions(
   options: readonly ResolvedActionOption[],
-  params?: Readonly<{ query?: string | null; limit?: number | null }>,
+  params?: Readonly<{ query?: string | null; limit?: number | null; values?: readonly JsonValue[] | null }>,
 ): readonly ResolvedActionOption[] {
   const query = typeof params?.query === 'string' ? params.query.trim().toLowerCase() : '';
   const limit = typeof params?.limit === 'number' && Number.isFinite(params.limit)
     ? Math.max(1, Math.min(200, Math.floor(params.limit)))
     : null;
 
+  const valued = params?.values ? options.filter(option => params.values!.some(value => pluginJsonValuesEqual(option.value, value))) : options;
   const filtered = query
-    ? options.filter((option) =>
+    ? valued.filter((option) =>
         [actionInputOptionValueSearchText(option.value), option.label, option.description ?? '']
           .join(' ')
           .toLowerCase()
           .includes(query))
-    : [...options];
+    : [...valued];
 
   return limit === null ? filtered : filtered.slice(0, limit);
 }

@@ -36,6 +36,93 @@ const sessionSpawnInput = {
 } as const;
 
 describe('createActionExecutor (durable plugin approval caller provenance)', () => {
+  it.each(['ui', 'cli'] as const)('retains an unsigned %s Settings invocation target independently of Account storage', surface => {
+    const actionId = 'plugins.settings.set' as const;
+    const input = { pluginId: 'happier.agent.claude', localId: 'claudeRemoteAgentSdkEnabled',
+      scope: { kind: 'account' }, target: { kind: 'account' }, value: false, expectedRevision: '45' };
+    const origin = buildApprovalExecutionOriginV1({ actionId, input, targetSessionId: null,
+      context: { surface, authority: surface === 'ui' ? 'present_user' : 'account_automation',
+        serverId: 'profile-1', runtimeAccountId: 'account-1', actionRequestId: 'settings-request',
+        externalActionTarget: { kind: 'machine', machineId: 'machine-1' } },
+    });
+    expect(origin).toMatchObject({ actionId, machineId: 'machine-1', target: { kind: 'machine', machineId: 'machine-1' } });
+    expect(ApprovalExecutionOriginV1Schema.safeParse(origin).success).toBe(true);
+  });
+  it.each(['agent', 'mcp'] as const)('admits %s discussion read-state as a present-user request and replays the exact private cursor', async surface => {
+    let stored: ApprovalRequest | null = null;
+    const executed: Array<{ authority: ActionExecutorContext['authority']; input: unknown }> = [];
+    const executor = createActionExecutor({
+      // Artifact persistence and the Discussion HTTP adapter are the boundaries;
+      // catalog admission, approval routing and replay remain real.
+      approvalsCreate: async ({ request }) => {
+        stored = ApprovalRequestV2Schema.parse(request);
+        return { artifactId: 'discussion-read-approval' };
+      },
+      approvalsGet: async () => stored,
+      approvalsUpdate: async ({ request }) => {
+        stored = ApprovalRequestV2Schema.parse(request);
+        return { ok: true };
+      },
+      isApprovalExecutionOriginCurrent: async () => true,
+      discussionAction: async ({ input, context }) => {
+        executed.push({ authority: context.authority, input });
+        return { v: 1, serverId: 'home-1',
+          cursor: { discussionId: 'discussion-1', lastReadSeq: 7, didChange: true } };
+      },
+    });
+    const input = { discussionId: 'discussion-1', lastReadSeq: 7 };
+    expect(await executor.execute('discussion.read_state.set', input, {
+      surface, authority: 'account_automation', serverId: 'home-1', runtimeAccountId: 'account-1',
+      defaultSessionId: 'session-1', defaultSessionMachineId: 'machine-1', actionRequestId: 'discussion-read-request',
+    })).toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId: 'discussion-read-approval' } });
+    expect(executed).toEqual([]);
+    expect(stored).toMatchObject({ actionId: 'discussion.read_state.set', actionArgs: input });
+    const decision = await executor.execute('approval.request.decide', {
+      artifactId: 'discussion-read-approval', decision: 'approve',
+    }, { surface: 'ui', authority: 'present_user', serverId: 'home-1', runtimeAccountId: 'account-1' });
+    expect(decision, JSON.stringify(decision))
+      .toMatchObject({ ok: true, result: { status: 'executed', execution: { ok: true,
+        result: { cursor: { discussionId: 'discussion-1', lastReadSeq: 7, didChange: true } } } } });
+    expect(executed).toEqual([{ authority: 'present_user', input }]);
+  });
+
+  it.each(['api', 'cli', 'agent'] as const)('retains %s invocation custody for Account Plugin Settings without changing the storage target', surface => {
+    const actionId = 'plugins.settings.set' as const;
+    const input = { pluginId: 'happier.agent.claude', localId: 'claudeUnifiedTerminalEnabled',
+      scope: { kind: 'account' }, target: { kind: 'account' }, value: true, expectedRevision: '7' };
+    const grant = ApiTokenGrantV1Schema.parse({ v: 1, actions: { families: [], ids: [actionId] },
+      targets: { sessions: [], machines: ['machine-1'] }, approve: false, origins: [], models: null, permissionModes: null, create: null });
+    const authorization: ExternalActionExecutionAuthorizationV1 = { v: 1, token: 'signed-invocation', binding: {
+      serverIdentityId: 'home-1', accountId: 'account-1', principalId: 'account-1',
+      credentialId: '00000000-0000-4000-8000-000000000001', machineId: 'machine-1',
+      custodianAccountId: 'account-1', installationId: 'installation-1', actionId, requestId: 'settings-request',
+      requestEnvelopeDigest: 'a'.repeat(43), target: { kind: 'machine', machineId: 'machine-1' }, grant,
+    } };
+    const { principalId: _principalId, credentialId: _credentialId, grant: _grant, ...accountBinding } = authorization.binding;
+    const context: ActionExecutorContext = surface !== 'agent' ? {
+      surface, authority: 'account_automation', serverId: 'profile-1', actionRequestId: 'settings-request',
+      ...(surface === 'api' ? { externalActionCredential: { accountId: 'account-1', principalId: 'account-1',
+        credentialId: authorization.binding.credentialId, grant } } : { runtimeAccountId: 'account-1' }),
+      externalActionExecutionAuthorization: surface === 'api' ? authorization : {
+        ...authorization, binding: { ...accountBinding, authentication: { kind: 'terminal', tokenEpoch: 1 } },
+      },
+      externalActionTarget: authorization.binding.target,
+      signExternalActionApprovalInput: () => 'a'.repeat(86),
+    } : {
+      surface: 'agent', authority: 'account_automation', serverId: 'profile-1', actionRequestId: 'settings-request',
+      defaultSessionId: 'session-1', defaultSessionMachineId: 'machine-1',
+      actionCaller: { kind: 'session', sessionId: 'session-1', starterDepth: 0, turnDepth: 0 },
+    };
+    const origin = buildApprovalExecutionOriginV1({ actionId, input, context,
+      targetSessionId: surface === 'agent' ? 'session-1' : null });
+    expect(origin).toMatchObject({ machineId: 'machine-1', actionId });
+    expect(ApprovalExecutionOriginV1Schema.safeParse(origin).success).toBe(true);
+    const accountOnly = buildApprovalExecutionOriginV1({ actionId, input, targetSessionId: null,
+      context: { surface: 'ui', authority: 'present_user', serverId: 'profile-1', actionRequestId: 'account-only' },
+    });
+    expect(accountOnly).toMatchObject({ actionId, serverId: 'profile-1' });
+    expect(accountOnly?.machineId).toBeUndefined();
+  });
   it.each([false, true])('captures input-dependent Provider machine placement without turning Account configuration into machine work (reviewed=%s)', reviewed => {
     const input = {
       action: 'createContribution' as const, connectionId: 'pc_reviewed', contributionKey: 'example.provider/source',
@@ -66,20 +153,20 @@ describe('createActionExecutor (durable plugin approval caller provenance)', () 
       approvalsCreate: async ({ request }) => { stored = ApprovalRequestV2Schema.parse(request); return { artifactId: 'relation-approval' }; },
       approvalsGet: async () => stored,
       approvalsUpdate: async ({ request }) => { stored = ApprovalRequestV2Schema.parse(request); return { ok: true }; },
-      isActionApprovalRequired: actionId => actionId === 'session.reports_to.set',
+      isActionApprovalRequired: actionId => actionId === 'session.manager.set',
       // Home/Account authentication and the relation HTTP writer are system boundaries.
       isApprovalExecutionOriginCurrent: async () => homeCurrent,
-      sessionReportsToSet: async ({ context, sessionId, leadSessionId }) => {
+      sessionManagerSet: async ({ context, sessionId, managerSessionId }) => {
         contexts.push(context);
         return context.serverId === 'app-profile'
-          ? { ok: true, sessionId, leadSessionId, attachedAt: 1 }
+          ? { ok: true, sessionId, managerSessionId, attachedAt: 1 }
           : { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
       },
     } satisfies Pick<ActionExecutorDeps, 'approvalsCreate' | 'approvalsGet' | 'approvalsUpdate'
-      | 'isActionApprovalRequired' | 'isApprovalExecutionOriginCurrent' | 'sessionReportsToSet'>;
+      | 'isActionApprovalRequired' | 'isApprovalExecutionOriginCurrent' | 'sessionManagerSet'>;
     const executor = createActionExecutor(deps as unknown as ActionExecutorDeps);
-    expect(await executor.execute('session.reports_to.set', {
-      sessionId: 'worker', leadSessionId: 'lead', expectedLeadSessionId: null,
+    expect(await executor.execute('session.manager.set', {
+      sessionId: 'worker', managerSessionId: 'lead', expectedManagerSessionId: null,
     }, { surface: 'cli', authority: 'account_automation', serverId: 'cli-profile',
       serverIdentityId: 'srv_same_home', runtimeAccountId: 'account', actionCaller: { kind: 'host' },
       actionRequestId: 'attach-request' })).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
@@ -331,6 +418,12 @@ describe('createActionExecutor (durable plugin approval caller provenance)', () 
       ...origin,
       surface: 'ui',
     }).success).toBe(true);
+    const mounted = { ...origin, surface: 'plugin', sessionListAccess: 'mounted_ui',
+      caller: { kind: 'plugin', pluginId: 'acme.board', contributionLocalId: 'sessions-panel',
+        sourceCustody: { kind: 'development', registeredRootId: 'board-root' } } };
+    expect(ApprovalExecutionOriginV1Schema.safeParse(mounted).success).toBe(true);
+    expect(ApprovalExecutionOriginV1Schema.safeParse({ ...mounted, surface: 'mcp' }).success).toBe(false);
+    expect(ApprovalExecutionOriginV1Schema.safeParse({ ...mounted, caller: { kind: 'host' } }).success).toBe(false);
   });
 
   it('rejects contradictory repeated V2 surface and plugin-caller facts', () => {
@@ -1404,7 +1497,16 @@ describe('createActionExecutor (durable plugin approval caller provenance)', () 
     expect(sessionStateFieldSet).toHaveBeenCalledOnce();
   });
 
-  it('rejects an obsolete execution-run occurrence after the host origin remains current', async () => {
+  it.each([
+    { scenario: 'changed', firstRead: { run: { runId: 'run-1', inputTurns: { occurrenceId: 'occurrence-replaced' } } },
+      firstErrorCode: 'approval_stale', staleReason: 'run_occurrence_changed' },
+    { scenario: 'not-found', firstRead: { ok: false, code: 'execution_run_not_found', message: 'Execution run not found' },
+      firstErrorCode: 'approval_stale', staleReason: 'currentness_read_failed' },
+    { scenario: 'home-envelope', firstRead: { ok: false, code: 'project_requester_home_unavailable', message: 'Home unavailable' },
+      firstErrorCode: 'project_requester_home_unavailable' },
+  ] as const)('classifies execution-run occurrence currentness reads ($scenario)', async ({
+    firstRead, firstErrorCode, staleReason,
+  }) => {
     let storedRequest: ApprovalRequest = ApprovalRequestV2Schema.parse({
       v: 2,
       status: 'open',
@@ -1432,12 +1534,8 @@ describe('createActionExecutor (durable plugin approval caller provenance)', () 
       storedRequest = request;
       return { ok: true as const };
     });
-    const executionRunGet = vi.fn(async () => ({
-      run: {
-        runId: 'run-1',
-        inputTurns: { occurrenceId: 'occurrence-replaced' },
-      },
-    }));
+    const currentRead = { run: { runId: 'run-1', inputTurns: { occurrenceId: 'occurrence-original' } } };
+    const executionRunGet = vi.fn(async () => executionRunGet.mock.calls.length === 1 ? firstRead : currentRead);
     const executionRunStop = vi.fn(async () => ({ ok: true }));
     const executor = createActionExecutor({
       approvalsGet: async () => storedRequest,
@@ -1447,24 +1545,33 @@ describe('createActionExecutor (durable plugin approval caller provenance)', () 
       executionRunStop,
     } as unknown as ActionExecutorDeps);
 
-    await expect(executor.execute('approval.request.decide', {
+    const decide = () => executor.execute('approval.request.decide', {
       artifactId: 'approval-run-stop-1',
       decision: 'approve',
-    }, { surface: 'ui', authority: 'present_user', serverId: 'server-1' })).resolves.toMatchObject({
-      ok: true,
-      result: { status: 'failed', execution: { ok: false, errorCode: 'approval_stale' } },
-    });
+    }, { surface: 'ui' as const, authority: 'present_user' as const, serverId: 'server-1' });
+    const firstDecision = await decide();
+    if (staleReason) {
+      expect(firstDecision).toMatchObject({ ok: true, result: { status: 'failed', execution: {
+        ok: false, errorCode: firstErrorCode, details: { reason: staleReason },
+      } } });
+    } else {
+      expect(firstDecision).toMatchObject({ ok: false, errorCode: firstErrorCode });
+    }
     expect(executionRunGet).toHaveBeenCalledWith(
       'session-1',
       { runId: 'run-1', includeStructured: false },
       {},
     );
-    expect(approvalsUpdate).toHaveBeenCalledTimes(2);
-    expect(storedRequest).toMatchObject({
-      status: 'failed',
-      execution: { ok: false, errorCode: 'approval_stale' },
-    });
-    expect(executionRunStop).not.toHaveBeenCalled();
+    if (staleReason) {
+      expect(approvalsUpdate).toHaveBeenCalledTimes(2);
+      expect(storedRequest).toMatchObject({ status: 'failed', execution: { ok: false, errorCode: 'approval_stale' } });
+      expect(executionRunStop).not.toHaveBeenCalled();
+    } else {
+      expect(storedRequest).toMatchObject({ status: 'approved', decision: { kind: 'approve' } });
+      expect(executionRunStop).not.toHaveBeenCalled();
+      await expect(decide()).resolves.toMatchObject({ ok: true, result: { status: 'executed' } });
+      expect(executionRunStop).toHaveBeenCalledOnce();
+    }
   });
 
   it('keeps legacy PAT approvals readable but refuses replay from descriptive credential IDs alone', async () => {

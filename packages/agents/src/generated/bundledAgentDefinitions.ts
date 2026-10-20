@@ -1009,6 +1009,9 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
         "name": "Haiku 5.5"
       },
       {
+        "aliases": [
+          "claude-haiku-4-5-20251001"
+        ],
         "costTier": "low",
         "description": "Fastest Claude option for lighter tasks and lower-latency replies.",
         "id": "claude-haiku-4-5",
@@ -1057,7 +1060,7 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
     "default": "default",
     "dontAsk": "dontAsk",
     "plan": "plan",
-    "read-only": "dontAsk",
+    "read-only": "plan",
     "safe-yolo": "auto",
     "yolo": "bypassPermissions"
   },
@@ -1262,6 +1265,10 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
             {
               "archivePath": "bin/codex-code-mode-host",
               "destinationPath": "bin/codex-code-mode-host"
+            },
+            {
+              "archivePath": "codex-resources/bwrap",
+              "destinationPath": "codex-resources/bwrap"
             }
           ],
           "win32": [
@@ -1303,7 +1310,8 @@ const _BUNDLED_AGENT_DEFINITIONS_BY_ID = ({
         },
         "binaryName": "codex",
         "githubRepo": "openai/codex",
-        "kind": "github_release_binary"
+        "kind": "github_release_binary",
+        "releaseTag": "rust-v0.162.1"
       },
       "manual": {
         "kind": "command"

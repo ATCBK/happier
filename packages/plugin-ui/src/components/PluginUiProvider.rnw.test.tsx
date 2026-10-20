@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import type { Disposable } from '@happier-dev/plugin-sdk';
 import type { SurfaceContext } from '@happier-dev/plugin-sdk/ui';
 import { describe, expect, it } from 'vitest';
@@ -9,13 +9,92 @@ import {
   useHappierUiLocalization,
   useHappierUiTheme,
 } from '../environment/context.js';
-import { useLivePluginResource } from '../hostApi/index.js';
+import { useLivePluginResource, usePluginResource } from '../hostApi/index.js';
 import { mountThroughReactNativeWeb, mountThroughReactNativeWebAsync } from '../rnwMount.testSupport.js';
 import { createHostApiStub, createSurfaceContext } from '../surfaceFixture.testSupport.js';
 import { PluginUiProvider, usePluginTranslation, useSurfaceContext } from './PluginUiProvider.js';
 import { Text } from './Text.js';
 
 describe('PluginUiProvider', () => {
+  it('keeps a genuine read outage terminal until explicit Retry after readiness', async () => {
+    let outage = true;
+    let publish: ((context: SurfaceContext) => void) | undefined;
+    let retry: (() => void) | undefined;
+    const initial = createSurfaceContext({ machineConnectionPending: false, machineExecutionReady: true });
+    const host = createHostApiStub(initial, {
+      watchContext: async listener => { publish = listener; return { dispose() {} }; },
+      readResource: async () => {
+        if (outage) throw Object.assign(new Error('Source transport failed'), { code: 'unavailable' });
+        return { contentType: 'text/plain', digest: 'ready', bytes: new TextEncoder().encode('ready') };
+      },
+    });
+    function Probe() {
+      const { resource, refresh } = usePluginResource('example-read');
+      retry = refresh;
+      return <output>{resource.error ? 'error' : resource.value ? 'ready' : resource.pending}</output>;
+    }
+    const mount = await mountThroughReactNativeWebAsync(<PluginUiProvider hostApi={host} context={initial}><Probe /></PluginUiProvider>);
+    const { act } = await import('react');
+    await act(async () => { await Promise.resolve(); });
+    expect(mount.container.textContent).toBe('error');
+    outage = false;
+    await act(async () => { publish?.(createSurfaceContext({ machineConnectionPending: false, machineExecutionReady: true })); });
+    expect(mount.container.textContent).toBe('error');
+    await act(async () => { retry?.(); });
+    expect(mount.container.textContent).toBe('ready');
+    mount.unmount();
+  });
+
+  it('does not let a late withdrawn refusal replace a re-admitted read', async () => {
+    let rejectOld: ((error: Error) => void) | undefined;
+    let publish: ((context: SurfaceContext) => void) | undefined;
+    const initial = createSurfaceContext({ machineConnectionPending: false, machineExecutionReady: true });
+    const host = createHostApiStub(initial, {
+      watchContext: async listener => { publish = listener; return { dispose() {} }; },
+      readResource: () => rejectOld === undefined
+        ? new Promise((_resolve, reject) => { rejectOld = reject; })
+        : Promise.resolve({ contentType: 'text/plain', digest: 'ready', bytes: new TextEncoder().encode('ready') }),
+    });
+    function Probe() {
+      const { resource } = usePluginResource('example-read');
+      return <output>{resource.error ? 'error' : resource.value ? 'ready' : resource.pending}</output>;
+    }
+    const mount = await mountThroughReactNativeWebAsync(<PluginUiProvider hostApi={host} context={initial}><Probe /></PluginUiProvider>);
+    const { act } = await import('react');
+    await act(async () => { publish?.(createSurfaceContext({ machineConnectionPending: true, machineExecutionReady: false })); });
+    expect(mount.container.textContent).toBe('initial');
+    await act(async () => { publish?.(createSurfaceContext({ machineConnectionPending: false, machineExecutionReady: true })); });
+    expect(mount.container.textContent).toBe('ready');
+    await act(async () => { rejectOld?.(Object.assign(new Error('Withdrawn read'), { code: 'unavailable' })); });
+    expect(mount.container.textContent).toBe('ready');
+    mount.unmount();
+  });
+
+  it('keeps a host-backed read pending during withdrawal and reacquires on re-admission', async () => {
+    let pending = true;
+    let publish: ((context: SurfaceContext) => void) | undefined;
+    const initial = createSurfaceContext({ machineConnectionPending: true, machineExecutionReady: false });
+    const host = createHostApiStub(initial, {
+      watchContext: async (listener) => { publish = listener; return { dispose() {} }; },
+      readResource: async () => {
+        if (pending) throw Object.assign(new Error('Host prerequisites are establishing'), { code: 'unavailable' });
+        return { contentType: 'text/plain', digest: 'ready', bytes: new TextEncoder().encode('ready') };
+      },
+    });
+    function Probe() {
+      const { resource } = usePluginResource('example-read');
+      return <output>{resource.error ? 'error' : resource.value ? 'ready' : resource.pending}</output>;
+    }
+    const mount = await mountThroughReactNativeWebAsync(<PluginUiProvider hostApi={host} context={initial}><Probe /></PluginUiProvider>);
+    const { act } = await import('react');
+    await act(async () => { await Promise.resolve(); });
+    expect(mount.container.textContent).toBe('initial');
+    pending = false;
+    await act(async () => { publish?.(createSurfaceContext({ machineConnectionPending: false, machineExecutionReady: true })); });
+    expect(mount.container.textContent).toBe('ready');
+    mount.unmount();
+  });
+
   it('publishes the host projection, never a package-local default', async () => {
     const context = createSurfaceContext({ locale: 'de', contrast: 'high', textScale: 1.25 });
     let observed: SurfaceContext | undefined;
@@ -60,8 +139,8 @@ describe('PluginUiProvider', () => {
    * fails against the obvious wrong implementation (a single `useMemo` over the
    * whole environment object).
    */
-  it('keeps localization and its resolver stable across unrelated inset and accessibility pushes', async () => {
-    const initial = createSurfaceContext();
+  it('keeps unchanged theme and localization consumers stable across serialized context pushes', async () => {
+    const initial = createSurfaceContext({ translations: { 'acme.ready': 'Ready' } });
     let publish: ((context: SurfaceContext) => void) | undefined;
     const hostApi = createHostApiStub(initial, {
       watchContext: async (listener: (context: SurfaceContext) => void): Promise<Disposable> => {
@@ -72,9 +151,14 @@ describe('PluginUiProvider', () => {
 
     const themeIdentities: unknown[] = [];
     const localizationIdentities: unknown[] = [];
-    const translationResolvers: unknown[] = [];
+    const translationResolvers: ReturnType<typeof usePluginTranslation>[] = [];
     const accessibilityIdentities: unknown[] = [];
     const insetsIdentities: unknown[] = [];
+    let themeRenders = 0;
+    const ThemeOnly = memo(function ThemeOnly() {
+      themeRenders++;
+      return <output data-testid="theme-text">{useHappierUiTheme().colors.text}</output>;
+    });
 
     function Probe() {
       themeIdentities.push(useHappierUiTheme());
@@ -89,13 +173,19 @@ describe('PluginUiProvider', () => {
     const mount = await mountThroughReactNativeWebAsync(
       <PluginUiProvider hostApi={hostApi}>
         <Probe />
+        <ThemeOnly />
       </PluginUiProvider>,
     );
 
     expect(publish).toBeTypeOf('function');
+    const initialThemeRenders = themeRenders;
     const { act } = await import('react');
     await act(async () => {
-      publish?.({ ...initial, safeAreaInsets: { top: 44, right: 0, bottom: 34, left: 0 } });
+      // Context transports deserialize a fresh message map, even when only
+      // another capability changed. Translation-dependent effects must keep
+      // their pending work rather than restarting on that transport identity.
+      publish?.({ ...initial, theme: structuredClone(initial.theme), translations: { ...initial.translations },
+        safeAreaInsets: { top: 44, right: 0, bottom: 34, left: 0 } });
     });
 
     expect(insetsIdentities.at(-1)).not.toBe(insetsIdentities[0]);
@@ -103,14 +193,37 @@ describe('PluginUiProvider', () => {
     expect(localizationIdentities.at(-1)).toBe(localizationIdentities[0]);
     expect(translationResolvers.at(-1)).toBe(translationResolvers[0]);
     expect(themeIdentities.at(-1)).toBe(themeIdentities[0]);
+    expect(themeRenders).toBe(initialThemeRenders);
 
     await act(async () => {
-      publish?.({ ...initial, contrast: 'high' });
+      publish?.({ ...initial, theme: structuredClone(initial.theme), translations: { ...initial.translations }, contrast: 'high' });
     });
 
     expect(accessibilityIdentities.at(-1)).not.toBe(accessibilityIdentities[0]);
     expect(localizationIdentities.at(-1)).toBe(localizationIdentities[0]);
     expect(translationResolvers.at(-1)).toBe(translationResolvers[0]);
+    expect(themeIdentities.at(-1)).not.toBe(themeIdentities[0]);
+    expect(themeRenders).toBe(initialThemeRenders + 1);
+    const highContrastTheme = themeIdentities.at(-1);
+    const highContrastRenders = themeRenders;
+    await act(async () => {
+      publish?.({ ...initial, theme: structuredClone(initial.theme), contrast: 'high',
+        safeAreaInsets: { top: 48, right: 0, bottom: 34, left: 0 } });
+    });
+    expect(themeIdentities.at(-1)).toBe(highContrastTheme);
+    expect(themeRenders).toBe(highContrastRenders);
+    await act(async () => {
+      publish?.({ ...initial, translations: { 'acme.ready': 'Bereit' }, locale: 'de' });
+    });
+    expect(translationResolvers.at(-1)).not.toBe(translationResolvers[0]);
+    expect(localizationIdentities.at(-1)).toMatchObject({ locale: 'de' });
+    expect(translationResolvers.at(-1)?.('acme.ready')).toBe('Bereit');
+    await act(async () => {
+      publish?.({ ...initial, theme: { ...structuredClone(initial.theme),
+        colors: { ...initial.theme.colors, text: '#123456' } } });
+    });
+    expect(mount.container.querySelector('[data-testid="theme-text"]')?.textContent).toBe('#123456');
+    expect(themeRenders).toBeGreaterThan(highContrastRenders);
     mount.unmount();
   });
 

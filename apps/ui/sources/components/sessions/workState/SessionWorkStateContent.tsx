@@ -42,8 +42,8 @@ export function SessionWorkStateContent(props: Readonly<{
     /** The continuation owner row (Keep going or the agent's own mode); the Goal control passes it. */
     continuation?: SessionGoalContinuationContext | null;
     requestClose: () => void;
-    onSetGoal?: (request: SessionWorkStateGoalSetRequest) => Promise<SessionWorkStateOperationResult>;
-    onClearGoal?: () => Promise<SessionWorkStateOperationResult>;
+    onSetGoal?: (request: SessionWorkStateGoalSetRequest, signal?: AbortSignal) => Promise<SessionWorkStateOperationResult>;
+    onClearGoal?: (signal?: AbortSignal) => Promise<SessionWorkStateOperationResult>;
     /** Backward-compat passthrough for hosts that observe the unsaved-draft state. */
     onDirtyChange?: (dirty: boolean) => void;
 }>) {

@@ -49,7 +49,6 @@ type JsonRecord = Record<string, unknown>;
 type RemoteCommandResult = Readonly<{ status: number; stdout: string; stderr: string }>;
 
 const ABSOLUTE_PATH_TOKEN_PATTERN = /(^|[\s"'`=:(])((?:~\/|\/|[A-Za-z]:\\)[^\s"'`]+)/gu;
-const LOCAL_REMOTE_CLI_PAYLOAD_ROOT_ENV = 'HAPPIER_FIRST_PARTY_REMOTE_CLI_PAYLOAD_ROOT';
 
 function redactSshStderrForErrorMessage(raw: string): string {
   const base = redactBugReportSensitiveText(String(raw ?? ''));
@@ -377,8 +376,9 @@ async function runSshCommandResult(params: Readonly<{
   knownHostsMode?: 'app' | 'system';
   remoteCommand: readonly string[];
   signal?: AbortSignal;
-  timeoutMs?: number;
+  timeoutMs?: number | null;
   onStdoutChunk?: (text: string) => void;
+  includeStdoutInError?: boolean;
   input?: string;
 }>): Promise<RemoteCommandResult> {
   if ((params.knownHostsMode ?? 'app') === 'app' && params.knownHostsPath) {
@@ -398,6 +398,7 @@ async function runSshCommandResult(params: Readonly<{
     signal: params.signal,
     timeoutMs: params.timeoutMs,
     onStdoutChunk: params.onStdoutChunk,
+    includeStdoutInError: params.includeStdoutInError,
     input: params.input,
     rejectOnNonZero: false,
   });
@@ -509,8 +510,9 @@ async function runSshPosixCommandResult(params: Readonly<{
   knownHostsMode?: 'app' | 'system';
   shellCommand: string;
   signal?: AbortSignal;
-  timeoutMs?: number;
+  timeoutMs?: number | null;
   onStdoutChunk?: (text: string) => void;
+  includeStdoutInError?: boolean;
   input?: string;
 }>): Promise<RemoteCommandResult> {
   return await runSshCommandResult({
@@ -522,6 +524,7 @@ async function runSshPosixCommandResult(params: Readonly<{
     signal: params.signal,
     timeoutMs: params.timeoutMs,
     onStdoutChunk: params.onStdoutChunk,
+    includeStdoutInError: params.includeStdoutInError,
     input: params.input,
   });
 }
@@ -675,11 +678,6 @@ async function installRemoteRelayRuntimeUsingSharedEngine(params: Readonly<{
   };
 }
 
-function resolveLocalRemoteCliPayloadRootOverride(): string | null {
-  const raw = String(process.env[LOCAL_REMOTE_CLI_PAYLOAD_ROOT_ENV] ?? '').trim();
-  return raw ? raw : null;
-}
-
 async function resolveLiveRemoteHostTrust(params: Readonly<{
   ssh: SystemTaskSshConnectionConfig;
   knownHostsMode: 'app' | 'system';
@@ -744,17 +742,10 @@ async function installLiveRemoteCli(params: Readonly<{
   signal?: AbortSignal;
 }>): Promise<void> {
   const knownHostsPath = resolveKnownHostsPath(params.ssh, params.knownHostsMode);
-  const localPayloadRootOverride = resolveLocalRemoteCliPayloadRootOverride();
   await systemTasks.installRemoteFirstPartyComponent({
     componentId: 'happier-cli', channel: params.channel, ssh: params.ssh, knownHostsMode: params.knownHostsMode,
     ...(params.signal ? { signal: params.signal } : {}),
   }, {
-    ...(localPayloadRootOverride ? {
-      preparePayload: async ({ componentId, channel }) => ({
-        componentId, channel, versionId: `local-${params.channel}-${Date.now()}`,
-        payloadRoot: localPayloadRootOverride, source: `local-payload:${localPayloadRootOverride}`, cleanup: async () => undefined,
-      }),
-    } : {}),
     resolveRemoteReleaseTarget: async ({ signal }) => {
       const preflight = await runSshPosixJson<Readonly<{ platform?: unknown; arch?: unknown }>>({
         ssh: params.ssh, auth: params.auth, knownHostsPath, knownHostsMode: params.knownHostsMode,
@@ -1008,7 +999,7 @@ export function createLiveRemoteSshManageHostTaskKind() {
   });
 }
 
-export function createLiveRemoteSshBootstrapTaskKind(options: Pick<systemTasks.RemoteSshBootstrapMachineDeps, 'assertManagedEnrollmentCurrent'> = {}) {
+export function createLiveRemoteSshBootstrapTaskKind(options: Pick<systemTasks.RemoteSshBootstrapMachineDeps, 'assertManagedEnrollmentCurrent' | 'onEnrollmentDeadline'> = {}) {
   const baseKind = systemTasks.createRemoteSshBootstrapMachineTaskKind({
     ...options,
     resolveHostTrust: resolveLiveRemoteHostTrust,
@@ -1188,7 +1179,7 @@ export function createLiveRemoteEnrollmentExecutor(params: Readonly<{
       onStdoutChunk,
       includeStdoutInError,
       input,
-    }) => await runSshPosixText({
+    }) => await runSshPosixCommandResult({
       ssh: params.ssh,
       auth: params.auth,
       knownHostsPath: resolveKnownHostsPath(params.ssh, params.knownHostsMode),

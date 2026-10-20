@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { composeWorkflowRunWorkerUpdateV1 } from './composeWorkflowRunWorkerUpdateV1.js';
+import { composeWorkflowRunWorkerUpdateV1, resolveWorkflowRunFollowEventV1 } from './composeWorkflowRunWorkerUpdateV1.js';
 import type { WorkflowFinalResultV1 } from './workflowProgressV1.js';
 
 describe('composeWorkflowRunWorkerUpdateV1', () => {
@@ -40,5 +40,12 @@ describe('composeWorkflowRunWorkerUpdateV1', () => {
     expect(composeWorkflowRunWorkerUpdateV1({ run: { id: 'run-1', state: 'running', attentionRequired: false } })).toBeNull();
     expect(composeWorkflowRunWorkerUpdateV1({ run: { id: 'run-1', state: 'running', attentionRequired: true } }))
       .toMatchObject({ wake: 'needs_you', ownerState: 'running' });
+  });
+
+  it('preserves terminal outcomes and refuses to call unknown attention progress', () => {
+    expect(resolveWorkflowRunFollowEventV1({ state: 'running' })).toBeNull();
+    expect(resolveWorkflowRunFollowEventV1({ state: 'succeeded', attentionRequired: true })).toEqual({ kind: 'finished' });
+    expect(resolveWorkflowRunFollowEventV1({ state: 'interrupted', attentionRequired: true })).toEqual({ kind: 'failed_or_stopped' });
+    expect(resolveWorkflowRunFollowEventV1({ state: 'waiting_for_review' })).toEqual({ kind: 'needs_you', type: 'decision' });
   });
 });

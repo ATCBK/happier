@@ -14,9 +14,13 @@ import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { encodeBase64, encrypt } from '@/api/encryption';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { publishRuntimeSessionEvent } from './publishRuntimeSessionEvent';
+import { buildOpenCodeRuntimeTranscriptLocalId } from '../../../../../../../packages/plugins/opencode/src/agent/runtime/server/transcript/identity';
+import { fetchCommittedTranscriptLocalIdBaseline } from '@/api/session/transcriptQueries';
 
 describe('native cold history reconciliation at the admitted Session scope', () => {
-  it.each(['plain', 'e2ee', 'opaque-spaces', 'legacy-incomplete', 'failed-read', 'malformed-native'] as const)('reconciles exact predecessor identities on cold resume (%s)', async (kind) => {
+  it.each(['plain', 'e2ee', 'streamed-plain', 'streamed-e2ee', 'opaque-spaces', 'legacy-incomplete', 'failed-read', 'malformed-native'] as const)('reconciles exact predecessor identities on cold resume (%s)', async (kind) => {
+    const streamed = kind.startsWith('streamed-');
+    const e2ee = kind.endsWith('e2ee');
     const nativeSessionId = kind === 'opaque-spaces' ? ' ses:old ' : 'ses:old';
     const encryptionKey = new Uint8Array(32).fill(7);
     let unavailable = kind === 'failed-read';
@@ -29,7 +33,9 @@ describe('native cold history reconciliation at the admitted Session scope', () 
         content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'ui prompt' } } } },
       { id: 'h_assistant', seq: 3, localId: 'agent-local', createdAt: 2, updatedAt: 2, messageRole: 'agent', sidechainId: null,
         content: { t: 'plain', v: { role: 'agent', content: { type: 'acp', provider: 'opencode', data: { type: 'message', message: 'ui answer' } },
-          meta: { opencodeMessageId: 'msg:ui:assistant', opencodeRemoteSessionId: nativeSessionId } } } },
+          meta: streamed ? { happierStreamSegmentV1: { v: 1, segmentKind: 'assistant', segmentState: 'complete', segmentLocalId: 'agent-local',
+            sourceMessageId: buildOpenCodeRuntimeTranscriptLocalId(nativeSessionId, 'msg:ui:assistant') } }
+            : { opencodeMessageId: 'msg:ui:assistant', opencodeRemoteSessionId: nativeSessionId } } } },
       ...['user', 'assistant'].map((role, index) => ({ id: `h_imported_${role}`, seq: 2 - index,
         localId: role === 'user' ? `opencode:import:history:${nativeSessionId}:msg:imported:${role}`
           : `opencode:import:v2:${JSON.stringify(['history', nativeSessionId, null, `msg:imported:${role}`])}`, createdAt: 11 + index, updatedAt: 11 + index,
@@ -57,7 +63,7 @@ describe('native cold history reconciliation at the admitted Session scope', () 
         if (unavailable) { response.writeHead(503); response.end('private baseline transport failure'); return; }
         const beforeSeq = Number(url.searchParams.get('beforeSeq') ?? Infinity);
         const eligible = committed.filter((row) => row.seq < beforeSeq);
-        const page = eligible.slice(0, 2).map((row) => ({ ...row, content: kind === 'e2ee'
+        const page = eligible.slice(0, 2).map((row) => ({ ...row, content: e2ee
           ? { t: 'encrypted', c: encodeBase64(encrypt(encryptionKey, 'dataKey', row.content.v)) } : row.content }));
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ messages: page, hasMore: eligible.length > page.length,
@@ -88,7 +94,7 @@ describe('native cold history reconciliation at the admitted Session scope', () 
       readCodec: () => openCodeTranscriptIdentityCodec,
       session: { sessionId: 'happy_old', getMetadataSnapshot: () => metadata,
         fetchCommittedTranscriptIdentitySnapshot: (options) => runWithServerHttpBaseUrl(baseUrl, () => fetchCommittedTranscriptIdentitySnapshot({
-          token: 'test-token', sessionId: 'happy_old', ...(kind === 'e2ee'
+          token: 'test-token', sessionId: 'happy_old', ...(e2ee
             ? { encryptionMode: 'e2ee', encryptionKey, encryptionVariant: 'dataKey' } as const : { encryptionMode: 'plain' } as const),
           ...(options?.signal ? { signal: options.signal } : {}),
         })),
@@ -128,6 +134,15 @@ describe('native cold history reconciliation at the admitted Session scope', () 
     const events: AgentSessionRuntimeEvent[] = [];
     runtime.watch((event) => events.push(event));
     try {
+      if (streamed) {
+        const baseline = await runWithServerHttpBaseUrl(baseUrl, () => fetchCommittedTranscriptLocalIdBaseline({
+          token: 'test-token', sessionId: 'happy_old', ...(e2ee
+            ? { encryptionMode: 'e2ee', encryptionKey, encryptionVariant: 'dataKey' } as const : { encryptionMode: 'plain' } as const),
+        }));
+        expect(baseline.complete).toBe(true);
+        expect(baseline.localIds.has('agent-local')).toBe(true);
+        expect(baseline.localIds.has(buildOpenCodeRuntimeTranscriptLocalId(nativeSessionId, 'msg:ui:assistant'))).toBe(true);
+      }
       await operations.openSession({ kind: 'resume', providerSessionId: nativeSessionId });
       if (kind === 'malformed-native') {
         await expect.poll(() => vi.mocked(fixture.logger.warn).mock.calls.length > 0).toBe(true);

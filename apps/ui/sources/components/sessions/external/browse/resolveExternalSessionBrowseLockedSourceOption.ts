@@ -6,6 +6,7 @@ import type {
 } from '@happier-dev/protocol';
 
 import { resolveAgentUiBehavior } from '@/agents/registry/registryUiBehavior';
+import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { ExternalSessionBrowseLabels } from './resolveExternalSessionBrowseSourceOptions';
 
@@ -38,7 +39,8 @@ export function canBrowseExternalSessions(params: Readonly<{
 }
 
 export function resolveExternalSessionBrowseLockedSource(params: Readonly<{
-    accountScope?: ServerAccountScope | null;
+    accountScope: ServerAccountScope | null;
+    serverId: string | null;
     providerId: ExternalSessionsAgentId;
     /** See `resolveExternalSessionBrowseSourceOptions`. */
     machineId?: string | null;
@@ -50,26 +52,32 @@ export function resolveExternalSessionBrowseLockedSource(params: Readonly<{
     /** See `canBrowseExternalSessions`. */
     interaction?: 'openSession' | 'pickRemoteSessionId';
 }>): ExternalSessionsSource | null {
+    // All browse projection readers bind an omitted Home to the captured active
+    // Account. Preserve that target meaning without reading another global scope.
+    const targetServerId = params.serverId ?? params.accountScope?.serverId ?? null;
+    const accountScope = selectActiveServerAccountScopeForServer(params.accountScope, targetServerId);
+    const accountInputsAvailable = accountScope !== null;
+    const profile = accountInputsAvailable ? params.profile : null;
     const sourceOptions = resolveExternalSessionBrowseSourceOptions({
-        accountScope: params.accountScope,
+        accountScope,
         providerId: params.providerId,
         machineId: params.machineId,
-        profile: params.profile,
-        labelsByKey: params.labelsByKey,
-        agentSettings: params.agentSettings,
+        profile,
+        labelsByKey: accountInputsAvailable ? params.labelsByKey : {},
+        agentSettings: accountInputsAvailable ? params.agentSettings : undefined,
         projection: params.projection,
         interaction: params.interaction,
     });
     if (sourceOptions.length === 0) return null;
 
-    const resolver = resolveAgentUiBehavior(params.providerId, params.machineId, params.accountScope)
+    const resolver = resolveAgentUiBehavior(params.providerId, params.machineId, accountScope)
         .externalSessions?.browse?.resolveLockedSourceOption;
     const resolvedOption = resolver
         ? resolver({
             agentId: params.providerId,
             sourceOptions,
-            agentOptionState: params.agentOptionState ?? null,
-            profile: params.profile,
+            agentOptionState: accountInputsAvailable ? params.agentOptionState ?? null : null,
+            profile,
         })
         : null;
 

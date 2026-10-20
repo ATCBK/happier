@@ -75,7 +75,7 @@ Callers choose a scene; they do not draw their own empty-state illustrations.
 
 "Needs you" uses one amber everywhere: Brand's `PLANET_ATTENTION_HEX` feeds the app theme's `state.attention`, the status cell (`createPlanetStatusCell`) and scene beacons. Rose is for failure only.
 
-Notices above retained content share [`HappierBanner`](../packages/plugin-ui/src/presentation/content/Foundation.tsx): the app's `AttentionBanner` binds its theme, actions and diagnostic disclosure, and the public `Banner` binds plugin text and glyphs. The shared renderer owns the tint, outline and responsive action placement. Whole-surface states continue to use the state-card composition.
+Notices above retained content share [`HappierBanner`](../packages/plugin-ui/src/presentation/content/Foundation.tsx): the app's `AttentionBanner` binds its theme, actions and diagnostic disclosure, and the public `Banner` binds plugin text and glyphs. The shared renderer owns the tint, outline and responsive action placement. Whole-surface states continue to use the state-card composition. Its `strip` presentation is the compact band across the top of a pane or reading surface (the walkthrough's failure, partial-review, refinement Undo and ended-conversation bands): freshness-line measures, ink hairlines in every tone, a title that leads only when a description finishes the sentence, quiet word actions before the one button, and actions that wrap beneath the words and end at the trailing edge on a narrow pane. Domain owners such as `ScmDiffSummaryFailureNotice` keep their typed classification and copy and draw through `AttentionBanner presentation="strip"`; there is no separate notice family.
 
 Public `Status` and its shared
 [`HappierStatus`](../packages/plugin-ui/src/presentation/status/Status.tsx) own
@@ -122,10 +122,14 @@ with their default coat. Solid masks it without erasing it. The marker is part o
 Solid removes glass; Auto uses the W3 layered whole-app coats on a supported desktop and
 floating surfaces on phone/browser; Everywhere uses one coat for chrome, sidebar and content. In 0.3 development,
 Auto, Everywhere and Clear share Strong/2% floating material, independent of the surrounding
-intensity choice. The Account setting `glassTintIntensity` (Subtle by default, Medium, Strong; owner
-`readGlassTintedMaterials` in `glassPreferenceMutations.ts`) sets the named presets' Elements and
-floating coats: Subtle 7% Elements (6% under Clear) and 11% floating, Medium 25% (15%) and 2%, Strong
-45% (30%) and 25%. The stored per-group table never changes with the tint, so preset matching and
+intensity choice. The Account setting `glassTintIntensity` is an integer 0–100 slider, default 12.
+The single interpolation owner is `resolveGlassTintValues` in
+[`glassTint.ts`](../packages/protocol/src/account/settings/glassTint.ts): anchors 0/50/100 retain the
+former Subtle/Medium/Strong values. Elements coats are 1/25/45% (Clear: 1/15/30%); menus are 1/2/25%.
+Every coat and compression value interpolates linearly between neighbouring anchors; default 20
+gives Elements 10.6% (Clear 6.6%) and menus 1.4%. Stored obsolete strings read as 20; mutations reject
+non-integers and values outside 0–100 without clamping. `readGlassTintedMaterials` consumes this mapping.
+The stored per-group table never changes with the tint, so preset matching and
 custom tables are unaffected; Solid groups stay solid and native renderers keep the stored (Medium)
 coats. Web floating and Elements paint composes one coat over the 24px-blurred backdrop, owned by
 `resolveGlassBackdropMap` (`glassMaterial.ts`). Before saturation and clipping its affine form is
@@ -136,16 +140,24 @@ target) and `saturate(1.05)`. Over the plain page the result is the surface's so
 the warm hue is kept. The solve includes saturation and filter clipping. When a saturated authored
 fill cannot fit the named coat, it adjusts the effective web coat just enough to
 reach every channel, removing the lift when that permits a thinner feasible coat. It still lands on
-the authored fill; custom material tables remain exact. Subtle's coats are the smallest that need no neutral lift in dark.
-The preferred compression k = (1 − α)·s comes from `GLASS_BACKDROP_COMPRESSION`: dark 1 over an ordinary page for
-Subtle and Medium (the page shows through, as in monocode), over a picture Subtle .6 (menus .55), Medium .45 and
-Strong .35 (primary ink keeps 4.5:1 over the balloons' bright sky); Strong .7 over a page; light .43
-(.3 Strong), hung from white. The fixed-point and dark wallpaper shell branches do not use
+the authored fill; custom material tables remain exact. At the 0 anchor, glass never takes a neutral lift: when its 1% hair cannot
+reach the paint, the coat thickens and the brightness is re-derived at that coat, so k stays exact.
+The preferred compression k = (1 − α)·s comes from the same `glassTint.ts` anchors: dark 1 over an ordinary page for
+Subtle and Medium (the page shows through, as in monocode); Subtle stays at 1 over a picture too (monocode's blur:
+inside luminance within ±5% of the blurred backdrop in light, moved only by the paint step in dark); over a picture
+Medium .45 and Strong .35 (primary ink keeps 4.5:1 over the balloons' bright sky); Strong .7 over a page; light .43
+(.3 Strong), hung from white, and every light k is at most 1 − α so the backdrop is never brightened.
+At default 12, k is .863 in light (plain and picture), 1 in dark over a plain page and .868 in dark
+over a picture. Neutral lift is allowed only when k < 1 − α; otherwise the coat carries the paint.
+The fixed-point and dark wallpaper shell branches do not use
 `contrast()`, because it lifts dark backdrops toward mid-grey; the light wallpaper shell still uses
 it in its white-anchored tone. Secondary ink would measure about 1.7–1.9:1 over the brightest sky, so backed glass
 strengthens it (below) rather than dimming the picture to a slab. Wallpaper chrome and sidebar planes keep
-their heavy coat over a `brightness(.65)` tone in dark. Dialogs pass `dialog` to `GlassSurface`
-(`ModalCardFrame` owns it): `GLASS_DIALOG_COATS` gives Subtle .55, Medium .7, Strong .85, painted
+their heavy coat over a `brightness(.65)` tone in dark. Panels pass `floatingRole="panel"` to `GlassSurface`
+(`ModalCardFrame` for dialogs and phone sheets; `FloatingOverlay role="panel"` for large anchored panels such as
+Add widget, the widget flows, Workflow run inputs and Board settings; menus keep the default `menu` role and its
+hair, owner 2026-10-16): the protocol tint anchors give panel coats .55/.7/.85 at 0/50/100
+(default .61), painted
 as a fixed `color-mix` coat with k ≤ 1 − α and the coat solved so a plain page lands on
 `edge.floatingFill`. Faint ink: a translucent Elements or floating `GlassSurface` with a band,
 wallpaper or live desktop behind it redefines `--colors-text-secondary` for its subtree as
@@ -160,7 +172,7 @@ solid without legibility floors or contrast overrides. Code, terminal, diff and 
 backgrounds inherit the content material rather than introducing near-solid reading fills.
 Elements cover in-flow cards, card-framed widgets, the composer, settings groups and sidebar list
 groups. The stored/native Medium coats are 25% in Auto and Everywhere and 15% in Clear, with strong
-blur at any intensity. Effective web coats follow the Tint table above (7%/6% at default Subtle);
+blur at any intensity. Effective web coats follow the Tint table above (a 1% hair at default Subtle);
 their coat colour is solved by the same fixed-point owner. Sidebar- and chrome-held Elements are
 backed only by a glass plane over a wallpaper or the live desktop, and paint the page colour. The glass owner resolves Elements solid with exactly their original paint
 when no atmosphere band or wallpaper is behind them and the effective content plane is opaque.
@@ -211,8 +223,11 @@ longer a second runtime decision.
 
 Soft finish remains one theme ink in
 [`raisedEdge.ts`](../apps/ui/sources/theme/raisedEdge.ts). Dark defaults derive its hue and saturation
-from the card fill, raised to 80% HSL lightness at peak alpha 0.025 and tapering by 70% height.
-Light defaults are unchanged. Authored `effect.surfaceFinish` colour and alpha apply as set;
+from the card fill, raised to 80% HSL lightness at peak alpha 0.025. The finish is a fixed 32 px band
+(`SurfaceFinishGradient.band`), drawn by `happierSurfaceGradientWebStyle` (background size/position) and
+`HappierSurfaceGradientLayer` (a native strip): dark lights the top edge, light shades the bottom edge to its
+0.024 ink, and the rest of the surface is flat whatever its height. Primary and secondary button finishes stay
+full-height (buttons are short). Authored `effect.surfaceFinish` colour and alpha apply as set;
 Flat adds no finish overlay and preserves the existing fill, border and edge.
 
 Mounted web roots paint HTML, body and the app root through
@@ -225,12 +240,33 @@ native root and system-background updates remain profile-runtime-owned.
 
 ## Loading indicators
 
-In 0.3 development source, Sync publishes `isDataReady` when the first core
-bootstrap attempt settles: Settings precedes Sessions, while Profile loads in
-parallel. A failed core attempt exposes the existing sync-error state immediately;
-the same queues continue recovery. Startup observes `invalidateAndAwait`, without
-a queue-drain deadline. Machines, Artifacts, plugin availability, purchases, pets
-and independent background lists do not delay this publication. Machine inventory
+In 0.3 development source, loading bars and the transcript first-paint shape share
+`HappierSkeletonPulse` in [`Skeleton.tsx`](../packages/plugin-ui/src/presentation/feedback/Skeleton.tsx).
+It uses the existing CSS skeleton pulse on web and the native animation driver elsewhere.
+The transcript supplies active-view and reduced-motion facts; its geometry and readiness remain transcript-owned.
+
+In 0.3 development source, Sync publishes `isDataReady` when the first Settings
+and Profile bootstrap attempts settle. Settings still precedes the independent
+Sessions inventory, whose hydration and metadata upgrades do not delay workspace
+restoration. The workspace publishes its scoped Session route anchor before
+restoration; after Settings applies the client encryption requirement, Sync starts
+that Session's coalesced exact read while Profile can still be pending. The
+inventory and peripheral acquisition yield until that read settles, including its
+key opening, without delaying core readiness. List queries, visible-row hydration
+and reachability/reconnect recovery share that same foreground phase, so none can
+start competing inventory or draft recovery while the routed read is pending.
+This phase does not wait for Profile or Account-wide draft readiness.
+Settings-triggered Authoring Memory and Project-row acquisition, Saved Secret
+catalog materialization, Action-owned Artifact reads and Workflow Run list
+projections also join this Sync-owned phase before opening unrelated content.
+Their existing scoped loaders keep ownership of freshness, cancellation
+and retry; they do not create another startup queue. Foreground key admission
+does not by itself guarantee that the routed body has rendered.
+An exact-read failure preserves the
+route's retry state and lets background acquisition continue. A failed core attempt exposes the existing sync-error
+state immediately; the same queues continue recovery. Startup observes
+`invalidateAndAwait`, without a queue-drain deadline. Machines, Artifacts, plugin
+availability, purchases, pets and independent background lists do not delay this publication. Machine inventory
 loading and settlement come from the per-Home `machineListStatusByServerId`, so
 core readiness alone never means there are no Machines. The workspace can restore
 retained tabs without waiting for the Account-wide draft collection or
@@ -247,6 +283,34 @@ The existing local-draft fallback still applies when a read fails. Warm refreshe
 retain admitted editors, while Account retirement withdraws admission. Both
 Account facts reset when authority changes. Outbox recovery remains ordered after
 the full draft hydration attempt, even when a foreground editor is already usable.
+
+Session list acquisition and full Session hydration are separate in 0.3 development.
+The list owns its ordinary and attention page frontiers; neither automatically
+drains continuations without page demand. Activity membership retains truthful incomplete
+coverage instead of exhausting every page in the background. Actual virtualizer
+visibility publishes scoped list-row demand through `sessionSurfaceVisibility`.
+Sync batches newly visible rows through the same coalesced exact reader used by
+routes, without subscribing their transcripts. Running agents, attention facts,
+report relationships and persisted scroll positions alone do not demand full
+Session content. Routed Sessions, mounted content consumers and explicit operations
+retain their own reads. Hidden row changes keep their list projection until a
+consumer demands fresh detail; list visibility is distinct from transcript
+visibility and human presence. Explicit metadata inventories and owner operations
+retain their scoped acquisition semantics.
+
+Unopened row identities reserve their existing avatar, title and path slots with
+still placeholders. Metadata absence alone does not start a presentation clock:
+demand may legitimately remain absent while the list projection is retained.
+
+Content demand does not authorize skipping access reconciliation. An authoritative
+withdrawal must retire the exact Home's retained Session and list memberships even
+when no content consumer is mounted; refreshing a partial list head alone cannot
+prove that an older retained row remains accessible.
+Secondary-Home head refreshes reconcile retained rows omitted from that head
+through the canonical exact access reader, without opening Session content. Exact
+absence retires the Home-qualified row and every membership through the shared
+retirement owner. A failed read preserves the row and exposes failed freshness
+instead of treating transport failure as lost access.
 
 Workspace core readiness admits the first scoped layout restoration. Once
 `useWorkspaceState` has restored that Account/window, a later pending core
@@ -291,6 +355,12 @@ In 0.3 development source, a configuration page can pass `pageNoticeActive` to i
 The Plugins page owns retained-snapshot recovery notices for its collection and adjacent detail pane. Routine refresh keeps prior content quiet; failed reads retain one actionable notice. A standalone plugin page owns its own notice, and a cold detail without prior content keeps the loading state.
 
 Retained Plugin UI projections admit renderers against the bound controller's structurally installed Host API methods, separately from live invocation availability. Same-Account retained data can keep a page mounted with context and navigation available while effects return retryable `unavailable`; it does not grant fresh execution or semantic publication authority. Account, parent or containing-document retirement clears structural admission through that same controller, rather than borrowing another mount's authority.
+
+The interaction boundary also accepts the renderer's content-readiness fact: an
+already loaded RN module or inline HTML can render read-only on a cold mount
+while effects remain unavailable. Without loaded content or an earlier live
+paint, the boundary shows the cold state. Interaction availability alone is not
+proof that content is absent.
 
 Plugin Resource hooks retain their store snapshot when host mount activity turns inactive, release their read/watch subscription, and refresh through the same owner when activity resumes. Providers without a host activity fact keep their existing live behavior. Imperative `hostApi.watchResource` subscriptions remain caller-owned until disposal; view consumers should use the Resource hooks rather than create another presentation-driven polling lifecycle.
 

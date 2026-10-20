@@ -124,6 +124,19 @@ describe('UI testkit mock factories', () => {
         widget.updateTimeline([{ date, props: { title: 'captured' } }]);
         expect(await widget.getTimeline()).toEqual([{ date, props: { title: 'captured' } }]);
         expect(createLiveActivity('boundary-activity', () => ({ banner: React.createElement('View') })).getInstances()).toEqual([]);
+        const { createExpoWidgetsModuleMock } = await import('./expoWidgets');
+        const updateSnapshot = vi.fn();
+        const widgets = await createExpoWidgetsModuleMock({
+            importOriginal: () => import('expo-widgets'),
+            widgets: { 'recorded-widget': { updateSnapshot } },
+            addUserInteractionListener: () => ({ remove() {} }),
+        });
+        widgets.createWidget('recorded-widget', () => React.createElement('View')).updateSnapshot({ title: 'recorded' });
+        expect(updateSnapshot).toHaveBeenCalledWith({ title: 'recorded' });
+        const unconfigured = widgets.createWidget<{ title: string }>('unconfigured-widget', () => React.createElement('View'));
+        unconfigured.updateSnapshot({ title: 'retained SDK' });
+        expect(await unconfigured.getTimeline()).toEqual([{ date: expect.any(Date), props: { title: 'retained SDK' } }]);
+        expect(widgets.createLiveActivity('retained-activity', () => ({ banner: React.createElement('View') })).getInstances()).toEqual([]);
     });
     it('keeps released V2 omission distinct from an explicitly unassigned current Session projection', async () => {
         const { createPlainV2SessionRecordFixture, createPlainSessionCurrentProjectionRecordFixture } = await import('../fixtures/sessionFixtures');
@@ -164,13 +177,32 @@ describe('UI testkit mock factories', () => {
         const writer = new MMKV({ id: 'mock-factories-shared' });
         const reader = new MMKV({ id: 'mock-factories-shared' });
         const other = new MMKV({ id: 'mock-factories-other' });
+        const otherPath = new MMKV({ id: 'mock-factories-shared', path: '/other-native-store' });
         writer.clearAll();
         other.clearAll();
         writer.set('pending', 'captured-home');
         expect(reader.getString('pending')).toBe('captured-home');
         expect(other.getString('pending')).toBeUndefined();
+        expect(otherPath.getString('pending')).toBeUndefined();
         reader.clearAll();
         expect(writer.getString('pending')).toBeUndefined();
+    });
+
+    it('keeps native MMKV backing across JS module reloads and resets every retained handle', async () => {
+        const original = await vi.importActual<typeof import('../../reactNativeMmkvStub')>('../../reactNativeMmkvStub');
+        const retainedHandle = new original.MMKV({ id: 'mock-factories-reloaded' });
+        retainedHandle.set('pending', 'captured-home');
+
+        vi.resetModules();
+        const reloaded = await vi.importActual<typeof import('../../reactNativeMmkvStub')>('../../reactNativeMmkvStub');
+        const currentHandle = new reloaded.MMKV({ id: 'mock-factories-reloaded' });
+        expect(currentHandle.getString('pending')).toBe('captured-home');
+
+        reloaded.resetMmkvStoresForTests();
+        expect(retainedHandle.getString('pending')).toBeUndefined();
+        expect(currentHandle.getString('pending')).toBeUndefined();
+        currentHandle.set('pending', 'new-home');
+        expect(retainedHandle.getString('pending')).toBe('new-home');
     });
 
     it('preserves live native AppState reads across OS transitions', async () => {

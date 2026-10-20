@@ -6,6 +6,7 @@
 export type PluginExecutionOriginActionInputById = {
     readonly "plugins.execution_origin.list": {
         pluginId: string;
+        clientId?: string | undefined;
         contextualTarget?: {
             commandId: string;
         } | undefined;
@@ -44,17 +45,17 @@ export type PluginExecutionOriginActionInputById = {
                 };
             };
         };
+        clientId?: string | undefined;
         contextualTarget?: {
             commandId: string;
         } | undefined;
-        expectedSettingsVersion?: number | undefined;
     };
     readonly "plugins.execution_origin.clear": {
         pluginId: string;
+        clientId?: string | undefined;
         contextualTarget?: {
             commandId: string;
         } | undefined;
-        expectedSettingsVersion?: number | undefined;
     };
 };
 export type PluginExecutionOriginActionResultById = {
@@ -124,6 +125,7 @@ export type PluginExecutionOriginActionResultById = {
                 };
             };
         } | null;
+        selectionSource: 'auto' | 'pinned' | null;
         candidates: {
             origin: {
                 serverIdentityId: string;
@@ -159,106 +161,12 @@ export type PluginExecutionOriginActionResultById = {
             version: string;
             selectable: boolean;
         }[];
-    } | {
-        status: 'available';
-        storedOrigin: {
+        answeringClientId?: string | undefined;
+        answeringClientIds?: string[] | undefined;
+        storedTarget?: {
             serverIdentityId: string;
-            materializationRef: {
-                machineId: string;
-                materializationId: string;
-                pluginId: string;
-            };
-        } | {
-            serverIdentityId: string;
-            sourceRef: {
-                machineId: string;
-                pluginId: string;
-                sourceCustody: {
-                    kind: 'managed';
-                    immutableGenerationId: string;
-                    installSource: 'npm' | 'archive' | 'localPath';
-                } | {
-                    kind: 'bundled_first_party';
-                    packagedRuntime: {
-                        kind: 'cli_version_root';
-                        versionRootId: string;
-                    } | {
-                        kind: 'pinned_runner_snapshot';
-                        snapshotId: string;
-                    };
-                } | {
-                    kind: 'development';
-                    registeredRootId: string;
-                };
-            };
-        } | null;
-        selectedOrigin: {
-            serverIdentityId: string;
-            materializationRef: {
-                machineId: string;
-                materializationId: string;
-                pluginId: string;
-            };
-        } | {
-            serverIdentityId: string;
-            sourceRef: {
-                machineId: string;
-                pluginId: string;
-                sourceCustody: {
-                    kind: 'managed';
-                    immutableGenerationId: string;
-                    installSource: 'npm' | 'archive' | 'localPath';
-                } | {
-                    kind: 'bundled_first_party';
-                    packagedRuntime: {
-                        kind: 'cli_version_root';
-                        versionRootId: string;
-                    } | {
-                        kind: 'pinned_runner_snapshot';
-                        snapshotId: string;
-                    };
-                } | {
-                    kind: 'development';
-                    registeredRootId: string;
-                };
-            };
-        } | null;
-        candidates: {
-            origin: {
-                serverIdentityId: string;
-                materializationRef: {
-                    machineId: string;
-                    materializationId: string;
-                    pluginId: string;
-                };
-            } | {
-                serverIdentityId: string;
-                sourceRef: {
-                    machineId: string;
-                    pluginId: string;
-                    sourceCustody: {
-                        kind: 'managed';
-                        immutableGenerationId: string;
-                        installSource: 'npm' | 'archive' | 'localPath';
-                    } | {
-                        kind: 'bundled_first_party';
-                        packagedRuntime: {
-                            kind: 'cli_version_root';
-                            versionRootId: string;
-                        } | {
-                            kind: 'pinned_runner_snapshot';
-                            snapshotId: string;
-                        };
-                    } | {
-                        kind: 'development';
-                        registeredRootId: string;
-                    };
-                };
-            };
-            version: string;
-            selectable: boolean;
-        }[];
-        settingsVersion: number;
+            machineId: string;
+        } | null | undefined;
     } | {
         status: 'available';
         contextualTargets: {
@@ -266,35 +174,17 @@ export type PluginExecutionOriginActionResultById = {
             serverIdentityId: string;
             machineId: string;
         }[];
+        answeringClientId?: string | undefined;
+        answeringClientIds?: string[] | undefined;
     };
     readonly "plugins.execution_origin.set": {
         status: 'unavailable';
     } | {
         status: 'applied';
-    } | {
-        status: 'applied';
-        settingsVersion: number;
-    } | {
-        status: 'conflict';
-        currentSettingsVersion: number;
-    } | {
-        status: 'outcomeUnknown';
-        lastKnownSettingsVersion: number;
-        safeSnapshotVersion?: number | undefined;
     };
     readonly "plugins.execution_origin.clear": {
         status: 'unavailable';
     } | {
         status: 'applied';
-    } | {
-        status: 'applied';
-        settingsVersion: number;
-    } | {
-        status: 'conflict';
-        currentSettingsVersion: number;
-    } | {
-        status: 'outcomeUnknown';
-        lastKnownSettingsVersion: number;
-        safeSnapshotVersion?: number | undefined;
     };
 };

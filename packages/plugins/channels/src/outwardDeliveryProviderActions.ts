@@ -18,11 +18,12 @@ import {
   isPluginActionHandlerInvocationNotStartedAdvisory,
   type AdmittedTargetedOperationExecutionHandle,
   type ActionsService,
-  type PluginMachineExecutionOriginV1,
+  type PluginMachineExecutionRoutingV1,
 } from '@happier-dev/plugin-sdk/actions';
 import { isConversationDeliveryAutomaticTerminal } from './deliveryCustody.js';
 import { encodeUnpaddedBase64Url } from './privateRowIdentity.js';
-import { readCurrentProviderContributionForPersistedSelection } from './providerContributions.js';
+import { ConversationProviderContributionNotCurrentError, readCurrentProviderContributionForPersistedSelection } from './providerContributions.js';
+import { getConversationConnectionExecutionRouting } from './connectionLifecycle.js';
 import type {
   ConversationSessionProjectionBinding,
   ConversationSessionProjectionSource,
@@ -37,6 +38,7 @@ import {
   readConnectionFacts,
   readBindingFacts,
   checkConversationOutwardDeliveryRouteCurrentness,
+  normalizeConversationOutwardDeliveryCurrentnessResult,
   isConversationOutwardDeliveryPreEffectSuppression,
   redriveConversationOutwardDelivery,
   deliverConversationOutwardDelivery,
@@ -56,7 +58,7 @@ type ConversationAccountLocalBindingPolicyModule = Awaited<ReturnType<typeof loa
 type ConversationOutwardDeliveryProviderActionInvocation = Readonly<{
   action: AdmittedTargetedOperationExecutionHandle<JsonValue, ConversationDeliveryResultV1>;
   input: ConversationDeliveryInputV1 | ConversationDeliveryReconcileInputV1;
-  expectedExecutionOrigin: PluginMachineExecutionOriginV1;
+  expectedExecutionRouting: PluginMachineExecutionRoutingV1;
   outboundTextLimit?: ConversationOutboundTextLimit;
 }>;
 
@@ -90,13 +92,7 @@ async function prepareConversationOutwardDeliveryProviderActionInvocation(input:
     obligation: input.record.obligation,
     requireBindingRevision: false,
   });
-  if (currentness.kind === 'suppressed') return currentness;
-  if (currentness.kind === 'unavailable') {
-    return {
-      kind: 'suppressed',
-      reason: currentness.reason === 'cancelled' ? 'cancelled' : 'currentnessUnavailable',
-    };
-  }
+  if (currentness.kind !== 'current') return normalizeConversationOutwardDeliveryCurrentnessResult(currentness);
   const provider = currentness.connection.providerAction;
   const contribution = await readCurrentProviderContributionForPersistedSelection({
     context: {
@@ -105,7 +101,11 @@ async function prepareConversationOutwardDeliveryProviderActionInvocation(input:
     },
     providerPluginId: provider.providerPluginId,
     providerContributionSelection: provider.providerContributionSelection,
+  }).catch((error: unknown) => {
+    if (error instanceof ConversationProviderContributionNotCurrentError) return null;
+    throw error;
   });
+  if (contribution === null) return { kind: 'suppressed', reason: 'providerGenerationRetired' };
   const action = input.operation === 'deliver'
     ? contribution.operations.messageDeliver
     : contribution.operations.deliveryReconcile;
@@ -142,7 +142,7 @@ async function prepareConversationOutwardDeliveryProviderActionInvocation(input:
     invocation: {
       action,
       input: actionInput.data,
-      expectedExecutionOrigin: currentness.connection.transportOrigin,
+      expectedExecutionRouting: getConversationConnectionExecutionRouting(currentness.connection.transportOrigin, provider.providerPluginId),
       ...(currentness.connection.outboundTextLimit === undefined
         ? {} : { outboundTextLimit: currentness.connection.outboundTextLimit }),
     },
@@ -198,9 +198,9 @@ function createConversationOutwardDeliveryProviderActionBoundary(input: Readonly
       const invoke = async (actionInput: typeof current.input): Promise<ConversationDeliveryResultV1> => {
         try {
           const execution = await input.actions.executeAdmittedTargetedOperationWithExecutionOrigin(
-            current.action, actionInput, { signal, expectedExecutionOrigin: current.expectedExecutionOrigin },
+            current.action, actionInput, { signal, expectedExecutionRouting: current.expectedExecutionRouting },
           );
-          // The host fences expected == before == after execution origin.
+          // The host checks routing before the effect and exact invocation currentness afterward.
           const result = ConversationDeliveryResultV1Schema.safeParse(execution.result);
           return result.success ? result.data : { kind: 'outcomeUnknown' };
         } catch (error) {

@@ -1,6 +1,7 @@
 import type { ProviderBoundModelRef, ProviderCatalogReferenceResolutionV1, ProviderCatalogRuntimeStateKeyV1,
   ProviderEndpointRuntimeStateV1, ProviderRuntimeStateFileV1, ProviderSettingsV1 } from '@happier-dev/protocol';
 import type { ResolvedProviderConnectionRecord } from '../registry/types';
+import type { ProviderModelDescriptorV1 } from '@happier-dev/protocol';
 import type { ProviderCatalogCompatibilityPresentation, ProviderConnectionCatalogRow } from '@happier-dev/protocol/providers/catalog/pickerTypesV1';
 export type { ProviderCatalogCompatibilityPresentation, ProviderCatalogObservationPresentation,
   ProviderCatalogAuthorizationPresentation, ProviderCatalogRowPresentation, ProviderConnectionCatalogRow,
@@ -9,6 +10,7 @@ export type { ProviderCatalogCompatibilityPresentation, ProviderCatalogObservati
 
 export type AssembleProviderConnectionCatalogInput = Readonly<{
   agentTargetKey: string;
+  modelNameCatalog?: readonly ProviderModelDescriptorV1[];
   connection: ResolvedProviderConnectionRecord;
   providerSettings: ProviderSettingsV1;
   runtimeState: ProviderRuntimeStateFileV1;

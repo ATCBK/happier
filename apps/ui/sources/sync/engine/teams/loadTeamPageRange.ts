@@ -1,4 +1,4 @@
-import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
+import type { HomeDomainFailure } from '@/sync/ops/teams/teamActionClient';
 
 export type TeamPage<TRow> = Readonly<{
     items: readonly TRow[];

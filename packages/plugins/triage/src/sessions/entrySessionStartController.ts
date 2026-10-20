@@ -50,8 +50,7 @@ import {
     type TriageActionV1,
 } from '../settings/actions.js';
 import {
-    projectTriageSessionPlacementCandidateV1,
-    projectTriagePreparedWorkspaceSelectionInputV1,
+    projectTriageActionPlacementCandidatesV1,
     projectTriageNewSessionDestinationV1,
     triageNewSessionDraftSeedV1,
     type TriageNewSessionPreferenceV1,
@@ -62,10 +61,9 @@ import {
     type TriageNewSessionDraftHostV1,
 } from '../ui/header/newSessionDraftCommand.js';
 import {
-    requestTriageNewSessionSeed,
     type TriageNewSessionSeedHostV1,
-    type TriageNewSessionSeedV1,
 } from '../ui/header/newSessionSeedCommand.js';
+import { requestTriageNewSessionAuthoringV1 } from './newSessionAuthoring.js';
 import {
     submitTriageEntrySessionStart,
     type TriageSessionStartHostV1,
@@ -378,7 +376,8 @@ export async function authorizeTriagePreparedReviewWorkspaceV1(
         draft: projectTriagePrepareReviewWorkspaceInputV1(request),
     }, options);
     if (selected.kind === 'cancelled') return { status: 'cancelled' };
-    if (selected.kind !== 'submitted' || selected.connectedAccount.kind !== 'selected') {
+    if (selected.kind !== 'submitted'
+        || (selected.connectedAccount.kind === 'none' && 'account' in request.instance.binding)) {
         return { status: 'unavailable' };
     }
     return {
@@ -386,7 +385,7 @@ export async function authorizeTriagePreparedReviewWorkspaceV1(
         selection: {
             selection: selected.selection,
             input: selected.input,
-            credentialRef: selected.connectedAccount.ref,
+            ...(selected.connectedAccount.kind === 'selected' ? { credentialRef: selected.connectedAccount.ref } : {}),
         },
         // The selected source operation is consumed exactly once by the outer
         // start Action's canonical materialization owner.
@@ -499,6 +498,8 @@ export function createTriageEntrySessionStartController(
     // the gate the way a state read would.
     const inFlight = ({ current: false } as { current: boolean });
     const retired = ({ current: false } as { current: boolean });
+    // The recipe is a host presentation borrowed by this controller, not independent pending work.
+    let recipeLifetime = new AbortController();
     // The one identity a retry repeats. Scoped to this mount, like every other
     // fact here: a Session the user navigates back to is reached through its
     // link, not through a remembered start.
@@ -895,84 +896,17 @@ export function createTriageEntrySessionStartController(
                 // creates no Session, link or Message and spends no creation key.
                 if (request.comparisonDestination === undefined
                     && action.target.kind === 'agent' && action.target.delivery === 'compose') {
-                    const delivery = planTriageActionDeliveryV1({
-                        delivery: 'compose',
-                        promptText,
-                        entries: [{
-                            entryRef: request.entryRef,
-                            sourceInstance: request.sourceInstance,
-                            presentation: request.presentation,
-                            ...(request.lastKnownLocator === undefined
-                                ? {}
-                                : { lastKnownLocator: request.lastKnownLocator }),
-                        }],
-                    });
-                    const placementCandidates = placement !== null && placement.kind === 'prefill'
-                        ? placement.candidates.map(projectTriageSessionPlacementCandidateV1)
-                        : placement !== null && placement.kind === 'launch'
-                            ? [projectTriageSessionPlacementCandidateV1(placement.candidate)]
-                            : [];
-                    let newSessionOptions: Parameters<typeof requestTriageNewSessionSeed>[2];
-                    if (checkout === 'preparedReviewWorkspace') {
-                        if (request.reviewWorkspace === undefined) {
-                            setPhase(unavailable('preparedWorkspaceUnsupported'));
-                            return;
-                        }
-                        setPhase(CHOOSING);
-                        const selected = await host.selectActionInput({
-                            operation: request.reviewWorkspace.operation,
-                            draft: projectTriagePreparedWorkspaceSelectionInputV1({
-                                preparation: request.reviewWorkspace.preparation,
-                                placement: executionPlacement,
-                                candidates: placementCandidates,
-                            }),
-                        });
-                        if (retired.current) return;
-                        if (selected.kind === 'cancelled') {
-                            setPhase(IDLE);
-                            return;
-                        }
-                        if (selected.kind !== 'submitted') {
-                            setPhase(unavailable('preparedWorkspaceUnsupported'));
-                            return;
-                        }
-                        newSessionOptions = {
-                            preparedReviewWorkspace: {
-                                operation: request.reviewWorkspace.operation,
-                                result: selected,
-                            },
-                        };
-                    }
-                    const seed: TriageNewSessionSeedV1 = {
-                        ...(delivery.kind === 'compose' && delivery.text !== undefined
-                            ? { prompt: delivery.text }
-                            : {}),
-                        ...(action.profileId === null ? {} : { profileId: action.profileId }),
-                        checkoutIntent: checkout,
-                        ...(executionPlacement === null ? {} : {
-                            placement: {
-                                kind: 'exactTarget',
-                                serverId: executionPlacement.executionTarget.serverId,
-                                machineId: executionPlacement.executionTarget.machineId,
-                                ...(checkout === 'preparedReviewWorkspace'
-                                    || executionPlacement.directory === undefined
-                                    ? {}
-                                    : { directory: executionPlacement.directory }),
-                            },
-                        }),
-                        ...(placementCandidates.length > 0
-                            ? { candidates: placementCandidates }
-                            : {}),
-                        ...(delivery.kind === 'compose' && delivery.attachments.length > 0
-                            ? { attachments: delivery.attachments }
-                            : {}),
-                    };
+                    const placementCandidates = placement === null ? [] : projectTriageActionPlacementCandidatesV1(placement);
                     setPhase(CHOOSING);
-                    const seeded = await requestTriageNewSessionSeed(host, seed, newSessionOptions);
+                    const seeded = await requestTriageNewSessionAuthoringV1(host, {
+                        entries: [request], promptText, profileId: action.profileId,
+                        checkoutIntent: checkout, placement: executionPlacement, candidates: placementCandidates,
+                        isCurrent: () => !retired.current,
+                    });
                     if (retired.current) return;
-                    setPhase(seeded.status === 'seeded'
+                    setPhase(seeded.status === 'seeded' || seeded.status === 'cancelled'
                         ? IDLE
-                        : unavailable(seeded.status === 'unsupported'
+                        : unavailable(seeded.status === 'refused' ? 'preparedWorkspaceUnsupported' : seeded.status === 'unsupported'
                             ? 'newSessionUnsupported'
                             : 'newSessionUnavailable'));
                     return;
@@ -1009,7 +943,7 @@ export function createTriageEntrySessionStartController(
                         }]),
                     );
                     setPhase(CHOOSING);
-                    const draft = await requestTriageNewSessionDraft(host, seed);
+                    const draft = await requestTriageNewSessionDraft(host, seed, { signal: recipeLifetime.signal });
                     if (retired.current) return;
                     if (draft.status === 'cancelled') {
                         // The reader closed the surface. Nothing was chosen,
@@ -1027,11 +961,7 @@ export function createTriageEntrySessionStartController(
                 }
                 const placementCandidates = placement === null
                     ? undefined
-                    : placement.kind === 'launch'
-                        ? [projectTriageSessionPlacementCandidateV1(placement.candidate)]
-                        : placement.kind === 'prefill'
-                            ? placement.candidates.map(projectTriageSessionPlacementCandidateV1)
-                            : undefined;
+                    : projectTriageActionPlacementCandidatesV1(placement);
                 const destination = projectTriageNewSessionDestinationV1({
                     workspaceMode: action.workspaceMode,
                     creationKey: mintCreationKey(),
@@ -1086,6 +1016,7 @@ export function createTriageEntrySessionStartController(
                     v: 1,
                     workspaceMode: action.workspaceMode,
                     entryRef: request.entryRef,
+                    sourceInstanceId: request.sourceInstance.sourceInstanceId,
                     display: request.display,
                     destination: destination.destination,
                     ...(request.orchestrationPrompt === undefined ? {} : { orchestrate: true as const }),
@@ -1166,9 +1097,12 @@ export function createTriageEntrySessionStartController(
                 ...(recovery.reviewInstructions === undefined ? {} : { reviewInstructions: recovery.reviewInstructions }),
             };
         },
-        activate: () => { retired.current = false; },
+        activate: () => {
+            retired.current = false;
+            if (recipeLifetime.signal.aborted) recipeLifetime = new AbortController();
+        },
         subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
-        dispose: () => { retired.current = true;  listeners.clear(); },
+        dispose: () => { retired.current = true; recipeLifetime.abort(); listeners.clear(); },
         waitForSettled: () => inFlight.current ? new Promise<TriageEntrySessionStartControllerV1>((resolve) => {
             const listener = () => { if (!inFlight.current) { listeners.delete(listener); resolve(snapshot); } };
             listeners.add(listener);

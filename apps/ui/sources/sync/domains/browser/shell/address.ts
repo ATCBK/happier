@@ -3,6 +3,8 @@ import {
     type BrowserViewTargetV1,
 } from '@happier-dev/protocol/browser/target/v1';
 
+import type { BrowserControlViewState } from '../control';
+
 export type BrowserAddressNormalizationOptions = Readonly<{
     /** A `{query}` template; omitted means the default engine below. */
     searchUrlTemplate?: string;
@@ -124,9 +126,13 @@ export function normalizeBrowserAddressInput(
  * trimmed while the path/query/fragment are preserved. Non-http(s) or unparseable
  * input falls back to the trimmed raw value so the field is never blank when a URL
  * exists; `null`/empty input yields an empty string. `hostOnly` keeps just the host (the phone's
- * address capsule, which names where the page is and leaves the path for a tap).
+ * address capsule, which names where the page is and leaves the path for a tap). `displayHost` names
+ * the page by another host than the one it is served from (see {@link selectBrowserViewDisplayHost}).
  */
-export function formatBrowserDisplayUrl(raw: string | null, options?: Readonly<{ hostOnly?: boolean }>): string {
+export function formatBrowserDisplayUrl(
+    raw: string | null,
+    options?: Readonly<{ hostOnly?: boolean; displayHost?: string }>,
+): string {
     const input = (raw ?? '').trim();
     if (!input) {
         return '';
@@ -143,8 +149,34 @@ export function formatBrowserDisplayUrl(raw: string | null, options?: Readonly<{
         return input;
     }
 
-    const host = parsed.host.replace(/^www\./i, '');
+    const host = options?.displayHost ?? parsed.host.replace(/^www\./i, '');
     if (options?.hostOnly === true) return host;
     const path = parsed.pathname === '/' ? '' : parsed.pathname;
     return `${host}${path}${parsed.search}${parsed.hash}`;
+}
+
+function parseOrigin(url: string | null): string | null {
+    if (!url) return null;
+    try {
+        return new URL(url).origin;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * A relay preview is served from an opaque per-preview host. Its address names the service the person
+ * exposed (`localhost:5173`, the target's own display label), not that host. The label applies only
+ * while the shown address is still the preview's own origin; a page typed on another origin keeps its
+ * real host. Copy and focus keep reading the real URL.
+ */
+export function selectBrowserViewDisplayHost(view: BrowserControlViewState | null): string | undefined {
+    if (!view || view.target.kind !== 'localServicePreview') return undefined;
+    const label = view.target.display?.addressLabel?.split('/')[0]?.trim();
+    if (!label) return undefined;
+    const currentOrigin = parseOrigin(view.currentUrl);
+    const pendingOrigin = parseOrigin(view.pendingUrl);
+    if (!currentOrigin && !pendingOrigin) return undefined;
+    if (currentOrigin && pendingOrigin && currentOrigin !== pendingOrigin) return undefined;
+    return label;
 }

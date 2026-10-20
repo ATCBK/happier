@@ -1,88 +1,81 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { renderHook } from '@/dev/testkit';
+import { renderHook, standardCleanup } from '@/dev/testkit';
+import { seedPersistedHomeProfilesForTests } from '@/dev/testkit/fixtures/persistedHomeProfiles';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
+import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
 
-const serverRuntimeState = vi.hoisted(() => ({
-    snapshot: {
-        serverId: 'server-a',
-        serverUrl: 'https://a.example.test',
-        generation: 1,
-        activeShareableServerUrl: 'https://share-a.example.test',
-    },
-    listeners: new Set<() => void>(),
-}));
+installTokenStorageWebPlatformMocks();
+const profiles = await import('@/sync/domains/server/serverProfiles');
+const { useNewSessionActiveServerSource } = await import('./useNewSessionActiveServerSource');
+let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | undefined;
+const homeA = 'srv_source_a';
+const homeB = 'srv_source_b';
+const descriptor = { v: 1 as const, homeServerIdentityId: homeB,
+    canonicalServerUrl: 'https://b.example.test', revision: 1,
+    endpoints: [{ kind: 'https' as const, url: 'https://b.example.test' }] };
 
-const serverProfilesState = vi.hoisted(() => ({
-    value: [
-        { id: 'server-a', name: 'Server A', serverUrl: 'https://a.example.test', lastUsedAt: 1000 },
-        { id: 'server-b', name: 'Server B', serverUrl: 'https://b.example.test', lastUsedAt: 900 },
-    ],
-}));
-
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot: () => serverRuntimeState.snapshot,
-    subscribeActiveServer: (listener: () => void) => {
-        serverRuntimeState.listeners.add(listener);
-        return () => {
-            serverRuntimeState.listeners.delete(listener);
-        };
-    },
-}));
-
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    listServerProfiles: () => serverProfilesState.value,
-}));
-
-async function emitActiveServerUpdate() {
-    await act(async () => {
-        for (const listener of Array.from(serverRuntimeState.listeners)) {
-            listener();
-        }
-    });
+async function publishDescriptor() {
+    return await profiles.adoptHomeProfile({ descriptor, suggestedName: 'Server B', source: 'qr',
+        preserveUserLabel: true, preserveProfileSource: true, descriptorAuthority: 'current_connection_observation' });
 }
 
 describe('useNewSessionActiveServerSource', () => {
-    beforeEach(() => {
-        serverRuntimeState.snapshot = {
-            serverId: 'server-a',
-            serverUrl: 'https://a.example.test',
-            generation: 1,
-            activeShareableServerUrl: 'https://share-a.example.test',
-        };
-        serverRuntimeState.listeners.clear();
-        serverProfilesState.value = [
-            { id: 'server-a', name: 'Server A', serverUrl: 'https://a.example.test', lastUsedAt: 1000 },
-            { id: 'server-b', name: 'Server B', serverUrl: 'https://b.example.test', lastUsedAt: 900 },
-        ];
+    beforeEach(async () => {
+        browser = await installBrowserRuntimeForTests({ url: 'https://source.fixture.test' });
+        await seedPersistedHomeProfilesForTests({ activeServerId: homeA, browserStorage: browser.storage,
+            profiles: [
+                { id: homeA, serverIdentityId: homeA, name: 'Server A', serverUrl: 'https://a.example.test', createdAt: 1, updatedAt: 1, lastUsedAt: 1000 },
+                { id: homeB, serverIdentityId: homeB, name: 'Server B', serverUrl: 'https://b.example.test', createdAt: 1, updatedAt: 1, lastUsedAt: 900 },
+            ] });
     });
+    afterEach(() => { standardCleanup(); browser?.restore(); browser = undefined; });
 
-    it('ignores generation and shareable-url churn while preserving profile name changes', async () => {
-        const { useNewSessionActiveServerSource } = await import('./useNewSessionActiveServerSource');
+    it('ignores runtime-origin churn while preserving profile name changes', async () => {
         const hook = await renderHook(() => useNewSessionActiveServerSource());
         const first = hook.getCurrent();
 
-        serverRuntimeState.snapshot = {
-            ...serverRuntimeState.snapshot,
-            generation: 2,
-            activeShareableServerUrl: 'https://share-a-2.example.test',
-        };
-        await emitActiveServerUpdate();
+        const target = profiles.captureActiveServerRuntimeTarget();
+        await act(async () => {
+            expect(profiles.publishActiveServerRuntimeOrigin({ target, leaseId: 'source-runtime',
+                runtimeOrigin: 'https://runtime-a.example.test', carrier: 'https' })).toBe(true);
+        });
 
         expect(hook.getCurrent()).toBe(first);
 
-        serverRuntimeState.snapshot = {
-            ...serverRuntimeState.snapshot,
-            generation: 3,
-        };
-        serverProfilesState.value = [
-            { id: 'server-a', name: 'Server A renamed', serverUrl: 'https://a.example.test', lastUsedAt: 1000 },
-            { id: 'server-b', name: 'Server B', serverUrl: 'https://b.example.test', lastUsedAt: 900 },
-        ];
-        await emitActiveServerUpdate();
+        await act(async () => {
+            await profiles.adoptHomeProfile({ descriptor: { v: 1, homeServerIdentityId: homeA,
+                canonicalServerUrl: 'https://a.example.test', revision: 1,
+                endpoints: [{ kind: 'https', url: 'https://a.example.test' }] },
+                suggestedName: 'Server A renamed', source: 'qr', preserveUserLabel: false,
+                descriptorAuthority: 'current_connection_observation' });
+        });
 
+        expect(profiles.getServerProfileById(homeA)?.name).toBe('Server A renamed');
         expect(hook.getCurrent()).not.toBe(first);
-        expect(hook.getCurrent().serverProfiles[0]?.name).toBe('Server A renamed');
+        expect(hook.getCurrent().serverProfiles.find(profile => profile.id === homeA)?.name).toBe('Server A renamed');
+    });
+
+    it('publishes same-identity Home descriptor admission without changing the authoring focus', async () => {
+        const hook = await renderHook(() => useNewSessionActiveServerSource());
+        const first = hook.getCurrent();
+        expect(first.serverProfiles.find(profile => profile.id === homeB)?.homeConnectionDescriptor).toBeUndefined();
+
+        await act(async () => { await publishDescriptor(); });
+
+        // The real profile producer has admitted the descriptor. Its consumer
+        // must not retain a preceding id/name-only projection of this Home.
+        expect(profiles.getServerProfileById(homeB)?.homeConnectionDescriptor).toEqual(descriptor);
+        expect(hook.getCurrent().serverProfiles.find(profile => profile.id === homeB)?.homeConnectionDescriptor).toEqual(descriptor);
+        expect(hook.getCurrent().activeServerId).toBe(homeA);
+        const admitted = hook.getCurrent();
+        await act(async () => { await publishDescriptor(); });
+        expect(hook.getCurrent()).toBe(admitted);
+
+        await act(async () => { await profiles.removeServerProfile(homeB); });
+        expect(hook.getCurrent().serverProfiles.some(profile => profile.id === homeB)).toBe(false);
+        expect(hook.getCurrent().activeServerId).toBe(homeA);
     });
 });

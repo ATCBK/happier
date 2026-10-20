@@ -75,8 +75,9 @@ export const en = {
         loadFailed: "Could not load this session's triggers.",
         accountLoadFailed: 'Could not load your triggers.',
         title: 'Triggers',
+        habitsHere: 'Habits here',
         countOn: ({ count }: Count) => `${count} on`,
-        info: 'What runs in this session when something happens. These stay with this session and don\'t appear in your library.',
+        info: 'What starts from this session, and what writes into it. These stay with this session and don\'t appear in your library.',
         saveFailed: 'Could not save this trigger. Your changes are still here.',
     },    kindDescription: {
         pluginEvent: 'Run when a plugin observes an event.',

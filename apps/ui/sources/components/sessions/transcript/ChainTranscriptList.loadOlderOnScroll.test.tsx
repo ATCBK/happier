@@ -59,7 +59,8 @@ vi.mock('@/components/sessions/transcript/MessageView', () => ({
     MessageViewWithSessionCommon: (props: any) => React.createElement('MessageViewWithSessionCommon', props),
 }));
 
-vi.mock('@legendapp/list/react-native', async () => {
+vi.mock('@legendapp/list/react-native', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@legendapp/list/react-native')>();
     const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
     const captured = createCapturingLegendListMock({
         resolveState: () => legendState.current,
@@ -69,7 +70,7 @@ vi.mock('@legendapp/list/react-native', async () => {
         legendChildLayoutState.props = props;
         return React.createElement(CapturingLegendList, { ...props, ref });
     });
-    return { LegendList };
+    return { ...original, LegendList };
 });
 
 function LegendChildLayoutCallbackProbe() {
@@ -96,13 +97,15 @@ function createChainTestRoot(Content: typeof import('./ChainTranscriptList')['Ch
     };
 }
 
+// Prepare the real transcript graph at collection, outside each pagination operation's budget.
+const { ChainTranscriptList: ChainContent } = await import('./ChainTranscriptList');
+
 describe('ChainTranscriptList', () => {
     type ChainTranscriptListTestProps =
         Omit<React.ComponentProps<typeof import('./ChainTranscriptList')['ChainTranscriptList']>, 'datasetKey'>
         & { datasetKey?: string };
 
     async function renderChainTranscriptList(props: ChainTranscriptListTestProps) {
-        const { ChainTranscriptList: ChainContent } = await import('./ChainTranscriptList');
         const ChainTranscriptList = createChainTestRoot(ChainContent);
         return renderScreen(React.createElement(ChainTranscriptList, {
             ...props,

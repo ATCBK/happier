@@ -42,6 +42,8 @@ export function renderDropdownItemTriggerRightElement(params: Readonly<{
     loading?: boolean;
     /** Field only: `row` when the field is stacked under its label, so it spans the row. */
     fieldSpan?: 'content' | 'column' | 'row' | 'intrinsic';
+    /** Field only: `chip` draws the compact borderless pill (pair it with soft `field` colours). */
+    fieldDensity?: 'field' | 'chip';
 }>) {
     const resolvedDensity = params.detailDensity ?? 'comfortable';
     const chevron = (
@@ -63,7 +65,8 @@ export function renderDropdownItemTriggerRightElement(params: Readonly<{
         });
         return (
             <HappierFieldBoxTrigger colors={params.field} leading={params.leading} trailing={chevron}
-                {...(params.fieldSpan === undefined ? {} : { span: params.fieldSpan })}>
+                {...(params.fieldSpan === undefined ? {} : { span: params.fieldSpan })}
+                {...(params.fieldDensity === undefined ? {} : { density: params.fieldDensity })}>
                 {params.loading ? (
                     <HappierSkeletonBlock width={72} height={14} radius={5} color={params.field.placeholderColor} />
                 ) : <Text

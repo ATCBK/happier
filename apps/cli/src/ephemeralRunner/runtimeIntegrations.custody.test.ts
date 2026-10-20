@@ -1,4 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
+import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
+
+let runnerHome: string;
 
 const h = vi.hoisted(() => {
   const sourceDispose = vi.fn();
@@ -159,11 +165,15 @@ function createReviewedMcpMaterial() {
         target: { t: 'allMachines' }, createdAt: 8, updatedAt: 9,
       }],
     },
-    selection: {
-      v: 1,
-      managedServersEnabled: false,
-      forceIncludeServerIds: ['reviewed'],
-      forceExcludeServerIds: [],
+    agentId: 'codex',
+    agentAcceptsUserMcp: true,
+    capabilitySelection: {
+      mcp: {
+        v: 1,
+        managedServersEnabled: false,
+        forceIncludeServerIds: ['reviewed'],
+        forceExcludeServerIds: [],
+      },
     },
     resolveSavedSecret: (secretId) => secretId === 'mcp-secret'
       ? { value: 'sealed-mcp-secret', revision: 5 }
@@ -273,8 +283,8 @@ function createStartInput(signal: AbortSignal, invalidate?: 'application' | 'del
       managed: {
         launch: {
           source: 'managed',
-          resolvedPath: '/runner-home/agents/codex',
-          command: '/runner-home/agents/codex',
+          resolvedPath: join(runnerHome, 'agents', 'codex'),
+          command: join(runnerHome, 'agents', 'codex'),
           args: [],
         },
       },
@@ -284,10 +294,10 @@ function createStartInput(signal: AbortSignal, invalidate?: 'application' | 'del
       },
     },
     localState: {
-      homeDirectory: '/runner-home',
+      homeDirectory: runnerHome,
       environment: {
-        HAPPIER_HOME_DIR: '/runner-home',
-        HOME: '/runner-home',
+        HAPPIER_HOME_DIR: runnerHome,
+        HOME: runnerHome,
         PATH: '/inherited/bin',
         LANG: 'en_US.UTF-8',
       },
@@ -313,7 +323,8 @@ async function start(
 }
 
 describe('production Runner pre-handle resource custody', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    runnerHome = await createTempDir('happier-runner-custody-');
     vi.stubEnv('HAPPIER_HOME_CARRIER_POLICY', 'automatic');
     for (const mock of Object.values(h)) {
       if (typeof mock === 'function') mock.mockReset();
@@ -376,7 +387,10 @@ describe('production Runner pre-handle resource custody', () => {
       plan.config.onRuntimeStopReady?.(h.ordinarySessionStop);
     });
   });
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await removeTempDir(runnerHome);
+  });
 
   it('does not create a native Provider Machine runtime after Standard-only is selected', async () => {
     vi.stubEnv('HAPPIER_HOME_CARRIER_POLICY', 'standard_only');
@@ -409,8 +423,8 @@ describe('production Runner pre-handle resource custody', () => {
         overrides: { speed: { updatedAt: 456, value: 'fast' } },
       });
       expect(options.environmentVariables).toEqual({
-        HAPPIER_HOME_DIR: '/runner-home',
-        HOME: '/runner-home',
+        HAPPIER_HOME_DIR: runnerHome,
+        HOME: runnerHome,
         PATH: '/reviewed/bin',
         LANG: 'de_CH.UTF-8',
         RUNNER_PROFILE_TOKEN: 'sealed-secret',
@@ -446,7 +460,7 @@ describe('production Runner pre-handle resource custody', () => {
     await runtime.terminal;
 
     expect(h.createProviderRuntime).toHaveBeenCalledWith({
-      happyHomeDir: '/runner-home',
+      happyHomeDir: runnerHome,
       relayConfig: { relayPolicy: 'automatic', relayUrls: [], explicitlyConfigured: false },
     });
     expect(h.createMachineClient).toHaveBeenCalledWith(expect.objectContaining({
@@ -550,14 +564,18 @@ describe('production Runner pre-handle resource custody', () => {
     expect(h.createProviderRuntime).not.toHaveBeenCalled();
   });
 
-  it('rolls back the exact created checkout when cancellation wins during preparation', async () => {
+  it('retains the prepared checkout when cancellation wins without exclusive checkout custody', async () => {
     const controller = new AbortController();
+    const checkoutPath = join(runnerHome, '.dev', 'worktree', 'cancelled');
+    await mkdir(checkoutPath, { recursive: true });
+    const retainedFile = join(checkoutPath, 'accepted-by-another-consumer.txt');
+    await writeFile(retainedFile, 'retained checkout contents');
     h.realizeWorkspaceCheckout.mockImplementationOnce(async () => {
       controller.abort(new Error('cancelled-during-checkout'));
       return {
-        sourceRootPath: '/workspace/repository',
+        sourceRootPath: runnerHome,
         realization: {
-          targetPath: '/workspace/repository/.dev/worktree/cancelled',
+          targetPath: checkoutPath,
           branchName: 'cancelled',
           created: true,
         },
@@ -566,16 +584,10 @@ describe('production Runner pre-handle resource custody', () => {
 
     await expect(start(controller.signal, undefined, {
       checkoutCreationDraft: { kind: 'git_worktree', displayName: 'cancelled', baseRef: null },
-    }, '/workspace/repository')).rejects.toBeDefined();
+    }, runnerHome)).rejects.toBeDefined();
 
-    expect(h.runScmRoute).toHaveBeenCalledWith(expect.objectContaining({
-      request: expect.objectContaining({
-        cwd: '/workspace/repository/.dev/worktree/cancelled',
-        worktreePath: '/workspace/repository/.dev/worktree/cancelled',
-        confirmed: true,
-      }),
-      workingDirectory: '/workspace/repository/.dev/worktree/cancelled',
-    }));
+    expect(h.runScmRoute).not.toHaveBeenCalled();
+    await expect(readFile(retainedFile, 'utf8')).resolves.toBe('retained checkout contents');
     expect(h.createProviderRuntime).not.toHaveBeenCalled();
   });
 
@@ -724,16 +736,22 @@ describe('production Runner pre-handle resource custody', () => {
     expect(h.runHostSessionRuntimePlan).toHaveBeenCalledWith(expect.objectContaining({
       config: expect.objectContaining({
         resolvedMcpServers: {
-          reviewed: {
-            command: '/runner/bin/reviewed-mcp',
-            args: ['serve'],
-            env: { REVIEWED_SECRET: 'sealed-mcp-secret' },
-          },
+          reviewed: expect.objectContaining({
+            env: expect.objectContaining({ HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE: expect.any(String) }),
+          }),
         },
       }),
     }));
-    // Secret material is not copied into transport/auth arguments; it remains
-    // confined to the reviewed materializer and host MCP config.
+    const plan: { config: { resolvedMcpServers: Record<string, { env: Record<string, string> }> } } =
+      h.runHostSessionRuntimePlan.mock.calls[0]![0];
+    const sidecarPath = plan.config.resolvedMcpServers.reviewed!.env.HAPPIER_MCP_STDIO_LAUNCHER_CONFIG_FILE!;
+    expect(sidecarPath).toContain(join(runnerHome, 'tmp'));
+    expect(JSON.parse(await readFile(sidecarPath, 'utf8'))).toMatchObject({
+      command: '/runner/bin/reviewed-mcp', args: ['serve'], env: { REVIEWED_SECRET: 'sealed-mcp-secret' },
+    });
+    expect(JSON.stringify(plan.config.resolvedMcpServers)).not.toContain('sealed-mcp-secret');
+    // Secret material remains in the protected sidecar rather than transport
+    // arguments or the host MCP launch environment.
     expect(h.createMachineClient.mock.calls[0]?.[0]).not.toHaveProperty('mcpMaterial');
     expect(h.createSessionRuntime.mock.calls[0]?.[1]).not.toHaveProperty('mcpMaterial');
     expect(h.machineClose).toHaveBeenCalledOnce();

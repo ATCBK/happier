@@ -1,7 +1,8 @@
 import { teamGroupNameKeyV1, validateTeamGroupNameV1 } from "@happier-dev/protocol/teams";
 
 import type { Tx } from "@/storage/inTx";
-import { withTeamSessionAccessEffectsInTx, type TeamSessionAccessImpacts } from "./sessionAccessEffects";
+import { acquireAccountChangePublicationLocksInTx, assertAccountChangePublicationAudienceInTx, beforeAccountChangePublication } from "@/app/changes/markAccountChanged";
+import { acquireTeamMutationAccountAdmissionInTx, withTeamSessionAccessEffectsInTx, type TeamSessionAccessImpacts } from "./sessionAccessEffects";
 import {
     TeamExternalGroupBindingMode,
     TeamMembershipStatus,
@@ -117,6 +118,7 @@ export async function applyExternalTeamMembershipInTx(
         publishChange?: boolean;
     }>,
 ): Promise<ExternalMembershipResult> {
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.accountId], affectedAccountIds: [input.accountId], membershipChange: { kind: "teamMembership", teamId: input.teamId } });
     if (input.source.kind === "directory_source") {
         if (!await readSourceInTx(tx, {
             teamId: input.teamId,
@@ -187,7 +189,6 @@ export async function applyExternalTeamMembershipInTx(
     return withTeamSessionAccessEffectsInTx(tx, {
         teamId: input.teamId,
         accountIds: [input.accountId],
-        origin: existing && input.desired !== "absent" ? "retained_lifecycle" : "relationship_change",
         sessionAccessImpacts: input.sessionAccessImpacts,
     }, async (sessionAccessImpacts) => {
         if (input.desired === "absent") {
@@ -402,6 +403,7 @@ export async function applyExternalGroupContributionInTx(
         publishChange?: boolean;
     }>,
 ): Promise<ExternalGroupContributionResult> {
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.accountId], affectedAccountIds: [input.accountId], membershipChange: { kind: "teamGroupMembership", teamId: input.teamId, teamGroupIds: [input.groupId] } });
     const binding = await tx.teamExternalGroupBinding.findUnique({
         where: { id: input.externalGroupBindingId },
         select: {
@@ -572,7 +574,7 @@ export async function applyExternalManagedGroupInTx(
     if (!archiveChanged && !renamed) return { status: "unchanged", teamGroupId: group.id };
 
     return withTeamSessionAccessEffectsInTx(tx, {
-        teamId: input.teamId, teamGroupId: group.id, origin: "retained_lifecycle", sessionAccessImpacts: input.sessionAccessImpacts,
+        teamId: input.teamId, teamGroupId: group.id, sessionAccessImpacts: input.sessionAccessImpacts,
     }, async () => {
         await tx.teamGroup.update({
             where: { id: group.id },
@@ -620,6 +622,10 @@ export async function removeExternalGroupBindingInTx(
     }
 
     const affectedAccountIds = new Set<string>();
+    const admissionAccountIds = binding.contributions.map(row => row.membership.teamMembership.accountId);
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: admissionAccountIds,
+        affectedAccountIds: admissionAccountIds, membershipChange: { kind: "teamGroupMembership", teamId: input.teamId,
+            teamGroupIds: [...new Set(binding.contributions.map(row => row.teamGroupId))] } });
     for (const contribution of binding.contributions) {
         await applyTeamGroupContributionInTx(tx, {
             teamId: input.teamId,
@@ -646,26 +652,62 @@ export async function removeExternalGroupBindingInTx(
     };
 }
 
+export async function readExternalSourceAccountIdsInTx(
+    tx: Tx,
+    input: Readonly<{ owner: ExternalFactOwner }>,
+): Promise<readonly string[]> {
+    const ownerWhere = input.owner.kind === "directory_source"
+        ? { directorySourceId: input.owner.directorySourceId }
+        : { teamIdentityConnectionId: input.owner.teamIdentityConnectionId };
+    const bindings = await tx.teamExternalGroupBinding.findMany({
+        where: ownerWhere,
+        select: { contributions: { select: { membership: { select: { teamMembership: { select: { accountId: true } } } } } } },
+    });
+    const identities = input.owner.kind === "directory_source" ? await tx.teamProvisionedIdentity.findMany({
+        where: { directorySourceId: input.owner.directorySourceId, boundAccountId: { not: null } },
+        select: { boundAccountId: true },
+    }) : [];
+    const memberships = input.owner.kind === "identity_connection" ? await tx.teamMembershipIdentityConnectionManagement.findMany({
+        where: { teamIdentityConnectionId: input.owner.teamIdentityConnectionId },
+        select: { membership: { select: { accountId: true } } },
+    }) : [];
+    return [
+        ...identities.flatMap(identity => identity.boundAccountId ?? []),
+        ...memberships.map(row => row.membership.accountId),
+        ...bindings.flatMap(binding => binding.contributions.map(row => row.membership.teamMembership.accountId)),
+    ];
+}
+
+/** Admit retained lifecycle targets with the actor before source/resource writes. */
+export async function acquireExternalSourceAccountAdmissionInTx(
+    tx: Tx,
+    input: Readonly<{ owner: ExternalFactOwner; actorAccountIds?: readonly string[] }>,
+): Promise<void> {
+    const affectedAccountIds = await readExternalSourceAccountIdsInTx(tx, input);
+    const accountIds = [...(input.actorAccountIds ?? []), ...affectedAccountIds];
+    const source = input.owner.kind === "directory_source"
+        ? await tx.teamDirectorySource.findUnique({ where: { id: input.owner.directorySourceId }, select: { teamId: true } })
+        : await tx.teamIdentityConnection.findUnique({ where: { id: input.owner.teamIdentityConnectionId }, select: { teamId: true } });
+    if (source?.teamId) {
+        await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: source.teamId, accountIds, affectedAccountIds,
+            membershipChange: { kind: "teamMembership", teamId: source.teamId } });
+    } else {
+        await acquireAccountChangePublicationLocksInTx(tx, accountIds, { includeSingleAccount: true });
+    }
+    beforeAccountChangePublication(tx, accountIds, async () => {
+        assertAccountChangePublicationAudienceInTx(tx, await readExternalSourceAccountIdsInTx(tx, input));
+    });
+}
+
 /**
- * Remove every native fact one external source owns, atomically.
- *
- * This returns only after all of the source's native facts have become
- * ineffective. It is deliberately not a cursor into "the rest of the access
- * removals": a partially revoked source is committed access nobody is
- * responsible for, which is exactly the state atomic revocation exists to make
- * impossible.
- *
- * Group metadata disposition is `retain native`. Of the three permitted
- * dispositions it is the only non-destructive one: the Group keeps its roster
- * and horizons and simply becomes natively managed, which an administrator can
- * then rename, archive, or rebind deliberately. Archiving somebody's live Group
- * as a side effect of removing a source would be a policy decision this adapter
- * has no authority to make.
+ * Remove every native fact one external source owns atomically, retaining Group
+ * metadata, native contributions, and their existing membership horizons.
  */
 export async function revokeExternalSourceFactsInTx(
     tx: Tx,
     input: Readonly<{ teamId: string; owner: ExternalFactOwner }>,
 ): Promise<ExternalSourceRevocationResult> {
+    await acquireExternalSourceAccountAdmissionInTx(tx, input);
     const ownerWhere = input.owner.kind === "directory_source"
         ? { directorySourceId: input.owner.directorySourceId }
         : { teamIdentityConnectionId: input.owner.teamIdentityConnectionId };
@@ -711,7 +753,7 @@ export async function revokeExternalSourceFactsInTx(
         ...memberships.map(member => member.accountId),
         ...bindings.flatMap(binding => binding.contributions.map(contribution => contribution.membership.teamMembership.accountId)),
     ];
-    return withTeamSessionAccessEffectsInTx(tx, { teamId: input.teamId, accountIds, origin: "relationship_change" }, async (sessionAccessImpacts) => {
+    return withTeamSessionAccessEffectsInTx(tx, { teamId: input.teamId, accountIds }, async (sessionAccessImpacts) => {
         const affected = new Set<string>();
         let contributionsRemoved = 0;
 

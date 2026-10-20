@@ -26,9 +26,11 @@ const PREVIEW_HEIGHT_PX = 560;
  * under the page header) scrolls the page to reach Send instead of clipping it.
  */
 export const EMBED_PREVIEW_PAGE_MIN_HEIGHT_PX = 320;
-// The empty-state illustration's measure in settings lab L2; its contents are the real preview route.
+// The empty-state illustration's width in settings lab L2; its contents are the real preview route.
+// Its height keeps the whole chat (the page minimum at phone width, scaled), so the art never cuts
+// the approval buttons or the composer through a line.
 const ILLUSTRATION_WIDTH_PX = 294;
-const ILLUSTRATION_HEIGHT_PX = 168;
+const ILLUSTRATION_HEIGHT_PX = Math.round(EMBED_PREVIEW_PAGE_MIN_HEIGHT_PX * ILLUSTRATION_WIDTH_PX / PREVIEW_FRAME_WIDTH.phone);
 
 const stylesheet = StyleSheet.create((theme) => ({
     column: {

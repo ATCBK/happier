@@ -20,6 +20,7 @@ import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presenta
 import { Item } from '@/components/ui/lists/Item';
 import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 import { MENU_ROW_METRICS } from '@/components/ui/lists/itemDensityMetrics';
+import { resolveItemGroupContentHorizontalInsetPx } from '@/components/ui/lists/itemGroupSpacing';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { SlideTransitionSwitch } from '@/components/ui/motion/SlideTransitionSwitch';
 
@@ -57,6 +58,7 @@ import { renderSelectionListAccessory } from './renderSelectionListAccessory';
 import { resolveSelectionListOptionDomId } from './resolveSelectionListOptionDomId';
 import { SelectionListA11yPatternContext } from './SelectionListA11yPatternContext';
 import { SelectionListInputAttentionContext } from './SelectionListInputAttentionContext';
+import { SelectionListPointerFocusContext } from './SelectionListPointerFocusContext';
 import { SelectionListScrollIntoViewContext } from './SelectionListScrollIntoViewContext';
 import { selectionListTestId } from './_shared';
 import type { SectionRenderPlan } from './SelectionListRenderPlan';
@@ -74,11 +76,6 @@ const selectedMarkStyles = StyleSheet.create(() => ({
     gap: 8,
   },
 }));
-
-type WebHoverablePressableState = Readonly<{
-  pressed: boolean;
-  hovered?: boolean;
-}>;
 
 /**
  * Card geometry (`optionPresentation: 'card'`). Only the theme-INDEPENDENT
@@ -134,6 +131,10 @@ const menuStyles = StyleSheet.create(() => ({
     marginHorizontal: MENU_ROW_METRICS.insetPx,
     borderRadius: MENU_ROW_METRICS.radiusPx,
     overflow: 'hidden',
+  },
+  // `optionPresentation: 'section'`: rows on a grouped section's content inset, like `ItemGroup` rows.
+  section: {
+    marginHorizontal: resolveItemGroupContentHorizontalInsetPx(),
   },
 }));
 
@@ -257,6 +258,7 @@ export function PlanOptionRow(
   const requestInputAttention = React.useContext(
     SelectionListInputAttentionContext,
   );
+  const focusOptionFromPointer = React.useContext(SelectionListPointerFocusContext);
   const optionTabBehavior = React.useContext(
     SelectionListOptionTabBehaviorContext,
   );
@@ -349,6 +351,14 @@ export function PlanOptionRow(
     SelectionListOptionPresentationContext,
   );
   const isCard = optionPresentation === 'card';
+  // The pointer moves the list's one highlight to this row (a card has no focus fill to duplicate).
+  const handlePointerHighlight = () => {
+    if (!isCard) focusOptionFromPointer?.(props.option.id);
+    props.option.onHighlight?.();
+  };
+  const handlePointerLeave = () => {
+    if (!isCard) focusOptionFromPointer?.(null);
+  };
   const rowRole = optionPresentation === 'menu' ? 'menu' : 'item';
   // The card is the SINGLE owner of the option's fill: an unselected card
   // paints nothing, so it stays quiet on any pane (a base fill reads as a grey
@@ -380,9 +390,11 @@ export function PlanOptionRow(
         : undefined,
   });
   const isMenu = optionPresentation === 'menu';
+  const isSection = optionPresentation === 'section';
   const wrapperStyle = [
     props.columnCellStyle,
     isMenu ? menuStyles.container : null,
+    isSection ? menuStyles.section : null,
     ...(isCard
       ? [
           cardStyles.container,
@@ -392,7 +404,7 @@ export function PlanOptionRow(
       : []),
   ];
   const cardWrapperProps =
-    props.columnCellStyle !== undefined || isCard || isMenu
+    props.columnCellStyle !== undefined || isCard || isMenu || isSection
       ? { style: wrapperStyle }
       : {};
   // In card mode the trailing accessory leaves the row's flow entirely and
@@ -531,6 +543,8 @@ export function PlanOptionRow(
           rowRole={rowRole}
           title={labelContent ?? optionLabel}
           titleAccessory={titleAccessory}
+          contentAlign={props.option.contentAlign}
+          titleHighlightQuery={props.option.labelHighlightQuery}
           subtitle={displayedSubtitle}
           subtitleLeading={subtitleLeading}
           titleEllipsizeMode={props.option.labelEllipsizeMode}
@@ -569,7 +583,8 @@ export function PlanOptionRow(
       <Pressable
         testID={optionTestId}
         onPressIn={props.option.onPressIn}
-        onHoverIn={props.option.disabled === true ? undefined : props.option.onHighlight}
+        onHoverIn={props.option.disabled === true ? undefined : handlePointerHighlight}
+        onHoverOut={handlePointerLeave}
         onPress={handlePress}
         {...(Platform.OS === 'web'
           ? ({
@@ -587,18 +602,17 @@ export function PlanOptionRow(
         disabled={props.option.disabled === true}
         {...customContentAccessibilityProps}
         style={(state) => {
-          const hovered =
-            (state as WebHoverablePressableState).hovered === true;
           return {
             // In card mode the card owns the selected fill and wraps the
             // expanded content with it. Painting it here too would put a
             // SQUARE-cornered surface behind the rounded card — the exact
             // conflict that made the card impossible to add at the call
-            // site. Transient hover/press feedback still belongs to the
-            // pressable, since it tracks this control, not the option.
+            // site. Transient press feedback still belongs to the pressable,
+            // since it tracks this control, not the option; hover moves the
+            // list's one highlight instead of painting a second fill.
             backgroundColor: staticContent
               ? undefined
-              : state.pressed || hovered
+              : state.pressed
                 ? paintColor(theme.colors.surface.pressed)
                 : selectedOrFocused && !isCard
                   ? paintColor(theme.colors.surface.selected)
@@ -615,24 +629,33 @@ export function PlanOptionRow(
         testID={optionTestId}
         title={labelContent ?? optionLabel}
         titleAccessory={titleAccessory}
+        contentAlign={props.option.contentAlign}
+        titleHighlightQuery={props.option.labelHighlightQuery}
         subtitle={displayedSubtitle}
         subtitleLeading={subtitleLeading}
         titleEllipsizeMode={props.option.labelEllipsizeMode}
         subtitleEllipsizeMode={props.option.subtitleEllipsizeMode}
         icon={icon}
         rightElement={itemRightElement}
+        // A row's trailing facts and its selected check are never cut; the label gives way instead.
+        accessoryMaxWidth="row"
         rightElementOutsidePressable={
           !isCard && props.option.rightAccessoryOutsidePressable === true
         }
         onPressIn={props.option.onPressIn}
         onHoverIn={props.option.disabled === true ? undefined : () => {
           setHovered(true);
-          props.option.onHighlight?.();
+          handlePointerHighlight();
         }}
-        onHoverOut={() => setHovered(false)}
+        onHoverOut={() => {
+          setHovered(false);
+          handlePointerLeave();
+        }}
         onPress={handlePress}
         selected={isSelected}
         focused={props.isFocused}
+        // The list has one highlight and the pointer moves it; a hover fill of its own would show a second row selected.
+        hoverFill={false}
         disabled={props.option.disabled === true}
         loading={props.option.loading === true}
         showChevron={Boolean(props.option.openStep)}

@@ -1,7 +1,8 @@
 import * as pinnedHttp from '@/network/pinnedHttp';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { accountSettingsParse } from '@happier-dev/protocol';
+import { notificationSettingsSnapshotFixture as accountSettingsParse } from '@/notifications/activity/activityNotification.testkit';
+import { resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 import { PermissionRequestPushNotifier } from './permissionRequestPushNotifier';
 import type { PermissionRequestPushSender } from './permissionRequestPush';
@@ -10,15 +11,70 @@ import { createSessionNotificationContextFixture } from '@/testkit/backends/sess
 const fetchSessionNotificationContext = async (sessionId: string) => createSessionNotificationContextFixture(sessionId);
 
 describe('PermissionRequestPushNotifier', () => {
+  it('reevaluates admitted source policy on retries instead of retaining a stale interrupt', async () => {
+    vi.useFakeTimers();
+    const sendToAllDevicesAsync = vi.fn(async () => false);
+    const onNotifiedAt = vi.fn();
+    let selected = true;
+    const notifier = new PermissionRequestPushNotifier({
+      pushSender: { readAccountSessionDeliveryMutedScopes: async () => [], sendToAllDevicesAsync,
+        fetchSessionNotificationContext: async id => {
+          const context = createSessionNotificationContextFixture(id);
+          return { ...context, viewer: { ...context.viewer!, follow: {
+            follows: true, notificationLevel: 'important' as const, policy: { preset: 'quiet' as const },
+          } } };
+        },
+      },
+      getSettings: () => accountSettingsParse({}),
+      prepareRequestNotification: async () => ({ isCurrent: () => true,
+        admittedRulePolicies: [{ preset: selected ? 'important' : 'quiet' }] }),
+      sessionId: 'retry-policy', logPrefix: '[test]', retryDelaysMs: [100], onNotifiedAt,
+    });
+    try {
+      notifier.notify({ permissionId: 'retry-question', toolName: 'AskUserQuestion', requestKind: 'user_action' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1);
+      selected = false;
+      await vi.advanceTimersByTimeAsync(100);
+      expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1);
+      expect(onNotifiedAt).not.toHaveBeenCalled();
+      selected = true;
+      sendToAllDevicesAsync.mockResolvedValue(true);
+      notifier.notify({ permissionId: 'retry-question', toolName: 'AskUserQuestion', requestKind: 'user_action' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(2);
+      expect(onNotifiedAt).toHaveBeenCalledTimes(1);
+    } finally { notifier.dispose(); }
+  });
+  it('rechecks the question owner before delivery and keeps manager-handled questions quiet', async () => {
+    const sendToAllDevicesAsync = vi.fn(async () => true);
+    let handling: 'person' | 'manager' = 'manager';
+    const notifier = new PermissionRequestPushNotifier({
+      pushSender: { fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [], sendToAllDevicesAsync },
+      getSettings: () => accountSettingsParse({}),
+      getRequestFollowEvent: () => ({ kind: 'needs_you', type: 'decision', mode: 'wait', handling }),
+      sessionId: 's1', logPrefix: '[test]',
+    });
+    notifier.notify({ permissionId: 'q1', toolName: 'AskUserQuestion', requestKind: 'user_action' });
+    // A skipped source-policy decision is idle, not acknowledged as a delivery.
+    await vi.waitFor(() => expect(sendToAllDevicesAsync).not.toHaveBeenCalled());
+    await new Promise(resolve => setImmediate(resolve));
+    expect(sendToAllDevicesAsync).not.toHaveBeenCalled();
+    handling = 'person';
+    notifier.notify({ permissionId: 'q1', toolName: 'AskUserQuestion', requestKind: 'user_action' });
+    await vi.waitFor(() => expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1));
+    notifier.dispose();
+  });
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    resetActiveAccountSettingsSnapshotForTests();
   });
 
   it('delivers full questions and choices through the notifier', async () => {
     const sendToAllDevicesAsync = vi.fn<PermissionRequestPushSender['sendToAllDevicesAsync']>(async () => { return true; });
     const notifier = new PermissionRequestPushNotifier({
-      pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
+      pushSender: { fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [], sendToAllDevicesAsync },
       getSettings: () => accountSettingsParse({ notificationsSettingsV1: { requestIncludeMessageText: true } }),
       sessionId: 's1', logPrefix: '[test]',
     });
@@ -36,7 +92,7 @@ describe('PermissionRequestPushNotifier', () => {
   it('does not send when disabled by settings', async () => {
     const sendToAllDevicesAsync = vi.fn(async () => { return true; });
     const notifier = new PermissionRequestPushNotifier({
-      pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
+      pushSender: { fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [], sendToAllDevicesAsync },
       getSettings: () =>
         accountSettingsParse({
           notificationsSettingsV1: { v: 1, pushEnabled: true, ready: true, permissionRequest: false },
@@ -73,7 +129,7 @@ describe('PermissionRequestPushNotifier', () => {
       }),
     );
     const notifier = new PermissionRequestPushNotifier({
-      pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
+      pushSender: { fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [], sendToAllDevicesAsync },
       getSettings,
       sessionId: 's1',
       logPrefix: '[test]',
@@ -97,7 +153,7 @@ describe('PermissionRequestPushNotifier', () => {
   it('does not send user-action requests when disabled by settings', async () => {
     const sendToAllDevicesAsync = vi.fn(async () => { return true; });
     const notifier = new PermissionRequestPushNotifier({
-      pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
+      pushSender: { fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [], sendToAllDevicesAsync },
       getSettings: () =>
         accountSettingsParse({
           notificationsSettingsV1: {
@@ -125,7 +181,7 @@ describe('PermissionRequestPushNotifier', () => {
   it('sends user-action requests even when permission-request pushes are disabled', async () => {
     const sendToAllDevicesAsync = vi.fn(async () => { return true; });
     const notifier = new PermissionRequestPushNotifier({
-      pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
+      pushSender: { fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [], sendToAllDevicesAsync },
       getSettings: () =>
         accountSettingsParse({
           notificationsSettingsV1: {
@@ -144,9 +200,7 @@ describe('PermissionRequestPushNotifier', () => {
     });
 
     notifier.notify({ permissionId: 'p1', toolName: 'AskUserQuestion', requestKind: 'user_action' });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1));
     notifier.dispose();
   });
 
@@ -161,7 +215,7 @@ describe('PermissionRequestPushNotifier', () => {
     const sendToAllDevicesAsync = vi.fn(async () => { return true; });
     const onNotifiedAt = vi.fn();
     const notifier = new PermissionRequestPushNotifier({
-      pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
+      pushSender: { fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [], sendToAllDevicesAsync },
       getSettings: () =>
         accountSettingsParse({
           attentionDeliveryPolicyV1: {
@@ -223,7 +277,7 @@ describe('PermissionRequestPushNotifier', () => {
     const onNotifiedAt = vi.fn();
     let sessionTitle = 'Initial session title';
     const notifier = new PermissionRequestPushNotifier({
-      pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
+      pushSender: { fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [], sendToAllDevicesAsync },
       getSettings: () =>
         accountSettingsParse({
           notificationsSettingsV1: { v: 1, pushEnabled: true, ready: true, permissionRequest: true },
@@ -241,8 +295,7 @@ describe('PermissionRequestPushNotifier', () => {
     notifier.notify({ permissionId: 'p1', toolName: 'Write', createdAtMs: 0 });
 
     // First attempt runs immediately (async; no timer).
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
     expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1);
     expect(sendToAllDevicesAsync.mock.calls[0]?.[0]).toBe('Initial session title');
 
@@ -269,7 +322,7 @@ describe('PermissionRequestPushNotifier', () => {
   it('still sends when maxEntries is configured to 0 (clamped to 1)', async () => {
     const sendToAllDevicesAsync = vi.fn(async () => { return true; });
     const notifier = new PermissionRequestPushNotifier({
-      pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
+      pushSender: { fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [], sendToAllDevicesAsync },
       getSettings: () =>
         accountSettingsParse({
           notificationsSettingsV1: { v: 1, pushEnabled: true, ready: true, permissionRequest: true },
@@ -282,16 +335,14 @@ describe('PermissionRequestPushNotifier', () => {
     });
 
     notifier.notify({ permissionId: 'p1', toolName: 'Write' });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1));
     notifier.dispose();
   });
 
   it('falls back when display context callbacks throw', async () => {
     const sendToAllDevicesAsync = vi.fn(async () => { return true; });
     const notifier = new PermissionRequestPushNotifier({
-      pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
+      pushSender: { fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [], sendToAllDevicesAsync },
       getSettings: () =>
         accountSettingsParse({
           notificationsSettingsV1: { v: 1, pushEnabled: true, ready: true, permissionRequest: true },
@@ -310,15 +361,12 @@ describe('PermissionRequestPushNotifier', () => {
     });
 
     notifier.notify({ permissionId: 'p1', toolName: 'Write' });
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(sendToAllDevicesAsync).toHaveBeenCalledWith(
+    await vi.waitFor(() => expect(sendToAllDevicesAsync).toHaveBeenCalledWith(
       'Session s1',
       'Agent asks permission to use Write',
       expect.objectContaining({ sessionId: 's1', requestId: 'p1' }),
       { sound: 'happier_urgent.wav', priority: 'high', androidSoundId: 'urgent' },
-    );
+    ));
     notifier.dispose();
   });
 });

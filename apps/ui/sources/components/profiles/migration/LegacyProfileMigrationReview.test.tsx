@@ -66,6 +66,25 @@ const multiCredentialProfile = AIBackendProfileSchema.parse({
 });
 
 describe('LegacyProfileMigrationReview', () => {
+    it('cancels a non-replying preview when its reviewed draft changes and permits another preview', async () => {
+        const fingerprint = `legacy-profile-migration-source:v1:${'b'.repeat(43)}`;
+        preview.mockImplementationOnce(() => new Promise<never>(() => {}))
+            .mockResolvedValueOnce({ status: 'success', sourceProfileId: 'legacy-a', sourceFingerprint: fingerprint });
+        const { LegacyProfileMigrationReview } = await import('./LegacyProfileMigrationReview');
+        const screen = await renderScreen(<LegacyProfileMigrationReview profile={profile}
+            secretBindings={{ ANTHROPIC_AUTH_TOKEN: 'saved-secret-id' }} machineId="machine-a" serverId={serverId}
+            onConfirmed={async () => {}} onClose={() => {}} />);
+        const row = screen.findAllByType(Item).find(item => item.props.title === 'settingsProviders.migration.preview');
+        await React.act(async () => { row!.props.onPress(); });
+        await waitForHomeGovernance(() => expect(preview).toHaveBeenCalledOnce());
+        await React.act(async () => { screen.changeTextByTestId('profile-migration-base-url', 'https://new-gateway.example.test'); });
+        await flushHookEffects();
+        expect(screen.findAllByType(Item).some(item => item.props.loading)).toBe(false);
+        await pressRow(screen, 'settingsProviders.migration.preview');
+        expect(preview).toHaveBeenCalledTimes(2);
+        expect(screen.findAllByType(Item).find(item => item.props.title === 'settingsProviders.migration.confirm')?.props.disabled).not.toBe(true);
+    });
+
     afterEach(async () => { vi.useRealTimers(); standardCleanup(); await account.reset(); rpc.reset(); });
     beforeEach(async () => {
         preview.mockReset(); confirm.mockReset(); vi.useRealTimers();

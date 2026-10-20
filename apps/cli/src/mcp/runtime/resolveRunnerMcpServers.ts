@@ -1,4 +1,5 @@
 import type { McpServerConfig } from '@/agent';
+import type { ProcessEnvInput } from '@/utils/processEnv/buildScopedProcessEnv';
 import { createHappierMcpBridge } from '@/agent/runtime/createHappierMcpBridge';
 import type { ExecutionRunOccurrenceWitnessV1 } from '@/agent/runtime/bridges/executionRun/runOccurrenceWitness';
 import type { AgentInvocationTurnAdmissionWitness } from '@/plugins/runtime/invocation/services/types';
@@ -33,13 +34,9 @@ import {
   SavedSecretResolutionError,
   type SavedSecretCatalogResourceInputV1,
 } from '@/settings/secrets/savedSecretCatalog';
-import {
-  refreshSavedSecretCatalogForOperation,
-  savedSecretOperationAdmissionStatus,
-  SavedSecretOperationAdmissionError,
-  createInvocationSavedSecretOperationContextV1,
-  type SavedSecretOperationContextV1,
-} from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { refreshSavedSecretCatalogForOperation, savedSecretOperationAdmissionStatus } from "@/settings/secrets/hydrateSavedSecretCatalog";
+import { SavedSecretOperationAdmissionError } from "@/settings/secrets/savedSecretCatalogRead";
+import { createInvocationSavedSecretOperationContextV1, type SavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken,
@@ -51,7 +48,7 @@ import type { RuntimeActionSettingsProvider } from '@/settings/actionsSettingsPr
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { randomUUID } from 'node:crypto';
 import { createHappierMcpToolNamingResolver } from './projectMcpToolNames';
-import type { McpRequestAuthCapability } from './mcpRequestAuth';
+import { readMcpRequestAuthFailureCode, readMcpRequestAuthDiagnosticCode, readMcpRequestAuthFailureDiagnostic, type McpRequestAuthCapability, type McpRequestAuthFailureCode } from './mcpRequestAuth';
 import { canonicalMcpOAuthResourceUrlV1 } from '@happier-dev/protocol/mcp/oauth/mcpOAuthResourceV1';
 
 /**
@@ -84,7 +81,9 @@ function createRunScopedMcpSessionView(
   const readWitness = (): AgentInvocationTurnAdmissionWitness | null => {
     // Currentness is the occurrence owner's answer, never the caller's guess.
     if (!run.readCurrentRunOccurrence(run.runId)) return null;
-    return run.readActiveTurnAdmissionWitness();
+    const witness = run.readActiveTurnAdmissionWitness();
+    return witness ? { ...witness, agentStartCaller: { kind: 'session', sessionId: session.sessionId,
+      starterDepth: run.workDepth, turnDepth: run.workDepth } } : null;
   };
   return {
     ...session,
@@ -183,7 +182,7 @@ type RunnerMcpServersParams = Readonly<{
   agentAcceptsUserMcp?: boolean;
   mcpToolControl?: PluginAgentToolsCapabilityV2['mcpToolControl'];
   sessionMetadata?: Readonly<Record<string, unknown>> | null;
-  env?: NodeJS.ProcessEnv;
+  env?: ProcessEnvInput;
   tmpDir?: string | null;
   commandMode?: NonNullable<Parameters<typeof createHappierMcpBridge>[1]>['commandMode'];
   resolvedMcpServers?: Record<string, McpServerConfig>;
@@ -230,6 +229,15 @@ export function resolveRunnerMcpServers(params: RunnerMcpServersParams & { inclu
 export function resolveRunnerMcpServers(params: RunnerMcpServersParams & { includeHappierMcpServer: false }): Promise<RunnerMcpServersResult<{ stop: () => void }>>;
 export function resolveRunnerMcpServers(params: RunnerMcpServersParams): Promise<RunnerMcpServersResult<{ stop: () => void }>>;
 export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): Promise<RunnerMcpServersResult<{ stop: () => void }>> {
+  const startedAt = performance.now();
+  let phaseStartedAt = startedAt;
+  const recordStartupPhase = (phase: string) => {
+    const now = performance.now();
+    logger.infoFile('[mcp] Startup phase', { sessionId: params.session.sessionId, phase,
+      durationMs: Math.round(now - phaseStartedAt), elapsedMs: Math.round(now - startedAt) });
+    phaseStartedAt = now;
+  };
+  recordStartupPhase('entered');
   const env = params.env ?? process.env;
   const accountCredentials = Object.hasOwn(params, 'accountCredentials')
     ? params.accountCredentials ?? null
@@ -255,6 +263,7 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
   if (operationContext && (operationContext.credentials.token !== accountCredentials?.token || !await operationContext.isCurrent())) {
     throw new McpServerCatalogUnavailableError('scope-retired');
   }
+  recordStartupPhase('account_authority');
   let accountSettings = accountCredentials ? params.accountSettings ?? params.accountSettingsSnapshot?.settings ?? null : null;
   let savedSecretResources = params.savedSecretResources;
   let savedSecretCatalogState = params.savedSecretCatalogState;
@@ -288,31 +297,35 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
     if (startup.status === 'ready') mcpSettings = startup.settings;
     else await publishCapabilityNotice([{ kind: 'mcp_server', name: 'MCP servers', code: startup.error.code, detail: startup.error.reason }]);
   }
+  recordStartupPhase('catalog_admission');
   let mcpCatalog = accountSnapshot?.mcpServerCatalog;
   const pluginRegistry = params.pluginMcpRuntimeRegistry ?? params.pluginRuntimeRegistryLease?.registry ?? params.session.getPluginMcpRuntimeRegistry?.();
   let mcpPluginItems: readonly McpPluginItemV1[] = [];
   if (mcpSettings && pluginRegistry?.projectMcpServerItems && mcpCatalog?.status === 'ready') {
     mcpPluginItems = await pluginRegistry.projectMcpServerItems(mcpCatalog.catalog);
   }
+  recordStartupPhase('plugin_projection');
   const detected = params.detectedMcpServers ?? (pluginRegistry?.discoverMcpServersForDetection && params.agentId
     ? (await detectProviderMcpServers({ directory: params.directory, providers: [params.agentId], env,
       runtimeRegistry: pluginRegistry })).servers : []);
   const nativeServerNames = readLoadedMcpNativeServerNames({ servers: detected, agentId: params.agentId });
+  recordStartupPhase('native_discovery');
   const pluginAttachments: Readonly<{ dispose(): void | Promise<void> }>[] = [];
   const disposePluginAttachments = () => {
     for (const attachment of pluginAttachments.splice(0)) void Promise.resolve(attachment.dispose()).catch(error => {
       logger.debug('[mcp] Plugin attachment cleanup failed', { error });
     });
   };
-  let resolvedSelection: ReturnType<typeof resolveSessionCapabilitiesForDirectory> | null = null;
+  let resolvedSelection: Awaited<ReturnType<typeof resolveSessionCapabilitiesForDirectory>> | null = null;
   if (mcpSettings && accountCredentials) {
+    const initialSettings = mcpSettings;
     const selection = readSessionCapabilitySelectionFromMetadataV1(params.sessionMetadata ?? null).mcp;
     const serverBinding = params.session.getServerBinding();
     const projectInput = { credentials: accountCredentials, metadata: params.sessionMetadata ?? null,
-      serverId: serverBinding.serverId, signal: run?.signal ?? params.session.getRuntimeLifetimeSignal?.(),
+      serverId: serverBinding.serverId, signal: run?.signal ?? params.session.getRuntimeLifetimeSignal?.() ?? undefined,
       ...(operationContext ? { operationContext } : {}) };
     const initialSelection = await runWithServerHttpBaseUrl(serverBinding.serverUrl, () => resolveSessionCapabilitiesForDirectory({
-      settings: mcpSettings,
+      settings: initialSettings,
       machineId: params.machineId,
       directory: params.directory,
       selection: selection ? { mcp: selection } : {},
@@ -322,6 +335,7 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
       mcpPluginItems, nativeServerNames,
     }));
     resolvedSelection = initialSelection;
+    recordStartupPhase('capability_selection');
     const sharedReferences = listSelectedMcpSharedSecretReferences(initialSelection.selectedServersByName);
     if (sharedReferences.length > 0) {
       let admitted: Awaited<ReturnType<typeof refreshSavedSecretCatalogForOperation>>;
@@ -345,12 +359,14 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
         throw error;
       }
       accountSettings = admitted.settings;
+      recordStartupPhase('saved_secret_admission');
       savedSecretResources = admitted.savedSecretResources;
       savedSecretCatalogState = admitted.savedSecretCatalogState;
-      mcpSettings = readMcpServersSettingsFromAccountSettings({ ...admitted, mcpServerCatalog: admitted.mcpServerCatalog ?? accountSnapshot?.mcpServerCatalog });
+      const refreshedSettings = readMcpServersSettingsFromAccountSettings({ ...admitted, mcpServerCatalog: admitted.mcpServerCatalog ?? accountSnapshot?.mcpServerCatalog });
+      mcpSettings = refreshedSettings;
       mcpCatalog = admitted.mcpServerCatalog ?? accountSnapshot?.mcpServerCatalog;
       resolvedSelection = await runWithServerHttpBaseUrl(serverBinding.serverUrl, () => resolveSessionCapabilitiesForDirectory({
-        settings: mcpSettings,
+        settings: refreshedSettings,
         machineId: params.machineId,
         directory: params.directory,
         selection: selection ? { mcp: selection } : {},
@@ -360,11 +376,14 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
         sessionProject: projectInput,
         mcpPluginItems, nativeServerNames,
       }));
+      recordStartupPhase('capability_reselection');
     }
   }
   if (operationContext && !await operationContext.isCurrent()) throw new McpServerCatalogUnavailableError('scope-retired');
+  recordStartupPhase('account_currentness');
+  const emptyMcpServers: Record<string, McpServerConfig> = {};
   const builtIn = params.includeHappierMcpServer === false
-    ? { happierMcpServer: { stop: () => undefined }, mcpServers: {} }
+    ? { happierMcpServer: { stop: () => undefined }, mcpServers: emptyMcpServers }
     : await createHappierMcpBridge(scopedSession, {
     commandMode: params.commandMode,
     sessionCredentials: params.credentials,
@@ -384,17 +403,21 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
   const naming = 'readToolNames' in builtIn.happierMcpServer && builtIn.mcpServers.happier
     ? { resolveMcpToolNaming: createHappierMcpToolNamingResolver(builtIn.mcpServers.happier, builtIn.happierMcpServer.readToolNames) }
     : {};
+  recordStartupPhase('builtin_bridge');
 
   if (operationContext && !await operationContext.isCurrent()) {
     builtIn.happierMcpServer.stop();
     throw new McpServerCatalogUnavailableError('scope-retired');
   }
+  recordStartupPhase('account_currentness');
 
   if (!accountSettings || !accountCredentials) {
+    recordStartupPhase('completed');
     return { ...naming, happierMcpServer: builtIn.happierMcpServer, mcpServers: params.resolvedMcpServers ? mergeWithBuiltInHappierMcpServer({ builtIn: builtIn.mcpServers, extra: params.resolvedMcpServers }) : builtIn.mcpServers };
   }
 
   if (!mcpSettings || !resolvedSelection) {
+    recordStartupPhase('completed');
     return { ...naming, happierMcpServer: builtIn.happierMcpServer, mcpServers: builtIn.mcpServers };
   }
 
@@ -415,6 +438,11 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
 
   const attestation = SessionAttestedContextV1Schema.safeParse(params.session.getMetadataSnapshot?.()?.attestedContext);
   const requestAuthByServerId: Record<string, McpRequestAuthCapability> = {};
+  const requestAuthFailuresByServerId: Record<string, McpRequestAuthFailureCode> = {};
+  const requestAuthDiagnosticsByServerId: Record<string, Readonly<{
+    failureCode: ReturnType<typeof readMcpRequestAuthDiagnosticCode>;
+    failureCheckpoint: 'request_auth_port' | 'request_auth_open' | 'daemon_service_dispatch';
+  }>> = {};
   const requestAuthPort = scopedSession.getMcpRequestAuthPort?.();
   const materializationIds = new Set<string>();
   const retireRequestAuth = () => {
@@ -435,7 +463,7 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
       }));
       const attached = await pluginRegistry.materializePluginMcpServers({ scope: { kind: 'session', sessionId: params.session.sessionId }, directory: params.directory,
         permissionHandler: params.mcpPermissionHandler,
-        servers: selected, signal: run?.signal ?? params.session.getRuntimeLifetimeSignal?.(),
+        servers: selected, signal: run?.signal ?? params.session.getRuntimeLifetimeSignal?.() ?? undefined,
         addDisposable: attachment => pluginAttachments.push(attachment) });
       resolvedSelection = { ...resolvedSelection, selectedServersByName: Object.fromEntries(attached.map(server => {
         const selectedServer = resolvedSelection!.selectedServersByName[server.name]!;
@@ -444,26 +472,38 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
           : selectedServer];
       })) };
     }
-    for (const { config: server } of Object.values(resolvedSelection.selectedServersByName)) {
-      if (server.transport === 'stdio' || server.remote.auth?.kind !== 'oauth') continue;
-      if (!requestAuthPort) continue;
+    recordStartupPhase('plugin_materialization');
+    const authIssuances = await Promise.allSettled(Object.values(resolvedSelection.selectedServersByName).map(async ({ config: server }) => {
+      const remote = server.remote;
+      if (server.transport === 'stdio' || remote?.auth?.kind !== 'oauth') return;
+      if (!requestAuthPort) {
+        requestAuthFailuresByServerId[server.id] = 'mcp_request_auth_unavailable';
+        requestAuthDiagnosticsByServerId[server.id] = { failureCode: 'mcp_request_auth_unavailable', failureCheckpoint: 'request_auth_port' };
+        return;
+      }
       const materializationId = randomUUID();
       const occurrence = run?.readCurrentRunOccurrence(run.runId);
       if (run && (!occurrence || !run.isCurrent() || run.signal.aborted)) throw new Error('mcp_request_auth_not_active');
       try {
         const capability = await requestAuthPort.open({
         serverId: server.id,
-        resource: canonicalMcpOAuthResourceUrlV1(server.remote.url),
+        resource: canonicalMcpOAuthResourceUrlV1(remote.url),
         materializationId,
         ...(run && occurrence ? { executionRun: { runId: run.runId, occurrenceId: occurrence.occurrenceId } } : {}),
         });
         materializationIds.add(materializationId);
         requestAuthByServerId[server.id] = capability;
       } catch (error) {
-        if (mcpSettings.strictMode) throw error;
-        // The materializer owns the canonical unavailable-server warning/notice.
+        requestAuthFailuresByServerId[server.id] = readMcpRequestAuthFailureCode(error);
+        requestAuthDiagnosticsByServerId[server.id] = readMcpRequestAuthFailureDiagnostic(error);
+        // The materializer owns strict refusal versus optional omission, using
+        // the safe failure code rather than the port's private exception text.
       }
-    }
+    }));
+    // Every open owns a distinct capability. Join before materialization or
+    // cleanup so a late successful sibling cannot escape the profile lifetime.
+    for (const issuance of authIssuances) if (issuance.status === 'rejected') throw issuance.reason;
+    recordStartupPhase('request_auth');
     materialized = await materializeMcpServerConfigRecord({
     resolved: {
       directory: params.directory,
@@ -477,7 +517,9 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
     tmpDir: params.tmpDir ?? null,
     strictMode: mcpSettings.strictMode,
     requestAuthByServerId,
+    requestAuthFailuresByServerId,
   });
+    recordStartupPhase('config_materialization');
   } catch (error) {
     disposePluginAttachments();
     retireRequestAuth();
@@ -491,11 +533,13 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
     builtIn.happierMcpServer.stop();
     throw new McpServerCatalogUnavailableError('scope-retired');
   }
+  recordStartupPhase('account_currentness');
 
   if (materialized.warnings.length > 0) {
     logger.debug('[mcp] Materialization warnings', {
       warningCount: materialized.warnings.length,
-      warnings: materialized.warnings.map((w) => ({ serverName: w.serverName, code: w.code, detail: w.detail })),
+      warnings: materialized.warnings.map((w) => ({ serverName: w.serverName, code: w.code, detail: w.detail,
+        ...requestAuthDiagnosticsByServerId[resolvedSelection.itemsByName[w.serverName]?.serverId ?? ''] })),
     });
   }
   const identities = { mcpServerIdentities: Object.fromEntries(params.resolvedMcpServers ? [] : Object.keys(materialized.mcpServers).flatMap(name => {
@@ -529,10 +573,12 @@ export async function resolveRunnerMcpServers(params: RunnerMcpServersParams): P
       throw error;
     }
   }
+  recordStartupPhase('capability_notice');
 
   const mcpServerIdentities = identities.mcpServerIdentities;
   const mcpToolPolicy = projectMcpToolLaunchPolicies({ catalog: { v: 1, servers: mcpSettings.servers, bindings: mcpSettings.bindings, ...(mcpSettings.pluginServers ? { pluginServers: mcpSettings.pluginServers } : {}) },
     mcpServerIdentities, control: params.mcpToolControl, permissionMode: parseAgentPermissionIntentV1Alias(String(scopedSession.getPermissionMode?.() ?? 'default')) ?? 'default' });
+  recordStartupPhase('completed');
   return {
     ...naming,
     happierMcpServer: {

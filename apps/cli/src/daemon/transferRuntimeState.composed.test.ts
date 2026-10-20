@@ -17,6 +17,7 @@ import { FeaturesResponseSchema } from '@happier-dev/protocol';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
+import { createDeferred } from '@/testkit/async/deferred';
 import { createDaemonServerWorkBudget, createDaemonServerWorkScheduler } from './serverWork';
 import { bootstrapMachineSyncRuntime, retireMachineSyncRuntimeAttempt } from './machine/bootstrapMachineSyncRuntime';
 import type { BootstrapMachineSyncRuntimeResult } from './machine/bootstrapMachineSyncRuntime';
@@ -44,7 +45,7 @@ describe('lazy transfer declaration through Machine publication', () => {
     });
     let connected = false;
     let observed: unknown;
-    let observedMetadata: ReturnType<typeof StoredMachinePublishedMetadataV1Schema.parse> | undefined;
+    const metadataPublished = createDeferred<ReturnType<typeof StoredMachinePublishedMetadataV1Schema.parse>>();
     let version = 0;
     sockets.on('connection', socket => {
       connected = true;
@@ -52,8 +53,9 @@ describe('lazy transfer declaration through Machine publication', () => {
       socket.on('machine-update-operation-protocol-capabilities', (_raw, acknowledge) => acknowledge({ v: 1, result: 'success', revision: 1 }));
       socket.on('machine-update-metadata', (raw: unknown, acknowledge: (answer: unknown) => void) => {
         const request = MachineUpdateMetadataRequestSchema.parse(raw);
-        observedMetadata = StoredMachinePublishedMetadataV1Schema.parse(codec.decodeStored(request.metadata));
+        const metadata = StoredMachinePublishedMetadataV1Schema.parse(codec.decodeStored(request.metadata));
         acknowledge({ result: 'success', version: 1, metadata: request.metadata });
+        metadataPublished.resolve(metadata);
       });
       socket.on('machine-update-state', (raw: unknown, acknowledge: (answer: unknown) => void) => {
         const request = MachineUpdateStateRequestSchema.parse(raw);
@@ -81,6 +83,7 @@ describe('lazy transfer declaration through Machine publication', () => {
         startAutomationWorkerForMachine: () => null,
         startMemoryWorkerForMachine: async () => null,
         startVoiceInferenceWorkerForMachine: async () => null,
+        spawnSessionForInternalResume: async () => ({ type: 'success', sessionId: 'unused' }),
         spawnSession: async () => ({ type: 'success', sessionId: 'unused' }),
         stopSession: async () => ({ status: 'stopped' }), isSessionAlreadyRunning: async () => false,
         loadLocalSessionMetadataForHandoff: async () => null,
@@ -92,12 +95,13 @@ describe('lazy transfer declaration through Machine publication', () => {
       }));
       await expect.poll(() => isMachineDaemonFiniteTransferApplicationSupported(observed)).toBe(true);
       expect(connected).toBe(true);
-      expect(machine.daemonState?.transfer).toEqual(initialTransferState);
+      expect(observed).toMatchObject({ transfer: initialTransferState });
       expect(isMachineDaemonIrohTransferApplicationSupported(observed)).toBe(false);
       // Exercise the actual reconnect publication, strict wire/storage readers and
       // UI projection; a metadata helper alone cannot detect a missing bootstrap binding.
-      await expect.poll(() => buildMachineDisplayMetadata(observedMetadata)?.arch).toBe(arch());
+      const observedMetadata = await metadataPublished.promise;
       const display = buildMachineDisplayMetadata(MachinePublishedMetadataV1Schema.parse(observedMetadata))!;
+      expect(display.arch).toBe(arch());
       expect(display.platform).toBe(process.platform);
       const launch = AcpBackendLaunchV1Schema.parse({ kind: 'npm', package: '@fixture/agent', version: '1.0.0', args: [] });
       expect(resolveAcpPlatformFitV1(launch, {

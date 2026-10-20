@@ -8,14 +8,17 @@ import {
 } from '@/session/external/configuredSourceMaterializer';
 import { resolveExternalSessionSourceFromAgentProjection } from '@/plugins/projection/registry/externalSessionSources';
 import type { BoundedAgentExternalSessionsContribution } from '@/session/external/agentExternalSessionsInvocation';
+import type { AgentCatalogEntry } from '@/agent/catalog/types';
 
-export type NativeUsageSourceDescriptor = Pick<NativeUsageCaptureSource, 'agent' | 'source' | 'sourceKey' | 'root' | 'supported' | 'accountingSources'> & Readonly<{
-    rootKind: 'default' | 'configured' | 'materialized' | 'override';
+export type NativeUsageSourceDescriptor = Pick<NativeUsageCaptureSource, 'agent' | 'source' | 'sourceKey' | 'root' | 'supported' | 'accountingSources' | 'rootKind'> & Readonly<{
     /** Declared configured identity, independent of a runtime-resolved root. */
     configuredSourceKey?: string;
     error?: string;
+    /** Count only the paths the source already enumerated; no native-record read is admitted. */
+    discoveredFileCount?: number;
 }>;
 export type NativeUsageSourceBoundary = Readonly<{
+    catalogEntry: AgentCatalogEntry | null;
     externalSessions: BoundedAgentExternalSessionsContribution;
     occurrenceId: string;
     retirementSignal: AbortSignal;
@@ -34,7 +37,7 @@ export async function resolveNativeUsageSourceMetadata(input: Readonly<{
 }>): Promise<Readonly<{ descriptor: NativeUsageSourceDescriptor; metadata: AgentExternalSessionsResolveSourceResult }> | null> {
     const agent = input.agents.find(candidate => candidate.id === input.agentId);
     if (!agent?.identity || !input.boundary.isCurrent() || input.signal.aborted) return null;
-    const admitted = resolveConfiguredExternalSessionSourceAtAdmission(input);
+    const admitted = await resolveConfiguredExternalSessionSourceAtAdmission({ ...input, catalogEntry: input.boundary.catalogEntry });
     if (!admitted.ok) return null;
     const resolved = await input.boundary.externalSessions.resolveSource({ source: admitted.source, signal: input.signal });
     if (!resolved.ok || input.signal.aborted || !input.boundary.isCurrent()) return null;
@@ -53,6 +56,9 @@ export async function resolveNativeUsageSourceMetadata(input: Readonly<{
             root: resolved.value.accountingSource?.rootPath ?? resolved.value.transcriptMediaReadRoots?.[0] ?? null,
             supported: input.boundary.externalSessions.supportsAccounting,
             ...(resolved.value.accountingSource?.accountingSources ? { accountingSources: [...resolved.value.accountingSource.accountingSources] } : {}),
+            ...(resolved.value.accountingSource?.discoveredFileCount !== undefined ? {
+                discoveredFileCount: resolved.value.accountingSource.discoveredFileCount,
+            } : {}),
             rootKind: 'default',
         },
         metadata: resolved.value,
@@ -74,11 +80,12 @@ export async function discoverNativeUsageSourceMetadata(input: Readonly<{
     for (const candidate of candidates) {
         if (input.signal.aborted) break;
         if (candidate.refusal) continue;
-        const admitted = resolveConfiguredExternalSessionSourceAtAdmission({ ...input, agentId: candidate.agentId, source: candidate.source });
-        if (!admitted.ok) continue;
         let boundary: NativeUsageSourceBoundary | null;
         try { boundary = await input.resolveBoundary(candidate.agentId); }
         catch { boundary = null; }
+        const admitted = await resolveConfiguredExternalSessionSourceAtAdmission({ ...input, agentId: candidate.agentId,
+            source: candidate.source, catalogEntry: boundary?.catalogEntry ?? null });
+        if (!admitted.ok) continue;
         const hasConnectedProfile = admitted.declaration.instances?.some(instance => instance.kind === 'connectedServiceProfiles'
             && Object.entries(instance.constants).every(([field, value]) => admitted.source[field] === value));
         const configured = admitted.declaration.instances?.some(instance => (instance.kind === 'agentSetting' || instance.kind === 'agentSettingOverride')

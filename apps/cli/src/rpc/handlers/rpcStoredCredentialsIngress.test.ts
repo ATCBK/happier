@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SessionSpawnNewInputV2Schema } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
 import type { RpcHandler, RpcHandlerRegistrar } from '@/api/rpc/types';
 
 const mocks = vi.hoisted(() => ({
@@ -77,16 +78,16 @@ describe('plain-account RPC action ingress', () => {
     {
       name: 'session creation',
       method: RPC_METHODS.SESSION_SPAWN_NEW,
-      input: {
+      input: SessionSpawnNewInputV2Schema.parse({
         creationKey: 'manual:stored-credentials-1',
         executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
-        directory: '/tmp/project',
+        directory: { kind: 'path', path: '/tmp/project' },
         organizationPlacement: { folderId: null, tagIds: [] },
         agentTarget: {
           kind: 'agent',
           identity: { pluginId: 'happier.agent.codex', localId: 'codex' },
         },
-      },
+      }),
       register: (rpcHandlerManager: ReturnType<typeof createRegistrar>['rpcHandlerManager']) =>
         registerSessionSpawnNewRpcHandlers({ rpcHandlerManager }),
     },
@@ -116,7 +117,7 @@ describe('plain-account RPC action ingress', () => {
 
     await expect(handlers.get(RPC_METHODS.APPROVAL_REQUEST_LIST)?.({})).resolves.toBeDefined();
     expect(mocks.createExecutor).toHaveBeenCalledWith(expect.objectContaining({
-      isApprovalExecutionOriginCurrent: expect.any(Function),
+      workflowAcceptedAuthorizationCurrentness: expect.any(Function),
     }));
   });
 
@@ -138,16 +139,16 @@ describe('plain-account RPC action ingress', () => {
       sessionSpawnDirectTargetTransport: typeof directTargetTransport;
     }>);
 
-    await expect(handlers.get(RPC_METHODS.SESSION_SPAWN_NEW)?.({
+    await expect(handlers.get(RPC_METHODS.SESSION_SPAWN_NEW)?.(SessionSpawnNewInputV2Schema.parse({
       creationKey: 'manual:stored-credentials-direct-target',
       executionTarget: { serverId: 'srv_account_current', machineId: 'machine-1' },
-      directory: '/tmp/project',
+      directory: { kind: 'path', path: '/tmp/project' },
       organizationPlacement: { folderId: null, tagIds: [] },
       agentTarget: {
         kind: 'agent',
         identity: { pluginId: 'happier.agent.codex', localId: 'codex' },
       },
-    })).resolves.toBeDefined();
+    }))).resolves.toBeDefined();
 
     expect(mocks.createExecutor).toHaveBeenCalledWith(expect.objectContaining({
       credentials: {

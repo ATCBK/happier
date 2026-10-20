@@ -5,6 +5,8 @@ import {
     type PluginRequestInterceptorContributionV1,
 } from '@happier-dev/protocol';
 import { isPluginError, PluginError } from '@happier-dev/plugin-sdk';
+import { logger } from '@/ui/logger';
+import { runTracedExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
 import type {
     HttpService,
     PluginWebSocketClose,
@@ -206,6 +208,79 @@ function createResponse(body: unknown): TestFetchResponse {
 }
 
 describe('createPluginHttpService', () => {
+    it('separates traced HTTP policy and transport waits through the bound host without request content', async () => {
+        vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
+        const sink = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => undefined);
+        let releaseDns!: () => void;
+        let startedDns!: () => void;
+        let releaseHttp!: () => void;
+        let startedHttp!: () => void;
+        const dnsStarted = new Promise<void>(resolve => { startedDns = resolve; });
+        const dnsBoundary = new Promise<void>(resolve => { releaseDns = resolve; });
+        const httpStarted = new Promise<void>(resolve => { startedHttp = resolve; });
+        const httpBoundary = new Promise<void>(resolve => { releaseHttp = resolve; });
+        const response = createResponse('private-response-marker');
+        const host = createProductionStablePluginHttpHost({
+            // DNS and the network adapter are the genuine system boundaries.
+            resolveNetworkAddresses: async () => { startedDns(); await dnsBoundary; return ['93.184.216.34']; },
+            adapter: {
+                request: async () => { startedHttp(); await httpBoundary; return response; },
+                openWebSocket: async () => { throw new Error('HTTP-only fixture'); },
+            },
+        });
+        const seed = {
+            plugin: { id: 'example.external-plugin', version: '1.0.0' },
+            contribution: { id: 'scan', qualifiedId: 'example.external-plugin/actions/scan' },
+            occurrenceId: 'external-occurrence', correlationId: 'external-correlation', surface: 'cli' as const,
+            signal: new AbortController().signal, isOccurrenceCurrent: () => true,
+        };
+        const service = host.bind(seed, createLoggerAndEventsAvailablePluginInvocationServiceBinding(
+            seed.occurrenceId, 'external-binding', [{ required: true, request: {
+                id: 'external-http', capability: 'network', reason: 'Read the external service',
+                scope: { targets: [{ kind: 'fixedOrigin', origin: 'https://api.example.test' }], methods: ['GET'] },
+            } }],
+        ));
+        const rootRequestId = '284f241a-d497-4fbe-955b-a91c7a7f4a4a';
+        const request = { url: 'https://api.example.test/private-path-marker', redirect: 'error' as const,
+            headers: { authorization: 'private-header-marker' } };
+        const pending = runTracedExternalActionStage('action.invoke', `rpc_${rootRequestId}`, 'contributed.target_invoke', () =>
+            service.request(request));
+        const observed = pending.then(value => ({ value }), error => ({ error }));
+        const records = () => sink.mock.calls.filter(([message]) => message === '[external-action-stage]');
+        try {
+            await dnsStarted;
+            expect(records()).toContainEqual(['[external-action-stage]', expect.objectContaining({
+                rootRequestId, stage: 'contributed.http.policy.begin',
+            })]);
+            expect(records()).not.toContainEqual(['[external-action-stage]', expect.objectContaining({
+                stage: 'contributed.http.transport.begin',
+            })]);
+            releaseDns();
+            await httpStarted;
+            expect(records()).toContainEqual(['[external-action-stage]', expect.objectContaining({
+                rootRequestId, stage: 'contributed.http.policy.end', elapsedMs: expect.any(Number),
+            })]);
+            expect(records()).toContainEqual(['[external-action-stage]', expect.objectContaining({
+                rootRequestId, stage: 'contributed.http.transport.begin',
+            })]);
+            expect(records()).not.toContainEqual(['[external-action-stage]', expect.objectContaining({
+                stage: 'contributed.http.transport.end',
+            })]);
+            releaseHttp();
+            await expect(observed).resolves.toEqual({ value: response });
+            expect(records()).toContainEqual(['[external-action-stage]', expect.objectContaining({
+                rootRequestId, stage: 'contributed.http.transport.end', httpStatus: 200, elapsedMs: expect.any(Number),
+            })]);
+            expect(JSON.stringify(records())).not.toContain('private-');
+            vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '');
+            const count = records().length;
+            await service.request(request);
+            expect(records()).toHaveLength(count);
+        } finally {
+            releaseDns(); releaseHttp(); await observed; sink.mockRestore(); vi.unstubAllEnvs();
+        }
+    });
+
     it('requires the exact network.client websocket grant instead of inheriting generic HTTP network authority', async () => {
         const connection: PluginWebSocketConnection = Object.freeze({
             url: 'wss://gateway.example.test/socket',

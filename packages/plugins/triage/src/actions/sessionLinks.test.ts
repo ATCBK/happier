@@ -9,13 +9,19 @@ import {
     CORPUS_SESSION_LINKS_COLLECTION_ID,
     CORPUS_SESSION_LINKS_INDEX_ID,
     CORPUS_SOURCE_INSTANCES_COLLECTION_ID,
+    CORPUS_SOURCE_INSTANCE_LIFECYCLE,
 } from '../corpus/collections/ids.js';
 import { fromCorpusStoredRow } from '../corpus/collections/rowCodec.js';
 import type { CorpusSessionLinkRowV1 } from '../corpus/collections/rows.js';
 import { createTestkitCorpusCollections } from '../corpus/testkit/corpusCollections.test-support.js';
 import { testkitEntryRef, testkitLocator } from '../corpus/testkit/observations.test-support.js';
-import { TRIAGE_LINK_ENTRY_TO_SESSION_ACTION_LOCAL_ID_V1 } from './sessionLinksProtocol.js';
+import { TRIAGE_LINK_ENTRY_TO_SESSION_ACTION_LOCAL_ID_V1, TRIAGE_READ_SOURCE_SESSION_LINKS_ACTION_LOCAL_ID_V1, TriageReadSourceSessionLinksResultV1Schema } from './sessionLinksProtocol.js';
+import { TRIAGE_START_ENTRY_SESSION_ACTION_LOCAL_ID_V1, TRIAGE_UNLINK_ENTRY_FROM_SESSION_ACTION_LOCAL_ID_V1 } from './entrySessionProtocol.js';
+import { TRIAGE_READ_ENTRY_DETAIL_ACTION_LOCAL_ID_V1 } from './entryDetailProtocol.js';
 import { triageEntryDragSourceRuntime, triageEntrySessionDropTargetRuntime } from '../ui/list/entryDragDrop.js';
+import { testkitConfiguredInstance, testkitReadOnlySourceSnapshot, TESTKIT_DELIVERY_REQUEST, createTestkitActionInvoker } from '../sessions/testkit/entrySessionTestkit.test-support.js';
+import { toCorpusStoredValue } from '../corpus/collections/rowCodec.js';
+import { linkEntryToSession } from '../sessions/entrySessionLinks.js';
 
 /**
  * The registered writer of `session-links`.
@@ -32,7 +38,7 @@ import { triageEntryDragSourceRuntime, triageEntrySessionDropTargetRuntime } fro
 
 const NOW_BEFORE_MS = 1_760_000_900_000;
 
-function registeredLinkHandler(): ActionHandler<JsonValue, JsonValue> {
+function registeredLinkHandler(localId = TRIAGE_LINK_ENTRY_TO_SESSION_ACTION_LOCAL_ID_V1): ActionHandler<JsonValue, JsonValue> {
     const handlers = new Map<string, ActionHandler<JsonValue, JsonValue>>();
     const api = {
         actions: {
@@ -44,7 +50,7 @@ function registeredLinkHandler(): ActionHandler<JsonValue, JsonValue> {
     } as unknown as PluginApi;
 
     activate(api);
-    const handler = handlers.get(TRIAGE_LINK_ENTRY_TO_SESSION_ACTION_LOCAL_ID_V1);
+    const handler = handlers.get(localId);
     if (handler === undefined) {
         throw new Error(
             `activation registers no handler for "${TRIAGE_LINK_ENTRY_TO_SESSION_ACTION_LOCAL_ID_V1}"`,
@@ -57,6 +63,9 @@ function createContext(collections: CorpusCollectionsV1): PluginInvocationContex
     return {
         signal: new AbortController().signal,
         services: {
+            targetedContributions: { observeForSelf: () => ({
+                readCurrent: async () => testkitReadOnlySourceSnapshot(), dispose: () => {},
+            }) },
             storage: {
                 account: {
                     collection: (definition: PluginAccountCollectionDefinition) => {
@@ -87,6 +96,142 @@ async function readLinkRows(
 }
 
 describe('the session-link writer Action', () => {
+    it.each(['cli', 'agent', 'self'] as const)('returns healthy source links and explicit unavailable coverage to %s callers', async (caller) => {
+        const { collections, control } = createTestkitCorpusCollections();
+        const configured = testkitConfiguredInstance();
+        const unavailable = { ...configured,
+            instance: { source: { pluginId: 'acme.uninstalled', localId: 'items' },
+                sourceInstanceId: '22222222-2222-4222-8222-222222222222' },
+            locator: { v: 1 as const, displayLabel: 'Retained source' },
+        };
+        for (const [index, instance] of [configured, unavailable].entries()) control.sourceInstances.seed(toCorpusStoredValue({
+            instanceTag: `${index}${'a'.repeat(42)}`, lifecycle: CORPUS_SOURCE_INSTANCE_LIFECYCLE.active,
+            configuredAtMs: 1, sourceQualifiedId: `${instance.instance.source.pluginId}/${instance.instance.source.localId}`,
+            configured: instance,
+        }));
+        const base = createContext(collections);
+        const snapshot = testkitReadOnlySourceSnapshot();
+        let unavailableRead = false;
+        const context = { ...base, surface: caller === 'self' ? 'ui' : caller,
+            ...(caller === 'self' ? { caller: { kind: 'plugin', pluginId: 'happier.triage' } } : {}),
+            services: { ...base.services,
+                targetedContributions: { observeForSelf: () => ({ readCurrent: async () => ({ contributions: [
+                    { ...snapshot.contributions[0], operations: { readSessionLinks: { role: 'readSessionLinks' } } },
+                ] }), dispose: () => {} }) },
+                // The host's admitted-operation transport is the boundary; the
+                // registered aggregate and relationship read below stay real.
+                actions: { executeAdmittedTargetedOperation: async () => unavailableRead
+                    ? { kind: 'failed', failure: { class: 'transient', code: 'accountDataUnavailable' } }
+                    : ({ kind: 'complete', links: [{
+                    localRef: { kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' },
+                    sessionId: 'session-a', linkedAtMs: 10, displayPath: 'Healthy linked work',
+                }] }) },
+            },
+        } as unknown as PluginInvocationContext;
+        const raw = await registeredLinkHandler(TRIAGE_READ_SOURCE_SESSION_LINKS_ACTION_LOCAL_ID_V1)(
+            { v: 1, sessionId: 'session-a' }, context);
+        const result = TriageReadSourceSessionLinksResultV1Schema.parse(raw);
+        expect(result).toMatchObject({ kind: 'partial', links: [{ entryRef: testkitEntryRef(), displayPath: 'Healthy linked work' }],
+            lanes: expect.arrayContaining([{ source: unavailable.instance.source,
+                sourceInstanceId: unavailable.instance.sourceInstanceId, displayLabel: 'Retained source',
+                health: { kind: 'unavailable' },
+            }]),
+        });
+        unavailableRead = true;
+        expect(TriageReadSourceSessionLinksResultV1Schema.parse(await registeredLinkHandler(TRIAGE_READ_SOURCE_SESSION_LINKS_ACTION_LOCAL_ID_V1)(
+            { v: 1, sessionId: 'session-a' }, context))).toMatchObject({ kind: 'failed', links: [],
+            lanes: expect.arrayContaining([expect.objectContaining({ source: configured.instance.source,
+                health: { kind: 'failed', failure: { class: 'transient', code: 'accountDataUnavailable' } },
+            })]),
+        });
+    });
+
+    it('uses an admitted source relationship role instead of also creating an external row', async () => {
+        const { collections, control } = createTestkitCorpusCollections();
+        const configured = testkitConfiguredInstance();
+        control.sourceInstances.seed(toCorpusStoredValue({
+            instanceTag: `a${'0'.repeat(42)}`, lifecycle: CORPUS_SOURCE_INSTANCE_LIFECYCLE.active, configuredAtMs: 1,
+            sourceQualifiedId: `${configured.instance.source.pluginId}/${configured.instance.source.localId}`,
+            configured,
+        }));
+        const writes: unknown[] = [];
+        let linked = false;
+        let writeFails = false;
+        await linkEntryToSession({ collections, entryRef: testkitEntryRef(), sessionId: 'session-a',
+            display: { locator: testkitLocator(), scopeLabel: 'example/repository' }, nowMs: 1 });
+        const sessionActions = createTestkitActionInvoker();
+        const context = createContext(collections);
+        const sourceContext = {
+            ...context,
+            surface: 'api',
+            services: {
+                ...context.services,
+                targetedContributions: { observeForSelf: () => ({
+                    readCurrent: async () => ({ contributions: [{
+                        contributor: { pluginId: configured.instance.source.pluginId, contributionId: configured.instance.source.localId },
+                        descriptor: { v: 1, purpose: 'triage-source', displayName: 'Example', kinds: [
+                            { id: 'pull-request', workflowSubject: 'pullRequest', displayName: 'Pull request' },
+                        ] },
+                        operations: { linkSession: { role: 'linkSession' }, readSessionLinks: { role: 'readSessionLinks' } },
+                    }] }), dispose: () => {},
+                }) },
+                actions: {
+                    execute: async (actionId: Parameters<typeof sessionActions.execute>[0], input: Parameters<typeof sessionActions.execute>[1]) => {
+                        if (actionId === 'session.message.send') expect(writes).toHaveLength(1);
+                        return await sessionActions.execute(actionId, input);
+                    },
+                    executeAdmittedTargetedOperation: async (operation: { role: string }, input: { linked: boolean }) => {
+                        if (operation.role === 'readSessionLinks') return { kind: 'complete', links: linked ? [{
+                            localRef: { kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' },
+                            sessionId: 'session-a', linkedAtMs: 10, displayPath: 'Personal task',
+                        }] : [] };
+                        if (writeFails) return { status: 'failed' };
+                        linked = input.linked;
+                        writes.push(input); return { status: linked ? 'linked' : 'unlinked' };
+                    },
+                },
+            },
+        } as unknown as PluginInvocationContext;
+        const startInput = { v: 1, entryRef: testkitEntryRef(),
+            sourceInstanceId: configured.instance.sourceInstanceId,
+            display: { locator: testkitLocator(), scopeLabel: 'example/repository' },
+            workspaceMode: 'reference_only', destination: { kind: 'existing', sessionId: 'session-a' },
+            delivery: { ...TESTKIT_DELIVERY_REQUEST, kind: 'send' },
+        } as const;
+        const start = registeredLinkHandler(TRIAGE_START_ENTRY_SESSION_ACTION_LOCAL_ID_V1);
+        writeFails = true;
+        expect(await start(startInput, sourceContext)).toMatchObject({ type: 'linkPending', sessionId: 'session-a' });
+        expect(sessionActions.callsFor('session.message.send')).toHaveLength(0);
+        expect(await readLinkRows(collections, 'session-a')).toHaveLength(1);
+        writeFails = false;
+        expect(await start({ ...startInput, resume: { phase: 'linkPending', sessionId: 'session-a', disposition: 'existing' } },
+            sourceContext)).toMatchObject({ v: 1, type: 'opened', sessionId: 'session-a', delivery: 'accepted' });
+        expect(writes).toEqual([{ v: 1, instance: configured,
+            localRef: { kindId: 'pull-request', collisionScope: 'example/repository', entryId: '17' },
+            sessionId: 'session-a', linked: true,
+        }]);
+        expect(await readLinkRows(collections, 'session-a')).toHaveLength(0);
+        expect(sessionActions.callsFor('session.message.send')).toHaveLength(1);
+        expect(await registeredLinkHandler(TRIAGE_READ_SOURCE_SESSION_LINKS_ACTION_LOCAL_ID_V1)(
+            { v: 1, sessionId: 'session-a' }, sourceContext)).toMatchObject({ kind: 'complete', links: [{
+                entryRef: testkitEntryRef(), sessionId: 'session-a', linkedAtMs: 10, displayPath: 'Personal task',
+            }] });
+        expect(await registeredLinkHandler(TRIAGE_READ_ENTRY_DETAIL_ACTION_LOCAL_ID_V1)({
+            v: 1, entryRef: testkitEntryRef(), sourceInstanceId: configured.instance.sourceInstanceId,
+        }, sourceContext)).toMatchObject({ kind: 'read', linkedSessions: [{ sessionId: 'session-a' }] });
+        expect(await registeredLinkHandler(TRIAGE_UNLINK_ENTRY_FROM_SESSION_ACTION_LOCAL_ID_V1)({
+            v: 1, sessionId: 'session-a', entryRef: testkitEntryRef(), sourceInstanceId: configured.instance.sourceInstanceId,
+        }, sourceContext)).toEqual({ v: 1, status: 'unlinked' });
+        expect(linked).toBe(false);
+        expect(await readLinkRows(collections, 'session-a')).toHaveLength(0);
+        writeFails = true;
+        expect(await registeredLinkHandler()({ v: 1, sessionId: 'session-a', entryRef: testkitEntryRef(),
+            sourceInstanceId: configured.instance.sourceInstanceId,
+            display: { locator: testkitLocator(), scopeLabel: 'example/repository' },
+        }, sourceContext)).toEqual({ v: 1, status: 'failed' });
+        expect(await readLinkRows(collections, 'session-a')).toHaveLength(0);
+    });
+
     it('links a host-qualified Session carried to the real PR target through this same writer', async () => {
         const { collections } = createTestkitCorpusCollections();
         const entryRef = testkitEntryRef();

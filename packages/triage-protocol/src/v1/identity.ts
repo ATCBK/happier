@@ -1,25 +1,30 @@
-import type { PluginJsonSchema } from '@happier-dev/plugin-sdk/protocol';
-
 import {
     defineProtocolLiteral,
     defineProtocolObject,
     defineProtocolString,
     defineProtocolUnion,
+    TriageIdentifierV1ProtocolSchema,
+    TriageCollisionScopeV1ProtocolSchema,
 } from '@happier-dev/plugin-sdk/protocol';
 import { PluginContributionIdentityV1Schema } from '@happier-dev/plugin-sdk/manifest';
 
 import {
-    MAX_TRIAGE_COLLISION_SCOPE_UTF8_BYTES_V1,
-    MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1,
     MAX_TRIAGE_LOCATION_UTF8_BYTES_V1,
     MAX_TRIAGE_ROUTING_TOKEN_UTF8_BYTES_V1,
     MAX_TRIAGE_TEXT_UTF8_BYTES_V1,
     TRIAGE_SOURCE_WORKFLOW_SUBJECTS_V1,
 } from './bounds.js';
-import {
-    defineTriageCompositeIdentifierStringV1,
-    defineTriageSingleLineStringV1,
-} from './strings.js';
+import { defineTriageSingleLineStringV1 } from './strings.js';
+
+// Preserve the feature ABI while Protocol consumers use the dependency-safe
+// owner directly. The SDK facade publishes these exact parser instances.
+export {
+    TriageEntryRefV1Schema,
+    TriageEntryRefV1JsonSchema,
+    TriageIdentifierV1ProtocolSchema,
+    TriageCollisionScopeV1ProtocolSchema,
+} from '@happier-dev/plugin-sdk/protocol';
+export type { TriageEntryRefV1 } from '@happier-dev/plugin-sdk/protocol';
 
 /** The target-minted stable configured-instance identity is a lowercase UUID. */
 export const TRIAGE_SOURCE_INSTANCE_ID_PATTERN_V1 =
@@ -36,21 +41,6 @@ export const TriageSourceInstanceIdV1Schema = defineProtocolString({
     pattern: TRIAGE_SOURCE_INSTANCE_ID_PATTERN_V1,
 });
 export type TriageSourceInstanceIdV1 = ReturnType<typeof TriageSourceInstanceIdV1Schema.parse>;
-
-/** @internal Relative-only bounded provider/source identifier component. */
-export const TriageIdentifierV1ProtocolSchema = defineTriageSingleLineStringV1(
-    MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1,
-);
-
-/**
- * @internal Relative-only bounded source-owned composite entry-scope key. It is
- * one of the two V1 strings that admit the `U+001F` separator a first-party
- * mapping uses (`CONTRACT.md` §6), `localInstanceKey` being the other; it is a
- * structural key and is never rendered.
- */
-export const TriageCollisionScopeV1ProtocolSchema = defineTriageCompositeIdentifierStringV1(
-    MAX_TRIAGE_COLLISION_SCOPE_UTF8_BYTES_V1,
-);
 
 /** @internal Relative-only bounded one-line display text. */
 export const TriageTextV1ProtocolSchema = defineTriageSingleLineStringV1(
@@ -93,20 +83,6 @@ export const TriageSourceEntryLocalRefV1Schema = defineProtocolObject({
 export type TriageSourceEntryLocalRefV1 = ReturnType<
     typeof TriageSourceEntryLocalRefV1Schema.parse
 >;
-
-/**
- * The canonical target-qualified entry reference. It carries the admitted
- * source contribution identity and never an account, credential, mutable path,
- * slug, display name, remote URL, or `sourceInstanceId` (`CONTRACT.md` §6).
- */
-export const TriageEntryRefV1Schema = defineProtocolObject({
-    source: PluginContributionIdentityV1Schema,
-    kindId: TriageIdentifierV1ProtocolSchema,
-    collisionScope: TriageCollisionScopeV1ProtocolSchema,
-    entryId: TriageIdentifierV1ProtocolSchema,
-}, { policy: 'closed' });
-export type TriageEntryRefV1 = ReturnType<typeof TriageEntryRefV1Schema.parse>;
-export const TriageEntryRefV1JsonSchema: PluginJsonSchema = TriageEntryRefV1Schema.jsonSchema;
 
 /**
  * The canonical configured-instance reference: the admitted source contribution

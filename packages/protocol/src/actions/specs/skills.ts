@@ -15,14 +15,14 @@ const reviewedFile = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T)
   sizeBytes: z.number().check(z.int(), z.nonnegative()), content: z.optional(z.string()),
 })));
 const reviewedFileInputs = {
-  'skills.create': lazyZodSchema(() => inputs['skills.create'].extend({ files: z.array(reviewedFile) }).strict()),
-  'skills.update': lazyZodSchema(() => inputs['skills.update'].extend({ files: z.optional(z.array(z.union([
+  'skills.create': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(inputs['skills.create'], { files: z.array(reviewedFile) }))),
+  'skills.update': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(inputs['skills.update'], { files: z.optional(z.array(z.union([
     z.strictObject({ kind: z.literal('upsert'), file: reviewedFile }), SkillFileChangeV1Schema._zod.def.options[1],
-  ]))) }).strict()),
-  'skills.install': lazyZodSchema(() => inputs['skills.install'].extend({ source: z.union([
+  ]))) }))),
+  'skills.install': lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(inputs['skills.install'], { source: z.union([
     SkillInstallSourceV1Schema._zod.def.options[0], SkillInstallSourceV1Schema._zod.def.options[1],
     z.strictObject({ kind: z.literal('upload'), files: z.array(reviewedFile) }),
-  ]) }).strict()),
+  ]) }))),
 };
 
 function skillReviewFields(id: SkillLibraryActionIdV1): NonNullable<PreNormalizedActionSpec['inputHints']>['fields'] {
@@ -82,7 +82,8 @@ function skillSpec<TId extends SkillLibraryActionIdV1>(id: TId, title: string, r
     ...(typeof input.skillId === 'string' ? { skillId: input.skillId } : {}), ...(typeof input.revision === 'string' ? { revision: input.revision } : {}),
     ...(typeof input.ok === 'boolean' ? { ok: input.ok } : {}), ...(typeof input.incomplete === 'string' ? { incomplete: input.incomplete } : {}),
   }; };
-  return { id, title, approval: { result: read ? 'none' : 'required' }, approvalPolicy: id === 'skills.delete' ? { uiConfirmation: 'policy' } : {},
+  return { id, title, approval: { result: read ? 'none' : 'required' },
+    approvalPolicy: id === 'skills.delete' ? { uiConfirmation: 'policy' } : read ? {} : { uiConfirmation: 'direct' },
     safety: read ? 'safe' : 'danger', sideEffectClass: read ? 'read' : 'write', requiredAuthority: 'account_automation', executionPlacement: 'account', placements: [],
     surfaces: { ui: true, cli: true, agent: true, mcp: true, rpc: true, voice: false },
     bindings: { rpcMethod: id, mcpToolName: id.replaceAll('.', '_') }, inputSchema: inputs[id], outputSchema: outputs[id], inputHints: { fields: skillReviewFields(id) },
@@ -105,7 +106,7 @@ function machineSkillSpec<TId extends Exclude<SkillMachineActionIdV1, 'skills.fo
 }> {
   return {
     id, title, approval: { result: 'required' },
-    approvalPolicy: id === 'skills.machine.uninstall' ? { uiConfirmation: 'policy' } : {},
+    approvalPolicy: id === 'skills.machine.uninstall' ? { uiConfirmation: 'policy' } : { uiConfirmation: 'direct' },
     safety: 'danger', sideEffectClass: 'write',
     requiredAuthority: 'account_automation', executionPlacement: 'machine', placements: [],
     surfaces: { ui: true, cli: true, agent: true, mcp: true, rpc: true, voice: false },
@@ -159,11 +160,15 @@ export const SKILL_ACTION_SPECS_V1 = [
         skillId: input.itemId, machineId: input.machineId, ...(input.force === undefined ? {} : { force: input.force }),
       }; },
       commands: [{ path: ['skills', 'machine-uninstall'], positionals: ['itemId'], visibility: 'canonical' }] } },
-  { ...skillSpec('skills.list', 'List skills', true), cli: { acceptsServerId: true,
+  // The app's plugin-library supplier reads these Account Actions through a
+  // Machine executor; it is an interactive Account root, not a Session caller.
+  { ...skillSpec('skills.list', 'List skills', true), originalExecution: { accountRoot: 'allowed' }, cli: { acceptsServerId: true,
     inputSchema: z.strictObject({ query: z.optional(z.string()), state: z.optional(z.enum(['in-use', 'off', 'updates', 'attention'])) }),
     bindInput: (raw: unknown) => { const input = readRecord(raw); return { ...input, ...(input.state ? { state: input.state === 'in-use' ? 'in_use' : input.state === 'attention' ? 'needs_attention' : input.state } : {}) }; },
     commands: [{ path: ['skills', 'list'], visibility: 'canonical' as const }] } },
   { id: 'skills.read', title: 'Read a skill', description: 'Read a library skill and its supporting files. By name, read only a skill delivered to the selected session.',
+    originalExecution: { accountRoot: 'allowed' },
+    contextualDefaults: { sessionId: 'current_session' },
     approval: { result: 'none' }, approvalPolicy: {}, safety: 'safe', sideEffectClass: 'read', requiredAuthority: 'account_automation', executionPlacement: 'account', executionPlacements: ['account', 'session'],
     executionPlacementForInput: (raw: unknown) => SkillReadInputV1Schema.parse(raw).sessionId ? 'session' : 'account', placements: [],
     surfaces: { ui: true, cli: true, agent: true, mcp: true, rpc: true, voice: false }, bindings: { rpcMethod: 'skills.read', mcpToolName: 'skills_read' },

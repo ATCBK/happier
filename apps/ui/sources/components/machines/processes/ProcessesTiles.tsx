@@ -8,7 +8,7 @@ import {
 import type { MachineResourceAttentionV1 } from '@happier-dev/protocol/machines/resources/machineResourceSummaryV1';
 import type { MachineVitalsSampleV1 } from '@happier-dev/protocol/machines/vitals/machineVitalsSampleV1';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { MachinePressureIndicator } from '@/components/machines/summary/MachinePressureIndicator';
 import {
   resolveMachineResourceToneColor,
@@ -40,6 +40,8 @@ import type { ProcessesMeterNote } from './useProcessesController';
 
 export type ProcessesTilesInput = Readonly<{
   sample: MachineVitalsSampleV1 | null;
+  /** The machine's CPU busy share as the resource summary retains it (a sample may lack one). */
+  cpuBusyPct: number | null;
   attention: MachineResourceAttentionV1 | null;
   happierBytes: number | null;
   happierCount: number;
@@ -64,7 +66,7 @@ function Meter(
 ) {
   const { theme } = useUnistyles();
   const reducedMotion = useReducedMotionPreference();
-  const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+  const pluginTheme = usePluginUiTheme(theme);
   const fill =
     props.tone === 'calm'
       ? theme.colors.text.tertiary
@@ -145,6 +147,7 @@ export const ProcessesTiles = React.memo(function ProcessesTiles(
   if (props.loading) return <ProcessesTilesLoading compact={props.compact} />;
   const memory = props.sample?.memory.reported ? props.sample.memory : null;
   const cpu = props.sample?.cpu.reported ? props.sample.cpu : null;
+  const cpuPercent = props.cpuBusyPct === null ? '—' : formatVitalsPercent(props.cpuBusyPct);
   const reason = selectMemoryReason(props.attention);
   const tone = resolveMemoryTone(props.attention);
   const freed = props.pendingFreedBytes;
@@ -249,23 +252,16 @@ export const ProcessesTiles = React.memo(function ProcessesTiles(
       }
       value={
         <VitalsValue
-          value={
-            cpu?.busyPct === null || cpu?.busyPct === undefined
-              ? '—'
-              : formatVitalsPercent(cpu.busyPct)
-          }
-          unit="%"
+          value={cpuPercent}
+          {...(props.cpuBusyPct === null ? {} : { unit: '%' })}
         />
       }
     >
       <Meter
         label={t('machineProcesses.tiles.cpuLabel', {
-          percent:
-            cpu?.busyPct === null || cpu?.busyPct === undefined
-              ? '—'
-              : formatVitalsPercent(cpu.busyPct),
+          percent: cpuPercent,
         })}
-        value={cpu?.busyPct ?? null}
+        value={props.cpuBusyPct}
         capacity={100}
         tone="calm"
       />
@@ -334,7 +330,7 @@ export const ProcessesTiles = React.memo(function ProcessesTiles(
 
 function ProcessesTilesLoading(props: Readonly<{ compact: boolean }>) {
   const { theme } = useUnistyles();
-  const color = theme.colors.border.default;
+  const color = theme.colors.surface.skeleton;
   const keys = props.compact
     ? (['memory', 'happier'] as const)
     : (['memory', 'cpu', 'happier'] as const);

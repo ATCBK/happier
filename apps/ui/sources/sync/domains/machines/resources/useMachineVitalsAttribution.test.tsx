@@ -20,19 +20,45 @@ const { useMachineProcesses } = await import('../processes/useMachineProcesses')
 beforeEach(async () => { await home.reset(); machineProcessesStore.reset(); machineStorageStore.reset(); network.rpc.mockReset(); });
 afterEach(async () => { standardCleanup(); machineProcessesStore.reset(); machineStorageStore.reset(); await home.reset(); });
 
-it('uses the Processes tree answer while attribution is paused rather than opening a separate owners census', async () => {
+it.each(['transport', 'native'] as const)('shares Processes recovery after an Overview %s failure, including paused attribution and re-entry', async failure => {
     const serverId = await home.addHome({ name: 'Shared census', serverUrl: 'https://shared-census.test', serverIdentityId: 'srv_shared_census', accountId: 'owner', currentAccount: true });
     const answer = { v: 1, machineId: 'machine', capturedAtMs: 1000, state: 'live', platform: 'linux', evidenceModel: 'fenced', owners: [], leftBehind: [],
         totals: { happier: { processCount: 2, memoryBytes: 60, cpuPercent: 25 }, leftBehind: { processCount: 0, memoryBytes: 0 } } };
-    network.rpc.mockImplementation(async ({ method, signal }: { method: string; signal?: AbortSignal }) => method === RPC_METHODS.DAEMON_PROCESSES_WATCH
-        ? new Promise(resolve => signal?.addEventListener('abort', () => resolve({ changed: false }), { once: true })) : answer);
+    let failed = false;
+    network.rpc.mockImplementation(async ({ method, signal }: { method: string; signal?: AbortSignal }) => {
+        if (method === RPC_METHODS.DAEMON_PROCESSES_WATCH || method === RPC_METHODS.DAEMON_STORAGE_WATCH) {
+            return new Promise(resolve => signal?.addEventListener('abort', () => resolve({ changed: false }), { once: true }));
+        }
+        if (method === RPC_METHODS.MACHINES_PROCESSES_LIST) {
+            if (!failed) {
+                failed = true;
+                if (failure === 'transport') throw new Error('Machine transport disconnected');
+                return { ...answer, state: 'unavailable', reason: 'read_failed' };
+            }
+            return answer;
+        }
+        return { revision: 1, sizedAt: 1000, volumes: [], categories: [], suggestionsTop: [],
+            pile: { count: 0, freesBytes: 0, droppedSinceLastView: [] }, trash: { count: 0, allocatedBytes: 0 },
+            wholeDisk: { enabled: false, scans: [] } };
+    });
+    const attribution = await renderHook(({ enabled }: { enabled: boolean }) => useMachineVitalsAttribution({
+        serverId, machineId: 'machine', online: true, enabled, sample: null,
+    }), { initialProps: { enabled: true } });
+    await act(async () => { await vi.waitFor(() => expect(attribution.getCurrent().processes.status)
+        .toBe(failure === 'transport' ? 'error' : 'unavailable')); });
+    // Tab navigation releases sampling but keeps the same credential-scoped snapshot available.
+    await attribution.rerender({ enabled: false });
     const processes = await renderHook(() => useMachineProcesses({ serverId, machineId: 'machine', online: true, scope: 'happier', view: 'tree' }));
     await act(async () => { await vi.waitFor(() => expect(processes.getCurrent().status).toBe('ready')); });
-    const attribution = await renderHook(() => useMachineVitalsAttribution({ serverId, machineId: 'machine', online: true, enabled: false, sample: null }));
     expect(attribution.getCurrent().processes.answer).toBe(processes.getCurrent().answer);
     expect(attribution.getCurrent().happier).toMatchObject({ memoryBytes: 60, cpuPercent: 25 });
-    await attribution.unmount();
+    const recovered = processes.getCurrent().answer;
     await processes.unmount();
+    await attribution.rerender({ enabled: true });
+    expect(attribution.getCurrent().processes.answer).toBe(recovered);
+    await act(async () => { await vi.waitFor(() => expect(attribution.getCurrent().processes.status).toBe('ready')); });
+    expect(attribution.getCurrent().processes.answer).toBe(recovered);
+    await attribution.unmount();
 });
 
 it('combines canonical totals without dividing whole-machine CPU again, leaves left-behind out of everything else and clamps to zero', async () => {

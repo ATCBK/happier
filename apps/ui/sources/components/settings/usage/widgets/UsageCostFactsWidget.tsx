@@ -6,6 +6,8 @@ import { HappierDataMetric } from '@happier-dev/plugin-ui/presentation';
 import { useWidgetFrameBodyCaption } from '@/components/widgets/frame/widgetFrameBodyCaption';
 import { formatTokenCount, formatUsageCost } from '@/utils/format/usageNumbers';
 import { t } from '@/text';
+import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
 import {
   UsageBodyInsufficient,
   UsageCoverageLine,
@@ -13,6 +15,7 @@ import {
   useUsagePluginTheme,
   type UsageBodyProps,
   UsageBodyNoUsage,
+  usagePartialHistoryLabel,
 } from './usageBodyKit';
 import { UsageModelPricesLine } from './UsageModelPrices';
 
@@ -54,8 +57,10 @@ export function UsageCostFactsWidget(props: UsageBodyProps) {
         ? fact.tokens.total > 0
         : fact.eventCount > 0 || (fact.amountUsd ?? 0) > 0)
   ));
+  // One qualifier, said once: when every fact is partial the band says so once, not under each figure (R9).
+  const partialOnce = facts.length > 1 && facts.every((fact) => !fact.complete);
   if (!props.slice.accounting)
-    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} />;
+    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} onRetry={props.model.refresh} />;
   // The prices behind API-equivalent money live with the money they make (U10); unpriced models
   // are exactly the case where there are no money facts yet.
   const prices = <UsageModelPricesLine slice={props.slice} serverId={props.serverId} testID={`${props.testID}.prices`} />;
@@ -97,7 +102,7 @@ export function UsageCostFactsWidget(props: UsageBodyProps) {
                   : t('usage.board.page.factTokens', {
                       tokens: formatTokenCount(fact.tokens.total),
                     }),
-                fact.complete ? null : t('usage.board.page.factIncomplete'),
+                fact.complete || partialOnce ? null : t('usage.board.page.factIncomplete'),
               ]
                 .filter(Boolean)
                 .join(' · ')}
@@ -105,6 +110,9 @@ export function UsageCostFactsWidget(props: UsageBodyProps) {
           </View>
         ))}
       </View>
+      {partialOnce ? (
+        <Text style={styles.partial} testID={`${props.testID}.partial`}>{usagePartialHistoryLabel()}</Text>
+      ) : null}
       {prices}
       <UsageCoverageLine
         slice={props.slice}
@@ -116,7 +124,8 @@ export function UsageCostFactsWidget(props: UsageBodyProps) {
   );
 }
 
-const styles = StyleSheet.create(() => ({
+const styles = StyleSheet.create((theme) => ({
+  partial: { ...Typography.variant('meta'), color: theme.colors.text.tertiary },
   body: { gap: 16 },
   grid: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 24, rowGap: 18 },
   cell: { flexGrow: 1, flexBasis: 150, minWidth: 0 },

@@ -56,6 +56,7 @@ const PAGE_GLYPHS: Readonly<Record<ProjectPageV1, IconName>> = {
   scripts: 'play',
   services: 'hard-drives',
   context: 'stack',
+  memory: 'book-bookmark',
 };
 
 /** A page's glyph: its tab and every reference back to that page draw the same mark. */
@@ -77,6 +78,8 @@ export function projectPageLabel(page: ProjectPageV1): string {
       return t('projects.pages.services');
     case 'context':
       return t('projects.pages.context');
+    case 'memory':
+      return t('projects.pages.memory');
   }
 }
 
@@ -325,6 +328,7 @@ export const ProjectCheckoutChip = React.memo(function ProjectCheckoutChip(
             hovered?: boolean;
           }) => [
             styles.chip,
+            props.compact && !row ? styles.chipCompact : null,
             row ? styles.row : null,
             HAPPIER_FOCUS_RING_DELEGATED_STYLE,
             {
@@ -469,6 +473,9 @@ const styles = StyleSheet.create(() => ({
     minWidth: 0,
     maxWidth: 320,
   },
+  // A compact band gives its room to the page tabs first: a long branch ellipsizes before a tab moves
+  // behind More (lab `p-overview` FIT keeps five labelled tabs beside a branch-only chip).
+  chipCompact: { maxWidth: 180 },
   chipText: {
     ...Typography.default(),
     fontSize: HAPPIER_SEGMENTED_METRICS.plain.labelFontSizePx,

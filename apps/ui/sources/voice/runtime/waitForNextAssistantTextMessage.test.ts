@@ -4,6 +4,7 @@ import { createSessionFixture, createSessionMessagesFixture } from '@/dev/testki
 import { storage } from '@/sync/domains/state/storage';
 import type { Message } from '@happier-dev/session-core/messages';
 import { readMountedSessionRealtimeTranscriptConsumerSessionIds } from '@/sync/runtime/sessionRealtimeTranscriptConsumers';
+import { buildSessionTurnsProjectionV1 } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
 
 import { captureAssistantTextMessageBaseline, waitForNextAssistantTextMessage } from './waitForNextAssistantTextMessage';
 
@@ -54,6 +55,114 @@ describe('waitForNextAssistantTextMessage', () => {
 
     await expect(waitPromise).resolves.toBe(null);
     expect(readMountedSessionRealtimeTranscriptConsumerSessionIds('waiter-home')).not.toContain('s1');
+  });
+
+  it.each(['streaming', 'interrupted', 'thinking', 'thinking-flag'] as const)('retains demand past %s text until a complete assistant segment arrives', async segment => {
+    const controller = new AbortController();
+    const baseline = captureAssistantTextMessageBaseline('s1');
+    let settled = false;
+    const waiting = waitForNextAssistantTextMessage('s1', baseline.baselineIds, baseline.baselineCount, controller.signal)
+      .then(value => { settled = true; return value; });
+    const draft = { id: 'reply', kind: 'agent-text', text: segment === 'thinking' ? 'Private reasoning' : "I'm",
+      localId: 'reply-local', createdAt: 1, isThinking: segment === 'thinking-flag',
+      meta: { happierStreamSegmentV1: { v: 1, segmentKind: segment === 'thinking' ? 'thinking' : 'assistant',
+        segmentLocalId: 'reply-local', segmentState: segment === 'thinking' || segment === 'thinking-flag' ? 'complete' : segment,
+        startedAtMs: 1, updatedAtMs: 2 } },
+    } satisfies Message;
+    try {
+      storage.setState({ sessionMessages: { s1: createSessionMessagesFixture({
+        messageIdsOldestFirst: [draft.id], messagesById: { [draft.id]: draft },
+      }) } });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(readMountedSessionRealtimeTranscriptConsumerSessionIds('waiter-home')).toContain('s1');
+      const reply = { ...draft, isThinking: false, text: "I'm ready to help.",
+        meta: { happierStreamSegmentV1: { ...draft.meta.happierStreamSegmentV1,
+          segmentKind: 'assistant' as const, segmentState: 'complete' as const, updatedAtMs: 3 } },
+      } satisfies Message;
+      storage.setState({ sessionMessages: { s1: createSessionMessagesFixture({
+        messageIdsOldestFirst: [reply.id], messagesById: { [reply.id]: reply },
+      }) } });
+      await expect(waiting).resolves.toBe(reply.text);
+    } finally { controller.abort(); await waiting; }
+  });
+
+  it.each([
+    ['cancelled', null], ['cancelled', undefined], ['failed', null], ['completed', null],
+  ] as const)('releases demand for the submitted turn with terminal %s and no reply (final sequence %s)', async (status, finalSeq) => {
+    const controller = new AbortController();
+    const baseline = captureAssistantTextMessageBaseline('s1');
+    let settled = false;
+    const waiting = waitForNextAssistantTextMessage(
+      's1', baseline.baselineIds, baseline.baselineCount, controller.signal, 'voice-input',
+    ).then(value => { settled = true; return value; });
+    try {
+      const user = { id: 'user', kind: 'user-text', text: 'hello', seq: 17, localId: 'voice-input', createdAt: 1 } satisfies Message;
+      const project = (userSeq: number) => {
+        const session = storage.getState().sessions.s1!;
+        storage.setState({ sessions: { ...storage.getState().sessions, s1: { ...session,
+          sessionTurns: buildSessionTurnsProjectionV1({ sessionId: 's1', updatedAt: 2, turns: [{
+            turnId: 'turn', startedAt: 1, updatedAt: 2, status,
+            transcriptAnchors: { startUserMessageSeq: userSeq, ...(finalSeq === undefined ? {} : { finalAssistantMessageSeq: finalSeq }) },
+          }] }),
+        } } });
+      };
+      storage.setState({ sessionMessages: { s1: createSessionMessagesFixture({
+        messageIdsOldestFirst: [user.id], messagesById: { [user.id]: user },
+      }) } });
+      project(16);
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(readMountedSessionRealtimeTranscriptConsumerSessionIds('waiter-home')).toContain('s1');
+      project(17);
+      await vi.waitFor(() => expect(settled).toBe(true));
+      expect(controller.signal.aborted).toBe(false);
+      await expect(waiting).resolves.toBeNull();
+      expect(readMountedSessionRealtimeTranscriptConsumerSessionIds('waiter-home')).not.toContain('s1');
+    } finally {
+      controller.abort();
+      await waiting;
+    }
+  });
+
+  it('keeps the submitted input boundary when older replies hydrate after baseline capture', async () => {
+    const controller = new AbortController();
+    const baseline = captureAssistantTextMessageBaseline('s1');
+    const waiting = waitForNextAssistantTextMessage('s1', baseline.baselineIds, baseline.baselineCount, controller.signal, 'voice-input');
+    const oldReply = { id: 'old', kind: 'agent-text', text: 'An earlier answer.', seq: 16, localId: null, createdAt: 1 } satisfies Message;
+    const user = { id: 'user', kind: 'user-text', text: 'My new question.', seq: 17, localId: 'voice-input', createdAt: 2 } satisfies Message;
+    try {
+      storage.setState({ sessionMessages: { s1: createSessionMessagesFixture({
+        messageIdsOldestFirst: [oldReply.id], messagesById: { [oldReply.id]: oldReply },
+      }) } });
+      expect(readMountedSessionRealtimeTranscriptConsumerSessionIds('waiter-home')).toContain('s1');
+      storage.setState({ sessionMessages: { s1: createSessionMessagesFixture({
+        messageIdsOldestFirst: [oldReply.id, user.id], messagesById: { [oldReply.id]: oldReply, [user.id]: user },
+      }) } });
+      expect(readMountedSessionRealtimeTranscriptConsumerSessionIds('waiter-home')).toContain('s1');
+      const reply = { id: 'new', kind: 'agent-text', text: 'The answer to your new question.', seq: 18, localId: null, createdAt: 3 } satisfies Message;
+      storage.setState({ sessionMessages: { s1: createSessionMessagesFixture({
+        messageIdsOldestFirst: [oldReply.id, user.id, reply.id], messagesById: { [oldReply.id]: oldReply, [user.id]: user, [reply.id]: reply },
+      }) } });
+      await expect(waiting).resolves.toBe(reply.text);
+    } finally { controller.abort(); await waiting; }
+  });
+
+  it.each([['completed', 18], ['failed', undefined]] as const)('waits for the final reply when a %s projection arrives before the transcript (final sequence %s)', async (status, finalAssistantMessageSeq) => {
+    const controller = new AbortController();
+    const baseline = captureAssistantTextMessageBaseline('s1');
+    const waiting = waitForNextAssistantTextMessage('s1', baseline.baselineIds, baseline.baselineCount, controller.signal, 'voice-input');
+    try {
+      const user = { id: 'user', kind: 'user-text', text: 'hello', seq: 17, localId: 'voice-input', createdAt: 1 } satisfies Message;
+      storage.setState({ sessions: { s1: { ...storage.getState().sessions.s1!, sessionTurns: buildSessionTurnsProjectionV1({
+        sessionId: 's1', updatedAt: 2, turns: [{ turnId: 'turn', startedAt: 1, updatedAt: 2, status,
+          transcriptAnchors: { userMessageSeqs: [17], ...(finalAssistantMessageSeq === undefined ? {} : { finalAssistantMessageSeq }) } }],
+      }) } }, sessionMessages: { s1: createSessionMessagesFixture({ messageIdsOldestFirst: [user.id], messagesById: { [user.id]: user } }) } });
+      expect(readMountedSessionRealtimeTranscriptConsumerSessionIds('waiter-home')).toContain('s1');
+      const reply = { id: 'reply', kind: 'agent-text', text: 'Done.', seq: 18, localId: null, createdAt: 2 } satisfies Message;
+      storage.setState({ sessionMessages: { s1: createSessionMessagesFixture({ messageIdsOldestFirst: [user.id, reply.id], messagesById: { [user.id]: user, [reply.id]: reply } }) } });
+      await expect(waiting).resolves.toBe('Done.');
+    } finally { controller.abort(); await waiting; }
   });
 
   it('reads new assistant replies from the real normalized transcript store', async () => {

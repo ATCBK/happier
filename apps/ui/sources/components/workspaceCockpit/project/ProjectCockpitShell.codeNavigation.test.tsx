@@ -7,6 +7,12 @@ import { DestinationInstanceHost } from '@/components/appShell/workspace/Destina
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
 
+// The retained host imports the recycler before runtime boundary installation.
+// Its native viewport is absent here, so install the canonical SDK boundary before static imports.
+vi.mock('@legendapp/list/react-native', async importOriginal => {
+    const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
+    return createCapturingLegendListMock({ original: await importOriginal<Record<string, unknown>>(), emitViewability: true }).module;
+});
 installSessionFilesViewBoundaries();
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));

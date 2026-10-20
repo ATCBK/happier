@@ -61,7 +61,9 @@ export function buildOrdinarySessionListHomeState(input: Readonly<{
                 ? (hasObservedRows ? 'refreshing' : 'loading')
                 : observedPhase === 'error'
                     ? 'error'
-                    : observedPhase === 'offline'
+                    // The observation's "offline" is published when the socket drops; a transport that is
+                    // back (`online`) outranks it, or a Home still paging would read as unreachable.
+                    : observedPhase === 'offline' && input.online !== true
                         ? 'offline'
                         : input.lifecycle.hasFetchedSnapshot
                             ? 'ready'

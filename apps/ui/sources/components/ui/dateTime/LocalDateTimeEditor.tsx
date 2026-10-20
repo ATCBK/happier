@@ -8,7 +8,7 @@ import {
     type HappierLocalDateTimePickerRequest,
 } from '@happier-dev/plugin-ui/presentation';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { Icon } from '@/components/ui/icons/Icon';
 
 import { DateTimePickerPopover, isDateTimePickerPopoverAvailable } from './DateTimePickerPopover';
@@ -43,7 +43,7 @@ export function resolveAppLocalDateTimePicker(): HappierLocalDateTimePickerHost 
  */
 export function LocalDateTimeEditor(props: Omit<HappierLocalDateTimeFieldProps, 'theme' | 'picker'>): React.ReactElement {
     const { theme } = useUnistyles();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const picker = resolveAppLocalDateTimePicker();
     return <HappierLocalDateTimeField {...props} theme={presentationTheme} {...(picker ? { picker } : {})} />;
 }

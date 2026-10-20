@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 import {
     presentExternalSessionOperationActionError,
@@ -31,11 +32,13 @@ export type UseExternalSessionMaterializeResult = Readonly<{
 export function useExternalSessionMaterialize(
     params: UseExternalSessionMaterializeParams,
 ): UseExternalSessionMaterializeResult {
+    const presentationActive = useLayoutPresentationActive();
     const [materializeInFlight, setMaterializeInFlight] = React.useState(false);
     const mountedRef = React.useRef(true);
     const generationRef = React.useRef(0);
     const requestPromiseRef = React.useRef<Promise<boolean> | null>(null);
     const idempotencyKeyRef = React.useRef<string | null>(null);
+    const requestControllerRef = React.useRef<AbortController | null>(null);
     const normalizedSessionId = React.useMemo(
         () => normalizeSessionId(params.sessionId),
         [params.sessionId],
@@ -53,19 +56,26 @@ export function useExternalSessionMaterialize(
     }, [normalizedSessionId, params.externalSessionRuntime.externalSessionLink]);
 
     React.useEffect(() => {
-        mountedRef.current = true;
+        mountedRef.current = presentationActive;
+        const controller = new AbortController();
+        requestControllerRef.current = controller;
+        const retirement = captureActiveServerAccountScopeCurrentness().onRetire(() => controller.abort());
         generationRef.current += 1;
         requestPromiseRef.current = null;
         idempotencyKeyRef.current = null;
         setMaterializeInFlight(false);
         return () => {
+            controller.abort();
+            retirement.dispose();
             mountedRef.current = false;
             generationRef.current += 1;
             requestPromiseRef.current = null;
         };
-    }, [materializeScopeKey]);
+    }, [materializeScopeKey, params.externalSessionRuntime.sessionServerId, presentationActive]);
 
     const requestMaterialize = React.useCallback((): Promise<boolean> => {
+        const signal = requestControllerRef.current?.signal;
+        if (!mountedRef.current || !signal || signal.aborted) return Promise.resolve(false);
         if (requestPromiseRef.current) {
             return requestPromiseRef.current;
         }
@@ -127,6 +137,7 @@ export function useExternalSessionMaterialize(
                     },
                 }, {
                     serverId: params.externalSessionRuntime.sessionServerId,
+                    signal,
                 });
                 if (!isRequestCurrent()) {
                     return false;

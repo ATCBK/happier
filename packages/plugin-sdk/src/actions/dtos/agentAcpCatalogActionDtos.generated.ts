@@ -162,7 +162,7 @@ export type AgentAcpCatalogActionInputById = {
                 envVars?: string[] | undefined;
             } | undefined;
             runtime?: {
-                stderrRules: {
+                stderrRules?: {
                     authenticationErrorDetail?: string | undefined;
                     suppress?: {
                         includes: string[];
@@ -173,7 +173,14 @@ export type AgentAcpCatalogActionInputById = {
                         detail: string;
                         caseSensitive?: boolean | undefined;
                     }[] | undefined;
-                };
+                } | undefined;
+                permissionModeMapping?: {
+                    default?: string | null | undefined;
+                    'read-only'?: string | null | undefined;
+                    'safe-yolo'?: string | null | undefined;
+                    yolo?: string | null | undefined;
+                    plan?: string | null | undefined;
+                } | undefined;
             } | undefined;
             compatibility?: {
                 source: 'acp-catalog-v2';
@@ -361,7 +368,7 @@ export type AgentAcpCatalogActionResultById = {
                 envVars?: string[] | undefined;
             } | undefined;
             runtime?: {
-                stderrRules: {
+                stderrRules?: {
                     authenticationErrorDetail?: string | undefined;
                     suppress?: {
                         includes: string[];
@@ -372,7 +379,14 @@ export type AgentAcpCatalogActionResultById = {
                         detail: string;
                         caseSensitive?: boolean | undefined;
                     }[] | undefined;
-                };
+                } | undefined;
+                permissionModeMapping?: {
+                    default?: string | null | undefined;
+                    'read-only'?: string | null | undefined;
+                    'safe-yolo'?: string | null | undefined;
+                    yolo?: string | null | undefined;
+                    plan?: string | null | undefined;
+                } | undefined;
             } | undefined;
             compatibility?: {
                 source: 'acp-catalog-v2';
@@ -535,7 +549,7 @@ export type AgentAcpCatalogActionResultById = {
                 } | undefined;
             } | undefined;
             runtime?: {
-                stderrRules: {
+                stderrRules?: {
                     authenticationErrorDetail?: string | undefined;
                     suppress?: {
                         includes: string[];
@@ -546,7 +560,14 @@ export type AgentAcpCatalogActionResultById = {
                         detail: string;
                         caseSensitive?: boolean | undefined;
                     }[] | undefined;
-                };
+                } | undefined;
+                permissionModeMapping?: {
+                    default?: string | null | undefined;
+                    'read-only'?: string | null | undefined;
+                    'safe-yolo'?: string | null | undefined;
+                    yolo?: string | null | undefined;
+                    plan?: string | null | undefined;
+                } | undefined;
             } | undefined;
             compatibility?: {
                 source: 'acp-catalog-v2';
@@ -726,7 +747,7 @@ export type AgentAcpCatalogActionResultById = {
                 envVars?: string[] | undefined;
             } | undefined;
             runtime?: {
-                stderrRules: {
+                stderrRules?: {
                     authenticationErrorDetail?: string | undefined;
                     suppress?: {
                         includes: string[];
@@ -737,7 +758,14 @@ export type AgentAcpCatalogActionResultById = {
                         detail: string;
                         caseSensitive?: boolean | undefined;
                     }[] | undefined;
-                };
+                } | undefined;
+                permissionModeMapping?: {
+                    default?: string | null | undefined;
+                    'read-only'?: string | null | undefined;
+                    'safe-yolo'?: string | null | undefined;
+                    yolo?: string | null | undefined;
+                    plan?: string | null | undefined;
+                } | undefined;
             } | undefined;
             compatibility?: {
                 source: 'acp-catalog-v2';
@@ -913,7 +941,7 @@ export type AgentAcpCatalogActionResultById = {
                 envVars?: string[] | undefined;
             } | undefined;
             runtime?: {
-                stderrRules: {
+                stderrRules?: {
                     authenticationErrorDetail?: string | undefined;
                     suppress?: {
                         includes: string[];
@@ -924,7 +952,14 @@ export type AgentAcpCatalogActionResultById = {
                         detail: string;
                         caseSensitive?: boolean | undefined;
                     }[] | undefined;
-                };
+                } | undefined;
+                permissionModeMapping?: {
+                    default?: string | null | undefined;
+                    'read-only'?: string | null | undefined;
+                    'safe-yolo'?: string | null | undefined;
+                    yolo?: string | null | undefined;
+                    plan?: string | null | undefined;
+                } | undefined;
             } | undefined;
             compatibility?: {
                 source: 'acp-catalog-v2';

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createSessionFixture } from '@/dev/testkit';
 import type { VoiceAdapterController } from '@/voice/session/types';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
@@ -17,6 +17,7 @@ import { SESSION_RPC_METHODS, RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ExecutionRunTurnStreamStartV2RequestSchema, ExecutionRunTurnStreamStartResponseSchema,
     ExecutionRunTurnStreamReadResponseSchema, ExecutionRunTurnStreamCancelResponseSchema } from '@happier-dev/protocol/execution/runs/streaming';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol';
+import { SessionResumeRequestV1Schema } from '@happier-dev/protocol/sessions/control/sessionResumeRequestV1';
 import { PendingLocalIdSchema } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
 import { PendingRequestedActionV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { parsePendingDeliveryStatusV1, pendingDeliveryStatusV1ToPersistedFields, type PendingDeliveryStatusV1 } from '@happier-dev/protocol/sessions/messages/pendingDeliveryStatusV1';
@@ -50,14 +51,14 @@ const composerVoiceSettings = voiceSettingsParse({ providerId: 'happier.voice.el
 
 // These are HTTP payloads, not a second Pending owner. The actual Sync codecs,
 // durable outbox and row projections consume the response below.
-const pendingPostSchema = z.object({
+const pendingPostSchema = z.strictObject({
     localId: PendingLocalIdSchema,
     content: StrictSessionStoredMessageContentEnvelopeSchema,
     messageRole: z.literal('user'),
-    deliveryMode: z.literal('external_handoff').optional(),
+    deliveryMode: z.optional(z.literal('external_handoff')),
     requestedAction: PendingRequestedActionV1Schema,
-    targetMachineId: z.string().optional(),
-}).strict();
+    targetMachineId: z.optional(z.string()),
+});
 type PendingPost = z.infer<typeof pendingPostSchema>;
 let enqueued: PendingPost | null = null;
 let deliveryStatus: PendingDeliveryStatusV1 | null = null;
@@ -184,7 +185,7 @@ async function restorePendingHttpAccount() {
             }
             if (path.endsWith('/delivery/block')) {
                 if (rejectBlock) return Response.json({ error: 'internal-server-error' }, { status: 500 });
-                const { reason } = z.object({ reason: z.string() }).strict().parse(JSON.parse(String(init?.body)));
+                const { reason } = z.strictObject({ reason: z.string() }).parse(JSON.parse(String(init?.body)));
                 deliveryStatus = parsePendingDeliveryStatusV1({ status: 'blocked', reason });
                 if (!deliveryStatus) throw new Error('Invalid HTTP blocked-delivery fixture');
                 return Response.json({ success: true });
@@ -304,7 +305,7 @@ describe('Voice composer through Sync HTTP custody', () => {
         changeControlBeforeEnqueueAck = true;
         expect(await sendVoiceSessionComposerText({ conversationSessionId: 'carrier-s1', text: 'hello', localId: 'carrier-changed',
             getAdapter: getVoiceAdapterRegistry().get })).toEqual({ ok: false, reason: 'terminal_rejected', localId: 'carrier-changed',
-                message: 'voice_transcript_carrier_changed' });
+                errorCode: 'VOICE_TEXT_TURN_REJECTED_BEFORE_EFFECT', message: 'voice_transcript_carrier_changed' });
         expect(providerMessages).toEqual([]);
         expect(deliveryStatus).toEqual({ status: 'blocked', reason: 'provider_rejected_before_acceptance' });
         expect(pendingRows()).toEqual([expect.objectContaining({ localId: 'carrier-changed', pendingDeliveryStatus: 'blocked',
@@ -523,7 +524,7 @@ describe('Voice composer through Sync HTTP custody', () => {
         } } } } });
     });
 
-    it.each(['accepted', 'unacknowledged', 'aborted-settled', 'aborted-settlement-failed', 'switched-to-direct-session', 'selection-unavailable'] as const)('routes native composer text through the actual local controller and daemon RPC with %s delivery', async (outcome) => {
+    it.each(['accepted', 'unacknowledged', 'aborted-settled', 'aborted-settlement-failed', 'switched-to-direct-session', 'selection-unavailable', 'target-offline'] as const)('routes native composer text through the actual local controller and daemon RPC with %s delivery', async (outcome) => {
         if (!account) throw new Error('Native composer Account is unavailable');
         await getVoiceAdapterRegistry().get('happier.voice.elevenlabs/realtime-elevenlabs')!.stop({ sessionId: 'carrier-s1' });
         const { writeVoiceConversationScopeMetadata } = await import('@/voice/persistence/voiceConversationScopeMetadata');
@@ -553,13 +554,20 @@ describe('Voice composer through Sync HTTP custody', () => {
             for (const boundary of network.socketBoundaries.filter(value => value.serverUrl === account!.home.serverUrl)) boundary.trigger('ephemeral', activity);
         }
         await vi.waitFor(() => expect(getStorage().getState().sessions[root.id]?.presence).toBe('online'));
+        let daemonCommittedOuterInput = false;
         const daemon = await createRetainedVoiceAgentRpcBoundary({ handleOtherRpc: async (method, input) => {
+            if (method === RPC_METHODS.SPAWN_HAPPY_SESSION || method === RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE) {
+                const request = SessionResumeRequestV1Schema.parse(input);
+                expect(request.sessionId).toBe(carrier.id);
+                return { type: 'success', sessionId: carrier.id } satisfies import('@happier-dev/protocol').SpawnSessionResult;
+            }
             if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START_V2) {
                 const request = ExecutionRunTurnStreamStartV2RequestSchema.parse(input);
                 // The real payload owner may prepend admitted target context,
                 // but the daemon must receive this exact final user input.
                 expect(request.message).toMatch(/(?:^|\nUser said:\n)hello$/);
-                expect(request).toMatchObject({ runId: 'local-agent-run', userTranscript: { mode: 'persist', localId: enqueued?.localId } });
+                expect(request).toMatchObject({ runId: 'local-agent-run', userTranscript: { localId: enqueued?.localId } });
+                daemonCommittedOuterInput = request.userTranscript?.mode === 'persist';
                 expect(pendingRows()).toEqual([expect.objectContaining({ localId: enqueued?.localId, pendingDeliveryStatus: 'external_handoff' })]);
                 providerMessages.push(request.message);
                 httpEvents.push('native-provider');
@@ -588,12 +596,22 @@ describe('Voice composer through Sync HTTP custody', () => {
         if (acceptsTranscript) handledResponse = async () => {
             entered();
             await gate;
+            // The server joins by exact content and sidechain, not just localId.
+            // A native Voice user row has its own meta/sidechain and conflicts
+            // with the original Pending envelope (live-3's HTTP 409).
+            if (daemonCommittedOuterInput) return Response.json({ error: 'transcript-conflict' }, { status: 409 });
             if (outcome === 'aborted-settlement-failed') return Response.json({ error: 'internal-server-error' }, { status: 500 });
             deliveryStatus = null;
             return Response.json({ success: true });
         };
         try {
-            if (outcome === 'selection-unavailable') {
+            if (outcome === 'target-offline') {
+                await voiceAgentSessions.stop(VOICE_AGENT_GLOBAL_SESSION_ID);
+                // A durable active target without an observed runtime is the
+                // reported refusal, distinct from an inactive Session.
+                getStorage().getState().applySessions([{ ...getStorage().getState().sessions[root.id], presence: undefined }]);
+                expect(getStorage().getState().sessions[root.id]).toMatchObject({ active: true, presence: undefined });
+            } else if (outcome === 'selection-unavailable') {
                 // This case starts a new turn admission. An already admitted
                 // run correctly retains its captured Agent despite edits.
                 await voiceAgentSessions.stop(VOICE_AGENT_GLOBAL_SESSION_ID);
@@ -650,16 +668,16 @@ describe('Voice composer through Sync HTTP custody', () => {
                 expect(failure?.type).toBe('rejected');
                 if (failure?.type !== 'rejected' || !(failure.value instanceof Error)) throw new Error('Actual native direct-session failure was not observable');
                 expect(result).toEqual({ ok: true, localId, disposition: 'ambiguous', message: failure.value.message });
-            } else if (outcome === 'selection-unavailable') expect(result).toEqual({ ok: false, localId,
-                reason: 'terminal_rejected', message: 'voice_agent_selection_unavailable' });
+            } else if (outcome === 'selection-unavailable' || outcome === 'target-offline') expect(result).toMatchObject({ ok: false, localId,
+                reason: 'terminal_rejected', message: outcome === 'selection-unavailable' ? 'voice_agent_selection_unavailable' : expect.any(String) });
             else if (outcome === 'aborted-settlement-failed') expect(result).toMatchObject({ ok: true, localId,
                 disposition: 'ambiguous', message: expect.stringContaining('pending settlement failed:') });
             else expect(result).toEqual(outcome === 'unacknowledged'
-                ? { ok: true, localId, disposition: 'ambiguous', message: 'voice_turn_acceptance_not_reported' }
+                ? { ok: true, localId, disposition: 'ambiguous', message: 'send_failed' }
                 : { ok: true, localId, disposition: 'settled' });
             expect(httpEvents.filter(event => event.startsWith('settle:'))).toEqual(acceptsTranscript ? [`settle:${localId}`] : []);
-            const noDispatch = outcome === 'switched-to-direct-session' || outcome === 'selection-unavailable';
-            const blockedReason = outcome === 'selection-unavailable' ? 'provider_unavailable_before_acceptance' : 'delivery_outcome_uncertain';
+            const noDispatch = outcome === 'switched-to-direct-session' || outcome === 'selection-unavailable' || outcome === 'target-offline';
+            const blockedReason = outcome === 'selection-unavailable' || outcome === 'target-offline' ? 'provider_unavailable_before_acceptance' : 'delivery_outcome_uncertain';
             expect(providerMessages).toHaveLength(noDispatch ? 0 : 1);
             expect(daemon.requests.filter(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STREAM_START_V2)).toHaveLength(noDispatch ? 0 : 1);
             expect(deliveryStatus).toEqual(!acceptsTranscript ? { status: 'blocked', reason: blockedReason }

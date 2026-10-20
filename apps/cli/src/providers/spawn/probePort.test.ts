@@ -281,7 +281,7 @@ describe('provider probe authorization port', () => {
     });
   });
 
-  it('reuses a matching bulk settings parse but rejects it after the canonical settings generation changes', async () => {
+  it('reuses a matching bulk parse and rechecks newer preferences without treating their version as authorization', async () => {
     const admitted = privateGrantedSnapshot();
     let current = admitted;
     const resolveAddresses = vi.fn(async () => ['10.0.0.1']);
@@ -328,10 +328,7 @@ describe('provider probe authorization port', () => {
       ...admitted,
       settingsVersion: admitted.settingsVersion + 1,
     };
-    await expect(port.authorize(request, scope)).resolves.toMatchObject({
-      ok: false,
-      error: { code: 'provider_authorization_changed' },
-    });
+    await expect(port.authorize(request, scope)).resolves.toMatchObject({ ok: true });
     expect(resolveAddresses).not.toHaveBeenCalled();
 
     current = {

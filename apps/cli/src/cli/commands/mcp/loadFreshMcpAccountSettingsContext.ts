@@ -3,7 +3,7 @@ import type { StoredCredentials } from '@/persistence';
 import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { prepareActiveMcpServerCatalog } from '@/settings/mcp/hydrateMcpServerCatalog';
-import { createInvocationSavedSecretOperationContextV1, type SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1, type SavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { McpServerCatalogUnavailableError, readMcpServersSettingsFromAccountSettings } from '@/mcp/servers/readMcpServersSettingsFromAccountSettings';
 
@@ -33,14 +33,16 @@ export async function loadFreshMcpAccountSettingsContext(
   const scopeKey = resolveAccountSettingsScopeKey(credentials);
   const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
   const serverHttpBaseUrl = resolveServerHttpBaseUrl();
+  const isCurrent = () => settings.scopeKey === scopeKey
+    && getActiveAccountSettingsSnapshot()?.scopeKey === scopeKey
+    && getActiveAccountSettingsSnapshotLifetimeToken() === lifetimeToken;
   const assertCurrent = () => {
-    if (settings.scopeKey !== scopeKey || getActiveAccountSettingsSnapshot()?.scopeKey !== scopeKey
-      || getActiveAccountSettingsSnapshotLifetimeToken() !== lifetimeToken) {
+    if (!isCurrent()) {
       throw new McpServerCatalogUnavailableError('scope-retired');
     }
   };
   assertCurrent();
-  await prepareActiveMcpServerCatalog({ credentials, scopeKey, lifetimeToken, refresh: true });
+  await prepareActiveMcpServerCatalog({ credentials, scopeKey, lifetimeToken, refresh: true, maintainSource: false });
   assertCurrent();
   const snapshot = getActiveAccountSettingsSnapshot();
   if (!snapshot) throw new McpServerCatalogUnavailableError('scope-retired');
@@ -54,7 +56,7 @@ export async function loadFreshMcpAccountSettingsContext(
     whenRefreshed: null,
   });
   const operationContext = runWithServerHttpBaseUrl(serverHttpBaseUrl, () => createInvocationSavedSecretOperationContextV1({
-    credentials, snapshot: capturedSnapshot, serverHttpBaseUrl, isCurrent: async () => { assertCurrent(); return true; },
+    credentials, snapshot: capturedSnapshot, serverHttpBaseUrl, isCurrent: async () => isCurrent(),
   }));
   return Object.freeze({ ...capturedSnapshot, operationContext });
 }

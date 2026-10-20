@@ -11,9 +11,11 @@
     "types": ["react"]
   },
   "files": [
+    "src/index.ts",
     "src/index.mjs",
     "src/issueComposer.mjs",
     "src/issueSurface.mjs",
-    "src/uiBuildIdentity.mjs"
+    "src/uiBuildIdentity.mjs",
+    "src/discussionComposer.mjs"
   ]
 }

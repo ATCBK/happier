@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
+import { RpcError } from '@happier-dev/protocol/rpcErrors';
 
 import {
     clearMachineRequestReachabilityForTest,
@@ -89,6 +91,9 @@ describe('machine reachability', () => {
         expect(isMachineRequestReachabilityFailure({ rpcErrorCode: 'machine_offline' })).toBe(true);
         expect(isMachineRequestReachabilityFailure({ rpcErrorCode: 'RPC_METHOD_NOT_AVAILABLE' })).toBe(false);
         expect(isMachineRequestReachabilityFailure({ rpcErrorCode: 'MACHINE_ENCRYPTION_UNAVAILABLE' })).toBe(false);
+        // Both the decoded daemon refusal and its transport Error are request-scoped facts.
+        expect(isMachineRequestReachabilityFailure({ errorCode: RPC_ERROR_CODES.FORBIDDEN, admissionPredicate: 'machine_currentness' })).toBe(false);
+        expect(isMachineRequestReachabilityFailure(new RpcError('Forbidden', RPC_ERROR_CODES.FORBIDDEN))).toBe(false);
     });
 
     it('clears reconnect failures only for the reconnected Machine or exact Account socket', () => {

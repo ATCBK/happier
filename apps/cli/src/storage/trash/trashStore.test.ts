@@ -141,6 +141,9 @@ describe('Trash with the real filesystem and native measurement', () => {
         expect(result.outcomes).toMatchObject([{ status: 'deleted' }]); expect(result.freedBytes).toBeGreaterThan(0);
         expect((await f.activityLog.list({ range: 'today' })).entries.find(row => row.kind === 'trash_emptied'))
             .toMatchObject({ attribution: { accountId: 'owner' }, freedBytes: result.freedBytes });
+        const moved = await f.activityLog.read(`${prepared.entry.entryId}-trash_moved`);
+        expect(moved?.wayBack ?? []).toEqual([]);
+        expect(moved?.inTrashBytes).toBe(0);
     });
     it('never overwrites, permits the one beside destination, and refuses a missing parent', async () => {
         const f = await fixture('beside'); const prepared = await f.prepare(); await prepared.commit();
@@ -311,6 +314,26 @@ describe('Trash with the real filesystem and native measurement', () => {
         expect(await readFile(join(allocation.directory, 'bytes'), 'utf8')).toBe('session bytes');
         expect(await restarted.list()).toEqual([]);
         expect((await f.activityLog.read(`${prepared.entry.entryId}-trash_moved`))?.undoneAt).toBeDefined();
+    });
+    it('empties a retired Session folder and settles its canonical owner after payload removal', async () => {
+        const f = await fixture('managed-empty');
+        const owner = createManagedSessionDirectories({ activeServerDir: f.home });
+        const allocation = await owner.materializeForFreshSpawn({ sessionCreationTag: 'empty-tag' });
+        await owner.bind({ allocationId: allocation.allocationId, sessionId: 'session' });
+        await writeFile(join(allocation.directory, 'bytes'), 'session bytes');
+        const ownerData = { kind: 'allocation', allocationId: allocation.allocationId };
+        const categoryDeps = { happyHomeDir: f.home, activeServerDir: f.home, managedSessionDirectories: owner };
+        const store = createTrashStore({ ...f.deps,
+            resolveOwnerAdapter: (_category, data) => sessionFolders.adapterForEntry!(data, categoryDeps) });
+        const prepared = await store.prepare({ path: allocation.directory, batchId: 'managed', title: 'Session folder', size: emptySize,
+            categoryId: 'sessionFolders', ownerData, movedBy: { accountId: 'alice', kind: 'person' } });
+        const adapter = await sessionFolders.adapterForEntry!(ownerData, categoryDeps);
+        await prepared.commit(adapter.retire);
+        const result = await store.empty({ entryIds: [prepared.entry.entryId] }, { actorAccountId: 'alice', custodianAccountId: 'owner' });
+        expect(result, JSON.stringify(result)).toMatchObject({ outcomes: [{ entryId: prepared.entry.entryId, status: 'deleted' }] });
+        expect(await owner.listRecords({ includeTrashed: true })).toEqual([]);
+        expect(await store.list()).toEqual([]);
+        expect(await f.activityLog.read(`${prepared.entry.entryId}-trash_emptied`)).toMatchObject({ outcome: 'done' });
     });
     it('finishes the canonical session owner after an empty crash at the payload deletion commit point', async () => {
         const f = await fixture('managed-empty-crash');

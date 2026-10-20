@@ -41,7 +41,12 @@
         "engineLicense": "GPL-3.0-or-later",
         "outputLicenseEvidence": "https://sourceforge.net/p/espeak/discussion/538920/thread/c6944a60/",
         "voice": "en-us"
-      }
+      },
+      "acceptanceGates": [
+        "transport",
+        "energy",
+        "pcm-format"
+      ]
     },
     {
       "id": "short-command-24k",
@@ -84,7 +89,12 @@
         "engineLicense": "GPL-3.0-or-later",
         "outputLicenseEvidence": "https://sourceforge.net/p/espeak/discussion/538920/thread/c6944a60/",
         "voice": "en-us"
-      }
+      },
+      "acceptanceGates": [
+        "transport",
+        "energy",
+        "pcm-format"
+      ]
     },
     {
       "id": "long-utterance-16k",
@@ -129,7 +139,12 @@
         "engineLicense": "GPL-3.0-or-later",
         "outputLicenseEvidence": "https://sourceforge.net/p/espeak/discussion/538920/thread/c6944a60/",
         "voice": "en-us"
-      }
+      },
+      "acceptanceGates": [
+        "transport",
+        "energy",
+        "pcm-format"
+      ]
     },
     {
       "id": "two-turns-with-pause-24k",
@@ -181,7 +196,12 @@
         "engineLicense": "GPL-3.0-or-later",
         "outputLicenseEvidence": "https://sourceforge.net/p/espeak/discussion/538920/thread/c6944a60/",
         "voice": "en-us"
-      }
+      },
+      "acceptanceGates": [
+        "transport",
+        "energy",
+        "pcm-format"
+      ]
     },
     {
       "id": "barge-in-timeline-24k",
@@ -233,7 +253,12 @@
         "engineLicense": "GPL-3.0-or-later",
         "outputLicenseEvidence": "https://sourceforge.net/p/espeak/discussion/538920/thread/c6944a60/",
         "voice": "en-us"
-      }
+      },
+      "acceptanceGates": [
+        "transport",
+        "energy",
+        "pcm-format"
+      ]
     },
     {
       "id": "multilingual-fr-16k",
@@ -276,7 +301,12 @@
         "engineLicense": "GPL-3.0-or-later",
         "outputLicenseEvidence": "https://sourceforge.net/p/espeak/discussion/538920/thread/c6944a60/",
         "voice": "fr-fr"
-      }
+      },
+      "acceptanceGates": [
+        "transport",
+        "energy",
+        "pcm-format"
+      ]
     },
     {
       "id": "silence-5s",
@@ -306,7 +336,12 @@
         "normalizer": "direct PCM16 mono WAV encoder",
         "algorithmVersion": "1",
         "seed": "zero-filled"
-      }
+      },
+      "acceptanceGates": [
+        "transport",
+        "energy",
+        "pcm-format"
+      ]
     },
     {
       "id": "low-noise",
@@ -336,7 +371,12 @@
         "normalizer": "direct PCM16 mono WAV encoder",
         "algorithmVersion": "1",
         "seed": "0x5eed1234"
-      }
+      },
+      "acceptanceGates": [
+        "transport",
+        "energy",
+        "pcm-format"
+      ]
     },
     {
       "id": "transient-cough-like",
@@ -386,6 +426,57 @@
         "normalizer": "direct PCM16 mono WAV encoder",
         "algorithmVersion": "1",
         "seed": "0xc0ffee"
+      },
+      "acceptanceGates": [
+        "transport",
+        "energy",
+        "pcm-format"
+      ]
+    },
+    {
+      "id": "natural-librispeech-61-70968-0000-16k",
+      "file": "phrases/natural-librispeech-61-70968-0000.16k.wav",
+      "sourceText": "He began a confused complaint against the wizard who had vanished behind the curtain on the left",
+      "language": "en-US",
+      "sampleRate": 16000,
+      "channels": 1,
+      "durationMs": 5805,
+      "sha256": "345e92a79e69aa31152fea4bc39dbc9405ab243a4be80f69bf52cf05b6db66d2",
+      "expectedTranscriptSubstrings": [],
+      "expectedTranscript": "He began a confused complaint against the wizard who had vanished behind the curtain on the left",
+      "acceptanceGates": [
+        "recognition-accuracy",
+        "pcm-format"
+      ],
+      "timelineMs": [
+        {
+          "kind": "speech",
+          "start": 0,
+          "end": 4905
+        },
+        {
+          "kind": "silence",
+          "start": 4905,
+          "end": 5805
+        }
+      ],
+      "scenarios": [
+        "daemon-stt-batch",
+        "streaming-stt"
+      ],
+      "provenance": {
+        "generator": "packages/tests/fixtures/voice/generate.mjs --natural-source=<FLAC>",
+        "speechEngine": "human recording",
+        "normalizer": "lossless FLAC decode; direct PCM16 mono WAV encoder",
+        "license": "CC-BY-4.0",
+        "attribution": "LibriSpeech (c) 2014 by Vassil Panayotov; LibriVox audiobook recording, speaker 61, utterance 61-70968-0000.",
+        "sourceVersion": "SLR12 test-clean",
+        "sourceUrl": "https://www.openslr.org/resources/12/test-clean.tar.gz",
+        "sourceArchiveSha256": "39fde525e59672dc6d1551919b1478f724438a95aa55f874b576be21967e6c23",
+        "sourceFile": "LibriSpeech/test-clean/61/70968/61-70968-0000.flac",
+        "sourceFileSha256": "fd3c84146d8b357efc7f0d21de86de770721fc5ddac7e6577688dbf3cdabff5b",
+        "outputLicenseEvidence": "https://www.openslr.org/12/",
+        "adaptation": "Lossless FLAC to PCM16 mono 16 kHz; appended 900 ms zero-valued silence; no gain, rate, or speech editing."
       }
     }
   ]

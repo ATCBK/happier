@@ -18,6 +18,8 @@ export const KNOWN_CODEX_ROLLOUT_TOOL_NAMES = [
     'session_title_set',
     // function_call
     'exec_command',
+    // Codex 0.162 code mode records the executed script as a custom tool.
+    'exec',
     'spawn_agent',
     'wait_agent',
     'close_agent',
@@ -50,6 +52,8 @@ export function canonicalizeCodexRolloutToolName(name: string): {
     }
 
     switch (name) {
+        case 'exec':
+            return { canonicalToolName: name, visibility: 'default' };
         case 'shell':
         case 'shell_command':
         case 'exec_command':

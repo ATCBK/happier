@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { realpath } from 'node:fs/promises';
 import { runPluginAuthorPhase } from '@/plugins/authoring/phaseLog';
 
 import type {
@@ -51,7 +52,10 @@ type PluginChangeApplyOrBusyResult =
   | Readonly<{ kind: 'busy'; pluginId: string }>;
 
 export type DaemonPluginChangeService = Readonly<{
-  requestPluginChange: (request: PluginChangeRequest) => Promise<PluginChangeRequestResult>;
+  requestPluginChange: (
+    request: PluginChangeRequest,
+    options?: Readonly<{ retainReview?: boolean; signal?: AbortSignal }>,
+  ) => Promise<PluginChangeRequestResult>;
   decidePluginChange: (decision: PluginChangeDecision) => Promise<PluginChangeDecisionResult>;
   statusPluginChange: (request: PluginChangeStatusRequest) => Promise<PluginChangeStatusResult>;
   /** Every change still awaiting or executing a present-user decision. */
@@ -64,6 +68,8 @@ export type DaemonPluginChangeService = Readonly<{
 }>;
 
 export type DaemonPluginChangeOwner = DaemonPluginChangeService & Readonly<{
+  /** Review/apply custody for the exact root, including a rejoin after a busy reply. */
+  hasPendingDevelopmentSourceChange: (registeredRootId: string) => boolean;
   quiesceForHandoff: () => Promise<Readonly<{ resume: () => void }>>;
   isQuiescing: () => boolean;
   runHardRevocationCurrentnessChange: (
@@ -305,11 +311,33 @@ export function createDaemonPluginChangeService(params: Readonly<{
     }
   }
 
+  function findPendingDevelopmentSourceChange(registeredRootId: string): PendingPluginChange | undefined {
+    return [...pendingById.values()].find(({ prepared }) => (
+      isDevelopmentCandidate(prepared) && prepared.sourceAuthority.registeredRootId === registeredRootId
+    ));
+  }
+
   return Object.freeze({
-    async requestPluginChange(request) {
+    hasPendingDevelopmentSourceChange(registeredRootId) {
+      return findPendingDevelopmentSourceChange(registeredRootId) !== undefined;
+    },
+    async requestPluginChange(request, options) {
+      if (options?.signal?.aborted) return { kind: 'cancelled' };
       if (!acceptsChanges()) return { kind: 'unavailable', code: 'daemon_shutting_down' };
       const finishActiveRequest = beginActiveRequest();
       try {
+        // An author/Action rejoins the observer's exact retained candidate.
+        // New observations still carry their revision and use normal admission.
+        if (request.kind === 'development' && request.observedRevision === undefined) {
+          const root = await realpath(request.sourceRootPath).catch(() => null);
+          if (options?.signal?.aborted) return { kind: 'cancelled' };
+          const retained = root === null ? undefined : findPendingDevelopmentSourceChange(root);
+          if (retained) {
+            const outstanding = projectOutstandingPendingChange(retained);
+            if (outstanding?.kind === 'reviewRequired') return outstanding;
+            return { kind: 'busy', pluginId: retained.prepared.pluginId };
+          }
+        }
         let prepared: PreparedDaemonPluginChange;
         try {
           prepared = await params.prepare(request);
@@ -326,6 +354,10 @@ export function createDaemonPluginChangeService(params: Readonly<{
           );
         }
 
+        if (options?.signal?.aborted) {
+          await cleanupPrepared(prepared);
+          return { kind: 'cancelled' };
+        }
         if (!acceptsChanges()) {
           await cleanupPrepared(prepared);
           return { kind: 'unavailable', code: 'daemon_shutting_down' };
@@ -338,7 +370,7 @@ export function createDaemonPluginChangeService(params: Readonly<{
           await cleanupPrepared(prepared);
           return { kind: 'busy', pluginId: prepared.pluginId };
         }
-        if (prepared.requiresReview === false) {
+        if (prepared.requiresReview === false && options?.retainReview !== true) {
           const result = await tryApply(prepared);
           return await cleanupAfterApply(prepared, result);
         }

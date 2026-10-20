@@ -26,15 +26,27 @@ export const INTERNAL_CLAUDE_EVENT_TYPES = new Set<string>([
  * ratifies. `agent-setting`, `ai-title`, and `bridge-session` are session
  * bookkeeping envelopes — an agent setting, the generated session title, and
  * bridge sequence state — that carry no message body, so a page that advances
- * past one is complete rather than lossy. Keep this list closed: a Claude
- * release that starts writing conversation content under a new type must fail
- * closed here rather than be skipped silently.
+ * past one is complete rather than lossy. Keep this bookkeeping list explicit:
+ * new or malformed native records produce a visible unsupported-content row
+ * and safe diagnostic so transcripts stay readable across Claude CLI releases.
+ * Only actual source loss, such as replacement or an unread boundary, is a
+ * discontinuity; an unknown record must never be skipped silently.
  */
 export const CLAUDE_NON_TRANSCRIPT_RECORD_TYPES = new Set<string>([
     ...INTERNAL_CLAUDE_EVENT_TYPES,
     'agent-setting',
     'ai-title',
+    'custom-title',
     'bridge-session',
+    // Observed native 2026-10-15: persisted cost counters and ATIS latch state,
+    // neither of which contains a recipient-facing conversation message.
+    'cost-state',
+    'atis-latch',
+    // Claude 2.1.302 API input bookkeeping, observed in c11's native JSONL.
+    // Blobs may repeat prior prompts; none of these records is new conversation.
+    'api-request-shape',
+    'api-request-blob',
+    'api-request',
     'control_request',
     'control_response',
     'event',

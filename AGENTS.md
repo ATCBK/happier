@@ -281,7 +281,7 @@ Before changing production behavior:
 
 ### TypeScript compiler ownership
 
-- First-party compilation uses TypeScript 7 from `@typescript/native` through repository/workspace scripts. For an ad hoc development invocation, use `node scripts/workspaces/runTypeScriptCli.mjs ...`.
+- First-party compilation uses TypeScript 7 from `@typescript/native` through repository/workspace scripts. For an ad hoc development invocation, use `node scripts/workspaces/runTypeScriptCli.mjs ...` or `yarn tsc ...`: direct compilation routes through `hstack-exec` AUTO on POSIX, while executor/admitted descendants retain their selected machine. Standalone `--version`/`--help` queries and Windows stay local. The runner's leading `--local` delegates to executor policy; controller-local compilation also requires its explicit `--allow-local-compilation` override. Do not use that escape for whole-package checks on nl2.
 - Never invoke bare `tsc`, `npx tsc`, `node_modules/.bin/tsc`, or `typescript/bin/tsc`; those can select the retained TypeScript 5 API package.
 - `scripts/workspaces/resolveTypeScriptCliInvocation.mjs` is the only compiler-selection owner. Orchestrators import it or use `runTypeScriptCli.mjs`/`buildTypeScriptPackageDist.mjs`; never add compiler fallbacks.
 - The `typescript` dependency remains on 5.9 for compiler-API consumers. Do not use it for compilation, remove it, or upgrade it independently without inventorying and validating those consumers.

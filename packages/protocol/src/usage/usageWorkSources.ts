@@ -1,4 +1,4 @@
-import { RPC_METHODS } from '../rpc/index.js';
+import { RPC_METHODS } from '../rpc/methods.js';
 import { getUsageQueryKey, type UsageQuery } from '../inputs/usageQuery.js';
 import { ScmBranchListResponseSchema, type ScmBranchListRequest, type ScmBranchWorkEvidence, ScmPullRequestListResponseSchema, type ScmPullRequestListRequest } from '../scm/index.js';
 import type { UsageWorkEvidence } from './usageOutcomeAllocation.js';

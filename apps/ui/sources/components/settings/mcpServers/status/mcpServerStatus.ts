@@ -2,8 +2,9 @@ import type { McpServerCatalogEntryV1 } from '@happier-dev/protocol/mcp/servers/
 import { listValueRefSecretIdsV1 } from '@happier-dev/protocol/valueRefs/valueRefV1';
 import type { SavedSecretCatalogProjection } from '@/components/secrets/useSavedSecretCatalog';
 
-import type { CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
+import { pickMostBlockingCapabilityStatus, presentCapabilityStatus, type CapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
 import type { SessionCapabilityNoticeV1 } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
+import { describeCapabilityNoticeReason, readCapabilityNoticeReason } from '@/components/capabilities/status/capabilityNoticeReason';
 
 /**
  * A server's sign-in as the status owner reads it (T2 states, U7.9's `useMcpServerSignIn`). `null`: the
@@ -103,15 +104,46 @@ export function mcpServerStatus(input: McpServerStatusInput): readonly Capabilit
     statuses.push(...mcpServerMachineStatuses(input).values());
     for (const notice of input.sessionNotices ?? []) for (const item of notice.items) {
         if (item.kind !== 'mcp_server' || item.itemId !== input.entry.id) continue;
-        // The current grant/attempt owner supersedes this historical missing-auth condition.
-        if (item.code === 'mcp_sign_in_required' && input.signIn) continue;
+        // One reading of the runtime's reason (shared with the transcript notice): a reason the person can act
+        // on is that status with its fix, and only an unexplained stop is a failure.
+        const reason = readCapabilityNoticeReason(item);
+        if (reason?.kind === 'sign_in') {
+            // The current grant/attempt owner supersedes this historical missing-auth condition.
+            if (!input.signIn) statuses.push({ kind: 'signin', fix: { kind: 'sign_in', onPress: fixes.signIn } });
+            continue;
+        }
+        if (reason?.kind === 'missing_key') {
+            if (!statuses.some(status => status.kind === 'key')) statuses.push({ kind: 'key', detail: reason.key,
+                ...(fixes.addKey ? { fix: { kind: 'add_key' as const, onPress: fixes.addKey } } : {}) });
+            continue;
+        }
         const machine = input.machines[0];
-        statuses.push(item.code === 'mcp_sign_in_required'
-            ? { kind: 'signin', fix: { kind: 'sign_in', onPress: fixes.signIn } }
-            : { kind: 'error', ...(machine ? { machineName: machine.name } : {}), detail: item.detail ?? item.code,
-                ...(machine ? { fix: { kind: 'try_again' as const, onPress: () => fixes.tryAgain(machine.machineId) } } : {}) });
+        statuses.push({ kind: 'error', ...(machine ? { machineName: machine.name } : {}),
+            ...(reason ? { detail: describeCapabilityNoticeReason(reason) } : {}),
+            ...(machine ? { fix: { kind: 'try_again' as const, onPress: () => fixes.tryAgain(machine.machineId) } } : {}) });
     }
     return statuses;
+}
+
+/**
+ * What a list says about a server: the most blocking status the person must act on (sign-in family or key), the
+ * same one the page's banner leads with. Quiet while signing in, when connected and for a server that needs nothing;
+ * null when it needs nothing. `open` is where every fix leads (the server's page); without it the status is drawn
+ * fix-less, for a list whose action column owns the fix.
+ */
+export function mcpServerAttentionStatus(input: Pick<McpServerStatusInput, 'entry' | 'signIn' | 'savedSecretCatalog'> & Readonly<{ open?: () => void }>): CapabilityStatus | null {
+    const go = input.open ?? (() => {});
+    const needsYou = mcpServerStatus({
+        entry: input.entry,
+        signIn: input.signIn,
+        savedSecretCatalog: input.savedSecretCatalog,
+        tests: {},
+        machines: [],
+        fixes: { signIn: go, reconnect: go, grantAccess: go, addKey: go, howToFix: go, tryAgain: go },
+    }).filter((status) => presentCapabilityStatus(status, 'row').tone === 'needs_you');
+    const top = pickMostBlockingCapabilityStatus(needsYou, 'row');
+    if (top === null || input.open !== undefined) return top;
+    return { kind: top.kind, ...(top.detail ? { detail: top.detail } : {}) };
 }
 
 /** Each machine's own status (offline, can't run, stopped), keyed by machine id; healthy machines are absent. */

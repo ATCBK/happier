@@ -106,6 +106,10 @@ function useCredentialScopeEntries(
     const [entries, setEntries] = React.useState<ReadonlyMap<string, ScopeEntry>>(() => new Map());
     /** Homes whose latest settled read failed on this device's secure storage. */
     const unreadableServerIdsRef = React.useRef(new Set<string>());
+    const committedHomesRef = React.useRef<Readonly<{
+        profilesGeneration: number;
+        serverIds: ReadonlySet<string>;
+    }> | null>(null);
     // Projection callbacks observe credential transitions; their identity is
     // not a credential transition. Read the latest committed callbacks without
     // retiring and republishing a binding on each consumer render.
@@ -113,15 +117,27 @@ function useCredentialScopeEntries(
     React.useLayoutEffect(() => {
         projectionLifecycleRef.current = projectionLifecycle;
     }, [projectionLifecycle]);
+    // A retained Suspense tree disconnects layout effects without unmounting. Credential
+    // authority follows the subscription's passive lifetime, not that visibility transition.
+    React.useEffect(() => {
+        mountedRef.current = true;
+        return () => { mountedRef.current = false; };
+    }, []);
+    React.useLayoutEffect(() => {
+        committedHomesRef.current = { profilesGeneration, serverIds: new Set(normalizedServerIds) };
+        // Only committed selections may retire Home bindings; a suspended render owns none.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [profilesGeneration, serverIdsKey]);
 
     React.useEffect(() => {
         if (embedded) return;
-        mountedRef.current = true;
         const trackedServerIds = new Set(normalizedServerIds);
-        setEntries((current) => {
-            if ([...current.keys()].every((serverId) => trackedServerIds.has(serverId))) return current;
-            return new Map([...current].filter(([serverId]) => trackedServerIds.has(serverId)));
-        });
+        if ([...entries.keys()].some((serverId) => !trackedServerIds.has(serverId))) {
+            setEntries((current) => {
+                if ([...current.keys()].every((serverId) => trackedServerIds.has(serverId))) return current;
+                return new Map([...current].filter(([serverId]) => trackedServerIds.has(serverId)));
+            });
+        }
 
         const publishEntry = (serverId: string, entry: ScopeEntry): void => {
             setEntries((current) => {
@@ -133,6 +149,8 @@ function useCredentialScopeEntries(
         };
 
         const invalidate = (serverId: string, replacement: ScopeEntry | null = RESOLVING_ENTRY): number => {
+            const revision = (revisionsRef.current.get(serverId) ?? 0) + 1;
+            revisionsRef.current.set(serverId, revision);
             const retirements = retirementCallbacksRef.current.get(serverId);
             retirementCallbacksRef.current.delete(serverId);
             for (const retire of retirements ?? []) {
@@ -142,15 +160,15 @@ function useCredentialScopeEntries(
                     // One consumer cannot prevent sibling scope retirement.
                 }
             }
-            const revision = (revisionsRef.current.get(serverId) ?? 0) + 1;
-            revisionsRef.current.set(serverId, revision);
             if (replacement) publishEntry(serverId, replacement);
             return revision;
         };
 
         const resolveBinding = async (requestedServerId: string, revision: number): Promise<void> => {
             const isCurrent = () => mountedRef.current
-                && revisionsRef.current.get(requestedServerId) === revision;
+                && revisionsRef.current.get(requestedServerId) === revision
+                && committedHomesRef.current?.profilesGeneration === profilesGeneration
+                && committedHomesRef.current.serverIds.has(requestedServerId);
             const resolution = await resolveServerCredentialAccountScope(requestedServerId);
             if (!isCurrent()) return;
             if (resolution.kind === 'unavailable') unreadableServerIdsRef.current.add(requestedServerId);
@@ -199,6 +217,10 @@ function useCredentialScopeEntries(
         };
 
         for (const serverId of normalizedServerIds) {
+            const previous = entries.get(serverId);
+            // Changing the selected Home set does not change the credentials of a retained Home.
+            // Its live binding and every consumer's cursor remain current until its own retirement.
+            if (previous && 'binding' in previous && previous.binding?.isCurrent()) continue;
             // A profile publication can change transport metadata without
             // changing the Home or Account this credential resolves to. Retire
             // the old binding immediately, but keep its settled projection on
@@ -208,7 +230,6 @@ function useCredentialScopeEntries(
             // microtask later. New Homes still begin in `resolving`; explicit
             // credential mutations below continue to publish it because the
             // previous Account claim is no longer safe to show.
-            const previous = entries.get(serverId);
             const retainedEntry: ScopeEntry = previous
                 ? previous.resolution.kind === 'bound'
                     ? Object.freeze({ resolution: previous.resolution })
@@ -238,10 +259,13 @@ function useCredentialScopeEntries(
         });
 
         return () => {
-            mountedRef.current = false;
             unsubscribe();
             unsubscribeRetry();
-            for (const serverId of trackedServerIds) invalidate(serverId, null);
+            const committedHomes = committedHomesRef.current;
+            for (const serverId of trackedServerIds) {
+                if (!mountedRef.current || !committedHomes || committedHomes.profilesGeneration !== profilesGeneration
+                    || !committedHomes.serverIds.has(serverId)) invalidate(serverId, null);
+            }
         };
         // The sorted key identifies the Home set. Profile changes retire and
         // re-resolve bindings without making profile data Account authority.

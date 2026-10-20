@@ -5,6 +5,8 @@ import { WidgetSizePicker, happierPageTextMetrics, type WidgetSizePickerCompactI
 import { Typography } from '@/constants/Typography';
 import { getWidgetSizeFootprintV1, stepWidgetSizeV1, type WidgetSizeV1, type WidgetSurfaceRefV1 } from '@happier-dev/protocol/widgets';
 import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
+import { ITEM_ROW_PADDING_HORIZONTAL } from '@/components/ui/lists/itemDensityMetrics';
+import { useResolvedItemDensity } from '@/components/ui/lists/useResolvedItemDensity';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
 
@@ -19,12 +21,12 @@ export type WidgetSizeControl = Readonly<{
 }>;
 
 /** Core supplies labels, theme and its field menu; app and plugins render the same presentation primitive. */
-export function WidgetSizeControl(props: WidgetSizeControl & Readonly<{ testID: string; showLabel?: boolean }>) {
+export function WidgetSizeControl(props: WidgetSizeControl & Readonly<{ testID: string; showLabel?: boolean; flush?: boolean }>) {
     const { theme } = useUnistyles();
     const testID = props.testID;
     const renderCompact = React.useCallback((input: WidgetSizePickerCompactInput) => (
-        <WidgetSizeMenu input={input} testID={`${testID}.compact`} />
-    ), [testID]);
+        <WidgetSizeMenu input={input} testID={`${testID}.compact`} flush={props.flush === true} />
+    ), [props.flush, testID]);
     if (props.sizes.length === 0) return null;
     return <View style={{ gap: theme.space.s6 }}>
         <WidgetSizePicker testID={props.testID} accessibilityLabel={t('widgetAdd.size')} value={props.size}
@@ -52,8 +54,10 @@ export function WidgetSizeControl(props: WidgetSizeControl & Readonly<{ testID: 
  * The size choice when its segments do not fit the room (a phone's sheet): the app's one field
  * select, "Size · Medium", opening the same choices in the shared menu.
  */
-function WidgetSizeMenu(props: Readonly<{ input: WidgetSizePickerCompactInput; testID: string }>): React.ReactElement {
+function WidgetSizeMenu(props: Readonly<{ input: WidgetSizePickerCompactInput; testID: string; flush: boolean }>): React.ReactElement {
     const [open, setOpen] = React.useState(false);
+    // A flow's column keeps one edge: a flush trigger's label and value sit on it, and only its press fill reaches past.
+    const rowPaddingPx = ITEM_ROW_PADDING_HORIZONTAL[useResolvedItemDensity()];
     const { input } = props;
     const selected = input.choices.find((choice) => choice.key === input.value) ?? null;
     return (
@@ -70,7 +74,8 @@ function WidgetSizeMenu(props: Readonly<{ input: WidgetSizePickerCompactInput; t
             itemTrigger={{
                 title: input.accessibilityLabel,
                 detailFormatter: () => selected?.label ?? null,
-                itemProps: { testID: `${props.testID}.trigger`, disabled: input.disabled === true, showDivider: false },
+                itemProps: { testID: `${props.testID}.trigger`, disabled: input.disabled === true, showDivider: false,
+                    ...(props.flush ? { style: { marginHorizontal: -rowPaddingPx } } : {}) },
             }}
         />
     );

@@ -13,6 +13,8 @@ vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+// The picker reads the real foreground-acquisition graph after Home admission.
+await import('@/sync/syncEngine');
 const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
 const { createUiPromptLibraryArtifactStore } = await import('@/sync/ops/promptLibrary/promptLibraryArtifactStore');
 const { resetPromptLibraryCatalogEngineForTests } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
@@ -79,10 +81,13 @@ describe('active prompt picker Account library', () => {
         }
     });
 
-    it('loads headers, shares a highlighted pending body read with insertion and patches favorite without losing the body', async () => {
+    it('loads headers through real Action admission, shares a pending body read and preserves favorite metadata', async () => {
         const { serverId, artifactId, catalog } = await seed();
         const hook = await renderHook(() => usePromptPickerLibrary(serverId));
-        await vi.waitFor(async () => { await flushHookEffects(); expect(hook.getCurrent().documents).toHaveLength(1); });
+        await vi.waitFor(async () => { await flushHookEffects(); expect(hook.getCurrent().isLoading).toBe(false); });
+        expect(hook.getCurrent().error).toBe(false);
+        expect(hook.getCurrent().documents).toMatchObject([{ artifactId, title: 'Testing', favorite: false,
+            folderId: 'folder', tags: ['debug'] }]);
         const held = createDeferred<void>();
         harness.answer(serverId, `GET /v1/artifacts/${artifactId}`, { body: harness.artifacts(serverId).read(artifactId), respondAfter: held.promise });
         const preview = hook.getCurrent().read(artifactId);

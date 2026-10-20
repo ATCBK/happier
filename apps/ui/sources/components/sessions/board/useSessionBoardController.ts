@@ -223,14 +223,6 @@ export type SessionBoardControllerInput = Readonly<{
     installedWidgetsAvailable?: boolean;
     /** Exact Session caller-hosted runtime admission for this device/account. */
     callerHostedHtmlAvailable?: boolean;
-    /** Destructive confirmation host. Injected so the shared Actions decision owns the policy. */
-    confirmDestructive?: (request: Readonly<{
-        title: string;
-        message: string;
-        confirmText: string;
-        /** Viewer-local Board view whose native tab should regain focus after the dialog. */
-        focusReturnViewId?: string;
-    }>) => Promise<boolean>;
     /** Explicit item disposition required before a non-empty Board view may be removed. */
     chooseViewRemovalDisposition?: (
         request: SessionBoardViewRemovalChoiceRequest,
@@ -809,9 +801,9 @@ export function useSessionBoardController(input: SessionBoardControllerInput): S
                     submission.current = { actionId: 'session.board.item.upsert', input: actionInput };
                     return await port.upsertItem(actionInput);
                 },
-                removeItem: async (actionInput, approval) => {
+                removeItem: async (actionInput) => {
                     submission.current = { actionId: 'session.board.item.remove', input: actionInput };
-                    return await port.removeItem(actionInput, approval);
+                    return await port.removeItem(actionInput);
                 },
                 updateLayout: async (actionInput) => {
                     submission.current = { actionId: 'session.board.layout.update', input: actionInput };
@@ -1367,24 +1359,6 @@ export function useSessionBoardController(input: SessionBoardControllerInput): S
                         ? guardedRemoval.committedItemRevision
                         : projected.revision;
                     const removedLayoutRevision = removalLive.layoutRevision;
-                    const confirmed = removalInput.confirmDestructive
-                        ? await removalInput.confirmDestructive({
-                            title: t('sessionBoard.item.remove.title'),
-                            message: t('sessionBoard.item.remove.message'),
-                            confirmText: t('common.remove'),
-                            // The item menu may have closed before this modal mounts,
-                            // and a successful removal makes that card disappear.
-                            // Return to the surviving mounted Board view rather than
-                            // relying on an activation-time target that may no longer
-                            // exist. Re-select after the draft guard so remote layout
-                            // convergence cannot leave this identity stale.
-                            focusReturnViewId: selectSessionBoardView(removalLive, requestedViewId).id,
-                        })
-                        : true;
-                    if (!confirmed) {
-                        setLastOutcome({ kind: 'cancelled' });
-                        return;
-                    }
                     await submit(command, (p) => p.removeItem(
                         {
                             sessionId: removalInput.sessionId,
@@ -1392,13 +1366,6 @@ export function useSessionBoardController(input: SessionBoardControllerInput): S
                             expectedItemRevision: removedRevision,
                             expectedLayoutRevision: removedLayoutRevision,
                         },
-                        // The provider resolved the one shared Action policy through
-                        // the canonical Board modal (or its explicit UI waiver).
-                        // Carry that decision to the Action seam so it cannot create
-                        // a second approval artifact for the same destructive intent.
-                        removalInput.confirmDestructive
-                            ? { approvalDecisionApplied: true }
-                            : undefined,
                     ), () => retireDraftForItem(command.itemId));
                 };
 
@@ -1502,20 +1469,6 @@ export function useSessionBoardController(input: SessionBoardControllerInput): S
                     ? eligibleDestinations.find((candidate) => candidate.viewId === disposition.viewId)
                     : undefined;
                 if (disposition.kind === 'move' && destination === undefined) {
-                    setLastOutcome({ kind: 'cancelled' });
-                    return;
-                }
-                const confirmed = current.confirmDestructive
-                    ? await current.confirmDestructive({
-                        title: t('sessionBoard.views.remove.title', { title: viewTitle(target) }),
-                        message: destination
-                            ? t('sessionBoard.views.remove.moveMessage', { title: destination.title })
-                            : t('sessionBoard.views.remove.unpinMessage'),
-                        confirmText: t('common.remove'),
-                        focusReturnViewId: target.id,
-                    })
-                    : true;
-                if (!confirmed) {
                     setLastOutcome({ kind: 'cancelled' });
                     return;
                 }

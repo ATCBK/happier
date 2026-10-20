@@ -94,7 +94,7 @@ function normalizeRouteQueryValue(value: unknown): string | null {
     return normalized.length > 0 ? normalized : null;
 }
 
-function appendRouteSearchParams(basePath: string, params: URLSearchParams): string {
+function appendRouteSearchParams<TPath extends string>(basePath: TPath, params: URLSearchParams): TPath | `${TPath}?${string}` {
     const search = params.toString();
     return search.length > 0 ? `${basePath}?${search}` : basePath;
 }
@@ -204,11 +204,23 @@ export function resolveSessionMobileSurfaceIntent(input: Readonly<{
     return 'chat';
 }
 
+/**
+ * A phone docks the Session's viewer into Chat's reading flow, so a cockpit that mounts while the
+ * viewer is presented (a desktop window narrowed to a phone width, say) opens on Chat instead of a
+ * retained projection that would hide it.
+ */
+export function resolveSessionCockpitLandingSurface(
+    requestedSurface: SessionMobileSurface,
+    viewerPresenting: boolean,
+): SessionMobileSurface {
+    return viewerPresenting ? 'chat' : requestedSurface;
+}
+
 export function resolveSessionRoutePathForSurface(
     sessionId: string,
     surface: SessionMobileSurface,
     options?: SessionRoutePathOptions,
-): string {
+): `/session/${string}` {
     const encodedSessionId = encodeURIComponent(sessionId);
     const searchParams = new URLSearchParams();
     if (

@@ -20,11 +20,16 @@ vi.mock('socket.io-client', async importOriginal =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
 let actionPolicy = normalizeActionsSettingsV1({ v: 1 });
+let artifactReadFails = false;
 const runtime = installSessionPaneRuntimeTestHarness({ request: async (url, init) => {
     const path = new URL(String(url)).pathname;
     if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: { actionsSettingsV1: actionPolicy } }, version: 0 });
+    if (artifactReadFails && /^\/v1\/artifacts\/[^/]+$/.test(path) && (init?.method ?? 'GET') === 'GET')
+        return Response.json({ error: 'Failed to get artifact' }, { status: 500 });
     return artifacts.handle(path, init);
 } });
+// Load the rendered area graph after installing HTTP boundaries, outside the timed Account journey.
+const { WidgetArea } = await import('./WidgetArea');
 function setActionPolicy(policy: ReturnType<typeof normalizeActionsSettingsV1>) {
     actionPolicy = policy;
     storage.setState({ settingsScope: { serverId: runtime.serverId, accountId: 'account-a' },
@@ -48,11 +53,80 @@ beforeAll(async () => {
 afterAll(() => disposeActionLoader?.());
 beforeEach(() => {
     artifacts.clear(); retirePresentationNotice();
+    artifactReadFails = false;
     // These layout-owner scenarios exercise acknowledged edits under the user's explicit policy.
     setActionPolicy(normalizeActionsSettingsV1({ v: 1,
         approvalWaivedSurfaces: { 'widgets.item.rename': ['ui'], 'widgets.item.move': ['ui'],
             'widgets.area.layout.create': ['ui'], 'widgets.area.layout.reset': ['ui'], 'widgets.area.layout.undo': ['ui'] },
     }));
+});
+
+it('retains an admitted core-page area through a transient Artifact HTTP failure and admits recovery', async () => {
+    const input = { serverId: runtime.serverId, pageId: 'usage', area: 'main', context: {}, presets: [
+        { id: 'overview', name: 'Overview', items: [{ kind: 'widget' as const, instance: {
+            v: 1 as const, id: 'displayed', definition: { kind: 'builtin' as const, id: 'project_about' }, bindings: {},
+        } }] },
+    ] };
+    let current!: { binding: ReturnType<typeof useCorePageWidgetAreaBinding>; layout: ReturnType<typeof useWidgetAreaLayout> };
+    function Composition() {
+        const binding = useCorePageWidgetAreaBinding(input);
+        const layout = useWidgetAreaLayout(binding.port!, input.context);
+        current = { binding, layout };
+        return <WidgetArea port={binding.port} context={input.context} layout={layout} geometry="grid"
+            title="Overview" surfaceName="Overview" dashboard={{ addLabel: 'Add widget', emptyTitle: 'No widgets' }} testID="core.area" />;
+    }
+    const screen = await renderScreen(<Composition />);
+    try {
+        await vi.waitFor(() => expect(current.layout.state).toMatchObject({ status: 'ready', placements: [{ instance: { id: 'displayed' } }] }));
+        const admitted = current.layout.state;
+        const body = screen.findByTestId('core.area.widget.displayed.body');
+        expect(body).not.toBeNull();
+        artifactReadFails = true;
+        await act(async () => {
+            expect(await current.layout.reload()).toMatchObject({ status: 'unavailable', reasonCode: 'widget_area_unavailable' });
+        });
+        const failed = current.layout.state;
+        expect(failed).toMatchObject({ status: 'ready', readFailure: { reasonCode: 'widget_area_unavailable' } });
+        expect(failed.status === 'ready' && admitted.status === 'ready' && failed.placements === admitted.placements).toBe(true);
+        expect(failed.status === 'ready' && failed.isReadPending()).toBe(false);
+        expect(admitted.status === 'ready' && admitted.isCurrent()).toBe(true);
+        expect(screen.findByTestId('core.area.widget.displayed.body')).toBe(body);
+        expect(screen.findByTestId('core.area.readFailed')).not.toBeNull();
+        artifactReadFails = false;
+        await screen.pressByTestIdAsync('core.area.retry');
+        await vi.waitFor(() => expect(screen.findByTestId('core.area.readFailed')).toBeNull());
+        expect(screen.findByTestId('core.area.widget.displayed.body')).toBe(body);
+        expect(current.layout.state).not.toHaveProperty('readFailure');
+        await act(async () => {
+            expect(await current.binding.port!.execute({ actionId: 'widgets.item.rename', instanceId: 'displayed', displayName: 'Recovered' }))
+                .toMatchObject({ ok: true });
+            expect(await current.layout.reload()).toMatchObject({ status: 'ready' });
+        });
+        await vi.waitFor(() => expect(current.layout.state).toMatchObject({ status: 'ready', placements: [{ instance: { displayName: 'Recovered' } }] }));
+    } finally { artifactReadFails = false; await screen.unmount(); }
+});
+
+it('renews named layouts after same-Account activation without a Profile scope change', async () => {
+    const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+    const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+    const snapshot = getActiveServerSnapshot();
+    publishAppliedActiveServerSnapshot(snapshot, false);
+    const input = { serverId: runtime.serverId, pageId: 'usage', area: 'main', context: {}, presets: [{ id: 'overview', name: 'Overview', items: [] }] };
+    const hook = await renderHook(() => {
+        const binding = useCorePageWidgetAreaBinding(input);
+        return { binding, layouts: useWidgetAreaLayouts({ surface: binding.surface, execute: binding.executeLayoutAction }) };
+    });
+    try {
+        expect(hook.getCurrent().binding.surface).toBeNull();
+        await act(async () => { publishAppliedActiveServerSnapshot(snapshot); });
+        await vi.waitFor(() => expect(hook.getCurrent().layouts.state.dashboards.map(row => row.name)).toEqual(['Overview']));
+        const retiredPort = hook.getCurrent().binding.port!;
+        await act(async () => { publishAppliedActiveServerSnapshot(snapshot, false); });
+        expect(hook.getCurrent().binding.surface).toBeNull();
+        expect(await retiredPort.execute({ actionId: 'widgets.item.list' })).toMatchObject({ ok: false, errorCode: 'widget_area_scope_retired' });
+        await act(async () => { publishAppliedActiveServerSnapshot(snapshot); });
+        await vi.waitFor(() => expect(hook.getCurrent().layouts.state.dashboards.map(row => row.name)).toEqual(['Overview']));
+    } finally { await hook.unmount(); publishAppliedActiveServerSnapshot(snapshot); }
 });
 
 it('keeps an untouched Usage widget unchanged while its configured UI edit awaits canonical approval', async () => {

@@ -19,12 +19,12 @@ import { PermissionFooter } from '@/components/tools/shell/permissions/Permissio
 import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import { SessionView } from '../SessionView';
 import { EmbeddedSessionNewChat } from './EmbeddedSessionNewChat';
-import { getSessionDraftSnapshot, resetSessionDraftRepositoryForTests } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
+import { getSessionComposerDraftSnapshot, resetSessionDraftRepositoryForTests } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { SessionChat, SessionComposer, SessionProvider, SessionTranscript } from '@happier-dev/plugin-ui';
 import { PluginUiHostPresentationScope } from '@happier-dev/plugin-ui/advanced';
 import { projectHappierUiEnvironment } from '@happier-dev/plugin-ui/environment';
 import { createPluginSurfaceContextFixture } from '@/dev/testkit/fixtures/pluginSurfaceContextFixture';
-import { PluginSessionPartMountScope, renderPluginSessionPart } from '@/components/plugins/surfaces/PluginSessionPartHost';
+import { renderPluginSessionPart } from '@/components/plugins/surfaces/PluginSessionPartHost';
 import { createPluginUiPrivatePresentationHost } from '@/components/plugins/surfaces/pluginUiPrivatePresentationHost';
 import { useIsBeneathPluginSurfaceNestingBoundary } from '@/components/plugins/surfaces/pluginSurfaceNesting';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -138,26 +138,51 @@ afterEach(async () => {
 });
 
 describe('EmbeddedSessionProvider', () => {
+    it('keeps the exact Home in Session parts rendered outside the plugin mount tree', async () => {
+        const lifetime: ActiveServerAccountScopeLifetime = {
+            scope: { serverId: account.home.id, accountId: 'account-1' },
+            isCurrent: () => true, onRetire: () => ({ dispose: () => undefined }),
+        };
+        const environment = projectHappierUiEnvironment(createPluginSurfaceContextFixture());
+        // Details/header slots render outside the mount ancestry. The registered renderer must
+        // carry its own exact mount facts, like the Host API and other bridged presentation facts.
+        const presentationHost = createPluginUiPrivatePresentationHost(undefined, {
+            renderSessionPart: input => renderPluginSessionPart(input, {
+                accountLifetime: lifetime, presented: true, focusEligible: false,
+            }),
+        });
+        const screen = await renderScreen(host(
+            <PluginUiHostPresentationScope environment={environment} presentationHost={presentationHost}>
+                <SessionChat sessionId="s1" />
+            </PluginUiHostPresentationScope>,
+        ));
+        expect(screen.tree.findHostByTestId('embedded-session-unavailable')).toBeNull();
+        expect(screen.tree.findAll(matchesComponent(ChatList))).toHaveLength(1);
+        expect(screen.tree.findAll(matchesComponent(AgentInput))).toHaveLength(1);
+        expect(screen.tree.findByType(EmbeddedSessionProvider).props).toMatchObject({
+            serverId: account.home.id, surfaceFocused: false, surfaceVisible: true,
+        });
+    });
+
     it('composes public plugin Session parts through the registered host into one real controller', async () => {
         const lifetime: ActiveServerAccountScopeLifetime = {
             scope: { serverId: account.home.id, accountId: 'account-1' },
             isCurrent: () => true, onRetire: () => ({ dispose: () => undefined }),
         };
         const environment = projectHappierUiEnvironment(createPluginSurfaceContextFixture());
-        const presentationHost = createPluginUiPrivatePresentationHost(undefined, { renderSessionPart: renderPluginSessionPart });
         function NestingProbe() {
             return React.createElement('PluginNestingProbe', { testID: 'plugin-nesting', beneath: useIsBeneathPluginSurfaceNestingBoundary() });
         }
         const render = (readOnly = false, focusEligible = true) => host(
-            <PluginSessionPartMountScope accountLifetime={lifetime} presented focusEligible={focusEligible}>
-                <PluginUiHostPresentationScope environment={environment} presentationHost={presentationHost}>
-                    <SessionProvider sessionId="s1" readOnly={readOnly}>
-                        <SessionTranscript testID="plugin-transcript" />
-                        <SessionComposer testID="plugin-composer" />
-                        <NestingProbe />
-                    </SessionProvider>
-                </PluginUiHostPresentationScope>
-            </PluginSessionPartMountScope>,
+            <PluginUiHostPresentationScope environment={environment} presentationHost={createPluginUiPrivatePresentationHost(undefined, {
+                renderSessionPart: input => renderPluginSessionPart(input, { accountLifetime: lifetime, presented: true, focusEligible }),
+            })}>
+                <SessionProvider sessionId="s1" readOnly={readOnly}>
+                    <SessionTranscript testID="plugin-transcript" />
+                    <SessionComposer testID="plugin-composer" />
+                    <NestingProbe />
+                </SessionProvider>
+            </PluginUiHostPresentationScope>
         );
         const screen = await renderScreen(render());
         expect(screen.tree.findAll(matchesComponent(ChatList))).toHaveLength(1);
@@ -182,13 +207,13 @@ describe('EmbeddedSessionProvider', () => {
     it('renders public plugin Session fallback without registration and denies an unscoped host controller', async () => {
         const environment = projectHappierUiEnvironment(createPluginSurfaceContextFixture());
         const render = (registered: boolean) => host(
-            <PluginSessionPartMountScope accountLifetime={null} presented focusEligible>
-                <PluginUiHostPresentationScope environment={environment}
-                    presentationHost={createPluginUiPrivatePresentationHost(undefined,
-                        registered ? { renderSessionPart: renderPluginSessionPart } : {})}>
-                    <SessionChat sessionId="s1" fallback={<span data-testid="plugin-session-fallback" />} />
-                </PluginUiHostPresentationScope>
-            </PluginSessionPartMountScope>,
+            <PluginUiHostPresentationScope environment={environment}
+                presentationHost={createPluginUiPrivatePresentationHost(undefined,
+                    registered ? { renderSessionPart: input => renderPluginSessionPart(input, {
+                        accountLifetime: null, presented: true, focusEligible: true,
+                    }) } : {})}>
+                <SessionChat sessionId="s1" fallback={<span data-testid="plugin-session-fallback" />} />
+            </PluginUiHostPresentationScope>
         );
         const screen = await renderScreen(render(false));
         expect(screen.tree.findHostByTestId('plugin-session-fallback')).not.toBeNull();
@@ -211,7 +236,7 @@ describe('EmbeddedSessionProvider', () => {
         await act(async () => { screen.tree.changeTextByTestId('new-session-composer-input', 'Unsent embedded draft'); });
         expect(screen.tree.findHostByTestId('new-session-composer-input')?.props.value).toBe('Unsent embedded draft');
         await screen.update(host(<span>Loading</span>));
-        expect(getSessionDraftSnapshot(draftScope, { kind: 'newSession', draftId })?.document.composer.text.value).toBe('Unsent embedded draft');
+        expect(getSessionComposerDraftSnapshot(draftScope, { kind: 'newSession', draftId })?.composer.text.value).toBe('Unsent embedded draft');
         await screen.update(renderNewChat(draftId));
         expect(screen.tree.findHostByTestId('new-session-composer-input')?.props.value).toBe('Unsent embedded draft');
         await screen.update(host(<span>Loading</span>));

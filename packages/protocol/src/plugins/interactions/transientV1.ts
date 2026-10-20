@@ -41,7 +41,7 @@ function hasUnpairedSurrogate(value: string): boolean {
   return false;
 }
 
-function boundedIdentifier(label: string): z.ZodMiniString {
+function boundedIdentifier(label: string): z.ZodMiniString<string> {
   return z.string().check(z.minLength(1), z.superRefine((value, context) => {
     if (utf8ByteLength(value) > MAX_INTERACTION_TRANSIENT_IDENTIFIER_UTF8_BYTES_V1) {
       context.addIssue({
@@ -55,7 +55,7 @@ function boundedIdentifier(label: string): z.ZodMiniString {
   }));
 }
 
-function boundedText(label: string, maxCodePoints: number): z.ZodMiniString {
+function boundedText(label: string, maxCodePoints: number): z.ZodMiniString<string> {
   return z.string().check(z.minLength(1), z.superRefine((value, context) => {
     if (codePointLength(value) > maxCodePoints) {
       context.addIssue({
@@ -69,15 +69,15 @@ function boundedText(label: string, maxCodePoints: number): z.ZodMiniString {
   }));
 }
 
-function boundedPrompt(label: string): z.ZodMiniString {
+function boundedPrompt(label: string): z.ZodMiniString<string> {
   return boundedText(label, MAX_INTERACTION_TRANSIENT_PROMPT_CODE_POINTS_V1);
 }
 
-function boundedTitleOrLabel(label: string): z.ZodMiniString {
+function boundedTitleOrLabel(label: string): z.ZodMiniString<string> {
   return boundedText(label, MAX_INTERACTION_TRANSIENT_TITLE_OR_LABEL_CODE_POINTS_V1);
 }
 
-function boundedTextAnswer(label: string): z.ZodMiniString {
+function boundedTextAnswer(label: string): z.ZodMiniString<string> {
   return boundedText(label, MAX_INTERACTION_TRANSIENT_TEXT_ANSWER_CODE_POINTS_V1);
 }
 
@@ -275,6 +275,8 @@ const InteractionTransientStrictJsonValueV1Schema = lazyZodSchema(() => z.pipe(z
 
 const InteractionTransientApprovalSubjectV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('tool'),
+  /** Native transcript correlation; interaction custody remains host-stamped. */
+  toolCallId: z.optional(boundedIdentifier('Native tool call ids')),
   // Complete native tool names share the enclosing request's JSON-byte and
   // Unicode validation; they are not short host-generated custody identifiers.
   name: z.string().check(z.minLength(1)),
@@ -321,7 +323,7 @@ export const InteractionTransientRequestV1Schema = lazyZodSchema(() => z.discrim
 })));
 export type InteractionTransientRequestV1 = z.infer<typeof InteractionTransientRequestV1Schema>;
 
-const QuestionsAuthorRequestV1Schema = lazyZodSchema(() => z.strictObject({
+export const InteractionTransientQuestionsAuthorRequestV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('questions'),
   title: z.optional(boundedTitleOrLabel('Interaction question titles')),
   questions: z.array(InteractionTransientAuthorQuestionV1Schema).check(z.minLength(1), z.maxLength(MAX_INTERACTION_TRANSIENT_QUESTIONS_V1)),
@@ -342,7 +344,7 @@ const ConfirmationAuthorRequestV1Schema = lazyZodSchema(() => z.strictObject({
 }));
 
 export const InteractionTransientAuthorRequestV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-  QuestionsAuthorRequestV1Schema,
+  InteractionTransientQuestionsAuthorRequestV1Schema,
   ApprovalAuthorRequestV1Schema,
   ConfirmationAuthorRequestV1Schema,
 ]).check(z.superRefine((request, context) => issueForInvalidPayload(request, context, 'Interaction author requests'))));
@@ -354,6 +356,22 @@ export type InteractionTransientConfirmationAuthorRequestV1 = Extract<Interactio
 export type InteractionTransientRequestNormalizationV1 =
   | Readonly<{ ok: true; value: InteractionTransientRequestV1 }>
   | Readonly<{ ok: false; code: 'invalid_interaction_request' }>;
+
+/** Normalize a validated author form without manufacturing plugin custody. */
+export function normalizeInteractionTransientQuestionsV1(request: InteractionTransientQuestionsAuthorRequestV1): Readonly<{
+  kind: 'questions'; title?: string; questions: InteractionTransientQuestionV1[];
+}> {
+  return {
+    kind: 'questions',
+    ...(request.title === undefined ? {} : { title: request.title }),
+    questions: request.questions.map((question): InteractionTransientQuestionV1 => (
+      question.type === 'text'
+        ? { ...question, required: question.required ?? false }
+        : { ...question, required: question.required ?? false, allowCustom: question.allowCustom ?? false,
+            choices: question.choices.map((choice) => ({ ...choice, label: choice.label ?? choice.id })) }
+    )),
+  };
+}
 
 /**
  * The only conversion from author input to the request a presenter may see.
@@ -380,32 +398,7 @@ export function normalizeInteractionTransientRequestV1(
   const normalized: InteractionTransientRequestV1 = request.kind === 'questions'
     ? {
         ...parsedStamp.data,
-        kind: 'questions',
-        ...(request.title === undefined ? {} : { title: request.title }),
-        questions: request.questions.map((question): InteractionTransientQuestionV1 => (
-          question.type === 'text'
-            ? {
-                id: question.id,
-                prompt: question.prompt,
-                ...(question.description === undefined ? {} : { description: question.description }),
-                ...(question.initialValue === undefined ? {} : { initialValue: question.initialValue }),
-                type: 'text',
-                required: question.required ?? false,
-              }
-            : {
-                id: question.id,
-                prompt: question.prompt,
-                ...(question.description === undefined ? {} : { description: question.description }),
-                type: question.type,
-                required: question.required ?? false,
-                allowCustom: question.allowCustom ?? false,
-                choices: question.choices.map((choice) => ({
-                  id: choice.id,
-                  label: choice.label ?? choice.id,
-                  ...(choice.description === undefined ? {} : { description: choice.description }),
-                })),
-              }
-        )),
+        ...normalizeInteractionTransientQuestionsV1(request),
       }
     : request.kind === 'approval'
       ? {

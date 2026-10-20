@@ -65,6 +65,15 @@ describe('apiSessionDrafts', () => {
 
         await expect(createApiSessionDraftsTransport({ request }).read(address)).rejects.toThrow('Invalid session draft response');
     });
+
+    it.each([{ status: 400, retryable: false }, { status: 500, retryable: true }])('preserves HTTP retry eligibility for a $status draft rejection', async ({ status, retryable }) => {
+        const { createApiSessionDraftsTransport } = await import('./apiSessionDrafts');
+        const { shouldRetryError } = await import('@/sync/runtime/connectivity/transientConnectivityErrors');
+        request.mockResolvedValueOnce(jsonResponse({}, status));
+        const error = await createApiSessionDraftsTransport({ request }).mutate({ address, expectedRevision: 'absent', content: null }).catch(error => error);
+        expect(error).toBeInstanceOf(Error);
+        expect(shouldRetryError(error)).toBe(retryable);
+    });
 });
 
 

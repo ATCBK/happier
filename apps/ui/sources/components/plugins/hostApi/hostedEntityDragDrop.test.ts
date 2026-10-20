@@ -120,7 +120,9 @@ describe('hosted entity coordinates and mount retirement', () => {
         await send({ kind: 'move', pointer: { x: 20, y: 20 }, viewport: { width: 100, height: 100 } });
         expect(runtime.getSnapshot().targetId).toBe('iframe\u0000child');
         frame = { ...frame, x: 400 };
-        expect(await carry.release()).toBeNull();
+        expect(await carry.release()).toEqual({ status: 'refused', reason: {
+            code: 'target-missing', message: 'target-missing',
+        } });
         expect(writes).toEqual([]);
         runtime.registerSource({ id: 'host-file', scope, isCurrent: () => true, getItem: () => ({ kind: 'repository-file', scope, machineId: 'machine', path: '/repo/issue.ts' }) });
         runtime.begin('host-file')!;

@@ -13,7 +13,10 @@ export type ProjectDefinitionActionId = typeof PROJECT_DEFINITION_ACTION_IDS[num
 // nested domain schemas remain the single Mini validation owners.
 export const ProjectDefinitionWorkspaceSchema = WorkspaceAddressV1Schema;
 export type ProjectDefinitionWorkspace = z.infer<typeof ProjectDefinitionWorkspaceSchema>;
-export const ProjectDefinitionInspectInputSchema = lazyZodSchema(() => z.strictObject({ workspace: ProjectDefinitionWorkspaceSchema }));
+export const ProjectDefinitionInspectInputSchema = lazyZodSchema(() => z.strictObject({ workspace: ProjectDefinitionWorkspaceSchema,
+  /** Passive consent check for compound operations before disruptive effects. */
+  reviewSetupConsent: z.optional(z.literal(true)),
+}));
 export const ProjectManifestUpdateInputSchema = lazyZodSchema(() => z.strictObject({
   workspace: ProjectDefinitionWorkspaceSchema, expectedBasis: ProjectManifestFileBasisV1Schema, bytes: z.string(),
 }));
@@ -39,6 +42,12 @@ export const ProjectDefinitionInspectOutputSchema = lazyZodSchema(() => z.strict
   tools: z.optional(z.array(ProjectToolInspectionV1Schema)),
   setupReadiness: z.optional(ProjectSetupReadinessV1Schema),
   setupReview: z.optional(ProjectSetupReviewV1Schema),
+  /** Passive decision from the same setup admission owner used by execution. */
+  setupConsent: z.optional(z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('admitted') }),
+    z.strictObject({ kind: z.literal('required'), code: z.enum(['project_setup_consent_required', 'project_setup_effect_changed']) }),
+    z.strictObject({ kind: z.literal('unavailable'), code: z.string().check(z.minLength(1)) }),
+  ])),
 }));
 export type ProjectDefinitionInspectOutput = z.infer<typeof ProjectDefinitionInspectOutputSchema>;
 export const ProjectManifestUpdateOutputSchema = lazyZodSchema(() => z.lazy(() => ProjectManifestUpdateResultSchema));

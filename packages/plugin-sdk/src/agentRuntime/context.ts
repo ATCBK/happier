@@ -1,4 +1,5 @@
 import type { AgentRuntimeFactoryContext, PluginInvocationContext } from '../invocation.js';
+import type { AgentNativeLaunchQualifier } from '../exec.js';
 import type {
   StructuredImageInputV1,
   SessionAuthService,
@@ -58,7 +59,11 @@ export type AgentSessionHookServerStartRequest = Readonly<{
   /** Ephemeral resources for one execution; omission preserves the host's Session retention. */
   lifetime?: 'invocation';
   onSessionHook?: (providerSessionId: string, data: AgentSessionHookProviderPayload) => void | Promise<void>;
-  onPermissionHook?: (data: AgentSessionHookProviderPayload) => unknown | Promise<unknown>;
+  /** The signal withdraws this hook's permission wait when its HTTP transport retires. */
+  onPermissionHook?: (
+    data: AgentSessionHookProviderPayload,
+    options?: Readonly<{ signal?: AbortSignal }>,
+  ) => unknown | Promise<unknown>;
   onStatuslineUpdate?: (data: AgentSessionHookProviderPayload) => void | Promise<void>;
   defaultPermissionHookResponse?: (
     data: AgentSessionHookProviderPayload,
@@ -187,7 +192,11 @@ export interface AgentTranscriptSessionEventPublisher {
   /** Bind the Agent's exact native Session to the host's ordered durable source importer. */
   followSource?(
     request: Readonly<{ providerSessionId: string; replay: 'historical' | 'fresh' }>,
-  ): Promise<Readonly<{ dispose(): Promise<void> }>>;
+  ): Promise<Readonly<{
+    /** Unexpected source loss after admission; disposal leaves this pending. */
+    failure?: Promise<Error>;
+    dispose(): Promise<void>;
+  }>>;
   /**
    * Publishes one protocol-validated Session event into the host-owned durable
    * transcript. Resolution means the canonical outbox accepted durable custody;
@@ -509,6 +518,12 @@ export type AgentSessionTerminalComposerClearOutcome =
 
 export type AgentSessionActiveInputBinding = Readonly<{
   isTurnInFlight(): boolean;
+  /**
+   * Passively resolve when native input is usable, immediately when idle and
+   * after turn-neutral controls settle, including failed controls. Rejection
+   * refuses this admission before effect. The host owns custody and cancellation.
+   */
+  waitForInputReady?(): Promise<void>;
   canSteer(): boolean;
   canInterruptForPendingInput?(): boolean;
   onPromptQueued(): void;
@@ -644,6 +659,7 @@ export type AgentSessionSubagentObservationPublisher = Readonly<{
  * bag rather than duplicating it.
  */
 export type AgentSessionHostServices = Readonly<{
+  nativeLaunch?: AgentNativeLaunchQualifier;
   features: AgentFeatureDecisionService;
   /** Host-bound native authentication; it grants no general Session capability. */
   auth?: SessionAuthService;
@@ -672,6 +688,7 @@ export type AgentSessionHostServices = Readonly<{
  * projections deliberately remain absent.
  */
 export type AgentExecutionRunHostServicesV1 = Readonly<{
+  nativeLaunch?: AgentNativeLaunchQualifier;
   features: AgentFeatureDecisionService;
   hooks: AgentExecutionRunHooksServiceV1;
   fileFollow: AgentTranscriptFileFollowService;

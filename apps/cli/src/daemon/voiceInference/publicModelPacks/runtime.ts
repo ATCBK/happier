@@ -557,6 +557,9 @@ export function createDaemonPublicVoiceModelPackRuntime(params: Readonly<{
           host: installerHost,
           packId: manifest.packId,
           manifest,
+          priorManifest: priorMetadata
+            ? await readInstalledVoiceModelPackManifest({ packsRootDir: params.paths.packsRootDir, packId: manifest.packId }) ?? undefined
+            : undefined,
           signal,
           urlPolicy,
           sourceBinding: {

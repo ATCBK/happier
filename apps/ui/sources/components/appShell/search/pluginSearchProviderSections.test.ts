@@ -95,6 +95,77 @@ beforeEach(() => {
 });
 
 describe('buildPluginSearchProviderSections', () => {
+    it.each([true, false])('announces an empty plugin reply truthfully when truncated=%s', async (truncated) => {
+        const React = await import('react');
+        const { act } = await import('react-test-renderer');
+        const { renderScreen } = await import('@/dev/testkit');
+        const { SelectionList } = await import('@/components/ui/selectionList');
+        executeAction.mockResolvedValue(actionResult({ ok: true, result: { items: [], truncated } }));
+        const screen = await renderScreen(React.createElement(SelectionList, {
+            testID: 'empty-search', inputValue: 'needle', keyboardHintsEnabled: false, disableTransitions: true,
+            rootStep: { id: 'root', inputPlaceholder: 'Search', sections: sections().map(section => ({ kind: 'dynamic' as const, ...section, debounceMs: 0 })) },
+            onSelect: vi.fn(), onRequestClose: vi.fn(),
+        }));
+        try {
+            await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
+            const status = screen.findByTestId('empty-search:status');
+            expect(status?.props.role).toBe('status');
+            expect(screen.getTextContent()).toContain(truncated ? 'PRs & Issues · No matches in what was searched' : 'PRs & Issues · No matches');
+            expect(screen.getTextContent()).not.toContain('More results are available');
+            expect(screen.findByTestId('empty-search:section:plugin-search:happier.triage:entries:error')).toBeNull();
+        } finally { await act(async () => screen.tree.unmount()); }
+    });
+
+    it('folds an external plugin root failure into the folder line while an untyped failure keeps Retry', async () => {
+        const React = await import('react');
+        const { act } = await import('react-test-renderer');
+        const { renderScreen } = await import('@/dev/testkit');
+        const { SelectionList } = await import('@/components/ui/selectionList');
+        const { buildUniversalSearchSections } = await import('./buildUniversalSearchSections');
+        const { workspaceFolderMissingFailure } = await import('./universalSearchMachineFailures');
+        const { t } = await import('@/text');
+        const base = projection();
+        const external = projection({
+            searchProvidersById: Object.fromEntries(['root', 'untyped'].map(id => [`searchProvider:acme.${id}:entries`, {
+                ...base.searchProvidersById['searchProvider:happier.triage:entries']!,
+                id: `searchProvider:acme.${id}:entries`, pluginId: `acme.${id}`, occurrenceId: `occurrence-${id}`,
+                identity: { pluginId: `acme.${id}`, localId: 'entries' },
+                action: { pluginId: `acme.${id}`, localId: 'search' },
+            }])),
+            actionsById: Object.fromEntries(['root', 'untyped'].map(id => [`acme.${id}/search`, {
+                ...base.actionsById['happier.triage/search']!,
+                pluginId: `acme.${id}`, occurrenceId: `occurrence-${id}`, title: id,
+            }])),
+        });
+        executeAction.mockImplementation(async (_machineId, call) => actionResult(call.qualifiedActionId === 'acme.root/search'
+            ? { ok: true, result: { items: [], truncated: false, failure: { code: 'root_not_found' } } }
+            : { ok: false, code: 'plugin_action_failed', message: 'private diagnostic' }));
+        const paletteSections = buildUniversalSearchSections({
+            query: 'needle', commands: [], sessions: [], projects: [], searchSettingsPages: () => [],
+            transcript: { status: 'absent' }, files: { status: 'absent' }, commits: { status: 'absent' },
+            pluginSections: sections({ projection: external }).map(section => ({ ...section, debounceMs: 0 })),
+            onCommitResult: vi.fn(),
+        });
+        const screen = await renderScreen(React.createElement(SelectionList, {
+            testID: 'r115', inputValue: 'needle', keyboardHintsEnabled: false, disableTransitions: true,
+            rootStep: { id: 'root', inputPlaceholder: 'Search', sections: [
+                { kind: 'dynamic', id: 'files', title: 'Files', debounceMs: 0,
+                    resolve: async () => { throw workspaceFolderMissingFailure(); } },
+                ...paletteSections,
+            ] },
+            onSelect: vi.fn(), onRequestClose: vi.fn(),
+        }));
+        try {
+            await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
+            expect(executeAction.mock.calls.map(([, call]) => call.qualifiedActionId).sort()).toEqual(['acme.root/search', 'acme.untyped/search']);
+            expect(screen.getTextContent().split(t('errors.workspaceFolderMissing'))).toHaveLength(2);
+            expect(screen.findByTestId('r115:section:plugin-search:acme.root:entries:error')).toBeNull();
+            expect(screen.findByTestId('r115:section:plugin-search:acme.untyped:entries:error')).not.toBeNull();
+            expect(screen.findByTestId('r115:section:plugin-search:acme.untyped:entries:error:retry')).not.toBeNull();
+            expect(screen.getTextContent()).not.toContain('private diagnostic');
+        } finally { await act(async () => screen.tree.unmount()); }
+    });
+
     it('builds one qualified dynamic section per admitted provider', () => {
         const built = sections();
         expect(built).toHaveLength(1);
@@ -204,9 +275,9 @@ describe('buildPluginSearchProviderSections', () => {
                     pluginId: 'happier.triage',
                     occurrenceId: 'happier-triage-occurrence-7',
                     title: 'PRs & Issues',
-                    scopes: ['global'],
-                    surfaces: ['ui'],
-                    execution: { target: 'daemon' },
+                    scopes: ['global' as const],
+                    surfaces: ['ui' as const],
+                    execution: { target: 'daemon' as const },
                     dangerLevel: 'safe',
                     available: false,
                 }),
@@ -334,12 +405,12 @@ describe('buildPluginSearchProviderSections', () => {
             }),
             actionsById: Object.freeze({
                 'acme.first/search': Object.freeze({
-                    id: 'search', pluginId: 'acme.first', occurrenceId: 'acme-first-occurrence-11', title: 'First', scopes: ['global'], surfaces: ['ui'],
-                    execution: { target: 'daemon' }, dangerLevel: 'safe', available: true, hostOrigin: firstOrigin,
+                    id: 'search', pluginId: 'acme.first', occurrenceId: 'acme-first-occurrence-11', title: 'First', scopes: ['global' as const], surfaces: ['ui' as const],
+                    execution: { target: 'daemon' as const }, dangerLevel: 'safe', available: true, hostOrigin: firstOrigin,
                 }),
                 'acme.second/search': Object.freeze({
-                    id: 'search', pluginId: 'acme.second', occurrenceId: 'acme-second-occurrence-22', title: 'Second', scopes: ['global'], surfaces: ['ui'],
-                    execution: { target: 'daemon' }, dangerLevel: 'safe', available: true, hostOrigin: secondOrigin,
+                    id: 'search', pluginId: 'acme.second', occurrenceId: 'acme-second-occurrence-22', title: 'Second', scopes: ['global' as const], surfaces: ['ui' as const],
+                    execution: { target: 'daemon' as const }, dangerLevel: 'safe', available: true, hostOrigin: secondOrigin,
                 }),
             }),
         });
@@ -421,8 +492,8 @@ describe('buildPluginSearchProviderSections', () => {
             actionsById: Object.freeze({
                 ...projection().actionsById,
                 'acme.healthy/search': Object.freeze({
-                    id: 'search', pluginId: 'acme.healthy', occurrenceId: 'acme-healthy-occurrence-7', title: 'Healthy', scopes: ['global'], surfaces: ['ui'],
-                    execution: { target: 'daemon' }, dangerLevel: 'safe', available: true,
+                    id: 'search', pluginId: 'acme.healthy', occurrenceId: 'acme-healthy-occurrence-7', title: 'Healthy', scopes: ['global' as const], surfaces: ['ui' as const],
+                    execution: { target: 'daemon' as const }, dangerLevel: 'safe', available: true,
                 }),
             }),
         });

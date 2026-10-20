@@ -29,6 +29,7 @@ export type BundledFirstPartyPluginLocator = Readonly<{
 
 export const BUNDLED_FIRST_PARTY_PLUGIN_PACKAGE_NAMES: readonly string[] = Object.freeze([
   "@happier-dev/plugins-antigravity",
+  "@happier-dev/plugins-app-context",
   "@happier-dev/plugins-auggie",
   "@happier-dev/plugins-channel-discord",
   "@happier-dev/plugins-channel-email",
@@ -50,9 +51,11 @@ export const BUNDLED_FIRST_PARTY_PLUGIN_PACKAGE_NAMES: readonly string[] = Objec
   "@happier-dev/plugins-google",
   "@happier-dev/plugins-grok",
   "@happier-dev/plugins-inspector",
+  "@happier-dev/plugins-jira",
   "@happier-dev/plugins-kilo",
   "@happier-dev/plugins-kimi",
   "@happier-dev/plugins-kiro",
+  "@happier-dev/plugins-linear",
   "@happier-dev/plugins-lmstudio",
   "@happier-dev/plugins-machine-boat",
   "@happier-dev/plugins-machine-crabbox",
@@ -84,6 +87,7 @@ export const BUNDLED_FIRST_PARTY_PLUGIN_PACKAGE_NAMES: readonly string[] = Objec
   "@happier-dev/plugins-scm-gitlab",
   "@happier-dev/plugins-scm-sapling",
   "@happier-dev/plugins-sentry",
+  "@happier-dev/plugins-triage",
   "@happier-dev/plugins-xai",
   "@happier-dev/plugins-zai",
 ]);
@@ -97,6 +101,13 @@ export const BUNDLED_FIRST_PARTY_PLUGIN_METADATA: readonly BundledFirstPartyPlug
     "packageVersion": "0.0.0",
     "pluginId": "happier.agent.antigravity",
     "pluginPackageId": "antigravity"
+  },
+  {
+    "manifestPath": "bundled:happier.app-context",
+    "packageName": "@happier-dev/plugins-app-context",
+    "packageVersion": "0.0.0",
+    "pluginId": "happier.app-context",
+    "pluginPackageId": "app-context"
   },
   {
     "agentId": "auggie",
@@ -258,6 +269,13 @@ export const BUNDLED_FIRST_PARTY_PLUGIN_METADATA: readonly BundledFirstPartyPlug
     "pluginPackageId": "inspector"
   },
   {
+    "manifestPath": "bundled:happier.jira",
+    "packageName": "@happier-dev/plugins-jira",
+    "packageVersion": "0.0.0",
+    "pluginId": "happier.jira",
+    "pluginPackageId": "jira"
+  },
+  {
     "agentId": "kilo",
     "manifestPath": "bundled:happier.agent.kilo",
     "packageName": "@happier-dev/plugins-kilo",
@@ -280,6 +298,13 @@ export const BUNDLED_FIRST_PARTY_PLUGIN_METADATA: readonly BundledFirstPartyPlug
     "packageVersion": "0.0.0",
     "pluginId": "happier.agent.kiro",
     "pluginPackageId": "kiro"
+  },
+  {
+    "manifestPath": "bundled:happier.linear",
+    "packageName": "@happier-dev/plugins-linear",
+    "packageVersion": "0.0.0",
+    "pluginId": "happier.linear",
+    "pluginPackageId": "linear"
   },
   {
     "manifestPath": "bundled:happier.provider.lmstudio",
@@ -505,6 +530,13 @@ export const BUNDLED_FIRST_PARTY_PLUGIN_METADATA: readonly BundledFirstPartyPlug
     "pluginPackageId": "sentry"
   },
   {
+    "manifestPath": "bundled:happier.triage",
+    "packageName": "@happier-dev/plugins-triage",
+    "packageVersion": "0.0.0",
+    "pluginId": "happier.triage",
+    "pluginPackageId": "triage"
+  },
+  {
     "manifestPath": "bundled:happier.voice.xai",
     "packageName": "@happier-dev/plugins-xai",
     "packageVersion": "0.0.0",
@@ -529,6 +561,19 @@ export const BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS: readonly BundledFirstPartyPlug
     sourceSpec: Object.freeze({
       kind: 'bundled',
       locator: "@happier-dev/plugins-antigravity",
+      trustPolicy: 'local_trusted',
+      installPolicy: 'link',
+      resolvedVersion: "0.0.0",
+    }),
+  }),
+  Object.freeze({
+    pluginId: "happier.app-context",
+    manifestRelativePath: "assets/bundled-plugin-manifests/app-context.json",
+    manifestPath: "bundled:happier.app-context",
+    daemonEntryPath: "@happier-dev/plugins-app-context",
+    sourceSpec: Object.freeze({
+      kind: 'bundled',
+      locator: "@happier-dev/plugins-app-context",
       trustPolicy: 'local_trusted',
       installPolicy: 'link',
       resolvedVersion: "0.0.0",
@@ -808,6 +853,19 @@ export const BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS: readonly BundledFirstPartyPlug
     }),
   }),
   Object.freeze({
+    pluginId: "happier.jira",
+    manifestRelativePath: "assets/bundled-plugin-manifests/jira.json",
+    manifestPath: "bundled:happier.jira",
+    daemonEntryPath: "@happier-dev/plugins-jira",
+    sourceSpec: Object.freeze({
+      kind: 'bundled',
+      locator: "@happier-dev/plugins-jira",
+      trustPolicy: 'local_trusted',
+      installPolicy: 'link',
+      resolvedVersion: "0.0.0",
+    }),
+  }),
+  Object.freeze({
     pluginId: "happier.agent.kilo",
     manifestRelativePath: "assets/bundled-plugin-manifests/kilo.json",
     manifestPath: "bundled:happier.agent.kilo",
@@ -841,6 +899,19 @@ export const BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS: readonly BundledFirstPartyPlug
     sourceSpec: Object.freeze({
       kind: 'bundled',
       locator: "@happier-dev/plugins-kiro",
+      trustPolicy: 'local_trusted',
+      installPolicy: 'link',
+      resolvedVersion: "0.0.0",
+    }),
+  }),
+  Object.freeze({
+    pluginId: "happier.linear",
+    manifestRelativePath: "assets/bundled-plugin-manifests/linear.json",
+    manifestPath: "bundled:happier.linear",
+    daemonEntryPath: "@happier-dev/plugins-linear",
+    sourceSpec: Object.freeze({
+      kind: 'bundled',
+      locator: "@happier-dev/plugins-linear",
       trustPolicy: 'local_trusted',
       installPolicy: 'link',
       resolvedVersion: "0.0.0",
@@ -1244,6 +1315,19 @@ export const BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS: readonly BundledFirstPartyPlug
     sourceSpec: Object.freeze({
       kind: 'bundled',
       locator: "@happier-dev/plugins-sentry",
+      trustPolicy: 'local_trusted',
+      installPolicy: 'link',
+      resolvedVersion: "0.0.0",
+    }),
+  }),
+  Object.freeze({
+    pluginId: "happier.triage",
+    manifestRelativePath: "assets/bundled-plugin-manifests/triage.json",
+    manifestPath: "bundled:happier.triage",
+    daemonEntryPath: "@happier-dev/plugins-triage",
+    sourceSpec: Object.freeze({
+      kind: 'bundled',
+      locator: "@happier-dev/plugins-triage",
       trustPolicy: 'local_trusted',
       installPolicy: 'link',
       resolvedVersion: "0.0.0",

@@ -12,7 +12,7 @@ import {
 
 import { TriageAccountKvRevisionV1Schema } from '../settings/actions.js';
 import {
-    TriageListFilterSelectionV1Schema,
+    TriageSurfaceFilterSelectionV1Schema,
     TriageListSettledQueryV1Schema,
     TriageSmartPolicyV1Schema,
 } from './listEntriesProtocol.js';
@@ -58,7 +58,7 @@ const TriageSavedViewV1Schema = defineProtocolObject({
     viewId: triageViewId,
     label: triageViewLabel,
     query: TriageListSettledQueryV1Schema,
-    filters: TriageListFilterSelectionV1Schema,
+    filters: TriageSurfaceFilterSelectionV1Schema,
     order: TriageSavedViewOrderV1Schema,
     smartPolicy: TriageSmartPolicyV1Schema,
     view: TriageSavedViewPresentationV1Schema.optional(),
@@ -101,7 +101,7 @@ export type TriageReadSavedViewsResultV1 = ReturnType<typeof TriageReadSavedView
 const TriageSavedViewDraftV1Schema = {
     label: triageViewLabel,
     query: TriageListSettledQueryV1Schema,
-    filters: TriageListFilterSelectionV1Schema,
+    filters: TriageSurfaceFilterSelectionV1Schema,
     order: TriageSavedViewOrderV1Schema,
     smartPolicy: TriageSmartPolicyV1Schema,
     view: TriageSavedViewPresentationV1Schema.optional(),

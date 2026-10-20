@@ -14,6 +14,7 @@ import {
     resolvePluginUiClientActionRegistration,
     resolvePluginUiClientDragSourceRegistration,
     resolvePluginUiClientDropTargetRegistration,
+    resolvePluginUiClientWorkItemsRegistration,
 } from './clientExecutableContributions';
 import {
     createPluginUiExecutableModuleHost,
@@ -199,9 +200,9 @@ function projectedClientAction(): PluginProjectedActionV2 {
 function withCurrentAuthorization(action: PluginProjectedActionV2): PluginProjectedActionV2 {
     const authorization: NonNullable<PluginProjectedActionV2['authorization']> = {
         generation: {
-            targetGeneration: '12',
-            desiredGeneration: '12',
-            appliedGeneration: '12',
+            targetGeneration: action.occurrenceId,
+            desiredGeneration: action.occurrenceId,
+            appliedGeneration: action.occurrenceId,
         },
         resourceSelections: [],
         scopedGrants: [],
@@ -309,6 +310,38 @@ function createLifecycle() {
 }
 
 describe('generic client executable contribution registration', () => {
+    it('resolves external work items only for the current plugin occurrence and retires its read authority', async () => {
+        const index = createPluginUiClientExecutableRegistrationIndex();
+        const contributes = PluginContributesV2Schema.parse({ workItems: [{ id: 'work-items', client: { artifactId: target.artifactId, exportName: target.exportName }, platforms: ['web'] }] });
+        const source = { id: `${pluginId}/work-items`, pluginId, pluginVersion: '1.0.0', occurrenceId, definition: contributes.workItems[0]!, executionOrigin };
+        const scope = index.createScope({ pluginId, contributes, target, executionOrigin, occurrenceId, pluginVersion: '1.0.0', authority, lifecycle: createLifecycle() });
+        let invalidation: (() => void) | undefined;
+        let cleanupCount = 0;
+        scope.api.workItems.register('work-items', {
+            resolve: async ({ itemIds }) => Object.fromEntries(itemIds.map(id => [id, id === 'known' ? { title: 'Live issue', category: 'started', linkedSessions: [] } : null])),
+            watch: (_request, onChange) => { invalidation = onChange; return () => { cleanupCount++; }; },
+        });
+        expect(resolvePluginUiClientWorkItemsRegistration({ source, platform: 'web', reader: index })).toBeNull();
+        scope.commit();
+        const resolved = resolvePluginUiClientWorkItemsRegistration({ source, platform: 'web', reader: index });
+        let changes = 0;
+        const stop = resolved?.runtime.watch?.({ serverId: authority.serverId, itemIds: ['known'] }, () => { changes++; });
+        invalidation?.();
+        expect(changes).toBe(1);
+        expect(await resolved?.runtime.resolve({ serverId: authority.serverId, itemIds: ['known', 'unknown'] }, { signal: new AbortController().signal })).toEqual({ known: { title: 'Live issue', category: 'started', linkedSessions: [] }, unknown: null });
+        await expect(resolved?.runtime.resolve({ serverId: 'foreign-home', itemIds: ['known'] }, { signal: new AbortController().signal })).rejects.toThrow();
+        expect(resolvePluginUiClientWorkItemsRegistration({ source: { ...source, id: 'unknown.plugin/work-items', pluginId: 'unknown.plugin' }, platform: 'web', reader: index })).toBeNull();
+        expect(resolvePluginUiClientWorkItemsRegistration({ source: { ...source, occurrenceId: 'retired' }, platform: 'web', reader: index })).toBeNull();
+        expect(resolvePluginUiClientWorkItemsRegistration({ source, platform: 'ios', reader: index })).toBeNull();
+        const retiring = scope.unwind();
+        invalidation?.();
+        stop?.();
+        expect(changes).toBe(1);
+        expect(cleanupCount).toBe(1);
+        expect(resolvePluginUiClientWorkItemsRegistration({ source, platform: 'web', reader: index })).toBeNull();
+        await expect(resolved?.runtime.resolve({ serverId: authority.serverId, itemIds: ['known'] }, { signal: new AbortController().signal })).rejects.toThrow();
+        await retiring;
+    });
     it('resolves synchronous entity callbacks only for committed exact occurrences and withdraws on retirement', async () => {
         const index = createPluginUiClientExecutableRegistrationIndex();
         const contributes = PluginContributesV2Schema.parse({

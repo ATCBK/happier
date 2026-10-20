@@ -20,7 +20,7 @@ import {
     isRpcMethodNotAvailableError,
     isRpcMethodNotFoundError,
 } from '@happier-dev/protocol/rpcErrors';
-import type { ZodType } from 'zod';
+import type { ZodMiniType } from 'zod/mini';
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
@@ -91,8 +91,8 @@ async function callExternalSessionMachineRpc<Request, Response>(params: Readonly
     machineId: string;
     method: string;
     input: Request;
-    requestSchema: ZodType<Request>;
-    responseSchema: ZodType<Response>;
+    requestSchema: ZodMiniType<Request>;
+    responseSchema: ZodMiniType<Response>;
     legacy?: Readonly<{
         method: string;
         input: unknown;
@@ -647,7 +647,7 @@ async function machineExternalSessionOperationAction(
     input: MachineExternalSessionOperationRequest,
     params: Readonly<{
         method: string;
-        requestSchema: ZodType<ExternalSessionOperationReferenceV1>;
+        requestSchema: ZodMiniType<ExternalSessionOperationReferenceV1>;
     }>,
     opts?: MachineExternalSessionsOpts,
 ): Promise<ExternalSessionOperationActionResponseV1> {

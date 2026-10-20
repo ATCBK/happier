@@ -58,6 +58,7 @@ import type { VoiceProvidersRegistrationApi } from './voice/projections.js';
 import type { PluginCaptureSourceRuntime } from './captureSources.js';
 import type { PluginProjectNativeAdapterRuntimeV1 } from './projectNativeAdapters.js';
 import type { PluginDragSourceRuntime, PluginDropTargetRuntime } from './entityDragDrop.js';
+import type { PluginWorkItemsRuntime } from './workItems.js';
 
 /** SDK author projection of one exact attachment callback instance. */
 export type ComposerAttachmentPrepareRequestV1<
@@ -413,6 +414,7 @@ export interface PluginApi {
  * @realm client
  */
 export interface PluginClientApi {
+    readonly workItems: { register(id: 'work-items', runtime: PluginWorkItemsRuntime): void };
     readonly dragSources: { register(id: string, runtime: PluginDragSourceRuntime): void };
     readonly dropTargets: { register(id: string, runtime: PluginDropTargetRuntime): void };
     readonly actions: {

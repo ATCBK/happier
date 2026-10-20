@@ -76,7 +76,8 @@ export function applyMcpServerCatalogMutationV1(catalog: McpServerCatalogV1, raw
     if (!server) return McpServerCatalogV1Schema.parse({ ...catalog,
       pluginServers: { ...catalog.pluginServers, [change.serverId]: { ...settings, tools } } });
     return McpServerCatalogV1Schema.parse({ ...catalog,
-      servers: catalog.servers.map(entry => entry.id === server.id ? { ...entry, tools } : entry),
+      servers: catalog.servers.map(entry => entry.id === server.id ? { ...entry, tools,
+        updatedAt: Math.max(ctx?.nowMs ?? entry.updatedAt + 1, entry.updatedAt + 1) } : entry),
     });
   }
   const exists = catalog.servers.some(entry => entry.id === change.entry.id);
@@ -94,7 +95,8 @@ export function applyMcpServerCatalogMutationV1(catalog: McpServerCatalogV1, raw
     if (binding.serverId !== change.entry.id) throw new Error(`Binding serverId mismatch: ${binding.serverId}`);
   }
   return McpServerCatalogV1Schema.parse({ ...catalog,
-    servers: exists ? catalog.servers.map(entry => entry.id === change.entry.id ? change.entry : entry) : [...catalog.servers, change.entry],
+    servers: exists ? catalog.servers.map(entry => entry.id === change.entry.id ? { ...change.entry,
+      updatedAt: Math.max(change.entry.updatedAt, ctx?.nowMs ?? 0, entry.updatedAt + 1) } : entry) : [...catalog.servers, change.entry],
     bindings: [...catalog.bindings, ...rules],
   });
 }
@@ -127,7 +129,8 @@ export type McpServerCatalogSourceTransferV1 = Readonly<{
     Promise<McpServerCatalogRowMutationResponseV1>;
   replaceSource?(input: Readonly<{ raw: Readonly<Record<string, unknown>>; expectedVersion: number }>): Promise<
     Readonly<{ status: 'applied'; settingsVersion: number }> | Readonly<{ status: 'conflict'; currentSettingsVersion: number }>
-    | Readonly<{ status: 'outcomeUnknown'; lastKnownSettingsVersion: number }> | Readonly<{ status: 'rejected' }>>;
+    | Readonly<{ status: 'outcomeUnknown'; lastKnownSettingsVersion: number }> | Readonly<{ status: 'rejected' }>
+    | Readonly<{ status: 'invalid'; reason: 'invalidPreparedMutation' }>>;
   normalizeHistory?(input: Readonly<{ activeTransferredRoots: readonly string[] }>): Promise<
     Readonly<{ status: 'complete' }> | Readonly<{ status: 'cleanup-pending'; versions: readonly number[] }>>;
 }>;
@@ -137,6 +140,8 @@ type LoadInput = Readonly<{
   transfer?: McpServerCatalogSourceTransferV1;
   onReadyBeforeCleanup?: (catalog: Extract<McpServerCatalogSnapshotV1, { catalog: unknown }>) => Promise<void>;
   hasPendingCleanup?: () => boolean;
+  /** Finite reads activate absent destinations but leave retained-source maintenance to hydration. */
+  maintainSource?: false;
 }>;
 export function emptyMcpServerCatalogV1(): McpServerCatalogV1 { return { v: 1, servers: [], bindings: [] }; }
 
@@ -201,7 +206,7 @@ export async function loadMcpServerCatalogV1(input: LoadInput): Promise<McpServe
   if (!transfer) return { status: 'unavailable', reason: 'authority-not-confirmed' };
   if (catalog.status === 'ready') {
     await input.onReadyBeforeCleanup?.(catalog);
-    if (input.hasPendingCleanup?.()) return catalog;
+    if (input.maintainSource === false || input.hasPendingCleanup?.()) return catalog;
   }
   let source: Awaited<ReturnType<McpServerCatalogSourceTransferV1['readSourceSnapshot']>>;
   try { source = await transfer.readSourceSnapshot(); }
@@ -237,7 +242,7 @@ export async function loadMcpServerCatalogV1(input: LoadInput): Promise<McpServe
     if (catalog.status === 'absent') return { status: 'unavailable', reason: receipt?.status === 'settings-conflict' ? 'source-version-conflict' : 'authority-not-confirmed' };
     if (catalog.status !== 'ready') return catalog;
     await input.onReadyBeforeCleanup?.(catalog);
-    if (input.hasPendingCleanup?.()) return catalog;
+    if (input.maintainSource === false || input.hasPendingCleanup?.()) return catalog;
   }
   if (!transfer.replaceSource) return catalog;
   const policy = extractRetainedMcpServerCatalogPolicyV1(source.raw);

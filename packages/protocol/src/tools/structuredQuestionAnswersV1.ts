@@ -1,9 +1,10 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
+import { MAX_INTERACTION_TRANSIENT_CHOICES_V1, MAX_INTERACTION_TRANSIENT_QUESTIONS_V1 } from '../plugins/interactions/transientV1.js';
 
 const STRUCTURED_QUESTION_ANSWERS_V1_LIMITS = Object.freeze({
-  maxQuestions: 16,
-  maxAnswersPerQuestion: 32,
+  maxQuestions: MAX_INTERACTION_TRANSIENT_QUESTIONS_V1,
+  maxAnswersPerQuestion: MAX_INTERACTION_TRANSIENT_CHOICES_V1,
   maxStringLength: 16_384,
   maxTotalStringLength: 262_144,
 });
@@ -61,3 +62,14 @@ export const StructuredQuestionAnswersV1Schema = lazyZodSchema(() => z.pipe(z
     }
     return Object.freeze(normalized) as StructuredQuestionAnswersV1;
   })));
+
+/**
+ * Receiver-owned compatibility for ui-web-v0.2.17 (b8d1c449) and the moving
+ * 0.2 predecessor. Retain while those clients can send their lossless carrier;
+ * new writers use the canonical user-action answer RPC instead.
+ */
+export const StructuredQuestionResponseV1Schema = lazyZodSchema(() => z.strictObject({
+  id: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
+  structuredAnswersV1: StructuredQuestionAnswersV1Schema,
+}));
+export type StructuredQuestionResponseV1 = z.infer<typeof StructuredQuestionResponseV1Schema>;

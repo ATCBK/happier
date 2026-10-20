@@ -4,6 +4,8 @@ import { z } from "zod/mini";
 import { SavedSecretResourceActionErrorV1Schema, SavedSecretResourceEnvelopeRepairInputV1Schema, SavedSecretResourceEnvelopeRepairOutputV1Schema, SavedSecretResourceRecipientEnvelopeInputV1Schema, SharedSavedSecretCreateInputV1Schema, SharedSavedSecretDeleteInputV1Schema, SharedSavedSecretDeleteOutputV1Schema, SharedSavedSecretGrantsSetInputV1Schema, SharedSavedSecretListOutputV1Schema, SharedSavedSecretMutationOutputV1Schema, SharedSavedSecretPromoteInputV1Schema, SharedSavedSecretPromoteOutputV1Schema, SharedSavedSecretUpdateInputV1Schema } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
 import { SavedSecretResourceMaterialsResponseV1Schema, SavedSecretResourceEnvelopeCensusRequestV1Schema, SavedSecretResourceEnvelopeCensusResponseV1Schema } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { inTx } from "@/storage/inTx";
+import { AccountSettingsPublicationConflict } from '@/app/accountSettings/writeAccountSettingsInTx';
+import { readUserKvMutationConflict } from '@/app/kv/kvMutate';
 import { type Fastify } from "../../types";
 import { requirePresentUser, PresentUserRequiredResponseSchema } from "@/app/api/utils/requirePresentUser";
 import {
@@ -282,6 +284,14 @@ export function registerSavedSecretResourceRoutes(app: Fastify): void {
                 personalSecretPromotions: body.personalSecretPromotions,
             }), { /* Secret recipient keys, effective grants and cross-owner reference censuses must stay coherent. */ isolationLevel: "Serializable" });
         } catch (error) {
+            if (await readUserKvMutationConflict(error)) {
+                return reply.code(savedSecretResourceErrorHttpStatus('references_conflict', 400)).send({ error: 'references_conflict' });
+            }
+            if (error instanceof AccountSettingsPublicationConflict) {
+                const failure = error.result.status === 'version_mismatch' ? 'settings_conflict'
+                    : error.result.status === 'profile_transfer_mismatch' ? 'references_conflict' : 'settings_invalid';
+                return reply.code(savedSecretResourceErrorHttpStatus(failure, 400)).send({ error: failure });
+            }
             if (error instanceof SavedSecretResourceTransactionAbort) {
                 return reply.code(savedSecretResourceErrorHttpStatus(error.error, 400)).send({ error: error.error });
             }
@@ -384,6 +394,9 @@ export function registerSavedSecretResourceRoutes(app: Fastify): void {
                 managedResourceDispositions: body.managedResourceDispositions,
             }), { /* Secret recipient keys, effective grants and cross-owner reference censuses must stay coherent. */ isolationLevel: "Serializable" });
         } catch (error) {
+            if (await readUserKvMutationConflict(error)) {
+                return reply.code(savedSecretResourceErrorHttpStatus('references_conflict', 404)).send({ error: 'references_conflict' });
+            }
             if (error instanceof SavedSecretResourceTransactionAbort) {
                 return reply.code(savedSecretResourceErrorHttpStatus(error.error, 404)).send({ error: error.error });
             }

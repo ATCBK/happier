@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
     AccountSettingsV2GetResponseSchema,
     AccountSettingsV2UpdateRequestSchema,
@@ -11,7 +11,33 @@ import { runtimeFetch } from '@/utils/system/runtimeFetch';
 import { serveActionHomes } from './actionHomesHttpHarness';
 import { initializeRealAppRuntimeForTests } from './realAppRuntimeHarness';
 
+await initializeRealAppRuntimeForTests();
+
 describe('served Account Settings HTTP boundary', () => {
+    it.each([false, true])('restores the prior logical Account after Home identity adoption (prior Account: %s)', async preexisting => {
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const { createAccountTokenForTests } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+        const { upsertServerProfileOnly } = await import('@/sync/domains/server/serverRuntime');
+        const { setServerProfileIdentityForUrl } = await import('@/sync/domains/server/serverProfiles');
+        const { parseToken } = await import('@/utils/auth/parseToken');
+        const serverUrl = `https://served-adoption-${preexisting}.example.test`;
+        const identity = `srv_served_adoption_${preexisting}`;
+        const profile = await upsertServerProfileOnly({ serverUrl });
+        const previous = preexisting ? { token: createAccountTokenForTests('prior-account') } : null;
+        if (previous) expect(await TokenStorage.setCredentialsForServerUrl(serverUrl, { serverId: profile.id }, previous)).toBe(true);
+        const fixture = await serveAccountHomes({ homes: [{ key: 'home', serverUrl, accountId: 'fixture-account' }], route: () => undefined });
+        try {
+            expect(await setServerProfileIdentityForUrl(serverUrl, identity)).not.toBeNull();
+            const installed = await TokenStorage.getCredentialsForServerUrl(serverUrl, { serverId: identity });
+            expect(parseToken(installed!.token)).toBe('fixture-account');
+            await fixture.dispose();
+            expect(await TokenStorage.getCredentialsForServerUrl(serverUrl, { serverId: identity })).toEqual(previous);
+        } finally {
+            await fixture.dispose();
+            await TokenStorage.removeCredentialsForServerUrl(serverUrl, { serverId: identity });
+        }
+    });
+
     it('retires verified Home credentials across fixture reuse and fences an Account switch', async () => {
         const { TokenStorage } = await import('@/auth/storage/tokenStorage');
         const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
@@ -33,6 +59,43 @@ describe('served Account Settings HTTP boundary', () => {
             } finally { account.dispose(); await fixture.dispose(); }
             expect(await TokenStorage.getCredentialsForServerUrl(serverUrl,
                 { serverId: 'srv_served_retirement' })).toBeNull();
+        }
+    });
+
+    it.each(['removed', 'replaced'] as const)('preserves credentials %s by the exercised flow during cleanup', async outcome => {
+        await initializeRealAppRuntimeForTests();
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const { createAccountTokenForTests } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+        const fixture = await serveAccountHomes({ homes: [{ key: 'home',
+            serverUrl: `https://served-cleanup-${outcome}.example.test`,
+            serverIdentityId: `srv_served_cleanup_${outcome}`, accountId: 'cleanup-account' }], route: () => undefined });
+        const home = fixture.homes.home!;
+        const replacement = { token: createAccountTokenForTests('replacement-account') };
+        if (outcome === 'removed') {
+            expect(await TokenStorage.removeCredentialsForServerUrl(home.serverUrl, { serverId: home.id })).toBe(true);
+        } else {
+            expect(await TokenStorage.setCredentialsForServerUrl(home.serverUrl, { serverId: home.id }, replacement)).toBe(true);
+        }
+        await fixture.dispose();
+        const current = await TokenStorage.getCredentialsForServerUrl(home.serverUrl, { serverId: home.id });
+        expect(current).toEqual(outcome === 'removed' ? null : replacement);
+    });
+
+    it('surfaces device storage failure when cleanup still owns the credential write', async () => {
+        await initializeRealAppRuntimeForTests();
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const secureStore = await import('expo-secure-store');
+        const fixture = await serveAccountHomes({ homes: [{ key: 'home',
+            serverUrl: 'https://served-cleanup-failure.example.test',
+            serverIdentityId: 'srv_served_cleanup_failure', accountId: 'cleanup-account' }], route: () => undefined });
+        const home = fixture.homes.home!;
+        const failure = new Error('Device storage unavailable');
+        const remove = vi.spyOn(secureStore, 'deleteItemAsync').mockRejectedValue(failure);
+        try {
+            await expect(fixture.dispose()).rejects.toBe(failure);
+        } finally {
+            remove.mockRestore();
+            await TokenStorage.removeCredentialsForServerUrl(home.serverUrl, { serverId: home.id });
         }
     });
 

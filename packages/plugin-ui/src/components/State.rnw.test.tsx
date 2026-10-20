@@ -15,6 +15,7 @@ import { defineHappierScene, defineHappierSceneProp, type HappierSceneRenderRequ
 import { PluginUiProvider, PluginUiProviderInternal } from './PluginUiProvider.js';
 import { Button, EmptyState, ErrorState, FreshnessLine, LoadingState, Spinner, State, Status } from './index.js';
 import { SceneArt } from './State.js';
+import { PluginUiSurfaceNoticeContext } from '../presentationHost/surfaceNotice.js';
 
 /**
  * EU-7b, family `Spinner` / `LoadingState` / `EmptyState` / `ErrorState` /
@@ -626,3 +627,69 @@ function normalizeColor(color: string): string {
   const [, r, g, b] = rgb;
   return `#${[r, g, b].map((part) => Number(part).toString(16).padStart(2, '0')).join('')}`;
 }
+
+describe('a host sentence about a part that cannot run now', () => {
+  it('is said once, in the failure state of the part that failed, with that state\'s own action; other content stays', () => {
+    const claims: string[] = [];
+    const notice = { sentence: 'This operation is unavailable on Studio Mac.', claim: (id: string) => {
+      claims.push(id);
+      return () => { claims.splice(claims.indexOf(id), 1); };
+    } };
+    let retried = 0;
+    const mount = mountSurface(
+      <PluginUiSurfaceNoticeContext.Provider value={notice}>
+        <Status tone="success" label="Account rows" />
+        <ErrorState title="The latest entries could not be read" details="host_api_method_unavailable:readResource" onRetry={() => { retried += 1; }} />
+      </PluginUiSurfaceNoticeContext.Provider>,
+    );
+    const text = mount.container.textContent ?? '';
+    expect(text).toContain('Account rows');
+    expect(text.split('This operation is unavailable on Studio Mac.')).toHaveLength(2);
+    expect(text).not.toContain('could not be read');
+    expect(text).not.toContain('host_api_method_unavailable');
+    expect(claims).toHaveLength(1);
+    const buttons = mount.container.querySelectorAll('[role="button"]');
+    expect(buttons).toHaveLength(1);
+    act(() => { (buttons[0] as HTMLElement).click(); });
+    expect(retried).toBe(1);
+    mount.unmount();
+    expect(claims).toHaveLength(0);
+  });
+
+  it('draws the host\'s way forward in place of the failure state\'s own retry when retrying cannot help', () => {
+    let opened = 0;
+    let retried = 0;
+    const notice = {
+      sentence: 'Add or connect a machine to use this here.',
+      action: { label: 'Add a machine', onPress: () => { opened += 1; } },
+      claim: () => () => undefined,
+    };
+    const mount = mountSurface(
+      <PluginUiSurfaceNoticeContext.Provider value={notice}>
+        <ErrorState title="The latest entries could not be read" onRetry={() => { retried += 1; }} />
+      </PluginUiSurfaceNoticeContext.Provider>,
+    );
+    const buttons = mount.container.querySelectorAll('[role="button"]');
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]!.textContent).toBe('Add a machine');
+    act(() => { (buttons[0] as HTMLElement).click(); });
+    expect({ opened, retried }).toEqual({ opened: 1, retried: 0 });
+    mount.unmount();
+  });
+
+  it('leaves a non-failure state and every state outside such a host untouched', () => {
+    const mount = mountSurface(
+      <>
+        <PluginUiSurfaceNoticeContext.Provider value={{ sentence: 'This operation is unavailable on Studio Mac.', claim: () => () => undefined }}>
+          <EmptyState title="Nothing new right now" />
+        </PluginUiSurfaceNoticeContext.Provider>
+        <ErrorState title="The latest entries could not be read" />
+      </>,
+    );
+    const text = mount.container.textContent ?? '';
+    expect(text).toContain('Nothing new right now');
+    expect(text).toContain('The latest entries could not be read');
+    expect(text).not.toContain('Studio Mac');
+    mount.unmount();
+  });
+});

@@ -98,6 +98,7 @@ export async function requestLiveStreamRelayAuthorization(input: Readonly<{
     credentials: AuthCredentials;
     startRequest: MachineLiveStreamUnsignedStartRequest;
     timeoutMs?: number;
+    signal?: AbortSignal;
 }>): Promise<OperationResult<MachineLiveStreamRelayAuthorizationV1>> {
     try {
         const response = await requestPeerMediationServerJsonForCredential({
@@ -107,6 +108,7 @@ export async function requestLiveStreamRelayAuthorization(input: Readonly<{
             timeoutMs: input.timeoutMs,
             init: {
                 method: 'POST',
+                signal: input.signal,
                 headers: {
                     'Content-Type': 'application/json',
                 },

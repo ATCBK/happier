@@ -35,8 +35,10 @@ export function resolveHappierFieldKeyboardType(
 export type HappierFieldValueDraftInput = Readonly<{
   /** The saved value, as text. The draft follows it whenever it changes. */
   value: string;
+  /** A controlled editor may echo its draft in value; blur still compares against this acknowledged value. */
+  committedValue?: string;
   /**
-   * Saves the typed value, only when it differs from `value`. Returns the text
+   * Saves the typed value, only when it differs from `committedValue` (or `value` when omitted). Returns the text
    * the field shows afterwards (a number moved to its bound, the saved value
    * when refused), or nothing to keep the draft.
    */
@@ -66,6 +68,7 @@ export function useHappierFieldValueDraft(input: HappierFieldValueDraftInput): R
   canIncrement: boolean;
 }> {
   const { value, onCommit, onDraftChange, kind = 'text', signed = false, allowEmpty, stepper } = input;
+  const committedValue = input.committedValue ?? value;
   const [draft, setDraft] = useState(value);
   useEffect(() => {
     setDraft(value);
@@ -78,16 +81,16 @@ export function useHappierFieldValueDraft(input: HappierFieldValueDraftInput): R
   const commit = useCallback(() => {
     const next = kind === 'text' ? draft.trim() : draft;
     if (kind !== 'text' && next.length === 0 && !allowEmpty) {
-      setDraft(value);
+      setDraft(committedValue);
       return;
     }
-    if (next === value) {
+    if (next === committedValue) {
       setDraft(value);
       return;
     }
     const shown = onCommit(next);
     setDraft(typeof shown === 'string' ? shown : next);
-  }, [allowEmpty, draft, kind, onCommit, value]);
+  }, [allowEmpty, committedValue, draft, kind, onCommit, value]);
   const current = draft.trim() !== '' && Number.isFinite(Number(draft)) ? Number(draft) : Number(value);
   const stepBy = useCallback((direction: -1 | 1) => {
     if (!stepper || !Number.isFinite(current)) return;

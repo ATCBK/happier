@@ -2,7 +2,7 @@
 
 import { cloneElement, type ReactElement } from 'react';
 import { PluginError, type JsonValue } from '@happier-dev/plugin-sdk';
-import type { PluginUiResourceReference, RenderContext, ResourceContent, ResourceSubscriptionEvent } from '@happier-dev/plugin-sdk/ui';
+import type { PluginUiHostApi, PluginUiResourceReference, RenderContext, ResourceContent, ResourceSubscriptionEvent, SelectActionInputResult, SessionStateV1 } from '@happier-dev/plugin-sdk/ui';
 import {
   CONVERSATION_MANAGEMENT_ACTION_IDS_V1,
   CONVERSATION_PROVIDERS_CONTRIBUTION_POINT_ID_V1,
@@ -45,6 +45,8 @@ import {
   type ConversationConnectionFixtureAuthority,
 } from '../testkit/currentConnectionFixture.js';
 import { renderSurface } from './renderSurface.js';
+import { PLUGIN_MANIFEST } from '../manifest.js';
+import { createSessionCandidatePageFixture } from '../testkit/sessionCandidatePageFixture.js';
 
 import { assertChannelsTestCollectionQueryLimit } from '../testkit/collectionQueryBound.js';
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -725,6 +727,26 @@ async function pressButtonWithAccessibleLabelFragment(fragment: string): Promise
   await act(async () => { element?.click(); });
 }
 
+/** Choose one option of a field Select through the shared menu it opens. */
+async function chooseFieldOption(fieldLabel: string, optionLabel: string): Promise<void> {
+  await pressButtonWithAccessibleLabelFragment(fieldLabel);
+  const option = await vi.waitFor(() => {
+    const candidate = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitemradio"]'))
+      .find((item) => item.textContent?.includes(optionLabel));
+    expect(candidate, `Expected a ${JSON.stringify(optionLabel)} option in the ${fieldLabel} menu`).toBeDefined();
+    return candidate!;
+  });
+  await act(async () => { option.click(); });
+}
+
+/** The current value a closed field Select states on its trigger. */
+function expectFieldValue(fieldLabel: string, optionLabel: string): void {
+  const trigger = Array.from(document.querySelectorAll<HTMLElement>('[role="button"]')).find((candidate) => (
+    candidate.getAttribute('aria-label')?.includes(fieldLabel)
+  ));
+  expect(trigger?.textContent ?? trigger?.getAttribute('aria-label')).toContain(optionLabel);
+}
+
 /** Exercise the mounted RNW field through its real browser input event. */
 async function enterTextByTestId(testID: string, value: string): Promise<void> {
   const input = document.querySelector<HTMLInputElement>(`[data-testid="${testID}"]`);
@@ -797,8 +819,8 @@ async function searchBindingPrincipal(fixture: PluginUiTestkit): Promise<void> {
 
 async function selectPrincipalAndOpenTarget(fixture: PluginUiTestkit): Promise<void> {
   await searchBindingPrincipal(fixture);
-  await fixture.press(await fixture.getByRole('radio', {
-    name: bindingPrincipalCandidate.label,
+  await fixture.press(await fixture.getByRole('checkbox', {
+    name: `${bindingPrincipalCandidate.label}: ${bindingPrincipalCandidate.id}`,
     state: { checked: false },
   }));
   await fixture.press(await fixture.getByRole('button', { name: 'Continue' }));
@@ -874,7 +896,7 @@ function offlineConnectionRow(): OfflineChannelStateRow {
       },
       providerSetupInput: { source: 'test' },
       credentialRef: null,
-      transportOrigin: { serverIdentityId: 'server-1', materializationRef: offlineMaterialization },
+      transportOrigin: { serverIdentityId: 'srv_account_one', materializationRef: offlineMaterialization },
       providerConnectionKey: 'connection-key-1',
       providerConfig: {},
       routingIdentityKey: 'r'.repeat(43),
@@ -1193,11 +1215,9 @@ describe('Channels mounted provider setup recovery', () => {
               outboundTextLimit: { maximum: 4_000, unit: 'unicodeCodePoints' },
             };
       }
-      if (typeof request.action === 'object'
-        && request.action !== null
-        && request.action.pluginId === providerSetupRemediationOperation.action.pluginId
-        && request.action.localId === providerSetupRemediationOperation.action.localId) {
+      if (request.action === 'connection/setup-remediate-v1') {
         remediationInput = request.input;
+        expect(request.selectedActionInput).toEqual({ operation: providerSetupRemediationOperation, result: submittedRemediation });
         return { kind: 'remediated' };
       }
       throw new Error(`Unexpected mounted Action: ${String(request.action)}`);
@@ -1223,7 +1243,7 @@ describe('Channels mounted provider setup recovery', () => {
       await vi.waitFor(() => {
         expect(executeAction.mock.calls.map(([request]) => request.action)).toEqual([
           CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPrepare,
-          expect.objectContaining(providerSetupRemediationOperation.action),
+          'connection/setup-remediate-v1',
           CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPrepare,
         ]);
       });
@@ -1231,7 +1251,8 @@ describe('Channels mounted provider setup recovery', () => {
       expect(selectActionInput.mock.calls[1]?.[0].request).toEqual({
         operation: providerSetupRemediationOperation,
       });
-      expect(remediationInput).toEqual(submittedRemediation.input);
+      expect(remediationInput).toEqual({ providerSelection: submittedRemediation.selection,
+        providerRemediationInput: submittedRemediation.input, credentialRef: null });
       await expect(fixture.getByRole('button', { name: 'Create connection' })).resolves.toBeDefined();
     } finally {
       await fixture.dispose();
@@ -1329,10 +1350,7 @@ describe('Channels mounted provider setup recovery', () => {
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPrepare) {
         return { kind: 'requiresRemediation' };
       }
-      if (typeof action === 'object'
-        && action !== null
-        && action.pluginId === providerSetupRemediationOperation.action.pluginId
-        && action.localId === providerSetupRemediationOperation.action.localId) {
+      if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionSetupRemediate) {
         throw new PluginError({ code: 'timeout', message: 'provider mutation timed out' });
       }
       throw new Error(`Unexpected mounted Action: ${String(action)}`);
@@ -1358,7 +1376,7 @@ describe('Channels mounted provider setup recovery', () => {
       });
       expect(executeAction.mock.calls.map(([request]) => request.action)).toEqual([
         CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPrepare,
-        expect.objectContaining(providerSetupRemediationOperation.action),
+        CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionSetupRemediate,
       ]);
       expect(selectActionInput).toHaveBeenCalledTimes(2);
     } finally {
@@ -2224,6 +2242,20 @@ describe('Channels mounted ingress attention recovery', () => {
               },
             },
           },
+          ...(['actorUnattributable', 'actorNotAllowed', 'botSenderDisabled'] as const).map((reason, index) => {
+            const id = String(index).repeat(43);
+            return { rowId: id, revision: 1, value: {
+              id, 'record-kind': 'ingress-obligation', v: 1,
+              'connection-id': 'connection-1', 'binding-id': 'binding-1',
+              terminal: true, attention: true, 'created-at': 10, 'updated-at': 22,
+              payload: {
+                occurrenceIds: ['private-occurrence'], censusId: 'B'.repeat(43), target: null,
+                sourceAuthority: { connectionAuthorityEpoch: 1, bindingRevision: 2, bindingAuthorityEpoch: 3 },
+                lifecycle: { phase: 'terminal', attemptCount: 0, dueAt: null }, disposition: 'rejected',
+                nonAdmission: { reason, senderFeedbackEligible: false },
+              },
+            } };
+          }),
         ],
         nextCursor: undefined,
         changeCursor: 0,
@@ -2271,7 +2303,11 @@ describe('Channels mounted ingress attention recovery', () => {
 
     try {
       await expect(fixture.findByRole('button', { name: 'Retry saved input' })).resolves.toBeDefined();
+      await expect(fixture.getByText('Dropped because the sender could not be verified.')).resolves.toBeDefined();
+      await expect(fixture.getByText('Dropped because the sender is not allowed.')).resolves.toBeDefined();
+      await expect(fixture.getByText('Dropped because automated senders are not allowed.')).resolves.toBeDefined();
       await expect(fixture.getByText('An incoming message was not accepted.')).resolves.toBeDefined();
+      expect(document.body.textContent).not.toContain('private-occurrence');
       await expect(fixture.getByText(
         'An incoming message is waiting for its connection or target to be reachable again.',
       )).resolves.toBeDefined();
@@ -2295,9 +2331,10 @@ describe('Channels mounted ingress attention recovery', () => {
           },
         }));
       });
-      await vi.waitFor(async () => {
+      await vi.waitFor(() => {
         expect(attentionQuery).toHaveBeenCalledTimes(2);
-        await expect(fixture.getByText('No incoming messages need attention')).resolves.toBeDefined();
+        expect(document.querySelector(`[data-testid="channels-ingress-attention-retry-${blockedObligationId}"]`))
+          .toBeNull();
       });
     } finally {
       await fixture.dispose();
@@ -2329,7 +2366,7 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'principalCandidates', candidates: [bindingPrincipalCandidate] };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null });
       }
       throw new Error(`Unexpected mounted Action: ${String(action)}`);
     });
@@ -2383,7 +2420,7 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'principalCandidates', candidates: [bindingPrincipalCandidate] };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null });
       }
       throw new Error(`Unexpected mounted Action: ${String(action)}`);
     });
@@ -2435,7 +2472,7 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'principalCandidates', candidates: [bindingPrincipalCandidate] };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null });
       }
       throw new Error(`Unexpected mounted Action: ${String(action)}`);
     });
@@ -2467,8 +2504,8 @@ describe('Channels mounted binding creation', () => {
 
       await fixture.press(await fixture.getByRole('button', { name: bindingEndpointCandidate.label }));
       await searchBindingPrincipal(fixture);
-      await fixture.press(await fixture.getByRole('radio', {
-        name: bindingPrincipalCandidate.label,
+      await fixture.press(await fixture.getByRole('checkbox', {
+        name: `${bindingPrincipalCandidate.label}: ${bindingPrincipalCandidate.id}`,
         state: { checked: false },
       }));
       await fixture.press(await fixture.getByRole('button', { name: 'Continue' }));
@@ -2554,6 +2591,8 @@ describe('Channels mounted binding creation', () => {
       expect(endpointHeading).toBeDefined();
       expect(document.activeElement).toBe(endpointHeading);
       expect(focusTarget).toHaveBeenCalledTimes(1);
+      // The opener has done its job: an open journey does not repeat it beside its own first step.
+      expect(document.querySelector('[data-testid="channels-binding-create-open"]')).toBeNull();
 
       await enterTextByTestId('channels-binding-create-endpoint-query', bindingEndpointSelection.query);
       await fixture.press(await fixture.getByRole('button', { name: 'Search endpoints' }));
@@ -2644,15 +2683,13 @@ describe('Channels mounted binding creation', () => {
         return { kind: 'principalCandidates', candidates: principalCandidates };
       }
       if (action === 'session.list') {
-        return {
+        return createSessionCandidatePageFixture({
           sessions: [{
             id: 'session-1',
             title: 'Project review',
-            // The mounted create flow must never render or request previews.
-            lastMessagePreview: { role: 'user', text: 'private preview' },
           }],
           nextCursor: null,
-        };
+        });
       }
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingCreate) {
         return { kind: 'created', binding: createdBinding };
@@ -2708,19 +2745,19 @@ describe('Channels mounted binding creation', () => {
           },
         }));
       });
-      await expect(fixture.getByRole('radiogroup', { name: 'Allowed sender candidates' })).resolves.toBeDefined();
-      await expect(fixture.getByRole('radio', {
-        name: 'Ada',
+      await expect(fixture.getByRole('group', { name: 'Allowed sender candidates' })).resolves.toBeDefined();
+      await expect(fixture.getByRole('checkbox', {
+        name: 'Ada: principal-ada',
         state: { checked: false },
       })).resolves.toBeDefined();
-      await expect(fixture.getByRole('radio', {
-        name: 'Grace',
+      await expect(fixture.getByRole('checkbox', {
+        name: 'Grace: principal-grace',
         state: { checked: false },
       })).resolves.toBeDefined();
-      await fixture.press(await fixture.getByRole('radio', { name: 'Ada', state: { checked: false } }));
-      expect(document.querySelectorAll('[role="radio"][aria-checked="true"]')).toHaveLength(1);
-      await expect(fixture.getByRole('radio', {
-        name: 'Ada',
+      await fixture.press(await fixture.getByRole('checkbox', { name: 'Ada: principal-ada', state: { checked: false } }));
+      expect(document.querySelectorAll('[role="checkbox"][aria-checked="true"]')).toHaveLength(1);
+      await expect(fixture.getByRole('checkbox', {
+        name: 'Ada: principal-ada',
         state: { checked: true },
       })).resolves.toBeDefined();
       await fixture.press(await fixture.getByRole('button', { name: 'Continue' }));
@@ -2728,14 +2765,14 @@ describe('Channels mounted binding creation', () => {
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
           action: 'session.list',
-          input: { limit: 100, includeLastMessagePreview: false },
+          input: { view: 'awareness', limit: 100 },
         }));
       });
       expect(document.body.textContent).not.toContain('private preview');
       await fixture.press(await fixture.getByRole('button', { name: 'Back' }));
-      expect(document.querySelectorAll('[role="radio"][aria-checked="true"]')).toHaveLength(1);
-      await expect(fixture.getByRole('radio', {
-        name: 'Ada',
+      expect(document.querySelectorAll('[role="checkbox"][aria-checked="true"]')).toHaveLength(1);
+      await expect(fixture.getByRole('checkbox', {
+        name: 'Ada: principal-ada',
         state: { checked: true },
       })).resolves.toBeDefined();
       await fixture.press(await fixture.getByRole('button', { name: 'Continue' }));
@@ -2774,7 +2811,7 @@ describe('Channels mounted binding creation', () => {
       expect(summary?.textContent).toContain('Durable push');
       expect(summary?.textContent).toContain('Uses this connection’s host-verified webhook endpoint.');
 
-      await fixture.press(await fixture.getByRole('button', { name: 'Create binding' }));
+      await fixture.press(await fixture.getByRole('button', { name: 'Link conversation' }));
 
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
@@ -2815,7 +2852,7 @@ describe('Channels mounted binding creation', () => {
       expect(createInput).not.toHaveProperty('inboundDebounceMs');
       await expect(fixture.getByText('Binding created')).resolves.toBeDefined();
       await expect(fixture.getByRole('button', {
-        name: 'Create binding',
+        name: 'Link conversation',
         state: { disabled: true },
       })).resolves.toBeDefined();
       await expect(fixture.getByRole('button', {
@@ -2833,6 +2870,207 @@ describe('Channels mounted binding creation', () => {
     }
   });
 
+  it('creates a thread router from a mailbox endpoint with its allowed senders as the first group (REV-C-01)', async () => {
+    const durablePushConnectionsResource = connectionsResourceForTransport('durablePush');
+    const endpointCandidate = {
+      kind: 'direct' as const,
+      audience: 'direct' as const,
+      id: 'direct-ada',
+      label: 'Ada direct',
+    };
+    const endpointSelection = {
+      query: 'ada-direct',
+      selected: {
+        kind: 'direct' as const,
+        audience: 'direct' as const,
+        id: 'direct-ada',
+      },
+    };
+    const principalCandidate = {
+      id: 'principal-ada',
+      kind: 'human' as const,
+      label: 'Ada',
+    };
+    const principalCandidates = [
+      principalCandidate,
+      {
+        id: 'principal-grace',
+        kind: 'human' as const,
+        label: 'Grace',
+      },
+    ];
+    const principalSelection = {
+      query: 'ada',
+      selected: [{
+        id: 'principal-ada',
+        kind: 'human' as const,
+      }],
+    };
+    const createdBinding = {
+      v: 1,
+      id: 'binding-created',
+      connectionId: 'connection-1',
+      endpoint: endpointCandidate,
+      target: {
+        kind: 'session' as const,
+        sessionId: 'session-1',
+        policy: {
+          deliveryMode: 'mirrorSession' as const,
+          permissionCeiling: 'read-only',
+          approvals: { kind: 'off' as const },
+          newSession: { kind: 'off' as const },
+        },
+      },
+      allowedPrincipalIds: ['principal-ada'],
+      allowBotSenders: false,
+      inputMode: 'allAllowedMessages' as const,
+      inboundDebounceMs: 750,
+      linkPreviewPolicy: 'suppress' as const,
+      senderFeedback: 'off' as const,
+      authorityEpoch: 2,
+      enabled: true,
+      deletionState: 'none' as const,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const executeAction = vi.fn(async ({ action, input }: PluginUiTestkitExecuteActionInput): Promise<JsonValue> => {
+      if (action === 'binding/resolve-v1') {
+        if ((input as { kind?: unknown }).kind === 'endpoint') {
+          return { kind: 'endpointCandidates', candidates: [endpointCandidate] };
+        }
+        return { kind: 'principalCandidates', candidates: principalCandidates };
+      }
+      if (action === 'session.list') {
+        return createSessionCandidatePageFixture({
+          sessions: [{
+            id: 'session-1',
+            title: 'Project review',
+          }],
+          nextCursor: null,
+        });
+      }
+      if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingCreate) {
+        return { kind: 'created', binding: createdBinding };
+      }
+      throw new Error(`Unexpected mounted Action: ${String(action)}`);
+    });
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'fixture-instance-87r', mountNonce: 'fixture-mount-87r' },
+      authorPlugin: { id: 'happier.channels', version: '0.0.0' },
+      surface: renderSurface,
+      surfaceContext: createChannelsSurfaceContext(),
+      adapter: createChannelsSemanticAdapter(),
+      handlers: {
+        selectActionInput: async () => ({ kind: 'cancelled' as const }),
+        executeAction,
+        readResource: async ({ resource }) => {
+          const localId = resourceFixtureLocalId(resource);
+          if (localId === BINDINGS_RESOURCE.localId) return bindingsResource;
+          if (localId === CONNECTIONS_RESOURCE.localId) return durablePushConnectionsResource;
+          throw new Error(`Unexpected Resource: ${localId}`);
+        },
+      },
+    });
+
+    try {
+      await fixture.press(await fixture.getByRole('button', { name: 'Add binding' }));
+      await enterTextByTestId('channels-binding-create-endpoint-query', endpointSelection.query);
+      await fixture.press(await fixture.getByRole('button', { name: 'Search endpoints' }));
+      await vi.waitFor(() => {
+        expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
+          action: 'binding/resolve-v1',
+          input: {
+            kind: 'endpoint',
+            connectionId: 'connection-1',
+            expectedConnectionRevision: 1,
+            query: endpointSelection.query,
+          },
+        }));
+      });
+      await fixture.press(await fixture.getByRole('button', { name: 'Ada direct' }));
+
+      await enterTextByTestId('channels-binding-create-principal-query', principalSelection.query);
+      await fixture.press(await fixture.getByRole('button', { name: 'Search people' }));
+      await vi.waitFor(() => {
+        expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
+          action: 'binding/resolve-v1',
+          input: {
+            kind: 'principal',
+            connectionId: 'connection-1',
+            expectedConnectionRevision: 1,
+            endpointSelection,
+            query: principalSelection.query,
+          },
+        }));
+      });
+      await expect(fixture.getByRole('group', { name: 'Allowed sender candidates' })).resolves.toBeDefined();
+      await expect(fixture.getByRole('checkbox', {
+        name: 'Ada: principal-ada',
+        state: { checked: false },
+      })).resolves.toBeDefined();
+      await expect(fixture.getByRole('checkbox', {
+        name: 'Grace: principal-grace',
+        state: { checked: false },
+      })).resolves.toBeDefined();
+      await fixture.press(await fixture.getByRole('checkbox', { name: 'Ada: principal-ada', state: { checked: false } }));
+      expect(document.querySelectorAll('[role="checkbox"][aria-checked="true"]')).toHaveLength(1);
+      await expect(fixture.getByRole('checkbox', {
+        name: 'Ada: principal-ada',
+        state: { checked: true },
+      })).resolves.toBeDefined();
+      await fixture.press(await fixture.getByRole('button', { name: 'Continue' }));
+
+      await vi.waitFor(() => {
+        expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
+          action: 'session.list',
+          input: { view: 'awareness', limit: 100 },
+        }));
+      });
+      expect(document.body.textContent).not.toContain('private preview');
+      await fixture.press(await fixture.getByRole('button', { name: 'Back' }));
+      expect(document.querySelectorAll('[role="checkbox"][aria-checked="true"]')).toHaveLength(1);
+      await expect(fixture.getByRole('checkbox', {
+        name: 'Ada: principal-ada',
+        state: { checked: true },
+      })).resolves.toBeDefined();
+      // Exact-address providers return a separate candidate page per sender.
+      // Retain the earlier verified selection when searching for another one.
+      await enterTextByTestId('channels-binding-create-principal-query', 'grace');
+      await fixture.press(await fixture.getByRole('button', { name: 'Search people' }));
+      await fixture.press(await fixture.getByRole('checkbox', { name: 'Grace: principal-grace', state: { checked: false } }));
+      await fixture.press(await fixture.getByRole('button', { name: 'Continue' }));
+      await vi.waitFor(() => {
+        expect(document.querySelector('[data-testid="channels-binding-target-router"]')).not.toBeNull();
+      });
+      await pressByTestId('channels-binding-target-router');
+      await expect(fixture.findByRole('heading', { name: 'Routes' })).resolves.toBeDefined();
+      await fixture.press(await fixture.getByRole('button', { name: 'Review binding' }));
+      const summary = document.querySelector<HTMLElement>('[data-testid="channels-binding-create-summary"]');
+      expect(summary?.textContent).toContain('senders (2)');
+      expect(summary?.textContent).toContain('No routes yet');
+      await fixture.press(await fixture.getByRole('button', { name: 'Link conversation' }));
+      await vi.waitFor(() => {
+        expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
+          action: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingCreate,
+          input: expect.objectContaining({
+            endpointSelection,
+            principalSelection: {
+              ...principalSelection,
+              selected: [...principalSelection.selected, { id: 'principal-grace', kind: 'human', query: 'grace' }],
+            },
+            target: {
+              kind: 'threadRouter',
+              principalGroups: [{ id: 'senders', principalIds: ['principal-ada', 'principal-grace'] }],
+              routes: [],
+            },
+          }),
+        }));
+      });
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   it('requires an explicit retry after a Session candidate page fails during pairing', async () => {
     let sessionReads = 0;
     let finishUnexpectedRead: ((value: JsonValue) => void) | undefined;
@@ -2844,7 +3082,7 @@ describe('Channels mounted binding creation', () => {
       }
       if (action === 'session.list') {
         sessionReads += 1;
-        if (sessionReads === 1) throw new PluginError('plugin_service_unavailable', 'Session listing unavailable');
+        if (sessionReads === 1) throw new PluginError({ code: 'plugin_service_unavailable', message: 'Session listing unavailable' });
         return new Promise((resolve) => { finishUnexpectedRead = resolve; });
       }
       throw new Error(`Unexpected mounted Action: ${String(action)}`);
@@ -2872,12 +3110,12 @@ describe('Channels mounted binding creation', () => {
       await fixture.press(await fixture.getByRole('button', { name: 'Reload Sessions' }));
       await vi.waitFor(() => { expect(sessionReads).toBe(2); });
       await act(async () => {
-        finishUnexpectedRead?.({ sessions: [{ id: 'recovered-session', title: 'Recovered Session' }], nextCursor: null });
+        finishUnexpectedRead?.(createSessionCandidatePageFixture({ sessions: [{ id: 'recovered-session', title: 'Recovered Session' }], nextCursor: null }));
       });
       await expect(fixture.getByRole('button', { name: 'Recovered Session' })).resolves.toBeDefined();
     } finally {
       await fixture.dispose();
-      finishUnexpectedRead?.({ sessions: [], nextCursor: null });
+      finishUnexpectedRead?.(createSessionCandidatePageFixture({ sessions: [], nextCursor: null }));
     }
   });
 
@@ -2908,7 +3146,7 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'unavailable', reason: 'principalResolveUnsupported' };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-pairing', title: 'Pairing Session' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-pairing', title: 'Pairing Session' }], nextCursor: null });
       }
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingCreate) {
         return {
@@ -3071,10 +3309,10 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'unavailable', reason: 'principalResolveUnsupported' };
       }
       if (action === 'session.list') {
-        return {
+        return createSessionCandidatePageFixture({
           sessions: [{ id: 'session-pairing', title: 'Pairing Session' }],
           nextCursor: null,
-        };
+        });
       }
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingCreate) {
         return {
@@ -3168,7 +3406,7 @@ describe('Channels mounted binding creation', () => {
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
           action: 'session.list',
-          input: { limit: 100, includeLastMessagePreview: false },
+          input: { view: 'awareness', limit: 100 },
         }));
       });
       expect(executeAction.mock.calls.map(([request]) => request.action)).not.toContain(
@@ -3319,7 +3557,7 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'unavailable', reason: 'principalResolveUnsupported' };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-pairing', title: 'Pairing Session' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-pairing', title: 'Pairing Session' }], nextCursor: null });
       }
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingCreate) {
         sentPairingRequestId = (input as Readonly<{ pairingRequestId?: string }>).pairingRequestId;
@@ -3419,7 +3657,7 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'unavailable', reason: 'principalResolveUnsupported' };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-pairing', title: 'Pairing Session' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-pairing', title: 'Pairing Session' }], nextCursor: null });
       }
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingCreate) {
         sentPairingRequestId = (input as Readonly<{ pairingRequestId?: string }>).pairingRequestId;
@@ -3521,7 +3759,7 @@ describe('Channels mounted binding creation', () => {
             : { kind: 'unavailable', reason: 'principalResolveUnsupported' };
         }
         if (action === 'session.list') {
-          return { sessions: [{ id: 'session-pairing', title: 'Pairing Session' }], nextCursor: null };
+          return createSessionCandidatePageFixture({ sessions: [{ id: 'session-pairing', title: 'Pairing Session' }], nextCursor: null });
         }
         if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.connectionPairingCreate) {
           return {
@@ -3638,7 +3876,7 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'principalCandidates', candidates: [bindingPrincipalCandidate] };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null });
       }
       throw new Error(`Unexpected mounted Action: ${String(action)}`);
     });
@@ -3661,7 +3899,7 @@ describe('Channels mounted binding creation', () => {
       await fixture.press(await fixture.getByRole('button', { name: 'Project review' }));
 
       const newSession = await fixture.getByRole('switch', {
-        name: 'Configure a new Session',
+        name: 'Allow /new',
         state: { checked: false },
       });
       await fixture.press(newSession);
@@ -3674,7 +3912,7 @@ describe('Channels mounted binding creation', () => {
         }));
       });
       await expect(fixture.getByRole('switch', {
-        name: 'Configure a new Session',
+        name: 'Allow /new',
         state: { checked: false },
       })).resolves.toBeDefined();
       expect(executeAction.mock.calls.map(([request]) => request.action)).not.toContain('session.spawn_new');
@@ -3694,7 +3932,7 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'principalCandidates', candidates: [bindingPrincipalCandidate] };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null });
       }
       if (action === 'automation.conversation.targets.list') {
         if ((input as Readonly<{ cursor?: unknown }>).cursor === undefined) {
@@ -3746,7 +3984,7 @@ describe('Channels mounted binding creation', () => {
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
           action: 'session.list',
-          input: { limit: 100, includeLastMessagePreview: false },
+          input: { view: 'awareness', limit: 100 },
         }));
       });
       await fixture.press(await fixture.getByRole('button', { name: 'Show Automations' }));
@@ -3787,7 +4025,7 @@ describe('Channels mounted binding creation', () => {
         'The Automation runs unattended with the permissions, tools, and outward effects its own definition grants.',
       );
 
-      await fixture.press(await fixture.getByRole('button', { name: 'Create binding' }));
+      await fixture.press(await fixture.getByRole('button', { name: 'Link conversation' }));
 
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
@@ -3828,24 +4066,24 @@ describe('Channels mounted binding creation', () => {
       if (action === 'session.list') {
         const cursor = (input as Readonly<{ cursor?: unknown }>).cursor;
         if (cursor === undefined) {
-          return {
+          return createSessionCandidatePageFixture({
             sessions: Array.from({ length: 100 }, (_unused, index) => ({
               id: `session-p1-${index}`,
               title: `Session 1-${index}`,
             })),
             nextCursor: 'session-page-2',
-          };
+          });
         }
         if (cursor === 'session-page-2') {
-          return {
+          return createSessionCandidatePageFixture({
             sessions: Array.from({ length: 100 }, (_unused, index) => ({
               id: `session-p2-${index}`,
               title: `Session 2-${index}`,
             })),
             nextCursor: null,
-          };
+          });
         }
-        return { sessions: [], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [], nextCursor: null });
       }
       if (action === 'automation.conversation.targets.list') {
         const cursor = (input as Readonly<{ cursor?: unknown }>).cursor;
@@ -3884,14 +4122,14 @@ describe('Channels mounted binding creation', () => {
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
           action: 'session.list',
-          input: { limit: 100, includeLastMessagePreview: false },
+          input: { view: 'awareness', limit: 100 },
         }));
       });
       await fixture.press(await fixture.getByRole('button', { name: 'Show more Sessions' }));
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
           action: 'session.list',
-          input: { limit: 100, includeLastMessagePreview: false, cursor: 'session-page-2' },
+          input: { view: 'awareness', limit: 100, cursor: 'session-page-2' },
         }));
       });
       await enterTextByTestId('channels-binding-target-search', 'Session 2-99');
@@ -3975,7 +4213,7 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'ready', revision: 2, binding: savedBinding };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null });
       }
       if (action === 'automation.conversation.targets.list') {
         return {
@@ -4008,8 +4246,12 @@ describe('Channels mounted binding creation', () => {
     });
 
     try {
+      await expect(fixture.getByRole('button', { name: 'Pause' })).resolves.toBeDefined();
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
-      await expect(fixture.getByRole('heading', { name: 'Edit binding' })).resolves.toBeDefined();
+      await expect(fixture.getByRole('heading', { name: 'Edit conversation' })).resolves.toBeDefined();
+      // Editing is a focused state of the page: the bot and the stop operations leave while it lasts.
+      await expect(fixture.queryByRole('button', { name: 'Pause' })).resolves.toBeUndefined();
+      await expect(fixture.queryByRole('button', { name: 'Manage bot' })).resolves.toBeUndefined();
       await expect(fixture.getByRole('radio', {
         name: 'No external result',
         state: { checked: true },
@@ -4022,7 +4264,7 @@ describe('Channels mounted binding creation', () => {
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
           action: 'session.list',
-          input: { limit: 100, includeLastMessagePreview: false },
+          input: { view: 'awareness', limit: 100 },
         }));
       });
       await fixture.press(await fixture.getByRole('button', { name: 'Show Automations' }));
@@ -4112,7 +4354,7 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'ready', revision: 2, binding: savedBinding };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null });
       }
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingUpdate) {
         updateInputs.push(input);
@@ -4136,7 +4378,7 @@ describe('Channels mounted binding creation', () => {
 
     try {
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
-      await expect(fixture.getByRole('heading', { name: 'Edit binding' })).resolves.toBeDefined();
+      await expect(fixture.getByRole('heading', { name: 'Edit conversation' })).resolves.toBeDefined();
       await fixture.press(await fixture.getByRole('button', { name: 'Change target' }));
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
@@ -4178,7 +4420,7 @@ describe('Channels mounted binding creation', () => {
           : { kind: 'principalCandidates', candidates: [bindingPrincipalCandidate] };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-1', title: 'Project review' }], nextCursor: null });
       }
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingCreate) {
         throw new PluginError({ code: 'timeout', message: 'The binding create request timed out.' });
@@ -4209,11 +4451,12 @@ describe('Channels mounted binding creation', () => {
       await selectPrincipalAndOpenTarget(fixture);
       await fixture.press(await fixture.getByRole('button', { name: 'Project review' }));
       await fixture.press(await fixture.getByRole('button', { name: 'Review binding' }));
-      await fixture.press(await fixture.getByRole('button', { name: 'Create binding' }));
+      await fixture.press(await fixture.getByRole('button', { name: 'Link conversation' }));
 
       await expect(fixture.getByText('Could not confirm binding creation')).resolves.toBeDefined();
+      // The open journey carries the lock: its confirm stays disabled and no second opener appears.
       await expect(fixture.findByRole('button', {
-        name: 'Add binding',
+        name: 'Link conversation',
         state: { disabled: true },
       })).resolves.toBeDefined();
       expect(executeAction.mock.calls.filter(([request]) => (
@@ -4225,8 +4468,9 @@ describe('Channels mounted binding creation', () => {
         expect(bindingsReadCount).toBe(2);
         expect(resolveBindingsRefresh).toBeTypeOf('function');
       });
+      // The open journey carries the lock: its confirm stays disabled and no second opener appears.
       await expect(fixture.findByRole('button', {
-        name: 'Add binding',
+        name: 'Link conversation',
         state: { disabled: true },
       })).resolves.toBeDefined();
 
@@ -4363,7 +4607,7 @@ describe('Channels mounted binding editor', () => {
           input: { bindingId: 'binding-1' },
         }));
       });
-      await expect(fixture.getByRole('heading', { name: 'Edit binding' })).resolves.toBeDefined();
+      await expect(fixture.getByRole('heading', { name: 'Edit conversation' })).resolves.toBeDefined();
       await expect(fixture.getByText('provider-principal-private-4')).resolves.toBeDefined();
       await expect(fixture.getByRole('switch', {
         name: 'Allow bot senders',
@@ -4494,7 +4738,8 @@ describe('Channels mounted binding editor', () => {
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingResolve) {
         return (input as Readonly<{ kind: unknown }>).kind === 'endpoint'
           ? { kind: 'endpointCandidates', candidates: [externalEndpoint] }
-          : { kind: 'principalCandidates', candidates: [externalPrincipal] };
+          : { kind: 'principalCandidates', candidates: (input as Readonly<{ query: string }>).query === 'another reviewer'
+            ? [{ id: 'external-reviewer-8', kind: 'human', label: 'Another reviewer' }] : [externalPrincipal] };
       }
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingUpdate) {
         updateInputs.push(input);
@@ -4523,7 +4768,7 @@ describe('Channels mounted binding editor', () => {
 
     try {
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
-      await expect(fixture.getByRole('heading', { name: 'Edit binding' })).resolves.toBeDefined();
+      await expect(fixture.getByRole('heading', { name: 'Edit conversation' })).resolves.toBeDefined();
       await fixture.press(await fixture.getByRole('button', {
         name: 'Re-resolve conversation and allowed senders',
       }));
@@ -4537,10 +4782,13 @@ describe('Channels mounted binding editor', () => {
       await fixture.press(await fixture.getByRole('button', { name: externalEndpoint.label }));
       await enterTextByAccessibleLabel('People search', 'reviewer');
       await fixture.press(await fixture.getByRole('button', { name: 'Search people' }));
-      await fixture.press(await fixture.getByRole('switch', {
-        name: externalPrincipal.label,
+      await fixture.press(await fixture.getByRole('checkbox', {
+        name: `${externalPrincipal.label}: ${externalPrincipal.id}`,
         state: { checked: false },
       }));
+      await enterTextByAccessibleLabel('People search', 'another reviewer');
+      await fixture.press(await fixture.getByRole('button', { name: 'Search people' }));
+      await fixture.press(await fixture.getByRole('checkbox', { name: 'Another reviewer: external-reviewer-8', state: { checked: false } }));
       await fixture.press(await fixture.getByRole('button', {
         name: 'Use selected conversation and senders',
       }));
@@ -4563,7 +4811,7 @@ describe('Channels mounted binding editor', () => {
             },
             principalSelection: {
               query: 'reviewer',
-              selected: [{ id: 'external-reviewer-7', kind: 'human' }],
+              selected: [{ id: 'external-reviewer-7', kind: 'human' }, { id: 'external-reviewer-8', kind: 'human', query: 'another reviewer' }],
             },
           },
           allowBotSenders: false,
@@ -4682,7 +4930,7 @@ describe('Channels mounted binding editor', () => {
           : { kind: 'principalCandidates', candidates: [externalPrincipal] };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-current-8', title: 'Current session' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-current-8', title: 'Current session' }], nextCursor: null });
       }
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingUpdate) {
         updateInputs.push(input);
@@ -4698,7 +4946,7 @@ describe('Channels mounted binding editor', () => {
       surface: renderSurface,
       surfaceContext: createChannelsPageSurfaceContext(),
       subPath: 'binding-1',
-      adapter: createChannelsSemanticAdapter(),
+      adapter: createChannelsSemanticAdapter(emptyDataClient, undefined, { overlays: true }),
       handlers: {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
@@ -4715,8 +4963,8 @@ describe('Channels mounted binding editor', () => {
       await fixture.press(await fixture.getByRole('button', { name: externalEndpoint.label }));
       await enterTextByAccessibleLabel('People search', 'reviewer');
       await fixture.press(await fixture.getByRole('button', { name: 'Search people' }));
-      await fixture.press(await fixture.getByRole('switch', {
-        name: externalPrincipal.label,
+      await fixture.press(await fixture.getByRole('checkbox', {
+        name: `${externalPrincipal.label}: ${externalPrincipal.id}`,
         state: { checked: false },
       }));
       await fixture.press(await fixture.getByRole('button', {
@@ -4726,14 +4974,14 @@ describe('Channels mounted binding editor', () => {
 
     try {
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
-      await expect(fixture.getByRole('heading', { name: 'Edit binding' })).resolves.toBeDefined();
+      await expect(fixture.getByRole('heading', { name: 'Edit conversation' })).resolves.toBeDefined();
 
       // Target first: re-resolving the audience afterwards must not discard it.
       await fixture.press(await fixture.getByRole('button', { name: 'Change target' }));
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
           action: 'session.list',
-          input: { limit: 100, includeLastMessagePreview: false },
+          input: { view: 'awareness', limit: 100 },
         }));
       });
       await fixture.press(await fixture.getByRole('button', { name: 'Current session' }));
@@ -4742,14 +4990,13 @@ describe('Channels mounted binding editor', () => {
         name: 'Mirror Session',
         state: { checked: false },
       }));
-      await fixture.press(await fixture.getByRole('radio', {
-        name: 'All allowed messages',
-        state: { checked: false },
-      }));
-      await fixture.press(await fixture.getByRole('radio', {
-        name: '0.75 seconds',
-        state: { checked: false },
-      }));
+      await chooseFieldOption('Incoming messages', 'All allowed messages');
+      // Seven durations are a field that opens the shared menu.
+      await pressButtonWithAccessibleLabelFragment('Message grouping delay');
+      const delayOption = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitemradio"]'))
+        .find((candidate) => candidate.textContent?.includes('0.75 seconds'));
+      expect(delayOption).toBeDefined();
+      await act(async () => { delayOption?.click(); });
       await fixture.press(await fixture.getByRole('radio', {
         name: 'Provider default',
         state: { checked: false },
@@ -4879,7 +5126,7 @@ describe('Channels mounted binding editor', () => {
 
     try {
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
-      await expect(fixture.getByRole('heading', { name: 'Edit binding' })).resolves.toBeDefined();
+      await expect(fixture.getByRole('heading', { name: 'Edit conversation' })).resolves.toBeDefined();
 
       // The scope selector only exists once the owner turns approvals on, so
       // its absence here proves the toggle is the control, not decoration.
@@ -4977,7 +5224,7 @@ describe('Channels mounted binding editor', () => {
           : { kind: 'ready', revision: 2, binding: savedBinding };
       }
       if (action === 'session.list') {
-        return { sessions: [{ id: 'session-current-8', title: 'Current session' }], nextCursor: null };
+        return createSessionCandidatePageFixture({ sessions: [{ id: 'session-current-8', title: 'Current session' }], nextCursor: null });
       }
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingUpdate) {
         updateInputs.push(input);
@@ -5001,7 +5248,7 @@ describe('Channels mounted binding editor', () => {
 
     try {
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
-      await expect(fixture.getByRole('heading', { name: 'Edit binding' })).resolves.toBeDefined();
+      await expect(fixture.getByRole('heading', { name: 'Edit conversation' })).resolves.toBeDefined();
       await fixture.press(await fixture.getByRole('button', { name: 'Change target' }));
       await fixture.press(await fixture.getByRole('button', { name: 'Current session' }));
       await fixture.press(await fixture.getByRole('button', { name: 'Review changes' }));
@@ -5090,7 +5337,7 @@ describe('Channels mounted binding editor', () => {
 
     try {
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
-      await expect(fixture.getByRole('heading', { name: 'Edit binding' })).resolves.toBeDefined();
+      await expect(fixture.getByRole('heading', { name: 'Edit conversation' })).resolves.toBeDefined();
       await fixture.press(await fixture.getByRole('button', { name: 'Review changes' }));
       await fixture.press(await fixture.getByRole('button', { name: 'Save binding' }));
 
@@ -5189,7 +5436,7 @@ describe('Channels mounted binding editor', () => {
 
     try {
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
-      await expect(fixture.getByRole('heading', { name: 'Edit binding' })).resolves.toBeDefined();
+      await expect(fixture.getByRole('heading', { name: 'Edit conversation' })).resolves.toBeDefined();
       await fixture.press(await fixture.getByRole('switch', {
         name: 'Enable this binding',
         state: { checked: true },
@@ -5289,7 +5536,7 @@ describe('Channels mounted binding editor', () => {
 
     try {
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
-      await expect(fixture.getByRole('heading', { name: 'Edit binding' })).resolves.toBeDefined();
+      await expect(fixture.getByRole('heading', { name: 'Edit conversation' })).resolves.toBeDefined();
       await fixture.press(await fixture.getByRole('button', { name: 'Review changes' }));
       await fixture.press(await fixture.getByRole('button', { name: 'Save binding' }));
 
@@ -5390,8 +5637,9 @@ describe('Channels mounted binding editor', () => {
 
     try {
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
+      // The editing state announces itself by its page title.
       const heading = Array.from(document.querySelectorAll<HTMLElement>('[role="heading"]')).find((node) => (
-        node.textContent === 'Edit binding'
+        node.textContent === 'Edit conversation'
       ));
       expect(heading).toBeDefined();
       expect(document.activeElement).toBe(heading);
@@ -5425,7 +5673,12 @@ describe('Channels thread router conversation', () => {
         {
           id: 'route-intake',
           when: { group: 'sales', forwarded: true as const },
-          recipe: { agentId: 'claude', directory: '/srv/wilson/intake', unlistedTools: 'deny', allowedTools: ['mcp__wilson-intake__*'] },
+          recipe: {
+            agentTarget: { kind: 'agent', identity: { pluginId: 'happier.claude', localId: 'claude' } },
+            directory: { kind: 'path', path: '/srv/wilson/intake' },
+            unlistedTools: 'deny',
+            allowedTools: ['mcp__wilson-intake__*'],
+          },
           policy: {
             deliveryMode: 'repliesOnly' as const,
             permissionCeiling: 'read-only',
@@ -5436,7 +5689,10 @@ describe('Channels thread router conversation', () => {
         {
           id: 'route-conversation',
           when: { group: 'any', forwarded: 'any' as const },
-          recipe: { agentId: 'claude', directory: '/srv/wilson/conversation' },
+          recipe: {
+            agentTarget: { kind: 'agent', identity: { pluginId: 'happier.claude', localId: 'claude' } },
+            directory: { kind: 'path', path: '/srv/wilson/conversation' },
+          },
           policy: {
             deliveryMode: 'repliesOnly' as const,
             permissionCeiling: 'read-only',
@@ -5482,17 +5738,52 @@ describe('Channels thread router conversation', () => {
       approval: { kind: 'off' },
       enabled: true,
       deletionState: 'none',
+    }, {
+      // A thread started before providers sent a label: its Session title names it.
+      bindingId: 'thread-2',
+      parentBindingId: 'router-1',
+      revision: 1,
+      connectionId: 'connection-1',
+      endpoint: { audience: 'shared' },
+      target: { kind: 'session', summary: 'session-thread-2' },
+      inputMode: 'allAllowedMessages',
+      deliveryMode: 'repliesOnly',
+      approval: { kind: 'off' },
+      enabled: true,
+      deletionState: 'none',
     }],
   }, 'b');
+  const routerThreadSessions: Readonly<Record<string, SessionStateV1>> = {
+    'session-thread-2': {
+      sessionId: 'session-thread-2', title: 'Rendez-vous showroom Morges',
+      lifecycle: 'active', runtime: 'working', operational: 'working', pendingPermissions: [],
+      workStatus: { bucket: 'needs_you', tone: 'attention', word: 'Needs you' },
+    },
+  };
 
   it('shows the routes and started threads, and saves a reordered route list through the guarded update', async () => {
     const readReply = ConversationBindingReadResultV1Schema.parse({
       kind: 'ready', revision: 1, binding: routerBinding,
     });
+    // Each started thread's own detail names the person who wrote in.
+    const threadReply = (id: string, sender: string) => ConversationBindingReadResultV1Schema.parse({
+      kind: 'ready',
+      revision: 1,
+      binding: {
+        ...routerBinding,
+        id,
+        endpoint: { kind: 'thread' as const, audience: 'shared' as const, id: `${id}@batiplus.ch` },
+        target: { kind: 'session' as const, sessionId: `session-${id}`, policy: routerBinding.target.routes[0]!.policy },
+        allowedPrincipalIds: [sender],
+      },
+    });
     const updateInputs: unknown[] = [];
     let readCount = 0;
     const executeAction = vi.fn(async ({ action, input }: PluginUiTestkitExecuteActionInput): Promise<JsonValue> => {
       if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingRead) {
+        const bindingId = (input as Readonly<{ bindingId: string }>).bindingId;
+        if (bindingId === 'thread-1') return threadReply('thread-1', 'anna@batiplus.ch');
+        if (bindingId === 'thread-2') return threadReply('thread-2', 'leeroy@batiplus.ch');
         expect(input).toEqual({ bindingId: 'router-1' });
         readCount += 1;
         return { ...readReply, revision: readCount > 2 ? 2 : 1 };
@@ -5514,6 +5805,7 @@ describe('Channels thread router conversation', () => {
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
         executeAction,
         readResource: bindingResourceReader(() => routerBindingsResource),
+        readSession: ({ sessionId }) => routerThreadSessions[sessionId] ?? null,
       },
     });
 
@@ -5521,9 +5813,26 @@ describe('Channels thread router conversation', () => {
       await vi.waitFor(async () => {
         await expect(fixture.getByText('1. People in sales, forwarded mail')).resolves.toBeDefined();
       });
-      await expect(fixture.getByText('claude · intake · only 1 listed tools')).resolves.toBeDefined();
+      // The recipe is read in the Session spawn shape, not as raw ids.
+      expect(document.body.textContent).toContain('intake · Only 1 tool');
+      expect(document.body.textContent).not.toContain('listed tools');
       await expect(fixture.getByText('Devis chantier Lausanne')).resolves.toBeDefined();
+      // An unlabeled thread is named by its Session and shows its work state.
+      await vi.waitFor(async () => {
+        await expect(fixture.getByText('Rendez-vous showroom Morges')).resolves.toBeDefined();
+      });
+      await expect(fixture.getByText('Needs you')).resolves.toBeDefined();
+      await expect(fixture.queryByText('External conversation')).resolves.toBeUndefined();
       await expect(fixture.queryByText('threadRouter')).resolves.toBeUndefined();
+      // Threads tell apart by who wrote in and by which sender group; the
+      // header says who can reach the router instead of "Only you".
+      await vi.waitFor(async () => {
+        await expect(fixture.getByText('anna@batiplus.ch · sales')).resolves.toBeDefined();
+        await expect(fixture.getByText('leeroy@batiplus.ch · brief')).resolves.toBeDefined();
+      });
+      expect(document.body.textContent).toContain('Senders in sales and brief');
+      expect(document.body.textContent).toContain('2 threads');
+      expect(document.body.textContent).not.toContain('Only you');
 
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
       await expect(fixture.findByRole('heading', { name: 'Routes' })).resolves.toBeDefined();
@@ -5543,7 +5852,139 @@ describe('Channels thread router conversation', () => {
     }
   });
 
+  it('reports a started conversation as queued until its custody says delivered, and pages reply sessions (REV-C-06/07)', async () => {
+    const custodyId = 'e'.repeat(43);
+    const readReply = ConversationBindingReadResultV1Schema.parse({
+      kind: 'ready', revision: 1, binding: routerBinding,
+    });
+    const startInputs: unknown[] = [];
+    const sessionListInputs: unknown[] = [];
+    let deliveryOutcome: 'pending' | 'delivered' = 'pending';
+    const executeAction = vi.fn(async ({ action, input }: PluginUiTestkitExecuteActionInput): Promise<JsonValue> => {
+      if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingRead) return readReply;
+      if (action === 'session.list') {
+        sessionListInputs.push(input);
+        const cursor = (input as Readonly<{ cursor?: string }>).cursor;
+        return createSessionCandidatePageFixture(cursor === undefined
+          ? { sessions: [{ id: 'session-recent', title: 'Brief du matin' }], nextCursor: 'page-2' }
+          : { sessions: [{ id: 'session-older', title: 'Wilson questions' }] });
+      }
+      if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.conversationStart) {
+        startInputs.push(input);
+        return { kind: 'accepted', custodyId };
+      }
+      if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.deliveryRead) {
+        expect(input).toEqual({ custodyId });
+        return {
+          kind: 'ready',
+          delivery: {
+            custodyId, revision: 1, connectionId: 'connection-1', bindingId: 'router-1',
+            state: deliveryOutcome === 'delivered' ? 'delivered' : 'ready',
+            projection: { terminal: deliveryOutcome === 'delivered', attention: false },
+            lastOutcome: deliveryOutcome,
+          },
+        };
+      }
+      throw new Error(`Unexpected mounted Action: ${String(action)}`);
+    });
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'fixture-router-start', mountNonce: 'fixture-router-start' },
+      authorPlugin: { id: 'happier.channels', version: '0.0.0' },
+      surface: renderSurface,
+      surfaceContext: createChannelsPageSurfaceContext(),
+      subPath: 'router-1',
+      adapter: createChannelsSemanticAdapter(),
+      handlers: {
+        selectActionInput: async () => ({ kind: 'cancelled' as const }),
+        executeAction,
+        readResource: bindingResourceReader(() => routerBindingsResource),
+      },
+    });
+
+    try {
+      await vi.waitFor(async () => {
+        await expect(fixture.getByText('1. People in sales, forwarded mail')).resolves.toBeDefined();
+      });
+      await fixture.press(await fixture.getByRole('button', { name: 'Start a conversation' }));
+      await vi.waitFor(() => {
+        expect(document.querySelector('[data-testid="channels-router-start-sessions-more"]')).not.toBeNull();
+      });
+      await pressByTestId('channels-router-start-sessions-more');
+      await vi.waitFor(() => {
+        expect(sessionListInputs).toHaveLength(2);
+      });
+      expect(sessionListInputs[1]).toMatchObject({ cursor: 'page-2' });
+      await vi.waitFor(() => {
+        expect(document.querySelector('[data-testid="channels-router-start-sessions-more"]')).toBeNull();
+      });
+
+      await enterTextByAccessibleLabel('Subject', 'Brief du matin');
+      const messageField = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]');
+      expect(messageField).not.toBeNull();
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(messageField, 'Voici le brief.');
+        messageField?.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      await pressByTestId('channels-router-start-send');
+      await vi.waitFor(() => {
+        expect(startInputs).toHaveLength(1);
+      });
+      expect(startInputs[0]).toMatchObject({
+        routerBindingId: 'router-1', audienceGroupId: 'sales', subject: 'Brief du matin',
+        content: { text: 'Voici le brief.' }, sessionId: 'session-recent',
+      });
+      // Custody acceptance is not delivery.
+      await vi.waitFor(async () => {
+        await expect(fixture.getByText('Queued. It is sent as soon as the bot can reach the mailbox.')).resolves.toBeDefined();
+      });
+      await expect(fixture.queryByText('Sent. Replies come back to the session you chose.')).resolves.toBeUndefined();
+
+      deliveryOutcome = 'delivered';
+      await pressByTestId('channels-router-start-status-refresh');
+      await vi.waitFor(async () => {
+        await expect(fixture.getByText('Sent. Replies come back to the session you chose.')).resolves.toBeDefined();
+      });
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it('shows the typed custody refusal returned by the start Action', async () => {
+    const message = 'The conversation start could not enter delivery custody. (invalidRow)';
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'fixture-router-start-refusal', mountNonce: 'fixture-router-start-refusal' },
+      authorPlugin: { id: 'happier.channels', version: '0.0.0' }, surface: renderSurface,
+      surfaceContext: createChannelsPageSurfaceContext(), subPath: 'router-1', adapter: createChannelsSemanticAdapter(),
+      handlers: {
+        executeAction: async ({ action }) => {
+          if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingRead) return ConversationBindingReadResultV1Schema.parse({ kind: 'ready', revision: 1, binding: routerBinding });
+          if (action === 'session.list') return createSessionCandidatePageFixture({ sessions: [{ id: 'session-recent', title: 'Brief du matin' }] });
+          if (action === CONVERSATION_MANAGEMENT_ACTION_IDS_V1.conversationStart) throw new PluginError({
+            code: 'channels_conversation_start_invalid', message, details: { reason: 'invalidRow' },
+          });
+          throw new Error(`Unexpected mounted Action: ${String(action)}`);
+        },
+        readResource: bindingResourceReader(() => routerBindingsResource),
+      },
+    });
+    try {
+      await fixture.press(await fixture.findByRole('button', { name: 'Start a conversation' }));
+      await enterTextByAccessibleLabel('Subject', 'Brief du matin');
+      const field = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]');
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(field, 'Voici le brief.');
+        field?.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('[data-testid="channels-router-start-send"]')?.disabled).toBe(false));
+      await pressByTestId('channels-router-start-send');
+      await vi.waitFor(async () => { await expect(fixture.getByText(message)).resolves.toBeDefined(); });
+      // A post-write decode failure cannot establish that no effect exists.
+      await expect(fixture.getByText('It is not yet known whether the message was sent. Check the bot’s delivery attention before sending again.')).resolves.toBeDefined();
+    } finally { await fixture.dispose(); }
+  });
+
   it('seeds the current route recipe through the host selector and saves its strict edited settlement', async () => {
+    type ServerStartDraft = Extract<SelectActionInputResult, { kind: 'serverStartDraft' }>['draft'];
     const recipe = {
       executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
       directory: { kind: 'path', path: '/srv/wilson/intake' },
@@ -5552,8 +5993,8 @@ describe('Channels thread router conversation', () => {
       organizationPlacement: { folderId: 'intake', tagIds: ['email'] },
       capabilitySelection: { mcp: { v: 1, managedServersEnabled: false,
         forceIncludeServerIds: ['wilson-intake'], forceExcludeServerIds: [] } },
-    };
-    const editedRecipe = { ...recipe, directory: { kind: 'path', path: '/srv/edited' } };
+    } satisfies ServerStartDraft;
+    const editedRecipe = { ...recipe, directory: { kind: 'path', path: '/srv/edited' } } satisfies ServerStartDraft;
     const readReply = ConversationBindingReadResultV1Schema.parse({ kind: 'ready', revision: 1,
       binding: { ...routerBinding, target: { ...routerBinding.target,
         routes: [{ ...routerBinding.target.routes[0], recipe }] } } });
@@ -5728,9 +6169,6 @@ describe('Channels binding deletion presentation', () => {
 
     try {
       await fixture.press(await fixture.getByRole('button', { name: 'Unlink…' }));
-      expect(executeAction).not.toHaveBeenCalled();
-      await expect(fixture.getByText('Unlink this conversation?')).resolves.toBeDefined();
-      await fixture.press(await fixture.getByRole('button', { name: 'Unlink' }));
 
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
@@ -5778,9 +6216,6 @@ describe('Channels binding deletion presentation', () => {
 
     try {
       await fixture.press(await fixture.getByRole('button', { name: 'Unlink…' }));
-      expect(executeAction).not.toHaveBeenCalled();
-      await expect(fixture.getByText('Unlink this conversation?')).resolves.toBeDefined();
-      await fixture.press(await fixture.getByRole('button', { name: 'Unlink' }));
       await expect(fixture.getByText('Could not confirm binding deletion')).resolves.toBeDefined();
       await expect(fixture.findByRole('button', {
         name: 'Unlink…',
@@ -6076,6 +6511,50 @@ describe('Channels connection policy editing across a source change', () => {
 });
 
 describe('Channels connection lifecycle actions', () => {
+  it('explains a poll caller refusal and preserves the actionable connection-test error', async () => {
+    const connectionResource = JSON.parse(new TextDecoder().decode(connectionsResourceForTransport('checkpointedPull').bytes));
+    connectionResource.connections[0].attention.pollFailure = {
+      phase: 'blocked', attemptCount: 1, retryNotBeforeMs: null,
+      evidence: { kind: 'action', code: 'plugin_action_caller_unavailable' },
+    };
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'caller-refusal', mountNonce: 'caller-refusal-mount' },
+      authorPlugin: { id: 'happier.channels', version: '0.0.0' },
+      surface: renderSurface,
+      surfaceContext: createChannelsSurfaceContext(),
+      adapter: createChannelsSemanticAdapter(),
+      handlers: {
+        selectActionInput: async () => ({ kind: 'cancelled' as const }),
+        executeAction: async () => {
+          throw new PluginError({
+            code: 'plugin_action_caller_unavailable',
+            message: 'Reload the integration on the selected machine, then try again.',
+          });
+        },
+        readResource: async ({ resource }) => resourceFixtureLocalId(resource) === CONNECTIONS_RESOURCE.localId
+          ? jsonResource(connectionResource, '4')
+          : bindingsResource,
+      },
+    });
+    try {
+      await pressByTestId('channels-connection-connection-1');
+      expect(document.querySelector('[data-testid="channels-poll-blocked-disclosure"]')?.textContent)
+        .toContain('Reload the integration on the selected machine, then retry polling.');
+      await fixture.press(await fixture.getByRole('button', { name: 'Test connection' }));
+      await vi.waitFor(() => {
+        expect(document.querySelector('[data-testid="channels-connection-retest-error"]')?.textContent)
+          .toContain('Reload the integration on the selected machine, then try again.');
+      });
+      await fixture.press(await fixture.getByRole('button', { name: 'Retry polling' }));
+      await vi.waitFor(() => {
+        expect(document.querySelector('[data-testid="channels-poll-retry-error"]')?.textContent)
+          .toContain('Reload the integration on the selected machine, then try again.');
+      });
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   it('makes an occurrence conflict terminal over an older blocked poll and leaves deletion as the available exit', async () => {
     const resource = connectionsResourceWithIngressConflict();
     const executeAction = vi.fn(async () => {
@@ -6931,9 +7410,6 @@ describe('Channels connection lifecycle actions', () => {
       await pressButtonWithAccessibleLabelFragment('Example conversation');
 
       await pressByTestId('channels-connection-delete');
-      expect(executeAction).not.toHaveBeenCalled();
-      await expect(fixture.getByText('Delete this connection?')).resolves.toBeDefined();
-      await fixture.press(await fixture.getByRole('button', { name: 'Confirm deletion' }));
 
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
@@ -6949,7 +7425,7 @@ describe('Channels connection lifecycle actions', () => {
     }
   });
 
-  it('requires explicit confirmation to accept a history baseline, returns Cancel focus, and rereads the cleared gap', async () => {
+  it('accepts a history baseline through the shared Action and rereads the cleared gap', async () => {
     const firstGap = connectionsResourceWithHistoryGap({
       revision: 4,
       authorityEpoch: 2,
@@ -7007,33 +7483,18 @@ describe('Channels connection lifecycle actions', () => {
     try {
       await pressButtonWithAccessibleLabelFragment('Example conversation');
       await fixture.press(await fixture.getByRole('button', { name: 'Accept new history baseline' }));
-      expect(executeAction).not.toHaveBeenCalled();
-      const confirm = document.querySelector<HTMLElement>('[data-testid="channels-history-gap-baseline-confirm"]');
-      expect(confirm).not.toBeNull();
-      expect(document.activeElement).toBe(confirm);
-
-      await fixture.press(await fixture.getByRole('button', { name: 'Cancel' }));
-      const opener = document.querySelector<HTMLElement>('[data-testid="channels-history-gap-baseline-accept"]');
-      expect(opener).not.toBeNull();
-      expect(document.activeElement).toBe(opener);
-      expect(executeAction).not.toHaveBeenCalled();
-      expect(focusTarget).toHaveBeenCalledTimes(2);
-
-      await fixture.press(await fixture.getByRole('button', { name: 'Accept new history baseline' }));
-      await fixture.press(await fixture.getByRole('button', { name: 'Confirm new history baseline' }));
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledTimes(1);
         expect(connectionReads).toBeGreaterThanOrEqual(2);
       });
       await expect(fixture.queryByRole('button', { name: 'Accept new history baseline' })).resolves.toBeUndefined();
       expect(document.querySelector('[data-testid="channels-history-gap-disclosure"]')).toBeNull();
-      expect(focusTarget).toHaveBeenCalled();
     } finally {
       await fixture.dispose();
     }
   });
 
-  it('replaces a stale history-gap confirmation with the current Resource revision before dispatch', async () => {
+  it('uses the refreshed history-gap Resource revision for the next shared Action', async () => {
     let current = connectionsResourceWithHistoryGap({
       revision: 4,
       authorityEpoch: 2,
@@ -7066,8 +7527,6 @@ describe('Channels connection lifecycle actions', () => {
 
     try {
       await pressButtonWithAccessibleLabelFragment('Example conversation');
-      await fixture.press(await fixture.getByRole('button', { name: 'Accept new history baseline' }));
-      expect(executeAction).not.toHaveBeenCalled();
       current = connectionsResourceWithHistoryGap({
         revision: 5,
         authorityEpoch: 3,
@@ -7076,11 +7535,9 @@ describe('Channels connection lifecycle actions', () => {
         digestDigit: 'f',
       });
       await pressByTestId('channels-detail-resource-refresh');
-      await expect(fixture.queryByRole('button', { name: 'Confirm new history baseline' })).resolves.toBeUndefined();
       expect(executeAction).not.toHaveBeenCalled();
 
       await fixture.press(await fixture.getByRole('button', { name: 'Accept new history baseline' }));
-      await fixture.press(await fixture.getByRole('button', { name: 'Confirm new history baseline' }));
       await vi.waitFor(() => expect(executeAction).toHaveBeenCalledTimes(1));
       expect(executeAction.mock.calls[0]?.[0].action)
         .toBe(CONVERSATION_MANAGEMENT_ACTION_IDS_V1.streamBaselineAccept);
@@ -7133,7 +7590,6 @@ describe('Channels connection lifecycle actions', () => {
     try {
       await pressButtonWithAccessibleLabelFragment('Example conversation');
       await fixture.press(await fixture.getByRole('button', { name: 'Accept new history baseline' }));
-      await fixture.press(await fixture.getByRole('button', { name: 'Confirm new history baseline' }));
       await expect(fixture.getByText('Could not confirm the history baseline request')).resolves.toBeDefined();
       await expect(fixture.findByRole('button', {
         name: 'Accept new history baseline',
@@ -7196,9 +7652,6 @@ describe('Channels connection lifecycle actions', () => {
       expect(document.querySelector('[data-testid="channels-old-transport-stop-unconfirmed"]')).not.toBeNull();
       expect(document.querySelector('[data-testid="channels-connection-delete"]')).toBeNull();
       await pressByTestId('channels-connection-accept-loss');
-      expect(executeAction).not.toHaveBeenCalled();
-      await expect(fixture.getByText('Accept possible loss?')).resolves.toBeDefined();
-      await fixture.press(await fixture.getByRole('button', { name: 'Confirm accepting possible loss' }));
 
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
@@ -7312,9 +7765,6 @@ describe('Channels connection lifecycle actions', () => {
       expect(document.querySelector('[data-testid="channels-connection-accept-loss"]')).toBeNull();
       expect(document.querySelector('[data-testid="channels-connection-delete"]')).not.toBeNull();
       await pressByTestId('channels-connection-delete');
-      expect(executeAction).not.toHaveBeenCalled();
-      await expect(fixture.getByText('Delete this connection?')).resolves.toBeDefined();
-      await fixture.press(await fixture.getByRole('button', { name: 'Confirm deletion' }));
 
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
@@ -7331,87 +7781,51 @@ describe('Channels connection lifecycle actions', () => {
   });
 });
 
-describe('Channels destructive confirmation focus', () => {
-  it('moves focus into the binding delete confirmation and returns it to the opener on Cancel', async () => {
-    const executeAction = vi.fn(async ({ action }: PluginUiTestkitExecuteActionInput) => {
-      throw new Error(`Unexpected mounted Action: ${String(action)}`);
-    });
+describe('Channels offline Account-local binding policy', () => {
+  it.each([false, true])('explains unavailable linking and keeps Account conversations reachable (Resource method installed: %s)', async (resourceMethodInstalled) => {
+    const account = createOfflineChannelStateFixture();
+    const openedSurfaces: string[] = [];
+    const unavailableMessage = 'NLDW6-3-11-20 · f759 is unavailable for this operation.';
     const fixture = await createPluginUiTestkit({
-      identity: { instanceId: 'fixture-instance-134', mountNonce: 'fixture-mount-134' },
+      identity: { instanceId: 'channels-offline-link', mountNonce: 'channels-offline-link' },
       authorPlugin: { id: 'happier.channels', version: '0.0.0' },
       surface: renderSurface,
       surfaceContext: createChannelsPageSurfaceContext(),
-      subPath: 'binding-1',
-      adapter: createChannelsSemanticAdapter(emptyDataClient, focusTransferPresentationHost()),
+      subPath: 'link',
+      adapter: createChannelsSemanticAdapter(account.dataClient),
       handlers: {
-        selectActionInput: async () => ({ kind: 'cancelled' as const }),
-        executeAction,
-        readResource: bindingResourceReader(),
+        ...(resourceMethodInstalled ? { readResource: async () => {
+          throw new PluginError({ code: 'unavailable', message: unavailableMessage, retryable: false,
+            diagnostics: [{ code: 'host_api_method_unavailable:readResource', severity: 'error' }] });
+        } } : {}),
+        openSurface: ({ subPath }) => { openedSurfaces.push(subPath ?? ''); },
       },
     });
-
     try {
-      await fixture.press(await fixture.getByRole('button', { name: 'Unlink…' }));
-      const confirm = document.querySelector<HTMLElement>('[data-testid="channels-binding-delete-confirm-binding-1"]');
-      expect(confirm).not.toBeNull();
-      expect(document.activeElement).toBe(confirm);
-
-      await fixture.press(await fixture.getByRole('button', { name: 'Cancel' }));
-      const opener = document.querySelector<HTMLElement>('[data-testid="channels-binding-delete-binding-1"]');
-      expect(opener).not.toBeNull();
-      expect(document.activeElement).toBe(opener);
-      expect(executeAction).not.toHaveBeenCalled();
-    } finally {
-      await fixture.dispose();
-    }
+      await vi.waitFor(() => expect(document.querySelector('[data-testid="channels-link-unavailable"]')).not.toBeNull());
+      if (resourceMethodInstalled) await expect(fixture.getByText(unavailableMessage)).resolves.toBeDefined();
+      await fixture.press(await fixture.getByRole('button', { name: 'Show all conversations' }));
+      expect(openedSurfaces).toEqual(['']);
+      expect(account.collection.batches).toHaveLength(0);
+    } finally { await fixture.dispose(); }
   });
 
-  it('moves focus into the connection delete confirmation and returns it to the opener on Cancel', async () => {
-    const executeAction = vi.fn(async ({ action }: PluginUiTestkitExecuteActionInput) => {
-      throw new Error(`Unexpected mounted Action: ${String(action)}`);
-    });
-    const fixture = await createPluginUiTestkit({
-      identity: { instanceId: 'fixture-instance-135', mountNonce: 'fixture-mount-135' },
-      authorPlugin: { id: 'happier.channels', version: '0.0.0' },
-      surface: renderSurface,
-      surfaceContext: createChannelsSurfaceContext(),
-      adapter: createChannelsSemanticAdapter(emptyDataClient, focusTransferPresentationHost()),
-      handlers: {
-        selectActionInput: async () => ({ kind: 'cancelled' as const }),
-        executeAction,
-        readResource: bindingResourceReader(),
-      },
-    });
-
-    try {
-      await pressButtonWithAccessibleLabelFragment('Example conversation');
-      await pressByTestId('channels-connection-delete');
-      const confirm = document.querySelector<HTMLElement>('[data-testid="channels-connection-delete-confirm"]');
-      expect(confirm).not.toBeNull();
-      expect(document.activeElement).toBe(confirm);
-
-      await fixture.press(await fixture.getByRole('button', { name: 'Cancel' }));
-      const opener = document.querySelector<HTMLElement>('[data-testid="channels-connection-delete"]');
-      expect(opener).not.toBeNull();
-      expect(document.activeElement).toBe(opener);
-      expect(executeAction).not.toHaveBeenCalled();
-    } finally {
-      await fixture.dispose();
-    }
-  });
-});
-
-describe('Channels offline Account-local binding policy', () => {
   it('edits the Account-decidable binding policy through the shared transition and CAS owner without a daemon', async () => {
     const account = createOfflineChannelStateFixture();
+    const decisions: unknown[] = [];
+    let answer: ((accepted: boolean) => void) | undefined;
     const fixture = await createPluginUiTestkit({
       identity: { instanceId: 'fixture-instance-136', mountNonce: 'fixture-mount-136' },
       authorPlugin: { id: 'happier.channels', version: '0.0.0' },
       surface: renderSurface,
       surfaceContext: createChannelsPageSurfaceContext(),
       subPath: 'binding-1',
-      adapter: createChannelsSemanticAdapter(account.dataClient),
+      adapter: createChannelsSemanticAdapter(account.dataClient, undefined, { overlays: true }),
       handlers: {
+        confirm: async request => {
+          decisions.push(request);
+          return await new Promise<boolean>(resolve => { answer = resolve; });
+        },
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
       },
     });
@@ -7421,10 +7835,7 @@ describe('Channels offline Account-local binding policy', () => {
       // before any assertion about what the surface offers to edit.
       await expect(fixture.getByRole('button', { name: 'Turn on' })).resolves.toBeDefined();
       await fixture.press(await fixture.getByRole('button', { name: 'Edit binding' }));
-      await fixture.press(await fixture.getByRole('radio', {
-        name: 'Direct mentions only',
-        state: { checked: false },
-      }));
+      await chooseFieldOption('Incoming messages', 'Direct mentions only');
       await fixture.press(await fixture.getByRole('radio', {
         name: 'Eligible refusals',
         state: { checked: false },
@@ -7433,11 +7844,14 @@ describe('Channels offline Account-local binding policy', () => {
         name: 'Allow bot senders',
         state: { checked: false },
       }));
-      // Admitting bot senders widens the binding's authority, so the shared
-      // authority comparison routes the save through the same confirmation
-      // boundary the daemon-backed editor uses.
-      await fixture.press(await fixture.getByRole('button', { name: 'Review changes' }));
       await fixture.press(await fixture.getByRole('button', { name: 'Save binding' }));
+      await vi.waitFor(() => expect(decisions).toHaveLength(1));
+      expect(account.collection.batches).toHaveLength(0);
+      await act(async () => { answer?.(false); });
+      expect(account.collection.batches).toHaveLength(0);
+      await fixture.press(await fixture.getByRole('button', { name: 'Save binding' }));
+      await vi.waitFor(() => expect(decisions).toHaveLength(2));
+      await act(async () => { answer?.(true); });
 
       await vi.waitFor(() => {
         expect(account.collection.batches).toHaveLength(1);
@@ -7574,6 +7988,7 @@ describe('Channels offline Account-local binding policy', () => {
       subPath: 'binding-1',
       adapter: createChannelsSemanticAdapter(account.dataClient),
       handlers: {
+        confirm: async () => true,
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
       },
     });
@@ -7590,10 +8005,7 @@ describe('Channels offline Account-local binding policy', () => {
         name: 'Mirror Session',
         state: { checked: false },
       }));
-      // Mirroring the whole Session outward widens the binding's authority, so
-      // the shared confirmation boundary (with the execution machine fact)
-      // comes before the save.
-      await fixture.press(await fixture.getByRole('button', { name: 'Review changes' }));
+      // Consequences stay visible in the editor; the Action policy admits Save.
       expect(document.body.textContent).toContain('machine-1');
       expect(document.body.textContent).toContain('Session delivery');
       await fixture.press(await fixture.getByRole('button', { name: 'Save binding' }));
@@ -7647,6 +8059,7 @@ describe('Channels offline Account-local binding policy', () => {
       subPath: 'binding-1',
       adapter: createChannelsSemanticAdapter(account.dataClient),
       handlers: {
+        confirm: async () => true,
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
       },
     });
@@ -7695,8 +8108,9 @@ describe('Channels offline Account-local binding policy', () => {
       surface: renderSurface,
       surfaceContext: createChannelsPageSurfaceContext(),
       subPath: 'binding-1',
-      adapter: createChannelsSemanticAdapter(account.dataClient),
+      adapter: createChannelsSemanticAdapter(account.dataClient, undefined, { overlays: true }),
       handlers: {
+        confirm: async () => true,
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
       },
     });
@@ -7707,10 +8121,7 @@ describe('Channels offline Account-local binding policy', () => {
         code: 'plugin_collection_cancelled',
         message: 'The binding policy write was cancelled after it crossed the mutation boundary.',
       });
-      await fixture.press(await fixture.getByRole('radio', {
-        name: 'Direct mentions only',
-        state: { checked: false },
-      }));
+      await chooseFieldOption('Incoming messages', 'Direct mentions only');
       await fixture.press(await fixture.getByRole('button', { name: 'Save binding' }));
 
       await vi.waitFor(() => {
@@ -7728,10 +8139,7 @@ describe('Channels offline Account-local binding policy', () => {
       });
       // The draft survives the reconciling reread, exactly as the daemon-backed
       // editor promises, and the next write is admitted against the reread row.
-      await expect(fixture.getByRole('radio', {
-        name: 'Direct mentions only',
-        state: { checked: true },
-      })).resolves.toBeDefined();
+      expectFieldValue('Incoming messages', 'Direct mentions only');
 
       await fixture.press(await fixture.getByRole('button', { name: 'Save binding' }));
       await vi.waitFor(() => {
@@ -7754,8 +8162,9 @@ describe('Channels offline Account-local binding policy', () => {
       surface: renderSurface,
       surfaceContext: createChannelsPageSurfaceContext(),
       subPath: 'binding-1',
-      adapter: createChannelsSemanticAdapter(account.dataClient),
+      adapter: createChannelsSemanticAdapter(account.dataClient, undefined, { overlays: true }),
       handlers: {
+        confirm: async () => true,
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
       },
     });
@@ -7766,10 +8175,7 @@ describe('Channels offline Account-local binding policy', () => {
         code: 'plugin_collection_cancelled',
         message: 'The binding policy write was cancelled after it crossed the mutation boundary.',
       });
-      await fixture.press(await fixture.getByRole('radio', {
-        name: 'Direct mentions only',
-        state: { checked: false },
-      }));
+      await chooseFieldOption('Incoming messages', 'Direct mentions only');
       await fixture.press(await fixture.getByRole('button', { name: 'Save binding' }));
 
       await vi.waitFor(() => {
@@ -7807,10 +8213,7 @@ describe('Channels offline Account-local binding policy', () => {
         expect(document.querySelector('[data-testid="channels-account-local-binding-outcome-unknown"]'))
           .toBeNull();
       });
-      await expect(fixture.getByRole('radio', {
-        name: 'Direct mentions only',
-        state: { checked: true },
-      })).resolves.toBeDefined();
+      expectFieldValue('Incoming messages', 'Direct mentions only');
     } finally {
       await fixture.dispose();
     }
@@ -7862,6 +8265,7 @@ describe('Channels offline Account-local sender revocation', () => {
       subPath: 'binding-1',
       adapter: createChannelsSemanticAdapter(account.dataClient),
       handlers: {
+        confirm: async () => true,
         selectActionInput: async () => ({ kind: 'cancelled' as const }),
       },
     });
@@ -7961,15 +8365,17 @@ describe('Channels Session destination', () => {
   async function mountSessionDestination(
     sessionConversations: ResourceContent | 'unavailable',
     openSurface?: (view: unknown) => Promise<void>,
+    executeAction?: PluginUiHostApi['executeAction'],
   ) {
     const surface = createSessionConversationsContext('session-under-test');
     const baseHostApi = createHostApiStub(surface);
     const hostApi = createHostApiStub(surface, {
       version: () => ({
         ...baseHostApi.version(),
-        methods: ['readResource', 'openSurface'],
+        methods: ['readResource', 'openSurface', ...(executeAction === undefined ? [] : ['executeAction' as const])],
       }),
       ...(openSurface === undefined ? {} : { openSurface: openSurface as never }),
+      ...(executeAction === undefined ? {} : { executeAction }),
       readResource: async (resource) => {
         const localId = resourceFixtureLocalId(resource);
         if (localId === 'session-conversations-v1') {
@@ -7994,6 +8400,25 @@ describe('Channels Session destination', () => {
     const entry = renderSurface(context) as ReactElement<{ dataClient?: PluginUiDataClient }>;
     return await mountThroughReactNativeWebAsync(cloneElement(entry, { dataClient: emptyDataClient }));
   }
+
+  it('keeps the Session conversation unchanged and quiet on host confirmation decline, but shows authorization denial', async () => {
+    const refusals = [
+      Object.assign(new Error('denied'), { code: 'denied', diagnostics: ['plugin_action_current_intent_rejected'] }),
+      Object.assign(new Error('denied'), { code: 'denied', diagnostics: ['plugin_action_scope_denied'] }),
+    ];
+    const executeAction = vi.fn(async () => { throw refusals.shift(); });
+    const mount = await mountSessionDestination(sessionConversationsResource, undefined, executeAction);
+    try {
+      await vi.waitFor(() => expect(mount.container.querySelector('[data-testid="channels-session-conversation:binding-session-1"]')).not.toBeNull());
+      await act(async () => { mount.container.querySelector<HTMLElement>('[data-testid="channels-session-conversation:binding-session-1"]')?.click(); });
+      await act(async () => { mount.container.querySelector<HTMLElement>('[data-testid="channels-session-conversation-unlink:binding-session-1"]')?.click(); });
+      await vi.waitFor(() => expect(executeAction).toHaveBeenCalledTimes(1));
+      expect(mount.container.textContent).not.toContain('That didn’t go through');
+      expect(mount.container.querySelector('[data-testid="channels-session-conversation:binding-session-1"]')).not.toBeNull();
+      await act(async () => { mount.container.querySelector<HTMLElement>('[data-testid="channels-session-conversation-unlink:binding-session-1"]')?.click(); });
+      await vi.waitFor(() => expect(mount.container.textContent).toContain('That didn’t go through'));
+    } finally { mount.unmount(); }
+  });
 
   it('renders this Session\'s external conversations instead of the Account settings vertical', async () => {
     const mount = await mountSessionDestination(sessionConversationsResource);
@@ -8405,7 +8830,7 @@ describe('Channels Session tab (round 2)', () => {
     }
   });
 
-  it('resumes a paused conversation, and unlinks one only after an inline confirm', async () => {
+  it('resumes a paused conversation and submits unlink to the shared Action policy without a local confirm', async () => {
     const executeAction = vi.fn(async () => ({}) as JsonValue);
     const fixture = await mountSessionTab({ conversations: threeConversations, executeAction });
     try {
@@ -8419,8 +8844,6 @@ describe('Channels Session tab (round 2)', () => {
       });
 
       await fixture.press(await fixture.getByRole('button', { name: 'Unlink Ops on-call' }));
-      expect(executeAction).toHaveBeenCalledTimes(1);
-      await fixture.press(await fixture.findByRole('button', { name: 'Unlink' }));
       await vi.waitFor(() => {
         expect(executeAction).toHaveBeenCalledWith(expect.objectContaining({
           action: CONVERSATION_MANAGEMENT_ACTION_IDS_V1.bindingDelete,
@@ -8542,12 +8965,12 @@ describe('Channels connection row placement presentation', () => {
     }
   });
 
-  it('keeps an enabled healthy connection reading as enabled and running', async () => {
+  it('keeps an enabled healthy connection reading as running without redundant status', async () => {
     const fixture = await mountConnectionRows(connectionsResource);
     try {
       const row = await collapsedConnectionRow();
-      expect(row.text).toContain('Enabled');
       expect(row.text).toContain('Runs on your selected machine');
+      expect(row.accessibleName).toContain('Runs on your selected machine');
       expect(row.text).not.toContain('Paused');
     } finally {
       await fixture.dispose();
@@ -8728,6 +9151,62 @@ describe('Channels collapsed row identity', () => {
       const row = await collapsedRowByIdentity('channels-connection-connection-c7tQm2xwAbCdEfGh');
       expect(row.accessibleName).toContain('c7tQm2xw');
       expect(row.accessibleName).toContain('Provider:');
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it('accepts an ambiguous started conversation only with the thread it created (REV-C-04)', async () => {
+    const account = createOfflineChannelStateFixture();
+    const base = offlineAmbiguousDeliveryRow();
+    const started = {
+      ...base,
+      value: {
+        ...base.value,
+        payload: {
+          ...base.value.payload,
+          source: { kind: 'conversationStart', sessionId: 'session-1', requestId: 'start-1' },
+          newThread: { recipients: ['principal-1'], subject: 'Brief du matin' },
+          threadBindingPending: true,
+        },
+      },
+    };
+    account.deliveries.rows.set(started.rowId, started);
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'fixture-instance-148b', mountNonce: 'fixture-mount-148b' },
+      authorPlugin: { id: 'happier.channels', version: '0.0.0' },
+      surface: renderSurface,
+      surfaceContext: createChannelsSurfaceContext(),
+      adapter: createChannelsSemanticAdapter(account.dataClient),
+      handlers: {
+        selectActionInput: async () => ({ kind: 'cancelled' as const }),
+      },
+    });
+
+    try {
+      await pressButtonWithAccessibleLabelFragment('Example conversation');
+      const threadField = `channels-delivery-resolution-thread-${OFFLINE_AMBIGUOUS_CUSTODY_ID}`;
+      await vi.waitFor(() => {
+        expect(document.querySelector(`[data-testid="${threadField}"]`)).not.toBeNull();
+      });
+      const accept = () => document.querySelector<HTMLElement>(
+        `[data-testid="channels-delivery-resolution-accept-${OFFLINE_AMBIGUOUS_CUSTODY_ID}"]`,
+      );
+      // Without the created thread, accepting could never restore reply routing.
+      expect(accept()?.getAttribute('aria-disabled')).toBe('true');
+      await enterTextByTestId(threadField, '<brief-1@batiplus.ch>');
+      await vi.waitFor(() => {
+        expect(accept()?.getAttribute('aria-disabled')).not.toBe('true');
+      });
+      await pressByTestId(`channels-delivery-resolution-accept-${OFFLINE_AMBIGUOUS_CUSTODY_ID}`);
+      await vi.waitFor(() => {
+        expect(account.deliveries.rows.get(OFFLINE_AMBIGUOUS_CUSTODY_ID)?.value.payload).toMatchObject({
+          state: 'resolvedAccepted',
+          endpoint: { kind: 'direct', id: 'chat-1' },
+        });
+      });
+      expect(JSON.stringify(account.deliveries.rows.get(OFFLINE_AMBIGUOUS_CUSTODY_ID)?.value.payload))
+        .toContain('<brief-1@batiplus.ch>');
     } finally {
       await fixture.dispose();
     }
@@ -8996,6 +9475,31 @@ describe('Channels page (the one owner of linked conversations)', () => {
   );
   const opened = (calls: readonly (readonly [string, string])[]) => calls.map(([view, subPath]) => `${view}:${subPath}`);
 
+  it('reports the failed bots read before offering a conversation selection', async () => {
+    let refuseConnections = true;
+    const page = await mountPage({
+      subPath: '',
+      readResource: async (request) => {
+        if (resourceFixtureLocalId(request.resource) === CONNECTIONS_RESOURCE.localId && refuseConnections) {
+          throw new PluginError({ code: 'unavailable', message: 'unavailable', retryable: false });
+        }
+        return readerFor(bindingsResource)(request);
+      },
+      surfaceContext: { ...createChannelsPageSurfaceContext(), page: { columnVisible: true } },
+    });
+    try {
+      await vi.waitFor(() => expect(document.querySelector('[data-testid="channels-bindings-error"]')).not.toBeNull());
+      expect(document.querySelector('[data-testid="channels-page-no-selection"]')).toBeNull();
+      expect(document.querySelector('[data-testid="channels-bindings-loading"]')).toBeNull();
+      refuseConnections = false;
+      await page.fixture.press(await page.fixture.getByRole('button', { name: 'Try again' }));
+      await vi.waitFor(() => expect(document.querySelector('[data-testid="channels-page-no-selection"]')).not.toBeNull());
+      expect(document.querySelector('[data-testid="channels-bindings-error"]')).toBeNull();
+    } finally {
+      await page.fixture.dispose();
+    }
+  });
+
   it('shows a selection prompt beside its column and the list when the column is hidden', async () => {
     const visible = await mountPage({
       subPath: '',
@@ -9018,10 +9522,45 @@ describe('Channels page (the one owner of linked conversations)', () => {
     }
   });
 
+  it('lists conversations only once their bots are known, and says one cause once for a blocked bot', async () => {
+    let releaseConnections!: () => void;
+    const connectionsGate = new Promise<void>((resolve) => { releaseConnections = resolve; });
+    const blocked = JSON.parse(new TextDecoder().decode(connectionsResource.bytes)) as {
+      connections: { attention: { pollFailure: unknown } }[];
+    };
+    blocked.connections[0]!.attention.pollFailure = {
+      phase: 'blocked', attemptCount: 1, retryNotBeforeMs: null, evidence: { kind: 'provider', reason: 'providerConflict' },
+    };
+    const hidden = await mountPage({
+      subPath: '',
+      connections: jsonResource(blocked, '9'),
+      connectionsGate,
+      surfaceContext: { ...createChannelsPageSurfaceContext(), page: { columnVisible: false } },
+    });
+    try {
+      // The conversations are in; their bots are not. Nothing is drawn under a placeholder group, and
+      // the wait names what it is waiting for rather than how it reads.
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+      expect(document.body.textContent).not.toContain('Example conversation');
+      expect(document.body.textContent).not.toContain('Other conversations');
+      expect(document.body.textContent).not.toContain('binding policy');
+      await act(async () => { releaseConnections(); });
+      await vi.waitFor(async () => { await hidden.fixture.getByText('Example conversation'); });
+      // The bot's one cause reads as it does beside the column: one label, not the cause's own words.
+      expect(document.body.textContent).toContain('Bot needs you');
+      expect(document.body.textContent).not.toContain('Polling needs attention');
+    } finally {
+      await hidden.fixture.dispose();
+    }
+  });
+
   async function mountPage(input: Readonly<{
     subPath: string;
     bindings?: ResourceContent;
     connections?: ResourceContent;
+    /** Holds the bots' read until it settles, so the bindings arrive first. */
+    connectionsGate?: Promise<void>;
+    readResource?: NonNullable<PluginUiTestkitHostHandlers['readResource']>;
     executeAction?: (request: PluginUiTestkitExecuteActionInput) => Promise<JsonValue>;
     surfaceContext?: ReturnType<typeof createChannelsSurfaceContext>;
   }>) {
@@ -9038,7 +9577,12 @@ describe('Channels page (the one owner of linked conversations)', () => {
         executeAction: input.executeAction ?? (async ({ action }) => {
           throw new Error(`Unexpected mounted Action: ${String(action)}`);
         }),
-        readResource: readerFor(input.bindings ?? bindingsResource, input.connections),
+        readResource: input.readResource ?? (input.connectionsGate === undefined
+          ? readerFor(input.bindings ?? bindingsResource, input.connections)
+          : async (request) => {
+            if (resourceFixtureLocalId(request.resource) === CONNECTIONS_RESOURCE.localId) await input.connectionsGate;
+            return readerFor(input.bindings ?? bindingsResource, input.connections)(request);
+          }),
         openSurface: ({ view, subPath }) => {
           openedSurfaces.push([typeof view === 'string' ? view : view.localId, subPath ?? '']);
         },
@@ -9057,6 +9601,30 @@ describe('Channels page (the one owner of linked conversations)', () => {
       await expect(fixture.queryByRole('button', { name: 'Unlink…' })).resolves.toBeUndefined();
       await fixture.press(await fixture.getByRole('button', { name: 'Open Channels' }));
       expect(opened(openedSurfaces)).toEqual(['conversations:']);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it('leads Settings with the connections and offers no link button before a connection exists', async () => {
+    const { fixture } = await mountPage({
+      subPath: '',
+      bindings: noBindingsResource,
+      connections: noConnectionsResource,
+      surfaceContext: createChannelsSurfaceContext(),
+    });
+    try {
+      await vi.waitFor(async () => {
+        await fixture.getByText('Create an active conversation connection before adding a binding.');
+      });
+      // A link cannot succeed without a connection, so no (disabled) link button is offered.
+      expect(document.querySelector('[data-testid="channels-binding-create-open"]')).toBeNull();
+      const connections = document.querySelector('[data-testid="channels-connections-section"]');
+      const linked = document.querySelector('[data-testid="channels-settings-conversations"]');
+      expect(connections).not.toBeNull();
+      expect(linked).not.toBeNull();
+      // The page's identity (its connections) comes before what depends on them.
+      expect(connections!.compareDocumentPosition(linked!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     } finally {
       await fixture.dispose();
     }

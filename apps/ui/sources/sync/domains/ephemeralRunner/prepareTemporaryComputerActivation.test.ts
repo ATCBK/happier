@@ -278,7 +278,7 @@ describe('prepareTemporaryComputerActivation creator recipient authority', () =>
             mcpMaterial: {
                 v: 1,
                 strictMode: true,
-                selection: { v: 1, managedServersEnabled: false, forceIncludeServerIds: ['reviewed'], forceExcludeServerIds: [] },
+                capabilitySelection: { mcp: { v: 1, managedServersEnabled: false, forceIncludeServerIds: ['reviewed'], forceExcludeServerIds: [] } },
                 servers: [{
                     serverId: 'reviewed', serverRevision: 2, bindingId: 'all', bindingRevision: 4,
                     savedSecretRevisions: [{ secretId: 'token', revision: 5 }],

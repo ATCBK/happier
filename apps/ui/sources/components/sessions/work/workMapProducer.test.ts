@@ -12,11 +12,11 @@ import { readSessionWorkStatusFacts } from '@/components/work/status/sessionWork
 import { projectSessionWorkMap, readWorkFoldedFromMap } from './workMapProducer';
 import { projectWork, type WorkProjectionInput, type WorkReportSessionSource } from './workProjection';
 
-function report(sessionId: string, leadSessionId: string): WorkReportSessionSource {
+function report(sessionId: string, managerSessionId: string): WorkReportSessionSource {
     const now = Date.now();
     return {
         sessionId,
-        leadSessionId,
+        managerSessionId,
         title: sessionId,
         agentId: null,
         facts: [],
@@ -45,14 +45,14 @@ describe('projectSessionWorkMap', () => {
     it('places reports under their lead and runs under the lead, through the one map contract', () => {
         const projection = projectWork(input({
             reportSessions: [report('api', 'lead'), report('ledger', 'api')],
-            managedRuns: [{ run: { id: 'run-1', state: 'running' }, title: 'Review each file', word: 'Running', needsAttention: false }],
+            managedRuns: [{ run: { id: 'run-1', state: 'running', workflowCustodyState: null }, title: 'Review each file', word: 'Running', needsAttention: false }],
             agentEntries: [{
                 id: 'run:scout', kind: 'execution_run', status: 'running', title: 'Scout', metaDetail: null,
                 startedAtMs: null, endedAtMs: null, provenance: 'local', detailState: 'loaded', parentId: null,
                 runId: 'scout', sidechainId: null, subagentId: null, attentionKinds: NO_SESSION_AGENT_ACTIVITY_ATTENTION,
             }],
         }));
-        const map = projectSessionWorkMap({ leadSessionId: 'lead', leadTitle: 'Payments v2 rollout', projection });
+        const map = projectSessionWorkMap({ managerSessionId: 'lead', leadTitle: 'Payments v2 rollout', projection });
 
         expect(map.rootNodeIds).toEqual(['session:lead']);
         expect(map.nodesById.get('session:lead')?.childNodeIds).toEqual(['session:api', 'run:run-1', 'agent:run:scout']);
@@ -63,15 +63,15 @@ describe('projectSessionWorkMap', () => {
     });
 
     it('draws only the lead when nothing was started — no inferred edges', () => {
-        const map = projectSessionWorkMap({ leadSessionId: 'lead', leadTitle: 'Solo', projection: projectWork(input({})) });
+        const map = projectSessionWorkMap({ managerSessionId: 'lead', leadTitle: 'Solo', projection: projectWork(input({})) });
         expect(map.nodes.map((node) => node.nodeId)).toEqual(['session:lead']);
     });
 });
 
-function finished(sessionId: string, leadSessionId: string): WorkReportSessionSource {
+function finished(sessionId: string, managerSessionId: string): WorkReportSessionSource {
     const now = Date.now();
     return {
-        ...report(sessionId, leadSessionId),
+        ...report(sessionId, managerSessionId),
         statusFacts: readSessionWorkStatusFacts(createSessionListRenderableSessionFixture({ id: sessionId, active: true,
             activeAt: now, latestTurnStatus: 'completed', latestTurnStatusObservedAt: now }), now),
     };
@@ -81,9 +81,9 @@ describe('finished work folds out of the map (lab session-A2 / B / C)', () => {
     it('leaves finished leaves out of the map and lists them as folded, while List keeps them', () => {
         const projection = projectWork(input({
             reportSessions: [report('api', 'lead'), finished('runbook', 'lead')],
-            managedRuns: [{ run: { id: 'run-done', state: 'succeeded' }, title: 'Review each file', word: 'Completed', needsAttention: false }],
+            managedRuns: [{ run: { id: 'run-done', state: 'succeeded', workflowCustodyState: null }, title: 'Review each file', word: 'Completed', needsAttention: false }],
         }));
-        const map = projectSessionWorkMap({ leadSessionId: 'lead', leadTitle: 'Payments v2 rollout', projection });
+        const map = projectSessionWorkMap({ managerSessionId: 'lead', leadTitle: 'Payments v2 rollout', projection });
         expect(map.nodesById.get('session:lead')?.childNodeIds).toEqual(['session:api']);
         expect(readWorkFoldedFromMap(projection).map((item) => item.key)).toEqual(['session:runbook', 'run:run-done']);
         expect(projection.sessions.map((item) => item.key)).toContain('session:runbook');
@@ -91,7 +91,7 @@ describe('finished work folds out of the map (lab session-A2 / B / C)', () => {
 
     it('keeps a finished session that still has work going under it, so nothing is orphaned', () => {
         const projection = projectWork(input({ reportSessions: [finished('api', 'lead'), report('ledger', 'api')] }));
-        const map = projectSessionWorkMap({ leadSessionId: 'lead', leadTitle: 'Payments v2 rollout', projection });
+        const map = projectSessionWorkMap({ managerSessionId: 'lead', leadTitle: 'Payments v2 rollout', projection });
         expect(map.nodesById.get('session:api')?.childNodeIds).toEqual(['session:ledger']);
         expect(readWorkFoldedFromMap(projection)).toEqual([]);
     });

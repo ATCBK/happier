@@ -10,14 +10,8 @@ import { readSettings } from '@/persistence';
 import { MachineProcessesAnswerV1Schema, type MachineProcessesAnswerV1 } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
 import { normalizeActionExecuteResult, unwrapCliActionSuccessPayload } from '@/cli/commands/session/shared/normalizeActionExecuteResult';
 
-import { classifyProcessByPid, type HappyProcessInfo } from './processInspection';
-export { classifyDaemonLifecycleProcessByPid, classifyProcessByPid, classifyHappyProcess, findAllHappyProcesses } from './processInspection';
+export { classifyDaemonLifecycleProcessByPid, classifyProcessByPid, classifyHappyProcess, findAllHappyProcesses, findHappyProcessByPid } from './processInspection';
 export type { DaemonLifecycleProcessByPidClassification, HappyProcessInfo, DaemonOwnershipEnvironmentVariables, ProcessByPidClassification } from './processInspection';
-
-export async function findHappyProcessByPid(pid: number): Promise<HappyProcessInfo | null> {
-  const classified = await classifyProcessByPid(pid);
-  return classified.kind === 'happy' ? classified.process : null;
-}
 
 export type DoctorProcessAnswer =
   | Readonly<{ status: 'available'; answer: MachineProcessesAnswerV1 }>

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -1027,6 +1028,22 @@ func diskObserve(result *diskWalkResult, root, path string, meta diskMetadata) {
 	}
 }
 
+// Match filepath.Rel's Windows case folding without changing Unix byte paths.
+func diskMembershipPathKey(path string) string {
+	if runtime.GOOS != "windows" {
+		return path
+	}
+	return strings.Map(func(r rune) rune {
+		key := r
+		for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
+			if next < key {
+				key = next
+			}
+		}
+		return key
+	}, path)
+}
+
 func diskWalk(ctx context.Context, roots []string, lowPower bool, request diskScanRequest) (diskWalkResult, error) {
 	result := diskWalkResult{observations: map[string]*diskObservation{}, summary: diskEmptySummary(), incomplete: map[string]bool{}, direct: map[string]*diskDirectMeasure{}}
 	result.aliases = map[string]string{}
@@ -1036,6 +1053,10 @@ func diskWalk(ctx context.Context, roots []string, lowPower bool, request diskSc
 	linkCounts := map[string]uint64{}
 	var linkCountsMu sync.Mutex
 	var rootFileFacts map[string]diskMetadata
+	// Populated after physical aliases are resolved. Each observation visits its
+	// own ancestors rather than comparing itself with every selected catalog row.
+	rootsByPhysicalPath := map[string][]string{}
+	rootOrder := map[string]int{}
 	if request.measureLinkCounts {
 		rootFileFacts = map[string]diskMetadata{}
 	}
@@ -1061,15 +1082,13 @@ func diskWalk(ctx context.Context, roots []string, lowPower bool, request diskSc
 	}
 	observe := func(path string, meta diskMetadata) {
 		members := []string{}
-		for _, root := range roots {
-			physical := result.aliases[root]
-			if physical == "" {
-				physical = root
-			}
-			if diskPathContains(physical, path) {
-				members = append(members, root)
+		for ancestor := filepath.Clean(path); ; ancestor = filepath.Dir(ancestor) {
+			members = append(members, rootsByPhysicalPath[diskMembershipPathKey(ancestor)]...)
+			if parent := filepath.Dir(ancestor); parent == ancestor {
+				break
 			}
 		}
+		sort.Slice(members, func(i, j int) bool { return rootOrder[members[i]] < rootOrder[members[j]] })
 		if meta.kind == "file" && meta.nlink == 1 && !diskCloneDataKnown(meta) {
 			key := strings.Join(members, "\x00")
 			direct := result.direct[key]
@@ -1167,6 +1186,15 @@ func diskWalk(ctx context.Context, roots []string, lowPower bool, request diskSc
 				}
 			}
 		}
+	}
+	for index, root := range roots {
+		physical := result.aliases[root]
+		if physical == "" {
+			physical = root
+		}
+		key := diskMembershipPathKey(filepath.Clean(physical))
+		rootsByPhysicalPath[key] = append(rootsByPhysicalPath[key], root)
+		rootOrder[root] = index
 	}
 	for _, root := range roots {
 		meta, ok := rootMetadata[root]

@@ -14,6 +14,7 @@ import { reportWorkspaceScmOperation, trackBlockedScmOperation } from '@/scm/ope
 import { tryShowDaemonUnavailableAlertForScmOperationFailure } from '@/scm/operations/scmDaemonUnavailableAlert';
 import { storage } from '@/sync/domains/state/storage';
 import { machineScmChangeExclude, machineScmChangeInclude } from '@/sync/ops/scm/machineScm';
+import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import { tracking } from '@/track';
@@ -104,6 +105,9 @@ export async function applyWorkspaceFileStageAction(input: Readonly<{
             const response = stage
                 ? await machineScmChangeInclude(scope.machineId, { cwd: scope.rootPath, paths: [filePath] }, scmCallOptions)
                 : await machineScmChangeExclude(scope.machineId, { cwd: scope.rootPath, paths: [filePath] }, scmCallOptions);
+
+            // Declined, or waiting on an approval: nothing ran and nothing failed.
+            if (isScmActionNotRun(response)) return;
 
             if (!response.success) {
                 const errorMessage = getScmUserFacingError({

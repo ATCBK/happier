@@ -12,6 +12,7 @@ export const en = {
     title: ({ count }: Count) => (count === 1 ? 'One commit for your pending changes' : `${count} commits for your pending changes`),
     titlePhone: ({ count }: Count) => (count === 1 ? 'One commit' : `${count} commits`),
     proposedBy: ({ who, committed, total }: { who: string; committed: number; total: number }) => `Proposed by ${who} · ${committed} of ${total} files · ordered so each commit builds on the last.`,
+    filesInCommits: ({ committed, total }: { committed: number; total: number }) => `${committed} of ${total} files in these commits`,
     proposedByPhone: ({ committed, total }: { committed: number; total: number }) => `${committed} of ${total} pending files · tap a change to move it.`,
     moveHint: ({ max }: { max: number }) => `Move any change with ⌥1–${max} or its menu.`,
     modelFallback: 'the model',

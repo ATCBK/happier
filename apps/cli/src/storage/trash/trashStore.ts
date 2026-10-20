@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { lstat, mkdir, readdir, realpath, rmdir, unlink } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { TrashEntryV1Schema, type HappierStorageCategoryIdV1, type StorageReasonV1, type TrashEntryV1 } from '@happier-dev/protocol/storage/storageV1';
 import { StrictJsonValueSchema, type JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
@@ -18,14 +18,14 @@ import { assertStoragePathIdentity, readStoragePathIdentity, removeStoragePath, 
 import { renameStoragePathNoReplace } from './renameStoragePath';
 
 const execute = promisify(execFile);
-const component = z.string().regex(/^[A-Za-z0-9_-]+$/u);
-const identitySchema = z.strictObject({ dev: z.string().min(1), ino: z.string().min(1), kind: z.enum(['file', 'directory', 'symlink', 'other']) });
+const component = z.string().check(z.regex(/^[A-Za-z0-9_-]+$/u));
+const identitySchema = z.strictObject({ dev: z.string().check(z.minLength(1)), ino: z.string().check(z.minLength(1)), kind: z.enum(['file', 'directory', 'symlink', 'other']) });
 const manifestSchema = z.strictObject({ v: z.literal(1), entry: TrashEntryV1Schema, identity: identitySchema,
-    phase: z.enum(['prepared', 'moved', 'emptying', 'restoring']), ownerData: StrictJsonValueSchema.optional(),
-    restorePath: z.string().optional(), attribution: z.union([RequesterWorkAttributionV1Schema, z.strictObject({ kind: z.literal('unknown') })]),
-    emptyAttribution: z.union([RequesterWorkAttributionV1Schema, z.strictObject({ kind: z.literal('unknown') })]).optional(),
-    restoreAttribution: z.union([RequesterWorkAttributionV1Schema, z.strictObject({ kind: z.literal('unknown') })]).optional(),
-    movedReceiptRecorded: z.boolean().default(false), emptiedReceiptRecorded: z.boolean().default(false),
+    phase: z.enum(['prepared', 'moved', 'emptying', 'restoring']), ownerData: z.optional(StrictJsonValueSchema),
+    restorePath: z.optional(z.string()), attribution: z.union([RequesterWorkAttributionV1Schema, z.strictObject({ kind: z.literal('unknown') })]),
+    emptyAttribution: z.optional(z.union([RequesterWorkAttributionV1Schema, z.strictObject({ kind: z.literal('unknown') })])),
+    restoreAttribution: z.optional(z.union([RequesterWorkAttributionV1Schema, z.strictObject({ kind: z.literal('unknown') })])),
+    movedReceiptRecorded: z._default(z.boolean(), false), emptiedReceiptRecorded: z._default(z.boolean(), false),
 });
 const storedManifestSchema = createStoredReadSchema(manifestSchema);
 type Attribution = MachineGuardActivityEntryV1['attribution'];
@@ -154,6 +154,7 @@ export function createTrashStore(deps: TrashStoreDeps) {
         await deps.activityLog.append({ v: 1, id, at: now(), kind, rule: 'approved_proposal', outcome: 'done',
             subject: { kind: 'trash', items: 1 }, attribution: kind === 'trash_emptied' ? record.manifest.emptyAttribution ?? record.manifest.attribution : record.manifest.attribution,
             freedBytes, inTrashBytes: kind === 'trash_moved' ? entry.size.allocatedBytes : 0,
+            ...(kind === 'trash_emptied' ? { ref: `${entry.entryId}-trash_moved` } : {}),
             ...(kind === 'trash_moved' ? { wayBack: [{ label: 'undo' as const, actionId: 'machines.storage.trash.restore' as const,
                 input: { ...deps.target, entryIds: [entry.entryId] } }, { label: 'empty_now' as const, actionId: 'machines.storage.trash.empty' as const,
                 input: { ...deps.target, entryIds: [entry.entryId] } }] } : {}),
@@ -230,8 +231,12 @@ export function createTrashStore(deps: TrashStoreDeps) {
                 await receipt(record, 'trash_moved', 0); notify(); return record.manifest.entry;
             }).finally(() => { activePreparations.delete(entry.entryId); }) };
         },
-        async list(selection: TrashSelection = {}): Promise<TrashEntryV1[]> {
-            return (await records(selection)).filter(record => record.manifest.phase !== 'prepared').map(record => record.manifest.entry);
+        async list(selection: TrashSelection = {}, visible?: (entry: TrashEntryV1, ownerData?: JsonValue) => Promise<boolean>): Promise<TrashEntryV1[]> {
+            const entries: TrashEntryV1[] = [];
+            for (const { manifest } of await records(selection)) {
+                if (manifest.phase !== 'prepared' && (!visible || await visible(manifest.entry, manifest.ownerData))) entries.push(manifest.entry);
+            }
+            return entries;
         },
         async read(entryId: string): Promise<TrashEntryV1 | null> { return (await records({ entryIds: [entryId] }))[0]?.manifest.entry ?? null; },
         restore(selection: TrashSelection, input: Readonly<{ beside?: boolean; actorAccountId: string; custodianAccountId?: string; assertCurrentAuthority?: () => Promise<void>; assertEntryAuthority?: TrashEntryAuthorityCheck }>) {

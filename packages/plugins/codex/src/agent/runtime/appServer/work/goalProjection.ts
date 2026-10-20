@@ -18,9 +18,10 @@ export function readCodexGoalPayload(value: unknown): CodexGoalPayload {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return { kind: 'malformed' };
   const root = value as RecordLike;
   if (typeof root.objective === 'string') return { kind: 'present', goal: root };
-  if (!Object.prototype.hasOwnProperty.call(root, 'goal') || root.goal === null || root.goal === undefined) {
-    return { kind: 'absent' };
-  }
+  // The native Goal read contract requires an explicit nullable goal. A
+  // missing field (including a ThreadResumeResponse) is not evidence of Clear.
+  if (!Object.prototype.hasOwnProperty.call(root, 'goal')) return { kind: 'malformed' };
+  if (root.goal === null) return { kind: 'absent' };
   return root.goal && typeof root.goal === 'object' && !Array.isArray(root.goal)
     ? { kind: 'present', goal: root.goal as RecordLike }
     : { kind: 'malformed' };
@@ -31,13 +32,13 @@ export function createCodexGoalProjection() {
   return Object.freeze({
     async publish(payload: CodexGoalPayload, goalSource: WorkStatePublisher) {
       if (payload.kind === 'malformed') {
-        return { status: 'unavailable' as const, retryable: false, diagnostic: diagnostic('codex_goal_payload_invalid') };
+        return { status: 'unavailable' as const, retryable: false, diagnostic: diagnostic('codex_goal_payload_invalid'), goalControlFailure: { phase: 'native_effect' as const } };
       }
       const decoded = payload.kind === 'absent'
         ? null
         : decodeCodexAppServerGoal({ backendId: 'codex', goal: payload.goal });
       if (payload.kind === 'present' && decoded === null) {
-        return { status: 'unavailable' as const, retryable: false, diagnostic: diagnostic('codex_goal_payload_invalid') };
+        return { status: 'unavailable' as const, retryable: false, diagnostic: diagnostic('codex_goal_payload_invalid'), goalControlFailure: { phase: 'native_effect' as const } };
       }
       const outcome = await goalSource.publish({
         sourceSequence: ++sourceSequence,
@@ -66,6 +67,7 @@ export function createCodexGoalProjection() {
         status: 'unavailable' as const,
         retryable: true,
         diagnostic: 'diagnostic' in outcome ? outcome.diagnostic : diagnostic('codex_goal_publication_failed'),
+        goalControlFailure: { phase: 'host_publication_rejected' as const },
       };
     },
   });

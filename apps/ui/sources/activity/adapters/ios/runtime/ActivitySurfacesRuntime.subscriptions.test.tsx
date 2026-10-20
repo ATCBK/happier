@@ -9,7 +9,20 @@ import { settingsDefaults } from '@/sync/domains/settings/settings';
 import * as iosPolicies from './resolveIosActivitySurfacePolicies';
 
 // Native widgets are an OS boundary. Web still mounts the same policy and settings subscriptions.
-vi.mock('expo-widgets', () => ({ addUserInteractionListener: () => ({ remove() {} }) }));
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock({ Platform: { OS: 'web' } });
+});
+
+vi.mock('expo-widgets', async (importOriginal) => {
+    const { createExpoWidgetsModuleMock } = await import('@/dev/testkit/mocks/expoWidgets');
+    return createExpoWidgetsModuleMock({
+        importOriginal,
+        addUserInteractionListener: () => ({ remove() {} }),
+    });
+});
+
+await import('./iosActivityWidgetModules');
 
 describe('ActivitySurfacesRuntime settings subscriptions', () => {
     beforeEach(async () => {
@@ -37,7 +50,9 @@ describe('ActivitySurfacesRuntime settings subscriptions', () => {
         await act(async () => {
             storage.getState().applySettingsLocal({ experiments: !storage.getState().settings.experiments });
         });
-        expect(commits.mock.calls.length).toBe(baseline + 1);
-        expect(resolvePolicies.mock.calls.length).toBe(computationBaseline + 1);
+        expect({
+            commits: commits.mock.calls.length - baseline,
+            computations: resolvePolicies.mock.calls.length - computationBaseline,
+        }).toEqual({ commits: 1, computations: 1 });
     });
 });

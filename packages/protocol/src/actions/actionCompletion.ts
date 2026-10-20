@@ -1,3 +1,4 @@
+import { EXECUTION_RUN_KIND_BY_INTENT } from '../execution/runs/startRequest.js';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
@@ -43,7 +44,7 @@ export function readActionCompletionRunObservationV1(native: Readonly<{
       return { kind: 'outcome_uncertain', code: native.run.error.code };
     }
     const tool = native.latestToolResult;
-    const raw = native.structuredMeta?.kind === 'scm_diff_summary.v1' ? native.structuredMeta.payload
+    const raw = native.structuredMeta?.kind === EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary ? native.structuredMeta.payload
       : tool;
     const output = createStoredReadSchema(ScmDiffSummaryGenerateOutputSchema).safeParse(raw);
     const matches = output.success && output.data.comparison?.id === observation.comparisonId

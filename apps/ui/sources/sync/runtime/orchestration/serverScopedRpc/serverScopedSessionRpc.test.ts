@@ -4,13 +4,17 @@ import { parseSerializedJsonValue, stringifySerializedJsonValue } from '@happier
 
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { storage } from '@/sync/domains/state/storage';
+import {
+  publishAppliedActiveServerSnapshot,
+  publishAppliedActiveServerRuntimeAvailability,
+} from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import type { VoiceAgentHandle } from '@/voice/agent/types';
 
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { RPC_METHODS, SESSION_RPC_METHODS, SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS } from '@happier-dev/protocol/rpc';
 import { CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD } from '@happier-dev/protocol/sessions';
-import { socketRpcCodec } from '@happier-dev/sync-client';
+import { raceSocketIoAckTimeout, socketRpcCodec } from '@happier-dev/sync-client';
 
 import { resetScopedSessionDataKeyCacheForTests } from './resolveScopedSessionDataKey';
 import { sessionRpcWithPreferredSessionScope } from './sessionRpcWithPreferredSessionScope';
@@ -127,6 +131,7 @@ async function useRealScopedEncryption() {
 
 describe('sessionRpcWithServerScope', () => {
   afterEach(() => {
+    publishAppliedActiveServerRuntimeAvailability(false);
     storage.setState(initialStorageState, true);
     vi.useRealTimers();
     sessionRpcSpy.mockReset();
@@ -137,6 +142,57 @@ describe('sessionRpcWithServerScope', () => {
     getActiveServerSnapshotSpy.mockReset();
     vi.unstubAllGlobals();
     resetScopedSessionDataKeyCacheForTests();
+  });
+
+  it('keeps a native permission answer pending until the owner acknowledges beyond the generic RPC cutoff', async () => {
+    getActiveServerSnapshotSpy.mockReturnValue({ serverId: 'server-a', serverUrl: 'https://server-a.example.test', kind: 'custom', generation: 1 });
+    storage.setState({ sessions: { 'session-1': createSessionFixture({ id: 'session-1', serverId: 'server-a', active: true }) } });
+    const { sessionRespondToPermission } = await import('@/sync/ops/sessions');
+    vi.useFakeTimers();
+    // Socket acknowledgement is the system boundary. Keep permission routing,
+    // Home context and response mapping real for the observed 50.8-second reply.
+    sessionRpcSpy.mockImplementation((_sessionId, _method, _payload, options) => raceSocketIoAckTimeout(
+      new Promise(resolve => setTimeout(() => resolve({ ok: true }), 50_805)), options.timeoutMs, options.signal,
+    ));
+    const result = sessionRespondToPermission('session-1', { id: 'native-request', approved: true, turnId: 'native-turn' },
+      { serverId: 'server-a' }).then(() => ({ ok: true }), error => ({ ok: false, error }));
+    await vi.advanceTimersByTimeAsync(50_805);
+    expect(await result).toEqual({ ok: true });
+    expect(sessionRpcSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('acknowledges delayed Review admission once, without the generic RPC deadline', async () => {
+    getActiveServerSnapshotSpy.mockReturnValue({ serverId: 'server-a', serverUrl: 'https://server-a.example.test', kind: 'custom', generation: 1 });
+    storage.setState({ sessions: { 'session-1': createSessionFixture({ id: 'session-1', serverId: 'server-a', active: true }) } });
+    const { sessionExecutionRunStart } = await import('@/sync/ops/sessionExecutionRuns');
+    vi.useFakeTimers();
+    const admission = { runId: 'review-run', callId: 'review-call', sidechainId: 'review-sidechain' };
+    // Only the socket boundary is substituted; the operation, route and timeout owner are real.
+    sessionRpcSpy.mockImplementation((_sessionId, _method, _payload, options) => raceSocketIoAckTimeout(
+      new Promise(resolve => setTimeout(() => resolve(admission), 181_000)), options.timeoutMs, options.signal,
+    ));
+    const pending = sessionExecutionRunStart('session-1', { intent: 'review',
+      backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+      instructions: 'Review these changes', permissionMode: 'read_only', retentionPolicy: 'resumable',
+      runClass: 'long_lived', ioMode: 'streaming',
+    }, { serverId: 'server-a' });
+    await vi.advanceTimersByTimeAsync(181_000);
+    expect(await pending).toEqual(admission);
+    expect(sessionRpcSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps Review admission cancellable before socket issuance', async () => {
+    storage.setState({ sessions: { 'session-1': createSessionFixture({ id: 'session-1', serverId: 'server-a', active: true }) } });
+    const { sessionExecutionRunStart } = await import('@/sync/ops/sessionExecutionRuns');
+    const controller = new AbortController();
+    controller.abort();
+    expect(await sessionExecutionRunStart('session-1', { intent: 'review',
+      backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+      permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming',
+    }, { serverId: 'server-a', signal: controller.signal })).toMatchObject({
+      ok: false,
+    });
+    expect(sessionRpcSpy).not.toHaveBeenCalled();
   });
 
   it('delegates to apiSocket.sessionRPC when target server is omitted', async () => {
@@ -283,6 +339,7 @@ describe('sessionRpcWithServerScope', () => {
       method: 'session-1:session.permission.remote.grants.list',
       params: { sessionId: 'session-1' },
       authorization: { kind: 'session.write', sessionId: 'session-1' },
+      timeoutMs: null,
     });
     expect(fakeSocket.disconnect).toHaveBeenCalledTimes(1);
   });
@@ -295,6 +352,7 @@ describe('sessionRpcWithServerScope', () => {
       serverId: 'server-a', serverUrl: 'https://server-a.example.test', kind: 'custom', generation: 1,
     });
     storage.setState({ profileScope: { serverId: 'server-a', accountId: 'account-a' } });
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshotSpy());
     const accountLifetime = captureActiveServerAccountScopeLifetime();
     if (!accountLifetime) throw new Error('Missing admitting Account fixture');
     const client = new DaemonVoiceAgentClient({ serverId: 'server-a', accountId: 'account-a' });
@@ -320,7 +378,7 @@ describe('sessionRpcWithServerScope', () => {
       await client.stop({ sessionId: 'session-1', voiceAgentId: 'run-a' });
     };
     const pending = cleanup();
-    const recoveryStopped = recovery.stop('session-1', () => captureStopped);
+    const recoveryStopped = recovery.prepareStop('session-1', () => captureStopped).run();
     getActiveServerSnapshotSpy.mockReturnValue({
       serverId: transition === 'home-switch' ? 'server-b' : 'server-a',
       serverUrl: transition === 'home-switch' ? 'https://server-b.example.test' : 'https://server-a.example.test',
@@ -332,6 +390,7 @@ describe('sessionRpcWithServerScope', () => {
       profileScope: { serverId: nextServerId, accountId: 'account-b' },
       sessions: { 'session-1': createSessionFixture({ serverId: nextServerId, metadata: nextMetadata }) },
     });
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshotSpy());
     const nextLifetime = captureActiveServerAccountScopeLifetime();
     if (!nextLifetime) throw new Error('Missing replacement Account fixture');
     const nextHandle = { ...handle, accountLifetime: nextLifetime, voiceAgentId: 'run-b' };
@@ -376,7 +435,7 @@ describe('sessionRpcWithServerScope', () => {
       }));
       const cancel = emitWithAck.mock.calls.find((call) => JSON.stringify(call).includes('stream-a'));
       expect(cancel).toBeDefined();
-      expect(cancel?.[1]).not.toHaveProperty('timeoutMs');
+      expect(cancel?.[1]).toHaveProperty('timeoutMs', null);
       expect(emitWithAck.mock.calls.map((call) => call[1].method)).toContain(`session-1:${SESSION_RPC_METHODS.EXECUTION_RUN_LIST}`);
       expect(emitWithAck.mock.calls.map((call) => call[1].params)).toContainEqual({ runId: 'run-a-duplicate' });
       expect(createEphemeralSocketSpy.mock.calls.every(([options]) => options.serverUrl === 'https://server-a.example.test')).toBe(true);

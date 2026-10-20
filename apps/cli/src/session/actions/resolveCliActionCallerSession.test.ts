@@ -5,6 +5,19 @@ import { resolveSessionTransportContext } from '@/session/services/resolveSessio
 import { createCliBoundSessionMetadataReader, resolveCliActionCallerSession, resolveCliActionCallerWorkflowTarget } from './resolveCliActionCallerSession';
 
 describe('Account Action caller Session metadata authority', () => {
+  it.each(['cli-global', 'plugin-global'])('keeps the unbound %s host out of Session selector transport', async sessionId => {
+    const credentials = { token: 'token', encryption: null };
+    const get = vi.spyOn(axios, 'get').mockRejectedValue(new Error('unbound_host_has_no_session'));
+    const post = vi.spyOn(axios, 'post').mockRejectedValue(new Error('unbound_host_has_no_session'));
+    try {
+      const read = createCliBoundSessionMetadataReader({ credentials, token: credentials.token, sessionId, mode: 'plain', ctx: null,
+        resolveTransportForSession: (id, signal) => resolveSessionTransportContext({ credentials, idOrPrefix: id, signal }),
+      });
+      await expect(read()).resolves.toBeNull();
+      expect(get).not.toHaveBeenCalled();
+      expect(post).not.toHaveBeenCalled();
+    } finally { get.mockRestore(); post.mockRestore(); }
+  });
   it('cancels remote caller preparation at the Account-currentness boundary', async () => {
     const sessionId = 'c111111111111111111111111';
     const credentials = { token: 'token', encryption: null };
@@ -31,7 +44,9 @@ describe('Account Action caller Session metadata authority', () => {
       caller.abort(reason);
       release();
       expect(await pending).toEqual({ error: reason });
-      expect(get).toHaveBeenCalledTimes(1);
+      // Currentness and exact Session reads may overlap. Cancellation must
+      // reach every dispatched HTTP read, independently of their ordering.
+      expect(get.mock.calls.every(([, config]) => config?.signal?.aborted === true)).toBe(true);
     } finally { get.mockRestore(); }
   });
   it('keeps a Session bearer closed to layout-1 owner metadata', async () => {

@@ -12,9 +12,19 @@ type InstalledRoutingState = Readonly<{
 }>;
 type InstalledRoutingRoute = Readonly<{
     name: string;
-    params?: Readonly<Record<string, unknown>>;
+    params?: object;
     state?: InstalledRoutingState;
 }>;
+
+/** Evaluate a published SDK module while replacing only the supplied external ports. */
+export async function evaluateInstalledExpoModule(path: string, overrides: Readonly<Record<string, unknown>>) {
+    const module: { exports: Record<string, unknown> } = { exports: {} };
+    const sdkRequire = createRequire(path);
+    const { code } = await transform(await readFile(path, 'utf8'), { loader: 'js', format: 'cjs' });
+    new Function('exports', 'require', 'module', '__filename', '__dirname', code)(module.exports,
+        (id: string) => Object.hasOwn(overrides, id) ? overrides[id] : sdkRequire(id), module, path, dirname(path));
+    return module.exports;
+}
 
 /** Execute the installed pure routing algorithms with their real dynamic-name matcher.
  * The surrounding CJS module imports native/browser adapters that these algorithms never use. */
@@ -42,15 +52,7 @@ export async function loadInstalledExpoPathSerializer() {
     const require = createRequire(import.meta.url);
     // Published CommonJS requires bypass Vitest's RN aliases. Preserve the exact SDK
     // serializers and pure navigation validator rather than mocking path/query logic.
-    const evaluate = async (path: string, overrides: Readonly<Record<string, unknown>>) => {
-        const module: { exports: Record<string, unknown> } = { exports: {} };
-        const sdkRequire = createRequire(path);
-        const { code } = await transform(await readFile(path, 'utf8'), { loader: 'js', format: 'cjs' });
-        new Function('exports', 'require', 'module', '__filename', '__dirname', code)(module.exports,
-            (id: string) => Object.hasOwn(overrides, id) ? overrides[id] : sdkRequire(id), module, path, dirname(path));
-        return module.exports;
-    };
-    const navigation = await evaluate(require.resolve('@react-navigation/core').replace(/index\.js$/, 'validatePathConfig.js'), {});
-    const forks = await evaluate(require.resolve('expo-router/build/fork/getPathFromState-forks'), { '@react-navigation/native': navigation });
-    return evaluate(require.resolve('expo-router/build/fork/getPathFromState'), { './getPathFromState-forks': forks });
+    const navigation = await evaluateInstalledExpoModule(require.resolve('@react-navigation/core').replace(/index\.js$/, 'validatePathConfig.js'), {});
+    const forks = await evaluateInstalledExpoModule(require.resolve('expo-router/build/fork/getPathFromState-forks'), { '@react-navigation/native': navigation });
+    return evaluateInstalledExpoModule(require.resolve('expo-router/build/fork/getPathFromState'), { './getPathFromState-forks': forks });
 }

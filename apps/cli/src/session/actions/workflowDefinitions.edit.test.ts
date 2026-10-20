@@ -4,6 +4,7 @@ import {
   createActionExecutor, WorkflowDefinitionV1Schema, type ActionExecutorDeps,
   type WorkflowDefinitionEditOpV1,
   accountSettingsParse,
+  createRoleSourceReaderV1,
 } from '@happier-dev/protocol';
 import { applyWorkflowDefinitionEditsV1 } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
 
@@ -30,11 +31,13 @@ const ops: WorkflowDefinitionEditOpV1[] = [
   { kind: 'move_block', blockId: 'b3', direction: 'up' },
 ];
 
+const roleSourceInventory = await createRoleSourceReaderV1({})();
+
 function currentAuthority(permissionMode: 'default' | 'yolo') {
   const context = resolveCliAgentStartContextV1({ sessionId: 'origin', machineId: 'machine', directory: '/repo',
     backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' }, metadata: {},
     starterDepth: 0, turnDepth: 0, callerPermissionMode: permissionMode, settings: accountSettingsParse({}),
-    accountRoleOverrides: { status: 'ready', overrides: {} } });
+    accountRoleOverrides: { status: 'ready', overrides: {} }, roleSourceInventory });
   if (!context) throw new Error('expected current host authority fixture');
   return context;
 }

@@ -46,7 +46,8 @@ export const MachineAgentRow = React.memo(function MachineAgentRow(props: Machin
         <RoundButton
             testID={`${props.testID}.action.${action.kind}`}
             size="small"
-            display={action.kind === 'signIn' ? 'default' : 'secondary'}
+            // A row's action repeats down the list (two agents needing sign-in): bordered, so no row shouts over its neighbours.
+            display="secondary"
             title={formatMachineAgentAction(action)}
             onPress={() => onAction(action)}
         />

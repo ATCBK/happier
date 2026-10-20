@@ -2,7 +2,7 @@
 import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-native', async () => {
     const { getVitestNodeBuiltin } = await import('@/dev/vitestNodeBuiltins');
@@ -53,11 +53,15 @@ import { assertNoUnsealedSettingsSecretValues, sealSecretsDeep } from '@/sync/en
 import { installLocalStorageMock, installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 
 vi.mock('socket.io-client', async original => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
 vi.mock('expo-audio', () => ({ AudioModule: { setAudioModeAsync: vi.fn(async () => undefined) } }));
 installDisconnectedServerSocketBoundary();
 await loadSyncSingletonForTests();
+
+// Supply only the human confirmation outcome; keep alert presentation real.
+beforeEach(async () => { const { Modal } = await import('@/modal'); vi.spyOn(Modal, 'confirm').mockResolvedValue(true); });
 
 const runtimeCleanup: Array<() => Promise<void>> = [];
 let homeFixtureOrdinal = 0;
@@ -214,6 +218,35 @@ async function createHarness(start = true, featureEnabled = true) {
 }
 
 describe('generated OpenAI conversation Actions through the lifecycle owner', () => {
+    it('admits a composer hold through Action policy and cancels an early gesture without committing', async () => {
+        const { lifecycle, sent } = await createHarness();
+        const { useVoiceAttemptControl } = await import('@/components/voice/attempt/useVoiceAttemptControl');
+        const { renderHook } = await import('@/dev/testkit');
+        storage.setState(state => ({ localSettings: { ...state.localSettings, voiceHoldToTalkEnabled: true }, settings: { ...state.settings,
+            actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: { ...state.settings.actionsSettingsV1?.actions,
+                'ui.voice_global.hold_begin': { disabledSurfaces: ['ui'] } } }) } }));
+        const hook = await renderHook(() => useVoiceAttemptControl({ kind: 'global' }));
+        try {
+            const denied = hook.getCurrent().beginHoldToTalk();
+            expect(denied).not.toBeNull();
+            expect(await denied!.ready).toBe(false);
+            await denied!.cancel();
+            await act(async () => storage.setState(state => ({ settings: { ...state.settings,
+                actionsSettingsV1: normalizeActionsSettingsV1({}) } })));
+            const before = sent().length;
+            const early = hook.getCurrent().beginHoldToTalk();
+            expect(early).not.toBeNull();
+            await early!.cancel();
+            expect(await early!.ready).toBe(false);
+            expect(sent().slice(before).filter(value => value.type === 'input_audio_buffer.commit')).toEqual([]);
+            const allowed = hook.getCurrent().beginHoldToTalk();
+            expect(allowed).not.toBeNull();
+            expect(await allowed!.ready).toBe(true);
+            await allowed!.release();
+            await allowed!.release();
+            expect(sent().slice(before).filter(value => value.type === 'input_audio_buffer.commit')).toHaveLength(1);
+        } finally { await hook.unmount(); await lifecycle.dispose(); }
+    });
     it('replays one tapped unmute Ask in the approving client while model decisions and End leave custody intact', async () => {
         const { lifecycle, expectedAttempt, serverId, artifacts, homeRequests, micTrack } = await createHarness();
         const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
@@ -280,16 +313,16 @@ describe('generated OpenAI conversation Actions through the lifecycle owner', ()
             speaking();
             await vi.waitFor(() => expect(lifecycle.getSnapshot().mode).toBe('speaking'));
             const sentBeforeInterrupt = sent().length;
-            createVoiceSurfaceActionHandlers({ sessionId: 'session-original', snapSessionId: null }).onBargeIn();
+            await createVoiceSurfaceActionHandlers({ sessionId: 'session-original', snapSessionId: null }).onBargeIn();
             expect(lifecycle.getSnapshot().mode).toBe('speaking');
             expect(sent().slice(sentBeforeInterrupt)).toEqual([]);
             setVoiceSessionLifecycleController(null);
-            createVoiceSurfaceActionHandlers({ sessionId: 'session-original', snapSessionId: 'session-original' }).onBargeIn();
+            await createVoiceSurfaceActionHandlers({ sessionId: 'session-original', snapSessionId: 'session-original' }).onBargeIn();
             await Promise.resolve();
             expect(lifecycle.getSnapshot().mode).toBe('speaking');
             expect(sent().slice(sentBeforeInterrupt)).toEqual([]);
             setVoiceSessionLifecycleController(lifecycle);
-            createVoiceSurfaceActionHandlers({ sessionId: 'session-original', snapSessionId: 'session-original' }).onBargeIn();
+            await createVoiceSurfaceActionHandlers({ sessionId: 'session-original', snapSessionId: 'session-original' }).onBargeIn();
             await vi.waitFor(() => expect(sent().slice(sentBeforeInterrupt)).toEqual([
                 { type: 'response.cancel' }, { type: 'output_audio_buffer.clear' },
             ]));
@@ -340,8 +373,9 @@ describe('generated OpenAI conversation Actions through the lifecycle owner', ()
             } else await lifecycle.stop('session-original');
             const expectedAttempt = getVoiceSessionPresentedAttemptId()!;
             useVoiceTargetStore.getState().setLastFocusedSessionAddress({ serverId: 'other-home', sessionId: 'visible-session' });
-            const actionId = scenario === 'recovery' ? 'ui.voice_global.recover' : 'ui.voice_global.open_conversation';
-            const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId, expectedAccountId: accountScope.accountId };
+            const actionId = scenario === 'recovery' ? 'ui.voice_global.recover' as const : 'ui.voice_global.open_conversation' as const;
+            const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId, expectedAccountId: accountScope.accountId,
+                presentUserConfirmation: { actionId } };
             const result = await createDefaultActionExecutor().execute(actionId, { expectedAttempt }, context);
             expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'completed' } });
             await act(async () => { await screen.update(hosted()); });
@@ -359,7 +393,7 @@ describe('generated OpenAI conversation Actions through the lifecycle owner', ()
             const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
             const executor = createDefaultActionExecutor();
             const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId,
-                expectedAccountId: 'voice-action-account' };
+                expectedAccountId: 'voice-action-account', presentUserConfirmation: { actionId: 'ui.voice_global.set_muted' as const } };
             expect(await executor.execute('ui.voice_global.set_muted', { expectedAttempt, muted: true }, context))
                 .toMatchObject({ ok: true, result: { status: 'completed' } });
             expect(lifecycle.getSnapshot().micMuted).toBe(true);
@@ -405,6 +439,10 @@ describe('generated OpenAI conversation Actions through the lifecycle owner', ()
     });
     it.each(['action', 'native'] as const)('starts Talk from a Bot SessionAction at its captured Home and surfaces a running attempt refusal through %s', async surface => {
         const { lifecycle, invoke, serverId } = await createHarness(false);
+        // This UI workflow now asks before opening the mic. Supply the human
+        // dialog outcome at its boundary, retaining the real approval policy.
+        const { Modal } = await import('@/modal');
+        vi.spyOn(Modal, 'confirm').mockResolvedValue(true);
         const target = createSessionActionTarget({ serverId, session: createSessionListRenderableSessionFixture({
             id: 'bot-talk-session', metadata: { path: '/project', name: 'Ada', bot: { kind: 'bot' } },
         }) });
@@ -517,7 +555,8 @@ describe('generated OpenAI conversation Action admission and turn controls', () 
             let settled = false;
             const pendingStart = createDefaultActionExecutor().execute('ui.voice_global.start', {
                 target: { kind: 'global' }, expectedAttempt: null,
-            }, { ...actionContext, serverId, expectedAccountId: 'voice-action-account' }).finally(() => { settled = true; });
+            }, { ...actionContext, serverId, expectedAccountId: 'voice-action-account',
+                presentUserConfirmation: { actionId: 'ui.voice_global.start' } }).finally(() => { settled = true; });
             try {
                 // Readiness is held at the actual Home HTTP boundary, not in a
                 // side-effectful replacement of the caller's currentness guard.

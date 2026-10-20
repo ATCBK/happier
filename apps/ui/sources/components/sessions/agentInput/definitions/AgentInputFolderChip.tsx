@@ -226,7 +226,7 @@ export function AgentInputFolderChip(props: AgentInputFolderChipProps): React.Re
                     ) : (
                         <View aria-hidden={true} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
                             <HappierSkeletonBlock
-                                color={theme.colors.surface.pressedOverlay}
+                                color={theme.colors.surface.skeleton}
                                 width={AGENT_INPUT_FOLDER_CHIP_RESOLVING_SIZE.width}
                                 height={AGENT_INPUT_FOLDER_CHIP_RESOLVING_SIZE.height}
                                 radius={AGENT_INPUT_FOLDER_CHIP_RESOLVING_SIZE.height / 2}
@@ -331,7 +331,8 @@ const FolderChipRemoveButton = React.memo(function FolderChipRemoveButton(props:
     );
 });
 
-const REMOVE_SLOT_STYLE = { alignSelf: 'stretch', marginRight: 4 } as const;
+// The reserved × slot is the only extra space after the chip; the row's own gap already separates it from its neighbour.
+const REMOVE_SLOT_STYLE = { alignSelf: 'stretch' } as const;
 const REMOVE_TARGET_STYLE = {
     width: AGENT_INPUT_CHIP_REMOVE_TARGET_WIDTH_PX,
     flex: 1,

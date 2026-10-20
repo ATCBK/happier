@@ -7,10 +7,11 @@ import { Switch } from '@/components/ui/forms/Switch';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Modal } from '@/modal';
+import { storage } from '@/sync/domains/state/storage';
 import type { VoiceLocalTtsSettings } from '@/sync/domains/settings/voiceLocalTtsSettings';
 import type { VoiceSettings } from '@/sync/domains/settings/voiceSettings';
 import { t } from '@/text';
-import { formatVoiceTestFailureMessage } from '@/voice/local/formatVoiceTestFailureMessage';
+import { describeTtsSampleFailure } from '@/voice/settings/panels/localTts/ttsSampleFailureMessage';
 import { primeWebAudioPlayback } from '@/voice/output/webAudioContext';
 import { getLocalTtsProviderSpec, useLocalTtsProviderSpecs } from '@/voice/settings/panels/localTts/providers/registry';
 import type { VoiceDaemonRouteDiagnosticReason } from '@/voice/settings/voiceProviderLocalAvailability';
@@ -19,9 +20,21 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { SettingAnchor } from '@/components/settings/shell/SettingRow';
 import { VOICE_CONVERSATIONS_SETTINGS } from '@/voice/settings/voiceSettingsDeclarations';
+import { useVoiceSettingsSearchPrerequisite } from '@/voice/settings/VoiceSettingsSearchPrerequisite';
+import { getVoiceContributedSettingRefs, useVoiceContributedSettingsDeclarations } from '@/voice/settings/useVoiceContributedSettingRefs';
+
+const LOCAL_NEURAL_TTS_SETTINGS = Object.entries(VOICE_CONVERSATIONS_SETTINGS.settings)
+  .filter(([id, setting]) => id.startsWith('tts') && id !== 'ttsProvider'
+    && setting.sectionId === VOICE_CONVERSATIONS_SETTINGS.settings.ttsProvider.sectionId)
+  .map(([, setting]) => setting);
+export const VOICE_LOCAL_TTS_SETTINGS = [VOICE_CONVERSATIONS_SETTINGS.settings.ttsProvider,
+  VOICE_CONVERSATIONS_SETTINGS.settings.autoSpeakReplies, VOICE_CONVERSATIONS_SETTINGS.settings.testTts,
+  ...LOCAL_NEURAL_TTS_SETTINGS];
 
 export function LocalVoiceTtsGroup(props: {
   cfgTts: VoiceLocalTtsSettings;
+  /** A shared speech contribution's fields may already be drawn by Hear. */
+  otherSpeechProviderId?: string;
   setTts: (next: VoiceLocalTtsSettings) => void;
   voice: VoiceSettings;
   setVoice: (next: VoiceSettings) => void;
@@ -29,8 +42,10 @@ export function LocalVoiceTtsGroup(props: {
   popoverBoundaryRef?: React.RefObject<any> | null;
   daemonRouteDiagnosticReason?: VoiceDaemonRouteDiagnosticReason | null;
 }) {
+  const searchPrerequisite = useVoiceSettingsSearchPrerequisite();
   const { theme } = useUnistyles();
   const providerSpecs = useLocalTtsProviderSpecs();
+  const declarations = useVoiceContributedSettingsDeclarations('voiceConversations');
   const [openMenu, setOpenMenu] = React.useState<null | 'ttsProvider'>(null);
   const [testStatus, setTestStatus] = React.useState<'idle' | 'speaking'>('idle');
 
@@ -85,6 +100,11 @@ export function LocalVoiceTtsGroup(props: {
         <Item title={t('common.unavailable')} />
       )}
 
+      {providerSpecs.filter((spec) => spec.id !== providerSpec?.id).map((spec) => (
+        searchPrerequisite({ settings: [...(spec.id === props.otherSpeechProviderId ? [] : getVoiceContributedSettingRefs(declarations, spec.id)),
+            ...(spec.id === 'local_neural' ? LOCAL_NEURAL_TTS_SETTINGS : [])], reason: t('settingsVoice.pages.search.select', { choice: spec.title, control: t('settingsVoice.pages.conversations.voiceEngineTitle') }) })
+      ))}
+
       <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.autoSpeakReplies}>
       <Item
         title={t('settingsVoice.local.autoSpeak')}
@@ -117,17 +137,16 @@ export function LocalVoiceTtsGroup(props: {
             try {
               if (testStatus === 'speaking') return;
               setTestStatus('speaking');
-              const sample = t('settingsVoice.local.testTtsSample');
-              const selectedProvider = getLocalTtsProviderSpec(cfg.provider);
-              if (!selectedProvider) throw new Error('voice_tts_provider_unavailable');
-              await selectedProvider.test({
-                cfgTts: cfg,
-                voice: props.voice,
-                networkTimeoutMs: props.networkTimeoutMs,
-                sample,
+              const operation = VOICE_CONVERSATIONS_SETTINGS.settings.testTts.operation;
+              if (!operation || operation.kind !== 'invoke') throw new Error('voice_tts_test_operation_unavailable');
+              const result = await operation.invoke({
+                isCurrent: () => true,
+                readSettings: async () => storage.getState().settings,
+                mutateSettings: async () => { throw new Error('TTS sample must not mutate settings'); },
               });
+              if (result.status === 'unavailable') throw new Error(result.reason ?? 'voice_tts_provider_unavailable');
             } catch (err) {
-              fireAndForget(Promise.resolve().then(() => Modal.alert(t('common.error'), formatVoiceTestFailureMessage(t('settingsVoice.local.testTtsFailed'), err))), {
+              fireAndForget(Promise.resolve().then(() => Modal.alert(t('common.error'), describeTtsSampleFailure(err instanceof Error ? err.message : null))), {
                 tag: 'LocalVoiceTtsGroup.alert.testTtsFailed',
               });
             } finally {

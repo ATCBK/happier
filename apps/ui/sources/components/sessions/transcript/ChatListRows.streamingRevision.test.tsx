@@ -5,176 +5,30 @@
  */
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
-import type { AgentTextMessage } from "@happier-dev/session-core/messages";
-import type {
-    TranscriptForkCommon,
-    TranscriptMessageDisplayCommon,
-    TranscriptToolChromeCommon,
-    TranscriptToolRouteCommon,
-} from './transcriptSessionCommon';
-import { installMessageViewCommonModuleMocks } from './messageViewTestHelpers';
+import type { AgentTextMessage } from '@happier-dev/session-core/messages';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+vi.mock('react-native', async () =>
+    (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () =>
+    (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@/text', async () =>
+    (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
+vi.mock('@/modal', async () =>
+    (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
+vi.mock('expo-router', async () =>
+    (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 
-installMessageViewCommonModuleMocks({
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            Platform: {
-                OS: 'ios',
-                select: (values: Record<string, unknown>) => values?.ios ?? values?.native ?? values?.default,
-            },
-            View: 'View',
-            Text: 'Text',
-            Pressable: ({ children, ...props }: React.PropsWithChildren<Record<string, unknown>>) =>
-                React.createElement('Pressable', props, children),
-            ActivityIndicator: 'ActivityIndicator',
-            Dimensions: {
-                get: () => ({ width: 390, height: 844, scale: 3, fontScale: 1 }),
-            },
-            useWindowDimensions: () => ({ width: 390, height: 844, scale: 3, fontScale: 1 }),
-        });
-    },
-    unistyles: async () => {
-        const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-        return createUnistylesMock({
-            theme: {
-                colors: {
-                    text: {
-                        primary: '#f4f4f4',
-                    },
-                },
-            },
-        });
-    },
-    text: async () => {
-        const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        return createTextModuleMock({
-            translate: (key: string) => key,
-        });
-    },
-    modal: async () => {
-        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock().module;
-    },
-    router: async () => {
-        const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-        return createExpoRouterMock({ router: { push: vi.fn() } }).module;
-    },
-});
-
-vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
-vi.mock('expo-clipboard', () => ({ setStringAsync: vi.fn() }));
-vi.mock('@/sync/sync', () => ({ sync: { submitMessage: vi.fn(), sendMessage: vi.fn() } }));
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: (props: React.PropsWithChildren<Record<string, unknown>>) =>
-        React.createElement('Text', props, props.children),
-}));
-vi.mock('@/components/tools/shell/views/ToolView', () => ({ ToolView: () => React.createElement('ToolView') }));
-vi.mock('@/components/tools/shell/views/ToolTimelineRow', () => ({
-    ToolTimelineRow: () => React.createElement('ToolTimelineRow'),
-}));
-vi.mock('@/components/sessions/transcript/structured/StructuredMessageBlock', () => ({
-    renderStructuredMessage: () => null,
-    StructuredMessageBlock: () => React.createElement('StructuredMessageBlock'),
-}));
-vi.mock('@/components/sessions/transcript/transcriptRowActionVisibility', () => ({ shouldShowTranscriptRowActions: () => false, shouldShowTranscriptRowPinAction: () => false }));
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({ useFeatureEnabled: () => true }));
-vi.mock('@/utils/sessions/discardedCommittedMessages', () => ({ isCommittedMessageDiscarded: () => false }));
-vi.mock('@/utils/url/sessionFileDeepLink', () => ({ buildSessionFileDeepLink: () => '' }));
-vi.mock('@/utils/system/fireAndForget', () => ({ fireAndForget: (promise: Promise<unknown>) => promise }));
-vi.mock('@/components/sessions/linkedFiles/extractWorkspaceFileMentions', () => ({
-    extractWorkspaceFileMentions: () => [],
-}));
-vi.mock('@/components/sessions/transcript/references/StructuredReferencesRow', () => ({
-    StructuredReferencesRow: () => React.createElement('StructuredReferencesRow'),
-}));
-vi.mock('@/components/sessions/transcript/motion/TranscriptMotionContext', () => ({
-    useTranscriptMotion: () => ({
-        config: {
-            preset: 'subtle',
-            freshnessMs: 60_000,
-            animateNewItemsEnabled: true,
-            animateToolExpandCollapseEnabled: true,
-            animateToolExpandCollapseFreshOnly: true,
-            animateThinkingEnabled: true,
-        },
-    }),
-}));
-vi.mock('@/components/sessions/transcript/thinking/ThinkingTimelineRow', () => ({
-    ThinkingTimelineRow: (props: React.PropsWithChildren<Record<string, unknown>>) =>
-        React.createElement('ThinkingTimelineRow', props, props.children),
-}));
-vi.mock('@/sync/ops', () => ({ forkSession: vi.fn() }));
-vi.mock('@/sync/domains/sessionFork/forkUiSupport', () => ({ canForkFromMessage: () => false }));
-vi.mock('@/sync/domains/sessionFork/forkFromMessageSemantics', () => ({ resolveForkFromMessageSemantics: () => null }));
-vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
-    createDefaultActionExecutor: () => ({ executeAction: vi.fn() }),
-}));
-vi.mock('@/sync/ops/sessionMachineTarget', () => ({ readMachineTargetForSession: () => null }));
-vi.mock('@/utils/ui/clipboard', () => ({ setClipboardStringSafe: vi.fn(async () => true) }));
-
-const streamingMeta = {
-    happierStreamSegmentV1: {
-        v: 1,
-        segmentKind: 'assistant',
-        segmentLocalId: 'assistant-segment-1',
-        segmentState: 'streaming',
-        startedAtMs: 1_000,
-        updatedAtMs: 1_000,
-    },
-} satisfies AgentTextMessage['meta'];
-
-const messageDisplayCommon = {
-    sessionThinkingDisplayMode: 'inline',
-    sessionThinkingInlineChrome: 'plain',
-    sessionThinkingInlinePresentation: 'summary',
-    transcriptMessageTimestampDisplayMode: 'never',
-    transcriptStreamingMarkdownRenderingEnabled: true,
-    transcriptStreamingPartialOutputEnabled: true,
-    transcriptStreamingSettleDelayMs: 200,
-    transcriptStreamingSmoothingEnabled: true,
-    transcriptMessageSelectionEnabled: true,
-    transcriptMessageCopyActionEnabled: true,
-    transcriptMessageForkActionEnabled: true,
-    transcriptMessageRollbackActionEnabled: true,
-    transcriptMessagePinActionEnabled: true,
-    transcriptMessageSavePromptActionEnabled: true,
-    transcriptMessageMakeRepeatableActionEnabled: true,
-    transcriptMessagePluginActionsEnabled: true,
-    transcriptMessageSendToSessionEnabled: false,
-    debugInformationEnabled: false,
-    workspacePath: null,
-} satisfies TranscriptMessageDisplayCommon;
-
-const forkCommon = {
-    agentSwitchingEnabled: false,
-    executionRunsEnabled: false,
-    sessionForkSupportSource: null,
-    sessionReplayEnabled: false,
-    sessionReplayMaxSeedChars: 120_000,
-    sessionReplayStrategy: 'recent_messages',
-    sessionReplaySummaryRunnerV1: null,
-} satisfies TranscriptForkCommon;
-
-const toolChromeCommon = {
-    toolViewTimelineChromeMode: 'cards',
-    transcriptToolCallsCollapsedPreviewCount: 1,
-    transcriptToolCallsGroupShowBackground: false,
-} satisfies TranscriptToolChromeCommon;
-
-const toolRouteCommon = {
-    messagesById: {},
-    reducerState: null,
-} satisfies TranscriptToolRouteCommon;
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
 
 describe('useMessage subscription probe', () => {
-    beforeEach(() => {
-        vi.resetModules();
-    });
     afterEach(() => {
         standardCleanup();
     });

@@ -25,6 +25,8 @@ export type SessionRoute = Readonly<
 export type SessionRoutePresentationInput = Readonly<{
     phase: 'draft' | 'running'; selection: RouteSelection;
     appliedSelection?: RouteSelection; transitionPending?: boolean;
+    /** Presentation-only evidence from the canonical model disposition; never live runtime authority. */
+    reportedSelection?: RouteSelection;
     native: Readonly<{ label: string; authSource: 'native' | 'connected' | 'mixed' | 'unknown'; connectedCount: number }>;
     /** Runtime binding display snapshot, not a recomputed proposed connection. */
     appliedProviderSource?: ProviderRouteSource | null;
@@ -101,32 +103,59 @@ function routeSourceLabel(route: SessionRoute, nativeLabel: string): string | nu
     }
 }
 
+/** Whether two routes go through the same source: the Agent's own account, one connection or one Team resource. */
+function isSameRouteSource(left: SessionRoute, right: SessionRoute): boolean {
+    switch (left.kind) {
+        case 'unknown': return false;
+        case 'native': return right.kind === 'native';
+        case 'provider': return right.kind === 'provider' && right.connectionId === left.connectionId;
+        case 'team': return right.kind === 'team' && right.teamId === left.teamId && right.resourceId === left.resourceId;
+    }
+}
+
+/** The applied route, or while it is unreadable the last reported one; never a guess from the selection. */
+function readRunningRoute(presentation: Readonly<{ applied: SessionRoute; reported?: SessionRoute }>): SessionRoute {
+    return presentation.applied.kind === 'unknown' ? presentation.reported ?? presentation.applied : presentation.applied;
+}
+
 /**
- * The source a running session continues through once the next message is sent (D15): a route or
- * model picked while it runs is armed for that message, like an Agent switch. Null when nothing is
- * armed or the armed source cannot be named.
+ * Whether the armed change keeps the source the session already runs through and changes only its
+ * model (D15). The composer then names that model, not the unchanged source.
+ */
+export function isArmedModelOnlySessionChange(
+    presentation: Readonly<{ applied: SessionRoute; pending: SessionRoute | null; reported?: SessionRoute }>,
+): boolean {
+    return presentation.pending !== null && isSameRouteSource(readRunningRoute(presentation), presentation.pending);
+}
+
+/**
+ * The source a running session continues through once the next message is sent (D15): a route
+ * picked while it runs is armed for that message, like an Agent switch. Null when nothing is armed,
+ * when the armed source cannot be named, or when only the model changes within the source that
+ * already runs — the route does not switch, so naming it as "next" would claim a change that isn't.
  */
 export function presentArmedSessionRouteSource(
-    presentation: Readonly<{ pending: SessionRoute | null }>,
+    presentation: Readonly<{ applied: SessionRoute; pending: SessionRoute | null; reported?: SessionRoute }>,
     native: Readonly<{ label: string }>,
 ): string | null {
-    return presentation.pending ? routeSourceLabel(presentation.pending, native.label) : null;
+    if (!presentation.pending || isArmedModelOnlySessionChange(presentation)) return null;
+    return routeSourceLabel(presentation.pending, native.label);
 }
 
 /**
  * The composer chip's words for a route (D6). The native case keeps the incumbent account label,
  * which follows the user's account choice as they make it. An armed change is named as what comes
- * next ("Next via …") — a choice already made, not something that needs attention. Without applied
- * evidence or an armed source there is no route to name, so it returns `null` and the caller keeps
- * its incumbent label.
+ * next ("Next via …") — a choice already made, not something that needs attention. A missing runner
+ * observation retains coherent last-reported route presentation, without granting it live authority.
+ * Without either evidence or an armed source it returns `null` and the caller keeps its incumbent label.
  */
 export function presentSessionRouteChip(
-    presentation: Readonly<{ applied: SessionRoute; pending: SessionRoute | null }>,
+    presentation: Readonly<{ applied: SessionRoute; pending: SessionRoute | null; reported?: SessionRoute }>,
     native: Readonly<{ label: string; authSource: 'native' | 'connected' | 'mixed' | 'unknown' }>,
 ): Readonly<{ label: string }> | null {
     const armed = presentArmedSessionRouteSource(presentation, native);
     if (armed) return { label: t('connectedServices.authChip.nextVia', { source: armed }) };
-    const applied = presentation.applied;
+    const applied = readRunningRoute(presentation);
     if (applied.kind === 'native' && native.authSource === 'unknown') return null;
     const source = routeSourceLabel(applied, native.label);
     if (!source) return null;
@@ -137,7 +166,7 @@ export function presentSessionRouteChip(
     };
 }
 
-export function resolveSessionRoutePresentation(input: SessionRoutePresentationInput): Readonly<{ applied: SessionRoute; pending: SessionRoute | null }> {
+export function resolveSessionRoutePresentation(input: SessionRoutePresentationInput): Readonly<{ applied: SessionRoute; pending: SessionRoute | null; reported?: SessionRoute }> {
     const resolve = (selection: RouteSelection, applied: boolean): SessionRoute => {
         if (selection && 'source' in selection && selection.source === 'team_resource') {
             const source = input.teamSources?.find(source => source.teamId === selection.teamId && source.resourceId === selection.resourceId);
@@ -149,8 +178,10 @@ export function resolveSessionRoutePresentation(input: SessionRoutePresentationI
             : selection?.providerConnectionId ?? null;
         if (connectionId && selection) {
             const current = input.sources?.find(source => source.connectionId === connectionId);
-            const source = applied && input.appliedProviderSource?.connectionId === connectionId
-                ? input.appliedProviderSource : current;
+            // A retained Session can edit its next-launch choice before the picker is demanded.
+            // Its matching applied snapshot still names that exact source without a catalog RPC.
+            const snapshot = input.appliedProviderSource?.connectionId === connectionId ? input.appliedProviderSource : null;
+            const source = applied ? snapshot ?? current : current ?? snapshot;
             return { kind: 'provider', connectionId, sourceLabel: source ? providerConnectionSourceLabel(source) : null,
                 modelId: selection.modelId, unavailable: current === undefined };
         }
@@ -160,6 +191,8 @@ export function resolveSessionRoutePresentation(input: SessionRoutePresentationI
     return {
         applied: input.phase === 'draft' ? resolve(input.selection, false)
             : input.appliedSelection ? resolve(input.appliedSelection, true) : { kind: 'unknown' },
+        ...(input.phase === 'running' && !input.appliedSelection && input.reportedSelection
+            ? { reported: resolve(input.reportedSelection, true) } : {}),
         pending: input.phase === 'running' && input.transitionPending ? resolve(input.selection, false) : null,
     };
 }

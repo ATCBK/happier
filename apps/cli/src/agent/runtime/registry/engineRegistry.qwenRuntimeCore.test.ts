@@ -5,44 +5,13 @@ import { describe, expect, it } from 'vitest';
 
 import type { Credentials } from '@/persistence';
 import { resolveBuiltInContributions } from '../../../plugins/projection/registry/resolveBuiltInContributions';
-import type { ResolvedContributionRegistry } from '../../../plugins/projection/registry/types';
+import { createResolvedContributionRegistry } from '../../../plugins/projection/registry/createResolvedContributionRegistry';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { isExecutionRunHostRuntime } from '../bridges/executionRun/executionRunHostRuntime';
 import { resolveBackendEngineAdapterResolution } from './engineRegistry';
 
 const QWEN_BACKEND_ID = 'qwen';
 const QWEN_PLUGIN_ID = 'happier.agent.qwen';
-
-function createQwenOnlyContributionRegistry(): ResolvedContributionRegistry {
-  const builtInContributions = resolveBuiltInContributions();
-  const agentContribution = builtInContributions.agents.find((entry) => entry.id === QWEN_BACKEND_ID);
-  const activationTargets = builtInContributions.activationTargets?.filter((target) => target.pluginId === QWEN_PLUGIN_ID) ?? [];
-
-  if (!agentContribution || activationTargets.length !== 1) {
-    throw new Error('Expected generated Qwen Agent and activation target contributions');
-  }
-
-  return {
-    agents: Object.freeze([agentContribution]),
-        actions: Object.freeze([]),
-    resources: Object.freeze([]),
-    uiViewsV2: Object.freeze([]),
-    uiRenderersV2: Object.freeze([]),
-    uiTranslationsV2: Object.freeze([]),
-    notifications: Object.freeze([]),
-    notificationChannels: Object.freeze([]),
-    events: Object.freeze([]),
-    executionRunProfiles: Object.freeze([]),
-    managedDependencies: Object.freeze([]),
-    requestInterceptors: Object.freeze([]),
-    scmHostingProviders: Object.freeze([]),
-    scmBackends: Object.freeze([]),
-    connectedAccountDescriptors: Object.freeze([]),
-    activationTargets: Object.freeze(activationTargets),
-        catalogEntriesById: Object.freeze(agentContribution.catalogEntry ? { [agentContribution.catalogEntry.id]: agentContribution.catalogEntry } : {}),
-    agentDefinitionsById: new Map([[agentContribution.id, agentContribution]]),
-        pluginDiagnosticsByPluginId: Object.freeze({}),
-  };
-}
 
 function createTestCredentials(): Credentials {
   return {
@@ -59,15 +28,18 @@ describe('engineRegistry (qwen runtimeCore)', () => {
     const qwenShimDir = await mkdtemp(join(os.tmpdir(), 'happier-qwen-runtime-core-'));
     const qwenShimPath = join(qwenShimDir, 'qwen');
     const previousQwenPath = process.env.HAPPIER_QWEN_PATH;
-    const contributes = createQwenOnlyContributionRegistry();
+    let fixture: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | null = null;
 
     try {
       await writeFile(qwenShimPath, '#!/bin/sh\nexit 0\n');
       await chmod(qwenShimPath, 0o755);
       process.env.HAPPIER_QWEN_PATH = qwenShimPath;
+      fixture = await createAdmittedPluginRuntimeFixture({ runtimeOptions: {
+        contributes: createResolvedContributionRegistry(resolveBuiltInContributions()), pluginIds: [QWEN_PLUGIN_ID],
+      } });
 
       const resolution = await resolveBackendEngineAdapterResolution('qwen', {
-        contributes,
+        runtimeRegistry: fixture.registry,
       });
 
       expect(resolution).toMatchObject({
@@ -98,6 +70,8 @@ describe('engineRegistry (qwen runtimeCore)', () => {
       expect(plan.config.createSessionRuntime).toEqual(expect.any(Function));
 
       const executionRunRuntime = resolution!.engineAdapter.runtimeCore.createExecutionRunBackend({
+        runId: 'qwen-runtime-core',
+        start: { intent: 'delegate' },
         scope: 'detached',
         backendId: QWEN_BACKEND_ID,
         cwd: '/tmp/qwen',
@@ -108,6 +82,7 @@ describe('engineRegistry (qwen runtimeCore)', () => {
       expect(isExecutionRunHostRuntime(executionRunRuntime)).toBe(true);
       await expect(executionRunRuntime.readResumeSupport()).resolves.toBe(true);
     } finally {
+      await fixture?.dispose();
       if (previousQwenPath === undefined) {
         delete process.env.HAPPIER_QWEN_PATH;
       } else {

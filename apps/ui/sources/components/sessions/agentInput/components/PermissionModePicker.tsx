@@ -75,7 +75,7 @@ export function PermissionModePicker(props: {
                         >
                             {isSelected ? <View style={props.styles.overlayRadioInner} /> : null}
                         </View>
-                        <View>
+                        <View style={{ flex: 1 }}>
                             <Text
                                 style={[
                                     props.styles.overlayOptionLabel,
@@ -84,7 +84,7 @@ export function PermissionModePicker(props: {
                             >
                                 {option.label}
                             </Text>
-                            <Text style={props.styles.overlayOptionDescription}>{option.description}</Text>
+                            {option.description ? <Text style={props.styles.overlayOptionDescription}>{option.description}</Text> : null}
                         </View>
                     </Pressable>
                 );

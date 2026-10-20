@@ -36,7 +36,8 @@ function textOf(node: { children: unknown[] } | null): string {
         ? child
         : textOf(child as { children: unknown[] }),
     )
-    .join('');
+    .join('')
+    .replaceAll('\u00A0', ' '); // the line keeps its separators as no-break spaces; they read as spaces
 }
 
 describe('RightSidebarPaneHeader', { timeout: 240_000 }, () => {

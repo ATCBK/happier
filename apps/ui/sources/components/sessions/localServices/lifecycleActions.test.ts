@@ -1,14 +1,29 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { isLocalServiceActionConfirmationNonceV1, LocalServiceActionRequestV1Schema, type RuntimeActionExecute } from '@happier-dev/protocol';
+import { DaemonLocalServiceActionExecuteResponseV1Schema } from '@happier-dev/protocol/local/services/actions/v1';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
-import { readPresentationNotice, retirePresentationNotice } from '@/components/sessions/presentation/presentationNotices';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import type { LocalServiceLaunchTarget } from '@/sync/domains/local/services/launch';
-import { areServerProfileIdentifiersEquivalent, removeServerProfile, setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 
-import {
+const daemon = vi.hoisted(() => ({ rpc: vi.fn() }));
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () =>
+    (await import('@/dev/testkit/mocks/serverScopedRpc')).createServerScopedMachineRpcBoundaryMock(daemon.rpc));
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+installDisconnectedServerSocketBoundary();
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+const { readPresentationNotice, retirePresentationNotice } = await import('@/components/sessions/presentation/presentationNotices');
+const { areServerProfileIdentifiersEquivalent, removeServerProfile, setServerProfileIdentityForUrl, upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
+const { createFrontDoorRuntimeActionExecutor } = await import('@/sync/ops/actions/frontDoorRuntimeActionExecutor');
+const { useActionApprovalContinuation } = await import('@/components/approvals/useActionApprovalContinuation');
+const {
     buildDetectedLocalServiceTerminateRequest,
     buildLocalServiceCopyUrlRequest,
     createLocalServiceActionRequestId,
@@ -16,7 +31,7 @@ import {
     useDetectedLocalServiceTerminateAction,
     useLocalServiceCopyUrlAction,
     useManagedLocalServiceControlAction,
-} from './lifecycleActions';
+} = await import('./lifecycleActions');
 
 function managedCopyTarget(): LocalServiceLaunchTarget {
     return { id: 'logical-display-not-the-instance', source: 'managed_service',
@@ -28,7 +43,8 @@ function managedCopyTarget(): LocalServiceLaunchTarget {
 }
 
 describe('local service lifecycle action helpers', () => {
-    afterEach(() => { standardCleanup(); retirePresentationNotice(); });
+    beforeEach(async () => { await home.reset(); });
+    afterEach(async () => { standardCleanup(); retirePresentationNotice(); daemon.rpc.mockReset(); await home.reset(); });
 
     it.each(['accept', 'decline', 'retire'] as const)('joins Setup consent before Restart effect review without disrupting its occurrence (%s)', async decision => {
         const target = managedCopyTarget();
@@ -277,17 +293,25 @@ describe('local service lifecycle action helpers', () => {
         });
     });
 
-    it('keeps a refused Undo visible through the notice owner', async () => {
-        let requests = 0;
-        const runtimeActionExecute: RuntimeActionExecute = async () => {
-            requests += 1;
-            return requests === 1
-                ? { v: 1, requestId: 'forget', action: 'forget', status: 'succeeded', auditEvents: [], undoKey: 'suppression' }
-                : { v: 1, requestId: 'undo', action: 'forget', status: 'denied', reasonCode: 'wrong_machine', auditEvents: [] };
-        };
+    it.each(['reject', 'cancel', 'refused'] as const)('keeps declined Undo quiet and a real refusal visible through the notice owner (%s)', async decision => {
+        const serverId = await home.addHome({ name: 'Services', serverUrl: 'https://services-undo.test', accountId: 'owner', currentAccount: true });
+        // Only daemon IO is replaced: Action policy, persisted approval, continuation and notice owner stay real.
+        daemon.rpc.mockImplementation(async (rpc: Readonly<{ method: string; payload: unknown }>) => {
+            expect(rpc.method).toBe(RPC_METHODS.DAEMON_LOCAL_SERVICES_ACTIONS_EXECUTE);
+            const request = LocalServiceActionRequestV1Schema.parse(rpc.payload);
+            const refused = decision === 'refused' && request.undoKey !== undefined;
+            return DaemonLocalServiceActionExecuteResponseV1Schema.parse({ protocolVersion: 1,
+                result: { v: 1, requestId: request.requestId, action: request.action,
+                    status: refused ? 'denied' : 'succeeded', ...(refused ? { reasonCode: 'wrong_machine' } : { undoKey: 'suppression' }),
+                    auditEvents: [{ v: 1, eventId: `event:${request.requestId}`, requestId: request.requestId,
+                        machineId: request.target.machineId, action: request.action, result: refused ? 'denied' : 'succeeded', recordedAt: 1 }] } });
+        });
+        const runtimeActionExecute = createFrontDoorRuntimeActionExecutor();
         let forget: ReturnType<typeof useDetectedLocalServiceForgetAction>;
         function Harness() {
-            forget = useDetectedLocalServiceForgetAction({ runtimeActionExecute, machineId: 'machine-a' });
+            const continuation = useActionApprovalContinuation({ scopeKey: serverId, serverId, onExecuted: () => {} });
+            forget = useDetectedLocalServiceForgetAction({ runtimeActionExecute, machineId: 'machine-a', serverId,
+                expectedAccountId: 'owner', onApprovalPending: continuation.requestApproval });
             return React.createElement('View');
         }
         await renderScreen(React.createElement(Harness));
@@ -297,12 +321,28 @@ describe('local service lifecycle action helpers', () => {
                 machineId: 'machine-a', confidence: 'high', state: 'available', actions: [] });
         });
         const notice = readPresentationNotice();
-        await act(async () => { await notice?.undo?.run(); });
-        const failure = readPresentationNotice();
-        expect(failure?.severity).toBe('error');
-        // The host retires the clicked notice, not the newer remote-failure notice.
-        retirePresentationNotice(notice?.key);
-        expect(readPresentationNotice()).toBe(failure);
+        expect(notice?.undo).toBeDefined();
+        if (decision === 'refused') {
+            await act(async () => { await notice?.undo?.run(); });
+            const failure = readPresentationNotice();
+            expect(failure?.severity).toBe('error');
+            // The host retires the clicked notice, not the newer remote-failure notice.
+            retirePresentationNotice(notice?.key);
+            expect(readPresentationNotice()).toBe(failure);
+        } else {
+            await home.requireUiApproval(serverId, 'localServices.actions.forget');
+            let undo: Promise<unknown> | undefined;
+            await act(async () => {
+                undo = Promise.resolve(notice?.undo?.run());
+                await vi.waitFor(() => expect(home.artifacts(serverId).list()).toHaveLength(1));
+            });
+            await act(async () => {
+                expect(await decideApprovalAsInbox(serverId, home.artifacts(serverId).list()[0]!.id, decision)).toMatchObject({ ok: true });
+            });
+            await act(async () => { await undo; });
+            expect(readPresentationNotice()).toBe(notice);
+            expect(daemon.rpc).toHaveBeenCalledTimes(1);
+        }
     });
 
     it('generates bounded request ids for action correlation', () => {

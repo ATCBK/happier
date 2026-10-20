@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { z as miniZod } from 'zod/mini';
 
 import {
   agentEventAttentionImpact,
@@ -7,9 +8,19 @@ import {
   buildAgentEventLocalId,
   TranscriptRawAgentEventV1Schema,
   TranscriptRawRecordV1Schema,
+  createTranscriptRawRecordV1Schema,
 } from './transcriptRawRecordV1.js';
 
 describe('TranscriptRawRecordV1Schema', () => {
+  it('reads custom metadata through the Session-core Mini transcript factory', () => {
+    // Session-core composes the Mini transcript factory with its own metadata schema.
+    const schema = createTranscriptRawRecordV1Schema(miniZod, {
+      metaSchema: miniZod.looseObject({ source: miniZod.string() }),
+    });
+    const record = { role: 'user', content: { type: 'text', text: 'hello' }, meta: { source: 'ui' } };
+    expect(schema.parse(record)).toEqual(record);
+    expect(schema.safeParse({ ...record, content: { type: 'text', text: 42 } }).success).toBe(false);
+  });
   it('projects retired typed event fields while preserving opaque native-provider records', () => {
     const update = { v: 1, workerKind: 'session', workerId: 'worker', ownerState: 'settled', wake: 'finished',
       headline: 'Worker finished', canInspect: true };
@@ -40,6 +51,26 @@ describe('TranscriptRawRecordV1Schema', () => {
     expect(TranscriptRawAgentEventV1Schema.safeParse({ type: 'worker-report', summary: 'Final result' }).success).toBe(true);
     expect(TranscriptRawAgentEventV1Schema.safeParse({ type: 'worker-report', summary: 'x'.repeat(8001) }).success).toBe(false);
     expect(TranscriptRawAgentEventV1Schema.safeParse({ type: 'worker-report', summary: 'Final result', leadSessionId: 'forged' }).success).toBe(false);
+    expect(TranscriptRawAgentEventV1Schema.parse({ type: 'goal-changed' })).toEqual({ type: 'goal-changed' });
+    expect(TranscriptRawAgentEventV1Schema.safeParse({ type: 'goal-changed', objective: 'Private goal' }).success).toBe(false);
+  });
+  it('retains only a canonical same-destination Follow wake event reference on a host WorkerUpdate card', () => {
+    const event = { type: 'worker-update', update: {
+      v: 1, workerKind: 'session', workerId: 'worker', ownerState: 'settled', wake: 'finished',
+      headline: 'Worker finished', canInspect: true,
+    }, followWakeEventLocalId: 'session-follow-wake:accepted-batch' };
+    expect(TranscriptRawAgentEventV1Schema.parse(event)).toEqual(event);
+    expect(TranscriptRawAgentEventV1Schema.safeParse({ ...event, followWakeEventLocalId: 'ordinary-event' }).success).toBe(false);
+  });
+  it('retains admitted relation and rule reasons without disclosing private rule identity', () => {
+    const event = { type: 'worker-update', update: {
+      v: 1, workerKind: 'session', workerId: 'worker', ownerState: 'settled', wake: 'finished',
+      headline: 'Worker finished', canInspect: true,
+    }, followMatches: [{ kind: 'relation', relation: 'manager' }, { kind: 'rule' }],
+    followInputLocalId: 'follow-original:accepted' };
+    expect(TranscriptRawAgentEventV1Schema.parse(event)).toEqual(event);
+    expect(TranscriptRawAgentEventV1Schema.safeParse({ ...event,
+      followMatches: [{ kind: 'rule', ruleId: 'private-rule' }] }).success).toBe(false);
   });
   it('parses user text records with extra fields', () => {
     const parsed = TranscriptRawRecordV1Schema.safeParse({

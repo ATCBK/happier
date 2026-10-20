@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { db, initDbMysql } from "@/storage/db";
+import { sourceKeyForSessionFollowSourceV1 } from '@/app/session/follow/sessionFollowSourceIdentity';
 
 const provider = String(process.env.HAPPIER_DB_PROVIDER ?? process.env.HAPPY_DB_PROVIDER ?? "")
     .trim()
@@ -66,21 +67,26 @@ describe.skipIf(provider !== "mysql")("MySQL trigger invariant enforcement", () 
 
                 await tx.sessionFollowEdge.create({
                     data: {
+                        sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: source.id }),
                         sourceSessionId: source.id,
                         destinationSessionId: destination.id,
+                        policyJson: JSON.stringify({ preset: 'quiet' }),
                     },
                 });
                 await expect(tx.sessionFollowEdge.create({
                     data: {
+                        sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: destination.id }),
                         sourceSessionId: destination.id,
                         destinationSessionId: destination.id,
+                        policyJson: JSON.stringify({ preset: 'quiet' }),
                     },
                 })).rejects.toThrow("SessionFollowEdge source and destination must differ");
                 await expect(tx.sessionFollowEdge.update({
                     where: {
-                        destinationSessionId_sourceSessionId: {
+                        destinationSessionId_sourceSessionId_relation: {
                             destinationSessionId: destination.id,
                             sourceSessionId: source.id,
+                            relation: 'follower',
                         },
                     },
                     data: { destinationSessionId: source.id },
@@ -93,6 +99,44 @@ describe.skipIf(provider !== "mysql")("MySQL trigger invariant enforcement", () 
                 }]);
             } finally {
                 await tx.$executeRawUnsafe("SET SESSION sql_mode = @@GLOBAL.sql_mode");
+            }
+        });
+    });
+
+    it('enforces exact polymorphic Follow identity on insert and update without truncating full resource ids', async () => {
+        await db.$transaction(async tx => {
+            await tx.$executeRawUnsafe("SET SESSION sql_mode = ''");
+            try {
+                const account = await tx.account.create({ data: { publicKey: uniqueId('follow-source-account') } });
+                const source = await tx.session.create({ data: { accountId: account.id, tag: uniqueId('source'), metadata: '{}' } });
+                const destination = await tx.session.create({ data: { accountId: account.id, tag: uniqueId('destination'), metadata: '{}' } });
+                const discussion = await tx.discussion.create({ data: {
+                    id: uniqueId('discussion').padEnd(191, 'd'), ownerAccountId: account.id,
+                    encryptionMode: 'plain', dataEncryptionKey: new Uint8Array(), creationLocalId: uniqueId('create'),
+                    creationEqualityEvidenceV1: {}, titleContent: {}, lastMessageAt: new Date(),
+                } });
+                await expect(tx.sessionFollowEdge.create({ data: { sourceKey: 'discussion:wrong',
+                    sourceDiscussionId: discussion.id, destinationSessionId: destination.id,
+                    policyJson: JSON.stringify({ preset: 'important' }) } })).rejects.toThrow('source identity mismatch');
+                const sourceKey = sourceKeyForSessionFollowSourceV1({ kind: 'discussion', discussionId: discussion.id });
+                await tx.sessionFollowEdge.create({ data: { sourceKey, sourceDiscussionId: discussion.id,
+                    destinationSessionId: destination.id, deliveredTranscriptSeq: 11,
+                    policyJson: JSON.stringify({ preset: 'important' }) } });
+                const where = { destinationSessionId_sourceDiscussionId_relation: {
+                    destinationSessionId: destination.id, sourceDiscussionId: discussion.id, relation: 'follower',
+                } };
+                expect(await tx.sessionFollowEdge.findUniqueOrThrow({ where, select: { sourceKey: true, deliveredTranscriptSeq: true } }))
+                    .toEqual({ sourceKey, deliveredTranscriptSeq: 11 });
+                await expect(tx.sessionFollowEdge.update({ where, data: { sourceKey: sourceKey.toUpperCase() } }))
+                    .rejects.toThrow('source identity mismatch');
+                await expect(tx.sessionFollowEdge.update({ where, data: { sourceSessionId: source.id } }))
+                    .rejects.toThrow('source identity mismatch');
+                await expect(tx.sessionFollowEdge.update({ where, data: { relation: 'manager', managerSourceSessionId: source.id } }))
+                    .rejects.toThrow('manager relation identity mismatch');
+                await tx.discussion.delete({ where: { id: discussion.id } });
+                expect(await tx.sessionFollowEdge.findUnique({ where })).toBeNull();
+            } finally {
+                await tx.$executeRawUnsafe('SET SESSION sql_mode = @@GLOBAL.sql_mode');
             }
         });
     });

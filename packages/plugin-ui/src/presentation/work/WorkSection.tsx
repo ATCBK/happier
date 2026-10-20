@@ -3,7 +3,8 @@ import { StyleSheet, View } from 'react-native';
 
 import { HappierSkeletonRows } from '../feedback/Skeleton.js';
 import { HappierPressable } from '../interaction/Pressable.js';
-import { HappierPageSectionHeader, HappierPageSheet } from '../layout/PageSection.js';
+import { HappierPageSectionHeader, HappierPageSheet, useHappierPageSection } from '../layout/PageSection.js';
+import { HAPPIER_PAGE_METRICS } from '../layout/pageMetrics.js';
 import {
   HAPPIER_WORK_PANE_METRICS,
   resolveHappierWorkHost,
@@ -242,7 +243,11 @@ export type HappierWorkSectionEmptyLineProps = Readonly<{
 export function HappierWorkSectionEmptyLine(props: HappierWorkSectionEmptyLineProps) {
   const theme = useHappierWorkTheme(props.theme);
   const { Text } = resolveHappierWorkHost(props.host);
-  const style = { paddingHorizontal: HAPPIER_WORK_PANE_METRICS.rowInsetPx, paddingBottom: 2 };
+  // On the rows' text edge of whichever sheet holds it: the pane's flat sheet or a page section's sheet.
+  const section = useHappierPageSection();
+  const style = section?.framed
+    ? { paddingHorizontal: section.rowInsetPx, paddingVertical: HAPPIER_PAGE_METRICS.rowPaddingVerticalPx }
+    : { paddingHorizontal: section?.rowInsetPx ?? HAPPIER_WORK_PANE_METRICS.rowInsetPx, paddingBottom: 2 };
   const line = <Text role="pageSectionDescription" style={{ color: theme.colors.secondaryText }}>{props.text}</Text>;
   return props.onPress ? (
     <HappierPressable

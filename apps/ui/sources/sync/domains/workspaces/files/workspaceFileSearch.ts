@@ -290,7 +290,11 @@ async function buildFileItemsFromRipgrep(
         },
     );
     throwIfWorkspaceFileSearchAborted(signal);
-    if (!res.ok) return null;
+    if (!res.ok) {
+        // A confirmed missing root cannot be repaired by walking the same root.
+        if (res.errorCode === 'root_not_found') throw new WorkspaceFileSearchUnavailableError(res.errorCode);
+        return null;
+    }
     return { files: buildFileItemsFromPaths(res.paths), truncated: res.truncated };
 }
 
@@ -442,6 +446,7 @@ async function ensureCacheValid(input: Readonly<{
             );
         } catch (error) {
             if (input.signal?.aborted) throw error;
+            if (error instanceof WorkspaceFileSearchUnavailableError && error.errorCode === 'root_not_found') throw error;
             result = null;
         }
 
@@ -531,7 +536,7 @@ export async function searchWorkspaceFiles(
     input: WorkspaceFileSearchInput,
 ): Promise<FileSearchItem[] | WorkspaceFileSearchPage> {
     const limit = typeof input.limit === 'number' && Number.isFinite(input.limit)
-        ? Math.max(1, Math.min(1000, Math.floor(input.limit)))
+        ? Math.max(1, Math.min(input.mode === 'glob' ? WORKSPACE_FILE_LIST_MAX_RESULTS : 1000, Math.floor(input.limit)))
         : input.mode === 'glob' ? Infinity : 10;
     const project = (items: readonly FileSearchItem[], corpusTruncated: boolean) => {
         const page = items.slice(0, limit);

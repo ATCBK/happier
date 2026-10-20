@@ -22,6 +22,7 @@ const FIELD_CAPABILITY_PATH = {
   'intent.acpSessionMode': ['intent', 'acpSessionMode'],
   'intent.acpConfigOption': ['intent', 'acpConfigOption'],
   'display.title': ['display', 'title'],
+  'display.statusReason': ['display', 'statusReason'],
   'display.bot': ['display', 'bot'],
   'runtime.workState': ['runtime', 'workState'],
   'runtime.activity': ['runtime', 'activity'],
@@ -35,6 +36,7 @@ const FIELD_CAPABILITY_PATH = {
 } as const satisfies Record<SessionStateFieldId, readonly [SessionStateFieldFamily, string]>;
 
 const DEFERRED_PROVIDER_SYNC_FIELDS = new Set<SessionStateFieldId>([
+  'display.statusReason',
   'intent.role',
   'intent.sessionRoles',
   'intent.memoryEnabled',

@@ -6,6 +6,9 @@ import { resolveHomeTargetFromDescriptor } from '@happier-dev/cli-common/homeTar
 import { sealTerminalProvisioningV3TokenOnlyPayload } from '@happier-dev/protocol/crypto/terminalProvisioningV2';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
+// Collect the real CLI graph before individual test lifetimes; reload its
+// environment-bound configuration per case after setting the isolated Home.
+import './remoteTerminalEnrollment';
 
 const descriptor = { v: 1 as const, homeServerIdentityId: 'srv_managed_home', canonicalServerUrl: 'https://home.example.test', revision: 1, endpoints: [{ kind: 'https' as const, url: 'https://home.example.test' }] };
 const target = resolveHomeTargetFromDescriptor({ descriptor, authority: 'trusted_enrollment' });
@@ -25,21 +28,31 @@ describe('managed remote terminal enrollment', () => {
     expect(post).not.toHaveBeenCalled();
   });
 
-  it('uses the relay pairing deadline and does not persist the claimed Account bearer after cancellation at the authenticated Home observation', async () => {
+  it('recovers a post-claim feature 503 within the relay lifetime, then preserves cancellation before bearer persistence', async () => {
     await withTempDir('happier-managed-enrollment-cancel-', async (homeDir) => {
       env.patch({ HAPPIER_HOME_DIR: homeDir });
       const controller = new AbortController();
       let response = '';
       const expiresAt = Date.now() + 240_000;
       let observedExpiry: number | undefined;
+      let authenticatedObservations = 0;
+      let claims = 0;
       // HTTP is the only mocked boundary: pairing, crypto, Home verification and credential IO stay real.
       const httpResult = (data: unknown) => ({ data, status: 200, statusText: 'OK', headers: {}, config: { headers: new AxiosHeaders() } });
-      vi.spyOn(axios, 'post').mockImplementation(async (url) => httpResult(String(url).endsWith('/claim')
-        ? { state: 'authorized', serverIdentityId: descriptor.homeServerIdentityId, token: 'full-account-bearer', response }
-        : { state: 'requested', expiresAt }));
+      vi.spyOn(axios, 'post').mockImplementation(async (url) => {
+        if (String(url).endsWith('/claim')) {
+          claims++;
+          return httpResult({ state: 'authorized', serverIdentityId: descriptor.homeServerIdentityId, token: 'full-account-bearer', response });
+        }
+        return httpResult({ state: 'requested', expiresAt });
+      });
       vi.spyOn(axios, 'get').mockResolvedValue(httpResult({ status: 'authorized' }));
       vi.stubGlobal('fetch', vi.fn<typeof fetch>(async (url) => {
-        if (String(url).endsWith('/authenticated')) controller.abort();
+        if (String(url).endsWith('/authenticated')) {
+          authenticatedObservations++;
+          if (authenticatedObservations === 1) return new Response('{}', { status: 503 });
+          controller.abort();
+        }
         return new Response(JSON.stringify({ features: {}, capabilities: { serverIdentity: { serverIdentityId: descriptor.homeServerIdentityId } }, homeConnectionDescriptor: descriptor }), { status: 200 });
       }));
       const { runRemoteTerminalEnrollment } = await import('./remoteTerminalEnrollment');
@@ -55,6 +68,8 @@ describe('managed remote terminal enrollment', () => {
         },
       })).rejects.toThrow(/cancel|abort/i);
       expect(observedExpiry).toBe(expiresAt);
+      expect(authenticatedObservations).toBe(2);
+      expect(claims).toBe(1);
       expect((await readdir(homeDir, { recursive: true })).some((path) => /(?:^|[\\/])access\.key$/u.test(path))).toBe(false);
     });
   });

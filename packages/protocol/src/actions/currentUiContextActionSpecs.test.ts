@@ -9,6 +9,11 @@ import { clientActionUnavailable } from './clientDispatchV1.js';
 import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
 
 describe('current UI context host ActionSpecs', () => {
+  it('refuses draft deletion without a connected app instead of reporting a successful unavailable receipt', () => {
+    expect(clientActionUnavailable('session.draft.delete')).toMatchObject({
+      ok: false, errorCode: 'unavailable', details: { reason: 'client_unavailable' },
+    });
+  });
   it('publishes mounted Workflow draft Actions with the canonical edit grammar and human discard admission', () => {
     const scope = { serverId: 'home-a', accountId: 'account-a' };
     const address = { scope, draftId: 'draft-a' };
@@ -103,7 +108,7 @@ describe('current UI context host ActionSpecs', () => {
     ] as const) {
       const spec = getActionSpec(id as never);
       expect(spec.executionPlacement).toBe('client');
-      expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: false, rpc: false });
+      expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: true, rpc: false });
       expect(spec.inputSchema.safeParse(input).success).toBe(true);
       expect(spec.inputSchema.safeParse({ ...input, files: [{ name: 'invented', bytes: 'fake' }] }).success).toBe(false);
       expect(await executor.execute(id as never, input, { surface: 'agent', authority: 'account_automation' })).toEqual({ ok: true, result: { status: 'unavailable' } });
@@ -115,7 +120,7 @@ describe('current UI context host ActionSpecs', () => {
     const input = { scope: { serverId: 'home-a', accountId: 'account-a' }, draftId: 'draft-a', stepId: 'step-a',
       address: { serverId: 'home-a', sessionId: 'session-a' } };
     expect(spec.executionPlacement).toBe('client');
-    expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: false, rpc: false });
+    expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: true, rpc: false });
     expect(spec.inputSchema.safeParse(input).success).toBe(true);
     expect(spec.inputSchema.safeParse({ ...input, prompt: 'do not submit' }).success).toBe(false);
     expect(spec.inputSchema.safeParse({ ...input, address: { ...input.address, machineId: 'caller-chosen' } }).success).toBe(false);
@@ -130,35 +135,18 @@ describe('current UI context host ActionSpecs', () => {
     const executor = createActionExecutor({ listReorder: async () => ({ status: 'refused', reason: 'todo_reorder_conflict' }),
       isActionApprovalRequired: () => false } as unknown as ActionExecutorDeps);
     const context = { surface: 'agent' as const, authority: 'account_automation' as const };
-    expect(await executor.execute('todos.reorder', input, context)).toEqual({ ok: true, result: { status: 'refused', reason: 'todo_reorder_conflict' } });
+    expect(await executor.execute('tasks.internal.reorder', input, context)).toEqual({ ok: true, result: { status: 'refused', reason: 'todo_reorder_conflict' } });
     const headless = createActionExecutor({ isActionApprovalRequired: () => false } as unknown as ActionExecutorDeps);
-    expect(await headless.execute('todos.reorder', input, context)).toEqual({ ok: true, result: { status: 'unavailable' } });
-    expect(await executor.execute('todos.reorder', { ...input, orderedIds: ['source'] }, context)).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
-  });
-  it('exposes qualified Session canvas tabs only through the mounted client owner', async () => {
-    const scope = { serverId: 'home-a', accountId: 'account-a' };
-    for (const actionId of ['session.canvas.tabs.open', 'session.canvas.tabs.activate', 'session.canvas.tabs.close', 'session.canvas.tabs.move', 'session.canvas.tabs.reorder', 'session.canvas.tabs.pin', 'session.canvas.tabs.list'] as const) {
-      const spec = getActionSpec(actionId);
-      expect(ActionIdSchema.safeParse(actionId).success).toBe(true);
-      expect(spec.executionPlacement).toBe('client');
-      expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: false, rpc: false });
-      expect(spec.outputSchema?.safeParse({ status: 'unavailable' }).success).toBe(true);
-    }
-    const open = getActionSpec('session.canvas.tabs.open');
-    const input = { scope, canvasKey: 'workspace-a', sessionId: 's1', leafId: 'leaf-a', placement: 'center', beforeTabId: 'anchor' };
-    expect(open.inputSchema.safeParse(input).success).toBe(true);
-    expect(open.inputSchema.safeParse({ ...input, scope: { ...scope, token: 'secret' } }).success).toBe(false);
-    expect(open.inputSchema.safeParse({ ...input, availableSizePx: 99999 }).success).toBe(false);
-    const headless = createActionExecutor({ isActionApprovalRequired: () => false } as unknown as ActionExecutorDeps);
-    expect(await headless.execute('session.canvas.tabs.open', input, { surface: 'agent', authority: 'account_automation' })).toEqual({ ok: true, result: { status: 'unavailable' } });
+    expect(await headless.execute('tasks.internal.reorder', input, context)).toEqual({ ok: true, result: { status: 'unavailable' } });
+    expect(await executor.execute('tasks.internal.reorder', { ...input, orderedIds: ['source'] }, context)).toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
   });
   it('exposes exact pending and undone-todo semantic reorder without replacement membership', () => {
-    for (const actionId of ['session.pending.reorder', 'todos.reorder']) {
+    for (const actionId of ['session.pending.reorder', 'tasks.internal.reorder']) {
       const spec = getActionSpec(actionId as never);
       const common = { scope: { serverId: 'home-a', accountId: 'account-a' }, sourceId: 'source', position: { anchorId: 'anchor', placement: 'before' } };
       const input = actionId === 'session.pending.reorder' ? { ...common, sessionId: 'session-a', recipient: null } : common;
-      expect(spec.executionPlacement).toBe('client');
-      expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: false, rpc: false });
+      expect(spec.executionPlacement).toBe(actionId === 'session.pending.reorder' ? 'client' : 'account');
+      expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: true, rpc: false });
       expect(spec.inputSchema.safeParse(input).success).toBe(true);
       expect(spec.inputSchema.safeParse({ ...input, orderedIds: ['source'] }).success).toBe(false);
       expect(spec.inputSchema.safeParse({ ...input, position: { anchorId: 'anchor', placement: 'before', index: 1 } }).success).toBe(false);
@@ -174,7 +162,7 @@ describe('current UI context host ActionSpecs', () => {
   it('exposes semantic Session organization movement on the answering client', () => {
     const spec = getActionSpec('session.organization.move');
     expect(spec.executionPlacement).toBe('client');
-    expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: false, rpc: false });
+    expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: true, rpc: false });
     expect(spec.inputSchema.safeParse({ scope: { serverId: 'home-a', accountId: 'account-a' },
       sourceRowId: 'row-a', sourceKind: 'leaf', instructionKind: 'reorder-before',
       targetRowId: 'row-b', containerId: 'root', parentRowId: null, depth: 0, edge: 'top' }).success).toBe(true);
@@ -184,7 +172,7 @@ describe('current UI context host ActionSpecs', () => {
   it('opens the addressed prompt picker without accepting or disclosing draft text', () => {
     const spec = getActionSpec('ui.prompts.picker.open');
     expect(spec.executionPlacement).toBe('client');
-    expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: false, cli: false, rpc: false });
+    expect(spec.surfaces).toMatchObject({ ui: true, agent: true, mcp: true, cli: false, rpc: false });
     expect(spec.inputSchema.safeParse({}).success).toBe(true);
     expect(spec.inputSchema.safeParse({ composerRef: { kind: 'newSession', instanceId: 'new-1' } }).success).toBe(true);
     expect(spec.inputSchema.safeParse({ composerRef: { kind: 'session', sessionId: 's1', serverId: 'untrusted' } }).success).toBe(false);
@@ -200,6 +188,9 @@ describe('current UI context host ActionSpecs', () => {
     expect(spec.inputSchema.safeParse({ op: 'set', query: 'literal\\query', options: { regex: false, matchCase: true }, target: 'chat:1' }).success).toBe(true);
     expect(spec.inputSchema.safeParse({ op: 'read', query: 'ignored' }).success).toBe(false);
     expect(spec.inputSchema.safeParse({ op: 'step', direction: 0 }).success).toBe(false);
+    expect(spec.inputSchema.safeParse({ op: 'refold', target: 'review:1' }).success).toBe(true);
+    expect(spec.outputSchema?.safeParse({ status: 'unavailable', reason: 'unsupportedOperation' }).success).toBe(true);
+    expect(spec.outputSchema?.safeParse({ status: 'unavailable', reason: 'noRevealedFold' }).success).toBe(true);
     expect(spec.outputSchema?.safeParse({ status: 'noMountedSurface' }).success).toBe(true);
     expect(spec.outputSchema?.safeParse({ status: 'unavailable', unavailable: 'engineOwned',
       query: 'host seed', options: { matchCase: true, regex: false } }).success).toBe(true);

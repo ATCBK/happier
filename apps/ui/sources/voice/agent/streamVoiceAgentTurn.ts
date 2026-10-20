@@ -44,6 +44,7 @@ export async function streamVoiceAgentTurn(params: Readonly<{
             userText: params.userText,
             displayUserText: params.displayUserText,
             speechSegmentTargetChars,
+            signal: params.options?.signal,
             ...(params.resume === true ? { resume: true } : {}),
             ...(params.options?.userTranscript ? { userTranscript: params.options.userTranscript } : {}),
         });
@@ -71,6 +72,7 @@ export async function streamVoiceAgentTurn(params: Readonly<{
                     streamId: started.streamId,
                     cursor,
                     maxEvents: streamCfg.maxEvents,
+                    signal: params.options?.signal,
                 }),
             );
 
@@ -144,13 +146,13 @@ export async function streamVoiceAgentTurn(params: Readonly<{
             }
         }
         if (started && !terminalCancellationObserved) {
-            await params.handle.client
+            await abort.race(params.handle.client
                 .cancelTurnStream({
                     sessionId: params.handle.rpcSessionId,
                     voiceAgentId: params.handle.voiceAgentId,
                     streamId: started.streamId,
                 })
-                .catch(() => {});
+                .catch(() => {})).catch(() => {});
         }
         throw error;
     } finally {

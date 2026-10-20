@@ -36,11 +36,24 @@ html {
 }
 
 /*
- * Focus rings are for keyboard focus only. The browser's own ring is dropped for the focus a pointer
- * press leaves (the element does not match :focus-visible, or the last input was a pointer, which
- * `isHappierFocusVisible` in @happier-dev/plugin-ui records on <html> for engines such as WebKit that
- * report script focus after a click as visible), and kept for keyboard focus. Rings the app paints
- * itself decide through the same owner.
+ * A long path, hash or identifier in rendered Markdown (the enriched renderer's HTML) has no break
+ * opportunity, so it ran past the comment bubble or column it sat in. Text breaks inside the column;
+ * code blocks and tables keep their own horizontal scroll.
+ */
+[data-happier-enriched-markdown-profile] {
+    overflow-wrap: anywhere;
+}
+
+[data-happier-enriched-markdown-profile] :is(pre, table) {
+    overflow-wrap: normal;
+}
+
+/*
+ * Focus rings are for keyboard focus only. The browser's own ring is dropped unless the keyboard was
+ * the last input: focus a pointer press leaves, and script focus before any key was pressed (a reload
+ * or deep link), show none. `isHappierFocusVisible` in @happier-dev/plugin-ui records the last input
+ * on <html>, so engines such as WebKit that report script focus as visible follow the same decision.
+ * Rings the app paints itself decide through the same owner.
  * No `!important`, and the fallback has zero specificity (`:where`): a ring a control paints itself
  * (inline or through its own class, including the inset ring of a full-bleed list row) always wins over it.
  *
@@ -55,7 +68,7 @@ html {
 }
 
 :focus:not(:focus-visible),
-html[data-happier-input-modality="pointer"] :focus {
+html:not([data-happier-input-modality="keyboard"]) :focus {
     outline: none;
 }
 
@@ -71,6 +84,15 @@ html[data-happier-input-modality="pointer"] :focus {
         outline: 2px solid CanvasText !important;
         outline-offset: 2px !important;
     }
+}
+
+/*
+ * The raw web textarea (`MultiTextInput.web`) carries its placeholder ink, already stepped for the glass it
+ * stands on, as a custom property; without one the browser's own grey applies.
+ */
+[data-happier-text-input="true"]::placeholder {
+    color: var(--happier-placeholder-color, revert);
+    opacity: 1;
 }
 
 @keyframes happierStatusDotPulse {

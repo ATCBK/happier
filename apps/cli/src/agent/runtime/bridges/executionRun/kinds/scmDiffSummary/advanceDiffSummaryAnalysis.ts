@@ -1,4 +1,5 @@
-import { z } from 'zod';
+import { EXECUTION_RUN_KIND_BY_INTENT } from '@happier-dev/protocol/execution/runs/startRequest';
+import { z } from 'zod/mini';
 import { ScmComparisonSchema } from '@happier-dev/protocol/scm/comparison';
 import { ScmDiffSummaryMetadataSchema, ScmDiffSummaryModelOutputSchema, ScmDiffSummaryGenerateOutputSchema, ScmDiffSummaryOutputKindSchema, ScmDiffSummaryOutputLanguageSchema } from '@happier-dev/protocol/scm/diffSummary';
 import type { ScmComparison, ScmDiffSummaryModelOutput, ScmDiffSummaryOutputs } from '@happier-dev/protocol';
@@ -9,24 +10,24 @@ import { presentScmDiffSummaryModelContext } from './presentScmDiffSummaryModelC
 import { buildReviewNarrationInputContext, readReviewNarration } from '@/agent/executionRuns/profiles/review/reviewNarrationContext';
 import { findingCitationInstructions } from '@/agent/executionRuns/profiles/review/reviewFindingCitations';
 
-const FragmentSchema = z.object({ path: z.string(), startOffset: z.number().int().nonnegative(),
-  endOffset: z.number().int().nonnegative(), hunkHeader: z.string(), contextBefore: z.string(), contextAfter: z.string(),
-}).strict();
-const PartSchema = z.object({ refs: z.array(z.string()), diff: z.string().optional(), fragment: FragmentSchema.optional() }).strict();
-const AnalysisStateSchema = z.object({
-  phase: z.enum(['evidence', 'merge', 'done']), current: z.array(z.string()), currentDiff: z.string().optional(),
-  currentFragment: FragmentSchema.optional(), pending: z.array(PartSchema),
+const FragmentSchema = z.strictObject({ path: z.string(), startOffset: z.number().check(z.int(), z.nonnegative()),
+  endOffset: z.number().check(z.int(), z.nonnegative()), hunkHeader: z.string(), contextBefore: z.string(), contextAfter: z.string(),
+});
+const PartSchema = z.strictObject({ refs: z.array(z.string()), diff: z.optional(z.string()), fragment: z.optional(FragmentSchema) });
+const AnalysisStateSchema = z.strictObject({
+  phase: z.enum(['evidence', 'merge', 'done']), current: z.array(z.string()), currentDiff: z.optional(z.string()),
+  currentFragment: z.optional(FragmentSchema), pending: z.array(PartSchema),
   parts: z.array(ScmDiffSummaryModelOutputSchema), supplied: z.array(z.string()), analysed: z.array(z.string()),
   failures: z.array(z.string()), failedRefs: z.array(z.string()),
-  expectedInputId: z.string().optional(),
-  instructions: z.string().optional(),
-  outputLanguage: ScmDiffSummaryOutputLanguageSchema.optional(),
-  evidenceContext: z.string().optional(),
-  taskInstructions: z.string().optional(),
-  admitted: z.number().int().nonnegative().optional(), completed: z.number().int().nonnegative().optional(),
-  failedAdmissions: z.number().int().nonnegative().optional(), lastAdmittedInputId: z.string().optional(),
-  totalParts: z.number().int().nonnegative().optional(),
-}).strict();
+  expectedInputId: z.optional(z.string()),
+  instructions: z.optional(z.string()),
+  outputLanguage: z.optional(ScmDiffSummaryOutputLanguageSchema),
+  evidenceContext: z.optional(z.string()),
+  taskInstructions: z.optional(z.string()),
+  admitted: z.optional(z.number().check(z.int(), z.nonnegative())), completed: z.optional(z.number().check(z.int(), z.nonnegative())),
+  failedAdmissions: z.optional(z.number().check(z.int(), z.nonnegative())), lastAdmittedInputId: z.optional(z.string()),
+  totalParts: z.optional(z.number().check(z.int(), z.nonnegative())),
+});
 type AnalysisState = z.infer<typeof AnalysisStateSchema>;
 
 export function hasActiveDiffSummaryAnalysis(input: unknown): boolean {
@@ -348,7 +349,7 @@ export function advanceDiffSummaryAnalysis(params: ExecutionRunProfileTurnComple
   if (next) state.expectedInputId = nextLocalId;
   else delete state.expectedInputId;
   return { status: 'succeeded', summary: complete ? 'Diff summary generated.' : next ? 'Diff analysis is continuing.' : 'Diff analysis is incomplete.',
-    toolResultOutput: result, structuredMeta: { kind: 'scm_diff_summary.v1', payload: result },
+    toolResultOutput: result, structuredMeta: { kind: EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary, payload: result },
     updatedIntentInput: { ...input, scmAnalysis: state },
     ...(next ? { nextInput: { instructions: next, intentInput: { ...input, scmAnalysis: state }, localId: nextLocalId } } : {}),
   };

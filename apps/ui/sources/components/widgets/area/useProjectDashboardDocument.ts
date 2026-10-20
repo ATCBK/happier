@@ -1,8 +1,7 @@
 import * as React from 'react';
 import { readWidgetSurfaceArtifactV1, type WidgetSurfaceRefV1, type WidgetAreaLayoutSummaryV1 } from '@happier-dev/protocol/widgets';
 import { ArtifactCallerAccessV1Schema, type ArtifactCallerAccessV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
-import { useActiveServerAccountScope, useArtifact } from '@/sync/domains/state/storage';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { useActiveServerAccountScopeLifetime, useArtifact } from '@/sync/domains/state/storage';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { subscribeHomeAccountChange, subscribeHomeCredentialChange } from '@/sync/runtime/orchestration/homeAccountChange';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
@@ -13,8 +12,8 @@ export type ProjectDashboardDocumentRead = Readonly<{ artifactId: string; surfac
 
 /** Summary and mounted binding share the exact Artifact read, codec and viewer authority. */
 export function useProjectDashboardDocument(reference: Readonly<{ artifactId: string; serverId?: string }> | null, defaultServerId: string) {
-    const viewer = useActiveServerAccountScope();
-    const lifetime = React.useMemo(() => captureActiveServerAccountScopeLifetime(), [viewer?.serverId, viewer?.accountId]);
+    const lifetime = useActiveServerAccountScopeLifetime();
+    const viewer = lifetime?.scope ?? null;
     const serverId = reference?.serverId ?? defaultServerId;
     const publication = useArtifact(reference?.artifactId ?? '');
     const localPublication = areServerProfileIdentifiersEquivalent(serverId, defaultServerId) ? publication : null;

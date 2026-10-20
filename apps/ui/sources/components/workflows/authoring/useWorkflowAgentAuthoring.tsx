@@ -10,8 +10,12 @@ import { useWorkflowCardModal } from '../run/useWorkflowCardModal';
 import { t } from '@/text';
 import type { CustomModalInjectedProps } from '@/modal';
 import type { PluginUiNewSessionSeedV1 } from '@happier-dev/protocol/plugins/ui';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { useWorkflowAccountLifetime } from '../workflowAccountScope';
 
-const NewSessionScreen = retryableLazy(() => import('@/components/sessions/new/NewSessionScreen').then((module) => ({ default: module.NewSessionScreen })));
+const NewSessionScreen = retryableLazy<React.ComponentProps<typeof import('@/components/sessions/new/NewSessionScreen')['NewSessionScreen']>>(
+    () => import('@/components/sessions/new/NewSessionScreen').then((module) => ({ default: module.NewSessionScreen })),
+);
 type SessionTarget = Readonly<{ sessionId: string; serverId: string }>;
 
 export type WorkflowAgentAuthoringDraftProps = Readonly<{
@@ -61,8 +65,9 @@ function WorkflowAgentAuthoringSheet(props: CustomModalInjectedProps & Omit<Work
 export function seedWorkflowAgentDraft(
     seed: PluginUiNewSessionSeedV1 & Readonly<{ prompt: string }>,
     onDraft: (draft: Readonly<{ draftId: string; serverId: string; isCurrent: () => boolean }>) => void,
+    accountLifetime?: ServerAccountScopeLifetime | null,
 ): void {
-    const lifetime = captureActiveServerAccountScopeLifetime();
+    const lifetime = accountLifetime === undefined ? captureActiveServerAccountScopeLifetime() : accountLifetime;
     if (lifetime === null) return;
     seedAndOpenNewSession({ seed, scope: lifetime.scope, isCurrent: lifetime.isCurrent,
         navigateToNewSession: ({ draftId }) => onDraft({ draftId, serverId: lifetime.scope.serverId, isCurrent: lifetime.isCurrent }) });
@@ -70,6 +75,7 @@ export function seedWorkflowAgentDraft(
 
 /** Seeds the one ordinary composer. Send remains owned by New Session, not Workflows. */
 export function useWorkflowAgentAuthoring(onSessionCreated?: (target: SessionTarget) => void, title = t('workflows.authoring.create')) {
+    const accountLifetime = useWorkflowAccountLifetime();
     const router = useRouter();
     const wide = useDetailsPaneAvailable();
     const [entry, setEntry] = React.useState<Readonly<{ draftId: string; lifetime: NonNullable<ReturnType<typeof captureActiveServerAccountScopeLifetime>>; onSessionCreated?: (target: SessionTarget) => void }> | null>(null);
@@ -94,9 +100,9 @@ export function useWorkflowAgentAuthoring(onSessionCreated?: (target: SessionTar
         identity: entry?.draftId, title, subtitle: t('workflows.authoring.description'),
         testID: 'workflow-agent-authoring-sheet', onRequestClose: close });
     return React.useCallback((seed: PluginUiNewSessionSeedV1 & Readonly<{ prompt: string }>) => {
-        const lifetime = captureActiveServerAccountScopeLifetime();
+        const lifetime = accountLifetime === undefined ? captureActiveServerAccountScopeLifetime() : accountLifetime;
         if (lifetime === null) return;
         seedAndOpenNewSession({ seed, scope: lifetime.scope, isCurrent: lifetime.isCurrent,
             navigateToNewSession: ({ draftId }) => setEntry({ draftId, lifetime, onSessionCreated }) });
-    }, [onSessionCreated]);
+    }, [onSessionCreated, accountLifetime]);
 }

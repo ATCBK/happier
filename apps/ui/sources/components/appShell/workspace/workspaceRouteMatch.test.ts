@@ -1,8 +1,24 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createWorkspaceRouteMatcher, matchWorkspaceRoutePatterns } from './workspaceRouteMatch';
-import { matchWorkspaceDestinationRoute } from './workspaceRoutes';
+import { matchWorkspaceDestinationRoute, workspaceRouteHref } from './workspaceRoutes';
+import { MACHINE_SUB_PAGES } from '@/components/machines/page/machineSubPages';
 
 describe('Expo destination route matching', () => {
+    it.each(MACHINE_SUB_PAGES)('canonicalizes the %s query sub-page through the same machine route owner', page => {
+        for (const root of ['/machines', '/settings/machines']) {
+            expect(workspaceRouteHref(`${root}/m%2F1`, { id: 'm/1', page, serverId: 'home-a' }))
+                .toBe(`${root}/m%2F1/${page}?serverId=home-a`);
+        }
+    });
+    it('keeps query-owned page state and repeated values while omitting dynamic path params', () => {
+        expect(workspaceRouteHref('/machines/m1', { id: 'm1', tab: 'storage', page: 'category', categoryId: 'caches' }))
+            .toBe('/machines/m1?tab=storage&page=category&categoryId=caches');
+        expect(workspaceRouteHref('/machines/m1/terminal', { id: 'm1', page: 'terminal', serverId: 'home-a' }))
+            .toBe('/machines/m1/terminal?serverId=home-a');
+        expect(workspaceRouteHref('/plugins/acme/tools/a%2Fb/c', {
+            pluginId: 'acme', localId: 'tools', subPath: ['a/b', 'c'], filter: ['one', 'two'], absent: undefined,
+        })).toBe('/plugins/acme/tools/a%2Fb/c?filter=one&filter=two');
+    });
     it('reuses the prepared destination registry across repeated tab identity reads', () => {
         // Observe real sorting without replacing route matching or its comparator.
         const sorting = vi.spyOn(Array.prototype, 'sort');

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '@happier-dev/agents/agent-ids';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { readAcpConfiguredBackendV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/acpConfiguredBackendV1';
 import { SessionModelSelectionIntentV1Schema } from '@happier-dev/protocol/providers/model-selection';
@@ -45,7 +46,7 @@ import {
 import { LEGACY_COMPAT_PRIMARY_AGENT_ID } from '@/agents/backendCatalog/legacyCompatAgents';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { resolveSessionMachineId } from '@/sync/domains/session/external/resolveSessionMachineId';
-import { resolveSessionGoalExecutionCapabilities } from '@/sync/domains/session/control/sessionGoalExecutionCapabilities';
+import { hasRuntimeSessionGoalControls, resolveSessionGoalExecutionCapabilities } from '@/sync/domains/session/control/sessionGoalExecutionCapabilities';
 import {
     attachAgentPluginSettings,
     readAgentUiSetting,
@@ -97,10 +98,12 @@ export type AgentPluginSettingsReadiness = Readonly<{
     error: 'unavailable' | 'failed' | 'outcomeUnknown' | null;
 }>;
 
+function mergeAgentBehaviorSettings(settings: Settings, pluginSettings?: AgentPluginSettingsSnapshot | null): Settings;
+function mergeAgentBehaviorSettings(settings: Readonly<Record<string, unknown>>, pluginSettings?: AgentPluginSettingsSnapshot | null): Readonly<Record<string, unknown>>;
 function mergeAgentBehaviorSettings(
-    settings: Settings,
+    settings: Settings | Readonly<Record<string, unknown>>,
     pluginSettings?: AgentPluginSettingsSnapshot | null,
-): Settings {
+): Settings | Readonly<Record<string, unknown>> {
     if (!pluginSettings) return settings;
     return attachAgentPluginSettings(settings, pluginSettings);
 }
@@ -579,7 +582,13 @@ function buildDefaultAgentUiBehavior(agentId: BundledAgentId): AgentUiBehavior {
 function resolveGeneratedAgentUiBehavior(agentId: CanonicalAgentId): AgentUiBehavior {
     const generatedDescriptor = BUNDLED_CANONICAL_AGENT_UI_BEHAVIOR_DESCRIPTORS[agentId]?.descriptor;
     const generatedBehavior = generatedDescriptor
-        ? createAgentUiBehaviorFromDescriptor(generatedDescriptor, agentId).behavior
+        ? createAgentUiBehaviorFromDescriptor({
+            kind: 'plugin.ui.v1',
+            version: 1,
+            agentId,
+            pluginId: BUNDLED_AGENT_CONTRIBUTION_IDENTITIES[agentId].pluginId,
+            behavior: generatedDescriptor,
+        }, agentId).behavior
         : {};
     return generatedBehavior;
 }
@@ -893,7 +902,7 @@ export function getAgentResumeExperimentsFromSettings(
 }
 
 export function buildResumeCapabilityOptionsFromUiState(opts: {
-    settings: Settings;
+    settings: Pick<Settings, 'backendEnabledByTargetKey'>;
     pluginSettings?: AgentPluginSettingsSnapshot | null;
     results: CapabilityResults | undefined;
 }): ResumeCapabilityOptions {
@@ -1043,25 +1052,13 @@ export function supportsEditableSessionGoals(ctx: {
 /**
  * Effective goal-action profile for a session. Provider semantics are intersected with the active
  * runner or target daemon's callable controls here so every goal surface consumes one decision.
- * Returns null only when the provider does not semantically support editable goals.
+ * Agents without native goals use the daemon's Session-owned objective for Keep going.
  */
 export function resolveSessionGoalActionCapabilityProfile(ctx: {
     agentId: AgentLookupId;
     session: Session;
     daemonGoalControlsSupported?: boolean;
 }): GoalActionCapabilities | null {
-    const workState = resolveAgentUiBehavior(
-        ctx.agentId,
-        resolveOwningMachineIdForSession(ctx.session),
-    ).workState;
-    if (!workState?.supportsEditableGoals?.(ctx)) return null;
-
-    const semanticProfile = workState.resolveGoalActionCapabilityProfile?.(ctx) ?? {
-        canEdit: true,
-        canStop: true,
-        canClear: true,
-        canConfigureBudget: true,
-    };
     const execution = resolveSessionGoalExecutionCapabilities({
         session: ctx.session,
         machine: {
@@ -1070,6 +1067,22 @@ export function resolveSessionGoalActionCapabilityProfile(ctx: {
             },
         },
     });
+    const workState = resolveAgentUiBehavior(
+        ctx.agentId,
+        resolveOwningMachineIdForSession(ctx.session),
+    ).workState;
+    if (!workState?.supportsEditableGoals?.(ctx)) {
+        if (hasRuntimeSessionGoalControls(ctx.session) || !execution.canSet || !execution.canClear) return null;
+        // A Happier objective needs no native goal declaration. Keep going owns
+        // continuation; its switch, rather than native pause/resume, controls it.
+        return { canEdit: true, canStop: false, canClear: true, canConfigureBudget: true };
+    }
+    const semanticProfile = workState.resolveGoalActionCapabilityProfile?.(ctx) ?? {
+        canEdit: true,
+        canStop: true,
+        canClear: true,
+        canConfigureBudget: true,
+    };
     return {
         canEdit: semanticProfile.canEdit && execution.canSet,
         canStop: semanticProfile.canStop && execution.canSet,

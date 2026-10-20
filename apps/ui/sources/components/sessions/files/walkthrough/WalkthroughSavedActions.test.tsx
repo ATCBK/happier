@@ -15,7 +15,34 @@ vi.mock('@/text', async () => {
 
 const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
 const { createScmDiffSummaryResultOperationsWithTransport: createScmDiffSummaryResultOperations } = await import('@/dev/testkit/harness/scmActionTransport');
-const { WalkthroughSavedActions } = await import('./WalkthroughSavedActions');
+const { useWalkthroughSavedActions } = await import('./WalkthroughSavedActions');
+const { ScmComparisonMoreMenu } = await import('@/components/sessions/files/comparison/ScmComparisonMoreMenu');
+const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+type SavedActionsProps = NonNullable<Parameters<typeof useWalkthroughSavedActions>[0]>;
+type Screen = Awaited<ReturnType<typeof renderScreen>>;
+
+/** The host's composition: the operations are rows of the comparison bar's menu, their editors open in the column. */
+function WalkthroughSavedActions(props: SavedActionsProps) {
+    const saved = useWalkthroughSavedActions(props);
+    return <>{saved.section ? <ScmComparisonMoreMenu sections={[saved.section]} /> : null}{saved.panel}</>;
+}
+
+function menuRows(screen: Screen): ReadonlyArray<{ id: string; testID?: string; title: string }> {
+    const menu = screen.root.findAll((node) => node.type === DropdownMenu && node.props.testID === 'scm-comparison-more-menu')[0];
+    return menu ? menu.props.items : [];
+}
+
+function offered(screen: Screen, testID: string): boolean {
+    return menuRows(screen).some((row) => row.testID === testID);
+}
+
+/** Chooses an operation the way a person does: its row in the comparison menu. */
+async function choose(screen: Screen, testID: string) {
+    const menu = screen.root.find((node) => node.type === DropdownMenu && node.props.testID === 'scm-comparison-more-menu');
+    const row = (menu.props.items as Array<{ id: string; testID?: string }>).find((item) => item.testID === testID);
+    if (!row) throw new Error(`${testID} is not offered`);
+    await act(async () => { await menu.props.onSelect(row.id); });
+}
 
 const SAVED = ScmDiffSummaryResultSchema.parse({
     resultId: 'saved', revision: 4, canUndo: true, generator: { backendTarget: { kind: 'backend', backendId: 'codex' } },
@@ -34,13 +61,30 @@ function BoundActions(props: Readonly<{ operations: ReturnType<typeof createScmD
 }
 
 describe('Walkthrough saved-result controls', () => {
+    it('offers its operations once, as rows of the comparison menu, and keeps the reading column for the reading', async () => {
+        const operations = createScmDiffSummaryResultOperations({ sessionId: 'session', shouldContinue: () => true,
+            rpc: async () => ({ success: true, result: SAVED }) });
+        const screen = await renderScreen(<WalkthroughSavedActions result={SAVED} cwd="/repo" operations={operations} onResult={() => {}} />);
+        // Nothing renders in the column until an operation is chosen: no loose row of buttons over the reading.
+        expect(screen.findByTestId('walkthrough-saved-actions')).toBeNull();
+        expect(menuRows(screen).map((row) => row.testID)).toEqual(['walkthrough-saved-edit', 'walkthrough-saved-undo',
+            'walkthrough-saved-refine', 'walkthrough-saved-add-summary']);
+        await choose(screen, 'walkthrough-saved-edit');
+        expect(screen.findByTestId('walkthrough-saved-title')?.props.value).toBe(SPECIMEN_WALKTHROUGH.title);
+    });
+    it('leaves Undo to the update notice when the notice offers it', async () => {
+        const operations = createScmDiffSummaryResultOperations({ sessionId: 'session', shouldContinue: () => true,
+            rpc: async () => ({ success: true, result: SAVED }) });
+        const screen = await renderScreen(<WalkthroughSavedActions result={SAVED} cwd="/repo" operations={operations} onResult={() => {}} undoInNotice />);
+        expect(offered(screen, 'walkthrough-saved-undo')).toBe(false);
+    });
     it('discusses a native saved result at the current revision without a Session composer', async () => {
         const calls: unknown[] = [];
         const operations = createScmDiffSummaryResultOperations({ machineId: 'native-machine', shouldContinue: () => true,
             rpc: async (method, input) => { calls.push({ method, input }); return { success: true, result: withRevision(5), runId: 'native-run', inputId: 'actual-input' }; } });
         const screen = await renderScreen(<WalkthroughSavedActions result={SAVED} cwd="/repo" operations={operations}
             onResult={() => {}} nativeDiscussion />);
-        await screen.pressByTestIdAsync('walkthrough-saved-discuss');
+        await choose(screen, 'walkthrough-saved-discuss');
         await act(async () => screen.changeTextByTestId('walkthrough-saved-message', 'Why this approach?'));
         await screen.pressByTestIdAsync('walkthrough-saved-discuss-send');
         expect(calls).toEqual([{ method: 'scm.diffSummary.discuss', input: {
@@ -54,7 +98,7 @@ describe('Walkthrough saved-result controls', () => {
         const onResult = vi.fn();
         const screen = await renderScreen(<WalkthroughSavedActions result={SAVED} cwd="/repo" operations={operations} onResult={onResult} />);
         expect(calls).toEqual([]);
-        await screen.pressByTestIdAsync('walkthrough-saved-edit');
+        await choose(screen, 'walkthrough-saved-edit');
         await act(async () => screen.changeTextByTestId('walkthrough-saved-title', 'My title'));
         await act(async () => screen.update(<WalkthroughSavedActions result={withRevision(5)} cwd="/repo" operations={operations} onResult={onResult} />));
         await screen.pressByTestIdAsync('walkthrough-saved-stop-key');
@@ -74,7 +118,7 @@ describe('Walkthrough saved-result controls', () => {
         const onResult = vi.fn();
         const screen = await renderScreen(<WalkthroughSavedActions result={withRevision(5)} cwd="/repo" operations={operations} onResult={onResult} />);
         expect(calls).toEqual([]);
-        await screen.pressByTestIdAsync('walkthrough-saved-undo');
+        await choose(screen, 'walkthrough-saved-undo');
         expect(calls).toEqual([{ method: 'scm.diffSummary.result.undo', input: { cwd: '/repo', resultId: 'saved', expectedRevision: 5 } }]);
         expect(onResult).toHaveBeenCalledWith(restored);
     });
@@ -84,7 +128,7 @@ describe('Walkthrough saved-result controls', () => {
         const operations = createScmDiffSummaryResultOperations({ sessionId: 'session', shouldContinue: () => true,
             rpc: async (method, input) => { calls.push({ method, input }); return { success: true, result: withRevision(5) }; } });
         const screen = await renderScreen(<BoundActions operations={operations} />);
-        await screen.pressByTestIdAsync('walkthrough-saved-edit');
+        await choose(screen, 'walkthrough-saved-edit');
         await screen.pressByTestIdAsync('walkthrough-saved-stop-why');
         await act(async () => screen.changeTextByTestId('walkthrough-saved-prose', 'My explanation'));
         await screen.pressByTestIdAsync('walkthrough-saved-prose-save');
@@ -101,17 +145,17 @@ describe('Walkthrough saved-result controls', () => {
         const operations = createScmDiffSummaryResultOperations({ sessionId: 'session', shouldContinue: () => true,
             rpc: async (method, input) => { calls.push({ method, input }); return { success: true, result: SAVED }; } });
         const screen = await renderScreen(<WalkthroughSavedActions result={SAVED} cwd="/repo" operations={operations} onResult={() => {}} />);
-        await screen.pressByTestIdAsync('walkthrough-saved-edit');
+        await choose(screen, 'walkthrough-saved-edit');
         await screen.pressByTestIdAsync('walkthrough-saved-stop-sheet');
-        await screen.pressByTestIdAsync('walkthrough-saved-refine');
+        await choose(screen, 'walkthrough-saved-refine');
         await act(async () => screen.changeTextByTestId('walkthrough-saved-instructions', 'Explain the back gesture'));
         await screen.pressByTestIdAsync('walkthrough-saved-refine-send');
         expect(calls).toEqual([{ method: 'scm.diffSummary.refine', input: { cwd: '/repo', resultId: 'saved', expectedRevision: 4,
             output: 'walkthrough', instructions: 'Explain the back gesture', stopIds: ['sheet'] } }]);
         const { generator: _generator, ...withoutGenerator } = SAVED;
         await act(async () => screen.update(<WalkthroughSavedActions result={withoutGenerator} cwd="/repo" operations={operations} onResult={() => {}} />));
-        expect(screen.findByTestId('walkthrough-saved-refine')).toBeNull();
-        expect(screen.findByTestId('walkthrough-saved-add-summary')).toBeNull();
+        expect(offered(screen, 'walkthrough-saved-refine')).toBe(false);
+        expect(offered(screen, 'walkthrough-saved-add-summary')).toBe(false);
     });
 
     it('loads the latest revision on explicit conflict recovery without dropping the draft', async () => {
@@ -121,7 +165,7 @@ describe('Walkthrough saved-result controls', () => {
                 return method === 'scm.diffSummary.result.read' ? { success: true, result: withRevision(7) }
                     : { success: false, errorCode: 'revision_conflict', error: 'Changed', latestRevision: 7 }; } });
         const screen = await renderScreen(<BoundActions operations={operations} />);
-        await screen.pressByTestIdAsync('walkthrough-saved-edit');
+        await choose(screen, 'walkthrough-saved-edit');
         await act(async () => screen.changeTextByTestId('walkthrough-saved-title', 'My draft'));
         await screen.pressByTestIdAsync('walkthrough-saved-title-save');
         await screen.pressByTestIdAsync('walkthrough-saved-reload');
@@ -136,11 +180,11 @@ describe('Walkthrough saved-result controls', () => {
         const operations = createScmDiffSummaryResultOperations({ sessionId: 'session', shouldContinue: () => true,
             rpc: async (method, input) => { calls.push({ method, input }); return { success: true, result: SAVED }; } });
         const screen = await renderScreen(<WalkthroughSavedActions result={SAVED} cwd="/repo" operations={operations} onResult={() => {}} />);
-        await screen.pressByTestIdAsync('walkthrough-saved-add-summary');
+        await choose(screen, 'walkthrough-saved-add-summary');
         expect(calls).toEqual([{ method: 'scm.diffSummary.addOutputs', input: { cwd: '/repo', resultId: 'saved', expectedRevision: 4, outputs: ['summary'] } }]);
-        expect(screen.findByTestId('walkthrough-saved-add-commitPlan')).toBeNull();
+        expect(offered(screen, 'walkthrough-saved-add-commitPlan')).toBe(false);
         await act(async () => screen.update(<WalkthroughSavedActions result={SAVED} cwd="/repo" operations={operations} onResult={() => {}} disabledReason="Offline" />));
-        await screen.pressByTestIdAsync('walkthrough-saved-undo');
+        await choose(screen, 'walkthrough-saved-undo');
         expect(calls).toHaveLength(1);
     });
 
@@ -149,7 +193,7 @@ describe('Walkthrough saved-result controls', () => {
         const operations = createScmDiffSummaryResultOperations({ sessionId: 'session', shouldContinue: () => true,
             rpc: async (method, input) => { calls.push({ method, input }); return { success: true, result: withRevision(5) }; } });
         const screen = await renderScreen(<BoundActions operations={operations} />);
-        await screen.pressByTestIdAsync('walkthrough-saved-edit');
+        await choose(screen, 'walkthrough-saved-edit');
         await screen.pressByTestIdAsync('walkthrough-saved-stop-key');
         await act(async () => screen.changeTextByTestId('walkthrough-saved-stop-title', 'My explanation title'));
         await screen.pressByTestIdAsync('walkthrough-saved-merge-next');
@@ -164,7 +208,7 @@ describe('Walkthrough saved-result controls', () => {
         const operations = createScmDiffSummaryResultOperations({ sessionId: 'session', shouldContinue: () => true, rpc: () => deferred.promise });
         const onResult = vi.fn();
         const screen = await renderScreen(<WalkthroughSavedActions result={SAVED} cwd="/repo" operations={operations} onResult={onResult} />);
-        await act(async () => screen.pressByTestId('walkthrough-saved-undo'));
+        await choose(screen, 'walkthrough-saved-undo');
         await act(async () => screen.update(<WalkthroughSavedActions result={withRevision(8)} cwd="/repo" operations={operations} onResult={onResult} />));
         await act(async () => deferred.resolve({ success: true, result: withRevision(5) }));
         expect(onResult).not.toHaveBeenCalled();
@@ -181,7 +225,7 @@ describe('Walkthrough saved-result controls', () => {
                 return method === 'scm.diffSummary.result.read' ? { success: true, result: merged }
                     : { success: false, errorCode: 'revision_conflict', error: 'Merged elsewhere', latestRevision: 7 }; } });
         const screen = await renderScreen(<BoundActions operations={operations} />);
-        await screen.pressByTestIdAsync('walkthrough-saved-edit');
+        await choose(screen, 'walkthrough-saved-edit');
         await screen.pressByTestIdAsync('walkthrough-saved-stop-sheet');
         await act(async () => screen.changeTextByTestId('walkthrough-saved-prose', 'My draft'));
         await screen.pressByTestIdAsync('walkthrough-saved-prose-save');

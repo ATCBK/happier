@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
     AccountSettingsSchema, DEFAULT_PROVIDER_SETTINGS_V1, ProviderContributionV1Schema, ProviderSettingsV1Schema,
-    buildBackendTargetKeyV2,
+    buildBackendTargetKeyV2, ProviderBoundModelRefSchema,
 } from '@happier-dev/protocol';
 import { splitProviderSettingsV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { CODEX_PROVIDER_BINDING_ADAPTER_V1 } from '../../../../../../../../packages/plugins/codex/src/agent/providerBinding/adapter';
@@ -74,7 +74,7 @@ function fixture(agentId: 'codex' | 'claude', modelId = 'model-a') {
     return { release, materialize, activateContributionsOnDemand, input: {
         backendTarget, agentId, runId: 'run-child', machineId: 'machine-child', featureEnabled: true,
         happyHomeDir: '/tmp/happier-inherited-admission', accountSettingsSnapshot,
-        selection: { agentTargetKey: buildBackendTargetKeyV2(backendTarget), providerConnectionId: 'pc_inherited', modelId },
+        selection: ProviderBoundModelRefSchema.parse({ agentTargetKey: buildBackendTargetKeyV2(backendTarget), providerConnectionId: 'pc_inherited', modelId }),
     } };
 }
 

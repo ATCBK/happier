@@ -100,7 +100,7 @@ describe('EntityDragCarriedPreview refusal settlement', () => {
         };
         const retireSource = runtime.registerSource(source);
         const unsubscribe = runtime.subscribe(() => { if (runtime.getSnapshot().phase === 'settled') retireSource(); });
-        const admission: EntityDropAdmissionV1 = { status: 'allowed', effect: { actionId: 'session.reports_to.set', input: {}, preview: { verb: 'Put under', target: 'Lead' } } };
+        const admission: EntityDropAdmissionV1 = { status: 'allowed', effect: { actionId: 'session.manager.set', input: {}, preview: { verb: 'Put under', target: 'Lead' } } };
         const execute = vi.fn(async () => new Promise<EntityDropOutcomeV1>(resolve => { finish = resolve; }));
         runtime.registerTarget({ id: 'target', scope, acceptedKinds: ['session'],
             getBounds: () => ({ x: 200, y: 200, width: 100, height: 100 }), resolve: () => admission, execute });
@@ -114,7 +114,7 @@ describe('EntityDragCarriedPreview refusal settlement', () => {
         expect(screen.findHostByTestId('carried-card')).toBeNull();
         // Native source geometry can arrive after pickup; settlement must use its current origin.
         sourceBounds = { x: 10, y: 20, width: 300, height: 40 };
-        await act(async () => { finish({ status: 'refused', reason: { code: 'reports_to_forbidden', message: 'Lead cannot take reports' } }); await release; });
+        await act(async () => { finish({ status: 'refused', reason: { code: 'manager_forbidden', message: 'Lead cannot take reports' } }); await release; });
         const card = screen.findHostByTestId('carried-card');
         expect(card).not.toBeNull();
         expect(card?.props.dataSet.outcome).toBe('refused');

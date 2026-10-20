@@ -23,8 +23,9 @@ import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifet
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { readAccountSettingsV2Raw, replaceAccountSettingsV2RawForOwnerCutover } from '@/settings/accountSettings/updateAccountSettingsV2WithRetry';
 import { normalizeCliAccountSettingsHistoryAfterTransfer } from '@/settings/accountSettings/accountSettingsHistoryNormalization';
-import { createInvocationSavedSecretOperationContextV1, readSavedSecretCatalogForOperation,
-  prepareSavedSecretResourceCreateForOperation, type SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1, type SavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
+import { readSavedSecretCatalogForOperation } from "@/settings/secrets/savedSecretCatalogRead";
+import { prepareSavedSecretResourceCreateForOperation } from "@/settings/secrets/hydrateSavedSecretCatalog";
 import { createSavedSecretMaterializerFromSnapshotV1, readSavedSecretRevisionsFromSnapshotV1 } from '@/settings/secrets/savedSecretCatalog';
 import { deriveSettingsSecretsReadKeysForCredentials } from '@/settings/secrets/settingsSecretsKey';
 

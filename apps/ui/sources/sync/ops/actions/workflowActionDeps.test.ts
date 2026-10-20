@@ -12,6 +12,7 @@ import {
     AutomationTriggerIdSchema,
     ArtifactAccessRecipientCensusResponseV1Schema,
     validateWorkflowDefinition,
+    getActionSpec,
     WorkflowRunStartRequestV1Schema,
     SessionTriggerUpdateRequestV1Schema,
     ScmPullRequestListResponseSchema,
@@ -32,11 +33,12 @@ import {
 import { TokenStorage, type AuthCredentials } from '@/auth/storage/tokenStorage';
 import { encodeBase64 } from '@/encryption/base64';
 import { createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createPlainSessionCurrentProjectionRecordFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
 import { storage } from '@/sync/domains/state/storage';
+import { workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
 import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 import { setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
 import { captureLazyActionAccountContext } from './actionAccountContext';
@@ -68,6 +70,12 @@ import { WorkflowDefinitionListResultV1Schema } from '@happier-dev/protocol/work
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
+import { DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcTypes';
+import { buildKeepGoingTriggerAddRequest } from '@/components/sessions/workState/sessionGoalContinuation';
+
+let goalRpcBoundary: { reply: Promise<unknown>; issued: boolean } | null = null;
 
 // Home remains reachable while Machine daemons are offline. Keep the real
 // connection supervisor and replace only its external Socket.IO transport.
@@ -79,6 +87,17 @@ installDisconnectedServerSocketBoundary((socket) => {
         socket.connected = true;
         for (const listener of socket.listeners('connect')) listener();
         return socket;
+    });
+    if (!goalRpcBoundary) return;
+    const emitWithAck = socket.emitWithAck.bind(socket);
+    vi.spyOn(socket, 'emitWithAck').mockImplementation(async (...emission) => {
+        const [event, payload] = emission;
+        if (goalRpcBoundary && event === SOCKET_RPC_EVENTS.CALL && payload && typeof payload === 'object'
+            && 'method' in payload && typeof payload.method === 'string' && payload.method.endsWith(':session.goal.get')) {
+            goalRpcBoundary.issued = true;
+            return await goalRpcBoundary.reply;
+        }
+        return await emitWithAck(...emission);
     });
 });
 
@@ -101,6 +120,12 @@ vi.mock('react-native-unistyles', async () => {
 vi.mock('@/text', async () => {
     const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
     return createTextModuleMock();
+});
+// The user accepts native confirmation at the presentation boundary; Action
+// policy, approval selection and the eventual Account write remain real.
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({ confirmResult: true }).module;
 });
 // Metro's lazy module loader is a platform boundary unavailable in Vitest. Substitute
 // only its module loading; the real default factory and Action front door still execute.
@@ -143,6 +168,8 @@ function storedTrigger(triggerId: string, trigger: AutomationTriggerDefinitionIn
     }
     if (trigger.kind === 'runLifecycle') return { ...trigger, id: AutomationTriggerIdSchema.parse(triggerId), revision, createdAt: 1, updatedAt: 1,
         remainingOccurrences: 1, status: { state: 'waiting', runId: null }, triggerDefinitionEnvelope: null };
+    if (trigger.kind === 'sessionLifecycle') return { ...trigger, id: AutomationTriggerIdSchema.parse(triggerId), revision, createdAt: 1, updatedAt: 1,
+        remainingOccurrences: null, status: { state: 'waiting', runId: null }, triggerDefinitionEnvelope: null };
     if (trigger.kind !== 'schedule') throw new Error('fixture_supports_schedule_triggers_only');
     return { ...trigger, id: triggerId as AutomationDefinitionDetail['triggers'][number]['id'], revision, createdAt: 1, updatedAt: 1, nextRunAt: 2, triggerDefinitionEnvelope: null };
 }
@@ -222,12 +249,13 @@ async function installPullRequestProjection(h: Awaited<ReturnType<typeof createH
     return { setLinks: (next: typeof links) => { links = next; }, fail: () => { failure = true; } };
 }
 
-async function createHarness(mode: 'plain' | 'e2ee' = 'plain', options: Readonly<{ workflowResult?: boolean; malformed?: boolean; locked?: boolean; identity?: boolean; historicalSecret?: Uint8Array; credentialKind?: 'account_directory' | 'ephemeral_session_runner'; automations?: readonly AutomationDefinitionListItem[]; cleanupFailure?: boolean; beforeAutomationDeleteResponse?: () => Promise<void>; beforeAutomationListResponse?: () => Promise<void> }> = {}) {
+async function createHarness(mode: 'plain' | 'e2ee' = 'plain', options: Readonly<{ workflowResult?: boolean; malformed?: boolean; locked?: boolean; identity?: boolean; historicalSecret?: Uint8Array; credentialKind?: 'account' | 'account_directory' | 'ephemeral_session_runner'; automations?: readonly AutomationDefinitionListItem[]; cleanupFailure?: boolean; beforeAutomationDeleteResponse?: () => Promise<void>; beforeAutomationListResponse?: () => Promise<void> }> = {}) {
     const home = await upsertAndActivateServer({ serverUrl: `https://workflow-${mode}-${crypto.randomUUID()}.test`, scope: 'tab' });
     if (options.identity) await setServerProfileIdentityForUrl(home.serverUrl, `srv_workflow-${crypto.randomUUID()}`);
     const token = `header.${encodeBase64(new TextEncoder().encode(JSON.stringify({ sub: accountId,
         ...(options.credentialKind ? { provenance: { v: 1, kind: options.credentialKind,
-            authority: options.credentialKind === 'account_directory' ? 'present_user' : 'session_runtime' } } : {}),
+            authority: options.credentialKind === 'ephemeral_session_runner' ? 'session_runtime' : 'present_user' },
+            ...(options.credentialKind === 'account' ? { tokenEpoch: 0 } : {}) } : {}),
     })), 'base64url')}.signature`;
     const secret = new Uint8Array(32).fill(24);
     const credentials: AuthCredentials = options.historicalSecret
@@ -392,7 +420,7 @@ async function createHarness(mode: 'plain' | 'e2ee' = 'plain', options: Readonly
         throw new Error(`unexpected_operation:${String(operation.operation)}`);
     });
     await upsertAndActivateServer({ serverUrl: `https://focused-${crypto.randomUUID()}.test`, scope: 'tab' });
-    const account = await captureLazyActionAccountContext(home.id);
+    let account = await captureLazyActionAccountContext(home.id);
     // Capture follows the app's Account bootstrap; family construction happens
     // afterwards, so its real machine relay cannot re-enter storage creation.
     const { createUiWorkflowAction } = await import('./workflowActionDeps');
@@ -400,10 +428,23 @@ async function createHarness(mode: 'plain' | 'e2ee' = 'plain', options: Readonly
     const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
     // The mounted family's captured lifetime is real; the default factory still
     // owns settings policy, approval and every other Action dependency.
-    const execute = createFrontDoorActionExecute(createDefaultActionExecutor({ workflowAction: createUiWorkflowAction({ account, transport }) }));
+    let execute = createFrontDoorActionExecute(createDefaultActionExecutor({ workflowAction: createUiWorkflowAction({ account, transport }) }));
     const executeDefault = createFrontDoorActionExecute(createDefaultActionExecutor());
-    const context = { surface: 'ui' as const, serverId: account.serverId, runtimeAccountId: accountId, authority: 'present_user' as const };
-    return { account, execute, executeDefault, context, transport, operations, home, createUiWorkflowAction, deletedResources, artifacts, automationRows, automationWrites, resultEnvelope };
+    const context = { surface: 'ui' as const, serverId: account.serverId, runtimeAccountId: accountId,
+        authority: 'present_user' as const, actionCaller: { kind: 'host' as const } };
+    const restoreAccount = async (request: NonNullable<ReturnType<typeof runtimeFetch.getMockImplementation>>) => {
+        // Connection restoration is a real credential-lifetime replacement. Mount
+        // consumers only after that lifecycle, as the app does after sign-in.
+        const credentials = account.credentials;
+        account.dispose();
+        const connection = await restoreServerAccountForTest({ serverUrl: home.serverUrl, accountId, credentials, request });
+        runtimeFetch.mockImplementation(request);
+        account = await captureLazyActionAccountContext(home.id);
+        execute = createFrontDoorActionExecute(createDefaultActionExecutor({ workflowAction: createUiWorkflowAction({ account, transport }) }));
+        return connection;
+    };
+    return { get account() { return account; }, get execute() { return execute; }, restoreAccount,
+        executeDefault, context, transport, operations, home, createUiWorkflowAction, deletedResources, artifacts, automationRows, automationWrites, resultEnvelope };
 }
 
 function savedAutomationReceipt(automationId: string) {
@@ -419,6 +460,101 @@ function savedAutomationReceipt(automationId: string) {
 }
 
 describe('UI Workflow Action front door', () => {
+    it.each(['absent', 'unprojected', 'not_found', 'other_session', 'retired', 'native_owner'] as const)(
+        'FIX81 resolves Keep going placement through the exact Home: %s', async cached => {
+        const previousState = storage.getState();
+        const h = await createHarness();
+        const sessionId = 'session-not-opened';
+        const wire = createPlainSessionCurrentProjectionRecordFixture({ id: cached === 'other_session' ? 'different-session' : sessionId,
+            active: cached === 'native_owner',
+            metadata: { path: '/owned-project', host: 'host', homeDir: '/home', machineId: 'machine-a' } });
+        const request = runtimeFetch.getMockImplementation()!;
+        const sessionReads: string[] = [];
+        let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
+        if (cached === 'native_owner') goalRpcBoundary = { issued: false,
+            reply: Promise.resolve({ ok: true, result: { workState: null, nativeGoalOwner: true } }) };
+        try {
+            await loadSyncSingletonForTests();
+            connection = await h.restoreAccount(request);
+            runtimeFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
+                if (new URL(String(url)).pathname === `/v2/sessions/${sessionId}`) {
+                    sessionReads.push(String(url));
+                    if (cached === 'not_found') return json({ error: 'Session not found' }, 404);
+                    if (cached === 'retired') await TokenStorage.setCredentialsForServerUrl(h.home.serverUrl,
+                        { serverId: h.account.serverId }, { token: 'replacement-account' });
+                    return json({ session: wire });
+                }
+                return request(url, init);
+            });
+            expect(getActiveServerSnapshot().serverId).toBe(h.account.serverId);
+            storage.setState({ endpointStatus: 'online', profileScope: { serverId: h.account.serverId, accountId } });
+            storage.setState({ sessions: cached !== 'unprojected' ? {} : { [sessionId]: createSessionFixture({ id: sessionId,
+                metadataLayoutVersion: 1, ownerMetadataView: null }) } });
+            const input = buildKeepGoingTriggerAddRequest(sessionId, { maxRounds: 4, strikes: 3, secondOpinion: false });
+            const result = await h.execute('session.trigger.add', input, h.context);
+            if (cached !== 'absent' && cached !== 'unprojected') {
+                expect(result).toMatchObject({ ok: false, ...(cached === 'native_owner' ? { errorCode: 'native_goal_owner' } : {}) });
+                expect(h.automationWrites).toEqual([]);
+                return;
+            }
+            expect(result, JSON.stringify({ result, sessionReads, wire })).toMatchObject({ ok: true, result: { set: {
+                scopeSessionId: sessionId, project: { machineId: 'machine-a', directory: '/owned-project' },
+                target: { kind: 'workflow', ref: 'builtin:keep-going' },
+                triggers: [{ kind: 'sessionLifecycle', sourceSessionId: sessionId, events: ['parentTurnCompleted'] }],
+            } } });
+            if (!result.ok) throw new Error('Expected admitted trigger');
+            expect(getActionSpec('session.trigger.add').outputSchema!.safeParse(result.result).success).toBe(true);
+            expect(h.automationWrites).toHaveLength(1);
+            expect(h.transport).not.toHaveBeenCalled();
+            expect(storage.getState().sessions[sessionId]).toEqual(cached === 'absent' ? undefined
+                : expect.objectContaining({ ownerMetadataView: null }));
+        } finally { goalRpcBoundary = null; h.account.dispose(); await connection?.dispose(); storage.setState(previousState); }
+    });
+
+    it.each(['native', 'unsupported', 'abort'] as const)('retains Keep going capability readiness until %s settlement', async scenario => {
+        const previousState = storage.getState();
+        const h = await createHarness();
+        let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
+        let release!: (value: unknown) => void;
+        goalRpcBoundary = { issued: false, reply: new Promise(resolve => { release = resolve; }) };
+        try {
+            const request = runtimeFetch.getMockImplementation();
+            if (!request) throw new Error('Expected Workflow HTTP boundary');
+            await loadSyncSingletonForTests();
+            connection = await h.restoreAccount(request);
+            runtimeFetch.mockImplementation(request);
+            storage.setState({ endpointStatus: 'online', profileScope: { serverId: h.account.serverId, accountId } });
+            storage.getState().applySessions([createSessionFixture({ id: 'session-opening', active: true,
+                encryptionMode: 'plain', metadataLayoutVersion: 1,
+                metadata: { name: 'Session' } as ReturnType<typeof createSessionFixture>['metadata'],
+                ownerMetadataView: { path: '/repo', host: 'host', homeDir: '/home', machineId: 'machine-a' } as ReturnType<typeof createSessionFixture>['metadata'] })]);
+            const controller = new AbortController();
+            let settled = false;
+            const pending = h.execute('session.trigger.add', { sessionId: 'session-opening',
+                target: { kind: 'workflow', ref: 'builtin:keep-going' }, trigger: scheduleTrigger },
+            { ...h.context, signal: controller.signal }).then(result => { settled = true; return result; });
+            await vi.waitFor(() => expect(goalRpcBoundary?.issued).toBe(true));
+            // Include the existing transport's auth-error settlement after an ACK timeout.
+            if (scenario !== 'abort') await new Promise<void>(resolve => setTimeout(resolve, DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS + 1_000));
+            expect(settled, 'native controls readiness outlives the generic RPC default').toBe(false);
+            if (scenario === 'abort') {
+                controller.abort();
+                await vi.waitFor(() => expect(settled).toBe(true));
+            }
+            release({ ok: true, result: { workState: null, nativeGoalOwner: scenario !== 'unsupported' } });
+            await expect(pending).resolves.toMatchObject(scenario === 'unsupported' ? { ok: true }
+                : { ok: false, ...(scenario === 'native' ? { errorCode: 'native_goal_owner' } : {}) });
+            expect(h.automationWrites).toHaveLength(scenario === 'unsupported' ? 1 : 0);
+        } finally {
+            release({ ok: true, result: { workState: null, nativeGoalOwner: true } });
+            goalRpcBoundary = null;
+            vi.useRealTimers();
+            h.account.dispose();
+            await connection?.dispose();
+            storage.setState(previousState);
+        }
+    });
+
     it('runs one exact saved Automation occurrence on its captured Home and preserves the whole admission receipt', async () => {
         const h = await createHarness();
         const automationId = 'automation-upkeep';
@@ -466,6 +602,7 @@ describe('UI Workflow Action front door', () => {
         const previousApplied = getAppliedActiveServerSnapshot();
         const previousAvailable = isAppliedActiveServerRuntimeAvailable();
         const h = await createHarness();
+        const ownRunKey = workflowRunStoreKey(runId, h.account.accountLifetime.scope);
         let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
         const automationId = 'automation-cache';
         const receipt = savedAutomationReceipt(automationId);
@@ -490,22 +627,23 @@ describe('UI Workflow Action front door', () => {
             storage.setState({ profileScope: { serverId: getActiveServerSnapshot().serverId, accountId },
                 workflowRunsById: {}, automationRunIdsByAutomationId: {} });
             expect(await h.execute('workflow.trigger.run_now', { automationId }, h.context)).toEqual({ ok: true, result: receipt });
-            expect(storage.getState().workflowRunsById[runId]).toBeUndefined();
+            expect(storage.getState().workflowRunsById[ownRunKey]).toBeUndefined();
 
             const admissionRequest = runtimeFetch.getMockImplementation();
             if (!admissionRequest) throw new Error('Expected the manual admission HTTP boundary');
             await loadSyncSingletonForTests();
-            connection = await restoreServerAccountForTest({ serverUrl: h.home.serverUrl, accountId,
-                credentials: h.account.credentials, request: admissionRequest });
+            connection = await h.restoreAccount(admissionRequest);
             runtimeFetch.mockImplementation(admissionRequest);
             storage.setState({ profileScope: { serverId: h.account.serverId, accountId: 'another-account' } });
-            expect(await h.execute('workflow.trigger.run_now', { automationId }, h.context)).toEqual({ ok: true, result: receipt });
-            expect(storage.getState().workflowRunsById[runId]).toBeUndefined();
+            expect(await h.execute('workflow.trigger.run_now', { automationId }, h.context)).toMatchObject({ ok: false });
+            expect(storage.getState().workflowRunsById[ownRunKey]).toBeUndefined();
 
+            await connection.dispose();
+            connection = await h.restoreAccount(admissionRequest);
             storage.setState({ profileScope: { serverId: h.account.serverId, accountId } });
             expect(getActiveServerAccountScope()).toEqual({ serverId: h.account.serverId, accountId });
             expect(await h.execute('workflow.trigger.run_now', { automationId }, h.context)).toEqual({ ok: true, result: receipt });
-            expect(storage.getState().workflowRunsById[runId]?.automation).toEqual(receipt.run);
+            expect(storage.getState().workflowRunsById[ownRunKey]?.automation).toEqual(receipt.run);
             expect(storage.getState().automationRunIdsByAutomationId[automationId]).toEqual([runId]);
             expect(h.automationWrites).toEqual([]);
 
@@ -513,7 +651,7 @@ describe('UI Workflow Action front door', () => {
             misboundReceipt = true;
             expect(await h.execute('workflow.trigger.run_now', { automationId }, h.context))
                 .toMatchObject({ ok: false, errorCode: 'content_unavailable' });
-            expect(storage.getState().workflowRunsById[runId]).toBeUndefined();
+            expect(storage.getState().workflowRunsById[ownRunKey]).toBeUndefined();
             expect(storage.getState().automationRunIdsByAutomationId['another-automation']).toBeUndefined();
 
             const approval = { kind: 'approval_request_created', artifactId: 'manual-approval', actionId: 'workflow.trigger.run_now' };
@@ -523,7 +661,7 @@ describe('UI Workflow Action front door', () => {
                 context: { ...h.context, surface: 'agent',
                     externalActionTarget: { kind: 'machine', machineId: 'machine-a' } },
             })).toEqual(approval);
-            expect(storage.getState().workflowRunsById[runId]).toBeUndefined();
+            expect(storage.getState().workflowRunsById[ownRunKey]).toBeUndefined();
             expect(storage.getState().automationRunIdsByAutomationId[automationId]).toBeUndefined();
 
             h.transport.mockResolvedValueOnce({ ...receipt, run: { ...receipt.run, automationId: 'another-automation' } });
@@ -532,13 +670,13 @@ describe('UI Workflow Action front door', () => {
                 context: { ...h.context, surface: 'agent',
                     externalActionTarget: { kind: 'machine', machineId: 'machine-a' } },
             })).toMatchObject({ ok: false, errorCode: 'content_unavailable' });
-            expect(storage.getState().workflowRunsById[runId]).toBeUndefined();
+            expect(storage.getState().workflowRunsById[ownRunKey]).toBeUndefined();
             expect(storage.getState().automationRunIdsByAutomationId['another-automation']).toBeUndefined();
 
             misboundReceipt = false;
             retireBeforeReceipt = true;
             expect(await h.execute('workflow.trigger.run_now', { automationId }, h.context)).toMatchObject({ ok: false });
-            expect(storage.getState().workflowRunsById[runId]).toBeUndefined();
+            expect(storage.getState().workflowRunsById[ownRunKey]).toBeUndefined();
             expect(storage.getState().automationRunIdsByAutomationId[automationId]).toBeUndefined();
         } finally {
             h.account.dispose();
@@ -553,15 +691,15 @@ describe('UI Workflow Action front door', () => {
         const previousApplied = getAppliedActiveServerSnapshot();
         const previousAvailable = isAppliedActiveServerRuntimeAvailable();
         const h = await createHarness();
-        const controller = createUsageCoachController({ lifetime: h.account.accountLifetime, executor: { execute: h.execute } });
+        let controller: ReturnType<typeof createUsageCoachController> | null = null;
         let screen: Awaited<ReturnType<typeof renderScreen>> | null = null;
         let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
         try {
             const request = runtimeFetch.getMockImplementation();
             if (!request) throw new Error('Expected the Workflow HTTP boundary');
             await loadSyncSingletonForTests();
-            connection = await restoreServerAccountForTest({ serverUrl: h.home.serverUrl, accountId,
-                credentials: h.account.credentials, request });
+            connection = await h.restoreAccount(request);
+            controller = createUsageCoachController({ lifetime: h.account.accountLifetime, executor: { execute: h.execute } });
             runtimeFetch.mockImplementation(request);
             storage.setState({ profileScope: { serverId: h.account.serverId, accountId } });
             const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 }, sources: ['runtime'] });
@@ -589,7 +727,7 @@ describe('UI Workflow Action front door', () => {
             expect(await h.execute('workflow.trigger.remove', { automationId: receipt!.result.set.automationId,
                 triggerId: receipt!.result.triggerId }, h.context)).toMatchObject({ ok: true });
             expect(h.automationRows.get(receipt!.result.set.automationId)?.triggers).toEqual([]);
-        } finally { await screen?.unmount(); controller.dispose(); h.account.dispose(); await connection?.dispose();
+        } finally { await screen?.unmount(); controller?.dispose(); h.account.dispose(); await connection?.dispose();
             storage.setState(previous); publishAppliedActiveServerSnapshot(previousApplied, previousAvailable); }
     });
     it('returns saved workflows before awaiting the real plugin projection provider', async (testContext) => {
@@ -687,8 +825,7 @@ describe('UI Workflow Action front door', () => {
             };
             await loadSyncSingletonForTests();
             const { sync } = await import('@/sync/sync');
-            connection = await restoreServerAccountForTest({ serverUrl: h.home.serverUrl, accountId,
-                credentials: h.account.credentials, request: recoveryRequest });
+            connection = await h.restoreAccount(recoveryRequest);
             const inspection = await sync.getAutomationRunDetailInspection('automation-reply', runId);
             expect(inspection.privateContent.result).toMatchObject({ kind: 'available', result: { text: 'Reply opened with the Run key' } });
             expect(h.transport).not.toHaveBeenCalled();
@@ -711,7 +848,7 @@ describe('UI Workflow Action front door', () => {
                 recipientPublicKey: encryption.contentDataKey, randomBytes: (length) => new Uint8Array(length).fill(3) }), 'base64');
             const request = runtimeFetch.getMockImplementation()!;
             await loadSyncSingletonForTests();
-            connection = await restoreServerAccountForTest({ serverUrl: h.home.serverUrl, accountId, request });
+            connection = await h.restoreAccount(request);
             let retainedSessionReads = 0;
             runtimeFetch.mockImplementation(async (url: unknown, init?: RequestInit) => {
                 if (new URL(String(url)).pathname === '/v2/sessions/session-old') {
@@ -774,7 +911,7 @@ describe('UI Workflow Action front door', () => {
             const request = runtimeFetch.getMockImplementation();
             if (!request) throw new Error('Expected the Workflow HTTP boundary');
             await loadSyncSingletonForTests();
-            connection = await restoreServerAccountForTest({ serverUrl: h.home.serverUrl, accountId, request });
+            connection = await h.restoreAccount(request);
             runtimeFetch.mockImplementation(request);
             storage.setState({ endpointStatus: 'online', profileScope: { serverId: h.account.serverId, accountId }, sessions: {
                 'session-old': createSessionFixture({ id: 'session-old', active: false, metadata: {
@@ -807,7 +944,7 @@ describe('UI Workflow Action front door', () => {
             const request = runtimeFetch.getMockImplementation();
             if (!request) throw new Error('Expected the Workflow HTTP boundary');
             await loadSyncSingletonForTests();
-            connection = await restoreServerAccountForTest({ serverUrl: h.home.serverUrl, accountId, request });
+            connection = await h.restoreAccount(request);
             runtimeFetch.mockImplementation(request);
             // Only Machine daemons are absent; this fixture's Home HTTP is reachable.
             storage.setState({ endpointStatus: 'online', profileScope: { serverId: h.account.serverId, accountId }, sessions: {
@@ -835,9 +972,43 @@ describe('UI Workflow Action front door', () => {
             await act(async () => { h.account.dispose(); await connection?.dispose(); storage.setState(previousState); });
         }
     });
-    it.each(['prComment', 'ciFailed'] as const)('creates a scoped %s trigger from the session form and selected pull request', async (kind) => {
+    it.each(['session', 'directory'] as const)('refreshes session triggers when owner routing metadata hydrates after the first read (%s)', async (missing) => {
         const previousState = storage.getState();
         const h = await createHarness();
+        const sessionId = 'session-trigger-hydration';
+        let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
+        let hook: Awaited<ReturnType<typeof renderHook<ReturnType<typeof useSessionTriggers>>>> | null = null;
+        try {
+            const request = runtimeFetch.getMockImplementation();
+            if (!request) throw new Error('Expected the Workflow HTTP boundary');
+            await loadSyncSingletonForTests();
+            connection = await h.restoreAccount(request);
+            runtimeFetch.mockImplementation(request);
+            storage.setState({ endpointStatus: 'online', profileScope: { serverId: h.account.serverId, accountId },
+                sessions: missing === 'session' ? {} : {
+                    [sessionId]: createSessionFixture({ id: sessionId, active: false,
+                        metadataLayoutVersion: 1,
+                        ownerMetadataView: { path: '', host: 'host', homeDir: '/home', machineId: 'machine-a' },
+                    }),
+                }, machines: {}, machineListByServerId: {} });
+            (await installPullRequestProjection(h, sessionId)).setLinks([]);
+            hook = await renderHook(() => useSessionTriggers(sessionId));
+            expect(hook.getCurrent().status).toBe('failed');
+
+            await act(async () => storage.getState().applySessions([createSessionFixture({ id: sessionId, active: false,
+                metadataLayoutVersion: 1,
+                ownerMetadataView: { path: '/repo', host: 'host', homeDir: '/home', machineId: 'machine-a' },
+            })]));
+            await flushHookEffects();
+            expect(hook.getCurrent()).toMatchObject({ status: 'ready', sets: [], pullRequestLinks: [] });
+        } finally {
+            await hook?.unmount();
+            await act(async () => { h.account.dispose(); await connection?.dispose(); storage.setState(previousState); });
+        }
+    });
+    it.each(['prComment', 'ciFailed'] as const)('creates a scoped %s trigger from the session form and selected pull request', async (kind) => {
+        const previousState = storage.getState();
+        const h = await createHarness('plain', { identity: true, credentialKind: 'account' });
         const sessionId = 'session-pr-form';
         const pullRequest = { repository: 'happier-dev/happier', number: 42 };
         const pullRequestLinks = kind === 'ciFailed' ? [{ provider: 'github' as const, ...pullRequest, url: 'https://github.com/happier-dev/happier/pull/42' }] : [];
@@ -845,10 +1016,26 @@ describe('UI Workflow Action front door', () => {
         let screen: Awaited<ReturnType<typeof renderScreen>> | null = null;
         let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
         try {
-            const request = runtimeFetch.getMockImplementation();
-            if (!request) throw new Error('Expected the Workflow HTTP boundary');
+            const workflowRequest = runtimeFetch.getMockImplementation();
+            if (!workflowRequest || !h.account.serverIdentityId) throw new Error('Expected the current Workflow Home boundary');
+            const externalAction = await createExternalActionAccountHttpBoundary({
+                serverUrl: h.home.serverUrl, serverIdentityId: h.account.serverIdentityId, accountId,
+                machineId: 'machine-a', actionId: 'action.invoke', tokenEpoch: 0,
+                execute: (raw) => {
+                    const invoked: unknown = getActionSpec('action.invoke').inputSchema.parse(raw);
+                    if (!invoked || typeof invoked !== 'object' || !('input' in invoked)) throw new Error('Expected an invoked Channels Action');
+                    const input = SessionPullRequestBindingInputV1Schema.parse(invoked.input);
+                    if (input.kind === 'attach') {
+                        attachments.push(input);
+                        return { kind: 'attached', bindingId: 'binding-pr-form' };
+                    }
+                    return { kind: 'removed' };
+                },
+            });
+            const request = async (url: unknown, init?: RequestInit) => await externalAction.handle(new URL(String(url)), init)
+                ?? workflowRequest(url, init);
             await loadSyncSingletonForTests();
-            connection = await restoreServerAccountForTest({ serverUrl: h.home.serverUrl, accountId, request });
+            connection = await h.restoreAccount(request);
             runtimeFetch.mockImplementation(request);
             storage.setState({ endpointStatus: 'online', profileScope: { serverId: h.account.serverId, accountId }, sessions: {
                 [sessionId]: createSessionFixture({ id: sessionId, active: false,
@@ -860,13 +1047,7 @@ describe('UI Workflow Action front door', () => {
                     pullRequests: [{ provider: { kind: 'github', id: 'github', displayName: 'GitHub', baseUrl: 'https://github.com',
                         nameWithOwner: pullRequest.repository }, number: pullRequest.number, title: 'Fix CI',
                         url: 'https://github.com/happier-dev/happier/pull/42', baseBranch: 'main', headBranch: 'fix', state: 'open' }] });
-                const envelope = request.payload as { input: { input: unknown } };
-                const input = SessionPullRequestBindingInputV1Schema.parse(envelope.input.input);
-                if (input.kind === 'attach') {
-                    attachments.push(input);
-                    return { kind: 'attached', bindingId: 'binding-pr-form' };
-                }
-                return { kind: 'removed' };
+                throw new Error(`Unexpected Machine RPC: ${request.method}`);
             });
             const listed = await listSessionTriggers({ sessionId }, { context: { externalActionTarget: { kind: 'machine', machineId: 'machine-a' } } });
             expect(listed.pullRequestLinks).toEqual(pullRequestLinks);
@@ -1080,7 +1261,7 @@ describe('UI Workflow Action front door', () => {
     it('retains host authorization for a non-present-user definition delete', async () => {
         const h = await createHarness();
         try {
-            const { authority: _authority, ...context } = h.context;
+            const context = { ...h.context, authority: 'account_automation' as const };
             await h.createUiWorkflowAction({ account: h.account, transport: h.transport })({
                 actionId: 'workflow.definition.delete', input: { definitionId: runId },
                 context: { ...context, surface: 'agent', externalActionTarget: { kind: 'machine', machineId: 'relay-a' } },
@@ -1120,7 +1301,7 @@ describe('UI Workflow Action front door', () => {
             await expect(h.execute('workflow.run.start', { runId, source: { kind: 'inline', definition } }, { ...h.context, externalActionTarget: target }))
                 .resolves.toMatchObject({ ok: true, result: { admission: 'created' } });
             expect(h.transport).toHaveBeenCalledWith(expect.objectContaining({ serverId: h.account.serverId, accountId, machineId: 'machine-a',
-                payload: { v: 1, kind: 'targeted_action_rpc', target, input: { runId, source: { kind: 'inline', definition } } } }));
+                actionId: 'workflow.run.start', target, payload: { runId, source: { kind: 'inline', definition } } }));
             expect(h.operations).toEqual([]);
         } finally { h.account.dispose(); }
     });
@@ -1147,6 +1328,9 @@ describe('UI Workflow Action front door', () => {
     it.each(['plain', 'e2ee'] as const)('lists, adds, updates and removes %s Account triggers with no Machine', async (mode) => {
         const h = await createHarness(mode);
         try {
+            // Native confirmation is a system boundary: the person accepts these writes.
+            const { Modal } = await import('@/modal');
+            const confirmation = vi.spyOn(Modal, 'confirm').mockResolvedValue(true);
             const definitionId = '00000000-0000-4000-8000-000000000005';
             const project = { machineId: 'machine-a', directory: '/repo' };
             const created = await h.execute('workflow.definition.create', { definitionId, definition, metadata: { title: 'Workflow' } }, h.context);
@@ -1164,6 +1348,7 @@ describe('UI Workflow Action front door', () => {
                 .resolves.toMatchObject({ ok: true, result: { set: { automationId, triggers: [{ id: triggerId, enabled: false }] } } });
             await expect(h.execute('workflow.trigger.remove', { automationId, triggerId }, h.context))
                 .resolves.toMatchObject({ ok: true, result: { set: { automationId, triggers: [] } } });
+            expect(confirmation).toHaveBeenCalled();
             expect(h.automationWrites).toEqual([`create:${automationId}`, `reconcile:${automationId}`, `reconcile:${automationId}`]);
             expect(h.transport).not.toHaveBeenCalled();
         } finally { h.account.dispose(); }
@@ -1194,7 +1379,7 @@ describe('UI Workflow Action front door', () => {
             const request = runtimeFetch.getMockImplementation();
             if (!request) throw new Error('Expected the Workflow HTTP boundary');
             await loadSyncSingletonForTests();
-            connection = await restoreServerAccountForTest({ serverUrl: h.home.serverUrl, accountId, request });
+            connection = await h.restoreAccount(request);
             runtimeFetch.mockImplementation(request);
             storage.setState({ endpointStatus: 'online', profileScope: { serverId: h.account.serverId, accountId } });
             storage.getState().applySessions([createSessionFixture({ id: 'session-closed', active: false,
@@ -1229,7 +1414,7 @@ describe('UI Workflow Action front door', () => {
     it('routes agent trigger writes to the host that owns agent policy, and refuses typed with no Machine', async () => {
         const h = await createHarness();
         try {
-            const { authority: _authority, ...context } = h.context;
+            const context = { ...h.context, authority: 'account_automation' as const };
             const executeCaptured = h.createUiWorkflowAction({ account: h.account, transport: h.transport });
             await executeCaptured({ actionId: 'session.trigger.update', input: SessionTriggerUpdateRequestV1Schema.parse({
                 sessionId: 'session-a', triggerId: 'trigger-a', expectedRevision: 3, patch: { enabled: false },
@@ -1256,7 +1441,6 @@ describe('UI Workflow Action front door', () => {
                 .resolves.toMatchObject({ ok: false, errorCode: 'content_unavailable' });
             expect(h.operations).toEqual([
                 { operation: 'get', runId },
-                { operation: 'run-key.census', runId },
             ]);
         } finally { h.account.dispose(); }
     });

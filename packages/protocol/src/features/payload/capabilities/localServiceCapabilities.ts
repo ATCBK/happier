@@ -68,9 +68,9 @@ export const LocalServicePreviewCapabilitiesSchema = lazyZodSchema(() => z.stric
     streamingSseSupport: z._default(z.optional(z.boolean()), false),
     compressionPolicy: z._default(z.optional(z.enum(['identity', 'decode_reencode'])), 'identity'),
     cookiePolicy: z._default(z.optional(z.enum(['drop', 'isolate', 'rewrite'])), 'drop'),
-    maxRequestBodyBytes: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PREVIEW_MAX_REQUEST_BODY_BYTES)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PREVIEW_MAX_REQUEST_BODY_BYTES),
-    maxResponseBodyBytes: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PREVIEW_MAX_RESPONSE_BODY_BYTES)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PREVIEW_MAX_RESPONSE_BODY_BYTES),
-    tokenTtlMs: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PREVIEW_TOKEN_TTL_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PREVIEW_TOKEN_TTL_MS),
+    maxRequestBodyBytes: z._default(z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PREVIEW_MAX_REQUEST_BODY_BYTES)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PREVIEW_MAX_REQUEST_BODY_BYTES),
+    maxResponseBodyBytes: z._default(z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PREVIEW_MAX_RESPONSE_BODY_BYTES)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PREVIEW_MAX_RESPONSE_BODY_BYTES),
+    tokenTtlMs: z._default(z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PREVIEW_TOKEN_TTL_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PREVIEW_TOKEN_TTL_MS),
     diagnostics: z._default(z.optional(LocalServicePreviewDiagnosticsCapabilitiesSchema), DEFAULT_LOCAL_SERVICE_PREVIEW_DIAGNOSTICS_CAPABILITIES),
     disabledReasons: z._default(z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))), []),
   }));
@@ -120,11 +120,11 @@ export const DEFAULT_LOCAL_SERVICE_PUBLIC_CAPABILITIES: LocalServicePublicCapabi
 
 export const LocalServicePageTitleCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
     enabled: z._default(z.optional(z.boolean()), false),
-    timeoutMs: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PAGE_TITLE_TIMEOUT_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PAGE_TITLE_TIMEOUT_MS),
-    maxBodyBytes: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PAGE_TITLE_MAX_BODY_BYTES)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PAGE_TITLE_MAX_BODY_BYTES),
-    concurrency: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PAGE_TITLE_CONCURRENCY)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PAGE_TITLE_CONCURRENCY),
-    successTtlMs: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PAGE_TITLE_SUCCESS_TTL_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PAGE_TITLE_SUCCESS_TTL_MS),
-    failureTtlMs: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PAGE_TITLE_FAILURE_TTL_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PAGE_TITLE_FAILURE_TTL_MS),
+    timeoutMs: z._default(z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PAGE_TITLE_TIMEOUT_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PAGE_TITLE_TIMEOUT_MS),
+    maxBodyBytes: z._default(z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PAGE_TITLE_MAX_BODY_BYTES)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PAGE_TITLE_MAX_BODY_BYTES),
+    concurrency: z._default(z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PAGE_TITLE_CONCURRENCY)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PAGE_TITLE_CONCURRENCY),
+    successTtlMs: z._default(z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PAGE_TITLE_SUCCESS_TTL_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PAGE_TITLE_SUCCESS_TTL_MS),
+    failureTtlMs: z._default(z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_PAGE_TITLE_FAILURE_TTL_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_PAGE_TITLE_FAILURE_TTL_MS),
   }));
 export type LocalServicePageTitleCapabilities = z.infer<typeof LocalServicePageTitleCapabilitiesSchema>;
 
@@ -140,8 +140,8 @@ export const DEFAULT_LOCAL_SERVICE_PAGE_TITLE_CAPABILITIES: LocalServicePageTitl
 export const LocalServiceInventoryCapabilitiesSchema = lazyZodSchema(() => z.strictObject({
     supportedPlatforms: z._default(z.optional(z.array(z.enum(['darwin', 'linux', 'windows']))), []),
     disabledReasons: z._default(z.optional(z.array(z.string().check(z.trim(), z.minLength(1)))), []),
-    refreshIntervalMs: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_INVENTORY_REFRESH_INTERVAL_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_INVENTORY_REFRESH_INTERVAL_MS),
-    staleAfterMs: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_INVENTORY_STALE_AFTER_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_INVENTORY_STALE_AFTER_MS),
+    refreshIntervalMs: z._default(z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_INVENTORY_REFRESH_INTERVAL_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_INVENTORY_REFRESH_INTERVAL_MS),
+    staleAfterMs: z._default(z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_INVENTORY_STALE_AFTER_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_INVENTORY_STALE_AFTER_MS),
     processProvenance: z._default(z.optional(z.boolean()), false),
     workspaceProvenance: z._default(z.optional(z.boolean()), false),
     classifier: z._default(z.optional(z.boolean()), false),
@@ -167,13 +167,13 @@ export const LocalServiceManagedCapabilitiesSchema = lazyZodSchema(() => z.stric
     supportedRestartPolicies: z._default(z.optional(z.array(z.enum(['never']))), ['never']),
     portRange: z._default(z.optional(z
       .object({
-        start: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_MANAGED_PORT_RANGE_START)), z.number().check(z.int(), z.minimum(1), z.maximum(65_535)))), DEFAULT_LOCAL_SERVICE_MANAGED_PORT_RANGE_START),
-        end: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_MANAGED_PORT_RANGE_END)), z.number().check(z.int(), z.minimum(1), z.maximum(65_535)))), DEFAULT_LOCAL_SERVICE_MANAGED_PORT_RANGE_END),
+        start: z._default(z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_MANAGED_PORT_RANGE_START)), z.number().check(z.int(), z.minimum(1), z.maximum(65_535)))), DEFAULT_LOCAL_SERVICE_MANAGED_PORT_RANGE_START),
+        end: z._default(z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_MANAGED_PORT_RANGE_END)), z.number().check(z.int(), z.minimum(1), z.maximum(65_535)))), DEFAULT_LOCAL_SERVICE_MANAGED_PORT_RANGE_END),
       })), {
         start: DEFAULT_LOCAL_SERVICE_MANAGED_PORT_RANGE_START,
         end: DEFAULT_LOCAL_SERVICE_MANAGED_PORT_RANGE_END,
       }),
-    maxServicesPerOwner: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_MANAGED_MAX_SERVICES_PER_OWNER)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_MANAGED_MAX_SERVICES_PER_OWNER),
+    maxServicesPerOwner: z._default(z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_MANAGED_MAX_SERVICES_PER_OWNER)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_MANAGED_MAX_SERVICES_PER_OWNER),
     localNameDomain: z._default(z.optional(z.string().check(z.trim(), z.minLength(1))), 'localhost'),
     previewRegistrationAvailable: z._default(z.optional(z.boolean()), false),
   }));
@@ -195,8 +195,8 @@ export const LocalServiceLauncherCapabilitiesSchema = lazyZodSchema(() => z.stri
     supportedSources: z._default(z.optional(z.array(LocalServiceLaunchTargetSourceV1Schema)), []),
     scriptDiscovery: z._default(z.optional(z.strictObject({
         enabled: z._default(z.optional(z.boolean()), false),
-        maxDepth: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_LAUNCHER_SCRIPT_DISCOVERY_MAX_DEPTH)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_LAUNCHER_SCRIPT_DISCOVERY_MAX_DEPTH),
-        maxScripts: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_LAUNCHER_SCRIPT_DISCOVERY_MAX_SCRIPTS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_LAUNCHER_SCRIPT_DISCOVERY_MAX_SCRIPTS),
+        maxDepth: z._default(z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_LAUNCHER_SCRIPT_DISCOVERY_MAX_DEPTH)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_LAUNCHER_SCRIPT_DISCOVERY_MAX_DEPTH),
+        maxScripts: z._default(z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_LAUNCHER_SCRIPT_DISCOVERY_MAX_SCRIPTS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_LAUNCHER_SCRIPT_DISCOVERY_MAX_SCRIPTS),
       })), {
         enabled: false,
         maxDepth: DEFAULT_LOCAL_SERVICE_LAUNCHER_SCRIPT_DISCOVERY_MAX_DEPTH,
@@ -204,7 +204,7 @@ export const LocalServiceLauncherCapabilitiesSchema = lazyZodSchema(() => z.stri
       }),
     recentHistory: z._default(z.optional(z.strictObject({
         enabled: z._default(z.optional(z.boolean()), false),
-        maxEntries: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_LAUNCHER_RECENT_HISTORY_MAX_ENTRIES)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_LAUNCHER_RECENT_HISTORY_MAX_ENTRIES),
+        maxEntries: z._default(z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_LAUNCHER_RECENT_HISTORY_MAX_ENTRIES)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_LAUNCHER_RECENT_HISTORY_MAX_ENTRIES),
       })), {
         enabled: false,
         maxEntries: DEFAULT_LOCAL_SERVICE_LAUNCHER_RECENT_HISTORY_MAX_ENTRIES,
@@ -232,8 +232,8 @@ export const LocalServiceActionCapabilitiesSchema = lazyZodSchema(() => z.strict
       .array(LocalServiceActionKindV1Schema)), ['copy_url', 'open_preview', 'forget']),
     terminate: z._default(z.optional(z.strictObject({
         enabled: z._default(z.optional(z.boolean()), false),
-        gracefulTimeoutMs: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_ACTION_GRACEFUL_TIMEOUT_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_ACTION_GRACEFUL_TIMEOUT_MS),
-        verificationTimeoutMs: z._default(z.optional(z.pipe(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_ACTION_VERIFICATION_TIMEOUT_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_ACTION_VERIFICATION_TIMEOUT_MS),
+        gracefulTimeoutMs: z._default(z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_ACTION_GRACEFUL_TIMEOUT_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_ACTION_GRACEFUL_TIMEOUT_MS),
+        verificationTimeoutMs: z._default(z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => normalizePositiveInt(raw, DEFAULT_LOCAL_SERVICE_ACTION_VERIFICATION_TIMEOUT_MS)), z.number().check(z.int(), z.positive()))), DEFAULT_LOCAL_SERVICE_ACTION_VERIFICATION_TIMEOUT_MS),
         forceAllowed: z._default(z.optional(z.boolean()), false),
       })), {
         enabled: false,

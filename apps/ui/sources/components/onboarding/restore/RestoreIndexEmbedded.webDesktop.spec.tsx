@@ -1,6 +1,7 @@
 import * as React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
+import { RestoreIndexEmbedded } from './RestoreIndexEmbedded';
 
 type ReactActEnvironmentGlobal = typeof globalThis & {
     IS_REACT_ACT_ENVIRONMENT?: boolean;
@@ -17,10 +18,6 @@ vi.mock('react-native', async () => {
 
 vi.mock('@/utils/platform/platform', () => ({
     isRunningOnMac: () => false,
-}));
-
-vi.mock('@/utils/platform/webMobileHeuristics', () => ({
-    isWebMobileLikeQrScannerHost: () => false,
 }));
 
 vi.mock('@/utils/platform/qrScannerSupport', () => ({
@@ -46,11 +43,8 @@ vi.mock('@/components/account/restore/RestoreQrView', () => ({
 
 describe('RestoreIndexEmbedded (web desktop)', () => {
     it('opens the existing scanner first for the explicit add-home intent', async () => {
-        vi.resetModules();
         lastScanProps = null;
         lastQrProps = null;
-
-        const { RestoreIndexEmbedded } = await import('./RestoreIndexEmbedded');
 
         let tree!: renderer.ReactTestRenderer;
         try {
@@ -71,14 +65,11 @@ describe('RestoreIndexEmbedded (web desktop)', () => {
     });
 
     it('defaults to the QR view and lets the user explicitly switch into the scanner', async () => {
-        vi.resetModules();
         lastScanProps = null;
         lastQrProps = null;
 
         const onBack = vi.fn();
         const onOpenSecretKeyLogin = vi.fn();
-        const { RestoreIndexEmbedded } = await import('./RestoreIndexEmbedded');
-
         let tree!: renderer.ReactTestRenderer;
         try {
             await act(async () => {

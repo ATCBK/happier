@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
     SelectionListAccessory,
@@ -7,13 +7,14 @@ import type {
     SelectionListProps,
     SelectionListSectionDescriptor,
 } from '@/components/ui/selectionList';
-import { renderScreen } from '@/dev/testkit';
+import { createMachineFixture, renderScreen } from '@/dev/testkit';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import type { ServerScopedMachine } from '@/components/sessions/new/hooks/machines/useServerScopedMachineOptions';
 import type { MachinePoolViewV1 } from '@happier-dev/protocol';
 
 import { installNewSessionComponentsCommonModuleMocks } from './newSessionComponentsTestHelpers';
-import { buildMachineDestinationModel } from './machineSelection/buildMachineDestinationModel';
+import { buildMachineDestinationModel as buildScopedMachineDestinationModel } from './machineSelection/buildMachineDestinationModel';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -90,6 +91,18 @@ vi.mock('@/components/sessions/new/components/MachineCliGlyphs', () => ({
         React.createElement('MachineCliGlyphs', { testID: `machine-cli-glyphs:${machineId}` }),
 }));
 
+const network = await installSessionOpsNetworkBoundary();
+afterAll(() => network.dispose());
+
+function buildMachineDestinationModel(input: Parameters<typeof buildScopedMachineDestinationModel>[0]) {
+    return buildScopedMachineDestinationModel({
+        ...input,
+        scopesByServerId: new Map(input.groups.map((group) => [group.serverId, {
+            serverId: group.serverId, accountId: `account-${group.serverId.slice(-1)}`,
+        }])),
+    });
+}
+
 type MachineMetadataOverrides = Partial<NonNullable<Machine['metadata']>>;
 
 function createMachine(
@@ -99,7 +112,7 @@ function createMachine(
     }>,
 ): Machine {
     const { metadata, ...machineOverrides } = overrides;
-    return {
+    return createMachineFixture({
         seq: 1,
         createdAt: 1,
         updatedAt: 1,
@@ -118,7 +131,7 @@ function createMachine(
         daemonState: null,
         daemonStateVersion: 1,
         ...machineOverrides,
-    };
+    });
 }
 
 function createScopedMachine(
@@ -173,8 +186,11 @@ function readIconName(option: SelectionListOption): unknown {
 }
 
 describe('NewSessionMachineSelectionContent', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
         capturedSelectionLists.length = 0;
+        for (const suffix of ['a', 'b', 'c', 'd', 'e']) {
+            await network.addHome(`https://server-${suffix}`, `account-${suffix}`);
+        }
     });
 
     it('renders empty machine content through SelectionList with a measured native popover height cap', async () => {
@@ -198,6 +214,29 @@ describe('NewSessionMachineSelectionContent', () => {
         expect(props.rootStep.emptyStateLabel).toBe('newSession.noMachinesFound');
         expect(props.rootStep.inputPlaceholder).toBeUndefined();
         expect(props.rootStep.sections).toEqual([]);
+    });
+
+    it('leaves focus alone and draws page rows when the wizard lays the list out in its page', async () => {
+        const { NewSessionMachineSelectionContent } = await import('./NewSessionMachineSelectionContent');
+        const base = {
+            groups: [],
+            selectedMachine: null,
+            selectedServerId: null,
+            recentMachines: [],
+            favoriteMachines: [],
+            onSelectMachine: () => {},
+            onSelectScopedMachine: () => {},
+        } as const;
+
+        await renderScreen(<NewSessionMachineSelectionContent {...base} maxHeight={317} />);
+        expect(getLastSelectionList().autoFocusInputOnWeb).toBe(true);
+
+        await renderScreen(<NewSessionMachineSelectionContent {...base} presentation="inline" />);
+        const inline = getLastSelectionList();
+        // Focusing the search field on open would scroll the wizard page down to the Machine section.
+        expect(inline.autoFocusInputOnWeb).toBe(false);
+        expect(inline.optionPresentation).toBeUndefined();
+        expect(inline.maxHeight).toBeUndefined();
     });
 
     it('builds a single-server SelectionList with recent, favorites, and all machines deduped in launch order', async () => {

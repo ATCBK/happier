@@ -22,14 +22,15 @@ const { spawnHappyCLIMock, discoverInstalledDaemonServiceEntriesMock } = vi.hois
     ),
 }));
 
-vi.mock('node:readline', () => ({
-    createInterface: () => ({
+vi.mock('node:readline', async () => {
+    const { EventEmitter } = await import('node:events');
+    return { createInterface: () => Object.assign(new EventEmitter(), {
         question: (_prompt: string, cb: (answer: string) => void) => {
             cb(promptAnswers.shift() ?? '');
         },
         close: () => {},
-    }),
-}));
+    }) };
+});
 
 vi.mock('@/utils/spawnHappyCLI', () => ({
     spawnHappyCLI: (...args: unknown[]) => spawnHappyCLIMock(...args),

@@ -71,6 +71,13 @@ instructions. It is not a compulsory PR or completion check. Use Work's
 **Second opinion** launch action for an explicit read-only run, or review the
 optional step in a workflow.
 
+In Settings → Roles, **Can delegate to other roles** includes the available
+roles and their start Actions in the role's instructions and prompt preview.
+It starts on for Orchestrator and off for roles that do not declare it. You
+can enable it for a custom role or turn it off through a personal override.
+It does not grant access or permission to start work. A custom role keeps its
+session or background-run choice; Orchestrator still runs in the current session.
+
 ## Roles for this run
 
 When a workflow uses roles, **Run now** offers **Roles for this run**. Review
@@ -120,7 +127,7 @@ Inspect an Action's current input and surface availability in the
 | Read available roles or one role | `roles.list`, `roles.get` |
 | Create, update or delete a user role | `roles.create`, `roles.update`, `roles.delete` |
 | Save or reset a personal source override | `roles.override.set`, `roles.override.reset` |
-| Select a session role | `session.role.set` |
+| Select a session role or change its worker-question preference | `session.role.set` |
 | Change or clear one session override | `session.roles.override.set`, `session.roles.override.clear` |
 | Add or remove a session-only role | `session.roles.add`, `session.roles.remove` |
 | Apply the role set to your reporting sessions | `session.roles.apply_to_reports` |
@@ -132,6 +139,12 @@ Role-document update/delete uses the revision read for that document. An
 approval request is not a completed edit. Send a copy is a client file-export
 effect: CLI or agent callers read the role with `roles.get` and handle the
 file through their own authorized file tools.
+
+In 0.3 development, `session.role.set` accepts `answersWorkerQuestions` on its
+own to change whether a session answers its workers' questions. Supply
+`roleId`, `answersWorkerQuestions`, or both. Omitted choices stay unchanged,
+as do notes, inherited roles and session overrides. The normal Action approval
+and target-access checks still apply.
 
 ## Related
 

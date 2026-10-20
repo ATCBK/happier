@@ -34,7 +34,7 @@ export function useNewSessionSecretSelectionState(params: Readonly<{
     selectedProfileId: string | null;
     selectedProfile: AIBackendProfile | null;
     secretBindingsByProfileId: SecretBindingsByProfileId;
-    setSecretBindingsByProfileId: (next: SecretBindingsByProfileId) => void;
+    setSecretBindingsByProfileId: Parameters<typeof useSecretRequirementFlow>[0]['setSecretBindingsByProfileId'];
     secrets: SavedSecret[];
     setSecrets: (next: SavedSecret[]) => void;
     selectedMachineId: string | null;

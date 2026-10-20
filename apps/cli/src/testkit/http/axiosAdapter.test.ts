@@ -71,9 +71,9 @@ describe('axios fastify adapter helper', () => {
     await app.ready();
     restoreAdapter = installAxiosFastifyAdapter({ app, origin: 'http://adapter.test' });
 
-    await expect(axios.post('http://other.test/effect')).rejects.toThrow('unexpected origin');
+    await expect(axios.post('http://other.test/effect', {})).rejects.toThrow('unexpected origin');
     expect(effects).toBe(0);
-    await expect(axios.post('http://adapter.test/effect')).rejects.toMatchObject({
+    await expect(axios.post('http://adapter.test/effect', {})).rejects.toMatchObject({
       name: 'AxiosError', code: 'ERR_BAD_RESPONSE', response: { status: 503, data: { error: 'unavailable' } },
     });
     expect(effects).toBe(1);

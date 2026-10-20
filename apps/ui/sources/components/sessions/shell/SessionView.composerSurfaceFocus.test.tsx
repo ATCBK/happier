@@ -1,22 +1,18 @@
+import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { createReactNavigationNativeMock } from '@/dev/testkit/mocks/reactNavigation';
 import renderer from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { renderScreen as renderCanonicalScreen } from '@/dev/testkit/render/renderScreen';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { createModalModuleMock } from '@/dev/testkit/mocks/modal';
-import { createReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
-import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
-import { createLiveStorageStoreMock, createStorageModuleStub } from '@/dev/testkit/mocks/storage';
-import { createTextModuleMock } from '@/dev/testkit/mocks/text';
-import { createUnistylesMock } from '@/dev/testkit/mocks/unistyles';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import type { PluginUiHostApiRequestEnvelopeV1 } from '@happier-dev/protocol/plugins/ui';
-import { activateSessionShellStorageBoundary, installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 (globalThis as any).__DEV__ = false;
-let authCredentials: any = { token: 't', secret: 's' };
+vi.mock('socket.io-client', async (importOriginal) =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 const sessionState = vi.hoisted(() => ({
   session: {
     id: 's1',
@@ -34,39 +30,17 @@ sessionState.session = createSessionFixture({
 
 const attachmentsTransferAvailableState = vi.hoisted(() => ({ value: true }));
 const attachmentsFeatureScopeState = vi.hoisted(() => ({ enabledForServerId: null as string | null }));
-const executeSessionComposerResolutionMock = vi.hoisted(() => vi.fn());
 const modalAlertSpy = vi.hoisted(() => vi.fn());
-const resolveSessionComposerSendMock = vi.hoisted(() => vi.fn(() => ({ kind: 'noop' })));
-const supportsEditableSessionGoalsMock = vi.hoisted(() => vi.fn(() => false));
-const sessionAbortMock = vi.hoisted(() => vi.fn());
 
-installSessionShellCommonModuleMocks({
-  reactNative: async () =>
-    createReactNativeWebMock({
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock({
       View: 'View',
       Text: 'Text',
       Pressable: 'Pressable',
       ActivityIndicator: 'ActivityIndicator',
       Easing: {
         bezier: vi.fn(() => ({})),
-      },
-      Animated: {
-        View: 'Animated.View',
-        Value: class {
-          private _v: number;
-
-          constructor(v: number) {
-            this._v = v;
-          }
-
-          // Minimal stub for Animated.Value used by MultiPaneHost.
-          interpolate() {
-            return this;
-          }
-        },
-        timing: () => ({
-          start: (cb?: any) => cb?.({ finished: true }),
-        }),
       },
       AccessibilityInfo: {
         isReduceMotionEnabled: vi.fn(async () => false),
@@ -81,71 +55,32 @@ installSessionShellCommonModuleMocks({
         select: (spec: Record<string, unknown>) =>
           spec && Object.prototype.hasOwnProperty.call(spec, 'ios') ? (spec as any).ios : (spec as any).default,
       },
-    }),
-  unistyles: async () =>
-    createUnistylesMock(),
-  text: async () => createTextModuleMock({ translate: (key) => key }),
-  modal: async () =>
-    createModalModuleMock({
+    });
+});
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock();
+});
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock({ translate: (key) => key });
+});
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({
       spies: {
         alert: modalAlertSpy,
         confirm: vi.fn(),
         prompt: vi.fn(),
       },
-    }).module,
-  router: async () =>
-    createExpoRouterMock({
+    }).module;
+});
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    return createExpoRouterMock({
       router: { push: vi.fn(), back: vi.fn() },
       pathname: '/',
-    }).module,
-  registryUiBehavior: async () => ({
-    buildResumeCapabilityOptionsFromUiState: () => ({}),
-    buildNewSessionOptionsFromUiState: () => ({}),
-    canSelectAgentWithoutDetectedCli: () => false,
-    getNewSessionAgentInputExtraActionChips: () => [],
-    buildSpawnEnvironmentVariablesFromUiState: () => ({}),
-    buildResumeSessionExtrasFromUiState: () => ({}),
-    buildSpawnSessionExtrasFromUiState: () => ({}),
-    buildWakeResumeExtras: () => ({}),
-    getAgentResumeExperimentsFromSettings: () => ({ enabled: true, switches: {} }),
-    getNewSessionPreflightIssues: () => [],
-    getNewSessionRelevantInstallableDepKeys: () => [],
-    resolveAgentUiBehavior: () => ({}),
-    resolveAgentUiBehaviorFromFlavor: () => ({}),
-    resolveAgentUiBehaviorFromSessionMetadata: () => ({}),
-    supportsEditableSessionGoals: supportsEditableSessionGoalsMock,
-  }),
-  storage: async () =>
-    createStorageModuleStub({
-      storage: createLiveStorageStoreMock(() => ({
-        sessions: { s1: sessionState.session },
-        settings: settingsDefaults,
-        sessionListIndexByServerId: {},
-      })),
-      useSession: () => sessionState.session,
-      useSessionMachineId: () => sessionState.session.metadata?.machineId ?? null,
-      useIsDataReady: () => true,
-      useRealtimeStatus: () => ({ status: 'connected' }),
-      useSessionMessages: () => ({ messages: [], isLoaded: true }),
-      useSessionSubagentSourceMessages: () => [],
-      useSessionTranscriptIds: () => ({ ids: [], isLoaded: true }),
-      useOpenApprovalArtifactsForSession: () => [],
-      useEnabledAutomationsCountForSession: () => 0,
-      useLocalSetting: (key: string) => {
-        if (key === 'uiMultiPanePanelsEnabled') return false;
-        if (key === 'acknowledgedCliVersions') return [];
-        return null;
-      },
-      useSessionPendingMessages: () => ({ messages: [] }),
-      useSessionReviewCommentsDrafts: () => [],
-      useSessionUsage: () => null,
-      useSetting: <K extends keyof typeof settingsDefaults>(key: K) => settingsDefaults[key],
-      useSettings: () => ({ experiments: true, featureToggles: {} }),
-      useAutomations: () => [],
-      useMachine: () => null,
-      useLocalSettingMutable: () => [false, vi.fn()],
-      useSettingMutable: () => [null, vi.fn()],
-    }),
+    }).module;
 });
 
 vi.mock('expo-linear-gradient', () => ({
@@ -166,10 +101,6 @@ vi.mock('@react-navigation/native', () => ({
     ...createReactNavigationNativeMock(),
   useFocusEffect: () => {},
   useIsFocused: () => true,
-}));
-
-vi.mock('@/auth/context/AuthContext', () => ({
-  useAuth: () => ({ credentials: authCredentials }),
 }));
 
 vi.mock('@/components/sessions/transcript/AgentContentView', () => ({
@@ -246,54 +177,9 @@ vi.mock(
   },
 );
 
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-  getActiveServerSnapshot: () => ({ serverId: 'server-1' }),
-  subscribeActiveServer: () => () => {},
-}));
 vi.mock('@/voice/session/voiceSession', () => ({
   useVoiceSessionSnapshot: () => ({ status: 'disconnected' }),
   voiceSessionManager: {},
-}));
-
-vi.mock('@/sync/sync', async () => {
-  const { createAcceptedExternalSessionTailCursorSyncBoundary } = await import('@/dev/testkit/mocks/sync');
-  return {
-    sync: {
-        getSessionAttachmentTransferContext: () => undefined,
-      ...createAcceptedExternalSessionTailCursorSyncBoundary(),
-      markSessionViewed: async () => {},
-      fetchPendingMessages: async () => {},
-      publishSessionPermissionModeToMetadata: async () => {},
-      publishSessionAcpSessionModeOverrideToMetadata: async () => {},
-      publishSessionAcpConfigOptionOverrideToMetadata: async () => {},
-      publishSessionModelOverrideToMetadata: async () => {},
-      refreshSessions: async () => {},
-      onSessionVisible: () => {},
-      sendMessage: async () => {},
-      enqueuePendingMessage: async () => {},
-      submitMessage: async () => {},
-      encryption: {
-        getMachineEncryption: () => null,
-      },
-    },
-  };
-});
-
-vi.mock('@/sync/ops', async (importOriginal) => {
-  const { createSyncOpsModuleMock } = await import('@/dev/testkit/mocks/syncOps');
-  return createSyncOpsModuleMock({
-    importOriginal,
-    overrides: {
-      sessionAbort: (...args: unknown[]) => sessionAbortMock(...args),
-      resumeSession: vi.fn(),
-      sessionSwitch: vi.fn(),
-      sessionAttachmentsUploadFile: vi.fn(),
-    },
-  });
-});
-
-vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
-  createDefaultActionExecutor: () => ({ execute: vi.fn() }),
 }));
 
 vi.mock('@/components/sessions/agentInput', () => ({
@@ -309,39 +195,6 @@ vi.mock('@/utils/system/versionUtils', () => ({
   MINIMUM_CLI_VERSION: '0.0.0',
 }));
 
-vi.mock('@/agents/catalog/catalog', () => ({
-  AGENT_IDS: ['codex'],
-  DEFAULT_AGENT_ID: 'codex',
-  buildResumeSessionExtrasFromUiState: () => null,
-  getAgentCore: () => ({
-    cli: { detectKey: 'codex' },
-    uiConnectedService: { serviceId: null, labelKey: 'agentInput.agent.codex', connectRoute: null },
-    model: { defaultMode: 'default' },
-    resume: { vendorResumeIdField: null },
-    sessionModes: { kind: 'none' },
-  }),
-  getAgentResumeExperimentsFromSettings: () => null,
-  getNewSessionRelevantInstallableDepKeys: () => [],
-  isBundledAgentId: (value: unknown) => value === 'codex',
-  resolveAgentIdFromFlavor: () => 'codex',
-}));
-
-vi.mock('@/agents/hooks/useResumeCapabilityOptions', () => ({
-  useResumeCapabilityOptions: () => ({}),
-}));
-vi.mock('@/agents/runtime/resumeCapabilities', () => ({
-  canResumeSessionWithOptions: () => true,
-  getAgentVendorResumeId: () => '',
-}));
-vi.mock('@/hooks/server/useMachineCapabilitiesCache', async (importOriginal) => {
-  const actual = await importOriginal<any>();
-  return {
-    ...actual,
-    useMachineCapabilitiesCache: () => ({ state: { status: 'loaded', snapshot: { response: { results: [] } } } }),
-    prefetchMachineCapabilities: vi.fn(),
-    getMachineCapabilitiesSnapshot: vi.fn(),
-  };
-});
 vi.mock('@/utils/sessions/sessionUtils', async (importOriginal) => {
   const actual = await importOriginal<any>();
   return {
@@ -359,15 +212,6 @@ vi.mock('@/utils/sessions/sessionUtils', async (importOriginal) => {
 vi.mock('@/utils/platform/platform', () => ({
   isRunningOnMac: () => false,
 }));
-vi.mock('@/utils/system/fireAndForget', () => ({
-  fireAndForget: (p: any) => void p,
-}));
-vi.mock('@/sync/domains/input/slashCommands/resolveSessionComposerSend', () => ({
-  resolveSessionComposerSend: resolveSessionComposerSendMock,
-}));
-vi.mock('@/sync/domains/input/slashCommands/executeSessionComposerResolution', () => ({
-  executeSessionComposerResolution: executeSessionComposerResolutionMock,
-}));
 vi.mock('@/sync/domains/session/control/submitMode', () => ({
   chooseSubmitMode: () => 'direct',
 }));
@@ -375,18 +219,15 @@ vi.mock('@/sync/domains/session/control/localControlSwitch', async (importOrigin
     ...await importOriginal<typeof import('@/sync/domains/session/control/localControlSwitch')>(),
   shouldRenderChatTimelineForSession: () => true,
 }));
-vi.mock('@/sync/domains/sessionControl/sessionModeControl', () => ({
-  supportsSessionModeOverrides: () => false,
-}));
 vi.mock('@/sync/domains/automations/automationSessionLink', () => ({
   countEnabledAutomationDefinitionsLinkedToSession: () => 0,
 }));
-vi.mock('@/agents/backendCatalog/getResolvedBackendCatalogEntries', () => ({
-  getResolvedBackendCatalogEntries: () => [],
-  resolveCatalogAgentIdForBackendTarget: () => null,
-  resolveBackendTargetOperationalAgentId: () => null,
-}));
-
+vi.doUnmock('@/sync/domains/state/storage');
+vi.doUnmock('@/hooks/session/useDraft');
+vi.doUnmock('@/agents/registry/registryUiBehavior');
+const { storage: shellStorage } = await import('@/sync/domains/state/storage');
+const { installSessionPaneRuntimeTestHarness } = await import('../panes/sessionPaneRuntimeTestHarness');
+const accountRuntime = installSessionPaneRuntimeTestHarness();
 const { SessionView } = await import('./SessionView');
 const {
   createComposerPresentationHostHandlers,
@@ -433,33 +274,103 @@ function hostRequest(
 }
 
 async function renderSessionSurface(input: Readonly<{ surfaceFocused: boolean }>) {
-  return await renderScreen(<AppPaneProvider>
-    <SessionView id="s1" routeServerId="server-1" surfaceFocusedOverride={input.surfaceFocused} surfaceVisibleOverride />
-  </AppPaneProvider>);
+  return await renderScreen(surfaceElement(input));
 }
 
 function surfaceElement(input: Readonly<{ surfaceFocused: boolean }>) {
-  return (<AppPaneProvider>
-    <SessionView id="s1" routeServerId="server-1" surfaceFocusedOverride={input.surfaceFocused} surfaceVisibleOverride />
-  </AppPaneProvider>);
+  return <SessionView id="s1" routeServerId={accountRuntime.serverId} surfaceFocusedOverride={input.surfaceFocused} surfaceVisibleOverride />;
 }
 
-const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+async function renderScreen(element: Parameters<typeof renderCanonicalScreen>[0]) {
+  return renderCanonicalScreen(element, { wrapper: accountRuntime.Wrapper });
+}
 
 describe('SessionView composer surface focus', () => {
-  beforeEach(activateSessionShellStorageBoundary);
+  beforeEach(async () => {
+    sessionState.session = createSessionFixture({
+      id: 's1', serverId: accountRuntime.serverId, active: true,
+      metadata: { machineId: 'm1', host: 'test-home', flavor: 'codex', path: '/tmp', homeDir: '/tmp' },
+      agentState: { controlledByUser: true },
+    });
+    shellStorage.setState({
+      settings: { ...settingsDefaults, experiments: true },
+      localSettings: { ...shellStorage.getState().localSettings, uiMultiPanePanelsEnabled: false },
+    });
+    shellStorage.getState().applySessions([sessionState.session]);
+    shellStorage.getState().applyMachines([createMachineFixture({ id: 'm1', activeAt: Date.now() })], true, { sourceServerId: accountRuntime.serverId });
+    const { sync } = await import('@/sync/sync');
+    expect((await sync.ensureSessionVisibleForMessageRoute('s1', {
+      serverId: accountRuntime.serverId, forceRefresh: true, hydrateMessages: false,
+    })).kind).toBe('available');
+  });
+  it.each([
+    ['available', true, true, true],
+    ['uploads disabled', false, true, false],
+    ['transport unavailable', true, false, false],
+  ] as const)('admits Browser annotation only when the composer upload path is available (%s)', async (_label, featureEnabled, available, shouldStart) => {
+    const { SessionBrowserContextRuntimeProvider } = await import('@/components/sessions/browser/sessionBrowserContextRuntime');
+    const { createBrowserContextAnnotationAdapter } = await import('@/sync/domains/browser/context/annotationAdapter');
+    const { applyBrowserControlEvent, createBrowserControlState } = await import('@/sync/domains/browser/control');
+    const { buildBrowserAdapterCapabilities } = await import('@/sync/domains/browser/adapters/capabilities');
+    const oldContext = featureEnabledState['browser.context'];
+    const oldUploads = featureEnabledState['attachments.uploads'];
+    const oldTransfer = attachmentsTransferAvailableState.value;
+    featureEnabledState['browser.context'] = true;
+    featureEnabledState['attachments.uploads'] = featureEnabled;
+    attachmentsTransferAvailableState.value = available;
+    let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
+    try {
+      // This production root entry retains the Browser provider while a caller supplies the
+      // body; the unrelated loaded composer does not own the Browser runtime binding.
+      screen = await renderScreen(
+        <SessionView id="s1" routeServerId={accountRuntime.serverId} surfaceFocusedOverride surfaceVisibleOverride
+          contentOverride={<React.Fragment />} />
+      );
+      const runtime = screen.tree.findByType(SessionBrowserContextRuntimeProvider).props.runtime as
+        import('@/components/sessions/browser/sessionBrowserContextRuntime').SessionBrowserContextRuntime | null;
+      expect(runtime).not.toBeNull();
+      if (!runtime) throw new Error('Session Browser runtime did not mount');
+      const state = applyBrowserControlEvent(createBrowserControlState(), {
+        kind: 'viewOpened', eventId: 'opened', occurredAt: 1, browserSessionId: 's1', viewId: 'view',
+        platform: 'web', target: { kind: 'externalUrl', targetId: 'fixture', url: 'https://fixture.test/' },
+        adapterKind: 'chromiumSidecar', engineKind: 'streamedSurface',
+        adapterCapabilities: buildBrowserAdapterCapabilities({ adapterKind: 'chromiumSidecar',
+          supportedTargetKinds: ['externalUrl'], supportedRenderEngines: ['streamedSurface'] }),
+      });
+      const shell = runtime.browserShellContext;
+      const adapter = createBrowserContextAnnotationAdapter({
+        resolveBinding: () => ({ ...shell, view: state.viewsById.view ?? null, browserContextEnabled: shell.enabled === true,
+          captureProvider: { available: true, captureAnnotation: async () => { throw new Error('Start must not capture pixels'); } } }),
+        onStateChange: shell.onStateChange,
+      });
+      let result: Awaited<ReturnType<typeof adapter.dispatch>> | undefined;
+      await renderer.act(async () => { result = await adapter.dispatch({ kind: 'start' }); });
+      expect(result).toMatchObject(shouldStart
+        ? { status: 'started' }
+        : { status: 'unavailable', reason: { reasonCode: 'browser_context_attachment_uploads_disabled' } });
+    } finally {
+      await screen?.unmount();
+      featureEnabledState['browser.context'] = oldContext;
+      featureEnabledState['attachments.uploads'] = oldUploads;
+      attachmentsTransferAvailableState.value = oldTransfer;
+    }
+  });
+
   it('keeps a full same-address composer targeted while a later transcript-only view is mounted', async () => {
     const full = await renderSessionSurface({ surfaceFocused: true });
-    const address = { serverId: 'server-1', sessionId: 's1' };
+    const address = { serverId: accountRuntime.serverId, sessionId: 's1' };
     const target = readSessionComposerPresentationTargetAtAddress(address);
     expect(target).not.toBeNull();
-    const transcript = await renderScreen(<AppPaneProvider>
-      <SessionView id="s1" routeServerId="server-1" surfaceFocusedOverride surfaceVisibleOverride
+    expect(target?.readSnapshot).toBeTypeOf('function');
+    const transcript = await renderScreen(
+      <SessionView id="s1" routeServerId={accountRuntime.serverId} surfaceFocusedOverride surfaceVisibleOverride
         presentation={{ kind: 'embedded', composer: 'none' }} />
-    </AppPaneProvider>);
-    expect(readSessionComposerPresentationTargetAtAddress(address)).toBe(target);
+    );
+    // Reads allocate an invocation projection; its snapshot reader belongs to
+    // the mounted composer and must still be the original owner's reader.
+    expect(readSessionComposerPresentationTargetAtAddress(address)?.readSnapshot).toBe(target?.readSnapshot);
     await transcript.unmount();
-    expect(readSessionComposerPresentationTargetAtAddress(address)).toBe(target);
+    expect(readSessionComposerPresentationTargetAtAddress(address)?.readSnapshot).toBe(target?.readSnapshot);
     await full.unmount();
     expect(readSessionComposerPresentationTargetAtAddress(address)).toBeNull();
   });

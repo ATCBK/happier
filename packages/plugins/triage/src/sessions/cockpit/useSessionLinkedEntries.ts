@@ -3,6 +3,10 @@ import {
     usePluginCollectionQuery,
     usePluginUiDataClientOrNull,
     useSurfaceContext,
+    usePluginHostApi,
+    usePluginHostReadiness,
+    usePluginUiEphemeralSharedScope,
+    type PluginUiEphemeralSharedScope,
     type PluginUiCollectionQueryResult,
 } from '@happier-dev/plugin-ui';
 
@@ -10,7 +14,11 @@ import { CORPUS_SESSION_LINKS_COLLECTION } from '../../corpus/collections/defini
 import { fromCorpusStoredRow } from '../../corpus/collections/rowCodec.js';
 import type { CorpusSessionLinkRowV1 } from '../../corpus/collections/rows.js';
 import { useTriageListWindow } from '../../ui/window/useTriageListWindow.js';
-import { resolveTriageSourceWorkflowSubjectV1 } from '../../ui/detail/sourceSurface.js';
+import { resolveTriageSourceWorkflowSubjectV1, hasTriageSourceSessionRelationsV1 } from '../../ui/detail/sourceSurface.js';
+import { TRIAGE_READ_SOURCE_SESSION_LINKS_ACTION_LOCAL_ID_V1, TriageReadSourceSessionLinksResultV1Schema, type TriageSourceSessionLinksLaneV1 } from '../../actions/sessionLinksProtocol.js';
+import type { TriageSourceSessionLinkV1 } from '../sourceSessionRelations.js';
+import { renderSourceQualifiedId } from '../../corpus/identity/components.js';
+import { triageEntryRowKey } from '../../projection/listWindow.js';
 import {
     TRIAGE_SESSION_LINKED_ENTRIES_COLLECTION_ID_V1,
     TRIAGE_SESSION_LINKED_ENTRIES_UI_QUERY_ID_V1,
@@ -185,6 +193,49 @@ export function useTriageSessionLinkedEntries(sessionId: string): TriageSessionL
     // Reading the existing retained window does not demand a source pass.
     const window = useTriageListWindow();
     const { targetedContributions } = useSurfaceContext();
+    const host = usePluginHostApi();
+    const owner = usePluginUiEphemeralSharedScope();
+    const sourceReadAvailable = hasTriageSourceSessionRelationsV1(targetedContributions);
+    const readiness = usePluginHostReadiness(sourceReadAvailable);
+    const [sourceRead, setSourceRead] = React.useState<Readonly<{
+        owner: PluginUiEphemeralSharedScope | null; sessionId: string;
+        status: 'absent' | 'loading' | 'ready' | 'partial' | 'failed'; links: readonly TriageSourceSessionLinkV1[];
+        lanes?: readonly TriageSourceSessionLinksLaneV1[];
+    }>>({ owner, sessionId, status: sourceReadAvailable ? 'loading' : 'absent', links: [] });
+    const [sourceRefresh, setSourceRefresh] = React.useState(0);
+    React.useEffect(() => {
+        const controller = new AbortController();
+        if (!sourceReadAvailable) {
+            setSourceRead((previous) => previous.owner === owner && previous.sessionId === sessionId && previous.status !== 'absent'
+                ? { ...previous, status: 'failed' } : { owner, sessionId, status: 'absent', links: [] });
+            return () => controller.abort();
+        }
+        setSourceRead((previous) => previous.owner === owner && previous.sessionId === sessionId
+            ? { ...previous, status: 'loading' } : { owner, sessionId, status: 'loading', links: [] });
+        if (readiness.pending) return () => controller.abort();
+        void (async () => {
+            try {
+                const result = TriageReadSourceSessionLinksResultV1Schema.parse(await host.executeAction(
+                    TRIAGE_READ_SOURCE_SESSION_LINKS_ACTION_LOCAL_ID_V1, { v: 1, sessionId }, { signal: controller.signal },
+                ));
+                if (controller.signal.aborted) return;
+                setSourceRead((previous) => {
+                    const unavailable = result.lanes === undefined ? null : new Set(result.lanes
+                        .filter((lane) => lane.health.kind !== 'complete').map((lane) => renderSourceQualifiedId(lane.source)));
+                    const retained = previous.owner === owner && previous.sessionId === sessionId
+                        ? previous.links.filter((link) => unavailable === null || unavailable.has(renderSourceQualifiedId(link.entryRef.source))) : [];
+                    return { owner, sessionId, status: result.kind === 'complete' ? 'ready' : result.kind, lanes: result.lanes,
+                        links: result.kind === 'complete' ? result.links : [...new Map([
+                            ...retained, ...result.links,
+                        ].map((link) => [triageEntryRowKey(link.entryRef), link])).values()] };
+                });
+            } catch {
+                if (!controller.signal.aborted) setSourceRead((previous) => ({ owner, sessionId, status: 'failed',
+                    links: previous.owner === owner && previous.sessionId === sessionId ? previous.links : [] }));
+            }
+        })();
+        return () => controller.abort();
+    }, [host, owner, readiness.pending, readiness.revision, sessionId, sourceReadAvailable, sourceRefresh]);
     const parameters = React.useMemo(
         () => triageSessionLinkedEntriesParameters(sessionId),
         [sessionId],
@@ -209,13 +260,18 @@ export function useTriageSessionLinkedEntries(sessionId: string): TriageSessionL
     const { hydration, retryUnreadable } = useLinkHydration(targets);
     const refresh = React.useCallback(async () => {
         retryUnreadable();
+        setSourceRefresh((value) => value + 1);
         await query.refresh();
     }, [query.refresh, retryUnreadable]);
 
     const view = React.useMemo(
         () => projectTriageSessionLinkedEntries({ query: queryState, hydration, entries: window.snapshot.window?.rows,
+            sourceLinks: sourceRead.owner === owner && sourceRead.sessionId === sessionId ? sourceRead.links : [],
+            sourceLinksStatus: sourceRead.owner === owner && sourceRead.sessionId === sessionId
+                ? sourceRead.status === 'absent' ? 'ready' : sourceRead.status : 'loading',
+            sourceLanes: sourceRead.owner === owner && sourceRead.sessionId === sessionId ? sourceRead.lanes : undefined,
             workflowSubject: (entryRef) => resolveTriageSourceWorkflowSubjectV1(targetedContributions, entryRef) }),
-        [hydration, queryState, targetedContributions, window.snapshot.window?.rows],
+        [hydration, queryState, targetedContributions, window.snapshot.window?.rows, sourceRead, sessionId, owner],
     );
 
     return React.useMemo(

@@ -27,7 +27,7 @@ export const SessionAgentSpawnPolicyV1StrictSchema = lazyZodSchema(() => z.stric
 
 // Recover each malformed field through its own default; never erase other
 // restrictions because one field is invalid or a newer writer added a key.
-export const SessionAgentSpawnPolicyV1Schema = lazyZodSchema(() => z.pipe(z.transform((raw) => {
+export const SessionAgentSpawnPolicyV1Schema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => {
   const record = raw && typeof raw === 'object' && !Array.isArray(raw)
     ? raw as Record<string, unknown> : {};
   return Object.fromEntries(Object.entries(SessionAgentSpawnPolicyV1StrictSchema.shape).map(([key, schema]) => [

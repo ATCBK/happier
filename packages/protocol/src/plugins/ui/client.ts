@@ -46,6 +46,7 @@ export type {
   CurrentUiContextSnapshotV1,
   PluginUiContextEnrichmentV1,
 } from './currentUiContext.js';
+export { PluginUiActionAdmissionResultV1Schema } from './hostApiRequests.js';
 export {
   PluginUiDisposeHostResourceRequestV1Schema,
   PluginUiResourceSubscriptionEventV1Schema,

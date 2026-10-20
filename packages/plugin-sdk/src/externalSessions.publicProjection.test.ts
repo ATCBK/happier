@@ -40,6 +40,16 @@ describe('External Sessions public producer projections', () => {
         expect(getAgentExternalSessionsInvocationFailure({ signal: new AbortController().signal })).toBeNull();
         expect(isAgentExternalSessionsResultWithinByteBudget({ ok: true, value: { text: 'valid source identity' } }, undefined)).toBe(true);
     });
+    it('distinguishes caller deadline cancellation from an explicit Stop', () => {
+        const deadline = new AbortController();
+        deadline.abort(Object.assign(new Error('RPC request timed out'), { code: 'RPC_REQUEST_TIMEOUT' }));
+        expect(getAgentExternalSessionsInvocationFailure({ signal: deadline.signal }))
+            .toMatchObject({ ok: false, code: 'timeout', retryable: true });
+        const stopped = new AbortController();
+        stopped.abort(new Error('RPC request cancelled by caller'));
+        expect(getAgentExternalSessionsInvocationFailure({ signal: stopped.signal, deadlineAtMs: 0 }))
+            .toMatchObject({ ok: false, code: 'cancelled' });
+    });
     it('publishes one terminal and producer-overflow classifier for bounded contribution calls', () => {
         const liveInvocation = (overrides: Partial<AgentExternalSessionsInvocationBounds> = {}) => ({
             signal: new AbortController().signal,

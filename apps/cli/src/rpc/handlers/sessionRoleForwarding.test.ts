@@ -14,6 +14,7 @@ import { applyRegisteredSessionStateFieldMutationToMetadata } from '@/api/sessio
 import { registerActionSpecRpcHandlers } from './registerActionSpecRpcHandlers';
 import { resolveCliAgentStartContextV1 } from '@/session/actions/resolveCliAgentStartContextV1';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { readSessionRolesV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
 
 describe('Session role RPC provenance', () => {
   it('uses one registered Role writer for a transported UI edit and CLI edit, with an idle-runtime refusal', async () => {
@@ -63,10 +64,20 @@ describe('Session role RPC provenance', () => {
         .toEqual({ ok: true, result: { updated: true } });
       expect(queued).toHaveLength(2);
       expect(queued[1]).toMatchObject({ fieldId: queued[0].fieldId, deliveryClass: queued[0].deliveryClass, op: queued[0].op });
+      const roleBeforeToggle = readSessionRolesV1(metadata);
+      const toggle = { sessionId: 'child', answersWorkerQuestions: false };
+      expect(await cli.execute('session.role.set', toggle, { surface: 'cli', authority: 'present_user' }))
+        .toEqual({ ok: true, result: { updated: true } });
+      expect(readSessionRolesV1(metadata)).toEqual({ ...roleBeforeToggle, answersWorkerQuestions: false });
+      expect(await callSocketRpc({ socket: client, target: { kind: 'session', id: 'child' },
+        method: 'session.role.set', params: { ...toggle, answersWorkerQuestions: true }, content: { mode: 'plain' } }))
+        .toEqual({ updated: true });
+      expect(readSessionRolesV1(metadata)).toEqual({ ...roleBeforeToggle, answersWorkerQuestions: true });
       // A tightening Role on an idle/unbound runtime must refuse without adding a mutation.
+      const beforeRefusal = queued.length;
       expect(await cli.execute('session.role.set', { sessionId: 'child', roleId: 'orchestrator' },
         { surface: 'cli', authority: 'present_user' })).toMatchObject({ ok: false, errorCode: 'role_policy_unenforceable' });
-      expect(queued).toHaveLength(2);
+      expect(queued).toHaveLength(beforeRefusal);
       expect(readSessionRoleIdV1(metadata)).toBe('builder');
     } finally {
       client.disconnect();

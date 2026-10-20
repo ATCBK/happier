@@ -1,9 +1,10 @@
 import type { ReactElement, ReactNode } from 'react';
 
-import { HappierSurface } from '../presentation/layout/Surface.js';
+import { HappierSurface, type HappierFloatingRole } from '../presentation/layout/Surface.js';
 import type { HappierPortableStyle } from '../presentation/portableTypes.js';
 import type { HappierMaterialRole } from '../presentation/layout/material.js';
 import { usePluginTheme } from './PluginUiProvider.js';
+import { SURFACE_PADDING_BY_SIZE } from './surfacePadding.js';
 
 export type SurfaceTone = 'surface' | 'muted';
 export type SurfacePadding = 'none' | 'small' | 'medium' | 'large';
@@ -14,6 +15,8 @@ export type SurfaceProps = Readonly<{
   padding?: SurfacePadding;
   /** The host's material group. Surface uses content; Card uses the in-flow card group. */
   materialRole?: HappierMaterialRole;
+  /** Read only by a `floating` material: `panel` takes the heavy coat of a dialog or large panel, `menu` (the default) a menu's hair. */
+  floatingRole?: HappierFloatingRole;
   testID?: string;
   onPress?: () => unknown;
   disabled?: boolean;
@@ -23,15 +26,6 @@ export type SurfaceProps = Readonly<{
 
 export type CardProps = SurfaceProps;
 
-const PADDING_BY_SIZE: Readonly<Record<SurfacePadding, Readonly<{
-  horizontal: number;
-  vertical: number;
-}>>> = Object.freeze({
-  none: { horizontal: 0, vertical: 0 },
-  small: { horizontal: 12, vertical: 10 },
-  medium: { horizontal: 16, vertical: 14 },
-  large: { horizontal: 20, vertical: 18 },
-});
 
 function SurfaceChrome({
   children,
@@ -42,9 +36,10 @@ function SurfaceChrome({
   disabled,
   accessibilityLabel,
   materialRole = 'content',
+  floatingRole,
 }: SurfaceProps): ReactElement {
   const theme = usePluginTheme();
-  const inset = PADDING_BY_SIZE[padding];
+  const inset = SURFACE_PADDING_BY_SIZE[padding];
   const contentStyle: HappierPortableStyle = {
     width: '100%',
     minWidth: 0,
@@ -63,6 +58,7 @@ function SurfaceChrome({
       disabled={disabled}
       accessibilityLabel={accessibilityLabel}
       materialRole={materialRole}
+      floatingRole={floatingRole}
       style={contentStyle}
       pressableStyle={{ width: '100%', borderRadius: theme.radii.panel }}
       pressedStyle={{ opacity: 0.985 }}

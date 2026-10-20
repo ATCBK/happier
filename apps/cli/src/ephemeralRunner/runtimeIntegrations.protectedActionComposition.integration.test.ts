@@ -271,15 +271,17 @@ afterEach(async () => {
   }));
 });
 
-function createEmptyMcpMaterial() {
+function createEmptyMcpMaterial(agentId: string) {
   const result = resolveRunnerMcpMaterialV1({
     settings: { v: 1, strictMode: true, servers: [], bindings: [] },
-    selection: {
+    agentId,
+    agentAcceptsUserMcp: false,
+    capabilitySelection: { mcp: {
       v: 1,
       managedServersEnabled: false,
       forceIncludeServerIds: [],
       forceExcludeServerIds: [],
-    },
+    } },
     resolveSavedSecret: () => null,
   });
   if (!result.ok) throw new Error(`Runner MCP fixture failed: ${result.reason}`);
@@ -797,7 +799,7 @@ describe('production Ephemeral Runner composition under an e2ee bootstrap', () =
           },
           preparedAuthoring: {
             actionsSettings: { v: 1, actions: {} },
-            mcpMaterial: createEmptyMcpMaterial(),
+            mcpMaterial: createEmptyMcpMaterial(pluginRuntime.selected.agentId),
             authoring: {
               executionTarget: {
                 kind: 'temporary_computer',

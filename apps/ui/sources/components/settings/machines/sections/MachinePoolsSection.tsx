@@ -113,8 +113,6 @@ export const MachinePoolsSection = React.memo(function MachinePoolsSection(props
                     testID={`settings.machinePools.featureLoading.${group.serverId}`}
                     layout="line" lineLoading
                     title={t('common.loading')}
-                    lineRowStyle={rail ? collectionListStyles.row : undefined}
-                    lineDensity={rail ? 'compact' : undefined}
                 /> : null}
                 {featureError ? <Item
                     testID={`settings.machinePools.featureFailed.${group.serverId}`}
@@ -195,7 +193,7 @@ export const MachinePoolsSection = React.memo(function MachinePoolsSection(props
             });
             const loadingRow = rows.length === 0 && featureEnabled && projection.status === 'loading'
                 ? <EmptyState layout="line" lineLoading title={t('common.loading')}
-                    lineDensity={rail ? 'compact' : undefined} lineRowStyle={rail ? collectionListStyles.row : undefined} />
+                    />
                 : null;
             if (rail) {
                 // Adding goes through the rail's "+": a Home with nothing to list shows no heading.

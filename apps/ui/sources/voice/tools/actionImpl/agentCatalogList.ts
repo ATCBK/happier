@@ -30,6 +30,7 @@ import { buildDynamicModelProbeCacheKey } from '@/sync/domains/models/dynamicMod
 import { createUnavailablePreflightModelList, type PreflightModelList } from '@/sync/domains/models/modelOptions';
 import { describeProviderModels } from '@/providers/actions/client';
 import { getProviderCatalogSnapshot } from '@/sync/store/settings/providerCatalogSnapshot';
+import { refreshProviderCatalog } from '@/sync/engine/settings/providerCatalogEngine';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import {
   buildSessionModelPickerSections,
@@ -178,11 +179,6 @@ async function projectVoiceToolProviderModels(params: Readonly<{
   try {
     const scope = { serverId: context.serverId, accountId: context.accountId };
     context.assertCurrent();
-    const catalog = getProviderCatalogSnapshot(scope);
-    if (catalog?.status !== 'ready' || catalog.stale || !catalog.data) {
-      throw Object.assign(new Error('provider_catalog_unavailable'), { code: 'provider_catalog_unavailable' });
-    }
-    const settings = composeProviderSettingsV1(catalog.data, {});
     const projection = await describeProviderModels({
       machineId: params.machineId,
       serverId: params.serverId,
@@ -190,9 +186,13 @@ async function projectVoiceToolProviderModels(params: Readonly<{
       mode: 'picker',
     });
     context.assertCurrent();
-    if (getProviderCatalogSnapshot(scope) !== catalog) {
+    await refreshProviderCatalog(scope);
+    context.assertCurrent();
+    const catalog = getProviderCatalogSnapshot(scope);
+    if (catalog?.status !== 'ready' || catalog.stale || !catalog.data) {
       throw Object.assign(new Error('provider_catalog_unavailable'), { code: 'provider_catalog_unavailable' });
     }
+    const settings = composeProviderSettingsV1(catalog.data, {});
     if (projection.status !== 'success') {
       throw Object.assign(new Error('provider_projection_unavailable'), { code: 'provider_projection_unavailable' });
     }

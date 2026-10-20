@@ -4,7 +4,7 @@ import type { VoiceSpeechSynthesisInputLimits } from './speech.js';
 const ABBREVIATIONS = new Set([
   'e.g', 'i.e', 'etc', 'vs', 'mr', 'mrs', 'ms', 'dr', 'prof', 'sr', 'jr', 'st', 'fig', 'no', 'al',
 ]);
-const CLOSING_PUNCTUATION = /[.!?…"'’”）)\]]/u;
+const CLOSING_PUNCTUATION = /[.!?\u2026"'\u2019\u201d\uff09)\]]/u;
 
 function isUrlToken(text: string, index: number): boolean {
   let start = index;
@@ -15,7 +15,7 @@ function isUrlToken(text: string, index: number): boolean {
 export function isHardTerminatorDot(text: string, index: number): boolean {
   if (text[index] !== '.') return false;
   const next = text[index + 1];
-  if (next !== undefined && !/\s|[.!?…"'’”）)\]]/u.test(next)) return false;
+  if (next !== undefined && !/\s|[.!?\u2026"'\u2019\u201d\uff09)\]]/u.test(next)) return false;
   let start = index - 1;
   while (start >= 0 && /[a-z.]/iu.test(text[start]!)) start -= 1;
   const token = text.slice(start + 1, index).toLowerCase();
@@ -34,7 +34,7 @@ export function isSpeechSentenceBoundary(text: string, index: number, options?: 
 }
 
 export function isSpeechClauseBoundary(text: string, index: number, options?: Readonly<{ streaming: boolean }>): boolean {
-  if (!/[,;:，；：]/u.test(text[index] ?? '')) return false;
+  if (!/[,;:\uff0c\uff1b\uff1a]/u.test(text[index] ?? '')) return false;
   const next = text[index + 1];
   return ((next === undefined && !options?.streaming) || /\s/u.test(next ?? '')) && !isUrlToken(text, index);
 }

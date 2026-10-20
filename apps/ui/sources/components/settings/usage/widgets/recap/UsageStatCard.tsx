@@ -14,15 +14,20 @@ import { createPlanetFrame } from '@happier-dev/brand/planet';
 import { PlanetCanvas } from '@/components/atmosphere/PlanetCanvas';
 import { CompositionStrip, formatHappierDataShare } from '@happier-dev/plugin-ui/presentation';
 import { useUnistyles } from 'react-native-unistyles';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
-import type { UsageStatCardModel } from './usageStatCardModel';
+import { formatTokenCount } from '@/utils/format/usageNumbers';
+import { UsageAgentMark } from '../usageBodyKit';
+import type { UsageStatCardMixGroup, UsageStatCardModel } from './usageStatCardModel';
 import {
   USAGE_STAT_CARD_SIZES,
+  fitUsageStatFigureSize,
   USAGE_STAT_CARD_TYPE,
+  resolveUsageStatCardLayout,
   resolveUsageStatCardPalette,
+  type UsageStatCardLayout,
   type UsageStatCardPalette,
   type UsageStatCardTone,
 } from './usageStatCardStyles';
@@ -44,16 +49,30 @@ export const UsageStatCard = React.memo(
     }>
   >(function UsageStatCard(props, ref) {
     const { model } = props;
-    const size = USAGE_STAT_CARD_SIZES[model.format];
+    const drawnGroups = React.useMemo(() => drawnMixGroups(model), [model]);
+    const factCount = model.stats.filter((stat) => stat.tier === undefined).length;
     const palette = React.useMemo(
       () => resolveUsageStatCardPalette(model.style, props.tone),
       [model.style, props.tone],
     );
+    const panel = palette.panel !== undefined;
+    const layout = resolveUsageStatCardLayout(model.format, factCount, drawnGroups.length, {
+      hasLead: model.stats.some((stat) => stat.tier === 'lead'),
+      hasComparisons: model.stats.some((stat) => stat.tier === 'comparison'),
+      hasHeadline: model.headline !== null,
+      mixRowCount: Math.max(0, ...drawnGroups.map((group) => group.rows.length)),
+      panel,
+      wrapsLabels: panel || palette.mono,
+    });
+    const mixGroups = React.useMemo(
+      () => drawnGroups.map((group) => foldMixTail(group, layout.mixRows)),
+      [drawnGroups, layout.mixRows],
+    );
+    const size = USAGE_STAT_CARD_SIZES[model.format];
     const wide = model.format === 'link-preview';
     const story = model.format === 'story';
     const pad = wide ? 32 : 40;
     const gradientId = `card-bg-${React.useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
-    const statCount = wide ? 3 : story ? 6 : 4;
     return (
       <View
         ref={ref}
@@ -119,21 +138,30 @@ export const UsageStatCard = React.memo(
             ...(wide ? { width: size.width * 0.62 } : {}),
           }}
         >
-          <CardLine palette={palette} text={model.periodLabel} />
+          {/* A story's art fills its top, so its date leads the bottom stack and never sits on the art. */}
+          {story ? null : <CardLine palette={palette} text={model.periodLabel} />}
           <View
             style={{
-              gap: story ? 18 : 14,
+              gap: layout.gap,
               ...(story ? { marginTop: 'auto' } : {}),
             }}
           >
+            {story ? <CardLine palette={palette} text={model.periodLabel} /> : null}
             {model.headline ? (
-              <Headline model={model} palette={palette} />
+              <Headline model={model} palette={palette} size={layout.headline} />
             ) : null}
-            {model.mix.length > 0 ? (
-              <MixBar model={model} palette={palette} />
+            {mixGroups.length > 0 ? (
+              <View style={{ gap: layout.gap, flexDirection: layout.mixesInline ? 'row' : 'column' }}>
+                {mixGroups.map((group) => (
+                  <View key={group.kind} style={{ flex: 1 }}>
+                    <MixBar group={group} palette={palette} />
+                  </View>
+                ))}
+              </View>
             ) : null}
             {model.stats.length > 0 ? (
-              <Stats model={model} palette={palette} count={statCount} />
+              <Stats model={model} palette={palette} layout={layout}
+                width={(wide ? size.width * 0.62 : size.width) - pad * 2} />
             ) : null}
             <CardFooter model={model} palette={palette} />
           </View>
@@ -143,11 +171,42 @@ export const UsageStatCard = React.memo(
   }),
 );
 
+/** Selected populations that have something to draw; each keeps its own caption and denominator. */
+function drawnMixGroups(model: UsageStatCardModel): readonly UsageStatCardMixGroup[] {
+  return model.mixGroups.filter((group) => group.rows.length > 0);
+}
+
+/**
+ * A fixed-size image keeps the largest shares and folds the rest into one "+N more" share, so the legend
+ * fits its canvas and every token is still counted.
+ */
+function foldMixTail(group: UsageStatCardMixGroup, limit: number | null): UsageStatCardMixGroup {
+  if (limit === null || group.rows.length <= limit) return group;
+  const kept = group.rows.slice(0, limit - 1);
+  const tail = group.rows.slice(limit - 1);
+  return {
+    ...group,
+    rows: [...kept, {
+      id: `${group.kind}-more`,
+      share: tail.reduce((sum, row) => sum + row.share, 0),
+      label: t('usage.board.recap.mixMore', { count: tail.length }),
+    }],
+  };
+}
+
+function mixCaption(group: UsageStatCardMixGroup): string {
+  const name = t(group.kind === 'agentMix' ? 'usage.board.recap.field_agentMix' : 'usage.board.recap.field_modelMix');
+  return `${name} · ${formatTokenCount(group.totalTokens)} ${t('usage.board.recap.tokensUnit')}`;
+}
+
 function describeCard(model: UsageStatCardModel): string {
   return [
     model.periodLabel,
     model.headline ? `${model.headline.value} ${model.headline.unit}` : null,
-    ...model.mix.map(row => [row.label, formatHappierDataShare(row.share)].filter(Boolean).join(' ')),
+    ...drawnMixGroups(model).flatMap((group) => [
+      mixCaption(group),
+      ...group.rows.map((row) => [row.label, formatHappierDataShare(row.share)].filter(Boolean).join(' ')),
+    ]),
     ...model.stats.map((stat) => `${stat.value} ${stat.label}`),
   ]
     .filter(Boolean)
@@ -180,10 +239,9 @@ function CardLine(
 }
 
 function Headline(
-  props: Readonly<{ model: UsageStatCardModel; palette: UsageStatCardPalette }>,
+  props: Readonly<{ model: UsageStatCardModel; palette: UsageStatCardPalette; size: number }>,
 ) {
-  const { model, palette } = props;
-  const size = USAGE_STAT_CARD_TYPE.headline[model.format];
+  const { model, palette, size } = props;
   return (
     <View
       style={{
@@ -222,38 +280,60 @@ function Headline(
 }
 
 function MixBar(
-  props: Readonly<{ model: UsageStatCardModel; palette: UsageStatCardPalette }>,
+  props: Readonly<{ group: UsageStatCardMixGroup; palette: UsageStatCardPalette }>,
 ) {
-  const { model, palette } = props;
+  const { group, palette } = props;
   const { theme: appTheme } = useUnistyles();
-  const theme = React.useMemo(() => projectPluginUiTheme(appTheme), [appTheme]);
-  return <CompositionStrip theme={{ ...theme, colors: { ...theme.colors,
-    text: palette.ink, mutedText: palette.inkSecondary, controlDisabled: palette.rule } }}
-    label={t(model.manifest.includes('agentMix') ? 'usage.board.recap.field_agentMix' : 'usage.board.recap.field_modelMix')}
-    total={1} segments={model.mix.map((row, index) => ({ id: row.id, label: row.label ?? '', value: row.share,
-      color: palette.series[index % palette.series.length] }))}
-    appearance={{ legend: 'compact', height: 6, allowFontScaling: false,
-      textStyle: { ...font(palette, 'regular'), fontSize: USAGE_STAT_CARD_TYPE.legend, color: palette.inkSecondary } }}
-    shareFormatter={share => `${Math.round(share * 100)}%`} />;
+  const theme = usePluginUiTheme(appTheme);
+  const caption = mixCaption(group);
+  return (
+    <View style={{ gap: 6 }}>
+      <Text
+        allowFontScaling={false}
+        numberOfLines={1}
+        style={{
+          ...font(palette, 'regular'),
+          fontSize: USAGE_STAT_CARD_TYPE.legend,
+          color: palette.inkSecondary,
+        }}
+      >
+        {caption}
+      </Text>
+      <CompositionStrip theme={{ ...theme, colors: { ...theme.colors,
+        text: palette.ink, mutedText: palette.inkSecondary, controlDisabled: palette.rule } }}
+        label={caption}
+        total={1} valueKind="share" segments={group.rows.map((row, index) => ({ id: row.id, label: row.label ?? '', value: row.share,
+          color: palette.series[index % palette.series.length],
+          ...(row.agentId ? { mark: <UsageAgentMark agentId={row.agentId} serverId={null} size={USAGE_STAT_CARD_TYPE.legend} color={palette.inkSecondary} /> } : {}) }))}
+        appearance={{ legend: 'compact', height: 6, allowFontScaling: false,
+          textStyle: { ...font(palette, 'regular'), fontSize: USAGE_STAT_CARD_TYPE.legend, color: palette.inkSecondary } }}
+        shareFormatter={share => `${Math.round(share * 100)}%`} />
+    </View>
+  );
 }
 
 function Stats(
   props: Readonly<{
     model: UsageStatCardModel;
     palette: UsageStatCardPalette;
-    count: number;
+    layout: UsageStatCardLayout;
+    /** The stats block's own width; each figure fits its cell from it. */
+    width: number;
   }>,
 ) {
-  const { palette } = props;
-  const stats = props.model.stats.slice(0, props.count);
-  const perRow = props.model.format === 'story' ? 2 : stats.length;
+  const { palette, model, layout: grid } = props;
   const panel = palette.panel;
+  const inner = props.width - (panel ? 2 * 4 + 2 : 0);
+  // The selected total leads and its comparisons sit quieter beneath it; with no selected total the
+  // comparisons lead at full ink. Every other fact keeps the grid.
+  const lead = model.stats.filter((stat) => stat.tier === 'lead');
+  const comparisons = model.stats.filter((stat) => stat.tier === 'comparison');
+  const facts = model.stats.filter((stat) => stat.tier === undefined);
+  const comparisonColumns = Math.max(1, Math.min(comparisons.length, 3));
   return (
     <View
       style={[
         {
-          flexDirection: 'row',
-          flexWrap: 'wrap',
           borderTopWidth: panel ? 0 : 1,
           borderTopColor: palette.rule,
         },
@@ -268,47 +348,104 @@ function Stats(
           : null,
       ]}
     >
-      {stats.map((stat, index) => (
-        <View
-          key={`${stat.id}-${index}`}
-          style={{
-            width: `${100 / perRow}%`,
-            paddingVertical: 12,
-            paddingHorizontal: panel ? 12 : 0,
-            paddingRight: 10,
-            borderLeftWidth: index % perRow === 0 || panel ? 0 : 1,
-            borderLeftColor: palette.rule,
-            paddingLeft: index % perRow === 0 && !panel ? 0 : 12,
-          }}
-        >
-          <Text
-            allowFontScaling={false}
-            numberOfLines={1}
-            style={{
-              ...font(palette, 'semiBold'),
-              fontSize: USAGE_STAT_CARD_TYPE.stat,
-              lineHeight: USAGE_STAT_CARD_TYPE.stat * 1.15,
-              letterSpacing: palette.mono ? 0 : -0.8,
-              color: palette.ink,
-              fontVariant: ['tabular-nums'],
-            }}
-          >
-            {stat.value}
-          </Text>
-          <Text
-            allowFontScaling={false}
-            numberOfLines={1}
-            style={{
-              ...font(palette, 'regular'),
-              fontSize: USAGE_STAT_CARD_TYPE.statLabel,
-              color: palette.inkSecondary,
-            }}
-          >
-            {stat.label}
-          </Text>
+      {lead.map((stat, index) => (
+        <View key={`lead-${index}`} style={{ paddingVertical: grid.cellPadding, paddingHorizontal: panel ? 8 : 0 }}>
+          <StatFigure stat={stat} palette={palette} value={Math.round(grid.value * 1.5)} label={grid.label} width={inner - (panel ? 16 : 0)} />
         </View>
       ))}
+      {comparisons.length > 0 ? (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', paddingBottom: grid.cellPadding, paddingHorizontal: panel ? 8 : 0 }}>
+          {comparisons.map((stat, index) => (
+            <View
+              key={`comparison-${index}`}
+              style={{ width: `${100 / comparisonColumns}%`, paddingRight: 10, paddingTop: grid.cellPadding }}
+            >
+              <StatFigure
+                stat={stat}
+                palette={palette}
+                value={lead.length > 0 ? Math.max(12, Math.round(grid.value * 0.75)) : grid.value}
+                label={grid.label}
+                quiet={lead.length > 0}
+                width={(inner - (panel ? 16 : 0)) / comparisonColumns - 10}
+              />
+            </View>
+          ))}
+        </View>
+      ) : null}
+      {facts.length > 0 ? (
+        <View
+          style={{
+            flexDirection: 'row',
+            flexWrap: 'wrap',
+            ...(lead.length > 0 ? { borderTopWidth: 1, borderTopColor: palette.rule } : {}),
+          }}
+        >
+          {facts.map((stat, index) => {
+            const first = index % grid.columns === 0;
+            return (
+              <View
+                key={`${stat.id}-${index}`}
+                style={{
+                  width: `${100 / grid.columns}%`,
+                  paddingVertical: grid.cellPadding,
+                  // Five across the short link-preview column leave a figure just enough room to stay on one line.
+                  paddingRight: grid.columns >= 5 ? 4 : 10,
+                  borderLeftWidth: first || panel ? 0 : 1,
+                  borderLeftColor: palette.rule,
+                  paddingLeft: first && !panel ? 0 : grid.columns >= 5 ? 6 : 12,
+                }}
+              >
+                <StatFigure stat={stat} palette={palette} value={grid.value} label={grid.label}
+                  width={inner / grid.columns - (grid.columns >= 5 ? 4 : 10) - (first && !panel ? 0 : grid.columns >= 5 ? 7 : 13)} />
+              </View>
+            );
+          })}
+        </View>
+      ) : null}
     </View>
+  );
+}
+
+/** One value over its label; a quiet figure (a comparison) takes the secondary ink. */
+function StatFigure(
+  props: Readonly<{
+    stat: UsageStatCardModel['stats'][number];
+    palette: UsageStatCardPalette;
+    value: number;
+    label: number;
+    quiet?: boolean;
+    /** The cell's width: the figure steps down to stay on one line rather than wrap its unit. */
+    width: number;
+  }>,
+) {
+  const { palette, stat } = props;
+  const value = fitUsageStatFigureSize(stat.value, props.value, props.width);
+  return (
+    <>
+      <Text
+        allowFontScaling={false}
+        style={{
+          ...font(palette, 'semiBold'),
+          fontSize: value,
+          lineHeight: value * 1.15,
+          letterSpacing: palette.mono ? 0 : -value * 0.027,
+          color: props.quiet ? palette.inkSecondary : palette.ink,
+          fontVariant: ['tabular-nums'],
+        }}
+      >
+        {stat.value}
+      </Text>
+      <Text
+        allowFontScaling={false}
+        style={{
+          ...font(palette, 'regular'),
+          fontSize: props.label,
+          color: palette.inkSecondary,
+        }}
+      >
+        {stat.label}
+      </Text>
+    </>
   );
 }
 
@@ -463,7 +600,7 @@ function sigilArtLayout(props: ArtProps) {
 
 function SigilArt(props: ArtProps) {
   const { radius, cx, cy } = sigilArtLayout(props);
-  const rows = props.model.mix;
+  const rows = drawnMixGroups(props.model).flatMap((group) => group.rows);
   const ringGap = Math.min(9, radius / (rows.length + 2));
   return (
     <G>

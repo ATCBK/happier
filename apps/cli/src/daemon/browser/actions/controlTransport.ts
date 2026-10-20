@@ -1,4 +1,5 @@
-import { z } from 'zod';
+import { lazyZodSchema } from '@happier-dev/protocol/lazyZodSchema';
+import { z } from 'zod/mini';
 import { z as mini } from 'zod/mini';
 import { RuntimeActionIdV1Schema } from '@happier-dev/protocol/actions/actionIds';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
@@ -11,21 +12,21 @@ import { daemonPost } from '@/daemon/controlHttp';
 export const BROWSER_RUNTIME_ACTION_CONTROL_PATH = '/browser/runtime-actions/execute';
 
 /** Private host placement after Action admission; no caller-supplied policy context crosses IPC. */
-export const BrowserRuntimeActionControlRequestSchema = z.object({
-  actionId: RuntimeActionIdV1Schema.check(mini.refine((id) => ['browser', 'computer'].includes(resolveRuntimeActionExecutionFamily(id)))),
+export const BrowserRuntimeActionControlRequestSchema = z.strictObject({
+  actionId: lazyZodSchema(() => RuntimeActionIdV1Schema.check(mini.refine((id) => ['browser', 'computer'].includes(resolveRuntimeActionExecutionFamily(id))))),
   input: StrictJsonValueSchema,
-  sessionId: z.string().trim().min(1),
+  sessionId: z.string().check(z.trim(), z.minLength(1)),
   /** Authenticated host IPC carries Action-policy admission (approval, waiver or bypass), not caller authority. */
-  approvalAdmitted: z.literal(true).optional(),
-}).strict().superRefine((request, ctx) => {
+  approvalAdmitted: z.optional(z.literal(true)),
+}).check(z.superRefine((request, ctx) => {
   if (!getActionSpec(request.actionId).inputSchema.safeParse(request.input).success) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['input'], message: 'Invalid browser Action input' });
+    ctx.addIssue({ code: "custom", path: ['input'], message: 'Invalid browser Action input' });
   }
-});
+}));
 
-export const BrowserRuntimeActionControlResponseSchema = z.object({
+export const BrowserRuntimeActionControlResponseSchema = z.strictObject({
   result: StrictJsonValueSchema,
-}).strict();
+});
 
 /** Session processes reach the daemon's current browser owner through its authenticated control transport. */
 export function createCliBrowserRuntimeActionExecutor(params: Readonly<{ sessionId: string }>): RuntimeActionExecute {

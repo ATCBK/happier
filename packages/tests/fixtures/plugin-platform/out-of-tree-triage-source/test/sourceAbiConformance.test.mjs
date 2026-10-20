@@ -8,8 +8,8 @@
  *
  * The target here is a QA harness that declares the shipped `happier.triage`
  * sources point from the published protocol value and adds only executor
- * Actions, because the shipped aggregate's activation spine registers no
- * runtime yet. `publicSurface.test.mjs` owns the separate ownership census
+ * Actions to isolate the public source ABI from the shipped aggregate's
+ * runtime. `publicSurface.test.mjs` owns the separate ownership census
  * proving that `packages/plugins/triage` is the sole declarer of that point, so
  * the harness cannot quietly admit a shape the real target would not.
  */
@@ -33,6 +33,7 @@ import { checkTriageSourceContributionV1 } from '@happier-dev/triage-protocol/te
 import {
     LEDGER_ACTION_IDS,
     LEDGER_ACCOUNT_PURPOSE,
+    LEDGER_CONNECTED_ACCOUNT_ID,
     LEDGER_CONTRIBUTION_LOCAL_ID,
     activate,
 } from '../src/index.mjs';
@@ -70,7 +71,7 @@ const LEDGER_QA_PAGE_LIMIT = 100;
 /** Every space discovery offers, in the order it reports them. */
 const LEDGER_SPACES = Object.freeze([LEDGER_SPACE, LEDGER_QA_SPACE]);
 const LISTED_ACCOUNT = Object.freeze({
-    service: Object.freeze({ pluginId: 'acme.ledger', localId: 'ledger-account' }),
+    service: Object.freeze({ pluginId: 'acme.ledger', localId: LEDGER_CONNECTED_ACCOUNT_ID }),
     accountId: 'account-1',
 });
 
@@ -295,9 +296,19 @@ test('QB-01: install, activation, listInstances, scan and get all work through p
             v: 1,
             instance: configuredInstance(),
             localRef: first.localRef,
+            lastKnownLocator: first.locator,
         }));
         assert.equal(read.kind, 'present');
         assert.deepEqual(plain(read.localRef), plain(first.localRef));
+        // A separately installed source retains the canonical custom-forge
+        // identity on both paths; a source without it cannot join a checkout.
+        const repository = {
+            kind: 'custom',
+            deployment: 'https://forge.example.test/Forge',
+            repository: 'Team/Repo',
+        };
+        assert.deepEqual(plain(first.repository), repository);
+        assert.deepEqual(plain(read.repository), repository);
     } finally {
         await installed.dispose();
     }
@@ -690,13 +701,23 @@ test('QB-05: no source operation input or result can carry durable resume state'
 
     for (const [role, operation] of declarations) {
         const { declaration } = operation;
-        const serialized = JSON.stringify({
+        const fieldNames = [];
+        JSON.stringify({
             input: declaration.input.kind === 'protocolDefined'
                 ? declaration.input.schema.jsonSchema
                 : null,
             result: declaration.resultSchema.jsonSchema,
+        }, (key, value) => {
+            // This is the SCM-owned comparison grammar, not source paging
+            // authority. Its checkpointReceiptId identifies review evidence.
+            if (key === 'comparisonSource') return undefined;
+            if (key === 'properties') fieldNames.push(...Object.keys(value));
+            return value;
         });
-        assert.equal(forbidden.test(serialized), false, `${role} exposes durable resume state`);
+        // Domain literals such as a review revision's checkpoint kind do not
+        // grant the source a durable scan cursor. Judge field authority, not
+        // arbitrary words appearing anywhere in the canonical schema.
+        assert.equal(forbidden.test(fieldNames.join(' ')), false, `${role} exposes durable resume state`);
     }
 });
 

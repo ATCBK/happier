@@ -114,6 +114,38 @@ async function createTemporaryGitProject() {
 }
 
 describe('resolveWorkflowWorkspace', () => {
+  it.each(['/participant-only/repo', 'C:\\Users\\participant\\repo'])
+  ('retains an authorized remote Session cwd without coordinator filesystem inspection (%s)', async directory => {
+    const store = createInMemoryWorkflowCoordinatorStore();
+    const runId = 'remote-participant';
+    const key = workflowInvocationKey({ runId, blockId: 'opinion', scope: [], attempt: 0 });
+    const invocation = await store.ensureIntent({ key, recordId: 'opinion-record', runId, blockId: 'opinion',
+      blockKind: 'step', path: { blockId: 'opinion', scope: [] }, attempt: 0, acceptedAtMs: 1, lifecycle: 'admitting' });
+    const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: { workspace: { kind: 'new_worktree', source: { kind: 'workflow' } } }, blocks: [] };
+    const localFilesystem = async (): Promise<never> => { throw new Error('Remote Session paths must not reach the coordinator filesystem'); };
+    const resolve = createCoordinatorWorkspaceResolver({ store, projectWorkspace: project, scm: {
+      inspectLocation: localFilesystem, verifyRecordedWorkspace: localFilesystem,
+      inspectCommittedRevision: localFilesystem, realizeWorktree: localFilesystem,
+    } });
+    const conversationWorkspace = { machineId: 'participant-machine', directory };
+    const request = { runId, definition, step: { id: 'opinion' }, invocation, scope: [],
+      producerBinding: noProducerBinding, conversationWorkspace, useConversationWorkspace: true,
+      conversationBinding: { kind: 'existing_session' as const, sessionId: 'participant', machineId: conversationWorkspace.machineId } };
+    const expected = { ok: true, workspace: { ...conversationWorkspace, checkoutRootPath: directory } };
+    expect(await resolve(request)).toEqual(expected);
+    const recorded = await store.read(key);
+    if (!recorded) throw new Error('Missing retained Session workspace');
+    expect(recorded.workspace?.descriptor).toEqual(expected.workspace);
+    expect(await resolve({ ...request, invocation: recorded })).toEqual(expected);
+    expect(await resolve({ ...request, invocation: recorded, conversationWorkspace: { ...conversationWorkspace, machineId: 'another-machine' } }))
+      .toEqual({ ok: false, code: 'conversation_workspace_mismatch' });
+    expect(await resolve({ ...request, step: { id: 'opinion', execution: { workspace: { kind: 'new_worktree', source: { kind: 'workflow' } } } } }))
+      .toEqual({ ok: false, code: 'conversation_workspace_mismatch' });
+    expect(await resolveWorkflowWorkspace({ selection: { kind: 'inherit' }, defaultSelection: { kind: 'project_checkout' },
+      projectWorkspace: project, inheritedWorkspace: { descriptor: expected.workspace }, runId, logicalInvocationRecordId: 'unbound', deps: {} }))
+      .toEqual({ ok: false, code: 'workspace_conflict' });
+  });
+
   it('preserves a predecessor worktree name and named base ref through the real SCM boundary', async () => {
     const fixture = await createTemporaryGitProject();
     try {

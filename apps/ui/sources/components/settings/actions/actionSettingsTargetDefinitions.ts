@@ -26,7 +26,7 @@ export type ActionSettingsTargetSource = Readonly<{
     placements: readonly ActionUiPlacement[];
     slash?: unknown;
     requiredAuthority?: ActionSpec['requiredAuthority'];
-    contributedAction?: Pick<PluginActionPresentUserGatePolicy, 'dangerLevel' | 'confirmation'>;
+    contributedAction?: Pick<PluginActionPresentUserGatePolicy, 'dangerLevel' | 'confirmation' | 'confirmationWhen'>;
 }>;
 
 type ActionSettingsTargetBase = Readonly<{

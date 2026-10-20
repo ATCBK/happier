@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { spawn } from 'node:child_process';
 import { PassThrough } from 'node:stream';
+import { constants } from 'node:os';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -73,7 +74,8 @@ async function createHangingUpgradeServer(): Promise<{
         let upgraded = false;
         socket.on('data', chunk => {
             if (upgraded) {
-                if ((chunk[0]! & 0x0f) === 0xa) markPonged();
+                const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+                if ((bytes[0]! & 0x0f) === 0xa) markPonged();
                 return;
             }
             // Accept the TCP connection and request bytes but never complete the
@@ -301,7 +303,12 @@ describe('A.13p.10 spawned loopback WebSocket client transport', () => {
                             void writing.then(() => { writeSettled = true; }, () => { writeSettled = true; });
                             return writing;
                         },
-                        kill: signal => { child.kill(signal); },
+                        kill: signal => {
+                            if (signal === undefined) return child.kill();
+                            const signalNumber = Object.entries(constants.signals).find(([name]) => name === signal)?.[1];
+                            if (signalNumber === undefined) throw new Error(`Unsupported fixture process signal: ${signal}`);
+                            return child.kill(signalNumber);
+                        },
                         dispose: async () => { child.kill('SIGKILL'); await exit; },
                     },
                 },

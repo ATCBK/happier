@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { readdir, rm, stat } from 'node:fs/promises';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
 import { ScmDiffSummaryGenerateOutputSchema, ScmDiffSummaryOutputKindSchema, normalizeScmDiffSummaryModelOutput, ScmReviewExplanationTargetsSchema, ScmReviewExplanationRequesterSchema, ScmDiffSummaryModelOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
 import { ScmDiffSummaryResultSchema, ScmDiffSummaryResultEditSchema, ScmWalkthroughProvenanceSchema } from '@happier-dev/protocol/scm/diffSummaryResult';
 import { ScmCommitPlanAcceptanceSchema, ScmCommitPlanApplicationSchema, isScmCommitPlanApplicationLocked } from '@happier-dev/protocol/scm/diffSummaryCommitPlan';
@@ -18,23 +19,23 @@ import {
 } from '@/utils/fs/protectedLocalState';
 
 export type ScmDiffSummaryResultScope = Readonly<{ cwd: string; sessionId?: string; resultId: string; signal?: AbortSignal }>;
-const explanationRequestSchema = z.object({ targets: ScmReviewExplanationTargetsSchema,
-  requestedBy: ScmReviewExplanationRequesterSchema, requestedAtMs: z.number().int().nonnegative().optional(),
-}).strict();
+const explanationRequestSchema = z.strictObject({ targets: ScmReviewExplanationTargetsSchema,
+  requestedBy: ScmReviewExplanationRequesterSchema, requestedAtMs: z.optional(z.number().check(z.int(), z.nonnegative())),
+});
 type InputScope = Readonly<{ inputId: string; expectedRevision?: number; outputs?: readonly ScmDiffSummaryOutputKind[]; stopIds?: readonly string[];
   reviewExplanation?: z.infer<typeof explanationRequestSchema>; reviewFindingCitations?: ReviewFindingCitations }>;
-const pendingInputSchema = z.object({ inputId: z.string().min(1), baseRevision: z.number().int().nonnegative(),
-  outputs: z.array(ScmDiffSummaryOutputKindSchema).min(1), stopIds: z.array(z.string().min(1)).optional(),
-  reviewExplanation: explanationRequestSchema.optional(),
-  reviewFindingCitations: reviewFindingCitationsSchema.optional(),
-}).strict();
-const storedSchema = z.object({
-  result: ScmDiffSummaryResultSchema, cwd: z.string().min(1), sessionId: z.string().min(1).optional(),
-  undoOutput: ScmDiffSummaryGenerateOutputSchema.optional(), inputs: z.array(pendingInputSchema),
-  undoWalkthroughProvenance: ScmWalkthroughProvenanceSchema.optional(),
-  reviewFindingCitations: reviewFindingCitationsSchema.optional(),
-  generation: z.object({ key: z.string().min(1), runId: z.string().min(1).optional(), inputId: z.string().min(1).optional() }).strict().optional(),
-}).strict();
+const pendingInputSchema = z.strictObject({ inputId: z.string().check(z.minLength(1)), baseRevision: z.number().check(z.int(), z.nonnegative()),
+  outputs: z.array(ScmDiffSummaryOutputKindSchema).check(z.minLength(1)), stopIds: z.optional(z.array(z.string().check(z.minLength(1)))),
+  reviewExplanation: z.optional(explanationRequestSchema),
+  reviewFindingCitations: z.optional(reviewFindingCitationsSchema),
+});
+const storedSchema = z.strictObject({
+  result: ScmDiffSummaryResultSchema, cwd: z.string().check(z.minLength(1)), sessionId: z.optional(z.string().check(z.minLength(1))),
+  undoOutput: z.optional(ScmDiffSummaryGenerateOutputSchema), inputs: z.array(pendingInputSchema),
+  undoWalkthroughProvenance: z.optional(ScmWalkthroughProvenanceSchema),
+  reviewFindingCitations: z.optional(reviewFindingCitationsSchema),
+  generation: z.optional(z.strictObject({ key: z.string().check(z.minLength(1)), runId: z.optional(z.string().check(z.minLength(1))), inputId: z.optional(z.string().check(z.minLength(1))) })),
+});
 type Stored = z.infer<typeof storedSchema>;
 const storedReadSchema = createStoredReadSchema(storedSchema);
 export type ScmDiffSummaryResultStore = Readonly<{
@@ -103,7 +104,11 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
     }
   }
   async function save(stored: Stored) {
-    await writeProtectedLocalStateFileAtomic(path(stored.result.resultId), JSON.stringify(storedSchema.parse(stored)));
+    // Return the same JSON data that readers reload. Optional native members
+    // must not escape as undefined into strict Action/approval responses.
+    const saved = storedSchema.parse(projectNativeJsonValueForTransport(stored));
+    await writeProtectedLocalStateFileAtomic(path(saved.result.resultId), JSON.stringify(saved));
+    return saved;
   }
   async function locked<T>(scope: ScmDiffSummaryResultScope, operation: (stored: Stored | null) => Promise<T>): Promise<T> {
     await ensureProtectedLocalStateDirectory(directory);
@@ -123,8 +128,7 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
       let next: Stored | ScmDiffSummaryResultFailure;
       try { next = apply(stored); } catch (error) { return failure('invalid_edit', error instanceof Error ? error.message : 'Invalid edit'); }
       if ('success' in next) return next;
-      await save(next);
-      return { success: true, result: next.result };
+      return { success: true, result: (await save(next)).result };
     });
   }
   function updated(stored: Stored, output: ScmDiffSummaryGenerateOutput, undo: 'capture' | 'preserve' | 'clear' = 'capture',
@@ -268,8 +272,7 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
       const result = ScmDiffSummaryResultSchema.parse({ resultId, revision: 0, output: withRevision(output, resultId, 0), canUndo: false,
         ...(generator ? { generator } : {}) });
       await ensureProtectedLocalStateDirectory(directory);
-      await save({ result, cwd: resolve(cwd), ...(sessionId ? { sessionId } : {}), inputs: [] });
-      return result;
+      return (await save({ result, cwd: resolve(cwd), ...(sessionId ? { sessionId } : {}), inputs: [] })).result;
     },
     async read(scope) {
       const stored = await load(scope);
@@ -499,8 +502,7 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
             }) };
             const next = updated(stored, replaceValues(stored, { walkthrough }, pending.outputs));
             next.inputs = next.inputs.filter(request => request.inputId !== input.inputId);
-            await save(next);
-            return { success: true, result: next.result };
+            return { success: true, result: (await save(next)).result };
           }
           let normalized = publishReviewFindingCitations(normalizeScmDiffSummaryModelOutput(input.modelOutput, { comparison: stored.result.output.comparison!,
             requestedOutputs: pending.outputs, requireCompleteCoverage: !pending.stopIds }), pending.reviewFindingCitations ?? []);
@@ -526,8 +528,7 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
             normalized.walkthrough, stored.result.output.outputs?.walkthrough?.value) };
           const next = updated(stored, replaceValues(stored, normalized, pending.outputs, input.outputEnvelope));
           next.inputs = next.inputs.filter((request) => request.inputId !== input.inputId);
-          await save(next);
-          return { success: true, result: next.result };
+          return { success: true, result: (await save(next)).result };
         } catch (error) { return failure('invalid_output', error instanceof Error ? error.message : 'Invalid structured output'); }
       });
     },
@@ -596,8 +597,7 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
           nextGroupIndex: prefix.length, stopAfterCurrent: false });
         const next = updated(stored, stored.result.output, 'preserve');
         next.result.application = application;
-        await save(next);
-        return { success: true, result: next.result };
+        return { success: true, result: (await save(next)).result };
       });
     },
     async mutateApplication(scope, transition) {
@@ -608,8 +608,7 @@ export function createScmDiffSummaryResultStore(options: Readonly<{ directory: s
         if ('success' in application) return application;
         const next = updated(stored, stored.result.output, 'preserve');
         next.result.application = ScmCommitPlanApplicationSchema.parse(application);
-        await save(next);
-        return { success: true, result: next.result };
+        return { success: true, result: (await save(next)).result };
       });
     },
   };

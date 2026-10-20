@@ -9,13 +9,14 @@ import { SessionWorkStateV1Schema as SessionStateWorkStateValueSchema } from '@h
 import { SessionRuntimeActivitySnapshotSchema } from '@happier-dev/protocol/sessions/runtime/activity/sessionRuntimeActivity';
 import { SessionContextIntentV1Schema, migrateRetainedSessionWorkContextV1 } from '@happier-dev/protocol/sessions/context/sessionContextV1';
 import { SessionVoicePreferenceV1Schema } from '@happier-dev/protocol/sessions/instructions/sessionVoicePreferenceV1';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { Metadata } from '@/api/types';
 import { mergeUsageLimitRecoveryFieldIntoMetadata } from '@/session/usageLimitRecoveryControls/mergeUsageLimitRecoveryFieldIntoMetadata';
 import { deterministicStringify } from '@/utils/deterministicJson';
 import type { RegisteredSessionStateFieldMutationV1 } from './sessionClientDurableMutationTypes';
 import { hasSameUsageLimitRecoveryIdentity } from '@/session/usageLimitRecoveryControls/mergeUsageLimitRecoveryIntent';
+import { applySessionRoleEditToMetadata, SessionRoleEditSchema } from '@/session/roles/sessionRoleEdit';
 
 export function resolveRegisteredSessionStateFieldMutationSettlement(
     metadata: Metadata,
@@ -36,6 +37,12 @@ export function applyRegisteredSessionStateFieldMutationToMetadata(
     metadata: Metadata,
     mutation: RegisteredSessionStateFieldMutationV1,
 ): Metadata {
+    if (mutation.sessionRoleEdit !== undefined) {
+        if (mutation.fieldId !== 'intent.sessionRoles' || mutation.op.kind !== 'set') throw new Error('Invalid Role edit field');
+        const edit = SessionRoleEditSchema.parse(mutation.sessionRoleEdit);
+        if (edit.input.sessionId !== mutation.sessionId) throw new Error('Invalid Role edit Session');
+        return applySessionRoleEditToMetadata(metadata, edit);
+    }
     if (mutation.op.kind === 'clear') {
         if (mutation.fieldId === 'runtime.usageLimitRecovery') {
             const current = metadata.sessionUsageLimitRecoveryV1;
@@ -55,7 +62,7 @@ export function applyRegisteredSessionStateFieldMutationToMetadata(
     let value = mutation.op.value;
     if (mutation.fieldId === 'intent.context') value = SessionContextIntentV1Schema.parse(value);
     if (mutation.fieldId === 'intent.memoryEnabled') value = z.boolean().parse(value);
-    if (mutation.fieldId === 'intent.voicePreference') value = SessionVoicePreferenceV1Schema.nullable().parse(value);
+    if (mutation.fieldId === 'intent.voicePreference') value = z.nullable(SessionVoicePreferenceV1Schema).parse(value);
 
     if (mutation.fieldId === 'intent.role') {
         value = SessionRoleIdV1Schema.parse(value);

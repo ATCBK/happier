@@ -11,6 +11,7 @@ const ACCEPTED_BEGIN_PUBLISH_RETRY_DELAY_MS = 50;
 
 export type SessionTurnLifecycleMutationPort = Readonly<{
     sessionId: string;
+    readQuestionWaitTurnId?: () => string | null;
     enqueueSessionTurnMutation?: (
         mutation: RuntimeSessionTurnMutationV1,
     ) => void | Readonly<{ terminalStatusOverride: 'failed' }> | Promise<void | Readonly<{ terminalStatusOverride: 'failed' }>>;
@@ -20,6 +21,8 @@ type SessionTurnLifecycleParams = Readonly<{
     session: SessionTurnLifecycleMutationPort;
     agentId?: string;
     readTurnFacts?: () => SessionTurnFactsV1;
+    /** Exact native start cause, not the mutable active input of a later steer. */
+    readStartingInput?: (turnId: string) => Readonly<{ inputId: string; turnId: string }> | null;
     onTurnFactsChanged?: (input: Readonly<{ turnId: string; facts: SessionTurnFactsV1 | null }>) => void;
     onAcceptedTurnFailure?: (event: Extract<AgentSessionRuntimeEvent, { kind: 'turn-failed' }>) => Promise<void>;
     onAcceptedTurnLifecycle?: (input: Readonly<{
@@ -237,12 +240,15 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
                 activeTurnId = event.turnId;
                 lastActiveTurnTouchAtMs = null;
                 const facts = params.readTurnFacts?.();
+                const startingInput = params.readStartingInput?.(event.turnId);
                 if (facts) params.onTurnFactsChanged?.({ turnId: event.turnId, facts });
                 publish(
                     {
                         ...buildMutationBase({ session: params.session, agentId: params.agentId, action: 'begin', event }),
                         action: 'begin',
                         turnId: event.turnId,
+                        ...(facts?.initiator === 'agent_session' && startingInput?.turnId === event.turnId
+                            ? { startingInputId: startingInput.inputId } : {}),
                         ...facts,
                         ...(event.agentTurnId ? { agentTurnId: event.agentTurnId } : {}),
                     } satisfies RuntimeSessionTurnMutationV1,
@@ -279,6 +285,22 @@ export function createSessionTurnLifecycle(params: SessionTurnLifecycleParams): 
                         agentTurnId: event.agentTurnId,
                     } satisfies RuntimeSessionTurnMutationV1,
                 );
+                return;
+            }
+
+            if ((event.kind === 'turn-complete' || event.kind === 'turn-cancelled')
+                && activeTurnId === event.turnId && params.session.readQuestionWaitTurnId?.() === event.turnId) {
+                publish({
+                    ...buildMutationBase({ session: params.session, agentId: params.agentId, action: 'wait', event }),
+                    action: 'wait',
+                    turnId: event.turnId,
+                    ...(event.agentTurnId ? { agentTurnId: event.agentTurnId } : {}),
+                } satisfies RuntimeSessionTurnMutationV1,
+                // End exact daemon marker custody without claiming work completion or Stop.
+                { event: 'assistant_message_end', turnId: event.turnId });
+                params.onTurnFactsChanged?.({ turnId: event.turnId, facts: null });
+                activeTurnId = null;
+                lastActiveTurnTouchAtMs = null;
                 return;
             }
 

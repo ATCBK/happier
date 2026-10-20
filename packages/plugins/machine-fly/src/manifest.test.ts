@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { PluginApi, PluginInvocationContext } from '@happier-dev/plugin-sdk';
@@ -172,7 +173,7 @@ describe('public fly machine provisioner', () => {
     const optionsAction = exports.PLUGIN_MANIFEST.contributes.actions?.find(action => action.id === 'options');
     expect(optionsAction?.inputSchema).toBeDefined();
     const spec = { inputHints: normalizePluginActionInputHintsV2(
-      PluginActionInputHintsV2Schema.optional().parse(optionsAction?.inputHints),
+      z.optional(PluginActionInputHintsV2Schema).parse(optionsAction?.inputHints),
     ) };
     const edits: Array<readonly [string, string | number]> = [
       ['app.ownership', selected.app.ownership], ['app.name', selected.app.name],

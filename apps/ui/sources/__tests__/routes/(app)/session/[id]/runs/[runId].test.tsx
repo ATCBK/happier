@@ -1,266 +1,126 @@
 import * as React from 'react';
-import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
+import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ExecutionRunGetResponseSchema, ExecutionRunPublicStateSchema, type ExecutionRunPublicState } from '@happier-dev/protocol';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createMachineFixture, createSessionFixture, flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { withPopoverWebGlobals, reportPopoverContentLayout, flattenTestStyle } from '@/dev/testkit/harness/popoverHarness';
 
-import {
-    flushHookEffects,
-    renderScreen,
-    standardCleanup,
-} from '@/dev/testkit';
-import { installSessionRouteCommonModuleMocks } from '../sessionRouteTestHelpers';
-import type { Session } from '@/sync/domains/state/storageTypes';
-import { measureScreenContentBottom, PublishBottomChromeHeight } from '../testUtils/bottomChromeViewport';
-import { SessionCockpitChromeRegistryProvider } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
-
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-type ExecutionRunGetArgs = [string, Record<string, unknown>];
-type ExecutionRunSendArgs = [string, Record<string, unknown>];
-type ExecutionRunStopArgs = [string, Record<string, unknown>];
-
-type MachineExecutionRunsListArgs = [string, Record<string, unknown>?];
-
-const getRunSpy = vi.fn<(...args: ExecutionRunGetArgs) => Promise<any>>(async (_sessionId: string, _params: Record<string, unknown>) => ({
-    run: {
-        runId: 'run_1',
-        callId: 'call_1',
-        sidechainId: 'side_1',
-        intent: 'review',
-        backendId: 'claude',
-        permissionMode: 'read_only',
-        retentionPolicy: 'ephemeral',
-        runClass: 'bounded',
-        ioMode: 'request_response',
-        status: 'succeeded',
-        startedAtMs: 1,
-        finishedAtMs: 2,
+const route = vi.hoisted(() => ({
+    params: { id: 'session-1', runId: 'run_1' } as Record<string, string | string[] | undefined>,
+    stackScreen: vi.fn(), push: vi.fn(), back: vi.fn(), replace: vi.fn(), canGoBack: vi.fn(() => true),
+}));
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    const boundary = createExpoRouterMock({ params: () => route.params,
+        navigation: { canGoBack: route.canGoBack },
+        router: { push: route.push, back: route.back, replace: route.replace, setParams: vi.fn() } });
+    return { ...boundary.module, Stack: Object.assign(boundary.module.Stack, { Screen: route.stackScreen }) };
+});
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({
+    translate: (key, vars) => {
+        if (key === 'runs.detail.pid') return `pid ${vars?.pid ?? ''}`.trim();
+        if (key === 'runs.detail.cpu') return `cpu ${vars?.percent ?? ''}`.trim();
+        if (key === 'runs.detail.memory') return `memory ${vars?.megabytes ?? ''}`.trim();
+        return key;
     },
 }));
-const sendRunSpy = vi.fn<(...args: ExecutionRunSendArgs) => Promise<any>>(async (_sessionId: string, _params: Record<string, unknown>) => ({ ok: true }));
-const stopRunSpy = vi.fn<(...args: ExecutionRunStopArgs) => Promise<any>>(async (_sessionId: string, _params: Record<string, unknown>) => ({ ok: true }));
-const machineExecutionRunsListSpy = vi.fn(async (_machineId: string, _opts?: Record<string, unknown>) => ({
-    ok: true,
-    runs: [
-        {
-            happyHomeDir: '/tmp/happy',
-            pid: 123,
-            happySessionId: 'session-1',
-            runId: 'run_1',
-            callId: 'call_1',
-            sidechainId: 'side_1',
-            intent: 'review',
-            backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' },
-            runClass: 'bounded',
-            ioMode: 'request_response',
-            retentionPolicy: 'ephemeral',
-            status: 'succeeded',
-            startedAtMs: 1,
-            updatedAtMs: 2,
-            finishedAtMs: 2,
-            process: { pid: 123, cpu: 12.5, memory: 1048576 },
-        },
-    ],
-}));
-const stackScreenSpy = vi.fn((_props: any) => null);
-const routerPushSpy = vi.fn();
-const routerBackSpy = vi.fn();
-const routerReplaceSpy = vi.fn();
-const navigateWithBlurOnWebSpy = vi.hoisted(() => vi.fn((action: () => void) => action()));
-const navigationCanGoBackSpy = vi.fn(() => true);
-let localSearchParamsMock: Record<string, unknown> = { id: 'session-1', runId: 'run_1' };
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
+
 let hydrateReady = true;
 let hydratedServerId: string | undefined;
-let SessionRunDetailsScreen: typeof import('@/app/(app)/session/[id]/runs/[runId]').default;
-const sessionFixture: Session = {
-    id: 'session-1',
-    seq: 0,
-    createdAt: 0,
-    updatedAt: 0,
-    active: false,
-    activeAt: 0,
-    metadata: { flavor: 'codex' } as Session['metadata'],
-    metadataVersion: 0,
-    agentState: null,
-    agentStateVersion: 0,
-    thinking: false,
-    thinkingAt: 0,
-    presence: 'online',
-    accessLevel: 'edit',
-    canApprovePermissions: true,
-};
-
-vi.mock('@/utils/platform/navigateWithBlurOnWeb', () => ({
-    navigateWithBlurOnWeb: navigateWithBlurOnWebSpy,
-}));
-
-installSessionRouteCommonModuleMocks({
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            Platform: {
-                OS: 'web',
-                select: (values: any) => values?.web ?? values?.default,
-            },
-            View: 'View',
-            Text: 'Text',
-            Pressable: 'Pressable',
-            ActivityIndicator: 'ActivityIndicator',
-            TextInput: 'TextInput',
-            AppState: {
-                currentState: 'active',
-                addEventListener: () => ({ remove: () => {} }),
-            },
-        });
+// Observe both released and current run-input ports at the Socket boundary.
+const sendRunSpy = vi.fn();
+const pendingHydrationReads = new Set<() => void>();
+let runReplies: Array<Readonly<{ ok: false; error: string; errorCode: string }>
+    | Readonly<{ run: Partial<ExecutionRunPublicState>; structuredMeta?: unknown }>> = [];
+function runFixture(overrides: Partial<ExecutionRunPublicState> = {}) {
+    return ExecutionRunPublicStateSchema.parse({
+        runId: 'run_1', callId: 'call_1', sidechainId: 'side_1', intent: 'review',
+        backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, permissionMode: 'read_only',
+        retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response',
+        status: 'succeeded', startedAtMs: 1,
+        ...(overrides.status === 'running' ? {} : { finishedAtMs: 2 }), ...overrides,
+    });
+}
+const { installSessionPaneRuntimeTestHarness } = await import('@/components/sessions/panes/sessionPaneRuntimeTestHarness');
+const runtime = installSessionPaneRuntimeTestHarness({
+    sessionId: 'session-1',
+    credentials: { token: createAccountTokenForTests('account-a', { currentAccount: true }) },
+    request: async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        if (path === '/v2/sessions/session-1' && !hydrateReady) {
+            return new Promise<Response>(resolve => {
+                const release = () => { pendingHydrationReads.delete(release); resolve(Response.json({ error: 'Session not found' }, { status: 404 })); };
+                pendingHydrationReads.add(release);
+                init?.signal?.addEventListener('abort', release, { once: true });
+            });
+        }
+        return null;
     },
-    unistyles: async () => {
-        const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-        return createUnistylesMock({
-            theme: {
-                colors: {
-                    surface: '#111',
-                    surfaceHigh: '#222',
-                    divider: '#333',
-                    text: '#eee',
-                    textSecondary: '#aaa',
-                    textLink: '#06f',
-                    textDestructive: '#f00',
-                    accent: { indigo: '#33f' },
-                    groupped: { sectionTitle: '#888' },
-                    shadow: { color: '#000' },
-                },
-            },
-        });
-    },
-    router: async () => {
-        const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-        const routerMock = createExpoRouterMock({
-            navigation: {
-                canGoBack: navigationCanGoBackSpy,
-            },
-            router: {
-                push: routerPushSpy,
-                back: routerBackSpy,
-                replace: routerReplaceSpy,
-                setParams: vi.fn(),
-            },
-        });
-        return {
-            ...routerMock.module,
-            useLocalSearchParams: () => localSearchParamsMock,
-            Stack: { Screen: (props: any) => stackScreenSpy(props) },
-        };
-    },
-    text: async () => {
-        const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        return createTextModuleMock({
-            translate: (key: string, vars?: any) => {
-                if (key === 'runs.detail.pid') return `pid ${vars?.pid ?? ''}`.trim();
-                if (key === 'runs.detail.cpu') return `cpu ${vars?.percent ?? ''}`.trim();
-                if (key === 'runs.detail.memory') return `memory ${vars?.megabytes ?? ''}`.trim();
-                return key;
-            },
-        });
-    },
-    storageModule: async (importOriginal) => {
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                storage: {
-                    getState: () => ({
-                        sessions: {
-                            'session-1': {
-                                id: 'session-1',
-                                active: false,
-                                updatedAt: 0,
-                                metadata: {
-                                    machineId: 'machine-stale',
-                                    path: '/Users/leeroy/repo',
-                                    homeDir: '/Users/leeroy',
-                                },
-                            },
-                        },
-                        machines: {
-                            'machine-target': {
-                                id: 'machine-target',
-                                active: true,
-                                activeAt: 10,
-                                metadata: { host: 'workstation.local' },
-                            },
-                        },
-                        getProjectForSession: (sessionId: string) =>
-                            sessionId === 'session-1'
-                                ? {
-                                    key: {
-                                        machineId: 'machine-target',
-                                        path: '/Users/leeroy/repo',
-                                    },
-                                }
-                                : null,
-                        sessionMessages: {
-                            'session-1': {
-                                reducerState: {
-                                    toolIdToMessageId: new Map<string, string>([['side_1', 'message-side-1']]),
-                                },
-                            },
-                        },
-                    }),
-                } as any,
-                useSession: () => sessionFixture,
-                useSessionMessages: () => ({ messages: [], isLoaded: true }),
-                useResolvedSessionMessageRouteId: () => null,
-                useMessage: () => null,
-            },
-        });
+    rpc: async (method) => {
+        if (method === SESSION_RPC_METHODS.EXECUTION_RUN_SEND || method === SESSION_RPC_METHODS.EXECUTION_RUN_ACTION) sendRunSpy();
+        if (method === SESSION_RPC_METHODS.EXECUTION_RUN_GET) {
+            const reply = runReplies.shift();
+            return reply && !('run' in reply) ? reply
+                : ExecutionRunGetResponseSchema.parse({ ...reply, run: runFixture(reply?.run) });
+        }
+        if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP) return { ok: true };
+        if (method === RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST) return { runs: [{
+            happyHomeDir: '/tmp/happy', pid: 123, happySessionId: 'session-1', runId: 'run_1', callId: 'call_1', sidechainId: 'side_1',
+            intent: 'review', backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' },
+            runClass: 'bounded', ioMode: 'request_response', retentionPolicy: 'ephemeral', status: 'succeeded',
+            startedAtMs: 1, updatedAtMs: 2, finishedAtMs: 2, process: { pid: 123, cpu: 12.5, memory: 1048576 },
+        }] };
+        return {};
     },
 });
+const { getStorage } = await import('@/sync/domains/state/storageStore');
+const operations = await import('@/sync/ops/sessionExecutionRuns');
+const getRunSpy = vi.spyOn(operations, 'sessionExecutionRunGet');
+const stopRunSpy = vi.spyOn(operations, 'sessionExecutionRunStop');
+const machineExecutionRunsListSpy = vi.spyOn(await import('@/sync/ops/machineExecutionRuns'), 'machineExecutionRunsList');
+const navigateWithBlurOnWebSpy = vi.spyOn(await import('@/utils/platform/navigateWithBlurOnWeb'), 'navigateWithBlurOnWeb');
+const { ActivitySpinner } = await import('@/components/ui/feedback/ActivitySpinner');
+const { SessionExecutionRunInfoCard } = await import('@/components/sessions/runs/details/SessionExecutionRunInfoCard');
+const { SessionCockpitChromeRegistryProvider } = await import('@/components/workspaceCockpit/session/SessionCockpitChromeRegistry');
+const { measureScreenContentBottom, PublishBottomChromeHeight } = await import('../testUtils/bottomChromeViewport');
+const { layout } = await import('@/components/ui/layout/layout');
+const { default: SessionRunDetailsScreen } = await import('@/app/(app)/session/[id]/runs/[runId]');
+const stackScreenSpy = route.stackScreen;
+const routerPushSpy = route.push;
+const routerBackSpy = route.back;
+const routerReplaceSpy = route.replace;
+const navigationCanGoBackSpy = route.canGoBack;
+let restorePopover: (() => void) | undefined;
 
-vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
-
-vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
-    useHydrateSessionForRoute: (sessionId: string) => hydrateReady
-        ? { kind: 'available', sessionId, ...(hydratedServerId ? { serverId: hydratedServerId } : {}) }
-        : { kind: 'loading', sessionId, reason: 'store-miss', ...(hydratedServerId ? { serverId: hydratedServerId } : {}) },
-}));
-
-vi.mock('@/components/sessions/shell/SessionInvalidLinkFallback', () => ({
-    SessionInvalidLinkFallback: () => React.createElement('SessionInvalidLinkFallback', { testID: 'session-invalid-link' }),
-}));
-
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        fetchPendingMessages: vi.fn(async () => undefined),
-        sendMessage: vi.fn(async () => undefined),
-        submitMessage: vi.fn(),
-    },
-}));
-
-vi.mock('@/sync/ops/sessionExecutionRuns', () => ({
-    sessionExecutionRunGet: (...args: ExecutionRunGetArgs) => getRunSpy(...args),
-    sessionExecutionRunSend: (...args: ExecutionRunSendArgs) => sendRunSpy(...args),
-    sessionExecutionRunStop: (...args: ExecutionRunStopArgs) => stopRunSpy(...args),
-}));
-
-vi.mock('@/sync/ops/machineExecutionRuns', () => ({
-    machineExecutionRunsList: (...args: MachineExecutionRunsListArgs) => machineExecutionRunsListSpy(...args),
-}));
-
-vi.mock('@/components/ui/layout/layout', () => ({
-    layout: { maxWidth: 999 },
-    useLayoutMaxWidthStyle: () => ({ maxWidth: 999 }),
-    useLayoutMaxWidth: () => 999,
-}));
-vi.mock('@/components/sessions/transcript/details/SessionMessageDetailsView', () => ({
-    SessionMessageDetailsView: () => React.createElement('SessionMessageDetailsView'),
-}));
-vi.mock('@/components/sessions/runs/details/SessionExecutionRunInfoCard', () => ({
-    SessionExecutionRunInfoCard: (props: any) => React.createElement('SessionExecutionRunInfoCard', props),
-}));
-
-({ default: SessionRunDetailsScreen } = await import('@/app/(app)/session/[id]/runs/[runId]'));
+async function applyRouteFixture() {
+    if (hydratedServerId) await runtime.restoreRealm({ serverUrl: `https://run-details-${encodeURIComponent(hydratedServerId)}.example.test`, serverIdentityId: hydratedServerId, accountId: 'account-a' });
+    const store = getStorage();
+    const machine = createMachineFixture({ id: 'machine-target', activeAt: Date.now() });
+    store.setState({ sessions: hydrateReady ? { 'session-1': createSessionFixture({
+        id: 'session-1', serverId: runtime.serverId, active: true, activeAt: Date.now(),
+        metadata: { machineId: machine.id, path: '/repo', host: machine.metadata!.host, homeDir: machine.metadata!.homeDir },
+    }) } : {}, machines: { [machine.id]: machine }, machineListByServerId: { [runtime.serverId]: [machine] },
+        machineListStatusByServerId: { [runtime.serverId]: 'idle' },
+    });
+    if (hydrateReady) {
+        store.getState().applyMessages('session-1', [{ id: 'tool-message-side-1', localId: null, createdAt: 1, seq: 1,
+            role: 'agent', isSidechain: false, content: [{ type: 'tool-call', id: 'side_1', name: 'SubAgentRun', description: null,
+                uuid: 'run-marker', parentUUID: null, input: { runId: 'run_1' } }],
+        }]);
+        store.getState().applyMessagesLoaded('session-1');
+    }
+}
 
 describe('Session Run Details Screen', () => {
     beforeEach(() => {
+        restorePopover = withPopoverWebGlobals();
+        runReplies = [];
         getRunSpy.mockClear();
         sendRunSpy.mockClear();
         stopRunSpy.mockClear();
@@ -271,18 +131,25 @@ describe('Session Run Details Screen', () => {
         routerReplaceSpy.mockReset();
         navigateWithBlurOnWebSpy.mockClear();
         navigationCanGoBackSpy.mockReturnValue(true);
-        localSearchParamsMock = { id: 'session-1', runId: 'run_1' };
+        route.params = { id: 'session-1', runId: 'run_1' };
         hydrateReady = true;
         hydratedServerId = undefined;
     });
 
-    afterEach(() => {
-        standardCleanup();
+    afterEach(async () => {
+        await standardCleanup();
+        hydrateReady = true;
+        for (const release of pendingHydrationReads) release();
+        restorePopover?.();
     });
 
     async function renderRunDetailsScreen() {
-        const screen = await renderScreen(React.createElement(SessionRunDetailsScreen));
+        await applyRouteFixture();
+        const screen = await renderScreen(React.createElement(SessionRunDetailsScreen), { wrapper: runtime.Wrapper });
         await flushHookEffects();
+        if (hydrateReady && typeof route.params.id === 'string' && typeof route.params.runId === 'string') {
+            await vi.waitFor(() => expect(screen.findAllByType(SessionExecutionRunInfoCard)).toHaveLength(1));
+        }
         return screen;
     }
 
@@ -294,7 +161,8 @@ describe('Session Run Details Screen', () => {
                 <SessionRunDetailsScreen />
             </SessionCockpitChromeRegistryProvider>
         );
-        const screen = await renderScreen(render(94));
+        await applyRouteFixture();
+        const screen = await renderScreen(render(94), { wrapper: runtime.Wrapper });
         for (const height of [94, 121, 0]) {
             await screen.update(render(height));
             const frame = screen.findAllByType('View')[0];
@@ -321,12 +189,8 @@ describe('Session Run Details Screen', () => {
         expect(headerRightScreen.findByTestId('session-run-details-refresh')).toBeTruthy();
 
         const constrainedContainer = screen.findAllByType('View').find((node: any) => {
-            const raw = node.props.style;
-            const styles = Array.isArray(raw) ? raw : [raw];
-            return styles.some((entry: any) => {
-                if (!entry || typeof entry !== 'object') return false;
-                return entry.maxWidth === 999 && entry.width === '100%' && entry.alignSelf === 'center';
-            });
+            const style = flattenTestStyle(node.props.style);
+            return style.maxWidth === layout.maxWidth && style.width === '100%' && style.alignSelf === 'center';
         });
 
         expect(constrainedContainer).toBeTruthy();
@@ -343,29 +207,30 @@ describe('Session Run Details Screen', () => {
         await headerLeftScreen.pressByTestIdAsync('session-run-details-back');
 
         expect(routerBackSpy).not.toHaveBeenCalled();
-        expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1');
+        expect(routerReplaceSpy).toHaveBeenCalledWith(`/session/session-1?serverId=${runtime.serverId}`);
     });
 
     it('keeps the hydrated Home qualified for Run loading and no-history navigation', async () => {
-        hydratedServerId = 'server-hydrated';
+        hydratedServerId = "srv_run_details_hydrated";
         navigationCanGoBackSpy.mockReturnValue(false);
         await renderRunDetailsScreen();
 
         expect(getRunSpy).toHaveBeenCalledWith(
             'session-1',
             expect.objectContaining({ runId: 'run_1' }),
-            { serverId: 'server-hydrated' },
+            { serverId: "srv_run_details_hydrated" },
         );
 
         const stackOptions = stackScreenSpy.mock.calls.at(-1)?.[0]?.options;
         const headerLeftScreen = await renderScreen(React.createElement(stackOptions.headerLeft));
         await headerLeftScreen.pressByTestIdAsync('session-run-details-back');
 
-        expect(routerReplaceSpy).toHaveBeenCalledWith('/session/session-1?serverId=server-hydrated');
+        const { buildScopedSessionRouteHref } = await import('@/hooks/session/sessionRouteServerScope');
+        expect(routerReplaceSpy).toHaveBeenCalledWith(buildScopedSessionRouteHref({ sessionId: "session-1", serverId: hydratedServerId }));
     });
 
     it('renders invalid-link fallback when the run id param is missing', async () => {
-        localSearchParamsMock = { id: 'session-1' };
+        route.params = { id: 'session-1' };
         const screen = await renderRunDetailsScreen();
         expect(screen.findAllByType(ActivitySpinner)).toHaveLength(0);
         expect(screen.findByTestId('session-invalid-link')).toBeTruthy();
@@ -380,7 +245,7 @@ describe('Session Run Details Screen', () => {
 
     it('keeps the loading state visible while route hydration is pending even if params are not ready yet', async () => {
         hydrateReady = false;
-        localSearchParamsMock = {};
+        route.params = {};
         const screen = await renderRunDetailsScreen();
         expect(screen.findAllByType(ActivitySpinner)).toHaveLength(1);
         expect(screen.findAllByTestId('session-invalid-link')).toHaveLength(0);
@@ -388,24 +253,24 @@ describe('Session Run Details Screen', () => {
 
     it('loads run details via session execution run get', async () => {
         const screen = await renderRunDetailsScreen();
-        expect(getRunSpy).toHaveBeenCalledWith('session-1', expect.objectContaining({ runId: 'run_1' }));
-        expect(screen.findByType('SessionExecutionRunInfoCard' as any).props.run?.runId).toBe('run_1');
+        expect(getRunSpy).toHaveBeenCalledWith('session-1', expect.objectContaining({ runId: 'run_1' }), { serverId: runtime.serverId });
+        expect(screen.findByType(SessionExecutionRunInfoCard).props.run?.runId).toBe('run_1');
     });
 
     it('retries run details load once when session encryption is not yet available', async () => {
         getRunSpy.mockClear();
-        getRunSpy.mockResolvedValueOnce({
+        runReplies.push({
             ok: false,
             error: 'Session encryption not found for session-1',
             errorCode: 'session_encryption_not_found',
         });
-        getRunSpy.mockResolvedValueOnce({
+        runReplies.push({
             run: {
                 runId: 'run_1',
                 callId: 'call_1',
                 sidechainId: 'side_1',
                 intent: 'review',
-                backendId: 'claude',
+                backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
                 permissionMode: 'read_only',
                 retentionPolicy: 'ephemeral',
                 runClass: 'bounded',
@@ -418,7 +283,7 @@ describe('Session Run Details Screen', () => {
 
         const screen = await renderRunDetailsScreen();
         expect(getRunSpy).toHaveBeenCalledTimes(2);
-        expect(screen.findByType('SessionExecutionRunInfoCard' as any).props.run?.runId).toBe('run_1');
+        expect(screen.findByType(SessionExecutionRunInfoCard).props.run?.runId).toBe('run_1');
     });
 
     it('renders daemon process stats when machine execution runs list includes the run', async () => {
@@ -428,20 +293,20 @@ describe('Session Run Details Screen', () => {
         expect(typeof machineIdArg).toBe('string');
         expect(machineIdArg.length).toBeGreaterThan(0);
         await vi.waitFor(() => {
-            const daemonProcessLine = screen.findByType('SessionExecutionRunInfoCard' as any).props.daemonProcessLine;
+            const daemonProcessLine = screen.findByType(SessionExecutionRunInfoCard).props.daemonProcessLine;
             expect(daemonProcessLine).toContain('pid 123');
             expect(daemonProcessLine).toContain('cpu 12.5');
         });
     });
 
     it('renders structured meta using the structured message registry when available', async () => {
-        getRunSpy.mockResolvedValueOnce({
+        runReplies.push({
             run: {
                 runId: 'run_1',
                 callId: 'call_1',
                 sidechainId: 'side_1',
                 intent: 'delegate',
-                backendId: 'claude',
+                backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
                 status: 'succeeded',
                 startedAtMs: 1,
                 finishedAtMs: 2,
@@ -473,13 +338,13 @@ describe('Session Run Details Screen', () => {
     });
 
     it('stops a running bounded run without ever offering it a direct send box', async () => {
-        getRunSpy.mockResolvedValueOnce({
+        runReplies.push({
             run: {
                 runId: 'run_1',
                 callId: 'call_1',
                 sidechainId: 'side_1',
                 intent: 'review',
-                backendId: 'claude',
+                backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
                 permissionMode: 'read_write',
                 retentionPolicy: 'resumable',
                 runClass: 'bounded',
@@ -495,20 +360,22 @@ describe('Session Run Details Screen', () => {
         expect(screen.findAllByTestId('session-run-details-send-input')).toHaveLength(0);
         expect(screen.findAllByTestId('session-run-details-send')).toHaveLength(0);
 
+        await screen.pressByTestIdAsync('session-run-details-actions-menu');
+        await act(async () => { reportPopoverContentLayout(screen, { width: 340, height: 300 }); });
         expect(screen.findByTestId('session-run-details-stop')).toBeTruthy();
         await screen.pressByTestIdAsync('session-run-details-stop');
-        expect(stopRunSpy).toHaveBeenCalledWith('session-1', expect.objectContaining({ runId: 'run_1' }));
+        await vi.waitFor(() => expect(stopRunSpy).toHaveBeenCalledWith('session-1', expect.objectContaining({ runId: 'run_1' }), expect.objectContaining({ serverId: runtime.serverId })));
         expect(sendRunSpy).not.toHaveBeenCalled();
     });
 
     it('hides the send composer for running voice-agent runs', async () => {
-        getRunSpy.mockResolvedValueOnce({
+        runReplies.push({
             run: {
                 runId: 'run_1',
                 callId: 'call_1',
                 sidechainId: 'side_1',
                 intent: 'voice_agent',
-                backendId: 'codex',
+                backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
                 permissionMode: 'read_write',
                 retentionPolicy: 'resumable',
                 runClass: 'long_lived',

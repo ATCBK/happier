@@ -5,6 +5,7 @@ import { createTeamInTx, type CreateTeamError } from "@/app/teams/lifecycle";
 import { db, isPrismaErrorCode } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
 import { isPersonalHomeRuntimePurpose } from "@/app/runtime/personalHomeRuntimePurpose";
+import { isAuthEmailDeliveryReady } from "@/app/auth/email/resolveAuthEmailDelivery";
 
 import {
     isHomeGovernancePolicyCreateConflictError,
@@ -89,7 +90,7 @@ function mapTeamCreationFailure(error: CreateTeamError): PersonalHomeTeamsBootst
 
 async function bootstrapPersonalHomeTeamsInTx(
     tx: Tx,
-    input: PersonalHomeTeamsBootstrapInput,
+    input: PersonalHomeTeamsBootstrapInput & Readonly<{ emailDeliveryReady: boolean }>,
 ): Promise<Extract<PersonalHomeTeamsBootstrapResult, { status: "ready" }>> {
     // Resolve the durable product identity before actor-specific initial-claim
     // checks. Startup may legitimately run as an invited member or a new Home
@@ -127,6 +128,7 @@ async function bootstrapPersonalHomeTeamsInTx(
         const applied = await setHomeGovernancePolicyInTx(tx, {
             actorAccountId: initialOwnerAccountId,
             env: input.env,
+            emailDeliveryReady: input.emailDeliveryReady,
             patch: {
                 expectedRevision: currentPolicy.revision,
                 teamCreationPolicy: "managed_only",
@@ -172,6 +174,7 @@ export async function bootstrapPersonalHomeTeams(
 ): Promise<PersonalHomeTeamsBootstrapResult> {
     if (!isPersonalHomeRuntimePurpose(input.runtimePurpose)) return { status: "not_personal_home" };
     if (!await isServerFeatureEnabledForHome("teams", { env: input.env })) return { status: "teams_unavailable" };
+    const emailDeliveryReady = await isAuthEmailDeliveryReady({ env: input.env });
 
     // The absent singleton policy and reserved Team identity can each move only
     // once from absent to present. A competing committed creator therefore gives
@@ -181,7 +184,7 @@ export async function bootstrapPersonalHomeTeams(
     while (true) {
         try {
             return await inTx(
-                async (tx) => await bootstrapPersonalHomeTeamsInTx(tx, input),
+                async (tx) => await bootstrapPersonalHomeTeamsInTx(tx, { ...input, emailDeliveryReady }),
                 { isolationLevel: "Serializable" },
             );
         } catch (error) {

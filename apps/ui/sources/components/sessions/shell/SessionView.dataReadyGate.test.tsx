@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import type { ComposerAttachmentDraftV1 } from '@happier-dev/protocol';
 import { PluginProjectedActionV2Schema } from '@happier-dev/protocol';
+import { DEFAULT_SESSION_CAPABILITIES } from '@happier-dev/protocol/features/payload/capabilities/sessionCapabilities';
 
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { pressTestInstanceAsync, renderScreen as renderCanonicalScreen } from '@/dev/testkit/render/renderScreen';
@@ -45,7 +46,7 @@ const currentSessionPresentationPropsSpy = vi.hoisted(() => vi.fn());
 const pluginSurfaceHostPropsSpy = vi.hoisted(() => vi.fn());
 const agentInputPropsSpy = vi.hoisted(() => vi.fn());
 const machinePluginStructuredMessageActionExecuteMock = vi.hoisted(() => vi.fn());
-const outboundMessageAck = vi.hoisted(() => vi.fn<(payload: unknown) => Promise<unknown>>());
+const outboundPendingAck = vi.hoisted(() => vi.fn<(payload: unknown) => Promise<unknown>>());
 const composerScopePluginPresentationSpy = vi.hoisted(() => vi.fn());
 const composerScopePluginPresentationState = vi.hoisted(() => ({ value: null as ComposerScopePluginPresentation | null }));
 
@@ -351,9 +352,6 @@ vi.mock('@/utils/platform/responsive', () => ({
     useIsLandscape: () => false,
     useIsTablet: () => true,
 }));
-vi.mock('@/components/sessions/model/inactiveSessionUi', () => ({
-    getInactiveSessionUiState: () => ({ noticeKind: 'none', inactiveStatusTextKey: null, shouldShowInput: true }),
-}));
 vi.mock('@/components/sessions/model/resolveSessionMachineReachability', () => ({
     resolveSessionMachineReachability: () => true,
 }));
@@ -391,27 +389,28 @@ vi.mock('@/sync/domains/session/activeViewingSession', () => ({
 vi.doUnmock('@/sync/domains/state/storage');
 vi.doUnmock('@/hooks/session/useDraft');
 vi.doUnmock('@/agents/registry/registryUiBehavior');
-const { resetSessionDraftValueCachesForTests, writeSessionDraftValue } = await import('@/dev/testkit/sessionDraftRepositoryTestkit');
-const { applyComposerPresentationTransaction, createComposerPresentationHostHandlers, readComposerPresentationSnapshot } = await import('@/components/sessions/presentation/sessionComposerPresentationTargets');
 installDisconnectedServerSocketBoundary(socket => {
     vi.mocked(socket.connect).mockImplementation(() => {
         socket.connected = true;
         for (const listener of socket.listeners('connect')) listener();
         return socket;
     });
-    vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event: string, payload: unknown) => {
-        if (event === 'message') return outboundMessageAck(payload);
+    vi.spyOn(socket, 'emitWithAck').mockImplementation(async () => {
         return { v: 1, ok: true, admittedSessionIds: [] };
     });
 });
+const { resetSessionDraftValueCachesForTests, writeSessionDraftValue } = await import('@/dev/testkit/sessionDraftRepositoryTestkit');
+const { applyComposerPresentationTransaction, createComposerPresentationHostHandlers, readComposerPresentationSnapshot } = await import('@/components/sessions/presentation/sessionComposerPresentationTargets');
 const { storage: canonicalStorage } = await import('@/sync/domains/state/storage');
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 let account: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
 let previousStorage: ReturnType<typeof canonicalStorage.getState>;
 let foregroundDraftRead: ReturnType<typeof createDeferred<void>> | null = null;
 let foregroundDraftReadStarted = false;
+let accountDraftListRead: ReturnType<typeof createDeferred<void>>;
 
 async function renderScreen(...args: Parameters<typeof renderCanonicalScreen>) {
+    if (isSessionDraftsReadyState) accountDraftListRead.resolve();
     // Route acceptance and every narrow reader observe the SAME canonical store.
     if (sessionState) {
         canonicalStorage.getState().applySessions([createSessionFixture({
@@ -423,37 +422,53 @@ async function renderScreen(...args: Parameters<typeof renderCanonicalScreen>) {
     }
     canonicalStorage.setState({ isDataReady: isDataReadyState, isSessionDraftsReady: isSessionDraftsReadyState });
     canonicalStorage.getState().applySettingsLocal({ sessionMessageSendMode: 'agent_queue' });
-    canonicalStorage.getState().setSyncError(syncErrorState);
     canonicalStorage.getState().setEndpointConnectivity({
         status: endpointConnectivityStatus, reason: null, attempt: 0, nextRetryAt: null,
         lastConnectedAt: null, lastDisconnectedAt: null, lastErrorMessage: null,
     });
-    return renderCanonicalScreen(<InjectedAuthProvider credentials={account.credentials}>{args[0]}</InjectedAuthProvider>, args[1]);
+    const screen = await renderCanonicalScreen(<InjectedAuthProvider credentials={account.credentials}>{args[0]}</InjectedAuthProvider>, args[1]);
+    // This fixture represents a new failure after mount, rather than one that
+    // the successful Account bootstrap is legitimately about to supersede.
+    if (syncErrorState) await act(async () => { canonicalStorage.getState().setSyncError(syncErrorState); });
+    return screen;
 }
 
 beforeEach(async () => {
     foregroundDraftRead = null;
     foregroundDraftReadStarted = false;
+    accountDraftListRead = createDeferred<void>();
     previousStorage = canonicalStorage.getState();
     await loadSyncSingletonForTests();
-    account = await restoreServerAccountForTest({ serverUrl: 'https://server-a', accountId: 'account-1', request: async url => {
+    account = await restoreServerAccountForTest({ serverUrl: 'https://server-a', accountId: 'account-1', request: async (url, init) => {
         const path = new URL(String(url)).pathname;
         if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
         if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
-        if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse({ features: { sessions: { drafts: { enabled: true } } } }));
+        if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse({
+            features: { sessions: { drafts: { enabled: true } } },
+            capabilities: { session: { ...DEFAULT_SESSION_CAPABILITIES, pendingInput: { protocolVersion: 4 } } },
+        }));
         if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
-        if (path === '/v2/account/session-drafts/list') return Response.json({ items: [] });
+        if (path === '/v2/account/session-drafts/list') {
+            await accountDraftListRead.promise;
+            return Response.json({ items: [] });
+        }
         if (path === '/v2/account/session-drafts/read') {
             foregroundDraftReadStarted = true;
             await foregroundDraftRead?.promise;
             return Response.json({ status: 'absent' });
         }
-        if (path === '/v2/sessions/s1/pending') return Response.json({ pending: [] });
+        if (path === '/v2/sessions/s1/pending') {
+            if (init?.method === 'POST') return Response.json(await outboundPendingAck(JSON.parse(String(init.body))));
+            return Response.json({ pending: [] });
+        }
         if (path === '/v1/sessions/s1/messages') return Response.json({ messages: [], hasMore: false, nextBeforeSeq: null });
         return new Response('{}', { status: 404 });
     } });
+    // Establish the initial Settings response before tests make local edits.
+    await vi.waitFor(() => expect(canonicalStorage.getState().settingsVersion).toBe(1));
 });
 afterEach(async () => {
+    accountDraftListRead.resolve();
     await standardCleanup();
     const { scmStatusSync } = await import('@/scm/scmStatusSync');
     scmStatusSync.stop('s1', account.home.id);
@@ -492,6 +507,79 @@ describe('SessionView (data ready gating)', () => {
         await prepareSessionDraftPersistenceStorage();
     });
 
+    it('keeps unrelated New Session settings local and refreshes resume eligibility for owner metadata and Account policy', async () => {
+        const agents = await import('@happier-dev/agents');
+        // Observe the real policy: repeating this work was the sampled render-path parse.
+        const eligibility = vi.spyOn(agents, 'evaluateVendorResumeEligibility');
+        const { resolveBackendTargetKeyV2 } = await import('@/agents/backendCatalog/backendTargetKeyV2');
+        const { SessionView } = await sessionViewModulePromise;
+        isDataReadyState = true;
+        sessionState = createSessionFixture({
+            id: 's1', serverId: account.home.id, active: false,
+            metadata: { machineId: 'm1', path: '/tmp', host: 'localhost', homeDir: '/tmp', flavor: 'claude', claudeSessionId: 'resume-1' },
+        });
+        try {
+            const screen = await renderScreen(<AppPaneProvider><SessionView id="s1" routeServerId={account.home.id} /></AppPaneProvider>);
+            expect(screen.findAllHostsByTestId('session-composer-input')).toHaveLength(1);
+            expect(canonicalStorage.getState().sessions.s1.active).toBe(false);
+            const ownerMetadata = canonicalStorage.getState().sessions.s1.metadata;
+            const ownerReads = () => eligibility.mock.calls.filter(([input]) => input.metadata === ownerMetadata).length;
+            const initialReads = ownerReads();
+            expect(initialReads).toBeGreaterThan(0);
+
+            await waitForCurrentComposerAccount();
+            const initialComposerRenders = agentInputPropsSpy.mock.calls.length;
+            await act(async () => {
+                canonicalStorage.getState().applySettingsLocal({
+                    lastNewSessionAgentPickerViewV1: { kind: 'favoriteModels' },
+                });
+            });
+            expect(agentInputPropsSpy.mock.calls.length).toBe(initialComposerRenders);
+            await act(async () => {
+                canonicalStorage.getState().applySettingsLocal({
+                    lastUsedBackendTarget: { kind: 'backend', backendId: 'codex' },
+                });
+            });
+            expect(agentInputPropsSpy.mock.calls.length).toBe(initialComposerRenders);
+
+            await screen.update(<InjectedAuthProvider credentials={account.credentials}><AppPaneProvider>
+                <SessionView id="s1" routeServerId={account.home.id} chatBottomSpacing="none" />
+            </AppPaneProvider></InjectedAuthProvider>);
+            expect(screen.findByType(SessionView).props.chatBottomSpacing).toBe('none');
+            expect(ownerReads()).toBe(initialReads);
+
+            const targetKey = resolveBackendTargetKeyV2({ kind: 'backend', backendId: 'claude' });
+            await act(async () => {
+                canonicalStorage.getState().applySettingsLocal({ backendEnabledByTargetKey: { [targetKey]: false } });
+            });
+            expect(ownerReads()).toBeGreaterThan(initialReads);
+            expect(canonicalStorage.getState().settings.backendEnabledByTargetKey).toEqual({ [targetKey]: false });
+            const lastOwnerRead = eligibility.mock.calls.reduce((last, [input], index) => input.metadata === ownerMetadata ? index : last, -1);
+            expect(eligibility.mock.results[lastOwnerRead].value).toMatchObject({ eligible: false });
+            expect(screen.findAllHostsByTestId('session-composer-input')).toHaveLength(0);
+
+            await act(async () => {
+                canonicalStorage.getState().applySettingsLocal({ backendEnabledByTargetKey: {} });
+            });
+            expect(screen.findAllHostsByTestId('session-composer-input')).toHaveLength(1);
+
+            await act(async () => {
+                const current = canonicalStorage.getState().sessions.s1;
+                canonicalStorage.getState().applySessions([{
+                    ...current,
+                    metadata: { ...current.metadata!, claudeSessionId: 'resume-2' },
+                    metadataVersion: current.metadataVersion + 1,
+                }]);
+            });
+            const changedMetadata = canonicalStorage.getState().sessions.s1.metadata;
+            expect(changedMetadata?.claudeSessionId).toBe('resume-2');
+            expect(eligibility.mock.calls.some(([input]) => input.metadata === changedMetadata)).toBe(true);
+            expect(screen.findAllHostsByTestId('session-composer-input')).toHaveLength(1);
+        } finally {
+            eligibility.mockRestore();
+        }
+    });
+
     it('updates the mounted header when history supplies the first prompt title without a metadata change', async () => {
         isDataReadyState = true;
         sessionState = createSessionFixture({ id: 's1', serverId: account.home.id,
@@ -501,10 +589,10 @@ describe('SessionView (data ready gating)', () => {
         const screen = await renderScreen(<AppPaneProvider><SessionView id="s1" routeServerId={account.home.id} /></AppPaneProvider>);
         expect(screen.findByTestId('session-header-title')?.props.children).toBe('tmp');
         const sessionBeforeHistory = canonicalStorage.getState().sessions.s1;
-        await act(async () => canonicalStorage.getState().applyMessages('s1', [{
+        await act(async () => { canonicalStorage.getState().applyMessages('s1', [{
             id: 'first-prompt', role: 'user', localId: null, createdAt: 1, isSidechain: false,
             content: { type: 'text', text: 'Plan the release' },
-        }]));
+        }]); });
         expect(canonicalStorage.getState().sessions.s1).toBe(sessionBeforeHistory);
         expect(screen.findByTestId('session-header-title')?.props.children).toBe('Plan the release');
     });
@@ -587,7 +675,7 @@ describe('SessionView (data ready gating)', () => {
         pluginSurfaceHostPropsSpy.mockReset();
         agentInputPropsSpy.mockReset();
         machinePluginStructuredMessageActionExecuteMock.mockReset();
-        outboundMessageAck.mockReset();
+        outboundPendingAck.mockReset();
         composerScopePluginPresentationSpy.mockReset();
         composerScopePluginPresentationState.value = null;
     });
@@ -1119,9 +1207,13 @@ describe('SessionView (data ready gating)', () => {
             outboundDispatchCount += 1;
             const message = payload as { localId: string };
             if (outboundDispatchCount === 2) await secondSend.promise;
-            return { ok: true, id: `message-${outboundDispatchCount}`, seq: outboundDispatchCount + 1, localId: message.localId, didWrite: true };
+            return {
+                pending: { localId: message.localId },
+                requestedAction: { v: 1, kind: 'enqueue' },
+                didWrite: true,
+            };
         };
-        outboundMessageAck.mockImplementation(dispatchOutboundMessage);
+        outboundPendingAck.mockImplementation(dispatchOutboundMessage);
 
         const { SessionView } = await sessionViewModulePromise;
         await renderScreen(
@@ -1145,10 +1237,22 @@ describe('SessionView (data ready gating)', () => {
             ) => Promise<PluginContributedActionOpenOutcome> | PluginContributedActionOpenOutcome;
             onChangeText?: (text: string) => void;
             onSend?: () => void;
+            isSending?: boolean;
         }>;
         if (!agentInputProps.onContributedActionSuggestionSelect || !agentInputProps.onChangeText || !agentInputProps.onSend) {
             throw new Error('expected Session composer dispatch callbacks');
         }
+
+        const editAndSend = async (text: string) => {
+            // A real text event commits before the later Send press. Read the
+            // mounted callback after that commit rather than sending through
+            // the callback captured with the previous empty composer.
+            await act(async () => { agentInputProps.onChangeText?.(text); });
+            await act(async () => {
+                const current = agentInputPropsSpy.mock.lastCall?.[0] as typeof agentInputProps;
+                current.onSend?.();
+            });
+        };
 
         let openingWhileSendIsReserved: Promise<PluginContributedActionOpenOutcome> | null = null;
         try {
@@ -1157,32 +1261,23 @@ describe('SessionView (data ready gating)', () => {
                 expect(machinePluginStructuredMessageActionExecuteMock).toHaveBeenCalledOnce();
             });
 
-            await act(async () => {
-                agentInputProps.onChangeText?.('send while Action dispatch is pending');
-                agentInputProps.onSend?.();
-                await Promise.resolve();
-            });
+            await editAndSend('send while Action dispatch is pending');
             expect(outboundDispatchCount).toBe(0);
 
             firstActionDispatch.resolve(successfulActionDispatch);
             await expect(actionOpening).resolves.toMatchObject({ kind: 'direct', outcome: { ok: true } });
 
-            await act(async () => {
-                agentInputProps.onChangeText?.('retry after Action dispatch settles');
-                agentInputProps.onSend?.();
-            });
+            await editAndSend('retry after Action dispatch settles');
             await vi.waitFor(() => {
                 expect(Modal.alert).not.toHaveBeenCalled();
                 expect(outboundDispatchCount).toBe(1);
             });
 
-            await act(async () => {
-                agentInputProps.onChangeText?.('send before Action dispatch');
-                agentInputProps.onSend?.();
-            });
+            await editAndSend('send before Action dispatch');
             await vi.waitFor(() => {
                 expect(outboundDispatchCount).toBe(2);
             });
+            expect((agentInputPropsSpy.mock.lastCall?.[0] as typeof agentInputProps).isSending).toBe(true);
 
             openingWhileSendIsReserved = Promise.resolve(
                 agentInputProps.onContributedActionSuggestionSelect(action),
@@ -1194,10 +1289,8 @@ describe('SessionView (data ready gating)', () => {
             expect(machinePluginStructuredMessageActionExecuteMock).toHaveBeenCalledOnce();
 
             secondSend.resolve();
-            await act(async () => {
-                await Promise.resolve();
-                await Promise.resolve();
-                await Promise.resolve();
+            await vi.waitFor(() => {
+                expect((agentInputPropsSpy.mock.lastCall?.[0] as typeof agentInputProps).isSending).toBe(false);
             });
 
             const actionRetry = Promise.resolve(agentInputProps.onContributedActionSuggestionSelect(action));

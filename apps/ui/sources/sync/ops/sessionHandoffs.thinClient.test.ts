@@ -3,6 +3,7 @@ import { computeWorkspaceSyncPolicyDigest } from '@happier-dev/protocol';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { upsertServerProfile, setServerProfileIdentityForUrl } from '@/sync/domains/server/serverProfiles';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { preflightWorkspaceDestinationReplacement } from './sessionHandoffs';
 
 const machineRpc = vi.hoisted(() => vi.fn());
 
@@ -11,6 +12,33 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 }));
 
 describe('session handoff UI request client', () => {
+    it.each(['returned', 'thrown'] as const)('preserves the target preflight refusal and repair reason (%s)', async mode => {
+        const refusal = { errorCode: 'workspace_root_unsafe', error: 'Workspace target parent cannot be inspected' };
+        if (mode === 'returned') machineRpc.mockResolvedValueOnce(refusal);
+        else machineRpc.mockRejectedValueOnce(Object.assign(new Error(refusal.error), { rpcErrorCode: refusal.errorCode }));
+        await expect(preflightWorkspaceDestinationReplacement({ serverId: 'srv_fx14_owned', targetMachineId: 'target-1',
+            targetPath: '/worker/copies/project', operationId: 'create-worker', workspaceAction: { kind: 'none' },
+            destinationIntent: 'materialize_from_source_workspace' })).resolves.toEqual({
+            type: 'error', result: { ok: false, ...refusal },
+        });
+    });
+
+    it.each(['cancelled', 'unsupported', 'malformed'] as const)('distinguishes preflight %s from an unreachable target', async failure => {
+        const abort = new AbortController();
+        if (failure === 'cancelled') {
+            abort.abort();
+            machineRpc.mockRejectedValueOnce(new Error('Request cancelled'));
+        } else if (failure === 'unsupported') {
+            machineRpc.mockRejectedValueOnce(Object.assign(new Error('Method not found'), { rpcErrorCode: 'RPC_METHOD_NOT_FOUND' }));
+        } else machineRpc.mockResolvedValueOnce({ type: 'not_required', unexpected: true });
+        await expect(preflightWorkspaceDestinationReplacement({ serverId: 'srv_fx14_owned', targetMachineId: 'target-1',
+            targetPath: '/worker/project', operationId: 'create-worker', workspaceAction: { kind: 'none' },
+            destinationIntent: 'materialize_from_source_workspace', signal: abort.signal })).resolves.toMatchObject({
+            type: 'error', result: { ok: false, errorCode: failure === 'unsupported' ? 'workspace_sync_update_required'
+                : failure === 'malformed' ? 'invalid_response' : 'cancelled' },
+        });
+    });
+
     it('keeps the no-copy policy on the source coordinator request', async () => {
         machineRpc.mockResolvedValue({ ok: false, errorCode: 'existing_session_state_unavailable', error: 'Missing native history' });
         const { startSessionHandoff } = await import('./sessionHandoffs');
@@ -221,7 +249,7 @@ describe('session handoff UI request client', () => {
             serverId: 'srv_fx14_owned',
         })).resolves.toMatchObject({
             ok: false,
-            errorCode: 'UNEXPECTED',
+            errorCode: 'RPC_METHOD_NOT_AVAILABLE',
         });
     });
 

@@ -49,6 +49,7 @@ const EXPECTED_PRIVATE_ICON_NAMES: Readonly<Record<string, IconName>> = Object.f
     waiting: 'clock',
     list: 'list',
     board: 'kanban',
+    filter: 'funnel-simple',
 });
 
 describe('resolvePluginUiIconToken', () => {

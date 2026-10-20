@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
 
 import { encodeBase64, encryptLegacy } from '@/api/encryption';
 import { createSessionListResponseFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { evaluateFollowRulePreviewV1, type FollowRulePreviewCandidateV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRulePreviewV1';
+import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import {
   SessionAwarenessListResultV1Schema,
   encodeV2SessionListCursorV1,
@@ -65,6 +68,59 @@ describe('listSessions', () => {
     fetchSessionsPage.mockReset();
     fetchSessionsQueryPage.mockReset();
     getSessionTranscript.mockReset();
+  });
+
+  it('projects authorized preview candidates from real opened owner metadata and preserves locked facts as unavailable', async () => {
+    fetchSessionsPage.mockResolvedValue({ sessions: [
+      createSessionRecordFixture({ id: 'matching', ownerAccountId: 'owner', origin: { kind: 'none' }, metadata: encryptedMetadata({ workspaceId: 'accepted' }) }),
+      createSessionRecordFixture({ id: 'locked', origin: { kind: 'none' }, metadata: 'unreadable-ciphertext' }),
+      createSessionRecordFixture({ id: 'recipient', origin: { kind: 'none' }, share: { accessLevel: 'view', canApprovePermissions: false },
+        metadata: encryptedMetadata({ projectId: 'payments' }) }),
+    ], nextCursor: null, hasNext: false });
+    const candidates: FollowRulePreviewCandidateV1[] = [];
+    const { listSessions } = await import('./listSessions');
+    await listSessions({ credentials, accountSettings: null, includeSystem: true, resumableOnly: false,
+      workspaceRefs: [{ id: 'accepted', serverId: 'home', projectKey: 'payments', machineId: 'machine', rootPath: '/repo', createdAtMs: 1 }],
+      filterCandidates: { serverId: 'home', viewerAccountId: 'owner', collect: candidate => candidates.push(candidate) },
+    });
+    expect(candidates).toHaveLength(3);
+    const preview = evaluateFollowRulePreviewV1({ candidates, coverage: 'complete', filter: normalizeSessionListFilterV1({
+      homeServerIds: ['home'], show: 'sessions', scope: 'all_accessible',
+      projects: { include: [{ serverId: 'home', projectKey: 'payments' }], exclude: [] },
+    }) });
+    expect(preview).toMatchObject({ coverage: 'partial', matchCount: 1, matches: [{ serverId: 'home', source: { kind: 'session', sessionId: 'matching' } }] });
+    expect(preview.unavailable).toEqual(expect.arrayContaining([{ serverId: 'home', source: { kind: 'session', sessionId: 'locked' } },
+      { serverId: 'home', source: { kind: 'session', sessionId: 'recipient' } }]));
+  });
+
+  it.each([200, 403])('loads demanded current tag assignments once for the preview corpus, preserving denied evidence (%s)', async status => {
+    fetchSessionsPage.mockResolvedValue({ sessions: ['one', 'two'].map(id => createSessionRecordFixture({ id,
+      ownerAccountId: 'owner', origin: { kind: 'none' }, metadata: encryptedMetadata({}) })), nextCursor: null, hasNext: false });
+    const candidates: FollowRulePreviewCandidateV1[] = [];
+    const filter = normalizeSessionListFilterV1({ homeServerIds: ['home'], startedBy: ['you', 'agents', 'triggers'],
+      tagIds: [{ serverId: 'home', tagId: 'current-tag' }] });
+    // Only HTTP is substituted; scoped request construction, assignment decoding
+    // and canonical preview matching remain real.
+    const get = vi.spyOn(axios, 'get').mockImplementation(async (_url, config) => {
+      expect(config?.headers?.Authorization).toBeUndefined();
+      expect(config?.headers?.['signed-assignment']).toBe('requester');
+      return { status, data: status === 200 ? { snapshot: { schemaVersion: 1, version: 2,
+        pins: [], folders: [], folderAssignments: [], tags: [], labels: [], orderEntries: [],
+        tagAssignments: [{ sessionId: 'one', tagIds: ['current-tag'] }] } } : { error: 'forbidden' } } as never;
+    });
+    try {
+      const { listSessions } = await import('./listSessions');
+      const projection = { serverId: 'home', viewerAccountId: 'owner', filters: [filter],
+        collect: (candidate: FollowRulePreviewCandidateV1) => candidates.push(candidate) };
+      await listSessions({ credentials, accountSettings: null, includeSystem: true, resumableOnly: false,
+        filterCandidates: projection, resolveAuthorizationHeaders: () => ({ 'signed-assignment': 'requester' }) });
+      const preview = evaluateFollowRulePreviewV1({ filter, candidates, coverage: 'complete' });
+      expect(preview).toMatchObject(status === 200 ? { coverage: 'complete', matchCount: 1,
+        matches: [{ serverId: 'home', source: { kind: 'session', sessionId: 'one' } }] }
+        : { coverage: 'partial', matchCount: 0 });
+      expect(get).toHaveBeenCalledTimes(1);
+      expect(new URL(String(get.mock.calls[0]?.[0])).searchParams.get('assignmentSessionIds')).toBe('one,two');
+    } finally { get.mockRestore(); }
   });
 
   it.each(['summary', 'awareness'] as const)('narrows Project %s from real opened owner metadata, not recipient or path guesses', async view => {
@@ -281,6 +337,7 @@ describe('listSessions', () => {
     await expect(list({ ...baseQuery, scope: 'my_work' })).rejects.toBeInstanceOf(SessionListAdmittedQueryUnsupportedError);
     await expect(list({ ...baseQuery, attention: 'needs_my_attention' })).rejects.toMatchObject({ arms: ['attention'] });
     await expect(list({ ...baseQuery, tagIds: ['tag'] })).rejects.toMatchObject({ arms: ['tagIds'] });
+    await expect(list({ ...baseQuery, coordinator: 'coordinator' })).rejects.toMatchObject({ arms: ['coordinator'] });
 
     // `includeInactive:false` keeps an inactive row only when it needs attention,
     // which is the same server-owned meaning.
@@ -352,8 +409,8 @@ describe('listSessions', () => {
       attentionHasNext: true,
     });
 
-    const { createSessionListActionDependency } = await import('../actions/sessionListActionDependency');
-    const list = createSessionListActionDependency({ credentials });
+    const { createSessionListActionDeps } = await import('../actions/sessionListActionDependency');
+    const { sessionList: list } = createSessionListActionDeps({ credentials });
     const result = await list({
       context: { surface: 'cli', authority: 'present_user' },
       view: 'awareness',

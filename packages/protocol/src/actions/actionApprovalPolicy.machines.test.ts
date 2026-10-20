@@ -8,6 +8,49 @@ const corridorActionIds = ACTION_IDS.filter(id => /^machines\.(managed\.|presets
   || id.startsWith('connectedServices.authentication.'));
 
 describe('Corridor C approval defaults', () => {
+  it('applies a host-proved sharing reduction directly only for a present UI user, preserving Ask and automation policy', () => {
+    const actionId = 'machines.access.grant.set';
+    const args = { actionId, spec: getActionSpec(actionId), defaultUiConfirmation: false,
+      context: { surface: 'ui', authority: 'present_user' } } as const;
+    const settings = normalizeActionsSettingsV1({ v: 1 });
+    expect(resolveActionApprovalRouting({ ...args, settings }).required).toBe(false);
+    expect(resolveActionApprovalRouting(args).required).toBe(false);
+    expect(resolveActionApprovalRouting({ ...args, defaultUiConfirmation: undefined, settings }).required).toBe(true);
+    for (const surface of ['agent', 'mcp', 'cli'] as const) {
+      const context = { surface, authority: 'account_automation' } as const;
+      expect(resolveActionApprovalRouting({ ...args, settings, context }).required).toBe(true);
+      expect(resolveActionApprovalRouting({ ...args, context, settings: normalizeActionsSettingsV1({ v: 1,
+        approvalWaivedSurfaces: { [actionId]: [surface] } }) }).required).toBe(false);
+    }
+    expect(resolveActionApprovalRouting({ ...args, settings,
+      context: { surface: 'ui', authority: 'account_automation' } }).required).toBe(true);
+    expect(resolveActionApprovalRouting({ ...args, settings: normalizeActionsSettingsV1({ v: 1,
+      actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } }) }).required).toBe(true);
+  });
+
+  it.each([
+    'machines.terminal.open',
+    'machines.processes.stop',
+    'machines.daemon.stop', 'machines.replacement.set', 'machines.replacement.clear',
+    'machines.managed.acquire', 'machines.managed.power.set', 'machines.managed.retention.update',
+    'machines.managed.controller.update', 'machines.managed.setup.skip',
+    'machines.presets.create', 'machines.presets.update', 'machines.presets.archive', 'machines.presets.restore',
+    'machines.access.grant.remove', 'machines.access.leave',
+  ] as const)('applies reversible %s directly only for the present user in the app', actionId => {
+    const spec = getActionSpec(actionId);
+    const context = { surface: 'ui', authority: 'present_user' } as const;
+    for (const settings of [undefined, normalizeActionsSettingsV1({ v: 1 })]) {
+      expect(resolveActionApprovalRouting({ actionId, spec, context, settings }).required).toBe(false);
+      expect(resolveActionApprovalRouting({ actionId, spec, settings,
+        context: { surface: 'agent', authority: 'account_automation' } }).required).toBe(true);
+      expect(resolveActionApprovalRouting({ actionId, spec, settings,
+        context: { surface: 'ui', authority: 'account_automation' } }).required).toBe(true);
+    }
+    expect(resolveActionApprovalRouting({ actionId, spec, context,
+      settings: normalizeActionsSettingsV1({ v: 1, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } }),
+    }).required).toBe(true);
+  });
+
   it('keeps present-user terminal input under admitted custody while automation and explicit Ask still require approval', () => {
     const actionId = 'machines.terminal.write';
     const settings = normalizeActionsSettingsV1({ v: 1 });
@@ -22,7 +65,7 @@ describe('Corridor C approval defaults', () => {
       settings: normalizeActionsSettingsV1({ v: 1, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } }),
       context: { surface: 'ui', authority: 'present_user' } }).required).toBe(true);
     expect(resolveActionApprovalRouting({ actionId: 'machines.terminal.open', spec: getActionSpec('machines.terminal.open'), settings,
-      context: { surface: 'ui', authority: 'present_user' } }).required).toBe(true);
+      context: { surface: 'ui', authority: 'present_user' } }).required).toBe(false);
   });
   it('honors a surface-specific waiver on every machine and provisioner Connect Action; an explicit Ask wins', () => {
     expect(corridorActionIds.length).toBeGreaterThan(0);
@@ -55,6 +98,12 @@ describe('Corridor C approval defaults', () => {
           const waived = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: [surface] } });
           expect(resolveActionApprovalRouting({ ...args, settings: waived }).required, `${anchor}:${surface}`).toBe(false);
         }
+        const args = { actionId, spec: getActionSpec(actionId), input: { anchor },
+          context: { surface: 'ui', authority: 'present_user' } as const };
+        expect(resolveActionApprovalRouting({ ...args, settings: normalizeActionsSettingsV1({ v: 1 }) }).required,
+          `${anchor}:present_user`).toBe(false);
+        expect(resolveActionApprovalRouting({ ...args, settings: normalizeActionsSettingsV1({ v: 1,
+          actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } }) }).required).toBe(true);
       }
     }
   });

@@ -29,6 +29,206 @@ import type {
 
 import { createPublicManagedProviderRuntimeStartOperation } from './publicManagedRuntimeStart';
 import { createManagedPluginSourceCustody } from '@/plugins/runtime/lifecycle/contributions/runtimeIdentity.testkit';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { withConfiguredDaemonTestHome } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
+import { createManagedRunLaunchFixture } from '@/providers/lifecycle/managedRunLaunch.testkit';
+import { createAccountConnectionManagedConsumerSourceOpen } from '@/providers/broker/accountConnectionSource';
+import { startManagedProviderConsumerApplication } from '@/providers/broker/managedProviderConsumerApplication';
+import { createProviderManagedRuntimeBindingFingerprintV1 } from '@happier-dev/protocol/providers/contributions';
+import { createManagedProviderExplicitStartCustody } from './publicManagedRuntimeStart';
+import { createProviderConnectionService } from './service';
+import { resolveProviderConnectionForMachine } from '@/providers/registry';
+import { createMachineSharedProviderGatewayResolver } from '@/daemon/machine/bootstrapMachineSyncRuntime';
+import { waitForProcessExit } from '@/testkit/process/spawn';
+import { createRuntimeProviderModelManagementServices } from '@/providers/modelManagement/runtimeServices';
+import { composeProviderSettingsV1, splitProviderSettingsV1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+import { ProviderSettingsV1Schema } from '@happier-dev/protocol/providers/settings/v1';
+import { createAccountProviderActionExecuteV1 } from '@happier-dev/protocol/providers/connections/accountProviderActionV1';
+
+it('G1 releases only the deleted connection explicit Start claim through retained custody', async () => {
+  await withConfiguredDaemonTestHome({ prefix: 'gateway-delete-retention-' }, async ({ homeDir }) => {
+    const controller = createPluginReloadController();
+    const fixture = await createManagedRunLaunchFixture({ directory: join(homeDir, 'fixture'), happyHomeDir: homeDir,
+      controller, physicalGateway: true });
+    const gateway = fixture.gateway!;
+    const connectionId = fixture.record.connectionId;
+    const otherConnectionId = 'independent-gateway';
+    let providerSettings = ProviderSettingsV1Schema.parse({ ...fixture.providerSettings,
+      connections: [...fixture.providerSettings.connections, { ...fixture.providerSettings.connections[0],
+        id: otherConnectionId, role: 'named', displayNameMode: 'custom', displayName: 'Independent Gateway' }] });
+    let catalogRevision = 1;
+    let catalogAvailable = true;
+    // The Account catalog's persistent read/write boundary is in memory; its
+    // Action semantics, service, executable registry and process custody are real.
+    const accountExecute = createAccountProviderActionExecuteV1({ assertCurrent() {},
+      readCatalog: async () => ({ status: 'ready', revision: catalogRevision, catalog: splitProviderSettingsV1(providerSettings).catalog }),
+      writeCatalog: async value => {
+        expect(value.expectedRevision).toBe(catalogRevision);
+        providerSettings = composeProviderSettingsV1(value.catalog, splitProviderSettingsV1(providerSettings).defaults);
+        catalogRevision += 1;
+        return { status: 'updated' };
+      },
+      readDefinitions: async () => [...fixture.contributes.providersByContributionKey].map(([contributionKey, contribution]) => ({
+        contributionKey, definition: contribution.definition, provenance: contribution.provenance })), now: () => 2 });
+    const unavailable = async (): Promise<never> => { throw new Error('Unexpected machine operation'); };
+    const service = createProviderConnectionService({ machineId: fixture.machineId, featureGate: { isEnabled: () => true },
+      accountProviderActionExecute: request => accountExecute(request, { surface: 'cli' }),
+      loadSnapshot: async () => {
+        if (!catalogAvailable) throw new Error('Account catalog temporarily unavailable');
+        return { accountSettings: fixture.snapshot.settings, rawAccountSettings: {}, providerSettings, registry: fixture.contributes };
+      }, updateProviderSettings: unavailable, collectDnsEvidence: unavailable, runtimeSummary: unavailable, now: () => 2,
+      resolveConnection: input => resolveProviderConnectionForMachine({ ...input, dnsEvidenceByEndpointUrl: input.dnsEvidence }),
+      resolveManagedPurposeBindingIntent: gateway.purposeBindingOwner.resolveBindingIntent,
+      startManagedProviderRuntime: createPublicManagedProviderRuntimeStartOperation({ machineId: fixture.machineId, happyHomeDir: homeDir,
+        controller, resolveSharedGateway: createMachineSharedProviderGatewayResolver({ machineId: fixture.machineId,
+          readAccountId: () => 'account', readOrigin: async () => ({ serverIdentityId: 'home', machineId: fixture.machineId }) }) }),
+    });
+    const custody = createManagedProviderExplicitStartCustody({ machineId: fixture.machineId, happyHomeDir: homeDir, controller });
+    const start = (id: string) => service.startLocal({ action: 'startLocal', machineId: fixture.machineId,
+      contributionKey: `${gateway.identity.pluginId}/${gateway.identity.localId}`, connectionId: id });
+    try {
+      expect(await start(connectionId)).toMatchObject({ status: 'success', phase: 'running' });
+      const deletedPid = Number(await readFile(join(gateway.directory, 'gateway-started'), 'utf8'));
+      expect(await start(otherConnectionId)).toMatchObject({ status: 'success', phase: 'running' });
+      const retainedPid = Number(await readFile(join(gateway.directory, 'gateway-started'), 'utf8'));
+      expect(retainedPid).not.toBe(deletedPid);
+      catalogAvailable = false;
+      expect(await custody.revalidateRetainedClaims()).toBe(0);
+      expect(process.kill(deletedPid, 0)).toBe(true);
+      catalogAvailable = true;
+      expect(await service.delete({ action: 'delete', connectionId })).toEqual({ status: 'success', connectionId });
+      expect(providerSettings.connections.map(connection => connection.id)).toEqual([otherConnectionId]);
+      expect(await custody.revalidateRetainedClaims()).toBe(1);
+      expect(await waitForProcessExit(deletedPid)).toBe(true);
+      expect(process.kill(retainedPid, 0)).toBe(true);
+      expect(await custody.revalidateRetainedClaims()).toBe(0);
+    } finally { await fixture.cleanup(); }
+  });
+});
+
+it.each(['Start', 'next-request', 'new-stream'] as const)('G1 recovers retained consumers through %s custody without changing native access or replaying input', async recovery => {
+  await withConfiguredDaemonTestHome({ prefix: 'gateway-outage-recovery-' }, async ({ homeDir }) => {
+    const controller = createPluginReloadController();
+    const fixture = await createManagedRunLaunchFixture({ directory: join(homeDir, 'fixture'), happyHomeDir: homeDir,
+      controller, physicalGateway: true, holdResponseForInput: 'interrupted input' });
+    const gateway = fixture.gateway!;
+    const identity = gateway.identity;
+    const contributionKey = `${identity.pluginId}/${identity.localId}`;
+    const declaration = fixture.contributes.providersByContributionKey.get(contributionKey)!.definition;
+    const managedRuntime = declaration.managedRuntime!;
+    const purposeBindings = gateway.purposeBindings;
+    let admitted = true;
+    const signal = new AbortController().signal;
+    const custody = createManagedProviderExplicitStartCustody({ machineId: fixture.machineId, happyHomeDir: homeDir, controller });
+    const models = createRuntimeProviderModelManagementServices({ machineId: fixture.machineId, happyHomeDir: homeDir,
+      featureGate: { isEnabled: () => true }, registry: fixture.contributes, getAccountSettingsSnapshot: () => fixture.snapshot,
+      acquireRuntimeLease: async () => {
+        const lease = controller.tryAcquireRuntimeRegistry();
+        if (!lease) throw new Error('Expected serving fixture registry');
+        return lease;
+      }, resolveManagedPurposeBindingIntent: gateway.purposeBindingOwner.resolveBindingIntent,
+      modelSettingsMutation: async (): Promise<never> => { throw new Error('No model mutation'); },
+    });
+    const application = { agentTargetKey: fixture.agentTargetKey, implementationIdentity: identity,
+      endpointTemplateId: 'api', protocol: 'openai-responses' as const };
+    const source = { kind: 'account_connection' as const, connectionId: fixture.record.connectionId,
+      expectedConnectionSecurityFingerprint: fixture.record.connectionSecurityFingerprint,
+      expectedManagedRuntimeBindingFingerprint: createProviderManagedRuntimeBindingFingerprintV1({ implementationIdentity: identity,
+        managedRuntime, purposeBindings }) };
+    const open = createAccountConnectionManagedConsumerSourceOpen({ homeId: 'home', accountId: 'account', machineId: fixture.machineId,
+      custody, expectedAccountSettingsScopeKey: fixture.snapshot.scopeKey!, getAccountSettingsSnapshot: () => fixture.snapshot,
+      withRegistry: async read => await read(fixture.contributes), resolveBindingIntent: gateway.purposeBindingOwner.resolveBindingIntent,
+      // Authenticated Home Session liveness is the system boundary.
+      admitConsumer: async () => admitted,
+      projectModels: request => models.projectModelsForAccount(request, { getAccountSettingsSnapshot: () => fixture.snapshot,
+        resolveManagedPurposeBindingIntent: gateway.purposeBindingOwner.resolveBindingIntent, signal, isCurrent: () => admitted }),
+    });
+    const unavailable = async (): Promise<never> => { throw new Error('Unexpected configuration mutation or runtime inspection'); };
+    const service = createProviderConnectionService({ machineId: fixture.machineId, featureGate: { isEnabled: () => true },
+      loadSnapshot: async () => ({ accountSettings: fixture.snapshot.settings, rawAccountSettings: {},
+        providerSettings: fixture.providerSettings, registry: fixture.contributes }),
+      updateProviderSettings: unavailable, collectDnsEvidence: unavailable, runtimeSummary: unavailable, now: () => 1,
+      resolveConnection: input => resolveProviderConnectionForMachine({ ...input, dnsEvidenceByEndpointUrl: input.dnsEvidence }),
+      resolveManagedPurposeBindingIntent: gateway.purposeBindingOwner.resolveBindingIntent,
+      startManagedProviderRuntime: createPublicManagedProviderRuntimeStartOperation({ machineId: fixture.machineId, happyHomeDir: homeDir,
+        controller, resolveSharedGateway: createMachineSharedProviderGatewayResolver({ machineId: fixture.machineId,
+          readAccountId: () => 'account', readOrigin: async () => ({ serverIdentityId: 'home', machineId: fixture.machineId }) }) }),
+    });
+    const consumers: { cleanup(): Promise<void> }[] = [];
+    const opened: NonNullable<Awaited<ReturnType<typeof open>>>[] = [];
+    try {
+      const attach = async (sessionId: string, sourceSignal = signal) => {
+        const request = { source, application, consumer: { kind: 'session' as const, sessionId }, consumerMachineId: fixture.machineId };
+        let access = await open({ ...request, signal: sourceSignal });
+        if (!access) throw new Error('Expected admitted gateway consumer');
+        opened.push(access);
+        const consumer = await startManagedProviderConsumerApplication({ signal, endpointUrl: access.access.endpointUrl('api')!,
+          credentialTransport: declaration.credential!.transports[0]!, request: async request => access && await access.revalidate(request.signal)
+            ? { ok: true, response: await access.access.request(request) } : { ok: false, reasonCode: 'resource_forbidden' } });
+        consumers.push(consumer);
+        return { ...consumer, source: access, async reopen() {
+          access = await open({ ...request, signal });
+          if (!access) throw new Error('Expected fresh admitted stream source');
+          opened.push(access);
+        } };
+      };
+      const firstStream = new AbortController();
+      const [first, survivor] = await Promise.all([attach('session-one'), attach('session-two',
+        recovery === 'new-stream' ? firstStream.signal : signal)]);
+      const read = async (text: string) => {
+        const response = await fetch(`${survivor.endpointUrl}/responses`, { method: 'POST',
+          headers: { authorization: survivor.renderedCredential, 'content-type': 'application/json' }, body: JSON.stringify({ input: text }) });
+        return { status: response.status, body: await response.text() };
+      };
+      const processFile = join(gateway.directory, 'gateway-started');
+      const originalPid = Number(await readFile(processFile, 'utf8'));
+      expect((await read('first input')).status).toBe(200);
+      if (recovery === 'new-stream') {
+        await survivor.source.cleanup();
+        firstStream.abort();
+        await survivor.reopen();
+      }
+      const startLocal = () => service.startLocal({ action: 'startLocal' as const, machineId: fixture.machineId, contributionKey,
+        connectionId: fixture.record.connectionId });
+      if (recovery === 'Start') expect(await startLocal()).toMatchObject({ status: 'success', phase: 'running' });
+      await first.cleanup(); await first.source.retire();
+      const interrupted = read('interrupted input');
+      await vi.waitFor(async () => expect(await readFile(join(gateway.directory, 'gateway-inputs'), 'utf8')).toContain('interrupted input\n'));
+      process.kill(originalPid, 'SIGTERM');
+      expect(await waitForProcessExit(originalPid)).toBe(true);
+      expect((await interrupted).status).toBe(500);
+      await vi.waitFor(() => expect(survivor.source.access.endpointUrl('api')).toBeNull());
+      if (recovery === 'new-stream') {
+        // The carrier closes only this stream's join, then supplies a fresh
+        // source opening for the same retained operation on its next stream.
+        await survivor.reopen();
+      }
+      // The real repair Action reaches this exact service owner. Its public
+      // claim must not replace the Session or the runner's local URL/token.
+      if (recovery === 'Start') expect(await startLocal()).toMatchObject({ status: 'success', phase: 'running' });
+      const recovered = await Promise.all([read('fresh input one'), read('fresh input two')]);
+      expect(recovered).toEqual([{ status: 200, body: 'ok' }, { status: 200, body: 'ok' }]);
+      const replacementPid = Number(await readFile(processFile, 'utf8'));
+      expect(replacementPid).not.toBe(originalPid);
+      expect(await readFile(processFile, 'utf8')).toBe(String(replacementPid));
+      expect((await readFile(join(gateway.directory, 'gateway-starts'), 'utf8')).trim().split('\n')).toEqual([
+        String(originalPid), String(replacementPid),
+      ]);
+      expect((await readFile(join(gateway.directory, 'gateway-inputs'), 'utf8')).trim().split('\n').sort()).toEqual([
+        'first input', 'fresh input one', 'fresh input two', 'interrupted input',
+      ]);
+      admitted = false;
+      expect((await read('withdrawn input')).status).toBe(403);
+      expect(await readFile(processFile, 'utf8')).toBe(String(replacementPid));
+    } finally {
+      await Promise.all(consumers.map(consumer => consumer.cleanup()));
+      await Promise.all(opened.map(access => access.retire()));
+      await fixture.cleanup();
+    }
+  });
+});
 
 function managedServiceHandle(dispose: () => Promise<void>): ManagedServiceHandle {
   const snapshot = Object.freeze({
@@ -100,6 +300,8 @@ function runtimeRegistry(input: Readonly<{
   ) => Promise<ManagedProviderExplicitStartJoinResult>;
 }>): ResolvedExecutablePluginRuntimeRegistry {
   return {
+    declarationContributes: createResolvedContributionRegistry({}),
+    claimReleaseLessDeclarations: async () => undefined,
     projectManagedServices: createManagedServicesOwner({
       processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon' }),
       dependencies: createUnavailablePluginServices().managedServices.dependencies,
@@ -107,6 +309,9 @@ function runtimeRegistry(input: Readonly<{
     }),
     contributes: {
       agents: Object.freeze([]),
+      voiceProviders: Object.freeze([]),
+      connectedAccountDescriptorsById: new Map(),
+      providersByContributionKey: new Map(),
       actions: Object.freeze([]),
       resources: Object.freeze([]),
       uiViewsV2: Object.freeze([]),

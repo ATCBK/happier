@@ -6,10 +6,10 @@ import type { HomeCarrier } from '@/sync/runtime/homeCarrier';
 import type { Metadata } from '@happier-dev/session-core/state';
 
 /**
- * How long an unqualified server-scoped RPC operation may stay in flight.
+ * Default connection/setup budget for server-scoped RPC.
  *
- * Applies when the caller does not name a duration. Explicit finite deadlines
- * and caller-owned operation waits remain owned by the caller.
+ * An omitted operation deadline follows the caller and remote lifecycle.
+ * Only explicitly supplied finite deadlines bound the complete operation.
  */
 export const DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS = 30_000;
 
@@ -24,7 +24,7 @@ export type ServerScopedMachineRpcParams<A> = Readonly<{
     serverId?: string | null;
     /** When present, scoped credentials must resolve to this exact Account. */
     accountId?: string | null;
-    /** Total RPC budget, including route discovery, setup, fallback and retries. */
+    /** Explicit total RPC budget, including route discovery, setup, fallback and retries. */
     timeoutMs?: number;
     /** Caller cancellation owns the admitted operation; connection setup remains bounded. */
     operationTimeoutMs?: null;

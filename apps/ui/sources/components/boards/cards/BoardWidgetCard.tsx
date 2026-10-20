@@ -8,15 +8,16 @@ import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/App
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
 import type { ItemAction } from '@/components/ui/lists/itemActions';
 import { WidgetFrame } from '@/components/widgets/frame/WidgetFrame';
+import { readWidgetInstanceName, useWidgetFrameTitle } from '@/components/widgets/frame/widgetFrameTitle';
 import { useWidgetFrameRename } from '@/components/widgets/frame/useWidgetFrameRename';
 import { useWidgetFrameSurfaceDefault } from '@/components/widgets/frame/useWidgetFrameStyle';
-import { buildWidgetDefinitionActions, buildWidgetFrameStyleActions, buildWidgetInstanceActions, buildWidgetMoveActions, buildWidgetSizeActions, orderWidgetMenu } from '@/components/widgets/frame/widgetFrameMenu';
+import { buildWidgetDefinitionActions, buildWidgetFrameStyleActions, buildWidgetInstanceActions, buildWidgetMoveActions, buildWidgetSizeActions, orderWidgetMenu, WIDGET_MENU_MAX_HEIGHT_PX } from '@/components/widgets/frame/widgetFrameMenu';
 import { renderWidgetSizeMenuSection, stepWidgetSizeControl, type WidgetSizeControl } from '@/components/widgets/frame/WidgetSizeControl';
 import { useWidgetInputsEditor } from '@/components/widgets/surface/useWidgetInputsEditor';
 import { useWidgetDefinitionFlows } from '@/components/widgets/definitions/useWidgetDefinitionFlows';
 import { useWidgetInstanceBindingLabel } from '@/components/widgets/surface/useWidgetInstanceBindingLabel';
 import { WidgetSurface } from '@/components/widgets/surface/WidgetSurface';
-import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
+import { readWidgetSourcePluginName, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { t } from '@/text';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 
@@ -81,6 +82,7 @@ export const BoardWidgetCard = React.memo(function BoardWidgetCard(props: BoardW
     });
     const definition = useWidgetDefinitionFlows({ instance, scope, anchorRef: inputs.anchorRef, editInputs: inputs.editInputs, testID: props.testID });
     const title = describeBoardWidgetTitle(placement, candidate);
+    const frameTitle = useWidgetFrameTitle(placement.instance, candidate);
     const rename = useWidgetFrameRename({
         title,
         // An empty name gives the copy back its widget's name.
@@ -154,25 +156,24 @@ export const BoardWidgetCard = React.memo(function BoardWidgetCard(props: BoardW
                 placement="board"
                 widgetPresentation={widgetPresentation}
                 mark={candidate?.icon ?? 'squares-four'}
-                title={rename.field ?? title}
-                source={bindingLabel ?? candidate?.pluginName}
+                title={rename.field ?? frameTitle}
+                source={bindingLabel ?? readWidgetSourcePluginName(appRuntime.pluginUiProjection, candidate)}
                 menu={(
-                    <View style={styles.controls}>
-                        <View ref={inputs.anchorRef} collapsable={false}>
-                            <ItemRowActions
-                                title={title}
-                                compactThreshold={ALWAYS_OVERFLOW}
-                                compactActionIds={[]}
-                                overflowTriggerTestID={`${props.testID}.menu`}
-                                overflowTriggerAccessibilityLabel={t('boards.widgets.menuA11y', { widget: title })}
-                                onOverflowTriggerKeyDown={key => stepWidgetSizeControl(sizeControl, key)}
-                                renderOverflowSection={({ id }) => renderWidgetSizeMenuSection(sizeControl, id, `${props.testID}.size`)}
-                                actions={actions}
-                            />
-                        </View>
-                        {props.grip}
+                    <View ref={inputs.anchorRef} collapsable={false}>
+                        <ItemRowActions
+                            title={title}
+                            compactThreshold={ALWAYS_OVERFLOW}
+                            compactActionIds={[]}
+                            overflowTriggerTestID={`${props.testID}.menu`}
+                            overflowTriggerAccessibilityLabel={t('boards.widgets.menuA11y', { widget: title })}
+                            onOverflowTriggerKeyDown={key => stepWidgetSizeControl(sizeControl, key)}
+                            renderOverflowSection={({ id }) => renderWidgetSizeMenuSection(sizeControl, id, `${props.testID}.size`)}
+                            overflowMaxHeightCap={WIDGET_MENU_MAX_HEIGHT_PX}
+                            actions={actions}
+                        />
                     </View>
                 )}
+                {...(props.grip ? { grip: props.grip } : {})}
                 body={body}
                 {...(props.fresh ? { fresh: true } : {})}
                 accessibilityLabel={`${title}, ${t('boards.widgets.kind')}`}
@@ -185,11 +186,6 @@ export const BoardWidgetCard = React.memo(function BoardWidgetCard(props: BoardW
 
 /** A copy's title: its own name, else its widget's (an inline definition carries one), else what it is. */
 export function describeBoardWidgetTitle(placement: WorkBoardWidgetPlacementV1, candidate: Pick<WidgetCandidate, 'title'> | null): string {
-    const { instance } = placement;
-    const authoredName = instance.definition.kind === 'inline' ? instance.definition.definition.name : null;
-    return instance.displayName ?? candidate?.title ?? authoredName ?? t('boards.widgets.kind');
+    return readWidgetInstanceName(placement.instance, candidate) ?? t('boards.widgets.kind');
 }
 
-const styles = {
-    controls: { flexDirection: 'row', alignItems: 'center' },
-} as const;

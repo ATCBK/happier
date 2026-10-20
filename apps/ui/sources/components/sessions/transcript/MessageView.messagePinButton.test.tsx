@@ -88,6 +88,9 @@ vi.mock('@expo/vector-icons', async () => {
     return createExpoVectorIconsMock();
 });
 
+// Compile the real message graph during collection, after installing its boundaries.
+await import('./MessageView');
+
 describe('MessageView message pin button', () => {
     beforeEach(() => {
         toggleMessagePinSpy.mockReset();

@@ -95,7 +95,7 @@ function createVoice(providerId: VoiceSettings['providerId'] = 'local_direct'): 
 
 function hydrateMachines(ids: string[] = ['machine-1', 'voice-runtime-machine']) {
     storage.getState().applyMachines(ids.map(id => createMachineFixture({
-        ...createPlainMachineRowFixture({ id, accountId: account.scope.accountId }),
+        id, access: createPlainMachineRowFixture({ id, accountId: account.scope.accountId }).access,
         metadata: { ...createMachineFixture().metadata!, displayName: id === 'machine-1' ? 'Primary Mac' : 'Voice runtime' },
         daemonState: null, activeAt: Date.now(),
     })), true, { sourceServerId: account.scope.serverId });
@@ -183,7 +183,7 @@ describe('VoiceSettingsScreen local_direct daemon readiness', () => {
         expectCatalogFor('voice-runtime-machine');
         // Retained local_direct has no picker tile/pipeline; inspect the real screen's readiness output
         // and the actual installed model controls rather than inventing a selected gallery service.
-        expect(view.tree.root.findByType(VoiceProviderSection).props.localAvailability.daemon)
+        expect(view.tree.root.findByType(VoiceProviderSection).props.localAvailability?.daemon)
             .toMatchObject({ modelState: 'ready', runtimeState: 'available' });
         expect(view.findByTestId(`voice-model-remove-${DIRECT_STT_PACK_ID}`)).toBeTruthy();
         expect(view.findByTestId(`voice-model-remove-${DIRECT_TTS_PACK_ID}`)).toBeTruthy();
@@ -195,7 +195,7 @@ describe('VoiceSettingsScreen local_direct daemon readiness', () => {
             stt: readLocalDirectVoiceSettings(voice).stt } }), { capped: true });
         const view = await render(<VoiceConversationsSettingsScreen />);
         expect(view.tree.root.findByType(LocalDirectSection).props.daemonRouteDiagnosticReason).toBe('daemon_relay_capped');
-        expect(view.tree.root.findByType(VoiceProviderSection).props.localAvailability.daemon.route).toBe('relay_capped');
+        expect(view.tree.root.findByType(VoiceProviderSection).props.localAvailability?.daemon?.route).toBe('relay_capped');
         expect(resolveVoiceProviderAvailability({
             happierVoiceSupported: view.tree.root.findByType(VoiceProviderSection).props.happierVoiceSupported, platformOs: 'web',
             local: view.tree.root.findByType(VoiceProviderSection).props.localAvailability,
@@ -256,7 +256,7 @@ describe('VoiceSettingsScreen local_direct daemon readiness', () => {
         expect(view.tree.root.findByType(VoiceProviderSection).props.executionMachineId).toBeNull();
         await act(async () => hydrateMachines(['hydrated-machine']));
         await vi.waitFor(() => expectCatalogFor('hydrated-machine'));
-        await vi.waitFor(() => expect(view.tree.root.findByType(VoiceProviderSection).props.localAvailability.daemon)
+        await vi.waitFor(() => expect(view.tree.root.findByType(VoiceProviderSection).props.localAvailability?.daemon)
             .toMatchObject({ modelState: 'ready', runtimeState: 'available' }));
     });
 

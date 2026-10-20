@@ -1,6 +1,7 @@
 import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/strictJsonValue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { getUsageQueryKey, normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
@@ -13,14 +14,15 @@ import { planSyncActionsFromChanges, plannedChangesAffectUsageQuery } from '@/sy
 // Keep the canonical helpers without the presentation harness barrel graph.
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
-import { UsageAnalyticsQueryRequestSchema, type UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
-import { createPlainSessionCurrentProjectionRecordFixture, createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { UsageAnalyticsQueryRequestSchema, QualifiedConnectedAccountGroupV4Schema, type UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
+import { UsageQueryBatchResultSchema } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
+import { createPlainSessionCurrentProjectionRecordFixture, createSessionAccessFixture, createSessionFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { buildProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
 import { QualifiedConnectedAccountQuotaResponseV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
-import { QualifiedProviderAccountUsageHistoryRequestV4Schema, ProviderAccountUsagePageProjectionWriteV1Schema } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
+import { QualifiedProviderAccountUsageHistoryRequestV4Schema, ProviderAccountUsagePageProjectionReadV1Schema, ProviderAccountUsagePageProjectionWriteV1Schema, ConnectedServiceQuotaGetResultV1Schema } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
 import { parseQualifiedConnectedAccountV4StructuredQueryValue } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4QueryCodec';
 import { resolveAuthCredentialsScopeKey } from '@/auth/storage/resolveAuthCredentialsScopeKey';
 import { buildProviderAccountUsageScopeKey } from '@/sync/domains/connectedServices/accountUsage/providerAccountUsageLoadRoute';
@@ -49,6 +51,11 @@ import { decodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { createUiUsageActionPorts } from '@/sync/ops/actions/usageActionDeps';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
+import { saveAccountSettings } from '@/sync/domains/state/accountSettingsPersistence';
+import { evaluateUsageCoach } from '@happier-dev/protocol/usage/coach/evaluateUsageCoach';
+import { UsageMcpBindingUsageSchema } from '@happier-dev/protocol/usage/coach/usageMcpBindingUsage';
+import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
+import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 const scmTransport = vi.hoisted(() => vi.fn());
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
@@ -60,7 +67,11 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
 });
 
 let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
+let sessionBatchBoundary: ReturnType<typeof createSessionReadBatchHttpBoundary> | undefined;
+const sessionRequests = () => [...home!.requests.filter(request => request.path !== '/v2/sessions/read-batch'),
+  ...(sessionBatchBoundary?.componentRequests ?? [])];
 afterEach(async () => { standardCleanup(); retireActiveServerAccountScopeLifetime(); clearMachineRequestReachabilityForTest(); await home?.dispose(); home = undefined;
+  sessionBatchBoundary = undefined;
   // Digest and clock spies are system boundaries scoped to one case; leaving
   // them installed changes later Resource progress and timing observations.
   vi.restoreAllMocks();
@@ -85,6 +96,7 @@ async function context(route: Parameters<typeof serveAccountHomes>[0]['route'],
   // HTTP persistence boundary; the real B producer, protection, Resource and
   // Plans projection remain in-process. Server admission has its SQLite suite.
   const projections = new Map<string, ReturnType<typeof ProviderAccountUsagePageProjectionWriteV1Schema.parse>>();
+  sessionBatchBoundary = createSessionReadBatchHttpBoundary(route);
   home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-batch.test', accountId: 'account-a', profile, settings }],
     route: async request => {
       if (request.path === '/v4/connect/qualified/provider-account-usage/history' && request.method === 'PUT') {
@@ -92,11 +104,14 @@ async function context(route: Parameters<typeof serveAccountHomes>[0]['route'],
         projections.set(projection.recordId, projection);
         return Response.json({ success: true });
       }
-      const response = await route(request);
+      const response = await sessionBatchBoundary!.handle(request);
       if (request.path === '/v4/connect/qualified/provider-account-usage/history' && response?.ok) {
         const query = parseQualifiedConnectedAccountV4StructuredQueryValue(QualifiedProviderAccountUsageHistoryRequestV4Schema,
           request.url.searchParams.get('query'));
         if ('projection' in query) {
+          // Cases exercising an incomplete/invalidated materialization can
+          // serve the canonical HTTP read envelope instead of the default store.
+          if (ProviderAccountUsagePageProjectionReadV1Schema.safeParse(await response.clone().json()).success) return response;
           const projection = projections.get(query.recordId) ?? null;
           return Response.json({ projection, complete: projection !== null });
         }
@@ -121,6 +136,135 @@ async function context(route: Parameters<typeof serveAccountHomes>[0]['route'],
 }
 
 describe('usage query captured Resource adapter', () => {
+  it.each(['recovery', 'empty-success'] as const)('admits only successfully acquired interval evidence: %s', async scenario => {
+    const ids = ['healthy-turns', 'retry-turns', 'empty-turns', 'unread', 'healthy-second'];
+    let failedTurns = scenario === 'recovery';
+    const captured = await context(request => {
+      if (request.path === '/v2/usage/query') return Response.json(value);
+      const detail = /^\/v2\/sessions\/(healthy-turns|retry-turns|empty-turns|unread|healthy-second)$/.exec(request.path);
+      if (detail?.[1] === 'unread' && failedTurns) return Response.json({ error: 'unavailable' }, { status: 503 });
+      if (detail) return Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({ id: detail[1]!,
+        createdAt: 1, updatedAt: 900, seq: 1, active: true, activeAt: 900, metadataVersion: 1, agentStateVersion: 1 }) });
+      const turn = /^\/v1\/sessions\/(healthy-turns|retry-turns|empty-turns|unread|healthy-second)\/turns$/.exec(request.path);
+      if (turn) {
+        const id = turn[1]!;
+        if (id === 'retry-turns' && failedTurns) return Response.json({ error: 'unavailable' }, { status: 503 });
+        return Response.json({ v: 1, sessionId: id, updatedAt: 900,
+          turns: id === 'empty-turns' || id === 'unread' || id === 'retry-turns' && scenario === 'empty-success' ? [] : [
+            { turnId: `${id}-turn`, agentId: 'codex', status: 'completed', startedAt: 100,
+              terminalAt: id === 'retry-turns' ? 700 : 400, updatedAt: 900 },
+          ] });
+      }
+      return undefined;
+    });
+    storage.setState({ profileScope: captured.accountLifetime.scope, sessions: Object.fromEntries(ids.map(id => [id,
+      createSessionFixture({ id, seq: 1, serverId: captured.accountLifetime.scope.serverId, encryptionMode: 'plain' }),
+    ])) });
+    const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 }, includeWorkEvidence: false, includeTranscriptEvidence: false });
+    const entry = getUsageQueryResourceStore(captured)
+      .getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
+    const observed: ReturnType<typeof decodeUsageQueryResource>['results'][number][] = [];
+    const slice = () => decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!;
+    const release = entry.subscribe(() => {
+      if (entry.getSnapshot().value) observed.push(slice());
+    }, false);
+    try {
+      await entry.refresh();
+      expect(slice().pending).toBe(false);
+      expect(slice().howYouWork?.sessionCoverage).toEqual({ selected: 5, admitted: scenario === 'recovery' ? 3 : 5 });
+      expect(slice().coach?.sessionCoverage).toEqual(slice().howYouWork?.sessionCoverage);
+      if (scenario === 'recovery') {
+        expect(slice().sources).toContainEqual({ source: 'how_you_work:sessions', status: 'partial' });
+        expect(slice().howYouWork?.intervals).toBeNull();
+        expect(observed.some(row => row.sources.some(source => source.source === 'how_you_work:sessions' && source.status === 'available'))).toBe(false);
+        expect(observed.every(row => row.howYouWork?.intervals == null)).toBe(true);
+      } else {
+        expect(slice().sources).toContainEqual({ source: 'how_you_work:sessions', status: 'available' });
+        expect(slice().howYouWork?.intervals?.agentTimeMs).toBe(600);
+      }
+      const attemptsBeforeRetry = sessionRequests().filter(request => request.path === '/v1/sessions/retry-turns/turns').length;
+      failedTurns = false;
+      // No Session/store marker changes: Retry must reacquire only failed evidence.
+      await entry.refresh();
+      expect(slice().howYouWork?.intervals?.agentTimeMs).toBe(scenario === 'recovery' ? 1200 : 600);
+      expect(slice().howYouWork?.sessionCoverage).toEqual({ selected: 5, admitted: 5 });
+      expect(slice().coach?.sessionCoverage).toEqual({ selected: 5, admitted: 5 });
+      expect(slice().sources).toContainEqual({ source: 'how_you_work:sessions', status: 'available' });
+      expect(sessionRequests().filter(request => request.path === '/v1/sessions/healthy-turns/turns')).toHaveLength(1);
+      expect(sessionRequests().filter(request => request.path === '/v1/sessions/retry-turns/turns'))
+        .toHaveLength(attemptsBeforeRetry + (scenario === 'recovery' ? 1 : 0));
+      expect(home!.requests.filter(request => /^\/v[12]\/sessions\/(healthy-turns|retry-turns|empty-turns|unread|healthy-second)(\/|$)/.test(request.path))).toEqual([]);
+    } finally { release(); }
+  });
+
+  it('reads the same witnessed intervals through the Session batch owner without single-Session fan-out', async () => {
+    const ids = ['batch-first', 'batch-second'];
+    const captured = await context(request => {
+      if (request.path === '/v2/usage/query') return Response.json(value);
+      if (request.path === '/v2/sessions/read-batch') return Response.json({ results: ids.map(sessionId => ({
+        sessionId,
+        detail: { status: 200, body: { session: createPlainSessionCurrentProjectionRecordFixture({ id: sessionId,
+          createdAt: 1, updatedAt: 900, seq: 1, active: true, activeAt: 900, metadataVersion: 1, agentStateVersion: 1 }) } },
+        turns: { status: 200, body: { v: 1, sessionId, updatedAt: 900, turns: [
+          { turnId: `${sessionId}-turn`, agentId: 'codex', status: 'completed', startedAt: 100, terminalAt: 400, updatedAt: 900 },
+        ] } },
+      })) });
+      return undefined;
+    });
+    storage.setState({ profileScope: captured.accountLifetime.scope, sessions: Object.fromEntries(ids.map(id => [id,
+      createSessionFixture({ id, seq: 1, serverId: captured.accountLifetime.scope.serverId, encryptionMode: 'plain' }),
+    ])) });
+    const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 }, includeWorkEvidence: false, includeTranscriptEvidence: false });
+    const batch = await readUiUsageQueryBatch(captured, { queries: [query] });
+    expect(batch.results[0]?.howYouWork?.intervals?.agentTimeMs).toBe(600);
+    expect(home!.requests.filter(request => /^\/v[12]\/sessions\/batch-(first|second)(\/|$)/.test(request.path))).toEqual([]);
+    expect(home!.requests.filter(request => request.path === '/v2/sessions/read-batch')).toHaveLength(1);
+  });
+
+  it('ignores equivalent feature snapshots but refreshes when the consumed quota decision changes', async () => {
+    let quotasEnabled = false;
+    let diagnosticsEnabled = false;
+    let eventCount = 1;
+    const ref = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'work' };
+    const captured = await context(request => {
+      if (request.path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse({ features: {
+        connectedServices: { enabled: true, quotas: { enabled: quotasEnabled } },
+        browser: { diagnostics: { enabled: diagnosticsEnabled } },
+      } }));
+      if (request.path === '/v2/usage/query') return Response.json({ ...value, totals: { ...value.totals, eventCount } });
+      if (request.path === '/v4/connect/qualified/provider-account-usage/sources/resolve') {
+        return Response.json({ error: 'connect_quotas_not_found' }, { status: 404 });
+      }
+      return undefined;
+    }, { connectedAccountsV4: [{ ref, status: 'connected', authenticationModeId: 'manual', revisionSemantics: 'revisioned',
+      credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] }] });
+    const serverId = captured.accountLifetime.scope.serverId;
+    await getServerFeaturesSnapshot({ serverId, force: true });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({
+      queries: [normalizeUsageQuery({ includeSessionEvidence: false, includeWorkEvidence: false })],
+    }) });
+    const release = entry.subscribe(() => {}, true);
+    const observed = () => entry.getSnapshot().value && decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.accounting?.totals.eventCount;
+    try {
+      await entry.refresh();
+      expect(observed()).toBe(1);
+      eventCount = 2;
+      diagnosticsEnabled = true;
+      await getServerFeaturesSnapshot({ serverId, force: true });
+      expect(entry.getSnapshot(), 'unrelated feature discovery must keep admitted Usage facts settled')
+        .toMatchObject({ freshness: 'fresh', pending: 'idle' });
+      await flushHookEffects({ cycles: 30 });
+      expect(observed(), 'equivalent feature discovery must not re-arm the Usage read').toBe(1);
+      quotasEnabled = true;
+      await getServerFeaturesSnapshot({ serverId, force: true });
+      await expect.poll(observed).toBe(2);
+      eventCount = 3;
+      quotasEnabled = false;
+      await getServerFeaturesSnapshot({ serverId, force: true });
+      await expect.poll(observed).toBe(3);
+    } finally { release(); }
+  });
+
   it('keeps current-only allowance readings across navigation before history has ever settled', async () => {
     const now = Date.now();
     const ref = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'current-only' };
@@ -232,7 +376,145 @@ describe('usage query captured Resource adapter', () => {
       } finally { stopReturning(); }
     } finally { slowAccounting.resolve(); slowHistory.resolve(); stopSlow(); stopFast(); }
   });
-  it('keeps settled quota history through unrelated store churn and equivalent Profile refreshes', async () => {
+  it('waits for current Coach evidence and its binding catalog before admitting a preference', async () => {
+    const privateSession = createDeferred<Response>();
+    const catalogRead = createDeferred<Response>();
+    const sessionRequested = createDeferred<void>();
+    const catalogRequested = createDeferred<void>();
+    const usage = UsageMcpBindingUsageSchema.parse({ v: 2, evidenceId: 'mcp-window', sessionId: 'coach-session', turnId: 'turn',
+      observedAtMs: 500, window: { startMs: 400, endMs: 500 }, coverage: 'complete', bindings: [{ serverId: 'server',
+        bindingId: 'rule', serverRevision: 10, bindingRevision: 20, catalogRevision: 40, toolCallCount: 0, schemaBytes: null }] });
+    const captured = await context(request => {
+      if (request.path === '/v2/usage/query') return Response.json({ ...value, contributions: [{ ...workContribution, sessionId: 'coach-session' }] });
+      if (request.path === '/v2/sessions/coach-session') { sessionRequested.resolve(); return privateSession.promise; }
+      if (request.path === '/v1/sessions/coach-session/turns') return Response.json({ v: 1, sessionId: 'coach-session', updatedAt: 900, turns: [] });
+      if (request.path === '/v1/account/entity-rows/mcp') { catalogRequested.resolve(); return catalogRead.promise; }
+      if (request.path === '/v1/sessions/coach-session/messages') return Response.json({ messages: [{ id: 'mcp-row', seq: 1,
+        localId: null, createdAt: 500, content: { t: 'plain', v: { role: 'agent', content: { type: 'event', id: 'mcp-window',
+          data: { type: 'mcp-binding-usage', usage } } } } }], hasMore: false });
+      return undefined;
+    });
+    const query = normalizeUsageQuery({ session: 'coach-session', period: { startMs: 0, endMs: 1000 }, includeWorkEvidence: false });
+    const finding = evaluateUsageCoach({ queryKey: getUsageQueryKey(query), period: { startMs: 0, endMs: 1000 }, asOfMs: 1000,
+      currentness: 'current', detail: { coverage: 'partial', mcpUsage: [usage] } }).findings[0]!;
+    const settled: ActionExecuteResult[] = [];
+    const controller = new AbortController();
+    const pending = createDefaultActionExecutor().execute('usage.coach.snooze', { query, evidenceKey: finding.evidenceKey, untilMs: Date.now() + 60_000 },
+      { surface: 'ui', authority: 'present_user', serverId: captured.accountLifetime.scope.serverId,
+        actionCaller: { kind: 'host' }, signal: controller.signal }).then(result => { settled.push(result); });
+    try {
+      await sessionRequested.promise;
+      await flushHookEffects({ cycles: 30 });
+      expect(settled).toEqual([]);
+      privateSession.resolve(Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({
+        id: 'coach-session', createdAt: 1, updatedAt: 900, seq: 1, active: false, activeAt: 900,
+        metadataVersion: 1, metadata: { name: 'Coach', path: '/workspace/project', host: 'host',
+          runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} } }, agentStateVersion: 1,
+      }) }));
+      await catalogRequested.promise;
+      await flushHookEffects({ cycles: 30 });
+      expect(settled).toEqual([]);
+      catalogRead.resolve(Response.json({ status: 'present', revision: 41, content: { t: 'plain', v: { v: 1,
+        servers: [{ id: 'server', name: 'docs', transport: 'stdio', stdio: { command: 'docs', args: [] }, env: {}, createdAt: 1, updatedAt: 10 }],
+        bindings: [{ id: 'rule', serverId: 'server', target: { t: 'allMachines' }, enabled: true, createdAt: 1, updatedAt: 20 }],
+      } } }));
+      await pending;
+      expect(settled[0]).toMatchObject({ ok: true, result: { kind: 'preference_updated', evidenceKey: finding.evidenceKey } });
+      const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
+      const result = decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!.coach!;
+      expect(result.findings.find(row => row.evidenceKey === finding.evidenceKey)?.remedy)
+        .toMatchObject({ kind: 'mcp_binding', bindingId: 'rule', expectedRevision: 41 });
+    } finally {
+      privateSession.resolve(Response.json({ error: 'not_found' }, { status: 404 }));
+      catalogRead.resolve(Response.json({ status: 'absent' }));
+      controller.abort();
+      await pending;
+    }
+  });
+  it.each(['mode', 'settings', 'refused-mode'] as const)('issues current quota reads before held %s and publishes before unrelated settles', async held => {
+    const ref = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'startup' };
+    const source = { bindingKind: 'account' as const, ref };
+    const now = Date.now();
+    const recordKey = { providerId: 'codex', accountSubjectId: 'startup', subjectKind: 'account', quotaScope: 'account' } as const;
+    const snapshot = ProviderAccountUsageSnapshotV1Schema.parse({ v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
+      providerId: 'codex', accountSubject: { kind: 'providerSubject', id: 'startup' }, observedAtMs: now,
+      fetchedAtMs: now, staleAfterMs: 60_000, source: 'providerHttp', confidence: 'confirmed', state: 'loaded_data',
+      meters: [{ meterId: 'window', label: 'Window', used: 40, limit: 100, usedPct: 40, utilizationPct: 40,
+        unit: 'count', status: 'ok', resetAtMs: now + 3_600_000, resetsAt: now + 3_600_000, windowDurationMs: 18_000_000 }] });
+    const gate = createDeferred<void>();
+    const unrelated = createDeferred<void>();
+    const events: string[] = [];
+    const targets = [{ id: 'startup-target', scope: { kind: 'personal' as const }, utilizationFraction: 0.75 }];
+    const captured = await context(async request => {
+      if (request.path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
+      if (request.path === '/v2/usage/query') { await unrelated.promise; return Response.json(value); }
+      if (request.path === '/v4/connect/qualified/provider-account-usage/sources/resolve') {
+        events.push('source');
+        return Response.json({ source, recordId: snapshot.recordId, providerAccountId: 'startup', fetchedAt: now, staleAfterMs: 60_000 });
+      }
+      if (request.path === '/v4/connect/qualified/provider-account-usage/record') {
+        events.push('current');
+        return Response.json({ content: { t: 'plain', v: snapshot }, metadata: { fetchedAt: now, staleAfterMs: 60_000, status: 'ok' }, sources: [source] });
+      }
+      if (request.path === '/v4/connect/qualified/provider-account-usage/history') { await unrelated.promise; return Response.json({ entries: [], nextCursor: null }); }
+      if (request.path === '/v2/pending/reset-starts/read') { await unrelated.promise; return Response.json({ entries: [] }); }
+      return undefined;
+    }, { connectedAccountsV4: [{ ref, status: 'connected', authenticationModeId: 'manual', revisionSemantics: 'revisioned',
+      credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] }] },
+    { usagePacingTargetsV1: targets });
+    await getServerFeaturesSnapshot({ serverId: captured.accountLifetime.scope.serverId, force: true });
+    // A cold Settings document is an external persistence/HTTP boundary. Keep
+    // real Account admission, settings decoding, Action and Resource wiring.
+    const { getPersistenceStorage } = await import('@/sync/domains/state/persistenceStorage');
+    const { accountSettingsScopeKeySuffix } = await import('@/sync/domains/settings/scope/accountSettingsScope');
+    const { loadAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
+    getPersistenceStorage().delete(`account-settings:v2:${accountSettingsScopeKeySuffix(captured.accountLifetime.scope)}`);
+    storage.setState({ settingsScope: null });
+    expect(loadAccountSettings(captured.accountLifetime.scope).version).toBeNull();
+    const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+    const fetch = home!.fetch;
+    setRuntimeFetch(async (url, init) => {
+      const path = new URL(String(url)).pathname;
+      if (path === (held === 'settings' ? '/v2/account/settings' : '/v1/account/encryption')) {
+        events.push('held');
+        await gate.promise;
+        events.push('released');
+        if (held === 'refused-mode') return Response.json({ error: 'forbidden' }, { status: 403 });
+      }
+      return fetch(url, init);
+    });
+    const quotaAdmission = vi.spyOn(ConnectedServiceQuotaGetResultV1Schema, 'parse');
+    const query = normalizeUsageQuery({ period: { startMs: now - 1000, endMs: now }, includeSessionEvidence: false, includeWorkEvidence: false });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
+    const slice = () => entry.getSnapshot().value ? decodeUsageQueryResource(entry.getSnapshot().value!).results[0] : undefined;
+    const release = entry.subscribe(() => {}, false);
+    try {
+      await expect.poll(() => events).toContain('current');
+      expect(events).not.toContain('released');
+      if (held !== 'settings') {
+        expect(slice()?.quota).toBeUndefined(); // Mode still authorizes opening/disclosure.
+        gate.resolve();
+      }
+      if (held === 'refused-mode') {
+        unrelated.resolve();
+        await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
+        expect(slice()?.quota).toBeUndefined();
+        expect(slice()?.sources).toContainEqual(expect.objectContaining({ source: 'quota', status: 'error' }));
+        return;
+      }
+      await expect.poll(() => slice()?.quota?.[0]?.current).toEqual(snapshot);
+      expect(projectUsagePlans(slice()?.quota, now).accounts[0]?.headline?.remainingFraction).toBe(0.6);
+      expect(entry.getSnapshot().pending).not.toBe('idle');
+      gate.resolve();
+      unrelated.resolve();
+      await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
+      expect(slice()?.quota?.[0]?.targets).toEqual(targets);
+      expect(events.indexOf('current')).toBeLessThan(events.indexOf('released'));
+      expect(quotaAdmission.mock.calls.length, 'the configuration Action admits the quota result once').toBe(1);
+    } finally { gate.resolve(); unrelated.resolve(); await entry.refresh(); release(); quotaAdmission.mockRestore(); }
+  });
+
+  it.each([true, false])('keeps settled quota history through unrelated changes (accounting: %s)', async includeAccounting => {
     const ref = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'work' };
     const source = { bindingKind: 'account' as const, ref };
     const recordKey = { providerId: 'codex', accountSubjectId: 'provider-work', subjectKind: 'account', quotaScope: 'account' } as const;
@@ -279,16 +561,18 @@ describe('usage query captured Resource adapter', () => {
     updateProviderAccountUsageCacheEntries(providerScope, entries => ({ ...entries, [snapshot.recordId]: {
       snapshot, loading: false, hadError: false, nextFetchAtMs: now + 60_000, consecutiveErrors: 0 } }));
     const query = normalizeUsageQuery({ period: { startMs: now - 1000, endMs: now },
-      includeSessionEvidence: false, includeWorkEvidence: false });
+      includeAccounting, includeSessionEvidence: false, includeWorkEvidence: false });
     const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query',
       input: projectNativeJsonValueForTransport({ queries: [query] }) });
-    const release = entry.subscribe(() => {}, true);
+    let resourcePublications = 0;
+    const release = entry.subscribe(() => { resourcePublications++; }, true);
     try {
       await entry.refresh();
       expect(entry.getSnapshot().pending).toBe('idle');
       const settled = decodeUsageQueryResource(entry.getSnapshot().value!);
       expect(settled.results[0]?.sources).toContainEqual(expect.objectContaining({ source: 'quota', status: 'available' }));
       const before = { historyRequests, accountingRequests };
+      const publicationsBefore = resourcePublications;
       for (let index = 0; index < 128; index++) storage.setState({ isDataReady: !storage.getState().isDataReady });
       for (let index = 0; index < 8; index++) {
         const state = storage.getState();
@@ -311,12 +595,36 @@ describe('usage query captured Resource adapter', () => {
       await flushHookEffects({ cycles: 30 });
       expect({ historyRequests, accountingRequests }, 'unchanged cache evidence must not wake the Resource').toEqual(before);
       expect(decodeUsageQueryResource(entry.getSnapshot().value!)).toBe(settled);
+      expect(resourcePublications, 'unchanged store/provider ticks must publish nothing to Resource subscribers').toBe(publicationsBefore);
+      if (!includeAccounting) {
+        publishHomeAccountChange(captured.accountLifetime.scope.serverId, ['self', 'session-a', 'machine-a', 'approval-a'], {
+          changeKinds: ['account', 'session', 'machine', 'artifact'], usageQueryAffects: true,
+        });
+        await flushHookEffects({ cycles: 30 });
+        expect({ historyRequests, accountingRequests }, 'unrelated detailed Home changes must not reread Capacity').toEqual(before);
+        expect(resourcePublications).toBe(publicationsBefore);
+        const sessions = storage.getState().sessions;
+        storage.setState({ sessions: { ...sessions, 'unrelated-capacity-session': createSessionFixture({
+          id: 'unrelated-capacity-session', serverId: captured.accountLifetime.scope.serverId, encryptionMode: 'plain',
+        }) } });
+        await flushHookEffects({ cycles: 30 });
+        storage.setState({ sessions });
+        await flushHookEffects({ cycles: 30 });
+        expect({ historyRequests, accountingRequests }, 'Session membership changes must not reread Capacity').toEqual(before);
+        expect(resourcePublications, 'Session membership must not publish a quota-only revision').toBe(publicationsBefore);
+      }
+      publishHomeAccountChange(captured.accountLifetime.scope.serverId, ['provider-account-usage'], {
+        changeKinds: ['account'], usageQueryAffects: true,
+      });
+      await expect.poll(() => historyRequests).toBeGreaterThan(before.historyRequests);
+      await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
       await entry.refresh();
+      expect(resourcePublications).toBeGreaterThan(publicationsBefore);
       expect(historyRequests).toBeGreaterThan(before.historyRequests);
-      const beforeReplacement = accountingRequests;
+      const beforeReplacement = historyRequests;
       updateProviderAccountUsageCacheEntries(providerScope, entries => ({ ...entries, [snapshot.recordId]: {
         ...entries[snapshot.recordId]!, snapshot: { ...snapshot, fetchedAtMs: now + 1, observedAtMs: now + 1 } } }));
-      await expect.poll(() => accountingRequests).toBeGreaterThan(beforeReplacement);
+      await expect.poll(() => historyRequests).toBeGreaterThan(beforeReplacement);
       await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
     } finally { release(); }
   });
@@ -327,9 +635,9 @@ describe('usage query captured Resource adapter', () => {
     const { UsageCapacityWidget } = await import('@/components/settings/usage/widgets/UsageCapacityWidget');
     const { installConnectedAccountDescriptorProjection } = await import('@/sync/domains/connectedServices/connectedServiceRegistry');
     const now = Date.now();
-    const services = [{ pluginId: 'happier.agent.codex', localId: 'openai-codex' },
-      { pluginId: 'acme.email', localId: 'email' }];
-    const refs = ['work', 'personal', 'mail'].map((accountId, index) => ({ service: services[index === 2 ? 1 : 0]!, accountId }));
+    const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
+    const refs = ['work', 'personal', 'unread'].map(accountId => ({ service, accountId }));
+    const connectedRefs = [...refs, { service: { pluginId: 'acme.email', localId: 'email' }, accountId: 'mail' }];
     const sources = refs.map(ref => ({ bindingKind: 'account' as const, ref }));
     const gates = refs.map(() => createDeferred<void>());
     const records = refs.map((ref, index) => {
@@ -386,9 +694,10 @@ describe('usage query captured Resource adapter', () => {
       }
       if (request.path === '/v2/pending/reset-starts/read') return Response.json({ entries: [] });
       return undefined;
-    });
+    }, { connectedAccountsV4: connectedRefs.map(ref => ({ ref, status: 'connected', authenticationModeId: 'manual', revisionSemantics: 'revisioned',
+      credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] })) });
     storage.setState({ profile: AccountProfileSchema.parse({ id: captured.accountLifetime.scope.accountId,
-      connectedAccountsV4: refs.map(ref => ({ ref, status: 'connected', authenticationModeId: 'manual', revisionSemantics: 'revisioned',
+      connectedAccountsV4: connectedRefs.map(ref => ({ ref, status: 'connected', authenticationModeId: 'manual', revisionSemantics: 'revisioned',
         credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] })) }) });
     await getServerFeaturesSnapshot({ serverId: captured.accountLifetime.scope.serverId, force: true });
     const query = normalizeUsageQuery({ period: { startMs: now - 86_400_000, endMs: now }, includeSessionEvidence: false, includeWorkEvidence: false });
@@ -407,6 +716,8 @@ describe('usage query captured Resource adapter', () => {
     };
     try {
       await expect.poll(() => homeEntry.getSnapshot().value && projectionOf(homeEntry).accounts.length).toBe(3);
+      expect(projectionOf(homeEntry).accounts.map(account => account.accountId)).toEqual(['work', 'personal', 'unread']);
+      expect(projectionOf(homeEntry).readAccountCount).toBe(0);
       expect(readPendingPlanAccountCount(projectionOf(homeEntry).accounts)).toBe(3);
       const cold = await renderBody(homeEntry);
       expect(cold.findHostByTestId('timeline.reading')).not.toBeNull();
@@ -421,7 +732,7 @@ describe('usage query captured Resource adapter', () => {
       expect(readPendingPlanAccountCount(projectionOf(homeEntry).accounts)).toBe(1);
       // Live L22: current facts arrive before history; a Home rebind aborts
       // that read, then opens an unhydrated-cache revision before new HTTP
-      // current/history pages. The unanswered Email source must not disappear
+      // current/history pages. The unanswered usage-capable source must not disappear
       // and briefly fabricate a settled comparison between those revisions.
       holdHistory = true;
       gates[2]!.resolve(); // The host answers with an addressable placeholder; the vendor never observed this account.
@@ -442,7 +753,7 @@ describe('usage query captured Resource adapter', () => {
       }
       releaseResumedHome();
       // Usage can hydrate the same cache with an addressable but unobserved
-      // Email placeholder. That is still no replacement for its pending read.
+      // usage-capable placeholder. That is still no replacement for its pending read.
       const basis = getActiveServerSnapshot();
       const credentialsKey = resolveAuthCredentialsScopeKey(captured.credentials);
       const quotaContext = { credentials: captured.credentials, ref: refs[2]!,
@@ -481,8 +792,9 @@ describe('usage query captured Resource adapter', () => {
           sourceKind: 'installed', authentication: { defaultModeId: 'manual', modes: [{ id: 'manual', kind: 'manual',
             outcomeReconciliation: 'none', fields: [] }] }, capabilities: [], availability: { state: 'available', reason: 'resolved' }, diagnostics: [] }] }, captured.accountLifetime);
       await plans.rerender();
-      expect.soft(plans.getCurrent().nameOf(settled.accounts[2]!).serviceLabel).toBe('Email IMAP + SMTP');
-      expect.soft(plans.getCurrent().nameOf(settled.accounts[2]!).title).toBe('Email IMAP + SMTP account');
+      expect.soft(plans.getCurrent().projection.accounts.map(account => account.accountId)).toEqual(['work', 'personal', 'unread']);
+      expect.soft(plans.getCurrent().projection.readAccountCount).toBe(2);
+      expect.soft(plans.getCurrent().projection.unreadAccounts.map(account => account.accountId)).toEqual(['unread']);
       expect.soft((await renderBody(homeEntry)).findHostByTestId('timeline.state')).not.toBeNull();
       const paces = settled.accounts.map(account => account.windows.map(window => window.pace));
       expect(paces[0]?.[0]).not.toBeNull();
@@ -587,10 +899,9 @@ describe('usage query captured Resource adapter', () => {
       if (request.path === '/v4/connect/qualified/provider-account-usage/history') return Response.json({ entries: [], nextCursor: null });
       if (request.path === '/v2/pending/reset-starts/read') return Response.json({ entries: [] });
       return undefined;
-    });
-    storage.setState({ profile: AccountProfileSchema.parse({ id: captured.accountLifetime.scope.accountId,
+    }, {
       connectedAccountsV4: [{ ref, status: 'connected', authenticationModeId: 'manual', revisionSemantics: 'revisioned',
-        credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] }] }) });
+        credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] }] });
     await getServerFeaturesSnapshot({ serverId: captured.accountLifetime.scope.serverId, force: true });
     const query = normalizeUsageQuery({ period: { relative: '7days' }, includeSessionEvidence: false, includeWorkEvidence: false });
     const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
@@ -642,6 +953,7 @@ describe('usage query captured Resource adapter', () => {
     } finally { account.dispose(); }
   });
   it('settles accounting-only demand without private Session or SCM acquisition', async () => {
+    scmTransport.mockClear();
     const captured = await context(request => request.path === '/v2/usage/query' ? Response.json({ ...value,
       contributions: [workContribution] }) : undefined);
     storage.setState({ profileScope: captured.accountLifetime.scope,
@@ -661,8 +973,44 @@ describe('usage query captured Resource adapter', () => {
       expect(slice.sources).toContainEqual({ source: 'work', status: 'not_loaded' });
       expect(slice.sources).toContainEqual({ source: 'how_you_work', status: 'not_loaded' });
       expect(slice.pending).toBe(false);
-      expect(home!.requests.filter(request => /\/sessions\//.test(request.path))).toEqual([]);
+      // Home Sync has its own metadata/active-list bootstrap. Only exact Session
+      // and transcript reads acquire the private evidence excluded by this query.
+      expect(home!.requests.filter(request => /^\/v2\/sessions\/work-session(?:\/|$)/.test(request.path)
+        || /^\/v1\/sessions\/[^/]+\/messages$/.test(request.path))).toEqual([]);
+      expect(scmTransport).not.toHaveBeenCalled();
     } finally { release(); }
+  });
+
+  it('releases superseded Resource bytes while the replacement read is still pending', async () => {
+    const { Session: InspectorSession } = await import('node:inspector');
+    const gate = createDeferred<void>();
+    let hold = false;
+    const captured = await context(async request => {
+      if (request.path !== '/v2/usage/query') return undefined;
+      if (hold) await gate.promise;
+      return Response.json(value);
+    });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({
+      queries: [normalizeUsageQuery({ period: { relative: 'all' }, includeSessionEvidence: false, includeWorkEvidence: false })],
+    }) });
+    const release = entry.subscribe(() => {}, false);
+    const inspector = new InspectorSession();
+    inspector.connect();
+    let refreshing: ReturnType<typeof entry.refresh> | undefined;
+    try {
+      await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
+      const superseded = new WeakRef(entry.getSnapshot().value!);
+      hold = true;
+      refreshing = entry.refresh();
+      await expect.poll(() => entry.getSnapshot().value !== superseded.deref()).toBe(true);
+      expect(entry.getSnapshot().pending).not.toBe('idle');
+      // End the weak dereference job, then collect through the same inspector
+      // boundary used by the message-body retention regression below.
+      await new Promise<void>(resolve => setImmediate(resolve));
+      await new Promise<void>((resolve, reject) => inspector.post('HeapProfiler.collectGarbage', error => error ? reject(error) : resolve()));
+      expect(superseded.deref() === undefined, 'a refresh needs prior facts, not their superseded serialized bytes').toBe(true);
+      expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.accounting).toMatchObject(value);
+    } finally { gate.resolve(); await refreshing; release(); inspector.disconnect(); }
   });
 
   it('does not re-encode identical progressive and terminal content', async () => {
@@ -670,7 +1018,12 @@ describe('usage query captured Resource adapter', () => {
     const submitted: string[] = [];
     const originalDigest = platformDigest.digest;
     vi.spyOn(platformDigest, 'digest').mockImplementation(async (algorithm, bytes) => {
-      submitted.push(new TextDecoder().decode(bytes));
+      const text = new TextDecoder().decode(bytes);
+      // Bootstrap also hashes unrelated Account material. This contract owns
+      // only the queried Resource's progressive/terminal JSON representation.
+      if (text.startsWith('{"v":1,"results":[')) {
+        submitted.push(text);
+      }
       return await originalDigest(algorithm, bytes);
     });
     const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query',
@@ -760,10 +1113,9 @@ describe('usage query captured Resource adapter', () => {
         metadata: { fetchedAt: now, staleAfterMs: 60_000, status: 'ok' }, sources: [source] });
       if (request.path === '/v4/connect/qualified/provider-account-usage/history') return Response.json({ entries: [], nextCursor: null });
       return undefined;
-    });
-    storage.setState({ profileScope: captured.accountLifetime.scope, profile: AccountProfileSchema.parse({ id: captured.accountLifetime.scope.accountId,
+    }, {
       connectedAccountsV4: [{ ref, status: 'connected', authenticationModeId: 'manual', revisionSemantics: 'revisioned',
-        credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] }] }) });
+        credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] }] });
     const basis = getActiveServerSnapshot();
     await getServerFeaturesSnapshot({ serverId: basis.serverId, force: true });
     const readContext = { credentials: captured.credentials, ref,
@@ -834,6 +1186,36 @@ describe('usage query captured Resource adapter', () => {
     await expect(readUiUsageQueryBatch(captured, { queries: [query] }, undefined, first))
       .rejects.toMatchObject({ code: 'stale_surface' });
   });
+  it('refreshes coverage names and Account facts while ignoring reachability without a machine-consuming read', async () => {
+    let observed: UsageAnalyticsQueryResponse = { ...value, coverage: { status: 'partial', reasons: [], missingDimensions: [],
+      range: { complete: false }, ranked: [], sources: [{ source: 'native-history', path: 'native', status: 'available',
+        eventCount: 1, machineId: 'labels-only', captureKind: 'from_logs' }] } };
+    const captured = await context(request => request.path === '/v2/usage/query' ? Response.json(observed) : undefined);
+    const machine = createMachineFixture({ id: 'labels-only', activeAt: Date.now() });
+    storage.setState({ machines: { [machine.id]: { ...machine, metadata: { ...machine.metadata!, displayName: 'Before' } } } });
+    const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 } });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
+    const release = entry.subscribe(() => {}, true);
+    const slice = () => decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!;
+    const acquisitions = () => home!.requests.filter(request => request.path === '/v2/usage/query').length;
+    try {
+      await entry.refresh();
+      expect(slice().accounting?.coverage?.sources[0]?.displayLocation).toBe('Before');
+      await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
+      const beforeFlip = acquisitions();
+      recordMachineRequestFailed({ ...captured.accountLifetime.scope, machineId: machine.id });
+      await flushHookEffects();
+      await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
+      expect(acquisitions()).toBe(beforeFlip);
+      storage.setState({ machines: { [machine.id]: { ...machine, metadata: { ...machine.metadata!, displayName: 'After' } } } });
+      await expect.poll(() => slice().accounting?.coverage?.sources[0]?.displayLocation).toBe('After');
+      await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
+      expect(acquisitions()).toBeGreaterThan(beforeFlip);
+      observed = { ...observed, totals: { ...observed.totals, eventCount: 9 } };
+      publishHomeAccountChange(captured.accountLifetime.scope.serverId);
+      await expect.poll(() => slice().accounting?.totals.eventCount).toBe(9);
+    } finally { release(); }
+  });
   it('shares admitted hypothetical selector reads and never relabels a live response as a future comparison', async () => {
     const captured = await context(() => undefined);
     const input = { machineId: 'selected', group: { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, groupId: 'work' },
@@ -875,9 +1257,17 @@ describe('usage query captured Resource adapter', () => {
     const historical: UsageAnalyticsQueryResponse = { v: 1, totals: { eventCount: 1, tokens, cost }, contributions: [
       { ...workContribution, id: 'price-history', sessionId: null, modelId: 'private-model', tokens, cost },
     ] };
-    const captured = await context(request => request.path === '/v2/usage/query' ? Response.json(historical) : undefined);
-    const setPrice = (inputUsdPerMillion: number) => storage.setState({ settingsScope: captured.accountLifetime.scope,
-      settings: settingsParse({ usageModelPriceOverridesV1: { 'private-model': { kind: 'rates', inputUsdPerMillion, outputUsdPerMillion: 4 } } }) });
+    const priceSettings = (inputUsdPerMillion: number) => settingsParse({ usageModelPriceOverridesV1: {
+      'private-model': { kind: 'rates', inputUsdPerMillion, outputUsdPerMillion: 4 } } });
+    const captured = await context(request => request.path === '/v2/usage/query' ? Response.json(historical) : undefined,
+      undefined, priceSettings(2));
+    let settingsVersion = 1;
+    const setPrice = (inputUsdPerMillion: number) => {
+      const settings = priceSettings(inputUsdPerMillion);
+      home!.replaceAccountSettings('a', { settings, version: ++settingsVersion });
+      saveAccountSettings(captured.accountLifetime.scope, settings, settingsVersion);
+      storage.setState({ settingsScope: captured.accountLifetime.scope, settings });
+    };
     setPrice(2);
     const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 } });
     const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
@@ -894,29 +1284,34 @@ describe('usage query captured Resource adapter', () => {
         !JSON.stringify(request.body).includes('usageModelPriceOverridesV1'))).toBe(true);
       storage.setState({ settingsScope: { serverId: 'foreign', accountId: 'other' },
         settings: settingsParse({ usageModelPriceOverridesV1: { 'private-model': { kind: 'rates', inputUsdPerMillion: 100, outputUsdPerMillion: 100 } } }) });
-      await expect.poll(() => read().costFactTotals?.find(fact => fact.kind === 'unpriced')?.amountUsd).toBeNull();
-      expect(read().costFactTotals?.find(fact => fact.kind === 'api_equivalent')).toBeUndefined();
+      await entry.refresh();
+      // A different focused Account cannot supply its overrides. The captured
+      // Account still has its own canonical persisted settings when unfocused.
+      await expect.poll(() => read().costFactTotals?.find(fact => fact.kind === 'api_equivalent')?.amountUsd).toBe(8);
+      expect(read().accounting?.totals.cost).toMatchObject(cost);
     } finally { release(); }
   });
   it('shares qualified overlapping pools and selector revisions in the exact machine-scoped Resource', async () => {
-    const captured = await context(request => request.path === '/v2/usage/query' ? Response.json(value) : undefined);
     const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
-    const group = (groupId: string, memberAccountIds: string[]) => ({ v: 1, ref: { service, groupId }, incarnation: 'incarnation',
+    const group = (groupId: string, memberAccountIds: string[]) => QualifiedConnectedAccountGroupV4Schema.parse({ v: 1, ref: { service, groupId }, incarnation: 'incarnation',
       displayName: groupId, policy: { strategy: 'priority' }, activeConnectedAccountId: 'work', generation: 1,
       runtimeStateRevision: 1, state: {}, createdAt: 1, updatedAt: 1,
       members: memberAccountIds.map(connectedAccountId => ({ v: 1, connectedAccountId, priority: 1, enabled: true,
         state: {}, createdAt: 1, updatedAt: 1 })) });
-    storage.setState({ profile: AccountProfileSchema.parse({ id: captured.accountLifetime.scope.accountId,
+    const captured = await context(request => request.path === '/v2/usage/query' ? Response.json(value) : undefined, {
       connectedAccountsV4: ['work', 'personal', 'standalone'].map(accountId => ({ ref: { service, accountId }, status: 'connected',
         authenticationModeId: 'manual', revisionSemantics: 'revisioned', credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz',
         configurationReady: false, configurationRevision: null, scopes: [] })),
-      connectedAccountGroupsV4: [group('first', ['work', 'personal']), group('second', ['work'])] }),
+      connectedAccountGroupsV4: [group('first', ['work', 'personal']), group('second', ['work'])] });
+    storage.setState({
       machines: { selected: createMachineFixture({ id: 'selected', activeAt: Date.now() }),
         other: createMachineFixture({ id: 'other', activeAt: Date.now() }) } });
     let selectedId = 'work';
     let denied = false;
     let unavailable = false;
+    let timedOut = true;
     scmTransport.mockImplementation(async (input: { machineId: string; payload: { group: { service: typeof service; groupId: string } } }) => {
+      if (timedOut) throw Object.assign(new Error('Selector timed out'), { code: 'MACHINE_RPC_TIMEOUT' });
       if (denied) throw Object.assign(new Error('Denied'), { code: 'denied' });
       if (unavailable) return { status: 'unavailable', code: 'connected_account_daemon_runtime_unavailable' };
       expect(input.machineId).toBe('selected');
@@ -930,10 +1325,19 @@ describe('usage query captured Resource adapter', () => {
     const release = entry.subscribe(() => {}, true);
     try {
       await entry.refresh();
+      const failed = decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!;
+      expect(failed.pools?.every(pool => pool.selection.status === 'error' && pool.selection.errorCode === 'MACHINE_RPC_TIMEOUT')).toBe(true);
+      expect(failed.sources.filter(source => source.source.startsWith('selection:')))
+        .toEqual(expect.arrayContaining([expect.objectContaining({ status: 'error', errorCode: 'MACHINE_RPC_TIMEOUT' })]));
+      timedOut = false;
+      await entry.refresh();
       const pools = decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.pools;
       expect(pools).toMatchObject([{ group: { service, groupId: 'first' }, memberAccountIds: ['work', 'personal'],
         selection: { status: 'available', machineId: 'selected', value: { selection: { selected: { profileId: 'work' } } } } },
         { group: { service, groupId: 'second' }, memberAccountIds: ['work'] }]);
+      expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.sources.filter(source => source.source.startsWith('selection:')))
+        .toEqual(expect.arrayContaining([expect.objectContaining({ status: 'available', asOfMs: 100 })]));
+      expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.sources.some(source => source.errorCode === 'MACHINE_RPC_TIMEOUT')).toBe(false);
       selectedId = 'personal';
       publishHomeAccountChange(captured.accountLifetime.scope.serverId);
       await expect.poll(() => decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.pools?.[0]?.selection.value)
@@ -945,9 +1349,18 @@ describe('usage query captured Resource adapter', () => {
       const ambiguous = await readUiUsageQueryBatch(captured, { queries: [normalizeUsageQuery({})] });
       expect(ambiguous.results[0]?.pools?.every(pool => pool.selection.status === 'unknown' && pool.selection.machineId === undefined)).toBe(true);
       denied = false;
+      await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
+      const acquisitions = () => home!.requests.filter(request => request.path === '/v2/usage/query').length;
+      const beforeUnrelatedFlip = acquisitions();
+      recordMachineRequestFailed({ ...captured.accountLifetime.scope, machineId: 'other' });
+      await flushHookEffects();
+      await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
+      expect(acquisitions(), 'an unrelated machine must not re-acquire accounting').toBe(beforeUnrelatedFlip);
       recordMachineRequestFailed({ ...captured.accountLifetime.scope, machineId: 'selected' });
       await expect.poll(() => decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.pools?.[0]?.selection)
         .toMatchObject({ status: 'unsupported', errorCode: 'no_machine' });
+      await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
+      expect(acquisitions()).toBeGreaterThan(beforeUnrelatedFlip);
       recordMachineRequestSucceeded({ ...captured.accountLifetime.scope, machineId: 'selected' });
       await expect.poll(() => decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.pools?.[0]?.selection.status).toBe('available');
       unavailable = true;
@@ -1088,9 +1501,9 @@ describe('usage query captured Resource adapter', () => {
       }).toBe(2);
       expect(entry.getSnapshot().pending).toBe('refresh');
       expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.sources)
-        .toContainEqual({ source: 'work', status: 'pending' });
+        .toContainEqual(expect.objectContaining({ source: 'work', status: 'pending' }));
       expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.sources)
-        .toContainEqual({ source: 'how_you_work', status: 'pending' });
+        .toContainEqual(expect.objectContaining({ source: 'how_you_work', status: 'pending' }));
       retireActiveServerAccountScopeLifetime();
       work.resolve({ success: true, pullRequests: [] });
       privateSession.resolve(Response.json({ error: 'not_found' }, { status: 404 }));
@@ -1121,7 +1534,8 @@ describe('usage query captured Resource adapter', () => {
     const accounting: UsageAnalyticsQueryResponse = { ...value, contributions: [workContribution], activity: {
       weekdayHourBuckets: [{ weekday: 5, hour: 0, eventCount: 7 }, { weekday: 5, hour: 12, eventCount: 3 }] } };
     const captured = await context(request => request.path === '/v2/usage/query' ? Response.json(accounting)
-      : request.path === '/v2/sessions/work-session' ? (requestedPrivate.resolve(), privateSession.promise) : undefined);
+      : request.path === '/v2/sessions/work-session' ? (requestedPrivate.resolve(), privateSession.promise) : undefined,
+      undefined, { usageNightHoursV1: { startHour: 22, endHour: 6 } });
     storage.setState({ settingsScope: captured.accountLifetime.scope,
       settings: settingsParse({ usageNightHoursV1: { startHour: 22, endHour: 6 } }) });
     const query = normalizeUsageQuery({ session: 'work-session', period: { startMs: 0, endMs: 86400000 }, timeZoneOffsetMinutes: 120 });
@@ -1254,10 +1668,9 @@ describe('usage query captured Resource adapter', () => {
       if (request.path === '/v4/connect/qualified/provider-account-usage/history') return history.promise.then(response => response.clone());
       if (request.path === '/v2/pending/reset-starts/read') return Response.json({ entries: [] });
       return undefined;
-    });
-    storage.setState({ profile: AccountProfileSchema.parse({ id: captured.accountLifetime.scope.accountId,
+    }, {
       connectedAccountsV4: [ref, slowRef].map(ref => ({ ref, status: 'connected', authenticationModeId: 'manual', revisionSemantics: 'revisioned',
-        credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] })) }) });
+        credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] })) });
     await getServerFeaturesSnapshot({ serverId: captured.accountLifetime.scope.serverId, force: true });
     const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [{ period: { relative: '7days' } }] }) });
     const slice = () => { const content = entry.getSnapshot().value; return content ? decodeUsageQueryResource(content).results[0] : undefined; };
@@ -1297,8 +1710,17 @@ describe('usage query captured Resource adapter', () => {
       };
       const screen = await renderScreen(body());
       expect(screen.findByTestId('quota-capacity.cell.ready')).toBeTruthy();
-      expect(screen.findByTestId('quota-capacity.cell.slow')).toBeTruthy();
-      expect(screen.findByTestId('quota-fit.plan.slow')).toBeTruthy();
+      if (failureFirst) {
+        // The current Plans presentation collapses settled never-read accounts
+        // into its unread line; the qualified failure and Retry remain visible.
+        expect(screen.findByTestId('quota-capacity.cell.slow')).toBeNull();
+        expect(screen.findByTestId('quota-capacity.unread')).toBeTruthy();
+        expect(screen.findByTestId('quota-fit.plan.slow')).toBeNull();
+        expect(slowState()).toMatchObject({ status: 'error', errorCode: 'snapshot_read_failed' });
+      } else {
+        expect(screen.findByTestId('quota-capacity.cell.slow')).toBeTruthy();
+        expect(screen.findByTestId('quota-fit.plan.slow')).toBeTruthy();
+      }
       if (!failureFirst) {
         expect(screen.findByTestId('quota-capacity.reading')).toBeTruthy();
         expect(screen.findHostByTestId('quota-capacity.state')).toBeNull();
@@ -1377,10 +1799,9 @@ describe('usage query captured Resource adapter', () => {
         } finally { catalogActive = false; }
       }
       return undefined;
-    });
-    storage.setState({ profileScope: captured.accountLifetime.scope, profile: AccountProfileSchema.parse({ id: captured.accountLifetime.scope.accountId,
+    }, {
       connectedAccountsV4: refs.map(ref => ({ ref, status: 'connected', authenticationModeId: 'manual', revisionSemantics: 'revisioned',
-        credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] })) }) });
+        credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] })) });
     await getServerFeaturesSnapshot({ serverId: captured.accountLifetime.scope.serverId, force: true });
     const input = { queries: [normalizeUsageQuery({ period: { startMs: now - 1000, endMs: now + 1000 } })] };
     const reading = readUiUsageQueryBatch(captured, input);
@@ -1399,7 +1820,7 @@ describe('usage query captured Resource adapter', () => {
     } finally { catalog.resolve(); await reading.catch(() => {}); }
   });
 
-  it('opens first-use B from qualified profile sources without cache hydration and publishes accepted history before a held later page', async () => {
+  it('opens first-use B without cache hydration and admits its lossless projection only after the backfill completes', async () => {
     const ref = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'first-use' };
     const source = { bindingKind: 'account' as const, ref };
     const now = Date.parse('2026-10-11T21:30:05.321Z');
@@ -1425,16 +1846,16 @@ describe('usage query captured Resource adapter', () => {
           request.url.searchParams.get('query'));
         if ('history' in query && query.history.range) historyRanges.push(query.history.range);
         if ('history' in query && query.history.cursor) return later.promise.then(response => response.clone());
-        return Response.json({ entries: [{ id: 'first-use-page', observedAtMs: now, record: { content: { t: 'plain', v: snapshot },
-          metadata: { fetchedAt: now, staleAfterMs: 60_000, status: 'ok' }, sources: [source] } }],
-          nextCursor: { id: 'first-use-page', observedAtMs: now } });
+        return Response.json({ entries: [{ id: 'first-use-page', observedAtMs: now - 1, record: {
+          content: { t: 'plain', v: { ...snapshot, observedAtMs: now - 1, fetchedAtMs: now - 1 } },
+          metadata: { fetchedAt: now - 1, staleAfterMs: 60_000, status: 'ok' }, sources: [source] } }],
+          nextCursor: { id: 'first-use-page', observedAtMs: now - 1 } });
       }
       if (request.path === '/v2/pending/reset-starts/read') return pending.promise.then(response => response.clone());
       return undefined;
-    });
-    storage.setState({ profile: AccountProfileSchema.parse({ id: captured.accountLifetime.scope.accountId,
+    }, {
       connectedAccountsV4: [{ ref, status: 'connected', authenticationModeId: 'manual', revisionSemantics: 'revisioned',
-        credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] }] }) });
+        credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] }] });
     await getServerFeaturesSnapshot({ serverId: captured.accountLifetime.scope.serverId, force: true });
     const providerScope = buildProviderAccountUsageScopeKey({ serverId: captured.accountLifetime.scope.serverId,
       generation: getActiveServerSnapshot().generation, credentialScope: resolveAuthCredentialsScopeKey(captured.credentials) });
@@ -1446,14 +1867,12 @@ describe('usage query captured Resource adapter', () => {
         const content = entry.getSnapshot().value;
         return content && decodeUsageQueryResource(content).results[0]?.quota?.[0]?.current;
       }).toEqual(snapshot);
-      await expect.poll(() => {
-        const content = entry.getSnapshot().value;
-        return content && decodeUsageQueryResource(content).results[0]?.quota?.[0]?.history?.entries.length;
-      }).toBe(1);
+      await expect.poll(() => historyRanges.length).toBeGreaterThan(1);
       expect(historyRanges[0]).toEqual({ startAtMs: Date.parse('2026-10-05T00:00:00Z'), endAtMs: now });
       expect(entry.getSnapshot().pending).toBe('initial');
       expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]).toMatchObject({ accounting: value,
-        quota: [{ source, current: snapshot, history: { nextCursor: { id: 'first-use-page' } }, unusedCapacity: { historyStatus: 'partial' } }] });
+        quota: [{ source, current: snapshot, unusedCapacity: { historyStatus: 'not_loaded' } }] });
+      expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.quota?.[0]?.pageProjection).toBeUndefined();
       expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.sources)
         .toContainEqual(expect.objectContaining({ source: expect.stringMatching(/^quota:/), status: 'stale' }));
       later.resolve(Response.json({ entries: [], nextCursor: null }));
@@ -1461,6 +1880,12 @@ describe('usage query captured Resource adapter', () => {
       // facet is still outstanding. It cannot keep every account "Still reading".
       await expect.poll(() => decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.sources
         .find(source => source.source.startsWith('quota:'))?.status).toBe('available');
+      const projected = decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.quota?.[0];
+      expect(projected?.history).toBeUndefined();
+      expect(projected?.pageProjection).toBeUndefined();
+      expect(projected?.pageFacts).toMatchObject({ historyStatus: 'complete',
+        resetWitness: { id: 'first-use-page', observedAtMs: now - 1,
+          snapshot: { ...snapshot, observedAtMs: now - 1, fetchedAtMs: now - 1 } } });
       expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.sources)
         .toContainEqual(expect.objectContaining({ source: 'quota', status: 'available' }));
       pending.resolve(Response.json({ entries: [] }));
@@ -1501,6 +1926,7 @@ describe('usage query captured Resource adapter', () => {
     let heldHistoryResponse: Response | undefined;
     const recordKey = { providerId: 'codex', accountSubjectId: 'provider-work', subjectKind: 'account' as const, quotaScope: 'account' as const };
     const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
     const snapshot = { v: 1 as const, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
       providerId: 'codex', accountSubject: { kind: 'providerSubject' as const, id: 'provider-work' },
       observedAtMs: now, fetchedAtMs: now, staleAfterMs: 60_000, source: 'providerHttp' as const,
@@ -1533,6 +1959,10 @@ describe('usage query captured Resource adapter', () => {
       if (request.path === '/v4/connect/qualified/provider-account-usage/history') {
         const query = parseQualifiedConnectedAccountV4StructuredQueryValue(QualifiedProviderAccountUsageHistoryRequestV4Schema,
           request.url.searchParams.get('query'));
+        // Rebuild an explicitly absent projection to exercise held backfill,
+        // failure and refusal. Persisted reuse has the producer/HTTP suite.
+        if ('projection' in query) return historyUnavailable ? new Response('history unavailable', { status: 404 })
+          : Response.json({ projection: null, complete: false });
         const later = 'history' in query && query.history.cursor !== undefined;
         if (historyUnavailable || later && laterHistoryUnavailable) return new Response('history unavailable', { status: 404 });
         if (later && laterHistoryDenied) return new Response('history refused', { status: 403 });
@@ -1552,10 +1982,9 @@ describe('usage query captured Resource adapter', () => {
       }
       if (request.path === '/v2/pending/reset-starts/read') return Response.json({ entries: [] });
       return undefined;
-    });
-    storage.setState({ profile: AccountProfileSchema.parse({ id: captured.accountLifetime.scope.accountId,
+    }, {
       connectedAccountsV4: [{ ref, status: 'connected', authenticationModeId: 'manual', revisionSemantics: 'revisioned',
-        credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] }] }) });
+        credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false, configurationRevision: null, scopes: [] }] });
     const serverBasis = getActiveServerSnapshot();
     expect((await getServerFeaturesSnapshot({ serverId: serverBasis.serverId, force: true })).status).toBe('ready');
     // A Usage Action can settle before any legacy quota-cache consumer mounts.
@@ -1565,6 +1994,7 @@ describe('usage query captured Resource adapter', () => {
     const unhydratedSlice = unhydratedSettled.results[0]!;
     const unhydratedPlans = projectUsagePlans(unhydratedSlice.quota ?? [], now, unhydratedSlice.pools, unhydratedSlice.sources);
     expect(unhydratedPlans.tightest?.window.remainingFraction).toBe(0.6);
+    expect(unhydratedSlice.quota?.[0]?.pageFacts).toMatchObject({ historyStatus: 'complete', resetWitness: { id: 'second' } });
     const unhydratedRevisions: typeof unhydratedSettled[] = [];
     await readUiUsageQueryBatch(captured, { queries: [unhydratedQuery] }, undefined, unhydratedSettled,
       { onProgress: batch => { unhydratedRevisions.push(batch); } });
@@ -1575,7 +2005,7 @@ describe('usage query captured Resource adapter', () => {
       expect.soft(plans.tightest).toEqual(unhydratedPlans.tightest);
       expect.soft(plans.accounts[0]?.observedAtMs).toBe(now);
       expect.soft(usageCoverageSummary(slice, ['quota'])).toBe(usageCoverageSummary(unhydratedSlice, ['quota']));
-      expect.soft(slice.quota?.[0]?.history).toEqual(unhydratedSlice.quota?.[0]?.history);
+      expect.soft(slice.quota?.[0]?.pageFacts).toEqual(unhydratedSlice.quota?.[0]?.pageFacts);
     }
     const credentialScope = [captured.accountLifetime.scope.serverId, String(serverBasis.generation), resolveAuthCredentialsScopeKey(captured.credentials)].join('\u0000');
     const readContext = { credentials: captured.credentials, credentialScope, ref,
@@ -1614,8 +2044,9 @@ describe('usage query captured Resource adapter', () => {
       await expect.poll(() => decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.quota?.[0]).toMatchObject({ source,
         current: snapshot, waitingWork: { status: 'available', entries: [] } });
       const fullRead = (await readUiUsageQueryBatch(captured, { queries: [query] })).results[0]?.quota?.[0];
-      expect(fullRead?.history?.entries.map(entry => entry.id)).toEqual(['first', 'second']);
-      expect(fullRead?.history?.nextCursor).toBeNull();
+      expect(fullRead?.history).toBeUndefined();
+      expect(fullRead?.pageProjection).toBeUndefined();
+      expect(fullRead?.pageFacts).toMatchObject({ historyStatus: 'complete', resetWitness: { id: 'second' } });
       expect(fullRead?.unusedCapacity).toMatchObject({ historyStatus: 'returned_page', windows: [{ value: {
         status: 'available', method: 'terminal_observation', qualification: 'confirmed', sampleCount: 2 } }] });
       expect(fullRead?.unusedCapacity?.windows[0]?.value).toHaveProperty('unusedAmount', expect.closeTo(30));
@@ -1635,7 +2066,7 @@ describe('usage query captured Resource adapter', () => {
       for (const revision of revisions) {
         const slice = revision.results[0]!;
         expect.soft(projectUsagePlans(slice.quota ?? [], now, slice.pools, slice.sources).tightest).toEqual(settledPlans.tightest);
-        expect.soft(slice.quota?.[0]?.history).toEqual(settledSlice.quota?.[0]?.history);
+        expect.soft(slice.quota?.[0]?.pageFacts).toEqual(settledSlice.quota?.[0]?.pageFacts);
       }
       // Usage can acquire a new batch entry while Home's single-query entry is
       // warm. The admitted cache reading is still settled for that new entry.
@@ -1666,14 +2097,21 @@ describe('usage query captured Resource adapter', () => {
       holdLaterHistory = false;
       laterHistory.resolve(heldHistoryResponse!);
       await refreshingHistory;
-      expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.quota?.[0]?.history?.entries).toHaveLength(2);
+      const refreshedQuota = decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.quota?.[0];
+      expect(refreshedQuota?.pageFacts).toMatchObject({ historyStatus: 'complete', resetWitness: { id: 'second' } });
       laterHistoryUnavailable = true;
       const partialRead = (await readUiUsageQueryBatch(captured, { queries: [query] })).results[0]?.quota?.[0];
       expect(partialRead).toMatchObject({
-        current: snapshot, history: { entries: [{ id: 'first' }], nextCursor: { id: 'first' } },
-        unusedCapacity: { historyStatus: 'partial', windows: [{ value: {
-          status: 'available', method: 'linear_pace_at_last_observation', qualification: 'estimated', sampleCount: 1 } }] } });
-      expect(partialRead?.unusedCapacity?.windows[0]?.value).toHaveProperty('unusedAmount', expect.closeTo(60));
+        current: snapshot, unusedCapacity: { historyStatus: 'unavailable', windows: [] } });
+      // AR-5 never admits an incomplete prefix as the complete page document.
+      expect(partialRead?.pageProjection).toBeUndefined();
+      expect(partialRead?.history).toBeUndefined();
+      const beforeIncomplete = decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!;
+      await entry.refresh();
+      const afterIncomplete = decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!;
+      expect.soft(afterIncomplete.quota?.[0]?.pageFacts, 'an incomplete reread must retain the last complete pace/history')
+        .toEqual(beforeIncomplete.quota?.[0]?.pageFacts);
+      expect.soft(afterIncomplete.sources).toContainEqual(expect.objectContaining({ source: 'quota', status: 'stale' }));
       laterHistoryUnavailable = false;
       laterHistoryDenied = true;
       expect((await readUiUsageQueryBatch(captured, { queries: [query] })).results[0]?.quota?.[0]).toBeUndefined();
@@ -1792,6 +2230,7 @@ describe('usage query captured Resource adapter', () => {
       if (request.path === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 1,
         signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
       if (request.path === '/v2/sessions/staged-session') return session.promise;
+      if (request.path === '/v1/sessions/staged-session/turns') return Response.json({ v: 1, sessionId: 'staged-session', updatedAt: 900, turns: [] });
       if (request.path === '/v1/sessions/staged-session/messages') return Response.json({ messages: [], hasMore: false });
       return undefined;
     });
@@ -1825,13 +2264,203 @@ describe('usage query captured Resource adapter', () => {
       await detailCompleted.promise;
       const completed = decodeUsageQueryResource(entry.getSnapshot().value!).results[0];
       expect(completed?.accounting).toMatchObject(accounting);
-      expect(completed?.sources).toContainEqual({ source: 'work', status: 'unsupported' });
+      expect(completed?.sources).toContainEqual({ source: 'work', status: 'unsupported', asOfMs: expect.any(Number) });
       expect(completed?.howYouWork?.detailStatus).toBe('partial');
       expect(completed?.sources.some(source => source.source === 'how_you_work' && source.status === 'pending')).toBe(false);
     } finally { release(); }
   });
 
+  it('keeps same-scope approval waits consistent across Coach and Human loop while empty turn history stays unknown', async () => {
+    const nowMs = Date.now();
+    const captured = await context(request => {
+      if (request.path === '/v2/usage/query') return Response.json(value);
+      if (request.path === '/v2/sessions/truth') return Response.json({ session: { ...createPlainSessionCurrentProjectionRecordFixture({ id: 'truth',
+        createdAt: 1, updatedAt: nowMs, seq: 1, active: true, activeAt: nowMs, metadataVersion: 1, agentStateVersion: 1 }),
+        agentState: JSON.stringify({ completedRequests: { approval: { tool: 'Bash', arguments: {},
+          createdAt: nowMs - 1000, completedAt: nowMs - 500, status: 'approved' } } }) } });
+      if (request.path === '/v1/sessions/truth/turns') return Response.json({ v: 1, sessionId: 'truth', updatedAt: nowMs, turns: [] });
+      if (request.path === '/v1/sessions/truth/messages') return Response.json({ messages: [], hasMore: false });
+      return undefined;
+    });
+    storage.setState({ profileScope: captured.accountLifetime.scope, sessions: { truth: createSessionFixture({ id: 'truth', seq: 1,
+      serverId: captured.accountLifetime.scope.serverId, encryptionMode: 'plain' }) } });
+    const parallel = normalizeUsageQuery({ period: { relative: '7days' }, includeWorkEvidence: false, includeTranscriptEvidence: false });
+    const humanLoop = normalizeUsageQuery({ ...parallel, includeTranscriptEvidence: true });
+    const batch = await readUiUsageQueryBatch(captured, { queries: [parallel, humanLoop] });
+    for (const slice of batch.results) {
+      expect(slice.accounting?.totals.tokens.total).toBe(value.totals.tokens.total);
+      expect(slice.howYouWork?.todayInParallel, 'empty retained turn history cannot establish no runs today').toBeNull();
+      expect(slice.howYouWork?.permissions).toMatchObject({ pairedDecisionCount: 1, decisionLatencyMs: 500 });
+      const finding = slice.coach?.findings.find(row => row.detectorId === 'approval_friction');
+      expect(finding?.measurements).toEqual(expect.arrayContaining([
+        expect.objectContaining({ metric: 'permission_wait', value: 500 }),
+        expect.objectContaining({ metric: 'permission_requests', value: 1 }),
+      ]));
+    }
+  });
+
+  it('settles a summary slice while a sibling transcript in the same batch is held or fails', async () => {
+    const transcript = createDeferred<Response>();
+    const captured = await context(request => {
+      if (request.path === '/v2/usage/query') return Response.json(value);
+      if (request.path === '/v2/sessions/summary') return Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({ id: 'summary',
+        createdAt: 1, updatedAt: 900, seq: 1, active: true, activeAt: 900, metadataVersion: 1, agentStateVersion: 1 }) });
+      if (request.path === '/v1/sessions/summary/turns') return Response.json({ v: 1, sessionId: 'summary', updatedAt: 900,
+        turns: [{ turnId: 'turn', agentId: 'codex', status: 'completed', startedAt: 100, terminalAt: 400, updatedAt: 900 }] });
+      if (request.path === '/v1/sessions/summary/messages') return transcript.promise;
+      return undefined;
+    });
+    storage.setState({ profileScope: captured.accountLifetime.scope, sessions: { summary: createSessionFixture({ id: 'summary', seq: 1,
+      serverId: captured.accountLifetime.scope.serverId, encryptionMode: 'plain' }) } });
+    const summary = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 }, includeWorkEvidence: false, includeTranscriptEvidence: false });
+    const detail = normalizeUsageQuery({ ...summary, includeTranscriptEvidence: true });
+    let progress: Awaited<ReturnType<typeof readUiUsageQueryBatch>> | undefined;
+    const reading = readUiUsageQueryBatch(captured, { queries: [summary, detail] }, undefined, undefined,
+      { onProgress: batch => { progress = batch; } });
+    const slice = (query: typeof summary) => progress?.results.find(row => row.key === getUsageQueryKey(query));
+    try {
+      await expect.poll(() => sessionRequests().some(request => request.path.endsWith('/messages'))).toBe(true);
+      await expect.poll(() => slice(summary)?.sources.find(source => source.source === 'how_you_work')?.status).toBe('partial');
+      expect(slice(summary)?.pending, 'finished summary evidence cannot inherit a sibling transcript read').toBe(false);
+      expect(slice(summary)?.howYouWork?.intervals?.agentTimeMs).toBe(300);
+      expect(slice(summary)?.sources).toContainEqual({ source: 'how_you_work:transcripts', status: 'not_loaded' });
+      expect(slice(detail)?.pending).toBe(true);
+      expect(slice(detail)?.sources).toContainEqual(expect.objectContaining({ source: 'how_you_work', status: 'pending' }));
+    } finally { transcript.resolve(Response.json({ error: 'unavailable' }, { status: 500 })); await reading; }
+    for (const query of [summary, detail]) {
+      expect(slice(query)?.pending, 'a terminal transcript transport failure cannot leave evidence reading').toBe(false);
+      expect(slice(query)?.sources.some(source => source.source.startsWith('how_you_work') && source.status === 'pending')).toBe(false);
+    }
+    expect(slice(detail)?.sources).toContainEqual({ source: 'how_you_work:transcripts', status: 'partial' });
+    expect(slice(detail)?.howYouWork?.inputs).toBeNull();
+  });
+
+  it('settles summary demand independently of a held transcript and admits later transcript demand', async () => {
+    const transcript = createDeferred<Response>();
+    const captured = await context(async request => {
+      if (request.path === '/v2/usage/query') return Response.json(value);
+      if (request.path === '/v2/sessions/summary') return Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({ id: 'summary',
+        createdAt: 1, updatedAt: 900, seq: 1, active: true, activeAt: 900, metadataVersion: 1, agentStateVersion: 1 }) });
+      if (request.path === '/v1/sessions/summary/turns') return Response.json({ v: 1, sessionId: 'summary', updatedAt: 900,
+        turns: [{ turnId: 'turn', agentId: 'codex', status: 'completed', startedAt: 100, terminalAt: 400, updatedAt: 900 }] });
+      if (request.path === '/v1/sessions/summary/messages') return transcript.promise;
+      return undefined;
+    });
+    storage.setState({ profileScope: captured.accountLifetime.scope, sessions: { summary: createSessionFixture({ id: 'summary', seq: 1,
+      serverId: captured.accountLifetime.scope.serverId, encryptionMode: 'plain' }) } });
+    const store = getUsageQueryResourceStore(captured);
+    const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 }, includeWorkEvidence: false, includeTranscriptEvidence: false });
+    const reference = (input: typeof query) => ({ hostRead: 'usage.query' as const, input: projectNativeJsonValueForTransport({ queries: [input] }) });
+    const summary = store.getEntry(reference(query));
+    const detail = store.getEntry(reference(normalizeUsageQuery({ ...query, includeTranscriptEvidence: true })));
+    const slice = (entry: typeof summary) => entry.getSnapshot().value ? decodeUsageQueryResource(entry.getSnapshot().value!).results[0] : undefined;
+    const release = summary.subscribe(() => {}, false);
+    let releaseDetail: (() => void) | undefined;
+    const summaryRead = summary.refresh();
+    try {
+      await expect.poll(() => slice(summary)?.pending).toBe(false);
+      await summaryRead;
+      expect(slice(summary)?.pending).toBe(false);
+      expect(slice(summary)?.howYouWork?.intervals?.agentTimeMs).toBe(300);
+      expect(slice(summary)?.howYouWork?.inputs).toBeNull();
+      expect(slice(summary)?.sources).toContainEqual({ source: 'how_you_work:transcripts', status: 'not_loaded' });
+      expect(sessionRequests().filter(request => request.path.endsWith('/messages'))).toHaveLength(0);
+      releaseDetail = detail.subscribe(() => {}, false);
+      const detailRead = detail.refresh();
+      await expect.poll(() => sessionRequests().some(request => request.path.endsWith('/messages'))).toBe(true);
+      expect(slice(detail)?.pending).toBe(true);
+      expect(slice(summary)?.pending).toBe(false);
+      transcript.resolve(Response.json({ messages: [], hasMore: false }));
+      await detailRead;
+      expect(slice(detail)?.howYouWork?.inputs?.acceptedCount).toBe(0);
+      expect(slice(detail)?.sources).toContainEqual({ source: 'how_you_work:transcripts', status: 'available' });
+      await summary.refresh();
+      expect(sessionRequests().filter(request => request.path.endsWith('/messages'))).toHaveLength(1);
+    } finally { transcript.resolve(Response.json({ messages: [], hasMore: false })); await summaryRead; releaseDetail?.(); release(); }
+  });
+
+  it('publishes admitted intervals while shared transcript detail is held, and withdraws them on refusal', async () => {
+    const secondAdmission = createDeferred<void>();
+    const transcript = createDeferred<Response>();
+    let holdTranscript = true;
+    const captured = await context(async request => {
+      if (request.path === '/v2/usage/query') return Response.json(value);
+      const id = request.path === '/v2/sessions/first' ? 'first'
+        : request.path === '/v2/sessions/second' ? 'second' : null;
+      if (id) {
+        if (id === 'second') await secondAdmission.promise;
+        return Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({ id,
+          createdAt: 1, updatedAt: 900, seq: 1, active: true, activeAt: 900,
+          metadataVersion: 1, agentStateVersion: 1 }) });
+      }
+      if (request.path === '/v1/sessions/first/turns' || request.path === '/v1/sessions/second/turns') {
+        const id = request.path.split('/')[3]!;
+        return Response.json({ v: 1, sessionId: id, updatedAt: 900, turns: [
+          { turnId: 'turn', agentId: 'codex', status: 'completed', startedAt: 100,
+            terminalAt: id === 'first' ? 400 : 700, updatedAt: 900 },
+        ] });
+      }
+      if (request.path === '/v1/sessions/first/messages' && holdTranscript) return transcript.promise;
+      if (request.path.endsWith('/messages')) return Response.json({ messages: [], hasMore: false });
+      return undefined;
+    });
+    storage.setState({ profileScope: captured.accountLifetime.scope, sessions: Object.fromEntries(
+      ['first', 'second'].map(id => [id, createSessionFixture({ id, seq: 1,
+        serverId: captured.accountLifetime.scope.serverId, encryptionMode: 'plain' })]),
+    ) });
+    const store = getUsageQueryResourceStore(captured);
+    const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 }, includeWorkEvidence: false });
+    const broad = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
+    const pinned = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [
+      normalizeUsageQuery({ ...query, session: 'first' }),
+    ] }) });
+    const slice = (entry: typeof broad) => entry.getSnapshot().value
+      ? decodeUsageQueryResource(entry.getSnapshot().value!).results[0] : undefined;
+    const release = broad.subscribe(() => {}, false);
+    let releasePinned: (() => void) | undefined;
+    const refreshing = broad.refresh();
+    try {
+      await expect.poll(() => sessionRequests().some(request => request.path === '/v2/sessions/second')).toBe(true);
+      expect(slice(broad)?.howYouWork?.intervals).toBeNull();
+      secondAdmission.resolve();
+      await expect.poll(() => sessionRequests().some(request => request.path === '/v1/sessions/first/messages')).toBe(true);
+      await expect.poll(() => slice(broad)?.howYouWork?.intervals?.agentTimeMs).toBe(900);
+      expect(slice(broad)?.sources).toEqual(expect.arrayContaining([
+        expect.objectContaining({ source: 'how_you_work', status: 'pending' }),
+        expect.objectContaining({ source: 'how_you_work:sessions', status: 'available' }),
+        expect.objectContaining({ source: 'how_you_work:transcripts', status: 'pending' }),
+      ]));
+      // A newly mounted query joins the existing Account read and receives its
+      // admitted facts immediately; it cannot start a parallel detail reader.
+      releasePinned = pinned.subscribe(() => {}, false);
+      const pinnedRefresh = pinned.refresh();
+      await expect.poll(() => slice(pinned)?.howYouWork?.intervals?.agentTimeMs).toBe(300);
+      expect(sessionRequests().filter(request => request.path === '/v2/sessions/first')).toHaveLength(1);
+      expect(sessionRequests().filter(request => request.path === '/v1/sessions/first/messages')).toHaveLength(1);
+      transcript.resolve(Response.json({ error: 'denied' }, { status: 403 }));
+      await Promise.all([refreshing, pinnedRefresh]);
+      expect(slice(broad)?.howYouWork?.intervals).toBeNull();
+      expect(slice(pinned)?.howYouWork?.intervals).toBeNull();
+      expect(slice(broad)?.sources.some(source => source.source.startsWith('how_you_work') && source.status === 'pending')).toBe(false);
+      holdTranscript = false;
+      await broad.refresh();
+      expect(slice(broad)?.howYouWork?.intervals?.agentTimeMs).toBe(900);
+    } finally {
+      secondAdmission.resolve();
+      transcript.resolve(Response.json({ messages: [], hasMore: false }));
+      await refreshing;
+      releasePinned?.();
+      release();
+    }
+  });
+
   it.each([{}, { projects: ['project'] }, { sources: ['runtime'] }])('opens aggregate composition and accepted delivery within scope %j', async filters => {
+    const coachSession = createPlainSessionCurrentProjectionRecordFixture({
+      id: 'coach-session', createdAt: 1, updatedAt: 900, seq: 1, active: true, activeAt: 900,
+      metadataVersion: 1, metadata: { name: 'Opened', path: '/workspace/project', host: 'host', machineId: 'machine',
+        runtimeDescriptorV1: { v: 1, agentId: 'codex', agent: {} } },
+      agentStateVersion: 1,
+    });
     const composition = { v: 1, evidenceId: 'composition', sessionId: 'coach-session', turnId: 'turn', inputId: 'input',
       observedAtMs: 300, boundary: 'host_pre_dispatch', deliveryKind: 'newTurn', coverage: 'host_only',
       components: ['a', 'c'].map(source => ({ sourceId: source.repeat(64), digest: 'b'.repeat(64),
@@ -1843,14 +2472,8 @@ describe('usage query captured Resource adapter', () => {
       ] });
       if (request.path === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 1,
         signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
-      if (request.path === '/v2/sessions/coach-session') return Response.json({ session: {
-        id: 'coach-session', createdAt: 1, updatedAt: 900, seq: 1, active: true, activeAt: 900,
-        encryptionMode: 'plain', dataEncryptionKey: null, metadataLayoutVersion: 0,
-        ...ownerSessionAccess,
-        metadataVersion: 1, metadata: JSON.stringify({ name: 'Opened', path: '/workspace/project', machineId: 'machine',
-          agent: 'codex', agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } }),
-        agentStateVersion: 1, agentState: null, share: null,
-      } });
+      if (request.path === '/v2/sessions/coach-session') return Response.json({ session: coachSession });
+      if (request.path === '/v1/sessions/coach-session/turns') return Response.json({ v: 1, sessionId: 'coach-session', updatedAt: 900, turns: [] });
       if (request.path === '/v1/sessions/coach-session/messages') {
         // Real role filtering is the HTTP boundary: a user-only read cannot see host events.
         const admitted = request.url.searchParams.get('roles')?.split(',').includes('event');
@@ -1984,7 +2607,7 @@ describe('usage query captured Resource adapter', () => {
     expect(result.results[0]?.accounting).toMatchObject(value);
     expect(result.results[0]?.howYouWork).toMatchObject({ detailStatus: 'unknown', intervals: null,
       inputs: null, permissions: null });
-    expect(home!.requests.some(request => request.path === '/v1/sessions/denied-session/messages')).toBe(false);
+    expect(sessionRequests().some(request => request.path === '/v1/sessions/denied-session/messages')).toBe(false);
     expect(JSON.stringify(result)).not.toContain('denied private input');
   });
 
@@ -2000,6 +2623,7 @@ describe('usage query captured Resource adapter', () => {
         metadataVersion: 1, metadata: JSON.stringify({ name: 'Opened' }),
         agentStateVersion: 1, agentState: null, share: null,
       } });
+      if (request.path === '/v1/sessions/fresh-session/turns') return Response.json({ v: 1, sessionId: 'fresh-session', updatedAt: 900, turns: [] });
       if (request.path === '/v1/sessions/fresh-session/messages') return Response.json({ messages: [{
         id: 'accepted-row', seq: 2, localId: 'accepted-input', createdAt: 300,
         content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'private prompt text' } } },
@@ -2052,6 +2676,7 @@ describe('usage query captured Resource adapter', () => {
 
   it('distinguishes unopened nonempty input pages from observed empty pages and retains opened subsets', async () => {
     let pageKind: 'unopened' | 'legacy' | 'empty' | 'partial' = 'unopened';
+    let seq = 3;
     const unopenedRows = [
       { id: 'mode-mismatch', seq: 1, localId: null, createdAt: 100, content: { t: 'encrypted', c: 'unavailable' } },
       { id: 'invalid-record', seq: 2, localId: null, createdAt: 200, content: { t: 'plain', v: { unavailable: true } } },
@@ -2062,12 +2687,13 @@ describe('usage query captured Resource adapter', () => {
         signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
       if (request.path === '/v2/sessions/page-session') return Response.json({ session: {
         ...ownerSessionAccess,
-        id: 'page-session', createdAt: 1, updatedAt: 900, seq: 3, active: true, activeAt: 900,
+        id: 'page-session', createdAt: 1, updatedAt: 900, seq, active: true, activeAt: 900,
         encryptionMode: 'plain', dataEncryptionKey: null, metadataLayoutVersion: 0,
         metadataVersion: 1, metadata: JSON.stringify({ name: 'Opened' }), agentStateVersion: 1,
         agentState: JSON.stringify({ completedRequests: { request: { tool: 'Bash', arguments: {},
           turnId: 'turn', createdAt: 200, completedAt: 400, status: 'approved' } } }), share: null,
       } });
+      if (request.path === '/v1/sessions/page-session/turns') return Response.json({ v: 1, sessionId: 'page-session', updatedAt: 900, turns: [] });
       if (request.path === '/v1/sessions/page-session/messages') return Response.json({ messages:
         pageKind === 'empty' ? [] : pageKind === 'unopened' ? unopenedRows : pageKind === 'legacy' ? [{
           id: 'legacy-row', seq: 3, localId: 'legacy-input', createdAt: 500,
@@ -2086,14 +2712,20 @@ describe('usage query captured Resource adapter', () => {
     expect(unopened.results[0]?.howYouWork).toMatchObject({ detailStatus: 'partial', inputs: null,
       permissions: { pairedDecisionCount: 1, decisionLatencyMs: 200 } });
     pageKind = 'legacy';
+    seq++;
+    publishHomeAccountChange(captured.accountLifetime.scope.serverId, ['page-session'], { changeKinds: ['session'] });
     const legacy = await readUiUsageQueryBatch(captured, input);
     expect(legacy.results[0]?.howYouWork).toMatchObject({ detailStatus: 'partial', inputs: null,
       permissions: { pairedDecisionCount: 1, decisionLatencyMs: 200 } });
     expect(JSON.stringify(legacy)).not.toContain('private legacy input');
     pageKind = 'empty';
+    seq++;
+    publishHomeAccountChange(captured.accountLifetime.scope.serverId, ['page-session'], { changeKinds: ['session'] });
     const empty = await readUiUsageQueryBatch(captured, input);
     expect(empty.results[0]?.howYouWork?.inputs).toMatchObject({ acceptedCount: 0, steeringCount: 0 });
     pageKind = 'partial';
+    seq++;
+    publishHomeAccountChange(captured.accountLifetime.scope.serverId, ['page-session'], { changeKinds: ['session'] });
     const partial = await readUiUsageQueryBatch(captured, input);
     expect(partial.results[0]?.howYouWork).toMatchObject({ detailStatus: 'partial',
       inputs: { acceptedCount: 1, steeringCount: 1 }, permissions: { pairedDecisionCount: 1 } });
@@ -2110,7 +2742,7 @@ describe('usage query captured Resource adapter', () => {
     } });
     await expect(readUiUsageQueryBatch(captured, { queries: [normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 } })] }))
       .rejects.toMatchObject({ code: 'stale_surface' });
-    expect(home!.requests.some(request => request.path === '/v2/sessions/foreign')).toBe(false);
+    expect(sessionRequests().some(request => request.path === '/v2/sessions/foreign')).toBe(false);
   });
 
   it('projects only the opened active Account subset as partial private evidence without exporting request arguments', async () => {
@@ -2195,26 +2827,27 @@ describe('usage query captured Resource adapter', () => {
   it('shares private Session evidence while seq is unchanged and isolates consumer retirement', async () => {
     let detailGate = createDeferred<void>();
     let permissionCompletedAt = 200;
+    let sharedSeq = 1;
     const captured = await context(async request => {
       if (request.path === '/v2/usage/query') return Response.json(value);
       const sessionId = request.path === '/v2/sessions/shared' ? 'shared'
         : request.path === '/v2/sessions/other' ? 'other' : null;
       if (sessionId) {
         const completedAt = permissionCompletedAt;
+        const seq = sessionId === 'shared' ? sharedSeq : 1;
         if (sessionId === 'shared') await detailGate.promise;
-        return Response.json({ session: { ...ownerSessionAccess, id: sessionId,
-          createdAt: 1, updatedAt: 900, seq: 1, active: true, activeAt: 900,
-          encryptionMode: 'plain', dataEncryptionKey: null, metadataLayoutVersion: 0,
-          metadataVersion: 1, metadata: JSON.stringify({ name: sessionId }),
-          agentStateVersion: 1, agentState: JSON.stringify({ completedRequests: { request: {
-            tool: 'Bash', turnId: 'turn', createdAt: 100, completedAt, status: 'approved',
-          } } }), share: null } });
+        return Response.json({ session: { ...createPlainSessionCurrentProjectionRecordFixture({ id: sessionId,
+          createdAt: 1, updatedAt: 900, seq, active: true, activeAt: 900,
+          metadataVersion: 1, metadata: { path: '/repo', host: 'usage-test', name: sessionId }, agentStateVersion: seq }),
+          agentState: JSON.stringify({ completedRequests: { request: {
+            tool: 'Bash', arguments: {}, turnId: 'turn', createdAt: 100, completedAt, status: 'approved',
+          } } }) } });
       }
       if (request.path === '/v1/sessions/shared/turns' || request.path === '/v1/sessions/other/turns') {
         const id = request.path.split('/')[3]!;
         return Response.json({ v: 1, sessionId: id, updatedAt: 900, turns: [
           { turnId: 'turn', agentId: 'codex', status: 'completed', startedAt: 100,
-            terminalAt: id === 'shared' ? 400 : 700, updatedAt: 900 },
+            terminalAt: id === 'shared' ? (permissionCompletedAt === 200 ? 400 : 900) : 700, updatedAt: 900 },
         ] });
       }
       if (request.path === '/v1/sessions/shared/messages' || request.path === '/v1/sessions/other/messages') {
@@ -2222,6 +2855,10 @@ describe('usage query captured Resource adapter', () => {
       }
       return undefined;
     });
+    // Home bootstrap/resume legitimately re-admits private evidence. Finish
+    // that owner operation before measuring reuse under an unchanged Session.
+    const { sync } = await import('@/sync/sync');
+    await sync.resumeSync('manual');
     storage.setState({ profileScope: captured.accountLifetime.scope, sessions: Object.fromEntries(
       ['shared', 'other'].map(id => [id, createSessionFixture({ id,
         serverId: captured.accountLifetime.scope.serverId, encryptionMode: 'plain' })]),
@@ -2233,7 +2870,13 @@ describe('usage query captured Resource adapter', () => {
     const pinned = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [normalizeUsageQuery({
       period: { startMs: 0, endMs: 1000 }, session: 'shared', metric: 'cost',
     })] }) });
-    const countReads = (path: string) => home!.requests.filter(request => request.path === path).length;
+    const countReads = (path: string) => sessionRequests().filter(request => request.path === path).length;
+    const observedAgentTimes: number[] = [];
+    const observeBroadIntervals = () => {
+      const content = broad.getSnapshot().value;
+      const intervals = content && decodeUsageQueryResource(content).results[0]?.howYouWork?.intervals;
+      if (intervals) observedAgentTimes.push(intervals.agentTimeMs);
+    };
     const ready = async (entry: typeof broad) => {
       await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
       const content = entry.getSnapshot().value;
@@ -2261,14 +2904,18 @@ describe('usage query captured Resource adapter', () => {
 
       await pinned.refresh();
       expect((await ready(pinned)).howYouWork?.intervals?.agentTimeMs).toBe(200);
+      // Let the just-settled Resource drain its completion microtasks before
+      // changing the evidence basis for the next, independently tested read.
+      await flushHookEffects({ cycles: 20 });
       expect(countReads('/v2/sessions/shared')).toBe(1);
       expect(countReads('/v1/sessions/shared/messages')).toBe(1);
 
       // A changed sequence starts one new shared operation. Detaching one
       // Resource cancels only its observation, preserving the other consumer.
       detailGate = createDeferred<void>();
+      sharedSeq = 2;
       storage.setState({ sessions: { ...storage.getState().sessions,
-        shared: { ...storage.getState().sessions.shared!, seq: 2 } } });
+        shared: { ...storage.getState().sessions.shared!, seq: sharedSeq } } });
       const broadRefresh = broad.refresh();
       const pinnedRefresh = pinned.refresh();
       await expect.poll(() => countReads('/v2/sessions/shared')).toBe(2);
@@ -2285,27 +2932,39 @@ describe('usage query captured Resource adapter', () => {
       // Resource can join it. Late old evidence cannot be labelled fresh.
       detailGate = createDeferred<void>();
       const staleGate = detailGate;
+      sharedSeq = 3;
       storage.setState({ sessions: { ...storage.getState().sessions,
-        shared: { ...storage.getState().sessions.shared!, seq: 3 } } });
+        shared: { ...storage.getState().sessions.shared!, seq: sharedSeq } } });
+      releaseBroad = broad.subscribe(observeBroadIntervals, true);
       const staleRefresh = pinned.refresh();
       await expect.poll(() => countReads('/v2/sessions/shared')).toBe(3);
       detailGate = createDeferred<void>();
+      sharedSeq = 4;
       storage.setState({ sessions: { ...storage.getState().sessions,
-        shared: { ...storage.getState().sessions.shared!, seq: 4 } } });
+        shared: { ...storage.getState().sessions.shared!, seq: sharedSeq } } });
       permissionCompletedAt = 600;
       publishHomeAccountChange(captured.accountLifetime.scope.serverId, ['shared'], {
         changeKinds: ['session'], usageQueryAffects: true,
       });
       staleGate.resolve();
       await expect.poll(() => countReads('/v2/sessions/shared')).toBe(4);
+      // Keep replacement admission held while the superseded read and its
+      // progress publications drain. A fast replacement must not hide an
+      // incomplete total from the surviving Session in this window.
+      await flushHookEffects({ cycles: 20 });
+      expect(observedAgentTimes).not.toContain(500);
       detailGate.resolve();
       await staleRefresh;
       expect((await ready(pinned)).howYouWork?.permissions?.decisionLatencyMs).toBe(500);
+      expect((await ready(broad)).howYouWork?.intervals?.agentTimeMs).toBe(800);
+      // Losing one in-flight admission is not a complete 500ms Account total.
+      // The aggregate may withdraw while re-admitting, never publish that subset.
+      expect(observedAgentTimes).not.toContain(500);
 
       detailGate = createDeferred<void>();
+      sharedSeq = 5;
       storage.setState({ sessions: { ...storage.getState().sessions,
-        shared: { ...storage.getState().sessions.shared!, seq: 5 } } });
-      releaseBroad = broad.subscribe(() => {}, true);
+        shared: { ...storage.getState().sessions.shared!, seq: sharedSeq } } });
       const retiredRefresh = pinned.refresh();
       await expect.poll(() => countReads('/v2/sessions/shared')).toBe(5);
       retireActiveServerAccountScopeLifetime();
@@ -2328,7 +2987,7 @@ describe('usage query captured Resource adapter', () => {
         createdAt: 1, updatedAt: 900, seq: 1, active: true, activeAt: 900,
         encryptionMode: 'plain', dataEncryptionKey: null, metadataLayoutVersion: 0, metadataVersion: 1,
         metadata: JSON.stringify({ name: 'work' }), agentStateVersion: completedAt === 200 ? 1 : 2,
-        agentState: JSON.stringify({ completedRequests: { request: { tool: 'Bash', turnId: 'turn',
+        agentState: JSON.stringify({ completedRequests: { request: { tool: 'Bash', arguments: {}, turnId: 'turn',
           createdAt: 100, completedAt, status: 'approved' } } }), share: null } });
       if (request.path === '/v1/sessions/work/turns') return Response.json({ v: 1, sessionId: 'work', updatedAt: 900,
         turns: [{ turnId: 'turn', agentId: 'codex', status: 'completed', startedAt: 100, terminalAt: 900, updatedAt: 900 }] });
@@ -2349,9 +3008,191 @@ describe('usage query captured Resource adapter', () => {
       publishHomeAccountChange(captured.accountLifetime.scope.serverId, ['work'], { changeKinds: ['session'], usageQueryAffects: true });
       await expect.poll(latency).toBe(500);
       await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
-      expect(home!.requests.filter(request => request.path === '/v2/sessions/work')).toHaveLength(2);
-      expect(home!.requests.filter(request => request.path === '/v1/sessions/work/messages')).toHaveLength(1);
+      expect(sessionRequests().filter(request => request.path === '/v2/sessions/work')).toHaveLength(2);
+      expect(sessionRequests().filter(request => request.path === '/v1/sessions/work/messages')).toHaveLength(1);
+      completedAt = 800;
+      publishHomeAccountChange(captured.accountLifetime.scope.serverId, ['work']);
+      await entry.refresh();
+      expect(latency(), 'a named Session wake still re-admits access when domain tags are absent').toBe(700);
+      expect(sessionRequests().filter(request => request.path === '/v2/sessions/work')).toHaveLength(3);
+      expect(sessionRequests().filter(request => request.path === '/v1/sessions/work/messages')).toHaveLength(1);
     } finally { release(); }
+  });
+
+  it('updates demanded Session membership when the loaded list admits or removes a candidate', async () => {
+    const captured = await context(request => {
+      if (request.path === '/v2/usage/query') return Response.json(value);
+      if (request.path === '/v2/sessions/new-candidate') return Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({
+        id: 'new-candidate', createdAt: 1, updatedAt: 900, seq: 1, active: true, activeAt: 900, metadataVersion: 1, agentStateVersion: 1,
+      }) });
+      if (request.path === '/v1/sessions/new-candidate/turns') return Response.json({ v: 1, sessionId: 'new-candidate', updatedAt: 900,
+        turns: [{ turnId: 'turn', agentId: 'codex', status: 'completed', startedAt: 100, terminalAt: 400, updatedAt: 900 }] });
+      return undefined;
+    });
+    storage.setState({ profileScope: captured.accountLifetime.scope, sessions: {} });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({
+      queries: [normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 }, includeTranscriptEvidence: false, includeWorkEvidence: false })],
+    }) });
+    const release = entry.subscribe(() => {}, true);
+    const agentTime = () => entry.getSnapshot().value && decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.howYouWork?.intervals?.agentTimeMs;
+    try {
+      await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
+      storage.setState({ sessions: { 'new-candidate': createSessionFixture({ id: 'new-candidate', seq: 1,
+        serverId: captured.accountLifetime.scope.serverId, encryptionMode: 'plain' }) } });
+      await expect.poll(agentTime).toBe(300);
+      storage.setState({ sessions: {} });
+      await expect.poll(() => entry.getSnapshot().pending).toBe('idle');
+      await expect.poll(agentTime).toBeUndefined();
+    } finally { release(); }
+  });
+
+  it.each(['accounting', 'sessions'] as const)('keeps Account Coach membership on a failed %s refresh and isolates a Session-scoped sibling', async failureSource => {
+    const ids = ['first', 'second', 'third'];
+    let membership = ids;
+    let failing = false;
+    const captured = await context(request => {
+      if (failing && failureSource === 'sessions' && request.path === '/v2/sessions/read-batch') {
+        return Response.json({ error: 'unavailable' }, { status: 503 });
+      }
+      if (request.path === '/v2/usage/query') {
+        const pinned = UsageAnalyticsQueryRequestSchema.parse(request.body).filters?.sessionIds;
+        if (failing && failureSource === 'accounting' && !pinned?.length) return Response.json({ error: 'unavailable' }, { status: 503 });
+        return Response.json({ ...value, contributions: membership.filter(id => !pinned?.length || pinned.includes(id))
+          .map(id => ({ ...workContribution, id, sessionId: id, turnId: null })) });
+      }
+      const detail = /^\/v2\/sessions\/(first|second|third)$/.exec(request.path);
+      if (detail) return Response.json({ session: { ...createPlainSessionCurrentProjectionRecordFixture({ id: detail[1]!,
+        seq: 1, updatedAt: 900, agentStateVersion: 1 }), agentState: JSON.stringify({ completedRequests: {
+          approval: { tool: 'Bash', arguments: {}, turnId: 'turn', createdAt: 100, completedAt: 200, status: 'approved' },
+        } }) } });
+      const turns = /^\/v1\/sessions\/(first|second|third)\/turns$/.exec(request.path);
+      if (turns) return Response.json({ v: 1, sessionId: turns[1]!, updatedAt: 900, turns: [] });
+      if (request.path.endsWith('/messages')) return Response.json({ messages: [], hasMore: false });
+      return undefined;
+    });
+    const serverId = captured.accountLifetime.scope.serverId;
+    // Accounting admits historical Sessions independently of the small hydrated detail cache.
+    storage.setState({ sessions: { first: createSessionFixture({ id: 'first', serverId, encryptionMode: 'plain' }) } });
+    const store = getUsageQueryResourceStore(captured);
+    const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 }, includeWorkEvidence: false });
+    const broad = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({ queries: [query] }) });
+    const pinned = store.getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({
+      queries: [normalizeUsageQuery({ ...query, session: 'first' })],
+    }) });
+    const coach = (entry: typeof broad) => decodeUsageQueryResource(entry.getSnapshot().value!).results[0]!.coach!;
+    await broad.refresh();
+    await pinned.refresh();
+    expect(coach(broad).sessionCoverage).toEqual({ selected: 3, admitted: 3 });
+    const finding = coach(broad).findings.find(row => row.detectorId === 'approval_friction')!;
+    expect(finding.measurements.find(row => row.metric === 'permission_requests')?.value).toBe(3);
+    // Failed A retains the same displayed accounting; private evidence must use that same population.
+    // Alternate success/failure and a scoped sibling as periodic background reads do.
+    for (let pass = 0; pass < 2; pass++) {
+      await pinned.refresh();
+      failing = true;
+      if (failureSource === 'sessions') publishHomeAccountChange(serverId);
+      await broad.refresh();
+      expect.soft(coach(pinned).sessionCoverage).toEqual({ selected: 1, admitted: 1 });
+      expect.soft(coach(broad).sessionCoverage).toEqual({ selected: 3, admitted: 3 });
+      expect.soft(coach(broad).findings.find(row => row.detectorId === 'approval_friction')?.evidenceKey).toBe(finding.evidenceKey);
+      const failed = decodeUsageQueryResource(broad.getSnapshot().value!);
+      if (failureSource === 'accounting') expect(failed.results[0]!.sources).toContainEqual(expect.objectContaining({ source: 'accounting', status: 'error' }));
+      else expect(broad.getSnapshot().error).toBeDefined();
+      expect(UsageQueryBatchResultSchema.safeParse(failed).success).toBe(true);
+      if (failureSource === 'sessions') {
+        await broad.refresh();
+        expect.soft(coach(broad).sessionCoverage, 'a repeated failed replacement keeps the same admitted evidence').toEqual({ selected: 3, admitted: 3 });
+        expect.soft(coach(broad).findings.find(row => row.detectorId === 'approval_friction')?.evidenceKey).toBe(finding.evidenceKey);
+      }
+      failing = false;
+      await broad.refresh();
+      expect.soft(coach(broad).sessionCoverage).toEqual({ selected: 3, admitted: 3 });
+    }
+    membership = ['first'];
+    await broad.refresh();
+    expect(coach(broad).sessionCoverage).toEqual({ selected: 1, admitted: 1 });
+  });
+
+  it('reuses a list-only Session marker and refreshes it when that row advances', async () => {
+    let seq = 1;
+    const captured = await context(request => {
+      if (request.path === '/v2/usage/query') return Response.json(value);
+      if (request.path === '/v2/sessions/list-only') return Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({
+        id: 'list-only', createdAt: 1, updatedAt: 900, seq, active: true, activeAt: 900, metadataVersion: 1, agentStateVersion: 1,
+      }) });
+      if (request.path === '/v1/sessions/list-only/turns') return Response.json({ v: 1, sessionId: 'list-only', updatedAt: 900,
+        turns: [{ turnId: 'turn', agentId: 'codex', status: 'completed', startedAt: 100, terminalAt: seq === 1 ? 400 : 700, updatedAt: 900 }] });
+      return undefined;
+    });
+    const serverId = captured.accountLifetime.scope.serverId;
+    const rows = () => ({ [serverId]: { 'list-only': createSessionListRenderableSessionFixture({ id: 'list-only', seq }) } });
+    storage.setState({ profileScope: captured.accountLifetime.scope, sessions: {}, sessionListRowsByServerId: rows() });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({
+      queries: [normalizeUsageQuery({ session: 'list-only', period: { startMs: 0, endMs: 1000 }, includeTranscriptEvidence: false, includeWorkEvidence: false })],
+    }) });
+    const release = entry.subscribe(() => {}, true);
+    const agentTime = () => entry.getSnapshot().value && decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.howYouWork?.intervals?.agentTimeMs;
+    try {
+      await expect.poll(agentTime).toBe(300);
+      publishHomeAccountChange(serverId);
+      await entry.refresh();
+      expect(sessionRequests().filter(request => request.path === '/v2/sessions/list-only')).toHaveLength(1);
+      seq++;
+      storage.setState({ sessionListRowsByServerId: rows() });
+      await expect.poll(agentTime).toBe(600);
+      expect(sessionRequests().filter(request => request.path === '/v2/sessions/list-only')).toHaveLength(2);
+    } finally { release(); }
+  });
+
+  it('releases opened message bodies while the Account retains Coach evidence across refreshes', async () => {
+    const { Session: InspectorSession } = await import('node:inspector');
+    const stored = await import('@/sync/runtime/readStoredSessionContent');
+    const read = stored.readStoredSessionMessage;
+    const bodies: WeakRef<object>[] = [];
+    // Retention instrumentation only: execute the actual opener and keep weak
+    // handles, then remove the spy's own strong call/result history before GC.
+    const observation = vi.spyOn(stored, 'readStoredSessionMessage').mockImplementation(async (...args) => {
+      const result = await read(...args);
+      if (result) bodies.push(new WeakRef(result));
+      return result;
+    });
+    const captured = await context(request => {
+      if (request.path === '/v2/usage/query') return Response.json(value);
+      if (request.path === '/v2/sessions/released') return Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({
+        id: 'released', createdAt: 1, updatedAt: 900, seq: 1, active: true, activeAt: 900,
+        metadataVersion: 1, agentStateVersion: 1,
+      }) });
+      if (request.path === '/v1/sessions/released/turns') return Response.json({ v: 1, sessionId: 'released', updatedAt: 900,
+        turns: [{ turnId: 'turn', agentId: 'codex', status: 'completed', startedAt: 100, terminalAt: 900, updatedAt: 900 }] });
+      if (request.path === '/v1/sessions/released/messages') return Response.json({ messages: [{
+        id: 'message', seq: 1, localId: 'input', createdAt: 300,
+        content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'private body '.repeat(1024) } } },
+        deliveryResolution: { v: 1, kind: 'provider_accepted', content: { t: 'plain', v: {
+          v: 1, acceptedAtMs: 300, delivery: { kind: 'steer', turnId: 'turn' },
+        } } },
+      }], hasMore: false });
+      return undefined;
+    });
+    storage.setState({ profileScope: captured.accountLifetime.scope, sessions: {
+      released: createSessionFixture({ id: 'released', seq: 1, serverId: captured.accountLifetime.scope.serverId, encryptionMode: 'plain' }),
+    } });
+    const entry = getUsageQueryResourceStore(captured).getEntry({ hostRead: 'usage.query', input: projectNativeJsonValueForTransport({
+      queries: [normalizeUsageQuery({ session: 'released', period: { startMs: 0, endMs: 1000 }, includeWorkEvidence: false })],
+    }) });
+    const inspector = new InspectorSession();
+    inspector.connect();
+    try {
+      await entry.refresh();
+      for (let pass = 0; pass < 3; pass++) await entry.refresh();
+      expect(bodies.length).toBeGreaterThan(0);
+      observation.mockRestore();
+      await new Promise<void>(resolve => setImmediate(resolve));
+      await new Promise<void>((resolve, reject) => inspector.post('HeapProfiler.collectGarbage', error => error ? reject(error) : resolve()));
+      const retained = bodies.filter(body => body.deref() !== undefined).length;
+      console.info('USAGE-SESSION-EVIDENCE retained message bodies', JSON.stringify({ opened: bodies.length, retained }));
+      expect(retained, 'the live Account map must retain facts rather than decrypted bodies').toBe(0);
+      expect(decodeUsageQueryResource(entry.getSnapshot().value!).results[0]?.howYouWork?.inputs).toMatchObject({ acceptedCount: 1, steeringCount: 1 });
+    } finally { observation.mockRestore(); inspector.disconnect(); }
   });
 
   it('batches equivalent resolved inputs and preserves distinct scopes as independent slices', async () => {
@@ -2441,8 +3282,7 @@ describe('usage query Work composition', () => {
     const contribution = { id: 'cost', observedAtMs: 150, sessionId: 'session', turnId: 'turn', agentId: null,
       modelId: null, machineId: null, projectKey: null, workspaceId: null, source: null, tokens,
       cost: { reportedUsd: 1, estimatedUsd: 0, currency: 'USD' } };
-    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-work.test', accountId: 'account-a' }],
-      route: request => {
+    const workBoundary = createSessionReadBatchHttpBoundary(request => {
         if (request.path === '/v2/usage/query') return Response.json({ v: 1, totals: {
           eventCount: 1, tokens, cost: contribution.cost }, contributions: [{ ...contribution,
             ...(UsageAnalyticsQueryRequestSchema.parse(request.body).filters?.agentIds?.includes('different') ? { turnId: 'other-turn' } : {}) }] });
@@ -2456,7 +3296,10 @@ describe('usage query Work composition', () => {
           turns: [{ turnId: 'turn', agentId: 'codex', status: 'completed', startedAt: 100, terminalAt: 200, updatedAt: 200 }] });
         if (request.path === '/v1/sessions/session/messages') return Response.json({ messages: [], hasMore: false });
         return undefined;
-      } });
+      });
+    sessionBatchBoundary = workBoundary;
+    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-work.test', accountId: 'account-a' }],
+      route: workBoundary.handle });
     publishAppliedActiveServerSnapshot({ serverId: home.homes.a!.id, serverUrl: home.homes.a!.serverUrl, generation: 0 });
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
     const credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
@@ -2518,7 +3361,7 @@ describe('usage query Work composition', () => {
     expect(shown.work?.allocations).toMatchObject([{ reason: 'allocated', contribution, outcome: { repositoryKey: 'repo' } }]);
     expect(result.results.find(slice => slice.key === getUsageQueryKey(other))?.work?.allocations)
       .toMatchObject([{ reason: 'missing_evidence', outcome: null }]);
-    expect(shown.sources).toContainEqual({ source: 'work', status: 'partial' });
+    expect(shown.sources).toContainEqual({ source: 'work', status: 'partial', asOfMs: expect.any(Number) });
     expect(shown.howYouWork?.intervals?.agentTimeMs).toBe(100);
     const workSlice = result.results.find(slice => slice.key === getUsageQueryKey(workOnly))!;
     expect(workSlice.work?.allocations[0]?.reason).toBe('allocated');
@@ -2528,7 +3371,21 @@ describe('usage query Work composition', () => {
     expect(accountingSlice.accounting?.totals.tokens.total).toBe(15);
     expect(accountingSlice.work).toBeUndefined();
     expect(accountingSlice.sources).toContainEqual({ source: 'work', status: 'not_loaded' });
-    expect(home.requests.filter(request => request.path === '/v1/sessions/session/messages')).toHaveLength(1);
+    expect(sessionRequests().filter(request => request.path === '/v1/sessions/session/messages')).toHaveLength(1);
+    const machine = createMachineFixture({ id: 'work-machine', activeAt: Date.now() });
+    storage.setState({ machines: { [machine.id]: machine } });
+    const hostEntry = getUsageQueryResourceStore(context).getEntry({ hostRead: 'usage.query',
+      input: projectNativeJsonValueForTransport({ queries: [workOnly] }) });
+    const release = hostEntry.subscribe(() => {}, true);
+    try {
+      await hostEntry.refresh();
+      const beforeHostFlip = home.requests.filter(request => request.path === '/v2/usage/query').length;
+      // No pool is open. Only this admitted Session makes its Machine a consumer.
+      recordMachineRequestFailed({ ...context.accountLifetime.scope, machineId: machine.id });
+      await flushHookEffects();
+      await expect.poll(() => home!.requests.filter(request => request.path === '/v2/usage/query').length).toBeGreaterThan(beforeHostFlip);
+      await expect.poll(() => hostEntry.getSnapshot().pending).toBe('idle');
+    } finally { release(); recordMachineRequestSucceeded({ ...context.accountLifetime.scope, machineId: machine.id }); }
     const merged = { ...witness, pullRequest: { ...witness.pullRequest, state: 'merged' as const } };
     scmTransport.mockImplementation(async (request: { payload: { state?: string } }) => ({ success: true,
       pullRequests: request.payload.state === 'merged' ? [merged.pullRequest] : [],
@@ -2547,20 +3404,20 @@ describe('usage query Work composition', () => {
     expect(standalone.results[0]?.work?.outcomes).toEqual([]);
     // A local branch remains readable without a remote. Unsupported hosting
     // does not become a failed Work read or poison its exact branch evidence.
-    expect(standalone.results[0]?.sources).toContainEqual({ source: 'work', status: 'partial' });
+    expect(standalone.results[0]?.sources).toContainEqual({ source: 'work', status: 'partial', asOfMs: expect.any(Number) });
     scmTransport.mockImplementation(async (request: { payload: { state?: string } }) => request.payload.state === 'closed'
       ? { success: false, errorCode: 'COMMAND_FAILED', error: 'Native hosting read failed' }
       : { success: true, pullRequests: [merged.pullRequest], workEvidence: [merged], workEvidenceStatus: 'partial' });
     const partial = await readUiUsageQueryBatch(context, { queries: [query] });
-    expect(partial.results[0]?.sources).toContainEqual({ source: 'work', status: 'partial' });
+    expect(partial.results[0]?.sources).toContainEqual({ source: 'work', status: 'partial', asOfMs: expect.any(Number) });
     expect(partial.results[0]?.work?.allocations[0]?.reason).toBe('allocated');
     scmTransport.mockResolvedValue({ success: true, pullRequests: [witness.pullRequest] });
     const unsupported = await readUiUsageQueryBatch(context, { queries: [query] });
-    expect(unsupported.results[0]?.sources).toContainEqual({ source: 'work', status: 'unsupported' });
+    expect(unsupported.results[0]?.sources).toContainEqual({ source: 'work', status: 'unsupported', asOfMs: expect.any(Number) });
     expect(unsupported.results[0]?.work?.allocations[0]).toMatchObject({ reason: 'missing_evidence', outcome: null, evidence: [] });
     scmTransport.mockResolvedValue({ success: false, errorCode: 'FEATURE_UNSUPPORTED', error: 'No supported backend' });
     const unavailableBackend = await readUiUsageQueryBatch(context, { queries: [query] });
-    expect(unavailableBackend.results[0]?.sources).toContainEqual({ source: 'work', status: 'unsupported' });
+    expect(unavailableBackend.results[0]?.sources).toContainEqual({ source: 'work', status: 'unsupported', asOfMs: expect.any(Number) });
     scmTransport.mockImplementation(async (request: { payload: { state?: string } }) => request.payload.state === 'closed'
       ? { success: false, errorCode: 'INVALID_REQUEST', workEvidence: [merged] }
       : { success: true, pullRequests: [merged.pullRequest], workEvidence: [merged], workEvidenceStatus: 'partial' });

@@ -64,6 +64,22 @@ describe('shared local-service inventory store', () => {
         resetLocalServiceInventoryStoreForTests();
     });
 
+    it('seeds the parked watch from the initial snapshot instead of racing the first scan', async () => {
+        let finish!: (value: unknown) => void;
+        rpc.snapshot.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+        const key = { machineId: 'machine-a', serverId: 'server-a' };
+        const unsubscribe = subscribeLocalServiceInventoryStore(key, () => {});
+        await flushMicrotasks();
+        expect(rpc.machine.mock.calls.filter(([request]) => request.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH)).toHaveLength(0);
+        finish({ protocolVersion: 1, snapshot });
+        await flushMicrotasks();
+        expect(rpc.machine).toHaveBeenCalledWith(expect.objectContaining({
+            method: RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH,
+            payload: { machineId: 'machine-a', sinceGeneratedAt: snapshot.generatedAt },
+        }));
+        unsubscribe();
+    });
+
     it.each(['unavailable', 'rejection'] as const)('rearms the real watch transport after fresh publication overtakes %s', async failure => {
         const watches: Array<{ resolve(value: unknown): void; reject(error: unknown): void }> = [];
         rpc.machine.mockImplementation(async (request: { method: string }) => {
@@ -95,7 +111,7 @@ describe('shared local-service inventory store', () => {
         const key = { machineId: 'machine-a', serverId: 'server-a', sessionId: 'session-a' };
 
         const unsubA = subscribeLocalServiceInventoryStore(key, () => {});
-        const unsubB = subscribeLocalServiceInventoryStore(key, () => {});
+        const unsubB = subscribeLocalServiceInventoryStore({ ...key, sessionId: 'session-b' }, () => {});
         await flushMicrotasks();
 
         expect(snapshotClient).toHaveBeenCalledTimes(1);

@@ -47,6 +47,7 @@ export type PreviewSessionAgentTransitionBriefOnMachineInput = Readonly<{
     /** The boundary's two Agents, exactly as the divider records them. */
     sourceAgentId: string;
     targetAgentId: string;
+    signal?: AbortSignal;
 }>;
 
 /**
@@ -78,6 +79,7 @@ export async function previewSessionAgentTransitionBriefOnMachine(
             serverId: input.serverId,
             method: RPC_METHODS.SESSION_AGENT_TRANSITION_BRIEF_PREVIEW,
             payload,
+            ...(input.signal ? { signal: input.signal } : {}),
         });
     } catch (error) {
         return readRpcErrorCode(error) === RPC_ERROR_CODES.METHOD_NOT_AVAILABLE

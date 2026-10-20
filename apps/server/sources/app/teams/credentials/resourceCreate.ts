@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { TeamCredentialResourceCreateInputV1Schema, type TeamCredentialResourceCreateInputV1 } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import type { Tx } from "@/storage/inTx";
+import { acquireTeamMembershipAccountAdmissionInTx } from "../memberships/membershipService";
 import { resolveTeamActorContextInTx, type TeamOperationAuthenticationContext } from "../actorContext";
 import { resolveTeamCredentialCapabilities } from "../capabilities";
 import { publishTeamChangedInTx } from "../teamChanges";
@@ -65,6 +66,11 @@ export async function createTeamCredentialResourceInTx(tx: Tx, input: CreateTeam
     const parsed = TeamCredentialResourceCreateInputV1Schema.safeParse(draft);
     if (!parsed.success) return { ok: false, error: "invalid_resource_input" };
     const body = parsed.data;
+    await acquireTeamMembershipAccountAdmissionInTx(tx, {
+        teamId: body.teamId,
+        accountIds: [input.actorAccountId, ...body.usageLimits.flatMap(limit => limit.subjectKind === 'team_member' ? [limit.subjectId] : [])],
+        membershipIds: body.memberGrants.map(grant => grant.teamMembershipId),
+    });
     const actor = await resolveTeamActorContextInTx(tx, { teamId: body.teamId, actorAccountId: input.actorAccountId });
     if (!actor) return { ok: false, error: "not_found_or_not_visible" };
     const capabilities = resolveTeamCredentialCapabilities({ ...actor, teamArchivedAt: actor.team.archivedAt });

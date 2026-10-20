@@ -12,6 +12,7 @@ import { AtmosphereSurfaceFrame } from './AtmosphereSurfaceFrame';
 import { useAtmosphereBandBoundary } from './atmosphereBandBoundary';
 import { atmosphereStageStore } from './atmosphereStage';
 import { AtmosphereDissolve } from './AtmosphereDissolve';
+import { PlanetCanvas } from './PlanetCanvas';
 import { NewSessionComposerCard } from '@/components/sessions/new/components/NewSessionComposerCard';
 import { createNewSessionPromptStore } from '@/components/sessions/new/hooks/screenModel/newSessionPromptStore';
 import type { NewSessionSimplePanelProps } from '@/components/sessions/new/components/NewSessionSimplePanel';
@@ -38,7 +39,7 @@ function Composer(props: { sending: boolean }) {
     </View>;
 }
 
-function SessionComposer(props: { sending: boolean; onCreate: () => Promise<void>; panel?: boolean }) {
+function SessionComposer(props: { sending: boolean; onCreate: () => Promise<void>; panel?: boolean; topContent?: React.ReactNode }) {
     const promptStore = React.useMemo(() => createNewSessionPromptStore('First line\nSecond line\nThird line'), []);
     const panelProps = {
         // Native refs begin unmounted; this fixture never measures the unused popover boundary.
@@ -53,6 +54,7 @@ function SessionComposer(props: { sending: boolean; onCreate: () => Promise<void
         modelOptions: [], connectionStatus: undefined, machineName: undefined, selectedPath: '/repo',
         useProfiles: false, selectedProfileId: null,
         showResumePicker: false, resumeSessionId: null, isResumeSupportChecking: false,
+        composerTopContent: props.topContent,
     } satisfies NewSessionSimplePanelProps;
     return props.panel ? <NewSessionSimplePanel {...panelProps} />
         : <NewSessionComposerCard panelProps={panelProps} layout="screen" attachments={false} />;
@@ -120,6 +122,51 @@ describe('New Session atmosphere at the real stage and focus boundary', () => {
         expect(screen.findByType(AtmosphereDissolve).props.visible).toBe(false);
         expect(screen.findByType(AtmosphereDissolve).props.reducedMotion).toBe(true);
         await screen.unmount();
+    });
+
+    it.each(['corner', 'rise', 'side'] as const)('keeps a Project\'s %s planet inside its band, ending at the tabs', async (placement) => {
+        // R-7: the Project band ends below the Project tabs; the page under them keeps its ground.
+        storage.setState(state => ({ ...state, settings: { ...state.settings, homeAtmosphere: {
+            ...state.settings.homeAtmosphere, planet: { ...state.settings.homeAtmosphere.planet, placement },
+        } } }));
+        const screen = await renderScreen(<AtmosphereSurfaceFrame surface={{ project: { serverId: 'srv', projectKey: 'p1' } }} focused visible>
+            <Composer sending={false} />
+        </AtmosphereSurfaceFrame>, { createNodeMock: element => ({
+            measureInWindow: (done: (x: number, y: number, width: number, height: number) => void) =>
+                element.props.testID === 'composer' ? done(0, 40, 900, 50) : done(0, 0, 900, 800),
+        }) });
+        try {
+            const canvas = screen.findByType(PlanetCanvas);
+            const fade = canvas.props.fade as { from: number; to: number } | undefined;
+            expect(fade?.to).toBe(90);
+            expect(fade!.from).toBeLessThan(90);
+            const { cy, R } = canvas.props.options as { cy: number; R: number };
+            // Corner and Rise show their disc inside the band; Side keeps its pane geometry (only its halo reaches up).
+            if (placement !== 'side') expect(cy - R).toBeLessThan(90);
+        } finally {
+            await screen.unmount();
+        }
+    });
+
+    it('ends the band and seats the hero at the composer itself, never at content stacked above it', async () => {
+        // A New bot draft stacks its title, instructions and status above the composer; the planet's
+        // limb and the band follow the input, so that copy stays on the page ground (DA R-1).
+        const screen = await renderScreen(<AtmosphereSurfaceFrame surface="new-session" focused visible>
+            <SessionComposer sending={false} onCreate={async () => {}} topContent={<View testID="draft-header" />} />
+        </AtmosphereSurfaceFrame>, { createNodeMock: element => ({
+            measureInWindow: (done: (x: number, y: number, width: number, height: number) => void) =>
+                element.props.testID === 'new-session-composer-band' ? done(0, 300, 800, 120) : done(0, 0, 800, 600),
+        }) });
+        try {
+            const geometry = atmosphereStageStore.get().stage!.geometry!;
+            expect(geometry.band).toBe(420);
+            expect(geometry.focus.y).toBe(360);
+            const band = screen.findByTestId('new-session-composer-band')!;
+            expect(band.findAll(node => node.props.testID === 'draft-header')).toHaveLength(0);
+            expect(band.findAll(node => node.props.testID === 'new-session-composer-input').length).toBeGreaterThan(0);
+        } finally {
+            await screen.unmount();
+        }
     });
 
     it('holds the native band and focus through draft shrink and growth until blur or viewport resize', async () => {

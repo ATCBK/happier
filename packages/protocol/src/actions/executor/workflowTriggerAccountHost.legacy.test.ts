@@ -77,7 +77,8 @@ async function conversionApprovalFixture(surface: 'agent' | 'mcp' | 'cli' = 'mcp
     },
     resolveMaterializer: async () => ({ effects: { resolveTargetAvailability: async () => true } }),
   });
-  const human = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId: 'home-one' } as const;
+  const human = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId: 'home-one',
+    presentUserConfirmation: { actionId: 'workflow.trigger.update' } } as const;
   const { sets } = await host.list({ automationId: 'legacy-one', review: true }, human);
   const input = WorkflowTriggerUpdateRequestV1Schema.parse({ automationId: 'legacy-one', expectedRevision: 3,
     confirmLegacyConversion: true, patch: { target: sets[0]!.target, project: sets[0]!.project, enabled: true } });
@@ -87,9 +88,7 @@ async function conversionApprovalFixture(surface: 'agent' | 'mcp' | 'cli' = 'mcp
     update: async () => { throw new Error('Unexpected definition write'); }, delete: async () => ({ ok: true }),
   }, encodeListCursor: (row) => row.artifactId, assertDefinitionWriteAllowed: async () => undefined });
   let request: ApprovalRequest | null = null;
-  const settings = ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: {
-    'workflow.trigger.update': ['agent', 'mcp', 'cli'],
-  } });
+  let settings = ActionsSettingsV1Schema.parse({ v: 1 });
   // Approval Artifact persistence and authenticated Session metadata are system boundaries.
   // The real executor, approval transitions, materializer, crypto and trigger owner run beneath them.
   const reloadExecutor = () => createActionExecutor({
@@ -114,18 +113,21 @@ async function conversionApprovalFixture(surface: 'agent' | 'mcp' | 'cli' = 'mcp
     observeActionExecution: async ({ context }) => { observations.push(context); },
   });
   const context: ActionExecutorContext = { surface, authority: 'account_automation', serverId: 'home-one',
-    actionRequestId: 'conversion-request', actionsSettings: settings,
+    actionRequestId: 'conversion-request', actionsSettings: settings, defaultSessionMachineId: 'machine-one',
     ...(surface === 'agent' ? { actionCaller: agentStartContext.caller, defaultSessionId: 'session-old',
       sessionAgentSpawnPolicyV1: DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, agentStartContext,
       approvalOrigin: { kind: 'transcript_tool_call' as const, sessionId: 'session-old', toolCallId: 'convert-tool' } }
       : { actionCaller: { kind: 'host' as const } }),
   };
   return { ...f, host, executor: reloadExecutor(), reloadExecutor, input, context, human, observations,
+    waiveApproval: () => { settings = ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: {
+      'workflow.trigger.update': [surface],
+    } }); },
     request: () => ApprovalRequestV2Schema.parse(request) };
 }
 
 describe('0.2 Automation Account trigger host', () => {
-  it.each(['agent', 'mcp', 'cli'] as const)('converts a %s request only after the exact present-user approval, despite always-allow', async (surface) => {
+  it.each(['agent', 'mcp', 'cli'] as const)('converts a %s request only after the exact default present-user approval', async (surface) => {
     const f = await conversionApprovalFixture(surface);
     expect(await f.executor.execute('workflow.trigger.update', f.input, f.context))
       .toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId: 'conversion-approval' } });
@@ -139,8 +141,7 @@ describe('0.2 Automation Account trigger host', () => {
       expect.objectContaining({ path: 'automationId', value: 'legacy-one' }),
       expect.objectContaining({ path: 'confirmLegacyConversion', value: 'true' }),
       expect.objectContaining({ path: 'expectedRevision', value: '3' }),
-      expect.objectContaining({ path: 'patch.target', value: JSON.stringify(f.input.patch.target) }),
-      expect.objectContaining({ path: 'patch.project', value: JSON.stringify(f.input.patch.project) }),
+      expect.objectContaining({ path: 'patch', value: JSON.stringify(f.input.patch) }),
     ]));
     expect(await f.executor.execute('approval.request.decide', { artifactId: 'conversion-approval', decision: 'approve' }, f.context))
       .toMatchObject({ ok: false, errorCode: 'present_user_required' });
@@ -157,7 +158,8 @@ describe('0.2 Automation Account trigger host', () => {
     expect(f.written()).toMatchObject({ enabled: true, expectedTemplateVersion: 3,
       assignments: [{ machineId: 'machine-one', enabled: true, priority: 2 }] });
     expect(f.observations.filter((entry) => entry.bypassApprovals).at(-1))
-      .toMatchObject({ surface, actionCaller: f.context.actionCaller, actionRequestId: 'conversion-request' });
+      .toMatchObject({ surface: surface === 'agent' ? 'agent' : 'ui', authority: 'present_user',
+        actionCaller: f.context.actionCaller, actionRequestId: 'conversion-request' });
   });
   it('leaves denied conversion requests unchanged', async () => {
     const f = await conversionApprovalFixture();
@@ -194,6 +196,14 @@ describe('0.2 Automation Account trigger host', () => {
     await expect(f.host.update(f.input, { ...f.context, authority: 'present_user', bypassApprovals: true }))
       .rejects.toMatchObject({ code: 'present_user_required' });
     expect(f.writes()).toBe(0);
+  });
+  it.each(['agent', 'mcp', 'cli'] as const)('refuses waived %s conversion without present-user execution authority', async (surface) => {
+    const f = await conversionApprovalFixture(surface);
+    f.waiveApproval();
+    expect(await f.executor.execute('workflow.trigger.update', f.input, f.context))
+      .toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    expect(f.writes()).toBe(0);
+    expect(f.row().templateCiphertext).toBe(AUTOMATION_TEMPLATE_V02_EXISTING_ENCRYPTED);
   });
   it('binds approval proof to the Action, original request and every reviewed operand', async () => {
     const f = await conversionApprovalFixture('agent');

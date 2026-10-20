@@ -4,6 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { AgentsAcpBackendsInstallFromRegistryOutputV1Schema } from '@happier-dev/protocol/acp/catalog/registry/registryInstallActionV1';
 import type { AcpPlatformFitV1 } from '@happier-dev/protocol/acp/catalog/registry/acpPlatformFitV1';
 import { selectAcpRegistryDistributionV1 } from '@happier-dev/protocol/acp/catalog/registry/mapAcpRegistryAgentV1';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import type {
   AcpRegistryAgentV1,
   RegistryItemSummaryV1,
@@ -28,10 +29,12 @@ import { useRegistrySources } from '@/registries/useRegistrySources';
 import { useRegistrySourcesSlot } from '@/registries/useRegistrySourcesSlot';
 import { useReachMachines } from '@/sync/domains/capabilities/reach/useReachProjection';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { t } from '@/text';
 
 import { confirmAgentInstallChange } from '../install/agentInstallChangeConfirm';
 import { useAgentAdministrationCatalog } from '../collection/useAgentAdministrationCatalog';
+import { presentMachineAdministrationTargetState } from '@/components/settings/machines/MachineAdministrationTargetSelector';
 import {
   AgentRegistryDetail,
   AgentBuiltInDetail,
@@ -95,6 +98,7 @@ export type AgentAddState = Readonly<{
   definitionId: string;
   installOn: readonly string[];
 }>;
+type PluginAgentAddState = Readonly<{ status: 'added'; pluginId: string }>;
 
 /** Machines as the add details judge them: published OS/CPU facts, name, presence. */
 export function useAgentAddMachines(): readonly AgentAddMachine[] {
@@ -213,7 +217,7 @@ export function AgentAddModal(
   const scope = useAccountSettingsScope();
   const { execute } = useMountedActionExecution(scope);
   const machines = useAgentAddMachines();
-  const { agentEntries } = useAgentAdministrationCatalog({
+  const { agentEntries, targetSelection, executionTarget } = useAgentAdministrationCatalog({
     loadProjection: false,
   });
   const { backends: definitions } = useAcpCatalogBackends();
@@ -237,7 +241,7 @@ export function AgentAddModal(
   const [drafts, setDrafts] = React.useState<
     ReadonlyMap<string, AgentAddDraft>
   >(() => new Map());
-  const [adds, setAdds] = React.useState<ReadonlyMap<string, AgentAddState>>(
+  const [adds, setAdds] = React.useState<ReadonlyMap<string, AgentAddState | PluginAgentAddState>>(
     () => new Map(),
   );
   const draftSetters = React.useRef(
@@ -251,7 +255,7 @@ export function AgentAddModal(
           const current = previous.get(key);
           if (
             current &&
-            current.agent === draft.agent &&
+            current.payload === draft.payload &&
             current.choice === draft.choice
           )
             return previous;
@@ -385,8 +389,9 @@ export function AgentAddModal(
           </View>
         ),
       },
-      renderDetail: (row, ctx) =>
-        row.status?.kind === 'builtIn' ? (
+      renderDetail: (row, ctx) => {
+        const added = ctx.added ? adds.get(row.key) : null;
+        return row.status?.kind === 'builtIn' ? (
           <AgentBuiltInDetail
             key={row.key}
             row={row}
@@ -401,14 +406,15 @@ export function AgentAddModal(
             sourceTitle={sourceTitle(row.summary.sourceId)}
             machines={machines}
             serverId={scope?.serverId ?? null}
-            added={ctx.added ? (adds.get(row.key) ?? null) : null}
+            added={added && 'definitionId' in added ? added : null}
             existingDefinitionId={
               row.status?.kind === 'added' ? row.status.definitionId : null
             }
             onDraft={draftSetter(row.key)}
             testID={TEST_ID}
           />
-        ),
+        );
+      },
       detailFooter: (row) => {
         const note = (
           <View style={styles.note}>
@@ -451,7 +457,43 @@ export function AgentAddModal(
           };
         }
         const draft = drafts.get(row.key);
-        const agent = draft?.agent ?? null;
+        if (draft?.payload?.kind === 'plugin') {
+          const { listing, source } = draft.payload;
+          const target = scope && executionTarget && areServerProfileIdentifiersEquivalent(executionTarget.serverId, scope.serverId)
+            && targetSelection.selectedTargetServerMatchesActiveAccount ? executionTarget : null;
+          return {
+            ...(adds.has(row.key) ? { afterAdd: {} } : {}),
+            primary: {
+              label: t('settingsPlugins.installAndTrust'),
+              ...(row.summary.problem ? { disabledReason: t('capabilities.agentAdd.detail.unsupportedEntry') }
+                : !target ? { disabledReason: targetSelection.state.kind === 'online'
+                    ? t('settingsPlugins.targetSelection.unknown') : presentMachineAdministrationTargetState(targetSelection.state).title } : {}),
+              onPress: async () => {
+                if (!scope || !target || row.summary.problem) return null;
+                const fresh = targetSelection.resolveExecutionTarget({ accountScope: scope });
+                if (!fresh || !areServerProfileIdentifiersEquivalent(fresh.serverId, scope.serverId)
+                  || fresh.machine.id !== target.machine.id) return null;
+                const result = await execute('plugins.install', {
+                  machineId: fresh.machine.id,
+                  source: { kind: 'marketplace', sourceId: source.id, pluginId: listing.pluginId,
+                    version: listing.distribution.version, packageName: listing.distribution.packageName },
+                });
+                if (!result.ok) throw new Error(result.error || t('capabilities.add.addFailed'));
+                const output = getActionSpec('plugins.install').outputSchema?.parse(result.result);
+                if (!output || typeof output !== 'object' || !('ok' in output))
+                  throw new Error(t('capabilities.add.addFailed'));
+                if (!output.ok) {
+                  if ('change' in output && output.change && typeof output.change === 'object'
+                    && 'kind' in output.change && output.change.kind === 'cancelled') return null;
+                  throw new Error(t('capabilities.add.addFailed'));
+                }
+                setAdds(previous => new Map(previous).set(row.key, { status: 'added', pluginId: listing.pluginId }));
+                return { itemId: listing.pluginId, then: 'stay' as const };
+              },
+            },
+          };
+        }
+        const agent = draft?.payload?.kind === 'agent' ? draft.payload.agent : null;
         const fits = agent
           ? resolveAgentMachineFits(agent.distributions, machines)
           : [];
@@ -463,7 +505,8 @@ export function AgentAddModal(
                 !fits.some(({ fit }) => fit.kind === 'can_run')
               ? t('capabilities.agentAdd.detail.noRunnableMachine')
               : undefined;
-        const addedState = adds.get(row.key);
+        const addedResult = adds.get(row.key);
+        const addedState = addedResult && 'definitionId' in addedResult ? addedResult : null;
         return {
           provenance: note,
           ...(addedState
@@ -521,15 +564,17 @@ export function AgentAddModal(
       draftSetter,
       drafts,
       execute,
+      executionTarget,
       groups,
       machines,
       onAddedStay,
       params,
       query,
       rows,
-      scope?.serverId,
+      scope,
       slot.sources,
       sourceTitle,
+      targetSelection,
       theme.colors.text.secondary,
     ],
   );

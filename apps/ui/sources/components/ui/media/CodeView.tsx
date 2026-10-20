@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { CodeBlockView } from '@/components/ui/code/blocks/CodeBlockView';
-import { useSetting } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/store/settingsReadHooks';
 import type { FindTextRange } from '@happier-dev/plugin-ui/presentation';
 
 

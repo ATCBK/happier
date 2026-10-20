@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 
-import { createActivePluginAccountHostedArtifactRemover } from './removeActivePluginAccountHostedArtifact';
+installHomeGovernanceBoundaries(createHomeGovernanceHarness());
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+const { createActivePluginAccountHostedArtifactRemover } = await import('./removeActivePluginAccountHostedArtifact');
 
 const scope = { serverId: 'server-a', accountId: 'account-a' } as const;
 const target = {

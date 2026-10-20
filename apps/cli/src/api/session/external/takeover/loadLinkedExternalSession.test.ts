@@ -76,8 +76,10 @@ import {
 
 describe('loadLinkedExternalSession', () => {
   let runtimeFixture: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | null = null;
+  let connectedCodexHome: string;
 
   beforeAll(async () => {
+    connectedCodexHome = await realpath(await mkdtemp(join(tmpdir(), 'happier-load-codex-home-')));
     const pluginIds = [
       'happier.agent.claude',
       'happier.agent.codex',
@@ -97,14 +99,15 @@ describe('loadLinkedExternalSession', () => {
       controller: pluginReloadController,
       runtimeOptions: {
         contributes,
-        pluginIds,
       },
     });
   });
 
   afterAll(async () => {
     await runtimeFixture?.dispose();
+    await pluginReloadController.shutdown();
     runtimeFixture = null;
+    await rm(connectedCodexHome, { recursive: true, force: true });
   });
 
   beforeEach(() => {
@@ -797,7 +800,7 @@ describe('loadLinkedExternalSession', () => {
               home: 'connectedService',
               connectedServiceId: 'openai-codex',
               connectedServiceProfileId: 'work',
-              homePath: '/tmp/connected-home',
+              homePath: connectedCodexHome,
               providerExtra: {
                 owner: 'codex',
                 schemaId: 'codex.agentRuntimeDescriptorExtra',
@@ -808,7 +811,7 @@ describe('loadLinkedExternalSession', () => {
                   home: 'connectedService',
                   connectedServiceId: 'openai-codex',
                   connectedServiceProfileId: 'work',
-                  homePath: '/tmp/connected-home',
+                  homePath: connectedCodexHome,
                 },
               },
             },
@@ -832,7 +835,7 @@ describe('loadLinkedExternalSession', () => {
           home: 'connectedService',
           connectedServiceId: 'openai-codex',
           connectedServiceProfileId: 'work',
-          homePath: '/tmp/connected-home',
+          homePath: connectedCodexHome,
         },
       }),
     });
@@ -854,7 +857,7 @@ describe('loadLinkedExternalSession', () => {
           home: 'connectedService',
           connectedServiceId: 'openai-codex',
           connectedServiceProfileId: 'work',
-          homePath: '/tmp/connected-home',
+          homePath: connectedCodexHome,
         },
         linkedAtMs: 1,
         linkData: {
@@ -886,7 +889,7 @@ describe('loadLinkedExternalSession', () => {
           home: 'connectedService',
           connectedServiceId: 'openai-codex',
           connectedServiceProfileId: 'work',
-          homePath: '/tmp/connected-home',
+          homePath: connectedCodexHome,
         },
       }),
     });

@@ -16,6 +16,7 @@ import { TranscriptRawAgentEventV1Schema } from '@happier-dev/protocol/sessions/
 type PlanTurn = Readonly<{
   text: string;
   plan: string;
+  nativeStartupRefused?: boolean;
   accepted?: boolean;
   compact?: 'started' | 'completed';
   compactionBeforeAcceptance?: boolean;
@@ -75,8 +76,12 @@ async function dispatchPlans(turns: readonly PlanTurn[], nativePlans?: string[],
       cancelTurn: async () => undefined,
       readSessionIdentity: () => ({ sessionId: 'native-session' }),
       readSessionStartupInstructions: () => nativeInstructions,
+      readSessionStartupInstructionsSupport: () => !turns[index].nativeStartupRefused,
       updateSessionRuntimeConfig: async () => undefined,
       resetOrDisposeRuntime: async (reason, intent) => {
+        // Native open is the substituted system boundary. Measure its removed
+        // latency without imposing a production or test wall-time threshold.
+        if (turns[index].nativeStartupRefused) await new Promise(resolve => setTimeout(resolve, 40));
         // Native replacement invokes the host admission lifecycle before opening
         // the successor. Keep that owner real alongside the native I/O boundary.
         await inputConsumer.enforceProviderInputAdmission({
@@ -182,6 +187,19 @@ describe('session prompt-plan re-delivery', () => {
       { text: 'after compaction', plan: 'ROLE', deliveryState },
     ], nativePlans)).toEqual(['first', 'after compaction']);
     expect(nativePlans).toEqual(['ROLE']);
+  });
+  it('keeps the full plan on the existing fallback after the opened native runtime refuses startup instructions', async () => {
+    const nativePlans: string[] = [];
+    const deliveryState = { startupInstructionsSupported: true, revisionChanges: 'resume' as const };
+    const startedAt = performance.now();
+    const prompts = await dispatchPlans([
+      { text: 'first', plan: 'ROLE_ONE', nativeStartupRefused: true, deliveryState },
+      { text: 'same', plan: 'ROLE_ONE', nativeStartupRefused: true, deliveryState },
+      { text: 'changed', plan: 'ROLE_TWO', nativeStartupRefused: true, deliveryState },
+    ], nativePlans);
+    console.info('PERF4 refused native startup measurement', { durationMs: Math.round(performance.now() - startedAt), reopens: nativePlans.length });
+    expect(prompts).toEqual(['ROLE_ONE\n\nfirst', 'same', 'ROLE_TWO\n\nchanged']);
+    expect(nativePlans).toEqual([]);
   });
   it('prepares a native plan once, reopens for changed instructions, and keeps unchanged turns prefix-free', async () => {
     const nativePlans: string[] = [];

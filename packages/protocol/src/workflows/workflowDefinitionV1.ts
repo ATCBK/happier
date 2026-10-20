@@ -8,12 +8,13 @@ import {
   type WorkflowBlock,
   type WorkflowDefinitionV1,
   WorkflowStepExecutionSelectionSchema,
-  WorkflowEngineSelectionV1Schema,
+  WorkflowLiteralEngineSelectionV1Schema,
+  WorkflowSelectionBindingV1Schema,
   WorkflowLeafExecutionTargetV1Schema as WorkflowRunExecutionTargetV1Schema,
 } from './workflowV1.js';
 import { WorkflowDefinitionIdV1Schema } from './workflowIdsV1.js';
 import { preservedBoundedNfcString } from '../strings/preservedBoundedNfcString.js';
-import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
+import { StrictJsonValueSchema, sameStrictJsonValue } from '../json/strictJsonValue.js';
 import { AgentPermissionIntentV1Schema, type AgentPermissionIntentV1 } from '../runtime/permissionIntentV1.js';
 import { resolvePermissionPrivilegeOrdinal } from '../actions/permissionPrivilege.js';
 import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
@@ -26,6 +27,11 @@ import { WorkflowDefinitionRefV1StringSchema } from './workflowDefinitionRefV1.j
 import { ARTIFACT_EXCERPT_MAX_CHARS_V1 } from '../artifacts/artifactExcerptV1.js';
 import { ArtifactSavedByV1Schema } from '../artifacts/artifactBinaryV1.js';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
+import { ActionSessionAddressV1Schema } from '../actions/sessionTargetV1.js';
+import { ExecutableParticipantSelectionV1Schema } from '../discussions/executableParticipants.js';
+import { SessionSpawnNewSelectionV2Schema } from '../sessions/creation/sessionSpawnNewSelectionV2.js';
+import { ActionRequestAttributionV1Schema } from '../actions/actionRequestAttributionV1.js';
+import { WorkflowDiscussionOriginV1Schema, WorkflowResultDeliveryV1Schema } from './workflowDestinationsV1.js';
 export { collectWorkflowLeavesV1, deriveWorkflowDestinationsV1, readWorkflowLeafTargetSessionIdsV1,
   resolveWorkflowDestinationsV1, WorkflowDestinationsV1Schema, type WorkflowDestinationsV1 } from './workflowDestinationsV1.js';
 
@@ -33,7 +39,7 @@ export { collectWorkflowLeavesV1, deriveWorkflowDestinationsV1, readWorkflowLeaf
 export const WorkflowReplayAgentOverrideV1Schema = lazyZodSchema(() => z.strictObject({
   sourceKey: z.union([z.literal('$root'), WorkflowDefinitionRefV1StringSchema]),
   blockId: WorkflowBlockIdSchema,
-  engine: WorkflowEngineSelectionV1Schema,
+  engine: WorkflowLiteralEngineSelectionV1Schema,
 }));
 export type WorkflowReplayAgentOverrideV1 = z.infer<typeof WorkflowReplayAgentOverrideV1Schema>;
 
@@ -123,14 +129,53 @@ export type WorkflowResolvedInputsV1 = z.infer<typeof WorkflowResolvedInputsV1Sc
 export { WorkflowRunExecutionTargetV1Schema };
 export type WorkflowRunExecutionTargetV1 = z.infer<typeof WorkflowRunExecutionTargetV1Schema>;
 
+export const WorkflowAcceptedParticipantV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('session'), session: ActionSessionAddressV1Schema,
+    machineId: z.string().check(z.minLength(1)) }),
+  z.strictObject({ kind: z.literal('model'), launch: SessionSpawnNewSelectionV2Schema }),
+]));
+export type WorkflowAcceptedParticipantV1 = z.infer<typeof WorkflowAcceptedParticipantV1Schema>;
+
 export const WorkflowMaterializedLeafV1Schema = lazyZodSchema(() => z.strictObject({
   sourceKey: z.string().check(z.minLength(1)), blockId: z.string().check(z.minLength(1)),
   kind: z.enum(['step', 'action', 'workflow', 'wait']),
   selection: WorkflowStepExecutionSelectionSchema,
   /** Lexical workspace intent before defaults are flattened into selection. */
-  authoredWorkspace: WorkflowStepExecutionSelectionSchema.shape.workspace.unwrap(),
+  authoredWorkspace: WorkflowStepExecutionSelectionSchema.shape.workspace._zod.def.innerType,
   executionTarget: WorkflowRunExecutionTargetV1Schema,
+  participant: z.optional(WorkflowAcceptedParticipantV1Schema),
   role: zMini.optional(ResolvedRoleV1Schema),
+  /** Frame-local Session inputs admitted against the starting principal's corpus. */
+  sessionAuthorityBindings: z.optional(z.array(z.strictObject({
+    inputName: WorkflowInputNameSchema,
+    targets: z.array(z.strictObject({ address: ActionSessionAddressV1Schema, machineId: z.string().check(z.minLength(1)) })),
+  }))),
+  /** Verified Session placement for each immutable input admitted to this leaf. */
+  sessionBindings: z.optional(z.strictObject({
+    inputName: WorkflowInputNameSchema,
+    defaultFrom: z.optional(z.literal('origin_session')),
+    targets: z.array(z.strictObject({ address: ActionSessionAddressV1Schema, machineId: z.string().check(z.minLength(1)) })),
+  })),
+  /** Finite choices frozen at admission; invocation items can only select this roster. */
+  engineBindings: z.optional(z.strictObject({
+    reference: WorkflowSelectionBindingV1Schema,
+    selections: z.array(z.strictObject({
+      value: WorkflowLiteralEngineSelectionV1Schema,
+      selection: WorkflowStepExecutionSelectionSchema,
+      executionTarget: WorkflowRunExecutionTargetV1Schema,
+      role: zMini.optional(ResolvedRoleV1Schema),
+    })),
+  })),
+  participantBindings: z.optional(z.strictObject({
+    reference: WorkflowSelectionBindingV1Schema,
+    selections: z.array(z.strictObject({
+      value: ExecutableParticipantSelectionV1Schema,
+      participant: WorkflowAcceptedParticipantV1Schema,
+      selection: WorkflowStepExecutionSelectionSchema,
+      executionTarget: WorkflowRunExecutionTargetV1Schema,
+      role: zMini.optional(ResolvedRoleV1Schema),
+    })),
+  })),
   childRef: zMini.optional(WorkflowDefinitionRefV1StringSchema),
   actionId: z.optional(z.string().check(z.minLength(1))),
   actionContract: z.optional(z.strictObject({ inputSchema: StrictJsonValueSchema, outputSchema: StrictJsonValueSchema,
@@ -154,6 +199,15 @@ const workflowMaterializationFields = () => ({
   frozenChildren: WorkflowFrozenChildrenV1Schema,
 });
 
+/** Host-stamped cause retained inside the accepted Run's existing origin custody. */
+export const WorkflowAcceptedOriginV1Schema = lazyZodSchema(() => z.strictObject({
+  kind: z.literal('direct'),
+  originSessionId: zMini.optional(preservedBoundedNfcString(191, 'Session ids')),
+  discussion: z.optional(WorkflowDiscussionOriginV1Schema),
+  actionRequestAttributionV1: z.optional(ActionRequestAttributionV1Schema),
+}));
+export type WorkflowAcceptedOriginV1 = z.infer<typeof WorkflowAcceptedOriginV1Schema>;
+
 const WorkflowAcceptedSnapshotAutomationV1Schema = lazyZodSchema(() => z.strictObject({
   ...workflowMaterializationFields(),
   definition: WorkflowDefinitionV1Schema,
@@ -163,8 +217,8 @@ const WorkflowAcceptedSnapshotAutomationV1Schema = lazyZodSchema(() => z.strictO
   machineId: preservedBoundedNfcString(191, 'Machine ids'),
   executionTarget: WorkflowRunExecutionTargetV1Schema,
   workspaceTarget: WorkflowAcceptedWorkspaceTargetV1Schema,
-  origin: z.optional(z.strictObject({ kind: z.literal('direct'), originSessionId: zMini.optional(preservedBoundedNfcString(191, 'Session ids')) })),
-  resultDelivery: z.optional(z.strictObject({ kind: z.literal('originating_session'), originSessionId: preservedBoundedNfcString(191, 'Session ids') })),
+  origin: z.optional(WorkflowAcceptedOriginV1Schema),
+  resultDelivery: z.optional(WorkflowResultDeliveryV1Schema),
   authorization: z.lazy((): typeof WorkflowAcceptedAuthorizationV1Schema => WorkflowAcceptedAuthorizationV1Schema),
   source: z.strictObject({
     kind: z.literal('automation'),
@@ -184,8 +238,12 @@ const WorkflowAcceptedSnapshotAutomationV1Schema = lazyZodSchema(() => z.strictO
       message: 'Project workspace must use the immutable Run Machine',
     });
   }
-  if (value.resultDelivery && value.resultDelivery.originSessionId !== value.origin?.originSessionId) {
+  if (value.resultDelivery?.kind === 'originating_session' && value.resultDelivery.originSessionId !== value.origin?.originSessionId) {
     context.addIssue({ code: 'custom', path: ['resultDelivery', 'originSessionId'], message: 'Delivery must use the frozen origin Session' });
+  }
+  if (value.resultDelivery?.kind === 'originating_discussion' && !sameStrictJsonValue(value.origin?.discussion,
+    { discussion: value.resultDelivery.discussion, messageId: value.resultDelivery.messageId, throughSeq: value.resultDelivery.throughSeq })) {
+    context.addIssue({ code: 'custom', path: ['resultDelivery'], message: 'Delivery must use the frozen Discussion occurrence' });
   }
 })));
 
@@ -296,15 +354,9 @@ const WorkflowAcceptedSnapshotDirectV1Schema = lazyZodSchema(() => z.strictObjec
   machineId: preservedBoundedNfcString(191, 'Machine ids'),
   executionTarget: WorkflowRunExecutionTargetV1Schema,
   workspaceTarget: WorkflowAcceptedWorkspaceTargetV1Schema,
-  origin: z.strictObject({
-    kind: z.literal('direct'),
-    originSessionId: zMini.optional(preservedBoundedNfcString(191, 'Session ids')),
-  }),
+  origin: WorkflowAcceptedOriginV1Schema,
   authorization: WorkflowAcceptedAuthorizationV1Schema,
-  resultDelivery: z.optional(z.strictObject({
-    kind: z.literal('originating_session'),
-    originSessionId: preservedBoundedNfcString(191, 'Session ids'),
-  })),
+  resultDelivery: z.optional(WorkflowResultDeliveryV1Schema),
 }).check(z.superRefine((value, context) => {
   if (value.workspaceTarget.project.machineId !== value.machineId) {
     context.addIssue({
@@ -313,12 +365,16 @@ const WorkflowAcceptedSnapshotDirectV1Schema = lazyZodSchema(() => z.strictObjec
       message: 'Project workspace must use the immutable Run Machine',
     });
   }
-  if (value.resultDelivery && value.origin.originSessionId !== value.resultDelivery.originSessionId) {
+  if (value.resultDelivery?.kind === 'originating_session' && value.origin.originSessionId !== value.resultDelivery.originSessionId) {
     context.addIssue({
       code: 'custom',
       path: ['resultDelivery', 'originSessionId'],
       message: 'Result delivery must target the frozen originating Session',
     });
+  }
+  if (value.resultDelivery?.kind === 'originating_discussion' && !sameStrictJsonValue(value.origin.discussion,
+    { discussion: value.resultDelivery.discussion, messageId: value.resultDelivery.messageId, throughSeq: value.resultDelivery.throughSeq })) {
+    context.addIssue({ code: 'custom', path: ['resultDelivery'], message: 'Delivery must use the frozen Discussion occurrence' });
   }
 })));
 

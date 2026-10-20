@@ -67,7 +67,7 @@ export const BUILT_IN_VOICE_UI_ENTRIES: readonly VoiceUiRuntimeContribution[] = 
     settingsSectionId: 'voice.speech.local_neural',
     processingDisclosures: {
       stt: {
-        titleKey: 'settingsVoice.local.localNeuralStt.title',
+        titleKey: 'settingsVoice.local.localNeuralStt.provider.title',
         disclosureKey: 'settingsVoice.pages.privacy.localDisclosure',
         facts: {
           audioDestination: { key: 'settingsVoice.pages.privacy.localAudio', fallback: 'Your device or Voice computer' },
@@ -76,7 +76,7 @@ export const BUILT_IN_VOICE_UI_ENTRIES: readonly VoiceUiRuntimeContribution[] = 
         },
       },
       tts: {
-        titleKey: 'settingsVoice.local.localNeuralTts.title',
+        titleKey: 'settingsVoice.local.localNeuralTts.provider.title',
         disclosureKey: 'settingsVoice.pages.privacy.localDisclosure',
         facts: {
           audioDestination: { key: 'settingsVoice.pages.privacy.noMicrophoneAudio', fallback: 'No microphone audio; reply text only.' },

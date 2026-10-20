@@ -6,6 +6,7 @@ import { useApprovalArtifact } from './useApprovalArtifact';
 import { readApprovalPreviewSummary } from './ApprovalPreviewCard';
 import { approvalArtifactBodyMatchesHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { buildApprovalHref } from './approvalNavigation';
+import { usePreferredLanguage } from '@/text/usePreferredLanguage';
 
 const PENDING_STATUSES = new Set(['open', 'approved', 'executing']);
 const TERMINAL_STATUSES = new Set(['executed', 'rejected', 'failed', 'canceled']);
@@ -18,6 +19,7 @@ export function useActionApprovalContinuation(input: Readonly<{
     /** Direct controls without an inline decision surface open the existing Inbox review. */
     openOnRequest?: boolean;
 }>) {
+    const language = usePreferredLanguage();
     const router = useRouter();
     const onExecutedRef = React.useRef(input.onExecuted);
     onExecutedRef.current = input.onExecuted;
@@ -53,7 +55,8 @@ export function useActionApprovalContinuation(input: Readonly<{
     const approvalId = approval?.artifactId ?? null;
     const artifactScope = approval?.continuation?.scope;
     const artifactBinding = useApprovalArtifact({ artifactId: approvalId,
-        serverId: artifactScope?.serverId ?? input.serverId, scope: artifactScope });
+        serverId: artifactScope?.serverId ?? input.serverId, scope: artifactScope,
+        observeWhileUnfocused: approvalId !== null });
     const approvalStatus = artifactBinding.artifact?.header?.approvalStatus;
     const awaitingTypedBody = Boolean(approval?.continuation)
         && TERMINAL_STATUSES.has(String(approvalStatus)) && typeof artifactBinding.artifact?.body !== 'string';
@@ -68,7 +71,7 @@ export function useActionApprovalContinuation(input: Readonly<{
         if (!approvalId || !artifact || typeof artifact.body !== 'string') return null;
         const matched = approvalArtifactBodyMatchesHeaderV1(artifact.header ?? {}, artifact.body);
         return matched?.family === 'built_in' ? readApprovalPreviewSummary(matched.request.preview, matched.request) : null;
-    }, [approvalId, artifactBinding.artifact]);
+    }, [approvalId, artifactBinding.artifact, language]);
     return { ...artifactBinding, approvalId, approvalStatus, approvalPending, approvalSummary,
         requestApproval };
 }

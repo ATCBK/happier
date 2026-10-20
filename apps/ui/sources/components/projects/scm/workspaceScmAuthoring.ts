@@ -76,12 +76,12 @@ export async function openWorkspaceScmAuthoringDraft(input: Readonly<{
     try {
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
         if (!current()) return { kind: 'stale', reason: 'host_retired' };
-        const prepared = await createFrontDoorActionExecute(createDefaultActionExecutor()).prepare('session.authoring.open', { seed }, {
+        // Run-now present-user entry: only `execute` offers the in-place default confirmation.
+        const response = await createFrontDoorActionExecute(createDefaultActionExecutor())('session.authoring.open', { seed }, {
             surface: 'ui', authority: 'present_user', serverId: lifetime.scope.serverId,
             expectedAccountId: lifetime.scope.accountId, ...(input.signal ? { signal: input.signal } : {}),
         });
         if (!current()) return { kind: 'stale', reason: 'host_retired' };
-        const response = prepared.kind === 'settled' ? prepared.result : await prepared.invocation.run();
         if (!response.ok) return { kind: 'unavailable', reason: 'navigation_unavailable' };
         const approval = ActionApprovalRequestCreatedResultSchema.safeParse(response.result);
         if (approval.success) return approval.data;

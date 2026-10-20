@@ -5,23 +5,8 @@ import {
   createSurfaceContextFixture,
 } from '@happier-dev/plugin-sdk/testing';
 import * as React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-
-const flatListRenderItems = vi.hoisted(() => [] as unknown[]);
-
-// FlatList is the native platform boundary. Keep its real RNW behavior while
-// observing the renderer identity that the public List hands to it.
-vi.mock('react-native', async (importOriginal) => {
-  const reactNative = await importOriginal<typeof import('react-native')>();
-  type FlatListProps = React.ComponentProps<typeof reactNative.FlatList>;
-  return {
-    ...reactNative,
-    FlatList: (props: FlatListProps) => {
-      flatListRenderItems.push(props.renderItem);
-      return React.createElement(reactNative.FlatList, props);
-    },
-  };
-});
+import { PluginError } from '@happier-dev/plugin-sdk';
+import { describe, expect, it, vi } from 'vitest';
 
 // First-party RNW contract coverage consumes the same public testing subpath
 // exposed to external authors.
@@ -69,7 +54,8 @@ async function findInventoryRefreshRow(fixture: Awaited<ReturnType<typeof create
 function verticalScrollAncestors(element: HTMLElement): HTMLElement[] {
   const ancestors: HTMLElement[] = [];
   for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
-    if (ancestor.style.overflowY === 'auto' || ancestor.style.overflowY === 'scroll') {
+    const overflowY = getComputedStyle(ancestor).overflowY;
+    if (overflowY === 'auto' || overflowY === 'scroll') {
       ancestors.push(ancestor);
     }
   }
@@ -77,8 +63,51 @@ function verticalScrollAncestors(element: HTMLElement): HTMLElement[] {
 }
 
 describe('Inspector public presentation contract', () => {
-  beforeEach(() => {
-    flatListRenderItems.length = 0;
+
+  it('waits for shared host readiness before reading inventory and reacquires without Retry', async () => {
+    let withdrawn = true;
+    let inventoryReads = 0;
+    let deferRefresh = false;
+    let rejectRefresh: ((error: PluginError) => void) | undefined;
+    let title = 'Review Assistant';
+    const initial = { ...createInspectorSurfaceContext(), machineConnectionPending: true, machineExecutionReady: false };
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'inventory-readiness', mountNonce: 'inventory-readiness-mount' },
+      authorPlugin: { id: 'happier.inspector', version: '0.0.0' },
+      surface: renderSurface,
+      surfaceContext: initial,
+      adapter: createPluginUiRnwSemanticSurfaceAdapter(),
+      handlers: { executeAction: async ({ action }: InspectorExecuteActionRequest) => {
+        if (action !== 'plugins.list') return { ok: true };
+        inventoryReads += 1;
+        if (withdrawn) throw new PluginError({ code: 'unavailable', retryable: true,
+          diagnostics: [{ code: 'target_unavailable', severity: 'error' }] });
+        if (deferRefresh) return new Promise<never>((_resolve, reject) => { rejectRefresh = reject; });
+        return { plugins: [{ pluginId: 'com.acme.review-assistant', title, enabled: true }] };
+      } },
+    });
+    try {
+      await expect(fixture.queryByRole('alert')).resolves.toBeUndefined();
+      expect(inventoryReads).toBe(0);
+      await expect(fixture.queryByText('No plugins installed.')).resolves.toBeUndefined();
+      withdrawn = false;
+      await React.act(async () => { await fixture.updateSurface({ ...initial,
+        machineConnectionPending: false, machineExecutionReady: true }); });
+      await expect(fixture.getByRole('button', { name: 'Reload Review Assistant' })).resolves.toBeDefined();
+      await expect(fixture.queryByRole('alert')).resolves.toBeUndefined();
+      deferRefresh = true;
+      await fixture.press(await findInventoryRefreshRow(fixture));
+      expect(rejectRefresh).toBeTypeOf('function');
+      await React.act(async () => { await fixture.updateSurface(initial); });
+      await React.act(async () => { rejectRefresh?.(new PluginError({ code: 'unavailable', retryable: true })); });
+      await expect(fixture.queryByRole('alert')).resolves.toBeUndefined();
+      await expect(fixture.getByRole('button', { name: 'Reload Review Assistant' })).resolves.toBeDefined();
+      deferRefresh = false;
+      title = 'Updated review assistant';
+      await React.act(async () => { await fixture.updateSurface({ ...initial,
+        machineConnectionPending: false, machineExecutionReady: true }); });
+      await expect(fixture.getByRole('button', { name: 'Reload Updated review assistant' })).resolves.toBeDefined();
+    } finally { await fixture.dispose(); }
   });
 
   it('publishes the settled public Action result for the mounted self-check', async () => {
@@ -94,7 +123,7 @@ describe('Inspector public presentation contract', () => {
       handlers: { executeAction },
     });
     try {
-      await expect(fixture.getByRole('heading', { name: 'Plugin Inspector' })).resolves.toBeDefined();
+      // In a pane the host's pane header names the Inspector; the pane opens on its purpose.
       await expect(fixture.getByText('Inspect installed plugins, diagnostics, and reload state.'))
         .resolves.toBeDefined();
       await expect(fixture.getAllByRole('button', { name: 'Execute Inspector self-check' }))
@@ -159,7 +188,7 @@ describe('Inspector public presentation contract', () => {
     }
   });
 
-  it('renders the admitted inventory without a bulk reload path and dispatches only the selected row reload action through the public host boundary', async () => {
+  it('renders the admitted inventory without a bulk reload path and dispatches only that row\'s reload action through the public host boundary', async () => {
     const executeAction = vi.fn(async ({ action }: InspectorExecuteActionRequest) => {
       if (action === 'plugins.list') {
         return {
@@ -190,11 +219,6 @@ describe('Inspector public presentation contract', () => {
       await fixture.press(await fixture.findByRole('button', { name: 'Open Inspector quick menu' }));
       await expect(fixture.queryByText('Reload all')).resolves.toBeUndefined();
 
-      const plugin = await fixture.findByRole('option', {
-        name: 'Review Assistant',
-        state: { selected: false },
-      });
-      await fixture.press(plugin);
       const pluginReload = await fixture.findByRole('button', { name: 'Reload Review Assistant' });
 
       await fixture.press(pluginReload);
@@ -217,7 +241,53 @@ describe('Inspector public presentation contract', () => {
     }
   });
 
-  it('uses the virtualized public List as the sole populated scroll owner', async () => {
+  it('names a row\'s current daemon diagnostic in its own words and leaves resolved ones out', async () => {
+    const record = (message: string, state: 'current' | 'resolved') => ({
+      version: 1,
+      id: `happier.agent.codex:normalization:${state}`,
+      data: { code: 'plugin_external_session_source_refused', severity: 'error', message },
+      plugin: { id: 'happier.agent.codex', version: '0.0.0', source: 'bundled' },
+      stage: 'normalization',
+      host: 'daemon',
+      platform: 'linux',
+      occurredAtMs: 1,
+      resolution: state === 'current' ? { state } : { state, resolvedAtMs: 2 },
+    });
+    const executeAction = vi.fn(async ({ action }: InspectorExecuteActionRequest) => (
+      action === 'plugins.list'
+        ? { plugins: [{
+            pluginId: 'happier.agent.codex',
+            version: '0.0.0',
+            title: 'Codex',
+            enabled: true,
+            diagnostics: [
+              record('Configured External Sessions source for Agent \'codex\' was refused', 'current'),
+              record('An earlier refusal that has cleared', 'resolved'),
+            ],
+          }] }
+        : { ok: true }
+    ));
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'fixture-instance-diag', mountNonce: 'fixture-mount-diag' },
+      authorPlugin: { id: 'happier.inspector', version: '0.0.0' },
+      surface: renderSurface,
+      surfaceContext: createInspectorSurfaceContext(),
+      adapter: createPluginUiRnwSemanticSurfaceAdapter(),
+      handlers: { executeAction },
+    });
+
+    try {
+      await vi.waitFor(async () => {
+        await expect(fixture.queryByText('Configured External Sessions source for Agent \'codex\' was refused')).resolves.toBeDefined();
+      });
+      await expect(fixture.queryByText('diagnostic')).resolves.toBeUndefined();
+      await expect(fixture.queryByText('An earlier refusal that has cleared', { exact: false })).resolves.toBeUndefined();
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it('scrolls its header, inventory rows and gallery as one page with a single scroll owner', async () => {
     const executeAction = vi.fn(async ({ action }: InspectorExecuteActionRequest) => action === 'plugins.list'
       ? {
           plugins: [{
@@ -237,15 +307,16 @@ describe('Inspector public presentation contract', () => {
     });
 
     try {
-      await expect(fixture.findByRole('option', {
-        name: 'Review Assistant',
-        state: { selected: false },
-      })).resolves.toBeDefined();
+      await expect(fixture.findByRole('button', { name: 'Reload Review Assistant' })).resolves.toBeDefined();
 
-      const listbox = document.querySelector<HTMLElement>('[role="listbox"][aria-label="Installed plugins"]');
-      expect(listbox, 'the populated Inspector List must be the surface scroll owner').not.toBeNull();
-      expect(listbox?.dataset.testid).toBe('inspector-surface');
-      expect(verticalScrollAncestors(listbox!)).toEqual([]);
+      // The rows get the room: the header above them and the gallery below them scroll with them in one
+      // scroller, rather than standing as fixed chrome around a squeezed list.
+      const row = document.querySelector<HTMLElement>('[data-testid="inspector-plugin-com.acme.review-assistant"]');
+      expect(row, 'the populated inventory row must render').not.toBeNull();
+      const scrollers = verticalScrollAncestors(row!);
+      expect(scrollers).toHaveLength(1);
+      expect(scrollers[0]!.contains(document.querySelector('[data-testid="inspector-self-check-card"]'))).toBe(true);
+      expect(scrollers[0]!.contains(document.querySelector('[data-testid="inspector-component-gallery"]'))).toBe(true);
     } finally {
       await fixture.dispose();
     }
@@ -259,11 +330,12 @@ describe('Inspector public presentation contract', () => {
       if (listReadCount === 1) throw new Error('plugin_action_unavailable');
       return { plugins: [] };
     });
+    const context = { ...createInspectorSurfaceContext(), machineConnectionPending: false, machineExecutionReady: true };
     const fixture = await createPluginUiTestkit({
       identity: { instanceId: 'fixture-instance-155-error', mountNonce: 'fixture-mount-155-error' },
       authorPlugin: { id: 'happier.inspector', version: '0.0.0' },
       surface: renderSurface,
-      surfaceContext: createInspectorSurfaceContext(),
+      surfaceContext: context,
       adapter: createPluginUiRnwSemanticSurfaceAdapter(),
       handlers: { executeAction },
     });
@@ -272,6 +344,10 @@ describe('Inspector public presentation contract', () => {
       await expect(fixture.getByRole('alert')).resolves.toBeDefined();
       await expect(fixture.getByText('Plugin inventory unavailable')).resolves.toBeDefined();
       await expect(fixture.getByText('A plugin UI test host handler failed.')).resolves.toBeDefined();
+
+      await React.act(async () => { await fixture.updateSurface({ ...context }); });
+      expect(listReadCount).toBe(1);
+      await expect(fixture.getByRole('alert')).resolves.toBeDefined();
 
       await fixture.press(await fixture.findByRole('button', { name: 'Try inventory again' }));
 
@@ -343,13 +419,7 @@ describe('Inspector public presentation contract', () => {
     });
 
     try {
-      await expect(fixture.findByRole('option', {
-        name: 'Review Assistant',
-        state: { selected: false },
-      })).resolves.toBeDefined();
-
-      const settledRenderItem = flatListRenderItems.at(-1);
-      expect(settledRenderItem).toBeTypeOf('function');
+      await expect(fixture.findByRole('button', { name: 'Reload Review Assistant' })).resolves.toBeDefined();
 
       await React.act(async () => {
         await fixture.press(await fixture.findByRole('button', { name: 'Refresh with icon button' }));
@@ -364,12 +434,8 @@ describe('Inspector public presentation contract', () => {
         role: 'progressbar',
         name: 'Refreshing plugin inventory',
       });
-      await expect(fixture.getByRole('option', {
-        name: 'Review Assistant',
-        state: { selected: false },
-      })).resolves.toBeDefined();
-      expect(flatListRenderItems.at(-1), 'refresh chrome must preserve the virtualized row renderer')
-        .toBe(settledRenderItem);
+      // The admitted inventory stays on screen while it refreshes.
+      await expect(fixture.getByRole('button', { name: 'Reload Review Assistant' })).resolves.toBeDefined();
 
       await React.act(async () => {
         resolveRefresh({ plugins: [reviewAssistant] });
@@ -401,7 +467,7 @@ describe('Inspector public presentation contract', () => {
       } },
     });
     try {
-      await fixture.findByRole('option', { name: 'Review Assistant', state: { selected: false } });
+      await fixture.findByRole('button', { name: 'Reload Review Assistant' });
       await fixture.press(await findInventoryRefreshRow(fixture));
       await vi.waitFor(() => expect(reads).toBe(2));
       await fixture.press(await findInventoryRefreshRow(fixture));
@@ -434,7 +500,7 @@ describe('Inspector public presentation contract', () => {
       } },
     });
     try {
-      await fixture.press(await fixture.findByRole('option', { name: 'Review Assistant', state: { selected: false } }));
+      await fixture.findByRole('button', { name: 'Reload Review Assistant' });
       await fixture.press(await findInventoryRefreshRow(fixture));
       await vi.waitFor(() => expect(reads).toBe(2));
       await fixture.press(await fixture.findByRole('button', { name: 'Reload Review Assistant' }));
@@ -453,7 +519,65 @@ describe('Inspector public presentation contract', () => {
     } finally { resolveOlder({ ok: true, kind: 'plugins_list', plugins: [plugin] }); resolveNewer({ ok: true, kind: 'plugins_list', plugins: [plugin] }); await fixture.dispose(); }
   });
 
-  it('filters through the public List before virtualization and never reloads a filtered-out selection', async () => {
+  it('ranks page search by label prefix, exact id, label substring, then byline and restores inventory order when cleared', async () => {
+    const plugins = [
+      { pluginId: 'com.acme.code-quality', title: 'Code review', enabled: true },
+      { pluginId: 'com.acme.review-helper', title: 'Helper', enabled: true },
+      { pluginId: 'review', title: 'Agent tools', enabled: true },
+      { pluginId: 'com.acme.assistant', title: 'Review assistant', enabled: true },
+      { pluginId: 'com.acme.terminal', title: 'Terminal helper', enabled: false },
+      { pluginId: 'com.acme.board', title: 'Review board', enabled: true },
+    ];
+    const fixture = await createPluginUiTestkit({
+      identity: { instanceId: 'ranked-search', mountNonce: 'ranked-search' },
+      authorPlugin: { id: 'happier.inspector', version: '0.0.0' },
+      surface: renderSurface,
+      surfaceContext: createSurfaceContextFixture({
+        mount: {
+          kind: 'destination',
+          destination: { pluginId: 'happier.inspector', localId: 'inspector-page' },
+          container: 'appPage',
+        },
+        target: { kind: 'app' },
+      }),
+      adapter: createPluginUiRnwSemanticSurfaceAdapter(),
+      // The host Action boundary supplies inventory; Inspector and the public Collection stay real.
+      handlers: { executeAction: async ({ action }: InspectorExecuteActionRequest) => (
+        action === 'plugins.list' ? { plugins } : { ok: true }
+      ) },
+    });
+    const rowNames = async () => (await fixture.queryAllByRole('button'))
+      .map(row => row.name)
+      .filter(name => name?.startsWith('Reload '));
+    try {
+      await fixture.findByRole('button', { name: 'Reload Review assistant' });
+      const search = document.querySelector<HTMLInputElement>('[data-testid="inspector-plugin-search"]');
+      expect(search).not.toBeNull();
+      await React.act(async () => { enterText(search!, ' ReViEw '); });
+      await vi.waitFor(async () => {
+        expect(await rowNames()).toEqual([
+          'Reload Agent tools',
+          'Reload Review assistant',
+          'Reload Review board',
+          'Reload Code review',
+          'Reload Helper',
+        ]);
+      });
+      await React.act(async () => { enterText(search!, ''); });
+      await vi.waitFor(async () => {
+        expect(await rowNames()).toEqual(plugins.map(plugin => `Reload ${plugin.title}`));
+      });
+      await React.act(async () => { enterText(search!, 'no matching plugin'); });
+      await vi.waitFor(async () => {
+        await expect(fixture.getByText('No matching plugins')).resolves.toBeDefined();
+      });
+      expect(await rowNames()).toEqual([]);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it('filters its rows through the page search and reloads only a row that is still shown', async () => {
     const executeAction = vi.fn(async ({ action }: InspectorExecuteActionRequest) => {
       if (action === 'plugins.list') {
         return {
@@ -485,31 +609,20 @@ describe('Inspector public presentation contract', () => {
     });
 
     try {
-      const review = await fixture.findByRole('option', {
-        name: 'Review Assistant',
-        state: { selected: false },
-      });
+      await expect(fixture.findByRole('button', { name: 'Reload Review Assistant' })).resolves.toBeDefined();
       await expect(fixture.getByText('com.acme.review-assistant · v1.2.3 · enabled')).resolves.toEqual({
         content: 'com.acme.review-assistant · v1.2.3 · enabled',
       });
       await expect(fixture.getByText('com.acme.terminal-helper · v2.0.0 · disabled')).resolves.toEqual({
         content: 'com.acme.terminal-helper · v2.0.0 · disabled',
       });
-      await fixture.press(review);
-      await expect(fixture.getByRole('button', { name: 'Reload Review Assistant' })).resolves.toBeDefined();
-
       const search = document.querySelector<HTMLInputElement>('[data-testid="inspector-plugin-search"]');
       expect(search, 'the maintained Inspector surface must expose its public search control').not.toBeNull();
       await React.act(async () => { enterText(search!, 'disabled'); });
 
-      await expect(fixture.queryByRole('option', { name: 'Review Assistant' })).resolves.toBeUndefined();
-      await expect(fixture.queryByRole('button', { name: 'Reload Review Assistant' })).resolves.toBeUndefined();
-
-      const terminal = await fixture.findByRole('option', {
-        name: 'Terminal Helper',
-        state: { selected: false },
+      await vi.waitFor(async () => {
+        await expect(fixture.queryByRole('button', { name: 'Reload Review Assistant' })).resolves.toBeUndefined();
       });
-      await fixture.press(terminal);
       await fixture.press(await fixture.findByRole('button', { name: 'Reload Terminal Helper' }));
 
       await vi.waitFor(() => {
@@ -518,58 +631,6 @@ describe('Inspector public presentation contract', () => {
           input: { pluginId: 'com.acme.terminal-helper' },
         }));
       });
-    } finally {
-      await fixture.dispose();
-    }
-  });
-
-  it('keeps the author-local selection when a refresh temporarily omits its row', async () => {
-    let listReadCount = 0;
-    const reviewAssistant = {
-      pluginId: 'com.acme.review-assistant',
-      version: '1.2.3',
-      title: 'Review Assistant',
-      enabled: true,
-    };
-    const executeAction = vi.fn(async ({ action }: InspectorExecuteActionRequest) => {
-      if (action === 'plugins.list') {
-        listReadCount += 1;
-        return { plugins: listReadCount === 2 ? [] : [reviewAssistant] };
-      }
-      if (action === 'plugins.reload') {
-        return { ok: true, generation: listReadCount + 1, changedPluginIds: [], affectedPluginIds: [] };
-      }
-      return { ok: true };
-    });
-    const fixture = await createPluginUiTestkit({
-      identity: { instanceId: 'fixture-instance-159', mountNonce: 'fixture-mount-159' },
-      authorPlugin: { id: 'happier.inspector', version: '0.0.0' },
-      surface: renderSurface,
-      surfaceContext: createInspectorSurfaceContext(),
-      adapter: createPluginUiRnwSemanticSurfaceAdapter(),
-      handlers: { executeAction },
-    });
-
-    try {
-      const review = await fixture.findByRole('option', {
-        name: 'Review Assistant',
-        state: { selected: false },
-      });
-      await fixture.press(review);
-      await fixture.press(await fixture.findByRole('button', { name: 'Reload Review Assistant' }));
-
-      await vi.waitFor(async () => {
-        expect(await fixture.getByText('No plugins installed.')).toEqual({ content: 'No plugins installed.' });
-      });
-      await expect(fixture.queryByRole('button', { name: 'Reload Review Assistant' })).resolves.toBeUndefined();
-
-      await fixture.press(await fixture.findByRole('button', { name: 'Refresh with icon button' }));
-
-      await expect(fixture.findByRole('option', {
-        name: 'Review Assistant',
-        state: { selected: true },
-      })).resolves.toBeDefined();
-      await expect(fixture.findByRole('button', { name: 'Reload Review Assistant' })).resolves.toBeDefined();
     } finally {
       await fixture.dispose();
     }

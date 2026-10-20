@@ -19,7 +19,7 @@ describe('useSplitCanvasDnD shared entity admission', () => {
         const entityDrop: SplitCanvasEntityDrop = {
             runtime, id: 'canvas', scope, acceptedKinds: ['session'],
             resolve: ({ target, availableSizePx }) => ({ status: 'allowed', effect: {
-                actionId: 'session.canvas.apply', input: { ...target, availableSizePx: availableSizePx ?? null },
+                actionId: 'test.pane.open', input: { ...target, availableSizePx: availableSizePx ?? null },
                 preview: { verb: 'Open', target: target.leafId },
             } }),
             execute: async effect => { writes.push(effect.input); return { status: 'applied' }; },
@@ -54,7 +54,7 @@ describe('useSplitCanvasDnD shared entity admission', () => {
             getItem: () => ({ kind: 'session', scope, address: { serverId: 'home', sessionId: 'session' } }) });
         const writes: unknown[] = [];
         const entityDrop: SplitCanvasEntityDrop = { runtime, id: 'canvas', scope, acceptedKinds: ['session'],
-            resolve: ({ target }) => ({ status: 'allowed', effect: { actionId: 'session.canvas.apply', input: target,
+            resolve: ({ target }) => ({ status: 'allowed', effect: { actionId: 'test.pane.open', input: target,
                 preview: { verb: 'Open', target: target.leafId } } }),
             execute: async effect => { writes.push(effect.input); return { status: 'applied' }; },
         };
@@ -79,7 +79,7 @@ describe('useSplitCanvasDnD shared entity admission', () => {
         const entityDrop: SplitCanvasEntityDrop = { runtime, id: 'canvas', scope, acceptedKinds: ['session'],
             resolve: ({ target, declinedSplit }) => {
                 resolved.push({ placement: target.placement, declinedSplit });
-                return { status: 'allowed', effect: { actionId: 'session.canvas.apply', input: target,
+                return { status: 'allowed', effect: { actionId: 'test.pane.open', input: target,
                     preview: { verb: 'Open', target: target.leafId } } };
             },
             execute: async () => ({ status: 'applied' }),

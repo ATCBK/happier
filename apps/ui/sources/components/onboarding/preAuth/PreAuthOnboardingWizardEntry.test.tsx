@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import type {
     DesktopWindowChromePolicy,
@@ -196,7 +197,7 @@ vi.mock('@/hooks/server/useFeatureDecision', () => ({
     },
 }));
 
-vi.mock('@/sync/store/hooks', () => ({
+vi.mock('@/sync/store/settingsReadHooks', () => ({
     useLocalSetting: (key: string) => (localSettingsState as Record<string, unknown>)[key],
 }));
 
@@ -306,6 +307,7 @@ vi.mock('@/text', async () => {
 
 describe('PreAuthOnboardingWizardEntry', () => {
     const originalDebug = process.env.EXPO_PUBLIC_DEBUG;
+    let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | undefined;
 
     beforeEach(() => {
         vi.resetModules();
@@ -376,6 +378,8 @@ describe('PreAuthOnboardingWizardEntry', () => {
     });
 
     afterEach(() => {
+        browser?.restore();
+        browser = undefined;
         process.env.EXPO_PUBLIC_DEBUG = originalDebug;
         vi.unstubAllGlobals();
         standardCleanup();
@@ -443,16 +447,10 @@ describe('PreAuthOnboardingWizardEntry', () => {
 
     it('hands a supplied Home address to the connection step without consuming the URL first', async () => {
         onboardingTourFeatureState.state = 'enabled';
-        const replaceState = vi.fn();
         const retainedEntry = { id: 'onboarding-entry' };
-        vi.stubGlobal('window', {
-            location: {
-                href: 'https://app.example.test/?server=https%3A%2F%2Fhome.example.test',
-                search: '?server=https%3A%2F%2Fhome.example.test',
-            },
-            history: { state: retainedEntry, replaceState },
-        });
-        vi.stubGlobal('document', {});
+        browser = await installBrowserRuntimeForTests({ url: 'https://app.example.test/?server=https%3A%2F%2Fhome.example.test' });
+        browser.window.history.replaceState(retainedEntry, '');
+        const replaceState = vi.spyOn(browser.window.history, 'replaceState');
 
         const { PreAuthOnboardingWizardEntry } = await import('./PreAuthOnboardingWizardEntry');
         const screen = await renderScreen(React.createElement(PreAuthOnboardingWizardEntry));

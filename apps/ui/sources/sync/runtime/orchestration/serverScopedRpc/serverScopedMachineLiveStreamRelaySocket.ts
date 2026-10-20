@@ -1,12 +1,9 @@
 import { MACHINE_LIVE_STREAM_SOCKET_EVENT, type MachineLiveStreamRelayEnvelopeV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
-import { type MachineLiveStreamContentV1, MachineLiveStreamPayloadErrorV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/payloadV1';
+import { MachineLiveStreamPayloadErrorV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/payloadV1';
 
 import { apiSocket } from '@/sync/api/session/apiSocket';
-import { createMachineLiveStreamSocketTransport } from '@/sync/domains/machines/peer/mediation/stream/socketTransport';
-import { resolveScopedMachineTransport } from './serverScopedRpcPool';
-import { resolveRunnerMachineContentKeyTrustV1 } from '@/sync/domains/machines/runnerMachineContentKeyTrust';
-import { fetchAccountEncryptionMode } from '@/sync/api/account/apiAccountEncryptionMode';
-import { createServerRequestForExplicitServerScope } from './createServerRequestWithServerScope';
+import { createMachineLiveStreamSocketTransport, type ResolvedMachineLiveStreamContent } from '@/sync/domains/machines/peer/mediation/stream/socketTransport';
+import { resolveMachineLiveStreamContent } from './resolveMachineLiveStreamContent';
 
 import { createServerScopedRelaySocket, type ServerScopedRelaySocket } from './serverScopedRelaySocket';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
@@ -29,9 +26,11 @@ export type ServerScopedMachineLiveStreamRelaySocket = Readonly<{
      * The per-tab socket id of THIS viewer connection. When present the server relay delivers
      * frames to exactly this tab via `io.to(socketId)`. If unavailable, the simulator product
      * path fails closed before opening the relay. May change across reconnects — read at
-     * relay-open time.
+     * relay-open time. Mounted readers subscribe through `onSocketIdChange`.
      */
     socketId: string;
+    /** Notify mounted readers when Socket.IO retires or replaces this connection. */
+    onSocketIdChange: (listener: () => void) => () => void;
     sendEnvelope: (payload: MachineLiveStreamRelayEnvelopeV1) => void;
     onEnvelope: (listener: (payload: MachineLiveStreamRelayEnvelopeV1) => void) => () => void;
     disconnect: () => Promise<void>;
@@ -50,6 +49,7 @@ export async function resolveServerScopedMachineLiveStreamRelaySocket(params: Re
         timeoutMs: params.timeoutMs,
         missingScopeUserProfileErrorMessage: 'Active account profile id is unavailable for machine live-stream relay',
         getActiveSocketId: () => apiSocket.getSocketId(),
+        onActiveSocketIdChange: listener => apiSocket.onStatusChange(listener),
         createActiveTransport: {
             send: (payload) => {
                 apiSocket.sendMachineLiveStreamRelayEnvelope(payload);
@@ -59,49 +59,16 @@ export async function resolveServerScopedMachineLiveStreamRelaySocket(params: Re
         createScopedTransport: (scopedSocket, context) => {
             const listeners = new Set<(envelope: MachineLiveStreamRelayEnvelopeV1) => void>();
             let current = true;
-            let contentRead: Promise<MachineLiveStreamContentV1> | null = null;
-            let isContentCurrent = () => true;
+            let contentRead: Promise<ResolvedMachineLiveStreamContent> | null = null;
             const transport = createMachineLiveStreamSocketTransport({
                 emit: (wire) => scopedSocket.emit(MACHINE_LIVE_STREAM_SOCKET_EVENT, wire),
                 deliver: (decoded) => { for (const listener of listeners) listener(decoded); },
-                isCurrent: () => current && isContentCurrent(),
+                isCurrent: () => current,
                 // Failure is delivered as a typed terminal stop by the shared framing owner.
                 onError: (error) => console.warn('[Live stream] Scoped payload rejected', { code: error.code }),
                 resolveContent: async (machineId) => {
                     if (machineId !== context.machineId) throw new MachineLiveStreamPayloadErrorV1('stream_payload_binding_mismatch');
-                    contentRead ??= (async (): Promise<MachineLiveStreamContentV1> => {
-                        const credentials = context.credentials ?? { token: context.token };
-                        const trust = context.encryption ? await resolveRunnerMachineContentKeyTrustV1({
-                            credentials, homeServerIdentityId: context.targetServerId, machineId,
-                        }) : null;
-                        const machine = await resolveScopedMachineTransport({
-                            serverId: context.targetServerId, serverUrl: context.targetServerUrl,
-                            runtimeOrigin: context.runtimeOrigin, homeCarrier: context.homeCarrier,
-                            token: context.token, machineId, accountId: context.targetAccountId,
-                            readAccountMode: async () => (await fetchAccountEncryptionMode(credentials, {
-                                request: createServerRequestForExplicitServerScope({
-                                    serverUrl: context.targetServerUrl, token: context.token,
-                                    runtimeOrigin: context.runtimeOrigin, homeCarrier: context.homeCarrier, timeoutMs: context.timeoutMs,
-                                }),
-                            })).mode,
-                            expectedRunnerBinding: trust?.expectedRunnerBinding,
-                            trustedMachineKind: trust?.trustedMachineKind, timeoutMs: context.timeoutMs,
-                            ...(context.encryption ? { encryption: context.encryption, decryptEncryptionKey: (value: string) => context.encryption!.decryptEncryptionKey(value) } : {}),
-                        });
-                        if (!machine) throw new MachineLiveStreamPayloadErrorV1('stream_payload_mode_mismatch');
-                        isContentCurrent = () => machine.context?.isCurrent() !== false;
-                        if (machine.mode === 'plain') {
-                            context.encryption?.removeMachineEncryption(machineId);
-                            return { mode: 'plain' };
-                        }
-                        if (!context.encryption || !trust) throw new MachineLiveStreamPayloadErrorV1('stream_encryption_material_unavailable');
-                        await context.encryption.initializeMachines(new Map([[machineId, machine.dataKey]]), undefined, { isMachineCurrent: isContentCurrent });
-                        const cipher = context.encryption.getMachineEncryption(machineId);
-                        if (!cipher || !isContentCurrent()) throw new MachineLiveStreamPayloadErrorV1('stream_encryption_material_unavailable');
-                        const isContextCurrent = isContentCurrent;
-                        isContentCurrent = () => isContextCurrent() && context.encryption?.getMachineEncryption(machineId) === cipher;
-                        return { mode: 'e2ee', cipher };
-                    })();
+                    contentRead ??= resolveMachineLiveStreamContent(context);
                     return await contentRead;
                 },
             });
@@ -120,6 +87,7 @@ export async function resolveServerScopedMachineLiveStreamRelaySocket(params: Re
     // Capture admission can finish after a viewer disappears. Keep this logical carrier until
     // its ingestion subscriber has sent the final Stop and released its interest.
     const readers = new Set<() => void>();
+    const connectionReaders = new Set<() => void>();
     let closing = false;
     let disconnectStarted = false;
     let completion: Promise<void> | null = null;
@@ -135,6 +103,16 @@ export async function resolveServerScopedMachineLiveStreamRelaySocket(params: Re
         machineId: socket.machineId,
         viewerId: socket.scopeUserId,
         get socketId() { return socket.socketId ?? ''; },
+        onSocketIdChange: listener => {
+            if (closing) return () => {};
+            const unsubscribe = socket.onSocketIdChange(listener);
+            const release = () => {
+                if (!connectionReaders.delete(release)) return;
+                unsubscribe();
+            };
+            connectionReaders.add(release);
+            return release;
+        },
         sendEnvelope: envelope => {
             if (!disconnectStarted && (!closing || (envelope.message.kind === 'control' && envelope.message.control.kind === 'stop'))) {
                 socket.sendEnvelope(envelope);
@@ -154,6 +132,7 @@ export async function resolveServerScopedMachineLiveStreamRelaySocket(params: Re
         disconnect: () => {
             if (!completion) {
                 closing = true;
+                for (const release of connectionReaders) release();
                 completion = new Promise<void>((resolve, reject) => { resolveCompletion = resolve; rejectCompletion = reject; });
                 finishDisconnect();
             }

@@ -1,7 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { PluginProjectionV2Schema, WorkflowDefinitionV1Schema, materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createWorkflowMaterializationHostV1 } from '@/session/actions/workflowMaterializationHost';
@@ -12,7 +9,7 @@ import { projectLoadedPluginContributes } from './resolvePluginContributions';
 import { createResolvedContributionRegistry, createMergedContributionRegistry } from './createResolvedContributionRegistry';
 import { buildPluginProjectionV2 } from './projection/v2';
 import { readPluginWorkflowSources } from './workflows';
-import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 
 const definition = WorkflowDefinitionV1Schema.parse({ version: 1, blocks: [{ kind: 'wait', id: 'review',
     document: { text: 'Review the result.', references: [], attachments: [] }, result: { kind: 'text' },
@@ -98,21 +95,18 @@ describe('plugin workflows through the canonical projection', () => {
     });
 
     it('admits a workflows-only plugin without executable activation and fences its source with the occurrence', async () => {
-        const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-plugin-workflows-'));
-        const contributes = createResolvedContributionRegistry(projectLoadedPluginContributes({
-            loadResult: { loadedPlugins: [loaded('com.acme.review')], diagnosticsByPluginId: {} }, provenance: 'first_party',
-        }));
-        const registry = await resolveExecutablePluginRuntimeRegistry({ happyHomeDir, contributes, generation: 1,
-            generationAuthority: { commit: null, generations: new Map(), rejectedGenerations: new Map(), isCurrent: async () => true },
+        const fixture = await createAuthoredAdmittedPluginRuntimeFixture({
+            plugins: [{ manifest: loaded('com.acme.review').manifest, files: {} }],
+            runtimeOptions: { pluginIds: ['com.acme.review'] },
         });
+        const registry = fixture.registry;
         try {
             expect(readPluginWorkflowSources(registry.contributes)).toHaveLength(1);
             registry.fencePluginConsumers?.(['com.acme.review']);
             expect(readPluginWorkflowSources(registry.contributes)).toEqual([]);
             expect(registry.contributes.workflows).toEqual([]);
         } finally {
-            await registry.dispose();
-            await rm(happyHomeDir, { recursive: true, force: true });
+            await fixture.dispose();
         }
     });
 

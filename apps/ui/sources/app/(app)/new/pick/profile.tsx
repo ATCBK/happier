@@ -2,6 +2,7 @@ import { useAiLaunchProfilesForLegacyUi } from '@/sync/store/useAiLaunchProfiles
 import React from 'react';
 import { AppHeaderCloseButton } from '@/components/navigation/AppHeaderCloseButton';
 import { Stack, useRouter, useLocalSearchParams, useNavigation } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { Platform } from 'react-native';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
@@ -79,6 +80,11 @@ export default React.memo(function ProfilePickerScreen() {
         || secretRequirementResultId.trim(),
     );
     const spawnServerId = resolveSpawnServerRouteParam(params.spawnServerId);
+    const profilePreviewRequest = React.useRef<AbortController | null>(null);
+    useFocusEffect(React.useCallback(() => () => {
+        profilePreviewRequest.current?.abort();
+        profilePreviewRequest.current = null;
+    }, [machineId, spawnServerId]));
     const currentRouteParams = React.useMemo(() => {
         return pickNewSessionRouteParams(params);
     }, [params]);
@@ -293,6 +299,9 @@ export default React.memo(function ProfilePickerScreen() {
     }, [dataId, machineId, roundTripBackendParams, router, secretBindingsByProfileId, secrets, setParamsOnPreviousAndClose, setSecretBindingsByProfileId, setSecrets, spawnServerId]);
 
     const handleProfilePress = React.useCallback(async (profile: AIBackendProfile) => {
+        profilePreviewRequest.current?.abort();
+        const controller = new AbortController();
+        profilePreviewRequest.current = controller;
         const profileId = profile.id;
         const requiredSecretNames = getRequiredSecretEnvVarNames(profile);
         const machineEnvReadyByName: Record<string, boolean> = {};
@@ -305,7 +314,9 @@ export default React.memo(function ProfilePickerScreen() {
                 sensitiveKeys: requiredSecretNames,
             }, {
                 serverId: spawnServerId,
+                signal: controller.signal,
             });
+            if (controller.signal.aborted) return;
             if (preview.supported) {
                 for (const name of requiredSecretNames) {
                     machineEnvReadyByName[name] = Boolean(preview.response.values[name]?.isSet);

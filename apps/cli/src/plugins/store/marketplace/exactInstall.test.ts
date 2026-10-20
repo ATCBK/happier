@@ -16,11 +16,10 @@ import {accountMarketplaceUserSourceFixture,curatedMarketplaceSourceFixture,comm
 import {resetActiveAccountSettingsSnapshotForTests} from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import {createTempDir,removeTempDir} from '@/testkit/fs/tempDir';
 import {createCliActionExecutor} from '@/session/actions/createCliActionExecutor';
+import {createCliActionExecutorFromCredentials} from '@/session/actions/createCliActionExecutorFromCredentials';
 import {getActionSpec} from '@happier-dev/protocol/actions/actionSpecs';
 import {ExpectedMarketplaceListingV1Schema, PluginChangePendingReviewResultSchema} from '@happier-dev/protocol/marketplace/internal';
 import {createPluginInstallationReviewFixture} from '@happier-dev/protocol/testing/pluginInstallationReviewFixture';
-import {PLUGIN_DEV_LOOP_CLI_PRESENTATION} from '@/cli/actions/pluginDevLoopPresentation';
-import {findCompiledActionCliCommand, listCompiledActionCliCommands} from '@/cli/actions/compiledCommands';
 import fastify, {type FastifyInstance} from 'fastify';
 import {installAxiosFastifyAdapter} from '@/testkit/http/axiosAdapter';
 import {runWithServerHttpBaseUrl} from '@/api/client/serverHttpBaseUrl';
@@ -34,9 +33,13 @@ import {createCliActionExecutorHarness} from '@/session/actions/createCliActionE
 import * as persistence from '@/persistence';
 import {accountSettingsParse} from '@happier-dev/protocol/account/settings/accountSettings';
 import {createPluginCliActionHost} from '@/plugins/testkit/pluginCliActionHost';
+import {ApprovalRequestV2Schema} from '@happier-dev/protocol/approvals/approvalRequestV1';
+import {resolveApprovalRequestApproveAdmission} from '@happier-dev/protocol/actions/actionApprovalPresentation';
+import {projectPluginInstallationReview} from '@/plugins/daemon/installationReview';
+import {handlePluginsRegistryCommand} from '@/cli/commands/pluginsRegistry';
 
-const daemonBoundary=vi.hoisted(()=>({request:vi.fn(),decide:vi.fn()}));
-vi.mock('@/daemon/controlClient',async original=>({...await original<typeof import('@/daemon/controlClient')>(),requestDaemonPluginChange:daemonBoundary.request,decideDaemonPluginChange:daemonBoundary.decide}));
+const daemonBoundary=vi.hoisted(()=>({request:vi.fn(),decide:vi.fn(),status:vi.fn()}));
+vi.mock('@/daemon/controlClient',async original=>({...await original<typeof import('@/daemon/controlClient')>(),requestDaemonPluginChange:daemonBoundary.request,decideDaemonPluginChange:daemonBoundary.decide,readDaemonPluginChangeStatus:daemonBoundary.status}));
 vi.mock('@/daemon/ensureDaemon',async original=>({...await original<typeof import('@/daemon/ensureDaemon')>(),ensureDaemonRunningForSessionCommand:async()=>undefined}));
 
 // DNS, Home credentials and third-party HTTP are the substituted system boundaries.
@@ -49,10 +52,10 @@ const COMMUNITY_NPM_MARKETPLACE_SOURCE=communityMarketplaceSourceFixture();
 const INTEGRITY='sha512-'+Buffer.alloc(64,1).toString('base64');
 const MANIFEST_DIGEST='sha256:'+'a'.repeat(64);
 const user=()=>accountMarketplaceUserSourceFixture({sourceUrl:'https://catalog.example/team.json',title:'Team'});
-function snapshot(source:{id:string;title:string;sourceUrl:string;origin:'curated'|'user'},options:{updatePolicy?:'pinned'|'allowed';review?:'approved'|'withdrawn';registryOrigin?:string;registryProfileId?:string}={}){
+function snapshot(source:{id:string;title:string;sourceUrl:string;origin:'curated'|'user'},options:{updatePolicy?:'pinned'|'allowed';review?:'approved'|'withdrawn';registryOrigin?:string;registryProfileId?:string;packageName?:string}={}){
   return {source:{id:source.id,title:source.title,kind:source.origin,sourceUrl:source.sourceUrl},freshness:{state:'fresh',fetchedAtMs:1},diagnostics:[],entries:[{
     pluginId:SAMPLE_PLUGIN_ID,publisher:{id:'acme',displayName:'Acme'},display:{title:'Sample',description:null},
-    distribution:{kind:'npm',registryOrigin:options.registryOrigin??'https://registry.npmjs.org',packageName:'@acme/sample',version:'1.0.0',integrity:INTEGRITY,...(options.registryProfileId?{registryProfileId:options.registryProfileId}:{})},
+    distribution:{kind:'npm',registryOrigin:options.registryOrigin??'https://registry.npmjs.org',packageName:options.packageName??'@acme/sample',version:'1.0.0',integrity:INTEGRITY,...(options.registryProfileId?{registryProfileId:options.registryProfileId}:{})},
     manifestDigest:MANIFEST_DIGEST,compatibility:{platforms:['linux']},summary:{contributions:[],requiredHostAccess:[],optionalHostAccess:[],executableRealms:['daemon']},
     review:source.origin==='curated'?{status:options.review??'approved',reviewedAt:'2026-07-22T00:00:00.000Z'}:{status:'unreviewed',reviewedAt:null},
     categories:[],media:[],updatePolicy:options.updatePolicy??'allowed',links:{},
@@ -77,12 +80,44 @@ async function marketplaceActionComposition(happyHomeDir:string){
     setActiveAccountSettingsSnapshot({...active,settings,scopeKey:resolveAccountSettingsScopeKey(credentials)});
     vi.mocked(persistence.readStoredCredentials).mockResolvedValue({token:`e30.${Buffer.from(JSON.stringify({sub:'custodian-account'})).toString('base64url')}.fixture`,credentialProvenance:'stored_session',encryption:null});
     const params={token:credentials.token,credentials,sessionId:'fixture-session',rawSession:{path:'/fixture-workspace'},mode:'plain' as const,ctx:null,happyHomeDir,serverId:'selected-home',serverHttpBaseUrl:origin};
-    return {executor:createCliActionExecutor({...params,pluginActionExecutionOwner:'current_process'}),harness:createCliActionExecutorHarness(params)};
+    return {executor:createCliActionExecutor({...params,pluginActionExecutionOwner:'current_process'}),harness:createCliActionExecutorHarness(params),
+      requester:createCliActionExecutorFromCredentials({credentials,serverId:'selected-home',serverApiUrl:origin,pluginActionExecutionOwner:'current_process'})};
   });
 }
-afterEach(async()=>{for(const fixture of accountHttp.splice(0).reverse()){fixture.restore();await fixture.app.close();}vi.restoreAllMocks();vi.mocked(undici.fetch).mockReset();vi.mocked(https.request).mockReset();daemonBoundary.request.mockReset();daemonBoundary.decide.mockReset();resetActiveAccountSettingsSnapshotForTests();await Promise.all(homes.splice(0).map(removeTempDir));});
+afterEach(async()=>{for(const fixture of accountHttp.splice(0).reverse()){fixture.restore();await fixture.app.close();}vi.restoreAllMocks();vi.mocked(undici.fetch).mockReset();vi.mocked(https.request).mockReset();daemonBoundary.request.mockReset();daemonBoundary.decide.mockReset();daemonBoundary.status.mockReset();resetActiveAccountSettingsSnapshotForTests();await Promise.all(homes.splice(0).map(removeTempDir));});
 
 describe('exact Account marketplace install',()=>{
+  it.each(['@acme/sample','happier-plugin-qa-capabilities'])('produces an approvable external marketplace review with the source-bound private-network profile for %s',async packageName=>{
+    const happyHomeDir=await home();
+    const registryOrigin='https://127.0.0.1:41261';
+    const stored=accountMarketplaceUserSourceFixture({sourceUrl:registryOrigin+'/catalog.json',registryProfileId:'registry_external'});
+    publishAccountRegistrySourcesFixture([stored]);
+    const source={...stored,sourceUrl:stored.url,origin:'user' as const};
+    const profiles=createNpmRegistryProfileService({happyHomeDir,probe:async()=>({status:'available'})});
+    const registryCli={service:profiles,machineId:'machine-1',promptSecret:async()=>{throw new Error('Anonymous registry must not ask for a token');},write:()=>{}};
+    await handlePluginsRegistryCommand(['add',registryOrigin,'--id','registry_external','--name','External','--allow-private-network',...(packageName.startsWith('@')?['--scope','@acme']:[])],registryCli);
+    await handlePluginsRegistryCommand(['test','registry_external'],registryCli);
+    expect((await profiles.snapshot()).profiles).toMatchObject([{profileId:'registry_external',availability:'available',useAsDefault:false}]);
+    vi.mocked(undici.fetch).mockImplementation(async()=>new undici.Response(JSON.stringify(snapshot(source,{registryOrigin,packageName})),{status:200}));
+    const pending=PluginChangePendingReviewResultSchema.parse({kind:'reviewRequired',reviewKind:'installation',pendingChangeId:'external-review',reason:'firstInstall',currentVersion:null,authorityExpansion:[],
+      review:projectPluginInstallationReview({
+        manifest:PluginManifestV2Schema.parse(createPluginManifestV2Fixture({id:SAMPLE_PLUGIN_ID,version:'1.0.0',contributes:{skills:[{id:'external',directory:'./resources/skills/external'}]}})),
+        source:{kind:'npm',locator:packageName+'@1.0.0',integrity:INTEGRITY,integrityBasis:'expected',packageName,registryOrigin,registryProfileId:'registry_external',
+          marketplaceSource:{id:source.id,kind:'user',sourceUrl:source.sourceUrl},publisher:{status:'unavailable'},signature:{status:'notProvided'},provenance:{status:'notProvided'},curation:{status:'notApplicable'},updatePolicy:'allowed'},
+        uiArtifacts:{verification:'verified',contributionIds:[]},
+      })});
+    daemonBoundary.request.mockResolvedValue(pending);
+    const {harness}=await marketplaceActionComposition(happyHomeDir);
+    const input={machineId:'machine-1',source:{kind:'marketplace',sourceId:source.id,pluginId:SAMPLE_PLUGIN_ID,version:'1.0.0'}};
+    const preview=await harness.deps.buildApprovalPreview?.({actionId:'plugins.install',input,context:{surface:'ui',authority:'present_user',actionCaller:{kind:'host'}},defaultPreview:{actionId:'plugins.install',actionArgs:input,summary:'Install external plugin'}});
+    const request=ApprovalRequestV2Schema.parse({v:2,status:'open',createdAtMs:1,updatedAtMs:1,createdBy:{surface:'system'},actionId:'plugins.install',actionArgs:input,summary:'Install external plugin',preview,
+      executionOriginV1:{v:1,authority:'present_user',caller:{kind:'host'},requestId:'external-install',surface:'ui',serverId:'selected-home',machineId:'machine-1',target:{kind:'machine',machineId:'machine-1'},actionId:'plugins.install'}});
+    expect(resolveApprovalRequestApproveAdmission(JSON.parse(JSON.stringify(request))).status).toBe('available');
+    if(pending.reviewKind!=='installation')throw new Error('Expected the installation review');
+    expect(pending.review.contributions).toContainEqual({family:'skills',count:1});
+    expect(daemonBoundary.request).toHaveBeenCalledWith(expect.objectContaining({kind:'installNpm',registryProfileId:'registry_external',expectedMarketplaceListing:expect.objectContaining({pluginId:SAMPLE_PLUGIN_ID,version:'1.0.0'})}));
+    expect(daemonBoundary.decide).not.toHaveBeenCalled();
+  });
   it('derives original CLI placement from the semantic install Machine and refuses conflicting outer targets',async()=>{
     publishAccountRegistrySourcesFixture();
     const source=curatedMarketplaceSourceFixture();
@@ -125,35 +160,30 @@ describe('exact Account marketplace install',()=>{
     if(result.ok)expect(getActionSpec('plugins.install').outputSchema?.safeParse(result.result).success).toBe(true);
     expect(daemonBoundary.request).not.toHaveBeenCalled();
   });
-  it('prepares one exact candidate through production Action wiring without granting trust',async()=>{
+  it('executes the policy-waived exact candidate through production Action wiring',async()=>{
     const happyHomeDir=await home(),stored=user();publishAccountRegistrySourcesFixture([stored]);const source={...stored,sourceUrl:stored.url,origin:'user' as const};
     vi.mocked(undici.fetch).mockImplementation(async()=>new undici.Response(JSON.stringify(snapshot(source)),{status:200}));
     const pending=PluginChangePendingReviewResultSchema.parse({kind:'reviewRequired',reviewKind:'installation',pendingChangeId:'pending-exact-marketplace',reason:'firstInstall',currentVersion:null,authorityExpansion:[],review:createPluginInstallationReviewFixture({pluginId:SAMPLE_PLUGIN_ID,version:'1.0.0',source:{kind:'npm',locator:'@acme/sample@1.0.0',integrity:INTEGRITY,integrityBasis:'expected'},updateChannel:{kind:'npm',packageName:'@acme/sample',registryOrigin:'https://registry.npmjs.org',marketplaceSource:{id:source.id,kind:'user',sourceUrl:source.sourceUrl}}})});
     daemonBoundary.request.mockResolvedValue(pending);
-    const {executor,harness}=await marketplaceActionComposition(happyHomeDir);
+    daemonBoundary.status.mockResolvedValue(pending);
+    daemonBoundary.decide.mockImplementation(committedChange());
+    const {executor,harness,requester}=await marketplaceActionComposition(happyHomeDir);
     const input={machineId:'machine-1',source:{kind:'marketplace',sourceId:source.id,pluginId:SAMPLE_PLUGIN_ID,version:'1.0.0'}};
     const result=await executor.execute('plugins.install',input,{surface:'cli'});
-    expect(result).toMatchObject({ok:true,result:{ok:false,kind:'plugins_install',outcome:'reviewRequired',pendingReview:pending}});
-    const command=findCompiledActionCliCommand(['plugins','marketplace','install'],listCompiledActionCliCommands());
-    if(!command)throw new Error('Missing generated marketplace install alias');
-    if(result.ok)expect(PLUGIN_DEV_LOOP_CLI_PRESENTATION.classifyResult?.(result.result, {command,json:true,input:{},callerInput:{}})).toMatchObject({errorCode:'review_required'});
+    expect(result).toMatchObject({ok:true,result:{ok:true,kind:'plugins_install',outcome:'applied',change:{kind:'committed'}}});
     if(result.ok)expect(getActionSpec('plugins.install').outputSchema?.safeParse(result.result).success).toBe(true);
     const request=daemonBoundary.request.mock.calls[0]?.[0];
     expect(request).toMatchObject({kind:'installNpm',packageName:'@acme/sample',selector:'1.0.0'});
     expect(ExpectedMarketplaceListingV1Schema.safeParse(request?.expectedMarketplaceListing).success).toBe(true);
-    expect(daemonBoundary.decide).not.toHaveBeenCalled();
-    // A Settings waiver never replaces this Action's fixed present-user
-    // authority. A bare Agent has no approval origin and cannot prepare a
-    // second candidate or decide the CLI's already-issued private review.
-    const host=await createPluginCliActionHost({happyHomeDir});
+    expect(daemonBoundary.decide).toHaveBeenCalledWith({pendingChangeId:pending.pendingChangeId,decision:'installAndTrust',optionalSelections:[]});
+    // D22 permits an explicit Agent-surface waiver too. It still goes through
+    // the same daemon-issued review and decision, rather than a second installer.
     const requestsBeforeAgent=daemonBoundary.request.mock.calls.length;
-    try {
-      const agentResult=await host.executeInstall(input,{surface:'agent'});
-      expect(agentResult,JSON.stringify(agentResult))
-        .toMatchObject({ok:false,errorCode:'approval_origin_unavailable'});
-    } finally {await host.dispose();}
-    expect(daemonBoundary.request).toHaveBeenCalledTimes(requestsBeforeAgent);
-    expect(daemonBoundary.decide).not.toHaveBeenCalled();
+    // Stay at the receiving factory: the HTTP fixture represents a terminal.
+    const agentResult=await requester.execute('plugins.install',input,{surface:'agent'});
+    expect(agentResult).toMatchObject({ok:true,result:{ok:true,kind:'plugins_install',outcome:'applied'}});
+    expect(daemonBoundary.request).toHaveBeenCalledTimes(requestsBeforeAgent+1);
+    expect(daemonBoundary.decide).toHaveBeenLastCalledWith({pendingChangeId:pending.pendingChangeId,decision:'installAndTrust',optionalSelections:[]});
     const requestsBefore=daemonBoundary.request.mock.calls.length;
     const foreign=await harness.deps.pluginsDevLoopAction?.({actionId:'plugins.install',input:{machineId:'machine-1',source:{kind:'marketplace',sourceId:source.id,pluginId:SAMPLE_PLUGIN_ID,version:'1.0.0'}},context:{surface:'rpc',authority:'present_user',externalActionCredential:{accountId:'foreign-account',principalId:'foreign-principal',credentialId:'foreign-credential',grant:API_TOKEN_FULL_GRANT_V1}}});
     expect(foreign).toMatchObject({ok:false,errorCode:'approval_context_unavailable'});

@@ -2134,7 +2134,7 @@ describe('runner managed-services Provider custody', () => {
             kind: 'supervise',
             scope,
             spec: wireSpec,
-        })).rejects.toMatchObject({ name: 'ZodError' });
+        })).rejects.toMatchObject({ issues: expect.arrayContaining([expect.objectContaining({ path: expect.arrayContaining(['spec']) })]) });
         await expect(handler({
             v: 1,
             kind: 'supervise',
@@ -2149,7 +2149,7 @@ describe('runner managed-services Provider custody', () => {
                     },
                 },
             },
-        })).rejects.toMatchObject({ name: 'ZodError' });
+        })).rejects.toMatchObject({ issues: expect.arrayContaining([expect.objectContaining({ path: expect.arrayContaining(['spec']) })]) });
         await expect(handler({
             v: 1,
             kind: 'supervise',
@@ -2164,7 +2164,7 @@ describe('runner managed-services Provider custody', () => {
                     },
                 },
             },
-        })).rejects.toMatchObject({ name: 'ZodError' });
+        })).rejects.toMatchObject({ issues: expect.arrayContaining([expect.objectContaining({ path: expect.arrayContaining(['spec']) })]) });
         expect(supervise).not.toHaveBeenCalled();
     });
 
@@ -2576,7 +2576,7 @@ describe('runner managed-services Provider custody', () => {
             ),
             serviceId: spec.id,
             unexpected: true,
-        })).rejects.toMatchObject({ name: 'ZodError' });
+        })).rejects.toMatchObject({ issues: expect.arrayContaining([expect.objectContaining({ code: 'unrecognized_keys', path: [], keys: ['unexpected'] })]) });
         expect(dispatch).not.toHaveBeenCalled();
 
         const signal = new AbortController().signal;

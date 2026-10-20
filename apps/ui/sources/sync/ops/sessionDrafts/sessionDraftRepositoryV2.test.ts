@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
     canonicalSessionDraftAddressV2,
+    SessionDraftDocumentV1Schema,
     type SessionDraftAddressV2,
     type SessionDraftDocumentV2,
     type SessionDraftStoredContentEnvelopeV2,
@@ -11,7 +12,7 @@ import {
     type SessionDraftRepositoryCipher,
     type SessionDraftRepositoryTransport,
 } from './sessionDraftRepository';
-import { createDeferred } from '@/dev/testkit';
+import { createDeferred, requireComposerDraftDocument } from '@/dev/testkit';
 import { createSessionDraftCipher } from '@/sync/encryption/sessionDraftEncryption';
 import { SessionDraftEpochUnavailableError } from './sessionDraftEpochError';
 import { readNewSessionAttachmentDrafts, writeNewSessionAttachmentDrafts, clearAllNewSessionAttachmentDrafts } from '@/components/sessions/new/attachments/newSessionAttachmentDraftStore';
@@ -20,8 +21,8 @@ import { materializeSessionDraftSocketWake } from '@/sync/runtime/orchestration/
 
 const scope = { serverId: 'server-a', accountId: 'account-a' } as const;
 const runAddress = { kind: 'run', sessionId: 'session-a', runId: 'run-a' } as const;
-const discussionAddress = { kind: 'discussion', sessionId: 'session-a', discussionId: 'disc-a' } as const;
-const newDiscussionAddress = { kind: 'newDiscussion', sessionId: 'session-a' } as const;
+const discussionAddress = { kind: 'discussion', discussionId: 'disc-a' } as const;
+const newDiscussionAddress = { kind: 'newDiscussion', } as const;
 
 function createMemoryStorage() {
     const values = new Map<string, string>();
@@ -138,16 +139,19 @@ describe('session draft repository V2 addresses', () => {
         const author = createSessionDraftRepository({ storage: createMemoryStorage(), scope, transport: remote.transport, cipher, syncEnabled: true });
         author.writeNewSessionDraft({ scope, draftId: address.draftId, materializationIntent: 'userEdit', patch: { text: 'before remote change' } });
         expect(await author.flushSessionDraft({ scope, address })).toEqual({ status: 'clean' });
-        const observer = createSessionDraftRepository({ storage: createMemoryStorage(), scope, transport: remote.transport, cipher, syncEnabled: true });
         const readStarted = createDeferred<void>();
         const readHeld = createDeferred<void>();
         const originalRead = remote.transport.read;
         let first = true;
-        remote.transport.read = async target => {
-            const snapshot = await originalRead(target);
-            if (first) { first = false; readStarted.resolve(); await readHeld.promise; }
-            return snapshot;
+        const observerTransport: SessionDraftRepositoryTransport = {
+            ...remote.transport,
+            read: async target => {
+                const snapshot = await originalRead(target);
+                if (first) { first = false; readStarted.resolve(); await readHeld.promise; }
+                return snapshot;
+            },
         };
+        const observer = createSessionDraftRepository({ storage: createMemoryStorage(), scope, transport: observerTransport, cipher, syncEnabled: true });
         const admission = observer.materializeExact(scope, address);
         await readStarted.promise;
         if (status === 'present') {
@@ -175,7 +179,7 @@ describe('session draft repository V2 addresses', () => {
         await Promise.all([admission, foreground]);
         const afterWake = observer.getSessionDraftSnapshot(scope, address);
         if (status === 'present') {
-            expect(afterWake?.document.composer.text.value).toBe('newer remote change');
+            expect(requireComposerDraftDocument(afterWake?.document)?.composer.text.value).toBe('newer remote change');
         } else {
             expect(afterWake).toBeNull();
         }
@@ -242,7 +246,7 @@ describe('session draft repository V2 addresses', () => {
         const deletedRecord = remote.readCurrent()!;
         remote.replaceCurrent({ ...deletedRecord, revision: deletedRecord.revision + 1, content: capturedRecord.content });
         await observer.materializeExactWithScopedRuntime({ scope, address, runtime: { cipher, transport: remote.transport }, isCurrent: () => true });
-        expect(observer.getSessionDraftSnapshot(scope, address)?.document.composer.text.value).toBe('deleted remotely');
+        expect(requireComposerDraftDocument(observer.getSessionDraftSnapshot(scope, address)?.document)?.composer.text.value).toBe('deleted remotely');
     });
 
     it('shares an in-flight exact read between foreground surfaces and reads fresh again afterward', async () => {
@@ -287,14 +291,16 @@ describe('session draft repository V2 addresses', () => {
         await writer.flushSessionDraft({ scope, address });
         const readStarted = createDeferred<void>();
         const readHeld = createDeferred<void>();
-        const originalRead = remoteA.transport.read;
-        remoteA.transport.read = async target => {
-            const result = await originalRead(target);
-            readStarted.resolve();
-            await readHeld.promise;
-            return result;
+        const heldTransport: SessionDraftRepositoryTransport = {
+            ...remoteA.transport,
+            read: async target => {
+                const result = await remoteA.transport.read(target);
+                readStarted.resolve();
+                await readHeld.promise;
+                return result;
+            },
         };
-        const repository = createSessionDraftRepository({ storage: createMemoryStorage(), scope, cipher, syncEnabled: true, transport: remoteA.transport });
+        const repository = createSessionDraftRepository({ storage: createMemoryStorage(), scope, cipher, syncEnabled: true, transport: heldTransport });
         const oldRead = repository.ensureSessionDraftAddressesHydrated(scope, [address]);
         await readStarted.promise;
         repository.configure({ scope: scopeB, cipher, syncEnabled: true, transport: remoteB.transport });
@@ -412,7 +418,7 @@ describe('session draft repository V2 addresses', () => {
             isCurrent: () => true,
         });
 
-        expect(repository.getSessionDraftSnapshot(scopeB, address)?.document.composer.text.value)
+        expect(requireComposerDraftDocument(repository.getSessionDraftSnapshot(scopeB, address)?.document)?.composer.text.value)
             .toBe('Home B draft');
         expect(remoteB.transport.read).toHaveBeenCalledOnce();
         expect(remoteA.transport.read).not.toHaveBeenCalled();
@@ -542,7 +548,7 @@ describe('session draft repository V2 addresses', () => {
         })).resolves.toBe(true);
 
         expect(repository.getSessionDraftSnapshot(inactiveScope, address)).toBeNull();
-        expect(repository.getSessionDraftSnapshot(scope, address)?.document.composer.text.value).toBe('active Home');
+        expect(requireComposerDraftDocument(repository.getSessionDraftSnapshot(scope, address)?.document)?.composer.text.value).toBe('active Home');
         expect(inactiveRemote.readCurrent()?.content).toBeNull();
         expect(activeRemote.transport.mutate).not.toHaveBeenCalled();
     });
@@ -587,7 +593,7 @@ describe('session draft repository V2 addresses', () => {
         release.resolve();
 
         await expect(deletion).resolves.toBe(false);
-        expect(repository.getSessionDraftSnapshot(inactiveScope, address)?.document.composer.text.value)
+        expect(requireComposerDraftDocument(repository.getSessionDraftSnapshot(inactiveScope, address)?.document)?.composer.text.value)
             .toBe('recoverable waiting draft');
     });
 
@@ -832,7 +838,7 @@ describe('session draft repository V2 addresses', () => {
         expect(stored?.content?.t).toBe('plain');
         expect(cipher.seal).toHaveBeenCalledWith(runAddress, expect.objectContaining({ v: 1 }));
         const snapshot = repository.getSessionDraftSnapshot(scope, runAddress);
-        expect(snapshot?.document.composer.text.value).toBe('ask the run');
+        expect(requireComposerDraftDocument(snapshot?.document)?.composer.text.value).toBe('ask the run');
         expect(snapshot?.document.target).toMatchObject({
             kind: 'session',
             routing: {
@@ -898,7 +904,7 @@ describe('session draft repository V2 addresses', () => {
         await repository.flushSessionDraft({ scope, address: runAddress });
 
         const base = remote.readCurrent()!;
-        const remoteDocument = structuredClone(
+        const remoteDocument = SessionDraftDocumentV1Schema.parse(
             (base.content as Extract<SessionDraftStoredContentEnvelopeV2, { t: 'plain' }>).v.document,
         );
         remoteDocument.composer.attachments = { mutationId: '00000000-0000-4000-8000-0000000000a1', value: [{ id: 'from-another-device' }] };
@@ -912,8 +918,8 @@ describe('session draft repository V2 addresses', () => {
         repository.writeExistingSessionDraft({ scope, sessionId: runAddress.sessionId, runId: runAddress.runId, patch: { text: 'second' } });
         expect(await repository.flushSessionDraft({ scope, address: runAddress })).toEqual({ status: 'clean' });
         const snapshot = repository.getSessionDraftSnapshot(scope, runAddress);
-        expect(snapshot?.document.composer.text.value).toBe('second');
-        expect(snapshot?.document.composer.attachments.value).toEqual([{ id: 'from-another-device' }]);
+        expect(requireComposerDraftDocument(snapshot?.document)?.composer.text.value).toBe('second');
+        expect(requireComposerDraftDocument(snapshot?.document)?.composer.attachments.value).toEqual([{ id: 'from-another-device' }]);
         expect(snapshot?.conflict).toBeNull();
     });
 
@@ -933,7 +939,7 @@ describe('session draft repository V2 addresses', () => {
         repository.writeExistingSessionDraft({ scope, sessionId: runAddress.sessionId, runId: runAddress.runId, patch: { text: 'unsent' } });
         expect(await repository.flushSessionDraft({ scope, address: runAddress })).toEqual({ status: 'offline' });
         const snapshot = repository.getSessionDraftSnapshot(scope, runAddress);
-        expect(snapshot?.document.composer.text.value).toBe('unsent');
+        expect(requireComposerDraftDocument(snapshot?.document)?.composer.text.value).toBe('unsent');
         expect(snapshot?.status).toBe('offline');
         expect(remote.readCurrent()).toBeNull();
     });

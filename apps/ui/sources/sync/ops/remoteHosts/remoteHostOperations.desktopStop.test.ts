@@ -1,9 +1,13 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { createActionExecutor } from '@happier-dev/protocol/actions';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
+import { createDeferred, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { installSettingsViewCommonModuleMocks } from '@/components/settings/settingsViewTestHelpers';
 
 installSettingsViewCommonModuleMocks({ storage: 'real', text: async () => vi.importActual<typeof import('@/text')>('@/text') });
@@ -16,6 +20,8 @@ vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOrigin
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
+installDisconnectedServerSocketBoundary();
+beforeEach(() => installHomeGovernanceBoundaries(home));
 function installDesktopOsBoundary(invoke: (command: string, args: Record<string, unknown>) => Promise<unknown>) {
     let callbackId = 0;
     // The actual Tauri event SDK reads the WebView globals, while Happier's command seam
@@ -34,7 +40,147 @@ const [{ createUiRemoteHostActionExecuteV1 }, { captureLazyActionAccountContext 
     import('./remoteHostOperations'), import('@/sync/ops/actions/actionAccountContext'),
 ]);
 
-afterEach(async () => { await standardCleanup(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); await home.reset(); });
+afterEach(async () => {
+    await standardCleanup();
+    const { publishAppliedActiveServerRuntimeAvailability } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+    publishAppliedActiveServerRuntimeAvailability(false);
+    vi.unstubAllGlobals(); vi.unstubAllEnvs(); await home.reset();
+});
+
+async function mountDesktopTunnelControl(fixtureId: string, policy: unknown) {
+    await loadSyncSingletonForTests();
+    const { resetScopedHomeActionExecutorsForTests } = await import('@/sync/ops/actions/scopedHomeActionExecutor');
+    resetScopedHomeActionExecutorsForTests();
+    const serverId = await home.addHome({ name: 'Desktop inventory policy', serverUrl: `https://desktop-policy-${fixtureId}.test`,
+        serverIdentityId: `srv_desktop_policy_${fixtureId}`, accountId: 'owner', currentAccount: true });
+    const settings = { ...storage.getState().settings, actionsSettingsV1: ActionsSettingsV1Schema.parse(policy) };
+    const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+    const scope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'owner' };
+    storage.setState({ profileScope: scope, settingsScope: scope, settings, settingsVersion: 1 });
+    const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+    const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot(), true);
+    home.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
+    const { useRemoteHostSshTunnelControl } = await import('@/components/settings/remoteHosts/useRemoteHostSshTunnelControl');
+    const hook = await renderHook(useRemoteHostSshTunnelControl);
+    await flushHookEffects({ cycles: 20 });
+    return { hook, serverId };
+}
+
+it('admits initial and explicit desktop tunnel Refresh through the disabled list Action', async () => {
+    const specs: unknown[] = [];
+    vi.stubEnv('EXPO_PUBLIC_SYSTEM_TASKS_RUNNER_MODE', 'tauri');
+    installDesktopOsBoundary(async (command, args) => {
+        if (command === 'start_system_task') {
+            specs.push(JSON.parse(String(args.specJson)));
+            return { taskId: 'disabled-list' };
+        }
+        if (command === 'get_system_task_snapshot') return { events: [], result: {
+            protocolVersion: 1, taskId: 'disabled-list', ok: true, data: { ok: true, tunnels: [] },
+        } };
+        throw new Error(`Unexpected desktop command: ${command}`);
+    });
+    const { hook } = await mountDesktopTunnelControl('disabled', { v: 1, actions: { 'remote_hosts.tunnel.list': { enabled: false } } });
+    try {
+        expect(specs).toEqual([]);
+        await act(async () => { expect(await hook.getCurrent().refreshTunnels()).toBeNull(); });
+        expect(specs).toEqual([]);
+        expect(hook.getCurrent().lastErrorMessage).toMatch(/disabled/);
+    } finally { await hook.unmount(); }
+});
+
+it('keeps desktop tunnel inventory behind an explicit Ask-first list Action', async () => {
+    const specs: unknown[] = [];
+    vi.stubEnv('EXPO_PUBLIC_SYSTEM_TASKS_RUNNER_MODE', 'tauri');
+    installDesktopOsBoundary(async (command, args) => {
+        if (command === 'start_system_task') {
+            specs.push(JSON.parse(String(args.specJson)));
+            return { taskId: 'unapproved-list' };
+        }
+        if (command === 'get_system_task_snapshot') return { events: [], result: {
+            protocolVersion: 1, taskId: 'unapproved-list', ok: true, data: { ok: true, tunnels: [] },
+        } };
+        throw new Error(`Unexpected desktop command: ${command}`);
+    });
+    const { hook, serverId } = await mountDesktopTunnelControl('approval', { v: 1 });
+    let refresh: Promise<string | null> | undefined;
+    try {
+        await act(async () => { expect(await hook.getCurrent().refreshTunnels()).toBe('unapproved-list'); });
+        await flushHookEffects();
+        const admittedBeforeAsk = specs.length;
+        await act(async () => { await home.requireUiApproval(serverId, 'remote_hosts.tunnel.list'); });
+        await act(async () => { refresh = hook.getCurrent().refreshTunnels(); });
+        expect(hook.getCurrent().lastErrorMessage).toBeNull();
+        await waitForHomeGovernance(async () => {
+            await flushHookEffects();
+            expect(hook.getCurrent().lastErrorMessage).toBeNull();
+            expect(home.artifacts(serverId).list()).toHaveLength(1);
+        });
+        expect(specs).toHaveLength(admittedBeforeAsk);
+        expect(hook.getCurrent().approval.approvalPending).toBe(true);
+    } finally { await hook.unmount(); }
+    expect(await refresh).toBeNull();
+});
+
+it('keeps successful desktop listing and refuses a Refresh whose Account retires during admission', async () => {
+    const specs: Array<{ kind: string }> = [];
+    const held = createDeferred<void>();
+    const reached = createDeferred<void>();
+    let holdRefresh = false;
+    vi.stubEnv('EXPO_PUBLIC_SYSTEM_TASKS_RUNNER_MODE', 'tauri');
+    installDesktopOsBoundary(async (command, args) => {
+        if (command === 'start_system_task') {
+            specs.push(JSON.parse(String(args.specJson)));
+            if (holdRefresh) { reached.resolve(); await held.promise; }
+            return { taskId: 'admitted-list' };
+        }
+        if (command === 'get_system_task_snapshot') return { events: [], result: {
+            protocolVersion: 1, taskId: 'admitted-list', ok: true, data: { ok: true, tunnels: [] },
+        } };
+        throw new Error(`Unexpected desktop command: ${command}`);
+    });
+    const { hook, serverId } = await mountDesktopTunnelControl('retirement', { v: 1 });
+    try {
+        expect(hook.getCurrent().lastErrorMessage).toBeNull();
+        await waitForHomeGovernance(() => expect(specs).toEqual([{ protocolVersion: 1, kind: 'daemon.sshTunnel.list.v1', params: {} }]));
+        holdRefresh = true;
+        let refresh: Promise<string | null> | undefined;
+        await act(async () => { refresh = hook.getCurrent().refreshTunnels(); });
+        await reached.promise;
+        await act(async () => { await home.switchAccount(serverId, 'replacement', { currentAccount: true }); });
+        held.resolve();
+        await act(async () => { expect(await refresh).toBeNull(); });
+        expect(specs).toHaveLength(2);
+        expect(hook.getCurrent().lastErrorMessage).toBeNull();
+    } finally { await hook.unmount(); }
+});
+
+it('returns active desktop tunnel inventory to an agent through Action admission and the existing system task', async () => {
+    const specs: unknown[] = [];
+    vi.stubEnv('EXPO_PUBLIC_SYSTEM_TASKS_RUNNER_MODE', 'tauri');
+    installDesktopOsBoundary(async (command, args) => {
+        if (command === 'start_system_task') {
+            specs.push(JSON.parse(String(args.specJson)));
+            return { taskId: 'desktop-list-action' };
+        }
+        if (command === 'get_system_task_snapshot') return { events: [], result: {
+            protocolVersion: 1, taskId: 'desktop-list-action', ok: true, data: { ok: true, tunnels: [] },
+        } };
+        throw new Error(`Unexpected desktop command: ${command}`);
+    });
+    const serverId = await home.addHome({ name: 'Desktop inventory', serverUrl: 'https://desktop-inventory.test', accountId: 'owner' });
+    const account = await captureLazyActionAccountContext(serverId);
+    try {
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({
+            remoteHostActionExecute: createUiRemoteHostActionExecuteV1(account),
+        }));
+        expect(await executor.execute('remote_hosts.tunnel.list', {}, { surface: 'agent',
+            authority: 'account_automation', bypassApprovals: true }))
+            .toMatchObject({ ok: true, result: { status: 'completed', taskId: 'desktop-list-action',
+                result: { ok: true, data: { ok: true, tunnels: [] } } } });
+        expect(specs).toEqual([{ protocolVersion: 1, kind: 'daemon.sshTunnel.list.v1', params: {} }]);
+    } finally { account.dispose(); }
+});
 
 it('starts the exact desktop stop task and leaves terminal failure settlement with the incumbent runner', async () => {
     const specs: unknown[] = [];
@@ -98,6 +244,8 @@ it('preserves desktop bridge failure settlement through mounted Action admission
     try {
         // The real secure-storage scope producer resolves asynchronously after mount.
         await flushHookEffects({ cycles: 20 });
+        await act(async () => { await hook.getCurrent().refreshTunnels(); });
+        await flushHookEffects();
         let stopped: Promise<string | null> | undefined;
         await act(async () => { stopped = hook.getCurrent().stopTunnel('exact-private-failed-tunnel'); });
         await waitForHomeGovernance(() => expect(stopAttempted).toBe(true));

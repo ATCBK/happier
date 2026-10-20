@@ -1,3 +1,4 @@
+import { z } from 'zod/mini';
 import {
   HappierReplayRecentMessagesCountSchema,
   HappierReplayWritableMaxSeedCharsSchema,
@@ -29,11 +30,11 @@ export function resolveHappierReplayConfig(settings: HappierReplayConfigSource):
 }> {
   const enabled = settings.sessionReplayEnabled === true;
   const strategy = normalizeStrategy(settings.sessionReplayStrategy);
-  const recentMessagesCount = HappierReplayRecentMessagesCountSchema
-    .catch(settingsDefaults.sessionReplayRecentMessagesCount)
+  const recentMessagesCount = z.catch(HappierReplayRecentMessagesCountSchema,
+    settingsDefaults.sessionReplayRecentMessagesCount)
     .parse(settings.sessionReplayRecentMessagesCount);
-  const maxSeedChars = HappierReplayWritableMaxSeedCharsSchema
-    .catch(settingsDefaults.sessionReplayMaxSeedChars)
+  const maxSeedChars = z.catch(HappierReplayWritableMaxSeedCharsSchema,
+    settingsDefaults.sessionReplayMaxSeedChars)
     .parse(settings.sessionReplayMaxSeedChars);
   return { enabled, strategy, recentMessagesCount, maxSeedChars };
 }

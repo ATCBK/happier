@@ -1,9 +1,13 @@
 import { isBackendTargetDisabledByAccountSettings } from '@happier-dev/protocol/account/settings/accountSettings';
-import type { AccountSettings, ReviewEngineCapabilities } from '@happier-dev/protocol';
+import type { AccountSettings } from '@happier-dev/protocol';
+import { ReviewEngineListItemSchema, type ReviewEngineListItem } from '@happier-dev/protocol/reviews/reviewEngines';
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/executionTargetV1';
+import { AGENT_IDS, isBundledAgentId } from '@happier-dev/agents/agent-ids';
 
 import { readAgentContributionDisplayTitle } from '@/agent/catalog/agentDisplayTitle';
+import { resolveExecutionRunAgentDefaultSelection } from '@/agent/runtime/bridges/executionRun/runtime/openInputs';
+import { isNativeAutomaticModelSelectionInputV1 } from '@happier-dev/protocol/providers/selection/v1';
 import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
 import { readAgentExecutionRunCapabilities, readAgentStructuredOutputCapabilities } from '@/plugins/projection/registry/agentContributionDefinition';
 import type {
@@ -12,19 +16,14 @@ import type {
 
 import { buildConfiguredAcpBackendInventoryItems } from './buildAgentBackendInventoryItems';
 
-export type ActionReviewEngineInventoryItem = Readonly<{
-  engineId: string;
+export type ActionReviewEngineInventoryItem = ReviewEngineListItem & Readonly<{
   value: string;
-  label: string;
-  enabled: boolean;
   backendId: string;
-  capabilities: ReviewEngineCapabilities;
-  description?: string;
 }>;
 
 export type ReviewEngineScope = 'worktree' | 'paths';
 
-type ReviewAgentCatalog = ReturnType<typeof readAgentCatalogSnapshot>;
+type ReviewAgentCatalog = Pick<ReturnType<typeof readAgentCatalogSnapshot>, 'agentDefinitionsById' | 'executionRunProfiles'>;
 
 function normalizeLimit(value: unknown): number | null {
   const parsed = Number(value);
@@ -108,14 +107,19 @@ export async function buildReviewEngineInventoryItems(params: Readonly<{
   accountSettings?: AccountSettings | null;
   acpCatalogSnapshot?: AcpCatalogSnapshotV1;
   scope?: ReviewEngineScope;
+  registrySnapshot?: ReviewAgentCatalog;
 }>): Promise<readonly ActionReviewEngineInventoryItem[]> {
   const accountSettings = params.accountSettings ?? null;
   const includeDisabled = params.includeDisabled === true;
   const limit = normalizeLimit(params.limit);
-  const registry = readAgentCatalogSnapshot();
+  const registry = params.registrySnapshot ?? readAgentCatalogSnapshot();
   const reviewAgentIds = selectReviewEngineAgentIds(registry, params.scope);
-  const agentItems = [...reviewAgentIds]
-    .sort()
+  // Match the shared Agent catalog's display/default order; installed Agents retain their registry order.
+  const orderedReviewAgentIds = [
+    ...AGENT_IDS.filter((agentId) => reviewAgentIds.has(agentId)),
+    ...[...reviewAgentIds].filter((agentId) => !isBundledAgentId(agentId)),
+  ];
+  const agentItems = orderedReviewAgentIds
     .flatMap((agentId) => {
       const agent = registry.agentDefinitionsById.get(agentId);
       if (!agent) return [];
@@ -142,6 +146,15 @@ export async function buildReviewEngineInventoryItems(params: Readonly<{
       ...(item.description ? { description: item.description } : {}),
     }));
   const items = [...agentItems, ...configuredItems]
+    .map((item): ActionReviewEngineInventoryItem => {
+      const selection = resolveExecutionRunAgentDefaultSelection({
+        backendTarget: item.engineId === item.backendId ? { kind: 'backend', backendId: item.backendId } : item.value,
+        accountSettings,
+      });
+      const launchModelId = selection && !isNativeAutomaticModelSelectionInputV1(selection) ? selection.modelId : undefined;
+      return { ...ReviewEngineListItemSchema.parse({ ...item, ...(launchModelId ? { launchModelId } : {}) }),
+        value: item.value, backendId: item.backendId };
+    })
     .filter((item) => includeDisabled || item.enabled !== false);
 
   return limit ? items.slice(0, limit) : items;

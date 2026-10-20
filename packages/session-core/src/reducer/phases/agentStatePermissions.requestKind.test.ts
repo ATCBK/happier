@@ -6,6 +6,44 @@ import { buildToolPermissionFromStored } from '../helpers/toolCallProjection.js'
 import { collectTranscriptRequestStates, type TranscriptRequestState } from '../../pending/listPendingRequests.js';
 
 describe('runAgentStatePermissionsPhase (request kind)', () => {
+  it('keeps the question answering actor separate from the worker and ignores actor labels inside the answer', () => {
+    const state = createReducer();
+    const changed = new Set<string>();
+    const request = { tool: 'AskUserQuestion', kind: 'user_action', createdAt: 100,
+      arguments: { questions: [{ question: 'Revision?' }], answeredBy: { kind: 'session', sessionId: 'forged' } } };
+    const run = (answeredBy?: { kind: 'session'; sessionId: string } | { kind: 'person'; accountId?: string }) => runAgentStatePermissionsPhase({ state,
+      agentState: { requests: {}, completedRequests: { question: { ...request, status: 'approved', completedAt: 200,
+        structuredAnswersV1: { 'Revision?': ['3'] }, ...(answeredBy ? { answeredBy } : {}) } } },
+      incomingToolIds: new Set<string>(), mainHistoryStartLoaded: true, changed, allocateId: () => 'question-message', enableLogging: false });
+    run();
+    const message = state.messages.get('question-message')!;
+    const cause = { requestRef: 'bob-input', requester: { serverId: 'home', accountId: 'bob' },
+      persona: { serverId: 'home', sessionId: 'worker' }, origin: null };
+    message.meta = { actionRequestAttributionV1: cause };
+    expect(message.tool?.permission).not.toHaveProperty('answeredBy');
+    // Terminal provider results may precede the host's completed disposition.
+    message.tool!.startedAt = 150;
+    message.tool!.permission!.date = 210;
+    changed.clear();
+    run({ kind: 'session', sessionId: 'manager' });
+    expect(message.tool?.permission).toMatchObject({ answeredBy: { kind: 'session', sessionId: 'manager' } });
+    expect(message.tool?.result).toEqual({ answers: { 'Revision?': '3' } });
+    expect(message.meta?.actionRequestAttributionV1).toBe(cause);
+    expect(buildToolPermissionFromStored('question', state.permissions.get('question')!))
+      .toMatchObject({ answeredBy: { kind: 'session', sessionId: 'manager' } });
+    expect(changed.has('question-message')).toBe(true);
+    changed.clear();
+    run({ kind: 'session', sessionId: 'manager' });
+    expect(changed.size).toBe(0);
+    // An authoritative refresh is not a Session-global last answerer.
+    run({ kind: 'person' });
+    expect(message.tool?.permission).toMatchObject({ answeredBy: { kind: 'person' } });
+    run({ kind: 'person', accountId: 'bob' });
+    expect(message.tool?.permission).toMatchObject({ answeredBy: { kind: 'person', accountId: 'bob' } });
+    expect(message.meta?.actionRequestAttributionV1).toBe(cause);
+    run();
+    expect(message.tool?.permission).not.toHaveProperty('answeredBy');
+  });
   it('retains the request source through transcript-only projection and clears it on an authoritative refresh', () => {
     const state = createReducer();
     const changed = new Set<string>();

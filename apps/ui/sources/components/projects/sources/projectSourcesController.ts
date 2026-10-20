@@ -1,3 +1,4 @@
+import { z } from 'zod/mini';
 import {
     ProjectSourcesListOutputV1Schema, ProjectSourcesReadOutputV1Schema, ProjectSourcesCreateInputV1Schema,
     ProjectSourcesCreateOutputV1Schema, ProjectSourcesUpdateOutputV1Schema, ProjectSourcesDeleteOutputV1Schema,
@@ -76,7 +77,7 @@ function materializeCreationDraft(draft: ProjectSourceCreationDraft | null): Pro
 }
 
 function createIdentity(draft: ProjectSourceDraft) {
-    const input = ProjectSourcesCreateInputV1Schema.omit({ serverId: true, requestKey: true }).parse({ ...draft, audience: draft.audience ?? [] });
+    const input = z.omit(ProjectSourcesCreateInputV1Schema, { serverId: true, requestKey: true }).parse({ ...draft, audience: draft.audience ?? [] });
     return JSON.stringify({ ...input, audience: [...(input.audience ?? [])].sort((left, right) =>
         JSON.stringify(left.principal).localeCompare(JSON.stringify(right.principal))) });
 }

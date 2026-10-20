@@ -100,17 +100,30 @@ const SettingsInlineBackControl = React.memo(function SettingsInlineBackControl(
 }>) {
     const host = React.useContext(SettingsFloatingControlsHostContext);
     const back = useSettingsBackControl(host?.collectionRootPathname);
+    const shown = useClaimSettingsBack(back.visible);
+    if (!shown) return null;
+    return <NavigationInlineBackButton onPress={back.handleBack} style={props.style} />;
+});
+
+/**
+ * One Back per page: a page head that draws its own way back (the page header's title-line glyph, or
+ * a head with a crumb named for where it returns, such as a machine's pushed pages) takes the settings
+ * host's back while it shows, so the floating control steps aside. Only the focused screen claims,
+ * since settings screens stay mounted under the one they pushed. Outside a settings host it is a no-op.
+ * Returns whether the claim holds (the caller's own back is the page's one Back).
+ */
+export function useClaimSettingsBack(drawsBack: boolean): boolean {
+    const host = React.useContext(SettingsFloatingControlsHostContext);
     const focused = useDestinationFocus();
-    const shown = host !== null && back.visible && focused;
+    const shown = host !== null && drawsBack && focused;
     const setClaimed = host?.setClaimed;
     React.useLayoutEffect(() => {
         if (!shown || !setClaimed) return;
         setClaimed(true);
         return () => setClaimed(false);
     }, [setClaimed, shown]);
-    if (!shown) return null;
-    return <NavigationInlineBackButton onPress={back.handleBack} style={props.style} />;
-});
+    return shown;
+}
 
 /**
  * The back glyph on a page header's title line, for any navigation chrome that gives the header its

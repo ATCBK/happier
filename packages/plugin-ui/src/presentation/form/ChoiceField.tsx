@@ -25,6 +25,7 @@ import {
   resolveHappierFieldBoxLabel,
 } from './FieldBox.js';
 import {
+  HAPPIER_FIELD_DISABLED_OPACITY,
   HappierTextField,
   planHappierSelectOptions,
   type HappierSelectOption,
@@ -199,7 +200,8 @@ export function HappierChoiceField<Value = string>(
       </HappierText>
       {entry.option.description ? (
         <HappierText
-          numberOfLines={1}
+          // A floating row reads its whole description (a path tells two same-named checkouts apart): it wraps, never clips.
+          {...(style === 'floating' ? {} : { numberOfLines: 1 })}
           style={{ ...captionStyle, color: theme.colors.secondaryText }}
         >
           {entry.option.description}
@@ -227,7 +229,9 @@ export function HappierChoiceField<Value = string>(
           if (props.onOpen) props.onOpen();
           else setOpen((current) => !current);
         }}
-        style={{ alignSelf: 'stretch', ...HAPPIER_FOCUS_RING_DELEGATED_STYLE }}
+        // A field box that cannot open yet (its choices are loading or failed) reads as unavailable, not as a
+        // field that ignores the press.
+        style={{ alignSelf: 'stretch', ...HAPPIER_FOCUS_RING_DELEGATED_STYLE, opacity: disabled ? HAPPIER_FIELD_DISABLED_OPACITY : 1 }}
       >
         {(state) => (
           <HappierFieldBoxTrigger
@@ -265,7 +269,9 @@ export function HappierChoiceField<Value = string>(
             // A field's choices drop beneath it (or above, near the window's foot), never beside it.
             placement: 'bottom',
             presentation: 'dropdown',
-            width: 'anchor',
+            // Choices that tell themselves apart by a description (a checkout's path) open at the width that
+            // reads it; plain labels keep the field's width.
+            width: plan.options.some((entry) => entry.option.description !== undefined) ? 'content' : 'anchor',
             autoFocusOnOpen: true,
             onRequestClose: () => setOpen(false),
             content: (controls) => (

@@ -144,7 +144,7 @@ export function resolveSkillCatalogItemIdentityV1(value: unknown): SkillCatalogI
 export const SkillCatalogOriginV1Schema = lazyZodSchema(() => z.enum(['vendor', 'happier']));
 export type SkillCatalogOriginV1 = z.infer<typeof SkillCatalogOriginV1Schema>;
 
-export const SkillCatalogItemV1Schema = lazyZodSchema(() => z.pipe(z.transform(normalizeSkillCatalogItemInput), z.looseObject({
+export const SkillCatalogItemV1Schema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeSkillCatalogItemInput), z.looseObject({
       v: z.literal(1),
       id: NonBlankOpaqueIdentifierSchema,
       idSource: z.optional(z.literal('generated')),

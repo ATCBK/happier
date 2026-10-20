@@ -35,6 +35,11 @@ export const en = {
         outOfBounds: ({ bounds }: { bounds: string }) => `Must be ${bounds}`,
         invalid: 'This value isn’t valid here',
         storedEncrypted: 'stored encrypted, never shown',
+        listItem: ({ title, position }: { title: string; position: number }) => `${title} ${position}`,
+        listRemove: ({ position }: { position: number }) => `Remove entry ${position}`,
+        listAdd: 'Add',
+        listDuplicate: 'Already in the list',
+        httpsOnly: 'Must be an https:// address',
     },
     banner: {
         pendingNames: ({ names }: { names: string }) => `${names}.`,

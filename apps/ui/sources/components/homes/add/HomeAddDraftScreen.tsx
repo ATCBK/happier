@@ -18,7 +18,7 @@ import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import type { AddHomePath } from './addHomeFlowModel';
 import { HomeAddForm } from './HomeAddForm';
-import { homeAddDraftTitle } from './homeAddDraftTitle';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 
 const ADD_HOME_PATHS: readonly AddHomePath[] = ['service', 'other_service', 'direct', 'use_service_as_home', 'server_home'];
 
@@ -34,6 +34,7 @@ function readParam(value: string | string[] | undefined): string | undefined {
  * behind; a Home that connects becomes a row of the collection.
  */
 export const HomeAddDraftScreen = React.memo(function HomeAddDraftScreen() {
+    const homeAddDraftTitle = useCollectionDraftTitle();
     const router = useRouter();
     const params = useLocalSearchParams<{ address?: string | string[]; path?: string | string[]; auto?: string | string[]; source?: string | string[] }>();
     const initialAddress = readParam(params.address);
@@ -53,11 +54,11 @@ export const HomeAddDraftScreen = React.memo(function HomeAddDraftScreen() {
     }, [connectedProfile, router]);
     const initialPath = ADD_HOME_PATHS.find((path) => path === readParam(params.path));
     // The draft row in the rail is titled by the address being typed; it clears when the draft closes.
-    const publishDraftTitle = React.useCallback((address: string) => homeAddDraftTitle.publish(address.trim()), []);
+    const publishDraftTitle = React.useCallback((address: string) => homeAddDraftTitle.publish(address.trim()), [homeAddDraftTitle]);
     React.useEffect(() => {
         if (initialAddress) homeAddDraftTitle.publish(initialAddress);
         return () => homeAddDraftTitle.publish('');
-    }, [initialAddress]);
+    }, [homeAddDraftTitle, initialAddress]);
     const leave = React.useCallback(() => {
         const result = runGuardedNavigation(() => router.replace(HOMES_COLLECTION_ROOT as never));
         if (result !== true) fireAndForget(result, { tag: 'HomeAddDraftScreen.leave' });

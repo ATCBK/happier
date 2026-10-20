@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import type { McpRequestAuthPort } from '@/mcp/runtime/mcpRequestAuth';
+import { readMcpRequestAuthDispatchCause, type McpRequestAuthPort } from '@/mcp/runtime/mcpRequestAuth';
+import type { AgentCatalogEntry } from '@/agent/catalog/types';
 import { bindPluginExecProcessOwnerForHost } from '@/plugins/runtime/invocation/services/exec';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
 import type { AgentRuntime } from '@happier-dev/plugin-sdk/agents/runtime';
@@ -200,13 +201,20 @@ export async function createRunnerAgentSessionRuntimeBootstrap(input: Readonly<{
         return null;
     }
     if (!descriptor.agentDeclaration) return null;
-    const bootstrapAgentContribution =
+    const bootstrapAgentDeclaration =
         projectManifestAgentContribution({
             definition: descriptor.agentDeclaration.definition,
             provenance: descriptor.agentDeclaration.provenance,
             source: descriptor.agentDeclaration.source,
             pluginId: descriptor.pluginId,
         });
+    // Engine composition captures this object before prepareForSession claims the runner.
+    const bootstrapAgentContribution = Object.freeze({
+        ...bootstrapAgentDeclaration,
+        get catalogEntry() {
+            return claimed?.agentContribution.catalogEntry ?? bootstrapAgentDeclaration.catalogEntry;
+        },
+    });
     const bootstrapAgentLocalId =
         bootstrapAgentContribution.identity?.localId;
     if (!bootstrapAgentLocalId) return null;
@@ -334,7 +342,7 @@ export async function createRunnerAgentSessionRuntimeBootstrap(input: Readonly<{
         });
     const daemonModelTransitionAuthorizer:
         SessionModelTransitionProviderTargetAuthorizer =
-            async (params) => {
+            async (params, signal) => {
                 const authorizer =
                     requireClaimed().daemonModelTransitionAuthorizer;
                 if (!authorizer) {
@@ -342,7 +350,7 @@ export async function createRunnerAgentSessionRuntimeBootstrap(input: Readonly<{
                         'Runner Agent model-transition authority is unavailable',
                     );
                 }
-                return await authorizer(params);
+                return await authorizer(params, signal);
             };
     const externalSessionHostOperations:
         ExternalSessionHostOperationPortFactory =
@@ -783,7 +791,7 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
         });
     const verifiedAgentDeclaration =
         runnerManagedServiceOwner.verifiedAgentDeclaration;
-    const verifiedAgentContribution =
+    const verifiedAgentProjection =
         projectManifestAgentContribution({
             definition: verifiedAgentDeclaration.definition,
             provenance: verifiedAgentDeclaration.provenance,
@@ -794,6 +802,13 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
             },
             pluginId: binding.pluginId,
         });
+    let retainedCatalogEntry: AgentCatalogEntry | null | undefined;
+    const verifiedAgentContribution = Object.freeze({
+        ...verifiedAgentProjection,
+        get catalogEntry() {
+            return retainedCatalogEntry === undefined ? verifiedAgentProjection.catalogEntry : retainedCatalogEntry;
+        },
+    });
     const invocationServiceOwners =
         runnerManagedServiceOwner.owners;
     const managedServicesCustodyOwner =
@@ -880,7 +895,7 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
                     : 'current trusted development Agent source is unavailable';
                 throw createRunnerSourceUnavailableError(message);
             });
-        await runtimeLeafPromise;
+        retainedCatalogEntry = (await runtimeLeafPromise)!.catalogEntry;
     };
     // One retained External Sessions authority for this Session: the exact
     // durable source custody that admitted it. Both the runner's own private
@@ -1029,7 +1044,8 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
                     operation: { kind: 'mcp.request_auth.open', requestId: randomUUID(), ...input } }),
                 signal: lifetime.signal,
             });
-            if (!response.ok || response.result.kind !== 'mcp.request_auth') throw new Error(response.ok ? 'mcp_request_auth_unavailable' : response.error.code);
+            if (!response.ok) throw new Error(response.error.code, { cause: readMcpRequestAuthDispatchCause(response.error.cause) });
+            if (response.result.kind !== 'mcp.request_auth') throw new Error('mcp_request_auth_unavailable');
             mcpMaterializations.add(input.materializationId);
             if (lifetime.signal.aborted) { await this.close(input); throw new Error('mcp_request_auth_unavailable'); }
             return { capabilityFile: response.result.capabilityFile, resource: response.result.resource };
@@ -1055,6 +1071,7 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
                 daemonFacets.dispose(),
                 managedServicesCustodyOwner.dispose(),
                 invocationServiceOwners.dispose(),
+                ...(runtimeLeafPromise ? [runtimeLeafPromise.then(leaf => leaf.dispose())] : []),
             ]);
             const failures = results.flatMap((result) =>
                 result.status === 'rejected'
@@ -1318,8 +1335,9 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
             });
     const daemonModelTransitionAuthorizer:
         SessionModelTransitionProviderTargetAuthorizer =
-            async (params) =>
+            async (params, signal) =>
                 await authorizeCurrentAgentRuntimeDaemonModelTransition({
+                    signal,
                     authority: expectedAuthority,
                     requestId: randomUUID(),
                     selection: params.selection,
@@ -1595,7 +1613,7 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
                     readActiveTurnAdmissionWitness = null;
                 }
             }, { once: true });
-            if (preparedManagedProviderPluginServices) {
+            if (preparedManagedProviderPluginServices && params.processOwner?.kind !== 'run') {
                 if (params.processOwner) {
                     return Object.freeze({
                         ...preparedManagedProviderPluginServices,
@@ -1660,6 +1678,8 @@ export async function createRunnerAgentSessionRuntimeSource(input: Readonly<{
             return await prepareRunnerDaemonPluginServices({
                 ...(params.processOwner ? { processOwner: params.processOwner } : {}),
                 invocationId: params.correlationId,
+                ...(input.executionRunSnapshot && params.processOwner?.kind === 'run'
+                    ? { executionRunCwd: params.cwd } : {}),
                 signal: params.signal,
                 dispatch: async (operation, options) =>
                     await dispatchCurrentRunnerDaemonPluginService({

@@ -1,13 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { normalizeUsageQuery, resolveUsageQueryPeriod } from '../inputs/usageQuery.js';
-import { UsageAnalyticsQueryResponseSchema, type UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
-import { resolveUsagePageAggregation, resolveUsagePageAccountingRequests, UsageQueryBatchResultSchema } from './resolveUsagePageAggregation.js';
+import { UsageAnalyticsQueryResponseSchema, UsageAnalyticsSourceCoverageSchema, type UsageAnalyticsQueryResponse } from './usageAnalyticsContracts.js';
+import { resolveUsagePageAggregation, resolveUsagePageAccountingRequests, projectUsageAccountingSnapshotPrices, retainUsageQueryResultReferences, UsageQueryBatchResultSchema } from './resolveUsagePageAggregation.js';
 import type { UsageWorkEvidence } from './usageOutcomeAllocation.js';
 import { buildProviderAccountUsageRecordId } from '../connect/providerAccountUsagePrimitives.js';
 import { ConnectedServiceQuotaGetResultV1Schema } from '../connect/providerAccountUsageHistorySchemasV1.js';
 import { projectUsagePlanInsights } from './usagePlanInsights.js';
 import { USAGE_COACH_DETECTOR_IDS } from './coach/coachDetectorIds.js';
+import { bundledUsageModelPriceCatalog } from './usageModelPriceCatalog.js';
 import { readUsageScopeOptions } from './usageFilterOptions.js';
+import { projectSessionUsageWorkEvidence } from './usageWorkEvidence.js';
 
 const tokens = { input: 12, output: 4, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 16 };
 const accounting = UsageAnalyticsQueryResponseSchema.parse({
@@ -15,6 +17,135 @@ const accounting = UsageAnalyticsQueryResponseSchema.parse({
 });
 
 describe('resolveUsagePageAggregation', () => {
+  it('publishes one answered-approval population from opened Session evidence to Coach and Human loop', () => {
+    const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
+    const completion = { tool: 'Bash', createdAt: 110, completedAt: 140, status: 'approved' };
+    const detail = projectSessionUsageWorkEvidence({ id: 'session', metadata: null, agentState: { completedRequests: {
+      within: completion, earlier: { ...completion, createdAt: 90 },
+      immediate: { ...completion, createdAt: 150, completedAt: 150 },
+    } } });
+    const result = resolveUsagePageAggregation({ queries: [query],
+      accounting: [{ query, status: 'available', value: accounting }],
+      howYouWork: [{ query, asOfMs: 200, detail }],
+    });
+    const slice = result.results[0]!;
+    expect(slice.howYouWork?.permissions).toMatchObject({ pairedDecisionCount: 3, decisionLatencyMs: 80 });
+    expect(slice.coach?.findings.find(row => row.detectorId === 'approval_friction')?.measurements)
+      .toEqual(expect.arrayContaining([{ metric: 'permission_requests', value: 3, unit: 'count' },
+        { metric: 'permission_wait', value: 80, unit: 'milliseconds' }]));
+    expect(UsageQueryBatchResultSchema.safeParse(result).success).toBe(true);
+  });
+  it('carries admitted Session coverage independently of accounting and interval facts through retry and retirement', () => {
+    const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
+    const project = (selected: number, admitted: number) => resolveUsagePageAggregation({ queries: [query],
+      accounting: [{ query, status: 'available', value: accounting }],
+      howYouWork: [{ query, asOfMs: 200, sessionCoverage: { selected, admitted },
+        detail: { status: admitted < selected ? 'partial' : 'available', facts: [] } }],
+    });
+    const partial = project(5, 3);
+    for (const value of [partial.results[0]?.howYouWork, partial.results[0]?.coach]) {
+      expect(value?.sessionCoverage).toEqual({ selected: 5, admitted: 3 });
+    }
+    expect(partial.results[0]?.howYouWork?.detailStatus).toBe('partial');
+    expect(UsageQueryBatchResultSchema.safeParse(partial).success).toBe(true);
+    const pending = resolveUsagePageAggregation({ queries: [query], previous: partial,
+      sources: [{ source: 'how_you_work', status: 'pending' }] });
+    expect(pending.results[0]?.coach?.sessionCoverage).toEqual({ selected: 5, admitted: 3 });
+    const recovered = project(5, 5);
+    expect(recovered.results[0]?.howYouWork?.sessionCoverage).toEqual({ selected: 5, admitted: 5 });
+    expect(recovered.results[0]?.coach?.sessionCoverage).toEqual({ selected: 5, admitted: 5 });
+    expect(recovered.results[0]?.howYouWork?.intervals?.agentTimeMs).toBe(0);
+    expect(project(0, 0).results[0]?.coach?.sessionCoverage).toEqual({ selected: 0, admitted: 0 });
+    const refused = resolveUsagePageAggregation({ queries: [query], previous: recovered,
+      howYouWork: [{ query, detail: { status: 'unknown' } }] });
+    expect(refused.results[0]?.howYouWork?.sessionCoverage).toBeUndefined();
+    expect(refused.results[0]?.coach?.sessionCoverage).toBeUndefined();
+    expect(UsageQueryBatchResultSchema.safeParse({ ...partial, results: [{ ...partial.results[0],
+      howYouWork: { ...partial.results[0]!.howYouWork, sessionCoverage: { selected: 3, admitted: 5 } },
+    }] }).success).toBe(false);
+  });
+  it('updates authorized source labels without reparsing admitted source facts on refresh', () => {
+    const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 }, includeSessionEvidence: false, includeWorkEvidence: false });
+    const value = UsageAnalyticsQueryResponseSchema.parse({ ...accounting, coverage: { status: 'complete', reasons: [],
+      missingDimensions: [], range: { startMs: 100, endMs: 200, complete: true }, ranked: [],
+      sources: [{ source: 'runtime', path: 'runtime', status: 'available', machineId: 'machine', eventCount: 1 }] } });
+    const parse = vi.spyOn(UsageAnalyticsSourceCoverageSchema.shape.source._zod, 'run');
+    try {
+      const first = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, value, status: 'available' }],
+        sourceLocations: [{ machineId: 'machine', displayLocation: 'Current machine' }] });
+      const second = resolveUsagePageAggregation({ queries: [query], previous: first,
+        accounting: [{ query, value: first.results[0]!.accounting, status: 'available' }] });
+      expect(first.results[0]!.accounting!.coverage!.sources[0]).toHaveProperty('displayLocation', 'Current machine');
+      expect(second.results[0]!.accounting!.coverage!.sources[0]).not.toHaveProperty('displayLocation');
+      expect(parse.mock.calls.length, 'source-label refresh is not external admission').toBe(0);
+      expect(UsageQueryBatchResultSchema.safeParse(second).success).toBe(true);
+    } finally { parse.mockRestore(); }
+  });
+  it('reconciles changed accounting fields once and retains its unchanged contribution population', () => {
+    const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 }, includeSessionEvidence: false, includeWorkEvidence: false });
+    const value = UsageAnalyticsQueryResponseSchema.parse({ ...accounting, contributions: Array.from({ length: 100 }, (_, index) => ({
+      id: String(index), observedAtMs: 150, sessionId: null, turnId: null, agentId: null, modelId: null,
+      machineId: null, projectKey: null, workspaceId: null, source: null, tokens, cost: accounting.totals.cost,
+    })) });
+    // Keep the changed member after the large unchanged population, as in a
+    // late coverage/insight revision. Count real data reads, not elapsed time.
+    const insights = { activeDays: 1, longestStreakDays: 1, sessionsUsed: 0, messagesUsed: 0, modelsTried: 0, favoriteModelChangeCount: 0 };
+    const before = { ...value, insights };
+    const after = { ...structuredClone(value), insights: { ...insights, activeDays: 2 } };
+    let visits = 0;
+    for (const row of after.contributions!) {
+      const id = row.id;
+      Object.defineProperty(row, 'id', { enumerable: true, get() { visits++; return id; } });
+    }
+    const previous = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, value: before, status: 'available' }] });
+    expect(retainUsageQueryResultReferences({ ...previous, results: [...previous.results] }, previous)).toBe(previous);
+    const current = { ...previous, results: previous.results.map(slice => ({ ...slice, accounting: after })) };
+    const result = retainUsageQueryResultReferences(current, previous);
+    expect(result.results[0]!.accounting!.insights!.activeDays).toBe(2);
+    expect(result.results[0]!.accounting!.contributions).toBe(previous.results[0]!.accounting!.contributions);
+    expect(visits).toBeLessThanOrEqual(after.contributions!.length);
+  });
+  it('reuses snapshot pricing only for the same response, tariffs and cost basis', () => {
+    const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
+    const value = UsageAnalyticsQueryResponseSchema.parse({ ...accounting, contributions: [{ id: 'one', observedAtMs: 150,
+      sessionId: null, turnId: null, agentId: null, modelId: 'model', machineId: null, projectKey: null, workspaceId: null, source: null,
+      tokens, cost: accounting.totals.cost }] });
+    const overrides = { model: { kind: 'rates' as const, inputUsdPerMillion: 2, outputUsdPerMillion: 1 } };
+    const projected = projectUsageAccountingSnapshotPrices({ query, value, status: 'available' }, overrides);
+    expect(projectUsageAccountingSnapshotPrices(projected, structuredClone(overrides))).toBe(projected);
+    const sibling = projectUsageAccountingSnapshotPrices({ query: normalizeUsageQuery({ ...query,
+      includeTranscriptEvidence: !query.includeTranscriptEvidence }), value, status: 'available' }, structuredClone(overrides), [projected]);
+    expect(sibling.priceProjection).toBe(projected.priceProjection);
+    expect(projected.priceProjection?.value.totals.cost.apiEquivalentUsd).toBeCloseTo(28 / 1_000_000);
+    const repriced = projectUsageAccountingSnapshotPrices(projected, { model: { ...overrides.model, inputUsdPerMillion: 3 } }, [projected]);
+    expect(repriced.priceProjection?.value.totals.cost.apiEquivalentUsd).toBeCloseTo(40 / 1_000_000);
+    const replaced = projectUsageAccountingSnapshotPrices({ ...projected, value: { ...value,
+      contributions: value.contributions!.map(row => ({ ...row, tokens: { ...tokens, input: 24, total: 28 } })) } }, overrides, [projected]);
+    expect(replaced.priceProjection?.value.totals.cost.apiEquivalentUsd).toBeCloseTo(52 / 1_000_000);
+    const selected = projectUsageAccountingSnapshotPrices({ ...projected, query: normalizeUsageQuery({ ...query, costBasis: 'api_equivalent' }) }, overrides, [projected]);
+    expect(selected.priceProjection?.value.costPresentation?.mode).toBe('api_equivalent');
+    expect(projectUsageAccountingSnapshotPrices(projected, undefined).priceProjection).toBeUndefined();
+    expect(projectUsageAccountingSnapshotPrices({ ...projected, value: undefined }, overrides).priceProjection).toBeUndefined();
+    expect(projected.value).toBe(value);
+    expect(projected.priceProjection?.value.totals.cost.reportedUsd).toBe(value.totals.cost.reportedUsd);
+  });
+  it('keeps quota-only slices free of accounting and private evidence in a mixed batch', () => {
+    const full = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
+    const quota = normalizeUsageQuery({ ...full, includeAccounting: false });
+    expect(resolveUsagePageAccountingRequests([quota])).toEqual([]);
+    expect(resolveUsagePageAccountingRequests([full, quota])).toEqual(resolveUsagePageAccountingRequests([full]));
+    const batch = resolveUsagePageAggregation({ queries: [full, quota], quota: { status: 'unsupported' },
+      accounting: [full, quota].map(query => ({ query, value: accounting, status: 'available' })),
+      sources: [{ source: 'how_you_work', status: 'pending' }],
+    });
+    expect(batch.results[0]!.accounting).toBeDefined();
+    expect(batch.results[1]).toMatchObject({ requestedQuery: quota, shownQuery: quota, pending: false });
+    for (const field of ['accounting', 'comparison', 'work', 'howYouWork', 'coach', 'costFactTotals']) expect(batch.results[1]).not.toHaveProperty(field);
+    expect(UsageQueryBatchResultSchema.safeParse(batch).success).toBe(true);
+    expect(UsageQueryBatchResultSchema.safeParse({ ...batch, results: [{ ...batch.results[1], accounting }] }).success).toBe(false);
+    const refreshed = resolveUsagePageAggregation({ queries: [quota], previous: batch, quota: { status: 'unsupported' } });
+    expect(refreshed.results[0]).toBe(batch.results[1]);
+  });
   it('projects Work allocations only for the slice that requested Work evidence', () => {
     const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 }, includeWorkEvidence: false });
     const workQuery = normalizeUsageQuery({ ...query, includeWorkEvidence: true });
@@ -625,6 +756,23 @@ describe('resolveUsagePageAggregation', () => {
       ...result.results[0]!.work, allocations: result.results[0]!.work!.allocations.map(row => ({ ...row, reason: 'missing_evidence' })),
     } }] }).success).toBe(false);
   });
+  it('settles admitted private detail independently of a pending sibling source', () => {
+    const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 100 }, includeWorkEvidence: false });
+    const sibling = normalizeUsageQuery({ ...query, agents: ['codex'] });
+    const result = resolveUsagePageAggregation({ queries: [query, sibling],
+      accounting: [query, sibling].map(query => ({ query, status: 'available' as const, value: accounting })),
+      quota: { status: 'unsupported' },
+      howYouWork: [{ query, asOfMs: 100, detail: { status: 'partial', facts: [] } }],
+      sources: [{ source: 'how_you_work', status: 'pending' }],
+    });
+    expect(result.results[0]?.pending).toBe(false);
+    expect(result.results[0]?.sources.filter(source => source.source === 'how_you_work'))
+      .toEqual([{ source: 'how_you_work', status: 'partial', asOfMs: 100 }]);
+    expect(result.results[1]?.pending).toBe(true);
+    expect(result.results[1]?.sources).toContainEqual({ source: 'how_you_work', status: 'pending' });
+    expect(UsageQueryBatchResultSchema.safeParse(result).success).toBe(true);
+  });
+
   it('shares equivalent requests while keeping independently pinned requests separate', () => {
     const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 }, agents: ['b', 'a'] });
     const equivalent = normalizeUsageQuery({ ...query, agents: ['a', 'b', 'a'] });
@@ -669,6 +817,57 @@ describe('resolveUsagePageAggregation', () => {
     expect(next.results[0]).toBe(first.results[0]);
     expect(next.results[1]).not.toBe(first.results[1]);
     expect(next.results[1]?.accounting?.totals.tokens.total).toBe(16);
+  });
+
+  it('retains accounting identities while independent source progress replaces their slice', () => {
+    const query = normalizeUsageQuery({ period: { startMs: 100, endMs: 200 } });
+    const comparisonQuery = normalizeUsageQuery({ ...query, period: { startMs: 0, endMs: 100 } });
+    const value = UsageAnalyticsQueryResponseSchema.parse({ ...accounting,
+      priceCatalog: { ...bundledUsageModelPriceCatalog, models: { model: { inputUsdPerMillion: 2, outputUsdPerMillion: 1 } } },
+      coverage: { status: 'complete', reasons: [], missingDimensions: [], range: { complete: true }, ranked: [],
+        sources: [{ source: 'runtime', path: 'runtime', status: 'available', eventCount: 1, machineId: 'machine' }] },
+    });
+    const compose = (previous: ReturnType<typeof resolveUsagePageAggregation> | undefined,
+      status: 'pending' | 'available', displayLocation: string, current = value) => resolveUsagePageAggregation({
+        queries: [query], previous, nowMs: 200,
+        sourceLocations: [{ machineId: 'machine', displayLocation }],
+        accounting: [{ query, status: 'available', value: current },
+          { query: comparisonQuery, status: 'available', value }],
+        sources: [{ source: 'how_you_work', status }],
+      });
+    const initial = compose(undefined, 'pending', 'Dev box');
+    const settled = compose(initial, 'available', 'Dev box');
+    expect(settled.results[0]).not.toBe(initial.results[0]);
+    expect(settled.results[0]?.sources).toContainEqual({ source: 'how_you_work', status: 'available' });
+    // Source progress must not invalidate the existing accounting-keyed view
+    // projections or their contribution/ranking work in every mounted body.
+    expect(settled.results[0]?.accounting).toBe(initial.results[0]?.accounting);
+    expect(settled.results[0]?.comparison?.accounting).toBe(initial.results[0]?.comparison?.accounting);
+    expect(settled.results[0]?.planInsights).toBe(initial.results[0]?.planInsights);
+    expect(settled.results[0]?.comparison).toBe(initial.results[0]?.comparison);
+    const renamed = compose(settled, 'available', 'Renamed box');
+    expect(renamed.results[0]?.accounting).not.toBe(settled.results[0]?.accounting);
+    expect(renamed.results[0]?.accounting?.coverage?.sources[0]?.displayLocation).toBe('Renamed box');
+    const changed = compose(renamed, 'available', 'Renamed box', {
+      ...structuredClone(value), totals: { ...value.totals, eventCount: 2 },
+    });
+    expect(changed.results[0]?.accounting?.totals.eventCount).toBe(2);
+    expect(changed.results[0]?.accounting?.priceCatalog).toBe(renamed.results[0]?.accounting?.priceCatalog);
+    expect(changed.results[0]?.comparison?.accounting).toBe(renamed.results[0]?.comparison?.accounting);
+    const repriced = compose(changed, 'available', 'Renamed box', { ...value,
+      priceCatalog: { ...value.priceCatalog!, models: { model: { inputUsdPerMillion: 3, outputUsdPerMillion: 1 } } },
+    });
+    expect(repriced.results[0]?.accounting?.priceCatalog).not.toBe(changed.results[0]?.accounting?.priceCatalog);
+    expect(repriced.results[0]?.accounting?.priceCatalog?.models.model?.inputUsdPerMillion).toBe(3);
+    const reobserved = compose(changed, 'available', 'Renamed box', { ...value,
+      priceCatalog: { ...structuredClone(value.priceCatalog!), provenance: { ...value.priceCatalog!.provenance,
+        asOfMs: value.priceCatalog!.provenance.asOfMs + 1 } },
+    });
+    expect(reobserved.results[0]?.accounting?.priceCatalog?.models).toBe(changed.results[0]?.accounting?.priceCatalog?.models);
+    expect(reobserved.results[0]?.accounting?.priceCatalog?.provenance.asOfMs).toBe(value.priceCatalog!.provenance.asOfMs + 1);
+    const withdrawn = resolveUsagePageAggregation({ queries: [query], previous: changed,
+      accounting: [{ query, status: 'not_loaded' }] });
+    expect(withdrawn.results[0]?.accounting).toBeUndefined();
   });
 
   it('refuses mismatched shown-query identity and unavailable facts in the public result', () => {

@@ -17,6 +17,10 @@ import { ActivityLocalNotificationRuntime } from './ActivityLocalNotificationRun
 import { notifyActivityReady, resetActivityLocalNotificationRuntimeForTests } from './activityLocalNotificationBus';
 import { resetActivityAlertPresentationNotesForTests } from '../remoteAlerts/activityAlertPresentationNotes';
 import { resolveForegroundNotificationBehavior } from '../resolveForegroundNotificationBehavior';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
+import { stopConcurrentSessionCacheSync } from '@/sync/runtime/orchestration/concurrentSessionCache';
 
 type ExpoNotificationParams = Parameters<typeof import('../channels/sendExpoLocalNotification')['sendExpoLocalNotification']>[0];
 
@@ -45,6 +49,9 @@ vi.mock('@tauri-apps/plugin-notification', () => ({
     requestPermission: async () => 'granted',
     sendNotification: boundary.tauri,
 }));
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+await loadSyncSingletonForTests();
 const initialState = storage.getInitialState();
 const getSession = () => storage.getState().sessions['session-1'];
 const applySessions: Parameters<typeof handleUpdateContainer>[0]['applySessions'] = (sessions) => storage.getState().applySessions(sessions);
@@ -80,6 +87,55 @@ async function deliverMessage(seq: number, human: boolean, recovered = false, so
 }
 
 describe('live Follow socket notifications', () => {
+    it('selects a stalled presence original once while current, and withdraws recovered or replaced turns', async () => {
+        screen = await renderScreen(<ActivityLocalNotificationRuntime />);
+        const stalledOccurrence = { turnId: 'stalled-turn', publisherFence: 123 };
+        const setSource = (active: boolean, preset: 'important' | 'quiet' = 'important', latestTurnId = 'stalled-turn') => applySessions([{
+            ...getSession(), active, activeAt: 123, latestTurnId, latestTurnStatus: 'in_progress',
+            viewer: { ...getSession().viewer!, follow: { follows: true, notificationLevel: 'important', policy: { preset } } },
+        }]);
+        const deliver = () => handleEphemeralSocketUpdate({ sourceServerId: 'srv_home_a',
+            update: { type: 'session-personal-event', sessionId: 'session-1', eventId: 'stalled-original',
+                event: 'source_unavailable', stalledOccurrence },
+            addActivityUpdate: () => undefined, addMachineActivityUpdate: () => undefined,
+            getSessionEncryption: () => null, getSession, applyMessages: () => undefined,
+        });
+        await act(async () => { setSource(false, 'quiet'); });
+        await act(async () => { await deliver(); });
+        expect(boundary.expo).not.toHaveBeenCalled();
+        await act(async () => { setSource(false); });
+        expect(getSession()).toMatchObject({ active: false, activeAt: 123,
+            latestTurnId: 'stalled-turn', latestTurnStatus: 'in_progress' });
+        await act(async () => { await deliver(); });
+        expect(boundary.expo).toHaveBeenCalledTimes(1);
+        await act(async () => { setSource(true); });
+        await act(async () => { await deliver(); });
+        expect(boundary.expo).toHaveBeenCalledTimes(1);
+        await act(async () => { setSource(false, 'important', 'replacement-turn'); });
+        await act(async () => { await deliver(); });
+        expect(boundary.expo).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(['goal_changed', 'update_posted'] as const)('keeps a selected quiet %s original quiet and interrupts only after the same current policy selects Interrupt', async kind => {
+        const setDelivery = (delivery: 'quiet' | 'interrupt') => applySessions([{ ...getSession(), viewer: {
+            ...getSession().viewer!, follow: { follows: true, notificationLevel: 'important',
+                policy: { preset: 'custom', events: { [kind]: { delivery } } } },
+        } }]);
+        setDelivery('quiet');
+        screen = await renderScreen(<ActivityLocalNotificationRuntime />);
+        const deliver = (seq: number) => handleEphemeralSocketUpdate({ sourceServerId: 'srv_home_a',
+            update: { type: 'session-personal-event', sessionId: 'session-1', eventId: `original-${seq}`, event: 'message',
+                followEvent: { kind }, message: { sequenceDomain: 'session_transcript', messageSeq: seq } },
+            addActivityUpdate: () => undefined, addMachineActivityUpdate: () => undefined,
+            getSessionEncryption: () => null, getSession, applyMessages: () => undefined,
+        });
+        await act(async () => { await deliver(1); });
+        expect(boundary.expo).not.toHaveBeenCalled();
+        await act(async () => { setDelivery('interrupt'); });
+        await act(async () => { await deliver(2); });
+        expect(boundary.expo).toHaveBeenCalledTimes(1);
+    });
+
     it('reconciles a muted Home wake without posting a local alert, then delivers an ordinary wake', async () => {
         const { ActivityLocalNotificationRuntime } = await import('./ActivityLocalNotificationRuntime');
         const { notifyActivityReady } = await import('./activityLocalNotificationBus');
@@ -132,7 +188,10 @@ describe('live Follow socket notifications', () => {
     let localStorage: ReturnType<typeof installLocalStorageMock>;
     let webLocks: ReturnType<typeof installWebLockManagerMock>;
     let previousDesktopHost: PropertyDescriptor | undefined;
+    let restoredHome: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
     beforeEach(async () => {
+        storage.setState(initialState, true);
+        storage.setState({ isDataReady: false });
         boundary.desktop = false;
         const desktopStorage = createDesktopSecureStorageBoundary();
         previousDesktopHost = Object.getOwnPropertyDescriptor(globalThis, '__TAURI_INTERNALS__');
@@ -155,7 +214,11 @@ describe('live Follow socket notifications', () => {
             credentialWrites.push({ desktop, write });
         }
         boundary.desktop = false;
-        storage.setState(initialState, true);
+        restoredHome = await restoreServerAccountForTest({ serverUrl: boundary.active.serverUrl,
+            serverIdentityId: 'srv_home_a', accountId: 'account-a' });
+        storage.getState().activateProfileScope({ serverId: 'srv_home_a', accountId: 'account-a' });
+        setRuntimeFetch(async url => new URL(String(url)).pathname === '/v2/account/session-delivery-mutes'
+            ? Response.json({ scopes: [] }) : Response.json({}));
         storage.setState({ settings: settingsParse({}), localSettings: localSettingsParse({}) });
         saveAccountSettings({ serverId: 'srv_home_a', accountId: 'account-a' }, settingsParse({}), 1);
         applySessions([createSessionFixture({ id: 'session-1', serverId: 'srv_home_a', seq: 0, active: true, viewer: {
@@ -168,6 +231,8 @@ describe('live Follow socket notifications', () => {
     afterEach(async () => {
         await act(async () => { screen?.tree.unmount(); });
         screen = undefined;
+        await stopConcurrentSessionCacheSync();
+        await restoredHome?.dispose(); restoredHome = null;
         for (const { desktop, write } of credentialWrites.splice(0).reverse()) {
             boundary.desktop = desktop;
             await write.rollback();

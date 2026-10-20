@@ -29,6 +29,8 @@ vi.mock('react-native', async () => {
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const HOME = 'srv_popover_demand';
+// The signed-in Account the Home's machines are reached through: reachability is unknown without it.
+const SCOPE = { serverId: HOME, accountId: 'account-a' };
 const routerPush = vi.hoisted(() => vi.fn());
 const state = vi.hoisted(() => ({
     groups: [] as ActiveSelectionMachineGroup[],
@@ -128,7 +130,7 @@ it.each([false, true])('keeps needs-you machines in the open popover demand and 
         ] } } } });
     const calm = machine('calm', { daemonState: { resources: { ...urgent.daemonState!.resources, attention: { level: 'calm', reasons: [] } } } });
     const machines = mixed ? [urgent, calm] : [urgent];
-    state.groups = [{ serverId: HOME, serverName: 'Home A', status: 'idle', machines }];
+    state.groups = [{ serverId: HOME, serverName: 'Home A', accountScope: SCOPE, status: 'idle', machines }];
     state.source = source([]); state.managed = {}; state.pools = [];
     storage.setState({ machineListByServerId: { [HOME]: machines }, machineListStatusByServerId: { [HOME]: 'idle' } });
     const watches: AbortSignal[] = [];
@@ -167,7 +169,7 @@ async function labels(screen: Awaited<ReturnType<typeof renderPopover>>) {
 describe('SidebarMachinesPopoverContent', () => {
     beforeEach(() => {
         routerPush.mockClear();
-        state.groups = [{ serverId: HOME, serverName: 'Home A', status: 'idle', machines: fleet() }];
+        state.groups = [{ serverId: HOME, serverName: 'Home A', accountScope: SCOPE, status: 'idle', machines: fleet() }];
         state.managed = { [HOME]: [pending] };
         state.pools = [pool];
         state.source = source([workingOn('s1', 'mine'), workingOn('s2', 'mine'), workingOn('s3', 'shared')]);
@@ -188,11 +190,21 @@ describe('SidebarMachinesPopoverContent', () => {
 
     it("says what each machine is doing from the Activity classifier's per-machine count", async () => {
         const screen = await renderPopover();
-        expect(screen.findByTestId(`sidebar-machines-row.${HOME}.mine`)?.props).toMatchObject({
-            detail: 'machineDetailPage.work.working:2', titleAccessory: expect.anything() });
-        expect(screen.findByTestId(`sidebar-machines-row.${HOME}.shared`)?.props.detail).toBe('machineDetailPage.work.working:1');
-        // Offline says why, never "No work".
-        expect(screen.findByTestId(`sidebar-machines-row.${HOME}.edge`)?.props.detail).not.toBe('machineDetailPage.work.none');
+        // The work word sits on the name's line (the row's title meta), never in the detail slot that centres
+        // against the strip beneath the name.
+        const meta = (id: string) => (screen.findByTestId(`sidebar-machines-row.${HOME}.${id}`)?.props.titleMeta as React.ReactElement<{ children: unknown }> | undefined)?.props.children;
+        expect(screen.findByTestId(`sidebar-machines-row.${HOME}.mine`)?.props.titleAccessory).toBeTruthy();
+        expect(screen.findByTestId(`sidebar-machines-row.${HOME}.mine`)?.props.detail).toBeUndefined();
+        expect(meta('mine')).toBe('machineDetailPage.work.working:2');
+        expect(meta('shared')).toBe('machineDetailPage.work.working:1');
+        // Offline says why, never "No work": one quiet line under the name, where an online row has its strip
+        // (MPG-18), so a long presence sentence never wraps the name's line.
+        const edge = screen.findByTestId(`sidebar-machines-row.${HOME}.edge`)?.props;
+        expect(edge?.titleMeta).toBeUndefined();
+        expect((edge?.subtitle as React.ReactElement<{ children: unknown }> | undefined)?.props.children)
+            .toEqual(expect.stringMatching(/./));
+        expect((edge?.subtitle as React.ReactElement<{ children: unknown }> | undefined)?.props.children)
+            .not.toBe('machineDetailPage.work.none');
         expect(screen.findByTestId('sidebar-machines-working')?.props.children).toBe('machineDetailPage.work.working:3');
     });
 
@@ -209,7 +221,7 @@ describe('SidebarMachinesPopoverContent', () => {
         const resources = { v: 1, vitals: { state: 'reporting' }, host: { logicalCores: 8, memoryTotalBytes: 2 ** 34, bootedAt: 1 },
             attention: { level: 'needs_you', reasons: [{ key: 'memory', level: 'needs_you', since: Date.now() - 60_000, metric: 'memory',
                 nextStep: 'review_processes', kind: 'memory_pressure', pressure: 'critical', swapping: true }] } };
-        state.groups = [{ serverId: HOME, serverName: 'Home A', status: 'idle',
+        state.groups = [{ serverId: HOME, serverName: 'Home A', accountScope: SCOPE, status: 'idle',
             machines: [machine('mine', { daemonState: { resources } as never }), machine('other')] }];
         const screen = await renderPopover();
         expect(screen.findAll(node => node.props?.testID === 'sidebar-machines-popover-content' && typeof node.props?.title === 'string')[0]?.props.title)
@@ -222,7 +234,7 @@ describe('SidebarMachinesPopoverContent', () => {
     });
 
     it('has no All machines link with exactly one machine', async () => {
-        state.groups = [{ serverId: HOME, serverName: 'Home A', status: 'idle', machines: [machine('mine')] }];
+        state.groups = [{ serverId: HOME, serverName: 'Home A', accountScope: SCOPE, status: 'idle', machines: [machine('mine')] }];
         state.managed = {};
         const screen = await renderPopover();
         expect(screen.findByTestId(`sidebar-machines-row.${HOME}.mine`)).toBeTruthy();
@@ -230,7 +242,7 @@ describe('SidebarMachinesPopoverContent', () => {
     });
 
     it('invites adding this computer when there is no machine', async () => {
-        state.groups = [{ serverId: HOME, serverName: 'Home A', status: 'idle', machines: [] }];
+        state.groups = [{ serverId: HOME, serverName: 'Home A', accountScope: SCOPE, status: 'idle', machines: [] }];
         state.managed = {};
         state.pools = [];
         const screen = await renderPopover();
@@ -241,7 +253,7 @@ describe('SidebarMachinesPopoverContent', () => {
 
     it('says a signed-out Home cannot be listed and offers its sign-in', async () => {
         state.groups = [
-            { serverId: HOME, serverName: 'Home A', status: 'idle', machines: [machine('mine')] },
+            { serverId: HOME, serverName: 'Home A', accountScope: SCOPE, status: 'idle', machines: [machine('mine')] },
             { serverId: 'acme', serverName: 'Acme', status: 'signedOut', machines: [] },
         ];
         state.managed = {};

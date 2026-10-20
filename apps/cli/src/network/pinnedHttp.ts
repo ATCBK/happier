@@ -34,9 +34,16 @@ export type PinnedHttpStreamDependencies = Readonly<{
 function pinnedRequestHeaders(
   url: URL,
   headers: Readonly<Record<string, string>>,
+  body: Uint8Array | undefined,
 ): Readonly<Record<string, string>> {
+  const hasBodyFraming = Object.keys(headers).some((name) => (
+    name.toLowerCase() === 'content-length' || name.toLowerCase() === 'transfer-encoding'
+  ));
   return Object.freeze({
     ...Object.fromEntries(Object.entries(headers).filter(([name]) => name.toLowerCase() !== 'host')),
+    // Node does not add framing for every method (notably DELETE). These
+    // complete bytes otherwise reach the peer as an unframed request body.
+    ...(body !== undefined && !hasBodyFraming ? { 'content-length': String(body.byteLength) } : {}),
     host: url.host,
   });
 }
@@ -69,7 +76,7 @@ export function openPinnedHttpStream(
       port: url.port || undefined,
       path: `${url.pathname}${url.search}`,
       method: input.method ?? 'GET',
-      headers: pinnedRequestHeaders(url, input.headers),
+      headers: pinnedRequestHeaders(url, input.headers, input.body),
       // A pooled socket was admitted for the address set of an earlier request.
       // Reusing it would bypass this request's fresh DNS admission entirely.
       agent: false,

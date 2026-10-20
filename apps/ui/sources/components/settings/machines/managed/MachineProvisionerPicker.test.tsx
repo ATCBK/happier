@@ -267,7 +267,7 @@ describe('provisioner picker demand', () => {
         // One honest state: the line says the read failed, and the card claims nothing and cannot start.
         await waitForHomeGovernance(() => expect(screen.findByTestId('managed-picker.unavailable')).not.toBeNull());
         const unreadable = screen.tree.findAll(node => Array.isArray(node.props.cards)).flatMap(node => node.props.cards);
-        expect(unreadable[0].status.label).toBe(t('managedMachines.providers.loading'));
+        expect(unreadable[0].status.label).toBe('');
         expect(unreadable[0].action.disabled).toBe(true);
         await screen.unmount();
         return;
@@ -318,7 +318,12 @@ describe('provisioner picker demand', () => {
     },
   );
   /** One Home whose catalog answers with two provisioners; `hold` decides which later reads stay pending. */
-  async function arrangeCatalog(hold: Readonly<{ list?: (read: number, machineId: string) => boolean; check?: (read: number, localId: string) => boolean }>) {
+  async function arrangeCatalog(hold: Readonly<{
+    list?: (read: number, machineId: string) => boolean;
+    check?: (read: number, localId: string) => boolean;
+    /** Declared `[localId, title, kindTitle]` per provisioner; defaults to Alpha and Beta VMs. */
+    declared?: readonly (readonly [string, string, string])[];
+  }>) {
     const serverId = await harness.addHome({
       name: 'Build', serverUrl: 'https://build.example', serverIdentityId: 'srv_build', accountId: 'owner', currentAccount: true,
     });
@@ -328,11 +333,11 @@ describe('provisioner picker demand', () => {
         createMachineFixture({ id, installationId: `${id}-installation`, activeAt: Date.now(), kind: 'persistent' })) },
       machineListStatusByServerId: { [serverId]: 'idle' },
     });
-    const descriptor = (localId: string, title: string) => ({
+    const descriptor = (localId: string, title: string, kind = 'VM') => ({
       contribution: { pluginId: 'custom.compute', localId }, occurrenceId: `occurrence-${localId}`, credentialPurposes: [],
       descriptor: {
         id: localId, title, icon: 'server', resourceKind: 'native-compute-vm', schemaVersion: 1,
-        kindTitle: { key: `${localId}.kind`, fallback: 'VM' }, description: { key: `${localId}.description`, fallback: `${title} guest.` },
+        kindTitle: { key: `${localId}.kind`, fallback: kind }, description: { key: `${localId}.description`, fallback: `${title} guest.` },
         launchSchema: { type: 'object', properties: {}, additionalProperties: false },
         resourceSchema: { type: 'object', properties: {}, additionalProperties: false },
         platforms: ['linux'], prerequisites: [], billing: { location: 'local', stoppedBilling: 'not-billed' },
@@ -340,7 +345,8 @@ describe('provisioner picker demand', () => {
         actions: { check: 'check', options: 'options', acquire: 'acquire', bootstrap: 'bootstrap', inspect: 'inspect', destroy: 'destroy' },
       },
     });
-    const provisioners = [descriptor('alpha', 'Alpha'), descriptor('beta', 'Beta')];
+    const provisioners = (hold.declared ?? [['alpha', 'Alpha', 'VM'], ['beta', 'Beta', 'VM']] as const)
+      .map(([localId, title, kind]) => descriptor(localId, title, kind));
     const reads = { list: 0, check: new Map<string, number>() };
     let release: () => void = () => {};
     const gate = new Promise<void>(resolve => { release = resolve; });
@@ -368,6 +374,30 @@ describe('provisioner picker demand', () => {
     });
     return { serverId, reads, release, provisioners };
   }
+
+  it('tells two provisioners of one product apart by their declared kind and says a pending check in a word', async () => {
+    const { serverId, release } = await arrangeCatalog({
+      declared: [['alpha', 'Cua', 'sandbox'], ['beta', 'Cua', 'space']],
+      check: () => true,
+    });
+    const { t } = await import('@/text');
+    const { MachineProvisionerPicker } = await import('./MachineProvisionerPicker');
+    const screen = await renderPicker(<MachineProvisionerPicker serverId={serverId} onSelectProvisioner={vi.fn()} />);
+    const cards = () => [...new Map(screen.tree.findAll(node => Array.isArray(node.props.cards))
+      .flatMap(node => node.props.cards as { id: string; title: string; kind?: string; status: { label: string } }[])
+      .map(card => [card.id, card])).values()];
+    try {
+      await waitForHomeGovernance(() => {
+        // The composed title reads as one phrase; the standalone kind starts with a capital, as every label does.
+        expect(cards().map(card => [card.title, card.kind])).toEqual([['Cua sandbox', 'Sandbox'], ['Cua space', 'Space']]);
+      });
+      // The catalog's own line owns "Checking available provisioners"; a card still waiting says only that it is checking.
+      expect(cards().map(card => card.status.label)).toEqual([t('managedMachines.add.status.checking'), t('managedMachines.add.status.checking')]);
+    } finally {
+      release();
+    }
+    await screen.unmount();
+  });
 
   it('keeps the answered checks on screen while the catalog is re-read', async () => {
     const { serverId, reads, release } = await arrangeCatalog({ check: (read) => read > 1 });

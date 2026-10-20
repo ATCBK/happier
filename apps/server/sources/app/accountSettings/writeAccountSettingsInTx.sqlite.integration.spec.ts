@@ -6,16 +6,11 @@ import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { eventRouter } from "@/app/events/eventRouter";
 import { deriveAccountRemoteAlertPolicyV1 } from "@happier-dev/protocol";
+import { PROVIDER_CONNECTIONS_ACCOUNT_KV_KEY_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 
 import { writeAccountSettingsInTx } from "./writeAccountSettingsInTx";
 
 const emitUpdate = vi.hoisted(() => vi.fn());
-
-vi.mock("@/app/events/eventRouter", () => ({
-    eventRouter: { emitUpdate },
-    buildUpdateAccountUpdate: vi.fn(() => ({ body: { t: "update-account" } })),
-    buildAccountSettingsChangedUpdate: vi.fn(() => ({ body: { t: "account-settings-changed" } })),
-}));
 
 vi.mock("@/app/events/connectionEventRouter", () => ({
     eventRouter: { emitUpdate },
@@ -143,7 +138,12 @@ describe("writeAccountSettingsInTx (SQLite integration)", () => {
             cursor: 13,
             hint: { settingsVersion: 7 },
         });
-        expect(eventRouter.emitUpdate).toHaveBeenCalledTimes(3);
+        expect(eventRouter.emitUpdate).toHaveBeenCalledWith(expect.objectContaining({
+            userId: account.id,
+            payload: expect.objectContaining({ body: expect.objectContaining({
+                t: 'account-settings-changed', settingsVersion: 7,
+            }) }),
+        }));
     });
 
     it("leaves Settings, history, changes, and publication unchanged when the composing transaction fails", async () => {
@@ -193,6 +193,73 @@ describe("writeAccountSettingsInTx (SQLite integration)", () => {
         await expect(db.accountChange.count({
             where: { accountId: account.id },
         })).resolves.toBe(0);
+        expect(eventRouter.emitUpdate).not.toHaveBeenCalled();
+    });
+
+    it("rolls back staged history and publication when the terminal Settings CAS loses its admitted version", async () => {
+        const account = await db.account.create({
+            data: {
+                ...createSignedAccountContentBinding(),
+                encryptionMode: "e2ee",
+                settings: "settings-before",
+                settingsVersion: 6,
+                seq: 12,
+            },
+        });
+
+        // A real persistence change after admission exercises the final CAS
+        // independently of SQLite's single-writer transaction scheduling.
+        await expect(inTx(async (tx) => {
+            await writeAccountSettingsInTx({
+                tx,
+                accountId: account.id,
+                expectedVersion: 6,
+                next: { kind: "v2", content: { t: "encrypted", c: "settings-after" } },
+            });
+            await tx.account.update({
+                where: { id: account.id },
+                data: { settingsVersion: { increment: 1 } },
+            });
+        })).rejects.toMatchObject({
+            name: "AccountSettingsPublicationConflict",
+            result: { status: "version_mismatch", currentVersion: 7 },
+        });
+
+        await expect(db.account.findUniqueOrThrow({ where: { id: account.id } })).resolves.toMatchObject({
+            settings: "settings-before", settingsVersion: 6, seq: 12,
+        });
+        expect(await db.accountSettingsSnapshot.count({ where: { accountId: account.id } })).toBe(0);
+        expect(await db.accountChange.count({ where: { accountId: account.id } })).toBe(0);
+        expect(eventRouter.emitUpdate).not.toHaveBeenCalled();
+    });
+
+    it("rechecks transferred catalog authority before publishing a new legacy Settings root", async () => {
+        process.env.HAPPIER_FEATURE_ENCRYPTION__PLAIN_ACCOUNT_SETTINGS_AT_REST = "none";
+        const account = await db.account.create({ data: {
+            publicKey: null, encryptionMode: "plain", settings: null, settingsVersion: 0,
+        } });
+
+        await expect(inTx(async (tx) => {
+            await writeAccountSettingsInTx({
+                tx, accountId: account.id, expectedVersion: 0,
+                next: { kind: "v2", content: { t: "plain", v: { providerSettingsV1: {} } } },
+            });
+            // A tombstone is retained catalog authority. A newly admitted
+            // Settings root cannot become authoritative after this row exists.
+            await tx.userKVStore.create({ data: {
+                accountId: account.id, key: PROVIDER_CONNECTIONS_ACCOUNT_KV_KEY_V1,
+                value: null, version: 0,
+            } });
+        })).rejects.toMatchObject({
+            name: "AccountSettingsPublicationConflict", result: { status: "invalid_content" },
+        });
+
+        expect(await db.userKVStore.count({ where: { accountId: account.id } })).toBe(0);
+        expect(await db.accountSettingsSnapshot.count({ where: { accountId: account.id } })).toBe(0);
+        expect(await db.accountChange.count({ where: { accountId: account.id } })).toBe(0);
+        await expect(db.account.findUniqueOrThrow({ where: { id: account.id } })).resolves.toMatchObject({
+            settings: null, settingsVersion: 0,
+        });
         expect(eventRouter.emitUpdate).not.toHaveBeenCalled();
     });
 });

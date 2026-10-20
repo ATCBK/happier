@@ -13,6 +13,7 @@ vi.mock('@/utils/web/reactDomCjs', async () => {
 
 import { PresentationNoticeHost } from './PresentationNoticeHost';
 import { publishPresentationNotice, retirePresentationNotice } from './presentationNotices';
+import { setReducedMotionPreferenceOverride } from '@/hooks/ui/useReducedMotionPreference';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -44,6 +45,49 @@ it('keeps the single notice and its Undo reachable outside the retained hidden n
         expect(undo).toHaveBeenCalledTimes(3);
     } finally {
         await act(async () => { root.unmount(); retirePresentationNotice(); });
+        container.remove();
+    }
+});
+
+it('enters without fading any ancestor of its glass paint, so its frost samples whatever is beneath (a dialog included)', async () => {
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    // WAAPI is the browser boundary; the notice, its material and the motion owner stay real.
+    const runs: { target: Element; frames: Keyframe[] }[] = [];
+    const previousAnimate = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'animate');
+    Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: function (this: HTMLElement, frames: Keyframe[]) {
+        runs.push({ target: this, frames });
+        return { playState: 'running', effect: { target: this }, cancel: () => {} } as unknown as Animation;
+    } });
+    // Hold the browser's clock at the first frame, while the notice is still entering.
+    vi.useFakeTimers();
+    setReducedMotionPreferenceOverride(false);
+    try {
+        await act(async () => {
+            root.render(<PresentationNoticeHost />);
+            publishPresentationNotice({ key: 'frost', message: 'Renamed', severity: 'info', undo: { label: 'Undo', run: () => {} } });
+        });
+        const notice = document.querySelector<HTMLElement>('[data-testid="current-session-presentation-notice"]')!;
+        const paint = notice.querySelector<HTMLElement>('[data-happy-glass-backdrop]')!;
+        expect(paint).not.toBeNull();
+        // It enters through the browser's material motion: its frame moves by transform, with its paint inside.
+        const frameRuns = runs.filter(run => run.target.contains(paint) && run.target !== paint);
+        expect(frameRuns.length).toBeGreaterThan(0);
+        for (const run of frameRuns) expect(run.frames.some(frame => 'transform' in frame)).toBe(true);
+        // Opacity below 1 on an ancestor makes it the paint's backdrop root: the blur would see an empty plane.
+        for (let node = paint.parentElement; node && node !== document.body; node = node.parentElement) {
+            expect(['', '1']).toContain(node.style.opacity);
+            for (const run of runs.filter(candidate => candidate.target === node)) {
+                for (const frame of run.frames) expect(frame).not.toHaveProperty('opacity');
+            }
+        }
+    } finally {
+        await act(async () => { root.unmount(); retirePresentationNotice(); });
+        vi.useRealTimers();
+        setReducedMotionPreferenceOverride(null);
+        if (previousAnimate) Object.defineProperty(HTMLElement.prototype, 'animate', previousAnimate);
+        else delete (HTMLElement.prototype as { animate?: unknown }).animate;
         container.remove();
     }
 });

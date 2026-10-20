@@ -6,9 +6,10 @@ import type {
   SkillInstallPreviewV1,
 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 
-import { CapabilityRow } from '@/components/capabilities/row/CapabilityRow';
+import { CapabilityAddFooter, useAddDialogEdge } from '@/components/capabilities/add/CapabilityAddModal';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Text } from '@/components/ui/text/Text';
 import { useWebFileDropZone } from '@/hooks/ui/useWebFileDropZone';
 import {
@@ -22,6 +23,8 @@ import { applyWebDirectoryInputAttributes } from '@/utils/files/applyWebDirector
 import { nativePickFiles } from '@/utils/files/nativePickFiles';
 import { readWebDroppedEntries } from '@/utils/files/webDroppedEntries';
 
+import { SkillPreviewRows } from './SkillPreviewRows';
+import { readAllHeldFooter, tickAllSkillPreviews, toggleSkillPreview } from './skillPreviewSelection';
 import { installSkills, previewSkillInstall } from './skillInstall';
 
 function describeUploadError(error: SkillUploadError): string {
@@ -61,26 +64,33 @@ export function SkillUploadInput(
   props: Readonly<{
     execute: MountedAuthoringActionExecute;
     onAdded: (skillId: string) => void;
+    /** Closes the dialog (the footer's Done when everything found is already held). */
+    onDone: () => void;
     testID: string;
   }>,
 ) {
   const { theme } = useUnistyles();
+  const edge = useAddDialogEdge();
   const [state, setState] = React.useState<
     | Readonly<{ kind: 'idle' }>
     | Readonly<{ kind: 'reading' }>
     | Readonly<{
         kind: 'ready';
         files: readonly SkillFileInputV1[];
-        preview: SkillInstallPreviewV1;
+        items: readonly SkillInstallPreviewV1[];
       }>
     | Readonly<{ kind: 'error'; message: string }>
   >({ kind: 'idle' });
+  const [ticked, setTicked] = React.useState<ReadonlySet<string>>(() => new Set());
   const [adding, setAdding] = React.useState(false);
+  // A failed Add keeps the preview and the ticks: the footer says so and the same Add retries the same selection.
+  const [addError, setAddError] = React.useState<string | null>(null);
   const [dragging, setDragging] = React.useState(false);
 
   const accept = React.useCallback(
     async (source: UploadSource) => {
       setState({ kind: 'reading' });
+      setAddError(null);
       const read = await readSkillUpload(source);
       if (!read.ok) {
         setState({ kind: 'error', message: describeUploadError(read.error) });
@@ -97,11 +107,8 @@ export function SkillUploadInput(
         });
         return;
       }
-      setState({
-        kind: 'ready',
-        files: read.files,
-        preview: preview.items[0]!,
-      });
+      setTicked(tickAllSkillPreviews(preview.items));
+      setState({ kind: 'ready', files: read.files, items: preview.items });
     },
     [props.execute],
   );
@@ -181,23 +188,47 @@ export function SkillUploadInput(
     [accept, acceptWebFiles],
   );
 
+  const previewRows = (items: readonly SkillInstallPreviewV1[], ticks: ReadonlySet<string> | null) => (
+    <SkillPreviewRows
+      testID={`${props.testID}.preview`}
+      items={items}
+      ticked={ticks}
+      onToggle={(path) => {
+        setAddError(null);
+        setTicked((previous) => toggleSkillPreview(items, previous, path));
+      }}
+      onOpen={props.onAdded}
+      facts={(item) => ({
+        presentation: 'row',
+        source: { kind: 'you' },
+        trust: item.trust,
+        cost: { tokensWhenUsed: item.cost.bodyTokens },
+      })}
+    />
+  );
+
   const add = React.useCallback(async () => {
     if (state.kind !== 'ready') return;
     setAdding(true);
+    setAddError(null);
+    // One skill is added as it is; a folder of several adds the ticked ones.
+    const several = state.items.length > 1;
     const outcome = await installSkills(props.execute, {
       source: { kind: 'upload', files: state.files },
+      ...(several ? { selectPaths: state.items.filter((item) => ticked.has(item.path)).map((item) => item.path) } : {}),
     });
     setAdding(false);
     if (!outcome.ok) {
-      setState({ kind: 'error', message: t('capabilities.add.addFailed') });
+      setAddError(t('capabilities.add.addFailed'));
       return;
     }
     props.onAdded(outcome.skillIds[0]!);
-  }, [props, state]);
+  }, [props, state, ticked]);
 
+  const allHeld = state.kind === 'ready' ? readAllHeldFooter(state.items) : null;
   return (
     <View style={styles.fill}>
-      <ScrollView style={styles.fill} contentContainerStyle={styles.body}>
+      <ScrollView style={styles.fill} contentContainerStyle={[styles.body, edge]}>
         <Text variant="reading" style={{ color: theme.colors.text.secondary }}>
           {t('capabilities.skillAdd.upload.body')}
         </Text>
@@ -252,30 +283,58 @@ export function SkillUploadInput(
           </Text>
         ) : null}
         {state.kind === 'ready' ? (
-          <CapabilityRow
-            testID={`${props.testID}.preview`}
-            title={state.preview.name}
-            description={state.preview.description}
-            facts={{
-              presentation: 'row',
-              source: { kind: 'you' },
-              trust: state.preview.trust,
-              cost: { tokensWhenUsed: state.preview.cost.bodyTokens },
-            }}
-          />
+          state.items.length > 1 ? (
+            <ItemGroup title={t('capabilities.skillAdd.upload.found', { count: state.items.length })} surface="none">
+              {previewRows(state.items, ticked)}
+            </ItemGroup>
+          ) : (
+            // The one skill found stands in the same bare section as several, so its row has the same hairline extent.
+            <ItemGroup surface="none" header="none">
+              {previewRows(state.items, null)}
+            </ItemGroup>
+          )
         ) : null}
       </ScrollView>
       {state.kind === 'ready' ? (
-        <View style={styles.footer}>
-          <View style={styles.footerStart} />
-          <RoundButton
-            size="normal"
-            title={t('capabilities.skillAdd.addToLibrary')}
-            loading={adding}
-            onPress={() => void add()}
-            testID={`${props.testID}.add`}
-          />
-        </View>
+        <CapabilityAddFooter
+          testID={`${props.testID}.footer`}
+          start={
+            addError ? (
+              <Text variant="meta" style={{ color: theme.colors.status.error }} testID={`${props.testID}.add-error`}>
+                {addError}
+              </Text>
+            ) : null
+          }
+        >
+          {allHeld?.kind === 'open' ? (
+            <RoundButton
+              size="normal"
+              title={t('capabilities.skillAdd.open')}
+              onPress={() => props.onAdded(allHeld.skillId)}
+              testID={`${props.testID}.add`}
+            />
+          ) : allHeld?.kind === 'done' ? (
+            <RoundButton
+              size="normal"
+              title={t('capabilities.add.done')}
+              onPress={props.onDone}
+              testID={`${props.testID}.done`}
+            />
+          ) : (
+            <RoundButton
+              size="normal"
+              title={
+                state.items.length > 1
+                  ? t('capabilities.skillAdd.link.addSelected', { count: ticked.size })
+                  : t('capabilities.skillAdd.addToLibrary')
+              }
+              loading={adding}
+              disabled={state.items.length > 1 && ticked.size === 0}
+              onPress={() => void add()}
+              testID={`${props.testID}.add`}
+            />
+          )}
+        </CapabilityAddFooter>
       ) : null}
     </View>
   );
@@ -284,7 +343,6 @@ export function SkillUploadInput(
 const styles = StyleSheet.create((theme) => ({
   fill: { flex: 1, minHeight: 0 },
   body: {
-    paddingHorizontal: theme.space.s24,
     paddingTop: theme.space.s16,
     paddingBottom: theme.space.s24,
     gap: theme.space.s16,
@@ -299,14 +357,4 @@ const styles = StyleSheet.create((theme) => ({
     borderRadius: theme.borderRadius.lg,
   },
   chooseRow: { flexDirection: 'row', gap: theme.space.s8 },
-  footer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: theme.space.s16,
-    paddingHorizontal: theme.space.s24,
-    paddingVertical: theme.space.s12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.colors.border.subtle,
-  },
-  footerStart: { flex: 1, minWidth: 0 },
 }));

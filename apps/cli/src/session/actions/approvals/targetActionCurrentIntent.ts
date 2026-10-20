@@ -1,10 +1,13 @@
-import { PLUGIN_ACTION_CURRENT_INTENT_REJECTED_CODE } from '@happier-dev/protocol/plugins/actions/invocation';
+import { PLUGIN_ACTION_CURRENT_INTENT_REJECTED_CODE, PLUGIN_ACTION_OUTCOME_UNKNOWN_CODE } from '@happier-dev/protocol/plugins/actions/invocation';
 import { TargetActionApprovalRequestV1Schema, StoredTargetActionApprovalRequestV1Schema } from '@happier-dev/protocol/approvals/targetActionApprovalRequestV1';
 import type { PluginLocalizedStringV2, TargetActionApprovalRequestV1 } from '@happier-dev/protocol';
 import type { TargetActionCurrentIntentRequest, TargetActionCurrentIntentResult } from '@/plugins/runtime/invocation/actionExecutor';
 import { getSharedBlockingApprovalCoordinator } from '@happier-dev/protocol/actions/blockingApprovalCoordinator';
 import { targetActionApprovalSubjectsEqual } from './targetActionApprovalSubject';
 import { projectTargetActionApprovalInput, resolveApprovalRequestApproveAdmission } from '@happier-dev/protocol/actions/actionApprovalPresentation';
+import { admitApprovalRequesterDecisionV1 } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { projectTargetActionApprovalInvocationV1 } from '@happier-dev/protocol/approvals/targetActionApprovalRequestV1';
+import type { createCliApprovalsArtifactStore } from './artifactStore';
 
 function resolveLocalizedConfirmationText(value: PluginLocalizedStringV2): string {
   return typeof value === 'string' ? value : value.fallback;
@@ -21,12 +24,19 @@ function createTargetActionApprovalRequestCandidate(
     invocationSurface,
     replayPlacement,
     executionOriginV1,
+    requesterConfirmation,
   } = currentIntent;
   const requestedSurface = invocationSurface ?? surface;
   const approvalRequiredByActionSettings = action.approvalRequiredByActionSettings === true;
-  if (!action.confirmation && !approvalRequiredByActionSettings) return null;
+  if (!action.confirmation && !approvalRequiredByActionSettings) {
+    currentIntent.reportUnavailable?.('approval_not_required');
+    return null;
+  }
   const projected = projectTargetActionApprovalInput(action.input, action.secretInputPaths ?? []);
-  if (!projected) return null;
+  if (!projected) {
+    currentIntent.reportUnavailable?.('approval_input_unrepresentable');
+    return null;
+  }
   const candidate = {
     v: 1,
     kind: 'plugin_target_action',
@@ -45,7 +55,8 @@ function createTargetActionApprovalRequestCandidate(
     input: projected.input,
     secretInputPaths: action.secretInputPaths ?? [],
     ...(action.secretInputLabels === undefined ? {} : { secretInputLabels: action.secretInputLabels }),
-    ...(projected.confidentialPaths.length ? { approvalInputCustody: 'live_only' } : {}),
+    ...(projected.confidentialPaths.length || requesterConfirmation && requestedSurface === 'plugin'
+      ? { approvalInputCustody: 'live_only' } : {}),
     ...(action.accountId ? { accountId: action.accountId } : {}),
     ...(action.resourceId ? { resourceId: action.resourceId } : {}),
     sourceCustody: action.sourceCustody,
@@ -53,6 +64,7 @@ function createTargetActionApprovalRequestCandidate(
     subjectFingerprint: fingerprint,
     ...(replayPlacement === undefined ? {} : { replayPlacement }),
     ...(executionOriginV1 === undefined ? {} : { executionOriginV1 }),
+    ...(requesterConfirmation === undefined ? {} : { requesterConfirmation }),
     summary: action.confirmation
       ? resolveLocalizedConfirmationText(action.confirmation.title)
       : 'Action approval required',
@@ -61,7 +73,15 @@ function createTargetActionApprovalRequestCandidate(
       : {}),
   } as const;
   const parsed = TargetActionApprovalRequestV1Schema.safeParse(candidate);
-  return parsed.success && resolveApprovalRequestApproveAdmission(parsed.data).status === 'available' ? parsed.data : null;
+  if (!parsed.success) {
+    currentIntent.reportUnavailable?.('approval_subject_invalid');
+    return null;
+  }
+  if (resolveApprovalRequestApproveAdmission(parsed.data).status !== 'available') {
+    currentIntent.reportUnavailable?.('approval_presentation_unavailable');
+    return null;
+  }
+  return parsed.data;
 }
 
 /**
@@ -86,6 +106,7 @@ export function targetActionApprovalMatchesCurrentIntent(
 export function createTargetActionCurrentIntentAdapter(deps: Readonly<{
   create: (request: TargetActionApprovalRequestV1) => Promise<Readonly<{ artifactId: string }>>;
   read: (artifactId: string) => Promise<TargetActionApprovalRequestV1 | null>;
+  update?: ReturnType<typeof createCliApprovalsArtifactStore>['targetActionApprovalsUpdate'];
   subscribeChanges?: (
     artifactId: string,
     onChange: () => void,
@@ -105,9 +126,22 @@ export function createTargetActionCurrentIntentAdapter(deps: Readonly<{
     if (request === null) {
       return { status: 'unavailable', code: 'plugin_action_current_intent_unavailable' };
     }
-    const created = await deps.create(request);
+    const update = deps.update;
+    // A durable request has its existing replay writer. Live-only operands
+    // instead require the incumbent's receipt port before creating consent.
+    if (request.approvalInputCustody === 'live_only' && !update) {
+      currentIntent.reportUnavailable?.('approval_factory_unavailable');
+      return { status: 'unavailable', code: 'plugin_action_current_intent_unavailable' };
+    }
+    let created: Awaited<ReturnType<typeof deps.create>>;
+    try { created = await deps.create(request); }
+    catch (error) {
+      currentIntent.reportUnavailable?.('approval_artifact_create_failed');
+      throw error;
+    }
     const artifactId = created.artifactId.trim();
     if (!artifactId) {
+      currentIntent.reportUnavailable?.('approval_artifact_id_unavailable');
       return { status: 'unavailable', code: 'plugin_action_current_intent_unavailable' };
     }
     if (request.approvalInputCustody !== 'live_only') {
@@ -129,7 +163,33 @@ export function createTargetActionCurrentIntentAdapter(deps: Readonly<{
       return { status: 'unavailable', code: 'plugin_action_current_intent_mismatch' };
     }
     return result.decision === 'approve'
-      ? { status: 'approved', fingerprint, artifactId }
+      ? { status: 'approved', fingerprint, artifactId,
+          settleExecution: async ({ artifactId: admittedArtifactId, execution }) => {
+            if (admittedArtifactId !== artifactId || !update) throw new Error('approval_stale');
+            const latest = await deps.read(artifactId);
+            if (!latest || latest.approvalInputCustody !== 'live_only'
+              || !['approved', 'executing'].includes(latest.status) || latest.decision?.kind !== 'approve'
+              || !targetActionApprovalSubjectsEqual(request, latest)) throw new Error('approval_stale');
+            const executedAtMs = Math.max((deps.now ?? Date.now)(), latest.updatedAtMs);
+            const terminal = TargetActionApprovalRequestV1Schema.parse({ ...latest,
+              status: execution.ok ? 'executed' : 'failed', updatedAtMs: executedAtMs,
+              execution: { ...execution, executedAtMs,
+                ...(execution.errorCode === PLUGIN_ACTION_OUTCOME_UNKNOWN_CODE
+                  ? { errorCode: 'approval_execution_outcome_unknown' } : {}),
+              },
+            });
+            const updated = await update({ artifactId, request: terminal });
+            if (!updated.ok) throw new Error(updated.errorCode);
+          },
+          ...(request.requesterConfirmation ? { revalidateRequesterDecision: async () => {
+            const invocation = projectTargetActionApprovalInvocationV1(request);
+            return invocation !== null && (await admitApprovalRequesterDecisionV1({
+              request: { ...request, ...invocation },
+              context: { authority: 'present_user', surface: 'ui', runtimeAccountId: request.requesterConfirmation!.executionAccountId,
+                requesterApprovalDecision: result.requesterApprovalDecision },
+            })).ok;
+          } } : {}),
+        }
       : { status: 'rejected', code: PLUGIN_ACTION_CURRENT_INTENT_REJECTED_CODE };
   };
 }

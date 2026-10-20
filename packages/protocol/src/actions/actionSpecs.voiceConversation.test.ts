@@ -75,7 +75,9 @@ describe('local Voice Action contract', () => {
     }
     for (const muted of [true, false]) {
       expect(resolveActionApprovalRouting({ actionId, spec, input: { expectedAttempt: 'current-attempt', muted },
-        context: { surface: 'ui', authority: 'present_user' } }).required).toBe(false);
+        context: { surface: 'ui', authority: 'present_user' } }).required).toBe(!muted);
+      expect(resolveActionApprovalRouting({ actionId, spec, input: { expectedAttempt: 'current-attempt', muted },
+        context: { surface: 'ui', authority: 'present_user', presentUserConfirmation: { actionId } } }).required).toBe(false);
     }
   });
 

@@ -623,6 +623,70 @@ describe('createLocalVoiceCaptureOwner', () => {
         expect(nativeAudio.capture.getSnapshot().subscriberCount).toBe(0);
     });
 
+    it('retains a private daemon finish cause through endpoint capture failure', async () => {
+        const { boundary, getSettings } = await installDaemonCaptureBoundary();
+        const finishFailure = new Error('private daemon finish detail');
+        boundary.finish.mockRejectedValue(finishFailure);
+        const onCaptureError = vi.fn();
+        const owner = createLocalVoiceCaptureOwner({ getSettings, onCaptureStarted() {}, onCaptureError });
+        await owner.startCapture({ handsFree: true, provider: 'local_neural', localNeuralExecution: 'daemon', sessionId: 'finish-failure' });
+        nativeAudio.emit();
+        await nativeAudio.capture.waitForDrain();
+
+        const result = await owner.stopEndpointDrivenCapture({ adaptiveConfig: { ignoredPhrases: [] },
+            provider: 'local_neural', sessionId: 'finish-failure' });
+
+        expect(result.kind).not.toBe('submit_turn');
+        expect(onCaptureError).toHaveBeenCalledOnce();
+        const failure: unknown = onCaptureError.mock.calls[0]?.[0];
+        expect(failure).toMatchObject({ controlSessionId: 'finish-failure', kind: 'provider_error',
+            reason: 'daemon_streaming_stt_finalization_failed' });
+        expect(failure).toHaveProperty('cause.cause', finishFailure);
+        expect(Object.getOwnPropertyDescriptor(failure, 'cause')?.enumerable).toBe(false);
+        expect(JSON.stringify(failure)).not.toContain('private daemon finish detail');
+        expect(owner.isCaptureActive('finish-failure')).toBe(false);
+        expect(nativeAudio.capture.getSnapshot().subscriberCount).toBe(0);
+        await owner.stopSession();
+    });
+
+    it.each([false, true])('retains finalized manual input across a long daemon mute (resume=%s)', async resume => {
+        const { boundary, getSettings, machine, account } = await installDaemonCaptureBoundary();
+        let remoteExpired = false;
+        boundary.start.mockImplementation(async () => { remoteExpired = false; });
+        boundary.finish.mockImplementation(async () => {
+            if (remoteExpired) throw Object.assign(new Error('stream expired'), { code: 'stream_not_found' });
+        });
+        boundary.finalText = 'before mute';
+        const onCaptureError = vi.fn();
+        const owner = createLocalVoiceCaptureOwner({ getSettings, onCaptureStarted() {}, onCaptureError });
+        await owner.startCapture({ handsFree: false, provider: 'local_neural', localNeuralExecution: 'daemon', sessionId: 'buffered-input' });
+        nativeAudio.emit();
+        await nativeAudio.capture.waitForDrain();
+        await owner.setMuted({ sessionId: 'buffered-input', muted: true });
+        // Finalize while the remote stream is still owned. A muted turn must
+        // not depend on keeping an idle daemon stream alive until Send.
+        await vi.waitFor(() => expect(boundary.finish).toHaveBeenCalledOnce());
+        vi.useFakeTimers();
+        await vi.advanceTimersByTimeAsync(10 * 60_000);
+        remoteExpired = true; // The daemon may reclaim any stream left idle through the mute.
+        if (resume) {
+            // The real daemon remains online while this client is muted.
+            // Refresh its OS/network observation after advancing the clock.
+            const { storage } = await import('@/sync/domains/state/storage');
+            const onlineMachine = { ...machine, activeAt: Date.now() };
+            storage.setState(state => ({ machines: { ...state.machines, [machine.id]: onlineMachine },
+                machineListByServerId: { ...state.machineListByServerId, [account.home.id]: [onlineMachine] } }));
+            boundary.finalText = 'after unmute';
+            await owner.setMuted({ sessionId: 'buffered-input', muted: false });
+            nativeAudio.emit();
+            await nativeAudio.capture.waitForDrain();
+        }
+        const result = await owner.stopCapture({ provider: 'local_neural', sessionId: 'buffered-input' });
+        expect(onCaptureError).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ text: resume ? 'before mute after unmute' : 'before mute' });
+        await owner.stopSession();
+    });
+
     it('keeps endpoint signal gating and stopped-capture decisions in the runtime capture owner', async () => {
         sdk.sherpaFinish.mockResolvedValue({ status: 'finalized', text: 'open the latest notes' });
         const owner = createLocalVoiceCaptureOwner({ getSettings: () => neuralSettings, onCaptureStarted() {}, onCaptureError() {} });
@@ -792,6 +856,8 @@ describe('createLocalVoiceCaptureOwner', () => {
         micCleanup.resolve();
         await vi.waitFor(() => expect(onCaptureError).toHaveBeenCalledWith({ controlSessionId: 'dictation-session',
             kind: 'speech_recognition_unavailable', reason: 'audio-capture' }));
+        expect(onCaptureError.mock.calls[0]?.[0]).toHaveProperty('cause.reason', 'audio-capture');
+        expect(Object.getOwnPropertyDescriptor(onCaptureError.mock.calls[0]?.[0], 'cause')?.enumerable).toBe(false);
         expect(admission.acquire('conversation').status).toBe('acquired');
         await captureOwner.stopSession();
     });
@@ -898,6 +964,71 @@ describe('createLocalVoiceCaptureOwner', () => {
             kind: 'mic_plateau', reason: 'mic_audio_plateau' });
         await owner.stopSession();
         expect(nativeAudio.capture.getSnapshot().subscriberCount).toBe(0);
+    });
+
+    it.each([
+        { execution: 'device' as const, muteBeforeStart: false },
+        { execution: 'device' as const, muteBeforeStart: true },
+        { execution: 'daemon' as const, muteBeforeStart: false },
+        { execution: 'daemon' as const, muteBeforeStart: true },
+    ])('suspends the silent-mic watchdog while muted and measures a fresh unmuted window: $execution / before start=$muteBeforeStart', async ({ execution, muteBeforeStart }) => {
+        const getSettings = execution === 'daemon'
+            ? (await installDaemonCaptureBoundary()).getSettings
+            : () => neuralSettings;
+        const onCaptureError = vi.fn();
+        const owner = createLocalVoiceCaptureOwner({ getSettings, onCaptureStarted() {}, onCaptureError },
+            { micPlateauTimeoutMs: 25 });
+        vi.useFakeTimers();
+        if (muteBeforeStart) await owner.setMuted({ sessionId: 'muted-capture', muted: true });
+        await owner.startCapture({ sessionId: 'muted-capture', provider: 'local_neural',
+            localNeuralExecution: execution, handsFree: false });
+        if (!muteBeforeStart) {
+            await vi.advanceTimersByTimeAsync(10);
+            await owner.setMuted({ sessionId: 'muted-capture', muted: true });
+        }
+        // Muted PCM is intentionally dropped by the real capture boundary.
+        nativeAudio.emit();
+        await nativeAudio.capture.waitForDrain();
+        await vi.advanceTimersByTimeAsync(25);
+        expect(onCaptureError).not.toHaveBeenCalled();
+        expect(owner.isCaptureActive('muted-capture')).toBe(true);
+
+        await owner.setMuted({ sessionId: 'muted-capture', muted: false });
+        await vi.advanceTimersByTimeAsync(24);
+        expect(onCaptureError).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(onCaptureError).toHaveBeenCalledExactlyOnceWith({ controlSessionId: 'muted-capture',
+            kind: 'mic_plateau', reason: 'mic_audio_plateau' });
+        expect(owner.isCaptureActive('muted-capture')).toBe(false);
+    });
+
+    it('does not restart the silent-mic watchdog when unmuting a capture handed off for a turn', async () => {
+        const { boundary, getSettings } = await installDaemonCaptureBoundary();
+        const finishing = createDeferred<void>();
+        const finishEntered = createDeferred<void>();
+        boundary.finish.mockImplementation(async () => { finishEntered.resolve(); await finishing.promise; });
+        const onCaptureError = vi.fn();
+        const owner = createLocalVoiceCaptureOwner({ getSettings, onCaptureStarted() {}, onCaptureError },
+            { micPlateauTimeoutMs: 25 });
+        vi.useFakeTimers();
+        await owner.startCapture({ sessionId: 'turn-handoff', provider: 'local_neural',
+            localNeuralExecution: 'daemon', handsFree: false });
+        nativeAudio.emit();
+        await nativeAudio.capture.waitForDrain();
+        const mute = owner.setMuted({ sessionId: 'turn-handoff', muted: true });
+        await finishEntered.promise;
+        const stop = owner.stopEndpointDrivenCapture({ sessionId: 'turn-handoff', provider: 'local_neural',
+            adaptiveConfig: { ignoredPhrases: [] } });
+        try {
+            await owner.setMuted({ sessionId: 'turn-handoff', muted: false });
+            await vi.advanceTimersByTimeAsync(25);
+            expect(onCaptureError).not.toHaveBeenCalled();
+            expect(owner.isCaptureActive('turn-handoff')).toBe(false);
+        } finally {
+            finishing.resolve();
+            await mute;
+            await stop;
+        }
     });
 
     it('tracks the latest STT partial for VAD endpoint signals even when no UI partial callback is mounted', async () => {
@@ -1283,7 +1414,9 @@ describe('createLocalVoiceCaptureOwner', () => {
             await start;
             expect(first.recorder.stop).toHaveBeenCalledOnce();
             expect(retry.recorder.stop).not.toHaveBeenCalled();
-            expect(rawCaptureOwner.isCaptureActive('dictation-session-2')).toBe(true);
+            await expect(captureOwner.stopCapture({
+                provider: 'recorded_audio', sessionId: 'dictation-session-2',
+            })).resolves.toEqual({ provider: 'recorded_audio', uri: 'file:///retry-recording.wav' });
             await captureOwner.stopSession('dictation-session-2');
         } finally {
             firstStart.resolve();
@@ -1345,10 +1478,15 @@ describe('createLocalVoiceCaptureOwner', () => {
         await expect(staleResult).resolves.toMatchObject({ provider: 'local_neural', text: 'stale result for old caller' });
         await rawCaptureOwner.setMuted({ muted: true, sessionId: 'dictation-session' });
         expect(rawCaptureOwner.isCaptureActive('dictation-session')).toBe(true);
-        expect(nativeAudio.capture.getSnapshot().subscriberCount).toBe(1);
+        await vi.waitFor(() => expect(nativeAudio.capture.getSnapshot().subscriberCount).toBe(0));
         const chunksBeforeMutedInput = network.requests.filter(request => request.method === 'daemon.voiceInference.stt.stream.chunk').length;
         nativeAudio.emit(); await nativeAudio.capture.waitForDrain();
         expect(network.requests.filter(request => request.method === 'daemon.voiceInference.stt.stream.chunk')).toHaveLength(chunksBeforeMutedInput);
+        await rawCaptureOwner.setMuted({ muted: false, sessionId: 'dictation-session' });
+        nativeAudio.emit(); await nativeAudio.capture.waitForDrain();
+        await vi.waitFor(() => expect(network.requests.filter(request => request.method === 'daemon.voiceInference.stt.stream.chunk'))
+            .toHaveLength(chunksBeforeMutedInput + 1));
+        expect(onCaptureError).not.toHaveBeenCalled();
         await captureOwner.stopSession('dictation-session');
     });
 

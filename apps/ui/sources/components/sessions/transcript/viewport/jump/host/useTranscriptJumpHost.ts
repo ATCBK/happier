@@ -1096,6 +1096,27 @@ export function useTranscriptJumpHost(deps: TranscriptJumpHostDeps): TranscriptJ
             }) === true;
         };
         try {
+            // Native History locators have no session seq. Resolve them through the
+            // source's older frontier before asking the seq/window strategy to land.
+            if (routeMessageId !== null && normalizedTargetSeq === null) {
+                while (!isTranscriptJumpTargetInRenderedWindow(target)) {
+                    if (!isCurrentOperation()) return { status: 'aborted' };
+                    const loadOlder = transcriptSource.history.loadOlder;
+                    if (hasMoreOlderRef.current === false || loadOlder === null) {
+                        return { status: 'not-found', reason: 'exhausted' };
+                    }
+                    const page = await loadOlder(resolveSyncLoadOlderOptions() ?? undefined);
+                    if (!isCurrentOperation()) return { status: 'aborted' };
+                    observeOlderLoadResult(page);
+                    await waitForNextVisualUpdate();
+                    if (!isCurrentOperation()) return { status: 'aborted' };
+                    if (isTranscriptJumpTargetInRenderedWindow(target)) break;
+                    if (!page.hasMore || page.status === 'no_more') {
+                        return { status: 'not-found', reason: 'exhausted' };
+                    }
+                    if (page.status !== 'loaded') return { status: 'not-found', reason: 'unavailable' };
+                }
+            }
             const result = await executeTranscriptTargetWindowJump({
                 align,
                 // A forked transcript is not a lesser transcript: its own segment is an
@@ -1240,6 +1261,7 @@ export function useTranscriptJumpHost(deps: TranscriptJumpHostDeps): TranscriptJ
         endExplicitJumpWriteBarrier,
         executeViewportCommandWithAnimation,
         forkedTranscriptEnabled,
+        hasMoreOlderRef,
         invalidateViewportAnchorCapture,
         isPinnedRef,
         isTranscriptJumpTargetInRenderedWindow,
@@ -1265,6 +1287,7 @@ export function useTranscriptJumpHost(deps: TranscriptJumpHostDeps): TranscriptJ
         listRef,
         scrollPinRef,
         sessionId,
+        transcriptSource,
         waitForNextVisualUpdate,
         wantsPinnedRef,
     ]);

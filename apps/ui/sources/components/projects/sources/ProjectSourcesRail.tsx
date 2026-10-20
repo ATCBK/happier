@@ -2,7 +2,6 @@ import * as React from 'react';
 import { useUnistyles } from 'react-native-unistyles';
 import {
   HappierCollectionListMark,
-  createHappierCollectionDraftTitleStore,
 } from '@happier-dev/plugin-ui/presentation';
 import type { ProjectSourceV1 } from '@happier-dev/protocol/projects/sources/projectSourceV1';
 
@@ -18,13 +17,11 @@ import {
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 
 import { describeProjectSourceRow } from './projectSourceAddress';
 import { readSourceTeamId, type ProjectSourceGroup } from './projectSourceGroups';
 export { groupProjectSources, readSourceTeamId, type ProjectSourceGroup } from './projectSourceGroups';
-
-/** The name typed into the open new-source draft, shown by the rail's draft row. */
-export const projectSourceDraftTitle = createHappierCollectionDraftTitleStore();
 
 export const ProjectSourcesRail = React.memo(function ProjectSourcesRail(
   props: Readonly<{
@@ -41,6 +38,7 @@ export const ProjectSourcesRail = React.memo(function ProjectSourcesRail(
     onAdd: () => void;
   }>,
 ) {
+  const projectSourceDraftTitle = useCollectionDraftTitle();
   const { theme } = useUnistyles();
   const mark = React.useCallback(
     (dimmed?: boolean) => (

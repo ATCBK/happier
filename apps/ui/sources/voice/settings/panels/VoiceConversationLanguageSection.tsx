@@ -19,6 +19,7 @@ import { createDefaultVoiceProviderRegistry } from '@/voice/registry/defaultRegi
 import type { VoiceProviderRegistry } from '@/voice/registry/providerRegistry';
 import { useVoiceProviderRegistryRevision } from '@/voice/registry/useVoiceProviderRegistryRevision';
 import { resolveVoiceProviderLanguagePreference } from '@happier-dev/protocol/plugins/contributions/voice';
+import { useVoiceSettingsSearchPrerequisite } from '@/voice/settings/VoiceSettingsSearchPrerequisite';
 
 function languageName(code: string): string {
   return LANGUAGES.find((language) => language.code === code)?.name ?? code;
@@ -41,6 +42,7 @@ export function VoiceConversationLanguageSection(props: Readonly<{
   popoverBoundaryRef?: React.RefObject<unknown> | null;
   registry?: VoiceProviderRegistry;
 }>) {
+  const searchPrerequisite = useVoiceSettingsSearchPrerequisite();
   const { theme } = useUnistyles();
   const router = useRouter();
   const [replyMenuOpen, setReplyMenuOpen] = React.useState(false);
@@ -50,7 +52,7 @@ export function VoiceConversationLanguageSection(props: Readonly<{
   const language = projectConversationLanguage(props.voice, registry);
   const preference = projectConversationLanguagePreference(props.voice, registry);
   const languageSetting = resolveVoiceConversationLanguageSetting(props.voice, registry);
-  if (language.mode === 'off') return null;
+  if (language.mode === 'off') return searchPrerequisite({ settings: [languageSetting, SETTINGS.greeting], reason: t('settingsVoice.pages.search.chooseService'), group: true });
 
   const reveal = (setting: SettingRef) => router.setParams({ [SETTING_ANCHOR_QUERY_PARAM]: setting.anchor });
   const languageIcon = (name: 'sparkle' | 'translate') => (

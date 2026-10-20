@@ -419,6 +419,14 @@ export const PluginUiAppPageColumnV1Schema = lazyZodSchema(() => z.strictObject(
 }));
 export type PluginUiAppPageColumnV1 = z.infer<typeof PluginUiAppPageColumnV1Schema>;
 
+/**
+ * How an app page draws its own header once loaded: `page` (the default) is a page header (mark, title,
+ * purpose); `toolbar` is a Collection toolbar that leads with the page's name. The host says the page's identity
+ * the same way while the page loads, so the title does not jump when the surface arrives.
+ */
+export const PluginUiAppPageHeaderStyleV1Schema = lazyZodSchema(() => z.enum(['page', 'toolbar']));
+export type PluginUiAppPageHeaderStyleV1 = z.infer<typeof PluginUiAppPageHeaderStyleV1Schema>;
+
 export const PluginUiDestinationRankHintV1Schema = lazyZodSchema(() => z.optional(z.number().check(z.int(), z.minimum(MIN_PLUGIN_UI_DESTINATION_RANK_HINT_V1), z.maximum(MAX_PLUGIN_UI_DESTINATION_RANK_HINT_V1))));
 
 const PluginUiViewDestinationCommonShapeV2 = {
@@ -485,7 +493,7 @@ function createPluginUiViewBindingSchemaV2() {
         ? { placement: z.optional(PluginUiDestinationPlacementV1Schema) }
         : {}),
       ...(slot.container === 'appPage'
-        ? { column: z.optional(PluginUiAppPageColumnV1Schema), widgetAreas: zMini.optional(PluginUiWidgetAreaDeclarationsV1Schema) }
+        ? { description: zMini.optional(PluginLocalizedStringV2Schema), headerStyle: z.optional(PluginUiAppPageHeaderStyleV1Schema), column: z.optional(PluginUiAppPageColumnV1Schema), widgetAreas: zMini.optional(PluginUiWidgetAreaDeclarationsV1Schema) }
         : {}),
       container: z.literal(slot.container),
       target: PluginUiViewTargetSchemaByKindV1[slot.targetKind],
@@ -589,6 +597,8 @@ export type PluginUiViewDestinationBindingInputV2 = {
     column?: TSlot['container'] extends 'appPage'
       ? PluginUiAppPageColumnV1
       : never;
+    description?: TSlot['container'] extends 'appPage' ? PluginLocalizedStringV2 : never;
+    headerStyle?: TSlot['container'] extends 'appPage' ? PluginUiAppPageHeaderStyleV1 : never;
     widgetAreas?: TSlot['container'] extends 'appPage' ? PluginUiWidgetAreaDeclarationV1[] : never;
   }>;
 }[keyof {
@@ -627,6 +637,8 @@ export type PluginUiViewDestinationBindingV2 = z.output<typeof PluginUiViewV2Sch
     headerActions: TSlot['container'] extends 'appPage'
       ? PluginUiPageHeaderActionV1[]
       : [];
+    description?: TSlot['container'] extends 'appPage' ? PluginLocalizedStringV2 : never;
+    headerStyle?: TSlot['container'] extends 'appPage' ? PluginUiAppPageHeaderStyleV1 : never;
     placement?: TSlot['targetKind'] extends 'app'
       ? TSlot['container'] extends 'appPage' | 'rightSidebarTab'
         ? PluginUiDestinationPlacementV1

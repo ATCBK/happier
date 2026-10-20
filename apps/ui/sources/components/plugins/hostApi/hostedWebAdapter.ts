@@ -28,6 +28,7 @@ import {
     type ComposerRefV1,
     type PluginHostedWebBridgeResponseEnvelopeV1,
     type PluginUiHostApiErrorCodeV1,
+    type PluginUiHostApiErrorPayloadV1,
     type PluginUiHostApiRequestMethodV1,
     type PluginUiHostMethodV1,
     type PluginUiHostApiRequestEnvelopeV1,
@@ -203,7 +204,7 @@ type MountedRequestSettlement = Readonly<{
     payload: PluginUiJsonValueV1;
 }> | Readonly<{
     kind: 'error';
-    payload: Readonly<{ code: PluginUiHostApiErrorCodeV1; diagnostics: readonly string[] }>;
+    payload: Readonly<PluginUiHostApiErrorPayloadV1>;
 }>;
 
 type HostedFrameMountedRequestHandler = (input: Readonly<{
@@ -574,6 +575,7 @@ export function createHostedFrameHostApiBridgeHandler<TAuthority>(
         }>,
         code: PluginUiHostApiErrorCodeV1,
         diagnostics: readonly string[] = [],
+        messageText?: string,
     ): PluginHostedWebBridgeResponseEnvelopeV1 {
         return canonicalBridgeResponse(envelope, PluginUiHostApiWireEnvelopeV1Schema.parse({
             wireVersion: PLUGIN_UI_HOST_API_WIRE_VERSION_V1,
@@ -581,7 +583,7 @@ export function createHostedFrameHostApiBridgeHandler<TAuthority>(
             identity: message.identity,
             requestId: message.requestId,
             method: message.method,
-            error: createPluginSurfaceHostApiPluginErrorData(code, diagnostics),
+            error: createPluginSurfaceHostApiPluginErrorData(code, diagnostics, messageText),
         }));
     }
 
@@ -707,6 +709,7 @@ export function createHostedFrameHostApiBridgeHandler<TAuthority>(
                         message,
                         response.payload.code,
                         response.payload.diagnostics,
+                        response.payload.message,
                     );
                 }
                 admission = response.payload;
@@ -861,6 +864,7 @@ export function createHostedFrameHostApiBridgeHandler<TAuthority>(
                     message,
                     response.payload.code,
                     response.payload.diagnostics,
+                    response.payload.message,
                 );
             }
             const result = response.payload;

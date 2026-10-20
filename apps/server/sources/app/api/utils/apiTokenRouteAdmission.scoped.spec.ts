@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { isRestrictedAuthTokenDeniedForRoute, readRestrictedCredentialRouteField, resolveApiTokenSessionActionForRoute, isExternalActionSessionRoutePurposeAllowed } from "./apiTokenRouteAdmission";
+import { VerifiedEphemeralSessionRunnerPrincipalSchema } from '@happier-dev/protocol/ephemeralRunner/principal';
+import { readSessionAccessAuthenticationFromRequest } from '@/app/session/access/sessionAccessAuthentication';
 
 const principal = {
     accountId: "account-1", principalId: "token-1", credentialId: "token-1",
@@ -72,5 +74,50 @@ describe("scoped API-token route admission", () => {
         const request = { authTokenKind: "api_token", apiTokenPrincipal: unrestricted,
             routeOptions: { config: { allowApiToken: true } } };
         expect(isRestrictedAuthTokenDeniedForRoute(request)).toBe(false);
+    });
+
+    it('keeps every declared Session operand inside a Runner principal', () => {
+        const runner = VerifiedEphemeralSessionRunnerPrincipalSchema.parse({
+            kind: 'ephemeral_session_runner', authority: 'session_runtime', accountId: 'account-1',
+            activationId: '00000000-0000-4000-8000-000000000001', sessionId: 'session-1', machineId: 'machine-1',
+            installationId: 'installation-1', installationPublicKey: Buffer.alloc(32, 1).toString('base64url'), creatorTokenEpoch: 0,
+        });
+        const request = { authTokenKind: 'ephemeral_session_runner', userId: runner.accountId, sessionRuntimePrincipal: runner,
+            params: { destinationSessionId: runner.sessionId, sourceSessionId: 'session-2' },
+            routeOptions: { config: { restrictedCredentialBinding: { scope: 'session', session: 'params.destinationSessionId',
+                additionalSessions: ['params.sourceSessionId'] } } } } as const;
+        expect(isRestrictedAuthTokenDeniedForRoute(request)).toBe(true);
+        expect(isRestrictedAuthTokenDeniedForRoute({ ...request, params: {
+            destinationSessionId: runner.sessionId, sourceSessionId: runner.sessionId,
+        } })).toBe(false);
+        for (const [operand, field] of [
+            ['managerSessionId', 'body.managerSessionId'], ['expectedManagerSessionId', 'body.expectedManagerSessionId'],
+        ] as const) {
+            const nullableRequest = { ...request, body: { [operand]: null }, routeOptions: { config: {
+                restrictedCredentialBinding: { scope: 'session', session: 'params.destinationSessionId',
+                    additionalSessions: [{ field, nullable: true }] },
+            } } } as const;
+            expect(isRestrictedAuthTokenDeniedForRoute(nullableRequest)).toBe(false);
+            expect(isRestrictedAuthTokenDeniedForRoute({ ...nullableRequest, body: { [operand]: runner.sessionId } })).toBe(false);
+            expect(isRestrictedAuthTokenDeniedForRoute({ ...nullableRequest, body: { [operand]: 'session-2' } })).toBe(true);
+            expect(isRestrictedAuthTokenDeniedForRoute({ ...nullableRequest, body: {} })).toBe(true);
+        }
+        expect(isRestrictedAuthTokenDeniedForRoute({ ...request, params: { destinationSessionId: runner.sessionId } })).toBe(true);
+        expect(isRestrictedAuthTokenDeniedForRoute({ ...request, params: {
+            destinationSessionId: runner.sessionId, sourceSessionId: runner.sessionId,
+        }, routeOptions: { config: { restrictedCredentialBinding: {
+            ...request.routeOptions.config.restrictedCredentialBinding, allowSessionRuntime: false,
+        } } } })).toBe(true);
+    });
+
+    it('retains the captured PAT ceiling until signed Session resource admission is proved', () => {
+        const request = { authAuthority: 'account_automation' as const, apiTokenPrincipal: principal,
+            externalActionExecutionAuthorized: true, externalActionInputConstraints: {
+                models: principal.grant.models, permissionModes: principal.grant.permissionModes,
+            } };
+        expect(readSessionAccessAuthenticationFromRequest(request).apiTokenGrant).toEqual(principal.grant);
+        const admitted = { ...request, externalActionSessionAccessAdmitted: true };
+        expect(readSessionAccessAuthenticationFromRequest(admitted).apiTokenGrant).toBeUndefined();
+        expect(readSessionAccessAuthenticationFromRequest(admitted).callerInputConstraints).toEqual(request.externalActionInputConstraints);
     });
 });

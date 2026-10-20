@@ -64,6 +64,31 @@ describe('origin workflow current-state pull', () => {
     dataEncryptionKey: null, callerDataEncryptionKey: null, recipients: [],
   };
 
+  it('keeps successful workflow reports quiet while failures wake through the shared Important policy', async () => {
+    let current = { ...run };
+    let acknowledged = 0;
+    const port = createWorkflowOriginContextInputPort({ ...dispatchBoundary, accountId, originSessionId: 'origin', machineId: 'machine',
+      resolveEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
+      storage: { execute: async operation => {
+        if (operation.operation === 'run-key.census') return plainCensus;
+        if (operation.operation === 'delivery.pull') return { runs: [{ run: { ...current, originDeliveryAckRevision: acknowledged }, acceptedEnvelope }] };
+        if (operation.operation === 'get') return { run: current, acceptedEnvelope };
+        if (operation.operation === 'invocations.list') return { invocations: [], progressEnvelopesByInvocationId: {} };
+        if (operation.operation === 'delivery.ack') { acknowledged = Number(operation.revision); return { acknowledgedRevision: acknowledged }; }
+        throw new Error('unexpected source mutation');
+      } }, onError: error => { throw error; } });
+    const signal = new AbortController().signal;
+    expect(await port.take(signal)).toBeNull();
+    const quiet = await port.prepareWorkerUpdates!({ signal, maxUtf8Bytes: 65536 });
+    expect(quiet).toHaveLength(1);
+    expect(quiet[0]?.update.ownerState).toBe('succeeded');
+    expect(acknowledged).toBe(0);
+    current = { ...current, state: 'failed', revision: current.revision + 1 };
+    expect(await port.take(signal)).toMatchObject({ kind: 'worker_update', update: { ownerState: 'failed' } });
+    expect(await quiet[0]!.recheckAdmission(signal)).toBe(false);
+    expect(acknowledged).toBe(0);
+  });
+
   it('continues origin delivery when the first pending Run acknowledgement fails', async () => {
     const opened = openWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
       binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId }, envelope: parseWorkflowStoredContentEnvelopeV1(acceptedEnvelope) });
@@ -150,11 +175,12 @@ describe('origin workflow current-state pull', () => {
       onError: (error) => { throw error; },
     });
     const signal = new AbortController().signal;
-    const input = await port.take(signal);
-    expect(input).toMatchObject({ kind: 'worker_update', update: { result: expect.stringContaining('current final result'),
+    expect(await port.take(signal)).toBeNull();
+    const input = (await port.prepareWorkerUpdates!({ signal, maxUtf8Bytes: 65536 }))[0];
+    expect(input).toMatchObject({ update: { result: expect.stringContaining('current final result'),
       headline: expect.stringContaining('follow-up-run'), ownerState: 'succeeded' } });
     expect(operations.some((operation) => operation.operation === 'delivery.ack')).toBe(false);
-    if (input?.kind !== 'worker_update') throw new Error('expected worker update');
+    if (!input) throw new Error('expected natural-turn worker update');
     expect(await input.recheckAdmission(signal)).toBe(true);
     input.acknowledgeAccepted();
     await port.prepareWorkerUpdates!({ signal, maxUtf8Bytes: 65536 });
@@ -170,15 +196,49 @@ describe('origin workflow current-state pull', () => {
       resolveEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
       storage: { execute: async (operation) => operation.operation === 'run-key.census' ? plainCensus : operation.operation === 'delivery.pull'
         ? { runs: [{ run: current, acceptedEnvelope, resultEnvelope: null, checkpointEnvelope: null, invocations: [] }] }
+        : operation.operation === 'invocations.list' ? { invocations: [], progressEnvelopesByInvocationId: {} }
         : { run: current, acceptedEnvelope, resultEnvelope: null } }, onError: (error) => { throw error; },
     });
     const signal = new AbortController().signal;
     const input = (await port.prepareWorkerUpdates!({ signal, maxUtf8Bytes: 65536 }))[0];
     expect(input?.update.wake).toBe('needs_you');
-    // Attention is context on an existing turn, not an idle-origin wake.
-    expect(await port.take(signal)).toBeNull();
+    expect(await port.take(signal)).toMatchObject({ kind: 'worker_update', update: { ownerState: 'running', wake: 'needs_you' } });
     current = { ...current, attentionRequired: false };
     expect(await input?.recheckAdmission(signal)).toBe(false);
+    expect(await port.take(signal)).toBeNull();
+  });
+
+  it.each([
+    { resetAtMs: 1_800_000, state: 'failed' as const, attentionRequired: false, lifecycle: 'failed' as const },
+    { resetAtMs: null, state: 'failed' as const, attentionRequired: false, lifecycle: 'failed' as const },
+    { resetAtMs: 1_800_000, state: 'waiting_for_review' as const, attentionRequired: true, lifecycle: 'waiting_for_review' as const },
+  ])('delivers the actual failed leaf issue through sealed progress and the WorkerUpdate reader ($state, reset $resetAtMs)', async ({ resetAtMs, state, attentionRequired, lifecycle }) => {
+    const failedRun = { ...run, state, attentionRequired };
+    const runtimeIssueV1 = { v: 1 as const, scope: 'primary_session' as const, status: 'failed' as const,
+      source: 'usage_limit' as const, code: 'usage_limit', occurredAt: 1000,
+      usageLimit: { v: 1 as const, resetAtMs, retryAfterMs: null, quotaScope: 'provider' as const, recoverability: 'wait' as const } };
+    const index = { ...producerIndex, lifecycle };
+    const contentEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({ mode: 'plain',
+      binding: { v: 1, purpose: 'invocation_progress', accountId, runId, recordId: index.id, sequence: index.sequence,
+        parentRecordId: index.parentRecordId, memberOrdinal: index.memberOrdinal, attempt: index.attempt },
+      progress: { kind: 'happier.workflow-progress.v1', blockKind: 'step', invocationPath: { blockId: 'work', scope: [] },
+        attempt: '0', logicalInvocationRecordId: index.id,
+        reason: { code: 'usage_limit', message: 'Quota exhausted', runtimeIssueV1 } },
+    }));
+    const port = createWorkflowOriginContextInputPort({ ...dispatchBoundary, accountId, originSessionId: 'origin', machineId: 'machine',
+      resolveEncryption: async () => ({ kind: 'available', witness: { mode: 'plain', version: 1, contentKeyFingerprint: null } }),
+      storage: { execute: async operation => {
+        if (operation.operation === 'run-key.census') return plainCensus;
+        if (operation.operation === 'delivery.pull') return { runs: [{ run: failedRun, acceptedEnvelope }] };
+        if (operation.operation === 'get') return { run: failedRun, acceptedEnvelope };
+        if (operation.operation === 'invocations.list') return Array.isArray(operation.lifecycles) && operation.lifecycles.includes(lifecycle)
+          ? { invocations: [index], progressEnvelopesByInvocationId: { [index.id]: contentEnvelope } }
+          : { invocations: [], progressEnvelopesByInvocationId: {} };
+        throw new Error(`Unexpected workflow operation: ${operation.operation}`);
+      } }, onError: error => { throw error; } });
+    const input = await port.take(new AbortController().signal);
+    expect(input).toMatchObject({ kind: 'worker_update', update: { workerKind: 'workflow_run', ownerState: state,
+      runtimeIssueV1, transcriptPointer: { kind: 'workflow_run', runId, invocationRecordId: index.id } } });
   });
 
   it.each([
@@ -294,10 +354,10 @@ describe('origin workflow current-state pull', () => {
           contentEnvelope: serializeWorkflowStoredContentEnvelopeV1(producer) } };
         throw new Error('unexpected origin mutation');
       } }, onError: error => { errors.push(error); } });
-    const input = await port.take(new AbortController().signal);
+    const input = (await port.prepareWorkerUpdates!({ signal: new AbortController().signal, maxUtf8Bytes: 65536 }))[0] ?? null;
     if (keyState === 'available') {
-      expect(input).toMatchObject({ kind: 'worker_update', update: { result: 'Run-key protected result' } });
-      if (input?.kind !== 'worker_update') throw new Error('expected current encrypted result');
+      expect(input).toMatchObject({ update: { result: 'Run-key protected result' } });
+      if (!input) throw new Error('expected current encrypted result');
       expect(await input.recheckAdmission(new AbortController().signal)).toBe(true);
       expect(errors).toEqual([]);
     } else {

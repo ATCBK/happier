@@ -7,11 +7,15 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 
 import { spawnSleepyDetachedProcess } from './testkit/fakeDaemonLifecycle.testkit';
 
-const { readFileSyncMock } = vi.hoisted(() => ({ readFileSyncMock: vi.fn() }));
+const { readFileSyncMock, readFileMock } = vi.hoisted(() => ({ readFileSyncMock: vi.fn(), readFileMock: vi.fn() }));
 // Only the filesystem boundary is replaced; selection, definitions and status remain real.
 vi.mock('node:fs', async (importOriginal) => ({
   ...await importOriginal<typeof import('node:fs')>(),
   readFileSync: readFileSyncMock,
+}));
+vi.mock('node:fs/promises', async (importOriginal) => ({
+  ...await importOriginal<typeof import('node:fs/promises')>(),
+  readFile: readFileMock,
 }));
 
 const envScope = createEnvKeyScope([
@@ -36,6 +40,9 @@ describe('multiDaemon daemon ownership path resolution', () => {
     const fs = await vi.importActual<typeof import('node:fs')>('node:fs');
     readFileSyncMock.mockReset();
     readFileSyncMock.mockImplementation(fs.readFileSync);
+    const fsPromises = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    readFileMock.mockReset();
+    readFileMock.mockImplementation(fsPromises.readFile);
     envScope.patch({ HAPPIER_DAEMON_LIFECYCLE_SCOPE_ID: undefined });
   });
 
@@ -388,6 +395,11 @@ describe('multiDaemon daemon ownership path resolution', () => {
     readFileSyncMock.mockImplementation((...args: Parameters<typeof fs.readFileSync>) => {
       if (String(args[0]).endsWith('.service')) throw cause;
       return fs.readFileSync(...args);
+    });
+    const fsPromises = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    readFileMock.mockImplementation((...args: Parameters<typeof fsPromises.readFile>) => {
+      if (String(args[0]).endsWith('.service')) return Promise.reject(cause);
+      return fsPromises.readFile(...args);
     });
     vi.resetModules();
     const { listDaemonStatusesForAllKnownServers } = await import('./multiDaemon');

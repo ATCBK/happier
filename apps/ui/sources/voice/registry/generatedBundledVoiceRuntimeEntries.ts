@@ -22,6 +22,24 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "agents": [
       {
         "capabilities": {
+          "providerStateSharing": {
+            "config": {
+              "modes": [
+                "linked",
+                "copied",
+                "isolated"
+              ],
+              "supported": true
+            },
+            "state": {
+              "modes": [
+                "isolated",
+                "shared"
+              ],
+              "sharedStatePrivacyRiskAcknowledgementRequired": true,
+              "supported": true
+            }
+          },
           "sessions": {
             "cancel": true,
             "catalog": {
@@ -160,7 +178,11 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
             "externalSessions"
           ],
           "tools": {
-            "delivery": "native_mcp"
+            "delivery": "native_mcp",
+            "mcpToolControl": {
+              "approval": "host",
+              "off": "hidden"
+            }
           }
         },
         "catalog": {
@@ -226,6 +248,10 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
                   {
                     "archivePath": "bin/codex-code-mode-host",
                     "destinationPath": "bin/codex-code-mode-host"
+                  },
+                  {
+                    "archivePath": "codex-resources/bwrap",
+                    "destinationPath": "codex-resources/bwrap"
                   }
                 ],
                 "win32": [
@@ -267,7 +293,8 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
               },
               "binaryName": "codex",
               "githubRepo": "openai/codex",
-              "kind": "github_release_binary"
+              "kind": "github_release_binary",
+              "releaseTag": "rust-v0.162.1"
             },
             "manual": {
               "kind": "command"
@@ -744,6 +771,7 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
         "version": 1
       }
     ],
+    "skills": [],
     "systemTools": [
       {
         "executableNames": [
@@ -930,7 +958,8 @@ const CODEX_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
       }
     ],
     "webhooks": [],
-    "workflows": []
+    "workflows": [],
+    "workItems": []
   },
   "description": "OpenAI Codex coding agent.",
   "displayName": "Codex",
@@ -1103,6 +1132,7 @@ const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "sessionHeaderActions": [],
     "sessionInfoSections": [],
     "settings": [],
+    "skills": [],
     "systemTools": [],
     "targetedPluginContributions": [],
     "tools": [],
@@ -2529,7 +2559,8 @@ const ELEVENLABS_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
       }
     ],
     "webhooks": [],
-    "workflows": []
+    "workflows": [],
+    "workItems": []
   },
   "displayName": "ElevenLabs Voice",
   "engines": {
@@ -2636,6 +2667,7 @@ const OPENAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "sessionHeaderActions": [],
     "sessionInfoSections": [],
     "settings": [],
+    "skills": [],
     "systemTools": [],
     "targetedPluginContributions": [],
     "tools": [],
@@ -3183,7 +3215,8 @@ const OPENAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
       }
     ],
     "webhooks": [],
-    "workflows": []
+    "workflows": [],
+    "workItems": []
   },
   "displayName": "OpenAI Realtime Voice",
   "engines": {
@@ -3264,6 +3297,7 @@ const XAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
     "sessionHeaderActions": [],
     "sessionInfoSections": [],
     "settings": [],
+    "skills": [],
     "systemTools": [],
     "targetedPluginContributions": [],
     "tools": [],
@@ -4056,7 +4090,8 @@ const XAI_BUNDLED_PLUGIN_MANIFEST = Object.freeze(
       }
     ],
     "webhooks": [],
-    "workflows": []
+    "workflows": [],
+    "workItems": []
   },
   "displayName": "xAI Grok Voice",
   "engines": {

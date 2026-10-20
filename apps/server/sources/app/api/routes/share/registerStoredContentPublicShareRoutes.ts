@@ -1,5 +1,5 @@
 import { type Fastify } from "../../types";
-import { z } from "zod";
+import { z } from "zod/mini";
 import { StoredContentPublicShareCreateRequestV1Schema } from '@happier-dev/protocol/sharing/storedContentPublicShareV1';
 import { db } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
@@ -19,15 +19,15 @@ import { tryParseEncryptedDataKeyV0Bytes } from "./encryptedDataKeyValidation";
 import { buildShareableSessionMessagePublicationWhere, isSessionTranscriptShareable, SESSION_TRANSCRIPT_PUBLICATION_SELECT } from "@/app/session/sessionTranscriptPublicationPolicy";
 import { parseSessionMessageRole } from "@/app/session/messageRole/resolveSessionMessageRole";
 import { createPublicShareMessagesAccessToken, validatePublicShareMessagesAccessToken, requirePublicShareAccessGrantSecret, PUBLIC_SHARE_MESSAGES_ACCESS_TOKEN_HEADER } from "./publicShareMessageAccessGrant";
-import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { acquireAccountChangePublicationLocksInTx, markAccountChanged } from "@/app/changes/markAccountChanged";
 import { readArtifactBlob } from '@/app/artifacts/artifactBlobService';
 import { SessionTranscriptSurfaceItemReferenceInputV1Schema, readSessionTranscriptSurfaceItemReferencesV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import { readPublishedSessionSurfaceItemInTx } from '@/app/session/systemRecords/sessionSystemRecordService';
 import { isSessionSystemRecordRevisionAtLeastAcknowledged } from '@/app/session/systemRecords/sessionSystemRecordRevision';
 import { readRequestHomeEnv } from '@/app/home/settings/requestHomeEnv';
 
-const subjectQuery = z.object({ subjectKind: z.enum(["session", "artifact"]), subjectId: z.string().min(1) });
-const shareParams = z.object({ shareId: z.string().min(1) });
+const subjectQuery = z.object({ subjectKind: z.enum(["session", "artifact"]), subjectId: z.string().check(z.minLength(1)) });
+const shareParams = z.object({ shareId: z.string().check(z.minLength(1)) });
 type Authentication = ReturnType<typeof readSessionAccessAuthenticationFromRequest>;
 
 async function canManageSubject(tx: Tx, subject: { kind: "session" | "artifact"; id: string }, userId: string, authentication: Authentication) {
@@ -40,8 +40,8 @@ async function canManageSubject(tx: Tx, subject: { kind: "session" | "artifact";
 
 export function registerStoredContentPublicShareRoutes(app: Fastify): void {
     app.get('/v1/public-shares/:lookupId/visual/:messageId', { schema: {
-        params: z.object({ lookupId: z.string().min(1), messageId: z.string().min(1) }).strict(),
-        querystring: z.object({ consent: z.enum(['true', 'false']).optional(), referenceIndex: z.coerce.number().int().nonnegative().optional() }).strict(),
+        params: z.strictObject({ lookupId: z.string().check(z.minLength(1)), messageId: z.string().check(z.minLength(1)) }),
+        querystring: z.strictObject({ consent: z.optional(z.enum(['true', 'false'])), referenceIndex: z.optional(z.coerce.number().check(z.int(), z.nonnegative())) }),
     } }, async (request, reply) => {
         reply.header('Cache-Control', 'no-store').header('Referrer-Policy', 'no-referrer');
         if (request.headers.authorization || request.headers.cookie) return reply.code(403).send({ error: 'public_share_credentials_forbidden' });
@@ -76,7 +76,10 @@ export function registerStoredContentPublicShareRoutes(app: Fastify): void {
         if (result.type !== 'ok') return reply.code(result.type === 'limited' ? 429 : result.type === 'unavailable' ? 503 : 404).send({ error: 'public_share_unavailable' });
         return reply.send(result.value);
     });
-    app.post("/v1/public-shares", { preHandler: app.authenticate, schema: { body: StoredContentPublicShareCreateRequestV1Schema } }, async (request, reply) => {
+    app.post("/v1/public-shares", { preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.public_link.create',
+            restrictedCredentialBinding: { scope: 'session', session: 'body.subject.id', allowSessionRuntime: false } },
+        schema: { body: StoredContentPublicShareCreateRequestV1Schema } }, async (request, reply) => {
         const { subject, ...material } = request.body;
         const configEnv = await readRequestHomeEnv(request);
         const input = { ...material, encryptedDataKey: material.encryptedDataKey ?? undefined, userId: request.userId, authentication: readSessionAccessAuthenticationFromRequest(request), configEnv };
@@ -122,6 +125,7 @@ export function registerStoredContentPublicShareRoutes(app: Fastify): void {
             return result.type === "ok" ? reply.send({ success: true }) : reply.code(result.type === "forbidden" ? 403 : 404).send({ error: "public_share_unavailable" });
         }
         const removed = await inTx(async tx => {
+            await acquireAccountChangePublicationLocksInTx(tx, [request.userId], { includeSingleAccount: true });
             if (!share.artifactId || !await canManageSubject(tx, { kind: "artifact", id: share.artifactId }, request.userId, authentication)) return false;
             const result = await tx.publicSessionShare.deleteMany({ where: { id: share.id, artifactId: share.artifactId } });
             if (result.count) await markAccountChanged(tx, { accountId: request.userId, kind: "artifact", entityId: share.artifactId });
@@ -129,8 +133,8 @@ export function registerStoredContentPublicShareRoutes(app: Fastify): void {
         }, { /* Public share token/key, subject access and disclosed content must stay coherent. */ isolationLevel: "Serializable" });
         return removed ? reply.send({ success: true }) : reply.code(403).send({ error: "public_share_forbidden" });
     });
-    app.get("/v1/public-shares/:lookupId/content", { schema: { params: z.object({ lookupId: z.string().min(1) }), querystring: z.object({
-        consent: z.enum(["true", "false"]).optional(), beforeSeq: z.coerce.number().int().min(1).optional(), limit: z.coerce.number().int().min(1).max(500).default(150),
+    app.get("/v1/public-shares/:lookupId/content", { schema: { params: z.object({ lookupId: z.string().check(z.minLength(1)) }), querystring: z.object({
+        consent: z.optional(z.enum(["true", "false"])), beforeSeq: z.optional(z.coerce.number().check(z.int(), z.minimum(1))), limit: z._default(z.coerce.number().check(z.int(), z.minimum(1), z.maximum(500)), 150),
     }) } }, async (request, reply) => {
         // Public content never treats application credentials as public capabilities.
         if (request.headers.authorization || request.headers.cookie) return reply.code(403).send({ error: "public_share_credentials_forbidden" });

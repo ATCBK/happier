@@ -14,7 +14,7 @@ import { t } from '@/text';
  */
 export type VoicePresenceFixtureState =
     | 'rest' | 'connecting' | 'listening' | 'transcribing' | 'thinking' | 'speaking'
-    | 'interrupted' | 'muted' | 'blocked' | 'reconnecting' | 'failed' | 'ended' | 'working' | 'needs_you';
+    | 'interrupted' | 'muted' | 'blocked' | 'reconnecting' | 'failed' | 'stop_failed' | 'ended' | 'working' | 'needs_you';
 
 export function isVoicePresenceFixtureState(value: unknown): value is VoicePresenceFixtureState {
     return typeof value === 'string' && Object.hasOwn(SURFACE_STATE, value);
@@ -40,32 +40,42 @@ const SURFACE_STATE: Readonly<Record<VoicePresenceFixtureState, VoiceSurfaceStat
     blocked: 'permission_required',
     reconnecting: 'reconnecting',
     failed: 'error',
+    stop_failed: 'error',
     ended: 'idle',
     working: 'listening',
     needs_you: 'listening',
 };
 
+/** `stop_failed`: a Start cancelled while the previous session would not stop; Retry re-runs the ordered Stop. */
+const STOP_FAILED_COPY_KEY = resolveVoiceMachineErrorTranslationKey(
+    'service_temporarily_unavailable',
+    'voice_previous_session_stop_failed',
+);
+
 export function buildVoicePresenceFixture(state: VoicePresenceFixtureState): VoiceAttemptControlProjection {
+    const failed = state === 'failed' || state === 'stop_failed';
     const surfaceState = SURFACE_STATE[state];
     const status = state === 'rest' || state === 'ended'
         ? 'disconnected' as const
         : state === 'connecting'
             ? 'connecting' as const
-            : state === 'failed'
+            : failed
                 ? 'error' as const
                 : 'connected' as const;
-    const recovery = state === 'blocked' || state === 'reconnecting' || state === 'failed';
+    const recovery = state === 'blocked' || state === 'reconnecting' || failed;
     const control = resolveVoiceAttemptControl({
         surfaceState,
         tone: resolveVoiceSurfaceStatusPresentation(surfaceState).tone,
         status,
         sessionId: state === 'rest' || state === 'ended' ? null : 'specimen-voice',
-        canStop: state !== 'rest' && state !== 'failed' && state !== 'ended',
+        canStop: state !== 'rest' && !failed && state !== 'ended',
         muted: state === 'muted',
         capturing: state === 'listening' || state === 'muted' || state === 'interrupted',
         startAdmitted: true,
         hasRecovery: recovery,
-        canDismissFailedAttempt: state === 'failed',
+        canDismissFailedAttempt: failed,
+        // A muted conversation holds what was said so far; Send commits it without unmuting.
+        canCommitInput: state === 'muted',
     });
     // The real recovery copy (`resolveVoiceSurfaceRecovery`): a denied microphone is allowed, a lost transport retried.
     const recoveryLabel = state === 'blocked' ? t('voicePresence.recovery.allow') : recovery ? t('common.retry') : null;
@@ -73,13 +83,15 @@ export function buildVoicePresenceFixture(state: VoicePresenceFixtureState): Voi
     // The projection's own failure captions: how to unblock, or the runtime's reason (a lost transport).
     const captionLabel = state === 'blocked'
         ? t('voicePresence.captions.blocked')
-        : state === 'failed' ? t(resolveVoiceMachineErrorTranslationKey('transport_disconnect')) : '';
+        : state === 'failed' ? t(resolveVoiceMachineErrorTranslationKey('transport_disconnect')) : state === 'stop_failed' ? t(STOP_FAILED_COPY_KEY) : '';
     return {
         ...control,
         statusCell: state === 'working' || state === 'needs_you' ? state : control.statusCell,
         statusWord: state === 'working' ? 'Working' : state === 'needs_you' ? 'Needs you' : state === 'ended' ? t('voicePresence.ended') : state === 'muted' ? t('voicePresence.muted') : t(resolveVoiceSurfaceStatusPresentation(surfaceState).wordKey ?? resolveVoiceSurfaceStatusPresentation(surfaceState).labelKey),
         statusLabel: state === 'working' ? 'Working' : state === 'needs_you' ? 'Needs you' : state === 'ended' ? t('voicePresence.ended') : state === 'muted' ? t('voicePresence.muted') : t(resolveVoiceSurfaceStatusPresentation(surfaceState).labelKey),
         ended: state === 'ended' ? { sessionId: 'specimen-voice', adapterId: null, startedAt: SPECIMEN_STARTED_AT - 118_000, endedAt: SPECIMEN_STARTED_AT + 134_000, reason: { kind: 'stopped' as const }, conversationSessionAddress: null, targetSessionAddress: null, transcriptMode: null, accountScope: null, conversationScope: null } : null,
+        commitInputLabel: state === 'muted' ? t('common.send') : null,
+        onCommitInput: state === 'muted' ? NOOP : undefined,
         onDismissEnded: NOOP,
         onDismissFailedAttempt: NOOP,
         // A conversation that started 2:14 ago; transcript belongs to the surface fixture below.
@@ -132,7 +144,7 @@ export function buildVoicePresenceSurfaceFixture(state: VoicePresenceFixtureStat
         providerLabel: 'OpenAI Realtime',
         startStopLabel: '',
         status: attemptControl.live ? 'connected' : 'disconnected',
-        subtitle: state === 'failed' ? 'OpenAI Realtime isn’t set up on this device' : null,
+        subtitle: state === 'failed' ? 'OpenAI Realtime isn’t set up on this device' : state === 'stop_failed' ? t(STOP_FAILED_COPY_KEY) : null,
         targetLabel: null,
         toggleActivityLabel: '',
         transcriptEntries: SPECIMEN_TURNS,

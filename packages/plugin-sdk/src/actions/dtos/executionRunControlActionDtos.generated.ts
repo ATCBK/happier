@@ -26,14 +26,14 @@ export type ExecutionRunControlActionInputById = {
             groupId?: string | undefined;
         } | undefined;
         launchOrigin?: {
-            kind: 'session';
-            sessionId: string;
-            draftCorrelationId?: string | undefined;
-        } | {
-            kind: 'session_discussion';
-            sessionId: string;
+            kind: 'discussion';
+            serverId: string;
             discussionId: string;
             messageIds: string[];
+            draftCorrelationId?: string | undefined;
+        } | {
+            kind: 'session';
+            sessionId: string;
             draftCorrelationId?: string | undefined;
         } | {
             kind: 'external';
@@ -388,13 +388,13 @@ export type ExecutionRunControlActionInputById = {
                     pluginId: string;
                     localId: string;
                 };
-                key: unknown;
+                key: string;
                 value: unknown;
                 presentation: {
-                    label: unknown;
-                    typeLabel: unknown;
-                    description?: unknown;
-                    icon?: 'file' | 'review' | 'error' | 'check' | 'external' | 'action' | 'unavailable' | 'info' | 'warning' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'terminal' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                    label: string;
+                    typeLabel: string;
+                    description?: string | undefined;
+                    icon?: 'file' | 'review' | 'error' | 'check' | 'external' | 'action' | 'unavailable' | 'info' | 'warning' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'terminal' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | undefined;
                 };
                 content?: {
@@ -411,9 +411,9 @@ export type ExecutionRunControlActionInputById = {
                 canInspect: boolean;
                 summary?: string | undefined;
             } | undefined;
-            sessionDiscussionSelectionSourceV1?: {
-                kind: 'session_discussion';
-                sessionId: string;
+            discussionSelectionSourceV1?: {
+                kind: 'discussion';
+                serverId: string;
                 discussionId: string;
                 messageIds: string[];
             } | undefined;
@@ -627,14 +627,14 @@ export type ExecutionRunControlActionInputById = {
                 groupId?: string | undefined;
             } | undefined;
             launchOrigin?: {
-                kind: 'session';
-                sessionId: string;
-                draftCorrelationId?: string | undefined;
-            } | {
-                kind: 'session_discussion';
-                sessionId: string;
+                kind: 'discussion';
+                serverId: string;
                 discussionId: string;
                 messageIds: string[];
+                draftCorrelationId?: string | undefined;
+            } | {
+                kind: 'session';
+                sessionId: string;
                 draftCorrelationId?: string | undefined;
             } | {
                 kind: 'external';
@@ -989,13 +989,13 @@ export type ExecutionRunControlActionInputById = {
                         pluginId: string;
                         localId: string;
                     };
-                    key: unknown;
+                    key: string;
                     value: unknown;
                     presentation: {
-                        label: unknown;
-                        typeLabel: unknown;
-                        description?: unknown;
-                        icon?: 'file' | 'review' | 'error' | 'check' | 'external' | 'action' | 'unavailable' | 'info' | 'warning' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'terminal' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                        label: string;
+                        typeLabel: string;
+                        description?: string | undefined;
+                        icon?: 'file' | 'review' | 'error' | 'check' | 'external' | 'action' | 'unavailable' | 'info' | 'warning' | 'browser' | 'copy' | 'globe' | 'preview' | 'refresh' | 'settings' | 'terminal' | 'add' | 'back' | 'close' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'denied' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
                         tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | undefined;
                     };
                     content?: {
@@ -1012,9 +1012,9 @@ export type ExecutionRunControlActionInputById = {
                     canInspect: boolean;
                     summary?: string | undefined;
                 } | undefined;
-                sessionDiscussionSelectionSourceV1?: {
-                    kind: 'session_discussion';
-                    sessionId: string;
+                discussionSelectionSourceV1?: {
+                    kind: 'discussion';
+                    serverId: string;
                     discussionId: string;
                     messageIds: string[];
                 } | undefined;
@@ -1235,14 +1235,14 @@ export type ExecutionRunControlActionInputById = {
                     groupId?: string | undefined;
                 } | undefined;
                 launchOrigin?: {
-                    kind: 'session';
-                    sessionId: string;
-                    draftCorrelationId?: string | undefined;
-                } | {
-                    kind: 'session_discussion';
-                    sessionId: string;
+                    kind: 'discussion';
+                    serverId: string;
                     discussionId: string;
                     messageIds: string[];
+                    draftCorrelationId?: string | undefined;
+                } | {
+                    kind: 'session';
+                    sessionId: string;
                     draftCorrelationId?: string | undefined;
                 } | {
                     kind: 'external';
@@ -1430,6 +1430,7 @@ export type ExecutionRunControlActionInputById = {
                     [x: string]: unknown;
                     code: string;
                     message?: string | undefined;
+                    runtimeIssueV1?: unknown;
                 } | undefined;
             };
             latestToolResult?: unknown;
@@ -1437,6 +1438,118 @@ export type ExecutionRunControlActionInputById = {
                 [x: string]: unknown;
                 kind: string;
                 payload: unknown;
+            } | undefined;
+            reviewFindings?: {
+                [x: string]: unknown;
+                runRef: {
+                    [x: string]: unknown;
+                    runId: string;
+                    callId: string;
+                    backendId: string;
+                    backendTarget?: {
+                        kind: 'builtInAgent';
+                        agentId: string;
+                    } | {
+                        kind: 'configuredAcpBackend';
+                        backendId: string;
+                    } | undefined;
+                    retentionPolicy?: 'ephemeral' | 'resumable' | undefined;
+                };
+                summary: string;
+                overviewMarkdown: string;
+                findings: {
+                    [x: string]: unknown;
+                    id: string;
+                    title: string;
+                    severity: 'blocker' | 'high' | 'medium' | 'low' | 'nit';
+                    category: 'correctness' | 'security' | 'performance' | 'maintainability' | 'testing' | 'style' | 'docs';
+                    summary: string;
+                    filePath?: string | undefined;
+                    startLine?: number | undefined;
+                    endLine?: number | undefined;
+                    whyItMatters?: string | undefined;
+                    evidence?: string | undefined;
+                    confidence?: number | undefined;
+                    suggestion?: string | undefined;
+                    patch?: string | undefined;
+                    comment?: {
+                        id: string;
+                        state: 'open' | 'proposed' | 'delegated' | 'pending_review' | 'resolved' | 'dismissed';
+                        serverRevision: number;
+                        sessionId?: string | undefined;
+                        runId?: string | undefined;
+                        projectId?: string | undefined;
+                        workspace?: {
+                            machineId: string;
+                            path: string;
+                        } | undefined;
+                    } | undefined;
+                    attributionConfidence?: string | undefined;
+                }[];
+                generatedAtMs: number;
+                comparisonId?: string | undefined;
+                fileCount?: number | undefined;
+                reviewOutcome?: 'failed' | 'complete' | 'partial' | undefined;
+                questions?: {
+                    [x: string]: unknown;
+                    id: string;
+                    text: string;
+                    status: 'open' | 'answered' | 'superseded';
+                    findingIds?: string[] | undefined;
+                }[] | undefined;
+                assumptions?: {
+                    [x: string]: unknown;
+                    id: string;
+                    text: string;
+                    findingIds?: string[] | undefined;
+                }[] | undefined;
+                proposedComments?: {
+                    body: string;
+                    anchor: {
+                        kind: 'file';
+                        filePath: string;
+                    } | {
+                        kind: 'line';
+                        filePath: string;
+                        line: number;
+                        side?: 'after' | 'before' | undefined;
+                    } | {
+                        kind: 'range';
+                        filePath: string;
+                        startLine: number;
+                        endLine: number;
+                        side?: 'after' | 'before' | undefined;
+                    };
+                    findingId?: string | undefined;
+                    severity?: 'error' | 'info' | 'warning' | 'critical' | undefined;
+                    taxonomyIds?: string[] | undefined;
+                    tags?: string[] | undefined;
+                }[] | undefined;
+                triage?: {
+                    [x: string]: unknown;
+                    findings: {
+                        [x: string]: unknown;
+                        id: string;
+                        status: 'accept' | 'reject' | 'defer' | 'needs_refinement';
+                        commentId?: string | undefined;
+                        comment?: string | undefined;
+                    }[];
+                } | undefined;
+                publication?: {
+                    [x: string]: unknown;
+                    findings: {
+                        [x: string]: unknown;
+                        id: string;
+                        published: boolean;
+                        publishedAtMs?: number | undefined;
+                        publishedMessageRef?: string | undefined;
+                    }[];
+                } | undefined;
+                limits?: {
+                    [x: string]: unknown;
+                    findingsTruncated?: boolean | undefined;
+                    patchesTruncated?: boolean | undefined;
+                } | undefined;
             } | undefined;
         } | undefined;
     };
@@ -1536,14 +1649,14 @@ export type ExecutionRunControlActionResultById = {
                         groupId?: string | undefined;
                     } | undefined;
                     launchOrigin?: {
-                        kind: 'session';
-                        sessionId: string;
-                        draftCorrelationId?: string | undefined;
-                    } | {
-                        kind: 'session_discussion';
-                        sessionId: string;
+                        kind: 'discussion';
+                        serverId: string;
                         discussionId: string;
                         messageIds: string[];
+                        draftCorrelationId?: string | undefined;
+                    } | {
+                        kind: 'session';
+                        sessionId: string;
                         draftCorrelationId?: string | undefined;
                     } | {
                         kind: 'external';
@@ -1752,6 +1865,88 @@ export type ExecutionRunControlActionResultById = {
                         [x: string]: unknown;
                         code: string;
                         message?: string | undefined;
+                        runtimeIssueV1?: Readonly<{
+                            v: 1;
+                            scope: 'primary_session';
+                            status: 'failed';
+                            code: string;
+                            source: 'unknown' | 'agent_status_error' | 'agent_process_exit' | 'agent_process_exit_after_switch' | 'agent_session_error' | 'usage_limit' | 'team_credential' | 'auth_error' | 'dependency_failure' | 'stream_error' | 'permission_blocked';
+                            occurredAt: number;
+                            sessionSeq?: number | undefined;
+                            agentId?: string | undefined;
+                            agentTurnId?: string | undefined;
+                            sanitizedPreview?: string | undefined;
+                            usageLimit?: {
+                                v: 1;
+                                resetAtMs: number | null;
+                                retryAfterMs: number | null;
+                                quotaScope: 'unknown' | 'account' | 'workspace' | 'organization' | 'model' | 'provider';
+                                recoverability: 'unknown' | 'manual' | 'wait' | 'switch_account';
+                                providerLimitId?: string | undefined;
+                                planType?: string | null | undefined;
+                                utilization?: number | null | undefined;
+                                limitCategory?: 'unknown' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | 'disabled' | undefined;
+                                quotaSnapshotRef?: {
+                                    serviceId: string;
+                                    profileId?: string | undefined;
+                                    groupId?: string | undefined;
+                                    fetchedAtMs?: number | undefined;
+                                } | undefined;
+                                effectiveMeterId?: string | undefined;
+                                effectiveRemainingPct?: number | undefined;
+                                allWindows?: {
+                                    meterId: string;
+                                    scope?: string | undefined;
+                                    remainingPct?: number | undefined;
+                                    resetAtMs?: number | undefined;
+                                    status?: string | undefined;
+                                }[] | undefined;
+                                recoveryDecision?: 'switching' | 'waiting_for_reset' | 'manual_intervention' | 'not_recoverable' | undefined;
+                                overage?: {
+                                    status: 'unknown' | 'allowed' | 'allowed_warning' | 'rejected';
+                                    resetAtMs: number | null;
+                                    disabledReason?: string | null | undefined;
+                                } | null | undefined;
+                                action?: {
+                                    kind: 'open_url';
+                                    url: string;
+                                    labelKey?: string | undefined;
+                                } | {
+                                    kind: 'settings';
+                                } | {
+                                    kind: 'none';
+                                } | null | undefined;
+                                connectedService?: {
+                                    serviceId: string;
+                                    profileId: string | null;
+                                    groupId: string | null;
+                                    groupExhausted?: boolean | undefined;
+                                } | null | undefined;
+                            } | undefined;
+                            teamCredential?: {
+                                v: 1;
+                                resourceId: string;
+                                reasonCode: 'invalid_request' | 'resource_forbidden' | 'resource_unavailable' | 'resource_changed' | 'session_not_active' | 'operation_not_current' | 'execution_run_not_found' | 'execution_run_terminal' | 'execution_run_authority_unavailable' | 'broker_unavailable' | 'update_required' | 'team_credential_usage_limit' | 'token_limit_unavailable' | 'cost_limit_unavailable' | 'duplicate_request';
+                                usageLimit?: {
+                                    metric: 'inference_requests' | 'total_tokens' | 'cost_usd';
+                                    remaining: string;
+                                    resetsAtUtc: string;
+                                } | undefined;
+                            } | undefined;
+                            temporaryThrottle?: {
+                                v: 1;
+                                retryAfterMs: number | null;
+                                recoverability: 'unknown' | 'manual' | 'wait' | 'retry';
+                            } | undefined;
+                            agentProcessExitAfterSwitch?: {
+                                exitCode: number | null;
+                                signal: string | null;
+                                lastStderrLine: string | null;
+                                vendorResumeId: string | null;
+                                materializationRoot: string | null;
+                                effectiveStateMode: 'shared' | 'isolated' | null;
+                            } | undefined;
+                        }> | undefined;
                     } | undefined;
                 };
                 latestToolResult?: unknown;
@@ -1759,6 +1954,118 @@ export type ExecutionRunControlActionResultById = {
                     [x: string]: unknown;
                     kind: string;
                     payload: unknown;
+                } | undefined;
+                reviewFindings?: {
+                    [x: string]: unknown;
+                    runRef: {
+                        [x: string]: unknown;
+                        runId: string;
+                        callId: string;
+                        backendId: string;
+                        backendTarget?: {
+                            kind: 'builtInAgent';
+                            agentId: string;
+                        } | {
+                            kind: 'configuredAcpBackend';
+                            backendId: string;
+                        } | undefined;
+                        retentionPolicy?: 'ephemeral' | 'resumable' | undefined;
+                    };
+                    summary: string;
+                    overviewMarkdown: string;
+                    findings: {
+                        [x: string]: unknown;
+                        id: string;
+                        title: string;
+                        severity: 'blocker' | 'high' | 'medium' | 'low' | 'nit';
+                        category: 'correctness' | 'security' | 'performance' | 'maintainability' | 'testing' | 'style' | 'docs';
+                        summary: string;
+                        filePath?: string | undefined;
+                        startLine?: number | undefined;
+                        endLine?: number | undefined;
+                        whyItMatters?: string | undefined;
+                        evidence?: string | undefined;
+                        confidence?: number | undefined;
+                        suggestion?: string | undefined;
+                        patch?: string | undefined;
+                        comment?: {
+                            id: string;
+                            state: 'open' | 'proposed' | 'delegated' | 'pending_review' | 'resolved' | 'dismissed';
+                            serverRevision: number;
+                            sessionId?: string | undefined;
+                            runId?: string | undefined;
+                            projectId?: string | undefined;
+                            workspace?: {
+                                machineId: string;
+                                path: string;
+                            } | undefined;
+                        } | undefined;
+                        attributionConfidence?: string | undefined;
+                    }[];
+                    questions: {
+                        [x: string]: unknown;
+                        id: string;
+                        text: string;
+                        status: 'open' | 'answered' | 'superseded';
+                        findingIds?: string[] | undefined;
+                    }[];
+                    assumptions: {
+                        [x: string]: unknown;
+                        id: string;
+                        text: string;
+                        findingIds?: string[] | undefined;
+                    }[];
+                    generatedAtMs: number;
+                    comparisonId?: string | undefined;
+                    fileCount?: number | undefined;
+                    reviewOutcome?: 'failed' | 'complete' | 'partial' | undefined;
+                    proposedComments?: {
+                        body: string;
+                        anchor: {
+                            kind: 'range';
+                            filePath: string;
+                            startLine: number;
+                            endLine: number;
+                            side?: 'after' | 'before' | undefined;
+                        } | {
+                            kind: 'file';
+                            filePath: string;
+                        } | {
+                            kind: 'line';
+                            filePath: string;
+                            line: number;
+                            side?: 'after' | 'before' | undefined;
+                        };
+                        findingId?: string | undefined;
+                        severity?: 'error' | 'info' | 'warning' | 'critical' | undefined;
+                        taxonomyIds?: string[] | undefined;
+                        tags?: string[] | undefined;
+                    }[] | undefined;
+                    triage?: {
+                        [x: string]: unknown;
+                        findings: {
+                            [x: string]: unknown;
+                            id: string;
+                            status: 'accept' | 'reject' | 'defer' | 'needs_refinement';
+                            commentId?: string | undefined;
+                            comment?: string | undefined;
+                        }[];
+                    } | undefined;
+                    publication?: {
+                        [x: string]: unknown;
+                        findings: {
+                            [x: string]: unknown;
+                            id: string;
+                            published: boolean;
+                            publishedAtMs?: number | undefined;
+                            publishedMessageRef?: string | undefined;
+                        }[];
+                    } | undefined;
+                    limits?: {
+                        [x: string]: unknown;
+                        findingsTruncated?: boolean | undefined;
+                        patchesTruncated?: boolean | undefined;
+                    } | undefined;
                 } | undefined;
             };
         } | {
@@ -1794,14 +2101,14 @@ export type ExecutionRunControlActionResultById = {
                         groupId?: string | undefined;
                     } | undefined;
                     launchOrigin?: {
-                        kind: 'session';
-                        sessionId: string;
-                        draftCorrelationId?: string | undefined;
-                    } | {
-                        kind: 'session_discussion';
-                        sessionId: string;
+                        kind: 'discussion';
+                        serverId: string;
                         discussionId: string;
                         messageIds: string[];
+                        draftCorrelationId?: string | undefined;
+                    } | {
+                        kind: 'session';
+                        sessionId: string;
                         draftCorrelationId?: string | undefined;
                     } | {
                         kind: 'external';
@@ -2010,6 +2317,88 @@ export type ExecutionRunControlActionResultById = {
                         [x: string]: unknown;
                         code: string;
                         message?: string | undefined;
+                        runtimeIssueV1?: Readonly<{
+                            v: 1;
+                            scope: 'primary_session';
+                            status: 'failed';
+                            code: string;
+                            source: 'unknown' | 'agent_status_error' | 'agent_process_exit' | 'agent_process_exit_after_switch' | 'agent_session_error' | 'usage_limit' | 'team_credential' | 'auth_error' | 'dependency_failure' | 'stream_error' | 'permission_blocked';
+                            occurredAt: number;
+                            sessionSeq?: number | undefined;
+                            agentId?: string | undefined;
+                            agentTurnId?: string | undefined;
+                            sanitizedPreview?: string | undefined;
+                            usageLimit?: {
+                                v: 1;
+                                resetAtMs: number | null;
+                                retryAfterMs: number | null;
+                                quotaScope: 'unknown' | 'account' | 'workspace' | 'organization' | 'model' | 'provider';
+                                recoverability: 'unknown' | 'manual' | 'wait' | 'switch_account';
+                                providerLimitId?: string | undefined;
+                                planType?: string | null | undefined;
+                                utilization?: number | null | undefined;
+                                limitCategory?: 'unknown' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | 'disabled' | undefined;
+                                quotaSnapshotRef?: {
+                                    serviceId: string;
+                                    profileId?: string | undefined;
+                                    groupId?: string | undefined;
+                                    fetchedAtMs?: number | undefined;
+                                } | undefined;
+                                effectiveMeterId?: string | undefined;
+                                effectiveRemainingPct?: number | undefined;
+                                allWindows?: {
+                                    meterId: string;
+                                    scope?: string | undefined;
+                                    remainingPct?: number | undefined;
+                                    resetAtMs?: number | undefined;
+                                    status?: string | undefined;
+                                }[] | undefined;
+                                recoveryDecision?: 'switching' | 'waiting_for_reset' | 'manual_intervention' | 'not_recoverable' | undefined;
+                                overage?: {
+                                    status: 'unknown' | 'allowed' | 'allowed_warning' | 'rejected';
+                                    resetAtMs: number | null;
+                                    disabledReason?: string | null | undefined;
+                                } | null | undefined;
+                                action?: {
+                                    kind: 'open_url';
+                                    url: string;
+                                    labelKey?: string | undefined;
+                                } | {
+                                    kind: 'settings';
+                                } | {
+                                    kind: 'none';
+                                } | null | undefined;
+                                connectedService?: {
+                                    serviceId: string;
+                                    profileId: string | null;
+                                    groupId: string | null;
+                                    groupExhausted?: boolean | undefined;
+                                } | null | undefined;
+                            } | undefined;
+                            teamCredential?: {
+                                v: 1;
+                                resourceId: string;
+                                reasonCode: 'invalid_request' | 'resource_forbidden' | 'resource_unavailable' | 'resource_changed' | 'session_not_active' | 'operation_not_current' | 'execution_run_not_found' | 'execution_run_terminal' | 'execution_run_authority_unavailable' | 'broker_unavailable' | 'update_required' | 'team_credential_usage_limit' | 'token_limit_unavailable' | 'cost_limit_unavailable' | 'duplicate_request';
+                                usageLimit?: {
+                                    metric: 'inference_requests' | 'total_tokens' | 'cost_usd';
+                                    remaining: string;
+                                    resetsAtUtc: string;
+                                } | undefined;
+                            } | undefined;
+                            temporaryThrottle?: {
+                                v: 1;
+                                retryAfterMs: number | null;
+                                recoverability: 'unknown' | 'manual' | 'wait' | 'retry';
+                            } | undefined;
+                            agentProcessExitAfterSwitch?: {
+                                exitCode: number | null;
+                                signal: string | null;
+                                lastStderrLine: string | null;
+                                vendorResumeId: string | null;
+                                materializationRoot: string | null;
+                                effectiveStateMode: 'shared' | 'isolated' | null;
+                            } | undefined;
+                        }> | undefined;
                     } | undefined;
                 };
                 latestToolResult?: unknown;
@@ -2017,6 +2406,118 @@ export type ExecutionRunControlActionResultById = {
                     [x: string]: unknown;
                     kind: string;
                     payload: unknown;
+                } | undefined;
+                reviewFindings?: {
+                    [x: string]: unknown;
+                    runRef: {
+                        [x: string]: unknown;
+                        runId: string;
+                        callId: string;
+                        backendId: string;
+                        backendTarget?: {
+                            kind: 'builtInAgent';
+                            agentId: string;
+                        } | {
+                            kind: 'configuredAcpBackend';
+                            backendId: string;
+                        } | undefined;
+                        retentionPolicy?: 'ephemeral' | 'resumable' | undefined;
+                    };
+                    summary: string;
+                    overviewMarkdown: string;
+                    findings: {
+                        [x: string]: unknown;
+                        id: string;
+                        title: string;
+                        severity: 'blocker' | 'high' | 'medium' | 'low' | 'nit';
+                        category: 'correctness' | 'security' | 'performance' | 'maintainability' | 'testing' | 'style' | 'docs';
+                        summary: string;
+                        filePath?: string | undefined;
+                        startLine?: number | undefined;
+                        endLine?: number | undefined;
+                        whyItMatters?: string | undefined;
+                        evidence?: string | undefined;
+                        confidence?: number | undefined;
+                        suggestion?: string | undefined;
+                        patch?: string | undefined;
+                        comment?: {
+                            id: string;
+                            state: 'open' | 'proposed' | 'delegated' | 'pending_review' | 'resolved' | 'dismissed';
+                            serverRevision: number;
+                            sessionId?: string | undefined;
+                            runId?: string | undefined;
+                            projectId?: string | undefined;
+                            workspace?: {
+                                machineId: string;
+                                path: string;
+                            } | undefined;
+                        } | undefined;
+                        attributionConfidence?: string | undefined;
+                    }[];
+                    questions: {
+                        [x: string]: unknown;
+                        id: string;
+                        text: string;
+                        status: 'open' | 'answered' | 'superseded';
+                        findingIds?: string[] | undefined;
+                    }[];
+                    assumptions: {
+                        [x: string]: unknown;
+                        id: string;
+                        text: string;
+                        findingIds?: string[] | undefined;
+                    }[];
+                    generatedAtMs: number;
+                    comparisonId?: string | undefined;
+                    fileCount?: number | undefined;
+                    reviewOutcome?: 'failed' | 'complete' | 'partial' | undefined;
+                    proposedComments?: {
+                        body: string;
+                        anchor: {
+                            kind: 'range';
+                            filePath: string;
+                            startLine: number;
+                            endLine: number;
+                            side?: 'after' | 'before' | undefined;
+                        } | {
+                            kind: 'file';
+                            filePath: string;
+                        } | {
+                            kind: 'line';
+                            filePath: string;
+                            line: number;
+                            side?: 'after' | 'before' | undefined;
+                        };
+                        findingId?: string | undefined;
+                        severity?: 'error' | 'info' | 'warning' | 'critical' | undefined;
+                        taxonomyIds?: string[] | undefined;
+                        tags?: string[] | undefined;
+                    }[] | undefined;
+                    triage?: {
+                        [x: string]: unknown;
+                        findings: {
+                            [x: string]: unknown;
+                            id: string;
+                            status: 'accept' | 'reject' | 'defer' | 'needs_refinement';
+                            commentId?: string | undefined;
+                            comment?: string | undefined;
+                        }[];
+                    } | undefined;
+                    publication?: {
+                        [x: string]: unknown;
+                        findings: {
+                            [x: string]: unknown;
+                            id: string;
+                            published: boolean;
+                            publishedAtMs?: number | undefined;
+                            publishedMessageRef?: string | undefined;
+                        }[];
+                    } | undefined;
+                    limits?: {
+                        [x: string]: unknown;
+                        findingsTruncated?: boolean | undefined;
+                        patchesTruncated?: boolean | undefined;
+                    } | undefined;
                 } | undefined;
             };
         } | {
@@ -2052,14 +2553,14 @@ export type ExecutionRunControlActionResultById = {
                         groupId?: string | undefined;
                     } | undefined;
                     launchOrigin?: {
-                        kind: 'session';
-                        sessionId: string;
-                        draftCorrelationId?: string | undefined;
-                    } | {
-                        kind: 'session_discussion';
-                        sessionId: string;
+                        kind: 'discussion';
+                        serverId: string;
                         discussionId: string;
                         messageIds: string[];
+                        draftCorrelationId?: string | undefined;
+                    } | {
+                        kind: 'session';
+                        sessionId: string;
                         draftCorrelationId?: string | undefined;
                     } | {
                         kind: 'external';
@@ -2268,6 +2769,88 @@ export type ExecutionRunControlActionResultById = {
                         [x: string]: unknown;
                         code: string;
                         message?: string | undefined;
+                        runtimeIssueV1?: Readonly<{
+                            v: 1;
+                            scope: 'primary_session';
+                            status: 'failed';
+                            code: string;
+                            source: 'unknown' | 'agent_status_error' | 'agent_process_exit' | 'agent_process_exit_after_switch' | 'agent_session_error' | 'usage_limit' | 'team_credential' | 'auth_error' | 'dependency_failure' | 'stream_error' | 'permission_blocked';
+                            occurredAt: number;
+                            sessionSeq?: number | undefined;
+                            agentId?: string | undefined;
+                            agentTurnId?: string | undefined;
+                            sanitizedPreview?: string | undefined;
+                            usageLimit?: {
+                                v: 1;
+                                resetAtMs: number | null;
+                                retryAfterMs: number | null;
+                                quotaScope: 'unknown' | 'account' | 'workspace' | 'organization' | 'model' | 'provider';
+                                recoverability: 'unknown' | 'manual' | 'wait' | 'switch_account';
+                                providerLimitId?: string | undefined;
+                                planType?: string | null | undefined;
+                                utilization?: number | null | undefined;
+                                limitCategory?: 'unknown' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | 'disabled' | undefined;
+                                quotaSnapshotRef?: {
+                                    serviceId: string;
+                                    profileId?: string | undefined;
+                                    groupId?: string | undefined;
+                                    fetchedAtMs?: number | undefined;
+                                } | undefined;
+                                effectiveMeterId?: string | undefined;
+                                effectiveRemainingPct?: number | undefined;
+                                allWindows?: {
+                                    meterId: string;
+                                    scope?: string | undefined;
+                                    remainingPct?: number | undefined;
+                                    resetAtMs?: number | undefined;
+                                    status?: string | undefined;
+                                }[] | undefined;
+                                recoveryDecision?: 'switching' | 'waiting_for_reset' | 'manual_intervention' | 'not_recoverable' | undefined;
+                                overage?: {
+                                    status: 'unknown' | 'allowed' | 'allowed_warning' | 'rejected';
+                                    resetAtMs: number | null;
+                                    disabledReason?: string | null | undefined;
+                                } | null | undefined;
+                                action?: {
+                                    kind: 'open_url';
+                                    url: string;
+                                    labelKey?: string | undefined;
+                                } | {
+                                    kind: 'settings';
+                                } | {
+                                    kind: 'none';
+                                } | null | undefined;
+                                connectedService?: {
+                                    serviceId: string;
+                                    profileId: string | null;
+                                    groupId: string | null;
+                                    groupExhausted?: boolean | undefined;
+                                } | null | undefined;
+                            } | undefined;
+                            teamCredential?: {
+                                v: 1;
+                                resourceId: string;
+                                reasonCode: 'invalid_request' | 'resource_forbidden' | 'resource_unavailable' | 'resource_changed' | 'session_not_active' | 'operation_not_current' | 'execution_run_not_found' | 'execution_run_terminal' | 'execution_run_authority_unavailable' | 'broker_unavailable' | 'update_required' | 'team_credential_usage_limit' | 'token_limit_unavailable' | 'cost_limit_unavailable' | 'duplicate_request';
+                                usageLimit?: {
+                                    metric: 'inference_requests' | 'total_tokens' | 'cost_usd';
+                                    remaining: string;
+                                    resetsAtUtc: string;
+                                } | undefined;
+                            } | undefined;
+                            temporaryThrottle?: {
+                                v: 1;
+                                retryAfterMs: number | null;
+                                recoverability: 'unknown' | 'manual' | 'wait' | 'retry';
+                            } | undefined;
+                            agentProcessExitAfterSwitch?: {
+                                exitCode: number | null;
+                                signal: string | null;
+                                lastStderrLine: string | null;
+                                vendorResumeId: string | null;
+                                materializationRoot: string | null;
+                                effectiveStateMode: 'shared' | 'isolated' | null;
+                            } | undefined;
+                        }> | undefined;
                     } | undefined;
                 };
                 latestToolResult?: unknown;
@@ -2275,6 +2858,118 @@ export type ExecutionRunControlActionResultById = {
                     [x: string]: unknown;
                     kind: string;
                     payload: unknown;
+                } | undefined;
+                reviewFindings?: {
+                    [x: string]: unknown;
+                    runRef: {
+                        [x: string]: unknown;
+                        runId: string;
+                        callId: string;
+                        backendId: string;
+                        backendTarget?: {
+                            kind: 'builtInAgent';
+                            agentId: string;
+                        } | {
+                            kind: 'configuredAcpBackend';
+                            backendId: string;
+                        } | undefined;
+                        retentionPolicy?: 'ephemeral' | 'resumable' | undefined;
+                    };
+                    summary: string;
+                    overviewMarkdown: string;
+                    findings: {
+                        [x: string]: unknown;
+                        id: string;
+                        title: string;
+                        severity: 'blocker' | 'high' | 'medium' | 'low' | 'nit';
+                        category: 'correctness' | 'security' | 'performance' | 'maintainability' | 'testing' | 'style' | 'docs';
+                        summary: string;
+                        filePath?: string | undefined;
+                        startLine?: number | undefined;
+                        endLine?: number | undefined;
+                        whyItMatters?: string | undefined;
+                        evidence?: string | undefined;
+                        confidence?: number | undefined;
+                        suggestion?: string | undefined;
+                        patch?: string | undefined;
+                        comment?: {
+                            id: string;
+                            state: 'open' | 'proposed' | 'delegated' | 'pending_review' | 'resolved' | 'dismissed';
+                            serverRevision: number;
+                            sessionId?: string | undefined;
+                            runId?: string | undefined;
+                            projectId?: string | undefined;
+                            workspace?: {
+                                machineId: string;
+                                path: string;
+                            } | undefined;
+                        } | undefined;
+                        attributionConfidence?: string | undefined;
+                    }[];
+                    questions: {
+                        [x: string]: unknown;
+                        id: string;
+                        text: string;
+                        status: 'open' | 'answered' | 'superseded';
+                        findingIds?: string[] | undefined;
+                    }[];
+                    assumptions: {
+                        [x: string]: unknown;
+                        id: string;
+                        text: string;
+                        findingIds?: string[] | undefined;
+                    }[];
+                    generatedAtMs: number;
+                    comparisonId?: string | undefined;
+                    fileCount?: number | undefined;
+                    reviewOutcome?: 'failed' | 'complete' | 'partial' | undefined;
+                    proposedComments?: {
+                        body: string;
+                        anchor: {
+                            kind: 'range';
+                            filePath: string;
+                            startLine: number;
+                            endLine: number;
+                            side?: 'after' | 'before' | undefined;
+                        } | {
+                            kind: 'file';
+                            filePath: string;
+                        } | {
+                            kind: 'line';
+                            filePath: string;
+                            line: number;
+                            side?: 'after' | 'before' | undefined;
+                        };
+                        findingId?: string | undefined;
+                        severity?: 'error' | 'info' | 'warning' | 'critical' | undefined;
+                        taxonomyIds?: string[] | undefined;
+                        tags?: string[] | undefined;
+                    }[] | undefined;
+                    triage?: {
+                        [x: string]: unknown;
+                        findings: {
+                            [x: string]: unknown;
+                            id: string;
+                            status: 'accept' | 'reject' | 'defer' | 'needs_refinement';
+                            commentId?: string | undefined;
+                            comment?: string | undefined;
+                        }[];
+                    } | undefined;
+                    publication?: {
+                        [x: string]: unknown;
+                        findings: {
+                            [x: string]: unknown;
+                            id: string;
+                            published: boolean;
+                            publishedAtMs?: number | undefined;
+                            publishedMessageRef?: string | undefined;
+                        }[];
+                    } | undefined;
+                    limits?: {
+                        [x: string]: unknown;
+                        findingsTruncated?: boolean | undefined;
+                        patchesTruncated?: boolean | undefined;
+                    } | undefined;
                 } | undefined;
             };
         } | {
@@ -2314,14 +3009,14 @@ export type ExecutionRunControlActionResultById = {
                         groupId?: string | undefined;
                     } | undefined;
                     launchOrigin?: {
-                        kind: 'session';
-                        sessionId: string;
-                        draftCorrelationId?: string | undefined;
-                    } | {
-                        kind: 'session_discussion';
-                        sessionId: string;
+                        kind: 'discussion';
+                        serverId: string;
                         discussionId: string;
                         messageIds: string[];
+                        draftCorrelationId?: string | undefined;
+                    } | {
+                        kind: 'session';
+                        sessionId: string;
                         draftCorrelationId?: string | undefined;
                     } | {
                         kind: 'external';
@@ -2530,6 +3225,88 @@ export type ExecutionRunControlActionResultById = {
                         [x: string]: unknown;
                         code: string;
                         message?: string | undefined;
+                        runtimeIssueV1?: Readonly<{
+                            v: 1;
+                            scope: 'primary_session';
+                            status: 'failed';
+                            code: string;
+                            source: 'unknown' | 'agent_status_error' | 'agent_process_exit' | 'agent_process_exit_after_switch' | 'agent_session_error' | 'usage_limit' | 'team_credential' | 'auth_error' | 'dependency_failure' | 'stream_error' | 'permission_blocked';
+                            occurredAt: number;
+                            sessionSeq?: number | undefined;
+                            agentId?: string | undefined;
+                            agentTurnId?: string | undefined;
+                            sanitizedPreview?: string | undefined;
+                            usageLimit?: {
+                                v: 1;
+                                resetAtMs: number | null;
+                                retryAfterMs: number | null;
+                                quotaScope: 'unknown' | 'account' | 'workspace' | 'organization' | 'model' | 'provider';
+                                recoverability: 'unknown' | 'manual' | 'wait' | 'switch_account';
+                                providerLimitId?: string | undefined;
+                                planType?: string | null | undefined;
+                                utilization?: number | null | undefined;
+                                limitCategory?: 'unknown' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | 'disabled' | undefined;
+                                quotaSnapshotRef?: {
+                                    serviceId: string;
+                                    profileId?: string | undefined;
+                                    groupId?: string | undefined;
+                                    fetchedAtMs?: number | undefined;
+                                } | undefined;
+                                effectiveMeterId?: string | undefined;
+                                effectiveRemainingPct?: number | undefined;
+                                allWindows?: {
+                                    meterId: string;
+                                    scope?: string | undefined;
+                                    remainingPct?: number | undefined;
+                                    resetAtMs?: number | undefined;
+                                    status?: string | undefined;
+                                }[] | undefined;
+                                recoveryDecision?: 'switching' | 'waiting_for_reset' | 'manual_intervention' | 'not_recoverable' | undefined;
+                                overage?: {
+                                    status: 'unknown' | 'allowed' | 'allowed_warning' | 'rejected';
+                                    resetAtMs: number | null;
+                                    disabledReason?: string | null | undefined;
+                                } | null | undefined;
+                                action?: {
+                                    kind: 'open_url';
+                                    url: string;
+                                    labelKey?: string | undefined;
+                                } | {
+                                    kind: 'settings';
+                                } | {
+                                    kind: 'none';
+                                } | null | undefined;
+                                connectedService?: {
+                                    serviceId: string;
+                                    profileId: string | null;
+                                    groupId: string | null;
+                                    groupExhausted?: boolean | undefined;
+                                } | null | undefined;
+                            } | undefined;
+                            teamCredential?: {
+                                v: 1;
+                                resourceId: string;
+                                reasonCode: 'invalid_request' | 'resource_forbidden' | 'resource_unavailable' | 'resource_changed' | 'session_not_active' | 'operation_not_current' | 'execution_run_not_found' | 'execution_run_terminal' | 'execution_run_authority_unavailable' | 'broker_unavailable' | 'update_required' | 'team_credential_usage_limit' | 'token_limit_unavailable' | 'cost_limit_unavailable' | 'duplicate_request';
+                                usageLimit?: {
+                                    metric: 'inference_requests' | 'total_tokens' | 'cost_usd';
+                                    remaining: string;
+                                    resetsAtUtc: string;
+                                } | undefined;
+                            } | undefined;
+                            temporaryThrottle?: {
+                                v: 1;
+                                retryAfterMs: number | null;
+                                recoverability: 'unknown' | 'manual' | 'wait' | 'retry';
+                            } | undefined;
+                            agentProcessExitAfterSwitch?: {
+                                exitCode: number | null;
+                                signal: string | null;
+                                lastStderrLine: string | null;
+                                vendorResumeId: string | null;
+                                materializationRoot: string | null;
+                                effectiveStateMode: 'shared' | 'isolated' | null;
+                            } | undefined;
+                        }> | undefined;
                     } | undefined;
                 };
                 latestToolResult?: unknown;
@@ -2537,6 +3314,118 @@ export type ExecutionRunControlActionResultById = {
                     [x: string]: unknown;
                     kind: string;
                     payload: unknown;
+                } | undefined;
+                reviewFindings?: {
+                    [x: string]: unknown;
+                    runRef: {
+                        [x: string]: unknown;
+                        runId: string;
+                        callId: string;
+                        backendId: string;
+                        backendTarget?: {
+                            kind: 'builtInAgent';
+                            agentId: string;
+                        } | {
+                            kind: 'configuredAcpBackend';
+                            backendId: string;
+                        } | undefined;
+                        retentionPolicy?: 'ephemeral' | 'resumable' | undefined;
+                    };
+                    summary: string;
+                    overviewMarkdown: string;
+                    findings: {
+                        [x: string]: unknown;
+                        id: string;
+                        title: string;
+                        severity: 'blocker' | 'high' | 'medium' | 'low' | 'nit';
+                        category: 'correctness' | 'security' | 'performance' | 'maintainability' | 'testing' | 'style' | 'docs';
+                        summary: string;
+                        filePath?: string | undefined;
+                        startLine?: number | undefined;
+                        endLine?: number | undefined;
+                        whyItMatters?: string | undefined;
+                        evidence?: string | undefined;
+                        confidence?: number | undefined;
+                        suggestion?: string | undefined;
+                        patch?: string | undefined;
+                        comment?: {
+                            id: string;
+                            state: 'open' | 'proposed' | 'delegated' | 'pending_review' | 'resolved' | 'dismissed';
+                            serverRevision: number;
+                            sessionId?: string | undefined;
+                            runId?: string | undefined;
+                            projectId?: string | undefined;
+                            workspace?: {
+                                machineId: string;
+                                path: string;
+                            } | undefined;
+                        } | undefined;
+                        attributionConfidence?: string | undefined;
+                    }[];
+                    questions: {
+                        [x: string]: unknown;
+                        id: string;
+                        text: string;
+                        status: 'open' | 'answered' | 'superseded';
+                        findingIds?: string[] | undefined;
+                    }[];
+                    assumptions: {
+                        [x: string]: unknown;
+                        id: string;
+                        text: string;
+                        findingIds?: string[] | undefined;
+                    }[];
+                    generatedAtMs: number;
+                    comparisonId?: string | undefined;
+                    fileCount?: number | undefined;
+                    reviewOutcome?: 'failed' | 'complete' | 'partial' | undefined;
+                    proposedComments?: {
+                        body: string;
+                        anchor: {
+                            kind: 'range';
+                            filePath: string;
+                            startLine: number;
+                            endLine: number;
+                            side?: 'after' | 'before' | undefined;
+                        } | {
+                            kind: 'file';
+                            filePath: string;
+                        } | {
+                            kind: 'line';
+                            filePath: string;
+                            line: number;
+                            side?: 'after' | 'before' | undefined;
+                        };
+                        findingId?: string | undefined;
+                        severity?: 'error' | 'info' | 'warning' | 'critical' | undefined;
+                        taxonomyIds?: string[] | undefined;
+                        tags?: string[] | undefined;
+                    }[] | undefined;
+                    triage?: {
+                        [x: string]: unknown;
+                        findings: {
+                            [x: string]: unknown;
+                            id: string;
+                            status: 'accept' | 'reject' | 'defer' | 'needs_refinement';
+                            commentId?: string | undefined;
+                            comment?: string | undefined;
+                        }[];
+                    } | undefined;
+                    publication?: {
+                        [x: string]: unknown;
+                        findings: {
+                            [x: string]: unknown;
+                            id: string;
+                            published: boolean;
+                            publishedAtMs?: number | undefined;
+                            publishedMessageRef?: string | undefined;
+                        }[];
+                    } | undefined;
+                    limits?: {
+                        [x: string]: unknown;
+                        findingsTruncated?: boolean | undefined;
+                        patchesTruncated?: boolean | undefined;
+                    } | undefined;
                 } | undefined;
             };
         } | {
@@ -2552,7 +3441,7 @@ export type ExecutionRunControlActionResultById = {
             code: 'cancelled';
         } | {
             ok: false;
-            code: 'execution_run_not_allowed' | 'execution_run_not_found' | 'execution_run_action_not_supported' | 'execution_run_invalid_action_input' | 'execution_run_stream_not_found' | 'execution_run_busy' | 'execution_run_send_outcome_unknown' | 'execution_run_failed' | 'execution_run_budget_exceeded' | 'execution_run_output_limit_exceeded' | 'execution_run_protocol_unsupported' | 'execution_run_target_not_selected' | 'execution_run_target_unavailable' | 'execution_run_child_choice_required' | 'execution_run_child_default_unavailable' | 'execution_run_parent_selection_unavailable' | 'execution_run_start_ambiguous' | 'execution_run_scope_mismatch' | 'execution_run_connected_service_generation_refresh_required' | 'run_depth_exceeded' | 'permission_denied';
+            code: 'execution_run_not_found' | 'execution_run_not_allowed' | 'execution_run_action_not_supported' | 'execution_run_invalid_action_input' | 'execution_run_stream_not_found' | 'execution_run_busy' | 'execution_run_send_outcome_unknown' | 'execution_run_failed' | 'execution_run_budget_exceeded' | 'execution_run_output_limit_exceeded' | 'execution_run_protocol_unsupported' | 'execution_run_target_not_selected' | 'execution_run_target_unavailable' | 'execution_run_child_choice_required' | 'execution_run_child_default_unavailable' | 'execution_run_parent_selection_unavailable' | 'execution_run_start_ambiguous' | 'execution_run_scope_mismatch' | 'execution_run_connected_service_generation_refresh_required' | 'run_depth_exceeded' | 'permission_denied';
         } | undefined;
     };
     readonly "execution.run.list": {
@@ -2584,14 +3473,14 @@ export type ExecutionRunControlActionResultById = {
                 groupId?: string | undefined;
             } | undefined;
             launchOrigin?: {
-                kind: 'session';
-                sessionId: string;
-                draftCorrelationId?: string | undefined;
-            } | {
-                kind: 'session_discussion';
-                sessionId: string;
+                kind: 'discussion';
+                serverId: string;
                 discussionId: string;
                 messageIds: string[];
+                draftCorrelationId?: string | undefined;
+            } | {
+                kind: 'session';
+                sessionId: string;
                 draftCorrelationId?: string | undefined;
             } | {
                 kind: 'external';
@@ -2800,6 +3689,88 @@ export type ExecutionRunControlActionResultById = {
                 [x: string]: unknown;
                 code: string;
                 message?: string | undefined;
+                runtimeIssueV1?: Readonly<{
+                    v: 1;
+                    scope: 'primary_session';
+                    status: 'failed';
+                    code: string;
+                    source: 'unknown' | 'agent_status_error' | 'agent_process_exit' | 'agent_process_exit_after_switch' | 'agent_session_error' | 'usage_limit' | 'team_credential' | 'auth_error' | 'dependency_failure' | 'stream_error' | 'permission_blocked';
+                    occurredAt: number;
+                    sessionSeq?: number | undefined;
+                    agentId?: string | undefined;
+                    agentTurnId?: string | undefined;
+                    sanitizedPreview?: string | undefined;
+                    usageLimit?: {
+                        v: 1;
+                        resetAtMs: number | null;
+                        retryAfterMs: number | null;
+                        quotaScope: 'unknown' | 'account' | 'workspace' | 'organization' | 'model' | 'provider';
+                        recoverability: 'unknown' | 'manual' | 'wait' | 'switch_account';
+                        providerLimitId?: string | undefined;
+                        planType?: string | null | undefined;
+                        utilization?: number | null | undefined;
+                        limitCategory?: 'unknown' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | 'disabled' | undefined;
+                        quotaSnapshotRef?: {
+                            serviceId: string;
+                            profileId?: string | undefined;
+                            groupId?: string | undefined;
+                            fetchedAtMs?: number | undefined;
+                        } | undefined;
+                        effectiveMeterId?: string | undefined;
+                        effectiveRemainingPct?: number | undefined;
+                        allWindows?: {
+                            meterId: string;
+                            scope?: string | undefined;
+                            remainingPct?: number | undefined;
+                            resetAtMs?: number | undefined;
+                            status?: string | undefined;
+                        }[] | undefined;
+                        recoveryDecision?: 'switching' | 'waiting_for_reset' | 'manual_intervention' | 'not_recoverable' | undefined;
+                        overage?: {
+                            status: 'unknown' | 'allowed' | 'allowed_warning' | 'rejected';
+                            resetAtMs: number | null;
+                            disabledReason?: string | null | undefined;
+                        } | null | undefined;
+                        action?: {
+                            kind: 'open_url';
+                            url: string;
+                            labelKey?: string | undefined;
+                        } | {
+                            kind: 'settings';
+                        } | {
+                            kind: 'none';
+                        } | null | undefined;
+                        connectedService?: {
+                            serviceId: string;
+                            profileId: string | null;
+                            groupId: string | null;
+                            groupExhausted?: boolean | undefined;
+                        } | null | undefined;
+                    } | undefined;
+                    teamCredential?: {
+                        v: 1;
+                        resourceId: string;
+                        reasonCode: 'invalid_request' | 'resource_forbidden' | 'resource_unavailable' | 'resource_changed' | 'session_not_active' | 'operation_not_current' | 'execution_run_not_found' | 'execution_run_terminal' | 'execution_run_authority_unavailable' | 'broker_unavailable' | 'update_required' | 'team_credential_usage_limit' | 'token_limit_unavailable' | 'cost_limit_unavailable' | 'duplicate_request';
+                        usageLimit?: {
+                            metric: 'inference_requests' | 'total_tokens' | 'cost_usd';
+                            remaining: string;
+                            resetsAtUtc: string;
+                        } | undefined;
+                    } | undefined;
+                    temporaryThrottle?: {
+                        v: 1;
+                        retryAfterMs: number | null;
+                        recoverability: 'unknown' | 'manual' | 'wait' | 'retry';
+                    } | undefined;
+                    agentProcessExitAfterSwitch?: {
+                        exitCode: number | null;
+                        signal: string | null;
+                        lastStderrLine: string | null;
+                        vendorResumeId: string | null;
+                        materializationRoot: string | null;
+                        effectiveStateMode: 'shared' | 'isolated' | null;
+                    } | undefined;
+                }> | undefined;
             } | undefined;
         }[];
     };
@@ -2832,14 +3803,14 @@ export type ExecutionRunControlActionResultById = {
                 groupId?: string | undefined;
             } | undefined;
             launchOrigin?: {
-                kind: 'session';
-                sessionId: string;
-                draftCorrelationId?: string | undefined;
-            } | {
-                kind: 'session_discussion';
-                sessionId: string;
+                kind: 'discussion';
+                serverId: string;
                 discussionId: string;
                 messageIds: string[];
+                draftCorrelationId?: string | undefined;
+            } | {
+                kind: 'session';
+                sessionId: string;
                 draftCorrelationId?: string | undefined;
             } | {
                 kind: 'external';
@@ -3048,6 +4019,88 @@ export type ExecutionRunControlActionResultById = {
                 [x: string]: unknown;
                 code: string;
                 message?: string | undefined;
+                runtimeIssueV1?: Readonly<{
+                    v: 1;
+                    scope: 'primary_session';
+                    status: 'failed';
+                    code: string;
+                    source: 'unknown' | 'agent_status_error' | 'agent_process_exit' | 'agent_process_exit_after_switch' | 'agent_session_error' | 'usage_limit' | 'team_credential' | 'auth_error' | 'dependency_failure' | 'stream_error' | 'permission_blocked';
+                    occurredAt: number;
+                    sessionSeq?: number | undefined;
+                    agentId?: string | undefined;
+                    agentTurnId?: string | undefined;
+                    sanitizedPreview?: string | undefined;
+                    usageLimit?: {
+                        v: 1;
+                        resetAtMs: number | null;
+                        retryAfterMs: number | null;
+                        quotaScope: 'unknown' | 'account' | 'workspace' | 'organization' | 'model' | 'provider';
+                        recoverability: 'unknown' | 'manual' | 'wait' | 'switch_account';
+                        providerLimitId?: string | undefined;
+                        planType?: string | null | undefined;
+                        utilization?: number | null | undefined;
+                        limitCategory?: 'unknown' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | 'disabled' | undefined;
+                        quotaSnapshotRef?: {
+                            serviceId: string;
+                            profileId?: string | undefined;
+                            groupId?: string | undefined;
+                            fetchedAtMs?: number | undefined;
+                        } | undefined;
+                        effectiveMeterId?: string | undefined;
+                        effectiveRemainingPct?: number | undefined;
+                        allWindows?: {
+                            meterId: string;
+                            scope?: string | undefined;
+                            remainingPct?: number | undefined;
+                            resetAtMs?: number | undefined;
+                            status?: string | undefined;
+                        }[] | undefined;
+                        recoveryDecision?: 'switching' | 'waiting_for_reset' | 'manual_intervention' | 'not_recoverable' | undefined;
+                        overage?: {
+                            status: 'unknown' | 'allowed' | 'allowed_warning' | 'rejected';
+                            resetAtMs: number | null;
+                            disabledReason?: string | null | undefined;
+                        } | null | undefined;
+                        action?: {
+                            kind: 'open_url';
+                            url: string;
+                            labelKey?: string | undefined;
+                        } | {
+                            kind: 'settings';
+                        } | {
+                            kind: 'none';
+                        } | null | undefined;
+                        connectedService?: {
+                            serviceId: string;
+                            profileId: string | null;
+                            groupId: string | null;
+                            groupExhausted?: boolean | undefined;
+                        } | null | undefined;
+                    } | undefined;
+                    teamCredential?: {
+                        v: 1;
+                        resourceId: string;
+                        reasonCode: 'invalid_request' | 'resource_forbidden' | 'resource_unavailable' | 'resource_changed' | 'session_not_active' | 'operation_not_current' | 'execution_run_not_found' | 'execution_run_terminal' | 'execution_run_authority_unavailable' | 'broker_unavailable' | 'update_required' | 'team_credential_usage_limit' | 'token_limit_unavailable' | 'cost_limit_unavailable' | 'duplicate_request';
+                        usageLimit?: {
+                            metric: 'inference_requests' | 'total_tokens' | 'cost_usd';
+                            remaining: string;
+                            resetsAtUtc: string;
+                        } | undefined;
+                    } | undefined;
+                    temporaryThrottle?: {
+                        v: 1;
+                        retryAfterMs: number | null;
+                        recoverability: 'unknown' | 'manual' | 'wait' | 'retry';
+                    } | undefined;
+                    agentProcessExitAfterSwitch?: {
+                        exitCode: number | null;
+                        signal: string | null;
+                        lastStderrLine: string | null;
+                        vendorResumeId: string | null;
+                        materializationRoot: string | null;
+                        effectiveStateMode: 'shared' | 'isolated' | null;
+                    } | undefined;
+                }> | undefined;
             } | undefined;
         };
         latestToolResult?: unknown;
@@ -3055,6 +4108,118 @@ export type ExecutionRunControlActionResultById = {
             [x: string]: unknown;
             kind: string;
             payload: unknown;
+        } | undefined;
+        reviewFindings?: {
+            [x: string]: unknown;
+            runRef: {
+                [x: string]: unknown;
+                runId: string;
+                callId: string;
+                backendId: string;
+                backendTarget?: {
+                    kind: 'builtInAgent';
+                    agentId: string;
+                } | {
+                    kind: 'configuredAcpBackend';
+                    backendId: string;
+                } | undefined;
+                retentionPolicy?: 'ephemeral' | 'resumable' | undefined;
+            };
+            summary: string;
+            overviewMarkdown: string;
+            findings: {
+                [x: string]: unknown;
+                id: string;
+                title: string;
+                severity: 'blocker' | 'high' | 'medium' | 'low' | 'nit';
+                category: 'correctness' | 'security' | 'performance' | 'maintainability' | 'testing' | 'style' | 'docs';
+                summary: string;
+                filePath?: string | undefined;
+                startLine?: number | undefined;
+                endLine?: number | undefined;
+                whyItMatters?: string | undefined;
+                evidence?: string | undefined;
+                confidence?: number | undefined;
+                suggestion?: string | undefined;
+                patch?: string | undefined;
+                comment?: {
+                    id: string;
+                    state: 'open' | 'proposed' | 'delegated' | 'pending_review' | 'resolved' | 'dismissed';
+                    serverRevision: number;
+                    sessionId?: string | undefined;
+                    runId?: string | undefined;
+                    projectId?: string | undefined;
+                    workspace?: {
+                        machineId: string;
+                        path: string;
+                    } | undefined;
+                } | undefined;
+                attributionConfidence?: string | undefined;
+            }[];
+            questions: {
+                [x: string]: unknown;
+                id: string;
+                text: string;
+                status: 'open' | 'answered' | 'superseded';
+                findingIds?: string[] | undefined;
+            }[];
+            assumptions: {
+                [x: string]: unknown;
+                id: string;
+                text: string;
+                findingIds?: string[] | undefined;
+            }[];
+            generatedAtMs: number;
+            comparisonId?: string | undefined;
+            fileCount?: number | undefined;
+            reviewOutcome?: 'failed' | 'complete' | 'partial' | undefined;
+            proposedComments?: {
+                body: string;
+                anchor: {
+                    kind: 'range';
+                    filePath: string;
+                    startLine: number;
+                    endLine: number;
+                    side?: 'after' | 'before' | undefined;
+                } | {
+                    kind: 'file';
+                    filePath: string;
+                } | {
+                    kind: 'line';
+                    filePath: string;
+                    line: number;
+                    side?: 'after' | 'before' | undefined;
+                };
+                findingId?: string | undefined;
+                severity?: 'error' | 'info' | 'warning' | 'critical' | undefined;
+                taxonomyIds?: string[] | undefined;
+                tags?: string[] | undefined;
+            }[] | undefined;
+            triage?: {
+                [x: string]: unknown;
+                findings: {
+                    [x: string]: unknown;
+                    id: string;
+                    status: 'accept' | 'reject' | 'defer' | 'needs_refinement';
+                    commentId?: string | undefined;
+                    comment?: string | undefined;
+                }[];
+            } | undefined;
+            publication?: {
+                [x: string]: unknown;
+                findings: {
+                    [x: string]: unknown;
+                    id: string;
+                    published: boolean;
+                    publishedAtMs?: number | undefined;
+                    publishedMessageRef?: string | undefined;
+                }[];
+            } | undefined;
+            limits?: {
+                [x: string]: unknown;
+                findingsTruncated?: boolean | undefined;
+                patchesTruncated?: boolean | undefined;
+            } | undefined;
         } | undefined;
     };
     readonly "execution.run.send": {
@@ -3187,14 +4352,14 @@ export type ExecutionRunControlActionResultById = {
                     groupId?: string | undefined;
                 } | undefined;
                 launchOrigin?: {
-                    kind: 'session';
-                    sessionId: string;
-                    draftCorrelationId?: string | undefined;
-                } | {
-                    kind: 'session_discussion';
-                    sessionId: string;
+                    kind: 'discussion';
+                    serverId: string;
                     discussionId: string;
                     messageIds: string[];
+                    draftCorrelationId?: string | undefined;
+                } | {
+                    kind: 'session';
+                    sessionId: string;
                     draftCorrelationId?: string | undefined;
                 } | {
                     kind: 'external';
@@ -3403,6 +4568,88 @@ export type ExecutionRunControlActionResultById = {
                     [x: string]: unknown;
                     code: string;
                     message?: string | undefined;
+                    runtimeIssueV1?: Readonly<{
+                        v: 1;
+                        scope: 'primary_session';
+                        status: 'failed';
+                        code: string;
+                        source: 'unknown' | 'agent_status_error' | 'agent_process_exit' | 'agent_process_exit_after_switch' | 'agent_session_error' | 'usage_limit' | 'team_credential' | 'auth_error' | 'dependency_failure' | 'stream_error' | 'permission_blocked';
+                        occurredAt: number;
+                        sessionSeq?: number | undefined;
+                        agentId?: string | undefined;
+                        agentTurnId?: string | undefined;
+                        sanitizedPreview?: string | undefined;
+                        usageLimit?: {
+                            v: 1;
+                            resetAtMs: number | null;
+                            retryAfterMs: number | null;
+                            quotaScope: 'unknown' | 'account' | 'workspace' | 'organization' | 'model' | 'provider';
+                            recoverability: 'unknown' | 'manual' | 'wait' | 'switch_account';
+                            providerLimitId?: string | undefined;
+                            planType?: string | null | undefined;
+                            utilization?: number | null | undefined;
+                            limitCategory?: 'unknown' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | 'disabled' | undefined;
+                            quotaSnapshotRef?: {
+                                serviceId: string;
+                                profileId?: string | undefined;
+                                groupId?: string | undefined;
+                                fetchedAtMs?: number | undefined;
+                            } | undefined;
+                            effectiveMeterId?: string | undefined;
+                            effectiveRemainingPct?: number | undefined;
+                            allWindows?: {
+                                meterId: string;
+                                scope?: string | undefined;
+                                remainingPct?: number | undefined;
+                                resetAtMs?: number | undefined;
+                                status?: string | undefined;
+                            }[] | undefined;
+                            recoveryDecision?: 'switching' | 'waiting_for_reset' | 'manual_intervention' | 'not_recoverable' | undefined;
+                            overage?: {
+                                status: 'unknown' | 'allowed' | 'allowed_warning' | 'rejected';
+                                resetAtMs: number | null;
+                                disabledReason?: string | null | undefined;
+                            } | null | undefined;
+                            action?: {
+                                kind: 'open_url';
+                                url: string;
+                                labelKey?: string | undefined;
+                            } | {
+                                kind: 'settings';
+                            } | {
+                                kind: 'none';
+                            } | null | undefined;
+                            connectedService?: {
+                                serviceId: string;
+                                profileId: string | null;
+                                groupId: string | null;
+                                groupExhausted?: boolean | undefined;
+                            } | null | undefined;
+                        } | undefined;
+                        teamCredential?: {
+                            v: 1;
+                            resourceId: string;
+                            reasonCode: 'invalid_request' | 'resource_forbidden' | 'resource_unavailable' | 'resource_changed' | 'session_not_active' | 'operation_not_current' | 'execution_run_not_found' | 'execution_run_terminal' | 'execution_run_authority_unavailable' | 'broker_unavailable' | 'update_required' | 'team_credential_usage_limit' | 'token_limit_unavailable' | 'cost_limit_unavailable' | 'duplicate_request';
+                            usageLimit?: {
+                                metric: 'inference_requests' | 'total_tokens' | 'cost_usd';
+                                remaining: string;
+                                resetsAtUtc: string;
+                            } | undefined;
+                        } | undefined;
+                        temporaryThrottle?: {
+                            v: 1;
+                            retryAfterMs: number | null;
+                            recoverability: 'unknown' | 'manual' | 'wait' | 'retry';
+                        } | undefined;
+                        agentProcessExitAfterSwitch?: {
+                            exitCode: number | null;
+                            signal: string | null;
+                            lastStderrLine: string | null;
+                            vendorResumeId: string | null;
+                            materializationRoot: string | null;
+                            effectiveStateMode: 'shared' | 'isolated' | null;
+                        } | undefined;
+                    }> | undefined;
                 } | undefined;
             };
             latestToolResult?: unknown;
@@ -3410,6 +4657,118 @@ export type ExecutionRunControlActionResultById = {
                 [x: string]: unknown;
                 kind: string;
                 payload: unknown;
+            } | undefined;
+            reviewFindings?: {
+                [x: string]: unknown;
+                runRef: {
+                    [x: string]: unknown;
+                    runId: string;
+                    callId: string;
+                    backendId: string;
+                    backendTarget?: {
+                        kind: 'builtInAgent';
+                        agentId: string;
+                    } | {
+                        kind: 'configuredAcpBackend';
+                        backendId: string;
+                    } | undefined;
+                    retentionPolicy?: 'ephemeral' | 'resumable' | undefined;
+                };
+                summary: string;
+                overviewMarkdown: string;
+                findings: {
+                    [x: string]: unknown;
+                    id: string;
+                    title: string;
+                    severity: 'blocker' | 'high' | 'medium' | 'low' | 'nit';
+                    category: 'correctness' | 'security' | 'performance' | 'maintainability' | 'testing' | 'style' | 'docs';
+                    summary: string;
+                    filePath?: string | undefined;
+                    startLine?: number | undefined;
+                    endLine?: number | undefined;
+                    whyItMatters?: string | undefined;
+                    evidence?: string | undefined;
+                    confidence?: number | undefined;
+                    suggestion?: string | undefined;
+                    patch?: string | undefined;
+                    comment?: {
+                        id: string;
+                        state: 'open' | 'proposed' | 'delegated' | 'pending_review' | 'resolved' | 'dismissed';
+                        serverRevision: number;
+                        sessionId?: string | undefined;
+                        runId?: string | undefined;
+                        projectId?: string | undefined;
+                        workspace?: {
+                            machineId: string;
+                            path: string;
+                        } | undefined;
+                    } | undefined;
+                    attributionConfidence?: string | undefined;
+                }[];
+                questions: {
+                    [x: string]: unknown;
+                    id: string;
+                    text: string;
+                    status: 'open' | 'answered' | 'superseded';
+                    findingIds?: string[] | undefined;
+                }[];
+                assumptions: {
+                    [x: string]: unknown;
+                    id: string;
+                    text: string;
+                    findingIds?: string[] | undefined;
+                }[];
+                generatedAtMs: number;
+                comparisonId?: string | undefined;
+                fileCount?: number | undefined;
+                reviewOutcome?: 'failed' | 'complete' | 'partial' | undefined;
+                proposedComments?: {
+                    body: string;
+                    anchor: {
+                        kind: 'range';
+                        filePath: string;
+                        startLine: number;
+                        endLine: number;
+                        side?: 'after' | 'before' | undefined;
+                    } | {
+                        kind: 'file';
+                        filePath: string;
+                    } | {
+                        kind: 'line';
+                        filePath: string;
+                        line: number;
+                        side?: 'after' | 'before' | undefined;
+                    };
+                    findingId?: string | undefined;
+                    severity?: 'error' | 'info' | 'warning' | 'critical' | undefined;
+                    taxonomyIds?: string[] | undefined;
+                    tags?: string[] | undefined;
+                }[] | undefined;
+                triage?: {
+                    [x: string]: unknown;
+                    findings: {
+                        [x: string]: unknown;
+                        id: string;
+                        status: 'accept' | 'reject' | 'defer' | 'needs_refinement';
+                        commentId?: string | undefined;
+                        comment?: string | undefined;
+                    }[];
+                } | undefined;
+                publication?: {
+                    [x: string]: unknown;
+                    findings: {
+                        [x: string]: unknown;
+                        id: string;
+                        published: boolean;
+                        publishedAtMs?: number | undefined;
+                        publishedMessageRef?: string | undefined;
+                    }[];
+                } | undefined;
+                limits?: {
+                    [x: string]: unknown;
+                    findingsTruncated?: boolean | undefined;
+                    patchesTruncated?: boolean | undefined;
+                } | undefined;
             } | undefined;
         };
     } | {
@@ -3445,14 +4804,14 @@ export type ExecutionRunControlActionResultById = {
                     groupId?: string | undefined;
                 } | undefined;
                 launchOrigin?: {
-                    kind: 'session';
-                    sessionId: string;
-                    draftCorrelationId?: string | undefined;
-                } | {
-                    kind: 'session_discussion';
-                    sessionId: string;
+                    kind: 'discussion';
+                    serverId: string;
                     discussionId: string;
                     messageIds: string[];
+                    draftCorrelationId?: string | undefined;
+                } | {
+                    kind: 'session';
+                    sessionId: string;
                     draftCorrelationId?: string | undefined;
                 } | {
                     kind: 'external';
@@ -3661,6 +5020,88 @@ export type ExecutionRunControlActionResultById = {
                     [x: string]: unknown;
                     code: string;
                     message?: string | undefined;
+                    runtimeIssueV1?: Readonly<{
+                        v: 1;
+                        scope: 'primary_session';
+                        status: 'failed';
+                        code: string;
+                        source: 'unknown' | 'agent_status_error' | 'agent_process_exit' | 'agent_process_exit_after_switch' | 'agent_session_error' | 'usage_limit' | 'team_credential' | 'auth_error' | 'dependency_failure' | 'stream_error' | 'permission_blocked';
+                        occurredAt: number;
+                        sessionSeq?: number | undefined;
+                        agentId?: string | undefined;
+                        agentTurnId?: string | undefined;
+                        sanitizedPreview?: string | undefined;
+                        usageLimit?: {
+                            v: 1;
+                            resetAtMs: number | null;
+                            retryAfterMs: number | null;
+                            quotaScope: 'unknown' | 'account' | 'workspace' | 'organization' | 'model' | 'provider';
+                            recoverability: 'unknown' | 'manual' | 'wait' | 'switch_account';
+                            providerLimitId?: string | undefined;
+                            planType?: string | null | undefined;
+                            utilization?: number | null | undefined;
+                            limitCategory?: 'unknown' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | 'disabled' | undefined;
+                            quotaSnapshotRef?: {
+                                serviceId: string;
+                                profileId?: string | undefined;
+                                groupId?: string | undefined;
+                                fetchedAtMs?: number | undefined;
+                            } | undefined;
+                            effectiveMeterId?: string | undefined;
+                            effectiveRemainingPct?: number | undefined;
+                            allWindows?: {
+                                meterId: string;
+                                scope?: string | undefined;
+                                remainingPct?: number | undefined;
+                                resetAtMs?: number | undefined;
+                                status?: string | undefined;
+                            }[] | undefined;
+                            recoveryDecision?: 'switching' | 'waiting_for_reset' | 'manual_intervention' | 'not_recoverable' | undefined;
+                            overage?: {
+                                status: 'unknown' | 'allowed' | 'allowed_warning' | 'rejected';
+                                resetAtMs: number | null;
+                                disabledReason?: string | null | undefined;
+                            } | null | undefined;
+                            action?: {
+                                kind: 'open_url';
+                                url: string;
+                                labelKey?: string | undefined;
+                            } | {
+                                kind: 'settings';
+                            } | {
+                                kind: 'none';
+                            } | null | undefined;
+                            connectedService?: {
+                                serviceId: string;
+                                profileId: string | null;
+                                groupId: string | null;
+                                groupExhausted?: boolean | undefined;
+                            } | null | undefined;
+                        } | undefined;
+                        teamCredential?: {
+                            v: 1;
+                            resourceId: string;
+                            reasonCode: 'invalid_request' | 'resource_forbidden' | 'resource_unavailable' | 'resource_changed' | 'session_not_active' | 'operation_not_current' | 'execution_run_not_found' | 'execution_run_terminal' | 'execution_run_authority_unavailable' | 'broker_unavailable' | 'update_required' | 'team_credential_usage_limit' | 'token_limit_unavailable' | 'cost_limit_unavailable' | 'duplicate_request';
+                            usageLimit?: {
+                                metric: 'inference_requests' | 'total_tokens' | 'cost_usd';
+                                remaining: string;
+                                resetsAtUtc: string;
+                            } | undefined;
+                        } | undefined;
+                        temporaryThrottle?: {
+                            v: 1;
+                            retryAfterMs: number | null;
+                            recoverability: 'unknown' | 'manual' | 'wait' | 'retry';
+                        } | undefined;
+                        agentProcessExitAfterSwitch?: {
+                            exitCode: number | null;
+                            signal: string | null;
+                            lastStderrLine: string | null;
+                            vendorResumeId: string | null;
+                            materializationRoot: string | null;
+                            effectiveStateMode: 'shared' | 'isolated' | null;
+                        } | undefined;
+                    }> | undefined;
                 } | undefined;
             };
             latestToolResult?: unknown;
@@ -3668,6 +5109,118 @@ export type ExecutionRunControlActionResultById = {
                 [x: string]: unknown;
                 kind: string;
                 payload: unknown;
+            } | undefined;
+            reviewFindings?: {
+                [x: string]: unknown;
+                runRef: {
+                    [x: string]: unknown;
+                    runId: string;
+                    callId: string;
+                    backendId: string;
+                    backendTarget?: {
+                        kind: 'builtInAgent';
+                        agentId: string;
+                    } | {
+                        kind: 'configuredAcpBackend';
+                        backendId: string;
+                    } | undefined;
+                    retentionPolicy?: 'ephemeral' | 'resumable' | undefined;
+                };
+                summary: string;
+                overviewMarkdown: string;
+                findings: {
+                    [x: string]: unknown;
+                    id: string;
+                    title: string;
+                    severity: 'blocker' | 'high' | 'medium' | 'low' | 'nit';
+                    category: 'correctness' | 'security' | 'performance' | 'maintainability' | 'testing' | 'style' | 'docs';
+                    summary: string;
+                    filePath?: string | undefined;
+                    startLine?: number | undefined;
+                    endLine?: number | undefined;
+                    whyItMatters?: string | undefined;
+                    evidence?: string | undefined;
+                    confidence?: number | undefined;
+                    suggestion?: string | undefined;
+                    patch?: string | undefined;
+                    comment?: {
+                        id: string;
+                        state: 'open' | 'proposed' | 'delegated' | 'pending_review' | 'resolved' | 'dismissed';
+                        serverRevision: number;
+                        sessionId?: string | undefined;
+                        runId?: string | undefined;
+                        projectId?: string | undefined;
+                        workspace?: {
+                            machineId: string;
+                            path: string;
+                        } | undefined;
+                    } | undefined;
+                    attributionConfidence?: string | undefined;
+                }[];
+                questions: {
+                    [x: string]: unknown;
+                    id: string;
+                    text: string;
+                    status: 'open' | 'answered' | 'superseded';
+                    findingIds?: string[] | undefined;
+                }[];
+                assumptions: {
+                    [x: string]: unknown;
+                    id: string;
+                    text: string;
+                    findingIds?: string[] | undefined;
+                }[];
+                generatedAtMs: number;
+                comparisonId?: string | undefined;
+                fileCount?: number | undefined;
+                reviewOutcome?: 'failed' | 'complete' | 'partial' | undefined;
+                proposedComments?: {
+                    body: string;
+                    anchor: {
+                        kind: 'range';
+                        filePath: string;
+                        startLine: number;
+                        endLine: number;
+                        side?: 'after' | 'before' | undefined;
+                    } | {
+                        kind: 'file';
+                        filePath: string;
+                    } | {
+                        kind: 'line';
+                        filePath: string;
+                        line: number;
+                        side?: 'after' | 'before' | undefined;
+                    };
+                    findingId?: string | undefined;
+                    severity?: 'error' | 'info' | 'warning' | 'critical' | undefined;
+                    taxonomyIds?: string[] | undefined;
+                    tags?: string[] | undefined;
+                }[] | undefined;
+                triage?: {
+                    [x: string]: unknown;
+                    findings: {
+                        [x: string]: unknown;
+                        id: string;
+                        status: 'accept' | 'reject' | 'defer' | 'needs_refinement';
+                        commentId?: string | undefined;
+                        comment?: string | undefined;
+                    }[];
+                } | undefined;
+                publication?: {
+                    [x: string]: unknown;
+                    findings: {
+                        [x: string]: unknown;
+                        id: string;
+                        published: boolean;
+                        publishedAtMs?: number | undefined;
+                        publishedMessageRef?: string | undefined;
+                    }[];
+                } | undefined;
+                limits?: {
+                    [x: string]: unknown;
+                    findingsTruncated?: boolean | undefined;
+                    patchesTruncated?: boolean | undefined;
+                } | undefined;
             } | undefined;
         };
     } | {
@@ -3703,14 +5256,14 @@ export type ExecutionRunControlActionResultById = {
                     groupId?: string | undefined;
                 } | undefined;
                 launchOrigin?: {
-                    kind: 'session';
-                    sessionId: string;
-                    draftCorrelationId?: string | undefined;
-                } | {
-                    kind: 'session_discussion';
-                    sessionId: string;
+                    kind: 'discussion';
+                    serverId: string;
                     discussionId: string;
                     messageIds: string[];
+                    draftCorrelationId?: string | undefined;
+                } | {
+                    kind: 'session';
+                    sessionId: string;
                     draftCorrelationId?: string | undefined;
                 } | {
                     kind: 'external';
@@ -3919,6 +5472,88 @@ export type ExecutionRunControlActionResultById = {
                     [x: string]: unknown;
                     code: string;
                     message?: string | undefined;
+                    runtimeIssueV1?: Readonly<{
+                        v: 1;
+                        scope: 'primary_session';
+                        status: 'failed';
+                        code: string;
+                        source: 'unknown' | 'agent_status_error' | 'agent_process_exit' | 'agent_process_exit_after_switch' | 'agent_session_error' | 'usage_limit' | 'team_credential' | 'auth_error' | 'dependency_failure' | 'stream_error' | 'permission_blocked';
+                        occurredAt: number;
+                        sessionSeq?: number | undefined;
+                        agentId?: string | undefined;
+                        agentTurnId?: string | undefined;
+                        sanitizedPreview?: string | undefined;
+                        usageLimit?: {
+                            v: 1;
+                            resetAtMs: number | null;
+                            retryAfterMs: number | null;
+                            quotaScope: 'unknown' | 'account' | 'workspace' | 'organization' | 'model' | 'provider';
+                            recoverability: 'unknown' | 'manual' | 'wait' | 'switch_account';
+                            providerLimitId?: string | undefined;
+                            planType?: string | null | undefined;
+                            utilization?: number | null | undefined;
+                            limitCategory?: 'unknown' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | 'disabled' | undefined;
+                            quotaSnapshotRef?: {
+                                serviceId: string;
+                                profileId?: string | undefined;
+                                groupId?: string | undefined;
+                                fetchedAtMs?: number | undefined;
+                            } | undefined;
+                            effectiveMeterId?: string | undefined;
+                            effectiveRemainingPct?: number | undefined;
+                            allWindows?: {
+                                meterId: string;
+                                scope?: string | undefined;
+                                remainingPct?: number | undefined;
+                                resetAtMs?: number | undefined;
+                                status?: string | undefined;
+                            }[] | undefined;
+                            recoveryDecision?: 'switching' | 'waiting_for_reset' | 'manual_intervention' | 'not_recoverable' | undefined;
+                            overage?: {
+                                status: 'unknown' | 'allowed' | 'allowed_warning' | 'rejected';
+                                resetAtMs: number | null;
+                                disabledReason?: string | null | undefined;
+                            } | null | undefined;
+                            action?: {
+                                kind: 'open_url';
+                                url: string;
+                                labelKey?: string | undefined;
+                            } | {
+                                kind: 'settings';
+                            } | {
+                                kind: 'none';
+                            } | null | undefined;
+                            connectedService?: {
+                                serviceId: string;
+                                profileId: string | null;
+                                groupId: string | null;
+                                groupExhausted?: boolean | undefined;
+                            } | null | undefined;
+                        } | undefined;
+                        teamCredential?: {
+                            v: 1;
+                            resourceId: string;
+                            reasonCode: 'invalid_request' | 'resource_forbidden' | 'resource_unavailable' | 'resource_changed' | 'session_not_active' | 'operation_not_current' | 'execution_run_not_found' | 'execution_run_terminal' | 'execution_run_authority_unavailable' | 'broker_unavailable' | 'update_required' | 'team_credential_usage_limit' | 'token_limit_unavailable' | 'cost_limit_unavailable' | 'duplicate_request';
+                            usageLimit?: {
+                                metric: 'inference_requests' | 'total_tokens' | 'cost_usd';
+                                remaining: string;
+                                resetsAtUtc: string;
+                            } | undefined;
+                        } | undefined;
+                        temporaryThrottle?: {
+                            v: 1;
+                            retryAfterMs: number | null;
+                            recoverability: 'unknown' | 'manual' | 'wait' | 'retry';
+                        } | undefined;
+                        agentProcessExitAfterSwitch?: {
+                            exitCode: number | null;
+                            signal: string | null;
+                            lastStderrLine: string | null;
+                            vendorResumeId: string | null;
+                            materializationRoot: string | null;
+                            effectiveStateMode: 'shared' | 'isolated' | null;
+                        } | undefined;
+                    }> | undefined;
                 } | undefined;
             };
             latestToolResult?: unknown;
@@ -3926,6 +5561,118 @@ export type ExecutionRunControlActionResultById = {
                 [x: string]: unknown;
                 kind: string;
                 payload: unknown;
+            } | undefined;
+            reviewFindings?: {
+                [x: string]: unknown;
+                runRef: {
+                    [x: string]: unknown;
+                    runId: string;
+                    callId: string;
+                    backendId: string;
+                    backendTarget?: {
+                        kind: 'builtInAgent';
+                        agentId: string;
+                    } | {
+                        kind: 'configuredAcpBackend';
+                        backendId: string;
+                    } | undefined;
+                    retentionPolicy?: 'ephemeral' | 'resumable' | undefined;
+                };
+                summary: string;
+                overviewMarkdown: string;
+                findings: {
+                    [x: string]: unknown;
+                    id: string;
+                    title: string;
+                    severity: 'blocker' | 'high' | 'medium' | 'low' | 'nit';
+                    category: 'correctness' | 'security' | 'performance' | 'maintainability' | 'testing' | 'style' | 'docs';
+                    summary: string;
+                    filePath?: string | undefined;
+                    startLine?: number | undefined;
+                    endLine?: number | undefined;
+                    whyItMatters?: string | undefined;
+                    evidence?: string | undefined;
+                    confidence?: number | undefined;
+                    suggestion?: string | undefined;
+                    patch?: string | undefined;
+                    comment?: {
+                        id: string;
+                        state: 'open' | 'proposed' | 'delegated' | 'pending_review' | 'resolved' | 'dismissed';
+                        serverRevision: number;
+                        sessionId?: string | undefined;
+                        runId?: string | undefined;
+                        projectId?: string | undefined;
+                        workspace?: {
+                            machineId: string;
+                            path: string;
+                        } | undefined;
+                    } | undefined;
+                    attributionConfidence?: string | undefined;
+                }[];
+                questions: {
+                    [x: string]: unknown;
+                    id: string;
+                    text: string;
+                    status: 'open' | 'answered' | 'superseded';
+                    findingIds?: string[] | undefined;
+                }[];
+                assumptions: {
+                    [x: string]: unknown;
+                    id: string;
+                    text: string;
+                    findingIds?: string[] | undefined;
+                }[];
+                generatedAtMs: number;
+                comparisonId?: string | undefined;
+                fileCount?: number | undefined;
+                reviewOutcome?: 'failed' | 'complete' | 'partial' | undefined;
+                proposedComments?: {
+                    body: string;
+                    anchor: {
+                        kind: 'range';
+                        filePath: string;
+                        startLine: number;
+                        endLine: number;
+                        side?: 'after' | 'before' | undefined;
+                    } | {
+                        kind: 'file';
+                        filePath: string;
+                    } | {
+                        kind: 'line';
+                        filePath: string;
+                        line: number;
+                        side?: 'after' | 'before' | undefined;
+                    };
+                    findingId?: string | undefined;
+                    severity?: 'error' | 'info' | 'warning' | 'critical' | undefined;
+                    taxonomyIds?: string[] | undefined;
+                    tags?: string[] | undefined;
+                }[] | undefined;
+                triage?: {
+                    [x: string]: unknown;
+                    findings: {
+                        [x: string]: unknown;
+                        id: string;
+                        status: 'accept' | 'reject' | 'defer' | 'needs_refinement';
+                        commentId?: string | undefined;
+                        comment?: string | undefined;
+                    }[];
+                } | undefined;
+                publication?: {
+                    [x: string]: unknown;
+                    findings: {
+                        [x: string]: unknown;
+                        id: string;
+                        published: boolean;
+                        publishedAtMs?: number | undefined;
+                        publishedMessageRef?: string | undefined;
+                    }[];
+                } | undefined;
+                limits?: {
+                    [x: string]: unknown;
+                    findingsTruncated?: boolean | undefined;
+                    patchesTruncated?: boolean | undefined;
+                } | undefined;
             } | undefined;
         };
     } | {
@@ -3965,14 +5712,14 @@ export type ExecutionRunControlActionResultById = {
                     groupId?: string | undefined;
                 } | undefined;
                 launchOrigin?: {
-                    kind: 'session';
-                    sessionId: string;
-                    draftCorrelationId?: string | undefined;
-                } | {
-                    kind: 'session_discussion';
-                    sessionId: string;
+                    kind: 'discussion';
+                    serverId: string;
                     discussionId: string;
                     messageIds: string[];
+                    draftCorrelationId?: string | undefined;
+                } | {
+                    kind: 'session';
+                    sessionId: string;
                     draftCorrelationId?: string | undefined;
                 } | {
                     kind: 'external';
@@ -4181,6 +5928,88 @@ export type ExecutionRunControlActionResultById = {
                     [x: string]: unknown;
                     code: string;
                     message?: string | undefined;
+                    runtimeIssueV1?: Readonly<{
+                        v: 1;
+                        scope: 'primary_session';
+                        status: 'failed';
+                        code: string;
+                        source: 'unknown' | 'agent_status_error' | 'agent_process_exit' | 'agent_process_exit_after_switch' | 'agent_session_error' | 'usage_limit' | 'team_credential' | 'auth_error' | 'dependency_failure' | 'stream_error' | 'permission_blocked';
+                        occurredAt: number;
+                        sessionSeq?: number | undefined;
+                        agentId?: string | undefined;
+                        agentTurnId?: string | undefined;
+                        sanitizedPreview?: string | undefined;
+                        usageLimit?: {
+                            v: 1;
+                            resetAtMs: number | null;
+                            retryAfterMs: number | null;
+                            quotaScope: 'unknown' | 'account' | 'workspace' | 'organization' | 'model' | 'provider';
+                            recoverability: 'unknown' | 'manual' | 'wait' | 'switch_account';
+                            providerLimitId?: string | undefined;
+                            planType?: string | null | undefined;
+                            utilization?: number | null | undefined;
+                            limitCategory?: 'unknown' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | 'disabled' | undefined;
+                            quotaSnapshotRef?: {
+                                serviceId: string;
+                                profileId?: string | undefined;
+                                groupId?: string | undefined;
+                                fetchedAtMs?: number | undefined;
+                            } | undefined;
+                            effectiveMeterId?: string | undefined;
+                            effectiveRemainingPct?: number | undefined;
+                            allWindows?: {
+                                meterId: string;
+                                scope?: string | undefined;
+                                remainingPct?: number | undefined;
+                                resetAtMs?: number | undefined;
+                                status?: string | undefined;
+                            }[] | undefined;
+                            recoveryDecision?: 'switching' | 'waiting_for_reset' | 'manual_intervention' | 'not_recoverable' | undefined;
+                            overage?: {
+                                status: 'unknown' | 'allowed' | 'allowed_warning' | 'rejected';
+                                resetAtMs: number | null;
+                                disabledReason?: string | null | undefined;
+                            } | null | undefined;
+                            action?: {
+                                kind: 'open_url';
+                                url: string;
+                                labelKey?: string | undefined;
+                            } | {
+                                kind: 'settings';
+                            } | {
+                                kind: 'none';
+                            } | null | undefined;
+                            connectedService?: {
+                                serviceId: string;
+                                profileId: string | null;
+                                groupId: string | null;
+                                groupExhausted?: boolean | undefined;
+                            } | null | undefined;
+                        } | undefined;
+                        teamCredential?: {
+                            v: 1;
+                            resourceId: string;
+                            reasonCode: 'invalid_request' | 'resource_forbidden' | 'resource_unavailable' | 'resource_changed' | 'session_not_active' | 'operation_not_current' | 'execution_run_not_found' | 'execution_run_terminal' | 'execution_run_authority_unavailable' | 'broker_unavailable' | 'update_required' | 'team_credential_usage_limit' | 'token_limit_unavailable' | 'cost_limit_unavailable' | 'duplicate_request';
+                            usageLimit?: {
+                                metric: 'inference_requests' | 'total_tokens' | 'cost_usd';
+                                remaining: string;
+                                resetsAtUtc: string;
+                            } | undefined;
+                        } | undefined;
+                        temporaryThrottle?: {
+                            v: 1;
+                            retryAfterMs: number | null;
+                            recoverability: 'unknown' | 'manual' | 'wait' | 'retry';
+                        } | undefined;
+                        agentProcessExitAfterSwitch?: {
+                            exitCode: number | null;
+                            signal: string | null;
+                            lastStderrLine: string | null;
+                            vendorResumeId: string | null;
+                            materializationRoot: string | null;
+                            effectiveStateMode: 'shared' | 'isolated' | null;
+                        } | undefined;
+                    }> | undefined;
                 } | undefined;
             };
             latestToolResult?: unknown;
@@ -4188,6 +6017,118 @@ export type ExecutionRunControlActionResultById = {
                 [x: string]: unknown;
                 kind: string;
                 payload: unknown;
+            } | undefined;
+            reviewFindings?: {
+                [x: string]: unknown;
+                runRef: {
+                    [x: string]: unknown;
+                    runId: string;
+                    callId: string;
+                    backendId: string;
+                    backendTarget?: {
+                        kind: 'builtInAgent';
+                        agentId: string;
+                    } | {
+                        kind: 'configuredAcpBackend';
+                        backendId: string;
+                    } | undefined;
+                    retentionPolicy?: 'ephemeral' | 'resumable' | undefined;
+                };
+                summary: string;
+                overviewMarkdown: string;
+                findings: {
+                    [x: string]: unknown;
+                    id: string;
+                    title: string;
+                    severity: 'blocker' | 'high' | 'medium' | 'low' | 'nit';
+                    category: 'correctness' | 'security' | 'performance' | 'maintainability' | 'testing' | 'style' | 'docs';
+                    summary: string;
+                    filePath?: string | undefined;
+                    startLine?: number | undefined;
+                    endLine?: number | undefined;
+                    whyItMatters?: string | undefined;
+                    evidence?: string | undefined;
+                    confidence?: number | undefined;
+                    suggestion?: string | undefined;
+                    patch?: string | undefined;
+                    comment?: {
+                        id: string;
+                        state: 'open' | 'proposed' | 'delegated' | 'pending_review' | 'resolved' | 'dismissed';
+                        serverRevision: number;
+                        sessionId?: string | undefined;
+                        runId?: string | undefined;
+                        projectId?: string | undefined;
+                        workspace?: {
+                            machineId: string;
+                            path: string;
+                        } | undefined;
+                    } | undefined;
+                    attributionConfidence?: string | undefined;
+                }[];
+                questions: {
+                    [x: string]: unknown;
+                    id: string;
+                    text: string;
+                    status: 'open' | 'answered' | 'superseded';
+                    findingIds?: string[] | undefined;
+                }[];
+                assumptions: {
+                    [x: string]: unknown;
+                    id: string;
+                    text: string;
+                    findingIds?: string[] | undefined;
+                }[];
+                generatedAtMs: number;
+                comparisonId?: string | undefined;
+                fileCount?: number | undefined;
+                reviewOutcome?: 'failed' | 'complete' | 'partial' | undefined;
+                proposedComments?: {
+                    body: string;
+                    anchor: {
+                        kind: 'range';
+                        filePath: string;
+                        startLine: number;
+                        endLine: number;
+                        side?: 'after' | 'before' | undefined;
+                    } | {
+                        kind: 'file';
+                        filePath: string;
+                    } | {
+                        kind: 'line';
+                        filePath: string;
+                        line: number;
+                        side?: 'after' | 'before' | undefined;
+                    };
+                    findingId?: string | undefined;
+                    severity?: 'error' | 'info' | 'warning' | 'critical' | undefined;
+                    taxonomyIds?: string[] | undefined;
+                    tags?: string[] | undefined;
+                }[] | undefined;
+                triage?: {
+                    [x: string]: unknown;
+                    findings: {
+                        [x: string]: unknown;
+                        id: string;
+                        status: 'accept' | 'reject' | 'defer' | 'needs_refinement';
+                        commentId?: string | undefined;
+                        comment?: string | undefined;
+                    }[];
+                } | undefined;
+                publication?: {
+                    [x: string]: unknown;
+                    findings: {
+                        [x: string]: unknown;
+                        id: string;
+                        published: boolean;
+                        publishedAtMs?: number | undefined;
+                        publishedMessageRef?: string | undefined;
+                    }[];
+                } | undefined;
+                limits?: {
+                    [x: string]: unknown;
+                    findingsTruncated?: boolean | undefined;
+                    patchesTruncated?: boolean | undefined;
+                } | undefined;
             } | undefined;
         };
     } | {
@@ -4203,6 +6144,6 @@ export type ExecutionRunControlActionResultById = {
         code: 'cancelled';
     } | {
         ok: false;
-        code: 'execution_run_not_allowed' | 'execution_run_not_found' | 'execution_run_action_not_supported' | 'execution_run_invalid_action_input' | 'execution_run_stream_not_found' | 'execution_run_busy' | 'execution_run_send_outcome_unknown' | 'execution_run_failed' | 'execution_run_budget_exceeded' | 'execution_run_output_limit_exceeded' | 'execution_run_protocol_unsupported' | 'execution_run_target_not_selected' | 'execution_run_target_unavailable' | 'execution_run_child_choice_required' | 'execution_run_child_default_unavailable' | 'execution_run_parent_selection_unavailable' | 'execution_run_start_ambiguous' | 'execution_run_scope_mismatch' | 'execution_run_connected_service_generation_refresh_required' | 'run_depth_exceeded' | 'permission_denied';
+        code: 'execution_run_not_found' | 'execution_run_not_allowed' | 'execution_run_action_not_supported' | 'execution_run_invalid_action_input' | 'execution_run_stream_not_found' | 'execution_run_busy' | 'execution_run_send_outcome_unknown' | 'execution_run_failed' | 'execution_run_budget_exceeded' | 'execution_run_output_limit_exceeded' | 'execution_run_protocol_unsupported' | 'execution_run_target_not_selected' | 'execution_run_target_unavailable' | 'execution_run_child_choice_required' | 'execution_run_child_default_unavailable' | 'execution_run_parent_selection_unavailable' | 'execution_run_start_ambiguous' | 'execution_run_scope_mismatch' | 'execution_run_connected_service_generation_refresh_required' | 'run_depth_exceeded' | 'permission_denied';
     };
 };

@@ -1,9 +1,9 @@
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import { HAPPIER_META_COLUMN_STYLE, HappierMaterialRoleProvider, useContainingHappierMaterialRole, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
 import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
+import { readSessionLiveManagedSessionCountV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import React from 'react';
 import {
-    Animated,
     Platform,
     Pressable,
     View,
@@ -70,6 +70,8 @@ import { SessionRowReportsChip, SessionRowReportsDisclosure, hasSessionRowReport
 import { buildSessionListIndexNodeId } from '@/sync/domains/sessionList/sessionListIndex';
 import { SessionListRowPresentation, SessionListRowSubtitle, SessionListRowTitle, useReadableNativePhoneMinimalRow as useReadableNativePhoneMinimalRowFor } from './row/SessionListRowPresentation';
 import { WorkflowRunItemBody, type WorkflowRunItemProps } from './row/WorkflowRunItemBody';
+import { useWorkflowSessionOccurrence } from './row/useWorkflowSessionOccurrence';
+import { describeWorkflowInvocationLifecycle } from '@/components/workflows/presentation/workflowLifecyclePresentation';
 import {
     SESSION_LIST_ROW_CORNER_RADIUS,
     resolveSessionListRowIdentityMetrics,
@@ -80,14 +82,12 @@ import { resolveSessionRowInteractionPolicy } from './row/resolveSessionRowInter
 import { SESSION_LIST_SHEET_INSET_PX } from './sessionListStyles';
 import { resolveSessionItemTagCollections } from './sessionTagUtils';
 import { planSessionTagDisplay } from './sessionTagPlacement';
-import { useSessionSplitCanvasRowActionsForScope } from '@/components/sessions/canvas/useSessionSplitCanvasRowActions';
 import { EntityDragGrip } from '@/components/ui/treeDragDrop/ui/EntityReleasePreview';
 import { isTouchPrimaryPointer } from '@/components/ui/interactiveTargetSize';
 import { GlassSurface, useContainingGlassSurfaceGroup } from '@/components/ui/glass/GlassSurface';
 import { useGlassMaterialColorResolver } from '@/components/ui/glass/useGlassSurfaceColor';
 import { useSessionListOrganizeMode } from './organize/SessionListOrganizeMode';
 import { resolveWorkspaceTargetForSession } from '@/sync/domains/session/resolveWorkspaceTargetForSession';
-import { resolveSessionSplitCanvasScope } from '@/sync/domains/session/sessionSplitCanvasScope';
 import type { SessionListRowViewModel } from './sessionListRowViewModels';
 import type { SessionListGuardState } from '@/sync/domains/session/listing/sessionListRenderable';
 import { GuardCountdown } from '@/components/machines/guard/GuardCountdown';
@@ -110,11 +110,6 @@ import { useOptionalSessionListSelectionRow } from './selection/SessionListSelec
 import { resolveSessionListSelectionPointerAction } from './selection/sessionListSelectionPointer';
 import { useSessionRowActionMenu } from './row/actionMenu/useSessionRowActionMenu';
 import { formatSessionAttentionReminderDateTime } from './row/actionMenu/sessionAttentionReminderAction';
-import {
-    SESSION_ROW_ACTION_OPEN_SPLIT_DOWN_ID,
-    SESSION_ROW_ACTION_OPEN_SPLIT_RIGHT_ID,
-    SESSION_ROW_ACTION_REVEAL_IN_CURRENT_SPLIT_ID,
-} from './row/actionMenu/sessionRowActionMenuTypes';
 import {
     buildSessionDebugInformation,
     isSessionDebugInformationEnabled,
@@ -152,7 +147,6 @@ const SESSION_ROW_ORGANIZE_LIST_MENU_ITEM_ID = 'session.organizeList';
 
 const CONTEXT_MENU_PRESS_IN_OPEN_DELAY_MS = 350;
 const CONTEXT_MENU_PRESS_SUPPRESSION_TIMEOUT_MS = 600;
-const SESSION_IDENTITY_SKELETON_ANIMATION_MS = 900;
 const SESSION_FOLDER_ROW_CHROME_INDENT_BASE = 38;
 const SESSION_FOLDER_ROW_CHROME_INDENT_STEP = 12;
 const SESSION_REPORTS_ROW_INDENT_STEP = 22;
@@ -217,7 +211,7 @@ export type SessionItemBaseProps = Readonly<{
     compact?: boolean;
     compactMinimal?: boolean;
     folderDepth?: number;
-    /** Level under a lead in the `reportsTo` tree (ORC §3.8); 0 or absent draws the row at its own level. */
+    /** Level under a lead in the `manager` tree (ORC §3.8); 0 or absent draws the row at its own level. */
     reportsDepth?: number;
     /** A lead whose reports are nested under it in this list: their fold state (lab `b-launch N`). */
     reportsDisclosure?: 'collapsed' | 'expanded';
@@ -244,6 +238,11 @@ export type SessionItemBaseProps = Readonly<{
      * action), in place of the list's tag and pin affordances.
      */
     showTalkAction?: boolean;
+    /**
+     * The Bots roster's rows: an offline Bot's age is already its time meta, so the row adds no
+     * "Last seen" line of its own (lab `b-rail A`). A Bot's outcome (an error, ready for review) still speaks; an offline row never claims to be working.
+     */
+    quietWhenOffline?: boolean;
     /** The Bots roster's compact More menu (lab `b-rail M`) instead of the list's. */
     actionMenuSurface?: 'rowMenu' | 'botsRoster';
     /** Runs after the row opened its Session (a popover that hosts the row closes). */
@@ -388,25 +387,25 @@ const stylesheet = StyleSheet.create((theme) => ({
         width: SESSION_LIST_ROW_IDENTITY_METRICS.default.slotSize,
         height: SESSION_LIST_ROW_IDENTITY_METRICS.default.slotSize,
         borderRadius: 999,
-        backgroundColor: theme.colors.surface.elevated,
+        backgroundColor: theme.colors.surface.skeleton,
     },
     avatarLoadingCompact: {
         width: SESSION_LIST_ROW_IDENTITY_METRICS.compact.slotSize,
         height: SESSION_LIST_ROW_IDENTITY_METRICS.compact.slotSize,
         borderRadius: 999,
-        backgroundColor: theme.colors.surface.elevated,
+        backgroundColor: theme.colors.surface.skeleton,
     },
     avatarLoadingMinimal: {
         width: SESSION_LIST_ROW_IDENTITY_METRICS.minimal.slotSize,
         height: SESSION_LIST_ROW_IDENTITY_METRICS.minimal.slotSize,
         borderRadius: 999,
-        backgroundColor: theme.colors.surface.elevated,
+        backgroundColor: theme.colors.surface.skeleton,
     },
     avatarLoadingMinimalNativePhone: {
         width: SESSION_LIST_ROW_IDENTITY_METRICS.minimalNativePhone.slotSize,
         height: SESSION_LIST_ROW_IDENTITY_METRICS.minimalNativePhone.slotSize,
         borderRadius: 999,
-        backgroundColor: theme.colors.surface.elevated,
+        backgroundColor: theme.colors.surface.skeleton,
     },
     pendingCountContainer: {
         position: 'absolute',
@@ -479,14 +478,14 @@ const stylesheet = StyleSheet.create((theme) => ({
         width: '46%',
         height: 10,
         borderRadius: 999,
-        backgroundColor: theme.colors.surface.inset,
+        backgroundColor: theme.colors.surface.skeleton,
         marginTop: 3,
     },
     sessionSubtitleLoadingCompact: {
         width: '42%',
         height: 9,
         borderRadius: 999,
-        backgroundColor: theme.colors.surface.inset,
+        backgroundColor: theme.colors.surface.skeleton,
         marginTop: theme.space.s2,
     },
     serverBadgeContainer: {
@@ -502,7 +501,7 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...Typography.variant('micro', 'semiBold'),
         color: theme.colors.text.secondary,
     },
-    // The `reportsTo` tree: a report sits one step in, joined to its lead by a hairline elbow.
+    // The `manager` tree: a report sits one step in, joined to its lead by a hairline elbow.
     reportsGutter: {
         alignSelf: 'stretch',
         alignItems: 'flex-end',
@@ -700,12 +699,13 @@ const SessionItemContent = React.memo(
         onNativeContextMenuOpenChange,
         agentSwitchingEnabled = false,
         showTalkAction = false,
+        quietWhenOffline = false,
         actionMenuSurface = 'rowMenu',
         onOpened,
         forkActionContext,
         sessionStatus,
         externalSessionIdentity,
-        sessionNameResolved,
+        sessionNameResolved: savedSessionName,
         sessionSubtitle,
         isSessionIdentityLoading,
         activityTimeLabel,
@@ -724,6 +724,18 @@ const SessionItemContent = React.memo(
     }: SessionItemContentProps) => {
         const router = useDestinationRouter();
         const { theme } = useUnistyles();
+        const workflowOccurrence = useWorkflowSessionOccurrence({
+            sessionId: session.id, origin: session.origin, serverId,
+            enabled: (reportsDepth ?? 0) > 0 && rowAttentionAnimationEnabled !== false
+                && isSessionAwarenessContentReadableV1(sessionStatus.awareness.encryption),
+        });
+        const sessionNameResolved = workflowOccurrence?.title ?? savedSessionName;
+        const workflowLifecycle = sessionStatus.isConnected && sessionStatus.state !== 'stale'
+            ? workflowOccurrence?.lifecycle : undefined;
+        const workflowPresentation = workflowLifecycle === undefined ? null
+            : describeWorkflowInvocationLifecycle(workflowLifecycle, {
+                blockKind: workflowOccurrence?.blockKind, runStopPending: workflowOccurrence?.runStopPending,
+            });
         const materialColor = useHappierMaterialColorResolver();
         const containingGroup = useContainingGlassSurfaceGroup();
         const mutedPaint = { backgroundColor: materialColor(theme.colors.surface.elevated) };
@@ -774,46 +786,14 @@ const SessionItemContent = React.memo(
         );
         const resolvedSelectionKey = selectionKey ?? '';
         const rowSelection = useOptionalSessionListSelectionRow(resolvedSelectionKey);
-        const identitySkeletonOpacity = React.useRef(new Animated.Value(0.45)).current;
-        React.useEffect(() => {
-            if (!isSessionIdentityLoading) return;
-            if (!rowAttentionAnimationEnabled) return;
-            if (typeof Animated.loop !== 'function' || typeof Animated.sequence !== 'function') return;
-
-            const animation = Animated.loop(
-                Animated.sequence([
-                    Animated.timing(identitySkeletonOpacity, {
-                        toValue: 1,
-                        duration: SESSION_IDENTITY_SKELETON_ANIMATION_MS,
-                        useNativeDriver: true,
-                    }),
-                    Animated.timing(identitySkeletonOpacity, {
-                        toValue: 0.45,
-                        duration: SESSION_IDENTITY_SKELETON_ANIMATION_MS,
-                        useNativeDriver: true,
-                    }),
-                ]),
-            );
-            animation.start();
-            return () => {
-                animation.stop();
-            };
-        }, [isSessionIdentityLoading, identitySkeletonOpacity, rowAttentionAnimationEnabled]);
+        // Metadata can remain unopened until this row is demanded. Its reserved
+        // identity slots must stay quiet rather than running a presentation clock.
         const navigateToSession = useNavigateToSession();
         // Open in a kept tab or beside the focused pane, through the workspace owner (workspace lab O).
         const workspaceOpen = useWorkspaceOpenActions(buildScopedSessionRouteHref({
             sessionId: resolvedSession.id,
             serverId: serverId ?? null,
         }));
-        const splitCanvasScope = React.useMemo(() => {
-            return resolveSessionSplitCanvasScope(resolveWorkspaceTargetForSession(sessionId), {
-                routeServerId: serverId ?? null,
-            });
-        }, [serverId, sessionId]);
-        const splitCanvasRowActions = useSessionSplitCanvasRowActionsForScope({
-            sessionId: resolvedSession.id,
-            scope: splitCanvasScope,
-        });
         const swipeableRef = React.useRef<Swipeable | null>(null);
         const contextMenuAnchorRef = React.useRef<View>(null);
         // The row's picture: an accepted Pin to rail travels from here (lab `b-rail` signature move).
@@ -995,30 +975,6 @@ const SessionItemContent = React.memo(
             if (e && typeof e.preventDefault === 'function') e.preventDefault();
         }, []);
 
-        const splitCanvasMenuItems = React.useMemo((): DropdownMenuItem[] => {
-            if (splitCanvasRowActions.mode === 'open') {
-                return [
-                    {
-                        id: SESSION_ROW_ACTION_OPEN_SPLIT_RIGHT_ID,
-                        title: t('sessionInfo.openInSplitRight'),
-                        icon: <Icon name="arrow-right" size={16} color={rowActionIconColor} />,
-                    },
-                    {
-                        id: SESSION_ROW_ACTION_OPEN_SPLIT_DOWN_ID,
-                        title: t('sessionInfo.openInSplitDown'),
-                        icon: <Icon name="arrow-down" size={16} color={rowActionIconColor} />,
-                    },
-                ];
-            }
-            if (splitCanvasRowActions.mode === 'reveal') {
-                return [{
-                    id: SESSION_ROW_ACTION_REVEAL_IN_CURRENT_SPLIT_ID,
-                    title: t('sessionInfo.revealInCurrentSplit'),
-                    icon: <Icon name="crosshair" size={16} color={rowActionIconColor} />,
-                }];
-            }
-            return [];
-        }, [rowActionIconColor, splitCanvasRowActions.mode]);
         const copyDebugMenuItems = React.useMemo((): DropdownMenuItem[] => {
             if (!devModeEnabled) return [];
             return [createCopySessionDebugInformationMenuItem({ iconColor: rowActionIconColor })];
@@ -1110,25 +1066,10 @@ const SessionItemContent = React.memo(
             }];
         }, [dragEnabled, organize.active, organize.available, rowActionIconColor]);
         const leadingMenuItems = React.useMemo(
-            () => [...workspaceOpen.items, ...draftMenuItems, ...copyDebugMenuItems, ...forkMenuItems, ...splitCanvasMenuItems, ...organizeMenuItems],
-            [copyDebugMenuItems, draftMenuItems, forkMenuItems, organizeMenuItems, splitCanvasMenuItems, workspaceOpen.items],
+            () => [...workspaceOpen.items, ...draftMenuItems, ...copyDebugMenuItems, ...forkMenuItems, ...organizeMenuItems],
+            [copyDebugMenuItems, draftMenuItems, forkMenuItems, organizeMenuItems, workspaceOpen.items],
         );
 
-        const handleSelectSplitCanvasMenuItem = React.useCallback((itemId: string): boolean => {
-            switch (itemId) {
-                case SESSION_ROW_ACTION_OPEN_SPLIT_RIGHT_ID:
-                    splitCanvasRowActions.openInSplitRight();
-                    return true;
-                case SESSION_ROW_ACTION_OPEN_SPLIT_DOWN_ID:
-                    splitCanvasRowActions.openInSplitDown();
-                    return true;
-                case SESSION_ROW_ACTION_REVEAL_IN_CURRENT_SPLIT_ID:
-                    splitCanvasRowActions.revealInSplit();
-                    return true;
-                default:
-                    return false;
-            }
-        }, [splitCanvasRowActions]);
         const handleSelectLeadingMenuItem = React.useCallback(async (itemId: string): Promise<boolean> => {
             if (workspaceOpen.select(itemId)) return true;
             if (itemId === SESSION_ROW_ORGANIZE_LIST_MENU_ITEM_ID) {
@@ -1150,8 +1091,8 @@ const SessionItemContent = React.memo(
                 openForkFlow();
                 return true;
             }
-            return handleSelectSplitCanvasMenuItem(itemId);
-        }, [confirmDeleteDraft, copyFeedback, handleSelectSplitCanvasMenuItem, openForkFlow, organize, resolvedSession.id, resolveSessionDebugInformation, workspaceOpen]);
+            return false;
+        }, [confirmDeleteDraft, copyFeedback, openForkFlow, organize, resolvedSession.id, resolveSessionDebugInformation, workspaceOpen]);
 
         const handleEnterSelectionMode = React.useCallback(() => {
             if (!resolvedSelectionKey) return;
@@ -1383,9 +1324,10 @@ const SessionItemContent = React.memo(
         }));
         // Retention controls placement only. It cannot turn quiet, unread, or pending facts into
         // semantic work after the canonical awareness owner stopped reporting work.
-        const rowAttentionState = derivedRowAttentionState;
+        const rowAttentionState = workflowPresentation?.attention ? 'action_required'
+            : workflowPresentation?.marker.kind === 'activity' ? 'working' : derivedRowAttentionState;
         const attentionIndicatorAnimationEnabled = rowAttentionAnimationEnabled
-            && sessionStatus.isPulsing === true;
+            && (workflowPresentation ? workflowPresentation.marker.kind === 'activity' : sessionStatus.isPulsing === true);
         const rowContextSubtitle = externalSessionIdentity?.rowMetadataLabel || sessionSubtitle;
         const rowPresentation = resolveSessionRowPresentation({
             attentionState: rowAttentionState,
@@ -1403,11 +1345,14 @@ const SessionItemContent = React.memo(
         // included, which its copy owner gives no words — is never a word-and-dot headline. The row
         // keeps its context line where it has one, and otherwise just its name.
         const statusUnknownIsQuiet = sessionStatus.state === 'unknown';
-        const statusAvailabilityNeedsExplanation = !statusUnknownIsQuiet && (
+        const statusOfflineIsQuiet = quietWhenOffline && sessionStatus.state === 'disconnected';
+        // An offline row keeps the outcome its presentation words (an error, ready for review), never "Last seen" or "working".
+        const offlineRowKeepsItsState = rowPresentation.statusTextKey !== undefined;
+        const statusAvailabilityNeedsExplanation = !statusUnknownIsQuiet && !statusOfflineIsQuiet && (
             !isSessionAwarenessContentReadableV1(sessionStatus.awareness.encryption)
             || sessionStatus.state === 'stale'
             || sessionStatus.state === 'disconnected');
-        const effectiveSecondaryLineMode: SessionListSecondaryLineMode = statusAvailabilityNeedsExplanation
+        const effectiveSecondaryLineMode: SessionListSecondaryLineMode = statusAvailabilityNeedsExplanation || statusOfflineIsQuiet
             ? 'status'
             : rowPresentation.secondaryLine === 'path' || (statusUnknownIsQuiet && Boolean(rowContextSubtitle))
                 ? 'path'
@@ -1415,13 +1360,18 @@ const SessionItemContent = React.memo(
         // The row's word and tone come from the shared work-status owner, fed by the Session facts owner
         // with the status this row already projected (INT §5.3): healthy work is quiet, needs-you and
         // trouble speak in their tone. The marker beside it stays the row presentation's own.
-        const workStatus = resolveWorkStatusTone({
+        const workStatus = workflowPresentation && !statusAvailabilityNeedsExplanation
+            ? resolveWorkStatusTone({ kind: 'workflow_step', facts: { lifecycle: workflowPresentation.lifecycle,
+                word: workflowPresentation.label, runStopPending: workflowOccurrence?.runStopPending } })
+            : resolveWorkStatusTone({
             kind: 'session',
             facts: sessionWorkStatusFactsFromStatus(resolvedSession, sessionStatus),
         });
-        const canonicalStatusSummaryText = statusAvailabilityNeedsExplanation
+        const canonicalStatusSummaryText = workflowLifecycle !== undefined && !statusAvailabilityNeedsExplanation
             ? workStatus.word
-            : statusUnknownIsQuiet
+            : statusAvailabilityNeedsExplanation
+            ? workStatus.word
+            : statusUnknownIsQuiet || (statusOfflineIsQuiet && !offlineRowKeepsItsState)
                 ? ''
                 : rowPresentation.statusTextKey
                     ? t(rowPresentation.statusTextKey)
@@ -1430,7 +1380,7 @@ const SessionItemContent = React.memo(
         const statusSummaryText = [canonicalStatusSummaryText, externalIdentityText]
             .filter(Boolean)
             .join(' · ');
-        const currentWorkTitle = sessionStatus.awareness?.currentWork?.title;
+        const currentWorkTitle = workflowLifecycle === undefined ? sessionStatus.awareness?.currentWork?.title : undefined;
         const statusLineText = currentWorkTitle && sessionStatus.awareness?.availability !== 'locked'
             ? `${statusSummaryText} · ${currentWorkTitle}`
             : statusSummaryText;
@@ -1439,7 +1389,9 @@ const SessionItemContent = React.memo(
         // from accessibility, so whenever the row draws a state without writing a sentence for it
         // — every minimal row, and unread/queued-input rows in any density — the canonical row
         // presentation owner supplies the words instead of this component inferring them.
-        const rowAttentionAccessibilityLabel = statusAvailabilityNeedsExplanation
+        const rowAttentionAccessibilityLabel = workflowLifecycle !== undefined && !statusAvailabilityNeedsExplanation
+            ? statusLineText
+            : statusAvailabilityNeedsExplanation
             ? statusLineText
             : rowAttentionState === 'failed'
                 ? t('status.error')
@@ -1454,23 +1406,24 @@ const SessionItemContent = React.memo(
                             : undefined;
         const normalizedReportsDepth = Math.min(Math.max(Math.trunc(reportsDepth ?? 0), 0), 3);
         const reportsCollapsed = reportsDisclosure === 'collapsed';
-        const reportsChip = resolvedSession.reports && (reportsCollapsed || hasSessionRowReportsChip(resolvedSession.reports))
-            ? <SessionRowReportsChip sessionId={resolvedSession.id} reports={resolvedSession.reports} collapsed={reportsCollapsed} />
+        const liveReportCount = readSessionLiveManagedSessionCountV1(resolvedSession.managedSessions);
+        const reportsChip = resolvedSession.managedSessions && (reportsCollapsed || hasSessionRowReportsChip(resolvedSession.managedSessions))
+            ? <SessionRowReportsChip sessionId={resolvedSession.id} reports={resolvedSession.managedSessions} collapsed={reportsCollapsed} />
             : null;
         const reportsDisclosureControl = reportsDisclosure && onSetReportsCollapsed ? (
             <SessionRowReportsDisclosure
                 sessionId={resolvedSession.id}
                 nodeId={buildSessionListIndexNodeId({ type: 'session', serverId, sessionId: resolvedSession.id })}
                 name={sessionNameResolved}
-                count={resolvedSession.reports?.total ?? 0}
+                count={liveReportCount}
                 collapsed={reportsCollapsed}
                 onSetCollapsed={onSetReportsCollapsed}
             />
         ) : null;
         const reportsAccessibilityLabel = [
             normalizedReportsDepth > 0 ? t('sessionWork.list.level', { level: normalizedReportsDepth + 1 }) : null,
-            (resolvedSession.reports?.total ?? 0) > 0
-                ? t('sessionWork.list.subSessions', { count: resolvedSession.reports?.total ?? 0 })
+            liveReportCount > 0
+                ? t('sessionWork.list.subSessions', { count: liveReportCount })
                 : null,
         ].filter(Boolean).join('. ');
         const rowAccessibilityLabel = [sessionNameResolved, reportsAccessibilityLabel, rowAttentionAccessibilityLabel]
@@ -1641,7 +1594,7 @@ const SessionItemContent = React.memo(
                                 style={compact ? { width: avatarSize, height: avatarSize } : undefined}
                             />
                         ) : isSessionIdentityLoading ? (
-                            <Animated.View
+                            <View
                                 testID={`session-list-avatar-loading-${resolvedSession.id}`}
                                 style={[
                                     isMinimal
@@ -1651,7 +1604,6 @@ const SessionItemContent = React.memo(
                                         : compact
                                             ? styles.avatarLoadingCompact
                                             : styles.avatarLoading,
-                                    { opacity: identitySkeletonOpacity },
                                 ]}
                             />
                         ) : (
@@ -1695,11 +1647,10 @@ const SessionItemContent = React.memo(
                 ) : null}
                 title={<>
                         {isSessionIdentityLoading ? (
-                            <Animated.View
+                            <View
                                 testID={`session-list-title-loading-${resolvedSession.id}`}
                                 style={[
                                     identityTitleLoadingStyle,
-                                    { opacity: identitySkeletonOpacity },
                                 ]}
                             />
                         ) : (
@@ -1746,11 +1697,10 @@ const SessionItemContent = React.memo(
                         </SessionListRowSubtitle>
                     ) : showStandardSecondaryLine ? (
                         shouldShowIdentitySubtitleSkeleton ? (
-                            <Animated.View
+                            <View
                                 testID={`session-list-subtitle-loading-${resolvedSession.id}`}
                                 style={[
                                     compact ? styles.sessionSubtitleLoadingCompact : styles.sessionSubtitleLoading,
-                                    { opacity: identitySkeletonOpacity },
                                 ]}
                             />
                         ) : effectiveSecondaryLineMode === 'status' ? (

@@ -204,23 +204,35 @@ describe('WidgetFrame', () => {
             widgetPresentation={{ size: 'small', footprint: { columns: 2, columnSpan: 1, rowSpan: 1, height: 'compact', width: 'half' } }}
             body={{ kind: 'content', children: <Body /> }} />);
         expect(screen.root.findAllByType(HappierScrollArea)).toHaveLength(0);
-        await act(async () => { screen.findByTestId('grouped.viewport')!.props.onLayout({ nativeEvent: { layout: { width: 330, height: 240 } } }); });
+        await act(async () => { screen.findByTestId('grouped.viewportBody')!.props.onLayout({ nativeEvent: { layout: { width: 330, height: 240 } } }); });
         expect(observed).toMatchObject({ size: 'small', geometry: { width: 330, height: 240 } });
     });
-    it('gives every half-width card the half-cell header, grouped or not: the title keeps its room and activity is its spinner alone', async () => {
+    it('keeps a background refresh to the glyph, and says Refreshing in words only for the refresh the person started with Retry', async () => {
         const { useWidgetFrameResourceActivity } = await import('./widgetFrameResourceActivity');
         function Refreshing() { useWidgetFrameResourceActivity(true); return <>rows</>; }
-        const frame = (width: 'half' | 'full') => <WidgetFrame testID={width} frameStyle="card" placement="home" title="Period summary" source="Account"
-            widgetPresentation={{ size: width === 'half' ? 'medium' : 'full', footprint: { columns: 2, columnSpan: width === 'half' ? 1 : 2, rowSpan: 2, height: 'regular', width } }}
-            body={{ kind: 'content', children: <Refreshing /> }} />;
-        const half = await renderScreen(frame('half'));
+        let finishRetry: () => void = () => undefined;
+        const retry = vi.fn(() => new Promise<void>(resolve => { finishRetry = resolve; }));
+        const frame = (testID: string, footer?: React.ComponentProps<typeof WidgetFrame>['footer']) => <WidgetFrame testID={testID}
+            frameStyle="card" placement="home" title="Period summary" source="Account"
+            widgetPresentation={{ size: 'medium', footprint: { columns: 2, columnSpan: 1, rowSpan: 2, height: 'regular', width: 'half' } }}
+            body={{ kind: 'content', children: <Refreshing /> }} {...(footer ? { footer } : {})} />;
+        // A half-width cell with room: the dot-matrix glyph alone would read as one more grip beside the card's own.
+        const roomy = await renderScreen(frame('roomy', { kind: 'refreshFailed', reason: 'Couldn\'t refresh', onRetry: retry }));
         await flushHookEffects({ cycles: 2 });
-        expect(half.findByTestId('half.refreshing')?.props.accessibilityLabel).toBe('widgetDefinition.refreshing');
-        expect(half.getTextContent()).not.toContain('widgetDefinition.refreshing');
-        // A full-width card has the room, so the word stays.
-        const full = await renderScreen(frame('full'));
+        await act(async () => { roomy.findByTestId('roomy')!.props.onLayout({ nativeEvent: { layout: { width: 400, height: 280 } } }); });
+        // W9b: a refresh nobody asked for is quiet work, however long it runs: the named glyph, never the sentence.
+        expect(roomy.findByTestId('roomy.refreshing')?.props.accessibilityLabel).toBe('widgetDefinition.refreshing');
+        expect(roomy.getTextContent()).not.toContain('widgetDefinition.refreshing');
+        await act(async () => { roomy.pressByTestId('roomy.stale-action'); });
+        expect(roomy.getTextContent()).toContain('widgetDefinition.refreshing');
+        await act(async () => { finishRetry(); });
+        expect(roomy.getTextContent()).not.toContain('widgetDefinition.refreshing');
+        // Below the frame's narrowing width the title keeps its room and the glyph stays, named for assistive technology.
+        const tight = await renderScreen(frame('tight'));
         await flushHookEffects({ cycles: 2 });
-        expect(full.getTextContent()).toContain('widgetDefinition.refreshing');
+        await act(async () => { tight.findByTestId('tight')!.props.onLayout({ nativeEvent: { layout: { width: 280, height: 280 } } }); });
+        expect(tight.findByTestId('tight.refreshing')?.props.accessibilityLabel).toBe('widgetDefinition.refreshing');
+        expect(tight.getTextContent()).not.toContain('widgetDefinition.refreshing');
     });
     it('fades the foot of a fixed body whose rows run past it, so no line reads as cut off', async () => {
         const frame = await renderScreen(<WidgetFrame testID="fixed" frameStyle="card" placement="home" title="Period summary"
@@ -242,8 +254,58 @@ describe('WidgetFrame', () => {
             body={{ kind: 'content', children: <Body /> }} />);
         // No fixed-height scroll viewport: the row is as tall as what it shows.
         expect(screen.root.findAllByType(HappierScrollArea)).toHaveLength(0);
-        await act(async () => { screen.findByTestId('core.viewport')!.props.onLayout({ nativeEvent: { layout: { width: 900, height: 412 } } }); });
+        await act(async () => { screen.findByTestId('core.viewportBody')!.props.onLayout({ nativeEvent: { layout: { width: 900, height: 412 } } }); });
         expect(observed).toMatchObject({ size: 'wide', footprint: { columnSpan: 2 }, geometry: { width: 900, height: 412 } });
+    });
+    it('keeps a headerless frame headerless while its body refreshes: no empty header row, no lone spinner above the body', async () => {
+        const { useWidgetFrameResourceActivity } = await import('./widgetFrameResourceActivity');
+        function Refreshing() { useWidgetFrameResourceActivity(true); return <>capacity</>; }
+        const screen = await renderScreen(<WidgetFrame testID="embed" frameStyle="plain" grouped placement="home" title={null} bodyHeight="content"
+            widgetPresentation={{ size: 'medium', footprint: { columns: 2, columnSpan: 1, rowSpan: 2, height: 'regular', width: 'half' } }}
+            body={{ kind: 'content', children: <Refreshing /> }} />);
+        await flushHookEffects({ cycles: 2 });
+        expect(screen.findByTestId('embed.refreshing')).toBeNull();
+        expect(screen.getTextContent()).toContain('capacity');
+    });
+    it('tells a body stretched by its band its own height, never the band\'s, so a chart keeps its height and the cell keeps the space', async () => {
+        let observed: ReturnType<typeof useWidgetPresentation>;
+        function Body() { observed = useWidgetPresentation(); return <>a sized plot</>; }
+        const screen = await renderScreen(<WidgetFrame testID="daily" frameStyle="plain" grouped placement="home" title="Daily usage" bodyHeight="content"
+            widgetPresentation={{ size: 'medium', footprint: { columns: 2, columnSpan: 1, rowSpan: 2, height: 'regular', width: 'half' } }}
+            body={{ kind: 'content', children: <Body /> }} />);
+        // The body lays out at its own height first; then the taller partner column stretches the viewport.
+        await act(async () => { screen.findByTestId('daily.viewportBody')?.props.onLayout({ nativeEvent: { layout: { width: 560, height: 300 } } }); });
+        await act(async () => { screen.findByTestId('daily.viewport')!.props.onLayout?.({ nativeEvent: { layout: { width: 560, height: 700 } } }); });
+        expect(observed?.geometry).toEqual({ width: 560, height: 300 });
+        // A refresh that briefly grows the partner never ratchets the body's room up with it.
+        await act(async () => { screen.findByTestId('daily.viewport')!.props.onLayout?.({ nativeEvent: { layout: { width: 560, height: 888 } } }); });
+        expect(observed?.geometry).toEqual({ width: 560, height: 300 });
+    });
+    it('tells a content-height body at least the room its footprint declares, so a chart in a tall cell is not sized from its own first frame', async () => {
+        let observed: ReturnType<typeof useWidgetPresentation>;
+        function Body() { observed = useWidgetPresentation(); return <>a sized plot</>; }
+        const screen = await renderScreen(<WidgetFrame testID="daily" frameStyle="plain" grouped placement="home" title="Daily usage" bodyHeight="content"
+            widgetPresentation={{ size: 'tall', footprint: { columns: 2, columnSpan: 1, rowSpan: 4, height: 'tall', width: 'half' } }}
+            body={{ kind: 'content', children: <Body /> }} />);
+        // The body first draws small (a skeleton, a floor-height plot); its declared room is what a chart reads.
+        await act(async () => { screen.findByTestId('daily.viewportBody')?.props.onLayout({ nativeEvent: { layout: { width: 560, height: 120 } } }); });
+        expect(observed?.geometry?.width).toBe(560);
+        expect(observed?.geometry?.height).toBeGreaterThan(300);
+        // The room is declared, not applied: the body itself is not stretched to it.
+        expect(screen.findByTestId('daily.viewportBody')!.props.style).not.toHaveProperty('minHeight');
+    });
+    it('does not say the source again when the title already names it', async () => {
+        const named = await renderFrame({ title: 'New in PRs & Issues', source: 'PRs & Issues' });
+        // One mention in the header; the accessible name still carries the source.
+        expect(named.getTextContent().split('PRs & Issues')).toHaveLength(2);
+        expect(named.findByTestId('frame')?.props.accessibilityLabel).toBe('New in PRs & Issues, PRs & Issues');
+        const distinct = await renderFrame({ title: 'Latest runs', source: 'Automations' });
+        expect(distinct.getTextContent()).toContain('Automations');
+    });
+    it('ends the header with the ⋯ menu, then the move grip, the one order on every card', async () => {
+        const screen = await renderFrame({ menu: <Text testID="frame-menu">menu</Text>, grip: <Text testID="frame-grip">grip</Text> });
+        const order = screen.tree.findAllByType(Text).map((node) => node.props.testID).filter((id: unknown) => id === 'frame-menu' || id === 'frame-grip');
+        expect(order).toEqual(['frame-menu', 'frame-grip']);
     });
     it('keeps the suffix that tells near-identical machines apart when a bound source is too long for its header', async () => {
         const screen = await renderFrame({ source: 'Following group · NLDW6-3-11-20 · 0371' });

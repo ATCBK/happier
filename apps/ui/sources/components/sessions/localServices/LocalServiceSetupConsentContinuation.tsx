@@ -1,5 +1,5 @@
 import * as React from 'react';
-import type { RuntimeActionExecute } from '@happier-dev/protocol/actions/executor/types';
+import type { FrontDoorRuntimeActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { ProjectPrepareNoLaunchResultV1Schema } from '@happier-dev/protocol/actions/projectActionFamily';
 
@@ -31,7 +31,7 @@ const NO_CHANGE = () => {};
 export function LocalServiceSetupConsentContinuation(props: Readonly<{
     review: LocalServiceSetupConsentReview;
     binding: ServerCredentialAccountScopeBinding;
-    runtimeActionExecute: RuntimeActionExecute;
+    runtimeActionExecute: FrontDoorRuntimeActionExecute;
     onComplete: (accepted: boolean) => void;
     testID: string;
 }>): React.ReactElement | null {
@@ -107,7 +107,7 @@ function RetainedSetupContinuation(props: Parameters<typeof LocalServiceSetupCon
             return;
         }
         // Remembering resumes the held setup; its own completion releases the intent.
-        if (result && 'kind' in result && result.kind === 'remembered') return;
+        if (result && 'kind' in result && (result.kind === 'remembered' || result.kind === 'continued')) return;
         const settled = ProjectPrepareNoLaunchResultV1Schema.safeParse(result);
         if (settled.success) props.onComplete(settled.data.kind !== 'skippedForInvocation');
         else Modal.alert(t('common.error'), t('approvals.decisionError'));

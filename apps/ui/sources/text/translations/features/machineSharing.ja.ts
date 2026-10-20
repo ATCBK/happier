@@ -18,6 +18,7 @@ export const machineSharing = createMachineSharingTranslations({
     plain: 'データはエンドツーエンド暗号化されていないため、Home が読み取れます。', saved: '共有を更新しました', yourAccess: '自分のアクセス権',
     ownHistory: "ここで開始したセッションは、アクセスが終わった後も Happier であなたのものです。", through: "{audience} 経由",
     leave: 'この共有から退出', inherited: '{audience} 経由のアクセス権が残っています。管理者に変更を依頼してください。', unavailable: '{machine} のアクセス権を確認できませんでした。',
+    saveFailed: '{person} の「{draft}」を保存できませんでした。現在も「{current}」のままです。',
     effectiveLoss: '最後のアクセス権を失う人のセッション、スクリプト、実行、待機中・準備中の作業、ターミナル、サービスは停止されます。Happier の履歴は本人のものとして残り、取得済みのデータは回収できません。',
     overlap: '他の有効なアクセス権が残っています。作業は継続します。', custodianProtected: '元のマシン所有者はここでは削除・変更できません。',
 });

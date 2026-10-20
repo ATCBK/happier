@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { WebSocketServer, type WebSocket } from 'ws';
-import type { ExecService } from '@happier-dev/plugin-sdk/exec';
+import type { ExecService, PluginProcessResult } from '@happier-dev/plugin-sdk/exec';
 import type { AgentExecutionRunConversationRuntimeV1, AgentExecutionRunRuntimeContextV1, AgentSessionConfigurationSnapshot, AgentSessionOpenRequest, AgentSessionRuntime, AgentSessionRuntimeContext } from '@happier-dev/plugin-sdk/agents/runtime';
 
 import { buildCodexAppServerArgs, createCodexNativeAppServerClient } from './client.js';
@@ -11,6 +11,7 @@ import { createCodexAppServerRuntime, startCodexAppServerRuntime, type CodexAppS
 import { openCodexNativeAppServerExecutionRunConversation, openCodexNativeAppServerSession } from './native.js';
 import type { CodexProviderBindingEngineConfigV1 } from '../../providerBinding/runtimeConfig.js';
 import { resolveCodexTerminalPermissionPolicy } from '../terminal/permissionPolicy.js';
+import { connectCodexUnixWebSocketJsonRpc } from './client/unixWebSocket.js';
 
 // The network fixture models pinned Codex 0.159.2's empty paginated rollout:
 // name/set supplies metadata; a full read persists it; native resume then works.
@@ -26,23 +27,31 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   failResume(message: string): void;
   emitNotification(method: string, params: Record<string, unknown>): void;
   failNextRevert(outcome: 'methodNotFound' | 'applied' | 'notApplied'): void;
-  openConfiguredSession(providerSessionId?: string): Promise<AgentSessionRuntime>;
+  openConfiguredSession(providerSessionId?: string, mcpServers?: AgentSessionOpenRequest['mcpServers']): Promise<AgentSessionRuntime>;
   openConfiguredRun(): Promise<AgentExecutionRunConversationRuntimeV1>;
 }) => Promise<void>, options: {
   longTemporaryDirectory?: boolean;
   toolRestriction?: Pick<AgentSessionConfigurationSnapshot, 'allowedTools' | 'unlistedTools'>;
   mcpServers?: AgentSessionOpenRequest['mcpServers'];
   mcpToolPolicy?: AgentSessionOpenRequest['mcpToolPolicy'];
-  permissionMode?: string;
+  permissionMode?: AgentSessionConfigurationSnapshot['permissionIntent']['value'];
   interactions?: CodexAppServerRuntimeHost['ui'];
+  models?: AgentSessionRuntimeContext['session']['services']['models'];
+  modelListResponse?: unknown;
   onTurnStart?: (input: Readonly<{ socket: WebSocket; params: Record<string, unknown>; turnId: string }>) => void | Promise<void>;
+  beforeTurnStartResponse?: () => Promise<void>;
+  beforeThreadResumeResponse?: (input: Readonly<{ socket: WebSocket; params: Record<string, unknown> }>) => void | Promise<void>;
   turnIdForStart?: (occurrence: number) => string;
   nativeToolMode?: 'code_mode_only' | 'direct';
   initialProviderBinding?: CodexProviderBindingEngineConfigV1;
   processEnv?: Readonly<Record<string, string | undefined>>;
   skills?: AgentSessionOpenRequest['skills'];
+  startupInstructions?: AgentSessionOpenRequest['startupInstructions'] | null;
   appServerTransport?: 'daemonProxy';
   rejectExtraRootsSet?: boolean;
+  nativeSpawnFailure?: Error;
+  nativeProcessResult?: PluginProcessResult;
+  logger?: CodexAppServerRuntimeHost['logger'];
   beforeExtraRootsSetResponse?: (input: Readonly<{ occurrence: number; params: Record<string, unknown> }>) => Promise<void>;
   directory?: string;
   observer?: Readonly<{
@@ -66,6 +75,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   const nativeLaunches: (readonly string[])[] = [];
   let named = false;
   let materialized = false;
+  let goal: Record<string, unknown> | null = null;
   let rejectRead = false;
   let resumeFailure: string | null = null;
   let extraRootsSetOccurrence = 0;
@@ -74,6 +84,10 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   const nativeServers = new Set([ws]);
   const turns: Array<{ id: string; status: string }> = [];
   const emitNotification = (method: string, params: Record<string, unknown>) => {
+    if (method === 'thread/goal/cleared') goal = null;
+    if (method === 'thread/goal/updated' && params.goal && typeof params.goal === 'object') {
+      goal = params.goal as Record<string, unknown>;
+    }
     if (method === 'turn/completed' && params.turn && typeof params.turn === 'object') {
       const observed = params.turn as { id?: unknown; status?: unknown };
       const turn = turns.find((entry) => entry.id === observed.id);
@@ -96,14 +110,26 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
     }
     let result: unknown = {};
     let error: unknown;
+    if (message.method === 'turn/start') turnStartOccurrence += 1;
     const turnId = message.method === 'turn/start'
-      ? options.turnIdForStart?.(++turnStartOccurrence) ?? `provider-turn-${turnStartOccurrence}` : 'fixture-turn';
+      ? options.turnIdForStart?.(turnStartOccurrence) ?? `provider-turn-${turnStartOccurrence}` : 'fixture-turn';
     if (message.method === 'initialize') {
       result = { userAgent: 'happier_cli/0.162.1 (fixture)' };
     } else if (message.method === 'config/read') {
       result = { config: { mcp_servers: options.mcpServers ? { happier__wilson: { enabled: true } } : {}, features: { code_mode: { excluded_tool_namespaces: ['functions'] } } } };
     } else if (message.method === 'thread/start') {
       result = { model: 'fixture-model', thread: { id: 'fresh-thread', turns: [] }, sandbox: { type: 'readOnly' }, reasoningEffort: 'low' };
+    } else if (message.method.startsWith('thread/goal/')) {
+      // An independent native control process can find only a persisted rollout.
+      if (!materialized || params.threadId !== 'fresh-thread') error = { code: -32600, message: 'thread not found' };
+      else if (message.method === 'thread/goal/set') {
+        goal = { ...goal, ...params, status: params.status ?? goal?.status ?? 'active',
+          createdAt: 1_776_272_400, updatedAt: 1_776_272_460 };
+        result = { goal };
+      } else if (message.method === 'thread/goal/clear') {
+        goal = null;
+        result = { cleared: true };
+      } else result = { goal };
     } else if (message.method === 'turn/start') {
       const turn = { id: turnId, status: 'inProgress' };
       turns.push(turn);
@@ -139,9 +165,13 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
       result = { data: turns, nextCursor: null };
     } else if (message.method === 'experimentalFeature/list') {
       result = { data: [{ name: 'realtime_conversation', enabled: true }], nextCursor: null };
+    } else if (message.method === 'model/list') {
+      result = options.modelListResponse ?? { data: [{ id: 'fixture-model', model: 'fixture-model', displayName: 'Fixture Model', isDefault: true }], nextCursor: null };
     } else if (message.method === 'skills/extraRoots/set' && options.rejectExtraRootsSet) {
       error = { code: -32601, message: 'Method not found' };
     }
+    if (message.method === 'thread/resume') await options.beforeThreadResumeResponse?.({ socket, params });
+    if (message.method === 'turn/start') await options.beforeTurnStartResponse?.();
     socket.send(JSON.stringify({ id: message.id, ...(error ? { error } : { result }) }));
     if (message.method === 'turn/start') await options.onTurnStart?.({ socket, params, turnId });
     if (message.method === 'turn/interrupt') {
@@ -174,7 +204,7 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
     toolRestriction: options.toolRestriction,
     mcpServers: options.mcpServers,
     mcpToolPolicy: options.mcpToolPolicy,
-    initialPermissionMode: options.permissionMode,
+    initialPermissionMode: options.permissionMode ?? undefined,
     initialProviderBinding: options.initialProviderBinding,
     processEnv: options.processEnv,
     skills: options.skills,
@@ -184,11 +214,16 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
       : ({ approvalPolicy: 'never', sandbox: 'read-only', sandboxPolicy: { type: 'readOnly' } }),
     host: { baseProcessEnv: {}, logger: { debug() {}, warn() {} }, createClient, ui: options.interactions },
   });
-  const opened: { session: AgentSessionRuntime | null } = { session: null };
-  let openedRun: AgentExecutionRunConversationRuntimeV1 | null = null;
+  const opened: { session: AgentSessionRuntime | null; run: AgentExecutionRunConversationRuntimeV1 | null } = {
+    session: null, run: null,
+  };
   await runtime.updateConfig?.({ configOption: { id: 'reasoning_effort', value: 'low' } });
   const nativeExec = {
     ...exec,
+    // Substitute the process boundary with the same real JSON-RPC socket transport.
+    clients: { spawn: async (request: { maxFrameBytes: number; requestTimeoutMs: number }) => await connectCodexUnixWebSocketJsonRpc({
+      socketPath, maxFrameBytes: request.maxFrameBytes, requestTimeoutMs: request.requestTimeoutMs,
+    }) },
     run: async (request: { args: readonly string[] }) => ({
       stdout: new TextEncoder().encode(request.args.includes('--version') ? 'codex-cli 0.159.2' : request.args.includes('models') ? JSON.stringify({ models: [{ slug: 'fixture-model', tool_mode: options.nativeToolMode === 'direct' ? undefined : 'code_mode_only' }, { slug: 'direct-model' }] }) : ''),
       stderr: new Uint8Array(),
@@ -196,6 +231,12 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
       termination: { requestedBy: { kind: 'none' }, observed: { kind: 'exit', exitCode: 0 } },
     }),
     spawn: async (request: { args: readonly string[] }) => {
+      if (options.nativeSpawnFailure) throw options.nativeSpawnFailure;
+      if (options.nativeProcessResult) return {
+        write: async () => undefined, closeStdin: async () => undefined,
+        onOutput: () => ({ dispose() {} }), dispose: async () => undefined,
+        wait: async () => options.nativeProcessResult!,
+      };
       nativeLaunches.push([...request.args]);
       const endpoint = request.args[request.args.indexOf('--listen') + 1];
       if (!endpoint?.startsWith('unix://')) throw new Error('Expected shared native socket launch');
@@ -232,12 +273,12 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
   try {
     await run({ runtime, requests, exec: nativeExec, directory: root, endpoints, nativeLaunches, emitNotification,
       failNextRevert: (outcome) => { revertFailure = outcome; },
-      failRead: () => { rejectRead = true; }, failResume: (message) => { resumeFailure = message; }, async openConfiguredSession(providerSessionId) {
+      failRead: () => { rejectRead = true; }, failResume: (message) => { resumeFailure = message; }, async openConfiguredSession(providerSessionId, mcpServers = options.mcpServers) {
       // Exec and host SDK services are genuine external boundaries; native/runtime/client logic stays real.
       const context = {
         signal: new AbortController().signal,
-        services: { exec: nativeExec, logger: { debug() {}, warn() {} }, sessions: {} },
-        session: { id: 'actual-happier-session', services: {} },
+        services: { exec: nativeExec, logger: options.logger ?? { debug() {}, warn() {} }, sessions: {} },
+        session: { id: 'actual-happier-session', services: { models: options.models } },
         ui: { title: { set: async () => undefined } },
       } as unknown as AgentSessionRuntimeContext;
       opened.session = await openCodexNativeAppServerSession({
@@ -246,40 +287,45 @@ export async function withCodexNativeAttachFixture(run: (fixture: {
         launchEnvironment: { values: { CODEX_HOME: root }, unset: ['CODEX_SQLITE_HOME', 'HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON'] },
         configuration: {
           mode: { value: null, updatedAtMs: 0 }, model: { value: 'fixture-model', updatedAtMs: 1 },
-          permissionIntent: { value: 'read-only', updatedAtMs: 1 },
+          permissionIntent: { value: options.permissionMode ?? 'read-only', updatedAtMs: 1 },
           options: { reasoning_effort: { value: 'low', updatedAtMs: 1 } },
           ...options.toolRestriction,
         },
-        ...(options.mcpServers ? { mcpServers: options.mcpServers } : {}),
+        ...(mcpServers ? { mcpServers } : {}),
+        ...(options.mcpToolPolicy ? { mcpToolPolicy: options.mcpToolPolicy } : {}),
         ...(options.skills ? { skills: options.skills } : {}),
-        startupInstructions: { v: 1, id: 'fixture.startup', revision: 1, instructions: 'Actual startup instructions.' },
+        ...(options.startupInstructions === null ? {} : {
+          startupInstructions: options.startupInstructions ?? { v: 1, id: 'fixture.startup', revision: 1, instructions: 'Actual startup instructions.' },
+        }),
       }, context);
       return opened.session;
     }, async openConfiguredRun() {
       const context = {
         signal: new AbortController().signal,
-        services: { exec: nativeExec, logger: { debug() {}, warn() {} } },
+        services: { exec: nativeExec, logger: options.logger ?? { debug() {}, warn() {} } },
         executionRun: { id: 'skills-run-1', services: {} },
       } as unknown as AgentExecutionRunRuntimeContextV1;
-      openedRun = await openCodexNativeAppServerExecutionRunConversation({
+      opened.run = await openCodexNativeAppServerExecutionRunConversation({
         kind: 'create', runId: 'skills-run-1', cwd: root,
         profile: { pluginId: 'happier.agent.codex', localId: 'codex' },
         input: { text: 'Use the review skill.' },
         launchEnvironment: { values: { CODEX_HOME: root }, unset: ['CODEX_SQLITE_HOME', 'HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON'] },
         configuration: {
           mode: { value: null, updatedAtMs: 0 }, model: { value: 'fixture-model', updatedAtMs: 1 },
-          permissionIntent: { value: 'read-only', updatedAtMs: 1 }, options: {},
+          permissionIntent: { value: options.permissionMode ?? 'read-only', updatedAtMs: 1 }, options: {},
         },
         ...(options.skills ? { skills: options.skills } : {}),
+        ...(options.mcpServers ? { mcpServers: options.mcpServers } : {}),
+        ...(options.mcpToolPolicy ? { mcpToolPolicy: options.mcpToolPolicy } : {}),
       }, context);
-      return openedRun;
+      return opened.run;
     }, async resume() {
       const peer = await createClient();
       try { return await peer.request('thread/resume', { threadId: 'fresh-thread' }); }
       finally { await peer.dispose(); }
     } });
   } finally {
-    await openedRun?.dispose();
+    await opened.run?.dispose();
     await opened.session?.dispose();
     await runtime.dispose();
     for (const socket of ws.clients) socket.terminate();

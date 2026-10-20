@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { fetchAccountEncryptionMode } from '@/sync/api/account/apiAccountEncryptionMode';
@@ -8,7 +8,7 @@ import { AutomationTemplateEncryptionMaterialUnavailableError } from './automati
 /** Schema-specific recipe callers share the Account envelope and currentness owner. */
 export async function openAutomationRecipePayloadForAuthoring<T>(params: Readonly<{
     envelope: Readonly<{ t: 'plain'; v: unknown }> | Readonly<{ t: 'encrypted'; c: string }>;
-    schema: z.ZodType<T>;
+    schema: z.ZodMiniType<T>;
     decryptRaw?: (ciphertext: string) => Promise<unknown | null>;
     isCurrent?: () => boolean;
 }>): Promise<T> {

@@ -76,7 +76,8 @@ export function LocalNeuralTtsSettings(props: {
                 setting={VOICE_CONVERSATIONS_SETTINGS.settings.ttsAssetId}
             />
 
-            <SettingAnchor setting={VOICE_CONVERSATIONS_SETTINGS.settings.ttsVoiceId}>
+            <SettingAnchor settings={[VOICE_CONVERSATIONS_SETTINGS.settings.ttsVoiceId,
+                VOICE_CONVERSATIONS_SETTINGS.settings.ttsCatalog, VOICE_CONVERSATIONS_SETTINGS.settings.ttsCatalogRetry]}>
             <DropdownMenu
                 open={openMenu === 'voiceId'}
                 onOpenChange={(next) => setOpenMenu(next ? 'voiceId' : null)}

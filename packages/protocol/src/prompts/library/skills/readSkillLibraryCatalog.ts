@@ -1,11 +1,31 @@
-import { readSkillBundleContentV1 } from '../promptBundleSchemas.js';
-import { FIRST_PARTY_SKILLS_V1 } from './firstPartySkillsV1.js';
+import { readSkillBundleContentV1, readReadOnlySkillContentV1 } from '../promptBundleSchemas.js';
+import { FIRST_PARTY_SKILLS_V1, type ReadOnlySkillV1 } from './firstPartySkillsV1.js';
+import { isPluginSkillIdV1 } from './skillLibraryItemV1.js';
+import type { ArtifactCoarseKindV1 } from '../../../artifacts/artifactKindV1.js';
+
+/** Plugin source outages may omit list rows, but never authorize retirement or GC. */
+export async function readAvailablePluginSkillItemsV1<T>(
+  read: () => readonly T[] | Promise<readonly T[]>, signal?: AbortSignal,
+): Promise<readonly T[]> {
+  signal?.throwIfAborted();
+  try {
+    const items = await read();
+    signal?.throwIfAborted();
+    return items;
+  } catch (error) {
+    signal?.throwIfAborted();
+    const code = error && typeof error === 'object' ? Reflect.get(error, 'code') : undefined;
+    if (code === 'skill_content_unavailable' || code === 'needs_machine') return [];
+    throw error;
+  }
+}
 
 export type SkillLibraryInventoryArtifactV1 = Readonly<{
   artifactId: string; header: Readonly<Record<string, unknown>>; body?: unknown;
 }>;
 export type SkillLibraryInventoryPortV1<T extends SkillLibraryInventoryArtifactV1 = SkillLibraryInventoryArtifactV1> = Readonly<{
-  list(options: Readonly<{ includeBody: boolean; limit?: number; cursor?: string; signal?: AbortSignal }>): Promise<Readonly<{
+  readPluginSkills?(signal?: AbortSignal, skillIds?: readonly string[]): Promise<readonly ReadOnlySkillV1[]>;
+  list(options: Readonly<{ includeBody: boolean; limit?: number; cursor?: string; coarseKind?: ArtifactCoarseKindV1; signal?: AbortSignal }>): Promise<Readonly<{
     items: readonly T[]; coverage: 'complete' | 'partial'; nextCursor?: string;
   }>>;
 }>;
@@ -19,7 +39,7 @@ export async function readCompleteSkillLibraryInventoryV1<T extends SkillLibrary
   do {
     options.signal?.throwIfAborted();
     // The Artifact API admits at most 500 rows per request; continue until exhausted.
-    const page = await store.list({ ...options, limit: 500, ...(cursor ? { cursor } : {}) });
+    const page = await store.list({ ...options, limit: 500, coarseKind: 'skill', ...(cursor ? { cursor } : {}) });
     options.signal?.throwIfAborted();
     if (page.coverage !== 'complete') throw Object.assign(new Error('Skill library unavailable'), { code: 'catalog_unavailable' });
     for (const artifact of page.items) {
@@ -44,12 +64,15 @@ export async function readSkillLibraryCatalog(store: SkillLibraryInventoryPortV1
   read(id: string, options?: Readonly<{ signal?: AbortSignal }>): Promise<SkillLibraryInventoryArtifactV1 | null>;
 }>>, signal?: AbortSignal, skillIds?: readonly string[]): Promise<readonly Readonly<{ id: string; name: string }>[]> {
   signal?.throwIfAborted();
-  const bundled = FIRST_PARTY_SKILLS_V1.filter(skill => !skillIds || skillIds.includes(skill.skillId));
+  const readPlugins = () => store.readPluginSkills?.(signal, skillIds) ?? [];
+  const pluginSkills = skillIds ? await readPlugins() : await readAvailablePluginSkillItemsV1(readPlugins, signal);
+  signal?.throwIfAborted();
+  const bundled = [...FIRST_PARTY_SKILLS_V1, ...pluginSkills].filter(skill => !skillIds || skillIds.includes(skill.skillId));
   let inventory: readonly SkillLibraryInventoryArtifactV1[];
   if (skillIds) {
     const read = store.read;
     if (!read) throw Object.assign(new Error('Addressed skill reader unavailable'), { code: 'catalog_unavailable' });
-    const nativeIds = [...new Set(skillIds)].filter(id => !bundled.some(skill => skill.skillId === id));
+    const nativeIds = [...new Set(skillIds)].filter(id => !isPluginSkillIdV1(id) && !bundled.some(skill => skill.skillId === id));
     const opened = await Promise.all(nativeIds.map(id => read(id, { signal })));
     signal?.throwIfAborted();
     inventory = opened.filter((artifact): artifact is SkillLibraryInventoryArtifactV1 => artifact !== null);
@@ -62,5 +85,5 @@ export async function readSkillLibraryCatalog(store: SkillLibraryInventoryPortV1
     if (!content) continue;
     items.push({ id: artifact.artifactId, name: content.frontmatter.name });
   }
-  return [...items, ...bundled.map(skill => ({ id: skill.skillId, name: skill.name }))];
+  return [...items, ...bundled.map(skill => ({ id: skill.skillId, name: readReadOnlySkillContentV1(skill.skillId, pluginSkills)!.frontmatter.name }))];
 }

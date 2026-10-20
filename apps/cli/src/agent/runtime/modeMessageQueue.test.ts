@@ -3,6 +3,32 @@ import { MessageQueue2 } from './modeMessageQueue';
 import { hashObject } from '@/utils/deterministicJson';
 
 describe('MessageQueue2', () => {
+    it('retains next-turn context until the exact represented item is discarded', async () => {
+        const queue = new MessageQueue2<string>(mode => mode, {
+            isContextOnly: (_message, mode) => mode === 'next-turn-information',
+            withContext: (message, context) => `${context.join('\n')}\n${message}`,
+        });
+        queue.push('Answer to the earlier question', 'next-turn-information');
+        expect(queue.size()).toBe(0);
+        let started = false;
+        const waiting = queue.waitForMessagesAndGetAsString().then(batch => { started = true; return batch; });
+        await Promise.resolve();
+        expect(started).toBe(false);
+        queue.push('Continue the work', 'human-input-mode');
+        await expect(waiting).resolves.toMatchObject({
+            mode: 'human-input-mode', message: 'Answer to the earlier question\nContinue the work',
+        });
+        expect(queue.getContextOnlyMessages()).toEqual(['Answer to the earlier question']);
+        queue.push('Another input', 'human-input-mode');
+        await expect(queue.waitForMessagesAndGetAsString()).resolves.toMatchObject({
+            message: 'Answer to the earlier question\nAnother input',
+        });
+        expect(queue.discardMatching(message => message === 'Answer to the earlier question')).toBe(1);
+        queue.push('After exact representation', 'human-input-mode');
+        await expect(queue.waitForMessagesAndGetAsString()).resolves.toMatchObject({ message: 'After exact representation' });
+        queue.close();
+    });
+
     it('should create a queue', () => {
         const queue = new MessageQueue2<string>(mode => mode);
         expect(queue.size()).toBe(0);

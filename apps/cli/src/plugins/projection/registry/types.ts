@@ -1,3 +1,4 @@
+import type { PluginWorkItemsContributionV1 } from '@happier-dev/protocol/plugins/contributions/workItems';
 import type {
     BackendCatalogDefinition,
     BackendDefinitionContractV1,
@@ -126,12 +127,17 @@ export type ResolvedWorkflowContribution = ResolvedTargetUiContribution<PluginWo
 export type ResolvedInputTypeContribution = ResolvedTargetUiContribution<PluginInputTypeContributionV1>;
 export type ResolvedAtmospherePictureContribution = ResolvedTargetUiContribution<PluginAtmospherePictureContributionV1>;
 export type ResolvedRegistrySourceContribution = ResolvedTargetUiContribution<import('@happier-dev/protocol').PluginRegistrySourceContributionV1>;
+export type ResolvedSkillContribution = ResolvedTargetUiContribution<import('@happier-dev/protocol').PluginSkillContributionV1> & Readonly<{
+    pluginRootPath: string;
+    pluginName?: string;
+}>;
 export type ResolvedMachineProvisionerContribution = ResolvedTargetUiContribution<MachineProvisionerContributionV1>;
 export type ResolvedClientExecutableContribution<T> = ResolvedTargetUiContribution<T> & Readonly<{
     pluginRootPath: string;
     generatedUiArtifactsManifest?: PluginUiArtifactsManifestV2;
 }>;
 export type ResolvedDragSourceContribution = ResolvedClientExecutableContribution<PluginDragSourceContributionV1>;
+export type ResolvedWorkItemsContribution = ResolvedClientExecutableContribution<PluginWorkItemsContributionV1>;
 export type ResolvedDropTargetContribution = ResolvedClientExecutableContribution<PluginDropTargetContributionV1>;
 export type ResolvedSearchProviderContribution = ResolvedTargetUiContribution<
     PluginSearchProviderContributionV1
@@ -423,6 +429,9 @@ type ResolvedActionDefinitionBase = Readonly<
 >;
 
 type ResolvedActionPresentation = Readonly<{
+    /** Authored contribution surfaces retained by the canonical Action projection. */
+    contributionSurfaces?: PluginActionContributionV2['surfaces'];
+    confirmationWhen?: PluginActionContributionV2['confirmationWhen'];
     /** Manifest Action icon retained for host-rendered catalog consumers. */
     icon?: PluginActionContributionV2['icon'];
     /** Canonical V2 semantic bindings retained through the legacy passthrough shell. */
@@ -461,8 +470,8 @@ type ResolvedContributedActionDefinition = Readonly<
 >;
 
 export type ResolvedActionDefinition =
-    | LegacyResolvedActionDefinition
-    | ResolvedContributedActionDefinition;
+    (LegacyResolvedActionDefinition | ResolvedContributedActionDefinition)
+    & Readonly<Pick<PluginActionContributionV2, 'connectedAccountPurposeBindings'>>;
 
 export type ResolvedToolDefinition = Readonly<PluginToolContributionV2 & {
     kindVersion: 1;
@@ -861,8 +870,10 @@ export type ResolvedContributionInputs = Readonly<{
     inputTypes?: readonly ResolvedInputTypeContribution[];
     atmospherePictures?: readonly ResolvedAtmospherePictureContribution[];
     registrySources?: readonly ResolvedRegistrySourceContribution[];
+    skills?: readonly ResolvedSkillContribution[];
     machineProvisioners?: readonly ResolvedMachineProvisionerContribution[];
     dragSources?: readonly ResolvedDragSourceContribution[];
+    workItems?: readonly ResolvedWorkItemsContribution[];
     dropTargets?: readonly ResolvedDropTargetContribution[];
     mcpServers?: readonly ResolvedMcpServerContribution[];
     mcpDiscoverySources?: readonly ResolvedMcpDiscoverySourceContribution[];
@@ -925,8 +936,10 @@ export type ResolvedContributionRegistry = Readonly<{
     inputTypes?: readonly ResolvedInputTypeContribution[];
     atmospherePictures?: readonly ResolvedAtmospherePictureContribution[];
     registrySources?: readonly ResolvedRegistrySourceContribution[];
+    skills?: readonly ResolvedSkillContribution[];
     machineProvisioners?: readonly ResolvedMachineProvisionerContribution[];
     dragSources?: readonly ResolvedDragSourceContribution[];
+    workItems?: readonly ResolvedWorkItemsContribution[];
     dropTargets?: readonly ResolvedDropTargetContribution[];
     mcpServers?: readonly ResolvedMcpServerContribution[];
     mcpDiscoverySources?: readonly ResolvedMcpDiscoverySourceContribution[];

@@ -297,10 +297,10 @@ export type SavedSecretSharingActionInputById = {
                                 command: string;
                                 args: string[];
                                 cwd?: {
+                                    t: 'session';
+                                } | {
                                     t: 'path';
                                     path: string;
-                                } | {
-                                    t: 'session';
                                 } | undefined;
                             } | undefined;
                             remote?: {
@@ -353,6 +353,8 @@ export type SavedSecretSharingActionInputById = {
                                     command?: string | undefined;
                                     args?: string[] | undefined;
                                     cwd?: {
+                                        t: 'session';
+                                    } | {
                                         t: 'path';
                                         path: string;
                                     } | undefined;
@@ -468,17 +470,17 @@ export type SavedSecretSharingActionInputById = {
                         bindings: {
                             id: string;
                             target: {
-                                t: 'allMachines';
-                            } | {
                                 t: 'machine';
                                 machineId: string;
-                            } | {
-                                t: 'project';
-                                projectKey: string;
                             } | {
                                 t: 'workspace';
                                 machineId: string;
                                 workspaceRoot: string;
+                            } | {
+                                t: 'allMachines';
+                            } | {
+                                t: 'project';
+                                projectKey: string;
                             };
                             enabled: boolean;
                             createdAt: number;
@@ -650,7 +652,7 @@ export type SavedSecretSharingActionInputById = {
                                 } | undefined;
                             } | undefined;
                             runtime?: {
-                                stderrRules: {
+                                stderrRules?: {
                                     authenticationErrorDetail?: string | undefined;
                                     suppress?: {
                                         includes: string[];
@@ -661,7 +663,14 @@ export type SavedSecretSharingActionInputById = {
                                         detail: string;
                                         caseSensitive?: boolean | undefined;
                                     }[] | undefined;
-                                };
+                                } | undefined;
+                                permissionModeMapping?: {
+                                    default?: string | null | undefined;
+                                    'read-only'?: string | null | undefined;
+                                    'safe-yolo'?: string | null | undefined;
+                                    yolo?: string | null | undefined;
+                                    plan?: string | null | undefined;
+                                } | undefined;
                             } | undefined;
                             compatibility?: {
                                 source: 'acp-catalog-v2';
@@ -1283,6 +1292,7 @@ export type SavedSecretSharingActionInputById = {
                                 profileId?: string | undefined;
                                 workspaceWrites?: 'allow' | 'deny' | undefined;
                                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                                canDelegateToOtherRoles?: boolean | undefined;
                                 instructionsOverride?: string | undefined;
                             }>;
                             v: 1;
@@ -1294,17 +1304,17 @@ export type SavedSecretSharingActionInputById = {
                             rules: {
                                 id: string;
                                 target: {
-                                    t: 'allMachines';
-                                } | {
                                     t: 'machine';
                                     machineId: string;
-                                } | {
-                                    t: 'project';
-                                    projectKey: string;
                                 } | {
                                     t: 'workspace';
                                     machineId: string;
                                     workspaceRoot: string;
+                                } | {
+                                    t: 'allMachines';
+                                } | {
+                                    t: 'project';
+                                    projectKey: string;
                                 };
                                 enabled: boolean;
                                 createdAt: number;
@@ -1551,18 +1561,6 @@ export type SavedSecretSharingActionInputById = {
 export type SavedSecretSharingActionResultById = {
     readonly "secrets.shared.list": {
         resources: ({
-            materialStatus: 'resource_corrupt';
-            relationship: 'owner';
-            repair: {
-                kind: 'delete_resource';
-                resourceId: string;
-                expectedRevision: number;
-            };
-        } | {
-            materialStatus: 'resource_corrupt';
-            relationship: 'recipient';
-            repair: null;
-        } | {
             ref: string;
             source: 'personal' | 'shared_resource';
             relationship: 'owner' | 'recipient';
@@ -1624,6 +1622,18 @@ export type SavedSecretSharingActionResultById = {
                 manageAccess: boolean;
                 delete: boolean;
             };
+        } | {
+            materialStatus: 'resource_corrupt';
+            relationship: 'owner';
+            repair: {
+                kind: 'delete_resource';
+                resourceId: string;
+                expectedRevision: number;
+            };
+        } | {
+            materialStatus: 'resource_corrupt';
+            relationship: 'recipient';
+            repair: null;
         })[];
     };
     readonly "secrets.shared.create": {

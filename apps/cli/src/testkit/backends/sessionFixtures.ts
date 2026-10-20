@@ -136,6 +136,9 @@ export function createApiSessionClientFixture(options?: {
 
     return {
         keepAlive() {},
+        prepareForClose() {},
+        retireUndispatchedProviderInput() {},
+        markPendingProviderInputDispatched() {},
         async enqueueAgentMessageCommitted() {
             return { persisted: true, delivered: false };
         },
@@ -188,6 +191,7 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
     const fixture = {
         sessionId,
         getServerBinding: () => serverBinding,
+        getServerFeaturesSnapshot: () => null,
         bindMcpRequestAuthPort(port: Parameters<ApiSessionClient['bindMcpRequestAuthPort']>[0]) {
             mcpRequestAuth = port;
         },
@@ -209,7 +213,16 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
             metadata = updater(metadata);
             events.emit('metadata-updated');
         },
+        hasOwnerMetadataAuthority: () => true,
+        async updateMetadataAsCurrentPublisher(updater: (current: Metadata) => Metadata) {
+            // This generic transport fixture uses the caller's metadata view;
+            // production enforces publisher currentness at the Home boundary.
+            fixture.updateMetadata(current => updater(current as Metadata) as TMetadata);
+        },
         updateAgentState(updater: (current: AgentState) => AgentState) {
+            agentState = updater(agentState);
+        },
+        async updateAgentStateRequestSettlement(updater: (current: AgentState) => AgentState) {
             agentState = updater(agentState);
         },
         async fetchRecentTranscriptTextItemsForAcpImport() {
@@ -249,7 +262,9 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
             });
         },
         async refreshSessionSnapshotFromServerBestEffort() {},
+        async disposeExecutionRuns() {},
         observeProviderInputSettlement() {},
+        markPendingProviderInputDispatched() {},
         confirmUserMessageLocallyConsumed() {},
         getMetadataSnapshot() {
             return metadata;
@@ -261,6 +276,8 @@ export function createMutableApiSessionClientFixture<TMetadata extends Record<st
             closed = true;
             events.emit('local-closed');
         },
+        prepareForClose() {},
+        retireUndispatchedProviderInput() {},
         on(event: string, listener: (...args: unknown[]) => void) {
             return events.on(event, listener);
         },
@@ -322,6 +339,7 @@ export function createCurrentSessionProjectionRecordFixture(
 export function createSessionNotificationContextFixture(sessionId: string): CurrentSessionProjectionRecordFixture {
     return createCurrentSessionProjectionRecordFixture({
         id: sessionId,
+        share: null,
         effectiveAccess: {
             v: 1,
             level: 'owner',

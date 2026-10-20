@@ -8,11 +8,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createActionExecutor, type ActionExecutorDeps, RPC_METHODS, UiActionDispatchRequestV1Schema, ActionIdSchema, tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { SessionAuthoringOpenResultV1Schema } from '@happier-dev/protocol/plugins/ui';
+import { SessionResumeRequestV1Schema } from '@happier-dev/protocol/sessions/control/sessionResumeRequestV1';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { configureConnectedServerSocketBoundary, installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createSessionFixture, createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { buildSessionDetailAccessProjectionQuery } from '@/sync/api/session/sessionDetailAccessProjection';
 import { SessionMetadataTuplePatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
@@ -25,6 +26,7 @@ import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol/auth/apiTokenGrant';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import type { CurrentUiContextReader } from '@/components/appShell/currentUiContext/CurrentUiContextProvider';
 
 const navigation = vi.hoisted(() => ({ push: vi.fn() }));
 // The cross-package daemon dispatcher can import Socket before the UI installs
@@ -37,7 +39,21 @@ vi.mock('expo-router', async () => {
 });
 
 const clientSockets: Socket[] = [];
-installDisconnectedServerSocketBoundary(socket => { clientSockets.push(socket); });
+let connectDaemonSockets = false;
+let answerDaemonRpc: (method: string, params: unknown, serverUrl: string | undefined) => unknown;
+installDisconnectedServerSocketBoundary((socket, serverUrl) => {
+  clientSockets.push(socket);
+  if (connectDaemonSockets) configureConnectedServerSocketBoundary(socket);
+  socket.timeout = vi.fn<typeof socket.timeout>(() => socket);
+  // Retain real Socket listeners for the reverse receiver above; only the
+  // external daemon's outgoing RPC acknowledgement is synthetic.
+  socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, payload: unknown) => {
+    if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
+    if (!payload || typeof payload !== 'object' || !('method' in payload)
+      || typeof payload.method !== 'string' || !('params' in payload)) throw new Error('Malformed daemon RPC');
+    return { ok: true, result: await answerDaemonRpc(payload.method, payload.params, serverUrl) };
+  });
+});
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
 const { storage } = await import('@/sync/domains/state/storage');
@@ -59,6 +75,8 @@ let serverId: string;
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
 beforeEach(async () => {
   clientSockets.length = 0;
+  connectDaemonSockets = false;
+  answerDaemonRpc = () => { throw Object.assign(new Error('RPC method not available'), { code: 'RPC_METHOD_NOT_AVAILABLE' }); };
   await homes.reset();
   serverId = await homes.addHome({ name: 'Home', serverUrl: 'https://relay.test', accountId: 'relay-account' });
   connection = await restoreServerAccountForTest({ serverUrl: 'https://relay.test', accountId: 'relay-account', request: homes.request });
@@ -78,6 +96,212 @@ afterEach(async () => {
 });
 
 describe('admitted app Actions and daemon-to-app continuations', () => {
+  it('keeps reverse registrations stable across fresh current-UI snapshots and retires replaced commands', async () => {
+    const { ClientActionReverseRuntime } = await import('@/components/appShell/runtime/ClientActionReverseRuntime');
+    const { renderMountedCurrentUiContext } = await import('@/dev/testkit/harness/mountedCurrentUiContext');
+    const { useOptionalCurrentUiContextReader, usePublishCurrentUiContext } = await import('@/components/appShell/currentUiContext/CurrentUiContextProvider');
+    const { currentUiContextCommandClientRpcMethod, currentUiContextReadClientRpcMethod } = await import('@happier-dev/protocol/actions/clientDispatchV1');
+    const machine = createMachineFixture({ id: 'stable-context-machine', activeAt: Date.now(), storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
+    const offline = createMachineFixture({ id: 'offline-machine', active: false, activeAt: 1 });
+    const revoked = createMachineFixture({ id: 'revoked-machine', activeAt: Date.now(), revokedAt: 1 });
+    const replaced = createMachineFixture({ id: 'replaced-machine', activeAt: Date.now(), replacedByMachineId: machine.id });
+    const foreign = createMachineFixture({ id: 'foreign-home-machine', activeAt: Date.now() });
+    await act(async () => {
+      storage.setState(state => ({ profile: { ...state.profile!, id: 'relay-account' },
+        machines: { [machine.id]: machine, [offline.id]: offline, [revoked.id]: revoked, [replaced.id]: replaced },
+        machineListByServerId: { 'foreign-home': [foreign] } }));
+    });
+    const socket = clientSockets.slice().reverse().find(candidate => candidate.listeners(SOCKET_RPC_EVENTS.REQUEST).length > 0);
+    if (!socket) throw new Error('Account transport did not install its reverse receiver');
+    const registered = new Set<string>();
+    const registrations: string[] = [];
+    const emit = vi.spyOn(socket, 'emit').mockImplementation((event, ...args) => {
+      const payload: unknown = args[0];
+      if (payload && typeof payload === 'object' && 'method' in payload && typeof payload.method === 'string') {
+        if (event === SOCKET_RPC_EVENTS.REGISTER) { registered.add(payload.method); registrations.push(payload.method); }
+        if (event === SOCKET_RPC_EVENTS.UNREGISTER) registered.delete(payload.method);
+      }
+      return socket;
+    });
+    releases.push(() => emit.mockRestore());
+    let readContext: CurrentUiContextReader['readCurrentUiContext'] | undefined;
+    let replaceCommand: (() => void) | undefined;
+    let refreshDeclaration: (() => void) | undefined;
+    function CurrentContextOwner(): React.ReactElement {
+      const reader = useOptionalCurrentUiContextReader();
+      readContext = reader?.readCurrentUiContext;
+      const [version, setVersion] = React.useState(0);
+      const [revision, setRevision] = React.useState(0);
+      replaceCommand = () => setVersion(value => value + 1);
+      refreshDeclaration = () => setRevision(value => value + 1);
+      const enrichment = React.useMemo(() => ({ detail: { revision }, commands: [{ title: 'Open issue', command: {
+        kind: 'openSurface' as const, destination: { pluginId: 'triage', localId: 'issues' }, input: { issueNumber: version },
+      } }] }), [version, revision]);
+      usePublishCurrentUiContext(enrichment);
+      return React.createElement(ClientActionReverseRuntime);
+    }
+    const runtime = await renderMountedCurrentUiContext(React.createElement(CurrentContextOwner));
+    try {
+      const snapshot = readContext?.();
+      expect(snapshot?.commands).toHaveLength(1);
+      // This is a fresh presentational DTO, not a valid external-store snapshot.
+      expect(readContext?.()).not.toBe(snapshot);
+      expect(readContext?.()).toEqual(snapshot);
+      const command = snapshot!.commands[0]!;
+      const method = (id: string) => `${machine.id}:${currentUiContextCommandClientRpcMethod(id)}`;
+      expect(registered.has(`${machine.id}:${RPC_METHODS.UI_ACTION_EXECUTE}`)).toBe(true);
+      expect(registered.has(`${machine.id}:${currentUiContextReadClientRpcMethod()}`)).toBe(true);
+      expect(registered.has(method(command.id))).toBe(true);
+      expect([...new Set([...registered].map(method => method.slice(0, method.indexOf(':'))))]).toEqual([machine.id]);
+      const beforeRefresh = [...registrations];
+      await act(async () => { refreshDeclaration?.(); });
+      expect(readContext?.()?.commands[0]?.id).toBe(command.id);
+      expect(registrations).toEqual(beforeRefresh);
+      await act(async () => {
+        storage.setState(state => ({ machines: { ...state.machines, [offline.id]: { ...offline, active: true, activeAt: Date.now() } } }));
+      });
+      expect(registered.has(`${offline.id}:${currentUiContextCommandClientRpcMethod(command.id)}`)).toBe(true);
+      const stableRegistrations = registrations.filter(method => method.startsWith(`${machine.id}:`));
+      await act(async () => {
+        storage.setState(state => ({ machines: { ...state.machines, [offline.id]: { ...offline, revokedAt: 1 } } }));
+      });
+      expect([...registered].some(method => method.startsWith(`${offline.id}:`))).toBe(false);
+      expect(registrations.filter(method => method.startsWith(`${machine.id}:`))).toEqual(stableRegistrations);
+      await act(async () => { replaceCommand?.(); });
+      const replacement = readContext?.()?.commands[0];
+      expect(replacement?.id).not.toBe(command.id);
+      expect(registered.has(method(command.id))).toBe(false);
+      expect(registered.has(method(replacement!.id))).toBe(true);
+    } finally {
+      await runtime.unmount();
+    }
+    expect(registered.size).toBe(0);
+  });
+  it('routes current UI context through its mounted app instead of another generic app socket', async () => {
+    const { ClientActionReverseRuntime } = await import('@/components/appShell/runtime/ClientActionReverseRuntime');
+    const { renderMountedCurrentUiContext } = await import('@/dev/testkit/harness/mountedCurrentUiContext');
+    const { usePublishCurrentUiContext } = await import('@/components/appShell/currentUiContext/CurrentUiContextProvider');
+    const machine = createMachineFixture({ id: 'current-ui-machine', activeAt: Date.now(), storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
+    await act(async () => {
+      storage.setState(state => ({ ...state, profile: { ...state.profile!, id: 'relay-account' },
+        machines: { [machine.id]: machine }, machineListByServerId: {} }));
+    });
+    const socket = clientSockets.slice().reverse().find(candidate => candidate.listeners(SOCKET_RPC_EVENTS.REQUEST).length > 0);
+    if (!socket) throw new Error('Account transport did not install its reverse receiver');
+    const registered = new Set<string>();
+    const emit = vi.spyOn(socket, 'emit').mockImplementation((event, ...args) => {
+      const payload: unknown = args[0];
+      if (payload && typeof payload === 'object' && 'method' in payload && typeof payload.method === 'string') {
+        if (event === SOCKET_RPC_EVENTS.REGISTER) registered.add(payload.method);
+        if (event === SOCKET_RPC_EVENTS.UNREGISTER) registered.delete(payload.method);
+      }
+      return socket;
+    });
+    let invoked = 0;
+    function CurrentContextOwner(): React.ReactElement {
+      const enrichment = React.useMemo(() => ({ commands: [{ title: 'Choose Studio Home', command: {
+        kind: 'hostLocal' as const,
+        invoke: () => { invoked++; return { ok: true as const }; },
+      } }] }), []);
+      usePublishCurrentUiContext(enrichment);
+      return React.createElement(ClientActionReverseRuntime);
+    }
+    // The generic response models the earlier-sorting background App socket from
+    // QA. Only the mounted provider registers the capability-specific methods.
+    const reverse = createClientActionReverseDispatcher(() => ({
+      hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE
+        || registered.has(`${machine.id}:${method}`),
+      callConnectedClientRpc: async (method, payload, options) => {
+        options.onIssued();
+        if (method === RPC_METHODS.UI_ACTION_EXECUTE) return { ok: true, result: { v: 1, execution: {
+          ok: false, errorCode: 'unsupported_action', error: 'current_ui_context_unavailable',
+        } } };
+        const wire = UiActionDispatchRequestV1Schema.parse(JSON.parse(JSON.stringify(payload)));
+        const result = await new Promise<unknown>(resolve => {
+          for (const receive of socket.listeners(SOCKET_RPC_EVENTS.REQUEST)) {
+            receive({ method: `${machine.id}:${method}`, params: wire }, resolve);
+          }
+        });
+        return { ok: true, result };
+      },
+    }));
+    const caller = createActionExecutor({ clientActionExecute: reverse } as unknown as ActionExecutorDeps);
+    const context = { surface: 'agent', authority: 'account_automation', serverId } as const;
+    expect(await caller.execute('ui.current_context.read', {}, context))
+      .toEqual({ ok: false, errorCode: 'unavailable', error: 'noClient' });
+    const runtime = await renderMountedCurrentUiContext(React.createElement(CurrentContextOwner));
+    try {
+      const read = await caller.execute('ui.current_context.read', {}, context);
+      expect(read).toMatchObject({ ok: true, result: { commands: [{ title: 'Choose Studio Home' }] } });
+      if (!read.ok || !read.result || typeof read.result !== 'object') throw new Error('Current UI context was not returned');
+      const commandId = Reflect.get(read.result, 'commands')?.[0]?.id;
+      expect(typeof commandId).toBe('string');
+      expect(await caller.execute('ui.current_context.command.invoke', { commandId }, context)).toMatchObject({ ok: true });
+      expect(invoked).toBe(1);
+    } finally {
+      await runtime.unmount();
+      emit.mockRestore();
+    }
+    expect(await caller.execute('ui.current_context.read', {}, context))
+      .toEqual({ ok: false, errorCode: 'unavailable', error: 'noClient' });
+  });
+  it('routes Work reads to the mounted Session owner instead of another connected client', async () => {
+    const { ClientActionReverseRuntime } = await import('@/components/appShell/runtime/ClientActionReverseRuntime');
+    const { registerMountedWorkReadOwner } = await import('./mountedWorkReadAction');
+    const { projectWork } = await import('@/components/sessions/work/workProjection');
+    const machine = createMachineFixture({ id: 'work-machine', activeAt: Date.now(), storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
+    await act(async () => {
+      storage.setState(state => ({ ...state, profile: { ...state.profile!, id: 'relay-account' },
+        machines: { [machine.id]: machine }, machineListByServerId: {} }));
+    });
+    const socket = clientSockets.slice().reverse().find(candidate => candidate.listeners(SOCKET_RPC_EVENTS.REQUEST).length > 0);
+    if (!socket) throw new Error('Account transport did not install its reverse receiver');
+    const registered = new Set<string>();
+    const emit = vi.spyOn(socket, 'emit').mockImplementation((event, ...args) => {
+      const payload: unknown = args[0];
+      if (payload && typeof payload === 'object' && 'method' in payload && typeof payload.method === 'string') {
+        if (event === SOCKET_RPC_EVENTS.REGISTER) registered.add(payload.method);
+        if (event === SOCKET_RPC_EVENTS.UNREGISTER) registered.delete(payload.method);
+      }
+      return socket;
+    });
+    releases.push(() => emit.mockRestore());
+    // Socket.IO is the only synthetic hop. An earlier-sorting connected browser
+    // has the generic handler but no Work owner; exact mounted registration must win.
+    const reverse = createClientActionReverseDispatcher(() => ({
+      hasConnectedClientRpcHandler: method => method === RPC_METHODS.UI_ACTION_EXECUTE || registered.has(`${machine.id}:${method}`),
+      callConnectedClientRpc: async (method, payload, options) => {
+        options.onIssued();
+        if (method === RPC_METHODS.UI_ACTION_EXECUTE) return { ok: true,
+          result: { v: 1, execution: { ok: true, result: { status: 'unavailable' } } } };
+        const wire = UiActionDispatchRequestV1Schema.parse(JSON.parse(JSON.stringify(payload)));
+        const result = await new Promise<unknown>(resolve => {
+          for (const receive of socket.listeners(SOCKET_RPC_EVENTS.REQUEST)) receive({ method: `${machine.id}:${method}`, params: wire }, resolve);
+        });
+        return { ok: true, result };
+      },
+    }));
+    const caller = createActionExecutor({ clientActionExecute: reverse } as unknown as ActionExecutorDeps);
+    const projection = projectWork({ sessionId: 'work-lead', reportSessions: [], agentEntries: [],
+      workflowHeadlineRuns: [], managedRuns: [], ownTriggerRunIds: new Set(), describeAgentStatus: () => '', describeProgress: () => '' });
+    const runtime = await renderScreen(React.createElement(ClientActionReverseRuntime));
+    let remove = () => {};
+    try {
+      await act(async () => {
+        remove = registerMountedWorkReadOwner({ scope: { serverId, accountId: 'relay-account' }, sessionId: 'work-lead',
+          isCurrent: () => true, read: () => ({ projection, transcriptLoaded: true,
+            managedRuns: { phase: 'loaded', refreshFailed: false } }) });
+      });
+      const context = { surface: 'cli', authority: 'present_user', serverId } as const;
+      expect(await caller.execute('session.work.get', { sessionId: 'work-lead' }, context))
+        .toMatchObject({ ok: true, result: { status: 'ready', sessionId: 'work-lead', summary: projection.summary, items: [] } });
+      expect(await caller.execute('session.work.get', { sessionId: 'unmounted' }, context))
+        .toEqual({ ok: true, result: { status: 'unavailable' } });
+      await act(async () => { remove(); });
+      expect(await caller.execute('session.work.get', { sessionId: 'work-lead' }, context))
+        .toEqual({ ok: true, result: { status: 'unavailable' } });
+    } finally { await act(async () => { remove(); }); await runtime.unmount(); }
+  });
   it('routes driver Library Actions through the mounted client registration and strict receiver', async () => {
     const { ClientActionReverseRuntime } = await import('@/components/appShell/runtime/ClientActionReverseRuntime');
     const { useWorkflowLibraryView } = await import('@/components/workflows/library/useWorkflowLibraryView');
@@ -86,7 +310,7 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       useWorkflowLibraryView(rows, null, true);
       return null;
     }
-    const machine = createMachineFixture({ id: 'driver-machine', storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
+    const machine = createMachineFixture({ id: 'driver-machine', activeAt: Date.now(), storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
     await act(async () => {
       storage.setState(state => ({ ...state, profile: { ...state.profile!, id: 'relay-account' },
         machines: { [machine.id]: machine }, machineListByServerId: {} }));
@@ -96,7 +320,7 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
     const registered = new Set<string>();
     // Socket.IO delivery is the external boundary. Production Runtime registration,
     // ApiSocket decoding, both Action executors and the Library controller stay real.
-    vi.mocked(socket.emit).mockImplementation((event, ...args) => {
+    const emit = vi.spyOn(socket, 'emit').mockImplementation((event, ...args) => {
       const payload: unknown = args[0];
       if (payload && typeof payload === 'object' && 'method' in payload && typeof payload.method === 'string') {
         if (event === SOCKET_RPC_EVENTS.REGISTER) registered.add(payload.method);
@@ -104,6 +328,7 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       }
       return socket;
     });
+    releases.push(() => emit.mockRestore());
     const reverse = createClientActionReverseDispatcher(() => ({
       hasConnectedClientRpcHandler: method => registered.has(`${machine.id}:${method}`),
       callConnectedClientRpc: async (method, payload, options) => {
@@ -168,7 +393,7 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
   });
   it.each([
     { owner: 'Home', anchor: 'homeAdministration.serverSettings.HAPPIER_API_CORS_MAX_AGE_SECONDS', value: 900, actionId: 'home.settings.set' },
-    { owner: 'Follow', anchor: 'notifications.autoFollowAssigned', value: true, actionId: 'session.follow.preferences.set' },
+    { owner: 'Follow', anchor: 'coordination.autoFollowAssigned', value: true, actionId: 'follow.preferences.set' },
   ] as const)('never turns an outer Settings-only credential grant into ambient $owner administrative authority', async ({ anchor, value, actionId }) => {
     const key = 'HAPPIER_API_CORS_MAX_AGE_SECONDS';
     const projection = (value: number) => ({ revision: 3, startedAt: null, entries: [{ key, value,
@@ -183,7 +408,7 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
     } }, version: 1 } });
     homes.answer(serverId, '/v1/home/settings/get', { body: projection(600) });
     homes.answer(serverId, '/v1/home/settings/set', { body: projection(900) });
-    const followPath = getActionSpec('session.follow.preferences.get').serverTransport?.path;
+    const followPath = getActionSpec('follow.preferences.get').serverTransport?.path;
     if (!followPath) throw new Error('Follow preference transport is undeclared');
     homes.answer(serverId, `GET ${followPath}`, { body: { assigned: false, direct: true, team: false, group: true } });
     homes.answer(serverId, `PUT ${followPath}`, { body: { assigned: true, direct: true, team: false, group: true } });
@@ -205,7 +430,7 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
   });
   it.each([
     { anchor: 'homeAdministration.serverSettings.HAPPIER_API_CORS_MAX_AGE_SECONDS', value: 900, ownerId: 'home.settings.set' },
-    { anchor: 'notifications.autoFollowAssigned', value: true, ownerId: 'session.follow.preferences.set' },
+    { anchor: 'coordination.autoFollowAssigned', value: true, ownerId: 'follow.preferences.set' },
   ] as const)('routes admitted $ownerId Settings aliases through their captured domain owner', async ({ anchor, value, ownerId }) => {
     const key = 'HAPPIER_API_CORS_MAX_AGE_SECONDS';
     const projection = (value: number) => ({ revision: 3, startedAt: null, entries: [{ key, value,
@@ -218,7 +443,7 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
     }) } });
     homes.answer(serverId, '/v1/home/settings/get', { body: projection(600) });
     homes.answer(serverId, '/v1/home/settings/set', { body: projection(900) });
-    const followPath = getActionSpec('session.follow.preferences.get').serverTransport?.path;
+    const followPath = getActionSpec('follow.preferences.get').serverTransport?.path;
     if (!followPath) throw new Error('Follow preference transport is undeclared');
     homes.answer(serverId, `GET ${followPath}`, { body: { assigned: false, direct: true, team: false, group: true } });
     homes.answer(serverId, `PUT ${followPath}`, { body: { assigned: true, direct: true, team: false, group: true } });
@@ -329,7 +554,33 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
     releases.push(() => registerVoiceAdapters(previousAdapters));
     const rootId = 'teleport-root';
     const carrierId = 'teleport-carrier';
-    const machine = createMachineFixture({ id: 'teleport-machine', activeAt: Date.now() });
+    const machine = createMachineFixture({ id: 'teleport-machine', activeAt: Date.now(),
+      storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER });
+    const machineRow = createPlainMachineRowFixture({ id: machine.id, accountId: 'relay-account' });
+    homes.answer(serverId, '/v1/machines', { body: [machineRow] });
+    homes.answer(serverId, `/v1/machines/${machine.id}`, { body: { machine: machineRow } });
+    const resumedCarrierIds: string[] = [];
+    connectDaemonSockets = true;
+    answerDaemonRpc = (qualifiedMethod, params, serverUrl) => {
+      expect(serverUrl?.replace(/\/+$/, '')).toBe('https://relay.test');
+      const separator = qualifiedMethod.indexOf(':');
+      expect(qualifiedMethod.slice(0, separator)).toBe(machine.id);
+      const method = qualifiedMethod.slice(separator + 1);
+      if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
+        // This daemon has no optional installed-plugin projection. Bundled
+        // Agent identity is resolved by the real canonical catalog owner.
+        return { error: 'RPC method not found', errorCode: 'RPC_METHOD_NOT_FOUND' };
+      }
+      if (method !== RPC_METHODS.SPAWN_HAPPY_SESSION && method !== RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE) {
+        throw new Error('Unexpected Voice daemon method: ' + method);
+      }
+      const resume = SessionResumeRequestV1Schema.parse(params);
+      expect(resume).toMatchObject({ type: 'resume-session', sessionId: carrierId,
+        directory: '/Users/tester/project', agentTarget: { kind: 'agent',
+          identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } });
+      resumedCarrierIds.push(resume.sessionId);
+      return { type: 'success', sessionId: resume.sessionId };
+    };
     const voice = voiceSettingsParse({ providerId: 'local_conversation', providers: {
       local_conversation: { schemaVersion: 1, config: {
         conversationMode: 'agent', agent: { stayInVoiceHome: false, teleportEnabled: true },
@@ -342,8 +593,10 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       machines: { [machine.id]: machine }, machineListByServerId: { [serverId]: [machine] },
     }));
     const metadata = { path: '/Users/tester/project', homeDir: '/Users/tester',
-      host: 'tester.local', machineId: machine.id };
+      host: 'tester.local', machineId: machine.id, flavor: 'codex',
+      codexBackendMode: 'appServer', codexSessionId: 'teleport-root-thread' };
     const carrierMetadata = { ...metadata,
+      codexSessionId: 'teleport-carrier-thread',
       systemSessionV1: { v: 1 as const, key: 'voice_conversation', hidden: true },
       voiceConversationScopeV1: { v: 1 as const, kind: 'session_root' as const, sessionRootId: rootId },
     };
@@ -383,6 +636,7 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
         ...(surface === 'agent' ? { defaultSessionId: rootId } : {}) });
     expect(result)
       .toEqual({ ok: true, result: { ok: true, sessionId: rootId } });
+    expect(resumedCarrierIds).toEqual([carrierId]);
     expect(voiceSessionBindingStore.getState().getByControlSessionId(VOICE_AGENT_GLOBAL_SESSION_ID))
       .toMatchObject({ conversationSessionAddress: { serverId, sessionId: carrierId },
         targetSessionAddress: { serverId, sessionId: rootId } });
@@ -440,7 +694,7 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
       .toMatchObject({ ok: false, errorCode: 'VOICE_TELEPORT_UNAVAILABLE' });
     const unavailable = createActionExecutor({ clientActionExecute: createClientActionReverseDispatcher(() => null) });
     expect(await unavailable.execute('ui.voice_agent.teleport', { sessionId: 'unbound-root' }, context))
-      .toMatchObject({ ok: false, errorCode: 'unavailable' });
+      .toMatchObject({ ok: false, errorCode: 'machine_transport_unavailable' });
     expect(homes.requests.some(request => request.path.startsWith('/v2/sessions/unbound-root'))).toBe(false);
   });
 
@@ -465,8 +719,8 @@ describe('admitted app Actions and daemon-to-app continuations', () => {
 
   it('keeps a mounted Machine continuation current when another Machine appears, and retires it on unmount', async () => {
     const { ClientActionReverseRuntime } = await import('@/components/appShell/runtime/ClientActionReverseRuntime');
-    const machine = createMachineFixture({ id: 'machine-one' });
-    const another = createMachineFixture({ id: 'machine-two' });
+    const machine = createMachineFixture({ id: 'machine-one', activeAt: Date.now() });
+    const another = createMachineFixture({ id: 'machine-two', activeAt: Date.now() });
     await act(async () => {
       storage.setState(state => ({ ...state, profile: { ...(state.profile ?? {}), id: 'relay-account' },
         machines: { [machine.id]: machine }, machineListByServerId: {} }));

@@ -8,8 +8,6 @@ import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers'
 
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
-// The shared press owner's motion tokens build their easing curves at import.
-vi.mock('react-native-reanimated', () => ({ Easing: { bezier: () => (value: number) => value, linear: (value: number) => value } }));
 vi.mock('react-native-gesture-handler', () => ({
     Swipeable: (props: Record<string, unknown>) => React.createElement('Swipeable', props),
     GestureDetector: (props: React.PropsWithChildren) => React.createElement('GestureDetector', props, props.children),

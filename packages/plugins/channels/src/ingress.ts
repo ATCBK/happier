@@ -1,7 +1,7 @@
 import {
   isPluginError,
   PluginError,
-  arePluginMachineExecutionOriginsEqual,
+  projectPluginFailureText,
   createCanonicalJsonSigningInput,
   type JsonValue,
   type PluginInvocationCaller,
@@ -20,10 +20,12 @@ import type {
   ActionApprovalRequestCreatedResult,
   PluginActionResultById,
   PluginMachineExecutionOriginV1,
+  PluginMachineExecutionRoutingV1,
 } from '@happier-dev/plugin-sdk/actions';
 import {
   isPluginActionApprovalRequestCreated,
-  PluginMachineExecutionOriginV1Schema,
+  arePluginMachineExecutionRoutingsEqual,
+  getPluginMachineExecutionRouting,
 } from '@happier-dev/plugin-sdk/actions';
 import {
   AutomationConversationResultDeliveryV1Schema,
@@ -78,7 +80,12 @@ import {
 } from './bindingTransition.js';
 import {
   hasUnsettledDestructiveOldTransportStop,
-  isSelfStampedPluginCaller,
+  areConversationConnectionTransportOriginsEqual,
+  ConversationConnectionTransportOriginV1Schema,
+  getConversationConnectionExecutionRouting,
+  getConversationConnectionTransportOrigin,
+  isConversationPendingEndpointRetarget,
+  getSelfStampedPluginCallerExecutionOrigin,
   type ConversationConnectionPollFailureEvidenceV1,
   type ConversationConnectionPollFailureV1,
   type ConversationConnectionLifecycleStateV1,
@@ -121,6 +128,7 @@ import {
   readConversationBindingUpdateRow,
   readConversationBindingParentEligibility,
   readConversationConnectionUpdateRow,
+  withConversationConnectionPayload,
   type ChannelStateRow as StateRow,
   type ConversationConnectionUpdateRow,
 } from './accountLocalBindingPolicy.js';
@@ -154,7 +162,7 @@ type IngressExecutionSource =
   }>
   | Readonly<{
     kind: 'checkpointedPoll';
-    executionOrigin: ConversationConnectionTransportOriginV1;
+    executionOrigin: PluginMachineExecutionRoutingV1;
     authorityEpoch: number;
     /** Exact endpoint context supplied to the provider that shaped this batch. */
     bindings?: ConversationPollInputV1['bindings'];
@@ -198,6 +206,7 @@ type ChannelConnectionProviderTransport = Readonly<{
 }>;
 
 type ChannelConnectionPayload = Readonly<{
+  configurationRevision: number;
   providerPluginId: string;
   providerContributionSelection: PersistedConversationProviderContributionSelection;
   transportOrigin: ConversationConnectionTransportOriginV1;
@@ -304,7 +313,7 @@ type FrozenEventTarget = Readonly<{
   candidate: ConversationIngressAutomationEventCandidateV1;
   providerPluginId: string;
   providerContributionSelection: PersistedConversationProviderContributionSelection;
-  executionOrigin: PluginMachineExecutionOriginV1;
+  executionOrigin: ConversationConnectionTransportOriginV1;
 }>;
 
 type FrozenIngressTarget = FrozenSessionTarget | FrozenAutomationTarget | FrozenEventTarget;
@@ -602,8 +611,10 @@ function readConnectionProviderTransport(
 }
 
 function stampedPluginCaller(context: PluginInvocationContext): PluginCaller | undefined {
-  return context.surface === 'plugin' && isSelfStampedPluginCaller(context.caller)
-    ? context.caller
+  const caller = context.caller;
+  return context.surface === 'plugin' && caller?.kind === 'plugin'
+    && getSelfStampedPluginCallerExecutionOrigin(caller) !== undefined
+    ? caller
     : undefined;
 }
 
@@ -644,6 +655,7 @@ function asConnection(row: StateRow | null):
       'record-kind': CHANNEL_STATE_RECORD_KIND.connection,
       'connection-id': row.rowId,
       payload: {
+        configurationRevision: connection.configurationRevision,
         providerPluginId: connection.providerPluginId,
         providerContributionSelection: connection.providerContributionSelection,
         transportOrigin: connection.transportOrigin,
@@ -786,7 +798,7 @@ function readFrozenIngressTarget(value: JsonValue | undefined): FrozenIngressTar
     const candidate = ConversationIngressAutomationEventCandidateV1Schema.safeParse(own(value, 'candidate'));
     const providerPluginId = own(value, 'providerPluginId');
     const selection = own(value, 'providerContributionSelection');
-    const executionOrigin = PluginMachineExecutionOriginV1Schema.safeParse(own(value, 'executionOrigin'));
+    const executionOrigin = ConversationConnectionTransportOriginV1Schema.safeParse(own(value, 'executionOrigin'));
     if (!isJsonRecord(selection)) return undefined;
     const contributionId = own(selection, 'contributionId');
     if (
@@ -1251,8 +1263,10 @@ function assertCurrentConnection(input: Readonly<{
       );
     }
   } else if (
-    payload.providerPluginId !== source.executionOrigin.materializationRef.pluginId
-    || !arePluginMachineExecutionOriginsEqual(payload.transportOrigin, source.executionOrigin)
+    !arePluginMachineExecutionRoutingsEqual(
+      getConversationConnectionExecutionRouting(payload.transportOrigin, payload.providerPluginId),
+      source.executionOrigin,
+    )
     || payload.authorityEpoch !== source.authorityEpoch
   ) {
     throw pluginError(
@@ -1284,8 +1298,16 @@ function assertCurrentConnection(input: Readonly<{
   }
 }
 
+/** Display labels may contain message content; they are not immutable endpoint evidence. */
+function withoutEndpointDisplayLabels(endpoint: ConversationResolvedEndpointV1): ConversationResolvedEndpointV1 {
+  const { label: _label, parentLabel: _parentLabel, ...evidence } = endpoint;
+  return evidence;
+}
+
 function ingressShell(input: ConversationNormalizedIngressV1): ConversationAuthenticatedObservationShellV1 {
-  if (input.kind === 'routableNonAdmission') return input.shell;
+  if (input.kind === 'routableNonAdmission') {
+    return { ...input.shell, endpoint: withoutEndpointDisplayLabels(input.shell.endpoint) };
+  }
   const observation = input.observation;
   const message = observation.message;
   const shellMessage = message.addressingEvidence === 'replyToIntegration'
@@ -1313,7 +1335,7 @@ function ingressShell(input: ConversationNormalizedIngressV1): ConversationAuthe
     occurrenceId: observation.occurrenceId,
     occurredAt: observation.occurredAt,
     transport: observation.transport,
-    endpoint: observation.endpoint,
+    endpoint: withoutEndpointDisplayLabels(observation.endpoint),
     actor: observation.actor,
     message: shellMessage,
   };
@@ -1332,14 +1354,23 @@ function censusIngressShell(
   payload: IngressCensusPayload,
 ): ConversationAuthenticatedObservationShellV1 {
   return payload.normalizedIngress === null
-    ? payload.compacted.shell
+    ? { ...payload.compacted.shell, endpoint: withoutEndpointDisplayLabels(payload.compacted.shell.endpoint) }
     : ingressShell(payload.normalizedIngress);
 }
 
 function normalizedIngressDiscriminant(
   input: ConversationNormalizedIngressV1,
 ): ConversationNormalizedIngressV1 {
-  return ConversationNormalizedIngressV1Schema.parse(input);
+  const normalized = ConversationNormalizedIngressV1Schema.parse(input);
+  return normalized.kind === 'routableNonAdmission'
+    ? ingressReplayEvidence(normalized)
+    : normalized;
+}
+
+function ingressReplayEvidence<T extends ConversationNormalizedIngressV1>(input: T): T {
+  return input.kind === 'fullText'
+    ? { ...input, observation: { ...input.observation, endpoint: withoutEndpointDisplayLabels(input.observation.endpoint) } }
+    : { ...input, shell: { ...input.shell, endpoint: withoutEndpointDisplayLabels(input.shell.endpoint) } };
 }
 
 /**
@@ -1359,12 +1390,12 @@ async function immutableIngressMatches(
   const compacted = census.compacted;
   if (compacted === null) {
     if (
-      pluginJsonValuesEqual(census.normalizedIngress, normalized)
+      pluginJsonValuesEqual(ingressReplayEvidence(census.normalizedIngress), ingressReplayEvidence(normalized))
       && pluginJsonValuesEqual(census.eventCandidate, input.eventCandidate)
     ) return true;
   } else if (
     normalized.kind === 'fullText'
-    && pluginJsonValuesEqual(compacted.shell, ingressShell(normalized))
+    && pluginJsonValuesEqual(censusIngressShell(census), ingressShell(normalized))
     && await deriveIngressCensusReplayDigest({
       routingIdentityKey,
       text: normalized.observation.message.text,
@@ -2019,8 +2050,11 @@ async function bindingsForThreadObservation(input: Readonly<{
     if (!isChannelSessionSpawnRecipeAuthorableV1(decision.route.recipe)) {
       throw pluginError('channels_session_recipe_attestation_forbidden', 'Session recipes cannot supply host-attested birth facts.');
     }
+    const threadEndpoint = fullTextObservation(ingress)?.endpoint ?? shell.endpoint;
+    const threadTitle = threadEndpoint.label?.trim();
     const spawnInput = SessionSpawnNewInputV2Schema.parse({
       ...decision.route.recipe,
+      ...(threadTitle ? { title: threadTitle } : {}),
       creationKey: `channel-thread:${router.value.id}:${shell.endpoint.id}`,
       attestedContext: { externalPrincipalId: principalId, sourceMessageId: shell.message.id },
     });
@@ -2045,7 +2079,7 @@ async function bindingsForThreadObservation(input: Readonly<{
     const birthMessageId = isJsonRecord(birth) ? own(birth, 'sourceMessageId') : undefined;
     const child = await createConversationThreadBindingForInvocation({
       routerBindingId: router.value.id, expectedRouterRevision: router.row.revision,
-      expectedConnectionRevision: connection.row.revision, endpoint: shell.endpoint,
+      expectedConnectionRevision: connection.row.revision, endpoint: threadEndpoint,
       sessionId: spawned.sessionId, allowedPrincipalIds: [origin], policy: decision.route.policy,
       ...(typeof birthMessageId === 'string' ? { inboundBirthMessageId: birthMessageId } : {}),
     }, context);
@@ -2956,7 +2990,7 @@ async function revalidateFirstDispatchAuthority(input: Readonly<{
         connection.value.payload.providerContributionSelection,
         target.providerContributionSelection,
       )
-      || !arePluginMachineExecutionOriginsEqual(
+      || !areConversationConnectionTransportOriginsEqual(
         connection.value.payload.transportOrigin,
         target.executionOrigin,
       )
@@ -4658,12 +4692,11 @@ async function dispatchIngressObligation(input: Readonly<{
       },
       {
         signal: input.context.signal,
-        expectedExecutionOrigin: target.executionOrigin,
+        expectedExecutionRouting: getConversationConnectionExecutionRouting(target.executionOrigin, target.providerPluginId),
       },
     );
-    // Origin equality for this origin-bearing call is the host Actions
-    // owner's fence: a settled result proves the frozen target origin stayed
-    // current across the provider effect, so no consumer re-check follows.
+    // The host checks the frozen route before the effect and revalidates the
+    // admitted invocation afterward; no consumer custody comparison follows.
     const admission = ConversationProviderAutomationEventAdmitResultV1Schema.parse(execution.result);
     if (admission.kind === 'unsettled') {
       await putIngressObligationLifecycle({
@@ -5074,14 +5107,16 @@ async function ingestConversationObservationForInvocation(
 
   const fullText = fullTextObservation(ingress);
   if (pairing !== undefined && fullText !== undefined) {
-    const materialization = source.kind === 'providerObservation'
-      ? source.caller?.materialization
-      : source.executionOrigin.materializationRef;
-    if (materialization !== undefined) {
+    const callerOrigin = source.kind === 'providerObservation'
+      ? getSelfStampedPluginCallerExecutionOrigin(source.caller)
+      : undefined;
+    const executionOrigin = source.kind === 'checkpointedPoll' ? source.executionOrigin
+      : callerOrigin === undefined ? undefined : getPluginMachineExecutionRouting(callerOrigin);
+    if (executionOrigin !== undefined) {
       const preparedPairing = pairing.preparePreBindingMessage({
         censusId,
         connectionId: connectionState.value.id,
-        materialization,
+        executionOrigin,
         endpoint: fullText.endpoint,
         actor: fullText.actor,
         contentProvenance: fullText.message.contentProvenance,
@@ -5564,7 +5599,7 @@ export async function runConversationIngressDueWorkForInvocation(input: Readonly
       if (connection === undefined) continue;
       const source: IngressExecutionSource = {
         kind: 'checkpointedPoll',
-        executionOrigin: connection.value.payload.transportOrigin,
+        executionOrigin: getConversationConnectionExecutionRouting(connection.value.payload.transportOrigin, connection.value.payload.providerPluginId),
         authorityEpoch: connection.value.payload.authorityEpoch,
       };
       await dispatchIngressObligation({
@@ -5804,7 +5839,10 @@ function compactedIngressCensusValue(input: Readonly<{
     [CHANNEL_STATE_FIELD.updatedAt]: input.now,
     payload: {
       normalizedIngress: null,
-      compacted: input.compacted,
+      compacted: { ...input.compacted, shell: {
+        ...input.compacted.shell,
+        endpoint: withoutEndpointDisplayLabels(input.compacted.shell.endpoint),
+      } },
       phase,
       connectionAuthorityEpoch,
       maximumObservationAgeMs,
@@ -5829,8 +5867,11 @@ function compactedIngressCensusValue(input: Readonly<{
 function compactedTerminalAttentionObligationValue(
   obligation: IngressObligationRecord,
 ): JsonRecord {
+  // The reader normalizes an absent due projection to null; persisted terminal
+  // rows omit it, as required by the Collection's optional integer field.
+  const { [CHANNEL_STATE_FIELD.dueAt]: _dueAt, ...obligationWithoutDueAt } = obligation;
   return {
-    ...obligation,
+    ...obligationWithoutDueAt,
     payload: {
       ...obligation.payload,
       target: null,
@@ -6182,8 +6223,11 @@ function readConversationStreamBaselineAcceptInput(
 function assertCurrentBaselineConnection(input: Readonly<{
   connection: Readonly<{ row: StateRow; value: ChannelConnectionRecord }>;
   expectedRevision: number;
+  revisionKind: 'physical' | 'configuration';
 }>): void {
-  if (input.connection.row.revision !== input.expectedRevision) {
+  const revision = input.revisionKind === 'configuration'
+    ? input.connection.value.payload.configurationRevision : input.connection.row.revision;
+  if (revision !== input.expectedRevision) {
     throw pluginError(
       'channels_stream_baseline_conflict',
       'The Channel connection changed before its history baseline could be accepted.',
@@ -6206,7 +6250,7 @@ function assertCurrentBaselineConnection(input: Readonly<{
 function clearConnectionHistoryGapValue(input: Readonly<{
   connection: Readonly<{ row: StateRow; value: ChannelConnectionRecord }>;
   now: number;
-}>): JsonRecord {
+}>): ReturnType<typeof withConversationConnectionPayload> {
   const payload = own(input.connection.row.value, 'payload');
   if (!isJsonRecord(payload)) {
     throw pluginError(
@@ -6214,15 +6258,15 @@ function clearConnectionHistoryGapValue(input: Readonly<{
       'The current Channel connection cannot produce its canonical baseline reset.',
     );
   }
-  return {
-    ...input.connection.row.value,
-    [CHANNEL_STATE_FIELD.updatedAt]: input.now,
+  return withConversationConnectionPayload({
+    row: input.connection.row,
+    updatedAt: input.now,
     payload: {
       ...payload,
       historyGap: null,
       pollFailure: null,
     },
-  } satisfies JsonRecord;
+  });
 }
 
 function connectionPollFailureValue(input: Readonly<{
@@ -6237,14 +6281,14 @@ function connectionPollFailureValue(input: Readonly<{
       'The current Channel connection cannot produce its canonical poll-failure transition.',
     );
   }
-  return {
-    ...input.connection.row.value,
-    [CHANNEL_STATE_FIELD.updatedAt]: input.now,
+  return withConversationConnectionPayload({
+    row: input.connection.row,
+    updatedAt: input.now,
     payload: {
       ...payload,
       pollFailure: input.pollFailure,
     },
-  } satisfies JsonRecord;
+  });
 }
 
 function createCheckpointValue(input: Readonly<{
@@ -6315,6 +6359,7 @@ async function readCurrentBaselineConnection(input: Readonly<{
   context: PluginInvocationContext;
   connectionId: string;
   expectedRevision: number;
+  revisionKind: 'physical' | 'configuration';
 }>): Promise<Readonly<{ row: StateRow; value: ChannelConnectionRecord }>> {
   const collection = requireChannelsAccountStorage(input.context).collection(CHANNEL_STATE_COLLECTION);
   const connection = asConnection(readStateRow(await collection.get(
@@ -6328,7 +6373,7 @@ async function readCurrentBaselineConnection(input: Readonly<{
       true,
     );
   }
-  assertCurrentBaselineConnection({ connection, expectedRevision: input.expectedRevision });
+  assertCurrentBaselineConnection({ connection, expectedRevision: input.expectedRevision, revisionKind: input.revisionKind });
   return connection;
 }
 
@@ -6557,10 +6602,11 @@ async function clearCurrentHistoryGapWithoutCheckpoint(input: Readonly<{
   // rather than leaving the stranded units behind a cleared gap.
   await abandonUnreplayablePreparingIngressCensuses(input);
   const collection = requireChannelsAccountStorage(input.context).collection(CHANNEL_STATE_COLLECTION);
+  const value = clearConnectionHistoryGapValue({ connection: input.connection, now: Date.now() });
   const result = await collection.batch([
     {
       kind: 'put',
-      value: clearConnectionHistoryGapValue({ connection: input.connection, now: Date.now() }),
+      value,
       expectedRevision: input.connection.row.revision,
     },
   ], { signal: input.context.signal });
@@ -6582,7 +6628,7 @@ async function clearCurrentHistoryGapWithoutCheckpoint(input: Readonly<{
   return updateResult({
     kind: 'updated',
     connectionId: input.connection.value.id,
-    revision: row.revision,
+    revision: value.payload.configurationRevision,
     authorityEpoch: input.connection.value.payload.authorityEpoch,
   });
 }
@@ -6927,7 +6973,7 @@ async function commitCurrentCheckpointedPoll(input: Readonly<{
   connectionId: string;
   expectedRevision: number;
   authorityEpoch: number;
-  executionOrigin: ConversationConnectionTransportOriginV1;
+  executionOrigin: PluginMachineExecutionOriginV1;
   checkpointId: string;
   checkpoint: Readonly<{ row: StateRow; value: CheckpointRecord }> | undefined;
   checkpointAfter: JsonValue;
@@ -6939,10 +6985,11 @@ async function commitCurrentCheckpointedPoll(input: Readonly<{
     context: input.context,
     connectionId: input.connectionId,
     expectedRevision: input.expectedRevision,
+    revisionKind: 'physical',
   });
   const source: IngressExecutionSource = {
     kind: 'checkpointedPoll',
-    executionOrigin: input.executionOrigin,
+    executionOrigin: getPluginMachineExecutionRouting(input.executionOrigin),
     authorityEpoch: input.authorityEpoch,
   };
   if (
@@ -7137,10 +7184,11 @@ async function clearCurrentCheckpointedBaselineGap(input: Readonly<{
   checkpoint: Readonly<{ row: StateRow; value: CheckpointRecord }>;
 }>): Promise<ConversationConnectionUpdateResult> {
   const collection = requireChannelsAccountStorage(input.context).collection(CHANNEL_STATE_COLLECTION);
+  const value = clearConnectionHistoryGapValue({ connection: input.connection, now: Date.now() });
   const result = await collection.batch([
     {
       kind: 'put',
-      value: clearConnectionHistoryGapValue({ connection: input.connection, now: Date.now() }),
+      value,
       expectedRevision: input.connection.row.revision,
     },
     {
@@ -7167,7 +7215,7 @@ async function clearCurrentCheckpointedBaselineGap(input: Readonly<{
   return updateResult({
     kind: 'updated',
     connectionId: input.connection.value.id,
-    revision: row.revision,
+    revision: value.payload.configurationRevision,
     authorityEpoch: input.connection.value.payload.authorityEpoch,
   });
 }
@@ -7187,13 +7235,14 @@ export async function acceptConversationStreamBaselineForInvocation(
     context,
     connectionId: request.connectionId,
     expectedRevision: request.expectedRevision,
+    revisionKind: 'configuration',
   });
   const capturedInvocation = captureCheckpointedPollInvocation(connection);
   if (connection.value.payload.historyGap === null) {
     return updateResult({
       kind: 'unchanged',
       connectionId: connection.value.id,
-      revision: connection.row.revision,
+      revision: connection.value.payload.configurationRevision,
       authorityEpoch: connection.value.payload.authorityEpoch,
     });
   }
@@ -7257,24 +7306,10 @@ export async function acceptConversationStreamBaselineForInvocation(
     pollInput,
     {
       signal: context.signal,
-      expectedExecutionOrigin: connection.value.payload.transportOrigin,
+      expectedExecutionRouting: getConversationConnectionExecutionRouting(connection.value.payload.transportOrigin, connection.value.payload.providerPluginId),
     },
   );
   assertNotAborted(context.signal);
-  // Origin equality for this call is the host Actions owner's fence: the
-  // settled origin-bearing result already proves expected == before == after.
-  if (!('materializationRef' in execution.executionOrigin)) {
-    await settleCapturedCheckpointedPollStop({
-      context,
-      connectionId: connection.value.id,
-      capturedInvocation,
-    });
-    throw pluginError(
-      'channels_stream_baseline_conflict',
-      'The provider poll did not settle under the retained materialized transport authority.',
-      true,
-    );
-  }
   let result: ReturnType<typeof ConversationPollResultV1Schema.parse>;
   try {
     result = readConversationPollResultForAdmission(execution.result);
@@ -7315,6 +7350,7 @@ export async function acceptConversationStreamBaselineForInvocation(
           context,
           connectionId: connection.value.id,
           expectedRevision: transferSettlement.revision,
+          revisionKind: 'physical',
         });
       } catch (cause) {
         if (!context.signal.aborted) {
@@ -7328,9 +7364,9 @@ export async function acceptConversationStreamBaselineForInvocation(
       }
       if (
         settledConnection.value.payload.authorityEpoch !== connection.value.payload.authorityEpoch
-        || !arePluginMachineExecutionOriginsEqual(
+        || !areConversationConnectionTransportOriginsEqual(
           settledConnection.value.payload.transportOrigin,
-          execution.executionOrigin,
+          getConversationConnectionTransportOrigin(execution.executionOrigin),
         )
       ) {
         await settleCapturedCheckpointedPollStop({
@@ -7465,7 +7501,7 @@ function pollActionFailureEvidence(cause: unknown): ConversationConnectionPollFa
     kind: 'action',
     code: boundedPollActionText(code, 256, 'channels_checkpointed_poll_action_failed'),
     message: boundedPollActionText(
-      message,
+      projectPluginFailureText(new Error(message)),
       1024,
       'The contributed provider poll Action failed before returning a result.',
     ),
@@ -7504,10 +7540,6 @@ async function settleCurrentCheckpointedPollFailure(input: Readonly<{
     current === undefined
     || current.row.revision !== input.connection.row.revision
     || current.value.payload.authorityEpoch !== input.connection.value.payload.authorityEpoch
-    || !arePluginMachineExecutionOriginsEqual(
-      current.value.payload.transportOrigin,
-      input.connection.value.payload.transportOrigin,
-    )
   ) {
     return { kind: 'ineligible' };
   }
@@ -7655,7 +7687,9 @@ async function settleCapturedCheckpointedPollStop(input: Readonly<{
   const raw = await collection.get(input.connectionId, { signal: input.context.signal });
   if (raw === null) return;
   const current = asConnection(readStateRow(raw) ?? null);
-  const frozenStopRequest = current?.value.payload.pendingOldTransportStop?.stopRequest;
+  const pending = current?.value.payload.pendingOldTransportStop;
+  const frozenStopRequest = pending === null || pending === undefined || isConversationPendingEndpointRetarget(pending)
+    ? undefined : pending.stopRequest;
   if (frozenStopRequest === undefined) return;
   await confirmConversationCheckpointedPollStopForInvocation({
     connectionId: input.connectionId,
@@ -7879,7 +7913,7 @@ export async function runConversationCheckpointedPollForInvocation(input: Readon
       createCurrentCheckpointedPollInput({ connection, checkpoint, waitMs, bindings: pollBindings }),
       {
         signal: context.signal,
-        expectedExecutionOrigin: connection.value.payload.transportOrigin,
+        expectedExecutionRouting: getConversationConnectionExecutionRouting(connection.value.payload.transportOrigin, connection.value.payload.providerPluginId),
       },
     );
   } catch (cause) {
@@ -7910,19 +7944,13 @@ export async function runConversationCheckpointedPollForInvocation(input: Readon
     return failure;
   }
   assertNotAborted(context.signal);
-  // Origin equality for the call itself is the host Actions owner's fence
-  // (expected == before == after). The fence below is a distinct retained
-  // fact: the persisted row must still name the settled origin at the
-  // starting revision before the poll result may be applied.
+  // The host has already enforced the route around this invocation. The
+  // Account reread independently proves that the captured row is still current
+  // before the poll result may be applied.
   let current = await readEligibleCheckpointedPollConnection({ context, connectionId: input.connectionId });
   if (
     current === undefined
     || current.row.revision !== connection.row.revision
-    || !('materializationRef' in execution.executionOrigin)
-    || !arePluginMachineExecutionOriginsEqual(
-      current.value.payload.transportOrigin,
-      execution.executionOrigin,
-    )
   ) {
     await settleCapturedCheckpointedPollStop({
       context,
@@ -7979,9 +8007,9 @@ export async function runConversationCheckpointedPollForInvocation(input: Readon
         settledCurrent === undefined
         || settledCurrent.row.revision !== transferSettlement.revision
         || settledCurrent.value.payload.authorityEpoch !== current.value.payload.authorityEpoch
-        || !arePluginMachineExecutionOriginsEqual(
+        || !areConversationConnectionTransportOriginsEqual(
           settledCurrent.value.payload.transportOrigin,
-          execution.executionOrigin,
+          getConversationConnectionTransportOrigin(execution.executionOrigin),
         )
       ) {
         await settleCapturedCheckpointedPollStop({
@@ -8068,7 +8096,7 @@ export async function runConversationCheckpointedPollForInvocation(input: Readon
 
   const source: Extract<IngressExecutionSource, Readonly<{ kind: 'checkpointedPoll' }>> = {
     kind: 'checkpointedPoll',
-    executionOrigin: execution.executionOrigin,
+    executionOrigin: getPluginMachineExecutionRouting(execution.executionOrigin),
     authorityEpoch: current.value.payload.authorityEpoch,
     bindings: pollBindings,
   };

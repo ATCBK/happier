@@ -23,11 +23,13 @@ import { readFileTargetAnchorResource } from '@/utils/url/sessionFileDeepLink';
 import { SessionInteractiveExecutionRunDraftView } from '@/components/sessions/runs/launcher/SessionInteractiveExecutionRunDraftView';
 import { isSessionPeekDetailsResource } from '@/components/sessions/work/createSessionPeekDetailsTab';
 import { SessionPeekDetailsView } from '@/components/sessions/work/SessionPeekDetailsView';
+import { isWorkflowRunPeekDetailsResource } from '@/components/sessions/work/createWorkflowRunPeekDetailsTab';
+import { WorkflowRunPeekDetailsView } from '@/components/sessions/work/WorkflowRunPeekDetailsView';
 import { SessionWorkMapDetailsView, isSessionWorkMapDetailsResource } from '@/components/sessions/work/SessionWorkMapDetailsView';
 import { SessionExecutionRunDetailsView } from '@/components/sessions/runs/details/SessionExecutionRunDetailsView';
 import { createExecutionRunDetailsTab } from '@/components/sessions/runs/launcher/executionRunLauncherModel';
 import { SessionBoardDetailsSurface } from '@/components/sessions/board/SessionBoardDetailsSurface';
-import { SessionDiscussionDetailsView } from '@/components/sessions/conversations/SessionDiscussionDetailsView';
+import { DiscussionDetailsView } from '@/components/discussions/DiscussionDetailsView';
 import {
     createSessionBoardDetailsTab,
     createSessionDiscussionDetailsTab,
@@ -50,7 +52,7 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 import type { LocalServicePreviewState } from '@/sync/domains/local/services/preview/store';
 import { resolveLocalServicePreviewPlatform } from '@/sync/domains/local/services/preview/platform';
 import type { PeerMediationObservabilityUiStore } from '@/sync/domains/machines/peer/mediation/observability';
-import { SessionDiscussionSelectionSourceV1Schema, type SessionDiscussionSelectionSourceV1 } from '@happier-dev/protocol/sessions/discussions/content';
+import { DiscussionSelectionSourceV1Schema, type DiscussionSelectionSourceV1 } from '@happier-dev/protocol/discussions/content';
 import type { PeerMediationObservabilityScopeV1 } from '@happier-dev/protocol/machines/peer/mediation/observability/v1';
 import type { PluginUiDestinationRuntimeFormFactorV1 } from '@happier-dev/protocol/plugins/ui';
 import type { LocalServicePreviewPlatform } from '@/sync/domains/local/services/preview/url';
@@ -70,6 +72,16 @@ import {
 } from '@/components/workspaces/sync/WorkspaceSyncConflictDetailsView';
 
 type SessionDetailsOpenFile = (path: string, intent?: 'default' | 'pinned') => void;
+
+function SessionScmReviewSurface(props: Omit<React.ComponentProps<typeof SessionScmReviewDetailsViewForPanel>, 'target'> & Readonly<{
+    resource: DetailsTab['resource'];
+}>) {
+    const { resource, ...viewProps } = props;
+    // Parsing creates comparison objects that own the navigation callbacks used by every hunk.
+    // Unrelated surface updates must retain them while the tab's resource is unchanged.
+    const target = React.useMemo(() => readSessionScmReviewTarget(resource), [resource]);
+    return <SessionScmReviewDetailsViewForPanel {...viewProps} target={target} />;
+}
 
 type SessionDetailsSurfaceRendererOptions = Readonly<{
     sessionId: string;
@@ -149,7 +161,7 @@ function isExecutionRunLauncherResource(value: unknown): value is Readonly<{
     kind: 'executionRunLauncher';
     mode?: 'conversation';
     intent?: 'review' | 'plan' | 'delegate';
-    source?: SessionDiscussionSelectionSourceV1;
+    source?: DiscussionSelectionSourceV1;
     initialInstructions?: string;
     roleId?: string;
 }> {
@@ -173,7 +185,7 @@ function isExecutionRunLauncherResource(value: unknown): value is Readonly<{
     if (maybe.initialInstructions != null && typeof maybe.initialInstructions !== 'string') return false;
     if (maybe.roleId != null && (typeof maybe.roleId !== 'string' || maybe.roleId.trim().length === 0)) return false;
     if (maybe.source == null) return true;
-    const source = SessionDiscussionSelectionSourceV1Schema.safeParse(maybe.source);
+    const source = DiscussionSelectionSourceV1Schema.safeParse(maybe.source);
     if (!source.success) return false;
     return maybe.mode !== 'conversation'
         || (typeof source.data.draftCorrelationId === 'string' && source.data.draftCorrelationId.trim().length > 0);
@@ -403,9 +415,13 @@ export function createSessionDetailsSurfaceRenderers(
                 const target = readSessionDiscussionDetailsTarget(input.tab.resource);
                 if (!target || !discussionTargetMatchesSession(target, options)) return null;
                 return (
-                    <SessionDiscussionDetailsView
-                        target={target}
+                    <DiscussionDetailsView
+                        target={target.kind === 'new'
+                            ? { kind: 'new', address: { serverId: target.address.serverId }, anchor: { kind: 'session', sessionId: target.address.sessionId } }
+                            : { kind: 'discussion', address: { serverId: target.address.serverId }, discussionId: target.discussionId }}
                         active={input.active}
+                        hostSessionAddress={target.address}
+                        onClose={() => options.closeDetailsTab(input.tab.key)}
                         onCreated={(discussion) => {
                             input.callbacks.replaceTab?.(
                                 input.tab.key,
@@ -462,13 +478,14 @@ export function createSessionDetailsSurfaceRenderers(
             order: 30,
             canRender: (input) => readResourceKind(input) === 'scmReview',
             render: (input) => (
-                <SessionScmReviewDetailsViewForPanel
+                <SessionScmReviewSurface
                     sessionId={options.sessionId}
                     serverId={options.serverId}
                     scopeId={options.scopeId}
                     active={input.active}
-                    target={readSessionScmReviewTarget(input.tab.resource)}
+                    resource={input.tab.resource}
                     onRequestClose={options.requestClose}
+                    onOpenDetailsTab={options.openDetailsTab}
                 />
             ),
         },
@@ -557,6 +574,23 @@ export function createSessionDetailsSurfaceRenderers(
             },
         },
         {
+            id: 'session-workflow-run-peek',
+            owner: 'session',
+            order: 63,
+            canRender: (input) => isWorkflowRunPeekDetailsResource(input.tab.resource),
+            render: (input) => {
+                if (!isWorkflowRunPeekDetailsResource(input.tab.resource)) return null;
+                return (
+                    <WorkflowRunPeekDetailsView
+                        runId={input.tab.resource.runId}
+                        serverId={input.tab.resource.serverId}
+                        active={input.active}
+                        onClose={() => options.closeDetailsTab(input.tab.key)}
+                    />
+                );
+            },
+        },
+        {
             id: 'session-work-map',
             owner: 'session',
             order: 62,
@@ -581,7 +615,7 @@ export function createSessionDetailsSurfaceRenderers(
                 if (!isExecutionRunLauncherResource(input.tab.resource)) return null;
                 if (
                     input.tab.resource.source
-                    && input.tab.resource.source.sessionId !== options.sessionId
+                    && (!options.serverId || !areServerProfileIdentifiersEquivalent(input.tab.resource.source.serverId, options.serverId))
                 ) return null;
                 // One composer-first start for every ask (lab `convo-S1`): a conversation draft carries
                 // no intent; a Review, Plan or Delegate tab carries its own; the old intent-less
@@ -596,7 +630,7 @@ export function createSessionDetailsSurfaceRenderers(
                         roleId={resource.roleId ?? null}
                         initialText={resource.initialInstructions}
                         launchOrigin={resource.source && 'draftCorrelationId' in resource.source
-                            ? resource.source as SessionDiscussionSelectionSourceV1 & Readonly<{ draftCorrelationId: string }>
+                            ? resource.source as DiscussionSelectionSourceV1 & Readonly<{ draftCorrelationId: string }>
                             : undefined}
                         onRunStarted={(runId, recovery, presentation) => {
                             input.callbacks.replaceTab?.(

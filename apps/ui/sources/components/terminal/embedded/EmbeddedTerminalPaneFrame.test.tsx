@@ -100,6 +100,22 @@ describe('EmbeddedTerminalPaneFrame states (terminal lab ST)', () => {
         screen.findByTestId('pending-state-line-action')?.props.onPress();
         expect(onOpenApproval).toHaveBeenCalledOnce();
     });
+    it.each(['not-open', 'idle', 'connecting'] as const)('waits on consent as a quiet line, never Connecting, when %s and the approval is pending', async (status) => {
+        const bare = await renderScreen(<EmbeddedTerminalPaneFrame title="shell" controller={{ ...makeController({ status }), approvalPending: true }}
+            chrome="none" surface={React.createElement('TerminalSurface')} testIdPrefix="consent" platformOS="web" />);
+        expect(bare.findByTestId('consent-state-line')).toBeTruthy();
+        expect(bare.findByTestId('consent-state-line-spinner')).toBeFalsy();
+        expect(bare.findByTestId('consent-overlay')).toBeFalsy();
+        expect(bare.getTextContent()).toContain('approvals.waitingForYou');
+        expect(bare.getTextContent()).not.toContain('terminalWorkspace.states.connecting');
+        // Only the Approvals action needs the callback.
+        expect(bare.findByTestId('consent-state-line-action')).toBeFalsy();
+    });
+    it('keeps a connected terminal live even when an approval is pending', async () => {
+        const screen = await renderScreen(<EmbeddedTerminalPaneFrame title="shell" controller={{ ...makeController({ status: 'connected' }), approvalPending: true }}
+            chrome="none" surface={React.createElement('TerminalSurface')} testIdPrefix="live" platformOS="web" />);
+        expect(screen.findByTestId('live-state-line')).toBeFalsy();
+    });
     it('without its own chrome, leaves the toolbar and the address to the owning strip', async () => {
         const screen = await renderScreen(React.createElement(EmbeddedTerminalPaneFrame, {
             title: 'zsh',
@@ -161,6 +177,65 @@ describe('EmbeddedTerminalPaneFrame states (terminal lab ST)', () => {
         expect(screen.findByTestId('term-overlay')).toBeFalsy();
         screen.findByTestId('term-state-line-action')?.props.onPress();
         expect(retryConnect).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the output and offers Reconnect, not "Couldn\'t start", when a connected stream drops', async () => {
+        const retryConnect = vi.fn();
+        const screen = await renderScreen(React.createElement(EmbeddedTerminalPaneFrame, {
+            title: 'zsh',
+            chrome: 'none',
+            controller: makeController({ status: 'error', error: 'terminal_stream_dropped', connectionLost: true, retryConnect }),
+            surface: React.createElement('TerminalSurface'),
+            testIdPrefix: 'term',
+            platformOS: 'web',
+        }));
+        const rendered = JSON.stringify(screen.tree.toJSON());
+        expect(screen.findByTestId('term-overlay')).toBeFalsy();
+        expect(rendered).toContain('terminalWorkspace.states.connectionLost');
+        expect(rendered).not.toContain('terminalWorkspace.states.failedTitle');
+        screen.findByTestId('term-state-line-action')?.props.onPress();
+        expect(retryConnect).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps a retained terminal readable when attaching fails before its first read', async () => {
+        const retryConnect = vi.fn();
+        const screen = await renderScreen(<EmbeddedTerminalPaneFrame title="Script"
+            controller={makeController({ status: 'error', error: 'terminal_access_denied', readOnly: true, retryConnect })}
+            surface={React.createElement('TerminalSurface')} testIdPrefix="retained" platformOS="web" />);
+        expect(screen.findByTestId('retained-overlay')).toBeFalsy();
+        expect(screen.findByTestId('retained-state-line')).toBeTruthy();
+        expect(screen.getTextContent()).not.toContain('terminalWorkspace.states.failedTitle');
+        screen.findByTestId('retained-state-line-action')?.props.onPress();
+        expect(retryConnect).toHaveBeenCalledOnce();
+    });
+
+    it.each([['not-open', undefined], ['error', 'terminal_cwd_denied']] as const)('hides a covered renderer (%s) while keeping it mounted, so nothing bleeds through a clear coat', async (status, error) => {
+        const render = (next: EmbeddedTerminalPaneController) => renderScreen(React.createElement(EmbeddedTerminalPaneFrame, {
+            title: 'zsh', chrome: 'none', controller: next, surface: React.createElement('TerminalSurface'),
+            testIdPrefix: 'term', platformOS: 'web',
+        }));
+        const covered = await render(makeController({ status, error: error ?? null }));
+        expect(covered.findByTestId('term-overlay')).toBeTruthy();
+        expect(covered.findAllByType('TerminalSurface')).toHaveLength(1);
+        expect(covered.findByTestId('term-renderer')?.props.pointerEvents).toBe('none');
+        expect(flattenStyle(covered.findByTestId('term-renderer')?.props.style).opacity).toBe(0);
+        const live = await render(makeController({ status: 'connected' }));
+        expect(live.findByTestId('term-renderer')?.props.pointerEvents).not.toBe('none');
+        expect(flattenStyle(live.findByTestId('term-renderer')?.props.style).opacity).not.toBe(0);
+    });
+
+    it('names the not-open state itself instead of repeating the terminal title the card already carries', async () => {
+        const screen = await renderScreen(React.createElement(EmbeddedTerminalPaneFrame, {
+            title: 'Terminal on NLDW4-5-40-40',
+            chrome: 'none',
+            controller: makeController({ status: 'not-open' }),
+            surface: React.createElement('TerminalSurface'),
+            testIdPrefix: 'term',
+            platformOS: 'web',
+        }));
+        const rendered = JSON.stringify(screen.tree.toJSON());
+        expect(rendered).toContain('terminalWorkspace.states.notOpen');
+        expect(rendered).not.toContain('Terminal on NLDW4-5-40-40');
     });
 
     it('covers the surface with the cause and Try again when the terminal could not start', async () => {

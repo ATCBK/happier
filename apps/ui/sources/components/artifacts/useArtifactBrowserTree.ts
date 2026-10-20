@@ -37,7 +37,6 @@ export function useArtifactFolderActions() {
                 throw error;
             });
         requireActionSuccess(receipt);
-        if (!receipt.ok) throw new HappyError(receipt.error, false, { code: receipt.errorCode });
         // An approval-request receipt is not a durable folder mutation.
         const mutation = ArtifactFolderMutationResultV1Schema.parse(receipt.result);
         if (mutation.status !== 'updated') throw new HappyError(mutation.status, false, {

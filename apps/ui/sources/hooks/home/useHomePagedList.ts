@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
+import type { HomeActionFailure as HomeDomainFailure } from '@/sync/ops/home/homeActionOutcome';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { HomeGovernanceQueryOutcome } from '@/sync/ops/home/homeGovernanceOperations';
 

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
-import { SessionOrganizationSnapshotResponseSchema } from "@happier-dev/protocol";
+import { SessionOrganizationSnapshotResponseSchema, ARTIFACT_PLAIN_DATA_KEY_MARKER } from "@happier-dev/protocol";
+import { decodeBase64 } from "privacy-kit";
 import { Expo, type ExpoPushMessage } from "expo-server-sdk";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod/mini";
@@ -222,11 +223,12 @@ describe("session attention standings on SQLite", () => {
         await expect(db.accountSessionFollow.count({ where: { accountId: reader.id, sessionId } })).resolves.toBe(0);
     });
 
-    it("atomically acknowledges current Discussion frontiers when scheduling a tracked Session reminder", async () => {
+    it("preserves independent Discussion frontiers when scheduling a Session reminder", async () => {
         const { accountId, sessionId } = await createAccountWithSession();
-        const discussion = await db.sessionDiscussion.create({
+        const discussion = await db.discussion.create({
             data: {
-                sessionId,
+                ownerAccountId: accountId, encryptionMode: "plain", dataEncryptionKey: decodeBase64(ARTIFACT_PLAIN_DATA_KEY_MARKER),
+                anchorSessionId: sessionId, anchorV1: { kind: "session", sessionId },
                 creationLocalId: randomUUID(),
                 creationEqualityEvidenceV1: { kind: "plainDigest", digest: randomUUID() },
                 createdByAccountId: accountId,
@@ -245,10 +247,10 @@ describe("session attention standings on SQLite", () => {
         });
 
         expect(response.reply.statusCode).toBe(200);
-        await expect(db.sessionDiscussionReadState.findUnique({
+        await expect(db.discussionReadState.findUnique({
             where: { discussionId_accountId: { discussionId: discussion.id, accountId } },
             select: { lastReadSeq: true },
-        })).resolves.toEqual({ lastReadSeq: 4 });
+        })).resolves.toEqual({ lastReadSeq: 1 });
     });
 
     it("does not commit a reminder when the tracked owner's read lifecycle row is missing", async () => {

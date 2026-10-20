@@ -3,47 +3,38 @@ import * as React from 'react';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import type { AIBackendProfile } from '@/sync/domains/profiles/profileCompatibility';
+import { requireUpdatedProfileOperation } from '@/sync/store/settingsWriters';
+import type { ProfileRemovalResult } from '@happier-dev/protocol/profiles/profileOperations';
+import type { AiLaunchProfileSourceV1 } from '@happier-dev/protocol/profiles/read';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
+
+type ReviewedProfile = AIBackendProfile & Pick<AiLaunchProfileSourceV1, 'profileRecordRevision'>;
 
 export function useNewSessionProfileActions(params: Readonly<{
-    hasUserTouchedProfileSelectionRef: React.MutableRefObject<boolean>;
     setSelectedProfileId: React.Dispatch<React.SetStateAction<string | null>>;
     selectedProfileId: string | null;
-    deleteProfile: (profileId: string) => Promise<void>;
+    deleteProfile: (profileId: string, expectedRevision?: number) => Promise<ProfileRemovalResult>;
 }>): Readonly<{
     onPressDefaultEnvironment: () => void;
-    handleDeleteProfile: (profile: AIBackendProfile) => void;
+    handleDeleteProfile: (profile: ReviewedProfile) => Promise<void>;
 }> {
     const onPressDefaultEnvironment = React.useCallback(() => {
-        params.hasUserTouchedProfileSelectionRef.current = true;
         params.setSelectedProfileId(null);
-    }, [params.hasUserTouchedProfileSelectionRef, params.setSelectedProfileId]);
+    }, [params.setSelectedProfileId]);
 
-    const handleDeleteProfile = React.useCallback((profile: AIBackendProfile) => {
-        Modal.alert(
-            t('profiles.delete.title'),
-            t('profiles.delete.message', { name: profile.name }),
-            [
-                { text: t('profiles.delete.cancel'), style: 'cancel' },
-                {
-                    text: t('profiles.delete.confirm'),
-                    style: 'destructive',
-                    onPress: async () => {
-                        try {
-                            await params.deleteProfile(profile.id);
-                            if (params.selectedProfileId === profile.id) {
-                                params.setSelectedProfileId(null);
-                            }
-                        } catch (error) {
-                            Modal.alert(
-                                t('common.error'),
-                                error instanceof Error ? error.message : t('common.error'),
-                            );
-                        }
-                    },
-                },
-            ],
-        );
-    }, [params.deleteProfile, params.selectedProfileId, params.setSelectedProfileId]);
+    const handleDeleteProfile = React.useCallback(async (profile: ReviewedProfile) => {
+        try {
+            const result = await params.deleteProfile(profile.id, profile.profileRecordRevision);
+            requireUpdatedProfileOperation(result);
+            params.setSelectedProfileId(current => current === profile.id ? null : current);
+            if (result.status === 'updated' && result.authoringMemoryCleanup) {
+                Modal.alert(t('common.error'), result.authoringMemoryCleanup.reason);
+            }
+        } catch (error) {
+            if (error !== null && typeof error === 'object' && 'code' in error && isActionApprovalDeclinedErrorCode(error.code)) return;
+            Modal.alert(t('common.error'), error instanceof Error ? error.message : t('common.error'));
+        }
+    }, [params.deleteProfile, params.setSelectedProfileId]);
 
     return {
         onPressDefaultEnvironment,

@@ -24,8 +24,12 @@ export type SidechainId = z.infer<typeof SidechainIdSchema>;
 export const ExecutionRunIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(SessionIndexedIdentifierMaxLengthV1)));
 export type ExecutionRunId = z.infer<typeof ExecutionRunIdSchema>;
 
-export const SessionDiscussionIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(SessionIndexedIdentifierMaxLengthV1)));
-export type SessionDiscussionId = z.infer<typeof SessionDiscussionIdSchema>;
+export const DiscussionIdSchema = defineProtocolString({
+  minLength: 1,
+  maxLength: SessionIndexedIdentifierMaxLengthV1,
+  pattern: NO_OUTER_WHITESPACE_PATTERN.source,
+});
+export type DiscussionId = ReturnType<typeof DiscussionIdSchema.parse>;
 
 export const TurnIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(SessionIndexedIdentifierMaxLengthV1), z.regex(NO_OUTER_WHITESPACE_PATTERN)));
 export type TurnId = z.infer<typeof TurnIdSchema>;

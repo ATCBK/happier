@@ -67,7 +67,7 @@ async function markAutomationSourceStatusChangedTx(params: Readonly<{
         entityId: "automation-source-status",
     });
     afterTx(params.tx, () => {
-        emitAutomationSourceStatusUpdated({ accountId: params.accountId, cursor });
+        emitAutomationSourceStatusUpdated({ accountId: params.accountId, cursor: cursor.resolveCursor() });
     });
 }
 
@@ -485,8 +485,12 @@ export async function reportAutomationEventSourceStatusV1(params: Readonly<{
             input,
         });
     }, {
-        // Status counters and catalog revision are read before absolute status upserts.
+        // Source deltas are added to prior counters and catalog status is
+        // validated against the current definition revision before absolute
+        // upserts. These reads have no row lock or CAS to prevent lost deltas
+        // or a stale "current" report, so they require one serializable read set.
         isolationLevel: "Serializable",
+        transactionClass: "automation-event-source-status-report",
     });
     return {};
 }

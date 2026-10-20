@@ -9,6 +9,8 @@ export function pickSessionCreateOriginFields(input: SessionCreateOriginFieldsV1
     ...(input.originKind !== undefined ? { originKind: input.originKind } : {}),
     ...(input.originSessionId !== undefined ? { originSessionId: input.originSessionId } : {}),
     ...(input.originRunId !== undefined ? { originRunId: input.originRunId } : {}),
+    ...(input.discussionParticipant !== undefined ? { discussionParticipant: input.discussionParticipant } : {}),
+    ...(input.discussionParticipantLaunch !== undefined ? { discussionParticipantLaunch: input.discussionParticipantLaunch } : {}),
     ...(input.workDepth !== undefined ? { workDepth: input.workDepth } : {}),
   });
 }

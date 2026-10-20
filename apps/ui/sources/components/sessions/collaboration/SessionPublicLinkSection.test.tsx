@@ -243,7 +243,7 @@ describe('SessionPublicLinkSection', () => {
         expect(publication.createPublicLink).toHaveBeenCalledTimes(1);
     });
 
-    it('asks before turning the link off and deletes once for rapid activations', async () => {
+    it('delegates turning the link off to the Action client once for rapid activations', async () => {
         const deferred = createDeferred<void>();
         publication.getPublicLink.mockResolvedValueOnce({ id: 'p1', expiresAt: null, useCount: 3, maxUses: null, isConsentRequired: false, updatedAt: 1 }).mockResolvedValue(null);
         publication.removePublicLink.mockImplementation(() => deferred.promise);
@@ -251,21 +251,22 @@ describe('SessionPublicLinkSection', () => {
         await vi.waitFor(() => expect(status(screen)).toBe('On'));
         await act(async () => { screen.pressByTestId('session-public-link-turn-off'); });
         await act(async () => { screen.pressByTestId('session-public-link-turn-off'); });
-        expect(modal.confirm).toHaveBeenCalledTimes(1);
+        expect(modal.confirm).not.toHaveBeenCalled();
         expect(publication.removePublicLink).toHaveBeenCalledTimes(1);
         await act(async () => { deferred.resolve(); });
         await vi.waitFor(() => expect(status(screen)).toBe('Off'));
         expect(publication.removePublicLink).toHaveBeenCalledTimes(1);
     });
 
-    it('keeps the link when the person does not confirm turning it off', async () => {
+    it('keeps the link when the Action confirmation is canceled', async () => {
         publication.getPublicLink.mockResolvedValue({ id: 'p1', expiresAt: null, useCount: 3, maxUses: null, isConsentRequired: false, updatedAt: 1 });
-        modal.confirm.mockResolvedValue(false);
+        publication.removePublicLink.mockRejectedValue(new SessionAccessApiError('approval_canceled'));
         const screen = await renderScreen(<PublicLink />);
         await vi.waitFor(() => expect(status(screen)).toBe('On'));
         await screen.pressByTestIdAsync('session-public-link-turn-off');
-        await vi.waitFor(() => expect(modal.confirm).toHaveBeenCalled());
-        expect(publication.removePublicLink).not.toHaveBeenCalled();
+        expect(modal.confirm).not.toHaveBeenCalled();
+        expect(publication.removePublicLink).toHaveBeenCalledTimes(1);
+        expect(screen.findByTestId('session-public-link-mutation-error')).toBeNull();
         expect(status(screen)).toBe('On');
     });
 

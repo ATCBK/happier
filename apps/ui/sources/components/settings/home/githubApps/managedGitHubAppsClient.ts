@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { homeDomainActionInputSchemaV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import { type ManagedGitHubAppActionIdV1, MANAGED_GITHUB_APP_ACTION_INPUT_SCHEMAS_V1, MANAGED_GITHUB_APP_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/identity/githubApps';

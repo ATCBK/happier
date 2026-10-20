@@ -13,7 +13,7 @@ export const LegacyRecentMachinePathSchema = lazyZodSchema(() => z.object({
   path: z.string().check(z.minLength(1)),
 }));
 
-export const LegacyRecentMachinePathsSchema = lazyZodSchema(() => z.pipe(z.transform((value) => {
+export const LegacyRecentMachinePathsSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
   if (!Array.isArray(value)) return [];
   const paths: Array<z.output<typeof LegacyRecentMachinePathSchema>> = [];
   for (const candidate of value) {

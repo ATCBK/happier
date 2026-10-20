@@ -1,0 +1,12 @@
+ALTER TABLE "SessionPendingMessage" ADD COLUMN "replyProgress" JSONB;
+ALTER TABLE "SessionPendingMessage" ADD COLUMN "replySourceSessionId" TEXT;
+ALTER TABLE "SessionPendingMessage" ADD COLUMN "replySourceTurnId" TEXT;
+ALTER TABLE "SessionMessage" ADD COLUMN "replyProgress" JSONB;
+ALTER TABLE "SessionMessage" ADD COLUMN "replySourceSessionId" TEXT;
+ALTER TABLE "SessionMessage" ADD COLUMN "replySourceTurnId" TEXT;
+ALTER TABLE "SessionPendingMessage" ADD COLUMN "replyDisposition" TEXT;
+ALTER TABLE "SessionMessage" ADD COLUMN "replyDisposition" TEXT;
+CREATE INDEX "SessionPendingMessage_reply_source_idx" ON "SessionPendingMessage"("replySourceSessionId", "replySourceTurnId");
+CREATE INDEX "SessionMessage_reply_source_idx" ON "SessionMessage"("replySourceSessionId", "replySourceTurnId");
+CREATE INDEX "SessionPendingMessage_reply_disposition_idx" ON "SessionPendingMessage"("sessionId", "replyDisposition", "localId");
+CREATE INDEX "SessionMessage_reply_disposition_idx" ON "SessionMessage"("sessionId", "replyDisposition", "localId");

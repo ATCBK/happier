@@ -1,17 +1,17 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export class ComputerDriverError extends Error {
   constructor(readonly code: string) { super(code); this.name = 'ComputerDriverError'; }
 }
 
 const resultSchema = z.object({
-  isError: z.boolean().optional(), structuredContent: z.record(z.string(), z.unknown()).optional(),
-  content: z.array(z.object({ type: z.string(), mimeType: z.string().optional(), data: z.string().optional() })).optional(),
+  isError: z.optional(z.boolean()), structuredContent: z.optional(z.record(z.string(), z.unknown())),
+  content: z.optional(z.array(z.object({ type: z.string(), mimeType: z.optional(z.string()), data: z.optional(z.string()) }))),
 });
 export type NativeToolResult = z.infer<typeof resultSchema>;
 
 export function nativeRefusalCode(result: NativeToolResult): string {
-  const error = z.object({ code: z.string().min(1) }).safeParse(result.structuredContent?.error);
+  const error = z.object({ code: z.string().check(z.minLength(1)) }).safeParse(result.structuredContent?.error);
   if (error.success) return error.data.code;
   const code = result.structuredContent?.code;
   return typeof code === 'string' && code ? code : 'driver_refused';

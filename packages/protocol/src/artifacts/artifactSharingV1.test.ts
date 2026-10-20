@@ -148,6 +148,8 @@ describe('Document sharing kind owner', () => {
     expect(target('home-hub-layout.v1')).toMatchObject({ browserListed: false, publicLinkAllowed: false, canShare: false });
     expect(target('usage_notice.v1')).toMatchObject({ browserListed: false, publicLinkAllowed: false, canShare: false });
     expect(artifactKindRequiresTextBodyV1('usage_notice.v1')).toBe(true);
+    expect(target('account_notice.v1')).toMatchObject({ browserListed: false, publicLinkAllowed: false, canShare: false });
+    expect(artifactKindRequiresTextBodyV1('account_notice.v1')).toBe(true);
     for (const kind of ['approval_request.v1', 'target_action_approval.v1', 'execution_run_host_action_approval.v1']) {
       expect(target(kind)).toMatchObject({ kind: 'approval', browserListed: false, publicLinkAllowed: false, canShare: false });
     }
@@ -165,6 +167,19 @@ describe('Document sharing kind owner', () => {
     }
     expect(withArtifactExcerptV1({ title: 'Document', excerpt: 'old' }, 'Current text'))
       .toEqual({ title: 'Document', excerpt: 'Current text' });
+  });
+  it('preserves paired private notice identity on writes and restores, not generic workspace provenance', () => {
+    const content = { v: 1, source: { kind: 'plugin', pluginId: 'acme.tasks', itemId: 'review' }, type: 'update', resolved: false };
+    const header = { ...content, kind: 'account_notice.v1', title: 'Review', status: 'dismissed', readAt: 10 };
+    const body = JSON.stringify(content);
+    expect(prepareArtifactHeaderForBodyV1(header, body)).toEqual(header);
+    const restore = { artifactId: 'notice', header, body, expectedRevision: { headerVersion: 1, bodyVersion: 1 },
+      nextRevision: { headerVersion: 2, bodyVersion: 2 } };
+    expect(prepareArtifactHeaderForRevisionV1(restore)).toEqual(header);
+    expect(() => prepareArtifactHeaderForRevisionV1({ ...restore, shared: true })).toThrow();
+    expect(() => prepareArtifactHeaderForBodyV1(header, JSON.stringify({ ...content,
+      source: { ...content.source, pluginId: 'other.tasks' } }))).toThrow();
+    expect(prepareArtifactHeaderForBodyV1({ kind: 'text', source: { machineId: 'workspace' } }, 'Document')).toEqual({ kind: 'text' });
   });
   it('validates stored dashboard content and private inputs while retaining private-definition placeholders', () => {
     const surface = { serverId: 'home', accountId: 'owner', owner: { kind: 'project', projectId: 'project' } } as const;

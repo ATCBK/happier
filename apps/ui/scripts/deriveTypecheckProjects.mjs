@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -32,9 +32,16 @@ function prepareUiTypedRoutes(packageDir) {
   // watcher debounce. Use the exact generator underlying regenerateDeclarations.
   const { getTypedRoutesDeclarationFile } = cliRequire('@expo/router-server/build/typed-routes/generate');
   const declaration = getTypedRoutesDeclarationFile(context, exp.extra?.router);
-  const outputDir = resolve(packageDir, '.expo/types');
+  // Expo's live watcher owns .expo/types/router.d.ts and can regenerate it
+  // while finite programs compile. Keep this input with the finite configs.
+  const outputDir = resolve(packageDir, 'node_modules/.cache/tsc');
   mkdirSync(outputDir, { recursive: true });
-  writeFileSync(resolve(outputDir, 'router.d.ts'), declaration);
+  const outputPath = resolve(outputDir, 'router.d.ts');
+  const temporaryPath = resolve(outputDir, `.router.${process.pid}.tmp`);
+  writeFileSync(temporaryPath, declaration);
+  renameSync(temporaryPath, outputPath);
+  process.stderr.write(`[typescript] prepared UI typed routes: ${outputPath}\n`);
+  return { declarationOverrides: new Map([[resolve(packageDir, '.expo/types/router.d.ts'), outputPath]]) };
 }
 
 
@@ -49,13 +56,15 @@ export function deriveUiTypecheckProjects(packageDir, options = {}) {
 export async function prepareUiTypecheckProjects(projects, cwd) {
   return prepareDerivedTypecheckProjects(projects, cwd, {
     names: projects.length === sourceNames.length ? sourceNames : names,
-    derive: deriveUiTypecheckProjects, beforeDerive: prepareUiTypedRoutes,
+    derive: packageDir => deriveUiTypecheckProjects(packageDir, prepareUiTypedRoutes(packageDir)),
   });
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
   const packageDir = dirname(dirname(fileURLToPath(import.meta.url)));
+  const writeAuthored = process.argv.includes('--write-authored');
   console.log(JSON.stringify(await deriveUiTypecheckProjects(packageDir, {
-    check: process.argv.includes('--check'), writeAuthored: process.argv.includes('--write-authored'),
+    ...(!writeAuthored ? prepareUiTypedRoutes(packageDir) : {}),
+    check: process.argv.includes('--check'), writeAuthored,
   })));
 }

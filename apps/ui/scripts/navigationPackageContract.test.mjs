@@ -195,6 +195,19 @@ test('apps/ui patched expo-router web modal stack guards missing preloadedRoutes
   );
 });
 
+test('apps/ui patched expo-router web modal stack preserves navigator layout guards', async () => {
+  const scriptsDir = dirname(fileURLToPath(import.meta.url));
+  const modalStackPath = join(dirname(scriptsDir), 'node_modules', 'expo-router', 'build', 'modal', 'web', 'ModalStack.js');
+  const contents = await readFile(modalStackPath, 'utf-8');
+  // This installed dependency API is the real web Stack path. Its layout owns
+  // the app's authentication guard; checking only NativeStackNavigator misses it.
+  const navigatorProps = contents.match(/function ModalStackNavigator\(\{([^}]+)\}/)?.[1];
+  const builderOptions = contents.match(/useNavigationBuilder\)\([^,]+,\s*\{([^}]+)\}/)?.[1];
+
+  assert.match(navigatorProps ?? '', /\blayout\b/, 'the web modal navigator must accept its layout guard');
+  assert.match(builderOptions ?? '', /(?:^|,)\s*layout\s*(?:,|$)/, 'the real navigation builder must own the layout guard');
+});
+
 test('apps/ui patched expo-router web modal keeps critical layout when Metro omits CSS-module injection', async () => {
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
   const packageRoot = dirname(scriptsDir);

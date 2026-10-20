@@ -3,6 +3,7 @@ export { ApprovalPendingNotice, type ApprovalPendingNoticeProps } from './Approv
 export { ApprovalPrompt, type ApprovalPromptProps } from './ApprovalPrompt.js';
 export * from './Button.js';
 export * from './Collection.js';
+export { CollectionToolbar, type CollectionToolbarFreshness, type CollectionToolbarProps } from './CollectionToolbar.js';
 export type { CollectionVirtualizer, CollectionVirtualizerHandle, CollectionVirtualizerRequest } from '../presentation/collection/collectionVirtualizer.js';
 export * from './Content.js';
 export {
@@ -30,9 +31,15 @@ export {
 } from './Focus.js';
 export * from './Foundation.js';
 export * from './Form.js';
+export {
+  FollowPolicyEditor,
+  type FollowPolicyEditorDelivery, type FollowPolicyEditorEvent, type FollowPolicyEditorProps,
+  type FollowPolicyEditorReceiver,
+} from './FollowPolicyEditor.js';
 export { Icon, type IconName, type IconProps } from './Icon.js';
 export * from './Image.js';
 export { MotionFeedback, type MotionFeedbackProps } from './MotionFeedback.js';
+export { ModalHeader, type ModalHeaderProps } from './ModalHeader.js';
 export * from './StoredImage.js';
 export * from './Layout.js';
 export { LinkDelivery, type LinkDeliveryProps } from './LinkDelivery.js';
@@ -47,6 +54,9 @@ export {
   type ItemProps, type ListItemProps, type ListAccessibilityPattern, type ItemGroupProps,
 } from './List.js';
 export { CountedDisclosureItem, type CountedDisclosureItemProps } from './CountedDisclosureItem.js';
+export {
+  TechnicalDetailsDisclosure, type TechnicalDetailsDisclosureProps, type TechnicalDetailsLine,
+} from './TechnicalDetailsDisclosure.js';
 export { ItemAddRow, type ItemAddRowProps } from './ItemAddRow.js';
 export * from './NavigationList.js';
 export * from './PageHeader.js';
@@ -71,6 +81,13 @@ export {
   type PluginTranslationValues,
 } from './PluginUiProvider.js';
 export * from './SelectionTiles.js';
+export {
+  ExecutableParticipantPicker,
+  type ExecutableParticipantPickerOption,
+  type ExecutableParticipantPickerSection,
+  type ExecutableParticipantPickerSelection,
+  type ExecutableParticipantPickerProps,
+} from './ExecutableParticipantPicker.js';
 export * from './Session.js';
 export * from './Spinner.js';
 export * from './State.js';
@@ -81,6 +98,57 @@ export * from './Voice.js';
 export * from './Surface.js';
 export * from './Tabs.js';
 export { Timeline, type TimelineProps, type TimelineItemContent } from './Timeline.js';
+export { ThreadMessage, type ThreadMessageProps } from './ThreadMessage.js';
+export { ReplyQuote, type ReplyQuoteProps } from './ReplyQuote.js';
+export { HappierReplyQuote, type HappierReplyQuoteProps, type HappierReplyQuoteSource, type HappierReplyQuoteTextProps } from '../presentation/content/ReplyQuote.js';
+export { ReturnedAnswerQuote, type ReturnedAnswerOutcome, type ReturnedAnswerQuestion, type ReturnedAnswerQuoteProps } from './ReturnedAnswerQuote.js';
+export {
+  HappierReturnedAnswerQuote,
+  type HappierReturnedAnswerOutcome,
+  type HappierReturnedAnswerQuestion,
+  type HappierReturnedAnswerQuoteActionProps,
+  type HappierReturnedAnswerQuoteLabels,
+  type HappierReturnedAnswerQuoteProps,
+  type HappierReturnedAnswerQuoteTextProps,
+} from '../presentation/content/ReturnedAnswerQuote.js';
+export { HappierThreadMessage, type HappierThreadMessageProps } from '../presentation/content/ThreadMessage.js';
+export {
+  MemoryDuplicateChoice,
+  type MemoryDuplicateCandidate,
+  type MemoryDuplicateChoiceKind,
+  type MemoryDuplicateChoiceProps,
+} from './MemoryDuplicateChoice.js';
+export {
+  HappierMemoryDuplicateChoice,
+  type HappierMemoryDuplicateCandidate,
+  type HappierMemoryDuplicateChoiceControlProps,
+  type HappierMemoryDuplicateChoiceKind,
+  type HappierMemoryDuplicateChoiceLabels,
+  type HappierMemoryDuplicateChoiceProps,
+  type HappierMemoryDuplicateChoiceTextProps,
+} from '../presentation/content/MemoryDuplicateChoice.js';
+export {
+  DocEditProposal,
+  type DocEditProposalAction,
+  type DocEditProposalFooter,
+  type DocEditProposalLine,
+  type DocEditProposalProps,
+  type DocEditProposalState,
+} from './DocEditProposal.js';
+export {
+  HappierDocEditProposal,
+  type HappierDocEditProposalAction,
+  type HappierDocEditProposalButtonProps,
+  type HappierDocEditProposalDiffProps,
+  type HappierDocEditProposalFooter,
+  type HappierDocEditProposalLine,
+  type HappierDocEditProposalMark,
+  type HappierDocEditProposalMarkProps,
+  type HappierDocEditProposalProps,
+  type HappierDocEditProposalState,
+  type HappierDocEditProposalTextProps,
+  type HappierDocEditProposalTone,
+} from '../presentation/content/DocEditProposal.js';
 export * from './Text.js';
 export * from './TargetedSurface.js';
 export { WidgetSurface, type WidgetSurfaceProps } from './WidgetSurface.js';
@@ -103,6 +171,38 @@ export {
   type FloatingFrameProps as HappierFloatingFrameProps,
 } from '../presentation/layout/FloatingFrame.js';
 export { resolveFloatingFrameRect, type FrameRect } from '../presentation/layout/floatingFrameGeometry.js';
+export { resolveFloatingFrameResizeRect } from '../presentation/layout/floatingFrameGeometry.js';
+export { HAPPIER_MIDDLE_ELLIPSIS_STYLE, splitForWebMiddleEllipsis } from '../presentation/text/middleEllipsis.js';
+export { HAPPIER_BALANCED_TEXT_WRAP } from '../presentation/text/balancedTextWrap.js';
+export {
+  HAPPIER_TECHNICAL_DETAILS_METRICS, HappierTechnicalDetailsDisclosure,
+  type HappierTechnicalDetailsContentProps, type HappierTechnicalDetailsDisclosureProps, type HappierTechnicalDetailsLine,
+  type HappierTechnicalDetailsSpace, type HappierTechnicalDetailsTextRender,
+} from '../presentation/collection/TechnicalDetailsDisclosure.js';
+export {
+  HAPPIER_MODAL_HEADER_METRICS, HappierModalHeader, resolveHappierModalHeaderLayout,
+  type HappierModalHeaderLayout, type HappierModalHeaderProps, type HappierModalHeaderSpace,
+  type HappierModalHeaderTextRender,
+} from '../presentation/layout/ModalHeader.js';
+export { HAPPIER_TEXT_INPUT_FOCUS_RESET_STYLE, HAPPIER_TEXT_INPUT_WEB_MARKER } from '../presentation/interaction/focusVisible.js';
+export {
+  HappierApprovalPendingNotice, HappierNoticeLine,
+  type HappierApprovalPendingNoticeProps, type HappierApprovalPendingNoticeTextRender,
+  type HappierNoticeLineProps, type HappierNoticeLineTextRender,
+} from '../presentation/interaction/ApprovalPendingNotice.js';
+export {
+  HappierItemAddRow, type HappierItemAddRowContentProps, type HappierItemAddRowProps,
+  type HappierItemAddRowRenderProps,
+} from '../presentation/collection/ItemAddRow.js';
+export { HappierRowOperationContext } from '../presentation/collection/rowOperation.js';
+export { HappierSkeletonPulse, type HappierSkeletonPulseProps } from '../presentation/feedback/Skeleton.js';
+export { type HappierTabLabels, resolveHappierTabGlyphOnly } from '../presentation/navigation/Tabs.js';
+export { resolveHappierPageRowDetailLayout } from '../presentation/layout/pageRowDetail.js';
+export { splitHappierPagePrimaryOperation } from '../presentation/layout/pageOperations.js';
+export { useHappierCopyFeedback } from '../presentation/interaction/copyFeedback.js';
+export { useHappierItemOverflowState } from '../presentation/collection/ItemOverflow.js';
+export { useHappierTextSelectability } from '../presentation/text/Text.js';
+export { useHappierTreeRowLineHeight } from '../presentation/navigation/TreeRow.js';
 export { HappierStack } from '../presentation/layout/Layout.js';
 export { HappierText } from '../presentation/text/Text.js';
 export { resolveHappierTreeFocusKey, type HappierTreeNode } from '../presentation/navigation/treeInteraction.js';
@@ -171,6 +271,12 @@ export {
   type HappierCountedDisclosureHeaderState,
   type HappierCountedDisclosureProps,
 } from '../presentation/collection/CountedDisclosure.js';
+export {
+  HappierListOverflowFooter,
+  leadHappierListRows,
+  type HappierListOverflowFooterLabels,
+  type HappierListOverflowFooterProps,
+} from '../presentation/collection/ListOverflowFooter.js';
 export {
   HAPPIER_DISCLOSURE_DURATION_MS,
   resolveHappierDisclosureFrameStyle,
@@ -243,6 +349,11 @@ export {
   type HappierCollectionVisitMemory,
   type HappierCollectionWindow,
 } from '../presentation/collection/collectionModel.js';
+export {
+  rankHappierQueryMatches,
+  type HappierQueryRankOptions,
+  type HappierQueryText,
+} from '../presentation/collection/queryRank.js';
 export {
   HAPPIER_COLLECTION_INSTANT_MOTION,
   resolveHappierCollectionTrackStyle,
@@ -373,6 +484,8 @@ export {
   HappierMarkdown,
   type HappierMarkdownProps,
   type HappierMarkdownRenderInput,
+  type MarkdownInlineReference,
+  type MarkdownInlineReferences,
 } from '../presentation/content/Markdown.js';
 export {
   HappierSetupSteps,
@@ -408,6 +521,7 @@ export {
   type HappierAgentCursorMotionDriver,
   type HappierAgentCursorProps,
   type HappierAgentPageRect,
+  type HappierAgentPoint,
   type HappierAgentTarget,
 } from '../presentation/copresence/AgentCursor.js';
 export {
@@ -671,6 +785,8 @@ export {
 export {
   HAPPIER_SELECTION_TILE_TEXT,
   HappierSelectionTiles,
+  resolveHappierSelectionTileText,
+  type HappierSelectionTileTextStep,
   type HappierActionSelectionTilesProps,
   type HappierMultipleSelectionTilesProps,
   type HappierSelectionTileFooterRenderer,
@@ -975,6 +1091,7 @@ export {
 export {
   HappierMaterialRoleProvider,
   HappierSurface,
+  type HappierFloatingRole,
   type HappierMaterialSurfaceRender,
   type HappierSurfaceProps,
   useContainingHappierMaterialRole,
@@ -1039,7 +1156,6 @@ export {
   useHappierPageChrome,
 } from '../presentation/layout/pageChrome.js';
 export {
-  HAPPIER_COLLECTION_RAIL_WIDTH_PX,
   HAPPIER_PAGE_ADAPTIVE_ACCESSORY_MAX_ROW_SHARE,
   HAPPIER_PAGE_METRICS,
   isHappierPageRowAccessoryStacked,
@@ -1063,7 +1179,6 @@ export {
   HAPPIER_ROW_TITLE_META_GAP_PX,
   resolveHappierPageRowDensityInput,
   resolveHappierPageRowMetrics,
-  resolveHappierRowTitleMetaPlacement,
   type HappierPageRowDensity,
   type HappierPageRowMetrics,
   type HappierPageRowShape,
@@ -1253,6 +1368,15 @@ export {
   HappierStatus,
   type HappierStatusProps,
 } from '../presentation/status/Status.js';
+export {
+  HAPPIER_REVIEW_SEVERITY_METRICS,
+  HAPPIER_REVIEW_SEVERITY_RANK,
+  HAPPIER_REVIEW_SEVERITY_TONE,
+  HappierReviewSeveritySign,
+  resolveHappierReviewSeverityColor,
+  type HappierReviewSeverity,
+  type HappierReviewSeveritySignProps,
+} from '../presentation/status/ReviewSeverity.js';
 export {
   HappierIdentityCapsule,
   HappierStatusCapsule,

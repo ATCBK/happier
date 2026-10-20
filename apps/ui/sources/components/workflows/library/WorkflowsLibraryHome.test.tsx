@@ -15,6 +15,7 @@ import { resolveCompactAppDestinations } from '@/components/appShell/destination
 import { ModalProvider, useModal } from '@/modal/ModalProvider';
 import { installWorkflowActionHttpBoundary } from '@/dev/testkit/fixtures/workflowActionHttpBoundary';
 import { installShippedNativeFrameScheduler } from '@/dev/testkit/legend/shippedNativeLegendRuntime';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 const execute = vi.hoisted(() => vi.fn());
 const routerPush = vi.hoisted(() => vi.fn());
@@ -48,33 +49,48 @@ let automationDefinitionResponse: ((url: URL, init?: RequestInit) => Promise<Res
 let appliedSnapshot: typeof import('@/sync/domains/server/serverRuntime')['getActiveServerSnapshot'];
 const searchRuntime = { open: () => {}, buildCommands: () => [] };
 let modals: ReturnType<typeof useModal>['state']['modals'] = [];
+let answeredNativeConfirmations = 0;
 function ObserveModals() { modals = useModal().state.modals; return null; }
 function Wrapper({ children }: React.PropsWithChildren) {
-    return <ModalProvider><ObserveModals /><InjectedAuthProvider credentials={null}>
+    return <ModalProvider><ObserveModals /><InjectedAuthProvider credentials={httpBoundary?.credentials ?? null}>
         <UniversalSearchRuntimeProvider value={searchRuntime}>{children}</UniversalSearchRuntimeProvider>
     </InjectedAuthProvider></ModalProvider>;
 }
-async function confirmDeletion() {
-    const buttons = nativeAlert.mock.calls.at(-1)?.[2];
-    const confirm = buttons?.find(button => button.style === 'destructive');
+async function confirmDeletion(accepted = true) {
+    await vi.waitFor(() => expect(nativeAlert.mock.calls.length).toBeGreaterThan(answeredNativeConfirmations));
+    const buttons = nativeAlert.mock.calls[answeredNativeConfirmations++]?.[2];
+    const confirm = buttons?.find(button => (accepted ? button.style !== 'cancel' : button.style === 'cancel')
+        && typeof button.onPress === 'function');
     expect(confirm?.onPress).toBeTypeOf('function');
     await act(async () => { confirm?.onPress?.(); });
+}
+async function deleteWithConsent(definitionId: string) {
+    const { deleteWorkflowDefinition } = await import('@/sync/domains/workflows/workflowDefinitionActions');
+    const deletion = deleteWorkflowDefinition({ definitionId });
+    await confirmDeletion();
+    return await deletion;
 }
 let previous = storage.getState();
 let previousAppliedSnapshot = getAppliedActiveServerSnapshot();
 let previousRuntimeAvailable = isAppliedActiveServerRuntimeAvailable();
+let singleton: Awaited<ReturnType<typeof loadSyncSingletonForTests>> | undefined;
 beforeEach(async () => {
     installShippedNativeFrameScheduler();
     nativeAlert.mockReset();
+    answeredNativeConfirmations = 0;
     modals = [];
     previous = storage.getState();
     previousAppliedSnapshot = getAppliedActiveServerSnapshot();
     previousRuntimeAvailable = isAppliedActiveServerRuntimeAvailable();
-    httpBoundary = await installWorkflowActionHttpBoundary({ fixtureResponse: (actionId, input) => execute(actionId, input),
-        automationDefinitions: async (url, init) => automationDefinitionResponse?.(url, init) });
+    singleton = await loadSyncSingletonForTests();
     const runtime = await import('@/sync/domains/server/serverRuntime');
     appliedSnapshot = runtime.getActiveServerSnapshot;
     const home = await runtime.upsertAndActivateServer({ serverUrl: 'http://listsum.test', name: 'Library' });
+    httpBoundary = await installWorkflowActionHttpBoundary({
+        fixtureResponse: (actionId, input) => execute(actionId, input),
+        automationDefinitions: async (url, init) => automationDefinitionResponse?.(url, init) });
+    const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
+    await restoreConnectionToActiveServer(httpBoundary.credentials);
     publishAppliedActiveServerSnapshot(appliedSnapshot());
     const { settingsDefaults } = await import('@/sync/domains/settings/settings');
     storage.setState({ profileScope: { serverId: home.id, accountId: 'account-a' },
@@ -92,8 +108,10 @@ afterEach(async () => {
     (await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool')).resetScopedMachineTransportCacheForTests();
     (await import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs')).clearDaemonMergedProjectionCacheForTests();
     routerPush.mockClear();
-    httpBoundary?.dispose();
+    await httpBoundary?.dispose();
     httpBoundary = null;
+    singleton?.dispose();
+    singleton = undefined;
     automationDefinitionResponse = null;
     storage.setState(previous);
     publishAppliedActiveServerSnapshot(previousAppliedSnapshot, previousRuntimeAvailable);
@@ -135,7 +153,10 @@ describe('workflow library page anatomy', () => {
         expect(initial.getCurrent().loadingMore).toBe(true);
         await admitted.promise;
         await initial.unmount();
-        await deleteWorkflowDefinition({ definitionId: removedId });
+        const deletion = deleteWorkflowDefinition({ definitionId: removedId });
+        await vi.waitFor(() => expect(nativeAlert).toHaveBeenCalled());
+        await confirmDeletion();
+        await deletion;
         await act(async () => { projection.resolve({ ok: false, error: 'Daemon unavailable', errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND }); await projection.promise; });
         expect(execute.mock.calls.filter(call => call[0] === 'workflow.definition.list')).toHaveLength(1);
         // Keep the next genuine HTTP list pending while observing retained state on remount.
@@ -176,7 +197,6 @@ describe('workflow library page anatomy', () => {
         expect(screen.findHostByTestId('workflows-home:deleted')).toBeNull();
     });
     it('projects a cold editor delete acknowledgement without demanding a library read', async () => {
-        const { deleteWorkflowDefinition } = await import('@/sync/domains/workflows/workflowDefinitionActions');
         const { createWorkflowDefinitionFixture } = await import('@/dev/testkit/fixtures/workflowRunFixtures');
         const removedId = '10000000-0000-4000-8000-000000000001';
         execute.mockImplementation(async (actionId: string) => {
@@ -189,7 +209,7 @@ describe('workflow library page anatomy', () => {
             if (actionId === 'workflow.run.list') return { ok: true, result: { runs: [], metadataByRunId: {} } };
             return { ok: false, errorCode: 'unexpected', error: 'unexpected' };
         });
-        await deleteWorkflowDefinition({ definitionId: removedId });
+        await deleteWithConsent(removedId);
         expect(execute.mock.calls.map(call => call[0])).not.toContain('workflow.definition.list');
         const screen = await renderScreen(<WorkflowsLibraryHome />, { wrapper: Wrapper });
         expect(screen.findHostByTestId('workflows-home:deleted')).not.toBeNull();
@@ -197,7 +217,6 @@ describe('workflow library page anatomy', () => {
     });
     it.each([false, true])('applies a canonical delete outcome to the warm library while an older list is pending (unmounted=%s)', async (unmounted) => {
         const { createDeferred } = await import('@/dev/testkit/hooks/createDeferred');
-        const { deleteWorkflowDefinition } = await import('@/sync/domains/workflows/workflowDefinitionActions');
         const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
         const beforeId = '10000000-0000-4000-8000-000000000003';
         const removedId = '10000000-0000-4000-8000-000000000001';
@@ -231,7 +250,7 @@ describe('workflow library page anatomy', () => {
         expect(listReads).toBe(2);
         if (unmounted) await screen.unmount();
         // The editor uses this same writer; no library-row removal callback runs.
-        await act(async () => { await deleteWorkflowDefinition({ definitionId: removedId }); });
+        await act(async () => { await deleteWithConsent(removedId); });
         if (unmounted) {
             await act(async () => { staleRead.resolve({ ok: true, result: { definitions: rows } }); await staleRead.promise; });
             expect(listReads).toBe(2);
@@ -364,6 +383,10 @@ describe('workflow library page anatomy', () => {
         expect(execute.mock.calls.filter(call => call[0] === 'workflow.definition.delete')).toEqual([]);
         expect(modals).toEqual([]); // This ordinary iOS confirmation belongs to native Alert.
         await confirmDeletion();
+        await vi.waitFor(() => expect({
+            confirmations: nativeAlert.mock.calls.length,
+            deletions: execute.mock.calls.filter(call => call[0] === 'workflow.definition.delete').length,
+        }).toEqual({ confirmations: 1, deletions: 1 }));
         await deletionAdmitted;
         expect(row().props.busy).toBe(true);
         expect(menu.props.items?.find((item: { id: string }) => item.id === 'delete')?.destructive).toBe(true);
@@ -390,7 +413,7 @@ describe('workflow library page anatomy', () => {
             settleDelete({ ok: true, result: { definitionId: ids[1], deleted: true } });
         });
         expect(screen.findHostByTestId('workflows-home:deleted')).not.toBeNull();
-        expect(nativeAlert.mock.calls.filter(call => call[2]?.some(button => button.style === 'destructive'))).toHaveLength(2);
+        expect(nativeAlert).toHaveBeenCalledTimes(2);
     });
     it('shows one loading status rather than selectable placeholder workflows before the library is known', async () => {
         execute.mockImplementation(() => new Promise(() => {}));
@@ -398,7 +421,31 @@ describe('workflow library page anatomy', () => {
         expect(screen.findHostByTestId('workflows-home:loading')).not.toBeNull();
         expect(screen.findAll(node => node.props.accessibilityRole === 'checkbox')).toHaveLength(0);
     });
+    it('keeps the workflow and stays quiet when the executor deletion confirmation is cancelled', async () => {
+        const definitionId = '10000000-0000-4000-8000-000000000051';
+        execute.mockImplementation(async (actionId: string) => {
+            if (actionId === 'workflow.definition.list') return { ok: true, result: { definitions: [{
+                kind: 'workflow-definition.v1', definitionId, revision: { headerVersion: 1, bodyVersion: 1 },
+                metadata: { title: 'Keep this workflow' }, ownerAccountId: 'account-a', access: 'owner',
+                contentStatus: 'available', stepCount: 1, triggers: [], nextRunAt: null,
+            }] } };
+            if (actionId === 'workflow.run.summaries') return { ok: true, result: { summaries: [], remainingSourceArtifactIds: [] } };
+            return { ok: false, errorCode: 'unexpected', error: 'unexpected' };
+        });
+        const screen = await renderScreen(<WorkflowsLibraryHome />, { wrapper: Wrapper });
+        const { ContextMenu, Collection } = await import('@happier-dev/plugin-ui');
+        const row = () => screen.findAll(node => node.props.testID === `workflows-home:row:${definitionId}`
+            && Array.isArray(node.props.secondaryActions))[0]!;
+        await act(async () => { row().findByType(ContextMenu).props.onSelect('delete'); });
+        await confirmDeletion(false);
+        await vi.waitFor(() => expect(screen.findAllByType(Collection)[0]!.props.selection.focusRequest).toEqual({ key: definitionId }));
+        expect(row().props.busy).toBe(false);
+        expect(execute.mock.calls.filter(call => call[0] === 'workflow.definition.delete')).toEqual([]);
+        expect(nativeAlert).toHaveBeenCalledOnce();
+        expect(screen.findHostByTestId('workflows-home:deleted')).toBeNull();
+    });
     it('gives a phone one way to add (the column\'s "+" menu rows) and no second overflow in the title bar (DESIGN-9 N6)', async () => {
+        windowSize.width = 390;
         execute.mockImplementation(async (actionId: string) => {
             if (actionId === 'workflow.definition.list') return { ok: true, result: { definitions: [{
                 kind: 'workflow-definition.v1', definitionId: '10000000-0000-4000-8000-000000000001', revision: { headerVersion: 1, bodyVersion: 1 },
@@ -415,8 +462,9 @@ describe('workflow library page anatomy', () => {
             <WorkflowsDestinationIndex />
         </DestinationInstanceHost>, { wrapper: Wrapper });
         await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-        expect(screen.findHostByTestId('workspace-destination-header')).not.toBeNull();
-        expect(screen.findHostByTestId('workflows-home:row:10000000-0000-4000-8000-000000000001')).not.toBeNull();
+        // The canonical Workflows root opts out of native chrome; its page owns identity.
+        expect(screen.findHostByTestId('workspace-destination-header')).toBeNull();
+        await vi.waitFor(() => expect(screen.findHostByTestId('workflows-home:row:10000000-0000-4000-8000-000000000001')).not.toBeNull());
         // One overflow: the title bar carries no page-actions `⋯` of raw buttons beside the column's own.
         expect(screen.findHostByTestId('page-header-actions.trigger')).toBeNull();
         expect(screen.findHostByTestId('workflows-home:new')).toBeNull();
@@ -429,17 +477,35 @@ describe('workflow library page anatomy', () => {
         await act(async () => { addMenu.props.onSelect('new'); });
         expect(routerPush).toHaveBeenCalledWith('/workflows/new');
     });
-    it('shares a Home wake refresh between mounted definition consumers', async () => {
-        const { useWorkflowDefinitionLibrary } = await import('./workflowLibraryReads');
-        const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
-        function Consumer() { useWorkflowDefinitionLibrary(); return null; }
-        execute.mockResolvedValue({ ok: true, result: { definitions: [] } });
-        await renderScreen(<><Consumer /><Consumer /></>, { wrapper: Wrapper });
-        expect(execute.mock.calls.filter(([actionId]) => actionId === 'workflow.definition.list')).toHaveLength(1);
-        execute.mockClear();
-        await act(async () => { publishHomeAccountChange(appliedSnapshot().serverId); });
-        // This boundary count measures duplicate network refreshes, not incidental internal calls.
-        expect(execute.mock.calls.filter(([actionId]) => actionId === 'workflow.definition.list')).toHaveLength(1);
+    it('gives a phone-sized web window the same one way to add when no navigation bar shows the title (lab P1)', async () => {
+        windowSize.width = 390;
+        execute.mockImplementation(async (actionId: string) => {
+            if (actionId === 'workflow.definition.list') return { ok: true, result: { definitions: [{
+                kind: 'workflow-definition.v1', definitionId: '10000000-0000-4000-8000-000000000041', revision: { headerVersion: 1, bodyVersion: 1 },
+                metadata: { title: 'Saved workflow' }, ownerAccountId: 'account-a', access: 'owner',
+                contentStatus: 'available', stepCount: 1, triggers: [], nextRunAt: null,
+            }] } };
+            if (actionId === 'workflow.run.summaries') return { ok: true, result: { summaries: [], remainingSourceArtifactIds: [] } };
+            if (actionId === 'workflow.trigger.list') return { ok: true, result: { sets: [] } };
+            if (actionId === 'workflow.run.list') return { ok: true, result: { runs: [], metadataByRunId: {} } };
+            return { ok: false, errorCode: 'unexpected', error: 'unexpected' };
+        });
+        try {
+            const screen = await renderScreen(<DestinationInstanceHost tabId="workflows" ref={{ kind: 'workflows', params: {} }}
+                pathname="/workflows" focused visible navigation={{ push: routerPush, replace: () => {}, back: () => {} }}>
+                <WorkflowsDestinationIndex />
+            </DestinationInstanceHost>, { wrapper: Wrapper });
+            await vi.waitFor(() => expect(screen.findHostByTestId('workflows-home:row:10000000-0000-4000-8000-000000000041')).not.toBeNull());
+            // The page header keeps its title and purpose; Import, Create with an agent and New workflow are not stacked under it.
+            expect(screen.findHostByTestId('workflows-home:new')).toBeNull();
+            expect(screen.findHostByTestId('workflows-home:import')).toBeNull();
+            expect(screen.findHostByTestId('workflows-home:agent')).toBeNull();
+            const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+            const addMenu = screen.findAllByType(DropdownMenu).find((menu) => menu.props.testID === 'workflows-column:add:menu');
+            expect(addMenu?.props.items.map((item: { id: string }) => item.id)).toEqual(['new', 'agent', 'trigger', 'example', 'import']);
+        } finally {
+            windowSize.width = 800;
+        }
     });
     it('keeps the full library home, Runs switch and account triggers on a phone destination', async () => {
         const { AutomationDefinitionDetailSchema, AutomationDefinitionListResponseSchema,
@@ -642,9 +708,15 @@ describe('workflow library summaries and filter', () => {
                 .toMatchObject({ ok: false, errorCode: 'client_surface_unavailable' });
         });
         const scope = storage.getState().profileScope!;
-        await act(async () => { storage.setState({ profileScope: { ...scope, accountId: 'account-b' } }); });
+        await act(async () => {
+            storage.setState({ profileScope: { ...scope, accountId: 'account-b' } });
+            await httpBoundary!.refreshAccount();
+        });
         expect(await action.execute('workflow.library.view.get', {}, context)).toMatchObject({ ok: true, result: { view: 'all', searchQuery: '' } });
-        await act(async () => { storage.setState({ profileScope: scope }); });
+        await act(async () => {
+            storage.setState({ profileScope: scope });
+            await httpBoundary!.refreshAccount();
+        });
         expect(await action.execute('workflow.library.view.get', {}, context)).toMatchObject({ ok: true, result: { view: 'all', searchQuery: '' } });
     });
 
@@ -656,7 +728,7 @@ describe('workflow library summaries and filter', () => {
                 row('10000000-0000-4000-8000-000000000011', 'Release notes'), row('10000000-0000-4000-8000-000000000012', 'Dependency review')] } };
             if (actionId === 'workflow.run.summaries') return { ok: true, result: { remainingSourceArtifactIds: [], summaries: [
                 { sourceArtifactId: '10000000-0000-4000-8000-000000000011', recent: [{ runId: 'run-live', state: 'running' }],
-                    lastRun: { runId: 'run-live', state: 'running', createdAt: '2026-10-11T08:00:00.000Z', finishedAt: null }, needsYouCount: 0, needsYouRunId: null },
+                    lastRun: { runId: 'run-live', state: 'running', createdAt: '2026-10-11T08:00:00.000Z', finishedAt: null }, needsYouCount: 1, needsYouRunId: 'run-live' },
                 { sourceArtifactId: '10000000-0000-4000-8000-000000000012', recent: [{ runId: 'run-done', state: inactiveState }],
                     lastRun: { runId: 'run-done', state: inactiveState, createdAt: '2026-10-10T08:00:00.000Z', finishedAt: inactiveState === 'succeeded' ? '2026-10-10T08:05:00.000Z' : null }, needsYouCount: 0, needsYouRunId: null },
             ] } };
@@ -671,6 +743,8 @@ describe('workflow library summaries and filter', () => {
         await screen.tree.pressByTestIdAsync('workflows-home:filter:running');
         expect(screen.tree.findHostByTestId('workflows-home:row:10000000-0000-4000-8000-000000000011')).not.toBeNull();
         expect(screen.tree.findHostByTestId('workflows-home:row:10000000-0000-4000-8000-000000000012')).toBeNull();
+        await screen.pressByTestIdAsync('workflows-home:row:10000000-0000-4000-8000-000000000011:needsYou');
+        expect(routerPush).toHaveBeenLastCalledWith(`/workflows/runs/run-live?serverId=${encodeURIComponent(httpBoundary!.serverId)}`);
     });
 
     it.each([[390, false], [800, true]] as const)('lays a row out for a %ipx window whether or not navigation chrome shows a title (run strip: %s)', async (width, showsStrip) => {
@@ -757,8 +831,7 @@ describe('workflow library summaries and filter', () => {
         await screen.tree.pressByTestIdAsync('workflows-home:filter:all');
         expect(screen.tree.findHostByTestId('workflows-home:row:10000000-0000-4000-8000-000000000003')).not.toBeNull();
         await screen.tree.pressByTestIdAsync('workflows-home:filter:triggered');
-        const { deleteWorkflowDefinition } = await import('@/sync/domains/workflows/workflowDefinitionActions');
-        await act(async () => { await deleteWorkflowDefinition({ definitionId: '10000000-0000-4000-8000-000000000004' }); });
+        await act(async () => { await deleteWithConsent('10000000-0000-4000-8000-000000000004'); });
         expect(screen.tree.findHostByTestId('workflows-home:filter:triggered')).toBeNull();
         expect(screen.tree.findHostByTestId('workflows-home:row:10000000-0000-4000-8000-000000000003')).not.toBeNull();
     });

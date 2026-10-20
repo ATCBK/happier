@@ -57,6 +57,30 @@ export function resolveTranscriptSessionBoardItemReferenceV1(input: Readonly<{
     return null;
 }
 
+/**
+ * Layout only: whether a completed call acknowledged an item shown in the transcript, so its visual stands
+ * as the reply rather than inside a tool group. It reads the acknowledgement's own address and is never an
+ * authority to show content; the exact-address recognizer above decides that for the viewer's Home.
+ */
+export function isTranscriptSessionBoardItemReplyCallV1(input: Readonly<{
+    toolName: string;
+    state: string;
+    input: unknown;
+    result: unknown;
+}>): boolean {
+    if (input.state !== 'completed') return false;
+    for (const candidate of readHappierActionToolResultCandidates(input.result, input.input)) {
+        if (!isRecord(candidate)) continue;
+        const acknowledgement = Object.hasOwn(candidate, 'ok') ? candidate.result : candidate;
+        if (!isRecord(acknowledgement)) continue;
+        const { serverId, sessionId } = acknowledgement;
+        if (typeof serverId !== 'string' || typeof sessionId !== 'string') continue;
+        const reference = resolveTranscriptSessionBoardItemReferenceV1({ ...input, address: { serverId, sessionId } });
+        if (reference) return reference.itemDestination !== 'board';
+    }
+    return false;
+}
+
 /** The published association is authenticated by its current Session writer, never by origin metadata. */
 export function isPublishedTranscriptSessionBoardItemReferenceCorrespondingV1(input: Readonly<{
     acknowledgedReference: TranscriptSessionBoardItemReferenceV1;

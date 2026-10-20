@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
+import { setTimeout as delay } from 'node:timers/promises';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, readdirSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -2356,6 +2358,44 @@ test('workspace bundle locks reclaim a fresh authenticated dead owner in the sam
   }
 });
 
+test('workspace publication recovers a real unreaped owner in its own PID namespace', {
+  skip: process.platform !== 'linux', timeout: 10000,
+}, async context => {
+  const root = mkdtempSync(join(tmpdir(), 'happier-workspace-zombie-'));
+  context.after(() => rmSync(root, { recursive: true, force: true }));
+  const lockPath = join(root, 'publication.lock');
+  const releasePath = join(root, 'release-parent');
+  const ownerScript = `import {withWorkspaceBundleLock} from ${JSON.stringify(new URL('./workspaceBundleLock.mjs', import.meta.url).href)};
+    process.stdin.once('data',()=>process.exit(0));
+    await withWorkspaceBundleLock(async()=>{process.stdout.write('held');await new Promise(()=>{});},{lockPath:process.argv[1]});`;
+  // Keep only the owned fixture parent from reaping its exited child. The
+  // kernel reports Z while signal 0 and the incarnation fingerprint still match.
+  const parentScript = `import {spawn} from 'node:child_process';import {existsSync} from 'node:fs';
+    const child=spawn(process.execPath,['--input-type=module','-e',${JSON.stringify(ownerScript)},process.argv[1]],{stdio:['pipe','pipe','inherit']});
+    child.stdout.once('data',()=>{process.stdout.write(String(child.pid)+'\\n');child.stdin.end('exit');
+      const state=new Int32Array(new SharedArrayBuffer(4));
+      while(!existsSync(process.argv[2]))Atomics.wait(state,0,0,10);});`;
+  const parent = spawn(process.execPath, ['--input-type=module', '-e', parentScript, lockPath, releasePath],
+    { stdio: ['ignore', 'pipe', 'inherit'] });
+  const exited = once(parent, 'close');
+  try {
+    const [chunk] = await once(parent.stdout, 'data', { signal: context.signal });
+    const pid = Number(String(chunk).trim());
+    while (true) {
+      context.signal.throwIfAborted();
+      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+      if (stat.slice(stat.lastIndexOf(') ') + 2).startsWith('Z ')) break;
+      await delay(5, undefined, { signal: context.signal });
+    }
+    assert.doesNotThrow(() => process.kill(pid, 0));
+    assert.equal(await withWorkspaceBundleLock(async () => 'recovered', { lockPath, wait: false }), 'recovered');
+    assert.equal(existsSync(lockPath), false);
+  } finally {
+    writeFileSync(releasePath, 'release');
+    assert.equal((await exited)[0], 0, 'the fixture parent must resume and reap its child');
+  }
+});
+
 test('workspace bundle locks preserve a fresh authenticated owner in another Linux PID namespace', {
   skip: process.platform !== 'linux',
 }, () => {
@@ -3060,11 +3100,11 @@ assert.ok(Date.now() - startedAt >= 50);
   }
 });
 
-test('withWorkspaceBundleLock does not reclaim an old lock while the owner pid is alive', async () => {
+for (const ownerPid of [process.pid, 1]) test(`withWorkspaceBundleLock does not reclaim an old lock while owner ${ownerPid === 1 ? 'PID1' : 'process'} is alive`, async () => {
   const tempRoot = mkdtempSync(join(tmpdir(), 'happier-workspace-bundle-lock-live-owner-'));
   try {
     const lockPath = join(tempRoot, 'workspace-bundling.lock');
-    const owner = { pid: process.pid, createdAtMs: Date.now() - 60_000 };
+    const owner = { pid: ownerPid, createdAtMs: Date.now() - 60_000 };
     writeFileSync(lockPath, JSON.stringify(owner), 'utf8');
     let enteredCriticalSection = false;
 

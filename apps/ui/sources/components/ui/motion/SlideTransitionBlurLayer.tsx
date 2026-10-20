@@ -2,14 +2,9 @@
  * Cross-platform blur overlay for `SlideTransitionFrame` layers.
  *
  * Web → CSS `filter: blur(${px}px)` driven via `useAnimatedStyle`.
- * Native → `expo-blur` `BlurView`.intensity driven via `useAnimatedProps`.
- *
- * Lazy-loads `expo-blur` only on native (web has no equivalent runtime cost).
- *
- * Per Phase 1A.0 spike conclusions: a single cross-platform implementation is
- * sufficient — the visual approximates the reference on both platforms (and on
- * Android with `experimentalBlurMethod: 'dimezisBlurView'`). If a per-platform
- * fallback is ever needed, the caller can pass `blur={false}` for that platform.
+ * iOS → `expo-blur` intensity driven via `useAnimatedProps`.
+ * Android → no blur overlay without an explicit content target; translation/fade remain.
+ * The shared blur material owner loads the native SDK only where it is usable.
  */
 
 import * as React from 'react';
@@ -20,32 +15,24 @@ import Animated, {
     type SharedValue,
 } from 'react-native-reanimated';
 
+import { getBlurViewComponent, isNativeBlurAvailable } from '@/components/ui/glass/blurMaterial';
+
 import { resolveSlideLayerStyle, type SlideLayerRole } from './resolveSlideLayerStyle';
 
 type AnimatedBlurViewProps = Readonly<{
     intensity?: number;
-    experimentalBlurMethod?: string;
     style?: StyleProp<ViewStyle>;
     animatedProps?: object;
     testID?: string;
 }>;
 
 let cachedNativeBlurComponent: React.ComponentType<AnimatedBlurViewProps> | null = null;
-let pendingNativeBlurComponent: Promise<React.ComponentType<AnimatedBlurViewProps> | null> | null = null;
-
-function loadAnimatedNativeBlurComponent(): Promise<React.ComponentType<AnimatedBlurViewProps> | null> {
-    if (Platform.OS === 'web') return Promise.resolve(null);
-    if (cachedNativeBlurComponent) return Promise.resolve(cachedNativeBlurComponent);
-    pendingNativeBlurComponent ??= import('expo-blur')
-        .then((expoBlur) => {
-            const animated = Animated.createAnimatedComponent(
-                expoBlur.BlurView as React.ComponentType<AnimatedBlurViewProps>,
-            );
-            cachedNativeBlurComponent = animated as React.ComponentType<AnimatedBlurViewProps>;
-            return cachedNativeBlurComponent;
-        })
-        .catch(() => null);
-    return pendingNativeBlurComponent;
+function getAnimatedNativeBlurComponent(): React.ComponentType<AnimatedBlurViewProps> | null {
+    if (cachedNativeBlurComponent) return cachedNativeBlurComponent;
+    const BlurView = getBlurViewComponent();
+    if (!BlurView) return null;
+    cachedNativeBlurComponent = Animated.createAnimatedComponent(BlurView);
+    return cachedNativeBlurComponent;
 }
 
 export type SlideTransitionBlurLayerProps = Readonly<{
@@ -65,6 +52,7 @@ export function SlideTransitionBlurLayer(props: SlideTransitionBlurLayerProps): 
     if (Platform.OS === 'web') {
         return <SlideTransitionBlurLayerWeb {...props} />;
     }
+    if (!isNativeBlurAvailable()) return null;
     return <SlideTransitionBlurLayerNative {...props} />;
 }
 
@@ -111,23 +99,7 @@ function SlideTransitionBlurLayerWeb(props: SlideTransitionBlurLayerProps): Reac
 }
 
 function SlideTransitionBlurLayerNative(props: SlideTransitionBlurLayerProps): React.ReactElement | null {
-    const [AnimatedBlurView, setAnimatedBlurView] = React.useState<React.ComponentType<AnimatedBlurViewProps> | null>(
-        () => cachedNativeBlurComponent,
-    );
-
-    React.useEffect(() => {
-        if (cachedNativeBlurComponent) {
-            setAnimatedBlurView(() => cachedNativeBlurComponent);
-            return undefined;
-        }
-        let active = true;
-        void loadAnimatedNativeBlurComponent().then((component) => {
-            if (active) setAnimatedBlurView(() => component);
-        });
-        return () => {
-            active = false;
-        };
-    }, []);
+    const AnimatedBlurView = getAnimatedNativeBlurComponent();
 
     const animatedProps = useAnimatedProps(() => {
         const layer = resolveSlideLayerStyle({
@@ -144,7 +116,6 @@ function SlideTransitionBlurLayerNative(props: SlideTransitionBlurLayerProps): R
     return (
         <AnimatedBlurView
             animatedProps={animatedProps as object}
-            experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
             style={blurOverlayStyle}
             testID={props.testID}
         />

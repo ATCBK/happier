@@ -1,5 +1,5 @@
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -197,6 +197,40 @@ describe('Git repository worktree status enrichment', () => {
 });
 
 describe('Git repository detection', () => {
+    it('detects a nested checkout and reads a diff using one repository probe', async () => {
+        const repoRoot = await initRepoWithCommit('git-plugin-detect-once-');
+        try {
+            const cwd = join(repoRoot, 'nested');
+            await mkdir(cwd);
+            await writeFile(join(repoRoot, 'README.md'), 'changed\n', 'utf8');
+            const command = vi.fn(createRealGitScmBackendRuntimeServices().runCommand);
+            await runWithGitScmCommandRunner(command, async () => {
+                const detection = await detectGitRepo({ cwd });
+                expect(detection).toEqual({ isRepo: true, rootPath: await realpath(repoRoot), mode: '.git' });
+                const response = await gitDiffFile({
+                    context: { cwd, projectKey: `test:${repoRoot}`, detection },
+                    request: { path: 'README.md', area: 'pending' },
+                });
+                expect(response).toMatchObject({ success: true, diff: expect.stringContaining('+changed') });
+            });
+            expect(command.mock.calls.filter(([input]) => input.args[0] === 'rev-parse'
+                && input.args.some((arg) => arg === '--is-inside-work-tree' || arg === '--show-toplevel'))).toHaveLength(1);
+        } finally {
+            await rm(repoRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('preserves bare repository detection when there is no worktree root', async () => {
+        const repoRoot = await makeTempDir('git-plugin-detect-bare-');
+        try {
+            await runGit(repoRoot, ['init', '--bare']);
+            expect(await runWithRealGitScmRuntime(() => detectGitRepo({ cwd: repoRoot })))
+                .toEqual({ isRepo: true, rootPath: null, mode: '.git' });
+        } finally {
+            await rm(repoRoot, { recursive: true, force: true });
+        }
+    });
+
     it('reports a real ownership refusal as unavailable even when git itself is healthy', async () => {
         const repoRoot = await initRepoWithCommit('git-plugin-detect-ownership-');
         const realCommand = createRealGitScmBackendRuntimeServices().runCommand;

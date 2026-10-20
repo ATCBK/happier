@@ -24,6 +24,12 @@ function manifest(overrides: Record<string, unknown> = {}): Record<string, unkno
 }
 
 describe('plugin manifest v2 root contract', () => {
+  it('admits an optional automatic Run-on opt-out while keeping routing declarations closed', () => {
+    const result = ingestPluginManifestV2(manifest({ executionTarget: { autoPick: false } }));
+    expect(result.ok ? result.manifest.executionTarget : result.diagnostics).toEqual({ autoPick: false });
+    expect(ingestPluginManifestV2(manifest({ executionTarget: { autoPick: 'false' } }))).toMatchObject({ ok: false });
+    expect(ingestPluginManifestV2(manifest({ executionTarget: { autoPick: false, machineId: 'other' } }))).toMatchObject({ ok: false });
+  });
   it('preserves an optional installation default hint and rejects other target declarations', () => {
     const admitted = ingestPluginManifestV2(manifest({ executionTarget: { default: 'installation' } }));
     expect(admitted.ok ? admitted.manifest.executionTarget : admitted.diagnostics)
@@ -32,7 +38,6 @@ describe('plugin manifest v2 root contract', () => {
     expect(omitted.ok).toBe(true);
     if (omitted.ok) expect(omitted.manifest).not.toHaveProperty('executionTarget');
     for (const executionTarget of [
-      {},
       { default: 'firstOnline' },
       { default: 'installation', machineId: 'machine-a' },
       { default: 'installation', permission: 'execute' },
@@ -81,7 +86,7 @@ describe('plugin manifest v2 root contract', () => {
       id: 'security-reviewer', name: 'Security reviewer', instructions: 'Review security boundaries.',
       engine: { agentTargetKey: 'agent:codex', modelId: 'review-model', effort: 'high' },
       runsAs: { kind: 'background_run', intent: 'review' },
-      workspaceWrites: 'deny', secondOpinion: 'encouraged', enabled: true,
+      workspaceWrites: 'deny', secondOpinion: 'encouraged', canDelegateToOtherRoles: true, enabled: true,
     };
     const parse = (value: unknown) => PluginManifestV2Schema.safeParse(manifest({ contributes: { roles: [value] } }));
     const result = parse(role);
@@ -90,6 +95,7 @@ describe('plugin manifest v2 root contract', () => {
     for (const invalid of [
       { ...role, id: 'plugin:com.acme.fixture/security-reviewer' },
       { ...role, unexpected: true },
+      { ...role, canDelegateToOtherRoles: 'yes' },
       { ...role, engine: { ...role.engine, fallback: 'other' } },
       { ...role, runsAs: { kind: 'background_run' } },
     ]) expect(parse(invalid).success).toBe(false);

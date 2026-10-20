@@ -18,9 +18,12 @@ export async function withTrackedSessionRpc<T>(input: Readonly<{
   machineId: string;
   serverHttpBaseUrl: string;
   requesterBootstrap?: Pick<AdmittedRequesterSessionBootstrap,
-    'credentials' | 'attribution' | 'serverHttpBaseUrl' | 'getBoundSessionId' | 'isCurrent'>;
+    'credentials' | 'attribution' | 'serverHttpBaseUrl' | 'getBoundSessionId' | 'isCurrent'>
+    & Partial<Pick<AdmittedRequesterSessionBootstrap, 'savedSecretOperationContext'>>;
   isTrackedCurrent(): boolean;
   signal?: AbortSignal;
+  /** Omission retains the transport default; null uses the caller's lifetime. */
+  timeoutMs?: Parameters<typeof callSessionRpc>[0]['timeoutMs'];
   /** Exit settlement retains the owning Home lifetime after the stop caller retires. */
   retainedRecordSignal?: AbortSignal;
   /** Authenticated network boundary; production uses the incumbent transport. */
@@ -71,6 +74,7 @@ export async function withTrackedSessionRpc<T>(input: Readonly<{
     const result = await operation(async (method, request) => {
       if (!await isCurrent()) throw new Error('requester_session_not_current');
       const rpc = { token: credentials.token, sessionId, method, request,
+        ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
         ...(input.signal ? { signal: input.signal } : {}) };
       const call = input.callRpc ?? callSessionRpc;
       return transport.mode === 'plain'

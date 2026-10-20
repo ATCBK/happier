@@ -26,30 +26,32 @@ import {
 
 type Registration = Readonly<{ query: UsageQuery; key: string }>;
 type UsageQueryWidgetId = Exclude<UsageBuiltinWidgetIdV1, 'usage_sources'>;
-// The bodies consume two independent projections: native SCM outcomes and
-// opened Session inputs/metadata. Keep their demand policy at this query owner.
-const USAGE_WIDGET_EVIDENCE_DEMAND = {
+// Each body declares its accounting and private-evidence demand here. Capacity
+// consumes B quota/selection only; other bodies retain their A projection.
+const USAGE_WIDGET_DEMAND = {
   usage_daily: { includeSessionEvidence: false, includeWorkEvidence: false },
   usage_period_summary: { includeSessionEvidence: true, includeWorkEvidence: true },
   usage_cost_facts: { includeSessionEvidence: false, includeWorkEvidence: false },
   usage_flow: { includeSessionEvidence: false, includeWorkEvidence: false },
   usage_efficiency: { includeSessionEvidence: false, includeWorkEvidence: false },
   usage_breakdowns: { includeSessionEvidence: false, includeWorkEvidence: false },
-  usage_capacity: { includeSessionEvidence: false, includeWorkEvidence: false },
+  usage_capacity: { includeAccounting: false, includeSessionEvidence: false, includeWorkEvidence: false },
   usage_projections: { includeSessionEvidence: false, includeWorkEvidence: false },
   usage_resets: { includeSessionEvidence: false, includeWorkEvidence: false },
   usage_plan_fit: { includeSessionEvidence: false, includeWorkEvidence: false },
   usage_project_ledger: { includeSessionEvidence: false, includeWorkEvidence: true },
-  usage_session_value: { includeSessionEvidence: true, includeWorkEvidence: true },
+  usage_session_value: { includeSessionEvidence: false, includeWorkEvidence: true },
   usage_outcomes: { includeSessionEvidence: false, includeWorkEvidence: true },
-  usage_coach: { includeSessionEvidence: true, includeWorkEvidence: false },
+  usage_coach: { includeSessionEvidence: true, includeTranscriptEvidence: true, includeWorkEvidence: false },
   usage_rhythm: { includeSessionEvidence: false, includeWorkEvidence: false },
   usage_parallel: { includeSessionEvidence: true, includeWorkEvidence: false },
-  usage_human_loop: { includeSessionEvidence: true, includeWorkEvidence: false },
+  usage_human_loop: { includeSessionEvidence: true, includeTranscriptEvidence: true, includeWorkEvidence: false },
   usage_night_shift: { includeSessionEvidence: true, includeWorkEvidence: false },
-  usage_recap: { includeSessionEvidence: true, includeWorkEvidence: true },
+  usage_recap: { includeSessionEvidence: true, includeTranscriptEvidence: true, includeWorkEvidence: true },
   usage_footprint: { includeSessionEvidence: false, includeWorkEvidence: false },
-} satisfies Record<UsageQueryWidgetId, Readonly<{ includeSessionEvidence: boolean; includeWorkEvidence: boolean }>>;
+  usage_source_coverage: { includeSessionEvidence: false, includeWorkEvidence: false },
+  usage_unpriced: { includeSessionEvidence: false, includeWorkEvidence: false },
+} satisfies Record<UsageQueryWidgetId, Readonly<{ includeAccounting?: boolean; includeSessionEvidence: boolean; includeTranscriptEvidence?: boolean; includeWorkEvidence: boolean }>>;
 type UsageWidgetBatch = Readonly<{
   clauses: UsageWidgetQueryOverrides;
   register(id: string, registration: Registration): () => void;
@@ -60,6 +62,11 @@ type UsageWidgetBatch = Readonly<{
 const UsageWidgetBatchContext = React.createContext<UsageWidgetBatch | null>(
   null,
 );
+
+/** A setup preview belongs to its destination, independently of the page beneath it. */
+export function UsageWidgetBatchBoundary(props: Readonly<{ children: React.ReactNode }>) {
+  return <UsageWidgetBatchContext.Provider value={null}>{props.children}</UsageWidgetBatchContext.Provider>;
+}
 
 /**
  * One plan from the bodies' own platform-resolved inputs. The widget binder has already applied each
@@ -180,8 +187,16 @@ function resolveQuery(
   try {
     // This widget bundle consumes both the calendar and weekday/hour facts, irrespective of partial route read clauses.
     // Direct usage.query callers retain their explicit includeActivity/activityResolution semantics.
-    const query = normalizeUsageQuery({ ...clauses, ...input, includeActivity: true, activityResolution: 'both',
-      ...USAGE_WIDGET_EVIDENCE_DEMAND[widgetId] });
+    const singleSession = typeof input.session === 'string' && input.session.length > 0
+      || Array.isArray(input.session) && input.session.length === 1;
+    // The Work autopsy renders only for one selected Session. The aggregate
+    // Session-value plot/rows consume allocation facts, not private transcripts.
+    const autopsy = widgetId === 'usage_session_value' && singleSession;
+    const query = normalizeUsageQuery({ ...clauses, ...input, includeActivity: true, activityResolution: 'both', includeAccounting: true,
+      includeTranscriptEvidence: false,
+      ...USAGE_WIDGET_DEMAND[widgetId],
+      ...(autopsy ? { includeSessionEvidence: true, includeTranscriptEvidence: true } : {}),
+    });
     return { query, key: getUsageQueryKey(query) };
   } catch {
     return null;

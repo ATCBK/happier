@@ -27,6 +27,7 @@ function subject(request: TargetActionApprovalRequestV1): unknown {
     subjectFingerprint: request.subjectFingerprint,
     replayPlacement: request.replayPlacement,
     executionOriginV1: request.executionOriginV1,
+    requesterConfirmation: request.requesterConfirmation,
     summary: request.summary,
     detail: request.detail,
   };

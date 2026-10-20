@@ -7,7 +7,7 @@ import { getAgentCore, type AgentId } from '@/agents/catalog/catalog';
 import type { BrowserAutomationControlService } from '@/sync/domains/browser/automation';
 import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 import { useSession } from '@/sync/domains/state/storage';
-import { selectBrowserCopresence } from '@/sync/domains/browser/automation/copresence';
+import { readBrowserAgentPoint, selectBrowserAgentPoint, selectBrowserCopresence } from '@/sync/domains/browser/automation/copresence';
 import type { BrowserControlViewState } from '@/sync/domains/browser/control';
 import { isDaemonAuthoritativeBrowserView } from '@/sync/domains/browser/control/commands';
 import { t } from '@/text';
@@ -126,6 +126,11 @@ export function BrowserShellPresence(props: Readonly<{
         timeline: !daemonOwned && controlService ? controlService.getActionTimeline(viewKey) : [],
     }), [agentTurnActive, controlService, daemonController, daemonOwned, version, viewKey]);
 
+    const agentPoint = React.useMemo(() => selectBrowserAgentPoint({
+        lastPoint: daemonOwned ? view.agentPoint : !controlService ? null : readBrowserAgentPoint(controlService.getSnapshot(), viewKey),
+        presence,
+    }), [controlService, daemonOwned, presence, view.agentPoint, viewKey]);
+
     const agent = React.useMemo(
         () => ({ agentId: identity.agentId, name: identity.name }),
         [identity.agentId, identity.name],
@@ -177,6 +182,7 @@ export function BrowserShellPresence(props: Readonly<{
             <BrowserAgentCursor
                 testID={`${props.testID}-cursor`}
                 target={presence.kind === 'agent' ? presence.target : null}
+                point={agentPoint}
                 pageRect={props.pageRect}
                 agentId={agent.agentId}
             />

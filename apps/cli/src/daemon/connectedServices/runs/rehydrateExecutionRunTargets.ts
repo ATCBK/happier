@@ -105,12 +105,6 @@ export async function rehydrateLiveExecutionRunTargets(input: Readonly<{
   const inactiveRunIds: string[] = [];
   for (const candidate of candidates) {
     const { marker, normalized } = candidate;
-    // A detached run has no Session runner to prove or re-adopt. Its marker is
-    // observability only; daemon loss does not manufacture a restart owner.
-    if (marker.happySessionId === null) {
-      inactiveRunIds.push(marker.runId);
-      continue;
-    }
     const isRunning = marker.status === 'running' && typeof marker.finishedAtMs !== 'number';
     if (!isRunning) {
       if (marker.executionRunConnectedServicesCleanupReceiptV1 && input.cleanupTerminal) {
@@ -125,6 +119,12 @@ export async function rehydrateLiveExecutionRunTargets(input: Readonly<{
           await input.clearTerminalCleanupReceipt?.(marker.runId);
         }
       }
+      inactiveRunIds.push(marker.runId);
+      continue;
+    }
+    // A detached running marker cannot re-create the lost daemon owner.
+    // Terminal cleanup above has no execution authority and also serves it.
+    if (marker.happySessionId === null) {
       inactiveRunIds.push(marker.runId);
       continue;
     }

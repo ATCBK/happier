@@ -30,7 +30,7 @@ const EXECUTION_INPUT_ENVELOPE = (() => {
             kind: 'newSession',
             spawn: {
                 executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
-                directory: '/tmp/automation-failure-detail',
+                directory: { kind: 'path', path: '/tmp/automation-failure-detail' },
                 agentTarget: {
                     kind: 'agent',
                     identity: { pluginId: 'happier.agent.codex', localId: 'codex' },

@@ -312,13 +312,13 @@ export async function stubServerFeaturesFetch(overrides: FixtureOverrides = {}):
     }
 
     const response = buildServerFeaturesResponse(overrides);
-    vi.stubGlobal(
-        'fetch',
-        vi.fn(async () => new Response(JSON.stringify(response), {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-        })),
-    );
+    const request = vi.fn(async () => new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', request);
+    const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+    setRuntimeFetch(request);
 }
 
 export async function stubServerFeaturesFetchFailure(): Promise<void> {
@@ -332,17 +332,17 @@ export async function stubServerFeaturesFetchFailure(): Promise<void> {
         await profiles.setActiveServerId(profile.id, { scope: 'device' });
     }
 
-    vi.stubGlobal(
-        'fetch',
-        vi.fn(async (input: RequestInfo | URL) => {
-            const url = input instanceof Request ? input.url : String(input);
-            if (url.endsWith('/health')) {
-                return new Response(null, { status: 200 });
-            }
-            if (url.endsWith('/v1/auth/ping')) {
-                return new Response(null, { status: 200 });
-            }
-            throw new Error('network down');
-        }),
-    );
+    const request = vi.fn(async (input: RequestInfo | URL) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (url.endsWith('/health')) {
+            return new Response(null, { status: 200 });
+        }
+        if (url.endsWith('/v1/auth/ping')) {
+            return new Response(null, { status: 200 });
+        }
+        throw new Error('network down');
+    });
+    vi.stubGlobal('fetch', request);
+    const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
+    setRuntimeFetch(request);
 }

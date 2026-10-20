@@ -26,12 +26,58 @@ Dependency runtime JavaScript stays outside authored emission roots, including
 ambient declarations that self-reference their package's runtime subpaths.
 The public check derives these inputs without rewriting tracked membership lists.
 
-In 0.3 development, `yarn workspace @happier-dev/cli test:unit src/api/artifacts/accountArtifactStore.test.ts` forwards the file selection through the routed script chain and runs it once. Explicit runner arguments, including file and test-name filters, bypass automatic sharding and the unit lane's unrelated native checks. An unfiltered unit run retains its shard/CI-part selection, native script tests and import-cycle guard. Known CLI unit aliases use source-test preparation and the validation class; actual compiler and runtime preparation keeps its own class.
+The public UI typecheck generates typed routes with the installed Expo generator and
+Metro exclusions into `apps/ui/node_modules/.cache/tsc/router.d.ts`. All finite
+partitions, including CLI's referenced UI declarations, consume this compiler-owned
+input; Expo's live `.expo/types/router.d.ts` remains the editor/watcher's output.
+This also lets these checks run without an Expo server or a synchronized
+`.expo` directory.
 
-CLI Vitest commands declare the existing `cli-dist-build.lock` at joint payload
-admission because source-only global setup stages native process custody. Setup
-inherits that authenticated lease; unit runs still do not build full CLI `dist`.
-Non-CLI validation and generator-only checks do not acquire this CLI lease.
+In 0.3 development, `yarn workspace @happier-dev/cli test:unit src/api/artifacts/accountArtifactStore.test.ts` forwards the file selection through the routed script chain and runs it once. Explicit runner arguments, including file and test-name filters, bypass automatic sharding and the unit lane's unrelated native checks. An unfiltered unit run retains its shard/CI-part selection, native script tests and import-cycle guard. CLI unit aliases use source-test preparation. Explicit test-file requests retain the existing validation envelope; the complete lane uses the existing compilation envelope because it executes real compiler owners. Focused compiler-consuming requests use the explicit compilation-class wrapper inside a routed outer `hstack-exec` command, never a controller-local admission implementation.
+
+Source-test tool requirements come from the selected package's optional
+`package.json#happierSourceTestTools` array of executable names, for both direct
+Vitest and package-manager requests. An absent declaration adds no prerequisite;
+a malformed present declaration fails visibly. Current CLI source declares Go.
+On POSIX, public source-test preparation stages current native custody through
+the existing Go build owner on each invocation; Go owns source/module/build-cache
+currentness. This phase uses joint package-dist admission and the existing
+`cli-dist-build.lock`, so it can wait for publication, then releases both before
+the test payload. Source global setup only consumes the prepared executable and
+fails visibly if it is missing; it does not compile again. Windows source global
+setup retains native preparation because its public wrapper has no preflight.
+Artifact-consuming CLI Vitest validation retains its payload lease; source unit
+runs still do not build full CLI `dist`. Generator-only checks do not acquire this CLI lease.
+`createProcessCustodyFixture` copies that prepared executable rather than
+starting another compiler inside a test body or hook.
+
+In 0.3 development, package-manager workspace aliases resolve their component
+through the selected workspace manifest before preparation and payload admission.
+`HAPPIER_EXEC_CONFIG_PATH` is an explicit execution-policy override and must be
+absolute. When selecting command execution policy, POSIX native and JavaScript
+dispatch validate that file through the canonical configuration loader; a relative, missing, unreadable
+or invalid override fails without default discovery, even with a warm projection.
+The cached native projection must name that same canonical absolute configuration
+path; a neighboring file's projection is regenerated, not borrowed. Valid explicit
+configuration keeps its own remote/local fallback policy and does not require
+default-discovery HOME/storage settings. Ordinary
+discovery without an override retains the warm native path. Runtime/service
+placement continues to read its selected Stack's configuration.
+Implicit discovery also honors source-path provenance when present; older implicit
+projections without that field keep their existing warm behavior until refreshed.
+For example, a root `yarn workspace @happier-dev/server build` prepares Server's
+workspace prerequisites before reserving the build's compilation capacity.
+Manifest traversal follows repository-local `--cwd` and workspace references,
+including lifecycle hooks: Server's prebuild and Plugin UI's public SDK
+toolchain check finish before the canonical TypeScript leaf admits compilation.
+Unresolved, cyclic or outside-repository script graphs retain conservative
+outer admission instead of assuming that a leaf owns it.
+An authenticated inherited dependency reader, like an inherited workspace
+publication lease, cannot wait for capacity or a foreign producer while holding
+that resource. Native and in-process preparation use the existing custody
+owner to enforce this ordering. Simulated independent workers in tests use
+`buildNativeAdmissionFixtureEnv` so the containing suite's real custody does not
+cross their physical-worker boundary.
 
 ## Choose checks by the changed contract
 
@@ -135,6 +181,12 @@ The Stack unit runner isolates product state and caches without dropping its exe
 
 Remote dependency bootstrap reuses the existing per-install dependency refresh lock and checks freshness again after waiting, so same-input callers share the completed installation. In 0.3 development, both remote command entry points finish dependency and workspace preparation before reserving the payload's heavyweight admission envelope. Preparation's compiler leaves retain their own admission. This order lets a dependency/build lock holder obtain admission while another command waits for that lock. Dependency waiters remain behind a live installer without an acquisition deadline; a delayed JavaScript heartbeat during synchronous package-manager work does not permit replacing that owner. The existing lock owner still reclaims exited installers and stale malformed lock records. Native admission decisions reclaim dead owners and owner directories with an unreadable or incomplete process identity under the existing capacity lock; read-only memory samples do not mutate those records.
 
+Shared dependency-reader timestamps advance on join/release, not periodically;
+heartbeat age alone is not proof of departure. On Linux, the canonical PID observer
+also recognizes a positively observed zombie as departed even while signal0 succeeds.
+Stopped or blocked live processes and unavailable procfs evidence retain conservative
+liveness; this adds no heartbeat-expiry eviction policy.
+
 In 0.3 development, local validation preparation reads dependency readiness through `dependency_refresh.mjs#assertDependenciesReady`. Stale, missing or damaged dependencies, incomplete UI postinstall outputs, and an active installer return `HAPPIER_DEPENDENCIES_NEED_REFRESH` before installation, repair or lock-queue registration. An active installer diagnostic includes its PID and held/heartbeat ages. Refresh/skip/service settings do not grant validation mutation authority; an explicit refresh remains with the canonical dependency owner and its [Expo dependency barrier](binary-runtime.md). Bootstrap defaults to local admission, and both remote command transports explicitly select worker preparation.
 
 Scriptless bootstrap remains for synchronized replicas. Every worker role completes UI's canonical `postinstall:real` under dependency admission after an install, including forced package repairs. Readiness verifies every applicable UI patch in both hoisted and app-local copies, enriched-markdown's generated JavaScript/WASM outputs, and mandatory postinstall assets before publishing the installed tree. Healthy warm preparation only reads dependency bytes. Warm output repair preserves the installed tree's existing full admission when no extraction occurred. Missing markdown artifacts are repaired through the existing postinstall patch owner before its strict all-package patch pass; they do not require re-extracting healthy dependencies. Dependency-lock consumers, including Expo startup, use the existing workspace wait notifier to report the holder while waiting.
@@ -147,10 +199,18 @@ registration lock serializes joins, releases and writer admission. A queued
 dependency refresh blocks new independent readers, then runs exclusively after
 all current readers finish; writers retain FIFO order. Healthy Stack startup
 verifies installed admission under shared read custody without joining the mutation
-queue. Component-owned output preparation remains separate from dependency
-freshness, while missing patches/assets and stale installed inputs still use the
+queue. Warm worker source tests and typechecks use the same read custody and retain
+the installed admission marker; they request a writer only when installed inputs
+or mandatory UI outputs need refresh. Component-owned output preparation remains
+separate from dependency freshness, while missing patches/assets and stale installed inputs still use the
 canonical writer. Already-loaded untyped lock owners remain conservatively
 treated as possible writers by read-only verification.
+
+JSON lock holders and waiters publish complete owner records atomically.
+Wait observation ignores unrelated directory writes and existing-ticket
+heartbeats; ticket joins/removals, holder changes and the existing catch-up
+still drive admission and departed-owner recovery. When a queued writer blocks
+a free lock, the wait diagnostic identifies that queued owner explicitly.
 
 Native Linux liveness rejects unreaped zombie and dead process states even when
 the PID and start token still match. The existing admitted-tree observer keeps
@@ -177,8 +237,10 @@ use short publication custody directly. Standalone and in-process publishers
 try all declared resources without waiting, release partial acquisitions before
 an event wait, and never retry an error from an entered publisher.
 Package-manifest and exact-entry facts preserve placement and effective compiler
-class while letting these publishers, rather than an outer package command,
-reserve their envelope. Explicit command environment/cwd overrides participate
+class while letting finite publishers reserve their own envelope. A lifecycle
+containing a finite publisher can also defer to its canonical TypeScript leaf
+after prerequisite publication. Bare compilers and pure compiler scripts retain
+outer admission with reentrant leaf validation. Explicit command environment/cwd overrides participate
 in that same policy. No second class table, admission budget or deadline is added.
 
 Package input fingerprints use the actual package workspace's compiler-owner
@@ -198,6 +260,23 @@ owner recovery and FIFO rules; heartbeat-only writes do not rescan healthy
 contention. They share the workspace watcher's one-second catch-up default,
 bounded by their existing acquisition and stale-owner budgets; legacy 125/250 ms
 poll settings do not keep healthy owners on periodic scans.
+
+Admission watches filter shared lock directories to the relevant lease and
+queue filenames. After acquiring and releasing all workspace resources because
+capacity or queue priority declined admission, the worker observes admission
+owners and queue changes only; independent publisher lease churn cannot free
+capacity. A resource-busy attempt still observes its leases and dependency writer
+queue. Both paths retain the existing catch-up and dead-owner recovery rules.
+
+`hstack-exec --cwd=REPO_RELATIVE_PATH -- COMMAND ...` also works with AUTO
+placement. The selected target resolves the path against its repository; AUTO
+retries retain it, and configured local fallback resolves it against the local
+repository. Absolute paths and parent traversal are rejected. `--env` and `--tty`
+still require an explicit target.
+
+Admission refusals and waits use the same reason formatter. Memory decisions
+report available, required and reserved memory; queue decisions name the deciding
+head PID, class and envelope. A contended decision lock is reported explicitly.
 
 Authenticated descendants may reenter their own leases and envelope. A charged
 payload cannot wait for a foreign publication lease, including a lock-only
@@ -314,7 +393,11 @@ An empty implicit pool and an unknown explicitly named target fail without local
 
 In current 0.3 development, an unplaced package-script command whose entire payload directly invokes `hstack-exec --script=...`, without local pre/post hooks, reaches that script before the outer launcher selects a host or reserves memory. The package manifest owns this delegation, including `--cwd` and Yarn workspace commands; there is no separate list of routed script names. The script's dispatcher owns placement and admission on the executing host. Binary runners, implementation scripts, already-placed commands and genuine local payloads keep their existing admission envelopes.
 
-On the Linux controller, explicit `--local` heavyweight compilation (including package-dist and runtime-build) refuses by default and points to AUTO. A caller can explicitly authorize `--local --allow-local-compilation`; this changes placement only and retains class admission plus the existing 8 GiB local floor, even under CI. Already-placed workers do not require the controller override. Light local commands remain immediate. Ordinary automatic CI execution retains its existing exemption.
+On the Linux controller, explicit `--local` heavyweight compilation (including package-dist and runtime-build) refuses by default and points to AUTO. A caller can explicitly authorize `--local --allow-local-compilation`; this changes placement only and retains class admission plus the existing 8 GiB local floor, even under CI. Deferred finite producers and compiler leaves inherit that admission requirement rather than reserving their package-manager parent. Already-placed workers do not require the controller override. Light local commands remain immediate. Ordinary automatic CI execution retains its existing exemption.
+
+Linux AUTO keeps heavyweight commands, including compilation and validation, in the configured remote command pool even with `includeLocal: true`. The controller does not compete by load for these classes; lightweight commands still honor `includeLocal`. Busy workers retain the existing remote admission/reselection flow. Explicit local placement and configured local fallback when workers are unreachable retain their existing admission rules; this does not require a per-session execution config.
+
+Heavyweight ranking adds normalized CPU load to the selected class envelope divided by observed unreserved memory (available memory on Darwin). This compares actual headroom for the command rather than each worker's percentage of free RAM, so larger workers are not penalized solely for having more total memory. Existing class-capacity checks, live admission, warm compiler affinity and runtime platform preferences still apply.
 
 Selection excludes machines whose total RAM is below the selected class's requirement. Linux/WSL admission subtracts only each live admitted job's unused reservation, `max(0, class envelope - authenticated process-tree memory)`, from available memory: resident pages are already absent from `MemAvailable`. Missing memory observation retains the full reservation. There is no additional guessed available-memory percentage, PSI or CPU-load denial. Reservations remain until exit or proven-dead owner reclamation; authenticated descendants reuse their parent's reservation, and escalation replaces that owner's envelope under the admission lock while crediting its existing resident memory. Explicit `--local` bypasses remote placement and uses this same admission against local memory. Light local commands remain immediate. Diagnostics name available, required and unused reserved memory. The envelopes reserve admission headroom but do not cap a command's actual memory use. Runtime publication placement uses the retained-demand broker described below; busy admission keeps the build remote, and only unavailable capable workers permit configured local fallback. Darwin selection applies the total-capacity filter and load ranking; its existing execution path has no admission queue. Native Windows command routing remains local.
 
@@ -324,12 +407,15 @@ In current 0.3 development source, the Linux worker fixes admission state at `/t
 
 If remote admission cannot register its state before payload execution, the admission owner emits an execution-qualified failure. Automatic placement excludes that worker for the existing unavailable-probe TTL and tries another configured target; an explicitly pinned invocation reports the failure without changing hosts. Preparation failures and a started payload's exit status, including 75, are authoritative and never request replay.
 
-In current 0.3 development, AUTO checks actual worker admission without waiting after preparation and before payload execution. An execution-qualified busy result releases that dispatch reservation and re-evaluates the remaining pool without an unavailable-host TTL. If every usable worker is busy, the selector waits using the admission pressure-retry cadence and re-evaluates the pool; it does not fall back locally merely because workers are busy. Heavy Linux candidates also rank using the admission owner's unreserved memory budget, including service memory and unused live-owner reservations; a budget below the command's class floor ranks behind fitting workers. With `includeLocal`, local ranking also adds live waiters from the current admission root divided by CPU capacity to its effective load, alongside active dispatches; stale process incarnations add no penalty. Explicit pins retain the worker's observable admission wait. Existing already-loaded launchers are not restarted or moved by this source change.
+In current 0.3 development, AUTO checks dispatcher-owned payload admission without waiting after preparation and before payload execution. An execution-qualified busy result releases that dispatch reservation and re-evaluates the remaining pool without an unavailable-host TTL. If every usable worker is busy, the selector waits using the admission pressure-retry cadence and re-evaluates the pool; it does not fall back locally merely because workers are busy. Heavy Linux candidates also rank using the admission owner's unreserved memory budget, including service memory and unused live-owner reservations; a budget below the command's class floor ranks behind fitting workers. With `includeLocal`, local ranking also adds live waiters from the current admission root divided by CPU capacity to its effective load, alongside active dispatches; stale process incarnations add no penalty. Explicit pins retain the worker's observable admission wait. Existing already-loaded launchers are not restarted or moved by this source change.
 
 POSIX compilation-class dispatch in 0.3 development keeps project locality at this same
 AUTO selector. A repeated project scope prefers its most recently completed worker
-when the current sample can admit immediately; busy admission falls back to
-ordinary pool selection. Each invocation completes its own causal synchronization
+when the current sample can admit immediately; dispatcher-certified busy admission
+falls back to ordinary pool selection, including bare canonical TypeScript
+commands. Finite publishers and the compiler leaves of producer-containing
+lifecycles instead wait through their own admission transaction on the selected
+host, without an outer reservation across prerequisite production. Each invocation completes its own causal synchronization
 barrier and runs through the existing heavyweight admission. The native compiler
 remains authoritative for incremental currentness. There is no input-equality
 scan, shared in-flight result or completed-check cache.
@@ -530,12 +616,33 @@ minimum of one. Development and CI use the same default. Vitest otherwise sizes
 an invocation from CPU count, not current machine load; several independent
 invocations can still contend, so runner-level concurrency also matters.
 
+In current 0.3 development, `hstack-exec` passes its governor budget separately
+through `HAPPIER_VITEST_GOVERNOR_MAX_WORKERS`. The shared configuration uses the
+smaller of that budget and the package default. The launcher does not turn a
+derived budget into native Vitest pool variables or worker flags, which would
+override package policy. Explicit shared, UI, native pool and CLI overrides
+retain their existing precedence.
+
 Set `HAPPIER_VITEST_MAX_WORKERS` to a positive integer for an explicitly sized
 local or CI job. CLI worker flags remain available for individual invocations.
 The UI-only `VITEST_UI_MAX_FORKS` override remains supported with its existing
 six-worker ceiling; the shared override takes precedence. Explicit single-fork,
 single-thread and non-parallel lanes retain their stronger isolation contract.
 No test selection, assertions or coverage settings change with this budget.
+
+The current 0.3 public UI `test:unit` wrapper caps requested partition concurrency
+at `max(1, floor(availableParallelism() / (maxWorkers + 1)))`, using the shared
+worker policy above. Each partition owns a transform server and its fork pool;
+keeping that pool together reuses its transform cache. With the default four-fork
+budget, a 12-CPU worker admits two partitions and a 48-CPU worker can admit eight.
+Native CLI worker overrides still retain Vitest's resolution and precedence.
+Partition caches start cold; the wrapper does not persist a shared transform cache.
+
+The pinned `vite-node+3.2.4` patch recognizes pending transitive import cycles
+entered concurrently, complementing the Vitest patch that retains async-mock
+import ancestry. `sources/dev/vitestAsyncMockContext.test.ts` in the UI owns the
+real cycle and non-cycle controls; run them when upgrading either dependency
+before removing a patch replaced upstream.
 
 Automatic v0.3 Gate UI partitions use one native Vitest invocation per partition,
 with disjoint native selection rather than repeated 16-file processes. The non-UI

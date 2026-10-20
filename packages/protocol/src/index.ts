@@ -74,6 +74,7 @@ export {
   shouldSuppressEmptyCanonicalTurnDiffToolCall,
 } from './sessions/messages/canonicalTurnDiffTool.js';
 export * from './sessions/messages/sessionMessagesPageV1.js';
+export * from './sessions/read/sessionReadBatchV1.js';
 export * from './sessions/permissions/respondRpcParamsV1.js';
 export { readSessionUpdatedMessageChangeHintV1 } from './changes/index.js';
 export * from './crypto/sessionDataKeyBundleV0.js';
@@ -106,17 +107,18 @@ export {
   type MachinesAgentsListOutput,
 } from './capabilities/machineAgentInventory.js';
 
-export * from './sessions/relations/sessionReportsToV1.js';
+export * from './sessions/follow/sessionManagerV1.js';
+export * from './sessions/follow/sessionCoordinatorActionsV1.js';
 export {
   WorkerUpdateV1Schema,
-  SessionWorkerPublishInputV1Schema,
-  SessionWorkerPublishOutputV1Schema,
+  SessionUpdatePostInputV1Schema,
+  SessionUpdatePostOutputV1Schema,
   WorkerUpdateTranscriptPointerV1Schema,
   WorkerDeliverableReferenceV1Schema,
   workerDeliverableResultMaxLengthV1,
   workerDeliverablesBelongToSessionV1,
   type WorkerDeliverableReferenceV1,
-  type SessionWorkerPublishInputV1,
+  type SessionUpdatePostInputV1,
   type WorkerUpdateV1,
   type WorkerUpdateTranscriptPointerV1,
 } from './sessions/relations/workerUpdateV1.js';
@@ -267,6 +269,13 @@ export {
 
 export {
 } from './daemon/contributionRegistryProjection.js';
+export {
+  PluginMachineExecutionRoutingV1Schema,
+  PluginMachineExecutionRoutingV1JsonSchema,
+  getPluginMachineExecutionRouting,
+  arePluginMachineExecutionRoutingsEqual,
+  type PluginMachineExecutionRoutingV1,
+} from './machines/administration/pluginMachineExecutionOriginV1.js';
 
 export * from './plugins/events/index.js';
 export { ARTIFACT_FOLDER_ACTION_IDS_V1, isArtifactFolderActionIdV1 } from './prompts/library/artifactFolderActionIdsV1.js';
@@ -532,6 +541,11 @@ export {
   type SessionMessageAcceptedDeliveryContentV1,
 } from './sessions/messages/sessionMessageDeliveryResolutionV1.js';
 export {
+  SessionMessageRefV1Schema,
+  parseSessionMessageRefV1,
+  type SessionMessageRefV1,
+} from './sessions/messages/sessionMessageRefV1.js';
+export {
   MESSAGE_ACTION_STRUCTURED_PRESENTATION_SUMMARY_MAX_UTF8_BYTES,
   MESSAGE_ACTION_VISIBLE_TEXT_MAX_UTF8_BYTES,
   MessageActionAvailableSnapshotV1Schema,
@@ -730,7 +744,7 @@ export * from './sessions/pending/pendingProviderAction.js';
 export * from './sessions/pending/acceptedPendingSettlementV1.js';
 export * from './sessions/pending/pendingActivationAuthorizationV1.js';
 export * from './sessions/mutations/sessionMutationEqualityV1.js';
-export * from './sessions/discussions/index.js';
+export * from './discussions/index.js';
 export * from './sessions/follow/index.js';
 
 export {
@@ -2329,6 +2343,9 @@ export {
 
 export {
   isExpoPushNotificationChannelEnabled,
+  COORDINATOR_KEEP_DEFAULT_VALUES,
+  resolveCoordinatorKeepDefault,
+  type CoordinatorKeepDefault,
   NEW_SESSION_DRAFT_ENTRY_MODES,
   SESSION_PROVIDER_USAGE_GAUGE_WINDOW_MODES,
   SessionPendingQueueDeliveryTimingSchema,
@@ -2748,6 +2765,7 @@ export type {
   UsageAnalyticsSeriesBucket,
   UsageAnalyticsTotals,
   UsageEventIngestRequest,
+  UsageRequestAttribution,
   UsageNativeAccountingSubject,
   UsageNativeAccountingEvidence,
   UsageNativeHistoryDeleteRequest,
@@ -4339,6 +4357,10 @@ export {
   SessionSendResultSchema,
   SessionStatusEnvelopeSchema,
   SessionStatusResultSchema,
+  SessionStatusActionResultV1Schema,
+  SessionReadinessV1Schema,
+  composeSessionReadinessV1,
+  projectSessionSummaryV1,
   SessionStopEnvelopeSchema,
   SessionStopCleanupIncompleteReasonSchema,
   SessionStopOutcomeSchema,
@@ -4415,6 +4437,10 @@ export {
   type SessionRunWaitResult,
   type SessionSendResult,
   type SessionStatusResult,
+  type SessionReadinessV1,
+  type SessionReadinessFactsV1,
+  type SessionCredentialReadinessV1,
+  type SessionReadinessRepairV1,
   type SessionStopCleanupIncompleteReason,
   type SessionStopOutcome,
   type SessionStopResult,
@@ -4593,6 +4619,16 @@ export {
   type WriteSessionPendingQueueHoldV1Input,
 } from './sessions/metadata/sessionPendingQueueHoldV1.js';
 export {
+  SESSION_EXPLICIT_STOP_METADATA_KEY,
+  SessionExplicitStopV1Schema,
+  resolveSessionAutoResumeAdmissionV1,
+  readSessionExplicitStopV1FromMetadata,
+  writeSessionExplicitStopV1ToMetadata,
+  clearSessionExplicitStopV1FromMetadata,
+  type SessionExplicitStopV1,
+  type SessionAutoResumeAdmissionV1,
+} from './sessions/metadata/sessionExplicitStopV1.js';
+export {
   PROVIDER_ACCOUNT_USAGE_REFS_MAX_RECORD_IDS,
   PROVIDER_ACCOUNT_USAGE_REFS_METADATA_KEY,
   ProviderAccountUsageRefsV1Schema,
@@ -4686,6 +4722,25 @@ export {
 } from './sessions/metadata/sessionPermissionModes.js';
 
 export {
+  SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1, SessionMessageReplyAdmissionV1Schema,
+  SessionMessageReplyCapabilityV1Schema, type SessionMessageReplyCapabilityV1,
+  SessionMessageReplyMachineMutationV1Schema, type SessionMessageReplyMachineMutationV1,
+  SESSION_MESSAGE_REPLY_RELEASE_SOURCE_TURN_EVENT_V1, SessionMessageReplySourceTurnReleaseV1Schema, type SessionMessageReplySourceTurnReleaseV1,
+  SessionMessageReplySourceTurnReleaseResultV1Schema, type SessionMessageReplySourceTurnReleaseResultV1,
+  SessionMessageReplyMachinePendingCursorV1Schema, SessionMessageReplyMachinePendingPageV1Schema, type SessionMessageReplyMachinePendingPageV1,
+  SessionMessageReplyOutcomeV1Schema, SessionMessageReplyProgressV1Schema,
+  SessionMessageReplyOperationV1Schema, SessionMessageReplyMutationV1Schema,
+  SessionMessageReplyReadResultV1Schema, SessionMessageReplyMutationResultV1Schema,
+  SessionMessageReplyPendingHintV1Schema, SessionMessageReplyPendingPageV1Schema,
+  deriveSessionMessageReplyReturnLocalIdV1,
+  type SessionMessageReplyAdmissionV1, type SessionMessageReplyOutcomeV1,
+  type SessionMessageReplyProgressV1, type SessionMessageReplyOperationV1,
+  type SessionMessageReplyMutationV1, type SessionMessageReplyReadResultV1,
+  type SessionMessageReplyMutationResultV1,
+  type SessionMessageReplyPendingHintV1, type SessionMessageReplyPendingPageV1,
+} from './sessions/messages/sessionMessageReplyV1.js';
+
+export {
   SESSION_USER_MESSAGE_DELIVERY_INTENT_META_KEY,
   SESSION_TOOL_ANSWER_DELIVERY_KIND,
   SessionMessageMetaSchema,
@@ -4718,12 +4773,17 @@ export {
   SessionInputAdmissionReceiptV1Schema,
   SessionInputAdmissionRejectionCodeV1Schema,
   SessionInputAdmissionResultV1Schema,
+  SessionInputEnqueueResultV1Schema,
   SessionMessageSendResultV1Schema,
   SessionInputAuthorityV1Schema,
   SessionInputAuthorityV2Schema,
   SessionInputAuthoritySchema,
   SessionInputCausalPermissionAuthorityV1Schema,
   SessionInputSourceSessionV1Schema,
+  SessionInputReplyIntentV1Schema,
+  SessionInputReturnedAnswerV1Schema,
+  type SessionInputReplyIntentV1,
+  type SessionInputReturnedAnswerV1,
   SessionInputRequestEnvelopeDigestV1Schema,
   SessionInputRequestEqualityEvidenceV1Schema,
   SessionInputRequestV1Schema,
@@ -4776,6 +4836,7 @@ export {
   type SessionInputMachineTargetV1,
   type SessionInputAdmissionRejectionCodeV1,
   type SessionInputAdmissionResultV1,
+  type SessionInputEnqueueResultV1,
   type SessionMessageSendResultV1,
   type SessionInputAuthorityV1,
   type SessionInputAuthorityV2,
@@ -5901,6 +5962,7 @@ export {
   type ExecutionRunStartRunCreation,
   type ExecutionRunStartFailureDetailsV1,
   type ExecutionRunStartResponse,
+  type ExecutionRunError,
   type ExecutionRunWaitResult,
   type ExecutionRunRetentionPolicy,
   type ExecutionRunClass,
@@ -7438,6 +7500,7 @@ export {
   MemorySearchResultHitV1Schema,
   MemorySearchCorpusV1Schema,
   MemoryDocumentSearchCoverageV1Schema,
+  MemoryProjectSearchCoverageV1Schema,
   isMemoryDocumentSearchHitV1,
   isMemoryExternalTranscriptSearchHitV1,
   isMemorySessionSearchHitV1,
@@ -7448,6 +7511,7 @@ export {
   type MemoryExternalTranscriptSourceV1,
   type MemoryExternalTranscriptSearchHitV1,
   negotiateMemorySearchV1,
+  resolveMemorySearchCorporaV1,
   MemorySearchModeSchema,
   MemorySearchQueryV1Schema,
   MemorySearchResultV1Schema,
@@ -7459,6 +7523,7 @@ export {
   type MemorySearchResultHitV1,
   type MemorySearchCorpusV1,
   type MemoryDocumentSearchCoverageV1,
+  type MemoryProjectSearchCoverageV1,
   type MemorySearchMode,
   type MemorySearchQueryV1,
   type MemorySearchResultV1,
@@ -7565,6 +7630,7 @@ export {
   ApprovalRequestV2StatusSchema,
   ApprovalRequestV1Schema,
   ApprovalRequestV2Schema,
+  ApprovalRequesterConfirmationV1Schema,
   requiresExactDaemonApprovalReplay,
   type ApprovalExecutionOriginCallerV1,
   type ApprovalExecutionOriginV1,
@@ -7573,6 +7639,7 @@ export {
   type ApprovalRequestOriginV1,
   type ApprovalRequestV1,
   type ApprovalRequestV2,
+  type ApprovalRequesterConfirmationV1,
 } from './approvals/approvalRequestV1.js';
 export {
   projectApprovalExecutionFailureV2,
@@ -9668,6 +9735,10 @@ export * from './boards/index.js';
 export * from './artifacts/artifactAccessV1.js';
 export * from './artifacts/artifactAccountEncryptionMigrationV1.js';
 export * from './artifacts/artifactActionsV1.js';
+export * from './artifacts/artifactCollaborationV1.js';
+export * from './artifacts/artifactPassageV1.js';
+export * from './artifacts/artifactCollaborationActionsV1.js';
+export * from './artifacts/artifactCollaborationActionIdsV1.js';
 export * from './artifacts/artifactBinaryV1.js';
 export * from './artifacts/artifactHtmlV1.js';
 export * from './artifacts/artifactListSelectionV1.js';
@@ -9724,9 +9795,27 @@ export { parseOauthAuthorizationResponse, type OauthAuthorizationResponse } from
 
 export { PluginAtmospherePictureContributionV1Schema, type PluginAtmospherePictureContributionV1 } from './plugins/contributions/atmospherePictures.js';
 export { PluginRegistrySourceContributionV1Schema, type PluginRegistrySourceContributionV1 } from './plugins/contributions/registrySources.js';
+export { PluginSkillContributionV1Schema, projectPluginSkillDeclarationV1, type PluginSkillContributionV1 } from './plugins/contributions/skills.js';
+export { PluginProjectedSkillEntryV1Schema, type PluginProjectedSkillEntryV1 } from './daemon/contributionRegistryProjection.js';
 export { SKILL_ACTION_IDS_V1, type SkillActionIdV1 } from './prompts/library/skills/skillActionIdsV1.js';
 export { SkillReadInputV1Schema, SkillReadResultV1Schema, type SkillReadInputV1, type SkillReadResultV1,
   type SessionSkillReadItemV1 } from './prompts/library/skills/skillReadV1.js';
 export { readSkillInLibrary } from './prompts/library/promptLibraryActionOperations.js';
 export { renderSkillIndexV1 } from './prompts/library/skills/skillIndexV1.js';
 export * from './registries/index.js';
+export {
+  SessionTargetV1Schema,
+  SessionTargetSelectorV1Schema,
+  normalizeSessionTargetV1,
+  ActionSessionTargetDeclarationV1Schema,
+  ActionSessionAddressV1Schema,
+  ActionResolvedSessionTargetsV1Schema,
+  ActionSessionFanoutResultV1Schema,
+  withSessionTargetFanoutResultV1,
+  type SessionTargetV1,
+  type SessionTargetSelectorV1,
+  type ActionSessionTargetDeclarationV1,
+  type ActionSessionAddressV1,
+  type ActionResolvedSessionTargetsV1,
+  type ActionSessionFanoutResultV1,
+} from './actions/sessionTargetV1.js';

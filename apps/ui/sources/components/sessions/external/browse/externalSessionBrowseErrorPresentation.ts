@@ -17,10 +17,18 @@ function fallbackMessage(operation: ExternalSessionBrowseOperation): string {
     }
 }
 
+/**
+ * The body for a typed External Sessions failure. `retryable: false` is the host's word that repeating
+ * the same request will not help, so the copy must not send the person to a Retry that is not offered.
+ */
 export function resolveExternalSessionBrowseRpcErrorMessage(
     errorCode: ExternalSessionsRpcErrorCode,
     operation: ExternalSessionBrowseOperation,
+    options?: Readonly<{ retryable?: boolean }>,
 ): string {
+    const agentFailed = () => t(options?.retryable === false
+        ? 'externalSessions.browseAgentFailedNoRetry'
+        : 'externalSessions.browseAgentFailed');
     switch (errorCode) {
         case 'machine_offline':
             return t('newSession.machineOfflineInlineBody');
@@ -29,10 +37,12 @@ export function resolveExternalSessionBrowseRpcErrorMessage(
         case 'agent_timeout':
             return t('externalSessions.browseAgentTimedOut');
         case 'agent_error':
-            return t('externalSessions.browseAgentFailed');
-        case 'invalid_request':
+            return agentFailed();
         case 'internal_error':
-            return fallbackMessage(operation);
+            // A host fault while reading an Agent's sessions has the same next step as the Agent's own fault.
+            return operation === 'list' ? agentFailed() : fallbackMessage(operation);
+        case 'invalid_request':
+            return operation === 'list' ? t('externalSessions.browseSourceInvalid') : fallbackMessage(operation);
     }
 }
 
@@ -55,5 +65,5 @@ export function resolveExternalSessionBrowseThrownErrorMessage(
     ) {
         return t('newSession.daemonRpcUnavailableBody');
     }
-    return fallbackMessage(operation);
+    return resolveExternalSessionBrowseRpcErrorMessage('internal_error', operation, { retryable: true });
 }

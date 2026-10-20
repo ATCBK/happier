@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { getComponentDir, resolveExplicitStackEnvFilePath } from '../paths/paths.mjs';
+import { getComponentDir, getRepoDir, resolveExplicitStackEnvFilePath } from '../paths/paths.mjs';
 import { isPidAlive, readPidState } from '../expo/expo.mjs';
 import { loadDevTargetsConfig } from '../dev_targets/config.mjs';
 import { retireStackDevTarget } from '../dev_targets/retirement.mjs';
@@ -10,7 +10,7 @@ import { prepareDevTargetOpenSsh, runDevTargetControlProcess } from '../dev_targ
 import { resolveDevTargetMutagenRuntime } from '../dev_targets/mutagen_runtime.mjs';
 import { loadControlledRuntimeConfig } from '../dev_targets/service_placement.mjs';
 import { stopStackQaBrowsers } from '../dev_targets/qa_browser.mjs';
-import { runCaptureResult } from '../proc/proc.mjs';
+import { redactFailureDiagnostic, runCaptureResult } from '../proc/proc.mjs';
 import { listListenPidsWithStatus } from '../net/ports.mjs';
 import { stopLocalDaemon } from '../../daemon.mjs';
 import { stopHappyServerManagedInfra } from '../server/infra/happy_server_infra.mjs';
@@ -568,6 +568,7 @@ async function stopStackWithEnvInternal({
   const cleanupResults = [];
   const confirmedCleanupPids = new Set();
   const serverShutdownGraceMs = resolveServerShutdownGraceMs(env);
+  const sourceDir = getRepoDir(rootDir, env);
 
   // Preferred: stop stack-started processes (by PID) recorded in stack.runtime.json.
   // This is safer than killing whatever happens to listen on a port, and doesn't rely on the runner's shutdown handler.
@@ -614,10 +615,10 @@ async function stopStackWithEnvInternal({
 
   try {
     actions.browsers = await stopStackQaBrowsers({ stackName, baseDir,
-      sourceDir: String(env.HAPPIER_STACK_REPO_DIR ?? rootDir), env }, { capture: runCaptureResultImpl });
+      sourceDir, env }, { capture: runCaptureResultImpl });
     for (const warning of actions.browsers.warnings) console.warn(`[stack] ${warning.code}: ${warning.error}`);
   } catch (error) {
-    actions.errors.push({ step: 'browsers', error: error instanceof Error ? error.message : String(error) });
+    actions.errors.push({ step: 'browsers', error: redactFailureDiagnostic(error instanceof Error ? error.message : String(error), env) });
     actions.finalization = { finalized: false, reason: 'browser_cleanup_incomplete' };
     return actions;
   }
@@ -630,7 +631,6 @@ async function stopStackWithEnvInternal({
     const runtimeMode = state.runtimeMode ?? runtimeState.runtimeMode ?? (runtimeState.sourceRuntimeIdentities ? 'source-snapshot'
       : runtimeState.runtimeSnapshotId || state.runtimeSnapshotId ? 'controlled' : 'source');
     try {
-      const sourceDir = String(env.HAPPIER_STACK_REPO_DIR ?? rootDir);
       const loaded = runtimeMode === 'source' ? await loadDevTargetsConfig({ stackName, path: join(baseDir, 'dev-targets.json'), env })
         : await loadControlledRuntimeConfig({ stackName, sourceDir, initializeQaDaemonPlacement: false, env });
       const target = loaded.config.targets.find(candidate => candidate.name === name);

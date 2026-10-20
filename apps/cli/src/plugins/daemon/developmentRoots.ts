@@ -3,7 +3,7 @@ import { lstatSync, realpathSync, statSync } from 'node:fs';
 import { access, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { PluginDevelopmentControlResultV1, PluginDevelopmentPhaseV1, PluginDevelopmentStatusV1 } from '@happier-dev/protocol/capabilities';
 
 import { startFileWatcher } from '@/integrations/watcher/startFileWatcher';
@@ -67,16 +67,24 @@ type DevelopmentSubmissionResult = Readonly<{
   uiArtifactDigest?: string;
 }>;
 
+type DevelopmentSourceCommit = Readonly<{
+  sourceRootPath: string;
+  observedRevision: number;
+  pluginId?: string;
+  occurrenceId?: string;
+  uiArtifactDigest?: string;
+}>;
+
 type CollectionObserverHandle = Readonly<{ stop(): void }>;
 
-const PersistedDevelopmentRootsSchema = z.object({
+const PersistedDevelopmentRootsSchema = z.strictObject({
   version: z.literal(1),
   projects: z.record(z.string(), z.enum(['accepted', 'denied'])),
-  explicitRoots: z.array(z.object({
+  explicitRoots: z.array(z.strictObject({
     rootPath: z.string(),
-    sdkRegistryOrigin: z.string().optional(),
-  }).strict()),
-}).strict();
+    sdkRegistryOrigin: z.optional(z.string()),
+  })),
+});
 
 type PersistedDevelopmentRoots = Readonly<{
   version: 1;
@@ -177,8 +185,15 @@ export type DaemonPluginDevelopmentRootsOwner = Readonly<{
   initialize(): Promise<void>;
   control(request: DaemonPluginDevelopmentControlRequest): Promise<DaemonPluginDevelopmentControlResult>;
   readStatus(): DaemonPluginDevelopmentStatus;
+  /** Projects an adopted observation, including one that awaited installation approval. */
+  recordSourceCommit(commit: DevelopmentSourceCommit): void;
   /** Workspace discoveries still awaiting one remembered project decision. */
   readPendingProjectTrusts(): readonly PendingWorkspaceProjectTrust[];
+  /** Current watcher generation for a directly addressed registered source. */
+  resolveRegisteredSourceObservation(rootPath: string): Readonly<{
+    registeredRootId: string;
+    observedRevision: number;
+  }> | null;
   resolveDevelopmentSourceAuthority(input: Readonly<{
     pluginId: string;
     rootPath: string;
@@ -198,6 +213,7 @@ export type DaemonPluginDevelopmentRootsOwner = Readonly<{
 export function createDaemonPluginDevelopmentRootsOwner(params: Readonly<{
   happyHomeDir: string;
   submitObservation(observation: DaemonPluginDevelopmentSubmission): Promise<DevelopmentSubmissionResult>;
+  hasPendingSourceChange?: (rootPath: string) => boolean;
   startCollectionObserver?: (
     rootPath: string,
     onChange: () => void,
@@ -287,6 +303,23 @@ export function createDaemonPluginDevelopmentRootsOwner(params: Readonly<{
       .sort((left, right) => left.sourceRootPath.localeCompare(right.sourceRootPath))),
   });
 
+  const recordSourceCommit = (commit: DevelopmentSourceCommit): void => {
+    if (!sources.get(commit.sourceRootPath)?.admitted
+      || observedRevisionBySource.get(commit.sourceRootPath) !== commit.observedRevision) return;
+    const prior = pluginStatusBySource.get(commit.sourceRootPath);
+    pluginStatusBySource.set(commit.sourceRootPath, Object.freeze({
+      sourceRootPath: commit.sourceRootPath,
+      ...(commit.pluginId ? { pluginId: commit.pluginId } : prior?.pluginId ? { pluginId: prior.pluginId } : {}),
+      phase: 'active',
+      ...(commit.occurrenceId ? { occurrenceId: commit.occurrenceId } : {}),
+      ...(commit.uiArtifactDigest
+        ? { uiArtifactDigest: commit.uiArtifactDigest }
+        : prior?.uiArtifactDigest
+          ? { uiArtifactDigest: prior.uiArtifactDigest }
+          : {}),
+    }));
+  };
+
   const deliverObservation = async (
     sourceRootPath: string,
     observation: DaemonPluginDevelopmentObservation,
@@ -373,17 +406,11 @@ export function createDaemonPluginDevelopmentRootsOwner(params: Readonly<{
       }));
       if (observedRevisionBySource.get(sourceRootPath) !== observedRevision) return 'retained';
       if (result.kind === 'committed') {
-        pluginStatusBySource.set(sourceRootPath, Object.freeze({
-          sourceRootPath,
-          ...(result.pluginId ? { pluginId: result.pluginId } : prior?.pluginId ? { pluginId: prior.pluginId } : {}),
-          phase: 'active',
+        recordSourceCommit({ sourceRootPath, observedRevision,
+          ...(result.pluginId ? { pluginId: result.pluginId } : {}),
           ...(result.occurrenceId ? { occurrenceId: result.occurrenceId } : {}),
-          ...(result.uiArtifactDigest
-            ? { uiArtifactDigest: result.uiArtifactDigest }
-            : prior?.uiArtifactDigest
-              ? { uiArtifactDigest: prior.uiArtifactDigest }
-              : {}),
-        }));
+          ...(result.uiArtifactDigest ? { uiArtifactDigest: result.uiArtifactDigest } : {}),
+        });
         return 'adopted';
       }
       pluginStatusBySource.set(sourceRootPath, Object.freeze({
@@ -644,6 +671,8 @@ export function createDaemonPluginDevelopmentRootsOwner(params: Readonly<{
       await attachSource(canonicalRoot, canonicalRoot, sdkRegistryOrigin);
     } else if (registered.kind === 'explicit' && registered.sdkRegistryOrigin !== sdkRegistryOrigin) {
       throw new Error('Unregister the plugin development root before changing its SDK registry');
+    } else {
+      await invalidate(canonicalRoot);
     }
     const existingRegistration = persistedState.explicitRoots.find((entry) => entry.rootPath === canonicalRoot);
     if (!existingRegistration || existingRegistration.sdkRegistryOrigin !== sdkRegistryOrigin) {
@@ -717,22 +746,23 @@ export function createDaemonPluginDevelopmentRootsOwner(params: Readonly<{
 
   const invalidate = async (rootPath: string): Promise<void> => {
     const canonicalRoot = await realpath(resolve(rootPath));
+    if (params.hasPendingSourceChange?.(canonicalRoot)) return;
+    const source = sources.get(canonicalRoot);
     if (params.invalidateSource) {
       await params.invalidateSource(canonicalRoot);
       return;
     }
-    const source = sources.get(canonicalRoot);
     if (source) {
       const owners = [...source.owners];
       source.handle?.stop();
       sources.delete(canonicalRoot);
-      await attachSource(owners[0] ?? canonicalRoot, canonicalRoot);
+      await attachSource(owners[0] ?? canonicalRoot, canonicalRoot, roots.get(canonicalRoot)?.sdkRegistryOrigin);
       for (const owner of owners.slice(1)) sources.get(canonicalRoot)?.owners.add(owner);
       return;
     }
     const explicitRoot = roots.get(canonicalRoot);
     if (explicitRoot?.kind === 'explicit') {
-      await attachSource(canonicalRoot, canonicalRoot);
+      await attachSource(canonicalRoot, canonicalRoot, explicitRoot.sdkRegistryOrigin);
       return;
     }
     if (roots.get(canonicalRoot)?.collection) await reconcileCollection(canonicalRoot);
@@ -755,8 +785,11 @@ export function createDaemonPluginDevelopmentRootsOwner(params: Readonly<{
     async control(request) {
       if (request.kind === 'status') return { kind: 'status', status: readStatus() };
       try {
-        if (request.kind === 'registerExplicit') {
-          const canonicalRoot = await registerExplicit(request.rootPath, request.sdkRegistryOrigin);
+        if (request.kind === 'registerExplicit' || request.kind === 'invalidate' || request.kind === 'reload') {
+          const canonicalRoot = request.kind === 'registerExplicit'
+            ? await registerExplicit(request.rootPath, request.sdkRegistryOrigin)
+            : await realpath(resolve(request.rootPath));
+          if (request.kind !== 'registerExplicit') await invalidate(canonicalRoot);
           const plugin = pluginStatusBySource.get(canonicalRoot);
           if (plugin?.diagnostic
             && (plugin.phase === 'unavailable' || plugin.phase === 'retained_incumbent')) {
@@ -770,10 +803,6 @@ export function createDaemonPluginDevelopmentRootsOwner(params: Readonly<{
           return { kind: 'status', status: readStatus() };
         }
         if (request.kind === 'unregisterExplicit') return await unregisterExplicit(request.rootPath);
-        if (request.kind === 'invalidate' || request.kind === 'reload') {
-          await invalidate(request.rootPath);
-          return { kind: 'status', status: readStatus() };
-        }
         if (request.kind !== 'registerWorkspace') {
           return { kind: 'failed', code: 'plugin_development_request_invalid', message: 'Unsupported development request', status: readStatus() };
         }
@@ -821,8 +850,16 @@ export function createDaemonPluginDevelopmentRootsOwner(params: Readonly<{
       }
     },
     readStatus,
+    recordSourceCommit,
     readPendingProjectTrusts() {
       return Object.freeze([...pendingProjectTrustByProjectRoot.values()]);
+    },
+    resolveRegisteredSourceObservation(rootPath) {
+      const registeredRootId = resolve(rootPath);
+      const source = sources.get(registeredRootId);
+      const observedRevision = observedRevisionBySource.get(registeredRootId);
+      if (!source?.admitted || observedRevision === undefined) return null;
+      return Object.freeze({ registeredRootId, observedRevision });
     },
     resolveDevelopmentSourceAuthority(input) {
       const registeredRootId = resolve(input.rootPath);

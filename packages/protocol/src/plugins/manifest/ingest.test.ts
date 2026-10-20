@@ -1000,7 +1000,10 @@ describe('canonical plugin manifest ingestion', () => {
     for (const value of [undefined, () => undefined, Symbol('invalid'), Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(ingestPluginManifestV2({ ...manifest(), metadata: { invalid: value } })).toEqual({
         ok: false,
-        diagnostics: [expect.objectContaining({ code: 'plugin_manifest_invalid_json' })],
+        diagnostics: [expect.objectContaining({
+          code: 'plugin_manifest_invalid_json',
+          message: expect.stringContaining('value.metadata.invalid must contain'),
+        })],
       });
     }
 
@@ -1020,6 +1023,25 @@ describe('canonical plugin manifest ingestion', () => {
         diagnostics: [expect.objectContaining({ code: 'plugin_manifest_invalid_json' })],
       });
     }
+  });
+
+  it('reports the strict JSON path and reason for nested executable schema members without running accessors', () => {
+    let reads = 0;
+    const schema = Object.defineProperty({}, 'parse', {
+      enumerable: true,
+      get() { reads += 1; return () => null; },
+    });
+    const result = ingestPluginManifestV2(manifest({
+      contributes: { actions: [{ input: { schema } }] },
+    }));
+    expect(result).toMatchObject({
+      ok: false,
+      diagnostics: [{
+        code: 'plugin_manifest_invalid_json',
+        message: expect.stringContaining('value.contributes.actions[0].input.schema.parse must be an enumerable data property'),
+      }],
+    });
+    expect(reads).toBe(0);
   });
 
   it('accepts non-enumerable symbol-keyed host brands that JSON output cannot carry', () => {
@@ -1268,9 +1290,12 @@ describe('canonical plugin manifest ingestion', () => {
     const result = ingestPluginManifestV2(manifest({
       contributes: { resources: [{ id: 'legacy.dotted', kind: 'asset', path: 'asset.txt', contentType: 'text/plain' }] },
     }));
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: false,
-      diagnostics: [expect.objectContaining({ code: 'plugin_manifest_invalid_contribution_id' })],
+      diagnostics: expect.arrayContaining([expect.objectContaining({
+        code: 'plugin_manifest_invalid_contribution_id',
+        path: ['contributes', 'resources', 0, 'id'],
+      })]),
     });
   });
 

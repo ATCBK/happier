@@ -1,6 +1,6 @@
 import * as privacyKit from "privacy-kit";
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { z } from "zod";
+import { z } from "zod/mini";
 import { db } from "@/storage/db";
 import { auth } from "@/app/auth/auth";
 import {
@@ -64,7 +64,7 @@ const KeyChallengeV2UnavailableResponseSchema = z.object({
 const KeyChallengeV2RequiredResponseSchema = z.object({
     error: z.literal(AUTH_KEY_CHALLENGE_V2_ERROR_CODES.required),
 });
-const KeyChallengeAuthResponseSchemas: Record<number, z.ZodTypeAny> = {
+const KeyChallengeAuthResponseSchemas: Record<number, z.ZodMiniType> = {
     426: KeyChallengeV2RequiredResponseSchema,
 };
 
@@ -414,7 +414,7 @@ function registerKeyChallengeAuthRoutesForPurpose(
             // passed, so the stamp records what was actually verified.
             const token = purpose.tokenKind === "account"
                 ? await inTx(async (tx) => {
-                    await acquireAccountSessionOwnerMetadataFenceInTx(tx, expectedAccount.id);
+                    await acquireAccountSessionOwnerMetadataFenceInTx(tx, expectedAccount.id, "content");
                     const passwordIdentity = verifiedNativePasswordEvidence !== null
                         ? await tx.accountIdentity.findUnique({
                             where: { accountId_provider: { accountId: expectedAccount.id, provider: "email" } },

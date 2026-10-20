@@ -1,8 +1,10 @@
+import { z } from 'zod/mini';
 import { AgentExecutionTargetV1Schema } from '@happier-dev/protocol/agents/executionTargetV1';
 import { SessionAuthoringExecutionTargetV2Schema } from '@happier-dev/protocol/sessions/authoring/fieldCatalog';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 
 import type { NewSessionDraftProjection } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
+import { getSessionDraftDocumentFieldValue } from '@/sync/ops/sessionDrafts/sessionDraftDocumentFields';
 import {
     resolveAgentIdFromFlavor,
     resolveBundledAgentIdFromContributionIdentity,
@@ -22,9 +24,7 @@ export type NewSessionDraftAvailabilitySummary = Readonly<{
 }>;
 
 function readAuthoringValue(draft: NewSessionDraftProjection, fieldId: string): unknown {
-    if (draft.document.target.kind !== 'newSession') return null;
-    const authoring = draft.document.target.authoring as Readonly<Record<string, Readonly<{ value: unknown }>>>;
-    return authoring[fieldId]?.value ?? null;
+    return getSessionDraftDocumentFieldValue(draft.document, { kind: 'authoring', fieldId });
 }
 
 function readNonblankString(value: unknown): string | null {
@@ -60,9 +60,10 @@ function readAutomationName(draft: NewSessionDraftProjection): string | null {
  * Agent resolves to none: the row shows no mark rather than the default Agent's.
  */
 export function resolveNewSessionDraftAgentId(draft: NewSessionDraftProjection): string {
-    if (draft.document.v === 2 && draft.document.target.kind === 'newSession') {
-        const agentTarget = AgentExecutionTargetV1Schema.nullable().safeParse(
-            draft.document.target.authoring.agentTarget?.value ?? null,
+    if (!draft.readView) return '';
+    if (draft.readView.documentVersion === 2) {
+        const agentTarget = z.nullable(AgentExecutionTargetV1Schema).safeParse(
+            readAuthoringValue(draft, 'agentTarget'),
         );
         if (agentTarget.success && agentTarget.data) {
             return resolveBundledAgentIdFromContributionIdentity(agentTarget.data.identity)
@@ -81,15 +82,12 @@ export function resolveNewSessionDraftAgentId(draft: NewSessionDraftProjection):
  * out of Machine availability and never reports an offline Machine.
  */
 export function resolveNewSessionDraftMachineId(draft: NewSessionDraftProjection): string | null {
-    const document = draft.document;
-    if (document.v === 1) {
-        return document.target.kind === 'newSession'
-            ? readNonblankString(document.target.authoring.machineId?.value)
-            : null;
+    if (!draft.readView) return null;
+    if (draft.readView.documentVersion === 1) {
+        return readNonblankString(readAuthoringValue(draft, 'machineId'));
     }
-    if (document.target.kind !== 'newSession') return null;
-    const executionTarget = SessionAuthoringExecutionTargetV2Schema.nullable()
-        .safeParse(document.target.authoring.executionTarget?.value ?? null);
+    const executionTarget = z.nullable(SessionAuthoringExecutionTargetV2Schema)
+        .safeParse(readAuthoringValue(draft, 'executionTarget'));
     return executionTarget.success && executionTarget.data?.kind === 'machine'
         ? readNonblankString(executionTarget.data.target.machineId)
         : null;
@@ -113,7 +111,7 @@ export function buildNewSessionDraftRowPresentation(
     draft: NewSessionDraftProjection,
     availability?: NewSessionDraftAvailabilitySummary,
 ): NewSessionDraftRowPresentation {
-    const promptLine = firstPromptLine(draft.document.composer.text.value);
+    const promptLine = firstPromptLine(draft.readView?.composer.text.value ?? '');
     const automationName = readAutomationName(draft);
     const folderName = safeFinalPathSegment(readAuthoringValue(draft, 'directory'));
     const title = promptLine ?? automationName ?? folderName ?? t('sessionDrafts.untitled');

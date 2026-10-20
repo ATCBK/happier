@@ -89,7 +89,7 @@ const waitTool = {
 const header = {
   title: 'MCP: Happier Projects Script Run',
   icon: null,
-  density: 'regular' as const,
+  density: 'comfortable' as const,
   onPress: null,
   canOpen: false,
   onOpen: null,

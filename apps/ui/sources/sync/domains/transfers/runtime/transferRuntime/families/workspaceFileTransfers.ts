@@ -190,14 +190,23 @@ async function downloadWorkspaceFileToDestination(params: Readonly<{
     }
     let account: Awaited<ReturnType<typeof captureFilesystemTransferAccountScope>> | undefined;
     try {
-        const captured = account = capturedAccount ?? await captureFilesystemTransferAccountScope(params.serverId, params.signal);
-        captured.assertCurrent();
-        const machineRoute = await resolveMachineCarrierRoute(params.machineId, captured.serverId);
-        captured.assertCurrent();
+        let captured: Awaited<ReturnType<typeof captureFilesystemTransferAccountScope>>;
+        let machineRoute: Awaited<ReturnType<typeof resolveMachineCarrierRoute>>;
+        try {
+            captured = account = capturedAccount ?? await captureFilesystemTransferAccountScope(params.serverId, params.signal);
+            captured.assertCurrent();
+            machineRoute = await resolveMachineCarrierRoute(params.machineId, captured.serverId);
+            captured.assertCurrent();
+        } catch (error) {
+            await params.destination.cleanup();
+            return { ok: false, error: error instanceof Error ? error.message : 'Download Account custody is unavailable', errorCode: 'action_account_scope_changed' };
+        }
         if (machineRoute.kind === 'unavailable') {
             await params.destination.cleanup();
             return { ok: false, error: machineRoute.error, errorCode: machineRoute.errorCode };
         }
+        // The byte owner preserves operation and cleanup errors. Do not turn
+        // those into Account-custody failures or clean its destination twice.
         const result = await downloadBulkPayloadViaDirectExportToDestination({
             machineId: params.machineId,
             serverId: machineRoute.serverId,
@@ -218,11 +227,13 @@ async function downloadWorkspaceFileToDestination(params: Readonly<{
                 return await machineRoute.acquire({ operationId, accountLifetime: captured.accountOnlyLifetime });
             },
         });
-        captured.assertCurrent();
+        try {
+            captured.assertCurrent();
+        } catch (error) {
+            if (result.ok) await params.destination.cleanup();
+            return { ok: false, error: error instanceof Error ? error.message : 'Download Account custody is unavailable', errorCode: 'action_account_scope_changed' };
+        }
         return result;
-    } catch (error) {
-        await params.destination.cleanup();
-        return { ok: false, error: error instanceof Error ? error.message : 'Download Account custody is unavailable', errorCode: 'action_account_scope_changed' };
     } finally { if (!capturedAccount) account?.dispose(); }
 }
 

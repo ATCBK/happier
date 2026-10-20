@@ -77,7 +77,7 @@ describe('applyWorkspaceFileDiscardAction', () => {
                 cwd: '/repo',
                 entries: [{ path: 'src/a.ts', kind: 'modified' }],
             },
-            { serverId: 'server-1' },
+            { serverId: 'server-1', onDispatched: expect.any(Function) },
         );
         expect(modalConfirmSpy).not.toHaveBeenCalled();
     });

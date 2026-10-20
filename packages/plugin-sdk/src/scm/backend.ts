@@ -706,6 +706,8 @@ export type BackendCommandRunResult = Readonly<{
     outputLimitExceeded?: boolean;
     /** Host executable resolution found no installed command; no process was started. */
     executableMissing?: true;
+    /** The spawn failed and the host confirmed its cwd is missing or is not a directory. */
+    workingDirectoryMissing?: true;
     /** The consumer settled its read and the host completed owned process cleanup. */
     stoppedEarly?: boolean;
 }>;

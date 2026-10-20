@@ -33,6 +33,7 @@ describe('getSessionEvents', () => {
     fetchEncryptedTranscriptMessagesPage.mockResolvedValueOnce({
       messages: [
         {
+          id: '4',
           seq: 4,
           createdAt: 40,
           messageRole: 'agent',

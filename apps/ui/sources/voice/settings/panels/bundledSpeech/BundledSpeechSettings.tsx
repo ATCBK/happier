@@ -20,6 +20,8 @@ import { VoiceCredentialItem } from '@/voice/credentials/CredentialItem';
 import { VoiceRawCredentialAccessReview } from '@/voice/credentials/VoiceRawCredentialAccessReview';
 import { useVoiceExecutionMachinePresentation } from '@/voice/credentials/useExecutionMachinePresentation';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { readVoiceCatalogSettingsActionResult } from '../realtime/voiceCatalog';
 import { playAudioBytesWithStopper } from '@/voice/output/playAudioBytesWithStopper';
 import {
   resolveSelectedVoiceCredentialRawGrants,
@@ -168,6 +170,7 @@ function BundledSpeechSettings(props: Readonly<{
   const settingRef = useVoiceContributedSettingRefs(props.descriptor.providerId);
   const machine = useVoiceExecutionMachinePresentation();
   const endpointScope = useAccountSettingsScope();
+  const catalogActions = useMountedActionExecution(endpointScope, { openOnRequest: true });
   const endpointSettingsRef = React.useRef({ ...props, scope: endpointScope });
   endpointSettingsRef.current = { ...props, scope: endpointScope };
   const endpointMountedRef = React.useRef(true);
@@ -258,7 +261,15 @@ function BundledSpeechSettings(props: Readonly<{
     const controller = new AbortController();
     for (const field of props.descriptor.fields) {
       if (field.kind !== 'remote_select') continue;
-      void bundledSpeechDaemonClient.fetchCatalog(props.entry, field.catalog, controller.signal).then((rows) => {
+      const readCatalog = async () => {
+        if (field.catalog !== 'voices') return bundledSpeechDaemonClient.fetchCatalog(props.entry, field.catalog, controller.signal);
+        const setting = settingRef(`${field.key}.${catalogRefreshRevision > 0 ? 'retryCatalog' : 'listCatalog'}`);
+        if (!setting) throw new Error('voice_catalog_unavailable');
+        const result = await catalogActions.execute('settings.invoke', { anchor: setting.anchor }, { signal: controller.signal });
+        return readVoiceCatalogSettingsActionResult(result).map(row => ({ id: row.id, name: row.name,
+          metadata: row.subtitle ? { description: row.subtitle } : {} }));
+      };
+      void readCatalog().then((rows) => {
         if (controller.signal.aborted) return;
         setCatalogState((current) => ({
           targetKey: catalogTargetKey,
@@ -279,7 +290,7 @@ function BundledSpeechSettings(props: Readonly<{
       });
     }
     return () => controller.abort();
-  }, [catalogTargetKey, hasCanonicalConfig, props.descriptor.fields, props.entry]);
+  }, [catalogActions.execute, catalogRefreshRevision, catalogTargetKey, hasCanonicalConfig, props.descriptor.fields, props.entry, settingRef]);
 
   return (
     <>
@@ -582,7 +593,9 @@ function BundledSpeechSettings(props: Readonly<{
         );
         })();
         const setting = settingRef(field.key);
-        return setting ? <SettingAnchor key={field.key} setting={setting}>{rendered}</SettingAnchor> : rendered;
+        const operations = field.kind === 'remote_select' && field.catalog === 'voices'
+          ? ['listCatalog', 'retryCatalog'].map(operation => settingRef(`${field.key}.${operation}`)) : [];
+        return setting ? <SettingAnchor key={field.key} settings={[setting, ...operations].flatMap(ref => ref ? [ref] : [])}>{rendered}</SettingAnchor> : rendered;
       })}
       <VoiceProviderSettingsActions
         providerId={props.descriptor.providerId}

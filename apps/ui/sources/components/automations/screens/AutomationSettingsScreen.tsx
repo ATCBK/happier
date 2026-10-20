@@ -16,7 +16,9 @@ import { Modal } from '@/modal';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { sync } from '@/sync/sync';
-import { createFrontDoorUiActionExecutor } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { HappyError } from '@/utils/errors/errors';
 import { t } from '@/text';
 import { formatAutomationErrorMessage } from '@/components/automations/automationErrorFormatting';
 import { WORKFLOW_RUN_SETTINGS } from '@/components/automations/settings/workflowRunSettings';
@@ -37,10 +39,7 @@ export function AutomationSettingsScreen(): React.ReactElement {
     // remounts this route-local projection even when the route itself stays put.
     useActiveServerAccountScope();
     const accountLifetime = captureActiveServerAccountScopeLifetime();
-    const executeAction = React.useMemo(() => createFrontDoorUiActionExecutor(undefined, accountLifetime ? {
-        serverId: accountLifetime.scope.serverId,
-        expectedAccountId: accountLifetime.scope.accountId,
-    } : undefined), [accountLifetime]);
+    const { executeValue: executeAction } = useMountedActionExecution(accountLifetime?.scope, { openOnRequest: true });
     const [settings, setSettings] = React.useState<AutomationV3Settings | null>(null);
     const [loading, setLoading] = React.useState(true);
     const [loadFailed, setLoadFailed] = React.useState(false);
@@ -107,6 +106,7 @@ export function AutomationSettingsScreen(): React.ReactElement {
             setSettings(updated);
         } catch (error) {
             if (requestEpoch !== requestEpochRef.current || requestAccountLifetime?.isCurrent() === false) return;
+            if (error instanceof HappyError && isActionApprovalDeclinedErrorCode(error.code)) return;
             await Modal.alert(
                 t('workflows.destination.runSettingsPage.saveFailed'),
                 formatAutomationErrorMessage(error, t('automations.settings.updateFailed')),

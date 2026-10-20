@@ -14,6 +14,8 @@ import { signAccountContentKeyBindingV1, computeContentPublicKeyFingerprint, ope
     type ArtifactRecipientKeyEnvelopeCommitInputV1 } from '@happier-dev/protocol';
 import { decodeBase64 } from '@/encryption/base64';
 import { shouldRetryError } from '@/sync/runtime/connectivity/transientConnectivityErrors';
+import { createStore } from 'zustand/vanilla';
+import { createArtifactsDomain, type ArtifactsDomain } from '@/sync/store/domains/artifacts';
 
 const runtimeFetch = vi.hoisted(() => vi.fn());
 
@@ -29,6 +31,7 @@ function json(value: unknown): Response {
 
 function plainHead(index: number): Artifact {
     return { id: `11111111-1111-4111-8111-${String(index).padStart(12, '0')}`,
+        kind: 'other',
         ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain',
         header: encodePlainArtifactStoredContent({ title: `Document ${index}` }),
         dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
@@ -39,6 +42,58 @@ describe('fetchAndApplyArtifactsList', () => {
     afterEach(() => {
         runtimeFetch.mockReset();
         vi.resetModules();
+    });
+
+    it('keeps body batch successes, missing identities and malformed content independent', async () => {
+        const { fetchArtifactsWithBodiesFromApi } = await import('./syncArtifacts');
+        const readable = { ...plainHead(1), publicAudience: 'none', body: encodePlainArtifactStoredContent({ body: 'Current instructions' }) };
+        const malformed = { ...plainHead(2), publicAudience: 'none', body: 'invalid body' };
+        const missing = plainHead(3).id;
+        const result = await fetchArtifactsWithBodiesFromApi({ credentials: { token: 'token' }, encryption: null,
+            artifactDataKeys: new Map(), artifactIds: [readable.id, missing, malformed.id],
+            request: async (path, init) => {
+                expect(path).toBe('/v1/artifacts/read');
+                expect(JSON.parse(String(init?.body))).toEqual({ artifactIds: [readable.id, missing, malformed.id] });
+                return json({ items: [
+                    { artifactId: readable.id, ok: true, artifact: readable, recipientCensus: null },
+                    { artifactId: missing, ok: false, error: 'artifact_not_found', status: 404, retryable: false },
+                    { artifactId: malformed.id, ok: true, artifact: malformed, recipientCensus: null },
+                ] });
+            } });
+        expect(result[0]).toMatchObject({ status: 'fulfilled', value: { id: readable.id, body: 'Current instructions' } });
+        expect(result[1]).toEqual({ status: 'fulfilled', value: null });
+        // The shared codec retains a readable header but never invents an unreadable body.
+        expect(result[2]).toMatchObject({ status: 'fulfilled', value: { id: malformed.id, body: undefined } });
+    });
+
+    it('does not open or publish body batches after their captured request is cancelled', async () => {
+        const { fetchArtifactsWithBodiesFromApi } = await import('./syncArtifacts');
+        const controller = new AbortController();
+        const artifact = { ...plainHead(1), publicAudience: 'none', body: encodePlainArtifactStoredContent({ body: 'Instructions' }) };
+        await expect(fetchArtifactsWithBodiesFromApi({ credentials: { token: 'token' }, encryption: null,
+            artifactDataKeys: new Map(), artifactIds: [artifact.id], signal: controller.signal,
+            request: async () => {
+                controller.abort();
+                return json({ items: [{ artifactId: artifact.id, ok: true, artifact, recipientCensus: null }] });
+            } })).rejects.toMatchObject({ name: 'AbortError' });
+    });
+
+    it('publishes demanded bodies without inventory readiness, then reconciles a completed inventory', async () => {
+        const store = createStore<ArtifactsDomain>((set, get) => createArtifactsDomain({ set, get }));
+        const { fetchAndApplyArtifactBodies, fetchAndApplyArtifactsList } = await import('./syncArtifacts');
+        const artifact = { ...plainHead(1), publicAudience: 'none', body: encodePlainArtifactStoredContent({ body: 'Demanded content' }) };
+        const params = { credentials: { token: 'token' }, encryption: null, artifactDataKeys: new Map(),
+            request: async (path: string) => path === '/v1/artifacts/read'
+                ? json({ items: [{ artifactId: artifact.id, ok: true, artifact, recipientCensus: null }] }) : json([]),
+            applyArtifacts: store.getState().applyArtifacts };
+        await fetchAndApplyArtifactBodies({ ...params, artifactIds: [artifact.id] });
+        expect(store.getState().artifacts[artifact.id]?.body).toBe('Demanded content');
+        expect(store.getState().artifactsLoaded).toBe(false);
+        const readStartedWith = store.getState().artifacts;
+        await fetchAndApplyArtifactsList({ ...params,
+            applyArtifacts: (rows, source) => store.getState().applyArtifacts(rows, source === 'inventory' ? readStartedWith : undefined) });
+        expect(store.getState().artifactsLoaded).toBe(true);
+        expect(store.getState().artifacts).toEqual({});
     });
 
     it('continues beyond the first transport page without evicting older heads', async () => {
@@ -139,7 +194,7 @@ describe('fetchAndApplyArtifactsList', () => {
         const changedDataEncryptionKey = encodeBase64(await encryption.encryptEncryptionKey(new Uint8Array(32).fill(23)));
         const rows: Artifact[] = await Promise.all([1, 2].map(async index => ({ ...plainHead(index),
             encryptionMode: 'e2ee' as const, dataEncryptionKey,
-            header: await artifactEncryption.encryptHeader({ title: `Profile ${index}`, kind: 'launch-profile.v1' }),
+            header: await artifactEncryption.encryptHeader({ title: `Profile ${index}`, kind: 'approval_request.v1', approvalStatus: 'open' }),
             body: await artifactEncryption.encryptBody({ body: `Profile body ${index}` }), publicAudience: 'none' as const })));
         const paths: string[] = [];
         let changed = false;
@@ -213,7 +268,7 @@ describe('fetchAndApplyArtifactsList', () => {
     });
 
     it('skips disappeared details but rejects refused or incomplete batches after publishing headers', async () => {
-        const head = { ...plainHead(1), header: encodePlainArtifactStoredContent({ title: 'Profile', kind: 'launch-profile.v1' }) };
+        const head = { ...plainHead(1), header: encodePlainArtifactStoredContent({ title: 'Approval', kind: 'approval_request.v1', approvalStatus: 'open' }) };
         let batch: unknown = { items: [{ artifactId: head.id, ok: false, error: 'artifact_not_found', status: 404, retryable: false }] };
         const request = async (path: string) => json(path.startsWith('/v1/artifacts?') ? [head] : batch);
         const { fetchAndApplyArtifactsList } = await import('./syncArtifacts');
@@ -244,7 +299,7 @@ describe('fetchAndApplyArtifactsList', () => {
     });
 
     it('keeps a failed batch HTTP read retryable through the existing retry owner', async () => {
-        const head = { ...plainHead(1), header: encodePlainArtifactStoredContent({ title: 'Profile', kind: 'launch-profile.v1' }) };
+        const head = { ...plainHead(1), header: encodePlainArtifactStoredContent({ title: 'Approval', kind: 'approval_request.v1', approvalStatus: 'open' }) };
         const request = async (path: string) => path.startsWith('/v1/artifacts?') ? json([head])
             : Response.json({ error: 'artifact_content_unavailable' }, { status: 500 });
         const { fetchAndApplyArtifactsList } = await import('./syncArtifacts');
@@ -264,7 +319,7 @@ describe('fetchAndApplyArtifactsList', () => {
         const id = '11111111-1111-4111-8111-111111111111';
         const source = { sessionId: 'session', machineId: 'machine', path: 'private/output.ts', sha: 'a'.repeat(64) };
         const provenance = { savedBy: { kind: 'agent' as const, accountId: 'owner', sessionId: source.sessionId }, source };
-        const row = { id, ownerAccountId: 'owner', access: 'owner' as const, encryptionMode: mode,
+        const row = { id, kind: 'other' as const, ownerAccountId: 'owner', access: 'owner' as const, encryptionMode: mode,
             header: mode === 'plain' ? encodePlainArtifactStoredContent({ title: 'Published output' }) : await new ArtifactEncryption(contentKey).encryptHeader({ title: 'Published output' }),
             headerVersion: 1, bodyVersion: 2, seq: 2, createdAt: 1, updatedAt: 2,
             dataEncryptionKey: encryption ? encodeBase64(await encryption.encryptEncryptionKey(contentKey)) : ARTIFACT_PLAIN_DATA_KEY_MARKER,
@@ -280,7 +335,7 @@ describe('fetchAndApplyArtifactsList', () => {
         });
         const applied: DecryptedArtifact[][] = [];
         const { fetchAndApplyArtifactsList } = await import('./syncArtifacts');
-        await fetchAndApplyArtifactsList({ credentials: { token: 'token' }, encryption, artifactDataKeys: new Map(),
+        await fetchAndApplyArtifactsList({ credentials: { token: 'token' }, encryption, artifactDataKeys: new Map(), includeProvenance: true,
             applyArtifacts: rows => applied.push(rows) });
         expect(applied[0]?.[0]).toMatchObject({ id, bodyVersion: 2, provenance });
         expect(applied[0]?.[0]?.body).toBeUndefined();
@@ -295,13 +350,13 @@ describe('fetchAndApplyArtifactsList', () => {
             const viewerRow = { ...row, access: 'view' as const, dataEncryptionKey: viewerContentWrap,
                 provenance: null, provenanceDataEncryptionKey: null };
             runtimeFetch.mockImplementation(async (url: unknown) => json(new URL(String(url)).pathname === '/v1/artifacts' ? [viewerRow] : { ok: true }));
-            await fetchAndApplyArtifactsList({ credentials: { token: 'viewer' }, encryption: viewerEncryption,
+            await fetchAndApplyArtifactsList({ credentials: { token: 'viewer' }, encryption: viewerEncryption, includeProvenance: true,
                 artifactDataKeys: new Map(), applyArtifacts: rows => applied.push(rows) });
             expect(applied[1]?.[0]).toMatchObject({ id, isDecrypted: true, title: 'Published output' });
             expect(readArtifactProvenance(applied[1]![0]!)).toBeNull();
             runtimeFetch.mockImplementation(async (url: unknown) => json(new URL(String(url)).pathname === '/v1/artifacts' ? [{ ...viewerRow,
                 provenance: row.provenance, provenanceDataEncryptionKey: viewerPrivateWrap }] : { ok: true }));
-            await fetchAndApplyArtifactsList({ credentials: { token: 'viewer' }, encryption: viewerEncryption,
+            await fetchAndApplyArtifactsList({ credentials: { token: 'viewer' }, encryption: viewerEncryption, includeProvenance: true,
                 artifactDataKeys: new Map(), applyArtifacts: rows => applied.push(rows) });
             expect(applied[2]?.[0]).toMatchObject({ id, bodyVersion: 2, provenance });
             expect(readArtifactProvenance(applied[2]![0]!)).toEqual(source);

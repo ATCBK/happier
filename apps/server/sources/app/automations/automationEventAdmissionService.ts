@@ -489,7 +489,7 @@ async function admitEncryptedAutomationEventV1(params: Readonly<{
             automationIds: params.hostEvidence.definitions.map(definition => definition.automationId) });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(
             tx,
-            params.accountId,
+            params.accountId, "content",
         );
         if (
             accountFence.status !== "ready"
@@ -820,7 +820,7 @@ async function admitEncryptedAutomationEventV1(params: Readonly<{
             accountId: params.accountId,
             results,
         });
-    }));
+    }, { transactionClass: "automation-event-admit-encrypted" }));
 }
 
 /**
@@ -873,7 +873,7 @@ export async function admitAutomationEventV1(params: Readonly<{
             automationIds: input.definitions.map(definition => definition.automationId) });
         const accountFence = await acquireAccountEncryptionTransitionFenceInTx(
             tx,
-            params.accountId,
+            params.accountId, "content",
         );
         if (
             accountFence.status !== "ready"
@@ -1289,5 +1289,5 @@ export async function admitAutomationEventV1(params: Readonly<{
             accountId: params.accountId,
             results,
         });
-    }));
+    }, { transactionClass: "automation-event-admit" }));
 }

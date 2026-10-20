@@ -8,6 +8,13 @@ const CODEX = 'agent:happier.agent.codex/codex';
 const CLAUDE = 'agent:happier.agent.claude/claude';
 
 describe('buildSessionRouteSourceRows', () => {
+    it('keeps a compatible source browseable before it has any projected model rows', () => {
+        const rows = buildSessionRouteSourceRows({ agentTargetKey: CODEX, isGateway: () => true,
+            views: [createProviderConnectionViewFixture({ connectionId: 'pc_gateway',
+                compatibility: [{ agentTargetKey: CODEX, agentName: 'Codex', status: 'verified', reasons: [] }] })],
+            shownSources: [], hiddenSources: [] });
+        expect(rows.gateways).toEqual([expect.objectContaining({ connectionId: 'pc_gateway', modelCount: null, worksWith: null })]);
+    });
     it('retains admitted Provider contribution identity for its packaged mark', () => {
         const contributionKey = 'happier.provider.deepseek/deepseek';
         const rows = buildSessionRouteSourceRows({ agentTargetKey: CODEX, isGateway: () => false,

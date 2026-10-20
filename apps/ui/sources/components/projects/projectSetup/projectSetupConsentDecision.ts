@@ -14,36 +14,71 @@ import type { QualifiedActionOperation } from '@/sync/domains/actionOperations/q
 import { publishActionOperationObservation } from '@/sync/domains/actionOperations/actionOperationRuntime';
 import { getActionOperation } from '@/sync/ops/actionOperations';
 import { readRpcErrorCode } from '@/sync/runtime/rpcErrors';
+import { HappyError } from '@/utils/errors/errors';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { createProjectManifestActionClient } from './projectManifestActionClient';
+
+export type ProjectSetupDecision = 'thisTime' | 'untilChanged' | 'skip';
 
 export type ProjectSetupConsentDecisionResult =
   | Readonly<{ kind: 'remembered' }>
+  | Readonly<{ kind: 'continued' }>
   | Readonly<{ kind: 'changed' }>
   | Readonly<{ kind: 'unavailable'; code: string }>;
 
 /**
- * "Until it changes" (D18): the reviewing person's own grant for this Project's exact reviewed setup
- * effect, written through the approving Account's Project Trust row. It is the only producer of that
- * grant on the client; a held original invocation resumes from the daemon's own trust read, never from
- * this call's result. The Project is the checkout's accepted Project association, never a Machine.
+ * One human setup decision owner for Scripts, Services and Session. One-time/Skip goes to the
+ * retained target's projects.prepare path; Until it changes writes the approving Account's Project
+ * Trust row and refreshes that same retained producer. Neither path starts a second setup runner.
  */
-export async function rememberProjectSetupConsent(
+export async function decideProjectSetupConsent(
   input: Readonly<{
     scope: ServerAccountScope;
     workspace: WorkspaceAddressV1;
     reviewedEffectDigest: string;
+    decision: ProjectSetupDecision;
     operation?: QualifiedActionOperation;
     signal?: AbortSignal;
+    execute?: Parameters<typeof createProjectManifestActionClient>[0]['execute'];
+    onApprovalPending?: Parameters<typeof createProjectManifestActionClient>[0]['onApprovalPending'];
   }>,
 ): Promise<ProjectSetupConsentDecisionResult> {
   const workspace = { ...input.workspace, serverId: resolveServerProfileScopeIdForIdentifier(input.workspace.serverId) };
-  const projectId = resolveProjectSetupProjectId(input.scope, workspace);
-  if (!projectId) return { kind: 'unavailable', code: 'project_unavailable' };
   const retained = input.operation;
   if (!retained) return { kind: 'unavailable', code: 'project_setup_requester_review_unavailable' };
   if (retained.serverId !== input.scope.serverId || !matchesRetainedCheckout(retained.snapshot, retained.snapshot, input.scope, workspace)) {
     return { kind: 'unavailable', code: 'project_setup_review_unavailable' };
   }
+  if (input.decision !== 'untilChanged') {
+    const target = retained.snapshot.domainRef;
+    if (target?.kind !== 'projectCommand') return { kind: 'unavailable', code: 'project_setup_review_unavailable' };
+    try {
+      const client = createProjectManifestActionClient({
+        workspace: { serverId: target.serverId, machineId: target.machineId, workspaceId: target.workspaceRefId, rootPath: target.cwd },
+        expectedAccountId: input.scope.accountId, signal: input.signal, execute: input.execute, onApprovalPending: input.onApprovalPending,
+      });
+      const result = await client.prepare({ phase: target.purpose === 'teardown' ? 'teardown' : 'setup',
+        heldOperationId: retained.snapshot.operationId, expectedEffectDigest: input.reviewedEffectDigest,
+        ...(input.decision === 'skip' ? { skipForInvocation: true } : { consentScope: 'thisTime' }),
+      });
+      if (!('operation' in result) || result.operation.operationId !== retained.snapshot.operationId
+        || !matchesRetainedCheckout(result.operation, retained.snapshot, input.scope, workspace)) {
+        return { kind: 'unavailable', code: 'project_setup_review_unavailable' };
+      }
+      const resumed = result.operation;
+      publishActionOperationObservation({ serverId: retained.serverId, machineId: retained.snapshot.scope.machineId,
+        observation: 'available', snapshots: [resumed] });
+      if (resumed.setupReview) return resumed.setupReview.reviewedEffectDigest !== input.reviewedEffectDigest
+        || resumed.setupReview.code === 'project_setup_effect_changed'
+        ? { kind: 'changed' } : { kind: 'unavailable', code: resumed.setupReview.code };
+      if (resumed.state === 'failed' || resumed.state === 'cancelled') return { kind: 'unavailable', code: resumed.error?.errorCode ?? 'cancelled' };
+      return { kind: 'continued' };
+    } catch (error) {
+      return { kind: 'unavailable', code: (error instanceof HappyError ? error.code : readRpcErrorCode(error)) ?? 'project_setup_review_unavailable' };
+    }
+  }
+  const projectId = resolveProjectSetupProjectId(input.scope, workspace);
+  if (!projectId) return { kind: 'unavailable', code: 'project_unavailable' };
   const project = { serverId: workspace.serverId, projectId };
   const refresh = async () => {
     if (input.signal?.aborted) throw new ProjectTrustOperationError('cancelled');
@@ -98,7 +133,7 @@ export async function rememberProjectSetupConsent(
         ? { kind: 'changed' }
         : { kind: 'unavailable', code: error.code };
     }
-    return { kind: 'unavailable', code: readRpcErrorCode(error) ?? 'project_setup_requester_review_unavailable' };
+    return { kind: 'unavailable', code: (error instanceof HappyError ? error.code : readRpcErrorCode(error)) ?? 'project_setup_requester_review_unavailable' };
   }
 }
 
@@ -112,7 +147,9 @@ function matchesRetainedCheckout(
   const target = current.domainRef;
   const original = retained.domainRef;
   if (target?.kind !== 'projectCommand' || original?.kind !== 'projectCommand') return false;
-  const source = target.sourceWorkspace;
+  // Once review clears, the same invocation's producer may project only its target.
+  // Its validated retained review still binds Source; a supplied Source must match.
+  const source = target.sourceWorkspace ?? (!current.setupReview ? original.sourceWorkspace : undefined);
   return current.operationId === retained.operationId && current.actionId === retained.actionId
     && current.scope.accountId === scope.accountId && current.scope.machineId === retained.scope.machineId
     && target.serverId === scope.serverId && target.machineId === current.scope.machineId

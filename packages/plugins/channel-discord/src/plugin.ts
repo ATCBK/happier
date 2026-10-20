@@ -79,6 +79,7 @@ const DISCORD_GATEWAY_WORKER_ATTEMPT_INPUT_SCHEMA = {
 
 type DiscordGatewayActivationBindings = Readonly<{
   run: DiscordGatewaySupervisor['run'];
+  invalidateConnections(): void;
   runWorkerAttempt: (
     input: unknown,
     context: Parameters<DiscordGatewaySupervisor['runWorkerAttempt']>[1],
@@ -103,6 +104,9 @@ function createDiscordGatewayActivationBindings(): DiscordGatewayActivationBindi
   };
 
   return Object.freeze({
+    invalidateConnections() {
+      currentSupervisor?.invalidateConnections();
+    },
     async run(context) {
       await requireCurrentSupervisor().run(context);
     },
@@ -342,6 +346,16 @@ function createDiscordPlugin() {
     },
   },
   events: {
+    'connections-invalidated-v1': {
+      declaration: {
+        kind: 'subscription',
+        target: {
+          kind: 'plugin',
+          event: { pluginId: 'happier.channels', localId: 'connections-invalidated-v1' },
+        },
+      },
+      handler: gatewayActivationBindings.invalidateConnections,
+    },
     [DISCORD_AUTOMATION_MESSAGE_EVENT_ID]: {
       declaration: {
         kind: 'event',

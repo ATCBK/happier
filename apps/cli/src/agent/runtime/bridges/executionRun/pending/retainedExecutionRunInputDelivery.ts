@@ -89,7 +89,7 @@ export function createRetainedExecutionRunInputDelivery(
         controller.sidechainStreamKey = '';
     };
     const unsubscribeRuntimeEvents = controller.backend.subscribeRuntimeEvents?.((event) => {
-        if (controller.cancelled) return;
+        if (controller.cancelled || controller.delegatedTurn) return;
         if (event.kind === 'input-accepted') {
             projectExecutionRunWorkflowInputAcceptance(controller, runId, event);
             const previous = controller.currentInputTurn;
@@ -148,12 +148,15 @@ export function createRetainedExecutionRunInputDelivery(
     let contextInputLocalId: string | null = null;
 
     const readProviderEffectRefusal = async (): Promise<ExecutionRunRuntimeDeliveryOutcome | null> => {
-        const authorized = await options.authorizeProviderEffect();
-        return authorized.ok ? null : {
+        const authorized = controller.delegatedTurn
+            ? { ok: false, errorCode: 'execution_run_busy', error: 'Run is busy' }
+            : await options.authorizeProviderEffect();
+        const delegated = Boolean(controller.delegatedTurn);
+        return authorized.ok && !delegated ? null : {
             status: 'rejected_before_effect',
             reason: 'provider_unavailable_before_acceptance',
             diagnostic: {
-                code: authorized.errorCode ?? 'execution_run_provider_effect_unauthorized',
+                code: delegated ? 'execution_run_busy' : authorized.errorCode ?? 'execution_run_provider_effect_unauthorized',
                 message: authorized.error ?? `Execution run '${runId}' may not produce a provider effect.`,
                 severity: 'error',
             },

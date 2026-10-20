@@ -10,6 +10,7 @@ import {
   sealSessionOwnerMetadataEnvelopeV1,
   signExternalActionApprovalInputV1,
   ApprovalRequestV2Schema,
+  AccountProfileSchema,
   ApprovalExecutionOriginV1Schema,
   ExternalActionExecutionAuthorizationV1Schema,
   type ApprovalExecutionOriginV1,
@@ -42,6 +43,23 @@ const origin: ApprovalExecutionOriginV1 = {
 };
 
 describe('daemon approval execution-origin currentness', () => {
+  it.each([
+    ['account_changed', { accountId: 'other-account' }],
+    ['home_changed', { serverIdentityId: 'other-home' }],
+    ['machine_changed', { machineId: 'other-machine' }],
+  ] as const)('names the refusing %s fact without disclosing origin values', async (reason, changed) => {
+    const currentness = createDaemonApprovalExecutionOriginCurrentness({
+      accountId: 'account-1', machineId: 'machine-1', serverId: 'profile',
+      resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'home-1', machineId: 'machine-1' }),
+      resolveTarget: async () => ({ kind: 'machine', machineId: 'machine-1' }),
+      isAccountCurrent: async () => true, listAccountApiTokens: async () => ({ tokens: [] }),
+    });
+    const reasons: string[] = [];
+    expect(await currentness({ origin: { v: 1, surface: 'ui', authority: 'present_user', caller: { kind: 'host' },
+      actionId: 'session.spawn_new', requestId: 'request', serverId: 'profile', serverIdentityId: 'home-1',
+      accountId: 'account-1', machineId: 'machine-1', ...changed }, reportStale: value => reasons.push(value) })).toBe(false);
+    expect(reasons).toEqual([reason]);
+  });
   it.each((['ui', 'session', 'external'] as const).flatMap(kind => [
     { kind, widening: false }, { kind, widening: true },
   ]))('executes only an admitted signed $kind narrowed process subset (widening: $widening)', async ({ kind, widening }) => {
@@ -83,7 +101,7 @@ describe('daemon approval execution-origin currentness', () => {
       approval: { flow: 'deferred', result: 'required' } });
     const originIsCurrent = createDaemonApprovalExecutionOriginCurrentness({ accountId: 'account-1', machineId: 'machine-1', serverId: 'profile',
       resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'home-1', machineId: 'machine-1' }),
-      resolveTarget: async () => target, listAccountApiTokens: async () => ({ tokens: [] }),
+      resolveTarget: async () => target, isAccountCurrent: async () => true, listAccountApiTokens: async () => ({ tokens: [] }),
       externalActionMachinePublicKey: keys.publicKey,
       // Home authorization/Session permission reads and the native driver are external boundaries;
       // signature verification, catalog, decision transition and Action replay all remain real.
@@ -147,7 +165,7 @@ describe('daemon approval execution-origin currentness', () => {
     // input and replay origin owner are exercised directly, without a PAT.
     const check = createDaemonApprovalExecutionOriginCurrentness({ accountId: 'account-1', machineId: 'machine-1', serverId: 'profile',
       resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'home-1', machineId: 'machine-1' }),
-      resolveTarget: async () => target, listAccountApiTokens: async () => { throw new Error('Unexpected PAT lookup'); },
+      resolveTarget: async () => target, isAccountCurrent: async () => true, listAccountApiTokens: async () => { throw new Error('Unexpected PAT lookup'); },
       externalActionMachinePublicKey: keys.publicKey, verifyExternalExecutionAuthorization: async () => current,
     });
     expect(await check({ origin: accountOrigin, request })).toBe(true);
@@ -170,6 +188,7 @@ describe('daemon approval execution-origin currentness', () => {
     // Only the HTTP boundaries are replaced. Identity, Account currentness,
     // Session transport, envelope opening and permission policy remain real.
     const get = vi.spyOn(axios, 'get').mockImplementation(async (url) => {
+      if (String(url).endsWith('/v1/account/profile')) return { status: 200, data: AccountProfileSchema.parse({ id: 'account-1' }) };
       if (String(url).endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
         mode: 'e2ee', version: 1, signingKeyFingerprint: 'a'.repeat(64), contentKeyFingerprint: 'b'.repeat(64), updatedAt: 1 } };
       if (String(url).includes('/v2/sessions/')) return { status: 200, data: { session: rawSession } };
@@ -195,6 +214,13 @@ describe('daemon approval execution-origin currentness', () => {
         caller: { kind: 'session', sessionId, starterDepth: 0, turnDepth: 0 }, serverId: 'home-1', accountId: 'account-1', machineId: 'machine-1',
         actionId: 'workflow.trigger.add', requestId: 'private-permission-request', callerPermissionMode: 'default' };
       await expect(check!({ origin: sessionOrigin })).resolves.toBe(true);
+      const retiredDecisionRequesterCheck = createDaemonApprovalExecutionOriginCurrentnessFromCredentials({ credentials,
+        serverApiUrl, machineId: 'machine-1', serverId: 'home-1', isSessionCallerCurrent: () => true,
+        ...{ isRequesterCurrent: async () => false },
+      });
+      // The reviewer invocation only supplies decision custody. Its lifetime is
+      // independent of the immutable approval origin being revalidated here.
+      await expect(retiredDecisionRequesterCheck!({ origin: sessionOrigin })).resolves.toBe(true);
       const target = { kind: 'session' as const, sessionId };
       const resolveTarget = createDaemonExternalActionTargetResolver({ credentials, serverApiUrl });
       await expect(resolveTarget({ actionId: 'session.open', target, currentMachineId: 'machine-1' })).resolves.toEqual(target);
@@ -220,6 +246,7 @@ describe('daemon approval execution-origin currentness', () => {
       accountId: 'account-1', machineId: 'machine-1', serverId: 'home-1',
       resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId: 'home-1', machineId: 'machine-1' }),
       resolveTarget: async () => origin.target ?? null,
+      isAccountCurrent: async () => true,
       listAccountApiTokens: async () => ({ tokens: [] }),
       resolveCurrentPermissionMode: async () => currentMode,
     };
@@ -249,6 +276,7 @@ describe('daemon approval execution-origin currentness', () => {
       serverId: 'home-1',
       resolveCurrentMachineExecutionOriginContext,
       resolveTarget: async () => origin.target ?? null,
+      isAccountCurrent: async () => true,
       listAccountApiTokens: async () => ({
         tokens: [{
           tokenId: origin.credentialId!,
@@ -330,6 +358,7 @@ describe('daemon approval execution-origin currentness', () => {
       serverId: 'current-device-profile-id',
       resolveCurrentMachineExecutionOriginContext,
       resolveTarget: async () => origin.target ?? null,
+      isAccountCurrent: async () => true,
       listAccountApiTokens: async () => ({ tokens: [{
         tokenId: authorization.binding.credentialId,
         label: 'automation',
@@ -417,6 +446,7 @@ describe('daemon approval execution-origin currentness', () => {
       serverId: 'home-1',
       resolveCurrentMachineExecutionOriginContext,
       resolveTarget,
+      isAccountCurrent: async () => true,
       listAccountApiTokens,
       externalActionMachinePublicKey: keyPair.publicKey,
       verifyExternalExecutionAuthorization,
@@ -522,6 +552,7 @@ describe('daemon approval execution-origin currentness', () => {
         serverIdentityId: 'home-1', machineId: 'machine-1',
       }),
       resolveTarget: async () => target,
+      isAccountCurrent: async () => true,
       listAccountApiTokens: async () => ({ tokens: [{
         tokenId: authorization.binding.credentialId,
         label: 'automation',
@@ -590,6 +621,7 @@ describe('daemon approval execution-origin currentness', () => {
       serverId: 'home-1',
       resolveCurrentMachineExecutionOriginContext,
       resolveTarget,
+      isAccountCurrent: async () => true,
       listAccountApiTokens,
     });
 
@@ -625,6 +657,7 @@ describe('daemon approval execution-origin currentness', () => {
         serverIdentityId: 'home-1', machineId: 'machine-1',
       }),
       resolveTarget: async () => ({ kind: 'session', sessionId: 'session-1' }),
+      isAccountCurrent: async () => true,
       listAccountApiTokens,
     });
 
@@ -634,7 +667,8 @@ describe('daemon approval execution-origin currentness', () => {
   });
 
   it('requires an authenticated current Account owner even for a host machine origin without a PAT', async () => {
-    const listAccountApiTokens = vi.fn(async () => ({ tokens: [] }));
+    const isAccountCurrent = vi.fn(async () => true);
+    const listAccountApiTokens = vi.fn(async (): Promise<{ tokens: [] }> => { throw new Error('token_management_denied'); });
     const isCurrent = createDaemonApprovalExecutionOriginCurrentness({
       accountId: 'account-1',
       machineId: 'machine-1',
@@ -643,10 +677,12 @@ describe('daemon approval execution-origin currentness', () => {
         serverIdentityId: 'home-1', machineId: 'machine-1',
       }),
       resolveTarget: async () => ({ kind: 'machine', machineId: 'machine-1' }),
+      isAccountCurrent,
       listAccountApiTokens,
     });
     const hostMachineOrigin: ApprovalExecutionOriginV1 = {
       ...origin,
+      surface: 'ui', authority: 'present_user',
       principalId: undefined,
       credentialId: undefined,
       sessionId: undefined,
@@ -655,7 +691,10 @@ describe('daemon approval execution-origin currentness', () => {
     };
 
     await expect(isCurrent({ origin: hostMachineOrigin })).resolves.toBe(true);
-    listAccountApiTokens.mockRejectedValueOnce(new Error('account_disabled'));
+    expect(listAccountApiTokens).not.toHaveBeenCalled();
+    isAccountCurrent.mockResolvedValueOnce(false);
+    await expect(isCurrent({ origin: hostMachineOrigin })).resolves.toBe(false);
+    isAccountCurrent.mockRejectedValueOnce(new Error('account_disabled'));
     await expect(isCurrent({ origin: hostMachineOrigin })).resolves.toBe(false);
   });
 
@@ -672,6 +711,7 @@ describe('daemon approval execution-origin currentness', () => {
         serverIdentityId: 'home-1', machineId: 'machine-1',
       }),
       resolveTarget: async () => ({ kind: 'machine', machineId: 'machine-1' }),
+      isAccountCurrent: async () => true,
       listAccountApiTokens: async () => ({ tokens: [] }),
       resolveCurrentPluginSourceCustody,
     });
@@ -714,6 +754,7 @@ describe('daemon approval execution-origin currentness', () => {
         serverIdentityId: 'home-1', machineId: 'machine-1',
       }),
       resolveTarget: async () => ({ kind: 'machine', machineId: 'machine-1' }),
+      isAccountCurrent: async () => true,
       listAccountApiTokens: async () => ({ tokens: [] }),
       ...additionalOwners,
     });
@@ -781,6 +822,7 @@ describe('daemon approval execution-origin currentness', () => {
         serverIdentityId: 'home-1', machineId: 'machine-1',
       }),
       resolveTarget: async () => ({ kind: 'machine' as const, machineId: 'machine-1' }),
+      isAccountCurrent: async () => true,
       listAccountApiTokens: async () => ({ tokens: [] }),
     };
 
@@ -812,6 +854,7 @@ describe('daemon approval execution-origin currentness', () => {
         serverIdentityId: 'home-1', machineId: 'machine-1',
       }),
       resolveTarget: async () => ({ kind: 'session', sessionId: 'session-1' }),
+      isAccountCurrent: async () => true,
       listAccountApiTokens: async () => ({ tokens: [] }),
       ...additionalOwners,
     });
@@ -861,6 +904,7 @@ describe('daemon approval execution-origin currentness', () => {
         serverIdentityId: 'home-1', machineId: 'machine-1',
       }),
       resolveTarget: async () => ({ kind: 'session', sessionId: 'session-1' }),
+      isAccountCurrent: async () => true,
       listAccountApiTokens: async () => ({ tokens: [] }),
       resolveCurrentSessionAgentSpawnPolicyV1,
     });

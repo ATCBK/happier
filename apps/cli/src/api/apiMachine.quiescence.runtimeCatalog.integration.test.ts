@@ -252,6 +252,19 @@ describe('ApiMachineClient daemon quiescence admission', () => {
         });
     });
 
+    it('carries exact answering-client routing and its answering address through the Machine socket', async () => {
+        const socket = createApiSessionSocketStub({ connected: true, emitWithAck: (_event, payload) => {
+            expect(payload).toMatchObject({ method: `machine-plain-1:answering-client.v1/${RPC_METHODS.UI_ACTION_EXECUTE}`,
+                answeringClient: { clientId: 'app-b', requireSingle: true }, params: { hello: 'ui' } });
+            return { ok: true, result: { status: 'applied' }, answeringClientId: 'app-b' };
+        } });
+        const client = new ApiMachineClient('token', createPlainMachine());
+        Reflect.set(client, 'socket', socket);
+        expect(await client.callConnectedClientRpc(RPC_METHODS.UI_ACTION_EXECUTE, { hello: 'ui' },
+            { answeringClient: { clientId: 'app-b', requireSingle: true } }))
+            .toEqual({ ok: true, result: { status: 'applied' }, answeringClientId: 'app-b' });
+    });
+
     it('forwards invoking cancellation to the issued connected-client RPC', async () => {
         let issued!: () => void;
         const sent = new Promise<void>(resolve => { issued = resolve; });

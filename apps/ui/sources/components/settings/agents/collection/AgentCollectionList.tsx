@@ -21,6 +21,8 @@ import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { StatusPill } from '@/components/ui/status/StatusPill';
 import { useMachineAgent, useMachineAgents } from '@/agents/machineAgents/useMachineAgents';
 import { useMachineAgentRowActions } from '@/components/machines/agents/useMachineAgentRowActions';
+import { formatMachineAgentAction } from '@/components/machines/agents/machineAgentCopy';
+import { resolveMachineAgentRowAction } from '@/components/machines/agents/machineAgentPresentation';
 import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
@@ -30,7 +32,7 @@ import { useSetting } from '@/sync/domains/state/storage';
 import { openAgentAddModal } from '../add/agentAddModalConfig';
 import { buildAgentCollection, isCommandAgentDefinition, resolveSelectedAgentCollectionId, type AgentCollectionRow } from './agentCollectionModel';
 import { recordAgentCollectionVisit } from './agentCollectionVisit';
-import { customAcpDraftTitle } from './customAcpDraftTitle';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 import { useAgentAdministrationCatalog, type AgentAdministrationCatalog } from './useAgentAdministrationCatalog';
 import { useAgentAuthoringEntry } from '../authoring/useAgentAuthoringEntry';
 import { CollectionDraftRow, CollectionList, CollectionListGroupLabel, collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
@@ -63,7 +65,7 @@ function resolveRowStatusLabel(row: AgentCollectionRow): string | undefined {
         }
         case 'installing': return t('machineAgents.installing');
         case 'failed': return t('agentInstallJob.failed');
-        case 'unsupported': return t('machineAgents.unsupportedOs');
+        case 'unsupported': return t('machineAgents.unsupported');
         case 'checking': return t('machineAgents.checking');
         case 'installsOnFirstUse': return t('capabilities.agentAdd.adding.firstUse');
         case 'unknown': return undefined;
@@ -416,6 +418,7 @@ export const AgentCollectionList = React.memo(function AgentCollectionList(props
 
 /** The new ACP agent being written in the detail pane, titled as it is typed. */
 const CustomAcpDraftRow = React.memo(function CustomAcpDraftRow() {
+    const customAcpDraftTitle = useCollectionDraftTitle();
     return (
         <CollectionDraftRow
             testID="settings-agents-collection.customDraft"
@@ -450,17 +453,19 @@ const AgentRowInstallAction = React.memo(function AgentRowInstallAction(props: R
         machineName: props.machineName,
         onOpenForm: props.onOpen,
     });
-    const available = Boolean(agent && props.machineId && props.serverId && agent.install.available);
+    // The row offers what the Agent's own setup phase offers (install, or the vendor's guide when it is
+    // installed by hand). With nothing to do yet (checking, offline) the button keeps its place, disabled.
+    const action = agent && props.machineId && props.serverId ? resolveMachineAgentRowAction(agent) : null;
     return (
         <RoundButton
             testID={`settings-agents-collection.install.${props.entry.agentId}`}
             size="small"
             display="secondary"
-            title={t('settingsAgents.collection.install')}
-            accessibilityLabel={t('machineAgents.installAgent', { agent: props.entry.title })}
-            disabled={!available}
+            title={action?.kind === 'guide' ? formatMachineAgentAction(action) : t('settingsAgents.collection.install')}
+            {...(action?.kind === 'guide' ? {} : { accessibilityLabel: t('machineAgents.installAgent', { agent: props.entry.title }) })}
+            disabled={action === null}
             loading={agent?.state === 'installing'}
-            onPress={() => { if (agent) runAction(agent, agent.install.available ? { kind: 'install' } : { kind: 'signIn' }); }}
+            onPress={() => { if (agent && action) runAction(agent, action); }}
         />
     );
 });

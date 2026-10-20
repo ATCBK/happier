@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 export const WORKSPACE_TRANSFER_STAGING_ROOT_PREFIX = 'workspace-transfer-staging-';
@@ -15,11 +15,11 @@ export type WorkspaceStagingRoot = Readonly<{
     markerFilePath: string;
 }>;
 
-export const WorkspaceStagingRootMarkerSchema = z.object({
+export const WorkspaceStagingRootMarkerSchema = z.strictObject({
     schemaVersion: z.literal(1),
-    stagingId: z.string().min(1),
-    rootDirectory: z.string().min(1),
-}).strict();
+    stagingId: z.string().check(z.minLength(1)),
+    rootDirectory: z.string().check(z.minLength(1)),
+});
 export type WorkspaceStagingRootMarker = z.infer<typeof WorkspaceStagingRootMarkerSchema>;
 const StoredWorkspaceStagingRootMarkerSchema = createStoredReadSchema(WorkspaceStagingRootMarkerSchema);
 

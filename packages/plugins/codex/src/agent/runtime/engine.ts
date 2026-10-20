@@ -2,22 +2,19 @@ import type {
   AgentRuntime,
   AgentRuntimeFactory,
   AgentExecutionRunOpenRequest,
+  AgentExecutionRunConversationRuntimeV1,
   AgentExecutionRunRuntime,
   AgentExecutionRunRuntimeContextV1,
   AgentSessionOpenRequest,
   AgentSessionRuntime,
   AgentSessionRuntimeContext,
   AgentSessionRuntimeFactory,
-  AgentTerminalSurface,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { createExecutionRunHostBackendFromConversationRuntime } from '@happier-dev/plugin-sdk/agents/runtime';
 import { PluginError } from '@happier-dev/plugin-sdk';
 
 import { buildCodexNativeAcpRuntimeOptions } from '../acp/backend.js';
 import { resolveCanonicalCodexBackendModeFromCompatInput } from '../lifecycle/backendMode.js';
-import { readCanonicalCodexAgentRuntimeDescriptorV1 } from '../../protocol/runtimeDescriptorV1.js';
-import { buildCodexTerminalArgs } from './terminal/invocation.js';
-import { resolveCodexTerminalPermissionPolicy } from './terminal/permissionPolicy.js';
 import {
   openCodexNativeAppServerExecutionRunConversation,
   openCodexNativeAppServerSession,
@@ -85,6 +82,22 @@ async function openCodexExecutionRun(
   });
 }
 
+async function openCodexExecutionRunConversation(
+  request: AgentExecutionRunOpenRequest,
+  context: AgentExecutionRunRuntimeContextV1,
+): Promise<AgentExecutionRunConversationRuntimeV1> {
+  if (readCodexBackendMode(request) === 'acp') {
+    if (!context.protocols.acp.openExecutionRunConversationV1) {
+      throw new PluginError({ code: 'execution_run_protocol_unsupported',
+        message: 'This host does not support retained detached ACP conversations.' });
+    }
+    return await context.protocols.acp.openExecutionRunConversationV1(
+      request, buildCodexNativeAcpRuntimeOptions(request),
+    );
+  }
+  return await openCodexNativeAppServerExecutionRunConversation(request, context);
+}
+
 function requestHasStartupInstructions(request: AgentSessionOpenRequest): boolean {
   return 'startupInstructions' in request && request.startupInstructions !== undefined;
 }
@@ -136,36 +149,6 @@ async function openCodexSession(
   };
 }
 
-function createCodexNativeTerminalSurface(): AgentTerminalSurface {
-  return {
-    resolveLaunch(request) {
-      if (request.configuration?.unlistedTools === 'deny') {
-        throw new PluginError({
-          code: 'codex_tool_restriction_unsupported_transport',
-          message: 'Codex terminal launch cannot retain the host-filtered MCP tool catalog. Continue in the remote session.',
-        });
-      }
-      const runtimeDescriptor = request.metadata.runtimeDescriptorV1
-        ? readCanonicalCodexAgentRuntimeDescriptorV1(request.metadata.runtimeDescriptorV1)
-        : null;
-      const permissionMode = request.configuration?.permissionIntent.value ?? 'default';
-      return {
-        argv: buildCodexTerminalArgs({
-          cwd: request.cwd,
-          resumeId: runtimeDescriptor?.providerSessionId,
-          permissionMode: request.configuration?.workspaceWrites === 'deny' ? 'read-only' : permissionMode,
-          resolvePermissionPolicy: (mode) => resolveCodexTerminalPermissionPolicy(mode, request.configuration?.workspaceWrites),
-        }),
-        process: { stdio: 'inherit', windowsHide: true },
-        presentation: {
-          onLaunch: { target: 'local', reason: 'codex_terminal_runtime_launcher_start' },
-          onExit: { target: 'remote', reason: 'codex_terminal_runtime_launcher_exit' },
-        },
-      };
-    },
-  };
-}
-
 export const createCodexAgentRuntime: AgentRuntimeFactory = () => {
   const goalProjection = createCodexGoalProjection();
   const controls = createCodexNativeSessionControls(goalProjection);
@@ -192,10 +175,10 @@ export const createCodexAgentRuntime: AgentRuntimeFactory = () => {
       open: async (request, context) => await openCodexSession(request, context, goalProjection),
       executionRunContextV1: {
         open: async (request, context) => await openCodexExecutionRun(request, context),
+        openConversation: openCodexExecutionRunConversation,
       },
     },
     surfaces: {
-      terminal: createCodexNativeTerminalSurface(),
       handoff: codexHandoffSurface,
     },
   } satisfies AgentRuntime;

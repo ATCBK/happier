@@ -140,6 +140,7 @@ describe('Discord Channel plugin activation', () => {
         { family: 'actions', localId: DISCORD_CHANNEL_ACTION_IDS.messageDeliver },
         { family: 'actions', localId: DISCORD_CHANNEL_ACTION_IDS.connectionStop },
         { family: 'backgroundServices', localId: DISCORD_GATEWAY_BACKGROUND_SERVICE_ID },
+        { family: 'events', localId: 'connections-invalidated-v1' },
         { family: 'connectedAccountDescriptors', localId: DISCORD_BOT_CONNECTED_ACCOUNT_ID },
       ]);
 

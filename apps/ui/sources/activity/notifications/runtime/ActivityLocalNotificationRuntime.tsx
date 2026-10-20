@@ -7,8 +7,11 @@ import { isPushNotificationBundledSoundId, resolveExpoNotificationSoundName, res
 import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
 import { resolveActivityRequestEventIdentityV1, resolveActivitySequenceEventIdentityV1, resolveActivityTranscriptLocalIdEventIdentityV1, resolveActivityTurnEventIdentityV1 } from '@happier-dev/protocol/activity/eventIdentity';
 import { resolveSessionPersonalEventEligibilityV1 } from '@happier-dev/protocol/sessions/personal/eventEligibility';
+import { resolveEffectiveAccountFollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import { resolveActivityAttentionDeliveryPlan } from '@/activity/delivery/resolveActivityAttentionDeliveryPlan';
 import { useExactHomeAccountSettings } from '@/activity/delivery/useExactHomeAccountSettings';
+import { readAccountSessionDeliveryMutedScopes } from '@/sync/api/session/sessionFollowApi';
+import { isFollowDeliveryMutedV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
 import type { ActivityAttentionDeliveryEventKind } from '@/activity/delivery/activityAttentionDeliveryPlanTypes';
 import { localSettingsParse, type LocalSettings } from '@/sync/domains/settings/localSettings';
 import { isDesktopMainWindowFocused } from '@/desktop/window/desktopMainWindowPresence';
@@ -42,6 +45,8 @@ import { sendExpoLocalNotification } from '../channels/sendExpoLocalNotification
 import { sendTauriLocalNotification } from '../channels/sendTauriLocalNotification';
 import { GuardStopWarningDesktopBanners } from './GuardStopWarningDesktopBanners';
 import { isActivityLocalNotificationMutedForWake, subscribeActivityLocalNotifications, type ActivityLocalNotificationEvent } from './activityLocalNotificationBus';
+import { isSessionFollowStalledOccurrenceCurrentV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceOccurrenceV1';
+import { resolveActivityStalledEventIdentityV1 } from '@happier-dev/protocol/activity/eventIdentity';
 
 function resolveLocalNotificationEventKind(event: ActivityLocalNotificationEvent): ActivityAttentionDeliveryEventKind {
     if (event.kind === 'ready') return 'ready';
@@ -50,6 +55,8 @@ function resolveLocalNotificationEventKind(event: ActivityLocalNotificationEvent
 }
 
 function resolveLocalNotificationEventIdentity(event: ActivityLocalNotificationEvent): string | undefined {
+    if (event.kind === 'session-update' && event.event === 'source_unavailable' && event.stalledOccurrence)
+        return resolveActivityStalledEventIdentityV1(event.stalledOccurrence);
     if (event.kind === 'agent-request') return resolveActivityRequestEventIdentityV1(event.requestId);
     if (event.kind === 'session-update' && 'turnId' in event) return resolveActivityTurnEventIdentityV1(event.turnId);
     return 'committedSequence' in event && event.committedSequence
@@ -130,9 +137,18 @@ export function ActivityLocalNotificationRuntime(): React.ReactElement | null {
     }, []);
 
     React.useEffect(() => {
-        return subscribeActivityLocalNotifications((event) => {
+        const controller = new AbortController();
+        const notify = async (event: ActivityLocalNotificationEvent) => {
+            // Capture the reconciliation decision while its owning scope is
+            // active, before the asynchronous Account mute read can outlive it.
             if (event.kind === 'ready' && event.source === 'reconciliation'
                 && isActivityLocalNotificationMutedForWake(event.address)) return;
+            const scope = audienceSource.audienceScopes?.get(event.address.serverId);
+            if (!scope) return;
+            const scopes = await readAccountSessionDeliveryMutedScopes(scope, controller.signal);
+            if (controller.signal.aborted || scopes === null || isFollowDeliveryMutedV1(scopes, {
+                senderSessionId: event.address.sessionId, source: { kind: 'session', sessionId: event.address.sessionId },
+            })) return;
             const state = storage.getState();
             const directSession = state.sessions[event.address.sessionId];
             const directServerId = typeof directSession?.serverId === 'string' ? directSession.serverId.trim() : '';
@@ -145,6 +161,9 @@ export function ActivityLocalNotificationRuntime(): React.ReactElement | null {
                 ? buildSessionFromListRenderable(scopedRow.session, { serverId: event.address.serverId })
                 : null);
             if (!session) return;
+            const stalledOccurrence = event.kind === 'session-update' && event.event === 'source_unavailable'
+                ? event.stalledOccurrence : undefined;
+            if (stalledOccurrence && !isSessionFollowStalledOccurrenceCurrentV1(stalledOccurrence, session)) return;
             if (event.kind === 'session-update' && event.event === 'human_message'
                 && event.sourceAccountId === audienceSource.audienceScopes?.get(event.address.serverId)?.accountId) return;
             const viewer = session.viewer;
@@ -159,6 +178,8 @@ export function ActivityLocalNotificationRuntime(): React.ReactElement | null {
                 access: session.access,
                 active: session.active,
             });
+            const followEvent = stalledOccurrence ? { kind: 'stalled' as const }
+                : event.kind === 'session-update' && event.event === 'message' ? event.followEvent : undefined;
             const eligibility = resolveSessionPersonalEventEligibilityV1({
                 event: event.event,
                 isSessionOwner,
@@ -171,6 +192,7 @@ export function ActivityLocalNotificationRuntime(): React.ReactElement | null {
                 responsible: viewer?.relevance.reasons.includes('responsible_for_me') === true,
                 targeted: false,
                 followFacts: viewer ? viewer.follow : { follows: false, notificationLevel: null },
+                followEvent,
                 capabilities: {
                     canSubmitAgentInput: interaction.canSendMessages,
                     canApprovePermissions: interaction.canApprovePermissions,
@@ -179,6 +201,9 @@ export function ActivityLocalNotificationRuntime(): React.ReactElement | null {
             if (!eligibility.eligible) return;
             const accountSettings = resolveAccountSettings(event.address.serverId);
             if (!accountSettings) return;
+            const followPolicy = followEvent ? resolveEffectiveAccountFollowPolicyV1({
+                facts: viewer?.follow ?? { follows: false, notificationLevel: null }, isSessionOwner,
+            }) : null;
             const deliveryPlan = resolveActivityAttentionDeliveryPlan({
                 accountSettings,
                 localSettings,
@@ -186,6 +211,7 @@ export function ActivityLocalNotificationRuntime(): React.ReactElement | null {
                 channel: 'local_notification',
                 sameSessionVisible: isSessionActivelyViewedForLocalNotification(event),
                 now: new Date(),
+                ...(followEvent ? { follow: { event: followEvent, policies: followPolicy ? [followPolicy] : [] } } : {}),
             });
             if (deliveryPlan.delivery === 'suppress') {
                 return;
@@ -289,7 +315,11 @@ export function ActivityLocalNotificationRuntime(): React.ReactElement | null {
             fireAndForget(submission, {
                 tag: 'ActivityLocalNotificationRuntime.sendExpoLocalNotification',
             });
+        };
+        const unsubscribe = subscribeActivityLocalNotifications(event => {
+            fireAndForget(notify(event), { tag: 'ActivityLocalNotificationRuntime.admitNotification' });
         });
+        return () => { controller.abort(); unsubscribe(); };
     }, [
         localSettings,
         resolveAccountSettings,

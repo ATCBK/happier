@@ -1,936 +1,337 @@
-import React from 'react';
+import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-    flushHookEffects,
-    renderScreen,
-    standardCleanup,
-} from '@/dev/testkit';
-import { installNewPickRouteCommonModuleMocks } from './newPickRouteTestHelpers';
-import { createUseSettingMutableMockFromReader } from '@/dev/testkit/mocks/storage';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+const navigation = vi.hoisted(() => ({ dispatch: vi.fn(), back: vi.fn(), replace: vi.fn(),
+    params: {} as Record<string, string | undefined> }));
 
-const navigationDispatchSpy = vi.hoisted(() => vi.fn());
-const routerBackSpy = vi.hoisted(() => vi.fn());
-const routerReplaceSpy = vi.hoisted(() => vi.fn());
-const setActiveServerAndSwitchSpy = vi.hoisted(() => vi.fn(async (_params: any) => false));
-const refreshMachinesThrottledSpy = vi.hoisted(() => vi.fn(async () => {}));
-const prefetchMachineCapabilitiesSpy = vi.hoisted(() => vi.fn(async () => {}));
-const resolveMachinePoolSpy = vi.hoisted(() => vi.fn(async () => ({
-    kind: 'resolved' as const,
-    poolId: '3a948f0c-bc30-491c-b764-37f0e6744d1f',
-    machineId: 'machine-1',
-    priorityTier: 0,
-})));
-const refreshMachinePoolsSpy = vi.hoisted(() => vi.fn(async () => []));
-const storeTempDataSpy = vi.hoisted(() => vi.fn(() => 'temporary-target-data'));
-const temporaryComputerAvailabilityState = vi.hoisted(() => ({
-    value: { status: 'unavailable', reason: 'artifact_unavailable', retry: vi.fn() } as any,
-    inputs: [] as Array<Record<string, unknown>>,
-}));
-const machinePoolLists = vi.hoisted(() => ({
-    byServerId: {} as Record<string, any[] | null>,
-    statusByServerId: { 'server-b': 'error' } as Record<string, 'idle' | 'loading' | 'signedOut' | 'error'>,
-}));
-const activeServerListeners = vi.hoisted(() => new Set<(snapshot: {
-    serverId: string;
-    serverUrl: string;
-    generation: number;
-}) => void>());
-const activeServerSnapshotState = vi.hoisted(() => ({
-    serverId: 'server-a',
-    serverUrl: 'https://stack-a.example.test',
-    generation: 1,
-}));
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+vi.mock('react-native-reanimated', async () =>
+    (await import('@/dev/testkit/mocks/reanimated')).createReanimatedModuleMock());
+vi.mock('react-native', async () =>
+    (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () =>
+    (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@expo/vector-icons', async () =>
+    (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
+vi.mock('@/text', async () =>
+    (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
+vi.mock('expo-router', async () =>
+    (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
+        pathname: '/new/pick/machine', params: () => navigation.params,
+        navigation: { dispatch: navigation.dispatch, getState: () => ({ index: 1, routes: [
+            { key: 'new-route', name: '(app)/new/index', path: '/new', params: {} },
+            { key: 'current-route', name: '(app)/new/pick/machine', path: '/new/pick/machine' },
+        ] }) },
+        router: { back: navigation.back, replace: navigation.replace, canGoBack: () => true },
+    }).module);
 
-const state = vi.hoisted(() => ({
-    localSearchParams: {
-        selectedId: 'machine-1',
-        spawnServerId: 'server-b',
-    } as {
-        selectedId?: string;
-        spawnServerId?: string;
-    },
-    settings: {
-        serverSelectionGroups: [] as Array<{ id: string; name: string; serverIds: string[]; presentation?: 'grouped' | 'flat-with-badge' }>,
-        serverSelectionActiveTargetKind: 'server' as 'server' | 'group' | null,
-        serverSelectionActiveTargetId: 'server-b' as string | null,
-    },
-}));
+import { MachinePoolListOutputV1Schema, MachinePoolResolveResultV1Schema, MachinePoolViewV1Schema } from '@happier-dev/protocol/machines/pools/v1';
+import { machinePoolActionEndpointPathV1 } from '@happier-dev/protocol/machines/pools/actionsV1';
+import { RunnerArtifactAvailabilityProjectionV1Schema } from '@happier-dev/protocol/ephemeralRunner/runnerArtifact';
+import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
+import { EPHEMERAL_RUNNER_ARTIFACTS_PATH_V1, EPHEMERAL_RUNNER_ACTIVATIONS_PATH_V1 } from '@happier-dev/protocol/ephemeralRunner/routes';
+import { createDeferred, createMachineFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createProviderSettingsAccountHarness, createProviderSettingsHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
+import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
+import type { Machine } from '@/sync/domains/state/storageTypes';
 
-let activeServerId = 'server-a';
-const scopedMachinesState = vi.hoisted(() => ({
-    groups: [
-        {
-            serverId: 'server-b',
-            serverName: 'Server B',
-            loading: false,
-            signedOut: false,
-            machines: [
-                {
-                    id: 'machine-1',
-                    serverId: 'server-b',
-                    metadata: { host: 'host-1', displayName: 'Machine 1', homeDir: '/home/me' },
-                    active: true,
-                    createdAt: 1,
-                    updatedAt: 1,
-                    activeAt: Date.now(),
-                    seq: 1,
-                    metadataVersion: 1,
-                    daemonState: null,
-                    daemonStateVersion: 0,
-                },
-            ],
-        },
-    ] as any[],
-}));
-const serverScopedMachineOptionsCalls = vi.hoisted(() => [] as Array<Readonly<{
-    allowedServerIds: readonly string[];
-}>>);
+const account = createProviderSettingsAccountHarness();
+const daemon = createProviderSettingsHarness();
+installProviderSettingsRpcBoundary(daemon);
+await loadSyncSingletonForTests();
+const restoreActionLoader = await installRealActionExecutorModuleLoader();
+const profiles = await import('@/sync/domains/server/serverProfiles');
+const { updateEffectiveHomeViewState } = await import('@/sync/domains/server/selection/homeViewSelectionState');
+const { NewSessionMachineSelectionContent } = await import('@/components/sessions/new/components/NewSessionMachineSelectionContent');
+const Screen = (await import('@/app/(app)/new/pick/machine')).default;
+const { sync } = await import('@/sync/sync');
+const { resetMachinePoolSyncRuntimeForTests } = await import('@/sync/engine/machines/machinePoolSyncRuntime');
+type ContentProps = React.ComponentProps<typeof NewSessionMachineSelectionContent>;
 
-let capturedMachineSelectionContentProps: any = null;
+const pool = MachinePoolViewV1Schema.parse({ pool: { id: '3a948f0c-bc30-491c-b764-37f0e6744d1f', name: 'Development',
+    description: null, revision: 1, createdAt: 1, updatedAt: 1, members: [] },
+    availability: { state: 'known', connectedCount: 1, enabledCount: 1 } });
+const poolListPath = machinePoolActionEndpointPathV1('machines.pools.list');
+const poolResolvePath = machinePoolActionEndpointPathV1('machines.pools.resolve');
+const artifacts = RunnerArtifactAvailabilityProjectionV1Schema.parse({ status: 'available', artifacts: [{
+    identity: { product: 'happier-runner', version: '1.0.0', target: 'linux-x64', sha256: 'a'.repeat(64) },
+    channel: 'stable', url: 'https://runner.fixture.test/runner.tar.gz',
+    checksumsUrl: 'https://runner.fixture.test/checksums', checksumsSignatureUrl: 'https://runner.fixture.test/checksums.sig',
+    sizeBytes: 1, entries: [{ path: 'happier-runner', kind: 'file', sizeBytes: 1, mode: 0o755 }],
+}] });
+let homeA = '';
+let homeB = '';
+let homeC = '';
+let savedHomeB = '';
+let savedHomeC = '';
+let screen: Awaited<ReturnType<typeof renderScreen>> | null = null;
+let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | undefined;
 
-vi.mock('react-native-reanimated', async () => {
-    const { createReanimatedModuleMock } = await import('@/dev/testkit/mocks/reanimated');
-    return createReanimatedModuleMock();
+function machine(id = 'machine-1', overrides: Partial<Machine> = {}) {
+    return createMachineFixture({ id, active: true, activeAt: Date.now(), metadata: {
+        ...createMachineFixture().metadata!,
+        host: id, displayName: id === 'machine-1' ? 'Machine 1' : id, homeDir: '/home/me', platform: 'darwin',
+    }, ...overrides });
+}
+
+function features(serverId: string, temporary = false) {
+    const response = createRootLayoutFeaturesResponse({ capabilities: { serverIdentity: { serverIdentityId: serverId } } });
+    for (const [id, enabled] of [['machines', true], ['sessions', true], ['sessions.drafts', true],
+        ['sessions.ephemeralRunner', temporary], ['machines.pools', true]] as const) {
+        if (!tryWriteServerEnabledBitInPlace(response, id, enabled)) throw new Error(`Missing fixture feature ${id}`);
+    }
+    return response;
+}
+
+function answerPools(serverId: string, rows = [] as Array<typeof pool>) {
+    account.home.answer(serverId, poolListPath, { body: MachinePoolListOutputV1Schema.parse({ pools: rows }) });
+}
+
+async function view(target: string | null, group?: Readonly<{ id: string; serverIds: string[] }>) {
+    await updateEffectiveHomeViewState(() => ({ version: 1,
+        groups: group ? [{ ...group, name: 'Dev Group', presentation: 'grouped' }] : [],
+        activeTargetKind: group ? 'group' : target ? 'server' : null, activeTargetId: group?.id ?? target,
+    }), { scope: 'device' });
+}
+
+function content(): ContentProps {
+    if (!screen) throw new Error('Picker is not mounted');
+    return screen.findByType(NewSessionMachineSelectionContent).props as ContentProps;
+}
+
+async function renderPicker() {
+    // Keep the actual lazy owner, but let its SDK graph finish loading before
+    // asserting that the destination projection has settled.
+    await import('@/components/sessions/new/components/machineSelection/ManagedMachineSelectionOffers');
+    screen = await renderScreen(<Screen />);
+    await vi.waitFor(() => expect(content().groups?.every(group => !group.loading)).toBe(true));
+    return screen;
+}
+
+function returnedParams() {
+    return navigation.dispatch.mock.calls.map(([action]) => action?.payload?.params as Record<string, unknown>);
+}
+
+function expectExactReturn(machineId: string, serverId = homeB) {
+    expect(navigation.dispatch).toHaveBeenCalledWith(expect.objectContaining({ type: 'SET_PARAMS',
+        payload: { params: expect.objectContaining({ machineId, spawnServerId: serverId }) } }));
+}
+
+beforeEach(async () => {
+    browser = await installBrowserRuntimeForTests({ url: 'https://ui.fixture.test/new/pick/machine' });
+    daemon.reset();
+    navigation.dispatch.mockReset(); navigation.back.mockReset(); navigation.replace.mockReset();
+    screen = null;
+    await account.restore({ serverIdentityId: 'srv_picker_a', currentAccount: true, machines: [], features: features('srv_picker_a'),
+        settings: { useMachinePickerSearch: false, managedMachineCreationEnabled: false } });
+    homeA = profiles.resolveServerProfileScopeIdForIdentifier(account.serverId);
+    savedHomeB = await account.addHome({ name: 'Server B',
+        serverUrl: 'https://stack-b.fixture.test', serverIdentityId: 'srv_picker_b', accountId: 'account-b', currentAccount: true,
+        active: false, features: features('srv_picker_b') });
+    homeB = profiles.resolveServerProfileScopeIdForIdentifier(savedHomeB);
+    savedHomeC = await account.addHome({ name: 'Server C',
+        serverUrl: 'https://stack-c.fixture.test', serverIdentityId: 'srv_picker_c', accountId: 'account-c', currentAccount: true,
+        active: false, features: features('srv_picker_c') });
+    homeC = profiles.resolveServerProfileScopeIdForIdentifier(savedHomeC);
+    for (const savedHome of [savedHomeB, savedHomeC]) {
+        account.home.answer(savedHome, '/v2/account/settings', { body: {
+            content: { t: 'plain', v: { managedMachineCreationEnabled: false } }, version: 1,
+        } });
+    }
+    await account.publishMachines(savedHomeB, [machine()]);
+    for (const home of [account.serverId, savedHomeB, savedHomeC]) answerPools(home);
+    await view(homeB);
+    navigation.params = { selectedId: 'machine-1', spawnServerId: homeB };
 });
 
-installNewPickRouteCommonModuleMocks({
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            Platform: { OS: 'web' },
-        });
-    },
-    unistyles: async () => {
-        const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-        return createUnistylesMock({
-            theme: {
-                colors: {
-                    header: { tint: '#111' },
-                    textSecondary: '#666',
-                    groupped: { background: '#fff' },
-                },
-            },
-        });
-    },
-    router: async () => {
-        const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-        const module = createExpoRouterMock({
-            navigation: {
-                getState: () => ({
-                    index: 1,
-                    routes: [
-                        {
-                            key: 'new-route',
-                            name: '(app)/new/index',
-                            path: '/new',
-                            params: {
-                                machineId: 'machine-1',
-                                spawnServerId: 'server-b',
-                            },
-                        },
-                        {
-                            key: 'current-route',
-                            name: '(app)/new/pick/machine',
-                            path: '/new/pick/machine',
-                        },
-                    ],
-                }),
-                dispatch: navigationDispatchSpy,
-            },
-            router: {
-                push: vi.fn(),
-                back: routerBackSpy,
-                replace: routerReplaceSpy,
-                setParams: vi.fn(),
-            },
-        }).module;
-
-        return {
-            ...module,
-            useLocalSearchParams: () => state.localSearchParams,
-        };
-    },
-    storage: async () => {
-        const { createStorageModuleStub, createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            storage: createStorageStoreMock({
-                setMachinePoolListStatus: vi.fn(),
-            }),
-            useAllMachines: () => ([
-                {
-                    id: 'machine-1',
-                    metadata: {
-                        host: 'host-1',
-                        displayName: 'Machine 1',
-                        homeDir: '/home/me',
-                        platform: 'darwin',
-                        happyCliVersion: '0.0.0-test',
-                        happyHomeDir: '/Users/tester/.happy-dev',
-                    },
-                    active: true,
-                    createdAt: 1,
-                    updatedAt: 1,
-                    activeAt: Date.now(),
-                    seq: 1,
-                    metadataVersion: 1,
-                    daemonState: null,
-                    daemonStateVersion: 0,
-                },
-            ]),
-            useAllSessionListRenderables: () => [],
-            useMachinePoolListByServerId: () => machinePoolLists.byServerId,
-            useMachinePoolListStatusByServerId: () => machinePoolLists.statusByServerId,
-            useMachinePoolAccountIdByServerId: () => Object.fromEntries(
-                Object.keys(machinePoolLists.byServerId).map((serverId) => [serverId, 'account-a']),
-            ),
-            useSetting: (key: string) => {
-                if (key === 'useMachinePickerSearch') return false;
-                return (state.settings as any)[key];
-            },
-            useSettings: () => ({
-                ...state.settings,
-                useMachinePickerSearch: false,
-            } as any),
-            useSettingMutable: createUseSettingMutableMockFromReader((key) => (key === 'favoriteMachines' ? [[], vi.fn()] : [undefined, vi.fn()])),
-        });
-    },
+afterEach(async () => {
+    standardCleanup();
+    sync.disconnectServer();
+    resetMachinePoolSyncRuntimeForTests();
+    await account.reset();
+    browser?.restore();
+    browser = undefined;
 });
-
-vi.mock('@react-navigation/native', () => ({
-    CommonActions: {
-        setParams: (params: Record<string, unknown>) => ({
-            type: 'SET_PARAMS',
-            payload: { params },
-        }),
-    },
-}));
-
-vi.mock('@/components/sessions/new/components/NewSessionMachineSelectionContent', () => ({
-    NewSessionMachineSelectionContent: (props: any) => {
-        capturedMachineSelectionContentProps = props;
-        return null;
-    },
-}));
-
-vi.mock('@/utils/sessions/recentMachines', () => ({
-    getRecentMachinesFromSessions: ({ machines }: { machines: unknown[] }) => machines,
-}));
-
-vi.mock('@/components/navigation/HeaderTitleWithAction', () => ({
-    HeaderTitleWithAction: ({ title }: { title: string }) => React.createElement('Text', null, title),
-}));
-
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        refreshMachinesThrottled: refreshMachinesThrottledSpy,
-    },
-}));
-
-vi.mock('@/sync/ops/machinePools', () => ({
-    refreshMachinePools: refreshMachinePoolsSpy,
-    resolveMachinePool: resolveMachinePoolSpy,
-}));
-
-vi.mock('@/utils/sessions/tempDataStore', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/utils/sessions/tempDataStore')>();
-    return {
-        ...actual,
-        storeTempData: storeTempDataSpy,
-    };
-});
-
-vi.mock('@/components/sessions/new/hooks/useTemporaryComputerAvailability', () => ({
-    resolveTemporaryComputerDestinationProjectionState: (availability: { status: string }) => (
-        availability.status === 'available' ? 'available' : availability.status === 'loading' ? 'pending' : 'empty'
-    ),
-    shouldOfferTemporaryComputerDestination: (availability: { status: string; reason?: string }) => (
-        availability.status !== 'unavailable'
-        || (availability.reason !== 'feature_disabled' && availability.reason !== 'automation_unsupported')
-    ),
-    // Destination eligibility no longer consumes Agent compatibility; that is
-    // launch readiness, resolved separately by the picker model.
-    useTemporaryComputerAvailability: (input: Record<string, unknown>) => {
-        temporaryComputerAvailabilityState.inputs.push(input);
-        return temporaryComputerAvailabilityState.value;
-    },
-}));
-
-vi.mock('@/hooks/server/useMachineCapabilitiesCache', () => ({
-    prefetchMachineCapabilities: prefetchMachineCapabilitiesSpy,
-}));
-
-vi.mock('@/hooks/machine/useMachineEnvPresence', () => ({
-    invalidateMachineEnvPresence: vi.fn(),
-}));
-
-// The picker model now reads Home view selection, which subscribes to this module's real
-// device-state and profile change sources. Keep the profile fixtures overridden but preserve every
-// sibling export instead of replacing the module with a fixed surface.
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => {
-    const { createPartialServerProfilesModuleMock } = await import('@/dev/testkit/mocks/serverProfiles');
-    return createPartialServerProfilesModuleMock(importOriginal as <T>() => Promise<T>, {
-        profiles: [
-            { id: 'server-a', name: 'Server A', serverUrl: 'https://stack-a.example.test' },
-            { id: 'server-b', name: 'Server B', serverUrl: 'https://stack-b.example.test' },
-            { id: 'server-c', name: 'Server C', serverUrl: 'https://stack-c.example.test' },
-        ],
-        overrides: {
-            getActiveServerId: () => activeServerId,
-            loadHomeViewState: () => null,
-        },
-    });
-});
-
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot: () => ({
-        ...activeServerSnapshotState,
-    }),
-    subscribeActiveServer: (listener: (snapshot: { serverId: string; serverUrl: string; generation: number }) => void) => {
-        activeServerListeners.add(listener);
-        return () => {
-            activeServerListeners.delete(listener);
-        };
-    },
-}));
-
-vi.mock('@/sync/domains/features/featureDecisionRuntime', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/sync/domains/features/featureDecisionRuntime')>();
-    const { buildServerFeaturesResponse } = await import('@/hooks/server/serverFeaturesTestUtils');
-    const features = buildServerFeaturesResponse();
-    features.features.machines.pools.enabled = true;
-    const readySnapshot = Object.freeze({ status: 'ready' as const, features });
-    const mainSnapshots = new Map<string, Readonly<{
-        status: 'ready';
-        serverIds: string[];
-        snapshotsByServerId: Record<string, typeof readySnapshot>;
-    }>>();
-    return {
-        ...actual,
-        useServerFeaturesRuntimeSnapshot: () => readySnapshot,
-        useServerFeaturesSnapshotForServerId: () => readySnapshot,
-        useServerFeaturesMainSelectionSnapshot: (serverIds: readonly string[]) => {
-            const key = serverIds.join('\u0000');
-            const cached = mainSnapshots.get(key);
-            if (cached) return cached;
-            const snapshot = Object.freeze({
-                status: 'ready' as const,
-                serverIds: [...serverIds],
-                snapshotsByServerId: Object.fromEntries(serverIds.map((serverId) => [serverId, {
-                    status: 'ready' as const,
-                    features,
-                }])),
-            });
-            mainSnapshots.set(key, snapshot);
-            return snapshot;
-        },
-    };
-});
-
-vi.mock('@/sync/domains/scope/useServerCredentialAccountScopes', () => ({
-    useServerCredentialAccountScopeResolution: (serverId: string | null | undefined) => (
-        serverId
-            ? { kind: 'bound' as const, scope: { serverId, accountId: 'account-a' } }
-            : { kind: 'unknown_home' as const }
-    ),
-    useServerCredentialAccountScopeResolutions: (serverIds: readonly string[]) => new Map(
-        serverIds.map((serverId) => [serverId, {
-            kind: 'bound' as const,
-            scope: { serverId, accountId: 'account-a' },
-        }]),
-    ),
-}));
-
-vi.mock('@/sync/domains/server/activeServerSwitch', () => ({
-    setActiveServerAndSwitch: async (params: any) => {
-        setActiveServerAndSwitchSpy(params);
-        activeServerId = String(params?.serverId ?? '').trim() || activeServerId;
-        return true;
-    },
-}));
-
-vi.mock('@/components/sessions/new/hooks/machines/useServerScopedMachineOptions', () => ({
-    useServerScopedMachineOptions: (params: Readonly<{ allowedServerIds: readonly string[] }>) => {
-        serverScopedMachineOptionsCalls.push(params);
-        return scopedMachinesState.groups;
-    },
-}));
+afterAll(() => restoreActionLoader());
 
 describe('machine picker server scope', () => {
-    afterEach(() => {
-        standardCleanup();
-    });
-
-    beforeEach(() => {
-        activeServerId = 'server-a';
-        activeServerSnapshotState.serverId = 'server-a';
-        activeServerSnapshotState.serverUrl = 'https://stack-a.example.test';
-        activeServerSnapshotState.generation = 1;
-        activeServerListeners.clear();
-        state.localSearchParams = {
-            selectedId: 'machine-1',
-            spawnServerId: 'server-b',
-        };
-        state.settings = {
-            serverSelectionGroups: [],
-            serverSelectionActiveTargetKind: 'server',
-            serverSelectionActiveTargetId: 'server-b',
-        };
-        scopedMachinesState.groups = [
-            {
-                serverId: 'server-b',
-                serverName: 'Server B',
-                loading: false,
-                signedOut: false,
-                machines: [
-                    {
-                        id: 'machine-1',
-                        serverId: 'server-b',
-                        metadata: { host: 'host-1', displayName: 'Machine 1', homeDir: '/home/me' },
-                        active: true,
-                        createdAt: 1,
-                        updatedAt: 1,
-                        activeAt: Date.now(),
-                        seq: 1,
-                        metadataVersion: 1,
-                        daemonState: null,
-                        daemonStateVersion: 0,
-                    },
-                ],
-            },
-        ] as any;
-        machinePoolLists.byServerId = { 'server-b': [] };
-        machinePoolLists.statusByServerId = { 'server-b': 'idle' };
-        serverScopedMachineOptionsCalls.length = 0;
-        resolveMachinePoolSpy.mockClear();
-        refreshMachinePoolsSpy.mockClear();
-        storeTempDataSpy.mockClear();
-        temporaryComputerAvailabilityState.value = {
-            status: 'unavailable',
-            reason: 'artifact_unavailable',
-            retry: vi.fn(),
-        };
-        temporaryComputerAvailabilityState.inputs.length = 0;
-    });
-
-    function emitActiveServerSnapshot(serverId: string) {
-        activeServerId = serverId;
-        activeServerSnapshotState.serverId = serverId;
-        activeServerSnapshotState.serverUrl = `https://${serverId}.example.test`;
-        activeServerSnapshotState.generation += 1;
-        const nextSnapshot = {
-            ...activeServerSnapshotState,
-        };
-        for (const listener of activeServerListeners) {
-            listener(nextSnapshot);
-        }
-    }
-
     it('propagates selected machine and server params back to new session route without switching global active server', async () => {
-        setActiveServerAndSwitchSpy.mockReset();
-        navigationDispatchSpy.mockReset();
-        routerBackSpy.mockReset();
-        refreshMachinesThrottledSpy.mockReset();
-        prefetchMachineCapabilitiesSpy.mockReset();
-        capturedMachineSelectionContentProps = null;
-
-        const Screen = (await import('@/app/(app)/new/pick/machine')).default;
-        await renderScreen(React.createElement(Screen));
-
-        expect(setActiveServerAndSwitchSpy).not.toHaveBeenCalled();
-
-        await act(async () => {
-            capturedMachineSelectionContentProps.onSelectMachine({
-                id: 'machine-1',
-                metadata: { host: 'host-1', displayName: 'Machine 1', homeDir: '/home/me' },
-            });
-            await flushHookEffects();
-        });
-
-        expect(navigationDispatchSpy).toHaveBeenCalledWith(expect.objectContaining({
-            type: 'SET_PARAMS',
-            payload: {
-                params: expect.objectContaining({
-                    machineId: 'machine-1',
-                    spawnServerId: 'server-b',
-                }),
-            },
-        }));
-        expect(routerBackSpy).toHaveBeenCalledTimes(1);
+        const focused = profiles.getActiveServerSnapshot().serverId;
+        await renderPicker();
+        expect(profiles.getActiveServerSnapshot().serverId).toBe(focused);
+        await act(async () => { content().onSelectMachine(machine()); });
+        expectExactReturn('machine-1');
+        expect(navigation.back).toHaveBeenCalledTimes(1);
+        expect(profiles.getActiveServerSnapshot().serverId).toBe(focused);
     });
 
     it('uses the selected machine serverId when provided (group target coherence)', async () => {
-        setActiveServerAndSwitchSpy.mockReset();
-        navigationDispatchSpy.mockReset();
-        routerBackSpy.mockReset();
-        refreshMachinesThrottledSpy.mockReset();
-        prefetchMachineCapabilitiesSpy.mockReset();
-        capturedMachineSelectionContentProps = null;
-
-        const Screen = (await import('@/app/(app)/new/pick/machine')).default;
-        await renderScreen(React.createElement(Screen));
-
-        await act(async () => {
-            capturedMachineSelectionContentProps.onSelectMachine({
-                id: 'machine-1',
-                serverId: 'server-c',
-                metadata: { host: 'host-1', displayName: 'Machine 1', homeDir: '/home/me' },
-            } as any);
-            await flushHookEffects();
-        });
-
-        expect(setActiveServerAndSwitchSpy).not.toHaveBeenCalled();
-        expect(navigationDispatchSpy).toHaveBeenCalledWith(expect.objectContaining({
-            type: 'SET_PARAMS',
-            payload: {
-                params: expect.objectContaining({
-                    machineId: 'machine-1',
-                    spawnServerId: 'server-c',
-                }),
-            },
-        }));
+        const focused = profiles.getActiveServerSnapshot().serverId;
+        await account.publishMachines(savedHomeC, [machine()]);
+        await renderPicker();
+        await act(async () => { content().onSelectScopedMachine?.({ ...machine(), serverId: homeC, serverName: 'Server C' }); });
+        expectExactReturn('machine-1', homeC);
+        expect(profiles.getActiveServerSnapshot().serverId).toBe(focused);
     });
 
     it('auto-selects machine when selected server has exactly one machine', async () => {
-        setActiveServerAndSwitchSpy.mockReset();
-        navigationDispatchSpy.mockReset();
-        routerBackSpy.mockReset();
-        refreshMachinesThrottledSpy.mockReset();
-        prefetchMachineCapabilitiesSpy.mockReset();
-        capturedMachineSelectionContentProps = null;
-
-        state.localSearchParams = {
-            selectedId: '',
-            spawnServerId: 'server-b',
-        };
-
-        const Screen = (await import('@/app/(app)/new/pick/machine')).default;
-        await renderScreen(React.createElement(Screen));
-        await flushHookEffects();
-
-        expect(navigationDispatchSpy).toHaveBeenCalledWith(expect.objectContaining({
-            type: 'SET_PARAMS',
-            payload: {
-                params: expect.objectContaining({
-                    machineId: 'machine-1',
-                    spawnServerId: 'server-b',
-                }),
-            },
-        }));
-        expect(routerBackSpy).toHaveBeenCalledTimes(1);
+        navigation.params.selectedId = '';
+        await renderPicker();
+        expect(content().groups).toMatchObject([{ serverId: homeB, loading: false,
+            machines: [{ id: 'machine-1', active: true, availability: { kind: 'available' } }] }]);
+        await vi.waitFor(() => expect(content().poolGroups).toMatchObject([{ serverId: homeB,
+            pools: [], status: 'idle', projectionReady: true }]));
+        await vi.waitFor(() => expectExactReturn('machine-1'));
+        expect(navigation.back).toHaveBeenCalledTimes(1);
     });
 
     it('keeps the picker open when one machine and a machine pool are both available', async () => {
-        navigationDispatchSpy.mockReset();
-        routerBackSpy.mockReset();
-        state.localSearchParams = { selectedId: '', spawnServerId: 'server-b' };
-        machinePoolLists.byServerId = {
-            'server-b': [{
-                pool: {
-                    id: '3a948f0c-bc30-491c-b764-37f0e6744d1f',
-                    name: 'Development',
-                    description: null,
-                    revision: 1,
-                    createdAt: 1,
-                    updatedAt: 1,
-                    members: [],
-                },
-                availability: { state: 'known', connectedCount: 1, enabledCount: 1 },
-            }],
-        };
-
-        const Screen = (await import('@/app/(app)/new/pick/machine')).default;
-        await renderScreen(React.createElement(Screen));
-        await flushHookEffects();
-
-        expect(navigationDispatchSpy).not.toHaveBeenCalled();
-        expect(routerBackSpy).not.toHaveBeenCalled();
-        expect(capturedMachineSelectionContentProps.poolGroups[0].serverId).toBe('server-b');
+        navigation.params.selectedId = '';
+        answerPools(savedHomeB, [pool]);
+        await renderPicker();
+        await vi.waitFor(() => expect(content().poolGroups?.[0].pools).toEqual([pool]));
+        expect(content().poolGroups?.[0].serverId).toBe(homeB);
+        expect(navigation.dispatch).not.toHaveBeenCalled();
+        expect(navigation.back).not.toHaveBeenCalled();
     });
 
     it('keeps Temporary computer offered and explained when the picker has no exact authoring producer', async () => {
-        navigationDispatchSpy.mockReset();
-        routerBackSpy.mockReset();
-        state.localSearchParams = { selectedId: '', spawnServerId: 'server-b' };
-        temporaryComputerAvailabilityState.value = {
-            status: 'available',
-            artifacts: [{ identity: { target: 'linux-x64' } }],
-            client: {},
-            retry: vi.fn(),
-        };
-        scopedMachinesState.groups = [{
-            serverId: 'server-b',
-            serverName: 'Server B',
-            loading: false,
-            signedOut: false,
-            machines: [],
-        }] as any;
-
-        const Screen = (await import('@/app/(app)/new/pick/machine')).default;
-        await renderScreen(React.createElement(Screen));
-        await flushHookEffects();
-
-        // Destination eligibility is a Home fact; the missing authoring producer
-        // is launch readiness. Deleting the row for the second used to leave the
-        // user with no destination, no reason and no recovery.
-        expect(temporaryComputerAvailabilityState.inputs.at(-1)).not.toHaveProperty('agentCompatible');
-        const offered = capturedMachineSelectionContentProps.temporaryComputers;
-        expect(offered).toHaveLength(1);
-        expect(offered[0]).toMatchObject({
-            serverId: 'server-b',
-            artifactTarget: 'linux-x64',
-        });
+        navigation.params.selectedId = '';
+        await account.publishMachines(savedHomeB, []);
+        await account.publishFeatures(savedHomeB, features(homeB, true));
+        await profiles.adoptHomeProfile({ descriptor: { v: 1, homeServerIdentityId: homeB,
+            canonicalServerUrl: 'https://stack-b.fixture.test', revision: 1,
+            endpoints: [{ kind: 'https', url: 'https://stack-b.fixture.test' }] },
+            source: 'qr', descriptorAuthority: 'current_connection_observation' });
+        account.home.answer(savedHomeB, EPHEMERAL_RUNNER_ARTIFACTS_PATH_V1, { body: artifacts });
+        await renderPicker();
+        await vi.waitFor(() => expect(content().temporaryComputers).toHaveLength(1));
+        const offered = content().temporaryComputers!;
+        expect(offered[0]).toMatchObject({ serverId: homeB, artifactTarget: 'linux-x64' });
         expect(offered[0].disabled).not.toBe(true);
         expect(typeof offered[0].unavailableText).toBe('string');
-        expect(offered[0].unavailableText.length).toBeGreaterThan(0);
-        expect(storeTempDataSpy).not.toHaveBeenCalled();
-        expect(navigationDispatchSpy).not.toHaveBeenCalled();
-        expect(routerBackSpy).not.toHaveBeenCalled();
+        expect(offered[0].unavailableText!.length).toBeGreaterThan(0);
+        expect(account.home.requests.some(request => request.path === EPHEMERAL_RUNNER_ARTIFACTS_PATH_V1)).toBe(true);
+        expect(account.home.requests.some(request => request.path === EPHEMERAL_RUNNER_ACTIVATIONS_PATH_V1)).toBe(false);
+        expect(navigation.dispatch).not.toHaveBeenCalled();
+        expect(navigation.back).not.toHaveBeenCalled();
     });
 
     it('resolves a pool against its captured Home and returns the exact machine', async () => {
-        navigationDispatchSpy.mockReset();
-        routerBackSpy.mockReset();
-        state.localSearchParams = { selectedId: '', spawnServerId: 'server-b', draftId: 'request-7' } as any;
-        const pool = {
-            pool: { id: '3a948f0c-bc30-491c-b764-37f0e6744d1f', name: 'Development', description: null, revision: 1, createdAt: 1, updatedAt: 1, members: [] },
-            availability: { state: 'known', connectedCount: 1, enabledCount: 1 },
-        };
-        machinePoolLists.byServerId = { 'server-b': [pool] };
-
-        const Screen = (await import('@/app/(app)/new/pick/machine')).default;
-        await renderScreen(React.createElement(Screen));
-        await act(async () => {
-            await capturedMachineSelectionContentProps.onSelectPool({ serverId: 'server-b', accountId: 'account-a', pool });
-            await flushHookEffects();
-        });
-
-        expect(resolveMachinePoolSpy).toHaveBeenCalledWith('server-b', {
-            poolId: pool.pool.id,
-            requestKey: 'request-7',
-        });
-        expect(navigationDispatchSpy).toHaveBeenCalledWith(expect.objectContaining({
-            payload: {
-                params: expect.objectContaining({
-                    machineId: 'machine-1',
-                    spawnServerId: 'server-b',
-                    machinePoolId: pool.pool.id,
-                }),
-            },
-        }));
+        navigation.params = { selectedId: '', spawnServerId: homeB, draftId: 'request-7' };
+        answerPools(savedHomeB, [pool]);
+        account.home.answer(savedHomeB, poolResolvePath, { body: MachinePoolResolveResultV1Schema.parse({ kind: 'resolved',
+            poolId: pool.pool.id, machineId: 'machine-1', priorityTier: 0 }) });
+        await renderPicker();
+        await vi.waitFor(() => expect(content().poolGroups?.[0].projectionReady).toBe(true));
+        await act(async () => { await content().onSelectPool?.({ serverId: homeB, accountId: 'account-b', pool }); });
+        expect(account.home.requests.filter(request => request.path === poolResolvePath).map(request => ({
+            serverId: request.serverId, input: request.input,
+        }))).toEqual([{ serverId: savedHomeB, input: { poolId: pool.pool.id, requestKey: 'request-7' } }]);
+        expectExactReturn('machine-1');
+        expect(returnedParams().at(-1)?.machinePoolId).toBe(pool.pool.id);
     });
 
     it('keeps the picker open until the pool list is known empty', async () => {
-        navigationDispatchSpy.mockReset();
-        routerBackSpy.mockReset();
-        state.localSearchParams = { selectedId: '', spawnServerId: 'server-b' };
-        machinePoolLists.byServerId = {};
-        machinePoolLists.statusByServerId = { 'server-b': 'error' };
-
-        const Screen = (await import('@/app/(app)/new/pick/machine')).default;
-        await renderScreen(React.createElement(Screen));
-        await flushHookEffects();
-
-        expect(navigationDispatchSpy).not.toHaveBeenCalled();
-        expect(routerBackSpy).not.toHaveBeenCalled();
+        navigation.params.selectedId = '';
+        account.home.answer(savedHomeB, poolListPath, { status: 503, body: { error: 'unavailable' } });
+        await renderPicker();
+        await vi.waitFor(() => expect(content().poolGroups?.[0].status).toBe('error'));
+        expect(navigation.dispatch).not.toHaveBeenCalled();
+        expect(navigation.back).not.toHaveBeenCalled();
     });
 
     it('ignores a late pool result after a newer exact-machine choice', async () => {
-        navigationDispatchSpy.mockReset();
-        routerBackSpy.mockReset();
-        state.localSearchParams = { selectedId: '', spawnServerId: 'server-b', draftId: 'request-8' } as any;
-        const pool = {
-            pool: { id: '3a948f0c-bc30-491c-b764-37f0e6744d1f', name: 'Development', description: null, revision: 1, createdAt: 1, updatedAt: 1, members: [] },
-            availability: { state: 'known', connectedCount: 1, enabledCount: 1 },
-        };
-        machinePoolLists.byServerId = { 'server-b': [pool] };
-        let finishResolve!: (value: any) => void;
-        resolveMachinePoolSpy.mockImplementationOnce(() => new Promise((resolve) => {
-            finishResolve = resolve;
-        }));
-
-        const Screen = (await import('@/app/(app)/new/pick/machine')).default;
-        await renderScreen(React.createElement(Screen));
-        let pending!: Promise<void>;
-        await act(async () => {
-            pending = capturedMachineSelectionContentProps.onSelectPool({ serverId: 'server-b', accountId: 'account-a', pool });
-            await Promise.resolve();
-            capturedMachineSelectionContentProps.onSelectMachine({ id: 'machine-new', serverId: 'server-b' });
-            finishResolve({ kind: 'resolved', poolId: pool.pool.id, machineId: 'machine-late', priorityTier: 0 });
-            await pending;
-            await flushHookEffects();
-        });
-
-        const returnedMachineIds = navigationDispatchSpy.mock.calls.map((call) => call[0]?.payload?.params?.machineId);
-        expect(returnedMachineIds).toContain('machine-new');
-        expect(returnedMachineIds).not.toContain('machine-late');
-        const exactMachineReturn = navigationDispatchSpy.mock.calls
-            .map((call) => call[0]?.payload?.params)
-            .find((params) => params?.machineId === 'machine-new');
-        expect(exactMachineReturn?.machinePoolId).toBeUndefined();
+        navigation.params = { selectedId: '', spawnServerId: homeB, draftId: 'request-8' };
+        answerPools(savedHomeB, [pool]);
+        const held = createDeferred<void>();
+        const requested = createDeferred<void>();
+        account.home.answer(savedHomeB, poolResolvePath, { select: async () => {
+            requested.resolve(); await held.promise;
+            return { body: MachinePoolResolveResultV1Schema.parse({ kind: 'resolved', poolId: pool.pool.id,
+                machineId: 'machine-late', priorityTier: 0 }) };
+        } });
+        await renderPicker();
+        await vi.waitFor(() => expect(content().poolGroups?.[0].projectionReady).toBe(true));
+        let pending: unknown;
+        await act(async () => { pending = content().onSelectPool?.({ serverId: homeB, accountId: 'account-b', pool }); });
+        try {
+            await requested.promise;
+            await act(async () => { content().onSelectMachine(machine('machine-new')); });
+        } finally {
+            await act(async () => { held.resolve(); await pending; });
+        }
+        expect(returnedParams().map(params => params.machineId)).toContain('machine-new');
+        expect(returnedParams().map(params => params.machineId)).not.toContain('machine-late');
+        expect(returnedParams().find(params => params.machineId === 'machine-new')?.machinePoolId).toBeUndefined();
     });
 
     it('does not auto-select when the only machine for the selected server is offline', async () => {
-        setActiveServerAndSwitchSpy.mockReset();
-        navigationDispatchSpy.mockReset();
-        routerBackSpy.mockReset();
-        refreshMachinesThrottledSpy.mockReset();
-        prefetchMachineCapabilitiesSpy.mockReset();
-        capturedMachineSelectionContentProps = null;
-
-        state.localSearchParams = {
-            selectedId: '',
-            spawnServerId: 'server-b',
-        };
-
-        scopedMachinesState.groups = [
-            {
-                serverId: 'server-b',
-                serverName: 'Server B',
-                loading: false,
-                signedOut: false,
-                machines: [
-                    {
-                        id: 'machine-1',
-                        serverId: 'server-b',
-                        metadata: { host: 'host-1', displayName: 'Machine 1', homeDir: '/home/me' },
-                        active: false,
-                        createdAt: 1,
-                        updatedAt: 1,
-                        activeAt: 0,
-                        seq: 1,
-                        metadataVersion: 1,
-                        daemonState: null,
-                        daemonStateVersion: 0,
-                    },
-                ],
-            },
-        ] as any;
-
-        const Screen = (await import('@/app/(app)/new/pick/machine')).default;
-        await renderScreen(React.createElement(Screen));
-        await flushHookEffects();
-
-        expect(navigationDispatchSpy).not.toHaveBeenCalled();
-        expect(routerBackSpy).not.toHaveBeenCalled();
+        navigation.params.selectedId = '';
+        // The shared setup published a recent online heartbeat. Replace that
+        // census before seeding a Home that only has an expired, offline row;
+        // a stale activeAt cannot overwrite a newer live presence observation.
+        await account.publishMachines(savedHomeB, []);
+        await account.publishMachines(savedHomeB, [machine('machine-1', { active: false, activeAt: 0 })]);
+        await renderPicker();
+        await vi.waitFor(() => expect(content().poolGroups?.[0].projectionReady).toBe(true));
+        expect(content().groups?.[0].machines).toMatchObject([{ id: 'machine-1', active: false }]);
+        expect(navigation.dispatch).not.toHaveBeenCalled();
+        expect(navigation.back).not.toHaveBeenCalled();
     });
 
     it('refreshes machines on mount so newly registered daemons appear in the fallback picker route', async () => {
-        refreshMachinesThrottledSpy.mockReset();
-
-        const Screen = (await import('@/app/(app)/new/pick/machine')).default;
-        await renderScreen(React.createElement(Screen));
-        await flushHookEffects();
-
-        expect(refreshMachinesThrottledSpy).toHaveBeenCalledWith({
-            staleMs: 0,
-            force: true,
-        });
+        await view(homeA);
+        navigation.params = { selectedId: 'machine-new', spawnServerId: homeA };
+        // Publish the new registration only at HTTP, leaving the real mounted store's old census empty.
+        await account.publishMachines(account.serverId, [machine('machine-new')]);
+        const { storage } = await import('@/sync/domains/state/storage');
+        storage.getState().applyMachines([], true, { sourceServerId: homeA });
+        account.home.requests.length = 0;
+        await renderPicker();
+        await vi.waitFor(() => expect(content().groups?.[0].machines.map(row => row.id)).toContain('machine-new'));
+        expect(account.home.requests.some(request => request.serverId === account.serverId && request.path.split('?')[0] === '/v1/machines')).toBe(true);
     });
 
     it('normalizes invalid requested serverId to the allowed active target server', async () => {
-        setActiveServerAndSwitchSpy.mockReset();
-        navigationDispatchSpy.mockReset();
-        routerBackSpy.mockReset();
-        capturedMachineSelectionContentProps = null;
-
-        state.localSearchParams = {
-            selectedId: 'machine-1',
-            spawnServerId: 'server-z',
-        };
-        state.settings.serverSelectionActiveTargetKind = 'server';
-        state.settings.serverSelectionActiveTargetId = 'server-b';
-        scopedMachinesState.groups = [
-            {
-                serverId: 'server-b',
-                serverName: 'Server B',
-                loading: false,
-                signedOut: false,
-                machines: [
-                    {
-                        id: 'machine-1',
-                        serverId: 'server-b',
-                        metadata: { host: 'host-1', displayName: 'Machine 1', homeDir: '/home/me' },
-                        active: true,
-                        createdAt: 1,
-                        updatedAt: 1,
-                        activeAt: Date.now(),
-                        seq: 1,
-                        metadataVersion: 1,
-                        daemonState: null,
-                        daemonStateVersion: 0,
-                    },
-                ],
-            },
-        ] as any;
-
-        const Screen = (await import('@/app/(app)/new/pick/machine')).default;
-        await renderScreen(React.createElement(Screen));
-
-        expect(capturedMachineSelectionContentProps).toBeTruthy();
-        expect(capturedMachineSelectionContentProps.serverId).toBe('server-b');
-
-        await act(async () => {
-            capturedMachineSelectionContentProps.onSelectMachine({
-                id: 'machine-1',
-                metadata: { host: 'host-1', displayName: 'Machine 1', homeDir: '/home/me' },
-            } as any);
-            await flushHookEffects();
-        });
-
-        expect(navigationDispatchSpy).toHaveBeenCalledWith(expect.objectContaining({
-            type: 'SET_PARAMS',
-            payload: {
-                params: expect.objectContaining({
-                    machineId: 'machine-1',
-                    spawnServerId: 'server-b',
-                }),
-            },
-        }));
+        navigation.params.spawnServerId = 'removed-requested-home';
+        await renderPicker();
+        expect(content().serverId).toBe(homeB);
+        await act(async () => { content().onSelectMachine(machine()); });
+        expectExactReturn('machine-1');
     });
 
     it('keeps the fallback Home destinations visible when the saved exact Home no longer exists', async () => {
-        capturedMachineSelectionContentProps = null;
-        state.localSearchParams = { selectedId: '' };
-        state.settings.serverSelectionActiveTargetKind = 'server';
-        state.settings.serverSelectionActiveTargetId = 'removed-server';
-        scopedMachinesState.groups = [{
-            serverId: 'server-a',
-            serverName: 'Server A',
-            loading: false,
-            signedOut: false,
-            machines: [{
-                id: 'machine-a',
-                serverId: 'server-a',
-                metadata: { host: 'host-a', displayName: 'Machine A', homeDir: '/home/me' },
-                active: true,
-                createdAt: 1,
-                updatedAt: 1,
-                activeAt: Date.now(),
-                seq: 1,
-                metadataVersion: 1,
-                daemonState: null,
-                daemonStateVersion: 0,
-            }],
-        }] as any;
-        machinePoolLists.byServerId = { 'server-a': [] };
-        machinePoolLists.statusByServerId = { 'server-a': 'idle' };
-
-        const Screen = (await import('@/app/(app)/new/pick/machine')).default;
-        await renderScreen(React.createElement(Screen));
-
-        expect(serverScopedMachineOptionsCalls.at(-1)?.allowedServerIds).toEqual(['server-a']);
-        expect(capturedMachineSelectionContentProps.groups).toEqual(expect.arrayContaining([
-            expect.objectContaining({ serverId: 'server-a' }),
-        ]));
-        expect(capturedMachineSelectionContentProps.poolGroups).toEqual(expect.arrayContaining([
-            expect.objectContaining({ serverId: 'server-a' }),
-        ]));
+        navigation.params = { selectedId: '' };
+        await view('removed-server');
+        await account.publishMachines(account.serverId, [machine('machine-a')]);
+        await renderPicker();
+        expect(content().groups).toEqual(expect.arrayContaining([expect.objectContaining({ serverId: homeA })]));
+        await vi.waitFor(() => expect(content().poolGroups).toEqual(expect.arrayContaining([expect.objectContaining({ serverId: homeA })])));
+        expect(content().groups?.map(group => group.serverId)).toEqual([homeA]);
     });
 
     it('renders grouped selector when target is a group with multiple servers', async () => {
-        capturedMachineSelectionContentProps = null;
-        state.settings.serverSelectionGroups = [
-            {
-                id: 'grp-dev',
-                name: 'Dev Group',
-                serverIds: ['server-b', 'server-c'],
-                presentation: 'grouped',
-            },
-        ];
-        state.settings.serverSelectionActiveTargetKind = 'group';
-        state.settings.serverSelectionActiveTargetId = 'grp-dev';
-        scopedMachinesState.groups = [
-            {
-                serverId: 'server-b',
-                serverName: 'Server B',
-                loading: false,
-                signedOut: false,
-                machines: [
-                    {
-                        id: 'machine-1',
-                        serverId: 'server-b',
-                        metadata: { host: 'host-1', displayName: 'Machine 1', homeDir: '/home/me' },
-                        active: true,
-                        createdAt: 1,
-                        updatedAt: 1,
-                        activeAt: Date.now(),
-                        seq: 1,
-                        metadataVersion: 1,
-                        daemonState: null,
-                        daemonStateVersion: 0,
-                    },
-                ],
-            },
-            {
-                serverId: 'server-c',
-                serverName: 'Server C',
-                loading: false,
-                signedOut: false,
-                machines: [],
-            },
-        ] as any;
-
-        const Screen = (await import('@/app/(app)/new/pick/machine')).default;
-        await renderScreen(React.createElement(Screen));
-
-        expect(capturedMachineSelectionContentProps).toBeTruthy();
-        expect(capturedMachineSelectionContentProps.groups).toHaveLength(2);
-        expect(capturedMachineSelectionContentProps.onSelectScopedMachine).toEqual(expect.any(Function));
+        await view(null, { id: 'grp-dev', serverIds: [homeB, homeC] });
+        await renderPicker();
+        expect(content().groups).toHaveLength(2);
+        expect(content().groups?.map(group => group.serverId)).toEqual([homeB, homeC]);
+        expect(content().onSelectScopedMachine).toEqual(expect.any(Function));
     });
 
     it('tracks active server snapshot changes so machine scope does not stay on a stale server', async () => {
-        capturedMachineSelectionContentProps = null;
-        state.localSearchParams = {
-            selectedId: '',
-        };
-        state.settings.serverSelectionGroups = [];
-        state.settings.serverSelectionActiveTargetKind = null;
-        state.settings.serverSelectionActiveTargetId = null;
-        scopedMachinesState.groups = [
-            {
-                serverId: 'server-a',
-                serverName: 'Server A',
-                loading: false,
-                signedOut: false,
-                machines: [],
-            },
-            {
-                serverId: 'server-b',
-                serverName: 'Server B',
-                loading: false,
-                signedOut: false,
-                machines: [
-                    {
-                        id: 'machine-b',
-                        serverId: 'server-b',
-                        metadata: { host: 'host-b', displayName: 'Machine B', homeDir: '/home/me' },
-                        active: true,
-                        createdAt: 1,
-                        updatedAt: 1,
-                        activeAt: Date.now(),
-                        seq: 1,
-                        metadataVersion: 1,
-                        daemonState: null,
-                        daemonStateVersion: 0,
-                    },
-                ],
-            },
-        ] as any;
-
-        const Screen = (await import('@/app/(app)/new/pick/machine')).default;
-        await renderScreen(React.createElement(Screen));
-
-        expect(capturedMachineSelectionContentProps).toBeTruthy();
-        expect(capturedMachineSelectionContentProps.selectedServerId).toBe('server-a');
-
-        await act(async () => {
-            emitActiveServerSnapshot('server-b');
-            await flushHookEffects();
-        });
-
-        expect(capturedMachineSelectionContentProps.selectedServerId).toBe('server-b');
+        navigation.params = { selectedId: '' };
+        await view(null);
+        await account.publishMachines(savedHomeB, [machine('machine-b')]);
+        await renderPicker();
+        expect(content().selectedServerId).toBe(homeA);
+        await act(async () => { await profiles.setActiveServerId(homeB, { scope: 'tab' }); });
+        expect(profiles.getActiveServerSnapshot().serverId).toBe(homeB);
+        await vi.waitFor(() => expect(content().selectedServerId).toBe(homeB));
     });
 });

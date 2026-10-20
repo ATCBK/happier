@@ -1,17 +1,28 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
-import { createSessionFixture, createSessionMessagesFixture, createThemeFixture, createToolCallMessageFixture, renderScreen } from '@/dev/testkit';
-import { storage } from '@/sync/domains/state/storage';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { installSessionGitPaneCommonModuleMocks } from './sessionGitPaneTestHelpers';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+import { createMachineFixture, createSessionFixture, createSessionMessagesFixture, createThemeFixture, createToolCallMessageFixture, renderScreen } from '@/dev/testkit';
+import { storage } from '@/sync/domains/state/storageStore';
 import { projectChangedFilesAsScmSnapshot, type ScmFileStatus } from '@/scm/scmStatusFiles';
 import { installSessionPaneRuntimeTestHarness } from '../sessionPaneRuntimeTestHarness';
-import { installSessionGitPaneCommonModuleMocks } from './sessionGitPaneTestHelpers';
 import type { SessionRightPanelGitCommitTabContentProps } from './SessionRightPanelGitCommitTabContent';
 import type { SessionRightPanelGitCommitTabProps } from './SessionRightPanelGitCommitTab';
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 installSessionGitPaneCommonModuleMocks({ storage: async (original) => original() });
 const runtime = installSessionPaneRuntimeTestHarness();
+
+beforeEach(() => {
+    storage.getState().applySessions([createSessionFixture({ id: 's1', serverId: runtime.serverId,
+        metadata: { path: '/tmp/repo', machineId: 'machine-1', host: 'tester.local' },
+    })]);
+    storage.getState().applyMachines([createMachineFixture({ storageMode: 'plain', activeAt: Date.now() })],
+        true, { sourceServerId: runtime.serverId });
+});
 
 function file(fullPath: string): ScmFileStatus {
     const segments = fullPath.split('/');

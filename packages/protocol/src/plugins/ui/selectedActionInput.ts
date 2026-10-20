@@ -44,10 +44,12 @@ export type PluginUiSelectedActionInputCarrierV1 = z.infer<
 >;
 
 /** The selection-free shape accepted by the one input reconstruction owner. */
-export type PluginUiSelectedActionInputForReconstructionV1 = Pick<
-  PluginUiSelectedActionInputV1,
-  'input' | 'connectedAccount'
->;
+export type PluginUiSelectedActionInputForReconstructionV1<
+  Input extends PluginUiJsonValueV1 = PluginUiSelectedActionInputV1['input'],
+> = Readonly<{
+  input: Input;
+  connectedAccount: PluginUiSelectedActionInputV1['connectedAccount'];
+}>;
 
 const unsafeInputPathSegments = new Set(['__proto__', 'constructor', 'prototype']);
 
@@ -69,9 +71,12 @@ function isPlainJsonRecord(value: PluginUiJsonValueV1): value is Readonly<Record
  * Restores the one Account ref removed by target-scoped form selection. It is
  * the sole realm-neutral reconstruction owner; callers must first establish
  * that the selected settlement is an active, exact admitted operation.
+ * Retained input may opt into preserving an already-present exact Account;
+ * form settlements keep rejecting every occupied selection field.
  */
 export function reconstructPluginUiSelectedActionInput(
-  result: PluginUiSelectedActionInputForReconstructionV1,
+  result: PluginUiSelectedActionInputForReconstructionV1<PluginUiJsonValueV1>,
+  options?: Readonly<{ allowMatchingConnectedAccount?: boolean }>,
 ): Readonly<Record<string, PluginUiJsonValueV1>> | null {
   const input = result.input;
   if (!isPlainJsonRecord(input)) return null;
@@ -86,7 +91,12 @@ export function reconstructPluginUiSelectedActionInput(
   ): Readonly<Record<string, PluginUiJsonValueV1>> | null => {
     const segment = segments[index]!;
     if (Object.prototype.hasOwnProperty.call(source, segment)) {
-      if (index === segments.length - 1) return null;
+      if (index === segments.length - 1) {
+        return options?.allowMatchingConnectedAccount
+          && pluginJsonValuesEqual(source[segment], connectedAccount.ref)
+          ? source
+          : null;
+      }
       const child = source[segment];
       if (!child || !isPlainJsonRecord(child)) return null;
       const inserted = insert(child, index + 1);

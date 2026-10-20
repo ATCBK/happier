@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
 import { Pressable, useWindowDimensions, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
@@ -56,13 +57,16 @@ export type WorkflowRunItemProps = Readonly<{
     presentation?: 'list' | 'work';
     /** Writes-here rows retain their destination, separately from the Run's origin. */
     destinationSessionId?: string;
+    /** What names a Run whose own title cannot be read: the trigger or workflow it belongs to. */
+    fallbackName?: string;
 }>;
 
 const styles = StyleSheet.create((theme) => ({
     sheet: { marginHorizontal: SESSION_LIST_SHEET_INSET_PX },
     tail: { marginBottom: theme.space.s12 },
     context: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4 },
-    status: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4 },
+    status: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4, flexShrink: 1, minWidth: 0 },
+    statusWord: { flexShrink: 1, minWidth: 0 },
     guide: { borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: theme.colors.border.default },
 }));
 
@@ -125,7 +129,7 @@ export function WorkflowRunItemBody(props: WorkflowRunItemProps): React.ReactEle
     if (dataActive || retained.current === null || retained.current.scopeKey !== scopeKey
         || retained.current.serverId !== props.serverId || retained.current.runId !== props.runId) {
         retained.current = { scopeKey, serverId: props.serverId, runId: props.runId,
-            row: inScope ? live ?? getStorage().getState().workflowRunsById[props.runId] ?? null : null };
+            row: inScope ? live ?? getStorage().getState().workflowRunsById[workflowRunStoreKey(props.runId)] ?? null : null };
     }
     // A hidden surface retains its body, never another Account's body.
     const row = inScope && retained.current.scopeKey === scopeKey ? retained.current.row : null;
@@ -142,7 +146,12 @@ export function WorkflowRunItemBody(props: WorkflowRunItemProps): React.ReactEle
     const readablePhone = useReadableNativePhoneMinimalRow(props.density === 'minimal');
     if (!summary) return null;
     const density = props.density ?? 'default';
-    const name = formatWorkflowRunDisplayName(resolveWorkflowRunDisplayName(row.metadata));
+    // A Run is always named: its own title, else the trigger or workflow it belongs to. Why the title
+    // could not be read is a quiet part of the line beneath, never the name.
+    const displayName = resolveWorkflowRunDisplayName(row.metadata);
+    const name = displayName.kind === 'name' ? displayName.value
+        : props.fallbackName ?? formatWorkflowRunDisplayName({ kind: 'unknown' });
+    const unreadable = displayName.kind === 'unavailable' ? formatWorkflowRunDisplayName(displayName) : null;
     const lifecycle = describeWorkflowRunState(summary.state, {
         inAttentionWindow: summary.attentionRequired === true, workflowCustodyState: summary.workflowCustodyState,
         machineReachable, machineName,
@@ -163,7 +172,7 @@ export function WorkflowRunItemBody(props: WorkflowRunItemProps): React.ReactEle
     const context = [...destinationProgress,
         props.presentation === 'work' && destinationProgress.length === 0 ? formatAsOfTime(Date.parse(summary.createdAt)) : null,
         describeWorkflowRunProgress(summary.stepProgress),
-        props.presentation !== 'work' ? starterLabel : null].filter(Boolean).join(' · ');
+        props.presentation !== 'work' ? starterLabel : null, unreadable].filter(Boolean).join(' · ');
     const resultLine = !resultEnabled ? null : result.text
         ?? t(result.status === 'failed' ? 'workflows.contentUnavailable'
             : result.status === 'pending' ? 'common.loading' : 'workflows.finalOutput.none');
@@ -176,11 +185,11 @@ export function WorkflowRunItemBody(props: WorkflowRunItemProps): React.ReactEle
                 {lifecycle.marker.kind === 'activity'
                     ? <ActivitySpinner size={ICON_SIZE.xs} animationEnabled={dataActive} color={workStatusGlyphColor(theme.colors, status.tone)} />
                     : null}
-                <SessionListRowSubtitle density={density} textScale={fontScale} style={workStatusWordStyle(status.tone)}>{word}</SessionListRowSubtitle>
+                <SessionListRowSubtitle density={density} textScale={fontScale} style={[styles.statusWord, workStatusWordStyle(status.tone)]}>{word}</SessionListRowSubtitle>
             </View>}
             showChevron={false}
             accessibilityLabel={[name, word, context, starterLabel].filter(Boolean).join('. ')}
-            onPress={() => router.push(createWorkflowRunRoute(props.runId) as never)} />
+            onPress={() => router.push(createWorkflowRunRoute(props.runId, props.serverId) as never)} />
     );
     return <GlassSurface testID={`workflow-run-sheet:${props.runId}`} surfaceGroup="card" nested finishRole={null}
         solidColor={theme.colors.surface.base} style={[styles.sheet, {
@@ -206,13 +215,13 @@ export function WorkflowRunItemBody(props: WorkflowRunItemProps): React.ReactEle
                         ? <ActivitySpinner size={ICON_SIZE.xs} animationEnabled={dataActive} color={workStatusGlyphColor(theme.colors, status.tone)} />
                         : <Icon name={lifecycle.marker.icon} size={ICON_SIZE.xs} color={workStatusGlyphColor(theme.colors, status.tone)} />}
                     {lifecycle.marker.kind !== 'activity' || status.tone !== 'neutral'
-                        ? <SessionListRowSubtitle density={density} readableNativePhoneMinimal={readablePhone} textScale={fontScale} style={workStatusWordStyle(status.tone)}>{word}</SessionListRowSubtitle> : null}
+                        ? <SessionListRowSubtitle density={density} readableNativePhoneMinimal={readablePhone} textScale={fontScale} style={[styles.statusWord, workStatusWordStyle(status.tone)]}>{word}</SessionListRowSubtitle> : null}
                 </View>}
-                renderContainer={(content, style) => <WorkspaceDestinationRow href={createWorkflowRunRoute(props.runId)} style={style}>
+                renderContainer={(content, style) => <WorkspaceDestinationRow href={createWorkflowRunRoute(props.runId, props.serverId)} style={style}>
                     <Pressable style={style} testID={`workflow-run-row:${props.runId}`}
                     accessibilityRole="button" accessibilityState={{ selected: props.selected === true }}
                     accessibilityLabel={[name, word, context, starterLabel].filter(Boolean).join('. ')}
-                    onPress={() => router.push(createWorkflowRunRoute(props.runId) as never)}>{content}</Pressable>
+                    onPress={() => router.push(createWorkflowRunRoute(props.runId, props.serverId) as never)}>{content}</Pressable>
                 </WorkspaceDestinationRow>}>
                 {context || starterLabel || resultLine !== null ? <View style={styles.context}>
                     {summary.startedBy === 'trigger' || summary.startedBy === 'agent'
@@ -222,7 +231,7 @@ export function WorkflowRunItemBody(props: WorkflowRunItemProps): React.ReactEle
                         {resultLine ?? context}</SessionListRowSubtitle> : null}
                     {resultEnabled && result.status === 'failed' ? <ToolbarButton
                         testID={`workflow-run-result:${props.runId}:retry`} label={t('workflows.retry')}
-                        onPress={event => { event.stopPropagation(); result.retry(); }} /> : null}
+                        onPress={event => { event?.stopPropagation(); result.retry(); }} /> : null}
                 </View> : null}
             </SessionListRowPresentation>
         </View>

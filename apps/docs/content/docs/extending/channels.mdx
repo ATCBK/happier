@@ -37,6 +37,16 @@ connection serves every conversation linked through it, so a problem with the
 bot (a revoked token, another program reading the same Telegram bot) affects
 all of them at once.
 
+In the current 0.3 development source, a connection follows its provider's
+current admitted implementation on the selected Home and machine. Updating the
+CLI or plugin, reloading development code, or reinstalling a plugin with the
+same identity does not require recreating or transferring the connection.
+Admitting a different source under that same plugin identity also resumes its
+retained configuration. Changing the machine, transport, credential or provider
+configuration still uses the transfer flow and its recovery checks.
+Durable webhook endpoints retain their own exact installation target; this
+continuity does not automatically repair an endpoint after reinstall.
+
 **A binding is one linked conversation**: one chat, channel, thread, issue or
 pull request, pointed at one target — a session, an automation, or a thread router
 that selects recipes for child threads. It carries
@@ -175,6 +185,13 @@ still apply. Known-no-effect delivery failures remain visible while retrying
 with increasing backoff (positive provider Retry-After first; a zero wait uses
 the growing fallback); accepted, partial, and unknown effects never resend
 automatically.
+
+If Happier temporarily cannot read the current Account or route authority before
+calling the provider, it retains the message for that same backoff and checks
+the authority again on the next attempt. A confirmed route mismatch or invalid
+authority suppresses delivery; previously suppressed messages stay suppressed.
+If a send was already attempted and its outcome cannot be established, it stays
+unknown and does not resend automatically.
 
 When a connection starts, Happier does not swallow everything said in that
 conversation before you arrived. It offers a **history baseline** for you to

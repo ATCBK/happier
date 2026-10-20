@@ -1,11 +1,107 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 import { createWorkflowRunAccountStorage } from './apiWorkflowRunStorage';
+import type { ServerFetch } from '@/sync/http/client';
+import { createWorkflowAccountRunActionOwner } from '@happier-dev/protocol/actions/executor/workflowRunActions';
+import { materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol/workflows/materializeWorkflowAcceptedSnapshotV1';
+import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1,
+    serializeWorkflowStoredContentEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowStoredContentV1';
+import { createWorkflowInvocationIndexFixture, createWorkflowRunSummaryFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 
 // Public capability discovery and captured HTTP are network boundaries.
 const runtimeFetch = vi.hoisted(() => vi.fn());
 vi.mock('@/utils/system/runtimeFetch', () => ({ runtimeFetch: (...args: unknown[]) => runtimeFetch(...args) }));
 afterEach(() => { runtimeFetch.mockReset(); vi.restoreAllMocks(); });
+
+it('witnesses a Run deletion only after issuing its captured HTTP request', async () => {
+    const runId = '11111111-1111-4111-8111-111111111111';
+    const { createDeferred } = await import('@/dev/testkit/hooks/createDeferred');
+    const response = createDeferred<Response>();
+    const request = vi.fn<ServerFetch>((_path, _init, options) => {
+        options?.onIssued?.();
+        return response.promise;
+    });
+    let issued = false;
+    const owner = createWorkflowAccountRunActionOwner({
+        storage: createWorkflowRunAccountStorage({ credentials: { token: 'token' }, serverId: 'captured-home',
+            request, assertCurrent: () => {} }),
+        definitions: { get: async () => { throw new Error('Deleting history does not open its definition'); } },
+        resolveAccountId: async () => 'account-a',
+        resolveEncryption: async () => { throw new Error('Deleting history does not open its content'); },
+        normalizeAbsolutePath: path => path,
+        randomBytes: () => { throw new Error('Deleting history does not generate keys'); },
+    });
+    const deletion = owner.execute({ actionId: 'workflow.run.delete', input: { runId, expectedRevision: 1 },
+        context: { surface: 'ui', authority: 'present_user', onTransportIssued: () => {
+            expect(request).toHaveBeenCalledTimes(1);
+            issued = true;
+        } } });
+    await vi.waitFor(() => expect(issued).toBe(true));
+    response.resolve(Response.json({ runId, deleted: true }));
+    await expect(deletion).resolves.toEqual({ runId, deleted: true });
+    expect(JSON.parse(String(request.mock.calls[0]?.[1]?.body))).toEqual({ operation: 'delete', runId, expectedRevision: 1 });
+    const controller = new AbortController();
+    controller.abort();
+    const onTransportIssued = vi.fn();
+    await expect(owner.execute({ actionId: 'workflow.run.delete', input: { runId, expectedRevision: 1 },
+        context: { surface: 'ui', authority: 'present_user', signal: controller.signal, onTransportIssued } })).rejects.toThrow();
+    expect(onTransportIssued).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledTimes(1);
+});
+
+it('keeps a received storage failure visible through real Account review transport and recovery', async () => {
+    const runId = '11111111-1111-4111-8111-111111111111';
+    const rootId = '22222222-2222-4222-8222-222222222222';
+    const leafId = '33333333-3333-4333-8333-333333333333';
+    const accountId = 'review-owner';
+    const witness = { mode: 'plain' as const, version: 1, contentKeyFingerprint: null };
+    const accepted = await materializeWorkflowAcceptedSnapshotV1({
+        definition: { version: 1, inputs: [], defaults: {}, blocks: [{ kind: 'wait', id: 'answer',
+            document: { text: 'Answer', references: [], attachments: [] }, result: { kind: 'text' } }] },
+        admission: { kind: 'user' }, effects: { resolveTargetAvailability: async () => true },
+        context: { source: { kind: 'inline' }, inputs: {}, machineId: 'machine-a',
+            executionTarget: { kind: 'session' }, workspaceTarget: { project: { machineId: 'machine-a', directory: '/repo', checkoutRootPath: '/repo' } },
+            origin: { kind: 'direct' }, authorization: { principal: { kind: 'host' } } },
+    });
+    if (!accepted.ok) throw new Error(accepted.error.code);
+    const run = createWorkflowRunSummaryFixture({ id: runId, ownerAccountId: accountId, state: 'waiting_for_review', revision: 11 });
+    const row = (id: string, root: boolean) => {
+        const index = createWorkflowInvocationIndexFixture({ id, runId, sequence: root ? '0' : '1',
+            parentRecordId: root ? null : rootId, memberOrdinal: '0', attempt: '0', contentRevision: root ? '0' : '1',
+            lifecycle: root ? 'running' : 'waiting_for_review' });
+        return { index, contentEnvelope: serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({
+            mode: 'plain', binding: { v: 1, purpose: 'invocation_progress', accountId, runId, recordId: id,
+                sequence: index.sequence, parentRecordId: index.parentRecordId, memberOrdinal: index.memberOrdinal, attempt: index.attempt },
+            progress: { kind: 'happier.workflow-progress.v1', blockKind: root ? 'root' : 'wait', attempt: '0',
+                logicalInvocationRecordId: id, invocationPath: { blockId: root ? '$root' : 'answer', scope: [] } },
+        })), parentRevision: 11 };
+    };
+    const held = row(leafId, false);
+    const snapshot = { run, checkpointEnvelope: null, resultEnvelope: null,
+        keyCensus: { runId, ownerAccountId: accountId, access: 'edit', encryptionMode: 'plain', visibleTeamId: null,
+            ownerAccountCurrentness: witness, dataEncryptionKey: null, callerDataEncryptionKey: null, recipients: [] },
+        acceptedEnvelope: serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({
+            mode: 'plain', binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId }, acceptedSnapshot: accepted.snapshot,
+        })) };
+    const storage = createWorkflowRunAccountStorage({ credentials: { token: 'recipient-token' }, serverId: 'captured-home',
+        assertCurrent: () => {}, request: async (_path, init) => {
+            const input = JSON.parse(String(init?.body));
+            if (input.operation === 'get') return Response.json(snapshot);
+            if (input.operation === 'invocations.get') return Response.json({ invocation: input.invocationId === rootId ? row(rootId, true) : held });
+            if (input.operation === 'invocations.current') return Response.json({ invocation: held, parentRevision: 11 });
+            if (input.operation === 'invocations.complete_review') return Response.json({ error: 'storage_unavailable' }, { status: 503 });
+            throw new Error(`Unexpected HTTP operation: ${input.operation}`);
+        } });
+    const owner = createWorkflowAccountRunActionOwner({ storage, resolveAccountId: async () => 'review-recipient',
+        resolveEncryption: async () => ({ kind: 'available', witness }),
+        definitions: { get: async () => { throw new Error('Frozen review must not read a definition'); } },
+        normalizeAbsolutePath: path => path, randomBytes: () => { throw new Error('Plain Run is keyless'); } });
+    await expect(owner.execute({ actionId: 'workflow.run.invocations.complete_review', input: { runId,
+        invocation: { recordId: leafId }, expectedContentRevision: '1', mode: 'use_result', value: 'Exact answer' },
+        context: { surface: 'ui', authority: 'present_user', callerPermissionMode: 'safe-yolo' } }))
+        .rejects.toMatchObject({ code: 'storage_unavailable', status: 503 });
+    expect(held.index).toMatchObject({ lifecycle: 'waiting_for_review', contentRevision: '1' });
+});
 
 it('rejects worker publication and unknown operations before any Account request', async () => {
     const request = vi.fn();

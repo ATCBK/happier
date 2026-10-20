@@ -9,6 +9,16 @@ import { installUiListsCommonModuleMocks } from './uiListsTestHelpers';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const viewport = vi.hoisted(() => ({ width: 320, height: 800 }));
+// The focus ring is keyboard-only: its owner records the last input at the document when it loads, so the
+// document boundary exists before any import and the case below presses a key through its listener.
+const documentInput = vi.hoisted(() => {
+    const listeners = new Map<string, (event: unknown) => void>();
+    const document = {
+        addEventListener: (type: string, listener: (event: unknown) => void) => { listeners.set(type, listener); },
+    };
+    (globalThis as { document?: unknown }).document = document;
+    return { listeners, document };
+});
 installUiListsCommonModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -46,7 +56,17 @@ describe('ItemRowActions', () => {
     beforeEach(() => {
         viewport.width = 320;
         viewport.height = 800;
-        restoreWebGlobals = withPopoverWebGlobals();
+        // The touch floors below are the finger contract: a phone browser's primary pointer cannot hover.
+        // A precise pointer keeps the dense desktop sizes (see `resolveMinimumInteractiveTargetSize`).
+        restoreWebGlobals = withPopoverWebGlobals({
+            window: {
+                addEventListener: vi.fn(),
+                removeEventListener: vi.fn(),
+                setTimeout: globalThis.setTimeout.bind(globalThis),
+                clearTimeout: globalThis.clearTimeout.bind(globalThis),
+                matchMedia: (query: string) => ({ matches: query === '(pointer: coarse)' || query === '(hover: none)', media: query }),
+            },
+        });
     });
     afterEach(() => restoreWebGlobals?.());
 
@@ -569,6 +589,8 @@ describe('ItemRowActions', () => {
         const flatten = (style: unknown) => (Array.isArray(style)
             ? Object.assign({}, ...style.filter(Boolean))
             : (style ?? {})) as Record<string, unknown>;
+        (globalThis as { document?: unknown }).document = documentInput.document;
+        documentInput.listeners.get('keydown')?.({ key: 'Tab' });
         const base = flatten(action!.props.style({ pressed: false, focused: false }));
         const focused = flatten(action!.props.style({ pressed: false, focused: true }));
 

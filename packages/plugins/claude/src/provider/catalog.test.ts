@@ -12,7 +12,9 @@ import {
 describe('Anthropic Provider catalog', () => {
   it('publishes low-cost model tier through the strict model descriptor consumed by model admission', () => {
     const haiku = ANTHROPIC_STATIC_MODELS.find(({ id }) => id === 'claude-haiku-4-5');
-    expect(ProviderModelDescriptorV1Schema.parse(haiku)).toMatchObject({ costTier: 'low' });
+    expect(ProviderModelDescriptorV1Schema.parse(haiku)).toMatchObject({
+      costTier: 'low', name: 'Haiku 4.5', aliases: ['claude-haiku-4-5-20251001'],
+    });
   });
   it('uses provider-relative labels without rewriting non-Anthropic gateway names', () => {
     expect(normalizeAnthropicModelDisplayName('Claude Future 6', 'claude-future-6')).toBe('Future 6');

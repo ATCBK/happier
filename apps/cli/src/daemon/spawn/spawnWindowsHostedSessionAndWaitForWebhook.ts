@@ -224,7 +224,7 @@ export async function spawnWindowsHostedSessionAndWaitForWebhook(params: Readonl
         trackedSession.cancelStartupLaunchBeforeAck =
             cancelStartupLaunch;
         params.pidToTrackedSession.set(waitParams.pid, trackedSession);
-        params.spawnLifecycleCallbacks.onTrackedSessionRegistered?.();
+        params.spawnLifecycleCallbacks.onTrackedSessionRegistered?.(trackedSession);
         params.spawnLifecycleCallbacks.registerSpawnResourceCleanupForPid(trackedSession.pid);
         params.spawnLifecycleCallbacks.consumeSessionAttachCleanupForPid(trackedSession.pid);
         let acceptedSpawnMarkerPromise: Promise<void>;

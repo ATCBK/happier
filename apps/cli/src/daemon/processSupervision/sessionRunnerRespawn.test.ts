@@ -8,6 +8,10 @@ import {
 } from '@/session/shared/spawnSessionContract';
 
 import { createSessionRunnerRespawnManager } from './sessionRunnerRespawn';
+import { createVersionRuntimeRefreshAttemptHandoff } from '../plannedRunnerRestart/versionRuntimeRefreshAttemptHandoff';
+import { HostTerminalTranscriptFollowAdmissionError } from '@/agent/runtime/session/terminal/contract';
+import { resolveSessionRunnerFailureExitCode } from '@/cli/resolveSessionRunnerFailureExitCode';
+import { PluginError } from '@happier-dev/plugin-sdk';
 
 type RespawnOptionsResolver = (input: Readonly<{
   sessionId: string;
@@ -17,6 +21,154 @@ type RespawnOptionsResolver = (input: Readonly<{
 }>) => SpawnSessionOptions | Promise<SpawnSessionOptions>;
 
 describe('createSessionRunnerRespawnManager', () => {
+  it.each(['scheduled', 'retry', 'preflight'] as const)('settles the exact predecessor refresh when Stop retires a %s respawn', async phase => {
+    vi.useFakeTimers();
+    const tracked: TrackedSession = { startedBy: 'daemon', pid: 111, happySessionId: 'stopped-refresh',
+      vendorResumeId: 'native', spawnOptions: { directory: '/repo' } };
+    const handoff = createVersionRuntimeRefreshAttemptHandoff({ timeoutMs: null,
+      timeoutCompletion: 'timeout', supersededCompletion: 'superseded', cancelledCompletion: 'cancelled' });
+    const attempt = handoff.create({ sessionId: 'stopped-refresh', previousPid: 111, tracked });
+    const other = handoff.create({ sessionId: 'other-session', previousPid: 222, tracked: { ...tracked, pid: 222 } });
+    let releasePreflight!: (value: boolean) => void;
+    const preflight = new Promise<boolean>(resolve => { releasePreflight = resolve; });
+    const terminals: number[] = [];
+    const spawnSession = vi.fn(async () => ({ type: 'error', errorCode: 'SPAWN_FAILED' }));
+    const manager = createSessionRunnerRespawnManager({ enabled: true, maxRestarts: 2,
+      baseDelayMs: 50, maxDelayMs: 50, jitterMs: 0,
+      isSessionAlreadyRunning: () => phase === 'preflight' ? preflight : false, spawnSession,
+      onRespawnTerminal: ({ sessionId, previousPid, reason }) => {
+        terminals.push(previousPid);
+        handoff.settle(sessionId, previousPid, reason);
+      }, random: () => 0, logDebug: () => {}, logWarn: () => {} });
+    try {
+      attempt.start();
+      manager.handleUnexpectedExit(tracked, { reason: 'process-exit', code: 1, signal: null }, { forceRestart: true });
+      if (phase !== 'scheduled') await vi.advanceTimersByTimeAsync(0);
+      if (phase === 'retry') expect(spawnSession).toHaveBeenCalledOnce();
+      manager.markStopRequested('stopped-refresh', { reason: 'daemon_stop_session', requestedAtMs: 10 });
+      expect(handoff.has('stopped-refresh', 111)).toBe(false);
+      await expect(attempt.promise).resolves.toBe('stop_requested');
+      expect(handoff.has('other-session', 222)).toBe(true);
+      manager.prepareFreshExplicitResumeAdmission('stopped-refresh').complete();
+      releasePreflight(false);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(terminals).toEqual([111]);
+      expect(spawnSession).toHaveBeenCalledTimes(phase === 'retry' ? 1 : 0);
+    } finally { releasePreflight(false); attempt.cancel(); other.cancel(); vi.useRealTimers(); }
+  });
+  it('keeps intended replacement custody scoped to its Session until launch settles or Stop retires it', async () => {
+    vi.useFakeTimers();
+    let finishSpawn!: (result: { type: 'success' }) => void;
+    const spawn = new Promise<{ type: 'success' }>(resolve => { finishSpawn = resolve; });
+    const spawnSession = vi.fn(() => spawn);
+    const manager = createSessionRunnerRespawnManager({
+      enabled: true, maxRestarts: 2, baseDelayMs: 50, maxDelayMs: 50, jitterMs: 0,
+      isSessionAlreadyRunning: async () => false, spawnSession,
+      random: () => 0, logDebug: () => {}, logWarn: () => {},
+    });
+    const tracked: TrackedSession = { startedBy: 'daemon', pid: 111, happySessionId: 'planned-session',
+      vendorResumeId: 'vendor-session', spawnOptions: { directory: '/repo' } };
+    try {
+      expect(manager.handleUnexpectedExit(tracked, { reason: 'process-exit', code: 0, signal: null },
+        { forceRestart: true })).toBe('scheduled');
+      expect(manager.hasPendingIntendedRestarts('planned-session')).toBe(true);
+      expect(manager.hasPendingIntendedRestarts('another-session')).toBe(false);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(manager.hasPendingIntendedRestarts('planned-session')).toBe(true);
+      finishSpawn({ type: 'success' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(manager.hasPendingIntendedRestarts('planned-session')).toBe(false);
+      expect(spawnSession).toHaveBeenCalledOnce();
+      expect(manager.handleUnexpectedExit(tracked, { reason: 'process-exit', code: 0, signal: null },
+        { forceRestart: true })).toBe('scheduled');
+      manager.markStopRequested('planned-session', { reason: 'daemon_stop_session', requestedAtMs: 100 });
+      expect(manager.hasPendingIntendedRestarts('planned-session')).toBe(false);
+    } finally { finishSpawn({ type: 'success' }); vi.useRealTimers(); }
+  });
+
+  it('ends automatic recovery after a deterministic requester-custody refusal while preserving explicit Resume', async () => {
+    vi.useFakeTimers();
+    try {
+      const spawnSession = vi.fn(async () => ({ type: 'success' as const }));
+      const terminal = vi.fn();
+      const manager = createSessionRunnerRespawnManager({
+        enabled: true, maxRestarts: null, baseDelayMs: 50, maxDelayMs: 50, jitterMs: 0,
+        isSessionAlreadyRunning: async () => false, spawnSession, onRespawnTerminal: terminal,
+        random: () => 0, logDebug: () => {}, logWarn: () => {},
+      });
+      const error = new PluginError({ code: 'project_requester_credentials_unavailable',
+        message: 'Runner PluginServices operation failed (dispatch: project_requester_credentials_unavailable)',
+        details: { cause: { code: 'project_requester_credentials_unavailable', stage: 'dispatch' } } });
+      const exitCode = resolveSessionRunnerFailureExitCode(error);
+      expect(exitCode).toBe(79);
+      const tracked: TrackedSession = { startedBy: 'daemon', pid: 111, happySessionId: 'requester-refusal',
+        spawnOptions: { directory: '/repo' } };
+      expect(manager.handleUnexpectedExit(tracked, { reason: 'process-exit', code: exitCode, signal: null })).toBe('terminal');
+      await vi.runAllTimersAsync();
+      expect(spawnSession).not.toHaveBeenCalled();
+      expect(terminal).toHaveBeenCalledWith({ sessionId: 'requester-refusal', previousPid: 111,
+        reason: 'terminal_follow_admission_failed' });
+      manager.prepareFreshExplicitResumeAdmission('requester-refusal').complete();
+      expect(manager.prepareAutomaticResumeAdmission('requester-refusal')()).toBe(true);
+      expect(resolveSessionRunnerFailureExitCode(new PluginError({ code: 'runner_plugin_services_unavailable',
+        message: 'Transport unavailable' }))).toBe(1);
+      const unavailableHome = resolveSessionRunnerFailureExitCode(new PluginError({ code: 'project_requester_home_unavailable',
+        message: 'Requester Home temporarily unavailable' }));
+      expect(unavailableHome).toBe(1);
+      expect(manager.handleUnexpectedExit({ ...tracked, happySessionId: 'requester-home-unavailable' },
+        { reason: 'process-exit', code: unavailableHome, signal: null })).toBe('scheduled');
+      await vi.advanceTimersByTimeAsync(50);
+      expect(spawnSession).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(['bind', 'active'] as const)('preserves terminal follow %s failure through runner exit and daemon recovery', async phase => {
+    vi.useFakeTimers();
+    try {
+      const spawnSession = vi.fn(async () => ({ type: 'success' as const }));
+      const terminal = vi.fn();
+      const manager = createSessionRunnerRespawnManager({
+        enabled: true, maxRestarts: null, baseDelayMs: 50, maxDelayMs: 50, jitterMs: 0,
+        isSessionAlreadyRunning: async () => false, spawnSession, onRespawnTerminal: terminal,
+        random: () => 0, logDebug: () => {}, logWarn: () => {},
+      });
+      const error = new HostTerminalTranscriptFollowAdmissionError('native_agent_terminal_provider_session_unavailable', phase);
+      const code = resolveSessionRunnerFailureExitCode(error);
+      if (phase === 'bind') {
+        // A terminal replacement failure also retires an already scheduled crash cycle.
+        manager.handleUnexpectedExit({
+          startedBy: 'daemon', pid: 100, happySessionId: 'follow-admission', spawnOptions: { directory: '/repo' },
+        }, { reason: 'process-exit', code: 1, signal: null });
+      }
+      const disposition = manager.handleUnexpectedExit({
+        startedBy: 'daemon', pid: 111, happySessionId: 'follow-admission', spawnOptions: { directory: '/repo' },
+      }, { reason: 'process-exit', code, signal: null });
+      expect(disposition).toBe(phase === 'bind' ? 'terminal' : 'scheduled');
+      await vi.advanceTimersByTimeAsync(50);
+      if (phase === 'bind') {
+        expect(code).not.toBe(1);
+        expect(spawnSession).not.toHaveBeenCalled();
+        expect(terminal).toHaveBeenCalledWith({
+          sessionId: 'follow-admission', previousPid: 111, reason: 'terminal_follow_admission_failed',
+        });
+        // An explicit later start is independent of the terminal automatic cycle.
+        manager.prepareFreshExplicitResumeAdmission('follow-admission').complete();
+        expect(manager.prepareAutomaticResumeAdmission('follow-admission')()).toBe(true);
+        expect(manager.handleUnexpectedExit({
+          startedBy: 'daemon', pid: 222, happySessionId: 'follow-admission', spawnOptions: { directory: '/repo' },
+        }, { reason: 'process-exit', code: 1, signal: null })).toBe('scheduled');
+        await vi.advanceTimersByTimeAsync(50);
+        expect(spawnSession).toHaveBeenCalledOnce();
+      } else {
+        expect(code).toBe(1);
+        expect(spawnSession).toHaveBeenCalledOnce();
+        expect(terminal).not.toHaveBeenCalled();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not revive earlier automatic launch admission when explicit Resume clears Stop', () => {
     const manager = createSessionRunnerRespawnManager({
       enabled: true, maxRestarts: 2, baseDelayMs: 50, maxDelayMs: 50, jitterMs: 0,
@@ -29,13 +181,33 @@ describe('createSessionRunnerRespawnManager', () => {
     const whileStopped = manager.prepareAutomaticResumeAdmission('recovering-session');
     expect(beforeStop()).toBe(false);
     expect(whileStopped()).toBe(false);
-    manager.prepareFreshExplicitResumeAdmission('recovering-session')();
+    manager.prepareFreshExplicitResumeAdmission('recovering-session').complete();
     expect(beforeStop()).toBe(false);
     expect(whileStopped()).toBe(false);
     const afterResume = manager.prepareAutomaticResumeAdmission('recovering-session');
     expect(afterResume()).toBe(true);
     manager.markStopRequested('recovering-session', { reason: 'daemon_stop_session', requestedAtMs: 101 });
     expect(afterResume()).toBe(false);
+  });
+
+  it.each(['none', 'before', 'after'] as const)('preserves topology retirement admission with external Stop %s', (externalStop) => {
+    const manager = createSessionRunnerRespawnManager({
+      enabled: true, maxRestarts: 2, baseDelayMs: 50, maxDelayMs: 50, jitterMs: 0,
+      isSessionAlreadyRunning: async () => false, spawnSession: async () => ({ type: 'success' }),
+      random: () => 0, logDebug: () => {}, logWarn: () => {},
+    });
+    const oldAutomaticAdmission = manager.prepareAutomaticResumeAdmission('repair-session');
+    const admission = manager.prepareFreshExplicitResumeAdmission('repair-session');
+    const stop = () => manager.markStopRequested('repair-session', { reason: 'daemon_stop_session', requestedAtMs: 101 });
+    if (externalStop === 'before') stop();
+    admission.retireIncumbent({ reason: 'daemon_stop_session', requestedAtMs: 100 });
+    expect(oldAutomaticAdmission()).toBe(false);
+    expect(admission.isCurrent()).toBe(externalStop !== 'before');
+    if (externalStop === 'after') stop();
+    admission.complete();
+    expect(admission.isCurrent()).toBe(externalStop === 'none');
+    expect(manager.prepareAutomaticResumeAdmission('repair-session')()).toBe(externalStop === 'none');
+    expect(oldAutomaticAdmission()).toBe(false);
   });
 
   it.each(['stop', 'stop-then-resume', 'launch-refused'] as const)(
@@ -70,7 +242,7 @@ describe('createSessionRunnerRespawnManager', () => {
         expect(preparationStarted).toBe(true);
         if (retirement !== 'launch-refused') {
           manager.markStopRequested('prepared-runner', { reason: 'daemon_stop_session', requestedAtMs: 100 });
-          if (retirement === 'stop-then-resume') manager.prepareFreshExplicitResumeAdmission('prepared-runner')();
+          if (retirement === 'stop-then-resume') manager.prepareFreshExplicitResumeAdmission('prepared-runner').complete();
         }
         finishPreparation();
         await vi.advanceTimersByTimeAsync(50);
@@ -174,7 +346,7 @@ describe('createSessionRunnerRespawnManager', () => {
         spawnOptions: { directory: '/repo' } }, { reason: 'process-exit', code: 1, signal: null });
       await vi.advanceTimersByTimeAsync(50);
       manager.markStopRequested('resume-during-read', { reason: 'daemon_stop_session', requestedAtMs: 100 });
-      manager.prepareFreshExplicitResumeAdmission('resume-during-read')();
+      manager.prepareFreshExplicitResumeAdmission('resume-during-read').complete();
       finishRead();
       await vi.advanceTimersByTimeAsync(60_000);
       expect(spawnSession).not.toHaveBeenCalled();
@@ -774,7 +946,7 @@ describe('createSessionRunnerRespawnManager', () => {
       reason: 'daemon_stop_session',
       requestedAtMs: 1_001,
     });
-    completeAdmission();
+    completeAdmission.complete();
 
     expect(manager.handleUnexpectedExit(
       tracked,
@@ -1224,7 +1396,7 @@ describe('createSessionRunnerRespawnManager', () => {
     expect(spawnSession).toHaveBeenCalledTimes(1);
 
     manager.markStopRequested('sess-stopped', { reason: 'daemon_stop_session', requestedAtMs: 1_000 });
-    manager.prepareFreshExplicitResumeAdmission('sess-stopped')();
+    manager.prepareFreshExplicitResumeAdmission('sess-stopped').complete();
     expect(manager.handleUnexpectedExit(
       tracked(222),
       { reason: 'process-exited', code: 1, signal: null },

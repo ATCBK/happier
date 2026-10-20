@@ -35,6 +35,8 @@ const credential: ProviderApiKeyCredentialRequirementV1 = {
   }],
 };
 
+const reviewedModel = { id: 'reviewed-model', name: 'Reviewed model' };
+
 const endpoint = (protocol: 'openai-responses' | 'openai-chat') => ({
   id: protocol,
   protocol,
@@ -58,26 +60,40 @@ describe('Runner broker readiness reviewed application', () => {
   it('accepts the exact reviewed compatible endpoint', () => {
     expect(resolveReviewedRunnerBrokerApplicationCompatibility({
       agentTargetKey: 'agent:happier.agent.codex/codex', agent,
-      endpoints: [endpoint('openai-responses')], application, credential,
+      endpoints: [endpoint('openai-responses')], application, credential, model: reviewedModel,
     })).toEqual({ status: 'ready' });
+  });
+
+  it('assesses required model capabilities from the exact reviewed model', () => {
+    const input = {
+      agentTargetKey: application.agentTargetKey,
+      agent: { ...agent, required: { toolRoundTrips: true as const } },
+      endpoints: [endpoint('openai-responses')], application, credential,
+      model: { id: 'reviewed-model', name: 'Reviewed model', capabilities: { toolRoundTrips: 'supported' as const } },
+    };
+    expect(resolveReviewedRunnerBrokerApplicationCompatibility(input)).toEqual({ status: 'ready' });
+    expect(resolveReviewedRunnerBrokerApplicationCompatibility({
+      ...input,
+      model: { ...input.model, capabilities: { toolRoundTrips: 'unsupported' } },
+    })).toEqual({ status: 'unavailable', reason: 'reviewed_application_incompatible' });
   });
 
   it('rejects an Agent that cannot use the reviewed broker protocol', () => {
     expect(resolveReviewedRunnerBrokerApplicationCompatibility({
       agentTargetKey: application.agentTargetKey,
       agent: { ...agent, acceptsProtocols: ['anthropic'] },
-      endpoints: [endpoint('openai-responses')], application, credential,
+      endpoints: [endpoint('openai-responses')], application, credential, model: reviewedModel,
     })).toEqual({ status: 'unavailable', reason: 'reviewed_application_incompatible' });
   });
 
   it('fails closed when the reviewed endpoint changed, without treating another endpoint as ambiguous', () => {
     expect(resolveReviewedRunnerBrokerApplicationCompatibility({
       agentTargetKey: 'agent:happier.agent.codex/codex', agent,
-      endpoints: [], application, credential,
+      endpoints: [], application, credential, model: reviewedModel,
     })).toEqual({ status: 'unavailable', reason: 'reviewed_application_changed' });
     expect(resolveReviewedRunnerBrokerApplicationCompatibility({
       agentTargetKey: 'agent:happier.agent.codex/codex', agent,
-      endpoints: [endpoint('openai-responses'), endpoint('openai-chat')], application, credential,
+      endpoints: [endpoint('openai-responses'), endpoint('openai-chat')], application, credential, model: reviewedModel,
     })).toEqual({ status: 'ready' });
   });
 });

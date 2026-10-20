@@ -92,18 +92,32 @@ describe('credentialed Session Project mutation and Sync row ports', () => {
         const portableRef = { ...ref, serverId: homeId };
         const boundary = accountRows([refRow(portableRef), refRow({ ...refB, serverId: homeId }), graphRow()]);
         const invoke = vi.fn().mockImplementation(async method => method.startsWith('usage.sources.') ? { sources: [] }
-          : method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_RELATIONSHIP_CREATE ? { created: true, relationshipId: 'rel-portable' }
+          : method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_TARGET_REPLACEMENT_PREFLIGHT ? { type: 'not_required' }
+          : method === RPC_METHODS.DAEMON_WORKSPACE_SYNC_RELATIONSHIP_CREATE ? {
+              v: 1, created: true, relationshipId: 'rel-portable', controllerMachineId: ref.machineId,
+              sourceWorkspaceRefId: ref.id, targetWorkspaceRefId: refB.id,
+              status: { relationshipId: 'rel-portable', controllerMachineId: ref.machineId, state: 'watching',
+                alphaPath: ref.rootPath, betaPath: refB.rootPath, mode: 'keep_both_in_sync',
+                endpointStates: { alpha: null, beta: null }, conflictCount: 0, lastCycleObservedAtMs: null },
+            }
           : { status: 'page', relationshipId: 'rel-ab', conflicts: [], totalCount: 0, nextCursor: null });
         const actions = createCliActionDeps({ token, credentials: { token, encryption: null },
           serverId: profileId, serverIdentityId: homeId, serverHttpBaseUrl: serverUrl, sessionId: 'session-a', mode: 'plain', ctx: null,
           machineActionDirectTargetTransport: { machineId: 'machine-a', invoke } });
         const executor = createActionExecutor(actions);
         const context = { surface: 'cli' as const, serverId: homeId, bypassApprovals: true };
-        const syncResult = await actions.workspaceSyncRelationshipCreate!({ serverId: homeId, operationId: 'portable-sync',
-          input: { v: 1, sourceWorkspaceRefId: ref.id, targetMachineId: refB.machineId, targetPath: refB.rootPath,
-            mode: 'keep_both_in_sync', contentPolicy: relationship().contentPolicy, destinationIntent: 'use_existing' } });
-        expect.soft(syncResult).toMatchObject({ created: true, relationshipId: 'rel-portable' });
-        const syncRead = await actions.workspaceSyncConflictsList!({ input: { workspaceRefId: refB.id, relationshipId: 'rel-ab', limit: 50 } })
+        const syncResult = await executor.execute('workspace.sync.relationship.create', {
+          v: 1, sourceWorkspaceRefId: ref.id, targetMachineId: ref.machineId, targetPath: refB.rootPath,
+          mode: 'keep_both_in_sync', contentPolicy: relationship().contentPolicy, destinationIntent: 'use_existing',
+        }, { ...context, surface: 'agent', serverId: profileId, serverIdentityId: homeId, actionRequestId: 'portable-sync' });
+        expect.soft(syncResult, JSON.stringify(syncResult))
+          .toMatchObject({ ok: true, result: { created: true, relationshipId: 'rel-portable' } });
+        expect(invoke).toHaveBeenCalledWith(
+          RPC_METHODS.DAEMON_WORKSPACE_SYNC_RELATIONSHIP_CREATE,
+          expect.objectContaining({ operationId: 'portable-sync' }),
+          expect.objectContaining({ localActionContext: expect.objectContaining({ surface: 'agent' }) }),
+        );
+        const syncRead = await actions.workspaceSyncConflictsList!({ input: { controllerMachineId: ref.machineId, relationshipId: 'rel-ab', limit: 50 } })
           .catch(error => ({ errorCode: error.code }));
         expect.soft(syncRead).toMatchObject({ status: 'page', relationshipId: 'rel-ab' });
         const usage = await actions.usageSourceAction!({ actionId: 'usage.sources.discover', input: { serverId: homeId, machineId: 'machine-a' } }, context)
@@ -115,11 +129,25 @@ describe('credentialed Session Project mutation and Sync row ports', () => {
             { serverId: homeId, projectKey: { serverId: homeId, id: ref.id } },
             { serverId: homeId, projectKey: { serverId: homeId, id: refB.id } },
           ] } });
-        expect(await executor.execute('projects.workspace.update', { serverId: homeId, workspaceId: ref.id, label: 'Portable' }, context))
-          .toMatchObject({ ok: true, result: { workspaceRef: { ...portableRef, label: 'Portable' } } });
-        expect(boundary.writes()[0]?.[1]).toMatchObject({ mutations: [{ key: { serverId: homeId } }] });
+        expect(await executor.execute('projects.list', { serverId: profileId }, { ...context, serverId: profileId }))
+          .toMatchObject({ ok: true, result: { items: [
+            { serverId: homeId, projectKey: { serverId: homeId, id: ref.id } },
+            { serverId: homeId, projectKey: { serverId: homeId, id: refB.id } },
+          ] } });
+        expect(await executor.execute('projects.workspace.update', { serverId: profileId, workspaceId: ref.id, label: 'Portable', pinned: true }, context))
+          .toMatchObject({ ok: true, result: { workspaceRef: { ...portableRef, label: 'Portable' }, organization: { pinned: true } } });
+        expect(boundary.writes()[0]?.[1]).toMatchObject({ mutations: [
+          { key: { kind: 'workspace-ref', serverId: homeId } },
+          { key: { kind: 'project-organization', serverId: homeId } },
+        ] });
+        expect(await executor.execute('projects.visibility.set', {
+          target: { serverId: profileId, projectKey: ref.projectKey }, expectedRevision: 0, hidden: true,
+        }, context)).toMatchObject({ ok: true, result: { revision: 1, row: { pinned: true, hidden: true } } });
+        expect(boundary.writes()[1]?.[1]).toMatchObject({ mutations: [
+          { key: { kind: 'project-organization', serverId: homeId } },
+        ] });
         for (const scenario of ['wrong', 'ambiguous', 'retired'] as const) {
-          await updateSettings(settings => ({ ...settings, servers: scenario === 'retired' ? {} : scenario === 'ambiguous'
+          await updateSettings((settings): typeof settings => ({ ...settings, servers: scenario === 'retired' ? {} : scenario === 'ambiguous'
             ? { [profileId]: profile, duplicate: { ...profile, id: 'duplicate' } } : { [profileId]: profile } }));
           const rejectedHome = scenario === 'wrong' ? 'srv_wrongRows' : homeId;
           expect(await executor.execute('projects.list', { serverId: rejectedHome }, { ...context, serverId: rejectedHome }))
@@ -127,6 +155,7 @@ describe('credentialed Session Project mutation and Sync row ports', () => {
           expect(await executor.execute('projects.workspace.update', { serverId: rejectedHome, workspaceId: ref.id, label: 'Rejected' },
             { ...context, serverId: rejectedHome })).toMatchObject({ ok: false, errorCode: 'server_scope_mismatch' });
           expect(await actions.workspaceSyncRelationshipCreate!({ serverId: rejectedHome, operationId: 'rejected-sync',
+            context: { ...context, serverId: rejectedHome },
             input: { v: 1, sourceWorkspaceRefId: ref.id, targetMachineId: refB.machineId, targetPath: refB.rootPath,
               mode: 'keep_both_in_sync', contentPolicy: relationship().contentPolicy, destinationIntent: 'use_existing' } }))
             .toMatchObject({ ok: false, errorCode: 'server_scope_mismatch' });
@@ -134,7 +163,7 @@ describe('credentialed Session Project mutation and Sync row ports', () => {
             input: { serverId: rejectedHome, machineId: 'machine-a' } }, { ...context, serverId: rejectedHome }))
             .toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
         }
-        expect(boundary.writes()).toHaveLength(1);
+        expect(boundary.writes()).toHaveLength(2);
       } finally { scope.restore(); reloadConfiguration(); }
     });
   });
@@ -254,7 +283,7 @@ describe('credentialed Session Project mutation and Sync row ports', () => {
     accountRows([refRow(), refRow(refB), graphRow()]);
     const invoke = vi.fn().mockResolvedValue({ status: 'page', relationshipId: 'rel-ab', conflicts: [], totalCount: 0, nextCursor: null });
     const signal = new AbortController().signal;
-    await expect(dependencies(invoke).workspaceSyncConflictsList!({ input: { relationshipId: 'rel-ab', limit: 50 }, signal })).resolves.toMatchObject({ status: 'page' });
+    await expect(dependencies(invoke).workspaceSyncConflictsList!({ input: { controllerMachineId: ref.machineId, relationshipId: 'rel-ab', limit: 50 }, signal })).resolves.toMatchObject({ status: 'page' });
     expect(invoke).toHaveBeenCalledWith(RPC_METHODS.DAEMON_WORKSPACE_SYNC_CONFLICTS_LIST, { relationshipId: 'rel-ab', limit: 50 }, { signal });
   });
 

@@ -15,6 +15,7 @@ import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/prov
 import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { CurrentUiContextSnapshotV1Schema } from '@happier-dev/protocol/plugins/ui';
 
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
@@ -36,6 +37,11 @@ const { storage } = await import('@/sync/domains/state/storage');
 const { settingsParse } = await import('@/sync/domains/settings/settings');
 const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
 const { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { publishMachineContributionRegistryProjectionInvalidation } = await import('@/sync/ops/machineContributionRegistryProjectionRevision');
+const { renderMountedCurrentUiContext } = await import('@/dev/testkit/harness/mountedCurrentUiContext');
+const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+// Load the declaration's operation leaf before the timed confirmation flow.
+await import('../../voiceSettingsOperationInvoker');
 const STT_PACK = listModelPackCatalogEntries('stt_sherpa')[0]!.packId;
 const EXTERNAL_PACK = 'acme.speech/english-small';
 
@@ -147,6 +153,134 @@ describe('useDaemonVoiceModelCatalogState', () => {
     });
     afterEach(async () => { vi.useRealTimers(); await account.reset(); vi.restoreAllMocks(); });
 
+    it('retires unanswered catalog reads on unmount and can load the same Machine again', async () => {
+        const signals: AbortSignal[] = [];
+        respond = (_request, context) => {
+            signals.push(context.signal);
+            return new Promise(() => {});
+        };
+        const first = await mount({ refreshKey: 'machine-a' });
+        expect(state(first).loading).toBe(true);
+        await vi.waitFor(() => expect(signals.length).toBeGreaterThan(0));
+        await act(async () => { first.unmount(); });
+        await vi.waitFor(() => expect(signals.every(signal => signal.aborted)).toBe(true));
+        catalogReply();
+        const retry = await mount({ refreshKey: 'machine-a' });
+        expect(state(retry)).toMatchObject({ loading: false, errorCode: null, count: 1 });
+        await act(async () => { retry.unmount(); });
+    });
+
+    it('does not let another saved Home cancel the active Account model operation', async () => {
+        const pending = createDeferred<unknown>();
+        const defaultReply = respond;
+        respond = (request, context) => request.method.endsWith('.install') ? pending.promise : defaultReply(request, context);
+        const screen = await renderMountedCurrentUiContext(<TestHarness refreshKey="machine-a" />);
+        await settle();
+        const { action } = await start(screen.tree);
+        try {
+            const otherServerId = await account.addHome({ name: 'Other Voice Account',
+                serverUrl: 'https://other-voice-account.test', serverIdentityId: 'other-voice-home',
+                accountId: 'account-b', active: false,
+                features: createRootLayoutFeaturesResponse({ features: { voice: { enabled: true } } }) });
+            account.home.answer(otherServerId, '/v2/account/settings', { body: {
+                version: 1, content: { t: 'plain', v: storage.getState().settings },
+            } });
+            const result = await createDefaultActionExecutor().execute('settings.invoke', {
+                anchor: 'voiceAdvanced.cancelSpeechModel',
+                input: { kind: 'model_pack', packId: STT_PACK, machineId: 'machine-a' },
+            }, { surface: 'ui', authority: 'present_user', serverId: otherServerId, expectedAccountId: 'account-b',
+                presentUserConfirmation: { actionId: 'settings.invoke' } });
+            expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: {
+                status: 'unavailable', reason: 'model_operation_changed',
+            } });
+            expect(observedSignals[0].aborted).toBe(false);
+        } finally {
+            pending.resolve(installed());
+            await action;
+            screen.unmount();
+        }
+    });
+
+    it('cancels a UI-started install through the declared settings Action and refuses the retired command', async () => {
+        const pending = createDeferred<unknown>();
+        const defaultReply = respond;
+        respond = (request, context) => request.method.endsWith('.install') ? pending.promise : defaultReply(request, context);
+        const screen = await renderMountedCurrentUiContext(<TestHarness refreshKey="machine-a" />);
+        await settle();
+        const { action } = await start(screen.tree);
+        const executor = createDefaultActionExecutor();
+        const context = { surface: 'agent' as const, serverId: storage.getState().settingsScope!.serverId };
+        try {
+            const read = await executor.execute('ui.current_context.read', {}, context);
+            expect(read).toMatchObject({ ok: true });
+            if (!read.ok) throw new Error(read.errorCode);
+            const snapshot = CurrentUiContextSnapshotV1Schema.parse(read.result);
+            expect(snapshot.commands).toHaveLength(1);
+            expect(await executor.execute('settings.invoke', { anchor: 'voiceAdvanced.cancelSpeechModel',
+                input: { kind: 'model_pack', packId: 'other-model', machineId: 'machine-a' } }, context))
+                .toMatchObject({ ok: true, result: { status: 'unavailable' } });
+            expect(await executor.execute('settings.invoke', { anchor: 'voiceAdvanced.cancelSpeechModel',
+                input: { kind: 'model_pack', packId: STT_PACK, machineId: 'machine-b' } }, context))
+                .toMatchObject({ ok: true, result: { status: 'unavailable', reason: 'execution_machine_changed' } });
+            expect(observedSignals[0].aborted).toBe(false);
+            const result = await executor.execute('settings.invoke', { anchor: 'voiceAdvanced.cancelSpeechModel',
+                input: { kind: 'model_pack', packId: STT_PACK, machineId: 'machine-a' } }, context);
+            expect(result).toMatchObject({ ok: true, result: { status: 'completed' } });
+            await act(async () => { await action; });
+            await settle();
+            expect(observedSignals[0].aborted).toBe(true);
+            expect(state(screen.tree)).toMatchObject({ actionPackId: null, actionError: null });
+            expect(await executor.execute('settings.invoke', { anchor: 'voiceAdvanced.cancelSpeechModel',
+                input: { kind: 'model_pack', packId: STT_PACK, machineId: 'machine-a' } }, context))
+                .toMatchObject({ ok: true, result: { status: 'unavailable' } });
+            const replacement = createDeferred<unknown>();
+            respond = (request, rpcContext) => request.method.endsWith('.install') ? replacement.promise : defaultReply(request, rpcContext);
+            const next = await start(screen.tree);
+            try {
+                expect(await executor.execute('ui.current_context.command.invoke', { commandId: snapshot.commands[0]!.id }, context))
+                    .toMatchObject({ ok: false });
+                expect(observedSignals[1].aborted).toBe(false);
+                expect(await executor.execute('settings.invoke', { anchor: 'voiceAdvanced.cancelSpeechModel',
+                    input: { kind: 'model_pack', packId: STT_PACK, machineId: 'machine-a' } }, context))
+                    .toMatchObject({ ok: true, result: { status: 'completed' } });
+                await act(async () => { await next.action; });
+                expect(observedSignals[1].aborted).toBe(true);
+            } finally { replacement.resolve(installed()); await next.action; }
+        } finally {
+            pending.resolve(installed());
+            await action;
+            await screen.unmount();
+        }
+    });
+
+    it('refuses an ambiguous Cancel when two mounted controllers own the same pack', async () => {
+        const pending = createDeferred<unknown>();
+        const defaultReply = respond;
+        respond = (request, context) => request.method.endsWith('.install') ? pending.promise : defaultReply(request, context);
+        const screen = await renderMountedCurrentUiContext(<><TestHarness refreshKey="machine-a" /><TestHarness refreshKey="machine-a" /></>);
+        await settle();
+        const owners = () => screen.tree.root.findAllByType('State').map(node => node.props);
+        const actions: Promise<void>[] = [];
+        await act(async () => { for (const owner of owners()) actions.push(owner.install(STT_PACK)); });
+        await settle();
+        const executor = createDefaultActionExecutor();
+        const context = { surface: 'agent' as const, serverId: storage.getState().settingsScope!.serverId };
+        try {
+            const read = await executor.execute('ui.current_context.read', {}, context);
+            if (!read.ok) throw new Error(read.errorCode);
+            expect(CurrentUiContextSnapshotV1Schema.parse(read.result).commands).toHaveLength(2);
+            expect(await executor.execute('settings.invoke', { anchor: 'voiceAdvanced.cancelSpeechModel',
+                input: { kind: 'model_pack', packId: STT_PACK, machineId: 'machine-a' } }, context))
+                .toMatchObject({ ok: true, result: { status: 'unavailable', reason: 'model_operation_changed' } });
+            expect(observedSignals).toHaveLength(2);
+            expect(observedSignals.every(signal => !signal.aborted)).toBe(true);
+        } finally {
+            await act(async () => { for (const owner of owners()) owner.cancel(); await Promise.all(actions); });
+            pending.resolve(installed());
+            await screen.unmount();
+        }
+    });
+
     it('cancels pending removal consent after Account retirement with the same execution machine', async () => {
         catalogReply([status(STT_PACK, { installState: 'installed' })]);
         const lifetime = captureActiveServerAccountScopeLifetime();
@@ -206,6 +340,181 @@ describe('useDaemonVoiceModelCatalogState', () => {
         const tree = await mount({ enabled: false });
         expect(requests).toHaveLength(0);
         expect(state(tree)).toMatchObject({ count: 0, loading: false });
+    });
+
+    it('shares actual catalog observations with passive readers without asking the machine again', async () => {
+        catalogReply([status(STT_PACK, { installState: 'installed' })]);
+        const active = await renderScreen(<TestHarness refreshKey="machine-a" />);
+        await settle();
+        const reads = listingRequests().length;
+        const passive = await mount({ enabled: false, refreshKey: 'machine-a' });
+        expect(state(passive)).toMatchObject({ installState: 'installed', loading: false });
+        await active.unmount();
+        const remounted = await mount({ enabled: false, refreshKey: 'machine-a' });
+        expect(state(remounted)).toMatchObject({ installState: 'installed', loading: false });
+        const otherMachine = await mount({ enabled: false, refreshKey: 'machine-b' });
+        expect(state(otherMachine)).toMatchObject({ count: 0, loading: false });
+        expect(listingRequests()).toHaveLength(reads);
+
+        await act(async () => publishMachineContributionRegistryProjectionInvalidation({
+            machineId: 'machine-a', serverId: storage.getState().settingsScope!.serverId,
+        }));
+        await settle();
+        expect(state(passive)).toMatchObject({ count: 0, loading: false });
+        expect(state(remounted)).toMatchObject({ count: 0, loading: false });
+        expect(listingRequests()).toHaveLength(reads);
+    });
+
+    it('shares an in-flight catalog refresh across active readers of the same machine', async () => {
+        const pending = createDeferred<unknown>();
+        respond = request => request.method.endsWith('.status') ? modelStatus([]) : pending.promise;
+        const screen = await renderScreen(<><TestHarness refreshKey="machine-a" /><TestHarness refreshKey="machine-a" /></>);
+        await settle();
+        expect(listingRequests()).toHaveLength(1);
+        await act(async () => pending.resolve(modelList([status(STT_PACK, { installState: 'installed' })])));
+        await settle();
+        expect(screen.tree.root.findAllByType('State').map(node => node.props.installState)).toEqual(['installed', 'installed']);
+    });
+
+    it.each([false, true])('withdraws a settings Action model removal from passive observations and rechecks only active readers (%s)', async (keepActive) => {
+        let isInstalled = true;
+        respond = request => {
+            const models = [status(STT_PACK, { installState: isInstalled ? 'installed' : 'not_installed' })];
+            if (request.method.endsWith('.list')) return modelList(models);
+            if (request.method.endsWith('.status')) return modelStatus(models);
+            if (request.method.endsWith('.remove')) {
+                isInstalled = false;
+                return DaemonVoiceInferenceModelsRemoveResponseSchema.parse({ ok: true });
+            }
+            throw new Error(`Unexpected model RPC: ${request.method}`);
+        };
+        const active = await renderScreen(<TestHarness refreshKey="machine-a" />);
+        await settle();
+        const passive = await mount({ enabled: false, refreshKey: 'machine-a' });
+        expect(state(passive).installState).toBe('installed');
+        if (!keepActive) await active.unmount();
+        const reads = listingRequests().length;
+        let removal!: ReturnType<ReturnType<typeof createDefaultActionExecutor>['execute']>;
+        let removalResult: unknown;
+        await act(async () => {
+            removal = createDefaultActionExecutor().execute('settings.invoke', {
+                anchor: 'voiceAdvanced.removeSpeechModel', input: { kind: 'model_pack', packId: STT_PACK, machineId: 'machine-a' },
+            }, { surface: 'ui', authority: 'present_user', serverId: storage.getState().settingsScope!.serverId,
+                presentUserConfirmation: { actionId: 'settings.invoke' } });
+            void removal.then(result => { removalResult = result; });
+        });
+        await settle();
+        expect(nativeAlert, JSON.stringify(removalResult)).toHaveBeenCalled();
+        await act(async () => { chooseNativeConfirmation(true); });
+        expect(await removal).toMatchObject({ ok: true, result: { status: 'completed' } });
+        await settle();
+        expect(state(passive).installState).toBe(keepActive ? 'not_installed' : null);
+        expect(listingRequests()).toHaveLength(reads + (keepActive ? 1 : 0));
+    });
+
+    it('shares actual Action inspection and partial pack checks without certifying unqueried models', async () => {
+        catalogReply([status(STT_PACK, { installState: 'installed' }), externalStatus()]);
+        const passive = await mount({ enabled: false, refreshKey: 'machine-a' });
+        expect(state(passive).count).toBe(0);
+        const inspection = await createDefaultActionExecutor().execute('settings.invoke', {
+            anchor: 'voiceAdvanced.speechModels',
+        }, { surface: 'ui', authority: 'present_user', serverId: storage.getState().settingsScope!.serverId });
+        expect(inspection).toMatchObject({ ok: true, result: { status: 'completed' } });
+        await settle();
+        expect(state(passive)).toMatchObject({ installState: 'installed', externalVisible: true });
+        const { captureDaemonVoiceModelCatalogObservation } = await import('./daemonVoiceModelCatalogObservation');
+        const { DaemonVoiceInferenceClient } = await import('@/voice/runtime/daemonInference/DaemonVoiceInferenceClient');
+        const observation = captureDaemonVoiceModelCatalogObservation('machine-a');
+        respond = () => modelStatus([status()]);
+        await act(async () => { await observation.read({ client: new DaemonVoiceInferenceClient(), packIds: [STT_PACK] }); });
+        expect(state(passive)).toMatchObject({ installState: 'not_installed', externalVisible: true });
+        await act(async () => {
+            observation.invalidate();
+            await observation.read({ client: new DaemonVoiceInferenceClient(), packIds: [STT_PACK] });
+        });
+        expect(state(passive)).toMatchObject({ installState: 'not_installed', externalVisible: false, count: 1 });
+    });
+
+    it('withdraws the current daemon revision observation when Action removal completes after consent', async () => {
+        let isInstalled = true;
+        respond = request => {
+            const models = [status(STT_PACK, { installState: isInstalled ? 'installed' : 'not_installed' })];
+            if (request.method.endsWith('.list')) return modelList(models);
+            if (request.method.endsWith('.status')) return modelStatus(models);
+            if (request.method.endsWith('.remove')) {
+                isInstalled = false;
+                return DaemonVoiceInferenceModelsRemoveResponseSchema.parse({ ok: true });
+            }
+            throw new Error(`Unexpected model RPC: ${request.method}`);
+        };
+        const active = await renderScreen(<TestHarness refreshKey="machine-a" />);
+        await settle();
+        const passive = await mount({ enabled: false, refreshKey: 'machine-a' });
+        let removal!: ReturnType<ReturnType<typeof createDefaultActionExecutor>['execute']>;
+        await act(async () => {
+            removal = createDefaultActionExecutor().execute('settings.invoke', {
+                anchor: 'voiceAdvanced.removeSpeechModel', input: { kind: 'model_pack', packId: STT_PACK, machineId: 'machine-a' },
+            }, { surface: 'ui', authority: 'present_user', serverId: storage.getState().settingsScope!.serverId,
+                presentUserConfirmation: { actionId: 'settings.invoke' } });
+        });
+        await settle();
+        expect(nativeAlert).toHaveBeenCalled();
+        await act(async () => publishMachineContributionRegistryProjectionInvalidation({
+            machineId: 'machine-a', serverId: storage.getState().settingsScope!.serverId,
+        }));
+        await settle();
+        expect(state(passive).installState).toBe('installed');
+        await active.unmount();
+        const reads = listingRequests().length;
+        await act(async () => { chooseNativeConfirmation(true); });
+        expect(await removal).toMatchObject({ ok: true, result: { status: 'completed' } });
+        await settle();
+        expect(state(passive).installState).toBeNull();
+        expect(listingRequests()).toHaveLength(reads);
+    });
+
+    it('refuses a retained non-React reader after the daemon projection is replaced', async () => {
+        const { captureDaemonVoiceModelCatalogObservation } = await import('./daemonVoiceModelCatalogObservation');
+        const { DaemonVoiceInferenceClient } = await import('@/voice/runtime/daemonInference/DaemonVoiceInferenceClient');
+        const observation = captureDaemonVoiceModelCatalogObservation('machine-a');
+        publishMachineContributionRegistryProjectionInvalidation({
+            machineId: 'machine-a', serverId: storage.getState().settingsScope!.serverId,
+        });
+        const result = await observation.read({ client: new DaemonVoiceInferenceClient(), packIds: [STT_PACK] });
+        expect(result).toBeNull();
+        expect(requests).toHaveLength(0);
+    });
+
+    it('rechecks a demanded full catalog when a partial Action check supersedes its initial read', async () => {
+        const pending = createDeferred<unknown>();
+        let lists = 0;
+        respond = request => request.method.endsWith('.status') ? modelStatus([status()])
+            : ++lists === 1 ? pending.promise : modelList([externalStatus()]);
+        const active = await renderScreen(<TestHarness refreshKey="machine-a" />);
+        await settle();
+        const { captureDaemonVoiceModelCatalogObservation } = await import('./daemonVoiceModelCatalogObservation');
+        const { DaemonVoiceInferenceClient } = await import('@/voice/runtime/daemonInference/DaemonVoiceInferenceClient');
+        try {
+            await act(async () => {
+                await captureDaemonVoiceModelCatalogObservation('machine-a').read({
+                    client: new DaemonVoiceInferenceClient(), packIds: [STT_PACK], requireNewObservation: true,
+                });
+            });
+            await settle();
+            expect(state(active.tree).externalVisible).toBe(true);
+        } finally {
+            await act(async () => pending.resolve(modelList([])));
+        }
+    });
+
+    it('does not reuse catalog observations from a retired Account lifetime', async () => {
+        catalogReply([status(STT_PACK, { installState: 'installed' })]);
+        const active = await renderScreen(<TestHarness refreshKey="machine-a" />);
+        await settle();
+        await active.unmount();
+        await act(async () => retireActiveServerAccountScopeLifetime());
+        const passive = await mount({ enabled: false, refreshKey: 'machine-a' });
+        expect(state(passive)).toMatchObject({ count: 0, loading: false });
     });
 
     it('refreshes status when the selected execution-machine identity changes', async () => {
@@ -460,12 +769,16 @@ describe('useDaemonVoiceModelCatalogState', () => {
         const defaultReply = respond;
         respond = (request, context) => request.method.endsWith('.install') ? pending.promise : defaultReply(request, context);
         const neverCommits = createDeferred<never>();
-        const { tree } = await renderScreen(<React.Suspense fallback={React.createElement('Fallback')}><TestHarness refreshKey="machine-a" /></React.Suspense>);
+        const screen = await renderScreen(<React.Suspense fallback={React.createElement('Fallback')}><TestHarness refreshKey="machine-a" /></React.Suspense>);
+        const { tree } = screen;
         await settle();
         const { action } = await start(tree);
-        await act(async () => tree.update(<React.Suspense fallback={React.createElement('Fallback')}>
+        let replacement!: Promise<void>;
+        React.startTransition(() => { replacement = screen.update(<React.Suspense fallback={React.createElement('Fallback')}>
             <TestHarness refreshKey="machine-b" suspendAfterHook={neverCommits.promise} />
-        </React.Suspense>));
+        </React.Suspense>); });
+        await replacement;
+        expect(tree.root.findAllByType('Fallback')).toHaveLength(0);
         expect(observedSignals[0].aborted).toBe(false);
         await act(async () => { pending.resolve(installed()); await action; });
         await settle();
@@ -479,12 +792,16 @@ describe('useDaemonVoiceModelCatalogState', () => {
         const defaultReply = respond;
         respond = (request, context) => request.method.endsWith('.install') ? pending.promise : defaultReply(request, context);
         const neverCommits = createDeferred<never>();
-        const { tree } = await renderScreen(<React.Suspense fallback={React.createElement('Fallback')}><TestHarness refreshKey="machine-a" enabled /></React.Suspense>);
+        const screen = await renderScreen(<React.Suspense fallback={React.createElement('Fallback')}><TestHarness refreshKey="machine-a" enabled /></React.Suspense>);
+        const { tree } = screen;
         await settle();
         const { action } = await start(tree);
-        await act(async () => tree.update(<React.Suspense fallback={React.createElement('Fallback')}>
+        let replacement!: Promise<void>;
+        React.startTransition(() => { replacement = screen.update(<React.Suspense fallback={React.createElement('Fallback')}>
             <TestHarness refreshKey="machine-a" enabled={false} suspendAfterHook={neverCommits.promise} />
-        </React.Suspense>));
+        </React.Suspense>); });
+        await replacement;
+        expect(tree.root.findAllByType('Fallback')).toHaveLength(0);
         expect(observedSignals[0].aborted).toBe(false);
         await act(async () => { pending.resolve(installed()); await action; });
         await settle();

@@ -1,11 +1,10 @@
-import { TemporaryComputerActivationRefV1Schema } from '@happier-dev/protocol/sessions/authoring/fieldCatalog';
 import * as React from 'react';
 
 import {
     recoverMaterializedTemporaryComputerSessionForSession,
     type MaterializedTemporaryComputerRecoveryCandidate,
 } from '@/components/sessions/new/navigation/settleMaterializedTemporaryComputerSession';
-import { readNewSessionDraftFromRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
+import { resolveRunnerDraftActivation } from '@/components/sessions/drafts/newSessionDraftDeletion';
 import { useServerProfilesGeneration } from '@/hooks/server/useServerProfilesGeneration';
 import { createRunnerActivationClient } from '@/sync/api/ephemeralRunner/runnerActivationClient';
 import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
@@ -23,14 +22,13 @@ const EMPTY_DRAFTS = Object.freeze([]);
 
 export function projectMaterializedTemporaryComputerRecoveryCandidates(
     drafts: readonly NewSessionDraftProjection[],
-    readActivationRef: (draftId: string) => unknown,
 ): readonly MaterializedTemporaryComputerRecoveryCandidate[] {
     return drafts.flatMap((draft) => {
-        const parsed = TemporaryComputerActivationRefV1Schema.safeParse(readActivationRef(draft.draftId));
-        if (!parsed.success) return [];
+        const publicRef = resolveRunnerDraftActivation(draft).publicRef;
+        if (!publicRef) return [];
         return [{
             draftId: draft.draftId,
-            activationId: parsed.data.activationId,
+            activationId: publicRef.activationId,
             launchUserAttemptId: draft.localSupplement.launchUserAttemptId ?? null,
         } satisfies MaterializedTemporaryComputerRecoveryCandidate];
     });
@@ -59,13 +57,8 @@ export function useMaterializedTemporaryComputerSessionRecovery(input: Readonly<
     ), [scope]);
     const drafts = React.useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
     const candidates = React.useMemo(
-        () => projectMaterializedTemporaryComputerRecoveryCandidates(
-            drafts,
-            (draftId) => scope
-                ? readNewSessionDraftFromRepository({ scope, draftId })?.temporaryComputerActivationRef
-                : null,
-        ),
-        [drafts, scope],
+        () => projectMaterializedTemporaryComputerRecoveryCandidates(drafts),
+        [drafts],
     );
     useServerProfilesGeneration();
     const profile = input.serverId ? getServerProfileById(input.serverId) : null;

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { MaterializeNextPendingResult } from '@/api/session/sessionClientPort';
@@ -7,6 +7,7 @@ import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { createDeferred } from '@/testkit/async/deferred';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { writeSessionPendingQueueHoldV1ToMetadata } from '@happier-dev/protocol';
+import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 
 import { waitForNextPermissionModeMessage } from './waitForNextPermissionModeMessage';
 
@@ -24,11 +25,15 @@ function createQueue(): MessageQueue2<QueueMode> {
   return new MessageQueue2<QueueMode>(() => 'hash');
 }
 
+const sessions: Pick<ReturnType<typeof createMutableApiSessionClientFixture>, 'close'>[] = [];
+afterEach(async () => {
+  await Promise.all(sessions.splice(0).map(session => session.close()));
+});
+
 function asSessionClient(session: PermissionModeSessionFixture): ApiSessionClient {
-  return {
-    getMetadataSnapshot: () => null,
-    ...session,
-  } as unknown as ApiSessionClient;
+  const client = createMutableApiSessionClientFixture({ metadata: createTestMetadata() });
+  sessions.push(client);
+  return Object.assign(client, session);
 }
 
 describe('waitForNextPermissionModeMessage', () => {
@@ -48,19 +53,11 @@ describe('waitForNextPermissionModeMessage', () => {
       },
     };
 
-    const result = await Promise.race([
-      waitForNextPermissionModeMessage({
+    await expect(waitForNextPermissionModeMessage({
         messageQueue: queue,
         abortSignal: new AbortController().signal,
         session: asSessionClient(session),
-      }).then(
-        () => 'resolved',
-        (error: unknown) => error instanceof Error ? error.message : String(error),
-      ),
-      new Promise<string>((resolve) => setTimeout(() => resolve('timed-out'), 10)),
-    ]);
-
-    expect(result).toMatch(/auth/i);
+      })).rejects.toThrow(/auth/i);
     expect(popPendingMessage).not.toHaveBeenCalled();
   });
 
@@ -211,6 +208,45 @@ describe('waitForNextPermissionModeMessage', () => {
     expect(materializeNextPendingMessageSafely).not.toHaveBeenCalled();
     expect(popPendingMessage).not.toHaveBeenCalled();
     expect(waitCount).toBe(1);
+  });
+
+  it('waits for the next natural input while omitted quiet context remains retained', async () => {
+    const queue = new MessageQueue2<QueueMode>(() => 'hash', {
+      isContextOnly: text => text === 'quiet-original',
+    });
+    const waitingForMetadata = createDeferred<void>();
+    const materializeNextPendingMessageSafely = vi.fn(async () => ({ type: 'no_pending' as const }));
+    const session = asSessionClient({ materializeNextPendingMessageSafely,
+      async waitForMetadataUpdate(signal?: AbortSignal) {
+        waitingForMetadata.resolve();
+        return await new Promise<boolean>(resolve => {
+          if (signal?.aborted) resolve(false);
+          else signal?.addEventListener('abort', () => resolve(false), { once: true });
+        });
+      },
+    });
+    const abort = new AbortController();
+    queue.push('quiet-original', { permissionMode: 'default' });
+    queue.push('first-natural', { permissionMode: 'default' });
+    const first = await waitForNextPermissionModeMessage({ messageQueue: queue, session, abortSignal: abort.signal });
+    expect(first?.message).toBe('quiet-original\nfirst-natural');
+    expect(queue.getContextOnlyMessages()).toEqual(['quiet-original']);
+
+    let completed = false;
+    const next = waitForNextPermissionModeMessage({ messageQueue: queue, session, abortSignal: abort.signal })
+      .then(batch => { completed = true; return batch; });
+    try {
+      await waitingForMetadata.promise;
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(completed).toBe(false);
+      expect(materializeNextPendingMessageSafely).toHaveBeenCalledOnce();
+      queue.push('second-natural', { permissionMode: 'default' });
+      expect((await next)?.message).toBe('quiet-original\nsecond-natural');
+      expect(queue.getContextOnlyMessages()).toEqual(['quiet-original']);
+    } finally {
+      abort.abort();
+      await next;
+    }
   });
 
   it('continues processing when onMetadataUpdate throws', async () => {

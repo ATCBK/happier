@@ -1,13 +1,15 @@
+import * as React from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { act } from 'react-test-renderer';
-import { renderHook, standardCleanup, flushHookEffects, createDeferred } from '@/dev/testkit';
+import { renderHook, renderScreen, standardCleanup, flushHookEffects, createDeferred } from '@/dev/testkit';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { decodeUsageQueryResource, invalidateUsageQueryResources } from '@/sync/api/account/usageQueryResource';
 import { normalizeUsageQuery, getUsageQueryKey, type UsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
-import type { UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
-import { useUsageWidgetResource, useUsageWidgetBodyModel } from './useUsageWidgetResource';
+import { UsageAnalyticsQueryRequestSchema, type UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
+import { useUsageWidgetResource, useUsageWidgetBodyModel, type UsageWidgetResource, type UsageWidgetBodyModel } from './useUsageWidgetResource';
 import type { UsageWidgetQueryPlan } from './usageWidgetQueries';
 
 const accounting: UsageAnalyticsQueryResponse = { v: 1, totals: { eventCount: 1,
@@ -20,14 +22,92 @@ function plan(query: UsageQuery): UsageWidgetQueryPlan {
         input: { queries: [query] }, widgets: new Map([['first', row], ['second', row]]) };
 }
 async function mountHome(route: Parameters<typeof serveAccountHomes>[0]['route']) {
-    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-widgets.test', accountId: 'account-a' }], route });
+    const sessionBoundary = createSessionReadBatchHttpBoundary(route);
+    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-widgets.test', accountId: 'account-a' }],
+        route: sessionBoundary.handle });
     publishAppliedActiveServerSnapshot({ serverId: home.homes.a!.id, serverUrl: home.homes.a!.serverUrl, generation: 0 });
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
     return (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
 }
 afterEach(async () => { standardCleanup(); retireActiveServerAccountScopeLifetime(); invalidateUsageQueryResources(); await home?.dispose(); home = undefined; });
 
+function BodyProbe(props: Readonly<{ resource: UsageWidgetResource; instanceId: string;
+    onModel: (instanceId: string, model: UsageWidgetBodyModel) => void }>) {
+    const model = useUsageWidgetBodyModel(props.resource, props.instanceId);
+    props.onModel(props.instanceId, model);
+    return null;
+}
+
 describe('Usage widget shared Resource selection', () => {
+    it('keeps a settled sibling body and its model work stable through another query progress, while forwarding its own activity and authority loss', async () => {
+        const slowAccounting = createDeferred<Response>();
+        const slowDetail = createDeferred<Response>();
+        let detailIssued = false;
+        let denied = false;
+        const credentials = await mountHome(request => {
+            if (request.path === '/v2/usage/query') {
+                if (denied) return Response.json({ error: 'forbidden' }, { status: 403 });
+                const query = UsageAnalyticsQueryRequestSchema.parse(request.body);
+                return query.filters?.sessionIds?.includes('slow-session') ? slowAccounting.promise : Response.json(accounting);
+            }
+            if (request.path === '/v2/sessions/slow-session') { detailIssued = true; return slowDetail.promise; }
+            return undefined;
+        });
+        const first = normalizeUsageQuery({ session: 'settled-session', period: { startMs: 0, endMs: 1000 },
+            includeSessionEvidence: false, includeWorkEvidence: false });
+        const second = normalizeUsageQuery({ ...first, session: 'slow-session', includeSessionEvidence: true });
+        const queryPlan = { ...plan(first), input: { queries: [first, second] }, widgets: new Map([
+            ['first', plan(first).widgets.get('first')!], ['second', plan(second).widgets.get('second')!],
+        ]) };
+        const models = new Map<string, UsageWidgetBodyModel>();
+        const computations = new Map<string, number>();
+        const commits = new Map<string, number>();
+        const onModel = (id: string, model: UsageWidgetBodyModel) => {
+            models.set(id, model); computations.set(id, (computations.get(id) ?? 0) + 1);
+        };
+        const onRender: React.ProfilerOnRenderCallback = id => { commits.set(id, (commits.get(id) ?? 0) + 1); };
+        function Page() {
+            const resource = useUsageWidgetResource({ credentials, enabled: true, plan: queryPlan });
+            return <>{['first', 'second'].map(id => <React.Profiler key={id} id={id} onRender={onRender}>
+                <BodyProbe resource={resource} instanceId={id} onModel={onModel} />
+            </React.Profiler>)}</>;
+        }
+        await renderScreen(<Page />);
+        try {
+            await expect.poll(() => models.get('first')?.slice?.accounting).toMatchObject(accounting);
+            await flushHookEffects({ cycles: 20 });
+            const settledSlice = models.get('first')!.slice;
+            const baseline = { computations: computations.get('first'), commits: commits.get('first') };
+            const secondComputations = computations.get('second')!;
+            const withDetail: UsageAnalyticsQueryResponse = { ...accounting, contributions: [{ id: 'fact', observedAtMs: 500,
+                sessionId: 'slow-session', turnId: 'turn', agentId: null, modelId: null, machineId: null, projectKey: null,
+                workspaceId: null, source: null, tokens: accounting.totals.tokens, cost: accounting.totals.cost }] };
+            await act(async () => { slowAccounting.resolve(Response.json(withDetail)); });
+            await expect.poll(() => detailIssued).toBe(true);
+            await expect.poll(() => models.get('second')?.slice?.accounting).toMatchObject(withDetail);
+            await flushHookEffects({ cycles: 20 });
+            expect(models.get('first')!.slice).toBe(settledSlice);
+            expect(computations.get('first')).toBe(baseline.computations);
+            expect(commits.get('first')).toBe(baseline.commits);
+            expect(computations.get('second')).toBeGreaterThan(secondComputations);
+            expect(models.get('second')!.pending).toBe(true);
+            expect(models.get('second')!.refreshing).toBe(false);
+            await act(async () => { slowDetail.resolve(Response.json({ error: 'not_found' }, { status: 404 })); });
+            await expect.poll(() => models.get('second')!.pending).toBe(false);
+            expect(models.get('first')!.pending).toBe(false);
+            denied = true;
+            await act(async () => { await models.get('first')!.refresh(); });
+            await flushHookEffects({ cycles: 20 });
+            for (const model of models.values()) {
+                expect(model.slice).toBeNull();
+                expect(model.shownQuery).toBeNull();
+                expect(model.error).toBeTruthy();
+            }
+        } finally {
+            slowAccounting.resolve(Response.json(accounting));
+            slowDetail.resolve(Response.json({ error: 'not_found' }, { status: 404 }));
+        }
+    });
     it('exposes source-only initial progress to page chrome while bodies retain their first-read placeholder', async () => {
         const held = createDeferred<Response>();
         const credentials = await mountHome(request => request.path === '/v2/usage/query'
@@ -129,15 +209,13 @@ describe('Usage widget shared Resource selection', () => {
 
     it('releases accounting activity while slow private detail is still being read', async () => {
         const detail = createDeferred<Response>();
-        const issued = createDeferred<void>();
+        let issued = false;
         const withDetail: UsageAnalyticsQueryResponse = { ...accounting, contributions: [{ id: 'fact', observedAtMs: 500,
             sessionId: 'slow-session', turnId: 'turn', agentId: null, modelId: null, machineId: null, projectKey: null,
             workspaceId: null, source: null, tokens: accounting.totals.tokens, cost: accounting.totals.cost }] };
         const credentials = await mountHome(request => {
             if (request.path === '/v2/usage/query') return Response.json(withDetail);
-            if (request.path === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 1,
-                signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
-            if (request.path === '/v2/sessions/slow-session') { issued.resolve(); return detail.promise; }
+            if (request.path === '/v2/sessions/slow-session') { issued = true; return detail.promise; }
             return undefined;
         });
         const queryPlan = plan(normalizeUsageQuery({ session: 'slow-session', period: { startMs: 0, endMs: 1000 } }));
@@ -150,7 +228,7 @@ describe('Usage widget shared Resource selection', () => {
         const entry = hook.getCurrent().entry!;
         const release = entry.subscribe(() => { if (entry.getSnapshot().pending === 'idle') settled.resolve(); }, false);
         try {
-            await act(async () => { await issued.promise; });
+            await expect.poll(() => issued).toBe(true);
             expect(hook.getCurrent().slice?.accounting).toMatchObject(withDetail);
             expect(hook.getCurrent().pending).toBe(true);
             expect(hook.getCurrent().refreshing).toBe(false);

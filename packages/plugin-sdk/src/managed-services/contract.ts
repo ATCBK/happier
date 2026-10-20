@@ -144,6 +144,8 @@ export type ManagedServiceRequest = Readonly<{
      * Bounds request establishment through validated response headers. After
      * headers arrive, the caller signal and exact handle lifecycle own a
      * streaming response body.
+     * Omission leaves establishment under that same caller/handle lifetime;
+     * an ordinary native prompt has no implicit managed HTTP deadline.
      */
     timeoutMs?: number;
     signal?: AbortSignal;

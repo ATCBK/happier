@@ -233,18 +233,21 @@ function selectedActionInputForAction(
     if (fields.some((field) => field.widget === 'secret')) {
         return Object.freeze({ kind: 'unavailable' as const });
     }
-    const connectedAccountFields = fields.filter(
-        (field) => field.connectedAccountOptions === true,
-    );
-    if (connectedAccountFields.length === 0) {
+    // A transport Action can bind a credential without exposing a form. The
+    // semantic binding and any form hint must agree on one Account field.
+    const accountPaths = [...new Set([
+        ...fields.filter((field) => field.connectedAccountOptions === true).map((field) => field.path),
+        ...(action.definition.connectedAccountPurposeBindings ?? []).map((binding) => binding.path),
+    ])];
+    if (accountPaths.length === 0) {
         return Object.freeze({ kind: 'none' as const });
     }
-    if (connectedAccountFields.length !== 1) {
+    if (accountPaths.length !== 1) {
         return Object.freeze({ kind: 'unavailable' as const });
     }
     return Object.freeze({
         kind: 'connectedAccount' as const,
-        fieldPath: connectedAccountFields[0]!.path,
+        fieldPath: accountPaths[0]!,
     });
 }
 

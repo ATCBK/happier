@@ -89,14 +89,12 @@ describe('BaseModal (web native driver)', () => {
     expect(requireRadixDismissableLayerMock).toHaveBeenCalledTimes(1);
     expect(requireRadixDialogMock).toHaveBeenCalledTimes(0);
 
-    await act(async () => {
-      rendered.tree.update(
-        <BaseModal visible={true}>
-          <div />
-          <div />
-        </BaseModal>,
-      );
-    });
+    await rendered.update(
+      <BaseModal visible={true}>
+        <div />
+        <div />
+      </BaseModal>,
+    );
     expect(requireRadixDismissableLayerMock).toHaveBeenCalledTimes(1);
     expect(requireRadixDialogMock).toHaveBeenCalledTimes(0);
   });

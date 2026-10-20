@@ -7,7 +7,8 @@ import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/a
 import type { ProviderProbeCredential } from '../probe/client';
 import type { ResolvedProviderConnectionRecord } from '../registry/types';
 import { awaitWithinProviderOperation, ProviderOperationAbandonedError, type ProviderOperationLifetime } from '../operationLifetime';
-import { refreshSavedSecretCatalogForOperation, type SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { refreshSavedSecretCatalogForOperation } from "@/settings/secrets/hydrateSavedSecretCatalog";
+import { type SavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import {
   resolveProviderCredentialPlaintext,
   resolveProviderCredentialPlaintextAsync,
@@ -15,6 +16,7 @@ import {
 } from './credentials';
 import { TeamCredentialDirectMaterialOperationError } from '@/daemon/connectedServices/directMaterial/teamCredentialDirectMaterialClient';
 import { createProviderRedactionLease } from './redaction';
+import { sameProviderConnectionsCatalogAuthority } from '../lifecycle/currentAccountSettingsSnapshot';
 
 /** Refresh only the selected shared credential at a new Provider operation's admission. */
 export async function admitRuntimeProviderSavedSecret(input: Readonly<{
@@ -59,8 +61,8 @@ export async function admitRuntimeProviderSavedSecret(input: Readonly<{
       || current.settingsVersion !== snapshot.settingsVersion
       || admitted.settingsVersion !== snapshot.settingsVersion
       || admitted.settings !== snapshot.settings || current.settings !== snapshot.settings
-      || admitted.providerConnectionsCatalog !== snapshot.providerConnectionsCatalog
-      || current.providerConnectionsCatalog !== snapshot.providerConnectionsCatalog) {
+      || !sameProviderConnectionsCatalogAuthority(snapshot.providerConnectionsCatalog, admitted.providerConnectionsCatalog)
+      || !sameProviderConnectionsCatalogAuthority(snapshot.providerConnectionsCatalog, current.providerConnectionsCatalog)) {
       return { ok: false, error: createProviderErrorV1('provider_authorization_changed', context) };
     }
     return { ok: true, snapshot: admitted };

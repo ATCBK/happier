@@ -71,6 +71,7 @@ describe('sessionDeny', () => {
         expect(mockSessionRpcWithPreferredSessionScope).toHaveBeenCalledWith({
             sessionId,
             method: RPC_METHODS.SESSION_PERMISSION_RESPOND,
+            timeoutMs: null,
             payload: expect.objectContaining({ id: 'perm_1', approved: false, decision: 'abort' }),
         });
     });
@@ -126,6 +127,7 @@ describe('session permission/user-action RPC methods', () => {
         expect(mockSessionRpcWithPreferredSessionScope).toHaveBeenCalledWith({
             sessionId,
             method: RPC_METHODS.SESSION_PERMISSION_RESPOND,
+            timeoutMs: null,
             payload: {
                 id: 'perm_approve',
                 answeringClientCategory: 'web',
@@ -200,6 +202,7 @@ describe('session permission/user-action RPC methods', () => {
         expect(mockSessionRpcWithPreferredSessionScope).toHaveBeenCalledWith({
             sessionId,
             method: RPC_METHODS.SESSION_PERMISSION_RESPOND,
+            timeoutMs: null,
             payload: {
                 id: 'perm_update',
                 answeringClientCategory: 'web',

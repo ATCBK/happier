@@ -81,7 +81,6 @@ export async function bundleWorkspaceDeps(opts = {}) {
     baseEnv,
     ensureWorkspacePackagesBuiltByName,
     {
-      force: forceArtifactWorkspaceBuilds,
       includeDevDependencies: false,
       publicationMode,
     },

@@ -109,6 +109,7 @@ import {
     type WebTranscriptKeyboardVerticalDirection,
 } from '@/components/sessions/transcript/viewport/lifecycle/webTranscriptKeyboardOwner';
 import { useTranscriptTargetWindowContinuationOwner } from '@/components/sessions/transcript/viewport/window/useTranscriptTargetWindowContinuationOwner';
+import { useCommittedTranscriptRef } from './useCommittedTranscriptRef';
 
 import type {
     TranscriptUserScrollIntentOwner,
@@ -1611,7 +1612,7 @@ export function useTranscriptScrollObservationHost(
         deps.sessionId,
         contentSizeObservationApplierEffects,
     ]);
-    const onScroll = React.useCallback((
+    const observeScroll = (
         e: NativeSyntheticEvent<NativeScrollEvent>,
         webMovementFact?: WebScrollMovementFact,
     ) => {
@@ -1648,38 +1649,22 @@ export function useTranscriptScrollObservationHost(
             wantsPinned: deps.wantsPinnedRef.current,
             ...(webMovementFact ? { webMovementFact } : {}),
         }, transcriptScrollIngressCallbacks);
-    }, [
-        deps.bottomFollowModeStateRef,
-        deps.hasNativeContentMeasurementForCurrentSession,
-        deps.hasNativeInitialViewportAppliedForCurrentSession,
-        deps.isLoaded,
-        deps.isWarmKeepAliveInstance,
-        deps.lastScrollOffsetForIntentRef,
-        deps.lastUserScrollIntentAtMsRef,
-        deps.listContentHeightRef,
-        deps.listDataRef,
-        deps.listLayoutHeightRef,
-        deps.loadOlderInFlightRef,
-        deps.nativeListDragActiveRef,
-        deps.nativeMomentumScrollActiveRef,
-        deps.nativeMountSettleDeadlineReachedRef,
-        deps.nativeMountSettleStable,
-        deps.pinEnabled,
-        deps.pinThresholdPx,
-        deps.resolveTranscriptMountSettleBottomDistanceNoiseFloorPx,
-        deps.sessionEntryViewportRef,
-        deps.sessionId,
-        deps.userIntentRecentMs,
-        deps.wantsPinnedRef,
-        transcriptScrollIngressCallbacks,
-        transcriptScrollIngressPlatform,
-    ]);
-    const onStartReached = React.useCallback(() => {
-        observePaginationEdgeReachedNudge(deps.resolveViewportReachedEdge('start'));
-    }, [deps.resolveViewportReachedEdge, observePaginationEdgeReachedNudge]);
-    const onEndReached = React.useCallback(() => {
-        observePaginationEdgeReachedNudge(deps.resolveViewportReachedEdge('end'));
-    }, [deps.resolveViewportReachedEdge, observePaginationEdgeReachedNudge]);
+    };
+    // Legend can invoke these during child layout. Keep the producer identities
+    // stable while publishing current scroll/pagination state before that phase;
+    // layout observations must not feed fresh callback props back into Legend.
+    const scrollCallbacks = {
+        onScroll: observeScroll,
+        onStartReached: () => observePaginationEdgeReachedNudge(deps.resolveViewportReachedEdge('start')),
+        onEndReached: () => observePaginationEdgeReachedNudge(deps.resolveViewportReachedEdge('end')),
+    };
+    const scrollCallbacksRef = React.useRef(scrollCallbacks);
+    useCommittedTranscriptRef(scrollCallbacksRef, scrollCallbacks);
+    const onScroll = React.useCallback<TranscriptScrollObservationHost['onScroll']>((event, webMovementFact) => {
+        scrollCallbacksRef.current.onScroll(event, webMovementFact);
+    }, []);
+    const onStartReached = React.useCallback(() => scrollCallbacksRef.current.onStartReached(), []);
+    const onEndReached = React.useCallback(() => scrollCallbacksRef.current.onEndReached(), []);
 
     return React.useMemo(() => ({
         adoptNativeFollowingForTrustedBottomArrival,

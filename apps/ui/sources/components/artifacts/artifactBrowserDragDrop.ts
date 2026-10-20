@@ -21,7 +21,7 @@ export type ArtifactBrowserDropTargetInput = Readonly<{
     getCatalog: () => Readonly<{ folders: PromptFoldersV1 | null; revision: number | 'absent'; canWrite: boolean }>;
     getBounds: () => WindowBounds | null; getRows: () => readonly TreeRow[]; getDropZones: () => readonly TreeContainerDropZone[];
     measureBounds?: EntityDropTarget['measureBounds']; autoscroll?: EntityDropTarget['autoscroll']; isCurrent?: () => boolean;
-    describeFolder: (folder: PromptFolderEntryV1 | null) => string; describeMove: () => string; describeRefusal: (code: string) => string;
+    describeFolder: (folder: PromptFolderEntryV1 | null) => string; describeMove: (target: string) => string; describeRefusal: (code: string) => string;
     execute: EntityDropTarget['execute'];
 }>;
 
@@ -42,7 +42,7 @@ export function createArtifactBrowserDropTarget(input: ArtifactBrowserDropTarget
             actionId: item.kind === 'artifact' ? 'artifact.folder.set' : 'artifact.folders.move',
             input: item.kind === 'artifact' ? { artifactId: item.artifactId, folderId, expectedRevision: catalog.revision }
                 : { folderId: item.folderId, parentId: folderId, expectedRevision: catalog.revision },
-            preview: { verb: input.describeMove(), target: input.describeFolder(folder), glyph: folderId === null ? 'topLevel' : 'folder' },
+            preview: { verb: input.describeMove(input.describeFolder(folder)), target: input.describeFolder(folder), glyph: folderId === null ? 'topLevel' : 'folder' },
         } };
     };
     return { id: input.id, scope: input.scope, acceptedKinds: ['artifact', 'artifact-folder'],

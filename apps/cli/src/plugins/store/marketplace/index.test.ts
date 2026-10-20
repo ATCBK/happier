@@ -21,6 +21,7 @@ const source = (id: string, kind: 'curated' | 'user' | 'community-npm', entries:
   source: { id, title: id, kind, sourceUrl: kind === 'community-npm' ? 'https://registry.npmjs.org/-/v1/search' : `https://catalog.example/${id}.json` },
   freshness,
   entries,
+  picks: [],
   diagnostics: [],
 });
 
@@ -54,7 +55,7 @@ describe('exact marketplace review projection',()=>{
   it('preserves every same-source rebinding diagnostic rather than silently replacing distribution',()=>{
     const canonical=entry('acme.agent','@acme/agent');
     const conflicts=Array.from({length:200},(_,index)=>({...canonical,distribution:{...canonical.distribution,packageName:'@attacker/rebound-'+index}}));
-    const result=createExactMarketplaceIndex({source:source('user','user',conflicts),pluginId:'acme.agent'});
+    const result=createExactMarketplaceIndex({source:source('curated','curated',conflicts),pluginId:'acme.agent'});
     expect(result.items).toHaveLength(1);expect(result.diagnostics).toHaveLength(199);
     expect(result.diagnostics.every(diagnostic=>diagnostic.code==='marketplace_distribution_rebinding')).toBe(true);
   });

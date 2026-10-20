@@ -20,7 +20,6 @@ import { AZURE_DEVOPS_TRIAGE_MUTATION_ACTION_IDS } from './mutationActions.js';
 import {
   AZURE_DEVOPS_ACCOUNT_NETWORK_HOST_ACCESS_ID,
   AZURE_DEVOPS_CONNECTED_ACCOUNT_ID,
-  AZURE_DEVOPS_NETWORK_HOST_ACCESS_ID,
   AZURE_DEVOPS_TRIAGE_DESCRIPTOR,
   AZURE_DEVOPS_TRIAGE_PURPOSE,
 } from './descriptor.js';
@@ -67,7 +66,6 @@ describe('Azure DevOps Triage source contribution conformance', () => {
       surfaces: ['plugin'],
       dangerLevel: 'writesLocal',
       hostAccess: [
-        AZURE_DEVOPS_NETWORK_HOST_ACCESS_ID,
         AZURE_DEVOPS_ACCOUNT_NETWORK_HOST_ACCESS_ID,
         AZURE_DEVOPS_TRIAGE_PURPOSE,
       ],
@@ -90,7 +88,6 @@ describe('Azure DevOps Triage source contribution conformance', () => {
       surfaces: ['plugin'],
       dangerLevel: 'safe',
       hostAccess: [
-        AZURE_DEVOPS_NETWORK_HOST_ACCESS_ID,
         AZURE_DEVOPS_ACCOUNT_NETWORK_HOST_ACCESS_ID,
         AZURE_DEVOPS_TRIAGE_PURPOSE,
       ],
@@ -129,7 +126,6 @@ describe('Azure DevOps Triage source contribution conformance', () => {
       expect(action?.dangerLevel).toBe('safe');
       expect(action?.hostAccess)
         .toEqual([
-          AZURE_DEVOPS_NETWORK_HOST_ACCESS_ID,
           AZURE_DEVOPS_ACCOUNT_NETWORK_HOST_ACCESS_ID,
           AZURE_DEVOPS_TRIAGE_PURPOSE,
         ]);
@@ -231,8 +227,7 @@ describe('Azure DevOps Triage source contribution conformance', () => {
           : 'safe',
       );
       expect(action?.hostAccess)
-        .toEqual([
-          AZURE_DEVOPS_NETWORK_HOST_ACCESS_ID,
+        .toEqual(actionId === AZURE_DEVOPS_TRIAGE_ACTION_IDS.listInstances ? [AZURE_DEVOPS_TRIAGE_PURPOSE] : [
           AZURE_DEVOPS_ACCOUNT_NETWORK_HOST_ACCESS_ID,
           AZURE_DEVOPS_TRIAGE_PURPOSE,
         ]);

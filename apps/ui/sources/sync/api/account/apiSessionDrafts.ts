@@ -3,6 +3,7 @@ import { SESSION_DRAFT_V2_ROUTE_LIST, SESSION_DRAFT_V2_ROUTE_MUTATE, SESSION_DRA
 
 import type { SessionDraftRepositoryTransport } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { SessionDraftEpochUnavailableError, isSessionDraftEpochUnavailableError } from '@/sync/ops/sessionDrafts/sessionDraftEpochError';
+import { HappyError } from '@/utils/errors/errors';
 
 /** Statuses a Home without the V2 draft epoch returns for these exact paths. */
 const EPOCH_UNAVAILABLE_STATUSES = new Set([404, 405, 501]);
@@ -33,7 +34,9 @@ async function postJson(params: Readonly<{
             || (response.status === 409 && SessionDraftEpochUnavailableResponseV2Schema.safeParse(raw).success)) {
             throw new SessionDraftEpochUnavailableError();
         }
-        throw new Error(`Session draft request failed (${response.status})`);
+        throw new HappyError(`Session draft request failed (${response.status})`,
+            response.status === 408 || response.status === 429 || response.status >= 500,
+            { status: response.status, kind: response.status === 401 || response.status === 403 ? 'auth' : 'server' });
     }
     return raw;
 }

@@ -13,7 +13,13 @@ describe('skill status usage truth', () => {
       digest: 'digest', state: 'masked_by_native' as const, reason: 'native_same_name' as const, maskedBy: { path: '/native/review' } }] };
     expect(skillStatus(item, undefined, { skillId: item.skillId, plan, notices: [], machineName: 'MacBook', onFix() {} })).toContainEqual({ kind: 'masked', machineName: 'MacBook' });
     expect(skillStatus(null, undefined, { skillId: item.skillId, plan: null, notices: [{ v: 1, items: [{ kind: 'skill', name: item.name, itemId: item.skillId, code: 'materialize_failed' }] }],
-      machineName: 'MacBook', onFix() {} })).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'error', detail: 'materialize_failed' })]));
+      machineName: 'MacBook', onFix() {} })).toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'error', machineName: 'MacBook' })]));
+    // A stored code is never shown as words; a known reason reads as the transcript notice says it.
+    const failure = (detail?: string) => skillStatus(null, undefined, { skillId: item.skillId, plan: null, machineName: 'MacBook', onFix() {},
+      notices: [{ v: 1, items: [{ kind: 'skill', name: item.name, itemId: item.skillId, code: 'skills_unavailable', ...(detail ? { detail } : {}) }] }] })
+      .find(status => status.kind === 'error');
+    expect(failure()?.detail).toBeUndefined();
+    expect(failure('launch_path_unsupported')?.detail).not.toMatch(/_/);
   });
   it.each([
     { lastUsedAt: nowMs - 31 * day, observed: nowMs - 31 * day, createdAt: item.createdAt, unused: true },

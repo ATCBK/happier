@@ -1,12 +1,21 @@
 import React from 'react';
+import { ThreadExample } from './threadSurface.js';
+import { ReplyQuoteExample } from './replyQuoteSurface.js';
+import { ReturnedAnswerQuoteExample } from './returnedAnswerQuoteSurface.js';
+import { ExecutableParticipantPickerExample } from './executableParticipantPickerSurface.js';
 import {
   Card,
+  CollectionToolbar,
   ContextMenu,
   defineUiSurface,
   Dropdown,
   Form,
   ListDetailLayout,
   Menu,
+  ModalHeader,
+  type ModalHeaderProps,
+  Item,
+  SheetMenu,
   Popover,
   SessionComposer,
   SessionProvider,
@@ -25,6 +34,8 @@ import {
   StackedSeriesChart, Heatmap, DotGrid, IntervalTimeline, CapacityBar,
   BurnUpChart, RankedRows, CompositionStrip, OutcomeScatter, OutcomeFunnel,
   type StackedSeriesBand,
+  ModalHeader as ComponentsModalHeader,
+  type ModalHeaderProps as ComponentsModalHeaderProps,
 } from '@happier-dev/plugin-ui/components';
 
 const summary = { pluginId: 'example.plugin-ui', localId: 'summary' } as const;
@@ -53,6 +64,10 @@ function Summary() {
       <ExternalAuthoringForm />
       <ExternalAuthoringOverlays />
       <NeutralMeasurements />
+      <ThreadExample />
+      <ReplyQuoteExample />
+      <ReturnedAnswerQuoteExample />
+      <ExecutableParticipantPickerExample multiple />
     </Card>
   );
 }
@@ -141,19 +156,37 @@ function ExternalAuthoringOverlays() {
   const [menuOpen, setMenuOpen] = React.useState(false);
   const [dropdownOpen, setDropdownOpen] = React.useState(false);
   const [contextMenuOpen, setContextMenuOpen] = React.useState(false);
+  const [filtersOpen, setFiltersOpen] = React.useState(false);
+  const [sheetOpen, setSheetOpen] = React.useState(false);
+  const [openOnly, setOpenOnly] = React.useState(false);
   const [selectedAction, setSelectedAction] = React.useState('No action selected');
   const onSelect = (id: string) => {
     setSelectedAction(`Selected ${id}`);
   };
+  const groups = [{ id: 'state', accessibilityLabel: 'State', items: [
+    { id: 'open', label: 'Open only', kind: 'checkbox' as const, checked: openOnly },
+  ] }];
+  const selectFilter = () => setOpenOnly(value => !value);
 
   return (
     <>
+      <CollectionToolbar refine={{ label: 'Filters', activeCount: openOnly ? 1 : 0,
+        render: () => <Menu open={filtersOpen} onOpenChange={setFiltersOpen}
+          trigger="Filters" triggerAccessibilityLabel="Filter entries" groups={groups} onSelect={selectFilter} />,
+        sheet: { groups, onSelect: selectFilter, clear: { label: 'Clear', onPress: () => setOpenOnly(false) },
+          showResultsLabel: 'Show results' },
+      }} />
+      <SheetMenu open={sheetOpen} onOpenChange={setSheetOpen} trigger="Filters"
+        triggerAccessibilityLabel="Filter entries" groups={groups} onSelect={selectFilter}
+        triggerCount={openOnly ? 1 : 0} sheet={{ title: 'Filters' }} />
+      <Item title="workspace/packages/example/src/entry.tsx" titleEllipsizeMode="middle" />
       <Popover
         open={popoverOpen}
         onOpenChange={setPopoverOpen}
         trigger="Show details"
         triggerAccessibilityLabel="Show plugin details"
         contentAccessibilityLabel="Plugin details"
+        floatingRole="panel"
       >
         <Text value="This content is positioned and dismissed by the host Popover." />
       </Popover>
@@ -188,6 +221,10 @@ function ExternalAuthoringOverlays() {
         onSelect={onSelect}
       />
       <Text tone="muted" value={selectedAction} />
+      <ModalHeader {...({ title: 'Plugin details', subtitle: selectedAction,
+        compact: true, onClose: () => setPopoverOpen(false) } satisfies ModalHeaderProps)} />
+      <ComponentsModalHeader {...({ title: 'Plugin actions', actions: <Text value={selectedAction} />,
+        compact: true } satisfies ComponentsModalHeaderProps)} />
     </>
   );
 }

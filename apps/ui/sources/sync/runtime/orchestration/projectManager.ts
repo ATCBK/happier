@@ -633,7 +633,7 @@ class ProjectManager {
         const project = this.getProjectForWorkspace(scope);
         const current = project?.scmOperationInFlight;
         if (!project || !current || current.id !== operationId) return false;
-        project.scmOperationInFlight = { ...current, phase: 'running', progressText };
+        project.scmOperationInFlight = { ...current, phase: 'running', progressText, ...(current.phase === 'queued' ? { startedAt: Date.now() } : {}) };
         project.updatedAt = Date.now();
         return true;
     }
@@ -969,7 +969,7 @@ class ProjectManager {
         const project = this.getProjectForSession(sessionId);
         const current = project?.scmOperationInFlight;
         if (!project || !current || current.id !== operationId) return false;
-        project.scmOperationInFlight = { ...current, phase: 'running', progressText };
+        project.scmOperationInFlight = { ...current, phase: 'running', progressText, ...(current.phase === 'queued' ? { startedAt: Date.now() } : {}) };
         project.updatedAt = Date.now();
         return true;
     }

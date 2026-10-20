@@ -25,6 +25,8 @@ export type OpenedUsageSession = Readonly<{
 }>;
 export type OpenedUsageMessage = Readonly<{ id: string; localId?: string | null; acceptedDelivery?: SessionMessageAcceptedDeliveryFactsV1 | null;
     content?: unknown; createdAt?: number }>;
+/** Content-free facts retained after opened transcript bodies have been released. */
+export type UsageSessionMessageEvidence = Pick<UsageHowYouWorkDetailInput, 'acceptedInputs' | 'phaseEvents' | 'coach'>;
 
 function resolveAccountingWorkMembership(query: UsageQuery, contributions: readonly UsageAnalyticsContribution[] = []) {
     const selected = query.session === null ? null : new Set(typeof query.session === 'string' ? [query.session] : query.session);
@@ -66,6 +68,7 @@ export function selectUsageQueryWorkEvidenceSessionIds(input: Readonly<{
 export function projectUsageQueryWorkEvidence(input: Readonly<{
     query: UsageQuery; sessions: readonly OpenedUsageSession[];
     openedMessages?: ReadonlyMap<string, readonly OpenedUsageMessage[]>;
+    sessionEvidence?: ReadonlyMap<string, UsageHowYouWorkDetailInput>;
     completeMessageSessionIds?: ReadonlySet<string>;
     contributions?: readonly UsageAnalyticsContribution[];
 }>): UsageHowYouWorkDetailInput {
@@ -76,7 +79,7 @@ export function projectUsageQueryWorkEvidence(input: Readonly<{
     const sessions = input.sessions.filter(session => (!selected || selected.has(session.id))
         && (!needsAccountingMembership || accountingSessions.has(session.id)));
     if (!sessions.length) return unknown;
-    const opened = sessions.map(session => projectSessionUsageWorkEvidence(session, input.openedMessages?.get(session.id),
+    const opened = sessions.map(session => input.sessionEvidence?.get(session.id) ?? projectSessionUsageWorkEvidence(session, input.openedMessages?.get(session.id),
         { messagesComplete: input.completeMessageSessionIds?.has(session.id) === true }));
     const facts = opened.flatMap(detail => detail.facts ?? []).filter(fact => accountingWork.has(fact.workId)
         || !needsAccountingMembership && (!query.agents.length || (fact.agentId !== null && query.agents.includes(fact.agentId)))
@@ -111,7 +114,7 @@ const timestamp = (value: unknown) => typeof value === 'number' && Number.isSafe
 export function projectSessionUsageWorkEvidence(
     session: OpenedUsageSession,
     messages?: readonly OpenedUsageMessage[],
-    coverage: Readonly<{ messagesComplete?: boolean }> = {},
+    coverage: Readonly<{ messagesComplete?: boolean; messageEvidence?: UsageSessionMessageEvidence }> = {},
 ): UsageHowYouWorkDetailInput {
     const facts: NonNullable<UsageHowYouWorkDetailInput['facts']>[number][] = [];
     const permissions: NonNullable<UsageHowYouWorkDetailInput['permissions']>[number][] = [];
@@ -141,12 +144,14 @@ export function projectSessionUsageWorkEvidence(
                 startMs: requestedAtMs, endMs: completedAtMs });
         }
     }
-    const acceptedInputs: NonNullable<UsageHowYouWorkDetailInput['acceptedInputs']>[number][] = [];
+    const retained = coverage.messageEvidence;
+    const hasMessages = messages !== undefined || retained !== undefined;
+    const acceptedInputs = [...(retained?.acceptedInputs ?? [])];
     const seenInputs = new Set<string>();
-    const composition = new Map<string, UsagePromptComposition>();
-    const compactions = new Map<string, UsageCoachCompactionFact>();
-    const mcpUsage = new Map<string, UsageMcpBindingUsage>();
-    const phaseEvents = new Map<string, NonNullable<UsageHowYouWorkDetailInput['phaseEvents']>[number]>();
+    const composition = new Map<string, UsagePromptComposition>(retained?.coach?.composition?.map(row => [row.evidenceId, row]));
+    const compactions = new Map<string, UsageCoachCompactionFact>(retained?.coach?.detail?.compactions?.map(row => [row.evidenceId, row]));
+    const mcpUsage = new Map<string, UsageMcpBindingUsage>(retained?.coach?.detail?.mcpUsage?.map(row => [row.evidenceId, row]));
+    const phaseEvents = new Map<string, NonNullable<UsageHowYouWorkDetailInput['phaseEvents']>[number]>(retained?.phaseEvents?.map(row => [row.evidenceId, row]));
     const storedEventSchema = createStoredReadSchema(TranscriptRawAgentEventV1Schema);
     for (const message of messages ?? []) {
         const content = message.content;
@@ -233,12 +238,12 @@ export function projectSessionUsageWorkEvidence(
     // The current retained snapshot/page is not proof of complete historical coverage.
     const hasFacts = session.sessionTurns?.sessionId === session.id || facts.length > 0;
     const hasPermissions = session.agentState?.requests != null || session.agentState?.completedRequests != null || confirmations.success;
-    const hasAcceptedInputs = messages !== undefined && (messages.length === 0 || acceptedInputs.length > 0);
-    return { status: hasFacts || hasPermissions || messages !== undefined ? 'partial' : 'unknown',
+    const hasAcceptedInputs = retained?.acceptedInputs !== undefined || messages !== undefined && (messages.length === 0 || acceptedInputs.length > 0);
+    return { status: hasFacts || hasPermissions || hasMessages ? 'partial' : 'unknown',
         ...(hasFacts ? { facts } : {}), ...(hasPermissions ? { permissions } : {}),
         ...(hasAcceptedInputs ? { acceptedInputs } : {}),
-        ...(messages !== undefined ? { phaseEvents: [...phaseEvents.values()] } : {}),
-        ...(messages !== undefined ? { coach: { composition: [...composition.values()], compositionCoverage: 'partial' as const,
+        ...(hasMessages ? { phaseEvents: [...phaseEvents.values()] } : {}),
+        ...(hasMessages ? { coach: { composition: [...composition.values()], compositionCoverage: 'partial' as const,
             detail: { coverage: 'partial' as const, compactions: [...compactions.values()], mcpUsage: [...mcpUsage.values()], modelRequests } } } : {}),
         activityAtMs: [...turns.map(turn => turn.startedAt), ...acceptedInputs.map(input => input.acceptedAtMs)] };
 }

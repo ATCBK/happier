@@ -21,6 +21,8 @@ export type ProcessActionExecution = Readonly<{
     verifyCurrent?: () => Promise<boolean>;
     rpcContext?: RpcHandlerContext;
     actionContext?: RuntimeActionExecuteArgs['context'];
+    /** Executor-owned native-effect lifetime and once-per-Session producer witness. Never transported. */
+    physicalStopEffect?: Readonly<{ completion: Promise<void>; recordedSessionIds: Set<string> }>;
     /** Native listener termination consumes the same Action's fresh membership checks. */
     authorizeSnapshot?: ProcessTreeTerminationInput['authorizeSnapshot'];
     authorizeSignal?: ProcessTreeTerminationInput['authorizeSignal'];
@@ -56,6 +58,14 @@ export function createProcessActionExecutor(input: ProcessActionExecutorInput) {
     const terminate = input.systemBoundary ? createProcessTreeTerminator(input.systemBoundary) : terminateProcessTree;
     const isCurrent = async (execution: ProcessActionExecution) => !execution.signal?.aborted
         && (!execution.verifyCurrent || await execution.verifyCurrent()) && !execution.signal?.aborted;
+    const withPhysicalStopEffect = async <T>(execution: ProcessActionExecution,
+        operation: (execution: ProcessActionExecution) => Promise<T>): Promise<T> => {
+        let complete!: () => void;
+        const completion = new Promise<void>(resolve => { complete = resolve; });
+        try {
+            return await operation({ ...execution, physicalStopEffect: { completion, recordedSessionIds: new Set() } });
+        } finally { complete(); }
+    };
     const allowedOwner = (owner: ProcessOwnerRef | null, requester: ProcessActionRequester, roots: readonly HappierProcessRoot[]) => requester.isCustodian
         || owner !== null && input.requesterForOwner(owner, roots)?.accountId === requester.accountId;
     const lifecycleFailed = (value: unknown) => value === false || value !== null && typeof value === 'object'
@@ -70,6 +80,18 @@ export function createProcessActionExecutor(input: ProcessActionExecutorInput) {
     });
     const nativeRow = (view: CurrentOwnership, pid: number) => view.snapshot.rows.find(row => row.pid === pid);
     const resolvedRow = (view: CurrentOwnership, pid: number) => view.rows.find(row => row.pid === pid);
+    const endedMemberMemory = (members: readonly ProcessCensusRow[], after: CurrentOwnership) => {
+        const current = new Map(after.snapshot.rows.map(row => [row.pid, row]));
+        const unreadable = new Set(after.snapshot.partial?.map(row => row.pid));
+        const ended = new Map<number, number>();
+        for (const member of members) {
+            const now = current.get(member.pid);
+            if (now ? !equalProcessStart(now.start, member.start) : !unreadable.has(member.pid)) {
+                ended.set(member.pid, member.memory?.bytes ?? 0);
+            }
+        }
+        return ended;
+    };
 
     function validate(target: MachineProcessTargetV1, view: CurrentOwnership, requester: ProcessActionRequester,
         tree: boolean, setSize: number, policy: boolean): Readonly<{ outcome: Outcome }> | Readonly<{ native: ProcessCensusRow; ownership: ResolvedProcessOwnership }> {
@@ -93,7 +115,7 @@ export function createProcessActionExecutor(input: ProcessActionExecutorInput) {
         return { native: row, ownership };
     }
 
-    const kill = async (request: MachineProcessesKillInputV1, requester: ProcessActionRequester,
+    const killEffect = async (request: MachineProcessesKillInputV1, requester: ProcessActionRequester,
         execution: ProcessActionExecution = {}, policy = false): Promise<MachineProcessesActionResultV1> => {
         if (!await isCurrent(execution)) return result(request.targets.map(target => refused(target.ref, 'access_denied')));
         const outcomes: Outcome[] = [];
@@ -208,7 +230,7 @@ export function createProcessActionExecutor(input: ProcessActionExecutorInput) {
                         continue;
                     }
                 }
-                const lifecycleEnded = new Map<number, number>();
+                let lifecycleEnded = new Map<number, number>();
                 if (!policy && (root?.stop && (root.owner.kind !== 'session' || request.tree)
                     || root && root.owner.kind === 'session' && request.tree && input.stopOwner
                     || root?.owner.kind === 'terminal' && input.closeTerminal)) {
@@ -226,12 +248,7 @@ export function createProcessActionExecutor(input: ProcessActionExecutorInput) {
                     if (lifecycleFailed(lifecycle)) { outcomes.push(refused(target.ref, 'termination_failed')); continue; }
                     const after = await input.ownership.readOwners({ freshness: 'fresh' });
                     if (after.status !== 'ok') { outcomes.push(refused(target.ref, 'termination_unverified')); continue; }
-                    for (const member of authorized.values()) {
-                        const now = nativeRow(after, member.native.pid);
-                        if (now ? !equalProcessStart(now.start, member.native.start) : !after.snapshot.partial?.some(item => item.pid === member.native.pid)) {
-                            lifecycleEnded.set(member.native.pid, member.native.memory?.bytes ?? 0);
-                        }
-                    }
+                    lifecycleEnded = endedMemberMemory([...authorized.values()].map(member => member.native), after);
                 }
                 const role = classifyProcessRole({ command: current.native.argv?.join(' ') ?? current.native.name }).role;
                 const stopped = await terminate({ targets: exact, tree: request.tree, policy: policy ? 'stop' : 'kill',
@@ -254,11 +271,15 @@ export function createProcessActionExecutor(input: ProcessActionExecutorInput) {
         }
         return result(outcomes);
     };
+    const kill = (request: MachineProcessesKillInputV1, requester: ProcessActionRequester,
+        execution: ProcessActionExecution = {}, policy = false) =>
+        withPhysicalStopEffect(execution, current => killEffect(request, requester, current, policy));
 
     return {
         executeKill: (request: MachineProcessesKillInputV1, requester: ProcessActionRequester, execution?: ProcessActionExecution) => kill(request, requester, execution),
         async executeStop(request: MachineProcessesStopInputV1, requester: ProcessActionRequester,
             execution: ProcessActionExecution = {}): Promise<MachineProcessesActionResultV1> {
+            return await withPhysicalStopEffect(execution, async execution => {
             const outcomes: Outcome[] = [];
             for (const target of request.targets) {
                 if (!await isCurrent(execution)) { outcomes.push(refused(target.ref, 'access_denied')); continue; }
@@ -280,6 +301,13 @@ export function createProcessActionExecutor(input: ProcessActionExecutorInput) {
                     const activeRoot = before.roots.find(candidate => candidate.pid === root.pid && equalProcessStart(candidate.start, root.start)
                         && processOwnerKey(candidate.owner) === processOwnerKey(root.owner));
                     if (!activeRoot) { outcomes.push(refused(target.ref, 'expectation_changed')); continue; }
+                    const ownerKey = processOwnerKey(activeRoot.owner);
+                    const admitted = new Map(before.rows.filter(row => row.owner && processOwnerKey(row.owner) === ownerKey
+                        && (row.level === 'proven' || row.level === 'likely')).map(row => [row.pid, row]));
+                    const members = before.snapshot.rows.filter(row => {
+                        const owned = admitted.get(row.pid);
+                        return owned && equalProcessStart(owned.start, row.start);
+                    });
                     const lifecycle = input.stopOwner ? await input.stopOwner(activeRoot, execution) : await activeRoot.stop?.();
                     if (lifecycleFailed(lifecycle)) { outcomes.push(refused(target.ref, 'termination_failed')); continue; }
                     const after = await input.ownership.readOwners({ freshness: 'fresh' });
@@ -292,11 +320,13 @@ export function createProcessActionExecutor(input: ProcessActionExecutorInput) {
                         outcomes.push({ ref: target.ref, outcome: 'survived', reasonCode: 'termination_unverified' });
                     } else {
                         input.onRootEnded?.(activeRoot);
-                        outcomes.push({ ref: target.ref, outcome: 'ended', ...(fresh.native.memory ? { freedBytes: fresh.native.memory.bytes } : {}) });
+                        const ended = endedMemberMemory(members, after);
+                        outcomes.push({ ref: target.ref, outcome: 'ended', freedBytes: [...ended.values()].reduce((sum, bytes) => sum + bytes, 0) });
                     }
                 } catch { outcomes.push(refused(target.ref, 'termination_failed')); }
             }
             return result(outcomes);
+            });
         },
         async cleanUp(request: MachineProcessesCleanUpInputV1, requester: ProcessActionRequester,
             execution: ProcessActionExecution = {}): Promise<MachineProcessesCleanUpResultV1> {

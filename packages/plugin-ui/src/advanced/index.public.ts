@@ -6,6 +6,9 @@
  * or Resource-store construction and therefore also own the corresponding
  * host/context boundary.
  */
+/** Core host geometry, not ordinary plugin author presentation choices. */
+export { HAPPIER_COLLECTION_RAIL_WIDTH_PX } from '../presentation/layout/pageMetrics.js';
+export { resolveHappierRowTitleMetaPlacement } from '../presentation/layout/pageMetrics.js';
 export {
   PluginUiHostPresentationScope,
   PluginUiProvider,
@@ -26,6 +29,12 @@ export {
   type SessionPartClaims,
   type SessionPartKind,
 } from '../presentationHost/sessionPartClaims.js';
+/** The host's one sentence about a part that cannot run now, said by the failure state that claims it. */
+export {
+  PluginUiSurfaceNoticeContext,
+  useClaimedPluginUiSurfaceNotice,
+  type PluginUiSurfaceNotice,
+} from '../presentationHost/surfaceNotice.js';
 /** Private host composition: physical scrollers pass the incumbent activity owner to widgets. */
 export {
   PluginUiScrollActivityProvider,

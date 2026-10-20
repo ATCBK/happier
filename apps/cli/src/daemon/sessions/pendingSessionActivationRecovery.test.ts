@@ -6,6 +6,7 @@ import {
   createSessionListResponseFixture,
   createSessionRecordFixture,
 } from '@/testkit/backends/sessionFixtures';
+import { createDeferred } from '@/testkit/async/deferred';
 
 import {
   createPendingSessionActivationRecovery,
@@ -14,10 +15,42 @@ import {
 } from './pendingSessionActivationRecovery';
 
 describe('pending session activation recovery', () => {
-  it('reconstructs reset demand for owned Pending rows through the same reconnect scan before activation', async () => {
+  it('discovers later pages and requester custody while an owned receiver read is pending', async () => {
+    const firstReceiverRead = createDeferred();
+    const effects: string[] = [];
+    const recovery = createPendingSessionActivationRecovery({
+      token: 'token',
+      activate: async input => { effects.push(`activate:${input.sessionId}`); },
+      visitOwnedSession: async sessionId => {
+        effects.push(`visit:${sessionId}`);
+        if (sessionId === 'first') await firstReceiverRead.promise;
+      },
+      recoverRequesterSessions: async () => { effects.push('requester'); },
+      warn: vi.fn(),
+      fetchSessionsPage: async ({ cursor }) => ({
+        sessions: createSessionListResponseFixture([createSessionRecordFixture({ id: cursor ? 'later' : 'first',
+          pendingActivationAuthorization: { requestId: cursor ? 'p2' : 'p1', requestedAt: 1, status: 'waiting' },
+        })]).sessions,
+        hasNext: !cursor, nextCursor: cursor ? null : 'next',
+      }),
+    });
+    let recovered = false;
+    const recovering = recovery.recoverAfterConnect().then(() => { recovered = true; });
+    try {
+      await vi.waitFor(() => expect(effects).toEqual(expect.arrayContaining(['visit:first', 'visit:later', 'activate:later', 'requester'])));
+      expect(effects).not.toContain('activate:first');
+      expect(recovered).toBe(false);
+    } finally {
+      firstReceiverRead.resolve();
+      await recovering;
+    }
+    expect(effects).toContain('activate:first');
+    expect(recovered).toBe(true);
+  });
+  it('visits owned idle receivers without Pending rows so Follow recovery survives reconnect', async () => {
     const visited: string[] = [];
     const activated: string[] = [];
-    const recovery = createPendingSessionActivationRecovery({
+    const createRecovery = () => createPendingSessionActivationRecovery({
       token: 'token',
       activate: async input => { activated.push(input.sessionId); },
       visitOwnedSession: async sessionId => { visited.push(sessionId); },
@@ -25,13 +58,15 @@ describe('pending session activation recovery', () => {
       fetchSessionsPage: async () => ({
         sessions: createSessionListResponseFixture([
           createSessionRecordFixture({ id: 'held-reset', pendingCount: 1 }),
+          createSessionRecordFixture({ id: 'idle-follow', pendingCount: 0, active: false }),
           createSessionRecordFixture({ id: 'shared', pendingCount: 1, share: { accessLevel: 'view', canApprovePermissions: false } }),
         ]).sessions,
         hasNext: false, nextCursor: null,
       }),
     });
-    await recovery.recoverAfterConnect();
-    expect(visited).toEqual(['held-reset']);
+    await createRecovery().recoverAfterConnect();
+    await createRecovery().recoverAfterConnect();
+    expect(visited).toEqual(['held-reset', 'idle-follow', 'held-reset', 'idle-follow']);
     expect(activated).toEqual([]);
   });
   it('routes live hints and the reconnect scan through one canonical activator', async () => {

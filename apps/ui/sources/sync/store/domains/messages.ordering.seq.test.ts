@@ -838,7 +838,7 @@ describe('messages domain: ordering', () => {
                 createdAt: messageCount + 1,
                 isSidechain: false,
                 role: 'agent',
-                content: [{ type: 'text', text: 'next' }],
+                content: [{ type: 'text', text: 'next', uuid: 'm1001', parentUUID: null }],
             },
         ]);
 

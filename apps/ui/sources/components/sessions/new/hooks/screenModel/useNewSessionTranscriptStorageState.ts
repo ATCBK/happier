@@ -9,6 +9,8 @@ import {
     type NewSessionTranscriptStorage,
 } from '@/components/sessions/new/modules/newSessionTranscriptStorage';
 import type { PersistedBackendTargetRefV2 } from '@happier-dev/protocol';
+import { useSettingsSelector } from '@/sync/store/hooks';
+import { getStorage } from '@/sync/domains/state/storageStore';
 
 type PersistedAuthoringDraftLike = Readonly<{
     transcriptStorage?: NewSessionTranscriptStorage | null;
@@ -39,7 +41,6 @@ export function useNewSessionTranscriptStorageState(params: Readonly<{
      */
     selectedMachineId: string | null;
     backendTarget: PersistedBackendTargetRefV2;
-    settings: Settings;
     externalSessionsFeatureEnabled: boolean;
 }>): Readonly<{
     transcriptStorage: NewSessionTranscriptStorage;
@@ -47,6 +48,13 @@ export function useNewSessionTranscriptStorageState(params: Readonly<{
     supportsDirectTranscriptStorage: boolean;
     hasUserSelectedTranscriptStorageRef: React.MutableRefObject<boolean>;
 }> {
+    const supportsDirectTranscriptStorage = useSettingsSelector(React.useCallback((settings) => (
+        supportsDirectTranscriptStorageForNewSession({
+            agentId: params.agentType,
+            machineId: params.selectedMachineId,
+            settings,
+        })
+    ), [params.agentType, params.selectedMachineId, params.resolvedBackendTargets]));
     const [transcriptStorage, setTranscriptStorage] = React.useState<NewSessionTranscriptStorage>(() => {
         const tempTranscriptStorage = params.hydratedTempAuthoringDraft?.transcriptStorage;
         if (tempTranscriptStorage === 'direct' || tempTranscriptStorage === 'persisted') {
@@ -72,18 +80,10 @@ export function useNewSessionTranscriptStorageState(params: Readonly<{
             requested: params.hydratedPersistedAuthoringDraft?.transcriptStorage ?? resolvedDefault,
             agentId: params.agentType,
             machineId: params.selectedMachineId,
-            settings: params.settings,
+            settings: getStorage().getState().settings,
             externalSessionsEnabled: params.externalSessionsFeatureEnabled,
         });
     });
-
-    const supportsDirectTranscriptStorage = React.useMemo(() => {
-        return supportsDirectTranscriptStorageForNewSession({
-            agentId: params.agentType,
-            machineId: params.selectedMachineId,
-            settings: params.settings,
-        });
-    }, [params.agentType, params.selectedMachineId, params.settings]);
 
     const accountTranscriptStorageDefaults = React.useMemo(() => {
         return readAccountTranscriptStorageDefaults({
@@ -123,7 +123,7 @@ export function useNewSessionTranscriptStorageState(params: Readonly<{
             requested,
             agentId: params.agentType,
             machineId: params.selectedMachineId,
-            settings: params.settings,
+            settings: getStorage().getState().settings,
             externalSessionsEnabled: params.externalSessionsFeatureEnabled,
         });
         if (coerced !== transcriptStorage) {
@@ -135,7 +135,7 @@ export function useNewSessionTranscriptStorageState(params: Readonly<{
         params.backendTarget,
         params.externalSessionsFeatureEnabled,
         params.selectedMachineId,
-        params.settings,
+        supportsDirectTranscriptStorage,
         selectedProfileTranscriptStorageDefaultsByTargetKey,
         transcriptStorage,
     ]);

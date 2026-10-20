@@ -2,7 +2,7 @@ import * as React from 'react';
 import { I18nManager, Platform, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import type { DragSourceProps, DropTargetProps } from '@happier-dev/plugin-ui';
-import { HAPPIER_CARRIED_SOURCE_OPACITY, describeHappierDropAnnouncement, resolveHappierDropChooserSections, resolveHappierStagedMoveKey } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_CARRIED_SOURCE_OPACITY, HappierRowOperationContext, describeHappierDropAnnouncement, resolveHappierDropChooserSections, resolveHappierStagedMoveKey } from '@happier-dev/plugin-ui/presentation';
 
 import { EntityDragGripChooser } from '@/components/ui/treeDragDrop/ui/EntityDragGripChooser';
 import { usePluginUiClientExecutableRegistrationRevision } from '@/components/plugins/reactNative/clientExecutableContributions';
@@ -107,14 +107,11 @@ function MountedPluginEntityDragSource(props: DragSourceProps & Readonly<{
             ? destination.admission.effect.preview.verb : destination.admission.reason.message),
         refusedReason: destination.admission.status === 'refused' ? destination.admission.reason.message : null,
     })), unavailableTitle: t('entityDragDrop.chooser.unavailable') });
-    const onKeyDown = (event: React.KeyboardEvent) => {
-        if (!enabled || event.defaultPrevented) return;
-        // This named entry owns staged movement; primary and secondary child controls keep activation.
-        if (event.target !== event.currentTarget) return;
+    const handleStagedKey = (key: string, repeat: boolean): boolean => {
+        if (!enabled) return false;
         const carrying = runtime.getSnapshot().sourceId === sourceId && runtime.getSnapshot().phase === 'carrying';
-        const intent = resolveHappierStagedMoveKey({ key: event.key, repeat: event.repeat, staged: carrying, rtl: I18nManager.isRTL });
-        if (!intent) return;
-        event.preventDefault(); event.stopPropagation();
+        const intent = resolveHappierStagedMoveKey({ key, repeat, staged: carrying, rtl: I18nManager.isRTL });
+        if (!intent) return false;
         if (intent === 'pickUp') {
             const carry = source?.begin('keyboard');
             keyboardCarry.current = carry ?? null;
@@ -132,22 +129,40 @@ function MountedPluginEntityDragSource(props: DragSourceProps & Readonly<{
             const destination = current[Math.max(0, Math.min(current.length - 1, index + (intent === 'previous' ? -1 : 1)))];
             if (destination) { setSelected(destination); keyboardCarry.current?.choose(destination.targetId, destination.destination); }
         }
+        return true;
+    };
+    const onKeyDown = (event: React.KeyboardEvent) => {
+        if (event.defaultPrevented || event.target !== event.currentTarget || !handleStagedKey(event.key, event.repeat)) return;
+        event.preventDefault(); event.stopPropagation();
     };
     const title = runtime.describeSource(sourceId)?.title ?? '';
     const label = t('entityDragDrop.organize.grip', { item: title });
+    const isKeyboardCarrying = () => {
+        const snapshot = runtime.getSnapshot();
+        return keyboardCarry.current !== null && snapshot.sourceId === sourceId && snapshot.phase === 'carrying' && runtime.getPointer() === null;
+    };
+    const rowOperation = {
+        // A row menu item: the menu already names its row, so the verb alone (the grip keeps the full name).
+        id: 'entity.move', label: t('commandPalette.hints.move'), disabled: !enabled,
+        onSelect: () => { if (!isKeyboardCarrying()) handleStagedKey(' ', false); },
+        onKeyDown: (key: string, event: unknown) => {
+            const input = event as Readonly<{ repeat?: boolean }>;
+            return isKeyboardCarrying() && handleStagedKey(key, input.repeat === true);
+        },
+    };
     const grip = enabled && !pointerInteraction && props.organizing === true ? <EntityDragGripChooser
         open={chooserOpen} onOpenChange={setChooserOpen} sections={sections}
         onSelect={key => { const destination = destinations[Number(key)]; if (destination) void runtime.perform(sourceId, destination.targetId, destination.destination, 'chooser'); }}
         trigger={({ toggle }) => <GestureDetector gesture={gesture}><EntityDragGripTrigger onPress={toggle} accessibilityLabel={label}
-            active={state.active} density="touch" expanded={chooserOpen} /></GestureDetector>} /> : null;
+            active={state.active} density="touch" expanded={chooserOpen} tabIndex={props.tabIndex} /></GestureDetector>} /> : null;
     const settledMatch = React.useMemo(() => ({ sourceId }), [sourceId]);
     return <EntityDropSettledFeedback runtime={runtime} match={settledMatch} {...(props.testID ? { testID: props.testID } : {})}>
-        <View ref={attachDrag} testID={props.testID}
+        <HappierRowOperationContext.Provider value={rowOperation}><View ref={attachDrag} testID={props.testID}
             style={{ opacity: state.active ? HAPPIER_CARRIED_SOURCE_OPACITY : 1 }}
-            {...(Platform.OS === 'web' ? { onKeyDown, tabIndex: enabled ? 0 : undefined, role: 'group' as const, accessibilityLabel: label } : {})}>
+            {...(Platform.OS === 'web' ? { onKeyDown, tabIndex: enabled ? props.tabIndex ?? 0 : undefined, role: 'group' as const, accessibilityLabel: label } : {})}>
             <View style={grip ? { flexDirection: 'row', alignItems: 'center' } : undefined}>{grip}<View style={grip ? { flex: 1, minWidth: 0 } : undefined}>{props.children}</View></View>
             <PluginSourceStagedFeedback binding={binding} sourceId={sourceId} testID={props.testID} />
-        </View>
+        </View></HappierRowOperationContext.Provider>
     </EntityDropSettledFeedback>;
 }
 

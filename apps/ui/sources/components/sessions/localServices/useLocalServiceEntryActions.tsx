@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import type { RuntimeActionExecute } from '@happier-dev/protocol';
+import type { FrontDoorRuntimeActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
@@ -17,6 +17,7 @@ import {
 } from './lifecycleActions';
 import type {
   LocalServiceActionAdmission,
+  LocalServiceActionInvocationOptions,
   LocalServiceEffectReview,
   LocalServiceSetupConsentReview,
 } from './localServiceActionAdmission';
@@ -33,7 +34,7 @@ export type LocalServiceEntryActionsInput = Readonly<{
   workspaceRoot?: string | null;
   scope: 'workspace' | 'machine';
   /** Defaults to the single front door, so ActionsSettings enablement and approval routing apply. */
-  runtimeActionExecute?: RuntimeActionExecute;
+  runtimeActionExecute?: FrontDoorRuntimeActionExecute;
   /** The surface's feeds: an approved Action re-reads them, and Start/Clear apply their snapshot. */
   onRefresh?: LocalServiceLiveFeeds['refresh'];
   applyLauncherSnapshot?: LocalServiceLiveFeeds['applyLauncherSnapshot'];
@@ -139,16 +140,16 @@ export function useLocalServiceEntryActions(
   const onStopManagedService = React.useMemo(
     () =>
       managedControl
-        ? (target: Parameters<typeof managedControl>[0]) =>
-            managedControl(target, 'localServices.actions.stopManaged')
+        ? (target: Parameters<typeof managedControl>[0], options?: LocalServiceActionInvocationOptions) =>
+            managedControl(target, 'localServices.actions.stopManaged', options)
         : undefined,
     [managedControl],
   );
   const onRestartManagedService = React.useMemo(
     () =>
       managedControl
-        ? (target: Parameters<typeof managedControl>[0]) =>
-            managedControl(target, 'localServices.actions.restartManaged')
+        ? (target: Parameters<typeof managedControl>[0], options?: LocalServiceActionInvocationOptions) =>
+            managedControl(target, 'localServices.actions.restartManaged', options)
         : undefined,
     [managedControl],
   );

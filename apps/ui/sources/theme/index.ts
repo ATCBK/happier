@@ -120,6 +120,9 @@ const lightThemeBase = {
             inset: '#F8F8F8',
             elevated: '#f0f0f0',
             ripple: 'rgba(0, 0, 0, 0.08)',
+            // Loading-placeholder ink: the theme's own text ink, quiet but plainly there on every surface
+            // (re-derived from a profile's text ink in `deriveThemeColors` unless the profile sets it).
+            skeleton: 'rgba(34, 34, 34, 0.16)',
             pressed: '#fafafa',
             // Selection is ink (DESIGN.md → "Borders, dividers and selection are ink"), never a grey.
             selected: 'rgba(0, 0, 0, 0.055)',
@@ -489,6 +492,7 @@ const darkThemeBase = {
             inset: '#171515',
             elevated: '#221C1C',
             ripple: 'rgba(255, 255, 255, 0.055)',
+            skeleton: 'rgba(239, 239, 239, 0.16)',
             pressed: '#302727',
             selected: 'rgba(255, 255, 255, 0.065)',
             pressedOverlay: 'rgba(255,255,255,0.036)',
@@ -586,7 +590,7 @@ const darkThemeBase = {
         radio: {
             active: '#9EB9FF',
             inactive: '#766C67',
-            dot: '#131111',
+            dot: '#9EB9FF',
         },
         button: {
             // Inverted primary: a light fill with dark text, mirroring the light theme's

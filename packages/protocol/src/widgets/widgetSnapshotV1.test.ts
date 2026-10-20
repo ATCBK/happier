@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SessionSurfaceItemV1Schema } from '../sessions/board/item.js';
+import { SessionSurfaceItemV1Schema, SessionSurfaceItemV1StoredSchema } from '../sessions/board/item.js';
 import { WidgetSnapshotPostInputV1Schema, buildWidgetSnapshotBoardUpsertV1, projectWidgetSnapshotPreviewV1 } from './widgetSnapshotV1.js';
 import { freezePluginDeclarativeDataNodeV1 } from '../plugins/contributions/ui/declarativeDataV1.js';
 import { PluginDeclarativeDocumentV1Schema } from '../plugins/contributions/ui/declarativeDocumentAuthoringV1.js';
@@ -58,7 +58,11 @@ describe('frozen widget Board content', () => {
   it('publishes exactly the admitted preview and rejects hidden live or executable state', () => {
     const upsert = buildWidgetSnapshotBoardUpsertV1(input);
     expect(upsert.item.source).toEqual({ kind: 'declarative', document: preview.document });
-    expect(upsert.item.snapshot).toEqual({ asOf: preview.asOf, provenance: preview.provenance });
+    expect(upsert.item.snapshot).toEqual({ asOf: preview.asOf, provenance: preview.provenance, postedByAccountId: 'viewer-a' });
+    expect(SessionSurfaceItemV1StoredSchema.parse({ ...upsert.item, snapshot: { ...upsert.item.snapshot, future: true } }).snapshot)
+      .toEqual(upsert.item.snapshot);
+    // The posting Account is admitted host scope, never part of the caller's preview.
+    expect(WidgetSnapshotPostInputV1Schema.safeParse({ ...input, preview: { ...preview, postedByAccountId: 'other' } }).success).toBe(false);
     for (const root of [
       { ...preview.document.root, data: { kind: 'value', value: { number: 7, credential: 'hidden' } }, value: { path: ['number'], type: 'number' } },
       { kind: 'stack', children: [{ kind: 'action', hostAction: 'session.message.send', label: 'Publish' }] },
@@ -91,6 +95,22 @@ describe('frozen widget Board content', () => {
       version: 1, root: { kind: 'action', hostAction: 'session.message.send', label: 'Send', input: { text: 'bad' } },
     } } }).success).toBe(false);
   });
+  it('freezes the rendered normalized document without publishing renderer metadata or executable nodes', () => {
+    const preview = projectWidgetSnapshotPreviewV1({
+      document: { version: 1, root: { kind: 'stack', path: 'root', order: 0, children: [
+        { kind: 'metric', path: 'root.children[0]', order: 1, label: 'Files',
+          data: { kind: 'value', value: { count: 17, private: 'excluded' } }, value: { path: ['count'], type: 'number' } },
+        { kind: 'action', path: 'root.children[1]', order: 2, action: { qualifiedId: 'acme/run' }, label: 'Run' },
+      ] } },
+      frozenByPath: new Map(), asOf: '2026-10-18T10:00:00.000Z', provenance: [],
+    });
+    expect(preview).not.toBeNull();
+    expect(preview?.document.root).toEqual({ kind: 'stack', children: [
+      { kind: 'metric', label: 'Files', data: { kind: 'value', value: 17 }, value: { path: [], type: 'number' } },
+    ] });
+    expect(JSON.stringify(preview)).not.toContain('excluded');
+  });
+
   it('projects the previewed frozen nodes by path, drops executable nodes and refuses a partly current preview', () => {
     const live = { kind: 'resource' as const, resource: { pluginId: 'acme.analytics', localId: 'signups' },
       inputSchema: { type: 'object' as const, additionalProperties: false }, outputSchema: { type: 'object' as const, properties: {

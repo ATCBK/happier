@@ -1,10 +1,10 @@
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { ApiClient } from '@/api/api';
+import { waitForObservation } from '@/api/client/accountEncryptionCurrentnessObservation';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { listQualifiedConnectedAccountsV4, listQualifiedConnectedAccountGroupsV4, readQualifiedConnectedAccountGroupV4, writeQualifiedProviderAccountUsageV4 } from '@/api/client/qualifiedConnectedAccountApi';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
-import { bootstrapAccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { createAccountSettingsConnectedAccountSecrets, createQualifiedConnectedAccountDaemonPersistence } from '../connectedServices/qualifiedConnectedAccountDaemonPersistence';
 import { createQualifiedConnectedAccountEstablishedRuntimeOwner } from '../connectedServices/qualifiedConnectedAccountEstablishedRuntimeOwner';
@@ -19,14 +19,24 @@ import { createProviderAccountUsagePersistenceScheduler } from '../connectedServ
 import { ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore } from '../connectedServices/accountGroups/quotas/ConnectedServiceAuthGroupRuntimeQuotaSnapshotStore';
 import { startDaemonConnectedServiceRuntime } from '../startup/startDaemonRuntimeBootstrap';
 import type { AdmittedRequesterSessionBootstrap, RequesterSessionRuntimeContext } from './requesterSessionCredentials';
+import { rethrowRequesterHomeReadFailure, runWithRequesterSessionCurrentnessCheckpoint } from "@/daemon/sessionEncryption/requesterCurrentness";
 import type { RequesterWorkAttributionV1 } from '../lifecycle/requesterWorkAttribution';
 import { createCliProfileStoreForOperation } from '@/settings/profiles/profileStore';
 import { ProfileCatalogUnavailableError, readProfilesFromAccountSettings,
   readProfileSettingsFromAccountSnapshot } from '@/settings/profiles/readProfilesFromAccountSettings';
 import { readAuthoringMemoryLastUsedProfile } from '@/settings/profiles/readAuthoringMemoryLastUsedProfile';
 import type { ProfileCatalogSnapshotV1, ProfileCatalogUnavailableReasonV1 } from '@happier-dev/protocol/profiles/profileCatalogV1';
+import { createAccountSessionFollowRuleCache } from '@/agent/runtime/session/follow/accountSessionFollowRuleCache';
+import { logger } from '@/ui/logger';
 
 type CoordinatorInput = Parameters<typeof startDaemonConnectedServiceRuntime>[0];
+
+// The runner diagnostic boundary retains codes, never arbitrary exception text.
+function requesterAccountContextUnavailable() {
+  return Object.assign(new Error('requester_account_context_unavailable'), {
+    code: 'requester_account_context_unavailable' as const,
+  });
+}
 
 /** Same Account-qualified native roots for runtime and exact retained-resource cleanup. */
 export function resolveRequesterSessionRuntimeDirectories(input: Readonly<{
@@ -41,6 +51,7 @@ export function resolveRequesterSessionRuntimeDirectories(input: Readonly<{
 /** Reuses ordinary Account owners with invocation custody; never publishes Bob as the daemon Account. */
 export async function createRequesterSessionRuntimeContext(input: Readonly<{
   bootstrap: AdmittedRequesterSessionBootstrap;
+  signal?: AbortSignal;
   coordinatorInput: Omit<CoordinatorInput, 'api' | 'credentials' | 'accountSettingsSnapshot'
     | 'activeServerDir' | 'providerAccountUsageStore' | 'connectedServiceRuntimeQuotaSnapshots'
     | 'qualifiedConnectedAccountEstablishedRuntimeOwner' | 'listScheduledQualifiedConnectedAccounts'
@@ -60,8 +71,37 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
   const bootstrap = input.bootstrap;
   const savedSecrets = bootstrap.savedSecretOperationContext;
   let disposed = false;
-  const isCurrent = async () => !disposed && await savedSecrets.isCurrent() && !disposed;
-  if (!await isCurrent()) return null;
+  const lifetime = new AbortController();
+  // Background coordinators also supply cancellation signals. Surface their
+  // failed observation to the owning loop's backoff; only explicit preparation
+  // entrypoints may retain an accepted Action while Home recovers.
+  const isCurrent = async (signal?: AbortSignal) => {
+    if (disposed || signal?.aborted) return false;
+    const readerSignal = signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal;
+    try {
+      return await bootstrap.ensureAccountSettingsCurrent(readerSignal)
+        && await waitForObservation(savedSecrets.isCurrent(), readerSignal)
+        && await bootstrap.ensureAccountSettingsCurrent(readerSignal) && !disposed;
+    } catch (error) { rethrowRequesterHomeReadFailure(error); return false; }
+  };
+  if (!await isCurrent(input.signal)) return null;
+  const sessionFollowRuleCache = createAccountSessionFollowRuleCache({ accountId: bootstrap.attribution.accountId,
+    credentials: bootstrap.credentials, serverHttpBaseUrl: bootstrap.serverHttpBaseUrl,
+    signal: lifetime.signal, isCurrent, subscribeInvalidation: bootstrap.subscribeSessionFollowRules });
+  let followSourceBinding: Readonly<{ reconcile: (sourceSessionId: string | null) => Promise<void>; signal: AbortSignal }> | null = null;
+  const releaseFollowSources = bootstrap.subscribeSessionFollowSources(sourceSessionId => {
+    const binding = followSourceBinding;
+    if (!binding || binding.signal.aborted || disposed) return;
+    void (async () => {
+      if (!await isCurrent()) return;
+      const opened = await sessionFollowRuleCache.read();
+      const destinationSessionId = bootstrap.getBoundSessionId();
+      if (opened.status !== 'available' || !destinationSessionId || !await isCurrent()
+        || !opened.rules.some(rule => rule.definition.enabled && rule.receiver.kind === 'session'
+          && rule.receiver.sessionId === destinationSessionId)) return;
+      if (binding === followSourceBinding && !binding.signal.aborted) await binding.reconcile(sourceSessionId);
+    })().catch(() => { if (!disposed) logger.warn('[Session Follow] Requester source recovery remains pending'); });
+  });
   const connectedServiceRuntimeRegistry = input.coordinatorInput.connectedServiceRuntimeRegistry.scopeToRequester(target => {
     const tracked = [...input.coordinatorInput.pidToTrackedSession.values()].find(candidate => candidate.happySessionId === target.sessionId);
     const stamp = target.requesterWorkAttributionV1 ?? tracked?.requesterWorkAttributionV1;
@@ -71,45 +111,50 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
   }, bootstrap.attribution);
   const readSnapshot = () => {
     const snapshot = savedSecrets.readSnapshot();
-    if (disposed || !snapshot) throw new Error('requester_account_context_unavailable');
+    if (disposed || !snapshot) throw requesterAccountContextUnavailable();
     return snapshot;
   };
   const withHome = <T>(operation: () => Promise<T>) => {
-    if (disposed) return Promise.reject<T>(new Error('requester_account_context_unavailable'));
+    if (disposed) return Promise.reject<T>(requesterAccountContextUnavailable());
     return runWithServerHttpBaseUrl(bootstrap.serverHttpBaseUrl, operation);
   };
   const api = await withHome(() => ApiClient.create(bootstrap.credentials));
   const listeners = new Set<() => void>();
+  const releaseSettingsPublication = bootstrap.subscribeAccountSettings(() => {
+    for (const listener of listeners) listener();
+  });
   const profileStore = createCliProfileStoreForOperation({ operationContext: savedSecrets });
   let profileProjection: Awaited<ReturnType<typeof profileStore.readCatalog>> | null = null;
   const refreshAccountSettings = async (minSettingsVersion?: number) => {
-    if (!await isCurrent()) return false;
-    const snapshot = await withHome(() => bootstrapAccountSettingsContext({ credentials: bootstrap.credentials,
-      mode: 'blocking', refresh: 'force', publication: 'invocation', honorAccountSettingsModeEnv: false,
-      ...(minSettingsVersion === undefined ? {} : { minSettingsVersion }),
-      shouldCommit: () => savedSecrets.readSnapshot() !== null }));
-    if (snapshot.source !== 'network' || !await savedSecrets.replaceAccountSettings(snapshot)) return false;
-    try {
-      const projection = await profileStore.readCatalog();
-      if (!await isCurrent() || !await savedSecrets.commitProfileCatalog({ expectedSettingsVersion: snapshot.settingsVersion,
-        catalog: projection.catalog })) return false;
-      profileProjection = projection;
-    } catch (error) {
-      if (!await isCurrent()) { profileProjection = null; return false; }
-      const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
-      const reason: ProfileCatalogUnavailableReasonV1 = code === 'unsupported' || code === 'unauthorized' || code === 'forbidden'
-        ? code : 'unreachable';
-      const catalog: ProfileCatalogSnapshotV1 = { status: 'unavailable', reason };
-      if (!await savedSecrets.commitProfileCatalog({ expectedSettingsVersion: snapshot.settingsVersion, catalog })) return false;
-      profileProjection = { catalog, artifactsById: new Map() };
-    }
-    const current = readSnapshot();
-    await Promise.all([
-      ...(current.connectedPurposeCatalog ? [refreshActiveConnectedAccountCatalog({ credentials: bootstrap.credentials,
-        key: 'purposes', operationContext: savedSecrets })] : []),
-      ...(current.connectedConfigurationCatalog ? [refreshActiveConnectedAccountCatalog({ credentials: bootstrap.credentials,
-        key: 'configurations', operationContext: savedSecrets })] : []),
-    ]);
+    // Catalog readers and commits consume one refresh's requester observation.
+    // Keep publication outside it so Home revocation during a read still wins.
+    const refreshed = await runWithRequesterSessionCurrentnessCheckpoint(async () => {
+      if (disposed || !await bootstrap.refreshAccountSettings(minSettingsVersion) || !await isCurrent()) return false;
+      const snapshot = readSnapshot();
+      try {
+        const projection = await profileStore.readCatalog();
+        if (!await isCurrent() || !await savedSecrets.commitProfileCatalog({ expectedSettingsVersion: snapshot.settingsVersion,
+          catalog: projection.catalog })) return false;
+        profileProjection = projection;
+      } catch (error) {
+        if (!await isCurrent()) { profileProjection = null; return false; }
+        const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+        const reason: ProfileCatalogUnavailableReasonV1 = code === 'unsupported' || code === 'unauthorized' || code === 'forbidden'
+          ? code : 'unreachable';
+        const catalog: ProfileCatalogSnapshotV1 = { status: 'unavailable', reason };
+        if (!await savedSecrets.commitProfileCatalog({ expectedSettingsVersion: snapshot.settingsVersion, catalog })) return false;
+        profileProjection = { catalog, artifactsById: new Map() };
+      }
+      const current = readSnapshot();
+      await Promise.all([
+        ...(current.connectedPurposeCatalog ? [refreshActiveConnectedAccountCatalog({ credentials: bootstrap.credentials,
+          key: 'purposes', operationContext: savedSecrets })] : []),
+        ...(current.connectedConfigurationCatalog ? [refreshActiveConnectedAccountCatalog({ credentials: bootstrap.credentials,
+          key: 'configurations', operationContext: savedSecrets })] : []),
+      ]);
+      return true;
+    });
+    if (!refreshed || !await isCurrent()) return false;
     for (const listener of listeners) listener();
     return true;
   };
@@ -144,13 +189,13 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
     configuration: persistence.configuration, configurationOwner });
   const token = bootstrap.credentials.token;
   const qualifiedConnectedAccountApi: RequesterSessionRuntimeContext['qualifiedConnectedAccountApi'] = {
-    readGroup: async ({ service, groupId, signal }) => { if (!await isCurrent()) throw new Error('requester_account_context_unavailable');
+    readGroup: async ({ service, groupId, signal }) => { if (!await isCurrent(signal)) throw requesterAccountContextUnavailable();
       return await withHome(() => readQualifiedConnectedAccountGroupV4({ token, group: { service, groupId }, ...(signal ? { signal } : {}) })); },
-    listAccounts: async ({ service, signal }) => { if (!await isCurrent()) throw new Error('requester_account_context_unavailable');
+    listAccounts: async ({ service, signal }) => { if (!await isCurrent(signal)) throw requesterAccountContextUnavailable();
       return await withHome(() => listQualifiedConnectedAccountsV4({ token, service, ...(signal ? { signal } : {}) })); },
   };
   const directMaterial = createHttpTeamCredentialDirectMaterialClient({ token, serverUrl: bootstrap.serverHttpBaseUrl,
-    readRecipientEncryptionMaterial: async signal => { if (!await isCurrent()) return { mode: 'e2ee_unavailable' };
+    readRecipientEncryptionMaterial: async signal => { if (!await isCurrent(signal)) return { mode: 'e2ee_unavailable' };
       const mode = await withHome(() => api.getAccountEncryptionMode({ signal }));
       const encryption = bootstrap.credentials.encryption;
       return mode === 'plain' ? { mode: 'plain' } : mode === 'e2ee' && encryption
@@ -158,13 +203,14 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
         : { mode: 'e2ee_unavailable' }; },
   });
   const purposes = createDaemonConnectedAccountPurposeBindingRuntime({ establishedRuntimeOwner: established,
+    credentialOwnerAccountId: bootstrap.attribution.accountId,
     workerMachineId: bootstrap.attribution.machineId, store, reloadController: pluginReloadController,
-    allowNativeAccountCredentials: false, openTeamDirect: directMaterial.open,
+    allowNativeAccountCredentials: bootstrap.allowNativeAccountCredentials === true, openTeamDirect: directMaterial.open,
     resolveQualifiedConnectedAccountV4Support: input.resolveQualifiedConnectedAccountV4Support,
     resolveConnectedAccountEndpoints: async request => await withHome(() => established.readConfiguredEndpoints(request)),
     qualifiedApi: { listAccounts: async (service, signal) => await qualifiedConnectedAccountApi.listAccounts({ service, signal }),
       listGroups: async (service, signal) => {
-        if (!await isCurrent()) throw new Error('requester_account_context_unavailable');
+        if (!await isCurrent(signal)) throw requesterAccountContextUnavailable();
         return await withHome(() => listQualifiedConnectedAccountGroupsV4({ token, service, signal }));
       },
       readGroup: async (group, signal) => await qualifiedConnectedAccountApi.readGroup({ ...group, signal }) },
@@ -172,12 +218,12 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
   const providerAccountUsageStore = createProviderAccountUsageStore();
   const providerAccountUsagePersistence = createProviderAccountUsagePersistenceScheduler({
     api: { getAccountEncryptionMode: async () => {
-      if (!await isCurrent()) throw new Error('requester_account_context_unavailable');
+      if (!await isCurrent()) throw requesterAccountContextUnavailable();
       return await withHome(() => api.getAccountEncryptionMode());
     } }, credentials: bootstrap.credentials, now: () => Date.now(), randomBytes,
     serverScope: bootstrap.attribution.serverId, accountScope: bootstrap.attribution.accountId,
     writeQualifiedProviderAccountUsage: async request => {
-      if (!await isCurrent()) throw new Error('requester_account_context_unavailable');
+      if (!await isCurrent()) throw requesterAccountContextUnavailable();
       return await withHome(() => writeQualifiedProviderAccountUsageV4(request));
     },
   });
@@ -190,12 +236,18 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
   let retirement: Promise<void> | undefined;
   const dispose = () => retirement ??= (async () => {
     disposed = true;
+    lifetime.abort();
+    sessionFollowRuleCache.dispose();
+    followSourceBinding = null;
+    releaseFollowSources();
+    releaseSettingsPublication();
     profileProjection = null;
     savedSecrets.withdrawCatalog();
     providerAccountUsagePersistence.dispose();
     listeners.clear();
     coordinators?.connectedServiceQuotasCoordinator?.disposeInBandQuotaPersistence();
     const results = await Promise.allSettled([
+      bootstrap.dispose(),
       Promise.resolve(coordinators?.connectedServiceRefreshLoopHandle?.stop()),
       Promise.resolve(coordinators?.connectedServiceQuotasLoopHandle?.stop()), daemonSessionMutationCustody.close(),
     ]);
@@ -207,7 +259,7 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
     activeServerDir, api, credentials: bootstrap.credentials, accountSettingsSnapshot: () => savedSecrets.readSnapshot(),
     connectedServiceRuntimeRegistry,
     connectedServicesMaterializationBaseDir, isAccountRuntimeCurrent: isCurrent, runAccountOperation: withHome,
-    allowNativeAccountState: false,
+    allowNativeAccountState: bootstrap.allowNativeAccountCredentials === true,
     connectedAccountsOwner: purposes.owner,
     activatePurposeBindings: purposes.activatePurposeBindings,
     providerAccountUsageStore, connectedServiceRuntimeQuotaSnapshots, daemonSessionMutationCustody,
@@ -219,17 +271,21 @@ export async function createRequesterSessionRuntimeContext(input: Readonly<{
     },
     listQualifiedConnectedAccountGroupQuotaTargets: purposes.listGroupQuotaTargets, onQualifiedConnectedAccountCredentialUpdated: purposes.invalidate,
     }));
+    if (!await isCurrent(input.signal)) {
+      await dispose();
+      return null;
+    }
   } catch (error) {
     try { await dispose(); } catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Requester Account runtime startup failed'); }
     throw error;
   }
-  if (!await isCurrent()) {
-    await dispose();
-    return null;
-  }
-  return Object.freeze({ bootstrap, isCurrent, api, readAccountSettingsSnapshot: readSnapshot, refreshAccountSettings, readAccountLaunchProfiles,
+  return Object.freeze({ bootstrap, isCurrent, api, sessionFollowRuleCache,
+    bindSessionFollowSourceReconciliation: (reconcile: (sourceSessionId: string | null) => Promise<void>, signal: AbortSignal) => {
+      if (!disposed && !signal.aborted && followSourceBinding?.signal !== signal) followSourceBinding = { reconcile, signal };
+    },
+    readAccountSettingsSnapshot: readSnapshot, refreshAccountSettings, readAccountLaunchProfiles,
     subscribeAccountSettingsSnapshot: (listener: () => void) => {
-      if (disposed) throw new Error('requester_account_context_unavailable');
+      if (disposed) throw requesterAccountContextUnavailable();
       listeners.add(listener);
       return () => { listeners.delete(listener); };
     },

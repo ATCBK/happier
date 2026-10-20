@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Pressable, View, type LayoutChangeEvent, type ViewProps } from 'react-native';
+import { Pressable, ScrollView, View, type LayoutChangeEvent, type ViewProps } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useLocalSearchParams } from '@/components/appShell/workspace/destinationRoute';
 import { StyleSheet } from 'react-native-unistyles';
@@ -25,7 +25,9 @@ import { getServerProfileById } from '@/sync/domains/server/serverProfiles';
 import { useHomeDisplayName } from '@/components/settings/server/homeDisplayName';
 import { sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { t } from '@/text';
+import { SessionPeopleFollowSections } from './SessionPeopleFollowSections';
 import { SessionPresenceSection } from './SessionPresenceSection';
+import { SessionPeopleReadinessSection } from './SessionPeopleReadinessSection';
 import { SessionPublicLinkSection, useSessionCollaborationPublicLink, type SessionCollaborationPublicLink } from './SessionPublicLinkSection';
 import { SessionConversationsBody } from '@/components/sessions/conversations/SessionConversationsBody';
 import { useSessionConversationsAvailability } from '@/components/sessions/conversations/useSessionConversationsAvailability';
@@ -95,6 +97,7 @@ export function SessionCollaborationSurface({ target }: Readonly<{ target: Sessi
 
 type PaneRefs = Readonly<{
     responsibleAnchor: React.RefObject<React.ElementRef<typeof View> | null>;
+    followingAnchor: React.RefObject<React.ElementRef<typeof View> | null>;
     accessAnchor: React.RefObject<React.ElementRef<typeof View> | null>;
     publicLinkAnchor: React.RefCallback<React.ElementRef<typeof View>>;
     panelAnchor: React.RefObject<React.ElementRef<typeof View> | null>;
@@ -157,6 +160,7 @@ function SessionCollaborationAccountContent(props: Readonly<{ scope: ServerAccou
     }, [scheduleFocus]);
     const refs: PaneRefs = {
         responsibleAnchor: React.useRef<React.ElementRef<typeof View>>(null),
+        followingAnchor: React.useRef<React.ElementRef<typeof View>>(null),
         accessAnchor: React.useRef<React.ElementRef<typeof View>>(null),
         publicLinkAnchor: attachPublicLinkAnchor,
         panelAnchor: React.useRef<React.ElementRef<typeof View>>(null),
@@ -190,11 +194,11 @@ function SessionCollaborationAccountContent(props: Readonly<{ scope: ServerAccou
             scheduleFocus(focusTarget === 'publicLink' ? publicLinkAnchor : refs.accessAnchor);
             return;
         }
-        if (focusTarget === 'responsible') {
+        if (focusTarget === 'responsible' || focusTarget === 'following') {
             setShareOpen(false);
-            scheduleFocus(refs.responsibleAnchor);
+            scheduleFocus(focusTarget === 'following' ? refs.followingAnchor : refs.responsibleAnchor);
         }
-    }, [openShare, refs.accessAnchor, refs.responsibleAnchor, scheduleFocus]);
+    }, [openShare, refs.accessAnchor, refs.followingAnchor, refs.responsibleAnchor, scheduleFocus]);
 
     React.useEffect(() => () => {
         if (focusHandle.current !== null) clearTimeout(focusHandle.current);
@@ -382,6 +386,14 @@ function SessionCollaborationPane(props: PaneProps & Readonly<{ access: SessionA
     } : undefined, [canCreateLink, card.notShared, props.homeName, props.openShare]);
     const showCard = props.namedAccess || publicLinkOn;
     const hidden = props.shareOpen;
+    // Who hears about this session and what it follows (lab P1p): on every session, after its conversations.
+    const followSections = (
+        <>
+            {/* Configured vs ready (C7): whether asking this session can work now, before who hears about it. */}
+            <SessionPeopleReadinessSection scope={props.scope} sessionId={props.sessionId} />
+            <SessionPeopleFollowSections target={props.target} session={props.snapshot.session} followingAnchorRef={refs.followingAnchor} />
+        </>
+    );
     return (
         <View style={styles.surface} onLayout={onContainerLayout}>
             <Animated.View style={[styles.column, coveredStyle]}>
@@ -396,18 +408,23 @@ function SessionCollaborationPane(props: PaneProps & Readonly<{ access: SessionA
                 >
                     <SessionPresenceSection serverId={props.scope.serverId} sessionId={props.sessionId} />
                     <View style={styles.body}>
-                        {!props.namedAccess ? (
-                            <SurfaceStateCard
-                                testID="session-collaboration-sharing-off"
-                                kind="unavailable"
-                                iconName="users"
-                                title={t('session.collaboration.pane.sharingOffTitle', { home: props.homeName })}
-                                reason={canCreateLink ? t('session.collaboration.pane.sharingOffBody') : t('session.collaboration.pane.sharingOffPrivateBody')}
-                                action={canCreateLink && !publicLinkOn ? { label: t('session.sharing.createPublicLink'), onPress: props.openShare } : undefined}
-                            />
-                        ) : props.conversationsEnabled ? (
-                            <SessionConversationsBody scope={props.scope} address={props.target} emptyInvite={emptyInvite} />
-                        ) : null}
+                        {props.namedAccess && props.conversationsEnabled ? (
+                            <SessionConversationsBody scope={props.scope} address={props.target} emptyInvite={emptyInvite} footer={followSections} />
+                        ) : (
+                            <ScrollView style={styles.body} testID="session-people-scroll">
+                                {!props.namedAccess ? (
+                                    <SurfaceStateCard
+                                        testID="session-collaboration-sharing-off"
+                                        kind="unavailable"
+                                        iconName="users"
+                                        title={t('session.collaboration.pane.sharingOffTitle', { home: props.homeName })}
+                                        reason={canCreateLink ? t('session.collaboration.pane.sharingOffBody') : t('session.collaboration.pane.sharingOffPrivateBody')}
+                                        action={canCreateLink && !publicLinkOn ? { label: t('session.sharing.createPublicLink'), onPress: props.openShare } : undefined}
+                                    />
+                                ) : null}
+                                {followSections}
+                            </ScrollView>
+                        )}
                     </View>
                     {/* User ruling 2026-09-29: who has access and Responsible are one block at the foot. */}
                     {showCard ? (

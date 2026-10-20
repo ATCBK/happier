@@ -41,7 +41,7 @@ describe('resolveProfileProbeEnvironment', () => {
       profileCatalog: { status: 'ready' as const, source: 'destination' as const, authority: 'active' as const, controlRevision: 1,
         control: { revision: 1, record: { v: 1 as const, phase: 'active' as const, sourceSettingsVersion: 1, migratedLogicalRevision: 1, inventory: [] } },
         referenceGuardRevision: 4, diagnostics: [], records: [{ revision: 4,
-        record: { v: 1 as const, id: 'work', enabled: true, promptStack: [], secretBindings: {},
+        record: { v: 1 as const, id: 'work', enabled: true, promptStack: [], skillSeeds: [], secretBindings: {},
           definition: { kind: 'inline' as const, profile: { v: 2 as const, id: 'work', name: 'Work',
             extraEnvironmentVariables: [{ name: 'TEAM_FLAG', value: 'destination' }],
             defaultPermissionModeByTargetKey: {}, defaultPersistenceModeByTargetKey: {}, compatibilityByTargetKey: {},

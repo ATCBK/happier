@@ -1,7 +1,7 @@
 /** Shared executable JSON Schema semantics; dialect admission belongs to each contract owner. */
-import Ajv from 'ajv';
-import Ajv2020 from 'ajv/dist/2020.js';
-import addFormats, { type FormatName } from 'ajv-formats';
+import { Ajv } from 'ajv';
+import { Ajv2020 } from 'ajv/dist/2020.js';
+import formatsImport, { type FormatName, type FormatsPlugin } from 'ajv-formats';
 
 import { containsEquivalentPluginJsonValue, hasUniquePluginJsonValues, pluginJsonValuesEqual, scalarPluginJsonValueKey } from '../contributions/jsonSchemaValues.js';
 import { assertStrictPluginJsonValue, measurePluginJsonUtf8Bytes, measureSerializedValidatedStrictPluginJsonUtf8Bytes } from '../contributions/strictJsonValue.js';
@@ -25,6 +25,14 @@ const SUPPORTED_PLUGIN_JSON_SCHEMA_FORMATS = Object.freeze([
   'json-pointer',
   'relative-json-pointer',
 ] satisfies readonly FormatName[]);
+
+// ajv-formats publishes a callable CommonJS export with an identical .default.
+// NodeNext describes the namespace while bundlers describe the callable value.
+function resolveFormatsPlugin(imported: FormatsPlugin | Readonly<{ default: FormatsPlugin }>): FormatsPlugin {
+  return typeof imported === 'function' ? imported : imported.default;
+}
+
+const addFormats = resolveFormatsPlugin(formatsImport);
 
 function createPluginJsonEnumValidator(allowed: readonly unknown[]): PluginJsonSchemaValidator {
   const allowedScalars = new Set<string>();
@@ -120,9 +128,22 @@ function createAjv(dialect: 'draft-07' | 'draft-2020-12'): Ajv {
   return ajv;
 }
 
+// Both dialect owners supply admitted immutable snapshots. Keep generated code
+// with that schema identity, without a process-lifetime AJV/schema registry that
+// would retain retired installed-plugin generations.
+const compiledSchemas = {
+  'draft-07': new WeakMap<object, PluginJsonSchemaValidator>(),
+  'draft-2020-12': new WeakMap<object, PluginJsonSchemaValidator>(),
+};
+
 export function compileProtocolJsonSchema(
   jsonSchema: object,
   dialect: 'draft-07' | 'draft-2020-12',
 ): PluginJsonSchemaValidator {
-  return createAjv(dialect).compile(jsonSchema);
+  const validators = compiledSchemas[dialect];
+  const existing = validators.get(jsonSchema);
+  if (existing) return existing;
+  const validate = createAjv(dialect).compile(jsonSchema);
+  validators.set(jsonSchema, validate);
+  return validate;
 }

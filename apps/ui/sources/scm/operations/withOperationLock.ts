@@ -30,12 +30,21 @@ export type WithSessionProjectScmOperationResult<T> =
 
 export type WithWorkspaceScmOperationResult<T> = WithSessionProjectScmOperationResult<T>;
 
+/**
+ * An operation holds the lock `queued` until it runs. The lock starts `running` at once unless the caller sets
+ * `deferRunning` and calls the `markRunning` it is handed: a write that is first confirmed by the person (the
+ * Action's in-place dialog) waits `queued`, which the pane does not show as work in progress, and runs from
+ * the moment its Action is dispatched.
+ */
+type ScmOperationLockRun<T> = (markRunning: () => void) => Promise<T>;
+
 export async function withSessionProjectScmOperationLock<T>(input: {
     state: ScmOperationLockState;
     sessionId: string;
     serverId?: string;
     operation: ScmProjectOperationKind;
-    run: () => Promise<T>;
+    deferRunning?: boolean;
+    run: ScmOperationLockRun<T>;
 }): Promise<WithSessionProjectScmOperationResult<T>> {
     const start = input.state.beginSessionProjectScmOperation(input.sessionId, input.operation, ...(input.serverId === undefined ? [] : [input.serverId]));
     if (!start.started) {
@@ -47,8 +56,9 @@ export async function withSessionProjectScmOperationLock<T>(input: {
 
     const operationId = start.operation.id;
     try {
-        input.state.updateSessionProjectScmOperationProgress(input.sessionId, operationId, undefined, ...(input.serverId === undefined ? [] : [input.serverId]));
-        const value = await input.run();
+        const markRunning = () => { input.state.updateSessionProjectScmOperationProgress(input.sessionId, operationId, undefined, ...(input.serverId === undefined ? [] : [input.serverId])); };
+        if (!input.deferRunning) markRunning();
+        const value = await input.run(markRunning);
         return { started: true, value };
     } finally {
         input.state.finishSessionProjectScmOperation(input.sessionId, operationId, ...(input.serverId === undefined ? [] : [input.serverId]));
@@ -59,7 +69,8 @@ export async function withWorkspaceScmOperationLock<T>(input: {
     state: ScmWorkspaceOperationLockState;
     scope: WorkspaceScopeBase;
     operation: ScmProjectOperationKind;
-    run: () => Promise<T>;
+    deferRunning?: boolean;
+    run: ScmOperationLockRun<T>;
 }): Promise<WithWorkspaceScmOperationResult<T>> {
     const start = input.state.beginWorkspaceScmOperation(input.scope, input.operation);
     if (!start.started) {
@@ -71,8 +82,9 @@ export async function withWorkspaceScmOperationLock<T>(input: {
 
     const operationId = start.operation.id;
     try {
-        input.state.updateWorkspaceScmOperationProgress(input.scope, operationId);
-        const value = await input.run();
+        const markRunning = () => { input.state.updateWorkspaceScmOperationProgress(input.scope, operationId); };
+        if (!input.deferRunning) markRunning();
+        const value = await input.run(markRunning);
         return { started: true, value };
     } finally {
         input.state.finishWorkspaceScmOperation(input.scope, operationId);

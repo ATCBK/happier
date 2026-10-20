@@ -1,5 +1,5 @@
 import { createRpcCallError } from '@happier-dev/protocol/rpcErrors';
-import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
+import { isMachineRpcTimeoutError, RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import { markRpcRequestDisposition } from './rpcDisposition.js';
 
 export type SocketRpcContent =
@@ -32,7 +32,12 @@ function isCallId(value: unknown): value is string {
 async function open(content: Extract<SocketRpcContent, { mode: 'e2ee' }>, value: unknown): Promise<Record<string, unknown>> {
   if (typeof value !== 'string') throw updateRequired();
   let opened: unknown;
-  try { opened = await content.cipher.decryptRaw(value); } catch { throw updateRequired(); }
+  try { opened = await content.cipher.decryptRaw(value); } catch (error) {
+    // The cipher adapter may also enforce the caller's lifetime. Its timeout or
+    // cancellation says nothing about the authenticity/version of the ciphertext.
+    if (isMachineRpcTimeoutError(error) || error instanceof Error && error.name === 'AbortError') throw error;
+    throw updateRequired();
+  }
   if (!isRecord(opened) || opened.v !== 2 || !isCallId(opened.c)) throw updateRequired();
   return opened;
 }

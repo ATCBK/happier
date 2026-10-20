@@ -25,10 +25,13 @@ async function listFilesRecursively(directory: string): Promise<string[]> {
 describe('transferRuntime (public API)', () => {
     it('freezes the transferRuntime index runtime exports', async () => {
         expect(Object.keys(transferRuntime).sort()).toEqual([
+            'callAdmittedFilesystemTransferActionRpc',
             'callDaemonWorkspaceStatFileRpc',
             'callDaemonWorkspaceWriteFileRpc',
+            'captureComposerContentSubmission',
             'claimComposerContent',
             'createSessionAttachmentTransferRouting',
+            'createTransferManifestHasher',
             'downloadDaemonSessionAttachmentToDestination',
             'downloadDaemonWorkspaceFileToBase64',
             'downloadDaemonWorkspaceFileToDestination',
@@ -36,6 +39,7 @@ describe('transferRuntime (public API)', () => {
             'getComposerMediaContentAvailability',
             'inspectComposerContent',
             'isTransferFinalizeRecoveryFailure',
+            'observeTransferOperation',
             'prepareBulkJsonPayloadForUpload',
             'readFoundSkillBundle',
             'releaseComposerContent',
@@ -92,7 +96,11 @@ describe('transferRuntime (public API)', () => {
             && !filePath.endsWith('.test.ts')
             && !filePath.endsWith('.spec.ts')
             && !filePath.endsWith('.test.tsx')
-            && !filePath.endsWith('.spec.tsx'),
+            && !filePath.endsWith('.spec.tsx')
+            // Network/native fixture producers exercise these private codecs;
+            // they are test support, not product transfer entry points.
+            && !relative(sourcesPath, filePath).replaceAll('\\', '/').startsWith('dev/testkit/')
+            && !/(?:Testkit|\.testHarness)\.tsx?$/.test(filePath),
         );
 
         const externalPlumbingImports: string[] = [];

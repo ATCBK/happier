@@ -6,7 +6,9 @@ import {
     defineProtocolUnion,
     defineProtocolUniqueArray,
     defineProtocolUtf8String,
+    type ProtocolComposableSchema,
 } from '@happier-dev/plugin-sdk/protocol';
+import { ScmHostingProviderKindProtocolSchema, type ProtocolScmHostingProviderKind } from '@happier-dev/plugin-sdk/scm';
 
 import {
     MAX_TRIAGE_PAGING_TOKEN_UTF8_BYTES_V1,
@@ -25,6 +27,7 @@ import {
 import { TriageSourceFailureV1Schema } from './diagnostics.js';
 import {
     TriageEntryLocatorV1Schema,
+    TriageEntryRefV1Schema,
     TriageIdentifierV1ProtocolSchema,
     TriageSourceEntryLocalRefV1Schema,
     TriageTextV1ProtocolSchema,
@@ -133,7 +136,58 @@ export const TriageEntryStateV1ProtocolSchema = defineProtocolObject({
     ]),
     /** The provider's own word, preserved because the enum is a lossy projection. */
     nativeLabel: TriageTextV1ProtocolSchema.optional(),
+    stage: defineProtocolUnion([
+        defineProtocolLiteral('backlog'), defineProtocolLiteral('unstarted'), defineProtocolLiteral('started'),
+    ]).optional(),
+    completionReason: defineProtocolUnion([
+        defineProtocolLiteral('completed'), defineProtocolLiteral('canceled'),
+    ]).optional(),
 }, { policy: 'closed' });
+// Derive the public type through the public snapshot. The schema above is
+// stripped from declaration output and must not leak into this alias.
+export type TriageEntryStateV1 = ReturnType<typeof TriageSourceEntrySnapshotV1Schema.parse>['state'];
+
+/** The only mixed-task category projection; unknown/suppressed is not invented work state. */
+export function triageTaskStatusCategoryV1(state: TriageEntryStateV1): 'backlog' | 'unstarted' | 'started' | 'completed' | 'canceled' | null {
+    if (state.presentation === 'active') return state.stage ?? 'unstarted';
+    if (state.presentation === 'resolved' || state.presentation === 'closed') return state.completionReason ?? 'completed';
+    return null;
+}
+
+/** Closed declaration vocabulary; providers authorize the actual edit at execution. */
+export const TriageTaskFieldV1Schema = defineProtocolUnion([
+    defineProtocolLiteral('title'), defineProtocolLiteral('body'),
+    defineProtocolLiteral('assigneeIds'), defineProtocolLiteral('labelIds'),
+    defineProtocolLiteral('scopeId'), defineProtocolLiteral('projectId'),
+    defineProtocolLiteral('priority'), defineProtocolLiteral('dueDate'),
+    defineProtocolLiteral('estimate'), defineProtocolLiteral('parent'), defineProtocolLiteral('blockedBy'),
+]);
+export type TriageTaskFieldV1 = ReturnType<typeof TriageTaskFieldV1Schema.parse>;
+
+export const TriageTaskTransitionV1Schema = defineProtocolObject({
+    id: TriageIdentifierV1ProtocolSchema,
+    label: TriageTextV1ProtocolSchema,
+    state: TriageEntryStateV1ProtocolSchema,
+}, { policy: 'closed' });
+export const TriageTaskCapabilitiesV1Schema = defineProtocolObject({
+    createFields: defineProtocolUniqueArray(TriageTaskFieldV1Schema).optional(),
+    editFields: defineProtocolUniqueArray(TriageTaskFieldV1Schema).optional(),
+    transitions: defineProtocolArray(TriageTaskTransitionV1Schema).optional(),
+}, { policy: 'closed' });
+export type TriageTaskCapabilitiesV1 = ReturnType<typeof TriageTaskCapabilitiesV1Schema.parse>;
+
+/** Live read facts, not a second relationship store. Omitted facts remain unknown. */
+export const TriageEntryRelationsV1Schema = defineProtocolObject({
+    parent: TriageEntryRefV1Schema.optional(),
+    children: defineProtocolObject({
+        total: defineProtocolNumber({ integer: true, minimum: 0 }),
+        completed: defineProtocolNumber({ integer: true, minimum: 0 }).optional(),
+        entries: defineProtocolArray(TriageEntryRefV1Schema).optional(),
+        complete: defineProtocolLiteral(true).optional(),
+    }, { policy: 'closed' }).optional(),
+    blockedBy: defineProtocolArray(TriageEntryRefV1Schema).optional(),
+}, { policy: 'closed' });
+export type TriageEntryRelationsV1 = ReturnType<typeof TriageEntryRelationsV1Schema.parse>;
 
 /**
  * The bounded source projection of one provider entity's display content.
@@ -150,7 +204,8 @@ export const TriageSourceEntrySnapshotV1Schema = defineProtocolObject({
     /**
      * One line of row subtitle, never a body excerpt. Body, description,
      * comment, activity, diff, and complete label/reviewer content belongs to
-     * the live detail materialization and never rides a scan or get result.
+     * the live detail materialization and never rides this snapshot. Exact get
+     * may separately supply complete taskFields for an explicit edit.
      */
     summary: TriageTextV1ProtocolSchema.optional(),
     /** Readable owning scope; presentation only, never parsed back into identity. */
@@ -171,6 +226,9 @@ export const TriageSourceEntrySnapshotV1Schema = defineProtocolObject({
     designation: TriageTextV1ProtocolSchema.optional(),
     createdAtMs: defineProtocolNumber({ integer: true }).optional(),
     state: TriageEntryStateV1ProtocolSchema,
+    relations: TriageEntryRelationsV1Schema.optional(),
+    /** Entry-specific workflows may refine the kind's capability declaration. */
+    taskCapabilities: TriageTaskCapabilitiesV1Schema.optional(),
     facts: defineProtocolArray(TriageRowFactV1Schema, { maxItems: MAX_TRIAGE_ROW_FACTS_V1 }),
     /**
      * Present only for source rows that are pull/merge requests. This carries
@@ -244,14 +302,15 @@ export type TriageSourceViewerFactsV1 = ReturnType<
  * without one resolves no launch candidate, which is the honest answer rather
  * than a guessed directory.
  */
-export const TriageEntryRepositoryRefV1Schema = defineProtocolObject({
+export type TriageEntryRepositoryRefV1 = Readonly<{
+    kind: ProtocolScmHostingProviderKind;
+    deployment: string;
+    repository: string;
+}>;
+
+export const TriageEntryRepositoryRefV1Schema: ProtocolComposableSchema<TriageEntryRepositoryRefV1> = defineProtocolObject({
     /** The SCM hosting kind whose canonicalizer produced this identity. */
-    kind: defineProtocolUnion([
-        defineProtocolLiteral('github'),
-        defineProtocolLiteral('gitlab'),
-        defineProtocolLiteral('bitbucket'),
-        defineProtocolLiteral('azure-devops'),
-    ]),
+    kind: ScmHostingProviderKindProtocolSchema,
     /**
      * The forge DEPLOYMENT this repository lives on, spelled as the source's own
      * configured-origin owner already canonicalizes it: scheme and host
@@ -274,9 +333,6 @@ export const TriageEntryRepositoryRefV1Schema = defineProtocolObject({
     /** The provider-canonical repository identity. */
     repository: triageRepositoryPathV1,
 }, { policy: 'closed' });
-export type TriageEntryRepositoryRefV1 = ReturnType<
-    typeof TriageEntryRepositoryRefV1Schema.parse
->;
 
 /** @internal Relative-only fields of one authoritative present observation. */
 export const TriageSourcePresentObservationV1Fields = {

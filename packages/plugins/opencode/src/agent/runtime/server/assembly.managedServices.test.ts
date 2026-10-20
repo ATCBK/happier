@@ -1,5 +1,8 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import { createHappierMcpToolNamingResolver } from '../../../../../../../apps/cli/src/mcp/runtime/projectMcpToolNames';
 import { join } from 'node:path';
 
 import { buildOpenCodeSessionMcpProjection } from './mcpRegistration.js';
@@ -27,6 +30,91 @@ afterEach(() => {
 });
 
 describe('OpenCode server managed-service assembly', () => {
+  it.each(['session', 'execution_run'] as const)('registers scoped host naming and preserves original approvals and cleanup for %s', async (scope) => {
+    const original = 'plugin_' + 'long_name_'.repeat(9);
+    // The external tools/list response is the boundary fixture. Naming uses
+    // the real host owner; admitted daemon inventory is covered in CLI bootstrap.
+    const inventoryServer = createServer(async (request, response) => {
+      let body = '';
+      for await (const chunk of request) body += String(chunk);
+      const message = JSON.parse(body);
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { tools: [
+        { name: 'change_title', inputSchema: { type: 'object' } },
+        { name: original, inputSchema: { type: 'object' } },
+      ] } }));
+    });
+    inventoryServer.listen(0, '127.0.0.1');
+    await once(inventoryServer, 'listening');
+    let registered: { name: string; config: { command: string[] } } | undefined;
+    const disconnected: string[] = [];
+    let assembly: { dispose(): Promise<void> } | undefined;
+    try {
+      const address = inventoryServer.address();
+      if (!address || typeof address === 'string') throw new Error('Inventory fixture has no TCP address');
+      const launchConfig = { command: '/fixture/happier-mcp', args: ['--url', `http://127.0.0.1:${address.port}/mcp`] };
+      const resolveToolNaming = createHappierMcpToolNamingResolver(launchConfig, async () => {
+        const response = await fetch(launchConfig.args[1]!, { method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }) });
+        // This typed fixture only decodes the external inventory, leaving projection to the host owner.
+        const message: { result: { tools: Array<{ name: string }> } } = await response.json();
+        return message.result.tools.map(tool => tool.name);
+      });
+      const approvals: unknown[] = [];
+      let eventStream: ReadableStreamDefaultController<Uint8Array> | undefined;
+      const ctx = createContextFixture({
+        managedServerBaseUrl: 'http://127.0.0.1:49213',
+        permissionDecision: async request => { approvals.push(request); return { status: 'cancelled' }; },
+        managedServerRequest: async input => {
+          const path = input.pathAndQuery.split('?')[0]!;
+          if (path === '/event') return { ok: true, status: 200, headers: { 'content-type': 'text/event-stream' },
+            body: new ReadableStream<Uint8Array>({ start(controller) {
+              eventStream = controller;
+              controller.enqueue(new TextEncoder().encode('data: {"type":"server.connected","properties":{}}\n\n'));
+              input.signal?.addEventListener('abort', () => controller.close(), { once: true });
+            } }) };
+          const posted = input.body === undefined ? {} : JSON.parse(new TextDecoder().decode(input.body));
+          if (path === '/mcp') registered = posted;
+          if (path.endsWith('/disconnect')) disconnected.push(path);
+          const body = path === '/session' ? { id: 'oc-naming' }
+            : path === '/mcp' ? { [posted.name]: { status: 'connected' } }
+              : path === '/permission' ? [] : {};
+          return { ok: true, status: 200, headers: { 'content-type': 'application/json' }, body: new Response(JSON.stringify(body)).body };
+        },
+      });
+      const common = { ctx, directory: '/repo', endpoint: { mode: 'managed-spawn' as const },
+        mcpServers: { happier: launchConfig }, mcpService: { resolveServers: async () => [], resolveToolNaming } };
+      assembly = scope === 'session'
+        ? await createOpenCodeServerRuntimeAssembly({ ...common, happierSessionId: 'scope-session',
+          request: { kind: 'create', sessionId: 'scope-session', cwd: '/repo' } })
+        : await createOpenCodeServerRuntimeAssembly({ ...common, executionRunId: 'scope-run',
+          request: { kind: 'create', runId: 'scope-run', cwd: '/repo', input: { text: 'work' },
+            profile: { pluginId: 'happier.agent.opencode', localId: 'opencode' } } });
+      await vi.waitFor(() => expect(registered).toBeDefined());
+      const registration = registered!;
+      const expectedName = buildOpenCodeSessionMcpProjection(scope === 'session' ? 'scope-session' : 'scope-run', common.mcpServers).requiredHappierServerName;
+      expect(registration.name).toBe(expectedName);
+      expect(registration.config.command).toEqual([launchConfig.command, ...launchConfig.args, '--tool-name-max-length', '40']);
+      const naming = (await resolveToolNaming({ serverName: 'happier', toolNameMaxLength: 40 }))!;
+      const alias = naming.tools.find(tool => tool.originalName === original)!.projectedName;
+      expect(`${registration.name}_${alias}`.length).toBeLessThanOrEqual(64);
+      await vi.waitFor(() => expect(eventStream).toBeDefined());
+      eventStream!.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({ type: 'permission.asked', properties: {
+        id: 'permission-alias', sessionID: 'oc-naming', permission: `${registration.name}_${alias}`, patterns: ['*'],
+      } })}\n\n`));
+      await vi.waitFor(() => expect(approvals).toEqual([expect.objectContaining({
+        subject: expect.objectContaining({ kind: 'tool', name: `mcp__happier__${original}` }),
+      })]));
+    } finally {
+      try {
+        await assembly?.dispose();
+      } finally {
+        await new Promise<void>((resolve, reject) => inventoryServer.close(error => error ? reject(error) : resolve()));
+      }
+    }
+    expect(disconnected).toEqual([`/mcp/${registered!.name}/disconnect`]);
+  });
+
   it('carries open-request MCP policy to the real session permission transport', async () => {
     let permissions: unknown;
     const ctx = createContextFixture({
@@ -54,22 +142,38 @@ describe('OpenCode server managed-service assembly', () => {
       ]));
     } finally { await assembly.dispose(); }
   });
-  it('keeps V1 controls staged for the next prompt rather than claiming native zero-turn application', async () => {
+  it.each(['plan', 'default'] as const)('keeps V1 controls staged and rejects unavailable mode %s before prompt delivery', async (mode) => {
     const requests: Array<{ path: string; method: string }> = [];
+    const nativeModes: { source: AgentSessionModesSource | null } = { source: null };
     const ctx = createContextFixture({ managedServerBaseUrl: 'http://127.0.0.1:49213', managedServerRequest: async (input) => {
       requests.push({ path: input.pathAndQuery, method: input.method ?? 'GET' });
       const path = input.pathAndQuery.split('?')[0];
       const body = path === '/session' ? { id: 'oc-v1-staged' }
+        : path === '/agent' ? [{ name: 'build', mode: 'primary' }, { name: 'plan', mode: 'primary' }]
         : path === '/provider' ? { all: [{ id: 'openai', models: { luna: { id: 'luna', name: 'Luna' } } }] } : {};
       return { ok: true, status: 200, headers: { 'content-type': 'application/json' }, body: new Response(JSON.stringify(body)).body };
     } });
-    const assembly = await createOpenCodeServerRuntimeAssembly({ ctx, directory: '/repo', happierSessionId: 'happy-v1-staged', endpoint: { mode: 'managed-spawn' }, request: { kind: 'create', sessionId: 'happy-v1-staged', cwd: '/repo' } });
+    const admission = createOpenCodeServerRuntimeAssembly({ ctx, directory: '/repo', happierSessionId: 'happy-v1-staged', endpoint: { mode: 'managed-spawn' },
+      modes: { bind(source) { nativeModes.source = source; return { dispose() {} }; } },
+      request: { kind: 'create', sessionId: 'happy-v1-staged', cwd: '/repo', configuration: {
+        mode: { value: mode, updatedAtMs: 1 }, model: { value: null, updatedAtMs: 0 },
+        permissionIntent: { value: null, updatedAtMs: 0 }, options: {},
+      } } });
+    if (mode === 'default') {
+      await expect(admission).rejects.toMatchObject({ code: 'native_agent_session_mode_unavailable' });
+      expect(requests.some(({ path, method }) => method === 'POST' && path.includes('/message'))).toBe(false);
+      return;
+    }
+    const assembly = await admission;
     try {
+      // The real OpenCode producer must keep the observed default separate from the invalid desired mode.
+      expect(nativeModes.source?.read()).toMatchObject({ currentModeId: 'build', modes: [{ id: 'build' }, { id: 'plan' }] });
       if (!('updateConfiguration' in assembly.runtime) || !assembly.runtime.updateConfiguration) throw new Error('Session configuration unavailable');
       await expect(assembly.runtime.updateConfiguration({
         mode: { value: 'plan', updatedAtMs: 1 }, model: { value: 'openai/luna', updatedAtMs: 1 },
         permissionIntent: { value: null, updatedAtMs: 0 }, options: {},
       })).resolves.toMatchObject({ status: 'deferred' });
+      expect(nativeModes.source?.read().currentModeId).toBe('build');
       expect(requests.some(({ path, method }) => method === 'POST' && (path.endsWith('/model') || path.endsWith('/agent') || path.includes('/message')))).toBe(false);
     } finally { await assembly.dispose(); }
   });
@@ -115,6 +219,8 @@ describe('OpenCode server managed-service assembly', () => {
     });
     const assembly = await createOpenCodeServerRuntimeAssembly({
       ctx, directory: '/repo', happierSessionId: 'happy-catalog', endpoint: { mode: 'managed-spawn' },
+      mcpServers: { happier: { command: '/fixture/happier-mcp' } },
+      mcpService: { resolveServers: async () => [], resolveToolNaming: async () => { throw new Error('V2 must skip unsupported MCP naming preparation'); } },
       // The models service is the public plugin-to-host boundary, not a replacement catalog owner.
       models: { bind(source: AgentSessionModelsSource) {
         snapshots.push(source.read());

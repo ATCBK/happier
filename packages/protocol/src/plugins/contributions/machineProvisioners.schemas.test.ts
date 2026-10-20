@@ -468,6 +468,10 @@ describe('public machine provisioner role schemas', () => {
     expect(MachineProvisionerBootstrapCarrierV1Schema.parse(carrier)).toEqual(
       carrier,
     );
+    const validate = compilePluginJsonSchema(MachineProvisionerBootstrapCarrierV1Schema.jsonSchema);
+    expect(validate(carrier)).toBe(true);
+    expect(validate({ ...carrier, guestHome: { ...carrier.guestHome, homeDir: 'relative/home' } })).toBe(false);
+    expect(validate({ ...carrier, guestHome: { ...carrier.guestHome, happyHomeDir: 'relative/state' } })).toBe(false);
     expect(
       MachineProvisionerBootstrapCarrierV1Schema.safeParse({
         ...carrier,

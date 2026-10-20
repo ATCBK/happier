@@ -46,8 +46,10 @@ import {
 } from "./query";
 import type { createV2SessionListServerTiming } from "./timing";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
-import { readSessionLedSubtreeSessionIdsInTx } from "@/app/session/relations/sessionReportsToSubtree";
-import { projectSessionReportsForRowsInTx, readmitCapturedSessionReportReferencesInTx, type SessionReportContribution } from "@/app/session/awareness/sessionReportsProjection";
+import { readSessionManagedSubtreeSessionIdsInTx } from "@/app/session/follow/sessionManagerSubtree";
+import { projectSessionManagerForRowsInTx, readmitCapturedSessionManagerReferencesInTx, type SessionManagerContribution } from "@/app/session/awareness/sessionManagerProjection";
+import { readAccountFollowRuleReceiverCountsInTx } from '@/app/session/follow/accountFollowRuleService';
+import { deriveSessionCoordinatorV1 } from '@happier-dev/protocol/sessions/follow/sessionCoordinatorV1';
 
 export class SessionListInvalidCursorError extends Error {
     constructor() {
@@ -57,7 +59,7 @@ export class SessionListInvalidCursorError extends Error {
 }
 
 export class SessionListUnavailableQueryError extends Error {
-    constructor(readonly reason: "audience" | "scope" | "following") {
+    constructor(readonly reason: "audience" | "scope" | "following" | "coordinator") {
         super(`Session list query ${reason} producer is unavailable`);
         this.name = "SessionListUnavailableQueryError";
     }
@@ -109,8 +111,8 @@ export async function listSessionsForAccount(params: Readonly<{
             timing: params.timing,
         });
     }
-    let contributions: readonly SessionReportContribution[] = [];
-    return await readSnapshotWithCurrentAdmission(async (tx) => {
+    let contributions: readonly SessionManagerContribution[] = [];
+    return await readSnapshotWithCurrentAdmission(async (tx) => await params.timing.measureAsync("snapshot", async () => {
         const now = Date.now();
         const accessResolution = {
             where: buildSessionAccessWhere({
@@ -163,7 +165,7 @@ export async function listSessionsForAccount(params: Readonly<{
         });
         return page && {
             ...page,
-            sessions: await projectSessionReportsForRowsInTx(tx, {
+            sessions: await projectSessionManagerForRowsInTx(tx, {
                 accountId: params.userId,
                 authentication: params.authentication,
                 sessions: page.sessions,
@@ -172,12 +174,12 @@ export async function listSessionsForAccount(params: Readonly<{
                 captureContributions: rows => { contributions = rows; },
             }),
         };
-    }, async (tx, captured) => {
+    }), async (tx, captured) => await params.timing.measureAsync("readmission", async () => {
         if (!captured) return captured;
         const admission = { accountId: params.userId, authentication: params.authentication, accessMode: "legacy_owner_or_direct" as const };
         const sessions = await readmitSessionRowsInTx(tx, admission, captured.sessions);
-        return { ...captured, sessions: await readmitCapturedSessionReportReferencesInTx(tx, { ...admission, sessions, contributions }) };
-    });
+        return { ...captured, sessions: await readmitCapturedSessionManagerReferencesInTx(tx, { ...admission, sessions, contributions }) };
+    }), { transactionClass: "session-listing-read" });
 }
 
 async function listSessionRowsForAccount(params: Readonly<{
@@ -364,8 +366,8 @@ async function listFilteredSessionsForAccount(params: Readonly<{
         throw new SessionListUnavailableQueryError("audience");
     }
 
-    let contributions: readonly SessionReportContribution[] = [];
-    return await readSnapshotWithCurrentAdmission(async (tx) => {
+    let contributions: readonly SessionManagerContribution[] = [];
+    return await readSnapshotWithCurrentAdmission(async (tx) => await params.timing.measureAsync("snapshot", async () => {
         const accessResolution = await resolveEffectiveSessionAccessWhere({
             tx,
             accountId: params.userId,
@@ -384,7 +386,7 @@ async function listFilteredSessionsForAccount(params: Readonly<{
         const now = Date.now();
         let scopeWhere;
         try {
-            scopeWhere = createSessionListScopeWhere({ accountId: params.userId, scope: query.scope });
+            scopeWhere = await createSessionListScopeWhere({ tx, accountId: params.userId, scope: query.scope });
         } catch {
             throw new SessionListUnavailableQueryError("scope");
         }
@@ -402,7 +404,7 @@ async function listFilteredSessionsForAccount(params: Readonly<{
             ? attentionQuery.candidateWhere
             : { id: { in: [] } };
         const admitAttentionRows: SessionListRowAdmission = attentionQuery.admitRows;
-        const rowAdmission: SessionListRowAdmission | undefined = query.attention === "needs_my_attention"
+        const attentionRowAdmission: SessionListRowAdmission | undefined = query.attention === "needs_my_attention"
             ? admitAttentionRows
             : !query.includeInactive
                 ? async (rows) => {
@@ -420,6 +422,27 @@ async function listFilteredSessionsForAccount(params: Readonly<{
                     return rows.filter((row) => isPublishedActive(row) || admittedInactiveIds.has(row.id));
                 }
                 : undefined;
+        const ruleReceiverCounts = await readAccountFollowRuleReceiverCountsInTx(tx, {
+            accountId: params.userId, authentication: params.authentication,
+        });
+        const admitCoordinators: SessionListRowAdmission = async rows => {
+            const projected = await projectSessionManagerForRowsInTx(tx, {
+                accountId: params.userId, authentication: params.authentication, sessions: rows,
+                accessMode: 'effective_access_v1', collectiveAccessSnapshot: accessResolution.collectiveAccessSnapshot,
+                nowMs: now, ruleReceiverCounts,
+            });
+            const selected = new Set<string>();
+            for (const row of projected) {
+                const coordinator = deriveSessionCoordinatorV1(row);
+                if (coordinator === undefined) throw new SessionListUnavailableQueryError('coordinator');
+                if (coordinator) selected.add(row.id);
+            }
+            return rows.filter(row => selected.has(row.id));
+        };
+        const rowAdmission: SessionListRowAdmission | undefined = query.coordinator === undefined ? attentionRowAdmission
+            : async rows => admitCoordinators(attentionRowAdmission ? await attentionRowAdmission(rows) : rows);
+        const admitAttentionCandidates: SessionListRowAdmission = query.coordinator === undefined ? admitAttentionRows
+            : async rows => admitCoordinators(await admitAttentionRows(rows));
         const baseWhere = createFilteredSessionListWhere({
             accountId: params.userId,
             query,
@@ -429,7 +452,7 @@ async function listFilteredSessionsForAccount(params: Readonly<{
             attentionWhere,
         });
         const subtreeWhere: Prisma.SessionWhereInput = query.underSessionId
-            ? { id: { in: await readSessionLedSubtreeSessionIdsInTx(tx, {
+            ? { id: { in: await readSessionManagedSubtreeSessionIdsInTx(tx, {
                 accountId: params.userId,
                 rootSessionId: query.underSessionId,
                 authentication: params.authentication,
@@ -457,20 +480,21 @@ async function listFilteredSessionsForAccount(params: Readonly<{
             readSource,
             attentionWhere,
             rowAdmission,
-            attentionRowAdmission: admitAttentionRows,
+            attentionRowAdmission: admitAttentionCandidates,
             observedAttentionDiscussionFacts: attentionQuery.observedDiscussionFacts,
             now,
             rowRepresentabilityWhere: params.rowRepresentabilityWhere,
             timing: params.timing,
         });
         return page && SessionListQueryResponseV1Schema.parse({
-            sessions: await projectSessionReportsForRowsInTx(tx, {
+            sessions: await projectSessionManagerForRowsInTx(tx, {
                 accountId: params.userId,
                 authentication: params.authentication,
                 sessions: page.sessions,
                 accessMode: "effective_access_v1",
                 collectiveAccessSnapshot: accessResolution.collectiveAccessSnapshot,
                 nowMs: now,
+                ruleReceiverCounts,
                 captureContributions: rows => { contributions = rows; },
             }),
             nextCursor: page.nextCursor ?? null,
@@ -481,13 +505,16 @@ async function listFilteredSessionsForAccount(params: Readonly<{
                 ? { metadataUpgradeRequiredCount: page.metadataUpgradeRequiredCount }
                 : {}),
         });
-    }, async (tx, captured) => {
+    }), async (tx, captured) => await params.timing.measureAsync("readmission", async () => {
         if (!captured) return captured;
         const admission = { accountId: params.userId, authentication: params.authentication, accessMode: "effective_access_v1" as const };
         const sessions = await readmitSessionRowsInTx(tx, admission, captured.sessions);
+        const current = await readmitCapturedSessionManagerReferencesInTx(tx, { ...admission, sessions, contributions });
         return SessionListQueryResponseV1Schema.parse({
             ...captured,
-            sessions: await readmitCapturedSessionReportReferencesInTx(tx, { ...admission, sessions, contributions }),
+            // Revoking the last readable child can remove coordinator membership
+            // during final admission, just as it removes that child's counts.
+            sessions: query.coordinator === undefined ? current : current.filter(row => deriveSessionCoordinatorV1(row) === true),
         });
-    });
+    }), { transactionClass: "session-listing-read" });
 }

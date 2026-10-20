@@ -6,6 +6,7 @@ import { buildInboxSessionPresentation } from '@/activity/presentation/buildInbo
 import {
     markSessionSurfaceVisible,
     resetSessionSurfaceVisibilityForTests,
+    retainVisibleSessionListSurfaces,
     setRouteAnchorSessionId,
 } from '@/sync/domains/session/sessionSurfaceVisibility';
 import { storage } from '@/sync/domains/state/storage';
@@ -37,6 +38,11 @@ function replaceActiveSessionListRows(rows: SessionListRenderableSession[]): voi
     const serverId = String(getActiveServerSnapshot().serverId ?? '').trim();
     if (!serverId) throw new Error('Expected an active Home for the socket fixture.');
     storage.getState().applyServerScopedSessionListRows(serverId, rows, { source: 'ordinary', mode: 'replace' });
+}
+
+function demandSessionListRow(sessionId: string): void {
+    const serverId = String(getActiveServerSnapshot().serverId ?? '').trim();
+    retainVisibleSessionListSurfaces([{ serverId, sessionId }]);
 }
 type HandleUpdateContainerParams = Parameters<typeof handleUpdateContainer>[0];
 type HandleUpdateContainerBaseParams = Omit<HandleUpdateContainerParams, 'updateData'>;
@@ -78,6 +84,7 @@ function buildBaseParams(overrides: Partial<HandleUpdateContainerBaseParams> = {
         artifactDataKeys: new Map(),
         applySessions: vi.fn(),
         fetchSessions: vi.fn(),
+        hydrateSessionById: vi.fn(),
         applyMessages: vi.fn(),
         onSessionVisible: vi.fn(),
         isSessionMessagesLoaded: vi.fn(() => false),
@@ -307,6 +314,7 @@ describe('socket update handling: plaintext update-session', () => {
     });
 
     it('applies plaintext session updates when session encryption is unavailable', async () => {
+        markSessionSurfaceVisible('s1');
         const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
         try {
             storage.getState().applySessions([buildSession('s1')]);
@@ -352,6 +360,7 @@ describe('socket update handling: plaintext update-session', () => {
         storage.getState().applySessions([{
             ...buildSession(sessionId),
             serverId: 'server-a',
+            access: normalizeSessionAccessProjection({ share: null }, { allowLegacy: true }),
             metadata: {
                 path: '/tmp',
                 host: 'localhost',
@@ -530,6 +539,7 @@ describe('socket update handling: plaintext update-session', () => {
     });
 
     it('does not overwrite a newer title when a lower-version metadata payload arrives (hydrated path)', async () => {
+        markSessionSurfaceVisible('s_meta_version_guard');
         storage.getState().applySessions([{
             ...buildSession('s_meta_version_guard'),
             metadata: { path: '/tmp', host: 'localhost', name: 'Newer title' },
@@ -670,6 +680,7 @@ describe('socket update handling: plaintext update-session', () => {
     });
 
     it('applies metadata when the incoming version is higher and treats an equal version as a no-op (hydrated path)', async () => {
+        markSessionSurfaceVisible('s_meta_version_apply');
         storage.getState().applySessions([{
             ...buildSession('s_meta_version_apply'),
             metadata: { path: '/tmp', host: 'localhost', name: 'Original title' },
@@ -718,6 +729,7 @@ describe('socket update handling: plaintext update-session', () => {
     });
 
     it('applies the first durable session update immediately and coalesces trailing updates without dropping queued fields', async () => {
+        markSessionSurfaceVisible('s1');
         vi.useFakeTimers();
         storage.getState().applySessions([buildSession('s1')]);
         const appliedBatches: Session[][] = [];
@@ -977,6 +989,7 @@ describe('socket update handling: plaintext update-session', () => {
     });
 
     it('preserves runtime-local direct-session metadata for loaded plaintext sessions when an update omits externalSessionV1', async () => {
+        markSessionSurfaceVisible('s1');
         const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
         try {
             storage.getState().applySessions([{
@@ -1050,6 +1063,7 @@ describe('socket update handling: plaintext update-session', () => {
     });
 
     it('preserves runtime-local direct-session metadata for loaded plaintext sessions when an update sets externalSessionV1 to null', async () => {
+        markSessionSurfaceVisible('s1');
         const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
         try {
             storage.getState().applySessions([{
@@ -1123,6 +1137,7 @@ describe('socket update handling: plaintext update-session', () => {
     });
 
     it('patches cache-only renderables for plaintext update-session without forcing a sessions refresh', async () => {
+        demandSessionListRow('s_cached_only');
         replaceActiveSessionListRows([
             {
                 id: 's_cached_only',
@@ -1304,6 +1319,7 @@ describe('socket update handling: plaintext update-session', () => {
     });
 
     it('retains cache-only runtime activity truth and target-hydrates on an equal-revision conflict', async () => {
+        demandSessionListRow('s_cached_runtime_conflict');
         vi.useFakeTimers();
         replaceActiveSessionListRows([{
             id: 's_cached_runtime_conflict',
@@ -1361,6 +1377,7 @@ describe('socket update handling: plaintext update-session', () => {
     });
 
     it('retains hydrated runtime activity truth and target-hydrates on an equal-revision conflict', async () => {
+        markSessionSurfaceVisible('s_hydrated_runtime_conflict');
         storage.getState().applySessions([{
             ...buildSession('s_hydrated_runtime_conflict'),
             runtimeActivityState: 'active',
@@ -1403,9 +1420,11 @@ describe('socket update handling: plaintext update-session', () => {
     });
 
     it('preserves last-good responsibility and target-hydrates a malformed socket half-tuple', async () => {
+        markSessionSurfaceVisible('s_responsibility_half_tuple');
         const responsibleAccount = {
             kind: 'account' as const,
             accountId: 'account-alice',
+            name: 'Alice',
             firstName: 'Alice',
             lastName: null,
             username: 'alice',
@@ -1587,6 +1606,7 @@ describe('socket update handling: plaintext update-session', () => {
 
     it('keeps layout-0 metadata socket patches on the existing inline hydration path', async () => {
         const sessionId = 's_layout0_inline_metadata';
+        markSessionSurfaceVisible(sessionId);
         storage.getState().applySessions([buildSession(sessionId)]);
         const hydrateSessionById = vi.fn();
         const params = buildBaseParams({ hydrateSessionById });
@@ -1628,6 +1648,7 @@ describe('socket update handling: plaintext update-session', () => {
 
     it('keeps the last-known owner view while it target-hydrates layout-1 owner metadata after a shared metadata socket patch', async () => {
         const sessionId = 's_layout1_owner_refresh';
+        markSessionSurfaceVisible(sessionId);
         storage.getState().applySessions([{
             ...buildSession(sessionId),
             metadataLayoutVersion: 1,
@@ -1678,6 +1699,7 @@ describe('socket update handling: plaintext update-session', () => {
         'applies a layout-1 %s participant shared metadata patch without requesting owner hydration',
         async (accessLevel) => {
             const sessionId = `s_layout1_${accessLevel}_participant_shared_patch`;
+            markSessionSurfaceVisible(sessionId);
             storage.getState().applySessions([{
                 ...buildSession(sessionId),
                 metadataLayoutVersion: 1,
@@ -2026,6 +2048,7 @@ describe('socket update handling: plaintext update-session', () => {
     });
 
     it('does not overwrite a newer cache-only title when a lower-version metadata payload arrives', async () => {
+        demandSessionListRow('s_cached_meta_version_guard');
         replaceActiveSessionListRows([
             {
                 id: 's_cached_meta_version_guard',
@@ -2074,6 +2097,7 @@ describe('socket update handling: plaintext update-session', () => {
     });
 
     it('recomputes cache-only unread state after metadata read-state updates are applied', async () => {
+        demandSessionListRow('s_cached_metadata_read_state');
         replaceActiveSessionListRows([
             {
                 id: 's_cached_metadata_read_state',
@@ -2135,6 +2159,7 @@ describe('socket update handling: plaintext update-session', () => {
     });
 
     it('patches cache-only encrypted metadata while deferring hidden encrypted agentState', async () => {
+        demandSessionListRow('s_cached_encrypted_state');
         replaceActiveSessionListRows([
             {
                 id: 's_cached_encrypted_state',
@@ -2671,6 +2696,7 @@ describe('socket update handling: plaintext update-session', () => {
     });
 
     it('target-hydrates old share updates that cannot prove canApprovePermissions', async () => {
+        markSessionSurfaceVisible('s_share_legacy_payload');
         storage.getState().applySessions([{
             ...buildSession('s_share_legacy_payload'),
             accessLevel: 'edit',
@@ -2707,6 +2733,7 @@ describe('socket update handling: plaintext update-session', () => {
     });
 
     it('uses targeted session hydration for newly shared sessions instead of invalidating the full list', async () => {
+        markSessionSurfaceVisible('s_share_new');
         const hydrateSessionById = vi.fn();
         const params = buildBaseParams({ hydrateSessionById } as Partial<HandleUpdateContainerBaseParams>);
 
@@ -2734,6 +2761,7 @@ describe('socket update handling: plaintext update-session', () => {
     });
 
     it('forwards targeted session hydration through the parsed socket update path', async () => {
+        markSessionSurfaceVisible('s_share_socket_path');
         const hydrateSessionById = vi.fn();
         const params = buildBaseParams({ hydrateSessionById } as Partial<HandleUpdateContainerBaseParams>);
 
@@ -2760,6 +2788,7 @@ describe('socket update handling: plaintext update-session', () => {
     });
 
     it('preserves direct-session classification for cache-only renderables when an update omits externalSessionV1', async () => {
+        demandSessionListRow('s_cached_direct');
         replaceActiveSessionListRows([
             {
                 id: 's_cached_direct',
@@ -2832,6 +2861,7 @@ describe('socket update handling: plaintext update-session', () => {
     });
 
     it('preserves direct-session classification for cache-only renderables when an update sets externalSessionV1 to null', async () => {
+        demandSessionListRow('s_cached_direct');
         replaceActiveSessionListRows([
             {
                 id: 's_cached_direct',
@@ -2905,6 +2935,7 @@ describe('socket update handling: plaintext update-session', () => {
     });
 
     it('preserves direct-session classification for cache-only renderables when an update sets externalSessionV1 to null', async () => {
+        demandSessionListRow('s_cached_direct');
         replaceActiveSessionListRows([
             {
                 id: 's_cached_direct',
@@ -2977,10 +3008,10 @@ describe('socket update handling: plaintext update-session', () => {
         }));
     });
 
-    it('defers hidden encrypted agentState hydration when projected pending counts are complete and unchanged', async () => {
+    it.each(['e2ee', 'plain'] as const)('defers hidden %s Agent state when projected pending counts are complete and unchanged', async (encryptionMode) => {
         storage.getState().applySessions([{
             ...buildSession('s_hidden_encrypted'),
-            encryptionMode: 'e2ee',
+            encryptionMode,
             pendingPermissionRequestCount: 0,
             pendingUserActionRequestCount: 0,
             latestTurnStatus: 'in_progress',
@@ -3006,7 +3037,9 @@ describe('socket update handling: plaintext update-session', () => {
                 id: 's_hidden_encrypted',
                 pendingPermissionRequestCount: 0,
                 pendingUserActionRequestCount: 0,
-                agentState: { version: 3, value: 'encrypted-state' },
+                agentState: { version: 3, value: encryptionMode === 'plain'
+                    ? JSON.stringify({ controlledByUser: false })
+                    : 'encrypted-state' },
             },
         };
 
@@ -3114,16 +3147,16 @@ describe('socket update handling: plaintext update-session', () => {
         });
 
         expect(decryptAgentState).toHaveBeenCalledTimes(1);
-        expect(decryptMetadata).toHaveBeenCalledTimes(1);
-        expect(markSessionStateHydrationDeferred).not.toHaveBeenCalled();
+        expect(decryptMetadata).not.toHaveBeenCalled();
+        expect(markSessionStateHydrationDeferred).toHaveBeenCalledWith('s_hidden_agent_state_controlled');
         const applySessionsSpy = params.applySessions as unknown as ReturnType<typeof vi.fn>;
         expect(applySessionsSpy).toHaveBeenCalledTimes(1);
         const updatedSession = applySessionsSpy.mock.calls[0]?.[0]?.[0] as Session;
         expect(updatedSession).toEqual(expect.objectContaining({
             agentState: decryptedAgentState,
             agentStateVersion: 2,
-            metadata: { path: '/work', host: 'devbox' },
-            metadataVersion: 2,
+            metadata: { path: '/cached', host: 'cached-host' },
+            metadataVersion: 1,
             pendingPermissionRequestCount: 0,
             pendingUserActionRequestCount: 0,
         }));
@@ -3749,7 +3782,7 @@ describe('socket update handling: plaintext update-session', () => {
         }));
     });
 
-    it('hydrates hidden encrypted metadata while deferring hidden encrypted agentState', async () => {
+    it('defers hidden encrypted metadata and Agent state while applying activity projections', async () => {
         storage.getState().applySessions([{
             ...buildSession('s_hidden_metadata'),
             encryptionMode: 'e2ee',
@@ -3794,7 +3827,7 @@ describe('socket update handling: plaintext update-session', () => {
 
         await handleUpdateContainer({ ...params, updateData });
 
-        expect(decryptMetadata).toHaveBeenCalledTimes(1);
+        expect(decryptMetadata).not.toHaveBeenCalled();
         // Hidden encrypted agentState must be deferred: it is never decrypted in this path.
         expect(decryptAgentState).not.toHaveBeenCalled();
         const applySessionsSpy = params.applySessions as unknown as ReturnType<typeof vi.fn>;
@@ -3809,8 +3842,8 @@ describe('socket update handling: plaintext update-session', () => {
             latestTurnStatus: 'completed',
             latestTurnStatusObservedAt: 1238,
             meaningfulActivityAt: 1238,
-            metadataVersion: 3,
-            metadata: { path: '/work', host: 'devbox' },
+            metadataVersion: 1,
+            metadata: { path: '/tmp', host: 'localhost' },
             agentStateVersion: 1,
             agentState: {},
         }));

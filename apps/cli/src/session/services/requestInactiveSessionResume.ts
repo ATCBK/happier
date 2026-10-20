@@ -6,7 +6,7 @@ import { isRpcMethodNotAvailableError, isRpcMethodNotFoundError } from '@happier
 
 import { buildInactiveSessionResumeSpawnOptions, type InactiveSessionResumeRuntimeOptions } from '@/daemon/sessions/runtimeSnapshot/buildInactiveSessionResumeSpawnOptions';
 import type { StoredCredentials } from '@/persistence';
-import type { SpawnSessionOptions } from '@/session/shared/spawnSessionContract';
+import type { SpawnSessionOptions, SpawnSessionResult } from '@/session/shared/spawnSessionContract';
 import { createStableSpawnNonce } from '@/session/shared/spawnNonce';
 import type { RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { callMachineRpc } from '@/session/transport/rpc/machineRpc';
@@ -15,10 +15,12 @@ import type { ActionExecutorContext, SessionInitialGoalRequestV1 } from '@happie
 import { randomUUID } from 'node:crypto';
 import { logger } from '@/ui/logger';
 import { resolveSessionStartupTimeoutMs } from '@/daemon/spawn/waitForSessionWebhook';
+import { resolveSessionResumeControlIntent } from './sessionExplicitStopIntent';
 
 const resumeDiagnosticCauseCodes = new Set<string>([
   ...Object.values(SPAWN_SESSION_ERROR_CODES),
   'MACHINE_RPC_TIMEOUT',
+  'machine_target_not_current',
   'session_identity_mismatch',
 ]);
 
@@ -34,7 +36,7 @@ export type InactiveSessionResumeResult =
   | Readonly<{ ok: true }>
   | Readonly<{
       ok: false;
-      code: 'session_archived' | 'takeover_required' | 'unsupported' | 'resume_failed' | 'timeout' | 'SESSION_DIRECTORY_MISSING';
+      code: 'session_archived' | 'held_by_person' | 'authority_unavailable' | 'takeover_required' | 'unsupported' | 'resume_failed' | 'timeout' | 'SESSION_DIRECTORY_MISSING' | 'machine_target_not_current';
       message: string;
     }>;
 
@@ -116,13 +118,14 @@ export function buildMachineResumeRequest(
 function resolveThrownResumeFailureCode(
   error: unknown,
   code: unknown,
-): 'unsupported' | 'resume_failed' | 'timeout' {
+): 'unsupported' | 'resume_failed' | 'timeout' | 'machine_target_not_current' {
   if (code === 'MACHINE_RPC_TIMEOUT') return 'timeout';
+  if (code === 'machine_target_not_current') return 'machine_target_not_current';
   if (isRpcMethodNotAvailableError(error) || isRpcMethodNotFoundError(error)) return 'unsupported';
   return 'resume_failed';
 }
 
-/** Explicit user-action seam; persisted recovery owners never call this service. */
+/** Canonical inactive resume; automatic delivery retains explicit Stop custody. */
 export async function requestInactiveSessionResume(params: Readonly<{
   credentials: StoredCredentials;
   sessionId: string;
@@ -135,21 +138,31 @@ export async function requestInactiveSessionResume(params: Readonly<{
   approvedNewDirectoryCreation?: boolean;
   initialGoal?: SessionInitialGoalRequestV1;
   executionAuthority?: ActionExecutorContext['authority'];
+  /** Existing admitted Action context; the Machine still rechecks launch authority. */
+  actionContext?: ActionExecutorContext;
   externalAction?: Parameters<typeof callMachineRpc>[0]['externalAction'];
+  /** The hosting daemon reuses its existing exact-machine launch owner. */
+  spawnSession?: (options: SpawnSessionOptions) => Promise<SpawnSessionResult>;
   machineRpcTransport?: (
     method: string,
     request: unknown,
-    options?: Readonly<{ signal?: AbortSignal }>,
+    options?: Readonly<Pick<Parameters<typeof callMachineRpc>[0], 'signal' | 'timeoutMs' | 'reattachOnReconnect' | 'requestId'>>,
   ) => Promise<unknown>;
 }> & (Readonly<{ localId: string; requestId?: never }> | Readonly<{ requestId: string; localId?: never }>)): Promise<InactiveSessionResumeResult> {
   const requestId = params.requestId ?? params.localId;
-  const archivedAt = (params.rawSession as { archivedAt?: unknown }).archivedAt;
-  if (archivedAt !== null && archivedAt !== undefined) {
+  const resumeIntent = resolveSessionResumeControlIntent(params);
+  if (resumeIntent === 'session_archived') {
     return {
       ok: false,
       code: 'session_archived',
       message: 'Archived sessions must be unarchived before resume',
     };
+  }
+  if (resumeIntent === 'authority_unavailable') {
+    return { ok: false, code: 'authority_unavailable', message: 'Session Stop authority is unreadable' };
+  }
+  if (resumeIntent === 'held_by_person') {
+    return { ok: false, code: 'held_by_person', message: 'Session is held after explicit Stop' };
   }
   const rawSessionId = readNonEmptyString(params.rawSession.id);
   if (!rawSessionId || rawSessionId !== params.sessionId) {
@@ -179,10 +192,10 @@ export async function requestInactiveSessionResume(params: Readonly<{
     };
   }
 
-  const executionAuthorization = params.executionAuthority === 'account_automation' ? undefined : SpawnSessionExecutionAuthorizationSchema.parse({
+  const executionAuthorization = resumeIntent === 'person' ? SpawnSessionExecutionAuthorizationSchema.parse({
     provenance: 'user_request',
     requestId,
-  });
+  }) : undefined;
   const options = buildInactiveSessionResumeSpawnOptions({
     sessionId: params.sessionId,
     rawSession: params.rawSession,
@@ -224,11 +237,14 @@ export async function requestInactiveSessionResume(params: Readonly<{
       ? RPC_METHODS.SPAWN_HAPPY_SESSION_PROVIDER_SAFE
       : RPC_METHODS.SPAWN_HAPPY_SESSION;
     const request = buildMachineResumeRequest(options, params.sessionId, readinessSpawnNonce);
-    const response = params.machineRpcTransport && !params.externalAction
+    const response = params.spawnSession && !params.externalAction
+      ? await params.spawnSession({ ...options, ...(readinessSpawnNonce ? { spawnNonce: readinessSpawnNonce } : {}) })
+      : params.machineRpcTransport && !params.externalAction
       ? await params.machineRpcTransport(
           method,
           request,
-          params.signal ? { signal: params.signal } : undefined,
+          { requestId: spawnRpcRequestId, timeoutMs: resolveSessionStartupTimeoutMs(params.timeoutMs),
+            ...(params.signal ? { signal: params.signal } : {}) },
         )
       : await callMachineRpc({
           credentials: params.credentials,
@@ -295,20 +311,21 @@ export async function requestInactiveSessionResume(params: Readonly<{
         sessionIdStatus: 'pending',
       },
       spawnNonce: readinessSpawnNonce,
-      resolveSpawnSessionByNonce: async (spawnNonce, resolverTimeoutMs, observation) => (
-        normalizeSpawnSessionNonceResolution(await callMachineRpc({
-          credentials: params.credentials,
-          machineId,
-          method: RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE,
-          request: { spawnNonce, ...(resolverTimeoutMs !== undefined ? { timeoutMs: resolverTimeoutMs } : {}) },
+      resolveSpawnSessionByNonce: async (spawnNonce, resolverTimeoutMs, observation) => {
+        const request = { spawnNonce, ...(resolverTimeoutMs !== undefined ? { timeoutMs: resolverTimeoutMs } : {}) };
+        const options = {
           timeoutMs: null,
           reattachOnReconnect: {
             readRequest: () => ({ spawnNonce,
               timeoutMs: observation?.readRemainingTimeoutMs() ?? resolverTimeoutMs }),
           },
           ...(observation ? { signal: observation.signal } : {}),
-        }))
-      ),
+        };
+        return normalizeSpawnSessionNonceResolution(params.machineRpcTransport && !params.externalAction
+          ? await params.machineRpcTransport(RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE, request, options)
+          : await callMachineRpc({ credentials: params.credentials, machineId,
+            method: RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE, request, ...options }));
+      },
       ...(typeof remainingTimeoutMs === 'number' ? { timeoutMs: remainingTimeoutMs } : {}),
       ...(params.signal ? { signal: params.signal } : {}),
     });

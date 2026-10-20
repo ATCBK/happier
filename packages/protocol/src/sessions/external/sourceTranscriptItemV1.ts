@@ -1,3 +1,4 @@
+import { maxCodeUnits } from '../../strings/maxCodeUnits.js';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import { StrictJsonValueSchema } from '../../json/strictJsonValue.js';
@@ -18,7 +19,7 @@ export { SidechainIdSchema };
  */
 export const MAX_EXTERNAL_SESSION_TRANSCRIPT_ITEM_ID_CODE_UNITS = 2_000;
 
-export const ExternalSessionTranscriptItemIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(MAX_EXTERNAL_SESSION_TRANSCRIPT_ITEM_ID_CODE_UNITS), z.refine((value) => value === value.trim(), 'External Session transcript item id must already be trimmed.')));
+export const ExternalSessionTranscriptItemIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), maxCodeUnits(MAX_EXTERNAL_SESSION_TRANSCRIPT_ITEM_ID_CODE_UNITS), z.refine((value) => value === value.trim(), 'External Session transcript item id must already be trimmed.')));
 export type ExternalSessionTranscriptItemIdV1 = z.infer<
   typeof ExternalSessionTranscriptItemIdV1Schema
 >;
@@ -29,6 +30,9 @@ export type ExternalSessionTranscriptItemIdV1 = z.infer<
  * instead of restating a numeric predicate that then differs by placement.
  */
 export const ExternalSessionTranscriptSourceTimestampV1Schema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)));
+
+/** Host-derived presentation text; the containing response owns its byte budget. */
+export const ExternalSessionTranscriptDisplayUserTextV1Schema = lazyZodSchema(() => z.string());
 
 /**
  * Canonical known-field owner for one Agent-produced External Session source

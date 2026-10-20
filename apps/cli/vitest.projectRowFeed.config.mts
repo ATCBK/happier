@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createWorkspacePackageSourcesPlugin, type WorkspacePackageSpec } from '../../scripts/testing/vitestWorkspacePackageResolution.ts';
+import { createTestHomeEnvironment } from '../../scripts/testing/testHomeEnvironment.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const cliRoot = resolve(root, 'apps/cli');
@@ -27,7 +28,8 @@ export default {
     test: {
         environment: 'node', pool: 'forks', maxWorkers: 1,
         include: ['src/**/*.test.ts'],
-        setupFiles: [resolve(cliRoot, 'src/vitestSetup.ts')],
+        setupFiles: [resolve(root, 'scripts/testing/vitestHomeSetup.mjs'), resolve(cliRoot, 'src/vitestSetup.ts')],
+        env: createTestHomeEnvironment().env,
         globalSetup: [resolve(cliRoot, 'src/test-setup.unit.ts')],
         testTimeout: 60000, hookTimeout: 60000,
     },

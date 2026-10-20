@@ -1,5 +1,5 @@
 import * as React from 'react';
-import renderer, { act } from 'react-test-renderer';
+import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useEnsureSidechainsLoaded } from './useEnsureSidechainsLoaded';
@@ -65,17 +65,11 @@ describe('useEnsureSidechainsLoaded', () => {
   }
 
   it('does not re-request the same sidechain when callers pass a new array instance', async () => {
-    let tree: renderer.ReactTestRenderer | null = null;
-
-    tree = (await renderScreen(<Harness enabled sessionId="session-1" sidechainIds={['sidechain-1']} />)).tree;
+    const screen = await renderScreen(<Harness enabled sessionId="session-1" sidechainIds={['sidechain-1']} />);
 
     expect(ensureSidechainMessagesLoadedSpy).toHaveBeenCalledTimes(1);
 
-    await act(async () => {
-      tree!.update(
-        <Harness enabled sessionId="session-1" sidechainIds={['sidechain-1']} />,
-      );
-    });
+    await screen.update(<Harness enabled sessionId="session-1" sidechainIds={['sidechain-1']} />);
 
     expect(ensureSidechainMessagesLoadedSpy).toHaveBeenCalledTimes(1);
   });

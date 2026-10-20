@@ -1,10 +1,19 @@
 import axios from 'axios';
 import { tmpdir } from 'node:os';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { DaemonMcpServersTestResponseSchema } from '@happier-dev/protocol/mcp/servers/daemonRpcV1';
 import type { McpServerCatalogEntryV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
+import { McpServerCatalogV1Schema, type McpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
+import { projectMcpToolLaunchPolicyV1 } from '@happier-dev/protocol/mcp/servers/tools/resolveMcpToolDecisionV1';
+import { AgentSessionConfigurationSnapshotV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
+import { createAgentLaunchObserver, type AgentLaunchObserverBoundaries } from '@happier-dev/plugin-sdk/testing';
+import type { AgentSessionRuntime, AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
+import { AgentSessionRuntimeEventSchema } from '@happier-dev/plugin-sdk/agents/runtime';
+import { openRealCodexMcpSession } from '../../../../../packages/plugins/codex/src/agent/mcpToolPolicy.realVendor.test-support';
 import { bootstrapAccountSettingsContext, resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { resolveAccountSettingsCachePath } from '@/settings/accountSettings/accountSettingsCache';
 import * as executableBoundary from '@/mcp/runtime/resolveNodeBackedMcpServerCommand';
@@ -30,7 +39,10 @@ require('node:readline').createInterface({ input: process.stdin }).on('line', li
   const result = request.method === 'initialize' ? {
     protocolVersion: request.params.protocolVersion, capabilities: { tools: {} },
     serverInfo: { name: 'fixture', version: '2.0.0' }, instructions: 'Read before writing.'
-  } : { tools: [{ name: 'read_records', title: 'Read records', description: 'Lists records.',
+  } : request.method === 'tools/call' ? (() => {
+    if (process.env.R39_CALL_RECEIPT) require('node:fs').appendFileSync(process.env.R39_CALL_RECEIPT, 'called\n');
+    return { content: [{ type: 'text', text: 'R39_NATIVE_TOOL_CALLED' }] };
+  })() : { tools: [{ name: 'read_records', title: 'Read records', description: 'Lists records.',
     annotations: { readOnlyHint: true }, inputSchema: { type: 'object' } }] };
   process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\n');
 });
@@ -40,14 +52,14 @@ const server: McpServerCatalogEntryV1 = { id: 'server', name: 'fixture', transpo
 const catalog = { v: 1 as const, servers: [server], bindings: [{ id: 'on', serverId: server.id,
   enabled: true, target: { t: 'allMachines' as const }, createdAt: 1, updatedAt: 1 }] };
 
-function register(conflict = false, env: NodeJS.ProcessEnv = process.env) {
+function register(conflict = false, env: NodeJS.ProcessEnv = process.env, storedCatalog: McpServerCatalogV1 = catalog) {
   const writes: unknown[] = [];
   vi.mocked(axios.get).mockImplementation(async url => {
     const path = new URL(String(url)).pathname;
     if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 0,
       signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 } };
     if (path === '/v1/account/entity-rows/mcp') return { status: 200, data: {
-      status: 'present', revision: 3, content: { t: 'plain', v: catalog } } };
+      status: 'present', revision: 3, content: { t: 'plain', v: storedCatalog } } };
     if (path === '/v2/account/settings') return { status: 200, data: { version: 4, content: { t: 'plain', v: {} } } };
     throw new Error(`Unexpected HTTP path: ${path}`);
   });
@@ -84,7 +96,7 @@ describe('Machine MCP Test pipeline', () => {
       annotations: { readOnlyHint: true }, tokens: 11 }], serverInfo: { name: 'fixture', version: '2.0.0' },
       instructions: 'Read before writing.', protocolVersion: expect.any(String), stderrTail: expect.stringContaining('[REDACTED]') });
     expect(writes).toEqual([expect.objectContaining({ expectedRevision: 3, content: { t: 'plain', v: {
-      ...catalog, servers: [{ ...server, toolsSnapshot: expect.objectContaining({ machineId: 'machine',
+      ...catalog, servers: [{ ...server, updatedAt: expect.any(Number), toolsSnapshot: expect.objectContaining({ machineId: 'machine',
         checkedAt: expect.any(Number), tools: [{ name: 'read_records', title: 'Read records', description: 'Lists records.',
           annotations: { readOnlyHint: true }, tokens: 11 }] }) }],
     } } })]);
@@ -97,6 +109,104 @@ describe('Machine MCP Test pipeline', () => {
       .toMatchObject({ ok: false, errorCode: 'materialization_failed' });
     expect(writes).toHaveLength(1);
   });
+
+  it.each(['ruleless', 'off'] as const)('checks an explicitly selected %s server without enabling its reach', async reach => {
+    const storedCatalog: McpServerCatalogV1 = { ...catalog,
+      servers: [{ ...server, tools: { default: 'allow_read_only', overrides: {} } }],
+      bindings: reach === 'ruleless' ? [] : [{ ...catalog.bindings[0]!, enabled: false }],
+    };
+    const { test, writes } = register(false, process.env, storedCatalog);
+    const result = await test({ t: 'byId', serverId: server.id, machineId: 'machine', directory: tmpdir() });
+    expect(result).toMatchObject({ ok: true, tools: [{ name: 'read_records', annotations: { readOnlyHint: true } }] });
+    expect(writes).toHaveLength(1);
+    // The Home request is a JSON system boundary; parse its real producer output
+    // through the catalog consumed by Session tool-policy projection.
+    const checked = McpServerCatalogV1Schema.parse(JSON.parse(JSON.stringify(writes[0])).content.v);
+    expect(checked.bindings).toEqual(storedCatalog.bindings);
+    expect(projectMcpToolLaunchPolicyV1({ policy: checked.servers[0]?.tools,
+      snapshot: checked.servers[0]?.toolsSnapshot, permissionMode: 'read-only' }))
+      .toEqual({ unlisted: 'deny', tools: { read_records: 'allow' } });
+  });
+
+  it.skipIf(!process.env.HAPPIER_MCP_CODEX_BIN).each([
+    { permissionMode: 'read-only', checkBeforeAdd: true },
+    { permissionMode: 'default', checkBeforeAdd: false },
+  ] as const)('advertises and invokes a newly added MCP tool after real native resume ($permissionMode, checked=$checkBeforeAdd)', async ({ permissionMode, checkBeforeAdd }) => {
+    const home = await mkdtemp(join(tmpdir(), 'happier-r39-native-'));
+    const receipt = join(home, 'calls');
+    const observer = createAgentLaunchObserver({ home });
+    const boundaries = observer.boundaries as AgentLaunchObserverBoundaries;
+    const approvedTools: string[] = [];
+    const readProviderSessionId = () => observer.observeLaunch().runtimeEvents
+      .map(event => AgentSessionRuntimeEventSchema.parse(event))
+      .flatMap(event => event.kind === 'provider-session-id' ? [event.providerSessionId] : []).at(-1);
+    // The person/UI response is a system boundary. Approve only this fixture's
+    // one read tool; native configuration, discovery, dispatch and MCP stay real.
+    const interactions: NonNullable<Parameters<typeof openRealCodexMcpSession>[1]['interactions']> = {
+      requestApproval: async request => {
+        if (request.subject.kind !== 'tool' || request.subject.name !== 'mcp__fixture__read_records') {
+          throw new Error('Unexpected native approval');
+        }
+        approvedTools.push(request.subject.name);
+        return { requestId: 'r39-own-tool', kind: 'approval', status: 'approved' };
+      },
+      askQuestions: async () => { throw new Error('Unexpected native question'); },
+    };
+    const configuration = AgentSessionConfigurationSnapshotV1Schema.parse({
+      mode: { value: null, updatedAtMs: 0 }, model: { value: 'fixture', updatedAtMs: 1 }, options: {},
+      permissionIntent: { value: permissionMode, updatedAtMs: 1 },
+    });
+    const storedCatalog: McpServerCatalogV1 = { ...catalog, bindings: [],
+      servers: [{ ...server, tools: { default: 'allow_read_only', overrides: {} } }],
+    };
+    const events: AgentSessionRuntimeEvent[] = [];
+    const send = async (session: AgentSessionRuntime, turnId: string) => {
+      const done = new Promise<void>((resolve, reject) => {
+        const subscription = session.watch(event => {
+          events.push(event);
+          if (!('turnId' in event) || event.turnId !== turnId) return;
+          if (event.kind === 'turn-complete') { subscription.dispose(); resolve(); }
+          if (event.kind === 'turn-failed' || event.kind === 'turn-cancelled') {
+            subscription.dispose(); reject(new Error('Native fixture turn failed'));
+          }
+        });
+      });
+      expect(await session.send({ inputIds: [turnId],
+        input: { text: JSON.stringify({ server: 'fixture', tool: 'read_records', arguments: {} }) },
+        delivery: { kind: 'newTurn', turnId } })).toMatchObject({ status: 'admitted' });
+      await done;
+    };
+    let initial: AgentSessionRuntime | undefined;
+    let resumed: AgentSessionRuntime | undefined;
+    try {
+      initial = await openRealCodexMcpSession({ kind: 'create', sessionId: 'r39-fixture', cwd: home, configuration },
+        { home, observer: boundaries, interactions });
+      await send(initial, 'before-add');
+      const providerSessionId = readProviderSessionId();
+      if (typeof providerSessionId !== 'string') throw new Error('Missing native thread identity');
+      expect(events.some(event => event.kind === 'tool-call')).toBe(false);
+      await initial.dispose(); initial = undefined;
+      const { test, writes } = register(false, process.env, storedCatalog);
+      if (checkBeforeAdd) await test({ t: 'byId', serverId: server.id, machineId: 'machine', directory: home });
+      const checked = writes.length ? McpServerCatalogV1Schema.parse(JSON.parse(JSON.stringify(writes[0])).content.v) : storedCatalog;
+      const policy = projectMcpToolLaunchPolicyV1({ policy: checked.servers[0]?.tools,
+        snapshot: checked.servers[0]?.toolsSnapshot, permissionMode });
+      if (!checkBeforeAdd) expect(policy).toEqual({ unlisted: 'ask', tools: {} });
+      resumed = await openRealCodexMcpSession({ kind: 'resume', providerSessionId, sessionId: 'r39-fixture', cwd: home, configuration,
+        mcpServers: { fixture: { command: process.execPath, args: ['-e', fixture], env: { R39_CALL_RECEIPT: receipt } } },
+        mcpToolPolicy: { fixture: policy },
+      }, { home, observer: boundaries, interactions });
+      expect(readProviderSessionId()).toBe(providerSessionId);
+      expect(observer.observeLaunch().appServerRequests.filter(request => request.method === 'thread/resume'))
+        .toEqual([expect.objectContaining({ params: expect.objectContaining({ threadId: providerSessionId }) })]);
+      expect(observer.observeLaunch().appServerRequests.filter(request => request.method === 'thread/start')).toHaveLength(1);
+      await send(resumed, 'after-add');
+      expect(events.filter(event => event.kind === 'tool-result').some(event => JSON.stringify(event).includes('R39_NATIVE_TOOL_CALLED'))).toBe(true);
+      expect(await readFile(receipt, 'utf8')).toBe('called\n');
+      expect(approvedTools).toContain('mcp__fixture__read_records');
+      expect(checked.bindings).toEqual([]);
+    } finally { await resumed?.dispose(); await initial?.dispose(); await rm(home, { recursive: true, force: true }); }
+  }, 120_000);
 
   it('reports a missing executable by its configured command', async () => {
     const { test, writes } = register(false, { PATH: '' });

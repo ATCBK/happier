@@ -419,7 +419,7 @@ function InstrumentEntrance(props: Readonly<{ index: number; enabled: boolean; c
         opacity: progress.value,
         transform: [{ translateY: (1 - progress.value) * 4 }],
     }));
-    return <Animated.View style={style}>{props.children}</Animated.View>;
+    return <Animated.View style={[instrumentStripStyles.instrumentEntrance, style]}>{props.children}</Animated.View>;
 }
 
 /** Overflow collapse (<300px): a "•••" chip opening a full-size instrument list. */

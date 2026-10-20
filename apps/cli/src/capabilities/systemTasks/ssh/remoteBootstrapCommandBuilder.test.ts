@@ -9,7 +9,7 @@ describe('buildRemoteBootstrapCommand', () => {
     expect(buildRemoteBootstrapCommand({
       label: 'auth.status',
       serverUrl: 'https://relay.example.test',
-    })).toContain('$HOME/.happier/cli/current/happier auth status --json');
+    })).toContain(`"$HOME"/'.happier/cli/current/happier' auth status --json`);
 
     expect(buildRemoteBootstrapCommand({
       label: 'auth.status',
@@ -136,7 +136,7 @@ describe('buildRemoteBootstrapCommand', () => {
       },
     });
 
-    expect(command).toContain('$HOME/.happier/cli-preview/current/happier relay host install');
+    expect(command).toContain(`"$HOME"/'.happier/cli-preview/current/happier' relay host install`);
     expect(command).toContain("--channel 'preview'");
     expect(command).toContain('--mode system');
     expect(command).toContain("--env 'HAPPIER_SERVER_HOST=127.0.0.1'");

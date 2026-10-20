@@ -92,14 +92,14 @@ function refineTerminalMode(value: { mode?: unknown; controlServiceabilityV1?: {
 }
 
 function createOwnerTerminalSchema(zod: typeof z) {
-  const schema = (<T extends zod.ZodMiniObject>(schema: T) => zod.core.clone(schema, { ...schema._zod.def, catchall: zod.never() }) as zod.ZodMiniObject<T['shape'], zod.core.$strict>)(zod.extend(createTerminalObjectSchema(zod, 'owner'), {
-    controlServiceabilityV1: zod.optional((<T extends zod.ZodMiniObject>(schema: T) => zod.core.clone(schema, { ...schema._zod.def, catchall: zod.never() }) as zod.ZodMiniObject<T['shape'], zod.core.$strict>)(createSessionTerminalControlServiceabilityV1Schema(zod, 'owner'))),
+  const schema = (<T extends z.ZodMiniObject>(schema: T) => zod.core.clone(schema, { ...schema._zod.def, catchall: zod.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(zod.extend(createTerminalObjectSchema(zod, 'owner'), {
+    controlServiceabilityV1: zod.optional((<T extends z.ZodMiniObject>(schema: T) => zod.core.clone(schema, { ...schema._zod.def, catchall: zod.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(createSessionTerminalControlServiceabilityV1Schema(zod, 'owner'))),
   })).check(zod.superRefine(refineTerminalMode));
-  return zod.pipe(zod.transform(normalizeTerminalWireSelectors), schema);
+  return (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new zod.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(zod.transform(normalizeTerminalWireSelectors), schema);
 }
 
 function createLegacyTerminalSchema(zod: typeof z) {
-  return zod.pipe(zod.transform(normalizeTerminalWireSelectors), (<T extends zod.ZodMiniObject>(schema: T) => zod.core.clone(schema, { ...schema._zod.def, catchall: zod.unknown() }) as zod.ZodMiniObject<T['shape'], zod.core.$loose>)(createTerminalObjectSchema(zod, 'legacy')).check(zod.superRefine(refineTerminalMode)));
+  return (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new zod.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(zod.transform(normalizeTerminalWireSelectors), (<T extends z.ZodMiniObject>(schema: T) => zod.core.clone(schema, { ...schema._zod.def, catchall: zod.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(createTerminalObjectSchema(zod, 'legacy')).check(zod.superRefine(refineTerminalMode)));
 }
 
 export function createSessionTerminalMetadataSchema(zod: typeof z, context: 'owner'): ReturnType<typeof createOwnerTerminalSchema>;
@@ -146,6 +146,7 @@ export function normalizeSessionMetadataForRead<T extends { terminal?: unknown }
 export function readSessionTerminalControlServiceabilityStateV1(
   value: unknown,
 ): 'servable' | 'recoverable_unservable' | 'unknown' | null {
+  if (value === null || value === undefined) return null;
   const parsed = SessionTerminalControlServiceabilityV1Schema.safeParse(value);
   return parsed.success ? parsed.data.state : null;
 }

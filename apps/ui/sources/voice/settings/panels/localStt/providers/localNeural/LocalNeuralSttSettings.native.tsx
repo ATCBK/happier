@@ -1,3 +1,8 @@
+import {
+  readPartialDownloadBytes,
+  resolveModelPackTransferRow,
+  resolvePartialDownloadRemoveRow,
+} from '@/voice/settings/panels/modelPack/modelPackTransferRows';
 import * as React from 'react';
 import { SettingAnchor } from '@/components/settings/shell/SettingRow';
 import { useVoiceSttSettingRefs } from '@/voice/settings/useVoiceSttSettingRefs';
@@ -11,7 +16,6 @@ import { IconButton } from '@/components/ui/buttons/IconButton';
 import type { VoiceLocalSttSettings } from '@/sync/domains/settings/voiceLocalSttSettings';
 import type { VoiceDaemonRouteDiagnosticReason } from '@/voice/settings/voiceProviderLocalAvailability';
 import { t } from '@/text';
-import { formatDownloadProgressDetail } from '@/voice/downloads/downloadProgress';
 import { useLocalNeuralModelPackState } from '@/voice/settings/panels/localTts/useLocalNeuralModelPackState.native';
 import { formatModelPackBuildLabel } from '@/voice/modelPacks/formatBuildLabel';
 import { resolveModelPackManifestUrl } from '@/voice/modelPacks/manifests';
@@ -67,16 +71,14 @@ export function LocalNeuralSttSettings(props: {
   });
 
   const installedBuild = formatModelPackBuildLabel(installSummary?.manifest);
-  const downloadDetail =
-    modelStatus === 'downloading'
-      ? (progress
-        ? formatDownloadProgressDetail(progress, { prefix: t('settingsVoice.local.kokoro.modelStatus.downloadingPrefix') })
-        : t('settingsVoice.local.kokoro.modelStatus.downloading'))
-      : installed
-        ? installedBuild
-          ? t('settingsVoice.local.localNeuralStt.status.installedWithBuild', { build: installedBuild })
-          : t('settingsVoice.local.localNeuralStt.status.installed')
-        : t('settingsVoice.local.localNeuralStt.status.notInstalled');
+  const partialBytes = readPartialDownloadBytes(installSummary);
+  const transferRow = resolveModelPackTransferRow({ status: modelStatus, progress, partialBytes });
+  const partialRemoveRow = resolvePartialDownloadRemoveRow(partialBytes);
+  const downloadDetail = transferRow?.detail ?? (installed
+    ? installedBuild
+      ? t('settingsVoice.local.localNeuralStt.status.installedWithBuild', { build: installedBuild })
+      : t('settingsVoice.local.localNeuralStt.status.installed')
+    : t('settingsVoice.local.localNeuralStt.status.notInstalled'));
 
   return (
     <>
@@ -126,7 +128,8 @@ export function LocalNeuralSttSettings(props: {
           <SettingAnchor setting={settings.sttPrepareModel}>
           <Item
             title={t('settingsVoice.local.localNeuralStt.modelFiles.title')}
-            subtitle={t('settingsVoice.local.localNeuralStt.modelFiles.subtitle')}
+            subtitle={transferRow?.subtitle ?? t('settingsVoice.local.localNeuralStt.modelFiles.subtitle')}
+            subtitleLines={transferRow ? 0 : undefined}
             detail={downloadDetail}
             onPress={() => void prepareModel()}
             rightElement={
@@ -154,9 +157,9 @@ export function LocalNeuralSttSettings(props: {
           <SettingAnchor setting={settings.sttRemoveModel}>
           <Item
             title={t('settingsVoice.local.localNeuralStt.removeModelFiles.title')}
-            subtitle={t('settingsVoice.local.localNeuralStt.removeModelFiles.subtitle')}
-            detail={installed ? t('common.remove') : '—'}
-            onPress={installed ? () => void clearAssets() : undefined}
+            subtitle={partialRemoveRow?.subtitle ?? t('settingsVoice.local.localNeuralStt.removeModelFiles.subtitle')}
+            detail={installed ? t('common.remove') : (partialRemoveRow?.detail ?? '—')}
+            onPress={installed || partialRemoveRow ? () => void clearAssets() : undefined}
             showChevron={false}
             selected={false}
           />

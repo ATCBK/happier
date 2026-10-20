@@ -15,6 +15,10 @@ import { createWorkspaceBarGeometry, WorkspaceBarGeometryContext } from './works
 import { createWorkspaceNavigationAdapter } from '../workspaceNavigationAdapter';
 import { createWorkspaceActionAdapter } from '../workspaceActions';
 import { registerMountedWorkspaceAction } from '../workspaceActionRuntime';
+import { AppShellMaterialFrame } from '@/components/navigation/shell/AppShellMaterialFrame';
+import { AppShellTitleStrip } from '@/components/navigation/shell/appRail/AppShellTitleStrip';
+import { invokeTestInstanceHandler } from '@/dev/testkit/render/renderScreen';
+import { View } from 'react-native';
 
 installPanelCommonModuleMocks();
 // Recipient-envelope HTTP/process APIs are outside this deterministic workspace owner harness.
@@ -53,7 +57,7 @@ function tab(id: string, overrides: Partial<WorkspaceTab> = {}): WorkspaceTab {
     return { id, target: { kind: `removed:${id}`, params: {} }, pinned: false, preview: false, ...overrides };
 }
 
-function Harness(props: Readonly<{ initial: WorkspaceState; clusterEndPx: number; trailingStartPx?: number }>) {
+function Harness(props: Readonly<{ initial: WorkspaceState; clusterEndPx: number; trailingStartPx?: number; chromeActive?: boolean }>) {
     const [state, dispatch] = React.useReducer(reduceWorkspaceState, props.initial);
     const canvasControlsRef = React.useRef<SplitCanvasHostControls | null>(null);
     const currentState = React.useRef(state);
@@ -82,8 +86,15 @@ function Harness(props: Readonly<{ initial: WorkspaceState; clusterEndPx: number
     return <WorkspaceNavigationContext.Provider value={value}>
         <WorkspaceBarGeometryContext.Provider value={geometry}>
             {React.createElement('WorkspaceStateProbe', { state })}
-            <WorkspaceTitleBar catalog={[]} clusterEndPx={props.clusterEndPx} stripHeightPx={40} trailingStartPx={props.trailingStartPx} />
-            <WorkspaceShell catalog={[]} />
+            {props.chromeActive === undefined ? <>
+                <WorkspaceTitleBar catalog={[]} clusterEndPx={props.clusterEndPx} stripHeightPx={40} trailingStartPx={props.trailingStartPx} />
+                <WorkspaceShell catalog={[]} />
+            </> : <AppShellMaterialFrame showChrome={props.chromeActive} dragEnabled={false} leftOffsetPx={0}
+                sidebarWidth={320} rail={null} column={null} peek={null}
+                titleStrip={<AppShellTitleStrip columnVisible={false} columnToggleAvailable={false}
+                    onToggleColumn={() => {}} navigation={value} workspaceCatalog={[]} trailing={<View />} />}>
+                <WorkspaceShell catalog={[]} />
+            </AppShellMaterialFrame>}
         </WorkspaceBarGeometryContext.Provider>
     </WorkspaceNavigationContext.Provider>;
 }
@@ -109,6 +120,35 @@ function threePanes(): WorkspaceState {
 }
 
 describe('WorkspaceTitleBar', () => {
+    it('retains its document tabs when hidden strip measurements report zero width', async () => {
+        const initial = createWorkspaceState(tab('kept'));
+        const body = (chromeActive: boolean) => <Harness initial={initial} clusterEndPx={200} chromeActive={chromeActive} />;
+        const screen = await renderScreen(body(true), { createNodeMock: windowMeasurement({
+            'workspace-title-bar': { x: 0, width: 1440 },
+            'workspace-group-group_1': { x: 300, width: 1100 },
+        }) });
+        const measure = async (width: number) => act(async () => {
+            invokeTestInstanceHandler(screen.findHostByTestId('app-shell-title-strip')!, 'onLayout', {
+                nativeEvent: { layout: { x: 0, y: 0, width, height: 40 } },
+            });
+            invokeTestInstanceHandler(screen.findHostByTestId('app-shell-title-strip-trailing')!, 'onLayout', {
+                nativeEvent: { layout: { x: 0, y: 0, width: width === 0 ? 0 : 40, height: 40 } },
+            });
+        });
+        try {
+            await measure(1440);
+            const document = screen.findHostByTestId('workspace-tab-kept');
+            expect(document).not.toBeNull();
+            await screen.update(body(false));
+            await measure(0);
+            expect(screen.findHostByTestId('workspace-tab-kept')).toBe(document);
+            await screen.update(body(true));
+            await measure(1440);
+            expect(screen.findHostByTestId('workspace-tab-kept')).toBe(document);
+        } finally {
+            await screen.unmount();
+        }
+    });
     it('honors UI Require over a waiver before closing a tab, then closes when Require is removed', async () => {
         const { storage } = await import('@/sync/domains/state/storage');
         const initialSettings = storage.getState().settings;
@@ -247,7 +287,7 @@ describe('WorkspaceTitleBar', () => {
         expect(titles()).not.toContain('Fix settings modal remount');
     });
 
-    it('collapses the tabs that do not fit behind +N, keeps the open one, and closes the others from a tab\'s menu', async () => {
+    it('keeps every tab in the scrolling strip and offers all tabs, recently closed, Close others and Close all from one trailing menu', async () => {
         const ids = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
         let state = createWorkspaceState(tab('a', { pinned: true }));
         for (const id of ids.slice(1)) state = reduceWorkspaceState(state, { type: 'openTab', groupId: 'group:1', tab: tab(id) });
@@ -256,32 +296,46 @@ describe('WorkspaceTitleBar', () => {
             createNodeMock: windowMeasurement({ 'workspace-title-bar': { x: 0, width: 1440 }, 'workspace-group-group_1': { x: 300, width: 600 } }),
         });
         const visibleTabs = () => ids.filter((id) => screen.findAllByTestId(`workspace-tab-${id}`).length > 0);
+        // A narrow pane never truncates the strip to a fit count: every tab stays reachable by scrolling.
+        await act(async () => { screen.findByTestId('workspace-tabs-group_1')?.props.onLayout?.({ nativeEvent: { layout: { x: 0, y: 0, width: 300, height: 30 } } }); });
         expect(visibleTabs()).toEqual(ids);
+        const menu = screen.findByTestId('workspace-overflow-group_1');
+        expect(menu?.props.accessibilityLabel).toBe('workspaceBar.allTabs');
 
-        await act(async () => { screen.findByTestId('workspace-tabs-group_1')?.props.onLayout({ nativeEvent: { layout: { x: 0, y: 0, width: 600, height: 30 } } }); });
-        const shown = visibleTabs();
-        expect(shown.length).toBeLessThan(ids.length);
-        expect(shown).toEqual(expect.arrayContaining(['a', 'b']));
-        const overflow = screen.findByTestId('workspace-overflow-group_1');
-        expect(overflow?.props.accessibilityLabel).toBe('workspaceBar.moreTabs');
-
-        // +N lists every tab of the pane; choosing a hidden one opens it in the bar.
+        // The one menu lists every tab of the pane; choosing one opens it.
         await screen.pressByTestIdAsync('workspace-overflow-group_1');
-        // A menu opens on the frame after the press that asked for it.
         await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+        expect(screen.findByTestId('workspace-overflow-close-left')).toBeNull();
+        expect(screen.findByTestId('workspace-overflow-close-right')).toBeNull();
+        expect(screen.findByTestId('workspace-overflow-close-all')).not.toBeNull();
         await screen.pressByTestIdAsync('workspace-overflow-tab-h');
         await act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)); });
         expect(stateOf(screen).groups['group:1'].activeTabId).toBe('h');
-        expect(visibleTabs()).toContain('h');
 
-        // "Close other tabs" keeps the tab and the pinned tab.
-        const h = screen.findAllByTestId('workspace-tab-h').find((node) => typeof node.props.onLongPress === 'function');
-        await act(async () => { h?.props.onLongPress({}); });
-        await screen.pressByTestIdAsync('workspace-tab-menu-close-others');
+        // Close others, at the foot of the same menu, keeps the open tab and the pinned one.
+        await screen.pressByTestIdAsync('workspace-overflow-group_1');
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+        await screen.pressByTestIdAsync('workspace-overflow-close-others');
         await act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)); });
         expect(stateOf(screen).groups['group:1'].tabIds).toEqual(['a', 'h']);
-        // Open-tab overflow is gone, but every explicit close remains reachable for undo.
-        expect(screen.findByTestId('workspace-overflow-group_1')?.props.accessibilityLabel).toBe('workspaceTabs.recentlyClosed');
         expect(stateOf(screen).recentlyClosed.map(entry => entry.tab.id)).toEqual(ids.slice(1, -1).reverse());
+        expect(screen.findByTestId('workspace-overflow-group_1')).not.toBeNull();
+    });
+
+    it('lists a pinned tab first in the all-tabs menu, as the strip shows it, and marks it pinned', async () => {
+        let state = createWorkspaceState(tab('a'));
+        state = reduceWorkspaceState(state, { type: 'openTab', groupId: 'group:1', tab: tab('b') });
+        state = reduceWorkspaceState(state, { type: 'openTab', groupId: 'group:1', tab: tab('c', { pinned: true }) });
+        const screen = await renderScreen(<Harness initial={state} clusterEndPx={200} />, {
+            createNodeMock: windowMeasurement({ 'workspace-title-bar': { x: 0, width: 1440 }, 'workspace-group-group_1': { x: 300, width: 600 } }),
+        });
+        await screen.pressByTestIdAsync('workspace-overflow-group_1');
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+        const order = [...new Set(screen.root
+            .findAll((node) => typeof node.props?.testID === 'string' && /^workspace-overflow-tab-[abc]$/.test(node.props.testID))
+            .map((node) => String(node.props.testID).slice(-1)))];
+        expect(order).toEqual(['c', 'a', 'b']);
+        expect(screen.findAllByTestId('workspace-overflow-pinned-c').length).toBeGreaterThan(0);
+        expect(screen.findAllByTestId('workspace-overflow-pinned-a')).toHaveLength(0);
     });
 });

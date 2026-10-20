@@ -2,6 +2,8 @@ import {
     readHomeDomainActionErrorV1,
     type HomeDomainActionErrorCodeV1,
 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
+import { readHomeDomainConfirmedRollbackV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
+import { readActionCredentialScopeDeniedHttpFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
 
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
@@ -39,8 +41,10 @@ export type HomeDomainFailureKind =
     | 'outcome_unknown'
     | 'unknown';
 
-/** The exact code union accepted by the canonical Protocol family reader. */
-export type HomeDomainErrorCode = HomeDomainActionErrorCodeV1;
+/** The exact codes accepted by the canonical Home domain and HTTP rollback readers. */
+export type HomeDomainErrorCode = HomeDomainActionErrorCodeV1
+    | 'credential_scope_denied'
+    | NonNullable<ReturnType<typeof readHomeDomainConfirmedRollbackV1>>['code'];
 
 export type HomeDomainFailure<TCode extends string = HomeDomainErrorCode> = Readonly<{
     kind: HomeDomainFailureKind;
@@ -124,6 +128,18 @@ function classifyAnswer<TCode extends string>(
     body: unknown,
     schema?: StrictDomainSchema<TCode>,
 ): HomeDomainResult<never, TCode | HomeDomainErrorCode> {
+    const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(status, body);
+    if (scopeDenial) return failure('forbidden', false, scopeDenial.errorCode, undefined, status);
+    const confirmedRollback = readHomeDomainConfirmedRollbackV1(status, body);
+    if (confirmedRollback) {
+        return failure(
+            homeDomainFailureKindForHttpStatus(status, confirmedRollback.code),
+            true,
+            confirmedRollback.code,
+            confirmedRollback.details,
+            status,
+        );
+    }
     const domain = readHomeDomainActionErrorV1(body);
     if (domain) {
         // The shared Protocol parser is the sole authority for publishable
@@ -179,9 +195,9 @@ export async function requestHomeDomain<TValue, TCode extends string = HomeDomai
             }, { onIssued: () => { issued = true; } });
             const body = await readJsonBody(response);
             params.requestAuthority?.assertCurrent();
-            if (!response.ok) return classifyAnswer(response.status, body, params.errorSchema);
+            if (!response.ok) return classifyAnswer<TCode>(response.status, body, params.errorSchema);
             const parsed = params.schema.safeParse(body);
-            if (!parsed.success) return failure('invalid', false, null, undefined, response.status);
+            if (!parsed.success) return failure<TCode | HomeDomainErrorCode>('invalid', false, null, undefined, response.status);
             return Object.freeze({ ok: true as const, value: parsed.data });
         };
         if (params.requestAuthority) return await carry(params.requestAuthority);

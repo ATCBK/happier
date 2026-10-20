@@ -104,32 +104,33 @@ export const DaemonMcpServersTestErrorCodeSchema = lazyZodSchema(() => z.enum([
 ]));
 export type DaemonMcpServersTestErrorCode = z.infer<typeof DaemonMcpServersTestErrorCodeSchema>;
 
-export const DaemonMcpServersTestAuthoringRequestSchema = lazyZodSchema(() => z.discriminatedUnion('t', [
-  z.looseObject({
-    t: z.literal('draft'),
-    machineId: z.string().check(z.minLength(1)),
-    directory: z.string().check(z.minLength(1), z.maxLength(10_000)),
-    server: McpServerCatalogEntryV1Schema,
-    binding: z.nullish(McpServerRuleV1Schema),
-  }),
-  z.looseObject({
-    t: z.literal('byId'),
-    machineId: z.string().check(z.minLength(1)),
-    directory: z.string().check(z.minLength(1), z.maxLength(10_000)),
-    serverId: z.string().check(z.minLength(1)),
-    bindingId: z.optional(z.string().check(z.minLength(1))),
-  }),
-]));
+/** Current callers test saved servers; unsaved drafts are released RPC ingress only. */
+export const DaemonMcpServersTestAuthoringRequestSchema = lazyZodSchema(() => z.strictObject({
+  t: z.literal('byId'),
+  machineId: z.string().check(z.minLength(1)),
+  directory: z.string().check(z.minLength(1), z.maxLength(10_000)),
+  serverId: z.string().check(z.minLength(1)),
+  bindingId: z.optional(z.string().check(z.minLength(1))),
+}));
+
+const normalizedDraftTestRequest = lazyZodSchema(() => z.looseObject({
+  t: z.literal('draft'),
+  machineId: z.string().check(z.minLength(1)),
+  directory: z.string().check(z.minLength(1), z.maxLength(10_000)),
+  server: McpServerCatalogEntryV1Schema,
+  binding: z.nullish(McpServerRuleV1Schema),
+}));
 // Exact 0.2 RPC ingress; current Actions and catalog rows never author this field.
-// Provenance: ../0.2 cd2bb4d853a259ae00ebc3e5981224e3e4bb5380,
-// daemonRpcV1.ts:98–107 and McpServerTestPanel.tsx:136–141. Remove with 0.2 client support.
-const retainedDraftTestRequest = lazyZodSchema(() => z.extend(DaemonMcpServersTestAuthoringRequestSchema._zod.def.options[0], {
+// Released producer: ui-web-v0.2.17-preview.19 (b8d1c449c46ab4dfa8637db36b66f643d149e66d),
+// McpServerTestPanel.tsx:136–141; protocol mcpServers/daemonRpcV1.ts:98–107.
+// Remove when support for released 0.2 clients testing against an upgraded daemon ends.
+const retainedDraftTestRequest = lazyZodSchema(() => z.extend(normalizedDraftTestRequest, {
   binding: z.nullish((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.omit(McpServerRuleV1Schema, { agentId: true }), {
     target: z.union([ReachPlaceV1Schema._zod.def.options[0], ReachPlaceV1Schema._zod.def.options[1], ReachPlaceV1Schema._zod.def.options[3]]),
     overrides: z.optional(McpServerConfigOverrideFieldsV1Schema),
   }))),
 }));
-export const DaemonMcpServersTestRequestSchema = lazyZodSchema(() => z.pipe(z.transform(raw => {
+export const DaemonMcpServersTestRequestSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(raw => {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !('t' in raw) || raw.t !== 'draft'
     || !('binding' in raw) || !raw.binding || typeof raw.binding !== 'object' || !('overrides' in raw.binding)) return raw;
   const retained = retainedDraftTestRequest.safeParse(raw);
@@ -138,7 +139,7 @@ export const DaemonMcpServersTestRequestSchema = lazyZodSchema(() => z.pipe(z.tr
   // Draft Test supplies exactly one binding. Folding its configuration preserves
   // the predecessor winner's effect; the sole reach owner still checks its place.
   return { ...retained.data, server: applyMcpServerConfigOverrideV1(retained.data.server, overrides), binding };
-}), DaemonMcpServersTestAuthoringRequestSchema));
+}), z.discriminatedUnion('t', [normalizedDraftTestRequest, z.looseObject(DaemonMcpServersTestAuthoringRequestSchema.shape)])));
 export type DaemonMcpServersTestRequest = z.infer<typeof DaemonMcpServersTestRequestSchema>;
 
 export const DaemonMcpServersTestResponseSchema = lazyZodSchema(() => z.union([

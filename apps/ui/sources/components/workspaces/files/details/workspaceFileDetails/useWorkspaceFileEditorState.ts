@@ -84,7 +84,7 @@ export function useWorkspaceFileEditorState(input: Readonly<{
     const editorOriginalHashRef = React.useRef<string | null>(null);
     const isEditingFileRef = React.useRef(false);
     const fileChangedExternallyRef = React.useRef(false);
-    const savingRef = React.useRef<object | null>(null);
+    const savingRef = React.useRef<AbortController | null>(null);
     const saveEditsRef = React.useRef<((autoSave: boolean) => void) | null>(null);
     const persistDraftRef = React.useRef(input.persistDraft);
     const latestInputRef = React.useRef(input);
@@ -104,6 +104,11 @@ export function useWorkspaceFileEditorState(input: Readonly<{
 
     React.useEffect(() => {
         hydratedFromPersistedRef.current = false;
+    }, [draftKey]);
+
+    React.useEffect(() => () => {
+        savingRef.current?.abort();
+        savingRef.current = null;
     }, [draftKey]);
 
     React.useEffect(() => {
@@ -172,7 +177,6 @@ export function useWorkspaceFileEditorState(input: Readonly<{
         editorOriginalHashRef.current = input.fileHash;
         isEditingFileRef.current = false;
         fileChangedExternallyRef.current = false;
-        savingRef.current = null;
         setEditorOwnerKey(draftKey);
         setIsEditingFile(false);
         setPendingStartEditing(false);
@@ -386,9 +390,10 @@ export function useWorkspaceFileEditorState(input: Readonly<{
             if (editorTextRef.current === editorOriginalTextRef.current) return;
             if (savingRef.current) return;
 
-            const saveIdentity = {};
+            const saveIdentity = new AbortController();
             savingRef.current = saveIdentity;
-            const isCurrentSave = () => savingRef.current === saveIdentity && isDraftOwnerCurrent();
+            const isCurrentSave = () => savingRef.current === saveIdentity && !saveIdentity.signal.aborted
+                && latestInputRef.current.mountedRef.current && isDraftOwnerCurrent();
             setIsSavingEdits(true);
             let writeSucceeded = false;
             try {
@@ -409,6 +414,7 @@ export function useWorkspaceFileEditorState(input: Readonly<{
                     path: latestInput.filePath,
                     content: latestText,
                     expectedHash,
+                    signal: saveIdentity.signal,
                 });
                 if (!isCurrentSave()) return;
 

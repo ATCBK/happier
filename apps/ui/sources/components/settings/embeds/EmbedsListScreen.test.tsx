@@ -1,6 +1,9 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { buildEmbedParentGrantV1 } from '@happier-dev/protocol/embed';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';

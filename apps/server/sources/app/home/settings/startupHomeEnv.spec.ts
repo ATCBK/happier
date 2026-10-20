@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { projectHomeSettings } from './homeConfigOverlay';
 import { loadStartupHomeEnv } from './startupHomeEnv';
+import { readHomeConfigValueSource } from './homeConfigProvenance';
 
 const CONFIG = defineServerConfigRegistry({
     METRICS_PORT: { type: 'int', default: 9090, bounds: { min: 0, max: 65_535 }, sensitivity: 'plain', apply: 'restart', editable: 'home', section: 'server', description: 'Metrics port.' },
@@ -21,6 +22,8 @@ describe('loadStartupHomeEnv', () => {
 
         expect(readServerConfig(startup.env, CONFIG.METRICS_PORT)).toBe(9191);
         expect(startup.env.REDIS_URL).toBe('redis://cache:6379');
+        expect(readHomeConfigValueSource(startup.env, 'REDIS_URL')).toBe('home');
+        expect(readHomeConfigValueSource({ ...startup.env }, 'REDIS_URL')).toBe('home');
         // Live keys reach readers through the request/job overlay, never the startup snapshot.
         expect(startup.env.MAIL_HOST).toBeUndefined();
         expect(startup.snapshot).toEqual({ appliedAt: NOW.toISOString(), applied: ['METRICS_PORT', 'REDIS_URL'], ignored: {} });

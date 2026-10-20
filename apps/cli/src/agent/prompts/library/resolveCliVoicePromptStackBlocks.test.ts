@@ -80,7 +80,7 @@ describe('resolveCliVoicePromptStackBlocks', () => {
     retireOnBody = true;
     await expect(resolveCliVoicePromptStackBlocks(args)).rejects.toMatchObject({ reason: 'unavailable', admittedEntries: [] });
   });
-  it('reads a cross-Home Voice target through its saved application endpoint and exact credential', async () => {
+  it.each(['foreign', 'same'] as const)('reads a %s-Home Voice target with the correct Account custody', async relationship => {
     const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL']);
     try {
       await withTempDir('happier-voice-target-home-', async homeDir => {
@@ -94,13 +94,21 @@ describe('resolveCliVoicePromptStackBlocks', () => {
           createdAt: 1, updatedAt: 1, lastUsedAt: 1,
         } } });
         await writeStoredCredentialsForServerId('target', { token: 'target-home-reader', encryption: null });
+        const { adoptServerProfileHomeConnectionDescriptor } = await import('@/server/serverProfiles');
+        if (relationship === 'same') await adoptServerProfileHomeConnectionDescriptor({ expectedProfileId: 'target', observation: 'exact', descriptor: {
+          v: 1, homeServerIdentityId: 'srv_voice_target', canonicalServerUrl: 'https://target-auth.example.test',
+          revision: 1, endpoints: [{ kind: 'https', url: 'https://target-auth.example.test' }],
+        } });
         const hidden = buildSystemSessionMetadataV1({ key: VOICE_CONVERSATION_SYSTEM_SESSION_KEY, hidden: true });
         const targetReads: string[] = [];
         vi.spyOn(axios, 'get').mockImplementation(async (url, options) => {
           const parsed = new URL(String(url));
-          const target = options?.headers?.Authorization === 'Bearer target-home-reader';
+          const target = parsed.pathname === '/v2/sessions/exact-target'
+            || options?.headers?.Authorization === 'Bearer target-home-reader';
           if (target) targetReads.push(String(url));
-          expect(parsed.origin).toBe(target ? 'http://127.0.0.1:43127' : 'https://control.example.test');
+          expect(options?.headers?.Authorization).toBe(relationship === 'same' || !target
+            ? 'Bearer control-home-reader' : 'Bearer target-home-reader');
+          expect(parsed.origin).toBe(target && relationship === 'foreign' ? 'http://127.0.0.1:43127' : 'https://control.example.test');
           if (parsed.pathname === '/v1/account/encryption/currentness') return { status: 200, data: {
             mode: 'plain', version: 0, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0,
           } };
@@ -115,15 +123,16 @@ describe('resolveCliVoicePromptStackBlocks', () => {
             share: null, metadata: JSON.stringify(metadata), dataEncryptionKey: null } } };
         });
         const outcome = await resolveCliVoicePromptStackBlocks({
-          credentials: { token: 'control-home-reader', encryption: null }, serverId: 'control',
+          credentials: { token: 'control-home-reader', encryption: null }, serverId: relationship === 'same' ? 'srv_voice_target' : 'control',
           serverUrl: 'https://control.example.test', sessionId: 'history-session',
           accountEntries: [], profileEntries: [],
           readArtifactHeader: async () => ({ header: { v: 1, kind: 'prompt_doc.v2', title: 'Instructions' } }),
           readArtifact: async ref => doc(ref.artifactId, 'EXACT_TARGET_HOME'),
         }).catch(error => error);
-        expect(targetReads).toEqual(['http://127.0.0.1:43127/v1/account/encryption/currentness',
-          'http://127.0.0.1:43127/v2/sessions/exact-target']);
         expect(outcome).toEqual(['EXACT_TARGET_HOME']);
+        expect(targetReads).toEqual(relationship === 'foreign'
+          ? ['http://127.0.0.1:43127/v1/account/encryption/currentness', 'http://127.0.0.1:43127/v2/sessions/exact-target']
+          : ['https://control.example.test/v2/sessions/exact-target']);
         expect((await readSettings()).activeServerId).toBe(settings.activeServerId);
       });
     } finally {
@@ -142,7 +151,7 @@ describe('resolveCliVoicePromptStackBlocks', () => {
       record: { key: 'voice', value: { v: 1, scope: { kind: 'voice' }, entries: [entry('account')] } } }], tombstones: [], diagnostics: [] } });
     commitActiveProfileCatalog({ ...bound, catalog: { status: 'ready', authority: 'active', control: null, controlRevision: 'absent',
       referenceGuardRevision: 'absent', diagnostics: [], records: ['target-profile', 'voice-profile'].map(id => ({ revision: 1,
-        record: { v: 1, id, enabled: true, secretBindings: {}, definition: { kind: 'artifact', artifactId: `${id}-definition` }, promptStack: [entry(id)] } })) } });
+        record: { v: 1, id, enabled: true, secretBindings: {}, skillSeeds: [], definition: { kind: 'artifact', artifactId: `${id}-definition` }, promptStack: [entry(id)] } })) } });
     const workspaceKey = { kind: 'workspace-ref', serverId, id: 'checkout' };
     const projectKey = { kind: 'project-organization', serverId, projectKey: 'project' };
     vi.spyOn(axios, 'post').mockResolvedValue({ status: 200, data: { status: 'listed', coverage: 'complete', rows: [
@@ -212,7 +221,7 @@ describe('resolveCliVoicePromptStackBlocks', () => {
     publishVoice('current-voice');
     commitActiveProfileCatalog({ ...bound, catalog: { status: 'ready', authority: 'active', control: null,
       controlRevision: 'absent', referenceGuardRevision: 'absent', diagnostics: [],
-      records: [{ revision: 2, record: { v: 1, id: 'work', enabled: true, secretBindings: {},
+      records: [{ revision: 2, record: { v: 1, id: 'work', enabled: true, secretBindings: {}, skillSeeds: [],
         definition: { kind: 'artifact', artifactId: 'profile-definition' }, promptStack: [entry('current-profile')] } }] } });
     const args = { credentials, serverId: configuration.activeServerId, settings, profileId: 'work',
       readArtifact: async (ref: { artifactId: string }) => doc(ref.artifactId, ref.artifactId) };

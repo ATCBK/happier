@@ -1,4 +1,4 @@
-import { createHappierCollectionVisitMemory, createHappierCollectionDraftTitleStore } from '@happier-dev/plugin-ui/presentation';
+import { createHappierCollectionVisitMemory } from '@happier-dev/plugin-ui/presentation';
 
 /** Settings › Profiles: the collection's own route. */
 export const PROFILES_COLLECTION_ROOT = '/settings/profiles';
@@ -52,7 +52,3 @@ const profileVisits = createHappierCollectionVisitMemory<string>();
 
 export const recordProfileCollectionVisit = profileVisits.record;
 export const readLastVisitedProfileId = profileVisits.read;
-
-/** The name typed into the open new-profile draft, shown by the collection's draft row. */
-export const profileDraftTitle = createHappierCollectionDraftTitleStore();
-export const publishProfileDraftTitle = profileDraftTitle.publish;

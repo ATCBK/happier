@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { DaemonPluginUiTargetedContributionsReadResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
@@ -70,6 +70,45 @@ describe('targeted detail execution origins through admitted runtime publication
                 },
             });
             expect(response.targetedSurfaceMounts.length).toBeGreaterThan(0);
+
+            // The real describe is cold and held at its filesystem catalog
+            // boundary. Reading this admitted target must not join that work.
+            invalidateDaemonContributionRegistryProjectionCache();
+            let releaseCatalog!: () => void;
+            let catalogEntered!: () => void;
+            const pendingCatalog = new Promise<void>((resolve) => { releaseCatalog = resolve; });
+            const enteredCatalog = new Promise<void>((resolve) => { catalogEntered = resolve; });
+            const handlers = new Map<string, RpcHandler>();
+            registerDaemonContributionRegistryProjectionHandler({
+                registerHandler(method, handler) { handlers.set(method, handler); },
+            }, {
+                resolveRuntimeRegistry: async () => fixture.registry,
+                resolveInstalledPackages: async () => {
+                    catalogEntered();
+                    await pendingCatalog;
+                    return [];
+                },
+                resolvePluginProjectionExecutionOriginContext: () => ({
+                    serverIdentityId: expectedOrigin.serverIdentityId, machineId: 'machine-detail',
+                }),
+            });
+            const describeHandler = handlers.get(RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE);
+            const targetHandler = handlers.get(RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ);
+            if (!describeHandler || !targetHandler) throw new Error('Expected registered projection handlers');
+            const pendingDescribe = describeHandler({ machineId: 'machine-detail' });
+            await enteredCatalog;
+            let independentTarget: unknown;
+            const pendingTarget = Promise.resolve(targetHandler({
+                machineId: 'machine-detail', pluginId: 'happier.triage',
+            })).then((result) => { independentTarget = result; });
+            try {
+                await vi.waitFor(() => {
+                    expect(independentTarget).toEqual(response);
+                });
+            } finally {
+                releaseCatalog();
+                await Promise.all([pendingDescribe, pendingTarget]);
+            }
 
             // The loaded pre-migration daemon copied flat stamps into this
             // artifact. Current strict consumers reject that producer shape;

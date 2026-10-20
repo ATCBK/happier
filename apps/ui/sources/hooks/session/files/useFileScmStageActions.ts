@@ -4,7 +4,7 @@ import {
     sessionScmChangeInclude,
     sessionScmChangeExclude,
 } from '@/sync/ops';
-import { storage } from '@/sync/domains/state/storage';
+import { storage } from '@/sync/domains/state/storageStore';
 import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 import { Modal } from '@/modal';
 import { t } from '@/text';
@@ -19,6 +19,7 @@ import { tracking } from '@/track';
 import { applyFileStageAction } from '@/scm/operations/applyFileStageAction';
 import { tryShowDaemonUnavailableAlertForScmOperationFailure } from '@/scm/operations/scmDaemonUnavailableAlert';
 import { useMountedRef } from '@/hooks/ui/useMountedRef';
+import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 
 type DiffMode = 'included' | 'pending' | 'both';
 
@@ -183,6 +184,9 @@ export function useFileScmStageActions(input: {
                     const response = stageSelected
                         ? await sessionScmChangeInclude(sessionId, { patch }, serverId)
                         : await sessionScmChangeExclude(sessionId, { patch }, serverId);
+
+                    // Declined, or waiting on an approval: nothing ran and nothing failed.
+                    if (isScmActionNotRun(response)) return;
 
                     if (!response.success) {
                         const errorMessage = getScmUserFacingError({

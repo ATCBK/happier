@@ -1,5 +1,6 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 function sourceFiles(root: string): string[] {
@@ -28,13 +29,14 @@ const FORBIDDEN_ATTENTION_OWNERS = [
     'badge',
     'Badge',
 ];
+const uiRoot = fileURLToPath(new URL('../../../../../', import.meta.url));
 
 describe('human presence attention boundary', () => {
     it.each([
         'sources/sync/domains/session/humanPresence',
         'sources/components/sessions/collaboration',
     ])('keeps %s free of read, Follow, attention and notification owners', (directory) => {
-        const files = sourceFiles(join(process.cwd(), directory))
+        const files = sourceFiles(join(uiRoot, directory))
             .filter((path) => !/\.(test|spec)\.tsx?$/.test(path))
             // The access editor and public-link sections are separate Session-access
             // owners that legitimately reach other domains; presence is the boundary here.
@@ -53,7 +55,7 @@ describe('human presence attention boundary', () => {
 
     it('reads rendered surfaces from the one visibility owner and never writes them back', () => {
         const runtime = readFileSync(
-            join(process.cwd(), 'sources/sync/domains/session/humanPresence/sessionHumanPresenceRuntime.ts'),
+            join(uiRoot, 'sources/sync/domains/session/humanPresence/sessionHumanPresenceRuntime.ts'),
             'utf8',
         );
         expect(runtime).toContain('getVisibleSessionSurfaces');

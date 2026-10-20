@@ -1,13 +1,14 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ExecutionRunScmDiffSummaryInputV1Schema } from '@happier-dev/protocol/execution/runs/startRequest';
+import { ExecutionRunScmDiffSummaryInputV1Schema, ExecutionRunStartRequestSchema } from '@happier-dev/protocol/execution/runs/startRequest';
+import { ExecutionRunSendRequestSchema } from '@happier-dev/protocol';
 import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
 import { SCM_DIFF_SUMMARY_CACHE_SCHEMA_VERSION, ScmDiffSummaryGenerateOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
-import { ScmComparisonSchema } from '@happier-dev/protocol/scm/comparison';
-import type { ExecutionRunProfileStartParams } from '@/agent/executionRuns/profiles/ExecutionRunIntentProfile';
+import { ScmComparisonSchema, type ScmComparisonSource } from '@happier-dev/protocol/scm/comparison';
+import type { ExecutionRunProfilePrepareStartParams, ExecutionRunProfileStartParams } from '@/agent/executionRuns/profiles/ExecutionRunIntentProfile';
 import { captureScmComparison, deleteCapturedScmComparison } from '@/scm/comparisons/captureScmComparison';
 import { ScmDiffSummaryProfile } from './ScmDiffSummaryProfile';
 import { scmDiffSummaryCacheStore } from '@/agent/executionRuns/tasks/scmDiffSummary/cache/cacheStore';
@@ -21,7 +22,11 @@ import { accountSettingsParse } from '@happier-dev/protocol/account/settings/acc
 import { clearActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { executeScmActionOperation } from '@/scm/actions/executeScmActionOperation';
 import { ScmDiffSummaryResultResponseSchema } from '@happier-dev/protocol/scm/diffSummaryResult';
-import { getActionSpec, type ScmActionExecute } from '@happier-dev/protocol';
+import type { ScmActionExecute } from '@happier-dev/protocol';
+
+// The loose request's extension index must not erase its named public fields.
+expectTypeOf<ExecutionRunProfilePrepareStartParams['request']['instructions']>().toEqualTypeOf<string | undefined>();
+expectTypeOf<ExecutionRunProfilePrepareStartParams['request']['externalPluginExtension']>().toEqualTypeOf<unknown>();
 
 const comparison = ScmComparisonSchema.parse({
   id: 'comparison-1', source: { kind: 'workingTree' }, repository: { rootPath: '/repo' }, endpoints: {},
@@ -60,7 +65,9 @@ describe('initial generation context', () => {
 });
 
 async function exerciseSavedContinuation(operation: 'refine' | 'addOutputs' | 'replacement' | 'explicitChoice',
-  assertContinuation: (observed: { prompt: string; admittedInstructions?: unknown; savedLanguage?: unknown; replacementLanguage?: unknown }) => void) {
+  assertContinuation: (observed: { prompt: string; admittedInstructions?: unknown; savedLanguage?: unknown; replacementLanguage?: unknown;
+    savedConnectedServices?: unknown; replacementConnectedServices?: unknown }) => void,
+  connectedRouteAtStartOnly = false) {
   const previous = getActiveAccountSettingsSnapshot();
   setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({ 'scm.diffSummary.outputLanguage': 'de' }),
     settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: 'saved-language-account' });
@@ -68,11 +75,16 @@ async function exerciseSavedContinuation(operation: 'refine' | 'addOutputs' | 'r
     await withTempDir('happier-scm-continuation-', async cwd => {
       execFileSync('git', ['init', '-q'], { cwd });
       const captured = await captureScmComparison({ cwd, source: { kind: 'workingTree' } });
-      const request = { backendTarget: { kind: 'builtInAgent' as const, agentId: 'claude' }, intent: 'scm_diff_summary' as const,
+      const connectedServices = { v: 2 as const, bindingsByServiceId: { 'happier.agent.claude/claude-subscription': {
+          source: 'connected' as const, selection: 'profile' as const, profileId: 'saved-subscription',
+        } } };
+      const request = { kind: 'scm_diff_summary.v1' as const, backendTarget: { kind: 'builtInAgent' as const, agentId: 'claude' }, intent: 'scm_diff_summary' as const,
+        ...(!connectedRouteAtStartOnly ? { connectedServices } : {}),
         permissionMode: 'read_only', retentionPolicy: 'resumable' as const, runClass: 'long_lived' as const, ioMode: 'streaming' as const,
         intentInput: { cwd, source: captured.comparison.source, comparisonId: captured.comparison.id, outputs: ['summary'], outputLanguage: 'fr' } };
       const initial = await ScmDiffSummaryProfile.prepareStartParams!({ cwd, sessionId: null, request });
-      const params = { ...start(initial?.intentInput), sessionId: null, instructions: initial!.instructions! };
+      const preparedInitial = ExecutionRunStartRequestSchema.parse({ ...request, ...initial });
+      const params = { ...start(preparedInitial.intentInput), sessionId: null, instructions: preparedInitial.instructions ?? '', connectedServices };
       const begun = await ScmDiffSummaryProfile.onStarted!({ start: params, rawText: '', finishedAtMs: 1 });
       const generated = await ScmDiffSummaryProfile.onTurnComplete!({ start: params, rawText: JSON.stringify({ summaryMarkdown: 'UNTRUSTED_PRIOR_OUTPUT_DIRECTIVE' }),
         turnId: 'initial-turn', inputIds: ['initial:run-1'], previousStructuredMeta: begun?.structuredMeta, finishedAtMs: 2 });
@@ -83,6 +95,7 @@ async function exerciseSavedContinuation(operation: 'refine' | 'addOutputs' | 'r
       let prompt = '';
       let admittedInstructions: unknown;
       let replacementLanguage: unknown;
+      let replacementConnectedServices: unknown;
       // Only Run transport is substituted; profile admission, capture, persistence, Action routing and strict readers are real.
       const executeCanonicalAction: Parameters<ScmActionExecute>[0]['executeCanonicalAction'] = async (id, input) => {
         if (id === 'execution.run.get') return operation === 'replacement' || operation === 'explicitChoice'
@@ -92,16 +105,17 @@ async function exerciseSavedContinuation(operation: 'refine' | 'addOutputs' | 'r
             status: 'running', startedAtMs: 1, lifecycle: { v: 1, state: 'current' }, interaction: { kind: 'retained_agent_session.v1',
               capabilities: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: true } } } } };
         if (id === 'execution.run.send') {
-          const sent = getActionSpec('execution.run.send').inputSchema.parse(input);
+          const sent = ExecutionRunSendRequestSchema.parse(input);
           prompt = sent.message;
           return { ok: true, result: { ok: true } };
         }
         if (id === 'execution.run.start') {
-          const admitted = getActionSpec('execution.run.start').inputSchema.parse(input);
+          const admitted = ExecutionRunStartRequestSchema.parse(input);
           admittedInstructions = (admitted.intentInput as { instructions?: unknown }).instructions;
           replacementLanguage = (admitted.intentInput as { outputLanguage?: unknown }).outputLanguage;
+          replacementConnectedServices = admitted.connectedServices;
           const prepared = await ScmDiffSummaryProfile.prepareStartParams!({ cwd, sessionId: null, request: admitted });
-          prompt = prepared!.instructions!;
+          prompt = ExecutionRunStartRequestSchema.parse({ ...admitted, ...prepared }).instructions ?? '';
           return { ok: true, result: { runId: 'replacement', callId: 'call', sidechainId: 'sidechain', status: 'running' } };
         }
         throw new Error(`Unexpected transport ${id}`);
@@ -113,15 +127,28 @@ async function exerciseSavedContinuation(operation: 'refine' | 'addOutputs' | 'r
         workingDirectory: cwd, accessPolicy: { kind: 'restrictedRoots', roots: [cwd] }, executeCanonicalAction,
         actionContext: { surface: 'rpc', authority: 'present_user', externalActionTarget: { kind: 'machine', machineId: 'machine' } } });
       expect(result, JSON.stringify(result)).toMatchObject({ success: true });
-      assertContinuation({ prompt, admittedInstructions, replacementLanguage, savedLanguage: (saved.generator as { outputLanguage?: unknown } | undefined)?.outputLanguage });
+      assertContinuation({ prompt, admittedInstructions, replacementLanguage, savedLanguage: saved.generator?.outputLanguage,
+        savedConnectedServices: saved.generator?.connectedServices, replacementConnectedServices });
     });
   } finally {
     if (previous) setActiveAccountSettingsSnapshot(previous); else clearActiveAccountSettingsSnapshot();
   }
 }
 
+const fence = '`'.repeat(3);
+
 describe('ScmDiffSummaryProfile', () => {
   beforeEach(() => { scmDiffSummaryCacheStore.clear(); });
+
+  it.each([false, true])('persists the generator Connected Services and reuses them when refinement replaces a lost Run (resolved at start=%s)', async connectedRouteAtStartOnly => {
+    await exerciseSavedContinuation('replacement', ({ savedConnectedServices, replacementConnectedServices }) => {
+      const expected = { v: 2, bindingsByServiceId: { 'happier.agent.claude/claude-subscription': {
+        source: 'connected', selection: 'profile', profileId: 'saved-subscription',
+      } } };
+      expect(savedConnectedServices).toEqual(expected);
+      expect(replacementConnectedServices).toEqual(expected);
+    }, connectedRouteAtStartOnly);
+  });
 
   it.each(['refine', 'addOutputs', 'replacement'] as const)('keeps saved evidence separate from user instructions through the real %s continuation', async operation => {
     await exerciseSavedContinuation(operation, ({ prompt, admittedInstructions }) => {
@@ -244,10 +271,10 @@ describe('ScmDiffSummaryProfile', () => {
       if (reason === 'escaping symlink') symlinkSync('../outside.txt', join(cwd, 'escape.txt'));
       execFileSync('git', ['add', '.'], { cwd });
       execFileSync('git', ['commit', '-qm', 'initial'], { cwd });
-      const source = reason === 'missing hosted objects' ? { kind: 'pullRequest' as const, locator: {
+      const source: ScmComparisonSource = reason === 'missing hosted objects' ? { kind: 'pullRequest', locator: {
         providerId: 'github', repository: 'owner/repository', number: 1,
         sourceAction: { action: { pluginId: 'test.hosting', localId: 'changed-files' }, input: {} },
-      } } : { kind: 'workingTree' as const };
+      } } : { kind: 'workingTree' };
       // The hosting page is an external source boundary. Its endpoint identities
       // are intentionally absent from this local repository.
       const captured = await captureScmComparison({ cwd, source,
@@ -615,6 +642,29 @@ describe('ScmDiffSummaryProfile', () => {
     } });
   });
 
+  it('persists a typed cancellation reason through the saved result reader', async () => {
+    const admitted = await admitInitial(start(input(['walkthrough', 'summary'])));
+    const pending = ScmDiffSummaryGenerateOutputSchema.parse(admitted.previousStructuredMeta?.payload);
+    const published = await scmDiffSummaryResultStore.publishProgress({ cwd: '/repo', sessionId: 'sess-1',
+      resultId: pending.resultId!, expectedRevision: pending.revision!,
+      output: ScmDiffSummaryGenerateOutputSchema.parse({ ...pending, outputs: {
+        summary: { state: 'complete', value: { summaryMarkdown: 'Published summary' } },
+        walkthrough: { state: 'partial', value: { title: 'Usable reading', intro: '', stops: [], otherChangeRefs: ['change-1'] } },
+      } }),
+    });
+    expect(published.success).toBe(true);
+    const terminal = await ScmDiffSummaryProfile.onTerminal!({ start: admitted.start,
+      structuredMeta: admitted.previousStructuredMeta, status: 'cancelled', finishedAtMs: 1234 });
+    const output = ScmDiffSummaryGenerateOutputSchema.parse(terminal?.toolResultOutput);
+    const saved = ScmDiffSummaryResultResponseSchema.parse(await scmDiffSummaryResultStore.read({
+      cwd: '/repo', sessionId: 'sess-1', resultId: output.resultId!,
+    }));
+    expect(saved).toMatchObject({ success: true, result: { output: { outputs: {
+      walkthrough: { state: 'cancelled', reasonCode: 'generation_cancelled', value: { title: 'Usable reading' } },
+      summary: { state: 'complete', value: { summaryMarkdown: 'Published summary' } },
+    } } } });
+  });
+
   it('seeds cached follow-up context from the current capture while retaining the original generation provenance', async () => {
     const cachedOutput = { success: true, sourceKey: comparison.id, comparison, metadata: input().metadata,
       runId: 'original-run', producer: { kind: 'generation', runId: 'original-run' },
@@ -671,6 +721,13 @@ describe('ScmDiffSummaryProfile', () => {
   it('uses the strict protocol output contract without arbitrary prose length limits', () => {
     expect(parseDiffSummaryModelOutput(JSON.stringify({ summaryMarkdown: 'a'.repeat(80_001) }))?.summaryMarkdown?.length).toBe(80_001);
     expect(parseDiffSummaryModelOutput(JSON.stringify({ summaryMarkdown: 'Valid.', injectedCommand: 'git commit' }))).toBeNull();
+  });
+
+  it('reads the strict output a model wraps in leading prose and a code fence, still refusing unknown keys', () => {
+    const wrap = (value: unknown) => ['I will group these changes by intent.', '', fence + 'json', JSON.stringify(value, null, 2), fence].join('\n');
+    const commitPlan = { groups: [{ id: 'g1', message: 'Add sorting', rationale: 'Newest first.', changeRefs: ['c1'] }], leftOutChangeRefs: [] };
+    expect(parseDiffSummaryModelOutput(wrap({ commitPlan }))?.commitPlan?.groups[0]?.message).toBe('Add sorting');
+    expect(parseDiffSummaryModelOutput(wrap({ summaryMarkdown: 'Valid.', injectedCommand: 'git commit' }))).toBeNull();
   });
 
   it('publishes walkthrough-only output with captured identities and separate analysis coverage', async () => {

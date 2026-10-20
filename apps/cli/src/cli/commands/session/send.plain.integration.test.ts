@@ -53,6 +53,8 @@ describe('happier session send plaintext sessions (integration)', () => {
     content: unknown;
   } | null = null;
   let transcriptMessages: Array<Record<string, unknown>> = [];
+  let currentnessFailure: '503' | 'reset' | '401' | 'invalid' | 'migration' | null = null;
+  const mutationPaths: string[] = [];
 
   beforeEach(async () => {
     happyHomeDir = await createTempDir('happier-cli-session-send-plain-');
@@ -63,6 +65,9 @@ describe('happier session send plaintext sessions (integration)', () => {
     latestTurnStatusObservedAt = 1;
     visibleMessageByLocalId = null;
     transcriptMessages = [];
+    currentnessFailure = null;
+    mutationPaths.length = 0;
+    mockIo.mockClear();
     openSessionDataEncryptionKeySpy.mockClear();
 
     const sessionId = 'sess_integration_send_plain_123';
@@ -83,6 +88,7 @@ describe('happier session send plaintext sessions (integration)', () => {
 
     server = createServer(async (req, res) => {
       const url = new URL(req.url ?? '/', `http://${req.headers.host ?? '127.0.0.1'}`);
+      if (req.method !== 'GET') mutationPaths.push(url.pathname);
 
       if (req.method === 'GET' && url.pathname === `/v2/sessions/${sessionId}`) {
         res.statusCode = 200;
@@ -180,6 +186,19 @@ describe('happier session send plaintext sessions (integration)', () => {
       // so the integration server has to answer that boundary or the send fails
       // closed with `Account encryption currentness is unavailable (404)`.
       if (req.method === 'GET' && url.pathname === '/v1/account/encryption/currentness') {
+        if (currentnessFailure === 'reset') {
+          req.socket.destroy();
+          return;
+        }
+        if (currentnessFailure !== null) {
+          res.statusCode = currentnessFailure === 'invalid' ? 200
+            : currentnessFailure === 'migration' ? 400 : Number(currentnessFailure);
+          res.setHeader('content-type', 'application/json');
+          res.end(JSON.stringify(currentnessFailure === 'migration'
+            ? { error: 'migration-required', recipientEnvelopeReadiness: { status: 'unavailable', reason: 'encryption_inconsistent' } }
+            : { error: 'fixture failure; private upstream details' }));
+          return;
+        }
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
         res.end(JSON.stringify(createAccountEncryptionCurrentnessFixture({ mode: 'plain' })));
@@ -260,6 +279,51 @@ describe('happier session send plaintext sessions (integration)', () => {
 
     const { reloadConfiguration } = await import('@/configuration');
     reloadConfiguration();
+  });
+
+  it.each([
+    ['503', 'server_unreachable'],
+    ['reset', 'server_unreachable'],
+    ['401', 'not_authenticated'],
+    ['invalid', 'unknown_error'],
+    ['migration', 'unknown_error'],
+  ] as const)('fails before input admission for currentness %s and accepts one explicit retry', async (failure, code) => {
+    const { handleSessionCommand } = await import('./index');
+    const localId = `currentness-recovery-${failure}`;
+    const argv = ['send', 'sess_integration_send_plain_123', 'Retry after Home recovery', '--local-id', localId, '--json'];
+    const deps = { readCredentialsFn: async () => ({ token: 'token_test', encryption: null }) };
+    const previousExitCode = process.exitCode;
+    const output = captureConsoleJsonOutput();
+    try {
+      sessionActive = false;
+      currentnessFailure = failure;
+      await handleSessionCommand(argv, deps);
+      const result = output.json();
+      expect(result).toMatchObject({ ok: false, kind: 'session_send', error: { code } });
+      expect(JSON.stringify(result)).not.toContain('private upstream details');
+      if (failure === 'invalid') expect(result.error?.message).toContain('response is invalid');
+      if (failure === 'migration') expect(result.error?.message).toContain('(400)');
+      expect(receivedMessages).toEqual([]);
+      expect(mutationPaths).toEqual([]);
+      expect(mockIo).not.toHaveBeenCalled();
+    } finally {
+      output.restore();
+      process.exitCode = previousExitCode;
+    }
+
+    currentnessFailure = null;
+    sessionActive = true;
+    const retryOutput = captureConsoleJsonOutput();
+    try {
+      await handleSessionCommand(argv, deps);
+      expect(retryOutput.json()).toMatchObject({ ok: true, data: { localId } });
+      expect(receivedMessages).toHaveLength(1);
+      expect(visibleMessageByLocalId).toMatchObject({ localId });
+      expect(mutationPaths).toEqual([`/v2/sessions/sess_integration_send_plain_123/pending`]);
+    } finally {
+      retryOutput.restore();
+      process.exitCode = previousExitCode;
+    }
   });
 
   it('enqueues a plaintext message envelope and includes meta defaults from plaintext metadata', async () => {

@@ -26,6 +26,21 @@ export type HappierJustification =
 
 export type HappierDimension = number | `${number}%` | 'auto';
 
+/** The native/RNW accessibility vocabulary without importing either renderer. */
+export type HappierAccessibilityRole =
+  | 'none' | 'button' | 'togglebutton' | 'link' | 'search' | 'image' | 'keyboardkey'
+  | 'text' | 'adjustable' | 'imagebutton' | 'header' | 'summary' | 'alert' | 'checkbox'
+  | 'combobox' | 'menu' | 'menubar' | 'menuitem' | 'progressbar' | 'radio' | 'radiogroup'
+  | 'scrollbar' | 'spinbutton' | 'switch' | 'tab' | 'tabbar' | 'tablist' | 'timer' | 'list' | 'toolbar';
+
+export type HappierAccessibilityState = Readonly<{
+  disabled?: boolean;
+  selected?: boolean;
+  checked?: boolean | 'mixed';
+  busy?: boolean;
+  expanded?: boolean;
+}>;
+
 export type HappierFontWeight =
   | 'normal'
   | 'bold'
@@ -75,6 +90,10 @@ export type HappierPortableStyle = Readonly<{
   /** Web surface paint only; native draws through the shared gradient layer. */
   backgroundImage?: string;
   backgroundClip?: 'padding-box';
+  /** Web-only extent of `backgroundImage` layers (comma-separated per layer). */
+  backgroundSize?: string;
+  backgroundPosition?: string;
+  backgroundRepeat?: string;
   borderBottomColor?: string;
   borderBottomLeftRadius?: number | string;
   borderBottomRightRadius?: number | string;
@@ -154,7 +173,11 @@ export type HappierPortableStyle = Readonly<{
   textShadowOffset?: Readonly<{ width: number; height: number }>;
   textShadowRadius?: number;
   textTransform?: 'none' | 'capitalize' | 'uppercase' | 'lowercase';
+  /** Web only (RNW passes it to CSS): `HAPPIER_BALANCED_TEXT_WRAP`'s even two-line split. */
+  textWrap?: 'balance';
   top?: HappierDimension;
+  /** The numeric placement tracks shared by Collection motion and floating frames. */
+  transform?: Array<{ translateX: number } | { translateY: number }>;
   userSelect?: 'auto' | 'none' | 'text' | 'contain' | 'all';
   verticalAlign?: 'auto' | 'top' | 'bottom' | 'middle';
   width?: HappierDimension;
@@ -212,10 +235,12 @@ export type HappierTextHostProps = Readonly<{
   accessible?: boolean;
   accessibilityLabel?: string;
   accessibilityHint?: string;
+  accessibilityElementsHidden?: boolean;
   accessibilityLiveRegion?: HappierAccessibilityLiveRegion;
   accessibilityRole?: 'alert' | 'header' | 'link' | 'none' | 'text';
   allowFontScaling?: boolean;
   ellipsizeMode?: 'clip' | 'head' | 'middle' | 'tail';
+  importantForAccessibility?: 'auto' | 'yes' | 'no' | 'no-hide-descendants';
   maxFontSizeMultiplier?: number | null;
   nativeID?: string;
   numberOfLines?: number;

@@ -588,6 +588,8 @@ function createScopedPluginSettingsRecordStore(params: Readonly<{
     let inventoryFieldsKey = scopedPluginSettingsFieldsKey([]);
     let inventoryGeneration = 0;
     let currentRead: Promise<void> | null = null;
+    let readCancellation: AbortController | null = null;
+    let writeCancellation: AbortController | null = null;
     let currentReadFieldsKey: string | null = null;
     let refreshAfterCurrentRead = false;
     let initialRefreshScheduled = false;
@@ -638,6 +640,9 @@ function createScopedPluginSettingsRecordStore(params: Readonly<{
         }
         const generation = requestGeneration + 1;
         requestGeneration = generation;
+        readCancellation?.abort();
+        const controller = new AbortController();
+        readCancellation = controller;
         currentReadFieldsKey = fieldsKey;
         state = {
             ...state,
@@ -654,10 +659,12 @@ function createScopedPluginSettingsRecordStore(params: Readonly<{
                     scope: params.scope,
                     target: params.target,
                     fields,
+                    signal: controller.signal,
                 });
             } catch {
                 result = { status: 'unavailable', reason: 'transport' };
             }
+            if (controller.signal.aborted) return;
             if (!isRecordCurrent()) {
                 retireRecord();
                 return;
@@ -689,6 +696,7 @@ function createScopedPluginSettingsRecordStore(params: Readonly<{
         try {
             await read;
         } finally {
+            if (readCancellation === controller) readCancellation = null;
             if (currentRead === read) {
                 currentRead = null;
                 currentReadFieldsKey = null;
@@ -727,10 +735,12 @@ function createScopedPluginSettingsRecordStore(params: Readonly<{
             // initial partial snapshot followed by a second widened one.
             if (currentRead === null) scheduleInitialRefresh();
             // A current read for this exact inventory already supplies the
-            // pending request. A widened inventory waits for that read to
-            // settle, then the record owner performs one current read rather
-            // than starting a competing overlap.
-            else if (currentReadFieldsKey !== fieldsKey) refreshAfterCurrentRead = true;
+            // pending request. A widened inventory cancels that obsolete read,
+            // then the record owner reads the current union after settlement.
+            else if (currentReadFieldsKey !== fieldsKey) {
+                refreshAfterCurrentRead = true;
+                readCancellation?.abort();
+            }
         }
         else notify();
     };
@@ -757,6 +767,10 @@ function createScopedPluginSettingsRecordStore(params: Readonly<{
         // its authority.
         lifetimeGeneration += 1;
         requestGeneration += 1;
+        readCancellation?.abort();
+        readCancellation = null;
+        writeCancellation?.abort();
+        writeCancellation = null;
         currentRead = null;
         currentReadFieldsKey = null;
         refreshAfterCurrentRead = false;
@@ -835,6 +849,7 @@ function createScopedPluginSettingsRecordStore(params: Readonly<{
                     // after that response instead of losing the newer fact.
                     if (currentRead) {
                         refreshAfterCurrentRead = true;
+                        readCancellation?.abort();
                         return;
                     }
                     void refresh();
@@ -892,9 +907,11 @@ function createScopedPluginSettingsRecordStore(params: Readonly<{
                     // authoritative for the replacement source.
                     inventoryGeneration += 1;
                     loadedFieldsKey = null;
+                    writeCancellation?.abort();
                     if (currentRead !== null) {
                         requestGeneration += 1;
                         refreshAfterCurrentRead = true;
+                        readCancellation?.abort();
                     }
                 }
             }
@@ -924,6 +941,8 @@ function createScopedPluginSettingsRecordStore(params: Readonly<{
             state = { ...state, writePending: true, error: null };
             notify();
             let result: ScopedPluginSettingsWriteResult;
+            const controller = new AbortController();
+            writeCancellation = controller;
             try {
                 result = await params.adapter.write({
                     pluginId: params.pluginId,
@@ -933,12 +952,15 @@ function createScopedPluginSettingsRecordStore(params: Readonly<{
                     fieldId: input.fieldId,
                     mutation: input.mutation,
                     expectedRevision: snapshot.revision,
+                    signal: controller.signal,
                     ...(input.bindingServerIdentityId !== undefined ? { bindingServerIdentityId: input.bindingServerIdentityId } : {}),
                     isCurrent: () => isRecordCurrent() && lifetime === lifetimeGeneration
                         && inventory.generation === inventoryGeneration && isWriteCurrent(input.isCurrent),
                 });
             } catch {
                 result = { status: 'unavailable', reason: 'transport' };
+            } finally {
+                if (writeCancellation === controller) writeCancellation = null;
             }
             if (!isRecordCurrent()) {
                 retireRecord();
@@ -962,6 +984,11 @@ function createScopedPluginSettingsRecordStore(params: Readonly<{
                 return withoutScopedPluginSettingsWriteSnapshot(result);
             }
             const resultSnapshot = 'snapshot' in result ? result.snapshot : undefined;
+            if (result.status === 'declined') {
+                state = { ...state, writePending: pendingWriteCount > 0, error: null };
+                notify();
+                return result;
+            }
             if (
                 resultSnapshot !== undefined
                 && (
@@ -1420,6 +1447,21 @@ function useScopedPluginSettingsFieldModels(
             };
             draftsRef.current = next;
             setDrafts(next);
+            return result;
+        }
+        if (result?.status === 'declined') {
+            if (field.control === 'switch' || field.control === 'select' || field.control === 'multiSelect') {
+                const next = { ...draftsRef.current };
+                delete next[field.key];
+                draftsRef.current = next;
+                setDrafts(next);
+            }
+            setErrors((previous) => {
+                if (!Object.prototype.hasOwnProperty.call(previous, field.key)) return previous;
+                const next = { ...previous };
+                delete next[field.key];
+                return next;
+            });
             return result;
         }
         if (result?.status === 'ready' || result?.status === 'applied') {

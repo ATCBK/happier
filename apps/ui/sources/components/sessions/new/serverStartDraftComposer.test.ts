@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { MAX_PLUGIN_IDENTIFIER_BYTES } from '@happier-dev/protocol/plugins/plugin-id';
 import type { SessionServerStartSpawnDraftV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewInputV2';
+import { PluginUiJsonObjectV1Schema } from '@happier-dev/protocol/plugins/ui';
 
 import {
     composeSessionServerStartDraft,
@@ -45,7 +46,7 @@ describe('Session server-start draft composer', () => {
         };
         const present = vi.fn(({ seed }: Readonly<{ seed: SessionServerStartDraftSeed }>) => presentResolved(seed.existingDraft));
         const outcome = await composeSessionServerStartDraft({
-            draft: { existingDraft }, target, isCurrent: () => true, present,
+            draft: PluginUiJsonObjectV1Schema.parse({ existingDraft }), target, isCurrent: () => true, present,
         });
         expect(outcome).toEqual({ kind: 'submitted', draft: existingDraft });
         expect(present).toHaveBeenCalledWith({ seed: { existingDraft }, target });

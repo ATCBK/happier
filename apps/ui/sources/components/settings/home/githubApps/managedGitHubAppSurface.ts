@@ -2,6 +2,16 @@ import type { ManagedGitHubAppOwnerV1 } from '@happier-dev/protocol';
 
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
+import type {
+    homeAdministrationGitHubAppCreatePath,
+    homeAdministrationGitHubAppEditPath,
+    homeAdministrationGitHubAppPath,
+    homeAdministrationPoliciesPath,
+    homeAdministrationSignInProvidersPath,
+} from '../governance/homeAdministrationRoutes';
+import type { teamAuthenticationPath, teamDirectoryPath, teamGitHubAppEditPath, teamGitHubAppPath, teamIdentityProviderSetupPath } from '../../teams/teamsRoutes';
+
+export type ManagedGitHubAppCreatePath = ReturnType<typeof homeAdministrationGitHubAppCreatePath | typeof teamIdentityProviderSetupPath>;
 
 /**
  * Everything the shared GitHub App list, detail and editor need in order to
@@ -18,17 +28,17 @@ export type ManagedGitHubAppSurface = Readonly<{
     mutationsAvailable: boolean;
     onApprovalPending?: (registration: ActionApprovalRegistration) => void;
     routes: Readonly<{
-        detail: (registrationId: string) => string;
-        edit: (registrationId: string) => string;
+        detail: (registrationId: string) => ReturnType<typeof homeAdministrationGitHubAppPath | typeof teamGitHubAppPath>;
+        edit: (registrationId: string) => ReturnType<typeof homeAdministrationGitHubAppEditPath | typeof teamGitHubAppEditPath>;
         /** Canonical identity administration owner for this App's scope. */
-        signIn: string;
+        signIn: ReturnType<typeof homeAdministrationPoliciesPath | typeof teamAuthenticationPath>;
         /** Present only when one exact Team owns the directory destination. */
-        directory?: string;
+        directory?: ReturnType<typeof teamDirectoryPath>;
     }>;
     /**
      * Present only when this surface owns the Home policy that can approve a
      * GitHub Enterprise origin. Team-owned Apps deliberately omit it: their
      * administration tree must not manufacture Home authority or navigation.
      */
-    githubEnterpriseOriginPolicyPath?: string;
+    githubEnterpriseOriginPolicyPath?: ReturnType<typeof homeAdministrationSignInProvidersPath>;
 }>;

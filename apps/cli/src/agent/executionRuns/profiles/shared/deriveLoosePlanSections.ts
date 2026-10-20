@@ -8,7 +8,7 @@ function clampString(value: string, maxLength: number): string {
   return value.slice(0, maxLength);
 }
 
-const BULLET_RE = /^(?:[-*•]|\d+\.)\s+(?<content>.+)$/u;
+const BULLET_RE = /^(?:[-*\u2022]|\d+\.)\s+(?<content>.+)$/u;
 
 export function deriveLoosePlanSections(text: string): LoosePlanDerivation | null {
   const lines = String(text ?? '').split(/\r?\n/);

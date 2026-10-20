@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ExecutionRunPublicState, ScmComparison, ScmDiffSummaryGenerateInput, ScmDiffSummaryGenerateSuccess } from '@happier-dev/protocol';
-import { buildScmComparisonSourceKey } from '@happier-dev/protocol/scm';
+import { buildScmComparisonSourceKey, ScmDiffSummaryResultSchema } from '@happier-dev/protocol/scm';
 
 import {
     applyScmDiffSummaryEvent,
@@ -74,10 +74,10 @@ describe('SCM diff summary state', () => {
         runId: 'run_1', resultId: 'result_1', revision: 0,
     } satisfies ScmDiffSummaryGenerateSuccess;
 
-    function observe(output: ScmDiffSummaryGenerateSuccess) {
+    function observe(output: ScmDiffSummaryGenerateSuccess, requestInput: ScmDiffSummaryGenerateInput = { ...input, outputs: ['walkthrough'] }) {
         let state = applyScmDiffSummaryEvent(createInitialScmDiffSummaryState(), {
             type: 'request_started', key: 'progressive', sessionId: 'session_1', actionId: 'scm.diffSummary.generate',
-            input: { ...input, outputs: ['walkthrough'] }, runId: 'run_1', callId: 'call_1', sidechainId: 'sidechain_1',
+            input: requestInput, runId: 'run_1', callId: 'call_1', sidechainId: 'sidechain_1',
             requestedAtMs: 100, intent: 'generate',
         });
         return applyScmDiffSummaryEvent(state, {
@@ -127,6 +127,67 @@ describe('SCM diff summary state', () => {
         expect(selectScmDiffSummaryViewModel(observe(output), 'progressive')).toMatchObject({
             status: 'failed', error: { message: 'Native model provisioning failed' }, comparison,
         });
+    });
+
+    it('retains the typed cancellation code from the strict saved-result reader', () => {
+        const result = ScmDiffSummaryResultSchema.parse({ resultId: 'result_1', revision: 1, canUndo: false,
+            output: { ...pending, revision: 1, outputs: { walkthrough: {
+                state: 'cancelled', reasonCode: 'generation_cancelled',
+            } } } });
+        const state = applyScmDiffSummaryEvent(observe(pending), { type: 'saved_result', key: 'progressive', result, observedAtMs: 140 });
+        expect(selectScmDiffSummaryViewModel(state, 'progressive')).toMatchObject({ status: 'failed',
+            error: { code: 'generation_cancelled', reason: 'cancelled', messageKey: 'walkthrough.notice.cancelled' } });
+    });
+
+    it('projects each output independently while preserving a later explicit admission refusal', () => {
+        const original = observe({ ...pending, outputs: {
+            walkthrough: { state: 'failed', reason: 'Narration failed' },
+            commitPlan: { state: 'complete', value: { groups: [], leftOutChangeRefs: ['change_1'] } },
+        } });
+        expect(selectScmDiffSummaryViewModel(original, 'progressive', 'commitPlan')).toMatchObject({ status: 'succeeded', error: null });
+        expect(selectScmDiffSummaryViewModel(original, 'progressive', 'walkthrough')).toMatchObject({ status: 'failed' });
+        for (const requestedOutput of ['walkthrough', 'commitPlan'] as const) {
+            const state = applyScmDiffSummaryEvent(original, { type: 'request_failed', key: 'progressive', sessionId: 'session_1',
+                actionId: 'scm.diffSummary.generate', input: { ...input, outputs: [requestedOutput] },
+                error: 'Selected model unavailable', errorCode: 'MODEL_UNAVAILABLE', failedAtMs: 140, intent: 'regenerate' });
+            expect(selectScmDiffSummaryViewModel(state, 'progressive', requestedOutput)).toMatchObject({
+                status: 'failed', error: { reason: 'modelUnavailable', nextAction: 'chooseModel' },
+            });
+        }
+    });
+
+    it.each(['writing', 'failed', 'complete'] as const)('projects an added %s output independently of the original request', stateOfOutput => {
+        const original = observe({ ...pending, comparison: { ...comparison, source: { kind: 'workingTree' } },
+            metadata: { sourceKey: comparison.id, source: { kind: 'workingTree' } }, outputs: { walkthrough: { state: 'complete', value: {
+            title: 'Saved reading', intro: '', stops: [], otherChangeRefs: ['change_1'],
+        } } } }, { cwd: '/repo', source: { kind: 'workingTree' }, outputs: ['walkthrough'] });
+        const progress = { state: stateOfOutput, ...(stateOfOutput === 'failed' ? { reason: 'Model refused' } : {}),
+            ...(stateOfOutput === 'complete' ? { value: { groups: [], leftOutChangeRefs: ['change_1'] } } : {}) };
+        const output = original.entriesByKey.progressive!.latestOutput!;
+        const result = ScmDiffSummaryResultSchema.parse({ resultId: 'result_1', revision: 1, canUndo: false,
+            output: { ...output, revision: 1, requestedOutputs: ['walkthrough', 'commitPlan'],
+                outputs: { ...output.outputs, commitPlan: progress } } });
+        const state = applyScmDiffSummaryEvent(original, { type: 'saved_result', key: 'progressive', result, observedAtMs: 140 });
+        expect(selectScmDiffSummaryViewModel(state, 'progressive', 'commitPlan')).toMatchObject({
+            status: progress.state === 'writing' ? 'running' : progress.state === 'failed' ? 'failed' : 'succeeded',
+            error: progress.state === 'failed' ? { message: 'Model refused' } : null,
+        });
+        expect(selectScmDiffSummaryViewModel(state, 'progressive', 'walkthrough')).toMatchObject({ status: 'succeeded', error: null });
+    });
+
+    it('classifies recovery from typed codes while retaining native messages only as diagnostics', () => {
+        const failedWith = (reason?: string) => selectScmDiffSummaryViewModel(observe({ ...pending,
+            outputs: { walkthrough: { state: 'failed', ...(reason ? { reason } : {}) } } } satisfies ScmDiffSummaryGenerateSuccess), 'progressive').error;
+        expect(failedWith('CLI_START_FAILED: the runner could not start')).toMatchObject({
+            message: 'CLI_START_FAILED: the runner could not start', messageKey: 'walkthrough.notice.failedGeneric', nextAction: 'retry' });
+        let state = createInitialScmDiffSummaryState();
+        state = applyScmDiffSummaryEvent(state, { type: 'request_failed', key: 'k', sessionId: 's', actionId: 'scm.diffSummary.generate', input,
+            error: 'No model could start', errorCode: 'MODEL_UNAVAILABLE', failedAtMs: 1, intent: 'generate' });
+        // A classified failure speaks through its own typed sentence and next step.
+        expect(selectScmDiffSummaryViewModel(state, 'k').error).toMatchObject({ reason: 'modelUnavailable', nextAction: 'chooseModel' });
+        state = applyScmDiffSummaryEvent(state, { type: 'request_failed', key: 'k', sessionId: 's', actionId: 'scm.diffSummary.generate', input,
+            error: 'RPC method not available', errorCode: 'RPC_METHOD_NOT_AVAILABLE', failedAtMs: 2, intent: 'generate' });
+        expect(selectScmDiffSummaryViewModel(state, 'k').error).toMatchObject({ reason: 'invalidRequest', nextAction: 'reviewRequest' });
     });
 
     it('completes the requested output while its retained run remains running and other coverage remains incomplete', () => {

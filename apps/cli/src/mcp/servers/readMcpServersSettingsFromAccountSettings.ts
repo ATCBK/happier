@@ -10,6 +10,12 @@ export class McpServerCatalogUnavailableError extends Error {
   }
 }
 
+/** Required MCP preparation uses the daemon's existing Home-recovery policy. */
+export function isRetryableMcpServerCatalogUnavailableError(error: unknown): boolean {
+  return error instanceof McpServerCatalogUnavailableError
+    && (error.reason === 'unreachable' || error.reason === 'database_transaction_conflict_exhausted');
+}
+
 /** Runtime admission never falls back to a retained Settings root. */
 export function readMcpServersSettingsFromAccountSettings(snapshot: ActiveAccountSettingsSnapshot | null): McpServersSettingsV1 {
   if (!snapshot?.mcpServerCatalog) throw new McpServerCatalogUnavailableError('catalog-unobserved');

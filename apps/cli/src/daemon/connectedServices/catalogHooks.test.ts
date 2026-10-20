@@ -358,7 +358,10 @@ describe('connected-service catalog hooks', () => {
         credentialRevision: 'csr_abcdefghijklmnopqrstuv',
       })],
     });
-    await expect(getConnectedServiceRuntimeAuthAdapter('antigravity')).resolves.toBeNull();
+    await expect(getConnectedServiceRuntimeAuthAdapter('antigravity')).resolves.toMatchObject({
+      classifyRuntimeAuthFailure: expect.any(Function),
+      canHotApply: expect.any(Function),
+    });
     await expect(getConnectedServiceRuntimeAuthAdapter('opencode')).resolves.toBeNull();
     await expect(getConnectedServiceRuntimeAuthAdapter('pi')).resolves.toMatchObject({
       classifyRuntimeAuthFailure: expect.any(Function),

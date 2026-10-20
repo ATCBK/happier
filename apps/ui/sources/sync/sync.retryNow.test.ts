@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
@@ -9,13 +9,18 @@ vi.mock('react-native', async () => {
     return createReactNativeWebMock();
 });
 
+const network = await installSessionOpsNetworkBoundary();
+const syncBridge = await loadSyncSingletonForTests();
+afterAll(async () => {
+    try { await network.dispose(); }
+    finally { syncBridge.dispose(); }
+});
+
 describe('sync manual retry', () => {
-    let network: Awaited<ReturnType<typeof installSessionOpsNetworkBoundary>>;
     let home: Awaited<ReturnType<typeof network.addHome>>;
 
     beforeEach(async () => {
-        vi.resetModules();
-        network = await installSessionOpsNetworkBoundary();
+        network.resetRequests();
         home = await network.addHome('https://manual-retry.example.test', 'account-retry');
         const { profileDefaults } = await import('./domains/profiles/profile');
         network.setHttpResponder(async (input) => {
@@ -27,14 +32,15 @@ describe('sync manual retry', () => {
             if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
             if (path === '/v2/cursor') return Response.json({ cursor: 0 });
             if (path === '/v2/changes') return Response.json({ changes: [], nextCursor: 1 });
-            if (path === '/v2/sessions') return Response.json({ sessions: [], nextCursor: null, hasNext: false });
+            if (path === '/v2/sessions' || path === '/v2/sessions/active' || path === '/v2/sessions/query') return Response.json({
+                sessions: [], nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+            });
             if (path === '/v1/machines') return Response.json([]);
             if (path === '/v1/artifacts') return Response.json([]);
             if (path === '/v1/friends') return Response.json({ friends: [] });
             if (path === '/v1/kv') return Response.json({ items: [] });
             return null;
         });
-        await loadSyncSingletonForTests();
         const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
         const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
         await upsertAndActivateServer({ serverUrl: home.serverUrl });
@@ -47,7 +53,6 @@ describe('sync manual retry', () => {
     afterEach(async () => {
         const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
         await disconnectActiveServerConnection();
-        await network.dispose();
         vi.restoreAllMocks();
     });
 

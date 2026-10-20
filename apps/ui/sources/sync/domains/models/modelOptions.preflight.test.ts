@@ -9,6 +9,13 @@ import { getModelOptionsForAgentTypeOrPreflight } from './modelOptions';
 import { parsePreflightModelListFromProbeModelsResult } from './parsePreflightModelListFromProbeModelsResult';
 
 describe('modelOptions preflight', () => {
+    it('does not turn unavailable dynamic Codex discovery into a fake Default catalog', () => {
+        expect(getModelOptionsForAgentTypeOrPreflight({
+            agentType: 'codex',
+            preflight: { availableModels: [], supportsFreeform: false, unavailable: true },
+        })).toEqual([]);
+    });
+
     it('enriches advertised models without restoring missing membership or capabilities', () => {
         const out = getModelOptionsForAgentTypeOrPreflight({
             agentType: 'claude',
@@ -91,9 +98,9 @@ describe('modelOptions preflight', () => {
         expect(out.some((option) => option.value === 'gpt-5.1-codex-max')).toBe(false);
     });
 
-    it('keeps trusted static models selectable when dynamic discovery is unavailable', () => {
+    it('keeps concrete static catalog models selectable when dynamic discovery is unavailable', () => {
         const out = getModelOptionsForAgentTypeOrPreflight({
-            agentType: 'codex',
+            agentType: 'claude',
             preflight: {
                 availableModels: [],
                 supportsFreeform: false,
@@ -101,7 +108,8 @@ describe('modelOptions preflight', () => {
             },
         });
 
-        expect(out.some((option) => option.value === 'default')).toBe(true);
+        expect(out.length).toBeGreaterThan(0);
+        expect(out.some((option) => option.value !== 'default')).toBe(true);
     });
 
     it('ignores a dynamic preflight list from a different backend target', () => {

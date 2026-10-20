@@ -1,6 +1,6 @@
 import * as React from 'react';
-import { Pressable, View } from 'react-native';
-import { useUnistyles } from 'react-native-unistyles';
+import { Pressable, ScrollView, View } from 'react-native';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import type {
     ReviewCommentBulkTransitionResponseV1,
@@ -14,9 +14,13 @@ import type {
     ReviewCommentScopeV1,
 } from '@happier-dev/protocol';
 import { REVIEW_FINDINGS_VERIFY_AND_FIX_INSTRUCTIONS_V1, renderReviewFindingsForVerifyV1 } from '@happier-dev/protocol/reviews/reviewFindingsApplyInputV1';
+import { IconButton } from '@/components/ui/buttons/IconButton';
+import { ICON_SIZE } from '@/components/ui/icons/Icon';
+import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Modal } from '@/modal';
-import { t } from '@/text';
+import { t, usePreferredLanguage } from '@/text';
 import { sync } from '@/sync/sync';
 import { randomUUID } from '@/platform/randomUUID';
 import type {
@@ -126,17 +130,19 @@ export function ReviewCommentsSessionSurface(props: ReviewCommentsSessionSurface
 
 function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceProps) {
     const { theme } = useUnistyles();
-    const labels = React.useMemo(() => buildReviewCommentLabels(), []);
-    const headerLabels = React.useMemo(() => buildReviewCommentsHeaderLabels(), []);
-    const directWriteGrantLabels = React.useMemo(() => buildReviewCommentDirectWriteGrantLabels(), []);
+    const language = usePreferredLanguage();
+    const labels = React.useMemo(() => buildReviewCommentLabels(), [language]);
+    const headerLabels = React.useMemo(() => buildReviewCommentsHeaderLabels(), [language]);
+    const directWriteGrantLabels = React.useMemo(() => buildReviewCommentDirectWriteGrantLabels(), [language]);
     const actions = React.useMemo(() => createReviewCommentsActions({ execute: props.execute }), [props.execute]);
     const [commentsState, setCommentsState] = React.useState(createEmptyReviewCommentsState);
     const [ownPanelOpen, setPanelOpen] = React.useState(props.defaultPanelOpen !== false);
     const externalHeader = props.header === 'external';
     const panelOpen = externalHeader ? props.open === true : ownPanelOpen;
     const [showHistory, setShowHistory] = React.useState(false);
-    const [isRefreshing, setIsRefreshing] = React.useState(false);
     const [loadFailed, setLoadFailed] = React.useState(false);
+    // The last action that failed: on the card it was taken on (null for a bulk action), with its retry.
+    const [mutationFailure, setMutationFailure] = React.useState<Readonly<{ commentId: string | null; retry: () => void }> | null>(null);
     // Comments are read when the panel opens; until then the count is unknown, never "0".
     const [loaded, setLoaded] = React.useState(false);
     const [bulkTransitionResult, setBulkTransitionResult] = React.useState<ReviewCommentBulkTransitionResult | null>(null);
@@ -146,7 +152,6 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
 
     const loadComments = React.useCallback(async () => {
         if (!props.projectId && !props.workspace && !props.workspaceId && !props.sessionId && !props.runId) return;
-        setIsRefreshing(true);
         setLoadFailed(false);
         try {
             const response = await actions.list({
@@ -162,8 +167,6 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
             setBulkTransitionResult(null);
         } catch {
             setLoadFailed(true);
-        } finally {
-            setIsRefreshing(false);
         }
     }, [actions, props.projectId, props.runId, props.sessionId, props.workspace, props.workspaceId]);
 
@@ -181,6 +184,10 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
         ? []
         : selectReviewComments(commentsState, { states: selectedActiveStates }).filter(isReviewCommentActiveItem);
     const historyComments = selectReviewComments(commentsState).filter(isReviewCommentHistoryItem);
+    // One empty sentence per cause: nothing yet, nothing closed yet, or the filters hide what there is.
+    const activeLabels = activeCount > 0 && filteredActiveComments.length === 0
+        ? { ...labels, empty: t('files.reviewComments.durable.filteredEmpty') } : labels;
+    const historyLabels = activeCount > 0 ? { ...labels, empty: t('files.reviewComments.durable.historyEmpty') } : labels;
     const panelComments = showHistory
         ? historyComments
         : filteredActiveComments;
@@ -292,11 +299,8 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
     const delegateComment = React.useCallback(async (original: ReviewCommentV1) => {
         if (!props.sessionId) return;
         const body = resolveReviewCommentBodyPromptDefault(original.body);
-        if (body === undefined) {
-            setLoadFailed(true);
-            return;
-        }
-        try {
+        if (body === undefined) throw new Error('review_comment_body_unavailable');
+        {
             let comment = original;
             const transition = async (toState: ReviewCommentStateV1) => {
                 const response = await actions.transition({
@@ -322,8 +326,6 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
             await sync.submitMessage(props.sessionId, text, t('files.reviewComments.durable.headerTitle'), undefined, {
                 callerSurface: 'review_comments_delegate',
             });
-        } catch {
-            setLoadFailed(true);
         }
     }, [actions, props.sessionId, upsertUpdatedComments]);
 
@@ -393,16 +395,45 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
         if (bulkActionId) setBulkTransitionResult({ bulkActionId, failed });
     }, [actions, commentsState.byId, upsertUpdatedComments]);
 
+    const commentsById = React.useRef(commentsState.byId);
+    commentsById.current = commentsState.byId;
+    const runMutation = async (operation: () => Promise<void>, commentId: string | null = null) => {
+        setMutationFailure(null);
+        try {
+            await operation();
+        } catch {
+            setMutationFailure({ commentId, retry: () => void runMutation(operation, commentId) });
+        }
+    };
+    /** A card's action runs on the comment as currently held, so a retry after a refresh uses its new revision. */
+    const runCommentMutation = (comment: ReviewCommentV1, operation: (current: ReviewCommentV1) => Promise<void>) => runMutation(
+        () => operation(commentsById.current[comment.id] ?? comment),
+        comment.id,
+    );
+    const failureTestID = `${props.testID ?? 'review-comments'}-mutation-error`;
+    const renderMutationFailure = () => mutationFailure ? (
+        <View testID={failureTestID} accessibilityRole="alert">
+            <SurfaceStateCard
+                size="line"
+                kind="error"
+                title={mutationFailure.commentId ? t('files.reviewComments.durable.actionFailed') : t('errors.operationFailed')}
+                action={{ label: t('common.retry'), onPress: mutationFailure.retry, testID: `${failureTestID}-retry` }}
+                secondaryAction={{ label: t('files.reviewComments.durable.refresh'), onPress: () => { setMutationFailure(null); void loadComments(); },
+                    testID: `${failureTestID}-refresh` }}
+            />
+        </View>
+    ) : null;
+    const renderCardNotice = (comment: ReviewCommentV1) => mutationFailure?.commentId === comment.id ? renderMutationFailure() : null;
+
     // A host that draws the disclosure in its own bar shows nothing here until the panel is opened.
     if (externalHeader && !panelOpen) return null;
     return (
         <View
             testID={props.testID}
-            style={{
-                borderBottomWidth: 1,
+            style={[styles.root, {
                 borderBottomColor: theme.colors.border.default,
                 backgroundColor: theme.colors.surface.base,
-            }}
+            }]}
         >
             {externalHeader ? null : <ReviewCommentsHeaderButton
                 labels={headerLabels}
@@ -412,85 +443,68 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
                 testID={`${props.testID ?? 'review-comments'}-header`}
             />}
             {panelOpen ? (
-                <View style={{ gap: theme.space.s8, paddingHorizontal: theme.space.s12, paddingBottom: theme.space.s12 }}>
-                    <View style={{ flexDirection: 'row', gap: theme.space.s8, flexWrap: 'wrap' }}>
-                        <Pressable
-                            onPress={() => setShowHistory(false)}
-                            testID={`${props.testID ?? 'review-comments'}-show-active`}
-                            accessibilityRole="button"
-                            style={{
-                                borderWidth: 1,
-                                borderColor: showHistory ? theme.colors.border.default : theme.colors.button.primary.background,
-                                paddingHorizontal: theme.space.s10,
-                                paddingVertical: theme.space.s6,
-                            }}
-                        >
-                            <Text style={{ color: theme.colors.text.primary }}>
-                                {t('files.reviewComments.durable.showActive')}
-                            </Text>
-                        </Pressable>
-                        <Pressable
-                            onPress={() => setShowHistory(true)}
-                            testID={`${props.testID ?? 'review-comments'}-show-history`}
-                            accessibilityRole="button"
-                            style={{
-                                borderWidth: 1,
-                                borderColor: showHistory ? theme.colors.button.primary.background : theme.colors.border.default,
-                                paddingHorizontal: theme.space.s10,
-                                paddingVertical: theme.space.s6,
-                            }}
-                        >
-                            <Text style={{ color: theme.colors.text.primary }}>
-                                {t('files.reviewComments.durable.showHistory')}
-                            </Text>
-                        </Pressable>
-                        <Pressable
-                            onPress={() => void loadComments()}
+                <View style={styles.panel}>
+                    <View style={styles.bar}>
+                        <View style={styles.tabs}>
+                            <SegmentedTabBar
+                                compact
+                                segmentSizing="content"
+                                tabs={[
+                                    { id: 'active', label: t('files.reviewComments.durable.showActive'), testID: `${props.testID ?? 'review-comments'}-show-active` },
+                                    { id: 'history', label: t('files.reviewComments.durable.showHistory'), testID: `${props.testID ?? 'review-comments'}-show-history` },
+                                ]}
+                                activeTabId={showHistory ? 'history' : 'active'}
+                                onSelectTab={(tab) => setShowHistory(tab === 'history')}
+                            />
+                        </View>
+                        <IconButton
                             testID={`${props.testID ?? 'review-comments'}-refresh`}
-                            accessibilityRole="button"
-                            style={{
-                                borderWidth: 1,
-                                borderColor: theme.colors.border.default,
-                                paddingHorizontal: theme.space.s10,
-                                paddingVertical: theme.space.s6,
-                            }}
-                        >
-                            <Text style={{ color: theme.colors.text.primary }}>
-                                {t('files.reviewComments.durable.refresh')}
-                            </Text>
-                        </Pressable>
+                            variant="plain"
+                            iconName="arrows-clockwise"
+                            iconSize={ICON_SIZE.sm}
+                            accessibilityLabel={t('files.reviewComments.durable.refresh')}
+                            // A returned promise is the button's own busy state while the read runs.
+                            onPress={() => loadComments()}
+                        />
                     </View>
                     {loadFailed ? (
-                        <Text style={{ color: theme.colors.state.danger.foreground }}>
-                            {t('files.reviewComments.durable.loadFailed')}
-                        </Text>
+                        <SurfaceStateCard size="line" kind="error" title={t('files.reviewComments.durable.loadFailed')}
+                            action={{ label: t('common.retry'), onPress: () => void loadComments() }} />
                     ) : null}
-                    {isRefreshing && panelComments.length === 0 ? (
-                        <Text style={{ color: theme.colors.text.secondary }}>
-                            {t('common.loading')}
-                        </Text>
+                    {/* A card's failure sits with that card; only a bulk action's failure belongs to the whole list. */}
+                    {mutationFailure && mutationFailure.commentId === null ? renderMutationFailure() : null}
+                    {/* Until the first read lands the list is unknown: loading, never "No review comments yet". */}
+                    {!loaded && !loadFailed ? (
+                        <SurfaceStateCard size="line" kind="loading" title={t('common.loading')} />
                     ) : null}
-                    {showHistory ? (
-                        <ReviewCommentsHistoryView
-                            comments={panelComments}
-                            labels={labels}
-                            testID={`${props.testID ?? 'review-comments'}-history`}
-                        />
+                    {!loaded ? null : showHistory ? (
+                        <ScrollView style={styles.list} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                            <ReviewCommentsHistoryView
+                                comments={panelComments}
+                                labels={historyLabels}
+                                cardActions={{
+                                    onTransition: (input) => runCommentMutation(input.comment, (comment) => transitionComment({ ...input, comment })),
+                                    renderNotice: renderCardNotice,
+                                }}
+                                testID={`${props.testID ?? 'review-comments'}-history`}
+                            />
+                        </ScrollView>
                     ) : (
                         <ReviewCommentsPanel
                             comments={panelComments}
-                            labels={labels}
+                            labels={activeLabels}
                             selectedStates={selectedActiveStates}
                             stateOptions={ACTIVE_REVIEW_COMMENT_STATES}
                             onToggleState={toggleActiveStateFilter}
                             cardActions={{
-                                onEdit: (comment) => void editComment(comment),
-                                onTransition: (input) => void transitionComment(input),
-                                onRedact: (comment) => void redactComment(comment),
-                                ...(props.sessionId ? { onDelegate: (comment: ReviewCommentV1) => void delegateComment(comment) } : {}),
+                                onEdit: (comment) => runCommentMutation(comment, editComment),
+                                onTransition: (input) => runCommentMutation(input.comment, (comment) => transitionComment({ ...input, comment })),
+                                onRedact: (comment) => runCommentMutation(comment, redactComment),
+                                ...(props.sessionId ? { onDelegate: (comment: ReviewCommentV1) => runCommentMutation(comment, delegateComment) } : {}),
+                                renderNotice: renderCardNotice,
                             }}
-                            onReply={(input) => void replyToComment(input)}
-                            onBulkTransition={(input) => void bulkTransition(input)}
+                            onReply={(input) => runMutation(() => replyToComment(input), input.parentCommentId)}
+                            onBulkTransition={(input) => runMutation(() => bulkTransition(input))}
                             bulkTransitionResult={bulkTransitionResult}
                             testID={`${props.testID ?? 'review-comments'}-panel`}
                         />
@@ -582,3 +596,13 @@ function ScopedReviewCommentsSessionSurface(props: ReviewCommentsSessionSurfaceP
         </View>
     );
 }
+
+const styles = StyleSheet.create((theme) => ({
+    // Under the Files bar the comments share the pane with the files: they size to what they hold and
+    // give way past half the pane, so the comparison they are about always stays in view.
+    root: { borderBottomWidth: 1, flexShrink: 1, minHeight: 0, maxHeight: '50%' },
+    panel: { flexShrink: 1, minHeight: 0, gap: theme.space.s8, paddingHorizontal: theme.space.s16, paddingTop: theme.space.s8, paddingBottom: theme.space.s12 },
+    bar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: theme.space.s8 },
+    tabs: { flexShrink: 1, minWidth: 0 },
+    list: { flexShrink: 1, minHeight: 0 },
+}));

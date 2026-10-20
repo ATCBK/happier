@@ -1,5 +1,1 @@
-import { ZenHome } from "@/components/zen/screens/ZenHome";
-
-export default function ZenScreen() {
-    return <ZenHome />
-}
+export { ZenTasksRedirect as default } from '@/components/zen/navigation/ZenTasksRedirect';

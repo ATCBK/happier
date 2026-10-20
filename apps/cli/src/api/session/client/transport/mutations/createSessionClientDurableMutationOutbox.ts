@@ -4,6 +4,7 @@ import {
     assertCommittedTranscriptAdmission,
     CommittedTranscriptAdmissionExpiredError,
     type CommittedTranscriptAdmission,
+    type CommittedTranscriptOriginal,
 } from '@/api/session/transcriptPort';
 import { isDeepStrictEqual } from 'node:util';
 import { configuration } from '@/configuration';
@@ -57,6 +58,7 @@ import {
 } from './sessionClientDurableMutationDurabilityPolicy';
 import { createSerializedWorkQueueDiagnostics } from '@/utils/serializedWorkQueueDiagnostics';
 import type {
+    AgentStateRequestSettlementMutationV1,
     DaemonUsageLimitRecoveryFieldMutation,
     DaemonWorkStateFieldMutation,
     QueuedSessionClientDurableMutation,
@@ -78,9 +80,17 @@ import {
 
 export type TranscriptMessageAdmissionOptions = Readonly<{
     admission?: CommittedTranscriptAdmission;
+    observeCommitSignal?: AbortSignal;
 }>;
 
+type TranscriptMessageCommittedObserver = (
+    mutation: Readonly<Pick<TranscriptMessageAppendMutationV1, 'localId' | 'content' | 'messageRole' | 'sidechainId'>>
+        & Readonly<{ provenance?: TranscriptMessageAppendMutationV1['provenance'] }>,
+    committedSequence: number,
+) => void | Promise<void>;
+
 type GenericSessionClientDurableMutationOutbox = Readonly<{
+    enqueueAgentStateRequestSettlement(mutation: AgentStateRequestSettlementMutationV1, onPersisted?: () => void): Promise<Readonly<{ persisted: boolean; delivered: boolean }>>;
     enqueueSessionTurnMutation(mutation: SessionTurnMutationV1): Promise<void>;
     enqueueSessionEnd(mutation: SessionEndMutationV1): Promise<void>;
     enqueueTranscriptMessage(
@@ -91,6 +101,7 @@ type GenericSessionClientDurableMutationOutbox = Readonly<{
         delivered: boolean;
         localId?: string;
         committedSequence?: number;
+        whenCommitted?: Promise<CommittedTranscriptOriginal | null>;
     }>>;
     enqueueVoiceAgentTranscriptTurn(mutation: VoiceAgentTranscriptTurnMutationV1): Promise<Readonly<{
         persisted: boolean;
@@ -182,9 +193,11 @@ type CreateGenericSessionClientDurableMutationOutboxParams = Readonly<{
         localId: string;
         messageRole?: 'user' | 'agent' | 'event' | 'unknown';
     }>) => void;
+    onTranscriptMessageCommitted?: TranscriptMessageCommittedObserver;
     deliverTranscriptMessageMutation?: (
         mutation: TranscriptMessageAppendMutationV1,
     ) => Promise<boolean | undefined>;
+    deliverAgentStateRequestSettlement?: (mutation: AgentStateRequestSettlementMutationV1) => Promise<DurableMutationDeliveryOutcome>;
     deliverRegisteredSessionStateFieldMutation?: (
         mutation: RegisteredSessionStateFieldMutationV1,
     ) => Promise<RegisteredSessionStateFieldDeliveryResult>;
@@ -219,12 +232,19 @@ export async function resetSessionClientDurableMutationOutboxStateForTests(): Pr
     resetSessionEndDeliverySlotsForTests();
 }
 
+function findSocketDeliveryHandle(
+    handles: Map<symbol, CreateGenericSessionClientDurableMutationOutboxParams>,
+): CreateGenericSessionClientDurableMutationOutboxParams | undefined {
+    return [...handles.values()].reverse().find((handle) => (
+        handle.supportsSocketDelivery !== false
+        && handle.isDeliveryActive?.() !== false
+    ));
+}
+
 function selectActiveGenericSessionClientDurableMutationOutboxHandle(
     handles: Map<symbol, CreateGenericSessionClientDurableMutationOutboxParams>,
-    isEligible: (candidate: CreateGenericSessionClientDurableMutationOutboxParams) => boolean = () => true,
 ): CreateGenericSessionClientDurableMutationOutboxParams {
-    const candidates = [...handles.values()].filter(isEligible).reverse();
-    const selected = candidates[0];
+    const selected = findSocketDeliveryHandle(handles);
     if (!selected) throw new Error('Durable session mutation outbox has no active handle');
     return selected;
 }
@@ -440,7 +460,8 @@ type DurableMutationDeliveryOutcome = Readonly<{
         | 'session_turn_mutation_rejected'
         | 'metadata_tuple_conflict'
         | 'transcript_message_provenance_missing_or_invalid'
-        | 'transcript_message_invalid_observation';
+        | 'transcript_message_invalid_observation'
+        | 'invalid_agent_state_request_settlement';
     paused?: SessionClientDurableMutationPause;
     registeredFieldSettlement?: PendingRegisteredFieldSettlement;
     runtimeActivitySettlement?: NonNullable<RuntimeActivitySnapshotTail['settlement']>;
@@ -505,6 +526,7 @@ function readQueuedMutationObservedAt(mutation: QueuedSessionClientDurableMutati
     if (mutation.kind === 'transcript_message_append') {
         return Number.isFinite(mutation.payload.updatedAt) ? mutation.payload.updatedAt : mutation.createdAt;
     }
+    if (mutation.kind === 'agent_state_request_settlement') return mutation.createdAt;
     const observedAt = mutation.payload.observedAt;
     return Number.isFinite(observedAt) ? observedAt : mutation.createdAt;
 }
@@ -646,7 +668,8 @@ function readQueuedMutationCoalesceKey(mutation: QueuedSessionClientDurableMutat
     if (transcriptKey) return transcriptKey;
     if (mutation.kind === 'voice_agent_transcript_turn') return mutation.mutationId;
     if (mutation.kind === 'registered_session_state_field') {
-        if (mutation.payload.fieldId === 'intent.context') return mutation.mutationId;
+        // Complete Role configurations must not move ahead of interleaved individual edits.
+        if (mutation.payload.fieldId === 'intent.context' || mutation.payload.fieldId === 'intent.sessionRoles') return mutation.mutationId;
         return `registered_session_state_field:${mutation.payload.sessionId}:${mutation.payload.fieldId}`;
     }
     return null;
@@ -760,12 +783,20 @@ function createGenericSessionClientDurableMutationOutbox(
     if (closing) {
         let handleClosed = false;
         let reopened: Promise<GenericSessionClientDurableMutationOutbox> | null = null;
+        let reopenedHandle: GenericSessionClientDurableMutationOutbox | null = null;
         const resolveReopened = async (): Promise<GenericSessionClientDurableMutationOutbox | null> => {
             if (handleClosed) return null;
-            reopened ??= closing.then(() => createGenericSessionClientDurableMutationOutbox(params));
+            reopened ??= closing.then(() => {
+                reopenedHandle = createGenericSessionClientDurableMutationOutbox(params);
+                return reopenedHandle;
+            });
             return await reopened;
         };
         return {
+            enqueueAgentStateRequestSettlement: async (mutation, onPersisted) => (
+                await (await resolveReopened())?.enqueueAgentStateRequestSettlement(mutation, onPersisted)
+                ?? { persisted: false, delivered: false }
+            ),
             enqueueSessionTurnMutation: async (mutation) => { await (await resolveReopened())?.enqueueSessionTurnMutation(mutation); },
             enqueueSessionEnd: async (mutation) => { await (await resolveReopened())?.enqueueSessionEnd(mutation); },
             enqueueTranscriptMessage: async (mutation, opts) => (
@@ -786,7 +817,7 @@ function createGenericSessionClientDurableMutationOutbox(
             setSessionSyncPendingInputServerContract: async (result) => {
                 await (await resolveReopened())?.setSessionSyncPendingInputServerContract(result);
             },
-            readRuntimeActivitySnapshotTail: () => ({
+            readRuntimeActivitySnapshotTail: () => reopenedHandle?.readRuntimeActivitySnapshotTail() ?? ({
                 sequence: 0,
                 custody: null,
                 settlement: null,
@@ -815,15 +846,11 @@ function createGenericSessionClientDurableMutationOutbox(
                 get signal() {
                     return selectActiveGenericSessionClientDurableMutationOutboxHandle(
                         handles,
-                        (handle) => handle.supportsSocketDelivery !== false
-                            && handle.isDeliveryActive?.() !== false,
                     ).signal;
                 },
                 get token() {
                     return selectActiveGenericSessionClientDurableMutationOutboxHandle(
                         handles,
-                        (handle) => handle.supportsSocketDelivery !== false
-                            && handle.isDeliveryActive?.() !== false,
                     ).token;
                 },
                 sessionId: params.sessionId,
@@ -844,8 +871,6 @@ function createGenericSessionClientDurableMutationOutbox(
                 },
                 getSocket: () => selectActiveGenericSessionClientDurableMutationOutboxHandle(
                     handles,
-                    (handle) => handle.supportsSocketDelivery !== false
-                        && handle.isDeliveryActive?.() !== false,
                 ).getSocket(),
                 requestReconnect: (reason) => {
                     for (const handle of handles.values()) {
@@ -861,12 +886,12 @@ function createGenericSessionClientDurableMutationOutbox(
                     }
                 },
                 onTranscriptMessageDeliveryAttempt: (mutation) => {
-                    selectActiveGenericSessionClientDurableMutationOutboxHandle(
-                        handles,
-                        (handle) => handle.supportsSocketDelivery !== false
-                            && handle.isDeliveryActive?.() !== false,
-                    ).onTranscriptMessageDeliveryAttempt?.(mutation);
+                    // A daemon's admitted non-socket writer has no runtime echo
+                    // observer. That optional notification cannot block delivery.
+                    findSocketDeliveryHandle(handles)?.onTranscriptMessageDeliveryAttempt?.(mutation);
                 },
+                onTranscriptMessageCommitted: (mutation, sequence) =>
+                    findSocketDeliveryHandle(handles)?.onTranscriptMessageCommitted?.(mutation, sequence),
                 deliverTranscriptMessageMutation: async (mutation) => {
                     const deliver = [...handles.values()]
                         .reverse()
@@ -877,6 +902,13 @@ function createGenericSessionClientDurableMutationOutbox(
                 },
                 isShuttingDown: () => [...handles.values()]
                     .some((handle) => handle.isShuttingDown?.() === true),
+                deliverAgentStateRequestSettlement: async (mutation) => {
+                    const deliver = [...handles.values()].reverse().find(handle =>
+                        handle.isDeliveryActive?.() !== false && handle.deliverAgentStateRequestSettlement !== undefined
+                    )?.deliverAgentStateRequestSettlement;
+                    if (!deliver) throw new Error('Request settlement delivery owner is unavailable');
+                    return await deliver(mutation);
+                },
                 deliverRegisteredSessionStateFieldMutation: async (mutation) => {
                     const deliver = [...handles.values()]
                         .reverse()
@@ -922,6 +954,10 @@ function createGenericSessionClientDurableMutationOutbox(
     };
 
     return {
+        enqueueAgentStateRequestSettlement: async (mutation, onPersisted) => {
+            if (handleClosed) return { persisted: false, delivered: false };
+            return await sharedEntry.outbox.enqueueAgentStateRequestSettlement(mutation, onPersisted);
+        },
         enqueueSessionTurnMutation: async (mutation) => {
             if (handleClosed) return;
             await sharedEntry.outbox.enqueueSessionTurnMutation(mutation);
@@ -932,12 +968,15 @@ function createGenericSessionClientDurableMutationOutbox(
         },
         enqueueTranscriptMessage: async (mutation, opts) => {
             if (handleClosed) return { persisted: false, delivered: false };
-            return await sharedEntry.outbox.enqueueTranscriptMessage(mutation, opts?.admission?.requireDelivery ? {
+            return await sharedEntry.outbox.enqueueTranscriptMessage(mutation, opts ? {
                 ...opts,
-                admission: {
+                ...(opts.admission?.requireDelivery ? { admission: {
                     ...opts.admission,
                     signal: AbortSignal.any([opts.admission.signal, deliveryWaitAbort.signal]),
-                },
+                } } : {}),
+                ...(opts.observeCommitSignal ? { observeCommitSignal: AbortSignal.any([
+                    opts.observeCommitSignal, deliveryWaitAbort.signal,
+                ]) } : {}),
             } : opts);
         },
         enqueueVoiceAgentTranscriptTurn: async (mutation) => {
@@ -976,6 +1015,7 @@ function createGenericSessionClientDurableMutationOutbox(
 export type RuntimeSessionTurnMutationV1 = Exclude<SessionTurnMutationV1, Readonly<{ action: 'end_session' }>>;
 
 export type RuntimeSessionClientDurableMutationOutbox = Readonly<{
+    enqueueAgentStateRequestSettlement(mutation: AgentStateRequestSettlementMutationV1, onPersisted?: () => void): Promise<Readonly<{ persisted: boolean; delivered: boolean }>>;
     enqueueSessionTurnMutation(mutation: RuntimeSessionTurnMutationV1): Promise<void>;
     enqueueSessionEnd(mutation: SessionEndMutationV1): Promise<void>;
     enqueueTranscriptMessage(
@@ -1020,6 +1060,8 @@ export function createRuntimeSessionClientDurableMutationOutbox(params: Readonly
         localId: string;
         messageRole?: 'user' | 'agent' | 'event' | 'unknown';
     }>) => void;
+    onTranscriptMessageCommitted?: TranscriptMessageCommittedObserver;
+    deliverAgentStateRequestSettlement?: (mutation: AgentStateRequestSettlementMutationV1) => Promise<DurableMutationDeliveryOutcome>;
     deliverRegisteredSessionStateFieldMutation?: (
         mutation: RegisteredSessionStateFieldMutationV1,
     ) => Promise<boolean | Readonly<{
@@ -1051,6 +1093,12 @@ export function createRuntimeSessionClientDurableMutationOutbox(params: Readonly
         runtimeActivitySupportControlled: true,
     });
     return {
+        async enqueueAgentStateRequestSettlement(mutation, onPersisted) {
+            const queued = { kind: 'agent_state_request_settlement' as const, mutationId: mutation.mutationId,
+                payload: mutation, createdAt: Date.now(), attempts: 0, nextAttemptAt: 0 };
+            assertRuntimeCustodyMutation(queued);
+            return await journal.enqueueAgentStateRequestSettlement(mutation, onPersisted);
+        },
         async enqueueSessionTurnMutation(mutation) {
             const queued = createQueuedSessionTurnMutation(mutation as SessionTurnMutationV1);
             if (queued.payload.action === 'end_session') {
@@ -1112,7 +1160,7 @@ export type ExactDaemonSessionTurnEndMutationV1 = ExactSessionTurnEndMutationV1;
 export type DaemonSessionClientDurableMutationOutbox = Readonly<{
     enqueueExactTurnEnd(mutation: ExactDaemonSessionTurnEndMutationV1): Promise<void>;
     enqueueUsageLimitRecovery(mutation: DaemonUsageLimitRecoveryFieldMutation): Promise<void>;
-    enqueueWorkState(mutation: DaemonWorkStateFieldMutation): Promise<void>;
+    enqueueWorkState(mutation: DaemonWorkStateFieldMutation, opts?: Readonly<{ signal?: AbortSignal }>): Promise<void>;
     enqueueTranscriptMessage(
         mutation: TranscriptMessageAppendMutationV1,
         opts?: TranscriptMessageAdmissionOptions,
@@ -1164,7 +1212,8 @@ export function createDaemonSessionClientDurableMutationOutbox(params: Readonly<
                     if (mutation.fieldId === 'runtime.workState'
                         && mutation.source === 'daemon'
                         && mutation.deliveryClass === 'durable_required') {
-                        return await params.deliverWorkState?.(mutation as DaemonWorkStateFieldMutation) ?? false;
+                        const delivered = await params.deliverWorkState?.(mutation as DaemonWorkStateFieldMutation) ?? false;
+                        return { delivered, settlement: 'applied' as const };
                     }
                     if (
                         mutation.fieldId !== 'runtime.usageLimitRecovery'
@@ -1198,12 +1247,18 @@ export function createDaemonSessionClientDurableMutationOutbox(params: Readonly<
             }
             await journal.enqueueRegisteredSessionStateFieldMutation(mutation);
         },
-        async enqueueWorkState(mutation) {
+        async enqueueWorkState(mutation, opts) {
             const queued = createQueuedRegisteredSessionStateFieldMutation(mutation);
             if (parseDaemonSessionClientDurableMutation(queued, params.sessionId).mutations.length !== 1) {
                 throw new Error('Daemon mutation custody accepts only daemon-authored work-state fields');
             }
-            await journal.enqueueRegisteredSessionStateFieldMutation(mutation);
+            // Goal reads use committed Session metadata. Journal admission alone
+            // cannot acknowledge a mutation that those readers cannot see yet.
+            const result = await journal.enqueueRegisteredSessionStateFieldMutationAndWaitForDelivery(mutation, opts);
+            opts?.signal?.throwIfAborted();
+            if (result.status !== 'applied' && result.status !== 'unchanged' && result.status !== 'superseded') {
+                throw new Error(`daemon_work_state_delivery_${result.status}`);
+            }
         },
         async enqueueTranscriptMessage(mutation, opts) {
             const queued = createQueuedTranscriptMessage(mutation);
@@ -1265,6 +1320,16 @@ function createGenericSessionClientDurableMutationOutboxInstance(
     const awaitedDeliveryMutationCounts = new Map<string, number>();
     const acknowledgedAwaitedDeliveryMutations = new Map<string, number | undefined>();
     const awaitedDeliveryListeners = new Map<string, Set<(error?: Error) => void>>();
+
+    function releaseAwaitedDelivery(mutationId: string): void {
+        const waiterCount = awaitedDeliveryMutationCounts.get(mutationId) ?? 0;
+        if (waiterCount <= 1) {
+            awaitedDeliveryMutationCounts.delete(mutationId);
+            acknowledgedAwaitedDeliveryMutations.delete(mutationId);
+        } else {
+            awaitedDeliveryMutationCounts.set(mutationId, waiterCount - 1);
+        }
+    }
 
     function notifyAwaitedDelivery(mutationId: string, error?: Error): void {
         for (const listener of [...(awaitedDeliveryListeners.get(mutationId) ?? [])]) listener(error);
@@ -1803,6 +1868,11 @@ function createGenericSessionClientDurableMutationOutboxInstance(
     }
 
     async function deliver(mutation: QueuedSessionClientDurableMutation): Promise<DurableMutationDeliveryOutcome> {
+        if (mutation.kind === 'agent_state_request_settlement') {
+            if (!params.deliverAgentStateRequestSettlement) throw new Error('Request settlement delivery owner is unavailable');
+            return await params.deliverAgentStateRequestSettlement(mutation.payload);
+        }
+
         if (mutation.kind === 'session_turn_mutation') {
             const result = await runWithServerHttpBaseUrl(serverUrl, async () => deliverSessionTurnMutation({
                 signal: params.signal,
@@ -1845,6 +1915,23 @@ function createGenericSessionClientDurableMutationOutboxInstance(
                 || result.reason === 'transcript_message_invalid_observation'
             )) {
                 return { delivered: false, terminalFailureReason: result.reason };
+            }
+            if (result.delivered && result.ack && params.onTranscriptMessageCommitted) {
+                // The acknowledged original, not an enqueue attempt, owns this
+                // notification. Observer failure cannot undo transcript custody
+                // or cause a successfully delivered append to be retried.
+                try {
+                    void Promise.resolve(params.onTranscriptMessageCommitted(mutation.payload, result.ack.seq))
+                        .catch(error => logger.debug('[API] Committed transcript observer unavailable', {
+                            sessionId: params.sessionId, localId: mutation.payload.localId,
+                            error: serializeAxiosErrorForLog(error),
+                        }));
+                } catch (error) {
+                    logger.debug('[API] Committed transcript observer unavailable', {
+                        sessionId: params.sessionId, localId: mutation.payload.localId,
+                        error: serializeAxiosErrorForLog(error),
+                    });
+                }
             }
             return {
                 delivered: result.delivered,
@@ -2232,7 +2319,7 @@ function createGenericSessionClientDurableMutationOutboxInstance(
                     } else {
                         attemptFailureReason = 'delivery_error';
                     }
-                    logger.debug('[API] Durable session mutation delivery failed', {
+                    (mutation.kind === 'agent_state_request_settlement' ? logger.infoFile.bind(logger) : logger.debug.bind(logger))('[API] Durable session mutation delivery failed', {
                         sessionId: params.sessionId,
                         mutationKind: mutation.kind,
                         mutationId: mutation.mutationId,
@@ -2459,11 +2546,14 @@ function createGenericSessionClientDurableMutationOutboxInstance(
         mutation: QueuedSessionClientDurableMutation,
         opts: Readonly<{
             awaitFlush?: boolean;
+            onPersisted?: () => void;
             admission?: CommittedTranscriptAdmission;
+            observeCommitSignal?: AbortSignal;
             registeredFieldSettlementGroup?: RegisteredFieldSettlementGroup;
             rejectRegisteredFieldAdmission?: (error: unknown) => void;
         }> = {},
-    ): Promise<Readonly<{ delivered: boolean; persisted: boolean; committedSequence?: number }>> {
+    ): Promise<Readonly<{ delivered: boolean; persisted: boolean; committedSequence?: number;
+        whenCommitted?: Promise<Readonly<{ committedSequence: number }> | null> }>> {
         await ready;
         assertCommittedTranscriptAdmission(opts.admission);
         if (closed) return { delivered: false, persisted: false };
@@ -2575,13 +2665,26 @@ function createGenericSessionClientDurableMutationOutboxInstance(
         }
         if (closed) return { delivered: false, persisted: false };
         assertCommittedTranscriptAdmission(opts.admission);
+        opts.onPersisted?.();
         const deliveryMutationId = opts.registeredFieldSettlementGroup?.activeMutationId ?? admittedMutation.mutationId;
-        if (opts.awaitFlush === true) {
+        if (opts.awaitFlush === true || opts.observeCommitSignal) {
             awaitedDeliveryMutationCounts.set(
                 deliveryMutationId,
-                (awaitedDeliveryMutationCounts.get(deliveryMutationId) ?? 0) + 1,
+                (awaitedDeliveryMutationCounts.get(deliveryMutationId) ?? 0)
+                    + (opts.awaitFlush === true ? 1 : 0) + (opts.observeCommitSignal ? 1 : 0),
             );
         }
+        // Reuse the exact ACK waiter; observation does not hold local publication
+        // or change the canonical retained mutation's retry/cancellation custody.
+        const whenCommitted = opts.observeCommitSignal
+            ? waitForAcknowledgedDelivery(deliveryMutationId, { signal: opts.observeCommitSignal })
+                .then(() => {
+                    const seq = acknowledgedAwaitedDeliveryMutations.get(deliveryMutationId);
+                    return typeof seq === 'number' ? { committedSequence: seq } : null;
+                })
+                .catch(() => null)
+                .finally(() => releaseAwaitedDelivery(deliveryMutationId))
+            : undefined;
         const requiredDelivery = opts.admission?.requireDelivery === true
             ? waitForAcknowledgedDelivery(deliveryMutationId, opts.admission)
             : null;
@@ -2607,16 +2710,11 @@ function createGenericSessionClientDurableMutationOutboxInstance(
                 delivered,
                 persisted: true,
                 ...(committedSequence === undefined ? {} : { committedSequence }),
+                ...(whenCommitted ? { whenCommitted } : {}),
             };
         } finally {
             if (opts.awaitFlush === true) {
-                const waiterCount = awaitedDeliveryMutationCounts.get(deliveryMutationId) ?? 0;
-                if (waiterCount <= 1) {
-                    awaitedDeliveryMutationCounts.delete(deliveryMutationId);
-                    acknowledgedAwaitedDeliveryMutations.delete(deliveryMutationId);
-                } else {
-                    awaitedDeliveryMutationCounts.set(deliveryMutationId, waiterCount - 1);
-                }
+                releaseAwaitedDelivery(deliveryMutationId);
             }
         }
     }
@@ -2631,6 +2729,11 @@ function createGenericSessionClientDurableMutationOutboxInstance(
     }
 
     return {
+        async enqueueAgentStateRequestSettlement(mutation, onPersisted) {
+            if (mutation.sessionId !== params.sessionId) throw new Error('Request settlement belongs to another Session');
+            return await enqueue({ kind: 'agent_state_request_settlement', mutationId: mutation.mutationId,
+                payload: mutation, createdAt: Date.now(), attempts: 0, nextAttemptAt: 0 }, { awaitFlush: true, onPersisted });
+        },
         async enqueueSessionTurnMutation(mutation) {
             await enqueue(createQueuedSessionTurnMutation(mutation));
         },
@@ -2638,13 +2741,16 @@ function createGenericSessionClientDurableMutationOutboxInstance(
             await enqueue(createQueuedSessionEndMutation(mutation));
         },
         async enqueueTranscriptMessage(mutation, opts) {
-            const result = await enqueue(createQueuedTranscriptMessage(mutation), {
+            const { whenCommitted, ...result } = await enqueue(createQueuedTranscriptMessage(mutation), {
                 awaitFlush: true,
                 ...(opts?.admission === undefined ? {} : { admission: opts.admission }),
+                ...(opts?.observeCommitSignal === undefined ? {} : { observeCommitSignal: opts.observeCommitSignal }),
             });
             return {
                 ...result,
                 ...(result.persisted ? { localId: mutation.localId } : {}),
+                ...(whenCommitted ? { whenCommitted: whenCommitted.then(commit => commit
+                    ? { ...commit, localId: mutation.localId } : null) } : {}),
             };
         },
         async enqueueVoiceAgentTranscriptTurn(mutation) {
@@ -2658,10 +2764,11 @@ function createGenericSessionClientDurableMutationOutboxInstance(
             const queued = createQueuedRegisteredSessionStateFieldMutation(mutation);
             const waiter = registerRegisteredFieldWaiter(queued.mutationId, opts?.signal);
             await enqueue(queued, {
-                awaitFlush: true,
                 registeredFieldSettlementGroup: waiter.group,
                 rejectRegisteredFieldAdmission: waiter.rejectAdmission,
             });
+            // Admission retains durable custody and starts delivery. The exact waiter
+            // owns the caller's acknowledgement lifetime independently of that flush.
             const settlement = await waiter.promise;
             return typeof settlement === 'string' ? { status: settlement } : settlement;
         },

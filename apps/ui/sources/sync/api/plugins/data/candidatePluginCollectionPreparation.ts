@@ -349,7 +349,7 @@ export function createActivePluginCollectionCandidatePreparation(input: Readonly
                         for (const migration of migrations) {
                             const beforeCallback = currentness(operation);
                             if (beforeCallback) return unavailable(beforeCallback);
-                            value = await migration.migrate(value);
+                            value = await migration.migrate(value, Object.freeze({ currentRevision: row.revision }));
                             const afterCallback = currentness(operation);
                             if (afterCallback) return unavailable(afterCallback);
                         }

@@ -5,7 +5,7 @@ import type { ReviewFindingDecision } from './ReviewFindingRow';
 /** The durable comment a finding materialized into: its reference first, else its run-scoped id. */
 export function findCommentForFinding(
     comments: readonly ReviewCommentV1[],
-    finding: ReviewFinding,
+    finding: Pick<ReviewFinding, 'id' | 'comment'>,
     runId: string,
 ): ReviewCommentV1 | null {
     const referencedId = finding.comment?.id;

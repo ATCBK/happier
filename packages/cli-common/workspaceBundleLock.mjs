@@ -25,6 +25,7 @@ import {
   workspaceLockLeaseMatchesOwner,
 } from './workspaceLockLease.mjs';
 import {
+  observeProcessLivenessSync,
   readProcessHostIdentitySync,
   readProcessInstanceFingerprintSync,
 } from './processInstance.mjs';
@@ -261,12 +262,7 @@ function readLockOwnerSnapshot(lockPath) {
 }
 
 function isRunningPid(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error?.code !== 'ESRCH';
-  }
+  return observeProcessLivenessSync(pid).status !== 'dead';
 }
 
 function readWorkspaceLockProcessInstanceFingerprint(pid, expectedFingerprint, options = {}) {

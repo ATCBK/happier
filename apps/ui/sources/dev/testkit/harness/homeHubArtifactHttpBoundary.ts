@@ -2,21 +2,29 @@ import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, decodePlainArtifactStoredContent, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema } from '@happier-dev/protocol/account/authoringMemory';
 import { type ArtifactCallerAccessV1, type ArtifactAccessGrantRowV1 } from '@happier-dev/protocol/artifacts/artifactAccessV1';
+import { deriveArtifactCoarseKindV1 } from '@happier-dev/protocol/artifacts/artifactKindV1';
 import { buildHomeHubArtifactIdV1, HOME_HUB_ARTIFACT_KIND_V1, HOME_HUB_DEFAULT_LAYOUT, HomeHubLayoutV1Schema } from '@happier-dev/protocol/home';
 import type { Artifact } from '@/sync/domains/artifacts/artifactTypes';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import type { FetchedMachineRow } from '@/sync/engine/machines/syncMachines';
+import { PROJECT_ACCOUNT_ROWS_ROUTE_V1, ProjectAccountRowListResponseV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
+import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 
 /** HTTP persistence boundary: the real Account mode, Artifact codec, Action and Home owners run above it. */
 export function createHomeHubArtifactHttpBoundary(
     accountId: string,
     profile: ReturnType<typeof AccountProfileSchema.parse> | (() => ReturnType<typeof AccountProfileSchema.parse>) = AccountProfileSchema.parse({ id: accountId }),
+    options?: Readonly<{ machines?: readonly FetchedMachineRow[] }>,
 ) {
     const boundary = createLayoutArtifactHttpBoundary(accountId, { artifactId: buildHomeHubArtifactIdV1(accountId), kind: HOME_HUB_ARTIFACT_KIND_V1,
         defaultLayout: HOME_HUB_DEFAULT_LAYOUT, parseLayout: value => HomeHubLayoutV1Schema.parse(value) });
     return { ...boundary, request: async (input: RequestInfo | URL, init?: RequestInit) => {
         // The signed-in Account establishes the Home lifetime. A shared layout's
         // owner is a different principal and must never supply this Profile.
-        if (new URL(String(input)).pathname === '/v1/account/profile') {
+        const path = new URL(String(input)).pathname;
+        if (path === '/v1/machines' && options?.machines) return Response.json(options.machines);
+        if (path === '/v1/account/profile') {
             const currentProfile = AccountProfileSchema.parse(typeof profile === 'function' ? profile() : profile);
             if (currentProfile.id !== accountId) throw new Error('Home HTTP profile must belong to the signed-in Account');
             return Response.json(currentProfile);
@@ -34,11 +42,19 @@ export function createLayoutArtifactHttpBoundary<T>(accountId: string, definitio
     let callerAccess: ArtifactCallerAccessV1 | null = 'owner';
     let grants: readonly ArtifactAccessGrantRowV1[] = [];
     const writes: T[] = [];
+    /** The Account's Project rows census the Home serves; widget input admission checks checkouts against it. */
+    let workspaceRefs: readonly WorkspaceRefV1[] = [];
     const layout = () => {
         if (!artifact?.body) return definition.defaultLayout;
         const opened: unknown = decodePlainArtifactStoredContent(artifact.body);
         if (!opened || typeof opened !== 'object' || typeof Reflect.get(opened, 'body') !== 'string') throw new Error('Expected text Home Artifact body');
         return definition.parseLayout(JSON.parse(String(Reflect.get(opened, 'body'))));
+    };
+    /** The server stores the coarse kind hint with every row; without it, inventory sync would write a backfill. */
+    const served = (row: Artifact): Artifact => {
+        const header: unknown = decodePlainArtifactStoredContent(row.header);
+        return { ...row, kind: header && typeof header === 'object' && !Array.isArray(header)
+            ? deriveArtifactCoarseKindV1(header as Readonly<Record<string, unknown>>) : null };
     };
     const seed = (value: T) => {
         artifact = {
@@ -55,14 +71,17 @@ export function createLayoutArtifactHttpBoundary<T>(accountId: string, definitio
         if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
         if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
         if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+        if (path === `${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`) return Response.json(workspaceRefs.length === 0
+            ? ProjectAccountRowListResponseV1Schema.parse({ status: 'listed', rows: [], coverage: 'complete' })
+            : createPlainProjectAccountRowListFixture({ workspaceRefs }));
         if (path === AUTHORING_MEMORY_ROUTE_V1 && (!init?.method || init.method === 'GET')) return Response.json(AuthoringMemoryListResponseV1Schema.parse({ rows: [] }));
-        if (path === '/v1/artifacts' && init?.method !== 'POST') return Response.json(artifact ? [artifact] : []);
+        if (path === '/v1/artifacts' && init?.method !== 'POST') return Response.json(artifact ? [served(artifact)] : []);
         if (path === `/v1/artifacts/${artifactId}/access/grants`) return artifact && (callerAccess === 'owner' || callerAccess === 'admin')
             ? Response.json({ artifactId, ownerAccountId: artifact.ownerAccountId, access: callerAccess, grants })
             : Response.json({ error: 'artifact_access_forbidden' }, { status: 403 });
         if (path !== '/v1/artifacts' && path !== `/v1/artifacts/${artifactId}`) return Response.json({ error: 'not_found' }, { status: 404 });
         if (callerAccess === null) return Response.json({ error: 'artifact_access_forbidden' }, { status: 403 });
-        if (init?.method !== 'POST') return artifact ? Response.json({ ...artifact, access: callerAccess }) : Response.json({ error: 'not_found' }, { status: 404 });
+        if (init?.method !== 'POST') return artifact ? Response.json({ ...served(artifact), access: callerAccess }) : Response.json({ error: 'not_found' }, { status: 404 });
         if (callerAccess === 'view') return Response.json({ error: 'artifact_access_forbidden' }, { status: 403 });
         const body: unknown = typeof init.body === 'string' ? JSON.parse(init.body) : null;
         if (!body || typeof body !== 'object' || typeof Reflect.get(body, 'header') !== 'string' || typeof Reflect.get(body, 'body') !== 'string') throw new Error('Expected encoded Artifact write');
@@ -83,6 +102,7 @@ export function createLayoutArtifactHttpBoundary<T>(accountId: string, definitio
         return Response.json({ success: true, headerVersion: artifact.headerVersion, bodyVersion: artifact.bodyVersion });
     };
     return { artifactId, request, seed, layout, writes,
+        setWorkspaceRefs: (next: readonly WorkspaceRefV1[]) => { workspaceRefs = next; },
         setCallerAccess: (access: ArtifactCallerAccessV1 | null) => { callerAccess = access; },
         setGrants: (next: readonly ArtifactAccessGrantRowV1[]) => { grants = next; },
     };

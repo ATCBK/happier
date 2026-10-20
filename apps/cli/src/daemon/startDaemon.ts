@@ -8,7 +8,7 @@ import { serializeAxiosErrorForLog } from '@/api/client/serializeAxiosErrorForLo
 import { createManagedActivityInventory, createLiveWorkProducerGroup, type LiveWorkProducerV1 } from './lifecycle/managedActivity';
 import { createExecutionRunLiveWorkProducer } from './executionRunRegistry';
 import { createDaemonManagedMachinePolicyRuntime, readManagedMachinePolicyCensus } from './startup/managedMachinePolicyRuntime';
-import { ensureSessionMachineAccessKeyBinding } from '@/api/session/ensureSessionMachineAccessKeyBinding';
+import { reconcileRecoveredSessionMachineControl } from './sessions/reconcileRecoveredSessionMachineControl';
 import { readHttpStatus } from '@/api/client/httpStatusError';
 import type { ApiMachineClient, ApiMachineClientLifecycleDependencies } from '@/api/apiMachine';
 import { buildActionExecutorContextForRpc } from '@/rpc/handlers/_actionDispatchAdapter';
@@ -29,7 +29,7 @@ import { createDaemonKeepAwake } from './resources/daemonKeepAwake';
 import { createDaemonStorageVitalsBindings } from './resources/createDaemonStorageVitalsBindings';
 import { createDaemonGuard } from './guard/createDaemonGuard';
 import { createGuardSessionRestoration } from './guard/sessionRestoration';
-import { createGuardSessionStopReceipt } from './guard/sessionStopReceipt';
+import { createGuardSessionAccess } from './guard/sessionAccess';
 import type { GuardPolicyWorkPlan } from './guard/guardRuntime';
 import { createLeftBehindActuator, readLeftBehindRestoration } from './guard/actuators/leftBehind';
 import { createIdleTerminalPolicy } from './guard/idleTerminalPolicy';
@@ -43,7 +43,7 @@ import { browserClose } from './guard/actuators/browserClose';
 import { serviceStop } from './guard/actuators/serviceStop';
 import { sessionStop as stopGuardSession } from './guard/actuators/sessionStop';
 import { isTerminalHostPhysicallyRetiredStopResult } from './sessions/stopSessionContract';
-import { applySessionMemoryCeilingOverrideToMetadata, readSessionMemoryCeilingOverride, SessionGuardNoticeResponseV1Schema, type SessionGuardNoticeStateV1 } from '@happier-dev/protocol/machines/guard/sessionGuardStateV1';
+import { applySessionMemoryCeilingOverrideToMetadata, readSessionMemoryCeilingOverride } from '@happier-dev/protocol/machines/guard/sessionGuardStateV1';
 import { updateSessionMetadataForTarget } from '@/session/services/updateSessionMetadataForTarget';
 import { MachineGuardPolicyV1Schema } from '@happier-dev/protocol/machines/guard/guardPolicyV1';
 import { SessionSharedSummaryV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
@@ -108,8 +108,8 @@ import { createBeforeShutdownDrain } from './lifecycle/createBeforeShutdownDrain
 import { createDaemonAdmissionDrain } from './lifecycle/admissionDrain';
 import { startDaemonRuntimeBootstrap } from './startup/startDaemonRuntimeBootstrap';
 import { createRequesterSessionRuntimeContext } from './sessionEncryption/createRequesterSessionRuntimeContext';
-import type { AdmittedRequesterSessionBootstrap, RequesterSessionRuntimeContext, ResolveRequesterSessionRuntimeContext } from './sessionEncryption/requesterSessionCredentials';
-import { resolveRequesterSessionBootstrap, resolveRequesterSessionBootstrapFromCustody, bindRequesterSessionRuntimeMachineAdmissionCurrentness, listRequesterSessionCredentialBindings } from './sessionEncryption/requesterSessionCredentials';
+import type { AdmittedRequesterSessionBootstrap, RequesterSessionRuntimeContext } from './sessionEncryption/requesterSessionCredentials';
+import { createRequesterSessionRuntimeContextResolver, resolveRequesterSessionBootstrapFromCustody, bindRequesterSessionRuntimeMachineAdmissionCurrentness, listRequesterSessionCredentialBindings, releaseUnretainedRequesterSessionRuntimeContext } from './sessionEncryption/requesterSessionCredentials';
 import { notifyActiveAccountConnectedServicesProjection } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { warmActiveAccountSettingsSnapshotBestEffort } from '@/settings/accountSettings/warmActiveAccountSettingsSnapshot';
@@ -142,7 +142,7 @@ import { listAgentExecutionTargetsV1 } from '@happier-dev/protocol/agents/execut
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import { readServerEnabledBit } from '@happier-dev/protocol/features/serverEnabledBit';
 import type { ConnectedServiceId } from '@happier-dev/protocol';
-import { readIrohRelayConfigFromEnv } from '@happier-dev/iroh-native/node';
+import { readIrohRelayConfigFromEnv, trimProcessAllocator } from '@happier-dev/iroh-native/node';
 import { readHomeApplicationCarrierEligibilityFromEnv } from '@happier-dev/cli-common/homeEnrollment';
 import { readOrCreateInstallationIdentity } from './identity/store';
 import { createInstalledProjectFiniteRuntime } from './startup/createInstalledProjectFiniteRuntime';
@@ -154,13 +154,14 @@ import { attachPluginWebhookDaemonWakeV1 } from '@/plugins/runtime/webhooks/plug
 import { resolveDaemonServiceLabelFromEnv, resolveDaemonTakeoverRequestedFromEnv, resolveDaemonStartupSourceFromEnv } from '@/daemon/ownership/daemonOwnershipMetadata';
 import { DaemonOwnershipConflictError } from '@/daemon/ownership/DaemonOwnershipConflictError';
 import { resolveDaemonOwnershipConflictExitCode } from '@/daemon/ownership/resolveDaemonOwnershipConflictExitCode';
-import {
-  startDaemonSessionControlRuntime,
-  type ProviderManagedCatalogRuntimeOwner,
-} from './startup/startDaemonSessionControlRuntime';
+import { startDaemonSessionControlRuntime } from './startup/startDaemonSessionControlRuntime';
 import { prepareDaemonBootstrapContext } from './startup/prepareDaemonBootstrapContext';
 import { createDaemonMachineBootstrapRuntime } from './startup/createDaemonMachineBootstrapRuntime';
 import { createProductionDaemonWorkflowRuntime } from './workflows/daemonRuntime';
+import { prepareWorkflowSessionRequester, runObservedWorkflowSessionStartup } from './workflows/workflowSessionStartup';
+import { createMachineSessionSpawnRpcHandler } from '@/session/actions/sessionLifecycleActions';
+import { normalizeSpawnSessionNonceResolution } from '@happier-dev/protocol/sessions/spawnSessionNonce';
+import { ACTION_OPERATION_RPC_METHODS_V1, ACTION_OPERATION_RPC_METHODS_V2 } from '@happier-dev/protocol/actions/operations/v1';
 import { isWorkflowRuntimeEnabled } from './automation/workflowFeatureGate';
 import {
   createProductionDaemonWorkspaceSyncRuntime,
@@ -241,6 +242,7 @@ import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
 import type { DaemonPluginChangeOwner } from '@/plugins/daemon/changeService';
 import { createDaemonPluginRuntimeOwner } from '@/plugins/daemon/runtimeOwner';
+import { createDaemonPluginDevelopmentReviewApprovalPublisher } from '@/plugins/daemon/developmentReviewApproval';
 import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
 import { startBackgroundRegistryUpdateCheck } from '@/registries/updates/startBackgroundRegistryUpdateCheck';
 import { createCliRegistryUpdateCheck } from '@/registries/updates/createCliRegistryUpdateCheck';
@@ -249,7 +251,7 @@ import { DEFAULT_PLUGIN_DAEMON_DATABASE_LIMITS_POLICY } from '@/plugins/runtime/
 import { createDaemonPluginAvailabilityReporter } from '@/plugins/availability/daemonReporter';
 import { createDaemonPluginRegistryProjectionInvalidation } from './pluginRegistryProjectionInvalidation';
 import { withTrackedSessionRpc } from './sessionEncryption/withTrackedSessionRpc';
-import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { createExternalSessionHostOperationOwner } from '@/session/external/hostOperationOwner';
 import { resolveConnectedServiceQuotaFetcherDescriptors } from '@/plugins/projection/registry/connectedServiceQuotaFetchers';
 import { resolveMergedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
@@ -315,7 +317,7 @@ import { createProviderOperationLifetime } from '@/providers/operationLifetime';
 import {
   getActiveAccountSettingsSnapshot,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import { hydrateSavedSecretCatalog } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { hydrateSavedSecretCatalog } from "@/settings/secrets/savedSecretCatalogRead";
 import { createManagedProviderExplicitStartCustody } from '@/providers/connections/publicManagedRuntimeStart';
 import { createManagedProviderOperationAuthority } from './connectedServices/purposeBindings/managedProviderOperationAuthority';
 import { createConnectedAccountRequestAuthSubjectRegistry } from './connectedServices/requestAuth/ConnectedAccountRequestAuthSubjectRegistry';
@@ -544,6 +546,7 @@ export async function startDaemon(
     // unrelated daemon services remain usable with supported older Homes.
     await readProjectAccountRows({
       credentials,
+      publication: 'installed',
       serverId: configuration.activeServerId,
       signal: homeTransportCancellation.signal,
     }).catch((error) => {
@@ -619,7 +622,6 @@ export async function startDaemon(
     let localServiceSummary: Parameters<typeof createDaemonMachineBootstrapRuntime>[0]['localServiceSummary'];
     let isProjectServiceExecutionLive: (() => boolean) | undefined;
     let acquireLocalServicePreviewApplication: Parameters<typeof createDaemonMachineBootstrapRuntime>[0]['acquireLocalServicePreviewApplication'];
-    let providerManagedCatalogRuntimeOwner: ProviderManagedCatalogRuntimeOwner | null = null;
     const persistedTakeoverAdmissionWaiter =
       createPersistedTakeoverAdmissionWaiter();
     let persistedTakeoverAdmissionOwner:
@@ -654,6 +656,10 @@ export async function startDaemon(
     machineVitals = createMachineVitalsSampler({
       readers: createMachineVitalsReader({ signal: homeTransportCancellation.signal }),
       historyStore: machineVitalsHistory,
+      readPolicy: () => {
+        const snapshot = machineResourcesPolicy?.read();
+        return snapshot?.status === 'ready' ? snapshot.policy : null;
+      },
       onTick: () => { machineResourceSummary?.refresh(); daemonGuard?.refreshOnTick(); projectWorkerAdmission?.notifyChanged(); },
     });
     await machineVitals.start();
@@ -1138,22 +1144,23 @@ export async function startDaemon(
       }
 
       sessionMachineAccessBindingReconcileInFlight = (async () => {
-        const liveSessionIds = new Set(
-          Array.from(pidToTrackedSession.values())
-            .map((tracked) => tracked.happySessionId?.trim())
-            .filter((sessionId): sessionId is string => Boolean(sessionId)),
-        );
+        const liveSessionsById = new Map<string, TrackedSession>();
+        for (const tracked of pidToTrackedSession.values()) {
+          const sessionId = tracked.happySessionId?.trim();
+          if (sessionId) liveSessionsById.set(sessionId, tracked);
+        }
         for (const sessionId of pendingSessionMachineAccessBindingIds) {
-          if (!liveSessionIds.has(sessionId)) {
+          const tracked = liveSessionsById.get(sessionId);
+          if (!tracked) {
             pendingSessionMachineAccessBindingIds.delete(sessionId);
             continue;
           }
           try {
-            await ensureSessionMachineAccessKeyBinding({
-              serverUrl: configuration.apiServerUrl,
-              token: credentials.token,
+            await reconcileRecoveredSessionMachineControl({
+              credentials,
               sessionId,
               machineId,
+              runnerPid: tracked.sessionRunnerPid ?? tracked.pid,
             });
             pendingSessionMachineAccessBindingIds.delete(sessionId);
           } catch (error) {
@@ -1292,10 +1299,8 @@ export async function startDaemon(
           resolve: async sessionId => {
             const context = await resolveRequesterSessionRuntimeContext(sessionId);
             if (!context) return null;
-            return { ...context.bootstrap, isCurrent: context.isCurrent, release: async () => {
-              if ([...pidToTrackedSession.values()].some(tracked => tracked.requesterSessionRuntimeContext === context)) return;
-              await context.dispose();
-            } };
+            return { ...context.bootstrap, isCurrent: context.isCurrent,
+              release: () => releaseRequesterSessionRuntimeContext(context) };
           },
         },
       }),
@@ -1320,9 +1325,11 @@ export async function startDaemon(
     const requestControlServerSelfRestart = async (
       {
         successorDistClosureFingerprint,
+        successorServerUrls,
         onReplacementConfirmed,
     }: {
       successorDistClosureFingerprint?: string;
+        successorServerUrls?: Readonly<{ serverUrl: string; webappUrl: string }>;
       onReplacementConfirmed?: () => Promise<void>;
     } = {},
     ): Promise<void> => {
@@ -1350,7 +1357,10 @@ export async function startDaemon(
           ),
           ...(onReplacementConfirmed ? { onReplacementConfirmed } : {}),
           takeover: true,
-          env: resolveDaemonSelfRestartEnvironment(successorDistClosureFingerprint),
+          env: resolveDaemonSelfRestartEnvironment(
+            successorDistClosureFingerprint,
+            successorServerUrls,
+          ),
         },
       });
       if (result.status !== 'exited') {
@@ -1417,6 +1427,7 @@ export async function startDaemon(
       },
     });
     const connectedAccountPurposeBindingRuntime = createDaemonConnectedAccountPurposeBindingRuntime({
+      credentialOwnerAccountId: readAccountIdFromToken(credentials.token) ?? undefined,
       coordinatorInventoryIsObserved: () => apiMachine?.hasCurrentAccountChangesObserver() === true,
       workerMachineId: machineId,
       establishedRuntimeOwner: establishedConnectedAccountRuntimeOwner,
@@ -1527,7 +1538,7 @@ export async function startDaemon(
       createExternalSessionHostOperationOwner();
     const resolveCurrentMachineExecutionOriginContext =
       createCurrentMachineExecutionOriginContextResolver({
-        serverUrl: configuration.serverUrl,
+        serverUrl: resolveServerHttpBaseUrl(),
         resolveCurrentMachineId: () => machineId,
       });
     const managedPolicyServerHttpBaseUrl = resolveServerHttpBaseUrl();
@@ -1553,18 +1564,33 @@ export async function startDaemon(
       }
       return await readManagedMachinePolicyCensus({ ...controller, signal });
     };
-    const browserRuntimeActionExecute = api.createBrowserRuntimeActionExecutor();
+    const browserRuntimeActionExecute = api.createBrowserRuntimeActionExecutor({
+      observeExecution: request => apiMachineForSessions
+        ? apiMachineForSessions.observeActionExecution(request)
+        : Promise.resolve({ ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' }),
+    });
     confidentialSecretFill = api.createConfidentialSecretFillExecutor({
       machineId: () => machineId, readHostIdentity: resolveCurrentMachineExecutionOriginContext });
     const pluginRegistrySourceHome = resolveServerHttpBaseUrl();
     const pluginRegistrySourceHost = createCliRegistryHostV1({ credentials });
     const pluginRuntimeOwner = createDaemonPluginRuntimeOwner({
+      signal: homeTransportCancellation.signal,
+      publishDevelopmentReview: createDaemonPluginDevelopmentReviewApprovalPublisher({
+        credentials,
+        happyHomeDir: configuration.happyHomeDir,
+        resolveCurrentMachineExecutionOriginContext,
+      }),
       readSpawnFailureLimits: () => machineVitals?.latest()?.limits,
       happyHomeDir: configuration.happyHomeDir,
       readRegistrySources: () => runWithServerHttpBaseUrl(pluginRegistrySourceHome, () => pluginRegistrySourceHost.readSources()),
       ...(managedResourcePreflight ? { managedResourcePreflight } : {}),
       daemonDatabaseLimits: DEFAULT_PLUGIN_DAEMON_DATABASE_LIMITS_POLICY,
       resolveCurrentMachineId: () => machineId,
+      readDaemonRequesterWorkAttribution: () => {
+        const target = machineResourceTarget();
+        return target ? { serverId: target.serverId, accountId: target.custodianAccountId,
+          machineId: target.machineId, installationId: target.installationId } : null;
+      },
       machineAdmissionTransport,
       executeClientAction: createClientActionMachineRpcExecutor(() => apiMachineForSessions),
       resolveComposerMediaStageTransferRpcHandler: () => (
@@ -1652,6 +1678,7 @@ export async function startDaemon(
     pluginChangeService = pluginRuntimeOwner.changeService;
     const pluginRuntimeInitialization = pluginRuntimeOwner.initialize();
     void pluginRuntimeInitialization.catch((error) => {
+      if (homeTransportCancellation.signal.aborted) return;
       requestShutdown(
         'exception',
         error instanceof Error ? error.message : String(error),
@@ -1745,6 +1772,7 @@ export async function startDaemon(
         const reconciler = createDaemonTeamCredentialDirectMaterialReconciler({
           token: credentials.token,
           accountId: externalActionAccountId,
+          signal: homeTransportCancellation.signal,
           homeDomainAction,
           establishedRuntimeOwner: establishedConnectedAccountRuntimeOwner,
           async listAccounts(service, signal) {
@@ -1942,7 +1970,7 @@ export async function startDaemon(
           }
         }
       : undefined;
-    let createRequesterRuntime: ((bootstrap: AdmittedRequesterSessionBootstrap) => Promise<RequesterSessionRuntimeContext | null>) | null = null;
+    let createRequesterRuntime: ((bootstrap: AdmittedRequesterSessionBootstrap, signal?: AbortSignal) => Promise<RequesterSessionRuntimeContext | null>) | null = null;
     const requesterRuntimeServerId = configuration.activeServerId;
     const requesterRuntimeServerHttpBaseUrl = resolveServerHttpBaseUrl();
     const openRunAccountConnectionSource = managedPolicyHomeId && externalActionAccountId
@@ -1971,9 +1999,9 @@ export async function startDaemon(
               ...request,
               homeId: managedPolicyHomeId, accountId: externalActionAccountId, initiatorMachineId: machineId,
               openBroker: async (request, signal) => await api.openAccountConnectionProviderBroker(request, { signal }),
-              admitConsumer: async (authority, signal) => await isCurrent()
+              admitConsumer: async (authority, signal) => await isCurrent(signal)
                 && (await api.admitAccountConnectionProviderBroker({ v: 2, authority }, { signal })).ok
-                && await isCurrent(),
+                && await isCurrent(signal),
               openTunnel: createProviderBrokerMachineCarrierTunnelOpen({
                 homeId: managedPolicyHomeId, accountId: externalActionAccountId, localMachineId: machineId,
                 runtime, resolveTrustRoots: resolvePeerMediationTrustRoots,
@@ -1984,84 +2012,47 @@ export async function startDaemon(
       : undefined;
     const requesterMachineAdmissionBoundary = (attribution?: AdmittedRequesterSessionBootstrap['attribution']) => ({
       machineId, daemonToken: credentials.token, readInstallation: readInstallationIdentityIfExistsSync,
+      signal: homeTransportCancellation.signal,
       isHomeCurrent: () => configuration.activeServerId === requesterRuntimeServerId
         && (!attribution || attribution.serverId === requesterRuntimeServerId && attribution.machineId === machineId),
     });
-    const resolveRequesterSessionRuntimeContext: ResolveRequesterSessionRuntimeContext = async (sessionId, attribution) => {
-      const tracked = [...pidToTrackedSession.values()].find(candidate => candidate.happySessionId === sessionId);
-      const context = tracked?.requesterSessionRuntimeContext;
-      if (!context && !createRequesterRuntime) return null;
-      let stamp = tracked?.requesterWorkAttributionV1 ?? tracked?.spawnOptions?.requesterWorkAttributionV1
-        ?? context?.bootstrap.attribution ?? attribution;
-      const coldBootstrap = !stamp ? await resolveRequesterSessionBootstrapFromCustody({ happyHomeDir: configuration.happyHomeDir,
-        serverId: requesterRuntimeServerId, sessionId, serverHttpBaseUrl: requesterRuntimeServerHttpBaseUrl,
-        machineAdmissionBoundary: requesterMachineAdmissionBoundary(),
-        ...(tracked ? { legacyOwnerCredentials: credentials } : {}) }) : null;
-      stamp ??= coldBootstrap?.attribution;
-      if (!stamp || attribution && (stamp.serverId !== attribution.serverId || stamp.accountId !== attribution.accountId
-        || stamp.machineId !== attribution.machineId || stamp.installationId !== attribution.installationId)) return null;
-      if (context) {
-        const contextStamp = context.bootstrap.attribution;
-        if (contextStamp.serverId !== stamp.serverId || contextStamp.accountId !== stamp.accountId
-          || contextStamp.machineId !== stamp.machineId || contextStamp.installationId !== stamp.installationId
-          || context.bootstrap.getBoundSessionId() !== sessionId) return null;
-        if (await context.isCurrent()) {
-          const currentStamp = tracked?.requesterWorkAttributionV1 ?? tracked?.spawnOptions?.requesterWorkAttributionV1;
-          if (tracked && (tracked.requesterSessionRuntimeContext !== context
-            || ![...pidToTrackedSession.values()].some(candidate => candidate === tracked && candidate.happySessionId === sessionId)
-            || currentStamp && !isDeepStrictEqual(currentStamp, stamp))) return null;
-          if (tracked) tracked.requesterWorkAttributionV1 = stamp;
-          return context;
-        }
-      }
-      if (!createRequesterRuntime) return null;
-      const bootstrap = coldBootstrap ?? await resolveRequesterSessionBootstrap({ happyHomeDir: configuration.happyHomeDir,
-        sessionId, attribution: stamp, serverHttpBaseUrl: requesterRuntimeServerHttpBaseUrl,
-        machineAdmissionBoundary: requesterMachineAdmissionBoundary(stamp) });
-      if (!bootstrap) return null;
-      const recovered = await createRequesterRuntime(bootstrap);
-      if (!recovered) { bootstrap.savedSecretOperationContext.withdrawCatalog(); return null; }
-      if (tracked) {
-        const stillTracked = [...pidToTrackedSession.values()].some(candidate => candidate === tracked
-          && candidate.happySessionId === sessionId);
-        if (!stillTracked) { await recovered.dispose(); return null; }
-        const incumbent = tracked.requesterSessionRuntimeContext;
-        if (incumbent && incumbent !== context) {
-          await recovered.dispose();
-          const incumbentStamp = incumbent.bootstrap.attribution;
-          return incumbentStamp.serverId === stamp.serverId && incumbentStamp.accountId === stamp.accountId
-            && incumbentStamp.machineId === stamp.machineId && incumbentStamp.installationId === stamp.installationId
-            && incumbent.bootstrap.getBoundSessionId() === sessionId
-            && await incumbent.isCurrent() ? incumbent : null;
-        }
-        if (!await recovered.isCurrent() || ![...pidToTrackedSession.values()].some(candidate => candidate === tracked
-          && candidate.happySessionId === sessionId)
-          || (tracked.requesterWorkAttributionV1 ?? tracked.spawnOptions?.requesterWorkAttributionV1)
-            && !isDeepStrictEqual(tracked.requesterWorkAttributionV1 ?? tracked.spawnOptions?.requesterWorkAttributionV1, stamp)) {
-          await recovered.dispose(); return null;
-        }
-        tracked.requesterSessionRuntimeContext = recovered;
-        tracked.requesterWorkAttributionV1 = stamp;
-        if (context) await context.dispose();
-      }
-      return recovered;
+    const releaseRequesterSessionRuntimeContext = async (context: RequesterSessionRuntimeContext): Promise<void> => {
+      await releaseUnretainedRequesterSessionRuntimeContext(context,
+        [...pidToTrackedSession.values()].map(tracked => tracked.requesterSessionRuntimeContext));
     };
+    const resolveRequesterSessionRuntimeContext = createRequesterSessionRuntimeContextResolver({
+      trackedSessions: pidToTrackedSession,
+      getCreateRuntime: () => createRequesterRuntime,
+      recoverBootstrap: ({ sessionId, attribution: stamp, tracked, signal, onSessionReadRefused }) => resolveRequesterSessionBootstrapFromCustody({ happyHomeDir: configuration.happyHomeDir,
+        serverId: requesterRuntimeServerId, sessionId, serverHttpBaseUrl: requesterRuntimeServerHttpBaseUrl,
+        signal,
+        onSessionReadRefused,
+        machineAdmissionBoundary: requesterMachineAdmissionBoundary(),
+        ...(stamp ? { expectedAttribution: stamp } : {}),
+        // Retained attribution is not proof that a legacy Session has a
+        // private file. Its actual owner is still verified by the custody owner.
+        ...(tracked || stamp?.accountId === externalActionAccountId ? { legacyOwnerCredentials: credentials } : {}) }),
+    });
     publishSessionPluginCatalogInvalidation = revision => {
       const projection = { runtimeId, contributionRegistryProjectionRevision: revision };
       for (const tracked of pidToTrackedSession.values()) {
         if (!tracked.happySessionId) continue;
         void (async () => {
           const requester = await resolveRequesterSessionRuntimeContext(tracked.happySessionId!, tracked.requesterWorkAttributionV1);
-          const result = await withTrackedSessionRpc({
-            tracked, credentials, custodianAccountId: externalActionAccountId,
-            serverId: requesterRuntimeServerId, machineId,
-            serverHttpBaseUrl: requesterRuntimeServerHttpBaseUrl,
-            ...(requester ? { requesterBootstrap: requester.bootstrap } : {}),
-            isTrackedCurrent: () => !admissionDrain.isPublicationQuiescing()
-              && pidToTrackedSession.get(tracked.pid) === tracked,
-          }, callRpc => callRpc(SESSION_RPC_METHODS.SESSION_PLUGIN_CATALOG_INVALIDATE_V1, projection));
-          if (!result || typeof result !== 'object' || !('ok' in result) || result.ok !== true) {
-            logger.debug('[DAEMON RUN] Session plugin catalog hint unavailable', { sessionId: tracked.happySessionId });
+          try {
+            const result = await withTrackedSessionRpc({
+              tracked, credentials, custodianAccountId: externalActionAccountId,
+              serverId: requesterRuntimeServerId, machineId,
+              serverHttpBaseUrl: requesterRuntimeServerHttpBaseUrl,
+              ...(requester ? { requesterBootstrap: requester.bootstrap } : {}),
+              isTrackedCurrent: () => !admissionDrain.isPublicationQuiescing()
+                && pidToTrackedSession.get(tracked.pid) === tracked,
+            }, callRpc => callRpc(SESSION_RPC_METHODS.SESSION_PLUGIN_CATALOG_INVALIDATE_V1, projection));
+            if (!result || typeof result !== 'object' || !('ok' in result) || result.ok !== true) {
+              logger.debug('[DAEMON RUN] Session plugin catalog hint unavailable', { sessionId: tracked.happySessionId });
+            }
+          } finally {
+            if (requester) await releaseRequesterSessionRuntimeContext(requester);
           }
         })().catch(error => logger.debug('[DAEMON RUN] Session plugin catalog hint failed', {
           sessionId: tracked.happySessionId, error: error instanceof Error ? error.message : String(error),
@@ -2082,7 +2073,9 @@ export async function startDaemon(
       executeGuardLeftBehindAction,
       ownerRemainder,
       sessionLiveWorkProducer,
+      dispatchSessionFollowOccurrence,
       spawnSession,
+      spawnSessionForInternalResume,
       stopSession,
       stopRequesterSessionForHandoff,
       isSessionAlreadyRunning,
@@ -2106,6 +2099,7 @@ export async function startDaemon(
       reconcileConnectedServicesProjection,
       awaitAgentSessionOpen,
       installExternalSessionHostOperations,
+      readMaterializedStateObservationBinding,
       providerAccountUsageStore,
       flushProviderAccountUsagePersistence,
       connectedServiceRuntimeQuotaSnapshots,
@@ -2181,6 +2175,7 @@ export async function startDaemon(
         contributionRegistryProjectionRevision: pluginRegistryProjectionInvalidation.readRevision() }),
       createRequesterSessionRuntimeContext: async bootstrap => await createRequesterRuntime?.(bootstrap) ?? null,
       resolveRequesterSessionRuntimeContext,
+      releaseRequesterSessionRuntimeContext,
       daemonSessionMutationCustody,
       cancelInactiveSessionUsageLimitRecoveryAfterExplicitStop: async (input) =>
         await cancelInactiveSessionUsageLimitRecoveryAfterExplicitStop(input),
@@ -2244,9 +2239,6 @@ export async function startDaemon(
       onLocalServicesSummaryReady: (source) => {
         localServiceSummary = source;
         isProjectServiceExecutionLive = source.isProjectServiceExecutionLive;
-      },
-      onProviderManagedCatalogRuntimeOwnerReady: (owner) => {
-        providerManagedCatalogRuntimeOwner = owner;
       },
       onManagedServiceEndpointReadHostReady: (host) => {
         managedServiceEndpointReadHost = host;
@@ -2317,9 +2309,10 @@ export async function startDaemon(
           .resolveCurrentSessionPurposeBindingSnapshot,
       ...(externalActionAccountId && homeDomainAction
         ? {
-            resolveSessionTeamCredentialBindingIntents: async ({ teamResourceSelections }) =>
+            resolveSessionTeamCredentialBindingIntents: async ({ teamResourceSelections, signal }) =>
               await resolvePurposeTeamCredentialBindingIntentsFromHome({
                 teamResourceSelections,
+                signal,
                 resolveTeamCredentialResourceCatalog:
                   createSpawnConnectedServicesTeamResourceCatalogResolver({
                     homeDomainAction,
@@ -2351,6 +2344,7 @@ export async function startDaemon(
       return snapshot?.status === 'ready' && snapshot.policy.processes.allProcessesVisible;
     };
     machineProcessesView = createMachineProcessesView({
+      onRequesterEvidenceUnavailable: failure => logger.debug('[DAEMON PROCESSES] Owner requester evidence unavailable', failure),
       processOwnershipRuntime, leftBehind: sessionControlLeftBehindPass, machineVitals,
       platform: process.platform === 'win32' ? 'win32' : process.platform === 'darwin' ? 'darwin' : 'linux',
       allProcessesVisible, requesterForOwner: requesterForProcessOwner, roleCatalog: readProcessRoleCatalog(),
@@ -2383,7 +2377,10 @@ export async function startDaemon(
       stopOwner: async (root, execution) => {
         if (root.owner.kind === 'session') {
           const result = await processActionLifecycle.stopExactSession({ sessionId: root.owner.sessionId,
-            pid: root.pid, start: root.start, signal: execution.signal, verifyCurrent: execution.verifyCurrent });
+            pid: root.pid, start: root.start, signal: execution.signal, verifyCurrent: execution.verifyCurrent,
+            ...(execution.actionContext ? { actionContext: execution.actionContext } : {}),
+            ...(execution.rpcContext ? { rpcContext: execution.rpcContext } : {}),
+            ...(execution.physicalStopEffect ? { physicalStopEffect: execution.physicalStopEffect } : {}) });
           if (!isTerminalHostPhysicallyRetiredStopResult(result)) return false;
           return result;
         }
@@ -2401,58 +2398,25 @@ export async function startDaemon(
     });
     sessionActivityOwner = sessionLiveWorkProducer;
     sessionActivity.notifyChanged();
-    const readGuardAccess = async (tracked: TrackedSession, signal?: AbortSignal) => {
-      const requester = tracked.happySessionId
-        ? await resolveRequesterSessionRuntimeContext(tracked.happySessionId, tracked.requesterWorkAttributionV1) : null;
-      return { tracked, credentials, custodianAccountId: externalActionAccountId,
+    const { withAccess: withGuardAccess, sendNotice: sendGuardSessionNotice } = createGuardSessionAccess({
+      readAccess: () => ({ credentials, custodianAccountId: externalActionAccountId,
         retainedRecordSignal: homeTransportCancellation.signal,
-        serverId: requesterRuntimeServerId, machineId, serverHttpBaseUrl: requesterRuntimeServerHttpBaseUrl,
-        ...(requester ? { requesterBootstrap: requester.bootstrap } : {}),
-        isTrackedCurrent: () => !admissionDrain.isPublicationQuiescing() && pidToTrackedSession.get(tracked.pid) === tracked,
-        ...(signal ? { signal } : {}) };
-    };
+        serverId: requesterRuntimeServerId, machineId, serverHttpBaseUrl: requesterRuntimeServerHttpBaseUrl }),
+      resolveRequesterSessionRuntimeContext, releaseRequesterSessionRuntimeContext,
+      isTrackedCurrent: tracked => !admissionDrain.isPublicationQuiescing() && pidToTrackedSession.get(tracked.pid) === tracked,
+    });
     const readGuardEligibility = async (tracked: TrackedSession, signal?: AbortSignal) =>
-      readCurrentSessionEligibility({ access: await readGuardAccess(tracked, signal) });
+      withGuardAccess(tracked, access => readCurrentSessionEligibility({ access }), signal);
     const guardFacts = createReadGuardFacts({ ...guardSources,
       trackedSessions: () => pidToTrackedSession.values(),
       readInventory: () => managedActivity.read(),
       readSessionEligibility: async (tracked, inventory, signal) =>
-        readCurrentSessionEligibility({ access: await readGuardAccess(tracked, signal), inventory }),
+        withGuardAccess(tracked, access => readCurrentSessionEligibility({ access, inventory }), signal),
     });
     const defaultGuardPolicy = MachineGuardPolicyV1Schema.parse({});
     const readGuardPolicy = () => {
       const current = machineResourcesPolicy?.read();
       return current?.status === 'ready' ? current.policy.guard : defaultGuardPolicy;
-    };
-    const sendGuardSessionNotice = async (tracked: TrackedSession, state: SessionGuardNoticeStateV1, signal?: AbortSignal) => {
-      if (state.kind === 'clear') await tracked.guardStopReceipt?.settle('cancelled');
-      const response = await withTrackedSessionRpc(await readGuardAccess(tracked, signal), async (callRpc, access) => {
-        if (state.kind === 'stopped') {
-          // Retain the admitted requester before publication; even an acknowledgement failure may have committed intent.
-          tracked.guardStopReceipt = createGuardSessionStopReceipt({ records: access.systemRecords,
-            at: state.at, isCurrent: access.isRecordCurrent,
-            onSettled: async record => {
-              const written = await runWithServerHttpBaseUrl(access.serverHttpBaseUrl, () => updateSessionMetadataForTarget({
-                credentials: access.credentials, idOrPrefix: access.sessionId, expectedSessionId: access.sessionId,
-                currentness: { verifyCurrent: access.isRecordCurrent },
-                updater: metadata => {
-                  const current = metadata.sessionGuardStateV1;
-                  if (!current || typeof current !== 'object' || !('at' in current) || current.at !== record.at
-                    || !('kind' in current) || current.kind !== 'requested') return metadata;
-                  if (record.status === 'stopped') return { ...metadata, sessionGuardStateV1: { ...current, kind: 'stopped' } };
-                  const { sessionGuardStateV1: _previous, ...rest } = metadata;
-                  const ceilingBytes = readSessionMemoryCeilingOverride(metadata);
-                  return ceilingBytes === undefined ? rest : { ...rest, sessionGuardStateV1: { v: 1, kind: 'configured', ceilingBytes } };
-                },
-              }));
-              if (!written.ok) throw new Error('guard_stop_metadata_settlement_unavailable');
-            },
-          });
-        }
-        return await callRpc(SESSION_RPC_METHODS.SESSION_GUARD_NOTICE, { sessionId: tracked.happySessionId, state });
-      });
-      const result = SessionGuardNoticeResponseV1Schema.safeParse(response);
-      return result.success && result.data.ok;
     };
     const ceilingCapability = await readGuardCeilingCapability();
     const recordGuardSessionReplacement = async (previous: TrackedSession) => {
@@ -2547,14 +2511,14 @@ export async function startDaemon(
                 const tracked = [...pidToTrackedSession.values()].find(item => item.happySessionId === ownerSessionId
                   && (item.sessionRunnerPid ?? item.pid) === root.pid);
                 if (!tracked) continue;
-                const target = await withTrackedSessionRpc(await readGuardAccess(tracked, signal), async (_callRpc, access) => {
+                const target = await withGuardAccess(tracked, guardAccess => withTrackedSessionRpc(guardAccess, async (_callRpc, access) => {
                   const metadata = tryDecryptSessionOwnerMetadataView({ credentials: access.credentials,
                     accountEncryptionMode: access.accountEncryptionMode, rawSession: access.rawSession });
                   if (!metadata) return null;
                   const summary = SessionSharedSummaryV1Schema.safeParse(metadata.summary);
                   return { tracked, root, label: (summary.success ? summary.data.text : undefined) ?? tracked.happySessionId ?? 'Session',
                     attribution: root.requesterWorkAttributionV1!, metadata };
-                });
+                }), signal);
                 signal.throwIfAborted();
                 if (!target && pidToTrackedSession.get(tracked.pid) === tracked)
                   throw new Error('guard_ceiling_session_metadata_unavailable');
@@ -2700,8 +2664,7 @@ export async function startDaemon(
             currentGuard.runtime.invalidate();
             return { status: 'applied', appliesAt: 'next_start' };
           } finally {
-            if (context && ![...pidToTrackedSession.values()].some(item => item.requesterSessionRuntimeContext === context))
-              await context.dispose();
+            if (context) await releaseRequesterSessionRuntimeContext(context);
           }
         }
         const stamp = tracked?.requesterWorkAttributionV1 ?? tracked?.spawnOptions?.requesterWorkAttributionV1;
@@ -2866,10 +2829,10 @@ export async function startDaemon(
               const tracked = [...pidToTrackedSession.values()].find(session => session.happySessionId === sessionId);
               if (!tracked) return { status: 'unknown' as const };
               try {
-                return await withTrackedSessionRpc(await readGuardAccess(tracked), async (_rpc, access) => readSessionDraftPresence({
+                return await withGuardAccess(tracked, guardAccess => withTrackedSessionRpc(guardAccess, async (_rpc, access) => readSessionDraftPresence({
                   sessionId, requester: { token: access.credentials.token, serverHttpBaseUrl: access.serverHttpBaseUrl,
                     isCurrent: access.isCurrent },
-                })) ?? { status: 'unknown' as const };
+                }))) ?? { status: 'unknown' as const };
               } catch { return { status: 'unknown' as const }; }
             },
             readTemporaryFacts: async () => (await Promise.all([
@@ -2930,7 +2893,7 @@ export async function startDaemon(
     machineRpcRouteAttachments.attachStorageRoutes(storageRoutes);
     const storageTarget = machineResourceTarget();
     if (storageTarget) await storageRoutes.getService(storageTarget);
-    connectedAccountPurposeBindingRuntime.bindSessionRestartOwner(({ sessionId, purpose }) => {
+    connectedAccountPurposeBindingRuntime.bindSessionRestartOwner(({ sessionId, purpose, target }) => {
       const tracked = Array.from(pidToTrackedSession.values())
         .find((candidate) => candidate.happySessionId === sessionId);
       if (!tracked) {
@@ -2948,6 +2911,7 @@ export async function startDaemon(
           trigger: 'reconnect_propagation',
           sessionId,
           reason: `connected_account_purpose_changed:${purpose.purpose}`,
+          ...target,
         },
         onSignalFailure: (error) => {
           logger.debug('[DAEMON RUN] Failed to request Connected Account purpose restart', error);
@@ -3033,6 +2997,7 @@ export async function startDaemon(
             agentId,
             bindings: bindings.data,
             contributions: lease.registry.contributes,
+            catalogEntry: await lease.registry.acquireAgentCatalogEntry?.(agentId),
           });
         } finally {
           await lease.release();
@@ -3098,13 +3063,13 @@ export async function startDaemon(
     connectedServiceRefreshLoopHandle = runtimeBootstrap.connectedServiceRefreshLoopHandle;
     connectedServiceQuotasCoordinator = runtimeBootstrap.connectedServiceQuotasCoordinator;
     connectedServiceQuotasLoopHandle = runtimeBootstrap.connectedServiceQuotasLoopHandle;
-    createRequesterRuntime = async bootstrap => {
+    createRequesterRuntime = async (bootstrap, signal) => {
       if (bootstrap.serverHttpBaseUrl !== requesterRuntimeServerHttpBaseUrl
         || !requesterMachineAdmissionBoundary(bootstrap.attribution).isHomeCurrent()) return null;
       bindRequesterSessionRuntimeMachineAdmissionCurrentness({
         bootstrap, boundary: requesterMachineAdmissionBoundary(bootstrap.attribution),
       });
-      return await createRequesterSessionRuntimeContext({ bootstrap,
+      return await createRequesterSessionRuntimeContext({ bootstrap, signal,
         activeServerDir: configuration.activeServerDir, connectedServicesMaterializationBaseDir,
         resolveQualifiedConnectedAccountV4Support: () => resolveQualifiedConnectedAccountAtomicV4Negotiation(serverFeaturesSnapshotStore.getSnapshot()),
         coordinatorInput: {
@@ -3122,7 +3087,9 @@ export async function startDaemon(
             const bindings = ConnectedServiceBindingsV2IngressSchema.safeParse(connectedServicesBindingsRaw);
             if (!bindings.success) return null;
             const lease = await acquireAuthoritativePluginRuntimeRegistryLease({ happyHomeDir: configuration.happyHomeDir });
-            try { return resolveQualifiedPurposeBindingSnapshotForAgentSpawn({ agentId, bindings: bindings.data, contributions: lease.registry.contributes }); }
+            try { return resolveQualifiedPurposeBindingSnapshotForAgentSpawn({ agentId, bindings: bindings.data,
+              contributions: lease.registry.contributes,
+              catalogEntry: await lease.registry.acquireAgentCatalogEntry?.(agentId) }); }
             finally { await lease.release(); }
           },
         },
@@ -3170,6 +3137,7 @@ export async function startDaemon(
       isQuiescing: admissionDrain.isPublicationQuiescing,
       bootstrapRuntime: machineBootstrapRuntime = createDaemonMachineBootstrapRuntime({
         api,
+        controlPort,
         credentials,
         requesterServerId: requesterRuntimeServerId,
         resolveCurrentMachineExecutionOriginContext,
@@ -3183,10 +3151,8 @@ export async function startDaemon(
           return await listRequesterSessionCredentialBindings({ happyHomeDir: configuration.happyHomeDir,
             serverId: requesterRuntimeServerId, machineId, installationId: installation.installationId });
         },
-        releaseRequesterSessionRuntimeContext: async context => {
-          if ([...pidToTrackedSession.values()].some(tracked => tracked.requesterSessionRuntimeContext === context)) return;
-          await context.dispose();
-        },
+        releaseRequesterSessionRuntimeContext,
+        dispatchSessionFollowOccurrence,
         stopRequesterSessionForHandoff,
         daemonSessionMutationCustody,
         deviceLocalSecretStorage,
@@ -3684,9 +3650,21 @@ export async function startDaemon(
           return await workspaceSyncRuntimeCustody.acquire(registeredMachineId, async () => {
             const finiteServerId = configuration.activeServerId;
             const finiteServerHttpBaseUrl = resolveServerHttpBaseUrl();
-            const isCurrent = async () => !admissionDrain.isFinalShutdown()
-              && configuration.activeServerId === finiteServerId
-              && sameStoredCredentials(credentials, await readStoredCredentialsForServerId(finiteServerId).catch(() => null));
+            const isCurrent = async () => {
+              const refuse = (reason: string) => {
+                logger.debug('[ProjectFinite] Installed runtime refused', { reason });
+                return false;
+              };
+              if (admissionDrain.isFinalShutdown()) return refuse('daemon_shutdown');
+              if (configuration.activeServerId !== finiteServerId) return refuse('installed_home_changed');
+              const stored = await readStoredCredentialsForServerId(finiteServerId).catch(() => null);
+              if (!stored) return refuse('stored_credentials_unavailable');
+              if (!sameStoredCredentials(credentials, stored)) {
+                return refuse(credentials.requesterSessionCredentialScope && !stored.requesterSessionCredentialScope
+                  ? 'installed_credentials_scoped_by_requester' : 'installed_credentials_changed');
+              }
+              return true;
+            };
             const policyClient = await createAccountServerMachineFinitePolicyClient({
               machineId: registeredMachineId, credentials, serverHttpBaseUrl: resolveServerHttpBaseUrl(),
               isCredentialCurrent: async () => !admissionDrain.isFinalShutdown(),
@@ -3720,6 +3698,14 @@ export async function startDaemon(
               releaseChannel: configuration.publicReleaseRing,
               credentials,
               isCurrent,
+              callWorkspacePrepareBetween: async (descriptor, ingress) => {
+                const client = apiMachineForSessions;
+                const authorization = ingress.callerInputAuthorization;
+                if (!client || !authorization) throw Object.assign(new Error('Workspace source authority is unavailable'), { code: 'peer_unavailable' });
+                return await client.callWorkspaceSyncProjectSource({ ...descriptor, credentials, context: ingress,
+                  operationId: authorization.binding.requestId,
+                  method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN });
+              },
               callWorkspaceTargetPhase: async (descriptor, ingress) => {
                 const client = apiMachineForSessions;
                 const custodianCredentials = await readStoredCredentialsForServerId(finiteServerId).catch(() => null);
@@ -3753,7 +3739,7 @@ export async function startDaemon(
               api, credentials, externalActionAccountId, finiteServerId, finiteServerHttpBaseUrl,
               registeredMachineId, admission, isCurrent, resolveCurrentMachineExecutionOriginContext,
               nativeIo: createProjectNativeIo({ ownerRemainder }), successHomeDir: configuration.happyHomeDir,
-              prepareBetween: (request, signal) => runtime.handoffAdapter.prepareBetween(request, signal),
+              prepareBetween: (request, signal, context) => runtime.handoffAdapter.prepareBetween(request, signal, context),
               plugins: { async resolveProjectNativeAdapter(reference, role) {
                 if (!await isCurrent()) return { kind: 'refused', code: 'native_adapter_retired' };
                 const lease = await acquireAuthoritativePluginRuntimeRegistryLease({
@@ -3791,10 +3777,19 @@ export async function startDaemon(
           }
           return result;
         },
+        spawnSessionForInternalResume: async (options, pendingActivation) => {
+          const result = await spawnSessionForInternalResume(options, pendingActivation);
+          if (result.type === 'success' && result.sessionId) {
+            const tracked = [...pidToTrackedSession.values()].find(item => item.happySessionId === result.sessionId);
+            if (tracked) await guardSessionRestoration?.onSessionRunnerStarted(tracked);
+          }
+          return result;
+        },
         stopSession,
         sessionRunnerStatus,
         awaitAgentSessionOpen,
         installExternalSessionHostOperations,
+        readMaterializedStateObservationBinding,
         isSessionAlreadyRunning,
         loadLocalSessionMetadataForHandoff,
         resolveHostedSessionWorkingDirectory,
@@ -3847,22 +3842,10 @@ export async function startDaemon(
         onPublicVoiceModelPackRuntimeReady: bindStorageModels,
         ...(machineResourceSummary ? { machineResourceSummary } : {}),
         acquireLocalServicePreviewApplication,
-        managedCatalogRuntime: {
-          launch: async (input) => {
-            if (providerManagedCatalogRuntimeOwner) {
-              return providerManagedCatalogRuntimeOwner.managedCatalogRuntime.launch(input);
-            }
-            return {
-              ok: false,
-              error: createProviderErrorV1('provider_endpoint_unavailable', {
-                connectionId: input.request.connectionId,
-                machineId: input.request.machineId,
-              }),
-            };
-          },
-        },
         resolveManagedPurposeBindingIntent:
           connectedAccountPurposeBindingRuntime.resolveBindingIntent,
+        resolveManagedPurposeBindingIntentSelection:
+          connectedAccountPurposeBindingRuntime.resolveBindingIntentSelection,
         mcpServers: {
           readCredentials: async () => credentials,
           issueRequestAuth: createDaemonMcpRequestAuthForTest({ credentials, materializationBaseDir: connectedServicesMaterializationBaseDir,
@@ -3887,8 +3870,64 @@ export async function startDaemon(
                 process.env,
                 serverFeaturesSnapshotStore.getSnapshot(),
               ),
-              createWorkflowRunCoordinatorForMachine: (input) =>
-                workflowRuntime.createCoordinatorForMachine({ ...input, managedMachineAction: managedMachinePolicyAdapter }),
+              createWorkflowRunCoordinatorForMachine: (input) => {
+                const installation = readInstallationIdentityIfExistsSync();
+                return workflowRuntime.createCoordinatorForMachine({ ...input, managedMachineAction: managedMachinePolicyAdapter,
+                  sessionStartup: async request => {
+                    const client = apiMachineForSessions;
+                    const stamp = input.requesterWorkAttributionV1;
+                    const current = async () => Boolean(client && client === apiMachineForSessions
+                      && !homeTransportCancellation.signal.aborted && !isDaemonQuiescing()
+                      && stamp && stamp.accountId === externalActionAccountId && stamp.machineId === input.machineId
+                      && stamp.serverId === requesterRuntimeServerId && configuration.activeServerId === requesterRuntimeServerId
+                      && stamp.installationId === readInstallationIdentityIfExistsSync()?.installationId
+                      && request.authorization && await workflowRuntime.isAcceptedAuthorizationCurrent({ authorization: request.authorization }));
+                    if (!client || !stamp || !externalActionAccountId || !sameStoredCredentials(request.request.credentials, credentials) || !await current()) {
+                      throw Object.assign(new Error('Workflow requester Session authority unavailable'), { code: 'project_requester_credentials_unavailable' });
+                    }
+                    const prepared = request.retainedOperation ? null : await prepareWorkflowSessionRequester({
+                      credentials: request.request.credentials, attribution: stamp,
+                      // current() above proves this accepted Run's own Machine/Account binding.
+                      machineAdmission: { actorAccountId: stamp.accountId, custodianAccountId: externalActionAccountId },
+                      boundary: { serverId: stamp.serverId, serverHttpBaseUrl: requesterRuntimeServerHttpBaseUrl, happyHomeDir: configuration.happyHomeDir },
+                      verifyMachineAdmissionCurrent: current,
+                      ...(request.request.signal ? { signal: request.request.signal } : {}),
+                    });
+                    if (!request.retainedOperation && !prepared) throw Object.assign(new Error('Workflow requester Session authority unavailable'), {
+                      code: 'project_requester_credentials_unavailable',
+                    });
+                    const handler = createMachineSessionSpawnRpcHandler({ handlers: { spawnSession },
+                      serverId: stamp.serverId, awaitAgentSessionOpen });
+                    return await runObservedWorkflowSessionStartup(request, { serverId: stamp.serverId, machineId: input.machineId,
+                      observeExecution: observed => client.observeActionExecution(observed),
+                      rpcContext: prepared ? { requesterSessionBootstrap: prepared.admitted } : {},
+                      transport: operation => ({
+                        spawn: async (spawnRequest, options) => {
+                          if (!prepared || !await current()) throw new Error('project_requester_credentials_unavailable');
+                          return await handler(spawnRequest, { ...options, signal: operation.signal,
+                            requesterSessionBootstrap: prepared.admitted, localActionContext: operation });
+                        },
+                        resolveSpawnSessionByNonce: async (spawnNonce, options) => normalizeSpawnSessionNonceResolution(
+                          await input.machineActionDirectTargetTransport.invoke(RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE_BY_NONCE,
+                            { spawnNonce }, options?.signal ? { signal: options.signal } : undefined)),
+                      }),
+                      observeOperation: async (operation, options) => await input.machineActionDirectTargetTransport.invoke(
+                        ACTION_OPERATION_RPC_METHODS_V2.get, { operationId: operation.operationId,
+                          ...(options.waitForTerminal ? { waitForTerminal: true } : {}),
+                          ...(options.includeSetupReview ? { includeSetupReview: true } : {}) },
+                        options.signal ? { signal: options.signal } : undefined),
+                      cancelOperation: async operation => await input.machineActionDirectTargetTransport.invoke(
+                        ACTION_OPERATION_RPC_METHODS_V1.cancel, { operationId: operation.operationId }),
+                      cleanupOnFailure: async () => { await prepared?.cleanupOnFailure(); },
+                    });
+                  },
+                  ...(installation ? { installationIdentity: installation } : {}),
+                  ...(managedPolicyHomeId ? { serverIdentityId: managedPolicyHomeId } : {}),
+                  sessionActionRpcTransport: async request => {
+                    if (!apiMachineForSessions) throw new Error('machine_socket_unavailable');
+                    return await apiMachineForSessions.callSessionActionRpc(request);
+                  } });
+              },
               createWorkflowRecoveryForMachine: (input) =>
                 workflowRuntime.createRecoveryForMachine(input),
             }
@@ -4129,6 +4168,9 @@ export async function startDaemon(
     // 4. Write heartbeat
     const restartOnStaleVersionAndHeartbeat = startDaemonHeartbeatLoop({
       pidToTrackedSession,
+      ...(process.platform === 'linux' ? {
+        allocatorMaintenance: { activity: managedActivity, trim: trimProcessAllocator },
+      } : {}),
       spawnResourceCleanupByPid,
       sessionAttachCleanupByPid,
       getApiMachineForSessions: () => apiMachineForSessions,
@@ -4247,6 +4289,15 @@ export async function startDaemon(
     }
     if (error instanceof DaemonOwnershipConflictError) {
       process.exit(resolveDaemonOwnershipConflictExitCode(startupSource));
+    }
+    if (error === homeTransportCancellation.signal.reason) {
+      const shutdownRequest = await resolvesWhenShutdownRequested;
+      logger.debug('[DAEMON RUN] Startup interrupted; owned preparation and daemon ownership released', {
+        source: shutdownRequest.source,
+      });
+      logger.flushSync();
+      process.exit(shutdownRequest.source === 'exception' ? 1 : 0);
+      return;
     }
     // IMPORTANT: Do not log raw Axios errors here; they can contain bearer tokens.
     logger.debug('[DAEMON RUN][FATAL] Failed somewhere unexpectedly - exiting with code 1', serializeAxiosErrorForLog(error));

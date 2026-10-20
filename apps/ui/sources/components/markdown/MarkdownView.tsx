@@ -22,7 +22,30 @@ export type { MarkdownSourceRange };
 export type MarkdownSourceRangeAction = Readonly<{
     sourceRange: MarkdownSourceRange;
     markdown: string;
+    /** The renderer input, including this Doc's reference definitions when needed. */
+    renderMarkdown?: string;
+    /** The block's place in the whole Markdown source (UTF-16 offsets). */
+    sourceStart: number;
+    sourceLength: number;
 }>;
+
+/**
+ * An action offered on the reader's text selection where the platform renderer has a selection menu
+ * (native). Offsets index the actual native text, including renderer spacing.
+ */
+export type MarkdownRenderedSelection = Readonly<{
+    renderedText: string;
+    text: string;
+    start: number;
+    end: number;
+}>;
+export type MarkdownSelectionAction = Readonly<{
+    label: string;
+    onPress: (block: MarkdownSourceRangeAction, selection?: MarkdownRenderedSelection) => void;
+}>;
+
+/** What `findSourceRanges` marks: Find matches, or commented passages (a Doc's comment marks). */
+export type MarkdownSourceMarkKind = 'find' | 'passage';
 
 export type MarkdownSourceRangeLayoutObserver = Readonly<{
     onRanges: (ranges: readonly MarkdownSourceRangeAction[]) => void;
@@ -43,9 +66,15 @@ export const MarkdownView = React.memo((props: {
     streamingAnimated?: boolean;
     streamingRevealPreset?: StreamingTextRevealPreset;
     staticRenderPlaceholderEnabled?: boolean;
+    /** Stable message identity, independent of streaming revisions, for per-block presentation state. */
+    codeBlockStateKey?: string;
     renderCacheKey?: string;
     sourceRangeLayoutObserver?: MarkdownSourceRangeLayoutObserver;
     onPressSourceRange?: (action: MarkdownSourceRangeAction) => void;
+    /** Which blocks `onPressSourceRange` applies to; every block when absent. */
+    sourceRangePressable?: (action: MarkdownSourceRangeAction) => boolean;
+    selectionActions?: readonly MarkdownSelectionAction[];
+    sourceMarkKind?: MarkdownSourceMarkKind;
     renderAfterSourceRange?: (action: MarkdownSourceRangeAction) => React.ReactNode;
     highlightSourceRange?: MarkdownSourceRange | null;
     findSourceRanges?: readonly FindTextRange[];
@@ -74,9 +103,13 @@ export const MarkdownView = React.memo((props: {
             streamingAnimated={props.streamingAnimated === true}
             streamingRevealPreset={props.streamingRevealPreset}
             staticRenderPlaceholderEnabled={props.staticRenderPlaceholderEnabled}
+            codeBlockStateKey={props.codeBlockStateKey}
             renderCacheKey={props.renderCacheKey}
             sourceRangeLayoutObserver={props.sourceRangeLayoutObserver}
             onPressSourceRange={props.onPressSourceRange}
+            sourceRangePressable={props.sourceRangePressable}
+            selectionActions={props.selectionActions}
+            sourceMarkKind={props.sourceMarkKind ?? 'find'}
             renderAfterSourceRange={props.renderAfterSourceRange}
             highlightSourceRange={props.highlightSourceRange}
             findSourceRanges={props.findSourceRanges}

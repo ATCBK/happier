@@ -30,6 +30,14 @@ const snapshot = {
 } satisfies LocalServiceLauncherSnapshotV1;
 
 describe('local service launcher UI store', () => {
+    it('projects one row when a declaration and its observed binding resolve to the same target', async () => {
+        const { applyLocalServiceLauncherSnapshot, createLocalServiceLauncherState, selectLocalServiceLaunchTargets } = await import('./store');
+        const state = applyLocalServiceLauncherSnapshot(createLocalServiceLauncherState(), {
+            ...snapshot, targets: [snapshot.targets[0], snapshot.targets[0]],
+        });
+        expect(selectLocalServiceLaunchTargets(state)).toEqual(snapshot.targets);
+        expect(state.targetIds).toEqual([snapshot.targets[0].id]);
+    });
     it('keeps identical collections and selected targets stable across feed freshness changes', async () => {
         const { applyLocalServiceLauncherSnapshot, createLocalServiceLauncherState, selectLocalServiceLaunchTargets } = await import('./store');
         const loaded = applyLocalServiceLauncherSnapshot(createLocalServiceLauncherState(), snapshot);

@@ -1,10 +1,10 @@
 import { exists, inUse, item } from './filesystem';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { StorageCategoryAdapterError } from './types';
-import type { StorageCategoryDefinition, StorageCategoryAdapter, StorageCategoryCatalogDeps } from './types';
-const OwnerDataSchema = z.object({ recordingId: z.string().min(1) }).strict();
+import type { StorageCategoryDefinition, StorageCategoryAdapter, StorageCategoryCatalogDeps, StorageCategoryItem } from './types';
+const OwnerDataSchema = z.strictObject({ recordingId: z.string().check(z.minLength(1)) });
 const StoredOwnerDataSchema = createStoredReadSchema(OwnerDataSchema);
 function adapter(data: JsonValue, deps: StorageCategoryCatalogDeps): StorageCategoryAdapter {
     const parsed = StoredOwnerDataSchema.safeParse(data);
@@ -34,7 +34,7 @@ export const recordings: StorageCategoryDefinition = {
         for (const recording of context.recordings) if (await exists(recording.path)) result.push(item('recordings', recording.path,
             recording.active ? inUse : { verdict: 'caution', reason: { code: 'not_rebuildable' }, collectable: true, loses: [{ code: 'not_rebuildable' }] },
             { title: recording.title ?? recording.recordingId, evidence: ['browser_recording_owner',
-                ...(recording.expiresAtMs !== undefined && recording.expiresAtMs <= context.now ? ['recording_expired'] : [])] }));
+                ...(recording.expiresAtMs !== undefined && recording.expiresAtMs <= context.now ? ['recording_expired'] satisfies StorageCategoryItem['evidence'] : [])] }));
         return result;
     },
 };

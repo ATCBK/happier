@@ -197,7 +197,7 @@ describe('external-session daemon host-operation owner', () => {
         });
         await expect(binding.executeProviderSessionFollow({
             ...providerSessionFollowRequest(),
-            providerSessionId: ' remote-1',
+            providerSessionId: '   ',
         })).resolves.toEqual({
             status: 'unavailable',
             code: 'plugin_external_follow_identity_mismatch',
@@ -616,7 +616,7 @@ describe('external-session daemon host-operation owner', () => {
         expect(secondDispose).toHaveBeenCalledOnce();
     });
 
-    it('bounds a never-settling listener, retires only that follow, and leaves a sibling live', async () => {
+    it.each(['author', 'terminal'] as const)('settles a held %s listener under its owning lifetime and leaves a sibling live', async kind => {
         vi.useFakeTimers();
         try {
             let releaseHeldListener!: () => void;
@@ -645,8 +645,10 @@ describe('external-session daemon host-operation owner', () => {
                 followOperation: unavailableFollowOperation(followExecute),
             });
             const binding = owner.bind(createBindingInput());
+            const cancellation = new AbortController();
             const first = await binding.executeFollow({
-                ...followRequest(),
+                ...followRequest(cancellation.signal),
+                ...(kind === 'terminal' ? { options: { projection: 'terminal' as const, signal: cancellation.signal } } : {}),
                 listener: vi.fn(async () => await heldListener),
             });
             const healthyListener = vi.fn(async () => undefined);
@@ -655,13 +657,20 @@ describe('external-session daemon host-operation owner', () => {
                 listener: healthyListener,
             });
 
-            const heldDelivery = operationListeners[0]!({
+            const heldDelivery = Promise.resolve(operationListeners[0]!({
                 kind: 'resyncRequired', reason: 'bufferOverflow', cursor: 'cursor-1',
-            });
-            const heldDeliveryAssertion = expect(heldDelivery).rejects.toThrow(
-                'plugin_external_follow_listener_deadline_exceeded',
-            );
-            await vi.advanceTimersByTimeAsync(5_000);
+            }));
+            let deliverySettled = false;
+            void heldDelivery.then(() => { deliverySettled = true; }, () => { deliverySettled = true; });
+            const heldDeliveryAssertion = kind === 'terminal'
+                ? expect(heldDelivery).rejects.toThrow('plugin_operation_aborted')
+                : expect(heldDelivery).rejects.toMatchObject({ code: 'plugin_external_follow_listener_deadline_exceeded' });
+            await vi.advanceTimersByTimeAsync(5_100);
+            if (kind === 'terminal') {
+                expect(deliverySettled).toBe(false);
+                expect(firstDispose).not.toHaveBeenCalled();
+                cancellation.abort();
+            }
             await heldDeliveryAssertion;
             expect(firstDispose).toHaveBeenCalledOnce();
             expect(secondDispose).not.toHaveBeenCalled();

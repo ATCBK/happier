@@ -2,10 +2,9 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
-import {
-  DestinationInstanceHost,
-  type DestinationNavigation,
-} from '@/components/appShell/workspace/DestinationInstanceHost';
+import { DestinationInstanceHost, type DestinationNavigation } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { WorkspaceDestinationBody } from '@/components/appShell/workspace/WorkspaceDestinationBody';
+import { resolveDestinationRefFromHref, useCompactAppDestinations } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { ApprovalDetailScreen } from '@/components/approvals/ApprovalDetailScreen';
 import {
@@ -15,21 +14,15 @@ import {
 } from '@/components/navigation/stackHeaderActions';
 import { SessionPeekDetailsView } from '@/components/sessions/work/SessionPeekDetailsView';
 import { IconButton } from '@/components/ui/buttons/IconButton';
-import { WorkflowsGate } from '@/components/workflows/gating/WorkflowsGate';
-import { WorkflowRunScreen } from '@/components/workflows/screens/WorkflowRunScreen';
+import { WorkflowRunPane } from '@/components/workflows/run/WorkflowRunPane';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { useOptionalInboxModel } from '@/hooks/inbox/useInboxModel';
 import { t } from '@/text';
 
-import { resolveInboxItemPageRoute, type InboxItemFocus } from '../inboxItemFocus';
+import { INBOX_ITEM_DETAIL_REGISTRY, resolveInboxItemPageRoute, type InboxItemFocus } from '../inboxItemFocus';
 
 function describeOpenPage(focus: InboxItemFocus): string {
-  switch (focus.kind) {
-    case 'session':
-      return t('inbox.work.groups.openSession');
-    case 'workflow_run':
-      return t('inbox.work.groups.openRun');
-    case 'approval':
-      return t('inbox.work.detail.openApproval');
-  }
+  return t(INBOX_ITEM_DETAIL_REGISTRY[focus.kind].openLabel);
 }
 
 /**
@@ -46,8 +39,12 @@ export const InboxItemDetail = React.memo(function InboxItemDetail(
 ) {
   const router = useRouter();
   const { focus, onClose } = props;
+  const model = useOptionalInboxModel();
   const scopeKey = `inbox-detail:${React.useId()}`;
-  const pageRoute = resolveInboxItemPageRoute(focus);
+  const notice = focus.kind === 'notice'
+    ? model?.accountNotices.find(entry => entry.artifact.id === focus.id)?.header
+      ?? model?.openUsageNotices.find(entry => entry.artifact.id === focus.id)?.header : null;
+  const pageRoute = resolveInboxItemPageRoute(focus, { notice });
   const openLabel = describeOpenPage(focus);
   const renderControls = React.useCallback(
     () => (
@@ -74,7 +71,7 @@ export const InboxItemDetail = React.memo(function InboxItemDetail(
   );
   useStackHeaderActionsPublisher(scopeKey, renderControls);
   const controlsInHeader = useStackHeaderActionsClaimed(scopeKey);
-  const focusKey = `${focus.kind}:${focus.serverId}:${focus.id}:${focus.kind === 'workflow_run' ? focus.invocationId ?? '' : ''}`;
+  const focusKey = `${focus.kind}:${focus.serverId}:${focus.id}:${focus.kind === 'workflow_run' ? focus.invocationId ?? '' : focus.kind === 'discussion' ? focus.messageId : ''}`;
 
   return (
     <View testID="inbox.detail" style={styles.root}>
@@ -93,43 +90,63 @@ export const InboxItemDetail = React.memo(function InboxItemDetail(
   );
 });
 
-const InboxItemDetailBody = React.memo(function InboxItemDetailBody(
-  props: Readonly<{
+type DetailBodyProps = Readonly<{
     focus: InboxItemFocus;
     pageRoute: string;
     onClose: () => void;
-  }>,
-) {
-  const { focus } = props;
-  switch (focus.kind) {
-    case 'approval':
-      return (
+}>;
+
+function ApprovalDetailAdapter(props: DetailBodyProps) {
+  return props.focus.kind === 'approval' ? (
         <ApprovalDetailScreen
-          artifactId={focus.id}
-          serverId={focus.serverId || undefined}
+          artifactId={props.focus.id}
+          serverId={props.focus.serverId || undefined}
           onBack={props.onClose}
         />
-      );
-    case 'session':
-      return (
+      ) : null;
+}
+function SessionDetailAdapter(props: DetailBodyProps) {
+  return props.focus.kind === 'session' ? (
         <SessionPeekDetailsView
-          sessionId={focus.id}
-          serverId={focus.serverId}
+          sessionId={props.focus.id}
+          serverId={props.focus.serverId}
           active
           // The pane's own "open" already leaves for this session's page: one opener, not two.
           openControl={false}
         />
-      );
-    case 'workflow_run':
-      return (
+      ) : null;
+}
+function WorkflowDetailAdapter(props: DetailBodyProps) {
+  return props.focus.kind === 'workflow_run' ? (
         <InboxRunDetail
-          runId={focus.id}
-          invocationId={focus.invocationId}
+          runId={props.focus.id}
+          serverId={props.focus.serverId}
+          invocationId={props.focus.invocationId}
           pageRoute={props.pageRoute}
           onClose={props.onClose}
         />
-      );
-  }
+      ) : null;
+}
+
+const renderNoSession = () => null;
+function PageDetailAdapter(props: DetailBodyProps) {
+  const catalog = useCompactAppDestinations();
+  const router = useRouter();
+  const target = React.useMemo(() => resolveDestinationRefFromHref(catalog, props.pageRoute), [catalog, props.pageRoute]);
+  const navigation = React.useMemo<DestinationNavigation>(() => ({ push: router.push, replace: router.replace, back: props.onClose }),
+    [router.push, router.replace, props.onClose]);
+  if (!target) return <SurfaceStateCard kind="unavailable" title={t('common.unavailable')} />;
+  return <DestinationInstanceHost tabId={`inbox-detail:${props.focus.kind}:${props.focus.id}`} ref={target}
+    pathname={props.pageRoute} focused visible navigation={navigation}>
+    <WorkspaceDestinationBody target={target} pathname={props.pageRoute} renderSession={renderNoSession} renderSessionDetails={renderNoSession} />
+  </DestinationInstanceHost>;
+}
+
+// Rendering mechanisms only; every source-to-adapter/page decision belongs to the registry above.
+const DETAIL_ADAPTERS = { session: SessionDetailAdapter, approval: ApprovalDetailAdapter, workflow_run: WorkflowDetailAdapter, page: PageDetailAdapter };
+const InboxItemDetailBody = React.memo(function InboxItemDetailBody(props: DetailBodyProps) {
+  const Adapter = DETAIL_ADAPTERS[INBOX_ITEM_DETAIL_REGISTRY[props.focus.kind].detail];
+  return <Adapter {...props} />;
 });
 
 /**
@@ -140,16 +157,13 @@ const InboxItemDetailBody = React.memo(function InboxItemDetailBody(
 const InboxRunDetail = React.memo(function InboxRunDetail(
   props: Readonly<{
     runId: string;
+    serverId: string;
     invocationId?: string;
     pageRoute: string;
     onClose: () => void;
   }>,
 ) {
   const router = useRouter();
-  const ref = React.useMemo(
-    () => ({ kind: 'workflowRun', params: { runId: props.runId, ...(props.invocationId ? { invocationId: props.invocationId } : {}) } }),
-    [props.runId, props.invocationId],
-  );
   const navigation = React.useMemo<DestinationNavigation>(
     () => ({
       push: router.push,
@@ -159,18 +173,15 @@ const InboxRunDetail = React.memo(function InboxRunDetail(
     [props.onClose, router.push, router.replace],
   );
   return (
-    <DestinationInstanceHost
+    <WorkflowRunPane
       tabId={`inbox-detail:run:${props.runId}`}
-      ref={ref}
+      runId={props.runId}
+      serverId={props.serverId}
+      invocationId={props.invocationId ?? null}
       pathname={props.pageRoute}
-      focused
       visible
       navigation={navigation}
-    >
-      <WorkflowsGate>
-        <WorkflowRunScreen embedded />
-      </WorkflowsGate>
-    </DestinationInstanceHost>
+    />
   );
 });
 

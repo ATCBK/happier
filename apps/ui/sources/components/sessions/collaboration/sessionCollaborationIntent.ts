@@ -1,6 +1,6 @@
 import { sessionAddressKey, type SessionAddress } from '@/sync/domains/session/sessionAddress';
 
-export type SessionCollaborationFocusTarget = 'top' | 'access' | 'responsible' | 'publicLink';
+export type SessionCollaborationFocusTarget = 'top' | 'access' | 'responsible' | 'publicLink' | 'following';
 
 export type SessionCollaborationIntent = Readonly<{
     intentId: number;
@@ -73,7 +73,7 @@ export function subscribeSessionCollaborationIntent(target: SessionAddress, list
 
 export function normalizeSessionCollaborationFocusTarget(value: unknown): SessionCollaborationFocusTarget | null {
     const raw = Array.isArray(value) ? value[0] : value;
-    return raw === 'top' || raw === 'access' || raw === 'responsible' || raw === 'publicLink'
+    return raw === 'top' || raw === 'access' || raw === 'responsible' || raw === 'publicLink' || raw === 'following'
         ? raw
         : null;
 }

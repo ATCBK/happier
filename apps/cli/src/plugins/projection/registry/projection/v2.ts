@@ -1,3 +1,4 @@
+import { z } from 'zod/mini';
 import type {
     PluginContributionIntrospectionProjectionV1,
     PluginDiagnosticRecordV1,
@@ -38,6 +39,7 @@ import {
     pluginUiProjectionFamily,
     type PluginUiProjectionHostRuntimeContext,
 } from '../ui/projection';
+import { collectResolvedGeneratedReactNativeClientContributionArtifactOwners } from '../ui/generatedUiArtifactOwners';
 import { pluginBrowserProjectionFamily } from '../browser';
 import { providerProjectionFamily } from '../providers';
 import { connectedAccountProjectionFamily } from '../connectedAccounts';
@@ -47,8 +49,10 @@ import { workflowsProjectionFamily } from '../workflows';
 import { inputTypesProjectionFamily } from '../inputTypes';
 import { atmospherePicturesProjectionFamily } from '../atmospherePictures';
 import { registrySourcesProjectionFamily } from '../registrySources';
+import { skillsProjectionFamily } from '../skills';
 import { machineProvisionersProjectionFamily } from '../machineProvisioners';
 import { dragSourcesProjectionFamily, dropTargetsProjectionFamily } from '../entityDragDrop';
+import { workItemsProjectionFamily } from '../workItems';
 import {
     composerAttachmentsProjectionFamily,
     composerControlsProjectionFamily,
@@ -266,7 +270,7 @@ function resolveActionScopes(
     // Scope is a manifest-declared semantic fact. Surface only controls where
     // an Action can be invoked; deriving scope from it silently rewrites the
     // current qualified Action's host context.
-    return PluginActionScopeV2Schema.array().min(1).parse(
+    return z.array(PluginActionScopeV2Schema).check(z.minLength(1)).parse(
         action.definition.scopes,
     );
 }
@@ -420,6 +424,9 @@ function collectPluginContributionMetadata(
     }
     for (const source of registry.registrySources ?? []) {
         upsert(source);
+    }
+    for (const skill of registry.skills ?? []) {
+        upsert(skill);
     }
 
     return metadata;
@@ -678,6 +685,7 @@ export function buildAgentsById(
 
 function buildActionsById(
     registry: ResolvedContributionRegistry,
+    purposeScopes: ReturnType<typeof deriveRegistryConnectedAccountPurposeAuthorizations>,
     pluginExecutionOriginsByPluginId?: Readonly<Record<string, PluginMachineExecutionOriginV1>>,
     resolveActionPresentUserGatePolicy?: (
         pluginId: string,
@@ -740,6 +748,10 @@ function buildActionsById(
             id: action.definition.id,
             pluginId: action.pluginId,
             occurrenceId,
+            connectedAccountPurposes: purposeScopes.find(scope => scope.consumer.pluginId === action.pluginId
+                && scope.consumer.localId === action.definition.id)?.authorizedPurposes.map(scope => ({
+                    purpose: scope.purpose.purpose, serviceRefs: [...scope.serviceRefs],
+                })),
             title: localizedPresentation?.title ?? action.definition.title,
             description: localizedPresentation?.description ?? readOptionalString(action.definition.description),
             ...(action.definition.icon ? { icon: action.definition.icon } : {}),
@@ -757,6 +769,7 @@ function buildActionsById(
             ...(inputHints ? { inputHints } : {}),
             ...(action.definition.priority === undefined ? {} : { priority: action.definition.priority }),
             dangerLevel: action.definition.dangerLevel,
+            ...(action.definition.confirmationWhen === undefined ? {} : { confirmationWhen: action.definition.confirmationWhen }),
             ...(action.definition.confirmation
                 ? { confirmation: action.definition.confirmation }
                 : {}),
@@ -808,10 +821,10 @@ function buildCommandsById(
 
 function buildResourcesById(
     registry: ResolvedContributionRegistry,
+    purposeScopes: ReturnType<typeof deriveRegistryConnectedAccountPurposeAuthorizations>,
     pluginExecutionOriginsByPluginId?: Readonly<Record<string, PluginMachineExecutionOriginV1>>,
 ): PluginProjectionV2['resourcesById'] {
     const resourcesById: PluginProjectionV2['resourcesById'] = {};
-    const purposeScopes = deriveRegistryConnectedAccountPurposeAuthorizations(registry);
     for (const resource of registry.resources) {
         if (!resource.pluginId) {
             continue;
@@ -930,6 +943,7 @@ export function buildPluginProjectionV2(params: Readonly<{
     }>;
 }>): PluginProjectionV2 {
     const installedPackages = params.installedPackages ?? [];
+    const purposeScopes = deriveRegistryConnectedAccountPurposeAuthorizations(params.registry);
     const pluginDiagnosticsByPluginId = params.pluginDiagnosticsByPluginId ?? params.registry.pluginDiagnosticsByPluginId;
     if (params.introspectionRuntimeSnapshot && params.introspectionRuntimeSnapshot.generation !== params.generation) {
         throw new Error(
@@ -965,8 +979,10 @@ export function buildPluginProjectionV2(params: Readonly<{
         inputTypesProjectionFamily,
         atmospherePicturesProjectionFamily,
         registrySourcesProjectionFamily,
+        skillsProjectionFamily,
         machineProvisionersProjectionFamily,
         dragSourcesProjectionFamily,
+        workItemsProjectionFamily,
         dropTargetsProjectionFamily,
         voiceProviderProjectionFamily,
         accountCollectionsProjectionFamily,
@@ -1010,6 +1026,45 @@ export function buildPluginProjectionV2(params: Readonly<{
         },
     }, familyDescriptors);
 
+    // Generated UI admission already decided these refusals for this client.
+    // Publish that same evidence through the diagnostic records Details reads;
+    // do not revalidate artifacts or retain a separate plugin health snapshot.
+    const pluginUi = familiesById.pluginUi;
+    if (pluginUi?.family === 'pluginUi') {
+        const clientArtifactOwners = collectResolvedGeneratedReactNativeClientContributionArtifactOwners(params.registry);
+        for (const entry of Object.values(pluginUi.entriesById)) {
+            if (!('contributionKind' in entry)
+                || (entry.contributionKind !== 'reactNativeBundle' && entry.contributionKind !== 'hostedWeb')) continue;
+            const runtime = entry.runtime;
+            if (!runtime || typeof runtime !== 'object' || Array.isArray(runtime)) continue;
+            const codes: unknown = Reflect.get(runtime, 'diagnostics');
+            if (!Array.isArray(codes) || codes.length === 0) continue;
+            const pluginId = readOptionalString(entry.pluginId);
+            const localId = readOptionalString(entry.contributionId);
+            if (!pluginId || !localId) continue;
+            diagnosticMetadataByPluginId ??= collectPluginDiagnosticMetadata({ registry: params.registry, installedPackages });
+            const plugin = diagnosticMetadataByPluginId.get(pluginId);
+            // Partial catalog-free projections can omit attribution metadata.
+            // Keep their renderer result without inventing a plugin version/source.
+            if (!plugin) continue;
+            const contribution = clientArtifactOwners.find(owner => owner.pluginId === pluginId && owner.contributionId === localId)
+                ?.contributionIdentity ?? createPluginContributionIdentity({ pluginId, localId });
+            for (const code of new Set(codes)) {
+                if (typeof code !== 'string' || !code) continue;
+                diagnostics.push(enrichPluginDiagnosticRecord({
+                    code,
+                    severity: Reflect.get(runtime, 'state') === 'blocked' ? 'error' : 'warning',
+                    message: 'This plugin UI contribution is unavailable.',
+                }, {
+                    ordinal: diagnostics.length, plugin,
+                    contribution,
+                    stage: 'ui', occurrenceId: params.registry.occurrenceIdsByPluginId?.[pluginId],
+                    host: 'daemon', platform: process.platform, occurredAtMs: Date.now(),
+                }));
+            }
+        }
+    }
+
     return {
         v: 2,
         generation: params.generation,
@@ -1030,6 +1085,7 @@ export function buildPluginProjectionV2(params: Readonly<{
         agentsById: buildAgentsById(params.registry, params.generation),
         actionsById: buildActionsById(
             params.registry,
+            purposeScopes,
             params.pluginExecutionOriginsByPluginId,
             params.resolveActionPresentUserGatePolicy,
             params.pluginFinalPolicyCurrentRuntimesById,
@@ -1037,7 +1093,7 @@ export function buildPluginProjectionV2(params: Readonly<{
         ),
         toolsById: buildToolsById(params.registry),
         commandsById: buildCommandsById(params.registry),
-        resourcesById: buildResourcesById(params.registry, params.pluginExecutionOriginsByPluginId),
+        resourcesById: buildResourcesById(params.registry, purposeScopes, params.pluginExecutionOriginsByPluginId),
         settingsById: buildSettingsById(params.registry),
         familiesById,
         contributionIntrospection: narrowIntrospectionToClientReadFamilies(projectPluginContributionIntrospection({

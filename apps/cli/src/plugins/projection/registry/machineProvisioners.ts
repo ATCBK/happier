@@ -16,7 +16,7 @@ export const machineProvisionersProjectionFamily = definePluginProjectionFamilyV
             return [[key, Object.freeze({
                 id: key, pluginId: entry.pluginId, pluginVersion: entry.pluginVersion,
                 definition: entry.definition,
-                ...(purposes ? { connectedAccountPurposes: purposes.map(({ purpose, serviceRefs }) => ({ purpose: purpose.purpose, serviceRefs })) } : {}),
+                ...(purposes ? { connectedAccountPurposes: purposes.map(({ purpose, serviceRefs }) => ({ purpose: purpose.purpose, serviceRefs: [...serviceRefs] })) } : {}),
                 ...(origin ? { executionOrigin: origin } : {}),
             })]];
         }))),

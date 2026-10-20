@@ -25,6 +25,44 @@ export function isMemorySessionOnMachine(params: Readonly<{
   return readSessionOwnerLocality({ metadata, rawSession: params.session })?.machineId === params.machineId;
 }
 
+export function createMemorySessionLocalityReader(params: Readonly<{
+  machineId: string;
+  credentials: StoredCredentials;
+}>) {
+  // This worker already retains admitted local Session identities. Keep only
+  // their exact encrypted owner content, not opened metadata or access facts.
+  // Every caller still obtains a fresh authorized row and current Account mode.
+  const localOwnerCiphertexts = new Map<string, string>();
+  let materialType = params.credentials.encryption?.type;
+  const readKey = () => params.credentials.encryption?.type === 'legacy'
+    ? params.credentials.encryption.secret : params.credentials.encryption?.machineKey;
+  let materialBytes = readKey()?.slice();
+  return {
+    isOnMachine: (session: RawSessionListRow, accountEncryptionMode: 'plain' | 'e2ee') => {
+      const key = readKey();
+      if (materialType !== params.credentials.encryption?.type
+        || materialBytes?.length !== key?.length
+        || (key && !key.every((value, index) => materialBytes?.[index] === value))) {
+        localOwnerCiphertexts.clear();
+        materialType = params.credentials.encryption?.type;
+        materialBytes = key?.slice();
+      }
+      const envelope = session.ownerMetadata;
+      const ciphertext = accountEncryptionMode === 'e2ee'
+        && session.metadataLayoutVersion === SESSION_METADATA_LAYOUT_VERSION_V1
+        && envelope?.t === 'encrypted' && typeof envelope.c === 'string'
+        ? envelope.c : null;
+      if (ciphertext !== null && localOwnerCiphertexts.get(session.id) === ciphertext) return true;
+      const local = isMemorySessionOnMachine({ ...params, session, accountEncryptionMode });
+      if (local && ciphertext !== null) localOwnerCiphertexts.set(session.id, ciphertext);
+      else localOwnerCiphertexts.delete(session.id);
+      return local;
+    },
+    forget: (sessionIds: readonly string[]) => { for (const id of sessionIds) localOwnerCiphertexts.delete(id); },
+    clear: () => { localOwnerCiphertexts.clear(); },
+  };
+}
+
 /**
  * The two Session inventories the daemon memory worker may page. `active` is
  * the ordinary `/v2/sessions` listing, which the server already excludes

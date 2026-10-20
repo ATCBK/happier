@@ -1,15 +1,15 @@
 import { buildBackendTargetKeyV2, parseBackendTargetKeyV2 } from '../backends/targets/backendTargetRefV2.js';
 import type { AgentStartAdmissionV1, AgentStartRefusalV1, AgentStartRequestV1, MaterializedWorkflowLeafV1, Unresolved } from '../account/settings/admitAgentStartV1.js';
-import { isAgentStartActionV1, resolveActionAgentStartRequestsV1 } from '../actions/executor/agentStartAdmission.js';
+import { isAgentStartActionV1, projectAgentStartSelectionV1, resolveActionAgentStartRequestsV1 } from '../actions/executor/agentStartAdmission.js';
 import { MAX_AUTOMATION_STORED_ENVELOPE_UTF8_BYTES } from '../automations/automationStoredContentEnvelopeV1.js';
-import type { JsonValue } from '../json/strictJsonValue.js';
+import { sameStrictJsonValue, type JsonValue } from '../json/strictJsonValue.js';
 import { WorkspaceAddressV1Schema } from '../workspaces/workspaceRefV1.js';
 import type { ActionCaller } from '../actions/executor/types.js';
 import { describePluginJsonSchemaValueIssues } from '../plugins/actions/jsonSchemaValidation.js';
 import { compileActionInputJsonSchema } from '../actions/actionInputJsonSchemaValidation.js';
 import { isLaunchProfileV2, type AiLaunchProfile } from '../profiles/read.js';
-import type { ResolveRoleSelectionV1Input } from '../prompts/roles/resolveRoleSelectionV1.js';
 import type { ResolvedRoleV1 } from '../prompts/roles/rolesV1.js';
+import { resolveRoleSelectionV1 } from '../prompts/roles/resolveRoleSelectionV1.js';
 import { parseAgentPermissionIntentV1Alias, type AgentPermissionIntentV1 } from '../runtime/permissionIntentV1.js';
 import { formatWorkflowDefinitionRefV1, parseWorkflowDefinitionRefV1, type WorkflowDefinitionRefV1 } from './workflowDefinitionRefV1.js';
 import { WorkflowAcceptedSnapshotV1Schema, WorkflowMaterializedLeafV1Schema, WorkflowRoleOverridesV1Schema, WorkflowReplayAgentOverrideV1Schema, deriveWorkflowAcceptedPermissionCeilingV1,
@@ -17,9 +17,9 @@ import { WorkflowAcceptedSnapshotV1Schema, WorkflowMaterializedLeafV1Schema, Wor
   type WorkflowMaterializedLeafV1, type WorkflowResolvedInputsV1, type WorkflowRoleOverridesV1,
   type WorkflowReplayAgentOverrideV1,
   type WorkflowRunExecutionTargetV1 } from './workflowDefinitionV1.js';
-import { resolveWorkflowStepSelectionV1, WorkflowStepSelectionErrorV1, type WorkflowResolvedStepSelectionV1, type WorkflowStepSelectionRefusalV1 } from './workflowStepSelectionV1.js';
+import { listWorkflowAcceptedLeafSelectionsV1, resolveWorkflowAcceptedStepSelectionV1, resolveWorkflowStepSelectionV1, WorkflowStepSelectionErrorV1, type WorkflowResolvedStepSelectionV1, type WorkflowStepSelectionRefusalV1, type WorkflowRoleSelectionContextV1 } from './workflowStepSelectionV1.js';
 import { validateWorkflowDefinition } from './workflowValidationV1.js';
-import { WorkflowStepExecutionSelectionSchema, type WorkflowBlock, type WorkflowDefinitionV1,
+import { WorkflowLiteralEngineSelectionV1Schema, WorkflowStepExecutionSelectionSchema, type WorkflowBlock, type WorkflowDefinitionV1,
   type WorkflowIngressContextV1, type WorkflowLeafV1, type WorkflowStepSelectionV1,
   type WorkflowActionValueReferenceV1,
   type WorkflowValidationIssue } from './workflowV1.js';
@@ -27,6 +27,9 @@ import type { WorkflowAcceptedWorkspaceTargetV1 } from './workflowWorkspaceV1.js
 import { collectWorkflowConditionValueReferences, readWorkflowValuePathV1, type WorkflowValueReference } from './workflowReferenceV1.js';
 import { collectWorkflowLeavesV1 as leavesOf, deriveWorkflowDestinationsV1, readWorkflowLeafTargetSessionIdsV1 } from './workflowDestinationsV1.js';
 import type { WorkflowTargetUnavailableDetailsV1 } from './workflowProgressV1.js';
+import { normalizeExecutableParticipantSelectionV1 } from '../discussions/executableParticipants.js';
+import { SessionSpawnNewSelectionV2Schema } from '../sessions/creation/sessionSpawnNewSelectionV2.js';
+import { resolveWorkflowContextInputsV1, workflowInputErrorV1, WorkflowInputErrorV1, type ResolveWorkflowSessionTargetV1, type WorkflowResolvedSessionTargetV1 } from './workflowStartPreparationV1.js';
 
 export type WorkflowMaterializationContextV1 = Readonly<{
   /** Host-stamped admitting caller; private input, never authored Workflow content. */
@@ -34,7 +37,7 @@ export type WorkflowMaterializationContextV1 = Readonly<{
   source: WorkflowAcceptedSnapshotV1['source']; inputs: WorkflowResolvedInputsV1;
   machineId: string; executionTarget: WorkflowRunExecutionTargetV1; workspaceTarget: WorkflowAcceptedWorkspaceTargetV1;
   metadata?: WorkflowDefinitionMetadataV1;
-  origin?: Readonly<{ kind: 'direct'; originSessionId?: string }>;
+  origin?: WorkflowAcceptedSnapshotV1['origin'];
   resultDelivery?: WorkflowAcceptedSnapshotV1['resultDelivery'];
   authorization: Omit<WorkflowAcceptedAuthorizationV1, 'admittedPermissionCeiling'>;
 }>;
@@ -52,11 +55,15 @@ export function resolveWorkflowRunStartedByForActionCallerV1(caller: ActionCalle
   }
 }
 export type WorkflowMaterializationEffectsV1 = Readonly<{
+  resolveSessionTarget?: ResolveWorkflowSessionTargetV1;
+  /** Admission against the original caller's canonical Session corpus, not Account access. */
+  admitSessionAuthority?: (target: WorkflowResolvedSessionTargetV1) => Promise<boolean>;
   readWorkflowDefinition?: (ref: WorkflowDefinitionRefV1) => Promise<Readonly<{ definition: unknown; sourceKey: string; version?: number | string }> | null>;
   readLaunchProfile?: (profileId: string) => Promise<AiLaunchProfile | null>;
   resolveTargetAvailability: (leaf: Readonly<{
     blockId: string; selection: WorkflowResolvedStepSelectionV1;
     executionTarget: WorkflowRunExecutionTargetV1; actionId?: string; kind?: WorkflowMaterializedLeafV1['kind'];
+    participant?: WorkflowMaterializedLeafV1['participant'];
   }>, context: Readonly<{ sessionIds: readonly string[] }>) => Promise<boolean | WorkflowTargetUnavailableDetailsV1>;
   readActionContract?: (actionId: string) => Promise<NonNullable<WorkflowMaterializedLeafV1['actionContract']> | null>;
 }>;
@@ -71,7 +78,7 @@ export type MaterializeWorkflowAcceptedSnapshotV1Input = Readonly<{
   roleOverrides?: WorkflowRoleOverridesV1;
   /** Host-opened immutable source, never an authored/client-supplied snapshot. */
   replay?: Readonly<{ snapshot: WorkflowAcceptedSnapshotV1; agentOverride?: WorkflowReplayAgentOverrideV1 }>;
-  roleSelection?: Omit<ResolveRoleSelectionV1Input, 'roleId' | 'workflowRoles' | 'runOverrides'>;
+  roleSelection?: Omit<WorkflowRoleSelectionContextV1, 'workflowRoles' | 'runOverrides'>;
   admission: WorkflowMaterializationAdmissionV1; effects: WorkflowMaterializationEffectsV1;
 }>;
 export type WorkflowMaterializationErrorV1 = AgentStartRefusalV1 | WorkflowTargetUnavailableDetailsV1 | (WorkflowStepSelectionRefusalV1 & Readonly<{ blockId: string }>) | Readonly<{
@@ -90,9 +97,11 @@ function invalidInput(blockId?: string, issues?: readonly WorkflowValidationIssu
   return { ok: false, error: { code: 'invalid_input', ...(blockId === undefined ? {} : { blockId }), ...(issues === undefined ? {} : { issues }) } };
 }
 
-function usesSessionContext(definition: WorkflowDefinitionV1): boolean {
+function usesWorkflowContext(definition: WorkflowDefinitionV1, origin: 'session' | 'discussion'): boolean {
   const pending = [...definition.blocks];
-  const isContext = (reference: WorkflowValueReference) => reference.kind === 'session_context' || reference.kind === 'session_context_field';
+  const isContext = (reference: WorkflowValueReference) => origin === 'discussion'
+    ? reference.kind === 'discussion_context'
+    : reference.kind === 'session_context' || reference.kind === 'session_context_field';
   while (pending.length > 0) {
     const block = pending.pop()!;
     if ('onlyWhen' in block && block.onlyWhen && collectWorkflowConditionValueReferences(block.onlyWhen).some(isContext)) return true;
@@ -115,6 +124,11 @@ function usesSessionContext(definition: WorkflowDefinitionV1): boolean {
 }
 function unavailable(blockId: string, details?: WorkflowTargetUnavailableDetailsV1): MaterializeWorkflowAcceptedSnapshotV1Result {
   return { ok: false, error: { code: 'target_unavailable', reason: 'selection_unavailable', ...details, blockId } };
+}
+function mayAdmitSessionWithoutDedicatedAuthority(input: MaterializeWorkflowAcceptedSnapshotV1Input): boolean {
+  return input.context.authorization.principal.kind === 'host'
+    && (input.admission.kind === 'user' && (!input.context.actionCaller || input.context.actionCaller.kind === 'host')
+      || input.admission.kind === 'trigger' && input.context.actionCaller?.kind === 'automationRun');
 }
 function invalidDefinition(issues: readonly WorkflowValidationIssue[], blockId?: string): MaterializeWorkflowAcceptedSnapshotV1Result {
   const targetIssue = issues.find((issue) => issue.code === 'target_unavailable' && issue.blockId !== undefined);
@@ -159,6 +173,20 @@ function agentLeaf(snapshot: Pick<WorkflowAcceptedSnapshotV1, 'machineId' | 'wor
   leaf: WorkflowMaterializedLeafV1): MaterializedWorkflowLeafV1 | null {
   if (leaf.kind !== 'step' || !leaf.selection.agentTarget) return null;
   const selection = leaf.selection;
+  const launch = leaf.participant?.kind === 'model' ? leaf.participant.launch : undefined;
+  if (launch) {
+    const requested = resolveActionAgentStartRequestsV1({ actionId: 'session.spawn_new', input: launch,
+      context: { executionRunTargetMachineId: snapshot.machineId },
+      baseline: { machineId: snapshot.machineId, directory: snapshot.workspaceTarget.project.directory } });
+    const start = requested.ok ? requested.requests.find(request => request.kind === 'spawn_new') : undefined;
+    if (!start || start.kind !== 'spawn_new') throw new WorkflowMaterializationFailureV1({ code: 'invalid_input', blockId: leaf.blockId });
+    return { sourceKey: leaf.sourceKey, blockId: leaf.blockId, kind: 'session',
+      ...(launch.roleId ? { roleId: launch.roleId } : {}),
+      engine: { agentTargetKey: buildBackendTargetKeyV2(launch.agentTarget),
+        ...(launch.modelSelection ? { modelId: launch.modelSelection.ref.modelId } : {}) },
+      runsAs: { kind: 'session' }, workspaceWrites: leaf.role?.workspaceWrites ?? 'allow',
+      facts: start.facts };
+  }
   const agentTargetKey = buildBackendTargetKeyV2(selection.agentTarget!);
   const effort = selection.sessionConfigOptionOverrides?.overrides.reasoning_effort?.value;
   return {
@@ -189,7 +217,7 @@ function agentLeaf(snapshot: Pick<WorkflowAcceptedSnapshotV1, 'machineId' | 'wor
 
 /** Machine start admission is about execution, never trigger scope. */
 export function workflowRequiresMachineStartCapacityV1(leaves: readonly WorkflowMaterializedLeafV1[]): boolean {
-  return leaves.some(leaf => {
+  return leaves.flatMap(listWorkflowAcceptedLeafSelectionsV1).some(leaf => {
     if (leaf.kind === 'action') return leaf.actionId !== undefined && isAgentStartActionV1(leaf.actionId);
     if (leaf.kind !== 'step') return false;
     const conversation = leaf.selection.conversation?.kind;
@@ -308,8 +336,10 @@ export async function readWorkflowAcceptedAgentStartLeavesV1(snapshot: Pick<Work
   'machineId' | 'workspaceTarget' | 'materializedLeaves' | 'authoredDefinition' | 'frozenChildren' | 'inputs' | 'origin'>): Promise<readonly MaterializedWorkflowLeafV1[]> {
   const result: MaterializedWorkflowLeafV1[] = [];
   for (const leaf of snapshot.materializedLeaves) {
-    const agent = agentLeaf(snapshot, leaf);
-    if (agent) result.push(agent);
+    for (const selected of listWorkflowAcceptedLeafSelectionsV1(leaf)) {
+      const agent = agentLeaf(snapshot, selected);
+      if (agent) result.push(agent);
+    }
     const definition = leaf.sourceKey === '$root' ? snapshot.authoredDefinition : snapshot.frozenChildren[leaf.sourceKey];
     const authored = definition && leavesOf(definition).find((block) => block.id === leaf.blockId);
     const context = { inputs: leaf.sourceKey === '$root' ? snapshot.inputs : {}, origin: snapshot.origin };
@@ -336,8 +366,11 @@ export async function readWorkflowAcceptedAgentStartLeavesV1(snapshot: Pick<Work
 
 function boundValue(reference: WorkflowActionValueReferenceV1, context: WorkflowBindingContext, blockId: string, purpose: 'run' | 'definition', item?: WorkflowBoundItem): JsonValue | Unresolved {
   if (reference.kind === 'literal') return reference.value;
-  if (reference.kind === 'input') return Object.hasOwn(context.inputs, reference.name)
-    ? context.inputs[reference.name]! : { kind: 'unresolved' };
+  if (reference.kind === 'input') {
+    const value = Object.hasOwn(context.inputs, reference.name)
+      ? readWorkflowValuePathV1(context.inputs[reference.name]!, reference.path ?? []) : undefined;
+    return value === undefined ? { kind: 'unresolved' } : value;
+  }
   if (reference.kind === 'origin_session_id') {
     if (purpose === 'definition' && !context.origin?.originSessionId) return { kind: 'unresolved' };
     if (!context.origin?.originSessionId) throw new WorkflowMaterializationFailureV1({ code: 'invalid_input', blockId });
@@ -421,7 +454,8 @@ async function materializeWorkflowV1(input: MaterializeWorkflowAcceptedSnapshotV
       && leaf.sourceKey === replay.agentOverride!.sourceKey && leaf.blockId === replay.agentOverride!.blockId)) return invalidInput();
     input = { ...input, definition: replay.snapshot.authoredDefinition, roleOverrides: replay.snapshot.roleOverrides,
       context: { ...input.context, machineId: replay.snapshot.machineId,
-        workspaceTarget: replay.snapshot.workspaceTarget, executionTarget: replay.snapshot.executionTarget } };
+        workspaceTarget: replay.snapshot.workspaceTarget, executionTarget: replay.snapshot.executionTarget,
+        origin: replay.snapshot.origin } };
   }
   const overrides = WorkflowRoleOverridesV1Schema.safeParse(input.roleOverrides ?? []);
   if (!overrides.success) return invalidInput(undefined, overrides.error.issues.map((issue) => ({
@@ -430,6 +464,16 @@ async function materializeWorkflowV1(input: MaterializeWorkflowAcceptedSnapshotV
   const normalized = validateWorkflowDefinition(input.definition, { context: input.ingressContext });
   if (!normalized.valid || !normalized.normalizedDefinition) return invalidDefinition(normalized.issues);
   const root = normalized.normalizedDefinition;
+  if (purpose === 'run') {
+    try {
+      input = { ...input, context: { ...input.context, inputs: await resolveWorkflowContextInputsV1({ definition: root,
+        inputs: input.context.inputs, originSessionId: input.context.origin?.originSessionId,
+        resolveSessionTarget: input.effects.resolveSessionTarget }) } };
+    } catch (error) {
+      if (error instanceof WorkflowInputErrorV1) return invalidInput(undefined, error.issues);
+      throw error;
+    }
+  }
   const frozenRoot = purpose === 'definition' ? structuredClone(root) : freezeWorkflowLoopLimitsV1(root, input.context.inputs);
   if (!frozenRoot) return invalidInput();
   const definitions = new Map<string, WorkflowDefinitionV1>([['$root', root]]);
@@ -462,20 +506,102 @@ async function materializeWorkflowV1(input: MaterializeWorkflowAcceptedSnapshotV
       .reverse().map((leaf): ResolveTask => ({ kind: 'enter', leaf })));
   }
 
+  // Session and originless admissions cannot substitute for a Discussion context owner.
+  if (purpose === 'run' && !input.context.origin?.discussion) {
+    for (const definition of definitions.values()) {
+      if (usesWorkflowContext(definition, 'discussion')) return invalidInput();
+    }
+  }
   // Context belongs to the Run's frozen origin even across nested Workflow frames.
   if (purpose === 'run' && !input.context.origin?.originSessionId) {
     for (const definition of definitions.values()) {
-      if (usesSessionContext(definition)) return invalidInput();
+      if (usesWorkflowContext(definition, 'session')) return invalidInput();
     }
   }
 
   const concrete = new Map<string, WorkflowDefinitionV1>();
+  // Reused child definitions may bind different immutable inputs at each parent use.
+  // Enumerate those admitted values, while invocation identity stays with its ordinary frame.
+  const sourceInputs = new Map<string, WorkflowResolvedInputsV1[]>([['$root', [input.context.inputs]]]);
+  const inputFrames = [{ sourceKey: '$root', inputs: input.context.inputs }];
+  while (inputFrames.length > 0) {
+    const frame = inputFrames.pop()!;
+    const authored = definitions.get(frame.sourceKey)!;
+    for (const leaf of leavesOf(authored)) {
+      if (leaf.kind !== 'workflow') continue;
+      const child = definitions.get(leaf.workflowRef);
+      if (!child) continue;
+      const context = { inputs: frame.inputs, origin: input.context.origin };
+      for (const item of actionItemContexts(authored, leaf.id, context) ?? [undefined]) {
+        const inputs: WorkflowResolvedInputsV1 = Object.fromEntries(child.inputs.filter(input => input.default !== undefined)
+          .map(input => [input.name, input.default!]));
+        for (const [name, reference] of Object.entries(leaf.input)) inputs[name] = boundValue(reference, context, leaf.id, purpose, item);
+        if (purpose === 'run') {
+          try {
+            // Ordinary data may still depend on a prior invocation. Only
+            // Session context defaults must be concrete at parent admission.
+            const contextFields = child.inputs.filter(field => field.defaultFrom
+              || field.inputType && 'hostType' in field.inputType && field.inputType.hostType === 'agentParticipant');
+            Object.assign(inputs, await resolveWorkflowContextInputsV1({ definition: { inputs: contextFields },
+              inputs: Object.fromEntries(contextFields.filter(field => Object.hasOwn(inputs, field.name)).map(field => [field.name, inputs[field.name]!])),
+              originSessionId: input.context.origin?.originSessionId, resolveSessionTarget: input.effects.resolveSessionTarget }));
+          } catch (error) {
+            if (error instanceof WorkflowInputErrorV1) return invalidInput(leaf.id, error.issues);
+            throw error;
+          }
+        }
+        const previous = sourceInputs.get(leaf.workflowRef) ?? [];
+        if (previous.some(candidate => sameStrictJsonValue(candidate, inputs))) continue;
+        sourceInputs.set(leaf.workflowRef, [...previous, inputs]);
+        inputFrames.push({ sourceKey: leaf.workflowRef, inputs });
+      }
+    }
+  }
   const materializedLeaves: WorkflowMaterializedLeafV1[] = [];
   const profiles = new Map<string, AiLaunchProfile | null>();
   for (const [sourceKey, authored] of definitions) {
     // Child inputs are bound at the inline frame's admission, not the parent's.
-    const definition = sourceKey === '$root' ? frozenRoot : structuredClone(authored);
+    let definition = sourceKey === '$root' ? frozenRoot : structuredClone(authored);
+    // A nested frame's ordinary binder consumes literal defaults, so retain the
+    // source Session as an exact admitted default in its executable definition.
+    if (purpose === 'run' && sourceKey !== '$root' && input.context.origin?.originSessionId
+      && definition.inputs.some(field => field.defaultFrom === 'origin_session')) {
+      const defaults = await resolveWorkflowContextInputsV1({ definition: { inputs: definition.inputs.filter(field => field.defaultFrom) }, inputs: {},
+        originSessionId: input.context.origin.originSessionId, resolveSessionTarget: input.effects.resolveSessionTarget });
+      definition = { ...definition, inputs: definition.inputs.map(field => {
+        if (!field.defaultFrom) return field;
+        const { defaultFrom: _defaultFrom, ...declared } = field;
+        return { ...declared, required: false, default: defaults[field.name]! };
+      }) };
+    }
     const leaves = leavesOf(definition);
+    const authorityBindings: NonNullable<WorkflowMaterializedLeafV1['sessionAuthorityBindings']> = [];
+    if (purpose === 'run' || input.effects.admitSessionAuthority) {
+      for (const field of authored.inputs.filter(field => field.valueType === 'json' && field.inputType
+        && 'hostType' in field.inputType && field.inputType.hostType === 'session')) {
+        const targets: NonNullable<WorkflowMaterializedLeafV1['sessionAuthorityBindings']>[number]['targets'] = [];
+        for (const inputs of sourceInputs.get(sourceKey) ?? []) {
+          const value = Object.hasOwn(inputs, field.name) ? inputs[field.name] : field.default;
+          // Birth-trigger authoring admits explicit targets, while a future
+          // Session's context defaults and deferred values stay unresolved.
+          if (purpose === 'definition' && (value === undefined || hasUnresolvedValue(value))) continue;
+          if (value === undefined && !field.required) continue;
+          const target = value === undefined ? null : await input.effects.resolveSessionTarget?.(value);
+          if (!target || !sameStrictJsonValue(target.address, value) || !target.machineId.trim()) {
+            return invalidInput(leaves[0]?.id, workflowInputErrorV1(field.name, 'invalid_input').issues);
+          }
+          // Check each concrete frame target before recording authority. The
+          // declaration and ordinary Account access are not a Session grant.
+          if (input.effects.admitSessionAuthority) {
+            if (!await input.effects.admitSessionAuthority(target)) return { ok: false, error: { code: 'subtree_denied', blockId: leaves[0]?.id } };
+          } else if (!mayAdmitSessionWithoutDedicatedAuthority(input)) {
+            return { ok: false, error: { code: 'target_unavailable', reason: 'run_admission_unavailable', blockId: leaves[0]?.id } };
+          }
+          if (!targets.some(accepted => sameStrictJsonValue(accepted, target))) targets.push(structuredClone(target));
+        }
+        if (targets.length > 0) authorityBindings.push({ inputName: field.name, targets });
+      }
+    }
     const targetById = new Map<string, WorkflowRunExecutionTargetV1>();
     // Semantic validation already proves producer order and lexical visibility.
     for (const leaf of leaves) {
@@ -484,21 +610,201 @@ async function materializeWorkflowV1(input: MaterializeWorkflowAcceptedSnapshotV
       const agentOverride = replay?.agentOverride?.sourceKey === sourceKey && replay.agentOverride.blockId === leaf.id
         ? replay.agentOverride : undefined;
       let resolved: ReturnType<typeof resolveWorkflowStepSelectionV1>;
+      let boundEngines: WorkflowMaterializedLeafV1['engineBindings'];
+      let boundSessions: WorkflowMaterializedLeafV1['sessionBindings'];
+      let boundParticipants: WorkflowMaterializedLeafV1['participantBindings'];
       try {
         const conversation = leaf.execution?.conversation ?? definition.defaults.conversation;
-        resolved = frozen ? { selection: agentOverride
+        const engine = leaf.execution?.engine ?? definition.defaults.engine;
+        const producer = conversation?.kind === 'from_step' ? materializedLeaves.find(candidate => candidate.sourceKey === sourceKey
+          && candidate.blockId === conversation.producer.blockId) : undefined;
+        const participantBinding = leaf.execution?.participant ?? definition.defaults.participant ?? frozen?.participantBindings?.reference;
+        const binding = participantBinding ? undefined : engine && 'kind' in engine ? engine : producer?.engineBindings?.reference;
+        const frameInputs = sourceInputs.get(sourceKey) ?? [];
+        if (participantBinding && purpose === 'run') {
+          // A chosen participant owns its existing Session setup or complete fresh launch;
+          // ambient Workflow defaults are fallback choices, not launch overrides.
+          if (leaf.kind !== 'step'
+            || frozen && (!frozen.participantBindings
+              || !sameStrictJsonValue(frozen.participantBindings.reference, participantBinding))
+            || !frozen && Object.keys(leaf.execution ?? {}).some(key => key !== 'participant'
+              && !(key === 'workspace' && leaf.execution?.workspace?.kind === 'inherit')
+              && !(key === 'executionTarget' && leaf.execution?.executionTarget?.kind === 'session'))) return invalidInput(leaf.id);
+          boundParticipants = { reference: participantBinding, selections: [] };
+          for (const inputs of frameInputs) {
+            const items = participantBinding.kind === 'item'
+              ? actionItemContexts(authored, leaf.id, { inputs, origin: input.context.origin }) : [undefined];
+            if (items === null || participantBinding.kind === 'item' && items.some(item => item === undefined)) return invalidInput(leaf.id);
+            for (const item of items) {
+              const raw = participantBinding.kind === 'item' ? item!.value : inputs[participantBinding.name];
+              const selectedValue = raw === undefined ? undefined : readWorkflowValuePathV1(raw, participantBinding.path ?? []);
+              const value = normalizeExecutableParticipantSelectionV1(selectedValue);
+              if (!value) return invalidInput(leaf.id);
+              const accepted = frozen?.participantBindings?.selections.find(choice => sameStrictJsonValue(choice.value, value));
+              if (frozen && !accepted) return invalidInput(leaf.id);
+              if (boundParticipants.selections.some(choice => sameStrictJsonValue(choice.value, value))) continue;
+              if (value.kind === 'session') {
+                const target = await input.effects.resolveSessionTarget?.(value.session);
+                if (!target || !sameStrictJsonValue(target.address, value.session) || !target.machineId.trim()) return invalidInput(leaf.id);
+                if (accepted && (accepted.participant.kind !== 'session' || accepted.participant.machineId !== target.machineId)) return invalidInput(leaf.id);
+                if (input.effects.admitSessionAuthority && !await input.effects.admitSessionAuthority(target)) {
+                  return { ok: false, error: { code: 'subtree_denied', blockId: leaf.id } };
+                }
+                if (!input.effects.admitSessionAuthority && !mayAdmitSessionWithoutDedicatedAuthority(input)) {
+                  return { ok: false, error: { code: 'target_unavailable', reason: 'run_admission_unavailable', blockId: leaf.id } };
+                }
+                boundParticipants.selections.push({ value, participant: { kind: 'session', session: target.address, machineId: target.machineId },
+                  selection: { conversation: { kind: 'existing_session', sessionId: target.address.sessionId, machineId: target.machineId } },
+                  executionTarget: { kind: 'session' } });
+              } else {
+                const chosenLaunch = value.launch;
+                if (chosenLaunch.executionTarget.machineId !== input.context.machineId || chosenLaunch.directory.kind !== 'path'
+                  || chosenLaunch.checkoutCreationDraft != null) return unavailable(leaf.id);
+                let role: ResolvedRoleV1 | undefined;
+                if (chosenLaunch.roleId) {
+                  if (accepted) {
+                    if (accepted.role?.roleId !== chosenLaunch.roleId) return invalidInput(leaf.id);
+                    role = accepted.role;
+                  } else {
+                    const roleResult = resolveRoleSelectionV1({ ...input.roleSelection, workflowRoles: definition.roles,
+                      runOverrides: overrides.data, roleId: chosenLaunch.roleId,
+                      defaultEngine: { agentTargetKey: buildBackendTargetKeyV2(chosenLaunch.agentTarget),
+                        ...(chosenLaunch.modelSelection ? { modelId: chosenLaunch.modelSelection.ref.modelId } : {}) } });
+                    if (!roleResult.ok) return { ok: false, error: { ...roleResult.refusal, blockId: leaf.id } };
+                    role = roleResult.selection;
+                  }
+                  if (role.runsAs.kind !== 'session' || role.engine?.agentTargetKey !== buildBackendTargetKeyV2(chosenLaunch.agentTarget)
+                    || chosenLaunch.modelSelection !== undefined && role.engine.modelId !== chosenLaunch.modelSelection.ref.modelId
+                    || chosenLaunch.profileId !== undefined && role.profileId !== chosenLaunch.profileId
+                    || chosenLaunch.configuration?.model.value && role.engine.modelId !== chosenLaunch.configuration.model.value
+                    || chosenLaunch.configuration?.options.reasoning_effort?.value
+                      && role.engine.effort !== chosenLaunch.configuration.options.reasoning_effort.value) return unavailable(leaf.id);
+                }
+                let projected: unknown = role ? projectAgentStartSelectionV1(chosenLaunch,
+                  { engine: role.engine!, ...(role.profileId ? { profileId: role.profileId } : {}) }, 'spawn_new',
+                  { machineId: input.context.machineId, directory: input.context.workspaceTarget.project.directory },
+                  chosenLaunch.modelSelection?.ref) : chosenLaunch;
+                if (accepted) {
+                  if (accepted.participant.kind !== 'model') return invalidInput(leaf.id);
+                  // A replay selects the host-opened effective launch, never a changed Profile catalog.
+                  projected = accepted.participant.launch;
+                } else {
+                  const roleLaunch = SessionSpawnNewSelectionV2Schema.safeParse(projected);
+                  if (!roleLaunch.success) return invalidInput(leaf.id);
+                  const current = roleLaunch.data;
+                  if (current.profileId) {
+                    if (!profiles.has(current.profileId)) profiles.set(current.profileId,
+                      await input.effects.readLaunchProfile?.(current.profileId) ?? null);
+                    const profile = profiles.get(current.profileId);
+                    if (!profile) return unavailable(leaf.id);
+                    const key = buildBackendTargetKeyV2(current.agentTarget);
+                    if (isLaunchProfileV2(profile) && Object.keys(profile.compatibilityByTargetKey).length > 0
+                      && profile.compatibilityByTargetKey[key] !== true) return unavailable(leaf.id);
+                    const portable = profileSelection(profile, { agentTarget: current.agentTarget,
+                      ...(current.modelSelection ? { modelSelection: current.modelSelection } : {}),
+                      ...(current.permissionMode ? { permissionMode: current.permissionMode } : {}),
+                      ...(current.transcriptStorage ? { transcriptStorage: current.transcriptStorage } : {}) },
+                    { kind: 'session' });
+                    if (!portable) return unavailable(leaf.id);
+                    const permission = current.permissionMode ?? current.configuration?.permissionIntent.value
+                      ?? portable.permissionMode ?? 'default';
+                    const permissionMode = parseAgentPermissionIntentV1Alias(permission);
+                    if (!permissionMode) return unavailable(leaf.id);
+                    projected = { ...current, permissionMode,
+                      ...(current.modelSelection === undefined && !current.configuration?.model.value && portable.modelSelection
+                        ? { modelSelection: portable.modelSelection } : {}),
+                      ...(current.transcriptStorage === undefined && portable.transcriptStorage
+                        ? { transcriptStorage: portable.transcriptStorage } : {}) };
+                  }
+                }
+                const effectiveLaunch = SessionSpawnNewSelectionV2Schema.safeParse(projected);
+                if (!effectiveLaunch.success) return invalidInput(leaf.id);
+                const participant = { kind: 'model' as const, launch: effectiveLaunch.data };
+                if (accepted && !sameStrictJsonValue(accepted.participant, participant)) return invalidInput(leaf.id);
+                boundParticipants.selections.push({ value, participant,
+                  selection: { agentTarget: effectiveLaunch.data.agentTarget,
+                    ...(effectiveLaunch.data.modelSelection ? { modelSelection: effectiveLaunch.data.modelSelection } : {}),
+                    ...(effectiveLaunch.data.permissionMode ? { permissionMode: effectiveLaunch.data.permissionMode } : {}),
+                    ...(effectiveLaunch.data.connectedServices ? { connectedServices: effectiveLaunch.data.connectedServices } : {}),
+                    ...(effectiveLaunch.data.capabilitySelection ? { capabilitySelection: effectiveLaunch.data.capabilitySelection } : {}),
+                    conversation: { kind: 'fresh' } }, executionTarget: { kind: 'session' },
+                  ...(role ? { role } : {}) });
+              }
+            }
+          }
+        }
+        if (frozen?.sessionBindings) {
+          boundSessions = structuredClone(frozen.sessionBindings);
+          const acceptedSessions = boundSessions;
+          if (frameInputs.some(inputs => !acceptedSessions.targets.some(target => sameStrictJsonValue(target.address, inputs[acceptedSessions.inputName])))) {
+            throw workflowInputErrorV1(acceptedSessions.inputName, 'invalid_input');
+          }
+        }
+        else if (purpose === 'run' && !participantBinding && conversation?.kind === 'input') {
+          const declaration = authored.inputs.find(field => field.name === conversation.name);
+          if (!declaration?.inputType || !('hostType' in declaration.inputType) || declaration.inputType.hostType !== 'session') {
+            throw workflowInputErrorV1(conversation.name, 'invalid_input');
+          }
+          boundSessions = { inputName: conversation.name, targets: [],
+            ...(declaration.defaultFrom ? { defaultFrom: declaration.defaultFrom } : {}) };
+          const sessionTargets = boundSessions.targets;
+          for (const inputs of frameInputs) {
+            const value = inputs[conversation.name];
+            const target = value === undefined ? null : await input.effects.resolveSessionTarget?.(value);
+            if (!target || !sameStrictJsonValue(target.address, value) || !target.machineId.trim()) throw workflowInputErrorV1(conversation.name, 'invalid_input');
+            if (!sessionTargets.some(candidate => sameStrictJsonValue(candidate.address, target.address))) sessionTargets.push(structuredClone(target));
+          }
+        }
+        const sessionTargets = boundSessions;
+        const resolveSelection = (itemValue?: JsonValue, inputs = frameInputs[0] ?? {}) => resolveWorkflowStepSelectionV1({
+          defaults: definition.defaults, step: sessionTargets ? { ...leaf.execution, conversation: (() => {
+            const target = sessionTargets.targets.find(target => sameStrictJsonValue(target.address, inputs[sessionTargets.inputName]));
+            if (!target) throw workflowInputErrorV1(sessionTargets.inputName, 'invalid_input');
+            return { kind: 'existing_session' as const, sessionId: target.address.sessionId, machineId: target.machineId };
+          })() } : leaf.execution,
+          inputs,
+          ...(itemValue === undefined ? {} : { itemValue }),
+          runExecutionTarget: input.context.executionTarget,
+          ...(conversation?.kind === 'from_step' ? { producerExecutionTarget: producer
+            ? resolveWorkflowAcceptedStepSelectionV1(producer, itemValue, inputs).executionTarget
+            : targetById.get(conversation.producer.blockId) } : {}),
+          roleSelection: { ...input.roleSelection, workflowRoles: definition.roles, runOverrides: overrides.data },
+        });
+        if (frozen?.engineBindings && !agentOverride) boundEngines = structuredClone(frozen.engineBindings);
+        else if (!frozen && binding && (binding.kind === 'item' || sourceKey !== '$root')) {
+          boundEngines = { reference: binding, selections: [] };
+          for (const inputs of frameInputs) {
+            const items = binding.kind === 'item' ? actionItemContexts(authored, leaf.id, { inputs, origin: input.context.origin }) : [undefined];
+            if (items === null || binding.kind === 'item' && items.some(item => item === undefined)) return invalidInput(leaf.id);
+            for (const item of items) {
+              const raw = binding.kind === 'item' ? item!.value : inputs[binding.name];
+              const value = WorkflowLiteralEngineSelectionV1Schema.safeParse(raw === undefined ? undefined : readWorkflowValuePathV1(raw, binding.path ?? []));
+              if (!value.success) return invalidInput(leaf.id);
+              const selected = resolveSelection(item?.value, inputs);
+              boundEngines.selections.push({ value: value.data, selection: selected.selection,
+                executionTarget: selected.executionTarget ?? input.context.executionTarget,
+                ...(selected.role ? { role: selected.role } : {}) });
+            }
+          }
+        }
+        resolved = boundParticipants ? { selection: boundParticipants.selections[0]?.selection ?? {},
+          executionTarget: { kind: 'session' }, role: boundParticipants.selections[0]?.role } : frozen ? { selection: agentOverride
           ? resolveWorkflowStepSelectionV1({ defaults: frozen.selection, step: { engine: agentOverride.engine },
             roleSelection: input.roleSelection,
             ...(frozen.selection.conversation?.kind === 'from_step'
               ? { producerExecutionTarget: frozen.executionTarget } : {}) }).selection
           : structuredClone(frozen.selection), executionTarget: frozen.executionTarget, role: frozen.role }
-          : resolveWorkflowStepSelectionV1({ defaults: definition.defaults, step: leaf.execution,
-          runExecutionTarget: input.context.executionTarget,
-          ...(conversation?.kind === 'from_step' ? { producerExecutionTarget: targetById.get(conversation.producer.blockId) } : {}),
-          roleSelection: { ...input.roleSelection, workflowRoles: definition.roles, runOverrides: overrides.data },
-        });
+          : boundEngines ? boundEngines.selections[0] ?? resolveWorkflowStepSelectionV1({ defaults: definition.defaults,
+            step: leaf.execution, purpose: 'authoring' }) : resolveSelection();
       } catch (error) {
-        if (error instanceof WorkflowStepSelectionErrorV1) return { ok: false, error: { ...error.refusal, blockId: leaf.id } };
+        if (error instanceof WorkflowInputErrorV1) return invalidInput(leaf.id, error.issues);
+        if (error instanceof WorkflowStepSelectionErrorV1) {
+          const engine = leaf.execution?.engine ?? definition.defaults.engine;
+          return error.code === 'invalid_input' && engine && 'kind' in engine
+            ? invalidInput(leaf.id, [{ code: 'invalid_input', blockId: leaf.id, path: `/blocks/${leaf.id}/execution/engine`,
+              severity: 'error', message: 'The selection binding must resolve to a declared engine choice.' }])
+            : { ok: false, error: { ...error.refusal, blockId: leaf.id } };
+        }
         throw error;
       }
       const executionTarget = resolved.executionTarget ?? input.context.executionTarget;
@@ -512,7 +818,7 @@ async function materializeWorkflowV1(input: MaterializeWorkflowAcceptedSnapshotV
       // Choosing a role's engine does not also choose that role's profile.
       if (frozen && agentOverride && frozen.selection.profileId === undefined) delete selection.profileId;
       if (purpose === 'run' && selection.conversation?.kind === 'origin_session' && !input.context.origin?.originSessionId) return invalidInput(leaf.id);
-      if (!frozen && selection.profileId) {
+      if (!boundParticipants && !frozen && selection.profileId) {
         if (!profiles.has(selection.profileId)) profiles.set(selection.profileId, await input.effects.readLaunchProfile?.(selection.profileId) ?? null);
         const profile = profiles.get(selection.profileId);
         if (!profile) return unavailable(leaf.id);
@@ -524,11 +830,44 @@ async function materializeWorkflowV1(input: MaterializeWorkflowAcceptedSnapshotV
       if (!parsedSelection.success) return invalidInput(leaf.id);
       selection = parsedSelection.data;
       const sidecar: WorkflowMaterializedLeafV1 = { sourceKey, blockId: leaf.id, kind: leaf.kind, selection, executionTarget,
+        ...(boundParticipants?.selections[0] ? { participant: boundParticipants.selections[0].participant } : frozen?.participant
+          ? { participant: frozen.participant } : {}),
         authoredWorkspace: frozen?.authoredWorkspace ?? leaf.execution?.workspace ?? { kind: 'inherit' },
         ...(resolved.role === undefined ? {} : { role: { ...structuredClone(resolved.role),
           ...(selection.profileId === null ? { profileUnavailable: false } : {}) } }),
         ...(leaf.kind === 'workflow' ? { childRef: frozen?.childRef ?? leaf.workflowRef } : {}),
       };
+      if (authorityBindings.length > 0) {
+        for (const binding of authorityBindings) {
+          const previous = frozen?.sessionAuthorityBindings?.find(accepted => accepted.inputName === binding.inputName);
+          if (replay && binding.targets.some(target => !previous?.targets.some(accepted => sameStrictJsonValue(accepted, target)))) {
+            return invalidInput(leaf.id, workflowInputErrorV1(binding.inputName, 'invalid_input').issues);
+          }
+        }
+        sidecar.sessionAuthorityBindings = structuredClone(authorityBindings);
+      }
+      if (boundSessions) sidecar.sessionBindings = boundSessions;
+      if (boundParticipants) sidecar.participantBindings = boundParticipants;
+      if (boundEngines) {
+        // Profiles are resolved for every admitted choice, before deriving the ceiling or checking availability.
+        for (const bound of boundEngines.selections) {
+          if (bound.selection.profileId && !frozen) {
+            if (!profiles.has(bound.selection.profileId)) profiles.set(bound.selection.profileId,
+              await input.effects.readLaunchProfile?.(bound.selection.profileId) ?? null);
+            const profile = profiles.get(bound.selection.profileId);
+            if (!profile) return unavailable(leaf.id);
+            const portable = profileSelection(profile, bound.selection, bound.executionTarget);
+            if (!portable) return unavailable(leaf.id);
+            bound.selection = portable;
+          }
+          const parsed = WorkflowStepExecutionSelectionSchema.safeParse(bound.selection);
+          if (!parsed.success) return invalidInput(leaf.id);
+          bound.selection = parsed.data;
+          if (bound.executionTarget.kind === 'detached_run'
+            && (bound.selection.launchEnvironment !== undefined || bound.selection.providerSessionResume !== undefined)) return unavailable(leaf.id);
+        }
+        sidecar.engineBindings = boundEngines;
+      }
       if (leaf.kind === 'action') {
         const contract = frozen ? frozen.actionContract : await input.effects.readActionContract?.(leaf.actionId);
         if (!contract) return unavailable(leaf.id);
@@ -573,10 +912,15 @@ async function materializeWorkflowV1(input: MaterializeWorkflowAcceptedSnapshotV
       targetById.set(leaf.id, executionTarget);
       materializedLeaves.push(sidecar);
     }
-    const { engine: _engine, executionTarget: _target, ...defaults } = definition.defaults;
+    const { engine: _engine, participant: _participant, executionTarget: _target, ...defaults } = definition.defaults;
     concrete.set(sourceKey, { ...definition, defaults });
   }
   let agentStartLeaves: readonly MaterializedWorkflowLeafV1[];
+  if (purpose === 'run' && input.context.resultDelivery?.kind === 'originating_discussion') {
+    const unsupported = materializedLeaves.flatMap(listWorkflowAcceptedLeafSelectionsV1)
+      .find(leaf => leaf.kind === 'step' && leaf.executionTarget.kind === 'detached_run');
+    if (unsupported) return unavailable(unsupported.blockId, { code: 'target_unavailable', reason: 'selection_unavailable' });
+  }
   const frozenChildren = Object.fromEntries([...concrete].filter(([key]) => key !== '$root'));
   try { agentStartLeaves = await readWorkflowAcceptedAgentStartLeavesV1({
     machineId: input.context.machineId, workspaceTarget: input.context.workspaceTarget, materializedLeaves,
@@ -598,7 +942,8 @@ async function materializeWorkflowV1(input: MaterializeWorkflowAcceptedSnapshotV
   }
   if (input.admission.kind !== 'user') {
     for (const leaf of agentStartLeaves) {
-      const role = materializedLeaves.find((sidecar) => sidecar.sourceKey === leaf.sourceKey && sidecar.blockId === leaf.blockId && sidecar.role?.roleId === leaf.roleId)?.role;
+      const owner = materializedLeaves.find(sidecar => sidecar.sourceKey === leaf.sourceKey && sidecar.blockId === leaf.blockId);
+      const role = (owner ? listWorkflowAcceptedLeafSelectionsV1(owner) : []).find(selected => selected.role?.roleId === leaf.roleId)?.role;
       const admitted = await input.admission.admitLeaf(leaf, { permissionCeiling, ...(role ? { role } : {}) });
       if (!admitted.ok) return { ok: false, error: leaf.kind === 'action' && hasUnresolvedValue(leaf.facts)
         ? { code: 'definition_exceeds_authority', blockId: leaf.blockId, cause: admitted.refusal }
@@ -610,10 +955,12 @@ async function materializeWorkflowV1(input: MaterializeWorkflowAcceptedSnapshotV
   // without an explicit origin reference in the authored definition.
   const requiredOriginSessionId = purpose === 'run' ? input.context.origin?.originSessionId : undefined;
   for (const leaf of materializedLeaves) {
-    const sessionIds = readWorkflowLeafTargetSessionIdsV1(leaf.selection, requiredOriginSessionId);
-    if (leaf.kind === 'step' || leaf.kind === 'action' || sessionIds.length > 0) {
-      const availability = await input.effects.resolveTargetAvailability(leaf, { sessionIds });
-      if (availability !== true) return unavailable(leaf.blockId, availability === false ? undefined : availability);
+    for (const selected of listWorkflowAcceptedLeafSelectionsV1(leaf)) {
+      const sessionIds = readWorkflowLeafTargetSessionIdsV1(selected.selection, requiredOriginSessionId);
+      if (leaf.kind === 'step' || leaf.kind === 'action' || sessionIds.length > 0) {
+        const availability = await input.effects.resolveTargetAvailability(selected, { sessionIds });
+        if (availability !== true) return unavailable(leaf.blockId, availability === false ? undefined : availability);
+      }
     }
   }
   for (const leaf of agentStartLeaves) {

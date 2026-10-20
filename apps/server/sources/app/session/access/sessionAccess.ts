@@ -1,5 +1,5 @@
 import { db } from "@/storage/db";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, type Tx } from "@/storage/inTx";
 import type { Prisma } from "@prisma/client";
 import { isServerFeatureEnabledForRequest } from "@/app/features/catalog/serverFeatureGate";
 import { isSessionTranscriptShareable, SESSION_TRANSCRIPT_PUBLICATION_SELECT } from "@/app/session/sessionTranscriptPublicationPolicy";
@@ -40,7 +40,7 @@ export function projectSessionEffectiveAccessV1(access: EffectiveSessionAccess):
 }
 export type SessionAccessReader = Pick<Tx, "session">;
 // Session-major projections stay below the existing conservative SQLite bind boundary.
-const SESSION_ACCESS_SESSION_BATCH_SIZE = 200;
+export const SESSION_ACCESS_SESSION_BATCH_SIZE = 200;
 /**
  * Team and Group access, responsibility and atomic initial access are Session
  * sharing: they are served wherever `sharing.session` is enabled, with no
@@ -412,11 +412,11 @@ export async function resolveSessionAccessForOperation(
 export async function readCurrentSessionAccessForOperation(
     input: Omit<Parameters<typeof resolveSessionAccessForOperation>[1], "row">,
 ): Promise<SessionAccessOperationDecision> {
-    return await inTx(reader => resolveSessionAccessForOperation(reader, {
+    return await inReadSnapshot(reader => resolveSessionAccessForOperation(reader, {
         ...input,
         // Even a structurally wider caller cannot reuse an earlier access row.
         row: undefined,
-    }), { isolationLevel: "Serializable" /* Current Session admission must use one coherent Account, grant and credential snapshot. */, readOnly: true });
+    }));
 }
 
 /** Evidence-independent entitlement projection for internal census/preparation only. */

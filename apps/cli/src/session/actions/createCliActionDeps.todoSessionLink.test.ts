@@ -41,17 +41,20 @@ describe('agent task association through the CLI Account executor and real KV/CA
         const executor = createActionExecutor(createCliActionDeps({ token, credentials: { token, encryption: null },
             sessionId: 'cli-global', mode: 'plain', ctx: null, serverId: scope.serverId, serverHttpBaseUrl: 'https://task-home.test' }));
         const context = { surface: 'agent', authority: 'account_automation', bypassApprovals: true } as const;
-        expect(await executor.execute('todos.session.link', input, context)).toEqual({ ok: true, result: { status: 'linked' } });
+        expect(await executor.execute('tasks.internal.session.link', input, context)).toEqual({ ok: true, result: { status: 'linked' } });
         expect(todo).toMatchObject({ done: true, title: 'Human renamed', linkedSessions: {
             '9:task-home12:task-account16:accepted-session': { session: input.session },
         } });
-        expect(await executor.execute('todos.session.link', input, { ...context, surface: 'mcp' })).toEqual({ ok: true, result: { status: 'linked' } });
+        expect(await executor.execute('tasks.internal.session.link', input, { ...context, surface: 'mcp' })).toEqual({ ok: true, result: { status: 'linked' } });
         expect(writes).toBe(2);
-        expect(await executor.execute('todos.session.link', input, { ...context, surface: 'cli' })).toEqual({ ok: true, result: { status: 'linked' } });
+        expect(await executor.execute('tasks.internal.session.link', input, { ...context, surface: 'cli' })).toEqual({ ok: true, result: { status: 'linked' } });
         expect(writes).toBe(2);
-        expect(getActionSpec('todos.session.link')).toMatchObject({ executionPlacement: 'account',
-            bindings: { mcpToolName: 'todos_session_link' }, cli: { commands: [{ path: ['todos', 'session', 'link'] }] } });
-        expect(resolveActionSurfaceAvailability({ actionId: 'todos.session.link', surface: 'mcp', requireToolBinding: true }).available).toBe(true);
+        expect(getActionSpec('tasks.internal.session.link')).toMatchObject({ executionPlacement: 'account',
+            bindings: { mcpToolName: 'tasks_internal_session_link' }, cli: { commands: [{ path: ['tasks', 'internal', 'session', 'link'] }] } });
+        expect(resolveActionSurfaceAvailability({ actionId: 'tasks.internal.session.link', surface: 'mcp', requireToolBinding: true }).available).toBe(true);
+        expect(await executor.execute('tasks.internal.session.link', { ...input, linked: false }, context)).toEqual({ ok: true, result: { status: 'unlinked' } });
+        expect(todo).toMatchObject({ done: true, linkedSessions: {} });
+        expect(writes).toBe(3);
     });
 
     it('refuses deleted tasks and another Account before any write', async () => {
@@ -62,8 +65,8 @@ describe('agent task association through the CLI Account executor and real KV/CA
         const executor = createActionExecutor(createCliActionDeps({ token, credentials: { token, encryption: null },
             sessionId: 'cli-global', mode: 'plain', ctx: null, serverId: scope.serverId, serverHttpBaseUrl: 'https://task-home.test' }));
         const context = { surface: 'agent', authority: 'account_automation', bypassApprovals: true } as const;
-        expect(await executor.execute('todos.session.link', input, context)).toEqual({ ok: true, result: { status: 'refused', reason: 'task_deleted' } });
-        expect(await executor.execute('todos.session.link', { ...input, scope: { ...scope, accountId: 'other' } }, context))
+        expect(await executor.execute('tasks.internal.session.link', input, context)).toEqual({ ok: true, result: { status: 'refused', reason: 'task_deleted' } });
+        expect(await executor.execute('tasks.internal.session.link', { ...input, scope: { ...scope, accountId: 'other' } }, context))
             .toEqual({ ok: true, result: { status: 'refused', reason: 'task_scope_mismatch' } });
         expect(post).not.toHaveBeenCalled();
     });

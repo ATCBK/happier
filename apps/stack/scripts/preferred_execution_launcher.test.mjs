@@ -1,18 +1,19 @@
 import assert from 'node:assert/strict';
 import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { createTempFixture } from './testkit/core/temp_fixture.mjs';
 import { writeFakeBin } from './testkit/core/fake_bin_harness.mjs';
 import { prepareCommandRepository, renderNativeExecutionProjection } from './utils/dev_targets/native_execution_projection.mjs';
 import { buildRemoteExecCommand, resolveHeavyweightMemoryFloorKiB } from './utils/dev_targets/remote_commands.mjs';
-import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from './testkit/core/native_admission_fixture.mjs';
+import { buildNativeAdmissionFixtureEnv, installCliNativeCustodySourceFixture, installNativeAdmissionFixture } from './testkit/core/native_admission_fixture.mjs';
 import { flushDevTargetSync } from './utils/dev_targets/sync_project.mjs';
 import { syncDevTarget } from './utils/dev_targets/executor.mjs';
 import { resolveDevTargetMutagenRuntime } from './utils/dev_targets/mutagen_runtime.mjs';
 import { renderMutagenProject, resolveMutagenSessionName } from './utils/dev_targets/mutagen_project.mjs';
+import { resolveTypeScriptCliInvocation } from '../../../scripts/workspaces/resolveTypeScriptCliInvocation.mjs';
 
 const repoRoot = resolve(import.meta.dirname, '..', '..', '..');
 const launcher = join(repoRoot, 'apps', 'stack', 'bin', 'hstack-exec');
@@ -48,7 +49,7 @@ async function executable(path, contents) {
   if (path.endsWith('/node')) {
     // These are internal policy/admission owners, even when their argv contains
     // a compiler or test payload that the external executable fixture handles.
-    contents = contents.replace(/^(#![^\n]*\n)/, `$1case "\${1-}" in\n  *remote_commands.mjs|*workspace_build_admission.mjs|*worker_disk_budget.mjs|*remote_dependency_bootstrap.mjs|*remote_validation_preparation.mjs) exec ${JSON.stringify(process.execPath)} "$@" ;;\nesac\n`);
+    contents = contents.replace(/^(#![^\n]*\n)/, `$1case "\${1-}:\${2-}" in\n  *native_execution_projection.mjs:--validate-execution-config) exec ${JSON.stringify(process.execPath)} "$@" ;;\nesac\ncase "\${1-}" in\n  *remote_commands.mjs|*workspace_build_admission.mjs|*worker_disk_budget.mjs|*remote_dependency_bootstrap.mjs|*remote_validation_preparation.mjs) exec ${JSON.stringify(process.execPath)} "$@" ;;\nesac\n`);
   }
   await writeFile(path, contents, 'utf8');
   await chmod(path, 0o755);
@@ -137,7 +138,9 @@ async function writeNativeProjectionFixture(path, contents) {
   const runtime = nativeFixtureRuntime(dirname(path));
   // Even hand-authored external-process fixtures consume the shared-owner
   // fields. Keep their daemon/barrier namespace inside the isolated fixture.
-  const body = contents.replace(/^projection_mutagen_(?:data_dir|ssh_path)=.*\n/gm, '');
+  const source = /^projection_config_path=/m.test(contents) ? ''
+    : `projection_config_path=${JSON.stringify(join(dirname(path), 'dev-targets.json'))}\n`;
+  const body = source + contents.replace(/^projection_mutagen_(?:data_dir|ssh_path)=.*\n/gm, '');
   await writeFile(path, `projection_mutagen_data_dir=${JSON.stringify(runtime.dataDir)}\nprojection_mutagen_ssh_path=${JSON.stringify(runtime.opensshDir)}\n${body}`);
 }
 
@@ -148,15 +151,54 @@ test('controller explicit local compilation refuses without override and overrid
   const checkout = join(root, 'native-owner');
   const bin = join(root, 'bin');
   await mkdir(bin);
-  // Mock only compiler/process and OS telemetry boundaries; native policy,
-  // placement, admission, process identity and reservations remain real.
-  await executable(join(bin, 'node'), `#!/bin/sh\ncase "$1" in *runTypeScriptCli.mjs) printf 'compiler-started\\n'; exit 7 ;; *) exec ${JSON.stringify(process.execPath)} "$@" ;; esac\n`);
+  // Keep the real runner/selector/leaf admission. Only its native compiler
+  // process and physical worker state are adapted at the OS spawn boundary.
+  const compilerPath = resolveTypeScriptCliInvocation({}).compilerPath;
+  const compiler = join(root, 'compiler.cjs');
+  const preload = join(root, 'compiler-process.mjs');
+  const lifecycle = join(root, 'package-lifecycle.mjs');
+  const parentState = join(root, 'package-parent.json');
+  const compilerArgs = ['--noEmit', '-p', join(repoRoot, 'apps/ui/tsconfig.json')];
+  await writeFile(compiler, `process.stdout.write('compiler-started\\n'); process.exit(7);\n`);
+  await writeFile(join(checkout, 'scripts/workspaces/runTypeScriptCli.mjs'),
+    `await import(${JSON.stringify(new URL('../../../scripts/workspaces/runTypeScriptCli.mjs', import.meta.url).href)});\n`);
+  await writeFile(join(checkout, 'package.json'), JSON.stringify({ private: true, workspaces: ['apps/*'],
+    packageManager: 'yarn@1.22.22', scripts: {
+      pretypecheck: 'node scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json',
+      typecheck: `node scripts/workspaces/runTypeScriptCli.mjs ${compilerArgs.map(arg => JSON.stringify(arg)).join(' ')}`,
+    } }));
+  // The package-manager adapter keeps a real finite prerequisite before the
+  // real compiler. Parent admission would hide a missing leaf CI requirement.
+  await writeFile(lifecycle, `
+import { writeFileSync } from 'node:fs';
+import { runWorkspaceBuildAdmission } from ${JSON.stringify(new URL('./utils/proc/workspace_build_admission.mjs', import.meta.url).href)};
+writeFileSync(${JSON.stringify(parentState)}, JSON.stringify({ admitted: Boolean(process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN) }));
+const prepared = await runWorkspaceBuildAdmission({ command: process.execPath, args: ['-e', ''],
+  locks: [{ path: ${JSON.stringify(join(root, 'prerequisite.lock'))} }], admissionClass: 'package-dist',
+  cwd: ${JSON.stringify(checkout)}, env: process.env });
+if (prepared.error || prepared.signal || prepared.status !== 0) throw prepared.error ?? new Error('prerequisite failed');
+process.argv = [process.execPath, ${JSON.stringify(join(checkout, 'scripts/workspaces/runTypeScriptCli.mjs'))}, ...${JSON.stringify(compilerArgs)}];
+await import(${JSON.stringify(new URL('../../../scripts/workspaces/runTypeScriptCli.mjs', import.meta.url).href)});
+`);
+  await writeFile(preload, `
+import { createRequire, syncBuiltinESMExports } from 'node:module';
+import { installWorkspaceAdmissionProcessAdapter } from ${JSON.stringify(new URL('./testkit/core/native_admission_fixture.mjs', import.meta.url).href)};
+installWorkspaceAdmissionProcessAdapter({ launcher: ${JSON.stringify(native)} });
+const cp = createRequire(import.meta.url)('node:child_process');
+const spawn = cp.spawn;
+cp.spawn = (command, args, options) => spawn(command,
+  args?.map(arg => arg === ${JSON.stringify(compilerPath)} ? ${JSON.stringify(compiler)} : arg), options);
+syncBuiltinESMExports();
+`);
+  await executable(join(bin, 'node'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$@"\n`);
+  await executable(join(bin, 'corepack'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(lifecycle)}\n`);
   await executable(join(bin, 'uname'), '#!/bin/sh\nprintf "Linux\\n"\n');
   await executable(join(bin, 'awk'), '#!/bin/sh\ncase "$*" in */proc/meminfo*) printf "%s %s\\n" "$MEMORY_KIB" "$MEMORY_KIB" ;; */proc/loadavg*|*/proc/pressure/*) printf "0\\n" ;; *) exec /usr/bin/awk "$@" ;; esac\n');
   await executable(join(bin, 'systemctl'), '#!/bin/sh\nexit 1\n');
-  const invoke = (memory, options = [], extraEnv = {}, payload = ['node', 'scripts/workspaces/runTypeScriptCli.mjs', '--noEmit', '-p', 'apps/ui/tsconfig.json']) => spawnSync('/bin/sh', [native, '--local', ...options, '--', ...payload], {
+  const invoke = (memory, options = [], extraEnv = {}, payload = ['corepack', 'yarn', '-s', 'typecheck']) => spawnSync('/bin/sh', [native, '--local', ...options, '--', ...payload], {
     cwd: checkout, encoding: 'utf8', timeout: 15000,
-    env: { ...executionNeutralEnv, HOME: root, PATH: `${bin}:${process.env.PATH}`, CI: '', MEMORY_KIB: String(memory), ...extraEnv },
+    env: { ...executionNeutralEnv, HOME: root, PATH: `${bin}:${process.env.PATH}`, CI: '', MEMORY_KIB: String(memory),
+      NODE_OPTIONS: `${executionNeutralEnv.NODE_OPTIONS ?? ''} --import=${preload}`.trim(), ...extraEnv },
   });
   const refused = invoke(40 * 1024 * 1024);
   assert.equal(refused.status, 1, refused.stderr);
@@ -170,6 +212,8 @@ test('controller explicit local compilation refuses without override and overrid
   const admitted = invoke(40 * 1024 * 1024, ['--allow-local-compilation'], { CI: '1' });
   assert.equal(admitted.status, 7, admitted.stderr);
   assert.equal(admitted.stdout, 'compiler-started\n');
+  assert.deepEqual(JSON.parse(await readFile(parentState, 'utf8')), { admitted: false },
+    'only the producer and compiler leaf may admit this mixed package lifecycle');
   const localFloor = invoke(7 * 1024 * 1024, ['--allow-local-compilation'], {}, ['apps/stack/bin/hstack-exec', '--heavyweight-admission', '--class=package-dist', '--', 'node', '-e', '']);
   assert.equal(localFloor.status, 1, localFloor.stderr);
   assert.match(localFloor.stderr, /insufficient memory capacity.*requires=8388608/);
@@ -400,7 +444,12 @@ test('runtime alternatives observe a recovered worker on the next cadence despit
   const [original] = await readdir(waiters);
   await writeFile(fixture.workers.roomy.sample, '8 12 0.9 22000000 20 0 28000000 28311552 0 0 0 0 0 0 0 linux\n');
   await rm(down);
-  await waitForRuntime(() => runtime.stdout.includes('"worker":"roomy"'), () => runtime.stderr);
+  try {
+    await waitForRuntime(() => runtime.stdout.includes('"worker":"roomy"'), () => runtime.stderr);
+  } catch (error) {
+    error.message += `\nstdout:\n${runtime.stdout}\ntransport trace:\n${await readFile(fixture.invocation.env.FIXTURE_TRACE, 'utf8')}`;
+    throw error;
+  }
   assert.doesNotMatch(runtime.stdout, /BODY:/);
   runtime.child.stdin.write('{"requestPath":"/tmp/recovered-runtime-request"}\n');
   assert.equal((await runtime.completion).code, 0, runtime.stderr);
@@ -515,7 +564,13 @@ test('native runtime admission preserves Node preload arguments and runs the hoo
 
 test('EOF before runtime READY removes only its retained worker demand', { skip: process.platform !== 'linux', timeout: 30000 }, async t => {
   const fixture = await runtimeAdmissionTransportFixture(t);
-  const runtime = startRuntimeController(t, fixture);
+  // A repeated group TERM can arrive while the admission shell removes its
+  // demand. Deliver it at that exact OS-process boundary, without a delay.
+  await executable(join(fixture.binDir, 'rm'), `#!/bin/sh
+case "$*" in *"$CANCEL_WAITER_ROOT/"*) kill -TERM "$$" ;; esac
+exec /bin/rm "$@"
+`);
+  const runtime = startRuntimeController(t, fixture, { CANCEL_WAITER_ROOT: join(fixture.workers.starved.admissionRoot, 'waiters') });
   const waiters = join(fixture.workers.starved.admissionRoot, 'waiters');
   await waitForRuntime(async () => (await readdir(waiters).catch(() => [])).length === 1, () => runtime.stderr);
   runtime.child.stdin.end();
@@ -801,7 +856,30 @@ test('native nonblocking admission certifies busy without certifying state failu
   assert.equal(result.status, 75, result.stderr);
   assert.equal(result.stdout, '');
   assert.match(result.stderr, /^HSTACK_ADMISSION_BUSY:busy-test$/m);
+  assert.match(result.stderr, /class=validation.*memory-available=5242880\/28311552.*requires=8388608 KiB.*reserved-memory=0/,
+    'a nonblocking refusal must identify the deciding memory figures');
   assert.doesNotMatch(result.stderr, /HSTACK_ADMISSION_UNAVAILABLE/);
+});
+
+test('nonblocking admission identifies the live queue head and a contended decision lock', { skip: process.platform !== 'linux' }, async t => {
+  const fixture = await memoryRoutingFixture(t);
+  const native = await installNativeAdmissionFixture({ root: fixture.root });
+  await executable(join(fixture.binDir, 'uname'), '#!/bin/sh\nprintf "Linux\\n"\n');
+  await mkdir(join(native.admissionRoot, 'waiters'), { recursive: true });
+  const stat = await readFile(`/proc/${process.pid}/stat`, 'utf8');
+  const token = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19];
+  await writeFile(join(native.admissionRoot, 'waiters', `${process.pid}-${token}`), `${process.pid} ${token} 0 runtime-build 0\n`);
+  const invoke = () => spawnSync('/bin/sh', [native.launcher, '--heavyweight-admission', '--no-wait',
+    '--class=runtime-build', '--machine=queue-fixture', '--failure-id=queue-test', '--', '/usr/bin/true'], fixture.invocation);
+  const queued = invoke();
+  assert.equal(queued.status, 75, queued.stderr);
+  assert.match(queued.stderr, new RegExp(`class=runtime-build.*queue-ahead.*pid=${process.pid}.*class=runtime-build.*requires=18874368`));
+  // Only the OS lock boundary is unavailable; retain the real refusal path.
+  await executable(join(fixture.binDir, 'flock'), '#!/bin/sh\ncase "$*" in "-n 9") exit 1 ;; *) exec /usr/bin/flock "$@" ;; esac\n');
+  const contended = invoke();
+  assert.equal(contended.status, 75, contended.stderr);
+  assert.match(contended.stderr, /class=runtime-build.*admission-decision-in-progress/);
+  assert.doesNotMatch(contended.stderr, /\(admission busy\)/);
 });
 
 async function installBusyAdmissionTransport(fixture) {
@@ -959,6 +1037,8 @@ test('finite typecheck dispatch is granted by public script owners on remote and
 test('native dispatch consumes the shared source-test, generator, compiler and admission decisions', async (t) => {
   const { invocation } = await memoryRoutingFixture(t);
   for (const { args, kind, component } of [
+    { args: ['yarn', 'workspace', '@happier-dev/server', 'build'], kind: 'runtime', component: 'apps/server' },
+    { args: ['yarn', 'workspace', '@happier-dev/app', 'test:unit:local'], kind: 'source-test', component: 'apps/ui' },
     { args: ['node', '--conditions=happier-source', '--import', 'tsx', 'apps/stack/scripts/build/remote_runtime_build.mjs', '--worker-request=stdin'], kind: 'source-test', component: 'apps/stack' },
     { args: ['node', '--test', 'packages/plugin-sdk/scripts/generateActionTypeMap.test.mjs'], kind: 'source-test', component: 'packages/plugin-sdk' },
     { args: ['node', '--test', 'apps/ui/scripts/generateBundledPluginUiArtifacts.test.mjs'], kind: 'runtime', component: 'apps/ui' },
@@ -977,6 +1057,7 @@ test('native dispatch consumes the shared source-test, generator, compiler and a
     assert.match(trace, /--execution-placement=remote/, 'only worker mirrors receive dependency mutation authority');
     assert.ok(trace.includes('--validation-kind=' + kind), trace);
     assert.ok(trace.includes('--component-relative-dir=' + component), trace);
+    assert.equal(trace.includes('--component-relative-dir=' + repoRoot), false, 'preparation transports repository-relative components');
     if (component) assert.match(trace, /remote_validation_preparation\.mjs/);
   }
   await writeFile(invocation.env.FIXTURE_TRACE, '');
@@ -990,20 +1071,85 @@ test('native local fallback prepares dependencies through the local policy owner
   const fixture = await memoryRoutingFixture(t, { fallback: 'local' });
   const native = await installNativeAdmissionFixture({ root: fixture.root, prepareDependencies: true });
   const checkout = resolve(native.launcher, '../../../..');
-  fixture.invocation.cwd = checkout;
+  await installCliNativeCustodySourceFixture(checkout);
+  const cliDir = join(checkout, 'apps/cli');
+  const nativeSource = join(cliDir, 'native/processcustody/main.go');
+  const nativeExecutable = join(cliDir, 'tools/unpacked/happier-process-custody');
+  await mkdir(dirname(nativeSource), { recursive: true });
+  await mkdir(dirname(nativeExecutable), { recursive: true });
+  fixture.invocation.cwd = cliDir;
   await writeNativeProjectionFixture(join(fixture.stackDir, 'dev-target-exec-v1.sh'), renderNativeExecutionProjection(fixture.config, { repoRoot: checkout }));
   // Transport failure is external. The real launcher still classifies the
   // payload and owns fallback/preparation before invoking the command.
   await executable(join(fixture.binDir, 'ssh'), '#!/bin/sh\nexit 255\n');
+  // This keeper now executes the real native preparation worker. Its kernel
+  // must agree with Node's platform; the generic routing fixture uses Darwin
+  // only to avoid executing unrelated Linux resource owners.
+  await executable(join(fixture.binDir, 'uname'), `#!/bin/sh\nprintf '${process.platform === 'linux' ? 'Linux' : 'Darwin'}\\n'\n`);
+  await executable(join(fixture.binDir, 'awk'), '#!/bin/sh\ncase "$*" in */proc/meminfo*) printf "73400320 73400320\\n" ;; *) exec /usr/bin/awk "$@" ;; esac\n');
   writeFakeBin({ root: fixture.root, name: 'node', content: `#!/bin/sh\nprintf 'node:%s\\n' "$*" >> "$FIXTURE_TRACE"\nexec ${JSON.stringify(process.execPath)} "$@"\n` });
-  await executable(join(fixture.binDir, 'vitest'), '#!/bin/sh\nprintf "local-test-started\\n"\n');
-  const result = spawnSync('/bin/sh', [native.launcher, '--', 'vitest', 'run', 'fixture.test.ts'], fixture.invocation);
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, 'local-test-started\n');
+  await executable(join(fixture.binDir, 'go'), `#!/bin/sh
+${process.platform === 'linux' ? '[ -n "$HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN" ] || exit 91' : ''}
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = '-o' ]; then shift; output=$1; fi
+  shift
+done
+cat '${nativeSource}' > "$output"
+`);
+  await executable(join(fixture.binDir, 'vitest'), `#!/bin/sh
+[ ! -e '${join(checkout, '.project/tmp/cli-dist-build.lock')}' ] || exit 92
+cat '${nativeExecutable}'
+`);
+  const emptyStorage = join(fixture.root, 'empty-stacks');
+  await mkdir(emptyStorage, { recursive: true });
+  for (const [route, options, env] of [
+    ['fallback', [], {}],
+    ['explicit-local', ['--local'], {}],
+    ['no-config', [], { HAPPIER_EXEC_CONFIG_PATH: '', HAPPIER_STACK_STORAGE_DIR: emptyStorage }],
+  ]) {
+    await writeFile(nativeSource, `current-native:${route}\n`);
+    await writeFile(nativeExecutable, 'stale native output');
+    const result = spawnSync('/bin/sh', [native.launcher, ...options, '--', 'vitest', 'run', 'fixture.test.ts'], {
+      ...fixture.invocation, env: { ...fixture.invocation.env, ...env },
+    });
+    assert.equal(result.status, 0, `${route}: ${result.stderr}`);
+    assert.equal(result.stdout, `current-native:${route}\n`);
+  }
   const trace = await readFile(fixture.invocation.env.FIXTURE_TRACE, 'utf8');
   assert.match(trace, /remote_dependency_bootstrap\.mjs[^\n]*--execution-placement=local/,
     'fallback must select read-only primary readiness instead of worker installation');
 });
+
+for (const discovery of ['token', 'repository']) {
+  test(`implicit execution config ${discovery}: an explicit neighbor cannot override default discovery`, async t => {
+    const fixture = await memoryRoutingFixture(t, { availableKiB: 28000000 });
+    const stackDir = discovery === 'token' ? join(dirname(fixture.stackDir), `repo-${repoToken}-identity`) : fixture.stackDir;
+    await mkdir(stackDir, { recursive: true });
+    const configPath = join(stackDir, 'dev-targets.json');
+    const config = { ...fixture.config, targets: fixture.config.targets.filter(target => target.name === 'roomy'),
+      commandExecution: { mode: 'auto', targets: ['roomy'], includeLocal: false, fallback: 'error' } };
+    await writeFile(configPath, JSON.stringify(config));
+    const neighborPath = join(stackDir, 'neighbor.json');
+    const neighbor = { version: 3, targets: [], commandExecution: { mode: 'auto', includeLocal: true, fallback: 'local' } };
+    await writeFile(neighborPath, JSON.stringify(neighbor));
+    await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), renderNativeExecutionProjection(neighbor,
+      { repoRoot, configPath: neighborPath }));
+    await executable(join(fixture.binDir, 'node'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$@"\n`);
+    await executable(join(fixture.binDir, 'probe-command'), '#!/bin/sh\nprintf "wrong-local\\n"\n');
+    const invoke = path => spawnSync('/bin/sh', [launcher, '--', 'probe-command'], {
+      ...fixture.invocation, env: { ...fixture.invocation.env, HAPPIER_EXEC_CONFIG_PATH: path,
+        HAPPIER_STACK_STORAGE_DIR: discovery === 'repository'
+          ? relative(repoRoot, dirname(stackDir)) : dirname(stackDir) },
+    });
+    const intentional = invoke(neighborPath);
+    assert.equal(intentional.status, 0, intentional.stderr);
+    assert.equal(intentional.stdout, 'wrong-local\n');
+    await utimes(configPath, new Date(0), new Date(0));
+    const discovered = invoke('');
+    assert.equal(discovered.status, 0, discovered.stderr);
+    assert.equal(discovered.stdout, 'remote:roomy\n', 'discovery must not borrow the neighboring explicit policy');
+  });
+}
 
 for (const dispatcher of ['native', 'javascript']) {
   const dispatch = (invocation, args) => dispatcher === 'native'
@@ -1024,15 +1170,21 @@ for (const dispatcher of ['native', 'javascript']) {
     const focused = dispatch(invocation, ['vitest', 'run', 'fixture.test.ts']);
     assert.equal(focused.status, 0, focused.stderr);
     assert.equal(focused.stdout, 'remote:starved\n');
-    for (const args of [
-      ['corepack', 'yarn', '--cwd', 'apps/ui', '-s', 'typecheck'],
-      ['corepack', 'yarn', '--cwd', 'apps/cli', '-s', 'build'],
-      ['node', 'scripts/workspaces/runTypeScriptCli.mjs', '-p', 'apps/ui/tsconfig.source.json'],
+    for (const { args, selfAdmitting } of [
+      { args: ['corepack', 'yarn', '--cwd', 'apps/ui', '-s', 'typecheck'], selfAdmitting: false },
+      { args: ['corepack', 'yarn', '--cwd', 'apps/cli', '-s', 'build'], selfAdmitting: true },
+      { args: ['node', 'scripts/workspaces/runTypeScriptCli.mjs', '-p', 'apps/ui/tsconfig.source.json'], selfAdmitting: false },
     ]) {
+      await writeFile(invocation.env.FIXTURE_TRACE, '');
       const result = dispatch(invocation, args);
       assert.equal(result.status, 0, result.stderr);
       assert.equal(result.stdout, 'remote:roomy\n', args.join(' '));
-      assert.match(await readFile(invocation.env.FIXTURE_TRACE, 'utf8'), /--class=compilation/);
+      const trace = await readFile(invocation.env.FIXTURE_TRACE, 'utf8');
+      // Manifest chains with finite publishers prepare workspace outputs
+      // before leaf admission. Compiler-only commands retain the outer owner
+      // for nonblocking worker selection and reuse it at the compiler leaf.
+      if (selfAdmitting) assert.doesNotMatch(trace, /--heavyweight-admission/);
+      else assert.match(trace, /--class=compilation/);
     }
     const focusedAgain = dispatch(invocation, ['vitest', 'run', 'fixture.test.ts']);
     assert.equal(focusedAgain.status, 0, focusedAgain.stderr);
@@ -1064,10 +1216,10 @@ for (const dispatcher of ['native', 'javascript']) {
       assert.equal(result.status, 0, result.stderr);
       const runtime = args.some(arg => arg.startsWith('--worker-request='));
       const small = args.join(' ').includes('packages/cli-common');
-      const publisher = small || args.join(' ').includes('packages/protocol');
+      const selfAdmitting = small || args.join(' ').includes('packages/protocol');
       assert.equal(result.stdout, small ? 'remote:starved\n' : 'remote:roomy\n', args.join(' '));
       const trace = await readFile(invocation.env.FIXTURE_TRACE, 'utf8');
-      if (publisher) assert.doesNotMatch(trace, /--heavyweight-admission/, 'finite publishers own their joint lease and capacity admission');
+      if (selfAdmitting) assert.doesNotMatch(trace, /--heavyweight-admission/, 'publication and compiler leaves own capacity after workspace preparation');
       else assert.match(trace, runtime ? /--class=runtime-build/ : /--class=compilation/);
     }
   });
@@ -1247,6 +1399,20 @@ test('memory-aware placement weighs memory pressure above the absolute admission
   const result = spawnSync('/bin/sh', [launcher, '--', 'vitest', 'run', 'fixture.test.ts'], invocation);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, 'remote:roomy\n');
+});
+
+test('heavyweight placement ranks absolute unreserved headroom ahead of free-memory percentage', async t => {
+  const { invocation } = await memoryRoutingFixture(t, {
+    availableKiB: 24 * 1024 * 1024, totalKiB: 32 * 1024 * 1024,
+    roomyAvailableKiB: 64 * 1024 * 1024, roomyTotalKiB: 256 * 1024 * 1024, roomyLoad: 0.1,
+  });
+  // Both workers fit the class and have the same CPU load. The larger worker
+  // has more room for this command despite a lower percentage of free RAM.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = spawnSync('/bin/sh', [launcher, '--', 'node', 'scripts/workspaces/runTypeScriptCli.mjs', '--noEmit', '-p', 'apps/ui/tsconfig.json'], invocation);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, 'remote:roomy\n', 'fresh and cached samples must rank the actual class headroom');
+  }
 });
 
 test('memory-aware Darwin probe measures absolute headroom through the native dispatch path', async (t) => {
@@ -1706,7 +1872,7 @@ test('explicit local execution preserves placement while applying the adaptive n
   ].join('\n'));
   await executable(join(binDir, 'vitest'), [
     '#!/bin/sh',
-    'printf "workers:%s:%s:%s:%s\\n" "${VITEST_MAX_THREADS-}" "${VITEST_MIN_THREADS-}" "${VITEST_MAX_FORKS-}" "${VITEST_MIN_FORKS-}"',
+    'printf "workers:%s:%s:%s:%s:%s\\n" "${HAPPIER_VITEST_GOVERNOR_MAX_WORKERS-}" "${VITEST_MAX_THREADS-}" "${VITEST_MIN_THREADS-}" "${VITEST_MAX_FORKS-}" "${VITEST_MIN_FORKS-}"',
     'printf "args:%s\\n" "$*"',
     '',
   ].join('\n'));
@@ -1727,8 +1893,8 @@ test('explicit local execution preserves placement while applying the adaptive n
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stderr, /explicit --local bypasses automatic load distribution/u);
-  assert.match(result.stdout, /workers:2:1:2:1/);
-  assert.match(result.stdout, /args:run fixture\.test\.ts --maxWorkers=2 --minWorkers=1/);
+  assert.match(result.stdout, /workers:2::::/);
+  assert.match(result.stdout, /^args:run fixture\.test\.ts$/m);
 
   const search = spawnSync('/bin/sh', [launcher, '--local', '--', 'rg', 'needle', 'sources'], {
     cwd: repoRoot,
@@ -1756,7 +1922,7 @@ test('automatic dispatch protects control work while keeping a selected local pa
   t.after(async () => await rm(root, { recursive: true, force: true }));
   await mkdir(binDir, { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
-  await writeFile(configPath, '{}\n', 'utf8');
+  await writeFile(configPath, '{"version":1,"targets":[]}\n', 'utf8');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -1841,7 +2007,7 @@ test('Yarn workspace validation receives the remote workload governor', async (t
   t.after(async () => await rm(root, { recursive: true, force: true }));
   await mkdir(binDir, { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
-  await writeFile(configPath, '{}\n', 'utf8');
+  await writeFile(configPath, '{"version":1,"targets":[]}\n', 'utf8');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     "dependency_direct_commands='node npm npx pnpm tsc vitest yarn'",
@@ -1890,8 +2056,8 @@ test('Yarn workspace validation receives the remote workload governor', async (t
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /VITEST_MAX_THREADS=.*1/);
-  assert.match(result.stdout, /VITEST_MIN_THREADS=.*1/);
+  assert.match(result.stdout, /HAPPIER_VITEST_GOVERNOR_MAX_WORKERS=.*1/);
+  assert.doesNotMatch(result.stdout, /export VITEST_MAX_THREADS=|export VITEST_MAX_FORKS=/);
   assert.match(result.stdout, /nice -n 10/);
   for (const argument of ['yarn', 'workspace', '@happier-dev/app', 'test:local', 'fixture.test.ts']) {
     assert.match(result.stdout, new RegExp(argument.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
@@ -1908,8 +2074,8 @@ test('native launcher keeps Git commands on the authoritative checkout without p
   const remoteMarker = join(root, 'remote-called');
   await mkdir(binDir, { recursive: true });
   await mkdir(stackDir, { recursive: true });
-  await writeFile(configPath, '{}\n', 'utf8');
-  await writeFile(projectionPath, [
+  await writeFile(configPath, '{"version":1,"targets":[]}\n', 'utf8');
+  await writeNativeProjectionFixture(projectionPath, [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
     "command_mode='auto'",
@@ -1966,8 +2132,8 @@ test('native launcher keeps bundled-plugin publication on the authoritative chec
   t.after(async () => await rm(root, { recursive: true, force: true }));
   await mkdir(binDir, { recursive: true });
   await mkdir(stackDir, { recursive: true });
-  await writeFile(configPath, '{}\n', 'utf8');
-  await writeFile(projectionPath, [
+  await writeFile(configPath, '{"version":1,"targets":[]}\n', 'utf8');
+  await writeNativeProjectionFixture(projectionPath, [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
     "command_mode='auto'",
@@ -2076,7 +2242,7 @@ test('native launcher discovers the matching repository projection when its dire
   const configPath = join(stackDir, 'dev-targets.json');
   await mkdir(binDir, { recursive: true });
   await mkdir(stackDir, { recursive: true });
-  await writeFile(configPath, '{}\n', 'utf8');
+  await writeFile(configPath, '{"version":1,"targets":[]}\n', 'utf8');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -2091,6 +2257,9 @@ test('native launcher discovers the matching repository projection when its dire
     "target_1_remote_path='/usr/bin:/bin'",
     '',
   ].join('\n'));
+  // An older implicit projection may omit source provenance and remain warm.
+  const projectionPath = join(stackDir, 'dev-target-exec-v1.sh');
+  await writeFile(projectionPath, (await readFile(projectionPath, 'utf8')).replace(/^projection_config_path=.*\n/m, ''));
   await executable(join(binDir, 'node'), '#!/bin/sh\nexit 97\n');
   await executable(join(binDir, 'mutagen'), '#!/bin/sh\nprintf "happier-linux|Watching|false|true|1|0/0|0/0|true|1|0/0|0/0|active|7|ok|0|0\\n"\n');
   await executable(join(binDir, 'ssh'), [
@@ -2135,7 +2304,7 @@ test('native launcher refreshes an explicit stale projection instead of silently
   await mkdir(binDir, { recursive: true });
   await mkdir(stackDir, { recursive: true });
   await writeFile(configPath, '{"version":1,"targets":[]}\n', 'utf8');
-  await writeFile(projectionPath, [
+  await writeNativeProjectionFixture(projectionPath, [
     "HSTACK_EXEC_PROJECTION_VERSION='1'",
     `projection_repo_root='${repoRoot}'`,
     '',
@@ -2157,6 +2326,89 @@ test('native launcher refreshes an explicit stale projection instead of silently
   assert.equal(result.status, 0, result.stderr);
   assert.match(await readFile(projectionPath, 'utf8'), /^HSTACK_EXEC_PROJECTION_VERSION='2'$/m);
 });
+
+for (const dispatcher of ['native', 'javascript']) {
+  test(`explicit execution config ${dispatcher}: selection is authoritative and invalid overrides never discover defaults`, async t => {
+    const fixture = await memoryRoutingFixture(t, { availableKiB: 28000000, fallback: 'local' });
+    const directory = join(fixture.root, 'explicit policy');
+    await mkdir(directory);
+    const path = join(directory, 'dev-targets.json');
+    const config = { ...fixture.config, targets: fixture.config.targets.filter(target => target.name === 'roomy'),
+      commandExecution: { mode: 'auto', targets: ['roomy'], includeLocal: false, fallback: 'error' } };
+    await writeFile(path, JSON.stringify(config));
+    await writeNativeProjectionFixture(join(directory, 'dev-target-exec-v1.sh'), renderNativeExecutionProjection(config, { repoRoot }));
+    // Keep real configuration/manifest owners; only PM/SSH/OS boundaries are fixtures.
+    await executable(join(fixture.binDir, 'node'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$@"\n`);
+    await executable(join(fixture.binDir, 'probe-command'), '#!/bin/sh\nprintf "wrong-local\\n"\n');
+    const invoke = (configPath, args = ['probe-command'], environment = {}) => {
+      const invocation = { ...fixture.invocation, env: { ...fixture.invocation.env, ...environment, HAPPIER_EXEC_CONFIG_PATH: configPath } };
+      return dispatcher === 'native'
+        ? spawnSync('/bin/sh', [launcher, '--', ...args], invocation)
+        : spawnSync(process.execPath, [join(import.meta.dirname, 'dev_targets.mjs'), 'exec', 'auto', '--stack=repo-memory', '--', ...args], invocation);
+    };
+    await t.test('absolute override selects its remote-only pool instead of the discovered pool', async () => {
+      const result = invoke(path);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, 'remote:roomy\n');
+    });
+    await t.test('absolute policy does not depend on default discovery having a home directory', async () => {
+      const result = invoke(`${directory}/./dev-targets.json`, ['probe-command'], { HOME: '', HAPPIER_STACK_STORAGE_DIR: '' });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, 'remote:roomy\n');
+    });
+    await t.test('two valid colocated overrides retain their own target and local fallback policy', async () => {
+      const neighborPath = join(directory, 'neighbor.json');
+      const neighbor = { version: 3, targets: [],
+        commandExecution: { mode: 'auto', includeLocal: true, fallback: 'local' } };
+      await writeFile(neighborPath, JSON.stringify(neighbor));
+      await writeNativeProjectionFixture(join(directory, 'dev-target-exec-v1.sh'), renderNativeExecutionProjection(neighbor,
+        { repoRoot, configPath: neighborPath }));
+      const intendedLocal = invoke(neighborPath);
+      assert.equal(intendedLocal.status, 0, intendedLocal.stderr);
+      assert.equal(intendedLocal.stdout, 'wrong-local\n', 'the neighbor intentionally permits controller fallback');
+      await utimes(path, new Date(0), new Date(0));
+      const selected = invoke(path);
+      assert.equal(selected.status, 0, selected.stderr);
+      assert.equal(selected.stdout, 'remote:roomy\n', 'the named remote-only file must not borrow the neighbor projection');
+    });
+    await t.test('a valid explicit local fallback remains an intentional policy', async () => {
+      const fallbackDir = join(fixture.root, 'intentional fallback');
+      await mkdir(fallbackDir);
+      const fallbackPath = join(fallbackDir, 'dev-targets.json');
+      const localConfig = { version: 3, targets: [], commandExecution: { mode: 'auto', fallback: 'local' } };
+      await writeFile(fallbackPath, JSON.stringify(localConfig));
+      await writeNativeProjectionFixture(join(fallbackDir, 'dev-target-exec-v1.sh'), renderNativeExecutionProjection(localConfig, { repoRoot }));
+      const result = invoke(fallbackPath);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, 'wrong-local\n');
+    });
+    const invalidJson = join(directory, 'invalid.json');
+    const invalidSchema = join(directory, 'invalid-schema.json');
+    await writeFile(invalidJson, '{ invalid JSON');
+    await writeFile(invalidSchema, JSON.stringify({ version: 3, targets: 'invalid' }));
+    // Explicit input cannot borrow a newer valid projection from this directory.
+    for (const invalid of [invalidJson, invalidSchema]) await utimes(invalid, new Date(0), new Date(0));
+    for (const [name, configPath, args] of [
+      ['relative path before a package-manager cwd change', relative(repoRoot, path), ['corepack', 'yarn', '--cwd', 'apps/ui', '-s', 'typecheck']],
+      ['missing file', join(directory, 'missing.json')],
+      ['directory instead of a file', directory],
+      ['invalid JSON', invalidJson],
+      ['invalid schema', invalidSchema],
+    ]) await t.test(name, async () => {
+      await rm(fixture.invocation.env.DISPATCHES, { force: true });
+      const result = invoke(configPath, args);
+      assert.notEqual(result.status, 0, `${result.stderr}\n${result.stdout}`);
+      assert.equal(result.stdout, '', 'no local or remote payload may start');
+      await assert.rejects(readFile(fixture.invocation.env.DISPATCHES), { code: 'ENOENT' });
+    });
+    if (dispatcher === 'native') await t.test('an unloadable explicit projection cannot become local fallback', async () => {
+      await writeFile(join(directory, 'dev-target-exec-v1.sh'), 'return 7\n');
+      const result = invoke(path);
+      assert.notEqual(result.status, 0, result.stderr);
+      assert.equal(result.stdout, '');
+    });
+  });
+}
 
 test('native launcher preserves the canonical repository cwd boundary', async () => {
   const root = await mkdtemp(join(tmpdir(), 'happier-preferred-launcher-cwd-'));
@@ -2194,7 +2446,7 @@ test('remote heavyweight admission starts from the configured repository when SS
   t.after(async () => await rm(root, { recursive: true, force: true }));
   await mkdir(binDir, { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
-  await writeFile(configPath, '{}\n', 'utf8');
+  await writeFile(configPath, '{"version":1,"targets":[]}\n', 'utf8');
   await writeNativeProjectionFixture(projectionPath, [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -2272,7 +2524,7 @@ test('native launcher reuses one SSH master across sequential and concurrent com
   await writeFile(sshConfig, `Host linux-host\n  ControlMaster auto\n  ControlPath ${configuredControlPath}\n`);
   await mkdir(join(stackDir, 'dev-target-command-load-native'));
   await writeFile(provenancePath, `${historicalProvenance}\n`);
-  await writeFile(configPath, '{}\n', 'utf8');
+  await writeFile(configPath, '{"version":1,"targets":[]}\n', 'utf8');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -2492,7 +2744,7 @@ test('native launcher uses its private temporary SSH control root when XDG_RUNTI
   await mkdir(binDir, { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
   await mkdir(runtimeDir, { recursive: true });
-  await writeFile(configPath, '{}\n', 'utf8');
+  await writeFile(configPath, '{"version":1,"targets":[]}\n', 'utf8');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -2581,7 +2833,7 @@ test('native launcher admits another remote heavyweight command while the worker
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
   await mkdir(cacheDir, { recursive: true });
   await mkdir(runtimeDir, { recursive: true });
-  await writeFile(configPath, '{}\n', 'utf8');
+  await writeFile(configPath, '{"version":1,"targets":[]}\n', 'utf8');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -2693,7 +2945,7 @@ test('native launcher ignores an inherited local preference and dispatches to th
     new Date(0),
     new Date(0),
   );
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -2758,7 +3010,7 @@ test('native launcher automatic placement remains compatible with GNU awk local 
   const reservedLoadMarker = join(root, 'reserved-load-variable');
   await mkdir(binDir, { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -2818,43 +3070,46 @@ test('native launcher automatic placement remains compatible with GNU awk local 
   await assert.rejects(readFile(reservedLoadMarker), { code: 'ENOENT' });
 });
 
-test('AUTO ranks the controller admission floor above CPU preference when a worker fits', { skip: process.platform !== 'linux', timeout: 30000 }, async t => {
+test('AUTO keeps heavyweight compilation and validation on workers even when the controller is idle', { skip: process.platform !== 'linux', timeout: 30000 }, async t => {
   const { root } = await createTempFixture(t, { prefix: 'hstack-local-placement-floor-' });
-  const { launcher: native } = await installNativeAdmissionFixture({ root });
+  const { launcher: native } = await installNativeAdmissionFixture({ root, prepareDependencies: true });
   const checkout = join(root, 'native-owner');
   const bin = join(root, 'bin'), stack = join(root, 'stack');
   await mkdir(bin); await mkdir(stack);
   const config = join(stack, 'dev-targets.json');
-  await writeFile(config, '{}\n');
+  await writeFile(config, '{"version":1,"targets":[]}\n');
   await writeNativeProjectionFixture(join(stack, 'dev-target-exec-v1.sh'), renderNativeExecutionProjection({
     version: 3, targets: [{ name: 'worker', platform: 'posix', ssh: 'worker-host', repoDir: '/worker/repo', cliHomeDir: '/worker/home' }],
     commandExecution: { mode: 'auto', targets: ['worker'], includeLocal: true, fallback: 'error' },
   }, { repoRoot: checkout, stackBaseDir: stack }));
-  // Replace only OS telemetry and SSH. The real placement and admission
-  // owners distinguish 7 GiB on the controller from 6.5 GiB on a worker.
+  // Replace only OS telemetry and SSH. A CPU-idle controller has more memory
+  // than the worker, so load scoring alone incorrectly chooses the controller.
   await executable(join(bin, 'node'), `#!/bin/sh\nexec '${process.execPath}' "$@"\n`);
   await executable(join(bin, 'getconf'), '#!/bin/sh\nprintf "8\\n"\n');
   await executable(join(bin, 'sysctl'), '#!/bin/sh\nprintf "{ 0.0 0.0 0.0 }\\n"\n');
+  await executable(join(bin, 'memory_pressure'), '#!/bin/sh\nprintf "System-wide memory free percentage: 83%%\\n"\n');
   await executable(join(bin, 'systemctl'), '#!/bin/sh\nexit 1\n');
-  await executable(join(bin, 'awk'), '#!/bin/sh\ncase "$*" in */proc/meminfo*) printf "7340032 16777216\\n" ;; *) exec /usr/bin/awk "$@" ;; esac\n');
+  await executable(join(bin, 'awk'), '#!/bin/sh\ncase "$*" in */proc/meminfo*) printf "41943040 50331648\\n" ;; *) exec /usr/bin/awk "$@" ;; esac\n');
   await executable(join(bin, 'mutagen'), '#!/bin/sh\n[ "$2" != list ] || printf "%s|Watching|false|true|1|0/0|0/0|true|1|0/0|0/0|active|7|ok|0|0\\n" "$3"\n');
   await executable(join(bin, 'probe-command'), '#!/bin/sh\nprintf "local\\n"\n');
-  await executable(join(bin, 'ssh'), '#!/bin/sh\ncase "$*" in *getconf*) printf "8 16 0.4 22000000 10 0 6815744 16777216 0 0 0 0 0 0 0 linux 6815744\\n" ;; *command\\ -v*) exit 0 ;; *) printf "remote\\n" ;; esac\n');
-  const child = spawn('/bin/sh', [native, '--', './apps/stack/bin/hstack-exec', '--heavyweight-admission', '--class=validation', '--machine=worker', '--', 'probe-command'], {
-    cwd: checkout, env: { ...executionNeutralEnv, HOME: root, HAPPIER_EXEC_CONFIG_PATH: config,
-      HAPPIER_STACK_STORAGE_DIR: join(root, 'stacks'), PATH: `${bin}:/usr/bin:/bin`, TMPDIR: root },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  t.after(() => { if (child.exitCode == null && child.signalCode == null) child.kill('SIGTERM'); });
-  let stdout = '', stderr = '';
-  child.stdout.on('data', chunk => { stdout += chunk; });
-  child.stderr.on('data', chunk => {
-    stderr += chunk;
-    if (stderr.includes('waiting for heavyweight admission')) child.kill('SIGTERM');
-  });
-  const code = await new Promise((resolveExit, reject) => { child.once('error', reject); child.once('exit', resolveExit); });
-  assert.equal(code, 0, stderr);
-  assert.equal(stdout, 'remote\n', 'the busy but fitting worker must precede a controller that cannot admit');
+  await executable(join(bin, 'ssh'), '#!/bin/sh\ncase "$*" in *getconf*) printf "8 16 0.9 22000000 10 0 25165824 28311552 0 0 0 0 0 0 0 linux 25165824\\n" ;; *command\\ -v*) exit 0 ;; *) printf "remote\\n" ;; esac\n');
+  const invocation = {
+    cwd: checkout, encoding: 'utf8', timeout: 15000,
+    env: { ...executionNeutralEnv, CI: '', HOME: root, HAPPIER_EXEC_CONFIG_PATH: config,
+      HAPPIER_STACK_STORAGE_DIR: join(root, 'stacks'), PATH: `${bin}:/usr/bin:/bin`, TMPDIR: root,
+      HAPPIER_HSTACK_DISPATCH_CONTROL: '1',
+      NODE_OPTIONS: `${executionNeutralEnv.NODE_OPTIONS ?? ''} --conditions=happier-source --import=${join(repoRoot, 'node_modules/tsx/dist/loader.mjs')}`.trim() },
+  };
+  for (const admissionClass of ['compilation-ui', 'validation']) {
+    await t.test(admissionClass, () => {
+      const result = spawnSync('/bin/sh', [native, '--', './apps/stack/bin/hstack-exec', '--heavyweight-admission', `--class=${admissionClass}`, '--machine=worker', '--', 'probe-command'], invocation);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, 'remote\n', 'AUTO must preserve the controller for interactive work even when it wins load scoring');
+    });
+  }
+  const light = spawnSync('/bin/sh', [native, '--', 'probe-command'], invocation);
+  assert.equal(light.status, 0, light.stderr);
+  assert.equal(light.stdout, 'local\n', 'includeLocal still applies to lightweight commands');
 });
 
 test('native launcher ranks live local admission waiters against idle remote capacity', { skip: process.platform !== 'linux' }, async (t) => {
@@ -2867,7 +3122,7 @@ test('native launcher ranks live local admission waiters against idle remote cap
   await mkdir(bin);
   await mkdir(stack);
   await mkdir(join(admissionRoot, 'waiters'), { recursive: true });
-  await writeFile(config, '{}\n');
+  await writeFile(config, '{"version":1,"targets":[]}\n');
   await writeNativeProjectionFixture(join(stack, 'dev-target-exec-v1.sh'), renderNativeExecutionProjection({
     version: 3,
     targets: [{ name: 'worker', platform: 'posix', ssh: 'worker-host', repoDir: '/worker/repo', cliHomeDir: '/worker/home' }],
@@ -2904,7 +3159,7 @@ test('native launcher ranks live local admission waiters against idle remote cap
   assert.equal(stale.stdout, 'local\n', 'a stale process incarnation must not penalize local placement');
 });
 
-test('native launcher governs nested Vitest workers when automatic placement selects a pressured local Linux candidate', async (t) => {
+test('native launcher governs nested Vitest workers on an explicitly selected pressured local Linux host', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'happier-preferred-launcher-local-governor-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const { launcher } = await installNativeAdmissionFixture({ root, prepareDependencies: true });
@@ -2914,7 +3169,7 @@ test('native launcher governs nested Vitest workers when automatic placement sel
   const stackDir = join(storageDir, `repo-${repoToken}-native`);
   await mkdir(binDir, { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -2958,18 +3213,18 @@ test('native launcher governs nested Vitest workers when automatic placement sel
   ].join('\n'));
   await executable(join(binDir, 'vitest'), [
     '#!/bin/sh',
-    'printf "workers:%s:%s:%s:%s\\n" "${VITEST_MAX_THREADS-}" "${VITEST_MIN_THREADS-}" "${VITEST_MAX_FORKS-}" "${VITEST_MIN_FORKS-}"',
+    'printf "workers:%s:%s:%s:%s:%s\\n" "${HAPPIER_VITEST_GOVERNOR_MAX_WORKERS-}" "${VITEST_MAX_THREADS-}" "${VITEST_MIN_THREADS-}" "${VITEST_MAX_FORKS-}" "${VITEST_MIN_FORKS-}"',
     'printf "args:%s\\n" "$*"',
     '',
   ].join('\n'));
   await executable(join(binDir, 'corepack'), [
     '#!/bin/sh',
-    'printf "workers:%s:%s:%s:%s\\n" "${VITEST_MAX_THREADS-}" "${VITEST_MIN_THREADS-}" "${VITEST_MAX_FORKS-}" "${VITEST_MIN_FORKS-}"',
+    'printf "workers:%s:%s:%s:%s:%s\\n" "${HAPPIER_VITEST_GOVERNOR_MAX_WORKERS-}" "${VITEST_MAX_THREADS-}" "${VITEST_MIN_THREADS-}" "${VITEST_MAX_FORKS-}" "${VITEST_MIN_FORKS-}"',
     'printf "args:%s\\n" "$*"',
     '',
   ].join('\n'));
 
-  const result = spawnSync('/bin/sh', [launcher, '--', 'vitest', 'run', 'fixture.test.ts'], {
+  const result = spawnSync('/bin/sh', [launcher, '--local', '--', 'vitest', 'run', 'fixture.test.ts'], {
     cwd: repoRoot,
     env: {
       ...executionNeutralEnv,
@@ -2984,11 +3239,11 @@ test('native launcher governs nested Vitest workers when automatic placement sel
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /workers:1:1:1:1/);
-  assert.match(result.stdout, /args:run fixture\.test\.ts --maxWorkers=1 --minWorkers=1/);
+  assert.match(result.stdout, /workers:1::::/);
+  assert.match(result.stdout, /^args:run fixture\.test\.ts$/m);
   assert.doesNotMatch(result.stdout, /wrong-remote/);
 
-  const explicit = spawnSync('/bin/sh', [launcher, '--', 'vitest', 'run', '--maxWorkers=6'], {
+  const explicit = spawnSync('/bin/sh', [launcher, '--local', '--', 'vitest', 'run', '--maxWorkers=6'], {
     cwd: repoRoot,
     env: {
       ...executionNeutralEnv,
@@ -3000,12 +3255,12 @@ test('native launcher governs nested Vitest workers when automatic placement sel
     encoding: 'utf8',
   });
   assert.equal(explicit.status, 0, explicit.stderr);
-  assert.match(explicit.stdout, /workers::::/);
+  assert.match(explicit.stdout, /workers:::::/);
   assert.match(explicit.stdout, /args:run --maxWorkers=6/);
 
   const packageScript = spawnSync(
     '/bin/sh',
-    [launcher, '--', 'corepack', 'yarn', '-s', 'test:migration:bundled-plugin-projections'],
+    [launcher, '--local', '--', 'corepack', 'yarn', '-s', 'test:migration:bundled-plugin-projections'],
     {
       cwd: repoRoot,
       env: {
@@ -3019,8 +3274,38 @@ test('native launcher governs nested Vitest workers when automatic placement sel
     },
   );
   assert.equal(packageScript.status, 0, packageScript.stderr);
-  assert.match(packageScript.stdout, /workers:1:1:1:1/);
+  assert.match(packageScript.stdout, /workers:1::::/);
   assert.match(packageScript.stdout, /^args:yarn -s test:migration:bundled-plugin-projections$/m);
+});
+
+test('AUTO resolves repository-relative cwd on the selected target and retains it across admission retries', async t => {
+  const fixture = await memoryRoutingFixture(t, { availableKiB: 28000000, roomyLoad: 12 });
+  const { invocation } = fixture;
+  for (const cwdOption of [['--cwd=apps/cli'], ['--cwd', 'apps/cli']]) {
+    const result = spawnSync('/bin/sh', [launcher, ...cwdOption, '--', 'probe-command'], invocation);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, 'remote:starved\n');
+    assert.ok((await readFile(invocation.env.FIXTURE_TRACE, 'utf8')).includes(`cd -- '${repoRoot}/apps/cli'`));
+  }
+  await installBusyAdmissionTransport(fixture);
+  const retried = spawnSync('/bin/sh', [launcher, '--cwd=apps/cli', '--', 'vitest', 'run', 'fixture.test.ts'], invocation);
+  assert.equal(retried.status, 0, retried.stderr);
+  assert.equal(retried.stdout, 'payload:roomy\n');
+  assert.match(retried.stderr, /admission busy before dispatch/);
+  const trace = await readFile(invocation.env.FIXTURE_TRACE, 'utf8');
+  assert.ok(trace.includes(`cd -- '${repoRoot}/apps/cli'`), trace);
+  const invalid = spawnSync('/bin/sh', [launcher, '--cwd=apps/../../outside', '--', 'probe-command'], invocation);
+  assert.equal(invalid.status, 1, invalid.stderr);
+  assert.match(invalid.stderr, /working directory must stay inside/);
+  // AUTO's configured local fallback resolves the same repository-relative cwd.
+  await executable(join(fixture.binDir, 'probe-command'), '#!/bin/sh\npwd -P\n');
+  await executable(join(fixture.binDir, 'ssh'), '#!/bin/sh\nexit 255\n');
+  fixture.config.commandExecution.fallback = 'local';
+  await writeFile(fixture.configPath, JSON.stringify(fixture.config));
+  await writeNativeProjectionFixture(join(fixture.stackDir, 'dev-target-exec-v1.sh'), renderNativeExecutionProjection(fixture.config, { repoRoot }));
+  const fallback = spawnSync('/bin/sh', [launcher, '--cwd=apps/cli', '--', 'probe-command'], invocation);
+  assert.equal(fallback.status, 0, fallback.stderr);
+  assert.equal(fallback.stdout.trim(), join(repoRoot, 'apps/cli'));
 });
 
 test('native launcher exact target preserves remote-only cwd, environment, and TTY on only the named healthy target', async (t) => {
@@ -3037,7 +3322,7 @@ test('native launcher exact target preserves remote-only cwd, environment, and T
   await mkdir(binDir, { recursive: true });
   await mkdir(join(remoteRepo, 'apps/cli/dist'), { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -3129,7 +3414,7 @@ test('native launcher exact target fails closed when its command connection is r
   const stackDir = join(storageDir, `repo-${repoToken}-native`);
   await mkdir(binDir, { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -3219,7 +3504,7 @@ test('native launcher preserves a successful remote command when the login shell
   await mkdir(join(stackDir, 'dev-target-command-load-native'), { recursive: true });
   await mkdir(remoteRepo, { recursive: true });
   await mkdir(remoteHome, { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -3364,7 +3649,7 @@ test('native launcher refreshes a projection produced by older generator bytes',
     },
     commandExecution: { mode: 'local' },
   }), 'utf8');
-  await writeFile(projectionPath, [
+  await writeNativeProjectionFixture(projectionPath, [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
     "command_mode='local'",
@@ -3504,7 +3789,7 @@ test('native launcher excludes a target with no free repository filesystem space
   const stackDir = join(storageDir, `repo-${repoToken}-native`);
   await mkdir(binDir, { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -3576,7 +3861,7 @@ test('native launcher keeps remote execution available when sandboxing makes sta
   await mkdir(binDir, { recursive: true });
   await mkdir(runtimeDir, { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -3665,7 +3950,7 @@ test('native launcher admits APFS targets that round capacity to 100 percent wit
   const stackDir = join(storageDir, `repo-${repoToken}-native`);
   await mkdir(binDir, { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -3725,7 +4010,7 @@ test('native launcher re-probes a cached unavailable target as soon as its sync 
   await mkdir(binDir, { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
   await mkdir(cacheDir, { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeFile(join(cacheDir, 'mac.cache'), `${Math.floor(Date.now() / 1_000)} 0 - 1\n`);
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
@@ -3783,7 +4068,7 @@ test('native launcher retries another target when the selected host is unreachab
   const stackDir = join(storageDir, `repo-${repoToken}-native`);
   await mkdir(binDir, { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -3852,7 +4137,7 @@ test('native launcher retries another target when a live control master refuses 
   const warmedMarker = join(root, 'mac-master-warmed');
   await mkdir(binDir, { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -3950,7 +4235,7 @@ test('native launcher retries the same target without multiplexing when the auth
   const stackDir = join(storageDir, `repo-${repoToken}-native`);
   await mkdir(binDir, { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -4042,7 +4327,7 @@ test('native launcher never replays an authoritative remote command that starts 
   const stackDir = join(storageDir, `repo-${repoToken}-native`);
   await mkdir(binDir, { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -4127,7 +4412,7 @@ test('native launcher accounts for an in-flight dispatch from another sandboxed 
   });
   await mkdir(binDir, { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -4242,7 +4527,7 @@ test('anonymous controller probe and dispatch locks cannot hold reachable work',
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
   await mkdir(dispatchLock, { recursive: true });
   await mkdir(join(cacheDir, 'remote.cache.lock'));
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -4320,7 +4605,7 @@ test('native launcher cache writes and reservations survive reused sandbox proce
   await mkdir(binDir, { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
   await mkdir(cacheDir, { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   const cachedAt = Math.floor(Date.now() / 1_000);
   await writeFile(join(cacheDir, 'remote.cache'), `${cachedAt} 1 0.125000 8\n`);
   await writeFile(join(cacheDir, `remote.command.${probeCommandCacheKey}.cache`), `${cachedAt} 1 ready \n`);
@@ -4403,7 +4688,7 @@ test(`native launcher keeps ${platform} control commands preferred and adapts re
   const stackDir = join(storageDir, `repo-${repoToken}-native`);
   await mkdir(binDir, { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     "dependency_direct_commands='node npm npx pnpm tsc vitest yarn'",
@@ -4531,6 +4816,11 @@ test(`native launcher keeps ${platform} control commands preferred and adapts re
     env: { ...env, VITEST_MAX_THREADS: '7' },
     encoding: 'utf8',
   });
+  const explicitPackageWorkers = spawnSync('/bin/sh', [launcher, '--', 'vitest', 'run'], {
+    cwd: repoRoot,
+    env: { ...env, HAPPIER_VITEST_MAX_WORKERS: '2', VITEST_UI_MAX_FORKS: '3' },
+    encoding: 'utf8',
+  });
   const explicitRemoteVitestEnvironment = spawnSync('/bin/sh', [launcher, '--target=linux', '--env=VITEST_MAX_FORKS=3', '--', 'vitest', 'run'], {
     cwd: repoRoot,
     env: { ...env, VITEST_MAX_FORKS: '7' },
@@ -4566,24 +4856,24 @@ test(`native launcher keeps ${platform} control commands preferred and adapts re
     explicitVitestWorkers,
     explicitVitestPoolWorkers,
     explicitVitestEnvironment,
+    explicitPackageWorkers,
     explicitRemoteVitestEnvironment,
     explicitTypeScriptEnvironment,
   })) {
     assert.equal(result.status, 0, `${name}: ${result.stderr}\n${result.stdout}`);
   }
   assert.doesNotMatch(control.stdout, /nice -n 10|--maxWorkers|--threads|--singleThreaded/);
-  assert.match(vitest.stdout, /VITEST_MAX_THREADS=1.*VITEST_MIN_THREADS=1.*nice -n 10.*vitest/s);
-  assert.match(vitest.stdout, /VITEST_MAX_FORKS=1.*VITEST_MIN_FORKS=1/s);
-  assert.match(vitest.stdout, /vitest.*--maxWorkers=1.*--minWorkers=1/s);
+  assert.match(vitest.stdout, /HAPPIER_VITEST_GOVERNOR_MAX_WORKERS=1.*nice -n 10.*vitest/s);
+  assert.doesNotMatch(vitest.stdout, /export VITEST_MAX_THREADS=|export VITEST_MAX_FORKS=|--maxWorkers|--minWorkers/);
   assert.doesNotMatch(vitest.stdout, /fi;;/);
   assert.match(search.stdout, /nice -n 10.*rg.*--threads=1/s);
   assert.match(typecheck.stdout, /GOMAXPROCS=1.*nice -n 10.*runTypeScriptCli\.mjs/s);
   assert.doesNotMatch(typecheck.stdout, /--singleThreaded/);
-  assert.match(scriptedVitest.stdout, /VITEST_MAX_THREADS=1.*nice -n 10.*corepack.*yarn.*test:local/s);
+  assert.match(scriptedVitest.stdout, /HAPPIER_VITEST_GOVERNOR_MAX_WORKERS=1.*nice -n 10.*corepack.*yarn.*test:local/s);
   assert.doesNotMatch(scriptedVitest.stdout, /--maxWorkers|--minWorkers/);
   assert.match(
     scriptedNonVitestTest.stdout,
-    /VITEST_MAX_THREADS=1.*nice -n 10.*corepack.*yarn.*test:migration:bundled-plugin-projections/s,
+    /HAPPIER_VITEST_GOVERNOR_MAX_WORKERS=1.*nice -n 10.*corepack.*yarn.*test:migration:bundled-plugin-projections/s,
   );
   assert.doesNotMatch(scriptedNonVitestTest.stdout, /--maxWorkers|--minWorkers/);
   assert.match(
@@ -4593,13 +4883,16 @@ test(`native launcher keeps ${platform} control commands preferred and adapts re
   assert.doesNotMatch(directNonVitestTest.stdout, /--maxWorkers|--minWorkers/);
   assert.match(scriptedTypecheck.stdout, /GOMAXPROCS=1.*nice -n 10.*corepack.*yarn.*typecheck:local/s);
   assert.match(quietVitest.stdout, /nice -n 10.*vitest/s);
-  assert.doesNotMatch(quietVitest.stdout, /VITEST_MAX_THREADS=|--maxWorkers/);
+  assert.doesNotMatch(quietVitest.stdout, /HAPPIER_VITEST_GOVERNOR_MAX_WORKERS=|VITEST_MAX_THREADS=|--maxWorkers/);
   assert.match(explicitVitestWorkers.stdout, /vitest.*--maxWorkers=6/s);
   assert.doesNotMatch(explicitVitestWorkers.stdout, /VITEST_MAX_THREADS=1|VITEST_MAX_FORKS=1/);
   assert.match(explicitVitestPoolWorkers.stdout, /vitest.*--poolOptions\.forks\.maxForks=6/s);
   assert.doesNotMatch(explicitVitestPoolWorkers.stdout, /VITEST_MAX_THREADS=1|VITEST_MAX_FORKS=1/);
   assert.match(explicitVitestEnvironment.stdout, /VITEST_MAX_THREADS=.*7/s);
   assert.doesNotMatch(explicitVitestEnvironment.stdout, /VITEST_MAX_THREADS=1|VITEST_MAX_FORKS=1/);
+  assert.match(explicitPackageWorkers.stdout, /export HAPPIER_VITEST_MAX_WORKERS=.*2/s);
+  assert.match(explicitPackageWorkers.stdout, /export VITEST_UI_MAX_FORKS=.*3/s);
+  assert.doesNotMatch(explicitPackageWorkers.stdout, /export VITEST_MAX_THREADS=|export VITEST_MAX_FORKS=|--maxWorkers/);
   assert.match(explicitRemoteVitestEnvironment.stdout, /VITEST_MAX_FORKS=.*7.*VITEST_MAX_FORKS=.*3/s);
   assert.doesNotMatch(explicitRemoteVitestEnvironment.stdout, /--maxWorkers=1|VITEST_MAX_FORKS=1/);
   assert.match(explicitTypeScriptEnvironment.stdout, /GOMAXPROCS=.*7/s);
@@ -4619,7 +4912,7 @@ test('native launcher excludes a low-load target that cannot launch the requeste
   const stackDir = join(storageDir, `repo-${repoToken}-native`);
   await mkdir(binDir, { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -4683,7 +4976,7 @@ test('native launcher bootstraps dependency-consuming commands and leaves source
   const stackDir = join(storageDir, `repo-${repoToken}-native`);
   await mkdir(binDir, { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     "dependency_direct_commands='node npm npx pnpm tsc vitest yarn'",
@@ -4843,7 +5136,8 @@ test('native launcher bootstraps dependency-consuming commands and leaves source
   assert.match(composedVitest.stdout, /vitest-after-preparation/);
   assert.match(composedVitest.stdout, /remote_validation_preparation\.mjs/);
   assert.match(composedVitest.stdout, /--component-relative-dir=packages\/tests/);
-  assert.match(composedVitest.stdout, /run-vitest-with-heartbeat\.mjs.*--maxWorkers=[1-9][0-9]*.*--minWorkers=1/s);
+  assert.match(composedVitest.stdout, /HAPPIER_VITEST_GOVERNOR_MAX_WORKERS=[1-9][0-9]*/s);
+  assert.doesNotMatch(composedVitest.stdout, /--maxWorkers|--minWorkers/);
 
   const cwdVitest = spawnSync('/bin/sh', [
     launcher,
@@ -4974,7 +5268,7 @@ test('queue policy native launcher delegates dependency refresh waiting to the r
   const dependencyBusyMarker = join(root, 'dependency-busy');
   await mkdir(binDir, { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeFile(dependencyBusyMarker, '1\n');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
@@ -5205,7 +5499,7 @@ test('native launcher cancels only its remote execution after an authoritative S
   await mkdir(binDir, { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
   await mkdir(runtimeDir, { recursive: true });
-  await writeFile(configPath, '{}\n', 'utf8');
+  await writeFile(configPath, '{"version":1,"targets":[]}\n', 'utf8');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -5314,7 +5608,7 @@ test('native launcher executes locally when configured command targets are not P
   const stackDir = join(storageDir, `repo-${repoToken}-native`);
   await mkdir(binDir, { recursive: true });
   await mkdir(stackDir, { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     `projection_repo_root='${repoRoot}'`,
@@ -5354,7 +5648,7 @@ test('native launcher exact target blocks dispatch when a clean cached probe is 
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'openssh'), { recursive: true });
   await mkdir(cacheDir, { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   const cachedAt = Math.floor(Date.now() / 1_000);
   await writeFile(join(cacheDir, 'linux.cache'), `${cachedAt} 1 0.000000 4\n`);
   await writeFile(join(cacheDir, `linux.command.${probeCommandCacheKey}.cache`), `${cachedAt} 1 ready \n`);
@@ -5447,7 +5741,7 @@ test('startup and explicit sync share the command dispatch barrier and preserve 
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
   await mkdir(cacheDir, { recursive: true });
   await mkdir(syncControlDir, { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeFile(sourceBytes, 'X\n');
   const cachedAt = Math.floor(Date.now() / 1_000);
   await writeFile(join(cacheDir, 'linux.cache'), `${cachedAt} 1 0.000000 4\n`);
@@ -5584,7 +5878,7 @@ test('native launcher flushes an automatically selected mirror and retries anoth
   await mkdir(binDir, { recursive: true });
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
   await mkdir(cacheDir, { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeFile(join(cacheDir, 'provenance.jsonl'), '');
   const cachedAt = Math.floor(Date.now() / 1_000);
   await writeFile(join(cacheDir, 'linux.cache'), `${cachedAt} 1 0.000000 4\n`);
@@ -5727,7 +6021,7 @@ test('native launcher exact target flushes the selected Mutagen session before r
   await mkdir(mutagenDataDir, { recursive: true });
   await mkdir(mutagenSshPath, { recursive: true });
   await mkdir(cacheDir, { recursive: true });
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   // Cached load keeps placement separate from prerequisite inspection. Only
   // payload execution requires the source flush, not the SSH tool preflight.
   const cachedAt = Math.floor(Date.now() / 1_000);
@@ -5884,7 +6178,7 @@ test('native launcher admits heavyweight local and remote jobs, reclaims stale o
   await mkdir(join(stackDir, 'mutagen', 'data'), { recursive: true });
   await mkdir(staleOwner, { recursive: true });
   await writeFile(join(staleOwner, 'process'), '99999999 stale\n', 'utf8');
-  await writeFile(join(stackDir, 'dev-targets.json'), '{}\n');
+  await writeFile(join(stackDir, 'dev-targets.json'), '{"version":1,"targets":[]}\n');
   await writeNativeProjectionFixture(join(stackDir, 'dev-target-exec-v1.sh'), [
     "HSTACK_EXEC_PROJECTION_VERSION='2'",
     "dependency_direct_commands='node npm npx pnpm tsc vitest yarn'",

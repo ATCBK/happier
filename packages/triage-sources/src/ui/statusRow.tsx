@@ -12,16 +12,29 @@ type TriageStatusRowContent = Readonly<{
 export type TriageStatusRowProps = TriageStatusRowContent & (
   | Readonly<{ presentation: 'compact'; leading?: React.ReactNode; grow?: boolean }>
   | Readonly<{ presentation: 'summary'; nameVariant?: 'label' | 'micro'; nameTone?: TextTone }>
-  | Readonly<{ presentation: 'list'; detail?: string; actions?: React.ReactNode }>
+  | (Readonly<{ presentation: 'list'; detail?: string }> & (
+    /** Row-level actions live in the row's quiet overflow, never as buttons beside every row. */
+    | Readonly<{
+      secondaryActions: readonly Readonly<{ id: string; label: string }>[];
+      onSecondaryAction: (id: string) => void;
+    }>
+    | Readonly<{ secondaryActions?: undefined; onSecondaryAction?: undefined }>
+  ))
 );
 
 /** Presentation only: no check filtering, review decision, merge policy, or read lifecycle. */
 export function TriageStatusRow(props: TriageStatusRowProps): React.ReactElement {
   if (props.presentation === 'list') {
-    return <Item title={props.name} tone={props.tone ?? 'neutral'}
-      {...(props.status === undefined ? {} : { subtitle: props.status })}
-      {...(props.detail === undefined ? {} : { detail: props.detail })}
-      accessoryOutsidePressable accessory={props.actions} />;
+    // As in the compact and summary forms, the state word carries the tone and the name stays ink: the
+    // status is the row's trailing fact (one scannable column, rose only where a check failed) and the
+    // time it was read sits under the name.
+    return <Item title={props.name}
+      {...(props.status === undefined ? {} : { detail: props.status })}
+      {...(props.status === undefined || props.tone === undefined || props.tone === 'neutral' ? {} : { detailTone: props.tone })}
+      {...(props.detail === undefined ? {} : props.status === undefined ? { detail: props.detail } : { subtitle: props.detail })}
+      {...(props.secondaryActions === undefined
+        ? {}
+        : { secondaryActions: props.secondaryActions, onSecondaryAction: props.onSecondaryAction })} />;
   }
   if (props.presentation === 'summary') {
     const name = <Text variant={props.nameVariant ?? 'label'} tone={props.nameTone ?? 'neutral'} value={props.name} />;

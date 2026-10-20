@@ -233,7 +233,7 @@ const OauthCredentialPayloadSchema = lazyZodSchema(() => z.object({
     tokenType: z.nullable(z.string().check(z.minLength(1))),
     providerAccountId: z.nullable(z.string().check(z.minLength(1))),
     providerEmail: z.nullable(z.string().check(z.minLength(1))),
-    raw: z.nullable(z.unknown()),
+    raw: z.optional(z.nullable(z.unknown())),
 }));
 
 const TokenCredentialPayloadSchema = lazyZodSchema(() => z.object({
@@ -242,7 +242,7 @@ const TokenCredentialPayloadSchema = lazyZodSchema(() => z.object({
     token: z.string().check(z.trim(), z.minLength(1)),
     providerAccountId: z.nullable(z.string().check(z.minLength(1))),
     providerEmail: z.nullable(z.string().check(z.minLength(1))),
-    raw: z.nullable(z.unknown()),
+    raw: z.optional(z.nullable(z.unknown())),
 }));
 
 const ConnectedServiceCredentialBaseSchema = lazyZodSchema(() => z.object({
@@ -419,6 +419,15 @@ export const ConnectedServiceQuotaRecoveryCreditV1Schema = lazyZodSchema(() => z
     }));
 export type ConnectedServiceQuotaRecoveryCreditV1 = z.infer<typeof ConnectedServiceQuotaRecoveryCreditV1Schema>;
 
+/** Credit-level eligibility; inventory counts and debit admission remain caller-owned. */
+export function isConnectedServiceQuotaRecoveryCreditAvailable(
+    credit: Readonly<Pick<ConnectedServiceQuotaRecoveryCreditV1, 'status' | 'expiresAtMs'>>,
+    nowMs: number,
+): boolean {
+    return credit.status === 'available'
+        && (credit.expiresAtMs == null || credit.expiresAtMs > nowMs);
+}
+
 export const ConnectedServiceQuotaRecoveryCreditsV1Schema = lazyZodSchema(() => z.strictObject({
         availableCount: z.number().check(z.int(), z.nonnegative()),
         totalCount: z.optional(z.number().check(z.int(), z.nonnegative())),
@@ -450,6 +459,16 @@ export type ConnectedServiceQuotaRecoveryCreditDetailsV1 = z.infer<typeof Connec
 export const ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema = lazyZodSchema(() => z.record(z.string().check(z.trim(), z.minLength(1)), ConnectedServiceQuotaRecoveryCreditDetailsV1Schema));
 export type ConnectedServiceQuotaRecoveryCreditDetailsByIdV1 = z.infer<typeof ConnectedServiceQuotaRecoveryCreditDetailsByIdV1Schema>;
 
+export const ConnectedServiceQuotaMeterDetailsV1Schema = lazyZodSchema(() => z.object({
+    note: z.optional(z.nullable(z.string().check(z.minLength(1)))),
+    code: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    rawScope: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    remainingPct: z.optional(z.nullable(z.number().check(z.minimum(0), z.maximum(100)))),
+    scope: z.optional(ConnectedServiceQuotaMeterScopeV1Schema),
+    providerLimitId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    limitCategory: z.optional(ConnectedServiceLimitCategoryV1Schema),
+}));
+
 export const ConnectedServiceQuotaMeterV1Schema = lazyZodSchema(() => z.object({
     meterId: z.string().check(z.minLength(1)),
     label: z.string().check(z.minLength(1)),
@@ -474,16 +493,7 @@ export const ConnectedServiceQuotaMeterV1Schema = lazyZodSchema(() => z.object({
     scope: z.optional(ConnectedServiceQuotaMeterScopeV1Schema),
     limitScope: z.optional(ConnectedServiceQuotaLimitScopeV1Schema),
     confidence: z.optional(ConnectedServiceQuotaConfidenceV1Schema),
-    details: z._default(z.optional(z
-        .object({
-            note: z.optional(z.nullable(z.string().check(z.minLength(1)))),
-            code: z.optional(z.string().check(z.trim(), z.minLength(1))),
-            rawScope: z.optional(z.string().check(z.trim(), z.minLength(1))),
-            remainingPct: z.optional(z.nullable(z.number().check(z.minimum(0), z.maximum(100)))),
-            scope: z.optional(ConnectedServiceQuotaMeterScopeV1Schema),
-            providerLimitId: z.optional(z.string().check(z.trim(), z.minLength(1))),
-            limitCategory: z.optional(ConnectedServiceLimitCategoryV1Schema),
-        })), {}),
+    details: z._default(z.optional(ConnectedServiceQuotaMeterDetailsV1Schema), {}),
 }));
 
 export type ConnectedServiceQuotaMeterV1 = z.infer<typeof ConnectedServiceQuotaMeterV1Schema>;
@@ -758,7 +768,7 @@ export const ConnectedServiceAuthGroupMemberPatchRequestV1Schema = lazyZodSchema
 export type ConnectedServiceAuthGroupMemberPatchRequestV1 = z.infer<typeof ConnectedServiceAuthGroupMemberPatchRequestV1Schema>;
 
 export const ConnectedServiceAuthGroupMemberDeleteRequestV1Schema = lazyZodSchema(() => z.strictObject({
-        expectedGeneration: z.pipe(z.transform((value) => {
+        expectedGeneration: (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
             if (typeof value !== 'string') return value;
             const trimmed = value.trim();
             return trimmed.length > 0 ? Number(trimmed) : value;

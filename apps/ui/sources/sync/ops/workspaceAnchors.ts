@@ -12,12 +12,13 @@ export type ResolveWorkspaceAnchorsInput = WorkspaceAnchorsResolveRequestV1 & Re
     machineId: string;
     serverId?: string | null;
     timeoutMs?: number | null;
+    signal?: AbortSignal;
 }>;
 
 export async function resolveWorkspaceAnchors(
     input: ResolveWorkspaceAnchorsInput,
 ): Promise<WorkspaceAnchorsResolveResponseV1> {
-    const { machineId, serverId, timeoutMs, ...request } = input;
+    const { machineId, serverId, timeoutMs, signal, ...request } = input;
     const payload = WorkspaceAnchorsResolveRequestV1Schema.parse(request);
 
     const response = await machineRpcWithServerScope<unknown, WorkspaceAnchorsResolveRequestV1>({
@@ -26,6 +27,7 @@ export async function resolveWorkspaceAnchors(
         timeoutMs: timeoutMs ?? undefined,
         method: RPC_METHODS.WORKSPACE_ANCHORS_RESOLVE,
         payload,
+        signal,
     });
 
     const parsed = WorkspaceAnchorsResolveResponseV1Schema.safeParse(response);

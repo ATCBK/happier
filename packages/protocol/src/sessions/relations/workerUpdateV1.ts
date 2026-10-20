@@ -10,6 +10,9 @@ import {
 } from '../../workflows/workflowIdsV1.js';
 import { WorkflowRunStateV1Schema } from '../../workflows/workflowProgressV1.js';
 import { ExecutionRunIdSchema, SessionIdSchema } from '../idsV1.js';
+import { SessionRuntimeIssueV1Schema } from '../control/runtimeIssueV1.js';
+import type { FollowEventKindV1 } from '../follow/sessionFollowPolicyV1.js';
+import { isTerminalAutomationRunStateV3 } from '../../automations/automationRunStateV3.js';
 
 const WorkerUpdateSessionIdV1Schema = asProtocolZod<string, string>(SessionIdSchema);
 
@@ -40,15 +43,15 @@ export function refineWorkerDeliverableResultV1(result: string | undefined, deli
     context.addIssue({ code: "custom", path: [path], message: 'Worker result and references exceed the completion result bound' });
   }
 }
-export const SessionWorkerPublishInputV1Schema = lazyZodSchema(() => z.strictObject({
+export const SessionUpdatePostInputV1Schema = lazyZodSchema(() => z.strictObject({
   summary: ExecutionRunCompletionV1Schema.shape.summary._zod.def.innerType,
   deliverables: z.optional(WorkerDeliverablesV1Schema),
 }).check(z.superRefine((report, context) => refineWorkerDeliverableResultV1(report.summary, report.deliverables, context, 'summary'))));
-export type SessionWorkerPublishInputV1 = z.infer<typeof SessionWorkerPublishInputV1Schema>;
-export const SessionWorkerPublishOutputV1Schema = lazyZodSchema(() => z.strictObject({
+export type SessionUpdatePostInputV1 = z.infer<typeof SessionUpdatePostInputV1Schema>;
+export const SessionUpdatePostOutputV1Schema = lazyZodSchema(() => z.strictObject({
   sessionId: WorkerUpdateSessionIdV1Schema,
-  leadSessionId: WorkerUpdateSessionIdV1Schema,
   localId: z.string().check(z.minLength(1)),
+  persisted: z.literal(true),
 }));
 
 /** Epoch 1: the envelope and every nested identity/engine object are closed. */
@@ -86,6 +89,7 @@ const WorkerUpdateFieldsV1Schema = lazyZodSchema(() => z.strictObject({
   truncated: z.optional(z.boolean()),
   transcriptPointer: z.optional(WorkerUpdateTranscriptPointerV1Schema),
   canInspect: z.boolean(),
+  runtimeIssueV1: z.optional(SessionRuntimeIssueV1Schema),
 }));
 
 export const WorkerUpdateV1Schema = lazyZodSchema(() => z.discriminatedUnion('workerKind', [
@@ -120,3 +124,32 @@ export const WorkerUpdateV1Schema = lazyZodSchema(() => z.discriminatedUnion('wo
   }
 })));
 export type WorkerUpdateV1 = z.infer<typeof WorkerUpdateV1Schema>;
+
+/** Source outcome is authoritative; the legacy wake only carries live attention, never success. */
+export function classifyWorkerUpdateEventV1(update: Readonly<
+  Pick<WorkerUpdateV1, 'workerKind' | 'ownerState'> & Partial<Pick<WorkerUpdateV1, 'wake'>>
+>): FollowEventKindV1 | null {
+  if (update.workerKind === 'execution_run') {
+    return update.ownerState === 'succeeded' ? 'finished' : 'failed_or_stopped';
+  }
+  if (update.workerKind === 'workflow_run') {
+    if (isTerminalAutomationRunStateV3(update.ownerState) && update.ownerState !== 'succeeded') return 'failed_or_stopped';
+    if (update.wake === 'needs_you') return 'needs_you';
+    return update.ownerState === 'succeeded' ? 'finished' : null;
+  }
+  switch (update.ownerState) {
+    case 'failed': case 'cancelled': return 'failed_or_stopped';
+    case 'needs_input': return 'needs_you';
+    case 'stalled': return 'stalled';
+    case 'published': return 'update_posted';
+    case 'settled': return update.wake === 'needs_you' ? 'needs_you' : 'finished';
+    default: return null;
+  }
+}
+
+/** Transitional scheduling projection. Outcome and policy readers use the classifier above. */
+export function resolveWorkerUpdateWakeV1(event: FollowEventKindV1): WorkerUpdateV1['wake'] {
+  if (event === 'needs_you' || event === 'failed_or_stopped') return 'needs_you';
+  if (event === 'stalled') return 'stalled';
+  return event === 'update_posted' ? 'published' : 'finished';
+}

@@ -4,6 +4,7 @@ import { archiveSessionOnceInactive } from './archiveSessionOnceInactive';
 import { requestSessionStop } from './requestSessionStop';
 import { isSessionActiveArchiveError, setSessionArchivedStateById } from './sessionArchivedStateById';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
+import { runTracedExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
 
 export { setSessionArchivedStateById } from './sessionArchivedStateById';
 
@@ -23,16 +24,25 @@ export async function setSessionArchivedState(params: Readonly<{
   credentials: StoredCredentials;
   idOrPrefix: string;
   archived: boolean;
+  signal?: AbortSignal;
+  externalAction?: Parameters<typeof requestSessionStop>[0]['externalAction'];
+  resolveAuthorizationHeaders?: Parameters<typeof requestSessionStop>[0]['resolveAuthorizationHeaders'];
   serverFeaturesSnapshot?: CliServerFeaturesSnapshot;
 }>): Promise<
   | Readonly<{ ok: true; sessionId: string; archivedAt: number | null }>
-  | Readonly<{ ok: false; code: 'session_not_found' | 'session_id_ambiguous' | 'session_lookup_timeout' | 'unsupported'; candidates?: string[] }>
+  | Extract<Awaited<ReturnType<typeof requestSessionStop>>, { ok: false }>
 > {
-  const resolved = await resolveSessionIdOrPrefix({
+  const actionId = params.archived ? 'session.archive' : 'session.unarchive';
+  const signal = params.signal ?? params.externalAction?.context.signal;
+  signal?.throwIfAborted();
+  const rootRequestId = params.externalAction?.context.actionRequestId;
+  const resolved = await runTracedExternalActionStage(actionId, rootRequestId, 'session_archive.resolve_session', () => resolveSessionIdOrPrefix({
     credentials: params.credentials,
     idOrPrefix: params.idOrPrefix,
+    ...(signal ? { signal } : {}),
+    ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
     ...(params.serverFeaturesSnapshot ? { serverFeaturesSnapshot: params.serverFeaturesSnapshot } : {}),
-  });
+  }));
   if (!resolved.ok) {
     return {
       ok: false,
@@ -43,11 +53,13 @@ export async function setSessionArchivedState(params: Readonly<{
 
   let result;
   try {
-    result = await setSessionArchivedStateById({
+    result = await runTracedExternalActionStage(actionId, rootRequestId, 'session_archive.http', () => setSessionArchivedStateById({
       token: params.credentials.token,
       sessionId: resolved.sessionId,
       archived: params.archived,
-    });
+      ...(signal ? { signal } : {}),
+      ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
+    }));
   } catch (error) {
     if (!params.archived || !isSessionActiveArchiveError(error)) {
       throw error;
@@ -56,18 +68,20 @@ export async function setSessionArchivedState(params: Readonly<{
     const stopResult = await requestSessionStop({
       credentials: params.credentials,
       idOrPrefix: resolved.sessionId,
+      stopIntent: 'lifecycle_control',
+      ...(signal ? { signal } : {}),
+      ...(params.externalAction ? { externalAction: { ...params.externalAction, effectActionId: 'session.stop' } } : {}),
+      ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
     });
     if (!stopResult.ok) {
-      return {
-        ok: false,
-        code: stopResult.code,
-        ...(stopResult.candidates ? { candidates: stopResult.candidates } : {}),
-      };
+      return stopResult;
     }
 
     result = await archiveSessionOnceInactive({
       token: params.credentials.token,
       sessionId: resolved.sessionId,
+      ...(signal ? { signal } : {}),
+      ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
     });
   }
 

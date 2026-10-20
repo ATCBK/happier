@@ -7,6 +7,7 @@ import {
     CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY,
     CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD,
     CURRENT_SESSION_PRESENTATION_UNBIND_RPC_METHOD,
+    type CurrentSessionPresentationCommandV1,
 } from '@happier-dev/protocol/sessions';
 import type {
     ComposerPresentationDocumentMutation,
@@ -911,7 +912,7 @@ describe('CurrentSessionPresentationRuntime', () => {
             applySessionPresentationIntent: applyIntent,
             isCurrent: () => presented,
         });
-        const withCommand = (command: Record<string, unknown>) => storage.setState((state) => ({
+        const withCommand = (command: CurrentSessionPresentationCommandV1) => storage.setState((state) => ({
             ...state,
             deletedSessionIds: {},
             sessions: {

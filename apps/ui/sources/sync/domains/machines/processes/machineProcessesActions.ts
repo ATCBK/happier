@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import type { MachineProcessesActionId, MACHINE_PROCESSES_ACTION_INPUT_SCHEMAS } from '@happier-dev/protocol/actions/specs/machineProcesses';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { selectMachineProcessesLeftBehind } from './selectMachineProcessesLeftBehind';
@@ -9,13 +9,17 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 
 export type MachineProcessesActionScope = Readonly<{
     serverId: string; expectedAccountId: string; signal?: AbortSignal; actionRequestId?: string;
+    /** Rich surface content is rendered only when the shared Action policy asks. */
+    confirmation?: NonNullable<Parameters<typeof createFrontDoorActionExecute>[1]>['presentUserActionConfirmation'];
 }>;
 const execute = createFrontDoorActionExecute();
 
 /** Preserve canonical success, failure and approval-Artifact outcomes for the mounted surface. */
 export function executeMachineProcessesActionV1<Id extends MachineProcessesActionId>(actionId: Id,
     input: z.infer<(typeof MACHINE_PROCESSES_ACTION_INPUT_SCHEMAS)[Id]>, scope: MachineProcessesActionScope) {
-    return execute(actionId, input, { ...scope, surface: 'ui' });
+    const { confirmation, ...context } = scope;
+    const invoke = confirmation ? createFrontDoorActionExecute(undefined, { presentUserActionConfirmation: confirmation }) : execute;
+    return invoke(actionId, input, { ...context, surface: 'ui' });
 }
 
 /** Cleanup echoes exactly the same filtered set used by its rendered count and memory total. */

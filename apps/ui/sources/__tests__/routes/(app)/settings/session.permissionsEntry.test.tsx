@@ -1,20 +1,66 @@
 import * as React from 'react';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { Item } from '@/components/ui/lists/Item';
+import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
 
-import { renderSettingsView, standardCleanup } from '@/dev/testkit';
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
+import { renderSettingsView as renderBaseSettingsView, standardCleanup } from '@/dev/testkit';
+import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
+import { settingsParse } from '@/sync/domains/settings/settings';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
+import { localSettingsParse } from '@/sync/domains/settings/localSettings';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import {
-    installSessionSettingsEntryModuleMocks,
     resetSessionSettingsEntryState,
     sessionSettingsEntryState,
 } from './sessionSettingsEntryTestHelpers';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-installSessionSettingsEntryModuleMocks();
+await vi.hoisted(async () => {
+    const { installSessionSettingsEntryModuleMocks } = await import('./sessionSettingsEntryTestHelpers');
+    installSessionSettingsEntryModuleMocks();
+});
+vi.doUnmock('@/sync/domains/state/storage');
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+const { storage } = await import('@/sync/domains/state/storage');
+await Promise.all([
+    import('@/app/(app)/settings/session'),
+    import('@/app/(app)/settings/session/provider-limits'),
+]);
+let account: Awaited<ReturnType<typeof createSecretSettingsTestHarness>> | undefined;
+let foldersEnabled = false;
 
-afterEach(() => {
+async function renderSettingsView(element: React.ReactElement) {
+    const features = createRootLayoutFeaturesResponse();
+    for (const [id, enabled] of [['sessions', true], ['sessions.folders', foldersEnabled]] as const) {
+        if (!tryWriteServerEnabledBitInPlace(features, id, enabled)) throw new Error(`Missing fixture feature ${id}`);
+    }
+    account = await createSecretSettingsTestHarness({ features, settings: settingsParse({ ...sessionSettingsEntryState.settingsState,
+        experiments: true, featureToggles: { 'sessions.folders': foldersEnabled },
+    }), sharedEnabled: false });
+    storage.setState({ localSettings: localSettingsParse(sessionSettingsEntryState.settingsState) });
+    return renderBaseSettingsView(element);
+}
+
+async function expectPersistedSettings(delta: Record<string, unknown>) {
+    await vi.waitFor(() => expect(storage.getState().settings).toMatchObject(delta));
+    await vi.waitFor(() => expect(account?.persistedSettings).toMatchObject(delta));
+}
+
+afterEach(async () => {
     standardCleanup();
+    await account?.dispose();
+    account = undefined;
+    foldersEnabled = false;
     resetSessionSettingsEntryState();
 });
 
@@ -34,10 +80,12 @@ describe('Session settings (Permissions entry)', () => {
         screen.pressRowByTitle('settingsSession.resume.title');
         screen.pressRowByTitle('settingsSession.runtime.title');
 
-        expect(sessionSettingsEntryState.routerPushSpy).toHaveBeenCalledWith('/(app)/settings/session/composer');
-        expect(sessionSettingsEntryState.routerPushSpy).toHaveBeenCalledWith('/(app)/settings/session/provider-limits');
-        expect(sessionSettingsEntryState.routerPushSpy).toHaveBeenCalledWith('/(app)/settings/session/resume');
-        expect(sessionSettingsEntryState.routerPushSpy).toHaveBeenCalledWith('/(app)/settings/session/runtime');
+        await vi.waitFor(() => {
+            expect(sessionSettingsEntryState.routerPushSpy).toHaveBeenCalledWith('/(app)/settings/session/composer');
+            expect(sessionSettingsEntryState.routerPushSpy).toHaveBeenCalledWith('/(app)/settings/session/provider-limits');
+            expect(sessionSettingsEntryState.routerPushSpy).toHaveBeenCalledWith('/(app)/settings/session/resume');
+            expect(sessionSettingsEntryState.routerPushSpy).toHaveBeenCalledWith('/(app)/settings/session/runtime');
+        });
     });
 
     it('ends with the links to the detailed session pages, after the settings on this page', async () => {
@@ -45,7 +93,7 @@ describe('Session settings (Permissions entry)', () => {
         const SessionSettingsScreen = mod.default;
         const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
 
-        const groupTitles = screen.findAllByType('ItemGroup' as any).map((group) => group.props.title);
+        const groupTitles = screen.findAllByType(ItemGroup).map((group) => group.props.title);
 
         expect(groupTitles[groupTitles.length - 1]).toBe('settingsSession.detailedBehavior.title');
     });
@@ -55,7 +103,7 @@ describe('Session settings (Permissions entry)', () => {
         const SessionSettingsScreen = mod.default;
         const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
 
-        const groupTitles = screen.findAllByType('ItemGroup' as any).map((group) => group.props.title);
+        const groupTitles = screen.findAllByType(ItemGroup).map((group) => group.props.title);
 
         expect(groupTitles).toEqual([
             'settingsSession.rootGroups.launchDefaults.title',
@@ -76,16 +124,17 @@ describe('Session settings (Permissions entry)', () => {
         // ordering) and session folders enabled (folder sort).
         sessionSettingsEntryState.settingsState.sessionListSectionModeV1 = 'activity';
         sessionSettingsEntryState.settingsState.sessionListActiveGroupingV1 = 'project';
-        sessionSettingsEntryState.options.featureEnabled = (featureId) => featureId === 'sessions.folders';
+        foldersEnabled = true;
         const mod = await import('@/app/(app)/settings/session');
         const SessionSettingsScreen = mod.default;
         const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
 
         const groupTitleForRow = (title: string) => {
             const row = screen.findRowByTitle(title);
+            const groups = screen.findAllByType(ItemGroup);
             let current = row?.parent;
             while (current) {
-                if ((current.type as unknown) === 'ItemGroup') return current.props?.title;
+                if (groups.includes(current)) return current.props?.title;
                 current = current.parent;
             }
             return null;
@@ -124,8 +173,6 @@ describe('Session settings (Permissions entry)', () => {
     });
 
     it('does not render detailed composer, provider-limit, resume, or runtime controls on the root session settings screen', async () => {
-        sessionSettingsEntryState.options.featureEnabled = (featureId) =>
-            featureId === 'sessions.usageLimitRecovery' || featureId === 'connectedServices.quotas';
         const mod = await import('@/app/(app)/settings/session');
         const SessionSettingsScreen = mod.default;
         const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
@@ -143,7 +190,7 @@ describe('Session settings (Permissions entry)', () => {
         const SessionSettingsScreen = mod.default;
         const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
 
-        const titles = screen.findAllByType('Item' as any).map((item) => item.props.title);
+        const titles = screen.findAllByType(Item).map((item) => item.props.title);
 
         expect(titles).not.toContain('settings.permissions');
         expect(titles).not.toContain('settingsSession.defaultPermissions.applyPermissionChangesTitle');
@@ -154,7 +201,7 @@ describe('Session settings (Permissions entry)', () => {
         const SessionSettingsScreen = mod.default;
         const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
 
-        expect(screen.findAllByType('DropdownMenu' as any).some((dropdown) =>
+        expect(screen.findAllByType(DropdownMenu).some((dropdown) =>
             dropdown.props.itemTrigger?.title === 'settingsSession.sessionCreation.modalModeTitle'
         )).toBe(false);
         const startWith = screen.findByProps({ testIDPrefix: 'settings-session-startWith' });
@@ -167,7 +214,7 @@ describe('Session settings (Permissions entry)', () => {
         await act(async () => {
             startWith.props.onChange('wizard');
         });
-        expect(sessionSettingsEntryState.settingsState.useEnhancedSessionWizard).toBe(true);
+        await expectPersistedSettings({ useEnhancedSessionWizard: true });
     });
 
     it('shows the wizard disposition link only when wizard modal mode is selected', async () => {
@@ -178,7 +225,7 @@ describe('Session settings (Permissions entry)', () => {
 
         expect(screen.findRowByTitle('settingsSession.sessionCreation.wizardDispositionTitle')).toBeTruthy();
         screen.pressRowByTitle('settingsSession.sessionCreation.wizardDispositionTitle');
-        expect(sessionSettingsEntryState.routerPushSpy).toHaveBeenCalledWith('/settings/session/new-session-wizard');
+        await vi.waitFor(() => expect(sessionSettingsEntryState.routerPushSpy).toHaveBeenCalledWith('/settings/session/new-session-wizard'));
     });
 
     it('renders remembered project session selections in the new-session modal group', async () => {
@@ -191,8 +238,9 @@ describe('Session settings (Permissions entry)', () => {
 
         let current = row?.parent;
         let groupTitle: unknown;
+        const groups = screen.findAllByType(ItemGroup);
         while (current) {
-            if ((current.type as unknown) === 'ItemGroup') {
+            if (groups.includes(current)) {
                 groupTitle = current.props?.title;
                 break;
             }
@@ -202,7 +250,7 @@ describe('Session settings (Permissions entry)', () => {
         expect(groupTitle).toBe('settingsSession.rootGroups.launchDefaults.title');
 
         screen.pressRowByTitle('settingsSession.sessionCreation.rememberLastProjectSelectionsTitle');
-        expect(sessionSettingsEntryState.settingsState.rememberLastProjectSessionSelections).toBe(false);
+        await expectPersistedSettings({ rememberLastProjectSessionSelections: false });
     });
 
     it('renders remembered engine selections in the new-session modal group', async () => {
@@ -214,25 +262,23 @@ describe('Session settings (Permissions entry)', () => {
         expect(row).toBeTruthy();
 
         screen.pressRowByTitle('settingsSession.sessionCreation.rememberLastEngineSelectionsTitle');
-        expect(sessionSettingsEntryState.settingsState.rememberLastEngineSelectionsV1).toBe(false);
+        await expectPersistedSettings({ rememberLastEngineSelectionsV1: false });
     });
 
     it('renders provider usage gauge settings and updates gauge visibility and preferred window on the provider limits page', async () => {
         sessionSettingsEntryState.settingsState.sessionProviderUsageGaugeMode = 'auto';
         sessionSettingsEntryState.settingsState.sessionProviderUsageGaugeWindowMode = 'most_constrained';
-        sessionSettingsEntryState.options.featureEnabled = (featureId) => featureId === 'connectedServices.quotas';
         const mod = await import('@/app/(app)/settings/session/provider-limits');
         const ProviderLimitsSettingsScreen = mod.default;
         const screen = await renderSettingsView(React.createElement(ProviderLimitsSettingsScreen));
 
-        const dropdown = screen.findAllByType('DropdownMenu' as any).find((node) =>
-            node.props.itemTrigger?.itemProps?.testID === 'settings-session-providerUsageGauge-window-trigger'
-        );
+        const field = screen.findAll(node => node.props.testID === 'settings-session-providerUsageGauge-window-trigger'
+            && typeof node.props.onCommit === 'function')[0];
 
         expect(screen.findRowByTitle('settingsSession.providerUsageGauge.visibilityTitle')).toBeTruthy();
-        expect(dropdown).toBeTruthy();
-        expect(dropdown?.props.selectedId).toBe('most_constrained');
-        expect(dropdown?.props.items?.map((item: any) => item.id)).toEqual([
+        expect(field).toBeTruthy();
+        expect(field?.props.selectedIds).toEqual(['most_constrained']);
+        expect(field?.props.candidates?.map((item: { id: string }) => item.id)).toEqual([
             'most_constrained',
             'daily',
             'weekly',
@@ -241,11 +287,11 @@ describe('Session settings (Permissions entry)', () => {
             'secondary',
         ]);
 
+        await act(async () => { field!.props.onCommit(['weekly']); });
+        await expectPersistedSettings({ sessionProviderUsageGaugeWindowModes: ['weekly'] });
         screen.pressRowByTitle('settingsSession.providerUsageGauge.visibilityTitle');
-        dropdown?.props.onSelect('weekly');
 
-        expect(sessionSettingsEntryState.settingsState.sessionProviderUsageGaugeMode).toBe('hidden');
-        expect(sessionSettingsEntryState.settingsState.sessionProviderUsageGaugeWindowMode).toBe('weekly');
+        await expectPersistedSettings({ sessionProviderUsageGaugeMode: 'hidden', sessionProviderUsageGaugeWindowModes: ['weekly'] });
     });
 
     it('renders the animated working-status toggle row in session list activity settings', async () => {
@@ -263,7 +309,7 @@ describe('Session settings (Permissions entry)', () => {
 
         screen.pressRowByTitle('settingsSession.sessionList.workingStatusAnimatedTextTitle');
 
-        expect(sessionSettingsEntryState.settingsState.sessionListWorkingStatusAnimatedTextEnabled).toBe(false);
+        await expectPersistedSettings({ sessionListWorkingStatusAnimatedTextEnabled: false });
     });
 
     it('renders working indicator style as a session list setting', async () => {
@@ -271,7 +317,7 @@ describe('Session settings (Permissions entry)', () => {
         const SessionSettingsScreen = mod.default;
         const screen = await renderSettingsView(React.createElement(SessionSettingsScreen));
 
-        const dropdown = screen.findAllByType('DropdownMenu' as any).find((node) =>
+        const dropdown = screen.findAllByType(DropdownMenu).find((node) =>
             node.props.itemTrigger?.itemProps?.testID === 'settings-session-workingIndicator-trigger'
         );
         expect(dropdown).toBeTruthy();
@@ -279,6 +325,6 @@ describe('Session settings (Permissions entry)', () => {
 
         dropdown?.props.onSelect('pulse');
 
-        expect(sessionSettingsEntryState.settingsState.sessionListNarrowWorkingIndicatorStyle).toBe('pulse');
+        await expectPersistedSettings({ sessionListNarrowWorkingIndicatorStyle: 'pulse' });
     });
 });

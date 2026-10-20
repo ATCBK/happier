@@ -70,7 +70,8 @@ describe('server profiles', () => {
       envScope.patch({ HAPPIER_HOME_DIR: homeDir, HAPPIER_ACTIVE_SERVER_ID: undefined,
         HAPPIER_SERVER_URL: undefined, HAPPIER_WEBAPP_URL: undefined });
       reloadConfiguration();
-      const { addServerProfile, getServerProfile, isServerProfileHomeIdentity, refreshServerProfileHomeConnectionDescriptor } = await import('./serverProfiles');
+      const { addServerProfile, getServerProfile, isServerProfileHomeIdentity, resolveServerProfileHomeIdentityId,
+        refreshServerProfileHomeConnectionDescriptor } = await import('./serverProfiles');
       const serverUrl = 'https://seeded.example.test';
       const profile = await addServerProfile({ name: 'seeded', serverUrl, webappUrl: serverUrl });
       const focused = await addServerProfile({ name: 'other', serverUrl: 'https://other.example.test',
@@ -92,6 +93,10 @@ describe('server profiles', () => {
       expect(await isServerProfileHomeIdentity(profile.id, 'srv_seeded')).toBe(false);
       expect(await refreshServerProfileHomeConnectionDescriptor({ profileId: profile.id, serverUrl, token: credentials!.token })).toBe('updated');
       expect(await isServerProfileHomeIdentity(profile.id, 'srv_seeded')).toBe(true);
+      expect(await isServerProfileHomeIdentity('srv_seeded', profile.id)).toBe(true);
+      expect(await isServerProfileHomeIdentity('srv_seeded', focused.id)).toBe(false);
+      expect(await resolveServerProfileHomeIdentityId(profile.id)).toBe('srv_seeded');
+      expect(await resolveServerProfileHomeIdentityId('srv_seeded')).toBe('srv_seeded');
       expect(await isServerProfileHomeIdentity(profile.id, 'srv_other')).toBe(false);
       expect((await getServerProfile(focused.id)).homeConnectionDescriptor).toBeUndefined();
       expect((await readSettings()).activeServerId).toBe(focused.id);

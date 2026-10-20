@@ -14,6 +14,8 @@ export type WorkflowDocumentStepSlots = Readonly<{
     nestedDefinition?: WorkflowDefinitionV1 | null;
     /** The state word with its tone, in the block heading line. */
     state?: React.ReactNode;
+    /** The step's Run has settled: hints about what the step will do no longer apply. */
+    settled?: boolean;
     /** A repeated body's occurrence selector, in the container heading line. */
     occurrenceSelector?: React.ReactNode;
     /** The effective role/engine chip, only where it differs from the authored one. */

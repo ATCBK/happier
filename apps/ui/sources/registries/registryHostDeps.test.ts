@@ -3,6 +3,20 @@ import { createUiRegistryHttpV1 } from './registryHttpV1';
 import { RegistrySourceStatusV1Schema } from '@happier-dev/protocol/registries';
 
 describe('UI registry HTTP boundary', () => {
+    it('reaches an upstream authentication failure once the origin rate limit clears', async () => {
+        let now = 1_000;
+        let calls = 0;
+        const http = createUiRegistryHttpV1(async () => ++calls === 1
+            ? new Response(null, { status: 429, headers: { 'retry-after': '2' } })
+            : new Response(null, { status: 401 }), undefined, () => now);
+        expect(await http.getJson('https://registry-expiry.test/catalog')).toMatchObject({ status: { state: 'rate_limited', retryAt: 3_000 } });
+        now = 2_999;
+        expect(await http.getJson('https://registry-expiry.test/catalog')).toMatchObject({ status: { state: 'rate_limited' } });
+        expect(calls).toBe(1);
+        now = 3_000;
+        expect(await http.getJson('https://registry-expiry.test/catalog')).toEqual({ ok: false, status: { state: 'auth_failed' } });
+        expect(calls).toBe(2);
+    });
     it('admits a headerless rate limit and lets a manual retry reach the upstream', async () => {
         let calls = 0;
         const http = createUiRegistryHttpV1(async () => ++calls === 1

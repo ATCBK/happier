@@ -19,7 +19,7 @@ import { DaemonVoiceInferenceAudioOutputSchema, DaemonVoiceInferenceModelRuntime
 import { VoiceModelPackRuntimeV1Schema } from '@happier-dev/protocol/voice/modelPacks/contributionV1';
 import { VoiceModelPackSupportArtifactV1Schema } from '@happier-dev/protocol/voice/modelPacks/artifactRolesV1';
 import type { DaemonVoiceInferenceAudioOutput, DaemonVoiceInferenceModelRuntimeState, DaemonVoiceInferenceNormalizationDecision, DaemonVoiceInferenceSttStreamEvent, DaemonVoiceInferenceSttStreamPcmFormat, ModelPackManifest, VoiceModelPackRuntimeV1, VoiceModelPackSupportArtifactV1 } from '@happier-dev/protocol';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export const VOICE_INFERENCE_WORKER_IPC_VERSION = 1 as const;
 
@@ -221,16 +221,16 @@ const VoiceInferenceWorkerResultPayloadSchema = z.discriminatedUnion('kind', [
     kind: z.literal('synthesize'),
     output: DaemonVoiceInferenceAudioOutputSchema,
     bytesBase64: z.string(),
-    name: z.string().nullable(),
+    name: z.nullable(z.string()),
   }),
   z.object({
     kind: z.literal('transcribe'),
     text: z.string(),
-    language: z.string().nullable(),
+    language: z.nullable(z.string()),
   }),
   z.object({
     kind: z.literal('stt_stream_start'),
-    sessionId: z.string().min(1),
+    sessionId: z.string().check(z.minLength(1)),
   }),
   z.object({
     kind: z.literal('stt_stream_append'),
@@ -239,7 +239,7 @@ const VoiceInferenceWorkerResultPayloadSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('stt_stream_finish'),
     text: z.string(),
-    language: z.string().nullable(),
+    language: z.nullable(z.string()),
     events: z.array(DaemonVoiceInferenceSttStreamEventSchema),
   }),
   z.object({
@@ -283,13 +283,11 @@ export function parseVoiceInferenceWorkerResponseFrame(value: unknown): VoiceInf
  * does not deep-validate manifests. This guards the wire SHAPE without coupling the IPC contract to
  * the manifest's published schema.
  */
-const ManifestObjectSchema: z.ZodType<ModelPackManifest> = z
-  .object({})
-  .passthrough() as unknown as z.ZodType<ModelPackManifest>;
+const ManifestObjectSchema: z.ZodMiniType<ModelPackManifest> = z.looseObject({}) as unknown as z.ZodMiniType<ModelPackManifest>;
 
 const VoiceInferenceWorkerPackContractSchemaShape = {
-  runtimeDescriptor: VoiceModelPackRuntimeV1Schema.nullable().optional(),
-  supportArtifacts: z.array(VoiceModelPackSupportArtifactV1Schema).max(32).optional(),
+  runtimeDescriptor: z.optional(z.nullable(VoiceModelPackRuntimeV1Schema)),
+  supportArtifacts: z.optional(z.array(VoiceModelPackSupportArtifactV1Schema).check(z.maxLength(32))),
 } as const;
 
 const VoiceInferenceWorkerRequestFrameSchema = z.discriminatedUnion('kind', [
@@ -325,8 +323,8 @@ const VoiceInferenceWorkerRequestFrameSchema = z.discriminatedUnion('kind', [
     packId: z.string(),
     packDir: z.string(),
     manifest: ManifestObjectSchema,
-    voiceId: z.string().nullable(),
-    speed: z.number().nullable(),
+    voiceId: z.nullable(z.string()),
+    speed: z.nullable(z.number()),
     output: DaemonVoiceInferenceAudioOutputSchema,
     ...VoiceInferenceWorkerPackContractSchemaShape,
   }),
@@ -339,7 +337,7 @@ const VoiceInferenceWorkerRequestFrameSchema = z.discriminatedUnion('kind', [
     packId: z.string(),
     packDir: z.string(),
     manifest: ManifestObjectSchema,
-    language: z.string().nullable(),
+    language: z.nullable(z.string()),
     normalization: DaemonVoiceInferenceNormalizationDecisionSchema,
     ...VoiceInferenceWorkerPackContractSchemaShape,
   }),
@@ -350,27 +348,27 @@ const VoiceInferenceWorkerRequestFrameSchema = z.discriminatedUnion('kind', [
     packId: z.string(),
     packDir: z.string(),
     manifest: ManifestObjectSchema,
-    language: z.string().nullable(),
+    language: z.nullable(z.string()),
     format: DaemonVoiceInferenceSttStreamPcmFormatSchema,
     ...VoiceInferenceWorkerPackContractSchemaShape,
   }),
   z.object({
     kind: z.literal('stt_stream_append'),
     id: z.string(),
-    sessionId: z.string().min(1),
-    seq: z.number().int().nonnegative(),
-    pcm16Base64: z.string().min(1),
+    sessionId: z.string().check(z.minLength(1)),
+    seq: z.number().check(z.int(), z.nonnegative()),
+    pcm16Base64: z.string().check(z.minLength(1)),
   }),
   z.object({
     kind: z.literal('stt_stream_finish'),
     id: z.string(),
-    sessionId: z.string().min(1),
-    finalSeq: z.number().int().nonnegative(),
+    sessionId: z.string().check(z.minLength(1)),
+    finalSeq: z.number().check(z.int(), z.nonnegative()),
   }),
   z.object({
     kind: z.literal('stt_stream_cancel'),
     id: z.string(),
-    sessionId: z.string().min(1),
+    sessionId: z.string().check(z.minLength(1)),
   }),
   z.object({ kind: z.literal('abort'), id: z.string(), targetId: z.string() }),
 ]);

@@ -28,6 +28,13 @@ describe('host-stamped begin turn facts', () => {
     expect(SessionTurnMutationV1Schema.safeParse({ ...begin, ...facts, action: 'complete' }).success).toBe(false);
   });
 
+  it('retains an exact host-stamped turn-start input only on begin', () => {
+    expect(SessionTurnMutationV1Schema.parse({ ...begin, startingInputId: 'local-input' }))
+      .toMatchObject({ startingInputId: 'local-input' });
+    expect(SessionTurnMutationV1Schema.safeParse({ ...begin, startingInputId: ' ' }).success).toBe(false);
+    expect(SessionTurnMutationV1Schema.safeParse({ ...begin, action: 'complete', startingInputId: 'local-input' }).success).toBe(false);
+  });
+
   it('rejects malformed facts and unknown nested authority', () => {
     for (const invalid of [
       { ...facts, initiator: 'automation' },

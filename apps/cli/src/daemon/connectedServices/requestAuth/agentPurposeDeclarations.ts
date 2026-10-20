@@ -302,6 +302,7 @@ export function resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn(
     input: Readonly<{
         agentId: string;
         contributions: AgentSpawnPurposeContributions;
+        catalogEntry?: AgentSpawnPurposeCatalogEntry | null;
     }>,
 ): AgentSpawnQualifiedPurposeDeclarationSnapshot | null {
     return resolveAgentSpawnPurposeDeclarations(input)?.snapshot ?? null;

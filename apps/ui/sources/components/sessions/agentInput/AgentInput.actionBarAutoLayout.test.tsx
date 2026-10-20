@@ -800,7 +800,7 @@ describe('AgentInput (action bar auto layout)', () => {
                 autocompleteKinds={[]} autocompleteSuggestions={async () => []}
             />,
         );
-        const rails = screen.tree.root.findAll((node) => node.type === 'ScrollView' && node.props.horizontal === true);
+        const rails = screen.tree.root.findAll((node) => typeof node.type === 'string' && String(node.type) === 'ScrollView' && node.props.horizontal === true);
         const railOf = (testID: string) => rails.findIndex((rail) => (
             findAllHostTestInstances(rail, (node) => node.props.testID === testID).length > 0
         ));
@@ -831,9 +831,9 @@ describe('AgentInput (action bar auto layout)', () => {
         if (!shape) throw new Error('Expected the submit shape');
         expect(flattenStyle(shape.props.style)).toMatchObject({ flexShrink: 1, minWidth: 0 });
         const cluster = findNearestHostParent(shape);
-        expect(flattenStyle(cluster?.props.style)).toMatchObject({ flexShrink: 1, minWidth: 0, maxWidth: '60%' });
+        expect(flattenStyle(cluster?.props.style)).toMatchObject({ flexShrink: 1, minWidth: 0, maxWidth: '85%' });
         // The rail is still mounted beside it, scrolling.
-        const rail = screen.tree.root.findAll((node) => node.type === 'ScrollView' && node.props.horizontal === true);
+        const rail = screen.tree.root.findAll((node) => typeof node.type === 'string' && String(node.type) === 'ScrollView' && node.props.horizontal === true);
         expect(rail.length).toBeGreaterThan(0);
         expect(findAllHostTestInstances(rail[0]!, node => node.props.testID === 'agent-input-permission-chip').length).toBeGreaterThan(0);
     });

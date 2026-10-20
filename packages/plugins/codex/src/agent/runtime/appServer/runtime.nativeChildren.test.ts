@@ -39,20 +39,98 @@ function fixture() {
 }
 
 describe('managed Codex native children', () => {
-  it.each(['assistant', 'reasoning'] as const)('clears an empty authoritative child %s draft and retains the next message', async (channel) => {
+  it.each([
+    { child: false, failureFirst: true },
+    { child: false, failureFirst: false },
+    { child: true, failureFirst: true },
+    { child: true, failureFirst: false },
+  ])('retains an independent script failure (child=$child, failureFirst=$failureFirst)', async ({ child, failureFirst }) => {
+    const f = fixture();
+    try {
+      await startCodexAppServerRuntime(f.runtime);
+      await f.runtime.send({ text: 'Execute two scripts' }, { turnId: 'host-turn' });
+      if (child) {
+        await f.notify('thread/started', { thread: { id: 'child', parentThreadId: 'parent' } });
+        await f.notify('turn/started', { threadId: 'child', turn: { id: 'child-turn' } });
+      }
+      const scope = { threadId: child ? 'child' : 'parent', turnId: child ? 'child-turn' : 'parent-turn' };
+      const notify = (item: unknown, method = 'rawResponseItem/completed') => f.notify(method, { ...scope, item });
+      const failedScript = async () => {
+        await notify({ type: 'custom_tool_call', call_id: 'failed-script', name: 'exec', input: 'throw new Error("failed before dispatch")' });
+        await notify({ type: 'custom_tool_call_output', call_id: 'failed-script', output: 'Script failed before a native command existed' });
+      };
+      const nativeScript = async () => {
+        await notify({ type: 'custom_tool_call', call_id: 'successful-script', name: 'exec', input: 'await tools.exec_command({cmd:"pwd"});' });
+        await notify({ type: 'function_call', call_id: 'native-command', name: 'exec_command', arguments: '{"cmd":"pwd"}' });
+        await notify({ type: 'commandExecution', id: 'native-command', command: 'pwd' }, 'item/started');
+        await notify({ type: 'function_call_output', call_id: 'native-command', output: '{"exit_code":0,"output":"/workspace"}' });
+        await notify({ type: 'commandExecution', id: 'native-command', command: 'pwd', exitCode: 0 }, 'item/completed');
+        await notify({ type: 'custom_tool_call_output', call_id: 'successful-script', output: 'Script completed' });
+      };
+      if (failureFirst) { await failedScript(); await nativeScript(); }
+      else { await nativeScript(); await failedScript(); }
+      await f.notify('turn/completed', { threadId: scope.threadId, turn: { id: scope.turnId, status: 'completed' } });
+      if (!child) await waitForCodexAppServerRuntimeTurnCompletion(f.runtime);
+      const tools = f.nativeEvents.filter(event => (event.kind === 'tool-call' || event.kind === 'tool-result')
+        && (child ? event.sidechainId === 'child' : !event.sidechainId));
+      expect(tools).toEqual([
+        expect.objectContaining({ kind: 'tool-call', toolCallId: 'native-command', toolName: 'Bash' }),
+        expect.objectContaining({ kind: 'tool-result', toolCallId: 'native-command', output: { exit_code: 0, output: '/workspace' } }),
+        expect.objectContaining({ kind: 'tool-call', toolCallId: 'failed-script', toolName: 'exec' }),
+        expect.objectContaining({ kind: 'tool-result', toolCallId: 'failed-script', output: 'Script failed before a native command existed' }),
+      ]);
+    } finally { await f.runtime.dispose(); }
+  });
+  it('retains raw-only child tools without orphan results or typed/raw duplicates', async () => {
     const f = fixture();
     try {
       await startCodexAppServerRuntime(f.runtime);
       await f.runtime.send({ text: 'Delegate' }, { turnId: 'host-turn' });
       await f.notify('thread/started', { thread: { id: 'child', parentThreadId: 'parent' } });
       await f.notify('turn/started', { threadId: 'child', turn: { id: 'child-turn' } });
+      const notify = (item: unknown, method = 'rawResponseItem/completed') => f.notify(method, {
+        threadId: 'child', turnId: 'child-turn', item,
+      });
+      await notify({ type: 'function_call_output', call_id: 'hidden', output: 'private internal result' });
+      await notify({ type: 'custom_tool_call', call_id: 'code-wrapper', name: 'exec', input: 'await tools.exec_command({cmd:"pwd"});' });
+      await notify({ type: 'function_call', call_id: 'call-pwd', name: 'exec_command', arguments: '{"cmd":"pwd"}' });
+      await notify({ type: 'function_call_output', call_id: 'call-pwd', output: '{"exit_code":101,"output":"bubblewrap is unavailable"}' });
+      await notify({ type: 'commandExecution', id: 'call-pwd', command: 'pwd' }, 'item/started');
+      await notify({ type: 'commandExecution', id: 'call-pwd', command: 'pwd', exitCode: 101 }, 'item/completed');
+      await notify({ type: 'custom_tool_call_output', call_id: 'code-wrapper', output: 'Script completed' });
+      await f.notify('turn/completed', { threadId: 'child', turn: { id: 'child-turn', status: 'completed' } });
+      const tools = f.nativeEvents.filter((event) => (event.kind === 'tool-call' || event.kind === 'tool-result') && event.sidechainId === 'child');
+      expect(tools).toEqual([
+        expect.objectContaining({ kind: 'tool-call', toolCallId: 'call-pwd', toolName: 'Bash', input: expect.objectContaining({ cmd: 'pwd' }) }),
+        expect.objectContaining({ kind: 'tool-result', toolCallId: 'call-pwd', output: { exit_code: 101, output: 'bubblewrap is unavailable' } }),
+      ]);
+      expect(tools.every((event) => !('turnId' in event))).toBe(true);
+    } finally { await f.runtime.dispose(); }
+  });
+  it.each([
+    { channel: 'assistant', nativeRetry: false },
+    { channel: 'reasoning', nativeRetry: false },
+    { channel: 'assistant', nativeRetry: true },
+  ] as const)('settles a child $channel draft and retains the next message (nativeRetry=$nativeRetry)', async ({ channel, nativeRetry }) => {
+    const f = fixture();
+    try {
+      await startCodexAppServerRuntime(f.runtime);
+      await f.runtime.send({ text: 'Delegate' }, { turnId: 'host-turn' });
+      await f.notify('thread/started', { thread: { id: 'child', parentThreadId: 'parent' } });
+      await f.notify('error', { threadId: 'child', turnId: 'unobserved-turn', willRetry: true, error: { message: 'diagnostic' } });
+      expect(f.observations).toEqual([]);
+      await f.notify('turn/started', { threadId: 'child', turn: { id: 'child-turn' } });
       await f.notify('item/completed', { threadId: 'child', turnId: 'child-turn', item: { id: 'no-output', type: 'agentMessage', text: '' } });
       await f.notify(channel === 'assistant' ? 'item/agentMessage/delta' : 'item/reasoning/textDelta', {
         threadId: 'child', turnId: 'child-turn', itemId: 'removed', delta: 'Removed child draft',
       });
-      await f.notify('item/completed', { threadId: 'child', turnId: 'child-turn',
-        item: { id: 'removed', type: channel === 'assistant' ? 'agentMessage' : 'reasoning', text: '' },
-      });
+      if (nativeRetry) {
+        await f.notify('error', { threadId: 'child', turnId: 'child-turn', willRetry: true, error: { message: 'stream failed' } });
+      } else {
+        await f.notify('item/completed', { threadId: 'child', turnId: 'child-turn',
+          item: { id: 'removed', type: channel === 'assistant' ? 'agentMessage' : 'reasoning', text: '' },
+        });
+      }
       await f.notify('item/agentMessage/delta', { threadId: 'child', turnId: 'child-turn', itemId: 'retained', delta: 'Retained child answer' });
       await f.notify('item/completed', { threadId: 'child', turnId: 'child-turn', item: { id: 'retained', type: 'agentMessage', text: 'Retained child answer' } });
       await f.notify('turn/completed', { threadId: 'child', turn: { id: 'child-turn', status: 'completed' } });

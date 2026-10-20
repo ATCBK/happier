@@ -1,3 +1,4 @@
+import { maxCodeUnits } from '../strings/maxCodeUnits.js';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import { NonBlankOpaqueIdentifierSchema } from '../strings/opaqueIdentifier.js';
@@ -9,9 +10,9 @@ import {
 } from './agentRuntimeDiagnosticV1.js';
 
 const SafeIntegerSchema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative(), z.maximum(LIMITS.safeIntegerMax)));
-const MessageIdSchema = lazyZodSchema(() => NonBlankOpaqueIdentifierSchema.check(z.maxLength(LIMITS.providerIdMaxCodeUnits)));
+const MessageIdSchema = lazyZodSchema(() => NonBlankOpaqueIdentifierSchema.check(maxCodeUnits(LIMITS.providerIdMaxCodeUnits)));
 const RunIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.refine((value) => value === value.trim(), 'Identifiers must not contain leading or trailing whitespace')));
-const CheckpointIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(LIMITS.providerIdMaxCodeUnits), z.refine((value) => value === value.trim(), 'Identifiers must not contain leading or trailing whitespace')));
+const CheckpointIdSchema = lazyZodSchema(() => z.string().check(z.minLength(1), maxCodeUnits(LIMITS.providerIdMaxCodeUnits), z.refine((value) => value === value.trim(), 'Identifiers must not contain leading or trailing whitespace')));
 const BaseShape = {
   sequence: SafeIntegerSchema,
   runId: RunIdSchema,

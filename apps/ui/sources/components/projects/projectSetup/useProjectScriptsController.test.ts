@@ -8,6 +8,9 @@ import { actionOperationStore } from '@/sync/domains/actionOperations/actionOper
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createActionExecutor } from '@happier-dev/protocol';
+import { PROJECT_ACTION_INPUT_SCHEMAS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
+import { ManagedMachineActionInputSchemasV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { ActionOperationActionInputSchemasV1 } from '@happier-dev/protocol/actions/specs/actionOperations';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { createManagedMachineSelectionDraft } from '@/sync/domains/state/newSessionManagedMachineDraft';
 import { getServerProfileById, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
@@ -42,6 +45,89 @@ describe('Project Scripts Setup controls', () => {
     beforeEach(async () => { await harness.reset(); actionOperationStore.reset(); rpc.machine.mockReset(); });
     afterEach(() => standardCleanup());
 
+    it('discards picker intent for another checkout, Account, or a removed portable Script', async () => {
+        const { useProjectScriptsController } = await import('./useProjectScriptsController');
+        const { useServerCredentialAccountScopeBindings } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
+        const home = await harness.addHome({ name: 'Picker scope', serverUrl: 'https://picker-scope.test', serverIdentityId: 'srv_picker_scope', accountId: 'alice' });
+        const serverId = resolveServerProfileScopeIdForIdentifier(home);
+        const workspace = { serverId, workspaceId: 'checkout', machineId: 'source', rootPath: '/repo' };
+        const homes = [serverId];
+        const selected = { kind: 'existing', choice: { kind: 'workers', destination: { kind: 'machine', machineId: 'worker' } } } as const;
+        const hook = await renderHook((props: { workspace: typeof workspace; runChoiceKeys: readonly string[] }) =>
+            useProjectScriptsController(props.workspace, () => {}, useServerCredentialAccountScopeBindings(homes).get(serverId) ?? null,
+                { runChoiceKeys: props.runChoiceKeys }), { initialProps: { workspace, runChoiceKeys: ['build'] } });
+        const choose = async () => { await act(async () => { hook.getCurrent().chooseRunDestination('build', selected); }); };
+        try {
+            await waitForHomeGovernance(() => expect(hook.getCurrent().ready).toBe(true));
+            await choose();
+            expect(hook.getCurrent().runChoices.build).toEqual(selected);
+            await hook.rerender({ workspace, runChoiceKeys: [] });
+            expect(hook.getCurrent().runChoices).toEqual({});
+            await hook.rerender({ workspace, runChoiceKeys: ['build'] });
+            expect(hook.getCurrent().runChoices).toEqual({});
+            const launch = { provider: { pluginId: 'custom.compute', localId: 'native' }, schemaVersion: 1, name: 'Worker', choices: {} };
+            const controller = { machineId: 'controller', installationId: 'installation' };
+            const retention = { kind: 'until-delete' } as const;
+            const draft = createManagedMachineSelectionDraft({
+                selection: { kind: 'one-off', homeId: serverId, launch, controller, retention, wakeOnAcceptedMessage: false },
+                receipt: { launch, controller, retention, wakeOnAcceptedMessage: false, optionStatus: 'current', prerequisites: [],
+                    billing: { location: 'local', stoppedBilling: 'not-billed' }, retentionCapabilities: { supportedIntents: ['start', 'stop', 'delete'] } },
+            });
+            await act(async () => { hook.getCurrent().chooseRunDestination('build', { kind: 'managed', draft }); });
+            const { upsertServerProfile } = await import('@/sync/domains/server/serverProfiles');
+            await act(async () => { await upsertServerProfile({ name: 'Refreshed picker scope', serverUrl: 'https://picker-scope.test' }); });
+            await waitForHomeGovernance(() => expect(hook.getCurrent().ready).toBe(true));
+            expect(hook.getCurrent().runChoices).toEqual({});
+            expect(hook.getCurrent().managedCreations).toEqual({});
+            await choose();
+            await hook.rerender({ workspace: { ...workspace, machineId: 'another-source' }, runChoiceKeys: ['build'] });
+            expect(hook.getCurrent().runChoices).toEqual({});
+            await hook.rerender({ workspace, runChoiceKeys: ['build'] });
+            expect(hook.getCurrent().runChoices).toEqual({});
+            await choose();
+            await act(async () => { await harness.switchAccount(home, 'bob'); });
+            await waitForHomeGovernance(() => expect(hook.getCurrent().accountId).toBe('bob'));
+            expect(hook.getCurrent().runChoices).toEqual({});
+            await act(async () => { await harness.switchAccount(home, 'alice'); });
+            await waitForHomeGovernance(() => expect(hook.getCurrent().accountId).toBe('alice'));
+            expect(hook.getCurrent().runChoices).toEqual({});
+        } finally { await hook.unmount(); }
+    });
+
+    it('decides a worker-held Script on that original target, retaining the Script operation instead of SOURCE preparation', async () => {
+        const { useProjectScriptsController } = await import('./useProjectScriptsController');
+        const { useServerCredentialAccountScopeBindings } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
+        const home = await harness.addHome({ name: 'Setup Worker', serverUrl: 'https://setup-worker.test', accountId: 'alice' });
+        const serverId = resolveServerProfileScopeIdForIdentifier(home);
+        const workspace = { serverId, workspaceId: 'source', machineId: 'source-machine', rootPath: '/repo' };
+        const held = { ...operation(serverId).snapshot, actionId: 'projects.script.run', state: 'accepted' as const,
+            scope: { accountId: 'alice', machineId: 'worker' }, startedAt: undefined,
+            domainRef: { kind: 'projectCommand' as const, purpose: 'script' as const, serverId, machineId: 'worker',
+                workspaceRefId: 'worker-copy', cwd: '/copy', sourceWorkspace: workspace },
+            setupReview: { kind: 'pendingApproval' as const, code: 'project_setup_consent_required' as const,
+                reviewedEffectDigest: 'reviewed', reviewedEffect: { commands: ['echo setup'] } },
+        };
+        const requests: unknown[] = [];
+        const execute = async (id: string, input: unknown) => {
+            requests.push({ id, input });
+            return { ok: true as const, result: { operation: requests.length === 1 ? held : { ...held, revision: 2, setupReview: undefined } } };
+        };
+        const homes = [serverId];
+        const hook = await renderHook(() => useProjectScriptsController(workspace, () => {},
+            useServerCredentialAccountScopeBindings(homes).get(serverId) ?? null, { execute }));
+        try {
+            await waitForHomeGovernance(() => expect(hook.getCurrent().ready).toBe(true));
+            await act(async () => { await hook.getCurrent().run('checked', { kind: 'named', name: 'checked' }); });
+            expect(hook.getCurrent().retainedOperation?.snapshot.setupReview).toBeDefined();
+            await act(async () => { await hook.getCurrent().prepare('reviewed', 'thisTime'); });
+            expect(requests[1]).toEqual({ id: 'projects.prepare', input: {
+                workspace: { serverId, workspaceId: 'worker-copy', machineId: 'worker', rootPath: '/copy' },
+                phase: 'setup', expectedEffectDigest: 'reviewed', consentScope: 'thisTime', heldOperationId: 'operation-1',
+            } });
+            expect(hook.getCurrent().retainedOperation?.snapshot.operationId).toBe('operation-1');
+        } finally { await hook.unmount(); }
+    });
+
     it('admits independent Scripts while another Run awaits its Action result', async () => {
         const firstGate = createDeferred<void>();
         const { useProjectScriptsController } = await import('./useProjectScriptsController');
@@ -54,7 +140,8 @@ describe('Project Scripts Setup controls', () => {
         const execute = createFrontDoorActionExecute(createActionExecutor(createActionExecutorBoundaryFixture({
             isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, settings, context, getActionSpec(id).safety),
             projectAction: async request => {
-                const name = request.input.selection?.kind === 'named' ? request.input.selection.name : '';
+                const input = PROJECT_ACTION_INPUT_SCHEMAS_V1['projects.script.run'].parse(request.input);
+                const name = input.selection.kind === 'named' ? input.selection.name : '';
                 admissions.push(name);
                 if (name === 'first') await firstGate.promise;
                 return { operation: { version: 1, operationId: `finite-${name}`, revision: 1, actionId: 'projects.script.run', state: 'accepted',
@@ -107,21 +194,26 @@ describe('Project Scripts Setup controls', () => {
             isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, settings, context, getActionSpec(id).safety),
             managedMachineAction: async request => {
                 if (request.actionId === 'machines.managed.list') return { machines };
-                if (request.actionId === 'machines.managed.get') return machines.find(machine => machine.id === request.input.managedId);
+                if (request.actionId === 'machines.managed.get') {
+                    const input = ManagedMachineActionInputSchemasV1['machines.managed.get'].parse(request.input);
+                    return machines.find(machine => machine.id === input.managedId);
+                }
                 if (request.actionId === 'machines.managed.acquire') {
-                    const id = request.input.selection.kind === 'one-off' ? request.input.selection.launch.name : '';
+                    const input = ManagedMachineActionInputSchemasV1['machines.managed.acquire'].parse(request.input);
+                    const id = input.selection.kind === 'one-off' ? input.selection.launch.name : '';
                     purchases.push(id);
                     return { managedId: id, operation: { operationId: `install-${id}` } };
                 }
                 throw new Error('unexpected_managed_transport');
             },
             actionOperationAction: async request => ({ kind: 'found', operation: {
-                version: 1, operationId: request.input.operationId, revision: 2, actionId: 'machines.managed.acquire', state: 'succeeded',
+                version: 1, operationId: ActionOperationActionInputSchemasV1['action.operations.get'].parse(request.input).operationId, revision: 2, actionId: 'machines.managed.acquire', state: 'succeeded',
                 scope: { accountId: 'alice', machineId: 'controller' }, title: 'Install', createdAt: 1, startedAt: 1, settledAt: 2, cancellation: 'supported',
             } }),
             projectAction: async request => {
                 admissions.push(request.input);
-                const name = request.input.selection?.kind === 'named' ? request.input.selection.name : '';
+                const input = PROJECT_ACTION_INPUT_SCHEMAS_V1['projects.script.run'].parse(request.input);
+                const name = input.selection.kind === 'named' ? input.selection.name : '';
                 return { operation: { version: 1, operationId: `finite-${name}`, revision: 1, actionId: 'projects.script.run', state: 'accepted',
                     scope: { accountId: 'alice', machineId: `guest-${name}` }, title: name, createdAt: 2, cancellation: 'supported' } };
             },

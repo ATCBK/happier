@@ -16,6 +16,7 @@ import { requireOneShotAccountSettingsMutationApplied, retireLegacyAuthoringMemo
 import { resolveAccountStorageContext } from '@/sync/encryption/accountStorageContext';
 import { createAuthoringMemoryCipher } from '@/sync/encryption/authoringMemoryEncryption';
 import type { LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
+import { createAuthoringMemorySync } from '@/sync/engine/authoringMemory/authoringMemorySync';
 
 /** Reuses the reserved Account-row route shape with an exact Home/Account request. */
 export function createApiAuthoringMemoryTransport(options: Readonly<{
@@ -41,6 +42,20 @@ export function createApiAuthoringMemoryTransport(options: Readonly<{
             body: JSON.stringify(AuthoringMemoryMutationRequestV1Schema.parse({ expectedRevision, content })),
         })),
     };
+}
+
+/** Addressed editors use the same memory domain without publishing into the focused Account. */
+export async function createAuthoringMemorySyncInContext(account: LazyActionAccountContext,
+    options: Pick<Parameters<typeof createAuthoringMemorySync>[0], 'apply' | 'isCurrent'>): Promise<ReturnType<typeof createAuthoringMemorySync>> {
+    const { encryption } = await account.resolveAccountEncryption();
+    const storage = await resolveAccountStorageContext(account.credentials, { encryption, request: account.request });
+    account.assertCurrent();
+    return createAuthoringMemorySync({ ...options,
+        transport: createApiAuthoringMemoryTransport({ request: account.request }),
+        cipher: createAuthoringMemoryCipher({ mode: storage.mode,
+            material: storage.mode === 'plain' ? null : resolveAccountScopedCryptoMaterialFromCredentials(account.credentials),
+            randomBytes: getRandomBytes }),
+    });
 }
 
 /** Exact selection evidence without bootstrapping or publishing unrelated memory rows. */

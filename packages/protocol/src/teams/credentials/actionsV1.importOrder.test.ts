@@ -19,7 +19,7 @@ describe('Team credential action registry import lifetime', () => {
       .toEqual({ resources: [], viewer: { manageCredentials: false, offerOwnCredential: false }, nextCursor: null });
     expect(output.safeParse({ resources: [], viewer: { manageCredentials: false, offerOwnCredential: false }, unknown: true }).success)
       .toBe(false);
-    expect(Object.keys(actions.TEAM_CREDENTIAL_ACTION_INPUT_SCHEMAS_V1)).toEqual(actions.TEAM_CREDENTIAL_ACTION_IDS_V1);
-    expect(Object.keys(actions.TEAM_CREDENTIAL_ACTION_OUTPUT_SCHEMAS_V1)).toEqual(actions.TEAM_CREDENTIAL_ACTION_IDS_V1);
+    expect(Object.keys(actions.TEAM_CREDENTIAL_ACTION_INPUT_SCHEMAS_V1).sort()).toEqual([...actions.TEAM_CREDENTIAL_ACTION_IDS_V1].sort());
+    expect(Object.keys(actions.TEAM_CREDENTIAL_ACTION_OUTPUT_SCHEMAS_V1).sort()).toEqual([...actions.TEAM_CREDENTIAL_ACTION_IDS_V1].sort());
   });
 });

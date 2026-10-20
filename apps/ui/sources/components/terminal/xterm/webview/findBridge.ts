@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { FindOptions, FindStatus } from '@happier-dev/plugin-ui/presentation';
 import type { FindEngine, TerminalFindSnapshot } from '../../embedded/embeddedTerminalRendererHandle';
 
@@ -10,11 +10,11 @@ export type XtermFindRequest =
 // Validate the guest's terminal-only projection at the actual transport boundary.
 // This narrows the shared FindStatus contract; it makes no matching/coverage decisions.
 const StatusSchema = z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('idle') }).strict(),
-    z.object({ kind: z.literal('invalidPattern') }).strict(),
-    z.object({ kind: z.literal('results'), current: z.number().int().positive().nullable(), total: z.number().int().nonnegative(), coverage: z.enum(['complete', 'loaded', 'limited']) }).strict(),
+    z.strictObject({ kind: z.literal('idle') }),
+    z.strictObject({ kind: z.literal('invalidPattern') }),
+    z.strictObject({ kind: z.literal('results'), current: z.nullable(z.number().check(z.int(), z.positive())), total: z.number().check(z.int(), z.nonnegative()), coverage: z.enum(['complete', 'loaded', 'limited']) }),
 ]);
-const ResultSchema = z.object({ revision: z.number().int().nonnegative(), status: StatusSchema, retainedLines: z.number().int().nonnegative() }).strict();
+const ResultSchema = z.strictObject({ revision: z.number().check(z.int(), z.nonnegative()), status: StatusSchema, retainedLines: z.number().check(z.int(), z.nonnegative()) });
 export type XtermFindResult = z.infer<typeof ResultSchema>;
 
 /** Transport facade; all matching, decoration and selection remain in the guest engine. */

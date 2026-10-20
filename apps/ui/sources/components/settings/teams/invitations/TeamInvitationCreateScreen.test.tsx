@@ -245,6 +245,8 @@ describe('TeamInvitationCreateScreen', () => {
         // No chooser with one option, and no silent disappearance either.
         expect(ids).not.toContain('team-invite-delivery:email');
         expect(screen.getTextContent()).toContain('teams.invitations.emailUnavailable');
+        // It names who can set email up (lab tsInvites-N), rather than only saying no.
+        expect(screen.getTextContent()).toMatch(/teams\.authentication\.add\.ask(Named|Unnamed)/);
     });
 
     it('offers copy, share and a QR for the one confined link delivery', async () => {

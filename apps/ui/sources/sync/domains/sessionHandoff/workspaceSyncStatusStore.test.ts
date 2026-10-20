@@ -88,6 +88,7 @@ describe('workspaceSyncStatusStore', () => {
         const input = { serverId: scope.serverId, machineId: scope.controllerMachineId,
             event: { v: 1, readiness: { engine: { state: 'ready' }, carrier: { state: 'ready' } } } };
         applyWorkspaceSyncRuntimeEvent(input);
+        await vi.waitFor(() => expect(listWorkspaceSyncStatuses).toHaveBeenCalledOnce());
         applyWorkspaceSyncRuntimeEvent(input);
         expect(listWorkspaceSyncStatuses).toHaveBeenCalledOnce();
         resolveStale([status]);
@@ -148,6 +149,7 @@ describe('workspaceSyncStatusStore', () => {
             .mockResolvedValueOnce([{ ...status, state: 'paused' }]);
         const unsubscribe = subscribeWorkspaceSyncStatus(scope, () => {});
         const pending = refreshWorkspaceSyncStatuses([scope]);
+        await vi.waitFor(() => expect(listWorkspaceSyncStatuses).toHaveBeenCalledOnce());
         applyWorkspaceSyncRuntimeEvent({ serverId: scope.serverId, machineId: scope.controllerMachineId,
             event: { v: 1, readiness: { engine: { state: 'ready' }, carrier: { state: 'ready' } } } });
         const observedStates: string[] = [];
@@ -176,6 +178,7 @@ describe('workspaceSyncStatusStore', () => {
         listWorkspaceSyncStatuses.mockResolvedValueOnce([{ ...status, state: 'paused' }]);
         const unsubscribe = subscribeWorkspaceSyncStatus(scope, () => {});
         const pending = refreshWorkspaceSyncStatus(scope);
+        await vi.waitFor(() => expect(getWorkspaceSyncStatus).toHaveBeenCalledOnce());
         applyWorkspaceSyncRuntimeEvent({ serverId: scope.serverId, machineId: scope.controllerMachineId,
             event: { v: 1, readiness: { engine: { state: 'ready' }, carrier: { state: 'ready' } } } });
         await vi.waitFor(() => expect(getWorkspaceSyncStatusSnapshot(scope).status?.state).toBe('paused'));
@@ -194,7 +197,7 @@ describe('workspaceSyncStatusStore', () => {
 
         const first = refreshWorkspaceSyncStatus(scope);
         const second = refreshWorkspaceSyncStatus(scope);
-        expect(getWorkspaceSyncStatus).toHaveBeenCalledTimes(1);
+        await vi.waitFor(() => expect(getWorkspaceSyncStatus).toHaveBeenCalledTimes(1));
         expect(getWorkspaceSyncStatusSnapshot(scope)).toMatchObject({ phase: 'loading', status: null });
 
         resolveFirst({
@@ -210,6 +213,7 @@ describe('workspaceSyncStatusStore', () => {
         let resolveSecond!: (value: unknown) => void;
         getWorkspaceSyncStatus.mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve; }));
         const repeated = refreshWorkspaceSyncStatus(scope);
+        await vi.waitFor(() => expect(getWorkspaceSyncStatus).toHaveBeenCalledTimes(2));
         expect(getWorkspaceSyncStatusSnapshot(scope)).toMatchObject({
             phase: 'refreshing',
             status: { state: 'watching' },
@@ -281,6 +285,7 @@ describe('workspaceSyncStatusStore', () => {
         const scope = { serverId: 'server-1', controllerMachineId: 'machine-1', relationshipId: 'relationship-1' } as const;
 
         const refresh = refreshWorkspaceSyncStatus(scope);
+        await vi.waitFor(() => expect(getWorkspaceSyncStatus).toHaveBeenCalledOnce());
         applyWorkspaceSyncStatusEvent(scope, {
             relationshipId: 'relationship-1', controllerMachineId: 'machine-1', state: 'paused',
             alphaPath: '/alpha', betaPath: '/beta', mode: 'keep_synced',

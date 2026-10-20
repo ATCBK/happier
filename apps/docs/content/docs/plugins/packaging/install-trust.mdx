@@ -4,9 +4,10 @@ description: Review plugin code before execution and let the daemon own installe
 ---
 
 `hdev plugins install` validates package and manifest facts before executing
-plugin code. When approval is required, an interactive terminal presents one
-concise install decision naming the trusted code, selected machine, executable
-realms, and authority or credential access being granted. Technical package,
+plugin code. In 0.3 development source, a required install review uses the
+ordinary `plugins.install` approval Artifact in the Happier Inbox, naming the
+trusted code, selected machine, executable realms, and authority or credential
+access being granted. Technical package,
 integrity, compatibility, and provenance evidence remains available in the
 details; it does not create another decision.
 
@@ -26,13 +27,17 @@ again.
 In 0.3 development source, app-level plugin UI is discovered across the Account's
 machines before an execution machine is chosen. Installing Channels on one machine
 and Triage on another does not make either disappear when you change targets.
-Missing declarations stay preparing, and conflicting versions or UI content stay
-visible as a conflict rather than running an arbitrary copy.
+Missing declarations stay preparing. Happier prefers a Machine matching the
+rendered release; when no candidate is compatible, the conflict remains visible.
+UI content and compatibility admission still apply before execution.
 
 Machine-free UI has no execution-machine picker. When a plugin needs a machine,
-Happier uses your valid saved preference first, then the plugin's admitted
-installation default, then a sole eligible compatible installation; otherwise you
-choose a target. A saved offline target remains selected and unavailable until it
+Happier uses your explicit device-local pin first. Without a pin, it automatically
+chooses a compatible Machine on this Home, preferring the rendered release's
+version and then your last-used Machine, this device's own Machine when known,
+and the most recently active eligible Machine. A plugin may declare
+`executionTarget: { autoPick: false }` to ask when several candidates remain.
+A saved offline pin remains selected and unavailable until it
 recovers or you explicitly change it. Invocation checks the exact target again,
 including after approval.
 
@@ -223,9 +228,15 @@ review the newly prepared facts; do not reuse the old pending ID. This is not
 the same as `outcome_unknown`: inspect installed state before deciding whether
 to replay that mutation.
 
-Settings -> Plugins lists the reviews the selected machine's daemon is still
-holding, so a review you no longer have an ID for stays decidable there for
-that daemon lifetime.
+A retained development review appears in the ordinary Happier Inbox. Rerun
+`hdev plugins install <exact-source> --dev --json` with the original source to
+rejoin the same daemon-retained candidate and approval Artifact. Decide in the
+Inbox or through the public `approval.request.decide` Action with the ordinary
+approval Artifact ID, rather than the daemon pending change ID. Agents, MCP,
+and CLI callers use that same Action under the user's approval policy; see
+[Review a pending change](/plugins/packaging/authoring-cli#review-a-pending-change)
+for CLI examples. The status command only inspects daemon custody and does not
+publish or decide an approval.
 
 ## Temporary computers install through this same review
 

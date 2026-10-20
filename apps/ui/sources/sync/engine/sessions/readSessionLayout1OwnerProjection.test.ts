@@ -23,6 +23,18 @@ const credentials = {
 };
 
 describe('readSessionLayout1OwnerMetadata', () => {
+    it.each([null, undefined])('fails closed when an owner projection omits its required owner envelope (%s)', (ownerMetadataEnvelope) => {
+        expect(readSessionLayout1OwnerMetadata({
+            access: normalizeSessionAccessProjection({ share: null }, { allowLegacy: true }),
+            accountMode: 'e2ee',
+            ownerMetadataEnvelope,
+            credentials,
+        })).toEqual({
+            kind: 'unavailable',
+            reason: 'invalid_envelope',
+        });
+    });
+
     it('opens plain owner options only from authoritative plain Account mode, not Session mode or key absence', () => {
         const plainOwner = createPlainSessionOwnerMetadataEnvelopeV1(SessionOwnerMetadataV1Schema.parse({
             v: 1, workspace: { path: '/private' }, runtime: { modelOverrideV1: { v: 1, modelId: 'chosen', updatedAt: 10 } },
@@ -128,6 +140,42 @@ describe('readSessionLayout1OwnerMetadata', () => {
             kind: 'owner',
             ownerMetadata,
         });
+    });
+
+    it('reuses only an unchanged encrypted envelope under the same credential authority', () => {
+        const envelope = sealSessionOwnerMetadataEnvelopeV1({
+            material: { type: 'legacy', secret }, ownerMetadata,
+            randomBytes: length => new Uint8Array(length).fill(3),
+        });
+        const params = {
+            access: normalizeSessionAccessProjection({ share: null }, { allowLegacy: true }),
+            accountMode: 'e2ee' as const, ownerMetadataEnvelope: envelope, credentials,
+        };
+        const first = readSessionLayout1OwnerMetadata(params);
+        expect(first.kind).toBe('owner');
+        expect(readSessionLayout1OwnerMetadata({ ...params, previousProjection: first.kind === 'owner' ? first : null,
+            ownerMetadataEnvelope: { ...envelope },
+        })).toBe(first);
+        const retained = first.kind === 'owner' ? first : null;
+        expect(readSessionLayout1OwnerMetadata({ ...params, previousProjection: retained, credentials: { token: 'keyless' } }))
+            .toMatchObject({ kind: 'unavailable', reason: 'material_unavailable' });
+        expect(readSessionLayout1OwnerMetadata({ ...params, previousProjection: retained, accountMode: 'plain' }))
+            .toMatchObject({ kind: 'unavailable', reason: 'account_mode_mismatch' });
+        expect(readSessionLayout1OwnerMetadata({ ...params, previousProjection: retained,
+            ownerMetadataEnvelope: { ...envelope, unexpected: true },
+        })).toMatchObject({ kind: 'unavailable', reason: 'invalid_envelope' });
+        expect(readSessionLayout1OwnerMetadata({ ...params, previousProjection: retained,
+            access: normalizeSessionAccessProjection({ effectiveAccess: {
+                v: 1, level: 'view', sources: [{ kind: 'team', teamId: 'team', requiredByTeamPolicy: false }],
+                capabilities: projectLegacySessionAccessCapabilitiesV1({ level: 'view' }),
+            } }),
+        })).toEqual({ kind: 'recipient' });
+        const changedCredentials = { ...credentials };
+        const beforeMutation = readSessionLayout1OwnerMetadata({ ...params, credentials: changedCredentials });
+        changedCredentials.secret = Buffer.from(new Uint8Array(32).fill(8)).toString('base64url');
+        expect(readSessionLayout1OwnerMetadata({ ...params, credentials: changedCredentials,
+            previousProjection: beforeMutation.kind === 'owner' ? beforeMutation : null,
+        })).toMatchObject({ kind: 'unavailable', reason: 'invalid_ciphertext' });
     });
 
     it.each([

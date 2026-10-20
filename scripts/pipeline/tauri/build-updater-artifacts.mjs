@@ -12,6 +12,8 @@ import { resolveYarnInvocation } from './resolve-yarn-invocation.mjs';
 import { formatPublicReleaseChannelChoices, normalizePublicReleaseChannel } from '../release/lib/public-release-rings.mjs';
 import { execFileSyncPortable } from '../lib/exec-file-sync-portable.mjs';
 import { createTauriActoolEnvironment } from '../../../apps/ui/scripts/tauriActoolEnvironment.mjs';
+import { readTauriMainBinaryName, resolveTauriChannelConfigFile } from './channel-config.mjs';
+import { validateLinuxWebKitRuntime, linuxWebKitAppImageFilesConfig } from './linux-webkit-runtime.mjs';
 
 function fail(message) {
   console.error(message);
@@ -152,7 +154,7 @@ export function resolveLinuxHsetupResourcesOverrideConfig() {
 }
 
 /**
- * @param {{ environment: string }} opts
+ * @param {{ environment: string; tauriDir?: string }} opts
  * @returns {{
  *   productName: string;
  *   appRelativePath: string;
@@ -166,7 +168,7 @@ export function resolveLinuxAppImageDiagnosticsLayout(opts) {
   const productName = resolveLinuxProductNameOverride({ environment }) ?? 'Happier';
   return {
     productName,
-    appRelativePath: path.join('usr', 'bin', 'app'),
+    appRelativePath: path.join('usr', 'bin', readTauriMainBinaryName(opts)),
     legacyHsetupRelativePath: path.join('usr', 'bin', 'hsetup'),
     resourceHsetupDirRelativePath: path.join('usr', 'lib', productName, 'binaries'),
     resourceHsetupPrefix: 'hsetup-',
@@ -229,7 +231,7 @@ function dumpLinuxAppImageDiagnostics(opts) {
   const absUiDir = String(opts.absUiDir ?? '').trim();
   const environment = String(opts.environment ?? '').trim();
 
-  const layout = resolveLinuxAppImageDiagnosticsLayout({ environment });
+  const layout = resolveLinuxAppImageDiagnosticsLayout({ environment, tauriDir: path.join(absUiDir, 'src-tauri') });
   const productName = layout.productName;
   const appDirPath = path.join(absUiDir, 'src-tauri', 'target', 'release', 'bundle', 'appimage', `${productName}.AppDir`);
   const appPath = path.join(appDirPath, layout.appRelativePath);
@@ -449,6 +451,15 @@ function main() {
   }
 
   const platform = process.platform;
+  if (platform === 'linux' && !noBundle && !dryRun) {
+    try {
+      // This pipeline bundles all configured Linux formats. Native candidate
+      // compilation uses --no-bundle and retains the distro headers and symbols.
+      validateLinuxWebKitRuntime({ root: '/', layout: 'installed' });
+    } catch (error) {
+      throw new Error('Linux AppImage packaging requires the pinned WebKit SDK. Prepare it with .github/actions/install-tauri-linux-dependencies (bundled-webkit: true) before bundling.', { cause: error });
+    }
+  }
   const yarn = platform === 'win32' ? null : resolveYarnInvocation();
   const targetArgs = tauriTarget ? ['--target', tauriTarget] : [];
   /** @type {string[]} */
@@ -481,6 +492,16 @@ function main() {
       );
     }
     configs.push('--config', linuxHsetupOverridePath);
+  }
+
+  if (platform === 'linux' && !noBundle) {
+    const webkitFilesOverridePath = tempFile(tmpRoot, 'tauri.linux.webkit.appimage.files.override.json');
+    if (opts.dryRun) {
+      console.log(`[dry-run] write ${webkitFilesOverridePath} (AppImage WebKit GPU helper)`);
+    } else {
+      fs.writeFileSync(webkitFilesOverridePath, `${JSON.stringify(linuxWebKitAppImageFilesConfig())}\n`, 'utf8');
+    }
+    configs.push('--config', webkitFilesOverridePath);
   }
 
   const signingKeyValue = noBundle ? '' : String(process.env.TAURI_SIGNING_PRIVATE_KEY ?? '').trim();
@@ -612,7 +633,7 @@ function main() {
         fs.writeFileSync(versionOverride, `${JSON.stringify({ version: tauriBuildVersion })}\n`, 'utf8');
       }
 
-      const configPath = environment === 'publicdev' ? 'src-tauri/tauri.publicdev.conf.json' : 'src-tauri/tauri.preview.conf.json';
+      const configPath = `src-tauri/${resolveTauriChannelConfigFile(environment)}`;
 
       if (platform === 'win32') {
         const tauri = resolveTauriCliInvocation({ platform, absUiDir });

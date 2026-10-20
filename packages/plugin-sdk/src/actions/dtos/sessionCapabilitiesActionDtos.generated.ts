@@ -272,7 +272,7 @@ export type SessionCapabilitiesActionResultById = {
         };
     } | {
         ok: false;
-        code: 'not_found' | 'session_unavailable';
+        code: 'not_found' | 'session_unavailable' | 'preview_timeout';
     };
     readonly "session.capabilities.set": {
         ok: true;

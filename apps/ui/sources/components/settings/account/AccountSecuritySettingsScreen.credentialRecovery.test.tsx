@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -21,6 +21,7 @@ installDisconnectedServerSocketBoundary();
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 const { AccountSecuritySettingsScreen } = await import('./AccountSecuritySettingsScreen');
 
+beforeEach(() => installHomeGovernanceBoundaries(harness));
 afterEach(async () => { standardCleanup(); await harness.reset(); routerPush.mockReset(); });
 
 it('settles an absent credential through the real scope resolver and exposes Home recovery', async () => {
@@ -40,13 +41,18 @@ it('settles an absent credential through the real scope resolver and exposes Hom
 it('keeps unreadable device credentials distinct from sign-out and retries through the scope owner', async () => {
     await harness.addHome({ name: 'Personal Home', serverUrl: 'https://security-unreadable.example.test', accountId: null });
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
-    vi.mocked(TokenStorage.getCredentialsForServerUrl).mockRejectedValueOnce(new Error('secure_storage_unavailable'));
-    const screen = await renderScreen(
-        <InjectedAuthProvider credentials={null}><AccountSecuritySettingsScreen /></InjectedAuthProvider>,
-    );
-    await vi.waitFor(() => expect(screen.findByTestId('settings-account-security-home-unavailable')).not.toBeNull());
-    expect(screen.findByTestId('settings-account-security-signed-out')).toBeNull();
-    await screen.pressByTestIdAsync('settings-account-security-home-unavailable-action');
-    await vi.waitFor(() => expect(screen.findByTestId('settings-account-security-signed-out')).not.toBeNull());
-    expect(routerPush).not.toHaveBeenCalled();
+    const credentialRead = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl')
+        .mockRejectedValueOnce(new Error('secure_storage_unavailable'));
+    try {
+        const screen = await renderScreen(
+            <InjectedAuthProvider credentials={null}><AccountSecuritySettingsScreen /></InjectedAuthProvider>,
+        );
+        await vi.waitFor(() => expect(screen.findByTestId('settings-account-security-home-unavailable')).not.toBeNull());
+        expect(screen.findByTestId('settings-account-security-signed-out')).toBeNull();
+        await screen.pressByTestIdAsync('settings-account-security-home-unavailable-action');
+        await vi.waitFor(() => expect(screen.findByTestId('settings-account-security-signed-out')).not.toBeNull());
+        expect(routerPush).not.toHaveBeenCalled();
+    } finally {
+        credentialRead.mockRestore();
+    }
 });

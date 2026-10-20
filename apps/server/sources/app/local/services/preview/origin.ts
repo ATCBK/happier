@@ -137,3 +137,16 @@ export function resolveLocalServicePreviewUrl(input: ResolveLocalServicePreviewU
     // Direct browsers and native embeds provide no isolated-origin guarantee for API paths.
     return { ok: false, reasonCode: "host_origin_unavailable" };
 }
+
+/**
+ * The scheme the viewer's browser used to reach this server, as the upstream service must see it in
+ * `X-Forwarded-Proto`: a secure request, or the configured https public base when a TLS terminator in
+ * front of the server hides it. One owner for the HTTP and WebSocket data planes of previews and
+ * public exposures.
+ */
+export function resolveLocalServiceExternalProtocol(input: Readonly<{
+    requestIsSecure: boolean;
+    configured?: "http" | "https";
+}>): "http" | "https" {
+    return input.requestIsSecure || input.configured === "https" ? "https" : "http";
+}

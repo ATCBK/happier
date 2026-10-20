@@ -360,7 +360,7 @@ describe('daemon speech host-mediated Voice Account operations', () => {
           parameters: {},
           signal: context.signal,
         });
-        return (JSON.parse(new TextDecoder().decode(result.body)) as { models: readonly { id: string; name: string }[] }).models;
+        return (JSON.parse(new TextDecoder().decode(result.body)) as { models: readonly { id: string; name: string }[] }).models.map(model => ({ ...model, metadata: {} }));
       },
     });
 

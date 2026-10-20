@@ -8,12 +8,12 @@ import { buildAnalyticsProfile, buildEncryptedSecretValue, buildSecretValue } fr
 
 describe('buildAccountSettingsSnapshot', () => {
     it('tracks count-only collection summaries through canonical analytics serializers', () => {
-        const snapshot = buildAccountSettingsSnapshot({
+        const snapshot = buildAccountSettingsSnapshot(settingsParse({
             ...settingsDefaults,
             favoriteDirectories: ['/a', '/b', '/c'],
             favoriteMachines: ['m1'],
             favoriteProfiles: ['default', 'custom:work'],
-        });
+        }));
 
         expect(snapshot.properties).not.toHaveProperty('acct_setting__recentMachinePaths');
         expect(snapshot.properties.acct_setting__favoriteDirectories).toBe(3);
@@ -21,8 +21,8 @@ describe('buildAccountSettingsSnapshot', () => {
         expect(snapshot.properties.acct_setting__favoriteProfiles).toBe(2);
     });
 
-    it('tracks dismissed cli warnings through canonical analytics serializers', () => {
-        const snapshot = buildAccountSettingsSnapshot({
+    it('excludes transferred dismissed CLI warnings from account analytics', () => {
+        const snapshot = buildAccountSettingsSnapshot(settingsParse({
             ...settingsDefaults,
             dismissedCLIWarnings: {
                 global: {
@@ -39,14 +39,13 @@ describe('buildAccountSettingsSnapshot', () => {
                     },
                 },
             },
-        });
+        }));
 
-        expect(snapshot.properties.acct_setting__dismissedCLIWarnings__globalDismissedCount).toBe(2);
-        expect(snapshot.properties.acct_setting__dismissedCLIWarnings__perMachineDismissedCount).toBe(3);
+        expect(Object.keys(snapshot.properties).some((key) => key.startsWith('acct_setting__dismissedCLIWarnings'))).toBe(false);
     });
 
     it('tracks connected services summaries through canonical analytics serializers', () => {
-        const snapshot = buildAccountSettingsSnapshot({
+        const snapshot = buildAccountSettingsSnapshot(settingsParse({
             ...settingsDefaults,
             connectedServicesDefaultProfileByServiceId: {
                 anthropic: 'work',
@@ -66,10 +65,10 @@ describe('buildAccountSettingsSnapshot', () => {
                 'openai-codex/personal': 'min_remaining',
                 'openai-codex/work': 'primary',
             },
-        });
+        }));
 
         expect(snapshot.properties.acct_setting__connectedServicesDefaultProfileByServiceId).toBe(2);
-        expect(snapshot.properties.acct_setting__connectedServicesProfileLabelByKey).toBe(3);
+        expect(snapshot.properties).not.toHaveProperty('acct_setting__connectedServicesProfileLabelByKey');
         expect(snapshot.properties.acct_setting__connectedServicesQuotaPinnedMeterIdsByKey__profilesWithPinsCount).toBe(2);
         expect(snapshot.properties.acct_setting__connectedServicesQuotaPinnedMeterIdsByKey__totalPinnedMeterCount).toBe(3);
         expect(snapshot.properties.acct_setting__connectedServicesQuotaSummaryStrategyByKey__primaryCount).toBe(2);
@@ -77,7 +76,7 @@ describe('buildAccountSettingsSnapshot', () => {
     });
 
     it('tracks actions settings summaries through canonical analytics serializers', () => {
-        const snapshot = buildAccountSettingsSnapshot({
+        const snapshot = buildAccountSettingsSnapshot(settingsParse({
             ...settingsDefaults,
             actionsSettingsV1: {
                 ...DEFAULT_ACTIONS_SETTINGS_V1,
@@ -108,7 +107,7 @@ describe('buildAccountSettingsSnapshot', () => {
                     },
                 },
             },
-        });
+        }));
 
         expect(snapshot.properties.acct_setting__actionsSettingsV1__overrideCount).toBe(3);
         expect(snapshot.properties.acct_setting__actionsSettingsV1__enabledOverrideCount).toBe(2);
@@ -138,12 +137,12 @@ describe('buildAccountSettingsSnapshot', () => {
                     },
                 },
             },
-        } as unknown as typeof settingsDefaults.actionsSettingsV1;
+        };
 
-        const snapshot = buildAccountSettingsSnapshot({
+        const snapshot = buildAccountSettingsSnapshot(settingsParse({
             ...settingsDefaults,
             actionsSettingsV1: rawActionsSettings,
-        });
+        }));
 
         expect(snapshot.properties.acct_setting__actionsSettingsV1__overrideCount).toBe(1);
         expect(snapshot.properties.acct_setting__actionsSettingsV1__enabledOverrideCount).toBe(0);
@@ -154,8 +153,8 @@ describe('buildAccountSettingsSnapshot', () => {
         expect(snapshot.properties.acct_setting__actionsSettingsV1__toolExposureOverrideCount).toBe(2);
     });
 
-    it('tracks prompt library and context selection summaries through canonical analytics serializers', () => {
-        const snapshot = buildAccountSettingsSnapshot({
+    it('excludes transferred prompt library and context selection entities from account analytics', () => {
+        const snapshot = buildAccountSettingsSnapshot(settingsParse({
             ...settingsDefaults,
             promptStacksV1: {
                 v: 1,
@@ -212,20 +211,15 @@ describe('buildAccountSettingsSnapshot', () => {
                     three: { machineId: null, workspacePath: '/repo-three' },
                 },
             },
-        });
+        }));
 
-        expect(snapshot.properties.acct_setting__promptStacksV1__codingCount).toBe(2);
-        expect(snapshot.properties.acct_setting__promptStacksV1__voiceCount).toBe(1);
-        expect(snapshot.properties.acct_setting__promptStacksV1__profileOverrideCount).toBe(2);
-        expect(snapshot.properties.acct_setting__promptFoldersV1).toBe(2);
-        expect(snapshot.properties.acct_setting__promptInvocationsV1).toBe(2);
-        expect(snapshot.properties.acct_setting__promptExternalLinksV1).toBe(1);
-        expect(snapshot.properties.acct_setting__promptRegistrySourcesV1).toBe(2);
-        expect(snapshot.properties.acct_setting__contextSelectionsV1).toBe(3);
+        for (const prefix of ['promptStacksV1', 'promptFoldersV1', 'promptInvocationsV1', 'promptExternalLinksV1', 'promptRegistrySourcesV1', 'contextSelectionsV1']) {
+            expect(Object.keys(snapshot.properties).some((key) => key.startsWith('acct_setting__' + prefix))).toBe(false);
+        }
     });
 
-    it('tracks execution guidance, tmux overrides, and installables policy summaries through canonical analytics serializers', () => {
-        const snapshot = buildAccountSettingsSnapshot({
+    it('excludes transferred guidance while tracking tmux and installables policy summaries', () => {
+        const snapshot = buildAccountSettingsSnapshot(settingsParse({
             ...settingsDefaults,
             executionRunsGuidanceEntries: [
                 {
@@ -282,15 +276,9 @@ describe('buildAccountSettingsSnapshot', () => {
                     },
                 },
             },
-        });
+        }));
 
-        expect(snapshot.properties.acct_setting__executionRunsGuidanceEntries__totalCount).toBe(3);
-        expect(snapshot.properties.acct_setting__executionRunsGuidanceEntries__enabledCount).toBe(2);
-        expect(snapshot.properties.acct_setting__executionRunsGuidanceEntries__withSuggestedBackendCount).toBe(2);
-        expect(snapshot.properties.acct_setting__executionRunsGuidanceEntries__withSuggestedModelCount).toBe(1);
-        expect(snapshot.properties.acct_setting__executionRunsGuidanceEntries__delegateCount).toBe(1);
-        expect(snapshot.properties.acct_setting__executionRunsGuidanceEntries__reviewCount).toBe(1);
-        expect(snapshot.properties.acct_setting__executionRunsGuidanceEntries__planCount).toBe(1);
+        expect(Object.keys(snapshot.properties).some((key) => key.startsWith('acct_setting__executionRunsGuidanceEntries'))).toBe(false);
         expect(snapshot.properties.acct_setting__sessionTmuxByMachineId__overrideCount).toBe(2);
         expect(snapshot.properties.acct_setting__sessionTmuxByMachineId__useTmuxCount).toBe(1);
         expect(snapshot.properties.acct_setting__sessionTmuxByMachineId__isolatedCount).toBe(1);
@@ -303,7 +291,7 @@ describe('buildAccountSettingsSnapshot', () => {
         expect(snapshot.properties.acct_setting__installablesPolicyByMachineId__autoUpdateOffCount).toBe(1);
     });
 
-    it('tracks profile, secret, and mcp summaries through canonical analytics serializers', () => {
+    it('tracks retained secret counts while excluding transferred profiles and MCP entities', () => {
         const snapshot = buildAccountSettingsSnapshot(settingsParse({
             ...settingsDefaults,
             profiles: [
@@ -422,25 +410,9 @@ describe('buildAccountSettingsSnapshot', () => {
             },
         }));
 
-        expect(snapshot.properties.acct_setting__profiles__totalCount).toBe(2);
-        expect(snapshot.properties.acct_setting__profiles__customEnvVarProfileCount).toBe(1);
-        expect(snapshot.properties.acct_setting__profiles__builtInCount).toBe(1);
-        expect(snapshot.properties.acct_setting__profiles__machineLoginCount).toBe(1);
-        expect(snapshot.properties).not.toHaveProperty('acct_setting__lastUsedProfile');
         expect(snapshot.properties.acct_setting__secrets).toBe(2);
-        expect(snapshot.properties.acct_setting__secretBindingsByProfileId__boundProfileCount).toBe(2);
-        expect(snapshot.properties.acct_setting__secretBindingsByProfileId__totalBindingCount).toBe(3);
-        expect(snapshot.properties.acct_setting__mcpServersSettingsV1__strictMode).toBe(true);
-        expect(snapshot.properties.acct_setting__mcpServersSettingsV1__serverCount).toBe(2);
-        expect(snapshot.properties.acct_setting__mcpServersSettingsV1__stdioCount).toBe(1);
-        expect(snapshot.properties.acct_setting__mcpServersSettingsV1__httpCount).toBe(1);
-        expect(snapshot.properties.acct_setting__mcpServersSettingsV1__sseCount).toBe(0);
-        expect(snapshot.properties.acct_setting__mcpServersSettingsV1__bindingCount).toBe(3);
-        expect(snapshot.properties.acct_setting__mcpServersSettingsV1__enabledBindingCount).toBe(2);
-        expect(snapshot.properties.acct_setting__mcpServersSettingsV1__allMachinesCount).toBe(1);
-        expect(snapshot.properties.acct_setting__mcpServersSettingsV1__machineTargetCount).toBe(1);
-        expect(snapshot.properties.acct_setting__mcpServersSettingsV1__workspaceTargetCount).toBe(1);
-        expect(snapshot.properties.acct_setting__mcpServersSettingsV1__overridePresenceCount).toBe(2);
-        expect(snapshot.properties.acct_setting__mcpServersSettingsV1__savedSecretRefCount).toBe(4);
+        for (const prefix of ['profiles', 'secretBindingsByProfileId', 'mcpServersSettingsV1', 'lastUsedProfile']) {
+            expect(Object.keys(snapshot.properties).some((key) => key.startsWith('acct_setting__' + prefix))).toBe(false);
+        }
     });
 });

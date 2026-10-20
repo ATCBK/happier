@@ -38,6 +38,7 @@ import {
   getStackRuntimePendingRemoteTargets,
   getStackRuntimeProcessInstanceFingerprint,
   readStackRuntimeStateFile,
+  readActiveStackRuntimeStateFile,
   recordStackRuntimeServerPids,
   recordStackRuntimeServerLifecycle,
   recordStackRuntimeStart,
@@ -50,6 +51,23 @@ import {
   withStackRuntimeStartClaim,
   withStackRuntimeStopTransaction,
 } from './runtime_state.mjs';
+
+test('active runtime reads retain only a matching stack with a live recorded owner', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'hstack-active-runtime-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const statePath = join(dir, 'stack.runtime.json');
+  const state = { stackName: 'source-qa', ownerPid: process.pid,
+    sourceRuntimeIdentities: { server: { selected: 'source', loaded: 'source' } } };
+  await writeFile(statePath, JSON.stringify(state));
+  assert.deepEqual(await readActiveStackRuntimeStateFile(statePath, { stackName: 'source-qa' }), state);
+  assert.equal(await readActiveStackRuntimeStateFile(statePath, { stackName: 'other-qa' }), null);
+  await writeFile(statePath, JSON.stringify({ ...state, ownerPid: null }));
+  assert.equal(await readActiveStackRuntimeStateFile(statePath, { stackName: 'source-qa' }), null);
+  const child = spawnTestProcess(process.execPath, ['-e', '']);
+  await new Promise((resolve, reject) => { child.once('close', resolve); child.once('error', reject); });
+  await writeFile(statePath, JSON.stringify({ ...state, ownerPid: child.pid }));
+  assert.equal(await readActiveStackRuntimeStateFile(statePath, { stackName: 'source-qa' }), null);
+});
 
 test('preserve-daemon finalization retains remote custody without local daemon PIDs', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'hstack-runtime-remote-preserve-'));

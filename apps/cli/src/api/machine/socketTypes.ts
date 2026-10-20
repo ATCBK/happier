@@ -19,9 +19,11 @@ import { TRANSFER_RELAY_V2_SOCKET_EVENT } from '@happier-dev/protocol/transfers/
 import type { MachineUpdateStateRequest, MachineUpdateStateResponse } from '@happier-dev/protocol/machines/metadataUpdate';
 import { SESSION_PENDING_RESET_START_RELEASE_EVENT_V1, type PendingResetStartReleaseRequestV1, type PendingResetStartReleaseResponseV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import type { PendingActivationRequestedEphemeralV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1, type SessionMessageReplyMachineMutationV1,
+  type SessionMessageReplyMutationResultV1, type SessionMessageReplyPendingHintV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
 
 export interface ServerToDaemonEvents {
-  ephemeral: (data: PendingActivationRequestedEphemeralV1) => void;
+  ephemeral: (data: PendingActivationRequestedEphemeralV1 | SessionMessageReplyPendingHintV1) => void;
   update: (data: Update) => void;
   session: (data: SessionBroadcast) => void;
   [SOCKET_RPC_EVENTS.REQUEST]: (data: SocketRpcRequestPayload, callback: (response: unknown) => void) => void;
@@ -38,6 +40,8 @@ export interface ServerToDaemonEvents {
 }
 
 export interface DaemonToServerEvents {
+  [SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1]: (data: SessionMessageReplyMachineMutationV1,
+    cb: (answer: SessionMessageReplyMutationResultV1) => void) => void;
   [SESSION_PENDING_RESET_START_RELEASE_EVENT_V1]: (data: PendingResetStartReleaseRequestV1, cb: (answer: PendingResetStartReleaseResponseV1) => void) => void;
   [TEAM_CREDENTIAL_EXTERNAL_PROVIDER_OPERATION_RETIRE_EVENT_V1]: (
     data: TeamCredentialExternalProviderOperationRetireV1,

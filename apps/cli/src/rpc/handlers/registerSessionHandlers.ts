@@ -146,6 +146,7 @@ export function registerSessionHandlers(
             structuredInputAdmissionPolicy?: SessionStructuredInputAdmissionPolicyV1;
         }) => Promise<void> | void) | null;
         sessionRuntimeControls?: SessionRuntimeControls | null;
+        waitForSessionRuntimeControls?: (signal?: AbortSignal) => Promise<boolean>;
         accessPolicy?: FilesystemAccessPolicy;
         executionBudgetRegistry?: ExecutionBudgetRegistry;
         admissionDrain?: DaemonAdmissionDrain;
@@ -171,7 +172,10 @@ export function registerSessionHandlers(
             Parameters<typeof registerCapabilitiesHandlers>[1]
         >['activatePurposeBindings'];
     }>,
-): Readonly<{ dispose: () => Promise<void> }> {
+): Readonly<{
+    dispose: () => Promise<void>;
+    resolveSessionAttachment: (handle: import('@happier-dev/protocol').SessionAttachmentHandleV1) => ReturnType<TransferSessionStore['getIssuedAttachment']>;
+}> {
     const accessPolicy = opts?.accessPolicy ?? { kind: 'osUser' };
     const authorizedSessionRpcHandlerManager = createAuthorizedSessionRpcRegistrar(
         rpcHandlerManager,
@@ -259,6 +263,7 @@ export function registerSessionHandlers(
         isUsageLimitRecoveryEnabled: opts?.isUsageLimitRecoveryEnabled ?? null,
         checkRuntimeAuthUsageLimitRecovery: opts?.checkRuntimeAuthUsageLimitRecovery ?? null,
         sessionRuntimeControls: opts?.sessionRuntimeControls ?? null,
+        waitForSessionRuntimeControls: opts?.waitForSessionRuntimeControls,
         notifyUsageLimitWaitResumeCancelled: opts?.notifyUsageLimitWaitResumeCancelled ?? null,
     });
     registerSessionTranscriptRpcHandlers({
@@ -272,5 +277,10 @@ export function registerSessionHandlers(
                 : {}),
         }),
     });
-    return { dispose: async () => { await sessionAttachmentStore?.dispose(); } };
+    return {
+        resolveSessionAttachment: handle => handle.sessionId === opts?.sessionId
+            ? sessionAttachmentStore?.getIssuedAttachment(handle) ?? null
+            : null,
+        dispose: async () => { await sessionAttachmentStore?.dispose(); },
+    };
 }

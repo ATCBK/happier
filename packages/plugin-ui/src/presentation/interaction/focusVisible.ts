@@ -54,8 +54,9 @@ function matchesFocusVisible(target: FocusVisibleTarget | null | undefined): boo
 /**
  * The one decision of whether a focused control shows its focus ring.
  *
- * On the web: never right after a pointer press, whatever the engine reports; otherwise the
- * browser's `:focus-visible` decides (keyboard focus shows the ring). Native focus only ever comes
+ * On the web: only once the keyboard was the last input, and then as the browser's `:focus-visible`
+ * decides; never right after a pointer press and never before any input (a reload or deep link that
+ * moves focus by script). Native focus only ever comes
  * from a keyboard or an assistive technology, so it always shows. React Native Web reports `focused`
  * for EVERY focus, including the one a mouse click leaves, so a control that paints its ring from
  * that flag alone keeps a ring after every click; route the flag through here instead.
@@ -65,7 +66,9 @@ function matchesFocusVisible(target: FocusVisibleTarget | null | undefined): boo
  */
 export function isHappierFocusVisible(target?: unknown): boolean {
   if (Platform.OS !== 'web') return true;
-  if (latestModality === 'pointer') return false;
+  // Only a keyboard shows the ring: script focus after a click, a reload or a deep link (no input at
+  // all yet) is not keyboard navigation, whatever the engine's own `:focus-visible` heuristic says.
+  if (latestModality !== 'keyboard') return false;
   if (target !== undefined && target !== null) return matchesFocusVisible(target as FocusVisibleTarget);
   if (typeof document === 'undefined') return true;
   return matchesFocusVisible(document.activeElement as FocusVisibleTarget | null);
@@ -123,3 +126,19 @@ export function happierFocusRingStyle(input: Readonly<{
 export const HAPPIER_FOCUS_RING_DELEGATED_STYLE: HappierPortableLayerStyle | null = Platform.OS === 'web'
   ? ({ outlineStyle: 'none' } as unknown as HappierPortableLayerStyle)
   : null;
+
+/**
+ * Product text inputs paint no focus ring of their own: the field's box is its one box, and a browser
+ * ring on the input inside it drew a second box. Forced-colors mode restores one system ring through
+ * {@link HAPPIER_TEXT_INPUT_WEB_MARKER} (`apps/ui/sources/theme.css`). Web only; core `TextInput` and
+ * the plugin-ui text field both apply it.
+ */
+export const HAPPIER_TEXT_INPUT_FOCUS_RESET_STYLE = Platform.OS === 'web'
+  ? Object.freeze({ outlineStyle: 'solid', outlineWidth: 0, outlineColor: 'transparent' } as const)
+  : null;
+
+/** The marker forced-colors mode keys its restored input ring on. Web only. */
+// React Native Web forwards `dataSet` (rendered as `data-happier-text-input`), not raw `data-*` props.
+export const HAPPIER_TEXT_INPUT_WEB_MARKER: Readonly<{ dataSet?: Readonly<Record<string, string>> }> = Platform.OS === 'web'
+  ? Object.freeze({ dataSet: Object.freeze({ happierTextInput: 'true' }) })
+  : Object.freeze({});

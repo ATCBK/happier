@@ -1,12 +1,15 @@
-import { isValidElement, useState, type ReactNode } from 'react';
+import { isValidElement, useContext, useState, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { HAPPIER_PAGE_METRICS } from '../layout/pageMetrics.js';
 import { useHappierPageSection } from '../layout/PageSection.js';
+import { HappierBodyEdgeContext, useHappierColumnEdgePx } from '../layout/columnEdge.js';
 import { HAPPIER_COLLECTION_LIST_METRICS } from '../collection/CollectionList.js';
 import { HappierText } from '../text/Text.js';
+import { HAPPIER_BALANCED_TEXT_WRAP } from '../text/balancedTextWrap.js';
 import type { HappierTone } from '../semantics.js';
 import { HappierPressable } from '../interaction/Pressable.js';
+import { HAPPIER_MENU_ROW_METRICS } from '../interaction/Menu.js';
 import { happierDiscretePressStyle, happierPressTransitionStyle } from '../interaction/pressFeedback.js';
 import { useOptionalHappierUiAccessibility } from '../../environment/context.js';
 
@@ -57,22 +60,50 @@ export function HappierSurfaceStateFrame(props: Readonly<{
  */
 const LINE_TEXT_BASIS_PX = 180;
 
-/** One compact sentence, glyph and inline recovery; diagnostic detail never enters a list line. */
+/**
+ * The one in-list state line (lab 0 "N"): one compact sentence, glyph and inline recovery; diagnostic
+ * detail never enters a list line. Happier core's `EmptyState layout="line"` and the plugin line states
+ * both draw this, binding only their own text and glyphs. The glyph keeps the size its binding gives it:
+ * a line's quiet ring or warning never grows into a row glyph.
+ */
 export function HappierStateLine(props: Readonly<{
   testID?: string;
   icon?: ReactNode;
   children: ReactNode;
   action?: ReactNode;
   accessibilitySemantics?: 'status' | 'alert';
+  /**
+   * `menu`: the line sits among a transient menu's rows, so it takes the menu row's height, inset and
+   * glyph column, and its sentence starts on the options' label edge.
+   */
+  density?: 'menu';
 }>) {
   const metrics = HAPPIER_STATE_LINE_METRICS;
+  const menu = props.density === 'menu';
   // In a page section's sheet the line stands on the rows' edge (the sheet's row inset), not the
   // collection column's text inset.
   const pageSection = useHappierPageSection();
+  // Loose in a page or detail column (no sheet around it) it stands on the column's text edge, under the
+  // titles, rather than the collection's inset.
+  const columnEdgePx = useHappierColumnEdgePx();
+  // In a body that draws its own content edge (a widget body) the line stands on that edge.
+  const onBodyEdge = useContext(HappierBodyEdgeContext);
+  // The glyph sits in the leading column of the rows around it, so the sentence starts on their titles'
+  // edge: a menu's icon box, a page section's leading column, or a collection row's glyph box.
+  const glyphColumn = menu
+    ? { boxPx: HAPPIER_MENU_ROW_METRICS.iconBoxSizePx, gapPx: HAPPIER_MENU_ROW_METRICS.iconMarginRightPx }
+    : pageSection
+      ? { boxPx: HAPPIER_PAGE_METRICS.rowLeadingColumnPx, gapPx: HAPPIER_PAGE_METRICS.rowLeadingGapPx }
+      : { boxPx: HAPPIER_COLLECTION_LIST_METRICS.rowGlyphBox, gapPx: HAPPIER_COLLECTION_LIST_METRICS.rowGlyphGap };
   return (
     <View testID={props.testID} {...resolveHappierStateAnnouncement(props.accessibilitySemantics)} style={{
-      minHeight: metrics.minHeightPx,
-      paddingHorizontal: pageSection?.rowInsetPx ?? metrics.paddingHorizontalPx,
+      minHeight: menu ? HAPPIER_MENU_ROW_METRICS.minHeightPx : metrics.minHeightPx,
+      paddingHorizontal: menu
+        ? HAPPIER_MENU_ROW_METRICS.paddingHorizontalPx
+        : onBodyEdge
+          ? 0
+          : pageSection?.rowInsetPx
+          ?? (columnEdgePx > 0 ? Math.max(0, HAPPIER_PAGE_METRICS.pageTextInsetPx - columnEdgePx) : metrics.paddingHorizontalPx),
       paddingVertical: metrics.paddingVerticalPx,
       // One line that wraps its sentence, never its parts: the glyph and the recovery stay beside the
       // text in a narrow column instead of stacking above and below it.
@@ -87,12 +118,12 @@ export function HappierStateLine(props: Readonly<{
       <View style={{
         flexDirection: 'row',
         alignItems: 'center',
-        gap: metrics.gapPx,
+        gap: glyphColumn.gapPx,
         flexShrink: 1,
         minWidth: 0,
         ...(props.action ? { flexGrow: 1, flexBasis: LINE_TEXT_BASIS_PX } : {}),
       }}>
-        {props.icon ? <View style={{ flexShrink: 0 }} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">{props.icon}</View> : null}
+        {props.icon ? <View style={{ flexShrink: 0, width: glyphColumn.boxPx, alignItems: 'center' }} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">{props.icon}</View> : null}
         <View style={{ flexShrink: 1, minWidth: 0 }}>{props.children}</View>
       </View>
       {props.action ? <View style={{ flexShrink: 0, marginLeft: 'auto' }}>{props.action}</View> : null}
@@ -108,13 +139,16 @@ export function HappierStateDetails(props: Readonly<{
   details: string;
   renderToggle?: (open: boolean) => ReactNode;
   renderDetails?: (details: string) => ReactNode;
+  /** `start` for a state that stands on a left edge (an inline state): the disclosure joins that edge. */
+  align?: 'start' | 'center';
 }>) {
+  const start = props.align === 'start';
   const [open, setOpen] = useState(false);
   const reducedMotion = useOptionalHappierUiAccessibility()?.reducedMotion ?? true;
   return (
-  <View testID={props.markerTestID} style={{ alignItems: 'center', marginTop: 12, gap: 6 }}>
+  <View testID={props.markerTestID} style={{ alignItems: start ? 'flex-start' : 'center', marginTop: start ? 4 : 12, gap: 6 }}>
     <HappierPressable testID={props.testID ? `${props.testID}-details-toggle` : undefined} accessibilityRole="button" accessibilityLabel={props.label} expanded={open} hitSlop={8} onPress={() => setOpen((value) => !value)} style={(state) => [
-      { minHeight: 32, paddingHorizontal: 8, paddingVertical: 4, flexDirection: 'row', alignItems: 'center', gap: 4 },
+      { minHeight: 32, paddingHorizontal: start ? 0 : 8, paddingVertical: 4, flexDirection: 'row', alignItems: 'center', gap: 4 },
       happierDiscretePressStyle(state.pressed, reducedMotion),
       happierPressTransitionStyle(state.pressed, ['transform', 'opacity'], reducedMotion),
     ]}>
@@ -358,7 +392,7 @@ function renderSlot(
     <HappierText
       variant={semantic.variant}
       tone={semantic.tone}
-      style={{ textAlign: 'center', marginBottom: semantic.gap, ...semantic.type }}
+      style={{ textAlign: 'center', marginBottom: semantic.gap, ...semantic.type, ...HAPPIER_BALANCED_TEXT_WRAP }}
     >
       {slot}
     </HappierText>

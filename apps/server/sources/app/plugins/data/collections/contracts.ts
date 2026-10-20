@@ -9,6 +9,7 @@ import { z } from "zod/mini";
 import { readPluginsFeatureEnv } from "@/app/features/catalog/readFeatureEnv";
 import { isPrismaErrorCode } from "@/storage/db";
 import type { Tx } from "@/storage/inTx";
+import { getDbProviderFromEnv } from "@/storage/prisma";
 
 import {
     findPluginCollectionActivationQuotaIncompatibility,
@@ -144,14 +145,11 @@ function canonicalizeWritableContractRefs(input: Readonly<{
  * Reads one exact immutable contract fact for Data-owned readiness and query
  * callers. It intentionally knows nothing about release selection.
  */
-async function readExactMaterializedPluginCollectionContractTx(input: Readonly<{
-    tx: Tx;
+export async function findExactMaterializedPluginCollectionContractTx(input: Readonly<{
+    tx: Pick<Tx, 'pluginCollectionContract'>;
     ref: PluginCollectionContractRefV1;
-}>): Promise<Readonly<{
-    id: string;
-    contract: NormalizedPluginAccountCollectionContractV1;
-}>> {
-    const persisted = await input.tx.pluginCollectionContract.findFirst({
+}>): Promise<(StoredPluginCollectionContractRow & Readonly<{ id: string }>) | null> {
+    return await input.tx.pluginCollectionContract.findFirst({
         where: {
             pluginId: input.ref.pluginId,
             collectionId: input.ref.collectionId,
@@ -170,6 +168,16 @@ async function readExactMaterializedPluginCollectionContractTx(input: Readonly<{
             privacyProjection: true,
         },
     });
+}
+
+async function readExactMaterializedPluginCollectionContractTx(input: Readonly<{
+    tx: Tx;
+    ref: PluginCollectionContractRefV1;
+}>): Promise<Readonly<{
+    id: string;
+    contract: NormalizedPluginAccountCollectionContractV1;
+}>> {
+    const persisted = await findExactMaterializedPluginCollectionContractTx(input);
     if (!persisted) {
         throw new PluginCollectionWriterReadinessError("collection_writer_contract_unavailable");
     }
@@ -345,19 +353,28 @@ async function materializeOnePluginCollectionContractTx(
     contract: NormalizedPluginAccountCollectionContractV1,
 ): Promise<void> {
     if (await assertExistingContract(tx, contract)) return;
+    const data = {
+        pluginId: contract.pluginId,
+        collectionId: contract.collectionId,
+        schemaVersion: contract.schemaVersion,
+        contractDigest: contract.contractDigest,
+        normalizedSchema: toPrismaJson(contract.schema),
+        indexes: toPrismaJson(contract.indexes),
+        relations: toPrismaJson(contract.relations),
+        privacyProjection: storedPrivacyProjection(contract),
+    };
+    if (getDbProviderFromEnv(process.env, "postgres") !== "sqlite") {
+        // Contracts are shared across Accounts, whose publication fences are
+        // independent. A duplicate insert must not abort PostgreSQL before
+        // this canonical owner can reconstruct and validate the winner.
+        const inserted = await tx.pluginCollectionContract.createMany({ data, skipDuplicates: true });
+        if (inserted.count === 0 && !await assertExistingContract(tx, contract)) {
+            throw new PluginCollectionContractMaterializationError("collection_contract_inconsistent");
+        }
+        return;
+    }
     try {
-        await tx.pluginCollectionContract.create({
-            data: {
-                pluginId: contract.pluginId,
-                collectionId: contract.collectionId,
-                schemaVersion: contract.schemaVersion,
-                contractDigest: contract.contractDigest,
-                normalizedSchema: toPrismaJson(contract.schema),
-                indexes: toPrismaJson(contract.indexes),
-                relations: toPrismaJson(contract.relations),
-                privacyProjection: storedPrivacyProjection(contract),
-            },
-        });
+        await tx.pluginCollectionContract.create({ data });
     } catch (error) {
         if (!isPrismaErrorCode(error, "P2002")) throw error;
         if (!await assertExistingContract(tx, contract)) throw error;

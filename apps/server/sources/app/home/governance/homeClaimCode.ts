@@ -6,6 +6,7 @@ import { inTx, type Tx } from "@/storage/inTx";
 
 import { countActiveHomeOwnersInTx } from "./homeCapabilities";
 import { claimHomeOwnerInTx } from "./ownerAssignment";
+import { acquireHomeGovernanceAdmissionInTx } from "./governanceChanges";
 
 /**
  * The one-time Home claim code (plan `2026-09-26-home-owner-console` §3.5, decision A(b), AM-1,
@@ -94,6 +95,7 @@ async function redeemInTx(
     const submitted = Buffer.from(hashCode(canonical ?? input.code), "hex");
     if (!canonical || !timingSafeEqual(submitted, Buffer.from(stored.hash, "hex"))) return { status: "refused" };
 
+    await acquireHomeGovernanceAdmissionInTx(tx, { accountIds: [input.accountId], intent: "exclusive" });
     // Spend the code first, conditionally, so two concurrent redemptions cannot both use it.
     const spent = await tx.simpleCache.deleteMany({ where: { key: HOME_CLAIM_CODE_CACHE_KEY, value: row.value } });
     if (spent.count !== 1) return { status: "refused" };

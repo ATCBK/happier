@@ -12,11 +12,60 @@ import type { TokenOnlyCredentials } from '@/persistence';
 import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
 import { PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { createRoleSourceReaderV1 } from '@happier-dev/protocol/prompts/roles/accountRoleActions';
+import { createRoleSourceReader } from './roleSources';
+import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
+import { createAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 
 const defaultEngine = { agentTargetKey: buildBackendTargetKeyV2({ kind: 'backend', backendId: 'codex' }) };
 
 describe('session role prompt-plan context', () => {
+  it.each(['ECONNRESET', 'ETIMEDOUT', 'database_connection_unavailable'])('keeps a transient Home Role read pending without falling back to a Role set (%s)', async code => {
+    vi.spyOn(axios, 'get').mockRejectedValue(Object.assign(new Error('PRIVATE_NETWORK_DETAIL'), { code }));
+    const artifactStore = createAccountArtifactStore({ credentials: { token: 'role-read-test-token', encryption: null },
+      getAccountEncryptionMode: async () => 'plain' });
+    const owner = createSessionRoleContext({ readMetadata: () => ({ work: { sessionRolesV1: {
+      roleId: 'builder', overrides: {}, sessionRoles: {}, notes: '',
+    } } }), readOrganization: async () => ({}),
+      readRoleSources: createRoleSourceReader({ readPluginRoles: () => [], artifactStore }),
+      readAccountRoleOverrides: () => ({ status: 'ready', overrides: {} }), readDefaultEngine: () => defaultEngine });
+    const error: unknown = await owner.resolveRoles().catch((failure: unknown) => failure);
+    expect(error).toMatchObject({ code: 'preparation_pending', reason: 'unavailable' });
+    expect(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error })).toMatchObject({ code: 'preparation_pending', source: 'dependency_failure' });
+    expect(() => owner.readResolvedRoles()).toThrow('role_source_incomplete');
+    expect(JSON.stringify(error)).not.toContain('PRIVATE_NETWORK_DETAIL');
+    expect(String(error)).not.toContain('PRIVATE_NETWORK_DETAIL');
+  });
+
   afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
+  it('shares the live Artifact read across concurrent Session consumers and reobserves later edits', async () => {
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    let reads = 0;
+    let instructions = 'FIRST_ARTIFACT';
+    const readSources = createRoleSourceReader({ readPluginRoles: () => [], artifactStore: {
+      read: async () => null,
+      list: async () => {
+        reads++;
+        await pending;
+        return { coverage: 'complete', items: [{ artifactId: 'user-role', ownerAccountId: 'account', access: 'owner',
+          header: { kind: 'role.v1' }, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1,
+          body: JSON.stringify({ ...BUILT_IN_ROLES_V1.builder, instructions }) }] };
+      },
+    } });
+    const owner = createSessionRoleContext({ readMetadata: () => ({ work: { sessionRolesV1: {
+      roleId: 'user-role', overrides: {}, sessionRoles: {}, notes: '',
+    } } }), readOrganization: async () => ({}), readRoleSources: readSources,
+      readAccountRoleOverrides: () => ({ status: 'ready', overrides: {} }), readDefaultEngine: () => defaultEngine });
+    const roles = owner.resolveRoles();
+    const prompt = owner.resolvePromptContext();
+    release();
+    expect((await roles)['user-role']?.instructions).toBe('FIRST_ARTIFACT');
+    expect((await prompt)?.role?.instructions).toBe('FIRST_ARTIFACT');
+    expect(reads).toBe(1);
+    instructions = 'EDITED_ARTIFACT';
+    expect((await owner.resolvePromptContext())?.role?.instructions).toBe('EDITED_ARTIFACT');
+    expect(reads).toBe(2);
+  });
   it('resolves conversational Role facts without fabricating a coding engine', async () => {
     // The conversational caller has no coding engine; the Role owner must not require one.
     const owner = createSessionRoleContext({ readMetadata: () => ({ work: { sessionRolesV1: {
@@ -122,7 +171,7 @@ describe('session role prompt-plan context', () => {
       instructions: 'FROZEN_ROLE', workspaceWrites: 'allow' as const };
     const owner = createSessionRoleContext({ readMetadata: () => ({ work: { sessionRolesV1: {
       roleId: 'builder', inheritedFrom: 'lead', overrides: {}, sessionRoles: { builder: inherited }, notes: '',
-    } } }), readOrganization: async () => ({ reportsTo: { sessionId: 'lead' } }),
+    } } }), readOrganization: async () => ({ manager: { sessionId: 'lead' } }),
       readRoleSources: async () => ({ status: 'ready', entries: [], diagnostics: [] }), readDefaultEngine: () => defaultEngine,
       readAccountRoleOverrides: () => ({ status: 'unavailable', reason: 'catalog-unobserved' }),
     });
@@ -178,7 +227,7 @@ describe('session role prompt-plan context', () => {
     commitActivePromptLibraryCatalog({ ...bound, catalog: { status: 'unavailable', reason: 'unreachable' } });
     expect(readActiveAccountRoleOverrides(bound)).toMatchObject({ status: 'unavailable' });
     let metadata: SessionMetadata = {};
-    let organization: Pick<V2SessionByIdResponse['session'], 'reportsTo' | 'origin'> = { reportsTo: { sessionId: 'lead' } };
+    let organization: Pick<V2SessionByIdResponse['session'], 'manager' | 'origin'> = { manager: { sessionId: 'lead' } };
     const owner = createSessionRoleContext({ readMetadata: () => metadata, readOrganization: async () => organization,
       readRoleSources: createRoleSourceReaderV1({}), readAccountRoleOverrides: () => readActiveAccountRoleOverrides(bound),
       readDefaultEngine: () => defaultEngine });

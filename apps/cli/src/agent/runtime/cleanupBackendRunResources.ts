@@ -3,11 +3,11 @@ export async function cleanupBackendRunResources(opts: {
   reconnectionHandle?: { cancel: () => void } | null;
   stopMcpServer: () => void;
   resetRuntime: () => Promise<void>;
-  unmountUi: () => void;
+  unmountUi: () => void | Promise<void>;
 }): Promise<void> {
   opts.stopKeepAlive();
   opts.reconnectionHandle?.cancel();
   opts.stopMcpServer();
   await opts.resetRuntime();
-  opts.unmountUi();
+  await opts.unmountUi();
 }

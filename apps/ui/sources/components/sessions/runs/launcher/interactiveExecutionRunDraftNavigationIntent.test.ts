@@ -8,8 +8,8 @@ import {
 
 const address = { serverId: 'server-a', sessionId: 'session-a' } as const;
 const source = {
-    kind: 'session_discussion' as const,
-    sessionId: 'session-a',
+    kind: 'discussion' as const,
+    serverId: 'server-a',
     discussionId: 'discussion-a',
     messageIds: ['message-a'],
     draftCorrelationId: 'correlation-a',
@@ -38,6 +38,14 @@ describe('interactive execution Run draft navigation intent', () => {
             correlationId: 'correlation-a',
         })).toBeNull();
         expect(consumeInteractiveExecutionRunDraftNavigationIntent({ address, correlationId: 'correlation-a' })).not.toBeNull();
+    });
+
+    it('rejects the same Discussion identity when its source belongs to another Home', () => {
+        expect(() => publishInteractiveExecutionRunDraftNavigationIntent({
+            address,
+            source: { ...source, serverId: 'server-b' },
+            initialText: 'private selected text',
+        })).toThrow();
     });
 
     it('rejects a Discussion handoff without the stable draft correlation identity', () => {

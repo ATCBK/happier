@@ -62,6 +62,26 @@ describe('ComputerTargetPicker', () => {
         expect(props.onAccessChange).toHaveBeenCalledWith('see');
     });
 
+    it('draws a row’s thumbnail in the landscape leading-media box, not the square glyph slot', async () => {
+        const { HAPPIER_PAGE_METRICS } = await import('@happier-dev/plugin-ui/presentation');
+        const { StyleSheet } = await import('react-native');
+        const appWindow = { ...lumen, appName: 'Lumen', thumbnail: { mimeType: 'image/png' as const, base64: 'cG5n', width: 200, height: 120 } };
+        const screen = await renderPicker({ compact: true, state: { ...ready, targets: [appWindow, screenTarget] } }).screen;
+        const box = HAPPIER_PAGE_METRICS.rowLeadingMediaPx;
+        let node = screen.findByTestId('p-thumbnail:window') as { parent?: unknown; props: { style?: unknown } } | null;
+        let sized = false;
+        for (let depth = 0; node && depth < 6 && !sized; depth++) {
+            const style = StyleSheet.flatten(node.props.style as never) as { width?: unknown; height?: unknown } | undefined;
+            sized = style?.width === box.width && style?.height === box.height;
+            node = (node.parent ?? null) as typeof node;
+        }
+        expect(sized).toBe(true);
+        // The picture fills that box (jsdom has no layout, so the contract is the style it carries;
+        // SafeExpoImage owns making that style survive expo-image on web).
+        const image = screen.findByTestId('p-thumbnail:window') as { props: { style?: unknown } } | null;
+        expect(StyleSheet.flatten(image?.props.style as never)).toMatchObject({ width: '100%', height: '100%' });
+    });
+
     it('starts on the agent’s suggestion, says so on its row, and lets the person pick another', async () => {
         const key = computerTargetKey(lumen.target);
         const { props, screen: pending } = renderPicker({ suggestedKey: key, selectedKey: key });
@@ -91,6 +111,9 @@ describe('ComputerTargetPicker', () => {
         const { props, screen: pending } = renderPicker({ state: { kind: 'ready', targets: [], grants: { capture: 'denied', input: 'granted' } } });
         const screen = await pending;
         expect(screen.findByTestId('p-permission')).toBeTruthy();
+        // Both permissions are listed with their state on the machine, not named in prose.
+        expect(screen.findByTestId('computer-permission-grant-capture-denied')).not.toBeNull();
+        expect(screen.findByTestId('computer-permission-grant-input-granted')).not.toBeNull();
         await screen.pressByTestIdAsync('computer-permission-open-settings');
         expect(props.onOpenSettings).toHaveBeenCalledWith('capture');
     });

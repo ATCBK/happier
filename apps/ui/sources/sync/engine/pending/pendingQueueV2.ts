@@ -50,6 +50,7 @@ import { normalizePendingDeliveryStatusV1, parsePendingDeliveryStatusV1, shouldE
 import { readPendingLocalId } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
 import { normalizePendingDeliveryBlockedReason, type PendingDeliveryBlockedReason } from '@happier-dev/protocol/sessions/messages/pendingDeliveryBlockedReason';
 import { PendingRequestedActionV1Schema, PendingRequestedActionV1StoredSchema, PendingResetStartSetResultV1Schema, DEFAULT_PENDING_REQUESTED_ACTION_V1, type PendingRequestedActionV1, type PendingResetStartSetResultV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
+import { AutonomousExchangeRootV1Schema } from '@happier-dev/protocol/sessions/messages/autonomousExchangeV1';
 import { HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1, SessionPendingMessageComposerAdmissionAcceptedRequestV1Schema, type SessionPendingMessageComposerAdmissionAcceptedRequestV1, type SessionPendingMessageComposerAdmissionPrepareResponseV1 } from '@happier-dev/protocol/sessions/userMessageRpc';
 import { hasRawComposerAttachmentSelectionV1, HappierStructuredInputV1Schema, HappierStructuredInputV1StoredSchema, RawIngressStructuredInputV1Schema, RawIngressStructuredInputV1StoredSchema, readIngressComposerAttachmentSelectionV1, type RawIngressStructuredInputV1, type HappierStructuredInputV1 } from '@happier-dev/protocol/runtime/input/structuredInputV1';
 import { PendingMessageMutationFingerprintV1Schema } from '@happier-dev/protocol/sessions/pending/pendingMessageMutationFingerprintV1';
@@ -93,7 +94,8 @@ import { assertValidPendingMessageId } from '@/sync/domains/pending/pendingMessa
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { resolveSessionMachineId } from '@/sync/domains/session/external/resolveSessionMachineId';
 import { SessionCreationCorrespondenceV1ReadSchema } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
-import { PendingMessageWithdrawOutcomeV1Schema, type PendingMessageWithdrawOutcomeV1 } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
+import { PendingMessageWithdrawOutcomeV1Schema, PendingActivationHoldReasonV1Schema,
+    type PendingMessageWithdrawOutcomeV1, type PendingActivationHoldReasonV1 } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
 import type { SessionMessageHostAdmissionOrigin } from '@/sync/domains/session/input/types';
 import { encodeBase64 } from '@/encryption/base64';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
@@ -110,6 +112,7 @@ export type PendingMessageComposerAdmissionAcceptedFactV1 =
 
 type PreparedPendingComposerAdmission = Readonly<{
     stagedMediaHandles: readonly ComposerContentHandleV1[];
+    stagedMediaReleaseIntents?: SessionPendingMessageComposerAdmissionAcceptedRequestV1['stagedMediaReleaseIntents'];
     sessionMediaMetadata?: Readonly<{
         key: 'happier' | 'happierMedia';
         envelope: SessionMediaMessageMetaV1;
@@ -151,12 +154,15 @@ function buildPreparedPendingComposerRecord<T extends RawRecord>(
     const accepted = SessionPendingMessageComposerAdmissionAcceptedRequestV1Schema.parse({
         sessionId, localId, structuredInput,
         stagedMediaHandles: prepared.stagedMediaHandles,
+        ...(prepared.stagedMediaReleaseIntents ? { stagedMediaReleaseIntents: prepared.stagedMediaReleaseIntents } : {}),
         ...(sessionMediaMetadata ? { sessionMediaMetadata } : {}),
     });
     return { rawRecord: { ...rawRecord, meta }, accepted };
 }
 
 type PendingRow = {
+    autonomousExchangeRoot?: PendingMessage['pendingAutonomousExchangeRoot'];
+    activationHoldReason?: PendingActivationHoldReasonV1;
     recipient?: PendingMessage['recipient'];
     localId: string;
     messageRole: 'user' | 'non_user' | null;
@@ -254,6 +260,7 @@ function findCanonicalPendingProjection(
     sessionId: string,
     pendingId: string,
     outboxScope: ServerAccountScope,
+    targetExecutionRunId?: string,
 ): PendingMessage | null {
     const bucket = storage.getState().sessionPending[sessionId];
     const candidates = [...(bucket?.messages ?? []), ...(bucket?.discarded ?? [])].filter((message) =>
@@ -264,7 +271,10 @@ function findCanonicalPendingProjection(
         )
         && !isPendingOutboxQuarantineDiagnostic(message)
     );
-    const localIdCandidates = candidates.filter((message) => message.localId === pendingId);
+    const recipientCandidates = targetExecutionRunId === undefined ? candidates
+        : candidates.filter((message) => message.recipient?.runId === targetExecutionRunId);
+    const scopedCandidates = recipientCandidates.length > 0 ? recipientCandidates : candidates;
+    const localIdCandidates = scopedCandidates.filter((message) => message.localId === pendingId);
     const exactScopedLocalIdCandidates = localIdCandidates.filter((message) =>
         isPendingOutboxProjectionInScope(message, outboxScope));
     return exactScopedLocalIdCandidates.find((message) =>
@@ -273,10 +283,10 @@ function findCanonicalPendingProjection(
         ?? exactScopedLocalIdCandidates[0]
         ?? localIdCandidates.find((message) => message.source === 'server_pending')
         ?? localIdCandidates[0]
-        ?? candidates.find((message) => message.source === 'server_pending' && message.id === pendingId)
-        ?? candidates.find((message) => message.source === 'server_pending')
-        ?? candidates.find((message) => message.id === pendingId)
-        ?? candidates[0]
+        ?? scopedCandidates.find((message) => message.source === 'server_pending' && message.id === pendingId)
+        ?? scopedCandidates.find((message) => message.source === 'server_pending')
+        ?? scopedCandidates.find((message) => message.id === pendingId)
+        ?? scopedCandidates[0]
         ?? null;
 }
 
@@ -934,7 +944,12 @@ function parsePendingRows(raw: unknown, serverId: string): PendingRow[] | null {
         if (typeof createdAt !== 'number' || !Number.isFinite(createdAt)) continue;
         if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt)) continue;
 
+        const activationHoldReason = PendingActivationHoldReasonV1Schema.safeParse(item.activationHoldReason);
+        const autonomousExchangeRoot = AutonomousExchangeRootV1Schema.safeParse(item.autonomousExchangeRoot);
         out.push({
+            ...(effectiveDeliveryStatus.status === 'blocked' && effectiveDeliveryStatus.reason === 'autonomous_check_in'
+                && autonomousExchangeRoot.success ? { autonomousExchangeRoot: autonomousExchangeRoot.data } : {}),
+            ...(activationHoldReason.success ? { activationHoldReason: activationHoldReason.data } : {}),
             ...(recipient?.success ? { recipient: recipient.data } : {}),
             localId,
             messageRole: messageRole === 'user' ? 'user' : messageRole == null ? null : 'non_user',
@@ -1004,6 +1019,8 @@ function withPendingDeliveryState<T extends PendingMessage>(row: PendingRow, mes
     return {
         ...message,
         ...(row.recipient ? { recipient: row.recipient } : {}),
+        ...(row.activationHoldReason ? { pendingActivationHoldReason: row.activationHoldReason } : {}),
+        ...(row.autonomousExchangeRoot ? { pendingAutonomousExchangeRoot: row.autonomousExchangeRoot } : {}),
         messageRole: row.messageRole,
         pendingDeliveryStatus,
         ...(row.deliveryStatus.status === 'delivering' && row.deliveryStatus.detail
@@ -1054,12 +1071,12 @@ type PendingSnapshotRefreshToken = {
     readonly acceptedLocalIdsAfterCapture: Set<string>;
     readonly committedTranscriptSeqAtCapture: number | null;
     readonly pendingVersionAtCapture: number | null;
-    readonly sessionEncryptionAtCapture: ReturnType<Encryption['getSessionEncryption']>;
+    readonly sessionEncryptionAtCapture: ReturnType<PendingQueueUpdateEncryption['getSessionEncryption']>;
     readonly transcriptAtCapture: ReturnType<typeof storage.getState>['sessionMessages'][string] | undefined;
     readonly requestAtCapture: Parameters<typeof fetchAndApplyPendingMessagesV2>[0]['request'];
     readonly isOutboxScopeCurrentAtCapture: Parameters<typeof fetchAndApplyPendingMessagesV2>[0]['isOutboxScopeCurrent'];
     readonly completion: Promise<void>;
-    isSupersededByLocalWrite: boolean;
+    isInvalidated: boolean;
 };
 const latestPendingSnapshotRefreshByScopedSession = new Map<string, PendingSnapshotRefreshToken>();
 const inFlightPendingEnqueueByProjectionIdentity = new Map<
@@ -1120,7 +1137,7 @@ function collectCommittedTranscriptLocalIdsAboveSeq(sessionId: string, aboveSeq:
  * times for one utterance (`.project/reviews/2026-08-06-simplify-and-native/C3-void-writer.md`).
  *
  * Each refresh owns its server read and capture point. Overlapping callers share the complete
- * refresh only while the Pending version and transcript are unchanged.
+ * refresh only while the Pending version and transcript are unchanged and it has not been invalidated.
  *
  * The discriminator is the server's own monotone per-session `seq`, NOT membership in the loaded
  * transcript. A pending row and a committed message for one localId can coexist PERMANENTLY: the
@@ -1326,44 +1343,27 @@ function pruneDeletedPendingLocalIdsProvenAbsent(
 }
 
 /**
- * Records that the SERVER has confirmed it holds a pending row for `localId`, so a snapshot response
- * read before that confirmation may no longer be applied — see
- * {@link pendingSnapshotRepresentsAcceptedLocalIdsAfterCapture}.
- *
- * THE INVARIANT: every point at which this client learns the server took custody of a localId must
- * reach this function, or an in-flight snapshot can delete the message. Acknowledgement is a
- * property of the HTTP RESPONSE, while every store-mutation choke point in this module is shared
- * with anti-acknowledgement retirements (cancel, discard, delivery-handled, delete, definitive
- * rejection), so no downstream owner can discriminate — which is why each acknowledging response
- * records here directly, immediately after its own success check and before any branch. The
- * converse is equally load-bearing: recording a localId the server has STOPPED listing would make
- * the guard refuse every snapshot for the remainder of the in-flight refresh chain.
- * `pendingQueueV2.acknowledgementBoundaries.test.ts` holds both directions for every export.
- *
- * Recording is deliberately SEPARATE from {@link supersedePendingSnapshotRefreshForLocalWrite}: they
- * are different events with different lifetimes, and expressing them as one call with an optional
- * localId made a boundary that needed both effects silently get only one.
+ * Bind acceptance to this recipient's read outstanding at the successful HTTP response. Payload
+ * validation may await the body before proving custody of an exact localId, but must never fence
+ * a newer read that already observes settlement. Capturing no read must remain a no-op.
  */
-function markPendingLocalIdAcceptedAfterSnapshotCapture(
+function capturePendingSnapshotAcceptance(
     scope: ServerAccountScope,
     sessionId: string,
-    localId: string,
     recipient?: PendingMessage['recipient'],
-): void {
-    latestPendingSnapshotRefreshByScopedSession
-        .get(pendingSnapshotKey(scope, sessionId, recipient
-            ?? findPendingProjectionByCanonicalLocalId(sessionId, localId, scope)?.recipient))
-        ?.acceptedLocalIdsAfterCapture.add(localId);
+): (localId: string) => void {
+    const refreshToken = latestPendingSnapshotRefreshByScopedSession.get(pendingSnapshotKey(scope, sessionId, recipient));
+    return (localId) => { refreshToken?.acceptedLocalIdsAfterCapture.add(localId); };
 }
 
-/** A successful local Pending write invalidates older reads for this Home and session. */
-function supersedePendingSnapshotRefreshForLocalWrite(
+/** Pending writes and changed access facts invalidate older reads for this Home and session. */
+function invalidatePendingSnapshotRefresh(
     scope: ServerAccountScope,
     sessionId: string,
 ): void {
     const sessionKey = pendingScopedSessionKey(scope, sessionId);
     for (const [key, refreshToken] of latestPendingSnapshotRefreshByScopedSession) {
-        if (key === sessionKey || key.startsWith(`${sessionKey}:run:`)) refreshToken.isSupersededByLocalWrite = true;
+        if (key === sessionKey || key.startsWith(`${sessionKey}:run:`)) refreshToken.isInvalidated = true;
     }
 }
 
@@ -1427,8 +1427,9 @@ async function resolvePendingMutationTarget(
     sessionId: string,
     pendingId: string,
     outboxScope: ServerAccountScope,
+    targetExecutionRunId?: string,
 ): Promise<PendingMessage | null> {
-    const target = findCanonicalPendingProjection(sessionId, pendingId, outboxScope);
+    const target = findCanonicalPendingProjection(sessionId, pendingId, outboxScope, targetExecutionRunId);
     (await assertPendingOutboxTransportable(sessionId, pendingId, outboxScope, target));
     return target;
 }
@@ -1437,12 +1438,19 @@ export async function resolvePendingMutationIdentity(
     sessionId: string,
     pendingId: string,
     outboxScope: ServerAccountScope,
+    targetExecutionRunId?: string,
 ): Promise<Readonly<{ target: PendingMessage | null; localId: string; recipient?: PendingMessage['recipient'] }>> {
-    const target = (await resolvePendingMutationTarget(sessionId, pendingId, outboxScope));
+    const target = (await resolvePendingMutationTarget(sessionId, pendingId, outboxScope, targetExecutionRunId));
+    const outbox = target?.recipient ? null : await findPendingOutboxMessage(sessionId, target?.localId ?? pendingId, outboxScope);
+    const recipient = target?.recipient ?? outbox?.request.recipient;
+    if (targetExecutionRunId !== undefined && (target ? target.recipient?.runId !== targetExecutionRunId
+        : outbox && recipient?.runId !== targetExecutionRunId)) {
+        throw Object.assign(new Error('Pending input belongs to a different recipient'), { code: 'session_input_target_unavailable' });
+    }
     return {
         target,
         localId: target?.localId ?? target?.id ?? pendingId,
-        recipient: target?.recipient ?? (await findPendingOutboxMessage(sessionId, target?.localId ?? pendingId, outboxScope))?.request.recipient,
+        recipient: targetExecutionRunId === undefined ? recipient : { kind: 'execution_run', runId: targetExecutionRunId },
     };
 }
 
@@ -1533,7 +1541,7 @@ async function deletePendingOutboxMessageAtServer(params: {
     if (!response.ok && response.status !== 404) {
         await assertPendingResponseOk(response, 'Failed to delete pending message');
     }
-    supersedePendingSnapshotRefreshForLocalWrite(params.outboxScope, params.sessionId);
+    invalidatePendingSnapshotRefresh(params.outboxScope, params.sessionId);
 }
 
 async function completePendingOutboxCancellationIfRequested(params: {
@@ -1686,31 +1694,23 @@ async function buildPendingEnqueueWriteBody(params: Parameters<typeof buildPendi
     });
 }
 
-function buildPendingDecryptFailureMessage(params: {
+function buildPendingUndecryptedMessage(params: {
     row: Pick<PendingRow, 'localId' | 'createdAt' | 'updatedAt'>;
-}): {
-    id: string;
-    localId: string;
-    createdAt: number;
-    updatedAt: number;
-    source: 'server_pending';
-    text: string;
-    displayText: string;
-    rawRecord: { pendingDecryptFailure: PendingDecryptFailure };
-    pendingDecryptFailure: PendingDecryptFailure;
-} {
-    const pendingDecryptFailure: PendingDecryptFailure = { kind: 'decrypt_failed' };
-
+    kind: 'loading' | 'decrypt_failed';
+}) {
+    const state = params.kind === 'loading'
+        ? { pendingDecryption: { kind: 'loading' as const } }
+        : { pendingDecryptFailure: { kind: 'decrypt_failed' as const } satisfies PendingDecryptFailure };
     return {
         id: params.row.localId,
         localId: params.row.localId,
         createdAt: params.row.createdAt,
         updatedAt: params.row.updatedAt,
-        source: 'server_pending',
+        source: 'server_pending' as const,
         text: '',
-        displayText: t('session.pendingMessages.decryptFailed'),
-        rawRecord: { pendingDecryptFailure },
-        pendingDecryptFailure,
+        displayText: params.kind === 'loading' ? t('common.loading') : t('session.pendingMessages.decryptFailed'),
+        rawRecord: state,
+        ...state,
     };
 }
 
@@ -1933,12 +1933,12 @@ async function readPendingRowDecryptedContent(params: {
     sessionEncryption: ReturnType<Encryption['getSessionEncryption']>;
 }): Promise<
     | { kind: 'ok'; value: unknown }
-    | { kind: 'decrypt_failed'; message: ReturnType<typeof buildPendingDecryptFailureMessage> }
+    | { kind: 'loading' | 'decrypt_failed'; message: ReturnType<typeof buildPendingUndecryptedMessage> }
 > {
     if (params.row.content === null) {
         return {
             kind: 'decrypt_failed',
-            message: buildPendingDecryptFailureMessage({ row: params.row }),
+            message: buildPendingUndecryptedMessage({ row: params.row, kind: 'decrypt_failed' }),
         };
     }
     if (params.row.content.t !== 'encrypted') {
@@ -1947,8 +1947,8 @@ async function readPendingRowDecryptedContent(params: {
 
     if (!params.sessionEncryption) {
         return {
-            kind: 'decrypt_failed',
-            message: buildPendingDecryptFailureMessage({ row: params.row }),
+            kind: 'loading',
+            message: buildPendingUndecryptedMessage({ row: params.row, kind: 'loading' }),
         };
     }
 
@@ -1957,7 +1957,7 @@ async function readPendingRowDecryptedContent(params: {
         if (decrypted == null) {
             return {
                 kind: 'decrypt_failed',
-                message: buildPendingDecryptFailureMessage({ row: params.row }),
+                message: buildPendingUndecryptedMessage({ row: params.row, kind: 'decrypt_failed' }),
             };
         }
 
@@ -1968,7 +1968,7 @@ async function readPendingRowDecryptedContent(params: {
     } catch {
         return {
             kind: 'decrypt_failed',
-            message: buildPendingDecryptFailureMessage({ row: params.row }),
+            message: buildPendingUndecryptedMessage({ row: params.row, kind: 'decrypt_failed' }),
         };
     }
 }
@@ -1976,22 +1976,28 @@ async function readPendingRowDecryptedContent(params: {
 export async function fetchAndApplyPendingMessagesV2(params: {
     sessionId: string;
     recipient?: PendingMessage['recipient'];
-    encryption: Encryption | null;
+    encryption: PendingQueueUpdateEncryption | null;
     request: (path: string, init?: RequestInit) => Promise<Response>;
     outboxScope: ServerAccountScope;
     isOutboxScopeCurrent?: () => boolean | Promise<boolean>;
+    invalidateSnapshot?: boolean;
 }): Promise<void> {
     const { sessionId } = params;
+    if (params.invalidateSnapshot) invalidatePendingSnapshotRefresh(params.outboxScope, sessionId);
     const refreshKey = pendingSnapshotKey(params.outboxScope, sessionId, params.recipient);
     const state = storage.getState();
     const pendingVersionAtCapture = readPendingSnapshotVersion(params.outboxScope, sessionId);
     const transcriptAtCapture = state.sessionMessages[sessionId];
-    const sessionEncryptionAtCapture = state.sessions[sessionId]?.encryptionMode === 'plain'
+    const scopedSession = readSessionListRowForServerId(state.sessionListRowsByServerId, params.outboxScope.serverId, sessionId);
+    const sessionEncryptionMode = areServerAccountScopesEqual(getActiveServerAccountScope(), params.outboxScope)
+        ? state.sessions[sessionId]?.encryptionMode ?? scopedSession?.encryptionMode
+        : scopedSession?.encryptionMode;
+    const sessionEncryptionAtCapture = sessionEncryptionMode === 'plain'
         ? null
         : params.encryption?.getSessionEncryption(sessionId) ?? null;
     const inFlightRefresh = latestPendingSnapshotRefreshByScopedSession.get(refreshKey);
     if (inFlightRefresh
-        && !inFlightRefresh.isSupersededByLocalWrite
+        && !inFlightRefresh.isInvalidated
         && inFlightRefresh.pendingVersionAtCapture === pendingVersionAtCapture
         && inFlightRefresh.sessionEncryptionAtCapture === sessionEncryptionAtCapture
         && inFlightRefresh.requestAtCapture === params.request
@@ -2001,7 +2007,7 @@ export async function fetchAndApplyPendingMessagesV2(params: {
     }
 
     // Coalesce the complete read and reconciliation at the existing Home/session/recipient owner.
-    // A receipt, transcript repair, or local edit starts its own read rather than adopting older
+    // A receipt, transcript repair, local edit or access invalidation starts its own read rather than adopting older
     // HTTP work. Each token consequently owns its own capture facts.
     const completion = Promise.resolve().then(() => fetchAndApplyPendingMessagesV2Owned(params, refreshKey, refreshToken));
     const refreshToken: PendingSnapshotRefreshToken = {
@@ -2013,7 +2019,7 @@ export async function fetchAndApplyPendingMessagesV2(params: {
         requestAtCapture: params.request,
         isOutboxScopeCurrentAtCapture: params.isOutboxScopeCurrent,
         completion,
-        isSupersededByLocalWrite: false,
+        isInvalidated: false,
     };
     latestPendingSnapshotRefreshByScopedSession.set(refreshKey, refreshToken);
     return completion;
@@ -2025,22 +2031,10 @@ async function fetchAndApplyPendingMessagesV2Owned(
     refreshToken: PendingSnapshotRefreshToken,
 ): Promise<void> {
     const { sessionId, request } = params;
-    try {
-    if (isDemoModeActive()) {
-        storage.getState().applyPendingSnapshot(sessionId, {
-            messages: storage.getState().sessionPending[sessionId]?.messages ?? [],
-            discarded: [],
-        });
-        return;
-    }
-    const sessionEncryption = refreshToken.sessionEncryptionAtCapture;
-
-    const response = await request(`${pendingQueuePath(sessionId, params.recipient)}?includeDiscarded=1`, { method: 'GET', cache: 'no-store' });
-    // This refresh may apply only while it is BOTH the latest registered refresh and unsuperseded by
-    // a local write.
+    // This refresh may apply only while it is BOTH the latest registered refresh and not invalidated.
     const isRefreshTokenAuthoritative = (): boolean =>
         latestPendingSnapshotRefreshByScopedSession.get(refreshKey) === refreshToken
-        && !refreshToken.isSupersededByLocalWrite
+        && !refreshToken.isInvalidated
         && readPendingSnapshotVersion(params.outboxScope, sessionId) === refreshToken.pendingVersionAtCapture;
     const isRefreshScopeCurrent = async (): Promise<boolean> => {
         if (!isRefreshTokenAuthoritative()) return false;
@@ -2053,6 +2047,18 @@ async function fetchAndApplyPendingMessagesV2Owned(
     })();
         return isScopeCurrent && isRefreshTokenAuthoritative();
     };
+    try {
+    if (isDemoModeActive()) {
+        storage.getState().applyPendingSnapshot(sessionId, {
+            messages: storage.getState().sessionPending[sessionId]?.messages ?? [],
+            discarded: [],
+        });
+        return;
+    }
+    const sessionEncryption = await refreshToken.sessionEncryptionAtCapture ?? null;
+    if (!await isRefreshScopeCurrent()) return;
+    if (!params.recipient) storage.getState().setPendingReadState(sessionId, 'loading');
+    const response = await request(`${pendingQueuePath(sessionId, params.recipient)}?includeDiscarded=1`, { method: 'GET', cache: 'no-store' });
     if (!await isRefreshScopeCurrent()) return;
     // A refresh that cannot answer for its scope clears only that scope's discarded history: an
     // exact-target GET that fails (404 from a Home without the nested resource, transport error)
@@ -2095,9 +2101,14 @@ async function fetchAndApplyPendingMessagesV2Owned(
             row: r,
             sessionEncryption,
         });
-        if (decrypted.kind === 'decrypt_failed') {
+        if (decrypted.kind !== 'ok') {
+            const previous = decrypted.kind === 'loading'
+                ? storage.getState().sessionPending[sessionId]?.messages.find(message => message.localId === r.localId
+                    && message.source === 'server_pending' && message.updatedAt === r.updatedAt
+                    && !message.pendingDecryption && !message.pendingDecryptFailure
+                    && isPendingOutboxProjectionInScope(message, params.outboxScope)) : undefined;
             pendingMessages.push(withPendingDeliveryState(r, {
-                ...decrypted.message,
+                ...(previous ?? decrypted.message),
                 pendingOutboxScope: params.outboxScope,
             }));
             continue;
@@ -2106,7 +2117,7 @@ async function fetchAndApplyPendingMessagesV2Owned(
         const coerced = coercePendingUserTextRecord(decrypted.value);
         if (!coerced) {
             pendingMessages.push(withPendingDeliveryState(r, {
-                ...buildPendingDecryptFailureMessage({ row: r }),
+                ...buildPendingUndecryptedMessage({ row: r, kind: 'decrypt_failed' }),
                 pendingOutboxScope: params.outboxScope,
             }));
             continue;
@@ -2130,7 +2141,7 @@ async function fetchAndApplyPendingMessagesV2Owned(
             row: r,
             sessionEncryption,
         });
-        if (decrypted.kind === 'decrypt_failed') {
+        if (decrypted.kind !== 'ok') {
             discardedMessages.push({
                 ...decrypted.message,
                 pendingOutboxScope: params.outboxScope,
@@ -2144,7 +2155,7 @@ async function fetchAndApplyPendingMessagesV2Owned(
         const coerced = coercePendingUserTextRecord(decrypted.value);
         if (!coerced) {
             discardedMessages.push({
-                ...buildPendingDecryptFailureMessage({ row: r }),
+                ...buildPendingUndecryptedMessage({ row: r, kind: 'decrypt_failed' }),
                 pendingOutboxScope: params.outboxScope,
                 ...(r.recipient ? { recipient: r.recipient } : {}),
                 discardedAt: r.discardedAt ?? r.updatedAt,
@@ -2236,6 +2247,11 @@ async function fetchAndApplyPendingMessagesV2Owned(
             ...visible.discarded,
         ],
     });
+    } catch (error) {
+        // The same exact-scope/token owner publishes failure without claiming a
+        // snapshot loaded or discarding retained content. Run reads do not settle main hydration.
+        if (!params.recipient && await isRefreshScopeCurrent()) storage.getState().setPendingReadState(sessionId, 'error');
+        throw error;
     } finally {
         if (latestPendingSnapshotRefreshByScopedSession.get(refreshKey) === refreshToken) {
             latestPendingSnapshotRefreshByScopedSession.delete(refreshKey);
@@ -2312,6 +2328,7 @@ async function enqueuePendingMessageV2Owned(params: {
     requestedAction?: PendingRequestedActionV1;
     resumeWhenAvailable?: true;
     accountLifetime?: ServerAccountScopeLifetime;
+    signal?: AbortSignal;
     isCurrent?: () => boolean | Promise<boolean>;
 }): Promise<PendingMessageEnqueueResultV2> {
     const { sessionId, encryption, request } = params;
@@ -2338,12 +2355,13 @@ async function enqueuePendingMessageV2Owned(params: {
     }
     const ownerMetadata = readSessionOwnerMetadataView(session);
     const correspondence = SessionCreationCorrespondenceV1ReadSchema.safeParse(ownerMetadata?.sessionCreationCorrespondenceV1);
-    const ordinaryMachineId = correspondence.success ? correspondence.data.recipe.execution.machineId
-        : resolveSessionMachineId(ownerMetadata);
+    const ordinaryMachineId = params.deliveryMode === 'external_handoff' ? undefined
+        : correspondence.success ? correspondence.data.recipe.execution.machineId : resolveSessionMachineId(ownerMetadata);
     if (!recipient && ordinaryMachineId && params.targetMachineId && ordinaryMachineId !== params.targetMachineId) {
         throw createPendingTargetConflictError();
     }
-    const targetMachineId = recipient ? params.targetMachineId : ordinaryMachineId ?? params.targetMachineId;
+    const targetMachineId = params.deliveryMode === 'external_handoff' ? undefined
+        : recipient ? params.targetMachineId : ordinaryMachineId ?? params.targetMachineId;
     const requestedLocalId = readPendingLocalId(params.localId);
     const localId = requestedLocalId ?? randomUUID();
     let existingOutboxRow: PersistedPendingOutboxMessage | null;
@@ -2414,6 +2432,7 @@ async function enqueuePendingMessageV2Owned(params: {
             await abandonPendingMessageComposerAdmission(sessionId, {
                 sessionId, localId, structuredInput: prepared.structuredInput,
                 stagedMediaHandles: prepared.stagedMediaHandles,
+                ...(prepared.stagedMediaReleaseIntents ? { stagedMediaReleaseIntents: prepared.stagedMediaReleaseIntents } : {}),
                 sessionMediaCleanup: prepared.sessionMediaCleanup,
             }, composerAdmissionOptions);
         } catch (error) {
@@ -2424,7 +2443,7 @@ async function enqueuePendingMessageV2Owned(params: {
         const response = await preparePendingMessageComposerAdmission(sessionId, {
             localId, text,
             structuredInput: RawIngressStructuredInputV1Schema.parse(metaOverrides?.[HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1]),
-        }, composerAdmissionOptions);
+        }, { ...composerAdmissionOptions, signal: params.signal });
         if (!response.ok) throw Object.assign(new Error(response.error), { code: response.errorCode });
         prepared = response;
         if (params.isCurrent && !await params.isCurrent()) {
@@ -2595,6 +2614,7 @@ async function enqueuePendingMessageV2Owned(params: {
                 serverCommitMayExist = false;
                 await throwPendingEnqueueResponseError(response, recipient);
             }
+            const recordAcceptance = capturePendingSnapshotAcceptance(outboxScope, sessionId, outboxRow.request.recipient);
             const payload = await response.json().catch(() => null) as unknown;
             assertPendingTargetAcknowledgement(payload, outboxRow.request.recipient);
             let didWrite: boolean | undefined;
@@ -2608,15 +2628,9 @@ async function enqueuePendingMessageV2Owned(params: {
                 && !isReleasedServerV021PendingEnqueueResponse(payload, localId)) {
                     throw new Error('Released server returned an invalid Pending enqueue acknowledgement');
             }
-            // The acknowledgement is a fact about THIS RESPONSE: a 2xx that proves the exact row (or
-            // its exact committed twin) means the server took custody, so a snapshot read issued
-            // BEFORE it cannot list the row and must not be applied over it. Recorded here, above
-            // every branch below, for the same reason the two PATCH boundaries record at their
-            // response: the branches below decide what happened to LOCAL custody, which is a
-            // different question, and each of their early returns would otherwise leave the fence
-            // relying on `apiSocket.request`'s in-flight de-dupe — the very mechanism that creates
-            // the losing ordering — rather than on the invariant.
-            markPendingLocalIdAcceptedAfterSnapshotCapture(outboxScope, sessionId, localId);
+            // Validate exact server custody before retiring the outbox, and record only against
+            // the recipient's read captured at HTTP success, never one started during validation.
+            recordAcceptance(localId);
             applyPendingAcknowledgementActor(sessionId, localId, outboxScope, payload);
             const terminal = isPlainObject(payload) && payload.terminal === true;
             if (effectiveDeliveryMode === 'external_handoff') {
@@ -2854,6 +2868,7 @@ export async function retryPendingOutboxOperationV2(params: {
                 await throwPendingEnqueueResponseError(response, current.request.recipient);
             }
             serverCommitMayExist = true;
+            const recordAcceptance = capturePendingSnapshotAcceptance(outboxScope, sessionId, current.request.recipient);
             const payload = await response.json().catch(() => null) as unknown;
             assertPendingTargetAcknowledgement(payload, current.request.recipient);
             if (params.serverWireMode === 'pending_input_v1' || params.serverWireMode === 'pending_input_v3' || params.serverWireMode === 'pending_input_v4') {
@@ -2869,7 +2884,7 @@ export async function retryPendingOutboxOperationV2(params: {
             // The replay POST is an acknowledgement exactly like the initial enqueue above, and is
             // recorded at the response for the same reason: every branch below reads LOCAL custody,
             // and each of their early returns is downstream of the fact the server already stated.
-            markPendingLocalIdAcceptedAfterSnapshotCapture(outboxScope, sessionId, pendingLocalId);
+            recordAcceptance(pendingLocalId);
             applyPendingAcknowledgementActor(sessionId, pendingLocalId, outboxScope, payload);
             const terminal = isPlainObject(payload) && payload.terminal === true;
             if (deliveryMode === 'external_handoff') {
@@ -3082,7 +3097,7 @@ export async function updatePendingMessageV2(params: {
         return buildOutgoingUserTextRecord({
             text,
             displayText:
-                existing.pendingDecryptFailure
+                existing.pendingDecryptFailure || existing.pendingDecryption
                     ? undefined
                     : (typeof existing.displayText === 'string' ? existing.displayText : undefined),
             permissionMode,
@@ -3140,7 +3155,8 @@ export async function updatePendingMessageV2(params: {
         if (!response.ok) {
             await assertPendingResponseOk(response, 'Failed to update pending message');
         }
-        supersedePendingSnapshotRefreshForLocalWrite(params.outboxScope, sessionId);
+        const recordAcceptance = capturePendingSnapshotAcceptance(params.outboxScope, sessionId, recipient);
+        invalidatePendingSnapshotRefresh(params.outboxScope, sessionId);
         // A replacement identity changes the server row's lookup key. Do not
         // update the local projection unless this exact response confirms it;
         // an older server that strips the new field must leave the editor
@@ -3169,7 +3185,7 @@ export async function updatePendingMessageV2(params: {
         // below (an outstanding cancellation, a projection that vanished) returns on a PATCH that
         // already succeeded, so superseding beneath them would leave an in-flight pre-PATCH read
         // free to overwrite the write the server just accepted.
-        markPendingLocalIdAcceptedAfterSnapshotCapture(params.outboxScope, sessionId, confirmedLocalId, recipient);
+        recordAcceptance(confirmedLocalId);
         // Past that acceptance boundary a retired owner scope may only stop the
         // LOCAL projection — the write is already durable, and rejecting here
         // loses the Composer's one post-accept settlement and its prepared media.
@@ -3206,11 +3222,12 @@ export async function updatePendingMessageV2(params: {
                 }
                 : {}),
             pendingDecryptFailure: undefined,
+            pendingDecryption: undefined,
             ...(confirmedLocalId !== localId ? { localId: confirmedLocalId } : {}),
             text,
             updatedAt,
             rawRecord,
-            displayText: currentProjection.pendingDecryptFailure ? undefined : currentProjection.displayText,
+            displayText: currentProjection.pendingDecryptFailure || currentProjection.pendingDecryption ? undefined : currentProjection.displayText,
         });
         return acceptedComposerAdmission;
     });
@@ -3257,7 +3274,10 @@ export async function updatePendingRequestedActionV2(params: {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
     });
-    if (response.ok) supersedePendingSnapshotRefreshForLocalWrite(params.outboxScope, params.sessionId);
+    if (response.ok) {
+        capturePendingSnapshotAcceptance(params.outboxScope, params.sessionId, recipient)(localId);
+        invalidatePendingSnapshotRefresh(params.outboxScope, params.sessionId);
+    }
     if (!response.ok) {
         await throwPendingAuthErrorIfNeeded(response);
     }
@@ -3271,10 +3291,6 @@ export async function updatePendingRequestedActionV2(params: {
             ...(errorCode ? [{ code: errorCode }] : []),
         );
     }
-    // Recorded at the RESPONSE, for the reason given in `updatePendingMessageV2`: the PATCH
-    // succeeded, so the server holds the row, and receipt validation below is downstream
-    // of that fact.
-    markPendingLocalIdAcceptedAfterSnapshotCapture(params.outboxScope, params.sessionId, localId);
     const receipt = PendingResetStartSetResultV1Schema.safeParse(isPlainObject(payload)
         ? { didUpdate: payload.didUpdate, requestedAction: payload.requestedAction }
         : payload);
@@ -3364,7 +3380,7 @@ export async function deletePendingMessageV2(params: PendingMessageDeletionParam
             if (outcome !== 'removed') return outcome;
             markPendingCancellationRequested(params.outboxScope, sessionId, localId);
             await removePendingOutboxMessage(sessionId, localId, params.outboxScope);
-            supersedePendingSnapshotRefreshForLocalWrite(params.outboxScope, sessionId);
+            invalidatePendingSnapshotRefresh(params.outboxScope, sessionId);
             markPendingLocalIdDeleted(params.outboxScope, sessionId, localId);
             if (existing && await isProjectionOwnerCurrent()) {
                 storage.getState().removePendingMessage(sessionId, existing.id);
@@ -3445,7 +3461,7 @@ export async function deletePendingMessageV2(params: PendingMessageDeletionParam
         if (!response.ok && response.status !== 404) {
             await assertPendingResponseOk(response, 'Failed to delete pending message');
         }
-        supersedePendingSnapshotRefreshForLocalWrite(params.outboxScope, sessionId);
+        invalidatePendingSnapshotRefresh(params.outboxScope, sessionId);
     } catch (error) {
         throw error;
     }
@@ -3462,7 +3478,7 @@ export async function discardPendingMessageV2(params: {
     sessionId: string;
     pendingId: string;
     reason?: 'switch_to_local' | 'manual';
-    encryption: Encryption | null;
+    encryption: PendingQueueUpdateEncryption | null;
     request: (path: string, init?: RequestInit) => Promise<Response>;
     outboxScope: ServerAccountScope;
     isOutboxScopeCurrent?: () => boolean | Promise<boolean>;
@@ -3478,7 +3494,7 @@ export async function discardPendingMessageV2(params: {
     if (!response.ok) {
         await assertPendingResponseOk(response, 'Failed to discard pending message');
     }
-    supersedePendingSnapshotRefreshForLocalWrite(params.outboxScope, sessionId);
+    invalidatePendingSnapshotRefresh(params.outboxScope, sessionId);
     await fetchAndApplyPendingMessagesV2({
         sessionId, recipient, encryption, request, outboxScope: params.outboxScope,
         isOutboxScopeCurrent: params.isOutboxScopeCurrent,
@@ -3488,13 +3504,14 @@ export async function discardPendingMessageV2(params: {
 export async function dismissPendingDeliveryV2(params: {
     sessionId: string;
     pendingId: string;
-    encryption: Encryption | null;
+    encryption: PendingQueueUpdateEncryption | null;
+    targetExecutionRunId?: string;
     request: (path: string, init?: RequestInit) => Promise<Response>;
     outboxScope: ServerAccountScope;
     isOutboxScopeCurrent?: () => boolean | Promise<boolean>;
 }): Promise<void> {
     const { sessionId, pendingId, encryption, request } = params;
-    const { localId, recipient } = (await resolvePendingMutationIdentity(sessionId, pendingId, params.outboxScope));
+    const { localId, recipient } = (await resolvePendingMutationIdentity(sessionId, pendingId, params.outboxScope, params.targetExecutionRunId));
 
     const response = await request(`${pendingMessagePath(sessionId, localId, recipient)}/delivery/dismiss`, {
         method: 'POST',
@@ -3504,7 +3521,7 @@ export async function dismissPendingDeliveryV2(params: {
     if (!response.ok) {
         await assertPendingResponseOk(response, 'Failed to dismiss pending delivery');
     }
-    supersedePendingSnapshotRefreshForLocalWrite(params.outboxScope, sessionId);
+    invalidatePendingSnapshotRefresh(params.outboxScope, sessionId);
     await fetchAndApplyPendingMessagesV2({
         sessionId, recipient, encryption, request, outboxScope: params.outboxScope,
         isOutboxScopeCurrent: params.isOutboxScopeCurrent,
@@ -3515,7 +3532,7 @@ export async function blockPendingDeliveryV2(params: {
     sessionId: string;
     pendingId: string;
     reason: PendingDeliveryBlockedReason;
-    encryption: Encryption | null;
+    encryption: PendingQueueUpdateEncryption | null;
     request: (path: string, init?: RequestInit) => Promise<Response>;
     outboxScope: ServerAccountScope;
     isOutboxScopeCurrent?: () => boolean | Promise<boolean>;
@@ -3531,7 +3548,7 @@ export async function blockPendingDeliveryV2(params: {
     if (!response.ok) {
         await assertPendingResponseOk(response, 'Failed to block pending delivery');
     }
-    supersedePendingSnapshotRefreshForLocalWrite(params.outboxScope, sessionId);
+    invalidatePendingSnapshotRefresh(params.outboxScope, sessionId);
     await fetchAndApplyPendingMessagesV2({
         sessionId, recipient, encryption, request, outboxScope: params.outboxScope,
         isOutboxScopeCurrent: params.isOutboxScopeCurrent,
@@ -3541,13 +3558,14 @@ export async function blockPendingDeliveryV2(params: {
 export async function sendPendingDeliveryAsNewV2(params: {
     sessionId: string;
     pendingId: string;
-    encryption: Encryption | null;
+    encryption: PendingQueueUpdateEncryption | null;
+    targetExecutionRunId?: string;
     request: (path: string, init?: RequestInit) => Promise<Response>;
     outboxScope: ServerAccountScope;
     isOutboxScopeCurrent?: () => boolean | Promise<boolean>;
 }): Promise<string> {
     const { sessionId, pendingId, encryption, request } = params;
-    const { localId, recipient } = (await resolvePendingMutationIdentity(sessionId, pendingId, params.outboxScope));
+    const { localId, recipient } = (await resolvePendingMutationIdentity(sessionId, pendingId, params.outboxScope, params.targetExecutionRunId));
 
     const response = await request(`${pendingMessagePath(sessionId, localId, recipient)}/delivery/send-as-new`, {
         method: 'POST',
@@ -3557,7 +3575,8 @@ export async function sendPendingDeliveryAsNewV2(params: {
     if (!response.ok) {
         await assertPendingResponseOk(response, 'Failed to send pending delivery as new');
     }
-    supersedePendingSnapshotRefreshForLocalWrite(params.outboxScope, sessionId);
+    const recordAcceptance = capturePendingSnapshotAcceptance(params.outboxScope, sessionId, recipient);
+    invalidatePendingSnapshotRefresh(params.outboxScope, sessionId);
     const payload = await response.json().catch(() => null) as { newLocalId?: unknown } | null;
     const newLocalId = readPendingLocalId(payload?.newLocalId);
     if (!newLocalId) {
@@ -3570,7 +3589,7 @@ export async function sendPendingDeliveryAsNewV2(params: {
     // enqueue and PATCH boundaries record at theirs — and above the trailing refresh below, which
     // `apiSocket.request` can answer from exactly such an older read and which would otherwise
     // republish the DISCARDED original while omitting the replacement.
-    markPendingLocalIdAcceptedAfterSnapshotCapture(params.outboxScope, sessionId, newLocalId, recipient);
+    recordAcceptance(newLocalId);
     await fetchAndApplyPendingMessagesV2({
         sessionId, recipient, encryption, request, outboxScope: params.outboxScope,
         isOutboxScopeCurrent: params.isOutboxScopeCurrent,
@@ -3581,7 +3600,7 @@ export async function sendPendingDeliveryAsNewV2(params: {
 export async function markPendingDeliveryHandledV2(params: {
     sessionId: string;
     pendingId: string;
-    encryption: Encryption | null;
+    encryption: PendingQueueUpdateEncryption | null;
     request: (path: string, init?: RequestInit) => Promise<Response>;
     outboxScope: ServerAccountScope;
     isOutboxScopeCurrent?: () => boolean | Promise<boolean>;
@@ -3598,7 +3617,7 @@ export async function markPendingDeliveryHandledV2(params: {
     if (!response.ok) {
         await assertPendingResponseOk(response, 'Failed to mark pending delivery handled');
     }
-    supersedePendingSnapshotRefreshForLocalWrite(params.outboxScope, sessionId);
+    invalidatePendingSnapshotRefresh(params.outboxScope, sessionId);
     const existing = revalidateResolvedPendingMutationTarget(
         sessionId,
         target,
@@ -3619,7 +3638,7 @@ export async function markPendingDeliveryHandledV2(params: {
 export async function restoreDiscardedPendingMessageV2(params: {
     sessionId: string;
     pendingId: string;
-    encryption: Encryption | null;
+    encryption: PendingQueueUpdateEncryption | null;
     request: (path: string, init?: RequestInit) => Promise<Response>;
     outboxScope: ServerAccountScope;
     isOutboxScopeCurrent?: () => boolean | Promise<boolean>;
@@ -3631,7 +3650,7 @@ export async function restoreDiscardedPendingMessageV2(params: {
     if (!response.ok) {
         await assertPendingResponseOk(response, 'Failed to restore discarded message');
     }
-    supersedePendingSnapshotRefreshForLocalWrite(params.outboxScope, sessionId);
+    invalidatePendingSnapshotRefresh(params.outboxScope, sessionId);
     await fetchAndApplyPendingMessagesV2({
         sessionId, recipient, encryption, request, outboxScope: params.outboxScope,
         isOutboxScopeCurrent: params.isOutboxScopeCurrent,
@@ -3641,7 +3660,7 @@ export async function restoreDiscardedPendingMessageV2(params: {
 export async function deleteDiscardedPendingMessageV2(params: {
     sessionId: string;
     pendingId: string;
-    encryption: Encryption | null;
+    encryption: PendingQueueUpdateEncryption | null;
     request: (path: string, init?: RequestInit) => Promise<Response>;
     outboxScope: ServerAccountScope;
     isOutboxScopeCurrent?: () => boolean | Promise<boolean>;
@@ -3654,7 +3673,7 @@ export async function deleteDiscardedPendingMessageV2(params: {
         if (!response.ok && response.status !== 404) {
             await assertPendingResponseOk(response, 'Failed to delete discarded message');
         }
-        supersedePendingSnapshotRefreshForLocalWrite(params.outboxScope, sessionId);
+        invalidatePendingSnapshotRefresh(params.outboxScope, sessionId);
         markPendingLocalIdDeleted(params.outboxScope, sessionId, localId);
         await fetchAndApplyPendingMessagesV2({
             sessionId, recipient, encryption, request, outboxScope: params.outboxScope,
@@ -3670,7 +3689,7 @@ export async function reorderPendingMessagesV2(params: {
     sessionId: string;
     recipient?: PendingMessage['recipient'];
     orderedLocalIds: string[];
-    encryption: Encryption | null;
+    encryption: PendingQueueUpdateEncryption | null;
     request: (path: string, init?: RequestInit) => Promise<Response>;
     outboxScope: ServerAccountScope;
     isOutboxScopeCurrent?: () => boolean | Promise<boolean>;
@@ -3697,7 +3716,7 @@ export async function reorderPendingMessagesV2(params: {
         }
         await assertPendingResponseOk(response, 'Failed to reorder pending messages');
     }
-    supersedePendingSnapshotRefreshForLocalWrite(params.outboxScope, sessionId);
+    invalidatePendingSnapshotRefresh(params.outboxScope, sessionId);
     await fetchAndApplyPendingMessagesV2({
         sessionId, recipient, encryption, request, outboxScope: params.outboxScope,
         isOutboxScopeCurrent: params.isOutboxScopeCurrent,

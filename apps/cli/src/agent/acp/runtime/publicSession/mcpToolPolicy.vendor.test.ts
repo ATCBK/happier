@@ -1,5 +1,6 @@
 import { describe, it } from 'vitest';
 import { parsePluginManifest } from '@happier-dev/plugin-sdk/manifest';
+import { PluginAgentContributionV2Schema } from '@happier-dev/protocol';
 import { runAgentMcpToolPolicyContract } from '@happier-dev/plugin-sdk/testing';
 import { createAcpMcpPolicyFixture, createDeclarativeAcpMcpPolicyFixtures, createGeminiMcpPolicyFixture } from '@/agent/acp/testkit/mcpToolPolicyHarness';
 import { createLocalModelVendorBoundary } from '@/agent/acp/testkit/mcpToolPolicyVendorBoundary';
@@ -26,15 +27,18 @@ if (selected && executablePath) describe('installed ACP vendor MCP policy admiss
   const manifest = selected === 'kilo' ? kiloManifest : openCodeManifest;
   const parsed = parsePluginManifest(manifest);
   if (!parsed.ok) throw new Error(JSON.stringify(parsed.diagnostics));
-  const agent = parsed.manifest.contributes.agents?.find(agent => agent.id === selected);
-  if (!agent) throw new Error(`Unsupported installed vendor fixture: ${selected}`);
+  const declaration = parsed.manifest.contributes.agents?.find(agent => agent.id === selected);
+  if (!declaration) throw new Error(`Unsupported installed vendor fixture: ${selected}`);
+  const agent = PluginAgentContributionV2Schema.parse(declaration);
   runAgentMcpToolPolicyContract(createAcpMcpPolicyFixture({ agent, pluginId: parsed.manifest.id,
     toolWireFormat: 'underscore', vendor: createLocalModelVendorBoundary(executablePath!, 'openai'),
     factory: selected === 'kilo' ? createKiloAgentRuntime : async context => {
       const runtime = await createOpenCodeAgentRuntime(context);
-      return { ...runtime, sessions: { ...runtime.sessions,
+      const sessions = runtime.sessions;
+      if (!sessions) throw new Error('Expected the installed OpenCode Session factory');
+      return { ...runtime, sessions: { ...sessions,
         open(request, host) {
-          return runtime.sessions.open({ ...request, configuration: { ...request.configuration!, options: {
+          return sessions.open({ ...request, configuration: { ...request.configuration!, options: {
             ...request.configuration?.options, opencodeBackendMode: { value: 'acp', updatedAtMs: 0 },
           } } }, host);
         },

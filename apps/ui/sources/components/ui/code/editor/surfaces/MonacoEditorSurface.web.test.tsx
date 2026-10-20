@@ -1,5 +1,5 @@
 import * as React from 'react';
-import renderer, { act } from 'react-test-renderer';
+import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { flushHookEffects, renderScreen } from '@/dev/testkit';
@@ -232,7 +232,7 @@ describe('MonacoEditorSurface (web)', () => {
 
         unistylesState.currentTheme = lightEditorTheme;
         await act(async () => {
-            result.tree.update(
+            await result.update(
                 React.createElement(MonacoEditorSurface, {
                     resetKey: '1',
                     value: 'const message = "hello";',
@@ -430,7 +430,7 @@ describe('MonacoEditorSurface (web)', () => {
         triggerChange({});
 
         await act(async () => {
-            screen.tree.update(React.createElement(MonacoEditorSurface, {
+            await screen.update(React.createElement(MonacoEditorSurface, {
                 resetKey: '1',
                 value: 'external seed',
                 language: 'markdown',
@@ -564,7 +564,7 @@ describe('MonacoEditorSurface (web)', () => {
         }));
 
         await act(async () => {
-            screen.tree.update(React.createElement(MonacoEditorSurface, {
+            await screen.update(React.createElement(MonacoEditorSurface, {
                 resetKey: '1',
                 value: 'first line\nchanged second line',
                 language: 'markdown',
@@ -610,20 +610,18 @@ describe('MonacoEditorSurface (web)', () => {
         };
 
         const onChange = vi.fn();
-        let tree: renderer.ReactTestRenderer;
-
-        tree = (await renderScreen(React.createElement(MonacoEditorSurface, {
+        const screen = await renderScreen(React.createElement(MonacoEditorSurface, {
                     resetKey: '1',
                     value: 'hello',
                     language: 'markdown',
                     onChange,
                     readOnly: true,
-                }))).tree;
+                }));
 
         updateOptionsSpy.mockClear();
 
         await act(async () => {
-            tree!.update(
+            await screen.update(
                 React.createElement(MonacoEditorSurface, {
                     resetKey: '1',
                     value: 'hello',
@@ -676,18 +674,16 @@ describe('MonacoEditorSurface (web)', () => {
         );
 
         const onChange = vi.fn();
-        let tree: renderer.ReactTestRenderer;
-
-        tree = (await renderScreen(React.createElement(MonacoEditorSurface, {
+        const screen = await renderScreen(React.createElement(MonacoEditorSurface, {
                     resetKey: '1',
                     value: 'hello',
                     language: 'markdown',
                     onChange,
                     readOnly: true,
-                }))).tree;
+                }));
 
         await act(async () => {
-            tree!.update(
+            await screen.update(
                 React.createElement(MonacoEditorSurface, {
                     resetKey: '1',
                     value: 'hello',

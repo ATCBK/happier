@@ -20,10 +20,11 @@ import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/
  */
 export async function fetchAccountMachineReplacements(params: Readonly<{
   credentials: Readonly<{ token: string }>;
+  serverUrl?: string;
   timeoutMs?: number;
 }>): Promise<readonly MachineReplacementRecord[] | null> {
   try {
-    const response = await axios.get(`${resolveServerHttpBaseUrl()}/v1/machines?includeRevoked=true`, {
+    const response = await axios.get(`${params.serverUrl ?? resolveServerHttpBaseUrl()}/v1/machines?includeRevoked=true`, {
       headers: { ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(), Authorization: `Bearer ${params.credentials.token}` },
       timeout: params.timeoutMs && params.timeoutMs > 0 ? params.timeoutMs : 15_000,
     });

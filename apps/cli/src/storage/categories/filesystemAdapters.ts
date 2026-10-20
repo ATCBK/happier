@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { createStorageFilesystemAdapter } from '../trash/filesystemAdapter';
 import { storagePathDirname as dirname, storagePathsEqual, storagePathContains } from '../storagePath';
@@ -7,10 +7,10 @@ import { normalizeStrictJsonValue } from '@happier-dev/protocol/json/strictJsonV
 import type { StorageCategoryDefinition, StorageCleanupItem } from './types';
 import { StorageCategoryAdapterError } from './types';
 
-export const FilesystemOwnerDataSchema = z.object({
-    kind: z.literal('filesystem'), sourcePath: z.string().min(1), allowedRoot: z.string().min(1),
-    sessionId: z.string().min(1).optional(),
-}).strict();
+export const FilesystemOwnerDataSchema = z.strictObject({
+    kind: z.literal('filesystem'), sourcePath: z.string().check(z.minLength(1)), allowedRoot: z.string().check(z.minLength(1)),
+    sessionId: z.optional(z.string().check(z.minLength(1))),
+});
 const FilesystemOwnerDataStoredReadSchema = createStoredReadSchema(FilesystemOwnerDataSchema);
 export function bindFilesystemItem(item: StorageCleanupItem) {
     const binding = item.sessionId ? { sessionId: item.sessionId } : {};

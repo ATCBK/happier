@@ -44,6 +44,57 @@ function findFirstNode(root: ASTNode, type: ASTNode['type']): ASTNode | null {
 }
 
 describe('MarkdownView (enriched renderer)', () => {
+    it('resolves themed web stylesheet text metrics and ink before flattening style arrays', async () => {
+        const { MarkdownView } = await import('./MarkdownView');
+        const { useUnistyles } = await import('react-native-unistyles');
+        const { theme } = useUnistyles();
+        // Unistyles 3 web/create.ts keeps the stylesheet/key/arguments non-enumerable
+        // in its secret; CSS-class entries need resolving against the current theme.
+        const stylesheet = (currentTheme: typeof theme) => ({
+            prose: (compact: boolean) => ({
+                fontSize: compact ? 15 : 16,
+                lineHeight: compact ? 23 : 24,
+                color: currentTheme.colors.text.secondary,
+            }),
+        });
+        const secret = Object.defineProperties({}, {
+            __uni__stylesheet: { value: stylesheet },
+            __uni__key: { value: 'prose' },
+            __uni__args: { value: [true] },
+        });
+        const themedStyle = Object.defineProperty({}, 'unistyles_prose', { value: secret, enumerable: true });
+        const screen = await renderScreen(
+            <MarkdownView markdown="Themed prose" textStyle={[themedStyle, { fontWeight: '500' }]} />,
+        );
+        expect(screen.findByType('EnrichedMarkdownText').props.markdownStyle.paragraph).toMatchObject({
+            fontSize: 15, lineHeight: 23, color: theme.colors.text.secondary,
+        });
+        const overridden = await renderScreen(
+            <MarkdownView markdown="Overridden prose" textStyle={[themedStyle, { fontSize: 14, color: theme.colors.text.primary }]} />,
+        );
+        expect(overridden.findByType('EnrichedMarkdownText').props.markdownStyle.paragraph).toMatchObject({
+            fontSize: 14, lineHeight: 23, color: theme.colors.text.primary,
+        });
+    });
+
+    it('resolves native stylesheet metrics and applies the UI font scale once', async () => {
+        const { buildEnrichedMarkdownStyle } = await import('./enriched/useEnrichedMarkdownStyle');
+        const { useUnistyles } = await import('react-native-unistyles');
+        const { theme } = useUnistyles();
+        const style = Object.defineProperty({}, 'unistyles_native', {
+            enumerable: true,
+            value: { uni__getStyles: () => ({ fontSize: 15, lineHeight: 23, color: theme.colors.text.primary }) },
+        });
+        expect(buildEnrichedMarkdownStyle({
+            colors: theme.colors,
+            profile: 'transcript',
+            uiFontScale: 1.1,
+            textStyle: [style, { color: theme.colors.text.secondary }],
+        }).markdownStyle.paragraph).toMatchObject({
+            fontSize: 16.5, lineHeight: 25.3, color: theme.colors.text.secondary,
+        });
+    });
+
     it('renders package-safe prose as one selectable enriched markdown run', async () => {
         const { MarkdownView } = await import('./MarkdownView');
 
@@ -210,6 +261,8 @@ describe('MarkdownView (enriched renderer)', () => {
         expect(onPressSourceRange).toHaveBeenCalledWith({
             sourceRange: { startLine: 1, endLine: 1 },
             markdown: '# Title',
+            sourceStart: 0,
+            sourceLength: '# Title'.length,
         });
         expect(flattenStyle(trigger.props.style)).toMatchObject({
             width: '100%',
@@ -264,6 +317,8 @@ describe('MarkdownView (enriched renderer)', () => {
         expect(onPressSourceRange).toHaveBeenCalledWith({
             sourceRange: { startLine: 1, endLine: 1 },
             markdown: '# Title',
+            sourceStart: 0,
+            sourceLength: '# Title'.length,
         });
     });
 
@@ -298,6 +353,8 @@ describe('MarkdownView (enriched renderer)', () => {
         expect(onPressSourceRange).toHaveBeenCalledWith({
             sourceRange: { startLine: 3, endLine: 3 },
             markdown: 'Second paragraph.',
+            sourceStart: markdown.indexOf('Second paragraph.'),
+            sourceLength: 'Second paragraph.'.length,
         });
         expect(screen.findAllByType('EnrichedMarkdownText')).toHaveLength(2);
     });

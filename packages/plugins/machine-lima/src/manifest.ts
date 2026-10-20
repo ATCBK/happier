@@ -4,6 +4,7 @@ import { definePlugin } from '@happier-dev/plugin-sdk';
 import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import {
   defineMachineProvisionerSchemas,
+  defineMachineProvisionerReconciliationSchemas,
   MachineProvisionerBootstrapCarrierV1Schema, MachineProvisionerCheckResultV1Schema,
   MachineProvisionerNativeExecResultV1Schema, MachineProvisionerObservationV1Schema,
   MachineProvisionerOptionsResultV1Schema,
@@ -15,6 +16,9 @@ import { createLimaProvider, LIMA_DEPENDENCY_ID, LIMA_PLUGIN_ID, LIMA_PROVISIONE
 import { LimaLaunchSchema, LimaOptionsInputSchema, LimaResourceSchema } from './machine/schemas.js';
 
 export const LIMA_ROLE_SCHEMAS = defineMachineProvisionerSchemas({ launch: LimaLaunchSchema, resource: LimaResourceSchema });
+export const LIMA_RECONCILIATION_SCHEMAS = defineMachineProvisionerReconciliationSchemas({
+  launch: LimaLaunchSchema, resource: LimaResourceSchema, nativeOperation: LimaResourceSchema,
+});
 const processAccess = 'lima-process';
 const actionDefaults = { scopes: ['machine'], surfaces: ['cli', 'plugin'], hostAccess: [processAccess] } as const;
 
@@ -52,6 +56,7 @@ export const LIMA_MACHINE_PROVISIONER = {
   billing: { location: 'local', stoppedBilling: 'not-billed' },
   retention: { supportedIntents: ['start', 'stop', 'delete'] },
   actions: { check: 'check', options: 'options', acquire: 'acquire', bootstrap: 'bootstrap', inspect: 'inspect', power: 'power', destroy: 'destroy' },
+  reconciliation: { action: 'reconcile', nativeOperationSchema: LimaResourceSchema.jsonSchema },
   bootstrapTransport: { kind: 'native', exec: 'exec', putFile: 'put-file' },
 } satisfies MachineProvisionerAuthorDefinitionV1;
 
@@ -115,11 +120,20 @@ export const LIMA_PLUGIN = definePlugin({
     acquire: {
       ...actionDefaults, title: 'Acquire Lima guest', dangerLevel: 'writesLocal',
       confirmation: { title: 'Create this Lima guest?', body: 'This creates the reviewed VM in the selected Lima storage.' },
-      inputSchema: LIMA_ROLE_SCHEMAS.acquireInput, resultSchema: LIMA_ROLE_SCHEMAS.acquireResult,
+      inputSchema: LIMA_ROLE_SCHEMAS.acquireInput, resultSchema: LIMA_RECONCILIATION_SCHEMAS.result,
       async run(input, context) {
         try { return await (await provider(context)).acquire(input.launch); }
         catch (error) { return { kind: 'unknown' as const,
           recovery: { reference: `${input.launch.store}/${input.launch.instance}`, reason: errorCode(error) } }; }
+      },
+    },
+    reconcile: {
+      ...actionDefaults, title: 'Recover exact Lima guest', dangerLevel: 'safe',
+      inputSchema: LIMA_RECONCILIATION_SCHEMAS.input, resultSchema: LIMA_RECONCILIATION_SCHEMAS.result,
+      async run(input, context) {
+        const current = await provider(context);
+        return 'nativeOperation' in input ? current.reconcile({ resource: input.nativeOperation })
+          : current.reconcile({ launch: input.correlation.launch });
       },
     },
     bootstrap: {
@@ -149,9 +163,9 @@ export const LIMA_PLUGIN = definePlugin({
     destroy: {
       ...actionDefaults, title: 'Delete exact Lima guest', dangerLevel: 'destructive',
       confirmation: { title: 'Delete this Lima guest?', body: 'This permanently removes the exact managed VM and its disk from the recorded storage.' },
-      inputSchema: LIMA_ROLE_SCHEMAS.resourceInput, resultSchema: MachineProvisionerPowerResultV1Schema,
+      inputSchema: LIMA_RECONCILIATION_SCHEMAS.destroyInput, resultSchema: LIMA_RECONCILIATION_SCHEMAS.destroyResult,
       async run(input, context) {
-        try { return await (await provider(context)).destroy(input.resource); }
+        try { return await (await provider(context)).destroy('resource' in input ? input.resource : input.nativeOperation); }
         catch (error) { return { kind: 'unknown' as const, code: errorCode(error) }; }
       },
     },

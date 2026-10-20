@@ -2,17 +2,15 @@ import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { mergeTurnChangeSets } from '@happier-dev/protocol';
-import { renderScreen } from '@/dev/testkit';
+import { createThemeFixture, renderScreen } from '@/dev/testkit';
 import { useChangedFilesData } from '@/hooks/session/files/useChangedFilesData';
-import {
-    installFilesContentCommonModuleMocks,
-} from '@/components/workspaces/scm/review/filesContentTestHelpers';
+import { ChangedFilesList } from './ChangedFilesList';
+import { ScmChangeRow } from '@/components/workspaces/scm/changes/ScmChangeRow';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-installFilesContentCommonModuleMocks({
-    reactNative: async () => {
+vi.mock('react-native', async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
             View: 'View',
@@ -20,8 +18,16 @@ installFilesContentCommonModuleMocks({
                 select: (value: any) => value?.default ?? null,
             },
         });
-    },
-    text: async () => {
+});
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock();
+});
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock().module;
+});
+vi.mock('@/text', async () => {
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
         return createTextModuleMock({
             translate: (key: string, params?: Record<string, unknown>) => {
@@ -38,46 +44,16 @@ installFilesContentCommonModuleMocks({
                 return key;
             },
         });
-    },
 });
 
-vi.mock('@expo/vector-icons', () => ({
-    Octicons: 'Octicons',
-}));
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: 'Text',
-    TextInput: 'TextInput',
-}));
-
-vi.mock('@/components/ui/media/FileIcon', () => ({
-    FileIcon: 'FileIcon',
-}));
-
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: any) => React.createElement('Item', props),
-}));
-
-vi.mock('@/components/workspaces/scm/changes/ScmChangeRow', () => ({
-    ScmChangeRow: (props: any) => React.createElement('ScmChangeRow', props),
-    resolveScmChangeStatsColumnWidth: (files: readonly any[]) => {
-        const maxLabelLength = files.reduce((maxLength, file) => {
-            const added = Number.isFinite(file?.linesAdded) ? String(Math.max(0, Math.trunc(file.linesAdded))) : '0';
-            const removed = Number.isFinite(file?.linesRemoved) ? String(Math.max(0, Math.trunc(file.linesRemoved))) : '0';
-            return Math.max(maxLength, `+${added}/-${removed}`.length);
-        }, 0);
-        return Math.max(38, maxLabelLength * 7 + 4);
-    },
-}));
+async function changeRows(screen: Awaited<ReturnType<typeof renderScreen>>) {
+    return screen.findAllByType(Reflect.get(ScmChangeRow, 'type') ?? ScmChangeRow);
+}
 
 describe('ChangedFilesList', () => {
-    const testTheme = {
-        colors: {
-            text: { primary: '#fff', secondary: '#999' },
-            border: { default: '#222' },
-            surface: { inset: '#111' },
-        },
-    } as const;
+    const testTheme = createThemeFixture();
 
     const file = {
         fileName: 'a.ts',
@@ -99,7 +75,6 @@ describe('ChangedFilesList', () => {
     } as const;
 
     it('renders repository view heading and rows', async () => {
-        const { ChangedFilesList } = await import('./ChangedFilesList');
         const screen = await renderScreen(<ChangedFilesList
                     theme={testTheme as any}
                     changedFilesViewMode="repository"
@@ -114,13 +89,12 @@ describe('ChangedFilesList', () => {
 
         // Directory-like SCM entries should be ignored (they cannot be opened / diffed).
         expect(screen.getTextContent()).toContain('Repository changed files (1)');
-        const rows = screen.findAllByType('ScmChangeRow' as any);
+        const rows = await changeRows(screen);
         expect(rows).toHaveLength(1);
         expect(rows[0].props.density).toBe('compact');
     });
 
     it('uses the largest visible change stats as a shared stats column width', async () => {
-        const { ChangedFilesList } = await import('./ChangedFilesList');
         const largeStatsFile = {
             ...file,
             fileName: 'requestId.test.ts',
@@ -150,15 +124,14 @@ describe('ChangedFilesList', () => {
                     onFilePress={vi.fn()}
                 />);
 
-        const smallWidth = smallScreen.findByType('ScmChangeRow' as any).props.statsColumnWidth;
-        const mixedWidths = mixedScreen.findAllByType('ScmChangeRow' as any).map((row) => row.props.statsColumnWidth);
+        const smallWidth = (await changeRows(smallScreen))[0]!.props.statsColumnWidth;
+        const mixedWidths = (await changeRows(mixedScreen)).map((row) => row.props.statsColumnWidth);
 
         expect(new Set(mixedWidths).size).toBe(1);
         expect(mixedWidths[0]).toBeGreaterThan(smallWidth);
     });
 
     it('supports injecting per-file actions for commit/stage flows', async () => {
-        const { ChangedFilesList } = await import('./ChangedFilesList');
 
         const screen = await renderScreen(<ChangedFilesList
                     theme={testTheme as any}
@@ -172,16 +145,13 @@ describe('ChangedFilesList', () => {
                     renderFileActions={(f) => React.createElement('Action', { path: f.fullPath })}
                 />);
 
-        const rows = screen.findAllByType('ScmChangeRow' as any);
+        const rows = await changeRows(screen);
         expect(rows).toHaveLength(1);
 
-        const right = rows[0]!.props.leadingElement;
-        const rightScreen = await renderScreen(right);
-        expect(rightScreen.findAllByType('Action' as any)).toHaveLength(1);
+        expect(screen.findAllByType('Action')).toHaveLength(1);
     });
 
     it('supports opening a pinned details tab via onFilePressPinned', async () => {
-        const { ChangedFilesList } = await import('./ChangedFilesList');
         const onFilePressPinned = vi.fn();
 
         const screen = await renderScreen(<ChangedFilesList
@@ -196,7 +166,7 @@ describe('ChangedFilesList', () => {
                     onFilePressPinned={onFilePressPinned}
                 />);
 
-        const row = screen.findByType('ScmChangeRow' as any);
+        const row = (await changeRows(screen))[0]!;
         expect(typeof row.props.onPressPinned).toBe('function');
 
         act(() => {
@@ -208,7 +178,6 @@ describe('ChangedFilesList', () => {
     });
 
     it('keeps uncertain Session attribution visible without inferring active peers', async () => {
-        const { ChangedFilesList } = await import('./ChangedFilesList');
         const screen = await renderScreen(<ChangedFilesList
                     theme={testTheme as any}
                     changedFilesViewMode="session"
@@ -225,7 +194,6 @@ describe('ChangedFilesList', () => {
     });
 
     it('renders latest-turn copy and rows when turn view is selected', async () => {
-        const { ChangedFilesList } = await import('./ChangedFilesList');
         const repositoryOnlyFile = {
             ...file,
             fileName: 'b.ts',
@@ -250,12 +218,11 @@ describe('ChangedFilesList', () => {
         expect(textContent).not.toContain('Other repository changes (1)');
         expect(textContent).not.toContain('Reliability limited: multiple sessions are active for this repository');
 
-        const rows = screen.findAllByType('ScmChangeRow' as any);
+        const rows = await changeRows(screen);
         expect(rows).toHaveLength(1);
     });
 
     it('does not render checkpoint empty copy when checkpoint evidence is unavailable', async () => {
-        const { ChangedFilesList } = await import('./ChangedFilesList');
         const screen = await renderScreen(<ChangedFilesList
                     theme={testTheme as any}
                     changedFilesViewMode="turn_checkpoint"
@@ -282,7 +249,6 @@ describe('ChangedFilesList', () => {
     });
 
     it('keeps session view scoped to session-attributed files', async () => {
-        const { ChangedFilesList } = await import('./ChangedFilesList');
         const sessionFile = {
             ...file,
             fullPath: 'src/session.ts',
@@ -308,7 +274,7 @@ describe('ChangedFilesList', () => {
         expect(textContent).toContain('Session-attributed changes (1)');
         expect(textContent).not.toContain('Other repository changes (1)');
 
-        const rows = screen.findAllByType('ScmChangeRow' as any);
+        const rows = await changeRows(screen);
         expect(rows).toHaveLength(1);
         expect(rows[0]?.props.file?.fullPath).toBe('src/session.ts');
         expect(rows[0]?.props.accessibilityQualification).toContain('changedFileEvidence.content.exact');
@@ -317,7 +283,6 @@ describe('ChangedFilesList', () => {
     });
 
     it('retains edit-to-rename turn lineage through the hook into a mounted evidence disclosure without exposing ids', async () => {
-        const { ChangedFilesList } = await import('./ChangedFilesList');
         const { ChangedFileEvidenceDisclosure } = await import('@/components/workspaces/scm/changes/ChangedFileEvidenceDisclosure');
         const sessionChangeSet = mergeTurnChangeSets({
             sessionId: 's1',

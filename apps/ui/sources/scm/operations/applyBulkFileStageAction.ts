@@ -17,6 +17,7 @@ import { reportSessionScmOperation, trackBlockedScmOperation } from '@/scm/opera
 import { tracking } from '@/track';
 import { tryShowDaemonUnavailableAlertForScmOperationFailure } from '@/scm/operations/scmDaemonUnavailableAlert';
 import { buildCommitSelectionPathHints } from './commitSelectionHints';
+import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 
 export async function applyBulkFileStageAction(input: Readonly<{
     sessionId: string;
@@ -114,6 +115,8 @@ export async function applyBulkFileStageAction(input: Readonly<{
                     });
                 }
             }
+
+            if (isScmActionNotRun(response)) return;
 
             if (!response.success) {
                 const shownDaemonUnavailable = tryShowDaemonUnavailableAlertForScmOperationFailure({

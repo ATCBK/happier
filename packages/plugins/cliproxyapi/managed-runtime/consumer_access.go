@@ -213,20 +213,26 @@ func (o *consumerAccessOwner) middleware() gin.HandlerFunc {
 				if !ok {
 					continue
 				}
+				purposes := make([]QualifiedPurpose, 0)
 				for _, entry := range o.entries {
 					if access.admits(entry.Purpose) && cliproxy.GlobalModelRegistry().ClientSupportsModel(entry.ID, id) {
-						// Keep the OpenAI model-list wire projection used by the
-						// SDK handler, rather than expose internal model metadata.
-						row := make(map[string]any)
-						for _, key := range []string{"id", "object", "created", "owned_by"} {
-							if value, present := model[key]; present {
-								row[key] = value
-							}
-						}
-						models = append(models, row)
-						break
+						purposes = append(purposes, entry.Purpose)
 					}
 				}
+				if len(purposes) == 0 {
+					continue
+				}
+				// Keep the SDK's OpenAI projection and add only the configured,
+				// consumer-admitted slots that actually serve this exact model.
+				// Protocol is a downstream translation, never vendor identity.
+				row := make(map[string]any)
+				for _, key := range []string{"id", "object", "created", "owned_by"} {
+					if value, present := model[key]; present {
+						row[key] = value
+					}
+				}
+				row["happier_connected_account_purposes"] = purposes
+				models = append(models, row)
 			}
 			c.AbortWithStatusJSON(http.StatusOK, gin.H{"object": "list", "data": models})
 			return

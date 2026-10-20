@@ -46,7 +46,7 @@ import { trackAccountCreated, trackAccountRestored } from '@/track';
 
 import { WizardModalShell } from '@/components/onboarding/ui/WizardModalShell';
 import { safeRouterBack } from '@/utils/navigation/safeRouterBack';
-import { normalizeInternalReturnPath } from '@/utils/path/routeUtils';
+import { admitInternalRouteHref, normalizeInternalReturnPath } from '@/utils/path/routeUtils';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import {
     resolveServerProfileScopeId,
@@ -206,7 +206,7 @@ function tryResolveProviderIdFromWebPathname(): string | null {
     }
 }
 
-function buildRestoreRedirectUrl(params: { providerId: string; reason: 'provider_already_linked' }): string {
+function buildRestoreRedirectUrl(params: { providerId: string; reason: 'provider_already_linked' }): `/restore?${string}` {
     const provider = encodeURIComponent(params.providerId);
     const reason = encodeURIComponent(params.reason);
     return `/restore?provider=${provider}&reason=${reason}`;
@@ -362,7 +362,7 @@ function OAuthProviderReturnBody() {
             homeAuthenticationFailure: { homeServerIdentityId: ctx.accountContinuation.homeServerIdentityId, code: 'restore_required' },
         }, { expectedCredentialTokenDigest: ctx.accountContinuation.credentialTokenDigest })) return true;
         pendingAuthContextRef.current = null;
-        router.replace(destination);
+        router.replace(admitInternalRouteHref(destination));
         return true;
     }, [router]);
 
@@ -526,7 +526,7 @@ function OAuthProviderReturnBody() {
                             await Modal.alert(t('common.error'), t('errors.oauthStateMismatch'));
                             await clearTeamContinuationCustody();
                             pendingAuthContextRef.current = null;
-                            router.replace(failureReturnTo);
+                            router.replace(admitInternalRouteHref(failureReturnTo));
                             return;
                         }
                         if (!ctx.serverUrl) return;
@@ -541,7 +541,7 @@ function OAuthProviderReturnBody() {
                         if (!updatedPending) {
                             await Modal.alert(t('common.error'), t('errors.oauthStateMismatch'));
                             pendingAuthContextRef.current = null;
-                            router.replace(failureReturnTo);
+                            router.replace(admitInternalRouteHref(failureReturnTo));
                             return;
                         }
                         continuationPending = updatedPending;
@@ -586,7 +586,7 @@ function OAuthProviderReturnBody() {
                                 }, { expectedCredentialTokenDigest: ctx.accountContinuation.credentialTokenDigest })) {
                                     throw new Error('Account Service credential custody changed');
                                 }
-                                router.replace(destination);
+                                router.replace(admitInternalRouteHref(destination));
                                 return;
                             }
                             await maybeActivateServerTarget(ctx.serverUrl, ctx.serverId, auth.refreshFromActiveServer);
@@ -594,13 +594,13 @@ function OAuthProviderReturnBody() {
                                 secret,
                                 intent: ctx.intent,
                             });
-                            router.replace(ctx.teamContinuation && retainPostAuthInvitation
+                            router.replace(admitInternalRouteHref(ctx.teamContinuation && retainPostAuthInvitation
                                 ? teamSignInReturnPath({
                                     teamId: ctx.teamContinuation.destination.teamId,
                                     carrier: ctx.teamContinuation.homeServerIdentityId,
                                     postAuthInvitation: true,
                                 })
-                                : ctx.returnTo);
+                                : ctx.returnTo));
                         },
                     });
                     return;
@@ -629,7 +629,7 @@ function OAuthProviderReturnBody() {
                     await Modal.alert(t('common.error'), t('errors.oauthStateMismatch'));
                     await TokenStorage.clearPendingExternalAuth();
                     pendingAuthContextRef.current = null;
-                    router.replace(failureReturnTo);
+                    router.replace(admitInternalRouteHref(failureReturnTo));
                     return;
                 }
                 if (ctx.teamContinuation && isTeamAuthenticationFailureCode(err)) {
@@ -645,7 +645,7 @@ function OAuthProviderReturnBody() {
                     : mapFinalizeErrorToMessage(err));
                 await TokenStorage.clearPendingExternalAuth();
                 pendingAuthContextRef.current = null;
-                router.replace(failureReturnTo);
+                router.replace(admitInternalRouteHref(failureReturnTo));
             } finally {
                 await closeTransport();
                 setBusy(false);
@@ -777,7 +777,7 @@ function OAuthProviderReturnBody() {
         };
         const safeReplace = (path: string) => {
             if (disposed || controller.signal.aborted) return;
-            router.replace(path);
+            router.replace(admitInternalRouteHref(path));
         };
 
         fireAndForget((async () => {
@@ -1014,13 +1014,13 @@ function OAuthProviderReturnBody() {
                         result.kind !== 'cancelled' || !result.accountCredentialCommitted
                     )) return;
                     if (result.kind === 'authenticated') {
-                        router.replace(result.destination);
+                        router.replace(admitInternalRouteHref(result.destination));
                         return;
                     }
                     if (result.kind === 'cancelled') {
                         if (result.accountCredentialCommitted && pendingDirectoryAuth) {
                             const destination = createAccountServiceReturn(pendingDirectoryAuth);
-                            if (destination) router.replace(destination);
+                            if (destination) router.replace(admitInternalRouteHref(destination));
                         }
                         return;
                     }
@@ -1687,7 +1687,7 @@ function OAuthProviderReturnBody() {
         }
         accountDirectoryAttemptRef.current = null;
         accountDirectoryCredentialCommitStartedRef.current = false;
-        router.replace(attempt?.returnTo ?? '/settings/account');
+        router.replace(admitInternalRouteHref(attempt?.returnTo ?? '/settings/account'));
     }, [resolvedEndpointIdentity, resolvedEndpointUrl, router]);
 
     const recoverAccountDirectoryJourney = React.useCallback(() => {
@@ -1695,7 +1695,7 @@ function OAuthProviderReturnBody() {
             ?? '/settings/account';
         accountDirectoryAttemptRef.current = null;
         accountDirectoryCredentialCommitStartedRef.current = false;
-        router.replace(returnTo);
+        router.replace(admitInternalRouteHref(returnTo));
     }, [router]);
 
     const wizardTitle =
@@ -1832,7 +1832,7 @@ function OAuthProviderReturnBody() {
                     diagnosticCode={teamFailure.code}
                     action={{
                         label: t('teams.entry.returnToTeamSignIn'),
-                        onPress: () => router.replace(teamFailure.returnTo),
+                        onPress: () => router.replace(admitInternalRouteHref(teamFailure.returnTo)),
                     }}
                     secondaryAction={{
                         label: t('teams.entry.returnToHappier'),

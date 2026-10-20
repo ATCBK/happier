@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import type { ActionOperationSnapshotV1 } from '@happier-dev/protocol';
+import { ActionOperationSnapshotV1Schema } from '@happier-dev/protocol/actions/operations/v1';
 
 import { installSessionSubagentCommonModuleMocks } from '@/components/sessions/agents/sessionSubagentTestHelpers';
 import {
@@ -14,7 +15,12 @@ import {
 } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { actionOperationStore } from '@/sync/domains/actionOperations/actionOperationStore';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { actionOperationAddressKey } from '@/sync/domains/actionOperations/qualifiedActionOperation';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema,
+  ExternalActionExecutionAuthorizationRequestV1Schema, ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { createHomeGovernanceHarness, createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 vi.mock('expo-router', async () => {
   const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -38,6 +44,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 }));
 const { storage } = await import('@/sync/domains/state/storage');
 const { Text } = await import('react-native');
+const { Modal } = await import('@/modal');
 const { useServerCredentialAccountScopeBindings } = await import('@/sync/domains/scope/useServerCredentialAccountScopes');
 const { resolveServerProfileScopeIdForIdentifier } =
   await import('@/sync/domains/server/serverProfiles');
@@ -115,6 +122,130 @@ function heldScript(
 }
 
 describe('Project setup review inside a Session', () => {
+  it.each(['thisTime', 'skip', 'changed', 'retired', 'checkoutMismatch', 'sourceMismatch', 'effectFailed'] as const)('consumes the mounted Session %s choice through the real Action front door without Trust', async choice => {
+    const home = createHomeGovernanceHarness();
+    await home.addHome({ name: 'Setup Home', serverUrl: 'https://session-once.test', serverIdentityId: 'srv_session_once', accountId: 'account' });
+    let held: ActionOperationSnapshotV1;
+    const decisions: unknown[] = [];
+    const receipts: ActionOperationSnapshotV1[] = [];
+    const paths: string[] = [];
+    const decisionOwner = await import('./projectSetupConsentDecision');
+    const decisionObservation = vi.spyOn(decisionOwner, 'decideProjectSetupConsent');
+    const alert = vi.spyOn(Modal, 'alert');
+    let finishDecision: (() => void) | undefined;
+    const decisionGate = choice === 'retired' ? new Promise<void>(resolve => { finishDecision = resolve; }) : Promise.resolve();
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://session-once.test',
+      serverIdentityId: 'srv_session_once', accountId: 'account',
+      credentials: { token: createAccountTokenForTests('account', { currentAccount: true }) }, request: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        paths.push(path);
+        const machine = createPlainMachineRowFixture({ id: 'devbox', accountId: 'account' });
+        if (path === '/v1/machines') return Response.json([machine]);
+        if (path === '/v1/machines/devbox') return Response.json({ machine });
+        if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+        if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+        if (path === '/v2/account/settings') return Response.json({ version: 1, content: { t: 'plain', v: {
+          actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'projects.prepare': ['ui'] } },
+        } } });
+        if (path === '/v1/actions/projects.prepare/execution-authorization') {
+          const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(JSON.parse(String(init?.body)));
+          const envelope = ExternalActionRequestEnvelopeV1Schema.parse(request.envelope);
+          return Response.json(ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'test-home-authorization', binding: {
+            accountId: 'account', authentication: { kind: 'account', tokenEpoch: 0 }, serverIdentityId: 'srv_session_once',
+            machineId: 'devbox', installationId: machine.installationId, custodianAccountId: 'account', accountEncryptionMode: 'plain',
+            actionId: 'projects.prepare', requestId: envelope.requestId, target: envelope.target,
+            requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
+          } }));
+        }
+        if (path === '/v1/actions/projects.prepare') {
+          const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(JSON.parse(String(init?.body)));
+          const envelope = ExternalActionRequestEnvelopeV1Schema.parse(request.envelope);
+          decisions.push(envelope.input);
+          expect(envelope.target).toMatchObject({ kind: 'machine', machineId: 'devbox' });
+          await decisionGate;
+          if (choice === 'effectFailed') return Response.json(ExternalActionResponseEnvelopeV1Schema.parse({
+            v: 1, actionId: 'projects.prepare', requestId: envelope.requestId,
+            execution: { ok: false, errorCode: 'project_source_declaration_unavailable', error: 'project_source_declaration_unavailable' },
+          }));
+          // A resumed Run projects its target without the review-only Source attachment (LV16).
+          const target = held.domainRef;
+          if (target?.kind !== 'projectCommand') throw new Error('Expected retained Project target');
+          const operation = ActionOperationSnapshotV1Schema.parse({ ...held, revision: 2, domainRef: { ...target,
+            workspaceRefId: choice === 'checkoutMismatch' ? 'different-checkout' : target.workspaceRefId,
+            sourceWorkspace: choice === 'changed' ? target.sourceWorkspace : choice === 'sourceMismatch'
+              ? { ...target.sourceWorkspace!, rootPath: '/another-source' } : undefined,
+          }, setupReview: choice === 'changed' ? {
+            ...held.setupReview!, code: 'project_setup_effect_changed' as const, reviewedEffectDigest: 'current-effect',
+          } : undefined });
+          receipts.push(operation);
+          return Response.json(ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'projects.prepare',
+            requestId: envelope.requestId, execution: { ok: true, result: { operation } } }));
+        }
+        if (path.includes('project-trust')) throw new Error('One-time and Skip cannot read or write Trust');
+        return home.request(url, init);
+      } });
+    const serverId = resolveServerProfileScopeIdForIdentifier(connection.home.id);
+    const workspace = { serverId, machineId: 'source', workspaceId: 'source-ref', rootPath: '/source' };
+    held = heldScript(serverId, 'session-1', workspace);
+    held = ActionOperationSnapshotV1Schema.parse({ ...held, actionId: 'execution.run.start', state: 'running', startedAt: 100,
+      domainRef: { kind: 'projectCommand', purpose: 'setup',
+        serverId, machineId: 'devbox', workspaceRefId: 'worker-ref', cwd: '/worker', sourceWorkspace: workspace } });
+    actionOperationStore.mergeSnapshots({ serverId, snapshots: [held] });
+    const screen = await renderWithSessionTranscriptSource(<ProjectSetupSessionReviews sessionId="session-1" serverId={serverId} />,
+      createTestSessionTranscriptSource({ sessionId: 'session-1', serverId, interaction: { canApprovePermissions: true } as never }));
+    try {
+      const id = 'project-setup-session-review:held-test';
+      await vi.waitFor(() => expect(screen.findByTestId(`${id}.scope:thisTime`)).not.toBeNull());
+      if (choice === 'skip') await act(async () => { await screen.pressByTestIdAsync(`${id}.scope:skip`); });
+      await act(async () => { screen.pressByTestId(`${id}-approve`); });
+      await vi.waitFor(async () => expect(decisions, JSON.stringify({ paths,
+        decision: choice === 'retired' ? 'pending' : await decisionObservation.mock.results[0]?.value })).toHaveLength(1));
+      expect(decisions[0]).toEqual({ workspace: { serverId, machineId: 'devbox', workspaceId: 'worker-ref', rootPath: '/worker' },
+        phase: 'setup', expectedEffectDigest: DIGEST, heldOperationId: 'held-test',
+        ...(choice === 'skip' ? { skipForInvocation: true } : { consentScope: 'thisTime' }) });
+      if (choice !== 'retired' && choice !== 'effectFailed') expect(receipts).toHaveLength(1);
+      if (choice === 'retired') {
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        const bob = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'bob' })).toString('base64url')}.signature` };
+        const credentialRead = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue(bob);
+        try {
+          await act(async () => { await TokenStorage.setCredentialsForServerUrl(connection.home.serverUrl, { serverId }, bob); });
+          finishDecision!();
+          await vi.waitFor(() => expect(screen.findByTestId(id)).toBeNull());
+          expect(await decisionObservation.mock.results[0]?.value).toMatchObject({ kind: 'unavailable' });
+        } finally { credentialRead.mockRestore(); }
+      } else if (choice === 'effectFailed') {
+        expect(await decisionObservation.mock.results[0]?.value).toEqual({ kind: 'unavailable', code: 'project_source_declaration_unavailable' });
+        // Readable words first; the typed code waits behind the alert's Technical details.
+        await vi.waitFor(() => expect(alert).toHaveBeenCalledWith(expect.any(String),
+          expect.not.stringContaining('project_source_declaration_unavailable'), expect.any(Array)));
+        const buttons = alert.mock.calls.at(-1)?.[2] as Array<{ onPress?: () => void }>;
+        buttons[0]?.onPress?.();
+        expect(alert).toHaveBeenLastCalledWith(expect.any(String), 'project_source_declaration_unavailable');
+        expect(screen.findByTestId(`${id}.settled`)).toBeNull();
+      } else if (choice === 'changed') {
+        expect(await decisionObservation.mock.results[0]?.value).toEqual({ kind: 'changed' });
+        await vi.waitFor(() => expect(actionOperationStore.getSnapshot().operationsByKey.get(actionOperationAddressKey({ serverId,
+          operationId: 'held-test' }))?.snapshot.setupReview?.reviewedEffectDigest).toBe('current-effect'));
+        expect(screen.findByTestId(`${id}.settled`)).toBeNull();
+      } else if (choice === 'checkoutMismatch' || choice === 'sourceMismatch') {
+        await vi.waitFor(() => expect(alert).toHaveBeenCalled());
+        expect(await decisionObservation.mock.results[0]?.value).toMatchObject({ kind: 'unavailable' });
+        expect(screen.findByTestId(`${id}.settled`)).toBeNull();
+        expect(actionOperationStore.getSnapshot().operationsByKey.get(actionOperationAddressKey({ serverId,
+          operationId: 'held-test' }))?.snapshot).toEqual(held);
+      } else {
+        expect(await decisionObservation.mock.results[0]?.value).toEqual({ kind: 'continued' });
+        await vi.waitFor(() => expect(screen.findByTestId(`${id}.settled`)).not.toBeNull());
+        expect(alert).not.toHaveBeenCalled();
+        const resumed = actionOperationStore.getSnapshot().operationsByKey.get(actionOperationAddressKey({ serverId,
+          operationId: 'held-test' }))?.snapshot;
+        expect(resumed).toMatchObject({ operationId: held.operationId, actionId: 'execution.run.start' });
+        expect(resumed?.setupReview).toBeUndefined();
+      }
+    } finally { finishDecision?.(); await screen.unmount(); decisionObservation.mockRestore(); alert.mockRestore(); await connection.dispose(); }
+  });
+
   it('asks for the held invocation with its exact effect and remembers the reviewed effect for this Project only', async () => {
     const mutations: unknown[] = [];
     const connection = await restoreServerAccountForTest({
@@ -175,9 +306,15 @@ describe('Project setup review inside a Session', () => {
           ],
         },
       } as never);
-      const held = heldScript(serverId, 'session-1', workspace);
+      const held = ActionOperationSnapshotV1Schema.parse({ ...heldScript(serverId, 'session-1', workspace),
+        actionId: 'execution.run.start', state: 'running', startedAt: 100,
+        domainRef: { kind: 'projectCommand', purpose: 'setup', serverId, machineId: workspace.machineId,
+          workspaceRefId: workspace.workspaceId, cwd: workspace.rootPath, sourceWorkspace: workspace } });
+      const target = held.domainRef;
+      if (target?.kind !== 'projectCommand') throw new Error('Expected retained Project target');
       machineTransport.read.mockResolvedValueOnce({ kind: 'found', operation: held })
-        .mockResolvedValueOnce({ kind: 'found', operation: { ...held, revision: 2, setupReview: undefined } });
+        .mockResolvedValueOnce({ kind: 'found', operation: { ...held, revision: 2, setupReview: undefined,
+          domainRef: { ...target, sourceWorkspace: undefined } } });
       actionOperationStore.mergeSnapshots({
         serverId,
         snapshots: [
@@ -212,6 +349,9 @@ describe('Project setup review inside a Session', () => {
       expect(screen.getTextContent()).toContain('mise install');
       expect(screen.getTextContent()).toContain('yarn install --immutable');
 
+      await act(async () => {
+        await screen.pressByTestIdAsync('project-setup-session-review:held-test.scope:untilChanged');
+      });
       await act(async () => {
         screen.pressByTestId('project-setup-session-review:held-test-approve');
       });

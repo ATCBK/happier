@@ -24,6 +24,8 @@ type CacheEntry = {
     state: MachineCapabilitiesCacheState;
     updatedAt: number;
     inFlightToken?: number;
+    /** Successful requests can omit optional facts; mounting again is not an invalidation. */
+    settledRequestKeys?: ReadonlySet<string>;
 };
 
 const cache = new Map<string, CacheEntry>();
@@ -37,7 +39,7 @@ type ScheduledFetch = Readonly<{
     requestKey: string;
     promise: Promise<void>;
     isCurrent(): boolean;
-    retainAccountReader(lifetime: ServerAccountScopeLifetime): void;
+    retainReader(params: MachineCapabilitiesFetchParams): Promise<void>;
 }>;
 
 const scheduledFetchByCacheKey = new Map<string, ScheduledFetch>();
@@ -350,7 +352,7 @@ function detectRequestKey(request: CapabilitiesDetectRequest): string {
     });
 }
 
-function requestNeedsRefetchFromState(state: MachineCapabilitiesCacheState, request: CapabilitiesDetectRequest): boolean {
+function requestNeedsRefetchFromState(state: MachineCapabilitiesCacheState, request: CapabilitiesDetectRequest, settledRequest = false): boolean {
     const snapshot =
         state.status === 'loaded'
             ? state.snapshot
@@ -366,6 +368,28 @@ function requestNeedsRefetchFromState(state: MachineCapabilitiesCacheState, requ
     const overrideEntries = isPlainObject(request.overrides)
         ? Object.entries(request.overrides as Record<string, { params?: Record<string, unknown> }>)
         : [];
+    const capabilityIdsNeedingLoginStatus = new Set<string>();
+    for (const entry of requests) {
+        if (entry.id.startsWith('cli.') && isPlainObject(entry.params) && entry.params.includeLoginStatus) {
+            capabilityIdsNeedingLoginStatus.add(entry.id);
+        }
+    }
+    for (const [capabilityId, override] of overrideEntries) {
+        if (capabilityId.startsWith('cli.') && override?.params?.includeLoginStatus) {
+            capabilityIdsNeedingLoginStatus.add(capabilityId);
+        }
+    }
+    if (settledRequest) {
+        // A failed readiness probe supplied no installation/login facts. A new
+        // demand must ask again; cache publication itself never starts a read.
+        // Successful answers may omit optional facts, while update-only failures
+        // retain the existing latest-version retry cadence.
+        return [...capabilityIdsNeedingLoginStatus].some(id => results[id as CapabilityId]?.ok !== true)
+            || requests.some(entry => entry.id.startsWith('cli.')
+                && Boolean((entry.params as { includeLatestVersion?: unknown } | undefined)?.includeLatestVersion)
+                && results[entry.id]?.ok === false
+                && isAgentLatestVersionMissing(results, entry.id));
+    }
 
     for (const entry of requests) {
         const capabilityId = typeof entry?.id === 'string' ? entry.id : '';
@@ -387,22 +411,6 @@ function requestNeedsRefetchFromState(state: MachineCapabilitiesCacheState, requ
         if (Boolean((entry.params as { includeLatestVersion?: unknown } | undefined)?.includeLatestVersion)
             && isAgentLatestVersionMissing(results, entry.id)) {
             return true;
-        }
-    }
-
-    const capabilityIdsNeedingLoginStatus = new Set<string>();
-
-    for (const entry of requests) {
-        if (!entry?.id?.startsWith('cli.')) continue;
-        if (Boolean((entry.params as any)?.includeLoginStatus)) {
-            capabilityIdsNeedingLoginStatus.add(entry.id);
-        }
-    }
-
-    for (const [capabilityId, override] of overrideEntries) {
-        if (!capabilityId.startsWith('cli.')) continue;
-        if (Boolean(override?.params?.includeLoginStatus)) {
-            capabilityIdsNeedingLoginStatus.add(capabilityId);
         }
     }
 
@@ -443,11 +451,12 @@ type MachineCapabilitiesFetchParams = {
     request: CapabilitiesDetectRequest;
     timeoutMs?: number;
     accountLifetime?: ServerAccountScopeLifetime;
+    signal?: AbortSignal;
 };
 
 function scheduleObservedErrorRetry(
     cacheKey: string,
-    params: MachineCapabilitiesFetchParams,
+    readers: readonly MachineCapabilitiesFetchParams[],
     failedAt: number,
 ): void {
     if (scheduledErrorRetryByCacheKey.has(cacheKey) || !listeners.get(cacheKey)?.size) return;
@@ -458,40 +467,66 @@ function scheduleObservedErrorRetry(
         const entry = getEntry(cacheKey);
         if (!listeners.get(cacheKey)?.size
             || entry?.state.status !== 'error'
-            || entry.updatedAt !== failedAt
-            || (params.accountLifetime && !params.accountLifetime.isCurrent())) return;
-        void fetchAndMerge(params);
+            || entry.updatedAt !== failedAt) return;
+        for (const params of readers) {
+            if (params.signal?.aborted || (params.accountLifetime && !params.accountLifetime.isCurrent())) continue;
+            void fetchAndMerge(params);
+        }
     }, backoffMs);
     scheduledErrorRetryByCacheKey.set(cacheKey, retry);
 }
 
 async function fetchAndMerge(params: MachineCapabilitiesFetchParams): Promise<void> {
+    if (params.signal?.aborted || (params.accountLifetime && !params.accountLifetime.isCurrent())) return;
     const cacheKey = toCacheKey(params.machineId, params.serverId, params.cacheKeySalt, params.accountLifetime?.scope.accountId);
     const requestKey = detectRequestKey(params.request);
     const scheduled = scheduledFetchByCacheKey.get(cacheKey);
     if (scheduled && scheduled.requestKey === requestKey && scheduled.isCurrent()) {
-        if (params.accountLifetime) scheduled.retainAccountReader(params.accountLifetime);
-        return await scheduled.promise;
+        return await scheduled.retainReader(params);
     }
 
     const previousPromise = scheduled?.promise ?? Promise.resolve();
     const token = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
-    const controller = params.accountLifetime ? new AbortController() : null;
-    const accountReaders = new Set<ServerAccountScopeLifetime>();
-    const retirements: Array<Readonly<{ dispose(): void }>> = [];
-    const isCurrent = () => !controller?.signal.aborted && (!params.accountLifetime || [...accountReaders].some((reader) => reader.isCurrent()));
-    const retainAccountReader = (lifetime: ServerAccountScopeLifetime) => {
-        if (accountReaders.has(lifetime)) return;
-        accountReaders.add(lifetime);
-        retirements.push(lifetime.onRetire(() => {
-            if (isCurrent()) return;
-            controller?.abort();
-            if (getEntry(cacheKey)?.inFlightToken === token) {
-                setEntry(cacheKey, { state: { status: 'idle' }, updatedAt: 0 });
-            }
-        }));
+    const controller = new AbortController();
+    const readers = new Map<() => boolean, MachineCapabilitiesFetchParams>();
+    const isCurrent = () => !controller.signal.aborted && [...readers.keys()].some((reader) => reader());
+    const currentReaders = () => [...readers].filter(([isCurrentReader]) => isCurrentReader()).map(([, reader]) => reader);
+    const cancelled = new Promise<void>((resolve) => controller.signal.addEventListener('abort', () => resolve(), { once: true }));
+    const retainReader = (readerParams: MachineCapabilitiesFetchParams): Promise<void> => {
+        if (readerParams.signal?.aborted || (readerParams.accountLifetime && !readerParams.accountLifetime.isCurrent())) return Promise.resolve();
+        return new Promise<void>((resolve) => {
+            const readerIsCurrent = () => !readerParams.signal?.aborted && (!readerParams.accountLifetime || readerParams.accountLifetime.isCurrent());
+            readers.set(readerIsCurrent, readerParams);
+            let settled = false;
+            let retirement: Readonly<{ dispose(): void }> | undefined;
+            const finish = () => {
+                if (settled) return;
+                settled = true;
+                readerParams.signal?.removeEventListener('abort', cancel);
+                retirement?.dispose();
+                readers.delete(readerIsCurrent);
+                resolve();
+            };
+            const cancel = () => {
+                finish();
+                if (isCurrent()) return;
+                controller.abort();
+                if (scheduledFetchByCacheKey.get(cacheKey)?.promise === finalPromise) {
+                    if (scheduled?.isCurrent()) scheduledFetchByCacheKey.set(cacheKey, scheduled);
+                    else scheduledFetchByCacheKey.delete(cacheKey);
+                }
+                const entry = getEntry(cacheKey);
+                if (entry?.inFlightToken === token) {
+                    const snapshot = 'snapshot' in entry.state ? entry.state.snapshot : undefined;
+                    setEntry(cacheKey, { state: snapshot ? { status: 'loaded', snapshot } : { status: 'idle' }, updatedAt: 0 });
+                }
+            };
+            readerParams.signal?.addEventListener('abort', cancel, { once: true });
+            retirement = readerParams.accountLifetime?.onRetire(cancel);
+            // The shared request settles even if a boundary delivers its late reply after cancellation.
+            void finalPromise.then(finish, finish);
+        });
     };
-    if (params.accountLifetime) retainAccountReader(params.accountLifetime);
 
     const scheduledPromise = previousPromise.then(async () => {
         if (!isCurrent()) return;
@@ -509,6 +544,7 @@ async function fetchAndMerge(params: MachineCapabilitiesFetchParams): Promise<vo
             state: { status: 'loading', ...(prevSnapshot ? { snapshot: prevSnapshot } : {}) },
             updatedAt: Date.now(),
             inFlightToken: token,
+            settledRequestKeys: existing?.settledRequestKeys,
         });
 
         let result: MachineCapabilitiesDetectResult;
@@ -517,7 +553,7 @@ async function fetchAndMerge(params: MachineCapabilitiesFetchParams): Promise<vo
                 timeoutMs: params.timeoutMs,
                 serverId: params.serverId,
                 accountId: params.accountLifetime?.scope.accountId,
-                signal: controller?.signal,
+                signal: controller.signal,
             });
         } catch {
             if (!isCurrent()) return;
@@ -530,8 +566,9 @@ async function fetchAndMerge(params: MachineCapabilitiesFetchParams): Promise<vo
             setEntry(cacheKey, {
                 state: prevSnapshot ? ({ status: 'error', snapshot: prevSnapshot } as const) : ({ status: 'error' } as const),
                 updatedAt: failedAt,
+                settledRequestKeys: existing?.settledRequestKeys,
             });
-            scheduleObservedErrorRetry(cacheKey, params, failedAt);
+            scheduleObservedErrorRetry(cacheKey, currentReaders(), failedAt);
             return;
         }
 
@@ -566,12 +603,15 @@ async function fetchAndMerge(params: MachineCapabilitiesFetchParams): Promise<vo
         setEntry(cacheKey, {
             state: nextState,
             updatedAt,
+            settledRequestKeys: result.supported
+                ? new Set([...(existing?.settledRequestKeys ?? []), requestKey])
+                : existing?.settledRequestKeys,
         });
-        if (nextState.status === 'error') scheduleObservedErrorRetry(cacheKey, params, updatedAt);
+        if (nextState.status === 'error') scheduleObservedErrorRetry(cacheKey, currentReaders(), updatedAt);
     });
 
-    const finalPromise = scheduledPromise.finally(() => {
-        for (const retirement of retirements) retirement.dispose();
+    // A cancelled queue slot releases its reader, while successors still wait for live predecessors.
+    const finalPromise = previousPromise.then(() => Promise.race([scheduledPromise, cancelled])).finally(() => {
         const current = scheduledFetchByCacheKey.get(cacheKey);
         if (current?.promise === finalPromise) {
             scheduledFetchByCacheKey.delete(cacheKey);
@@ -582,10 +622,10 @@ async function fetchAndMerge(params: MachineCapabilitiesFetchParams): Promise<vo
         requestKey,
         promise: finalPromise,
         isCurrent,
-        retainAccountReader,
+        retainReader,
     });
 
-    return await finalPromise;
+    return await retainReader(params);
 }
 
 export function prefetchMachineCapabilities(params: {
@@ -595,6 +635,7 @@ export function prefetchMachineCapabilities(params: {
     request: CapabilitiesDetectRequest;
     timeoutMs?: number;
     accountLifetime?: ServerAccountScopeLifetime;
+    signal?: AbortSignal;
 }): Promise<void> {
     return fetchAndMerge(params);
 }
@@ -607,12 +648,16 @@ export function prefetchMachineCapabilitiesIfStale(params: {
     request: CapabilitiesDetectRequest;
     timeoutMs?: number;
     accountLifetime?: ServerAccountScopeLifetime;
+    signal?: AbortSignal;
 }): Promise<void> {
-    if (params.accountLifetime && !params.accountLifetime.isCurrent()) return Promise.resolve();
+    if (params.signal?.aborted || (params.accountLifetime && !params.accountLifetime.isCurrent())) return Promise.resolve();
     const cacheKey = toCacheKey(params.machineId, params.serverId, params.cacheKeySalt, params.accountLifetime?.scope.accountId);
     const scheduled = scheduledFetchByCacheKey.get(cacheKey);
-    if (params.accountLifetime && scheduled?.isCurrent()) scheduled.retainAccountReader(params.accountLifetime);
     const existing = getEntry(cacheKey);
+    if (scheduled?.isCurrent() && (scheduled.requestKey === detectRequestKey(params.request)
+        || (existing?.state.status === 'loading' && !requestNeedsRefetchFromState(existing.state, params.request)))) {
+        return scheduled.retainReader(params);
+    }
     if (!existing || existing.state.status === 'idle') {
         return fetchAndMerge({
             machineId: params.machineId,
@@ -621,9 +666,12 @@ export function prefetchMachineCapabilitiesIfStale(params: {
             request: params.request,
             timeoutMs: params.timeoutMs,
             accountLifetime: params.accountLifetime,
+            signal: params.signal,
         });
     }
-    if (requestNeedsRefetchFromState(existing.state, params.request)) {
+    if (existing.state.status !== 'error'
+        && requestNeedsRefetchFromState(existing.state, params.request,
+            existing.settledRequestKeys?.has(detectRequestKey(params.request)))) {
         return fetchAndMerge({
             machineId: params.machineId,
             serverId: params.serverId,
@@ -631,6 +679,7 @@ export function prefetchMachineCapabilitiesIfStale(params: {
             request: params.request,
             timeoutMs: params.timeoutMs,
             accountLifetime: params.accountLifetime,
+            signal: params.signal,
         });
     }
     const now = Date.now();
@@ -643,6 +692,7 @@ export function prefetchMachineCapabilitiesIfStale(params: {
             request: params.request,
             timeoutMs: params.timeoutMs,
             accountLifetime: params.accountLifetime,
+            signal: params.signal,
         });
     }
     return Promise.resolve();
@@ -667,6 +717,7 @@ export function useMachineCapabilitiesCache(params: {
     requestRef.current = params.request;
     const timeoutMsRef = React.useRef<number | undefined>(params.timeoutMs);
     timeoutMsRef.current = params.timeoutMs;
+    const consumerControllerRef = React.useRef<{ controller: AbortController } | null>(null);
 
     const [state, setState] = React.useState<MachineCapabilitiesCacheState>(() => {
         if (!cacheKey) return { status: 'idle' };
@@ -675,7 +726,12 @@ export function useMachineCapabilitiesCache(params: {
     });
 
     const refresh = React.useCallback((next?: { request?: CapabilitiesDetectRequest; timeoutMs?: number; bypassCache?: boolean }) => {
-        if (!machineId) return;
+        const consumer = consumerControllerRef.current;
+        if (!machineId || !consumer) return;
+        const previousController = consumer.controller;
+        const controller = new AbortController();
+        consumer.controller = controller;
+        previousController.abort();
         void fetchAndMerge({
             machineId,
             serverId,
@@ -684,17 +740,21 @@ export function useMachineCapabilitiesCache(params: {
                 ? withDetectRequestBypassCache(next?.request ?? requestRef.current)
                 : (next?.request ?? requestRef.current),
             timeoutMs: typeof next?.timeoutMs === 'number' ? next.timeoutMs : timeoutMsRef.current,
+            signal: controller.signal,
         });
         const entry = getEntry(toCacheKey(machineId, serverId, cacheKeySalt));
         if (entry) setState(entry.state);
     }, [cacheKeySalt, machineId, serverId]);
 
     React.useEffect(() => {
-        if (!cacheKey) {
+        if (!cacheKey || !machineId) {
             setState({ status: 'idle' });
             return;
         }
 
+        const controller = new AbortController();
+        const consumer = { controller };
+        consumerControllerRef.current = consumer;
         let subscribed = true;
         const unsubscribeState = subscribe(cacheKey, (nextState) => {
             setState(nextState);
@@ -703,12 +763,15 @@ export function useMachineCapabilitiesCache(params: {
             // settled it asks again instead of idling.
             if (!enabled || nextState.status !== 'idle') return;
             void (scheduledFetchByCacheKey.get(cacheKey)?.promise ?? Promise.resolve()).then(() => {
-                if (subscribed && getEntry(cacheKey)?.state.status === 'idle') refresh();
+                if (subscribed && getEntry(cacheKey)?.state.status === 'idle'
+                    && !scheduledFetchByCacheKey.get(cacheKey)?.isCurrent()) refresh();
             });
         });
         const unsubscribe = () => {
             subscribed = false;
             unsubscribeState();
+            if (consumerControllerRef.current === consumer) consumerControllerRef.current = null;
+            consumer.controller.abort();
         };
 
         const entry = getEntry(cacheKey);
@@ -718,16 +781,10 @@ export function useMachineCapabilitiesCache(params: {
             return unsubscribe;
         }
 
-        if (entry && requestNeedsRefetchFromState(entry.state, requestRef.current)) {
-            refresh();
-            return unsubscribe;
-        }
-
-        const now = Date.now();
-        const shouldFetch = shouldRefetchEntry({ entry: entry ?? null, staleMs, nowMs: now });
-        if (shouldFetch) {
-            refresh();
-        }
+        void prefetchMachineCapabilitiesIfStale({
+            machineId, serverId, cacheKeySalt, staleMs,
+            request: requestRef.current, timeoutMs: timeoutMsRef.current, signal: controller.signal,
+        });
 
         return unsubscribe;
     }, [cacheKey, enabled, refresh, staleMs]);

@@ -4,6 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { SystemTaskProgressCard } from '@/components/systemTasks';
 import type { SystemTaskRunState } from '@/components/systemTasks/types';
+import { getBlurViewComponent } from '@/components/ui/glass/blurMaterial';
 import { createBackdropNativeStyle, createBackdropWebStyle } from '@/components/ui/overlays/createBackdropLayerStyle';
 
 const stylesheet = StyleSheet.create({
@@ -34,27 +35,16 @@ export const RelayAccessWizardBusyOverlay = React.memo(function RelayAccessWizar
         return null;
     }
 
+    const BlurView = getBlurViewComponent();
     const overlayScrimColor = theme.colors.overlay?.scrimWizard ?? theme.colors.surface.base;
 
     return (
         <View testID={props.testID} style={styles.overlay}>
             {Platform.OS !== 'web' ? (
                 (() => {
-                    try {
-                        // eslint-disable-next-line @typescript-eslint/no-var-requires
-                        const { BlurView } = require('expo-blur');
-                        if (BlurView) {
-                            return (
-                                <BlurView
-                                    intensity={Platform.OS === 'ios' ? 12 : 3}
-                                    tint="default"
-                                    pointerEvents="none"
-                                    style={StyleSheet.absoluteFillObject}
-                                />
-                            );
-                        }
-                    } catch {
-                        // fall back
+                    if (BlurView) {
+                        return <BlurView intensity={12} tint="default" pointerEvents="none"
+                            style={StyleSheet.absoluteFillObject} />;
                     }
                     return (
                         <View

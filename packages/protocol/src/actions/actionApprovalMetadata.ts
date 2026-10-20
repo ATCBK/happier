@@ -4,10 +4,12 @@ import { ActionSurfaceSchema } from './metadata.js';
 
 /** Host-only confirmation ownership; result custody remains in ActionApproval. */
 export const ActionApprovalPolicySchema = lazyZodSchema(() => z.strictObject({
-  uiConfirmation: z.optional(z.literal('policy')),
+  uiConfirmation: z.optional(z.enum(['policy', 'direct'])),
   uiConfirmationForInput: z.optional(z.custom<(input: unknown) => boolean>((value) => typeof value === 'function')),
   agentDefault: z.optional(z.enum(['egress', 'authority'])),
   requiredSurfaces: z.optional(z.readonly(z.array(z.keyof(ActionSurfaceSchema)))),
+  /** Security decisions that remain explicit even when ordinary Action prompts are waived. */
+  nonWaivable: z.optional(z.literal(true)),
   scopeAdmissionOwnsConfirmation: z.optional(z.literal(true)),
   pluginCaptureWaiver: z.optional(z.literal(true)),
   computerConsent: z.optional(z.literal(true)),

@@ -74,6 +74,11 @@ export type TabsProps = Readonly<{
    * updates its label without remounting it. Nested Tabs own panel activity.
    */
   sharedPanel?: ReactNode;
+  /**
+   * `none`: a strip with little room shows each tab as its glyph alone, still named by its title for assistive
+   * technology. It applies only when every tab has an `icon`; otherwise every label stays. Default `all`.
+   */
+  labels?: 'all' | 'none';
   children?: ReactNode;
 }>;
 

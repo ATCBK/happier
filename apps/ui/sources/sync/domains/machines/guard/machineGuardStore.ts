@@ -59,6 +59,9 @@ export function createMachineGuardStore(clients: MachineGuardClients) {
         },
         failRefresh: state => ({ ...applyView(state, { kind: 'status', status: 'error' }), pending: false }),
         applySnapshot: applyView,
+        onWatchSnapshot: (input, update, previous) => {
+            if (update.kind === 'view' && JSON.stringify(previous.view?.recentActivity) !== JSON.stringify(update.view.recentActivity)) refreshActivity(input);
+        },
         watch: async ({ input, state, watchClient, signal, nowMs }) => {
             const answer = await watchClient({ ...input, since: state.since, signal });
             if (signal?.aborted) return { status: 'unavailable' };
@@ -67,10 +70,7 @@ export function createMachineGuardStore(clients: MachineGuardClients) {
                 return { status: 'unavailable' };
             }
             if (!answer.value.changed) return { status: 'idle' };
-            const previous = views.getState(input).view;
-            views.publish(input, { kind: 'view', view: answer.value.view, since: answer.value.since, receivedAtMs: nowMs() });
-            if (JSON.stringify(previous?.recentActivity) !== JSON.stringify(answer.value.view.recentActivity)) refreshActivity(input);
-            return { status: 'idle' };
+            return { status: 'changed', snapshot: { kind: 'view', view: answer.value.view, since: answer.value.since, receivedAtMs: nowMs() } };
         },
     });
     const activities: SharedSubscriptionStore<MachineGuardActivityKey, MachineGuardActivityState, MachineGuardActivityListV1, MachineGuardClients['activityClient']>
@@ -100,12 +100,14 @@ export function createMachineGuardStore(clients: MachineGuardClients) {
             const demand = activityDemands.get(id) ?? { key, count: 0 };
             demand.count += 1;
             activityDemands.set(id, demand);
+            const releaseView = views.subscribe(key, () => {});
             const release = activities.subscribe(key, () => {});
             let released = false;
             return () => {
                 if (released) return;
                 released = true;
                 release();
+                releaseView();
                 demand.count -= 1;
                 if (demand.count === 0 && activityDemands.get(id) === demand) activityDemands.delete(id);
             };

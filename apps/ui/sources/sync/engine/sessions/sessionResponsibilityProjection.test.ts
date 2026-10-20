@@ -42,6 +42,7 @@ describe('responsibility projection through the normalized Session corridor', ()
             responsibleAccount: {
                 kind: 'account',
                 accountId: 'account-1',
+                name: 'Alice',
                 firstName: 'Alice',
                 lastName: null,
                 username: 'alice',

@@ -11,7 +11,7 @@ import {
     installProviderConnectionsCatalogHttpBoundary,
 } from '@/dev/testkit/harness/providerSettingsHarness';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsRowMutationV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
-import { PROVIDER_ACTION_INPUT_SCHEMAS_V1 } from '@happier-dev/protocol/providers/providerActionsV1';
+import { PROVIDER_ACTION_INPUT_SCHEMAS_V1, PROVIDER_CONNECTION_ACTION_ID_BY_OPERATION_V1 } from '@happier-dev/protocol/providers/providerActionsV1';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
@@ -1504,7 +1504,8 @@ describe('ProviderConnectionAuthoringScreen', () => {
     ] as const)('continues the %s pasted-key save from the original Secret approval result: %s', async (kind, outcome) => {
         // Private pasted-key creation enters through the personal Secret Action;
         // its admitted host performs the shared-resource write beneath that policy.
-        await account.home.requireUiApproval(account.serverId, 'secrets.create');
+        await account.home.requireUiApproval(account.serverId, ['secrets.create',
+            PROVIDER_CONNECTION_ACTION_ID_BY_OPERATION_V1[kind === 'custom' ? 'createCustom' : 'createContribution']]);
         state.credential = { required: true };
         installPastedSecretResourceBoundary();
         if (kind === 'built-in') await installOwnMachineApprovalReplayBoundary({
@@ -1546,15 +1547,15 @@ describe('ProviderConnectionAuthoringScreen', () => {
             }
             return;
         }
-        // Requiring Secret approval replaces the fixture's waived policy. The
-        // subsequent Provider Action therefore still needs its own consent.
+        // Both effects explicitly require Ask-first, so the Provider write
+        // remains pending after the original Secret approval settles.
         await waitForHomeGovernance(() => expect(account.home.artifacts(originalServerId).list()).toHaveLength(2));
         const providerArtifactId = account.home.artifacts(originalServerId).list().find(artifact => artifact.id !== artifactId)!.id;
         expect(run).not.toHaveBeenCalled();
         expect(stored.writes).toBe(0);
         const providerDecision = await decideApprovalAsInbox(originalServerId, providerArtifactId, 'approve');
         if (!providerDecision.ok) throw new Error(providerDecision.errorCode);
-        expect(providerDecision).toMatchObject({ ok: true, result: { status: 'executed' } });
+        expect(providerDecision, JSON.stringify(providerDecision)).toMatchObject({ ok: true, result: { status: 'executed' } });
         await waitForHomeGovernance(() => expect(kind === 'built-in' ? run.mock.calls.length : stored.writes).toBe(1));
         await operation;
         const resourceWrites = account.home.requestsFor('/v1/account/saved-secrets/resources').filter(request => request.input != null);

@@ -19,10 +19,13 @@ import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAc
 import { switchConnectionToActiveServer } from '@/sync/runtime/orchestration/connectionManager';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { saveAccountSettings } from '@/sync/domains/state/accountSettingsPersistence';
+import { createDeferred, createSessionListRenderableSessionFixture } from '@/dev/testkit';
+import type { SessionEncryption } from '@/sync/encryption/sessionEncryption';
 
 import {
     deletePendingMessageV2,
     discardPendingMessageV2,
+    dismissPendingDeliveryV2,
     enqueuePendingMessageV2,
     fetchAndApplyPendingMessagesV2,
     replayPersistedPendingOutboxForSession,
@@ -31,6 +34,117 @@ import {
     retryPendingOutboxOperationV2,
 } from './pendingQueueV2';
 import { activatePendingQueueScope, buildSession, createPendingQueueEncryption, currentPendingEnqueueAck, getSessionEncryptionOrThrow, resetPendingQueueState } from './pendingQueueV2.testHelpers';
+
+it.each([false, true])('settles send-as-new before awaiting the captured scoped reader and fences retirement during that read (%s)', async retire => {
+    const outboxScope = { serverId: 'recovery-server', accountId: 'recovery-account' };
+    const sessionId = 'async-reader-recovery';
+    await resetPendingQueueState(outboxScope);
+    storage.getState().applySessions([buildSession({ sessionId, overrides: { encryptionMode: 'e2ee' } })]);
+    const encryption = await createPendingQueueEncryption({ sessionId });
+    const sessionEncryption = getSessionEncryptionOrThrow({ encryption, sessionId });
+    const content = { t: 'encrypted', c: await sessionEncryption.encryptRawRecord({ role: 'user',
+        content: { type: 'text', text: 'server-owned replacement' }, meta: {} }) };
+    const reader = createDeferred<SessionEncryption>();
+    const reading = createDeferred<void>();
+    const events: string[] = [];
+    let current = true;
+    const result = sendPendingDeliveryAsNewV2({ sessionId, pendingId: 'original', outboxScope,
+        encryption: { getSessionEncryption: () => { events.push('reader'); reading.resolve(undefined); return reader.promise; } },
+        isOutboxScopeCurrent: () => current,
+        request: async (_path, init) => {
+            events.push(init?.method ?? 'GET');
+            return init?.method === 'POST' ? Response.json({ ok: true, newLocalId: 'replacement' }) : Response.json({ pending: [{
+                localId: 'replacement', content, status: 'queued', position: 0, createdAt: 1, updatedAt: 1,
+            }] });
+        },
+    });
+    await reading.promise;
+    expect(events).toEqual(['POST', 'reader']);
+    if (retire) current = false;
+    reader.resolve(sessionEncryption);
+    expect(await result).toBe('replacement');
+    expect(events).toEqual(retire ? ['POST', 'reader'] : ['POST', 'reader', 'GET']);
+    const messages = storage.getState().sessionPending[sessionId]?.messages ?? [];
+    if (retire) expect(messages).toEqual([]);
+    else expect(messages).toMatchObject([{ localId: 'replacement', text: 'server-owned replacement' }]);
+});
+
+it('recovers a plain Session without asking an Account reader for Session keys', async () => {
+    const outboxScope = { serverId: 'recovery-server', accountId: 'recovery-account' };
+    const sessionId = 'plain-reader-recovery';
+    await resetPendingQueueState(outboxScope);
+    storage.getState().applySessions([buildSession({ sessionId, overrides: { encryptionMode: 'plain' } })]);
+    const getSessionEncryption = vi.fn(() => { throw new Error('Plain Sessions have no Session reader'); });
+    const events: string[] = [];
+    expect(await sendPendingDeliveryAsNewV2({ sessionId, pendingId: 'original', outboxScope,
+        encryption: { getSessionEncryption }, isOutboxScopeCurrent: () => true,
+        request: async (_path, init) => {
+            events.push(init?.method ?? 'GET');
+            return init?.method === 'POST' ? Response.json({ ok: true, newLocalId: 'replacement' }) : response('replacement', 'queued');
+        },
+    })).toBe('replacement');
+    expect(getSessionEncryption).not.toHaveBeenCalled();
+    expect(events).toEqual(['POST', 'GET']);
+});
+
+it.each(['plain', 'e2ee'] as const)('reads the %s background Session mode from its Home when the focused Home reuses the Session id', async encryptionMode => {
+    const sessionId = 'same-id-different-mode';
+    const focusedScope = { serverId: 'focused-server', accountId: 'focused-account' };
+    const outboxScope = { serverId: 'background-server', accountId: 'background-account' };
+    await resetPendingQueueState(focusedScope);
+    storage.getState().applySessions([buildSession({ sessionId, overrides: {
+        encryptionMode: encryptionMode === 'plain' ? 'e2ee' : 'plain', serverId: focusedScope.serverId,
+    } })]);
+    storage.getState().applyServerScopedSessionListRows(outboxScope.serverId, [createSessionListRenderableSessionFixture({
+        id: sessionId, encryptionMode,
+    })], { source: 'ordinary', mode: 'replace' });
+    const encryption = await createPendingQueueEncryption({ sessionId });
+    const reader = getSessionEncryptionOrThrow({ encryption, sessionId });
+    const getSessionEncryption = vi.fn(async () => reader);
+    const content = encryptionMode === 'plain'
+        ? { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'background replacement' }, meta: {} } }
+        : { t: 'encrypted', c: await reader.encryptRawRecord({ role: 'user', content: { type: 'text', text: 'background replacement' }, meta: {} }) };
+    expect(await sendPendingDeliveryAsNewV2({ sessionId, pendingId: 'original', outboxScope,
+        encryption: { getSessionEncryption }, isOutboxScopeCurrent: () => true,
+        request: async (_path, init) => init?.method === 'POST' ? Response.json({ ok: true, newLocalId: 'replacement' }) : Response.json({ pending: [{
+            localId: 'replacement', content, status: 'queued', position: 0, createdAt: 1, updatedAt: 1,
+        }] }),
+    })).toBe('replacement');
+    expect(getSessionEncryption).toHaveBeenCalledTimes(encryptionMode === 'plain' ? 0 : 1);
+    expect(storage.getState().sessionPending[sessionId]?.messages).toMatchObject([{ localId: 'replacement', text: 'background replacement' }]);
+});
+
+it.each(['dismiss', 'send-as-new'] as const)('keeps explicit %s recovery at its execution run when the local projection is absent', async action => {
+    const outboxScope = { serverId: 'target-server', accountId: 'target-account' };
+    const sessionId = 'target-recovery';
+    await resetPendingQueueState(outboxScope);
+    storage.getState().applySessions([buildSession({ sessionId, overrides: { encryptionMode: 'plain' } })]);
+    const paths: string[] = [];
+    const input = { sessionId, pendingId: 'missing-local-projection', targetExecutionRunId: 'run/one', encryption: null, outboxScope,
+        isOutboxScopeCurrent: () => true,
+        request: async (path: string, init?: RequestInit) => {
+            paths.push(path);
+            return init?.method === 'POST' ? Response.json({ ok: true, newLocalId: 'replacement' }) : Response.json({ pending: [] });
+        } };
+    if (action === 'dismiss') await dismissPendingDeliveryV2(input);
+    else expect(await sendPendingDeliveryAsNewV2(input)).toBe('replacement');
+    expect(paths).toEqual([
+        `/v2/sessions/${sessionId}/execution-runs/run%2Fone/pending/missing-local-projection/delivery/${action}`,
+        `/v2/sessions/${sessionId}/execution-runs/run%2Fone/pending?includeDiscarded=1`,
+    ]);
+});
+
+it.each(['dismiss', 'send-as-new'] as const)('refuses %s recovery if the known projection belongs to a different recipient', async action => {
+    const outboxScope = { serverId: 'target-server', accountId: 'target-account' };
+    const sessionId = 'target-recovery';
+    await resetPendingQueueState(outboxScope);
+    storage.getState().upsertPendingMessage(sessionId, { id: 'known-main', localId: 'known-main', source: 'server_pending',
+        createdAt: 1, updatedAt: 1, text: 'main input', rawRecord: null, pendingOutboxScope: outboxScope });
+    const request = vi.fn(async () => Response.json({ ok: true, newLocalId: 'replacement', pending: [] }));
+    const input = { sessionId, pendingId: 'known-main', targetExecutionRunId: 'other-run', encryption: null, outboxScope, request };
+    await expect(action === 'dismiss' ? dismissPendingDeliveryV2(input) : sendPendingDeliveryAsNewV2(input)).rejects.toThrow();
+    expect(request).not.toHaveBeenCalled();
+});
 it('refreshes only the exact target and keeps sibling Pending rows intact', async () => {
     await resetPendingQueueState();
     const sessionId = 'target-isolation';
@@ -1850,20 +1964,26 @@ describe('pendingQueueV2 scoped refresh reconciliation', () => {
                 pendingDeliveryStatus: 'blocked',
             }),
         ]);
-        let requestCount = 0;
+        const requests: Array<{ path: string; method?: string }> = [];
         await expect(restoreDiscardedPendingMessageV2({
             sessionId,
             pendingId: baseDiagnosticId,
             encryption: await Encryption.create(new Uint8Array(32).fill(19)),
             outboxScope: scope,
-            request: async (_path, init) => {
-                requestCount += 1;
+            isOutboxScopeCurrent: () => true,
+            request: async (path, init) => {
+                requests.push({ path, method: init?.method });
                 return init?.method === 'POST'
                     ? new Response(null, { status: 204 })
                     : Response.json({ pending: [] });
             },
         })).resolves.toBeUndefined();
-        expect(requestCount).toBe(2);
+        expect(requests).toEqual([
+            { path: `/v2/sessions/${sessionId}/pending/${encodeURIComponent(baseDiagnosticId)}/restore`, method: 'POST' },
+            { path: `/v2/sessions/${sessionId}/pending?includeDiscarded=1`, method: 'GET' },
+        ]);
+        expect(storage.getState().sessionPending[sessionId]?.discarded).toEqual([]);
+        expect(storage.getState().sessionPending[sessionId]?.messages).toMatchObject([{ localId, pendingDeliveryStatus: 'blocked' }]);
     });
 
     it.each(['queued', 'discarded'] as const)(

@@ -138,6 +138,24 @@ export function resolveTriageSourcePreparesReviewWorkspaceV1(
   return resolveTriageSourcePrepareReviewWorkspaceOperationV1(targetedContributions, source) !== undefined;
 }
 
+/** Transport availability comes from the same exact admitted source snapshot. */
+export function resolveTriageSourceSessionRelationsV1(
+  targetedContributions: SurfaceContext['targetedContributions'],
+  source: TriageEntryRefV1['source'],
+  role: 'linkSession' | 'readSessionLinks',
+): boolean {
+  return targetedContributions !== undefined && selectTargetedContributionOperation(targetedContributions, {
+    ...triageSourceSelectorV1(source), role,
+  }) !== undefined;
+}
+
+export function hasTriageSourceSessionRelationsV1(targetedContributions: SurfaceContext['targetedContributions']): boolean {
+  return targetedContributions?.points.some((point) => point.protocols.some((protocol) => protocol.contributions.some((contribution) =>
+    resolveTriageSourceSessionRelationsV1(targetedContributions, {
+      pluginId: contribution.contributor.pluginId, localId: contribution.contributor.contributionId,
+    }, 'readSessionLinks')))) ?? false;
+}
+
 /** The exact host-created source handle a selected-PR start must carry. */
 export function resolveTriageSourcePrepareReviewWorkspaceOperationV1(
   targetedContributions: SurfaceContext['targetedContributions'],
@@ -148,6 +166,16 @@ export function resolveTriageSourcePrepareReviewWorkspaceOperationV1(
     ...triageSourceSelectorV1(source),
     role: TRIAGE_PREPARE_REVIEW_WORKSPACE_ROLE_V1,
   });
+}
+
+/** Optional Tasks roles use the same exact admitted-contribution matcher as detail. */
+export function resolveTriageSourceTaskOperationV1(
+  targetedContributions: SurfaceContext['targetedContributions'],
+  source: TriageEntryRefV1['source'],
+  role: 'create' | 'edit' | 'transition' | 'readSessionLinks',
+) {
+  if (targetedContributions === undefined) return undefined;
+  return selectTargetedContributionOperation(targetedContributions, { ...triageSourceSelectorV1(source), role });
 }
 
 /**

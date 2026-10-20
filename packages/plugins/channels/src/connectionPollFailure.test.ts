@@ -122,4 +122,25 @@ describe('Conversation connection poll-failure codec', () => {
       attemptCount: Number.MAX_SAFE_INTEGER + 1,
     })).toBeUndefined();
   });
+
+  it('re-redacts historical Action messages while retaining actionable text and code-only readers', () => {
+    const persisted = readPersistedConversationConnectionPollFailure({
+      phase: 'blocked', attemptCount: 1, retryNotBeforeMs: null,
+      evidence: { kind: 'action', code: 'external_poll_refused',
+        message: 'Reconnect the provider. client_secret=historical-secret; path=C:\\private\\poll-canary',
+      },
+    });
+    if (!persisted) throw new Error('Expected a valid retained poll failure.');
+    const attention = projectConversationConnectionPollFailureAttention(persisted);
+    expect(attention).toMatchObject({ evidence: { message: expect.stringContaining('Reconnect the provider.') } });
+    expect(JSON.stringify(attention)).not.toContain('historical-secret');
+    expect(JSON.stringify(attention)).not.toContain('poll-canary');
+    expect(readConversationConnectionPollFailureAttention(attention)).toEqual(attention);
+    expect(readConversationConnectionPollFailureAttention({ ...attention,
+      evidence: { kind: 'action', code: 'external_poll_refused' },
+    })).toMatchObject({ evidence: { kind: 'action', code: 'external_poll_refused' } });
+    expect(readConversationConnectionPollFailureAttention({ ...attention,
+      evidence: { kind: 'action', code: 'external_poll_refused', message: 42 },
+    })).toBeUndefined();
+  });
 });

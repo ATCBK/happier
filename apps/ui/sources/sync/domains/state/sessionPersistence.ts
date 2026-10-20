@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { isModelMode, isPermissionMode, type ModelMode, type PermissionMode } from '@/sync/domains/permissions/permissionTypes';
@@ -153,9 +153,9 @@ export function saveWorkspaceReviewCommentsDrafts(
 
 export type SessionActionDraftsByAddressKey = Record<string, z.infer<typeof SessionActionDraftSchema>[]>;
 
-const LegacySessionActionDraftSchema = SessionActionDraftSchema.omit({ address: true, accountId: true }).extend({
-    sessionId: z.string().min(1),
-}).strict();
+const LegacySessionActionDraftSchema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(z.omit(SessionActionDraftSchema, { address: true, accountId: true }), {
+    sessionId: z.string().check(z.minLength(1)),
+}));
 const StoredLegacySessionActionDraftSchema = createStoredReadSchema(LegacySessionActionDraftSchema);
 
 export function loadSessionActionDrafts(scope?: ServerAccountScope | null): SessionActionDraftsByAddressKey {

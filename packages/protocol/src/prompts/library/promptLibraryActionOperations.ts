@@ -3,7 +3,7 @@ import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import type { SkillReadInputV1, SkillReadResultV1, SessionSkillReadItemV1 } from './skills/skillReadV1.js';
 import type { SkillUsageRowV1 } from './skills/skillUsageV1.js';
-import { readSkillLockV1, isSkillModifiedV1, encodeSkillRevisionV1, type SkillLockV1 } from './skills/skillLibraryItemV1.js';
+import { readSkillLockV1, isSkillModifiedV1, encodeSkillRevisionV1, isPluginSkillIdV1, type SkillLockV1 } from './skills/skillLibraryItemV1.js';
 import { deriveSkillTrustV1 } from './skills/skillTrustV1.js';
 import { estimateSkillCostV1 } from './skills/skillCostV1.js';
 import type { SkillRuleV1 } from '../../reach/reachRuleV1.js';
@@ -17,7 +17,8 @@ import {
   PromptBundleCreateActionInputV1Schema,
   validatePromptBundleBodyV1AgainstSchemaId,
   readSkillBundleContentV1,
-  readFirstPartySkillContentV1,
+  readReadOnlySkillContentV1,
+  projectPromptBundleActionEntriesV1,
   type PromptBundleBodyV1,
   type PromptBundleEntryV1,
   type PromptBundleCreateActionInputV1,
@@ -30,9 +31,13 @@ import { MemoryDocArtifactHeaderV1Schema, MemoryDocArtifactHeaderV1StoredSchema,
   MEMORY_ARCHIVE_TOPIC_TITLE_V1, MEMORY_ARCHIVE_TOPIC_SUMMARY_V1, projectMemoryDocIndexV1, readMemoryDocTopicV1,
   type MemoryDocBodyV1, type MemoryDocIndexV1, type MemoryFactV1, type MemoryTopicV1 } from './memoryDocV1.js';
 import type { PromptDocArtifactRefV1 } from './promptArtifactRefsV1.js';
-import type { MemoryUpdateInputV1 } from './memoryActionsV1.js';
+import type { MemoryUpdateInputV1, MemoryDuplicateChoiceV1, MemorySemanticMutationResultV1 } from './memoryActionsV1.js';
+import { findMemoryFactCandidatesV1, reviewMemoryFactWriteV1 } from './memoryFactCandidatesV1.js';
 import { redactBugReportSensitiveText } from '../../bugs/reports/redaction.js';
+import type { ReadOnlySkillV1 } from './skills/firstPartySkillsV1.js';
 import type { ArtifactCallerAccessV1 } from '../../artifacts/artifactAccessV1.js';
+import type { CoordinationMessageRefV1 } from '../../discussions/messageRefs.js';
+import type { ArtifactCoarseKindV1 } from '../../artifacts/artifactKindV1.js';
 
 export type PromptLibraryStoredArtifact = Readonly<{
   id: string;
@@ -47,23 +52,28 @@ export type PromptLibraryStoredArtifact = Readonly<{
 export type PromptLibraryArtifactStore = Readonly<{
   organization?: ArtifactFolderActionPortV1;
   /** Header inventory only. Unreadable ranges must not be reported as complete. */
-  list?(options?: Readonly<{ limit?: number; cursor?: string; signal?: AbortSignal }>): Promise<Readonly<{
+  list?(options?: Readonly<{ limit?: number; cursor?: string; coarseKind?: ArtifactCoarseKindV1; signal?: AbortSignal }>): Promise<Readonly<{
     items: readonly Readonly<{ id: string; header: Readonly<Record<string, unknown>> | null; updatedAtMs: number; owned?: boolean }>[];
     coverage: 'complete' | 'partial' | 'unavailable';
     nextCursor?: string;
   }>>;
   read(artifactId: string, options?: Readonly<{ signal?: AbortSignal }>): Promise<PromptLibraryStoredArtifact | null>;
+  /** A transport batch keeps per-identity refusal and not-found semantics in input order. */
+  readMany?(artifactIds: readonly string[], options?: Readonly<{ signal?: AbortSignal }>): Promise<readonly PromiseSettledResult<PromptLibraryStoredArtifact | null>[]>;
   update(input: Readonly<{
     artifactId: string;
     /** The revision returned by the read used to derive this mutation. */
     expectedRevision: PromptLibraryStoredArtifact['revision'];
     header: Readonly<Record<string, unknown>>;
     body: string;
+    /** Server-authorized source admission for a semantic decision write, including opaque E2EE bodies. */
+    memoryDecisionSource?: CoordinationMessageRefV1;
     signal?: AbortSignal;
   }>): Promise<void | Readonly<{ revision: PromptLibraryStoredArtifact['revision'] }>>;
   create?(input: Readonly<{
     header: Readonly<Record<string, unknown>>;
     body: string;
+    memoryDecisionSource?: CoordinationMessageRefV1;
     signal?: AbortSignal;
   }>): Promise<string | Readonly<{ artifactId: string; revision: PromptLibraryStoredArtifact['revision'] }>>;
   delete?(input: Readonly<{ artifactId: string; expectedRevision: PromptLibraryStoredArtifact['revision']; signal?: AbortSignal }>): Promise<void>;
@@ -96,6 +106,7 @@ function parseArtifactBody<T>(body: string | null, parse: (value: unknown) => T 
 export async function readSkillInLibrary(params: Readonly<{
   store: Pick<PromptLibraryArtifactStore, 'read'>;
   request: SkillReadInputV1;
+  pluginSkills?: readonly ReadOnlySkillV1[];
   sessionItems?: readonly SessionSkillReadItemV1[] | null;
   rules?: readonly SkillRuleV1[];
   usage?: SkillUsageRowV1 | null;
@@ -110,7 +121,8 @@ export async function readSkillInLibrary(params: Readonly<{
   if (request.sessionId && !sessionItem) return notFound;
   const skillId = 'skillId' in request ? request.skillId : sessionItem?.skillId;
   if (!skillId) return notFound;
-  const bundled = readFirstPartySkillContentV1(skillId);
+  const bundled = readReadOnlySkillContentV1(skillId, params.pluginSkills);
+  if (!bundled && isPluginSkillIdV1(skillId)) return notFound;
   const artifact = bundled ? null : await params.store.read(skillId, params.signal ? { signal: params.signal } : undefined);
   throwIfAborted(params.signal);
   if (!bundled && (!artifact || artifact.id !== skillId)) return notFound;
@@ -120,11 +132,12 @@ export async function readSkillInLibrary(params: Readonly<{
   if (sessionItem && sessionItem.name !== name) return notFound;
   const file = request.file === undefined ? undefined : body.entries.find(entry => entry.path === request.file);
   if (request.file !== undefined && !file) return notFound;
-  const lock: SkillLockV1 = bundled ? { provenance: { kind: 'first_party' }, updatePolicy: 'manual' } : readSkillLockV1(artifact?.header);
+  const lock: SkillLockV1 = bundled ? { provenance: bundled.provenance, updatePolicy: 'manual' } : readSkillLockV1(artifact?.header);
   const result: SkillReadResultV1 = {
     skillId, name, skillMd,
     revision: bundled ? bundled.digest : encodeSkillRevisionV1(artifact!.revision), provenance: lock.provenance, modified: isSkillModifiedV1(lock, content.digest),
     ...(lock.upstream ? { upstream: lock.upstream } : {}), trust: deriveSkillTrustV1(body.entries), cost: estimateSkillCostV1(skillMd), rules: [...(params.rules ?? [])],
+    ...(request.includeFileContents ? { fileContents: projectPromptBundleActionEntriesV1(body.entries) } : {}),
     files: body.entries.map(entry => ({ path: entry.path, bytes: decodeBase64(entry.contentBase64).length,
       ...(entry.unixMode == null ? {} : { unixMode: entry.unixMode }) })),
     ...(file ? { file: { path: file.path, contentBase64: file.contentBase64, contentKind: file.contentKind,
@@ -205,12 +218,16 @@ export async function readReviewedMemoryDocInLibrary(params: MemoryMutationParam
   return memoryVersion(await readReviewedMemory(params));
 }
 
-async function writeMemory(params: MemoryMutationParams, read: Awaited<ReturnType<typeof readReviewedMemory>>, body: MemoryDocBodyV1) {
+async function writeMemory(params: MemoryMutationParams, read: Awaited<ReturnType<typeof readReviewedMemory>>, body: MemoryDocBodyV1,
+  memoryDecisionSource?: CoordinationMessageRefV1) {
   throwIfAborted(params.signal);
+  let revision: PromptLibraryStoredArtifact['revision'] | undefined;
   try {
-    await params.store.update({ artifactId: read.artifact.id, expectedRevision: params.request.expectedRevision,
+    const written = await params.store.update({ artifactId: read.artifact.id, expectedRevision: params.request.expectedRevision,
       header: read.artifact.header!, body: JSON.stringify(MemoryDocBodyV1Schema.parse(body)),
+      ...(memoryDecisionSource ? { memoryDecisionSource } : {}),
       ...(params.signal ? { signal: params.signal } : {}) });
+    revision = written ? written.revision : undefined;
   } catch (error) {
     if (error && typeof error === 'object' && 'code' in error && error.code === 'version_mismatch') {
       // This is a new access/mode-aware read, never the earlier approved snapshot or an automatic retry.
@@ -219,7 +236,7 @@ async function writeMemory(params: MemoryMutationParams, read: Awaited<ReturnTyp
     }
     throw error;
   }
-  return { ok: true as const, artifactId: read.artifact.id };
+  return { ok: true as const, artifactId: read.artifact.id, ...(revision ? { revision } : {}) };
 }
 
 function appendMemoryFact(body: MemoryDocBodyV1, fact: MemoryFactV1, title?: string): MemoryDocBodyV1 {
@@ -232,10 +249,14 @@ function appendMemoryFact(body: MemoryDocBodyV1, fact: MemoryFactV1, title?: str
 
 type MemoryFactAuthorParams = Readonly<{
   randomId: () => string; nowMs?: () => number; sourceSessionRef: MemoryFactV1['sourceSessionRef'];
+  /** Admitted by the host; never parsed from an Action's input. */
+  decision?: NonNullable<MemoryFactV1['decision']>;
+  approvedBy?: NonNullable<MemoryFactV1['decision']>['approvedBy'];
 }>;
 function authorMemoryFact(params: MemoryFactAuthorParams, request: Readonly<{ text: string; expiresAtMs?: number }>): MemoryFactV1 {
   return { id: params.randomId(), text: redactBugReportSensitiveText(request.text),
     createdAtMs: (params.nowMs ?? Date.now)(), sourceSessionRef: params.sourceSessionRef,
+    ...(params.decision ? { decision: params.decision } : {}),
     ...(request.expiresAtMs === undefined ? {} : { expiresAtMs: request.expiresAtMs }) };
 }
 
@@ -243,64 +264,108 @@ function authorMemoryFact(params: MemoryFactAuthorParams, request: Readonly<{ te
 export async function createMemoryDocInLibrary(params: MemoryFactAuthorParams & Readonly<{
   store: PromptLibraryArtifactStore; request: Readonly<{ title: string; text: string; topic?: string; expiresAtMs?: number }>;
   signal?: AbortSignal;
-}>): Promise<Readonly<{ ok: true; artifactId: string; factId: string }>> {
+}>): Promise<Readonly<{ ok: true; artifactId: string; factId: string; revision?: PromptLibraryStoredArtifact['revision'] }>> {
   throwIfAborted(params.signal);
   if (!params.store.create) throw memoryFailure('memory_doc_create_unavailable');
   const fact = authorMemoryFact(params, params.request);
   const body = MemoryDocBodyV1Schema.parse(appendMemoryFact({ v: 1, index: [], topics: [] }, fact, params.request.topic));
   const header = MemoryDocArtifactHeaderV1Schema.parse({ v: 1, kind: 'memory_doc.v1', title: params.request.title });
   throwIfAborted(params.signal);
-  const created = await params.store.create({ header, body: JSON.stringify(body), ...(params.signal ? { signal: params.signal } : {}) });
+  const created = await params.store.create({ header, body: JSON.stringify(body),
+    ...(params.decision ? { memoryDecisionSource: params.decision.sourceMessageRef } : {}),
+    ...(params.signal ? { signal: params.signal } : {}) });
   const artifactId = typeof created === 'string' ? created : created.artifactId;
-  return { ok: true, artifactId, factId: fact.id };
+  return { ok: true, artifactId, factId: fact.id, ...(typeof created === 'string' ? {} : { revision: created.revision }) };
 }
 
 export async function rememberMemoryFactInLibrary(params: MemoryMutationParams & MemoryFactAuthorParams & Readonly<{
-  request: MemoryDocMutationTargetV1 & Readonly<{ text: string; expiresAtMs?: number }>;
-}>): Promise<Readonly<{ ok: true; artifactId: string; factId: string }>> {
+  request: MemoryDocMutationTargetV1 & Readonly<{ text: string; expiresAtMs?: number; duplicateChoice?: MemoryDuplicateChoiceV1 }>;
+}>) {
   const read = await readReviewedMemory(params);
+  const choice = params.request.duplicateChoice;
+  const review = reviewMemoryFactWriteV1({ body: read.body, target: params.request, text: params.request.text,
+    nowMs: (params.nowMs ?? Date.now)(), duplicateChoice: choice });
+  if (review) return review;
+  if (choice && choice.kind !== 'keep_both') {
+    return updateMemoryFactInLibrary({ ...params, request: { ...params.request, factId: choice.factId,
+      duplicateChoice: choice }, });
+  }
   const fact = authorMemoryFact(params, params.request);
-  const result = await writeMemory(params, read, appendMemoryFact(read.body, fact, params.request.topic));
+  const result = await writeMemory(params, read, appendMemoryFact(read.body, fact, params.request.topic), fact.decision?.sourceMessageRef);
   return { ...result, factId: fact.id };
+}
+
+/** Admission and mutation resolve the same restore source without breaking an existing supersedes link. */
+export function readRestorableMemoryFactV1(body: MemoryDocBodyV1, factId: string): MemoryFactV1 {
+  const original = body.topics.find(topic => topic.title === MEMORY_ARCHIVE_TOPIC_TITLE_V1)?.facts.find(fact => fact.id === factId);
+  if (!original) throw memoryFailure('memory_fact_not_found');
+  if ([...body.index, ...body.topics.flatMap(topic => topic.facts)].some(fact => fact.supersedes === original.id)) {
+    throw memoryFailure('memory_fact_superseded');
+  }
+  return original;
 }
 
 export async function updateMemoryFactInLibrary(params: MemoryMutationParams & MemoryFactAuthorParams & Readonly<{
   request: MemoryUpdateInputV1;
-}>): Promise<Readonly<{ ok: true; artifactId: string; factId: string }>> {
+}>): Promise<MemorySemanticMutationResultV1> {
   const read = await readReviewedMemory(params);
   if ('restore' in params.request) {
     const request = params.request;
     if (request.restoreTopic === MEMORY_ARCHIVE_TOPIC_TITLE_V1) throw memoryFailure('memory_restore_destination_invalid');
-    const archived = read.body.topics.find(topic => topic.title === MEMORY_ARCHIVE_TOPIC_TITLE_V1);
-    const original = archived?.facts.find(fact => fact.id === request.factId);
-    if (!original) throw memoryFailure('memory_fact_not_found');
-    const facts = [...read.body.index, ...read.body.topics.flatMap(topic => topic.facts)];
-    if (facts.some(fact => fact.supersedes === original.id)) throw memoryFailure('memory_fact_superseded');
+    const original = readRestorableMemoryFactV1(read.body, request.factId);
+    const review = reviewMemoryFactWriteV1({ body: read.body, target: request, text: original.text,
+      nowMs: (params.nowMs ?? Date.now)(), duplicateChoice: request.duplicateChoice });
+    if (review) return review;
+    if (request.duplicateChoice && request.duplicateChoice.kind !== 'keep_both') {
+      return updateMemoryFactInLibrary({ ...params,
+        ...(original.decision ? { decision: original.decision } : {}),
+        request: { ref: request.ref, expectedRevision: request.expectedRevision, factId: request.duplicateChoice.factId,
+          text: original.text, expiresAtMs: original.expiresAtMs ?? null, topic: request.restoreTopic,
+          duplicateChoice: request.duplicateChoice } });
+    }
     const body = { ...read.body, topics: read.body.topics.map(topic => topic.title === MEMORY_ARCHIVE_TOPIC_TITLE_V1
       ? { ...topic, facts: topic.facts.filter(fact => fact.id !== original.id) } : topic) };
-    const result = await writeMemory(params, read, appendMemoryFact(body, original, request.restoreTopic));
+    const result = await writeMemory(params, read, appendMemoryFact(body, original, request.restoreTopic), original.decision?.sourceMessageRef);
     return { ...result, factId: original.id };
   }
-  const previous = read.body.index.find(fact => fact.id === params.request.factId)
-    ?? read.body.topics.filter(topic => topic.title !== MEMORY_ARCHIVE_TOPIC_TITLE_V1).flatMap(topic => topic.facts).find(fact => fact.id === params.request.factId);
+  const activeFacts = [...read.body.index, ...read.body.topics.filter(topic => topic.title !== MEMORY_ARCHIVE_TOPIC_TITLE_V1).flatMap(topic => topic.facts)];
+  const previous = activeFacts.find(fact => fact.id === params.request.factId);
   if (!previous) throw memoryFailure('memory_fact_not_found');
-  const expiresAtMs = params.request.expiresAtMs === undefined ? previous.expiresAtMs : params.request.expiresAtMs;
-  const next: MemoryFactV1 = { id: params.randomId(), text: redactBugReportSensitiveText(params.request.text),
-    createdAtMs: (params.nowMs ?? Date.now)(), sourceSessionRef: params.sourceSessionRef, supersedes: previous.id,
+  const review = reviewMemoryFactWriteV1({ body: read.body, target: params.request, text: params.request.text,
+    nowMs: (params.nowMs ?? Date.now)(), duplicateChoice: params.request.duplicateChoice, excludeFactId: previous.id });
+  if (review) return review;
+  const choice = params.request.duplicateChoice;
+  const selectedId = choice && choice.kind !== 'keep_both' ? choice.factId : previous.id;
+  const selected = activeFacts.find(fact => fact.id === selectedId);
+  if (!selected) throw memoryFailure('memory_duplicate_choice_invalid');
+  const candidate = selected.id !== previous.id ? findMemoryFactCandidatesV1(read.body, redactBugReportSensitiveText(params.request.text),
+    (params.nowMs ?? Date.now)(), previous.id).find(fact => fact.factId === selected.id) : undefined;
+  if (selected.id !== previous.id && !candidate) throw memoryFailure('memory_duplicate_choice_invalid');
+  const updatingCandidate = choice?.kind === 'update' && selected.id !== previous.id;
+  const target = updatingCandidate ? selected : previous;
+  const expiresAtMs = params.request.expiresAtMs === undefined ? target.expiresAtMs : params.request.expiresAtMs;
+  const text = redactBugReportSensitiveText(params.request.text);
+  const next: MemoryFactV1 = { id: params.randomId(), text,
+    createdAtMs: (params.nowMs ?? Date.now)(), sourceSessionRef: params.sourceSessionRef, supersedes: choice?.kind === 'replace' ? selected.id : target.id,
+    // New wording cannot inherit a person's approval. Keep the admitted source/reason and historical approval in archive.
+    ...(params.decision ? { decision: params.decision } : target.decision && choice?.kind !== 'replace'
+      ? { decision: { ...target.decision, approvedBy: text === target.text ? target.decision.approvedBy : params.approvedBy ?? null } } : {}),
     ...(expiresAtMs == null ? {} : { expiresAtMs }) };
-  const destination = params.request.topic;
+  const destination = updatingCandidate ? candidate?.topic : params.request.topic;
+  // Each archived fact retains its own history; Update B does not make A replace B.
+  const archived = selected.id === previous.id ? [previous] : updatingCandidate ? [selected, previous] : [previous, selected];
   let replaced = false;
   const replace = (facts: readonly MemoryFactV1[], title?: string) => facts.flatMap(fact => {
-    if (fact.id !== previous.id) return [fact];
-    if (title !== destination) return [];
+    if (!archived.some(original => original.id === fact.id)) return [fact];
+    if (fact.id !== target.id || title !== destination) return [];
     replaced = true;
     return [next];
   });
   let body: MemoryDocBodyV1 = { ...read.body, index: replace(read.body.index),
     topics: read.body.topics.map(topic => ({ ...topic, facts: replace(topic.facts, topic.title) })) };
   if (!replaced) body = appendMemoryFact(body, next, destination);
-  body = appendMemoryFact(body, previous, MEMORY_ARCHIVE_TOPIC_TITLE_V1);
-  const result = await writeMemory(params, read, body);
+  for (const original of archived) body = appendMemoryFact(body, original, MEMORY_ARCHIVE_TOPIC_TITLE_V1);
+  const result = await writeMemory(params, read, body, next.decision?.sourceMessageRef);
   return { ...result, factId: next.id };
 }
 

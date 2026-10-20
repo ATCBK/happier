@@ -66,6 +66,27 @@ describe('resolveMobileBottomChromeModel', () => {
         }))).toEqual({ kind: 'hidden' });
     });
 
+    it('hides cockpit chrome on the pushed SCM reading and keeps it on every other details target', () => {
+        expect(resolveMobileBottomChromeModel(createChromeInput({
+            pathname: '/session/session-1/details',
+            mobileWorkspaceExperience: 'cockpit',
+            sessionDetailsKind: 'scmReview',
+        }))).toEqual({ kind: 'hidden' });
+        for (const sessionDetailsKind of ['file', 'commit', 'scmStash', 'scmPullRequest', null]) {
+            expect(resolveMobileBottomChromeModel(createChromeInput({
+                pathname: '/session/session-1/details',
+                mobileWorkspaceExperience: 'cockpit',
+                sessionDetailsKind,
+            }))).toMatchObject({ kind: 'sessionCockpit', sessionId: 'session-1' });
+        }
+        // The reading's own pane on a session root/files route keeps the cockpit.
+        expect(resolveMobileBottomChromeModel(createChromeInput({
+            pathname: '/session/session-1/files',
+            mobileWorkspaceExperience: 'cockpit',
+            sessionDetailsKind: 'scmReview',
+        }))).toMatchObject({ kind: 'sessionCockpit', surface: 'browse' });
+    });
+
     it('uses persisted cockpit state for the session root route', () => {
         expect(resolveMobileBottomChromeModel(createChromeInput({
             pathname: '/session/session-1',

@@ -6,7 +6,10 @@
   "license": "MIT",
   "repository": "happier-dev/happier",
   "type": "module",
-  "sideEffects": false,
+  "sideEffects": [
+    "./src/ui/configureZodLocale.ts",
+    "./dist/ui/configureZodLocale.js"
+  ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
@@ -430,7 +433,7 @@
     "examples/public-authoring/ui/reviewClientActions.ts",
     "examples/public-authoring/ui/reviewOpenableContent.ts",
     "examples/public-authoring/ui/reviewPanel.css",
-    "examples/public-authoring/ui/reviewPanel.native.tsx",
+    "examples/public-authoring/ui/reviewPanelPortable.tsx",
     "examples/public-authoring/ui/reviewPanel.web.tsx",
     "examples/public-authoring/usageCoach.ts",
     "examples/public-authoring/voiceProvider.ts",
@@ -563,6 +566,6 @@
     "@noble/hashes": "^1.8.0",
     "@types/node": ">=20",
     "esbuild": "0.27.2",
-    "zod": "4.3.6"
+    "zod": "4.6.7"
   }
 }

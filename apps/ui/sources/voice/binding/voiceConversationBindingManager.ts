@@ -54,6 +54,7 @@ export function createVoiceSessionBindingManager(deps: Readonly<{
         controlSessionId: string;
         requestedTargetSessionId?: string | null;
         requestedTargetServerId?: string | null;
+        signal?: AbortSignal;
     }>) => Promise<VoiceConversationBindingResolution | null>;
     resolveExistingBindingByConversationSessionId?: (
         conversationSessionId: string,
@@ -82,6 +83,7 @@ export function createVoiceSessionBindingManager(deps: Readonly<{
         controlSessionId: string;
         requestedTargetSessionId?: string | null;
         requestedTargetServerId?: string | null;
+        signal?: AbortSignal;
     }>): Promise<VoiceSessionBinding | null> => {
         const adapterId = normalizeNonEmptyString(params.adapterId);
         const controlSessionId = normalizeNonEmptyString(params.controlSessionId);
@@ -94,7 +96,9 @@ export function createVoiceSessionBindingManager(deps: Readonly<{
             controlSessionId,
             requestedTargetSessionId,
             requestedTargetServerId: params.requestedTargetServerId,
+            signal: params.signal,
         });
+        params.signal?.throwIfAborted();
         if (!resolution) return null;
         if (existing && hasSameBindingSemantics(existing, adapterId, resolution)) {
             // An exact synced binding is discovery, not local admission, until this
@@ -115,6 +119,7 @@ export function createVoiceSessionBindingManager(deps: Readonly<{
         };
 
         await Promise.resolve(persistBinding(nextBinding));
+        params.signal?.throwIfAborted();
         store.getState().bind(nextBinding);
 
         if (

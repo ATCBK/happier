@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { describe, expect, it } from 'vitest';
+import { buildHappierBaseSystemPromptV1 } from '@happier-dev/protocol/prompts/systemPromptBaseV1';
 
 import {
   discoverNewAntigravityConversationId,
@@ -68,7 +69,7 @@ describe('Antigravity cliPrint conversation store', () => {
       JSON.stringify({
         step_index: 0,
         type: 'USER_INPUT',
-        content: '<USER_REQUEST>\nReview   the\ncandidate   titles\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nnoise\n</ADDITIONAL_METADATA>',
+        content: `<USER_REQUEST>\n${buildHappierBaseSystemPromptV1()}\n\nReview   the\ncandidate   titles\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nnoise\n</ADDITIONAL_METADATA>`,
       }),
       JSON.stringify({ step_index: 1, type: 'PLANNER_RESPONSE', text: 'later' }),
     ]);

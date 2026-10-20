@@ -1,3 +1,6 @@
+import type { RequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionContext';
+import { requesterActionContext } from '@/daemon/sessionEncryption/requesterAccountActionContext';
+
 import { randomBytes } from 'node:crypto';
 import tweetnacl from 'tweetnacl';
 import { ExternalActionExecutionAuthorizationV1Schema,
@@ -5,13 +8,14 @@ import { ExternalActionExecutionAuthorizationV1Schema,
   type ExternalActionExecutionAuthorizationBindingV1,
   type ExternalActionRequesterAccountProjectionV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { createProjectAccountRowCipherV1 } from '@happier-dev/protocol/projects/projectAccountRowCipherV1';
-import { acquireRequesterAccountEncryptionCurrentness, readRequesterAccountEncryptionCurrentness, sameRequesterAccountEncryptionCurrentness, isRequesterAccountEncryptionCurrentnessObserved } from './requesterAccountEncryptionCurrentness';
-import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { acquireRequesterAccountEncryptionCurrentness, readRequesterAccountEncryptionCurrentness, sameRequesterAccountEncryptionCurrentness, isRequesterAccountEncryptionCurrentnessObserved } from '@/api/client/accountEncryptionCurrentnessObservation';
+import { normalizeServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
-import type { AdmittedRequesterSessionBootstrap } from './requesterSessionCredentials';
+import { rethrowRequesterHomeReadFailure } from "@/daemon/sessionEncryption/requesterCurrentness";
+import { type AdmittedRequesterSessionBootstrap } from "./requesterSessionCredentials";
 import { bindRequesterSessionCredentialScope, decodeStoredCredentials, encodeStoredCredentials, type StoredCredentials } from '@/persistence';
 import { fetchAccountProfile } from '@/api/accountProfile';
-import { bootstrapAccountSettingsContext, type AccountSettingsContext } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
+import { bootstrapAccountSettingsContext } from "@/settings/accountSettings/bootstrapAccountSettingsContext";
 import { resolvePublishedMachineEncryptionContext } from '@/api/machine/machineDataEncryptionKey';
 import type { AccountScopedCryptoMaterial } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
@@ -21,13 +25,16 @@ import { openExternalActionRequesterAccountContextV1, sealExternalActionRequeste
 import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import type { PrepareExternalActionRequesterAccountContext, ResolveExternalActionEncryption } from '../externalActions/executeExternalAction';
-import { createInvocationSavedSecretOperationContextV1, type SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1, type SavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
+import { createRequesterAccountSettingsPublication } from '@/settings/accountSettings/requesterAccountSettingsPublication';
 import { projectExternalActionRequesterHttpAuthorization } from '@/api/externalActionExecutionAuthorization';
 import type { RpcHandlerContext } from '@/api/rpc/types';
 import { readInstallationIdentityIfExistsSync } from '@/daemon/identity/store';
 import { decodeBase64 } from '@/api/encryption';
 import type { CurrentMachineExecutionOriginContext } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
 import { verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externalActionExecutionAuthorization';
+import { refuseExternalActionPhase, runTracedExternalActionStage } from '../externalActions/externalActionPhase';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
 export type RequesterAccountActionAuthorizationInput = Readonly<{
   authorization: ExternalActionExecutionAuthorizationV1;
@@ -72,25 +79,30 @@ async function projectAdmittedAccountCustody(
   const parsed = ExternalActionExecutionAuthorizationV1Schema.safeParse(input.authorization);
   const { bootstrap } = input;
   const stamp = bootstrap.attribution;
-  if (!parsed.success) return null;
+  const refused = (phase: string) => { refuseExternalActionPhase(phase, stamp.machineId); return null; };
+  if (!parsed.success) return refused('requester_projection_root');
+  let phase = 'requester_projection_currentness';
   try {
-    if (!await bootstrap.isCurrent() || input.signal?.aborted) return null;
+    if (!await bootstrap.isCurrent() || input.signal?.aborted) return refused('requester_projection_custody');
     const currentness = await readRequesterAccountEncryptionCurrentness({ accountId: stamp.accountId, token: bootstrap.credentials.token,
       serverBaseUrl: bootstrap.serverHttpBaseUrl, ...(input.signal ? { signal: input.signal } : {}) });
     const encryption = bootstrap.credentials.encryption;
     if (parsed.data.binding.accountEncryptionMode !== undefined
       && parsed.data.binding.accountEncryptionMode !== currentness.mode
       || currentness.mode === 'e2ee' && !encryption
-      || !await bootstrap.isCurrent() || input.signal?.aborted) return null;
+      || !await bootstrap.isCurrent() || input.signal?.aborted) return refused('requester_projection_mode');
     const material: AccountScopedCryptoMaterial | null = currentness.mode === 'plain' ? null : encryption?.type === 'legacy'
         ? { type: 'legacy', secret: new Uint8Array(encryption.secret) }
         : encryption ? { type: 'dataKey', machineKey: new Uint8Array(encryption.machineKey) } : null;
+    phase = 'requester_projection_cipher';
     const cipher = createProjectAccountRowCipherV1({ mode: currentness.mode,
       material,
       randomBytes: length => new Uint8Array(randomBytes(length)) });
     const isCurrent = async (): Promise<boolean> => {
       try {
-        if (input.signal?.aborted || !isCustodyLive()) return false;
+        if (input.signal?.aborted || !isCustodyLive()
+          || !isRequesterAccountEncryptionCurrentnessObserved({ accountId: stamp.accountId,
+            token: bootstrap.credentials.token, serverBaseUrl: bootstrap.serverHttpBaseUrl }, currentness)) return false;
         const next = await readRequesterAccountEncryptionCurrentness({ accountId: stamp.accountId, token: bootstrap.credentials.token,
           serverBaseUrl: bootstrap.serverHttpBaseUrl, ...(input.signal ? { signal: input.signal } : {}) });
         // Account seq also advances for unrelated activity; encryption custody follows its own mode/key transition.
@@ -101,9 +113,10 @@ async function projectAdmittedAccountCustody(
           && !input.signal?.aborted && isCustodyLive()
           && isRequesterAccountEncryptionCurrentnessObserved({ accountId: stamp.accountId,
             token: bootstrap.credentials.token, serverBaseUrl: bootstrap.serverHttpBaseUrl }, currentness);
-      } catch { return false; }
+      } catch (error) { refuseExternalActionPhase('requester_projection_currentness', stamp.machineId, error); rethrowRequesterHomeReadFailure(error); return false; }
     };
     // Loaded only when a real admitted invocation asks for private Account ports.
+    phase = 'requester_projection_ports';
     const { createCredentialedAccountArtifactStore } = await import('@/api/artifacts/accountArtifactStore');
     const artifacts = createCredentialedAccountArtifactStore(bootstrap.credentials);
     const { createProjectSetupTrustRowCipher } = await import('@/workspaces/projectSetup/projectSetupTrust');
@@ -123,7 +136,7 @@ async function projectAdmittedAccountCustody(
             credentials: { ...encodeStoredCredentials(bootstrap.credentials), token: bootstrap.credentials.token },
             randomBytes: length => new Uint8Array(randomBytes(length)) });
           return await isCurrent() ? sealed : null;
-        } catch { return null; }
+        } catch (error) { refuseExternalActionPhase('requester_custody_seal', stamp.machineId, error); rethrowRequesterHomeReadFailure(error); return null; }
       },
       resolveMachineContentEncryptionContext: row => {
         const context = resolvePublishedMachineEncryptionContext({ credentials: bootstrap.credentials,
@@ -140,7 +153,7 @@ async function projectAdmittedAccountCustody(
           const workspace = await readOwnSessionMachineWorkspace({ ...request, credentials: bootstrap.credentials,
             serverHttpBaseUrl: bootstrap.serverHttpBaseUrl });
           return request.signal?.aborted || !await isCurrent() ? null : workspace;
-        } catch { return null; }
+        } catch (error) { refuseExternalActionPhase('requester_workspace_read', stamp.machineId, error); return null; }
       },
       readArtifact: async (ref, options) => {
         if (!await isServerProfileHomeIdentity(stamp.serverId, ref.serverId) || options?.signal?.aborted || !await isCurrent()) return null;
@@ -152,7 +165,7 @@ async function projectAdmittedAccountCustody(
           const promptLibraryArtifact = projectAccountArtifactToPromptLibraryStoredArtifact(artifact);
           return { artifactId: artifact.artifactId, header: artifact.header,
             ...(promptLibraryArtifact ? { promptLibraryArtifact } : {}) };
-        } catch { return null; }
+        } catch (error) { refuseExternalActionPhase('requester_artifact_read', stamp.machineId, error); return null; }
       },
     });
     const carrier: ExternalActionExecutionAuthorizationV1 = { ...parsed.data };
@@ -166,7 +179,7 @@ async function projectAdmittedAccountCustody(
     // logs, or RPC forwarding. Strict wire parsing also drops this local facet.
     Object.defineProperty(carrier, 'requesterAccountProjection', { value: projection, enumerable: false });
     return Object.freeze(carrier);
-  } catch { return null; }
+  } catch (error) { refuseExternalActionPhase(phase, stamp.machineId, error); rethrowRequesterHomeReadFailure(error); return null; }
 }
 
 /** Consumes already-admitted ports at the exact installed receiver; never opens installed credentials. */
@@ -184,10 +197,21 @@ export async function resolveAdmittedRequesterAccountReadRuntime(input: Readonly
   const authorization = ingress.callerInputAuthorization;
   const account = authorization?.requesterAccountProjection;
   const http = authorization?.requesterHttpProjection;
+  const packet = ingress.workspaceSyncSourceExecution;
+  const forwardedMove = (authorization?.binding.actionId === 'projects.service.relocate'
+    || authorization?.binding.actionId === 'discussion.second_opinion.start'
+      && packet?.externalActionExecution.effectActionId === 'session.spawn_new'
+      && (packet.method === `${input.machineId}:${RPC_METHODS.SESSION_SPAWN_NEW}`
+        || packet.method === `${input.machineId}:${RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT}`)) && packet?.originalActionEnvelope
+    && ingress.originalActionEnvelope && sameStrictJsonValue(packet.originalActionEnvelope, ingress.originalActionEnvelope)
+    && packet.externalActionExecution.authorization.token === authorization.token
+    && sameStrictJsonValue(packet.externalActionExecution.authorization.binding, authorization.binding)
+    && packet.method.startsWith(`${input.machineId}:`);
   if (!admission || !authorization || !account || !http || !ingress.verifyMachineAdmissionCurrent
     || admission.machineId !== input.machineId || admission.installationId !== input.installationId
-    || authorization.binding.machineId !== input.machineId || authorization.binding.installationId !== input.installationId
-    || authorization.binding.accountId !== admission.actorAccountId || authorization.binding.custodianAccountId !== admission.custodianAccountId
+    || !forwardedMove && (authorization.binding.machineId !== input.machineId || authorization.binding.installationId !== input.installationId
+        || authorization.binding.custodianAccountId !== admission.custodianAccountId)
+    || authorization.binding.accountId !== admission.actorAccountId
     || account.accountId !== admission.actorAccountId || http.accountId !== account.accountId
     || account.serverId !== input.serverId || http.serverId !== input.serverId
     || http.serverIdentityId !== authorization.binding.serverIdentityId
@@ -197,34 +221,10 @@ export async function resolveAdmittedRequesterAccountReadRuntime(input: Readonly
     try { return !ingress.signal.aborted && await input.isInstalledCurrent()
       && await ingress.verifyMachineAdmissionCurrent!() && await account.isCurrent() && await http.isCurrent()
       && !ingress.signal.aborted && await input.isInstalledCurrent(); }
-    catch { return false; }
+    catch (error) { refuseExternalActionPhase('requester_read_runtime_currentness', input.machineId, error); return false; }
   };
   return await isCurrent() ? { serverId: input.serverId, machineId: input.machineId, accountId: account.accountId,
     accountAuthorization: authorization, serverHttpBaseUrl: http.serverHttpBaseUrl, isCurrent } : null;
-}
-
-/** Finite Account custody at an admitted ingress, never a Session or a credential store. */
-export type RequesterAccountActionContext = Readonly<{
-  invocation?: ExternalActionRequesterInvocationV1;
-  credentials: StoredCredentials;
-  accountSettingsContext: AccountSettingsContext;
-  savedSecretOperationContext: SavedSecretOperationContextV1;
-  authorization: ExternalActionExecutionAuthorizationV1;
-  serverHttpBaseUrl: string;
-  resolveEncryption: ResolveExternalActionEncryption;
-  isCurrent(): Promise<boolean>;
-  refreshAccountSettings(signal?: AbortSignal): Promise<boolean>;
-  retain(): () => Promise<void>;
-  dispose(): Promise<void>;
-}>;
-
-const requesterActionContext = Symbol('admittedRequesterAccountActionContext');
-
-/** Host-local custody facet; strict parsing/JSON forwarding cannot carry credentials or settings. */
-export function readRequesterAccountActionContext(authorization?: ExternalActionExecutionAuthorizationV1): RequesterAccountActionContext | null {
-  const projection: (ExternalActionRequesterAccountProjectionV1 & { [requesterActionContext]?: RequesterAccountActionContext }) | undefined
-    = authorization?.requesterAccountProjection;
-  return projection?.[requesterActionContext] ?? null;
 }
 
 export async function admitRequesterAccountActionContext(input: Readonly<{
@@ -235,78 +235,85 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
   serverIdentityId: string;
   serverHttpBaseUrl: string;
   isCurrent(): Promise<boolean>;
+  /** Supplied by the installed owner after root admission; never a transported fact. */
+  isCustodyCurrent?: () => Promise<boolean>;
+  /** Transferred only after successful admission; runs at final retained retirement. */
+  onRetire?: () => Promise<void>;
   signal?: AbortSignal;
 }>): Promise<RequesterAccountActionContext | null> {
   const parsed = ExternalActionExecutionAuthorizationV1Schema.safeParse(input.authorization);
   if (!parsed.success || parsed.data.binding.serverIdentityId !== input.serverIdentityId
     || input.signal?.aborted || !await input.isCurrent()) return null;
-  const observation = acquireRequesterAccountEncryptionCurrentness({ accountId: parsed.data.binding.accountId,
-    token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl });
+  let observation: ReturnType<typeof acquireRequesterAccountEncryptionCurrentness> | undefined;
   let admitted = false;
   let live = true;
   let references = 1;
   let ingressReleased = false;
-  const release = async () => { if (--references === 0) { live = false; await observation.dispose(); } };
+  let settingsPublication: ReturnType<typeof createRequesterAccountSettingsPublication> | undefined;
+  let savedSecrets: SavedSecretOperationContextV1 | undefined;
+  const release = async () => { if (--references === 0) { live = false;
+    try { settingsPublication?.dispose(); await savedSecrets?.isCurrent(); await observation?.dispose(); }
+    finally { await input.onRetire?.(); } } };
   const retain = () => {
     if (!live) throw new Error('requester_account_context_retired');
     references += 1;
     let released = false;
     return async () => { if (!released) { released = true; await release(); } };
   };
-  const isCurrent = async () => live && !input.signal?.aborted && await input.isCurrent();
+  const isCurrent = async () => live && !input.signal?.aborted
+    && await (input.isCustodyCurrent ?? input.isCurrent)() && live && !input.signal?.aborted;
+  let phase = 'requester_profile';
+  const refused = () => { refuseExternalActionPhase(phase, parsed.data.binding.machineId); return null; };
   try {
-    const [profile, currentness] = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => Promise.all([
-      fetchAccountProfile({ token: input.credentials.token, ...(input.signal ? { signal: input.signal } : {}) }),
-      readRequesterAccountEncryptionCurrentness({ accountId: parsed.data.binding.accountId, token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl,
-        ...(input.signal ? { signal: input.signal } : {}) }),
-    ]));
-    if (profile.id !== parsed.data.binding.accountId || parsed.data.binding.accountEncryptionMode !== currentness.mode
+    const trace = <T>(stage: string, operation: () => T | Promise<T>) => runTracedExternalActionStage(
+      parsed.data.binding.actionId, parsed.data.binding.requestId, stage, operation);
+    const profile = await trace('requester.profile', () => runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () =>
+      fetchAccountProfile({ token: input.credentials.token, ...(input.signal ? { signal: input.signal } : {}) })));
+    if (profile.id !== parsed.data.binding.accountId || input.signal?.aborted) return refused();
+    phase = 'requester_encryption_currentness';
+    observation = acquireRequesterAccountEncryptionCurrentness({ accountId: profile.id,
+      token: input.credentials.token, serverBaseUrl: input.serverHttpBaseUrl });
+    const currentness = await trace('requester.encryption_currentness', () => observation!.read(input.signal));
+    phase = 'requester_account_mode';
+    if (parsed.data.binding.accountEncryptionMode !== currentness.mode
       || (currentness.mode === 'plain' ? input.credentials.encryption !== null : input.credentials.encryption === null)
-      || !await isCurrent()) return null;
+      || !await isCurrent()) return refused();
+    phase = 'requester_content_key';
     if (currentness.mode === 'e2ee' && currentness.contentKeyFingerprint && input.credentials.encryption) {
       const encryption = input.credentials.encryption;
       const key = encryption.type === 'legacy' ? deriveAccountMachineKeyFromRecoverySecret(encryption.secret) : encryption.machineKey;
-      if (computeAccountEncryptionMigrateKeyFingerprintV1(tweetnacl.box.keyPair.fromSecretKey(key).publicKey) !== currentness.contentKeyFingerprint) return null;
+      if (computeAccountEncryptionMigrateKeyFingerprintV1(tweetnacl.box.keyPair.fromSecretKey(key).publicKey) !== currentness.contentKeyFingerprint) return refused();
     }
     bindRequesterSessionCredentialScope(input.credentials, { serverId: input.serverId, serverHttpBaseUrl: input.serverHttpBaseUrl });
-    const accountSettingsContext = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => bootstrapAccountSettingsContext({
+    phase = 'requester_settings';
+    const accountSettingsContext = await trace('requester.settings', () => runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => bootstrapAccountSettingsContext({
       credentials: input.credentials, mode: 'blocking', refresh: 'force', publication: 'invocation',
-      honorAccountSettingsModeEnv: false, minSettingsVersion: currentness.settingsVersion, shouldCommit: () => live && !input.signal?.aborted,
-    }));
-    if (accountSettingsContext.source !== 'network' || !await isCurrent()) return null;
+      expectedAccountEncryptionMode: currentness.mode, honorAccountSettingsModeEnv: false,
+      minSettingsVersion: currentness.settingsVersion, shouldCommit: () => live && !input.signal?.aborted,
+    })));
+    if (accountSettingsContext.source !== 'network' || !await isCurrent()) return refused();
     const { requesterAccountContext: _sealed, managedFiniteWake, ...root } = parsed.data;
     const wakeFacts = managedFiniteWake ? (() => {
       const { requesterAccountContext: _controllerSealed, ...facts } = managedFiniteWake;
       return facts;
     })() : undefined;
     const wire = { ...root, ...(wakeFacts ? { managedFiniteWake: wakeFacts } : {}) };
-    const authorization = await projectAdmittedAccountCustody({ authorization: wire,
+    phase = 'requester_account_projection';
+    const authorization = await trace('requester.account_projection', () => projectAdmittedAccountCustody({ authorization: wire,
       ...(input.invocation ? { invocation: input.invocation } : {}),
       serverIdentityId: input.serverIdentityId, bootstrap: {
       credentials: input.credentials, serverHttpBaseUrl: input.serverHttpBaseUrl, isCurrent,
       attribution: { serverId: input.serverId, accountId: profile.id, machineId: wire.binding.machineId,
         installationId: wire.binding.installationId },
-    }, ...(input.signal ? { signal: input.signal } : {}) }, () => live);
-    if (!authorization || !await isCurrent()) return null;
+    }, ...(input.signal ? { signal: input.signal } : {}) }, () => live));
+    if (!authorization || !await isCurrent()) return refused();
+    phase = 'requester_saved_secret_context';
     const savedSecretOperationContext = createInvocationSavedSecretOperationContextV1({ credentials: input.credentials,
       snapshot: accountSettingsContext, serverHttpBaseUrl: input.serverHttpBaseUrl,
       isCurrent: authorization.requesterAccountProjection!.isCurrent });
-    const refreshAccountSettings = async (signal?: AbortSignal): Promise<boolean> => {
-      try {
-        if (signal?.aborted || !await authorization.requesterAccountProjection!.isCurrent()) return false;
-        const previous = savedSecretOperationContext.readSnapshot();
-        if (!previous) return false;
-        const next = await runWithServerHttpBaseUrl(input.serverHttpBaseUrl, () => bootstrapAccountSettingsContext({
-          credentials: input.credentials, mode: 'blocking', refresh: 'force', publication: 'invocation',
-          honorAccountSettingsModeEnv: false, minSettingsVersion: previous.settingsVersion,
-          shouldCommit: () => live && !input.signal?.aborted && !signal?.aborted,
-        }));
-        if (next.source !== 'network' || signal?.aborted
-          || !await authorization.requesterAccountProjection!.isCurrent()) return false;
-        return await savedSecretOperationContext.replaceAccountSettings(next)
-          && !signal?.aborted && await authorization.requesterAccountProjection!.isCurrent();
-      } catch { return false; }
-    };
+    savedSecrets = savedSecretOperationContext;
+    settingsPublication = createRequesterAccountSettingsPublication({ observation, currentness, operationContext: savedSecretOperationContext });
+    const refreshAccountSettings = settingsPublication.ensureCurrent;
     const resolveEncryption: ResolveExternalActionEncryption = async signal => {
       if (signal?.aborted || !await authorization.requesterAccountProjection!.isCurrent() || !input.credentials.encryption) return null;
       const encryption = input.credentials.encryption;
@@ -326,7 +333,10 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
       authorization: carrier, resolveEncryption,
       refreshAccountSettings,
       serverHttpBaseUrl: input.serverHttpBaseUrl,
-      isCurrent: authorization.requesterAccountProjection!.isCurrent,
+      isCurrent: input.isCustodyCurrent ? async () => await authorization.requesterAccountProjection!.isCurrent()
+        && await input.isCurrent() && await authorization.requesterAccountProjection!.isCurrent()
+        : authorization.requesterAccountProjection!.isCurrent,
+      ...(input.isCustodyCurrent ? { isCustodyCurrent: authorization.requesterAccountProjection!.isCurrent } : {}),
       retain,
       dispose: async () => { if (!ingressReleased) { ingressReleased = true; await release(); } },
     });
@@ -335,8 +345,12 @@ export async function admitRequesterAccountActionContext(input: Readonly<{
     Object.freeze(carrier);
     admitted = true;
     return context;
-  } catch { return null; }
-  finally { if (!admitted) { live = false; await observation.dispose(); } }
+  } catch (error) {
+    refuseExternalActionPhase(phase, parsed.data.binding.machineId, error);
+    rethrowRequesterHomeReadFailure(error);
+    return null;
+  }
+  finally { if (!admitted) { live = false; settingsPublication?.dispose(); await observation?.dispose(); } }
 }
 
 /** Original own custody excludes delegated Session/Workflow requests and foreign Accounts. */
@@ -347,6 +361,20 @@ export function isOriginalOwnAccountActionCustody(binding: ExternalActionExecuti
     && binding.accountId === binding.custodianAccountId;
 }
 
+/** An original input may reuse only the custody already admitted for its exact Session. */
+export function isOriginalSessionInputAccountActionCustody(binding: ExternalActionExecutionAuthorizationBindingV1): boolean {
+  return 'authentication' in binding
+    && (binding.authentication.kind === 'account' || binding.authentication.kind === 'terminal')
+    && !binding.sessionActionOrigin && !binding.sessionActionSource && !binding.workflowActionOrigin
+    && !binding.managedContinuation && !binding.handoffContinuation && !binding.handoffPreflight
+    && binding.actionId === 'session.message.send' && binding.target.kind === 'session';
+}
+
+type RequesterSessionInputCustody = Pick<AdmittedRequesterSessionBootstrap,
+  'credentials' | 'attribution' | 'serverHttpBaseUrl' | 'getBoundSessionId' | 'isCurrent'> & Readonly<{
+    release(): Promise<void>;
+  }>;
+
 /** One installed ingress for both existing Action and Machine-RPC authorization carriers. */
 export async function prepareInstalledRequesterAccountActionContext(input: Readonly<{
   authorization: ExternalActionExecutionAuthorizationV1;
@@ -355,27 +383,75 @@ export async function prepareInstalledRequesterAccountActionContext(input: Reado
   serverId: string;
   serverHttpBaseUrl: string;
   ownCredentials?: StoredCredentials;
+  /** Existing installed Session owner; never resolves custody by Account alone. */
+  resolveRequesterSessionBootstrap?: (sessionId: string, attribution: AdmittedRequesterSessionBootstrap['attribution']) => Promise<RequesterSessionInputCustody | null>;
+  /** Manager-owned recheck of the exact Home-verified signed SOURCE request, private to preparation. */
+  verifyWorkspaceSyncPrepareCurrent?: () => Promise<boolean>;
+  /** Manager-owned proof of the exact forwarded Move child, including current destination access. */
+  verifyServiceMoveChildCurrent?: () => Promise<boolean>;
   resolveCurrentMachineExecutionOriginContext(signal?: AbortSignal): Promise<CurrentMachineExecutionOriginContext | null>;
   createExecutor(context: RequesterAccountActionContext, installation: NonNullable<ReturnType<typeof readInstallationIdentityIfExistsSync>>):
     NonNullable<ExternalActionExecutionAuthorizationV1['requesterAccountExecutor']>;
   signal?: AbortSignal;
 }>): ReturnType<PrepareExternalActionRequesterAccountContext> {
   const installation = readInstallationIdentityIfExistsSync();
-  const origin = await input.resolveCurrentMachineExecutionOriginContext(input.signal);
-  if (!installation || !origin || origin.machineId !== input.machineId) return null;
+  const trace = <T>(stage: string, operation: () => T | Promise<T>) => runTracedExternalActionStage(
+    input.authorization.binding.actionId, input.authorization.binding.requestId, stage, operation);
+  const origin = await trace('requester.initial_origin', () => input.resolveCurrentMachineExecutionOriginContext(input.signal));
+  if (!installation || !origin || origin.machineId !== input.machineId) {
+    const phase = !installation ? 'requester_installation_missing'
+      : !origin ? 'requester_origin_unavailable' : 'requester_origin_machine_mismatch';
+    refuseExternalActionPhase(phase, input.machineId);
+    return null;
+  }
+  const binding = input.authorization.binding;
+  const reusesSessionCustody = input.purpose.kind === 'external_action'
+    && !input.authorization.requesterAccountContext && isOriginalSessionInputAccountActionCustody(binding);
+  if (reusesSessionCustody && (binding.serverIdentityId !== origin.serverIdentityId
+    || binding.machineId !== input.machineId || binding.installationId !== installation.installationId)) {
+    refuseExternalActionPhase('requester_session_custody', input.machineId);
+    return null;
+  }
+  const installationPrivateKey = decodeBase64(installation.privateKey, 'base64url');
+  const requesterSessionBootstrap = reusesSessionCustody && binding.target.kind === 'session'
+    ? await input.resolveRequesterSessionBootstrap?.(binding.target.sessionId, { serverId: input.serverId,
+      accountId: binding.accountId, machineId: input.machineId, installationId: installation.installationId }) ?? null : null;
+  const isCustodyCurrent = async () => {
+    const before = readInstallationIdentityIfExistsSync();
+    if (input.signal?.aborted || before?.installationId !== installation.installationId || before.privateKey !== installation.privateKey
+      || requesterSessionBootstrap && !await requesterSessionBootstrap.isCurrent()) return false;
+    const after = readInstallationIdentityIfExistsSync();
+    return !input.signal?.aborted && after?.installationId === installation.installationId && after.privateKey === installation.privateKey;
+  };
   return await prepareRequesterAccountActionContext({ ...input, installationId: installation.installationId,
-    serverIdentityId: origin.serverIdentityId, installationPrivateKey: decodeBase64(installation.privateKey, 'base64url'),
+    ...(requesterSessionBootstrap ? { requesterSessionBootstrap } : {}),
+    serverIdentityId: origin.serverIdentityId, installationPrivateKey,
+    // SOURCE preparation has a distinct manager-owned proof and keeps its
+    // incumbent fresh verification; it is not a worker-targeted HTTP grant.
+    // The installed Stop receiver has the same split as external Actions:
+    // HTTP destinations admit signed observations, and its native Stop port
+    // calls admitted.isCurrent() immediately before the physical effect.
+    // Do not repeat Home root admission while opening its private read ports.
+    ...(input.purpose.kind === 'external_action'
+      || input.purpose.kind === 'machine_rpc' && input.purpose.method === RPC_METHODS.STOP_SESSION
+        && binding.actionId === 'session.stop'
+      || input.purpose.kind === 'machine_rpc' && input.purpose.recipient ? { isCustodyCurrent } : {}),
     isCurrent: async () => {
-      const next = readInstallationIdentityIfExistsSync();
-      const current = await input.resolveCurrentMachineExecutionOriginContext(input.signal);
-      if (next?.installationId !== installation.installationId || next.privateKey !== installation.privateKey
-        || current?.machineId !== input.machineId || current.serverIdentityId !== origin.serverIdentityId) return false;
-      return await verifyExternalActionExecutionAuthorizationCurrent({ authorization: input.authorization,
+      if (!await isCustodyCurrent()) return false;
+      const current = await trace('requester.fresh_origin', () => input.resolveCurrentMachineExecutionOriginContext(input.signal));
+      if (current?.machineId !== input.machineId || current.serverIdentityId !== origin.serverIdentityId) return false;
+      if (input.purpose.kind === 'workspace_sync_prepare') {
+        return input.verifyWorkspaceSyncPrepareCurrent !== undefined && await input.verifyWorkspaceSyncPrepareCurrent();
+      }
+      if (input.purpose.kind === 'machine_rpc' && input.purpose.recipient) {
+        return input.verifyServiceMoveChildCurrent !== undefined && await input.verifyServiceMoveChildCurrent();
+      }
+      return await trace('requester.root_verification', () => verifyExternalActionExecutionAuthorizationCurrent({ authorization: input.authorization,
         effectActionId: input.authorization.binding.actionId, target: input.authorization.binding.target,
         installationId: installation.installationId, privateKey: installation.privateKey,
         serverHttpBaseUrl: input.serverHttpBaseUrl,
         ...(input.purpose.kind === 'managed_finite_wake' ? { managedFiniteWakeTarget: input.purpose.target } : {}),
-        ...(input.signal ? { signal: input.signal } : {}) });
+        ...(input.signal ? { signal: input.signal } : {}) }));
     }, createExecutor: admitted => input.createExecutor(admitted, installation) });
 }
 
@@ -390,49 +466,86 @@ export async function prepareRequesterAccountActionContext(input: Readonly<{
   serverHttpBaseUrl: string;
   /** Host-owned custody only; never admitted from a public request or selected by Account id. */
   ownCredentials?: StoredCredentials;
+  requesterSessionBootstrap?: RequesterSessionInputCustody;
   isCurrent(): Promise<boolean>;
+  isCustodyCurrent?: () => Promise<boolean>;
   createExecutor(context: RequesterAccountActionContext): NonNullable<ExternalActionExecutionAuthorizationV1['requesterAccountExecutor']>;
   signal?: AbortSignal;
 }>): ReturnType<PrepareExternalActionRequesterAccountContext> {
-  if (input.signal?.aborted || !await input.isCurrent()) return null;
-  const root = ExternalActionExecutionAuthorizationV1Schema.safeParse(input.authorization);
-  if (!root.success || root.data.binding.serverIdentityId !== input.serverIdentityId) return null;
-  const finiteWake = input.purpose.kind === 'managed_finite_wake' ? root.data.managedFiniteWake : undefined;
-  if (input.purpose.kind === 'managed_finite_wake' && (!finiteWake
-    || !sameStrictJsonValue(finiteWake.target, input.purpose.target))) return null;
-  const recipient = finiteWake?.target.controller ?? { machineId: root.data.binding.machineId,
-    installationId: root.data.binding.installationId };
-  if (recipient.machineId !== input.machineId || recipient.installationId !== input.installationId) return null;
-  const regularOwnAccount = isOriginalOwnAccountActionCustody(root.data.binding);
-  const hasBox = finiteWake ? Boolean(finiteWake.requesterAccountContext) : Boolean(root.data.requesterAccountContext);
-  const encoded = hasBox ? openExternalActionRequesterAccountContextV1({ ...input, includeInvocation: true }) : null;
-  const credentials = hasBox
-    ? encoded ? decodeStoredCredentials(encoded.credentials) : null
-    : !finiteWake && regularOwnAccount && input.ownCredentials
-      // Admission binds invocation scope in place. Borrow a private copy so
-      // installed custody stays current, preserving any existing private scope.
-      ? Object.defineProperties({ ...input.ownCredentials }, Object.getOwnPropertyDescriptors(input.ownCredentials))
-      : null;
-  if (!credentials) return null;
-  const admitted = await admitRequesterAccountActionContext({ ...input, credentials,
-    ...(encoded?.invocation ? { invocation: encoded.invocation } : {}) });
-  if (!admitted) return null;
+  const sessionCustody = input.requesterSessionBootstrap;
+  let custodyTransferred = false;
   try {
-    // Named native preparation proves controller custody, not a generic HTTP
-    // effect grant for the unchanged guest-targeted original Action.
-    const projected = finiteWake ? admitted.authorization : await projectExternalActionRequesterHttpAuthorization({ authorization: admitted.authorization,
-      serverId: input.serverId, serverIdentityId: input.serverIdentityId, serverHttpBaseUrl: input.serverHttpBaseUrl,
-      target: admitted.authorization.binding.target, installationId: input.installationId,
-      privateKey: input.installationPrivateKey, isCurrent: admitted.isCurrent,
-      ...(input.signal ? { signal: input.signal } : {}) });
-    if (!projected) { await admitted.dispose(); return null; }
-    const executor = input.createExecutor(Object.freeze({ ...admitted, authorization: projected }));
-    const authorization: ExternalActionExecutionAuthorizationV1 = { ...projected };
-    for (const [key, value] of Object.entries({ requesterAccountProjection: projected.requesterAccountProjection,
-      requesterHttpProjection: projected.requesterHttpProjection, requesterAccountExecutor: executor })) {
-      if (value) Object.defineProperty(authorization, key, { value, enumerable: false });
-    }
-    return { authorization: Object.freeze(authorization), executor, dispose: admitted.dispose, resolveEncryption: admitted.resolveEncryption,
-      ...(encoded?.invocation ? { invocation: encoded.invocation } : {}) };
-  } catch { await admitted.dispose(); return null; }
+    const refused = (phase: string, error?: unknown) => { refuseExternalActionPhase(phase, input.machineId, error); return null; };
+    // Reject a different root/Session before consulting retained private custody.
+    // admitRequesterAccountActionContext owns the fresh Home admission below.
+    const root = ExternalActionExecutionAuthorizationV1Schema.safeParse(input.authorization);
+    if (!root.success || root.data.binding.serverIdentityId !== input.serverIdentityId) return refused('requester_preparation_root');
+    const trace = <T>(stage: string, operation: () => T | Promise<T>) => runTracedExternalActionStage(
+      root.data.binding.actionId, root.data.binding.requestId, stage, operation);
+    const finiteWake = input.purpose.kind === 'managed_finite_wake' ? root.data.managedFiniteWake : undefined;
+    const preparation = input.purpose.kind === 'workspace_sync_prepare' ? input.purpose : undefined;
+    const moveRecipient = input.purpose.kind === 'machine_rpc' ? input.purpose.recipient : undefined;
+    if (moveRecipient && !(root.data.binding.actionId === 'projects.service.relocate'
+      || root.data.binding.actionId === 'discussion.second_opinion.start'
+        && input.purpose.kind === 'machine_rpc' && (input.purpose.method === RPC_METHODS.SESSION_SPAWN_NEW
+          || input.purpose.method === RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT))) return refused('requester_move_root');
+    if (preparation && ((root.data.binding.actionId !== 'projects.script.run' && root.data.binding.actionId !== 'projects.compute.exec' && root.data.binding.actionId !== 'projects.service.relocate')
+      || root.data.binding.target.kind !== 'machine' || root.data.binding.target.machineId !== root.data.binding.machineId)) return refused('requester_workspace_preparation_root');
+    if (input.purpose.kind === 'managed_finite_wake' && (!finiteWake
+      || !sameStrictJsonValue(finiteWake.target, input.purpose.target))) return refused('requester_finite_wake_target');
+    const recipient = moveRecipient ?? preparation?.controller ?? finiteWake?.target.controller ?? { machineId: root.data.binding.machineId,
+      installationId: root.data.binding.installationId };
+    if (recipient.machineId !== input.machineId || recipient.installationId !== input.installationId) return refused('requester_preparation_recipient');
+    const regularOwnAccount = isOriginalOwnAccountActionCustody(root.data.binding);
+    if (sessionCustody && (!isOriginalSessionInputAccountActionCustody(root.data.binding)
+      || input.purpose.kind !== 'external_action' || root.data.binding.target.kind !== 'session'
+      || sessionCustody.getBoundSessionId() !== root.data.binding.target.sessionId
+      || sessionCustody.attribution.accountId !== root.data.binding.accountId
+      || sessionCustody.attribution.serverId !== input.serverId
+      || sessionCustody.attribution.machineId !== input.machineId
+      || sessionCustody.attribution.installationId !== input.installationId
+      || normalizeServerHttpBaseUrl(sessionCustody.serverHttpBaseUrl) !== normalizeServerHttpBaseUrl(input.serverHttpBaseUrl))) return refused('requester_session_custody');
+    if (input.signal?.aborted || !await (input.isCustodyCurrent ?? input.isCurrent)()
+      || sessionCustody && !await sessionCustody.isCurrent()) return refused('requester_preparation_currentness');
+    const hasBox = finiteWake ? Boolean(finiteWake.requesterAccountContext) : Boolean(root.data.requesterAccountContext);
+    const encoded = hasBox ? openExternalActionRequesterAccountContextV1({ ...input, includeInvocation: true }) : null;
+    const retainedCredentials = sessionCustody?.credentials ?? (regularOwnAccount ? input.ownCredentials : undefined);
+    const credentials = hasBox
+      ? encoded ? decodeStoredCredentials(encoded.credentials) : null
+      : !moveRecipient && !preparation && !finiteWake && retainedCredentials
+        // Admission binds invocation scope in place. Borrow a private copy so
+        // installed custody stays current, preserving any existing private scope.
+        ? Object.defineProperties({ ...retainedCredentials }, Object.getOwnPropertyDescriptors(retainedCredentials))
+        : null;
+    if (!credentials) return refused('requester_credentials_open');
+    const admitted = await admitRequesterAccountActionContext({ ...input, credentials,
+      ...(sessionCustody ? { onRetire: () => sessionCustody.release() } : {}),
+      ...(encoded?.invocation ? { invocation: encoded.invocation } : {}) });
+    if (!admitted) return refused('requester_account_admission');
+    custodyTransferred = true;
+    let phase = 'requester_http_projection';
+    try {
+      // Named native preparation proves controller custody, not a generic HTTP
+      // effect grant for the unchanged guest-targeted original Action.
+      const projected = finiteWake || preparation ? admitted.authorization : await trace('requester.http_projection', () => projectExternalActionRequesterHttpAuthorization({ authorization: admitted.authorization,
+        serverId: input.serverId, serverIdentityId: input.serverIdentityId, serverHttpBaseUrl: input.serverHttpBaseUrl,
+        target: admitted.authorization.binding.target, installationId: input.installationId,
+        privateKey: input.installationPrivateKey, isCurrent: admitted.isCustodyCurrent ?? admitted.isCurrent,
+        ...(moveRecipient ? { forwardedMove: { credentials: admitted.credentials, isCurrent: admitted.isCurrent } } : {}),
+        ...(input.signal ? { signal: input.signal } : {}) }));
+      if (!projected) { await admitted.dispose(); return refused(phase); }
+      phase = 'requester_executor';
+      const executor = input.createExecutor(Object.freeze({ ...admitted, authorization: projected }));
+      const authorization: ExternalActionExecutionAuthorizationV1 = { ...projected };
+      for (const [key, value] of Object.entries({ requesterAccountProjection: projected.requesterAccountProjection,
+        requesterHttpProjection: projected.requesterHttpProjection, requesterAccountExecutor: executor })) {
+        if (value) Object.defineProperty(authorization, key, { value, enumerable: false });
+      }
+      return { authorization: Object.freeze(authorization), executor, dispose: admitted.dispose, resolveEncryption: admitted.resolveEncryption,
+        ...(encoded?.invocation ? { invocation: encoded.invocation } : {}) };
+    } catch (error) { await admitted.dispose(); rethrowRequesterHomeReadFailure(error); return refused(phase, error); }
+  } finally { if (!custodyTransferred) await sessionCustody?.release(); }
 }
+
+export type { RequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionContext';
+export { readRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionContext';

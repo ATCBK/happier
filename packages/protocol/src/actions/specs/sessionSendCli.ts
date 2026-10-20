@@ -14,9 +14,8 @@ export const SESSION_SEND_NATIVE_PROVIDER_CONNECTION_TOKEN = 'native';
 /** The caller spelling `--model default` uses to clear a session model override. */
 export const SESSION_SEND_DEFAULT_MODEL_TOKEN = 'default';
 
-/** The friendly send timeout the CLI has always applied when none is supplied. */
+/** Legacy wait ingress retains its established CLI budget; canonical reply has none. */
 export const SESSION_SEND_DEFAULT_TIMEOUT_SECONDS = 300;
-const SESSION_SEND_MAX_TIMEOUT_SECONDS = 3600;
 
 /**
  * The caller shape `happier send` accepts.
@@ -47,8 +46,12 @@ export const SessionSendCliInputSchema = lazyZodSchema(() => z.strictObject({
   providerConnection: z.optional(z.string().check(z.trim(), z.minLength(1))),
   localId: z.optional(z.string().check(z.trim(), z.minLength(1))),
   wait: z.optional(z.boolean()),
+  reply: z.optional(z.enum(['none', 'wait', 'return'])),
   timeoutSeconds: z.optional(z.number().check(z.int(), z.minimum(1))),
 }).check(z.superRefine((value, ctx) => {
+  if (value.reply !== undefined && value.wait !== undefined) {
+    ctx.addIssue({ code: 'custom', path: ['reply'], message: 'reply and legacy wait cannot be combined' });
+  }
   // The canonical schema owns the same rule, but it can only name the canonical
   // field. Naming the caller's flags keeps the established diagnostic.
   if (value.providerConnection === undefined) return;
@@ -79,6 +82,9 @@ export const SessionSendCliInputHints: ActionInputHints = {
     // Shared by the main send and a targeted `--run` send: `wait` settles the
     // admitted message's own turn, never parent-Session idle (Lane 05 plan 04 §10.2).
     { path: 'wait', title: 'Wait for message completion (optional)', widget: 'boolean' },
+    { path: 'reply', title: 'Reply mode (optional)', widget: 'select', options: [
+      { value: 'none', label: 'No reply' }, { value: 'wait', label: 'Wait' }, { value: 'return', label: 'Return later' },
+    ] },
     { path: 'timeoutSeconds', title: 'Wait timeout in seconds (optional)', widget: 'text' },
   ],
 };
@@ -118,10 +124,10 @@ export function bindSessionSendCliInput(
     // retained — an identity minted out of the caller's reach cannot be named in
     // the failure guidance.
     localId: value.localId ?? actionCliDerivedDefault(context.invocationId),
-    ...(value.wait ? { wait: true } : {}),
-    timeoutSeconds: value.timeoutSeconds === undefined
-      ? actionCliDerivedDefault(SESSION_SEND_DEFAULT_TIMEOUT_SECONDS)
-      : Math.min(SESSION_SEND_MAX_TIMEOUT_SECONDS, value.timeoutSeconds),
+    ...(value.reply === undefined ? (value.wait ? { wait: true } : {}) : { reply: value.reply }),
+    ...(value.timeoutSeconds === undefined
+      ? value.reply === undefined ? { timeoutSeconds: actionCliDerivedDefault(SESSION_SEND_DEFAULT_TIMEOUT_SECONDS) } : {}
+      : { timeoutSeconds: value.timeoutSeconds }),
   };
 }
 

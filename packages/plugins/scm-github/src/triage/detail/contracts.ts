@@ -9,7 +9,7 @@ import {
 } from '@happier-dev/plugin-sdk/protocol';
 import {
   MAX_TRIAGE_ROUTING_TOKEN_UTF8_BYTES_V1,
-  TriageConfiguredSourceInstanceV1Schema,
+  TriageConfiguredSourceCredentialInstanceV1Schema as TriageConfiguredSourceInstanceV1Schema,
   TriageSourceEntryLocalRefV1Schema,
   TriageSourceFailureV1Schema,
 } from '@happier-dev/triage-protocol/v1';

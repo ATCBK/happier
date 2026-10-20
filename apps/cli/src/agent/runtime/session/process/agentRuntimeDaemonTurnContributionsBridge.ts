@@ -8,7 +8,7 @@ import type {
     ComposerAttachmentValueV1,
     ComposerReferenceResolutionV1,
     PluginContributionIdentityV1,
-    SessionInputAdmissionResultV1,
+    SessionInputEnqueueResultV1,
     SessionPendingEnqueueByMachineRequestV1,
     SessionPendingExecutionRunEnqueueByMachineRequestV2,
 } from '@happier-dev/protocol';
@@ -40,7 +40,7 @@ export type DaemonAgentRuntimeTurnContributionsBridge = Readonly<{
         sessionId: string;
         request: SessionPendingEnqueueByMachineRequestV1 | SessionPendingExecutionRunEnqueueByMachineRequestV2;
         signal?: AbortSignal;
-    }>): Promise<SessionInputAdmissionResultV1>;
+    }>): Promise<SessionInputEnqueueResultV1>;
     resolvePrompt(params: Readonly<{
         sessionId: string;
         selectedAsset?: Readonly<{ pluginId: string; localId: string }>;

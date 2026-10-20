@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DownloadOptions, DownloadProgressData, DownloadResumable } from 'expo-file-system/legacy';
 
-import { ensureModelPackInstalled, getModelPackInstallSummary, removeModelPack } from '@/voice/modelPacks/installer.native';
+import { checkModelPackUpdateAvailable, ensureModelPackInstalled, getModelPackInstallSummary, removeModelPack } from '@/voice/modelPacks/installer.native';
 import { createMemFs, createMemNativeDownload } from '@/voice/modelPacks/installerTestFs';
 
 const nativeDownload = vi.hoisted(() => vi.fn<(
@@ -15,6 +15,44 @@ vi.mock('react-native', async () => {
 });
 
 describe('modelPacks installer (native)', () => {
+  it.each(['corrupt', 'unreadable'] as const)('reports %s receipt fallback without exposing its contents', async (failure) => {
+    const { fs, files, root } = createMemFs();
+    const packId = 'receipt-warning';
+    const privateContents = 'private_receipt_contents';
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const BaseFile = fs.File;
+    class ReceiptFile extends BaseFile {
+      constructor(...args: unknown[]) {
+        super(...args);
+        const readText = this.text.bind(this);
+        this.text = async () => {
+          if (failure === 'unreadable' && this.uri.endsWith('/pack.json')) throw new Error(privateContents);
+          return readText();
+        };
+      }
+    }
+    const boundary = { ...fs, File: ReceiptFile };
+    try {
+      const normalFile = new ReceiptFile(root, packId, 'normal-read.txt');
+      normalFile.write(privateContents);
+      await expect(normalFile.text()).resolves.toBe(privateContents);
+      expect((await getModelPackInstallSummary({ packId }, { fs: boundary })).installed).toBe(false);
+      expect(warning).not.toHaveBeenCalled();
+      files.set(`${root}/${packId}/pack.json`, new TextEncoder().encode(privateContents));
+      expect((await getModelPackInstallSummary({ packId }, { fs: boundary })).installed).toBe(false);
+      expect(warning).toHaveBeenCalled();
+      expect(warning.mock.calls.flat()).toContain(failure === 'corrupt' ? 'SyntaxError' : 'Error');
+      expect(warning.mock.calls.flat().map(String).join('\n')).not.toContain(privateContents);
+      warning.mockClear();
+      const update = await checkModelPackUpdateAvailable({ packId, manifestUrl: null, timeoutMs: null,
+        signal: new AbortController().signal }, { fs: boundary, invalidatePackRuntime: async () => {} });
+      expect(update.installed).toBe(false);
+      expect(warning).toHaveBeenCalled();
+      expect(warning.mock.calls.flat()).toContain(failure === 'corrupt' ? 'SyntaxError' : 'Error');
+      expect(warning.mock.calls.flat().map(String).join('\n')).not.toContain(privateContents);
+    } finally { warning.mockRestore(); }
+  });
+
   it('keeps artifact transfer native with foreground lifetime and numeric progress', async () => {
     const { createHash } = await import('node:crypto');
     const { fs, files } = createMemFs();
@@ -45,7 +83,7 @@ describe('modelPacks installer (native)', () => {
         signal: new AbortController().signal, onProgress: (value) => progress.push(value.loaded) },
         { fs, invalidatePackRuntime: async () => {} });
       expect(files.get('file:///docs/happier/voice/modelPacks/native-download/model.onnx')).toEqual(bytes);
-      expect(files.has('file:///docs/happier/voice/modelPacks/.native-download.download')).toBe(false);
+      expect([...files.keys()].some(path => path.includes('/.native-download.downloads/'))).toBe(false);
       expect(progress.every((loaded, index) => loaded <= bytes.length && loaded >= (progress[index - 1] ?? 0))).toBe(true);
     } finally {
       vi.unstubAllGlobals(); nativeDownload.mockReset();

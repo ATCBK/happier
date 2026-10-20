@@ -1,8 +1,53 @@
 import { describe, expect, it } from 'vitest';
 import { buildSessionInstructionsContextIntentV1 } from '../../actions/sessionStateFieldActions.js';
-import { admitSessionContextIntentV1, readSessionMemoryEnabledV1, SessionContextIntentV1Schema, writeSessionContextIntentV1ToMetadata } from './sessionContextV1.js';
+import { createSessionOwnerMetadataV1, parseSessionOwnerMetadataEnvelopeV1 } from '../metadata/sessionMetadataSchemasV1.js';
+import { PromptStackEntryAuthoringV1Schema } from '../../prompts/library/promptStacksV1.js';
+import { admitSessionContextIntentV1, readSessionMemoryEnabledV1, SessionContextIntentV1Schema, SessionPromptStackV1StoredSchema, writeSessionContextIntentV1ToMetadata } from './sessionContextV1.js';
 
 describe('Session context field owner', () => {
+  it('selects exactly one existing Doc as Plan, preserving that annotation through ordinary Context edits and metadata reads', () => {
+    const metadata = { work: { memoryEnabled: false, sessionRolesV1: { overrides: {}, sessionRoles: {}, notes: 'Keep notes' }, promptStack: [
+      { id: 'a', ref: { kind: 'doc', artifactId: 'doc-a' }, enabled: true, placement: 'system_append' },
+      { id: 'b', ref: { kind: 'doc', artifactId: 'doc-b' }, enabled: true, placement: 'composer_insert' },
+      { id: 'bundle', ref: { kind: 'bundle', artifactId: 'bundle' }, enabled: true, placement: 'system_append' },
+    ] } };
+    const select = (current: typeof metadata, entryId: string | null) => writeSessionContextIntentV1ToMetadata(current,
+      SessionContextIntentV1Schema.parse({ kind: 'set_plan', entryId }));
+    expect(select(metadata, null)).toBe(metadata);
+    const selected = select(metadata, 'a');
+    expect(selected.work.promptStack[0]).toHaveProperty('plan', true);
+    expect(select(selected, 'a')).toBe(selected);
+    const switched = select(selected, 'b');
+    expect(switched.work.promptStack[0]).not.toHaveProperty('plan');
+    expect(switched.work.promptStack[1]).toHaveProperty('plan', true);
+    for (const [entryId, code] of [['absent', 'entry_not_found'], ['bundle', 'invalid_parameters']] as const) {
+      expect(() => select(switched, entryId)).toThrow(code);
+      expect(switched.work.promptStack[1]).toHaveProperty('plan', true);
+    }
+    let edited = writeSessionContextIntentV1ToMetadata(switched, { kind: 'reorder', entryId: 'b', siblingId: 'a', position: 'before' });
+    edited = writeSessionContextIntentV1ToMetadata(edited, { kind: 'set_budget', entryId: 'b', maxChars: 3000 });
+    edited = writeSessionContextIntentV1ToMetadata(edited, { kind: 'set_enabled', entryId: 'b', enabled: false });
+    const created = createSessionOwnerMetadataV1({ metadata: edited });
+    expect(created).toMatchObject({ ok: true });
+    if (!created.ok) throw new Error('Session Plan owner metadata refused');
+    const envelope = parseSessionOwnerMetadataEnvelopeV1(JSON.stringify({ t: 'plain', v: created.ownerMetadata }));
+    expect(envelope).toMatchObject({ t: 'plain', v: { work: { memoryEnabled: false, sessionRolesV1: { notes: 'Keep notes' },
+      promptStack: [{ id: 'b', plan: true, maxChars: 3000, enabled: false, placement: 'composer_insert' }, { id: 'a' }, { id: 'bundle' }],
+    } } });
+    expect(select(edited, null).work.promptStack.every(entry => !('plan' in entry))).toBe(true);
+    expect(writeSessionContextIntentV1ToMetadata(edited, { kind: 'detach', entryId: 'b' }).work.promptStack
+      .every(entry => !('plan' in entry))).toBe(true);
+    expect(writeSessionContextIntentV1ToMetadata(edited, SessionContextIntentV1Schema.parse({ kind: 'set', entry: {
+      id: 'b', ref: { kind: 'doc', artifactId: 'replacement' },
+    } })).work.promptStack.every(entry => !('plan' in entry))).toBe(true);
+    // Session selection cannot become an Account/Project authoring flag or an inline pointer.
+    expect(PromptStackEntryAuthoringV1Schema.safeParse({ ...metadata.work.promptStack[0], plan: true }).success).toBe(false);
+    expect(SessionContextIntentV1Schema.safeParse({ kind: 'set_plan', entryId: 'a', planEntryId: 'b' }).success).toBe(false);
+    expect(SessionPromptStackV1StoredSchema.safeParse([
+      { ...metadata.work.promptStack[0], plan: true }, { ...metadata.work.promptStack[1], plan: true },
+    ]).success).toBe(false);
+    expect(SessionPromptStackV1StoredSchema.safeParse([{ ...metadata.work.promptStack[2], plan: true }]).success).toBe(false);
+  });
   it('does not rewrite Session metadata for already-applied list intents', () => {
     const metadata = { work: { memoryEnabled: false, promptStack: [
       { id: 'first', ref: { kind: 'doc' as const, artifactId: 'first' }, enabled: false, placement: 'system_append' as const, maxChars: 3000 },

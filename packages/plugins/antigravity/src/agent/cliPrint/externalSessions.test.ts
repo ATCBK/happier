@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
+import { AgentExternalSessionTranscriptRawRecordSchema } from '@happier-dev/plugin-sdk/sessions/external';
 
 import {
   createAntigravityExternalSessionsContribution,
@@ -92,6 +93,10 @@ describe('Antigravity external-session pure leaf', () => {
     try {
       const result = await contribution.listCandidates({ ...invocation(), ripgrep, source: { kind: 'antigravityCliPrint' }, maxItems: 10, searchTarget: 'content', searchTerm: query });
       expect(result).toMatchObject({ ok: true, value: { contentCoverage: 'complete', candidates: [{ remoteSessionId: 'conversation-content', match: { snippet: expect.stringContaining(query), sourceItemId: 'answer', messageIndex: 1 } }] } });
+      const page = await contribution.pageTranscript({ ...invocation(), source: { kind: 'antigravityCliPrint' },
+        remoteSessionId: 'conversation-content', direction: 'older', maxItems: 10 });
+      if (!result.ok || !page.ok) throw new Error('Expected complete native search and transcript');
+      expect(result.value.candidates[0]?.messageCount).toBe(page.value.items.length);
       const metadataOnly = await contribution.listCandidates({ ...invocation(), ripgrep, source: { kind: 'antigravityCliPrint' }, maxItems: 10, searchTarget: 'content', searchTerm: 'metadata' });
       expect(metadataOnly).toMatchObject({ ok: true, value: { candidates: [], contentCoverage: 'complete' } });
     } finally { await rm(home, { recursive: true, force: true }); }
@@ -100,7 +105,10 @@ describe('Antigravity external-session pure leaf', () => {
   it('yields at the cooperative scan deadline while retaining the hard deadline and query-bound continuation', async () => {
     const home = await mkdir(join(tmpdir(), `antigravity-content-yield-${Date.now()}-`), { recursive: true });
     const brainDir = join(home, '.gemini', 'antigravity-cli', 'brain');
-    await createConversation(brainDir, 'conversation-content', [JSON.stringify({ id: 'answer', type: 'PLANNER_RESPONSE', text: 'body-only phrase' })]);
+    await createConversation(brainDir, 'conversation-content', [
+      JSON.stringify({ id: 'question', type: 'USER_INPUT', text: 'ordinary question' }),
+      JSON.stringify({ id: 'answer', type: 'PLANNER_RESPONSE', text: 'body-only phrase' }),
+    ]);
     const contribution = createAntigravityExternalSessionsContribution({ env: { HOME: home } });
     const clock = Date.now;
     let now = clock();
@@ -108,7 +116,7 @@ describe('Antigravity external-session pure leaf', () => {
     const ripgrep = { run: async () => { now += 100; return { exitCode: 0, stdout: 'hit\0', stderr: '' }; } };
     Date.now = () => now;
     try {
-      const result = await contribution.listCandidates({ ...bounds, ripgrep, source: { kind: 'antigravityCliPrint' }, maxItems: 10, searchTarget: 'content', searchTerm: 'body-only phrase' });
+      const result = await contribution.listCandidates({ ...bounds, ripgrep, source: { kind: 'antigravityCliPrint' }, maxItems: 1, searchTarget: 'content', searchTerm: 'body-only phrase' });
       expect(result).toMatchObject({ ok: true, value: { candidates: [], contentCoverage: 'partial', nextCursor: expect.any(String) } });
       if (!result.ok || !result.value.nextCursor) throw new Error('Expected content continuation');
       await expect(contribution.listCandidates({ ...bounds, deadlineAtMs: now, scanDeadlineAtMs: now + 100, ripgrep, source: { kind: 'antigravityCliPrint' }, maxItems: 10, searchTarget: 'content', searchTerm: 'body-only phrase' })).resolves.toMatchObject({ ok: false, code: 'timeout' });
@@ -764,16 +772,24 @@ describe('Antigravity external-session pure leaf', () => {
       cursor: completed.nextCursor,
       maxItems: 10,
       maxBytes: 64 * 1024,
-    })).resolves.toMatchObject({ kind: 'read_failed' });
+    })).resolves.toMatchObject({
+      kind: 'advanced',
+      items: [{ raw: agentMessageRaw('Agent emitted an unsupported content block.') }],
+      skippedPositions: [expect.any(Number)],
+    });
     await expect(contribution.readAfterTranscript({
       ...invocation(),
       source: identity.value.source,
       remoteSessionId: 'conversation-1',
       cursor: completed.nextCursor,
       maxItems: 10,
-    })).resolves.toEqual({
+    })).resolves.toMatchObject({
       ok: true,
-      value: { outcome: 'read_failed' },
+      value: {
+        outcome: 'advanced',
+        items: [{ raw: agentMessageRaw('Agent emitted an unsupported content block.') }],
+        diagnostics: [{ code: 'external_sessions_transcript_unsupported_record', severity: 'benign' }],
+      },
     });
 
     await writeFile(transcriptPath, [
@@ -1166,7 +1182,13 @@ describe('Antigravity external-session pure leaf', () => {
     });
   });
 
-  it('declares an older page incomplete instead of finalizing history past an unknown record', async () => {
+  it.each([
+    '{"step_index":2,"type":"FUTURE_RECORD_KIND","payload":{"turn":"unreadable"}}',
+    'not-json-unreadable',
+    'null',
+    '{"step_index":2,"type":"PLANNER_RESPONSE","text":42}',
+    '{"step_index":2,"type":"PLANNER_RESPONSE","text":"known sibling","tool_calls":[{"name":"read_file"},{"type":"future_block"}]}',
+  ])('preserves older readable history around a visible safe unsupported-record fallback: %s', async (unsupported) => {
     const home = await mkdir(
       join(tmpdir(), `antigravity-external-page-unknown-${Date.now()}-`),
       { recursive: true },
@@ -1174,7 +1196,7 @@ describe('Antigravity external-session pure leaf', () => {
     const brainDir = join(home, '.gemini', 'antigravity-cli', 'brain');
     await createConversation(brainDir, 'conversation-page-unknown', [
       '{"step_index":1,"type":"USER_INPUT","text":"oldest visible"}',
-      '{"step_index":2,"type":"FUTURE_RECORD_KIND","payload":{"turn":"unreadable"}}',
+      unsupported,
       '{"step_index":3,"type":"PLANNER_RESPONSE","text":"newest visible"}',
     ]);
     const contribution = createAntigravityExternalSessionsContribution({ env: { HOME: home } });
@@ -1185,10 +1207,6 @@ describe('Antigravity external-session pure leaf', () => {
     });
     if (!identity.ok) throw new Error('identity unexpectedly failed');
 
-    // A page has no diagnostics channel, so an unreadable record can only be
-    // reported by declaring the page incomplete. Returning the older rows as an
-    // ordinary success would finalize a history with a hole the user can never
-    // recover, and would hand back a cursor that walks straight past it.
     const page = await contribution.pageTranscript({
       ...invocation(),
       source: identity.value.source,
@@ -1200,15 +1218,29 @@ describe('Antigravity external-session pure leaf', () => {
     expect(page).toMatchObject({
       ok: true,
       value: {
-        items: [{ raw: agentMessageRaw('newest visible') }],
+        items: [
+          { raw: userRaw('oldest visible') },
+          { raw: agentMessageRaw('Agent emitted an unsupported content block.'), messageRole: 'agent' },
+          { raw: agentMessageRaw('newest visible') },
+        ],
         nextCursor: null,
         hasMore: false,
-        truncated: true,
+        diagnostics: [{ code: 'external_sessions_transcript_unsupported_record', severity: 'benign', count: 1, positions: [expect.any(Number)] }],
       },
     });
+    if (!page.ok) throw new Error('page unexpectedly failed');
+    expect(page.value.truncated).not.toBe(true);
+    for (const item of page.value.items) expect(AgentExternalSessionTranscriptRawRecordSchema.safeParse(item.raw).success).toBe(true);
+    expect(JSON.stringify(page)).not.toContain('unreadable');
   });
 
-  it('reports skipped native records while advancing visible items', async () => {
+  it.each([
+    '{"step_index":2,"type":"UNSUPPORTED_RECORD","text":"ignored"}',
+    'not-json',
+    'null',
+    '{"step_index":2,"type":"PLANNER_RESPONSE","text":42}',
+    '{"step_index":2,"type":"PLANNER_RESPONSE","text":"known sibling","tool_calls":[{"name":"read_file"},{"type":"future_block"}]}',
+  ])('reports skipped native records while advancing visible items: %s', async (unsupported) => {
     const home = await mkdir(join(tmpdir(), `antigravity-external-read-after-skips-${Date.now()}-`), { recursive: true });
     const brainDir = join(home, '.gemini', 'antigravity-cli', 'brain');
     const transcriptPath = await createConversation(brainDir, 'conversation-read-after-skips', [
@@ -1231,7 +1263,7 @@ describe('Antigravity external-session pure leaf', () => {
     if (!initial.ok || !initial.value.tailCursor) throw new Error('tail cursor missing');
 
     await appendFile(transcriptPath, [
-      '{"step_index":2,"type":"UNSUPPORTED_RECORD","text":"ignored"}',
+      unsupported,
       '{"step_index":3,"type":"PLANNER_RESPONSE","text":"visible"}',
       '',
     ].join('\n'));
@@ -1246,9 +1278,13 @@ describe('Antigravity external-session pure leaf', () => {
       ok: true,
       value: {
         outcome: 'advanced',
-        items: [{ raw: agentMessageRaw('visible') }],
+        items: [
+          { raw: agentMessageRaw('Agent emitted an unsupported content block.'), messageRole: 'agent' },
+          { raw: agentMessageRaw('visible') },
+        ],
         diagnostics: [{
-          code: 'unsupported_record_skipped',
+          code: 'external_sessions_transcript_unsupported_record',
+          severity: 'benign',
           count: 1,
           positions: [expect.any(Number)],
         }],

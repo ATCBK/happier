@@ -165,8 +165,8 @@ type InvocationPresentationParams = Omit<InvocationInteractionParams, 'isOccurre
     isOccurrenceCurrent: () => boolean;
 }>;
 
-function readActiveTurnPermissionContext(
-    params: InvocationInteractionParams,
+export function readActiveTurnPermissionContext(
+    params: Pick<InvocationInteractionParams, 'readActiveTurnAdmissionWitness'>,
 ) {
     if (!params.readActiveTurnAdmissionWitness) return undefined;
     try {
@@ -174,6 +174,7 @@ function readActiveTurnPermissionContext(
         return Object.freeze({
             turnId: witness?.turnId ?? null,
             causalPermissionAuthority: witness?.causalPermissionAuthority ?? null,
+            ...(witness?.callerPermissionMode !== undefined ? { callerPermissionMode: witness.callerPermissionMode } : {}),
         });
     } catch {
         // A broken host reader is an active-turn authority failure, never legacy.
@@ -215,6 +216,8 @@ export function createPluginInteractionsService(params: InvocationInteractionPar
                     ? {
                         turnId: activeTurnPermissionContext.turnId,
                         causalPermissionAuthority: activeTurnPermissionContext.causalPermissionAuthority,
+                        ...('callerPermissionMode' in activeTurnPermissionContext
+                          ? { callerPermissionMode: activeTurnPermissionContext.callerPermissionMode } : {}),
                     }
                     : {}),
             })

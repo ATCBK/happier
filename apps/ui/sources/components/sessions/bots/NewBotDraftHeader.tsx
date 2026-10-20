@@ -83,6 +83,8 @@ export const NewBotDraftHeader = React.memo(function NewBotDraftHeader(
             })}
           </Animated.View>
         }
+        // Its Instructions line sits under the purpose, on the name's column (lab `b-new`).
+        details={props.botCreation.instructions}
         leading={
           <PageHeaderMarkSlot testID="new-bot-draft-mark">
             <Icon

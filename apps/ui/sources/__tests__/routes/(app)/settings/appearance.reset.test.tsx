@@ -69,7 +69,12 @@ const shared = vi.hoisted(() => ({
 installSessionSettingsEntryModuleMocks({
     reactNative: async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({ Appearance: { getColorScheme: () => 'light' } });
+        const viewport = { width: 1200, height: 900, scale: 1, fontScale: 1 };
+        return createReactNativeWebMock({
+            Appearance: { getColorScheme: () => 'light' },
+            Dimensions: { get: () => viewport },
+            useWindowDimensions: () => viewport,
+        });
     },
     unistyles: async () => {
         const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
@@ -89,8 +94,6 @@ installSessionSettingsEntryModuleMocks({
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
         return createModalModuleMock({ spies: { confirm: shared.confirm } }).module;
     },
-    storageModule: (importOriginal) => importOriginal<typeof import('@/sync/domains/state/storage')>(),
-    useDeviceType: 'desktop',
 });
 
 vi.mock('expo-localization', () => ({ getLocales: () => [{ languageTag: 'en-US' }] }));

@@ -1,4 +1,4 @@
-import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers/safety/limits';
+import { randomUUID } from 'node:crypto';
 import { assessProviderEndpoint } from '@happier-dev/protocol/providers/safety/url';
 import { createProviderErrorV1, ProviderErrorV1Schema } from '@happier-dev/protocol/providers/errors';
 import { ConnectedServiceBindingsV2Schema, readBuiltInLegacyConnectedAccountServiceKeyIngress } from '@happier-dev/protocol/connect/connected-service-bindings';
@@ -60,6 +60,7 @@ import {
 import { projectProviderRuntimeBindingBasis } from './runtimeBindingBasis';
 import { admitRuntimeProviderSavedSecret } from './runtimeCredential';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { logger } from '@/ui/logger';
 
 type ExternalProviderSpawnAuthorization = Extract<
   ProviderSpawnAuthorization,
@@ -150,7 +151,7 @@ export function filterSuppressedConnectedServiceBindings(input: Readonly<{
   bindings: ConnectedServiceBindingsV2;
   suppressConnectedServiceIds: readonly ConnectedServiceId[];
 }>): Readonly<{
-  bindings: ConnectedServiceBindingsV2;
+  bindings: ConnectedServiceBindingsV2 | null;
   suppressedServiceIds: readonly ConnectedServiceId[];
 }> {
   const parsed = ConnectedServiceBindingsV2Schema.parse(input.bindings);
@@ -170,7 +171,12 @@ export function filterSuppressedConnectedServiceBindings(input: Readonly<{
       .filter(([serviceKey]) => !suppressionByServiceKey.has(serviceKey)),
   );
   return {
-    bindings: ConnectedServiceBindingsV2Schema.parse({ v: 2, bindingsByServiceId }),
+    // Only Provider suppression that actually clears selected native intent
+    // means explicit none. An originally empty selection keeps its distinct
+    // Account-defaulting semantics.
+    bindings: suppressedServiceIds.length > 0 && Object.keys(bindingsByServiceId).length === 0
+      ? null
+      : ConnectedServiceBindingsV2Schema.parse({ v: 2, bindingsByServiceId }),
     suppressedServiceIds: Object.freeze(suppressedServiceIds),
   };
 }
@@ -204,8 +210,8 @@ type ProviderSpawnAuthorizationAttemptCommon<TAuthorization extends ProviderSpaw
   isRetainedAuthorizationCurrent: (
     input: RetainedManagedProviderAuthorizationCurrentnessCheck,
   ) => boolean;
-  revalidateBeforeEffect: () => Promise<Readonly<{ ok: true } | { ok: false; error: ProviderErrorV1 }>>;
-  revalidateBeforeCommit: () => Promise<Readonly<{ ok: true } | { ok: false; error: ProviderErrorV1 }>>;
+  revalidateBeforeEffect: (signal?: AbortSignal) => Promise<Readonly<{ ok: true } | { ok: false; error: ProviderErrorV1 }>>;
+  revalidateBeforeCommit: (signal?: AbortSignal) => Promise<Readonly<{ ok: true } | { ok: false; error: ProviderErrorV1 }>>;
   cleanupOnFailure: () => void;
   takeCleanupOnExit: () => (() => void) | null;
   transferLaunchMaterializationCleanupOwnership: () => void;
@@ -232,7 +238,7 @@ export type ProviderSpawnAuthorizationAttempt =
 
 type ProviderSpawnAuthorizationAttemptInput<TAuthorization extends ProviderSpawnAuthorization> = Readonly<{
   initial: TAuthorization;
-  revalidate: () => Promise<ProviderSpawnAuthorizationResult>;
+  revalidate: (signal?: AbortSignal) => Promise<ProviderSpawnAuthorizationResult>;
   resolveCredential: () => ProviderCredentialPlaintextResultForSpawn;
   materialize: (input: Readonly<{
     authorization: TAuthorization;
@@ -299,7 +305,7 @@ export function createProviderSpawnAuthorizationAttempt<
     }
   };
 
-  const revalidate = async () => {
+  const revalidate = async (signal?: AbortSignal) => {
     if (!isAuthorizationCurrent()) {
       return {
         ok: false as const,
@@ -310,7 +316,7 @@ export function createProviderSpawnAuthorizationAttempt<
       };
     }
     const managed = isManagedProviderSpawnAuthorization(input.initial);
-    const current = await input.revalidate();
+    const current = await input.revalidate(signal);
     if (!current.ok) {
       return managed
         ? {
@@ -379,8 +385,8 @@ export function createProviderSpawnAuthorizationAttempt<
     isAuthorizationCurrent,
     isRetainedAuthorizationCurrent,
     revalidateBeforeEffect: revalidate,
-    revalidateBeforeCommit: async () => {
-      const current = await revalidate();
+    revalidateBeforeCommit: async (signal?: AbortSignal) => {
+      const current = await revalidate(signal);
       if (!current.ok) cleanup();
       return current;
     },
@@ -540,13 +546,35 @@ export async function createRuntimeProviderSpawnAuthorizationAttempt(input: Read
   resolveManagedPurposeBindingIntent?: ResolveManagedProviderPurposeBindingIntent;
   managedPurposeBindingSnapshot?: QualifiedConnectedAccountPurposeBindingsV1;
   savedSecretOperationContext?: SavedSecretOperationContextV1;
+  signal?: AbortSignal;
 }>): Promise<Readonly<
   | { ok: true; attempt: ProviderSpawnAuthorizationAttempt }
   | { ok: false; error: ProviderErrorV1 }
 >> {
-  const admissionLifetime = createProviderOperationLifetime({
-    wallTimeMs: PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs,
-  });
+  // Session/Run admission must not borrow an endpoint probe's wall cap. The
+  // containing launch and transport owners retain their own lifetime policy.
+  let admissionLifetime = createProviderOperationLifetime({ signal: input.signal });
+  const authorizationId = randomUUID();
+  const authorizationStartedAt = performance.now();
+  const observePhase = async <T>(phase: 'catalog' | 'agent_activation' | 'dns' | 'purpose_bindings' | 'managed_runtime' | 'model_projection', work: () => Promise<T>): Promise<T> => {
+    const startedAt = performance.now();
+    const record = (status: 'started' | 'completed' | 'failed', reason?: string) => logger.infoFile('[PROVIDER] Spawn authorization phase', {
+      authorizationId, connectionId: input.selection.ref.providerConnectionId, machineId: input.machineId,
+      phase, status, durationMs: Math.round(performance.now() - startedAt),
+      elapsedMs: Math.round(performance.now() - authorizationStartedAt), ...(reason ? { reason } : {}),
+    });
+    record('started');
+    try {
+      const result = await work();
+      record('completed');
+      return result;
+    } catch (error) {
+      const parsed = ProviderErrorV1Schema.safeParse(error);
+      record('failed', error instanceof ProviderOperationAbandonedError ? error.reason
+        : parsed.success ? parsed.data.code : 'unclassified');
+      throw error;
+    }
+  };
   // Reject only cold, locally definitive facts before activation can create an
   // executable plugin runtime or any downstream launch state.  A later fresh
   // resolution still owns dynamic prerequisites and can legitimately fail.
@@ -563,12 +591,13 @@ export async function createRuntimeProviderSpawnAuthorizationAttempt(input: Read
       }),
     };
   }
+  const initialScopeKey = initialSnapshot.scopeKey;
   let catalog;
   try {
     catalog = initialSnapshot.providerConnectionsCatalog?.status === 'ready'
       ? initialSnapshot.providerConnectionsCatalog
-      : await awaitWithinProviderOperation(prepareProviderConnectionsCatalogForCli({ expectedScopeKey: initialSnapshot.scopeKey,
-          operationContext: input.savedSecretOperationContext }), admissionLifetime);
+      : await observePhase('catalog', () => awaitWithinProviderOperation(prepareProviderConnectionsCatalogForCli({ expectedScopeKey: initialScopeKey,
+          operationContext: input.savedSecretOperationContext }), admissionLifetime));
   } catch (error) {
     if (error instanceof ProviderOperationAbandonedError) {
       return { ok: false, error: createProviderErrorV1('provider_endpoint_unavailable', {
@@ -590,13 +619,13 @@ export async function createRuntimeProviderSpawnAuthorizationAttempt(input: Read
 
   let activationResults;
   try {
-    activationResults = await awaitWithinProviderOperation(
+    activationResults = await observePhase('agent_activation', () => awaitWithinProviderOperation(
       activateAgentRuntimeContributionOnDemand(
         input.lease.registry,
         input.agentId,
       ),
       admissionLifetime,
-    );
+    ));
   } catch (error) {
     if (error instanceof ProviderOperationAbandonedError) {
       return {
@@ -625,11 +654,15 @@ export async function createRuntimeProviderSpawnAuthorizationAttempt(input: Read
     providersByContributionKey:
       input.lease.registry.contributes.providersByContributionKey ?? new Map(),
   };
+  const retirementSignal = input.lease.registry.agentRuntimesByAgentId.get(input.agentId)?.retirementSignal;
+  if (retirementSignal) {
+    admissionLifetime = createProviderOperationLifetime({
+      signal: input.signal ? AbortSignal.any([input.signal, retirementSignal]) : retirementSignal,
+    });
+  }
   let managedPurposeBindingSnapshot = input.managedPurposeBindingSnapshot;
   const resolveCurrent = async (
-    lifetime = createProviderOperationLifetime({
-      wallTimeMs: PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs,
-    }),
+    lifetime = admissionLifetime,
     admitSavedSecret = false,
   ): Promise<ProviderSpawnAuthorizationResult> => {
     let snapshot = getAccountSettingsSnapshot();
@@ -649,14 +682,14 @@ export async function createRuntimeProviderSpawnAuthorizationAttempt(input: Read
     }
     let dnsEvidenceByEndpointUrl;
     try {
-      dnsEvidenceByEndpointUrl = await collectProviderConnectionDnsEvidence({
+      dnsEvidenceByEndpointUrl = await observePhase('dns', () => collectProviderConnectionDnsEvidence({
         connectionId,
         machineId: input.machineId,
         providerSettings,
         registry,
         ...(input.resolveAddresses ? { resolveAddresses: input.resolveAddresses } : {}),
         lifetime,
-      });
+      }));
     } catch (error) {
       if (error instanceof ProviderOperationAbandonedError) {
         return {
@@ -711,19 +744,25 @@ export async function createRuntimeProviderSpawnAuthorizationAttempt(input: Read
         };
       }
       if (!managedPurposeBindingSnapshot && input.resolveManagedPurposeBindingIntent) {
+        const deployment = connectionResolution.record.deployment;
+        const resolveBindingIntent = input.resolveManagedPurposeBindingIntent;
         try {
           managedPurposeBindingSnapshot =
-            await resolveManagedProviderPurposeBindingSnapshot({
+            await observePhase('purpose_bindings', () => awaitAbortableWithinProviderOperation(signal => resolveManagedProviderPurposeBindingSnapshot({
               implementationIdentity:
-                connectionResolution.record.deployment.implementationIdentity,
+                deployment.implementationIdentity,
               connectedAccounts:
-                connectionResolution.record.deployment.managedRuntime
+                deployment.managedRuntime
                   .connectedAccounts,
               purposeBindingIntents:
-                connectionResolution.record.deployment.purposeBindingIntents,
-              resolveBindingIntent: input.resolveManagedPurposeBindingIntent,
-            });
-        } catch {
+                deployment.purposeBindingIntents,
+              resolveBindingIntent,
+              signal,
+            }), lifetime));
+        } catch (error) {
+          if (error instanceof ProviderOperationAbandonedError) return {
+            ok: false, error: createProviderErrorV1('provider_endpoint_unavailable', { connectionId, machineId: input.machineId }),
+          };
           return {
             ok: false,
             error: createProviderErrorV1('provider_connection_invalid', {
@@ -742,6 +781,7 @@ export async function createRuntimeProviderSpawnAuthorizationAttempt(input: Read
     ) {
       const acquireManagedProviderRuntime =
         input.lease.registry.acquireManagedProviderRuntime;
+      const deployment = connectionResolution.record.deployment;
       if (!acquireManagedProviderRuntime) {
         return {
           ok: false,
@@ -753,11 +793,13 @@ export async function createRuntimeProviderSpawnAuthorizationAttempt(input: Read
       }
       try {
         managedProviderRuntime =
-          await acquireManagedProviderRuntime(
-            connectionResolution.record.deployment
-              .implementationIdentity,
-          ) ?? undefined;
-      } catch {
+          await observePhase('managed_runtime', () => awaitWithinProviderOperation(acquireManagedProviderRuntime(
+            deployment.implementationIdentity,
+          ), lifetime)) ?? undefined;
+      } catch (error) {
+        if (error instanceof ProviderOperationAbandonedError) return {
+          ok: false, error: createProviderErrorV1('provider_endpoint_unavailable', { connectionId, machineId: input.machineId }),
+        };
         managedProviderRuntime = undefined;
       }
       if (!managedProviderRuntime?.isCurrent()) {
@@ -786,7 +828,7 @@ export async function createRuntimeProviderSpawnAuthorizationAttempt(input: Read
     }
     let runtimeModelObservation: ProviderRuntimeCatalogSelectionObservation | null;
     try {
-      runtimeModelObservation = await awaitAbortableWithinProviderOperation(signal => resolveProviderRuntimeCatalogSelectionObservation({
+      runtimeModelObservation = await observePhase('model_projection', () => awaitAbortableWithinProviderOperation(signal => resolveProviderRuntimeCatalogSelectionObservation({
           selection: input.selection,
           machineId: input.machineId,
           accountSettings: snapshot.settings,
@@ -810,7 +852,7 @@ export async function createRuntimeProviderSpawnAuthorizationAttempt(input: Read
           ...(input.localCandidateUrlsByConnectionId
             ? { localCandidateUrlsByConnectionId: input.localCandidateUrlsByConnectionId }
             : {}),
-        }), lifetime);
+        }), lifetime));
     } catch (error) {
       const parsed = ProviderErrorV1Schema.safeParse(error);
       return { ok: false, error: parsed.success ? parsed.data : createProviderErrorV1('provider_endpoint_unavailable', {
@@ -960,7 +1002,14 @@ export async function createRuntimeProviderSpawnAuthorizationAttempt(input: Read
     ok: true,
     attempt: createProviderSpawnAuthorizationAttempt({
       initial: initial.authorization,
-      revalidate: resolveCurrent,
+      revalidate: (signal) => resolveCurrent(signal
+        ? {
+            ...admissionLifetime,
+            signal: admissionLifetime.signal
+              ? AbortSignal.any([admissionLifetime.signal, signal])
+              : signal,
+          }
+        : admissionLifetime),
       resolveCredential: () => {
         const snapshot = getAccountSettingsSnapshot();
         if (!snapshot) {

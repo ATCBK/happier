@@ -11,6 +11,7 @@ import { resolveMachineAdmission } from '@/app/machines/machineAccess';
 
 import { resolveMachineLiveStreamRelayCaps } from '../../machines/peer/mediation/stream/relayCaps';
 import { applyMachineLiveStreamRelayBackpressure } from '../../machines/peer/mediation/stream/metering';
+import { createMachineLiveStreamMeter } from '@happier-dev/protocol/machines/peer/mediation/stream/metering';
 import type { PeerMediationViewerSocketOwnershipVerifier } from './viewerSocketOwnership';
 import {
     createPeerMediationFlowEvent,
@@ -43,7 +44,7 @@ type MachineLiveStreamRelayState = {
     framesRelayed: number;
     framesDropped: number;
     lastBandwidthCappedReceiptAtMs: number | null;
-    recentFrames: Array<Readonly<{ atMs: number; bytes: number }>>;
+    meter: ReturnType<typeof createMachineLiveStreamMeter>;
     queuedFrames: MachineLiveStreamFrameV1[];
     availableWindowFrames: number;
     availableWindowBytes: number;
@@ -238,7 +239,12 @@ function createControlEnvelope(
 }
 
 function getFrameBytes(frame: MachineLiveStreamFrameV1): number {
-    return getMachineLiveStreamPayloadDecodedByteLength(frame.payload.t === 'plain' ? frame.payload.v : frame.payload.c);
+    return getMachineLiveStreamPayloadDecodedByteLength(meterFrame(frame).payloadBase64);
+}
+
+// Meter opaque wire bytes without decrypting them; metadata is not image cadence.
+function meterFrame(frame: MachineLiveStreamFrameV1) {
+    return { payloadKind: frame.payloadKind, payloadBase64: frame.payload.t === 'plain' ? frame.payload.v : frame.payload.c };
 }
 
 function fromBase64Url(value: string): Uint8Array | null {
@@ -334,11 +340,11 @@ function createState(input: Readonly<{
         framesRelayed: 0,
         framesDropped: 0,
         lastBandwidthCappedReceiptAtMs: null,
-        recentFrames: [],
+        meter: createMachineLiveStreamMeter({ caps: input.caps, startedAtMs: input.nowMs }),
         queuedFrames: [],
-        // Server relay owns the bounded viewer delivery window. It opens with one frame so a
+        // Server relay owns the bounded viewer delivery window. It opens with one image so a
         // newly started viewer can render a keyframe, then socket-authorized viewer acks
-        // replenish the window in `applyAckControl`.
+        // replenish the window in `applyAckControl`. Metadata shares its byte credit.
         availableWindowFrames: 1,
         availableWindowBytes: input.maxWindowBytes,
         nextSequenceToRelay: 1,
@@ -359,39 +365,21 @@ function pruneInactiveSocketStreamKeys(socketStreamKeys: Set<MachineLiveStreamKe
     }
 }
 
-function pruneRecentFrames(state: MachineLiveStreamRelayState, nowMs: number): void {
-    const minMs = nowMs - 1_000;
-    while (state.recentFrames.length > 0 && state.recentFrames[0]!.atMs < minMs) {
-        state.recentFrames.shift();
-    }
-}
-
 function resolveFrameCapFailure(input: Readonly<{
     state: MachineLiveStreamRelayState;
     frame: MachineLiveStreamFrameV1;
-    caps: MachineLiveStreamRelayCaps;
     nowMs: number;
 }>): string | null {
-    const frameBytes = getFrameBytes(input.frame);
-    if (input.caps.maxFrameBytes !== undefined && frameBytes > input.caps.maxFrameBytes) return 'max_frame_bytes_exceeded';
-    if (input.caps.maxDurationMs !== undefined
-        && input.nowMs - input.state.startedAtMs > input.caps.maxDurationMs) return 'max_duration_ms_exceeded';
-    pruneRecentFrames(input.state, input.nowMs);
-    const recentBytes = input.state.recentFrames.reduce((sum, item) => sum + item.bytes, 0) + frameBytes;
-    const recentFrames = input.state.recentFrames.length + 1;
-    if (input.caps.maxFramesPerSecond !== undefined && recentFrames > input.caps.maxFramesPerSecond) return 'max_frames_per_second_exceeded';
-    if (input.caps.maxBitrateBps !== undefined && recentBytes * 8 > input.caps.maxBitrateBps) return 'max_bitrate_bps_exceeded';
-    if (input.caps.maxTotalBytes !== undefined
-        && input.state.bytesRelayed + frameBytes > input.caps.maxTotalBytes) return 'max_total_bytes_exceeded';
-    return null;
+    const result = input.state.meter.checkFrame(meterFrame(input.frame), input.nowMs);
+    return result.ok ? null : result.reasonCode;
 }
 
 function recordFrame(state: MachineLiveStreamRelayState, frame: MachineLiveStreamFrameV1, nowMs: number): void {
-    const frameBytes = getFrameBytes(frame);
-    state.bytesRelayed += frameBytes;
-    state.framesRelayed += 1;
-    state.recentFrames.push({ atMs: nowMs, bytes: frameBytes });
-    pruneRecentFrames(state, nowMs);
+    const result = state.meter.recordFrame(meterFrame(frame), nowMs);
+    if (result.ok) {
+        state.bytesRelayed = result.metering.bytesSent;
+        state.framesRelayed = result.metering.framesSent;
+    }
 }
 
 function emitCapFailure(input: Readonly<{
@@ -585,17 +573,17 @@ function applyRelayWindowPressure(input: Readonly<{
         capIntervalExceeded,
     });
     input.state.queuedFrames = [...pressured.frames];
+    input.state.framesDropped += pressured.framesDropped;
+    input.state.bytesDropped += pressured.bytesDropped;
     if (pressured.receipt) {
         input.state.lastBandwidthCappedReceiptAtMs = input.nowMs;
-        input.state.framesDropped += pressured.receipt.framesDropped ?? 0;
-        input.state.bytesDropped += pressured.receipt.bytesDropped ?? 0;
         emitReceipt({
             socket: input.socket,
             envelope: input.envelope,
             receipt: pressured.receipt,
         });
     }
-    if (pressured.receipt && pressured.requiresKeyframeResync) {
+    if (pressured.requiresKeyframeResync) {
         input.state.awaitingKeyframe = true;
         emitKeyframeRequired(input);
     }
@@ -631,18 +619,16 @@ function drainRelayQueue(input: Readonly<{
     undeliverableSocket?: Socket;
     onCapFailure: (frame: MachineLiveStreamFrameV1, reasonCode: string) => void;
 }>): void {
-    while (
-        input.state.queuedFrames.length > 0
-        && input.state.availableWindowFrames > 0
-    ) {
+    while (input.state.queuedFrames.length > 0) {
         const nextFrame = input.state.queuedFrames[0]!;
-        if (input.state.awaitingKeyframe && nextFrame.payloadKind !== 'image_keyframe') return;
+        const mediaFrame = nextFrame.payloadKind !== 'metadata';
+        if (mediaFrame && input.state.availableWindowFrames <= 0) return;
+        if (input.state.awaitingKeyframe && nextFrame.payloadKind === 'image_delta') return;
         const frameBytes = getFrameBytes(nextFrame);
         if (frameBytes > input.state.availableWindowBytes) return;
         const capFailure = resolveFrameCapFailure({
             state: input.state,
             frame: nextFrame,
-            caps: input.state.caps,
             nowMs: input.nowMs,
         });
         if (capFailure) {
@@ -671,7 +657,7 @@ function drainRelayQueue(input: Readonly<{
             }
             return;
         }
-        input.state.availableWindowFrames -= 1;
+        if (mediaFrame) input.state.availableWindowFrames -= 1;
         input.state.availableWindowBytes -= frameBytes;
         recordFrame(input.state, nextFrame, input.nowMs);
         input.state.nextSequenceToRelay = Math.max(input.state.nextSequenceToRelay, nextFrame.sequence + 1);
@@ -1205,7 +1191,6 @@ export function machineLiveStreamRelayHandler(
             const capFailure = resolveFrameCapFailure({
                 state,
                 frame: envelope.message.frame,
-                caps: state.caps,
                 nowMs,
             });
             if (capFailure) {
@@ -1315,6 +1300,14 @@ export function machineLiveStreamRelayHandler(
                     onCapFailure: (frame, reasonCode) => closeCapExceeded(streamKey, state, frame, reasonCode),
                 });
                 if (!accepted) return;
+                // Relay credit stays here; demand-driven capture also needs the
+                // admitted acknowledgement to produce its next frame.
+                emitToMachine({
+                    io: ctx.io,
+                    userId,
+                    machineId: state.sourceMachineId,
+                    envelope,
+                });
                 return;
             }
             if (!state && (socketViewerId || (isSourceSocket && envelope.targetMachineId !== envelope.sourceMachineId))) {
@@ -1324,13 +1317,6 @@ export function machineLiveStreamRelayHandler(
             if (!isSourceSocket && !isTargetControlSocket) {
                 emitError(socket, 'target_machine_control_required');
                 return;
-            }
-            if (envelope.message.control.kind === 'stop') {
-                closeStreamWithObservability({
-                    streamKey,
-                    kind: 'flow.closed',
-                    reasonCode: envelope.message.control.reasonCode ?? 'stream_stopped',
-                });
             }
             if (isSourceSocket) {
                 // Source-initiated control flows to the consumer (per-tab viewer when the stream
@@ -1357,6 +1343,15 @@ export function machineLiveStreamRelayHandler(
                     userId,
                     machineId: envelope.sourceMachineId,
                     envelope,
+                });
+            }
+            // Installation-bound routing needs the admitted state until the
+            // terminal control has reached the opposite endpoint.
+            if (envelope.message.control.kind === 'stop') {
+                closeStreamWithObservability({
+                    streamKey,
+                    kind: 'flow.closed',
+                    reasonCode: envelope.message.control.reasonCode ?? 'stream_stopped',
                 });
             }
             return;

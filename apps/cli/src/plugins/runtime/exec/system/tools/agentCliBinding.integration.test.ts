@@ -13,7 +13,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { bindAgentCliLaunchSpec, buildAgentCliLaunchSpecFromResolution } from '@/packagedRuntime/managedTools/agentCliLaunchSpec';
 import { prepareManagedAgentCliLaunch } from '@/packagedRuntime/managedTools/prepareManagedAgentCliLaunch';
 
-import { resolveExecutablePluginRuntimeRegistry } from '../../../resolveExecutablePluginRuntimeRegistry';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { createRetainedAgentCliSystemToolService } from './agentCliBinding';
 import { createClaudeNativeSdkQueryContext } from '../../../../../../../../packages/plugins/claude/src/agent/sdk/nativeExec.js';
 import { createClaudeAgentSdkTurnOperations } from '../../../../../../../../packages/plugins/claude/src/agent/runtime/remote/sdk/session.js';
@@ -22,7 +22,7 @@ import { createStablePluginExecService } from '../../../invocation/services/exec
 import { resolvePluginPathWithinRoots } from '../../../invocation/services/filesystem';
 import { captureProcessTree, terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
 import { isPidAlive } from '@/testkit/process/spawn';
-import type { AgentSessionRuntimeEvent } from '@happier-dev/protocol/runtime';
+import type { AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
 
 const windowsSpawnBoundary = vi.hoisted(() => ({ wrapperPath: null as string | null }));
 // Windows command-shell execution is the OS boundary; grant authorization and SDK owners remain real.
@@ -32,7 +32,7 @@ vi.mock('node:child_process', async importOriginal => {
         ...actual,
         spawn: (command: string, args: readonly string[], options?: SpawnOptions) =>
             actual.spawn(command, windowsSpawnBoundary.wrapperPath && args[0]?.endsWith('agent_cli_windows_shim_runner.cjs')
-                ? [windowsSpawnBoundary.wrapperPath, ...args.slice(2)] : args, options),
+                ? [windowsSpawnBoundary.wrapperPath, ...args.slice(2)] : args, options ?? {}),
     };
 });
 
@@ -113,7 +113,7 @@ describe('Agent CLI system-tool binding (integration)', () => {
             allowedExecutables: [{ kind: 'systemTool', id: 'claude-cli' }],
             signal: new AbortController().signal, isOccurrenceCurrent: () => true, systemTools,
             resolveExecutable: async () => { throw new Error('The exact resolution grant was not consumed'); },
-            resolvePath: path => resolvePluginPathWithinRoots({ pluginData: directory, workspace: directory, projects: new Map() }, path),
+            resolvePath: async path => resolvePluginPathWithinRoots({ pluginData: directory, workspace: directory, projects: new Map() }, path),
         });
         windowsSpawnBoundary.wrapperPath = mode === 'wrapped' ? vendorPath : null;
         const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service,
@@ -337,10 +337,11 @@ describe('Agent CLI system-tool binding (integration)', () => {
             process.env[fixture.overrideEnvKey] = overridePath;
             process.env.HAPPIER_JS_RUNTIME_PATH = process.execPath;
 
-            const runtimeRegistry = await resolveExecutablePluginRuntimeRegistry({
+            const admitted = await createAdmittedPluginRuntimeFixture({
                 happyHomeDir,
-                pluginIds: [fixture.pluginId],
+                runtimeOptions: { pluginIds: [fixture.pluginId] },
             });
+            const runtimeRegistry = admitted.registry;
             try {
                 await runtimeRegistry.activateContributionsOnDemand([{
                     pluginId: fixture.pluginId,
@@ -381,7 +382,7 @@ describe('Agent CLI system-tool binding (integration)', () => {
                     expect(new TextDecoder().decode(result.stdout)).toBe(expectedOutput);
                 }
             } finally {
-                await runtimeRegistry.dispose();
+                await admitted.dispose();
                 if (previousPath === undefined) delete process.env.PATH;
                 else process.env.PATH = previousPath;
                 if (previousOverride === undefined) delete process.env[fixture.overrideEnvKey];

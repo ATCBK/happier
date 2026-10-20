@@ -3,6 +3,7 @@ import { createElement, useCallback, useContext, type Context, type ReactNode } 
 import { PLUGIN_UI_DATA_CONTEXT_INTERNAL } from '../data/context.js';
 import { HAPPIER_UI_ENVIRONMENT_CONTEXTS_INTERNAL } from '../environment/context.js';
 import { PLUGIN_HOST_API_CONTEXT_INTERNAL } from '../hostApi/context.js';
+import { PLUGIN_UI_HOST_READINESS_CONTEXT_INTERNAL } from '../hostApi/readiness.public.js';
 import { HAPPIER_PAGE_CHROME_CONTEXT_INTERNAL, type HappierPageChromeInternal } from '../presentation/layout/pageChrome.js';
 import { PLUGIN_UI_PRESENTATION_HOST_CONTEXT_INTERNAL } from '../presentationHost/context.js';
 import { PLUGIN_SURFACE_CONTEXT_INTERNAL } from './PluginUiProvider.js';
@@ -15,6 +16,7 @@ import { PLUGIN_SURFACE_CONTEXT_INTERNAL } from './PluginUiProvider.js';
  */
 const SURFACE_ROOT_CONTEXTS: readonly Context<unknown>[] = [
   PLUGIN_HOST_API_CONTEXT_INTERNAL,
+  PLUGIN_UI_HOST_READINESS_CONTEXT_INTERNAL,
   PLUGIN_SURFACE_CONTEXT_INTERNAL,
   ...HAPPIER_UI_ENVIRONMENT_CONTEXTS_INTERNAL,
   PLUGIN_UI_DATA_CONTEXT_INTERNAL,

@@ -5,6 +5,8 @@ import { MarkdownBlockView, type Option, type OptionLongPressHandler } from '../
 import type { MarkdownBlock } from '../parseMarkdown';
 import { parseMarkdownTableSources, type MarkdownTableCellSource } from '../parseMarkdownBlock';
 import { projectLeafRanges } from './MarkdownFindDecorationContext';
+import { parseMarkdownSyntax } from '../streaming/splitMarkdownIntoBlockSources';
+import { readMarkdownSpecialCodeSources } from '../streaming/readMarkdownContainerBlock';
 import type { StreamingTextRevealPreset } from '../streaming/streamingTextRevealConfig';
 import { markdownProfileToLegacyVariant, type MarkdownRenderingProfile } from './MarkdownRenderingProfile';
 import type { FindTextRange } from '@happier-dev/plugin-ui/presentation';
@@ -24,6 +26,7 @@ type SpecialMarkdownBlockViewProps = Readonly<{
     streamingRevealPreset?: StreamingTextRevealPreset;
     agentTexMath: boolean;
     findSourceRanges?: readonly FindTextRange[];
+    codeFindRanges?: readonly FindTextRange[];
     sourceStart?: number;
     markdown?: string;
 }>;
@@ -37,6 +40,10 @@ export const SpecialMarkdownBlockView = React.memo((props: SpecialMarkdownBlockV
         () => hasTableFindRanges && props.markdown ? parseMarkdownTableSources(props.markdown) : null,
         [hasTableFindRanges, props.markdown],
     );
+    const codeSources = React.useMemo(() => props.markdown && props.findSourceRanges?.length && !props.codeFindRanges
+        && props.blocks.some(block => block.type === 'code-block')
+        ? readMarkdownSpecialCodeSources(props.markdown, parseMarkdownSyntax(props.markdown).topNode.firstChild)
+        : null, [props.markdown, props.findSourceRanges, props.codeFindRanges, props.blocks]);
     const tableRanges = React.useMemo(() => {
         if (!tableSources || !props.findSourceRanges) return undefined;
         const projectCell = (cell: MarkdownTableCellSource) =>
@@ -50,7 +57,7 @@ export const SpecialMarkdownBlockView = React.memo((props: SpecialMarkdownBlockV
     return (
         <>
             {props.blocks.map((block, index) => {
-                let ranges: readonly FindTextRange[] | undefined;
+                let ranges = block.type === 'code-block' ? props.codeFindRanges : undefined;
                 const locateRanges = (text: string) => {
                     const start = props.markdown?.indexOf(text, cursor) ?? -1;
                     if (start < 0) return [];
@@ -59,11 +66,8 @@ export const SpecialMarkdownBlockView = React.memo((props: SpecialMarkdownBlockV
                 };
                 const optionRanges = block.type === 'options' && props.findSourceRanges?.length ? block.items.map(locateRanges) : undefined;
                 if (block.type === 'table') cursor = tableSources?.get(index)?.sourceEnd ?? cursor;
-                if (block.type === 'code-block' && props.markdown && props.findSourceRanges?.length) {
-                    cursor = props.markdown.indexOf('\n', cursor) + 1;
-                    const start = props.markdown.indexOf(block.content, cursor);
-                    if (start >= 0) ranges = sliceFindRanges(props.findSourceRanges, (props.sourceStart ?? 0) + start, block.content.length);
-                    cursor = Math.max(cursor, start + block.content.length);
+                if (block.type === 'code-block' && codeSources && props.findSourceRanges) {
+                    ranges = projectLeafRanges(codeSources.get(index)!, props.sourceStart ?? 0, props.findSourceRanges);
                 }
                 return (
                 <MarkdownBlockView

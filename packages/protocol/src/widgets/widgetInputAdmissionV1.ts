@@ -58,14 +58,9 @@ export function readWidgetInputTargetV1(descriptor: WidgetInputDescriptorV1): Wi
     return declared[0] ?? { kind: 'app' };
 }
 
-/**
- * A checkout target needs a Project. Core pages host app reads; their query-scope slots do not
- * admit an executable Session target. Home, Project and plugin areas retain explicit Session pins.
- */
-export function isWidgetTargetHostableV1(descriptor: WidgetInputDescriptorV1, surface: string): boolean {
-    const target = readWidgetInputTargetV1(descriptor);
-    if (target.kind === 'workspace') return surface === 'project';
-    return target.kind !== 'session' || surface !== 'corePage';
+/** Placement selects presentation, never target authority. Exact targets are admitted at each read. */
+export function isWidgetTargetHostableV1(descriptor: WidgetInputDescriptorV1, _surface: string): boolean {
+    return readWidgetInputTargetV1(descriptor).kind !== 'invalid';
 }
 
 /** Discover only declared target intent before reaching its own Resource/purpose authority. */
@@ -100,11 +95,11 @@ export function resolveConfiguredWidgetInputs(options: ConfiguredWidgetInputsV1)
     })) };
 }
 
-/** Context supplies admitted checkout facts; a saved value never supplies read authority. */
+/** Authorized Project rows supply checkout facts; bindings and page context never grant access. */
 export function validateWidgetWorkspaceInputV1(input: Readonly<{
     value: JsonValue;
     serverId: string;
-    contextValues: readonly JsonValue[];
+    workspaceRefs: readonly WorkspaceRefV1[];
 }>, context: WorkspaceRefResolutionContextV1 = {}): Readonly<{ status: 'valid'; checkout: WorkspaceRefV1 }>
     | Readonly<{ status: 'invalid' | 'denied'; reasonCode: string }> {
     const selected = WorkspaceRefV1Schema.safeParse(input.value);
@@ -112,11 +107,7 @@ export function validateWidgetWorkspaceInputV1(input: Readonly<{
     const selectedServerId = context.normalizeServerId?.(selected.data.serverId) ?? selected.data.serverId;
     const scopeServerId = context.normalizeServerId?.(input.serverId) ?? input.serverId;
     if (selectedServerId !== scopeServerId) return { status: 'denied', reasonCode: 'widget_target_scope_mismatch' };
-    const refs = input.contextValues.flatMap(value => {
-        const ref = WorkspaceRefV1Schema.safeParse(value);
-        return ref.success ? [ref.data] : [];
-    });
-    const admitted = resolveWorkspaceRefV1(refs, workspaceAddressFromRefV1(selected.data), context);
+    const admitted = resolveWorkspaceRefV1(input.workspaceRefs, workspaceAddressFromRefV1(selected.data), context);
     return admitted.kind === 'resolved' ? { status: 'valid', checkout: admitted.ref }
         : { status: 'denied', reasonCode: 'widget_target_identity_mismatch' };
 }

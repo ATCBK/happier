@@ -13,6 +13,7 @@ import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/act
 import { upsertAndActivateServer } from '@/sync/domains/server/serverRuntime';
 import { resetRuntimeFetch, setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { publishHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';
+import { handleEphemeralSocketUpdate } from '@/sync/engine/socket/socket';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, PROVIDER_CONNECTIONS_ACCOUNT_KV_KEY_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { buildConnectedAccountCatalogPhysicalKeyV1, emptyConnectedAccountCatalogRecordV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { CONNECTED_PRESENTATION_ACCOUNT_KV_KEY_V1, CONNECTED_ACKNOWLEDGEMENTS_ACCOUNT_KV_KEY_V1 } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
@@ -48,10 +49,14 @@ describe('private catalog Account-change admission', () => {
         '%s retains admitted authority for unrelated changes, but revalidates its own rows and Account source', async domain => {
             const accountId = `catalog-wakes-${domain}`;
             let revision = 1;
+            const catalogReads = new Map<string, number>();
             // Home HTTP and the disconnected socket are the only substituted boundaries.
             // Account admission, private-row readers, maintenance and publication all run.
             setRuntimeFetch(async url => {
                 const path = new URL(String(url)).pathname;
+                if (path.startsWith('/v1/account/entity-rows/connected-accounts/')) {
+                    catalogReads.set(path, (catalogReads.get(path) ?? 0) + 1);
+                }
                 if (path === '/health' || path === '/v1/auth/ping') return Response.json({ ok: true });
                 if (path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
                 if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
@@ -107,6 +112,31 @@ describe('private catalog Account-change admission', () => {
                 for (let index = 0; index < 20; index += 1) publishHomeAccountChange(home.id, [`session-${index}`, `machine-${index}`]);
                 publishHomeAccountChange(home.id, []);
                 expect(owner.snapshot()).toBe(before);
+                if (domain === 'configurations' || domain === 'purposes') {
+                    const path = `/v1/account/entity-rows/connected-accounts/${domain}`;
+                    const initialReads = catalogReads.get(path) ?? 0;
+                    // Replay 60 seconds of settled machine Usage notifications. Only the
+                    // clock and physical transports are substituted; wake routing, Account
+                    // admission, catalog reads and snapshot publication are real.
+                    vi.useFakeTimers({ toFake: ['Date'] });
+                    const startedAt = Date.now();
+                    try {
+                        for (let elapsed = 2_000; elapsed <= 60_000; elapsed += 2_000) {
+                            vi.setSystemTime(startedAt + elapsed);
+                            await handleEphemeralSocketUpdate({
+                                sourceServerId: home.id,
+                                update: { type: 'usage-sources-invalidated', machineId: 'selected-machine', installationId: 'installation' },
+                                addActivityUpdate: () => {}, addMachineActivityUpdate: () => {},
+                                getSessionEncryption: () => null, getSession: () => undefined, applyMessages: () => {},
+                            });
+                            await vi.waitFor(() => expect(owner.snapshot()).toMatchObject({ status: 'ready', revision: 1 }));
+                        }
+                    } finally { vi.useRealTimers(); }
+                    const refreshReads = (catalogReads.get(path) ?? 0) - initialReads;
+                    console.info(JSON.stringify({ method: 'GET', path, status: 200, durationMs: 60_000, notifications: 30, initialReads, refreshReads }));
+                    expect(refreshReads).toBe(0);
+                    expect(owner.snapshot()).toBe(before);
+                }
                 for (const entityIds of [...owner.rowIds.map(id => [id]), ['self'], undefined]) {
                     revision += 1;
                     const incumbent = owner.snapshot();

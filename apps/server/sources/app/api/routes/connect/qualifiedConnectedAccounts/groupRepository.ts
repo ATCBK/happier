@@ -4,9 +4,11 @@ import { QualifiedConnectedAccountGroupCreateV4Schema, QualifiedConnectedAccount
 import { clearConnectedServiceAuthGroupMemberRuntimeBlockers, readConnectedServiceManualActiveProfileRuntimeBlocker } from '@happier-dev/protocol/connect/connectedServiceAuthGroupMemberRuntimeStatePolicy';
 import { type QualifiedConnectedAccountGroupV4, type QualifiedConnectedAccountServiceRef } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import type { Prisma } from "@prisma/client";
+import { isDeepStrictEqual } from "node:util";
 
 import { db } from "@/storage/db";
 import { inTx, type Tx } from "@/storage/inTx";
+import { acquireAccountCredentialSourceTeamAdmissionInTx } from "@/app/teams/teamChanges";
 import {
     isPrismaErrorCode,
 } from "@/storage/prisma";
@@ -183,10 +185,7 @@ async function listQualifiedConnectedAccountGroupsByFilter(
         accountId: string;
         service?: QualifiedConnectedAccountServiceRef;
     }>,
-): Promise<Array<Readonly<{
-    group: QualifiedConnectedAccountGroupV4;
-    activeProfileId: string | null;
-}>>> {
+): Promise<QualifiedConnectedAccountGroupV4[]> {
     const service = params.service
         ? QualifiedConnectedAccountServiceRefSchema.parse(params.service)
         : null;
@@ -246,28 +245,13 @@ async function listQualifiedConnectedAccountGroupsByFilter(
         }
         return true;
     });
-    return preparedRows.map((row) => ({
-        group: toQualifiedConnectedAccountGroup(row),
-        activeProfileId: row.activeProfileId,
-    }));
+    return preparedRows.map(toQualifiedConnectedAccountGroup);
 }
 
 export async function listAllQualifiedConnectedAccountGroupsInTx(
     tx: QualifiedGroupListStorage,
     params: Readonly<{ accountId: string }>,
 ): Promise<QualifiedConnectedAccountGroupV4[]> {
-    const projections =
-        await listQualifiedConnectedAccountGroupsByFilter(tx, params);
-    return projections.map((projection) => projection.group);
-}
-
-export async function listAllQualifiedConnectedAccountGroupsForLegacyProjectionInTx(
-    tx: QualifiedGroupListStorage,
-    params: Readonly<{ accountId: string }>,
-): Promise<Array<Readonly<{
-    group: QualifiedConnectedAccountGroupV4;
-    activeProfileId: string | null;
-}>>> {
     return await listQualifiedConnectedAccountGroupsByFilter(tx, params);
 }
 
@@ -277,9 +261,7 @@ export async function listQualifiedConnectedAccountGroups(
         service: QualifiedConnectedAccountServiceRef;
     }>,
 ): Promise<QualifiedConnectedAccountGroupV4[]> {
-    const projections =
-        await listQualifiedConnectedAccountGroupsByFilter(db, params);
-    return projections.map((projection) => projection.group);
+    return await listQualifiedConnectedAccountGroupsByFilter(db, params);
 }
 
 const qualifiedGroupInclude = {
@@ -543,25 +525,6 @@ export async function readQualifiedConnectedAccountGroup(
     return row ? toQualifiedConnectedAccountGroup(row) : null;
 }
 
-export async function readQualifiedConnectedAccountGroupForLegacyProjection(
-    params: Readonly<{
-        accountId: string;
-        service: QualifiedConnectedAccountServiceRef;
-        groupId: string;
-    }>,
-): Promise<Readonly<{
-    group: QualifiedConnectedAccountGroupV4;
-    activeProfileId: string | null;
-}> | null> {
-    const row = await readQualifiedGroupRowInTx(db, params);
-    return row
-        ? {
-            group: toQualifiedConnectedAccountGroup(row),
-            activeProfileId: row.activeProfileId,
-        }
-        : null;
-}
-
 export type QualifiedConnectedAccountGroupMutationResult =
     | Readonly<{
         status: "written";
@@ -733,6 +696,7 @@ export async function createQualifiedConnectedAccountGroup(
         group: params.group,
     });
     return await inTx(async (tx) => {
+        await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'content' });
         const serviceDigest =
             createQualifiedConnectedAccountServiceDigest(parsed.service);
         const groupDigest =
@@ -877,7 +841,7 @@ export async function createQualifiedConnectedAccountGroup(
             service: parsed.service,
             groupId: parsed.group.groupId,
         });
-    }, { /* Group membership/active-source and usage-source insertion/removal must remain coordinated. */ isolationLevel: "Serializable" });
+    });
 }
 
 export async function patchQualifiedConnectedAccountGroup(
@@ -892,6 +856,7 @@ export async function patchQualifiedConnectedAccountGroup(
         params.patch,
     );
     return await inTx(async (tx) => {
+        await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'content' });
         const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
             accountId: params.accountId,
             service: patch.service,
@@ -1057,7 +1022,7 @@ export async function patchQualifiedConnectedAccountGroup(
             service: patch.service,
             groupId: patch.groupId,
         });
-    }, { /* Group membership/active-source and usage-source insertion/removal must remain coordinated. */ isolationLevel: "Serializable" });
+    });
 }
 
 export async function deleteQualifiedConnectedAccountGroup(
@@ -1073,6 +1038,7 @@ export async function deleteQualifiedConnectedAccountGroup(
     const service =
         QualifiedConnectedAccountServiceRefSchema.parse(params.service);
     return await inTx(async (tx) => {
+        await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'content' });
         const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
             accountId: params.accountId,
             service,
@@ -1147,7 +1113,7 @@ export async function deleteQualifiedConnectedAccountGroup(
             accountId: params.accountId,
         });
         return { status: "deleted" };
-    }, { /* Group membership/active-source and usage-source insertion/removal must remain coordinated. */ isolationLevel: "Serializable" });
+    });
 }
 
 export async function patchQualifiedConnectedAccountGroupRuntimeState(
@@ -1162,6 +1128,7 @@ export async function patchQualifiedConnectedAccountGroupRuntimeState(
             params.patch,
         );
     return await inTx(async (tx) => {
+        await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'content' });
         const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
             accountId: params.accountId,
             service: patch.service,
@@ -1197,6 +1164,22 @@ export async function patchQualifiedConnectedAccountGroupRuntimeState(
             !membersByConnectedAccountId.has(member.connectedAccountId))) {
             return { status: "member_not_found" };
         }
+        const nextStateJson = patch.runtimeState.state === undefined ? current.stateJson
+            : encodeQualifiedGroupStateForActiveAccount({
+                currentStateJson: current.stateJson,
+                nextState: patch.runtimeState.state,
+                previousActiveAccountId: current.activeConnectedAccountId,
+                nextActiveAccountId: current.activeConnectedAccountId,
+            });
+        if (isDeepStrictEqual(
+            parseStoredJson(ConnectedServiceAuthGroupStateV1Schema, nextStateJson),
+            parseStoredJson(ConnectedServiceAuthGroupStateV1Schema, current.stateJson),
+        ) && patch.runtimeState.memberStates.every(member => isDeepStrictEqual(
+            member.state,
+            parseStoredJson(ConnectedServiceAuthGroupMemberStateV1Schema, membersByConnectedAccountId.get(member.connectedAccountId)!.stateJson),
+        ))) {
+            return { status: "written", group: toQualifiedConnectedAccountGroup(current) };
+        }
         const write = await tx.connectedServiceAuthGroup.updateMany({
             where: {
                 id: current.id,
@@ -1207,12 +1190,7 @@ export async function patchQualifiedConnectedAccountGroupRuntimeState(
             data: {
                 ...(patch.runtimeState.state !== undefined
                     ? {
-                        stateJson: encodeQualifiedGroupStateForActiveAccount({
-                            currentStateJson: current.stateJson,
-                            nextState: patch.runtimeState.state,
-                            previousActiveAccountId: current.activeConnectedAccountId,
-                            nextActiveAccountId: current.activeConnectedAccountId,
-                        }),
+                        stateJson: nextStateJson,
                     }
                     : {}),
                 runtimeStateRevision: { increment: 1 },
@@ -1267,7 +1245,7 @@ export async function patchQualifiedConnectedAccountGroupRuntimeState(
             service: patch.service,
             groupId: patch.groupId,
         });
-    }, { /* Group membership/active-source and usage-source insertion/removal must remain coordinated. */ isolationLevel: "Serializable" });
+    });
 }
 
 async function mutateQualifiedGroupMember(
@@ -1285,6 +1263,7 @@ async function mutateQualifiedGroupMember(
         );
     try {
         return await inTx(async (tx) => {
+            await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'content' });
             const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
                 accountId: params.accountId,
                 service: mutation.group.service,
@@ -1500,7 +1479,7 @@ async function mutateQualifiedGroupMember(
                 service: mutation.group.service,
                 groupId: mutation.group.groupId,
             });
-        }, { /* Group membership/active-source and usage-source insertion/removal must remain coordinated. */ isolationLevel: "Serializable" });
+        });
     } catch (error) {
         if (error instanceof QualifiedGroupMemberCasConflictError) {
             return await settleQualifiedGroupMemberCasConflict({
@@ -1576,6 +1555,7 @@ export async function deleteQualifiedConnectedAccountGroupMember(
         );
     try {
         return await inTx(async (tx) => {
+            await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'content' });
             const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
                 accountId: params.accountId,
                 service: mutation.group.service,
@@ -1660,7 +1640,7 @@ export async function deleteQualifiedConnectedAccountGroupMember(
                 service: mutation.group.service,
                 groupId: mutation.group.groupId,
             });
-        }, { /* Group membership/active-source and usage-source insertion/removal must remain coordinated. */ isolationLevel: "Serializable" });
+        });
     } catch (error) {
         if (!(error instanceof QualifiedGroupMemberCasConflictError)) {
             throw error;
@@ -1687,6 +1667,7 @@ export async function setQualifiedConnectedAccountGroupActiveAccount(
             params.mutation,
         );
     return await inTx(async (tx) => {
+        await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'content' });
         const admission = await readQualifiedGroupMutationAdmissionInTx(tx, {
             accountId: params.accountId,
             service: mutation.group.service,
@@ -1812,5 +1793,5 @@ export async function setQualifiedConnectedAccountGroupActiveAccount(
             service: mutation.group.service,
             groupId: mutation.group.groupId,
         });
-    }, { /* Group membership/active-source and usage-source insertion/removal must remain coordinated. */ isolationLevel: "Serializable" });
+    });
 }

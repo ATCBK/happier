@@ -1,14 +1,15 @@
 export type RpcAckResponseEmitter = Readonly<{
     id: string;
     data?: Record<string, unknown>;
-    timeout: (ms: number) => Readonly<{
+    timeout: (ms: number, ackLifetime?: Readonly<{ rejectOnDisconnect?: boolean; signal?: AbortSignal }>) => Readonly<{
         emitWithAck: (event: string, payload: unknown) => Promise<unknown>;
     }>;
 }>;
 
 export type RpcTargetSelectionResult =
-    | Readonly<{ type: "target"; target: RpcAckResponseEmitter; hadMultipleTargets: boolean }>
+    | Readonly<{ type: "target"; target: RpcAckResponseEmitter; hadMultipleTargets: boolean; clientIds?: readonly string[] }>
     | Readonly<{ type: "self-call" }>
+    | Readonly<{ type: "ambiguous"; clientIds: readonly string[] }>
     | Readonly<{ type: "not-available" }>;
 
 export type RpcForwardTargetGuard = Readonly<{

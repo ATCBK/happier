@@ -261,6 +261,17 @@ export const SERVER_RUNTIME_SERVER_CONFIG = defineServerConfigRegistry({
         aliases: ['HAPPIER_LOG_LEVEL', 'LOG_LEVEL'],
         description: 'Server log level.',
     },
+    HAPPIER_SERVER_LOG_FORMAT: {
+        type: 'enum',
+        default: 'pretty',
+        bounds: { values: ['pretty', 'json'] },
+        sensitivity: 'plain',
+        apply: 'restart',
+        editable: 'home',
+        section: 'server',
+        group: 'logging',
+        description: 'Node stdout log format. JSON writes one object per line for log collectors; Bun always uses JSON. Unrecognized env values use pretty.',
+    },
     DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING: {
         type: 'boolean',
         default: false,
@@ -425,7 +436,7 @@ export const SERVER_RUNTIME_SERVER_CONFIG = defineServerConfigRegistry({
         section: 'server',
         group: 'errorReporting',
         aliases: ['HAPPIER_SENTRY_PROFILE_SESSION_SAMPLE_RATE'],
-        description: 'Share of sessions profiled by Sentry, from 0 to 1.',
+        description: 'Share of sessions profiled by Sentry on Node, from 0 to 1. Bun servers skip native profiling with a warning; error capture remains enabled.',
     },
     SENTRY_ENABLE_LOGS: {
         type: 'boolean',

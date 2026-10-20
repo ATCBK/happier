@@ -1,5 +1,4 @@
 import * as React from 'react';
-import type { PluginContributionClientPlatform } from '@happier-dev/protocol';
 import { getPreferredLanguage } from '@/text';
 
 import {
@@ -27,6 +26,7 @@ import {
 import {
     getMachineContributionRegistryProjectionRevision,
     subscribeMachineContributionRegistryProjectionInvalidation,
+    type MachineContributionRegistryProjectionFailureReason,
 } from '@/sync/ops/machineContributionRegistryProjection';
 import { loadDaemonMergedProjectionCacheEntry } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import {
@@ -95,6 +95,7 @@ type LoadedProjectionState = Readonly<{
      */
     accountLifetime: ActiveServerAccountScopeLifetime | null;
     authorityKey: string | null;
+    failureReason?: MachineContributionRegistryProjectionFailureReason;
     /**
      * `retainedOffline` is derived, never stored: a `current` snapshot with no
      * live authority is retained-offline whether it was confirmed earlier in
@@ -130,15 +131,7 @@ export type PluginUiProjectionCurrentness = Readonly<{
  */
 export { resolvePluginUiProjectionPlatform };
 
-/**
- * Client executable declarations have web/iOS/Android targets. Desktop uses
- * the same React Native Web executable bundle as web, while the projection
- * platform retains `desktop` for UI/currentness consumers that distinguish it.
- */
-export function resolvePluginUiClientExecutablePlatform(): PluginContributionClientPlatform {
-    const platform = resolvePluginUiProjectionPlatform();
-    return platform === 'desktop' ? 'web' : platform;
-}
+export { resolvePluginUiClientExecutablePlatform } from './projection';
 
 function advanceProjectionConnectionState(
     previous: ProjectionConnectionState,
@@ -417,6 +410,7 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
         }
 
         let cancelled = false;
+        const abort = new AbortController();
         let retryTimer: ReturnType<typeof setTimeout> | null = null;
         let retryAttempts = 0;
 
@@ -427,14 +421,15 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
             && isAccountLifetimeCurrent(accountLifetime)
         );
 
-        const scheduleRetry = (): void => {
+        const scheduleRetry = (failureReason: MachineContributionRegistryProjectionFailureReason = 'error'): void => {
             if (!isRequestCurrent() || retryTimer !== null) return;
             setLoadedProjection((previous) => {
                 if (previous.targetKey !== targetKey
                     || previous.accountLifetime !== accountLifetime
-                    || previous.connectedAccountProjection === CONNECTED_ACCOUNT_PROJECTION_TRANSPORT_ERROR) return previous;
+                    || (previous.connectedAccountProjection === CONNECTED_ACCOUNT_PROJECTION_TRANSPORT_ERROR
+                        && previous.failureReason === failureReason)) return previous;
                 const retained = previous.phase === 'current' ? previous : restoreRetained();
-                return { ...retained, phase: retained.phase === 'current' ? 'current' : 'unavailable',
+                return { ...retained, failureReason, phase: retained.phase === 'current' ? 'current' : 'unavailable',
                     connectedAccountProjection: CONNECTED_ACCOUNT_PROJECTION_TRANSPORT_ERROR };
             });
             const delayMs = PLUGIN_UI_PROJECTION_RETRY_BACKOFF_MS[
@@ -455,6 +450,7 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
                 machineId: target.machineId,
                 serverId: target.serverId,
                 accountLifetime,
+                signal: abort.signal,
                 reuseFreshReady: loadedProjection.authorityKey === null
                     || loadedProjection.authorityKey === authorityKey,
             }).then((entry) => {
@@ -462,7 +458,7 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
                 if (!entry || entry.kind === 'error') {
                     // Keep the last-known snapshot, but retry a current
                     // transient failure without letting it regain authority.
-                    scheduleRetry();
+                    scheduleRetry(entry?.kind === 'error' ? entry.reason : 'error');
                     return;
                 }
                 if (entry.kind === 'unsupported') {
@@ -539,6 +535,7 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
 
         return () => {
             cancelled = true;
+            abort.abort();
             if (retryTimer !== null) clearTimeout(retryTimer);
         };
     }, [accountLifetime, authorityKey, platform, target, targetKey]);
@@ -567,9 +564,14 @@ export function usePluginUiProjectionCurrentness(params: Readonly<{
                         : 'establishing';
     const interactionEnabled = phase === 'current';
     const unavailableReasonCode = (phase === 'unavailable' || phase === 'retainedOffline') && targetKey && accountLifetimeCurrent
-        && loadedProjection.connectedAccountProjection !== CONNECTED_ACCOUNT_PROJECTION_UNSUPPORTED
-        && (!authorityKey || loadedProjection.connectedAccountProjection === CONNECTED_ACCOUNT_PROJECTION_TRANSPORT_ERROR)
-        ? 'plugin_machine_unreachable' : undefined;
+        ? loadedProjection.connectedAccountProjection === CONNECTED_ACCOUNT_PROJECTION_UNSUPPORTED
+            ? 'plugin_daemon_unsupported'
+            : loadedProjection.failureReason === 'invalid-response'
+                ? 'plugin_daemon_invalid_response'
+                : loadedProjection.failureReason
+                    ? 'plugin_daemon_unavailable'
+                    : !authorityKey ? 'plugin_machine_unreachable' : undefined
+        : undefined;
     const pluginBrowserProjection = interactionEnabled
         ? loadedProjection.pluginBrowserProjection
         : null;

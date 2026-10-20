@@ -5,6 +5,7 @@ import { BUILT_IN_ROLES_V1 } from './builtInRolesV1.js';
 import { ResolvedRoleV1Schema, type RoleResolutionLayerV1 } from './rolesV1.js';
 import { buildBackendTargetKeyV2, parseBackendTargetKeyV2 } from '../../backends/targets/backendTargetRefV2.js';
 import type { RoleSourceInventoryV1 } from './accountRoleActions.js';
+import { buildQualifiedPluginContributionKey } from '../../plugins/contributionIdentity.js';
 
 export type ResolveRoleSelectionV1Input = Readonly<{
   roleId: string;
@@ -34,11 +35,13 @@ export function resolveRolesSnapshotV1(input: Pick<ResolveRoleSelectionV1Input,
   }));
 }
 
-/** A role adds a workspace ceiling; it never changes permission mode or grants coordination authority. */
+/** Roles may tighten the authored Session ceiling, never relax it or change permission intent. */
 export function readSessionWorkspaceWritesV1(
   metadata: unknown,
   layers: Omit<ResolveRoleSelectionV1Input, 'roleId' | 'sessionRoles'> = {},
 ): 'allow' | 'deny' | undefined {
+  const authored = metadata && typeof metadata === 'object' ? Reflect.get(metadata, 'workspaceWrites') : undefined;
+  if (authored !== undefined && authored !== 'allow') return 'deny';
   const sessionRoles = readSessionRolesV1(metadata);
   if (!sessionRoles) {
     if (metadata && typeof metadata === 'object' && 'work' in metadata
@@ -69,7 +72,7 @@ export function resolveRoleSelectionV1(input: ResolveRoleSelectionV1Input): Reso
   const apply = (value: Partial<RoleArtifactV1> & { instructionsOverride?: string }, layer: RoleResolutionLayerV1) => {
     // Undefined means fall through, not erase. An engine is one role field: its
     // model and effort must never be silently borrowed from a different target.
-    for (const field of ['name', 'instructions', 'engine', 'runsAs', 'profileId', 'workspaceWrites', 'secondOpinion', 'enabled'] as const) {
+    for (const field of ['name', 'instructions', 'engine', 'runsAs', 'profileId', 'workspaceWrites', 'secondOpinion', 'canDelegateToOtherRoles', 'enabled'] as const) {
       if (value[field] !== undefined) {
         selection = { ...selection, [field]: value[field] };
         changedAt = layer;
@@ -94,7 +97,7 @@ export function resolveRoleSelectionV1(input: ResolveRoleSelectionV1Input): Reso
     // enabled inventory order; changing Agent must not carry its caller's model.
     const family = (key: string) => {
       const target = parseBackendTargetKeyV2(key);
-      return target.kind === 'agent' ? buildBackendTargetKeyV2(target)
+      return target.kind === 'agent' ? buildQualifiedPluginContributionKey(target.identity)
         : buildBackendTargetKeyV2({ kind: 'backend', backendId: target.backendId });
     };
     const callerFamily = family(defaultEngine.agentTargetKey);

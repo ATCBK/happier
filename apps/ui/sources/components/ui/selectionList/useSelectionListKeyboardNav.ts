@@ -1,3 +1,4 @@
+import { resolveHappierRovingSelection, type HappierRovingEntry } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
 
 import type { SelectionListVirtualizedOptionSource } from './_types';
@@ -442,6 +443,23 @@ export function useSelectionListRovingFocus(
     ]);
 }
 
+/**
+ * The flat (non-virtualized) navigation array holds only focusable options, so it binds the shared
+ * collection roving owner as a combobox: ↑/↓ wrap, Home/End take the ends, and from no active row the
+ * list is entered at its first (↓, Home) or last (↑, End) option. Returns -1 for an empty list.
+ */
+function moveFlatRovingFocus(length: number, current: number, key: 'ArrowDown' | 'ArrowUp' | 'Home' | 'End'): number {
+    return resolveHappierRovingSelection({
+        entries: Array.from({ length }, () => FOCUSABLE_ROVING_ENTRY),
+        currentIndex: current,
+        key,
+        rtl: false,
+        enterFromNone: true,
+    }) ?? -1;
+}
+
+const FOCUSABLE_ROVING_ENTRY: HappierRovingEntry = Object.freeze({ disabled: false });
+
 function resolveFocusableOptionId(
     flatVisibleOptionIds: ReadonlyArray<string>,
     virtualizedOptionSource: SelectionListVirtualizedOptionSource | undefined,
@@ -655,13 +673,9 @@ export function useSelectionListKeyboardNav(
                     setFocusedIndex(next);
                     return consume(event);
                 }
-                const length = flatVisibleOptionIds.length;
-                if (length === 0) return consume(event);
+                if (flatVisibleOptionIds.length === 0) return consume(event);
                 if (moveToArrowTarget('ArrowDown')) return consume(event);
-                updateFocusedIndex((current) => {
-                    const base = current < 0 ? -1 : current;
-                    return (base + 1) % length;
-                });
+                updateFocusedIndex((current) => moveFlatRovingFocus(flatVisibleOptionIds.length, current, 'ArrowDown'));
                 return consume(event);
             }
             case 'ArrowUp': {
@@ -671,26 +685,22 @@ export function useSelectionListKeyboardNav(
                     setFocusedIndex(next);
                     return consume(event);
                 }
-                const length = flatVisibleOptionIds.length;
-                if (length === 0) return consume(event);
+                if (flatVisibleOptionIds.length === 0) return consume(event);
                 if (moveToArrowTarget('ArrowUp')) return consume(event);
-                updateFocusedIndex((current) => {
-                    const base = current < 0 ? length : current;
-                    return (base - 1 + length) % length;
-                });
+                updateFocusedIndex((current) => moveFlatRovingFocus(flatVisibleOptionIds.length, current, 'ArrowUp'));
                 return consume(event);
             }
             case 'Home': {
                 if (isComposing === true) return false;
                 const first = virtualizedOptionSource
                     ? virtualizedOptionSource.getFirstFocusableOptionIndex()
-                    : flatVisibleOptionIds.length > 0 ? 0 : -1;
+                    : moveFlatRovingFocus(flatVisibleOptionIds.length, -1, 'Home');
                 if (first >= 0) setFocusedIndex(first);
                 return consume(event);
             }
             case 'End': {
                 if (isComposing === true) return false;
-                let last = flatVisibleOptionIds.length - 1;
+                let last = moveFlatRovingFocus(flatVisibleOptionIds.length, -1, 'End');
                 if (virtualizedOptionSource) {
                     last = -1;
                     for (let index = virtualizedOptionSource.items.length - 1; index >= 0; index -= 1) {

@@ -20,9 +20,11 @@ export function useRepositoryComposerDocumentOwner(input: Readonly<{
     scope: ServerAccountScope | null;
     ref: Extract<ComposerRefV1, { kind: 'session' | 'newSession' | 'participantMessage' }>;
     address: RepositoryAddress | null;
+    launcherDraftKey?: string;
     capabilities: ComposerCapabilitiesV1;
     isCurrent?: () => boolean;
     onDocumentChange?: (document: ComposerDraftDocument) => void;
+    onDocumentEdit?: () => void;
 }>): MutableComposerDocumentOwner {
     const latestInputRef = React.useRef(input);
     latestInputRef.current = input;
@@ -32,7 +34,7 @@ export function useRepositoryComposerDocumentOwner(input: Readonly<{
             ? `participant:${input.ref.sessionId}:${input.ref.instanceId}`
             : `session:${input.ref.sessionId}`;
     const key = input.scope && input.address
-        ? `repository:${serverAccountScopeKeySuffix(input.scope)}:${addressKey(input.address)}:${refKey}`
+        ? `repository:${serverAccountScopeKeySuffix(input.scope)}:${addressKey(input.address)}:${input.launcherDraftKey ?? ''}:${refKey}`
         : `ephemeral:${refKey}`;
     const stateRef = React.useRef<Readonly<{ key: string; owner: MutableComposerDocumentOwner }> | null>(null);
     if (!stateRef.current || stateRef.current.key !== key) {
@@ -41,6 +43,8 @@ export function useRepositoryComposerDocumentOwner(input: Readonly<{
                 scope: input.scope,
                 ref: input.ref,
                 address: input.address,
+                launcherDraftKey: input.launcherDraftKey,
+                onDocumentEdit: () => latestInputRef.current.onDocumentEdit?.(),
                 isCurrent: () => latestInputRef.current.isCurrent?.() ?? true,
             })
             : createEphemeralComposerDocumentOwner({

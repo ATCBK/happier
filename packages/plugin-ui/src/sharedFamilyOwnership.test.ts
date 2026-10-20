@@ -43,20 +43,20 @@ const APPROVED_CATALOG_VOCABULARY = [
   'Text', 'Heading', 'Label',
   'Icon', 'Image', 'StoredImage', 'BrandMark', 'QRCode',
   'Divider', 'Badge', 'Metadata', 'Link',
-  'Markdown', 'CodeBlock',
-  'Spinner', 'Status',
+  'Markdown', 'CodeBlock', 'SceneArt',
+  'Spinner', 'Status', 'ReviewSeverity',
   'ApprovalPrompt', 'ApprovalPendingNotice', 'Timeline',
   'State', 'LoadingState', 'EmptyState', 'ErrorState',
   'Button', 'IconButton',
   'Action.Execute', 'Action.Copy', 'Action.OpenExternal', 'Action.OpenSurface', 'Action.Refresh',
   'ActionPanel', 'ActionPanel.Section',
-  'List', 'List.Section', 'List.Item', 'Item', 'ItemGroup',
-  'CountedDisclosureItem',
+  'List', 'List.Section', 'List.Item', 'Item', 'ItemGroup', 'ItemAddRow',
+  'CountedDisclosureItem', 'TechnicalDetailsDisclosure',
   'List.SelectionActionBar', 'ListSelectionActionBar',
   'ListMultiSelectionProvider', 'createListMultiSelectionStore',
   'Form', 'Field', 'TextField', 'Toggle', 'Select', 'ValidationMessage',
   'Form.Field', 'Form.TextField', 'Form.Toggle', 'Form.Select', 'Form.ValidationMessage', 'Form.Actions',
-  'Popover', 'Dropdown', 'Menu', 'ContextMenu',
+  'Popover', 'Dropdown', 'Menu', 'SheetMenu', 'ContextMenu',
   'Tabs', 'Tabs.Item',
   'TargetedSurface',
   'Progress', 'Banner',
@@ -75,10 +75,12 @@ const APPROVED_CATALOG_VOCABULARY = [
   'SelectionTiles',
   // configuration-surfaces r1 U9 (03b amendment r0.14): the page header, one presentation owner.
   'PageHeader',
+  // RU2 §9.5 (UI-6): the phone-aware dialog title band, one presentation owner.
+  'ModalHeader',
   // configuration-surfaces pilot (consumed by that plan): measured list+detail and column layouts.
   'ListDetailLayout', 'Columns', 'Column',
   // r0.41 (Triage plan): the generic Collection (table, list, board, grid and their detail containers).
-  'Collection',
+  'Collection', 'CollectionLoadingRows', 'CollectionToolbar',
   // Embeddable Happier plan 05: a host-mediated live Session (one controller, composable parts).
   'SessionProvider', 'SessionTranscript', 'SessionComposer', 'SessionChat',
   // Pane states and shell columns: existing public adapters over shared presentation owners.
@@ -96,6 +98,16 @@ const APPROVED_CATALOG_VOCABULARY = [
   'LocalDateTimeField',
   // Lane 12 Projects: the widget-body glance row and the lines-added/removed readout, one owner each.
   'WidgetGlanceRow', 'DiffStat',
+  // C3 DISC-13: the existing Discussion frame shared with external author threads.
+  'ThreadMessage',
+  'ReplyQuote',
+  // C2 U4: the answer another session returned to an Ask, shared by core and external authors.
+  'ReturnedAnswerQuote',
+  'FollowPolicyEditor',
+  // C3/C4 R7: one host-mediated, controlled participant choice/search presentation.
+  'ExecutableParticipantPicker',
+  // C6/C5 (N3 FR1-10): the controlled Memory duplicate choice and the Doc suggested-edit card.
+  'MemoryDuplicateChoice', 'DocEditProposal',
 ] as const;
 
 type DeclarativeDisposition = Readonly<{
@@ -314,6 +326,24 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     coreConsumers: ['components/plugins/shared/declarativeNodes.tsx'],
     devMountSymbols: ['Status as PluginStatus'],
     declarative: { kind: 'node', node: 'status', rendererSymbol: 'HappierStatus' },
+  },
+  {
+    publicName: 'ReviewSeverity',
+    propTypeName: 'ReviewSeverityProps',
+    family: 'Review severity',
+    disposition: 'required',
+    proofTier: 'simple',
+    phase: 'graduated',
+    publiclyExported: true,
+    sharedModule: 'presentation/status/ReviewSeverity.tsx',
+    sharedSymbol: 'HappierReviewSeveritySign',
+    pluginOwner: { module: 'components/Status.tsx', symbol: 'ReviewSeverity' },
+    coreConsumers: ['components/sessions/reviews/findings/ReviewSeverity.tsx'],
+    devMountSymbols: ['ReviewSeverity as PluginReviewSeverity'],
+    declarative: { kind: 'not-applicable', reason: 'V2 findings are host review content, not a declarative node.' },
+    deletedCoreDuplicates: [
+      { path: 'components/sessions/reviews/findings/reviewFindingPresentation.ts', symbol: 'reviewSeverityTone' },
+    ],
   },
   {
     publicName: 'State',
@@ -649,8 +679,8 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     pluginOwner: { module: 'components/List.tsx', symbol: 'ListItem' },
     coreConsumers: ['components/ui/lists/Item.tsx'],
     positiveConsumer: {
-      kind: 'plugin-surface',
-      pathFromRepoRoot: 'packages/plugins/inspector/src/ui/renderSurface.tsx',
+      kind: 'external-author-reference',
+      pathFromRepoRoot: 'packages/plugin-ui/fixtures/external-authoring/src/semanticSurface.tsx',
     },
     devMountSymbols: ['List as PluginList'],
     declarative: { kind: 'node', node: 'item', rendererSymbol: 'HappierListItem' },
@@ -676,6 +706,25 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     declarative: { kind: 'node', node: 'item', rendererSymbol: 'HappierListItem' },
   },
   {
+    publicName: 'ItemAddRow',
+    propTypeName: 'ItemAddRowProps',
+    family: 'Add row',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentation/collection/ItemAddRow.tsx',
+    sharedSymbol: 'HappierItemAddRow',
+    pluginOwner: { module: 'components/ItemAddRow.tsx', symbol: 'ItemAddRow' },
+    coreConsumers: ['components/ui/lists/ItemAddRow.tsx'],
+    positiveConsumer: {
+      kind: 'external-author-reference',
+      pathFromRepoRoot: 'packages/plugin-ui/fixtures/external-authoring/src/semanticSurface.tsx',
+    },
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'The add action owns a caller-controlled inline form; declarative sections retain their Action nodes.' },
+  },
+  {
     publicName: 'CountedDisclosureItem',
     propTypeName: 'CountedDisclosureItemProps',
     family: 'Counted disclosure',
@@ -693,6 +742,25 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     },
     devMountSymbols: ['CountedDisclosureItem as PluginCountedDisclosureItem'],
     declarative: { kind: 'not-applicable', reason: 'The fold carries executable React details; declarative documents retain their list/item composition.' },
+  },
+  {
+    publicName: 'TechnicalDetailsDisclosure',
+    propTypeName: 'TechnicalDetailsDisclosureProps',
+    family: 'Technical details',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    phase: 'graduated',
+    publiclyExported: true,
+    sharedModule: 'presentation/collection/TechnicalDetailsDisclosure.tsx',
+    sharedSymbol: 'HappierTechnicalDetailsDisclosure',
+    pluginOwner: { module: 'components/TechnicalDetailsDisclosure.tsx', symbol: 'TechnicalDetailsDisclosure' },
+    coreConsumers: ['components/ui/lists/TechnicalDetailsDisclosure.tsx'],
+    positiveConsumer: {
+      kind: 'external-author-reference',
+      pathFromRepoRoot: 'packages/plugin-ui/fixtures/external-authoring/src/semanticSurface.tsx',
+    },
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'Exact references sit behind the readable outcome an executable surface composes; declarative documents keep their list/item composition.' },
   },
   {
     publicName: 'ItemGroup',
@@ -1063,7 +1131,7 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     coreConsumers: ['components/plugins/shared/declarativeNodes.tsx'],
     positiveConsumer: {
       kind: 'plugin-surface',
-      pathFromRepoRoot: 'packages/plugins/inspector/src/ui/renderSurface.tsx',
+      pathFromRepoRoot: 'packages/plugins/scm-bitbucket/src/ui/renderSurface.tsx',
     },
     devMountSymbols: ['Markdown as PluginMarkdown'],
     declarative: { kind: 'node', node: 'markdown', rendererSymbol: 'HappierMarkdown' },
@@ -1098,6 +1166,7 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     sharedSymbol: 'useHappierCodeBlockBehavior',
     pluginOwner: { module: 'components/Content.tsx', symbol: 'CodeBlock' },
     coreConsumers: ['components/ui/code/blocks/CodeBlockViewFrame.tsx'],
+    corePresentationMechanism: { module: 'presentation/content/CodeBlock.ts', symbol: 'resolveHappierCodeBlockLayout' },
     positiveConsumer: {
       kind: 'plugin-surface',
       pathFromRepoRoot: 'packages/plugins/inspector/src/ui/renderSurface.tsx',
@@ -1608,6 +1677,23 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     declarative: { kind: 'not-applicable', reason: 'V2 has no page-header node; host-rendered settings sit inside the host page chrome.' },
   },
   {
+    publicName: 'ModalHeader',
+    propTypeName: 'ModalHeaderProps',
+    family: 'Modal header',
+    disposition: 'required',
+    // The title band and its phone rule (title keeps the close row, actions and subtitle move
+    // beneath) live in one presentation owner that Happier core's ModalCardHeader also renders.
+    proofTier: 'simple',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentation/layout/ModalHeader.tsx',
+    sharedSymbol: 'HappierModalHeader',
+    pluginOwner: { module: 'components/ModalHeader.tsx', symbol: 'ModalHeader' },
+    coreConsumers: ['modal/components/card/ModalCardHeader.tsx'],
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'V2 has no dialog-header node; host dialogs draw their own chrome.' },
+  },
+  {
     publicName: 'ListDetailLayout',
     propTypeName: 'ListDetailLayoutProps',
     family: 'List detail layout',
@@ -1677,6 +1763,90 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     },
     devMountSymbols: ['CollectionPreviewSample'],
     declarative: { kind: 'not-applicable', reason: 'V2 has no collection node; a declarative surface uses List.' },
+  },
+  {
+    publicName: 'CollectionLoadingRows',
+    propTypeName: 'CollectionLoadingRowsProps',
+    family: 'Collection loading rows',
+    disposition: 'required',
+    proofTier: 'simple',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentation/feedback/Skeleton.tsx',
+    sharedSymbol: 'HappierSkeletonRows',
+    pluginOwner: { module: 'components/Collection.tsx', symbol: 'CollectionLoadingRows' },
+    coreConsumers: [],
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'Collection loading is composed by its mounted owner.' },
+  },
+  {
+    publicName: 'CollectionToolbar',
+    propTypeName: 'CollectionToolbarProps',
+    family: 'Collection toolbar',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    phase: 'in-progress',
+    publiclyExported: true,
+    // The public component owns composition; current core usage is dev-only.
+    sharedModule: 'components/CollectionToolbar.tsx',
+    sharedSymbol: 'CollectionToolbar',
+    pluginOwner: { module: 'components/CollectionToolbar.tsx', symbol: 'CollectionToolbar' },
+    coreConsumers: [],
+    positiveConsumer: {
+      kind: 'external-author-reference',
+      pathFromRepoRoot: 'packages/plugin-ui/fixtures/external-authoring/src/Surface.tsx',
+    },
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'V2 has no collection-toolbar node.' },
+  },
+  {
+    publicName: 'FollowPolicyEditor',
+    propTypeName: 'FollowPolicyEditorProps',
+    family: 'Follow policy editor',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'components/FollowPolicyEditor.tsx',
+    sharedSymbol: 'FollowPolicyEditor',
+    pluginOwner: { module: 'components/FollowPolicyEditor.tsx', symbol: 'FollowPolicyEditor' },
+    coreConsumers: ['components/sessions/follow/FollowPolicyEditorBinding.tsx'],
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'Follow policy composition uses the public form and row owners.' },
+  },
+  {
+    publicName: 'SheetMenu',
+    propTypeName: 'SheetMenuProps',
+    family: 'Sheet menu',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentation/interaction/Menu.ts',
+    sharedSymbol: 'useHappierMenuInteraction',
+    pluginOwner: { module: 'components/Overlay.tsx', symbol: 'SheetMenu' },
+    coreConsumers: [],
+    positiveConsumer: {
+      kind: 'external-author-reference',
+      pathFromRepoRoot: 'packages/plugin-ui/fixtures/external-authoring/src/Surface.tsx',
+    },
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'V2 has no author-controlled sheet-menu node.' },
+  },
+  {
+    publicName: 'SceneArt',
+    propTypeName: 'SceneArtProps',
+    family: 'Scene art',
+    disposition: 'required',
+    proofTier: 'simple',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentation/state/scenes.ts',
+    sharedSymbol: 'resolveHappierScene',
+    pluginOwner: { module: 'components/State.tsx', symbol: 'SceneArt' },
+    coreConsumers: ['components/ui/empty/EmptyState.tsx'],
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'Scene art requires the mounted host renderer; V2 has no standalone scene node.' },
   },
   {
     publicName: 'FreshnessLine',
@@ -1858,6 +2028,135 @@ const GRADUATED_FAMILIES: readonly GraduatedFamily[] = [
     coreConsumers: ['components/workspaces/scm/DiffStat.tsx'],
     devMountSymbols: [],
     declarative: { kind: 'not-applicable', reason: 'V2 has no diff-stat node.' },
+  },
+  {
+    publicName: 'ThreadMessage',
+    propTypeName: 'ThreadMessageProps',
+    family: 'Authored thread message',
+    disposition: 'required',
+    proofTier: 'simple',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentation/content/ThreadMessage.tsx',
+    sharedSymbol: 'HappierThreadMessage',
+    pluginOwner: { module: 'components/ThreadMessage.tsx', symbol: 'ThreadMessage' },
+    coreConsumers: ['components/discussions/DiscussionDetailsView.tsx'],
+    positiveConsumer: {
+      kind: 'external-author-reference',
+      pathFromRepoRoot: 'packages/plugin-ui/fixtures/external-authoring/src/threadSurface.tsx',
+    },
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'V2 has no authored thread-message node.' },
+  },
+  {
+    publicName: 'ReplyQuote',
+    propTypeName: 'ReplyQuoteProps',
+    family: 'Reply source quote',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentation/content/ReplyQuote.tsx',
+    sharedSymbol: 'HappierReplyQuote',
+    pluginOwner: { module: 'components/ReplyQuote.tsx', symbol: 'ReplyQuote' },
+    coreConsumers: ['components/ui/text/ReplyQuote.tsx'],
+    positiveConsumer: {
+      kind: 'external-author-reference',
+      pathFromRepoRoot: 'packages/plugin-ui/fixtures/external-authoring/src/replyQuoteSurface.tsx',
+    },
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'V2 has no reply-quote node; source admission is caller-owned.' },
+  },
+  {
+    publicName: 'ReturnedAnswerQuote',
+    propTypeName: 'ReturnedAnswerQuoteProps',
+    family: 'Returned answer quote',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentation/content/ReturnedAnswerQuote.tsx',
+    sharedSymbol: 'HappierReturnedAnswerQuote',
+    pluginOwner: { module: 'components/ReturnedAnswerQuote.tsx', symbol: 'ReturnedAnswerQuote' },
+    coreConsumers: ['components/sessions/transcript/returnedAnswer/ReturnedAnswerQuote.tsx'],
+    positiveConsumer: {
+      kind: 'external-author-reference',
+      pathFromRepoRoot: 'packages/plugin-ui/fixtures/external-authoring/src/returnedAnswerQuoteSurface.tsx',
+    },
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'V2 has no returned-answer node; answer admission and the question read are caller-owned.' },
+  },
+  {
+    publicName: 'MemoryDuplicateChoice',
+    propTypeName: 'MemoryDuplicateChoiceProps',
+    family: 'Memory duplicate choice',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentation/content/MemoryDuplicateChoice.tsx',
+    sharedSymbol: 'HappierMemoryDuplicateChoice',
+    pluginOwner: { module: 'components/MemoryDuplicateChoice.tsx', symbol: 'MemoryDuplicateChoice' },
+    coreConsumers: ['components/memory/MemoryDocumentBody.tsx'],
+    positiveConsumer: {
+      kind: 'external-author-reference',
+      pathFromRepoRoot: 'packages/plugin-ui/fixtures/external-authoring/src/memoryDuplicateChoiceSurface.tsx',
+    },
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'V2 has no duplicate-choice node; the review, the write and its effect are caller-owned Actions.' },
+    deletedCoreDuplicates: [{ path: 'components/memory/MemoryDocumentBody.tsx', symbol: 'compareRowChosen' }],
+  },
+  {
+    publicName: 'DocEditProposal',
+    propTypeName: 'DocEditProposalProps',
+    family: 'Doc suggested edit',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentation/content/DocEditProposal.tsx',
+    sharedSymbol: 'HappierDocEditProposal',
+    pluginOwner: { module: 'components/DocEditProposal.tsx', symbol: 'DocEditProposal' },
+    coreConsumers: ['components/artifacts/ArtifactEditProposal.tsx'],
+    positiveConsumer: {
+      kind: 'external-author-reference',
+      pathFromRepoRoot: 'packages/plugin-ui/fixtures/external-authoring/src/docEditProposalSurface.tsx',
+    },
+    devMountSymbols: [],
+    declarative: { kind: 'not-applicable', reason: 'V2 has no suggested-edit node; currency reads and the person-only Accept/Decline stay in the Doc Actions.' },
+    deletedCoreDuplicates: [{ path: 'components/artifacts/ArtifactEditProposal.tsx', symbol: 'Settled' }],
+  },
+  {
+    publicName: 'ExecutableParticipantPicker',
+    propTypeName: 'ExecutableParticipantPickerProps',
+    family: 'Host-mediated executable participant picker',
+    disposition: 'required',
+    proofTier: 'behavior-owning',
+    // Source core/author mounts are proven; public declaration and loaded-platform gates remain separate.
+    phase: 'in-progress',
+    publiclyExported: true,
+    sharedModule: 'presentationHost/context.ts',
+    sharedSymbol: 'useOptionalPluginUiPresentationHost',
+    pluginOwner: { module: 'components/ExecutableParticipantPicker.tsx', symbol: 'ExecutableParticipantPicker' },
+    coreConsumers: ['components/sessions/authoring/ExecutableParticipantPickerModal.tsx'],
+    coreAdapter: { module: 'components/ExecutableParticipantPicker.tsx', symbol: 'ExecutableParticipantPicker' },
+    positiveConsumer: {
+      kind: 'external-author-reference',
+      pathFromRepoRoot: 'packages/plugin-ui/fixtures/external-authoring/src/executableParticipantPickerSurface.tsx',
+    },
+    devMountSymbols: [],
+    declarative: {
+      kind: 'not-applicable',
+      reason: 'V2 has no participant-picker node; native and RNW surfaces bind the same host SelectionList presenter, without inventory or setup authority.',
+    },
+    hostComposition: {
+      adapter: { module: 'components/plugins/surfaces/pluginUiPrivatePresentationHost.tsx', symbol: 'createPluginUiPrivatePresentationRenderers' },
+      physicalHost: {
+        module: 'components/sessions/authoring/ExecutableParticipantPickerPresentation.tsx',
+        symbol: 'ExecutableParticipantPickerPresentation',
+        callbackSymbol: 'renderExecutableParticipantPicker',
+      },
+    },
   },
   // These five public adapters request the existing physical host. They do not duplicate its
   // presentation or lifecycle and are source-present, not loaded-platform graduated.
@@ -2198,7 +2497,8 @@ function catalogProblems(
       );
       const reachesPublicAdapter = entry.coreAdapter?.symbol === entry.publicName
         && sourceRendersPublicPluginUiComponent(consumerSource, entry.publicName);
-      if (!reachesPublicAdapter && (!consumerSource.includes('@happier-dev/plugin-ui/presentation')
+      const reachesPublicSharedOwner = sourceRendersPublicPluginUiComponent(consumerSource, expectedCoreConsumerSymbol);
+      if (!reachesPublicAdapter && !reachesPublicSharedOwner && (!consumerSource.includes('@happier-dev/plugin-ui/presentation')
         || !consumerSource.includes(expectedCoreConsumerSymbol))) {
         problems.push(`${entry.publicName} core consumer ${consumer} does not reach ${expectedCoreConsumerSymbol}`);
       }
@@ -2582,6 +2882,7 @@ describe('graduated shared presentation families (§8.2)', () => {
       .map((entry) => entry.publicName);
 
     expect(unfinished).toEqual([
+      'ItemAddRow',
       'createListMultiSelectionStore',
       'ListMultiSelectionProvider',
       'ListSelectionActionBar',
@@ -2615,16 +2916,22 @@ describe('graduated shared presentation families (§8.2)', () => {
       'EmptySlot',
       'FloatingFrame',
       'PageHeader',
+      'ModalHeader',
       'ListDetailLayout',
       'Columns',
       'Column',
+      'CollectionLoadingRows',
+      'CollectionToolbar',
+      'FollowPolicyEditor',
+      'SheetMenu',
+      'SceneArt',
       'FreshnessLine',
       'NavigationList',
       'NavigationList.Group',
       'NavigationList.Row',
       'DragSource', 'DropTarget',
       'DetailsPane', 'DetailsPaneFooter', 'PaneHeaderContent', 'Avatar', 'AgentCursor', 'PresenceCapsule', 'StatusCapsule',
-      'SetupSteps', 'LocalDateTimeField', 'WidgetGlanceRow', 'DiffStat', 'SetupBlockTile', 'SetupBlockGrid', 'VoiceMarkArt', 'StatusCell', 'DictationButton',
+      'SetupSteps', 'LocalDateTimeField', 'WidgetGlanceRow', 'DiffStat', 'ThreadMessage', 'ReplyQuote', 'ReturnedAnswerQuote', 'MemoryDuplicateChoice', 'DocEditProposal', 'ExecutableParticipantPicker', 'SetupBlockTile', 'SetupBlockGrid', 'VoiceMarkArt', 'StatusCell', 'DictationButton',
     ]);
   });
 
@@ -2691,7 +2998,10 @@ describe('graduated shared presentation families (§8.2)', () => {
     expect(adapter).toContain('useWidgetAreaPort(area)');
     expect(adapter).toContain('renderWidgetArea(request)');
     const host = read(join(appSourceRoot, 'components/plugins/surfaces/PluginSurfaceHost.tsx'));
-    expect(host).toMatch(/renderWidgetArea:\s*\(input\)\s*=>\s*\(\s*<PluginPageWidgetArea\b/u);
+    expect(host).toContain('createDeclarativeWidgetAreaRender({ dispatch: controller.widgetArea');
+    expect(host).toContain('renderWidgetArea: renderDeclarativeWidgetArea');
+    const bridge = read(join(appSourceRoot, 'components/plugins/surfaces/declarativeWidgetArea.tsx'));
+    expect(bridge).toContain('<PluginPageWidgetArea');
     const area = read(join(appSourceRoot, 'components/widgets/area/PluginPageWidgetArea.tsx'));
     expect(area).toContain('<WidgetArea');
     expect(area).toContain('pagePort.execute(operation, pageContext');

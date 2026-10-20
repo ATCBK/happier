@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { resetPendingQueueState } from '@/sync/engine/pending/pendingQueueV2.testHelpers';
@@ -13,9 +13,9 @@ import { reorderTodos, type TodoState } from './todoOps';
 const scope = { serverId: 'server-a', accountId: 'account-a' };
 const token = `header.${Buffer.from(JSON.stringify({ sub: scope.accountId })).toString('base64url')}.signature`;
 const credentials = { token };
-const mutationsSchema = z.object({ mutations: z.array(z.object({
-    key: z.string(), value: z.string().nullable(), version: z.number(),
-}).strict()) }).strict();
+const mutationsSchema = z.strictObject({ mutations: z.array(z.strictObject({
+    key: z.string(), value: z.nullable(z.string()), version: z.number(),
+})) });
 
 function todo(id: string): TodoItem { return { id, title: id, done: false, createdAt: 1, updatedAt: 1 }; }
 function state(ids: string[]): TodoState {

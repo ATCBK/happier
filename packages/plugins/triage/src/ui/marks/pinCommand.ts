@@ -1,4 +1,5 @@
 import type { JsonValue, PluginCancellationOptions } from '@happier-dev/plugin-sdk';
+import type { PluginUiHostApi } from '@happier-dev/plugin-sdk/ui';
 import type { TriageEntryRefV1 } from '@happier-dev/triage-protocol/v1';
 
 import {
@@ -12,6 +13,7 @@ import {
   TriageSetEntryPinnedResultV1Schema,
   type TriageListPinnedEntriesResultV1,
   type TriageSetEntryPinnedResultV1,
+  type TriageSetEntryPinnedInputV1,
 } from '../../actions/userMarksProtocol.js';
 import type { CorpusCollectionsV1 } from '../../corpus/collections/bindCorpusCollections.js';
 import { MAX_TRIAGE_LIST_WINDOW_ROWS_V1 } from '../../projection/listWindow.js';
@@ -81,7 +83,7 @@ export type TriageMarksTransportV1 = Readonly<{
   write(
     intent: TriagePinIntentV1,
     options?: PluginCancellationOptions,
-  ): Promise<TriageSetEntryPinnedResultV1>;
+  ): Promise<TriageSetEntryPinnedResultV1 | null>;
 }>;
 
 /**
@@ -91,6 +93,7 @@ export type TriageMarksTransportV1 = Readonly<{
  */
 export function createDirectTriageMarksTransport(
   collections: Pick<CorpusCollectionsV1, 'userMarks'>,
+  host: Pick<PluginUiHostApi, 'admitAction'>,
   nowMs: () => number = () => Date.now(),
 ): TriageMarksTransportV1 {
   return Object.freeze({
@@ -106,10 +109,12 @@ export function createDirectTriageMarksTransport(
       });
     },
     async write(intent, options) {
-      return await setTriageEntryPinned(
-        intent.pinned
+      const input: TriageSetEntryPinnedInputV1 = intent.pinned
           ? { v: 1, pinned: true, entryRef: intent.entryRef, displayAtMark: intent.displayAtMark }
-          : { v: 1, pinned: false, entryRef: intent.entryRef },
+          : { v: 1, pinned: false, entryRef: intent.entryRef };
+      if (!await host.admitAction(TRIAGE_SET_ENTRY_PINNED_ACTION_LOCAL_ID_V1, input, options)) return null;
+      return await setTriageEntryPinned(
+        input,
         {
           collections,
           nowMs,

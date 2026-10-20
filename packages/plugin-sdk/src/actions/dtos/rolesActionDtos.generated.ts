@@ -6,7 +6,8 @@
 export type RolesActionInputById = {
     readonly "session.role.set": {
         sessionId: string;
-        roleId: string;
+        roleId?: string | undefined;
+        answersWorkerQuestions?: boolean | undefined;
     };
     readonly "session.roles.override.set": {
         roleId: string;
@@ -25,6 +26,7 @@ export type RolesActionInputById = {
         profileId?: string | undefined;
         workspaceWrites?: 'allow' | 'deny' | undefined;
         secondOpinion?: 'off' | 'encouraged' | undefined;
+        canDelegateToOtherRoles?: boolean | undefined;
     };
     readonly "session.roles.override.clear": {
         sessionId: string;
@@ -51,6 +53,7 @@ export type RolesActionInputById = {
                 effort?: string | undefined;
             } | undefined;
             profileId?: string | undefined;
+            canDelegateToOtherRoles?: boolean | undefined;
         };
     };
     readonly "session.roles.remove": {
@@ -87,6 +90,7 @@ export type RolesActionInputById = {
                 effort?: string | undefined;
             } | undefined;
             profileId?: string | undefined;
+            canDelegateToOtherRoles?: boolean | undefined;
         };
         roleId?: string | undefined;
     };
@@ -114,6 +118,7 @@ export type RolesActionInputById = {
                 effort?: string | undefined;
             } | undefined;
             profileId?: string | undefined;
+            canDelegateToOtherRoles?: boolean | undefined;
         };
     };
     readonly "roles.delete": {
@@ -139,6 +144,7 @@ export type RolesActionInputById = {
         profileId?: string | undefined;
         workspaceWrites?: 'allow' | 'deny' | undefined;
         secondOpinion?: 'off' | 'encouraged' | undefined;
+        canDelegateToOtherRoles?: boolean | undefined;
         instructionsOverride?: string | undefined;
     };
     readonly "roles.override.reset": {
@@ -188,6 +194,7 @@ export type RolesActionResultById = {
                     effort?: string | undefined;
                 } | undefined;
                 profileId?: string | undefined;
+                canDelegateToOtherRoles?: boolean | undefined;
             };
             shared: boolean;
             viewOnly: boolean;
@@ -229,6 +236,7 @@ export type RolesActionResultById = {
                 effort?: string | undefined;
             } | undefined;
             profileId?: string | undefined;
+            canDelegateToOtherRoles?: boolean | undefined;
         };
         shared: boolean;
         viewOnly: boolean;

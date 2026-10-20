@@ -1,4 +1,4 @@
-import { inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, type Tx } from "@/storage/inTx";
 import {
     buildCurrentSessionAccessMembershipWhere,
     isGrantAfterMembershipHorizon,
@@ -153,7 +153,7 @@ export async function resolveCurrentSessionRecipientAccountIdsInTx(
 export async function resolveCurrentSessionRecipientAccountIds(
     params: Readonly<{ sessionId: string }>,
 ): Promise<string[]> {
-    return inTx(tx => resolveCurrentSessionRecipientAccountIdsInTx(tx, params), { isolationLevel: "Serializable" /* Recipient entitlement and status census must use one coherent access snapshot. */ });
+    return inReadSnapshot(tx => resolveCurrentSessionRecipientAccountIdsInTx(tx, params));
 }
 
 /**

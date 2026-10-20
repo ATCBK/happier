@@ -1,6 +1,6 @@
 import { MachinePoolCreateInputV1Schema, MachinePoolDeleteInputV1Schema, MachinePoolDeleteOutputV1Schema, MachinePoolErrorV1Schema, MachinePoolGetInputV1Schema, MachinePoolListInputV1Schema, MachinePoolListOutputV1Schema, MachinePoolResolveInputV1Schema, MachinePoolResolveResultV1Schema, MachinePoolUpdateInputV1Schema, MachinePoolViewV1Schema } from '@happier-dev/protocol/machines/pools/v1';
 import { machinePoolActionEndpointPathV1 } from '@happier-dev/protocol/machines/pools/actionsV1';
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { createServerFeatureGatePreHandler } from "@/app/features/catalog/serverFeatureGate";
 import type { MachineDaemonPresenceSocketServer } from "@/app/machines/machineDaemonPresence";
@@ -27,7 +27,7 @@ export function registerMachinePoolRoutes(
     const preHandler = [app.authenticate, createServerFeatureGatePreHandler("machines.pools")];
     const errors = {
         400: MachinePoolErrorV1Schema,
-        404: z.union([MachinePoolErrorV1Schema, z.object({ error: z.literal("not_found") }).strict()]),
+        404: z.union([MachinePoolErrorV1Schema, z.strictObject({ error: z.literal("not_found") })]),
         409: MachinePoolErrorV1Schema,
     };
 

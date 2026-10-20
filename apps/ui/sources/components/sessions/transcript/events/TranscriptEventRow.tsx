@@ -6,6 +6,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { readSessionAgentTransitionDividerV1 } from '@happier-dev/protocol/sessions/agentTransitionDivider';
 import { isConnectedServiceRuntimeAuthRecoveryCancellation } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
 import { SESSION_FOLLOW_WAKE_EVENT_MESSAGE } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
+import type { FollowDeliveryProjectionV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowDeliveryProjectionV1';
 
 import { ActivitySpinner, iconMatchedSpinnerSize } from '@/components/ui/feedback/ActivitySpinner';
 import { AgentTransitionDividerRow } from '@/components/sessions/transcript/agentTransition/AgentTransitionDividerRow';
@@ -349,6 +350,7 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
     navigationEnabled?: boolean;
     /** On the worker update that opens a context-only wake: how many updates woke the session. */
     hostWakeCount?: number;
+    followDeliveryProjection?: FollowDeliveryProjectionV1;
     createdAt?: number;
 }) {
     const { theme } = useUnistyles();
@@ -403,7 +405,10 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
                         </Text>
                     </View>
                 ) : null}
-                <WorkerUpdateCard update={props.event.update} messageId={props.messageId} serverId={props.serverId} navigationEnabled={props.navigationEnabled} at={props.createdAt} />
+                <WorkerUpdateCard update={props.event.update} followMatches={props.event.followMatches}
+                    followInputLocalId={props.event.followInputLocalId} followWakeEventLocalId={props.event.followWakeEventLocalId}
+                    delivery={props.followDeliveryProjection} messageId={props.messageId} serverId={props.serverId}
+                    navigationEnabled={props.navigationEnabled} at={props.createdAt} />
             </View>
         );
     }
@@ -416,6 +421,11 @@ export const TranscriptEventRow = React.memo(function TranscriptEventRow(props: 
     } else if (props.event.type === 'worker-report') {
         testID = 'transcript-event-worker-report';
         text = props.event.summary;
+    } else if (props.event.type === 'goal-changed') {
+        // Content-free by contract: the event says the Goal moved, never what it says now.
+        testID = 'transcript-event-goal-changed';
+        iconName = 'target';
+        text = t('message.goalChanged');
     } else if (props.event.type === 'switch') {
         iconName = 'arrows-left-right';
         text = t('message.switchedToMode', { mode: props.event.mode });

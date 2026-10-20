@@ -95,7 +95,13 @@ export type WorkflowBlockListEditorProps = Readonly<{
     onCommitChange?: () => void;
     onSelect: (blockId: string | null) => void;
     /** Opens Step options for a block, anchored beside the control that asked. */
-    onCustomize: (blockId: string, anchorRef: React.RefObject<View | null>) => void;
+    /**
+     * Opens a block's Step options from its control (`anchorRef`, where focus returns). A leaf block
+     * also names its card region (`cardRef`), so the options sit beside the card without covering it.
+     */
+    onCustomize: (blockId: string, anchorRef: React.RefObject<View | null>, cardRef?: React.RefObject<View | null>) => void;
+    /** A retained inspector owns its card refs when responsive layouts remount this document. */
+    cardRefs?: React.RefObject<Map<string, React.RefObject<View | null>>>;
     /** The web Session drop target for Agent steps (J19); absent where no drag source exists. */
     sessionDrop?: WorkflowSessionDrop;
     registerPromptRef?: (blockId: string, focus: (() => void) | null) => void;
@@ -254,6 +260,21 @@ export function WorkflowBlockListEditor(props: WorkflowBlockListEditorProps): Re
     const selectedInList = selectedBlockId !== null && blocks.some((block) => block.id === selectedBlockId);
     const revealInserters = WORKFLOW_EDITOR_TOUCH_POINTER && selectedInList;
 
+    // A leaf block's row is its card; a container's row spans its whole body, so only its own control anchors.
+    const localCardRefs = React.useRef(new Map<string, React.RefObject<View | null>>());
+    const cardRefs = props.cardRefs ?? localCardRefs;
+    const cardRefFor = (blockId: string): React.RefObject<View | null> => {
+        const existing = cardRefs.current.get(blockId);
+        if (existing !== undefined) return existing;
+        const created: React.RefObject<View | null> = React.createRef<View>();
+        cardRefs.current.set(blockId, created);
+        return created;
+    };
+    const customizeBlock = (block: WorkflowBlock, anchorRef: React.RefObject<View | null>) => {
+        const leaf = block.kind === 'step' || block.kind === 'action' || block.kind === 'workflow' || block.kind === 'wait';
+        onCustomize(block.id, anchorRef, leaf ? cardRefFor(block.id) : undefined);
+    };
+
     const nameEditorFor = (block: WorkflowBlock): WorkflowBlockNameEditor | undefined => editable ? {
         value: block.name ?? '',
         placeholder: workflowBlockReferenceLabel(block),
@@ -317,6 +338,8 @@ export function WorkflowBlockListEditor(props: WorkflowBlockListEditorProps): Re
                         </View>
                     ) : null}
                     <View
+                        ref={cardRefFor(block.id)}
+                        collapsable={false}
                         // Each block is a real member of the ordered list, so
                         // assistive technology can say "2 of 3" and move by item.
                         // Position and set size are web ARIA; native reads the
@@ -353,7 +376,7 @@ export function WorkflowBlockListEditor(props: WorkflowBlockListEditorProps): Re
                                     (current) => current.kind === 'step' ? { ...current, document } : current,
                                 ), t('workflows.editor.history.document'), false)}
                                 onCommitDocument={props.onCommitChange}
-                                onCustomize={(anchorRef) => onCustomize(block.id, anchorRef)}
+                                onCustomize={(anchorRef) => customizeBlock(block, anchorRef)}
                                 onChangeInput={(input) => onChange(updateWorkflowBlock(draft, block.id, (current) => (
                                     current.kind === 'step' ? { ...current, input: [...input] } : current
                                 )))}
@@ -383,7 +406,7 @@ export function WorkflowBlockListEditor(props: WorkflowBlockListEditorProps): Re
                                 headingAccessory={slots?.occurrenceSelector ?? slots?.state}
                                 onSelect={() => onSelect(block.id)}
                                 {...(editable ? {
-                                    onOpenOptions: (anchorRef: React.RefObject<View | null>) => onCustomize(block.id, anchorRef),
+                                    onOpenOptions: (anchorRef: React.RefObject<View | null>) => customizeBlock(block, anchorRef),
                                     onAddBranch: () => onChange(updateWorkflowBlock(draft, block.id, (current) => (
                                         current.kind === 'parallel'
                                             ? { ...current, branches: [...current.branches, createWorkflowParallelBranch(collectWorkflowBlockIds(draft))] }
@@ -423,7 +446,7 @@ export function WorkflowBlockListEditor(props: WorkflowBlockListEditorProps): Re
                                 headingAccessory={slots?.occurrenceSelector ?? slots?.state}
                                 onSelect={() => onSelect(block.id)}
                                 {...(editable ? {
-                                    onOpenOptions: (anchorRef: React.RefObject<View | null>) => onCustomize(block.id, anchorRef),
+                                    onOpenOptions: (anchorRef: React.RefObject<View | null>) => customizeBlock(block, anchorRef),
                                 } : {})}
                                 renderBody={() => (
                                     <WorkflowBlockListEditor
@@ -509,7 +532,7 @@ export function WorkflowBlockListEditor(props: WorkflowBlockListEditorProps): Re
                                 {...(focusRegistration === undefined ? {} : { focusRegistration })}
                                 {...(fieldIssues === undefined ? {} : { fieldIssues })}
                                 {...(editable ? {
-                                    onOpenOptions: (anchorRef: React.RefObject<View | null>) => onCustomize(block.id, anchorRef),
+                                    onOpenOptions: (anchorRef: React.RefObject<View | null>) => customizeBlock(block, anchorRef),
                                 } : {})}
                                 draft={draft}
                                 ordinal={ordinal}
@@ -539,7 +562,7 @@ export function WorkflowBlockListEditor(props: WorkflowBlockListEditorProps): Re
                                 {...(fieldIssues === undefined ? {} : { fieldIssues })}
                                 block={block}
                                 {...(editable ? {
-                                    onOpenOptions: (anchorRef: React.RefObject<View | null>) => onCustomize(block.id, anchorRef),
+                                    onOpenOptions: (anchorRef: React.RefObject<View | null>) => customizeBlock(block, anchorRef),
                                 } : {})}
                                 draft={draft}
                                 ordinal={ordinal}
@@ -565,9 +588,8 @@ export function WorkflowBlockListEditor(props: WorkflowBlockListEditorProps): Re
                                 {...(focusRegistration === undefined ? {} : { focusRegistration })}
                                 inLane={list.kind !== 'root'}
                                 block={block}
-                                draft={draft}
                                 {...(editable ? {
-                                    onOpenOptions: (anchorRef: React.RefObject<View | null>) => onCustomize(block.id, anchorRef),
+                                    onOpenOptions: (anchorRef: React.RefObject<View | null>) => customizeBlock(block, anchorRef),
                                 } : {})}
                                 ordinal={ordinal}
                                 visibleOrdinal={visibleOrdinals.get(block.id) ?? null}
@@ -608,7 +630,7 @@ export function WorkflowBlockListEditor(props: WorkflowBlockListEditorProps): Re
                                     trailing={<WorkflowContainerOptionsControl
                                         optionsLabel={t('workflows.page.inspector.options')}
                                         {...(editable ? {
-                                            onOpenOptions: (anchorRef: React.RefObject<View | null>) => onCustomize(block.id, anchorRef),
+                                            onOpenOptions: (anchorRef: React.RefObject<View | null>) => customizeBlock(block, anchorRef),
                                         } : {})}
                                         testID={`${testIDPrefix}-if-${block.id}-summary`}
                                     />}

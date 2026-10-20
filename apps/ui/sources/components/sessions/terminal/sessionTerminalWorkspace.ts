@@ -16,6 +16,7 @@ export type SessionTerminalWorkspaceCommand =
     | { type: 'reorder'; tabId: string; index: number }
     | { type: 'rename'; terminalId: string; title: string | null }
     | { type: 'pendingActionApproval'; terminalId: string; pending: SessionTerminalMemberV1['pendingActionApproval'] | null; expectedArtifactId?: string }
+    | { type: 'openCancelled'; terminalId: string; cancelled: boolean }
     | { type: 'showList'; showList: boolean }
     | { type: 'resize'; tabId: string; splitId: string; ratio: number; availableWidthPx: number; minimumTerminalWidthPx: number; minimumFirstWidthPx?: number; minimumSecondWidthPx?: number };
 
@@ -132,6 +133,16 @@ export function reduceSessionTerminalWorkspace(state: SessionTerminalWorkspaceV1
                 if (terminal.id !== command.terminalId) return terminal;
                 const { title: previousTitle, ...rest } = terminal;
                 return title ? { ...rest, title } : rest;
+            }) });
+        }
+        case 'openCancelled': {
+            const tab = state.tabs.find(tab => tab.terminals.some(member => member.id === command.terminalId));
+            const member = tab?.terminals.find(member => member.id === command.terminalId);
+            if (!tab || !member || Boolean(member.openCancelled) === command.cancelled) return state;
+            return replace({ ...tab, terminals: tab.terminals.map(member => {
+                if (member.id !== command.terminalId) return member;
+                const { openCancelled: previous, ...rest } = member;
+                return command.cancelled ? { ...rest, openCancelled: true as const } : rest;
             }) });
         }
         case 'pendingActionApproval': {

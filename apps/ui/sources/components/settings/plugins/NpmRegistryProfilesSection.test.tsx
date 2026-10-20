@@ -1,10 +1,16 @@
 import * as React from 'react';
-import { act, create } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, create as createRenderer } from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MachineAdministrationTargetSelectionV1 } from '@/sync/domains/machines/administration/useTargetSelection';
 import { t } from '@/text';
 import { ItemRowActions } from '@/components/ui/lists/ItemRowActions';
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { ApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { DaemonNpmRegistryProfileMutationRequestV1Schema } from '@happier-dev/protocol/rpc/npmRegistryProfiles';
 
 const mocks = vi.hoisted(() => ({
     get: vi.fn(),
@@ -18,14 +24,29 @@ const mocks = vi.hoisted(() => ({
     serverId: 'server-a' as string | null,
 }));
 
+vi.mock('socket.io-client', async (importOriginal) => (
+    await import('@/dev/testkit/harness/serverAccountConnectionHarness')
+).createSocketIoClientBoundary(importOriginal));
+
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({ View: 'View' }));
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock({
     theme: { colors: { accent: { blue: 'blue' } } },
 }));
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
-vi.mock('@/sync/ops/machineNpmRegistryProfiles', () => ({
-    machineNpmRegistryProfilesGet: mocks.get,
-    machineNpmRegistryProfilesMutate: mocks.mutate,
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
+    // Keep Action admission, private credential delivery and the raw RPC codec real.
+    machineRpcWithServerScope: async (request: Readonly<{
+        machineId: string; serverId?: string | null; method: string; payload: unknown; signal?: AbortSignal;
+        preparePayload?: (remainingTimeoutMs: number) => unknown; onIssued?: () => void;
+    }>) => {
+        if (request.method === RPC_METHODS.DAEMON_NPM_REGISTRY_PROFILES_GET)
+            return mocks.get(request.machineId, { serverId: request.serverId, signal: request.signal });
+        if (request.method !== RPC_METHODS.DAEMON_NPM_REGISTRY_PROFILES_MUTATE)
+            throw new Error('Unexpected registry Machine RPC');
+        const mutation = DaemonNpmRegistryProfileMutationRequestV1Schema.parse(request.preparePayload?.(0) ?? request.payload);
+        request.onIssued?.();
+        return mocks.mutate(request.machineId, mutation, { serverId: request.serverId, signal: request.signal });
+    },
 }));
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({
     spies: {
@@ -36,7 +57,25 @@ vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).creat
         show: mocks.show,
     },
 }).module);
-import { NpmRegistryProfilesSection } from './NpmRegistryProfilesSection';
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+installDisconnectedServerSocketBoundary();
+const { NpmRegistryProfilesSection } = await import('./NpmRegistryProfilesSection');
+const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+let homeA: string;
+let homeB: string;
+const mountedTrees = new Set<ReturnType<typeof createRenderer>>();
+const create: typeof createRenderer = (...args) => {
+    const tree = createRenderer(...args);
+    mountedTrees.add(tree);
+    return tree;
+};
+afterEach(async () => {
+    await act(async () => { for (const tree of mountedTrees) tree.unmount(); mountedTrees.clear(); });
+    standardCleanup();
+    await disconnectActiveServerConnection();
+    await homes.reset();
+});
 
 type RegistryRowAction = Readonly<{
     id: string;
@@ -120,7 +159,7 @@ function createTargetSelection(
             resolveExecutionTarget: () => null,
         };
     }
-    const target = { serverIdentityId: `portable-${serverId}`, machineId };
+    const target = { serverIdentityId: serverId === homeA ? 'srv_registry_a' : 'srv_registry_b', machineId };
     return {
         selectedTarget: target,
         canExecute: true,
@@ -188,7 +227,7 @@ function snapshot(profileId = 'registry_acme', displayName = 'Acme', hasCredenti
             useAsDefault: false,
             allowPrivateNetwork: false,
             hasCredentials,
-            authenticationState: hasCredentials ? 'authenticated' as const : 'missing' as const,
+            authenticationState: hasCredentials ? 'configured' as const : 'missing' as const,
             availability: hasCredentials ? 'available' as const : 'sign_in_required' as const,
             lastSuccessfulCheckAtMs: null,
             updatedAtMs: 1,
@@ -198,9 +237,15 @@ function snapshot(profileId = 'registry_acme', displayName = 'Acme', hasCredenti
 }
 
 describe('NpmRegistryProfilesSection', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
+        await homes.reset();
+        await loadSyncSingletonForTests();
+        homeA = await homes.addHome({ name: 'Registry A', serverUrl: 'https://registry-home-a.test', serverIdentityId: 'srv_registry_a',
+            accountId: 'registry-account', currentAccount: true });
+        homeB = await homes.addHome({ name: 'Registry B', serverUrl: 'https://registry-home-b.test', serverIdentityId: 'srv_registry_b',
+            accountId: 'registry-account', currentAccount: true, active: false });
         mocks.machineId = 'machine-a';
-        mocks.serverId = 'server-a';
+        mocks.serverId = homeA;
         mocks.get.mockReset().mockResolvedValue({
             status: 'success',
             snapshot: snapshot(),
@@ -220,7 +265,7 @@ describe('NpmRegistryProfilesSection', () => {
         const screen = await renderScreen(<TestSection daemonOperationsAvailable />);
         const tree = screen.tree;
         await flush();
-        expect(mocks.get).toHaveBeenCalledWith('machine-a', { serverId: 'server-a' });
+        expect(mocks.get).toHaveBeenCalledWith('machine-a', expect.objectContaining({ serverId: homeA }));
         const profile = tree.root.findByProps({ testID: 'settings.plugins.registries.profile.registry_acme' });
         expect(profile.props.subtitle).toContain('https://registry.acme.test');
         // One profile is one row: edit, sign in, test and remove are that row's
@@ -235,8 +280,48 @@ describe('NpmRegistryProfilesSection', () => {
             .toContain('Acme');
     });
 
+    it('cancels a stalled profile read on target replacement and unmount, then loads on retry', async () => {
+        const signals: Array<AbortSignal | undefined> = [];
+        mocks.get.mockImplementation((_machineId: string, options: { signal?: AbortSignal }) => {
+            signals.push(options.signal);
+            return new Promise((_resolve, reject) => options.signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }));
+        });
+        const firstTarget = createTargetSelection('machine-a', homeA);
+        const secondTarget = createTargetSelection('machine-b', homeB);
+        const screen = await renderScreen(<TestSection daemonOperationsAvailable targetSelection={firstTarget} />);
+        await flush();
+        await act(async () => { screen.tree.update(<TestSection daemonOperationsAvailable targetSelection={secondTarget} />); });
+        await flush();
+        expect(signals[0]?.aborted).toBe(true);
+        expect(signals[1]?.aborted).toBe(false);
+        await act(async () => screen.tree.unmount());
+        expect(signals[1]?.aborted).toBe(true);
+        mocks.get.mockResolvedValue({ status: 'success', snapshot: snapshot() });
+        const retry = await renderScreen(<TestSection daemonOperationsAvailable targetSelection={secondTarget} />);
+        await flush();
+        expect(retry.tree.root.findByProps({ testID: 'settings.plugins.registries.profile.registry_acme' })).toBeTruthy();
+    });
+
+    it('retires an issued profile mutation when its selected machine changes', async () => {
+        let requestSignal: AbortSignal | undefined;
+        mocks.mutate.mockImplementation((_machineId: string, _request: unknown, options: { signal?: AbortSignal }) => {
+            requestSignal = options.signal;
+            return new Promise((_resolve, reject) => requestSignal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true }));
+        });
+        const firstTarget = createTargetSelection('machine-a', homeA);
+        const secondTarget = createTargetSelection('machine-b', homeA);
+        const screen = await renderScreen(<TestSection daemonOperationsAvailable targetSelection={firstTarget} />);
+        await flush();
+        await act(async () => { profileAction(screen.tree, 'registry_acme', 'test')?.onPress(); });
+        await vi.waitFor(() => expect(mocks.mutate).toHaveBeenCalledTimes(1));
+        await act(async () => { screen.tree.update(<TestSection daemonOperationsAvailable targetSelection={secondTarget} />); });
+        await flush();
+        expect(requestSignal?.aborted).toBe(true);
+        expect(screen.tree.root.findByProps({ testID: 'settings.plugins.registries.profile.registry_acme' }).props.loading).toBe(false);
+    });
+
     it('uses the supplied fresh exact target rather than deriving the primary machine', async () => {
-        const targetSelection = createTargetSelection('machine-b', 'server-b');
+        const targetSelection = createTargetSelection('machine-b', homeB);
         let tree!: ReturnType<typeof create>;
         await act(async () => {
             tree = create(<TestSection
@@ -247,12 +332,12 @@ describe('NpmRegistryProfilesSection', () => {
         await flush();
 
         expect(tree.root.findByProps({ testID: 'settings.plugins.registries.profile.registry_acme' })).toBeTruthy();
-        expect(mocks.get).toHaveBeenCalledWith('machine-b', { serverId: 'server-b' });
-        expect(mocks.get).not.toHaveBeenCalledWith('machine-a', { serverId: 'server-a' });
+        expect(mocks.get).toHaveBeenCalledWith('machine-b', expect.objectContaining({ serverId: homeB }));
+        expect(mocks.get).not.toHaveBeenCalledWith('machine-a', expect.objectContaining({ serverId: homeA }));
     });
 
     it('routes a profile mutation through the supplied fresh exact target', async () => {
-        const selected = createTargetSelection('machine-b', 'server-b');
+        const selected = createTargetSelection('machine-b', homeB);
         const resolveExecutionTarget = vi.fn(selected.resolveExecutionTarget);
         const targetSelection: NpmRegistryProfilesTargetSelection = {
             ...selected,
@@ -279,12 +364,12 @@ describe('NpmRegistryProfilesSection', () => {
             profileId: 'registry_acme',
             machineId: 'machine-b',
             expectedRevision: 2,
-        }), { serverId: 'server-b' });
-        expect(mocks.mutate).not.toHaveBeenCalledWith('machine-a', expect.anything(), { serverId: 'server-a' });
+        }), expect.objectContaining({ serverId: homeB }));
+        expect(mocks.mutate).not.toHaveBeenCalledWith('machine-a', expect.anything(), expect.objectContaining({ serverId: homeA }));
     });
 
     it('does not send a profile mutation after fresh resolution loses the selected target', async () => {
-        const selected = createTargetSelection('machine-b', 'server-b');
+        const selected = createTargetSelection('machine-b', homeB);
         let current = selected.resolveExecutionTarget();
         const targetSelection: NpmRegistryProfilesTargetSelection = {
             ...selected,
@@ -306,7 +391,7 @@ describe('NpmRegistryProfilesSection', () => {
     });
 
     it('fails closed when its selected portable target cannot be freshly resolved', async () => {
-        const selected = createTargetSelection('machine-b', 'server-b');
+        const selected = createTargetSelection('machine-b', homeB);
         const targetSelection: NpmRegistryProfilesTargetSelection = {
             ...selected,
             canExecute: false,
@@ -323,7 +408,7 @@ describe('NpmRegistryProfilesSection', () => {
     });
 
     it('discards a read when fresh resolution loses the same selected target', async () => {
-        const selected = createTargetSelection('machine-a', 'server-a');
+        const selected = createTargetSelection('machine-a', homeA);
         let current = selected.resolveExecutionTarget();
         const targetSelection: NpmRegistryProfilesTargetSelection = {
             ...selected,
@@ -336,7 +421,7 @@ describe('NpmRegistryProfilesSection', () => {
         await act(async () => {
             tree = create(<TestSection daemonOperationsAvailable targetSelection={targetSelection} />);
         });
-        expect(mocks.get).toHaveBeenCalledWith('machine-a', { serverId: 'server-a' });
+        expect(mocks.get).toHaveBeenCalledWith('machine-a', expect.objectContaining({ serverId: homeA }));
 
         current = null;
         await act(async () => {
@@ -431,12 +516,41 @@ describe('NpmRegistryProfilesSection', () => {
         expect(mocks.prompt).not.toHaveBeenCalled();
         expect(mocks.mutate).toHaveBeenCalledWith('machine-a', expect.objectContaining({
             action: 'login', credential: { kind: 'bearer_token', secret: 'boundary-secret' }, expectedRevision: 2,
-        }), { serverId: 'server-a' });
+        }), expect.objectContaining({ serverId: homeA }));
         const renderedText = tree.root.findAll((node) => (
             typeof node.props.title === 'string' || typeof node.props.subtitle === 'string'
         )).flatMap((node) => [node.props.title, node.props.subtitle]).filter((value): value is string => typeof value === 'string');
         expect(renderedText.join('\n')).not.toContain('boundary-secret');
         expect(tree.root.findAll((node) => node.props.testID === 'settings.plugins.registries.login.token')).toHaveLength(0);
+    });
+
+    it('retains a private login token in the originating mounted invocation across Ask-first', async () => {
+        await homes.requireUiApproval(homeA, 'plugins.npm_registry_profiles.login');
+        let tree!: ReturnType<typeof create>;
+        await act(async () => { tree = create(<TestSection daemonOperationsAvailable />); });
+        await flush();
+        await submitInlineCredential(tree);
+        let pending: Readonly<{ id: string; request: ReturnType<typeof ApprovalRequestSchema.parse> }> | undefined;
+        await waitForHomeGovernance(() => {
+            pending = homes.artifacts(homeA).list().map(row => ({ id: row.id,
+                request: ApprovalRequestSchema.parse(JSON.parse(homes.artifacts(homeA).readPlainBody(row.id) ?? 'null')) }))
+                .find(({ request }) => request.actionId === 'plugins.npm_registry_profiles.login');
+            expect(pending).toBeDefined();
+        });
+        expect(mocks.mutate).not.toHaveBeenCalled();
+        expect(pending?.request.approval?.flow).toBe('blocking');
+        expect(JSON.stringify(pending?.request)).not.toContain('boundary-secret');
+        if (!pending) throw new Error('Missing registry login approval');
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        await act(async () => {
+            expect(await createDefaultActionExecutor().execute('approval.request.decide', {
+                artifactId: pending!.id, decision: 'approve',
+            }, { surface: 'ui', serverId: homeA, expectedAccountId: 'registry-account' })).toMatchObject({ ok: true });
+        });
+        await waitForHomeGovernance(() => expect(mocks.mutate).toHaveBeenCalledWith('machine-a', expect.objectContaining({
+            action: 'login', expectedRevision: 2, credential: { kind: 'bearer_token', secret: 'boundary-secret' },
+        }), expect.objectContaining({ serverId: homeA })));
+        expect(mocks.prompt).not.toHaveBeenCalled();
     });
 
     it('keeps removed or signed-out sources visible as paused update diagnostics', async () => {
@@ -510,14 +624,14 @@ describe('NpmRegistryProfilesSection', () => {
                 useAsDefault: false,
                 allowPrivateNetwork: true,
             },
-        }), { serverId: 'server-a' });
+        }), expect.objectContaining({ serverId: homeA }));
         // The new profile is checked by its owner at once, against the revision
         // the add produced, so its availability is known rather than "unknown".
         const added = mocks.mutate.mock.calls[0]?.[1] as Readonly<{ profileId: string }>;
         expect(mocks.mutate).toHaveBeenCalledTimes(2);
         expect(mocks.mutate).toHaveBeenLastCalledWith('machine-a', expect.objectContaining({
             action: 'test', profileId: added.profileId, expectedRevision: 3,
-        }), { serverId: 'server-a' });
+        }), expect.objectContaining({ serverId: homeA }));
     });
 
     it('offers the registry a caller needs as the new profile the form starts from', async () => {
@@ -553,7 +667,7 @@ describe('NpmRegistryProfilesSection', () => {
         expect(mocks.mutate).toHaveBeenCalledTimes(1);
         expect(mocks.mutate).toHaveBeenCalledWith('machine-a', expect.objectContaining({
             action: 'login', profileId: 'registry_acme', expectedRevision: 2,
-        }), { serverId: 'server-a' });
+        }), expect.objectContaining({ serverId: homeA }));
         expect(tree.root.findByProps({ testID: 'settings.plugins.registries.profile.registry_acme' }).props.loading)
             .toBe(false);
     });
@@ -597,7 +711,7 @@ describe('NpmRegistryProfilesSection', () => {
                 useAsDefault: true,
                 allowPrivateNetwork: false,
             },
-        }), { serverId: 'server-a' });
+        }), expect.objectContaining({ serverId: homeA }));
     });
 
     it('ignores a late profile response from a previously selected machine', async () => {

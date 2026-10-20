@@ -3,6 +3,7 @@ import { type AuthTokenAuthenticationEvidenceV1 } from '@happier-dev/protocol/au
 import type { TeamCapabilitiesV1, TeamErrorCodeV1 } from "@happier-dev/protocol/teams";
 
 import type { Tx } from "@/storage/inTx";
+import { getDbProviderFromEnv } from "@/storage/prisma";
 import { AccountStatus, TeamMembershipStatus, TeamRole } from "@/storage/enums.generated";
 import {
     readHomeGovernanceAccountInTx,
@@ -128,6 +129,19 @@ export async function resolveTeamActorContextInTx(
     });
     if (!team) return null;
     return resolveTeamActorContextForTeamInTx(tx, { team, actorAccountId: input.actorAccountId });
+}
+
+/** Serialize Team lifecycle and owner-set decisions before their authority reads
+ * and Session effects. Account admission must precede this resource lock. */
+export async function acquireTeamMutationLockInTx(tx: Tx, teamId: string): Promise<void> {
+    const provider = getDbProviderFromEnv(process.env, "postgres");
+    if (provider === "sqlite") return; // Account admission already reserves its single writer.
+    await tx.$queryRawUnsafe(
+        provider === "mysql"
+            ? "SELECT `id` FROM `Team` WHERE `id` = ? FOR UPDATE"
+            : 'SELECT "id" FROM "Team" WHERE "id" = $1 FOR NO KEY UPDATE',
+        teamId,
+    );
 }
 
 /** Resolves one actor across a bounded Team page without repeating Account,

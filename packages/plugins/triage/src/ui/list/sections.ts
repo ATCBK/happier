@@ -1,5 +1,5 @@
-import type { SessionStateV1 } from '@happier-dev/plugin-sdk/ui';
 import type { TriageEntryLocatorV1, TriageSourceWorkflowSubjectV1 } from '@happier-dev/triage-protocol/v1';
+import { projectTriageDetailFieldsV1, projectTriageDetailFieldTextV1, triageTaskStatusCategoryV1 } from '@happier-dev/triage-protocol/v1';
 
 import { CORPUS_LANE } from '../../corpus/fold/lane.js';
 import { triageEntryRowKey, type TriageListRowV1 } from '../../projection/listWindow.js';
@@ -12,7 +12,7 @@ import {
   type TriageListRowProjectionOptionsV1,
 } from '../marks/pinnedRows.js';
 import { readTriageSelectedObservationV1 } from '../window/selectedObservation.js';
-import { readTriageEntryAgentStatusV1, type TriageAgentStatusV1 } from '../detail/agentState.js';
+import { readTriageEntryAgentStatusV1, type TriageAgentStateV1, type TriageAgentStatusV1 } from '../detail/agentState.js';
 
 /**
  * The PRs & Issues rows and their ONE grouping axis (PLAN.md r0.41): **Needs you / With an agent / In review /
@@ -32,10 +32,11 @@ export const TRIAGE_LIST_GROUPS_V1 = Object.freeze([
   'withAgent',
   'inReview',
   'everythingElse',
+  'backlog', 'unstarted', 'started', 'completed', 'canceled',
 ] as const);
 export type TriageListGroupIdV1 = (typeof TRIAGE_LIST_GROUPS_V1)[number];
 
-/** A source-labelled status fact the source marked primary: the table's signal column, source-neutral. */
+/** The source's status, impact count or supplementary text: the table's source-neutral Signal cell. */
 export type TriageListRowSignalV1 = Readonly<{
   label: string;
   tone: 'success' | 'warning' | 'danger' | 'info' | 'neutral';
@@ -75,20 +76,33 @@ export function readTriageListGroupV1(input: Readonly<{
   return 'everythingElse';
 }
 
-const NO_AGENT_STATES: readonly SessionStateV1[] = Object.freeze([]);
+const NO_AGENT_STATES: readonly TriageAgentStateV1[] = Object.freeze([]);
 
-function readSignal(row: TriageListRowV1 | null): TriageListRowSignalV1 | null {
-  for (const fact of row?.content?.outcome.snapshot.facts ?? []) {
+function readSignal(row: TriageListRowV1 | null, locale: string): TriageListRowSignalV1 | null {
+  const facts = row?.content?.outcome.snapshot.facts ?? [];
+  for (const fact of facts) {
     if (fact.importance === 'primary' && fact.value.kind === 'status') {
       return { label: fact.value.value, tone: fact.value.tone };
     }
   }
+  // Identity text (entry number, repository) already has its own columns. Source-declared impact and
+  // supplementary text (such as labels) carry the remaining useful signal without parsing source ids.
+  const fields = projectTriageDetailFieldsV1(facts);
+  const impact = fields.find((field) => field.importance === 'primary' && field.kind === 'number');
+  if (impact?.kind === 'number') {
+    const value = projectTriageDetailFieldTextV1(impact, locale, 0);
+    const label = facts.find((fact) => fact.id === impact.id)?.label;
+    return { label: label === undefined ? value! : `${value} ${label}`, tone: 'neutral' };
+  }
+  const text = fields.find((field) => field.importance === 'supplementary' && field.kind === 'text');
+  if (text?.kind === 'text') return { label: text.value, tone: 'neutral' };
   return null;
 }
 
 export function planTriageListItemsV1(input: Readonly<{
   rows: readonly TriageListRowV1[];
   pins: readonly TriagePinnedEntryV1[];
+  locale?: string;
   /** The admitted source contribution's workflow subject for this kind, or `null` when none was declared. */
   workflowSubjectOf: (entryRef: TriageListRowV1['entryRef']) => TriageSourceWorkflowSubjectV1 | null;
   /**
@@ -96,16 +110,30 @@ export function planTriageListItemsV1(input: Readonly<{
    * relationship/Session-fact join, shared by every row; both the "With an agent" group and the Agent
    * column are read from it, so they cannot disagree about one entry.
    */
-  agentStatesOf?: (key: string) => readonly SessionStateV1[];
+  agentStatesOf?: (key: string) => readonly TriageAgentStateV1[];
   /** How the rows say the words this plugin authors, and whether the window they came from is current. */
   display?: TriageListRowProjectionOptionsV1;
-}>): readonly TriageListItemV1[] {
+  tasks?: Readonly<{
+    audience: 'mine' | 'agents' | 'everyone';
+    isTask: (entryRef: TriageListRowV1['entryRef']) => boolean;
+    hasSessions: (key: string) => boolean;
+  }>;
+}>, previous: readonly TriageListItemV1[] = []): readonly TriageListItemV1[] {
   const pinIndex = indexTriagePinsByEntry(input.pins);
   const agentStatesOf = (key: string) => input.agentStatesOf?.(key) ?? NO_AGENT_STATES;
   const projectedByKey = new Map<string, TriageListRowV1>();
   for (const row of input.rows) projectedByKey.set(triageEntryRowKey(row.entryRef), row);
 
-  const items: TriageListItemV1[] = input.pins.map((pin) => {
+  const included = (ref: TriageListRowV1['entryRef'], row: TriageListRowV1 | null): boolean => {
+    if (input.tasks === undefined) return true;
+    if (!input.tasks.isTask(ref)) return false;
+    if (input.tasks.audience === 'everyone') return true;
+    if (input.tasks.audience === 'agents') return input.tasks.hasSessions(triageEntryRowKey(ref));
+    return row?.observations.some((observation) => observation.outcome.kind === 'present'
+      && observation.outcome.viewer.involvement.length > 0) ?? false;
+  };
+  const items: TriageListItemV1[] = input.pins.filter((pin) => included(pin.entryRef,
+    projectedByKey.get(triageEntryRowKey(pin.entryRef)) ?? null)).map((pin) => {
     const projected = projectedByKey.get(triageEntryRowKey(pin.entryRef)) ?? null;
     const row = projectTriagePinnedRow(pin, projected, input.display);
     return Object.freeze({
@@ -113,27 +141,67 @@ export function planTriageListItemsV1(input: Readonly<{
       row,
       group: 'pinned' as const,
       summary: projected?.content?.outcome.snapshot.summary ?? null,
-      signal: readSignal(projected),
+      signal: readSignal(projected, input.locale ?? 'en'),
       agent: readTriageEntryAgentStatusV1(agentStatesOf(row.key)),
       locator: projected === null ? null : readTriageSelectedObservationV1(projected)?.observation.locator ?? null,
     });
   });
   for (const windowRow of input.rows) {
+    if (!included(windowRow.entryRef, windowRow)) continue;
     const row = projectTriageWindowRow(windowRow, pinIndex, input.display);
     if (row.pinned) continue;
     items.push(Object.freeze({
       key: row.key,
       row,
-      group: readTriageListGroupV1({
+      group: input.tasks !== undefined
+        ? (windowRow.content === null ? null : triageTaskStatusCategoryV1(windowRow.content.outcome.snapshot.state)) ?? 'everythingElse'
+        : readTriageListGroupV1({
         row: windowRow,
         workflowSubject: input.workflowSubjectOf(windowRow.entryRef),
         agentActive: agentStatesOf(row.key).some((state) => state.workStatus.bucket === 'working'),
       }),
       summary: windowRow.content?.outcome.snapshot.summary ?? null,
-      signal: readSignal(windowRow),
+      signal: readSignal(windowRow, input.locale ?? 'en'),
       agent: readTriageEntryAgentStatusV1(agentStatesOf(row.key)),
       locator: readTriageSelectedObservationV1(windowRow)?.observation.locator ?? null,
     }));
   }
-  return Object.freeze(items);
+  // A Session transition changes its own item/group, not every unchanged
+  // display row. Retain only the preceding projection; no history is kept.
+  const previousByKey = new Map(previous.map((item) => [item.key, item]));
+  const retained = items.map((item) => {
+    const prior = previousByKey.get(item.key);
+    if (prior === undefined) return item;
+    const rowKeys = Object.keys(item.row) as (keyof TriageListDisplayRowV1)[];
+    const row = rowKeys.length === Object.keys(prior.row).length
+      && rowKeys.every((key) => item.row[key] === prior.row[key])
+      ? prior.row : item.row;
+    if (row === prior.row && item.group === prior.group && item.summary === prior.summary
+      && item.locator === prior.locator
+      && JSON.stringify(item.signal) === JSON.stringify(prior.signal)
+      && JSON.stringify(item.agent) === JSON.stringify(prior.agent)) return prior;
+    return row === item.row ? item : Object.freeze({ ...item, row });
+  });
+  return retained.length === previous.length && retained.every((item, index) => item === previous[index])
+    ? previous : Object.freeze(retained);
+}
+
+/**
+ * The suggestion a whole group shares: when every entry of a group (two or more) is there for the same suggested
+ * reason ("Mentioned"), the group says it once and its rows leave the chip out. A group with any other reason, a
+ * required one, or none keeps the reasons on its rows, where they tell entries apart.
+ */
+export function readTriageSharedGroupReasonsV1(
+  items: readonly TriageListItemV1[],
+): ReadonlyMap<TriageListGroupIdV1, string> {
+  const byGroup = new Map<TriageListGroupIdV1, { label: string | null; count: number }>();
+  for (const item of items) {
+    const label = item.row.detailKind === 'suggestion' ? item.row.detail : null;
+    const seen = byGroup.get(item.group);
+    if (seen === undefined) byGroup.set(item.group, { label, count: 1 });
+    else byGroup.set(item.group, { label: seen.label === label ? label : null, count: seen.count + 1 });
+  }
+  const shared = new Map<TriageListGroupIdV1, string>();
+  for (const [group, { label, count }] of byGroup) if (label !== null && count > 1) shared.set(group, label);
+  return shared;
 }

@@ -9,6 +9,7 @@ import { type PeerTcpTunnelRelayAuthorizationPayloadV2, type PeerTcpTunnelRelayA
 
 import { getSocketRooms } from '../../../../socketRooms';
 import { resolveMachineAdmission } from '@/app/machines/machineAccess';
+import { log } from '@/utils/logging/log';
 import { resolvePeerTcpTunnelRelayCaps, type PeerTcpTunnelRelayCaps } from './relayCaps';
 import {
     createPeerMediationFlowEvent,
@@ -603,20 +604,49 @@ export function registerPeerTcpTunnelRelaySocketHandler(
     const caps = resolvePeerTcpTunnelRelayCaps(ctx);
     const readMachineAdmission = ctx.readMachineAdmission ?? ((machineId: string) => resolveMachineAdmission({ actorAccountId: userId, machineId }));
     const pendingCurrentnessByTunnelKey = new Map<TunnelKey, Promise<string | null>>();
-    async function readCurrentInstallation(machineId: string, expectedInstallationId?: string): Promise<string | null> {
+    const currentnessTailByTunnelKey = new Map<TunnelKey, Promise<string | null>>();
+    async function readCurrentInstallation(machineId: string, expectedInstallationId?: string, tunnelId?: string): Promise<string | null> {
+        const startedAt = process.env.HAPPIER_WEB_LATENCY_TRACE === '1' ? performance.now() : null;
+        let installationId: string | null = null;
+        let databaseErrorCode: string | undefined;
         try {
             const admission = await readMachineAdmission(machineId);
-            return admission.kind === 'admitted' && admission.actorAccountId === userId && admission.custodianAccountId === userId
+            installationId = admission.kind === 'admitted' && admission.actorAccountId === userId && admission.custodianAccountId === userId
                 && (expectedInstallationId === undefined || admission.installationId === expectedInstallationId)
                 ? admission.installationId : null;
-        } catch { return null; }
+            return installationId;
+        } catch (error) {
+            if (startedAt !== null) {
+                try {
+                    const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+                    if (typeof code === 'string' && /^P\d{4}$/.test(code)) databaseErrorCode = code;
+                } catch { /* Diagnostic only. */ }
+            }
+            return null;
+        } finally {
+            if (startedAt !== null) {
+                try { log({ module: 'peer-relay', event: 'peer-relay-machine-read', machineId, tunnelId,
+                    elapsedMs: performance.now() - startedAt, admitted: installationId !== null,
+                    ...(databaseErrorCode ? { databaseErrorCode } : {}),
+                }, '[peer-relay-machine-read]'); } catch { /* Diagnostic only. */ }
+            }
+        }
     }
     async function readOrderedCurrentInstallation(tunnelKey: TunnelKey, machineId: string, expectedInstallationId?: string): Promise<string | null> {
-        const previous = pendingCurrentnessByTunnelKey.get(tunnelKey);
-        const current = (previous ?? Promise.resolve()).then(() => readCurrentInstallation(machineId, expectedInstallationId));
+        const pending = pendingCurrentnessByTunnelKey.get(tunnelKey);
+        if (pending) return await pending;
+        const previous = currentnessTailByTunnelKey.get(tunnelKey);
+        const current = (previous ?? Promise.resolve()).then(() => {
+            // All members of this batch arrived before its fresh read began.
+            // Arrivals during that read queue the next read; no completed or
+            // already-running admission result can authorize a later frame.
+            pendingCurrentnessByTunnelKey.delete(tunnelKey);
+            return readCurrentInstallation(machineId, expectedInstallationId, observabilityIdentityByTunnelKey.get(tunnelKey)?.tunnelId);
+        });
         pendingCurrentnessByTunnelKey.set(tunnelKey, current);
+        currentnessTailByTunnelKey.set(tunnelKey, current);
         try { return await current; }
-        finally { if (pendingCurrentnessByTunnelKey.get(tunnelKey) === current) pendingCurrentnessByTunnelKey.delete(tunnelKey); }
+        finally { if (currentnessTailByTunnelKey.get(tunnelKey) === current) currentnessTailByTunnelKey.delete(tunnelKey); }
     }
     const isServerRoutedFlowEnabled = (
         flowKind: PeerTcpTunnelRelayAuthorizationPayloadV2['flowKind'],
@@ -941,6 +971,7 @@ export function registerPeerTcpTunnelRelaySocketHandler(
         }
 
         if (!isV1OpenFrame) {
+            const admissionStartedAt = process.env.HAPPIER_WEB_LATENCY_TRACE === '1' ? performance.now() : null;
             const pending = pendingOpenByTunnelKey.get(tunnelKey);
             if (pending) {
                 const queuedBytes = envelope.v === 1
@@ -970,6 +1001,15 @@ export function registerPeerTcpTunnelRelaySocketHandler(
                 if (pending.cancelledReason || ownerSocketDisconnected) return;
             }
             currentInstallationId = machineId ? await readOrderedCurrentInstallation(tunnelKey, machineId, authorizationStateByTunnelKey.get(tunnelKey)?.installationId) : null;
+            if (admissionStartedAt !== null) {
+                try { log({ module: 'peer-relay', event: 'peer-relay-frame-admission', tunnelId,
+                    sender: envelope.sender.kind, kind: decodedBinary?.ok ? decodedBinary.header.kind : undefined,
+                    substreamId: decodedBinary?.ok ? decodedBinary.header.substreamId : undefined,
+                    sequence: decodedBinary?.ok ? decodedBinary.header.sequence : undefined,
+                    elapsedMs: performance.now() - admissionStartedAt, admitted: currentInstallationId !== null,
+                    pendingOpen: pending !== undefined,
+                }, '[peer-relay-frame-admission]'); } catch { /* Diagnostic only. */ }
+            }
             if (!currentInstallationId || (envelope.sender.kind === 'machine' && ingress === 'socket'
                 && socket.data?.verifiedMachineInstallationId !== currentInstallationId)) {
                 emitAbort({ io: ctx.io, userId, envelope, tunnelId, reasonCode: 'route_unavailable', tunnelKey, senderSocketId: socket.id, notifyAttachedMachine: true });

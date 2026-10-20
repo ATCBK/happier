@@ -72,12 +72,14 @@ export const CommandMenu = React.memo((props: CommandMenuProps) => {
                 id: item.id,
                 label: item.label,
                 subtitle: item.description,
+                ...(item.disabled ? { disabled: true as const } : {}),
                 onHighlight: item.onHighlight ? () => { if (item.id !== selectedOptionIdRef.current) pointerHighlightRef.current = true; item.onHighlight?.(); } : undefined,
                 content: item.renderRow ? item.renderRow() : (
                     <CommandMenuRow
                         label={item.label}
                         description={item.description}
                         icon={item.icon}
+                        disabled={item.disabled}
                         testID={testID ? `${testID}:row:${item.id}` : undefined}
                     />
                 ),
@@ -145,6 +147,7 @@ export const CommandMenu = React.memo((props: CommandMenuProps) => {
             flip={props.flip}
             gap={gap}
             boundaryRef={boundaryRef}
+            clearanceRef={props.clearanceRef}
             keyboardBottomInset={keyboardBottomInset}
             edgePadding={edgePadding}
             backdrop={backdrop}

@@ -9,6 +9,8 @@ import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 const rpc = vi.hoisted(() => vi.fn());
 const machineRpc = vi.hoisted(() => vi.fn());
 // Session RPC is a transport boundary; the default Action executor and approval owner stay real.
+// The in-place confirmation is the only mocked boundary; the Action executor and policy stay real.
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', () => ({ sessionRpcWithServerScope: rpc }));
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpc }));
 const harness = createHomeGovernanceHarness();
@@ -99,7 +101,7 @@ describe('commit proposal approval through the default Action executor', () => {
     const { machineScmCommitCreate } = await import('@/sync/ops/scm/machineScm');
     expectReceipt(await machineScmCommitCreate('machine', { cwd: '/repo', message: 'Intentional commit' }, {
       serverId, accountId: 'account',
-    })).toMatchObject({ success: false, errorCode: 'FEATURE_UNSUPPORTED', actionErrorCode: 'approval_required', approvalArtifactId: expect.any(String) });
+    })).toMatchObject({ success: false, awaitingApproval: true, approvalArtifactId: expect.any(String) });
     expect(machineRpc).not.toHaveBeenCalled();
     expect(harness.artifacts(serverId).list()).toHaveLength(1);
   });

@@ -3,8 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { ProjectAccountRowMutationRequestV1Schema, type ProjectAccountRowMutationRequestV1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { computeWorkspaceSyncPolicyDigest } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
-import { createProjectAccountSnapshotMutation, readProjectAccountRows, mutateProjectAccountOrganization,
-  getActiveProjectAccountRowsSnapshot, withdrawActiveProjectAccountRowsSnapshot } from './projectAccountRows';
+import { createProjectAccountSnapshotMutation, readProjectAccountRows, readProjectAccountRowsObservation, mutateProjectAccountOrganization,
+  getActiveProjectAccountRowsSnapshot, subscribeActiveProjectAccountRowsSnapshot, withdrawActiveProjectAccountRowsSnapshot } from './projectAccountRows';
 import { updatePersonalProjectContextV1, ProjectContextUpdateInputV1Schema, type ProjectContextActionOwnerDepsV1 } from '@happier-dev/protocol/projects/projectContextV1';
 import { PromptStackEntryV1Schema } from '@happier-dev/protocol/prompts/library/promptStacksV1';
 import { createProjectAccountRowCipherV1 } from '@happier-dev/protocol/projects/projectAccountRowCipherV1';
@@ -12,6 +12,7 @@ import { ExternalActionExecutionAuthorizationV1Schema, type ExternalActionExecut
 import { createProjectWorkspaceRetirement } from './projectWorkspaceRetirement';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { mockProjectAccountRowsHttpBoundary as boundary } from './projectAccountRows.testkit';
+import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
 
 afterEach(() => { vi.restoreAllMocks(); withdrawActiveProjectAccountRowsSnapshot(); });
 const credentials = { token: 'project-token', encryption: null };
@@ -24,8 +25,54 @@ function deferred() {
   return { promise, resolve };
 }
 
+describe('Project snapshot refresh availability', () => {
+  it.each([[403, false], [429, true]] as const)('preserves HTTP %s read disposition and retains rows only for retryable failures', async (status, retryable) => {
+    const post = boundary([{ key, revision: 1, content: { t: 'plain', v: { key, value: ref } } }]);
+    const input = { credentials, serverId: 'home-a', publication: 'installed' as const };
+    const accepted = await readProjectAccountRows(input);
+    post.mockResolvedValueOnce({ status, data: { error: 'PRIVATE_RESPONSE' } });
+    const error: unknown = await readProjectAccountRows(input).catch((failure: unknown) => failure);
+    expect(classifyServerEndpointError(error)).toMatchObject({ statusCode: status, retryable });
+    expect(getActiveProjectAccountRowsSnapshot()).toBe(retryable ? accepted : null);
+    expect(String(error)).not.toContain('PRIVATE_RESPONSE');
+  });
+
+  it('keeps cold failures unavailable and withdraws accepted rows on authentication failure', async () => {
+    const post = boundary([{ key, revision: 1, content: { t: 'plain', v: { key, value: ref } } }]);
+    const input = { credentials, serverId: 'home-a', publication: 'installed' as const };
+    post.mockResolvedValueOnce({ status: 503, data: { error: 'internal' } });
+    await expect(readProjectAccountRows(input)).rejects.toMatchObject({ code: 'project_account_rows_unavailable' });
+    expect(getActiveProjectAccountRowsSnapshot()).toBeNull();
+    await readProjectAccountRows(input);
+    vi.mocked(axios.get).mockResolvedValueOnce({ status: 401, data: { error: 'unauthorized' } });
+    await expect(readProjectAccountRows(input)).rejects.toMatchObject({ code: 'project_account_mode_unavailable' });
+    expect(getActiveProjectAccountRowsSnapshot()).toBeNull();
+  });
+
+  it.each(['network', 'rows 500', 'mode 500'] as const)('retains the last accepted same-scope rows after %s and accepts recovery', async failure => {
+    const rows = [{ key, revision: 1, content: { t: 'plain', v: { key, value: ref } } }];
+    const post = boundary(rows);
+    const input = { credentials, serverId: 'home-a', publication: 'installed' as const };
+    const accepted = await readProjectAccountRows(input);
+    if (failure === 'network') post.mockRejectedValueOnce(new axios.AxiosError('Connection reset', 'ECONNRESET'));
+    if (failure === 'rows 500') post.mockResolvedValueOnce({ status: 500, data: { error: 'internal' } });
+    if (failure === 'mode 500') vi.mocked(axios.get).mockResolvedValueOnce({ status: 500, data: { error: 'internal' } });
+    await expect(readProjectAccountRows(input)).rejects.toBeDefined();
+    expect(getActiveProjectAccountRowsSnapshot()).toBe(accepted);
+    rows[0] = { key, revision: 2, content: { t: 'plain', v: { key, value: { ...ref, rootPath: '/work/recovered' } } } };
+    expect((await readProjectAccountRows(input)).workspaceRefs).toEqual([{ ...ref, rootPath: '/work/recovered' }]);
+    // Invalid mode/content evidence still withdraws access; a retained snapshot
+    // must never turn a security failure into a successful stored-data read.
+    post.mockResolvedValueOnce({ status: 200, data: { status: 'listed', coverage: 'complete', rows: [
+      { key, revision: 3, content: { t: 'encrypted', c: 'invalid' } },
+    ] } });
+    await expect(readProjectAccountRows(input)).rejects.toMatchObject({ code: 'project_account_mode_mismatch' });
+    expect(getActiveProjectAccountRowsSnapshot()).toBeNull();
+  });
+});
+
 describe('Project checkout retirement', () => {
-  const createOwner = () => createProjectWorkspaceRetirement({ authority: { credentials, serverId: ref.serverId },
+  const createOwner = () => createProjectWorkspaceRetirement({ authority: { credentials, serverId: ref.serverId, publication: 'installed' },
     serverId: ref.serverId, machineId: ref.machineId, assertCurrentAuthority: async () => {} });
   const row = (value: WorkspaceRefV1 = ref, revision = 2) => {
     const rowKey = { ...key, serverId: value.serverId, id: value.id };
@@ -162,9 +209,73 @@ describe('Project checkout retirement', () => {
   });
 });
 describe('Project Account row transport', () => {
+  it.each(['empty', 'foreign'] as const)('keeps a private observation current without publishing over an %s installed scope', async installedScope => {
+    boundary([]);
+    if (installedScope === 'foreign') await readProjectAccountRows({ credentials, serverId: 'home-a', publication: 'installed' });
+    const installed = getActiveProjectAccountRowsSnapshot();
+    let current = true;
+    const observation = await readProjectAccountRowsObservation({
+      credentials: { token: 'private-requester', encryption: null }, serverId: 'home-a',
+      assertCurrentAuthority: async () => { if (!current) throw new Error('Requester retired'); },
+    });
+    expect(await observation.isCurrent()).toBe(true);
+    expect(getActiveProjectAccountRowsSnapshot()).toBe(installed);
+    current = false;
+    expect(await observation.isCurrent()).toBe(false);
+    expect(getActiveProjectAccountRowsSnapshot()).toBe(installed);
+  });
+
+  it('keeps published observations across equivalent reprojected topology but refuses changed or withdrawn topology', async () => {
+    const rows: unknown[] = [];
+    boundary(rows);
+    const input = { credentials, serverId: 'home-a', publication: 'installed' as const };
+    const observation = await readProjectAccountRowsObservation(input);
+    await readProjectAccountRows(input);
+    expect(await observation.isCurrent()).toBe(true);
+    rows.push({ key, revision: 0, content: { t: 'plain', v: { key, value: ref } } });
+    await readProjectAccountRows(input);
+    expect(await observation.isCurrent()).toBe(false);
+    const latest = await readProjectAccountRowsObservation(input);
+    withdrawActiveProjectAccountRowsSnapshot();
+    expect(await latest.isCurrent()).toBe(false);
+  });
+
+  it('keeps unbound and foreign credential reads private, including failures and acknowledged mutations', async () => {
+    const rows: unknown[] = [];
+    const post = boundary(rows);
+    const requester = { credentials: { token: 'different-requester', encryption: null }, serverId: 'home-a' };
+    const installed = await readProjectAccountRows({ credentials, serverId: 'home-a', publication: 'installed' });
+    let publications = 0;
+    const release = subscribeActiveProjectAccountRowsSnapshot(() => publications++);
+    try {
+      const privateSnapshot = await readProjectAccountRows(requester);
+      expect(privateSnapshot.scopeKey).not.toBe(installed.scopeKey);
+      expect(await createProjectAccountSnapshotMutation(requester)(snapshot => ({ ...snapshot, workspaceRefs: [ref] })))
+        .toMatchObject({ status: 'applied', snapshot: { workspaceRefs: [ref] } });
+      expect(getActiveProjectAccountRowsSnapshot()).toBe(installed);
+      post.mockRejectedValueOnce(new Error('Requester Home unavailable'));
+      await expect(readProjectAccountRows(requester)).rejects.toThrow('Requester Home unavailable');
+      expect(getActiveProjectAccountRowsSnapshot()).toBe(installed);
+      await readProjectAccountRows({ credentials, serverId: 'home-a', publication: 'installed',
+        sessionCustody: { serverId: 'home-a', accountId: 'installed-account', serverHttpBaseUrl: 'https://installed-home.invalid',
+          isCurrent: async () => true } });
+      expect(getActiveProjectAccountRowsSnapshot()).toBe(installed);
+      expect(publications).toBe(0);
+      // An ordinary installed refresh still publishes and can recover after withdrawal.
+      await readProjectAccountRows({ credentials, serverId: 'home-a' });
+      expect(getActiveProjectAccountRowsSnapshot()?.workspaceRefs).toEqual([ref]);
+      expect(publications).toBe(1);
+      withdrawActiveProjectAccountRowsSnapshot();
+      await readProjectAccountRows({ credentials, serverId: 'home-a', publication: 'installed' });
+      expect(getActiveProjectAccountRowsSnapshot()?.workspaceRefs).toEqual([ref]);
+      withdrawActiveProjectAccountRowsSnapshot();
+      await readProjectAccountRows(requester);
+      expect(getActiveProjectAccountRowsSnapshot()).toBeNull();
+    } finally { release(); }
+  });
   it('uses admitted requester HTTP and cipher ports for private row acceptance without replacing the daemon snapshot', async () => {
     boundary([]);
-    const daemonSnapshot = await readProjectAccountRows({ credentials });
+    const daemonSnapshot = await readProjectAccountRows({ credentials, publication: 'installed' });
     const cipher = createProjectAccountRowCipherV1({ mode: 'e2ee', material: { type: 'legacy', secret: new Uint8Array(32).fill(8) },
       randomBytes: n => new Uint8Array(n).fill(2) });
     let current = true;
@@ -220,9 +331,9 @@ describe('Project Account row transport', () => {
         { key: graphKey, revision: 5, content: { t: 'plain', v: { key: graphKey, value: { relationships: [] } } } },
       ] } };
     });
-    const older = readProjectAccountRows({ credentials });
+    const older = readProjectAccountRows({ credentials, publication: 'installed' });
     await readStarted.promise;
-    expect(await readProjectAccountRows({ credentials })).toMatchObject({ graphRevision: 5, workspaceRefs: [] });
+    expect(await readProjectAccountRows({ credentials, publication: 'installed' })).toMatchObject({ graphRevision: 5, workspaceRefs: [] });
     releaseRead.resolve();
     expect(await older).toMatchObject({ graphRevision: 5, workspaceRefs: [] });
     expect(getActiveProjectAccountRowsSnapshot()).toMatchObject({ graphRevision: 5, workspaceRefs: [],
@@ -250,11 +361,11 @@ describe('Project Account row transport', () => {
         ...(wrote ? [{ key: forgottenKey, revision: 2, content: null }] : []),
       ] } };
     });
-    const edit = createProjectAccountSnapshotMutation(credentials)(snapshot => ({ ...snapshot,
+    const edit = createProjectAccountSnapshotMutation({ credentials, publication: 'installed' })(snapshot => ({ ...snapshot,
       workspaceRefs: snapshot.workspaceRefs.map(value => ({ ...value, label: 'Earlier edit' })),
     }));
     await writeStarted.promise;
-    await readProjectAccountRows({ credentials });
+    await readProjectAccountRows({ credentials, publication: 'installed' });
     releaseWrite.resolve();
     expect(await edit).toMatchObject({ status: 'applied', version: 3, snapshot: { workspaceRefs: [{ ...ref, label: 'Later edit' }] } });
     expect(getActiveProjectAccountRowsSnapshot()).toMatchObject({ graphRevision: 3, workspaceRefs: [{ ...ref, label: 'Later edit' }],

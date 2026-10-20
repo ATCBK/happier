@@ -1546,6 +1546,64 @@ describe('account Voice operation service', () => {
     }
   });
 
+  it.each(['materialization', 'response', 'responseBody', 'refusal'] as const)(
+    'preserves mutation uncertainty when authority retires during %s', async (retirement) => {
+      let current = true;
+      const mutationContract = normalizeRecipientContractV1({
+        ...recipientContract,
+        operations: recipientContract.operations.map(operation => ({ ...operation, effect: 'mutation' })),
+      });
+      const declaration = VoiceProviderContributionSchema.parse({
+        ...defaultCredentialDeclaration,
+        credentials: {
+          ...defaultCredentialDeclaration.credentials,
+          hostMediated: {
+            operations: defaultCredentialDeclaration.credentials!.hostMediated!.operations.map(operation => ({
+              ...operation, ...(operation.id === 'client-auth' ? { effect: 'mutation' as const } : {}),
+            })),
+          },
+        },
+      });
+      if (declaration.kind !== 'conversation') throw new Error('Expected conversation declaration');
+      const fetch = vi.fn(async () => {
+        if (retirement === 'response' || retirement === 'refusal') current = false;
+        const body = new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (retirement === 'responseBody') current = false;
+            controller.enqueue(new TextEncoder().encode('{"ok":true}'));
+            controller.close();
+          },
+        }, { highWaterMark: 0 });
+        return new Response(body, { status: retirement === 'refusal' ? 422 : 200,
+          headers: { 'content-type': 'application/json' } });
+      });
+      const service = createQualifiedAccountVoiceOperationService({
+        providerId: 'happier.voice.openai/realtime-openai',
+        contribution,
+        declaration,
+        phase: 'prepare',
+        recipientContract: mutationContract,
+        signal: new AbortController().signal,
+        isCurrent: () => current,
+        fetch,
+        materializeSecret: async () => {
+          if (retirement === 'materialization') current = false;
+          return 'account-secret';
+        },
+      });
+
+      await expect(requestClientAuth(service)).rejects.toMatchObject(retirement === 'refusal' ? {
+        code: 'provider_response_invalid',
+        responseFailure: { kind: 'http_status', status: 422, statusClass: '4xx' },
+      } : {
+        code: retirement === 'materialization'
+          ? 'voice_account_operation_cancelled'
+          : 'voice_account_operation_outcome_unknown',
+      });
+      expect(fetch).toHaveBeenCalledTimes(retirement === 'materialization' ? 0 : 1);
+    },
+  );
+
   it('withdraws authority when the bundled runtime generation retires during materialization', async () => {
     let current = true;
     const fetch = vi.fn();

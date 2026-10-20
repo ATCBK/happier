@@ -4,6 +4,7 @@ import { act, cloneElement, type ReactElement } from 'react';
 import { createPluginUiTestkit, createSurfaceContextFixture } from '@happier-dev/plugin-sdk/testing';
 import type { PluginUiSemanticSurfaceAdapter, PluginUiTestkit } from '@happier-dev/plugin-sdk/testing';
 import type { RenderContext } from '@happier-dev/plugin-sdk/ui';
+import { PluginError } from '@happier-dev/plugin-sdk';
 import { Button, defineUiSurface, Text, usePluginHostApi } from '@happier-dev/plugin-ui';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
 import type { PluginUiDataClient } from '@happier-dev/plugin-ui/data';
@@ -15,6 +16,7 @@ import {
     CORPUS_USER_MARKS_FIELD,
 } from '../corpus/collections/ids.js';
 import { toCorpusStoredValue } from '../corpus/collections/rowCodec.js';
+import { readActiveConfiguredSourceRows } from '../corpus/configuration/readConfiguredSourceRows.js';
 import { deriveUserMarkTag } from '../corpus/identity/tags.js';
 import {
     createTestkitCorpusCollections,
@@ -39,6 +41,7 @@ import {
     createDirectTriageUnlinkTransport,
 } from '../sessions/cockpit/unlinkLinkedEntry.js';
 import type { TriageListDisplayRowV1 } from './marks/pinnedRows.js';
+import { triageResetActionsInputV1 } from './actions/actionsCommand.js';
 import { useTriageActions } from './actions/useTriageActions.js';
 import { useTriageConfiguredSources } from './configuration/useTriageConfiguredSources.js';
 import { useTriageEntryDetail } from './detail/useTriageEntryDetail.js';
@@ -89,6 +92,7 @@ type DurableHarness = Readonly<{
     accountKv: TestkitAccountKv;
     client: PluginUiDataClient;
     actionCalls: readonly string[];
+    admissionDenied: boolean;
 }>;
 
 /**
@@ -104,6 +108,8 @@ function createDurableHarness(options: Readonly<{
     accountReachable?: boolean;
     /** Genuine Collection CAS boundary refusal for the configured-source writer. */
     sourceRemoveConflict?: boolean;
+    admissionDenied?: boolean;
+    accountReadsFail?: () => boolean;
 }> = {}): DurableHarness {
     const corpus = createTestkitCorpusCollections();
     const accountKv = createTestkitAccountKv();
@@ -117,7 +123,13 @@ function createDurableHarness(options: Readonly<{
     const byId = new Map<string, unknown>([
         ['source-instances', sourceInstances],
         ['session-links', corpus.collections.sessionLinks],
-        ['user-marks', corpus.collections.userMarks],
+        ['user-marks', {
+            ...corpus.collections.userMarks,
+            query: async (...args: Parameters<typeof corpus.collections.userMarks.query>) => {
+                if (options.accountReadsFail?.()) throw new PluginError({ code: 'plugin_account_storage_unavailable' });
+                return await corpus.collections.userMarks.query(...args);
+            },
+        }],
     ]);
 
     const client = {
@@ -129,7 +141,13 @@ function createDurableHarness(options: Readonly<{
         async openCollectionQuery() {
             throw new Error('These surfaces open no declared UI query.');
         },
-        accountKv: accountKv.kv,
+        accountKv: {
+            ...accountKv.kv,
+            get: async (...args: Parameters<typeof accountKv.kv.get>) => {
+                if (options.accountReadsFail?.()) throw new PluginError({ code: 'plugin_account_storage_unavailable' });
+                return await accountKv.kv.get(...args);
+            },
+        },
     } as unknown as PluginUiDataClient;
 
     return {
@@ -137,6 +155,7 @@ function createDurableHarness(options: Readonly<{
         accountKv,
         client: options.accountReachable === false ? (null as unknown as PluginUiDataClient) : client,
         actionCalls,
+        admissionDenied: options.admissionDenied === true,
     };
 }
 
@@ -163,7 +182,7 @@ const durableProbeSurface = defineUiSurface(() => {
     // nothing about how a mount reaches it.
     const unlinkTransport = React.useMemo(
         () => durable.collections
-            ? createDirectTriageUnlinkTransport(durable.collections)
+            ? createDirectTriageUnlinkTransport(durable.collections, host)
             : createActionTriageUnlinkTransport(host),
         [durable.collections, host],
     );
@@ -188,6 +207,13 @@ const durableProbeSurface = defineUiSurface(() => {
                     ? 'actions:unavailable'
                     : `actions:${actions.loaded ? 'loaded' : 'reading'}:[${actions.actions.map((action) => action.label).join(',')}]`}
             />
+            <Text value={`actions-read:${actions.read.kind}`} />
+            <Button title="probe-restore-actions" onPress={() => {
+                if (actions.revision !== null) void actions.administer(triageResetActionsInputV1(actions.revision));
+            }} />
+            <Button title="probe-clear-view-selection" onPress={() => {
+                if (views.revision !== null) void views.administer({ v: 1, kind: 'select', viewId: null, expectedRevision: views.revision });
+            }} />
             <Text value={actionResolution} />
             <Button title="probe-resolve-action" onPress={async () => {
                 const result = await actions.resolveForExecution('ask', []);
@@ -241,7 +267,7 @@ const durableProbeSurface = defineUiSurface(() => {
                                 sessionId: SESSION_ID,
                                 entryRef: testkitEntryRef(),
                             });
-                            setUnlinked(`unlink:${result.status}`);
+                            setUnlinked(`unlink:${result === null ? 'declined' : result.status}`);
                         } catch {
                             setUnlinked('unlink:unavailable');
                         }
@@ -275,7 +301,7 @@ function createDurableAdapter(
 
 const mounted: PluginUiTestkit[] = [];
 
-async function mountProbe(harness: DurableHarness): Promise<PluginUiTestkit> {
+async function mountProbe(harness: DurableHarness, surfaceContext = createSurfaceContextFixture({})): Promise<PluginUiTestkit> {
     let fixture!: PluginUiTestkit;
     const calls = harness.actionCalls as string[];
     await act(async () => {
@@ -283,9 +309,14 @@ async function mountProbe(harness: DurableHarness): Promise<PluginUiTestkit> {
             identity: { instanceId: 'fixture-instance-183', mountNonce: 'fixture-mount-183' },
             authorPlugin: { id: PLUGIN_ID, version: '0.0.0' },
             surface: durableProbeSurface,
-            surfaceContext: createSurfaceContextFixture({}),
+            surfaceContext,
             adapter: createDurableAdapter(harness.client),
             handlers: {
+                admitAction: async () => {
+                    if (harness.admissionDenied) throw new PluginError({ code: 'denied', message: 'Action is disabled.' });
+                    return true;
+                },
+                confirm: async () => true,
                 // No daemon is reachable. Every Action dispatch fails exactly as
                 // it does when the mount cannot reach a machine at all.
                 executeAction: async ({ action }) => {
@@ -350,6 +381,24 @@ function seedConfiguredSource(harness: DurableHarness, seed = 2): void {
 }
 
 describe('durable Account state with no daemon reachable', () => {
+    it('recovers pins and saved views after cold Account reads fail and the host becomes ready, without Retry', async () => {
+        let failing = true;
+        const harness = createDurableHarness({ accountReadsFail: () => failing });
+        await seedPin(harness, 'Replace the duplicated normalizer');
+        const context = createSurfaceContextFixture({ machineConnectionPending: true, machineExecutionReady: false });
+        const fixture = await mountProbe(harness, context);
+        await expect(fixture.getByText('pins:unavailable')).resolves.toBeDefined();
+        await expect(fixture.getByText('views:unavailable')).resolves.toBeDefined();
+        failing = false;
+        await act(async () => {
+            await fixture.updateSurface({ ...context, machineConnectionPending: false, machineExecutionReady: true });
+        });
+        await expect(fixture.getByText('pins:[Replace the duplicated normalizer]')).resolves.toBeDefined();
+        await expect(fixture.getByText('views:absent:[]')).resolves.toBeDefined();
+        expect(harness.actionCalls).toEqual([]);
+        expect(harness.accountKv.setCallCount()).toBe(0);
+    });
+
     it('reads pins, saved views and configured actions from the Account while every daemon Action fails', async () => {
         const harness = createDurableHarness();
         await seedPin(harness, 'Replace the duplicated normalizer');
@@ -388,6 +437,77 @@ describe('durable Account state with no daemon reachable', () => {
         await expect(fixture.getByText('actions:loaded:[Discuss,Ask,Fix,Review,Explain this PR in chat]'))
             .resolves.toEqual({ content: 'actions:loaded:[Discuss,Ask,Fix,Review,Explain this PR in chat]' });
         // The whole point: not one of those reads went near a daemon.
+        expect(harness.actionCalls).toEqual([]);
+    });
+
+    it('reads the catalog as the shipped one again once Restore defaults has removed the stored set', async () => {
+        const harness = createDurableHarness();
+        harness.accountKv.seed(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1, {
+            v: 1,
+            actions: [{
+                actionId: 'action-1',
+                label: 'Discuss',
+                enabled: true,
+                appliesTo: ['pullRequest'],
+                profileId: null,
+                workspaceMode: 'reference_only',
+                target: { kind: 'agent', promptInvocationId: 'prompt-1', delivery: 'compose' },
+            }],
+        });
+        const fixture = await mountProbe(harness);
+        await expect(fixture.getByText('actions-read:parsed')).resolves.toEqual({ content: 'actions-read:parsed' });
+
+        await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'probe-restore-actions' })); });
+        for (let settle = 0; settle < 4; settle += 1) await act(async () => { await Promise.resolve(); });
+
+        expect(harness.accountKv.read(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1)).toBeUndefined();
+        await expect(fixture.getByText('actions-read:absent')).resolves.toEqual({ content: 'actions-read:absent' });
+    });
+
+    it('retains its authoritative catalog when Action policy refuses a direct mutation', async () => {
+        const harness = createDurableHarness({ admissionDenied: true });
+        const catalog = {
+            v: 1,
+            actions: [{
+                actionId: 'action-1', label: 'Discuss', enabled: true,
+                appliesTo: ['pullRequest'], profileId: null, workspaceMode: 'reference_only',
+                target: { kind: 'agent', promptInvocationId: 'prompt-1', delivery: 'compose' },
+            }],
+        };
+        harness.accountKv.seed(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1, catalog);
+        const fixture = await mountProbe(harness);
+        await expect(fixture.getByText('actions-read:parsed')).resolves.toEqual({ content: 'actions-read:parsed' });
+
+        await act(async () => { await fixture.press(await fixture.getByRole('button', { name: 'probe-restore-actions' })); });
+        for (let settle = 0; settle < 4; settle += 1) await act(async () => { await Promise.resolve(); });
+
+        expect(harness.accountKv.read(TRIAGE_ACTIONS_ACCOUNT_KV_KEY_V1)).toEqual(catalog);
+        await expect(fixture.getByText('actions-read:parsed')).resolves.toEqual({ content: 'actions-read:parsed' });
+        await expect(fixture.getByText('actions:loaded:[Discuss,Ask,Fix,Review,Explain this PR in chat]'))
+            .resolves.toEqual({ content: 'actions:loaded:[Discuss,Ask,Fix,Review,Explain this PR in chat]' });
+        expect(harness.actionCalls).toEqual([]);
+    });
+
+    it('retains reachable pins, saved views and sources after direct mutation policy refusals', async () => {
+        const harness = createDurableHarness({ admissionDenied: true });
+        await seedPin(harness, 'Keep this pin');
+        seedConfiguredSource(harness);
+        const markTag = await deriveUserMarkTag(harness.corpus.collections.userMarks, testkitEntryRef());
+        const beforeMark = harness.corpus.control.userMarks.inspect(markTag);
+        const fixture = await mountProbe(harness);
+
+        for (const name of ['probe-unpin', 'probe-clear-view-selection', 'probe-remove-source']) {
+            await act(async () => { await fixture.press(await fixture.getByRole('button', { name })); });
+            for (let settle = 0; settle < 4; settle += 1) await act(async () => { await Promise.resolve(); });
+        }
+
+        expect(harness.corpus.control.userMarks.inspect(markTag)).toEqual(beforeMark);
+        expect(harness.accountKv.read(TRIAGE_SAVED_VIEWS_ACCOUNT_KV_KEY_V1)).toBeUndefined();
+        expect((await readActiveConfiguredSourceRows(harness.corpus.collections.sourceInstances)).rows).toHaveLength(1);
+        await expect(fixture.getByText('pins:[Keep this pin]')).resolves.toEqual({ content: 'pins:[Keep this pin]' });
+        await expect(fixture.getByText('sources-count:1')).resolves.toEqual({ content: 'sources-count:1' });
+        expect(document.body.textContent).not.toContain('sources:unavailable');
+        expect(document.body.textContent).not.toContain('views:unavailable');
         expect(harness.actionCalls).toEqual([]);
     });
 

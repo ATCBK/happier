@@ -45,7 +45,7 @@ describe('SessionWorkMapView', () => {
             } }],
         });
         const command = projection.projectCommands[0];
-        const map = projectSessionWorkMap({ leadSessionId: 'lead', leadTitle: 'Lead', projection });
+        const map = projectSessionWorkMap({ managerSessionId: 'lead', leadTitle: 'Lead', projection });
         const onOpenItem = vi.fn();
         const screen = await renderScreen(<SessionWorkMapView map={map} projection={projection} testIDPrefix="work-map" onOpenItem={onOpenItem} />);
         const node = screen.findByTestId(`work-map-node-${command.key}`);
@@ -72,9 +72,10 @@ describe('SessionWorkMapView', () => {
             backgroundRuns: [],
             agents: [],
             projectCommands: [],
+            archivedSessions: [],
             summary: { outstanding: 4, needsYou: 2, stalled: 1, sessions: 4, runs: 0 },
         };
-        const map = projectSessionWorkMap({ leadSessionId: 'lead', leadTitle: 'Lead', projection });
+        const map = projectSessionWorkMap({ managerSessionId: 'lead', leadTitle: 'Lead', projection });
         const screen = await renderScreen(
             <SessionWorkMapView map={map} projection={projection} testIDPrefix="work-map" onOpenItem={vi.fn()} />,
         );

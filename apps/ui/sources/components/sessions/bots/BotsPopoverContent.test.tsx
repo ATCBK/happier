@@ -17,6 +17,7 @@ import {
 } from 'vitest';
 import {
   AccountSettingsV2GetResponseSchema,
+  ActionsSettingsV1Schema,
   CurrentCursorResponseSchema,
   V2SessionListResponseSchema,
 } from '@happier-dev/protocol';
@@ -48,6 +49,7 @@ import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionLis
 import { writeSessionOrganizationGroupOrder } from '@/sync/ops/sessionOrganization/sessionOrganizationMutationOwner';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import type { AppRailBotEntry } from '@/components/navigation/shell/appRail/appRailModel';
+import { t } from '@/text';
 
 // The Account, ordinary list/index, Bot classification, rows and actions stay real. Only
 // native/navigation adapters and the external transports are replaced.
@@ -91,12 +93,12 @@ let serveHealthyOrdinarySnapshot = false;
 let webLocks: WebLockManagerMockHandle | undefined;
 const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-a', encryptionMode: 'plain' });
 const actionApprovalSettings = () => askFirst ? {
-  actionsSettingsV1: { v: 1 as const, actions: { 'session.organization.move': { approvalRequiredSurfaces: ['ui' as const] } } },
+  actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: { 'session.organization.move': { approvalRequiredSurfaces: ['ui'] } } }),
 } : {};
 
 // Renderer rows drive RN's native press callback; the DOM keyboard case below dispatches real events.
 async function pressNativeBoundary(screen: RenderScreenResult, testID: string) {
-  const control = screen.findAllByTestId(testID).findLast(node => typeof node.type !== 'string' && typeof node.props.onPress === 'function');
+  const control = [...screen.findAllByTestId(testID)].reverse().find(node => typeof node.type !== 'string' && typeof node.props.onPress === 'function');
   if (!control) throw new Error(`missing_native_press_boundary:${testID}`);
   await act(async () => { await control.props.onPress(); });
 }
@@ -180,7 +182,7 @@ describe('Bots roster', () => {
       displayName: addressOnly ? 'bots-roster.example.test' : 'Test Home',
     } });
     expect(getServerProfileById(connection!.home.id)?.name).toBe(addressOnly ? 'bots-roster.example.test' : 'Test Home');
-    storage.setState({ sessionsReady: false, socketStatus: 'disconnected' });
+    storage.setState({ socketStatus: 'disconnected' });
     primeServerFeaturesSnapshot({
       serverId: connection!.home.id,
       snapshot: { status: 'error', reason: 'network' },
@@ -195,6 +197,28 @@ describe('Bots roster', () => {
     expect(screen.findByTestId('bots-roster.empty')).toBeNull();
     expect(screen.getTextContent()).toContain(addressOnly ? 'This Home' : 'Test Home');
     expect(screen.getTextContent()).not.toContain('bots-roster.example.test');
+
+    // The open roster must observe the published name without changing its Home id.
+    await act(async () => {
+      primeServerFeaturesSnapshot({
+        serverId: connection!.home.id,
+        snapshot: { status: 'ready', features: {
+          ...features, homePresentation: { v: 1, displayName: 'Research Home' },
+        } },
+      });
+    });
+    expect(screen.getTextContent()).toContain('Research Home');
+    expect(screen.getTextContent()).not.toContain('Test Home');
+    await act(async () => {
+      primeServerFeaturesSnapshot({ serverId: connection!.home.id, snapshot: { status: 'error', reason: 'network' } });
+      await adoptHomeProfile({ source: 'manual', descriptor: {
+        serverUrl: connection!.home.serverUrl,
+        homeServerIdentityId: connection!.home.serverIdentityId ?? undefined,
+        displayName: 'Studio Home',
+      } });
+    });
+    expect(screen.getTextContent()).toContain('Studio Home');
+    expect(screen.getTextContent()).not.toContain('Research Home');
   });
 
   it('lists every Bot, inactive ones too, as ordinary Session rows with New bot and Ask Happier beneath', async () => {
@@ -243,11 +267,43 @@ describe('Bots roster', () => {
     expect(screen.findByTestId('session-list-item-ordinary')).toBeNull();
     expect(screen.findByTestId('bots-roster.new-bot')).not.toBeNull();
     expect(screen.findByTestId('bots-roster.ask-happier')).not.toBeNull();
+    expect(storage.getState().socketStatus).toBe('connected');
+    expect(screen.findByTestId('bots-roster.offline')).toBeNull();
 
     // Opening a Bot opens its Session and closes the roster that hosted it.
     await pressNativeBoundary(screen, 'session-list-item-active-bot');
     expect(close).toHaveBeenCalled();
     expect(JSON.stringify(navigate.mock.calls[0]?.[0])).toContain('active-bot');
+  });
+
+  it('orders Bots needs-you, then working, then most recent, and says nothing about an idle Bot beyond its age', async () => {
+    const serverId = connection!.home.id;
+    const now = Date.now();
+    const hour = 3_600_000;
+    const bot = { path: '/project', bot: { kind: 'bot' as const } };
+    storage.getState().applyServerScopedSessionListRows(serverId, [
+      createSessionListRenderableSessionFixture({ id: 'idle-old', meaningfulActivityAt: now - 20 * hour, active: false, activeAt: now - 20 * hour, updatedAt: now - 20 * hour, metadata: { ...bot, name: 'Docs gardener' } }),
+      createSessionListRenderableSessionFixture({ id: 'idle-new', meaningfulActivityAt: now - 3 * hour, active: false, activeAt: now - 3 * hour, updatedAt: now - 3 * hour, metadata: { ...bot, name: 'Deps' } }),
+      createSessionListRenderableSessionFixture({ id: 'working', meaningfulActivityAt: now, active: true, thinking: true, thinkingAt: now, latestTurnStatus: 'in_progress', latestTurnStatusObservedAt: now, activeAt: now, updatedAt: now, metadata: { ...bot, name: 'Release captain' } }),
+      createSessionListRenderableSessionFixture({ id: 'needs-you', meaningfulActivityAt: now - hour, active: true, activeAt: now, updatedAt: now, hasPendingPermissionRequests: true, pendingRequestObservedAt: now, metadata: { ...bot, name: 'Flake hunter' } }),
+      createSessionListRenderableSessionFixture({ id: 'offline-blocked', presence: now - 2 * hour, pendingBlockedCount: 1, activeAt: now - 2 * hour, metadata: { ...bot, name: 'Release notebook' } }),
+      createSessionListRenderableSessionFixture({ id: 'offline-failed', presence: now - 2 * hour, latestTurnStatus: 'failed', activeAt: now - 2 * hour, metadata: { ...bot, name: 'Library companion' } }),
+      createSessionListRenderableSessionFixture({ id: 'offline-working', presence: now - 2 * hour, latestTurnStatus: 'in_progress', latestTurnStatusObservedAt: now, activeAt: now - 2 * hour, metadata: { ...bot, name: 'A pinned companion' } }),
+    ], { source: 'ordinary', mode: 'replace' });
+
+    const { BotsPopoverContent } = await import('./BotsPopoverContent');
+    const screen = await renderScreen(
+      <InjectedAuthProvider credentials={null}><BotsPopoverContent close={() => {}} maxHeight={520} /></InjectedAuthProvider>,
+    );
+    await flushHookEffects({ cycles: 3 });
+
+    const text = screen.getTextContent();
+    const order = ['Flake hunter', 'Release captain', 'Deps', 'Docs gardener'].map(name => text.indexOf(name));
+    expect(order.every(index => index >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(text).toContain(`${t('bots.roster.needsYou', { count: 1 })} · ${t('bots.roster.working', { count: 1 })}`);
+    // The row's age already says when it was last active; an idle Bot adds no "Last seen" line.
+    expect(text).not.toContain('Last seen');
   });
 
   it('invites a first Bot when there is none, without apologising', async () => {
@@ -319,11 +375,11 @@ describe('Bots roster', () => {
     storage.getState().applyLocalSettings({ collapsedGroupKeysV1: {} });
     storage.getState().applyServerScopedSessionListRows(serverId, [
       createSessionListRenderableSessionFixture({ id: 'lead-bot', metadata: { path: '/project', bot: { kind: 'bot' } },
-        reports: { total: 9, working: 0, stalled: 0, needsYou: 0 } }),
+        managedSessions: { total: 9, working: 0, stalled: 0, needsYou: 0 } }),
       createSessionListRenderableSessionFixture({ id: 'child-session', metadata: { path: '/project' },
-        reportsTo: { sessionId: 'lead-bot' } }),
+        manager: { sessionId: 'lead-bot' } }),
       createSessionListRenderableSessionFixture({ id: 'child-bot', metadata: { path: '/project', bot: { kind: 'bot' } },
-        reportsTo: { sessionId: 'lead-bot' } }),
+        manager: { sessionId: 'lead-bot' } }),
       createSessionListRenderableSessionFixture({ id: 'unrelated', metadata: { path: '/project' } }),
     ], { source: 'ordinary', mode: 'replace' });
     const { BotsPopoverContent } = await import('./BotsPopoverContent');
@@ -342,6 +398,27 @@ describe('Bots roster', () => {
     expect(screen.findByTestId('session-list-item-unrelated')).toBeNull();
     await pressNativeBoundary(screen, 'session-row-reports-disclosure:lead-bot');
     expect(screen.findByTestId('session-list-item-child-session')).toBeNull();
+  });
+
+  it('offers no sub-session disclosure for a Bot whose only report is archived, and counts the rest otherwise', async () => {
+    const serverId = connection!.home.id;
+    storage.getState().applyServerScopedSessionListRows(serverId, [
+      createSessionListRenderableSessionFixture({ id: 'archived-only-bot', metadata: { path: '/project', bot: { kind: 'bot' } },
+        managedSessions: { total: 1, working: 0, stalled: 0, needsYou: 0, archived: 1 } }),
+      createSessionListRenderableSessionFixture({ id: 'mixed-bot', metadata: { path: '/project', bot: { kind: 'bot' } },
+        managedSessions: { total: 3, working: 0, stalled: 0, needsYou: 0, archived: 1 } }),
+    ], { source: 'ordinary', mode: 'replace' });
+    const { BotsPopoverContent } = await import('./BotsPopoverContent');
+    const screen = await renderScreen(<InjectedAuthProvider credentials={null}>
+      <BotsPopoverContent close={() => {}} maxHeight={520} />
+    </InjectedAuthProvider>);
+    await flushHookEffects({ cycles: 3 });
+    expect(screen.findByTestId('session-row-reports-disclosure:archived-only-bot')).toBeNull();
+    expect(screen.findByTestId('session-row-reports-chip:archived-only-bot')).toBeNull();
+    expect(screen.findByTestId('session-row-reports-disclosure:mixed-bot')).not.toBeNull();
+    expect(screen.findByTestId('session-row-reports-chip:mixed-bot')).not.toBeNull();
+    expect(screen.getTextContent()).toContain('2');
+    expect(screen.getTextContent()).not.toContain('3');
   });
 
   it('moves a rail Bot with the keyboard through qualified Action admission and the mounted organization writer', async () => {

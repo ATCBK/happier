@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AIBackendProfileSchema } from '@happier-dev/protocol/profiles/backendProfileSchema';
 import { LaunchProfileV2Schema } from '@happier-dev/protocol/profiles/v2/schema';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
 
 import { resolveProfileMigrationStatus } from './status';
 
@@ -56,8 +57,9 @@ describe('profile migration presentation status', () => {
                         v: 1,
                         sourceProfileId: 'deepseek',
                         contributionKey: 'happier.provider.deepseek/deepseek',
-                        existingConnectionId: 'pc_existing',
+                        existingConnectionId: ProviderConnectionIdSchema.parse('pc_existing'),
                         kinds: ['credential_binding'],
+                        modelChoices: [],
                         candidateFingerprint: `legacy-profile-migration-conflict:v1:${'a'.repeat(43)}`,
                         detectedAt: 1,
                     }],

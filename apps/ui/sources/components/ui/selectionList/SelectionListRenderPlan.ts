@@ -13,6 +13,8 @@
  * have `dynamicState: undefined`.
  */
 
+import { rankHappierQueryMatches, type HappierQueryText } from '@happier-dev/plugin-ui/presentation';
+
 import { SELECTION_LIST_DEFAULT_LOADING_SKELETON_ROWS } from './_constants';
 import { filterSelectionListSections } from './filterSelectionListSections';
 import type {
@@ -22,7 +24,10 @@ import type {
     SelectionListSectionDescriptor,
     SelectionListVirtualizationMode,
 } from './_types';
+import { SelectionListSectionFailure } from './selectionListSectionFailure';
 import type { DynamicSectionState } from './useSelectionListDynamicSections';
+
+const EMPTY_OPTIONS: readonly SelectionListOption[] = Object.freeze([]);
 
 export type SectionRenderPlan = Readonly<{
     id: string;
@@ -40,6 +45,10 @@ export type SectionRenderPlan = Readonly<{
     hint?: string;
     /** Non-activatable status rendered after successful result rows. */
     resultHint?: string;
+    /** `error` only: the failure line's Retry link (label already translated). */
+    retry?: Readonly<{ label: string; onPress: () => void }>;
+    /** `error` only: failures sharing this key are said once, under the first section in plan order. */
+    failureCauseKey?: string;
     /** Loading skeleton row count when dynamicState === 'loading'. */
     skeletonRowCount?: number;
     /**
@@ -78,73 +87,25 @@ export function filterDynamicOptionsByQuery(
 }
 
 /**
- * RUX-1 Issue 1: rank options into 4 tiers given a query, preserving each
- * option's original index within its tier (which itself preserves the
- * descriptor's original alphabetical/curated order):
- *   tier 1 — label starts with the query, or an exact canonical identity matches
- *   tier 2 — label contains the query (not at start)
- *   tier 3 — subtitle contains the query
- *   tier 4 — additional canonical metadata contains the query
- * Options with no match are dropped. Returns the original array reference
- * unchanged when the query is empty so consumers can cheaply skip
- * re-rendering.
+ * Picker options ranked by the one shared query ranking (`rankHappierQueryMatches`, plugin-ui): label
+ * prefix or exact identity, then label, then subtitle, then hidden `searchText`, each band in the
+ * descriptor's order. An empty query returns `options` itself.
  *
- * Background: the user typed "de" in the path picker and got
- * ".codex-pr-fixups" first because it was alphabetically earlier than "dev".
- * Substring-only filtering with alphabetical ordering buries the obviously-
- * relevant prefix match. Tiered ranking matches what users intuit from
- * IDE-style fuzzy pickers (VSCode, JetBrains, Sublime).
+ * RUX-9.2: `disableSubtitleTier` leaves the subtitle out for domains whose subtitle repeats the query's
+ * context on every row (paths, whose subtitle contains the parent directory).
  */
 export function rankOptionsByQuery(
     options: ReadonlyArray<SelectionListOption>,
     query: string,
     disableSubtitleTier?: boolean,
 ): ReadonlyArray<SelectionListOption> {
-    const normalized = query.trim().toLowerCase();
-    if (normalized.length === 0) return options;
-    const tier1: { idx: number; option: SelectionListOption }[] = [];
-    const tier2: { idx: number; option: SelectionListOption }[] = [];
-    const tier3: { idx: number; option: SelectionListOption }[] = [];
-    const tier4: { idx: number; option: SelectionListOption }[] = [];
-    for (let i = 0; i < options.length; i += 1) {
-        const option = options[i]!;
-        const label = option.label.toLowerCase();
-        if (label.startsWith(normalized)) {
-            tier1.push({ idx: i, option });
-            continue;
-        }
-        if (option.exactSearchText
-            ?.split('\n')
-            .some((value) => value.trim().toLowerCase() === normalized)) {
-            tier1.push({ idx: i, option });
-            continue;
-        }
-        if (label.includes(normalized)) {
-            tier2.push({ idx: i, option });
-            continue;
-        }
-        // RUX-9.2: tier-3 (subtitle.includes) is opt-out per call. The path
-        // domain disables it because every row's subtitle is the absolute
-        // path which always contains the parent directory, so tier-3 would
-        // match EVERY child when typing inside a folder, polluting the
-        // ranking with false positives.
-        if (disableSubtitleTier !== true && option.subtitle && option.subtitle.toLowerCase().includes(normalized)) {
-            tier3.push({ idx: i, option });
-            continue;
-        }
-        if (option.searchText?.toLowerCase().includes(normalized)) {
-            tier4.push({ idx: i, option });
-        }
-    }
-    // Stable order within each tier is the original input order. The caller
-    // is responsible for sorting the input alphabetically beforehand if
-    // alphabetical-within-tier is the desired behavior.
-    const out: SelectionListOption[] = [];
-    for (const { option } of tier1) out.push(option);
-    for (const { option } of tier2) out.push(option);
-    for (const { option } of tier3) out.push(option);
-    for (const { option } of tier4) out.push(option);
-    return out;
+    return rankHappierQueryMatches(options, query, selectionListOptionQueryText, {
+        matchSubtitle: disableSubtitleTier !== true,
+    });
+}
+
+function selectionListOptionQueryText(option: SelectionListOption): HappierQueryText {
+    return option;
 }
 
 export type SynthesizeSelectionListRenderPlanArgs = Readonly<{
@@ -238,6 +199,10 @@ export function synthesizeSelectionListRenderPlan(
         }
         const state = dynamicSectionStates.get(descriptor.id);
         if (!state) continue;
+        const retainedOptions = state.status === 'idle' || state.status === 'loading'
+            ? state.lastSuccessOptions ?? EMPTY_OPTIONS
+            : state.options;
+        const options = descriptor.projectOptions?.(retainedOptions) ?? retainedOptions;
         const baseEntry = {
             id: descriptor.id,
             title: descriptor.title,
@@ -252,7 +217,7 @@ export function synthesizeSelectionListRenderPlan(
                 // `lastSuccessOptions`, surface those rows as stale so the
                 // user sees the cached results immediately on popover
                 // reopen instead of a one-frame empty flash.
-                const cachedStale = state.lastSuccessOptions ?? [];
+                const cachedStale = options;
                 if (cachedStale.length === 0) {
                     if (descriptor.showSkeletonsOnFirstLoad !== true) continue;
                     plan.push({
@@ -283,7 +248,7 @@ export function synthesizeSelectionListRenderPlan(
                 // only surface on first load (no prior data) — otherwise
                 // they cause a visible flicker between consecutive fetches
                 // (e.g. typing "d" then "de" briefly empties the list).
-                const stale = state.lastSuccessOptions ?? [];
+                const stale = options;
                 const hasStale = stale.length > 0;
                 // RUX-11.2: on a TRUE first load (no stale cache), hide the
                 // section entirely UNLESS the descriptor opts into eager
@@ -307,16 +272,21 @@ export function synthesizeSelectionListRenderPlan(
                 continue;
             }
             case 'error': {
+                const failure = state.error instanceof SelectionListSectionFailure ? state.error : undefined;
                 plan.push({
                     ...baseEntry,
-                    options: state.options,
+                    options,
                     dynamicState: 'error',
                     // Resolver errors can contain transport details, paths, or
                     // credentials. Keep the Error available to diagnostics in
                     // the dynamic-state owner, but present only the canonical
                     // localized fallback (or the section owner's own host copy) at this user-visible boundary.
-                    hint: descriptor.errorHint,
-                    isStale: state.options.length > 0,
+                    hint: failure?.hint ?? descriptor.errorHint,
+                    isStale: options.length > 0,
+                    ...(failure?.causeKey !== undefined ? { failureCauseKey: failure.causeKey } : {}),
+                    ...(descriptor.retryLabel !== undefined && failure?.retryable !== false && state.retry !== undefined
+                        ? { retry: { label: descriptor.retryLabel, onPress: state.retry } }
+                        : {}),
                 });
                 continue;
             }
@@ -338,9 +308,9 @@ export function synthesizeSelectionListRenderPlan(
                 // drop relevant rows (a transcript excerpt need not repeat the
                 // query in its title) and reorder provider relevance.
                 const filteredOptions = descriptor.resultFiltering === 'provider'
-                    ? state.options
+                    ? options
                     : filterDynamicOptionsByQuery(
-                        state.options,
+                        options,
                         filterQuery,
                         descriptor.disableSubtitleRanking === true,
                     );
@@ -371,18 +341,51 @@ export function synthesizeSelectionListRenderPlan(
             }
         }
     }
+    const sayEachCauseOnce = sayEachFailureCauseOnce(plan);
     if (args.searchAcrossSections === true && filterQuery.trim().length > 0) {
         // Authored groups remain useful when browsing, but cannot put a
         // description-only match ahead of a title match while searching.
         // Keep pending/error/stale rows in their original status sections.
-        const resultSections = plan.filter(section => section.dynamicState === undefined && !section.isStale);
+        const resultSections = sayEachCauseOnce.filter(section => section.dynamicState === undefined && !section.isStale);
         const options = rankOptionsByQuery(resultSections.flatMap(section => section.options), filterQuery);
         const firstResultSection = resultSections.find(section => section.options.length > 0);
-        return plan.flatMap(section => {
+        return sayEachCauseOnce.flatMap(section => {
             if (section.dynamicState !== undefined || section.isStale) return [section];
             if (section === firstResultSection) return [{ ...section, title: undefined, count: undefined, options }];
             return section.resultHint ? [{ ...section, options: [] }] : [];
         });
     }
-    return plan;
+    return sayEachCauseOnce;
+}
+
+/**
+ * Sections that fail for one named cause (a failure's `causeKey`) say it once: the first section in plan
+ * order keeps its line, later row-less ones step aside, and the kept line's Retry re-runs every section it
+ * stands for.
+ */
+function sayEachFailureCauseOnce(plan: ReadonlyArray<SectionRenderPlan>): ReadonlyArray<SectionRenderPlan> {
+    const keptByCause = new Map<string, SectionRenderPlan>();
+    const retriesByCause = new Map<string, Array<() => void>>();
+    const collapsed = new Set<SectionRenderPlan>();
+    for (const entry of plan) {
+        const cause = entry.dynamicState === 'error' ? entry.failureCauseKey : undefined;
+        if (cause === undefined) continue;
+        if (!keptByCause.has(cause)) {
+            keptByCause.set(cause, entry);
+            continue;
+        }
+        if (entry.options.length > 0) continue;
+        collapsed.add(entry);
+        if (entry.retry) retriesByCause.set(cause, [...(retriesByCause.get(cause) ?? []), entry.retry.onPress]);
+    }
+    if (collapsed.size === 0) return plan;
+    return plan.flatMap((entry) => {
+        if (collapsed.has(entry)) return [];
+        const behind = entry.failureCauseKey !== undefined && keptByCause.get(entry.failureCauseKey) === entry
+            ? retriesByCause.get(entry.failureCauseKey)
+            : undefined;
+        if (!behind || !entry.retry) return [entry];
+        const own = entry.retry.onPress;
+        return [{ ...entry, retry: { label: entry.retry.label, onPress: () => { own(); behind.forEach((retry) => retry()); } } }];
+    });
 }

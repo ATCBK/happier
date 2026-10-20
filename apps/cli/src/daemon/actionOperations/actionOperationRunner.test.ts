@@ -2,10 +2,90 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createActionOperationRunner } from './actionOperationRunner';
 import { createActionOperationStore } from './actionOperationStore';
+import { ActionOperationCredentialUseV1Schema } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { ActionOperationSnapshotV1Schema, projectActionOperationSnapshotForV1Reader } from '@happier-dev/protocol/actions/operations/v1';
+import { ActionOperationSnapshotV1Schema as PredecessorSnapshotSchema } from './testFixtures/predecessorActionOperationV1';
 
 const scope = { accountId: 'account-1', machineId: 'machine-1' } as const;
 
 describe('action operation canonical execution observer', () => {
+  it.each([
+    { ok: true, result: { outcome: 'accepted', operationCredentialUses: [{ label: 'forged plugin actor' }] } },
+    { ok: false, errorCode: 'external_write_failed', error: 'Write failed' },
+    { ok: false, errorCode: 'action_outcome_unknown', error: 'Outcome unknown' },
+    { ok: false, errorCode: 'cancelled', error: 'cancelled' },
+  ] as const)('retains admitted credential observations across operation reads and exact request rejoin: $ok $errorCode', async outcome => {
+    const operationCredentialUses = [ActionOperationCredentialUseV1Schema.parse({
+      v: 1, kind: 'team_resource', label: 'Acme GitHub', owner: { kind: 'team', teamId: 'team-1' },
+      service: { pluginId: 'acme.github', localId: 'github' },
+      why: { kind: 'purpose_binding', purpose: { consumer: { pluginId: 'acme.release', localId: 'release' }, purpose: 'publish' }, target: 'group' },
+      currentness: { kind: 'current_at_materialization', resourceRevision: 4 },
+    })];
+    const store = createActionOperationStore();
+    const runner = createActionOperationRunner({ store, generateOperationId: () => 'credential-operation',
+      resolveAction: actionId => ({ actionId, title: 'Publish', operation: {
+        version: 1, visibility: 'activity', progress: 'reported', presentation: { onStart: 'current' },
+      } }),
+    });
+    let executions = 0;
+    const request = { actionId: 'acme.github.publish', scope, requestId: 'credential-request', execute: async () => {
+      executions++;
+      return { ...outcome, operationCredentialUses };
+    } };
+    const original = await runner.observe(request);
+    const operation = store.get(scope, 'credential-operation');
+    expect(operation).toMatchObject({ operationCredentialUses });
+    expect(ActionOperationSnapshotV1Schema.parse(operation)).toEqual(operation);
+    expect(store.list(scope).items[0]).toMatchObject({ operationCredentialUses });
+    expect(store.get({ ...scope, accountId: 'other-account' }, 'credential-operation')).toBeNull();
+    expect(await runner.observe({ ...request, execute: async () => { throw new Error('Rejoin must not execute'); } })).toEqual(original);
+    expect(executions).toBe(1);
+    const legacy = projectActionOperationSnapshotForV1Reader(operation!);
+    expect(legacy).not.toHaveProperty('operationCredentialUses');
+    expect(PredecessorSnapshotSchema.parse(legacy)).toEqual(legacy);
+    if (outcome.ok) expect(legacy.result).toEqual(outcome.result);
+    else expect(legacy.state).toBe(outcome.errorCode === 'cancelled' ? 'cancelled' : 'failed');
+  });
+
+  it('does not derive credential attribution from a plugin result payload', async () => {
+    const store = createActionOperationStore();
+    const runner = createActionOperationRunner({ store, generateOperationId: () => 'unobserved-operation',
+      resolveAction: actionId => ({ actionId, title: 'Publish', operation: {
+        version: 1, visibility: 'activity', progress: 'reported', presentation: { onStart: 'current' },
+      } }),
+    });
+    const result = { operationCredentialUses: [{ label: 'forged plugin actor' }] };
+    expect(await runner.observe({ actionId: 'acme.github.publish', scope,
+      execute: async () => ({ ok: true, result }) })).toEqual({ ok: true, result });
+    expect(store.get(scope, 'unobserved-operation')).not.toHaveProperty('operationCredentialUses');
+  });
+
+  it.each(['machines.managed.power.set', 'machines.managed.acquire', 'machines.managed.bootstrap.retry'])(
+    'retains admitted credential observations when %s reports an unconfirmed outcome', async actionId => {
+    const operationCredentialUses = [ActionOperationCredentialUseV1Schema.parse({
+      v: 1, kind: 'connected_account', label: null, owner: null,
+      service: { pluginId: 'acme.compute', localId: 'cloud' },
+      why: { kind: 'purpose_binding', purpose: { consumer: { pluginId: 'acme.compute', localId: 'vm' }, purpose: 'manage' }, target: 'account' },
+      currentness: { kind: 'current_at_materialization' },
+    })];
+    const store = createActionOperationStore();
+    const runner = createActionOperationRunner({ store, generateOperationId: () => 'unconfirmed-credential-operation',
+      resolveAction: actionId => ({ actionId, title: 'Stop', operation: {
+        version: 1, visibility: 'activity', progress: 'reported', presentation: { onStart: 'current' },
+      } }),
+    });
+    await runner.observe({ actionId, scope, execute: async () => ({
+      ok: false, errorCode: 'action_outcome_unknown', error: 'Outcome unknown', operationCredentialUses,
+    }) });
+    const operation = store.get(scope, 'unconfirmed-credential-operation');
+    expect(operation).toMatchObject({ state: 'running', observation: { kind: 'outcome_uncertain' }, operationCredentialUses });
+    expect(operation).not.toHaveProperty('settledAt');
+    expect(ActionOperationSnapshotV1Schema.parse(operation)).toEqual(operation);
+    const legacy = projectActionOperationSnapshotForV1Reader(operation!);
+    expect(PredecessorSnapshotSchema.parse(legacy)).toEqual(legacy);
+    expect(legacy.state).toBe('running');
+  });
+
   it('returns recorded uncertainty to ordinary Wait while retirement still waits for physical settlement', async () => {
     const store = createActionOperationStore();
     const runner = createActionOperationRunner({ store, generateOperationId: () => 'uncertain-wait',
@@ -134,7 +214,12 @@ describe('action operation canonical execution observer', () => {
     expect(store.get(scope, 'review-cancel')).not.toHaveProperty('setupReview');
   });
 
-  it('retains typed setup review failure facts across scoped get and exact request replay without leaking arbitrary details', async () => {
+  it.each([
+    { ok: false, errorCode: 'project_setup_consent_required', error: 'project_setup_consent_required',
+      details: { kind: 'pendingApproval', code: 'project_setup_consent_required',
+        reviewedEffect: { commands: ['install'] }, reviewedEffectDigest: 'reviewed-effect' } },
+    { ok: false, errorCode: 'approval_stale', error: 'approval_stale', details: { reason: 'home_changed' } },
+  ] as const)('retains typed $errorCode failure facts across scoped get and exact request replay without leaking arbitrary details', async failure => {
     const store = createActionOperationStore();
     let executions = 0;
     let operationIndex = 0;
@@ -143,9 +228,6 @@ describe('action operation canonical execution observer', () => {
         version: 1, visibility: 'activity', progress: 'reported', presentation: { onStart: 'current' },
       } }),
     });
-    const failure = { ok: false, errorCode: 'project_setup_consent_required', error: 'project_setup_consent_required',
-      details: { kind: 'pendingApproval', code: 'project_setup_consent_required',
-        reviewedEffect: { commands: ['install'] }, reviewedEffectDigest: 'reviewed-effect' } } as const;
     const request = { actionId: 'projects.prepare', scope, requestId: 'prepare-request', execute: async () => {
       executions++;
       return failure;
@@ -623,7 +705,13 @@ describe('action operation canonical execution observer', () => {
     expect(store.list(scope).items).toEqual([]);
   });
 
-  it('returns the terminal result for an exact replay without invoking the Action again', async () => {
+  it.each([
+    { actionId: 'session.spawn_new', result: { type: 'success', disposition: 'created', sessionId: 'created-session',
+      executionTarget: { serverId: 'home', machineId: 'machine-1' }, organizationPlacement: { folderId: null, tagIds: [] },
+      initialInput: { status: 'notRequested' } } },
+    { actionId: 'session.spawn_new', result: { type: 'error', code: 'permission_denied', retryable: false } },
+    { actionId: 'session.fork', result: { type: 'error', code: 'spawn_failed', retryable: true } },
+  ])('returns the terminal $actionId result for an exact replay without invoking the Action again ($result.type)', async ({ actionId, result }) => {
     const published: Array<{ operationId: string }> = [];
     const store = createActionOperationStore({ onSnapshot: (snapshot) => published.push(snapshot) });
     const runner = createActionOperationRunner({
@@ -637,12 +725,12 @@ describe('action operation canonical execution observer', () => {
       }),
       generateOperationId: vi.fn(() => 'operation-1'),
     });
-    const execute = vi.fn(async () => ({ ok: true as const, result: { type: 'success' } }));
+    const execute = vi.fn(async () => ({ ok: true as const, result }));
 
-    await runner.observe({ actionId: 'session.spawn_new', requestId: 'creation-1', input: { target: 'machine-1' }, scope, execute });
+    await runner.observe({ actionId, requestId: 'creation-1', input: { target: 'machine-1' }, scope, execute });
     await expect(runner.observe({
-      actionId: 'session.spawn_new', requestId: 'creation-1', input: { target: 'machine-1' }, scope, execute,
-    })).resolves.toEqual({ ok: true, result: { type: 'success' } });
+      actionId, requestId: 'creation-1', input: { target: 'machine-1' }, scope, execute,
+    })).resolves.toEqual({ ok: true, result });
 
     expect(execute).toHaveBeenCalledTimes(1);
     expect(store.list(scope).items).toHaveLength(1);

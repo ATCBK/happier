@@ -87,6 +87,43 @@ describe('connectedServiceQuotaSnapshotStore', () => {
         });
     });
 
+    it('keeps shared daemon admission until its final observer leaves, then permits a fresh refresh', async () => {
+        const { buildQuotaSnapshotScopeKey, retainQuotaSnapshotPolling, refreshQuotaSnapshot, getQuotaSnapshotEntry } = await import('./connectedServiceQuotaSnapshotStore');
+        let admissionSignal: AbortSignal | undefined;
+        let cancelled = false;
+        let stall = true;
+        const ctx = {
+            credentials: { token: 't', secret: 's' }, credentialScope: 'scope',
+            serverBasis: { serverId: 'server-a', generation: 3 }, serviceId: 'openai-codex', profileId: 'work',
+            resolveAccountMode: async () => 'plain' as const,
+            assertOperationAllowed: async (_operation: BuiltInLegacyConnectedAccountOperation, signal?: AbortSignal) => {
+                if (!stall) return;
+                admissionSignal = signal;
+                await new Promise<void>((_resolve, reject) => signal?.addEventListener('abort', () => {
+                    cancelled = true;
+                    reject(new Error('cancelled'));
+                }, { once: true }));
+            },
+        } as const;
+        const key = buildQuotaSnapshotScopeKey(ctx.credentialScope, ctx.serviceId, ctx.profileId);
+        const releaseFirst = retainQuotaSnapshotPolling(key, ctx);
+        const releaseSecond = retainQuotaSnapshotPolling(key, ctx);
+        await flushAsyncTurns();
+        const refresh = refreshQuotaSnapshot(key, ctx);
+        await flushAsyncTurns(15);
+        releaseFirst();
+        expect(cancelled).toBe(false);
+        releaseSecond();
+        expect(admissionSignal?.aborted).toBe(true);
+        await refresh;
+        expect(getQuotaSnapshotEntry(key).refreshing).toBe(false);
+        stall = false;
+        const releaseRetry = retainQuotaSnapshotPolling(key, ctx);
+        await refreshQuotaSnapshot(key, ctx);
+        expect(requestConnectedServiceQuotaSnapshotRefreshV3Spy).toHaveBeenCalledTimes(1);
+        releaseRetry();
+    });
+
     it('consumes settings reset credits through the connected-service recovery-credit operation', async () => {
         const {
             buildQuotaSnapshotScopeKey,

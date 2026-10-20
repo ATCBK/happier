@@ -49,6 +49,7 @@ describe('ApiMachineClient peer mediation RPC invoker', () => {
         const tracked = new Map<number, TrackedSession>();
         try {
             client.registerMachineAccessLossReceiver({
+                serverId: 'home',
                 resolveInstallationId: () => 'installation_1',
                 cleanupRequesterMachineSessions: createRequesterMachineSessionAccessLossCleanup({
                     serverId: 'home', machineId: 'machine_1', pidToTrackedSession: tracked,

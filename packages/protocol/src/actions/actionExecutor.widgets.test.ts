@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createActionExecutor, type ActionExecutorDeps } from './actionExecutor.js';
+import { createActionExecutor, type ActionExecutorContext, type ActionExecutorDeps } from './actionExecutor.js';
 import { getActionSpec, resolveActionExecutionPlacementForInput } from './index.js';
 import { ActionIdSchema, type ActionId } from './actionIds.js';
 import { isApprovalRequiredByActionsSettings } from './actionApprovalPolicy.js';
@@ -22,6 +22,75 @@ import { WidgetInstanceActionOutputSchemasV1 } from '../widgets/actionsV1.js';
 const surface = { serverId: 'home', accountId: 'account', owner: { kind: 'home' } } as const;
 
 describe('configured widget Actions', () => {
+  it.each(['project', 'pluginArea', 'corePage'] as const)('removes a personal referenced widget directly on %s while confirming sole content, groups and explicit Ask', async kind => {
+    const boundary = createWorkBoardArtifactBoundary();
+    const target = { ...surface, owner: kind === 'project' ? { kind, projectId: 'project' }
+      : kind === 'pluginArea' ? { kind, pluginId: 'example', pageId: 'overview', area: 'pinned' }
+      : { kind, pageId: 'usage', area: 'main' } };
+    const store = createWidgetSurfaceArtifactPortV1(boundary.forAccount(surface.accountId), { surface: target, isCurrent: () => true });
+    const port = createWidgetAreaActionPortV1(() => store);
+    const executor = createActionExecutor({ widgetAccountScope: () => ({ serverId: surface.serverId, accountId: surface.accountId }),
+      widgetSurfaceActions: { [kind]: port } });
+    const context = { surface: 'ui', authority: 'present_user' } as const;
+    const remove = (instanceId: string, extra: Partial<ActionExecutorContext> = {}) => executor.execute('widgets.item.remove', { ref: { surface: target, instanceId } }, { ...context, ...extra });
+    const instance: WidgetInstanceV1 = { v: 1, id: 'reference', definition: { kind: 'builtin', id: 'count' }, bindings: {} };
+    await store.apply({ kind: 'add', instance });
+    expect(await remove(instance.id)).toMatchObject({ ok: true, result: { instance: null } });
+    await store.apply({ kind: 'add', instance });
+    const approvalContexts: readonly Partial<ActionExecutorContext>[] = [
+      { actionsSettings: normalizeActionsSettingsV1({ v: 1, actions: { 'widgets.item.remove': { approvalRequiredSurfaces: ['ui'] } } }) },
+      { surface: 'agent', authority: 'account_automation' },
+    ];
+    for (const extra of approvalContexts) expect(await remove(instance.id, extra)).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+    expect(flattenWidgetLayoutWidgetsV1((await store.read()).items).filter(entry => entry.instance.id === instance.id)).toHaveLength(1);
+    const inline: WidgetInstanceV1 = { ...instance, id: 'inline', definition: { kind: 'inline', definition: {
+      v: 1, id: 'inline-definition', name: 'Only copy', provenance: { source: { kind: 'authored' } }, sizeDeclaration: { sizes: ['medium'], defaultSize: 'medium' },
+      inputs: { fields: [] }, inputSchema: { type: 'object', additionalProperties: false },
+      body: { kind: 'declarative', document: { version: 1, root: { kind: 'text', text: 'Only saved content' } } },
+    } } };
+    await store.apply({ kind: 'add', instance: inline });
+    expect(await remove(inline.id)).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+    await store.apply({ kind: 'group_create', groupId: 'group', instanceIds: [instance.id] });
+    expect(await remove('group')).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+    expect((await store.read()).items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'group', id: 'group' }), expect.objectContaining({ kind: 'widget', instance: inline }),
+    ]));
+    const row = [...boundary.rows.values()][0]!;
+    boundary.rows.set(row.artifactId, { ...row, shared: true });
+    expect(await remove(instance.id)).toMatchObject({ ok: true, result: { instance: null } });
+  });
+
+  it.each(['home', 'workBoard'] as const)('uses the same reference-removal rule on %s and the native Home alias', async kind => {
+    const boundary = createWorkBoardArtifactBoundary(kind === 'workBoard' ? [createWorkBoardV1({ id: 'board', name: 'Board' })] : []);
+    const target = { ...surface, owner: kind === 'home' ? { kind } : { kind, boardId: 'board' } };
+    const homeHubArtifacts = kind === 'home' ? createHomeHubArtifactPortV1(boundary.forAccount(surface.accountId), { accountId: surface.accountId }) : undefined;
+    const workBoardArtifacts = kind === 'workBoard' ? createWorkBoardArtifactPortV1(boundary.transport) : undefined;
+    const port = kind === 'workBoard' ? createWorkBoardWidgetActionPortV1(workBoardArtifacts!) : null;
+    const instance: WidgetInstanceV1 = { v: 1, id: 'copy', definition: { kind: 'builtin', id: 'count' }, bindings: {} };
+    const add = async () => homeHubArtifacts
+      ? homeHubArtifacts.apply({ kind: 'widget_add', instance })
+      : port!.apply(target, { kind: 'add', instance }, { surface: 'ui' });
+    const executor = createActionExecutor({ widgetAccountScope: () => ({ serverId: surface.serverId, accountId: surface.accountId }),
+      homeHubArtifacts, workBoardArtifacts });
+    const context = { surface: 'ui', authority: 'present_user' } as const;
+    await add();
+    expect(await executor.execute('widgets.item.remove', { ref: { surface: target, instanceId: instance.id } }, context))
+      .toMatchObject({ ok: true, result: { instance: null } });
+    if (homeHubArtifacts) {
+      await add();
+      expect(await executor.execute('home.hub.layout.update', { intent: { kind: 'widget_remove', instanceId: instance.id } }, context)).toMatchObject({ ok: true });
+      expect(flattenWidgetLayoutWidgetsV1((await homeHubArtifacts.read()).items).filter(entry => entry.instance.id === instance.id)).toHaveLength(0);
+      await add();
+      expect(await executor.execute('home.hub.layout.update', { intent: { kind: 'remove', instanceId: instance.id } }, context)).toMatchObject({ ok: true });
+      await add();
+      const actionsSettings = normalizeActionsSettingsV1({ v: 1, actions: { 'home.hub.layout.update': { approvalRequiredSurfaces: ['ui'] } } });
+      expect(await executor.execute('home.hub.layout.update', { intent: { kind: 'widget_remove', instanceId: instance.id } }, { ...context, actionsSettings }))
+        .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+      expect(await executor.execute('home.hub.layout.update', { intent: { kind: 'widget_remove', instanceId: instance.id } }, { surface: 'agent', authority: 'account_automation' }))
+        .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+    }
+  });
+
   it('refuses a Session-target credential for Account fragments before opening the Artifact port', async () => {
     const executor = createActionExecutor({ widgetAccountScope: () => ({ serverId: surface.serverId, accountId: surface.accountId }) });
     const grant = ApiTokenGrantV1Schema.parse({ v: 1, actions: { families: ['widgets'], ids: [] },
@@ -562,7 +631,7 @@ describe('configured widget Actions', () => {
     expect(await executor.execute('widgets.item.list', { surface }, { ...context, signal: abort.signal })).toMatchObject({ ok: false, errorCode: 'cancelled' });
     expect(reads).toBe(admittedReads);
   });
-  it('uses admitted shared Artifact facts for configurable present-user Project and WorkBoard write approval', async () => {
+  it('admits reversible shared widget edits directly while honoring explicit Ask at the canonical owner', async () => {
     for (const kind of ['project', 'workBoard'] as const) {
       const boundary = createWorkBoardArtifactBoundary(kind === 'workBoard'
         ? [createWorkBoardV1({ id: 'board', name: 'Shared' })] : []);
@@ -583,18 +652,28 @@ describe('configured widget Actions', () => {
         .toMatchObject({ ok: true });
       const row = [...boundary.rows.values()][0]!;
       boundary.rows.set(row.artifactId, { ...row, shared: true });
-      const before = boundary.rows.get(row.artifactId);
       expect(await executor.execute('widgets.item.rename', { ref, displayName: 'Shared' }, { surface: 'ui', authority: 'present_user' }))
+        .toMatchObject({ ok: true });
+      const before = boundary.rows.get(row.artifactId);
+      const ask = normalizeActionsSettingsV1({ v: 1, actions: { 'widgets.item.rename': { approvalRequiredSurfaces: ['ui'] } } });
+      expect(await executor.execute('widgets.item.rename', { ref, displayName: 'Await approval' },
+        { surface: 'ui', authority: 'present_user', actionsSettings: ask }))
         .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+      const nativeRename = { intent: { kind: 'widget_rename', boardId: 'board', ref, displayName: 'Native' } } as const;
       if (kind === 'workBoard') {
-        expect(await executor.execute('boards.apply', { intent: { kind: 'widget_rename', boardId: 'board', ref, displayName: 'Native' } },
-          { surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+        const askBoard = normalizeActionsSettingsV1({ v: 1, actions: { 'boards.apply': { approvalRequiredSurfaces: ['ui'] } } });
+        expect(await executor.execute('boards.apply', nativeRename, { surface: 'ui', authority: 'present_user', actionsSettings: askBoard }))
+          .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
       }
       expect(boundary.rows.get(row.artifactId)).toBe(before);
       const actionsSettings = normalizeActionsSettingsV1({ v: 1,
         approvalWaivedSurfaces: { 'widgets.item.rename': ['ui'] } });
       expect(await executor.execute('widgets.item.rename', { ref, displayName: 'Shared' }, { surface: 'ui', authority: 'present_user', actionsSettings }))
         .toMatchObject({ ok: true });
+      // The Board's own Action admits the same reversible edit with no confirmation.
+      if (kind === 'workBoard') {
+        expect(await executor.execute('boards.apply', nativeRename, { surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: true });
+      }
     }
   });
 });

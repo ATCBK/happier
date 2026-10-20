@@ -7,7 +7,7 @@ import { StatusPill, resolveStatusPillVariantForState } from '@/components/ui/st
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t, tLoose } from '@/text';
-import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { buildMachineAddCommand } from '@/components/machines/add/machineAddCommand';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 
@@ -130,7 +130,7 @@ function LiveStatus(props: Readonly<{
     useArrivalCallback(arrival, props.onArrived);
 
     if (arrival.status === 'arrived') {
-        const machineName = getMachineDisplayName(arrival.machine) ?? tLoose('setupOnboarding.machineArrival.unknownMachine');
+        const machineName = getMachineSentenceName(arrival.machine);
         return (
             <View style={styles.liveStatus}>
                 <StatusPill

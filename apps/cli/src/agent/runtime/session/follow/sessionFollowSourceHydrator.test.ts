@@ -1,26 +1,29 @@
-import {
-  isSessionAwarenessContentReadableV1,
-  SessionFollowUpdateEnvelopeV1Schema,
-  type SessionFollowFrontierV1,
-} from '@happier-dev/protocol';
+import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
+import { SessionFollowUpdateEnvelopeV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowUpdateEnvelopeV1';
+import type { SessionFollowFrontierV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
+import type { SessionAwarenessProjectionV1 } from '@happier-dev/protocol';
 import { describe, expect, it, vi } from 'vitest';
+import { SessionFollowInputV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import { encryptSessionPayload } from '@/session/transport/encryption/sessionEncryptionContext';
 import { createSessionFollowContextReconciler } from './sessionFollowContextReconciler';
+import { createSessionFollowSourceMaterialResolver } from './sessionFollowSourceMaterialResolver';
+import { createAccountEncryptionCurrentnessFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import {
   createSessionFollowSourceHydrator,
   resolveAccountVoiceFollowDisclosure,
 } from './sessionFollowSourceHydrator';
 
-const observation = {
+const observation = { policy: { preset: 'everything' as const },
+  relation: 'follower' as const,
   sourceSessionId: 'source',
   destinationSessionId: 'destination',
   delivered: { transcriptSeq: 1, readyEventSeq: 0, agentStateVersion: 0, turn: null },
   observed: { transcriptSeq: 3, readyEventSeq: 0, agentStateVersion: 0, turn: null },
 };
 
-const awareness = {
+const awareness: SessionAwarenessProjectionV1 = {
   v: 1,
   sessionId: 'source',
   lifecycle: 'ready' as const,
@@ -36,7 +39,318 @@ const destinationSession = {
   runSessionFollowSourceRequest: <T>(input: Readonly<{ request: () => T }>): T => input.request(),
 };
 
+function plainSourceTransport(overrides: Partial<ReturnType<typeof createSessionRecordFixture>> = {}) {
+  return { ok: true as const, sessionId: 'source',
+    rawSession: createSessionRecordFixture({ id: 'source', encryptionMode: 'plain',
+      metadata: JSON.stringify({ path: '/source', host: 'test' }), active: true, activeAt: Date.now(), ...overrides }),
+    accountEncryptionCurrentness: createAccountEncryptionCurrentnessFixture(), ctx: null, mode: 'plain' as const };
+}
+
 describe('Session Follow source hydrator', () => {
+  it('retains a transient Home failure at an admitted request original final recheck', async () => {
+    const material = createSessionFollowSourceMaterialResolver();
+    let unavailable = false;
+    const source = {
+      id: 'source', encryptionMode: 'plain' as const, metadata: '{}', archivedAt: null,
+      createdAt: 1, updatedAt: 1, active: true, activeAt: 1, thinking: false, thinkingAt: null,
+      latestTurnStatus: null, latestTurnStatusObservedAt: null, latestReadyEventSeq: null,
+      latestReadyEventAt: null, meaningfulActivityAt: null, agentStateVersion: 1,
+      agentState: JSON.stringify({ requests: { approval: { tool: 'Bash', arguments: {}, createdAt: 42 } } }),
+    };
+    const hydrate = createSessionFollowSourceHydrator({ session: destinationSession,
+      credentials: { token: 'token', encryption: null }, sourceMaterialResolver: material,
+      deps: { fetchRunnerSourceProjection: async () => {
+        if (unavailable) throw Object.assign(new Error('Home timed out'), { code: 'ECONNABORTED' });
+        return { v: 1, source, messages: [], hasMore: false };
+      } } });
+    const delivery = SessionFollowInputV1Schema.parse({ v: 1, delivery: 'wake',
+      original: { sourceSessionId: 'source', sourceRequests: { agentStateVersion: 1,
+        requests: [{ requestId: 'approval', createdAt: 42 }] } },
+      requestEvents: [{ requestId: 'approval', event: { kind: 'needs_you', type: 'approval' } }] });
+    const signal = new AbortController().signal;
+    try {
+      const result = await hydrate({ signal, observation: { kind: 'admitted_input', localInputId: 'request-original',
+        sourceSessionId: 'source', destinationSessionId: 'destination', delivery,
+        delivered: { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null },
+        observed: { transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 1, turn: null } } });
+      expect(result?.recheckWorkerUpdateAdmission).toBeTypeOf('function');
+      unavailable = true;
+      await expect(result!.recheckWorkerUpdateAdmission!(signal)).rejects.toMatchObject({ status: 'preparation_pending' });
+      unavailable = false;
+      await expect(result!.recheckWorkerUpdateAdmission!(signal)).resolves.toBe(true);
+    } finally { material.dispose(); }
+  });
+
+  it.each(['plain', 'e2ee'] as const)('reads exact terminal correlation only from a schema-validated %s ready original', async mode => {
+    const key = new Uint8Array(32).fill(21);
+    const ctx = { encryptionKey: key, encryptionVariant: 'dataKey' as const };
+    const material = createSessionFollowSourceMaterialResolver();
+    material.installPreparedDataKey({ sourceSessionId: 'source', dataKey: key });
+    try {
+      for (const variant of ['exact', 'contextless', 'malformed', 'row_sidechain', 'event_sidechain'] as const) {
+        const completedTurnId = variant === 'contextless' ? undefined : variant === 'malformed' ? '' : 'completed-turn';
+        const payload = { role: 'agent', content: { type: 'event', id: 'ready-original',
+          data: { type: 'ready', ...(completedTurnId === undefined ? {} : { completedTurnId }),
+            ...(variant === 'event_sidechain' ? { sidechainId: 'child' } : {}) } } };
+        const hydrate = createSessionFollowSourceHydrator({ session: destinationSession,
+          credentials: { token: 'token', encryption: null }, sourceMaterialResolver: material,
+          deps: { fetchRunnerSourceProjection: async () => ({ v: 1, source: {
+            id: 'source', encryptionMode: mode, metadata: mode === 'plain' ? '{}'
+              : encryptSessionPayload({ ctx, payload: {} }), archivedAt: null,
+            createdAt: 1, updatedAt: 1, active: true, activeAt: Date.now(), thinking: false, thinkingAt: null,
+            latestTurnStatus: 'completed', latestTurnId: 'completed-turn', latestTurnStatusObservedAt: 1,
+            latestReadyEventSeq: 2, latestReadyEventAt: 1, meaningfulActivityAt: 1, agentStateVersion: 0,
+          }, messages: [{ seq: 2, createdAt: 1, messageRole: 'event',
+            ...(variant === 'row_sidechain' ? { sidechainId: 'child' } : {}), content: mode === 'plain'
+            ? { t: 'plain', v: payload } : { t: 'encrypted', c: encryptSessionPayload({ ctx, payload }) } }], hasMore: false }) },
+        });
+        const delivery = SessionFollowInputV1Schema.parse({ v: 1, delivery: 'next_turn', event: { kind: 'finished' },
+          original: { sourceSessionId: 'source', sourceMessage: { localId: 'ready-original', seq: 2 } } });
+        const result = await hydrate({ signal: new AbortController().signal, observation: { kind: 'admitted_input',
+          localInputId: 'accepted-ready', sourceSessionId: 'source', destinationSessionId: 'destination',
+          delivered: { transcriptSeq: 1, readyEventSeq: 0, agentStateVersion: 0, turn: null },
+          observed: { transcriptSeq: 2, readyEventSeq: 0, agentStateVersion: 0, turn: null }, delivery } });
+        expect(result?.sourceTerminalTurn, variant).toEqual(variant === 'exact' ? { id: completedTurnId, status: 'completed' } : undefined);
+      }
+    } finally { material.dispose(); }
+  });
+
+  it.each(['sidechain', 'foreign_deliverable'] as const)('R14 does not promote or skip a %s publication while selecting the original Voice prefix', async problem => {
+    const hydrate = createSessionFollowSourceHydrator({ session: destinationSession, credentials: { token: 'token', encryption: null }, deps: {
+      resolveSourceTransport: (async () => plainSourceTransport()) as never,
+      fetchTranscriptPage: (async () => ({ messages: [2, 3].map(seq => ({ seq, createdAt: seq,
+        ...(seq === 2 && problem === 'sidechain' ? { sidechainId: 'child-run' } : {}),
+        content: { t: 'plain', v: { role: 'agent', content: { type: 'event', data: { type: 'worker-report', summary: `Report ${seq}`,
+          ...(seq === 2 && problem === 'foreign_deliverable'
+            ? { deliverables: [{ kind: 'workspace_file', sessionId: 'other-source', path: 'result.md' }] } : {}) } } } } })),
+        hasMore: false, nextBeforeSeq: null, nextAfterSeq: null })) as never,
+    } });
+    const result = await hydrate({ observation: { ...observation,
+      policy: { preset: 'custom' as const, events: { update_posted: { delivery: 'quiet' as const, voice: true } } } },
+      signal: new AbortController().signal, selectionChannel: 'voice' });
+    if (problem === 'sidechain') expect(result?.recentMessages.map(message => message.seq)).toEqual([3]);
+    else expect(result).toMatchObject({ reason: 'source_unavailable', recentMessages: [] });
+  });
+
+  it('R14 selects a real active Voice request and withdraws it when that original is answered before dispatch', async () => {
+    const transport = plainSourceTransport({ agentStateVersion: 1, pendingPermissionRequestCount: 1, pendingUserActionRequestCount: 0,
+      agentState: JSON.stringify({ requests: { approval: { tool: 'Bash', arguments: {}, createdAt: 42 } } }) });
+    const rawSession = transport.rawSession;
+    const hydrate = createSessionFollowSourceHydrator({ session: destinationSession,
+      credentials: { token: 'token', encryption: null }, deps: {
+        resolveSourceTransport: (async () => transport) as never,
+        fetchTranscriptPage: (async () => ({ messages: [], hasMore: false, nextBeforeSeq: null, nextAfterSeq: null })) as never,
+      } });
+    const args = { signal: new AbortController().signal, selectionChannel: 'voice' as const,
+      observation: { ...observation, observed: { ...observation.delivered, agentStateVersion: 1 },
+        policy: { preset: 'custom' as const, events: { needs_you: { approval: { delivery: 'quiet' as const, voice: true } } } } } };
+    const result = await hydrate(args);
+    expect(result).not.toBeNull();
+    expect(await result?.recheckWorkerUpdateAdmission?.(args.signal)).toBe(true);
+    rawSession.agentState = JSON.stringify({ requests: { approval: { tool: 'Bash', arguments: {} } } });
+    expect(await hydrate(args)).toBeNull();
+    rawSession.agentStateVersion = 2;
+    rawSession.pendingPermissionRequestCount = 0;
+    rawSession.agentState = JSON.stringify({ requests: {} });
+    expect(await result?.recheckWorkerUpdateAdmission?.(args.signal)).toBe(false);
+    expect(await hydrate(args)).toBeNull();
+  });
+
+  it('R14 keeps the oldest selected Voice original pending prefix when the snippet allowance cannot represent both reports', async () => {
+    const hydrate = createSessionFollowSourceHydrator({ session: destinationSession,
+      credentials: { token: 'token', encryption: null },
+      disclosure: { level: 'snippets', shareRecentMessages: true, shareSessionSummary: true,
+        includeUserMessagesInSnippets: true, snippetsMaxMessages: 1 },
+      deps: {
+        resolveSourceTransport: (async () => plainSourceTransport()) as never,
+        fetchTranscriptPage: (async () => ({ messages: [2, 3].map(seq => ({ seq, createdAt: seq,
+          content: { t: 'plain', v: { role: 'agent', content: { type: 'event',
+            data: { type: 'worker-report', summary: `Original report ${seq}` } } } } })),
+          hasMore: false, nextBeforeSeq: null, nextAfterSeq: null })) as never,
+      } });
+    const result = await hydrate({ signal: new AbortController().signal, selectionChannel: 'voice',
+      observation: { ...observation, policy: { preset: 'custom' as const, events: { update_posted: { delivery: 'quiet' as const, voice: true } } } } });
+    expect(result?.recentMessages.map(message => message.seq)).toEqual([2]);
+    expect(result?.observed.transcriptSeq).toBe(2);
+    expect(result?.transcriptConsumedThroughByRenderedMessageCount).toEqual([1, 2]);
+    expect(result?.truncated).toBe(true);
+  });
+
+  it.each(['off', 'finished', 'stalled'] as const)('R14 withholds unselected Voice context and represents the actual %s lifecycle occurrence without inventing a message', async selected => {
+    const observed = { ...observation.delivered,
+      turn: selected === 'off' ? null : { id: 'source-turn', status: selected === 'finished' ? 'completed' as const : 'stalled' as const } };
+    const hydrate = createSessionFollowSourceHydrator({ session: destinationSession,
+      credentials: { token: 'token', encryption: null }, deps: {
+        resolveSourceTransport: (async () => plainSourceTransport({ active: selected !== 'stalled',
+          latestTurnId: observed.turn?.id, latestTurnStatus: selected === 'stalled' ? 'in_progress' : selected === 'finished' ? 'completed' : undefined })) as never,
+        fetchTranscriptPage: (async () => ({ messages: [], hasMore: false, nextBeforeSeq: null, nextAfterSeq: null })) as never,
+      } });
+    const result = await hydrate({ signal: new AbortController().signal, selectionChannel: 'voice',
+      observation: { ...observation, observed, policy: { preset: 'custom' as const, events: {
+        finished: { delivery: 'quiet' as const, voice: true }, stalled: { delivery: 'quiet' as const, voice: true },
+      } } } });
+    if (selected === 'off') expect(result).toBeNull();
+    else expect(result).toMatchObject({ observed, recentMessages: [] });
+  });
+
+  it('R14 selects only original events enabled for Voice and withdraws a prepared prefix after policy replacement', async () => {
+    const selectedPolicy = { preset: 'custom' as const, events: {
+      update_posted: { delivery: 'quiet' as const, voice: true },
+      goal_changed: { delivery: 'quiet' as const, voice: false },
+      message: { delivery: 'off' as const, voice: true },
+    } };
+    let policy = selectedPolicy;
+    const observed = { ...observation.observed, transcriptSeq: 5 };
+    const acknowledgements: unknown[] = [];
+    const session = { ...destinationSession,
+      observePendingAccountVoiceFollow: async () => ({ ok: true, v: 1, voiceSessionId: 'destination',
+        publisherGeneration: '1', executionRunOccurrenceId: 'voice-occurrence', observations: [{
+          sourceSessionId: 'source', voiceSessionId: 'destination', expected: observation.delivered, observed, policy,
+        }] }),
+      acknowledgeAccountVoiceFollow: async (request: unknown) => { acknowledgements.push(request); return { ok: true }; },
+    } as unknown as ApiSessionClient;
+    const hydrateObservation = createSessionFollowSourceHydrator({ session, credentials: { token: 'token', encryption: null },
+      deps: {
+        resolveSourceTransport: (async () => plainSourceTransport()) as never,
+        fetchTranscriptPage: (async () => ({ messages: [
+          { seq: 2, content: { type: 'text', text: 'Unselected ordinary text' } },
+          { seq: 3, content: { type: 'event', data: { type: 'goal-changed' } } },
+          { seq: 4, content: { type: 'event', data: { type: 'worker-report', summary: 'Selected published update' } } },
+          { seq: 5, content: { type: 'text', text: 'Later unselected text' } },
+        ].map(row => ({ seq: row.seq, createdAt: row.seq, content: { t: 'plain', v: { role: 'agent', content: row.content } } })),
+          hasMore: false, nextBeforeSeq: null, nextAfterSeq: null })) as never,
+      } });
+    const prepare = createSessionFollowContextReconciler({ session, hydrateObservation, maxFollowContextUtf8Bytes: 8192,
+      observer: { kind: 'account_voice', accountId: 'account', voiceSessionId: 'destination' } });
+    const prepared = await prepare({ signal: new AbortController().signal, executionRunId: 'voice-run' });
+    expect(prepared?.updates[0]?.recentMessages.map(message => message.seq)).toEqual([4]);
+    expect(prepared?.updates[0]?.recentMessages[0]?.text).toContain('Selected published update');
+    expect(prepared?.updates[0]?.observed).toEqual(observed);
+    expect(acknowledgements).toEqual([]);
+    expect(await prepared?.recheckAdmission(new AbortController().signal)).toBe(true);
+    policy = { ...selectedPolicy, events: { ...selectedPolicy.events,
+      update_posted: { delivery: 'quiet', voice: false } } };
+    expect(await prepared?.recheckAdmission(new AbortController().signal)).toBe(false);
+    policy = selectedPolicy;
+    prepared?.acknowledgeAccepted({ kind: 'admitted_input', localInputId: 'voice-input', userMessageSeq: null });
+    await vi.waitFor(() => expect(acknowledgements).toEqual([expect.objectContaining({ policy: selectedPolicy,
+      expected: observation.delivered, observed, consumed: observed })]));
+  });
+
+  it.each([
+    ['natural', 'person_wrote'], ['wake', 'person_wrote'],
+    ['natural', 'goal_changed'], ['wake', 'goal_changed'],
+  ] as const)('represents one admitted %s notice for %s despite ordinary and manager overlap', async (deliveryIntent, eventKind) => {
+    const delivery = SessionFollowInputV1Schema.parse({ v: 1,
+      delivery: deliveryIntent === 'wake' ? 'wake' : 'next_turn', event: { kind: eventKind },
+      original: { sourceSessionId: 'source', sourceMessage: { localId: 'source-notice', seq: 2 } } });
+    const delivered = { ...observation.delivered, transcriptSeq: 1 };
+    const observed = { ...delivered, transcriptSeq: 2 };
+    const routes = [
+      { ...observation, relation: 'follower' as const, policy: { preset: 'quiet' as const } },
+      { ...observation, relation: 'manager' as const, attachedAt: 100,
+        policy: { preset: 'custom' as const, events: { [eventKind]: { delivery: 'interrupt' as const } } } },
+    ];
+    const acknowledgements: unknown[] = [];
+    const session = { ...destinationSession,
+      observePendingSessionFollow: async () => ({ ok: true, publisherGeneration: '1', observations: [
+        ...routes, { kind: 'admitted_input', localInputId: 'accepted-notice', delivery,
+          sourceSessionId: 'source', destinationSessionId: 'destination', delivered, observed },
+      ] }),
+      acknowledgeSessionFollow: async (request: unknown) => { acknowledgements.push(request); return { ok: true }; },
+    } as unknown as ApiSessionClient;
+    const hydrateObservation = createSessionFollowSourceHydrator({ session, credentials: { token: 'token', encryption: null },
+      deps: {
+        resolveSourceTransport: (async () => plainSourceTransport()) as never,
+        fetchTranscriptPage: (async () => ({ messages: [
+          { seq: 2, createdAt: 2, content: { t: 'plain', v: eventKind === 'goal_changed'
+            ? { role: 'agent', content: { type: 'event', data: { type: 'goal-changed' } } }
+            : { role: 'user', content: { type: 'text', text: 'Private human direction' },
+              meta: { happierProvenanceV1: { v: 1, kind: 'happierApp', actor: { kind: 'owner' } } } } } },
+          { seq: 3, createdAt: 3, content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'Another original' } } } },
+        ], hasMore: false, nextBeforeSeq: null, nextAfterSeq: null })) as never,
+        projectSourceAwareness: () => awareness,
+      } });
+    const prepared = await createSessionFollowContextReconciler({ session, hydrateObservation, maxFollowContextUtf8Bytes: 8192 })({
+      signal: new AbortController().signal, deliveryIntent,
+      followDeliveries: [{ delivery, localInputId: 'accepted-notice', userMessageSeq: 1 }],
+    });
+    expect(prepared?.representedFollowLocalInputIds).toEqual(['accepted-notice']);
+    expect(prepared?.updates).toHaveLength(1);
+    expect(prepared!.updates[0]!.recentMessages).toHaveLength(1);
+    expect(prepared!.updates[0]!.recentMessages[0]).toMatchObject({ seq: 2,
+      ...(eventKind === 'goal_changed' ? { event: { kind: 'goal_changed' } } : { provenance: { kind: 'happierApp' } }) });
+    expect(JSON.stringify(prepared)).not.toContain('Private human direction');
+    expect(JSON.stringify(prepared)).not.toContain('Another original');
+    expect(prepared?.wakeEventLocalId).toBeUndefined();
+    prepared!.acknowledgeAccepted({ kind: 'admitted_input', localInputId: 'accepted-notice', userMessageSeq: 1 });
+    await vi.waitFor(() => expect(acknowledgements).toHaveLength(1));
+    expect(acknowledgements[0]).toMatchObject({ localInputId: 'accepted-notice', consumed: observed });
+  });
+
+  it('represents an admitted original report and its deliverables without consuming a later report or terminal turn', async () => {
+    const hydrate = createSessionFollowSourceHydrator({
+      session: destinationSession,
+      credentials: { token: 'token', encryption: null },
+      deps: {
+        resolveSourceTransport: (async () => ({ ok: true, sessionId: 'source',
+          rawSession: { id: 'source', encryptionMode: 'plain' },
+          accountEncryptionCurrentness: { mode: 'plain' }, ctx: null, mode: 'plain' })) as never,
+        fetchTranscriptPage: (async () => ({
+          messages: [2, 3].map(seq => ({ seq, createdAt: seq, content: { t: 'plain', v: {
+            role: 'agent', content: { type: 'event', data: { type: 'worker-report', summary: `Report ${seq}`,
+              deliverables: [{ kind: 'workspace_file', sessionId: 'source', path: `report-${seq}.md` }] } },
+          } } })),
+          hasMore: false, nextBeforeSeq: null, nextAfterSeq: null,
+        })) as never,
+        projectSourceAwareness: () => awareness,
+      },
+    });
+    const envelope = await hydrate({ signal: new AbortController().signal,
+      observation: { kind: 'admitted_input', localInputId: 'accepted-report', sourceSessionId: 'source', destinationSessionId: 'destination',
+        delivered: observation.delivered, observed: { ...observation.delivered, transcriptSeq: 2 },
+        delivery: SessionFollowInputV1Schema.parse({ v: 1, delivery: 'next_turn', event: { kind: 'update_posted' },
+          original: { sourceSessionId: 'source', sourceMessage: { localId: 'report-original', seq: 2 } } }) },
+    });
+    expect(envelope?.workerUpdate).toMatchObject({ ownerState: 'published', result: 'Report 2',
+      deliverables: [{ kind: 'workspace_file', sessionId: 'source', path: 'report-2.md' }],
+      transcriptPointer: { kind: 'session', sessionId: 'source', seq: 2 } });
+    expect(envelope?.observed).toMatchObject({ transcriptSeq: 2, turn: null });
+    expect(envelope?.recentMessages.every(message => message.seq <= 2)).toBe(true);
+  });
+  it.each([
+    { type: 'worker-report', summary: 17 },
+    { type: 'worker-report', summary: 'Wrong source deliverable',
+      deliverables: [{ kind: 'workspace_file', sessionId: 'another-source', path: 'foreign.md' }] },
+  ])('keeps a malformed selected original report pending instead of scanning around it: %j', async (invalidReport) => {
+    const hydrate = createSessionFollowSourceHydrator({
+      session: destinationSession,
+      credentials: { token: 'token', encryption: null },
+      deps: {
+        resolveSourceTransport: (async () => ({ ok: true, sessionId: 'source',
+          rawSession: { id: 'source', encryptionMode: 'plain' },
+          accountEncryptionCurrentness: { mode: 'plain' }, ctx: null, mode: 'plain' })) as never,
+        fetchTranscriptPage: (async () => ({ messages: [
+          { seq: 2, createdAt: 2, content: { t: 'plain', v: { role: 'agent',
+            content: { type: 'event', data: invalidReport } } } },
+          { seq: 3, createdAt: 3, content: { t: 'plain', v: { role: 'agent',
+            content: { type: 'event', data: { type: 'worker-report', summary: 'Must stay pending' } } } } },
+        ], hasMore: false, nextBeforeSeq: null, nextAfterSeq: null })) as never,
+        projectSourceAwareness: () => awareness,
+      },
+    });
+    const envelope = await hydrate({ signal: new AbortController().signal,
+      observation: { kind: 'admitted_input', localInputId: 'accepted-report', sourceSessionId: 'source', destinationSessionId: 'destination',
+        delivered: observation.delivered, observed: { ...observation.delivered, transcriptSeq: 2 },
+        delivery: SessionFollowInputV1Schema.parse({ v: 1, delivery: 'next_turn', event: { kind: 'update_posted' },
+          original: { sourceSessionId: 'source', sourceMessage: { localId: 'report-original', seq: 2 } } }) },
+    });
+    expect(envelope).toMatchObject({ reason: 'source_unavailable', recentMessages: [] });
+    expect(envelope?.workerUpdate).toBeUndefined();
+  });
+
+
+
   it('hydrates a restricted Runner from the dedicated projection and omits a null author label', async () => {
     const sourceDataKey = new Uint8Array(32).fill(17);
     const encryptedContent = encryptSessionPayload({
@@ -972,7 +1286,8 @@ describe('Account Voice Follow disclosure, through the real reconciler and hydra
     }));
     const fetchTranscriptPage = vi.fn(async () => ({
       messages: [
-        { seq: 2, createdAt: 2, content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'human private words' } } } },
+        { seq: 2, createdAt: 2, content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'human private words' },
+          meta: { happierProvenanceV1: { v: 1, kind: 'happierApp', actor: { kind: 'owner' } } } } } },
         { seq: 3, createdAt: 3, content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'assistant one' } } } },
         { seq: 4, createdAt: 4, content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'assistant two' } } } },
         { seq: 5, createdAt: 5, content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'assistant three' } } } },

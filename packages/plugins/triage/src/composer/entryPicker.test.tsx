@@ -2,6 +2,8 @@
 import { act } from 'react';
 import { createPluginUiTestkit, createSurfaceContextFixture } from '@happier-dev/plugin-sdk/testing';
 import type { PluginUiTestkit } from '@happier-dev/plugin-sdk/testing';
+import { createPluginRegistrationScope } from '@happier-dev/plugin-sdk/host/registration';
+import { derivePluginClientContributionRegistrationRights } from '@happier-dev/protocol/plugins/contributions/catalog';
 import { ComposerSnapshotV1Schema, ComposerTransactionV1Schema } from '@happier-dev/plugin-sdk/ui';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
 import type {
@@ -292,6 +294,25 @@ function createHarness(options: Readonly<{
 
 const mounted: PluginUiTestkit[] = [];
 
+async function activateMountedUiAction() {
+    const declaration = PLUGIN_MANIFEST.contributes.actions.find(action => action.id === TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1);
+    if (declaration?.execution.target !== 'client') throw new Error('Missing mounted client Action');
+    const target = { ...declaration.execution.client, platform: 'web' as const };
+    const scope = createPluginRegistrationScope({
+        pluginId: PLUGIN_MANIFEST.id,
+        target: { realm: 'client', ...target },
+        rights: derivePluginClientContributionRegistrationRights(PLUGIN_MANIFEST.contributes, target),
+    });
+    const activate: unknown = Reflect.get(mountedUiActionArtifact, target.exportName);
+    if (typeof activate !== 'function') throw new Error('Missing declared activation');
+    await Reflect.apply(activate, undefined, [scope.api]);
+    const registration = scope.commit().find(entry => entry.family === 'actions' && entry.localId === declaration.id);
+    if (registration?.family !== 'actions') throw new Error('Missing registered mounted Action');
+    // The exact declared client target establishes this opaque SDK capture's handler type.
+    const handler = registration.value as unknown as ReturnType<typeof mountedUiActionArtifact.createTriageMountedUiActionHandler>;
+    return { declaration, handler };
+}
+
 /**
  * Mount the picker and nothing else — no explicit demand, exactly as opening
  * the control does it. What the surface reaches on its own is the point of
@@ -363,6 +384,75 @@ afterEach(async () => {
 });
 
 describe('the mounted Composer entry picker', () => {
+    it.each([COMPOSER_A, COMPOSER_B, null])('opens mounted details without changing the exact draft (%j)', async (composer) => {
+        const harness = createHarness();
+        const picker = await mountPicker(harness, composer, 'triage-picker-open-detail');
+        const enrichment = harness.publishedContexts.at(-1) as { detail: { mountedAction: { mountId: string } } };
+        const { declaration, handler } = await activateMountedUiAction();
+        const invoke = async (entryId: string) => {
+            let result;
+            await act(async () => { result = await handler(TriageMountedUiInputV1Schema.parse({
+                mountId: enrichment.detail.mountedAction.mountId,
+                operation: { kind: 'openDetail', entryRef: { source: SOURCE, kindId: 'pull-request',
+                    collisionScope: 'example/repository', entryId } },
+            }), {
+                plugin: { id: PLUGIN_MANIFEST.id, version: PLUGIN_MANIFEST.version },
+                contribution: { id: declaration.id, qualifiedId: `${PLUGIN_MANIFEST.id}/actions/${declaration.id}` },
+                invocationSurface: 'agent', signal: new AbortController().signal,
+                ui: picker.context.hostApi, ephemeralSharedScope: harness.ephemeralSharedScope,
+            }); });
+            return TriageMountedUiResultV1Schema.parse(result);
+        };
+        expect(await invoke('missing')).toEqual({ status: 'unavailable' });
+        expect(harness.publishedContexts.at(-1)).toMatchObject({ commands: expect.arrayContaining([
+            expect.objectContaining({ title: 'View details Replace the duplicated normalizer', command: {
+                kind: 'executeAction', action: TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1,
+                input: { mountId: enrichment.detail.mountedAction.mountId, operation: {
+                    kind: 'openDetail', entryRef: { source: SOURCE, kindId: 'pull-request', collisionScope: 'example/repository', entryId: '42' },
+                } },
+            } }),
+        ]) });
+        expect(await invoke('42')).toEqual({ status: 'applied' });
+        expect(harness.openCalls).toHaveLength(1);
+        expect(harness.openCalls[0]?.input).toMatchObject({
+            entryRef: { source: SOURCE, kindId: 'pull-request', collisionScope: 'example/repository', entryId: '42' },
+            ...(composer === null ? {} : { originComposer: composer }),
+        });
+        expect(harness.applyCalls).toHaveLength(0);
+        expect(harness.attachments).toHaveLength(0);
+        expect(harness.snapshot(COMPOSER_A).text).toBe('please look at this');
+    });
+    it.each([COMPOSER_A, null])('changes local query and refreshes through the mounted dispatcher with composer %j', async (composer) => {
+        const harness = createHarness();
+        const picker = await mountPicker(harness, composer, 'triage-picker-query');
+        const enrichment = harness.publishedContexts.at(-1) as { detail: { mountedAction: { mountId: string } } };
+        const { declaration, handler } = await activateMountedUiAction();
+        const invoke = async (operation: unknown) => {
+            const input = TriageMountedUiInputV1Schema.parse({ mountId: enrichment.detail.mountedAction.mountId, operation });
+            let result;
+            await act(async () => { result = await handler(input, {
+                plugin: { id: PLUGIN_MANIFEST.id, version: PLUGIN_MANIFEST.version },
+                contribution: { id: declaration.id, qualifiedId: `${PLUGIN_MANIFEST.id}/actions/${declaration.id}` },
+                invocationSurface: 'agent', signal: new AbortController().signal,
+                ui: picker.context.hostApi, ephemeralSharedScope: harness.ephemeralSharedScope,
+            }); });
+            return TriageMountedUiResultV1Schema.parse(result);
+        };
+        await expect(picker.getByText('Older change')).resolves.toBeDefined();
+        expect(await invoke({ kind: 'setPickerQuery', query: 'normalizer' })).toEqual({ status: 'applied' });
+        await expect(picker.queryByText('Older change')).resolves.toBeUndefined();
+        expect(await invoke({ kind: 'attachEntry', entryRef: { source: SOURCE, kindId: 'pull-request',
+            collisionScope: 'example/repository', entryId: '43' } })).toEqual({ status: 'unavailable' });
+        expect(await invoke({ kind: 'setPickerQuery', query: '' })).toEqual({ status: 'applied' });
+        await expect(picker.getByText('Older change')).resolves.toBeDefined();
+        const previous = harness.scanCalls.count;
+        expect(await invoke({ kind: 'refresh' })).toEqual({ status: 'applied' });
+        expect(harness.scanCalls.count).toBeGreaterThan(previous);
+        expect(harness.attachments).toHaveLength(0);
+        await picker.dispose();
+        expect(await invoke({ kind: 'refresh' })).toEqual({ status: 'unavailable' });
+    });
+
     it('attaches and removes through its addressed Action using the canonical draft owner', async () => {
         const harness = createHarness();
         const picker = await mountPicker(harness, COMPOSER_A, 'triage-picker-action');
@@ -375,11 +465,7 @@ describe('the mounted Composer entry picker', () => {
         if (!detail || typeof detail !== 'object' || !('mountedAction' in detail)) throw new Error('Missing address');
         const address = detail.mountedAction;
         if (!address || typeof address !== 'object' || !('mountId' in address)) throw new Error('Missing mount');
-        const declaration = PLUGIN_MANIFEST.contributes.actions.find((action) => action.id === TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1);
-        if (declaration?.execution.target !== 'client') throw new Error('Mounted Action must declare its client artifact');
-        const factory = Reflect.get(mountedUiActionArtifact, declaration.execution.client.exportName);
-        if (typeof factory !== 'function') throw new Error('Declared client Action export is missing');
-        const handler: ReturnType<typeof mountedUiActionArtifact.createTriageMountedUiActionHandler> = factory();
+        const { declaration, handler } = await activateMountedUiAction();
         const entryRef = { source: SOURCE, kindId: 'pull-request', collisionScope: 'example/repository', entryId: '42' };
         const invoke = async (kind: 'attachEntry' | 'removeEntry', ref = entryRef) => {
             const input = TriageMountedUiInputV1Schema.parse({ mountId: address.mountId, operation: { kind, entryRef: ref } });

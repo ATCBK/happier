@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -150,7 +151,7 @@ async function addAdministeredHome(options?: Readonly<{
         name: 'Home A',
         serverUrl: 'https://home-a.example',
         accountId: 'account-admin',
-        currentAccount: options?.currentAccount,
+        currentAccount: options?.currentAccount ?? true,
     });
     harness.answer(home, GOVERNANCE_PATH, {
         body: homeGovernanceProjectionFixture(options?.projection),
@@ -160,8 +161,7 @@ async function addAdministeredHome(options?: Readonly<{
 }
 
 beforeEach(async () => {
-    // A real connection fixture disposes its temporary credential spy. Reclaim
-    // this suite's genuine device-storage/network boundaries for the next case.
+    // Reclaim this suite's network boundary after a real connection fixture is disposed.
     installHomeGovernanceBoundaries(harness);
     const { resetHomeGovernanceSnapshotsForTests } = await import(
         '@/sync/store/home/governance/homeGovernanceSnapshots'
@@ -269,11 +269,11 @@ describe('HomeAdministrationAccountScreen', () => {
         await screen.pressByTestIdAsync('home-account-sign-out-everywhere-button');
 
         await waitForHomeGovernance(() => expect(harness.requestsFor(SIGN_OUT_PATH)).toHaveLength(1));
-        expect(modalState.confirms[0]?.title).toContain('homeGovernance.person.signOutEverywhereTitle');
+        expect(modalState.confirms).toHaveLength(1);
         const [request] = harness.requestsFor(SIGN_OUT_PATH);
         expect(request?.serverId).toBe(home);
         expect(request?.input).toEqual({ accountId: 'ada' });
-        expect(request?.token).toBe(createAccountTokenForTests('account-admin'));
+        expect(request?.token).toBe(createAccountTokenForTests('account-admin', { currentAccount: true }));
     });
 
     it('does nothing when someone else signs in on this Home while the sign-out confirmation is open', async () => {
@@ -289,15 +289,16 @@ describe('HomeAdministrationAccountScreen', () => {
         };
         await screen.pressByTestIdAsync('home-account-sign-out-everywhere-button');
 
-        await waitForHomeGovernance(() => expect(modalState.alerts).toHaveLength(1));
-        expect(modalState.alerts[0]?.body).toContain('settingsApiTokens.errors.accountChanged');
+        await waitForHomeGovernance(() => expect(modalState.confirms).toHaveLength(1));
+        await flushHookEffects();
         expect(harness.requestsFor(SIGN_OUT_PATH)).toHaveLength(0);
     });
 
     it('binds every destructive People action to the Account captured when its confirmation opened', async () => {
-        for (const testID of ['home-account-disable', 'home-account-delete', 'home-account-role:admin']) {
+        for (const testID of ['home-account-sign-out-everywhere-button', 'home-account-delete']) {
             await harness.reset();
             modalState.alerts = [];
+            modalState.confirms = [];
             const home = await addAdministeredHome();
             const screen = await renderAccount(home);
             modalState.confirmWith = async () => {
@@ -305,7 +306,8 @@ describe('HomeAdministrationAccountScreen', () => {
                 return true;
             };
             await screen.pressByTestIdAsync(testID);
-            await waitForHomeGovernance(() => expect(modalState.alerts).toHaveLength(1));
+            await waitForHomeGovernance(() => expect(modalState.confirms).toHaveLength(1));
+            await flushHookEffects();
             expect(harness.requestsFor(DISABLE_PATH)).toHaveLength(0);
             expect(harness.requestsFor(DELETE_PATH)).toHaveLength(0);
             expect(harness.requestsFor(ROLE_PATH)).toHaveLength(0);
@@ -314,19 +316,26 @@ describe('HomeAdministrationAccountScreen', () => {
         }
     });
 
-    it('changes a role only after its confirmation, and not at all when it is declined', async () => {
+    it('changes a role directly by default without a caller confirmation', async () => {
         const home = await addAdministeredHome();
         harness.answer(home, ROLE_PATH, { body: homeAccountRowFixture('ada', { homeRole: 'admin' }) });
         const screen = await renderAccount(home);
 
         modalState.confirmResult = false;
         await screen.pressByTestIdAsync('home-account-role:admin');
-        expect(harness.requestsFor(ROLE_PATH)).toHaveLength(0);
-
-        modalState.confirmResult = true;
-        await screen.pressByTestIdAsync('home-account-role:admin');
         await waitForHomeGovernance(() => expect(harness.requestsFor(ROLE_PATH)).toHaveLength(1));
+        expect(modalState.confirms).toHaveLength(0);
         expect(harness.requestsFor(ROLE_PATH)[0]?.input).toEqual({ accountId: 'ada', homeRole: 'admin' });
+    });
+
+    it('uses the Action Ask policy for role changes without a caller confirmation or mutation', async () => {
+        const home = await addAdministeredHome({ currentAccount: true });
+        await harness.requireUiApproval(home, 'home.accounts.role.set');
+        const screen = await renderAccount(home);
+        await screen.pressByTestIdAsync('home-account-role:admin');
+        await waitForHomeGovernance(() => expect(harness.artifacts(home).list()).toHaveLength(1));
+        expect(harness.requestsFor(ROLE_PATH)).toHaveLength(0);
+        expect(modalState.confirms).toHaveLength(0);
     });
 
     it('explains the last active owner instead of offering a demotion, disable or delete that would strand the Home', async () => {
@@ -444,7 +453,7 @@ describe('HomeAdministrationAccountScreen', () => {
         expect(screen.findHostByTestId('home-account-machines')?.findAll((node) => node.children.includes('7')).length).toBeGreaterThan(0);
     });
 
-    it('disables an account through the exact Home after an explicit confirmation', async () => {
+    it('disables an account through the exact Home with no default confirmation', async () => {
         const home = await addAdministeredHome();
         harness.answer(home, DISABLE_PATH, { body: disabledAccountRow() });
 
@@ -497,15 +506,17 @@ describe('HomeAdministrationAccountScreen', () => {
         expect(harness.requestsFor(DISABLE_PATH)[0]?.serverUrl).toBe('https://home-a.example');
     });
 
-    it('changes nothing when the destructive confirmation is declined', async () => {
+    it('changes nothing and stays quiet when the shared destructive confirmation is declined', async () => {
         const home = await addAdministeredHome();
-        harness.answer(home, DISABLE_PATH, { body: disabledAccountRow() });
+        harness.answer(home, DELETE_PATH, { body: { status: 'deleted' } });
         modalState.confirmResult = false;
 
         const screen = await renderAccount(home);
-        await screen.pressByTestIdAsync('home-account-disable');
-
-        expect(harness.requestsFor(DISABLE_PATH)).toHaveLength(0);
+        await screen.pressByTestIdAsync('home-account-delete');
+        await waitForHomeGovernance(() => expect(modalState.confirms).toHaveLength(1));
+        await flushHookEffects();
+        expect(harness.requestsFor(DELETE_PATH)).toHaveLength(0);
+        expect(modalState.alerts).toHaveLength(0);
     });
 
     it('offers Re-enable only for the reversible hold, never for a retired account', async () => {
@@ -577,7 +588,7 @@ describe('HomeAdministrationAccountScreen', () => {
         await screen.pressByTestIdAsync('home-account-delete');
         await waitForHomeGovernance(() => expect(harness.requestsFor(DELETE_PATH).length).toBeGreaterThan(0));
         await flushHookEffects();
-        expect(modalState.confirms).toHaveLength(3);
+        expect(modalState.confirms).toHaveLength(5);
         await waitForHomeGovernance(() => expect(routerBack).toHaveBeenCalled());
         expect(modalState.confirms[1]?.body).toContain('native-1');
         expect(harness.requestsFor(DELETE_PATH).map(request => ({ serverId: request.serverId, input: request.input }))).toEqual([
@@ -623,16 +634,8 @@ describe('HomeAdministrationAccountScreen', () => {
         await harness.selectHomes([home, focused]);
         connection = await restoreServerAccountForTest({ serverUrl: 'https://focused-delete.example', accountId: 'focused-account',
             credentials: { token: createAccountTokenForTests('focused-account', { currentAccount: true }) },
+            additionalRequestOrigins: ['https://home-a.example'],
             request: harness.request,
-        });
-        // The restore helper binds a single Home; the real concurrent observation
-        // runtime needs the same HTTP boundary to answer both selected Homes.
-        const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
-        setRuntimeFetch(harness.request);
-        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
-        vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async serverUrl => {
-            const record = harness.findByServerUrl(serverUrl);
-            return record?.token ? { token: record.token } : null;
         });
         const { storage } = await import('@/sync/domains/state/storage');
         const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
@@ -667,7 +670,7 @@ describe('HomeAdministrationAccountScreen', () => {
         });
         await deliverAccountChange();
         await flushHookEffects();
-        expect(modalState.confirms).toHaveLength(2);
+        expect(modalState.confirms).toHaveLength(1);
         await waitForHomeGovernance(() => expect(harness.artifacts(home).list()).toHaveLength(2));
         expect(routerBack).not.toHaveBeenCalled();
         expect(harness.requestsFor(DELETE_PATH)).toHaveLength(1);

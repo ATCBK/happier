@@ -6,7 +6,6 @@ import {
     prepareWorkspaceFileDetailsActionBoundary,
     getWorkspaceFileDetailsActionBoundary,
 } from './workspaceFileDetailsTestHelpers';
-import { refreshWorkspaceFileDetails } from './refreshWorkspaceFileDetails';
 
 installWorkspaceFileDetailsCommonModuleMocks();
 installWorkspaceFileDetailsActionBoundary();
@@ -19,6 +18,8 @@ vi.mock('@/platform/digest', () => ({ digest: async () => new Uint8Array(32) }))
 const patch = 'diff --git a/file.txt b/file.txt\n--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-old\n+new\n';
 const input = { scope: { serverId: 'server', machineId: 'machine', rootPath: '/repo' }, filePath: 'file.txt', diffMode: 'pending' as const, fileEntryKind: 'modified' as const };
 const workspaceFileDetailsActionBoundary = getWorkspaceFileDetailsActionBoundary();
+// Load the reader only after the socket boundary is installed.
+const { refreshWorkspaceFileDetails } = await import('./refreshWorkspaceFileDetails');
 
 describe('file details independent acquisition', () => {
     beforeEach(async () => {

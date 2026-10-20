@@ -1,392 +1,272 @@
 import * as React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { act } from 'react-test-renderer';
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
-import { installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers';
-import type { SessionRouteHydrationState } from '@/sync/domains/session/sessionRouteHydrationState';
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 import {
-    readSessionMobileSurfaceWithPredecessor,
-    resolveSessionMobileSurfacePersistenceKeys,
-} from '@/sync/domains/settings/mobileSurfacePersistence';
+    createDeferred,
+    createPlainSessionByIdResponseFixture,
+    createRootLayoutFeaturesResponse,
+    createSessionFixture,
+    renderScreen,
+    standardCleanup,
+    type Deferred,
+} from '@/dev/testkit';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
+import { buildRealmQualifiedMobileSurfaceStorageKey } from '@/sync/domains/settings/mobileSurfacePersistence';
+import { storage } from '@/sync/domains/state/storageStore';
+import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
+import { installSessionRouteCommonModuleMocks } from './sessionRouteTestHelpers';
 
-const runAfterInteractionsSpy = vi.hoisted(() => vi.fn(() => () => {}));
-const hydrateSessionForRouteSpy = vi.hoisted(
-    () => vi.fn((sessionId: string, _tag: string, options?: { serverId?: string }): SessionRouteHydrationState => ({
-        kind: 'available' as const,
-        sessionId,
-        serverId: options?.serverId,
-    })),
-);
-let deviceType: 'phone' | 'tablet' | 'desktop' = 'desktop';
-let mobileWorkspaceExperience: 'classic' | 'cockpit' = 'classic';
-let lastMobileSurfaceBySessionId: Record<string, string> = {};
-let activeServerAccountScope: { serverId: string; accountId: string } | null = {
-    serverId: 'server-b',
-    accountId: 'account-a',
-};
-let terminalTabAvailable = false;
-let sessionsById: Record<string, unknown> = {};
-const storageListeners = new Set<() => void>();
-const terminalAvailabilityCalls: Array<unknown> = [];
-const routeParams = vi.hoisted(() => ({
-    value: { id: 'session-1' } as Record<string, string | undefined>,
-}));
-const activeServerRuntimeState = vi.hoisted(() => ({
-    snapshot: { serverId: 'server-b', serverUrl: 'https://example.test', generation: 1 },
-    listener: null as null | (() => void),
-}));
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-function readRouteSessionMobileSurface(sessionId: string | null, serverId?: string | null): string | null {
-    const keys = resolveSessionMobileSurfacePersistenceKeys({
-        sessionId,
-        activeScope: activeServerAccountScope,
-        activeServerId: activeServerRuntimeState.snapshot.serverId,
-        targetServerId: serverId ?? null,
-    });
-    return readSessionMobileSurfaceWithPredecessor(lastMobileSurfaceBySessionId, keys).surface;
-}
+let phone = false;
+let holdInteractionJobs = false;
+const heldInteractionJobs = new Set<() => void>();
+let routeParams: Record<string, string | undefined> = { id: 'session-1' };
+let pendingSessionRead: Deferred<Response> | null = null;
+let sessionReadFails = false;
+
+beforeEach(() => {
+    phone = false;
+    holdInteractionJobs = false;
+    heldInteractionJobs.clear();
+    routeParams = { id: 'session-1' };
+    pendingSessionRead = null;
+    sessionReadFails = false;
+});
 
 installSessionRouteCommonModuleMocks({
     reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            Platform: { OS: 'ios' },
-            View: 'View',
-            ActivityIndicator: 'ActivityIndicator',
+        const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
+        const native = await createReactNativeNativeMock({ platformOS: 'ios' }, {
+            useWindowDimensions: () => ({ width: phone ? 390 : 1280, height: phone ? 844 : 900, scale: 1, fontScale: 1 }),
         });
+        const interactionManager = native.InteractionManager;
+        const sdkRunAfterInteractions = interactionManager.runAfterInteractions;
+        interactionManager.runAfterInteractions = (callback: () => void) => {
+            if (!holdInteractionJobs) return sdkRunAfterInteractions.call(interactionManager, callback);
+            const job = () => { heldInteractionJobs.delete(job); callback(); };
+            heldInteractionJobs.add(job);
+            return { cancel: () => { heldInteractionJobs.delete(job); } };
+        };
+        Object.defineProperty(native.Platform, 'isPad', { configurable: true, get: () => !phone });
+        return native;
     },
     router: async () => {
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-        const routerMock = createExpoRouterMock();
-        return {
-            ...routerMock.module,
-            useLocalSearchParams: () => routeParams.value,
-            useGlobalSearchParams: () => routeParams.value,
-        };
+        return createExpoRouterMock({ params: () => routeParams }).module;
     },
-    storageModule: async (importOriginal) => {
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                useSetting: ((key: string) => {
-                    if (key === 'mobileWorkspaceExperienceV1') return mobileWorkspaceExperience;
-                    return null;
-                }) as any,
-                useSettingMutable: ((key: string) => [
-                    key === 'mobileWorkspaceExperienceV1' ? mobileWorkspaceExperience : null,
-                    vi.fn(),
-                ]) as any,
-                useLocalSetting: ((key: string) => {
-                    if (key === 'sessionLastMobileSurfaceBySessionId') return lastMobileSurfaceBySessionId;
-                    return null;
-                }) as any,
-                useSessionLastMobileSurface: readRouteSessionMobileSurface as any,
-                useActiveServerAccountScope: () => activeServerAccountScope,
-                getStorage: (() => ({
-                    getState: () => ({
-                        localSettings: {
-                            sessionLastMobileSurfaceBySessionId: lastMobileSurfaceBySessionId,
-                        },
-                    }),
-                })) as any,
-            },
-        });
+    nativeNavigation: async () => {
+        const { createReactNavigationNativeMock } = await import('@/dev/testkit/mocks/reactNavigation');
+        // The native navigator is the SDK boundary. Render its initial scene so
+        // the real shared shell, including its classic SessionView, is exercised.
+        return createReactNavigationNativeMock({ renderInitialNavigatorScreen: true });
     },
 });
 
-vi.mock('@/components/sessions/shell/SessionView', () => ({
-    SessionView: (props: any) => React.createElement('SessionView', props),
-}));
-
-vi.mock('@/components/workspaceCockpit/session/SessionCockpitShell', () => ({
-    SessionCockpitShell: (props: any) => React.createElement('SessionCockpitShell', props),
-}));
-
-vi.mock('@/components/appShell/panes/hooks/useAppPaneScope', () => ({
-    useAppPaneScope: () => ({
-        scopeState: {
-            right: { activeTabId: null },
-            details: { tabs: [] },
-        },
-    }),
-}));
-
-vi.mock('@/components/sessions/terminal/useSessionTerminalAvailability', () => ({
-    useSessionTerminalAvailability: (...args: unknown[]) => {
-        terminalAvailabilityCalls.push(args[0]);
-        return {
-            sidebarTabAvailable: terminalTabAvailable,
-        };
+const runtime = installSessionPaneRuntimeTestHarness({
+    sessionId: 'session-1',
+    features: () => createRootLayoutFeaturesResponse({ features: { terminal: { embeddedPty: { enabled: true } } } }),
+    request: async (url, init) => {
+        if ((init?.method ?? 'GET') !== 'GET' || new URL(String(url)).pathname !== '/v2/sessions/session-1') return null;
+        if (pendingSessionRead) return (await pendingSessionRead.promise).clone();
+        if (sessionReadFails) return Response.json({ error: 'unavailable' }, { status: 503 });
+        return null;
     },
-}));
-
-vi.mock('@/sync/domains/state/storageStore', () => {
-    const buildState = () => ({
-        sessions: sessionsById,
-        sessionListIndexByServerId: {},
-        concurrentSessionListCacheByServerId: {},
-        getProjectForSession: () => null,
-        localSettings: {
-            sessionLastMobileSurfaceBySessionId: lastMobileSurfaceBySessionId,
-        },
-    });
-    const storage = Object.assign(
-        (selector?: (state: Record<string, unknown>) => unknown) => React.useSyncExternalStore(
-            (listener) => {
-                storageListeners.add(listener);
-                return () => storageListeners.delete(listener);
-            },
-            () => typeof selector === 'function' ? selector(buildState()) : buildState(),
-            () => typeof selector === 'function' ? selector(buildState()) : buildState(),
-        ),
-        {
-            getState: () => buildState(),
-            subscribe: (listener: () => void) => {
-                storageListeners.add(listener);
-                return () => storageListeners.delete(listener);
-            },
-        },
-    );
-    return {
-        storage,
-        getStorage: () => storage,
-    };
 });
 
-vi.mock('@/auth/context/AuthContext', () => ({
-    useAuth: () => ({
-        refreshFromActiveServer: vi.fn(async () => {}),
-    }),
-}));
+let hydration: typeof import('@/hooks/session/useHydrateSessionForRoute');
+let serverRuntime: typeof import('@/sync/domains/server/serverRuntime');
+let terminalAvailability: typeof import('@/components/sessions/terminal/useSessionTerminalAvailability');
+let SessionView: typeof import('@/components/sessions/shell/SessionView')['SessionView'];
+let SessionCockpitShell: typeof import('@/components/workspaceCockpit/session/SessionCockpitShell')['SessionCockpitShell'];
+let ActivitySpinner: typeof import('@/components/ui/feedback/ActivitySpinner')['ActivitySpinner'];
+let SurfaceStateCard: typeof import('@/components/ui/surfaces/SurfaceStateCard')['SurfaceStateCard'];
 
-vi.mock('@/components/sessions/shell/SessionInvalidLinkFallback', () => ({
-    SessionInvalidLinkFallback: () => React.createElement('SessionInvalidLinkFallback'),
-}));
+let hydrateSessionForRouteSpy: MockInstance<typeof hydration.useHydrateSessionForRoute>;
+let subscribeActiveServerSpy: MockInstance<typeof serverRuntime.subscribeActiveServer>;
+let terminalAvailabilitySpy: MockInstance<typeof terminalAvailability.useSessionTerminalAvailability>;
 
-vi.mock('@/components/ui/feedback/ActivitySpinner', () => ({
-    ActivitySpinner: (props: Record<string, unknown>) => React.createElement('ActivitySpinner', props),
-}));
+beforeEach(async () => {
+    storage.getState().applySettingsLocal({ mobileWorkspaceExperienceV1: 'classic' });
+    hydration = await import('@/hooks/session/useHydrateSessionForRoute');
+    serverRuntime = await import('@/sync/domains/server/serverRuntime');
+    terminalAvailability = await import('@/components/sessions/terminal/useSessionTerminalAvailability');
+    ({ SessionView } = await import('@/components/sessions/shell/SessionView'));
+    ({ SessionCockpitShell } = await import('@/components/workspaceCockpit/session/SessionCockpitShell'));
+    ({ ActivitySpinner } = await import('@/components/ui/feedback/ActivitySpinner'));
+    ({ SurfaceStateCard } = await import('@/components/ui/surfaces/SurfaceStateCard'));
+    hydrateSessionForRouteSpy = vi.spyOn(hydration, 'useHydrateSessionForRoute');
+    subscribeActiveServerSpy = vi.spyOn(serverRuntime, 'subscribeActiveServer');
+    terminalAvailabilitySpy = vi.spyOn(terminalAvailability, 'useSessionTerminalAvailability');
+});
 
-vi.mock('@/hooks/session/useHydrateSessionForRoute', () => ({
-    useHydrateSessionForRoute: (sessionId: string, tag: string, options?: { serverId?: string }) =>
-        hydrateSessionForRouteSpy(sessionId, tag, options),
-}));
+afterEach(async () => {
+    await standardCleanup();
+    pendingSessionRead?.resolve(Response.json({ error: 'Session not found' }, { status: 404 }));
+    heldInteractionJobs.clear();
+    holdInteractionJobs = false;
+    vi.restoreAllMocks();
+});
 
-vi.mock('@/utils/timing/runAfterInteractionsWithFallback', () => ({
-    runAfterInteractionsWithFallback: runAfterInteractionsSpy,
-}));
+function coldSession() {
+    storage.setState({ sessions: {}, sessionListIndexByServerId: {}, sessionListRowsByServerId: {} });
+}
 
-vi.mock('@/utils/sessions/tempDataStore', () => ({
-    getTempData: () => null,
-}));
+function pendingHydration() {
+    coldSession();
+    pendingSessionRead = createDeferred<Response>();
+    return pendingSessionRead;
+}
 
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot: () => activeServerRuntimeState.snapshot,
-    subscribeActiveServer: (listener: () => void) => {
-        activeServerRuntimeState.listener = listener;
-        return () => {
-            if (activeServerRuntimeState.listener === listener) {
-                activeServerRuntimeState.listener = null;
-            }
-        };
-    },
-}));
+function enableCockpit() {
+    phone = true;
+    storage.getState().applySettingsLocal({ mobileWorkspaceExperienceV1: 'cockpit' });
+}
 
-vi.mock('@/components/sessions/panes/url/sessionPaneUrlState', () => ({
-    parseSessionPaneUrlState: () => null,
-}));
+function rememberSurface(surface: 'tabs' | 'git') {
+    const scope = getActiveServerAccountScope();
+    if (!scope) throw new Error('Expected restored Account scope');
+    const key = buildRealmQualifiedMobileSurfaceStorageKey('session', scope, 'session-1');
+    if (!key) throw new Error('Expected qualified Session preference key');
+    storage.getState().applyLocalSettings({ sessionLastMobileSurfaceBySessionId: { 'session-1': 'git', [key]: surface } });
+}
 
-vi.mock('@/utils/platform/responsive', () => ({
-    useDeviceType: () => deviceType,
-}));
+async function renderRoute() {
+    const { default: SessionRoute } = await import('@/app/(app)/session/[id]');
+    return renderScreen(<runtime.Wrapper><SessionRoute /></runtime.Wrapper>);
+}
 
 describe('session route index', () => {
-    afterEach(() => {
-        standardCleanup();
-        runAfterInteractionsSpy.mockClear();
-        hydrateSessionForRouteSpy.mockReset();
-        hydrateSessionForRouteSpy.mockImplementation((sessionId: string, _tag: string, options?: { serverId?: string }) => ({
-            kind: 'available' as const,
-            sessionId,
-            serverId: options?.serverId,
-        }));
-        deviceType = 'desktop';
-        mobileWorkspaceExperience = 'classic';
-        lastMobileSurfaceBySessionId = {};
-        activeServerAccountScope = { serverId: 'server-b', accountId: 'account-a' };
-        terminalTabAvailable = false;
-        sessionsById = {};
-        storageListeners.clear();
-        terminalAvailabilityCalls.length = 0;
-        routeParams.value = { id: 'session-1' };
-        activeServerRuntimeState.snapshot = { serverId: 'server-b', serverUrl: 'https://example.test', generation: 1 };
-        activeServerRuntimeState.listener = null;
-    });
-
     it('mounts the session view immediately on native instead of waiting for interaction deferral', async () => {
-        const Route = await import('@/app/(app)/session/[id]');
+        holdInteractionJobs = true;
+        const screen = await renderRoute();
 
-        const screen = await renderScreen(React.createElement(Route.default));
-
-        expect(runAfterInteractionsSpy).not.toHaveBeenCalled();
-        expect(screen.findAllByType('SessionView')).toHaveLength(1);
+        expect(heldInteractionJobs.size).toBeGreaterThan(0);
+        expect(screen.findAllByType(SessionCockpitShell)).toHaveLength(1);
+        expect(screen.findAllByType(SessionView)).toHaveLength(1);
         const [hydratedSessionId, hydrateTag] = hydrateSessionForRouteSpy.mock.calls.at(-1) ?? [];
         expect(hydratedSessionId).toBe('session-1');
-        expect(String(hydrateTag)).toBe('SessionCanvasLeaf.ensureSessionVisible');
+        expect(String(hydrateTag)).toBe('SessionRoute.ensureSessionVisible gen=' + serverRuntime.getActiveServerSnapshot().generation);
+        await act(async () => {
+            holdInteractionJobs = false;
+            for (const job of [...heldInteractionJobs]) job();
+        });
+        expect(screen.findAllByType(SessionView)).toHaveLength(1);
     });
 
     it('shows a loading spinner while hydration is pending and the session is not cached', async () => {
-        hydrateSessionForRouteSpy.mockImplementation((sessionId: string) => ({
-            kind: 'loading' as const,
-            sessionId,
-            reason: 'store-miss' as const,
-        }));
-        const Route = await import('@/app/(app)/session/[id]');
+        pendingHydration();
+        const screen = await renderRoute();
 
-        const screen = await renderScreen(React.createElement(Route.default));
-
-        expect(screen.findAllByType('ActivitySpinner')).toHaveLength(1);
-        expect(screen.findAllByType('SessionView')).toHaveLength(0);
-        expect(screen.findAllByType('SessionCockpitShell')).toHaveLength(0);
+        expect(screen.findAllByType(ActivitySpinner)).toHaveLength(1);
+        expect(screen.findAllByType(SessionView)).toHaveLength(0);
+        expect(screen.findAllByType(SessionCockpitShell)).toHaveLength(0);
     });
 
     it('mounts the session shell when hydration is retrying so retry status and navigation remain available', async () => {
-        hydrateSessionForRouteSpy.mockImplementation((sessionId: string) => ({
-            kind: 'retrying' as const,
-            sessionId,
-            cause: 'network' as const,
-        }));
-        const Route = await import('@/app/(app)/session/[id]');
+        coldSession();
+        sessionReadFails = true;
+        routeParams.serverId = runtime.serverId;
+        const screen = await renderRoute();
 
-        const screen = await renderScreen(React.createElement(Route.default));
-
-        expect(screen.findAllByType('ActivitySpinner')).toHaveLength(0);
-        const sessionView = screen.findByType('SessionView' as never);
+        await waitForHomeGovernance(() => expect(screen.findByType(SessionView).props.routeHydrationState?.kind).toBe('retrying'));
+        expect(screen.findAllByType(SessionCockpitShell)).toHaveLength(1);
+        const retryStatus = screen.findAllByType(SurfaceStateCard).find(node => node.props.testID === 'session-route-retrying');
+        expect(retryStatus?.props.kind).toBe('loading');
+        expect(screen.findAllByType(ActivitySpinner).length).toBeGreaterThan(0);
+        const sessionView = screen.findByType(SessionView);
         expect(sessionView.props.routeHydrationState).toEqual({
-            kind: 'retrying',
-            sessionId: 'session-1',
-            cause: 'network',
+            kind: 'retrying', sessionId: 'session-1', serverId: runtime.serverId, cause: 'network',
         });
     });
 
     it('mounts the session view reactively when the scoped session lands after route hydration started', async () => {
-        routeParams.value = { id: 'session-1', serverId: 'server-a' };
-        hydrateSessionForRouteSpy.mockImplementation((sessionId: string) => ({
-            kind: 'loading' as const,
-            sessionId,
-            reason: 'store-miss' as const,
-        }));
-        const Route = await import('@/app/(app)/session/[id]');
-        const screen = await renderScreen(React.createElement(Route.default));
+        routeParams.serverId = runtime.serverId;
+        const pending = pendingHydration();
+        const screen = await renderRoute();
 
-        expect(screen.findAllByType('ActivitySpinner')).toHaveLength(1);
-
+        expect(screen.findAllByType(ActivitySpinner)).toHaveLength(1);
+        const session = createSessionFixture({ id: 'session-1', serverId: runtime.serverId, seq: 0 });
         await act(async () => {
-            sessionsById = {
-                'session-1': { id: 'session-1', serverId: 'server-a', active: false, seq: 0 },
-            };
-            for (const listener of storageListeners) listener();
+            storage.getState().applySessions([session]);
+            pending.resolve(Response.json(createPlainSessionByIdResponseFixture(session)));
         });
 
-        expect(screen.findAllByType('ActivitySpinner')).toHaveLength(0);
-        expect(screen.findAllByType('SessionView')).toHaveLength(1);
+        await waitForHomeGovernance(() => expect(screen.findAllByType(SessionView)).toHaveLength(1));
+        expect(screen.findAllByType(ActivitySpinner)).toHaveLength(0);
+        expect(screen.findAllByType(SessionView)).toHaveLength(1);
     });
 
     it('shows a loading spinner before mounting the cockpit shell while hydration is pending', async () => {
-        hydrateSessionForRouteSpy.mockImplementation((sessionId: string) => ({
-            kind: 'loading' as const,
-            sessionId,
-            reason: 'store-miss' as const,
-        }));
-        deviceType = 'phone';
-        mobileWorkspaceExperience = 'cockpit';
-        const Route = await import('@/app/(app)/session/[id]');
+        enableCockpit();
+        pendingHydration();
+        const screen = await renderRoute();
 
-        const screen = await renderScreen(React.createElement(Route.default));
-
-        expect(screen.findAllByType('ActivitySpinner')).toHaveLength(1);
-        expect(screen.findAllByType('SessionView')).toHaveLength(0);
-        expect(screen.findAllByType('SessionCockpitShell')).toHaveLength(0);
+        expect(screen.findAllByType(ActivitySpinner)).toHaveLength(1);
+        expect(screen.findAllByType(SessionView)).toHaveLength(0);
+        expect(screen.findAllByType(SessionCockpitShell)).toHaveLength(0);
     });
 
     it('restores only the route Account realm-qualified mobile surface, never the legacy bare entry', async () => {
-        deviceType = 'phone';
-        mobileWorkspaceExperience = 'cockpit';
-        routeParams.value = { id: 'session-1', serverId: 'server-b' };
-        lastMobileSurfaceBySessionId = {
-            'session-1': 'git',
-            'mobile-surface-selection:v2:session:8:server-b9:account-a:9:session-1': 'tabs',
-        };
-        const Route = await import('@/app/(app)/session/[id]');
-
-        const screen = await renderScreen(React.createElement(Route.default));
-        const shells = screen.findAllByType('SessionCockpitShell');
+        enableCockpit();
+        routeParams.serverId = runtime.serverId;
+        rememberSurface('tabs');
+        const screen = await renderRoute();
+        const shells = screen.findAllByType(SessionCockpitShell);
 
         expect(shells).toHaveLength(1);
         expect(shells[0]?.props.surface).toBe('tabs');
     });
 
     it('rehydrates when active server listener reports a new generation', async () => {
-        const Route = await import('@/app/(app)/session/[id]');
-        await renderScreen(React.createElement(Route.default));
-
-        expect(activeServerRuntimeState.listener).not.toBeNull();
+        await renderRoute();
+        expect(subscribeActiveServerSpy.mock.calls.at(-1)?.[0]).not.toBeNull();
+        expect(subscribeActiveServerSpy.mock.calls.at(-1)?.[0]).toEqual(expect.any(Function));
 
         await act(async () => {
-            activeServerRuntimeState.snapshot = { serverId: 'server-b', serverUrl: 'https://example.test', generation: 2 };
-            activeServerRuntimeState.listener?.();
+            await runtime.restoreRealm({ serverUrl: 'https://session-generation.test', serverIdentityId: 'srv_session_generation', accountId: 'account-a' });
         });
 
         expect(hydrateSessionForRouteSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
         const latestTag = hydrateSessionForRouteSpy.mock.calls.at(-1)?.[1] ?? '';
-        expect(String(latestTag)).toBe('SessionCanvasLeaf.ensureSessionVisible');
+        expect(String(latestTag)).toBe('SessionRoute.ensureSessionVisible gen=' + serverRuntime.getActiveServerSnapshot().generation);
     });
 
     it('renders the session cockpit shell on phone when cockpit mode is enabled by default', async () => {
-        deviceType = 'phone';
-        mobileWorkspaceExperience = 'cockpit';
-        routeParams.value = { id: 'session-1', serverId: 'server-b' };
-        lastMobileSurfaceBySessionId = {
-            'mobile-surface-selection:v2:session:8:server-b9:account-a:9:session-1': 'git',
-        };
-        const Route = await import('@/app/(app)/session/[id]');
+        enableCockpit();
+        routeParams.serverId = runtime.serverId;
+        rememberSurface('git');
+        const screen = await renderRoute();
 
-        const screen = await renderScreen(React.createElement(Route.default));
-
-        const cockpit = screen.findByType('SessionCockpitShell' as never);
+        const cockpit = screen.findByType(SessionCockpitShell);
         expect(cockpit.props.sessionId).toBe('session-1');
-        expect(cockpit.props.scopeId).toBe('session:address:server-b:session-1');
+        expect(cockpit.props.scopeId).toBe('session:address:' + runtime.serverId + ':session-1');
         expect(cockpit.props.surface).toBe('git');
-        expect(cockpit.props.routeServerId).toBe('server-b');
-        expect(screen.findAllByType('SessionView')).toHaveLength(0);
+        expect(cockpit.props.routeServerId).toBe(runtime.serverId);
+        // The classic SessionView cannot be mounted under a non-chat cockpit surface.
+        expect(screen.findAllByType(SessionView)).toHaveLength(0);
     });
 
     it('keeps the cockpit terminal surface when the viewed session server enables terminal', async () => {
-        deviceType = 'phone';
-        mobileWorkspaceExperience = 'cockpit';
-        terminalTabAvailable = true;
-        routeParams.value = { id: 'session-1', serverId: 'server-b', mobileSurface: 'terminal' };
-        lastMobileSurfaceBySessionId = { 'session-1': 'terminal' };
-        const Route = await import('@/app/(app)/session/[id]');
+        enableCockpit();
+        routeParams = { id: 'session-1', serverId: runtime.serverId, mobileSurface: 'terminal' };
+        const screen = await renderRoute();
 
-        const screen = await renderScreen(React.createElement(Route.default));
-
-        const cockpit = screen.findByType('SessionCockpitShell' as never);
+        const cockpit = screen.findByType(SessionCockpitShell);
         expect(cockpit.props.surface).toBe('terminal');
     });
 
     it('scopes terminal availability to the viewed session id in cockpit mode', async () => {
-        deviceType = 'phone';
-        mobileWorkspaceExperience = 'cockpit';
-        terminalTabAvailable = true;
-        routeParams.value = { id: 'session-scoped' };
-        const Route = await import('@/app/(app)/session/[id]');
+        enableCockpit();
+        routeParams = { id: 'session-scoped' };
+        await renderRoute();
 
-        await renderScreen(React.createElement(Route.default));
-
-        expect(terminalAvailabilityCalls.length).toBeGreaterThan(0);
-        expect(terminalAvailabilityCalls.at(-1)).toBeNull();
+        expect(terminalAvailabilitySpy.mock.calls.length).toBeGreaterThan(0);
+        expect(terminalAvailabilitySpy.mock.calls[0]?.[0]).toBeNull();
     });
 });

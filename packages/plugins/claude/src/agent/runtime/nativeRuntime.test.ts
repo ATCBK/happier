@@ -2,14 +2,18 @@ import { describe, expect, it, vi } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import type {
   AgentExecutionRunConversationRuntimeV1,
+  AgentExecutionRunConversationEventV1,
   AgentExecutionRunEvent,
+  AgentExecutionRunRuntime,
   AgentExecutionRunRuntimeContextV1,
   AgentSessionOpenRequest,
   AgentSessionProviderBinding,
   AgentSessionRuntimeContext,
+  AgentSessionHostServices,
   AgentSessionRuntimeEvent,
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
+import type { PluginServices } from '@happier-dev/plugin-sdk';
 import { AgentSessionConfigurationSnapshotV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
 
 import {
@@ -526,6 +530,162 @@ describe('createClaudeNativeRuntime', () => {
       'run-complete',
     ]);
     expect(events.every((event) => event.runId === request.runId && !('sessionId' in event))).toBe(true);
+  });
+
+  it.each(['assistant', 'result-only', 'retained', 'retained-policy-refusal'])('preserves final assistant text from the real detached SDK stream before completion (%s)', async (textSource) => {
+    const sdk = createSdkExecFixture();
+    const retained = textSource.startsWith('retained');
+    const launches: Parameters<ExecService['clients']['spawn']>[0][] = [];
+    const requestApproval = vi.fn<PluginServices['interactions']['requestApproval']>(async () => ({
+      kind: 'approval', status: 'declined', requestId: 'raw-read-only',
+    }));
+    const boundary = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, {
+      toolExecution: { before: async (request: Parameters<AgentSessionHostServices['toolExecution']['before']>[0]) =>
+        ({ status: 'continue', input: request.input }) },
+      settingsValues: { claudeRemoteAdvancedOptionsJson: JSON.stringify({
+        permissionPromptToolName: 'mcp__external__approve',
+        betas: ['beta-a', '--permission-mode', 'bypassPermissions'],
+        additionalDirectories: ['/tmp/extra', '--permission-prompt-tool', 'mcp__external__approve'],
+      }) },
+    });
+    // Adapt the existing OS JSON-stream fixture to the public ExecService port.
+    // Claude's SDK query, conversation codec and execution-run adapter remain real.
+    const exec = {
+      systemTools: { resolve: async () => ({ executable: { kind: 'systemTool', id: 'claude-cli' }, executablePath: '/managed/claude' }) },
+      clients: { spawn: async (spec: Parameters<ExecService['clients']['spawn']>[0]) => {
+        launches.push(spec);
+        const handle = await sdk.service.spawnClient({ launch: { kind: 'agent-cli', agentId: 'claude' },
+          transport: { kind: 'stdio', framing: { kind: 'strict-lf-json' } }, protocol: { kind: 'json-stream' } });
+        return {
+          client: {
+            subscribe: (listener: (record: unknown) => void | Promise<void>) => ({ dispose: handle.client.subscribe(listener) }),
+            write: async (record: unknown) => { await handle.client.writeRecord(record); },
+          },
+          process: { write: async () => undefined, dispose: async () => { await handle.dispose(); } },
+          wait: async () => {
+            const result = await handle.process.exit;
+            return { termination: { observed: { kind: 'exit', exitCode: result.exitCode ?? 0 }, requestedBy: { kind: 'none' } },
+              stdout: new Uint8Array(), stderr: new Uint8Array(), stdoutTruncated: false, stderrTruncated: false };
+          },
+          dispose: async () => { await handle.dispose(); },
+        };
+      } },
+    } as unknown as ExecService;
+    const runtime = createClaudeNativeRuntime({ openSession: vi.fn<ClaudeNativeSessionFactory>(),
+      resolveSupportsEffort: async () => false, resolveSupportsSystemPromptSnapshotOff: async () => false });
+    const request = { kind: 'create' as const, runId: 'detached-final-text', cwd: '/tmp/claude-project',
+      profile: { pluginId: 'happier.agent.claude', localId: 'default' },
+      input: { text: 'Return the background result' }, localInputId: 'detached-input',
+      configuration: AgentSessionConfigurationSnapshotV1Schema.parse({ mode: { value: null, updatedAtMs: 1 },
+        model: { value: null, updatedAtMs: 1 }, permissionIntent: { value: 'yolo', updatedAtMs: 1 },
+        allowedTools: ['Write'], options: {} }),
+    };
+    const runContext = {
+      scope: { kind: 'execution_run', executionRunId: request.runId },
+      executionRun: { id: request.runId, services: {
+        hooks: boundary.agentRuntime.sessionHooks, fileFollow: boundary.agentRuntime.transcripts.fileFollow,
+        toolExecution: boundary.agentRuntime.toolExecution,
+      } },
+      services: { exec, logger: boundary.logger, settings: boundary.settings, storage: boundary.storage,
+        interactions: { requestApproval } },
+      protocols: {}, signal: new AbortController().signal,
+    } as unknown as AgentExecutionRunRuntimeContextV1;
+    const facet = runtime.sessions.executionRunContextV1!;
+    const execution = retained
+      ? await facet.openConversation!(request, runContext)
+      : await facet.open(request, runContext);
+    const observed: AgentExecutionRunEvent[] = [];
+    const conversationEvents: AgentExecutionRunConversationEventV1[] = [];
+    if (retained) {
+      const conversation = execution as AgentExecutionRunConversationRuntimeV1;
+      conversation.watch(event => conversationEvents.push(event));
+      expect(sdk.written).not.toContainEqual(expect.objectContaining({ type: 'user' }));
+      await conversation.send({ inputIds: ['detached-input'], input: request.input,
+        delivery: { kind: 'newTurn', turnId: 'turn-1' } }, { permissionIntent: 'plan' });
+      expect(launches[0]?.launch.args).toEqual(expect.arrayContaining(['--permission-mode', 'plan']));
+      expect(launches[0]?.launch.args).toEqual(expect.arrayContaining(['--permission-prompt-tool', 'stdio']));
+      expect(launches[0]?.launch.args).not.toContain('mcp__external__approve');
+      expect(launches[0]?.launch.args.filter(arg => arg === '--permission-mode')).toHaveLength(1);
+      expect(launches[0]?.launch.args.filter(arg => arg === '--permission-prompt-tool')).toHaveLength(1);
+    } else {
+      (execution as AgentExecutionRunRuntime).watch(event => observed.push(event));
+    }
+    const finalText = 'QA-FIN41E BACKGROUND DONE. No tools or files.';
+    try {
+      await sdk.emit({ type: 'assistant', uuid: 'thinking-row', session_id: 'detached-native', parent_tool_use_id: null,
+        message: { id: 'split-message', role: 'assistant', stop_reason: 'end_turn',
+          content: [{ type: 'thinking', thinking: '', signature: 'native-signature' }] } });
+      expect(observed.some(event => event.kind === 'run-complete')).toBe(false);
+      if (textSource === 'assistant') {
+        await sdk.emit({ type: 'assistant', uuid: 'text-row', session_id: 'detached-native', parent_tool_use_id: null,
+          message: { id: 'split-message', role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: finalText }] } });
+        await vi.waitFor(() => expect(observed).toContainEqual(
+          expect.objectContaining({ kind: 'output-message-committed', text: finalText }),
+        ));
+        expect(observed.some(event => event.kind === 'run-complete')).toBe(false);
+      }
+      if (textSource === 'retained-policy-refusal') {
+        await sdk.emit({ type: 'system', subtype: 'task_started', task_id: 'background-worker',
+          session_id: 'detached-native', task_type: 'local_agent', is_backgrounded: true });
+      }
+      await sdk.emit({ type: 'result', subtype: 'success', is_error: false, session_id: 'detached-native',
+        uuid: 'final-result', result: finalText, num_turns: 1, total_cost_usd: 0, duration_ms: 10, duration_api_ms: 8 });
+      if (retained) {
+        await vi.waitFor(() => expect(conversationEvents).toContainEqual(expect.objectContaining({ kind: 'turn-complete', turnId: 'turn-1' })));
+        const conversation = execution as AgentExecutionRunConversationRuntimeV1;
+        if (textSource === 'retained-policy-refusal') {
+          const send = conversation.send({ inputIds: ['refused-input'], input: { text: 'must not reach native input' },
+            delivery: { kind: 'newTurn', turnId: 'refused-turn' } }, { permissionIntent: 'read-only' });
+          await vi.waitFor(() => expect(sdk.written).toContainEqual(expect.objectContaining({ type: 'control_request',
+            request: { subtype: 'set_permission_mode', mode: 'plan' },
+          })));
+          const control = sdk.written.find((record): record is { type: 'control_request'; request_id: string } =>
+            record !== null && typeof record === 'object' && 'type' in record && record.type === 'control_request'
+            && 'request_id' in record && typeof record.request_id === 'string');
+          expect(control).toBeDefined();
+          await sdk.emit({ type: 'control_response', response: {
+            subtype: 'error', request_id: control!.request_id, error: 'Permission change refused',
+          } });
+          await expect(send).resolves.toMatchObject({ status: 'rejected' });
+          expect(sdk.written.filter(record => record !== null && typeof record === 'object' && 'type' in record && record.type === 'user')).toHaveLength(1);
+          expect(launches).toHaveLength(1);
+          expect(conversationEvents.some(event => 'turnId' in event && event.turnId === 'refused-turn')).toBe(false);
+          return;
+        }
+        const result = await conversation.send({ inputIds: ['detached-input-2'], input: { text: 'Continue in this conversation' },
+          delivery: { kind: 'newTurn', turnId: 'turn-2' } }, { permissionIntent: 'read-only' });
+        expect(result).toMatchObject({ status: 'admitted' });
+        expect(launches[1]?.launch.args).toEqual(expect.arrayContaining([
+          '--permission-mode', 'plan', '--resume', 'detached-native',
+        ]));
+        expect(launches[1]?.launch.args).toEqual(expect.arrayContaining(['--permission-prompt-tool', 'stdio']));
+        expect(launches[1]?.launch.args).not.toContain('mcp__external__approve');
+        expect(launches[1]?.launch.args.filter(arg => arg === '--permission-mode')).toHaveLength(1);
+        expect(launches[1]?.launch.args.filter(arg => arg === '--permission-prompt-tool')).toHaveLength(1);
+        await sdk.emit({ type: 'control_request', request_id: 'write-under-read-only',
+          request: { subtype: 'can_use_tool', tool_name: 'Write',
+            input: { file_path: '/tmp/native-read-only.txt', content: 'must not write' }, tool_use_id: 'write-1' },
+        });
+        await vi.waitFor(() => expect(sdk.written).toContainEqual(expect.objectContaining({ type: 'control_response',
+          response: expect.objectContaining({ request_id: 'write-under-read-only',
+            response: expect.objectContaining({ behavior: 'deny' }) }),
+        })));
+        expect(requestApproval).toHaveBeenCalledWith(expect.objectContaining({
+          subject: expect.objectContaining({ kind: 'tool', name: 'Write' }),
+        }), expect.anything());
+        await sdk.emit({ type: 'result', subtype: 'success', is_error: false, session_id: 'detached-native',
+          uuid: 'second-result', result: 'retained continuation', num_turns: 1, total_cost_usd: 0, duration_ms: 10, duration_api_ms: 8 });
+        await vi.waitFor(() => expect(conversationEvents).toContainEqual(expect.objectContaining({ kind: 'turn-complete', turnId: 'turn-2' })));
+        expect(conversationEvents.every(event => !('sessionId' in event))).toBe(true);
+        return;
+      }
+      await vi.waitFor(() => expect(observed.some(event => event.kind === 'run-complete')).toBe(true));
+      expect(observed.filter(event => event.kind === 'output-message-committed')).toEqual([
+        expect.objectContaining({ channel: 'assistant', text: finalText }),
+      ]);
+      expect(observed.findIndex(event => event.kind === 'output-message-committed'))
+        .toBeLessThan(observed.findIndex(event => event.kind === 'run-complete'));
+    } finally { await execution.dispose(); }
   });
 
   it('rejects a detached fork before opening a Claude conversation', async () => {
@@ -1423,6 +1583,16 @@ describe('createClaudeNativeRuntime', () => {
     expect(configurationSnapshot.currentModelId).toBe('claude-opus-4-8');
     expect(configurationSnapshot.models?.some((model) => model.id === 'claude-runtime-observed')).toBe(false);
 
+    native.publishEffectiveModel({ modelId: 'claude-haiku-4-5-20251001' });
+    expect(source?.read()).toMatchObject({
+      currentModelId: 'claude-haiku-4-5-20251001',
+      models: expect.arrayContaining([{ id: 'claude-haiku-4-5-20251001', name: 'Haiku 4.5' }]),
+    });
+    native.publishEffectiveModel({ modelId: 'claude-haiku-4-5-20990101' });
+    expect(source?.read()).toMatchObject({
+      models: expect.arrayContaining([{ id: 'claude-haiku-4-5-20990101', name: 'claude-haiku-4-5-20990101' }]),
+    });
+
     await session.dispose();
     expect(disposeModels).toHaveBeenCalledTimes(1);
     const snapshotCountAfterDispose = snapshots.length;
@@ -2073,7 +2243,7 @@ describe('createClaudeNativeRuntime', () => {
     await session.dispose();
   });
 
-  it('publishes declared inactive goal mutations through the canonical goal work-state source', async () => {
+  it('refuses inactive Goal mutations without publishing a display-only objective', async () => {
     const runtime = createTestClaudeNativeRuntime({
       openSession: ({ request }) => createNativeOperations(request.sessionId).runtime,
     });
@@ -2095,28 +2265,16 @@ describe('createClaudeNativeRuntime', () => {
     await expect(runtime.sessions.goals?.set(
       { objective: 'Resume with this goal' },
       controlContext,
-    )).resolves.toEqual({
-      status: 'applied',
-      revision: 'goal-revision-inactive',
+    )).resolves.toMatchObject({
+      status: 'unsupported',
+      diagnostic: { code: 'inactive_agent_control_unsupported' },
     });
-    expect(publish).toHaveBeenLastCalledWith(expect.objectContaining({
-      items: [expect.objectContaining({
-        kind: 'goal',
-        localId: 'goal:claude',
-        status: 'active',
-        title: 'Resume with this goal',
-      })],
-      primaryLocalId: 'goal:claude',
-    }), expect.anything());
 
-    await expect(runtime.sessions.goals?.clear(controlContext)).resolves.toEqual({
-      status: 'applied',
-      revision: 'goal-revision-inactive',
+    await expect(runtime.sessions.goals?.clear(controlContext)).resolves.toMatchObject({
+      status: 'unsupported',
+      diagnostic: { code: 'inactive_agent_control_unsupported' },
     });
-    expect(publish).toHaveBeenLastCalledWith(expect.objectContaining({
-      items: [],
-      primaryLocalId: null,
-    }), expect.anything());
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it('enforces the host hands-off restriction in the native terminal launch', async () => {
@@ -2146,7 +2304,7 @@ describe('createClaudeNativeRuntime', () => {
       openSession: ({ request }) => createNativeOperations(request.sessionId).runtime,
     });
 
-    await expect(Promise.resolve(runtime.surfaces?.terminal?.resolveLaunch({
+    const plan = await Promise.resolve(runtime.surfaces?.terminal?.resolveLaunch({
       sessionId: 'session-1',
       cwd: '/repo',
       metadata: {},
@@ -2161,20 +2319,24 @@ describe('createClaudeNativeRuntime', () => {
         providerConnectionId: 'pc_claude',
         modelId: 'claude-sonnet-4-6',
       },
-    }))).resolves.toEqual({
+    }));
+    expect(plan).toEqual({
       argv: [
         '--model',
         'claude-sonnet-4-6',
         '--permission-mode',
         'acceptEdits',
         '--settings',
-        JSON.stringify({ permissions: { allow: ['mcp__happier__change_title', 'mcp__happier__session_title_set'] } }),
+        expect.any(String),
       ],
       process: { stdio: 'inherit', windowsHide: true },
       presentation: {
         onLaunch: { target: 'local', reason: 'claude_terminal_runtime_launcher_start' },
         onExit: { target: 'remote', reason: 'claude_terminal_runtime_launcher_exit' },
       },
+    });
+    expect(JSON.parse(plan!.argv[plan!.argv.indexOf('--settings') + 1])).toMatchObject({
+      permissions: { allow: expect.arrayContaining(['mcp__happier__change_title', 'mcp__happier__session_title_set']) },
     });
   });
 
@@ -2200,8 +2362,12 @@ describe('createClaudeNativeRuntime', () => {
       '--permission-mode',
       'bypassPermissions',
       '--settings',
-      JSON.stringify({ skipDangerousModePermissionPrompt: true, permissions: { allow: ['mcp__happier__change_title', 'mcp__happier__session_title_set'] } }),
+      expect.any(String),
     ]);
+    expect(JSON.parse(plan!.argv[plan!.argv.indexOf('--settings') + 1])).toMatchObject({
+      skipDangerousModePermissionPrompt: true,
+      permissions: { allow: expect.arrayContaining(['mcp__happier__change_title', 'mcp__happier__session_title_set']) },
+    });
   });
 
   it('does not override the configured Claude default when the host has no active selection', async () => {
@@ -2209,7 +2375,7 @@ describe('createClaudeNativeRuntime', () => {
       openSession: ({ request }) => createNativeOperations(request.sessionId).runtime,
     });
 
-    await expect(Promise.resolve(runtime.surfaces?.terminal?.resolveLaunch({
+    const plan = await Promise.resolve(runtime.surfaces?.terminal?.resolveLaunch({
       sessionId: 'session-1',
       cwd: '/repo',
       metadata: {},
@@ -2220,10 +2386,14 @@ describe('createClaudeNativeRuntime', () => {
         options: {},
       },
       modelSelection: null,
-    }))).resolves.toMatchObject({ argv: [
+    }));
+    expect(plan).toMatchObject({ argv: [
       '--settings',
-      JSON.stringify({ permissions: { allow: ['mcp__happier__change_title', 'mcp__happier__session_title_set'] } }),
+      expect.any(String),
     ] });
+    expect(JSON.parse(plan!.argv[plan!.argv.indexOf('--settings') + 1])).toMatchObject({
+      permissions: { allow: expect.arrayContaining(['mcp__happier__change_title', 'mcp__happier__session_title_set']) },
+    });
   });
 
   it('publishes input rejection when Claude proves spawn failed before prompt transport', async () => {

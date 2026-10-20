@@ -51,35 +51,6 @@ installNewSessionComponentsCommonModuleMocks({
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
         return createModalModuleMock().module;
     },
-    storage: async (importOriginal) => {
-        const { createPartialStorageModuleMock, createStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
-        const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-        return createPartialStorageModuleMock(importOriginal, {
-            storage: createStorageStoreMock({ settings: settingsDefaults }),
-            useActiveServerAccountScope: () => null,
-            useSetting: (key: string) => {
-                if (key === 'profiles') return [];
-                if (key === 'agentInputEnterToSend') return true;
-                if (key === 'agentInputActionBarLayout') return 'wrap';
-                if (key === 'agentInputChipDensity') return 'labels';
-                if (key === 'sessionPermissionModeApplyTiming') return 'immediate';
-                return null;
-            },
-            useSettings: () => ({
-                profiles: [],
-                agentInputEnterToSend: true,
-                agentInputActionBarLayout: 'wrap',
-                agentInputChipDensity: 'labels',
-                sessionPermissionModeApplyTiming: 'immediate',
-            }),
-            useWorkspaceReviewCommentsDrafts: () => [],
-            useSessionMessages: () => ({ messages: [], isLoaded: true }),
-            useSessionTranscriptIds: () => ({ ids: [], isLoaded: true }),
-            useSessionMessagesById: () => ({}),
-            useSessionMessagesVersion: () => 0,
-            useSessionMessagesReducerState: () => null,
-        });
-    },
     text: async () => {
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
         return createTextModuleMock({ translate: (key) => key });
@@ -180,6 +151,8 @@ vi.mock('@/components/sessions/agentInput', () => ({
                 testID: 'new-session-composer-send',
                 onPress: props.onSend,
             }),
+            // The status row's trailing actions are part of what the composer draws.
+            props.statusTrailingActions as React.ReactNode,
         );
     },
 }));
@@ -211,14 +184,6 @@ vi.mock('@/sync/domains/sessionControl/sessionModeControl', () => ({
 
 vi.mock('@/sync/domains/sessionControl/configOptionsControl', () => ({
     computeAcpConfigOptionControls: () => null,
-}));
-
-vi.mock('@/sync/domains/state/storageStore', () => ({
-    getStorage: () => (selector: any) => selector({ sessionMessages: {} }),
-}));
-
-vi.mock('@/sync/store/hooks', () => ({
-    useLocalSetting: () => 1,
 }));
 
 vi.mock('@/agents/catalog/catalog', () => ({
@@ -402,12 +367,17 @@ describe('NewSessionSimplePanel', () => {
         );
 
         const notice = screen.findByTestId('composer-notice');
+        // The composer sits inside its own band (the atmosphere boundary), so host content stacks
+        // directly above the band while staying on the page ground.
         const composer = screen.findByType('AgentInput' as React.ElementType);
         if (!notice) throw new Error('Expected composer notice');
         const siblings = notice.parent?.children.filter((child) => typeof child === 'object') ?? [];
-        expect(notice.parent).toBe(composer.parent);
-        expect(siblings.indexOf(composer)).toBe(siblings.indexOf(notice) + 1);
-        expect(agentInputPropsRef.current?.statusTrailingActions).toBe(statusTrailingActions);
+        const band = siblings[siblings.indexOf(notice) + 1];
+        // Compare identity without asking Vitest to diff the complete React fiber graphs on failure.
+        expect(typeof band === 'object' && band.props.testID === 'new-session-composer-band').toBe(true);
+        expect(typeof band === 'object' && band.findAll((node) => node === composer).length > 0).toBe(true);
+        // The host's actions reach the composer's status row (beside the floating composer's own capsules).
+        expect(screen.findByTestId('status-actions')).toBeTruthy();
         await screen.unmount();
     });
 

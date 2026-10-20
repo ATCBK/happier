@@ -8,7 +8,7 @@ import { isProviderActionMachineRequiredV1, parseProviderActionRequestV1, PROVID
   PROVIDER_MODEL_SETTINGS_ACTION_ID_BY_OPERATION_V1, type ProviderActionRequestV1 } from '@happier-dev/protocol/providers/providerActionsV1';
 import { ProviderErrorV1Schema } from '@happier-dev/protocol/providers/errors';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
-import { ZodError } from 'zod';
+import { z as zodMiniCore0 } from 'zod/mini';
 
 import { createProviderAuthoringOperations } from './service/authoringOperations';
 import { createProviderConnectionServiceContext } from './service/context';
@@ -67,7 +67,7 @@ export function createProviderConnectionService(deps: ProviderConnectionServiceD
           connectionId, machineId: deps.machineId,
         }) };
       }
-      if (error instanceof ProviderConnectionValidationError || error instanceof ZodError) {
+      if (error instanceof ProviderConnectionValidationError || error instanceof zodMiniCore0.core.$ZodError) {
         return { status: 'error', error: createProviderErrorV1('provider_connection_invalid', {
           ...(connectionId ? { connectionId } : {}), machineId: deps.machineId,
         }) };

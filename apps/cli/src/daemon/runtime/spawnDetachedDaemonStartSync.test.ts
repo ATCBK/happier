@@ -52,6 +52,7 @@ describe('spawnDetachedDaemonStartSync', () => {
       HAPPIER_DAEMON_SERVICE_BUNDLE_ID: 'dev.happier.app',
       HAPPIER_DAEMON_SERVICE_AUTOSTART: 'on-demand',
     });
+    vi.resetModules();
 
     const mod = await import('./spawnDetachedDaemonStartSync');
     await mod.spawnDetachedDaemonStartSync();

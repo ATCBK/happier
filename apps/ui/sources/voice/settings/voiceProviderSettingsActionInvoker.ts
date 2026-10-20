@@ -170,7 +170,15 @@ export const settingsActionInvoker = createHostPluginSettingsActionInvoker<Actio
     if (!Number.isInteger(settingsVersion) || settingsVersion < 0) {
       throw actionError('voice_provider_settings_version_unavailable');
     }
-    return await actions.execute({ ...input, signal });
+    try {
+      return await actions.execute({ ...input, signal });
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error
+        && error.code === 'voice_account_operation_outcome_unknown') {
+        throw actionError('voice_provider_settings_action_outcome_unknown');
+      }
+      throw error;
+    }
   },
   async applyPatch({ snapshot, patch, signal, context }) {
     if (!context) throw actionError('voice_provider_settings_action_context_missing');

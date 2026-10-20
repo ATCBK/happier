@@ -8,6 +8,7 @@ import {
 } from '../client/transcript/ephemeralSendOutcome';
 
 import type { ACPProvider } from '../sessionMessageTypes';
+import type { CommittedTranscriptAdmission } from '../transcriptPort';
 import {
   resolveInitialCheckpointDelayMs,
   resolveCheckpointIntervalMs,
@@ -55,7 +56,7 @@ type SegmentRuntime = StreamedTranscriptSegmentRuntime;
 const DURABLE_COMMIT_FAILURE_RETRY_DELAY_MS = 2_000;
 
 function didSegmentDurablyFlush(segment: SegmentRuntime, expectedState: SegmentState): boolean {
-  if (segment.accumulatedText.length === 0) return false;
+  if (segment.accumulatedText.length === 0 && segment.sourceMessageId === undefined) return false;
   return segment.lastCommittedTextVersion === segment.textVersion && segment.lastCommittedState === expectedState;
 }
 
@@ -66,8 +67,9 @@ function buildFlushSummary(params: {
   const segments: StreamedTranscriptSegmentFlushSummary[] = params.flushedSegments.map((segment) => ({
     kind: segment.kind,
     sidechainId: segment.sidechainId,
-    sawText: segment.accumulatedText.length > 0,
+    sawText: segment.accumulatedText.length > 0 || segment.sourceMessageId !== undefined,
     didDurablyFlush: didSegmentDurablyFlush(segment, params.expectedState(segment)),
+    didDeliver: didSegmentDurablyFlush(segment, params.expectedState(segment)) && segment.lastCommittedDelivered,
     lastCommittedState: segment.lastCommittedState,
   }));
 
@@ -93,6 +95,7 @@ function buildFlushSummary(params: {
 export function createStreamedTranscriptWriter(params: {
   provider: ACPProvider;
   session: StreamedTranscriptWriterSession;
+  runtimeTurnId?: string;
   makeLocalId?: () => string;
   initialCheckpointDelayMs?: number | null;
   checkpointIntervalMs?: number | null;
@@ -124,7 +127,7 @@ export function createStreamedTranscriptWriter(params: {
     return null;
   };
 
-  const commitDurableSnapshot = (segment: SegmentRuntime, opts: { state: SegmentState; interruptedReason?: string; force?: boolean }) => {
+  const commitDurableSnapshot = (segment: SegmentRuntime, opts: { state: SegmentState; interruptedReason?: string; force?: boolean; admission?: CommittedTranscriptAdmission }) => {
     if (opts.state === 'streaming' && Date.now() < segment.durableRetryNotBeforeMs) {
       scheduleDurableCheckpoint(segment);
       return;
@@ -139,6 +142,8 @@ export function createStreamedTranscriptWriter(params: {
       interruptedReason: opts.interruptedReason,
       failureRetryDelayMs: DURABLE_COMMIT_FAILURE_RETRY_DELAY_MS,
       onStreamingCommitFailure: () => scheduleDurableCheckpoint(segment),
+      admission: opts.admission,
+      runtimeTurnId: params.runtimeTurnId,
     });
   };
 
@@ -163,6 +168,7 @@ export function createStreamedTranscriptWriter(params: {
       lastCheckpointTextLen: 0,
       lastCommittedTextVersion: 0,
       lastCommittedState: null,
+      lastCommittedDelivered: false,
       lastCommitFailedAtMs: 0,
       durableCommitFailure: null,
       durableRetryNotBeforeMs: 0,
@@ -497,12 +503,12 @@ export function createStreamedTranscriptWriter(params: {
     return true;
   };
 
-  const flushAll = async (opts: {
+  const flushSegments = async (flushedSegments: SegmentRuntime[], opts: {
     reason: 'tool-call-boundary' | 'turn-end' | 'abort';
     interruptedReason?: string;
+    admission?: CommittedTranscriptAdmission;
   }): Promise<StreamedTranscriptFlushSummary> => {
     const drainPromises: Promise<void>[] = [];
-    const flushedSegments = Array.from(segments);
 
     for (const segment of flushedSegments) {
       segment.terminalIntent ??= {
@@ -520,7 +526,7 @@ export function createStreamedTranscriptWriter(params: {
           await waitForSegmentDrain(segment);
         }
         if (!didSegmentDurablyFlush(segment, state)) {
-          commitDurableSnapshot(segment, { state, interruptedReason, force: true });
+          commitDurableSnapshot(segment, { state, interruptedReason, force: true, admission: opts.admission });
           await waitForSegmentDrain(segment);
         }
         if (
@@ -576,6 +582,15 @@ export function createStreamedTranscriptWriter(params: {
     enableDurableCommits,
     discard,
     hasPendingSegments: () => segments.size > 0,
-    flushAll,
+    finalizeSegment: async (opts) => {
+      const key = buildStreamedTranscriptSegmentKey(opts.kind, opts.sidechainId);
+      const segment = Array.from(segments).find((candidate) => candidate.key === key && candidate.sourceMessageId === opts.sourceMessageId)
+        ?? getExistingSegment(opts.kind, opts.sidechainId);
+      if (!segment) return null;
+      segment.sourceMessageId = opts.sourceMessageId;
+      overrideSegmentText(opts.kind, opts.text, opts.sidechainId);
+      return await flushSegments([segment], { reason: 'turn-end', admission: opts.admission });
+    },
+    flushAll: (opts) => flushSegments(Array.from(segments), opts),
   };
 }

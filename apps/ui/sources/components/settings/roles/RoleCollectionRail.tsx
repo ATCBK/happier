@@ -13,7 +13,8 @@ import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
-import { newRoleRoute, resolveRoleCollectionSelection, roleDraftTitle, roleRoute } from './roleCollectionRoutes';
+import { newRoleRoute, resolveRoleCollectionSelection, roleRoute } from './roleCollectionRoutes';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 import { RoleCollectionRow } from './RoleCollectionRow';
 
 /** The roles migrated from 0.2 sub-agents guidance, named once under the list (lab `settings-R3`). */
@@ -54,6 +55,7 @@ export function groupRoleCatalog(entries: ReadonlyArray<RoleCatalogEntry>, query
  * top while its editor is open, and a note explains roles migrated from 0.2 sub-agents guidance.
  */
 export const RoleCollectionRail = React.memo(function RoleCollectionRail() {
+    const roleDraftTitle = useCollectionDraftTitle();
     const router = useRouter();
     const pathname = usePathname().replace(/\/+$/, '');
     const selection = resolveRoleCollectionSelection(pathname);

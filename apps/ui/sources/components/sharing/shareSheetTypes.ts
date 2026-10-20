@@ -101,6 +101,12 @@ export type ShareSheetSectionContext = Readonly<{
     idPrefix: string;
     editable: boolean;
     directoryKind?: ShareDirectoryKind;
+    /**
+     * Whether people still to add are listed: always in a compact popover, and once someone starts
+     * adding (field focused or a query typed) in an inline sheet. Adapters reveal their own candidates
+     * with them so one search adds everyone.
+     */
+    revealSuggestions?: boolean;
     onExpand(key: string): void;
 }>;
 export type ShareSheetAdapterSections = Readonly<{
@@ -122,6 +128,8 @@ export type ShareSheetAdapter<TRow extends ShareGrantRowModel = ShareGrantRowMod
     namespace: string;
     /** The list's accessible name. */
     title: string;
+    /** The add field's words when this domain adds more than people and Teams (for example agents). */
+    searchPlaceholder?: string;
     /** Only levels the domain actually accepts. The sheet never invents missing levels. */
     levels: Readonly<Partial<Record<ShareAccessLevel, ShareLevelPresentation>>>;
     /** The domain's sharing rules, one sentence each. */
@@ -147,6 +155,11 @@ export type ShareSheetAdapter<TRow extends ShareGrantRowModel = ShareGrantRowMod
     sections?: (context: ShareSheetSectionContext) => ShareSheetAdapterSections;
     /** Safety disclosure needed before adding from a pushed directory, not only the root roster. */
     showLeadingOnDirectorySteps?: boolean;
+    /**
+     * An inline sheet whose roster is the content (a Discussion's participants): its search field is
+     * the way to add, so the Browse entries wait until someone starts adding instead of trailing it.
+     */
+    browseOnlyWhileAdding?: boolean;
 }>;
 
 /**

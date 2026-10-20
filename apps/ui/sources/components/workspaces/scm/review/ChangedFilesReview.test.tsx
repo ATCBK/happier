@@ -982,6 +982,21 @@ describe('ChangedFilesReview', () => {
         expect(indexRows[0]?.props.leadingElement?.props?.testID).toBe('commit-toggle-a.ts');
     });
 
+    it('as a Details tab, still lists every changed file when the comparison is too large to open every diff', async () => {
+        diffFilesListViewSpy.mockClear();
+        await renderChangedFilesReview({
+            allRepositoryChangedFiles: [fileA, fileB],
+            detailsHeader: { isSelectedForCommit: () => false },
+            maxFiles: 1,
+        });
+        await flushReviewEffects(2);
+        const Header = diffFilesListViewSpy.mock.calls.at(-1)?.[0]?.ListHeaderComponent;
+        const headerScreen = await renderScreen(React.createElement(Header));
+        // A large change needs its file list most: the index is how a reader finds a file in it.
+        expect(headerScreen.findByTestId('scm-review-index')).not.toBeNull();
+        expect(headerScreen.findAllByType('ScmChangeRow' as any).map((row) => row.props.file.fullPath)).toEqual(['src/a.ts', 'src/b.ts']);
+    });
+
     it('keeps the compact toolbar and no file list outside Details', async () => {
         diffFilesListViewSpy.mockClear();
         const screen = await renderChangedFilesReview({ allRepositoryChangedFiles: [fileA, fileB] });

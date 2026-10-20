@@ -48,14 +48,14 @@ type IsEqual<Left, Right> = (
 ) ? true : false;
 
 type _AuthorCollectionKeysAreCurated = Assert<IsEqual<keyof CollectionProps<unknown>,
-  | 'model' | 'anatomy' | 'accessibilityLabel' | 'presentation' | 'boardLayout' | 'detail' | 'renderDetail' | 'detailHeader'
+  | 'model' | 'anatomy' | 'accessibilityLabel' | 'title' | 'presentation' | 'boardLayout' | 'detail' | 'renderDetail' | 'detailHeader'
   | 'minListWidth' | 'minDetailWidth' | 'preferredListRatio' | 'minCardWidth' | 'groupAction'
   | 'scroll' | 'virtualizer' | 'loading' | 'useRowActions' | 'selection' | 'search' | 'empty' | 'header' | 'footer'
   | 'windowStatement' | 'testID' | 'listTestID' | 'detailTestID'
   | 'sort' | 'summaryRows'
 >>;
 type _AuthorCollectionAnatomyKeysAreCurated = Assert<IsEqual<keyof CollectionAnatomy<unknown>,
-  | 'boardContent' | 'cardContent' | 'destination' | 'wrapItem' | 'glyph' | 'glyphBadge' | 'title' | 'titleSuffix' | 'where' | 'byline'
+  | 'boardContent' | 'cardContent' | 'destination' | 'wrapItem' | 'glyph' | 'glyphBadge' | 'title' | 'titleSuffix' | 'titleControls' | 'where' | 'byline'
   | 'reason' | 'signal'
   | 'agent' | 'age' | 'titleMeta'
   | 'fields' | 'peek' | 'preview' | 'description' | 'action' | 'accessibilityLabel' | 'accessibilityHint'
@@ -71,7 +71,7 @@ type _CollectionHeaderRenderReceivesItsSlots = Assert<IsEqual<
   Parameters<Extract<NonNullable<CollectionProps<unknown>['header']>, (slots: never) => unknown>>[0],
   CollectionHeaderSlots
 >>;
-type _CollectionHeaderSlotsAreCurated = Assert<IsEqual<keyof CollectionHeaderSlots, 'search' | 'selection' | 'pageActions'>>;
+type _CollectionHeaderSlotsAreCurated = Assert<IsEqual<keyof CollectionHeaderSlots, 'title' | 'search' | 'selection' | 'pageActions'>>;
 type _CollectionSortKeysAreCurated = Assert<IsEqual<keyof CollectionSort, 'key' | 'direction' | 'orders' | 'onChange'>>;
 type _CollectionNamedOrdersStayPortable = Assert<IsEqual<CollectionSort['orders'], readonly Readonly<{ key: string; label: string }>[] | undefined>>;
 type _CollectionVirtualizerIsPublic = Assert<IsEqual<CollectionProps<unknown>['virtualizer'], CollectionVirtualizer | undefined>>;
@@ -83,7 +83,7 @@ type _AuthorStepKeysAreCurated = Assert<IsEqual<keyof StepProps,
   'marker' | 'title' | 'titleKey' | 'trailing' | 'children' | 'testID'
 >>;
 type _AuthorTabsKeysAreCurated = Assert<IsEqual<keyof TabsProps,
-  'value' | 'onValueChange' | 'ariaLabel' | 'testID' | 'tabList' | 'layout' | 'sharedPanel' | 'children'
+  'value' | 'onValueChange' | 'ariaLabel' | 'testID' | 'tabList' | 'layout' | 'sharedPanel' | 'labels' | 'children'
 >>;
 type _AuthorTabsItemKeysAreCurated = Assert<IsEqual<keyof TabsItemProps,
   'value' | 'title' | 'icon' | 'badge' | 'badgeTone' | 'marker' | 'disabled' | 'retention' | 'children'
@@ -160,6 +160,7 @@ type _AuthorFormFieldKeysAreCurated = Assert<IsEqual<keyof FormProps['hints']['f
   | 'prompt'
   | 'description'
   | 'placeholder'
+  | 'defaultValue'
   | 'widget'
   | 'inputType'
   | 'contextMode'
@@ -185,6 +186,7 @@ type _AuthorItemPropKeysAreCurated = Assert<IsEqual<keyof ItemProps,
   | 'subtitle'
   | 'detail'
   | 'titleNumberOfLines'
+  | 'titleEllipsizeMode'
   | 'subtitleNumberOfLines'
   | 'detailNumberOfLines'
   | 'icon'
@@ -192,7 +194,9 @@ type _AuthorItemPropKeysAreCurated = Assert<IsEqual<keyof ItemProps,
   | 'accessoryWraps'
   | 'accessoryBelow'
   | 'fieldAccessory'
+  | 'fieldAccessorySiblingPx'
   | 'accessoryOutsidePressable'
+  | 'contentBesidePressable'
   | 'tone'
   | 'detailTone'
   | 'onPress'
@@ -259,6 +263,7 @@ type _AuthorPageHeaderPropKeysAreCurated = Assert<IsEqual<keyof PageHeaderProps,
   | 'compactPresentation'
   | 'meta'
   | 'actions'
+  | 'focusTarget'
   | 'testID'
 >>;
 

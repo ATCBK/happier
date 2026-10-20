@@ -175,7 +175,11 @@ export async function verifyRequestPrincipal(input: Readonly<{
         )
     ) return { status: "invalid" };
 
-    const eligibility = await enforceLoginEligibility({ accountId: verified.userId, env: input.env });
+    const eligibility = await enforceLoginEligibility({
+        accountId: verified.userId,
+        env: input.env,
+        verifiedCredential: disposition.credential,
+    });
     if (!eligibility.ok) return { status: "ineligible", eligibility };
 
     return {

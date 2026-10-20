@@ -17,10 +17,11 @@ import type { WorkspaceRootOwnershipHandle, WorkspaceRootOwnershipManager } from
 import { getPathRemainderWithinBase } from '@/session/handoff/paths/sessionHandoffPathNormalization';
 import { resolveWorkspaceSyncRelationshipEndpointRoles } from './workspaceSyncRelationshipEndpoints';
 import { probeScmExecutableAvailable } from '@/scm/runtime';
-import type { ManagedWorkspaceSync, ReadWorkspaceSyncFileResultV1, ReadWorkspaceSyncFileV1, WorkspaceContentPolicyV1, WorkspaceSyncConflictPageRequestV1, WorkspaceSyncConflictPageV1, WorkspaceSyncCopyOnceV1, WorkspaceSyncRelationshipPreparation, WorkspaceSyncRelationshipV1, WorkspaceSyncSourceRootLoan, WorkspaceSyncStatusV1 } from './workspaceSyncTypes';
+import type { ManagedWorkspaceSync, ReadWorkspaceSyncFileResultV1, ReadWorkspaceSyncFileV1, WorkspaceContentPolicyV1, WorkspaceSyncConflictPageRequestV1, WorkspaceSyncConflictPageV1, WorkspaceSyncCopyOnceV1, WorkspaceSyncFlushExpectation, WorkspaceSyncRelationshipPreparation, WorkspaceSyncRelationshipV1, WorkspaceSyncSourceRootLoan, WorkspaceSyncStatusV1 } from './workspaceSyncTypes';
 import { observeWorkspaceSyncEntryAtRoot, readWorkspaceSyncFileAtRoot } from './workspaceSyncFileRead';
 import { assertWorkspaceSyncStatusClean, isWorkspaceSyncStatusClean } from './workspaceSyncPreparation';
 import type { LiveWorkProducerV1, LiveWorkInventoryV1, LiveWorkItemV1 } from '@/daemon/lifecycle/managedActivity';
+import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 
 export type WorkspaceSyncResolvedRef = Readonly<{
   serverId?: string;
@@ -345,7 +346,7 @@ export class WorkspaceSyncController implements ManagedWorkspaceSync {
   private readonly discardStagedConflictResolutionAtTarget?: WorkspaceSyncControllerOptions['discardStagedConflictResolutionAtTarget'];
   private readonly releaseConflictResolutionCaptureAtSource?: WorkspaceSyncControllerOptions['releaseConflictResolutionCaptureAtSource'];
   private readonly recoverConflictResolutionAtTarget?: WorkspaceSyncControllerOptions['recoverConflictResolutionAtTarget'];
-  private readonly resolveAllDefinitions: () => readonly WorkspaceSyncRelationshipV1[] | null | Promise<readonly WorkspaceSyncRelationshipV1[] | null>;
+  private readonly resolveAllDefinitions: WorkspaceSyncControllerOptions['resolveAllRelationshipDefinitions'];
   private readonly assertConflictResolutionAuthorized?: WorkspaceSyncConflictResolutionAuthorizationAssert;
   private readonly probeGit: NonNullable<WorkspaceSyncControllerOptions['probeGitRuntimeDependency']>;
   private readonly assertStateAvailable: () => void;
@@ -387,7 +388,7 @@ export class WorkspaceSyncController implements ManagedWorkspaceSync {
   readonly activity: LiveWorkProducerV1 = Object.freeze({
     read: async (): Promise<Omit<LiveWorkInventoryV1, 'idleSince'>> => {
       this.assertStateAvailable();
-      const saved = await this.resolveAllDefinitions();
+      const saved = await this.resolveAllDefinitions?.() ?? null;
       const ids = new Set([
         ...this.definitions.keys(), ...this.copyOperations.keys(), ...this.activeIngress.keys(),
         ...this.sourceSeedAuthorizations.keys(), ...this.copyTargetReleases.keys(), ...this.copySourceReleases.keys(),
@@ -424,7 +425,7 @@ export class WorkspaceSyncController implements ManagedWorkspaceSync {
     }
   }
 
-  constructor(options: WorkspaceSyncControllerOptions) { assertCompleteAdapter(options.adapter); this.adapter = options.adapter; this.lifecycle = options.lifecycle; this.localServerId = options.localServerId?.trim() || null; this.localMachineId = options.localMachineId; this.resolveRef = options.resolveWorkspaceRef; this.rootOwnershipManager = options.rootOwnershipManager; this.resolveDefinition = options.resolveRelationshipDefinition ?? (() => null); this.prepareTarget = options.prepareRelationshipTarget ?? (async () => undefined); this.recoverCopyTarget = options.recoverCopyOnceTarget; this.borrowLinkedSourceRoot = options.borrowLinkedSourceRoot; this.openMachineCarrier = options.openMachineCarrierTunnel; this.openLocalAgent = options.openLocalWorkspaceAgentStream; this.readAtTarget = options.readFileAtTarget; this.observeEntryAtTarget = options.observeEntryAtTarget; this.stageConflictResolutionAtTarget = options.stageConflictResolutionAtTarget; this.applyStagedConflictResolutionAtTarget = options.applyStagedConflictResolutionAtTarget; this.discardStagedConflictResolutionAtTarget = options.discardStagedConflictResolutionAtTarget; this.releaseConflictResolutionCaptureAtSource = options.releaseConflictResolutionCaptureAtSource; this.recoverConflictResolutionAtTarget = options.recoverConflictResolutionAtTarget; this.resolveAllDefinitions = options.resolveAllRelationshipDefinitions ?? (async () => null); this.assertConflictResolutionAuthorized = options.assertConflictResolutionAuthorized; this.probeGit = options.probeGitRuntimeDependency ?? (async (signal) => await probeScmExecutableAvailable({ bin: 'git', ...(signal ? { signal } : {}) })); this.assertStateAvailable = options.assertLegacyStateAvailable ?? (() => undefined); this.observePersistentStatus = options.onStatusPublished !== undefined; this.onStatusPublished = options.onStatusPublished ?? (() => undefined); }
+  constructor(options: WorkspaceSyncControllerOptions) { assertCompleteAdapter(options.adapter); this.adapter = options.adapter; this.lifecycle = options.lifecycle; this.localServerId = options.localServerId?.trim() || null; this.localMachineId = options.localMachineId; this.resolveRef = options.resolveWorkspaceRef; this.rootOwnershipManager = options.rootOwnershipManager; this.resolveDefinition = options.resolveRelationshipDefinition ?? (() => null); this.prepareTarget = options.prepareRelationshipTarget ?? (async () => undefined); this.recoverCopyTarget = options.recoverCopyOnceTarget; this.borrowLinkedSourceRoot = options.borrowLinkedSourceRoot; this.openMachineCarrier = options.openMachineCarrierTunnel; this.openLocalAgent = options.openLocalWorkspaceAgentStream; this.readAtTarget = options.readFileAtTarget; this.observeEntryAtTarget = options.observeEntryAtTarget; this.stageConflictResolutionAtTarget = options.stageConflictResolutionAtTarget; this.applyStagedConflictResolutionAtTarget = options.applyStagedConflictResolutionAtTarget; this.discardStagedConflictResolutionAtTarget = options.discardStagedConflictResolutionAtTarget; this.releaseConflictResolutionCaptureAtSource = options.releaseConflictResolutionCaptureAtSource; this.recoverConflictResolutionAtTarget = options.recoverConflictResolutionAtTarget; this.resolveAllDefinitions = options.resolveAllRelationshipDefinitions; this.assertConflictResolutionAuthorized = options.assertConflictResolutionAuthorized; this.probeGit = options.probeGitRuntimeDependency ?? (async (signal) => await probeScmExecutableAvailable({ bin: 'git', ...(signal ? { signal } : {}) })); this.assertStateAvailable = options.assertLegacyStateAvailable ?? (() => undefined); this.observePersistentStatus = options.onStatusPublished !== undefined; this.onStatusPublished = options.onStatusPublished ?? (() => undefined); }
 
   private assertLocalSourcePlacement(ref: WorkspaceSyncResolvedRef | null): asserts ref is WorkspaceSyncResolvedRef {
     const serverMatches = this.localServerId === null || ref?.serverId?.trim() === this.localServerId;
@@ -525,23 +526,25 @@ export class WorkspaceSyncController implements ManagedWorkspaceSync {
   }
 
   private enqueue<T>(id: string, signal: AbortSignal | undefined, action: () => Promise<T>, material = true): Promise<T> {
-    abortIfRequested(signal);
-    const prior = this.queues.get(id);
-    const run = (): Promise<T> => { abortIfRequested(signal); return action(); };
-    const next = prior ? prior.task.catch(() => {}).then(() => {
-      queued.material = material;
+    return timeWebLatencyPhase('workspaceSync.controller.enqueue', () => {
+      abortIfRequested(signal);
+      const prior = this.queues.get(id);
+      const run = (): Promise<T> => { abortIfRequested(signal); return action(); };
+      const next = prior ? prior.task.catch(() => {}).then(() => {
+        queued.material = material;
+        this.notifyActivity();
+        return run();
+      }) : run();
+      const queued = { task: next, material: material || prior?.material === true };
+      this.queues.set(id, queued);
       this.notifyActivity();
-      return run();
-    }) : run();
-    const queued = { task: next, material: material || prior?.material === true };
-    this.queues.set(id, queued);
-    this.notifyActivity();
-    const settled = (): void => {
-      if (this.queues.get(id) === queued) this.queues.delete(id);
-      this.notifyActivity();
-    };
-    void next.then(settled, settled);
-    return next;
+      const settled = (): void => {
+        if (this.queues.get(id) === queued) this.queues.delete(id);
+        this.notifyActivity();
+      };
+      void next.then(settled, settled);
+      return next;
+    });
   }
   private enqueueAll<T>(ids: readonly string[], action: () => Promise<T>): Promise<T> {
     const ordered = [...new Set(ids)].sort();
@@ -565,8 +568,15 @@ export class WorkspaceSyncController implements ManagedWorkspaceSync {
     }] : []);
     return deriveWorkspaceSyncTopology({ workspaceRefs, relationships, serverId: this.localServerId ?? undefined });
   }
+  private async readDefinitionsForOperation(): Promise<readonly WorkspaceSyncRelationshipV1[] | undefined> {
+    const saved = await this.resolveAllDefinitions?.();
+    // Standalone controllers may have only local definitions. An installed
+    // Project source returning null must never become an empty graph instead.
+    if (saved === null) throw Object.assign(new Error('Project rows are unavailable'), { code: 'project_account_rows_unavailable' });
+    return saved;
+  }
   private async assertRuntimeTopologyAdmission(definition: WorkspaceSyncRelationshipV1): Promise<void> {
-    const savedDefinitions = await this.resolveAllDefinitions();
+    const savedDefinitions = await this.readDefinitionsForOperation();
     const definitions = new Map((savedDefinitions ?? []).map((candidate) => [candidate.relationshipId, candidate] as const));
     for (const [id, active] of this.definitions) definitions.set(id, active);
     definitions.set(definition.relationshipId, definition);
@@ -670,7 +680,13 @@ export class WorkspaceSyncController implements ManagedWorkspaceSync {
     const handles: WorkspaceRootOwnershipHandle[] = [];
     try {
       for (const { role, canonicalRoot } of candidates) {
-        const result = await this.rootOwnershipManager.tryAcquire({ ownerId: definition.relationshipId, canonicalRoot, operation: 'sync' });
+        const result = await this.rootOwnershipManager.tryAcquire({
+          ownerId: definition.relationshipId, canonicalRoot, operation: 'sync',
+          // Disabled intent is fenced only while discovering/pausing retained
+          // sessions. A staged target may not exist until the owning transaction
+          // bootstraps it; this reservation neither opens it nor admits I/O.
+          ...(!definition.enabled ? { deferRootIdentityBinding: true as const } : {}),
+        });
         if ('kind' in result) throw Object.assign(new Error('Workspace root is already in use'), { code: 'workspace_root_in_use', existing: result.existing, role });
         handles.push(result);
       }
@@ -1081,6 +1097,7 @@ export class WorkspaceSyncController implements ManagedWorkspaceSync {
     valid: WorkspaceSyncRelationshipV1,
     signal?: AbortSignal,
     preparation?: WorkspaceSyncRelationshipPreparation,
+    assertExpectedCurrent?: () => Promise<void>,
   ): Promise<WorkspaceSyncStatusV1> {
     if (valid.controllerMachineId !== this.localMachineId) {
       throw Object.assign(new Error('Workspace sync controller machine is unavailable'), { code: 'controller_unavailable' });
@@ -1096,14 +1113,17 @@ export class WorkspaceSyncController implements ManagedWorkspaceSync {
     let acquiredHandles: WorkspaceRootOwnershipHandle[] | undefined;
     let sourceHandles: WorkspaceRootOwnershipHandle[] = [];
     try {
+      if (assertExpectedCurrent) await assertExpectedCurrent();
       if (needsOwnership) {
         sourceHandles = await this.acquireSourceRoots(valid);
       }
+      if (assertExpectedCurrent) await assertExpectedCurrent();
       const targetPreparation = await this.withSourceSeedAuthorization(valid, sourceHandles, async () => (
         await this.prepareTarget(valid, signal, preparation)
       ));
       const carriedHandles = [...sourceHandles, ...(targetPreparation?.ownershipHandles ?? [])];
       if (needsOwnership) {
+        if (assertExpectedCurrent) await assertExpectedCurrent();
         acquiredHandles = await this.acquireRoots(valid, carriedHandles);
         this.fences.set(valid.relationshipId, {
           handles: [...carriedHandles, ...acquiredHandles],
@@ -1113,8 +1133,10 @@ export class WorkspaceSyncController implements ManagedWorkspaceSync {
       if (!previous) this.definitions.set(valid.relationshipId, valid);
       await this.assertRelationshipOwnershipCurrent(valid.relationshipId);
       await this.recoverConflictResolutionForRelationship(valid, signal);
+      if (assertExpectedCurrent) await assertExpectedCurrent();
       await this.lifecycle.start();
       const runtimeDefinition = !valid.enabled && preparation?.transient ? { ...valid, enabled: true } : valid;
+      if (assertExpectedCurrent) await assertExpectedCurrent();
       const status = await this.adapter.ensure(runtimeDefinition, signal);
       // A cold staged row may already occupy definitions. After successful
       // transient engine admission, retain its live definition, not that
@@ -1139,22 +1161,24 @@ export class WorkspaceSyncController implements ManagedWorkspaceSync {
     definition: WorkspaceSyncRelationshipV1,
     signal?: AbortSignal,
   ): Promise<void> {
-    if (!this.recoverConflictResolutionAtTarget) return;
-    for (const workspaceRefId of [definition.alphaWorkspaceRefId, definition.betaWorkspaceRefId]) {
-      const ref = await this.resolveRef(workspaceRefId);
-      if (!ref) throw Object.assign(new Error('Workspace conflict recovery endpoint is unavailable'), { code: 'peer_unavailable' });
-      const result = await this.recoverConflictResolutionAtTarget({
-        relationshipId: definition.relationshipId,
-        targetMachineId: ref.machineId,
-        targetWorkspaceRefId: workspaceRefId,
-        ...(signal ? { signal } : {}),
-      });
-      if (result.status === 'recovery_needed') {
-        throw Object.assign(new Error('Workspace conflict recovery must settle before synchronization resumes'), {
-          code: 'workspace_sync_recovery_needed', recoveryPath: result.recoveryPath,
+    return await timeWebLatencyPhase('workspaceSync.controller.recovery', async () => {
+      if (!this.recoverConflictResolutionAtTarget) return;
+      for (const workspaceRefId of [definition.alphaWorkspaceRefId, definition.betaWorkspaceRefId]) {
+        const ref = await this.resolveRef(workspaceRefId);
+        if (!ref) throw Object.assign(new Error('Workspace conflict recovery endpoint is unavailable'), { code: 'peer_unavailable' });
+        const result = await this.recoverConflictResolutionAtTarget({
+          relationshipId: definition.relationshipId,
+          targetMachineId: ref.machineId,
+          targetWorkspaceRefId: workspaceRefId,
+          ...(signal ? { signal } : {}),
         });
+        if (result.status === 'recovery_needed') {
+          throw Object.assign(new Error('Workspace conflict recovery must settle before synchronization resumes'), {
+            code: 'workspace_sync_recovery_needed', recoveryPath: result.recoveryPath,
+          });
+        }
       }
-    }
+    });
   }
   async get(id: string, signal?: AbortSignal): Promise<WorkspaceSyncStatusV1 | null> { this.assertStateAvailable(); abortIfRequested(signal); await this.lifecycle.start(); return await this.adapter.get(id, signal); }
   async list(signal?: AbortSignal): Promise<readonly WorkspaceSyncStatusV1[]> { this.assertStateAvailable(); abortIfRequested(signal); await this.lifecycle.start(); return await this.adapter.list(signal); }
@@ -1243,20 +1267,43 @@ export class WorkspaceSyncController implements ManagedWorkspaceSync {
       }
     });
   }
-  async flush(id: string, signal?: AbortSignal): Promise<WorkspaceSyncStatusV1> { return this.enqueue(id, signal, async () => {
+  private async assertFlushExpectationCurrent(id: string, expected: WorkspaceSyncFlushExpectation): Promise<void> {
+    const definition = this.definitions.get(id) ?? await this.resolveDefinition(id);
+    if (!definition || !definition.enabled || expected.relationship.relationshipId !== id
+      || !areWorkspaceSyncRelationshipDefinitionsEqual(definition, expected.relationship)) {
+      throw Object.assign(new Error('Workspace sync relationship changed before preparation'), { code: 'relationship_changed' });
+    }
+    for (const refId of [definition.alphaWorkspaceRefId, definition.betaWorkspaceRefId]) {
+      const matches = expected.workspaceRefs.filter(ref => ref.id === refId);
+      const actual = await this.resolveRef(refId);
+      const selected = matches.length === 1 ? matches[0] : undefined;
+      if (!selected || !actual || (actual.serverId ?? this.localServerId) !== selected.serverId
+        || actual.machineId !== selected.machineId || actual.rootPath !== selected.rootPath) {
+        throw Object.assign(new Error('Workspace sync endpoint changed before preparation'), { code: 'relationship_changed' });
+      }
+    }
+    await expected.assertCurrent();
+  }
+  async flush(id: string, signal?: AbortSignal, expected?: WorkspaceSyncFlushExpectation): Promise<WorkspaceSyncStatusV1> { return this.enqueue(id, signal, () => timeWebLatencyPhase('workspaceSync.controller.flush', async () => {
     this.assertStateAvailable();
+    const assertExpectedCurrent = expected ? async () => {
+      abortIfRequested(signal);
+      await this.assertFlushExpectationCurrent(id, expected);
+    } : undefined;
+    if (assertExpectedCurrent) await assertExpectedCurrent();
     if (this.ownershipLost.has(id)) throw Object.assign(new Error('Workspace root ownership was lost'), { code: 'workspace_root_ownership_lost' });
     if (!this.definitions.has(id)) {
       const definition = await this.resolveDefinition(id);
       if (!definition) throw Object.assign(new Error('Workspace sync relationship is not ready'), { code: 'relationship_not_ready' });
-      await this.ensureWithinQueue(validateWorkspaceSyncRelationship(definition), signal);
+      await this.ensureWithinQueue(validateWorkspaceSyncRelationship(definition), signal, undefined, assertExpectedCurrent);
     }
     const definition = this.definitions.get(id);
     if (definition) await this.recoverConflictResolutionForRelationship(definition, signal);
     await this.lifecycle.start();
     await this.assertRelationshipOwnershipCurrent(id);
+    if (assertExpectedCurrent) await assertExpectedCurrent();
     return this.publish(await this.adapter.flush(id, signal));
-  }); }
+  })); }
   async pause(id: string, signal?: AbortSignal): Promise<WorkspaceSyncStatusV1> { return this.enqueue(id, signal, async () => { this.assertStateAvailable(); await this.lifecycle.start(); return this.publish(await this.adapter.pause(id, signal)); }); }
   async resume(id: string, signal?: AbortSignal): Promise<WorkspaceSyncStatusV1> { return this.enqueue(id, signal, async () => {
     this.assertStateAvailable();
@@ -1314,7 +1361,7 @@ export class WorkspaceSyncController implements ManagedWorkspaceSync {
         definition,
         status: statusById.get(definition.relationshipId) ?? null,
       }));
-    const all = await this.resolveAllDefinitions();
+    const all = await this.resolveAllDefinitions?.() ?? null;
     const remoteRelationships = valid.workspaceRefId === undefined || all === null
       ? []
       : all
@@ -1617,7 +1664,7 @@ export class WorkspaceSyncController implements ManagedWorkspaceSync {
       throw Object.assign(new Error('Reviewed workspace conflict transfer is unavailable'), { code: 'agent_unavailable' });
     }
     const currentSet = async () => {
-      const saved = await this.resolveAllDefinitions();
+      const saved = await this.readDefinitionsForOperation();
       const definitions = new Map((saved ?? []).map((candidate) => [candidate.relationshipId, candidate] as const));
       for (const [id, definition] of this.definitions) definitions.set(id, definition);
       const topology = await this.deriveRuntimeTopology([...definitions.values()].filter((candidate) => candidate.enabled));
@@ -2460,46 +2507,49 @@ export class WorkspaceSyncController implements ManagedWorkspaceSync {
   async rehydrateFromSettings(value: unknown): Promise<readonly WorkspaceSyncStatusV1[]> {
     this.assertStateAvailable();
     const savedRelationships = validateWorkspaceSyncRelationships(value);
-    const relationshipsById = new Map(savedRelationships.map((relationship) => [relationship.relationshipId, relationship] as const));
-    for (const id of this.transientDefinitions) {
-      const live = this.definitions.get(id);
-      if (!live) continue;
-      const saved = relationshipsById.get(id);
-      if (saved && !areWorkspaceSyncRelationshipDefinitionsEqual(saved, live)) {
-        throw Object.assign(new Error('Prepared workspace relationship conflicts with saved settings'), {
-          code: 'relationship_definition_conflict',
-        });
-      }
-      // The staged disabled row is restart intent. While the owning transaction
-      // is live, its already-admitted runtime definition remains authoritative;
-      // a cold controller has no transient marker and therefore keeps it paused.
-      relationshipsById.set(id, live);
-    }
-    const savedTopology = await this.deriveRuntimeTopology([...relationshipsById.values()]);
-    const invalidRelationshipIds = new Set(savedTopology.issues.flatMap((issue) => issue.relationshipIds));
-    const relationships = [...relationshipsById.values()].filter((relationship) => (
-      relationship.controllerMachineId === this.localMachineId
-      && !invalidRelationshipIds.has(relationship.relationshipId)
-    ));
-    const disabledRelationships = relationships.filter((relationship) => !relationship.enabled);
-    const enabledRelationships = relationships.filter((relationship) => relationship.enabled);
-    const gitRelationships = enabledRelationships.filter(({ contentPolicy }) => contentPolicy.selection === 'git_worktree');
-    const gitUnavailable = gitRelationships.length > 0 && !(await this.probeGit());
-    const rejectUnavailableGit = gitUnavailable
-      && gitRelationships.length === enabledRelationships.length
-      && disabledRelationships.length === 0;
-    const activeRelationships = gitUnavailable
-      ? enabledRelationships.filter(({ contentPolicy }) => contentPolicy.selection !== 'git_worktree')
-      : enabledRelationships;
     return await this.enqueueAll([
-      ...relationships.map(({ relationshipId }) => relationshipId),
-      ...relationships.flatMap((relationship) => [
+      ...savedRelationships.map(({ relationshipId }) => relationshipId),
+      ...[...savedRelationships, ...this.definitions.values()].flatMap((relationship) => [
         `workspace-ref:${relationship.alphaWorkspaceRefId}`,
         `workspace-ref:${relationship.betaWorkspaceRefId}`,
       ]),
       ...this.definitions.keys(),
       ...this.copyOperations.keys(),
     ], async () => {
+      // A refresh can arrive while ensure is still admitting a transient copy.
+      // Resolve live preparation only after that operation releases this queue;
+      // an earlier disabled projection must not release its newly retained roots.
+      const relationshipsById = new Map(savedRelationships.map((relationship) => [relationship.relationshipId, relationship] as const));
+      for (const id of this.transientDefinitions) {
+        const live = this.definitions.get(id);
+        if (!live) continue;
+        const saved = relationshipsById.get(id);
+        if (saved && !areWorkspaceSyncRelationshipDefinitionsEqual(saved, live)) {
+          throw Object.assign(new Error('Prepared workspace relationship conflicts with saved settings'), {
+            code: 'relationship_definition_conflict',
+          });
+        }
+        // The staged disabled row is restart intent. While the owning transaction
+        // is live, its already-admitted runtime definition remains authoritative;
+        // a cold controller has no transient marker and therefore keeps it paused.
+        relationshipsById.set(id, live);
+      }
+      const savedTopology = await this.deriveRuntimeTopology([...relationshipsById.values()]);
+      const invalidRelationshipIds = new Set(savedTopology.issues.flatMap((issue) => issue.relationshipIds));
+      const relationships = [...relationshipsById.values()].filter((relationship) => (
+        relationship.controllerMachineId === this.localMachineId
+        && !invalidRelationshipIds.has(relationship.relationshipId)
+      ));
+      const disabledRelationships = relationships.filter((relationship) => !relationship.enabled);
+      const enabledRelationships = relationships.filter((relationship) => relationship.enabled);
+      const gitRelationships = enabledRelationships.filter(({ contentPolicy }) => contentPolicy.selection === 'git_worktree');
+      const gitUnavailable = gitRelationships.length > 0 && !(await this.probeGit());
+      const rejectUnavailableGit = gitUnavailable
+        && gitRelationships.length === enabledRelationships.length
+        && disabledRelationships.length === 0;
+      const activeRelationships = gitUnavailable
+        ? enabledRelationships.filter(({ contentPolicy }) => contentPolicy.selection !== 'git_worktree')
+        : enabledRelationships;
       // Disabled records remain settings intent. Their local roots are fenced
       // before runtime discovery so an existing sidecar cannot race its
       // terminal transition. They never bootstrap a target or create a new

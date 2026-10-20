@@ -1,16 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AccountSettingsV2UpdateRequestSchema, ApprovalRequestSchema, BUILT_IN_ROLES_V1 } from '@happier-dev/protocol';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { PROJECT_TRUST_ROUTE_V1, ProjectTrustMutationRequestV1Schema, ProjectTrustReadResponseV1Schema } from '@happier-dev/protocol/workspaces/projectSetup/projectTrustRowV1';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { renderHook } from '@/dev/testkit';
-import { t } from '@/text';
+import { t, setPreferredLanguageFromSettings, preloadTranslations } from '@/text';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+await loadSyncSingletonForTests();
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
 const { Modal } = await import('@/modal');
 
@@ -19,7 +22,100 @@ describe('present-user UI approval origin at the Action host', () => {
         await harness.reset();
         vi.mocked(Modal.confirm).mockClear().mockResolvedValue(false);
     });
-    afterEach(() => standardCleanup());
+    afterEach(() => { setPreferredLanguageFromSettings('en'); standardCleanup(); });
+
+    it('opens a generic confirmation with no repeated title body and declines without deleting', async () => {
+        const serverId = await harness.addHome({ name: 'Drafts', serverUrl: 'https://draft-confirmation.test', accountId: 'alice' });
+        const result = await createDefaultActionExecutor().execute('session.draft.delete', { draftId: '4135b238-607a-458d-b96c-7877d8076877' },
+            { surface: 'ui', authority: 'present_user', serverId });
+        expect(result).toMatchObject({ ok: false, errorCode: 'approval_canceled' });
+        expect(Modal.confirm).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(Modal.confirm).mock.calls[0]?.[0]).toBeTruthy();
+        expect(vi.mocked(Modal.confirm).mock.calls[0]?.[1]).toBe('');
+        // The confirm button names the Action itself, never a bare OK.
+        expect(vi.mocked(Modal.confirm).mock.calls[0]?.[2]).toEqual({ confirmText: getActionSpec('session.draft.delete').title });
+        expect(harness.artifacts(serverId).list()).toEqual([]);
+    });
+
+    it('localizes a Reset confirmation using the captured Role source without applying a declined reset', async () => {
+        const serverId = await harness.addHome({ name: 'Roles', serverUrl: 'https://role-confirmation.test', accountId: 'alice' });
+        const executor = createDefaultActionExecutor();
+        const roleId = '6780a145-8590-47fa-b294-c5a90aef4041';
+        const created = await executor.execute('roles.create', {
+            roleId, role: { ...BUILT_IN_ROLES_V1.reviewer, name: 'Payments reviewer' },
+        }, { surface: 'ui', serverId });
+        expect(created.ok).toBe(true);
+        await preloadTranslations('fr');
+        setPreferredLanguageFromSettings('fr');
+        const before = harness.requests.length;
+        const result = await executor.execute('roles.override.reset', { roleId }, { surface: 'ui', serverId });
+        expect(result).toMatchObject({ ok: false, errorCode: 'approval_canceled' });
+        const [title, summary] = vi.mocked(Modal.confirm).mock.calls.at(-1)!;
+        for (const copy of [title, summary]) {
+            expect(copy).toContain('Payments reviewer');
+            expect(copy).toContain(t('roles.settings.sourceYours'));
+        }
+        expect(harness.requests.slice(before).filter(({ path, input }) => input && path.includes('/entity-rows/'))).toEqual([]);
+    });
+
+    it.each(['recoverable', 'persistent', 'claimed'] as const)('reconciles a failed approval claim through the real UI decision owner (%s)', async failure => {
+        const serverId = await harness.addHome({ name: 'Approval recovery', serverUrl: 'https://claim-recovery.test', accountId: 'alice' });
+        await harness.requireUiApproval(serverId, 'roles.create');
+        const proposed = await createDefaultActionExecutor().execute('roles.create', {
+            roleId: 'recovered-role', role: BUILT_IN_ROLES_V1.builder,
+        }, { surface: 'ui', serverId });
+        expect(proposed).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+        const store = harness.artifacts(serverId);
+        const artifact = store.list()[0];
+        if (!artifact) throw new Error('Expected the deferred approval');
+        const request = ApprovalRequestSchema.parse(JSON.parse(store.readPlainBody(artifact.id) ?? 'null'));
+        const path = `/v1/artifacts/${artifact.id}`;
+        let failedClaims = 0;
+        let claimUnavailable = true;
+        harness.answer(serverId, `GET ${path}`, { select: async (_input, incoming) => {
+            // Recover only after the failed write's real HTTP retry owner has
+            // finished and the approval owner reads its durable claim receipt.
+            if (failedClaims > 0 && failure === 'recoverable') claimUnavailable = false;
+            const response = await store.handle(path, incoming.init);
+            if (!response) throw new Error('Expected Artifact read boundary');
+            return { status: response.status, body: await response.json() };
+        } });
+        harness.answer(serverId, `POST ${path}`, { select: async (input, incoming) => {
+            const encoded = input && typeof input === 'object' && 'body' in input && typeof input.body === 'string'
+                ? decodePlainArtifactStoredContent(input.body) : null;
+            const body = encoded && typeof encoded === 'object' && 'body' in encoded && typeof encoded.body === 'string'
+                ? encoded.body : null;
+            const proposal = body ? ApprovalRequestSchema.safeParse(JSON.parse(body)) : null;
+            if (proposal?.success && proposal.data.status === 'executing' && claimUnavailable
+                && (failure !== 'claimed' || failedClaims === 0)) {
+                failedClaims += 1;
+                // Genuine Home HTTP boundary: one case loses an acknowledged
+                // claim after commit; the others refuse before its CAS.
+                if (failure === 'claimed') await store.handle(path, incoming.init);
+                return { status: 500, body: { error: 'Failed to update artifact' } };
+            }
+            const response = await store.handle(path, incoming.init);
+            if (!response) throw new Error('Expected Artifact update boundary');
+            return { status: response.status, body: await response.json() };
+        } });
+        const { useApprovalDecisionHandler } = await import('@/components/tools/shell/approvals/useApprovalDecisionHandler');
+        const hook = await renderHook(() => useApprovalDecisionHandler({ id: artifact.id, header: null }, request, '', serverId));
+        if (failure === 'recoverable') {
+            await expect(hook.getCurrent()('approve')).resolves.toBe(true);
+            expect(JSON.parse(store.readPlainBody(artifact.id) ?? 'null')).toMatchObject({ status: 'executed', execution: { ok: true } });
+            const role = store.read('recovered-role');
+            expect(JSON.parse(store.readPlainBody('recovered-role') ?? 'null')).toMatchObject({ name: BUILT_IN_ROLES_V1.builder.name });
+            await hook.getCurrent()('approve');
+            expect(store.read('recovered-role')).toEqual(role);
+        } else {
+            await expect(hook.getCurrent()('approve')).rejects.toMatchObject({
+                code: failure === 'claimed' ? 'approval_execution_outcome_unknown' : 'approval_context_unavailable',
+            });
+            expect(JSON.parse(store.readPlainBody(artifact.id) ?? 'null')).toMatchObject({ status: failure === 'claimed' ? 'executing' : 'approved' });
+            expect(store.read('recovered-role')).toBeNull();
+        }
+        expect(failedClaims).toBeGreaterThan(0);
+    });
 
     it.each([
         ['localServices.actions.stopManaged', 'stop_managed'],
@@ -59,6 +155,21 @@ describe('present-user UI approval origin at the Action host', () => {
         expect(harness.artifacts(serverId).list()).toEqual([]);
     });
 
+    it('returns cancellation without effects when its invocation aborts during default UI confirmation', async () => {
+        const serverId = await harness.addHome({ name: 'Canceled Home', serverUrl: 'https://canceled-origin.test', accountId: 'alice' });
+        const controller = new AbortController();
+        vi.mocked(Modal.confirm).mockImplementation(async () => {
+            controller.abort();
+            return true;
+        });
+        await expect(createDefaultActionExecutor().execute('projects.trust.revoke', {
+            project: { serverId, projectId: 'project-a' }, expectedRevision: 1, expectedEffectDigest: 'effect-a',
+        }, { surface: 'ui', serverId, signal: controller.signal })).resolves.toMatchObject({ ok: false, errorCode: 'cancelled' });
+        expect(Modal.confirm).toHaveBeenCalledTimes(1);
+        expect(harness.requests.filter(({ path }) => path.includes('/project-trust/'))).toEqual([]);
+        expect(harness.artifacts(serverId).list()).toEqual([]);
+    });
+
     it.each([
         { actionId: 'roles.create', credential: 'account' },
         { actionId: 'artifact.access.grants.set', credential: 'account' },
@@ -83,6 +194,7 @@ describe('present-user UI approval origin at the Action host', () => {
             harness.answer(serverId, '/v2/account/settings', settingsAnswer);
             const executor = createDefaultActionExecutor();
             if (actionId === 'artifact.access.grants.set') {
+                vi.mocked(Modal.confirm).mockResolvedValueOnce(true);
                 const seeded = await executor.execute('roles.create', { roleId: 'shared-role', role: BUILT_IN_ROLES_V1.builder }, { serverId });
                 expect(seeded, JSON.stringify(seeded))
                     .toMatchObject({ ok: true, result: { roleId: 'shared-role' } });
@@ -93,20 +205,18 @@ describe('present-user UI approval origin at the Action host', () => {
                         createdByAccountId: 'alice', createdAt: 1, display: { name: 'Bob' } }],
                 } });
             }
+            if (credential === 'terminal') {
+                // A structural bearer at the credential-store boundary; the real
+                // provenance decoder and authority owner remain under test.
+                await harness.switchAccount(serverId, 'alice', { token: `e30.${btoa(JSON.stringify({ sub: 'alice', session: 'terminal-test', provenance: {
+                    v: 2, kind: 'terminal', authority: 'account_automation',
+                    evidence: [{ kind: 'home_method', methodId: 'key_challenge' }],
+                } }))}.signature` });
+            }
             await harness.requireUiApproval(serverId, actionId);
             raw = { ...raw, actionsSettingsV1: { v: 1, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } } };
             version += 1;
             harness.answer(serverId, '/v2/account/settings', settingsAnswer);
-            if (credential === 'terminal') {
-                const home = harness.findByServerUrl('https://ui-origin.test');
-                if (!home) throw new Error('Home missing');
-                // A structural bearer at the credential-store boundary; the real
-                // provenance decoder and authority owner remain under test.
-                home.token = `e30.${btoa(JSON.stringify({ sub: 'alice', session: 'terminal-test', provenance: {
-                    v: 2, kind: 'terminal', authority: 'account_automation',
-                    evidence: [{ kind: 'home_method', methodId: 'key_challenge' }],
-                } }))}.signature`;
-            }
             const input = actionId === 'roles.create'
                 ? { roleId: 'new-role', role: BUILT_IN_ROLES_V1.builder }
                 : { artifactId: 'shared-role', principal: { kind: 'account', accountId: 'bob' }, accessLevel: 'view' };
@@ -131,13 +241,13 @@ describe('present-user UI approval origin at the Action host', () => {
                     } });
                     if (request.v !== 2) throw new Error('Expected durable approval provenance');
                     expect(request.executionOriginV1.requestId).not.toBe('');
-                    const { getApprovalDecisionErrorMessage, useApprovalDecisionHandler } = await import('@/components/tools/shell/approvals/useApprovalDecisionHandler');
+                    const { presentApprovalFailure, useApprovalDecisionHandler } = await import('@/components/tools/shell/approvals/useApprovalDecisionHandler');
                     const hook = await renderHook(() => useApprovalDecisionHandler({ id: created.id, header: null }, request, '', serverId));
                     const decision = hook.getCurrent()('approve');
                     await expect(decision).rejects.toMatchObject({ code: 'present_user_required' });
                     const failure: unknown = await decision.catch((error: unknown) => error);
-                    expect(getApprovalDecisionErrorMessage(failure)).toBe(t('approvals.decisionAuthorityError'));
-                    expect(getApprovalDecisionErrorMessage(failure)).not.toBe(t('approvals.decisionError'));
+                    expect(presentApprovalFailure(failure).reason).toBe(t('approvals.decisionAuthorityError'));
+                    expect(presentApprovalFailure(failure).reason).not.toBe(t('approvals.decisionError'));
                     expect(JSON.parse(harness.artifacts(serverId).readPlainBody(created.id) ?? 'null')).toMatchObject({ status: 'open' });
                     expect(harness.artifacts(serverId).readPlainBody('new-role')).toBeNull();
                     expect(harness.requests.some(({ path }) => path.endsWith('/access/grants'))).toBe(false);

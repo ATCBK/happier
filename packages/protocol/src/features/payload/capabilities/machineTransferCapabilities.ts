@@ -28,7 +28,7 @@ export function normalizeMachineTransferServerRoutedMaxBytes(raw: unknown): numb
 }
 
 export const MachineTransferServerRoutedCapabilitiesSchema = lazyZodSchema(() => z.object({
-  maxBytes: z._default(z.optional(z.pipe(z.transform((raw) => normalizeMachineTransferServerRoutedMaxBytes(raw)), z.nullable(z.number().check(z.int(), z.positive())))), null),
+  maxBytes: z._default(z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => normalizeMachineTransferServerRoutedMaxBytes(raw)), z.nullable(z.number().check(z.int(), z.positive())))), null),
 }));
 
 export type MachineTransferServerRoutedCapabilities = z.infer<typeof MachineTransferServerRoutedCapabilitiesSchema>;

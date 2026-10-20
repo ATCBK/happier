@@ -3,6 +3,7 @@ import { useGlobalSearchParams } from 'expo-router';
 
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import type { VoiceSessionBinding } from '@/voice/binding/voiceConversationBindingTypes';
+import { areVoiceSessionBindingsEqual } from '@/voice/binding/voiceConversationBindingStore';
 import { resolveActiveLocalVoiceAgentBinding } from '@/voice/context/resolveActiveLocalVoiceAgentBinding';
 import { isVoiceQaDebugRuntime } from '@/voice/qa/voiceQaDebugRuntime';
 import { useVoiceSessionSnapshot } from '@/voice/session/voiceSession';
@@ -40,15 +41,15 @@ export function useForegroundVoiceTextTurnQaBridge(): void {
     React.useEffect(() => {
         if (!text?.trim() || !activeBinding) return;
         const delivered = deliveredTextRef.current;
-        if (delivered?.text === text && delivered.binding === activeBinding) return;
+        if (delivered?.text === text && areVoiceSessionBindingsEqual(delivered.binding, activeBinding)) return;
         const inFlight = inFlightTextRef.current;
-        if (inFlight?.text === text && inFlight.binding === activeBinding) return;
+        if (inFlight?.text === text && areVoiceSessionBindingsEqual(inFlight.binding, activeBinding)) return;
 
         const dispatched = { text, binding: activeBinding };
         inFlightTextRef.current = dispatched;
         fireAndForget(dispatchForegroundVoiceTextTurnQa(text).then((binding) => {
             if (!binding) return;
-            if (resolveActiveLocalVoiceAgentBinding()?.binding !== binding) return;
+            if (!areVoiceSessionBindingsEqual(resolveActiveLocalVoiceAgentBinding()?.binding, binding)) return;
             deliveredTextRef.current = { text, binding };
         }).finally(() => {
             if (inFlightTextRef.current === dispatched) {

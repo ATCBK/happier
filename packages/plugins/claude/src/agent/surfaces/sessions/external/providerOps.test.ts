@@ -2,7 +2,7 @@ import { appendFile, chmod, mkdir, mkdtemp, readFile, realpath, rename, rm, syml
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentExternalSessionsContribution } from '@happier-dev/plugin-sdk/sessions/external';
 
 import * as providerOps from './contribution.js';
@@ -10,6 +10,17 @@ import { classifyClaudeNativeTranscriptRow } from '../../../transcripts/nativeSe
 import { projectClaudeTranscriptRowToProviderPayload } from '../../../runtime/terminal/unified/providerTranscript.js';
 
 const roots: string[] = [];
+const fsBoundary = vi.hoisted(() => ({ failNextOpen: false }));
+vi.mock('node:fs/promises', async importOriginal => {
+    const actual = await importOriginal<typeof import('node:fs/promises')>();
+    return { ...actual, open: (...args: Parameters<typeof actual.open>) => {
+        if (fsBoundary.failNextOpen) {
+            fsBoundary.failNextOpen = false;
+            throw Object.assign(new Error('/private/unreadable'), { code: 'EIO' });
+        }
+        return actual.open(...args);
+    } };
+});
 
 function createClaudeExternalSessionsContribution(
     params?: Readonly<{ env?: NodeJS.ProcessEnv }>,
@@ -58,6 +69,35 @@ async function createTranscript(params: Readonly<{
 }
 
 describe('Claude native External Sessions contribution', () => {
+    it('returns a recoverable safe failure when the native file read fails', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'claude-transcript-unreadable-'));
+        roots.push(root);
+        await createTranscript({ configDir: root, projectId: 'fixture', remoteSessionId: 'native', title: 'fixture' });
+        const contribution = createClaudeExternalSessionsContribution({ env: { HAPPIER_CLAUDE_CONFIG_DIR: root } });
+        // Filesystem is the genuine boundary; leave discovery, framing,
+        // projection, budget and failure classification real.
+        fsBoundary.failNextOpen = true;
+        try {
+            await expect(contribution.pageTranscript({ ...invocation(), source: { kind: 'claudeConfig', projectId: 'fixture' },
+                remoteSessionId: 'native', direction: 'older', maxItems: 200 })).resolves.toMatchObject({
+                    ok: false, code: 'agent_error', retryable: true, message: 'external_sessions_transcript_read_failed',
+                });
+        } finally { fsBoundary.failNextOpen = false; }
+        await expect(contribution.pageTranscript({ ...invocation(), source: { kind: 'claudeConfig', projectId: 'fixture' },
+            remoteSessionId: 'native', direction: 'older', maxItems: 200 })).resolves.toMatchObject({ ok: true });
+    });
+    it('names an indivisible text item exceeding the existing transcript reply budget', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'claude-transcript-item-overflow-'));
+        roots.push(root);
+        await mkdir(join(root, 'projects', 'fixture'), { recursive: true });
+        await writeFile(join(root, 'projects', 'fixture', 'native.jsonl'), JSON.stringify({ type: 'user', uuid: 'text',
+            message: { role: 'user', content: 'x'.repeat(20_000) } }) + '\n');
+        const contribution = createClaudeExternalSessionsContribution({ env: { HAPPIER_CLAUDE_CONFIG_DIR: root } });
+        await expect(contribution.pageTranscript({ ...invocation(4_096), source: { kind: 'claudeConfig', projectId: 'fixture' },
+            remoteSessionId: 'native', direction: 'older', maxItems: 200 })).resolves.toMatchObject({
+                ok: false, code: 'agent_error', retryable: false, message: 'external_sessions_transcript_item_byte_budget',
+            });
+    });
     afterEach(async () => {
         await Promise.all(roots.splice(0).map(async (root) => {
             await rm(root, { recursive: true, force: true });
@@ -71,6 +111,10 @@ describe('Claude native External Sessions contribution', () => {
         const contribution = createClaudeExternalSessionsContribution({
             env: { HAPPIER_CLAUDE_CONFIG_DIR: configDir },
         });
+
+        expect(await contribution.resolveSource({ ...invocation(), includeAccountingSource: false,
+            source: { kind: 'claudeConfig', configDir, projectId: 'project-a' },
+        })).toEqual({ ok: true, value: { source: { kind: 'claudeConfig', configDir, projectId: 'project-a' } } });
 
         expect(await contribution.resolveSource({
             ...invocation(),
@@ -92,6 +136,8 @@ describe('Claude native External Sessions contribution', () => {
                     rootPath: configDir,
                     rootField: 'configDir',
                     resourceKey: expect.stringMatching(/^claude:accounting:[A-Za-z0-9_-]{43}$/u),
+                    accountingSources: ['claude-assistant-usage', 'claude-sdk-result'],
+                    discoveredFileCount: 0,
                     changeObservation: 'watch_file_changes',
                     watchFileChanges: { files: [], topologyDirectories: [join(configDir, 'projects')] },
                 },
@@ -230,7 +276,9 @@ describe('Claude native External Sessions contribution', () => {
             ok: true,
             value: {
                 outcome: 'advanced',
-                items: [expect.objectContaining({ messageRole: 'agent' })],
+                items: [expect.objectContaining({ messageRole: 'agent', raw: { role: 'agent',
+                    content: { type: 'acp', agentId: 'claude', data: { type: 'message', message: 'Agent emitted an unsupported content block.' } } } }),
+                    expect.objectContaining({ messageRole: 'agent' })],
                 nextCursor: expect.any(String),
                 boundary: expect.any(String),
                 diagnostics: [{
@@ -239,6 +287,7 @@ describe('Claude native External Sessions contribution', () => {
                     positions: [expect.any(Number)],
                 }, {
                     code: 'unsupported_record_skipped',
+                    severity: 'benign',
                     count: 1,
                     positions: [expect.any(Number)],
                 }],
@@ -473,7 +522,7 @@ describe('Claude native External Sessions contribution', () => {
                 },
             },
             {
-                messageRole: 'event',
+                messageRole: 'agent',
                 raw: {
                     role: 'agent',
                     content: {
@@ -487,7 +536,7 @@ describe('Claude native External Sessions contribution', () => {
                 },
             },
             {
-                messageRole: 'event',
+                messageRole: 'agent',
                 raw: {
                     role: 'agent',
                     content: {
@@ -581,7 +630,7 @@ describe('Claude native External Sessions contribution', () => {
             ok: true,
             value: {
                 items: [{
-                    messageRole: 'event',
+                    messageRole: 'agent',
                     raw: {
                         role: 'agent',
                         content: {
@@ -654,7 +703,7 @@ describe('Claude native External Sessions contribution', () => {
             value: {
                 outcome: 'advanced',
                 items: [{
-                    messageRole: 'event',
+                    messageRole: 'agent',
                     raw: {
                         role: 'agent',
                         content: {
@@ -1485,7 +1534,7 @@ describe('Claude native External Sessions contribution', () => {
         })).toEqual({
             ok: false,
             code: 'source_invalid',
-            message: 'provider/source mismatch',
+            message: 'external_sessions_source_kind_mismatch',
         });
         expect(await contribution.resolveLinkIdentity({
             ...invocation(),
@@ -1528,7 +1577,7 @@ describe('Claude native External Sessions contribution', () => {
         },
     );
 
-    it('fails an older page closed when it consumes an unsupported native record', async () => {
+    it('keeps an older page readable with a visible unsupported native record and diagnostic', async () => {
         const root = await mkdtemp(join(tmpdir(), 'happier-claude-older-unsupported-'));
         roots.push(root);
         const configDir = join(root, '.claude');
@@ -1565,7 +1614,15 @@ describe('Claude native External Sessions contribution', () => {
             direction: 'older',
             maxItems: 50,
         });
-        expect(page).toMatchObject({ ok: true, value: { truncated: true } });
+        expect(page).toMatchObject({ ok: true, value: {
+            diagnostics: [expect.objectContaining({ code: 'external_sessions_transcript_unsupported_record', count: 1 })],
+        } });
+        if (!page.ok) throw new Error('Expected a readable transcript page');
+        expect(page.value.truncated).not.toBe(true);
+        expect(page.value.items).toHaveLength(4);
+        expect(JSON.stringify(page.value.items)).toContain('later answer');
+        expect(JSON.stringify(page.value.items)).toContain('Agent emitted an unsupported content block.');
+        expect(JSON.stringify(page.value.items)).not.toContain('must not be silently discarded');
     });
 
     it('keeps an older page complete across ratified non-transcript records', async () => {

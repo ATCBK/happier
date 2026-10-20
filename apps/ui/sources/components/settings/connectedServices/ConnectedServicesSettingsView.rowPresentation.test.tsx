@@ -120,7 +120,7 @@ vi.mock('@/components/ui/icons/Icon', async (importOriginal) => ({
 }));
 
 const REGISTRY_ENTRIES: Array<Record<string, unknown>> = [
-    // Registry order deliberately does NOT match the expected attention-first order.
+    // Registry arrival order deliberately differs from qualified identity order.
     {
         serviceId: 'github', legacyServiceId: 'github',
         service: { pluginId: 'happier.scm.forge.github', localId: 'github-account' },
@@ -192,13 +192,13 @@ describe('ConnectedServicesSettingsView row presentation', () => {
         profileState.connectedAccountGroupsV4 = [];
     });
 
-    it('orders services attention-first, then by label, leaving services without accounts to setup', async () => {
+    it('orders services by qualified identity, leaving services without accounts to setup', async () => {
         const headers = serviceHeaders(await renderView());
 
         expect(headers.map((row) => row.props.title)).toEqual([
-            'OpenAI Codex', // needs_reauth -> error
-            'Anthropic', // refresh_failed_retryable -> attention
-            'GitHub', // healthy
+            'Anthropic',
+            'OpenAI Codex',
+            'GitHub',
         ]);
     });
 

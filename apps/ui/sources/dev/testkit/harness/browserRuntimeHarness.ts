@@ -31,22 +31,36 @@ export async function installBrowserRuntimeForTests(options: Readonly<{ url: str
         HTMLElement: window.HTMLElement,
         Element: window.Element,
         Node: window.Node,
+        Event: window.Event,
+        CustomEvent: window.CustomEvent,
+        PopStateEvent: window.PopStateEvent,
         MutationObserver: window.MutationObserver,
         getComputedStyle: window.getComputedStyle.bind(window),
         requestAnimationFrame: window.requestAnimationFrame.bind(window),
         cancelAnimationFrame: window.cancelAnimationFrame.bind(window),
     };
     const prior = new Map<string, PropertyDescriptor | undefined>();
-    for (const [name, value] of Object.entries(globals)) {
+    for (const name of Object.keys(globals)) {
         prior.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
-        Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
     }
+    const installGlobals = () => {
+        for (const [name, value] of Object.entries(globals)) {
+            Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
+        }
+    };
+    installGlobals();
     const locks = installWebLockManagerMock();
     let restored = false;
     return {
         window,
         document: window.document,
         storage: window.localStorage,
+        // Some SDK/persistence owners capture this exact port at collection.
+        // Re-publish it after the shared per-test cleanup restores Node globals.
+        activate() {
+            if (restored) throw new Error('Cannot activate a restored browser fixture');
+            installGlobals();
+        },
         reconfigureUrl(url: string) { dom.reconfigure({ url }); },
         restore() {
             if (restored) return;

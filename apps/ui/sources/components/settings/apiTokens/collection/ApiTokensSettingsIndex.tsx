@@ -46,7 +46,7 @@ const ApiTokensEmbedOnlyEmptyState = React.memo(function ApiTokensEmbedOnlyEmpty
             layout="page"
             variant="add"
             iconName="key"
-            title={t('settingsApiTokens.emptyTitle')}
+            title={t('settingsApiTokens.embedOnlyTitle')}
             subtitle={t('settingsApiTokens.embedKeysElsewhere')}
             primaryAction={{ label: t('settingsApiTokens.create.button'), testID: 'settings-api-tokens-embed-only-create', onPress: () => { showApiTokenCreateModal(controller); } }}
             secondaryAction={{ label: t('settingsApiTokens.openEmbeds'), testID: 'settings-api-tokens-open-embeds', onPress: () => {

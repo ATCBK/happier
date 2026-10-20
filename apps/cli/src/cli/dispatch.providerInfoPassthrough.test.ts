@@ -5,7 +5,8 @@ const { geminiHandlerSpy } = vi.hoisted(() => ({
 }));
 const ensureMergedAgentCommandRegistryLoadedSpy = vi.hoisted(() => vi.fn(async () => {}));
 
-vi.mock('@/cli/commandRegistry', () => ({
+vi.mock('@/cli/commandRegistry', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/cli/commandRegistry')>(),
   commandRegistry: {
     gemini: geminiHandlerSpy,
   },

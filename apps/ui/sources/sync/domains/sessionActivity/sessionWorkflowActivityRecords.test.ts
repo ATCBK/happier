@@ -7,7 +7,7 @@ describe('workflow System Record projection', () => {
     it('opens persisted snapshots while dropping unknown payload fields', async () => {
         const payload = makeSessionWorkflowRunSnapshot({ runId: 'run-one' });
         const result = await openWorkflowRunSystemRecord({
-            runId: 'run-one', context: { mode: 'plain', encryption: null },
+            runId: 'run-one', context: { mode: 'plain' },
             record: { id: 'record-one', address: { owner: 'host', namespace: 'activity', kind: 'workflow_run.v1',
                 localId: buildWorkflowRunSystemRecordLocalId({ runId: 'run-one' }) },
                 content: { t: 'plain', v: { ...payload, retired: true } },

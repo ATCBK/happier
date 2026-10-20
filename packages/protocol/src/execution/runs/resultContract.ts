@@ -99,10 +99,14 @@ export function decodeExecutionRunProfileResult(
 ): ExecutionRunResultDecodeResult {
   if (!contract || contract.kind === 'text') return { ok: true, value: rawText };
   const exactText = rawText.trim();
+  // Models may wrap an otherwise exact structured answer in one JSON code
+  // block. Only unwrap a whole-answer fence; prose and multiple values still
+  // fail JSON parsing, and the declared contract remains authoritative.
+  const fenced = /^```(?:json)?[\t ]*\r?\n([\s\S]*?)\r?\n```$/i.exec(exactText);
 
   let parsedJson: unknown;
   try {
-    parsedJson = JSON.parse(exactText);
+    parsedJson = JSON.parse(fenced ? fenced[1]! : exactText);
   } catch {
     return { ok: false, reason: 'not_json' };
   }

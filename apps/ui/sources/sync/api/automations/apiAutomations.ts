@@ -58,6 +58,16 @@ function requestAutomation(
     return (context?.request ?? serverFetch)(path, init, { includeAuth: false });
 }
 
+/** Once sent, a missing or invalid write acknowledgement cannot prove rollback. */
+async function readAutomationMutationReceipt<T>(response: Promise<Response>, parse: (raw: unknown) => T): Promise<T> {
+    try {
+        return parse(await readAutomationJsonOrThrow(await response));
+    } catch (cause) {
+        if (cause instanceof AutomationApiError && cause.status !== undefined && cause.status < 500) throw cause;
+        throw Object.assign(new Error('workflow_outcome_unresolved', { cause }), { code: 'workflow_outcome_unresolved' });
+    }
+}
+
 /**
  * Current list items deliberately exclude private definition and recipe
  * content. Consumers that need those bytes must read the exact definition.
@@ -128,13 +138,11 @@ export async function createAutomationDefinition(
     context?: AutomationRequestContext,
 ): Promise<AutomationDefinitionDetail> {
     const body = AutomationDefinitionCreateRequestSchema.parse(input);
-    const response = await requestAutomation(context, '/v3/automations', {
+    return readAutomationMutationReceipt(requestAutomation(context, '/v3/automations', {
         method: 'POST',
         headers: getAutomationAuthHeaders(credentials, { includeJsonContentType: true }),
         body: JSON.stringify(body),
-    });
-    const raw = await readAutomationJsonOrThrow(response);
-    return AutomationDefinitionDetailSchema.parse(raw);
+    }), raw => AutomationDefinitionDetailSchema.parse(raw));
 }
 
 export async function updateAutomationDefinition(
@@ -144,13 +152,11 @@ export async function updateAutomationDefinition(
     context?: AutomationRequestContext,
 ): Promise<AutomationDefinitionDetail> {
     const body = AutomationDefinitionPatchRequestSchema.parse(input);
-    const response = await requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}`, {
+    return readAutomationMutationReceipt(requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}`, {
         method: 'PATCH',
         headers: getAutomationAuthHeaders(credentials, { includeJsonContentType: true }),
         body: JSON.stringify(body),
-    });
-    const raw = await readAutomationJsonOrThrow(response);
-    return AutomationDefinitionDetailSchema.parse(raw);
+    }), raw => AutomationDefinitionDetailSchema.parse(raw));
 }
 
 /** One visible full-editor Save, committed by the canonical server owner. */
@@ -161,13 +167,11 @@ export async function reconcileAutomationDefinition(
     context?: AutomationRequestContext,
 ): Promise<AutomationDefinitionDetail> {
     const body = AutomationDefinitionReconcileRequestSchema.parse(input);
-    const response = await requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}`, {
+    return readAutomationMutationReceipt(requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}`, {
         method: 'PUT',
         headers: getAutomationAuthHeaders(credentials, { includeJsonContentType: true }),
         body: JSON.stringify(body),
-    });
-    const raw = await readAutomationJsonOrThrow(response);
-    return AutomationDefinitionDetailSchema.parse(raw);
+    }), raw => AutomationDefinitionDetailSchema.parse(raw));
 }
 
 /** Lifecycle mutations remain on the definition owner for Event Automations. */
@@ -176,12 +180,10 @@ export async function pauseAutomationDefinition(
     automationId: string,
     context?: AutomationRequestContext,
 ): Promise<AutomationDefinitionDetail> {
-    const response = await requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}/pause`, {
+    return readAutomationMutationReceipt(requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}/pause`, {
         method: 'POST',
         headers: getAutomationAuthHeaders(credentials),
-    });
-    const raw = await readAutomationJsonOrThrow(response);
-    return AutomationDefinitionDetailSchema.parse(raw);
+    }), raw => AutomationDefinitionDetailSchema.parse(raw));
 }
 
 export async function resumeAutomationDefinition(
@@ -189,12 +191,10 @@ export async function resumeAutomationDefinition(
     automationId: string,
     context?: AutomationRequestContext,
 ): Promise<AutomationDefinitionDetail> {
-    const response = await requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}/resume`, {
+    return readAutomationMutationReceipt(requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}/resume`, {
         method: 'POST',
         headers: getAutomationAuthHeaders(credentials),
-    });
-    const raw = await readAutomationJsonOrThrow(response);
-    return AutomationDefinitionDetailSchema.parse(raw);
+    }), raw => AutomationDefinitionDetailSchema.parse(raw));
 }
 
 export async function replaceAutomationDefinitionAssignments(
@@ -204,13 +204,11 @@ export async function replaceAutomationDefinitionAssignments(
     context?: AutomationRequestContext,
 ): Promise<AutomationDefinitionDetail> {
     const body = AutomationAssignmentUpdateRequestSchema.parse({ assignments });
-    const response = await requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}/assignments`, {
+    return readAutomationMutationReceipt(requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}/assignments`, {
         method: 'POST',
         headers: getAutomationAuthHeaders(credentials, { includeJsonContentType: true }),
         body: JSON.stringify(body),
-    });
-    const raw = await readAutomationJsonOrThrow(response);
-    return AutomationDefinitionDetailSchema.parse(raw);
+    }), raw => AutomationDefinitionDetailSchema.parse(raw));
 }
 
 /**
@@ -229,28 +227,16 @@ export async function runAutomationDefinitionNow(
     context?: AutomationRequestContext,
     options?: Readonly<{ idempotencyKey?: string }>,
 ): Promise<AutomationV3RunMutationResponse> {
-    const response = await requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}/run-now`, {
+    return readAutomationMutationReceipt(requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}/run-now`, {
         method: 'POST',
         headers: { ...getAutomationAuthHeaders(credentials), ...(options?.idempotencyKey === undefined
             ? {} : { 'Idempotency-Key': options.idempotencyKey }) },
-    }).catch((cause: unknown) => {
-        throw Object.assign(new Error('workflow_outcome_unresolved', { cause }), { code: 'workflow_outcome_unresolved' });
-    });
-    let raw: unknown;
-    try {
-        raw = await readAutomationJsonOrThrow(response);
-    } catch (cause) {
-        if (cause instanceof AutomationApiError) {
-            const code = cause.status === 401 || cause.status === 403 ? 'not_authenticated' : cause.code;
-            throw Object.assign(cause, { code });
+    }), raw => AutomationV3RunMutationResponseSchema.parse(raw)).catch((cause: unknown) => {
+        if (cause instanceof AutomationApiError && (cause.status === 401 || cause.status === 403)) {
+            throw Object.assign(cause, { code: 'not_authenticated' });
         }
-        throw Object.assign(new Error('workflow_outcome_unresolved', { cause }), { code: 'workflow_outcome_unresolved' });
-    }
-    try {
-        return AutomationV3RunMutationResponseSchema.parse(raw);
-    } catch (cause) {
-        throw Object.assign(new Error('workflow_outcome_unresolved', { cause }), { code: 'workflow_outcome_unresolved' });
-    }
+        throw cause;
+    });
 }
 
 /** Direct Run detail stays route-owned; the bounded Run list never carries these private envelopes. */
@@ -347,10 +333,8 @@ export async function deleteAutomationDefinition(
     automationId: string,
     context?: AutomationRequestContext,
 ): Promise<AutomationDeleteResponse> {
-    const response = await requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}`, {
+    return readAutomationMutationReceipt(requestAutomation(context, `/v3/automations/${encodeURIComponent(automationId)}`, {
         method: 'DELETE',
         headers: getAutomationAuthHeaders(credentials),
-    });
-    const raw = await readAutomationJsonOrThrow(response);
-    return AutomationDeleteResponseSchema.parse(raw);
+    }), raw => AutomationDeleteResponseSchema.parse(raw));
 }

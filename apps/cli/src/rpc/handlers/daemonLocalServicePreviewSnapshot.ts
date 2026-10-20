@@ -7,7 +7,7 @@ import type { LocalServicePreviewRoutes } from '@/daemon/local/services/preview/
 import type { createManagedServicesOwner } from '@/plugins/runtime/invocation/services/managedServicesOwner';
 import { DaemonLocalServicePreviewAdmissionRequestV1Schema, DaemonLocalServicePreviewAdmissionResponseV1Schema,
     type DaemonLocalServicePreviewAdmissionResponseV1 } from '@happier-dev/protocol/local/services/preview/v1';
-import { isSocketRpcLocalServicesPreviewAdmissionServerOriginAuthorizationContext } from '@happier-dev/protocol/rpc';
+import { isSocketRpcLocalServicesPreviewAdmissionServerOriginAuthorizationContext } from '@happier-dev/protocol/socketRpc';
 import { readProjectManagedServicePreviewEndpoint } from '@/daemon/local/services/preview/projectEndpoint';
 
 // The snapshot RPC reads the preview registry; the lifecycle methods (openOrCreate/revoke)

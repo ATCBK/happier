@@ -135,15 +135,6 @@ export async function confirmStorageKeep(
   );
 }
 
-/** Empty now outside the review sheet: one confirmation that says it frees the space for good. */
-export function confirmStorageEmpty(input: Readonly<{ count: number; amount: string }>): Promise<boolean> {
-  return Modal.confirm(t('machineStorage.emptyConfirm.title', { count: input.count }), t('machineStorage.emptyConfirm.body', { amount: input.amount }), {
-    confirmText: t('machineStorage.emptyConfirm.confirm'),
-    cancelText: t('common.cancel'),
-    destructive: true,
-  });
-}
-
 export type StorageCollectRowInput = StorageCollectable &
   Readonly<{
     title: string;

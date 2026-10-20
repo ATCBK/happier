@@ -1,10 +1,11 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
 
-import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 import type { ComposerStructuredInputMention } from './structuredInputMentions';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -36,13 +37,10 @@ const autocompleteMockState = vi.hoisted(() => ({
             displayName?: string;
         }>;
     }>,
-    selected: -1,
-    respectQuery: false,
     lastQuery: null as string | null,
 }));
 
-installAgentInputCommonModuleMocks({
-    reactNative: async () => {
+vi.mock('react-native', async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
             View: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
@@ -64,52 +62,18 @@ installAgentInputCommonModuleMocks({
                 get: () => ({ width: 900, height: 600, scale: 1, fontScale: 1 }),
             },
         });
-    },
-    icons: () => ({
+});
+vi.mock('@expo/vector-icons', () => ({
         Ionicons: (props: Record<string, unknown>) => React.createElement('Ionicons', props, null),
         Octicons: (props: Record<string, unknown>) => React.createElement('Octicons', props, null),
-    }),
-    text: async () => {
+}));
+vi.mock('@/text', async () => {
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
         return createTextModuleMock({ translate: (key) => key });
-    },
-    storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            useSetting: (key: string) => {
-                if (key === 'profiles') return [];
-                if (key === 'agentInputEnterToSend') return true;
-                if (key === 'agentInputActionBarLayout') return 'wrap';
-                if (key === 'agentInputChipDensity') return 'labels';
-                if (key === 'sessionPermissionModeApplyTiming') return 'immediate';
-                if (key === 'agentInputHistoryScope') return 'perSession';
-                return null;
-            },
-            useSettings: () => ({
-                profiles: [],
-                agentInputEnterToSend: true,
-                agentInputActionBarLayout: 'wrap',
-                agentInputChipDensity: 'labels',
-                sessionPermissionModeApplyTiming: 'immediate',
-                agentInputHistoryScope: 'perSession',
-            }),
-            useSessionTranscriptIds: () => ({ ids: [], isLoaded: true }),
-            useSessionMessagesById: () => ({}),
-            useSessionMessages: () => ({ messages: [], isLoaded: true }),
-            useSessionMessagesVersion: () => 0,
-            useSessionMessagesReducerState: () => null,
-        });
-    },
-    storageStore: async () => ({
-        getStorage: () => Object.assign(
-            (selector?: (state: unknown) => unknown) => {
-                const state = { sessionMessages: {}, localSettings: { uiFontScale: 1, uiContentWidthMode: 'wide' } };
-                return typeof selector === 'function' ? selector(state) : state;
-            },
-            { getState: () => ({ localSettings: { uiFontScale: 1, uiContentWidthMode: 'wide' } }) },
-        ),
-    }),
 });
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('react-native-reanimated', async () => (await import('@/dev/testkit/mocks/reanimated')).createReanimatedModuleMock());
+vi.mock('react-native-keyboard-controller', () => ({ useFocusedInputHandler: () => {} }));
 
 vi.mock('expo-image', () => ({
     Image: (props: Record<string, unknown>) => React.createElement('Image', props, null),
@@ -117,75 +81,6 @@ vi.mock('expo-image', () => ({
 
 vi.mock('@/components/tools/shell/permissions/PermissionFooter', () => ({
     PermissionFooter: () => null,
-}));
-
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-    useFeatureEnabled: () => false,
-}));
-
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        fetchUserMessageHistoryPage: vi.fn(),
-    },
-}));
-
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/usePreferredServerIdForSession', () => ({
-    usePreferredServerIdForSession: () => 'server-1',
-}));
-
-vi.mock('@/sync/domains/features/featureDecisionRuntime', () => ({
-    useServerFeaturesSnapshotForServerId: () => ({
-        status: 'ready',
-        features: { capabilities: { session: { messages: { role: false } } } },
-    }),
-}));
-
-vi.mock('@/sync/store/hooks', () => ({
-    useLocalSetting: (key: string) => {
-        if (key === 'uiBackdropBlurEnabled') return 1;
-        if (key === 'uiFontScale') return 1;
-        return null;
-    },
-    useActiveServerAccountScope: () => null,
-}));
-
-vi.mock('@/agents/catalog/catalog', () => ({
-    getAgentIconSvgXml: () => null,
-    getAgentIconSource: () => null,
-    getAgentIconTintColor: () => undefined,
-    AGENT_IDS: ['codex', 'claude', 'opencode', 'gemini'],
-    DEFAULT_AGENT_ID: 'codex',
-    resolveAgentIdFromFlavor: () => null,
-    getAgentCore: () => ({ displayNameKey: 'agents.codex', toolRendering: { hideUnknownToolsByDefault: false } }),
-    getAgentBehavior: () => ({
-        sessionUsage: {
-            supportsExactContextUsageBadge: false,
-        },
-    }),
-}));
-
-vi.mock('@/sync/domains/models/modelOptions', () => ({
-    findModelOptionForEffectiveModelId: (options: any, effectiveModelId: any) =>
-        options?.find?.((option: any) => option.value === effectiveModelId)
-            ?? options?.find?.((option: any) => option.value === String(effectiveModelId ?? '').replace(/\[[^\]]*\]$/u, ''))
-            ?? null,
-    getModelOptionsForSession: () => [{ value: 'default', label: 'Default' }],
-    supportsFreeformModelSelectionForSession: () => false,
-}));
-
-vi.mock('@/sync/domains/models/describeEffectiveModelMode', () => ({
-    describeEffectiveModelMode: () => ({ selectedModelId: 'default', appliedModelId: null, effectiveModelId: 'default' }),
-}));
-
-vi.mock('@/sync/domains/permissions/permissionModeOptions', () => ({
-    getPermissionModeBadgeLabelForAgentType: () => 'Default',
-    getPermissionModeLabelForAgentType: () => 'Default',
-    getPermissionModeOptionsForSession: () => [{ value: 'default', label: 'Default' }],
-    getPermissionModeTitleForAgentType: () => 'Permissions',
-}));
-
-vi.mock('@/sync/domains/permissions/describeEffectivePermissionMode', () => ({
-    describeEffectivePermissionMode: () => ({ effectiveMode: 'default', notes: [] }),
 }));
 
 vi.mock('@/components/ui/forms/MultiTextInput', () => {
@@ -228,18 +123,6 @@ vi.mock('@/components/ui/forms/Switch', () => ({
 vi.mock('@/components/ui/commandMenu', async (importOriginal) => ({
     ...await importOriginal<typeof import('@/components/ui/commandMenu')>(),
     CommandMenu: () => null,
-    useCommandMenuKeyboard: (args: Readonly<{
-        open: boolean;
-        onSelect: () => void;
-    }>) => ({
-        handleKey: (event: { key: string }) => {
-            if (args.open && event.key === 'Enter') {
-                args.onSelect();
-                return true;
-            }
-            return false;
-        },
-    }),
 }));
 
 vi.mock('@/components/ui/popover', () => ({
@@ -266,36 +149,6 @@ vi.mock('@/components/ui/feedback/Shaker', () => ({
 
 vi.mock('@/components/ui/status/StatusDot', () => ({
     StatusDot: () => null,
-}));
-
-vi.mock('@/components/sessions/sourceControl/status', () => ({
-    SourceControlStatusBadge: () => null,
-    useHasMeaningfulScmStatus: () => false,
-}));
-
-vi.mock('@/components/autocomplete/useActiveSuggestions', () => ({
-    useActiveSuggestions: (query: string | null) => {
-        autocompleteMockState.lastQuery = query;
-        const suggestions = !autocompleteMockState.respectQuery || query !== null
-            ? autocompleteMockState.suggestions
-            : [];
-        return [suggestions, autocompleteMockState.selected, () => {}, () => {}];
-    },
-}));
-
-vi.mock('@/components/autocomplete/applySuggestion', () => ({
-    applySuggestion: (
-        text: string,
-        selection: Readonly<{ start: number; end: number }>,
-        suggestionText: string,
-    ) => {
-        let start = selection.start;
-        while (start > 0 && !/\s/.test(text[start - 1] ?? '')) {
-            start -= 1;
-        }
-        const nextText = `${text.slice(0, start)}${suggestionText}${text.slice(selection.end)}`;
-        return { text: nextText, cursorPosition: start + suggestionText.length };
-    },
 }));
 
 const reviewMention = {
@@ -339,12 +192,33 @@ function findMultiTextInput(screen: Awaited<ReturnType<typeof renderScreen>>) {
     return nodes[0]!;
 }
 
+const browser = await installBrowserRuntimeForTests({ url: 'https://composer-structured.test/' });
+afterAll(() => browser.restore());
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+const { getStorage } = await import('@/sync/domains/state/storageStore');
+const initialStorageState = getStorage().getState();
+beforeEach(() => {
+    getStorage().setState({ settings: {
+        ...initialStorageState.settings,
+        agentInputEnterToSend: true,
+        agentInputActionBarLayout: 'wrap',
+        agentInputChipDensity: 'labels',
+        sessionPermissionModeApplyTiming: 'immediate',
+        agentInputHistoryScope: 'perSession',
+    } });
+});
+afterEach(async () => {
+    getStorage().setState(initialStorageState, true);
+    await home.reset();
+});
+
+await import('./AgentInput');
+
 describe('AgentInput structured input persistence', () => {
     afterEach(() => {
         vi.clearAllMocks();
         autocompleteMockState.suggestions = [];
-        autocompleteMockState.selected = -1;
-        autocompleteMockState.respectQuery = false;
         autocompleteMockState.lastQuery = null;
         multiTextInputMockState.liveText = null;
         multiTextInputMockState.appliedSelections = [];
@@ -371,13 +245,11 @@ describe('AgentInput structured input persistence', () => {
             structuredInputMentions: [reviewMention, staleMention],
         }));
 
-        await act(async () => {
-            screen.tree.update(React.createElement(AgentInput, {
-                ...baseProps,
-                value: 'Ask $review',
-                structuredInputMentions: [reviewMention, staleMention],
-            }));
-        });
+        await screen.update(React.createElement(AgentInput, {
+            ...baseProps,
+            value: 'Ask $review',
+            structuredInputMentions: [reviewMention, staleMention],
+        }));
 
         expect(onStructuredInputMentionsChange).toHaveBeenCalledWith([reviewMention]);
         await screen.unmount();
@@ -395,7 +267,6 @@ describe('AgentInput structured input persistence', () => {
                 displayName: 'Review',
             },
         }];
-        autocompleteMockState.selected = 0;
         const { AgentInput } = await import('./AgentInput');
         const onSend = vi.fn();
         const onChangeText = vi.fn();
@@ -416,12 +287,13 @@ describe('AgentInput structured input persistence', () => {
         }));
 
         const input = findMultiTextInput(screen);
+        await act(async () => { input.props.onFocus?.(); });
         await act(async () => {
             expect(input.props.onKeyPress?.({ key: 'Enter' })).toBe(true);
         });
 
         expect(onSend).not.toHaveBeenCalled();
-        expect(onChangeText).toHaveBeenCalledWith('Ask $review');
+        expect(onChangeText).toHaveBeenCalledWith('Ask $review ');
         expect(onStructuredInputMentionsChange).toHaveBeenCalledWith([
             expect.objectContaining({
                 kind: 'skill',
@@ -435,7 +307,7 @@ describe('AgentInput structured input persistence', () => {
         await screen.pressByTestIdAsync('session-composer-send');
 
         expect(onSend).toHaveBeenCalledWith({
-            inputTextOverride: 'Ask $review',
+            inputTextOverride: 'Ask $review ',
             structuredInputMetaOverrides: {
                 happierStructuredInputV1: {
                     v: 1,
@@ -456,8 +328,6 @@ describe('AgentInput structured input persistence', () => {
             text: '/run',
             label: 'Run',
         }];
-        autocompleteMockState.selected = 0;
-        autocompleteMockState.respectQuery = true;
         const { AgentInput } = await import('./AgentInput');
         const onSend = vi.fn();
         const onChangeText = vi.fn();
@@ -469,7 +339,10 @@ describe('AgentInput structured input persistence', () => {
             placeholder: 'p',
             onSend,
             autocompleteKinds: ['slashCommand'] as const,
-            autocompleteSuggestions: async () => autocompleteMockState.suggestions,
+            autocompleteSuggestions: async (query: string) => {
+                autocompleteMockState.lastQuery = query;
+                return autocompleteMockState.suggestions;
+            },
             sessionId: 'session-a',
             metadata: null,
             disabled: false,
@@ -498,7 +371,7 @@ describe('AgentInput structured input persistence', () => {
         });
 
         expect(onSend).not.toHaveBeenCalled();
-        expect(onChangeText).toHaveBeenLastCalledWith(`${'x'.repeat(210_000)} /run`);
+        expect(onChangeText).toHaveBeenLastCalledWith(`${'x'.repeat(210_000)} /run `);
         await screen.unmount();
     });
 
@@ -607,16 +480,14 @@ describe('AgentInput structured input persistence', () => {
             input.props.onChangeText?.('Ask $review please and more');
         });
 
-        await act(async () => {
-            screen.tree.update(React.createElement(AgentInput, {
-                ...selectionRestoreBaseProps,
-                value: 'Ask $review please',
-                inputPersistence: {
-                    ...selectionRestorePersistence,
-                    restoreToken: 'session-a:scope:0:adopted',
-                },
-            }));
-        });
+        await screen.update(React.createElement(AgentInput, {
+            ...selectionRestoreBaseProps,
+            value: 'Ask $review please',
+            inputPersistence: {
+                ...selectionRestorePersistence,
+                restoreToken: 'session-a:scope:0:adopted',
+            },
+        }));
 
         expect(multiTextInputMockState.appliedSelections).toEqual([{ start: 4, end: 11 }]);
         await screen.unmount();

@@ -1,9 +1,10 @@
+import { installNewSessionPreflightHarness } from '@/dev/testkit/harness/newSessionPreflightHarness';
+import { standardCleanup } from '@/dev/testkit';
 import * as React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, afterAll, afterEach } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
 import { resetDynamicModelProbeCacheForTests } from '@/sync/domains/models/dynamicModelProbeCache';
 import { renderScreen } from '@/dev/testkit';
-
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -14,39 +15,22 @@ const probeResultState = {
   },
 };
 
-const agentModelCapabilitiesState = {
-  supportsSelection: true,
-  supportsFreeform: false,
-};
-
-const machineCapabilitiesInvokeMock = vi.fn(async (_machineId: any, _request: any, _options: any) => ({
-  supported: true as const,
-  response: {
+const capabilityRpc = vi.fn(async (_machineId: any, _request: any, _options: any) => ({
     ok: true as const,
     result: probeResultState.value,
-  },
-}));
+  }));
 
-type ProbeResponse = Awaited<ReturnType<typeof machineCapabilitiesInvokeMock>>;
+type ProbeResponse = Awaited<ReturnType<typeof capabilityRpc>>;
 
-vi.mock('@/sync/ops/capabilities', () => ({
-  machineCapabilitiesInvoke: machineCapabilitiesInvokeMock,
-}));
-
-vi.mock('@/agents/catalog/catalog', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@/agents/catalog/catalog')>();
-  return {
-    ...actual,
-    getAgentCore: () => ({
-      model: {
-        supportsSelection: agentModelCapabilitiesState.supportsSelection,
-        allowedModes: [],
-        defaultMode: 'default',
-        supportsFreeform: agentModelCapabilitiesState.supportsFreeform,
-      }
-    }),
-  };
+const preflight = await installNewSessionPreflightHarness((...args) => capabilityRpc(...args));
+const { useNewSessionPreflightModelsState } = await import('./useNewSessionPreflightModelsState');
+const probeCache = await import('@/sync/domains/models/dynamicModelProbeCache');
+beforeEach(async () => {
+    await preflight.reset();
+    probeCache.resetDynamicModelProbeCacheForTests();
 });
+afterEach(standardCleanup);
+afterAll(() => preflight.dispose());
 
 describe('useNewSessionPreflightModelsState (cache)', () => {
   beforeEach(() => {
@@ -54,22 +38,25 @@ describe('useNewSessionPreflightModelsState (cache)', () => {
       availableModels: [{ id: 'm1', name: 'Model 1' }],
       supportsFreeform: false,
     };
-    agentModelCapabilitiesState.supportsSelection = true;
-    agentModelCapabilitiesState.supportsFreeform = false;
   });
 
   it('does not re-probe when a fresh result is cached', async () => {
-    vi.resetModules();
-    machineCapabilitiesInvokeMock.mockClear();
+
+    capabilityRpc.mockClear();
     resetDynamicModelProbeCacheForTests();
 
     const { useNewSessionPreflightModelsState } = await import('./useNewSessionPreflightModelsState');
 
+    let latest: ReturnType<typeof useNewSessionPreflightModelsState> | undefined;
+    const readLatest = () => {
+      if (!latest) throw new Error('Expected preflight models to render');
+      return latest;
+    };
     function Harness() {
-      useNewSessionPreflightModelsState({
+      latest = useNewSessionPreflightModelsState({
         backendTarget: { kind: 'backend', backendId: 'codex' },
         selectedMachineId: 'machine-1',
-        capabilityServerId: 'server-1',
+        capabilityServerId: preflight.serverId,
         cwd: '/repo',
       });
       return null;
@@ -77,22 +64,24 @@ describe('useNewSessionPreflightModelsState (cache)', () => {
 
     let root1!: renderer.ReactTestRenderer;
     root1 = (await renderScreen(React.createElement(Harness))).tree;
+    await vi.waitFor(() => expect(readLatest().preflightModels?.availableModels.map(model => model.id)).toEqual(['m1']));
     await act(async () => {
       root1.unmount();
     });
 
     let root2!: renderer.ReactTestRenderer;
     root2 = (await renderScreen(React.createElement(Harness))).tree;
+    expect(readLatest().preflightModels?.availableModels.map(model => model.id)).toEqual(['m1']);
     await act(async () => {
       root2.unmount();
     });
 
-    expect(machineCapabilitiesInvokeMock).toHaveBeenCalledTimes(1);
+    expect(capabilityRpc).toHaveBeenCalledTimes(1);
   });
 
   it('does not attempt dynamic model probing for plugin backend targets', async () => {
-    vi.resetModules();
-    machineCapabilitiesInvokeMock.mockClear();
+
+    capabilityRpc.mockClear();
     resetDynamicModelProbeCacheForTests();
 
     const { useNewSessionPreflightModelsState } = await import('./useNewSessionPreflightModelsState');
@@ -101,7 +90,7 @@ describe('useNewSessionPreflightModelsState (cache)', () => {
       useNewSessionPreflightModelsState({
         backendTarget: { kind: 'backend', backendId: 'acme.review.backend' },
         selectedMachineId: 'machine-1',
-        capabilityServerId: 'server-1',
+        capabilityServerId: preflight.serverId,
         cwd: '/repo',
       });
       return null;
@@ -113,12 +102,12 @@ describe('useNewSessionPreflightModelsState (cache)', () => {
       root.unmount();
     });
 
-    expect(machineCapabilitiesInvokeMock).toHaveBeenCalledTimes(0);
+    expect(capabilityRpc).toHaveBeenCalledTimes(0);
   });
 
   it('keeps the model probe idle while the selected Agent Settings record loads', async () => {
-    vi.resetModules();
-    machineCapabilitiesInvokeMock.mockClear();
+
+    capabilityRpc.mockClear();
     resetDynamicModelProbeCacheForTests();
 
     const { useNewSessionPreflightModelsState } = await import('./useNewSessionPreflightModelsState');
@@ -128,7 +117,7 @@ describe('useNewSessionPreflightModelsState (cache)', () => {
         backendTarget: { kind: 'backend', backendId: 'acme.review.backend' },
         runtimeCarrierAgentId: 'acme.review/provider',
         selectedMachineId: 'machine-1',
-        capabilityServerId: 'server-1',
+        capabilityServerId: preflight.serverId,
         cwd: '/repo',
         enabled: false,
       });
@@ -143,12 +132,12 @@ describe('useNewSessionPreflightModelsState (cache)', () => {
       root.unmount();
     });
 
-    expect(machineCapabilitiesInvokeMock).toHaveBeenCalledTimes(0);
+    expect(capabilityRpc).toHaveBeenCalledTimes(0);
   });
 
   it('keeps a freeform-only probe result when the backend supports custom model ids without listing models', async () => {
-    vi.resetModules();
-    machineCapabilitiesInvokeMock.mockClear();
+
+    capabilityRpc.mockClear();
     resetDynamicModelProbeCacheForTests();
     probeResultState.value = {
       availableModels: [],
@@ -166,7 +155,7 @@ describe('useNewSessionPreflightModelsState (cache)', () => {
       latestPreflightModels = useNewSessionPreflightModelsState({
         backendTarget: { kind: 'backend', backendId: 'codex' },
         selectedMachineId: 'machine-1',
-        capabilityServerId: 'server-1',
+        capabilityServerId: preflight.serverId,
         cwd: '/repo',
       }).preflightModels;
       return null;
@@ -175,10 +164,12 @@ describe('useNewSessionPreflightModelsState (cache)', () => {
     let root!: renderer.ReactTestRenderer;
     root = (await renderScreen(React.createElement(Harness))).tree;
 
-    expect(machineCapabilitiesInvokeMock).toHaveBeenCalledTimes(1);
-    expect(latestPreflightModels).toEqual({
-      availableModels: [],
-      supportsFreeform: true,
+    await vi.waitFor(() => {
+      expect(capabilityRpc).toHaveBeenCalledTimes(1);
+      expect(latestPreflightModels).toEqual({
+        availableModels: [],
+        supportsFreeform: true,
+      });
     });
 
     await act(async () => {
@@ -186,12 +177,12 @@ describe('useNewSessionPreflightModelsState (cache)', () => {
     });
   });
 
-  it('resets the probe phase to idle when switching to a backend that does not support model selection', async () => {
-    vi.resetModules();
+  it('resets the probe phase to idle when switching to a backend with static model selection', async () => {
+
     resetDynamicModelProbeCacheForTests();
 
     let resolveProbe: ((value: ProbeResponse) => void) | undefined;
-    machineCapabilitiesInvokeMock.mockImplementationOnce(() => new Promise((resolve) => {
+    capabilityRpc.mockImplementationOnce(() => new Promise((resolve) => {
       resolveProbe = resolve;
     }));
 
@@ -199,26 +190,23 @@ describe('useNewSessionPreflightModelsState (cache)', () => {
 
     let latestProbePhase: 'idle' | 'loading' | 'refreshing' = 'idle';
 
-    function Harness(props: { agentId: 'codex' | 'opencode' }) {
+    function Harness(props: { agentId: 'codex' | 'gemini' }) {
       latestProbePhase = useNewSessionPreflightModelsState({
         backendTarget: { kind: 'backend', backendId: props.agentId },
         selectedMachineId: 'machine-1',
-        capabilityServerId: 'server-1',
+        capabilityServerId: preflight.serverId,
         cwd: '/repo',
       }).probe.phase;
       return null;
     }
 
-    let root!: renderer.ReactTestRenderer;
-    root = (await renderScreen(React.createElement(Harness, { agentId: 'codex' }))).tree;
+    const screen = await renderScreen(React.createElement(Harness, { agentId: 'codex' }));
+    const root = screen.tree;
 
     expect(latestProbePhase).toBe('loading');
+    await vi.waitFor(() => expect(resolveProbe).toBeTypeOf('function'));
 
-    agentModelCapabilitiesState.supportsSelection = false;
-    await act(async () => {
-      root.update(React.createElement(Harness, { agentId: 'opencode' }));
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+    await screen.update(React.createElement(Harness, { agentId: 'gemini' }));
 
     expect(latestProbePhase).toBe('idle');
 
@@ -227,15 +215,12 @@ describe('useNewSessionPreflightModelsState (cache)', () => {
     }
 
     resolveProbe({
-      supported: true,
-      response: {
         ok: true,
         result: {
           availableModels: [{ id: 'm1', name: 'Model 1' }],
           supportsFreeform: false,
         },
-      },
-    });
+      });
 
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));

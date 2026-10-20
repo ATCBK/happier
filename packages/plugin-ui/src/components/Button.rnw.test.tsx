@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { mountThroughReactNativeWeb } from '../rnwMount.testSupport.js';
 import { HappierPressable } from '../presentation/interaction/Pressable.js';
 import { createHostApiStub, createSurfaceContext } from '../surfaceFixture.testSupport.js';
+import { HappierSectionActionStackedContext } from '../presentation/layout/PageSection.js';
 import { Button, IconButton } from './Button.js';
 import { PluginUiProvider } from './PluginUiProvider.js';
 
@@ -134,21 +135,24 @@ describe('plugin-ui Button renders real React Native pressable semantics', () =>
     mount.unmount();
   });
 
-  it('activates a tab with Space through the shared pressable owner', async () => {
-    function TabSurface() {
-      const [selected, setSelected] = useState(false);
-      return <HappierPressable accessibilityRole="tab" accessibilityLabel="Files" selected={selected}
-        onPress={() => setSelected(true)}><span>Files</span></HappierPressable>;
+  it.each(['tab', 'switch', 'checkbox'] as const)('activates a %s with Space through the shared pressable owner', async (role) => {
+    function ToggleSurface() {
+      const [active, setActive] = useState(false);
+      return <HappierPressable accessibilityRole={role} accessibilityLabel="Files"
+        selected={role === 'tab' ? active : undefined}
+        checked={role === 'tab' ? undefined : active}
+        onPress={() => setActive(true)}><span>Files</span></HappierPressable>;
     }
-    const mount = mountSurface(<TabSurface />);
-    const tab = mount.container.querySelector<HTMLElement>('[role="tab"]')!;
-    expect(tab.getAttribute('aria-selected')).toBe('false');
+    const mount = mountSurface(<ToggleSurface />);
+    const control = mount.container.querySelector<HTMLElement>(`[role="${role}"]`)!;
+    const attribute = role === 'tab' ? 'aria-selected' : 'aria-checked';
+    expect(control.getAttribute(attribute)).toBe('false');
     await act(async () => {
-      tab.focus();
-      tab.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space', bubbles: true, cancelable: true }));
-      tab.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', code: 'Space', bubbles: true, cancelable: true }));
+      control.focus();
+      control.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space', bubbles: true, cancelable: true }));
+      control.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', code: 'Space', bubbles: true, cancelable: true }));
     });
-    expect(tab.getAttribute('aria-selected')).toBe('true');
+    expect(control.getAttribute(attribute)).toBe('true');
     mount.unmount();
   });
 
@@ -470,6 +474,22 @@ describe('plugin-ui Button renders real React Native pressable semantics', () =>
     mount.unmount();
   });
 
+  it('keeps a disabled primary legible: its own fill and words receded into the page, not dimmed twice', () => {
+    // The host's primary recedes the same way (RoundButton, unified-work lab `.uwr-dis`): accent and label
+    // mixed at 0.38 over the page as solid colours. A generic disabled slab under the white label, dimmed
+    // again by opacity, left "Review" unreadable in a pull request's header while its detail was read.
+    const mount = mountSurface(<Button title="Review" disabled onPress={() => {}} testID="review" />);
+    const button = findButton(mount.container);
+    const label = [...button.querySelectorAll<HTMLElement>('*')].find((node) => node.textContent === 'Review' && node.children.length === 0)!;
+
+    // Fixture accent #2277ee and label #ffffff over the page #202020.
+    expect(getComputedStyle(button).backgroundColor).toBe('rgb(33, 65, 110)');
+    expect(getComputedStyle(label).color).toBe('rgb(117, 117, 117)');
+    expect(getComputedStyle(button).opacity).toBe('1');
+
+    mount.unmount();
+  });
+
   it('blocks a disabled press and announces the disabled state', async () => {
     const onPress = vi.fn();
     const mount = mountSurface(<Button title="Run review" disabled onPress={onPress} testID="run" />);
@@ -635,5 +655,24 @@ describe('plugin-ui Button renders real React Native pressable semantics', () =>
 
     expect(observedSelection).toBe(true);
     mount.unmount();
+  });
+  it('puts a plain button on the text edge of a section whose action sits on its own line without changing its box', () => {
+    const plain = (stacked: boolean) => {
+      const mount = mountSurface(
+        <HappierSectionActionStackedContext.Provider value={stacked}>
+          <Button variant="plain" title="Start a conversation" onPress={() => {}} />
+        </HappierSectionActionStackedContext.Provider>,
+      );
+      const style = getComputedStyle(findButton(mount.container));
+      const edge = { left: style.left, marginLeft: style.marginLeft };
+      mount.unmount();
+      return edge;
+    };
+    expect(plain(false).left).not.toMatch(/^-/);
+    // The label's own inset is given up so it reads on the section text's edge, not 18 px inside it. The
+    // offset is visual only: a negative margin would shrink the section's measured action, which wrapped
+    // the label and flipped the section header between inline and stacked.
+    expect(plain(true).left).toMatch(/^-\d/);
+    expect(plain(true).marginLeft).not.toMatch(/^-/);
   });
 });

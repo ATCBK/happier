@@ -8,6 +8,7 @@ import { resolveEffectiveInputFields } from '@happier-dev/protocol/inputs';
 
 import { useInputFieldOptions, type InputFieldOptionsRequest } from '@/components/sessions/actions/useInputFieldOptions';
 import { InputTypePickerHostProvider } from '@/components/sessions/actions/InputTypePickerHostProvider';
+import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ITEM_GROUP_HEADER_NO_TITLE_PADDING_TOP_PX } from '@/components/ui/lists/itemGroupSpacing';
@@ -20,7 +21,6 @@ import { WidgetPreviewWell, WidgetFlowPanel } from '@/components/widgets/flow/Wi
 import { WidgetPreviewStage } from '@/components/widgets/flow/WidgetPreviewStage';
 import { WidgetFrame } from '@/components/widgets/frame/WidgetFrame';
 import { WidgetSizeControl } from '@/components/widgets/frame/WidgetSizeControl';
-import { useFailureExplainedByUnreachableHome } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
 import { resolveActionExecutionErrorMessage } from '@/sync/ops/actions/resolveActionExecutionFailureMessage';
 
 import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
@@ -80,6 +80,11 @@ export function WidgetSetupStep(props: Readonly<{
     onCancel?: () => void;
     /** Edit inputs on a phone: the header caret closes the sheet (lab Ep), as Cancel does on desktop. */
     onClose?: () => void;
+    /**
+     * After an applied Add the pane's button reads "Add another" and returns here (to the picker)
+     * instead of writing: a second copy is a deliberate choice of a widget, never a repeated press.
+     */
+    onAddAnother?: () => void;
     /** After the Action acknowledged the write or retained it for approval. */
     onDone: (result: Extract<WidgetSetupSubmitResult, { ok: true }>) => void;
     /** The Action refused; the step keeps the reason on its line and the button retries. */
@@ -108,20 +113,25 @@ export function WidgetSetupStep(props: Readonly<{
     const [pickedOptions, setPickedOptions] = React.useState<Readonly<Record<string, readonly WidgetSetupValue[]>>>({});
     const [busy, setBusy] = React.useState(false);
     const [error, setError] = React.useState<string | null>(null);
-    // The Add pane stays open after an Add (another can follow): its button then offers another copy.
-    const [added, setAdded] = React.useState(false);
-    const pendingHomeIds = React.useMemo(() => busy && props.serverId ? [props.serverId] : [], [busy, props.serverId]);
-    const homeUnreachable = useFailureExplainedByUnreachableHome(pendingHomeIds);
+    // Gallery counts and server echoes rebuild entries. The unresolved invocation
+    // keeps custody until its own receipt; a rebuilt entry cannot turn Retry into Add.
+    const submission = React.useRef<WidgetSetup['submit'] | null>(null);
+    // The Add pane stays open after acknowledgement. Approval keeps custody of
+    // this request; only an applied Add offers an intentional additional copy.
+    const [completion, setCompletion] = React.useState<'added' | 'approvalPending' | null>(null);
     const resolution = React.useMemo(() => setup.resolve(draft), [draft, setup]);
     const blocker = describeWidgetSetupBlocker(setup.fields, resolution);
     // Finishable once nothing blocks; a per-viewer input is each viewer's own and never blocks.
-    const finishable = widgetSetupBlockingIssues(setup.fields, resolution).length === 0 && !props.blockedReason;
+    const finishable = completion !== 'approvalPending' && widgetSetupBlockingIssues(setup.fields, resolution).length === 0
+        && (!props.blockedReason || submission.current !== null);
     const pane = props.presentation === 'pane';
+    const offersAnother = pane && completion === 'added' && props.onAddAnother !== undefined;
 
     // Choices come from the one options resolver, read only while this step is open.
     const discoveryContext = React.useMemo(() => setup.optionsContext?.(draft), [draft, setup]);
     const consumer = discoveryContext?.consumer;
     const selectedSession = consumer?.kind === 'widget' ? consumer.selectedSession : undefined;
+    const appRuntime = useAppShellPluginUiProjection();
     const optionServerId = selectedSession?.serverId ?? props.serverId;
     const requests = React.useMemo<InputFieldOptionsRequest[]>(() => setup.fields.map(({ field, viewer }) => ({
         ...setup.optionsContext?.(draft, field),
@@ -135,6 +145,8 @@ export function WidgetSetupStep(props: Readonly<{
         enabled: true,
         ...(optionServerId ? { serverId: optionServerId } : {}),
         ...(selectedSession ? { sessionId: selectedSession.sessionId } : {}),
+        ...(!selectedSession ? { pluginUiMachineId: appRuntime.machineId, pluginUiProjection: appRuntime.pluginUiProjection,
+            accountLifetime: appRuntime.accountLifetime } : {}),
     });
 
     const change = React.useCallback((path: string, next: WidgetSetupFieldChange) => {
@@ -150,14 +162,17 @@ export function WidgetSetupStep(props: Readonly<{
     }, [options.state, requests]);
 
     const submit = React.useCallback(async () => {
+        if (offersAnother) { props.onAddAnother?.(); return; }
         if (busy || !finishable) return;
         setBusy(true);
         setError(null);
         try {
-            const result = await setup.submit(draft);
+            submission.current ??= setup.submit;
+            const result = await submission.current(draft);
             if (result.ok) {
+                submission.current = null;
                 AccessibilityInfo.announceForAccessibility?.(result.approvalPending ? t('widgetAdd.areaApprovalPending') : t('widgetAdd.saved', { widget: setup.title }));
-                if (!result.approvalPending) setAdded(true);
+                setCompletion(result.approvalPending ? 'approvalPending' : 'added');
                 props.onDone(result);
                 return;
             }
@@ -170,7 +185,7 @@ export function WidgetSetupStep(props: Readonly<{
         } finally {
             setBusy(false);
         }
-    }, [busy, draft, finishable, props, setup]);
+    }, [busy, draft, finishable, offersAnother, props, setup]);
     // The first needed input asked for the focus, and how many times (each ask moves it again).
     const [focusRequest, setFocusRequest] = React.useState<Readonly<{ path: string; count: number }> | null>(null);
     const blockerPath = blocker?.path ?? null;
@@ -178,11 +193,11 @@ export function WidgetSetupStep(props: Readonly<{
     React.useEffect(() => {
         if (!commandRef) return undefined;
         commandRef.current = () => {
-            if (finishable) { void submit(); return; }
+            if (finishable || offersAnother) { void submit(); return; }
             if (blockerPath) setFocusRequest((current) => ({ path: blockerPath, count: (current?.count ?? 0) + 1 }));
         };
         return () => { commandRef.current = null; };
-    }, [blockerPath, commandRef, finishable, submit]);
+    }, [blockerPath, commandRef, finishable, offersAnother, submit]);
 
     // The fields' own predicates over the current draft (shown, required, disabled), from the one
     // neutral field owner: a hidden input leaves the step and a disabled one cannot be changed.
@@ -259,7 +274,7 @@ export function WidgetSetupStep(props: Readonly<{
     const widthFootprint = (width: 'half' | 'full') => ({ columns: 2, columnSpan: width === 'half' ? 1 : 2, rowSpan: 1 });
     const unavailableWidth = widths?.find(choice => choice.unavailableReason);
     const sizePicker = sizes && draft.size ? <WidgetSizeControl
-        testID={`${props.testID}.size`} showLabel={!pane} surface={sizes.surface} sizes={sizes.sizes}
+        testID={`${props.testID}.size`} showLabel={!pane} flush={!pane} surface={sizes.surface} sizes={sizes.sizes}
         size={draft.size} disabled={busy} onSet={size => { setError(null); setDraft(current => ({ ...current, size })); }} />
         // A saved group offers its width only (lab wgsaved A): the same picker, Half | Full.
         : widths && draft.width ? <View style={styles.widthPicker}>
@@ -320,6 +335,8 @@ export function WidgetSetupStep(props: Readonly<{
             <WidgetPreviewWell
                 testID={`${props.testID}.preview`}
                 caption={t('widgetAdd.preview')}
+                // The card has its own edge; only a fixed-height clip (Edit inputs on a phone) keeps a plate behind it.
+                framed
                 // The Add pane on a phone shows the whole compact card; Edit inputs keeps its fixed room.
                 {...(props.phone ? (pane ? {} : { height: PHONE_PREVIEW_HEIGHT_PX }) : { minHeight: PREVIEW_MIN_HEIGHT_PX })}
             >
@@ -344,16 +361,15 @@ export function WidgetSetupStep(props: Readonly<{
         ...(props.footerAccessory && finishable ? { footerAccessory: props.footerAccessory } : {}),
         noteTestID: `${props.testID}.why`,
         error,
-        note: homeUnreachable ? t('settingsPlugins.targetSelection.unreachableThisHome')
-            : blocker ? t('widgetAdd.stillNeeded', { field: blocker.title }) : props.blockedReason ?? props.notice ?? consequence,
+        note: blocker ? t('widgetAdd.stillNeeded', { field: blocker.title }) : props.blockedReason ?? props.notice ?? consequence,
         ...(props.backLabel ? { backLabel: props.backLabel } : {}),
         primary: {
             testID: `${props.testID}.submit`,
-            label: pane && added ? t('widgetAdd.addAnother') : setup.submitLabel,
+            label: pane && completion === 'added' ? t('widgetAdd.addAnother') : setup.submitLabel,
             ...(pane ? { icon: 'plus' as const } : {}),
             onPress: () => { void submit(); },
-            disabled: busy || !finishable,
-            busy: busy && !homeUnreachable,
+            disabled: !offersAnother && (busy || !finishable),
+            busy,
             busyNote: pane ? t('widgetAdd.adding') : t('widgetAdd.savingInputs'),
         },
     } satisfies Omit<React.ComponentProps<typeof WidgetFlowPanel>, 'children'>;
@@ -384,9 +400,10 @@ export function WidgetSetupStep(props: Readonly<{
     const aside = preview && sizePicker ? <View style={{ gap: theme.space.s12 }}>{preview}{sizePicker}</View> : preview ?? sizePicker;
     return (
         <WidgetFlowPanel {...panel}>
-            {stacked ? (
+            {/* A copy that asks for nothing is its preview and size alone: no empty inputs column beside or above them. */}
+            {stacked || setup.fields.length === 0 ? (
                 <View style={styles.bodyPhone} onLayout={(event) => setBodyWidth(Math.round(event.nativeEvent.layout.width))}>
-                    {inputs}
+                    {setup.fields.length > 0 ? inputs : null}
                     {aside}
                 </View>
             ) : aside ? (

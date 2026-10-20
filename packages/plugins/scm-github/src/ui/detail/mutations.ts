@@ -181,12 +181,13 @@ export function buildGithubPullRequestTargetInputV1(
 /**
  * The merge input, carrying the head the USER is looking at.
  *
- * The revision comes from the applied observation and from nowhere else: its whole
- * value as a precondition is that it is the head the decision was made against, so
- * a fresh read at press time would defeat the guarantee it exists to provide. An
- * observation with no revision, or one whose identifier is not a commit object the
+ * The revision comes from the applied snapshot's public review evidence and
+ * nowhere else: the precondition must name the head the user saw. A fresh read
+ * at press time would defeat that guarantee. An observation with no review head,
+ * or one whose identifier is not a commit object the
  * write contract accepts, builds nothing — the control then says the head is
- * unknown instead of dispatching a write that can only fail.
+ * unknown instead of dispatching a write that can only fail. The process-local
+ * native revision is not published on the aggregate list wire.
  *
  * The method is a caller argument with no default here and none in the contract.
  * Choosing one on the user's behalf would pick how their history is rewritten.
@@ -200,7 +201,7 @@ export function buildGithubPullRequestMergeInputV1(
     instance: input.instance,
     localRef: localRefOf(input),
     routingToken: input.observation.locator.routingToken,
-    headRevision: input.observation.nativeRevision,
+    headRevision: input.observation.snapshot.reviewRevision?.headSha,
     mergeMethod,
   });
   return parsed.success ? parsed.data : null;
@@ -212,7 +213,7 @@ export function buildGithubPullRequestMarkReadyInputV1(
 ): GithubPullRequestMarkReadyInputV1 | null {
   const parsed = GithubPullRequestMarkReadyInputV1Schema.safeParse({
     ...mutationTargetOf(input),
-    headRevision: input.observation.nativeRevision,
+    headRevision: input.observation.snapshot.reviewRevision?.headSha,
   });
   return parsed.success ? parsed.data : null;
 }
@@ -222,7 +223,7 @@ export function buildGithubPullRequestUpdateBranchInputV1(
 ): GithubPullRequestUpdateBranchInputV1 | null {
   const parsed = GithubPullRequestUpdateBranchInputV1Schema.safeParse({
     ...mutationTargetOf(input),
-    headRevision: input.observation.nativeRevision,
+    headRevision: input.observation.snapshot.reviewRevision?.headSha,
   });
   return parsed.success ? parsed.data : null;
 }

@@ -38,7 +38,7 @@ export const SessionMcpSelectionAuthoringV1Schema = lazyZodSchema(() => z.pipe(z
 export type SessionMcpSelectionAuthoringV1 = z.infer<typeof SessionMcpSelectionAuthoringV1Schema>;
 
 /** Permissive legacy Session ingress retained for supported stored/session inputs. */
-export const SessionMcpSelectionV1Schema = lazyZodSchema(() => z.pipe(z.pipe(z.transform((raw) => {
+export const SessionMcpSelectionV1Schema = lazyZodSchema(() => z.pipe((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw) => {
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
       return raw;
     }), z.object(SESSION_MCP_SELECTION_V1_FIELDS)), z.transform(normalizeSessionMcpSelectionV1)));

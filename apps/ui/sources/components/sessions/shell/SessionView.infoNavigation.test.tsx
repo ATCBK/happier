@@ -6,24 +6,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen as renderCanonicalScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import 'fake-indexeddb/auto';
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createPlainSessionByIdResponseFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
+import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
-import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
-import { createReactNativeWebMock } from '@/dev/testkit/mocks/reactNative';
-import { createTextModuleMock } from '@/dev/testkit/mocks/text';
-import { createUnistylesMock } from '@/dev/testkit/mocks/unistyles';
 import { localSettingsDefaults, type LocalSettings } from '@/sync/domains/settings/localSettings';
 import { settingsDefaults, type Settings } from '@/sync/domains/settings/settings';
 
-import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 (globalThis as any).__DEV__ = false;
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 vi.mock('@/agents/backendCatalog/getResolvedBackendCatalogEntries', () => ({
     getResolvedBackendCatalogEntries: () => [],
@@ -37,20 +38,6 @@ vi.mock('@/agents/backendCatalog/useDaemonMergedProjectionInputs', () => ({
 vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
     BUNDLED_PLUGIN_UI_APP_ARTIFACTS: Object.freeze([]),
 }));
-vi.mock('@/sync/domains/plugins/availability/bundledAppExactArtifactSource', () => ({
-    createBundledPluginUiAppExactArtifactSource: () => Object.freeze({
-        kind: 'appExact' as const,
-        fetch: vi.fn(async () => null),
-    }),
-}));
-vi.mock('@/sync/domains/plugins/availability/reader', () => ({
-    createPluginAccountAvailabilityReader: vi.fn(() => null),
-    createPluginAccountAvailabilityReaderStore: vi.fn(() => ({
-        get: vi.fn(() => null),
-        subscribe: vi.fn(() => () => {}),
-    })),
-    projectPluginAccountAvailabilityMaterializationIdentity: vi.fn(() => null),
-}));
 
 const routerPushSpy = vi.hoisted(() => vi.fn());
 const routerNavigateSpy = vi.hoisted(() => vi.fn());
@@ -63,9 +50,9 @@ const capturedOpenSessionSpy = vi.hoisted(() => vi.fn<(sid: string) => void>());
 const companionHostPropsSpy = vi.hoisted(() => vi.fn());
 const boardControllerState = vi.hoisted(() => ({ unavailable: false }));
 
-installSessionShellCommonModuleMocks({
-    reactNative: async () =>
-        createReactNativeWebMock({
+vi.mock('react-native', async () => {
+    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeWebMock({
             View: 'View',
             Text: 'Text',
             Pressable: 'Pressable',
@@ -78,20 +65,30 @@ installSessionShellCommonModuleMocks({
                         : (spec as any).default,
             },
             useWindowDimensions: () => ({ width: 1200, height: 800 }),
-        }),
-    unistyles: async () =>
-        createUnistylesMock({
+        });
+});
+vi.mock('react-native-unistyles', async () => {
+    const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
+    return createUnistylesMock({
             theme: createThemeFixture(),
             runtime: {
                 hairlineWidth: 1,
             },
-        }),
-    text: async () =>
-        createTextModuleMock({
+        });
+});
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return createTextModuleMock({
             translate: (key: string) => key,
-        }),
-    router: async () =>
-        createExpoRouterMock({
+        });
+});
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock().module;
+});
+vi.mock('expo-router', async () => {
+    const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
+    return createExpoRouterMock({
             pathname: '/session/s1',
             router: {
                 push: routerPushSpy,
@@ -100,8 +97,7 @@ installSessionShellCommonModuleMocks({
                 replace: vi.fn(),
                 setParams: vi.fn(),
             },
-        }).module,
-    storage: async importOriginal => importOriginal(),
+        }).module;
 });
 
 
@@ -179,7 +175,7 @@ vi.mock('@/components/sessions/board/SessionBoardControllerProvider', async (imp
         return <SessionBoardContinuityProvider {...address}><actual.SessionBoardControllerOwner
             address={address} input={{ ...address, binding, actions }} binding={binding} actions={actions}
             pluginRuntime={{ serverId: address.serverId, machineId: 'm1', pluginUiProjection: null,
-                pluginBrowserProjection: null, phase: 'unavailable', interactionEnabled: false, platform: 'web' }}
+                pluginBrowserProjection: null, phase: 'unavailable', interactionEnabled: false, platform: 'web', accountLifetime: null }}
             callerHostedHtmlRuntime={null}
         >{props.children}</actual.SessionBoardControllerOwner></SessionBoardContinuityProvider>;
     } };
@@ -267,12 +263,13 @@ vi.mock('@/sync/ops', async (importOriginal) => {
         },
     });
 });
-vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
-    createDefaultActionExecutor: (params: any) => {
-        capturedOpenSessionSpy.mockImplementation((sid: string) => params.openSession(sid));
-        return { execute: vi.fn() };
-    },
-}));
+vi.mock('@/sync/ops/actions/defaultActionExecutor', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/sync/ops/actions/defaultActionExecutor')>();
+    return { ...actual, createDefaultActionExecutor: (...args: Parameters<typeof actual.createDefaultActionExecutor>) => {
+        capturedOpenSessionSpy.mockImplementation((sid: string) => { args[0]?.openSession?.(sid); });
+        return actual.createDefaultActionExecutor(...args);
+    } };
+});
 vi.mock('@/utils/system/versionUtils', () => ({
     isVersionSupported: () => true,
     MINIMUM_CLI_VERSION: '0.0.0',
@@ -288,9 +285,6 @@ vi.mock('@/hooks/server/useSessionExecutionRunsSupported', () => ({
 }));
 vi.mock('@/hooks/server/useExecutionRunsBackendsForSession', () => ({
     useExecutionRunsBackendsForSession: () => null,
-}));
-vi.mock('@/utils/system/fireAndForget', () => ({
-    fireAndForget: (promise: Promise<unknown>) => void promise,
 }));
 
 installDisconnectedServerSocketBoundary();
@@ -312,28 +306,48 @@ const AppPaneProviderWrapper = ({ children }: { children?: React.ReactNode }) =>
     <InjectedAuthProvider credentials={account.credentials}><AppPaneProvider><PaneProbe />{children ?? null}</AppPaneProvider></InjectedAuthProvider>
 );
 async function renderScreen(...args: Parameters<typeof renderCanonicalScreen>) {
-    return renderCanonicalScreen(...args);
+    const { sync } = await import('@/sync/sync');
+    expect((await sync.ensureSessionVisibleForMessageRoute('s1', {
+        serverId: account.home.id, forceRefresh: true, hydrateMessages: false,
+    })).kind).toBe('available');
+    const screen = await renderCanonicalScreen(...args);
+    // The first exact-Home binding resolves asynchronously even after the HTTP
+    // route read succeeds; interact only after its Session header is mounted.
+    await waitForHomeGovernance(() => expect(chatHeaderPropsSpy).toHaveBeenCalled());
+    return screen;
 }
 function applySessionHome(serverId = account.home.id) {
     storage.getState().applySessions([createSessionFixture({ id: 's1', serverId, active: true, metadata: {
+        name: 'Info navigation Session',
         machineId: 'm1', host: 'tester.local', flavor: 'codex', version: '0.0.0', path: '/tmp', homeDir: '/Users/test',
     }, agentState: {} })]);
 }
 async function restoreHome(serverUrl: string) {
     await loadSyncSingletonForTests();
-    return restoreServerAccountForTest({ serverUrl, request: async url => {
+    const accountHttp = createHomeHubArtifactHttpBoundary('account-a');
+    const account = await restoreServerAccountForTest({ serverUrl, request: async (url, init) => {
         const path = new URL(String(url)).pathname;
         if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
         if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
         if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
         if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+        if (path === '/v2/sessions/s1' && (init?.method ?? 'GET') === 'GET') {
+            return Response.json(createPlainSessionByIdResponseFixture(storage.getState().sessions.s1!));
+        }
         if (path === '/v2/sessions/s1/pending') return Response.json({ pending: [] });
         if (path === '/v1/sessions/s1/messages') return Response.json({ messages: [], hasMore: false, nextBeforeSeq: null });
-        return new Response('{}', { status: 404 });
+        return createEmptyAccountBootstrapHttpResponse(path, init) ?? await accountHttp.request(url, init);
     } });
+    await waitForHomeGovernance(() => expect(storage.getState()).toMatchObject({
+        isDataReady: true, profile: { id: 'account-a' },
+    }));
+    return account;
 }
 
 const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+// The real UI graph is collection work; each case measures its own mounted behavior.
+await loadSyncSingletonForTests();
+const { SessionView } = await import('./SessionView');
 
 describe('SessionView info navigation', () => {
     beforeEach(async () => {
@@ -364,7 +378,6 @@ describe('SessionView info navigation', () => {
     });
 
     it('opens session info via singular navigate using the explicit route server id for a route-owned session', async () => {
-        const { SessionView } = await import('./SessionView');
 
         const screen = await renderScreen(
             <SessionView id="s1" routeServerId="server-2" />,
@@ -386,7 +399,6 @@ describe('SessionView info navigation', () => {
 
     it('keeps the mounted Summary available before Board inventory is ready and routes it through the exact Home', async () => {
         boardControllerState.unavailable = true;
-        const { SessionView } = await import('./SessionView');
 
         const screen = await renderScreen(<SessionView id="s1" routeServerId="server-2" />, { wrapper: AppPaneProviderWrapper });
 
@@ -413,7 +425,6 @@ describe('SessionView info navigation', () => {
         // Two real cached addresses cannot admit a bare id, while the explicit
         // route retains its already Home-qualified Session identity.
         storage.setState({ ordinarySessionListMembershipByServerId: { 'server-other-home': ['s1'] } });
-        const { SessionView } = await import('./SessionView');
 
         const screen = await renderScreen(<SessionView id="s1" routeServerId="server-2" />, { wrapper: AppPaneProviderWrapper });
 
@@ -441,7 +452,6 @@ describe('SessionView info navigation', () => {
     });
 
     it('opens the exact Companion widget in the existing Board details owner', async () => {
-        const { SessionView } = await import('./SessionView');
         await renderScreen(
             <SessionView id="s1" routeServerId="server-2" />,
             { wrapper: AppPaneProviderWrapper },
@@ -460,7 +470,6 @@ describe('SessionView info navigation', () => {
 
     it('opens session info via singular navigate using the route server id when bare-id cache admission is ambiguous', async () => {
         storage.setState({ ordinarySessionListMembershipByServerId: { 'server-other-home': ['s1'] } });
-        const { SessionView } = await import('./SessionView');
 
         const screen = await renderScreen(
             <SessionView id="s1" routeServerId="server-2" />,
@@ -481,7 +490,6 @@ describe('SessionView info navigation', () => {
         account = await restoreHome('https://server-cache');
         applySessionHome();
         storage.setState({ isDataReady: true });
-        const { SessionView } = await import('./SessionView');
 
         const screen = await renderScreen(
             <SessionView id="s1" />,
@@ -497,7 +505,6 @@ describe('SessionView info navigation', () => {
     });
 
     it('uses back navigation for the session header back affordance', async () => {
-        const { SessionView } = await import('./SessionView');
 
         await renderScreen(
             <SessionView id="s1" />,
@@ -514,7 +521,6 @@ describe('SessionView info navigation', () => {
     });
 
     it('requests start-side truncation for the session header path subtitle', async () => {
-        const { SessionView } = await import('./SessionView');
 
         await renderScreen(
             <SessionView id="s1" />,
@@ -528,7 +534,6 @@ describe('SessionView info navigation', () => {
     });
 
     it('keeps the header top inset when only content safe-area padding is external', async () => {
-        const { SessionView } = await import('./SessionView');
 
         await renderScreen(
             <SessionView id="s1" safeAreaTopMode="external" headerSafeAreaTopMode="internal" />,
@@ -541,7 +546,6 @@ describe('SessionView info navigation', () => {
     });
 
     it('falls back to the session path subtitle when no matching workspace label key is available', async () => {
-        const { SessionView } = await import('./SessionView');
 
         await renderScreen(
             <SessionView id="s1" />,
@@ -554,7 +558,6 @@ describe('SessionView info navigation', () => {
     });
 
     it('opens child sessions with the current session owner when child cache resolution is unavailable', async () => {
-        const { SessionView } = await import('./SessionView');
 
         await renderScreen(
             <SessionView id="s1" routeServerId="server-2" />,

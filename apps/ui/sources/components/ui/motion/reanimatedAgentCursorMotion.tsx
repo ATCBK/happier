@@ -6,6 +6,7 @@ import type {
 } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
 import Animated, {
+    runOnJS,
     useAnimatedStyle,
     useSharedValue,
     withSpring,
@@ -41,11 +42,14 @@ function useReanimatedAgentCursorMotion(): ReanimatedAgentCursorMotion {
             setOpacity: (layer, value) => {
                 values[layer].value = value;
             },
-            fade: (layer, to, curve) => {
+            fade: (layer, to, curve, onDone) => {
                 values[layer].value = withTiming(to, {
                     duration: reanimatedMotionTokens.durationMs.fast,
                     easing: reanimatedMotionTokens.easing[curve],
-                });
+                }, onDone ? (finished) => {
+                    // A fade a later call redirected reports unfinished and is not "done".
+                    if (finished) runOnJS(onDone)();
+                } : undefined);
             },
             ringOpacity: () => values.ring.value,
         };

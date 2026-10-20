@@ -8,6 +8,7 @@ import {
     V2SessionByIdResponseSchema,
 } from "@happier-dev/protocol";
 import { db } from "@/storage/db";
+import { withSqliteReadSnapshot } from "@/storage/prisma";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 import { withAuthenticatedTestApp } from "../../testkit/sqliteFastify";
@@ -53,6 +54,125 @@ describe("Session access HTTP and initial creation (SQLite integration)", () => 
         sharedMetadata: { ciphertext: JSON.stringify({ v: 1 }) },
         ownerMetadata: { t: "plain", v: { v: 1 } },
         encryptionMode: "plain", dataEncryptionKey: null,
+    });
+
+    // Observe the real storage connection used by both inspection snapshots;
+    // delegate calls still execute against the disposable database.
+    async function observeInspectionReads() {
+        const reader = await withSqliteReadSnapshot(async (tx) => tx);
+        let reads = 0;
+        const restore: (() => void)[] = [];
+        for (const model of Object.keys(reader)) {
+            const delegate: unknown = Reflect.get(reader, model);
+            if (typeof delegate !== "object" || delegate === null) continue;
+            for (const method of ["findUnique", "findUniqueOrThrow", "findFirst", "findFirstOrThrow", "findMany", "count", "aggregate", "groupBy"]) {
+                const operation: unknown = Reflect.get(delegate, method);
+                if (typeof operation !== "function") continue;
+                Object.defineProperty(delegate, method, {
+                    configurable: true,
+                    writable: true,
+                    value: (...args: unknown[]) => {
+                        reads += 1;
+                        return Reflect.apply(operation, delegate, args);
+                    },
+                });
+                restore.push(() => {
+                    // Prisma's lazy delegates expose synthetic descriptors;
+                    // restore the actual function rather than descriptor.value.
+                    Object.defineProperty(delegate, method, { configurable: true, writable: true, value: operation });
+                });
+            }
+        }
+        return {
+            count: () => reads,
+            restore: () => { for (const reset of restore) reset(); },
+        };
+    }
+
+    it.each(["allowed", "disabled"] as const)("batches inspection reads for 1/100/500 Account grants under %s external sharing", async (externalSharingPolicy) => {
+        const { owner, recipient, team } = await fixture();
+        await db.team.update({ where: { id: team.id }, data: { externalSharingPolicy } });
+        const recipients: Array<Pick<typeof recipient, "id" | "publicKey" | "encryptionMode" | "status">> = Array.from({ length: 500 }, (_, index) => ({
+            id: crypto.randomUUID(), publicKey: `batch-recipient-${crypto.randomUUID()}`,
+            encryptionMode: "plain" as const, status: index === 1 ? "suspended" as const : "active" as const,
+        }));
+        recipients[0] = { ...recipients[0]!, id: recipient.id };
+        await db.account.createMany({ data: recipients.slice(1) });
+        const measured: { grants: number; reads: number }[] = [];
+        await withAuthenticatedTestApp(sessionRoutes, async (app) => {
+            const observer = await observeInspectionReads();
+            try {
+                for (const count of [1, 100, 500]) {
+                    const session = await db.session.create({ data: {
+                        accountId: owner.id, tag: `batch-${count}`, encryptionMode: "plain", metadata: "{}",
+                        currentStorageState: "hosted", primaryTeamId: team.id,
+                    } });
+                    await db.sessionShare.createMany({ data: recipients.slice(0, count).map((account) => ({
+                        sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: account.id,
+                        accessLevel: "edit" as const,
+                    })) });
+                    const before = observer.count();
+                    const response = await app.inject({ method: "POST", url: "/v2/sessions/access-grants/list", headers: headers(owner.id), payload: { sessionId: session.id } });
+                    measured.push({ grants: count, reads: observer.count() - before });
+                    expect(response.statusCode, response.body).toBe(200);
+                    const result = SessionAccessGrantsListResponseV1Schema.parse(response.json());
+                    expect(result.grants).toHaveLength(count);
+                    const byId = new Map(result.grants.flatMap((row) => row.grant.subject.kind === "account" ? [[row.grant.subject.accountId, row.allowedTransitions] as const] : []));
+                    expect(byId.get(recipient.id)).toEqual({ accessLevels: ["view", "edit", "admin"], canChangePermissionDelegation: true, canRemove: true });
+                    if (count > 1) {
+                        expect(byId.get(recipients[1]!.id)).toEqual({ accessLevels: [], canChangePermissionDelegation: false, canRemove: true, reason: "session_access_subject_ineligible" });
+                        expect(byId.get(recipients[2]!.id)).toEqual(externalSharingPolicy === "disabled"
+                            ? { accessLevels: ["view", "edit"], canChangePermissionDelegation: false, canRemove: true, reason: "session_access_external_sharing_disabled" }
+                            : { accessLevels: ["view", "edit", "admin"], canChangePermissionDelegation: true, canRemove: true });
+                    }
+                }
+            } finally { observer.restore(); }
+        });
+        console.info("Account grant inspection database reads", { externalSharingPolicy, measured });
+        expect(measured[0]!.reads).toBeGreaterThan(0);
+        expect(measured, JSON.stringify(measured)).toEqual(measured.map(({ grants }) => ({ grants, reads: measured[0]!.reads })));
+    });
+
+    it("batches inspection reads for 1/100/500 retained Team and Group grants", async () => {
+        const { owner, team } = await fixture();
+        await db.team.update({ where: { id: team.id }, data: { sessionCreationPolicy: "team_required", externalSharingPolicy: "disabled" } });
+        const teams = Array.from({ length: 500 }, (_, index) => ({
+            id: index === 0 ? team.id : crypto.randomUUID(), name: `Batch Team ${index}`,
+            archivedAt: index === 1 ? new Date() : null,
+        }));
+        await db.team.createMany({ data: teams.slice(1) });
+        const groups = teams.map((parent, index) => ({ id: crypto.randomUUID(), teamId: parent.id, name: `Group ${index}`, nameKey: `group-${index}`, archivedAt: index === 2 ? new Date() : null }));
+        await db.teamGroup.createMany({ data: groups });
+        const measured: { grants: number; reads: number }[] = [];
+        await withAuthenticatedTestApp(sessionRoutes, async (app) => {
+            const observer = await observeInspectionReads();
+            try {
+                for (const count of [1, 100, 500]) {
+                    const session = await db.session.create({ data: {
+                        accountId: owner.id, tag: `collective-batch-${count}`, encryptionMode: "plain", metadata: "{}",
+                        currentStorageState: "hosted", primaryTeamId: team.id,
+                    } });
+                    await db.sessionTeamGrant.createMany({ data: teams.slice(0, count).map((parent) => ({ sessionId: session.id, teamId: parent.id, accessLevel: "edit" as const, requiredByTeamPolicy: true, effectiveAt: new Date() })) });
+                    await db.sessionGroupGrant.createMany({ data: groups.slice(0, count).map((group) => ({ sessionId: session.id, teamGroupId: group.id, accessLevel: "edit" as const, effectiveAt: new Date() })) });
+                    const before = observer.count();
+                    const response = await app.inject({ method: "POST", url: "/v2/sessions/access-grants/list", headers: headers(owner.id), payload: { sessionId: session.id } });
+                    measured.push({ grants: count, reads: observer.count() - before });
+                    expect(response.statusCode, response.body).toBe(200);
+                    const result = SessionAccessGrantsListResponseV1Schema.parse(response.json());
+                    expect(result.grants).toHaveLength(count * 2);
+                    const byId = new Map(result.grants.map((row) => [row.grant.subject.kind === "team" ? row.grant.subject.teamId : row.grant.subject.kind === "group" ? row.grant.subject.groupId : row.grant.subject.accountId, row.allowedTransitions]));
+                    expect(byId.get(team.id)).toMatchObject({ canRemove: false, reason: "session_access_team_policy_required" });
+                    expect(byId.get(groups[0]!.id)).toEqual({ accessLevels: ["view", "edit", "admin"], canChangePermissionDelegation: true, canRemove: true });
+                    if (count > 1) {
+                        for (const id of [teams[1]!.id, groups[1]!.id, groups[2]!.id]) expect(byId.get(id)).toEqual({ accessLevels: [], canChangePermissionDelegation: false, canRemove: true, reason: "session_access_subject_ineligible" });
+                        for (const id of [teams[2]!.id, groups[3]!.id]) expect(byId.get(id)).toEqual({ accessLevels: ["view", "edit"], canChangePermissionDelegation: false, canRemove: true, reason: "session_access_external_sharing_disabled" });
+                    }
+                }
+            } finally { observer.restore(); }
+        });
+        console.info("Team/Group grant inspection database reads", measured);
+        expect(measured[0]!.reads).toBeGreaterThan(0);
+        expect(measured, JSON.stringify(measured)).toEqual(measured.map(({ grants }) => ({ grants, reads: measured[0]!.reads })));
     });
 
     it("serves serialized owner detail accepted by the current CLI reader schemas", async () => {
@@ -104,6 +224,95 @@ describe("Session access HTTP and initial creation (SQLite integration)", () => 
                 expect(removed.statusCode, removed.body).toBe(200);
                 expect(removed.json()).toEqual({ changed, subject: grant.subject });
             }
+        });
+    });
+
+    it("inspects exact recipient access through current direct grants without treating view as input authority", async () => {
+        const { owner, recipient } = await fixture();
+        const session = await db.session.create({ data: {
+            accountId: owner.id, tag: "recipient-access", encryptionMode: "plain", metadata: "{}", currentStorageState: "hosted",
+        } });
+        await db.sessionShare.create({ data: {
+            sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: recipient.id, accessLevel: "edit",
+        } });
+        await withAuthenticatedTestApp(sessionRoutes, async (app) => {
+            const inspect = async () => {
+                const response = await app.inject({
+                    method: "POST", url: "/v2/sessions/access-grants/list", headers: headers(owner.id),
+                    payload: { sessionId: session.id, recipientAccountId: recipient.id },
+                });
+                expect(response.statusCode, response.body).toBe(200);
+                return SessionAccessGrantsListResponseV1Schema.parse(response.json());
+            };
+            expect(await inspect()).toMatchObject({ visibility: "complete", recipientAccess: {
+                accountId: recipient.id, effectiveAccess: { level: "edit", capabilities: { readTranscript: true, submitAgentInput: true } },
+            } });
+            await db.sessionShare.updateMany({ where: { sessionId: session.id }, data: { accessLevel: "view" } });
+            expect(await inspect()).toMatchObject({ recipientAccess: {
+                accountId: recipient.id, effectiveAccess: { level: "view", capabilities: { readTranscript: true, submitAgentInput: false } },
+            } });
+            await db.sessionShare.deleteMany({ where: { sessionId: session.id } });
+            expect(await inspect()).toMatchObject({ recipientAccess: { accountId: recipient.id, effectiveAccess: null } });
+        });
+    });
+
+    it("refuses recipient access probing by an admitted non-manager", async () => {
+        const { owner, recipient } = await fixture();
+        const session = await db.session.create({ data: {
+            accountId: owner.id, tag: "recipient-access-private", encryptionMode: "plain", metadata: "{}", currentStorageState: "hosted",
+        } });
+        await db.sessionShare.create({ data: {
+            sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: recipient.id, accessLevel: "edit",
+        } });
+        await withAuthenticatedTestApp(sessionRoutes, async (app) => {
+            for (const recipientAccountId of [recipient.id, owner.id, "missing-account"]) {
+                const response = await app.inject({
+                    method: "POST", url: "/v2/sessions/access-grants/list", headers: headers(recipient.id),
+                    payload: { sessionId: session.id, recipientAccountId },
+                });
+                expect(response.statusCode, response.body).toBe(403);
+                expect(response.json()).toEqual({ error: "session_access_forbidden" });
+            }
+        });
+    });
+
+    it("inspects recipient access without borrowing manager authentication for a restricted Team", async () => {
+        const { owner, recipient, team } = await fixture();
+        const session = await db.session.create({ data: {
+            accountId: owner.id, tag: "recipient-access-team", encryptionMode: "plain", metadata: "{}", currentStorageState: "hosted",
+        } });
+        await db.sessionTeamGrant.create({ data: {
+            sessionId: session.id, teamId: team.id, accessLevel: "edit", effectiveAt: new Date(),
+        } });
+        await withAuthenticatedTestApp(sessionRoutes, async (app) => {
+            const inspect = async () => {
+                const response = await app.inject({
+                    method: "POST", url: "/v2/sessions/access-grants/list",
+                    headers: { ...headers(owner.id), "x-test-authentication-evidence": JSON.stringify([{ kind: "home_method", methodId: "key_challenge" }]) },
+                    payload: { sessionId: session.id, recipientAccountId: recipient.id },
+                });
+                expect(response.statusCode, response.body).toBe(200);
+                return SessionAccessGrantsListResponseV1Schema.parse(response.json());
+            };
+            expect(await inspect()).toMatchObject({ recipientAccess: {
+                accountId: recipient.id, effectiveAccess: { level: "edit", capabilities: { submitAgentInput: true } },
+            } });
+            await db.team.update({ where: { id: team.id }, data: { authenticationPolicy: {
+                v: 1, mode: "restricted", accepted: [{ kind: "home_method", methodId: "key_challenge" }],
+            } } });
+            expect(await inspect()).toMatchObject({ recipientAccess: { accountId: recipient.id, effectiveAccess: null } });
+            vi.stubEnv("HAPPIER_FEATURE_AUTH_LOGIN__KEY_CHALLENGE_ENABLED", "0");
+            try {
+                expect(await inspect()).toMatchObject({ recipientAccess: { accountId: recipient.id, effectiveAccess: null } });
+            } finally {
+                vi.stubEnv("HAPPIER_FEATURE_AUTH_LOGIN__KEY_CHALLENGE_ENABLED", "1");
+            }
+            await db.sessionShare.create({ data: {
+                sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: recipient.id, accessLevel: "view",
+            } });
+            expect(await inspect()).toMatchObject({ recipientAccess: {
+                accountId: recipient.id, effectiveAccess: { level: "view", capabilities: { submitAgentInput: false } },
+            } });
         });
     });
 

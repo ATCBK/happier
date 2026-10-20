@@ -5,12 +5,15 @@ import type {
 } from '@happier-dev/protocol/actions';
 import type { ActionOperationObservationV1 } from '@happier-dev/protocol/actions/operations/v1';
 import type { ProjectSetupConsentFailureDetailsV1 } from '@happier-dev/protocol/actions/projectActionFamily';
+import type { ActionApprovalRequestCreatedResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 /** Retained setup-review continuation; the original invocation owns review and re-entry. */
+export type ActionOperationSetupDecision = Readonly<{ reviewedEffectDigest: string; skipForInvocation: boolean }>;
+
 export type ActionOperationReviewContinuation = Readonly<{
   waitForResume(details: ProjectSetupConsentFailureDetailsV1, producer?: Readonly<{
     /** Null means the canonical preparation owner has admitted the current effect. */
-    review(): Promise<ProjectSetupConsentFailureDetailsV1 | null>;
+    review(decision?: ActionOperationSetupDecision): Promise<ProjectSetupConsentFailureDetailsV1 | null>;
   }>): Promise<void>;
 }>;
 
@@ -33,6 +36,7 @@ export type ActionOperationProgressUpdate = Readonly<{
   queueAhead?: number;
   current?: number;
   total?: number;
+  approval?: ActionApprovalRequestCreatedResult;
 }>;
 
 export type ActionOperationOwnerUpdate = Readonly<{
@@ -48,6 +52,12 @@ export interface ActionOperationDomainOwner {
   list(scope: ActionOperationQueryScope): Promise<readonly import('@happier-dev/protocol/actions').ActionOperationSnapshotV1[]>;
   get(scope: ActionOperationQueryScope, operationId: string): Promise<import('@happier-dev/protocol/actions').ActionOperationSnapshotV1 | null>;
   cancel(scope: ActionOperationQueryScope, operationId: string): Promise<import('@happier-dev/protocol/actions').ActionOperationCancelV1Response | null>;
+  refreshSetupReview?(scope: ActionOperationQueryScope, operationId: string): Promise<void>;
+  decideSetupReview?(scope: ActionOperationQueryScope, operationId: string,
+    workspace: import('@happier-dev/protocol/workspaces/workspaceRefV1').WorkspaceAddressV1,
+    phase: 'setup' | 'teardown', decision: ActionOperationSetupDecision): Promise<ActionOperationSnapshotV1 | null>;
+  waitForTerminal?(scope: ActionOperationQueryScope, operationId: string, signal?: AbortSignal,
+    options?: Readonly<{ includeSetupReview?: true }>): Promise<ActionOperationSnapshotV1 | null>;
   subscribe(input: Readonly<{
     resolveScope(): Promise<ActionOperationQueryScope | null>;
     publishSnapshot(snapshot: import('@happier-dev/protocol/actions').ActionOperationSnapshotV1): void;

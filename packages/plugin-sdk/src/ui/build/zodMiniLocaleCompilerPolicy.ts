@@ -1,3 +1,5 @@
+/** @moduleRealm daemon */
+/** @moduleRealm build */
 import type { Plugin } from 'esbuild';
 import { dirname } from 'node:path';
 

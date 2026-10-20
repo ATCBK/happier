@@ -13,11 +13,11 @@ vi.mock('@/sync/domains/state/storage', async () => {
     return createStorageModuleStub({ useLocalSetting: () => 1 });
 });
 installCodeViewCommonModuleMocks({ reactNative: async () => import('react-native-web') });
+const { FileContentPanel } = await import('./FileContentPanel');
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('raw file panel web scrolling', () => {
     it.each([true, false])('owns scrolling and retains the reading passage below the virtualization threshold, wrap=%s', async (wrapLines) => {
-        const { FileContentPanel } = await import('./FileContentPanel');
         const host = document.createElement('div');
         document.body.appendChild(host);
         const root = createRoot(host);

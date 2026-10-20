@@ -56,11 +56,11 @@ describe('happier session run streams (credential-aware Action executor)', () =>
         { readCredentialsFn: async () => apiTokenCredentials },
       );
 
-      expect(createCliActionExecutorFromCredentials).toHaveBeenCalledWith({
+      expect(createCliActionExecutorFromCredentials).toHaveBeenCalledWith(expect.objectContaining({
         credentials: apiTokenCredentials,
         readCredentials: expect.any(Function),
         resolveServerFeaturesSnapshot: expect.any(Function),
-      });
+      }));
       expect(resolveSessionTarget).toHaveBeenCalledWith('sess-prefix');
       expect(resolveSessionTransportContext).not.toHaveBeenCalled();
       expect(startExecutionRunStream).not.toHaveBeenCalled();

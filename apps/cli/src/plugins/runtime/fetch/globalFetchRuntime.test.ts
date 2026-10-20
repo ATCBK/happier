@@ -39,6 +39,33 @@ describe('createGlobalFetchRuntime', () => {
         }));
     });
 
+    it('delivers a plugin DELETE body through the real pinned transport', async () => {
+        const body = new TextEncoder().encode('{"members":["qa-user"]}');
+        let receivedBody = '';
+        const server = createServer(async (request, response) => {
+            const chunks: Buffer[] = [];
+            for await (const chunk of request) chunks.push(Buffer.from(chunk));
+            receivedBody = Buffer.concat(chunks).toString('utf8');
+            response.end('ok');
+        });
+        servers.push(server);
+        await new Promise<void>((resolve, reject) => {
+            server.once('error', reject);
+            server.listen(0, '127.0.0.1', resolve);
+        });
+        const address = server.address();
+        if (!address || typeof address === 'string') throw new TypeError('Expected a TCP test listener');
+        const response = await createGlobalFetchRuntime().request({
+            url: `http://body.example.test:${address.port}/members`,
+            method: 'DELETE',
+            headers: { 'content-type': 'application/json' },
+            body,
+            redirect: 'error',
+        }, { validatedAddresses: ['127.0.0.1'] });
+        expect(response.status).toBe(200);
+        expect(receivedBody).toBe(new TextDecoder().decode(body));
+    });
+
     it('connects only to the policy-validated address while preserving the URL hostname', async () => {
         let receivedHost = '';
         const server = createServer((request, response) => {

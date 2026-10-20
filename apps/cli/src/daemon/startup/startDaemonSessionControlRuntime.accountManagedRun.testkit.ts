@@ -28,7 +28,7 @@ import { admitRequesterSessionBootstrap, type RequesterSessionRuntimeContext } f
 import { createRequesterSessionRuntimeContext } from '@/daemon/sessionEncryption/createRequesterSessionRuntimeContext';
 
 const boundary = vi.hoisted(() => ({ control: null as Parameters<typeof startDaemonControlServer>[0] | null,
-  resolveRunAuthority: null as ((request: SessionExecutionRunBrokerAuthorityRequestV1) => SessionExecutionRunBrokerAuthorityResponseV1) | null,
+  resolveRunAuthority: null as ((request: SessionExecutionRunBrokerAuthorityRequestV1, signal?: AbortSignal) => SessionExecutionRunBrokerAuthorityResponseV1 | Promise<SessionExecutionRunBrokerAuthorityResponseV1>) | null,
   refusedCapabilityRoot: '', blockedCapabilityPaths: new Set<string>() }));
 // One filesystem boundary for the two exact capability-retirement fault cases.
 vi.mock('node:fs/promises', async importOriginal => {
@@ -62,17 +62,17 @@ vi.mock('@/api/client/connectedServiceCredentialApi', async importOriginal => ({
     recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' },
   }),
 }));
-vi.mock('@/session/transport/rpc/sessionRpc', () => ({ callSessionRpc: async (input: { request: SessionExecutionRunBrokerAuthorityRequestV1 }) => boundary.resolveRunAuthority?.(input.request) ?? ({
+vi.mock('@/session/transport/rpc/sessionRpc', () => ({ callSessionRpc: async (input: { request: SessionExecutionRunBrokerAuthorityRequestV1; signal?: AbortSignal }) => boundary.resolveRunAuthority?.(input.request, input.signal) ?? ({
   status: 'current', executionRunId: input.request.executionRunId, occurrenceId: input.request.expectedOccurrenceId,
   parentSessionId: 'parent-session', intent: 'review', runtimeState: 'idle', teamCredentialProviderModel: null,
 }) }));
-vi.mock('@/ui/logger', () => ({ logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } }));
+vi.mock('@/ui/logger', () => ({ logger: { debug: () => {}, info: () => {}, infoFile: () => {}, warn: () => {}, error: () => {} } }));
 
 /** A genuine installed Agent/Provider and live daemon service dispatcher for
  * consumer delivery tests. No source projection, runtime owner or token is
  * fabricated by this fixture. */
 export async function createAttachedManagedRunFixture(input: Readonly<{ directory?: string; issuedRequester?: boolean;
-  resolveRunAuthority?(request: SessionExecutionRunBrokerAuthorityRequestV1): SessionExecutionRunBrokerAuthorityResponseV1;
+  resolveRunAuthority?(request: SessionExecutionRunBrokerAuthorityRequestV1, signal?: AbortSignal): SessionExecutionRunBrokerAuthorityResponseV1 | Promise<SessionExecutionRunBrokerAuthorityResponseV1>;
   browserStartup?: Pick<Parameters<typeof startDaemonSessionControlRuntime>[0],
     'browserSidecarControlAdapterFactory' | 'resolveServerFeaturesSnapshot' | 'onBrowserControlRoutesReady'> & Readonly<{
       readMachineMemory?: () => import('@happier-dev/protocol').MachineVitalsSampleV1['memory'] | null;
@@ -136,7 +136,12 @@ export async function createAttachedManagedRunFixture(input: Readonly<{ director
       externalActionAccountId: 'account', credentials, api: {} as never,
       resolveManagedPurposeBindingIntent: fixture.gateway.purposeBindingOwner.resolveBindingIntent,
       ...(input.issuedRequester ? { resolveRequesterSessionRuntimeContext: async (sessionId: string) =>
-        requester?.bootstrap.getBoundSessionId() === sessionId ? requester : null } : {}),
+        requester?.bootstrap.getBoundSessionId() === sessionId ? requester : null,
+        // This fixture lends its shared requester; cleanup above owns its disposal.
+        releaseRequesterSessionRuntimeContext: async () => {} } : {
+        resolveRequesterSessionRuntimeContext: undefined,
+        releaseRequesterSessionRuntimeContext: undefined,
+      }),
       connectedServiceRuntimeRegistry,
       openAccountConnectionManagedConsumerSource: async input => {
         sourceDiagnostics.stage = 'reading_owned_snapshot';
@@ -151,7 +156,7 @@ export async function createAttachedManagedRunFixture(input: Readonly<{ director
               if (!contributes.providersByContributionKey) throw new Error('Missing committed Provider projection');
               return await read({ ...contributes, providersByContributionKey: contributes.providersByContributionKey });
             },
-          resolveBindingIntent: input.resolveManagedPurposeBindingIntent, admitConsumer: async () => await input.isCurrent(),
+          resolveBindingIntent: input.resolveManagedPurposeBindingIntent, admitConsumer: async (_request, signal) => await input.isCurrent(signal),
           projectModels: request => models.projectModelsForAccount(request, { getAccountSettingsSnapshot: () => owned,
             resolveManagedPurposeBindingIntent: input.resolveManagedPurposeBindingIntent, signal: input.signal, isCurrent: input.isCurrent }),
         })({ ...input.request, signal: input.signal });
@@ -216,7 +221,8 @@ export async function createAttachedManagedRunFixture(input: Readonly<{ director
     const context: Parameters<AgentRuntimeDaemonServiceRoutes['dispatch']>[1] = { sessionId: 'parent-session', runner, retainedAgent,
       invocationContext: tracked.runnerAgentInvocationContext!, trackedSession: tracked,
       isCurrent: async () => pidToTrackedSession.get(tracked.pid) === tracked, signal };
-    const dispatchRequest = async (request: unknown) => await service.dispatch(AgentRuntimeDaemonServiceRequestV1Schema.parse(request), context);
+    const dispatchRequest = async (request: unknown, signal?: AbortSignal) => await service.dispatch(AgentRuntimeDaemonServiceRequestV1Schema.parse(request),
+      signal ? { ...context, signal } : context);
     const dispatch = async (operation: unknown) => await dispatchRequest({ v: 1,
       context: { token: 'a'.repeat(43), sessionId: 'parent-session' }, operation });
     const proof = { executionRunId: 'run-private', executionRunOccurrenceId: 'run-occurrence', agentId: fixture.agentId, modelId: 'example',
@@ -258,7 +264,7 @@ export async function createAttachedManagedRunControlTransport(
     const request = AgentRuntimeDaemonServiceRequestV1Schema.parse(JSON.parse(String(init?.body)));
     const refused = await input.beforeDispatch?.(request);
     if (refused) return refused;
-    const response = await fixture.dispatchRequest(request);
+    const response = await fixture.dispatchRequest(request, init?.signal ?? undefined);
     if (response.ok && response.result.kind === 'provider_managed.binding') binding = response.result;
     await input.afterDispatch?.(request, response);
     return Response.json(response);

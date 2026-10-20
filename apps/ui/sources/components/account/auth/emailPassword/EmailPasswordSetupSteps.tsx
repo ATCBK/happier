@@ -7,7 +7,7 @@ import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { t } from '@/text';
 import { HappierStepMarkerView } from '@happier-dev/plugin-ui/presentation';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 
 export type EmailPasswordSetupStep = 'email' | 'confirm' | 'password';
 const EMAIL_PASSWORD_SETUP_STEPS: readonly EmailPasswordSetupStep[] = ['email', 'confirm', 'password'];
@@ -38,7 +38,7 @@ export function EmailPasswordSetupSteps(props: Readonly<{
     inset?: boolean;
 }>) {
     const { theme } = useUnistyles();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const current = EMAIL_PASSWORD_SETUP_STEPS.indexOf(props.step);
     return (
         <View style={[styles.setup, props.inset === false ? styles.flush : null]}>

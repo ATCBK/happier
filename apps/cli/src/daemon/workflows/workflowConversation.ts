@@ -3,7 +3,18 @@ import type {
   WorkflowProgressEnvelopeV1,
   WorkflowStepExecutionSelection,
 } from '@happier-dev/protocol/workflows';
+import type { WorkflowConversationUnavailableDetailsV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import type { SessionLaunchRetiredV1 } from '@happier-dev/protocol/spawnSession';
+import { logger } from '@/ui/logger';
 export { workflowBodyOwnsConversation } from '@happier-dev/protocol/workflows/workflowInvocationStructureV1';
+
+export class WorkflowSessionCompositionError extends Error {
+  constructor(readonly code: string, message = code, readonly details?: WorkflowConversationUnavailableDetailsV1,
+    readonly launchFailure?: SessionLaunchRetiredV1) {
+    super(message);
+    if (details) logger.infoFile(JSON.stringify({ event: 'workflow_conversation_refused', errorCode: code, ...details }));
+  }
+}
 
 export type WorkflowConversationTargetClass = 'session' | 'detached_run';
 
@@ -69,7 +80,7 @@ export type WorkflowConversationSelectionResolution =
   | Readonly<{ kind: 'observe'; execution: NonNullable<WorkflowProgressEnvelopeV1['execution']> }>
   | Readonly<{ kind: 'retained'; execution: NonNullable<WorkflowProgressEnvelopeV1['execution']> }>
   | Readonly<{ kind: 'unavailable' }>
-  | Readonly<{ kind: 'select'; binding: WorkflowConversationBinding }>;
+  | Readonly<{ kind: 'select'; binding: Exclude<WorkflowConversationBinding, { kind: 'input' }> }>;
 
 /** Rejoin is exact-input observation; recovery intent precedes authored continuity. */
 export function resolveWorkflowConversationSelection(params: Readonly<{
@@ -89,14 +100,12 @@ export function resolveWorkflowConversationSelection(params: Readonly<{
       ? { kind: 'retained', execution: params.recoveryPreviousExecution }
       : { kind: 'unavailable' };
   }
-  return {
-    kind: 'select',
-    binding: params.conversationBinding ?? resolveWorkflowConversationBinding({
-      execution: params.execution,
-      authoredConversation: params.execution.conversation,
-      inheritedOwnerKey: params.runId,
-      rootOwnerKey: params.runId,
-      targetClass: params.executionTarget?.kind ?? 'session',
-    }),
-  };
+  const binding = params.conversationBinding ?? resolveWorkflowConversationBinding({
+    execution: params.execution,
+    authoredConversation: params.execution.conversation,
+    inheritedOwnerKey: params.runId,
+    rootOwnerKey: params.runId,
+    targetClass: params.executionTarget?.kind ?? 'session',
+  });
+  return binding.kind === 'input' ? { kind: 'unavailable' } : { kind: 'select', binding };
 }

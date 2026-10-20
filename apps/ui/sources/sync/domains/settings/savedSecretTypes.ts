@@ -1,5 +1,5 @@
 import { SavedSecretSchema as ProtocolSavedSecretSchema } from '@happier-dev/protocol/profiles/backendProfileSchema';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { SavedSecretImportSourceV1, SavedSecretLegacyChatCredentialV1 } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
 
 export const SavedSecretSchema = ProtocolSavedSecretSchema;

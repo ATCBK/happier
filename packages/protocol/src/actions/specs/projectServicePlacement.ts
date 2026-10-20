@@ -8,11 +8,19 @@ import type { ActionInputFieldHint } from '../actionInputHintsRuntime.js';
 export const PROJECT_SERVICE_PLACEMENT_ACTION_IDS_V1 = [
   'projects.service.placement.get', 'projects.service.placement.set',
 ] as const;
-export const ProjectServicePlacementActionInputSchemasV1 = {
+type ProjectServicePlacementActionInputSchemas = Readonly<{
+  'projects.service.placement.get': typeof ProjectServicePlacementGetV1Schema;
+  'projects.service.placement.set': typeof ProjectServicePlacementSetV1Schema;
+}>;
+type ProjectServicePlacementActionOutputSchemas = Readonly<{
+  'projects.service.placement.get': typeof ProjectServicePlacementGetResultV1Schema;
+  'projects.service.placement.set': typeof ProjectServicePlacementMutationResultV1Schema;
+}>;
+export const ProjectServicePlacementActionInputSchemasV1: ProjectServicePlacementActionInputSchemas = {
   'projects.service.placement.get': ProjectServicePlacementGetV1Schema,
   'projects.service.placement.set': ProjectServicePlacementSetV1Schema,
 } as const;
-export const ProjectServicePlacementActionOutputSchemasV1 = {
+export const ProjectServicePlacementActionOutputSchemasV1: ProjectServicePlacementActionOutputSchemas = {
   'projects.service.placement.get': ProjectServicePlacementGetResultV1Schema,
   'projects.service.placement.set': ProjectServicePlacementMutationResultV1Schema,
 } as const;
@@ -37,7 +45,7 @@ export const PROJECT_SERVICE_PLACEMENT_ACTION_SPECS = PROJECT_SERVICE_PLACEMENT_
   const title = read ? 'Read service placement' : 'Set service placement';
   return {
     id, approval: read ? { result: 'required' } : { result: 'optional', flow: 'deferred' },
-    approvalPolicy: { uiConfirmation: 'policy' }, title, description: read ? 'Read desired next-start placement and separately observed actual native service custody.'
+    approvalPolicy: { uiConfirmation: 'direct' }, title, description: read ? 'Read desired next-start placement and separately observed actual native service custody.'
       : 'Save the destination and fallback for the next service start without starting or moving the service.',
     safety: read ? 'safe' : 'danger', sideEffectClass: read ? 'read' : 'write', executionPlacement: 'account', placements: [],
     surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },

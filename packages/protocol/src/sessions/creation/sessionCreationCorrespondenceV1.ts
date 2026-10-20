@@ -17,6 +17,7 @@ import { SessionDirectoryIntentV1Schema, refineSessionDirectoryIntentCheckoutV1 
 import { SessionIdentityAdditionsV1Schema } from '../identity/sessionBotV1.js';
 import { SessionPromptStackV1Schema } from '../context/sessionContextV1.js';
 import { ManagedControllerV1Schema } from '../../machines/managed/managedMachineV1.js';
+import { SessionDiscussionParticipantV1Schema } from './sessionDiscussionParticipantV1.js';
 
 /** Immutable birth provenance, validated against Home's admitted resource before Session creation. */
 export const SessionManagedCreationV1Schema = lazyZodSchema(() => z.strictObject({
@@ -40,6 +41,7 @@ const createSessionCreationImmutableRecipeSchema = () => z.strictObject({
   memoryEnabled: z.optional(z.boolean()),
   promptStack: z.optional(SessionPromptStackV1Schema),
   managedCreation: z.optional(SessionManagedCreationV1Schema),
+  discussionParticipant: z.optional(SessionDiscussionParticipantV1Schema),
   secretReferenceOverlay: z.optional(SecretReferenceOverlayV1Schema),
   requestedPermissionMode: z.nullable(z.string().check(z.trim(), z.minLength(1))),
   agentModeId: z.nullable(z.string().check(z.trim(), z.minLength(1))),
@@ -122,14 +124,29 @@ export function sessionCreationCorrespondenceMatchesV1(
 }
 
 function semanticCorrespondence(value: SessionCreationCorrespondenceV1) {
-  const selection = value.recipe.modelSelection;
   return {
     ...value,
     recipe: {
       ...value.recipe,
-      // Selection time orders later model updates; it does not change the
-      // initial model/provider binding. Keep the stored carrier unchanged.
-      modelSelection: selection ? { v: selection.v, ref: selection.ref } : null,
+      ...normalizeSessionCreationSelectionIdentityV1(value.recipe),
     },
+  };
+}
+
+type SessionCreationSelections = Readonly<Partial<Pick<SessionCreationImmutableRecipeV1, 'modelSelection' | 'configuration'>>>;
+
+/** Ordering times govern later edits, not the meaning of an initial launch retry. */
+export function normalizeSessionCreationSelectionIdentityV1(input: SessionCreationSelections): SessionCreationSelections {
+  return {
+    ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection
+      ? { ...input.modelSelection, updatedAt: 0 } : null }),
+    ...(input.configuration === undefined ? {} : { configuration: input.configuration ? {
+      ...input.configuration,
+      mode: { ...input.configuration.mode, updatedAtMs: 0 },
+      model: { ...input.configuration.model, updatedAtMs: 0 },
+      permissionIntent: { ...input.configuration.permissionIntent, updatedAtMs: 0 },
+      options: Object.fromEntries(Object.entries(input.configuration.options).map(([id, option]) =>
+        [id, { ...option, updatedAtMs: 0 }])),
+    } : null }),
   };
 }

@@ -1,3 +1,4 @@
+import { z } from 'zod/mini';
 import type { SessionTerminalMemberV1 } from '@happier-dev/protocol/terminal';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions';
 import { awaitPendingMachineTerminalCreation, machineTerminalClose, machineTerminalList } from '@/sync/ops/machineTerminal';
@@ -47,6 +48,7 @@ export async function closeOwnedSessionTerminals(input: Readonly<{
         for (const identity of identities) {
             if (!identity.member.pendingActionApproval) {
                 await awaitPendingMachineTerminalCreation(identity.machineId, identity.terminalKey, { serverId, accountId,
+                    signal: input.signal,
                     shouldStopWaiting: () => Boolean(readSessionTerminalWorkspaceForScope(input.scopeId)?.tabs
                         .flatMap(tab => tab.terminals).find(member => member.id === identity.member.id)?.pendingActionApproval),
                 });
@@ -93,7 +95,7 @@ export async function closeOwnedSessionTerminals(input: Readonly<{
         // authoritative even when the bounded output projection was evicted.
         const lists = new Map<string, Awaited<ReturnType<typeof machineTerminalList>>>();
         const closable: { machineId: string; terminalId: string; terminalKey: string }[] = [];
-        await Promise.all(identities.map((identity) => awaitPendingMachineTerminalCreation(identity.machineId, identity.terminalKey, { serverId, accountId })));
+        await Promise.all(identities.map((identity) => awaitPendingMachineTerminalCreation(identity.machineId, identity.terminalKey, { serverId, accountId, signal: input.signal })));
         for (const identity of identities) {
             if (input.signal?.aborted) return failed('action_cancelled');
             if (!isCurrent()) return failed('terminal_scope_unavailable');
@@ -106,7 +108,7 @@ export async function closeOwnedSessionTerminals(input: Readonly<{
                     const result = await execute('machines.terminal.list', { serverId, machineId: identity.machineId,
                         ...(queryWorkspace ? { workspace: queryWorkspace } : {}) }, actionContext());
                     if (!result.ok) return failed(result.errorCode ?? result.error);
-                    const parsed = DaemonTerminalListResponseV1Schema.nullable().safeParse(result.result);
+                    const parsed = z.nullable(DaemonTerminalListResponseV1Schema).safeParse(result.result);
                     if (!parsed.success) return failed('terminal_invalid_response');
                     lists.set(censusKey, parsed.data);
                 } else lists.set(censusKey, await machineTerminalList(identity.machineId, {

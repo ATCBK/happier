@@ -63,7 +63,7 @@ export const MACHINE_PAGE_ACTION_OUTPUT_SCHEMAS = {
 export type MachinePageActionInput = z.infer<(typeof MACHINE_PAGE_ACTION_INPUT_SCHEMAS)[MachinePageActionId]>;
 export const HomeReconnectInputSchema = lazyZodSchema(() => z.strictObject({ serverId: id }));
 export const HomeReconnectOutputSchema = HomeReconnectInputSchema;
-export const HomeConnectInputSchema = lazyZodSchema(() => z.object({
+export const HomeConnectInputSchema = lazyZodSchema(() => z.strictObject({
   address: id,
   displayName: z.optional(id),
   acceptInsecureHttp: z._default(z.boolean(), false),

@@ -27,6 +27,20 @@ function fixture(protocolVersion = 4) {
 }
 
 describe('CLI reset start admission', () => {
+  it.each([false, undefined])('preserves the explicit inactive-resume choice (%s) through the pending Action', async resumeWhenAvailable => {
+    const { deps } = fixture();
+    const requestedAction = { v: 1, kind: 'enqueue' } as const;
+    const patch = vi.spyOn(axios, 'patch').mockResolvedValue({ status: 200, data: { ok: true, didUpdate: true, requestedAction } });
+    expect(await createActionExecutor(deps).execute('session.pending.action.set', {
+      sessionId: 'session/one', localId: 'input/one', requestedAction,
+      ...(resumeWhenAvailable !== undefined ? { resumeWhenAvailable } : {}),
+    }, { surface: 'ui', authority: 'present_user', presentUserConfirmation: { actionId: 'session.pending.action.set' } }))
+      .toEqual({ ok: true, result: { didUpdate: true, requestedAction } });
+    expect(patch).toHaveBeenCalledWith(expect.stringContaining('/v2/sessions/session%2Fone/pending/input%2Fone/action'),
+      { requestedAction, ...(resumeWhenAvailable !== undefined ? { resumeWhenAvailable } : {}) },
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer account-token' }) }));
+  });
+
   it.each(['session.pending.markHandled', 'session.pending.dismiss', 'session.pending.sendAsNew'] as const)(
     'delivers %s through the registered Action and existing pending HTTP owner', async actionId => {
       const { deps } = fixture();

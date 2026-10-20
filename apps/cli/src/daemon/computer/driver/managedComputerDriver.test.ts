@@ -11,6 +11,7 @@ import { createCliActionExecutorHarness } from '@/session/actions/createCliActio
 import { createDaemonRuntimeActionExecutor } from '../../runtimeActionExecutor';
 import type { MachineLiveStreamFrameV1, MachineLiveStreamRelayEnvelopeV1 } from '@happier-dev/protocol';
 import { ActionsSettingsV1Schema, FeaturesResponseSchema, decideApprovalRequestTransition, type ApprovalRequest } from '@happier-dev/protocol';
+import { ComputerSelectedTargetResponseV1Schema } from '@happier-dev/protocol/computer/v1';
 
 
 describe('native primary-display and macOS contract', () => {
@@ -22,7 +23,7 @@ describe('native primary-display and macOS contract', () => {
     } };
   }
 
-  it('enumerates the native primary display through the actual targets route without selecting it', async () => {
+  it('carries the enumerated primary-display label through selection and subsequent target reads', async () => {
     native.call.mockImplementation(async ({ name }) => name === 'list_windows' ? { structuredContent: { windows: [] } }
       : name === 'get_screen_size' ? { structuredContent: { width: 200, height: 100, scale_factor: 1 } }
         : name === 'get_desktop_state' ? desktopResult() : { structuredContent: { x11: true, xsend_event: false } });
@@ -35,6 +36,13 @@ describe('native primary-display and macOS contract', () => {
           displays: { status: 'available' }, grants: { capture: 'granted', input: 'denied' } });
       expect(registry.list()).toHaveLength(0);
       expect(native.tools.some(tool => tool.name === 'get_desktop_state')).toBe(false);
+      const selection = ComputerSelectedTargetResponseV1Schema.parse(await routes.dispatch('computer.target.select',
+        { machineId: 'machine', target: { kind: 'display', displayId: ':73' }, access: 'see' },
+        { authority: 'present_user', defaultSessionId: 'session' }));
+      expect(selection.approvalDisplay.target).toEqual({ kind: 'display', title: 'primary' });
+      expect(await routes.dispatch('computer.target.get', { machineId: 'machine' },
+        { authority: 'present_user', defaultSessionId: 'session' }))
+        .toMatchObject({ approvalDisplay: { target: { kind: 'display', title: 'primary' } } });
     } finally { await routes.dispose(); }
   });
 
@@ -88,7 +96,7 @@ describe('native primary-display and macOS contract', () => {
       expect(await driver.checkPermissions()).toEqual({ capture: 'granted', input: 'denied' });
       expect(await driver.listTargets()).toEqual(expect.arrayContaining([
         expect.objectContaining({ target: { kind: 'window', displayId: 'primary', pid: 42, windowId: 123 } }),
-        expect.objectContaining({ target: { kind: 'display', displayId: 'primary' } }),
+        expect.objectContaining({ target: { kind: 'display', displayId: 'primary' }, label: 'primary', title: 'primary' }),
       ]));
       const capture = await driver.capture({ kind: 'display', displayId: 'primary' });
       expect(capture.geometry).toMatchObject({ captureWidth: 200, captureHeight: 100, nativeWidth: 100,

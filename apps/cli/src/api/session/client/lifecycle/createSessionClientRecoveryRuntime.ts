@@ -21,7 +21,7 @@ export type SessionClientRecoveryRuntime = Readonly<{
     catchUpSessionMessages: (request: SessionCatchUpRequest) => Promise<void>;
     scheduleNextStartupMessageCatchUpRetry: () => void;
     clearStartupMessageCatchUpRetryTimer: () => void;
-    syncChangesOnConnect: (opts: { reason: 'connect' | 'reconnect' }) => Promise<void>;
+    syncChangesOnConnect: (opts: { reason: 'connect' | 'reconnect' | 'live' }) => Promise<void>;
     getAccountId: () => Promise<string | null>;
 }>;
 
@@ -54,6 +54,7 @@ export function createSessionClientRecoveryRuntime(
     const serverUrl = params.serverUrl ?? resolveServerHttpBaseUrl();
     let accountIdPromise: Promise<string> | null = null;
     let changesSyncInFlight: Promise<void> | null = null;
+    let liveChangesPending = false;
     const sessionChangesCursorByAccountId = new Map<string, number>();
     let startupMessageCatchUpRetryTimer: ReturnType<typeof setTimeout> | null = null;
     const catchUpSessionMessages = async (catchUpRequest: SessionCatchUpRequest): Promise<void> => {
@@ -209,27 +210,35 @@ export function createSessionClientRecoveryRuntime(
         }
     };
 
-    const syncChangesOnConnect = async (opts: { reason: 'connect' | 'reconnect' }): Promise<void> => {
+    const syncChangesOnConnect = async (opts: { reason: 'connect' | 'reconnect' | 'live' }): Promise<void> => {
         if (params.accountChangesEnabled !== false && !isV2ChangesSyncEnabled(process.env.HAPPY_ENABLE_V2_CHANGES)) {
+            if (opts.reason === 'live' && !params.getClosed()) await params.refreshDemandedAccountCatalogs?.();
             return;
         }
 
         if (params.getClosed()) return;
         if (changesSyncInFlight) {
+            if (opts.reason === 'live') {
+                // A hint may describe a write after the active read began.
+                // Keep one follow-up on this owner rather than one read per waiter.
+                liveChangesPending = true;
+                await changesSyncInFlight;
+                return;
+            }
             await changesSyncInFlight.catch(() => {});
         }
 
         // A scoped Session has no Account change cursor. The existing exact
         // transcript/snapshot recovery owners reconstruct its projection.
-        const pending = params.accountChangesEnabled === false
+        const sync = (reason: 'connect' | 'reconnect' | 'live') => params.accountChangesEnabled === false
             ? (async () => {
-                if (opts.reason === 'reconnect') {
+                if (reason === 'reconnect') {
                     await catchUpSessionMessages({ afterSeq: params.getLastObservedMessageSeq() });
                 }
-                await params.syncSessionSnapshotFromServer({ reason: opts.reason });
+                await params.syncSessionSnapshotFromServer({ reason: reason === 'live' ? 'explicit-drain' : reason });
             })()
             : runWithServerHttpBaseUrl(serverUrl, () => runSessionChangesSyncOnConnect({
-            reason: opts.reason,
+            reason,
             token: params.token,
             sessionId: params.sessionId,
             lastObservedMessageSeq: params.getLastObservedMessageSeq(),
@@ -245,6 +254,15 @@ export function createSessionClientRecoveryRuntime(
             connectionSupervisor: params.getSessionConnectionSupervisor(),
             onDebug: (message, data) => logger.debug(message, data),
         }));
+
+        const pending = (async () => {
+            let reason = opts.reason;
+            do {
+                liveChangesPending = false;
+                await sync(reason);
+                reason = 'live';
+            } while (liveChangesPending && !params.getClosed());
+        })();
 
         changesSyncInFlight = pending;
         try {

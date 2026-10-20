@@ -1,12 +1,19 @@
 import * as React from 'react';
 import type { ReactTestInstance } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
 import { renderScreen } from '@/dev/testkit';
 import { installNewSessionComponentsCommonModuleMocks } from './newSessionComponentsTestHelpers';
 import type { AppTextProps, AppTextInputProps } from '@/components/ui/text/Text';
 import { ModalPortalTargetProvider } from '@/modal/portal/ModalPortalTarget';
+import { installSessionOpsNetworkBoundary, type SessionOpsRpcRequest } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { activateStorageAccountScope } from '@/dev/testkit/runtime/storageRuntime';
+import { DaemonFilesystemListDirectoryRequestSchema, DaemonFilesystemListDirectoryResponseSchema,
+    type DaemonFilesystemListDirectoryResponse } from '@happier-dev/protocol/machines/fileBrowser';
+import { RPC_ERROR_CODES, RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -16,21 +23,45 @@ installNewSessionComponentsCommonModuleMocks({
     }),
 });
 
-// Hoisted mocks so the production module sees them at import time.
+// The daemon filesystem reply is the network boundary; sorting, caching,
+// Home/Account admission and the picker lifecycle remain real.
 const openMachinePathBrowserModalMock = vi.hoisted(() => vi.fn());
-const listMachineFileBrowserDirectoryEntriesMock = vi.hoisted(() => vi.fn());
+type DirectoryReply = Pick<Extract<DaemonFilesystemListDirectoryResponse, { ok: true }>, 'ok' | 'entries'>
+    | Extract<DaemonFilesystemListDirectoryResponse, { ok: false }>;
+type DirectoryRequest = Pick<SessionOpsRpcRequest, 'serverUrl' | 'targetId' | 'method' | 'payload'>;
+const listMachineFileBrowserDirectoryEntriesMock = vi.hoisted(() => vi.fn<(request: DirectoryRequest) => Promise<DirectoryReply>>());
 
 vi.mock('@/components/ui/pathBrowser/openMachinePathBrowserModal', () => ({
     openMachinePathBrowserModal: (input: unknown) => openMachinePathBrowserModalMock(input),
 }));
 
-vi.mock('@/sync/domains/input/machineFileBrowser', () => ({
-    listMachineFileBrowserDirectoryEntries: (input: unknown) => listMachineFileBrowserDirectoryEntriesMock(input),
-}));
+const network = await installSessionOpsNetworkBoundary();
+await loadSyncSingletonForTests();
+let accountScope: Awaited<ReturnType<typeof activateStorageAccountScope>> | null = null;
+afterAll(() => network.dispose());
+afterEach(() => { accountScope?.dispose(); accountScope = null; });
 
-beforeEach(() => {
+beforeEach(async () => {
     openMachinePathBrowserModalMock.mockReset();
-    listMachineFileBrowserDirectoryEntriesMock.mockReset();
+    listMachineFileBrowserDirectoryEntriesMock.mockReset().mockResolvedValue({ ok: true, entries: [] });
+    network.resetRequests();
+    const home = await network.addHome('https://srv-a', 'account-a');
+    await network.addHome('https://srv-b', 'account-b');
+    await network.addHome('https://srv-1', 'account-c');
+    const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
+    await setActiveServerId(home.id);
+    accountScope = await activateStorageAccountScope({ serverId: home.id, accountId: home.accountId });
+    network.setRpcAckResponder(async request => {
+        if (request.method !== RPC_METHODS.DAEMON_FILESYSTEM_LIST_DIRECTORY) {
+            return { ok: false, error: 'Unsupported fixture RPC', errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
+        }
+        const payload = DaemonFilesystemListDirectoryRequestSchema.parse(request.payload);
+        const reply = await listMachineFileBrowserDirectoryEntriesMock({
+            serverUrl: request.serverUrl, targetId: request.targetId, method: request.method, payload,
+        });
+        return { ok: true, result: DaemonFilesystemListDirectoryResponseSchema.parse(reply.ok
+            ? { path: payload.path, truncated: false, ...reply } : reply) };
+    });
 });
 
 // The canonical `@/components/ui/text/Text` primitive depends on
@@ -83,6 +114,14 @@ function flattenStyle(props: StyleLikeProps): Record<string, unknown> {
 
 function readProps<P>(node: ReactTestInstance): P {
     return node.props as P;
+}
+
+function selectedOptionState(screen: Awaited<ReturnType<typeof renderScreen>>, optionId: string): boolean {
+    // The option's ARIA owner may be an inner gridcell rather than its layout row.
+    const owner = screen.tree.root.findAll((node) => typeof node.type === 'string'
+        && node.props.id === optionId && typeof node.props['aria-selected'] === 'boolean')[0];
+    if (!owner) throw new Error(`Missing selected-state owner for ${optionId}`);
+    return readProps<OptionWrapperLikeProps>(owner)['aria-selected']!;
 }
 
 function createInputNodeMock(focus: () => void) {
@@ -171,8 +210,7 @@ describe('PathSelectionList', () => {
                 && !node.props.testID.includes(':favorite-toggle'))
             .map((node) => node.props.testID as string);
         expect(optionIds[0]).toBe('path-selection-list:path-root:option:no-folder');
-        const noFolderWrapper = screen.findByTestId('path-selection-list:path-root:option-wrapper:no-folder');
-        expect(readProps<OptionWrapperLikeProps>(noFolderWrapper!)['aria-selected']).toBe(false);
+        expect(selectedOptionState(screen, 'path-selection-list:path-root:option:no-folder')).toBe(false);
 
         await act(async () => {
             readProps<PressableLikeProps>(screen.findByTestId('path-selection-list:path-root:option:no-folder')!).onPress?.();
@@ -182,8 +220,7 @@ describe('PathSelectionList', () => {
         act(() => screen.tree.unmount());
 
         const selectedScreen = await render(true);
-        const selectedWrapper = selectedScreen.findByTestId('path-selection-list:path-root:option-wrapper:no-folder');
-        expect(readProps<OptionWrapperLikeProps>(selectedWrapper!)['aria-selected']).toBe(true);
+        expect(selectedOptionState(selectedScreen, 'path-selection-list:path-root:option:no-folder')).toBe(true);
         act(() => selectedScreen.tree.unmount());
     });
 
@@ -279,6 +316,29 @@ describe('PathSelectionList', () => {
         expect(focus).toHaveBeenCalled();
     });
 
+    it('leaves focus alone when embedded in a page form, so opening the page does not scroll to the field', async () => {
+        const focus = vi.fn();
+        const { PathSelectionList } = await import('./PathSelectionList');
+
+        await renderScreen(
+            <PathSelectionList
+                initialValue=""
+                favorites={[]}
+                recents={[]}
+                machineHomeDir="/Users/leeroy"
+                machineId="m-1"
+                serverId={null}
+                machinePlatform="unix"
+                autoFocusInput={false}
+                onCommit={() => {}}
+                onRequestClose={() => {}}
+            />,
+            { createNodeMock: createInputNodeMock(focus) },
+        );
+
+        expect(focus).not.toHaveBeenCalled();
+    });
+
     it('does not render the IN THIS FOLDER section when the input is empty (idle state)', async () => {
         const { PathSelectionList } = await import('./PathSelectionList');
         const screen = await renderScreen(
@@ -362,8 +422,8 @@ describe('PathSelectionList', () => {
 
         expect(firstWrapper).not.toBeNull();
         expect(currentWrapper).not.toBeNull();
-        expect(readProps<OptionWrapperLikeProps>(firstWrapper!)['aria-selected']).toBe(false);
-        expect(readProps<OptionWrapperLikeProps>(currentWrapper!)['aria-selected']).toBe(true);
+        expect(selectedOptionState(screen, `path-selection-list:path-root:option:favorite:${firstPath}`)).toBe(false);
+        expect(selectedOptionState(screen, `path-selection-list:path-root:option:recent:${currentPath}`)).toBe(true);
         expect(readProps<ComboboxLikeProps>(input!)['aria-activedescendant']).toBe(
             `path-selection-list:path-root:option:recent:${currentPath}`,
         );
@@ -400,10 +460,9 @@ describe('PathSelectionList', () => {
         await flushPathSelectionDynamicResolver();
 
         expect(listMachineFileBrowserDirectoryEntriesMock).toHaveBeenCalledWith(expect.objectContaining({
-            machineId: 'm-1',
-            serverId: 'srv-1',
-            directoryPath: '/Users/leeroy/current',
-            includeFiles: false,
+            targetId: 'm-1',
+            serverUrl: 'https://srv-1',
+            payload: expect.objectContaining({ path: '/Users/leeroy/current', includeFiles: false }),
         }));
         expect(screen.findByTestId(
             'path-selection-list:path-root:option:in-folder:/Users/leeroy/current/Documents',
@@ -411,6 +470,39 @@ describe('PathSelectionList', () => {
         expect(screen.findByTestId(
             'path-selection-list:path-root:option:in-folder:/Users/leeroy/current/Archive',
         )).toBeNull();
+        act(() => screen.tree.unmount());
+    });
+
+    it('tells the person that Enter uses a typed folder that does not exist yet, instead of a bare "No matches"', async () => {
+        // Live 2026-10-16 (PLUGVIS r2k/r2l): typing a new folder name showed only "No matches".
+        listMachineFileBrowserDirectoryEntriesMock.mockResolvedValue({
+            ok: true,
+            entries: [{ type: 'directory', name: 'Archive', path: '/Users/leeroy/current/Archive' }],
+        });
+        const { PathSelectionList } = await import('./PathSelectionList');
+        const screen = await renderScreen(
+            <PathSelectionList
+                initialValue="/Users/leeroy/current"
+                initialSuggestionMode="history"
+                favorites={[]}
+                recents={[]}
+                machineHomeDir="/Users/leeroy"
+                machineId="m-1"
+                serverId="srv-1"
+                machinePlatform="unix"
+                onCommit={() => {}}
+                onRequestClose={() => {}}
+            />,
+        );
+
+        await act(async () => {
+            screen.changeTextByTestId('path-selection-list:header:input', 'recipe-box');
+        });
+        await flushPathSelectionDynamicResolver();
+
+        const { t } = await import('@/text');
+        expect(screen.getTextContent()).toContain(t('newSession.pathPicker.emptyNewFolder'));
+        expect(screen.getTextContent()).not.toContain(t('selectionList.emptyMatch'));
         act(() => screen.tree.unmount());
     });
 
@@ -742,7 +834,7 @@ describe('PathSelectionList', () => {
         expect(readProps<ValueLikeProps>(input!).value).toBe('/foo');
 
         await act(async () => {
-            screen.tree.update(
+            await screen.update(
                 <PathSelectionList
                     initialValue="/bar"
                     favorites={[]}
@@ -810,9 +902,7 @@ describe('PathSelectionList', () => {
 
         // Re-render the parent 3 times with NEW closures + churning recents.
         for (let i = 1; i <= 3; i += 1) {
-            await act(async () => {
-                screen.tree.update(renderHarness(i));
-            });
+            await screen.update(renderHarness(i));
             // Allow the dispatch effect to flush.
             await act(async () => { await new Promise((r) => setTimeout(r, 200)); });
         }
@@ -960,6 +1050,7 @@ describe('PathSelectionList', () => {
         });
 
         it('updates an IN THIS FOLDER favorite-toggle immediately after press while the directory rows stay cached', async () => {
+            const onCommit = vi.fn();
             listMachineFileBrowserDirectoryEntriesMock.mockResolvedValueOnce({
                 ok: true,
                 entries: [
@@ -989,7 +1080,7 @@ describe('PathSelectionList', () => {
                         machineId="m-1"
                         serverId={null}
                         machinePlatform="unix"
-                        onCommit={() => {}}
+                        onCommit={onCommit}
                         onRequestClose={() => {}}
                         isFavorite={isFavorite}
                         onToggleFavorite={onToggleFavorite}
@@ -1011,8 +1102,102 @@ describe('PathSelectionList', () => {
             const afterToggle = readProps<SelectableLikeProps>(screen.findByTestId(toggleTestId)!);
             expect(afterToggle.accessibilityState?.selected === true
                 || afterToggle['aria-pressed'] === true).toBe(true);
+            expect(afterToggle.accessibilityLabel).toBe('newSession.pathPicker.favoriteRemove');
+
+            await screen.pressByTestIdAsync(toggleTestId);
+            const afterRemoval = readProps<SelectableLikeProps>(screen.findByTestId(toggleTestId)!);
+            expect(afterRemoval.accessibilityState?.selected === true
+                || afterRemoval['aria-pressed'] === true).toBe(false);
+            expect(afterRemoval.accessibilityLabel).toBe('newSession.pathPicker.favoriteAdd');
+            expect(onCommit).not.toHaveBeenCalled();
             expect(listMachineFileBrowserDirectoryEntriesMock).toHaveBeenCalledTimes(1);
             act(() => screen.tree.unmount());
+        });
+
+        it('uses the reopened picker commit and drill callbacks while cached directory rows refresh', async () => {
+            const entries = [{ type: 'directory' as const, name: 'Documents', path: '/Users/leeroy/Documents' }];
+            listMachineFileBrowserDirectoryEntriesMock.mockResolvedValueOnce({ ok: true, entries });
+            const { PathSelectionList } = await import('./PathSelectionList');
+            const previousCommit = vi.fn();
+            const currentCommit = vi.fn();
+            const previousDraftPathChange = vi.fn();
+            const currentDraftPathChange = vi.fn();
+            const pendingListing = createDeferred<DirectoryReply>();
+            const rowTestId = 'path-selection-list:path-root:option:in-folder:/Users/leeroy/Documents';
+            const picker = (onCommit: (path: string) => void, onChangeDraftPath: (path: string) => void) => (
+                <PathSelectionList
+                    initialValue="~/"
+                    favorites={[]}
+                    recents={[]}
+                    machineHomeDir="/Users/leeroy"
+                    machineId="m-1"
+                    serverId={null}
+                    machinePlatform="unix"
+                    onCommit={onCommit}
+                    onChangeDraftPath={onChangeDraftPath}
+                    onRequestClose={() => {}}
+                />
+            );
+            const first = await renderScreen(picker(previousCommit, previousDraftPathChange));
+            await flushPathSelectionDynamicResolver();
+            expect(first.findByTestId(rowTestId)).not.toBeNull();
+            await first.unmount();
+
+            listMachineFileBrowserDirectoryEntriesMock.mockReturnValueOnce(pendingListing.promise);
+            const reopened = await renderScreen(picker(currentCommit, currentDraftPathChange));
+            try {
+                await reopened.pressByTestIdAsync(rowTestId);
+                expect(currentCommit).toHaveBeenCalledWith('/Users/leeroy/Documents');
+                expect(previousCommit).not.toHaveBeenCalled();
+                await reopened.pressByTestIdAsync(`${rowTestId}:drill`);
+                expect(currentDraftPathChange).toHaveBeenCalledWith('~/Documents/');
+                expect(previousDraftPathChange).not.toHaveBeenCalled();
+            } finally {
+                pendingListing.resolve({ ok: true, entries });
+                await reopened.unmount();
+            }
+        });
+
+        it('uses the reopened picker favorite state and callback while cached directory rows refresh', async () => {
+            const entries = [{ type: 'directory' as const, name: 'Documents', path: '/Users/leeroy/Documents' }];
+            listMachineFileBrowserDirectoryEntriesMock.mockResolvedValueOnce({ ok: true, entries });
+            const { PathSelectionList } = await import('./PathSelectionList');
+            const firstToggle = vi.fn();
+            const currentToggle = vi.fn();
+            const pendingListing = createDeferred<DirectoryReply>();
+            const toggleTestId = 'path-selection-list:path-root:option:in-folder:/Users/leeroy/Documents:favorite-toggle';
+            const picker = (isFavorite: boolean, onToggleFavorite: (path: string) => void) => (
+                <PathSelectionList
+                    initialValue="~/"
+                    favorites={[]}
+                    recents={[]}
+                    machineHomeDir="/Users/leeroy"
+                    machineId="m-1"
+                    serverId={null}
+                    machinePlatform="unix"
+                    onCommit={() => {}}
+                    onRequestClose={() => {}}
+                    isFavorite={() => isFavorite}
+                    onToggleFavorite={onToggleFavorite}
+                />
+            );
+            const first = await renderScreen(picker(false, firstToggle));
+            await flushPathSelectionDynamicResolver();
+            expect(first.findByTestId(toggleTestId)).not.toBeNull();
+            await first.unmount();
+
+            listMachineFileBrowserDirectoryEntriesMock.mockReturnValueOnce(pendingListing.promise);
+            const reopened = await renderScreen(picker(true, currentToggle));
+            try {
+                // These rows came from the previous mount, not the still-pending daemon reply.
+                expect(readProps<SelectableLikeProps>(reopened.findByTestId(toggleTestId)!)['aria-pressed']).toBe(true);
+                await reopened.pressByTestIdAsync(toggleTestId);
+                expect(currentToggle).toHaveBeenCalledWith('/Users/leeroy/Documents');
+                expect(firstToggle).not.toHaveBeenCalled();
+            } finally {
+                pendingListing.resolve({ ok: true, entries });
+                await reopened.unmount();
+            }
         });
 
         it('exposes an aria-label that reflects current favorite state', async () => {
@@ -1322,9 +1507,7 @@ describe('PathSelectionList', () => {
             const initialCount = listMachineFileBrowserDirectoryEntriesMock.mock.calls.length;
             expect(initialCount).toBeGreaterThanOrEqual(1);
 
-            await act(async () => {
-                screen.tree.update(renderHarness('/home/bob'));
-            });
+            await screen.update(renderHarness('/home/bob'));
             await flushDynamicSection();
 
             // The machine id is unchanged but the resolved home dir changed:
@@ -1363,9 +1546,7 @@ describe('PathSelectionList', () => {
             const initialCount = listMachineFileBrowserDirectoryEntriesMock.mock.calls.length;
             expect(initialCount).toBeGreaterThanOrEqual(1);
 
-            await act(async () => {
-                screen.tree.update(renderHarness('srv-b'));
-            });
+            await screen.update(renderHarness('srv-b'));
             await flushDynamicSection();
 
             expect(listMachineFileBrowserDirectoryEntriesMock.mock.calls.length)
@@ -1402,9 +1583,7 @@ describe('PathSelectionList', () => {
             const initialCount = listMachineFileBrowserDirectoryEntriesMock.mock.calls.length;
             expect(initialCount).toBeGreaterThanOrEqual(1);
 
-            await act(async () => {
-                screen.tree.update(renderHarness('windows'));
-            });
+            await screen.update(renderHarness('windows'));
             await flushDynamicSection();
 
             expect(listMachineFileBrowserDirectoryEntriesMock.mock.calls.length)

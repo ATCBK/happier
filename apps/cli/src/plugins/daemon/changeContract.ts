@@ -146,6 +146,7 @@ export type PluginChangeRequestResult =
   | PluginChangePendingReviewResult
   | PluginChangeApplyResult
   | PluginRegistryProfileRequiredResult
+  | Readonly<{ kind: 'cancelled' }>
   | Readonly<{ kind: 'busy'; pluginId: string }>;
 
 /**
@@ -169,7 +170,6 @@ export type PluginChangeDecision =
 
 export type PluginChangeDecisionResult =
   | PluginChangeRequestResult
-  | Readonly<{ kind: 'cancelled' }>
   | Readonly<{ kind: 'expired' }>
   | Readonly<{ kind: 'busy'; pluginId: string }>;
 

@@ -6,6 +6,9 @@ import { InjectedAuthProvider } from '@/auth/context/AuthContext';
 import { SessionListHeaderItem } from './sessionListHeaderItem';
 import { FolderGroupHeader, ProjectGroupHeader } from './sessionListChrome';
 import { SessionListOrganizeModeProvider, useSessionListOrganizeMode } from './organize/SessionListOrganizeMode';
+import { useSessionListRowMoveActionHandlers } from './useSessionListRowMoveActionHandlers';
+import { treeRowId } from './drop-resolution/treeRowId';
+import { DropdownMenu } from '@/components/ui/forms/dropdown/DropdownMenu';
 import { EntityDragGrip } from '@/components/ui/treeDragDrop/ui/EntityReleasePreview';
 
 const headerPlatform = vi.hoisted(() => ({ os: 'android' }));
@@ -84,9 +87,61 @@ describe('SessionListHeaderItem Organize source', () => {
         for (let ancestor = header.parent; ancestor; ancestor = ancestor.parent) {
             if (String(ancestor.type) === 'GestureDetector') wholeHeaderGesture = true;
         }
-        expect(wholeHeaderGesture).toBe(platform === 'web');
+        expect(wholeHeaderGesture).toBe(false);
         if (organize) expect(screen.root.findByType(EntityDragGrip).parent?.props.gesture).toBeTruthy();
         await act(async () => header.props.onToggleCollapse());
         expect(onPress).toHaveBeenCalled();
     });
+    it.each(['folder', 'project'] as const)('%s reuses move callbacks and menu items while dispatching the current label', async headerKind => {
+        headerPlatform.os = 'web';
+        const writes: Array<{ rowId: string; label: string; direction: 'up' | 'down' }> = [];
+        const scope = { serverId: 'srv_header', machineId: 'machine_a', rootPath: '/repo' };
+        function Header({ title }: { title: string }) {
+            const getRowMoveActionHandlers = useSessionListRowMoveActionHandlers({
+                openMoveSheetForTreeRow: async () => {},
+                moveTreeRowToWorkspaceRoot: () => {},
+                moveTreeRowByKeyboard: (rowId, label, direction) => { writes.push({ rowId, label, direction }); },
+            });
+            return <InjectedAuthProvider credentials={{ token: 'test-token' }}>
+                <SessionListHeaderItem
+                    item={{ type: 'header', title, headerKind, groupKey: `${headerKind}:planning`,
+                        folderId: 'planning', serverId: scope.serverId, workspaceKey: 'workspace_a',
+                        workspace: { t: 'workspaceRef', serverId: scope.serverId, workspaceRefId: 'workspace_a' },
+                        workspaceScopeHint: scope }}
+                    collapsedKeys={{}} projectHeaderViewModelByGroupKey={new Map()}
+                    hasMultipleMachines={false} onOpenProject={() => {}} onCreateSessionFromWorkspaceScope={() => {}}
+                    onAddFolderToWorkspace={() => {}} onRenameWorkspace={() => {}} onResetWorkspaceName={() => {}}
+                    onToggleCollapse={() => {}} getRowMoveActionHandlers={getRowMoveActionHandlers}
+                />
+            </InjectedAuthProvider>;
+        }
+        const screen = await renderScreen(<Header title="Planning" />);
+        const findHeader = () => screen.root.find(matchesComponent(headerKind === 'folder' ? FolderGroupHeader : ProjectGroupHeader));
+        const first = findHeader().props;
+        expect(typeof first.onMoveUp).toBe('function');
+        const menuItems = screen.root.find(matchesComponent(DropdownMenu)).props.items;
+        for (const title of ['Planning', 'Renamed']) {
+            await screen.update(<Header title={title} />);
+            const next = findHeader().props;
+            expect(next.onMoveUp).toBe(first.onMoveUp);
+            expect(next.onMoveDown).toBe(first.onMoveDown);
+            if (headerKind === 'folder') {
+                expect(next.onMove).toBe(first.onMove);
+                expect(next.onMoveToWorkspaceRoot).toBe(first.onMoveToWorkspaceRoot);
+            }
+            expect(screen.root.find(matchesComponent(DropdownMenu)).props.items).toBe(menuItems);
+        }
+        await act(async () => {
+            first.onMoveUp();
+            first.onMoveDown();
+        });
+        const rowId = headerKind === 'folder'
+            ? treeRowId.folder(scope.serverId, 'planning')
+            : treeRowId.workspaceRoot('project:planning');
+        expect(writes).toEqual([
+            { rowId, label: 'Renamed', direction: 'up' },
+            { rowId, label: 'Renamed', direction: 'down' },
+        ]);
+    });
+
 });

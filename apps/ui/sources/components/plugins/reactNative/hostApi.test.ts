@@ -22,6 +22,8 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { PLUGIN_UI_OUTWARD_EFFECT_HOST_METHODS_V1 } from '@/components/plugins/hostApi/outwardEffectSettlement';
 import { createPluginSurfaceContextFixture } from '@/dev/testkit/fixtures/pluginSurfaceContextFixture';
+import { createPluginSurfaceContext } from '@/components/plugins/surfaces/pluginSurfaceContext';
+import { PluginUiHostApiSurfaceContextV1Schema } from '@happier-dev/protocol/plugins/ui/client';
 import {
     createPluginSurfaceHostApi,
     type PluginSurfaceHostApiHandlers,
@@ -60,6 +62,47 @@ function readProductionSource(relativePath: string): string {
 }
 
 describe('canonical React Native plugin Host API adapter', () => {
+    it('routes Discussion Composer reads through the advertised optional operation', async () => {
+        const methods: string[] = [];
+        const adapter = createCanonicalPluginReactNativeHostApiAdapter({
+            surface: createPluginSurfaceContextFixture({ mount: canonicalRightPaneMount }),
+            requestSurface: surface, requestIdPrefix: 'rn-discussion-composer',
+            installedMethods: ['readComposer', 'readDiscussionComposer'],
+            handleRequest: async request => {
+                methods.push(request.method);
+                return { status: 'unavailable', reason: 'scopeClosed' };
+            },
+        });
+        const ref = { kind: 'discussion', discussionId: 'discussion-1' } as const;
+        try {
+            await expect(adapter.api.readComposer(ref)).resolves.toMatchObject({ status: 'unavailable' });
+            await expect(adapter.api.readDiscussionComposer(ref)).resolves.toMatchObject({ status: 'unavailable' });
+            expect(methods).toEqual(['readDiscussionComposer', 'readDiscussionComposer']);
+        } finally { adapter.dispose(); }
+    });
+
+    it('refuses Discussion operations before dispatch on an older native host while Session reads still work', async () => {
+        const methods: string[] = [];
+        const adapter = createCanonicalPluginReactNativeHostApiAdapter({
+            surface: createPluginSurfaceContextFixture({ mount: canonicalRightPaneMount }),
+            requestSurface: surface, requestIdPrefix: 'rn-old-discussion-composer',
+            installedMethods: ['readComposer', 'applyComposer'],
+            handleRequest: async request => {
+                methods.push(request.method);
+                return { status: 'unavailable', reason: 'scopeClosed' };
+            },
+        });
+        const ref = { kind: 'discussion', discussionId: 'discussion-1' } as const;
+        try {
+            await expect(adapter.api.readComposer(ref)).rejects.toMatchObject({ code: 'unsupported_method' });
+            await expect(adapter.api.applyComposer(ref, { expectedRevision: 0, operations: [{ kind: 'text.clear' }] }))
+                .rejects.toMatchObject({ code: 'unsupported_method' });
+            await expect(adapter.api.readComposer({ kind: 'session', sessionId: 'session-1' }))
+                .resolves.toMatchObject({ status: 'unavailable' });
+            expect(methods).toEqual(['readComposer']);
+        } finally { adapter.dispose(); }
+    });
+
     it('transports host reads through the same mounted read ceiling without dropping their identity', async () => {
         const reference = { hostRead: 'usage.query' as const, input: { queries: [] } };
         const owner = createPluginSurfaceHostApi({ surfaceContext: surface, handlers: {
@@ -1937,6 +1980,8 @@ describe('canonical React Native Host API advertised methods (UI-D02)', () => {
         // author the mount can never serve it and turns an outage into a
         // permanent capability verdict.
         let daemonReachable = false;
+        let targetReadTimedOut = false;
+        const unavailableMessage = 'NLDW6-3-11-20 · f759 is unavailable for this operation.';
         const host = createPluginSurfaceHostApi({
             surfaceContext: surface,
             handlers: {
@@ -1944,6 +1989,9 @@ describe('canonical React Native Host API advertised methods (UI-D02)', () => {
                 watchResource: async () => ({ ok: true }),
             },
             isMethodAvailable: (method) => method === 'context' || daemonReachable,
+            resolveUnavailableError: error => targetReadTimedOut
+                ? { code: 'timeout', diagnostics: [...error.diagnostics, 'targeted_contributions_timeout'], message: 'Target read timed out' }
+                : { ...error, message: unavailableMessage },
         });
         const adapter = createCanonicalPluginReactNativeHostApiAdapter({
             surface: canonicalSurface,
@@ -1965,8 +2013,21 @@ describe('canonical React Native Host API advertised methods (UI-D02)', () => {
             name: 'PluginError',
             code: 'unavailable',
             retryable: true,
+            message: unavailableMessage,
             diagnostics: [{ code: 'host_api_method_unavailable:watchResource', severity: 'error' }],
         });
+
+        // The real host producer and SDK consumer preserve a classified read
+        // failure, without turning a settled timeout into absent capability.
+        targetReadTimedOut = true;
+        await expect(adapter.api.watchResource(
+            { pluginId: 'acme.preview', localId: 'review-summary' },
+            () => undefined,
+        )).rejects.toMatchObject({
+            name: 'PluginError', code: 'timeout', retryable: true,
+            diagnostics: expect.arrayContaining([{ code: 'targeted_contributions_timeout', severity: 'error' }]),
+        });
+        targetReadTimedOut = false;
 
         // A method this mount never installs stays permanently unsupported.
         await expect(adapter.api.readClipboard()).rejects.toMatchObject({
@@ -2272,6 +2333,28 @@ describe('canonical React Native context subscriptions (UI-D03)', () => {
             installedMethods: host.installedMethods,
         });
     }
+
+    it('carries the canonical mount approval projection through the live context publisher and strict SDK consumer', async () => {
+        const adapter = createAdapter();
+        const observed: SurfaceContext['pendingApproval'][] = [];
+        const project = (pendingApproval: SurfaceContext['pendingApproval']) => createPluginSurfaceContext({
+            mount: canonicalSurface.mount, target: canonicalSurface.target,
+            accountEncryptionMode: canonicalSurface.accountEncryptionMode, translations: canonicalSurface.translations,
+            environment: { ...canonicalSurface, columnVisible: false }, pendingApproval,
+        });
+        const approval = { artifactId: 'approval-a', href: '/inbox/approvals/approval-a?serverId=home-a' };
+        try {
+            await adapter.api.watchContext(context => observed.push(context.pendingApproval));
+            adapter.pushSurfaceContext(project(approval));
+            const snapshot = PluginUiHostApiSurfaceContextV1Schema.parse(await adapter.api.context());
+            expect(snapshot.pendingApproval).toEqual(approval);
+            expect(observed).toEqual([approval]);
+            expect(PluginUiHostApiSurfaceContextV1Schema.safeParse({ ...snapshot,
+                pendingApproval: { ...approval, approve: true } }).success).toBe(false);
+            adapter.pushSurfaceContext(project(null));
+            expect(observed).toEqual([approval, null]);
+        } finally { adapter.dispose(); }
+    });
 
     it('advertises watchContext exactly when the mount owns a surface fact', () => {
         expect(createAdapter().api.version().methods).toEqual(['context', 'watchContext']);

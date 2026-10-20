@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
@@ -98,6 +99,12 @@ import {
   stopRetainedWorkspaceSyncNativeProcesses,
 } from './workspaceSyncNativeProcessLaunchers';
 import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/artifactStore';
+import { readRequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
+import { PROJECT_ACTION_INPUT_SCHEMAS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
+import { ProjectServiceRelocateInputV1Schema } from '@happier-dev/protocol/workspaces/projectServiceRelocationV1';
+import { isExternalActionAuthorizationBoundToEnvelope } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { openExternalActionRequestV2 } from '@happier-dev/protocol/actions/externalActionEncryption';
+import { readWebLatencyTracePoint, timeWebLatencyPhase, withWebLatencyTrace } from '@/daemon/externalActions/webLatencyTrace';
 
 export type ProductionDaemonWorkspaceSyncFactories = Readonly<{
   createDaemonRuntime: typeof createDaemonWorkspaceSyncRuntime;
@@ -540,6 +547,9 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
     isCurrent?: () => Promise<boolean>;
     /** Actual target-child socket, preserving the original Home-admitted requester. */
     callWorkspaceTargetPhase?: (descriptor: WorkspaceSyncTargetPhaseDescriptor, context: RpcHandlerContext) => Promise<unknown>;
+    /** The installed worker forwards its original root through the incumbent signed SOURCE transport. */
+    callWorkspacePrepareBetween?: (descriptor: Readonly<{ machineId: string; sourceWorkspace: WorkspaceRefV1;
+      request: WorkspaceSyncPrepareBetweenRequestV1; signal?: AbortSignal }>, context: RpcHandlerContext) => Promise<unknown>;
     /** Current installed physical TARGET socket, never the borrower's Parent Account transport. */
     callWorkspaceSeedExport?: (descriptor: Readonly<{ machineId: string;
       request: import('@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas').WorkspaceSyncSeedExportPrepareV1;
@@ -564,15 +574,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
   const semanticServerId = input.homeTarget?.homeServerIdentityId ?? input.activeServerId ?? configuration.activeServerId;
   const localProfileId = input.activeServerId ?? configuration.activeServerId;
   const serverHttpBaseUrl = resolveServerHttpBaseUrl();
-  const suppliedFactories: ProductionDaemonWorkspaceSyncFactories = { ...defaultFactories, ...overrides };
-  const factories: ProductionDaemonWorkspaceSyncFactories = {
-    ...suppliedFactories,
-    getProjectSnapshot: () => {
-      const snapshot = suppliedFactories.getProjectSnapshot();
-      if (!snapshot) throw compositionError('project_account_rows_unavailable', 'Project records are unavailable');
-      return snapshot;
-    },
-  };
+  const factories: ProductionDaemonWorkspaceSyncFactories = { ...defaultFactories, ...overrides };
   let inspection: WorkspaceSyncLegacyStateInspection;
   try {
     inspection = await factories.inspectLegacyState({
@@ -628,7 +630,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
     ...(input.callWorkspaceTargetPhase ? { callWorkspaceTargetPhase: input.callWorkspaceTargetPhase } : {}),
     refreshProjectSnapshot: async (signal, context) => await factories.refreshProjectRows({
       ...(context?.callerInputAuthorization ? { authorization: context.callerInputAuthorization,
-        effectActionId: context.callerInputAuthorization.binding.actionId } : { credentials: input.credentials }),
+        effectActionId: context.callerInputAuthorization.binding.actionId } : { credentials: input.credentials, publication: 'installed' }),
       serverId: semanticServerId,
       ...(signal ? { signal } : {}),
     }),
@@ -680,6 +682,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
         machineId: request.sourceMachineId,
         method: RPC_METHODS.DAEMON_DIRECT_TRANSFER_EXPORT_PREPARE,
         request: { t: 'workspace_sync_resolution_v1', ...wireRequest },
+        timeoutMs: null,
         ...(exportSignal ? { signal: exportSignal } : {}),
       });
       if (!preparedRaw || typeof preparedRaw !== 'object' || (preparedRaw as { success?: unknown }).success !== true) {
@@ -735,6 +738,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
             credentials: input.credentials,
             machineId: request.sourceMachineId,
             method: RPC_METHODS.DAEMON_DIRECT_TRANSFER_EXPORT_RELEASE,
+            timeoutMs: null,
             request: { transferId: request.operationId },
           });
         },
@@ -775,6 +779,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
                 machineId: request.sourceMachineId,
                 method: RPC_METHODS.DAEMON_DIRECT_TRANSFER_EXPORT_PREPARE,
                 request: seedRequest,
+                timeoutMs: null,
                 ...(request.signal ? { signal: request.signal } : {}),
               });
             const preparedRaw = await prepare.catch(() => {
@@ -854,6 +859,8 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
       machineId: request.machineId,
       method: request.method,
       request: request.request,
+      // Target phases follow Workspace Sync custody and caller cancellation.
+      timeoutMs: null,
       ...(request.signal ? { signal: request.signal } : {}),
     }),
   });
@@ -864,22 +871,36 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
       || !context.verifyMachineAdmissionCurrent || !await context.verifyMachineAdmissionCurrent())) {
       throw compositionError('project_requester_authority_unavailable', 'The admitted requester is no longer current');
     }
-    const snapshot = authorization ? await factories.refreshProjectRows({ authorization,
+    const requester = readRequesterAccountActionContext(authorization);
+    const privatePreparation = context?.workspaceSyncSourceRouting && authorization && isProjectPreparation(context);
+    if (privatePreparation && (!requester || !await requester.isCurrent())) {
+      throw compositionError('project_requester_authority_unavailable', 'The admitted requester is no longer current');
+    }
+    const snapshot = privatePreparation && requester ? await factories.refreshProjectRows({ credentials: requester.credentials,
+      sessionCustody: { serverId: semanticServerId, accountId: authorization.binding.accountId,
+        serverHttpBaseUrl: requester.serverHttpBaseUrl, isCurrent: requester.isCurrent },
+      serverId: semanticServerId, signal }) : authorization ? await factories.refreshProjectRows({ authorization,
       effectActionId: authorization.binding.actionId, serverId: semanticServerId, signal }) : factories.getProjectSnapshot();
     if (!snapshot) throw compositionError('workspace_sync_settings_unavailable', 'Workspace sync settings are unavailable');
     return snapshot;
   };
   const readHandoffChildMachines = async (machineIds: readonly string[], signal?: AbortSignal, context?: RpcHandlerContext) => {
     const authorization = context?.callerInputAuthorization;
+    const requester = context?.workspaceSyncSourceRouting && isProjectPreparation(context)
+      ? readRequesterAccountActionContext(authorization) : null;
+    if (requester && !await requester.isCurrent()) {
+      throw compositionError('project_requester_authority_unavailable', 'The admitted requester is no longer current');
+    }
     return await readWorkspaceSyncChildMachineFacts({ serverId: semanticServerId,
-      ...(authorization ? { authorization, effectActionId: authorization.binding.actionId,
+      ...(requester ? { credentials: requester.credentials } : authorization ? { authorization, effectActionId: authorization.binding.actionId,
         ...(context?.requesterSessionBootstrap ? { credentials: context.requesterSessionBootstrap.credentials } : {}) }
         : { credentials: input.credentials }),
-      serverHttpBaseUrl: authorization?.requesterHttpProjection?.serverHttpBaseUrl ?? serverHttpBaseUrl,
+      serverHttpBaseUrl: requester?.serverHttpBaseUrl ?? authorization?.requesterHttpProjection?.serverHttpBaseUrl ?? serverHttpBaseUrl,
       localProfileId, ...(input.homeTarget ? { homeTarget: input.homeTarget } : {}), machineIds, signal });
   };
   const currentRouteSnapshot = async (request: WorkspaceSyncPrepareBetweenRequestV1, signal?: AbortSignal, context?: RpcHandlerContext) => {
     const snapshot = await readHandoffProjectSnapshot(signal, context);
+    if (isProjectPreparation(context)) await assertProjectPreparationInput(request, snapshot, context!);
     const serverId = semanticServerId;
     const workspaceRefs = snapshot.workspaceRefs.filter(ref => ref.serverId === serverId);
     const endpoints = workspaceRefs.filter(ref => ref.id === request.sourceWorkspaceRefId || ref.id === request.targetWorkspaceRefId);
@@ -904,15 +925,61 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
     completed: [],
     ...('relationshipId' in route ? { blockedRelationshipId: route.relationshipId } : {}),
   });
+  function isProjectPreparation(context?: RpcHandlerContext): boolean {
+    const actionId = context?.callerInputAuthorization?.binding.actionId;
+    return actionId === 'projects.script.run' || actionId === 'projects.compute.exec' || actionId === 'projects.service.relocate';
+  }
+  const assertProjectPreparationInput = async (request: WorkspaceSyncPrepareBetweenRequestV1,
+    snapshot: ActiveProjectAccountRowsSnapshot, context: RpcHandlerContext) => {
+    const authorization = context.callerInputAuthorization;
+    const binding = authorization?.binding;
+    const envelope = context.workspaceSyncSourceRouting?.originalActionEnvelope ?? context.originalActionEnvelope;
+    const requester = readRequesterAccountActionContext(authorization);
+    if (!authorization || !binding || !requester || !envelope
+      || (binding.actionId !== 'projects.script.run' && binding.actionId !== 'projects.compute.exec' && binding.actionId !== 'projects.service.relocate')
+      || binding.serverIdentityId !== semanticServerId || !await requester.isCurrent()
+      || !isExternalActionAuthorizationBoundToEnvelope(binding, { actionId: binding.actionId, machineId: binding.machineId, envelope })) {
+      throw compositionError('project_requester_authority_unavailable', 'The original Project requester is unavailable');
+    }
+    let originalInput: unknown = envelope.v === 1 ? envelope.input : undefined;
+    if (envelope.v === 2) {
+      const encryption = await requester.resolveEncryption(context.signal);
+      if (encryption?.serverIdentityId === semanticServerId) {
+        originalInput = openExternalActionRequestV2({ envelope, material: encryption.material, binding: {
+          serverIdentityId: binding.serverIdentityId, accountId: binding.accountId, actionId: binding.actionId,
+          requestId: binding.requestId, target: binding.target,
+          ...('authentication' in binding ? { authentication: { kind: binding.authentication.kind,
+            tokenEpoch: binding.authentication.tokenEpoch } } : { credentialId: binding.credentialId }),
+        } })?.input;
+      }
+    }
+    const source = resolveWorkspaceRefById(snapshot.workspaceRefs, request.sourceWorkspaceRefId, semanticServerId);
+    const target = resolveWorkspaceRefById(snapshot.workspaceRefs, request.targetWorkspaceRefId, semanticServerId);
+    const original = binding.actionId === 'projects.service.relocate'
+      ? ProjectServiceRelocateInputV1Schema.safeParse(originalInput)
+      : PROJECT_ACTION_INPUT_SCHEMAS_V1[binding.actionId].safeParse(originalInput);
+    const matchesWorkspace = original.success && source && target && original.data.workspace.serverId === semanticServerId
+      && ('selectedTarget' in original.data
+        ? original.data.workspace.refId === source.id && original.data.selectedTarget.machineId === target.machineId
+        : original.data.workspace.workspaceId === source.id && original.data.workspace.machineId === source.machineId
+          && original.data.workspace.rootPath === source.rootPath && target.machineId === binding.machineId);
+    if (!matchesWorkspace || !source
+      || context.workspaceSyncSourceRouting && (context.workspaceSyncSourceRouting.sourceMachineId !== source.machineId
+        || context.workspaceSyncSourceRouting.sourceRootPath !== source.rootPath)) {
+      throw compositionError('project_workspace_changed', 'The original Project workspace no longer matches preparation');
+    }
+  };
   const prepareBetweenAtController = async (
     request: WorkspaceSyncPrepareBetweenRequestV1,
     signal?: AbortSignal,
     context?: RpcHandlerContext,
-  ): Promise<WorkspaceSyncPrepareBetweenResultV1> => {
+  ): Promise<WorkspaceSyncPrepareBetweenResultV1> => withWebLatencyTrace(
+    readWebLatencyTracePoint()?.requestId ?? context?.callerInputAuthorization?.binding.requestId ?? context?.transportRequestId,
+    () => timeWebLatencyPhase('workspaceSync.prepareBetweenAtController', async () => {
     if (!runtime) throw controllerUnavailable();
     const route = await currentRoute(request, signal, context);
     if (!route.ok) return routeFailure(route);
-    if (route.kind !== 'same_workspace') assertWorkspaceSyncRequesterBootstrapSupported({
+    if (route.kind !== 'same_workspace' && !isProjectPreparation(context)) assertWorkspaceSyncRequesterBootstrapSupported({
       authorization: context?.callerInputAuthorization, ownerKind: 'relationship' });
     if (route.kind !== 'same_workspace' && route.controllerMachineId !== input.localMachineId) {
       throw compositionError('workspace_sync_controller_mismatch', 'Linked workspace route belongs to another controller');
@@ -921,28 +988,57 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
       ...request,
       serverId: semanticServerId,
       readCurrent: async () => await currentRouteSnapshot(request, signal, context),
-      flush: async (relationshipId, flushSignal) => await runtime!.managedWorkspaceSync.flush(relationshipId, flushSignal),
+      flush: async (relationshipId, flushSignal) => {
+        if (isProjectPreparation(context)) {
+          const current = await currentRouteSnapshot(request, flushSignal, context);
+          const selected = current.relationships.find(row => row.relationshipId === relationshipId);
+          if (!selected) throw compositionError('relationship_changed', 'The admitted relationship is unavailable');
+          return await runtime!.managedWorkspaceSync.flush(relationshipId, flushSignal, {
+            relationship: selected,
+            workspaceRefs: current.workspaceRefs.filter(ref => ref.id === selected.alphaWorkspaceRefId || ref.id === selected.betaWorkspaceRefId),
+            assertCurrent: async () => {
+              const requester = readRequesterAccountActionContext(context?.callerInputAuthorization);
+              if (!requester || !await context?.verifyMachineAdmissionCurrent?.() || !await requester.isCurrent()) {
+                throw compositionError('project_requester_authority_unavailable', 'The admitted requester is no longer current');
+              }
+            },
+          });
+        }
+        return await runtime!.managedWorkspaceSync.flush(relationshipId, flushSignal);
+      },
       ...(signal ? { signal } : {}),
     });
-  };
+  }));
   const handoffPrepareBetween = async (
     request: WorkspaceSyncPrepareBetweenRequestV1,
     signal?: AbortSignal,
     context?: RpcHandlerContext,
-  ): Promise<WorkspaceSyncPrepareBetweenResultV1> => {
+  ): Promise<WorkspaceSyncPrepareBetweenResultV1> => withWebLatencyTrace(
+    readWebLatencyTracePoint()?.requestId ?? context?.callerInputAuthorization?.binding.requestId ?? context?.transportRequestId,
+    () => timeWebLatencyPhase('workspaceSync.handoffPrepareBetween', async () => {
     const route = await currentRoute(request, signal, context);
     if (!route.ok) return routeFailure(route);
-    if (route.kind !== 'same_workspace') assertWorkspaceSyncRequesterBootstrapSupported({
+    if (route.kind !== 'same_workspace' && !isProjectPreparation(context)) assertWorkspaceSyncRequesterBootstrapSupported({
       authorization: context?.callerInputAuthorization, ownerKind: 'relationship' });
     if (route.kind === 'same_workspace' || route.controllerMachineId === input.localMachineId) {
       return await prepareBetweenAtController(request, signal, context);
     }
     try {
+      if (isProjectPreparation(context)) {
+        if (!context || !input.callWorkspacePrepareBetween) throw compositionError('workspace_sync_update_required', 'Signed controller preparation is unavailable');
+        const snapshot = await currentRouteSnapshot(request, signal, context);
+        const sourceWorkspace = resolveWorkspaceRefById(snapshot.workspaceRefs, request.sourceWorkspaceRefId, semanticServerId);
+        if (!sourceWorkspace) throw compositionError('workspace_ref_not_ready', 'The admitted source Workspace is unavailable');
+        return WorkspaceSyncPrepareBetweenResultV1Schema.parse(await input.callWorkspacePrepareBetween({
+          machineId: route.controllerMachineId, sourceWorkspace, request, ...(signal ? { signal } : {}),
+        }, context));
+      }
       const result = await factories.callMachineRpc({
         credentials: input.credentials,
         machineId: route.controllerMachineId,
         method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_PREPARE_BETWEEN,
         request,
+        timeoutMs: null,
         ...(signal ? { signal } : {}),
       });
       return WorkspaceSyncPrepareBetweenResultV1Schema.parse(result);
@@ -952,7 +1048,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
       }
       throw error;
     }
-  };
+  }));
 
   const readHandoffExecutionBasis = async (request: Parameters<DaemonWorkspaceSyncRuntimeDependencies['bootstrap']>[0], context?: RpcHandlerContext,
     physicalSourceAuthority?: WorkspaceSyncSourceContextV1) => {
@@ -1184,6 +1280,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
             machineId: relationship.controllerMachineId,
             method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_FLUSH,
             request: { relationshipId },
+            timeoutMs: null,
             ...(signal ? { signal } : {}),
           });
           return parseControllerStatusResponse(response);
@@ -1429,7 +1526,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
     localMachineId: input.localMachineId,
     mutateProjectSnapshot: createProjectAccountRowsWorkspaceSyncRelationshipMutation(input.credentials),
     readProjectSnapshot: async () => {
-      return await factories.refreshProjectRows({ credentials: input.credentials });
+      return await factories.refreshProjectRows({ credentials: input.credentials, publication: 'installed' });
     },
     ensureRelationship: async (relationship, signal, preparation) => {
       if (!runtime) throw controllerUnavailable();
@@ -1466,6 +1563,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
       signal?.throwIfAborted();
       const refreshed = await factories.refreshProjectRows({
         credentials: input.credentials,
+        publication: 'installed',
         ...(signal ? { signal } : {}),
       });
       await runtime.whenProjectsSettled({
@@ -1474,10 +1572,15 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
         ...(signal ? { signal } : {}),
       });
     },
-    readRelationshipDependencies: async (relationship, snapshot) => {
+    readRelationshipDependencies: async (relationship, snapshot, removal) => {
       const serverId = semanticServerId;
-      const machineIds = resolveWorkspaceSyncRelationshipDependencyMachines({ ...snapshot, serverId,
-        relationshipId: relationship.relationshipId });
+      // Removing desired Sync intent is controller-owned and preserves remote
+      // workspaces. Only byte removal needs the component-wide dependency
+      // observation; an offline peer must not veto a definition-only change.
+      const machineIds = removal
+        ? resolveWorkspaceSyncRelationshipDependencyMachines({ ...snapshot, serverId,
+          relationshipId: relationship.relationshipId })
+        : [input.localMachineId];
       const dependencies = await Promise.all(machineIds.flatMap(machineId =>
         [relationship.alphaWorkspaceRefId, relationship.betaWorkspaceRefId].map(async (workspaceRefId) => {
         if (machineId === input.localMachineId) {
@@ -1485,7 +1588,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
           return input.readProjectWorkerDependencies(workspaceRefId, relationship.relationshipId);
         }
         try {
-          return ProjectWorkerDependencyV1Schema.array().parse(await factories.callMachineRpc({
+          return z.array(ProjectWorkerDependencyV1Schema).parse(await factories.callMachineRpc({
             credentials: input.credentials, machineId,
             method: RPC_METHODS.DAEMON_PROJECT_WORKER_DEPENDENCIES,
             request: { serverId, machineId,
@@ -1624,7 +1727,26 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
     readFileAtTarget: targetAuthority.readFileHere,
     observeEntryAtTarget: targetAuthority.observeEntryHere,
     preflightHandoffTargetReplacement: targetAuthority.preflightHandoffTargetReplacementHere,
-    prepareBootstrapAtTarget: targetAuthority.prepareBootstrapHere,
+    prepareBootstrapAtTarget: async (request, signal, context) => {
+      assertLegacyStateAvailable();
+      signal?.throwIfAborted();
+      // SOURCE has acknowledged staging at Home before dispatching this RPC.
+      // A receiving process can still lack those endpoint rows. Refresh that
+      // projection before admission; existing immutable endpoints and private
+      // requester reads retain their current owners.
+      if (!context?.callerInputAuthorization) {
+        const relationship = request.transientRelationship;
+        const endpointIds = request.owner.kind === 'copy_once'
+          ? [request.owner.operation.alphaWorkspaceRefId, request.owner.operation.betaWorkspaceRefId]
+          : relationship ? [relationship.alphaWorkspaceRefId, relationship.betaWorkspaceRefId] : [request.targetWorkspaceRefId];
+        const refs = factories.getProjectSnapshot()?.workspaceRefs ?? [];
+        if (endpointIds.some(id => !resolveWorkspaceRefById(refs, id, semanticServerId))) {
+          await factories.refreshProjectRows({ credentials: input.credentials, serverId: semanticServerId, publication: 'installed',
+            ...(signal ? { signal } : {}) });
+        }
+      }
+      return await targetAuthority.prepareBootstrapHere(request, signal, context);
+    },
     releaseBootstrapAtTarget: targetAuthority.releaseBootstrapHere,
     prepareSourceSeedExport: targetAuthority.prepareSourceSeedExport,
     prepareConflictResolutionExport: targetAuthority.prepareConflictResolutionExport,
@@ -1675,7 +1797,7 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
         || request.machineId !== input.localMachineId || !input.readProjectWorkerDependencies) {
         throw compositionError('workspace_sync_dependencies_unavailable', 'Worker dependency target is unavailable');
       }
-      const snapshot = await factories.refreshProjectRows({ credentials: input.credentials, serverId: request.serverId, signal });
+      const snapshot = await factories.refreshProjectRows({ credentials: input.credentials, serverId: request.serverId, signal, publication: 'installed' });
       const ref = resolveWorkspaceRefById(snapshot.workspaceRefs, request.workspaceRefId, request.serverId);
       const relationship = snapshot.relationships.find(value => value.relationshipId === request.relationshipId);
       if (!ref || !relationship
@@ -1701,7 +1823,8 @@ export async function createProductionDaemonWorkspaceSyncRuntime(
     readProcessRoots: () => runtime.readProcessRoots(),
     activity: {
       read: async () => {
-        const observations = await Promise.all(activitySources.map(source => source.read()));
+        // Capture every rejection even when a later synchronous reader throws.
+        const observations = await Promise.all(activitySources.map(async source => await source.read()));
         return { items: observations.flatMap(observation => observation.items),
           coverage: observations.every(observation => observation.coverage === 'complete') ? 'complete' : 'unknown' };
       },

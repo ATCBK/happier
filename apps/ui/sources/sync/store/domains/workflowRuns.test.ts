@@ -20,6 +20,7 @@ import {
     selectWorkflowRunWindowInvocations,
     workflowRunRowFromAutomationRun,
     workflowRunRowFromSummary,
+    sessionWorkflowRunWindowId,
 } from './workflowRuns';
 
 type State = ReturnType<typeof createWorkflowRunsDomain>;
@@ -69,6 +70,47 @@ function summary(input: Readonly<{
 }
 
 describe('workflow run body store', () => {
+    it('publishes Session relation membership with its qualified bodies and removes only the matching Home window', () => {
+        const store = createStore<State>()((set, get) => createWorkflowRunsDomain({ set, get }));
+        const scopes = [{ serverId: 'home-a', accountId: 'account' }, { serverId: 'home-b', accountId: 'account' }];
+        for (const [index, scope] of scopes.entries()) {
+            store.getState().applyWorkflowRunListPage({
+                scope, windowId: sessionWorkflowRunWindowId(scope, 'session', 'origin'),
+                runs: [summary({ id: 'same-run', revision: index + 1 }), summary({ id: 'same-run', revision: 1 })],
+                attentionRunIds: ['same-run'], lastSuccessfulReadAt: 100 + index,
+                mode: 'replace', nextCursor: null,
+            });
+        }
+        for (const [index, scope] of scopes.entries()) {
+            const window = store.getState().workflowRunListWindows[sessionWorkflowRunWindowId(scope, 'session', 'origin')]!;
+            expect(window).toMatchObject({ runIds: ['same-run'], attentionRunIds: ['same-run'], lastSuccessfulReadAt: 100 + index });
+            expect(resolveWorkflowRunRows(store.getState().workflowRunsById, window.runIds, scope)[0]?.revision).toBe(index + 1);
+        }
+        const otherWindow = store.getState().workflowRunListWindows[sessionWorkflowRunWindowId(scopes[1]!, 'session', 'origin')];
+        store.getState().removeWorkflowRun('same-run', scopes[0]);
+        expect(store.getState().workflowRunListWindows[sessionWorkflowRunWindowId(scopes[0]!, 'session', 'origin')])
+            .toMatchObject({ runIds: [], attentionRunIds: [] });
+        expect(store.getState().workflowRunListWindows[sessionWorkflowRunWindowId(scopes[1]!, 'session', 'origin')]).toBe(otherWindow);
+    });
+
+    it('keeps colliding Run ids and invocation histories independent across exact Homes and Accounts', () => {
+        const store = createStore<State>()((set, get) => createWorkflowRunsDomain({ set, get }));
+        const scopes = [{ serverId: 'home-a', accountId: 'account' }, { serverId: 'home-b', accountId: 'account' },
+            { serverId: 'home-a', accountId: 'another-account' }];
+        scopes.forEach((scope, index) => {
+            const run = createWorkflowRunSummaryFixture({ id: 'same-run', revision: index + 1 });
+            store.getState().upsertWorkflowRuns([workflowRunRowFromSummary(run)], scope);
+            store.getState().applyWorkflowRunInvocationPage({ runId: run.id, scope, invocations: [createWorkflowInvocationIndexFixture({
+                id: `step-${index}`, runId: run.id,
+            })], nextCursor: null, parentRevision: run.revision, mode: 'replace' });
+        });
+        scopes.forEach((scope, index) => expect(resolveWorkflowRunRows(store.getState().workflowRunsById, ['same-run'], scope)[0]?.revision).toBe(index + 1));
+        store.getState().removeWorkflowRun('same-run', scopes[0]);
+        expect(resolveWorkflowRunRows(store.getState().workflowRunsById, ['same-run'], scopes[0])).toEqual([]);
+        expect(resolveWorkflowRunRows(store.getState().workflowRunsById, ['same-run'], scopes[1])[0]?.revision).toBe(2);
+        expect(resolveWorkflowRunRows(store.getState().workflowRunsById, ['same-run'], scopes[2])[0]?.revision).toBe(3);
+    });
+
     it('retains the server held count through control-only reads and refreshes it without a parent transition', () => {
         const base = createWorkflowRunSummaryFixture({ id: 'run-1', revision: 7 });
         const first = mergeWorkflowRunBodies({}, [workflowRunRowFromSummary({ ...base, heldCount: 5 })]);
@@ -759,6 +801,32 @@ describe('workflow run body store', () => {
     describe('one invocation fact owner (03 §6.2)', () => {
         const held = (id: string, contentRevision: string, sequence = '1') => createWorkflowInvocationIndexFixture({
             id, sequence, contentRevision, lifecycle: 'waiting_for_approval',
+        });
+
+        it.each(['summary-first', 'invocations-first'] as const)('reconciles a completed Wait observation into stale peek facts (%s)', (order) => {
+            const harness = createHarness();
+            const wait = createWorkflowInvocationIndexFixture({ id: 'wait', runId: 'run-1', sequence: '1', contentRevision: '1', lifecycle: 'waiting_for_review' });
+            const run = createWorkflowRunSummaryFixture({ id: 'run-1', revision: 19, state: 'failed', attentionRequired: false,
+                stepProgressCurrentness: { recordId: 'root', attempt: '0', contentRevision: '5' },
+                stepProgress: { completed: 1, total: 1, destinations: [{ sourceKey: '$root', blockId: 'wait', ordinal: 1,
+                    sessionIds: [], observation: { recordId: wait.id, sequence: wait.sequence, attempt: wait.attempt,
+                        contentRevision: '2', lifecycle: 'completed', blockKind: 'wait' } }] },
+            });
+            const publishSummary = () => harness.get().upsertWorkflowRuns([workflowRunRowFromSummary(run)]);
+            const publishStalePage = () => harness.get().applyWorkflowRunInvocationPage({ runId: run.id, window: 'attention',
+                invocations: [wait], nextCursor: null, parentRevision: 12, mode: 'replace' });
+            if (order === 'summary-first') { publishSummary(); publishStalePage(); }
+            else { publishStalePage(); publishSummary(); }
+            const state = () => harness.get().workflowRunInvocationsByRunId[run.id];
+            expect(resolveVisibleWorkflowInvocations(state())).toMatchObject([{ id: wait.id, contentRevision: '2', lifecycle: 'completed' }]);
+            expect(selectWorkflowRunWindowInvocations(state(), 'attention')).toEqual([]);
+            // A delayed page cannot revive the already answered hold.
+            publishStalePage();
+            expect(selectWorkflowRunWindowInvocations(state(), 'attention')).toEqual([]);
+            // Nor can a summary erase a newer exact observation.
+            harness.get().upsertWorkflowRunInvocation({ runId: run.id, invocation: { ...wait, contentRevision: '3', lifecycle: 'failed' }, parentRevision: 20 });
+            publishSummary();
+            expect(resolveVisibleWorkflowInvocations(state())).toMatchObject([{ id: wait.id, contentRevision: '3', lifecycle: 'failed' }]);
         });
 
         it('merges attention, history, exact and first-failure reads into one fact per row', () => {

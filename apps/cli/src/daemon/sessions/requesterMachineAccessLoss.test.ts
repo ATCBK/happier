@@ -77,7 +77,7 @@ describe('requester Machine access-loss Session custody', () => {
             return lossCurrent && input.custodySubjectAccountId === 'revoked' && (!refuseSignal || !stopOwnerObserved);
           },
         }) });
-      registerMachineAccessLossReceiver(rpc, { machineId: 'machine', resolveInstallationId: () => 'installation',
+      registerMachineAccessLossReceiver(rpc, { serverId: 'home', machineId: 'machine', resolveInstallationId: () => 'installation',
         cleanupRequesterMachineSessions: cleanup });
       const request = { method: `machine:${RPC_METHODS.DAEMON_MACHINE_ACCESS_LOSS}`,
         params: { v: 1, subjectAccountId: 'revoked' }, authorization: MACHINE_ACCESS_LOSS_SERVER_ORIGIN,

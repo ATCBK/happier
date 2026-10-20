@@ -3,7 +3,7 @@ import { spawn as spawnChildProcess } from 'node:child_process';
 import { observeProcessLaunch } from '@/processes/launchNotification';
 import { isPidPresent } from '@happier-dev/cli-common/process';
 
-import { appendBoundedStderrTail, sanitizeChildStderrTail } from './childStderrDiagnostic';
+import { appendBoundedStderrTail, formatChildExitBeforeWebhookMessage, sanitizeChildStderrTail } from './childStderrDiagnostic';
 
 import type { ChildExit } from '../sessions/onChildExited';
 import { resolveSpawnWebhookResult } from '../sessions/resolveSpawnWebhookResult';
@@ -40,10 +40,6 @@ import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree
 import { createExactWindowsProcessCancellation } from '../platform/windows/windowsProcessCustody';
 import { classifySpawnFailure, spawnFailureMessage, type SpawnFailureLimitsReader } from '@/processes/spawnFailure/classifySpawnFailure';
 
-function appendRecentStderrDiagnostic(message: string, stderrTail: string | null): string {
-  return stderrTail ? `${message}; recent stderr: ${stderrTail}` : message;
-}
-
 export async function spawnRegularProcessAndWaitForWebhook(params: Readonly<{
   args: readonly string[];
   directory: string;
@@ -78,6 +74,7 @@ export async function spawnRegularProcessAndWaitForWebhook(params: Readonly<{
   memoryHighBytes?: number | null;
   readSpawnFailureLimits?: SpawnFailureLimitsReader;
 }>): Promise<SpawnSessionResult> {
+  const processExecStartedAt = performance.now();
   const sanitizeDiagnosticText = params.sanitizeDiagnosticText ?? ((value: string) => value);
   const useLinuxCgroupSelfMigration = shouldUseSystemdUserSessionResourceGovernor({
     platform: process.platform,
@@ -186,6 +183,9 @@ export async function spawnRegularProcessAndWaitForWebhook(params: Readonly<{
   }
 
   params.logDebug(`[DAEMON RUN] Spawned process with PID ${pid}`);
+  params.logDebug('[DAEMON RUN] Spawn process phase', { phase: 'process_exec', pid,
+    ...(params.normalizedExistingSessionId ? { sessionId: params.normalizedExistingSessionId } : {}),
+    durationMs: Math.round(performance.now() - processExecStartedAt) });
   void applySpawnedChildOomScoreAdjustment({
     pid,
     env: params.processEnv,
@@ -380,10 +380,7 @@ export async function spawnRegularProcessAndWaitForWebhook(params: Readonly<{
         type: 'error' as const,
         errorCode: SPAWN_SESSION_ERROR_CODES.CHILD_EXITED_BEFORE_WEBHOOK,
         errorDetail: { kind: 'spawn_failure' as const, ...classifySpawnFailure(undefined) },
-        errorMessage: appendRecentStderrDiagnostic(
-          `Child process exited before session webhook (pid=${pid}, code=${code ?? 'null'}, signal=${signal ?? 'null'})`,
-          stderrTail,
-        ),
+        errorMessage: formatChildExitBeforeWebhookMessage({ pid, code, signal, stderrTail }),
       };
       observeTerminalOnce(failure, {
         reason: spawnRequestSettled ? 'process-exited' : 'process-exited-before-webhook',
@@ -403,7 +400,7 @@ export async function spawnRegularProcessAndWaitForWebhook(params: Readonly<{
   });
 
   params.pidToTrackedSession.set(pid, trackedSession);
-  params.spawnLifecycleCallbacks.onTrackedSessionRegistered?.();
+  params.spawnLifecycleCallbacks.onTrackedSessionRegistered?.(trackedSession);
   params.spawnLifecycleCallbacks.consumeSessionAttachCleanupForPid(pid);
   params.spawnLifecycleCallbacks.registerSpawnResourceCleanupForPid(pid);
   params.logDebug(`[DAEMON RUN] Waiting for session webhook for PID ${pid}`);

@@ -6,7 +6,8 @@ import { usageAnalyticsRequestToQuery } from '@happier-dev/protocol/inputs/usage
 import { usageQaAccountingFixture } from '@/dev/testkit/fixtures/usageQaAccountingFixture';
 import { usageWidgetSurfaceContext, readUsageWidgetPageContext, readUsageWidgetPageScope } from '@/components/settings/usage/usageWidgetPageContext';
 import { proposeWidgetSetupDraft } from '@/components/widgets/add/widgetSetupModel';
-import { buildWidgetCandidateSetup, widgetProvidedContext, widgetSetupFieldsForCandidate } from './widgetSurfaceSetup';
+import { t } from '@/text';
+import { buildWidgetCandidateSetup, runAcknowledgedWidgetSetupCommand, widgetProvidedContext, widgetSetupFieldsForCandidate } from './widgetSurfaceSetup';
 import type { WidgetCandidate } from '../widgetCatalog';
 
 describe('Usage declared inputs on every host', () => {
@@ -200,5 +201,31 @@ describe('Widget setup page context', () => {
         const unavailable = { slots: { repository: { label: 'This page', value: null } } };
         expect(widgetSetupFieldsForCandidate({ inputs }, unavailable, 'personal')[0]?.follow).toBeUndefined();
         expect(widgetProvidedContext(unavailable)).toEqual({});
+    });
+});
+
+describe('Acknowledged widget setup command', () => {
+    const fallback = 'Couldn’t add it. Try again.';
+
+    it('settles applied and waiting-for-approval writes as the step finishing', async () => {
+        expect(await runAcknowledgedWidgetSetupCommand(async () => ({ kind: 'applied' }), fallback)).toEqual({ ok: true });
+        expect(await runAcknowledgedWidgetSetupCommand(async () => ({ kind: 'approvalPending' }), fallback)).toEqual({ ok: true, approvalPending: true });
+    });
+
+    it('keeps the reason of a returned typed refusal through the one failure presenter', async () => {
+        const invalid = await runAcknowledgedWidgetSetupCommand(async () => ({ kind: 'refused', errorCode: 'widget_inputs_invalid' }), fallback);
+        expect(invalid).toEqual({ ok: false, message: t('widgetAdd.refusals.inputsInvalid') });
+        const unavailable = await runAcknowledgedWidgetSetupCommand(async () => ({ kind: 'refused', errorCode: 'widget_area_unavailable' }), fallback);
+        expect(unavailable).toEqual({ ok: false, message: t('widgetAdd.refusals.areaUnavailable') });
+        // The presenter already owns reachability copy; a returned refusal gets it too.
+        const unreachable = await runAcknowledgedWidgetSetupCommand(async () => ({ kind: 'refused', errorCode: 'server_unreachable' }), fallback);
+        expect(unreachable.ok === false && unreachable.message).toBe(t('settingsPlugins.targetSelection.unreachableThisHome'));
+    });
+
+    it('keeps the transient fallback for an unknown refusal or a thrown unmapped failure, and never shows a raw code', async () => {
+        expect(await runAcknowledgedWidgetSetupCommand(async () => ({ kind: 'refused', errorCode: 'some_unmapped_code' }), fallback)).toEqual({ ok: false, message: fallback });
+        expect(await runAcknowledgedWidgetSetupCommand(async () => ({ kind: 'refused' }), fallback)).toEqual({ ok: false, message: fallback });
+        expect(await runAcknowledgedWidgetSetupCommand(async () => { throw new Error('boom'); }, fallback)).toEqual({ ok: false, message: fallback });
+        expect(await runAcknowledgedWidgetSetupCommand(async () => null, fallback)).toEqual({ ok: false, message: fallback });
     });
 });

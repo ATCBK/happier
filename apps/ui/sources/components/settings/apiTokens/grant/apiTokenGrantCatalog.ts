@@ -2,6 +2,7 @@ import { ACTION_ID_FAMILIES_V1, type ActionIdFamilyV1 } from '@happier-dev/proto
 import { DECISION_ACTION_IDS, TOKEN_CONVERSATIONAL_INPUT_ACTION_IDS } from '@happier-dev/protocol/actions/decisionAuthority';
 import { listActionSpecsForSurface, type ActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import type { ProviderBoundModelRef } from '@happier-dev/protocol/providers/model-selection';
+import { isNativeAutomaticModelSelectionInputV1 } from '@happier-dev/protocol/providers/model-selection';
 import type {
     DaemonProviderModelProjectionGroupV1,
     DaemonProviderModelProjectionRowV1,
@@ -134,7 +135,8 @@ export function buildApiTokenGrantModelOptions(input: Readonly<{
         options.push({ key, ref, name, description });
     };
     for (const model of input.nativeModels) {
-        add({ agentTargetKey: input.agentTargetKey, providerConnectionId: null, modelId: model.id }, model.name || model.id, model.description ?? null);
+        const ref = { agentTargetKey: input.agentTargetKey, providerConnectionId: null, modelId: model.id } as const;
+        if (!isNativeAutomaticModelSelectionInputV1(ref)) add(ref, model.name || model.id, model.description ?? null);
     }
     for (const group of input.providerGroups) {
         const connection = providerModelConnectionTitle(group);

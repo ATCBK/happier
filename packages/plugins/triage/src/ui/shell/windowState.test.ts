@@ -6,6 +6,7 @@ import type { TriageListWindowSnapshotV1 } from '../../projection/listWindowStor
 import {
   readTriageListFailureNotice,
   readTriageRefreshPacingNotice,
+  readTriageSourcesUnreachableNotice,
   resolveTriageListRefreshV1,
   resolveTriageListShellState,
 } from './windowState.js';
@@ -38,6 +39,16 @@ function snapshot(overrides: Partial<TriageListWindowSnapshotV1> = {}): TriageLi
 }
 
 describe('resolveTriageListShellState', () => {
+  it('keeps age-only staleness truthful without a list read warning', () => {
+    const aged = snapshot({
+      window: window({ lanes: [{ sourceInstanceId: INSTANCE, source: SOURCE, health: { kind: 'walkFinished' }, exhausted: true }] }),
+      freshness: 'stale',
+    });
+    expect(resolveTriageListShellState(aged)).toMatchObject({
+      kind: 'window', stale: true, showReadWarning: false, failure: null,
+    });
+  });
+
   it('withholds "configure a source" until a pass has actually looked', () => {
     // Before the first completed cycle nothing has enumerated the configured
     // instances, so accusing the reader of not configuring one would be a guess.
@@ -168,6 +179,7 @@ describe('resolveTriageListShellState', () => {
       window: rows,
       refreshing: false,
       stale: true,
+      showReadWarning: true,
       failure: null,
     });
   });
@@ -211,6 +223,7 @@ describe('resolveTriageListShellState', () => {
       window: failed,
       refreshing: false,
       stale: true,
+      showReadWarning: true,
       failure: {
         kind: 'sources',
         sources: [{
@@ -310,6 +323,8 @@ describe('resolveTriageListShellState', () => {
 
     expect(state).toMatchObject({
       kind: 'window',
+      stale: true,
+      showReadWarning: true,
       failure: {
         kind: 'sources',
         sources: [{
@@ -409,7 +424,7 @@ describe('resolveTriageListShellState', () => {
       freshness: 'stale',
     }));
 
-    expect(state).toMatchObject({ kind: 'window', failure: null });
+    expect(state).toMatchObject({ kind: 'window', stale: true, showReadWarning: true, failure: null });
   });
 
   it('separates a refresh in flight from staleness', () => {
@@ -419,6 +434,7 @@ describe('resolveTriageListShellState', () => {
       window: window(),
       refreshing: true,
       stale: false,
+      showReadWarning: false,
       failure: null,
     });
   });
@@ -445,11 +461,38 @@ describe('resolveTriageListShellState', () => {
     }));
 
     expect(state.kind).toBe('window');
+    expect(state).toMatchObject({ showReadWarning: true });
     const failure = state.kind === 'window' ? state.failure : null;
     expect(failure?.kind).toBe('sources');
     expect(failure?.kind === 'sources' ? failure.sources.map((s) => s.sourceInstanceId) : [])
       .toEqual([OTHER_INSTANCE]);
     expect(failure?.kind === 'sources' ? failure.sources[0]?.displayName : undefined)
       .toBe('globex/service');
+  });
+});
+
+describe('readTriageSourcesUnreachableNotice', () => {
+  it.each(['unavailable', 'plugin_action_failed', 'plugin.mounted-caller:unavailable'])('localizes a diagnostic token instead of presenting %s as the explanation', (message) => {
+    const notice = readTriageSourcesUnreachableNotice({ kind: 'sourcesUnreachable', message, retryable: true },
+      (key, fallback) => key === 'plugins.triage.surface.sourcesUnreachable.description' ? 'Localized recovery explanation' : fallback);
+    expect(notice.description).toBe('Localized recovery explanation');
+  });
+
+  it('says the host\'s own reason, which names the machine and the next step, instead of a vaguer stand-in', () => {
+    // D1: when this device's Run-on Machine cannot answer, the page stays and only its Machine data
+    // is unavailable. The host's reason is the one sentence that names that Machine; the generic
+    // "a machine" copy hid which one and what to do.
+    const notice = readTriageSourcesUnreachableNotice({
+      kind: 'sourcesUnreachable',
+      message: 'This operation is unavailable on studio-mac. Reconnect it or choose another machine with Run on.',
+      retryable: true,
+    });
+    expect(notice.title).toBe('Your sources could not be reached');
+    expect(notice.description).toBe('This operation is unavailable on studio-mac. Reconnect it or choose another machine with Run on.');
+  });
+
+  it('keeps the general explanation when the failure carried no words', () => {
+    const notice = readTriageSourcesUnreachableNotice({ kind: 'sourcesUnreachable', message: ' ', retryable: true });
+    expect(notice.description).toContain('Refresh tries again');
   });
 });

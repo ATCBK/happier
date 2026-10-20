@@ -103,18 +103,21 @@ export async function executeVoiceAttemptRecovery(params: Readonly<{
     const { context, navigate, recoveryAction, setupIncomplete } = params;
     if (params.isCurrent?.() === false) return false;
     if ('expectedAttempt' in params && !voiceSessionManager.matchesAttempt(params.expectedAttempt ?? null)) return false;
-        if (recoveryAction === 'connect_agent') {
+        const connectAgentRuntime = recoveryAction === 'connect_agent'
+            && context.connectRecoveryTarget.kind === 'default'
+            && context.runtimeRecoveryTarget !== null;
+        if (recoveryAction === 'connect_agent' && !connectAgentRuntime) {
             if (context.connectRecoveryTarget.kind === 'unavailable') return false;
             await navigate(
                 context.connectRecoveryTarget.kind === 'exact'
                     ? context.connectRecoveryTarget.route
                     : context.connectRecoveryTarget.kind === 'provider_settings'
                         ? VOICE_SETTINGS_PROVIDER_FOCUS_TARGET
-                        : SETTINGS_ROUTES.connectedServices,
+                        : SETTINGS_ROUTES.agents,
             );
             return true;
         }
-        if (recoveryAction === 'install_agent_runtime' || recoveryAction === 'update_agent_runtime') {
+        if (connectAgentRuntime || recoveryAction === 'install_agent_runtime' || recoveryAction === 'update_agent_runtime') {
             const runtimeRecoveryTarget = context.runtimeRecoveryTarget;
             if (!runtimeRecoveryTarget) return false;
             await navigate({
@@ -124,7 +127,9 @@ export async function executeVoiceAttemptRecovery(params: Readonly<{
                     pluginId: runtimeRecoveryTarget.pluginId,
                     machineId: runtimeRecoveryTarget.machineId,
                     serverIdentityId: runtimeRecoveryTarget.serverIdentityId,
-                    installIntent: recoveryAction === 'update_agent_runtime' ? 'update' : 'install',
+                    ...(!connectAgentRuntime
+                        ? { installIntent: recoveryAction === 'update_agent_runtime' ? 'update' : 'install' }
+                        : {}),
                 },
             });
             return true;
@@ -172,6 +177,10 @@ export async function executeVoiceAttemptRecovery(params: Readonly<{
         return false;
 }
 
-export function createVoiceAttemptRecoveryDispatch(params: Parameters<typeof executeVoiceAttemptRecovery>[0]): () => void {
-    return () => fireAndForget(executeVoiceAttemptRecovery(params), { tag: 'VoiceAttemptControl.recover' });
+export function createVoiceAttemptRecoveryDispatch(params: Parameters<typeof executeVoiceAttemptRecovery>[0]): () => Promise<boolean> {
+    return () => {
+        const pending = executeVoiceAttemptRecovery(params);
+        fireAndForget(pending, { tag: 'VoiceAttemptControl.recover' });
+        return pending;
+    };
 }

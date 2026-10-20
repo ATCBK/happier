@@ -58,7 +58,7 @@ it('reads real scanner paths of every scope through the registered encrypted dow
     handlers.set(method, data => handler(data as TRequest));
   } };
   const registration = registerMachinePromptAssetTransferRpcHandlers({ rpcHandlerManager: registrar,
-    adapterRegistry: new Map(), foundSkills: { home, agents } });
+    foundSkills: { home, agents } });
   const keyPair = createTransferRecipientKeyPair();
   const invoke = async (method: string, data: unknown) => await handlers.get(method)!(data);
   try {

@@ -51,7 +51,7 @@ export const LocalServiceSetupConsentCard = React.memo(function LocalServiceSetu
           <ApprovalDecisionFooter
             testIDPrefix={props.testID}
             isDeciding={props.deciding}
-            approveLabel={projectSetupRunLabel(props.machineName, props.sharedRunAs)}
+            approveLabel={scope === 'skip' ? t('common.skip') : projectSetupRunLabel(props.machineName, props.sharedRunAs)}
             rejectLabel={t('projects.scripts.setup.notNow')}
             onApprove={() => props.onDecide(scope)}
             onReject={props.onNotNow}

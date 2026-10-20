@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ActionsSettingsV1Schema, FeaturesResponseSchema, projectSessionAccessCapabilitiesV1, setActionApprovalOverride, type SessionWorkflowRunSnapshotV1 } from '@happier-dev/protocol';
-import { createSessionBoardOutcomeUnknownFailureV1, SessionBoardMutationV1Schema } from '@happier-dev/protocol/sessions/board';
+import { createSessionBoardOutcomeUnknownFailureV1, parseSessionBoardActionPortResultV1, SessionBoardMutationV1Schema } from '@happier-dev/protocol/sessions/board';
 
 import {
     createDeferred,
@@ -12,6 +12,7 @@ import {
 } from '@/dev/testkit';
 
 import { installLocalStorageMock, type LocalStorageMockHandle } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 // Device storage and network are the only substituted owners; workflow, crypto
 // projection, Session hydration, scope lifetime and repository logic remain real.
@@ -174,12 +175,22 @@ describe('Board Action Account retirement', () => {
         const mutationRequest = SessionBoardMutationV1Schema.parse(JSON.parse(requestBody));
         expect(mutationRequest).toMatchObject({ operation: 'update_layout', expectedLayoutRevision: null,
             layoutContent: { t: 'plain', v: { v: 1, tabs: [{ id: 'overview', title: 'Private title' }] } } });
+        const expectedRecovery = createSessionBoardOutcomeUnknownFailureV1({
+            actionId: 'session.board.layout.update', serverId, sessionId: 'sess_1', requestBody, mutationRequest, intent,
+        });
+        // Verify the expected packet at the same strict boundary that rejects the observed output.
+        expect(parseSessionBoardActionPortResultV1('session.board.layout.update', intent, expectedRecovery, {
+            expectedServerId: serverId, expectedSessionId: 'sess_1',
+        })).toMatchObject({ success: true, kind: 'failure' });
+        // Retire the captured Account through its credential owner, not only the focused store projection.
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        expect(await TokenStorage.setCredentialsForServerUrl('https://workflow.example', { serverId }, {
+            token: createAccountTokenForTests('bob'),
+        })).toBe(true);
         storage.getState().activateProfileScope({ serverId, accountId: 'bob' });
         acknowledgement.resolve(json({ operation: 'update_layout', outcome: 'updated', layoutRevision: 'ssr1.AAAACHN5c3JlY18xAAAAAQ' }));
         const result = await pending;
-        expect(result).toEqual(createSessionBoardOutcomeUnknownFailureV1({
-            actionId: 'session.board.layout.update', serverId, sessionId: 'sess_1', requestBody, mutationRequest, intent,
-        }));
+        expect(result).toEqual(expectedRecovery);
         expect(JSON.stringify(result)).not.toContain('ssr1.');
     });
 });

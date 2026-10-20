@@ -8,6 +8,8 @@ import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createPendingMessageFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -86,8 +88,9 @@ describe('SessionView (right pane auto-open)', () => {
         pendingRequests.length = 0;
         previousStorage = storage.getState();
         await loadSyncSingletonForTests();
-        account = await restoreServerAccountForTest({ serverUrl: 'https://session-right-pane.test', request: async (url, init) => {
+        account = await restoreServerAccountForTest({ serverUrl: 'https://session-right-pane.test', accountId: 'pane-account', request: async (url, init) => {
             const path = new URL(String(url)).pathname;
+            if (path === '/v1/account/profile') return Response.json(AccountProfileSchema.parse({ id: 'pane-account' }));
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
             if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
@@ -97,10 +100,15 @@ describe('SessionView (right pane auto-open)', () => {
                 return Response.json({ pending: [] });
             }
             if (path === '/v1/sessions/s1/messages') return Response.json({ messages: [], hasMore: false, nextBeforeSeq: null });
+            const bootstrapResponse = createEmptyAccountBootstrapHttpResponse(path, init);
+            if (bootstrapResponse) return bootstrapResponse;
             return new Response('{}', { status: 404 });
         } });
+        await waitForHomeGovernance(() => {
+            expect(storage.getState().profileScope?.accountId).toBe('pane-account');
+            expect(storage.getState().isDataReady).toBe(true);
+        });
         storage.getState().applySessions([createSessionFixture({ id: 's1', serverId: account.home.id, active: true })]);
-        storage.setState({ isDataReady: true });
         storage.getState().applyLocalSettings({ appPaneScopesV1: {}, sessionsRightPaneDefaultOpen: false, uiMultiPanePanelsEnabled: true }, { persist: false });
         pendingRequests.length = 0;
     });
@@ -135,8 +143,8 @@ describe('SessionView (right pane auto-open)', () => {
     it('keeps URL pane sync enabled when multi-pane setting is unset', async () => {
         // A missing persisted preference is normalized by the real LocalSettings owner.
         const { uiMultiPanePanelsEnabled: _removed, ...saved } = storage.getState().localSettings;
-        const { LocalSettingsSchema } = await import('@/sync/domains/settings/localSettings');
-        storage.setState({ localSettings: LocalSettingsSchema.parse(saved) });
+        const { localSettingsParse } = await import('@/sync/domains/settings/localSettings');
+        storage.setState({ localSettings: localSettingsParse(saved) });
         await renderSessionView({ rightTabId: 'git' });
         expect(pane.scopeState?.right).toMatchObject({ isOpen: true, activeTabId: 'git' });
     });
@@ -155,12 +163,16 @@ describe('SessionView (right pane auto-open)', () => {
             <SessionView id="s1" routeServerId={account.home.id} />
         </>;
         const screen = await renderScreen(content, { wrapper: Wrapper });
-        await waitForHomeGovernance(() => expect(pendingRequests).toHaveLength(1));
-        expect(storage.getState().sessionPending.s1?.isLoaded).toBe(true);
+        await waitForHomeGovernance(() => {
+            expect(pendingRequests).toHaveLength(1);
+            expect(storage.getState().sessionPending.s1?.isLoaded).toBe(true);
+        });
         await screen.unmount();
         storage.setState({ sessionPending: {} });
         await renderScreen(content, { wrapper: Wrapper });
-        await waitForHomeGovernance(() => expect(pendingRequests).toHaveLength(2));
-        expect(storage.getState().sessionPending.s1?.isLoaded).toBe(true);
+        await waitForHomeGovernance(() => {
+            expect(pendingRequests).toHaveLength(2);
+            expect(storage.getState().sessionPending.s1?.isLoaded).toBe(true);
+        });
     });
 });

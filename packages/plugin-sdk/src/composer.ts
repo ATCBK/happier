@@ -1,5 +1,6 @@
 import type { JsonValue } from './identity.js';
-import type { ProtocolComposableSchema } from './protocol/protocolFacade.js';
+import type { PluginJsonSchema } from './protocol/protocolFacade.js';
+import type { PluginUiSchema } from './ui/publicContract.js';
 import { COMPOSER_MEDIA_CONTENT_CAPABILITY_V1 as canonicalComposerMediaContentCapabilityV1, MAX_COMPOSER_CONTENT_INSPECT_BYTES_V1 as canonicalMaxComposerContentInspectBytesV1 } from '@happier-dev/protocol/runtime/input/composerContentV1';
 export type {
     ComposerContentHandleV1,
@@ -23,12 +24,7 @@ import type {
 export const COMPOSER_MEDIA_CONTENT_CAPABILITY_V1 = canonicalComposerMediaContentCapabilityV1;
 export const MAX_COMPOSER_CONTENT_INSPECT_BYTES_V1 = canonicalMaxComposerContentInspectBytesV1;
 
-/** A bounded inspection result; transfer/session implementation details remain host-private. */
-export type ComposerContentInspectResultV1 = Readonly<{
-    offset: number;
-    bytes: Uint8Array;
-    eof: boolean;
-}>;
+export type { ComposerContentInspectResultV1 } from './ui/publicContract.js';
 
 export function defineComposerReference(
     definition: PluginComposerReferenceDefinition,
@@ -36,19 +32,21 @@ export function defineComposerReference(
     return definition;
 }
 
-type ComposerSchemaValue<TSchema extends ProtocolComposableSchema<unknown, unknown>> =
+export type ComposerValueSchema = PluginUiSchema<unknown> & Readonly<{ jsonSchema: PluginJsonSchema }>;
+
+type ComposerSchemaValue<TSchema extends ComposerValueSchema> =
     Extract<ReturnType<TSchema['parse']>, JsonValue>;
 
 type ComposerPreparedSchemaValue<
     TDraft extends JsonValue,
-    TSchema extends ProtocolComposableSchema<unknown, unknown> | undefined,
-> = TSchema extends ProtocolComposableSchema<unknown, unknown>
+    TSchema extends ComposerValueSchema | undefined,
+> = TSchema extends ComposerValueSchema
     ? ComposerSchemaValue<TSchema>
     : TDraft;
 
 function defineComposerAttachmentImplementation<
-    const TValueSchema extends ProtocolComposableSchema<unknown, unknown>,
-    const TPreparedSchema extends ProtocolComposableSchema<unknown, unknown> | undefined = undefined,
+    const TValueSchema extends ComposerValueSchema,
+    const TPreparedSchema extends ComposerValueSchema | undefined = undefined,
 >(
     definition: Readonly<
         Omit<
@@ -76,14 +74,14 @@ function defineComposerAttachmentImplementation<
 }
 
 export const defineComposerAttachment = defineComposerAttachmentImplementation as <
-    const TValueSchema extends ProtocolComposableSchema<unknown, unknown>,
-    const TPreparedSchema extends ProtocolComposableSchema<unknown, unknown> | undefined = undefined,
+    const TValueSchema extends ComposerValueSchema,
+    const TPreparedSchema extends ComposerValueSchema | undefined = undefined,
 >(
     definition: Readonly<
         Omit<
             PluginComposerAttachmentDefinition<
                 Extract<ReturnType<TValueSchema['parse']>, JsonValue>,
-                TPreparedSchema extends ProtocolComposableSchema<unknown, unknown>
+                TPreparedSchema extends ComposerValueSchema
                     ? Extract<ReturnType<TPreparedSchema['parse']>, JsonValue>
                     : Extract<ReturnType<TValueSchema['parse']>, JsonValue>
             >,
@@ -96,7 +94,7 @@ export const defineComposerAttachment = defineComposerAttachmentImplementation a
     >,
 ) => PluginComposerAttachmentDefinition<
     Extract<ReturnType<TValueSchema['parse']>, JsonValue>,
-    TPreparedSchema extends ProtocolComposableSchema<unknown, unknown>
+    TPreparedSchema extends ComposerValueSchema
         ? Extract<ReturnType<TPreparedSchema['parse']>, JsonValue>
         : Extract<ReturnType<TValueSchema['parse']>, JsonValue>
 >;

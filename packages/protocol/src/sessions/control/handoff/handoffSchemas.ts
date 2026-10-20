@@ -42,8 +42,8 @@ export const SessionHandoffCapabilityV3Schema = lazyZodSchema(() => z.object({
   protocolVersion: z.literal(3),
   atomicTargetResume: z.boolean(),
   targetCleanup: z.boolean(),
-  sameMachineHandoff: z.pipe(z.unknown(), z.transform((value) => value === true)),
-  existingState: z.pipe(z.unknown(), z.transform((value) => value === true)),
+  sameMachineHandoff: z.pipe(z.optional(z.unknown()), z.transform((value) => value === true)),
+  existingState: z.pipe(z.optional(z.unknown()), z.transform((value) => value === true)),
 }));
 export type SessionHandoffCapabilityV3 = z.infer<typeof SessionHandoffCapabilityV3Schema>;
 

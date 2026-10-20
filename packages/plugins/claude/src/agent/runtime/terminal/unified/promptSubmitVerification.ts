@@ -26,6 +26,9 @@ function isPromptInComposer(params: Readonly<{ promptText: string; screenText: s
       allowShortVisibleWindow: true,
     });
   if (composerContent !== null && matches(composerContent)) return true;
+  if (promptText.startsWith('!')
+    && screen.shellComposerContent !== null
+    && matches(screen.shellComposerContent)) return true;
   if (params.beforeSubmit && classifyClaudeOwnComposerDraft({
     screen, rawText: params.screenText, ownComposerTexts: { matches },
   }) === 'foreign') throw new Error('Claude composer changed before prompt submission');

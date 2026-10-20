@@ -28,7 +28,6 @@ import {
     resolveWorkflowStepFieldInheritance,
 } from '@/sync/domains/workflows/workflowAuthoring';
 import type { WorkflowEditorDraft } from '@/sync/domains/workflows/workflowEditorDraft';
-import { workflowBlockReferenceLabel } from '@/sync/domains/workflows/workflowBlockLabel';
 
 import { WorkflowNumberField } from './WorkflowNumberField';
 import { workflowEditorStyles } from './workflowEditorStyles';
@@ -47,11 +46,7 @@ import { workflowEditorStyles } from './workflowEditorStyles';
 
 const styles = StyleSheet.create((theme) => ({
     root: {
-        gap: theme.space.s12,
-    },
-    scopeLabel: {
-        ...Typography.variant('label', 'semiBold'),
-        color: theme.colors.text.secondary,
+        gap: 0,
     },
     /**
      * A field's name, its state and its reset on one line while they fit; in a narrow popover the
@@ -69,8 +64,12 @@ const styles = StyleSheet.create((theme) => ({
         ...Typography.variant('label', 'regular'),
         color: theme.colors.text.primary,
     },
-    resetTarget: {
-        marginLeft: 'auto',
+    inheritance: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+        columnGap: theme.space.s8,
     },
     inheritedBadge: {
         ...Typography.variant('micro'),
@@ -83,9 +82,6 @@ const styles = StyleSheet.create((theme) => ({
     resetAction: {
         ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.button.secondary.tint,
-    },
-    control: {
-        paddingBottom: theme.space.s8,
     },
 }));
 
@@ -114,6 +110,43 @@ export function WorkflowStepTimeoutField(props: Readonly<{
 
 export type WorkflowStepInspectorFieldId = SessionAuthoringFieldId;
 
+/** A field's inheritance state ("Workflow defaults" / "Changed for this step") and its reset. */
+function WorkflowFieldInheritance(props: Readonly<{
+    fieldId: string;
+    inheritance: 'inherited' | 'override';
+    onReset: () => void;
+}>): React.ReactElement {
+    const { theme } = useUnistyles();
+    return (
+        <View style={styles.inheritance}>
+            <Text
+                testID={`${props.fieldId}-state`}
+                style={props.inheritance === 'inherited' ? styles.inheritedBadge : styles.overrideBadge}
+            >
+                {props.inheritance === 'inherited'
+                    ? t('workflows.page.blocks.workflowDefaults')
+                    : t('workflows.page.changedForStep')}
+            </Text>
+            {props.inheritance === 'override' ? (
+                <HappierPressable
+                    testID={`${props.fieldId}-reset`}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('workflows.editor.useWorkflowDefault')}
+                    onPress={props.onReset}
+                    style={(state) => [
+                        workflowEditorStyles.actionTarget,
+                        state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus }),
+                    ]}
+                >
+                    <Text style={styles.resetAction}>
+                        {t('workflows.editor.useWorkflowDefault')}
+                    </Text>
+                </HappierPressable>
+            ) : null}
+        </View>
+    );
+}
+
 export function WorkflowStepInspector(props: Readonly<{
     draft: WorkflowEditorDraft;
     step: WorkflowStep;
@@ -131,6 +164,8 @@ export function WorkflowStepInspector(props: Readonly<{
         engine?: WorkflowEngineSelectionV1;
         onChangeEngine?: (engine: WorkflowEngineSelectionV1) => void;
         workflowRoles?: readonly WorkflowRoleV1[];
+        /** The field's inheritance state and reset, for the control to show beside its own name. */
+        stateAccessory?: React.ReactNode;
     }>) => React.ReactNode;
     onResetField: (field: WorkflowStepInspectorFieldId) => void;
     onChangeFields?: (fields: Partial<WorkflowSessionAuthoringSelection>) => void;
@@ -174,10 +209,7 @@ export function WorkflowStepInspector(props: Readonly<{
 
     return (
         <View testID={testIDPrefix} style={styles.root}>
-            <Text style={styles.scopeLabel}>
-                {workflowBlockReferenceLabel(props.step)}
-            </Text>
-
+            {/* The step is named once, by the Step options header that holds this group. */}
             {props.onChangeTimeout === undefined ? null : (
                 <WorkflowStepTimeoutField
                     timeoutMs={props.step.timeoutMs}
@@ -192,6 +224,16 @@ export function WorkflowStepInspector(props: Readonly<{
                 const inheritance = field === engineField ? (engineOverridden ? 'override' : 'inherited')
                     : resolveWorkflowStepFieldInheritance(props.step, field);
                 const fieldId = `${testIDPrefix}-${field}`;
+
+                const isEngine = field === engineField;
+                const stateAccessory = (
+                    <WorkflowFieldInheritance
+                        fieldId={fieldId}
+                        inheritance={inheritance}
+                        onReset={() => isEngine && props.onResetEngine !== undefined
+                            ? props.onResetEngine() : props.onResetField(field)}
+                    />
+                );
                 const control = props.renderFieldControl?.({
                     field,
                     effective,
@@ -201,48 +243,22 @@ export function WorkflowStepInspector(props: Readonly<{
                     engine: props.step.execution?.engine ?? props.draft.defaults.engine,
                     onChangeEngine: props.onChangeEngine,
                     workflowRoles: props.draft.roles,
+                    stateAccessory,
                 });
 
+                // The control's own field row names the field and carries the state beside that name.
+                // Only a field with no control of its own gets a name line here, so it is never silent.
+                if (control !== null && control !== undefined) {
+                    return <React.Fragment key={field}>{control}</React.Fragment>;
+                }
                 return (
-                    <View key={field}>
-                        <View style={styles.fieldRow}>
-                            {/* The field's own canonical name, the same string
-                                its picker is titled with. Agent-contributed
-                                runtime copy wins over the localized generic
-                                fallback. */}
-                            <Text testID={fieldId} style={styles.fieldName}>
-                                {field === engineField ? t('workflows.page.sections.agentTitle') : resolveSessionAuthoringFieldTitle(field, selectedAgentTarget) ?? field}
-                            </Text>
-                            <Text
-                                testID={`${fieldId}-state`}
-                                style={inheritance === 'inherited' ? styles.inheritedBadge : styles.overrideBadge}
-                            >
-                                {inheritance === 'inherited'
-                                    ? t('workflows.page.blocks.workflowDefaults')
-                                    : t('workflows.page.changedForStep')}
-                            </Text>
-                            {inheritance === 'override' ? (
-                                <HappierPressable
-                                    testID={`${fieldId}-reset`}
-                                    accessibilityRole="button"
-                                    accessibilityLabel={t('workflows.editor.useWorkflowDefault')}
-                                    onPress={() => field === engineField && props.onResetEngine !== undefined
-                                        ? props.onResetEngine?.() : props.onResetField(field)}
-                                    style={(state) => [
-                                        workflowEditorStyles.actionTarget,
-                                        styles.resetTarget,
-                                        state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null, focusRingStyle({ focused: state.focused, color: theme.colors.border.focus }),
-                                    ]}
-                                >
-                                    <Text style={styles.resetAction}>
-                                        {t('workflows.editor.useWorkflowDefault')}
-                                    </Text>
-                                </HappierPressable>
-                            ) : null}
-                        </View>
-                        {control === null || control === undefined ? null : (
-                            <View style={styles.control}>{control}</View>
-                        )}
+                    <View key={field} style={styles.fieldRow}>
+                        {/* The field's canonical name, the same string its picker is titled with.
+                            Agent-contributed runtime copy wins over the localized generic fallback. */}
+                        <Text testID={fieldId} style={styles.fieldName}>
+                            {isEngine ? t('workflows.page.sections.agentTitle') : resolveSessionAuthoringFieldTitle(field, selectedAgentTarget) ?? field}
+                        </Text>
+                        {stateAccessory}
                     </View>
                 );
             })}

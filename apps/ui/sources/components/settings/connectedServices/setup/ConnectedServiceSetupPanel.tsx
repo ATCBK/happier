@@ -17,6 +17,8 @@ import { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } from '@/sync/domains/machine
 import { useMachineAdministrationTargetSelection, type MachineAdministrationTargetSelectionV1 } from '@/sync/domains/machines/administration/useTargetSelection';
 import type { ConnectedServiceId, PluginContributionIdentityV1, QualifiedConnectedAccountRef } from '@happier-dev/protocol';
 import { useDeviceType } from '@/utils/platform/responsive';
+import { useActiveServerAccountScope } from '@/sync/store/hooks';
+import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
 import { t } from '@/text';
 
 import { ConnectedAccountSetupController } from '../account/ConnectedAccountServiceView';
@@ -97,18 +99,37 @@ export const ConnectedServiceSetupPanel = React.memo(function ConnectedServiceSe
         { enabled: props.targetSelection === undefined },
     );
     const targetSelection = props.targetSelection ?? defaultTargetSelection;
-    const { target, catalog, onClose, onTargetChange, onConnected } = props;
+    const { target, catalog: liveCatalog, onClose, onTargetChange, onConnected } = props;
     const scope = props.scope ?? 'all';
-    const selected = target.kind === 'catalog'
+    const accountScope = useActiveServerAccountScope();
+    const selectionKey = JSON.stringify([accountScope ? serverAccountScopeKeySuffix(accountScope) : null, target]);
+    const liveSelected = target.kind === 'catalog'
         ? null
-        : catalog.find((candidate) => candidate.serviceKey === target.serviceKey) ?? null;
+        : liveCatalog.find((candidate) => candidate.serviceKey === target.serviceKey) ?? null;
+    // Discovery owns available choices, not an already selected setup attempt.
+    // Keep its presentation row and grid ancestry through refresh. The controller
+    // still resolves fresh execution authority before every native operation.
+    const [selection, setSelection] = React.useState(() => ({
+        key: selectionKey, entry: liveSelected, section: liveSelected?.section,
+    }));
+    React.useLayoutEffect(() => {
+        setSelection(current => {
+            if (current.key !== selectionKey) return { key: selectionKey, entry: liveSelected, section: liveSelected?.section };
+            if (!liveSelected || current.entry === liveSelected) return current;
+            return { key: selectionKey, entry: liveSelected, section: current.section ?? liveSelected.section };
+        });
+    }, [liveSelected, selectionKey]);
+    const retained = selection.key === selectionKey ? selection : null;
+    const selected = liveSelected ?? retained?.entry ?? null;
+    const selectedSection = retained?.section ?? selected?.section;
+    const catalog = selected && !liveSelected ? [...liveCatalog, selected] : liveCatalog;
     const selectedKey = selected?.serviceKey ?? null;
 
     // The plans people sign in with first (Claude, ChatGPT…), then keys; each group by name.
     const blocks = catalog
-        .filter((candidate) => scope === 'home' || candidate.section === 'agents')
+        .filter((candidate) => scope === 'home' || (candidate.serviceKey === selectedKey ? selectedSection : candidate.section) === 'agents')
         .sort((left, right) => Number(signsInWithAnAccount(right)) - Number(signsInWithAnAccount(left)));
-    const tools = scope === 'all' ? catalog.filter((candidate) => candidate.section === 'tools') : [];
+    const tools = scope === 'all' ? catalog.filter((candidate) => (candidate.serviceKey === selectedKey ? selectedSection : candidate.section) === 'tools') : [];
     const selectedIsTool = selected !== null && tools.some((candidate) => candidate.serviceKey === selected.serviceKey);
     const [toolsExpanded, setToolsExpanded] = React.useState(selectedIsTool);
     React.useEffect(() => {
@@ -294,7 +315,7 @@ export const ConnectedServiceSetupPanel = React.memo(function ConnectedServiceSe
             accessibilityLabel={title}
         >
             {props.chrome === 'page' ? <PageHeader title={title} description={purpose} alwaysShowTitle
-                cancelAction={props.targetLocked ? { label: t('common.cancel'), onPress: onClose, testID: 'connected-service-setup:close' } : undefined}
+                cancelAction={props.targetLocked ? { title: t('common.cancel'), onPress: onClose, testID: 'connected-service-setup:close' } : undefined}
                 leading={selected ? <ConnectedServiceMark legacyServiceId={selected.legacyServiceId} size="row" /> : <Icon name="plug" size={24} />}
                 actions={<MachineAdministrationTargetSelector selection={targetSelection} disabled={props.targetLocked} presentation="chip" testIDPrefix="connected-service-setup-target" />} /> : head}
             <View style={styles.body}>

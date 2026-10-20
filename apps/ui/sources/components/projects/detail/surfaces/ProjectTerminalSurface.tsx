@@ -2,6 +2,7 @@ import * as React from 'react';
 import { Platform, View } from 'react-native';
 import type { SessionTerminalMemberV1 } from '@happier-dev/protocol';
 import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
+import { isWorkspacePathWithinRootV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 import { useUnistyles } from 'react-native-unistyles';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { PANE_SIZING_DEFAULTS } from '@/components/appShell/panes/layout/paneSizing';
@@ -67,7 +68,7 @@ export const ProjectTerminalSurface = React.memo((props: Readonly<{
             machineName: id => names.get(id) ?? null };
     }, [machines, authority]);
     const keys = React.useMemo(() => workspace.tabs.flatMap(tab => tab.terminals.map(member => authority
-        ? buildProjectTerminalKey(authority.scope, member.target.kind === 'workspace_shell'
+        ? buildProjectTerminalKey(authority.scope, member.target.kind === 'workspace_shell' || member.target.kind === 'terminal_view'
             ? member.target.workspace ?? authority.workspace : authority.workspace, member.id) : '')),
     [authority, workspace.tabs]);
     React.useEffect(() => { if (authority?.lifetime.isCurrent()) privateKeys.current = keys; }, [authority, keys]);
@@ -98,7 +99,11 @@ export const ProjectTerminalSurface = React.memo((props: Readonly<{
         canJump: false, canOpenSettings: false }, glyph), [glyph, workspace.showList]);
     const renderLeaf = React.useCallback((member: SessionTerminalMemberV1, state: Readonly<{ focused: boolean; descriptor: SessionTerminalDescriptor | null }>) => {
         if (!authority) return null;
-        const captured = member.target.kind === 'workspace_shell' ? member.target.workspace ?? authority.workspace : authority.workspace;
+        const selected = member.target.kind === 'workspace_shell' || member.target.kind === 'terminal_view'
+            ? member.target.workspace ?? authority.workspace : authority.workspace;
+        const captured = resolveProjectTerminalScope(props.scopeId, selected)?.workspace;
+        if (!captured || member.target.kind === 'terminal_view' && (member.target.machineId !== captured.machineId
+            || !isWorkspacePathWithinRootV1(member.target.cwd, captured.rootPath))) return null;
         return <WorkspaceEmbeddedTerminalPane scopeId={props.scopeId} workspaceRefId={captured.workspaceId}
             machineId={member.target.kind === 'terminal_view' ? member.target.machineId : captured.machineId}
             rootPath={member.target.kind === 'terminal_view' ? member.target.cwd : captured.rootPath} serverId={captured.serverId}

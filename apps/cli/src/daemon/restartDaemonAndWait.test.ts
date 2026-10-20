@@ -336,7 +336,7 @@ describe('restartDaemonAndWait', () => {
             mode: 'force_current_cli',
             dryRun: false,
             reason: 'daemon_restart_session_runners',
-        });
+        }, { signal: undefined });
         expect(events).toEqual(['wait-new-daemon', 'restart-runners']);
     });
 

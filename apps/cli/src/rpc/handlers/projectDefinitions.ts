@@ -14,6 +14,7 @@ import { registerActionSpecRpcHandlers, type ActionSpecRpcRegistrar } from './re
 import type { RpcActionExecutor } from './_actionDispatchAdapter';
 import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 import type { ProjectSetupInspection } from '@/workspaces/projectSetup/projectSetupPreparation';
+import { isReviewedServiceMoveChild } from '@/api/externalActionExecutionAuthorization';
 
 type NativeInspectionRuntimeLease = Readonly<{
   registry: Pick<ResolvedExecutablePluginRuntimeRegistry, 'contributes' | 'resolveProjectNativeAdapter'>;
@@ -77,7 +78,8 @@ export function createProjectDefinitionAction(params: Readonly<{
   acquirePluginRuntime?: () => Promise<NativeInspectionRuntimeLease>;
   nativeIo?: ProjectNativeCommandIo;
   /** Captured requester/private-review boundary; the host owns its native lifetime and uses inspectProjectSetupReadiness. */
-  inspectSetup?: (input: Readonly<{ workspace: ProjectDefinitionWorkspace; root: string; context: ActionExecutorContext }>) => Promise<ProjectSetupInspection>;
+  inspectSetup?: (input: Readonly<{ workspace: ProjectDefinitionWorkspace; root: string; context: ActionExecutorContext;
+    reviewSetupConsent?: true }>) => Promise<ProjectSetupInspection>;
 }>): NonNullable<ActionExecutorDeps['projectDefinitionAction']> {
   return async ({ actionId, input, context }) => {
     const parsed = PROJECT_DEFINITION_ACTION_INPUT_SCHEMAS[actionId].safeParse(input);
@@ -85,8 +87,14 @@ export function createProjectDefinitionAction(params: Readonly<{
     const workspace = parsed.data.workspace;
     if (!await isServerProfileHomeIdentity(params.serverId, workspace.serverId)
       || context.serverId && !await isServerProfileHomeIdentity(params.serverId, context.serverId)) return failure('server_scope_mismatch');
-    if (workspace.machineId !== params.machineId || (context.externalActionTarget && (context.externalActionTarget.kind !== 'machine'
-      || context.externalActionTarget.machineId !== params.machineId))) return failure('target_not_local');
+    if (workspace.machineId !== params.machineId) return failure('target_not_local');
+    if (context.externalActionTarget && (context.externalActionTarget.kind !== 'machine'
+      || context.externalActionTarget.machineId !== params.machineId)) {
+      const authorization = context.externalActionExecutionAuthorization;
+      if (actionId !== 'projects.inspect' || !authorization || !await isReviewedServiceMoveChild({ authorization,
+        envelope: context.originalActionEnvelope, actionId, machineId: params.machineId, params: parsed.data,
+        ...(context.signal ? { signal: context.signal } : {}) })) return failure('target_not_local');
+    }
     const absolute = validateWorkspaceInspectionPath(expandHomeDirPath(workspace.rootPath));
     if (!absolute.valid || !absolute.resolvedPath) return failure('access_denied');
     const authorized = validatePath(absolute.resolvedPath, params.workingDirectory, [], params.accessPolicy);
@@ -107,7 +115,8 @@ export function createProjectDefinitionAction(params: Readonly<{
     context.signal?.throwIfAborted();
     let setup: ProjectSetupInspection = { setupReadiness: { kind: 'unknown', code: 'project_setup_requester_review_unavailable' } };
     if (params.inspectSetup) {
-      try { setup = await params.inspectSetup({ workspace, root, context }); }
+      try { setup = await params.inspectSetup({ workspace, root, context,
+        ...('reviewSetupConsent' in parsed.data && parsed.data.reviewSetupConsent ? { reviewSetupConsent: true as const } : {}) }); }
       catch { context.signal?.throwIfAborted(); }
     }
     context.signal?.throwIfAborted();

@@ -1,5 +1,5 @@
 import { DaemonPluginHostPresentedComposerCurrentIntentV1Schema, type DaemonPluginHostPresentedComposerCurrentIntentV1 } from '@happier-dev/protocol/plugins/actions/daemonInvocationV1';
-import { PluginActionPlacementV2Schema, PluginActionScopeV2Schema, type PluginActionPlacementV2, type PluginActionScopeV2 } from '@happier-dev/protocol/plugins/actions/v2';
+import { PluginActionPlacementV2Schema, PluginActionScopeV2Schema, resolveDeclaredInputLeaves, type PluginActionPlacementV2, type PluginActionScopeV2 } from '@happier-dev/protocol/plugins/actions/v2';
 import { PluginContributionIdentityV1Schema, buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { QualifiedConnectedAccountRefSchema, sameQualifiedConnectedAccountRef } from '@happier-dev/protocol/connect/qualified-connected-account-persistence';
 import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
@@ -375,6 +375,8 @@ export type PluginActionInputSelectionController = Readonly<{
 export type PluginExactBoundActionInputRequest = Readonly<{
     action: Readonly<{ pluginId: string; localId: string }>;
     expectedOccurrenceId: string;
+    /** Host-stamped caller surface; targeted and Automation selection retain their plugin default. */
+    invocationSurface?: 'ui' | 'plugin';
     draft?: Readonly<Record<string, unknown>>;
 }>;
 
@@ -646,20 +648,6 @@ function deletePath(input: Readonly<Record<string, unknown>>, path: string): Rea
     return remove(input, 0) as Readonly<Record<string, unknown>>;
 }
 
-function resolveInputSchemaLeaf(
-    schema: PluginJsonSchemaV2,
-    path: string,
-): PluginJsonSchemaV2 | null {
-    let current = schema;
-    for (const segment of path.split('.')) {
-        if (current.type !== 'object') return null;
-        const next = current.properties?.[segment];
-        if (!next) return null;
-        current = next;
-    }
-    return current;
-}
-
 function draftMatchesDeclaredNonSecretFields(params: Readonly<{
     draft: Readonly<Record<string, unknown>>;
     action: PluginProjectionAction;
@@ -681,10 +669,12 @@ function draftMatchesDeclaredNonSecretFields(params: Readonly<{
         const field = fieldsByPath.get(path);
         if (field) {
             if (field.widget === 'secret' || field.connectedAccountOptions === true) return false;
-            const leaf = resolveInputSchemaLeaf(schema, path);
-            if (!leaf) return false;
+            // Conditional hints may live in only one union arm. Reuse the
+            // declaration owner's traversal, just as manifest admission does.
+            const leaves = resolveDeclaredInputLeaves(schema, path, 'conditional-field');
+            if (!leaves) return false;
             try {
-                return isValidPluginJsonSchemaValue(compilePluginJsonSchema(leaf), value);
+                return leaves.some(leaf => isValidPluginJsonSchemaValue(compilePluginJsonSchema(leaf), value));
             } catch {
                 return false;
             }
@@ -1011,7 +1001,11 @@ export function createPluginContributedActionController(params: Readonly<{
             // Likewise, only the explicit message-menu projection can consume
             // the row's opaque current Message reference. Legacy presentation
             // routes retain their established no-arm compatibility behavior.
-            if (!isSemanticOnlyMessageMenuAction(params.resolved)) return { kind: 'resolved' };
+            // Client handlers have no legacy daemon admission to preserve. An
+            // actual menu press may carry its Message even when the same Action
+            // also appears in the palette; reference-only routes stay unchanged.
+            const clientAction = snapshot.resolveContributedAction?.(params.resolved.identity)?.execution.target === 'client';
+            if (!clientAction && !isSemanticOnlyMessageMenuAction(params.resolved)) return { kind: 'resolved' };
             if (!messageActionReference) return { kind: 'stale', reason: 'host_retired' };
             return {
                 kind: 'resolved',
@@ -1061,6 +1055,9 @@ export function createPluginContributedActionController(params: Readonly<{
                 ...(executionTarget === 'client'
                     ? {
                         clientAction: {
+                            ...(placement === 'message.menu' && invocation.invocation?.kind === 'hostPresentedMessage'
+                                ? { messageActionReference: invocation.invocation.currentMessageIntent }
+                                : {}),
                             ...(resolved.snapshot.host.openSurface
                                 ? { openSurface: resolved.snapshot.host.openSurface }
                                 : {}),
@@ -1328,7 +1325,7 @@ export function createPluginContributedActionController(params: Readonly<{
             || readRequiredString(action.occurrenceId) !== expectedOccurrenceId
             || !hasCurrentClientActionRegistration(snapshot, identity.data)
             || !isPluginProjectedActionExecutable(action)
-            || !action.surfaces.includes('plugin')
+            || !action.surfaces.includes(request.invocationSurface ?? 'plugin')
         ) {
             return { kind: 'stale', reason: 'action_retired' };
         }
@@ -1499,6 +1496,7 @@ export function createPluginContributedActionController(params: Readonly<{
                 description: presentation.description,
                 inputHints: resolvedHints,
             },
+            initialInput: draft,
             accountLifetime: resolved.snapshot.host.accountLifetime,
             ...(resolved.snapshot.host.signal ? { signal: resolved.snapshot.host.signal } : {}),
             isCurrent: () => !('kind' in resolveCurrent()),
@@ -1557,7 +1555,6 @@ export function createPluginContributedActionController(params: Readonly<{
                 return { ok: true };
             },
         });
-        form.replaceInput(draft);
         return { kind: 'form', form, result };
     }
 

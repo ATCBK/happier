@@ -2,6 +2,7 @@ import type { PluginProjectionV2, PluginJsonSchemaV2, PluginContributionIdentity
 import type { InputHints } from '@happier-dev/protocol/inputs';
 import { normalizePluginUiInlineSurfaceBindingV1 } from '@happier-dev/protocol/plugins/ui';
 import { WIDGET_SIZE_ORDER_V1, type WidgetSizeDeclarationV1 } from '@happier-dev/protocol/widgets';
+import type { PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 
 import {
     normalizePluginUiProjection,
@@ -87,7 +88,14 @@ export function widgetProjectionEntry(input: WidgetFixtureEntry): Extract<Plugin
 }
 
 export function widgetInstalledPackage(id: string, displayName: string) {
-    return { id, displayName, enabled: true, source: { kind: 'local', path: `/plugins/${id}` } };
+    return { id, displayName, enabled: true, source: { kind: 'local', locator: `/plugins/${id}` } };
+}
+
+/** Exact Administration-selected producer for tests that compose the Account union. */
+export function widgetExecutionOrigin(pluginId: string, machineId: string): PluginMachineExecutionOriginV1 {
+    return { serverIdentityId: 'srv_widgets_test', materializationRef: {
+        pluginId, machineId, materializationId: `${pluginId}-installation`,
+    } };
 }
 
 /** A projection holding exactly these widget entries and installed packages. */

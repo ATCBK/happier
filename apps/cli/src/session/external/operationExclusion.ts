@@ -827,7 +827,9 @@ export function createExternalSessionOperationExclusion(input: Readonly<{
                     if (active && active.expiresAtMs > observedAtMs) {
                         const ownerLiveness = await inspectClaimOwnerLiveness(active);
                         if (ownerLiveness !== 'verified_stopped') {
-                            if (serializeSemanticRequest(active.request) === serializeSemanticRequest(request)) {
+                            const reason = conflictReason(active, request, accountSubject);
+                            if (reason !== 'account_subject_mismatch'
+                                && serializeSemanticRequest(active.request) === serializeSemanticRequest(request)) {
                                 return Object.freeze({
                                     status: 'converged',
                                     active,
@@ -845,7 +847,7 @@ export function createExternalSessionOperationExclusion(input: Readonly<{
                             }
                             return Object.freeze({
                                 status: 'conflict',
-                                reason: conflictReason(active, request, accountSubject),
+                                reason,
                                 active,
                             });
                         }

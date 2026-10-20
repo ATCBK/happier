@@ -1,5 +1,5 @@
 import * as privacyKit from "privacy-kit";
-import { z } from "zod";
+import { z } from "zod/mini";
 import { omit } from "zod/mini";
 import { ReviewCommentPrepareMutationRequestV1Schema, ReviewCommentPrepareMutationResponseV1Schema, ReviewCommentCommitMutationRequestV1Schema, ReviewCommentCommitMutationResponseV1Schema, deriveReviewCommentStructuralMutationV1, applyReviewCommentPreparedSensitiveMutationV1, type ReviewCommentPrepareMutationRequestV1, type ReviewCommentPrepareMutationResponseV1, type ReviewCommentCommitMutationRequestV1, type ReviewCommentStructuralMutationV1, type ReviewCommentStoredSourceV1 } from '@happier-dev/protocol/reviews/comments/mutation';
 import { ReviewCommentOperationErrorCodeV1Schema, ReviewCommentPrincipalHeaderV1Schema, stringifyReviewCommentPrincipalCanonicalJsonV1 } from '@happier-dev/protocol/reviews/comments/actions';
@@ -18,14 +18,14 @@ import { assertReviewCommentSessionScope, assertReviewCommentDirectWriteGrant,
     type ReviewCommentPrincipal } from "./permissions";
 import type { ReviewCommentOperationRuntime } from "./operations";
 
-const ReceiptV1Schema = z.object({
+const ReceiptV1Schema = z.strictObject({
     v: z.literal(1), accountId: z.string(), actor: ReviewCommentPrincipalHeaderV1Schema.shape.actor,
-    mode: z.enum(["plain", "e2ee"]), accountVersion: z.number().int().optional(),
-    contentPublicKeyFingerprint: z.string().nullable(),
+    mode: z.enum(["plain", "e2ee"]), accountVersion: z.optional(z.number().check(z.int())),
+    contentPublicKeyFingerprint: z.nullable(z.string()),
     request: ReviewCommentPrepareMutationRequestV1Schema,
     prepared: omit(ReviewCommentPrepareMutationResponseV1Schema, { receipt: true }),
-    now: z.number().int().nonnegative(), ids: z.array(z.object({ prefix: z.string(), id: z.string() }).strict()),
-}).strict();
+    now: z.number().check(z.int(), z.nonnegative()), ids: z.array(z.strictObject({ prefix: z.string(), id: z.string() })),
+});
 
 export function readReviewCommentPreparationReceipt(accountId: string, receipt: string) {
     try { return ReceiptV1Schema.parse(JSON.parse(decryptString(["review-comment-mutation-preparation", "v1", accountId], privacyKit.decodeBase64(receipt)))); }
@@ -64,7 +64,9 @@ export function createReviewCommentCanonicalMutations(store: ReviewCommentStore,
             if (principal.actor.kind !== "user" && (mutation.input.authorIntent === "open" || principal.actor.kind === "agent" || principal.actor.kind === "workflow")) {
                 if (principal.currentIntent?.kind !== "review_findings_materialization") assertReviewCommentDirectWriteGrant(principal);
             }
-            if (principal.actor.kind === "agent") assertReviewCommentSessionScope(principal, mutation.input.sessionId);
+            if (principal.actor.kind === "agent" || (principal.actor.kind === "workflow" && mutation.input.sessionId !== undefined)) {
+                assertReviewCommentSessionScope(principal, mutation.input.sessionId);
+            }
         }
         for (const source of [...sources]) {
             try {

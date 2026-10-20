@@ -1,40 +1,84 @@
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { basename, dirname, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import ts from 'typescript';
 import { writeJsonAtomic } from '../../apps/stack/scripts/utils/fs/json.mjs';
 
-function readProject(path) {
+export function readTypecheckProject(path) {
   const config = ts.readConfigFile(path, ts.sys.readFile);
   if (config.error) throw new Error(ts.flattenDiagnosticMessageText(config.error.messageText, '\n'));
   const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, dirname(path), undefined, path);
-  if (parsed.errors.length) throw new Error(ts.formatDiagnostics(parsed.errors, {
+  if (parsed.errors.length) throw new Error(`TypeScript project ${path}:\n` + ts.formatDiagnostics(parsed.errors, {
     getCanonicalFileName: file => file, getCurrentDirectory: () => dirname(path), getNewLine: () => '\n',
   }));
   return { config: config.config, parsed };
 }
 
+export function resolveTypecheckPrimaryTypeReferences({ configPath, parsed }) {
+  const names = parsed.options.types ?? ts.getAutomaticTypeDirectiveNames(parsed.options, ts.sys);
+  return new Map(names.map(name => [name,
+    ts.resolveTypeReferenceDirective(name, configPath, parsed.options, ts.sys).resolvedTypeReferenceDirective]));
+}
+
+const readProject = readTypecheckProject;
+
 function sharedDeclaration(file) {
   if (!file.endsWith('.d.ts')) return false;
-  const source = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
-  return !ts.isExternalModule(source) || source.statements.some(statement =>
+  return contributesAmbientTypes(file);
+}
+
+function readAmbientSource(file) {
+  if (!/\.[cm]?tsx?$/.test(file)) return;
+  const text = readFileSync(file, 'utf8');
+  if (!/\.d\.[cm]?ts$/.test(file) && !text.includes('declare')) return;
+  return ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+}
+
+function contributesAmbientTypes(file) {
+  const source = readAmbientSource(file);
+  if (!source) return false;
+  return (source.isDeclarationFile && !ts.isExternalModule(source)) || source.statements.some(statement =>
     ts.isModuleDeclaration(statement) && (ts.isStringLiteral(statement.name)
       || Boolean(statement.flags & ts.NodeFlags.GlobalAugmentation)));
+}
+
+export function readTypecheckAmbientModules(file) {
+  const source = readAmbientSource(file);
+  const namespaces = [];
+  const modules = [];
+  let hasOtherGlobals = false;
+  if (!source) return { namespaces, modules, hasOtherGlobals };
+  const external = ts.isExternalModule(source);
+  const declarations = source.statements.flatMap(statement => {
+    if (ts.isModuleDeclaration(statement) && statement.flags & ts.NodeFlags.GlobalAugmentation) {
+      return statement.body && ts.isModuleBlock(statement.body) ? [...statement.body.statements] : [];
+    }
+    return !external || (ts.isModuleDeclaration(statement) && ts.isStringLiteral(statement.name)) ? [statement] : [];
+  });
+  for (const declaration of declarations) {
+    if (ts.isModuleDeclaration(declaration)) {
+      (ts.isStringLiteral(declaration.name) ? modules : namespaces).push(declaration.name.text);
+    } else if (!ts.isEmptyStatement(declaration)) hasOtherGlobals = true;
+  }
+  return { namespaces, modules, hasOtherGlobals };
 }
 
 /** Derive source cycles, their dependency-ordered prerequisites, the source
  * remainder, and caller-selected test programs from the current graph.
  * TypeScript 5 is used only as a compiler API; checking stays with native TS7.
  */
-export async function deriveTypecheckProjects(packageDir, { sourceNames, testNames, testProject = "test", testGroup = () => 0, check = false, writeAuthored = false } = {}) {
+export async function deriveTypecheckProjects(packageDir, { sourceNames, testNames, testProject = "test", testGroup = () => 0, testCompilerOptions = () => ({}), resolveSourceOwners = false, check = false, writeAuthored = false, declarationOverrides = new Map() } = {}) {
   const names = [...sourceNames, ...testNames];
   packageDir = resolve(packageDir);
   const original = readProject(resolve(packageDir, 'tsconfig.json'));
   const projects = names.map(name => readProject(resolve(packageDir, `tsconfig.${name}.json`)));
-  const originalRoots = new Set(original.parsed.fileNames);
-  const shared = original.parsed.fileNames.filter(sharedDeclaration);
+  const declarationRoot = file => resolve(declarationOverrides.get(resolve(file)) ?? file);
+  // Finite preparation can own a generated declaration independently of a
+  // live tool's output, including when that live output does not exist yet.
+  const originalRoots = new Set([...original.parsed.fileNames.map(declarationRoot), ...declarationOverrides.values()]);
+  const shared = [...originalRoots].filter(sharedDeclaration);
   const sharedSet = new Set(shared);
   const testConfig = readProject(resolve(packageDir, `tsconfig.${testProject}.json`));
-  const existingTests = new Set(testConfig.parsed.fileNames.filter(file => existsSync(file)
+  const existingTests = new Set(testConfig.parsed.fileNames.map(declarationRoot).filter(file => existsSync(file)
     && !basename(file).includes('.composed.')));
   const testRoots = new Set([...existingTests, ...originalRoots].filter(file => !sharedSet.has(file)
     && (existingTests.has(file) || /\.(?:test|spec)\.tsx?$/.test(file)
@@ -42,33 +86,107 @@ export async function deriveTypecheckProjects(packageDir, { sourceNames, testNam
   const owned = new Set();
   const results = [];
   const path = file => relative(packageDir, file).replaceAll('\\', '/');
-  const moduleCache = ts.createModuleResolutionCache(packageDir, file => file, original.parsed.options);
+  const originalConfigPath = resolve(packageDir, 'tsconfig.json');
+  const contexts = new Map([[originalConfigPath, { ...original, configPath: originalConfigPath }]]);
+  const privateNamespace = context => context.parsed.options.paths?.['@/*']?.map(path => resolve(
+    context.parsed.options.baseUrl ?? context.parsed.options.pathsBasePath ?? dirname(context.configPath), path));
+  const originalNamespace = JSON.stringify(privateNamespace(contexts.get(originalConfigPath)));
+  const originalLibraries = JSON.stringify(original.parsed.options.lib);
+  const sourceContexts = new Map();
+  const producerInputs = new Map();
+  const sourceContext = file => {
+    if (!resolveSourceOwners || file.endsWith('.json') || /[\\/]node_modules[\\/]/.test(file)) return contexts.get(originalConfigPath);
+    if (!sourceContexts.has(file)) {
+      // Private aliases and ambient libraries belong to their source producer.
+      // Other package leaves retain their consuming-program resolution.
+      // Never retry an unresolved import against another host's alias.
+      const configPath = resolve(ts.findConfigFile(dirname(file), ts.sys.fileExists) ?? originalConfigPath);
+      if (!contexts.has(configPath)) {
+        try {
+          const context = { ...readProject(configPath), configPath };
+          context.ownsForeignPrivateNamespace = Boolean(privateNamespace(context)
+            && JSON.stringify(privateNamespace(context)) !== originalNamespace);
+          contexts.set(configPath, context);
+        }
+        catch (cause) { throw new Error(`Cannot resolve compiler owner of ${file}: ${cause.message}`, { cause }); }
+      }
+      const context = contexts.get(configPath);
+      let owner = contexts.get(originalConfigPath);
+      if (context.ownsForeignPrivateNamespace) owner = context;
+      else if (JSON.stringify(context.parsed.options.lib) !== originalLibraries) {
+        // A library environment owns its real program, including imported
+        // implementations excluded as roots. Consumer-only test support is not
+        // promoted merely because its nearest production config uses DOM.
+        if (context.parsed.fileNames.includes(file)) owner = context;
+        else {
+          // Root membership is already known. Only excluded producer-private
+          // leaves need a walk inside that producer, not through every
+          // dependency's declarations and compiler environment.
+          if (!producerInputs.has(configPath)) producerInputs.set(configPath,
+            new Set(importClosure(context.parsed.fileNames,
+              input => {
+                const local = relative(dirname(configPath), input);
+                return local !== '..' && !local.startsWith(`..${sep}`) && !isAbsolute(local)
+                  && !/[\\/]node_modules[\\/]/.test(local);
+              }, context)));
+          if (producerInputs.get(configPath).has(file)) owner = context;
+        }
+      }
+      sourceContexts.set(file, owner);
+    }
+    return sourceContexts.get(file);
+  };
+  const moduleCaches = new Map();
+  const moduleCache = context => {
+    if (!moduleCaches.has(context.configPath)) moduleCaches.set(context.configPath,
+      ts.createModuleResolutionCache(dirname(context.configPath), file => file, context.parsed.options));
+    return moduleCaches.get(context.configPath);
+  };
   const imports = new Map();
+  const contextualImports = new Map();
+  const primaryTypeReferences = new Map();
+  const primaryTypes = context => {
+    if (!primaryTypeReferences.has(context.configPath)) {
+      primaryTypeReferences.set(context.configPath, resolveTypecheckPrimaryTypeReferences(context));
+    }
+    return primaryTypeReferences.get(context.configPath);
+  };
   const authored = resolved => /\.(?:json|[cm]?tsx?)$/.test(resolved.resolvedFileName)
     || (original.parsed.options.allowJs && !resolved.isExternalLibraryImport
       && !/[\\/]node_modules[\\/]/.test(resolved.resolvedFileName)
       && /\.(?:[cm]?js|jsx)$/.test(resolved.resolvedFileName));
-  const importClosure = seeds => {
+  const dependenciesFor = (file, context) => {
+    if (!contextualImports.has(context.configPath)) contextualImports.set(context.configPath, new Map());
+    const cache = contextualImports.get(context.configPath);
+    if (!cache.has(file)) {
+      const info = ts.preProcessFile(readFileSync(file, 'utf8'), true, true);
+      const dependencies = info.importedFiles.flatMap(({ fileName }) => {
+        const resolved = ts.resolveModuleName(fileName, file, context.parsed.options, ts.sys, moduleCache(context)).resolvedModule;
+        return resolved && authored(resolved) ? [resolve(resolved.resolvedFileName)] : [];
+      });
+      dependencies.push(...info.referencedFiles.map(({ fileName }) => resolve(dirname(file), fileName)));
+      dependencies.push(...info.typeReferenceDirectives.flatMap(({ fileName }) => {
+        // A program's primary type directive wins over a dependency's secondary
+        // reference, just as in the canonical producer compiler environment.
+        const primary = primaryTypes(context);
+        const resolved = primary.has(fileName) ? primary.get(fileName)
+          : ts.resolveTypeReferenceDirective(fileName, file, context.parsed.options, ts.sys).resolvedTypeReferenceDirective;
+        return resolved ? [resolve(resolved.resolvedFileName)] : [];
+      }));
+      cache.set(file, dependencies);
+    }
+    return cache.get(file);
+  };
+  const importClosure = (seeds, accepts = () => true, compilerContext) => {
     const found = new Set();
     const pending = [...seeds];
     while (pending.length) {
       const file = pending.pop();
-      if (found.has(file) || !existsSync(file)) continue;
+      if (found.has(file) || !existsSync(file) || !accepts(file)) continue;
       found.add(file);
-      if (!imports.has(file)) {
-        const info = ts.preProcessFile(readFileSync(file, 'utf8'), true, true);
-        const dependencies = info.importedFiles.flatMap(({ fileName }) => {
-          const resolved = ts.resolveModuleName(fileName, file, original.parsed.options, ts.sys, moduleCache).resolvedModule;
-          return resolved && authored(resolved) ? [resolve(resolved.resolvedFileName)] : [];
-        });
-        dependencies.push(...info.referencedFiles.map(({ fileName }) => resolve(dirname(file), fileName)));
-        dependencies.push(...info.typeReferenceDirectives.flatMap(({ fileName }) => {
-          const resolved = ts.resolveTypeReferenceDirective(fileName, file, original.parsed.options, ts.sys).resolvedTypeReferenceDirective;
-          return resolved ? [resolve(resolved.resolvedFileName)] : [];
-        }));
-        imports.set(file, dependencies);
-      }
-      pending.push(...imports.get(file));
+      const dependencies = dependenciesFor(file, compilerContext ?? sourceContext(file));
+      if (!compilerContext) imports.set(file, dependencies);
+      pending.push(...dependencies);
     }
     return [...found];
   };
@@ -140,9 +258,82 @@ export async function deriveTypecheckProjects(packageDir, { sourceNames, testNam
     for (const file of files) owned.add(file);
     results.push({ ...project.config, files: [...files, ...shared].map(path).sort(), include: [], exclude: [] });
   }
+  const foreignProjects = new Map();
+  const testContexts = new Map();
+  const consumerPrimaryAmbientInputs = new Map();
+  const testOptionOverrides = [];
+  const reachableOwners = new Map();
+  if (resolveSourceOwners) {
+    const dependencies = importClosure([...testRoots]);
+    const parents = new Map();
+    for (const [file, edges] of imports) for (const dependency of edges) {
+      if (!parents.has(dependency)) parents.set(dependency, []);
+      parents.get(dependency).push(file);
+    }
+    const ownerSeeds = new Map();
+    const pending = [];
+    const addOwner = (file, owner) => {
+      if (!reachableOwners.has(file)) reachableOwners.set(file, new Set());
+      if (reachableOwners.get(file).has(owner)) return;
+      reachableOwners.get(file).add(owner);
+      pending.push([file, owner]);
+    };
+    // Published declarations retain their ambient facts, but do not import
+    // their package's build context into the consumer. Label implementations
+    // once, then propagate exact reachability through the existing graph.
+    for (const file of dependencies) {
+      if (/\.d\.[cm]?ts$/.test(file)) continue;
+      const owner = sourceContext(file);
+      if (owner.configPath === originalConfigPath) continue;
+      if (!ownerSeeds.has(owner)) ownerSeeds.set(owner, []);
+      ownerSeeds.get(owner).push(file);
+      addOwner(file, owner);
+    }
+    for (let index = 0; index < pending.length; index++) {
+      const [file, owner] = pending[index];
+      for (const parent of parents.get(file) ?? []) addOwner(parent, owner);
+    }
+    for (const [owner, seeds] of ownerSeeds) {
+      // Preserve the producer's actual ambient environment, including .ts
+      // global declarations and dependency augmentations imported by its roots.
+      // Another host reached by a producer test does not own that environment.
+      const acceptsOwnerInput = file => /[\\/]node_modules[\\/]/.test(file)
+        || sourceContext(file).configPath === owner.configPath;
+      const primaryInputs = [...primaryTypes(owner).values()].flatMap(reference => reference ? [resolve(reference.resolvedFileName)] : []);
+      const producerAmbientInputs = importClosure([...owner.parsed.fileNames, ...primaryInputs], acceptsOwnerInput, owner).filter(contributesAmbientTypes);
+      // Canonical authored ambient roots form the producer's type contract.
+      // Dependency augmentations join that contract through reached inputs,
+      // not through unrelated UI/test implementations in the whole program.
+      const authoredAmbientRoots = owner.parsed.fileNames.filter(file =>
+        !/[\\/]node_modules[\\/]/.test(file) && acceptsOwnerInput(file) && contributesAmbientTypes(file));
+      const ambientInputs = importClosure([...seeds, ...authoredAmbientRoots, ...primaryInputs], acceptsOwnerInput, owner)
+        .filter(contributesAmbientTypes);
+      foreignProjects.set(owner.configPath, {
+        configPath: owner.configPath,
+        ambientInputs,
+        files: new Set([...producerAmbientInputs, ...importClosure([...seeds, ...producerAmbientInputs])
+          .filter(file => !/[\\/]node_modules[\\/]/.test(file))]),
+      });
+    }
+  }
+  for (const file of testRoots) testContexts.set(file, { file, owners: [...reachableOwners.get(file) ?? []] });
   for (let index = 0; index < testNames.length; index++) {
-    const roots = [...testRoots].filter(file => testGroup(path(file)) === index);
-    results.push({ ...projects[sourceNames.length + index].config, files: [...roots, ...shared].map(path).sort(), include: [], exclude: [] });
+    // Source imports determine prerequisite ownership even for explicitly
+    // test-listed files, such as a base config used by another Vitest config.
+    const roots = [...testRoots].filter(file => !owned.has(file) && testGroup(path(file), testContexts.get(file)) === index);
+    const config = projects[sourceNames.length + index].config;
+    const consumer = {
+      ...projects[sourceNames.length + index],
+      configPath: resolve(packageDir, `tsconfig.${testNames[index]}.json`),
+    };
+    if (resolveSourceOwners) consumerPrimaryAmbientInputs.set(consumer.configPath,
+      [...primaryTypes(consumer)].flatMap(([, reference]) => reference
+        ? importClosure([resolve(reference.resolvedFileName)], () => true, consumer).filter(contributesAmbientTypes) : []));
+    const overrides = testCompilerOptions(roots.map(file => testContexts.get(file)), consumer);
+    testOptionOverrides.push(overrides);
+    results.push({ ...config, compilerOptions: { ...config.compilerOptions,
+      ...overrides },
+    files: [...roots, ...shared].map(path).sort(), include: [], exclude: [] });
   }
   // Catch a stale selector or accidental test/source overlap before native
   // declaration emission; never silently omit an original implementation root.
@@ -170,6 +361,7 @@ export async function deriveTypecheckProjects(packageDir, { sourceNames, testNam
     // type roots and declaration outputs keep their existing meaning.
     const config = {
       extends: resolve(packageDir, `tsconfig.${names[index]}.json`),
+      ...(index >= sourceNames.length ? { compilerOptions: testOptionOverrides[index - sourceNames.length] } : {}),
       files: results[index].files.map(file => resolve(packageDir, file)),
       include: [], exclude: [],
       references: (projects[index].config.references ?? []).map(reference => {
@@ -187,7 +379,11 @@ export async function deriveTypecheckProjects(packageDir, { sourceNames, testNam
     }
   }
   if (check && changed.length) throw new Error(`TypeScript compiler partitions need regeneration: ${changed.join(', ')}`);
-  return results.map((config, index) => ({ project: names[index], files: config.files.length, configPath: targets[index] }));
+  const inventory = results.map((config, index) => ({ project: names[index], files: config.files.length, configPath: targets[index] }));
+  inventory.foreignProjects = [...foreignProjects.values()].map(project => ({ ...project, files: [...project.files].sort() }));
+  inventory.testContexts = testContexts;
+  inventory.consumerPrimaryAmbientInputs = consumerPrimaryAmbientInputs;
+  return inventory;
 }
 
 export async function prepareDerivedTypecheckProjects(projects, cwd, { names, derive, beforeDerive } = {}) {

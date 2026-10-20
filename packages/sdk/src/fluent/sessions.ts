@@ -36,9 +36,9 @@ export type HappierSessionSpawnInput = Readonly<
   }>
 >;
 
-/** Additional Action input for `session.sendAndWait()`, whose Session and wait mode are fixed by the fluent handle. */
+/** Additional Action input for `session.sendAndWait()`, whose Session and reply mode are fixed by the fluent handle. */
 export type HappierSessionSendAndWaitInput = Readonly<
-  Omit<Extract<PublicActionInputById['session.message.send'], { message: string }>, 'sessionId' | 'message' | 'wait'>
+  Omit<Extract<PublicActionInputById['session.message.send'], { message: string }>, 'sessionId' | 'message' | 'wait' | 'reply' | 'returnToSessionId'>
 >;
 
 /** Per-call controls for an unbound fluent Session client. */
@@ -74,11 +74,16 @@ export class HappierAgentUnavailableError extends Error {
 
 export class HappierSessionSpawnError extends Error {
   readonly result: Exclude<PublicActionResultById['session.spawn_new'], Readonly<{ type: 'success' }>>;
+  readonly requestId: string | undefined;
 
-  constructor(result: Exclude<PublicActionResultById['session.spawn_new'], Readonly<{ type: 'success' }>>) {
-    super(formatSessionSpawnFailure(result));
+  constructor(
+    result: Exclude<PublicActionResultById['session.spawn_new'], Readonly<{ type: 'success' }>>,
+    requestId?: string,
+  ) {
+    super(`${formatSessionSpawnFailure(result)}${requestId === undefined ? '' : ` (requestId=${requestId})`}`);
     this.name = 'HappierSessionSpawnError';
     this.result = result;
+    this.requestId = requestId;
   }
 }
 
@@ -212,15 +217,20 @@ export function createSessions<TOptions extends ActionExecutionOptions = ActionE
         bindPublicActionInput('session.message.send', { sessionId: id, message }, options?.requestId),
         optionsForSession(options),
       ),
-      sendAndWait: async (message: string, input = {}, options?: TOptions) => await params.execute(
-        'session.message.send',
-        bindPublicActionInput(
+      sendAndWait: async (message: string, input = {}, options?: TOptions) => {
+        // Remove the predecessor field even for untyped callers; an undefined
+        // property is not valid in the encrypted JSON request envelope.
+        const { wait: _legacyWait, ...fields } = { ...input, wait: undefined };
+        return await params.execute(
           'session.message.send',
-          { ...input, sessionId: id, message, wait: true },
-          options?.requestId,
-        ),
-        optionsForSession(options),
-      ),
+          bindPublicActionInput(
+            'session.message.send',
+            { ...fields, sessionId: id, message, reply: 'wait' },
+            options?.requestId,
+          ),
+          optionsForSession(options),
+        );
+      },
       waitForIdle: async (input = {}, options?: TOptions) => await params.execute(
         'session.wait.idle',
         bindPublicActionInput('session.wait.idle', { ...input, sessionId: id }, options?.requestId),
@@ -285,7 +295,7 @@ export function createSessions<TOptions extends ActionExecutionOptions = ActionE
         ...(initialMessage === undefined ? {} : { initialInput: { text: initialMessage } }),
         agentTarget: { kind: 'agent', identity },
       }, options?.requestId), options);
-      if (result.type !== 'success') throw new HappierSessionSpawnError(result);
+      if (result.type !== 'success') throw new HappierSessionSpawnError(result, options?.requestId);
       const session = get(result.sessionId);
       if (initialMessage !== undefined && hasInitialInputFailure(result)) {
         throw new HappierSessionInitialInputError<TOptions>(session, result);

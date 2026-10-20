@@ -31,7 +31,7 @@ export function projectSafeAuthError(error: unknown): SafeAuthErrorDiagnostic {
     ? errorRecord.name
     : 'Error';
   const rawCode = readSafeErrorCode(errorRecord?.code);
-  const code = typeof rawCode === 'string' ? redactBugReportSensitiveText(rawCode) : rawCode;
+  const code = readSafeErrorCode(typeof rawCode === 'string' ? redactBugReportSensitiveText(rawCode) : rawCode);
   const message = typeof errorRecord?.message === 'string' && errorRecord.message.trim().length > 0
     && errorRecord.message !== 'Unknown error'
     ? errorRecord.message

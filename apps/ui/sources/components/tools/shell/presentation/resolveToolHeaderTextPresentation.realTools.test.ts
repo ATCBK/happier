@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ToolCall } from "@happier-dev/session-core/messages";
+import { qualifyTranscriptAccountActor } from '@happier-dev/session-core/messages';
+import { SessionMessageAccountActorV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageAccountActorV1';
 
 import { knownTools } from '@/components/tools/catalog';
 import { resolveToolHeaderTextPresentation } from './resolveToolHeaderTextPresentation';
@@ -25,6 +27,55 @@ function makeToolCall(overrides: Partial<ToolCall>): ToolCall {
 }
 
 describe('resolveToolHeaderTextPresentation (real known tools)', () => {
+    it('names the authenticated answering person using the existing Home-qualified sanitized Account actor', () => {
+        const tool = makeToolCall({ name: 'AskUserQuestion', description: 'Worker question', input: {},
+            permission: { id: 'question', status: 'approved', answeredBy: { kind: 'person', accountId: 'bob' } } });
+        const actor = qualifyTranscriptAccountActor(SessionMessageAccountActorV1Schema.parse({ v: 1, accountId: 'bob',
+            profile: { name: 'Bob Chen', firstName: null, lastName: null, username: null, avatarUrl: null } }), 'home');
+        const model = resolveToolHeaderTextPresentation({ tool, metadata: null, serverId: 'home',
+            viewerScope: { serverId: 'home', accountId: 'alice' }, answeringAccountActor: actor });
+        expect(model.answeredBy).toEqual({ kind: 'person', accountId: 'bob' });
+        expect(model.answeredByLabel).toContain('Bob Chen');
+        const self = resolveToolHeaderTextPresentation({ tool, metadata: null, serverId: 'home',
+            viewerScope: { serverId: 'home', accountId: 'bob' } });
+        expect(self.answeredByLabel?.toLowerCase()).toContain('you');
+        for (const other of [actor && { ...actor, serverId: 'other-home' }, actor && { ...actor, accountId: 'worker-owner' }]) {
+            const unknown = resolveToolHeaderTextPresentation({ tool, metadata: null, serverId: 'home',
+                viewerScope: { serverId: 'other-home', accountId: 'bob' }, answeringAccountActor: other });
+            expect(unknown.answeredByLabel).toBeTruthy();
+            expect(unknown.answeredByLabel).not.toContain('Bob Chen');
+            expect(unknown.answeredByLabel?.toLowerCase()).not.toContain('you');
+        }
+        expect(model.title).toBe(self.title);
+        expect(model.subtitle).toBe(self.subtitle);
+    });
+    it('projects the admitted question answerer beside the unchanged worker description, never an authored label', () => {
+        const tool = makeToolCall({ name: 'AskUserQuestion', description: 'Worker question',
+            input: { questions: [], answeredBy: { kind: 'session', sessionId: 'forged' } },
+            permission: { id: 'question', status: 'approved', answeredBy: { kind: 'session', sessionId: 'manager' } } });
+        const model = resolveToolHeaderTextPresentation({ tool, metadata: null,
+            answeringSession: { sessionId: 'manager', name: 'Daily coordinator' } });
+        expect(model.answeredBy).toEqual({ kind: 'session', sessionId: 'manager' });
+        expect(model.answeredByLabel).toContain('Daily coordinator');
+        const withoutActor = resolveToolHeaderTextPresentation({ tool: { ...tool, permission: { id: 'question', status: 'approved' } },
+            metadata: null, answeringSession: { sessionId: 'manager', name: 'Forged owner' } });
+        expect(withoutActor.answeredBy).toBeNull();
+        expect(withoutActor.answeredByLabel).toBeNull();
+        const person = resolveToolHeaderTextPresentation({ tool: { ...tool,
+            permission: { id: 'question', status: 'approved', answeredBy: { kind: 'person' } } }, metadata: null,
+            answeringSession: { sessionId: 'manager', name: 'Bot owner' } });
+        expect(person.answeredBy).toEqual({ kind: 'person' });
+        expect(person.answeredByLabel).toBeTruthy();
+        expect(person.answeredByLabel).not.toContain('Bot owner');
+        expect(model.title).toBe(withoutActor.title);
+        expect(model.subtitle).toBe(withoutActor.subtitle);
+        const unnamed = resolveToolHeaderTextPresentation({ tool, metadata: null,
+            answeringSession: { sessionId: 'other-session', name: 'Bot owner' } });
+        expect(unnamed.answeredByLabel).toBeTruthy();
+        expect(unnamed.answeredByLabel).not.toContain('Bot owner');
+        expect(resolveToolHeaderTextPresentation({ tool: { ...tool,
+            permission: { ...tool.permission!, status: 'pending' } }, metadata: null }).answeredByLabel).toBeNull();
+    });
     it('renders Read with Read File title and path subtitle', () => {
         const tool = makeToolCall({ name: 'Read', input: { file_path: '/tmp/example.txt' } });
         const model = resolveToolHeaderTextPresentation({ tool, metadata: null });

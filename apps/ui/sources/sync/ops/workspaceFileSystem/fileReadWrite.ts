@@ -9,13 +9,15 @@ import {
     callDaemonWorkspaceStatFileRpc,
     downloadDaemonWorkspaceFileToBase64,
     uploadDaemonWorkspaceFileFromReader,
+    observeTransferOperation,
+    callAdmittedFilesystemTransferActionRpc,
 } from '@/sync/domains/transfers/runtime/transferRuntime';
 import { resolveMachineAbsolutePath } from '@/sync/domains/fileSystem/resolveMachineAbsolutePath';
 
 import type { WorkspaceFileSystemTarget } from './directoryBrowsing';
 import { runTransferFinalizeRecovery } from '@/components/transfers/recovery/runTransferFinalizeRecovery';
 import { t } from '@/text';
-import { isTransferFinalizeRecoveryFailure } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/directTransferFinalizeRecovery';
+import { isTransferFinalizeRecoveryFailure } from '@/sync/domains/transfers/runtime/transferRuntime';
 import type { WorkspaceFileUploadFinalizeResponse } from '@/sync/domains/transfers/runtime/transferRuntime/families/workspaceFileTransfers';
 import { ActionApprovalRequestCreatedResultSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import {
@@ -23,7 +25,8 @@ import {
     FilesystemWriteFileOutputSchema,
 } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { invokeWorkspaceFileSystemAction } from './actionInvocation';
-import { callAdmittedFilesystemTransferActionRpc } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/filesystemTransferActionClient';
+import { createUiFilesystemAction } from '@/sync/ops/actions/filesystemActionDeps';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 
 const WORKSPACE_FILE_INLINE_MAX_BYTES_ENV_KEY = 'EXPO_PUBLIC_HAPPIER_SESSION_FILE_INLINE_MAX_BYTES';
 const DEFAULT_WORKSPACE_FILE_INLINE_MAX_BYTES = 256 * 1024;
@@ -98,7 +101,12 @@ export async function workspaceStatFile(
 export async function workspaceReadFile(
     target: WorkspaceFileSystemTarget,
     path: string,
-    options?: Readonly<{ maxBytes?: number | null; signal?: AbortSignal | null }>,
+    options?: Readonly<{
+        maxBytes?: number | null;
+        signal?: AbortSignal | null;
+        /** Size from the caller's preceding stat; delivery hint only, never a byte-bound authority. */
+        knownSizeBytes?: number | null;
+    }>,
 ): Promise<WorkspaceReadFileResponse> {
     const inlineMaxBytes = resolveWorkspaceFileInlineMaxBytes();
     const maxBytes =
@@ -114,11 +122,24 @@ export async function workspaceReadFile(
             pathKind: 'workspace_entry',
         }),
     }, { signal: options?.signal,
-        ...(maxBytes > inlineMaxBytes ? { delivery: async ({ context }) => {
+        ...(maxBytes > inlineMaxBytes ? { delivery: async ({ actionId, input, context }) => {
+            // A preview ceiling is an admission bound, not the file's size.
+            // Keep small files on the ordinary reader even when the viewer
+            // permits larger previews. Reuse its admitted RPC and Account custody.
+            let sizeBytes = options?.knownSizeBytes;
+            if (typeof sizeBytes !== 'number' || !Number.isFinite(sizeBytes) || sizeBytes < 0) {
+                const stat = await workspaceStatFile({ ...target, serverId: context.serverId }, path, { signal: context.signal });
+                sizeBytes = stat.success && stat.exists && (!stat.kind || stat.kind === 'file') ? stat.sizeBytes : null;
+            }
+            context.signal?.throwIfAborted();
+            if (typeof sizeBytes === 'number' && Number.isFinite(sizeBytes)
+                && sizeBytes >= 0 && sizeBytes <= inlineMaxBytes) {
+                return await createUiFilesystemAction()({ actionId, input, context });
+            }
             const read = await downloadDaemonWorkspaceFileToBase64({ machineId: target.machineId,
                 serverId: context.serverId, rootPath: target.rootPath, agentRootPath: target.agentRootPath,
                 path, maxBytes, signal: context.signal,
-                callAdmittedAction: params => callAdmittedFilesystemTransferActionRpc({ ...params, requestId: context.actionRequestId }),
+                callAdmittedAction: params => callAdmittedFilesystemTransferActionRpc({ ...params, requestId: context.actionRequestId ?? undefined }),
             });
             return read.ok ? { success: true, content: read.contentBase64 }
                 : { success: false, error: read.error };
@@ -168,7 +189,9 @@ export async function workspaceWriteFile(
     path: string,
     content: string,
     expectedHash?: string | null,
+    options?: Readonly<{ signal?: AbortSignal | null }>,
 ): Promise<WorkspaceWriteFileResponse> {
+    options?.signal?.throwIfAborted();
     const contentBytes = new TextEncoder().encode(content);
     const inlineMaxBytes = resolveWorkspaceFileInlineMaxBytes();
     const guardedWrite = typeof expectedHash === 'string' && expectedHash.trim().length > 0;
@@ -181,13 +204,16 @@ export async function workspaceWriteFile(
         };
     }
 
-    const result = await invokeWorkspaceFileSystemAction(target, 'daemon.filesystem.writeFile', {
+    // View cancellation ends observation; an admitted write keeps the Action's
+    // Account lifetime and must not be reported as definitely unwritten.
+    const operation = invokeWorkspaceFileSystemAction(target, 'daemon.filesystem.writeFile', {
         rootPath: target.rootPath,
         path: resolveMachineAbsolutePath({ rootPath: target.rootPath, agentRootPath: target.agentRootPath,
             requestPath: path, pathKind: 'workspace_entry' }),
         content: encodeBase64(contentBytes, 'base64'),
         ...(expectedHash === undefined ? {} : { expectedHash }),
     }, contentBytes.byteLength > inlineMaxBytes ? { delivery: async ({ context }) => {
+        const recoveryObservation = mergeAbortSignals([options?.signal ?? undefined, context.signal]);
         try {
             const sha256 = bytesToHex(await digest('SHA-256', contentBytes));
             let upload = await uploadDaemonWorkspaceFileFromReader({
@@ -200,7 +226,7 @@ export async function workspaceWriteFile(
                     readBytes: async (offset, length) => contentBytes.slice(offset, offset + length),
                     close: async () => {},
                 },
-                callAdmittedAction: params => callAdmittedFilesystemTransferActionRpc({ ...params, requestId: context.actionRequestId }),
+                callAdmittedAction: params => callAdmittedFilesystemTransferActionRpc({ ...params, requestId: context.actionRequestId ?? undefined }),
                 request: {
                     path,
                     sizeBytes: contentBytes.byteLength,
@@ -213,6 +239,7 @@ export async function workspaceWriteFile(
             if (isTransferFinalizeRecoveryFailure<WorkspaceFileUploadFinalizeResponse>(upload)) {
                 const recoveryResult = await runTransferFinalizeRecovery({
                     recovery: upload.recovery,
+                    signal: recoveryObservation.signal,
                     title: t('transferRecovery.title'),
                     message: t('transferRecovery.message'),
                 });
@@ -248,8 +275,9 @@ export async function workspaceWriteFile(
                 error: error instanceof Error ? error.message : 'Unknown error',
                 errorCode: normalizeWorkspaceWriteFileErrorCode(readRpcErrorCode(error)),
             };
-        }
+        } finally { recoveryObservation.dispose(); }
     } } : undefined);
+    const result = await observeTransferOperation(operation, options?.signal);
     if (!result.ok) return { success: false, error: result.error,
         errorCode: normalizeWorkspaceWriteFileErrorCode(result.errorCode) };
     const approval = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);

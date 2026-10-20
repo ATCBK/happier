@@ -68,7 +68,7 @@ function discoverReferences(manifest: UnknownRecord) {
     const client = asRecord(provider.client);
     addReference(references, client?.artifactId, client?.exportName);
   }
-  for (const family of ['dragSources', 'dropTargets'] as const) {
+  for (const family of ['dragSources', 'dropTargets', 'workItems'] as const) {
     for (const contribution of asRecords(contributes?.[family])) {
       const client = asRecord(contribution.client);
       addReference(references, client?.artifactId, client?.exportName);

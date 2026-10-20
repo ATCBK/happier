@@ -79,7 +79,7 @@ hdev plugins dev build .
 hdev plugins test .
 hdev plugins pack . --out ../session-agent.tgz
 hdev plugins install ../session-agent.tgz --kind archive --json
-hdev plugins change approve <pendingChangeId> --json
+hdev actions invoke approval.request.decide --input-json '{"artifactId":"<approvalArtifactId>","decision":"approve"}' --json
 ```
 
 It demonstrates create and resume with exact provider identity, strict
@@ -94,8 +94,11 @@ or generation-scoped background work, use the composite
 reference instead.
 
 The final three commands exercise the ordinary selected-file archive and
-reviewed install path. Replace `<pendingChangeId>` only after reviewing the
-prepared change. Archive installation requires present-user trust approval.
+reviewed install path. When installation creates an ordinary `plugins.install`
+approval Artifact, review it in the Happier Inbox before replacing
+`<approvalArtifactId>` with that Artifact's ID. Decision authority follows the
+user's approval policy. The daemon pending change ID only identifies status.
+See [Review a pending change](/plugins/packaging/authoring-cli#review-a-pending-change).
 
 ## Runtime contents
 

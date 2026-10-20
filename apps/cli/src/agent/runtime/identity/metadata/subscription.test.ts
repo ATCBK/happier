@@ -6,6 +6,7 @@ import type { Metadata } from '@/api/types';
 import type { NormalizedRuntimeIdentityPublicationV1 } from '@/agent/runtime/events/createNormalizedRuntimeEventWriter';
 import { createSessionOwnerMetadataV1, SessionOwnerMetadataV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
 import { readSessionCapabilityAgentFactsV1 } from '@happier-dev/protocol/reach/capabilityApplyTimingV1';
+import { createCliRuntimeSessionStateBridge } from '@/agent/runtime/state/bridge';
 
 import { subscribeSessionRuntimePublicationToMetadata } from './subscription';
 
@@ -77,6 +78,53 @@ describe('subscribeSessionRuntimePublicationToMetadata', () => {
     expect(harness.sessionState.writeHappierField).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['commit', 'refuse', 'abort', 'supersede'] as const)('waits for its exact native identity write before source follow (%s)', async outcome => {
+    const harness = createHarness();
+    let finishWrite!: () => void;
+    const writing = new Promise<void>(resolve => { finishWrite = resolve; });
+    let metadata = createTestMetadata({ flavor: 'claude' });
+    const sessionState = createCliRuntimeSessionStateBridge({
+      session: harness.session, credentials: { token: 'test-home', encryption: null },
+      // Home metadata persistence is the system boundary; the state engine,
+      // identity binding and subscriber all run unchanged beneath it.
+      metadataPort: { update: async (_sessionId, updater) => {
+        await writing;
+        if (outcome === 'refuse') return { ok: false, reason: 'unknown_error' };
+        metadata = createTestMetadata(updater(metadata));
+        return { ok: true, version: 1 };
+      } },
+    }).engine;
+    const subscription = subscribeSessionRuntimePublicationToMetadata({
+      session: harness.session, sessionState, runtime: harness.runtime, providerSessionMetadataKey: 'claudeSessionId',
+    });
+    const controller = new AbortController();
+    try {
+      subscription.observeRuntimeEvent({ kind: 'provider-session-id', sequence: 1, sessionId: 'session-1', emittedAtMs: 1,
+        providerSessionId: 'native-session', nativeSessionLogPath: '/native/session.jsonl' });
+      let settled = false;
+      const waiting = subscription.waitForProviderSessionIdPublication('native-session', controller.signal);
+      void waiting.then(() => { settled = true; }, () => { settled = true; });
+      await setImmediate();
+      expect(settled).toBe(false);
+      expect(metadata.claudeSessionId).toBeUndefined();
+      if (outcome === 'abort') {
+        const reason = new Error('follow invocation retired');
+        controller.abort(reason);
+        await expect(waiting).rejects.toBe(reason);
+      } else {
+        if (outcome === 'supersede') subscription.observeRuntimeEvent({ kind: 'provider-session-id', sequence: 2,
+          sessionId: 'session-1', emittedAtMs: 2, providerSessionId: 'successor-session' });
+        finishWrite();
+        if (outcome === 'commit') {
+          await waiting;
+          expect(metadata).toMatchObject({ claudeSessionId: 'native-session', claudeTranscriptPath: '/native/session.jsonl' });
+        } else {
+          await expect(waiting).rejects.toMatchObject({ code: 'native_agent_identity_publication_unavailable',
+            ...(outcome === 'refuse' ? { cause: { ok: false, reason: 'unknown_error' } } : {}) });
+        }
+      }
+    } finally { finishWrite(); subscription(); }
+  });
   it('contains a refused capability metadata transport publication and accepts a later native publication', async () => {
     const harness = createHarness();
     let metadata = createRuntimePublicationMetadata();

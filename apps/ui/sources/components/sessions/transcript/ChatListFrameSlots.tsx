@@ -9,6 +9,7 @@ import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { useSessionChatFooterState } from '@/sync/domains/state/storage';
 import { TranscriptSessionActivityLine } from './TranscriptSessionActivityLine';
+import { SessionReportsChip } from './SessionReportsChip';
 import { ProjectSetupSessionReturn } from '@/components/projects/projectSetup/ProjectSetupReturn';
 import { ProjectSetupSessionReviews } from '@/components/projects/projectSetup/ProjectSetupSessionReview';
 
@@ -83,6 +84,8 @@ export const ChatListFooterWithKeyboardInset = React.memo((props: {
             {props.showToolCalls === false && props.serverId ? (
                 <TranscriptSessionActivityLine sessionId={props.sessionId} serverId={props.serverId} />
             ) : null}
+            {/* The Sessions this Session started: one chip into the Agents destination (lab `b-launch`). */}
+            <SessionReportsChip sessionId={props.sessionId} serverId={props.serverId} />
             {/* A finite command this Session's agent started that is held on setup consent asks here (lab `s-setup` ASK). */}
             <ProjectSetupSessionReviews sessionId={props.sessionId} serverId={props.serverId} />
             {/* A Session started from Project setup ends with its way back (lab `s-setup` DONE). */}

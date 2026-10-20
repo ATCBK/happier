@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { useShallow } from 'zustand/react/shallow';
 
 import type { SessionAgentActivityState } from '@/hooks/session/useSessionAgentActivity';
@@ -6,7 +7,7 @@ import { resolveAgentActivityStatusPresentation } from '@/components/sessions/ag
 import {
     useSessionManagedWorkflowRuns,
     type SessionManagedWorkflowRunsState,
-} from '@/components/sessions/workState/useSessionManagedWorkflowRuns';
+} from '@/components/workflows/run/useContextManagedWorkflowRuns';
 import {
     useSessionWorkflowActivity,
     type SessionWorkflowActivityState,
@@ -20,8 +21,10 @@ import { readSessionPresentationAgentId } from '@/sync/domains/session/presentat
 import { getStorage } from '@/sync/domains/state/storage';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import { t } from '@/text';
+import { formatAsOfTime } from '@/utils/time/formatAsOfTime';
 import { readSessionWorkStalled, readSessionWorkStatusFacts } from '@/components/work/status/sessionWorkStatusFacts';
-import { getSessionName, getSessionWorkContext } from '@/utils/sessions/sessionUtils';
+import { getSessionWorkContext } from '@/utils/sessions/sessionUtils';
+import { sessionDisplayTitle } from '@/utils/sessions/sessionDisplayTitle';
 import { describeActionOperationStatusLabel, resolveActionOperationStatus } from '@/components/inbox/actionOperations/actionOperationPresentation';
 import type { ActionOperationProjection } from '@/sync/domains/actionOperations/actionOperationSelectors';
 import { useSessionActionOperations } from '@/sync/domains/actionOperations/useActionOperations';
@@ -33,6 +36,7 @@ import { registerMountedWorkReadOwner } from '@/sync/ops/actions/mountedWorkRead
 export { sessionInstructionsActions } from '@/sync/ops/promptLibrary/sessionInstructions';
 
 import { selectSessionReportSubtree } from './reportSubtree';
+import { readOwnTriggerRunIds } from './workflowRunTriggerScope';
 import {
     EMPTY_WORK_SUMMARY,
     areWorkSummariesEqual,
@@ -48,7 +52,7 @@ import {
  *
  * The Session host mounts it ONCE, beside the header it feeds: the agent activity (narrow width, which
  * the host already pays for), the workflow activity headline, the managed workflow runs and the
- * `reportsTo` subtree. The header strip reads only the value-stable `summary`; the Work tab reads the
+ * `manager` subtree. The header strip reads only the value-stable `summary`; the Work tab reads the
  * items of the same projection through context, so the two can never count differently. Instruction
  * content is not a source here: only the open Work tab's Instructions section demands the current
  * qualified document (`useSessionInstructionsDetail`), so the permanent header and roster never read it.
@@ -73,7 +77,6 @@ export function useSessionWorkSources(): SessionWorkSources | null {
 }
 
 const EMPTY_SESSIONS: readonly Session[] = Object.freeze([]);
-const EMPTY_TRIGGER_RUN_IDS: ReadonlySet<string> = new Set();
 
 function normalizeId(value: string | null | undefined): string | null {
     const trimmed = value?.trim();
@@ -85,8 +88,10 @@ export function toWorkReportSessionSource(session: Session, nowMs: number): Work
     const context = getSessionWorkContext(session, session.serverId);
     return {
         sessionId: session.id,
-        leadSessionId: normalizeId(session.reportsTo?.sessionId),
-        title: getSessionName(session, session.serverId ?? null),
+        managerSessionId: normalizeId(readSessionManagerSessionIdV1(session)),
+        // The one display-title owner: a row whose content is still undecided names itself like the sidebar does
+        // ("Encrypted session"), not "Untitled session", until hydration settles it.
+        title: sessionDisplayTitle(session),
         agentId,
         facts: context ? [context] : [],
         statusFacts: readSessionWorkStatusFacts(session, nowMs),
@@ -99,31 +104,13 @@ function toManagedRunSources(state: SessionManagedWorkflowRunsState): readonly W
     return state.runs.map((run) => ({
         run,
         title: formatWorkflowRunDisplayName(resolveWorkflowRunDisplayName(state.metadataByRunId?.[run.id])),
-        word: describeWorkflowRunState(run.state, { inAttentionWindow: state.attentionRunIds.has(run.id) }).label,
+        word: describeWorkflowRunState(run.state, {
+            inAttentionWindow: state.attentionRunIds.has(run.id),
+            workflowCustodyState: run.workflowCustodyState,
+        }).label,
         needsAttention: state.attentionRunIds.has(run.id),
+        time: formatAsOfTime(Date.parse(run.finishedAt ?? run.updatedAt)),
     }));
-}
-
-/**
- * The Session's own trigger runs (INT §6 I4, ORC R-09): FIN's immutable cause names a trigger and the
- * retained Automation scope is this Session. Manual and unknown causes stay in Work, even when
- * the Automation is session-scoped. A retired trigger retains its cause identity; no title, timing,
- * origin Session or current trigger-list membership is used to guess a Run's cause.
- * They belong to the Session's Triggers section, not to its Work.
- */
-export function readOwnTriggerRunIds(params: Readonly<{
-    sessionId: string;
-    runs: SessionManagedWorkflowRunsState['runs'];
-}>): ReadonlySet<string> {
-    let ids: Set<string> | null = null;
-    for (const run of params.runs) {
-        if (run.origin.kind !== 'automation') continue;
-        const cause = run.origin.cause;
-        if (cause?.kind !== 'trigger' && !(cause?.kind === 'conversation' && cause.triggerId !== undefined)) continue;
-        if (run.automationScopeSessionId !== params.sessionId) continue;
-        (ids ??= new Set()).add(run.id);
-    }
-    return ids ?? EMPTY_TRIGGER_RUN_IDS;
 }
 
 function describeProgress(progress: Readonly<{ completed: number; total: number }>): string {

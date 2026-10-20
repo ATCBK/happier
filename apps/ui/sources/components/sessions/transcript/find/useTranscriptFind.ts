@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { matchFindText, type FindController, type FindOptions, type FindStatus, type FindCoverage } from '@happier-dev/plugin-ui/presentation';
-import type { Message, TranscriptOlderPageLoadResult } from '@happier-dev/session-core/messages';
+import { buildMessageRouteId, type Message, type TranscriptOlderPageLoadResult } from '@happier-dev/session-core/messages';
 import type { TranscriptHistoryState } from '../source/types';
 import type { TranscriptJumpResult, TranscriptJumpTarget } from '../viewport/jump/transcriptJumpTargetTypes';
 import { projectTranscriptFindText, type TranscriptFindTextBlock, type TranscriptFindTextContext } from './transcriptFindText';
@@ -59,7 +59,8 @@ export function createTranscriptFindModel(input: TranscriptFindModelInput) {
     const sameMatch = (a: TranscriptFindMatch | null, b: TranscriptFindMatch) => a?.messageId === b.messageId
         && a.blockId === b.blockId && a.start === b.start && a.end === b.end;
     const messageMatchesTarget = (message: Message, target: TranscriptJumpTarget) => target.kind === 'route-message-id'
-        ? message.id === target.routeMessageId || message.realID === target.routeMessageId || message.localId === target.routeMessageId
+        ? buildMessageRouteId(message) === target.routeMessageId
+            || message.id === target.routeMessageId || message.realID === target.routeMessageId || message.localId === target.routeMessageId
         : message.seq === target.seq;
     function sameDisplayContext(a: TranscriptFindTextContext | undefined, b: TranscriptFindTextContext | undefined) {
         if (a === b) return true;
@@ -174,6 +175,7 @@ export function createTranscriptFindModel(input: TranscriptFindModelInput) {
         if (!input.loadPage || searching || !snapshot.open || snapshot.query === '' || snapshot.status.kind === 'invalidPattern') return;
         const token = invalidateOperation();
         stopped = false;
+        partialErrors = false;
         searching = true;
         emit({ kind: 'searching', current: current ? matches.indexOf(current) + 1 : null, total: matches.length });
         pending = (async () => {

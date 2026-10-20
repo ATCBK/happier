@@ -1,19 +1,12 @@
 import type { JsonValue } from '@happier-dev/plugin-sdk';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { CodexConnectedServiceRuntimeFailureClassification } from '../../runtime/auth/failure.js';
 import { CODEX_OPENAI_CONNECTED_ACCOUNT_SERVICE_KEY } from '../../../../../constants.js';
 import { readCodexConnectedServiceRefreshSelection } from '../../runtime/auth/generationRequest.js';
 
-const connectedServiceProfileIdSchema = z.string()
-  .min(1)
-  .max(64)
-  .regex(/^[a-zA-Z0-9][a-zA-Z0-9_:-]{0,63}$/u, 'Invalid profile id');
-const connectedServiceAuthGroupIdSchema = z.string()
-  .trim()
-  .min(1)
-  .max(64)
-  .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/u, 'Invalid connected service account group id');
+const connectedServiceProfileIdSchema = z.string().check(z.minLength(1), z.maxLength(64), z.regex(/^[a-zA-Z0-9][a-zA-Z0-9_:-]{0,63}$/u, 'Invalid profile id'));
+const connectedServiceAuthGroupIdSchema = z.string().check(z.trim(), z.minLength(1), z.maxLength(64), z.regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/u, 'Invalid connected service account group id'));
 
 /**
  * Provider-local service id of the Codex Connected Account service on the
@@ -36,7 +29,7 @@ export const CodexChatGptAuthTokensRefreshSelectionSchema = z.discriminatedUnion
     groupId: connectedServiceAuthGroupIdSchema,
     activeProfileId: connectedServiceProfileIdSchema,
     fallbackProfileId: connectedServiceProfileIdSchema,
-    generation: z.number().int().nonnegative(),
+    generation: z.number().check(z.int(), z.nonnegative()),
   }),
 ]);
 
@@ -44,9 +37,9 @@ export type CodexChatGptAuthTokensRefreshSelection =
   z.infer<typeof CodexChatGptAuthTokensRefreshSelectionSchema>;
 
 export const CodexChatGptAuthTokensRefreshResponseSchema = z.object({
-  accessToken: z.string().min(1),
-  chatgptAccountId: z.string().nullable(),
-  chatgptPlanType: z.string().nullable(),
+  accessToken: z.string().check(z.minLength(1)),
+  chatgptAccountId: z.nullable(z.string()),
+  chatgptPlanType: z.nullable(z.string()),
 });
 
 export type CodexChatGptAuthTokensRefreshResponse =

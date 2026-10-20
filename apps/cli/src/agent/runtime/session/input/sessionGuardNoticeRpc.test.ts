@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { NotificationChannelCatalogSnapshotV1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import type { ACPMessageData } from '@/api/session/sessionMessageTypes';
 import type { Metadata } from '@/api/types';
 import type { RpcHandler } from '@/api/rpc/types';
@@ -6,8 +7,12 @@ import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { createSessionProviderInputConsumer } from './sessionProviderInputConsumer';
 import { registerSessionProviderInputAdmissionRpc } from './sessionProviderInputAdmissionRpc';
 import { clearSessionGuardStateOnRunnerStart } from './sessionGuardNoticeRpc';
+import { dispatchActivityNotificationAsync } from '@/notifications/activity/dispatchActivityNotification';
+import type { ActivityNotificationEvent } from '@/notifications/activity/activityNotificationEvent';
+import { logger } from '@/ui/logger';
 
-function setup(options?: Readonly<{ rejectTranscript?: boolean; retireAfterRecord?: boolean }>) {
+function setup(options?: Readonly<{ rejectTranscript?: boolean; retireAfterRecord?: boolean;
+  metadataError?: Error; notificationCatalog?: NotificationChannelCatalogSnapshotV1 }>) {
   let metadata: Metadata = { path: '', host: '', homeDir: '', happyHomeDir: '', happyLibDir: '', happyToolsDir: '' };
   let current = true;
   const records: unknown[] = [];
@@ -23,7 +28,10 @@ function setup(options?: Readonly<{ rejectTranscript?: boolean; retireAfterRecor
       sessionId: 'session-1',
       getMetadataSnapshot: () => metadata,
       checkCurrentPublisherAuthority: async () => current,
-      updateMetadataAsCurrentPublisher: async (update: (value: Metadata) => Metadata) => { metadata = update(metadata); },
+      updateMetadataAsCurrentPublisher: async (update: (value: Metadata) => Metadata) => {
+        if (options?.metadataError) throw options.metadataError;
+        metadata = update(metadata);
+      },
       getStoredContentEncryptionContext: () => ({ mode: 'plain' as const }),
       upsertSessionSystemRecord: async (record: unknown) => {
         records.push(record);
@@ -38,7 +46,12 @@ function setup(options?: Readonly<{ rejectTranscript?: boolean; retireAfterRecor
   let currentSession = guardSession;
   const guardNotice = {
     get session() { return currentSession; },
-    notify: async (event: unknown) => { notifications.push(event); },
+    notify: async (event: Extract<ActivityNotificationEvent, { topic: 'guard_stop_warning' | 'guard_attention' }>) => {
+      if (options?.notificationCatalog) await dispatchActivityNotificationAsync({
+        settings: undefined, notificationChannelCatalog: options.notificationCatalog, event, pluginNotifications: null,
+      });
+      notifications.push(event);
+    },
     machineId: 'machine-1',
     agentId: 'test-agent',
   };
@@ -55,6 +68,45 @@ function setup(options?: Readonly<{ rejectTranscript?: boolean; retireAfterRecor
 }
 
 describe('runner guard notice receipt', () => {
+  it('distinguishes notification admission from metadata failures without logging private error contents', async () => {
+    const debug = vi.spyOn(logger, 'debug').mockImplementation(() => {});
+    try {
+      const warning = { kind: 'stopping', stopAt: 300_000, rule: 'idle_sessions' };
+      const notificationOwner = setup({ notificationCatalog: { status: 'unavailable', reason: 'unreachable' } });
+      await expect(notificationOwner.notice(warning)).resolves.toEqual({ ok: false });
+      expect(notificationOwner.metadata()).toHaveProperty('sessionGuardStateV1.kind', 'stopping');
+      expect(debug).toHaveBeenCalledWith(expect.any(String), {
+        sessionId: 'session-1', stateKind: 'stopping', phase: 'notification',
+        errorClass: 'NotificationChannelCatalogUnavailableError',
+        errorCode: 'notification_channel_catalog_unavailable', reason: 'unreachable',
+      });
+      debug.mockClear();
+      // Session metadata persistence is a genuine server boundary. No private
+      // server payload, arbitrary code/reason or Error message may reach logs.
+      class PrivateErrorClassName extends Error {}
+      const metadataOwner = setup({ metadataError: Object.assign(new PrivateErrorClassName('private metadata payload'), {
+        name: 'private-error-name', code: 'private-error-code', reason: 'private-error-reason',
+      }) });
+      await expect(metadataOwner.notice(warning)).resolves.toEqual({ ok: false });
+      expect(debug).toHaveBeenCalledWith(expect.any(String), {
+        sessionId: 'session-1', stateKind: 'stopping', phase: 'metadata', errorClass: 'Error',
+      });
+      expect(JSON.stringify(debug.mock.calls)).not.toContain('private');
+    } finally { debug.mockRestore(); }
+  });
+
+  it('identifies a refused current-publisher check without acknowledging the notice', async () => {
+    const debug = vi.spyOn(logger, 'debug').mockImplementation(() => {});
+    try {
+      const owner = setup(); owner.retire();
+      await expect(owner.notice({ kind: 'stopping', stopAt: 300_000, rule: 'idle_sessions' })).resolves.toEqual({ ok: false });
+      expect(debug).toHaveBeenCalledWith(expect.any(String), {
+        sessionId: 'session-1', stateKind: 'stopping', phase: 'publisher_authority', reason: 'publisher_not_current',
+      });
+      expect(owner.notifications).toEqual([]);
+    } finally { debug.mockRestore(); }
+  });
+
   it('records requested intent without claiming exit or freed memory before a signal', async () => {
     const owner = setup();
     await expect(owner.notice({ kind: 'stopped', at: 300_000, rule: 'memory_guard', freedBytes: 1024 })).resolves.toEqual({ ok: true });

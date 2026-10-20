@@ -7,6 +7,40 @@ async function loadRunGuardedNavigationModule() {
 }
 
 describe('runGuardedNavigation', () => {
+    it('blocks another departure during preparation and prepares the next independent intent again', async () => {
+        const { setActiveUnsavedChangesGuard, runGuardedNavigation } = await loadRunGuardedNavigationModule();
+        let finish!: () => void;
+        const prepareGuard = vi.fn().mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }))
+            .mockResolvedValue(undefined);
+        const navigate = vi.fn();
+        setActiveUnsavedChangesGuard({ isDirtyRef: { current: false }, prepareGuard,
+            requestDecision: async () => 'keepEditing', tag: 'pending-prepare' });
+        const first = runGuardedNavigation(navigate);
+        expect(await runGuardedNavigation(navigate)).toBe(false);
+        expect(navigate).not.toHaveBeenCalled();
+        finish();
+        expect(await first).toBe(true);
+        expect(await runGuardedNavigation(navigate)).toBe(true);
+        expect(prepareGuard).toHaveBeenCalledTimes(2);
+        expect(navigate).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(['clean', 'discard', 'save', 'cancel'] as const)('admits a prepared %s continuation through a nested navigation owner', async decision => {
+        const { setActiveUnsavedChangesGuard, runGuardedNavigation } = await loadRunGuardedNavigationModule();
+        const isDirtyRef = { current: false };
+        const prepareGuard = vi.fn(() => { isDirtyRef.current = decision !== 'clean'; });
+        const requestDecision = vi.fn(async (): Promise<UnsavedChangesDecision> => decision === 'cancel' ? 'keepEditing' : decision === 'clean' ? 'keepEditing' : decision);
+        setActiveUnsavedChangesGuard({ isDirtyRef, prepareGuard, requestDecision, onSave: () => true, tag: 'prepared-nested' });
+        const navigate = vi.fn();
+        let admitted: boolean | undefined;
+        const result = await runGuardedNavigation(async () => { admitted = await runGuardedNavigation(navigate); });
+        expect(result).toBe(decision !== 'cancel');
+        expect(navigate).toHaveBeenCalledTimes(decision === 'cancel' ? 0 : 1);
+        expect(admitted).toBe(decision === 'cancel' ? undefined : true);
+        expect(prepareGuard).toHaveBeenCalledOnce();
+        expect(requestDecision).toHaveBeenCalledTimes(decision === 'clean' ? 0 : 1);
+    });
+
     const retireMountedGuards: (() => void)[] = [];
     afterEach(async () => {
         retireMountedGuards.splice(0).forEach(retire => retire());

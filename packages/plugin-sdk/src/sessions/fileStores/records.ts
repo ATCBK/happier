@@ -1,38 +1,27 @@
 import type { SessionFileStoreHeaderDescriptorV1 } from './productDescriptor.js';
+import type { AgentExternalSessionTranscriptItem } from '../../externalSessions.js';
+import { isRecord, parseTimestampMs, readString } from './recordValues.js';
+export { isRecord, parseJsonLine, parseTimestampMs, readString, readTrimmedString } from './recordValues.js';
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-export function readString(value: unknown): string | null {
-  return typeof value === 'string' && value.trim().length > 0 ? value : null;
-}
-
-export function readTrimmedString(value: unknown): string | null {
-  const raw = readString(value);
-  return raw ? raw.trim() : null;
-}
-
-export function parseTimestampMs(value: unknown): number | null {
-  if (typeof value === 'string' && value.trim().length > 0) {
-    const ms = Date.parse(value);
-    return Number.isFinite(ms) && ms >= 0 ? Math.trunc(ms) : null;
-  }
-  if (typeof value === 'number' && Number.isFinite(value) && value >= 0) {
-    const truncated = Math.trunc(value);
-    return truncated < 1_000_000_000_000 ? truncated * 1000 : truncated;
-  }
-  return null;
-}
-
-export function parseJsonLine(line: string): unknown | null {
-  const trimmed = line.trim();
-  if (!trimmed) return null;
-  try {
-    return JSON.parse(trimmed) as unknown;
-  } catch {
-    return null;
-  }
+/**
+ * A native record this reader cannot interpret is still a readable transcript
+ * item. Keep its source identity for paging, but never disclose its native body
+ * or mistake a codec mismatch for source discontinuity.
+ */
+export function createExternalSessionUnsupportedTranscriptItem(params: Readonly<{
+  agentId: string;
+  id: string;
+  localId?: string | null;
+  createdAtMs: number;
+}>): AgentExternalSessionTranscriptItem {
+  return {
+    id: params.id,
+    localId: params.localId ?? null,
+    createdAtMs: params.createdAtMs,
+    messageRole: 'agent',
+    raw: { role: 'agent', content: { type: 'acp', agentId: params.agentId,
+      data: { type: 'message', message: 'Agent emitted an unsupported content block.' } } },
+  };
 }
 
 /** @realm daemon */

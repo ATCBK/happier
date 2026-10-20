@@ -9,11 +9,16 @@ import { normalizeRawMessage, RawRecordSchema, type AgentEvent } from "@happier-
 
 import { TranscriptEventRow } from './TranscriptEventRow';
 import { AppSessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
+import { WorkerUpdateCard } from '@/components/sessions/work/WorkerUpdateCard';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 const executeDefaultAction = vi.fn();
 const modalConfirm = vi.fn();
 const modalAlert = vi.fn();
 const workerUpdateRouter = vi.hoisted(() => ({ push: vi.fn() }));
+
+vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 vi.mock('expo-router', async () => {
     const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
@@ -26,10 +31,6 @@ vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
     }),
 }));
 
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId', () => ({
-    resolveServerIdForSessionIdFromLocalCache: () => 'server-1',
-}));
-
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     return createModalModuleMock({
@@ -39,6 +40,9 @@ vi.mock('@/modal', async () => {
         },
     }).module;
 });
+
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
 
 describe('TranscriptEventRow', () => {
     it('retains canonical MCP accounting evidence without displaying it as an unknown conversation event', async () => {
@@ -99,6 +103,13 @@ describe('TranscriptEventRow', () => {
         expect(screen.findByTestId('worker-update-inspect')).toBeNull();
         expect(screen.findByTestId('transcriptEvent.clearTerminalComposer')).toBeNull();
     });
+    it('says a Goal changed in one quiet line without claiming any Goal content', async () => {
+        const screen = await renderScreen(<TranscriptEventRow event={{ type: 'goal-changed' }} sessionId="lead" />);
+
+        expect(screen.getTextContent()).toBe(t('message.goalChanged'));
+        expect(screen.getTextContent()).not.toContain(t('message.unknownEvent'));
+        await screen.unmount();
+    });
     it.each([
         { pointer: { kind: 'session', sessionId: 'worker', seq: 7 } as const, expected: '/session/worker?serverId=home-b' },
         { pointer: { kind: 'execution_run', sessionId: 'worker', runId: 'run_1' } as const, expected: '/session/worker/runs/run_1?serverId=home-b' },
@@ -144,6 +155,24 @@ describe('TranscriptEventRow', () => {
         </AppSessionTranscriptSourceProvider>);
         expect(follower.findByTestId('transcript-event-host-wake')).toBeNull();
         expect(follower.findByTestId('worker-update:worker')).not.toBeNull();
+    });
+    it('binds each card to its own admitted Follow reason and accepted delivery evidence', async () => {
+        const update = { v: 1, workerKind: 'session', workerId: 'worker', ownerState: 'settled',
+            wake: 'finished', headline: 'Finished', canInspect: false } as const;
+        const render = async (followMatches: { kind: 'relation'; relation: 'manager' | 'follower' }[] | undefined,
+            delivery: { status: 'woke' | null; reason: null }) => renderScreen(
+            <AppSessionTranscriptSourceProvider sessionId="lead" serverId="home-b">
+                <TranscriptEventRow event={{ type: 'worker-update', update, ...(followMatches ? { followMatches } : {}) }}
+                    followDeliveryProjection={delivery} />
+            </AppSessionTranscriptSourceProvider>);
+        const manager = await render([{ kind: 'relation', relation: 'manager' }], { status: 'woke', reason: null });
+        const unknown = await render([{ kind: 'relation', relation: 'follower' }], { status: null, reason: null });
+        expect(manager.findAll(node => node.type === WorkerUpdateCard)[0]?.props).toMatchObject({
+            followMatches: [{ kind: 'relation', relation: 'manager' }], delivery: { status: 'woke', reason: null },
+        });
+        expect(unknown.findAll(node => node.type === WorkerUpdateCard)[0]?.props).toMatchObject({
+            followMatches: [{ kind: 'relation', relation: 'follower' }], delivery: { status: null, reason: null },
+        });
     });
     it('renders a host worker update as a card with its effective engine and result', async () => {
         const screen = await renderScreen(<AppSessionTranscriptSourceProvider sessionId="lead" serverId="home-b"><TranscriptEventRow event={{
@@ -214,7 +243,7 @@ describe('TranscriptEventRow', () => {
 
         await screen.pressByTestIdAsync('transcriptEvent.clearTerminalComposer');
 
-        expect(modalConfirm).toHaveBeenCalledTimes(1);
+        expect(modalConfirm).not.toHaveBeenCalled();
         expect(executeDefaultAction).toHaveBeenCalledWith(
             'session.terminalComposer.clear',
             { sessionId: 's1', expectedStateAtMs: 1234 },

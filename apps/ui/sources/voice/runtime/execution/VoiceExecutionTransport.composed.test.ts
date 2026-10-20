@@ -5,7 +5,8 @@ import { createStandaloneVoicePolicyHarness, prepareStandaloneVoicePolicyHarness
 import { createRetainedVoiceAgentRpcBoundary } from '@/dev/testkit/harness/voiceAgentRpcBoundary';
 import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
 import { buildSystemSessionMetadataV1 } from '@happier-dev/protocol/sessions/control/contract';
-import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_CODES, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 
 vi.mock('socket.io-client', async original =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(original));
@@ -15,6 +16,90 @@ await prepareStandaloneVoicePolicyHarness();
 await import('@/voice/adapters/localConversation/localConversationAdapter');
 
 describe('real Local Voice Agent activation', () => {
+    it.each(['cancel', 'disconnect', 'cleanup_disconnect'] as const)('keeps failed Stop ordered before retry after %s', async (outcome) => {
+        const daemon = await createRetainedVoiceAgentRpcBoundary();
+        let stall = false;
+        let entered!: () => void;
+        let loseTransport!: (reason: Error) => void;
+        const entering = new Promise<void>(resolve => { entered = resolve; });
+        const fixture = await createStandaloneVoicePolicyHarness({ mode: 'off', dispatch: async (method, input) => {
+            if (stall && method === (outcome === 'cleanup_disconnect'
+                ? SESSION_RPC_METHODS.EXECUTION_RUN_LIST : SESSION_RPC_METHODS.EXECUTION_RUN_STOP)) {
+                entered();
+                // Socket.IO's ACK owner rejects with this error on disconnect.
+                return await new Promise((_resolve, reject) => { loseTransport = reject; });
+            }
+            return daemon.dispatch(method, input);
+        } });
+        const { createVoiceExecutionTransport } = await import('./VoiceExecutionTransport');
+        const { readRpcErrorCode } = await import('@/sync/runtime/rpcErrors');
+        const transport = createVoiceExecutionTransport();
+        const caller = new AbortController();
+        try {
+            await transport.ensureRunning(fixture.sessionId);
+            stall = true;
+            const stopping = transport.stop(fixture.sessionId, undefined, caller.signal).catch(error => error);
+            await entering;
+            if (outcome === 'cancel') caller.abort();
+            else loseTransport(new Error('socket has been disconnected'));
+            let failure: unknown;
+            await vi.waitFor(async () => {
+                failure = await Promise.race([stopping, Promise.resolve(null)]);
+                expect(failure).not.toBeNull();
+            });
+            expect(readRpcErrorCode(failure)).toBe(outcome === 'cancel' ? 'SOCKET_RPC_ABORTED' : RPC_ERROR_CODES.OUTCOME_UNKNOWN);
+            if (outcome === 'cancel') {
+                expect(fixture.rpcSockets.some(socket => vi.mocked(socket.emit).mock.calls.some(([event]) => event === SOCKET_RPC_EVENTS.CANCEL))).toBe(true);
+            }
+            if (outcome === 'cleanup_disconnect') expect(daemon.readRetainedRun()).toBeNull();
+            else expect(daemon.readRetainedRun()?.status).toBe('running');
+            stall = false;
+            for (const socket of fixture.rpcSockets) socket.connect();
+            const previousEnsure = daemon.requests.filter(request => request.method.includes('ensure')).length;
+            await transport.ensureRunning(fixture.sessionId);
+            const retry = daemon.requests.slice().reverse();
+            const ensureIndex = retry.findIndex(request => request.method.includes('ensure'));
+            const stopIndex = retry.findIndex(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP);
+            expect(ensureIndex).toBeLessThan(stopIndex);
+            expect(daemon.requests.filter(request => request.method.includes('ensure')).length).toBe(previousEnsure + 1);
+            expect(transport.isActive(fixture.sessionId)).toBe(true);
+        } finally {
+            stall = false;
+            await fixture.dispose();
+        }
+    });
+
+    it('stops an unanswered activation and permits a new activation on the same session', async () => {
+        const daemon = await createRetainedVoiceAgentRpcBoundary();
+        let stall = false;
+        let entered!: () => void;
+        const entering = new Promise<void>(resolve => { entered = resolve; });
+        const fixture = await createStandaloneVoicePolicyHarness({ mode: 'off', dispatch: async (method, input) => {
+            if (stall && (method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START
+                || method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1)) {
+                entered();
+                return await new Promise(() => {});
+            }
+            return daemon.dispatch(method, input);
+        } });
+        const { createVoiceExecutionTransport } = await import('./VoiceExecutionTransport');
+        const transport = createVoiceExecutionTransport();
+        try {
+            stall = true;
+            const pending = transport.ensureRunning(fixture.sessionId).then(() => 'resolved', () => 'cancelled');
+            await entering;
+            const stopping = transport.stop(fixture.sessionId);
+            await vi.waitFor(async () => expect(await Promise.race([pending, Promise.resolve('pending')])).toBe('cancelled'));
+            await stopping;
+            expect(transport.isActive(fixture.sessionId)).toBe(false);
+            stall = false;
+            await transport.ensureRunning(fixture.sessionId);
+            expect(transport.isActive(fixture.sessionId)).toBe(true);
+        } finally {
+            stall = false;
+            await fixture.dispose();
+        }
+    });
     it('releases the old device handle on continuation without stopping the run reused by the new device', async () => {
         const daemon = await createRetainedVoiceAgentRpcBoundary();
         const fixture = await createStandaloneVoicePolicyHarness({

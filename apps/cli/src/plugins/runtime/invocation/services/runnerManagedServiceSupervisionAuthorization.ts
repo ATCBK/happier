@@ -21,17 +21,19 @@ import {
 import {
     resolveCurrentInstalledPluginGenerationRuntimeExecutable,
 } from '@/plugins/runtime/installedGenerationRuntimeExecutable';
-import {
-    verifyRunnerAgentBindingAgainstGeneration,
+import type {
+    RetainedRunnerAgentServiceBinding,
 } from '@/plugins/runtime/runner/loadRetainedAgentRuntimeLeaf';
 import { attestRetainedPluginSource } from '@/plugins/runtime/retainedPluginSourceAttestation';
-import type {
-    AgentSessionRunnerBindingV1,
-} from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
 import {
     projectManagedServiceSpawnEnvironmentKeys,
 } from './managedServicesOwner';
 import type { ResolvedPluginExecutable } from './exec';
+import { projectNativeAgentCliRuntimeDescriptor } from '@/plugins/projection/registry/agentCliMetadata';
+import { createAgentCliHostResolutionEnvironment, createDeclaredAgentCliSystemToolService } from '@/plugins/runtime/exec/system/tools/agentCliBinding';
+import { projectPluginSystemToolContributions } from '@/plugins/runtime/exec/system/tools/definitions';
+import { createPluginExecSystemToolResolver } from '@/plugins/runtime/exec/system/tools/resolveGrant';
+import type { BoundAgentCliLaunchSpec } from '@/packagedRuntime/managedTools/agentCliLaunchSpec';
 
 export type RunnerManagedServiceSupervisionAuthorizationRequest = Readonly<{
     contributionId: string;
@@ -49,10 +51,11 @@ export type RunnerManagedProviderServerLaunchAuthority = Readonly<{
 }>;
 
 type RunnerManagedAgentServiceSupervisionAuthorizationInput = Readonly<{
-    paths: PluginStorePaths;
-    binding: AgentSessionRunnerBindingV1;
+    attested: RetainedRunnerAgentServiceBinding;
     request: RunnerManagedServiceSupervisionAuthorizationRequest;
     processEnv?: NodeJS.ProcessEnv;
+    happyHomeDir?: string;
+    agentCliLaunch?: BoundAgentCliLaunchSpec;
     signal?: AbortSignal;
 }>;
 
@@ -375,7 +378,7 @@ function refIdentity(
 export async function authorizeRunnerManagedServiceSupervision(
     input: RunnerManagedAgentServiceSupervisionAuthorizationInput,
 ): Promise<RunnerManagedServiceSupervisionAuthorization> {
-    const binding = input.binding;
+    const { binding, manifest } = input.attested;
     const contributionId = resolveAgentContributionQualifiedId({
         pluginId: binding.pluginId,
         localId: binding.localAgentId,
@@ -392,11 +395,7 @@ export async function authorizeRunnerManagedServiceSupervision(
             'Managed server contribution identity is not authorized',
         );
     }
-    const attested = await verifyRunnerAgentBindingAgainstGeneration({
-        paths: input.paths,
-        binding,
-    });
-    const { manifest } = attested;
+    await input.attested.assertStillAvailable();
     const processRequests = [
         ...manifest.hostAccess.required,
         ...manifest.hostAccess.optional,
@@ -452,16 +451,36 @@ export async function authorizeRunnerManagedServiceSupervision(
             'Managed server system tool is not declared',
         );
     }
-    const resolver = createDaemonSpawnToolResolutionContext({
+    const declaredAgent = manifest.contributes.agents.find(candidate => candidate.id === binding.localAgentId);
+    if (!declaredAgent) {
+        return fail('plugin_managed_server_contribution_denied', 'Managed server Agent is not declared');
+    }
+    const processEnv = createAgentCliHostResolutionEnvironment({
         processEnv: input.processEnv ?? process.env,
+        ...(input.happyHomeDir ? { happyHomeDir: input.happyHomeDir } : {}),
+    });
+    const definitions = projectPluginSystemToolContributions(manifest.contributes.systemTools);
+    const resolver = createDeclaredAgentCliSystemToolService({
+        agentId: binding.agentId,
+        localAgentId: binding.localAgentId,
+        binding: declaredAgent.catalog?.agentCliSystemTool,
+        ...(declaredAgent.cli ? { runtimeSpec: projectNativeAgentCliRuntimeDescriptor({
+            agentId: binding.agentId, title: declaredAgent.title, cli: declaredAgent.cli,
+        }) } : {}),
+        ...(input.agentCliLaunch ? { agentCliLaunch: input.agentCliLaunch } : {}),
+        definitions, processEnv,
+        delegate: createPluginExecSystemToolResolver({
+            definitions,
+            baseEnv: Object.fromEntries(Object.entries(processEnv).filter((entry): entry is [string, string] => entry[1] !== undefined)),
+            registerGrant() {},
+        }),
+    });
+    const resolved = await resolver.resolve({
+        toolId: identity.localId,
+        purpose: 'Authorize runner-owned managed server launch',
         ...(input.signal ? { signal: input.signal } : {}),
     });
-    const resolved = await resolver.resolveSystemTool({
-        toolId: `${identity.pluginId}/${identity.localId}`,
-        lookupNames: declaration.executableNames,
-        reason: 'Authorize runner-owned managed server launch',
-    });
-    if (!resolved.ok || !isAbsolute(resolved.command)) {
+    if (!isAbsolute(resolved.launch.executablePath)) {
         return fail(
             'plugin_system_tool_unavailable',
             'Managed server system tool is unavailable',
@@ -471,8 +490,8 @@ export async function authorizeRunnerManagedServiceSupervision(
         launch: Object.freeze({
             kind: 'daemonResolved' as const,
             value: Object.freeze({
-                command: resolved.command,
-                args: Object.freeze([...(resolved.args ?? [])]),
+                command: resolved.launch.executablePath,
+                args: Object.freeze([...(resolved.launch.args ?? [])]),
                 env: Object.freeze({ PATH: '' }),
                 ...(declaration.allowedArguments
                     ? {

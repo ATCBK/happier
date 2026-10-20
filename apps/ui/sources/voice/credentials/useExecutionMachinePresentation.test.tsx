@@ -27,7 +27,7 @@ const { useVoiceTargetStore } = await import('@/voice/runtime/voiceTargetStore')
 const { persistVoiceAutoTargetMachineId } = await import('@/voice/persistence/voiceAutoTargetMachineSettings');
 const { t } = await import('@/text');
 const { resolveMachineDisplayNames } = await import('@/utils/sessions/machineDisplayNames');
-const { useVoiceExecutionMachinePresentation } = await import('./useExecutionMachinePresentation');
+const { useVoiceExecutionMachineId, useVoiceExecutionMachinePresentation } = await import('./useExecutionMachinePresentation');
 
 let account: Awaited<ReturnType<typeof createSecretSettingsTestHarness>>;
 let webLocks: ReturnType<typeof installWebLockManagerMock>;
@@ -78,6 +78,24 @@ describe('useVoiceExecutionMachinePresentation', () => {
     expect(hook.getCurrent()).toEqual({ selectedMachineId: 'machine-b', machineId: 'machine-b', machineLabel: 'Machine B', selectionKind: 'resolved' });
     expect(storage.getState().settings).toBe(settings);
     expect(account.settingsWrites).toEqual([]);
+  });
+
+  it('keeps execution-only subscribers local when the selected machine label changes', async () => {
+    const machine = createMachineFixture({ id: 'machine-a', metadata: { ...createMachineFixture().metadata!, displayName: 'Machine A' } });
+    publishMachines(machine);
+    await selectMachine(machine.id);
+    let renders = 0;
+    const hook = await renderHook(() => {
+      renders += 1;
+      return useVoiceExecutionMachineId();
+    });
+    expect(hook.getCurrent()).toBe(machine.id);
+    const rendersBeforeRename = renders;
+    await act(async () => {
+      publishMachines({ ...machine, metadata: { ...machine.metadata!, displayName: 'Renamed machine' } });
+    });
+    expect(hook.getCurrent()).toBe(machine.id);
+    expect(renders).toBe(rendersBeforeRename);
   });
 
   it('reacts when hydration supplies the canonical execution-machine selection', async () => {

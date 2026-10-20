@@ -1,30 +1,36 @@
 import * as React from 'react';
 
-import { listModelPackCatalogEntries } from '@happier-dev/protocol/voice/modelPacks/catalog';
 import type { DaemonVoiceInferenceModelStatus } from '@happier-dev/protocol/daemon/voiceInference';
 
 import { VOICE_RUNTIME_CONFIG_DEFAULTS } from '@/voice/runtime/voiceRuntimeConfigDefaults';
 import { buildModelCatalogRows } from './buildModelCatalogRows';
 import { invokeDaemonModelPackOperation } from './invokeDaemonModelPackOperation';
-import { captureActiveServerAccountScopeCurrentness } from '@/sync/domains/scope/activeServerAccountScope';
+import {
+    captureActiveServerAccountScopeCurrentness,
+    captureActiveServerAccountScopeLifetime,
+} from '@/sync/domains/scope/activeServerAccountScope';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
+import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
+import { useVoiceExecutionMachineId } from '@/voice/credentials/useExecutionMachinePresentation';
+import {
+    getMachineContributionRegistryProjectionRevision,
+    subscribeMachineContributionRegistryProjectionInvalidation,
+} from '@/sync/ops/machineContributionRegistryProjectionRevision';
+import { createVoiceModelCancellationCommand } from '@/voice/settings/voiceModelCancellation';
+import { useCurrentUiContextMountedCommand } from '@/components/appShell/currentUiContext/CurrentUiContextCommands';
+import { resolveVoiceExecutionMachineId } from '@/voice/settings/executionMachine';
+import { t } from '@/text';
 import {
     DaemonVoiceInferenceClient,
     type DaemonVoiceInferenceModelMachineScope,
 } from '@/voice/runtime/daemonInference/DaemonVoiceInferenceClient';
 import {
-    readDaemonVoiceInferenceClientErrorCode,
-    type DaemonVoiceInferenceClientErrorCode,
-} from '@/voice/runtime/daemonInference/daemonVoiceInferenceErrors';
-
-export type DaemonVoiceModelCatalogErrorCode = Extract<
-    DaemonVoiceInferenceClientErrorCode,
-    | 'feature_disabled'
-    | 'machine_unreachable'
-    | 'runtime_unavailable'
-    | 'unsupported_runtime_family'
-    | 'request_timeout'
-    | 'internal_error'
-> | null;
+    createDaemonVoiceModelCatalogObservation,
+    getDaemonVoiceModelCatalogObservation,
+    readDaemonVoiceModelCatalogErrorCode as readErrorCode,
+    type DaemonVoiceModelCatalogErrorCode,
+} from './daemonVoiceModelCatalogObservation';
+export type { DaemonVoiceModelCatalogErrorCode } from './daemonVoiceModelCatalogObservation';
 
 export type DaemonVoiceModelCatalogState = Readonly<{
     /** Per-pack daemon status snapshots, keyed-by-pack-id in the consumer. */
@@ -46,38 +52,7 @@ type DaemonVoiceModelCatalogClient = Pick<
     'listModels' | 'getModelsStatus' | 'installModel' | 'acceptModelPackLicense' | 'removeModel'
 >;
 
-const CANONICAL_MODEL_PACK_IDS = listModelPackCatalogEntries().map((entry) => entry.packId);
-
-function createIdleState(): DaemonVoiceModelCatalogState {
-    return {
-        statuses: [],
-        errorCode: null,
-        loading: true,
-        actionPackId: null,
-        actionError: null,
-    };
-}
-
-/**
- * Daemon status-RPC failure codes we render an explicit state for. Anything
- * outside this set (or a missing code) collapses to `internal_error` so an
- * unrecognized failure can never leak through as a non-union string and read as
- * a healthy/"ready" status. Keep in sync with {@link DaemonVoiceModelCatalogErrorCode}.
- */
-function readErrorCode(error: unknown): DaemonVoiceModelCatalogErrorCode {
-    const code = readDaemonVoiceInferenceClientErrorCode(error);
-    switch (code) {
-        case 'feature_disabled':
-        case 'machine_unreachable':
-        case 'runtime_unavailable':
-        case 'unsupported_runtime_family':
-        case 'request_timeout':
-        case 'internal_error':
-            return code;
-        default:
-            return 'internal_error';
-    }
-}
+type CatalogActionState = Pick<DaemonVoiceModelCatalogState, 'actionPackId' | 'actionError'>;
 
 /**
  * Merge the effective selected-host discovery list with explicit status for
@@ -106,59 +81,54 @@ export function useDaemonVoiceModelCatalogState(params?: Readonly<{
         () => providedClient ?? new DaemonVoiceInferenceClient(),
         [providedClient],
     );
+    const settingsScope = useAccountSettingsScope();
+    const capturedAccount = captureActiveServerAccountScopeLifetime();
+    const account = capturedAccount && areServerAccountScopesEqual(settingsScope, capturedAccount.scope)
+        ? capturedAccount : null;
+    const selectedMachineId = useVoiceExecutionMachineId();
+    const machineId = (typeof params?.refreshKey === 'string' ? params.refreshKey.trim() : '') || selectedMachineId;
+    const serverId = account?.scope.serverId ?? settingsScope?.serverId ?? null;
+    const subscribeRevision = React.useCallback((listener: () => void) => machineId
+        ? subscribeMachineContributionRegistryProjectionInvalidation({ machineId, serverId }, listener)
+        : () => {}, [machineId, serverId]);
+    const readRevision = React.useCallback(() => machineId
+        ? getMachineContributionRegistryProjectionRevision({ machineId, serverId }) : 0, [machineId, serverId]);
+    const revision = React.useSyncExternalStore(subscribeRevision, readRevision, readRevision);
+    const observation = React.useMemo(() => account && machineId && !providedClient
+        ? getDaemonVoiceModelCatalogObservation(account, machineId, revision)
+        : createDaemonVoiceModelCatalogObservation({ account, machineId, revision }),
+    [account, machineId, revision, providedClient]);
+    const observed = React.useSyncExternalStore(observation.subscribe, observation.getSnapshot, observation.getSnapshot);
     const machineScope = React.useMemo<DaemonVoiceInferenceModelMachineScope | undefined>(() => {
-        const machineId = typeof params?.refreshKey === 'string' ? params.refreshKey.trim() : '';
-        return machineId.length > 0 ? { machineId } : undefined;
-    }, [params?.refreshKey]);
-    const [state, setState] = React.useState<DaemonVoiceModelCatalogState>(() => ({
-        ...createIdleState(),
-        loading: enabled,
-    }));
+        return machineId ? { machineId } : undefined;
+    }, [machineId]);
+    const [actionState, setActionState] = React.useState<CatalogActionState>({ actionPackId: null, actionError: null });
+    const state = React.useMemo<DaemonVoiceModelCatalogState>(() => ({
+        statuses: observed.statuses, errorCode: observed.errorCode, loading: observed.loading, ...actionState,
+    }), [observed, actionState]);
     const refreshSequenceRef = React.useRef(0);
     const nextActionTokenRef = React.useRef(0);
     const activeActionTokenRef = React.useRef<number | null>(null);
     const activeActionAbortControllerRef = React.useRef<AbortController | null>(null);
     const actionScopeGenerationRef = React.useRef(0);
     const enabledRef = React.useRef(enabled);
+    const readLifetimeRef = React.useRef<AbortController | null>(null);
+    const [cancellationCommand, setCancellationCommand] = React.useState<ReturnType<typeof createVoiceModelCancellationCommand>>(null);
+    useCurrentUiContextMountedCommand(cancellationCommand, t('common.cancel'));
 
-    const refresh = React.useCallback(async () => {
+    const refreshCatalog = React.useCallback(async (requireNewObservation = false) => {
         const sequence = ++refreshSequenceRef.current;
         if (!enabledRef.current) {
-            setState((current) => ({
-                ...current,
-                loading: false,
-                actionPackId: null,
-                actionError: null,
-            }));
+            setActionState({ actionPackId: null, actionError: null });
             return;
         }
-        // Keep an already-rendered catalog stable while polling or reconciling
-        // a completed mutation. `loading` is the empty/initial presentation,
-        // not a reason to insert a status row above known model rows on every
-        // background refresh.
-        setState((current) => ({
-            ...current,
-            loading: current.statuses.length === 0,
-        }));
         try {
-            const [discoveredStatuses, canonicalStatuses] = machineScope
-                ? await Promise.all([
-                    client.listModels(machineScope),
-                    client.getModelsStatus(CANONICAL_MODEL_PACK_IDS, machineScope),
-                ])
-                : await Promise.all([
-                    client.listModels(),
-                    client.getModelsStatus(CANONICAL_MODEL_PACK_IDS),
-                ]);
-            const statusByPackId = new Map(
-                discoveredStatuses.map((status) => [status.packId, status]),
-            );
-            for (const status of canonicalStatuses) {
-                statusByPackId.set(status.packId, status);
-            }
-            const statuses = [...statusByPackId.values()];
+            const signal = readLifetimeRef.current?.signal;
+            if (!signal || signal.aborted) return;
+            const statuses = await observation.read({ client, requireNewObservation, signal });
+            if (!statuses) return;
             if (refreshSequenceRef.current !== sequence) return;
-            setState((current) => {
+            setActionState((current) => {
                 const failedStatus = current.actionError
                     ? statuses.find((status) => status.packId === current.actionError?.packId)
                     : null;
@@ -169,39 +139,41 @@ export function useDaemonVoiceModelCatalogState(params?: Readonly<{
                         : false;
                 return {
                     ...current,
-                    statuses,
                     actionError: actionNowSucceeded ? null : current.actionError,
-                    errorCode: null,
-                    loading: false,
                 };
             });
-        } catch (error) {
-            if (refreshSequenceRef.current !== sequence) return;
-            setState((current) => ({
-                ...current,
-                errorCode: readErrorCode(error),
-                loading: false,
-            }));
+        } catch {
+            // The shared observation retains the typed read failure.
         }
-    }, [client, enabled, machineScope]);
+    }, [client, enabled, observation]);
+    const refresh = React.useCallback(() => refreshCatalog(true), [refreshCatalog]);
+
+    React.useEffect(() => account?.onRetire(observation.invalidate).dispose, [account, observation]);
+
+    React.useEffect(() => {
+        const controller = new AbortController();
+        readLifetimeRef.current = controller;
+        return () => {
+            if (readLifetimeRef.current === controller) readLifetimeRef.current = null;
+            controller.abort();
+        };
+    }, [observation, enabled]);
+
+    React.useEffect(() => {
+        if (enabled && observed.stale && !observed.loading && observed.errorCode === null) void refreshCatalog();
+    }, [enabled, observed.stale, observed.loading, observed.errorCode, refreshCatalog]);
 
     React.useEffect(() => {
         // Refs used by async owners represent committed lifecycle state. Never
         // write them during render: a Suspense/concurrent render may be
         // abandoned while sharing the current tree's ref objects.
         enabledRef.current = enabled;
+        setCancellationCommand(null);
         if (enabled) {
-            // A status snapshot belongs to exactly one execution-machine
-            // scope. Clear the previous scope before requesting the next one
-            // so machine A's installed/actionable rows cannot be rendered or
-            // mutated while machine B is still resolving.
-            setState(() => ({
-                ...createIdleState(),
-                loading: true,
-                actionPackId: null,
-                actionError: null,
-            }));
-            void refresh();
+            // Observation identity already isolates Account/Machine/revision.
+            // Mutation custody stays local to the committed controller.
+            setActionState({ actionPackId: null, actionError: null });
+            void refreshCatalog();
             return () => {
                 enabledRef.current = false;
                 refreshSequenceRef.current += 1;
@@ -215,12 +187,7 @@ export function useDaemonVoiceModelCatalogState(params?: Readonly<{
                 activeActionAbortControllerRef.current = null;
             };
         }
-        setState((current) => ({
-            ...current,
-            loading: false,
-            actionPackId: null,
-            actionError: null,
-        }));
+        setActionState({ actionPackId: null, actionError: null });
         actionScopeGenerationRef.current += 1;
         activeActionTokenRef.current = null;
         activeActionAbortControllerRef.current?.abort();
@@ -229,7 +196,7 @@ export function useDaemonVoiceModelCatalogState(params?: Readonly<{
             enabledRef.current = false;
             refreshSequenceRef.current += 1;
         };
-    }, [enabled, params?.refreshKey, refresh]);
+    }, [enabled, params?.refreshKey, refreshCatalog]);
 
     const anyInstalling = state.statuses.some((status) => status.installState === 'installing');
 
@@ -243,7 +210,7 @@ export function useDaemonVoiceModelCatalogState(params?: Readonly<{
         let cancelled = false;
         let timeout: ReturnType<typeof setTimeout> | null = null;
         const poll = async () => {
-            await refresh();
+            await refreshCatalog();
             if (cancelled) return;
             timeout = setTimeout(() => {
                 void poll();
@@ -256,7 +223,7 @@ export function useDaemonVoiceModelCatalogState(params?: Readonly<{
             cancelled = true;
             if (timeout !== null) clearTimeout(timeout);
         };
-    }, [anyInstalling, enabled, params?.pollIntervalMs, refresh, state.actionPackId]);
+    }, [anyInstalling, enabled, params?.pollIntervalMs, refreshCatalog, state.actionPackId]);
 
     const runAction = React.useCallback(async (
         packId: string,
@@ -279,11 +246,17 @@ export function useDaemonVoiceModelCatalogState(params?: Readonly<{
             && activeActionTokenRef.current === actionToken
             && actionScopeGenerationRef.current === actionScopeGeneration
         );
-        setState((current) => ({
+        const command = createVoiceModelCancellationCommand({ packId, execution: 'daemon',
+            machineId: machineScope?.machineId ?? resolveVoiceExecutionMachineId(),
+            account: 'scope' in account ? account : null,
+            isCurrent: () => actionStillOwnsState() && !actionAbortController.signal.aborted,
+            cancel: () => actionAbortController.abort() });
+        setCancellationCommand(command);
+        observation.publish({ ...observation.getSnapshot(), errorCode: null });
+        setActionState((current) => ({
             ...current,
             actionPackId: packId,
             actionError: null,
-            errorCode: null,
         }));
         try {
             await action(packId, () => actionStillOwnsState() && account.isCurrent(), actionAbortController.signal);
@@ -291,14 +264,15 @@ export function useDaemonVoiceModelCatalogState(params?: Readonly<{
             if (!actionStillOwnsState()) return;
             if (actionAbortController.signal.aborted) return;
             const errorCode = readErrorCode(error) ?? 'internal_error';
-            setState((current) => ({
+            setActionState((current) => ({
                 ...current,
                 actionError: { packId, operation, errorCode },
             }));
         } finally {
             retirement.dispose();
             if (!actionStillOwnsState()) return;
-            setState((current) => ({ ...current, actionPackId: null }));
+            setCancellationCommand(current => current === command ? null : current);
+            setActionState((current) => ({ ...current, actionPackId: null }));
             activeActionTokenRef.current = null;
             if (activeActionAbortControllerRef.current === actionAbortController) {
                 activeActionAbortControllerRef.current = null;
@@ -307,9 +281,9 @@ export function useDaemonVoiceModelCatalogState(params?: Readonly<{
             // lifecycle phases. Do not keep the row visually/action-locked
             // while route discovery or a remote status request is slow; the
             // refresh owns its own error handling and stale-response guard.
-            if (account.isCurrent()) void refresh();
+            if (account.isCurrent()) void refreshCatalog();
         }
-    }, [enabled, refresh]);
+    }, [enabled, machineScope, refreshCatalog, observation]);
 
     const mutate = React.useCallback((packId: string, operation: 'install' | 'remove') =>
         runAction(packId, operation, async (id, isCurrent, signal) => {

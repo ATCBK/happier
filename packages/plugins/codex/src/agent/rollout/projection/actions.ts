@@ -28,7 +28,7 @@ type RolloutEnvelope = { timestamp?: string; type?: string; payload?: unknown };
  * already published from the rows it replaces, `world_state` is environment
  * context rather than conversation, and `inter_agent_communication_metadata`
  * is turn-routing metadata. Advancing past them is safe; treating them as
- * unknown fails the whole page.
+ * unknown would add an unsupported-content row to the transcript.
  */
 const CODEX_KNOWN_NON_TRANSCRIPT_ENVELOPE_TYPES: ReadonlySet<string> = new Set([
     'compacted',
@@ -207,7 +207,8 @@ function parseSubagentNotification(text: string): Extract<CodexRolloutAction, { 
     };
 }
 
-function withLocalControlMeta(input: unknown): unknown {
+function withLocalControlMeta(input: unknown, localControl = true): unknown {
+    if (!localControl) return input;
     const record = asRecord(input);
     if (record) {
         const currentHappier = asRecord(record._happier) ?? {};
@@ -267,7 +268,7 @@ function readWaitingEndSubagentCompletions(payload: Record<string, unknown>): Co
 
 export function projectCodexRolloutRecord(
     event: unknown,
-    opts: { debug: boolean },
+    opts: { debug: boolean; localControl?: boolean },
 ): CodexRolloutRecordProjection {
     const env = asRecord(event) as RolloutEnvelope | null;
     if (!env || typeof env.type !== 'string') {
@@ -455,7 +456,7 @@ export function projectCodexRolloutRecord(
             typeof rawArgs === 'string'
                 ? safeJsonParse(rawArgs) ?? rawArgs
                 : rawArgs;
-        const input = withLocalControlMeta(normalizeCodexRolloutToolInput(name, parsedArgs));
+        const input = withLocalControlMeta(normalizeCodexRolloutToolInput(name, parsedArgs), opts.localControl);
 
         return {
             disposition: 'known',
@@ -499,7 +500,7 @@ export function projectCodexRolloutRecord(
         if (visibility === 'ignore') return { disposition: 'known', actions: [] };
         if (visibility === 'debug-only' && !opts.debug) return { disposition: 'known', actions: [] };
 
-        const input = withLocalControlMeta(normalizeCodexRolloutToolInput(name, payload.input));
+        const input = withLocalControlMeta(normalizeCodexRolloutToolInput(name, payload.input), opts.localControl);
         return {
             disposition: 'known',
             actions: [{ type: 'tool-call', callId, name: canonicalToolName, input, ...(source ? { source } : {}) }],
@@ -528,7 +529,7 @@ export function projectCodexRolloutRecord(
 
 export function mapCodexRolloutEventToActions(
     event: unknown,
-    opts: { debug: boolean },
+    opts: { debug: boolean; localControl?: boolean },
 ): CodexRolloutAction[] {
     return projectCodexRolloutRecord(event, opts).actions;
 }

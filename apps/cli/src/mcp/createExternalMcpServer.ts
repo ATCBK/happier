@@ -13,7 +13,7 @@ import {
   sameStoredCredentials,
   type StoredCredentials,
 } from '@/persistence';
-import { registerHappierMcpResources } from '@/mcp/resources/registerHappierMcpResources';
+import { listHappierMcpToolNames, registerHappierMcpResources } from '@/mcp/resources/registerHappierMcpResources';
 import { createActionToolExecutorBridge } from '@/agent/tools/happierTools/createActionToolExecutorBridge';
 import { createChangeTitleToolHandler } from '@/agent/tools/happierTools/createChangeTitleToolHandler';
 import { readActionsSettingsFromEnv } from '@/settings/actionsSettings';
@@ -35,7 +35,7 @@ import type { ProjectedPluginToolCatalogEntry } from '@/plugins/runtime/toolCata
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
 import { createSessionFollowActionDeps } from '@/api/sessionFollowActionDeps';
 import { reconcileExternalActionTarget } from '@/daemon/externalActions/reconcileExternalActionTarget';
-import { createSessionDiscussionActionDeps } from '@/session/discussions/sessionDiscussionActionDeps';
+import { createDiscussionActionDeps } from '@/discussions/discussionActionDeps';
 import {
   resolveServerHttpBaseUrl,
   runWithServerHttpBaseUrl,
@@ -120,8 +120,23 @@ export function createExternalMcpServer(params: Readonly<{
         const cryptoContext = ctx
           ? { mode: 'e2ee' as const, ctx }
           : { mode: 'plain' as const, ctx: null };
+        const isCredentialCurrent = async () => sameStoredCredentials(
+          params.credentials,
+          await readStoredCredentialsForServerId(serverId).catch(() => null),
+        );
+        const { projectWorkerAction: projectWorkerAccountAction, ...accountServerActionPorts } = createAccountServerActionDeps({
+          token: params.credentials.token,
+          credentials: params.credentials,
+          isCredentialCurrent,
+          serverId,
+          serverHttpBaseUrl,
+          ...(serverIdentityId ? { serverIdentityId } : {}),
+          resolveServerFeaturesSnapshot,
+        });
         const followDeps = createSessionFollowActionDeps({
           token: params.credentials.token,
+          credentials: params.credentials,
+          isCredentialCurrent,
           serverId,
           serverHttpBaseUrl,
           ...(serverIdentityId ? { serverIdentityId } : {}),
@@ -137,27 +152,18 @@ export function createExternalMcpServer(params: Readonly<{
             ...cryptoContext,
             token: params.credentials.token,
             credentials: params.credentials,
+            isCredentialCurrent,
             serverId,
             ...(serverIdentityId ? { serverIdentityId } : {}),
             serverHttpBaseUrl,
             sessionId: 'cli-global',
+            ...(projectWorkerAccountAction ? { projectWorkerAccountAction } : {}),
           },
           {
             invokeContributedAction: async (request) => pluginExecutor.invokeContributedAction(request),
-            ...createAccountServerActionDeps({
-              token: params.credentials.token,
-              credentials: params.credentials,
-              isCredentialCurrent: async () => sameStoredCredentials(
-                params.credentials,
-                await readStoredCredentialsForServerId(serverId).catch(() => null),
-              ),
-              serverId,
-              serverHttpBaseUrl,
-              ...(serverIdentityId ? { serverIdentityId } : {}),
-              resolveServerFeaturesSnapshot,
-            }),
+            ...accountServerActionPorts,
             ...followDeps,
-            ...createSessionDiscussionActionDeps({
+            ...createDiscussionActionDeps({
               credentials: params.credentials,
               serverId,
               serverHttpBaseUrl,
@@ -279,7 +285,7 @@ export function createExternalMcpServer(params: Readonly<{
       defaultSessionId: defaultSessionAddress?.sessionId ?? 'cli-global', isEnabled: () => isActionEnabled('wait') },
   });
 
-  const { toolNames } = registerHappierMcpBuiltInTools(mcp as any, {
+  const { toolNames } = registerHappierMcpBuiltInTools(mcp, {
     sessionId: 'cli-global',
     surface: toolSurface,
     actionsSettings,
@@ -300,5 +306,5 @@ export function createExternalMcpServer(params: Readonly<{
     },
   });
 
-  return { mcp, toolNames: [...toolNames, 'watch'] };
+  return { mcp, toolNames: listHappierMcpToolNames(toolNames) };
 }

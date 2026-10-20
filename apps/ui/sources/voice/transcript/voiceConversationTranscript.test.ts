@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readStoredSessionMessages } from '@happier-dev/session-core/messages';
 import { RawRecordSchema } from '@happier-dev/session-core/raw';
 import { SessionMessageRoleSchema } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createSessionFixture, standardCleanup } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storage';
 import { settingsParse } from '@/sync/domains/settings/settings';
@@ -20,8 +20,8 @@ vi.mock('socket.io-client', async original =>
 
 let account: Awaited<ReturnType<typeof import('@/voice/settings/panels/voiceSettingsAccountTestHarness').createVoiceSettingsAccountTestHarness>>;
 const writes: Array<{ sessionId: string; localId: string; messageRole: string; rawRecord: ReturnType<typeof RawRecordSchema.parse> }> = [];
-const writeSchema = z.object({ content: z.object({ t: z.literal('plain'), v: RawRecordSchema }).strict(),
-    localId: z.string().min(1), messageRole: SessionMessageRoleSchema }).strict();
+const writeSchema = z.strictObject({ content: z.strictObject({ t: z.literal('plain'), v: RawRecordSchema }),
+    localId: z.string().check(z.minLength(1)), messageRole: SessionMessageRoleSchema });
 
 beforeEach(async () => {
     const { installDisconnectedServerSocketBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');

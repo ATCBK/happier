@@ -340,7 +340,7 @@ export type PluginDeclarativeProjectedNodeV1 =
   }>;
 
 export const PluginDeclarativeProjectedNodeV1Schema: z.ZodMiniType<PluginDeclarativeProjectedNodeV1> = z.lazy(
-  () => z.union([z.union(PluginDeclarativeChartNodeV1Schema._zod.def.options.map(schema => schema.extend(ProjectedNodeBaseV1Shape))), z.discriminatedUnion('kind', [
+  () => z.union([z.union(PluginDeclarativeChartNodeV1Schema._zod.def.options.map(schema => z.extend(schema, ProjectedNodeBaseV1Shape))), z.discriminatedUnion('kind', [
     lazyZodSchema(() => z.extend(PluginDeclarativeMetricNodeV1Schema, ProjectedNodeBaseV1Shape)),
     lazyZodSchema(() => z.extend(PluginDeclarativeTableNodeV1Schema, ProjectedNodeBaseV1Shape)),
     lazyZodSchema(() => z.extend(PluginDeclarativeRowsNodeV1Schema, ProjectedNodeBaseV1Shape)),

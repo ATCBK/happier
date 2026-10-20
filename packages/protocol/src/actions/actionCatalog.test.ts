@@ -18,11 +18,34 @@ import { z } from 'zod/mini';
 import { projectActionDefinitionForExternalDiscovery } from './actionCatalog.js';
 import { zodSchemaToJsonSchemaObject } from './actionInputJsonSchema.js';
 import { prepareExternalActionResponseEnvelopeV1 } from './externalActionApi.js';
+import { compileProtocolJsonSchema } from '../plugins/actions/jsonSchemaCompiler.js';
 
 describe('actionCatalog action-definition adapter', () => {
+  it('offers the existing handoff operation through CLI and Voice with its normal policy', () => {
+    for (const surface of ['cli', 'voice'] as const) {
+      expect(listActionSpecsForCatalogSurface({ surface }).some(spec => spec.id === 'session.handoff')).toBe(true);
+    }
+    expect(getActionSpec('session.handoff').safety).toBe('safe');
+  });
+
   // Full-catalog projection is synchronous; let worker-reporting IPC complete
   // between contracts instead of starving it across the entire census.
   beforeEach(() => new Promise<void>(resolve => setImmediate(resolve)));
+
+  it('shares repeated discovery schemas while retaining complete input and output contracts', () => {
+    const repeated = z.strictObject({ name: z.string().check(z.minLength(1)) });
+    const schema = z.strictObject({ first: repeated, second: repeated, items: z.array(repeated) });
+    const spec = { ...getActionSpec('action.spec.get'), inputSchema: schema, outputSchema: schema };
+    const definition = actionSpecToActionDefinitionV1(spec);
+    const inline = zodSchemaToJsonSchemaObject(schema, { target: 'draft-7' });
+    for (const projected of [definition.inputSchema, definition.outputSchema!]) {
+      expect(JSON.stringify(projected).length).toBeLessThan(JSON.stringify(inline).length);
+      const validate = compileProtocolJsonSchema(projected, 'draft-07');
+      expect(validate({ first: { name: 'a' }, second: { name: 'b' }, items: [{ name: 'c' }] })).toBe(true);
+      expect(validate({ first: { name: 'a' }, second: { name: '' }, items: [] })).toBe(false);
+      expect(validate({ first: { name: 'a' }, second: { name: 'b' }, items: [{ name: 'c', extra: true }] })).toBe(false);
+    }
+  });
 
   it.each([
     ['machines.list', 'api'],
@@ -436,18 +459,16 @@ describe('actionCatalog action-definition adapter', () => {
     expect(definition.inputSchema).toMatchObject({
       description: 'Constrained action input',
       additionalProperties: false,
-      properties: {
-        label: {
-          minLength: 2,
-          maxLength: 20,
-          pattern: '^[a-z-]+$',
-          description: 'Action label',
-        },
-        attempts: { minimum: 1, maximum: 3 },
-        tags: { minItems: 1, maxItems: 2 },
-        mode: { enum: ['safe', 'fast'] },
-      },
     });
+    const validate = compileProtocolJsonSchema(definition.inputSchema, 'draft-07');
+    const valid = { label: 'valid', attempts: 2, tags: ['tag'], mode: 'safe' };
+    expect(validate(valid)).toBe(true);
+    for (const invalid of [
+      { ...valid, label: 'x' }, { ...valid, label: 'x'.repeat(21) }, { ...valid, label: 'Invalid' },
+      { ...valid, attempts: 0 }, { ...valid, attempts: 4 },
+      { ...valid, tags: [] }, { ...valid, tags: ['a', 'b', 'c'] },
+      { ...valid, mode: 'unknown' }, { ...valid, extra: true },
+    ]) expect(validate(invalid)).toBe(false);
     expect(serialized.outputSchema).toMatchObject({
       type: 'string',
       minLength: 2,
@@ -483,8 +504,8 @@ describe('actionCatalog action-definition adapter', () => {
     const apiOutputSchema = spec.surfaceBindings?.api?.outputSchema;
     if (!spec.outputSchema || !apiOutputSchema) throw new Error('Expected internal and API output schemas');
 
-    const apiOutputJsonSchema = zodSchemaToJsonSchemaObject(apiOutputSchema, { target: 'draft-7' });
-    const internalOutputJsonSchema = zodSchemaToJsonSchemaObject(spec.outputSchema, { target: 'draft-7' });
+    const apiOutputJsonSchema = zodSchemaToJsonSchemaObject(apiOutputSchema, { target: 'draft-7', reused: 'ref' });
+    const internalOutputJsonSchema = zodSchemaToJsonSchemaObject(spec.outputSchema, { target: 'draft-7', reused: 'ref' });
     const apiDefinition = getActionDefinitionForCatalogSurface({
       id: 'session.message.send',
       surface: 'api',

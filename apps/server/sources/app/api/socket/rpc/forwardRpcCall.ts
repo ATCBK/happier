@@ -21,6 +21,7 @@ import {
     type WorkspaceSyncSeedRoutingV1,
     type SessionActionRpcOriginV1,
     type SocketRpcTransportAcknowledgementV1,
+    type SocketRpcAnsweringClientV1,
 } from "@happier-dev/protocol/socketRpc";
 
 import {
@@ -54,6 +55,8 @@ export type RpcForwardResult =
     | Readonly<{
         ok: true;
         result: unknown;
+        answeringClientId?: string;
+        answeringClientIds?: readonly string[];
         transportAcknowledgement?: SocketRpcTransportAcknowledgementV1;
       }>
     | Readonly<{
@@ -108,12 +111,15 @@ export async function forwardRpcCall(params: Readonly<{
     targetUserId: string;
     method: string;
     callParams: unknown;
+    /** Existing Machine registration carrying an unchanged Session-bound encrypted decision. */
+    sessionDecisionTargetMethod?: string;
     timeoutMs?: number | null;
     authorization?: SocketRpcAuthorizationContext;
     /** Home-owned current Machine routing facts; never copied from inbound fields. */
     machineAdmission?: SocketRpcMachineAdmissionContextV1;
     transportResponseEnvelopeVersion?: 1;
     callerSocketId?: string;
+    answeringClient?: SocketRpcAnsweringClientV1;
     callerSocket?: Pick<Socket, "data">;
     /** Trusted source continuation ceiling, never copied from inbound generic RPC fields. */
     callerAuthority?: SocketRpcRequestPayload['callerAuthority'];
@@ -135,6 +141,8 @@ export async function forwardRpcCall(params: Readonly<{
         requestId: string;
     }>) => Promise<ExternalActionExecutionAuthorizationV1>;
     targetGuard?: RpcForwardTargetGuard;
+    /** The admitted route's canonical presence owner distinguishes target loss from a missing method. */
+    isTargetUnavailable?: () => Promise<boolean>;
     cancellation?: Readonly<{
         /** Server-minted correlation that is safe to expose to the exact target. */
         targetRequestId: string;
@@ -156,12 +164,13 @@ export async function forwardRpcCall(params: Readonly<{
         graceMs: resolveRpcMethodAvailabilityGraceMs(params.method),
         pollMs: resolveRpcMethodAvailabilityPollMs(),
         excludedSocketId: params.callerSocketId,
+        answeringClient: params.answeringClient,
         ...(params.callerLifetime ? { callerLifetime: params.callerLifetime } : {}),
         discoverTargets: async () => {
             const targets = await discoverRpcTargets({
                 io: params.io,
                 userId: params.targetUserId,
-                method: params.method,
+                method: params.sessionDecisionTargetMethod ?? params.method,
                 fetchTimeoutMs: resolveRpcClusterFetchTimeoutMs(params.method),
             });
             return params.targetGuard
@@ -174,6 +183,12 @@ export async function forwardRpcCall(params: Readonly<{
         durationMs: Date.now() - lookupStartedAt,
         result: selection.type === "not-available" ? "miss" : "resolved",
     });
+
+    if (selection.type === 'ambiguous') {
+        recordRpcCallFailure(params.method, 'request_error');
+        observeRpcCall({ method: params.method, durationMs: Date.now() - callStartedAt, result: 'error' });
+        return { ok: false, error: 'Choose an exact answering client', errorCode: RPC_ERROR_CODES.CLIENT_AMBIGUOUS };
+    }
 
     if (selection.type === "self-call") {
         recordRpcSelfCallRejection(params.method);
@@ -190,13 +205,14 @@ export async function forwardRpcCall(params: Readonly<{
     }
 
     if (selection.type === "not-available") {
+        if (params.answeringClient) return { ok: false, error: 'Answering client unavailable', errorCode: RPC_ERROR_CODES.CLIENT_NOT_AVAILABLE };
         return recordMethodUnavailable({
             method: params.method,
             callStartedAt,
-            targetUnavailable: await isMachineRpcTargetUnavailable({
+            targetUnavailable: params.isTargetUnavailable ? await params.isTargetUnavailable() : await isMachineRpcTargetUnavailable({
                 io: params.io,
                 userId: params.targetUserId,
-                method: params.method,
+                method: params.sessionDecisionTargetMethod ?? params.method,
                 fetchTimeoutMs: resolveRpcClusterFetchTimeoutMs(params.method),
             }),
         });
@@ -312,11 +328,18 @@ export async function forwardRpcCall(params: Readonly<{
             // Socket.IO 4.8.3 cluster ACKs call Node setTimeout directly. Keep
             // its real 2^31-1 ms adapter boundary separate from the authored
             // deadline, which is forwarded verbatim to the target owner.
-            const targetEmitter = selection.target.timeout(Math.min(timeoutMs ?? 2_147_483_647, 2_147_483_647));
             const callerInputAuthorization = params.createCallerInputAuthorization && targetRequestId
                 ? await params.createCallerInputAuthorization({ target: selection.target, requestId: targetRequestId })
                 : null;
             if (params.cancellation?.signal.aborted) throw new Error("RPC request cancelled by caller");
+            // Socket.IO's local Socket stores emit flags on the socket itself,
+            // so configure the ACK immediately before dispatch, after async auth.
+            // Caller cancellation retires ACK custody for finite and unbounded
+            // waits alike; submission still leaves admission uncertain.
+            const targetEmitter = selection.target.timeout(Math.min(timeoutMs ?? 2_147_483_647, 2_147_483_647), {
+                rejectOnDisconnect: true,
+                ...(params.cancellation ? { signal: params.cancellation.signal } : {}),
+            });
             requestSubmitted = true;
             const response = targetEmitter.emitWithAck(
                 SOCKET_RPC_EVENTS.REQUEST,
@@ -329,32 +352,7 @@ export async function forwardRpcCall(params: Readonly<{
                     } } : {}),
                 } : request,
             );
-            const cancellationSignal = params.cancellation?.signal;
-            // Caller-lifecycle operations forward cancellation to their exact
-            // target and let that owner return the correlated terminal result.
-            // Ending the relay locally after submission would discard a V2
-            // Action's authenticated cancellation/outcome-unknown response.
-            if (!cancellationSignal || timeoutMs === null) {
-                return await response;
-            }
-
-            let removeAbortListener: (() => void) | undefined;
-            const aborted = new Promise<never>((_resolve, reject) => {
-                const onAbort = (): void => {
-                    reject(new Error('RPC request cancelled by caller'));
-                };
-                cancellationSignal.addEventListener('abort', onAbort, { once: true });
-                removeAbortListener = () => {
-                    cancellationSignal.removeEventListener('abort', onAbort);
-                };
-                if (cancellationSignal.aborted) onAbort();
-            });
-
-            try {
-                return await Promise.race([response, aborted]);
-            } finally {
-                removeAbortListener?.();
-            }
+            return await response;
         };
         const guarded = params.targetGuard
             ? await params.targetGuard.runOperation({
@@ -405,6 +403,8 @@ export async function forwardRpcCall(params: Readonly<{
         return {
             ok: true,
             result: envelope.success ? envelope.data.result : response,
+            ...(params.answeringClient ? { answeringClientId: selection.target.id } : {}),
+            ...(selection.clientIds ? { answeringClientIds: selection.clientIds } : {}),
             ...(envelope.success && envelope.data.acknowledgement
                 ? { transportAcknowledgement: envelope.data.acknowledgement }
                 : {}),
@@ -419,7 +419,11 @@ export async function forwardRpcCall(params: Readonly<{
         });
         return {
             ok: false,
-            ...(params.method.endsWith(`:${RPC_METHODS.APPROVAL_REQUEST_SECRET_CONTINUE}`)
+            ...(requestSubmitted && params.cancellation?.signal.aborted
+                ? { error: 'RPC request cancelled after request submission', errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN }
+                : error instanceof Error && 'code' in error && error.code === 'SOCKET_DISCONNECTED'
+                ? { error: 'RPC target disconnected after request submission', errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN }
+                : params.method.endsWith(`:${RPC_METHODS.APPROVAL_REQUEST_SECRET_CONTINUE}`)
                 ? { error: 'confidential_continuation_failed', errorCode: 'confidential_continuation_failed' }
                 : { error: error instanceof Error ? error.message : "RPC call failed" }),
         };

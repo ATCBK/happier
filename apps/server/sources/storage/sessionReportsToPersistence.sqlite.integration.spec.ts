@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { db } from '@/storage/db';
+import { sourceKeyForSessionFollowSourceV1 } from '@/app/session/follow/sessionFollowSourceIdentity';
 import { createLightSqliteHarness, type LightSqliteHarness } from '@/testkit/lightSqliteHarness';
 
 describe('SessionReportsTo persistence', () => {
@@ -28,14 +29,14 @@ describe('SessionReportsTo persistence', () => {
         // Raw SQL exercises the migration itself, including before a generated
         // Prisma client can expose the newly introduced model.
         await db.$executeRaw`
-            INSERT INTO "SessionReportsTo" (
-                "sessionId", "leadSessionId", "attachedAt", "deliveredTranscriptSeq",
+            INSERT INTO "SessionFollowEdge" (
+                "sourceKey", "sourceSessionId", "destinationSessionId", "relation", "managerSourceSessionId", "attachedAt", "policyJson", "deliveredTranscriptSeq",
                 "deliveredReadyEventSeq", "deliveredAgentStateVersion", "deliveredTurnId", "deliveredTurnStatus"
-            ) VALUES (${child.id}, ${lead.id}, ${attachedAt}, 7, 3, 2, 'turn-report', 'completed')
+            ) VALUES (${sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: child.id })}, ${child.id}, ${lead.id}, 'manager', ${child.id}, ${attachedAt}, '{"preset":"important"}', 7, 3, 2, 'turn-report', 'completed')
         `;
         await db.$executeRaw`
-            INSERT INTO "SessionReportsTo" ("sessionId", "leadSessionId", "attachedAt")
-            VALUES (${deletedChild.id}, ${survivingLead.id}, ${attachedAt})
+            INSERT INTO "SessionFollowEdge" ("sourceKey", "sourceSessionId", "destinationSessionId", "relation", "managerSourceSessionId", "attachedAt", "policyJson")
+            VALUES (${sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: deletedChild.id })}, ${deletedChild.id}, ${survivingLead.id}, 'manager', ${deletedChild.id}, ${attachedAt}, '{"preset":"important"}')
         `;
         const rows = await db.$queryRaw<Array<{
             sessionId: string;
@@ -46,7 +47,9 @@ describe('SessionReportsTo persistence', () => {
             deliveredAgentStateVersion: number;
             deliveredTurnId: string | null;
             deliveredTurnStatus: string | null;
-        }>>`SELECT * FROM "SessionReportsTo" WHERE "sessionId" = ${child.id}`;
+        }>>`SELECT "sourceSessionId" AS "sessionId", "destinationSessionId" AS "leadSessionId", "attachedAt",
+            "deliveredTranscriptSeq", "deliveredReadyEventSeq", "deliveredAgentStateVersion", "deliveredTurnId", "deliveredTurnStatus"
+            FROM "SessionFollowEdge" WHERE "managerSourceSessionId" = ${child.id}`;
         expect(rows).toEqual([{
             sessionId: child.id,
             leadSessionId: lead.id,
@@ -60,7 +63,7 @@ describe('SessionReportsTo persistence', () => {
 
         await db.session.delete({ where: { id: lead.id } });
         await db.session.delete({ where: { id: deletedChild.id } });
-        expect(await db.$queryRaw`SELECT "sessionId" FROM "SessionReportsTo"`).toEqual([]);
+        expect(await db.$queryRaw`SELECT "sourceSessionId" FROM "SessionFollowEdge" WHERE "relation" = 'manager'`).toEqual([]);
         expect(await db.session.findUnique({ where: { id: child.id }, select: { id: true } })).toEqual({ id: child.id });
         expect(await db.session.findUnique({ where: { id: survivingLead.id }, select: { id: true } })).toEqual({ id: survivingLead.id });
     });

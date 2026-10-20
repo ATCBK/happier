@@ -99,7 +99,7 @@ const boundary = vi.hoisted(() => {
     const directDb = {
         account: { findUnique: vi.fn() },
         accountPluginIntent: { findUnique: vi.fn() },
-        accountPluginRelease: { findUnique: vi.fn() },
+        accountPluginRelease: { findUnique: vi.fn(), findMany: vi.fn() },
         accountPluginUiArtifact: { findUnique: vi.fn() },
         artifact: { findUnique: vi.fn() },
         machine: { findMany: vi.fn() },
@@ -107,7 +107,7 @@ const boundary = vi.hoisted(() => {
     const transactionSnapshot = {
         account: { findUnique: vi.fn() },
         accountPluginIntent: { findUnique: vi.fn() },
-        accountPluginRelease: { findUnique: vi.fn() },
+        accountPluginRelease: { findUnique: vi.fn(), findMany: vi.fn() },
         accountPluginUiArtifact: { findUnique: vi.fn() },
         artifact: { findUnique: vi.fn() },
         machine: { findMany: vi.fn() },
@@ -140,12 +140,14 @@ describe("plugin Availability read currentness", () => {
             writableCollections: [],
             revision: BigInt(1),
         });
-        boundary.directDb.accountPluginRelease.findUnique.mockResolvedValue(releaseRow({
+        const directRelease = releaseRow({
             artifactId: "00000000-0000-4000-8000-000000000007",
             archiveDigestSha256: `sha256:${"7".repeat(64)}`,
             artifactDigest: `sha256:${"7".repeat(64)}`,
             displayName: "Direct snapshot",
-        }));
+        });
+        boundary.directDb.accountPluginRelease.findUnique.mockResolvedValue(directRelease);
+        boundary.directDb.accountPluginRelease.findMany.mockResolvedValue([directRelease]);
         boundary.directDb.machine.findMany.mockResolvedValue([{
             id: "machine-direct",
             pluginMaterializationRevision: BigInt(7),
@@ -166,12 +168,14 @@ describe("plugin Availability read currentness", () => {
             writableCollections: [],
             revision: BigInt(2),
         });
-        boundary.transactionSnapshot.accountPluginRelease.findUnique.mockResolvedValue(releaseRow({
+        const snapshotRelease = releaseRow({
             artifactId: "00000000-0000-4000-8000-000000000008",
             archiveDigestSha256: `sha256:${"8".repeat(64)}`,
             artifactDigest: `sha256:${"8".repeat(64)}`,
             displayName: "Transaction snapshot",
-        }));
+        });
+        boundary.transactionSnapshot.accountPluginRelease.findUnique.mockResolvedValue(snapshotRelease);
+        boundary.transactionSnapshot.accountPluginRelease.findMany.mockResolvedValue([snapshotRelease]);
         boundary.transactionSnapshot.machine.findMany.mockResolvedValue([{
             id: "machine-transaction",
             pluginMaterializationRevision: BigInt(8),

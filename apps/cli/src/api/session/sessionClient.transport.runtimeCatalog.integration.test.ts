@@ -12,7 +12,8 @@ import { configuration } from '@/configuration';
 import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 import { createInitialHostRuntimeActivityMutation } from '@/agent/runtime/session/activity/createHostRuntimeActivityProjection';
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
-import { waitForNextPermissionModeMessage } from '@/agent/runtime/waitForNextPermissionModeMessage';
+import { createSessionProviderInputConsumerSessionAdapter, waitForNextPermissionModeMessage } from '@/agent/runtime/waitForNextPermissionModeMessage';
+import { createSessionProviderInputConsumer } from '@/agent/runtime/session/input/sessionProviderInputConsumer';
 import { fetchSessionSnapshotUpdateFromServer } from './snapshotSync';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 
@@ -42,6 +43,59 @@ describe('ApiSessionClient injected transport', () => {
         vi.useRealTimers();
         vi.restoreAllMocks();
         vi.unstubAllGlobals();
+    });
+
+    it('delivers Pending from the required startup snapshot without a daemon wake', async () => {
+        const sessionId = 'startup-pending-session';
+        const fields = buildSessionMetadataEnvelopeFields({ credentials: { token: 'startup-token', encryption: null },
+            accountEncryptionMode: 'plain', metadata: createTestMetadata(), agentState: null, storedContentMode: 'plain' });
+        const activity = createSessionRuntimeActivityHomeStub({ machineId: 'startup-machine' });
+        const socket = createApiSessionSocketStub({ connected: true, emitWithAck: (event, payload) => {
+            if (event === 'pending-materialize-next') return {
+                ok: true, didMaterialize: true, didWrite: false, localId: 'startup-pending-input',
+                pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 2,
+                message: { id: null, seq: null, localId: 'startup-pending-input', providerAction: 'send', messageRole: 'user',
+                    inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine' },
+                    content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'retained pending input' } } },
+                    createdAt: 1, updatedAt: 1, deliveryState: { mode: 'provider', unresolved: true } },
+            };
+            return activity.answer(event, payload) ?? { ok: false };
+        } });
+        const features = FeaturesResponseSchema.parse({ features: { sharing: { pendingQueueV2: { enabled: true } } },
+            capabilities: { session: { runtimeActivity: { protocolVersion: 2 }, pendingInput: { protocolVersion: 3 },
+                publisherAuthority: { protocolVersion: 1 } } } });
+        vi.stubGlobal('fetch', vi.fn(async () => Response.json(features)));
+        vi.mocked(axios.get).mockImplementation(async url => String(url).includes(`/v2/sessions/${sessionId}`)
+            ? { status: 200, data: { session: createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain',
+                metadataLayoutVersion: 1, metadata: fields.sharedMetadata.ciphertext, ownerMetadata: fields.ownerMetadata,
+                agentState: fields.agentState, share: null,
+                pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 1 }) } }
+            : { status: 404, data: {} });
+        client = new ApiSessionClient('startup-token', createMockSession({ id: sessionId, encryptionMode: 'plain',
+            metadataLayoutVersion: 1, metadata: { v: 1 }, pendingCount: 0, pendingVersion: 0 }), {
+            metadataAuthority: { kind: 'shared_editor' }, localMachineId: 'startup-machine',
+            durableMutationDeliveryInitiallyActive: false,
+            initialRegisteredSessionStateFieldMutations: [createInitialHostRuntimeActivityMutation({ sessionId,
+                agentRuntimeApplicability: 'supported' })],
+            transport: { serverId: 'startup-pending-home', serverUrl: 'https://startup-pending.example.test',
+                createSessionSocketTransport: () => ({ socket: socket as never, transport: createSocketTransportAdapter(socket as never) }) },
+        });
+        await vi.waitFor(() => expect(socket.getHandler('session')).toBeTypeOf('function'));
+        await expect(client.claimCurrentSessionPublisherAuthorityForStartup()).resolves.toEqual({ status: 'claimed' });
+        await client.refreshSessionSnapshotFromServerRequired({ reason: 'startup-drain' });
+        expect(client.getPendingQueueState()).toMatchObject({ pendingCount: 1, pendingVersion: 1 });
+        await client.activateDurableMutationDelivery();
+        const queue = new MessageQueue2<string>(() => 'startup');
+        client.onUserMessage(message => { queue.pushImmediate(message.content.text, 'startup'); return true; });
+        const consumer = createSessionProviderInputConsumer({ messageQueue: queue,
+            session: createSessionProviderInputConsumerSessionAdapter(client), reconcileWhenEmpty: 'skip', refreshBeforeQueuedBatch: false });
+        const lifetime = new AbortController();
+        try {
+            // No update event or pending-wake RPC is supplied. The first input
+            // pass must consume the canonical snapshot before it waits for a wake.
+            await expect(consumer.waitForNextInput({ abortSignal: lifetime.signal }))
+                .resolves.toMatchObject({ message: 'retained pending input', mode: 'startup' });
+        } finally { lifetime.abort(); }
     });
 
     it.each(['owner', 'shared_editor'] as const)('keeps an idle input waiter parked across unchanged layout-one snapshot reads (%s)', async authority => {
@@ -329,28 +383,37 @@ describe('ApiSessionClient injected transport', () => {
         }
     });
 
-    it('keeps the initial worker projection local and refreshes it only on the existing exact Session invalidation', async () => {
+    it('keeps worker projection reads local between connection and exact Session invalidations', async () => {
         const token = 'scoped-runtime-token';
         const serverUrl = 'https://runner-home.example.test';
         const socket = createApiSessionSocketStub({ connected: true });
+        mockIo.mockImplementation(() => socket);
+        const row = createSessionRecordFixture({ id: 'worker-session', encryptionMode: 'plain',
+            metadata: '{"v":1}', metadataVersion: 0, metadataLayoutVersion: 1,
+            share: { accessLevel: 'edit', canApprovePermissions: false },
+            manager: { sessionId: 'lead' }, origin: { kind: 'run_step' },
+            agentState: null, agentStateVersion: 0 });
+        vi.mocked(axios.get).mockImplementation(async url => String(url) === `${serverUrl}/v2/sessions/worker-session`
+            ? { status: 200, data: { session: row } } : { status: 404, data: {} });
         client = new ApiSessionClient(token, createMockSession({ id: 'worker-session', encryptionMode: 'plain',
-            metadataLayoutVersion: 1, reportsTo: { sessionId: 'lead' }, origin: { kind: 'run_step' } }), {
+            metadataLayoutVersion: 1, manager: { sessionId: 'lead' }, origin: { kind: 'run_step' } }), {
             metadataAuthority: { kind: 'shared_editor' },
             transport: { serverId: 'runner-home', serverUrl,
-                createSessionSocketTransport: () => ({ socket: socket as never, transport: createSocketTransportAdapter(socket as never) }),
+                createSessionSocketTransport: ({ sessionId, machineId }) => createSessionScopedSocketConnection({ token, sessionId, machineId, serverUrl }),
             },
         });
-        const row = { id: 'worker-session', seq: 0, createdAt: 1, updatedAt: 1, active: true, activeAt: 1,
-            encryptionMode: 'plain',
-            metadata: '{"v":1}', metadataVersion: 0, metadataLayoutVersion: 1,
-            share: { accessLevel: 'edit', canApprovePermissions: false }, dataEncryptionKey: null,
-            agentState: null, agentStateVersion: 0 };
         const release = publishServerHttpRuntimeOrigin('https://unrelated-home.example.test', 'https');
         try {
             await vi.waitFor(() => expect(socket.getHandler('session')).toBeTypeOf('function'));
-            await expect(client.readRolePromptOrganization()).resolves.toEqual({ reportsTo: { sessionId: 'lead' }, origin: { kind: 'run_step' } });
-            expect(vi.mocked(axios.get).mock.calls.some(([url]) => String(url).includes('/v2/sessions/worker-session'))).toBe(false);
-            vi.mocked(axios.get).mockResolvedValueOnce({ status: 200, data: { session: row } });
+            // Connection recovery is itself an invalidation. Settle its snapshot
+            // before checking that ordinary prompt reads use the accepted projection.
+            await client.refreshSessionSnapshotFromServerRequired({ reason: 'explicit-drain' });
+            const reads = vi.mocked(axios.get).mock.calls.length;
+            await expect(client.readRolePromptOrganization()).resolves.toEqual({ manager: { sessionId: 'lead' }, origin: { kind: 'run_step' } });
+            socket.trigger('session', { id: 'other-relation', createdAt: 1, body: { t: 'session-changed', sessionId: 'another-session' } });
+            expect(vi.mocked(axios.get).mock.calls).toHaveLength(reads);
+            delete row.manager;
+            delete row.origin;
             socket.trigger('session', { id: 'relation-detached', createdAt: 1, body: { t: 'session-changed', sessionId: 'worker-session' } });
             await expect(client.readRolePromptOrganization()).resolves.toEqual({});
             expect(axios.get).toHaveBeenCalledWith(`${serverUrl}/v2/sessions/worker-session`,

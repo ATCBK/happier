@@ -7,12 +7,24 @@ import { ApiClient } from '@/api/api';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import * as machineTransport from '@/session/transport/rpc/machineRpc';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { createProjectNativeEnvironmentIoForHost } from '@/plugins/runtime/invocation/services/exec';
 import { createProjectDefinitionAction, registerProjectDefinitionHandlers } from '@/rpc/handlers/projectDefinitions';
 import type { RpcHandlerContext } from '@/api/rpc/types';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { reloadConfiguration } from '@/configuration';
 import { updateSettings } from '@/persistence';
 import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
+import {
+  ExternalActionExecutionAuthorizationRequestV1Schema,
+  ExternalActionExecutionAuthorizationV1Schema,
+  ExternalActionMachineBootstrapV1Schema,
+  ExternalActionRequestEnvelopeV1Schema,
+  ExternalActionResponseEnvelopeV1Schema,
+  bindExternalActionExecutionAuthorizationHttpPathV1,
+} from '@happier-dev/protocol/actions/externalActionApi';
+import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
 
 import {
   type MachineLiveStreamFrameV1,
@@ -28,6 +40,7 @@ import type { LocalServiceListenerFact } from '../local/services/inventory/scann
 
 import type { MachineLiveStreamCaptureAdapter } from '../peer/mediation/stream/captureAdapter';
 import { createMachineLiveStreamCaptureRegistry } from '../peer/mediation/stream/captureRegistry';
+import { createMachineLiveStreamRelayTerminator } from '../peer/mediation/stream/relay';
 import type {
   AutomationWorkerHandle,
   startAutomationWorker,
@@ -66,6 +79,7 @@ const deviceLocalSecretStorage = {
 function createBaseRuntimeParams(overrides: Partial<Parameters<typeof createDaemonMachineBootstrapRuntime>[0]> = {}) {
   const workspaceSyncHandoffAdapter = {
     prepare: vi.fn(),
+    prepareBetween: vi.fn(),
     finalize: vi.fn(),
     commit: vi.fn(),
     abort: vi.fn(),
@@ -75,6 +89,7 @@ function createBaseRuntimeParams(overrides: Partial<Parameters<typeof createDaem
     api: {
       machineSyncClient: vi.fn(),
     } as never,
+    controlPort: 41233,
     credentials: {
       token: 'token',
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(7) },
@@ -86,6 +101,7 @@ function createBaseRuntimeParams(overrides: Partial<Parameters<typeof createDaem
     startupSource: 'manual',
     serviceLabel: undefined,
     transferRuntimeStatePublisher: null,
+    spawnSessionForInternalResume: vi.fn(),
     spawnSession: vi.fn(),
     stopSession: vi.fn(),
     awaitAgentSessionOpen: vi.fn(),
@@ -122,7 +138,7 @@ describe('createDaemonMachineBootstrapRuntime', () => {
       workspaceSyncHandoffAdapter: undefined,
     }));
     const apiMachine = await bootstrap.createConnectedApiMachine({ id: 'attachment-worker',
-      encryptionKey: new Uint8Array(32), encryptionVariant: 'legacy', encryptionMode: 'plain',
+      encryptionMode: 'plain',
       metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0,
     });
     if (!apiMachine) throw new Error('Missing actual Machine client');
@@ -132,7 +148,7 @@ describe('createDaemonMachineBootstrapRuntime', () => {
       serverId: 'home', machineId: 'attachment-worker', accountId: 'attachment-account', credentials,
       serverHttpBaseUrl: 'https://attachment-home.invalid', workerAdmission: admission,
       nativeIo: { resolveTool: async () => null }, resolveWorkspaceExecutionConfig: async () => null,
-      environmentIo: { resolveTool: async () => null, run: async () => { throw new Error('No native evaluation selected'); } },
+      environmentIo: createProjectNativeEnvironmentIoForHost({ resolveTool: async () => null }),
     }) });
     const events: string[] = [];
     let settleProcess!: () => void;
@@ -165,7 +181,10 @@ describe('createDaemonMachineBootstrapRuntime', () => {
           });
         },
       })).toMatchObject({ ok: true, result: { operation: { state: 'accepted' } } });
-      await expect.poll(async () => (await admission.load()).running).toBe(1);
+      await expect.poll(async () => {
+        const snapshot = await admission.load();
+        return snapshot.kind === 'known' ? snapshot.running : null;
+      }).toBe(1);
       // The failed handoff cleared the routing projection. Existing attempt
       // cleanup has not reached Api.shutdown because its peer stop is pending.
       attemptCleanup = retireMachineSyncRuntimeAttempt({ apiMachine, automationWorker: null,
@@ -205,7 +224,8 @@ describe('createDaemonMachineBootstrapRuntime', () => {
     const homeId = 'srv_sourceHome';
     const serverHttpBaseUrl = 'https://source-home.invalid';
     const accountId = 'source-account';
-    const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
+    const token = `header.${Buffer.from(JSON.stringify({ sub: accountId, tokenEpoch: 1,
+      provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.signature`;
     const credentials = { token, encryption: null, credentialProvenance: 'stored_session' as const };
     const source = { id: 'source-ref', serverId: homeId, machineId: 'source-machine', rootPath: root, projectKey: 'project', createdAtMs: 1 };
     let current = true;
@@ -214,6 +234,13 @@ describe('createDaemonMachineBootstrapRuntime', () => {
     let retireDuringReply = false;
     let malformedReply = false;
     let issued = 0;
+    const machinePublication = () => ExternalActionMachineBootstrapV1Schema.parse({
+      id: source.machineId, kind: 'persistent', active: true, installationId: 'source-installation',
+      revokedAt: null, replacedByMachineId: null, dataEncryptionKey: null, runnerContentKeyBinding: null,
+      ...(custodian === undefined ? {} : { access: {
+        custodian: { accountId: custodian, displayName: 'Source owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready',
+      } }),
+    });
     try {
       scope.patch({ HAPPIER_HOME_DIR: home, HAPPIER_ACTIVE_SERVER_ID: serverId });
       reloadConfiguration();
@@ -226,21 +253,19 @@ describe('createDaemonMachineBootstrapRuntime', () => {
       await writeFile(join(root, '.happier/project.json'), JSON.stringify({ version: 1,
         scripts: { check: { source: { kind: 'command', command: 'must-not-run' }, execution: 'portable',
           memoryDemand: { bytes: 123, basis: { kind: 'declared' } } } } }));
-      // Home HTTP and the exact Machine transport are genuine boundaries. The
-      // Machine decoder, Action executor/registrar and manifest reader stay real.
+      // Home HTTP is the boundary for original-Account admission and delivery.
+      // The Machine decoder, Action executor/registrar and manifest reader stay real.
       vi.spyOn(axios, 'get').mockImplementation(async (url, options) => {
         expect(url).toMatch(/^https:\/\/source-home\.invalid\//);
         expect(options?.headers?.Authorization).toBe(`Bearer ${token}`);
         if (url.endsWith('/v2/account/settings')) {
           return { status: 200, data: { content: { t: 'plain', v: {} }, version: 0 } };
         }
+        if (url.endsWith('/v1/machines')) return { status: 200, data: [machinePublication()] };
         if (url.endsWith(`/v1/machines/${source.machineId}`)) {
           if (retireDuringMachineRead) current = false;
           return { status: 200, data: { machine: {
-            id: source.machineId, metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0,
-            storageMode: 'plain', ...(custodian === undefined ? {} : { access: {
-              custodian: { accountId: custodian, displayName: 'Source owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready',
-            } }),
+            ...machinePublication(), storageMode: 'plain', metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0,
           } } };
         }
         return { status: 200, data: { mode: 'plain', updatedAt: 0 } };
@@ -248,23 +273,44 @@ describe('createDaemonMachineBootstrapRuntime', () => {
       const handlers = new Map<string, (input: unknown, context?: RpcHandlerContext) => Promise<unknown>>();
       registerProjectDefinitionHandlers({ machineId: source.machineId,
         rpcHandlerManager: { registerHandler: (method, handler) => { handlers.set(method, handler); } },
-        actionExecutor: createActionExecutor({ projectDefinitionAction: createProjectDefinitionAction({
-          serverId: homeId, machineId: source.machineId, workingDirectory: root,
+        actionExecutor: createActionExecutor({ ...createUnavailableActionTransportDeps(), projectDefinitionAction: createProjectDefinitionAction({
+          serverId, machineId: source.machineId, workingDirectory: root,
           accessPolicy: { kind: 'restrictedRoots', roots: [root] },
         }) }),
       });
-      vi.spyOn(machineTransport, 'callExactMachineRpc').mockImplementation(async request => {
+      vi.spyOn(axios, 'post').mockImplementation(async (url, body, options) => {
         expect(resolveServerHttpBaseUrl()).toBe(serverHttpBaseUrl);
-        expect(request.credentials).toEqual(credentials);
+        expect(options?.headers?.Authorization).toBe(`Bearer ${token}`);
+        const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
+        const envelope = ExternalActionRequestEnvelopeV1Schema.parse(request.envelope);
         expect(request.machineId).toBe(source.machineId);
-        expect(request.authorityCeiling).toBe('account_automation');
+        expect(envelope).toMatchObject({ target: { kind: 'machine', machineId: source.machineId },
+          input: { workspace: { serverId: expect.stringMatching(new RegExp(`^(${homeId}|${serverId})$`)),
+            workspaceId: source.id, machineId: source.machineId, rootPath: root } } });
+        if (url.endsWith(bindExternalActionExecutionAuthorizationHttpPathV1('projects.inspect'))) {
+          return { status: 200, data: ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1,
+            token: 'source-home-authorization', binding: { accountId, custodianAccountId: accountId,
+              authentication: { kind: 'account', tokenEpoch: 1 }, accountEncryptionMode: 'plain',
+              serverIdentityId: homeId, machineId: source.machineId, installationId: 'source-installation',
+              actionId: 'projects.inspect', requestId: envelope.requestId, target: envelope.target,
+              requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
+            } }) };
+        }
+        expect(url).toBe(`${serverHttpBaseUrl}/v1/actions/projects.inspect`);
+        expect(options?.headers?.[AUTHORITY_CEILING_HEADER_V1]).toBe('account_automation');
+        expect(request.executionAuthorization?.binding).toMatchObject({ serverIdentityId: homeId,
+          accountId, machineId: source.machineId, installationId: 'source-installation' });
         issued++;
-        const handler = handlers.get(request.method);
+        const handler = handlers.get('daemon.projects.inspect.v1');
         if (!handler) throw new Error('Wrong source Action transport');
-        const result = await handler(request.request, { signal: request.signal ?? new AbortController().signal });
+        const result = await handler(envelope.input, { signal });
         if (retireDuringReply) current = false;
-        return malformedReply ? { definition: result, detection: {}, extraAuthority: true } : result;
+        return { status: 200, data: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'projects.inspect',
+          requestId: envelope.requestId, execution: { ok: true,
+            result: malformedReply ? { definition: result, detection: {}, extraAuthority: true } : result,
+          } }) };
       });
+      vi.spyOn(machineTransport, 'callExactMachineRpc').mockRejectedValue(new Error('Source inspection must use Home admission'));
       vi.spyOn(machineTransport, 'callMachineRpc').mockRejectedValue(new Error('Source inspection must not retarget'));
       const inspect = createProjectFiniteSourceManifestInspector({ api: await ApiClient.create(credentials),
         credentials, serverId, serverHttpBaseUrl, accountId,
@@ -274,9 +320,14 @@ describe('createDaemonMachineBootstrapRuntime', () => {
         scripts: { check: { execution: 'portable', memoryDemand: { bytes: 123 } } },
       } } });
       expect(issued).toBe(1);
+      expect(await inspect({ source: { ...source, serverId }, signal })).toMatchObject({ document: { status: 'valid' } });
+      expect(issued).toBe(2);
       for (const scenario of ['ambiguous', 'retired'] as const) {
-        await updateSettings(settings => ({ ...settings, servers: scenario === 'ambiguous'
-          ? { [serverId]: profile, duplicate: { ...profile, id: 'duplicate' } } : {} }));
+        await updateSettings(settings => {
+          const servers: Record<string, typeof profile> = scenario === 'ambiguous'
+            ? { [serverId]: profile, duplicate: { ...profile, id: 'duplicate' } } : {};
+          return { ...settings, servers };
+        });
         await expect(inspect({ source, signal })).rejects.toMatchObject({ code: 'target_mismatch' });
       }
       await updateSettings(settings => ({ ...settings, servers: { [serverId]: profile } }));
@@ -288,11 +339,11 @@ describe('createDaemonMachineBootstrapRuntime', () => {
       await expect(inspect({ source: { ...source, serverId: 'wrong-home' }, signal })).rejects.toMatchObject({ code: 'target_mismatch' });
       current = false;
       await expect(inspect({ source, signal })).rejects.toMatchObject({ code: 'project_requester_credentials_unavailable' });
-      expect(issued).toBe(1);
+      expect(issued).toBe(2);
       current = true;
       retireDuringMachineRead = true;
       await expect(inspect({ source, signal })).rejects.toMatchObject({ code: 'project_requester_credentials_unavailable' });
-      expect(issued).toBe(1);
+      expect(issued).toBe(2);
       retireDuringMachineRead = false;
       current = true;
       malformedReply = true;
@@ -533,7 +584,11 @@ describe('createDaemonMachineBootstrapRuntime', () => {
     }
   });
 
-  it.each([undefined, 'false'])('wires bootstrap inference into Machine RPC with local override %s without loading models', async (override) => {
+  it.each([
+    { override: undefined, forwardWorker: true },
+    { override: 'false', forwardWorker: true },
+    { override: undefined, forwardWorker: false },
+  ])('wires bootstrap inference into Machine RPC with local override $override and forwarding $forwardWorker without loading models', async ({ override, forwardWorker }) => {
     const home = await mkdtemp(join(tmpdir(), 'daemon-inference-default-'));
     const envScope = createEnvKeyScope([
       'HAPPIER_HOME_DIR', 'HAPPIER_FEATURE_POLICY_ENV', 'HAPPIER_BUILD_FEATURES_ALLOW',
@@ -563,17 +618,17 @@ describe('createDaemonMachineBootstrapRuntime', () => {
     try {
       worker = await runtime.startVoiceInferenceWorkerForMachine('inference-machine', 'inference-account');
       apiMachine = await runtime.createConnectedApiMachine({
-        id: 'inference-machine', encryptionKey: new Uint8Array(32), encryptionVariant: 'legacy',
+        id: 'inference-machine',
         encryptionMode: 'plain', metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0,
       });
       if (!apiMachine) throw new Error('Missing Machine client');
       apiMachine.setRPCHandlers({
         spawnSession: async () => ({ type: 'success', sessionId: 'unused' }),
         stopSession: async () => true, requestShutdown() {},
-        ...(worker ? { voiceInference: worker } : {}),
-      });
-      if (override === undefined) {
-        expect(worker).not.toBeNull();
+        ...(worker && forwardWorker ? { voiceInference: worker } : {}),
+      }, { getServerFeaturesSnapshot: () => ({ status: 'ready', features }) });
+      expect(worker === null).toBe(override === 'false');
+      if (override === undefined && forwardWorker) {
         const response = DaemonVoiceInferenceStatusResponseSchema.parse(
           await apiMachine.invokeLocalMachineAction(RPC_METHODS.DAEMON_VOICE_INFERENCE_STATUS, {}),
         );
@@ -582,7 +637,6 @@ describe('createDaemonMachineBootstrapRuntime', () => {
         expect(response.models.every(model => model.installState === 'not_installed')).toBe(true);
         expect(worker!.readProcessRoots()).toEqual([]);
       } else {
-        expect(worker).toBeNull();
         await expect(apiMachine.invokeLocalMachineAction(RPC_METHODS.DAEMON_VOICE_INFERENCE_STATUS, {}))
           .resolves.toMatchObject({ errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND });
       }
@@ -608,6 +662,7 @@ describe('createDaemonMachineBootstrapRuntime', () => {
     const isShuttingDown = vi.fn(() => false);
     const workspaceSyncHandoffAdapter = {
       prepare: vi.fn(),
+      prepareBetween: vi.fn(),
       finalize: vi.fn(),
       commit: vi.fn(),
       abort: vi.fn(),
@@ -640,17 +695,18 @@ describe('createDaemonMachineBootstrapRuntime', () => {
       daemonStateVersion: 0,
     };
 
-    runtime.createConnectedApiMachine(machine);
+    await runtime.createConnectedApiMachine(machine);
 
     expect(machineSyncClient).toHaveBeenCalledWith(
       machine,
       expect.not.objectContaining({ isDaemonQuiescing: expect.any(Function) }),
-      {
+      expect.objectContaining({
+        controlPort: 41233,
         isDaemonQuiescing: isShuttingDown,
         workspaceSyncHandoffAdapter,
         workspaceSync,
         resolveServerFeaturesSnapshot: expect.any(Function),
-      },
+      }),
     );
     const lifecycleDependencies = machineSyncClient.mock.calls[0]?.[2];
     await expect(lifecycleDependencies?.resolveServerFeaturesSnapshot?.()).resolves.toBe(serverFeaturesSnapshot);
@@ -662,6 +718,7 @@ describe('createDaemonMachineBootstrapRuntime', () => {
     const machineSyncClient = vi.fn(() => ({ updateDaemonState }));
     const handoffAdapter = {
       prepare: vi.fn(),
+      prepareBetween: vi.fn(),
       finalize: vi.fn(),
       commit: vi.fn(),
       abort: vi.fn(),
@@ -822,6 +879,7 @@ describe('createDaemonMachineBootstrapRuntime', () => {
 
   it('publishes the worker to shutdown ownership before downstream bootstrap can continue', async () => {
     const worker: AutomationWorkerHandle = {
+      liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
       stop: vi.fn(),
       refreshAssignments: vi.fn(async () => {}),
       pause: vi.fn(),
@@ -836,7 +894,7 @@ describe('createDaemonMachineBootstrapRuntime', () => {
       },
     }));
 
-    const startedWorker = runtime.startAutomationWorkerForMachine('machine_1');
+    const startedWorker = await runtime.startAutomationWorkerForMachine('machine_1');
     expect(startedWorker).toBe(worker);
     expect(shutdownOwnedWorker).toBe(worker);
 
@@ -889,8 +947,12 @@ describe('createDaemonMachineBootstrapRuntime', () => {
     }));
 
     await runtime.createConnectedApiMachine({ id: 'machine_1' } as never);
-    runtime.startAutomationWorkerForMachine('machine_1');
+    await runtime.startAutomationWorkerForMachine('machine_1');
 
+    const workerParams = automationWorkerMocks.startAutomationWorker.mock.calls.at(-1)?.[0] as
+      | Parameters<typeof startAutomationWorker>[0]
+      | undefined;
+    await expect(workerParams?.coordinateWorkflowRun?.({} as never)).resolves.toBeUndefined();
     expect(createWorkflowRunCoordinatorForMachine).toHaveBeenCalledWith({
       machineId: 'machine_1',
       machineAdmissionTransport: expect.any(Function),
@@ -899,10 +961,6 @@ describe('createDaemonMachineBootstrapRuntime', () => {
         invoke: expect.any(Function),
       },
     });
-    const workerParams = automationWorkerMocks.startAutomationWorker.mock.calls.at(-1)?.[0] as
-      | Parameters<typeof startAutomationWorker>[0]
-      | undefined;
-    await expect(workerParams?.coordinateWorkflowRun?.({} as never)).resolves.toBeUndefined();
     expect(coordinateWorkflowRun).toHaveBeenCalledOnce();
   });
 
@@ -952,7 +1010,7 @@ describe('createDaemonMachineBootstrapRuntime', () => {
     });
 
     await runtime.createConnectedApiMachine({ id: 'machine_1' } as never);
-    runtime.startAutomationWorkerForMachine('machine_1');
+    await runtime.startAutomationWorkerForMachine('machine_1');
     const workerParams = automationWorkerMocks.startAutomationWorker.mock.calls.at(-1)?.[0] as
       | Parameters<typeof startAutomationWorker>[0]
       | undefined;
@@ -1067,5 +1125,34 @@ describe('createDaemonMachineBootstrapRuntime', () => {
 
     expect(result).toMatchObject({ ok: true });
     expect(offeredFrames.map((frame) => frame.sequence)).toEqual([1]);
+  });
+
+  it('carries admitted Browser input policy through the production bootstrap adapter into the relay', async () => {
+    const registry = createMachineLiveStreamCaptureRegistry();
+    let receivedText = '';
+    registry.register({ sourceId: 'browser-source', streamFamily: 'browser.streamed',
+      capabilities: { v: 1, sourceId: 'browser-source', sourceKind: 'browser', supportedCodecs: ['image.mjpeg'],
+        inputMode: 'shared', sidebands: [], health: { status: 'available' } },
+      adapter: { start: async () => ({ ok: true, session: { stop: () => undefined,
+        applySidebandControl: control => { if (control.kind === 'keyboard_text') receivedText += control.text; return { ok: true }; },
+      } }) },
+    });
+    const runtime = createDaemonMachineBootstrapRuntime(createBaseRuntimeParams({ liveStreamCaptureRegistry: registry }));
+    const relay = createMachineLiveStreamRelayTerminator({ machineId: 'machine_source',
+      captureAdapter: runtime.peerMediationMachineRpc?.stream?.captureAdapter, nowMs: () => 1_000, emitEnvelope: () => undefined });
+    try {
+      expect(await relay.start({ v: 1, streamId: 'stream', streamFamily: 'browser.streamed', sourceId: 'browser-source',
+        sourceMachineId: 'machine_source', targetMachineId: 'machine_target', routeKind: 'server_relay',
+        authorization: { payload: { v: 1, grantId: 'grant', accountId: 'account', flowKind: 'live_stream',
+          routeKind: 'server_relay', sourceMachineId: 'machine_source', targetMachineId: 'machine_target', streamId: 'stream',
+          streamFamily: 'browser.streamed', sourceId: 'browser-source', iat: 1_000, exp: 61_000,
+          aud: 'happier-live-stream-relay-authorization' }, signature: { keyId: 'key', alg: 'Ed25519', valueBase64Url: 'AQID' } },
+      }, 'present_user')).toEqual({ ok: true, streamId: 'stream' });
+      expect(relay.applyControl({ v: 1, sourceMachineId: 'machine_source', targetMachineId: 'machine_target',
+        message: { kind: 'sideband_control', control: { v: 1, streamId: 'stream', sourceId: 'browser-source',
+          eventId: 'typing', kind: 'keyboard_text', text: 'HUMAN' } },
+      })).toEqual({ ok: true });
+      expect(receivedText).toBe('HUMAN');
+    } finally { await relay.dispose(); }
   });
 });

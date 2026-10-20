@@ -8,7 +8,9 @@ import { createHomeCredentialDestinationV1, isHomeCredentialDestinationAllowedV1
 import type { HomeCredentialDestinationV1 } from '@happier-dev/protocol';
 import type { ResolvedHomeTarget } from '@happier-dev/cli-common/homeTarget';
 
-import { configuration } from '@/configuration';
+import { fetchAccountEncryptionCurrentnessFromServer } from '@/api/client/connectedServiceCredentialApi';
+import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { readStoredCredentials, readStoredCredentialsForServerId, type StoredCredentials } from '@/persistence';
 import { getServerProfile } from '@/server/serverProfiles';
 import { acquireTerminalAuthEnrollmentRuntime } from '@/auth/terminalAuthEnrollmentRuntime';
@@ -196,6 +198,7 @@ export type SealedProvisioningResponseKind = 'tokenOnly' | 'dataKey';
 function sealProvisioningMaterial(params: Readonly<{
   recipientPublicKey: Uint8Array;
   creds: StoredCredentials;
+  currentness: AccountEncryptionCurrentnessResponse;
   pairing: TerminalPairingAuthentication;
   supportsTokenOnly: boolean;
 }>): Readonly<{ kind: SealedProvisioningResponseKind; response: string }> {
@@ -207,15 +210,10 @@ function sealProvisioningMaterial(params: Readonly<{
     randomBytes: (length: number) => new Uint8Array(randomBytes(length)),
   } as const;
 
-  // One canonical material decision, owned by the shared protocol variant
-  // policy through the CLI provisioning-material resolver. The CLI supplies
-  // only its authoritative persisted credential shape as resolver inputs;
-  // the requester's token-only capability is compatibility admission below
-  // and never a mode authority. Keyed credentials — data-key or legacy
-  // recovery-secret — resolve the same canonical Account content private key.
+  // The authenticated Account mode selects the material; requester support is admission only.
   let material: TerminalProvisioningMaterial;
   try {
-    material = resolveTerminalProvisioningMaterial(params.creds);
+    material = resolveTerminalProvisioningMaterial(params.creds, params.currentness);
   } catch {
     throw new TerminalProvisioningMaterialInvalidError();
   }
@@ -267,13 +265,6 @@ export async function approveTerminalAuthRequest(params: Readonly<{
     // v3 response, so a requester without pairing context cannot be served.
     throw new TerminalPairingContextRequiredError();
   }
-  const material = sealProvisioningMaterial({
-    recipientPublicKey: recipientPk,
-    creds,
-    pairing,
-    supportsTokenOnly: params.supportsTokenOnly === true,
-  });
-
   const acquired = params.target?.descriptor
     ? await acquireTerminalAuthEnrollmentRuntime(
         params.target.descriptor,
@@ -286,7 +277,7 @@ export async function approveTerminalAuthRequest(params: Readonly<{
   }
   const runtimeOrigin = acquired?.ok
     ? acquired.runtime.runtimeOrigin
-    : params.target?.applicationUrl ?? configuration.apiServerUrl;
+    : params.target?.applicationUrl ?? resolveServerHttpBaseUrl();
   try {
     if (acquired?.ok && params.target) {
       const selectedDestination = acquired.runtime.authenticatedCredentialDestination;
@@ -304,6 +295,14 @@ export async function approveTerminalAuthRequest(params: Readonly<{
         throw new Error('The explicit remote Home route changed identity before approval. No approval was sent.');
       }
     }
+    const currentness = await fetchAccountEncryptionCurrentnessFromServer({
+      token: creds.token, serverBaseUrl: runtimeOrigin, allowCredentialRecovery: false,
+      ...(params.signal ? { signal: params.signal } : {}),
+    });
+    const material = sealProvisioningMaterial({
+      recipientPublicKey: recipientPk, creds, currentness,
+      pairing, supportsTokenOnly: params.supportsTokenOnly === true,
+    });
     try {
       await axios.post(
         `${runtimeOrigin}/v1/auth/response`,

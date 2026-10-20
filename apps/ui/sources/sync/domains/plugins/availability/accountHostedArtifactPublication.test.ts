@@ -9,6 +9,9 @@ vi.mock('@/sync/api/plugins/availability/activePluginAccountHostedArtifactRead',
     createActivePluginAccountHostedArtifactSourceCandidate: (input: unknown) => (
         activeAccountHostedArtifact.createSource(input)
     ),
+    createActivePluginAccountHostedArtifactTargetSourceCandidate: (input: unknown) => (
+        activeAccountHostedArtifact.createSource(input)
+    ),
     publishActivePluginAccountHostedArtifact: (input: unknown) => (
         activeAccountHostedArtifact.publish(input)
     ),
@@ -26,6 +29,7 @@ import {
 } from '@happier-dev/protocol/plugins/availability';
 
 import { encodeBase64 } from '@/encryption/base64';
+import { createPluginReactNativeBundleCache } from '@/components/plugins/reactNative/bundleCache';
 import type {
     DaemonPluginUiArtifactBytesReadResponse,
 } from '@happier-dev/protocol';
@@ -38,6 +42,8 @@ import {
     type PluginAccountAvailabilitySnapshot,
 } from './reader';
 import { acquirePluginReactNativeArtifactLease } from './reactNativeArtifactLease';
+import { createPluginReactNativeArtifactAvailabilityProducer } from './reactNativeArtifactAvailability';
+import { publishVerifiedPluginArtifactToAccountHosting } from './accountHostedArtifactPublication';
 
 const scope = { serverId: 'server-a', accountId: 'account-a' } as const;
 
@@ -228,12 +234,18 @@ function fixture(input: Readonly<{
     };
 }
 
-async function acquireFromDaemon(current: ReturnType<typeof fixture>) {
+async function acquireFromDaemon(
+    current: ReturnType<typeof fixture>,
+    signal?: AbortSignal,
+    accountHostingSignal?: AbortSignal,
+) {
     return await acquirePluginReactNativeArtifactLease({
         reader: current.reader,
         artifactGraph: current.graph,
         cacheIdentity: current.cacheIdentity,
         accountLifetime,
+        ...(signal ? { signal } : {}),
+        ...(accountHostingSignal ? { accountHostingSignal } : {}),
         appExact: inactiveAppExactSource,
         daemon: { machineId: current.origin.materializationRef.machineId, serverId: scope.serverId },
         fetchDaemonArtifactBytes: async () => current.daemonResponse,
@@ -241,6 +253,126 @@ async function acquireFromDaemon(current: ReturnType<typeof fixture>) {
 }
 
 describe('Account-hosted plugin UI Artifact publication', () => {
+    it('materializes RN bytes while hosting is pending and retains its snapshot after consumer disposal', async () => {
+        const current = fixture();
+        const cache = createPluginReactNativeBundleCache();
+        const producer = createPluginReactNativeArtifactAvailabilityProducer({
+            getCache: () => cache,
+            appExact: inactiveAppExactSource,
+            fetchDaemonArtifactBytes: async () => current.daemonResponse,
+        });
+        const acquisitionController = new AbortController();
+        const mountController = new AbortController();
+        let finishPublication = () => {};
+        let uploadedFiles: readonly Readonly<{ relativePath: string; bytes: Uint8Array }>[] = [];
+        activeAccountHostedArtifact.publish.mockImplementation((input: Readonly<{
+            files: typeof uploadedFiles;
+        }>) => new Promise((resolve) => {
+            finishPublication = () => {
+                uploadedFiles = input.files;
+                resolve({ kind: 'published', value: { outcome: 'created' } });
+            };
+        }));
+        let settled = false;
+        const acquisition = producer.acquire({
+            reader: current.reader,
+            artifactGraph: current.graph,
+            cacheIdentity: current.cacheIdentity,
+            accountLifetime,
+            daemon: { machineId: current.origin.materializationRef.machineId, serverId: scope.serverId },
+            signal: acquisitionController.signal,
+            accountHostingSignal: mountController.signal,
+            isCurrent: () => true,
+        }).then((result) => {
+            settled = true;
+            return result;
+        });
+        try {
+            await vi.waitFor(() => expect(settled).toBe(true));
+        } catch (error) {
+            // Release the boundary even on RED; a failed assertion must not
+            // leave an unresolved publication in the test process.
+            finishPublication();
+            throw error;
+        }
+        const acquired = await acquisition;
+        expect(acquired.kind).toBe('available');
+        if (acquired.kind !== 'available') return;
+        expect(cache.readInstalledArtifact(current.cacheIdentity)?.bytes).toEqual(current.entryBytes);
+        acquired.dispose();
+        acquisitionController.abort();
+        expect(activeAccountHostedArtifact.publish.mock.calls[0]?.[0]).toHaveProperty('signal', mountController.signal);
+        expect(mountController.signal.aborted).toBe(false);
+        finishPublication();
+        await expect(acquired.accountHosting).resolves.toMatchObject({ kind: 'published' });
+        expect(uploadedFiles).toEqual([{ relativePath: current.entryPath, bytes: current.entryBytes }]);
+    });
+
+    it('reports an optional hosting failure separately from the available verified lease', async () => {
+        activeAccountHostedArtifact.publish.mockResolvedValue({ kind: 'unavailable', code: 'transport_unavailable' });
+
+        const acquired = await acquireFromDaemon(fixture());
+
+        expect(acquired.kind).toBe('available');
+        if (acquired.kind !== 'available') return;
+        await expect(acquired.accountHosting).resolves.toEqual({ kind: 'unavailable', code: 'transport_unavailable' });
+        expect(acquired.lease.isCurrent()).toBe(true);
+        acquired.lease.dispose();
+    });
+
+    it.each(['before reading', 'while reading'] as const)('does not start publication when cancelled %s verified files', async (phase) => {
+        const acquired = await acquireFromDaemon(fixture({ offlineUiHosting: 'disabled' }));
+        expect(acquired.kind).toBe('available');
+        if (acquired.kind !== 'available') return;
+        const controller = new AbortController();
+        if (phase === 'before reading') controller.abort();
+
+        const publication = publishVerifiedPluginArtifactToAccountHosting({
+            reader: fixture().reader,
+            accountLifetime,
+            lease: acquired.lease,
+            signal: controller.signal,
+        });
+        // readFile is a real async lease read; cancelling here precedes its
+        // continuation without replacing the Artifact owner's internal logic.
+        if (phase === 'while reading') controller.abort();
+        await publication;
+
+        expect(activeAccountHostedArtifact.publish).not.toHaveBeenCalled();
+        acquired.lease.dispose();
+    });
+
+    it('settles acquisition when its caller cancels an in-flight optional publication', async () => {
+        const current = fixture();
+        const controller = new AbortController();
+        let publicationStarted = () => {};
+        const started = new Promise<void>((resolve) => { publicationStarted = resolve; });
+        // The publisher is the network boundary: its request remains pending
+        // until the acquisition's existing cancellation signal reaches it.
+        activeAccountHostedArtifact.publish.mockImplementation((input: Readonly<{ signal?: AbortSignal }>) => (
+            new Promise((resolve) => {
+                const cancelled = () => resolve({ kind: 'unavailable', code: 'operation_cancelled' });
+                if (input.signal?.aborted) cancelled();
+                else input.signal?.addEventListener('abort', cancelled, { once: true });
+                publicationStarted();
+            })
+        ));
+        let settled = false;
+        const acquisition = acquireFromDaemon(current, controller.signal).then((result) => {
+            settled = true;
+            return result;
+        });
+        await started;
+
+        controller.abort();
+
+        await vi.waitFor(() => expect(settled).toBe(true));
+        const acquired = await acquisition;
+        expect(acquired.kind).toBe('available');
+        if (acquired.kind !== 'available') return;
+        await expect(acquired.accountHosting).resolves.toMatchObject({ kind: 'unavailable', code: 'operation_cancelled' });
+    });
+
     it('publishes the verified daemon archive for an opted-in slot that has no committed link', async () => {
         const current = fixture();
 

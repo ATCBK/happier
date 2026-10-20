@@ -1063,6 +1063,16 @@ describe('Plugin UI Data client', () => {
         });
         expect(transport.mock.calls.some(([path]) => path === '/v1/plugins/data/mutate')).toBe(false);
     });
+    it('keeps the exact compiled reader refusal visible to a bundled plugin UI', async () => {
+        const { client, transport } = await loadClient({
+            collectionContractRead: () => new Response(JSON.stringify({ error: 'collection_update_required' }), {
+                status: 409, headers: { 'Content-Type': 'application/json' },
+            }),
+        });
+        await expect(client.collection(collectionDefinition).limits()).rejects.toMatchObject({ code: 'collection_update_required' });
+        expect(transport.mock.calls.some(([path]) => path === '/v1/plugins/data/mutate')).toBe(false);
+    });
+
     it('hands a plugin UI the same typed quota incompatibility a daemon plugin receives', async () => {
         const { client } = await loadClient({
             mutationResponse: () => new Response(JSON.stringify({

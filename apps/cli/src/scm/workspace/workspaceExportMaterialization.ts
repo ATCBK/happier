@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { access, readFile, readdir, realpath, rename, rm, rmdir } from 'node:fs/promises';
 import { basename, dirname, join, parse, resolve } from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import type { ScmBackendRegistry } from '../registry';
@@ -65,28 +65,28 @@ export type WorkspaceTargetMaterializationReceiptV1 = Readonly<{
     removalTargetName?: string;
 }>;
 
-const WorkerCopyCreationSchema = z.object({
-    serverId: z.string().min(1).refine(value => value === value.trim()),
-    relationshipId: z.string().min(1).refine(value => value === value.trim()),
-    sourceWorkspaceRefId: z.string().min(1).refine(value => value === value.trim()),
-    targetWorkspaceRefId: z.string().min(1).refine(value => value === value.trim()),
-}).strict().refine(value => value.sourceWorkspaceRefId !== value.targetWorkspaceRefId);
+const WorkerCopyCreationSchema = z.strictObject({
+    serverId: z.string().check(z.minLength(1), z.refine(value => value === value.trim())),
+    relationshipId: z.string().check(z.minLength(1), z.refine(value => value === value.trim())),
+    sourceWorkspaceRefId: z.string().check(z.minLength(1), z.refine(value => value === value.trim())),
+    targetWorkspaceRefId: z.string().check(z.minLength(1), z.refine(value => value === value.trim())),
+}).check(z.refine(value => value.sourceWorkspaceRefId !== value.targetWorkspaceRefId));
 
-const CommittedTargetSchema = z.object({
-    canonicalRoot: z.string().refine(value => value === resolve(value)),
-    rootFingerprint: z.string().regex(/^[a-f0-9]{64}$/u),
-}).strict();
-const RemovalTargetNameSchema = z.string().regex(/^\.happier-sync-backup\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu);
-const MaterializationReceiptSchema = z.object({
+const CommittedTargetSchema = z.strictObject({
+    canonicalRoot: z.string().check(z.refine(value => value === resolve(value))),
+    rootFingerprint: z.string().check(z.regex(/^[a-f0-9]{64}$/u)),
+});
+const RemovalTargetNameSchema = z.string().check(z.regex(/^\.happier-sync-backup\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu));
+const MaterializationReceiptSchema = z.strictObject({
     v: z.literal(1),
-    previousTargetName: z.string().nullable(),
-    originalTargetIdentity: WorkspaceSyncRootObjectIdentityV1Schema.nullable(),
-    promotedTargetIdentity: WorkspaceSyncRootObjectIdentityV1Schema.nullable(),
-    expectedBackupIdentity: WorkspaceSyncRootObjectIdentityV1Schema.nullable(),
-    workerCopyCreation: WorkerCopyCreationSchema.optional(),
-    committed: CommittedTargetSchema.optional(),
-    removalTargetName: RemovalTargetNameSchema.optional(),
-}).strict();
+    previousTargetName: z.nullable(z.string()),
+    originalTargetIdentity: z.nullable(WorkspaceSyncRootObjectIdentityV1Schema),
+    promotedTargetIdentity: z.nullable(WorkspaceSyncRootObjectIdentityV1Schema),
+    expectedBackupIdentity: z.nullable(WorkspaceSyncRootObjectIdentityV1Schema),
+    workerCopyCreation: z.optional(WorkerCopyCreationSchema),
+    committed: z.optional(CommittedTargetSchema),
+    removalTargetName: z.optional(RemovalTargetNameSchema),
+});
 const StoredMaterializationReceiptSchema = createStoredReadSchema(MaterializationReceiptSchema);
 
 export type WorkspaceExportMaterializationCustody = Readonly<{
@@ -244,6 +244,76 @@ async function resolveWorkspaceExportMaterializationTargetPath(params: Readonly<
     return await resolveWorkspaceMaterializationTargetPath(params);
 }
 
+/**
+ * The one rollback for a not-yet-committed materialization, shared by the live
+ * custody and the one rebuilt from its receipt. Only the object this custody
+ * left at the target (the bound promotion, or the original before anything
+ * replaced it) is ever removed; anything else stays for manual recovery.
+ * Rollback before the promotion was bound therefore restores the backup, or
+ * the absence, without touching a foreign object.
+ */
+async function rollbackMaterializedTarget(input: Readonly<{
+    targetPath: string;
+    previousTargetPath?: string;
+    receipt: WorkspaceTargetMaterializationReceiptV1;
+    receiptPath?: string;
+}>): Promise<void> {
+    const { receipt } = input;
+    const currentTargetIdentity = await readObjectIdentityOrAbsent(input.targetPath);
+    if (currentTargetIdentity) {
+        const expectedTargetIdentity = receipt.promotedTargetIdentity ?? receipt.originalTargetIdentity;
+        if (!expectedTargetIdentity
+            || !workspaceSyncRootObjectIdentitiesEqual(currentTargetIdentity, expectedTargetIdentity)) {
+            throw materializationRecoveryError('Target pathname is occupied by another filesystem object');
+        }
+    }
+    if (input.previousTargetPath) {
+        if (!receipt.expectedBackupIdentity) {
+            throw materializationRecoveryError('Backup identity is unavailable');
+        }
+        await assertObjectIdentity(input.previousTargetPath, receipt.expectedBackupIdentity);
+    }
+    if (currentTargetIdentity) {
+        await rm(input.targetPath, { recursive: true, force: true });
+    }
+    if (input.previousTargetPath) {
+        await rename(input.previousTargetPath, input.targetPath);
+    }
+    if (input.receiptPath) await rm(input.receiptPath, { force: true });
+}
+
+/**
+ * Rolls a failed materialization back and reports the failure that caused it.
+ * A rollback that itself needs manual recovery keeps its typed code, but never
+ * replaces the original failure's message.
+ */
+export async function abortWorkspaceTargetMaterializationAfterFailure(
+    custody: Pick<WorkspaceExportMaterializationCustody, 'abort'> | undefined,
+    failure: unknown,
+): Promise<void> {
+    try {
+        await custody?.abort();
+    } catch (rollbackError) {
+        const rollbackCode = (rollbackError as { code?: unknown }).code;
+        throw Object.assign(
+            new AggregateError(
+                [failure, rollbackError],
+                failure instanceof Error
+                    ? failure.message
+                    : rollbackError instanceof Error
+                        ? rollbackError.message
+                        : 'Workspace target rollback requires manual recovery',
+                { cause: failure },
+            ),
+            {
+                code: typeof rollbackCode === 'string'
+                    ? rollbackCode
+                    : 'workspace_target_materialization_manual_recovery',
+            },
+        );
+    }
+}
+
 export async function beginWorkspaceTargetMaterialization(input: Readonly<{
     targetPath: string;
     backupDirectoryPrefix: string;
@@ -357,21 +427,12 @@ export async function beginWorkspaceTargetMaterialization(input: Readonly<{
         },
         abort: async () => {
             if (settled) return;
-            if (!receipt.promotedTargetIdentity) {
-                throw materializationRecoveryError('Promoted target identity was not bound');
-            }
-            await assertObjectIdentity(input.targetPath, receipt.promotedTargetIdentity);
-            if (previousTargetPath) {
-                if (!receipt.expectedBackupIdentity) {
-                    throw materializationRecoveryError('Backup identity is unavailable');
-                }
-                await assertObjectIdentity(previousTargetPath, receipt.expectedBackupIdentity);
-            }
-            await rm(input.targetPath, { recursive: true, force: true });
-            if (previousTargetPath) {
-                await rename(previousTargetPath, input.targetPath);
-            }
-            if (input.receiptPath) await rm(input.receiptPath, { force: true });
+            await rollbackMaterializedTarget({
+                targetPath: input.targetPath,
+                ...(previousTargetPath ? { previousTargetPath } : {}),
+                receipt,
+                ...(input.receiptPath ? { receiptPath: input.receiptPath } : {}),
+            });
             settled = true;
         },
     });
@@ -475,27 +536,12 @@ export async function rehydrateWorkspaceTargetMaterialization(input: Readonly<{
         },
         abort: async () => {
             if (settled) return;
-            const currentTargetIdentity = await readObjectIdentityOrAbsent(targetPath);
-            if (currentTargetIdentity) {
-                const expectedTargetIdentity = validatedReceipt.promotedTargetIdentity ?? validatedReceipt.originalTargetIdentity;
-                if (!expectedTargetIdentity
-                    || !workspaceSyncRootObjectIdentitiesEqual(currentTargetIdentity, expectedTargetIdentity)) {
-                    throw materializationRecoveryError('Target pathname is occupied by another filesystem object');
-                }
-            }
-            if (previousTargetPath) {
-                if (!validatedReceipt.expectedBackupIdentity) {
-                    throw materializationRecoveryError('Backup identity is unavailable');
-                }
-                await assertObjectIdentity(previousTargetPath, validatedReceipt.expectedBackupIdentity);
-            }
-            if (currentTargetIdentity) {
-                await rm(targetPath, { recursive: true, force: true });
-            }
-            if (previousTargetPath) {
-                await rename(previousTargetPath, targetPath);
-            }
-            if (input.receiptPath) await rm(input.receiptPath, { force: true });
+            await rollbackMaterializedTarget({
+                targetPath,
+                ...(previousTargetPath ? { previousTargetPath } : {}),
+                receipt: validatedReceipt,
+                ...(input.receiptPath ? { receiptPath: input.receiptPath } : {}),
+            });
             settled = true;
         },
     });
@@ -714,31 +760,10 @@ export async function materializeWorkspaceExportArtifactsWithScmWorkspace(params
         });
         await params.assertCanContinue?.();
     } catch (error) {
-        let rollbackError: unknown;
-        try {
-            await targetMaterialization?.custody.abort();
-        } catch (cause) {
-            rollbackError = cause;
-        }
+        const rollback = await abortWorkspaceTargetMaterializationAfterFailure(targetMaterialization?.custody, error)
+            .then(() => undefined, (rollbackFailure: unknown) => rollbackFailure);
         await cleanupWorkspaceStaging({ rootDirectory: stagingRoot.rootDirectory }).catch(() => undefined);
-        if (rollbackError !== undefined) {
-            const rollbackCode = (rollbackError as { code?: unknown }).code;
-            throw Object.assign(
-                new AggregateError(
-                    [error, rollbackError],
-                    rollbackError instanceof Error
-                        ? rollbackError.message
-                        : 'Workspace target rollback requires manual recovery',
-                    { cause: error },
-                ),
-                {
-                    code: typeof rollbackCode === 'string'
-                        ? rollbackCode
-                        : 'workspace_target_materialization_manual_recovery',
-                },
-            );
-        }
-        throw error;
+        throw rollback ?? error;
     }
 
     await cleanupWorkspaceStaging({ rootDirectory: stagingRoot.rootDirectory }).catch(() => undefined);

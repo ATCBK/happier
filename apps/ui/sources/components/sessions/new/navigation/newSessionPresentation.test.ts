@@ -6,6 +6,7 @@ import {
     resolveNewSessionSecretRequirementRoutePresentation,
     resolveNewSessionRoutePresentation,
     resolveNewSessionShouldBottomAnchor,
+    resolveNewSessionWebModalStyle,
 } from './newSessionPresentation';
 
 describe('new session route presentation', () => {
@@ -83,8 +84,13 @@ describe('new session route presentation', () => {
             .toBe('modal');
     });
 
-    it('keeps web on the modal presentation Expo Router renders as its own drawer', () => {
+    it('floats the simple composer on web too, with no route card or sheet (owner 2026-10-18)', () => {
         expect(resolveNewSessionRoutePresentation({ mode: 'auto', variant: 'simple', platformOs: 'web' }))
+            .toBe('transparentModal');
+        expect(isNewSessionFloatingComposerPresentation({ mode: 'modal', variant: 'simple', platformOs: 'web' }))
+            .toBe(true);
+        // The wizard is a scrolling form and keeps its sheet.
+        expect(resolveNewSessionRoutePresentation({ mode: 'auto', variant: 'wizard', platformOs: 'web' }))
             .toBe('modal');
     });
 
@@ -124,5 +130,17 @@ describe('new session route presentation', () => {
             platformOs: 'desktop',
             isMobileLayoutWidth: false,
         })).toBe(true);
+    });
+
+    it('gives the wizard a card of its own height on the web, where a route modal otherwise sizes to its content', () => {
+        // The wizard is a scrolling form above its composer: in a content-sized card its form
+        // collapses to nothing and only the composer shows.
+        expect(resolveNewSessionWebModalStyle({ mode: 'auto', variant: 'wizard', platformOs: 'web' }))
+            .toEqual({ height: 'var(--happier-route-modal-max-height)' });
+        expect(resolveNewSessionWebModalStyle({ mode: 'modal', variant: 'wizard', platformOs: 'web' }))
+            .toEqual({ height: 'var(--happier-route-modal-max-height)' });
+        expect(resolveNewSessionWebModalStyle({ mode: 'auto', variant: 'simple', platformOs: 'web' })).toBeUndefined();
+        expect(resolveNewSessionWebModalStyle({ mode: 'screen', variant: 'wizard', platformOs: 'web' })).toBeUndefined();
+        expect(resolveNewSessionWebModalStyle({ mode: 'auto', variant: 'wizard', platformOs: 'ios' })).toBeUndefined();
     });
 });

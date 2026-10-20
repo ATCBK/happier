@@ -16,6 +16,7 @@ import { usageOtherColor, usageSignatureAccent } from '../usageAccent';
 import { formatUsageCalendarDate, resolveUsageShownCalendarRange } from '@/sync/domains/usage/usageCalendarPresentation';
 import { usageCostKindPhrase, usagePageCostTrend } from '../usageCostPresentation';
 import { useUsageDrill } from '../usageDrill';
+import { useUsageChartDetails } from './usageMountedControls';
 import {
   fillUsageMixCalendar,
   fillUsageTrendCalendar,
@@ -36,19 +37,29 @@ import {
   useUsagePluginTheme,
   type UsageBodyProps,
   UsageBodyNoUsage,
-  isUsageReadOutstanding,
+  resolveUsageChartPlotPx,
+  USAGE_CHART_FRAME_PX,
 } from './usageBodyKit';
 
-/** Room the peak figure, axis, legend and a one-line coverage note take around the plot in a sized frame. */
-const CHROME_PX = 84;
+const CHROME_PX = USAGE_CHART_FRAME_PX.chrome;
+
+/** Only a roomy, full-size Daily draws the peak figure above its plot; a phone and a compact card do not. */
+function dailyShowsPeak(phone: boolean, compact: boolean): boolean {
+  return !phone && !compact;
+}
+
 /**
- * Below this width the legend's "Show all" and the coverage note each wrap onto a second line (a Board
- * rail is ~315 px wide), which the plot has to leave room for or the last line is cut by the frame.
+ * Daily's plot height and the room its settled chart holds. A compact card (Small, Wide) fits its one row; every
+ * other size draws the declared plot (`resolveUsageChartPlotPx`), so a tall cell keeps the chart's height and
+ * leaves its own space empty. The plot's floor leaves the peak figure's room inside the 120 px a plot keeps, so a
+ * Medium card still holds the legend and the coverage note.
  */
-const NARROW_FRAME_PX = 420;
-const NARROW_CHROME_PX = 52;
-/** What a settled Daily body measures in a narrow frame (a phone: the 140 px plot, its axis and legend), held while it reads. */
-const SETTLED_NARROW_BODY_PX = 184;
+export function resolveUsageDailyChartShape(presentation: ReturnType<typeof useWidgetPresentation>, phone: boolean): Readonly<{ kind: 'chart'; plotPx: number; peak: boolean }> {
+  if (presentation?.size === 'small' || presentation?.size === 'wide')
+    return { kind: 'chart', plotPx: Math.max(1, (presentation.geometry?.height ?? 96) - CHROME_PX / 2), peak: false };
+  const peak = dailyShowsPeak(phone, false);
+  return { kind: 'chart', peak, plotPx: resolveUsageChartPlotPx(presentation?.geometry, phone ? 140 : 120 - USAGE_CHART_FRAME_PX.peak, { peak }) };
+}
 
 /**
  * "Daily usage": the period's buckets stacked by Agent when per-Agent tokens are known, otherwise one
@@ -213,23 +224,17 @@ export function UsageDailyWidget(props: UsageBodyProps) {
   // read answers, and the legend says it then. The chart's own label (for assistive technology) names the split.
   useWidgetFrameBodyCaption(measure);
   const caption = byAgent ? `${metric === 'cost' ? t('usage.cost') : t('usage.tokens')} ${t('usage.board.page.byAgent')} · ${usagePeriodPhrase(props.query)}` : measure;
-  if (!view || count === 0) {
-    const noUsage = <UsageBodyNoUsage slice={props.slice} testID={props.testID} />;
-    const narrow = presentation?.size !== 'small' && presentation?.size !== 'wide'
-      && (presentation?.geometry?.width ?? NARROW_FRAME_PX) < NARROW_FRAME_PX;
-    return narrow && isUsageReadOutstanding(props.slice, ['accounting'])
-      ? <View testID={`${props.testID}.reading`} style={{ minHeight: SETTLED_NARROW_BODY_PX }}>{noUsage}</View>
-      : noUsage;
-  }
+  const details = useUsageChartDetails(t(`usage.widgets.${props.id}`), Boolean(view && count > 0));
   const compact = presentation?.size === 'small' || presentation?.size === 'wide';
-  const chromePx = CHROME_PX + ((presentation?.geometry?.width ?? NARROW_FRAME_PX) < NARROW_FRAME_PX ? NARROW_CHROME_PX : 0);
-  const height = compact ? Math.max(1, (presentation?.geometry?.height ?? 96) - CHROME_PX / 2) : Math.max(
-    phone ? 140 : 120,
-    (presentation?.geometry?.height ?? 260) - chromePx,
-  );
+  const shape = resolveUsageDailyChartShape(presentation, phone);
+  const height = shape.plotPx;
+  if (!view || count === 0)
+    // Until the first read answers, the body holds the settled chart's shape (its plot, axis and legend room).
+    return <UsageBodyNoUsage slice={props.slice} testID={props.testID} readingShape={shape} onRetry={props.model.refresh} />;
   return (
     <View style={{ gap: theme.space.s10 }} testID={`${props.testID}.daily`}>
       <StackedSeriesChart
+        {...details}
         testID={`${props.testID}.chart`}
         theme={chartTheme}
         label={caption}
@@ -246,7 +251,7 @@ export function UsageDailyWidget(props: UsageBodyProps) {
         showGrid
         showScaleValues
         scaleGutter={44}
-        showPeakValue={!phone && !compact}
+        showPeakValue={dailyShowsPeak(phone, compact)}
         showLegend={!compact && series.length > 1}
         {...dailyContext}
         {...motion}

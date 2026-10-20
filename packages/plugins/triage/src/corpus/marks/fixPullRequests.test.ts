@@ -10,6 +10,7 @@ import {
 } from '../testkit/corpusCollections.test-support.js';
 import { testkitEntryRef, testkitLocator } from '../testkit/observations.test-support.js';
 import { linkEntryToSession } from '../../sessions/entrySessionLinks.js';
+import { readTriageSessionLinksPageV1 } from '../../sessions/readEntrySessionLinks.js';
 import {
     readFixPullRequestSources,
     resolveFixPullRequests,
@@ -65,6 +66,69 @@ async function resolve(
 }
 
 describe('fix pull request links', () => {
+    it('retains a fix PR after more than one relation page of distinct non-PR siblings', async () => {
+        const fixture = createTestkitCorpusCollections();
+        await link(fixture, ERROR_REF, 'session-a', 1);
+        await link(fixture, ERROR_REF, 'session-b', 2);
+        const sessions = await readTriageSessionLinksPageV1(fixture.collections.sessionLinks, { relation: { entryRef: ERROR_REF } });
+        const firstSession = sessions.links[0]!.sessionId;
+        const laterSession = sessions.links[1]!.sessionId;
+        for (const [sessionId, count] of [[firstSession, MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1 - 1], [laterSession, 110]] as const) {
+            for (let index = 0; index < count; index += 1) {
+                await link(fixture, { ...GITHUB_ISSUE, entryId: `${sessionId}-${index}` }, sessionId, 10 + index);
+            }
+        }
+        const pr = githubPr('late-fix');
+        await link(fixture, pr, laterSession, 1_000);
+        const later = await readTriageSessionLinksPageV1(fixture.collections.sessionLinks, { relation: { sessionId: laterSession } });
+        expect(later.nextCursor).toBeUndefined();
+        // The fixture puts at least 200 non-PR entries before this PR across
+        // the two complete relation pages, so filtering after a total cap loses it.
+        expect(later.links.filter((sibling) => sibling.entryRef.kindId !== 'error-group')[0]?.entryRef.kindId).toBe('issue');
+
+        const sources = await readFixPullRequestSources({ collections: fixture.collections, entryRef: ERROR_REF });
+        const resolved = await readTriageFixPullRequests({ v: 1, entryRef: ERROR_REF }, {
+            collections: fixture.collections, nowMs: () => 1_100,
+            projection: { workflowSubjectOf, presentationOf: () => null },
+        });
+        expect(resolved.candidates).toEqual([expect.objectContaining({ entryRef: pr, origins: ['session'] })]);
+        expect(sources.coLinked).toHaveLength(MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1 + 110);
+        expect(sources.incomplete).toBe(false);
+        const firstSibling = sources.coLinked[0]!;
+        await link(fixture, firstSibling.entryRef, laterSession, 1_900);
+        const repeated = await readFixPullRequestSources({ collections: fixture.collections, entryRef: ERROR_REF });
+        expect(repeated.coLinked.map((entry) => entry.entryRef)).toEqual(sources.coLinked.map((entry) => entry.entryRef));
+        expect(repeated.coLinked[0]?.linkedAtMs).toBe(1_900);
+
+        // A duplicate relation is one candidate, and durable choice still
+        // outranks a newer derived link of the same lifecycle state.
+        await link(fixture, ERROR_REF, 'session-duplicate', 2_000);
+        await link(fixture, pr, 'session-duplicate', 2_001);
+        const duplicates = await readFixPullRequestSources({ collections: fixture.collections, entryRef: ERROR_REF });
+        expect(duplicates.coLinked.filter((entry) => entry.entryRef.kindId === 'pull-request'))
+            .toEqual([expect.objectContaining({ entryRef: pr, linkedAtMs: 2_001 })]);
+        const explicit = githubPr('explicit-fix');
+        await setFixPullRequest({ collections: fixture.collections, entryRef: ERROR_REF, displayAtMark: ERROR_DISPLAY,
+            linked: true, fixPullRequest: explicit, displayAtLink: ERROR_DISPLAY, nowMs: 500 });
+        expect((await resolve(fixture)).candidates.map((candidate) => candidate.entryRef)).toEqual([explicit, pr]);
+        expect((await resolve(fixture)).incomplete).toBe(false);
+        await setFixPullRequest({ collections: fixture.collections, entryRef: ERROR_REF, displayAtMark: ERROR_DISPLAY,
+            linked: false, fixPullRequest: pr, nowMs: 3_000 });
+        expect((await resolve(fixture)).candidates.map((candidate) => candidate.entryRef)).toEqual([explicit]);
+
+        // The real Collection query boundary still cuts one relation at its
+        // page size, and the reader discloses the missing suffix without walking it.
+        await link(fixture, { ...GITHUB_ISSUE, entryId: 'beyond-relation-page' }, firstSession, 4_000);
+        const firstPage = await readTriageSessionLinksPageV1(fixture.collections.sessionLinks, { relation: { sessionId: firstSession } });
+        expect(firstPage.nextCursor).toBeDefined();
+        const suffix = await readTriageSessionLinksPageV1(fixture.collections.sessionLinks, {
+            relation: { sessionId: firstSession }, cursor: firstPage.nextCursor,
+        });
+        const incomplete = await readFixPullRequestSources({ collections: fixture.collections, entryRef: ERROR_REF });
+        expect(incomplete.incomplete).toBe(true);
+        expect(incomplete.coLinked.map((entry) => entry.entryRef)).not.toContainEqual(suffix.links[0]!.entryRef);
+    });
+
     it('returns every durable explicit choice rather than applying the relationship query page to intent', async () => {
         const fixture = createTestkitCorpusCollections();
         const choices = 2 * MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1 + 1;

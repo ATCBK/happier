@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
@@ -14,6 +15,13 @@ import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/
 import { openAskHappierDraft, openBlankAskHappierDraft } from './happierGuideDraft';
 import { openNewBotDraft } from './newBotDraft';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { CurrentUiContextProvider, useOptionalCurrentUiContextReader } from '@/components/appShell/currentUiContext/CurrentUiContextProvider';
+import { CurrentUiContextActionHost } from '@/components/appShell/currentUiContext/currentUiContextVoiceToolPort';
+import { MainAppTabStateProvider } from '@/components/navigation/mobile/chrome/MainAppTabStateProvider';
+import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
+import { useAskHappierOpener } from './useAskHappierOffer';
+import { InjectedAuthProvider } from '@/auth/context/AuthContext';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
 
 const navigation = vi.hoisted(() => ({ push: vi.fn() }));
 const userConfirmation = vi.hoisted(() => vi.fn(async () => true));
@@ -51,6 +59,25 @@ async function prepare(handleRequest?: (path: string, init?: RequestInit) => Pro
 }
 
 describe('Ask Happier ordinary authoring', () => {
+    it('captures the mounted screen for an Ask opener reparented outside its React provider', async () => {
+        const { home: fixture, lifetime } = await prepare();
+        const credentials = await TokenStorage.getCredentialsForServerUrl(fixture.home.serverUrl);
+        const host = await renderHook(() => useOptionalCurrentUiContextReader(), {
+            wrapper: ({ children }) => React.createElement(InjectedAuthProvider, { credentials, children: React.createElement(MainAppTabStateProvider, null,
+                React.createElement(AppPaneProvider, null, React.createElement(CurrentUiContextProvider, null,
+                    React.createElement(CurrentUiContextActionHost), children))) }),
+        });
+        const captured = host.getCurrent()?.readCurrentUiContext();
+        expect(captured).toBeTruthy();
+        const opener = await renderHook(() => useAskHappierOpener());
+        const result = await opener.getCurrent()();
+        expect(result.kind).toBe('opened');
+        if (result.kind !== 'opened') throw new Error('Expected the ordinary Ask draft');
+        const draft = readNewSessionDraftFromRepository({ scope: lifetime.scope, draftId: result.draftId });
+        expect(draft?.input).toBe('');
+        expect(draft?.composerAttachmentSeeds?.[0]?.value.value).toEqual(captured);
+        await host.unmount();
+    });
     it('refuses authenticated authoring without its mounted approval custodian before creating a document or draft', async () => {
         const { home: f, lifetime } = await prepare();
         expect(await openAskHappierDraft({ lifetime })).toMatchObject({ kind: 'unavailable', reason: 'client_unavailable', guideRef: null });
@@ -135,7 +162,13 @@ describe('Ask Happier ordinary authoring', () => {
             promptStack: [{ id: 'session.instructions', ref: { kind: 'doc', artifactId: rows[0]!.id, serverId: lifetime.scope.serverId }, required: true }] });
         const draft = readNewSessionDraftFromRepository({ scope: lifetime.scope, draftId: result.draftId });
         expect(draft?.input).toContain('Selected notes');
-        expect(draft?.input).toContain('machines');
+        expect(draft?.input).not.toContain('Current Happier screen');
+        expect(draft?.input).not.toContain('"navigation"');
+        expect(draft?.composerAttachmentSeeds).toHaveLength(1);
+        expect(draft?.composerAttachmentSeeds?.[0]).toMatchObject({
+            pluginId: 'happier.app-context', attachmentLocalId: 'current-screen',
+            value: { value: { navigation: { area: 'settings', screen: 'machines' }, commands: [] } },
+        });
         expect(draft?.input).not.toContain('Later notes');
         expect(draft?.input).not.toContain('"screen":"later"');
         if (!draft) throw new Error('Expected persisted draft');
@@ -170,21 +203,9 @@ describe('Ask Happier ordinary authoring', () => {
     });
 
     it('retains the created reference and canonical draft after navigation fails', async () => {
-        const confirmationRequested = createDeferred<void>();
-        const confirmation = createDeferred<boolean>();
-        userConfirmation.mockImplementationOnce(async () => {
-            confirmationRequested.resolve(undefined);
-            return await confirmation.promise;
-        });
         const { home: f, lifetime, executeAction } = await prepare();
         navigation.push.mockImplementation(() => { throw new Error('Router unavailable'); });
-        const pending = openAskHappierDraft({ lifetime, executeAction });
-        // The native Alert stub cannot answer the default UI confirmation itself.
-        await confirmationRequested.promise;
-        expect(f.boundary.list()).toEqual([]);
-        expect(navigation.push).not.toHaveBeenCalled();
-        confirmation.resolve(true);
-        const result = await pending;
+        const result = await openAskHappierDraft({ lifetime, executeAction });
         expect(result).toMatchObject({ kind: 'unavailable', reason: 'navigation_unavailable', guideRef: { artifactId: expect.any(String) } });
         const route = navigation.push.mock.calls[0]?.[0] as { params: { draftId: string } };
         expect(readNewSessionDraftFromRepository({ scope: lifetime.scope, draftId: route.params.draftId })).toMatchObject({ sessionName: 'Happier', promptStack: [{ ref: result.guideRef }] });
@@ -198,6 +219,5 @@ describe('Ask Happier ordinary authoring', () => {
         expect(retried.guideRef).toEqual(result.guideRef);
         expect(f.boundary.list()).toHaveLength(1);
         expect(navigation.push).toHaveBeenCalledTimes(1);
-        expect(userConfirmation).toHaveBeenCalledTimes(1);
     });
 });

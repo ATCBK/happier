@@ -19,8 +19,6 @@ import { DaemonLocalServicePreviewOpenOrCreateRequestV1Schema } from '@happier-d
  * now resolves through a real daemon owner rather than `local_services_runtime_action_unbacked`.
  */
 
-const PREVIEW_TARGET_PREFIX = 'preview:';
-
 /**
  * Launcher feed history (recents) store. Records launch-target ids the launcher has surfaced as
  * recents and supports clearing them; the feed consults {@link isDismissed} so cleared entries
@@ -128,7 +126,8 @@ export function createLocalServiceLauncherLeafRoutes(input: Readonly<{
                     reasonCode: target.unavailableReason ?? 'launcher_target_unavailable',
                 };
             }
-            if (target.sourceClass?.kind === 'managed_service') {
+            if (target.sourceClass?.kind === 'managed_service' || target.sourceClass?.kind === 'inventory_entry'
+                || target.sourceClass?.kind === 'registered_preview') {
                 const opened = await registerTargetPreview(target, request, context?.signal, context);
                 if (opened.status === 'unavailable' || !opened.browserTarget) return {
                     protocolVersion: 1, status: 'unavailable', targetId: target.id,
@@ -170,16 +169,6 @@ export function createLocalServiceLauncherLeafRoutes(input: Readonly<{
                 };
             }
             const { target } = resolved;
-            // Already a registered preview target → idempotent existing.
-            if (target.source === 'registered_preview' && target.id.startsWith(PREVIEW_TARGET_PREFIX)) {
-                return {
-                    protocolVersion: 1,
-                    status: 'existing',
-                    targetId: target.id,
-                    previewId: target.id.slice(PREVIEW_TARGET_PREFIX.length),
-                    ...(target.browserTarget ? { browserTarget: target.browserTarget } : {}),
-                };
-            }
             return registerTargetPreview(target, request, signal, context);
         },
 
@@ -204,7 +193,9 @@ export function createLocalServiceLauncherLeafRoutes(input: Readonly<{
             ? { machineId: input.machineId, serviceTarget: { kind: 'managed_service', machineId: target.machineId,
                 managedServiceId: source.managedServiceId, workspaceId: target.workspaceId, declaration: target.declaration, cwd: target.cwd } }
             : source?.kind === 'inventory_entry' ? { machineId: input.machineId,
-                ...(request.sessionId ? { sessionId: request.sessionId } : {}), inventoryEntryId: source.inventoryEntryId } : null);
+                ...(request.sessionId ? { sessionId: request.sessionId } : {}), inventoryEntryId: source.inventoryEntryId }
+                : source?.kind === 'registered_preview' ? { machineId: input.machineId,
+                    ...(target.sessionId ? { sessionId: target.sessionId } : {}), launchTargetId: source.previewId } : null);
         if (!parsed.success) return { protocolVersion: 1, status: 'unavailable', targetId: target.id, reasonCode: 'preview_target_unregisterable' };
         const result = await input.previewRoutes.openOrCreate(parsed.data, signal, context);
         if (!result.ok) return { protocolVersion: 1, status: 'unavailable', targetId: target.id, reasonCode: result.reasonCode };

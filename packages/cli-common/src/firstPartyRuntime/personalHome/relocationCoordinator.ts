@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
+import { z } from 'zod/mini';
 
 import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
 import type { HomeConnectionDescriptorV1 } from '@happier-dev/protocol';
@@ -405,7 +406,7 @@ async function returnStagedRelocationToSource(
   marker: SourceMarker,
   intent: 'explicit_return' | 'automatic_rollback',
 ): Promise<PersonalHomeRelocationSourceResult> {
-  const current = HomeConnectionDescriptorV1Schema.nullable().parse(
+  const current = z.nullable(HomeConnectionDescriptorV1Schema).parse(
     await params.readPublishedDescriptor(params.homeServerIdentityId),
   );
   // A signal cannot prove that a concurrent/lost publication did not transfer
@@ -465,7 +466,7 @@ export async function coordinatePersonalHomeRelocation(
     const { destinationTransferCleanupNeedsAttention: _attention, ...cleanedMarker } = marker;
     await writeSourceMarker(params.sourceDataDir, cleanedMarker);
     marker = cleanedMarker;
-    const current = HomeConnectionDescriptorV1Schema.nullable().parse(
+    const current = z.nullable(HomeConnectionDescriptorV1Schema).parse(
       await params.readPublishedDescriptor(params.homeServerIdentityId),
     );
     if (!current || !descriptorMatchesSource(current, marker.sourceDescriptor)) {
@@ -489,7 +490,7 @@ export async function coordinatePersonalHomeRelocation(
     if (destinationPreflight.status !== 'absent') {
       throw new Error('Relocation destination is not empty and available for this operation.');
     }
-    const sourceDescriptor = HomeConnectionDescriptorV1Schema.nullable().parse(
+    const sourceDescriptor = z.nullable(HomeConnectionDescriptorV1Schema).parse(
       await params.readPublishedDescriptor(params.homeServerIdentityId),
     );
     throwIfRelocationCancelled(params);
@@ -579,7 +580,7 @@ export async function coordinatePersonalHomeRelocation(
   let returnRecovery = params.recoveryAction === 'return_to_source' || cancellationRequested;
   if (marker.phase === 'source_reserved') {
     if (returnRecovery && destinationStatus.status === 'absent') {
-      const current = HomeConnectionDescriptorV1Schema.nullable().parse(
+      const current = z.nullable(HomeConnectionDescriptorV1Schema).parse(
         await params.readPublishedDescriptor(params.homeServerIdentityId),
       );
       if (!current || !descriptorMatchesSource(current, marker.sourceDescriptor)) {
@@ -739,7 +740,7 @@ export async function coordinatePersonalHomeRelocation(
 
   if (returnRecovery) {
     if (marker.phase === 'returned_to_source') {
-      const current = HomeConnectionDescriptorV1Schema.nullable().parse(
+      const current = z.nullable(HomeConnectionDescriptorV1Schema).parse(
         await params.readPublishedDescriptor(params.homeServerIdentityId),
       );
       if (!current || !descriptorMatchesSource(current, marker.sourceDescriptor)) {
@@ -794,7 +795,7 @@ export async function coordinatePersonalHomeRelocation(
     // Fresh readback below is the sole authority for deciding whether cutover
     // may continue; neither Home is activated from a missing response.
   }
-  const readback = HomeConnectionDescriptorV1Schema.nullable().parse(
+  const readback = z.nullable(HomeConnectionDescriptorV1Schema).parse(
     await params.readPublishedDescriptor(params.homeServerIdentityId),
   );
   const authoritative = descriptorMatchesDestination(readback, staged) ? readback : null;

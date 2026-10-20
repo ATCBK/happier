@@ -144,8 +144,14 @@ describe('example tiles, as a browser lays them out', () => {
             }
         }
         expect(cards).toBeGreaterThan(4);
+        const mapFrames = [...layout.rects].filter(([id]) => id.includes(':flow-node-')).flatMap(([, rects]) => rects);
         for (const text of mapTexts) {
-            for (const rect of layout.textRects(text)) {
+            // An example title can repeat its step's name. Only the map's own
+            // text belongs to these assertions, not the card heading above it.
+            const mapTextRects = layout.textRects(text).filter(rect => mapFrames.some(frame =>
+                rect.top >= frame.top && rect.top < frame.bottom && rect.left >= frame.left && rect.left < frame.right));
+            expect(mapTextRects.length, text).toBeGreaterThan(0);
+            for (const rect of mapTextRects) {
                 // A label is read whole: never cut to "Review tests and ed…" (DESIGN-9 P5).
                 expect(rect.clipped, text).toBe(false);
                 // Node labels and a fork's lane count are regular-weight words; only a fork's own title is bold

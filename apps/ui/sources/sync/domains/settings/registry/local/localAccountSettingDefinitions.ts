@@ -4,12 +4,11 @@ import { MachineAdministrationTargetsV1Schema } from '@happier-dev/protocol/acco
 import { SessionDraftAddressV1Schema } from '@happier-dev/protocol/drafts/sessionDrafts';
 import { buildSettingArtifacts } from '@happier-dev/protocol/settings/registry/buildSettingArtifacts';
 import { defineSettingDefinitions } from '@happier-dev/protocol/settings/registry/settingDefinition';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import * as zMini from 'zod/mini';
 import { createStoredReadSchema, defineStoredReadProjection } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { normalizeAccountSettingsServerSelection } from '@/sync/domains/settings/parse/accountSettingsServerSelectionNormalization';
-import { SessionSplitCanvasLayoutsSchema } from '@/sync/domains/session/sessionSplitCanvasPersistence';
 
 const NewSessionAgentPickerViewV1BackendSchema = z.object({
     kind: z.literal('backend'),
@@ -20,7 +19,7 @@ const NewSessionAgentPickerViewV1FavoriteModelsSchema = z.object({
     kind: z.literal('favoriteModels'),
 });
 
-export const NewSessionAgentPickerViewV1Schema = z.preprocess((value) => {
+export const NewSessionAgentPickerViewV1Schema = (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     const record = value as Record<string, unknown>;
     if (record.kind === 'favoriteModels') return { kind: 'favoriteModels' };
@@ -31,17 +30,14 @@ export const NewSessionAgentPickerViewV1Schema = z.preprocess((value) => {
         };
     }
     return null;
-}, z.union([
+}), z._default(z.nullable(z.union([
     NewSessionAgentPickerViewV1BackendSchema,
     NewSessionAgentPickerViewV1FavoriteModelsSchema,
-]).nullable().default(null));
+])), null));
 
 export type NewSessionAgentPickerViewV1 = z.infer<typeof NewSessionAgentPickerViewV1Schema>;
 
-export const NewSessionOrdinaryEntryDraftIdSchema = z.string().refine(
-    (draftId) => SessionDraftAddressV1Schema.safeParse({ kind: 'newSession', draftId }).success,
-    'Expected a canonical new-session draft UUID',
-);
+export const NewSessionOrdinaryEntryDraftIdSchema = z.string().check(z.refine((draftId) => SessionDraftAddressV1Schema.safeParse({ kind: 'newSession', draftId }).success, 'Expected a canonical new-session draft UUID'));
 
 function normalizeLastUsedBackendTarget(value: unknown, storedRead = false) {
     if (value === null || value === undefined) return null;
@@ -65,15 +61,15 @@ function normalizeLastUsedBackendTarget(value: unknown, storedRead = false) {
 }
 
 const LastUsedBackendTargetSchema = defineStoredReadProjection(
-    z.preprocess((value) => normalizeLastUsedBackendTarget(value), zMini.nullable(PersistedBackendTargetRefV2Schema)),
-    () => z.preprocess((value) => normalizeLastUsedBackendTarget(value, true), zMini.nullable(createStoredReadSchema(PersistedBackendTargetRefV2Schema))),
+    (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => normalizeLastUsedBackendTarget(value)), zMini.nullable(PersistedBackendTargetRefV2Schema)),
+    () => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => normalizeLastUsedBackendTarget(value, true)), zMini.nullable(createStoredReadSchema(PersistedBackendTargetRefV2Schema))),
 );
 
 export const ServerSelectionGroupSchema = z.object({
-    id: z.string().min(1),
-    name: z.string().min(1).max(100),
-    serverIds: z.array(z.string()).default([]),
-    presentation: z.enum(['grouped', 'flat-with-badge']).default('grouped'),
+    id: z.string().check(z.minLength(1)),
+    name: z.string().check(z.minLength(1), z.maxLength(100)),
+    serverIds: z._default(z.array(z.string()), []),
+    presentation: z._default(z.enum(['grouped', 'flat-with-badge']), 'grouped'),
 });
 
 /**
@@ -82,12 +78,6 @@ export const ServerSelectionGroupSchema = z.object({
  * be emitted by account-settings writers.
  */
 const localAccountSettingInputs = {
-    sessionSplitCanvasLayoutsV1: {
-        schema: SessionSplitCanvasLayoutsSchema,
-        default: {},
-        description: 'Session split geometry on this device, scoped to the Account and Home',
-        storageScope: 'local',
-    },
     machineAdministrationTargetsLocalV1: {
         schema: MachineAdministrationTargetsV1Schema,
         default: {},
@@ -95,7 +85,7 @@ const localAccountSettingInputs = {
         storageScope: 'local',
     },
     lastUsedAgent: {
-        schema: z.string().nullable(),
+        schema: z.nullable(z.string()),
         default: null,
         description: 'Last selected agent type for new sessions',
         storageScope: 'local',
@@ -113,7 +103,7 @@ const localAccountSettingInputs = {
         storageScope: 'local',
     },
     newSessionOrdinaryEntryDraftId: {
-        schema: NewSessionOrdinaryEntryDraftIdSchema.nullable(),
+        schema: z.nullable(NewSessionOrdinaryEntryDraftIdSchema),
         default: null,
         description: 'Ordinary-entry new-session draft identity for this device and Account/server scope',
         storageScope: 'local',
@@ -125,13 +115,13 @@ const localAccountSettingInputs = {
         storageScope: 'local',
     },
     serverSelectionActiveTargetKind: {
-        schema: z.enum(['server', 'group']).nullable(),
+        schema: z.nullable(z.enum(['server', 'group'])),
         default: null,
         description: 'Explicit active server selection target kind',
         storageScope: 'local',
     },
     serverSelectionActiveTargetId: {
-        schema: z.string().nullable(),
+        schema: z.nullable(z.string()),
         default: null,
         description: 'Explicit active server selection target id',
         storageScope: 'local',
@@ -155,7 +145,6 @@ export const LOCAL_ACCOUNT_SETTING_DEFINITIONS: ReturnType<typeof defineSettingD
 export const LOCAL_ACCOUNT_SETTING_ARTIFACTS: ReturnType<typeof buildSettingArtifacts<typeof LOCAL_ACCOUNT_SETTING_DEFINITIONS>> = buildSettingArtifacts(LOCAL_ACCOUNT_SETTING_DEFINITIONS);
 
 export const LOCAL_ACCOUNT_SETTING_KEYS = [
-    'sessionSplitCanvasLayoutsV1',
     'machineAdministrationTargetsLocalV1',
     'lastUsedAgent',
     'lastUsedBackendTarget',
@@ -171,12 +160,12 @@ export const LOCAL_ACCOUNT_SETTING_KEYS = [
 export type LocalAccountSettingKey = typeof LOCAL_ACCOUNT_SETTING_KEYS[number];
 export type LocalAccountSettings = typeof LOCAL_ACCOUNT_SETTING_ARTIFACTS.defaults;
 
-function parseLocalSetting<TSchema extends z.ZodTypeAny>(
-    definition: Readonly<{ schema: TSchema; default: z.input<TSchema> }>,
+function parseLocalSetting<TSchema extends zMini.core.$ZodType>(
+    definition: Readonly<{ schema: TSchema; default: zMini.core.input<TSchema> }>,
     value: unknown,
-): z.output<TSchema> {
-    const parsed = createStoredReadSchema(definition.schema).safeParse(value);
-    return parsed.success ? parsed.data : definition.schema.parse(definition.default);
+): zMini.core.output<TSchema> {
+    const parsed = zMini.safeParse(createStoredReadSchema(definition.schema), value);
+    return parsed.success ? parsed.data : zMini.parse(definition.schema, definition.default);
 }
 
 /** Parse field-by-field so one stale device value does not discard the rest of the local state. */
@@ -186,7 +175,6 @@ export function parseLocalAccountSettings(input: unknown): LocalAccountSettings 
         : {};
     const definitions = LOCAL_ACCOUNT_SETTING_DEFINITIONS;
     const parsed = {
-        sessionSplitCanvasLayoutsV1: parseLocalSetting(definitions.sessionSplitCanvasLayoutsV1, record.sessionSplitCanvasLayoutsV1),
         machineAdministrationTargetsLocalV1: parseLocalSetting(definitions.machineAdministrationTargetsLocalV1, record.machineAdministrationTargetsLocalV1),
         lastUsedAgent: parseLocalSetting(definitions.lastUsedAgent, record.lastUsedAgent),
         lastUsedBackendTarget: parseLocalSetting(definitions.lastUsedBackendTarget, record.lastUsedBackendTarget),

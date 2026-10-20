@@ -74,11 +74,16 @@ export async function bindPromptAssetContributionBlocks(params: Readonly<{
         if (!params.resources?.hasPlugin(request.resourcePluginId)) {
           return failResource('Prompt asset resource occurrence is unavailable');
         }
-        const service = params.resources.bind({
+        const service = await params.resources.bindForResource({
           pluginId: request.resourcePluginId,
+          resourceId: request.resourceLocalId,
           signal: params.signal,
           isOccurrenceCurrent: params.isOccurrenceCurrent,
         });
+        params.signal.throwIfAborted();
+        if (!params.isOccurrenceCurrent() || !params.isContributionOccurrenceCurrent(request.pluginId, request.occurrenceId)) {
+          return failResource('Prompt asset occurrence is stale');
+        }
         const descriptor = service.describe(request.resourceLocalId);
         if (descriptor.kind !== 'prompt' || !descriptor.contentType.toLowerCase().startsWith('text/')) {
           return failResource('Prompt asset resource must be textual prompt content');

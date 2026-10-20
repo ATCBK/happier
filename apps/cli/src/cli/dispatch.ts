@@ -29,7 +29,7 @@ import {
   withCliApiToken,
 } from '@/auth/cliApiToken';
 import type { EphemeralResolvedServerSelection } from '@/server/serverSelection';
-import { argvBeforeOptionTerminator } from '@/cli/commands/shared/argvFlags';
+import { argvBeforeOptionTerminator, readFlagValue } from '@/cli/commands/shared/argvFlags';
 import { resolveInheritedHerdrRuntime } from '@/terminal/runtime/inheritedHerdrRuntime';
 import { resolveInheritedZellijRuntime } from '@/terminal/runtime/inheritedZellijRuntime';
 
@@ -429,9 +429,13 @@ export async function dispatchCli(params: Readonly<{
     || (subcommand === 'actions' && args[1] === 'invoke')
     || pluginTmuxMode !== null
     || (subcommand === 'plugins' && args[1] === 'dev')
+    || (subcommand === 'daemon' && (args[1] === 'restart-session-runners'
+      || (args[1] === 'restart' && args.includes('--restart-session-runners'))))
     || subcommand === 'auth'
     || subcommand === 'setup'
-    || subcommand === 'home';
+    || subcommand === 'home'
+    || (subcommand === 'tools' && args[1] === 'call'
+      && readFlagValue(argvBeforeOptionTerminator(args), '--source') === 'happier');
   if (ownsInterruptSignal && !signal) {
     const commandAbort = new AbortController();
     const onSigint = () => commandAbort.abort(new Error('Command interrupted by SIGINT'));

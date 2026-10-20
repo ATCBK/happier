@@ -24,6 +24,7 @@ import {
     externalSessionsError,
     internalErrorResponse,
     mapExternalSessionProviderFailureToExternalSessionsError,
+    mapExternalSessionCorridorFailureToExternalSessionsError,
 } from './responseErrors';
 
 export async function executeExternalSessionCandidatesListAction(
@@ -296,8 +297,8 @@ export async function executeExternalSessionLinkEnsureAction(
         });
         return { ok: true, sessionId: res.sessionId, created: res.created } satisfies ExternalSessionLinkEnsureResponse;
     } catch (error) {
-        const providerFailure = mapExternalSessionProviderFailureToExternalSessionsError(error);
-        if (providerFailure) return providerFailure satisfies ExternalSessionLinkEnsureResponse;
+        const corridorFailure = mapExternalSessionCorridorFailureToExternalSessionsError(error);
+        if (corridorFailure) return corridorFailure satisfies ExternalSessionLinkEnsureResponse;
         return internalErrorResponse(
             'external_session_link_ensure',
             error,

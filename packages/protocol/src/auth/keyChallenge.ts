@@ -29,7 +29,7 @@ export function canonicalizeKeyChallengeV2AudienceOrigin(
 const KeyChallengeV2AudienceOriginSchema = lazyZodSchema(() => z
   .string().check(z.trim(), z.minLength(1), z.maxLength(191), z.refine((value) => canonicalizeKeyChallengeV2AudienceOrigin(value) === value, 'origin must be a canonical HTTP(S) origin')));
 
-const KeyChallengeV2ServerIdentityIdSchema = lazyZodSchema(() => z.pipe(z.transform(normalizeServerIdentityIdCapability), z.optional(z.string())));
+const KeyChallengeV2ServerIdentityIdSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeServerIdentityIdCapability), z.optional(z.string())));
 
 export const KeyChallengeV2AudienceSchema = lazyZodSchema(() => z.strictObject({
     origin: KeyChallengeV2AudienceOriginSchema,

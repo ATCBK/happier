@@ -54,10 +54,10 @@ describe('SessionListViewEmptyState in the rail', () => {
         const { SessionListViewEmptyState } = await import('./SessionListViewEmptyState');
         const screen = await renderScreen(<SessionListViewEmptyState {...props} />);
 
-        const line = screen.findByTestId('session-list-query-empty-state');
-        expect(line?.findByType('Item' as any).props.title).toBe('sessionsList.queryMyWorkEmptyTitle');
-        // One line: no purpose paragraph, no glyph, no full-width button.
-        expect(line?.findByType('Item' as any).props.rightElement).toBeTruthy();
+        expect(screen.findByTestId('session-list-query-empty-state')).toBeTruthy();
+        expect(screen.getTextContent()).toContain('sessionsList.queryMyWorkEmptyTitle');
+        // One line: no purpose paragraph, no full-width button; the way forward is the line's inline link.
+        expect(screen.findByTestId('session-list-query-action:browse_all_accessible')).toBeTruthy();
         expect(screen.getTextContent()).not.toContain('sessionsList.queryScopeEmptyDescription');
         await screen.pressByTestIdAsync('session-list-query-action:browse_all_accessible');
         expect(props.onBrowseAllAccessible).toHaveBeenCalledTimes(1);
@@ -68,8 +68,8 @@ describe('SessionListViewEmptyState in the rail', () => {
         const { SessionListViewEmptyState } = await import('./SessionListViewEmptyState');
         const screen = await renderScreen(<SessionListViewEmptyState {...props} />);
 
-        expect(screen.findByTestId('session-list-query-empty-state')?.findByType('Item' as any).props.title)
-            .toBe('sessionsList.queryRefreshFailedTitle');
+        expect(screen.findByTestId('session-list-query-empty-state')).toBeTruthy();
+        expect(screen.getTextContent()).toContain('sessionsList.queryRefreshFailedTitle');
         expect(screen.getTextContent()).not.toContain('sessionsList.queryRefreshFailedEmptyDescription');
         await screen.pressByTestIdAsync('session-list-query-action:retry');
         expect(props.onRetry).toHaveBeenCalledTimes(1);

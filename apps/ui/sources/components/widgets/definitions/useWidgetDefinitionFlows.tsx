@@ -12,18 +12,19 @@ import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountS
 import { readMountedComposerPresentationSnapshot } from '@/components/sessions/presentation/sessionComposerPresentationTargets';
 import { appendMountedComposerDraft } from '@/sync/ops/actions/appendMountedComposerDraft';
 import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
+import { publishPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import { randomUUID } from '@/platform/randomUUID';
 import { t } from '@/text';
 
 import { SaveAsWidgetPanel, type SaveAsWidgetConvertedInput } from './SaveAsWidgetPanel';
 import { WidgetAboutPanel, readWidgetAboutSources } from './WidgetAboutPanel';
-import { runWidgetDefinitionCommand } from './widgetDefinitionCommands';
+import { createWidgetArtifactWriteAttempt, runWidgetDefinitionCommand } from './widgetDefinitionCommands';
 import { WidgetFlowPanel } from '@/components/widgets/flow/WidgetFlowPanel';
 import { WIDGET_FLOW_WIDTH_PX, WidgetFlowShell } from '@/components/widgets/flow/WidgetFlowShell';
 import type { IconName } from '@/components/ui/icons/Icon';
 import { createWidgetSnapshotCaptureSlot, useWidgetSnapshotCaptureAvailable, type WidgetSnapshotCaptureSlot } from './widgetSnapshotCapture';
 import { WidgetSnapshotConfirmPanel } from './WidgetSnapshotConfirmPanel';
-import { WidgetCopyChooser, WidgetCopyPanel } from './WidgetCopyPanel';
+import { WidgetCopyChooser, WidgetCopyPanel, type WidgetCopyAttempt } from './WidgetCopyPanel';
 
 type Flow = 'about' | 'save' | 'snapshot' | 'addTo';
 
@@ -70,6 +71,12 @@ export function useWidgetDefinitionFlows(input: Readonly<{
     instance: WidgetInstanceV1 | null;
     scope: WidgetSurfaceRefV1 | null;
     anchorRef: React.RefObject<View | null>;
+    /**
+     * A card that sits among siblings opens every flow on its own card, not at the ⋯: the card's own
+     * `anchorRef` sits at its top edge and `reveal` brings the card into view first, so a panel never opens over a
+     * sibling or from a ⋯ that has scrolled away. Without it the flows open at the ⋯ (`anchorRef`).
+     */
+    card?: Readonly<{ anchorRef: React.RefObject<View | null>; reveal: () => void }>;
     editInputs?: Readonly<{ onPress: () => void; binding: string | null }> | undefined;
     sessionItem?: WidgetDefinitionSessionItem | null;
     providedContext?: Readonly<Record<string, readonly JsonValue[]>>;
@@ -85,46 +92,74 @@ export function useWidgetDefinitionFlows(input: Readonly<{
     const [flow, setFlow] = React.useState<Flow | null>(null);
     const [slot] = React.useState(createWidgetSnapshotCaptureSlot);
     const capturable = useWidgetSnapshotCaptureAvailable(slot);
-    const { instance, scope, anchorRef, editInputs, sessionItem, testID } = input;
+    const { instance, scope, editInputs, sessionItem, testID } = input;
+    const card = input.card;
+    const anchorRef = card?.anchorRef ?? input.anchorRef;
     const artifactId = instance?.definition.kind === 'artifact' ? instance.definition.artifactId : null;
     // Add to… chooses its place in the shared chooser first; the copy's setup then opens at setup width.
     const [copyTo, setCopyTo] = React.useState<string | null>(null);
-    const close = React.useCallback(() => { setFlow(null); setCopyTo(null); }, []);
-    const about = React.useMemo(() => (instance && scope ? () => setFlow('about') : undefined), [instance, scope]);
+    // Save as your widget hands each place the person chose to the same setup Add to… uses; the copy it created stays.
+    const [placing, setPlacing] = React.useState<Readonly<{ saved: WidgetDefinitionV1; instance: WidgetInstanceV1; remaining: readonly string[];
+        attempts: ReadonlyMap<string, WidgetCopyAttempt> }> | null>(null);
+    const close = React.useCallback(() => { setFlow(null); setCopyTo(null); setPlacing(null); }, []);
+    const stopPlacing = React.useCallback(() => {
+        if (placing) publishPresentationNotice({ key: `widget-save:${instance?.id ?? 'item'}`, severity: 'info', message: t('widgetDefinition.savedButNotPlaced') });
+        close();
+    }, [close, instance?.id, placing]);
+    const placeNext = React.useCallback(() => {
+        const [next, ...remaining] = placing?.remaining ?? [];
+        if (!placing || next === undefined) { close(); return; }
+        setCopyTo(next);
+        setPlacing({ ...placing, remaining });
+    }, [close, placing]);
+    const open = React.useCallback((next: Flow) => { card?.reveal(); setFlow(next); }, [card]);
+    const about = React.useMemo(() => (instance && scope ? () => open('about') : undefined), [instance, open, scope]);
     const addTo = React.useMemo(() => (instance && scope && (scope.owner.kind !== 'sessionBoard'
-        || canPromoteSessionWidgetDefinitionSourceV1({ kind: 'widget', instance })) ? () => setFlow('addTo') : undefined), [instance, scope]);
+        || canPromoteSessionWidgetDefinitionSourceV1({ kind: 'widget', instance })) ? () => open('addTo') : undefined), [instance, open, scope]);
     const onBoard = scope?.owner.kind === 'sessionBoard';
-    const saveAsYours = React.useMemo(() => (onBoard && sessionItem?.savable ? () => setFlow('save') : undefined), [onBoard, sessionItem?.savable]);
-    const postSnapshot = React.useMemo(() => (onBoard && sessionItem?.canEdit && capturable ? () => setFlow('snapshot') : undefined),
-        [capturable, onBoard, sessionItem?.canEdit]);
+    const saveAsYours = React.useMemo(() => (onBoard && sessionItem?.savable ? () => open('save') : undefined), [onBoard, open, sessionItem?.savable]);
+    const postSnapshot = React.useMemo(() => (onBoard && sessionItem?.canEdit && capturable ? () => open('snapshot') : undefined),
+        [capturable, onBoard, open, sessionItem?.canEdit]);
 
     let panel: React.ReactElement | null = null;
-    if (flow === 'addTo' && scope && instance && copyTo === null) {
+    if (flow === 'about' && scope && instance) {
+        // The read belongs to the open flow, above the shell that recomposes on resize.
+        panel = <AboutFlow key={`${scope.serverId}/${scope.accountId}/${instance.id}/${artifactId ?? instance.definition.kind}`}
+            account={{ serverId: scope.serverId, accountId: scope.accountId }} scope={scope} instance={instance} artifactId={artifactId}
+            anchorRef={anchorRef} editInputs={editInputs} providedContext={input.providedContext} onClose={close} testID={`${testID}.about`} />;
+    } else if (flow === 'addTo' && scope && instance && copyTo === null) {
         panel = <WidgetCopyChooser instance={instance} current={scope} anchorRef={anchorRef} onChoose={setCopyTo} onClose={close} testID={`${testID}.addTo`} />;
     } else if (flow && scope) {
+        const placeInstance = placing?.instance ?? instance;
         const title = flow === 'about' ? t('widgetDefinition.aboutTitle') : flow === 'save' ? t('widgetDefinition.saveTitle')
             : flow === 'addTo' ? t('widgetFrame.groupAddTo') : t('widgetDefinition.snapshotTitle');
         const account = { serverId: scope.serverId, accountId: scope.accountId };
         panel = (
             <WidgetFlowShell anchorRef={anchorRef} title={title} onRequestClose={close} testID={`${testID}.${flow}`}
                 {...(flow === 'addTo' ? { width: WIDGET_FLOW_WIDTH_PX.setup } : {})}>
-                {flow === 'addTo' && instance && copyTo !== null ? (
-                    <WidgetCopyPanel instance={instance} current={scope} destinationKey={copyTo} providedContext={input.providedContext ?? {}}
-                        onBack={() => setCopyTo(null)} onClose={close} testID={`${testID}.addTo`} />
-                ) : flow === 'about' && instance ? (
-                    <AboutFlow key={`${scope.serverId}/${scope.accountId}/${instance.id}/${artifactId ?? instance.definition.kind}`} account={account} scope={scope} instance={instance} artifactId={artifactId} editInputs={editInputs}
-                        providedContext={input.providedContext}
-                        onClose={close} testID={`${testID}.about`} />
+                {flow === 'addTo' && placeInstance && copyTo !== null ? (
+                    <WidgetCopyPanel instance={placeInstance} current={scope} destinationKey={copyTo} providedContext={input.providedContext ?? {}}
+                        {...(placing ? { saved: placing.saved, attempt: placing.attempts.get(copyTo), onDone: placeNext, onClose: stopPlacing } : { onBack: () => setCopyTo(null), onClose: close })}
+                        testID={`${testID}.addTo`} />
                 ) : flow === 'save' && sessionItem && scope.owner.kind === 'sessionBoard' ? (
                     <SaveAsWidgetPanel
                         account={account}
                         session={{ serverId: scope.serverId, sessionId: scope.owner.sessionId }}
+                        instance={instance}
                         itemId={sessionItem.itemId}
                         defaultName={sessionItem.title}
                         converted={sessionItem.converted}
                         {...(sessionItem.renderPreview ? { preview: sessionItem.renderPreview() } : {})}
+                        {...(sessionItem.mark ? { mark: sessionItem.mark } : {})}
+                        sourceLabel={sessionItem.sourceLabel}
+                        providedContext={input.providedContext ?? {}}
                         onCancel={close}
                         onDone={close}
+                        onSaved={(saved, [first = null, ...remaining], attempts) => {
+                            // The copy is placed from what it is: the item's widget, or its own definition when it declares no inputs.
+                            setPlacing({ saved, remaining, attempts, instance: instance ?? { v: 1, id: sessionItem.itemId, definition: { kind: 'inline', definition: saved }, bindings: {} } });
+                            setCopyTo(first); setFlow('addTo');
+                        }}
                         testID={`${testID}.save`}
                     />
                 ) : flow === 'snapshot' && sessionItem ? (
@@ -143,6 +178,7 @@ function AboutFlow(props: Readonly<{
     scope: WidgetSurfaceRefV1;
     instance: WidgetInstanceV1;
     artifactId: string | null;
+    anchorRef: React.RefObject<View | null>;
     providedContext?: Readonly<Record<string, readonly JsonValue[]>>;
     editInputs?: Readonly<{ onPress: () => void; binding: string | null }> | undefined;
     onClose: () => void;
@@ -163,21 +199,25 @@ function AboutFlow(props: Readonly<{
         return () => controller.abort();
     }, [accountId, artifactId, serverId, current]);
 
-    if (!current) return <WidgetFlowPanel title={t('widgetDefinition.aboutTitle')} testID={props.testID} onClose={props.onClose}
+    let content: React.ReactElement;
+    if (!current) content = <WidgetFlowPanel title={t('widgetDefinition.aboutTitle')} testID={props.testID} onClose={props.onClose}
         note={t('widgetDefinition.aboutUnavailable')}>{null}</WidgetFlowPanel>;
-    if (artifactId && (opened === 'loading' || opened === 'unavailable')) {
-        return (
+    else if (artifactId && (opened === 'loading' || opened === 'unavailable')) {
+        content = (
             <WidgetFlowPanel title={t('widgetDefinition.aboutTitle')} testID={props.testID} onClose={props.onClose}
                 note={opened === 'unavailable' ? t('widgetDefinition.aboutUnavailable') : null}>
                 {opened === 'loading' ? <ItemLoadStateRows testID={`${props.testID}.loading`} state={{ kind: 'loading' }} rows={4} lines={2} shape="list" /> : null}
             </WidgetFlowPanel>
         );
+    } else {
+        const definition = !artifactId ? props.instance.definition.kind === 'inline' ? props.instance.definition.definition : null
+            : typeof opened === 'object' ? opened.definition : null;
+        const placements = artifactId && typeof opened === 'object' ? opened.placements
+            : { placements: [{ surface: props.scope, instanceId: props.instance.id }], unavailableScopes: [] };
+        content = <AboutResolvedFlow {...props} definition={definition} placements={placements} />;
     }
-    const definition = !artifactId ? props.instance.definition.kind === 'inline' ? props.instance.definition.definition : null
-        : typeof opened === 'object' ? opened.definition : null;
-    const placements = artifactId && typeof opened === 'object' ? opened.placements
-        : { placements: [{ surface: props.scope, instanceId: props.instance.id }], unavailableScopes: [] };
-    return <AboutResolvedFlow {...props} definition={definition} placements={placements} />;
+    return <WidgetFlowShell anchorRef={props.anchorRef} title={t('widgetDefinition.aboutTitle')}
+        onRequestClose={props.onClose} testID={props.testID}>{content}</WidgetFlowShell>;
 }
 
 function AboutResolvedFlow(props: Parameters<typeof AboutFlow>[0] & Readonly<{
@@ -220,6 +260,7 @@ function AboutPanelContent(props: Parameters<typeof AboutBoundFlow>[0] & Readonl
     resolution: Parameters<typeof readWidgetAboutSources>[0]['resolution'];
 }>): React.ReactElement {
     const { account, artifactId } = props;
+    const duplicate = React.useRef<ReturnType<typeof createWidgetArtifactWriteAttempt<'widgets.definition.duplicate'>> | null>(null);
     const draftTarget = readDraftTarget(props.scope, props.definition);
     const editInputs = props.editInputs;
     return (
@@ -242,7 +283,10 @@ function AboutPanelContent(props: Parameters<typeof AboutBoundFlow>[0] & Readonl
                 });
             } } : {})}
             {...(artifactId ? { onDuplicate: async () => {
-                const outcome = await runWidgetDefinitionCommand('widgets.definition.duplicate', () => ({ account, artifactId, newArtifactId: randomUUID() }), account);
+                duplicate.current ??= createWidgetArtifactWriteAttempt('widgets.definition.duplicate', account);
+                const outcome = await duplicate.current.run(() => ({ account, artifactId, newArtifactId: randomUUID() }));
+                // Approval now owns this copy too; a later explicit Duplicate is a new intent.
+                if (outcome.kind !== 'refused') duplicate.current = null;
                 return outcome.kind === 'applied' ? outcome.result.definition.name : null;
             } } : {})}
             testID={props.testID}

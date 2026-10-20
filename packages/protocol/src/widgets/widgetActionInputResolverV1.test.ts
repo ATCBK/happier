@@ -117,20 +117,23 @@ describe('current Widget field options admission', () => {
         delete context.agents;
         expect(await resolver.resolve(request)).toMatchObject({ status: 'selection_required', fields: [{ path: 'agents', reasonCode: 'widget_context_missing' }] });
     });
-    it('rejects Session targets on core pages at configured-input admission while retaining explicit pin hosts', async () => {
+    it('admits Session targets on core pages through the same exact target check as Home', async () => {
+        let readable = true;
         const resolver = createWidgetActionInputResolverV1({
             readDescriptor: async () => ({ sessionInputPath: 'session', inputs: { fields: [
                 { path: 'session', title: 'Session', widget: 'json', required: true },
             ] } }),
             readContext: async () => ({}), readViewerValues: async () => ({ values: {} }),
-            validateValue: async () => ({ status: 'valid' }), resolveOptions: async () => [],
+            validateValue: async () => readable ? { status: 'valid' } : { status: 'denied', reasonCode: 'widget_session_access_denied' }, resolveOptions: async () => [],
         });
         const request = { ref: { surface: { serverId: 'home', accountId: 'viewer', owner: { kind: 'corePage' as const, pageId: 'usage', area: 'main' } }, instanceId: 'copy' },
             instance: { v: 1 as const, id: 'copy', definition: { kind: 'installed' as const, surface: consumer },
                 bindings: { session: { kind: 'value' as const, value: { serverId: 'home', sessionId: 'selected' } } } }, context: {} };
-        expect(await resolver.resolve(request)).toMatchObject({ status: 'denied', fields: [{ reasonCode: 'widget_target_surface_unsupported' }] });
+        expect(await resolver.resolve(request)).toEqual({ status: 'ready', input: { session: { serverId: 'home', sessionId: 'selected' } } });
         expect(await resolver.resolve({ ...request, ref: { ...request.ref, surface: { ...request.ref.surface, owner: { kind: 'home' } } } }))
             .toEqual({ status: 'ready', input: { session: { serverId: 'home', sessionId: 'selected' } } });
+        readable = false;
+        expect(await resolver.resolve(request)).toMatchObject({ status: 'denied', fields: [{ reasonCode: 'widget_session_access_denied' }] });
     });
     it('retains declared static options when admitting a host app-read input', async () => {
         const resolver = createWidgetActionInputResolverV1({
@@ -250,6 +253,21 @@ describe('current Widget field options admission', () => {
         resources = [];
         expect(await resolver.resolve({ ...request, admission: 'configuration' }))
             .toMatchObject({ status: 'unavailable', fields: [{ path: 'connection', reasonCode: 'widget_viewer_purpose_authority_unavailable' }] });
+    });
+    it('asks the options owner about the picked value so a source need not list its whole inventory', async () => {
+        const asked: (readonly JsonValue[])[] = [];
+        const resolver = createWidgetActionInputResolverV1({
+            readDescriptor: async () => ({ ...viewerDescriptor, inputs: { fields: [viewerDescriptor.inputs!.fields[1]!] },
+                inputSchema: { type: 'object', properties: { choice: { type: 'string', minLength: 2 } }, required: ['choice'], additionalProperties: false } }),
+            readContext: async () => ({}), readViewerValues: async () => ({ values: {} }),
+            validateValue: async () => ({ status: 'valid' }),
+            resolveOptions: async (_field, _input, _request, values) => { asked.push(values); return [{ value: 'current' }]; },
+        });
+        const request = { ref: { surface: { serverId: 'home', accountId: 'owner', owner: { kind: 'home' as const } }, instanceId: 'copy' },
+            instance: { v: 1 as const, id: 'copy', definition: { kind: 'installed' as const, surface: { pluginId: consumer.pluginId, localId: 'widget' } },
+                bindings: { choice: { kind: 'value' as const, value: 'current' } } }, context: {} };
+        expect(await resolver.resolve(request)).toEqual({ status: 'ready', input: { choice: 'current' } });
+        expect(asked).toEqual([['current']]);
     });
     it('admits declared viewer intent without a connection only for configuration, preserving execution and other value admission', async () => {
         const { resolver, removeResource, setDescriptor } = createUnconnectedViewerWidgetResolver();

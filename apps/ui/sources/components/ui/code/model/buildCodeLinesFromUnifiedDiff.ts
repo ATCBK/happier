@@ -31,6 +31,8 @@ export function buildCodeLinesFromUnifiedDiff(params: Readonly<{
     }>;
 }>): CodeLine[] {
     const rawLines = params.unifiedDiff.replace(/\r\n/g, '\n').split('\n');
+    // A diff that ends with a newline terminates its last line; it does not start an empty one.
+    if (rawLines.length > 1 && rawLines[rawLines.length - 1] === '') rawLines.pop();
 
     const out: CodeLine[] = [];
 

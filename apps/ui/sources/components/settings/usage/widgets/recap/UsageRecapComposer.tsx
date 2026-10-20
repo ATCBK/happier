@@ -1,6 +1,8 @@
 import * as React from 'react';
 import { ScrollView, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { HappierSkeletonBlock } from '@happier-dev/plugin-ui/presentation';
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { UsageRecapComposeResultSchema, UsageRecapExportResultSchema, USAGE_RECAP_FIELDS } from '@happier-dev/protocol/usage/usageRecap';
 import { type UsageRecapField } from '@happier-dev/protocol';
 import {
@@ -14,7 +16,6 @@ import { SelectionTiles } from '@/components/ui/forms/SelectionTiles';
 import { Switch } from '@/components/ui/forms/Switch';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { ItemLoadStateRows } from '@/components/ui/lists/ItemLoadStateRows';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
@@ -69,7 +70,8 @@ export type UsageRecapComposerProps = Readonly<{
 }>;
 
 type ComposeState =
-  | Readonly<{ kind: 'composing' }>
+  /** `shown` keeps the last composed card on screen (dimmed, not exportable) until the new one arrives. */
+  | Readonly<{ kind: 'composing'; shown?: UsageRecapComposed }>
   | Readonly<{ kind: 'ready'; result: UsageRecapComposed; query: UsageQuery }>
   | Readonly<{ kind: 'unavailable' }>
   | Readonly<{ kind: 'failed'; code: string }>;
@@ -85,6 +87,7 @@ export function UsageRecapComposer(
 ): React.ReactElement {
   const { theme } = useUnistyles();
   const phone = useDeviceType() === 'phone';
+  const reducedMotion = useReducedMotionPreference();
   const tone = theme.dark ? 'dark' : 'light';
   const [style, setStyle] = React.useState<UsageRecapStyle>('daybreak');
   const [format, setFormat] = React.useState<UsageRecapFormat>(
@@ -121,7 +124,11 @@ export function UsageRecapComposer(
       controller.abort();
       setState({ kind: 'failed', code: 'usage_scope_unavailable' });
     });
-    setState({ kind: 'composing' });
+    // A new style, format, period or field set keeps the last card and its style tiles until it is composed.
+    setState(previous => {
+      const shown = previous.kind === 'ready' ? previous.result : previous.kind === 'composing' ? previous.shown : undefined;
+      return shown ? { kind: 'composing', shown } : { kind: 'composing' };
+    });
     void (async () => {
       if (
         !lifetime?.isCurrent() ||
@@ -185,11 +192,13 @@ export function UsageRecapComposer(
 
   const composed =
     state.kind === 'ready' ? state.result : null;
+  const shown = composed ?? (state.kind === 'composing' ? state.shown ?? null : null);
   const model = React.useMemo(
-    () => (composed ? buildUsageStatCardModel(composed) : null),
-    [composed],
+    () => (shown ? buildUsageStatCardModel(shown) : null),
+    [shown],
   );
-  const size = USAGE_STAT_CARD_SIZES[format];
+  // The stage holds the card it shows: the kept card keeps its own proportions until the new one lands.
+  const size = USAGE_STAT_CARD_SIZES[model?.format ?? format];
   // The card takes the stage it is given (lab s2card C: the left two-thirds), at true proportions.
   const [stageWidth, setStageWidth] = React.useState<number | null>(null);
   const previewWidth = phone ? 300 : Math.max(240, (stageWidth ?? 520) - STAGE_INSET_PX * 2);
@@ -301,12 +310,16 @@ export function UsageRecapComposer(
       {formats}
       <View style={[styles.stageCard, { minHeight: size.height * scale }]}>
       {state.kind === 'composing' && !model ? (
-        <ItemLoadStateRows
-          state={{ kind: 'loading' }}
-          rows={4}
-          lines={2}
-          accessibilityLabel={t('usage.board.recap.composing')}
-        />
+        // The card's own place at its true proportions: the stage keeps its size while it is composed.
+        <View accessible accessibilityLabel={t('usage.board.recap.composing')} accessibilityRole="progressbar">
+          <HappierSkeletonBlock
+            color={theme.colors.surface.skeleton}
+            width={size.width * scale}
+            height={size.height * scale}
+            radius={18 * scale}
+            reducedMotion={reducedMotion}
+          />
+        </View>
       ) : state.kind === 'unavailable' ? (
         <SurfaceStateCard
           kind="empty"
@@ -357,7 +370,9 @@ export function UsageRecapComposer(
 
   const controls = (
     <View style={styles.controls}>
-      <ItemGroup title={t('usage.board.recap.styleLabel')}>
+      {/* The style tiles and the period control are their own surfaces: no sheet around them, which
+          clipped the last tile row's caption and pressed the tiles against its edge. */}
+      <ItemGroup title={t('usage.board.recap.styleLabel')} surface="none">
         <SelectionTiles
           variant="visual"
           density="compact"
@@ -368,7 +383,7 @@ export function UsageRecapComposer(
           accessibilityLabel={t('usage.board.recap.styleLabel')}
         />
       </ItemGroup>
-      <ItemGroup title={t('usage.board.recap.periodLabel')}>
+      <ItemGroup title={t('usage.board.recap.periodLabel')} surface="none">
         <SegmentedTabBar
           testIDPrefix="usage-recap-period"
           compact
@@ -424,7 +439,7 @@ export function UsageRecapComposer(
           size="small"
           display="secondary"
           title={t('usage.board.recap.copy')}
-          disabled={!model || delivery !== null}
+          disabled={!composed || delivery !== null}
           loading={delivery === 'copy'}
           onPress={() => {
             void deliver('copy');
@@ -435,7 +450,7 @@ export function UsageRecapComposer(
           size="small"
           display="secondary"
           title={t('usage.board.recap.save')}
-          disabled={!model || delivery !== null}
+          disabled={!composed || delivery !== null}
           loading={delivery === 'save'}
           onPress={() => {
             void deliver('save');
@@ -446,7 +461,7 @@ export function UsageRecapComposer(
         <RoundButton
           size="small"
           title={t('usage.board.recap.share')}
-          disabled={!model || delivery !== null}
+          disabled={!composed || delivery !== null}
           loading={delivery === 'share'}
           onPress={() => {
             void deliver('share');

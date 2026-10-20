@@ -15,6 +15,8 @@ import { buildTerminalAuthorityCeilingHttpHeaders } from '@/settings/accountSett
 import { acquireTerminalAuthEnrollmentRuntime } from '@/auth/terminalAuthEnrollmentRuntime';
 import { resolveAuthenticatedExactHomeConnectionDescriptorObservation, verifyTerminalAuthEnrollmentRuntime } from '@/auth/terminalAuthEnrollmentClient';
 import { observeServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
+import { AccountEncryptionCurrentnessUnavailableError, fetchAccountEncryptionCurrentnessFromServer } from '@/api/client/connectedServiceCredentialApi';
+import { readHttpStatus } from '@/api/client/httpStatusError';
 import { readStoredCredentialsForServerId } from '@/persistence';
 import {
   adoptServerProfileHomeConnectionDescriptor,
@@ -289,9 +291,24 @@ export async function runCliDirectHomeQr(input: Readonly<{
       }
     },
     complete: async ({ context, requesterPublicKey, signal }) => {
+      let currentness: Awaited<ReturnType<typeof fetchAccountEncryptionCurrentnessFromServer>>;
+      try {
+        currentness = await fetchAccountEncryptionCurrentnessFromServer({
+          token: credentials.token, serverBaseUrl: origin, signal, allowCredentialRecovery: false,
+          request: async () => {
+            const response = await fetch(`${origin}/v1/account/encryption/currentness`, { headers: authHeaders(), signal });
+            return { status: response.status, data: await readJson(response) };
+          },
+        });
+      } catch (error) {
+        const status = readHttpStatus(error) ?? (error instanceof AccountEncryptionCurrentnessUnavailableError ? readHttpStatus(error.cause) : null);
+        const retryable = status !== null ? status === 408 || status === 429 || status >= 500
+          : error instanceof AccountEncryptionCurrentnessUnavailableError && error.cause !== undefined;
+        throw new DirectHomeQrCompletionError(retryable ? 'retryable' : 'invalid');
+      }
       let material: TerminalProvisioningMaterial;
       try {
-        material = resolveTerminalProvisioningMaterial(credentials);
+        material = resolveTerminalProvisioningMaterial(credentials, currentness);
       } catch {
         throw new DirectHomeQrCompletionError('invalid');
       }

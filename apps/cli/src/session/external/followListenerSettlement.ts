@@ -1,6 +1,5 @@
 /**
- * The one bound on how long any External Sessions follow owner waits for an
- * author-supplied listener to settle.
+ * The bound for an author-supplied External Sessions listener.
  *
  * Listener code is trusted but ordinary: it can throw, hang, or never settle.
  * Whichever transport carries the follow, the owner that awaits that callback
@@ -10,8 +9,10 @@
 export const EXTERNAL_SESSION_FOLLOW_LISTENER_TIMEOUT_MS = 5_000;
 
 /**
- * Awaits one unit of follow listener work under that ceiling and under caller
- * or invocation cancellation.
+ * Awaits one unit of follow listener work under caller/invocation cancellation.
+ * Author callbacks also use their ceiling. The host-owned terminal importer
+ * passes no timeout: durable Home publication belongs to the containing follow
+ * operation, and a slow acknowledgement is not source loss.
  *
  * The abandoned work keeps running inside the author's callback; its eventual
  * settlement is deliberately ignored rather than allowed to advance delivery.
@@ -20,7 +21,7 @@ export const EXTERNAL_SESSION_FOLLOW_LISTENER_TIMEOUT_MS = 5_000;
  */
 export async function settleFollowListenerBounded(
     work: Promise<void>,
-    timeoutMs: number,
+    timeoutMs: number | undefined,
     signal?: AbortSignal,
 ): Promise<void> {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -28,13 +29,15 @@ export async function settleFollowListenerBounded(
     try {
         await Promise.race([
             work,
-            new Promise<never>((_, reject) => {
+            ...(timeoutMs === undefined ? [] : [new Promise<never>((_, reject) => {
                 timer = setTimeout(
-                    () => reject(new Error('plugin_external_follow_listener_deadline_exceeded')),
+                    () => reject(Object.assign(new Error('plugin_external_follow_listener_deadline_exceeded'), {
+                        code: 'plugin_external_follow_listener_deadline_exceeded',
+                    })),
                     timeoutMs,
                 );
                 timer.unref?.();
-            }),
+            })]),
             ...(signal
                 ? [new Promise<never>((_, reject) => {
                     onAbort = () => reject(new Error('plugin_operation_aborted'));

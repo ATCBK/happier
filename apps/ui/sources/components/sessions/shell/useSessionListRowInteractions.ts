@@ -6,6 +6,7 @@ import {
     measureWindowBounds,
     TREE_DROP_OVERLAY_KIND_NONE,
     useEntityDragDropRuntime,
+    useEntityDropDomBinding,
     useTreeDropAutoscroll,
     useTreeDropRegistry,
     windowBoundsToContentBounds,
@@ -60,7 +61,7 @@ import type {
 } from './SessionListHeaderFrame';
 
 /**
- * Pointer geometry for the `reportsTo` tree (R-03): the middle of another Session on the same Home
+ * Pointer geometry for the `manager` tree (R-03): the middle of another Session on the same Home
  * means "put under". Whether that Session takes reports is the domain resolver's verdict, so a
  * refused lead still resolves here and the release preview says why instead of nothing lighting up.
  */
@@ -113,6 +114,7 @@ export function useSessionListRowInteractions(input: UseSessionListRowInteractio
     const keyboardScrollTargetRef = React.useRef<string | null>(null);
     // Mounted geometry changes (virtualized rows arriving, scroll, resize) re-select the place under a carry.
     const entityDragRuntime = useEntityDragDropRuntime();
+    const attachTreeDrop = useEntityDropDomBinding(entityDragRuntime);
     const dropGeometryRegistry = useTreeDropRegistry(entityDragRuntime.refresh);
 
     const overlayVisible = useSharedValue(0);
@@ -302,6 +304,7 @@ export function useSessionListRowInteractions(input: UseSessionListRowInteractio
     }, [autoscrollViewportHeight]);
 
     const handleTreeViewportMeasure = React.useCallback((ref: TreeDropMeasurableRef | null) => {
+        attachTreeDrop(ref);
         void measureWindowBounds(ref).then((bounds) => {
             if (!bounds) return;
             viewportBoundsRef.current = bounds;
@@ -311,7 +314,7 @@ export function useSessionListRowInteractions(input: UseSessionListRowInteractio
             autoscrollViewportTopY.value = bounds.y;
             autoscrollViewportHeight.value = bounds.height;
         });
-    }, [autoscrollViewportHeight, autoscrollViewportTopY]);
+    }, [attachTreeDrop, autoscrollViewportHeight, autoscrollViewportTopY]);
 
     const buildBaseCommitContext = React.useCallback((scope?: SessionOrganizationMutationScope): SessionListBaseCommitContext => {
         const requireCapturedScope = () => {
@@ -366,7 +369,7 @@ export function useSessionListRowInteractions(input: UseSessionListRowInteractio
                 viewport: readViewportMetrics(),
                 canReorderSessionSiblings,
                 // Geometry names a same-Home candidate from the list topology. The entity
-                // resolver alone admits reportsTo using the canonical relation projection.
+                // resolver alone admits manager using the canonical relation projection.
                 canPutSessionUnder: () => true,
             });
         } catch {
@@ -481,6 +484,7 @@ export function useSessionListRowInteractions(input: UseSessionListRowInteractio
         setNativeContextMenuSessionKey(null);
         setDraggingSessionKey(sessionKey);
         remeasureAllRegisteredRows();
+        return carryRef.current;
     }, [autoscrollActive, autoscrollPointerY, clearDragState, entityDragDrop, input.folderActionsEnabled, remeasureAllRegisteredRows]);
 
     const handleDragUpdate = React.useCallback((_event: UseSessionInlineDragDropResultEvent) => {}, []);
@@ -506,13 +510,13 @@ export function useSessionListRowInteractions(input: UseSessionListRowInteractio
     }, []);
 
     const handleNativeListScrollInteractionStart = React.useCallback(() => {
-        if (Platform.OS !== 'ios') return;
+        if (Platform.OS !== 'ios' && Platform.OS !== 'android') return;
         nativeListScrollInteractionActiveRef.current = true;
         setNativeContextMenuSessionKey(null);
     }, []);
 
     const handleNativeListScrollInteractionEnd = React.useCallback(() => {
-        if (Platform.OS !== 'ios') return;
+        if (Platform.OS !== 'ios' && Platform.OS !== 'android') return;
         nativeListScrollInteractionActiveRef.current = false;
     }, []);
 

@@ -63,6 +63,8 @@ export function createMemFs(): MemFs {
       // Directories are implicit (defined by the files they contain).
     }
     delete() {
+      // Expo's native bridge rejects any JS arguments for File/Directory.delete().
+      if (arguments.length > 0) throw new Error('expo_delete_invalid_argument_count');
       const prefix = `${this.uri}/`;
       for (const key of Array.from(files.keys())) {
         if (key === this.uri || key.startsWith(prefix)) files.delete(key);
@@ -117,6 +119,13 @@ export function createMemFs(): MemFs {
     }
     create() {
       if (!files.has(this.uri)) files.set(this.uri, new Uint8Array());
+    }
+    copy(destination: { uri: string }) {
+      // Expo File.copy rejects an existing destination on both native platforms.
+      if (files.has(destination.uri)) throw new Error('EEXIST_copy_destination');
+      const bytes = files.get(this.uri);
+      if (!bytes) throw new Error('copy_source_missing');
+      files.set(destination.uri, bytes.slice());
     }
     write(data: string | Uint8Array, options?: { append?: boolean }) {
       const buf = typeof data === 'string' ? new TextEncoder().encode(data) : data;
@@ -184,6 +193,7 @@ export function createMemFs(): MemFs {
       return new TextDecoder().decode(files.get(this.uri) ?? new Uint8Array());
     }
     delete() {
+      if (arguments.length > 0) throw new Error('expo_delete_invalid_argument_count');
       files.delete(this.uri);
     }
     arrayBuffer(): Promise<ArrayBuffer> {

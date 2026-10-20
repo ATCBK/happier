@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
 
 import { fetchGitHubLatestRelease, fetchGitHubReleaseByTag, fetchFirstGitHubReleaseByTags } from '../dist/github.js';
 
@@ -186,4 +187,86 @@ test('fetchGitHubLatestRelease calls GitHub latest endpoint and returns JSON', a
   assert.equal(release.tag_name, 'v0.9.5');
   assert.equal(stub.calls[0].url, url);
   assert.match(String(stub.calls[0].init.headers['user-agent'] ?? ''), /test-agent/);
+});
+
+test('GitHub rate-limit failures retain their reset time through fetch', async () => {
+  const resetAtMs = 1792364400000;
+  for (const status of [403, 429]) {
+    for (const read of [fetchGitHubLatestRelease, (params) => fetchGitHubReleaseByTag({ ...params, tag: 'v1' })]) {
+      await assert.rejects(read({
+        githubRepo: 'acme/tool',
+        fetchImpl: async () => new Response('', { status, headers: {
+          'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(resetAtMs / 1000),
+        } }),
+      }), (error) => {
+        assert.equal(error.code, 'github_rate_limited');
+        assert.equal(error.resetAtMs, resetAtMs);
+        assert.equal(error.status, status);
+        assert.match(error.message, /2026-10-18T23:00:00.000Z/);
+        return true;
+      });
+    }
+  }
+});
+
+test('Node HTTP retains an exhausted GitHub rate-limit response without retrying it', async () => {
+  let requests = 0;
+  const server = createServer((_request, response) => {
+    requests += 1;
+    response.writeHead(429, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1792364400' });
+    response.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    await assert.rejects(fetchGitHubReleaseByTag({
+      githubRepo: 'acme/tool', tag: 'v1', apiBaseUrl: `http://127.0.0.1:${server.address().port}`,
+    }), (error) => {
+      assert.equal(error.code, 'github_rate_limited');
+      assert.equal(error.resetAtMs, 1792364400000);
+      assert.equal(requests, 1);
+      return true;
+    });
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('asset-only pinned resolution reads public downloads and row-bound digests without API credentials', async () => {
+  const requests = [];
+  const release = await fetchGitHubReleaseByTag({
+    githubRepo: 'openai/codex', tag: 'rust-v0.162.1', assetsOnly: true, githubToken: 'fixture-private-token',
+    fetchImpl: async (url, init) => {
+      requests.push(String(url));
+      assert.equal(init.headers.authorization, undefined);
+      // GitHub expanded_assets row structure observed 2026-10-18; formatting
+      // and classes are irrelevant, href and clipboard digest are the facts.
+      return new Response(`<ul>
+        <li><a href="/openai/codex/releases/download/rust-v0.162.1/other.zip">other</a>
+          <clipboard-copy value="sha256:${'a'.repeat(64)}"></clipboard-copy></li>
+        <li><a href="/openai/codex/releases/download/rust-v0.162.1/codex-package-aarch64-unknown-linux-musl.tar.gz">Codex</a>
+          <span>sha256:untrusted-display-copy</span>
+          <clipboard-copy aria-label="Copy digest" value="sha256:${'b'.repeat(64)}"></clipboard-copy></li>
+        <li><a href="https://elsewhere.invalid/codex.zip">wrong origin</a>
+          <clipboard-copy value="sha256:${'c'.repeat(64)}"></clipboard-copy></li>
+      </ul>`);
+    },
+  });
+  assert.deepEqual(requests, ['https://github.com/openai/codex/releases/expanded_assets/rust-v0.162.1']);
+  assert.deepEqual(release.assets.map(({ name, digest }) => ({ name, digest })), [
+    { name: 'other.zip', digest: `sha256:${'a'.repeat(64)}` },
+    { name: 'codex-package-aarch64-unknown-linux-musl.tar.gz', digest: `sha256:${'b'.repeat(64)}` },
+  ]);
+  assert.equal(release.assets[1].browser_download_url,
+    'https://github.com/openai/codex/releases/download/rust-v0.162.1/codex-package-aarch64-unknown-linux-musl.tar.gz');
+});
+
+test('pinned public metadata fails closed on missing rows or ambiguous asset integrity', async () => {
+  const row = (digest) => `<li><a href="/acme/tool/releases/download/v1/tool.zip">tool</a><clipboard-copy value="sha256:${digest.repeat(64)}"></clipboard-copy></li>`;
+  for (const html of ['<html>Sign in</html>', row('a') + row('b'),
+    row('a').replace('</li>', `<clipboard-copy value="sha256:${'b'.repeat(64)}"></clipboard-copy></li>`)]) {
+    await assert.rejects(fetchGitHubReleaseByTag({ githubRepo: 'acme/tool', tag: 'v1', assetsOnly: true,
+      fetchImpl: async () => new Response(html),
+    }), /metadata/);
+  }
 });

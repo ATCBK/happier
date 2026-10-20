@@ -1,4 +1,5 @@
-import { createDirectRouteGrantSigningInputV2, AccountSettingsSchema, computeWorkspaceSyncPolicyDigest, type DirectRouteGrantRequestV2 } from '@happier-dev/protocol';
+import { createDirectRouteGrantSigningInputV2, computeWorkspaceSyncPolicyDigest, type DirectRouteGrantRequestV2 } from '@happier-dev/protocol';
+import { parseProjectAccountSnapshotV1 } from '@happier-dev/protocol/projects/projectAccountSnapshotV1';
 import { createIrohNodeNativeModule, loadIrohNodeNativeAddon } from '@happier-dev/iroh-native/node';
 import { createIrohTestControllerFromNativeAddon } from '@happier-dev/iroh-native/test-controller';
 import { once } from 'node:events';
@@ -9,7 +10,7 @@ import { PassThrough } from 'node:stream';
 import tweetnacl from 'tweetnacl';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import type { ActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
 import { startPeerMediationLoopbackServer } from '../mediation/loopback/server';
 import { createWorkspaceRootOwnershipManager } from '@/workspaces/sync/workspaceSyncRootOwnership';
 import { connectWorkspaceSyncMachineTunnel } from '@/workspaces/sync/workspaceSyncMachineCarrierStream';
@@ -29,7 +30,7 @@ function base64url(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString('base64url');
 }
 
-function settingsSnapshot(sourceRoot: string, targetRoot: string): ActiveAccountSettingsSnapshot {
+function projectSnapshot(sourceRoot: string, targetRoot: string): ActiveProjectAccountRowsSnapshot {
   const policyInput = {
     v: 1 as const,
     selection: 'all_files' as const,
@@ -42,16 +43,16 @@ function settingsSnapshot(sourceRoot: string, targetRoot: string): ActiveAccount
   };
   return {
     source: 'network',
-    settings: AccountSettingsSchema.parse({
-      workspaceRefsV1: [
+    ...parseProjectAccountSnapshotV1({
+      workspaceRefs: [
         { id: sourceWorkspaceRefId, serverId: 'server-1', machineId: sourceMachineId, rootPath: sourceRoot, createdAtMs: 1 },
         { id: targetWorkspaceRefId, serverId: 'server-1', machineId: targetMachineId, rootPath: targetRoot, createdAtMs: 1 },
       ],
-      workspaceSyncRelationshipsV1: [],
+      relationships: [],
     }),
-    settingsVersion: 1,
+    organizations: [], rows: [], graphRevision: 1,
     loadedAtMs: 1,
-    settingsSecretsReadKeys: [],
+    scopeKey: accountId,
   };
 }
 
@@ -127,13 +128,13 @@ describe('production workspace opener -> native machine/1 -> Lane 08 ingress', (
     const trustRoots = [{ keyId: 'composed-signing-key', publicKey: base64url(signingKeyPair.publicKey) }];
     const rootedAgents: PassThrough[] = [];
     const rootOwnershipManager = createWorkspaceRootOwnershipManager({ lockDirectory });
-    const snapshot = settingsSnapshot(sourceRoot, targetRoot);
+    const snapshot = projectSnapshot(sourceRoot, targetRoot);
     const callMachineRpc = vi.fn(async () => { throw new Error('Composed target ingress must remain local'); });
     let targetIngressFailure: string | null = null;
     const targetAuthority = createWorkspaceSyncTargetAuthority({
       localServerId: 'server-1',
       localMachineId: targetMachineId,
-      getSettingsSnapshot: () => snapshot,
+      getProjectSnapshot: () => snapshot,
       callMachineRpc,
       bootstrap: { materializationDirectory, rootOwnershipManager },
       // The managed Mutagen agent is a genuine child-process boundary. This faithful

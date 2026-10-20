@@ -21,7 +21,7 @@ export function createLeftBehindPass(input: Readonly<{
         }
         return { status: 'ok' as const, owners, capturedAtMs: view.snapshot.capturedAtMs };
     };
-    const observeFresh = async () => observeView(await input.processOwnershipRuntime.readOwners({ freshness: 'fresh' }));
+    const observeFresh = async () => observeView(await input.processOwnershipRuntime.readOwners({ freshness: 'fresh', requesterAttribution: 'retained' }));
     const scheduleConfirmation = (owner: ProcessOwnerRef, capturedAtMs: number) => {
         const key = processOwnerKey(owner);
         const at = tracker.nextConfirmationAtMs(owner);

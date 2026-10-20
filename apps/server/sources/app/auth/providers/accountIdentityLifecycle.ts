@@ -3,6 +3,7 @@ import { db } from '@/storage/db';
 import { afterTx, inTx, type Tx } from '@/storage/inTx';
 import { isPrismaErrorCode } from '@/storage/prisma';
 import { markAccountChanged } from '@/app/changes/markAccountChanged';
+import { acquireAccountSessionOwnerMetadataFencesInTx } from '@/app/encryption/accountSessionOwnerMetadataFence';
 import { fetchLinkedProvidersForAccounts } from '@/app/auth/providers/linkedProviders';
 import { buildUpdateAccountUpdate, eventRouter } from '@/app/events/eventRouter';
 import { randomKeyNaked } from '@/utils/keys/randomKeyNaked';
@@ -88,7 +89,7 @@ async function publishIdentityChanges(tx: Tx, accountIdsInput: readonly string[]
         afterTx(tx, () => {
             eventRouter.emitUpdate({
                 userId: accountId,
-                payload: buildUpdateAccountUpdate(accountId, { ...profile, linkedProviders }, cursor, randomKeyNaked(12)),
+                payload: buildUpdateAccountUpdate(accountId, { ...profile, linkedProviders }, cursor.resolveCursor(), randomKeyNaked(12)),
                 recipientFilter: { type: 'user-scoped-only' },
             });
         });
@@ -123,6 +124,8 @@ export async function prepareIdentityLink(intent: IdentityLinkIntent): Promise<P
 }
 
 export async function linkIdentityInTx(tx: Tx, intent: IdentityLinkIntent): Promise<void> {
+    await acquireAccountSessionOwnerMetadataFencesInTx(tx,
+        [intent.accountId, ...(intent.transferFromAccountId ? [intent.transferFromAccountId] : [])], "exclusive");
     const existing = await checkLink(tx, intent);
     if (existing?.providerUserId === intent.providerUserId && intent.sameSubject === 'unchanged') return;
     const account = await tx.account.findUnique({
@@ -192,6 +195,7 @@ export async function linkIdentityInTx(tx: Tx, intent: IdentityLinkIntent): Prom
 }
 
 export async function unlinkIdentityInTx(tx: Tx, input: { accountId: string; provider: string; clearMatchingUsername?: string | null }): Promise<void> {
+    await acquireAccountSessionOwnerMetadataFencesInTx(tx, [input.accountId], "exclusive");
     const management = await readIdentityManagementInTx(tx, input);
     if (management && !management.canDisconnect) {
         throw new IdentityManagementDeniedError(management.disconnectReason ?? 'management_unavailable');
@@ -208,7 +212,7 @@ export async function unlinkIdentity(input: Parameters<typeof unlinkIdentityInTx
     await inTx((tx) => unlinkIdentityInTx(tx, input), { isolationLevel: "Serializable" /* Final-login viability spans identity, password, provider policy and Home-owner rows. */ });
 }
 
-async function readProviderLinkedAccountIdsInTx(tx: Tx, provider: string): Promise<readonly string[]> {
+export async function readProviderLinkedAccountIdsInTx(tx: Tx, provider: string): Promise<readonly string[]> {
     const identities = await tx.accountIdentity.findMany({
         where: { provider },
         select: { accountId: true },
@@ -227,6 +231,7 @@ export async function removeIdentitiesForProviderInTx(
 ): Promise<readonly string[]> {
     const accountIds = await readProviderLinkedAccountIdsInTx(tx, provider);
     if (accountIds.length === 0) return [];
+    await acquireAccountSessionOwnerMetadataFencesInTx(tx, accountIds, "exclusive");
     await tx.accountIdentity.deleteMany({ where: { provider } });
     await publishIdentityChanges(tx, accountIds);
     return accountIds;
@@ -254,6 +259,7 @@ export type IdentityRefresh = Pick<Prisma.AccountIdentityUncheckedUpdateInput,
 
 export async function refreshIdentity(input: { accountId: string; provider: string; identityId: string; data: IdentityRefresh }): Promise<void> {
     await inTx(async (tx) => {
+        await acquireAccountSessionOwnerMetadataFencesInTx(tx, [input.accountId], "exclusive");
         const { count } = await tx.accountIdentity.updateMany({
             where: { id: input.identityId, accountId: input.accountId, provider: input.provider }, data: input.data,
         });
@@ -263,6 +269,7 @@ export async function refreshIdentity(input: { accountId: string; provider: stri
 
 export async function setIdentityVisibilityInTx(tx: Tx, input: { accountId: string; provider: string; showOnProfile: boolean }): Promise<boolean> {
     if (!isAccountIdentityEligibleForGenericPresentation(process.env, input.provider)) return false;
+    await acquireAccountSessionOwnerMetadataFencesInTx(tx, [input.accountId], "content");
     const management = await readIdentityManagementInTx(tx, input);
     if (management && !management.canPublishProfile) {
         throw new IdentityManagementDeniedError(management.publishProfileReason ?? 'management_unavailable');

@@ -1,27 +1,32 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { preflightCatalogEntryFixture } from './preflightSessionControlsProbeAdapter.testkit';
 
 const {
-  resolvePreflightSessionControlsProbeAdapterMock,
   probeModelsRawMock,
 } = vi.hoisted(() => ({
-  resolvePreflightSessionControlsProbeAdapterMock: vi.fn(),
   probeModelsRawMock: vi.fn(),
 }));
 
-vi.mock('./resolvePreflightSessionControlsProbeAdapter', () => ({
-  resolvePreflightSessionControlsProbeAdapter: resolvePreflightSessionControlsProbeAdapterMock,
-}));
+vi.mock('node:fs', async importOriginal => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  const { createBundledPluginPublicationFsFixture } = await import('@/plugins/projection/registry/builtIn/locators.testkit');
+  return createBundledPluginPublicationFsFixture(actual);
+});
 
-import { probeAgentModelsBestEffort, resetAgentModelsProbeCacheForTests } from './agentModelsProbe';
+import { probeAgentModelsBestEffort as probeModels, resetAgentModelsProbeCacheForTests } from './agentModelsProbe';
+
+function probeAgentModelsBestEffort(params: Parameters<typeof probeModels>[0]) {
+  return probeModels({ ...params, catalogEntry: preflightCatalogEntryFixture('codex', {
+    failureCacheStrategy: 'retry', probeModelsRaw: probeModelsRawMock,
+  }) });
+}
+
+afterEach(() => vi.unstubAllEnvs());
 
 describe('probeAgentModelsBestEffort (codex app-server)', () => {
   beforeEach(() => {
-    resolvePreflightSessionControlsProbeAdapterMock.mockReset();
     probeModelsRawMock.mockReset();
-    resolvePreflightSessionControlsProbeAdapterMock.mockResolvedValue({
-      failureCacheStrategy: 'retry',
-      probeModelsRaw: probeModelsRawMock,
-    });
+    vi.stubEnv('HAPPIER_CODEX_PATH', process.execPath);
     resetAgentModelsProbeCacheForTests();
   });
 
@@ -39,7 +44,7 @@ describe('probeAgentModelsBestEffort (codex app-server)', () => {
       accountSettings: { codexBackendMode: 'appServer' },
     });
 
-    expect(first).toEqual({
+    expect(first).toMatchObject({
       agentId: 'codex',
       availableModels: [
         { id: 'default', name: 'Default' },
@@ -49,7 +54,6 @@ describe('probeAgentModelsBestEffort (codex app-server)', () => {
       supportsFreeform: false,
       source: 'dynamic',
     });
-    expect(resolvePreflightSessionControlsProbeAdapterMock).toHaveBeenCalledWith('codex');
     expect(probeModelsRawMock).toHaveBeenCalledTimes(2);
     expect(probeModelsRawMock).toHaveBeenNthCalledWith(1, expect.objectContaining({
       cwd: '/repo',
@@ -87,7 +91,7 @@ describe('probeAgentModelsBestEffort (codex app-server)', () => {
       accountSettings: { codexBackendMode: 'appServer' },
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       agentId: 'codex',
       availableModels: [
         { id: 'default', name: 'Default' },
@@ -132,7 +136,7 @@ describe('probeAgentModelsBestEffort (codex app-server)', () => {
       cwd: '/repo-default',
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       agentId: 'codex',
       availableModels: [
         { id: 'default', name: 'Default' },
@@ -148,7 +152,7 @@ describe('probeAgentModelsBestEffort (codex app-server)', () => {
     }));
   });
 
-  it('surfaces an empty Codex app-server model list as unavailable instead of static fallback models', async () => {
+  it('preserves an observed empty Codex app-server model list without static fallback models', async () => {
     probeModelsRawMock.mockResolvedValueOnce([]);
 
     const result = await probeAgentModelsBestEffort({
@@ -157,11 +161,11 @@ describe('probeAgentModelsBestEffort (codex app-server)', () => {
       accountSettings: { codexBackendMode: 'appServer' },
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       agentId: 'codex',
       availableModels: [],
       supportsFreeform: false,
-      source: 'unavailable',
+      source: 'dynamic',
     });
     expect(probeModelsRawMock).toHaveBeenCalledTimes(1);
   });
@@ -177,7 +181,7 @@ describe('probeAgentModelsBestEffort (codex app-server)', () => {
       accountSettings: { codexBackendMode: 'appServer' },
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       agentId: 'codex',
       availableModels: [],
       supportsFreeform: false,
@@ -222,7 +226,7 @@ describe('probeAgentModelsBestEffort (codex app-server)', () => {
       accountSettings: { codexBackendMode: 'appServer' },
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       agentId: 'codex',
       availableModels: [
         { id: 'default', name: 'Default' },

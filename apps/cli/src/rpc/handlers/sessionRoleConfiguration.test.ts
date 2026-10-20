@@ -1,13 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { accountSettingsParse, BUILT_IN_ROLES_V1, createRoleSourceReaderV1, readSessionWorkspaceWritesV1 } from '@happier-dev/protocol';
-import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshot, readAccountRoleOverridesFromSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { Metadata } from '@/api/types';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import type { RpcHandler, RpcHandlerContext } from '@/api/rpc/types';
 import { applyRegisteredSessionStateFieldMutationToMetadata } from '@/api/session/client/transport/mutations/applyRegisteredSessionStateFieldMutation';
-import { registerSessionRoleConfigurationHandler } from './sessionRoleConfiguration';
+import { registerSessionRoleConfigurationHandler as registerOwnerSessionRoleConfigurationHandler } from './sessionRoleConfiguration';
 import { resolveCliAgentStartContextV1 } from '@/session/actions/resolveCliAgentStartContextV1';
+import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
+import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
+import { createWorkflowAcceptedAuthorizationCurrentness } from '@/daemon/workflows/daemonRuntime';
+import { buildActionExecutorContextForRpc } from './_actionDispatchAdapter';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
+import { writeSessionRoleIdV1ToMetadata, writeSessionRoleConfigurationV1ToMetadata } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
+
+function registerSessionRoleConfigurationHandler(params: Parameters<typeof registerOwnerSessionRoleConfigurationHandler>[0]) {
+  registerOwnerSessionRoleConfigurationHandler({ readSettingsOverrides: () => {
+    const snapshot = getActiveAccountSettingsSnapshot();
+    return snapshot ? readAccountRoleOverridesFromSnapshot(snapshot) : { status: 'unavailable', reason: 'source-unavailable' };
+  }, ...params });
+}
 
 describe('session role configuration RPC', () => {
   beforeEach(() => {
@@ -17,6 +31,132 @@ describe('session role configuration RPC', () => {
       promptLibraryCatalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] } });
   });
   afterEach(() => resetActiveAccountSettingsSnapshotForTests());
+  it('applies complete report snapshots without waiting on unrelated Artifact inventory', async () => {
+    let metadata = createTestMetadata({ work: { sessionRolesV1: { roleId: 'builder', overrides: {}, sessionRoles: {}, notes: 'Before copy' } } });
+    const handlers = new Map<string, RpcHandler>();
+    // The external Artifact store is unavailable; built-in and inherited policy
+    // still have complete local authority at the registered recipient owner.
+    const sources = createRoleSourceReaderV1({ artifactStore: {
+      list: async () => { throw new Error('Unrelated Artifact inventory is unavailable'); },
+      read: async () => null,
+    } });
+    registerSessionRoleConfigurationHandler({ rpcHandlerManager: { registerHandler: (method, handler) => { handlers.set(method, handler); } },
+      sessionId: 'child', readSessionMetadata: () => metadata, readRoleSources: sources,
+      stageSessionStateMutation: async mutation => { metadata = applyRegisteredSessionStateFieldMutationToMetadata(metadata, mutation); } });
+    const handler = handlers.get(SESSION_RPC_METHODS.SESSION_ROLES_CONFIGURATION_SET)!;
+    const context: RpcHandlerContext = { signal: new AbortController().signal, callerAuthority: 'present_user' };
+    const configuration = { inheritedFrom: 'lead', overrides: {}, sessionRoles: {
+      builder: { ...BUILT_IN_ROLES_V1.builder, roleId: 'builder' },
+      inherited: { ...BUILT_IN_ROLES_V1.builder, roleId: 'inherited', name: 'Release checks' },
+    }, notes: 'Copied release notes', answersWorkerQuestions: false };
+    expect(await handler({ sessionId: 'child', configuration }, context)).toEqual({ updated: true });
+    expect(metadata.work?.sessionRolesV1).toMatchObject({ roleId: 'builder', ...configuration });
+    metadata = writeSessionRoleIdV1ToMetadata(metadata, 'inherited');
+    const { answersWorkerQuestions: _answersWorkerQuestions, ...rolesOnlyConfiguration } = configuration;
+    expect(await handler({ sessionId: 'child', configuration: { ...rolesOnlyConfiguration, notes: 'Second copy' } }, context))
+      .toEqual({ updated: true });
+    expect(metadata.work?.sessionRolesV1).toMatchObject({ roleId: 'inherited', notes: 'Second copy', answersWorkerQuestions: false });
+    metadata = writeSessionRoleIdV1ToMetadata(metadata, 'external-role');
+    await expect(handler({ sessionId: 'child', configuration: { ...configuration, notes: 'Unproved external policy' } }, context))
+      .rejects.toThrow('Unrelated Artifact inventory is unavailable');
+    expect(metadata.work?.sessionRolesV1?.notes).toBe('Second copy');
+  });
+  it('copies from a signed genuine Run through current target admission and the durable configuration owner', async () => {
+    let metadata = createTestMetadata();
+    let currentLead = 'lead';
+    let reparentAfterObservation = false;
+    let tightenOnFinalRelationRead = false;
+    let selectBuilderOnFinalRelationRead = false;
+    let relationReadCount = 0;
+    let nativePolicy: 'allow' | 'deny' = 'allow';
+    const handlers = new Map<string, RpcHandler>();
+    const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`,
+      encryption: null, credentialProvenance: 'stored_session' as const };
+    const scopeKey = resolveAccountSettingsScopeKey(credentials);
+    setActiveAccountSettingsSnapshot({ scopeKey, source: 'network', settingsVersion: 1, settings: accountSettingsParse({}),
+      rawSettings: {}, settingsSecretsReadKeys: [], loadedAtMs: 1,
+      promptLibraryCatalog: { status: 'ready', rows: [], tombstones: [], diagnostics: [] } });
+    const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId: 'child', mode: 'plain', ctx: null,
+      actionsSettingsProvider: createActionSettingsProvider({ scopeKey }) });
+    const current = createWorkflowAcceptedAuthorizationCurrentness({ accountId: 'owner',
+      listAccountApiTokens: async () => ({ tokens: [] }), resolveCurrentPluginOccurrenceId: async () => null,
+      resolveCurrentPluginSourceCustody: async () => null, isMediatedSourceCurrent: async () => false });
+    registerSessionRoleConfigurationHandler({ rpcHandlerManager: { registerHandler: (method, handler) => { handlers.set(method, handler); } },
+      sessionId: 'child', readSessionMetadata: () => metadata, readRoleSources: createRoleSourceReaderV1({}),
+      resolveAgentStartContext: deps.resolveAgentStartContext,
+      sessionList: async () => ({ queryVersion: 1, sessions: [{ id: 'child', createdAt: 1, updatedAt: 1,
+        active: true, activeAt: 1, encryption: null }], nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false }),
+      isWorkflowAuthorizationCurrent: async context => context.actionCaller?.kind === 'workflowRun'
+        && await current({ authorization: context.actionCaller.authorization }),
+      readCurrentReportLead: async () => {
+        if ((tightenOnFinalRelationRead || selectBuilderOnFinalRelationRead) && ++relationReadCount === 2) {
+          if (selectBuilderOnFinalRelationRead) metadata = writeSessionRoleIdV1ToMetadata(metadata, 'builder');
+          else {
+            metadata = writeSessionRoleConfigurationV1ToMetadata(metadata, {
+              inheritedFrom: 'lead', overrides: { builder: { roleId: 'builder', workspaceWrites: 'deny' } },
+              sessionRoles: {}, notes: 'User tightened hands-off',
+            });
+            expect(readSessionWorkspaceWritesV1(metadata)).toBe('deny');
+          }
+        }
+        const observed = currentLead;
+        if (reparentAfterObservation) currentLead = 'other';
+        return observed;
+      },
+      prepareWorkspaceWritesPolicy: async policy => { nativePolicy = policy; return { ok: true }; },
+      stageSessionStateMutation: async mutation => { metadata = applyRegisteredSessionStateFieldMutationToMetadata(metadata, mutation); } });
+    const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-proof', binding: {
+      accountId: 'owner', custodianAccountId: 'owner', authentication: { kind: 'account', tokenEpoch: 0 }, accountEncryptionMode: 'plain',
+      serverIdentityId: 'home', machineId: 'run-machine', installationId: 'installed', actionId: 'session.roles.apply_to_reports',
+      requestId: 'copy', requestEnvelopeDigest: 'a'.repeat(43), target: { kind: 'session', sessionId: 'child' },
+      workflowActionOrigin: { runId: 'run', requestId: 'copy', sessionAuthority: {
+        authorization: { principal: { kind: 'host' }, admittedPermissionCeiling: 'default' }, runDepth: 4,
+        runOriginSessionId: 'lead', directory: '/repo', workspaceWrites: 'allow',
+      } },
+    } });
+    const handler = handlers.get(SESSION_RPC_METHODS.SESSION_ROLES_CONFIGURATION_SET)!;
+    const context: RpcHandlerContext = { signal: new AbortController().signal, callerAuthority: 'account_automation',
+      callerInputAuthorization: authorization };
+    const request = { sessionId: 'child', configuration: { inheritedFrom: 'lead', overrides: {}, sessionRoles: {}, notes: 'Run copied' } };
+    expect(await handler(request, context)).toEqual({ updated: true });
+    expect(metadata.work?.sessionRolesV1?.notes).toBe('Run copied');
+    const originDeps = createCliActionDeps({ token: credentials.token, credentials, sessionId: 'lead', mode: 'plain', ctx: null,
+      getCurrentSessionMetadata: () => createTestMetadata({ machineId: 'target-machine' }),
+      getCurrentSessionWorkDepth: () => 0,
+      getCurrentSessionBackendTarget: () => ({ kind: 'backend', backendId: 'codex', sourceKind: 'built_in' }),
+      readRoleSources: createRoleSourceReaderV1({}), actionsSettingsProvider: createActionSettingsProvider({ scopeKey }) });
+    const foreignAccount = ExternalActionExecutionAuthorizationV1Schema.parse({ ...authorization, binding: {
+      ...authorization.binding, accountId: 'another-owner', target: { kind: 'session', sessionId: 'lead' },
+    } });
+    expect(await originDeps.resolveAgentStartContext!(buildActionExecutorContextForRpc({
+      callerAuthority: 'account_automation', callerInputAuthorization: foreignAccount,
+    }))).toBeNull();
+    currentLead = 'other';
+    expect(await handler({ ...request, configuration: { ...request.configuration, notes: 'After reparent' } }, context))
+      .toMatchObject({ ok: false, errorCode: 'session_target_not_led' });
+    expect(metadata.work?.sessionRolesV1?.notes).toBe('Run copied');
+    currentLead = 'lead';
+    reparentAfterObservation = true;
+    expect(await handler({ ...request, configuration: { ...request.configuration, notes: 'Detached during copy' } }, context))
+      .toMatchObject({ ok: false, errorCode: 'session_target_not_led' });
+    expect(metadata.work?.sessionRolesV1?.notes).toBe('Run copied');
+    reparentAfterObservation = false;
+    currentLead = 'lead';
+    metadata = writeSessionRoleIdV1ToMetadata(metadata, 'builder');
+    tightenOnFinalRelationRead = true;
+    const concurrentCopyResult = await handler(request, context);
+    expect({ result: concurrentCopyResult, workspaceWrites: readSessionWorkspaceWritesV1(metadata) })
+      .toMatchObject({ result: { ok: false, errorCode: 'role_policy_denied' }, workspaceWrites: 'deny' });
+    metadata = createTestMetadata();
+    relationReadCount = 0;
+    tightenOnFinalRelationRead = false;
+    selectBuilderOnFinalRelationRead = true;
+    const newlySelectedResult = await handler({ ...request, configuration: { ...request.configuration,
+      overrides: { builder: { roleId: 'builder', workspaceWrites: 'deny' } },
+    } }, context);
+    expect({ result: newlySelectedResult, nativePolicy, workspaceWrites: readSessionWorkspaceWritesV1(metadata) })
+      .toMatchObject({ result: { updated: true }, nativePolicy: 'deny', workspaceWrites: 'deny' });
+  });
   it('refuses configuration effects when Account override authority is unavailable', async () => {
     let metadata = createTestMetadata();
     const handlers = new Map<string, RpcHandler>();
@@ -49,6 +189,8 @@ describe('session role configuration RPC', () => {
     let target: Metadata = { ...createTestMetadata(), work: { sessionRolesV1: { roleId: 'builder', overrides: {}, sessionRoles: {}, notes: 'Child' } } };
     let currentLead = 'lead';
     let inSubtree = true;
+    let tightenOnFinalRelationRead = false;
+    let relationReadCount = 0;
     const handlers = new Map<string, RpcHandler>();
     registerSessionRoleConfigurationHandler({ rpcHandlerManager: { registerHandler: (method, handler) => { handlers.set(method, handler); } },
       sessionId: 'child', readSessionMetadata: () => target,
@@ -65,7 +207,16 @@ describe('session role configuration RPC', () => {
       sessionList: async ({ query }) => ({ queryVersion: 1, sessions: inSubtree && query?.storage === 'active' ? [{
         id: 'child', createdAt: 1, updatedAt: 1, active: true, activeAt: 1, encryption: null,
       }] : [], nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false }),
-      readCurrentReportLead: async () => currentLead,
+      readCurrentReportLead: async () => {
+        if (tightenOnFinalRelationRead && ++relationReadCount === 2) {
+          target = writeSessionRoleConfigurationV1ToMetadata(target, {
+            inheritedFrom: 'lead', overrides: { builder: { roleId: 'builder', workspaceWrites: 'deny' } },
+            sessionRoles: {}, notes: 'User tightened hands-off',
+          });
+          expect(readSessionWorkspaceWritesV1(target)).toBe('deny');
+        }
+        return currentLead;
+      },
       readCallerWorkspaceWrites: async () => readSessionWorkspaceWritesV1(source) ?? null,
       stageSessionStateMutation: async (mutation) => {
         expect(mutation.source).toBe('runtime');
@@ -89,6 +240,11 @@ describe('session role configuration RPC', () => {
     expect(await handler({ ...request, configuration: { ...request.configuration, notes: 'Relaxed' } }, context))
       .toMatchObject({ ok: false, errorCode: 'role_policy_denied' });
     expect(target).toMatchObject({ work: { sessionRolesV1: { notes: 'Copied' } } });
+    source = writeSessionRoleIdV1ToMetadata(source, 'builder');
+    tightenOnFinalRelationRead = true;
+    const concurrentCopyResult = await handler(request, context);
+    expect({ result: concurrentCopyResult, workspaceWrites: readSessionWorkspaceWritesV1(target) })
+      .toMatchObject({ result: { ok: false, errorCode: 'role_policy_denied' }, workspaceWrites: 'deny' });
   });
   it('rejects report copies when the authenticated caller cannot reach the target or allows forbidden writes', async () => {
     let metadata = createTestMetadata();

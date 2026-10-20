@@ -67,7 +67,7 @@ import { ensureUiWorkspacePackagesBuilt } from '../../apps/ui/scripts/ensureWork
 import { readStackInfoSnapshot } from '../../apps/stack/scripts/stack/stack_info_snapshot.mjs';
 import { withPatchedProcessEnv } from '../../apps/stack/scripts/testkit/core/env_scope.mjs';
 import { bundleWorkspacePackageWithRuntimeDependencies } from '../../packages/cli-common/dist/workspaces/index.js';
-import { installNativeAdmissionFixture, installWorkspaceAdmissionProcessFixture } from '../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
+import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture, installWorkspaceAdmissionProcessFixture } from '../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
 import { writeFakeBin } from '../../apps/stack/scripts/testkit/core/fake_bin_harness.mjs';
 
 for (const preparation of ['named', 'remote-validation']) test(`${preparation} workspace preparation releases dependency and dist custody while compiler capacity is unavailable`, { skip: process.platform !== 'linux', timeout: 30_000 }, async (t) => {
@@ -109,7 +109,7 @@ writeFileSync(join(process.env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR, 'index.js'), '
 const result = spawnSync('/bin/sh', [${JSON.stringify(launcher)}, '--heavyweight-admission', '--class=package-dist', '--machine=worker', '--', process.execPath, ${JSON.stringify(compiler)}], { stdio: 'inherit', env: process.env });
 process.exitCode = result.status ?? 1;
 `);
-  const env = { ...process.env, PATH: `${join(root, 'bin')}:/usr/bin:/bin`, npm_execpath: yarn, CI: '',
+  const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${join(root, 'bin')}:/usr/bin:/bin`, npm_execpath: yarn, CI: '',
     FIXTURE_MEMORY: memory, HAPPIER_DEV_TARGET_EXECUTION: '1', HAPPIER_WORKSPACE_DIST_BUILD_LOCK_HELD: '',
     HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES: '[]', HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN: '',
     HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT: '', HAPPIER_HEAVYWEIGHT_ADMISSION_MACHINE: '' };

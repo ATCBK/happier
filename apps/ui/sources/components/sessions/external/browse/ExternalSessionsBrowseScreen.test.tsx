@@ -480,6 +480,10 @@ describe('ExternalSessionsBrowseScreen', () => {
             await network.addHome(profile.serverUrl, accountId);
             await httpHomes.addHome({ name: key, serverUrl: profile.serverUrl, accountId, active: false,
                 ...(key === 'focused' || key === 'other' ? { serverIdentityId: key === 'focused' ? serverA : serverB } : {}) });
+            // Bootstrap/refetch must see the same connected Accounts as the screen fixture.
+            httpHomes.answer(profile.id, '/v1/account/profile', {
+                body: AccountProfileSchema.parse({ id: accountId, ...profileMock }),
+            });
             for (const machineId of ['machine-1', 'machine-2']) httpHomes.answer(profile.id, `/v1/machines/${machineId}`, {
                 select: () => ({ body: { machine: machineCensusRow(machineId, accountId) } }),
             });
@@ -1432,7 +1436,7 @@ describe('ExternalSessionsBrowseScreen', () => {
         await flushHookEffects();
 
         const text = screen.getTextContent();
-        expect(text).toContain('externalSessions.browseFailedToLoad');
+        expect(text).toContain('externalSessions.browseAgentFailed');
         expect(text).not.toContain('sensitive daemon implementation detail');
     });
 
@@ -2145,17 +2149,12 @@ describe('ExternalSessionsBrowseScreen', () => {
     it('switches to the codex connected-service source before linking', async () => {
         const { ExternalSessionsBrowseScreen } = await externalSessionsBrowseScreenModulePromise;
         const screen = await renderScreen(<ExternalSessionsBrowseScreen />);
-        const tree = screen.tree;
 
         await flushHookEffects();
         candidatesListSpy.mockClear();
 
         const sourceFilter = findBrowseFilter(screen, 'direct-session-source-picker');
         expect(sourceFilter).toBeTruthy();
-
-        await act(async () => {
-            sourceFilter!.onChange?.('codex:connected-service:openai-codex:work');
-        });
 
         candidatesListSpy.mockResolvedValueOnce({
             ok: true,
@@ -2180,7 +2179,7 @@ describe('ExternalSessionsBrowseScreen', () => {
             nextCursor: null,
         });
         await act(async () => {
-            tree.update(<ExternalSessionsBrowseScreen />);
+            sourceFilter!.onChange?.('codex:connected-service:openai-codex:work');
         });
         await flushHookEffects();
 
@@ -2228,7 +2227,6 @@ describe('ExternalSessionsBrowseScreen', () => {
         });
         const { ExternalSessionsBrowseScreen } = await externalSessionsBrowseScreenModulePromise;
         const screen = await renderScreen(<ExternalSessionsBrowseScreen />);
-        const tree = screen.tree;
 
         await flushHookEffects();
 
@@ -2258,10 +2256,8 @@ describe('ExternalSessionsBrowseScreen', () => {
         await act(async () => {
             providerFilter!.onChange?.('ohMyPi');
         });
-
-        await act(async () => {
-            tree.update(<ExternalSessionsBrowseScreen />);
-        });
+        // The state change already renders the selected Agent. Updating the raw
+        // renderer root bypasses the screen harness and remounts it at Codex.
         await flushHookEffects();
 
         expect(candidatesListSpy).toHaveBeenCalledWith({

@@ -41,11 +41,12 @@ describe('registered finite Action Machine admission', () => {
       resolveWorkspaceExecutionConfig: async () => createWorkspaceExecutionConfigClientV1({ mode: 'plain', material: null,
         randomBytes: size => new Uint8Array(size), isCurrent: () => true,
         transport: { read: noEffect, mutate: noEffect } }),
-      nativeIo: { resolveTool: noEffect }, environmentIo: { resolveTool: noEffect, run: noEffect },
+      nativeIo: { resolveTool: noEffect }, environmentIo: { resolveTool: noEffect, run: noEffect,
+        createInvocation: () => { throw new Error('No native invocation is admitted'); } },
       terminalSessions,
     };
     const handlers = new Map<string, RpcHandler>();
-    registerActionSpecRpcHandlers({
+    registerActionSpecRpcHandlers<'projects.prepare'>({
       rpcHandlerManager: { registerHandler(method, handler) { handlers.set(method, handler); } },
       targetMachineId: 'machine', actionIds: ['projects.prepare'],
       resolveActionExecutor: request => ({ execute: async (actionId, input, context) => {

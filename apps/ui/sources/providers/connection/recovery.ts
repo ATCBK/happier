@@ -1,6 +1,7 @@
 import { ProviderErrorV1Schema, type ProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
+import type { useRouter } from '@/components/appShell/workspace/destinationRoute';
 
-type RecoveryRouter = Readonly<{ push: (href: string) => void }>;
+type RecoveryRouter = Readonly<Pick<ReturnType<typeof useRouter>, 'push'>>;
 
 export type ProviderRecoveryAvailability = Readonly<{
     retry?: boolean;
@@ -96,7 +97,7 @@ export async function dispatchProviderRecoveryAction(input: Readonly<{
         enableOnMachine: input.enableOnMachine !== undefined,
     })) return false;
     const connectionPath = error.connectionId
-        ? `/(app)/settings/providers/${encodeURIComponent(error.connectionId)}`
+        ? `/(app)/settings/providers/${encodeURIComponent(error.connectionId)}` as const
         : null;
     switch (error.action) {
         case 'retry':

@@ -6,6 +6,33 @@ import { getSharedBlockingApprovalCoordinator } from '@happier-dev/protocol/acti
 const developmentCustody = { kind: 'development', registeredRootId: 'root-7' } as const;
 
 describe('target action current-intent adapter', () => {
+  it('refuses confidential admission before creating an orphan receipt when its terminal writer is unavailable', async () => {
+    const create = vi.fn();
+    const adapter = createTargetActionCurrentIntentAdapter({ create, read: async () => null });
+    await expect(adapter({
+      action: { qualifiedId: 'acme.alpha/actions/run', pluginId: 'acme.alpha', localId: 'run', occurrenceId: '7',
+        sourceCustody: developmentCustody, dangerLevel: 'destructive', scopes: ['global'], surfaces: ['cli'],
+        hostAccess: [], input: { token: 'private' }, secretInputPaths: ['token'], policyFingerprint: 'b'.repeat(64),
+        confirmation: { title: 'Run action' } },
+      fingerprint: 'a'.repeat(64), surface: 'cli',
+    })).resolves.toEqual({ status: 'unavailable', code: 'plugin_action_current_intent_unavailable' });
+    expect(create).not.toHaveBeenCalled();
+  });
+  it('reports a content-free typed reason when the approval subject is invalid', async () => {
+    const reasons: string[] = [];
+    const adapter = createTargetActionCurrentIntentAdapter({
+      create: async () => { throw new Error('An invalid subject must not be written'); },
+      read: async () => null,
+    });
+    await expect(adapter({
+      action: { qualifiedId: 'acme.alpha/actions/run', pluginId: 'acme.alpha', localId: 'run', occurrenceId: '7',
+        sourceCustody: developmentCustody, dangerLevel: 'writesLocal', scopes: ['global'], surfaces: ['cli'],
+        hostAccess: [], input: { privateOperand: 'must-not-enter-diagnostics' }, policyFingerprint: 'b'.repeat(64),
+        confirmation: { title: 'Apply change' } },
+      fingerprint: 'invalid', surface: 'cli', reportUnavailable: reason => { reasons.push(reason); },
+    })).resolves.toEqual({ status: 'unavailable', code: 'plugin_action_current_intent_unavailable' });
+    expect(reasons).toEqual(['approval_subject_invalid']);
+  });
   it.each([
     { _isSecretValue: true, value: 'private' },
     { entries: [{ credential: { _isSecretValue: true, value: 'private' }, public: 'visible' }] },
@@ -14,6 +41,7 @@ describe('target action current-intent adapter', () => {
     const adapter = createTargetActionCurrentIntentAdapter({
       create: async request => { stored = request; return { artifactId: 'secret-carrier' }; },
       read: async () => stored ? { ...stored, status: 'approved', decision: { kind: 'approve', decidedAtMs: 2 } } : null,
+      update: async () => ({ ok: true }),
     });
     await expect(adapter({
       action: { qualifiedId: 'acme.alpha/actions/run', pluginId: 'acme.alpha', localId: 'run', occurrenceId: '7',
@@ -35,6 +63,7 @@ describe('target action current-intent adapter', () => {
       now: () => 1,
       create: async (request) => { stored.request = request; return { artifactId: 'approval-other-device' }; },
       read: async () => stored.request,
+      update: async () => ({ ok: true }),
       subscribeChanges: (artifactId, change) => {
         subscribedArtifactId = artifactId;
         onChange = change;
@@ -50,7 +79,7 @@ describe('target action current-intent adapter', () => {
     if (!stored.request) throw new Error('approval_not_created');
     stored.request = { ...stored.request, status: 'approved', updatedAtMs: 2, decision: { kind: 'approve', decidedAtMs: 2 } };
     onChange();
-    await expect(pending).resolves.toEqual({ status: 'approved', fingerprint: 'a'.repeat(64), artifactId: 'approval-other-device' });
+    await expect(pending).resolves.toMatchObject({ status: 'approved', fingerprint: 'a'.repeat(64), artifactId: 'approval-other-device' });
     expect(dispose).toHaveBeenCalledTimes(1);
   });
 
@@ -60,11 +89,12 @@ describe('target action current-intent adapter', () => {
       now: () => 1,
       create: async (request) => { stored = request; return { artifactId: 'approval-1' }; },
       read: async () => ({ ...stored, status: 'approved', updatedAtMs: 2, decision: { kind: 'approve', decidedAtMs: 2 } }),
+      update: async () => ({ ok: true }),
     });
     await expect(adapter({
       action: { qualifiedId: 'acme.alpha/actions/run', pluginId: 'acme.alpha', localId: 'run', occurrenceId: '7', sourceCustody: developmentCustody, dangerLevel: 'destructive', scopes: ['global'], surfaces: ['cli'], hostAccess: [], input: { x: 1 }, secretInputPaths: ['x'], policyFingerprint: 'b'.repeat(64), confirmation: { title: 'Run action' } },
       fingerprint: 'a'.repeat(64), surface: 'cli',
-    })).resolves.toEqual({ status: 'approved', fingerprint: 'a'.repeat(64), artifactId: 'approval-1' });
+    })).resolves.toMatchObject({ status: 'approved', fingerprint: 'a'.repeat(64), artifactId: 'approval-1' });
     expect(stored).toMatchObject({ kind: 'plugin_target_action', qualifiedActionId: 'acme.alpha/actions/run', sourceCustody: developmentCustody, policyFingerprint: 'b'.repeat(64) });
     expect(stored).not.toHaveProperty('occurrenceId');
   });
@@ -89,6 +119,7 @@ describe('target action current-intent adapter', () => {
         return { artifactId: 'approval-confirmation-1' };
       },
       read: async () => stored,
+      update: async () => ({ ok: true }),
     });
 
     await expect(adapter({
@@ -107,7 +138,7 @@ describe('target action current-intent adapter', () => {
         },
       },
       fingerprint: 'a'.repeat(64), surface: 'ui',
-    })).resolves.toEqual({ status: 'approved', fingerprint: 'a'.repeat(64), artifactId: 'approval-confirmation-1' });
+    })).resolves.toMatchObject({ status: 'approved', fingerprint: 'a'.repeat(64), artifactId: 'approval-confirmation-1' });
 
     expect(stored).toMatchObject({
       summary: 'Start a new baseline',
@@ -211,6 +242,7 @@ describe('target action current-intent adapter', () => {
     const adapter = createTargetActionCurrentIntentAdapter({
       now: () => 1,
       create: async (request) => { stored = request; return { artifactId: 'approval-2' }; },
+      update: async () => ({ ok: true }),
       read: async () => ({
         ...stored, ...change, status: 'approved', updatedAtMs: 2,
         decision: { kind: 'approve', decidedAtMs: 2 },
@@ -249,6 +281,7 @@ describe('target action current-intent adapter', () => {
         return { artifactId: 'approval-detail-changed' };
       },
       read: async () => stored,
+      update: async () => ({ ok: true }),
     });
     await expect(changed({ action, fingerprint: 'a'.repeat(64), surface: 'cli' })).resolves.toEqual({
       status: 'unavailable', code: 'plugin_action_current_intent_mismatch',
@@ -265,6 +298,7 @@ describe('target action current-intent adapter', () => {
         return { artifactId: 'approval-canceled' };
       },
       read: async () => stored,
+      update: async () => ({ ok: true }),
     });
     await expect(canceled({ action, fingerprint: 'c'.repeat(64), surface: 'cli' })).resolves.toEqual({
       status: 'rejected', code: 'plugin_action_current_intent_rejected',

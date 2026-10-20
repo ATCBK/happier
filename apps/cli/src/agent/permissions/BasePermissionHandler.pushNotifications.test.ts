@@ -2,19 +2,26 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
 import * as pinnedHttp from '@/network/pinnedHttp';
 import { createSessionNotificationContextFixture } from '@/testkit/backends/sessionFixtures';
+import { createNotificationAccountSnapshotFixture } from '@/testkit/notificationAccountSnapshot';
+import { clearActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 
 import {
-  accountSettingsParse,
-  deriveSettingsSecretsKeyV1,
-  encryptSecretStringV1,
+  sealSavedSecretResourceStoredContentV1,
 } from '@happier-dev/protocol';
 
 import { BasePermissionHandler, type PermissionResult } from './BasePermissionHandler';
+import type { AgentState } from '@/api/types';
 import type { AgentStateRequestResponseTarget } from './agentStateRequestStore';
 import { ServerBoundPermissionRpcHandlerManager } from './testkit/serverBoundPermissionRpcHandlerManager';
 
 const fetchSessionNotificationContext = async (sessionId: string) => createSessionNotificationContextFixture(sessionId);
+
+function admitNotificationSettings(options: Parameters<typeof createNotificationAccountSnapshotFixture>[0] = {}) {
+  const snapshot = createNotificationAccountSnapshotFixture(options);
+  setActiveAccountSettingsSnapshot(snapshot);
+  return snapshot.settings;
+}
 
 class FakeSession {
   sessionId = 'session-test';
@@ -37,6 +44,10 @@ class FakeSession {
     this.agentState = updater(this.agentState);
     return this.agentState;
   }
+
+  async updateAgentStateRequestSettlement(updater: (state: AgentState) => AgentState): Promise<void> {
+    this.updateAgentState(updater);
+  }
 }
 
 class TestPermissionHandler extends BasePermissionHandler {
@@ -44,15 +55,8 @@ class TestPermissionHandler extends BasePermissionHandler {
     return '[Test]';
   }
 
-  publishPending(toolCallId: string, toolName: string, input: unknown): void {
-    this.addPendingRequestToState(toolCallId, toolName, input);
-  }
-
   request(toolCallId: string, toolName: string, input: unknown): Promise<PermissionResult> {
-    return new Promise<PermissionResult>((resolve, reject) => {
-      this.pendingRequests.set(toolCallId, { resolve, reject, toolName, input });
-      this.addPendingRequestToState(toolCallId, toolName, input);
-    });
+    return this.requestPermissionDecision(toolCallId, toolName, input);
   }
 
   seedPendingRequest(
@@ -84,14 +88,13 @@ class TestPermissionHandler extends BasePermissionHandler {
 describe('BasePermissionHandler push notifications', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    clearActiveAccountSettingsSnapshot();
   });
 
   it('sends a permission-request push when enabled', async () => {
     const sendToAllDevicesAsync = vi.fn(async () => { return true; });
     const session = new FakeSession();
-    const settings = accountSettingsParse({
-        notificationsSettingsV1: { v: 1, pushEnabled: true, ready: true, permissionRequest: true },
-    });
+    const settings = admitNotificationSettings();
     const handler = new TestPermissionHandler(session as any, {
       pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
       getAccountSettings: () => settings,
@@ -100,10 +103,7 @@ describe('BasePermissionHandler push notifications', () => {
     const promise = handler.request('perm-1', 'Write', { path: '/tmp/x', content: 'hi' });
 
     // Push is fire-and-forget; flush microtasks to observe the async send.
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1));
     expect(sendToAllDevicesAsync).toHaveBeenCalledWith(
       'Fix prod issue',
       'Codex asks permission to use Write\nFile: /tmp/x',
@@ -120,9 +120,9 @@ describe('BasePermissionHandler push notifications', () => {
   it('does not send when permission-request pushes are disabled', async () => {
     const sendToAllDevicesAsync = vi.fn(async () => { return true; });
     const session = new FakeSession();
-    const settings = accountSettingsParse({
-        notificationsSettingsV1: { v: 1, pushEnabled: true, ready: true, permissionRequest: false },
-    });
+    const settings = admitNotificationSettings({ channels: [
+      { v: 1, id: 'builtin:expo_push', kind: 'expo_push', topics: { permissionRequest: false } },
+    ] });
     const handler = new TestPermissionHandler(session as any, {
       pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
       getAccountSettings: () => settings,
@@ -141,9 +141,7 @@ describe('BasePermissionHandler push notifications', () => {
   it('dedupes repeated pending publications for the same request id', async () => {
     const sendToAllDevicesAsync = vi.fn(async () => { return true; });
     const session = new FakeSession();
-    const settings = accountSettingsParse({
-        notificationsSettingsV1: { v: 1, pushEnabled: true, ready: true, permissionRequest: true },
-    });
+    const settings = admitNotificationSettings();
     const handler = new TestPermissionHandler(session as any, {
       pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
       getAccountSettings: () => settings,
@@ -151,15 +149,14 @@ describe('BasePermissionHandler push notifications', () => {
 
     const input = { path: '/tmp/x', content: 'hi' };
     const p1 = handler.request('perm-1', 'Write', input);
-    handler.publishPending('perm-1', 'Write', input);
+    const p2 = handler.request('perm-1', 'Write', input);
 
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1));
 
     const rpc = session.rpcHandlerManager.handlers.get('permission');
     await rpc?.({ id: 'perm-1', approved: false, decision: 'denied' });
-    await p1;
+    await expect(p1).resolves.toMatchObject({ decision: 'denied' });
+    await expect(p2).resolves.toMatchObject({ decision: 'denied' });
   });
 
   it('re-attempts permission-request push after a session swap while still pending', async () => {
@@ -173,23 +170,17 @@ describe('BasePermissionHandler push notifications', () => {
     session2.sessionId = 'session-two';
     session2.rpcHandlerManager = new ServerBoundPermissionRpcHandlerManager(session2.sessionId);
 
-    const settings = accountSettingsParse({
-      notificationsSettingsV1: { v: 1, pushEnabled: true, ready: true, permissionRequest: true },
-    });
+    const settings = admitNotificationSettings();
     const handler = new TestPermissionHandler(session1 as any, {
       pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync },
       getAccountSettings: () => settings,
     } as any);
 
     const promise = handler.request('perm-1', 'Write', { path: '/tmp/x', content: 'hi' });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(1));
 
     handler.updateSession(session2 as any);
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(sendToAllDevicesAsync).toHaveBeenCalledTimes(2));
 
     const rpc = session2.rpcHandlerManager.handlers.get('permission');
     await rpc?.({ id: 'perm-1', approved: false, decision: 'denied' });
@@ -252,22 +243,26 @@ describe('BasePermissionHandler push notifications', () => {
     );
   });
 
-  it('signs webhook notifications when account settings secrets read keys are provided', async () => {
+  it('signs webhook notifications with the current encrypted Saved Secret resource', async () => {
     // The webhook's genuine network boundary is the pinned HTTP transport.
     const transport = vi.spyOn(pinnedHttp, 'openPinnedHttpStream').mockResolvedValue({
       status: 200, headers: {}, contentLength: 0, read: async () => null, cancel: () => {},
     });
 
-    const settingsSecretsKey = deriveSettingsSecretsKeyV1(new Uint8Array(32).fill(9));
-    const encryptedSigningSecret = encryptSecretStringV1(
-      'qa-signing-secret',
-      settingsSecretsKey,
-      () => new Uint8Array(24).fill(7),
-    );
+    const resourceDataKey = new Uint8Array(32).fill(9);
     const session = new FakeSession();
-    const settings = accountSettingsParse({
-      notificationsSettingsV1: { v: 1, pushEnabled: false, ready: true, permissionRequest: true },
-      notificationChannelsV1: [
+    const settings = admitNotificationSettings({
+      savedSecretCatalogState: 'ready',
+      savedSecretResources: [{
+        resourceId: 'webhook-signing', ownerAccountId: 'notification-fixture-account', displayName: 'Webhook signing',
+        kind: 'token', encryptionMode: 'e2ee', revision: 1, materialStatus: 'ready', resourceDataKey,
+        storedContent: sealSavedSecretResourceStoredContentV1({
+          resourceId: 'webhook-signing', mode: 'e2ee', resourceDataKey,
+          content: { v: 1, name: 'Webhook signing', kind: 'token', value: 'qa-signing-secret' },
+          randomBytes: length => new Uint8Array(length).fill(7),
+        }),
+      }],
+      channels: [
         {
           v: 1,
           id: 'builtin:expo_push',
@@ -282,10 +277,7 @@ describe('BasePermissionHandler push notifications', () => {
           kind: 'webhook',
           enabled: true,
           url: 'http://127.0.0.1:40123/webhook',
-          signingSecret: {
-            _isSecretValue: true,
-            encryptedValue: encryptedSigningSecret,
-          },
+          signingSecretRef: 'happier:shared-secret:v1:webhook-signing',
           topics: { ready: true, permissionRequest: true, userActionRequest: true },
           readyIncludeMessageText: false,
         },
@@ -294,7 +286,6 @@ describe('BasePermissionHandler push notifications', () => {
     const handler = new TestPermissionHandler(session as any, {
       pushSender: { fetchSessionNotificationContext, sendToAllDevicesAsync: vi.fn(async () => { return true; }) },
       getAccountSettings: () => settings,
-      getAccountSettingsSecretsReadKeys: () => [settingsSecretsKey],
     } as any);
 
     const promise = handler.request('perm-1', 'Write', { path: '/tmp/x', content: 'hi' });

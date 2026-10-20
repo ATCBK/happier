@@ -1,4 +1,6 @@
-import type { TriageSourceFailureV1 } from '@happier-dev/triage-protocol/v1';
+import type { TriageSourceFailureV1, TriageTaskCreateFieldsV1, TriageTaskFieldsV1, TriageTaskWriteResultV1 } from '@happier-dev/triage-protocol/v1';
+import { settleAtMostOnceProviderWrite } from '@happier-dev/triage-sources/runtime';
+import { decodeGithubJsonResponse } from '../../observations/githubApiClient.js';
 import {
   formatReviewCommentPublicationMarkerV1,
   matchReviewCommentPublicationMarkerV1,
@@ -20,6 +22,8 @@ import {
 } from '../errors.js';
 import { readGithubIssue, type GithubIssueFactsV1, type GithubIssueReadV1 } from '../get.js';
 import { buildGithubApiUrl, type GithubRepositoryRouteV1 } from '../locator.js';
+import { buildGithubEntryLocalRef } from '../identity.js';
+import { decodeGithubIssueBody } from '../mapping/entry.js';
 import { toTriageFailure, toTriageObservation } from '../mapping/protocol.js';
 import {
   createGithubRepositoryReader,
@@ -40,7 +44,7 @@ import {
 } from './pullRequest.js';
 
 /**
- * The GitHub issue writes: the two state transitions and the four exact deltas.
+ * The GitHub issue writes: create, content edit, state transitions and exact deltas.
  *
  * They run the same three beats every pull-request write runs, and nothing
  * between them is shared state: reauthorize and REREAD the provider entity,
@@ -70,7 +74,7 @@ const ENTRY_NOT_OBSERVED_FAILURE: TriageSourceFailureV1 = Object.freeze({
   code: 'github_entry_not_observed',
 });
 
-type ProjectedObservation = ReturnType<typeof toTriageObservation>;
+type ProjectedObservation = Extract<ReturnType<typeof toTriageObservation>, { kind: 'present' }>;
 
 type Applied = Readonly<{
   kind: 'applied';
@@ -209,6 +213,143 @@ function alreadySatisfied(current: Current & Readonly<{ ok: true }>): Applied {
     effect: 'alreadySatisfied' as const,
     observation: current.observation,
   });
+}
+
+/** Create identity comes only from the response; an answer-lost POST is never replayed. */
+export async function createGithubIssue(
+  input: Readonly<{ route: GithubRepositoryRouteV1; fields: TriageTaskCreateFieldsV1 }>,
+  dependencies: GithubMutationDependenciesV1,
+): Promise<TriageTaskWriteResultV1> {
+  const repositories = openResolver(dependencies);
+  const repository = await repositories.read(input.route);
+  if (repository.kind !== 'readable') return { kind: 'failed', failure: toTriageFailure(repository.failure) };
+  let dispatched: Awaited<ReturnType<typeof send>> | undefined;
+  const settlement = await settleAtMostOnceProviderWrite<
+    Awaited<ReturnType<typeof send>>, ProjectedObservation, TriageSourceFailureV1
+  >({
+    dispatch: async () => {
+      dispatched = await send(dependencies, {
+        url: buildGithubApiUrl(['repos', input.route.owner, input.route.name, 'issues']),
+        method: 'POST',
+        body: {
+          title: input.fields.title,
+          ...(input.fields.body === undefined ? {} : { body: input.fields.body }),
+          ...(input.fields.assigneeIds === undefined ? {} : { assignees: input.fields.assigneeIds }),
+          ...(input.fields.labelIds === undefined ? {} : { labels: input.fields.labelIds }),
+        },
+      });
+      return dispatched;
+    },
+    mayHaveChanged: (result) => !result.ok || isGithubSuccessStatus(result.response.status)
+      || isGithubWriteResponseAmbiguous(result.response),
+    confirm: async () => {
+      // With no proven identity there is no safe confirming route to guess.
+      if (dispatched === undefined) return { kind: 'uncertain' as const };
+      if (!dispatched.ok) return { kind: 'uncertain' as const, failure: dispatched.failure };
+      if (!isGithubSuccessStatus(dispatched.response.status)) {
+        return { kind: 'uncertain' as const, failure: toTriageFailure(classifyGithubResponseFailure(dispatched.response, dependencies.now())) };
+      }
+      let body: unknown;
+      try { body = decodeGithubJsonResponse(dispatched.response); } catch {
+        return { kind: 'uncertain' as const };
+      }
+      const view = decodeGithubIssueBody(body, null);
+      if (view === null || view.kindId !== 'issue'
+        || view.owner.toLowerCase() !== input.route.owner.toLowerCase()
+        || view.name.toLowerCase() !== input.route.name.toLowerCase()
+        || (view.repositoryId !== null && view.repositoryId !== repository.repositoryId)) {
+        return { kind: 'uncertain' as const };
+      }
+      const localRef = buildGithubEntryLocalRef({ kindId: 'issue', repositoryId: repository.repositoryId, nativeItemId: view.number });
+      if (localRef === null) return { kind: 'uncertain' as const };
+      const confirmed = await confirm(localRef, input.route, repositories, dependencies);
+      if (!confirmed.ok) return { kind: 'uncertain' as const, failure: confirmed.failure };
+      const matches = confirmed.facts.title === input.fields.title
+        && (input.fields.body === undefined || confirmed.facts.body === input.fields.body)
+        && everyNameIsPresent(confirmed.facts.assignees, input.fields.assigneeIds ?? [], true)
+        && everyNameIsPresent(confirmed.facts.labels, input.fields.labelIds ?? [], true);
+      return matches
+        ? { kind: 'applied' as const, observation: confirmed.observation }
+        : { kind: 'uncertain' as const, observation: confirmed.observation };
+    },
+  });
+  if (settlement.kind === 'unchanged') return { kind: 'uncertain', observation: settlement.observation };
+  return settlement.kind === 'settled'
+    ? { kind: 'failed', failure: settlement.result.ok
+      ? toTriageFailure(classifyGithubResponseFailure(settlement.result.response, dependencies.now()))
+      : settlement.result.failure }
+    : settlement;
+}
+
+/** Desired membership sets become exact native deltas against the initial fresh read. */
+export async function editGithubIssue(
+  input: Readonly<{ localRef: GithubTriageEntryLocalRefV1; route: GithubRepositoryRouteV1; fields: TriageTaskFieldsV1 }>,
+  dependencies: GithubMutationDependenciesV1,
+): Promise<TriageTaskWriteResultV1> {
+  const repositories = openResolver(dependencies);
+  const current = reduce(await readGithubIssue(input.localRef, input.route, repositories, dependencies));
+  if (!current.ok) return { kind: 'failed', failure: current.failure };
+  const difference = (left: readonly string[], right: readonly string[]) => {
+    const known = new Set(right.map((name) => name.toLowerCase()));
+    return [...new Set(left)].filter((name) => !known.has(name.toLowerCase()));
+  };
+  const addedAssignees = input.fields.assigneeIds === undefined ? [] : difference(input.fields.assigneeIds, current.facts.assignees);
+  const removedAssignees = input.fields.assigneeIds === undefined ? [] : difference(current.facts.assignees, input.fields.assigneeIds);
+  const addedLabels = input.fields.labelIds === undefined ? [] : difference(input.fields.labelIds, current.facts.labels);
+  const removedLabels = input.fields.labelIds === undefined ? [] : difference(current.facts.labels, input.fields.labelIds);
+  const content = {
+    ...(input.fields.title === undefined || input.fields.title === current.facts.title ? {} : { title: input.fields.title }),
+    ...(input.fields.body === undefined || input.fields.body === current.facts.body ? {} : { body: input.fields.body }),
+  };
+  let changed = false;
+  if (Object.keys(content).length > 0) {
+    let dispatched: Awaited<ReturnType<typeof send>> | undefined;
+    const settlement = await settleAtMostOnceProviderWrite({
+      dispatch: async () => {
+        dispatched = await send(dependencies, { url: issueUrl(input.route, input.localRef.entryId), method: 'PATCH', body: content });
+        return dispatched;
+      },
+      mayHaveChanged: (result) => !result.ok || isGithubWriteResponseAmbiguous(result.response),
+      confirm: async () => {
+        const observed = await confirm(input.localRef, input.route, repositories, dependencies);
+        const failure = dispatched === undefined ? undefined : dispatched.ok
+          ? toTriageFailure(classifyGithubResponseFailure(dispatched.response, dependencies.now()))
+          : dispatched.failure;
+        return { kind: 'uncertain' as const, ...(observed.ok ? { observation: observed.observation } : {}),
+          ...(failure === undefined ? {} : { failure }) };
+      },
+    });
+    // An ambiguous content edit stops the compound write; reread evidence never
+    // authorizes continuing the remaining fields or replaying the PATCH.
+    if (settlement.kind !== 'settled') return { ...settlement, kind: 'uncertain' };
+    const written = settlement.result;
+    if (!written.ok) return { kind: 'failed', failure: written.failure };
+    if (!isGithubSuccessStatus(written.response.status)) return { kind: 'failed', failure: toTriageFailure(classifyGithubResponseFailure(written.response, dependencies.now())) };
+    changed = true;
+  }
+  const deltas: (() => Promise<GithubIssueDeltaOutcomeV1>)[] = [];
+  const scopedDependencies = { ...dependencies, repositories };
+  if (addedAssignees.length) deltas.push(() => addGithubIssueAssignees({ ...input, usernames: addedAssignees }, scopedDependencies));
+  if (removedAssignees.length) deltas.push(() => removeGithubIssueAssignees({ ...input, usernames: removedAssignees }, scopedDependencies));
+  if (addedLabels.length) deltas.push(() => addGithubIssueLabels({ ...input, labels: addedLabels }, scopedDependencies));
+  for (const label of removedLabels) deltas.push(() => removeGithubIssueLabel({ ...input, label }, scopedDependencies));
+  for (const delta of deltas) {
+    const outcome = await delta();
+    if (outcome.kind === 'applied') { changed ||= outcome.effect === 'changed'; continue; }
+    if (outcome.kind === 'failed' && !changed) return outcome;
+    const failure = outcome.failure;
+    const observed = await confirm(input.localRef, input.route, repositories, dependencies);
+    return { kind: 'uncertain', ...(observed.ok ? { observation: observed.observation } : {}), ...(failure === undefined ? {} : { failure }) };
+  }
+  const confirmed = await confirm(input.localRef, input.route, repositories, dependencies);
+  if (!confirmed.ok) return { kind: 'uncertain', failure: confirmed.failure };
+  const matches = (input.fields.title === undefined || input.fields.title === confirmed.facts.title)
+    && (input.fields.body === undefined || input.fields.body === confirmed.facts.body)
+    && everyNameIsPresent(confirmed.facts.assignees, input.fields.assigneeIds ?? [], true)
+    && everyNameIsPresent(confirmed.facts.assignees, removedAssignees, false)
+    && everyNameIsPresent(confirmed.facts.labels, input.fields.labelIds ?? [], true)
+    && everyNameIsPresent(confirmed.facts.labels, removedLabels, false);
+  return { kind: matches ? 'applied' : 'uncertain', observation: confirmed.observation };
 }
 
 /** Publishes one canonical Reviews proposal into one issue conversation. */

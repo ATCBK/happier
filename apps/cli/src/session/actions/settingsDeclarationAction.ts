@@ -1,4 +1,7 @@
 import { accountSettingsParse, type AccountSettings } from '@happier-dev/protocol/account/settings/accountSettings';
+import { ActionPolicyInputSchemas, isActionPolicyActionId } from '@happier-dev/protocol/actions/actionPolicyActionFamily';
+import { readActionAudiencePolicy, setActionAudiencePolicy } from '@happier-dev/protocol/actions/actionAudiencePolicy';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { BUILT_IN_SETTINGS_DECLARATIONS_V1, readBuiltInSettingDeclarationV1, readPortableDomainSettingBindingV1,
   parseBuiltInAccountSettingValueV1, readBuiltInAccountSettingValueV1, buildBuiltInAccountSettingMutationV1,
   hasBuiltInAccountSettingBindingV1, resolveBuiltInAccountSettingResetValueV1,
@@ -6,8 +9,9 @@ import { BUILT_IN_SETTINGS_DECLARATIONS_V1, readBuiltInSettingDeclarationV1, rea
 import { AccountSettingMutationV1Schema } from '@happier-dev/protocol/account/settings/accountSettingMutationV1';
 import { SettingsDeclarationActionInputSchemasV1, SettingsDeclarationValueV1Schema,
   type SettingsDeclarationDescriptorV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
-import { executeHomeSettingDeclaration, readHomeSettingsDeclarationOwner, executeTeamSettingDeclaration,
-  executeSessionAutoFollowSetting } from '@happier-dev/protocol/actions';
+import { executeHomeSettingDeclaration, readHomeSettingsDeclarationOwner } from '@happier-dev/protocol/actions/settings/homeSettingsDeclarationAction';
+import { executeTeamSettingDeclaration } from '@happier-dev/protocol/actions/settings/teamSettingsDeclarationAction';
+import { executeSessionAutoFollowSetting } from '@happier-dev/protocol/actions/settings/sessionAutoFollowSettingsAction';
 import type { ActionExecutorContext, ActionExecutorDeps } from '@happier-dev/protocol';
 import type { PluginProjectionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
 import { clientActionUnavailable } from '@happier-dev/protocol/actions/clientDispatchV1';
@@ -62,6 +66,36 @@ export function createCliSettingsDeclarationAction(params: Readonly<{
   const readMachineAgentProjection = params.readMachineAgentProjection;
   const execute: NonNullable<ActionExecutorDeps['settingsDeclarationAction']> = async ({ actionId, input, context, executeOwnerAction }) => {
     context.signal?.throwIfAborted();
+    if (isActionPolicyActionId(actionId)) {
+      const requested = actionId === 'actions.policy.set' ? ActionPolicyInputSchemas[actionId].parse(input)
+        : { ...ActionPolicyInputSchemas[actionId].parse(input), mode: 'default' as const };
+      if (lacksCurrentAccountMaterial(context, params.credentials)) return refuse('requester_account_material_unavailable');
+      if (!params.credentials) return refuse('not_authenticated');
+      if (params.isCredentialCurrent && !await params.isCredentialCurrent()) return refuse('credential_scope_retired');
+      if (actionId === 'actions.policy.get') {
+        const current = await bootstrapAccountSettingsContext({ credentials: params.credentials, mode: 'blocking', refresh: 'force', signal: context.signal });
+        if (current.source === 'none' || !current.rawSettings) return refuse('account_settings_content_unavailable');
+        return readActionAudiencePolicy(accountSettingsParse(current.rawSettings).actionsSettingsV1, requested.actionId, requested.audience);
+      }
+      const mode = requested.mode;
+      let applied: ReturnType<typeof readActionAudiencePolicy> | undefined;
+      try {
+        const result = await updateAccountSettingsV2WithRetry({ credentials: params.credentials, signal: context.signal,
+          prepareMutation: async raw => {
+            context.signal?.throwIfAborted();
+            if (params.isCredentialCurrent && !await params.isCredentialCurrent()) throw new RejectedSettingMutation('credential_scope_retired');
+            const settings = setActionAudiencePolicy(normalizeActionsSettingsV1(raw.actionsSettingsV1), requested.actionId, requested.audience, mode);
+            applied = readActionAudiencePolicy(settings, requested.actionId, requested.audience);
+            return AccountSettingMutationV1Schema.parse({ operations: [{ op: 'set', key: 'actionsSettingsV1', value: settings }] });
+          },
+        });
+        if (result.status !== 'applied' && result.status !== 'unchanged' && result.status !== 'satisfied') return refuse(`account_settings_${result.status}`);
+        return applied ?? refuse('account_settings_content_unavailable');
+      } catch (error) {
+        if (error instanceof RejectedSettingMutation) return refuse(error.errorCode);
+        throw error;
+      }
+    }
     if (actionId === 'settings.list') {
       const requested = SettingsDeclarationActionInputSchemasV1[actionId].parse(input);
       const items: SettingsDeclarationDescriptorV1[] = BUILT_IN_SETTINGS_DECLARATIONS_V1

@@ -40,4 +40,4 @@ function normalizeExecutionRunActionPermissionMode(value: unknown): unknown {
   }
 }
 
-export const ExecutionRunActionPermissionModeSchema = z.pipe(z.transform(normalizeExecutionRunActionPermissionMode), z.enum(EXECUTION_RUN_ACTION_PERMISSION_MODES)).check(z.describe(EXECUTION_RUN_ACTION_PERMISSION_MODE_DESCRIPTION));
+export const ExecutionRunActionPermissionModeSchema = (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeExecutionRunActionPermissionMode), z.enum(EXECUTION_RUN_ACTION_PERMISSION_MODES)).check(z.describe(EXECUTION_RUN_ACTION_PERMISSION_MODE_DESCRIPTION));

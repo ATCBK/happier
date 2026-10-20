@@ -1,5 +1,5 @@
-import { useCallback, useMemo, useSyncExternalStore } from 'react';
-import { usePluginHostApi, usePluginUiEphemeralSharedScope } from '@happier-dev/plugin-ui';
+import { useCallback, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from 'react';
+import { usePluginHostApi, usePluginHostReadiness, usePluginUiEphemeralSharedScope, type PluginUiHostReadiness } from '@happier-dev/plugin-ui';
 
 import type { TriageListLensV1 } from '../../projection/listWindow.js';
 import type { TriageListWindowSnapshotV1 } from '../../projection/listWindowStore.js';
@@ -7,7 +7,8 @@ import type { TriageRefreshTriggerV1 } from '../../refresh/refreshEligibility.js
 import {
   acquireTriageListWindow,
   loadMoreTriageListWindow,
-  readTriageListWindowSnapshot,
+  readTriageMountedWindowReadState,
+  setTriageListWindowReadiness,
   refreshTriageListWindow,
   setTriageListWindowLens,
   subscribeToTriageListWindow,
@@ -36,7 +37,9 @@ import {
  * There is no timer and no poller here, and none anywhere beneath it.
  */
 export type TriageMountedListWindowV1 = Readonly<{
+  /** Includes completedAtMs from the freshness owner for the shell's read-age display. */
   snapshot: TriageListWindowSnapshotV1;
+  readiness: PluginUiHostReadiness;
   /** Explicit user demand; the shell's **Refresh** control passes `manual`. */
   refresh(trigger: TriageRefreshTriggerV1): Promise<void>;
   /**
@@ -53,9 +56,15 @@ export type TriageMountedListWindowV1 = Readonly<{
 export function useTriageListWindow(): TriageMountedListWindowV1 {
   const hostApi = usePluginHostApi();
   const sharedScope = usePluginUiEphemeralSharedScope();
+  const hostReadiness = usePluginHostReadiness();
+  const committedReadiness = useRef(hostReadiness);
+  useLayoutEffect(() => {
+    committedReadiness.current = hostReadiness;
+    setTriageListWindowReadiness(hostApi, sharedScope, hostReadiness);
+  }, [hostApi, sharedScope, hostReadiness]);
 
   const subscribe = useCallback((listener: () => void) => {
-    const lease = acquireTriageListWindow(hostApi, sharedScope);
+    const lease = acquireTriageListWindow(hostApi, sharedScope, committedReadiness.current);
     const unsubscribe = subscribeToTriageListWindow(hostApi, listener, sharedScope);
     return () => {
       unsubscribe();
@@ -66,7 +75,7 @@ export function useTriageListWindow(): TriageMountedListWindowV1 {
   // Host identity addresses this artifact's local lease; Account/plugin/install
   // isolation and retirement belong to the injected shared scope.
   const readSnapshot = useCallback(
-    () => readTriageListWindowSnapshot(hostApi, sharedScope),
+    () => readTriageMountedWindowReadState(hostApi, sharedScope),
     [hostApi, sharedScope],
   );
   const refresh = useCallback(
@@ -82,12 +91,21 @@ export function useTriageListWindow(): TriageMountedListWindowV1 {
     [hostApi, sharedScope],
   );
 
-  const snapshot = useSyncExternalStore(subscribe, readSnapshot, readSnapshot);
+  const { snapshot: acquired, readiness: readClientReadiness } = useSyncExternalStore(subscribe, readSnapshot, readSnapshot);
+  // Before subscription commits there is no transport client. Use this mount's
+  // shared host fact rather than inventing an admitted initial observation.
+  const readiness = readClientReadiness ?? hostReadiness;
+  const snapshot = useMemo<TriageListWindowSnapshotV1>(() => {
+    if (!readiness.pending) return acquired;
+    const { error: _error, unreadableSources: _unreadableSources, ...retained } = acquired;
+    return Object.freeze({ ...retained, pending: acquired.window === undefined ? 'initial' : 'refresh' });
+  }, [acquired, readiness.pending]);
 
   return useMemo(() => Object.freeze({
     snapshot,
+    readiness,
     refresh,
     loadMore,
     setLens,
-  }), [snapshot, refresh, loadMore, setLens]);
+  }), [snapshot, readiness, refresh, loadMore, setLens]);
 }

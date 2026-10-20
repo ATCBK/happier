@@ -10,7 +10,7 @@ import { Switch } from '@/components/ui/forms/Switch';
 import { t } from '@/text';
 import { useSetting } from '@/sync/domains/state/storage';
 import { resolveTerminalHost } from '@/sync/domains/settings/terminalSettings';
-import { useApplySettings } from '@/sync/store/settingsWriters';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
 import { SettingAnchor, SettingSection } from '@/components/settings/shell/SettingRow';
 import { SESSION_RUNTIME_SETTINGS } from '@/components/settings/session/sessionRuntimeSettings';
@@ -21,7 +21,7 @@ export const SessionRuntimeSettingsView = React.memo(function SessionRuntimeSett
     const tmuxSessionName = useSetting('sessionTmuxSessionName');
     const tmuxIsolated = useSetting('sessionTmuxIsolated');
     const tmuxTmpDir = useSetting('sessionTmuxTmpDir');
-    const applySettings = useApplySettings();
+    const { setSetting } = useSettingActionFeedback();
     const selectedTerminalHost = resolveTerminalHost({ settings: {
         sessionUseTmux: useTmux, sessionTerminalHost: terminalHost,
         sessionTmuxByMachineId: {}, sessionTerminalHostByMachineId: {},
@@ -45,7 +45,7 @@ export const SessionRuntimeSettingsView = React.memo(function SessionRuntimeSett
                             ]}
                             value={selectedTerminalHost}
                             onChange={(next) => {
-                                applySettings({ sessionTerminalHost: next, sessionUseTmux: next === 'tmux' });
+                                void setSetting(SESSION_RUNTIME_SETTINGS.settings.host, next);
                             }}
                         />
                     </SettingAnchor>
@@ -57,7 +57,7 @@ export const SessionRuntimeSettingsView = React.memo(function SessionRuntimeSett
                                     accessibilityLabel={t('profiles.tmuxSession')}
                                     placeholder={t('profiles.tmux.sessionNamePlaceholder')}
                                     value={tmuxSessionName}
-                                    onChangeText={(value) => applySettings({ sessionTmuxSessionName: value })}
+                                    onChangeText={(value) => { void setSetting(SESSION_RUNTIME_SETTINGS.settings.sessionName, value); }}
                                     autoCapitalize="none" monospace
                                 />
                             </FieldItem>
@@ -67,7 +67,7 @@ export const SessionRuntimeSettingsView = React.memo(function SessionRuntimeSett
                                 subtitle={tmuxIsolated ? t('profiles.tmux.isolatedServerEnabledSubtitle') : t('profiles.tmux.isolatedServerDisabledSubtitle')}
                                 showChevron={false}
                                 rightElement={<Switch testID="settings-session-tmux-isolated" value={tmuxIsolated}
-                                    onValueChange={(value) => applySettings({ sessionTmuxIsolated: value })} />}
+                                    onValueChange={(value) => { void setSetting(SESSION_RUNTIME_SETTINGS.settings.isolated, value); }} />}
                             />
                         </SettingAnchor>
                         {tmuxIsolated && <SettingAnchor setting={SESSION_RUNTIME_SETTINGS.settings.tmpDir}>
@@ -77,7 +77,7 @@ export const SessionRuntimeSettingsView = React.memo(function SessionRuntimeSett
                                     accessibilityLabel={t('profiles.tmuxTempDir')}
                                     placeholder={t('profiles.tmux.tempDirPlaceholder')}
                                     value={tmuxTmpDir ?? ''}
-                                    onChangeText={(value) => applySettings({ sessionTmuxTmpDir: value.trim().length > 0 ? value : null })}
+                                    onChangeText={(value) => { void setSetting(SESSION_RUNTIME_SETTINGS.settings.tmpDir, value.trim().length > 0 ? value : null); }}
                                     autoCapitalize="none" monospace
                                 />
                             </FieldItem>

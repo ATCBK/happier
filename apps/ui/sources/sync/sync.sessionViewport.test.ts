@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
@@ -62,8 +63,8 @@ vi.mock('@/log', () => ({
 }));
 
 // Packaged Expo assets are absent in this unit harness; retain the real plugin owners.
-vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', async () => {
-    const { emptyBundledPluginUiAssetsModule } = await import('@/dev/testkit/mocks/bundledPluginUiAssets');
+vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', async (importOriginal) => {
+    const { emptyBundledPluginUiAssetsModule } = await importOriginal<typeof import('@/dev/testkit/mocks/bundledPluginUiAssets')>();
     return emptyBundledPluginUiAssetsModule;
 });
 
@@ -113,9 +114,10 @@ describe('sync session viewport', () => {
         };
     }
 
-    beforeEach(() => {
+    beforeEach(async () => {
         vi.resetModules();
         kvStore.clear();
+        await loadSyncSingletonForTests();
     });
 
     it('leaves eager session-list hydration rows out of prioritized hydration ids', async () => {
@@ -443,7 +445,8 @@ describe('sync session viewport', () => {
         expect(sync.getSessionViewport('session-1')).toMatchObject({ anchor: validViewportAnchor });
 
         vi.resetModules();
-        const { sync: reloadedSync } = await import('./syncEngine');
+        await loadSyncSingletonForTests();
+        const { sync: reloadedSync } = await import('./sync');
 
         expect(reloadedSync.getSessionViewport('session-1')).toMatchObject({
             isPinned: false,
@@ -464,6 +467,7 @@ describe('sync session viewport', () => {
         sync.markSessionLiveTailIntent('session-1');
 
         vi.resetModules();
+        await loadSyncSingletonForTests();
         const { sync: reloadedSync } = await import('./sync');
         expect(reloadedSync.getSessionViewport('session-1')).toBeNull();
     });
@@ -552,26 +556,23 @@ describe('sync session viewport', () => {
         expect(invalidateCoalesced).toHaveBeenCalledTimes(2);
     });
 
-    it('limits historical viewport sessions used for session-list hydration priority', async () => {
+    it('keeps historical viewport restoration state out of session-list hydration priority', async () => {
         const { sync } = await import('./sync');
-        const dateNow = vi.spyOn(Date, 'now');
         const harness = sync as unknown as {
-            syncTuning: { sessionViewportHydrationPriorityMaxRows: number };
             getPrioritizedSessionHydrationIds: () => string[];
         };
-        harness.syncTuning = {
-            ...harness.syncTuning,
-            sessionViewportHydrationPriorityMaxRows: 3,
-        };
 
-        ['session-1', 'session-2', 'session-3', 'session-4', 'session-5'].forEach((sessionId, index) => {
-            dateNow.mockReturnValue(1_000 + index);
+        ['session-1', 'session-2', 'session-3', 'session-4', 'session-5'].forEach((sessionId) => {
             sync.onSessionVisible(sessionId);
+            sync.onSessionViewportChange(sessionId, {
+                isPinned: false, offsetY: 420, shouldRestoreViewport: true, anchor: validViewportAnchor,
+            });
         });
 
-        expect(harness.getPrioritizedSessionHydrationIds()).toEqual(['session-5', 'session-4', 'session-3']);
-
-        dateNow.mockRestore();
+        expect(harness.getPrioritizedSessionHydrationIds()).toEqual([]);
+        expect(sync.getSessionViewport('session-5')).toMatchObject({
+            isPinned: false, offsetY: 420, source: 'observed', anchor: validViewportAnchor,
+        });
     });
 
     it('includes the actively viewed session in hydration priority before viewport tracking exists', async () => {
@@ -592,7 +593,7 @@ describe('sync session viewport', () => {
         }
     });
 
-    it('prioritizes focused, route-anchored, and visible session surfaces before historical viewport rows', async () => {
+    it('prioritizes focused, route-anchored, and visible session surfaces while excluding historical viewport rows', async () => {
         const { sync } = await import('./sync');
         const {
             markSessionSurfaceVisible,
@@ -613,11 +614,10 @@ describe('sync session viewport', () => {
                 sync as unknown as { getPrioritizedSessionHydrationIds: () => string[] }
             ).getPrioritizedSessionHydrationIds();
 
-            expect(priorityIds.slice(0, 4)).toEqual([
+            expect(priorityIds).toEqual([
                 'session-focused',
                 'session-route',
                 'session-visible',
-                'session-history',
             ]);
         } finally {
             dateNow.mockRestore();

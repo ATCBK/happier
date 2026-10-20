@@ -13,6 +13,8 @@ import {
   type ClaudeTuiModeMarker,
 } from '../screenState.js';
 import type { ClaudeTuiControlTelemetrySink } from './telemetry.js';
+import { CLAUDE_NATIVE_PERMISSION_MODES } from '../../../../permissionModes.js';
+import { mapToClaudePermissionMode } from '../../../permissionMode.js';
 
 /**
  * Permission/plan mode control via verified raw ShiftTab cycling.
@@ -69,7 +71,11 @@ export function resolveTargetModeMarker(desired: PermissionModeDesired): TargetM
   const agentModeId = typeof desired.agentModeId === 'string' ? desired.agentModeId.trim() : '';
   if (agentModeId === 'plan') return { kind: 'cyclable', marker: 'plan' };
 
-  switch (desired.permissionMode) {
+  const permissionMode = typeof desired.permissionMode === 'string'
+    && Object.hasOwn(CLAUDE_NATIVE_PERMISSION_MODES, desired.permissionMode)
+    ? mapToClaudePermissionMode(desired.permissionMode)
+    : desired.permissionMode;
+  switch (permissionMode) {
     case 'default':
       return { kind: 'cyclable', marker: 'default' };
     case 'acceptEdits':
@@ -77,14 +83,11 @@ export function resolveTargetModeMarker(desired: PermissionModeDesired): TargetM
     case 'plan':
       return { kind: 'cyclable', marker: 'plan' };
     case 'auto':
-    case 'safe-yolo':
       return { kind: 'cyclable', marker: 'auto' };
     case 'bypassPermissions':
-    case 'yolo':
       return { kind: 'cyclable', marker: 'bypassPermissions' };
     case 'dontAsk':
-    case 'read-only':
-      return { kind: 'launch_only', mode: desired.permissionMode };
+      return { kind: 'launch_only', mode: permissionMode };
     default:
       return { kind: 'launch_only', mode: desired.permissionMode ?? 'unknown' };
   }

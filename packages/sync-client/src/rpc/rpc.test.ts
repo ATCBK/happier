@@ -44,6 +44,48 @@ afterEach(async () => {
   await destroy?.();
   if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
 });
+it('fails closed against a relay without answering-client routing instead of delivering to an arbitrary app', async () => {
+  const socket = await setup();
+  let effects = 0;
+  // A predecessor relay resolves only registered method names. It cannot
+  // ignore a selector and run the incumbent unqualified handler by accident.
+  server.sockets.sockets.forEach(remote => remote.once('rpc-call', (payload, ack) => {
+    if (payload.method === `m:${RPC_METHODS.UI_ACTION_EXECUTE}`) {
+      effects++;
+      ack({ ok: true, result: 'wrong-device' });
+    } else ack({ ok: false, error: 'RPC method not available', errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE });
+  }));
+  await expect(callSocketRpc({ socket, target: { kind: 'machine', id: 'm' }, method: RPC_METHODS.UI_ACTION_EXECUTE,
+    params: {}, content: { mode: 'plain' }, answeringClient: { clientId: 'app-b', requireSingle: true } }))
+    .rejects.toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE });
+  expect(effects).toBe(0);
+});
+it('classifies a disconnected Goal caller and allows a fresh call after reconnection without replaying the mutation', async () => {
+  const socket = await setup();
+  const requests: string[] = [];
+  server.on('connection', remote => remote.on('rpc-call', (payload, ack) => {
+    requests.push(payload.method);
+    ack({ ok: true, result: { workState: null } });
+  }));
+  server.sockets.sockets.forEach(remote => remote.once('rpc-call', payload => {
+    requests.push(payload.method);
+    remote.disconnect(true);
+  }));
+  const error = await callSocketRpc({ socket, target: { kind: 'machine', id: 'm' },
+    method: RPC_METHODS.DAEMON_SESSION_GOAL_SET_V2, params: { sessionId: 's', objective: 'Keep going', resumeInactiveWithInitialGoal: true },
+    content: { mode: 'plain' }, timeoutMs: null }).catch((failure: unknown) => failure);
+  expect(error).toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN });
+  expect(readRpcRequestDisposition(error)).toBe('outcomeUnknown');
+  await new Promise<void>((resolve, reject) => {
+    socket.once('connect', resolve);
+    socket.once('connect_error', reject);
+    socket.connect();
+  });
+  await expect(callSocketRpc({ socket, target: { kind: 'machine', id: 'm' },
+    method: RPC_METHODS.DAEMON_SESSION_GOAL_GET, params: { sessionId: 's' },
+    content: { mode: 'plain' }, timeoutMs: null })).resolves.toEqual({ workState: null });
+  expect(requests).toEqual([`m:${RPC_METHODS.DAEMON_SESSION_GOAL_SET_V2}`, `m:${RPC_METHODS.DAEMON_SESSION_GOAL_GET}`]);
+});
 it.each([undefined, null, 180_000])('carries the caller deadline intent across real Socket.IO (%s)', async timeoutMs => {
   const socket = await setup();
   const received = new Promise<Record<string, unknown>>(resolve => server.sockets.sockets.forEach(remote => {
@@ -154,7 +196,8 @@ it('records an acknowledgement before delayed result decoding completes', async 
   } finally { release(); }
   await expect(pending).resolves.toEqual({ accepted: true });
 });
-it('preserves explicit Session Action authorization rather than projecting it to a human write', async () => {
+it.each(['session.notes.set', 'session.user_action.answer', 'session.needs_you.raise'])(
+  'preserves explicit Session Action authorization for %s rather than projecting it to a human write', async (method) => {
   const socket = await setup();
   const authorization = { kind: 'session.action' as const, sessionId: 's', origin: {
     v: 1 as const, caller: { kind: 'session' as const, sessionId: 'lead', starterDepth: 2, turnDepth: 4 },
@@ -164,7 +207,7 @@ it('preserves explicit Session Action authorization rather than projecting it to
     resolve(payload.authorization);
     ack({ ok: true, result: { updated: true } });
   })));
-  await callSocketRpc({ socket, target: { kind: 'session', id: 's' }, method: 'session.notes.set',
+  await callSocketRpc({ socket, target: { kind: 'session', id: 's' }, method,
     params: { sessionId: 's', notes: 'private' }, content: { mode: 'plain' },
     authorization,
   });
@@ -329,11 +372,4 @@ it('preserves authenticated serialized undefined request params', async () => {
   const binding = { method: 'machine:echo', callId: '0123456789abcdef0123456789abcdef' };
   const result = await socketRpcCodec.encodeParams(content, undefined, binding);
   expect(await socketRpcCodec.decodeRequestParams(content, result, binding.method)).toEqual({ params: undefined, callId: binding.callId });
-});
-it('marks an issued request unknown when its socket disconnects without a caller deadline', async () => {
-  const socket = await setup();
-  server.sockets.sockets.forEach((remote) => remote.once('rpc-call', () => remote.disconnect(true)));
-  const error = await callSocketRpc({ socket, target: { kind: 'machine', id: 'm' }, method: 'disconnect', params: {}, content: { mode: 'plain' } }).catch((failure: unknown) => failure);
-  expect(error).toBeInstanceOf(Error);
-  expect(readRpcRequestDisposition(error)).toBe('outcomeUnknown');
 });

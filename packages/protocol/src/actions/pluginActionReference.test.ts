@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
@@ -18,6 +19,19 @@ function readRenderedActionIds(markdown: string): readonly string[] {
 }
 
 describe('plugin Action reference generator', () => {
+  it('loads and renders through standalone ESM without eager settings-cycle reads', () => {
+    const source = new URL('./pluginActionReference.ts', import.meta.url).href;
+    const output = execFileSync(process.execPath, [
+      '--import', 'tsx', '--conditions=happier-source', '--input-type=module', '--eval',
+      `const { renderPluginActionReferenceMarkdown } = await import(${JSON.stringify(source)});
+       renderPluginActionReferenceMarkdown();
+       process.stdout.write('rendered');`,
+    ], { encoding: 'utf8' });
+    expect(output).toBe('rendered');
+    // This checks ESM initialization, not cold-start speed. Keep cancellation
+    // with the containing test run instead of racing a cold catalog import.
+  }, 0);
+
   it('renders every and only canonical Plugin-surfaced ActionSpec', () => {
     const expectedActionIds = listActionSpecsForSurface('plugin')
       .map((spec) => spec.id)

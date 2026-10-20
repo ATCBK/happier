@@ -62,7 +62,7 @@ import { OtaUpdateStatusSection } from './OtaUpdateStatusSection';
 import { Icon } from '@/components/ui/icons/Icon';
 import { sanitizeActiveServerSnapshotForDiagnostics, UNKNOWN_VALUE } from './systemStatusDiagnostics';
 import { isDaemonOfAnotherAccount } from '@/sync/domains/server/relayDrift/relayDriftModel';
-import { createServerUrlComparableKey } from '@/sync/domains/server/url/serverUrlCanonical';
+import { createDiagnosticServerUrlKey } from '@/sync/domains/server/url/serverUrlCanonical';
 import { useActiveHomeConnectionHealth } from '@/components/navigation/connectionStatus/useConnectionHealth';
 import { formatIrohRelayConfiguration } from '@/components/navigation/connectionStatus/formatIrohRelayConfiguration';
 import { projectIrohHomeTransportPresentation } from '@/components/navigation/connectionStatus/projectIrohHomeTransportPresentation';
@@ -80,13 +80,6 @@ import { machinePageHref } from '@/components/settings/machines/collection/machi
 
 function resolveServerProfileLabel(profile: ServerProfile): string {
   return resolveHomeDisplayLabel(profile, profile.id);
-}
-
-function doServerUrlsMismatch(left: string, right: string): boolean {
-  const leftKey = createServerUrlComparableKey(left);
-  const rightKey = createServerUrlComparableKey(right);
-  if (leftKey && rightKey) return leftKey !== rightKey;
-  return left.replace(/\/+$/, '') !== right.replace(/\/+$/, '');
 }
 
 export const SystemStatusView = React.memo(function SystemStatusView() {
@@ -346,7 +339,9 @@ export const SystemStatusView = React.memo(function SystemStatusView() {
     if (entry.status === 'error') return 'unreadable';
     if (entry.status !== 'ready') return null;
     const daemonServerUrl = entry.snapshot.server.serverUrl;
-    const serverMismatch = Boolean(activeServerUrl && daemonServerUrl && doServerUrlsMismatch(activeServerUrl, daemonServerUrl));
+    const activeServerKey = createDiagnosticServerUrlKey(activeServerUrl);
+    const daemonServerKey = createDiagnosticServerUrlKey(daemonServerUrl);
+    const serverMismatch = Boolean(activeServerKey && daemonServerKey && activeServerKey !== daemonServerKey);
     const accountMismatch = isDaemonOfAnotherAccount({ daemonAccountId: entry.snapshot.accountId, appAccountId: profile?.id });
     return serverMismatch || accountMismatch ? 'mismatch' : null;
   };
@@ -594,7 +589,7 @@ export const SystemStatusView = React.memo(function SystemStatusView() {
                   const mismatchLabel = attention === 'mismatch' ? ` • ${t('systemStatus.mismatch')}` : '';
                   return (
                     <Text style={{ color: attention === 'mismatch' ? theme.colors.state.danger.foreground : theme.colors.text.secondary }}>
-                      {t('systemStatus.machine.daemonAttribution', { serverUrl: daemonServerUrl, accountId: daemonAccountId })}
+                      {t('systemStatus.machine.daemonAttribution', { home: daemonServerUrl, account: daemonAccountId })}
                       {mismatchLabel}
                       {'\n'}
                       {t('systemStatus.machine.daemonAttributionAge', { age: fetchEntry.cachedAt ? formatRelativeTimeShort(fetchEntry.cachedAt, Date.now()) : UNKNOWN_VALUE })}

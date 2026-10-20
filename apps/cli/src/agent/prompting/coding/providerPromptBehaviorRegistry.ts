@@ -1,6 +1,7 @@
 import type { PromptBlockV1 } from '@happier-dev/protocol';
 
 import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
+import { readSessionInputPromptUserTextV1 } from '@happier-dev/protocol/prompts/systemPromptBaseV1';
 
 export function resolveCodingProviderBehaviorBlocks(args: Readonly<{
   agentId: string | null | undefined;
@@ -27,4 +28,13 @@ export function resolveCodingProviderBehaviorBlocks(args: Readonly<{
       text: block.text,
     }];
   });
+}
+
+/** Historical bare prompt echoes use the same installed-Agent catalog as injection. */
+export function createCodingSessionInputPromptUserTextReader(agentId: string): (text: string) => string {
+  const blocks = resolveCodingProviderBehaviorBlocks({ agentId, disableTodos: true })
+    .flatMap(block => [block.text.trim(), block.text.replace(/\s+/g, ' ').trim()])
+    .filter(Boolean)
+    .sort((left, right) => right.length - left.length);
+  return text => readSessionInputPromptUserTextV1(text, blocks);
 }

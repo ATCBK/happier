@@ -12,7 +12,7 @@ export { CONNECTED_ACCOUNT_CATALOG_RETAINED_ROOTS_V1, emptyConnectedAccountCatal
   readRetainedConnectedAccountCatalogRecordV1 } from './connectedAccountConfigurationRowsV1.js';
 export type ConnectedAccountCatalogUnavailableReasonV1 = 'account-not-found' | 'account-inconsistent' | 'account-mode-mismatch'
   | 'encryption-material-unavailable' | 'invalid-stored-content' | 'invalid-reference' | 'unauthorized' | 'forbidden' | 'unsupported'
-  | 'unreachable' | 'scope-retired' | 'cancelled' | 'source-version-conflict' | 'authority-not-confirmed';
+  | 'unreachable' | 'database_transaction_conflict_exhausted' | 'scope-retired' | 'cancelled' | 'source-version-conflict' | 'authority-not-confirmed';
 export type ConnectedAccountCatalogSourceCleanupV1 = Readonly<{ status: 'complete' }> | Readonly<{
   status: 'cleanup-pending'; reason: 'source-unavailable' | 'source-conflict' | 'history-incomplete' | 'cancelled';
 }>;

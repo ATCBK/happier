@@ -8,7 +8,17 @@ import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { Text } from '@/components/ui/text/Text';
 import { t } from '@/text';
-import { formatLastSeen } from '@/utils/sessions/sessionUtils';
+
+/**
+ * When an offline machine was last known, in the short form the legend's narrow line can hold whole: the clock time
+ * today, the date otherwise ("Offline · last known 09:12").
+ */
+function formatLastKnown(ms: number, now: number = Date.now()): string {
+  const sameDay = new Date(ms).toDateString() === new Date(now).toDateString();
+  return new Intl.DateTimeFormat(undefined, sameDay
+    ? { hour: '2-digit', minute: '2-digit' }
+    : { month: 'short', day: 'numeric' }).format(ms);
+}
 
 export type CapabilityReachLegendRow = Readonly<{
   machineId: string;
@@ -51,7 +61,7 @@ export const CapabilityReachLegend = React.memo(function CapabilityReachLegend(
         const subtitle = row.offline ? (
           row.lastSeenAt ? (
             t('capabilities.skills.home.offlineLastKnown', {
-              time: formatLastSeen(row.lastSeenAt),
+              time: formatLastKnown(row.lastSeenAt),
             })
           ) : (
             t('capabilities.skills.home.offline')

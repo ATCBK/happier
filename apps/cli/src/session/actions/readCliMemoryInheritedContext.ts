@@ -9,6 +9,7 @@ import { getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accoun
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import type { StoredCredentials } from '@/persistence';
 import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 
 /** Transport and captured row CAS only; the shared Action owner chooses the destination. */
 export async function readCliMemoryInheritedContext(input: Readonly<{
@@ -76,7 +77,8 @@ export async function readCliMemoryScopeContext(input: Readonly<{
 }>): Promise<MemoryScopeContextV1> {
   const { target, context } = input;
   if (target.scope === 'account') return createCliMemoryAccountContextReader(input)();
-  if (target.projectRef.serverId !== input.serverId) throw Object.assign(new Error('server_target_mismatch'), { code: 'server_target_mismatch' });
+  if (!await isServerProfileHomeIdentity(input.serverId, target.projectRef.serverId))
+    throw Object.assign(new Error('server_target_mismatch'), { code: 'server_target_mismatch' });
   const project = await readProjectContextAttachmentTargetV1({ readRows: input.readProjectRows,
     readSource: request => input.projectSourcesRead(request, context),
     updateSource: request => input.projectSourcesUpdate(request, context),

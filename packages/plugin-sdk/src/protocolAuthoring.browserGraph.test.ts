@@ -45,12 +45,23 @@ const protocolDataCollectionOpaqueCursor = resolve(
     '../../protocol/src/plugins/data/collectionOpaqueCursorV1.ts',
 );
 const protocolLaunchProfileId = resolve(import.meta.dirname, '../../protocol/src/profiles/v2/profileId.ts');
+const protocolTriageEntryRef = resolve(import.meta.dirname, '../../protocol/src/tasks/entryRefV1.ts');
 const protocolComposerReferenceProviders = resolve(
     import.meta.dirname,
     '../../protocol/src/plugins/contributions/composerReferenceProviders.ts',
 );
 
 const expectedProtocolExports = [
+    'CURRENT_UI_CONTEXT_ATTACHMENT_IDENTITY_V1',
+    'MAX_TRIAGE_COLLISION_SCOPE_UTF8_BYTES_V1',
+    'MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1',
+    'TRIAGE_COMPOSITE_IDENTIFIER_PATTERN_V1',
+    'TRIAGE_SINGLE_LINE_STRING_PATTERN_V1',
+    'TriageCollisionScopeV1ProtocolSchema',
+    'TriageEntryRefV1',
+    'TriageEntryRefV1JsonSchema',
+    'TriageEntryRefV1Schema',
+    'TriageIdentifierV1ProtocolSchema',
     'ProtocolArrayOptions',
     'ProtocolCollectionOpaqueCursorV1',
     'ProtocolCollectionOpaqueCursorV1Schema',
@@ -58,6 +69,7 @@ const expectedProtocolExports = [
     'ProtocolComposerRefV1',
     'ProtocolComposerRefV1Schema',
     'ProtocolComposerReferenceResolutionV1Schema',
+    'ProtocolCurrentUiContextSnapshotV1Schema',
     'ProtocolJsonValue',
     'ProtocolJsonValueOptions',
     'ProtocolLaunchProfileIdV2Schema',
@@ -67,11 +79,13 @@ const expectedProtocolExports = [
     'ProtocolSchemaInput',
     'ProtocolSchemaOutput',
     'ProtocolSchemaSafeParseResult',
+    'ProtocolStoredReadSchema',
     'ProtocolStringOptions',
     'ProtocolUtf8StringOptions',
     'ProtocolUniqueJsonArrayOptions',
     'ProtocolValidationError',
     'ProtocolValidationIssue',
+    'createProtocolStoredReadSchema',
     'defineProtocolArray',
     'defineProtocolJsonValue',
     'defineProtocolLiteral',
@@ -81,6 +95,8 @@ const expectedProtocolExports = [
     'defineProtocolUnion',
     'defineProtocolUtf8String',
     'defineProtocolUniqueArray',
+    'defineTriageCompositeIdentifierStringV1',
+    'defineTriageSingleLineStringV1',
     'pluginJsonValuesEqual',
     'PluginJsonSchema',
 ].sort();
@@ -173,6 +189,10 @@ async function bundleProtocolAuthoring(): Promise<Readonly<{
                     replacement: protocolLaunchProfileId,
                 },
                 {
+                    find: '@happier-dev/protocol/tasks/entryRefV1',
+                    replacement: protocolTriageEntryRef,
+                },
+                {
                     // The graph is a source-level browser check; never let a stale
                     // workspace dist decide which Protocol exports it sees.
                     find: /^@happier-dev\/protocol$/u,
@@ -188,7 +208,7 @@ async function bundleProtocolAuthoring(): Promise<Readonly<{
             load(id) {
                 if (id !== '\0virtual:protocol-authoring-browser-realm-entry') return null;
                 return [
-                    `export { defineProtocolArray, defineProtocolJsonValue, defineProtocolLiteral, defineProtocolNumber, defineProtocolObject, defineProtocolString, defineProtocolUnion, defineProtocolUtf8String, defineProtocolUniqueArray, pluginJsonValuesEqual, ProtocolComposerRefV1Schema, ProtocolComposerReferenceResolutionV1Schema, ProtocolLaunchProfileIdV2Schema } from ${JSON.stringify(protocolBrowserEntry)};`,
+                    `export { defineProtocolArray, defineProtocolJsonValue, defineProtocolLiteral, defineProtocolNumber, defineProtocolObject, defineProtocolString, defineProtocolUnion, defineProtocolUtf8String, defineProtocolUniqueArray, pluginJsonValuesEqual, ProtocolComposerRefV1Schema, ProtocolComposerReferenceResolutionV1Schema, ProtocolLaunchProfileIdV2Schema, TriageEntryRefV1Schema } from ${JSON.stringify(protocolBrowserEntry)};`,
                     `export { defineContributionPoint, defineContributionProtocol, PluginTargetedContributionSelectionV1Schema } from ${JSON.stringify(contributionsBrowserEntry)};`,
                 ].join('\n');
             },
@@ -307,6 +327,8 @@ describe('protocol-authoring public browser entrypoint', () => {
         // pinned filters below are what catches.
         expect(moduleIds).toContain(protocolDataCollectionOpaqueCursor);
         expect(moduleIds).toContain(protocolLaunchProfileId);
+        expect(moduleIds).toContain(protocolTriageEntryRef);
+        expect(moduleIds.some(id => id.includes('/triage-protocol/'))).toBe(false);
         const manifestOrContributionsModules = moduleIds
             .filter((id) => id.includes('/protocol/src/plugins/manifest/')
                 || id.includes('/protocol/src/plugins/contributions/'))

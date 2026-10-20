@@ -76,7 +76,8 @@ function rpcRoute(actionId: RpcActionId): Readonly<{ method: string; mutation: b
 /** One dispatch owner: Account catalog semantics and exact-machine runtime effects. */
 export function createProviderActionExecuteV1(host: Readonly<{
   assertCurrent(context: ActionExecutorContext): void;
-  rpc(input: Readonly<{ machineId: string; method: string; request: ProviderActionRequestV1; context: ActionExecutorContext }>): Promise<unknown>;
+  rpc(input: Readonly<{ machineId: string; method: string; request: ProviderActionRequestV1; context: ActionExecutorContext;
+    operationTimeoutMs?: null }>): Promise<unknown>;
   setDefault(input: ProviderDefaultModelSelectionMutationV1, context: ActionExecutorContext): Promise<Pick<AccountSettingsMutationResult, 'status'>>;
   account?(request: ProviderActionRequestV1, context: ActionExecutorContext): Promise<ActionExecuteResult>;
 }>): NonNullable<ActionExecutorDeps['providerActionExecute']> {
@@ -108,7 +109,11 @@ export function createProviderActionExecuteV1(host: Readonly<{
     let result: unknown;
     try {
       if (!request.input.machineId) return { ok: false, errorCode: 'provider_machine_required', error: 'provider_machine_required' };
-      result = await host.rpc({ machineId: request.input.machineId, method, request, context });
+      result = await host.rpc({ machineId: request.input.machineId, method, request, context,
+        // The projection owns its end-to-end Provider budget and source-scoped
+        // refusals. A shorter acknowledgement timer would discard those results.
+        ...(method === RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION ? { operationTimeoutMs: null } : {}),
+      });
     } catch (caught) {
       // Admission/currentness refusals happen before transport and are not uncertain mutations.
       if (caught && typeof caught === 'object' && 'code' in caught &&

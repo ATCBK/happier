@@ -1,4 +1,5 @@
-import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { access, mkdir, open, readFile, rm, writeFile, type FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import axios from 'axios';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -18,6 +19,7 @@ import { createConnectedAccountRequestAuthSubjectRegistry } from '../requestAuth
 import { ConnectedServiceRuntimeRegistry } from '../runtimeRegistry/registry';
 import { resolveConnectedServiceAuthForSpawn } from '../resolveConnectedServiceAuthForSpawn';
 import { resolveConnectedServiceMaterializedRootDir } from '../materialize/resolveConnectedServiceMaterializedRootDir';
+import { ensurePrivateConnectedServiceMaterializedRoot } from '../materialize/privateMaterializedRoot';
 import { createAdoptedExecutionRunRootCleanup } from './createAdoptedExecutionRunRootCleanup';
 import { createExecutionRunConnectedServicesBridge } from './executionRunMaterialization';
 import { DEFAULT_CONNECTED_SERVICE_AUTH_GROUP_POLICY_V1 } from '../accountGroups/selection/selectConnectedServiceAuthGroupCandidate';
@@ -26,11 +28,11 @@ import { createDaemonQualifiedConnectedAccountAuthGroupSwitchCoordinator } from 
 describe('requester execution-run materialization', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it('materializes the captured parent requester subscription instead of the Machine custodian subscription', async () => {
+  it('materializes the captured parent requester Claude and Codex subscriptions instead of the Machine custodian subscription', async () => {
     const accountContexts = new Map(['alice', 'bob'].map(accountId => {
       const credentials = { token: `${accountId}-token`, encryption: null };
       const persistence = createQualifiedConnectedAccountDaemonPersistence({ credentials,
-        getAccountEncryptionMode: async () => 'plain', readAccountSettings: () => ({}),
+        getAccountEncryptionMode: async () => 'plain',
         secrets: createAccountSettingsConnectedAccountSecrets({ expectedScopeKey: resolveAccountSettingsScopeKey(credentials) }) });
       const established = createQualifiedConnectedAccountEstablishedRuntimeOwner({ credentials,
         reloadController: pluginReloadController, getAccountEncryptionMode: async () => 'plain',
@@ -48,9 +50,15 @@ describe('requester execution-run materialization', () => {
       return [accountId, { credentials, purposes }] as const;
     }));
     const runtime = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
-      runtimeOptions: { pluginIds: ['happier.agent.codex'], connectedAccounts: accountContexts.get('alice')!.purposes.owner } });
+      runtimeOptions: { pluginIds: ['happier.agent.claude', 'happier.agent.codex'], connectedAccounts: accountContexts.get('alice')!.purposes.owner } });
+    const retainedAuthSources: FileHandle[] = [];
     try {
-      const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
+      for (const { agentId, pluginId, serviceId, nativeHomeEnv, authFile } of [
+        { agentId: 'claude', pluginId: 'happier.agent.claude', serviceId: 'claude-subscription', nativeHomeEnv: 'CLAUDE_CONFIG_DIR', authFile: '.credentials.json' },
+        { agentId: 'codex', pluginId: 'happier.agent.codex', serviceId: 'openai-codex', nativeHomeEnv: 'CODEX_HOME', authFile: 'auth.json' },
+      ] as const) {
+      const service = { pluginId, localId: serviceId };
+      const qualifiedServiceId = `${pluginId}/${serviceId}`;
       const revision = 'csr_aaaaaaaaaaaaaaaaaaaaaa';
       const groups = new Map(['alice', 'bob'].map(accountId => [accountId, QualifiedConnectedAccountGroupV4Schema.parse({
         v: 1, ref: { service, groupId: 'main' }, incarnation: `${accountId}-main`, displayName: 'Main',
@@ -108,7 +116,7 @@ describe('requester execution-run materialization', () => {
       let runnerCurrent = true;
       const resolveBaseDir = (parentSessionId?: string | null) => join(runtime.happyHomeDir, 'materialized',
         parentSessionId === 'bob-session' ? 'bob' : 'alice');
-      const aliceRoot = resolveConnectedServiceMaterializedRootDir({ baseDir: resolveBaseDir('alice-session'), materializationKey: 'bob-run', agentId: 'codex' });
+      const aliceRoot = resolveConnectedServiceMaterializedRootDir({ baseDir: resolveBaseDir('alice-session'), materializationKey: 'bob-run', agentId });
       await mkdir(aliceRoot, { recursive: true });
       await writeFile(join(aliceRoot, 'custodian-sentinel'), 'alice-private');
       const bridge = createExecutionRunConnectedServicesBridge({
@@ -125,9 +133,21 @@ describe('requester execution-run materialization', () => {
           const accountContext = accountContexts.get(parentSessionId === 'bob-session' ? 'bob' : 'alice')!;
           const credentials = accountContext.credentials;
           const baseDir = resolveBaseDir(parentSessionId);
-          return await resolveConnectedServiceAuthForSpawn({ ...input, credentials, api: await ApiClient.create(credentials),
-            activeServerDir: baseDir, baseDir, connectedAccountsOwner: accountContext.purposes.owner,
-            allowNativeAccountState: false, isAccountRuntimeCurrent: async () => true });
+          // A genuine OS source resource stands in for the caller-owned requester
+          // lifetime; spawn resolution and its retained cleanup remain real.
+          const source = await open(join(runtime.happyHomeDir, `run-source-${randomUUID()}`), 'w+');
+          retainedAuthSources.push(source);
+          try {
+            const resolved = await resolveConnectedServiceAuthForSpawn({ ...input, credentials, api: await ApiClient.create(credentials),
+              activeServerDir: baseDir, baseDir, connectedAccountsOwner: accountContext.purposes.owner,
+              allowNativeAccountState: false, isAccountRuntimeCurrent: async () => true });
+            if (!resolved) { await source.close(); return null; }
+            const cleanupOnExit = resolved.cleanupOnExit;
+            return { ...resolved,
+              cleanupOnExit: cleanupOnExit ? async () => { await source.stat(); await cleanupOnExit(); } : null,
+              releaseAccountContext: async () => { await source.close(); },
+            };
+          } catch (error) { await source.close(); throw error; }
         },
         recoverRejectedStart: async ({ parentSessionId, selection, modelId, isCurrent }) => {
           const coordinator = createDaemonQualifiedConnectedAccountAuthGroupSwitchCoordinator({
@@ -142,43 +162,48 @@ describe('requester execution-run materialization', () => {
         },
         registerRunTargets: registration => { registry.registerRunTarget({ ...registration, pid: registration.runnerPid }); },
         unregisterRunTargets: runKey => { registry.unregisterRunKey(runKey); },
-        resolveRunMaterializedRoot: ({ runKey, agentId, parentSessionId }) => resolveConnectedServiceMaterializedRootDir({
-          baseDir: resolveBaseDir(parentSessionId), materializationKey: runKey, agentId }),
+        resolveRunMaterializedRoot: ({ runKey, agentId, parentSessionId }) => parentSessionId === 'bob-session'
+          ? resolveConnectedServiceMaterializedRootDir({ baseDir: resolveBaseDir(parentSessionId), materializationKey: runKey, agentId })
+          : null,
         createAdoptedRootCleanup: ({ runKey, agentId, materializedRoot, parentSessionId }) => createAdoptedExecutionRunRootCleanup({
           materializationBaseDir: resolveBaseDir(parentSessionId), materializationKey: runKey, agentId, materializedRoot,
           removeRoot: async root => { await rm(root, { recursive: true, force: true }); },
         }),
-        purposeBindingOwner: { activatePurposeBindings: (input, context) => accountContexts.get(
-          context?.parentSessionId === 'bob-session' ? 'bob' : 'alice')!.purposes.activatePurposeBindings(input) },
+        purposeBindingOwner: { activatePurposeBindings: async (input, context) => ({ lease: await accountContexts.get(
+          context?.parentSessionId === 'bob-session' ? 'bob' : 'alice')!.purposes.activatePurposeBindings(input) }) },
         requestAuthRegistry: createConnectedAccountRequestAuthSubjectRegistry(),
         resolveRequestAuthHttpPort: () => 42427,
         createRedactionLease: () => ({ add() {}, close() {} }), clearTerminalCleanupReceipt: async () => undefined,
       });
-      const result = await bridge.materialize({ runId: 'bob-run', runnerPid: process.pid, agentId: 'codex', cwd: runtime.happyHomeDir,
-        connectedServices: { v: 2, bindingsByServiceId: { 'happier.agent.codex/openai-codex': {
+      const result = await bridge.materialize({ activationId: randomUUID(), runId: 'bob-run', runnerPid: process.pid, agentId, cwd: runtime.happyHomeDir,
+        connectedServices: { v: 2, bindingsByServiceId: { [qualifiedServiceId]: {
           source: 'connected', selection: 'profile', profileId: 'work',
         } } } });
       if (!result.ok) throw new Error(result.errorMessage);
+      const retainedSource = retainedAuthSources.at(-1);
+      if (!retainedSource) throw new Error('Missing actual Run source resource');
+      await expect(retainedSource.stat()).resolves.toBeDefined();
       expect(result).toMatchObject({ ok: true });
       expect(authenticatedCredentialAccounts).toContain('bob');
       expect(authenticatedCredentialAccounts).not.toContain('alice');
-      const nativeHome = result.env.CODEX_HOME;
+      const nativeHome = result.env[nativeHomeEnv];
       if (!nativeHome) throw new Error('The Run did not materialize its native auth home');
-      expect(await readFile(join(nativeHome, 'auth.json'), 'utf8')).toContain('bob-subscription');
+      expect(await readFile(join(nativeHome, authFile), 'utf8')).toContain('bob-subscription');
       expect(result.registration.materializedRoot).toBe(nativeHome);
       expect(registry.getRunTargetByRunKey('bob-run')?.sessionId).toBe('bob-session');
       await bridge.release({ runId: 'bob-run', runnerPid: process.pid, activationId: result.activationId });
+      await expect(retainedSource.stat()).rejects.toMatchObject({ code: 'EBADF' });
       await expect(access(nativeHome)).resolves.toBeUndefined();
       await expect(readFile(join(aliceRoot, 'custodian-sentinel'), 'utf8')).resolves.toBe('alice-private');
-      const grouped = await bridge.materialize({ runId: 'bob-group-run', runnerPid: process.pid, agentId: 'codex',
+      const grouped = await bridge.materialize({ activationId: randomUUID(), runId: 'bob-group-run', runnerPid: process.pid, agentId,
         cwd: runtime.happyHomeDir, modelId: 'requested-model', connectedServices: { v: 2, bindingsByServiceId: {
-          'happier.agent.codex/openai-codex': { source: 'connected', selection: 'group', groupId: 'main', profileId: 'work' },
+          [qualifiedServiceId]: { source: 'connected', selection: 'group', groupId: 'main', profileId: 'work' },
         } } });
       if (!grouped.ok) throw new Error(grouped.errorMessage);
       expect(grouped).toMatchObject({ ok: true });
       await expect(bridge.recoverRejectedStart({ runId: 'bob-group-run', runnerPid: process.pid,
         activationId: grouped.activationId, modelId: 'requested-model', classification: {
-          kind: 'plan', serviceId: 'happier.agent.codex/openai-codex', profileId: 'work', groupId: 'main', groupGeneration: 7,
+          kind: 'plan', serviceId: qualifiedServiceId, profileId: 'work', groupId: 'main', groupGeneration: 7,
           expectedCredentialRevision: revision, limitCategory: 'plan_invalid', quotaScope: 'model',
           providerLimitId: 'requested-model', resetsAtMs: null, planType: null, rateLimits: null, source: 'structured_provider_error',
         } })).resolves.toEqual({ ok: true, retry: true });
@@ -186,28 +211,32 @@ describe('requester execution-run materialization', () => {
       expect(groups.get('alice')?.activeConnectedAccountId).toBe('work');
       await bridge.release({ runId: 'bob-group-run', runnerPid: process.pid, activationId: grouped.activationId });
       // A replacement daemon takes custody of an already-materialized native root.
+      // Release removed the disposable Run allocation as well as its capability.
+      const runRoot = resolveConnectedServiceMaterializedRootDir({ baseDir: resolveBaseDir('bob-session'), materializationKey: 'bob-run', agentId });
+      await ensurePrivateConnectedServiceMaterializedRoot(runRoot);
       await mkdir(nativeHome, { recursive: true });
-      await writeFile(join(nativeHome, 'auth.json'), 'retained-bob-secret');
+      await writeFile(join(nativeHome, authFile), 'retained-bob-secret');
       await expect(bridge.adoptLiveMaterialization({ runId: 'bob-run', runnerPid: process.pid,
         sessionId: 'bob-session', persistedLaunch: result.registration })).resolves.toBe(true);
       runnerCurrent = false;
       await bridge.releaseForRunnerExit({ runnerPid: process.pid, runnerIdentity });
       await expect(access(nativeHome)).resolves.toBeUndefined();
       await expect(readFile(join(aliceRoot, 'custodian-sentinel'), 'utf8')).resolves.toBe('alice-private');
-      // Cold terminal cleanup uses the exact retained parent Session without
+      // Cold terminal cleanup refuses a different requester's root without
       // admitting work or borrowing the custodian root after requester loss.
       await mkdir(nativeHome, { recursive: true });
-      await writeFile(join(nativeHome, 'auth.json'), 'retired-bob-secret');
-      const receipt = { v: 1, runKey: 'bob-run', agentId: 'codex', activationId: result.activationId };
+      await writeFile(join(nativeHome, authFile), 'retired-bob-secret');
+      const receipt = { v: 1, runKey: 'bob-run', agentId, activationId: result.activationId };
       await expect(bridge.cleanupTerminalMaterialization({ runId: 'bob-run', runnerPid: process.pid,
-        sessionId: null, receipt })).resolves.toBe(false);
-      await expect(readFile(join(nativeHome, 'auth.json'), 'utf8')).resolves.toBe('retired-bob-secret');
+        sessionId: 'alice-session', receipt })).resolves.toBe(false);
+      await expect(readFile(join(nativeHome, authFile), 'utf8')).resolves.toBe('retired-bob-secret');
       await expect(bridge.cleanupTerminalMaterialization({ runId: 'bob-run', runnerPid: process.pid,
         sessionId: 'bob-session', receipt })).resolves.toBe(true);
       await expect(access(nativeHome)).resolves.toBeUndefined();
       await expect(readFile(join(aliceRoot, 'custodian-sentinel'), 'utf8')).resolves.toBe('alice-private');
       // Durable account homes need runtime adoption/release, but never run-root deletion.
-      const durableHome = join(runtime.happyHomeDir, 'profiles', 'bob', 'codex-home');
+      await ensurePrivateConnectedServiceMaterializedRoot(runRoot);
+      const durableHome = join(runtime.happyHomeDir, 'profiles', 'bob', `${agentId}-home`);
       await mkdir(durableHome, { recursive: true });
       await writeFile(join(durableHome, 'history-sentinel'), 'bob-private-history');
       runnerCurrent = true;
@@ -222,6 +251,10 @@ describe('requester execution-run materialization', () => {
       await expect(bridge.cleanupTerminalMaterialization({ runId: 'bob-run', runnerPid: process.pid,
         sessionId: 'bob-session', receipt, materializedRoot: durableHome })).resolves.toBe(true);
       await expect(readFile(join(durableHome, 'history-sentinel'), 'utf8')).resolves.toBe('bob-private-history');
-    } finally { await runtime.dispose(); }
+      }
+    } finally {
+      try { await Promise.all(retainedAuthSources.map(source => source.close())); }
+      finally { await runtime.dispose(); }
+    }
   });
 });

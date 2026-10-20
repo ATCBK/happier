@@ -4,7 +4,8 @@ import {RegistryFetchResponseV1Schema,FeaturesResponseSchema,accountSettingsPars
 import {REGISTRY_ACTION_OUTPUT_SCHEMAS_V1,computeGitBlobShaV1,computeGitTreeShaV1} from '@happier-dev/protocol/registries';
 import {deriveMarketplaceSourceId} from '@happier-dev/protocol/marketplace/marketplaceSourceRegistryV1';
 import {sealSavedSecretResourceStoredContentV1} from '@happier-dev/protocol/account/settings/savedSecretResourceContentV1';
-import {createInvocationSavedSecretOperationContextV1,prepareSavedSecretResourceCreateForOperation} from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
+import { prepareSavedSecretResourceCreateForOperation } from "@/settings/secrets/hydrateSavedSecretCatalog";
 import {runWithServerHttpBaseUrl} from '@/api/client/serverHttpBaseUrl';
 import {openEncryptedDataKeyEnvelopeV1} from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
 import tweetnacl from 'tweetnacl';
@@ -61,6 +62,8 @@ describe('registry RPC production registration',()=>{
     const persistence=await import('@/persistence');vi.spyOn(persistence,'readStoredCredentials').mockResolvedValue(credentials);
     const prepare=(value:string)=>prepareSavedSecretResourceCreateForOperation({credentials,accountId:'daemon-primary',accountMode:'e2ee',resourceId:'daemon-token',displayName:'Daemon token',kind:'token',value});
     const old=prepare('stale-private-token');const fresh=prepare('fresh-private-token');
+    if(!old.keyEnvelopes?.length||!fresh.keyEnvelopes?.length)throw new Error('Encrypted secrets must produce recipient envelopes');
+    const freshEnvelope=fresh.keyEnvelopes[0]!;
     const handlers=new Map<string,RpcHandler>();
     const rpcHandlerManager={registerHandler(method:string,handler:RpcHandler){handlers.set(method,handler);}} as unknown as RpcHandlerManager;
     const ref='happier:shared-secret:v1:daemon-token';
@@ -78,7 +81,7 @@ describe('registry RPC production registration',()=>{
     vi.spyOn(axios,'get').mockImplementation(async(url,config)=>{
       expect(new URL(String(url)).pathname).toBe('/v1/account/saved-secrets/resources/materials');
       expect(config?.headers?.Authorization).toBe(`Bearer ${token}`);
-      const envelope=fresh.keyEnvelopes[0]!;
+      const envelope=freshEnvelope;
       return {status:200,data:{resources:revoked?[]:[{resourceId:'daemon-token',encryptionMode:'e2ee',storedContent:fresh.storedContent,
         recipientEnvelope:{encryptedDataKey:envelope.encryptedDataKey,recipientContentPublicKeyFingerprint:envelope.recipientContentPublicKeyFingerprint},
         entry:{ref,source:'shared_resource',relationship:'owner',name:'Daemon token',kind:'token',encryptionMode:'e2ee',revision:2,ownerAccountId:'daemon-primary',materialStatus:'ready',capabilities:{use:true,rename:true,rotate:true,manageAccess:true,delete:true}}}]}};
@@ -89,7 +92,7 @@ describe('registry RPC production registration',()=>{
       if(String(url).startsWith('https://raw.githubusercontent.com/'))return new Response(skillBytes);
       return Response.json(String(url).includes('/commits/')?{sha:'1'.repeat(40)}:{sha:treeSha,tree:[{path:'SKILL.md',mode:'100644',type:'blob',sha:computeGitBlobShaV1(skillBytes),size:skillBytes.length}]});
     });
-    const root=registerMachineRpcHandlers({rpcHandlerManager,handlers:{spawnSession:async()=>({type:'error',errorCode:'unknown',errorMessage:'unused'}),stopSession:async()=>true,requestShutdown(){}}});
+    const root=registerMachineRpcHandlers({rpcHandlerManager,handlers:{spawnSession:async()=>({type:'error',errorCode:'UNEXPECTED',errorMessage:'unused'}),stopSession:async()=>true,requestShutdown(){}}});
     try{
       const handler=handlers.get(RPC_METHODS.DAEMON_REGISTRIES_FETCH);if(!handler)throw new Error('production registry registration missing');
       const foreign:RpcHandlerContext={signal:new AbortController().signal,machineAdmission:{actorAccountId:'foreign-requester',custodianAccountId:'daemon-primary',
@@ -130,7 +133,7 @@ describe('registry RPC production registration',()=>{
         {id:'headerless-repo',title:'GitHub',format:'git',kinds:['skill'],url:'https://github.com/headerless/rate',enabled:true,addedAt:0} ]}}}],tombstones:[],diagnostics:[]}});
     let limited=true;
     vi.stubGlobal('fetch',async(url:unknown)=>limited?new Response(null,{status:429}):Response.json(String(url).includes('/commits/')?{sha:'1'.repeat(40)}:{sha:'2'.repeat(40),tree:[]}));
-    const root=registerMachineRpcHandlers({rpcHandlerManager,handlers:{spawnSession:async()=>({type:'error',errorCode:'unknown',errorMessage:'unused'}),stopSession:async()=>true,requestShutdown(){}}});
+    const root=registerMachineRpcHandlers({rpcHandlerManager,handlers:{spawnSession:async()=>({type:'error',errorCode:'UNEXPECTED',errorMessage:'unused'}),stopSession:async()=>true,requestShutdown(){}}});
     try{
       const handler=handlers.get(RPC_METHODS.DAEMON_REGISTRIES_FETCH);if(!handler)throw new Error('production registry registration missing');
       const input={op:'list',kind:'skill',sourceId:'headerless-repo'};
@@ -144,7 +147,7 @@ describe('registry RPC production registration',()=>{
     const command=async(args:string[])=>{const result=await runScmCommand({bin:'git',cwd,args});if(!result.success)throw new Error(result.stderr);return result.stdout.trim();};
     const handlers=new Map<string,RpcHandler>();
     const rpcHandlerManager={registerHandler(method:string,handler:RpcHandler){handlers.set(method,handler);}} as unknown as RpcHandlerManager;
-    const root=registerMachineRpcHandlers({rpcHandlerManager,handlers:{spawnSession:async()=>({type:'error',errorCode:'unknown',errorMessage:'unused'}),stopSession:async()=>true,requestShutdown(){}}});
+    const root=registerMachineRpcHandlers({rpcHandlerManager,handlers:{spawnSession:async()=>({type:'error',errorCode:'UNEXPECTED',errorMessage:'unused'}),stopSession:async()=>true,requestShutdown(){}}});
     try{
       await command(['init']);await command(['config','user.name','Registry fixture']);await command(['config','user.email','registry-fixture@example.invalid']);
       await writeFile(join(cwd,'SKILL.md'),'---\nname: daemon-pinned\n---\nReviewed\n');
@@ -183,7 +186,7 @@ describe('registry RPC production registration',()=>{
       throw new Error(`Unexpected Home boundary: ${path}`);
     });
     vi.stubGlobal('fetch',async(url:unknown)=>new Response(JSON.stringify(String(url).includes('/commits/')?{sha:commit}:{sha:'tree',tree:[{path:'review/SKILL.md',type:'blob',mode:'100644',sha:'blob',size:3}]}),{headers:{'content-type':'application/json'}}));
-    const root=registerMachineRpcHandlers({rpcHandlerManager,handlers:{spawnSession:async()=>({type:'error',errorCode:'unknown',errorMessage:'unused'}),stopSession:async()=>true,requestShutdown(){}},
+    const root=registerMachineRpcHandlers({rpcHandlerManager,handlers:{spawnSession:async()=>({type:'error',errorCode:'UNEXPECTED',errorMessage:'unused'}),stopSession:async()=>true,requestShutdown(){}},
       deps:{createRegistryHost:signal=>createCliRegistryHostV1({credentials,signal})}});
     try{
       const handler=handlers.get(RPC_METHODS.DAEMON_REGISTRIES_FETCH);if(!handler)throw new Error('production registry registration missing');
@@ -200,7 +203,7 @@ describe('registry RPC production registration',()=>{
     setActiveAccountSettingsSnapshot({settings:accountSettingsParse({}),source:'network',settingsVersion:1,loadedAtMs:1,settingsSecretsReadKeys:[],scopeKey:'account-fixture',
       promptLibraryCatalog:{status:'ready',rows:[{revision:3,record:{key:'registry-sources',value:{v:2,disabledSourceIds:[],sources:[
         {id:'account-repo',title:'Account repo',format:'git',kinds:['skill'],url:'https://github.com/a/b',enabled:true,addedAt:0} ]}}}],tombstones:[],diagnostics:[]}});
-    const root=registerMachineRpcHandlers({rpcHandlerManager,handlers:{spawnSession:async()=>({type:'error',errorCode:'unknown',errorMessage:'unused'}),stopSession:async()=>true,requestShutdown(){}}});
+    const root=registerMachineRpcHandlers({rpcHandlerManager,handlers:{spawnSession:async()=>({type:'error',errorCode:'UNEXPECTED',errorMessage:'unused'}),stopSession:async()=>true,requestShutdown(){}}});
     try{
       const handler=handlers.get(RPC_METHODS.DAEMON_REGISTRIES_FETCH);expect(handler).toBeDefined();if(!handler)throw new Error('production registry registration missing');
       const response=RegistryFetchResponseV1Schema.parse(await handler({op:'list',kind:'skill',sourceId:'account-repo'}));

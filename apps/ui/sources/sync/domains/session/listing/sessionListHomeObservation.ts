@@ -1,3 +1,5 @@
+import { areServerProfileIdentifiersEquivalent } from '../../server/serverProfiles';
+import { readSessionListRowsForServerId, type SessionListRowStateByServerId } from './sessionListRowStateLookup';
 import { canSessionListOrdinaryPageAnswerQuery, type SessionListQueryHomeState } from './sessionListQueryController';
 import { matchSessionBotFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import type { SessionBotFilterV1, SessionListQueryV1 } from '@happier-dev/protocol/sessions/listing/query';
@@ -136,4 +138,31 @@ export function areSessionListHomeObservationsEqual(
     if (left === right) return true;
     if (!left || !right) return false;
     return left.phase === right.phase && left.lastSuccessAt === right.lastSuccessAt;
+}
+
+/** The exact Home's observation, found through the Home's profile aliases (a cache key may be an alias). */
+export function readSessionListHomeObservationForServerId(
+    cache: SessionListObservationCacheByServerId | null | undefined, serverId: string,
+): SessionListHomeObservation | null {
+    if (!cache) return null;
+    const key = Object.keys(cache).find(candidate => areServerProfileIdentifiersEquivalent(candidate, serverId));
+    return key ? cache[key]?.listObservation ?? null : null;
+}
+
+/**
+ * Whether a Home's Sessions are still opening for a picker that offers rows (the owner of "can a picker
+ * offer rows yet?"): only until the Home has listed some. A Home's observation settles when its last
+ * page is read, which nobody pages for a picker, so rows already listed are offered while later pages
+ * remain, instead of the picker opening forever.
+ */
+export function isSessionListHomeOpening(
+    state: Readonly<{
+        sessionListRowsByServerId: SessionListRowStateByServerId | null | undefined;
+        concurrentSessionListCacheByServerId: SessionListObservationCacheByServerId | null | undefined;
+    }>,
+    serverId: string,
+): boolean {
+    const phase = readSessionListHomeObservationForServerId(state.concurrentSessionListCacheByServerId, serverId)?.phase;
+    if (phase && phase !== 'loading' && phase !== 'refreshing') return false;
+    return Object.keys(readSessionListRowsForServerId(state.sessionListRowsByServerId, serverId) ?? {}).length === 0;
 }

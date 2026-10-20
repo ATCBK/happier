@@ -12,7 +12,8 @@ import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { useSessionMetadata } from '@/sync/domains/state/storage';
+import { useSessionSelector } from '@/sync/domains/state/storage';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { sessionAddressKey } from '@/sync/domains/session/sessionAddress';
 import { roleActions } from '@/sync/ops/roles/roleActions';
 import { t } from '@/text';
@@ -36,7 +37,7 @@ export const SessionNotesSection = React.memo(function SessionNotesSection(props
 });
 
 function SessionNotesContent(props: SessionNotesSectionProps) {
-    const metadata = useSessionMetadata(props.sessionId, props.serverId);
+    const metadata = useSessionSelector(props.sessionId, props.serverId, session => session ? readSessionOwnerMetadataView(session) : null);
     const notes = React.useMemo(() => readSessionRolesV1(metadata)?.notes ?? '', [metadata]);
     const [editing, setEditing] = React.useState(false);
     const [draft, setDraft] = React.useState(notes);

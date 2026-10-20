@@ -466,9 +466,22 @@ await existingSession.stop();
 ```
 
 `sendAndWait(message, input?, executionOptions?)` uses the canonical
-`session.message.send` Action with `wait: true`. Use `input.localId` to safely
+`session.message.send` Action with `reply: 'wait'` in unreleased 0.3 development.
+The older boolean `wait` remains accepted by the Action ingress for existing
+callers; do not combine it with `reply`. Use `input.localId` to safely
 retry an uncertain send and `input.timeoutSeconds` to bound only the
-observation; it does not make a second idle-wait call.
+observation; it does not cancel admitted work or make a second idle-wait call.
+The bound method fixes its reply mode. Use the raw typed Action for other modes.
+For `wait`, `return`, or supplied `structuredInput`, the development SDK checks the selected executor's
+advertised input schema before sending; an endpoint that would ignore the reply
+mode or exact structured references returns `unsupported` without sending the input. A human later-return
+destination also requires explicit support and the normal present-person
+admission; providing its id grants no authority. In 0.3 development, human
+later-return also supports another Account's shared target. Target access and
+input permission for the requester's own return Session are rechecked, including
+whether its readers may read the target. A machine signed into the requester's
+Account delivers the answer with its own credentials; the return Session may
+run on another machine.
 
 ### Talk to an execution run inside a Session
 
@@ -536,13 +549,31 @@ const terminal = await run.wait({ timeoutSeconds: 300 });
 (`sessionId: null`), which has no parent Session admission owner. The bound
 Session handle never calls it.
 
-Human discussions inside a Session use ordinary generated Actions. The public
-API Token and SDK surfaces expose `actions.session.discussion.list`, `.get`,
-`.read`, and `.post`; the inputs and results contain authored documents, not
-ciphertext. The daemon owns the Session cipher, so an external caller never
-handles Session keys. In 0.3 development source, discussion management and
-personal read-state Actions are also available to automation within its token
-grant and target; Agent/MCP exposure for these human discussions stays disabled.
+Home Discussions are being refactored in 0.3 development source into the
+generated `actions.discussion.*` family. They have their own grants and
+encryption key, with an optional Session anchor; they do not require a parent
+Session. Semantic Action inputs and opened results keep resource keys inside
+the trusted host. The [host Action reference](/plugins/api/host-actions) owns
+the operation inventory and declared surfaces; each call still needs current
+credential, grant, authority and approval admission. The standalone API-token
+SDK exposes the catalog's API-admitted subset. Present-user create, rename,
+archive, restore, read-state, Leave and ownership transfer are not methods on
+that client; an approval scope does not add them.
+
+An installed plugin uses the separate [Plugin SDK Action
+service](/plugins/api/actions-tools-commands). It can request present-user
+operations through the host's existing approval flow. An approval-request
+result means review is pending, not that the Discussion was changed.
+
+This is unreleased work in progress, with package and live validation still
+pending. Capture the Home connection for the whole operation and preserve the
+separate creation and first-message retry identities after a lost response.
+The resource contract includes message replies and typed participant
+references. Executable agent addressing, final-reply fallback, answer policies,
+model participants, second-opinion entry and the [public Discussion composer
+scope](/plugins/guides/composer#discussion-integration-development) remain
+integration work; their schemas and generated bindings alone do not establish
+a completed live journey.
 
 ### Follow transcript and execution-run streams
 
@@ -753,6 +784,11 @@ is selected by the daemon, so your backend supplies no execution-machine path.
 3. POST to `/v1/actions/session.message.send`, substituting the returned Session
    ID in both places. Keep `localId` stable when retrying this same message:
 
+The reply field below is **unreleased 0.3 development**. For a raw HTTP reply
+send, first read `action.spec.get` against the same target and require its
+complete advertised input schema to support the requested reply mode. Do not
+send if support is absent; the fluent SDK performs this check for you.
+
 ```json
 {
   "v": 1,
@@ -762,12 +798,13 @@ is selected by the daemon, so your backend supplies no execution-machine path.
     "sessionId": "session-id",
     "message": "Read the connected data and summarize the result.",
     "localId": "backend-input-1",
-    "wait": true
+    "reply": "wait"
   }
 }
 ```
 
-`wait: true` observes this admitted turn. Inspect the typed result before
+`reply: 'wait'` observes this exact admitted input, not Session idle or a Run's
+lifetime. Inspect the typed result before
 assuming the turn completed; a lost response does not justify a fresh message ID.
 
 4. POST to `/v1/actions/session.transcript.get` to read the opened history:
@@ -814,12 +851,23 @@ POST to `/v1/actions/workflow.trigger.run_now` with that token:
 {
   "v": 1,
   "requestId": "backend-brief-1",
+  "idempotencyKey": "brief-occurrence-1",
   "target": { "kind": "machine", "machineId": "machine-id" },
   "input": { "automationId": "brief-automation-id", "idempotencyKey": "brief-occurrence-1" }
 }
 ```
 
-Reuse `idempotencyKey` for retries of the same manual occurrence. In the current
+Reuse `idempotencyKey` for retries of the same manual occurrence with the same
+token, even when sending a fresh request. Different tokens have separate retry
+identities. Without a key, replaying the same signed `requestId` rejoins the same
+occurrence. Keys are not secret; keep private content and credentials out of them.
+The SDK copies the input key into the signed request envelope, including for E2EE
+Accounts. When sending literal HTTP envelopes, include the same key at the top
+level and in `input`; a mismatch is refused. An optional `Idempotency-Key` header
+must also match. The daemon retains requester custody, and the server rechecks the
+current grant before admitting a Run.
+
+In the current
 0.3 development source, `automationIds` restricts `workflow.trigger.run_now` to
 the listed exact IDs in addition to the Action and machine/Session restrictions.
 Another or missing Automation ID is refused with `credential_scope_denied`.

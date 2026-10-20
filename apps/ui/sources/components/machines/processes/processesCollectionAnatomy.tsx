@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { View } from 'react-native';
+import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type {
   CollectionAnatomy,
@@ -17,7 +18,7 @@ import type {
   OwnerRowV1,
 } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { formatMachineBytes } from '@/components/machines/vitals/machineVitalsPresentation';
 import { formatVitalsPercent } from '@/components/machines/vitals/vitalsFormat';
 import { Icon } from '@/components/ui/icons/Icon';
@@ -66,8 +67,10 @@ export type ProcessesAnatomyInput = Readonly<{
   wrapItem?: (item: ProcessesItem, content: React.ReactNode) => React.ReactNode;
 }>;
 
+const ABSENT_FIGURE = '—';
+
 export function formatProcessCpu(value: number | null): string {
-  return value === null ? '—' : `${formatVitalsPercent(value)}%`;
+  return value === null ? ABSENT_FIGURE : `${formatVitalsPercent(value)}%`;
 }
 
 export function formatProcessMemory(value: number | null, ceiling?: OwnerRowV1['ceiling']): string {
@@ -75,7 +78,7 @@ export function formatProcessMemory(value: number | null, ceiling?: OwnerRowV1['
     used: ceiling.usedBytes === undefined ? '—' : formatMachineBytes(ceiling.usedBytes, 'memory'),
     limit: formatMachineBytes(ceiling.limitBytes, 'memory'),
   });
-  return value === null ? '—' : formatMachineBytes(value, 'memory');
+  return value === null ? ABSENT_FIGURE : formatMachineBytes(value, 'memory');
 }
 
 /** The name a row shows: owners by the identity owner, processes in plain words, groups by what they are. */
@@ -155,13 +158,17 @@ export const ProcessPortChips = React.memo(function ProcessPortChips(
   props: Readonly<{
     ports: readonly Readonly<{ port: number; inventoryEntryId?: string }>[];
     actionable?: Readonly<{ item: ProcessesItem; ownerTitle: string }>;
-    /** A phone row has room for a couple of chips; the rest say how many more the owner's page lists. */
+    /** A row keeps its first listener; the rest say how many more the rows it opens (and its detail) list. */
     max?: number;
+    /** The row the count belongs to, for its test id. */
+    rowKey?: string;
   }>,
 ) {
+  // On the tab's rows the count is a button: it shows the rest of the row's listeners in place, each its own chip and menu.
+  const [showAll, setShowAll] = React.useState(false);
   if (props.ports.length === 0) return null;
   const { actionable } = props;
-  const shown = props.max === undefined ? props.ports : props.ports.slice(0, props.max);
+  const shown = props.max === undefined || showAll ? props.ports : props.ports.slice(0, props.max);
   const hidden = props.ports.length - shown.length;
   return (
     <>
@@ -184,8 +191,25 @@ export const ProcessPortChips = React.memo(function ProcessPortChips(
           />
         ),
       )}
-      {hidden > 0 ? (
-        <Text numberOfLines={1} style={styles.moreChips}>{`+${hidden}`}</Text>
+      {hidden > 0 && !actionable ? (
+        // A read-only row (the Overview's preview) is itself the press target: the count stays text inside it.
+        <Text
+          testID={props.rowKey ? `machine-processes-ports-more-${props.rowKey}` : undefined}
+          numberOfLines={1}
+          accessibilityLabel={props.ports.slice(shown.length).map((port) => `:${port.port}`).join(', ')}
+          style={styles.moreChips}
+        >{`+${hidden}`}</Text>
+      ) : hidden > 0 ? (
+        <HappierPressable
+          testID={props.rowKey ? `machine-processes-ports-more-${props.rowKey}` : undefined}
+          accessibilityRole="button"
+          accessibilityLabel={props.ports.slice(shown.length).map((port) => `:${port.port}`).join(', ')}
+          // The row opens on its own press; the count only reveals its ports.
+          onPress={(event) => { event?.stopPropagation?.(); setShowAll(true); }}
+          hitSlop={8}
+        >
+          <Text numberOfLines={1} style={styles.moreChips}>{`+${hidden}`}</Text>
+        </HappierPressable>
       ) : null}
     </>
   );
@@ -202,7 +226,53 @@ function portActions(
     : { item, ownerTitle: input.titles.get(ownerRowId) ?? ownerRowId };
 }
 
-/** The rest of a row's line: a session's status word or what a process is running, its label and its ports. */
+const ROW_PORT_CHIPS = 1;
+
+/**
+ * A row's listeners. On the tab's tree each chip opens its menu, so the Collection draws them as the row's
+ * `titleControls`, beside its press target; a read-only surface keeps the plain chips in the row's line.
+ * Every row keeps one chip and a count, so its name and what it is doing stay readable; the rows it opens
+ * and its detail list every listener.
+ */
+const ProcessRowPorts = React.memo(function ProcessRowPorts(
+  props: Readonly<{ item: ProcessesItem; input: ProcessesAnatomyInput }>,
+) {
+  const { item, input } = props;
+  switch (item.kind) {
+    case 'owner':
+      return (
+        <ProcessPortChips
+          ports={item.ports}
+          actionable={portActions(input, item, item.owner.rowId)}
+          max={ROW_PORT_CHIPS}
+          rowKey={item.key}
+        />
+      );
+    case 'process':
+      return (
+        <ProcessPortChips
+          ports={item.row.ports ?? []}
+          actionable={portActions(input, item, item.owner.rowId)}
+          max={ROW_PORT_CHIPS}
+          rowKey={item.key}
+        />
+      );
+    case 'leftBehind':
+      // On a phone the line says why the row is here (its session and when it ended); the ports are on the review.
+      return (
+        <ProcessPortChips
+          ports={input.compact ? [] : (item.row.ports ?? [])}
+          actionable={portActions(input, item, item.key)}
+          max={ROW_PORT_CHIPS}
+          rowKey={item.key}
+        />
+      );
+    default:
+      return null;
+  }
+});
+
+/** The rest of a row's line: a session's status word or what a process is running, its label and (read-only) its ports. */
 const ProcessRowWhere = React.memo(function ProcessRowWhere(
   props: Readonly<{ item: ProcessesItem; input: ProcessesAnatomyInput }>,
 ) {
@@ -219,22 +289,14 @@ const ProcessRowWhere = React.memo(function ProcessRowWhere(
             </Text>
           ) : null}
           <ProcessOwnershipPill level={item.row.level} testID={`machine-processes-label-${item.key}`} />
-          <ProcessPortChips
-            ports={item.row.ports ?? []}
-            actionable={portActions(input, item, item.owner.rowId)}
-            max={input.compact ? 2 : undefined}
-          />
+          {input.readOnly ? <ProcessRowPorts item={item} input={input} /> : null}
         </View>
       );
     case 'leftBehind':
       return (
         <View style={styles.where}>
           <LeftBehindOwnerLine item={item} serverId={input.serverId} />
-          {/* On a phone the line says why the row is here (its session and when it ended); the ports are on the review. */}
-          <ProcessPortChips
-            ports={input.compact ? [] : (item.row.ports ?? [])}
-            actionable={portActions(input, item, item.key)}
-          />
+          {input.readOnly ? <ProcessRowPorts item={item} input={input} /> : null}
         </View>
       );
     case 'happier':
@@ -312,11 +374,7 @@ function OwnerWhere(
           {text}
         </Text>
       ) : null}
-      <ProcessPortChips
-        ports={item.ports}
-        actionable={portActions(input, item, item.owner.rowId)}
-        max={input.compact ? 2 : undefined}
-      />
+      {input.readOnly ? <ProcessRowPorts item={item} input={input} /> : null}
     </View>
   );
 }
@@ -354,11 +412,13 @@ function LeftBehindOwnerLine(
 const ProcessFigure = React.memo(function ProcessFigure(
   props: Readonly<{ text: string; strong: boolean; testID?: string }>,
 ) {
+  // A figure the answer does not carry (a daemon's CPU) is the quiet dash of an empty cell, never a bold one.
+  const absent = props.text === ABSENT_FIGURE;
   return (
     <Text
       testID={props.testID}
       numberOfLines={1}
-      style={[styles.figure, props.strong ? styles.figureStrong : null]}
+      style={[styles.figure, absent ? styles.figureAbsent : props.strong ? styles.figureStrong : null]}
     >
       {props.text}
     </Text>
@@ -373,7 +433,7 @@ const ProcessSpark = React.memo(function ProcessSpark(
   }>,
 ) {
   const { theme } = useUnistyles();
-  const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+  const pluginTheme = usePluginUiTheme(theme);
   const series = React.useMemo((): readonly HappierSeries[] | null => {
     const values = (props.samples ?? []).flatMap((sample) =>
       typeof sample.cpuPercent === 'number' ? [sample.cpuPercent] : [],
@@ -485,8 +545,19 @@ export function useProcessesCollectionAnatomy(
         : item.kind === 'process'
           ? input.history?.[item.row.ref]
           : undefined;
+    const memoryField: CollectionField<ProcessesItem> = {
+      key: 'memory',
+      title: t('machineProcesses.columns.memory'),
+      minWidth: 72,
+      priority: 4,
+      align: 'end',
+      sortable: true,
+      render: memory,
+    };
+    // Phone (lab `rp` Hp): the rows say memory in their trailing slot; the field is still declared, so the
+    // list's summary rows ("Happier in total", "Everything else") and its sort keep the same figure.
     const fields: CollectionField<ProcessesItem>[] = input.compact
-      ? []
+      ? [memoryField]
       : [
           ...(input.history
             ? [
@@ -513,15 +584,7 @@ export function useProcessesCollectionAnatomy(
             sortable: true,
             render: cpu,
           },
-          {
-            key: 'memory',
-            title: t('machineProcesses.columns.memory'),
-            minWidth: 72,
-            priority: 4,
-            align: 'end',
-            sortable: true,
-            render: memory,
-          },
+          memoryField,
         ];
     return {
       glyph: (item) => <ProcessGlyph item={item} input={input} />,
@@ -552,6 +615,9 @@ export function useProcessesCollectionAnatomy(
               <ProcessRowWhere item={item} input={input} />
             ),
           }),
+      ...(input.readOnly
+        ? {}
+        : { titleControls: (item: ProcessesItem) => <ProcessRowPorts item={item} input={input} /> }),
       fields,
       accessibilityLabel: (item) =>
         t('machineProcesses.a11y.row', {
@@ -614,7 +680,7 @@ export function buildProcessesSummaryRows(
       testID: 'machine-processes-total-else',
       title: (
         <View style={styles.where}>
-          <Text numberOfLines={1} style={styles.quiet}>
+          <Text style={styles.quiet}>
             {t('machineProcesses.totals.everythingElse', {
               machine: input.machineName,
             })}
@@ -641,10 +707,13 @@ export function buildProcessesSummaryRows(
 }
 
 const styles = StyleSheet.create((theme) => ({
+  // A totals row's sentence and its link share the line while they fit; on a phone the link drops under the
+  // sentence instead of either being cut ("Show all processes" is a control, the machine name an identity).
   where: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
-    gap: theme.space.s8,
+    columnGap: theme.space.s8,
     minWidth: 0,
     flexShrink: 1,
   },
@@ -685,5 +754,8 @@ const styles = StyleSheet.create((theme) => ({
   figureStrong: {
     ...Typography.default('medium'),
     color: theme.colors.text.primary,
+  },
+  figureAbsent: {
+    color: theme.colors.text.tertiary,
   },
 }));

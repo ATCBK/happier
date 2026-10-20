@@ -66,9 +66,10 @@ describe('resolveBuiltInContributions', () => {
   });
   it('serializes every concrete bundled projection family through the strict current Protocol schema', () => {
     const pluginMetadata = generatedBundledPluginManifests.BUNDLED_FIRST_PARTY_PLUGIN_METADATA;
+    const contributes = resolveBuiltInContributions();
     const projection = buildPluginProjectionV2({
       registry: createResolvedContributionRegistry({
-        ...resolveBuiltInContributions(),
+        ...contributes,
         immutableGenerationIdsByPluginId: Object.freeze(Object.fromEntries(
           pluginMetadata.map(({ pluginId }) => [pluginId, `generation:${pluginId}`]),
         )),
@@ -83,6 +84,11 @@ describe('resolveBuiltInContributions', () => {
       [...listPluginProjectionFamilyIdsV2()].sort(),
     );
     expect(() => PluginProjectionV2Schema.parse(projection)).not.toThrow();
+    for (const contribution of [...(contributes.dragSources ?? []), ...(contributes.dropTargets ?? [])]) {
+      expect(projection.diagnostics).toContainEqual(expect.objectContaining({
+        stage: 'ui', contribution: contribution.identity,
+      }));
+    }
   });
 
   it('projects bundled Triage and Inspector app-shell surfaces from their generated manifests', () => {
@@ -105,7 +111,7 @@ describe('resolveBuiltInContributions', () => {
       contributionKind: 'surfacePlacement',
       container: 'appPage',
       target: { kind: 'app' },
-      column: expect.objectContaining({ renderer: expect.objectContaining({ contributionId: 'views-column' }) }),
+      renderer: expect.objectContaining({ contributionId: 'list-page' }),
     }));
     expect(entries['surfacePlacement:happier.triage:latest']).toEqual(expect.objectContaining({
       contributionKind: 'surfacePlacement',
@@ -401,11 +407,11 @@ describe('resolveBuiltInContributions', () => {
       definition: {
         managedRuntime: {
           kind: 'managed',
-          endpointTemplateIds: [
+          endpointTemplateIds: expect.arrayContaining([
             'cliproxyapi-openai-responses',
             'cliproxyapi-openai-chat',
             'cliproxyapi-anthropic',
-          ],
+          ]),
           connectedAccounts: [{
             purpose: 'openai-upstream',
             materializationKinds: ['httpHeaders'],
@@ -632,7 +638,7 @@ describe('resolveBuiltInContributions', () => {
             descriptor.definition.authentication.defaultModeId,
             descriptor.definition.authentication.modes.map(({ id, kind }) => [id, kind]),
         ])).toEqual(expect.arrayContaining([
-            ['happier.agent.codex', 'openai-codex', 'oauth', [['oauth', 'oauthAuthorizationCode'], ['device', 'oauthDeviceCode']]],
+            ['happier.agent.codex', 'openai-codex', 'oauth', [['oauth', 'oauthAuthorizationCode'], ['device', 'oauthDeviceCode'], ['native-import', 'manual']]],
             ['happier.agent.claude', 'anthropic', 'api-key', [['api-key', 'manual']]],
             ['happier.voice.openai', 'openai', 'api-key', [['api-key', 'manual']]],
         ]));

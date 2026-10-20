@@ -2,7 +2,7 @@ import { DaemonPetImportAccountPackageRequestV1Schema, DaemonPetImportLocalPacka
 import { PET_PACKAGE_FORMAT_CODEX_ATLAS_V1 } from '@happier-dev/protocol/pets/constants';
 import type { AccountPetCreateRequestV1, AccountPetCreateResponseV1, DaemonPetImportLocalPackageResponseV1, DaemonPetImportResponseV1, FeatureDecision, PetPackageValidationResultV1 } from '@happier-dev/protocol';
 
-import { configuration } from '@/configuration';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resolveCliFeatureDecisionForServer } from '@/features/featureDecisionService';
 
 import type { PetPackageDiscoveryCache } from '../discovery/petPackageDiscoveryCache';
@@ -49,7 +49,7 @@ async function resolveActiveServerPetsSyncDecision(): Promise<FeatureDecision> {
   const resolved = await resolveCliFeatureDecisionForServer({
     featureId: 'pets.sync',
     env: process.env,
-    serverUrl: configuration.serverUrl,
+    serverUrl: resolveServerHttpBaseUrl(),
   });
   return resolved.decision;
 }

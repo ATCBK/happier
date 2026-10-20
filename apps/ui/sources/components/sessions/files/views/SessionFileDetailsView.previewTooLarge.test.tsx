@@ -1,17 +1,17 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { standardCleanup } from '@/dev/testkit';
 import { createSessionFilesViewFixture, fileViewSnapshot, installSessionFilesViewBoundaries, prepareSessionFilesViewTestkit } from './sessionFilesViewTestkit';
 import { createSessionFileNativeTransferBoundary } from '../sessionFileNativeTransferTestkit';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 
-installSessionFilesViewBoundaries();
+installSessionFilesViewBoundaries({ confirmResult: true });
+await prepareSessionFilesViewTestkit();
 let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
 let transfer: ReturnType<typeof createSessionFileNativeTransferBoundary>;
 const filePath = 'big.txt';
 
-beforeAll(prepareSessionFilesViewTestkit);
 beforeEach(async () => {
     standardCleanup();
     transfer = createSessionFileNativeTransferBoundary({ bytes: new Uint8Array([65, 66, 67]), name: filePath });

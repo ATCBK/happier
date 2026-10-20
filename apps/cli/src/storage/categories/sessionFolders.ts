@@ -1,8 +1,8 @@
 import { basename, dirname, join } from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { DEFAULT_SESSION_MEDIA_TRANSFER_CONFIG } from '@/transfers/targets/resolveSessionMediaTransferTarget';
-import { check, directoriesAtDepth, entries, exists, inUse, item, unavailableDirectory } from './filesystem';
+import { check, directoriesAtDepth, entries, exists, inUse, item, unavailableDirectory, opaqueItemTitle } from './filesystem';
 import { StorageCategoryAdapterError } from './types';
 import type { StorageCategoryContext, StorageCategoryDefinition, StorageCategoryVerdict, StorageCategoryAdapter, StorageCategoryCatalogDeps } from './types';
 import { bindFilesystemItem, filesystemAdapterForEntry } from './filesystemAdapters';
@@ -10,7 +10,7 @@ import { readStoragePathIdentity, removeStoragePath } from '../trash/removeStora
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { MachineStoragePolicyV1Schema } from '@happier-dev/protocol/storage/storageV1';
 
-const AllocationOwnerDataSchema = z.object({ kind: z.literal('allocation'), allocationId: z.string().regex(/^[a-f0-9]{64}$/u) }).strict();
+const AllocationOwnerDataSchema = z.strictObject({ kind: z.literal('allocation'), allocationId: z.string().check(z.regex(/^[a-f0-9]{64}$/u)) });
 const StoredAllocationOwnerDataSchema = createStoredReadSchema(AllocationOwnerDataSchema);
 async function allocationAdapter(data: JsonValue, deps: StorageCategoryCatalogDeps): Promise<StorageCategoryAdapter> {
     const parsed = StoredAllocationOwnerDataSchema.safeParse(data);
@@ -85,18 +85,20 @@ export const sessionFolders: StorageCategoryDefinition = {
             const record = byPath.get(path);
             if (record?.inTrash) continue;
             result.push({ ...item('sessionFolders', path, record ? sessionFolderCanGo(record.sessionId, context) : check,
-                { evidence: record ? ['managed_session_directory_record'] : ['managed_session_directory_record_unavailable'] }),
+                { title: opaqueItemTitle(path, 'Session folder'), evidence: record ? ['managed_session_directory_record'] : ['managed_session_directory_record_unavailable'] }),
                 ...(record?.sessionId ? { sessionId: record.sessionId } : {}) });
         }
         // The ownership record may name an allocation omitted by a transient directory relist.
         for (const record of context.allocations) if (!record.inTrash && !result.some(value => value.path === record.directory) && await exists(record.directory)) {
-            result.push({ ...item('sessionFolders', record.directory, sessionFolderCanGo(record.sessionId, context), { evidence: ['managed_session_directory_record'] }),
+            result.push({ ...item('sessionFolders', record.directory, sessionFolderCanGo(record.sessionId, context),
+                { title: opaqueItemTitle(record.directory, 'Session folder'), evidence: ['managed_session_directory_record'] }),
                 ...(record.sessionId ? { sessionId: record.sessionId } : {}) });
         }
         for (const root of uploadRoots(context)) for (const category of await entries(root, unavailableDirectory(context, 'sessionFolders'))) {
             for (const path of await directoriesAtDepth(category, 1, unavailableDirectory(context, 'sessionFolders'))) {
                 const sessionId = context.sessions.find(session => session.sessionId === basename(path))?.sessionId;
-                result.push({ ...item('sessionFolders', path, sessionFolderCanGo(sessionId ?? null, context), { evidence: ['session_workspace_upload'] }),
+                result.push({ ...item('sessionFolders', path, sessionFolderCanGo(sessionId ?? null, context),
+                    { title: opaqueItemTitle(path, 'Session attachments'), evidence: ['session_workspace_upload'] }),
                     ...(sessionId ? { sessionId } : {}) });
             }
         }

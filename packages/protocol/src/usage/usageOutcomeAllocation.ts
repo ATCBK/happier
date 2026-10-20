@@ -11,23 +11,23 @@ export type UsageWorkContribution = UsageAnalyticsContribution;
 /** Only the authorized SCM/hosting reader may supply these witnessed relationships. */
 export type UsageWorkEvidence = ScmPullRequestWorkEvidence;
 export type UsageWorkOutcome = Readonly<{
-  key: string; repositoryKey: string; pullRequest: ScmPullRequestSummary; contributionIds: readonly string[];
+  key: string; repositoryKey: string; pullRequest: ScmPullRequestSummary; contributionIds: string[];
 }>;
 export type UsageWorkAllocation = Readonly<{
   contribution: UsageWorkContribution; outcome: UsageWorkOutcome | null;
   reason: 'allocated' | 'missing_turn' | 'missing_evidence' | 'ambiguous_outcome' | 'uncertain_writers';
-  evidence: readonly UsageWorkEvidence[];
+  evidence: UsageWorkEvidence[];
 }>;
 export type UsageWorkProjection = Readonly<{
-  allocations: readonly UsageWorkAllocation[]; outcomes: readonly UsageWorkOutcome[];
-  branchAllocations: readonly UsageWorkBranchAllocation[]; branches: readonly UsageWorkBranch[];
+  allocations: UsageWorkAllocation[]; outcomes: UsageWorkOutcome[];
+  branchAllocations: UsageWorkBranchAllocation[]; branches: UsageWorkBranch[];
 }>;
 export type UsageWorkBranch = Readonly<{
-  key: string; repositoryKey: string; branch: ScmBranchWorkEvidence['branch']; contributionIds: readonly string[];
+  key: string; repositoryKey: string; branch: ScmBranchWorkEvidence['branch']; contributionIds: string[];
 }>;
 export type UsageWorkBranchAllocation = Readonly<{
   contribution: UsageWorkContribution; branch: UsageWorkBranch | null; reason: UsageWorkAllocation['reason'];
-  evidence: readonly ScmBranchWorkEvidence[];
+  evidence: ScmBranchWorkEvidence[];
 }>;
 
 const UsageWorkOutcomeSchema = lazyZodSchema(() => z.strictObject({

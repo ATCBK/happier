@@ -59,6 +59,30 @@ const overflow = (screen: Screen, testID: string) =>
   measure(screen, testID, { bar: 300, viewport: 200, strip: 520 });
 
 describe('WidgetAreaLayoutBar', () => {
+  it('names a lone layout as the page title with its menu, never a strip of one tab', async () => {
+    const { WidgetAreaLayoutBar } = await import('./WidgetAreaLayoutBar');
+    const { DropdownMenu } =
+      await import('@/components/ui/forms/dropdown/DropdownMenu');
+    const onCreate = vi.fn();
+    const screen = await renderScreen(
+      <WidgetAreaLayoutBar
+        layouts={[DASHBOARDS[0]]}
+        labels={LABELS}
+        selectedId="overview"
+        onSelect={vi.fn()}
+        onCreate={onCreate}
+        actions={null}
+        testID="bar"
+      />,
+    );
+    // Nothing to switch between: no tab strip, the name stands as the title and still lists Create.
+    expect(screen.findByTestId('bar.tabs:viewport')).toBeNull();
+    expect(screen.findHostByTestId('bar.current')).not.toBeNull();
+    expect(screen.findHostByTestId('bar.create')).not.toBeNull();
+    const menu = screen.root.findAllByType(DropdownMenu)[0]!;
+    expect(menu.props.items.map((item: { id: string }) => item.id)[0]).toBe('overview');
+  });
+
   it('remeasures compact tabs after a rename or deletion and restores the strip when it fits', async () => {
     const { WidgetAreaLayoutBar } = await import('./WidgetAreaLayoutBar');
     const props = { selectedId: 'overview', onSelect: () => {}, onCreate: null,
@@ -70,11 +94,15 @@ describe('WidgetAreaLayoutBar', () => {
     await screen.update(<WidgetAreaLayoutBar {...props} layouts={renamed} />);
     expect(screen.findByTestId('bar.tabs:strip')).not.toBeNull();
     await overflow(screen, 'bar');
-    await screen.update(<WidgetAreaLayoutBar {...props} layouts={[renamed[0]!]} />);
+    await screen.update(<WidgetAreaLayoutBar {...props} layouts={renamed.slice(0, 2)} />);
     expect(screen.findByTestId('bar.tabs:strip')).not.toBeNull();
     await measure(screen, 'bar', { bar: 300, viewport: 260, strip: 120 });
     expect(screen.findByTestId('bar.current')).toBeNull();
     expect(screen.findByTestId('bar.tabs:overview')).not.toBeNull();
+    // Deleted down to one, there is nothing to switch between: the name stands as the title.
+    await screen.update(<WidgetAreaLayoutBar {...props} layouts={[renamed[0]!]} />);
+    expect(screen.findByTestId('bar.tabs:strip')).toBeNull();
+    expect(screen.findByTestId('bar.current')).not.toBeNull();
     await screen.unmount();
   });
   it('separates host presets from the viewer layouts in the compact selector', async () => {
@@ -324,7 +352,7 @@ describe('WidgetAreaLayoutBar', () => {
     const { WidgetAreaLayoutBar } = await import('./WidgetAreaLayoutBar');
     const screen = await renderScreen(
       <WidgetAreaLayoutBar
-        layouts={[DASHBOARDS[0]]}
+        layouts={DASHBOARDS.slice(0, 2)}
         labels={LABELS}
         selectedId="overview"
         onSelect={() => {}}
@@ -334,7 +362,7 @@ describe('WidgetAreaLayoutBar', () => {
       />,
     );
     // The bar's own controls are measured where they lay out (64 here); a scroller caught mid-layout at
-    // 60 must not turn one tab into "needs 1000+" and keep the menu up for good.
+    // 60 must not turn two tabs into "needs 1000+" and keep the menu up for good.
     await act(async () => { screen.findByTestId('bar.trailing')!.props.onLayout({ nativeEvent: { layout: { width: 64, height: 40 } } }); });
     await measure(screen, 'bar', { bar: 912, viewport: 60, strip: 260 });
     expect(screen.findHostByTestId('bar.tabs:overview')).not.toBeNull();

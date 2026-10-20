@@ -17,6 +17,7 @@ import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForId
 import { HappyError } from '@/utils/errors/errors';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 import { isSessionAwarenessContentReadableV1 } from '@happier-dev/protocol/sessions/awareness/availability';
+import { readAwarenessPresence } from '@/sync/domains/session/attention/runtimePresentation';
 
 import {
   parseCursorKey as parseLegacyCursorKey,
@@ -115,7 +116,7 @@ export async function listSessionsForVoiceTool(params: Readonly<{
   serverId?: string | null;
   signal?: AbortSignal;
 }>) {
-  if (params.view === 'awareness' || params.query || params.project) {
+  if (params.serverId || params.view === 'awareness' || params.query || params.project) {
     const serverId = params.serverId ?? params.project?.serverId ?? getActiveServerSnapshot().serverId;
     const failure = (errorCode: string) => ({ ok: false as const, errorCode, error: errorCode });
     if (params.project && !areServerProfileIdentifiersEquivalent(params.project.serverId, serverId)) return failure('server_scope_mismatch');
@@ -216,12 +217,17 @@ export async function listSessionsForVoiceTool(params: Readonly<{
         const result = {
           ...(params.project ? { project: params.project, projectFilterUnavailableCount } : {}),
           ok: true as const,
-          sessions: sessions.map((session) => ({
-            id: session.id, active: session.active, presence: session.presence, updatedAt: session.updatedAt,
-            serverId,
-            ...(privacy.shareSessionSummary && session.metadata?.summaryText ? { title: session.metadata.summaryText } : {}),
-            ...(params.includeLastMessagePreview ? { lastMessagePreview: readRetainedPreview(state, serverId, session.id) } : {}),
-          })),
+          sessions: sessions.map((session) => {
+            const preview = params.includeLastMessagePreview ? readRetainedPreview(state, serverId, session.id) : undefined;
+            const presence = readAwarenessPresence(session.presence);
+            return {
+              id: session.id, active: session.active, presence: presence === 'unknown' ? null : presence, updatedAt: session.updatedAt,
+              serverId,
+              ...(session.manager != null ? { manager: session.manager } : {}),
+              ...(privacy.shareSessionSummary && session.metadata?.summaryText ? { title: session.metadata.summaryText } : {}),
+              ...(preview ? { lastMessagePreview: preview } : {}),
+            };
+          }),
           nextCursor: page.nextCursor,
           hasNext: page.hasNext,
           attentionNextCursor: page.attentionNextCursor ?? null,

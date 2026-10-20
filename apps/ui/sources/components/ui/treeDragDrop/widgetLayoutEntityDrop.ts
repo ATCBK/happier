@@ -1,5 +1,5 @@
 import { AnchoredListPositionV1Schema, resolveAnchoredListMoveV1, type AnchoredListPositionV1 } from '@happier-dev/protocol/actions/anchoredListOrderV1';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { entityDragScopesEqualV1, type EntityDragItemV1, type EntityDropAdmissionV1, type EntityDropPreviewV1 } from '@happier-dev/protocol/plugins/ui';
 import {
@@ -9,16 +9,16 @@ import {
 import { t } from '@/text';
 import { WIDGET_MOVE_UNCHANGED_CODE } from './entityDropNoChange';
 
-export const WidgetLayoutDropDestinationSchema = z.object({
+export const WidgetLayoutDropDestinationSchema = z.strictObject({
     ...AnchoredListPositionV1Schema.shape,
-    groupId: z.string().trim().min(1).nullable().optional(),
-}).strict();
+    groupId: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+});
 export type WidgetLayoutDropDestination = z.infer<typeof WidgetLayoutDropDestinationSchema>;
 
-/** Its source placement is still being read: a pending state, never a refusal. */
+/** Its source placement is still being read: the place is neither admitted nor refused yet (`describeEntityDropOutcome` words it). */
 export const WIDGET_MOVE_PENDING_CODE = 'widget_admission_pending';
-/** Neither is an answer about the place under the pointer, so the carried card shows only what it carries. */
-export const WIDGET_MOVE_SILENT_CODES: ReadonlySet<string> = new Set([WIDGET_MOVE_UNCHANGED_CODE, WIDGET_MOVE_PENDING_CODE]);
+/** Over its own place there is nothing to say, so the carried card shows only what it carries. */
+export const WIDGET_MOVE_SILENT_CODES: ReadonlySet<string> = new Set([WIDGET_MOVE_UNCHANGED_CODE]);
 
 /** Identity adapters do not select transport, credentials or layout authority. */
 export function widgetEntitySourceRef(item: EntityDragItemV1): WidgetInstanceRefV1 | null {

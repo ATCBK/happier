@@ -15,7 +15,7 @@ import { useWalkthroughReviewedMarks } from '@/components/sessions/files/walkthr
 import { presentStartReviewDialog } from '@/components/sessions/reviews/walkthrough/StartReviewDialog';
 import { useReviewComposerHandoff } from '@/components/sessions/reviews/comments/useReviewComposerHandoff';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
-import { WalkthroughNotice } from '@/components/sessions/files/walkthrough/WalkthroughLifecycle';
+import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { useSession, useSetting } from '@/sync/domains/state/storage';
 import { useSessionMachineReachability } from '@/components/sessions/model/useSessionMachineReachability';
 import { t } from '@/text';
@@ -31,6 +31,7 @@ export function SessionCapturedScmReviewDetailsView(props: SessionScmReviewDetai
     const session = useSession(props.sessionId);
     const latestTurnId = (!props.serverId || session?.serverId === props.serverId) ? session?.latestTurnId ?? null : null;
     const pane = useAppPaneScope(props.scopeId);
+    const openDetailsTab = props.onOpenDetailsTab ?? pane.openDetailsTab;
     const goToComposer = useReviewComposerHandoff(props.scopeId);
     const { machineReachable } = useSessionMachineReachability(props.sessionId, props.serverId);
     const reviewDisabledReason = machineReachable ? null : t('walkthrough.notice.offlineA11y');
@@ -57,22 +58,25 @@ export function SessionCapturedScmReviewDetailsView(props: SessionScmReviewDetai
             provenance: walkthrough.savedResult?.walkthroughProvenance }) : null, [walkthrough, comparison.comparisonId, marksAvailable, marks.record]);
     const maxFilesSetting = useSetting('scmReviewMaxFiles');
     const maxLinesSetting = useSetting('scmReviewMaxChangedLines');
-    const { mountedInitialReviewState, explain, setExplain,
-        onCollapsedPathsChange, onScrollTopChange } = useSessionScmReviewTabState(props.sessionId, pane, props.target);
-    const selectView = React.useCallback((next: SessionScmReviewView) => pane.openDetailsTab(
-        createSessionScmReviewDetailsTab({ ...props.target, comparison, view: next }), { intent: 'pinned' }), [pane.openDetailsTab, props.target, comparison]);
+    const { mountedInitialReviewState, startedReviewRunIds, setPersistedReviewTabState, explain, setExplain,
+        onCollapsedPathsChange, onScrollTopChange } = useSessionScmReviewTabState(props.sessionId, pane, props.target, openDetailsTab);
+    const selectView = React.useCallback((next: SessionScmReviewView) => openDetailsTab(
+        createSessionScmReviewDetailsTab({ ...props.target, comparison, view: next }), { intent: 'pinned' }), [openDetailsTab, props.target, comparison]);
     const openReview = React.useCallback(() => {
         if (!captured.comparison || !machineReachable) return;
         presentStartReviewDialog({ sessionId: props.sessionId, serverId: props.serverId ?? null,
             cwd: captured.comparison.repository.rootPath, comparison, scopeLabel, defaultWalkthrough: true,
-            onStarted: (started, narration) => { if (narration) pane.openDetailsTab(createSessionScmReviewDetailsTab({
-                ...props.target, comparison: { ...comparison, comparisonId: started.comparisonId }, view: 'walkthrough' }), { intent: 'pinned' }); } });
-    }, [captured.comparison, machineReachable, comparison, props.sessionId, props.serverId, props.target, scopeLabel, pane.openDetailsTab]);
+            onStarted: (started, narration) => {
+                setPersistedReviewTabState({ reviewRunIds: [...started.reviewRunIds] });
+                if (narration) openDetailsTab(createSessionScmReviewDetailsTab({
+                    ...props.target, comparison: { ...comparison, comparisonId: started.comparisonId }, view: 'walkthrough' }), { intent: 'pinned' });
+            } });
+    }, [captured.comparison, machineReachable, comparison, props.sessionId, props.serverId, props.target, scopeLabel, openDetailsTab, setPersistedReviewTabState]);
     const fileCount = captured.comparison?.inventory.files.length ?? null;
     const scopeOptions = React.useMemo(() => listFilesComparisonScopeOptions(NO_LOCAL_SCOPES, latestTurnId, comparison,
         { currentFileCount: fileCount ?? undefined }), [comparison, fileCount, latestTurnId]);
-    const selectComparison = React.useCallback((next: SessionScmReviewComparison) => pane.openDetailsTab(
-        createSessionScmReviewDetailsTab({ ...props.target, comparison: next, view }), { intent: 'pinned' }), [pane.openDetailsTab, props.target, view]);
+    const selectComparison = React.useCallback((next: SessionScmReviewComparison) => openDetailsTab(
+        createSessionScmReviewDetailsTab({ ...props.target, comparison: next, view }), { intent: 'pinned' }), [openDetailsTab, props.target, view]);
     return <WorkspaceScmReviewBody
         activeReviewFile={activeReviewFile}
         comparison={comparison} view={view} scopeLabel={scopeLabel} scopeOptions={scopeOptions}
@@ -84,9 +88,10 @@ export function SessionCapturedScmReviewDetailsView(props: SessionScmReviewDetai
         onStartReview={openReview} reviewDisabled={!captured.comparison || !machineReachable} reviewDisabledReason={reviewDisabledReason}
         renderWalkthrough={({ layout, renderBar, onShowFiles }) => <SessionWalkthroughView sessionId={props.sessionId}
             serverId={props.serverId} comparison={comparison} scopeLabel={scopeLabel} layout={layout} active={props.active !== false}
+            startedReviewRunIds={startedReviewRunIds}
             renderBar={renderBar} onShowFiles={onShowFiles} onOpenFile={onShowFiles} onOpenComposer={goToComposer} />}
         renderFiles={(chrome) => <>
-            {captured.error ? <WalkthroughNotice testID="captured-comparison-error" tone="warning" icon="warning" message={captured.error} /> : null}
+            {captured.error ? <AttentionBanner presentation="strip" testID="captured-comparison-error" tone="warning" title={captured.error} /> : null}
             {captured.comparison ? <CapturedComparisonFilesView activeReviewFile={activeReviewFile} comparison={captured.comparison} sessionId={props.sessionId}
                 comparisonChrome={chrome} initialCollapsedPaths={mountedInitialReviewState.collapsedPaths}
                 onCollapsedPathsChange={onCollapsedPathsChange} initialScrollTop={mountedInitialReviewState.scrollTop}

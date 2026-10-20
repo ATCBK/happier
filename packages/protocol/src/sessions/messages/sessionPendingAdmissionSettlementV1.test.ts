@@ -28,11 +28,13 @@ describe('Session Pending admission settlement V1', () => {
           v: { role: 'user', meta: { happierInputAuthorityV1: { v: 1 } } },
         },
         validation: {
-          sourceSession: { sourceSessionId: 'session-source', sourceTurnId: 'turn-source', via: 'action' },
+          sourceSession: { sourceSessionId: 'session-source', sourceTurnId: 'turn-source', sourceInputId: 'input-source', via: 'action' },
           automation: { automationId: 'automation-1', runId: 'run-1' },
         },
       },
-    })).toMatchObject({ decision: { kind: 'admit' } });
+    })).toMatchObject({ decision: { kind: 'admit', validation: { sourceSession: {
+      sourceSessionId: 'session-source', sourceTurnId: 'turn-source', sourceInputId: 'input-source', via: 'action',
+    } } } });
   });
 
   it('requires the exact source Session transport when settlement carries source correlation', () => {
@@ -45,6 +47,29 @@ describe('Session Pending admission settlement V1', () => {
           sourceSession: { sourceSessionId: 'session-source', sourceTurnId: 'turn-source' },
         },
       },
+    }).success).toBe(false);
+  });
+
+  it('carries protected returned-answer cause separately from descriptive source text', () => {
+    expect(SessionPendingAdmissionSettlementRequestV1Schema.parse({
+      ...base,
+      decision: { kind: 'admit', finalContent: { t: 'encrypted', c: 'answer' },
+        validation: { returnedAnswer: { requestSessionId: 'requester-session',
+          requestLocalId: 'request-input', outcome: 'answer', delivery: 'wake' } } },
+    })).toMatchObject({ decision: { validation: { returnedAnswer: {
+      requestSessionId: 'requester-session', requestLocalId: 'request-input', delivery: 'wake',
+    } } } });
+  });
+
+  it('carries only a positive current Account check-in choice or explicit Never pause', () => {
+    const decision = { kind: 'admit', finalContent: { t: 'encrypted', c: 'input' },
+      validation: { autonomousCheckIn: { afterTurns: 17 } } };
+    expect(SessionPendingAdmissionSettlementRequestV1Schema.safeParse({ ...base, decision }).success).toBe(true);
+    expect(SessionPendingAdmissionSettlementRequestV1Schema.safeParse({ ...base,
+      decision: { ...decision, validation: { autonomousCheckIn: { afterTurns: null } } },
+    }).success).toBe(true);
+    expect(SessionPendingAdmissionSettlementRequestV1Schema.safeParse({ ...base,
+      decision: { ...decision, validation: { autonomousCheckIn: { afterTurns: 0 } } },
     }).success).toBe(false);
   });
 

@@ -31,3 +31,18 @@ describe('filesystem approval literal operands', () => {
     expect(describeRenameApprovalSummary({ from: 3, to: 'file' })).toBeNull();
   });
 });
+
+describe('filesystem approval summaries for the checkout folder itself', () => {
+  const root = { rootPath: '/home/happier/mqa2-c14-clone', path: '/home/happier/mqa2-c14-clone' };
+
+  it('names the folder instead of leaving a lone dot in the sentence', () => {
+    expect(describeWriteFileApprovalSummary({ ...root, content: '' })).toBe('Write mqa2-c14-clone');
+    expect(describeCreateDirectoryApprovalSummary(root)).toBe('Create the folder mqa2-c14-clone');
+    expect(describeDeleteApprovalSummary({ ...root, recursive: true })).toBe('Delete mqa2-c14-clone and everything in it');
+  });
+
+  it('keeps a file inside the checkout named by its checkout', () => {
+    expect(describeWriteFileApprovalSummary({ rootPath: root.rootPath, path: `${root.rootPath}/a.txt` })).toBe('Write a.txt in mqa2-c14-clone');
+  });
+});
+

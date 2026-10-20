@@ -9,6 +9,7 @@ import { projectWorkspaceRefV1, resolveWorkspaceRefV1 } from '@happier-dev/proto
 import { resolveMcpToolDecisionV1 } from '@happier-dev/protocol/mcp/servers/tools/resolveMcpToolDecisionV1';
 import type { Message } from '@happier-dev/session-core/messages';
 
+import type { CapabilityCost } from '@/components/capabilities/facts/CapabilityFacts';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { useSavedSecretCatalog } from '@/components/secrets/useSavedSecretCatalog';
 import type {
@@ -36,6 +37,8 @@ import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/use
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { useSkillsLibrary } from '@/sync/domains/skills/useSkillsLibrary';
 import { useFoundSkillsCache } from '@/sync/domains/skills/useFoundSkills';
+import { useSkillComposerSource } from '@/sync/domains/skills/useSkillComposerSource';
+import type { SkillComposerSource } from '@/sync/domains/skills/skillComposerGroups';
 import { skillHref } from '@/components/settings/skills/skillsCollectionModel';
 import { useReachRulesLookup } from '@/sync/store/useReachRulesCatalog';
 import { t } from '@/text';
@@ -47,9 +50,11 @@ import {
 import {
   SessionCapabilitiesContent,
   type SessionCapabilitiesChange,
+  type SessionCapabilitiesUndo,
 } from './SessionCapabilitiesContent';
 import {
   buildSessionCapabilitiesModel,
+  type SessionCapabilitiesLastKnown,
   type SessionCapabilitiesModel,
   type SessionCapabilitiesModelInput,
 } from './sessionCapabilitiesModel';
@@ -66,7 +71,7 @@ type Detail = Pick<
   SessionCapabilitiesModelInput,
   'rules' | 'mcpStatus' | 'skillStatus' | 'names' | 'context' | 'nativeSkills' | 'cost'
 >;
-type SheetTarget = Readonly<{ sessionId?: string; metadata?: unknown;
+export type SheetTarget = Readonly<{ sessionId?: string; metadata?: unknown;
   draft?: Pick<NewSessionCapabilitiesDraft, 'machineId' | 'directory' | 'agentId' | 'projectKey'> }>;
 const EMPTY_MESSAGES: Readonly<Record<string, Message>> = Object.freeze({});
 type ModelInput = Pick<
@@ -85,7 +90,7 @@ const NO_STATUSES: ReturnType<Detail['mcpStatus']> = [];
  * The detail owners mount only in the open sheet, which reports back the one summary fact the closed
  * chip shows (its attention dot).
  */
-const CLOSED_DETAIL: Detail = {
+export const CLOSED_DETAIL: Detail = {
   rules: () => NO_RULES,
   mcpStatus: () => NO_STATUSES,
   skillStatus: () => NO_STATUSES,
@@ -101,13 +106,15 @@ const CLOSED_DETAIL: Detail = {
  * The sheet's detail inputs, from their canonical owners: rules from the Account rows (P2), skill and MCP
  * statuses from P6/P7's status owners, names from the places owner.
  */
-function useSessionCapabilitiesDetail(
+export function useSessionCapabilitiesDetail(
   serverId: string | null,
   machineOnline: boolean,
   onFactsChanged: () => void,
   target: SheetTarget,
   modelInput: ModelInput,
   machineName: string,
+  /** The cost facts the sheet last knew: shown while the Account rows they come from are read again. */
+  lastKnownCosts?: SessionCapabilitiesLastKnown['costs'],
 ) {
   const router = useRouter();
   const active = useActiveServerSnapshot(!serverId);
@@ -175,7 +182,7 @@ function useSessionCapabilitiesDetail(
       }
     }
     for (const item of modelInput.view?.skills.plan.nativeDisables ?? []) if (!items.has(item.name)) items.set(item.name, { name: item.name, path: item.path });
-    const declaration = machine?.agentDeclarationsById?.[agentId]?.capabilities.skills;
+    const declaration = machine?.agentDeclarationsById?.[agentId]?.capabilities?.skills;
     const bundled = !machine?.agentDeclarationsById && isBundledAgentId(agentId) ? getAgentCore(agentId)?.skills : null;
     return { items: [...items.values()], canDisable: (declaration ?? bundled)?.nativeDisable === 'supported',
       machineName, agentName: names.agentName(agentId), applyTiming: modelInput.applyState?.applyTiming?.mcp ?? modelInput.view?.applyTiming.mcp ?? { t: 'session_not_running' as const } };
@@ -204,27 +211,28 @@ function useSessionCapabilitiesDetail(
   const startSignIn = React.useRef(signIn.start);
   startSignIn.current = signIn.start;
   React.useEffect(() => { if (signInRequest) void startSignIn.current({ stepUp: signInRequest.stepUp }); }, [signInRequest]);
+  const freshCost = React.useCallback((kind: 'skill' | 'mcp_server', id: string): CapabilityCost | null => {
+    if (kind === 'skill') {
+      const cost = skills.get(id)?.cost;
+      return cost ? { tokensWhenUsed: cost.bodyTokens } : null;
+    }
+    const entry = servers.get(id);
+    const snapshot = entry?.toolsSnapshot;
+    if (!entry || !snapshot) return null;
+    const toolsDeclaration = agentId ? machine?.agentDeclarationsById?.[agentId]?.capabilities?.tools
+      ?? (!machine?.agentDeclarationsById && isBundledAgentId(agentId) ? getAgentCore(agentId)?.tools : null) : null;
+    const hidesOff = toolsDeclaration?.mcpToolControl?.off === 'hidden';
+    const tools = snapshot.tools.filter(tool => !hidesOff || resolveMcpToolDecisionV1({ policy: entry.tools, toolName: tool.name,
+      annotations: tool.annotations, permissionMode: 'default' }).exposed);
+    return { toolCount: tools.length, tokensPerTurn: tools.reduce((sum, tool) => sum + tool.tokens, 0) };
+  }, [skills, servers, agentId, machine?.agentDeclarationsById]);
   const detail = React.useMemo<Detail>(
     () => ({
       rules,
       names,
       context,
       nativeSkills,
-      cost: (kind, id) => {
-        if (kind === 'skill') {
-          const cost = skills.get(id)?.cost;
-          return cost ? { tokensWhenUsed: cost.bodyTokens } : null;
-        }
-        const entry = servers.get(id);
-        const snapshot = entry?.toolsSnapshot;
-        if (!entry || !snapshot) return null;
-        const toolsDeclaration = agentId ? machine?.agentDeclarationsById?.[agentId]?.capabilities.tools
-          ?? (!machine?.agentDeclarationsById && isBundledAgentId(agentId) ? getAgentCore(agentId)?.tools : null) : null;
-        const hidesOff = toolsDeclaration?.mcpToolControl?.off === 'hidden';
-        const tools = snapshot.tools.filter(tool => !hidesOff || resolveMcpToolDecisionV1({ policy: entry.tools, toolName: tool.name,
-          annotations: tool.annotations, permissionMode: 'default' }).exposed);
-        return { toolCount: tools.length, tokensPerTurn: tools.reduce((sum, tool) => sum + tool.tokens, 0) };
-      },
+      cost: (kind, id) => freshCost(kind, id) ?? lastKnownCosts?.get(`${kind}:${id}`) ?? null,
       skillStatus: (skillId) => {
         const item = skills.get(skillId);
         return skillStatus(item ?? null, undefined, { skillId, plan: modelInput.view?.skills.plan ?? null, notices, machineName,
@@ -259,7 +267,7 @@ function useSessionCapabilitiesDetail(
         });
       },
     }),
-    [context, nativeSkills, agentId, machine?.agentDeclarationsById, notices, machineName, modelInput.view?.skills.plan, signInRequest, signIn.fact,
+    [context, nativeSkills, freshCost, lastKnownCosts, notices, machineName, modelInput.view?.skills.plan, signInRequest, signIn.fact,
       signInMachines, diagnostics, rules, names, skills, servers, savedSecretCatalog, grants, machineOnline, router],
   );
   const renderMark = React.useCallback(
@@ -286,9 +294,14 @@ function SessionCapabilitiesSheet(
     machineName: string;
     maxHeight: number;
     target: SheetTarget;
+    undo?: SessionCapabilitiesUndo | null;
+    /** What the chip remembers of this Session's last sheet (read once, when the sheet opens). */
+    readKnown: () => SessionCapabilitiesLastKnown | null;
+    onKnown: (known: SessionCapabilitiesLastKnown) => void;
   }>,
 ) {
   const router = useRouter();
+  const [known] = React.useState(props.readKnown);
   const { detail, renderMark } = useSessionCapabilitiesDetail(
     props.serverId,
     props.base.machineOnline !== false,
@@ -296,6 +309,7 @@ function SessionCapabilitiesSheet(
     props.target,
     props.modelInput,
     props.machineName,
+    known?.costs,
   );
   const model = React.useMemo(
     () =>
@@ -311,6 +325,18 @@ function SessionCapabilitiesSheet(
     () => onAttention(model.attention),
     [onAttention, model.attention],
   );
+  // The chip keeps what this sheet now knows, so the next open holds its size and its cost facts.
+  const { onKnown } = props;
+  const { view } = props.modelInput;
+  React.useEffect(() => {
+    if (view === null) return;
+    const costs = new Map<string, CapabilityCost>();
+    for (const item of [...view.skills.items, ...view.mcp.items]) {
+      const cost = detail.cost?.(item.kind, item.id);
+      if (cost) costs.set(`${item.kind}:${item.id}`, cost);
+    }
+    onKnown({ rows: { skills: model.groups[0].rows.length, mcp: model.groups[1].rows.length }, costs });
+  }, [view, detail, model.groups, onKnown]);
   const onOpen = React.useCallback(
     (destination: 'skills' | 'mcp') =>
       router.push(
@@ -324,11 +350,13 @@ function SessionCapabilitiesSheet(
     <SessionCapabilitiesContent
       model={model}
       onChange={props.onChange}
+      undo={props.undo}
       onRetry={props.onRetry}
       onOpen={onOpen}
       renderMark={renderMark}
       machineName={props.machineName}
       maxHeight={props.maxHeight}
+      knownRows={known?.rows}
       testID="session-capabilities"
     />
   );
@@ -347,6 +375,7 @@ function useCapabilitiesChip(
     demandPreview: () => void;
     openRequest?: Readonly<{ consume: () => void }> | null;
     target: SheetTarget;
+    undo?: SessionCapabilitiesUndo | null;
   }>,
 ): AgentInputExtraActionChip {
   const { height } = useWindowDimensions();
@@ -364,10 +393,23 @@ function useCapabilitiesChip(
     demandPreview,
     openRequest,
     target,
+    undo,
   } = params;
   // Unknown is never zero: until the first preview the chip names what it holds, not "0 skills".
   const label = modelInput.view ? model.chipLabel : `${t('capabilities.skills.title')} · MCP`;
   const attention = model.attention || sheetAttention;
+  // What this Session's sheet last knew (its rows and cost facts), in memory only: the chip outlives the open sheet.
+  const knownRef = React.useRef<Readonly<{ key: string; known: SessionCapabilitiesLastKnown }> | null>(null);
+  const readKnown = React.useCallback(
+    () => (knownRef.current?.key === stabilityKey ? knownRef.current.known : null),
+    [stabilityKey],
+  );
+  const onKnown = React.useCallback(
+    (known: SessionCapabilitiesLastKnown) => {
+      knownRef.current = { key: stabilityKey, known };
+    },
+    [stabilityKey],
+  );
   return React.useMemo(
     () =>
       createCapabilitiesActionChip({
@@ -390,10 +432,15 @@ function useCapabilitiesChip(
             machineName={machineName}
             maxHeight={maxHeight}
             target={target}
+            undo={undo}
+            readKnown={readKnown}
+            onKnown={onKnown}
           />
         ),
       }),
     [
+      readKnown,
+      onKnown,
       label,
       attention,
       modelInput,
@@ -407,6 +454,7 @@ function useCapabilitiesChip(
       openRequest,
       height,
       target,
+      undo,
     ],
   );
 }
@@ -425,6 +473,8 @@ export function useNewSessionCapabilitiesChip(
 ): Readonly<{
   chip: AgentInputExtraActionChip;
   model: SessionCapabilitiesModel;
+  /** The composer `$` source: a library pick edits this same draft. */
+  skillSource: SkillComposerSource | null;
 }> {
   const machineOnline = params.machineOnline;
   const closedInput = React.useMemo(
@@ -462,7 +512,9 @@ export function useNewSessionCapabilitiesChip(
     demandPreview: popover.demandPreview,
     target,
   });
-  return { chip, model: popover.model };
+  const skillSource = useSkillComposerSource({ serverId: draft.targetServerId ?? null, agentId: draft.agentId,
+    machineId: draft.machineId ?? null, machineName: params.machineName, owner: setItem });
+  return { chip, model: popover.model, skillSource };
 }
 
 /**
@@ -484,6 +536,8 @@ export function useExistingSessionCapabilitiesChip(
   model: SessionCapabilitiesModel;
   applyBadge: AgentInputStatusBadge | null;
   undoLast: () => Promise<unknown>;
+  /** The composer `$` source: a library pick writes through this Session's own controller and apply line. */
+  skillSource: SkillComposerSource | null;
 }> {
   const { machineName, machineOnline, turnSettled } = params;
   const base = React.useMemo<Base>(
@@ -513,6 +567,28 @@ export function useExistingSessionCapabilitiesChip(
   const onRetry = React.useCallback(() => {
     void refresh();
   }, [refresh]);
+  const { undoReceipt, undoLast } = popover;
+  const undo = React.useMemo<SessionCapabilitiesUndo | null>(
+    () =>
+      undoReceipt
+        ? {
+            title: undoReceipt.title,
+            change: undoReceipt.change,
+            onUndo: () => {
+              void undoLast().then((result) => {
+                if (!result.ok && result.message !== 'read_only') {
+                  publishPresentationNotice({
+                    key: `session-capabilities:${sessionId}`,
+                    message: t('capabilities.control.changeFailed'),
+                    severity: 'error',
+                  });
+                }
+              });
+            },
+          }
+        : null,
+    [undoReceipt, undoLast, sessionId],
+  );
   const route = useSessionCapabilitiesOpenRequest();
   const { consume } = route;
   const openRequest = React.useMemo(
@@ -531,16 +607,26 @@ export function useExistingSessionCapabilitiesChip(
     demandPreview: popover.demandPreview,
     openRequest,
     target,
+    undo,
   });
   const { badge } = useSessionCapabilityRestart({
     notice: popover.model.applyNotice,
     stop: params.stop,
     resume: params.resume,
   });
+  const sessionMetadata = React.useMemo(() => {
+    const parsed = MetadataSchema.safeParse(popover.metadata);
+    return parsed.success ? parsed.data : null;
+  }, [popover.metadata]);
+  const skillSource = useSkillComposerSource({ serverId: params.target.serverId,
+    agentId: sessionMetadata ? resolveAgentIdFromSessionMetadata(sessionMetadata) : null,
+    machineId: sessionMetadata?.machineId ?? null, machineName, owner: setItem,
+    applyTiming: popover.applyTiming?.skills ?? null });
   return {
     chip,
     model: popover.model,
     applyBadge: badge,
     undoLast: popover.undoLast,
+    skillSource,
   };
 }

@@ -11,10 +11,11 @@ import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 
 afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
 
-function fixture() {
+function fixture(options?: { deferAccountPublication?: boolean }) {
     const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'skill-usage-owner' })).toString('base64url')}.signature`, encryption: null };
-    setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
+    const publishAccount = () => setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
         settingsVersion: 7, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) });
+    if (!options?.deferAccountPublication) publishAccount();
     let revision = 1;
     let value = { v: 1 as const, lastUsedAt: {} as Record<string, number> };
     let unreadable = false;
@@ -45,18 +46,28 @@ function fixture() {
             return { status: 409, data: { status: 'conflict', revision: ++revision } };
         }
         if (mutation.expectedRevision !== revision) return { status: 409, data: { status: 'conflict', revision } };
-        if (mutation.content.t !== 'plain') throw new Error('Expected plain Account row');
+        if (mutation.content?.t !== 'plain') throw new Error('Expected plain Account row');
         const record = PromptLibraryRecordV1Schema.parse(mutation.content.v);
         if (record.key !== 'skill-usage') throw new Error('Expected skill usage record');
         value = record.value;
         return { status: 200, data: { status: 'updated', revision: ++revision, cursor: revision } };
     });
     const account = { accountId: 'skill-usage-owner', serverHttpBaseUrl: resolveServerHttpBaseUrl() };
-    return { credentials, account, writes, read: () => ({ revision, value }), failRead: () => { unreadable = true; },
+    return { credentials, account, writes, publishAccount, read: () => ({ revision, value }), failRead: () => { unreadable = true; },
         conflict: () => { conflict = true; } };
 }
 
 describe('daemon Account skill-use writer', () => {
+    it('records fresh use after the daemon starts before its first Account settings publication', async () => {
+        const f = fixture({ deferAccountPublication: true });
+        const recorder = createSkillUsageRecorder({ credentials: f.credentials });
+        await recorder.recordSkillUse({ skillIds: ['guide'], account: f.account });
+        expect(f.writes).toEqual([]);
+        f.publishAccount();
+        await recorder.recordSkillUse({ skillIds: ['guide'], account: f.account });
+        expect(f.read().value.lastUsedAt.guide).toBeDefined();
+        expect(f.writes).toHaveLength(1);
+    });
     it('records use once per skill per day and publishes the acknowledged row for subsequent reads', async () => {
         const f = fixture();
         vi.spyOn(Date, 'now').mockReturnValue(100_000_000);

@@ -63,7 +63,7 @@ describe('Session shared browser DOM picker boundary', () => {
         expect(await invokeRepositoryUploadPick({ scope: { serverId: fixture.scope.serverId, accountId: 'alice' },
             workspace: fixture.scope, kind: 'files', destinationDir: '' })).toEqual({ status: 'requested' });
         Object.defineProperty(input, 'files', { configurable: true, value: [new File(['source'], 'upload-source.txt')] });
-        await act(async () => input.dispatchEvent(new Event('change', { bubbles: true })));
+        await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
         await vi.waitFor(() => expect(fixture.requests).toContainEqual(expect.objectContaining({
             targetId: fixture.scope.machineId, method: RPC_METHODS.STAT_FILE,
             payload: { path: `${fixture.scope.rootPath}/upload-source.txt` },

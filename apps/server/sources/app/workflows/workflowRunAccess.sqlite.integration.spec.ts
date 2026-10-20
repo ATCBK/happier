@@ -3,6 +3,7 @@ import * as privacyKit from "privacy-kit";
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent, sealEncryptedDataKeyEnvelopeV1 } from "@happier-dev/protocol";
 import tweetnacl from "tweetnacl";
 import { sealWorkflowAcceptedSnapshotStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1, type WorkflowDefinitionV1 } from "@happier-dev/protocol/workflows";
+import { WorkflowRunSummaryV1Schema } from "@happier-dev/protocol/workflows/workflowProgressV1";
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { admitWorkflowRun, getWorkflowRun, listWorkflowRuns, pauseWorkflowRun, resolveAutomationWorkflowAcceptedSnapshot, summarizeWorkflowRuns } from "./workflowRunService";
@@ -16,10 +17,16 @@ import { resolveWorkflowRunAdmissionVisibilityInTx } from "./workflowRunAccess";
 import { readTeamSummaryForActorInTx } from "@/app/teams/lifecycle";
 import { hashPasswordMaterial } from "@/app/auth/password/passwordMaterialVerifier";
 import type { TeamOperationAuthenticationContext } from "@/app/teams/actorContext";
+import { createDiscussion } from '@/app/discussions/mutations';
+import { buildDiscussionMutationRequestBodyV1 } from '@happier-dev/protocol/discussions/api';
+import { createPresentUserSessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication.testkit';
+import { inviteDiscussionParticipant } from '@/app/discussions/accessService';
 
 describe("Workflow Run live Team access (real SQLite)", () => {
     let harness: LightSqliteHarness;
-    beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: "happier-run-access-", initEncrypt: true }); }, 180_000);
+    beforeAll(async () => {
+        harness = await createLightSqliteHarness({ tempDirPrefix: "happier-run-access-", initEncrypt: true });
+    }, 180_000);
     afterAll(async () => { if (harness) await harness.close(); });
 
     async function fixture() {
@@ -50,6 +57,60 @@ describe("Workflow Run live Team access (real SQLite)", () => {
             assignments: { create: { machineId: machine.id, priority: 0 } } } });
         return { owner, viewer, team, membership, artifact, runId, machine, acceptedEnvelope };
     }
+
+    it('admits a Workflow Discussion destination only at its committed frontier with current grants, keys and Session disclosure', async () => {
+        const f = await fixture();
+        await db.automationRun.delete({ where: { id: f.runId } });
+        const authentication = createPresentUserSessionAccessAuthentication();
+        const content = { v: 1 as const, parts: [{ t: 'text' as const, text: 'Compare these answers' }] };
+        const created = await createDiscussion({ actorAccountId: f.owner.id, authentication,
+            request: buildDiscussionMutationRequestBodyV1({ kind: 'create', creationLocalId: crypto.randomUUID(),
+                titleContent: { t: 'plain', v: { v: 1, title: 'Pattern origin' } },
+                firstMessage: { localId: crypto.randomUUID(), content: { t: 'plain', v: content }, authoredContent: content,
+                    mentionedAccountIds: [] } }) });
+        if (!created.ok) throw new Error(created.error);
+        const discussionId = created.value.discussion.id;
+        const target = await db.session.create({ data: { accountId: f.owner.id, tag: crypto.randomUUID(),
+            encryptionMode: 'plain', metadata: '{}' } });
+        expect(await inviteDiscussionParticipant({ actorAccountId: f.owner.id, authentication, discussionId,
+            request: { participant: { kind: 'session', sessionId: target.id } } })).toMatchObject({ ok: true });
+        const origin = { kind: 'direct' as const, discussion: { discussion: { serverId: 'home', discussionId },
+            messageId: created.value.firstMessage.id, throughSeq: created.value.firstMessage.seq } };
+        const input = { accountId: f.owner.id, runId: f.runId, origin, machineId: f.machine.id,
+            acceptedEnvelope: f.acceptedEnvelope, discussionTargetSessionIds: [target.id],
+            resultDelivery: { kind: 'originating_discussion' as const },
+            accountCurrentness: { mode: 'plain' as const, version: f.owner.seq, contentKeyFingerprint: null },
+            discussionAuthentication: authentication,
+            authentication: { authenticationAuthority: 'present_user' as const } };
+        await expect(admitWorkflowRun({ ...input, origin: { ...origin,
+            discussion: { ...origin.discussion, throughSeq: origin.discussion.throughSeq + 1 } } }))
+            .rejects.toMatchObject({ code: 'invalid_input' });
+        const share = await db.sessionShare.create({ data: { sessionId: target.id, sharedByUserId: f.owner.id,
+            sharedWithUserId: f.viewer.id, accessLevel: 'view' } });
+        await expect(admitWorkflowRun(input)).rejects.toMatchObject({ code: 'run_access_denied' });
+        await db.sessionShare.delete({ where: { id: share.id } });
+        await db.discussionParticipant.update({ where: { discussionId_sessionId: { discussionId, sessionId: target.id } },
+            data: { answerPolicy: 'reads_only' } });
+        await expect(admitWorkflowRun(input)).rejects.toMatchObject({ code: 'run_access_denied' });
+        await db.discussionParticipant.update({ where: { discussionId_sessionId: { discussionId, sessionId: target.id } },
+            data: { answerPolicy: 'when_addressed' } });
+        const foreign = await db.session.create({ data: { accountId: f.viewer.id, tag: crypto.randomUUID(),
+            encryptionMode: 'plain', metadata: '{}' } });
+        await db.discussionAccountGrant.create({ data: { discussionId, accountId: f.viewer.id, accessLevel: 'view',
+            createdByAccountId: f.owner.id } });
+        await db.sessionShare.create({ data: { sessionId: foreign.id, sharedByUserId: f.viewer.id,
+            sharedWithUserId: f.owner.id, accessLevel: 'edit' } });
+        expect(await inviteDiscussionParticipant({ actorAccountId: f.owner.id, authentication, discussionId,
+            request: { participant: { kind: 'session', sessionId: foreign.id } } })).toMatchObject({ ok: true });
+        // The current protected Workflow input contract has no cross-Account
+        // custody. Read grants cannot manufacture that execution authority.
+        await expect(admitWorkflowRun({ ...input, discussionTargetSessionIds: [foreign.id] }))
+            .rejects.toMatchObject({ code: 'run_access_denied' });
+        await expect(admitWorkflowRun(input)).resolves.toMatchObject({ kind: 'created', run: { origin: { kind: 'direct' } } });
+        expect((await db.automationRun.findUniqueOrThrow({ where: { id: f.runId } })).originDeliveryAckRevision).toBeNull();
+        await db.discussion.update({ where: { id: discussionId }, data: { archivedAt: new Date() } });
+        await expect(admitWorkflowRun(input)).rejects.toMatchObject({ code: 'run_access_denied' });
+    });
 
     it("a Team viewer reads owner-bound content, cannot control it, and immediately loses visibility when membership is removed", async () => {
         const f = await fixture();
@@ -93,16 +154,40 @@ describe("Workflow Run live Team access (real SQLite)", () => {
         await db.artifactAccountGrant.create({ data: { artifactId: f.artifact.id, accountId: f.viewer.id,
             accessLevel: "edit", createdByAccountId: f.owner.id } });
         await expect(getWorkflowRun({ accountId: f.viewer.id, runId: f.runId })).rejects.toMatchObject({ code: "run_not_found" });
+        for (const filter of [{}, { sourceArtifactId: f.artifact.id }, { runIds: [f.runId] }]) {
+            expect((await listWorkflowRuns({ accountId: f.viewer.id, ...filter, pageByteLimit: 1_000_000 })).runs).toEqual([]);
+        }
     });
 
-    it("Team Runs appear in workflow-scoped history while the caller's own collection stays personal", async () => {
+    it("every Run list filter discovers the same accessible Team Runs and immediately honors revocation", async () => {
         const f = await fixture();
-        const personal = await listWorkflowRuns({ accountId: f.viewer.id, pageByteLimit: 1_000_000 });
-        expect(personal.runs).toEqual([]);
-        const shared = await listWorkflowRuns({ accountId: f.viewer.id, sourceArtifactId: f.artifact.id, pageByteLimit: 1_000_000 });
-        expect(shared.runs.map(run => run.id)).toEqual([f.runId]);
+        const automation = await db.automation.create({ data: { accountId: f.owner.id, name: "Team trigger",
+            targetType: null, templateCiphertext: "{}" } });
+        await db.automationRun.update({ where: { id: f.runId }, data: { automationId: automation.id, originKind: "automation",
+            causeKind: "manual", causeOccurredAt: new Date() } });
+        const filters = [{}, { sourceArtifactId: f.artifact.id }, { runId: f.runId }, { runIds: [f.runId] },
+            { automationId: automation.id }, { origin: "automation" as const }];
+        for (const filter of filters) {
+            const page = await listWorkflowRuns({ accountId: f.viewer.id, ...filter, pageByteLimit: 1_000_000 });
+            expect(page.runs.map(run => run.id), JSON.stringify(filter)).toEqual([f.runId]);
+            expect(WorkflowRunSummaryV1Schema.parse(page.runs[0]).ownerAccountId).toBe(f.owner.id);
+        }
+        await withAuthenticatedTestApp(app => registerWorkflowRunStorageRoutes(app), async app => {
+            for (const request of filters) {
+                const response = await app.inject({ method: "POST", url: "/v3/automations/runs/workflow-storage",
+                    headers: { "x-test-user-id": f.viewer.id }, payload: { operation: "list", request, pageByteLimit: 1_000_000 } });
+                expect(response.statusCode).toBe(200);
+                expect(response.json()).toMatchObject({ runs: [{ id: f.runId, ownerAccountId: f.owner.id }],
+                    keyCensusByRunId: { [f.runId]: { ownerAccountId: f.owner.id, access: "view" } } });
+            }
+        });
+        await db.teamMembership.update({ where: { id: f.membership.id }, data: { status: "suspended" } });
+        expect((await listWorkflowRuns({ accountId: f.viewer.id, runId: f.runId, pageByteLimit: 1_000_000 })).runs).toEqual([]);
+        await db.teamMembership.update({ where: { id: f.membership.id }, data: { status: "active" } });
         await db.artifactTeamGrant.deleteMany({ where: { artifactId: f.artifact.id, teamId: f.team.id } });
-        expect((await listWorkflowRuns({ accountId: f.viewer.id, sourceArtifactId: f.artifact.id, pageByteLimit: 1_000_000 })).runs).toEqual([]);
+        for (const filter of filters) {
+            expect((await listWorkflowRuns({ accountId: f.viewer.id, ...filter, pageByteLimit: 1_000_000 })).runs).toEqual([]);
+        }
         expect((await getWorkflowRun({ accountId: f.owner.id, runId: f.runId })).run.ownerAccountId).toBe(f.owner.id);
     });
 

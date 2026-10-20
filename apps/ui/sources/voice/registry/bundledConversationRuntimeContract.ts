@@ -222,6 +222,7 @@ export type BundledRealtimeProviderRuntimeHost = Readonly<{
     adapterId: string;
     controlSessionId: string;
     requestedTargetSessionAddress: SessionAddress | null;
+    signal?: AbortSignal;
   }>): Promise<unknown>;
   acquireDirectMediaConversation(input: Readonly<{
     adapterId: string;
@@ -254,6 +255,7 @@ export type BundledRealtimeProviderRuntimeHost = Readonly<{
     requestedTargetSessionAddress: SessionAddress | null;
     settings: unknown;
     connectedServices?: ConnectedServiceBindingsV2;
+    signal?: AbortSignal;
   }>): Promise<VoiceAdapterConversationBinding | null>;
   readProviderConversationState?(input: Readonly<{
     providerId: string;
@@ -401,6 +403,7 @@ type BundledRealtimeProviderRuntimeConfigBase = Readonly<{
     controlSessionId: string;
     requestedTargetSessionAddress: SessionAddress | null;
     settings: unknown;
+    signal?: AbortSignal;
   }>): Promise<VoiceAdapterConversationBinding | null>;
   resolveSurfaceCapabilities(settings: unknown): VoiceAdapterSurfaceCapabilities | null;
   outputLevelMeter?: 'measured' | 'unavailable';

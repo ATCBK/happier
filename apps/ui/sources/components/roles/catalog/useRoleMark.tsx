@@ -24,7 +24,7 @@ export function useRoleMark(): (
       const engine = presentEngine(role.engine, size);
       // Until the Agent catalog names the agent an unpinned role follows, its mark is a quiet block of the same size.
       const agentMark = engine.pending
-        ? <HappierSkeletonBlock width={size} height={size} radius={size / 2} color={theme.colors.surface.pressedOverlay} />
+        ? <HappierSkeletonBlock width={size} height={size} radius={size / 2} color={theme.colors.surface.skeleton} />
         : engine.icon;
       return <HappierRoleMark roleId={roleId} runsAs={role.runsAs.kind} agentMark={agentMark} renderGlyph={(glyph) => (
         <Icon

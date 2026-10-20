@@ -24,6 +24,7 @@ import {
   type ExecutionRunIntent,
 } from '../../execution/runs/runPrimitives.js';
 import { ExecutionRunStatusSchema } from '../../execution/runs/listRequest.js';
+import { executionRunKindForIntent } from '../../execution/runs/startRequest.js';
 import {
   EXECUTION_RUN_ACTION_PERMISSION_INPUTS,
   ExecutionRunActionPermissionModeSchema,
@@ -42,7 +43,7 @@ export function defaultExecutionRunPermissionMode(
 }
 
 export function defaultExecutionRunClass(intent: ExecutionRunIntent): 'bounded' | 'long_lived' {
-  return intent === 'voice_agent' ? 'long_lived' : 'bounded';
+  return intent === 'voice_agent' || intent === 'scm_diff_summary' ? 'long_lived' : 'bounded';
 }
 
 export function defaultExecutionRunIoMode(
@@ -54,7 +55,7 @@ export function defaultExecutionRunIoMode(
 export function defaultExecutionRunRetention(
   intent: ExecutionRunIntent,
 ): 'ephemeral' | 'resumable' {
-  return intent === 'voice_agent' ? 'resumable' : 'ephemeral';
+  return intent === 'voice_agent' || intent === 'scm_diff_summary' ? 'resumable' : 'ephemeral';
 }
 
 /**
@@ -123,6 +124,9 @@ export function bindExecutionRunStartCliInput(
       : { sessionId: input.sessionId }),
     ...(input.cwd === undefined ? {} : { cwd: input.cwd }),
     ...(intent === undefined ? {} : { intent }),
+    ...(intent === undefined || executionRunKindForIntent(intent) === undefined
+      ? {}
+      : { kind: actionCliDerivedDefault(executionRunKindForIntent(intent)) }),
     ...(input.agent === undefined
       ? {}
       : { backendTarget: readExecutionRunCliBackendTarget(input.agent)! }),

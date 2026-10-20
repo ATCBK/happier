@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./happier-plugin-ui/review-native": "./ui/reviewPanel.native.tsx",
-    "./happier-plugin-ui/review-openable-native": "./ui/reviewPanel.native.tsx",
+    "./happier-plugin-ui/review-native": "./ui/reviewPanelPortable.tsx",
+    "./happier-plugin-ui/review-openable-native": "./ui/reviewPanelPortable.tsx",
     "./happier-plugin-ui/review-client-actions": "./ui/reviewClientActions.ts",
     "./happier-plugin-ui/voice-runtime-web": "./voiceProvider.ts"
   },

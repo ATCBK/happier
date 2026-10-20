@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -288,7 +290,7 @@ function createFocusRecorder() {
     const focusedTestIds: string[] = [];
     return {
         focusedTestIds,
-        createNodeMock: (element: React.ReactElement) => ({
+        createNodeMock: (element: Parameters<NonNullable<NonNullable<Parameters<typeof renderScreen>[1]>['createNodeMock']>>[0]) => ({
             focus: () => {
                 const testID = typeof element.props === 'object'
                     && element.props !== null
@@ -1471,10 +1473,18 @@ describe('DesktopActivityOverlayRoute', () => {
         );
         const actionTestID = resolveDesktopActivityOverlayCardActionInstanceTestID('permission-1', 'allow');
 
-        expect(resolveStyle('desktop-activity-overlay-session-row-session-1', false).outlineColor).toBeUndefined();
-        expect(resolveStyle('desktop-activity-overlay-session-row-session-1', true).outlineColor).toBeTruthy();
-        expect(resolveStyle(actionTestID, false).outlineColor).toBeUndefined();
-        expect(resolveStyle(actionTestID, true).outlineColor).toBeTruthy();
+        const keyboardTarget = document.createElement('button');
+        document.body.appendChild(keyboardTarget);
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+        keyboardTarget.focus();
+        try {
+            expect(resolveStyle('desktop-activity-overlay-session-row-session-1', false).outlineColor).toBeUndefined();
+            expect(resolveStyle('desktop-activity-overlay-session-row-session-1', true).outlineColor).toBeTruthy();
+            expect(resolveStyle(actionTestID, false).outlineColor).toBeUndefined();
+            expect(resolveStyle(actionTestID, true).outlineColor).toBeTruthy();
+        } finally {
+            keyboardTarget.remove();
+        }
     });
 
     it('renders hidden state and skips bridge sync when not in overlay window context', async () => {

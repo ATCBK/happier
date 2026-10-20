@@ -192,7 +192,7 @@ describe('SessionSummaryCard (the Companion hero)', () => {
         await act(async () => { resolveAnswer(); });
         // The Session state the chat card reads drops the answered ask.
         await act(async () => {
-            screen.tree.update(<SessionSummaryCard model={model()} density="compact" answerPermission={answerPermission} />);
+            await screen.update(<SessionSummaryCard model={model()} density="compact" answerPermission={answerPermission} />);
         });
         expect(screen.findByTestId('session-companion-summary-ask')).toBeNull();
         expect(screen.findByTestId('session-companion-summary-answered')).not.toBeNull();

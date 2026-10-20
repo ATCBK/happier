@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Session } from 'node:inspector/promises';
 import { describe, expect, it } from 'vitest';
 
 import { normalizeStrictJsonValue, projectNativeJsonValueForTransport, sameStrictJsonValue } from './strictJsonValue.js';
@@ -84,6 +85,41 @@ describe('strict JSON vocabulary ownership', () => {
 });
 
 describe('sameStrictJsonValue', () => {
+  it('compares wide retained Usage curves without allocating one pending pair per value', async () => {
+    const left = Array.from({ length: 45_000 }, (_, index) => ({ observedAtMs: index, usedFraction: index / 45_000 }));
+    const right = left.map(point => ({ usedFraction: point.usedFraction, observedAtMs: point.observedAtMs }));
+    const repetitions = 20;
+    const bytes = Buffer.byteLength(JSON.stringify(left));
+    const session = new Session();
+    session.connect();
+    await session.post('HeapProfiler.enable');
+    await session.post('HeapProfiler.startSampling', { samplingInterval: 4096,
+      includeObjectsCollectedByMajorGC: true, includeObjectsCollectedByMinorGC: true });
+    let equal = true;
+    try {
+      for (let repeat = 0; repeat < repetitions; repeat++) equal &&= sameStrictJsonValue(left, right);
+      const { profile } = await session.post('HeapProfiler.stopSampling');
+      const sum = (node: typeof profile.head): number => node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
+      const allocatedBytes = sum(profile.head);
+      console.info(JSON.stringify({ comparator: '45k curves', repetitions, encodedBytes: bytes, allocatedBytes }));
+      expect(equal).toBe(true);
+      // This allocation regression budget covers key enumeration for both
+      // inputs. It excludes the reproduced per-child pending-pair copies.
+      expect(allocatedBytes).toBeLessThan(bytes * repetitions * 4);
+    } finally { session.disconnect(); }
+  });
+
+  it('preserves primitive, missing-key, array-order and deep non-recursive equality', () => {
+    for (const value of [null, true, false, 0, 'value', undefined]) expect(sameStrictJsonValue(value, value)).toBe(true);
+    for (const [left, right] of [[null, {}], [[], {}], [[1], [1, 2]], [{ a: 1 }, { b: 1 }], [0, '0'], [false, 0]]) {
+      expect(sameStrictJsonValue(left, right)).toBe(false);
+    }
+    expect(sameStrictJsonValue(nested(12_000), nested(12_000))).toBe(true);
+    const earlier = [{ at: 1, value: null }, { at: 2, value: 0 }];
+    expect(sameStrictJsonValue(earlier, [{ at: 1, value: 0 }, { at: 2, value: 0 }])).toBe(false);
+    expect(sameStrictJsonValue(earlier, [...earlier].reverse())).toBe(false);
+  });
+
   it('compares strict JSON semantically rather than by object insertion order', () => {
     const left = normalizeStrictJsonValue({ nested: { a: 1, b: 2 }, items: ['x', null] });
     const right = normalizeStrictJsonValue({ items: ['x', null], nested: { b: 2, a: 1 } });

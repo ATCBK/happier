@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { readProfilesFromAccountSettings } from './readProfilesFromAccountSettings';
-import type { ProfileCatalogSnapshotV1 } from '@happier-dev/protocol/profiles/profileCatalogV1';
+import type { ProfileCatalogRecordV1, ProfileCatalogSnapshotV1 } from '@happier-dev/protocol/profiles/profileCatalogV1';
 import { getBuiltInBackendProfile } from '@happier-dev/protocol/profiles/builtInBackendProfiles';
 import { DEFAULT_PROVIDER_SETTINGS_V1, ProviderSettingsV1Schema } from '@happier-dev/protocol/providers/settings/v1';
 
@@ -14,9 +14,9 @@ describe('readProfilesFromAccountSettings', () => {
     const builtin = getBuiltInBackendProfile('gemini-api-key');
     if (!builtin) throw new Error('Actual readonly builtin preset is unavailable');
     const records = [{ revision: 1, record: { v: 1 as const, id: builtin.id, enabled: true,
-      promptStack: [], secretBindings: {}, definition: { kind: 'legacy' as const, profile: builtin } } },
+      promptStack: [], skillSeeds: [], secretBindings: {}, definition: { kind: 'legacy' as const, profile: builtin } } },
     { revision: 1, record: {
-      v: 1 as const, id: 'custom', enabled: true, promptStack: [], secretBindings: {},
+      v: 1 as const, id: 'custom', enabled: true, promptStack: [], skillSeeds: [], secretBindings: {},
       definition: { kind: 'inline' as const, profile: { v: 2 as const, id: 'custom', name: 'Custom',
         createdAt: 1, updatedAt: 1, extraEnvironmentVariables: [], defaultPermissionModeByTargetKey: {},
         defaultPersistenceModeByTargetKey: {}, compatibilityByTargetKey: {} } },
@@ -28,9 +28,9 @@ describe('readProfilesFromAccountSettings', () => {
     expect(result.profiles.some(profile => profile.id === 'azure-openai')).toBe(false);
   });
   it('uses every destination row and its bindings instead of retained Settings bytes', () => {
-    const records = Array.from({ length: 257 }, (_, index) => ({
+    const records = Array.from({ length: 257 }, (_, index): ProfileCatalogRecordV1 => ({
       revision: index + 1,
-      record: { v: 1 as const, id: `row-${index}`, enabled: index !== 0, promptStack: [],
+      record: { v: 1 as const, id: `row-${index}`, enabled: index !== 0, promptStack: [], skillSeeds: [],
         definition: { kind: 'inline' as const, profile: { v: 2 as const, id: `row-${index}`, name: `Row ${index}`,
           extraEnvironmentVariables: [], defaultPermissionModeByTargetKey: {}, defaultPersistenceModeByTargetKey: {},
           compatibilityByTargetKey: {}, createdAt: 1, updatedAt: 1 } },
@@ -77,7 +77,7 @@ describe('readProfilesFromAccountSettings', () => {
       extraEnvironmentVariables: [], defaultPermissionModeByTargetKey: {}, defaultPersistenceModeByTargetKey: {}, compatibilityByTargetKey: {} };
     const catalog = { status: 'ready' as const, source: 'destination' as const, authority: 'inactive' as const,
       control: null, controlRevision: 'absent' as const, diagnostics: [], referenceGuardRevision: 1,
-      records: [{ revision: 1, record: { v: 1 as const, id: profile.id, enabled: true, promptStack: [], secretBindings: {},
+      records: [{ revision: 1, record: { v: 1 as const, id: profile.id, enabled: true, promptStack: [], skillSeeds: [], secretBindings: {},
         definition: { kind: 'inline' as const, profile } } }] };
     expect(readProfilesFromAccountSettings({}, undefined, undefined, catalog).profiles).toMatchObject([{ id: 'native', profileRecordRevision: 1 }]);
     expect(() => readProfilesFromAccountSettings({}, undefined, undefined, { ...catalog, source: undefined }))

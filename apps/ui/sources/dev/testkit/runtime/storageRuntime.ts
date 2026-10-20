@@ -13,6 +13,7 @@ import { authoringMemoryDefaults } from '@/sync/store/domains/authoringMemory';
 import { readSessionMessagesSnapshot } from '@/sync/store/sessionMessagesSnapshot';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { resolveSessionMachineId } from '@/sync/domains/session/external/resolveSessionMachineId';
+import { selectHomeQualifiedSession } from '@/sync/domains/session/selectHomeQualifiedSession';
 import type { StoreApi, UseBoundStore } from 'zustand';
 import type { CurrentSecretBindingsByProfileId } from '@/sync/domains/settings/secretBindings';
 import type { ServerAccountScope, ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
@@ -221,6 +222,8 @@ function completePartialStorageState(state: Partial<StorageState>): StorageState
     return {
         sessions: {},
         machines: {},
+        machineListByServerId: {},
+        machineListStatusByServerId: {},
         sessionMessages: {},
         sessionLastViewed: {},
         sessionPending: {},
@@ -284,6 +287,8 @@ export function createStorageModuleStub<TOverrides extends object>(
     const sessionListRenderablesById = {} as ReturnType<StorageModule['useSessionListRenderablesById']>;
     const sessionListRowsByServerId = {} as ReturnType<StorageModule['useSessionListRowsByServerId']>;
     const ordinarySessionListMembershipByServerId = {} as ReturnType<StorageModule['useOrdinarySessionListMembershipByServerId']>;
+    const sessionListHomeObservations = {} as ReturnType<StorageModule['useSessionListHomeObservations']>;
+    const sessionListQueryMembershipByKey = {} as ReturnType<StorageModule['useSessionListQueryMembershipByKey']>;
     const archivedSessionListMembershipByServerId = {} as ReturnType<StorageModule['useArchivedSessionListMembershipByServerId']>;
     const sessionListIndexByServerId = {} as ReturnType<StorageModule['useSessionListIndexByServerId']>;
     const useSetting = createUseSettingMock();
@@ -324,6 +329,8 @@ export function createStorageModuleStub<TOverrides extends object>(
         storage: store,
         getStorage: () => store,
         useSettings: () => defaultSettings,
+        useSettingsVersion: () => store.getState().settingsVersion ?? null,
+        useAccountSettingsScope: () => store.getState().settingsScope ?? null,
         useSettingsSelector: <T>(selector: (settings: Settings) => T): T => selector(defaultSettings),
         useSetting,
         useSettingMutable,
@@ -362,6 +369,8 @@ export function createStorageModuleStub<TOverrides extends object>(
         useSessionSubagentSourceMessages: () => [],
         useSessionSidechainMessages: () => [],
         useMachineCliDetectionTarget: () => ({ daemonStateVersion: 0, isOnline: false }),
+        useMachineCliDetectionTargets: createStableStorageReader((machineIds: readonly string[]) =>
+            Object.fromEntries(machineIds.map(machineId => [machineId, { daemonStateVersion: 0, isOnline: false }]))),
         useSessionForkSupportSource: () => null,
         useSessionInteractionSource: () => null,
         useSessionReferenceTarget: () => sessionReferenceTarget,
@@ -381,6 +390,8 @@ export function createStorageModuleStub<TOverrides extends object>(
         useAllSessionListAttentionRows: () => allSessionListAttentionRows,
         useMachine: (machineId: string) => store.getState().machines[machineId] ?? null,
         useSession: () => null,
+        useSessionSelector: <T>(id: string, serverId: string | null | undefined, select: (session: ReturnType<StorageModule['useSession']>) => T): T =>
+            store((state) => select(selectHomeQualifiedSession(state, id, serverId, state.profileScope?.serverId ?? ''))),
         // No session records in the stub, so every projection sees the absent source.
         useSessionDisplayNameProjections: <T,>(addresses: ReadonlyArray<unknown>, project: (source: null) => T): readonly T[] => addresses.map(() => project(null)),
         useSessionWorkspacePath: () => null,
@@ -402,6 +413,8 @@ export function createStorageModuleStub<TOverrides extends object>(
         useSessionListRenderablesById: () => sessionListRenderablesById,
         useSessionListRowsByServerId: () => sessionListRowsByServerId,
         useOrdinarySessionListMembershipByServerId: () => ordinarySessionListMembershipByServerId,
+        useSessionListHomeObservations: () => sessionListHomeObservations,
+        useSessionListQueryMembershipByKey: () => sessionListQueryMembershipByKey,
         useArchivedSessionListMembershipByServerId: () => archivedSessionListMembershipByServerId,
         useSessionListIndexByServerId: () => sessionListIndexByServerId,
         useSessionOrganizationProjection: () => null,
@@ -417,6 +430,7 @@ export function createStorageModuleStub<TOverrides extends object>(
         useMachineListStatusByServerId: () => ({}),
         useMachineListForServer: () => null,
         useMachineListStatusForServer: () => 'idle' as const,
+        useIsMachineListSettled: () => false,
         useIsActiveMachineListSettled: () => true,
         useServerScopedMachine: () => null,
         useWorkspaceScmSnapshot: () => null,

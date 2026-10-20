@@ -34,7 +34,7 @@ export function renderSessionRoleBlockV1(context: SessionRolePromptContextV1): s
       : 'Consider a second opinion (Second opinion role) before a PR or before declaring done.');
     if (role.workspaceWrites === 'deny') lines.push('Hands-off: do not change the workspace. Coordination and reads remain available.');
     if (!voice && role.profileUnavailable) lines.push(`Profile ${data(role.profileId)} is unavailable here; choose an available profile rather than assuming it was applied.`);
-    if (!voice && role.roleId === 'orchestrator') {
+    if (!voice && role.canDelegateToOtherRoles === true) {
       lines.push('Available roles (discover the Action schema before supplying its other required input fields):');
       for (const candidate of context.availableRoles ?? []) {
         if (!candidate.enabled) continue;
@@ -46,8 +46,9 @@ export function renderSessionRoleBlockV1(context: SessionRolePromptContextV1): s
       'Discover Actions through action.spec.search and action.spec.get before invoking them. Omit sessionId for current-session work. Use event-driven waits; a wait timeout does not imply the work stopped.');
   }
   if (context.notes) lines.push(`Orchestration notes: ${escape(context.notes)}`);
+  if (!voice && context.originKind !== 'run_step') lines.push('Post progress, results, blockers, or failure through session.update.post. This persists an update on your current session even when no manager is attached; follow policy determines delivery to observers.');
   if (context.worker) {
-    const publishAction = context.originKind === 'run_step' ? 'session.worker.publish_draft' : 'session.worker.publish';
+    const publishAction = context.originKind === 'run_step' ? 'session.worker.publish_draft' : 'session.update.post';
     if (!voice) lines.push(`lead_session_id=${data(context.worker.leadSessionId)}`);
     lines.push(`Task boundary: ${escape(context.worker.taskBoundary)}`);
     if (!voice) lines.push(`Publish through ${publishAction} when finished, when a blocker needs the lead, or on failure. Report success or failure explicitly with outcome and evidence, then go idle; do not poll the lead.`,

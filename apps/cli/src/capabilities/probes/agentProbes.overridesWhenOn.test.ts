@@ -1,38 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AgentModelOptionSchema } from '@happier-dev/protocol';
-
-vi.mock('@/agent/catalog/registry', () => ({
-  AGENTS: {
-    claude: {},
-    ohMyPi: {},
-  },
-}));
-
-const { createConfiguredAcpProbeBackendMock } = vi.hoisted(() => ({
-  createConfiguredAcpProbeBackendMock: vi.fn(async () => null),
-}));
-
-vi.mock('./configuredAcpProbeBackend', () => ({
-  createConfiguredAcpProbeBackend: createConfiguredAcpProbeBackendMock,
-}));
-
-const {
-  resolvePreflightSessionControlsProbeAdapterMock,
-  probeModelsRawMock,
-  probeConfigOptionsRawMock,
-} = vi.hoisted(() => ({
-  resolvePreflightSessionControlsProbeAdapterMock: vi.fn(),
-  probeModelsRawMock: vi.fn(),
-  probeConfigOptionsRawMock: vi.fn(),
-}));
-
-vi.mock('./resolvePreflightSessionControlsProbeAdapter', () => ({
-  resolvePreflightSessionControlsProbeAdapter: resolvePreflightSessionControlsProbeAdapterMock,
-}));
+import type { AgentCatalogEntry } from '@/agent/catalog/types';
 
 import { probeAgentModelsBestEffort, resetAgentModelsProbeCacheForTests } from './agentModelsProbe';
 import { probeAgentConfigOptionsBestEffort } from './agentConfigOptionsProbe';
+
+const probeModelsRawMock = vi.fn();
+const probeConfigOptionsRawMock = vi.fn();
+// The plugin-native observations are the boundary; host resolution and normalization stay real.
+const catalogEntry = {
+  id: 'example.overrides/agent', cliSubcommand: 'example.overrides/agent', vendorResumeSupport: 'unsupported',
+  getPreflightSessionControlsProbeAdapter: async () => ({ failureCacheStrategy: 'cooldown' as const,
+    probeModelsRaw: probeModelsRawMock, probeConfigOptionsRaw: probeConfigOptionsRawMock }),
+} satisfies AgentCatalogEntry;
 
 /**
  * Exactly what a producing agent is allowed to publish (Claude's `ultracode`), built through the
@@ -52,15 +33,8 @@ const EXPECTED_RULE = { optionIds: ['reasoning_effort'], forcedValue: 'xhigh' };
 describe('agent control probes preserve producer-declared option override rules', () => {
   beforeEach(() => {
     resetAgentModelsProbeCacheForTests();
-    createConfiguredAcpProbeBackendMock.mockClear();
     probeModelsRawMock.mockReset();
     probeConfigOptionsRawMock.mockReset();
-    resolvePreflightSessionControlsProbeAdapterMock.mockReset();
-    resolvePreflightSessionControlsProbeAdapterMock.mockResolvedValue({
-      failureCacheStrategy: 'cooldown',
-      probeModelsRaw: probeModelsRawMock,
-      probeConfigOptionsRaw: probeConfigOptionsRawMock,
-    });
   });
 
   it('keeps descriptor-owned model facts on a dynamically probed model', async () => {
@@ -73,9 +47,8 @@ describe('agent control probes preserve producer-declared option override rules'
     }]);
 
     const result = await probeAgentModelsBestEffort({
-      // A `dynamicProbe: 'auto'` agent: Claude's own catalog is `static-only`, so only an
-      // auto-probing agent actually exercises the dynamic option normalizer.
-      agentId: 'ohMyPi',
+      agentId: catalogEntry.id,
+      catalogEntry,
       cwd: '/repo',
       timeoutMs: 100,
     });
@@ -93,7 +66,8 @@ describe('agent control probes preserve producer-declared option override rules'
     probeConfigOptionsRawMock.mockResolvedValueOnce([OVERRIDING_OPTION]);
 
     const result = await probeAgentConfigOptionsBestEffort({
-      agentId: 'claude',
+      agentId: catalogEntry.id,
+      catalogEntry,
       cwd: '/repo-config-options',
       timeoutMs: 100,
     });
@@ -110,9 +84,8 @@ describe('agent control probes preserve producer-declared option override rules'
     }]);
 
     const result = await probeAgentModelsBestEffort({
-      // A `dynamicProbe: 'auto'` agent: Claude's own catalog is `static-only`, so only an
-      // auto-probing agent actually exercises the dynamic option normalizer.
-      agentId: 'ohMyPi',
+      agentId: catalogEntry.id,
+      catalogEntry,
       cwd: '/repo-invalid-rule',
       timeoutMs: 100,
     });

@@ -15,7 +15,7 @@ import { useRemoteHostCatalogSnapshot } from '@/sync/store/settings/remoteHostCa
 import { getRemoteHostLocalOverridesStore } from '@/sync/domains/remoteHosts/remoteHostLocalOverrides';
 import type { RemoteHost } from '@/sync/domains/remoteHosts/remoteHostModel';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import type { MachineAddSshAnswerSchema } from '@happier-dev/protocol/actions/specs/machineConnection';
 import { buildSshCredentialsDraftFromRemoteHostConfig } from '@/components/settings/remoteHosts/remoteHostOutcomeActions';
 import { resolveHomeDisplayName } from '@/components/settings/server/homeDisplayName';

@@ -29,7 +29,6 @@ import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } 
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { getPersistenceStorage } from './domains/state/persistenceStorage';
-import { storage } from './domains/state/storage';
 
 installDisconnectedServerSocketBoundary((socket) => {
     socket.connected = true;
@@ -45,6 +44,7 @@ installDisconnectedServerSocketBoundary((socket) => {
         return { ok: false, error: 'Machine method unavailable', errorCode: 'METHOD_NOT_AVAILABLE' };
     });
 });
+const { storage } = await import('./domains/state/storageStore');
 let account: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let webLocks: ReturnType<typeof installWebLockManagerMock>;
 
@@ -261,6 +261,13 @@ describe('§13 catch-up-newer signal brackets the on-open catch-up', () => {
         vi.unstubAllGlobals();
     });
 
+    it('retains authoritative older exhaustion from the initial snapshot even without a tail gap', async () => {
+        const sync = await seedLoadedSession(0, 1, { withMaterializedMessage: false });
+        requestMock.mockResolvedValue(emptyMessagesResponse());
+        await sync.refreshSessionMessages(SESSION_ID);
+        expect(sync.getSessionOlderMessagesAvailability(SESSION_ID)).toBe(false);
+    });
+
     it('flips sessionCatchUpNewerInFlight while a normal on-open incremental newer catch-up runs, and clears it after', async () => {
         // A loaded session that advanced in the background: materialized seq 10 < session seq 20.
         const sync = await seedLoadedSession(10, 20);
@@ -324,7 +331,9 @@ describe('§13 catch-up-newer signal brackets the on-open catch-up', () => {
     it('flips the signal while a loaded empty external transcript recovers from its live Agent', async () => {
         const { sync } = await import('./sync');
         const t = sync as unknown as SyncCatchUpTestAccess;
-        storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', active: true, storageMode: 'plain' })]);
+        storage.getState().applyMachines([createMachineFixture({
+            id: 'machine-1', active: true, activeAt: Date.now(), storageMode: 'plain',
+        })]);
             storage.getState().applySessions([createExternalSession('machine_only')]);
         storage.getState().applyMessagesLoaded(SESSION_ID);
         t.activeServerSessionIds = new Set([SESSION_ID]);

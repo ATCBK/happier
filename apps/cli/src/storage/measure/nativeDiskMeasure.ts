@@ -1,122 +1,121 @@
 import { spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createHappierTempDir, removeHappierTempDir, removeHappierTempDirAsync } from '@happier-dev/cli-common/tempDirs';
 
 import { resolveProcessCustodySupportExecutable } from '@/subprocess/supervision/processCustody';
 
-const bytes = z.number().int().nonnegative().safe();
-const flags = z.object({ atLeast: z.boolean(), sharedExtentsUnmeasured: z.boolean().optional() }).strict();
-const allocationFact = z.object({ key: z.string().min(1), allocatedBytes: bytes, pathId: z.string(),
-    mtimeMs: z.number().int().safe(), ageIncluded: z.boolean() }).strict();
-const measuredPath = z.object({
+const bytes = z.number().check(z.int(), z.nonnegative(), z.int());
+const flags = z.strictObject({ atLeast: z.boolean(), sharedExtentsUnmeasured: z.optional(z.boolean()) });
+const allocationFact = z.strictObject({ key: z.string().check(z.minLength(1)), allocatedBytes: bytes, pathId: z.string(),
+    mtimeMs: z.number().check(z.int(), z.int()), ageIncluded: z.boolean() });
+const measuredPath = z.strictObject({
     path: z.string(),
     allocatedBytes: bytes,
     exclusiveBytes: bytes,
-    freesUpToBytes: bytes.optional(),
+    freesUpToBytes: z.optional(bytes),
     sharedBytes: bytes,
     sharedExtentsUnmeasured: z.boolean(),
     items: bytes,
     atLeast: z.boolean(),
-    lastChangedAtMs: z.number().int().safe().positive().optional(),
-}).strict();
-const measurement = z.object({
+    lastChangedAtMs: z.optional(z.number().check(z.int(), z.int(), z.positive())),
+});
+const measurement = z.strictObject({
     v: z.literal(1),
     perPath: z.array(measuredPath),
     totalAllocatedBytes: bytes,
     totalExclusiveBytes: bytes,
-    unions: z.array(z.object({ id: z.string().min(1), totalAllocatedBytes: bytes, totalExclusiveBytes: bytes,
-        atLeast: z.boolean() }).strict()).optional(),
-}).strict();
+    unions: z.optional(z.array(z.strictObject({ id: z.string().check(z.minLength(1)), totalAllocatedBytes: bytes, totalExclusiveBytes: bytes,
+        atLeast: z.boolean() }))),
+});
 
-const scanNode = z.object({
+const scanNode = z.strictObject({
     id: z.string(),
     name: z.string(),
-    nameBytes: z.string().optional(),
+    nameBytes: z.optional(z.string()),
     kind: z.enum(['folder', 'file', 'symlink', 'mount', 'cloud-only', 'package', 'other']),
     allocatedBytes: bytes,
     logicalBytes: bytes,
     items: bytes,
-    mtimeMs: z.number().int().safe(),
+    mtimeMs: z.number().check(z.int(), z.int()),
     flags,
-    allocationFacts: z.array(allocationFact).optional(),
-}).strict();
-const directory = z.object({
+    allocationFacts: z.optional(z.array(allocationFact)),
+});
+const directory = z.strictObject({
     v: z.literal(1),
     type: z.literal('dir'),
-    ownLogicalBytes: bytes.optional(),
+    ownLogicalBytes: z.optional(bytes),
     id: z.string(),
-    parent: z.string().optional(),
+    parent: z.optional(z.string()),
     name: z.string(),
-    nameBytes: z.string().optional(),
+    nameBytes: z.optional(z.string()),
     allocatedBytes: bytes,
     logicalBytes: bytes,
     items: bytes,
-    mtimeMs: z.number().int().safe(),
+    mtimeMs: z.number().check(z.int(), z.int()),
     flags,
-    allocationFacts: z.array(allocationFact).optional(),
+    allocationFacts: z.optional(z.array(allocationFact)),
     children: z.array(scanNode),
     files: z.array(scanNode),
-    folded: z.object({ items: bytes, allocatedBytes: bytes, logicalBytes: bytes }).strict(),
-    ageGroupBytes: z.object({ unknown: bytes, months3: bytes, months6: bytes, months12: bytes }).strict(),
+    folded: z.strictObject({ items: bytes, allocatedBytes: bytes, logicalBytes: bytes }),
+    ageGroupBytes: z.strictObject({ unknown: bytes, months3: bytes, months6: bytes, months12: bytes }),
     complete: z.boolean(),
     /** Entries and physical facts arrived separately; this record contains aggregates only. */
-    streamed: z.literal(true).optional(),
+    streamed: z.optional(z.literal(true)),
     /** The directory's complete direct-name enumeration, independent of subtree coverage. */
-    enumerated: z.boolean().optional(),
+    enumerated: z.optional(z.boolean()),
     /** Verified developer tree: aggregate directory, with ordinary file queries retained. */
-    summarized: z.literal(true).optional(),
+    summarized: z.optional(z.literal(true)),
     /** Direct relist names, before chart folding; [] authoritatively lists an empty folder. */
-    directChildIds: z.array(z.string()).optional(),
+    directChildIds: z.optional(z.array(z.string())),
     /** Cached physical child subtrees reused without renewing their coverage. */
-    retainedSubtrees: z.array(z.string()).optional(),
-}).strict();
-const directoryStart = directory.omit({ directChildIds: true, retainedSubtrees: true }).extend({
-    type: z.literal('dir-start'), streamed: z.literal(true), relistOnly: z.boolean(),
-    children: z.tuple([]), files: z.tuple([]), allocationFacts: z.tuple([]).optional(),
+    retainedSubtrees: z.optional(z.array(z.string())),
 });
-const directoryEntry = z.object({
+const directoryStart = z.extend(z.omit(directory, { directChildIds: true, retainedSubtrees: true }), {
+    type: z.literal('dir-start'), streamed: z.literal(true), relistOnly: z.boolean(),
+    children: z.tuple([]), files: z.tuple([]), allocationFacts: z.optional(z.tuple([])),
+});
+const directoryEntry = z.strictObject({
     v: z.literal(1), type: z.literal('dir-entry'), parent: z.string(),
-    node: scanNode.omit({ allocationFacts: true }), visible: z.boolean(), retained: z.boolean(), replaceFacts: z.boolean(),
-}).strict();
-const physicalFact = z.object({ v: z.literal(1), type: z.literal('fact'), owner: z.string(), fact: allocationFact }).strict();
-const progress = z.object({
+    node: z.omit(scanNode, { allocationFacts: true }), visible: z.boolean(), retained: z.boolean(), replaceFacts: z.boolean(),
+});
+const physicalFact = z.strictObject({ v: z.literal(1), type: z.literal('fact'), owner: z.string(), fact: allocationFact });
+const progress = z.strictObject({
     v: z.literal(1),
     type: z.literal('progress'),
     sizedBytes: bytes,
     items: bytes,
-    currentPath: z.string().optional(),
-    stuckSinceMs: bytes.optional(),
-    fraction: z.number().min(0).max(1).optional(),
-}).strict();
-const summary = z.object({
+    currentPath: z.optional(z.string()),
+    stuckSinceMs: z.optional(bytes),
+    fraction: z.optional(z.number().check(z.minimum(0), z.maximum(1))),
+});
+const summary = z.strictObject({
     v: z.literal(1),
     type: z.literal('summary'),
     termination: z.enum(['completed', 'cancelled', 'interrupted', 'failed']),
-    unreadable: z.array(z.object({ path: z.string(), reason: z.enum(['permission', 'os_private', 'timeout', 'io']) }).strict()),
-    unreadableCounts: z.object({ permission: bytes, os_private: bytes, timeout: bytes, io: bytes }).strict(),
-    skipped: z.array(z.object({ path: z.string(), reason: z.string() }).strict()),
+    unreadable: z.array(z.strictObject({ path: z.string(), reason: z.enum(['permission', 'os_private', 'timeout', 'io']) })),
+    unreadableCounts: z.strictObject({ permission: bytes, os_private: bytes, timeout: bytes, io: bytes }),
+    skipped: z.array(z.strictObject({ path: z.string(), reason: z.string() })),
     backendByDirCounts: z.record(z.string(), bytes),
     allocatedBytes: bytes,
     items: bytes,
-    pendingFrontier: z.array(z.string()).optional(),
-    streamedFrontier: z.literal(true).optional(),
-    apfsLocalSnapshotCount: bytes.optional(),
-}).strict();
-const frontierStart = z.object({ v: z.literal(1), type: z.literal('frontier-start') }).strict();
-const frontierItem = z.object({ v: z.literal(1), type: z.literal('frontier-item'), path: z.string() }).strict();
-const permission = z.object({
+    pendingFrontier: z.optional(z.array(z.string())),
+    streamedFrontier: z.optional(z.literal(true)),
+    apfsLocalSnapshotCount: z.optional(bytes),
+});
+const frontierStart = z.strictObject({ v: z.literal(1), type: z.literal('frontier-start') });
+const frontierItem = z.strictObject({ v: z.literal(1), type: z.literal('frontier-item'), path: z.string() });
+const permission = z.strictObject({
     v: z.literal(1),
     type: z.literal('permission'),
-    fullDiskAccess: z.object({
+    fullDiskAccess: z.strictObject({
         state: z.enum(['unknown', 'not_granted', 'granted', 'not_applicable']),
-        binary: z.object({ name: z.string().min(1), path: z.string().min(1) }).strict(),
+        binary: z.strictObject({ name: z.string().check(z.minLength(1)), path: z.string().check(z.minLength(1)) }),
         waitingForConsent: z.boolean(),
-    }).strict(),
-}).strict();
-const scanRecord = z.discriminatedUnion('type', [directory, directoryStart, directoryEntry, physicalFact, frontierStart, frontierItem, progress, summary, permission])
-    .superRefine((record, context) => {
+    }),
+});
+const scanRecord = z.discriminatedUnion('type', [directory, directoryStart, directoryEntry, physicalFact, frontierStart, frontierItem, progress, summary, permission]).check(z.superRefine((record, context) => {
         if (record.type === 'dir' && record.streamed && (record.children.length || record.files.length
             || record.allocationFacts?.length || record.directChildIds !== undefined || record.retainedSubtrees !== undefined)) {
             context.addIssue({ code: 'custom', message: 'Streamed directory aggregates cannot carry entry arrays' });
@@ -124,12 +123,12 @@ const scanRecord = z.discriminatedUnion('type', [directory, directoryStart, dire
         if (record.type === 'summary' && record.streamedFrontier && record.pendingFrontier?.length) {
             context.addIssue({ code: 'custom', message: 'Streamed frontier cannot carry a second frontier array' });
         }
-    });
-const invalidIndexDiagnostic = z.object({
+    }));
+const invalidIndexDiagnostic = z.strictObject({
     v: z.literal(1),
     code: z.literal('native_disk_invalid_previous_index'),
     message: z.string(),
-}).strict();
+});
 
 export type NativeDiskMeasurement = z.infer<typeof measurement>;
 export type NativeDiskScanRecord = z.infer<typeof scanRecord>;

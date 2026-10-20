@@ -51,21 +51,26 @@ async function advertiseQualifiedPools(home: ReturnType<typeof createHomeGoverna
     const features = createRootLayoutFeaturesResponse({ features: { connectedServices: { enabled: true, accountGroups: { enabled: true } } },
         capabilities: { connectedServices: { qualifiedAccounts: { protocolVersion: 4 }, credentialDelete: { revisionGuard: false } } } });
     home.answer(serverId, '/v1/features', { body: features });
+    home.answer(serverId, '/v1/features/authenticated', { body: features });
     primeServerFeaturesSnapshot({ serverId, snapshot: { status: 'ready', features } });
 }
 
-async function publishMountedHomeFixture() {
+async function publishMountedHomeFixture(home: ReturnType<typeof createHomeGovernanceHarness>) {
     const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
-    const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } =
-        await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
-    const previous = getAppliedActiveServerSnapshot();
-    const previousAvailable = isAppliedActiveServerRuntimeAvailable();
-    // The real connection producer's completed-Home fact is part of a mounted viewer fixture.
-    // Credential and profile scopes alone do not activate UI Account reads.
-    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const { restoreServerAccountForTest } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+    const snapshot = getActiveServerSnapshot();
+    const credentials = await TokenStorage.getCredentialsForServerUrl(snapshot.serverUrl, { serverId: snapshot.serverId });
+    if (!credentials) throw new Error('The mounted Home fixture has no device credentials');
+    const previousCredentials = auth.credentials;
+    auth.credentials = credentials;
+    const connection = await restoreServerAccountForTest({ serverUrl: snapshot.serverUrl, credentials, request: home.request });
     const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
     expect(getActiveServerAccountScope()).not.toBeNull();
-    return () => publishAppliedActiveServerSnapshot(previous, previousAvailable);
+    return async () => {
+        try { await connection.dispose(); }
+        finally { auth.credentials = previousCredentials; }
+    };
 }
 
 describe('pool deletion through its shared Action owner', () => {
@@ -87,7 +92,7 @@ describe('pool deletion through its shared Action owner', () => {
         home.answer(serverId, 'GET /v1/account/entity-rows/connected-accounts/purposes', { body: { status: 'present', revision: 1,
             content: { t: 'plain', v: { key: 'purposes', value: { v: 1, bindings: [] } } } } });
         await home.requireUiApproval(serverId, 'connectedServices.acknowledgements.set');
-        const restoreMountedHome = await publishMountedHomeFixture();
+        const restoreMountedHome = await publishMountedHomeFixture(home);
         const { ConnectedServicesAgentSignInView } = await import('@/components/settings/connectedServices/collection/ConnectedServicesAgentSignInView');
         const { ConnectedServicesDefaultAuthRow } = await import('@/components/settings/connectedServices/ConnectedServicesDefaultAuthRow');
         const { ActionApprovalPendingNotice } = await import('@/components/approvals/ActionApprovalPendingNotice');
@@ -112,7 +117,7 @@ describe('pool deletion through its shared Action owner', () => {
             expect(home.requestsFor('/v1/artifacts').some(request => request.input !== null)).toBe(true);
             await screen.unmount();
             expect(await dismissal).toBe(false);
-        } finally { await screen.unmount(); restoreMountedHome(); await home.reset(); }
+        } finally { await screen.unmount(); await restoreMountedHome(); await home.reset(); }
     });
     it('holds a mounted Agent own-login default at Action approval without writing the purpose catalog', async () => {
         const home = createHomeGovernanceHarness();
@@ -126,7 +131,7 @@ describe('pool deletion through its shared Action owner', () => {
             content: { t: 'plain', v: { key: 'purposes', value: { v: 1, bindings: [] } } } } });
         home.answer(serverId, `POST ${path}`, { body: { status: 'updated', revision: 2, cursor: 2 } });
         await home.requireUiApproval(serverId, 'connectedServices.accounts.purposeDefault.set');
-        const restoreMountedHome = await publishMountedHomeFixture();
+        const restoreMountedHome = await publishMountedHomeFixture(home);
         // This contract starts with an admitted catalog, not the catalog loader's separate lifecycle.
         const { applyConnectedAccountCatalogSnapshot } = await import('@/sync/store/settings/connectedAccountCatalogSnapshot');
         const { storage } = await import('@/sync/domains/state/storage');
@@ -164,7 +169,7 @@ describe('pool deletion through its shared Action owner', () => {
             expect(mutationFailure).toBeUndefined();
             expect(await mutation).toBe(true);
             expect(home.requestsFor(path).filter(request => request.input !== null)).toHaveLength(1);
-        } finally { await hook.unmount(); restoreMountedHome(); await home.reset(); }
+        } finally { await hook.unmount(); await restoreMountedHome(); await home.reset(); }
     });
     it('admits the device identity-privacy effect before changing the local identity presenter', async () => {
         const home = createHomeGovernanceHarness();
@@ -172,7 +177,7 @@ describe('pool deletion through its shared Action owner', () => {
         const serverId = await home.addHome({ name: 'Identity privacy', serverUrl: 'https://identity-privacy-admission.test',
             accountId: 'privacy-owner', currentAccount: true });
         await home.requireUiApproval(serverId, 'connectedServices.identityPrivacy.set');
-        const restoreMountedHome = await publishMountedHomeFixture();
+        const restoreMountedHome = await publishMountedHomeFixture(home);
         const { storage } = await import('@/sync/domains/state/storage');
         expect(storage.getState().profileScope).toMatchObject({ accountId: 'privacy-owner' });
         const previous = storage.getState().localSettings.hideConnectedAccountIdentities;
@@ -188,7 +193,7 @@ describe('pool deletion through its shared Action owner', () => {
         } finally {
             await hook.unmount();
             storage.getState().applyLocalSettings({ hideConnectedAccountIdentities: previous }, { source: 'ui' });
-            restoreMountedHome();
+            await restoreMountedHome();
             await home.reset();
         }
     });
@@ -211,7 +216,7 @@ describe('pool deletion through its shared Action owner', () => {
         const emptyMetadata = { status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, entries: [] } } };
         home.answer(serverId, 'GET /v1/account/entity-rows/connected-metadata/presentation', { body: emptyMetadata });
         home.answer(serverId, `GET ${CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1}`, { body: emptyMetadata });
-        const restoreMountedHome = await publishMountedHomeFixture();
+        const restoreMountedHome = await publishMountedHomeFixture(home);
         const { storage } = await import('@/sync/domains/state/storage');
         const { applyConnectedAccountCatalogSnapshot } = await import('@/sync/store/settings/connectedAccountCatalogSnapshot');
         applyConnectedAccountCatalogSnapshot(storage.getState().profileScope!, 'purposes', { status: 'ready', revision: 1,
@@ -230,7 +235,7 @@ describe('pool deletion through its shared Action owner', () => {
             await act(async () => { await button!.props.onPress(); });
             expect(home.requestsFor(path).filter(request => request.input !== null)).toHaveLength(1);
             expect(onDismiss).not.toHaveBeenCalled();
-        } finally { await screen.unmount(); restoreMountedHome(); await home.reset(); }
+        } finally { await screen.unmount(); await restoreMountedHome(); await home.reset(); }
     });
     it.each(['create', 'patch', 'switchNow'] as const)('holds a mounted pool %s at the configured Action approval instead of writing the pool directly', async operation => {
         const home = createHomeGovernanceHarness();
@@ -240,6 +245,7 @@ describe('pool deletion through its shared Action owner', () => {
         await advertiseQualifiedPools(home, serverId);
         const { TokenStorage } = await import('@/auth/storage/tokenStorage');
         auth.credentials = await TokenStorage.getCredentialsForServerUrl(serverUrl, { serverId });
+        const admittedCredentials = auth.credentials;
         const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
         const group = { v: 1, ref: { service, groupId: 'work' }, displayName: 'Work', incarnation: 'work:1', generation: 2,
             runtimeStateRevision: 3, policy: ConnectedServiceAuthGroupPolicyV1Schema.parse({}), activeConnectedAccountId: null,
@@ -279,6 +285,12 @@ describe('pool deletion through its shared Action owner', () => {
                 expect(await decideApprovalAsInbox(serverId, artifactId, 'approve')).toMatchObject({ ok: true, result: { status: 'executed' } });
                 await waitForHomeGovernance(() => expect(settled).toBe(true));
                 expect(mutationFailure).toBeUndefined();
+                expect(currentGroup).toMatchObject({ displayName: 'Renamed', generation: 3 });
+                expect(auth.credentials).toBe(admittedCredentials);
+                expect(hook.getCurrent().error).toBeNull();
+                expect(hook.getCurrent().groups[0]).toMatchObject({
+                    displayName: 'Renamed', revision: { incarnation: group.incarnation, generation: 3, runtimeStateRevision: 3 },
+                });
                 expect(await result).toMatchObject({ displayName: 'Renamed' });
                 expect(hook.getCurrent().groups[0]?.displayName).toBe('Renamed');
             } else {

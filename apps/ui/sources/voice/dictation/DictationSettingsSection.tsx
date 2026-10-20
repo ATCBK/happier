@@ -14,6 +14,9 @@ import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { SettingAnchor } from '@/components/settings/shell/SettingRow';
 import { VOICE_DICTATION_SETTINGS } from '@/voice/settings/voiceSettingsDeclarations';
+import { useVoiceSettingsSearchPrerequisite } from '@/voice/settings/VoiceSettingsSearchPrerequisite';
+import { getVoiceContributedSettingRefs, useVoiceContributedSettingsDeclarations } from '@/voice/settings/useVoiceContributedSettingRefs';
+import { getVoiceLocalNeuralSttSettingRefs } from '@/voice/settings/useVoiceSttSettingRefs';
 import { restoreFocusToBestTarget } from '@/keyboard/focusReturn';
 import {
   writeLocalDirectVoiceSettings,
@@ -267,7 +270,7 @@ export function useVoiceDictationReadinessModel(props: Readonly<{
   };
 
   return {
-    engineOptions, selectedId, theme, providerControlRef, selectEngine, providerSpec, selectedStt,
+    engineOptions, selectedId, theme, providerControlRef, selectEngine, providerSpec, providerSpecs, selectedStt,
     dictation, setDictation, setReadinessCheck, localAdapter, openMenu, setOpenMenu,
     isCheckingReadiness, checkSetup, checkedReadiness, recoveryActionHandler, handleRecoveryAction,
     readinessCheckKey: JSON.stringify([nativeModelSelection.providerId, nativeModelSelection.packId, rawAuthorizationKey]),
@@ -278,8 +281,10 @@ export function useVoiceDictationReadinessModel(props: Readonly<{
 }
 
 export function DictationSettingsSection(props: Parameters<typeof useVoiceDictationReadinessModel>[0]) {
+  const searchPrerequisite = useVoiceSettingsSearchPrerequisite();
+  const declarations = useVoiceContributedSettingsDeclarations('voiceDictation');
   const {
-    engineOptions, selectedId, theme, providerControlRef, selectEngine, providerSpec, selectedStt,
+    engineOptions, selectedId, theme, providerControlRef, selectEngine, providerSpec, providerSpecs, selectedStt,
     dictation, setDictation, setReadinessCheck, localAdapter, openMenu, setOpenMenu,
     isCheckingReadiness, checkSetup, recoveryActionHandler, handleRecoveryAction, readiness,
     readinessCheckKey, isCurrentReadinessCheck, readinessForEngine,
@@ -377,6 +382,10 @@ export function DictationSettingsSection(props: Parameters<typeof useVoiceDictat
             daemonRouteDiagnosticReason={props.daemonRouteDiagnosticReason}
           />
         ) : null}
+        {providerSpecs.filter((spec) => spec.id !== providerSpec?.id).map((spec) => (
+          searchPrerequisite({ settings: [...getVoiceContributedSettingRefs(declarations, spec.id),
+              ...(spec.id === 'local_neural' ? getVoiceLocalNeuralSttSettingRefs(VOICE_DICTATION_SETTINGS.settings) : [])], reason: t('settingsVoice.pages.search.select', { choice: spec.title, control: t('settingsVoice.dictation.provider') }) })
+        ))}
       </ItemGroup>
       </SettingAnchor>
 

@@ -187,4 +187,73 @@ describe('Item page operation placement', () => {
             .filter((inset) => typeof inset === 'number' && inset > 0);
         expect(insets).toEqual([PAGE_LIST_METRICS.rowLeadingColumnPx + PAGE_LIST_METRICS.rowLeadingGapPx]);
     });
+
+    it('keeps a field beside a short name and its marker in a narrow desktop pane, where the shared 200px label column would stack it', async () => {
+        const { act } = await import('react-test-renderer');
+        const { Item } = await import('./Item');
+        const { ListPresentationProvider } = await import('./listPresentation');
+        const screen = await renderScreen(
+            <ListPresentationProvider value="page">
+                <Item
+                    title="Reviewer"
+                    titleAccessory={React.createElement('Marker', { testID: 'marker' })}
+                    rightElement={React.createElement('Operation', { testID: 'operation' })}
+                    rightElementOutsidePressable
+                    accessoryLayout="adaptive"
+                    fieldAccessory
+                    showChevron={false}
+                />
+            </ListPresentationProvider>,
+        );
+        const { direction, layout } = measuredRow(screen, act);
+        const report = async (matches: (node: ReturnType<typeof screen.findAll>[number]) => boolean, widthPx: number) => {
+            await act(async () => {
+                for (const node of screen.findAll((candidate) => typeof candidate.type === 'string' && matches(candidate)
+                    && typeof candidate.props?.onLayout === 'function')) {
+                    node.props.onLayout({ nativeEvent: { layout: { width: widthPx, height: 20, x: 0, y: 0 } } });
+                }
+            });
+        };
+        // The Work pane at its 340px default: a 323px row. The name (61) and its marker (57) are measured.
+        await layout({ row: 323, operation: 132 });
+        await report((node) => node.props?.children === 'Reviewer' && node.props?.onLayout !== undefined, 61);
+        await report((node) => node.findAll((child) => child.props?.testID === 'marker').length > 0
+            && node.findAll((child) => child.props?.testID === 'operation').length === 0, 57);
+        expect(direction()).not.toBe('column');
+    });
+
+    it('counts a glyph that shares the field\'s slot against the room, so the name is never squeezed', async () => {
+        const { act } = await import('react-test-renderer');
+        const { Item } = await import('./Item');
+        const { ListPresentationProvider } = await import('./listPresentation');
+        const screen = await renderScreen(
+            <ListPresentationProvider value="page">
+                <Item
+                    title="Reviewer"
+                    titleAccessory={React.createElement('Marker', { testID: 'marker' })}
+                    rightElement={React.createElement('Operation', { testID: 'operation' })}
+                    rightElementOutsidePressable
+                    accessoryLayout="adaptive"
+                    fieldAccessory
+                    fieldAccessorySiblingPx={60}
+                    showChevron={false}
+                />
+            </ListPresentationProvider>,
+        );
+        const { direction, layout } = measuredRow(screen, act);
+        const report = async (matches: (node: ReturnType<typeof screen.findAll>[number]) => boolean, widthPx: number) => {
+            await act(async () => {
+                for (const node of screen.findAll((candidate) => typeof candidate.type === 'string' && matches(candidate)
+                    && typeof candidate.props?.onLayout === 'function')) {
+                    node.props.onLayout({ nativeEvent: { layout: { width: widthPx, height: 20, x: 0, y: 0 } } });
+                }
+            });
+        };
+        // The same 323px row, name and marker as above: the field alone fits beside them, field and 60px of sibling do not.
+        await layout({ row: 323, operation: 132 });
+        await report((node) => node.props?.children === 'Reviewer' && node.props?.onLayout !== undefined, 61);
+        await report((node) => node.findAll((child) => child.props?.testID === 'marker').length > 0
+            && node.findAll((child) => child.props?.testID === 'operation').length === 0, 57);
+        expect(direction()).toBe('column');
+    });
 });

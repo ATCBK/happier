@@ -156,7 +156,7 @@ describe('project Git presentation', () => {
         expect(screen.findHostByTestId('session-git-outcome-outcome_unknown')).not.toBeNull();
         await screen.pressByTestIdAsync('session-git-outcome-outcome_unknown.action');
         expect(machineScmCommitUndoLast).toHaveBeenCalledOnce();
-        expect(machineScmCommitUndoLast).toHaveBeenCalledWith('m1', { cwd: '/repo', expectedHeadOid }, { serverId: 's1' });
+        expect(machineScmCommitUndoLast).toHaveBeenCalledWith('m1', { cwd: '/repo', expectedHeadOid }, { serverId: 's1', onDispatched: expect.any(Function) });
     });
 
     it('reconciles a rebase conflict and exposes its recovery without a duplicate failure dialog', async () => {
@@ -189,7 +189,7 @@ describe('project Git presentation', () => {
         await screen.pressByTestIdAsync('session-git-outcome-conflicted.action');
         expect(openReview).toHaveBeenCalledOnce();
         await screen.pressByTestIdAsync('scm-update-branch-operation-skip');
-        expect(machineScmBranchOperationSkip).toHaveBeenCalledWith('m1', { cwd: '/repo', operation: 'rebase' }, { serverId: 's1' });
+        expect(machineScmBranchOperationSkip).toHaveBeenCalledWith('m1', { cwd: '/repo', operation: 'rebase' }, { serverId: 's1', onDispatched: expect.any(Function) });
     });
 
     it('reconciles an unknown remote edit, preserves its draft and offers a read instead of replaying the write', async () => {

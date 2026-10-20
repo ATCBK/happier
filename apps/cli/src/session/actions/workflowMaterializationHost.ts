@@ -6,7 +6,7 @@ import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/cat
 import { requireReadyAcpCatalog } from '@/agent/acp/catalog/configured/resolveBackend';
 import { refreshActiveAcpCatalog } from '@/agent/acp/catalog/hydrateAcpCatalog';
 import { readAccountLaunchProfiles } from '@/settings/profiles/readProfilesFromAccountSettings';
-import type { AiLaunchProfile, ResolveRoleSelectionV1Input, AccountSettings, materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol';
+import type { AiLaunchProfile, AccountSettings, materializeWorkflowAcceptedSnapshotV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
@@ -20,13 +20,29 @@ import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resolveWorkflowAuthorizedSession } from '@/daemon/workflows/invocationRecoveryObserver';
 import type { WorkflowTargetUnavailableDetailsV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { ActionSessionAddressV1Schema } from '@happier-dev/protocol/actions/sessionTargetV1';
+import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
+import type { WorkflowSessionConversation } from '@/daemon/workflows/sessionStepExecutor';
 
 type Materialization = Pick<Parameters<typeof materializeWorkflowAcceptedSnapshotV1>[0], 'roleSelection' | 'effects'>;
-type RoleSelection = Omit<ResolveRoleSelectionV1Input, 'roleId' | 'workflowRoles' | 'runOverrides'>;
+type RoleSelection = NonNullable<Materialization['roleSelection']>;
 type MachineTarget = Readonly<{ machineId: string; directory: string; signal?: AbortSignal; roleSelection?: RoleSelection }>;
+
+/** Origin selection is a contextual fallback; Role and explicit engine overrides remain Protocol-owned. */
+export function projectWorkflowConversationRoleSelection(origin: WorkflowSessionConversation): RoleSelection {
+  const modelId = origin.runtimeSnapshot?.modelSelection?.value?.modelId;
+  return {
+    sessionRoles: origin.sessionRoles,
+    defaultConnectedServices: origin.runtimeSelection?.connectedServices,
+    ...(origin.agentTarget ? { defaultEngine: { agentTargetKey: buildBackendTargetKeyV2(origin.agentTarget),
+      ...(modelId ? { modelId } : {}) } } : {}),
+  };
+}
 
 export type WorkflowMaterializationHostDeps = Readonly<{
   credentials: StoredCredentials;
+  serverId?: string;
+  serverIdentityId?: string;
   serverHttpBaseUrl?: string;
   callMachineAction: (input: Readonly<{ machineId: string; method: string; request: unknown; signal?: AbortSignal }>) => Promise<unknown>;
   readRoleSelection: (signal?: AbortSignal) => Promise<RoleSelection>;
@@ -72,20 +88,20 @@ export function createWorkflowMaterializationHostV1(deps: WorkflowMaterializatio
     };
     let observation: ReturnType<typeof observeMachine> | undefined;
     const readMachine = () => observation ??= observeMachine();
-    const sessions = new Map<string, Promise<boolean>>();
-    const readSessionAvailability = (sessionId: string) => {
-      let availability = sessions.get(sessionId);
-      if (!availability) {
+    const sessions = new Map<string, ReturnType<typeof resolveWorkflowAuthorizedSession>>();
+    const readSession = (sessionId: string) => {
+      let observation = sessions.get(sessionId);
+      if (!observation) {
         const read = () => resolveWorkflowAuthorizedSession({ credentials: deps.credentials, sessionId,
-          machineId: target.machineId, ...(target.signal ? { signal: target.signal } : {}) });
-        availability = (deps.serverHttpBaseUrl ? runWithServerHttpBaseUrl(deps.serverHttpBaseUrl, read) : read())
-          .then((authorized) => authorized !== null).catch(() => {
+          ...(target.signal ? { signal: target.signal } : {}) });
+        observation = (deps.serverHttpBaseUrl ? runWithServerHttpBaseUrl(deps.serverHttpBaseUrl, read) : read())
+          .catch(() => {
             target.signal?.throwIfAborted();
-            return false;
+            return null;
           });
-        sessions.set(sessionId, availability);
+        sessions.set(sessionId, observation);
       }
-      return availability;
+      return observation;
     };
     const roleSelection = { ...await deps.readRoleSelection(target.signal), ...target.roleSelection };
     let catalogObservation: Promise<AcpCatalogSnapshotV1 | undefined> | undefined;
@@ -161,13 +177,51 @@ export function createWorkflowMaterializationHostV1(deps: WorkflowMaterializatio
         readWorkflowDefinition: (ref) => deps.readWorkflowDefinition(ref, target.signal),
         readLaunchProfile: (profileId) => deps.readLaunchProfile(profileId, target.signal),
         readActionContract,
+        resolveSessionTarget: async (value) => {
+          target.signal?.throwIfAborted();
+          const serverId = deps.serverIdentityId ?? deps.serverId;
+          if (!serverId || !deps.serverId) return null;
+          const address = ActionSessionAddressV1Schema.safeParse(typeof value === 'string'
+            ? { serverId, sessionId: value } : value);
+          if (!address.success) return null;
+          if (address.data.serverId !== serverId && address.data.serverId !== deps.serverId
+            && !await isServerProfileHomeIdentity(deps.serverId, address.data.serverId)) return null;
+          const authorized = await readSession(address.data.sessionId);
+          target.signal?.throwIfAborted();
+          return authorized ? { address: { serverId: address.data.serverId, sessionId: authorized.target.sessionId }, machineId: authorized.machineId } : null;
+        },
         resolveTargetAvailability: async (leaf, { sessionIds }) => {
           const unavailable = (reason: WorkflowTargetUnavailableDetailsV1['reason'],
             facts: Pick<WorkflowTargetUnavailableDetailsV1, 'agentId' | 'errorCode' | 'platformReason'> = {}): WorkflowTargetUnavailableDetailsV1 => (
             { code: 'target_unavailable', reason, ...facts }
           );
+          const participant = leaf.participant;
+          if (participant) {
+            const serverId = deps.serverIdentityId ?? deps.serverId;
+            const participantServerId = participant.kind === 'session'
+              ? participant.session.serverId : participant.launch.executionTarget.serverId;
+            if (!deps.serverId || !serverId || participantServerId !== serverId
+              && participantServerId !== deps.serverId
+              && !await isServerProfileHomeIdentity(deps.serverId, participantServerId)) {
+              return unavailable('selection_unavailable');
+            }
+            if (participant.kind === 'session') {
+              const authorized = await readSession(participant.session.sessionId);
+              target.signal?.throwIfAborted();
+              if (!authorized || authorized.machineId !== participant.machineId) return unavailable('session_unavailable');
+            } else if (participant.launch.executionTarget.machineId !== target.machineId
+              || participant.launch.directory.kind === 'managed'
+              || participant.launch.checkoutCreationDraft != null) {
+              return unavailable('selection_unavailable');
+            }
+          }
           for (const sessionId of sessionIds) {
-            if (!await readSessionAvailability(sessionId)) return unavailable('session_unavailable');
+            const conversation = leaf.selection.conversation;
+            const machineId = conversation?.kind === 'existing_session' && conversation.sessionId === sessionId
+              ? conversation.machineId : target.machineId;
+            const authorized = await readSession(sessionId);
+            target.signal?.throwIfAborted();
+            if (!authorized || authorized.machineId !== machineId) return unavailable('session_unavailable');
           }
           if (leaf.kind === 'wait' || leaf.kind === 'workflow') return true;
           if (leaf.actionId) return (await readActionContract(leaf.actionId)) !== null || unavailable('action_unavailable');
@@ -176,10 +230,11 @@ export function createWorkflowMaterializationHostV1(deps: WorkflowMaterializatio
           // Action Agent-start checks still require creation inventory.
           if (leaf.kind === 'step' && leaf.executionTarget.kind === 'session'
             && (selection.conversation?.kind === 'origin_session' || selection.conversation?.kind === 'existing_session')) return true;
-          if (!selection.agentTarget) return unavailable('selection_unavailable');
-          const definitionIds = selection.agentTarget.definitionId === undefined ? [] : await readDefinitionIds(true);
-          if (selection.agentTarget.definitionId !== undefined && !definitionIds.includes(selection.agentTarget.definitionId)) return unavailable('selection_unavailable');
-          const key = buildBackendTargetKeyV2(selection.agentTarget);
+          const agentTarget = participant?.kind === 'model' ? participant.launch.agentTarget : selection.agentTarget;
+          if (!agentTarget) return unavailable('selection_unavailable');
+          const definitionIds = agentTarget.definitionId === undefined ? [] : await readDefinitionIds(true);
+          if (agentTarget.definitionId !== undefined && !definitionIds.includes(agentTarget.definitionId)) return unavailable('selection_unavailable');
+          const key = buildBackendTargetKeyV2(agentTarget);
           const machine = await readMachine();
           if (!machine) return unavailable('machine_check_failed');
           const { roster, inventory, detachedFacts, detachedBackends, detachedFeatures } = machine;
@@ -187,12 +242,17 @@ export function createWorkflowMaterializationHostV1(deps: WorkflowMaterializatio
             && listAgentExecutionTargetsV1(agent.identity, definitionIds).some((executionTarget) => buildBackendTargetKeyV2(executionTarget) === key));
           if (!entry) return unavailable('selection_unavailable');
           const [agentId, agent] = entry;
-          const backend = object(detachedBackends?.[selection.agentTarget.definitionId === undefined ? agent.catalogAgentId ?? agentId : key]);
+          const backend = object(detachedBackends?.[agentTarget.definitionId === undefined ? agent.catalogAgentId ?? agentId : key]);
           if (leaf.executionTarget.kind === 'session') {
             if (agent.capabilities?.sessions?.open.includes('create') !== true) return unavailable('session_creation_unavailable', { agentId });
-            if (selection.agentTarget.definitionId !== undefined) {
+            if (agentTarget.definitionId !== undefined) {
               return backend?.available === true || unavailable('selection_unavailable', { agentId });
             }
+          }
+          // A Session-backed detached Run opens the same Agent executable.
+          // Declared Run support cannot override the Machine's installation facts.
+          // Configured commands and execution-only factories retain their own owners.
+          if (agent.capabilities?.sessions && agentTarget.definitionId === undefined) {
             const current = inventory.items.find((item) => item.agentId === agentId);
             if (!current) {
               const failed = inventory.unavailable?.find((item) => item.agentId === agentId);
@@ -201,8 +261,8 @@ export function createWorkflowMaterializationHostV1(deps: WorkflowMaterializatio
             if (!current.installed) return unavailable('agent_not_installed', { agentId });
             if (!current.platform.supported) return unavailable('platform_unsupported', { agentId, platformReason: current.platform.reason });
             if (!current.dependencies.every((dependency) => dependency.installed)) return unavailable('dependency_not_installed', { agentId });
-            return true;
           }
+          if (leaf.executionTarget.kind === 'session') return true;
           return (detachedFacts?.available === true && detachedFeatures?.detachedScope === true && backend?.available === true)
             || unavailable('detached_execution_unavailable', { agentId });
         },

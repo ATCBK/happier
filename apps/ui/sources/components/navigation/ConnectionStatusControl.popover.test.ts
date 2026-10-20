@@ -961,7 +961,7 @@ describe('ConnectionStatusControl (native popover config)', () => {
             // The Home answers: the line follows the canonical owners again.
             connectionHealthState.kind = 'healthy';
             (serverFeaturesState as { snapshot: unknown }).snapshot = previousSnapshot;
-            await act(async () => screen.tree?.update(React.createElement(ConnectionStatusControl, { variant: 'sidebar', textSize: 12 })));
+            await screen.update(React.createElement(ConnectionStatusControl, { variant: 'sidebar', textSize: 12 }));
             expect(findAction('account-identity')?.subtitle).not.toBe('accountPopover.signInStatusUnavailable');
             await act(async () => screen.tree?.unmount());
         } finally {
@@ -2385,9 +2385,9 @@ describe('ConnectionStatusControl (native popover config)', () => {
             state: 'connected',
         }];
         irohDiagnosticsState.revision += 1;
-        await act(async () => screen.tree?.update(
+        await screen.update(
             React.createElement(ConnectionStatusControl, { variant: 'sidebar', textSize: 13 }),
-        ));
+        );
 
         expect(screen.getTextContent()).toContain('endpoint-after');
         expect(screen.getTextContent()).not.toContain('endpoint-before');

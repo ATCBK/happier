@@ -32,7 +32,7 @@ describe('remote payload archive process', () => {
       try {
         const options = spawnMock.mock.calls[0]?.[2] ?? execFileMock.mock.calls[0]?.[2];
         expect(options?.windowsHide).toBe(true);
-        expect(result.archiveFileName).toMatch(/\.tar$/u);
+        expect(result.archiveFileName).toMatch(/\.tar\.gz$/u);
       } finally {
         await result.cleanup();
       }

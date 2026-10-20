@@ -1,14 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import type { NormalizedMessage } from '@happier-dev/session-core/raw';
 import { AgentStateSchema } from '@happier-dev/session-core/state';
-import { reducePublicShareTranscript } from './publicShareTranscript';
+import { createPublicSharePresentationAgentState, reducePublicShareTranscript } from './publicShareTranscript';
+import { projectSessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
+import { parsePlainSessionMetadata } from '@/sync/engine/sessions/parsePlainSessionPayload';
 
 // Public layout-v1 metadata carries completion outcomes, without private arguments or answers.
-const presentationAgentState = AgentStateSchema.parse({
+const sourceAgentState = AgentStateSchema.parse({
     completedRequests: {
-        question: { tool: 'AskUserQuestion', createdAt: 1, completedAt: 2, status: 'approved' },
+        question: { tool: 'AskUserQuestion', arguments: {}, createdAt: 1, completedAt: 2, status: 'approved' },
     },
 });
+const sharedMetadata = projectSessionSharedMetadataV1({ metadata: {}, agentState: sourceAgentState });
+const presentationAgentState = createPublicSharePresentationAgentState(
+    parsePlainSessionMetadata(JSON.stringify(sharedMetadata), 1), 1,
+);
+if (!presentationAgentState) throw new Error('The shared metadata fixture has no completed request presentation');
 
 function textRow(seq: number, createdAt: number): NormalizedMessage {
     return {

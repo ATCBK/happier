@@ -1,7 +1,11 @@
 export type InferenceConcurrencyCoordinator = Readonly<{
   runExclusive: <T>(modelId: string, work: () => Promise<T>, options?: InferenceConcurrencyRunOptions) => Promise<T>;
+  /** Retain a model between streaming operations without occupying a compute slot. */
+  runWithModelLease: <T>(modelId: string, work: (runOperation: InferenceOperationRunner) => Promise<T>, options?: InferenceConcurrencyRunOptions) => Promise<T>;
   runLifecycleExclusive: <T>(modelId: string, work: () => Promise<T>, options?: InferenceConcurrencyRunOptions) => Promise<T>;
 }>;
+
+export type InferenceOperationRunner = <T>(work: () => Promise<T>) => Promise<T>;
 
 export type InferenceConcurrencyRunOptions = Readonly<{
   signal?: AbortSignal | null;
@@ -9,6 +13,8 @@ export type InferenceConcurrencyRunOptions = Readonly<{
 
 type ModelConcurrencyState = {
   activeShared: number;
+  activeOperations: number;
+  operationWaiters: Array<() => void>;
   exclusiveActive: boolean;
   waiters: Array<{
     mode: 'shared' | 'exclusive';
@@ -41,6 +47,8 @@ export function createInferenceConcurrencyCoordinator(params?: Readonly<{
     }
     const created: ModelConcurrencyState = {
       activeShared: 0,
+      activeOperations: 0,
+      operationWaiters: [],
       exclusiveActive: false,
       waiters: [],
     };
@@ -49,7 +57,8 @@ export function createInferenceConcurrencyCoordinator(params?: Readonly<{
   }
 
   function maybeDeleteState(modelId: string, state: ModelConcurrencyState): void {
-    if (!state.exclusiveActive && state.activeShared === 0 && state.waiters.length === 0) {
+    if (!state.exclusiveActive && state.activeShared === 0 && state.waiters.length === 0
+      && state.activeOperations === 0 && state.operationWaiters.length === 0) {
       stateByModelId.delete(modelId);
     }
   }
@@ -70,7 +79,7 @@ export function createInferenceConcurrencyCoordinator(params?: Readonly<{
     }
 
     if (nextWaiter.mode === 'exclusive') {
-      if (state.activeShared > 0) {
+      if (state.activeShared > 0 || state.activeOperations > 0) {
         return;
       }
       state.waiters.shift();
@@ -80,11 +89,7 @@ export function createInferenceConcurrencyCoordinator(params?: Readonly<{
       return;
     }
 
-    if (state.activeShared >= perModelConcurrency) {
-      return;
-    }
-
-    while (state.waiters[0]?.mode === 'shared' && state.activeShared < perModelConcurrency && !state.exclusiveActive) {
+    while (state.waiters[0]?.mode === 'shared' && !state.exclusiveActive) {
       const waiter = state.waiters.shift();
       if (!waiter) {
         break;
@@ -141,20 +146,57 @@ export function createInferenceConcurrencyCoordinator(params?: Readonly<{
     });
   }
 
-  async function runShared<T>(modelId: string, work: () => Promise<T>, options?: InferenceConcurrencyRunOptions): Promise<T> {
+  async function runWithModelLease<T>(modelId: string, work: (runOperation: InferenceOperationRunner) => Promise<T>, options?: InferenceConcurrencyRunOptions): Promise<T> {
     const signal = options?.signal ?? null;
     rejectIfAborted(signal);
     const state = getOrCreateState(modelId);
-    if (!state.exclusiveActive && state.waiters.length === 0 && state.activeShared < perModelConcurrency) {
+    if (!state.exclusiveActive && state.waiters.length === 0) {
       state.activeShared += 1;
     } else {
       await waitForTurn(modelId, state, 'shared', signal);
     }
 
+    let leaseOpen = true;
     try {
       rejectIfAborted(signal);
-      return await work();
+      // Existing leases must be able to finish even if model removal has queued.
+      // Compute admission is independent of lifecycle admission for that reason.
+      return await work(async <R>(operation: () => Promise<R>): Promise<R> => {
+        if (!leaseOpen) throw createInferenceCancelledError();
+        rejectIfAborted(signal);
+        if (state.activeOperations < perModelConcurrency) {
+          state.activeOperations += 1;
+        } else {
+          await new Promise<void>((resolve, reject) => {
+            const admit = () => {
+              signal?.removeEventListener('abort', abort);
+              resolve();
+            };
+            const abort = () => {
+              const index = state.operationWaiters.indexOf(admit);
+              if (index < 0) return;
+              state.operationWaiters.splice(index, 1);
+              signal?.removeEventListener('abort', abort);
+              reject(createInferenceCancelledError());
+            };
+            state.operationWaiters.push(admit);
+            signal?.addEventListener('abort', abort, { once: true });
+          });
+        }
+        try {
+          if (!leaseOpen) throw createInferenceCancelledError();
+          rejectIfAborted(signal);
+          return await operation();
+        } finally {
+          const next = state.operationWaiters.shift();
+          if (next) next();
+          else state.activeOperations -= 1;
+          drainWaiters(modelId, state);
+          maybeDeleteState(modelId, state);
+        }
+      });
     } finally {
+      leaseOpen = false;
       state.activeShared = Math.max(0, state.activeShared - 1);
       drainWaiters(modelId, state);
       maybeDeleteState(modelId, state);
@@ -165,7 +207,7 @@ export function createInferenceConcurrencyCoordinator(params?: Readonly<{
     const signal = options?.signal ?? null;
     rejectIfAborted(signal);
     const state = getOrCreateState(modelId);
-    if (!state.exclusiveActive && state.activeShared === 0 && state.waiters.length === 0) {
+    if (!state.exclusiveActive && state.activeShared === 0 && state.activeOperations === 0 && state.waiters.length === 0) {
       state.exclusiveActive = true;
     } else {
       await waitForTurn(modelId, state, 'exclusive', signal);
@@ -182,7 +224,8 @@ export function createInferenceConcurrencyCoordinator(params?: Readonly<{
   }
 
   return {
-    runExclusive: async <T>(modelId: string, work: () => Promise<T>, options?: InferenceConcurrencyRunOptions): Promise<T> => await runShared(modelId, work, options),
+    runExclusive: async <T>(modelId: string, work: () => Promise<T>, options?: InferenceConcurrencyRunOptions): Promise<T> => await runWithModelLease(modelId, runOperation => runOperation(work), options),
+    runWithModelLease,
     runLifecycleExclusive,
   };
 }

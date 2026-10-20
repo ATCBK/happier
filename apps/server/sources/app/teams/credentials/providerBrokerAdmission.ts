@@ -1,3 +1,4 @@
+import { z } from 'zod/mini';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
 import { PROVIDER_BROKER_ROUTE_AUDIENCE_V1, ProviderBrokerOpenRequestV1Schema, ProviderBrokerRequestAdmissionV1Schema, SignedProviderBrokerRouteGrantV1Schema, type ProviderBrokerAdmissionFailureCodeV1, type ProviderBrokerOpenRequestV1, type ProviderBrokerOpenResponseV1, type ProviderBrokerRequestAdmissionV1, type SignedProviderBrokerRouteGrantV1 } from '@happier-dev/protocol/providers/brokerRouteGrantV1';
 import { DIRECT_ROUTE_GRANT_TTL_MS } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantCachePolicyV1';
@@ -15,7 +16,9 @@ import { auth } from '@/app/auth/auth';
 import { classifyMachineAvailabilityState } from '@/app/machines/machineStateGuards';
 import type { MachineDaemonPresenceInventory } from '@/app/machines/machineDaemonPresence';
 import type { SessionAccessAuthentication } from '@/app/session/access/sessionAccessAuthentication';
-import { inTx, type Tx } from '@/storage/inTx';
+import { inTx, TransactionReplayRequiredError, type Tx } from '@/storage/inTx';
+import { acquireAccountChangePublicationLocksInTx } from '@/app/changes/markAccountChanged';
+import { readSessionAccountCursorAudienceInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 import { resolveTeamCredentialBrokerMachineForOpenInTx } from './brokerMachineEligibility';
 import { resolveTeamCredentialBrokerPlacementInTx, resolveTeamCredentialBrokerPlacementFingerprint } from './brokerPlacementResolver';
 import { resolveTeamCredentialEntitlementInTx } from './resourceAccess';
@@ -603,6 +606,13 @@ async function authorizeTeamCredentialProviderBrokerOpenDurableInTx(
     request: ProviderBrokerOpenRequestV1,
     executionRun: CurrentExecutionRun | null,
 ): Promise<BrokerOpenDurableAuthorization | Failure> {
+    const resourceIdentity = await tx.teamCredentialResource.findUnique({
+        where: { id: request.resourceId }, select: { custodianAccountId: true },
+    });
+    const admissionSessionId = request.consumer.kind === 'session' ? request.consumer.sessionId : executionRun?.parentSessionId;
+    const admissionAudience = await readSessionAccountCursorAudienceInTx(tx, admissionSessionId ? [admissionSessionId] : [],
+        [input.actorAccountId, ...(resourceIdentity ? [resourceIdentity.custodianAccountId] : [])]);
+    await acquireAccountChangePublicationLocksInTx(tx, admissionAudience.accountIds, { includeSingleAccount: true });
     if (!await auth.isSignedCredentialCurrent(tx, input.actorAccountId, input.authentication.tokenEpoch)) {
         return failure('operation_not_current');
     }
@@ -719,6 +729,9 @@ async function authorizeTeamCredentialProviderBrokerOpenDurableInTx(
         },
     });
     if (!resource) return failure('resource_forbidden');
+    if (resource.custodianAccountId !== resourceIdentity?.custodianAccountId) {
+        throw new TransactionReplayRequiredError('transaction-account-audience-changed');
+    }
     if (pinsRequestedRevision && resource.revision !== request.expectedResourceRevision) return failure('resource_changed');
     if (refreshAuthority !== null && (
         refreshAuthority.payload.teamId !== resource.teamId
@@ -733,11 +746,14 @@ async function authorizeTeamCredentialProviderBrokerOpenDurableInTx(
         return failure('resource_unavailable');
     }
     const source = TeamCredentialSourceBindingV1Schema.safeParse(rawSource);
-    const policy = TeamCredentialRequestPolicyV1Schema.nullable().safeParse(rawPolicy);
+    const policy = z.nullable(TeamCredentialRequestPolicyV1Schema).safeParse(rawPolicy);
     if (!source.success || !policy.success) return failure('resource_unavailable');
+    // The Runner's reviewed selection remains bound to its original request.
+    // Established refreshes recheck current policy above without advancing
+    // that activation identity; fresh opens still pin the resource revision.
     if (runnerSelection !== null && (
         runnerSelection.resourceId !== request.resourceId
-        || runnerSelection.revision !== resource.revision
+        || runnerSelection.revision !== request.expectedResourceRevision
         || !pluginJsonValuesEqual(runnerSelection.application, request.application)
         || runnerSelection.sourceRevision !== request.sourceRevision
     )) return failure('resource_changed');
@@ -1146,6 +1162,10 @@ async function admitTeamCredentialProviderBrokerRequestInTx(
 ): Promise<TeamCredentialProviderBrokerRequestAdmissionResult> {
     const { authority, expectedResourceRevision, requestFacts } = request;
     const grant = authority.payload;
+    const admissionSessionId = grant.consumer.kind === 'session' ? grant.consumer.sessionId : executionRun?.parentSessionId;
+    const admissionAudience = await readSessionAccountCursorAudienceInTx(tx, admissionSessionId ? [admissionSessionId] : [],
+        [grant.initiator.accountId, grant.target.custodianAccountId]);
+    await acquireAccountChangePublicationLocksInTx(tx, admissionAudience.accountIds, { includeSingleAccount: true });
     if (grant.target.custodianAccountId !== input.authenticatedBrokerAccountId) return failure('resource_forbidden');
     const routeMatchesApplication = (
         requestFacts.routeKind === 'openai_responses' && grant.application.protocol === 'openai-responses'

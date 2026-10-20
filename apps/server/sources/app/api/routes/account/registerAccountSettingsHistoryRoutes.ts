@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { AccountSettingsV2HistoryDetailResponseSchema, AccountSettingsV2HistoryListResponseSchema, AccountSettingsV2HistoryRestoreClientUpdateRequiredResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import {
@@ -9,7 +9,7 @@ import {
 } from "@happier-dev/protocol/account/settings/accountSettingsApiV2";
 import { mutateAccountSettingsHistorySnapshotInTx } from "@/app/accountSettings/accountSettingsHistoryRepository";
 import { ACCOUNT_SETTINGS_HISTORY_MAX_AGGREGATE_BYTES } from "@/app/accountSettings/accountSettingsHistoryConfig";
-import { inTx } from "@/storage/inTx";
+import { inReadSnapshot, inTx } from "@/storage/inTx";
 import { PresentUserRequiredResponseSchema, requirePresentUser } from "@/app/api/utils/requirePresentUser";
 
 import {
@@ -28,7 +28,7 @@ import {
 } from "./accountSettingsStorageUnavailableRouteError";
 
 const AccountSettingsHistoryVersionParamsSchema = z.object({
-    version: z.coerce.number().int().min(0),
+    version: z.coerce.number().check(z.int(), z.minimum(0)),
 });
 
 const AccountSettingsHistoryErrorResponseSchema = z.object({
@@ -84,7 +84,7 @@ export function registerAccountSettingsHistoryRoutes(app: Fastify): void {
         },
     }, async (request, reply) => {
         try {
-            return await inTx(async tx => {
+            return await inReadSnapshot(async tx => {
                 const account = await tx.account.findUnique({
                     where: { id: request.userId },
                     select: {
@@ -126,7 +126,7 @@ export function registerAccountSettingsHistoryRoutes(app: Fastify): void {
                         byteLength: Buffer.byteLength(snapshot.settingsDbValue ?? "", "utf8"),
                     })),
                 });
-            }, { readOnly: true, isolationLevel: "Serializable" /* Account key/mode readiness and retained history inventory must share a snapshot. */ });
+            }, { transactionClass: "account-settings-history-list" });
         } catch (error) {
             const storageUnavailable = resolveAccountSettingsStorageUnavailableRouteError(error);
             if (storageUnavailable) {
@@ -155,7 +155,7 @@ export function registerAccountSettingsHistoryRoutes(app: Fastify): void {
         const { version } = request.params as { version: number };
 
         try {
-            return await inTx(async tx => {
+            return await inReadSnapshot(async tx => {
                 const account = await tx.account.findUnique({
                     where: { id: request.userId },
                     select: {
@@ -202,7 +202,7 @@ export function registerAccountSettingsHistoryRoutes(app: Fastify): void {
                     version: snapshot.version,
                     createdAt: snapshot.createdAt.toISOString(),
                 });
-            }, { readOnly: true, isolationLevel: "Serializable" /* Account key/mode admission and the disclosed history envelope must share a snapshot. */ });
+            }, { transactionClass: "account-settings-history-read" });
         } catch (error) {
             const storageUnavailable = resolveAccountSettingsStorageUnavailableRouteError(error);
             if (storageUnavailable) {

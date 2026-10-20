@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -18,6 +19,8 @@ import { syncBundledWorkspacePackages } from '../../../scripts/workspaces/syncBu
 
 import { createTempDirSync } from '../src/testkit/fs/tempDir';
 import { buildCliDist } from './build.mjs';
+import { runPkgrollBuild } from './runPkgrollBuild.mjs';
+import { readHappyCliRuntimeInputFreshness } from '../../stack/scripts/utils/proc/cli_runtime_inputs.mjs';
 
 function writeBuildPackageManifest(packageRoot: string) {
   writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({
@@ -28,6 +31,63 @@ function writeBuildPackageManifest(packageRoot: string) {
 }
 
 describe('buildCliDist', () => {
+  it.each([false, true])('captures the real native exit helper across builds without retaining a removed input (private snapshot: %s)', async (skipLock) => {
+    const packageRoot = createTempDirSync('happier-cli-build-native-exit-');
+    try {
+      writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({
+        name: '@happier-dev/build-fixture', version: '0.0.0', main: './dist/index.cjs', module: './dist/index.mjs',
+      }));
+      mkdirSync(join(packageRoot, 'src/terminal/host'), { recursive: true });
+      mkdirSync(join(packageRoot, 'scripts'));
+      const helperPath = join(packageRoot, 'scripts/native_process_exit.cjs');
+      cpSync(fileURLToPath(new URL('./native_process_exit.cjs', import.meta.url)), helperPath);
+      const helperDeclarationPath = join(packageRoot, 'scripts/native_process_exit.d.cts');
+      cpSync(fileURLToPath(new URL('./native_process_exit.d.cts', import.meta.url)), helperDeclarationPath);
+      writeFileSync(join(packageRoot, 'scripts/not-a-runtime-input.cjs'), 'throw new Error("must not be captured");\n');
+      writeFileSync(join(packageRoot, 'src/terminal/host/borrowed.ts'), [
+        "import { isNativeProcessExited } from '../../../scripts/native_process_exit.cjs';",
+        "export const valid = isNativeProcessExited({ type: 'terminal-native-exited', code: 0, signal: null });",
+        "export const invalid = isNativeProcessExited({ type: 'terminal-native-exited', code: null, signal: null });",
+      ].join('\n'));
+      writeFileSync(join(packageRoot, 'src/index.ts'), "export { valid, invalid } from './terminal/host/borrowed';\n");
+      const roots: string[] = [];
+      const initialFreshness = await readHappyCliRuntimeInputFreshness(packageRoot);
+      let capturedHelper = readFileSync(helperPath, 'utf8');
+      const options = {
+        packageRoot, repoRoot: packageRoot, lockPath: join(packageRoot, 'build.lock'), skipLock,
+        env: { HAPPIER_CLI_BUILD_OUTPUT_DIR: '', HAPPIER_WORKSPACE_BUILD_MODE: 'qa-runtime', npm_lifecycle_event: 'build:compiled' },
+        // Keep the real executable bundler; observe only its admitted source boundary.
+        runPkgrollBuildImpl: async (params: Parameters<typeof runPkgrollBuild>[0]) => {
+          const root = dirname(params.packageJsonPath);
+          roots.push(root);
+          expect(existsSync(join(root, 'scripts/not-a-runtime-input.cjs'))).toBe(false);
+          expect(readFileSync(join(root, 'scripts/native_process_exit.d.cts'), 'utf8'))
+            .toBe(readFileSync(helperDeclarationPath, 'utf8'));
+          if (roots.length === 1) writeFileSync(helperPath, `${capturedHelper}\n// New authored generation after admission.\n`);
+          await runPkgrollBuild(params);
+          expect(readFileSync(join(root, 'scripts/native_process_exit.cjs'), 'utf8')).toBe(capturedHelper);
+        },
+      };
+      await buildCliDist(options);
+      expect(await import(join(packageRoot, 'dist/index.mjs'))).toMatchObject({ valid: true, invalid: false });
+      const firstManifest = JSON.parse(readFileSync(join(packageRoot, 'dist/.build-manifest.json'), 'utf8'));
+      expect(firstManifest.inputFingerprint).toBe(initialFreshness?.fingerprint);
+      const changedFreshness = await readHappyCliRuntimeInputFreshness(packageRoot);
+      expect(changedFreshness?.fingerprint).not.toBe(initialFreshness?.fingerprint);
+      capturedHelper = readFileSync(helperPath, 'utf8');
+      await buildCliDist(options);
+      expect(JSON.parse(readFileSync(join(packageRoot, 'dist/.build-manifest.json'), 'utf8')).inputFingerprint)
+        .toBe(changedFreshness?.fingerprint);
+      expect(roots[1] === roots[0]).toBe(!skipLock);
+      rmSync(helperPath);
+      await expect(buildCliDist({ ...options, runPkgrollBuildImpl: async (params: Parameters<typeof runPkgrollBuild>[0]) => {
+        expect(existsSync(join(dirname(params.packageJsonPath), 'scripts/native_process_exit.cjs'))).toBe(false);
+        await runPkgrollBuild(params);
+      } })).rejects.toMatchObject({ code: 'EEXIT', exitCode: 1 });
+      expect(readFileSync(join(packageRoot, 'dist/.build-manifest.json'), 'utf8')).toContain(changedFreshness!.fingerprint);
+    } finally { rmSync(packageRoot, { recursive: true, force: true }); }
+  });
+
   it.each([false, true])('consumes checked source partitions without another compiler and rejects a missing declaration (%s)', async (missingLeaf) => {
     const packageRoot = createTempDirSync('happier-cli-prepared-declarations-');
     try {
@@ -51,13 +111,13 @@ describe('buildCliDist', () => {
         types: [], skipLibCheck: true, rootDir: 'src', noEmit: true, declaration: true,
       }, include: ['src/**/*.ts'] }));
       writeFileSync(join(packageRoot, 'tsconfig.build.json'), '{"extends":"./tsconfig.json"}');
-      const projectNames = ['foundation', 'services', 'core', 'source', 'test'];
+      const projectNames = ['foundation', 'services', 'core', 'source', 'test', 'test-ui'];
       for (const [index, name] of projectNames.entries()) {
         writeFileSync(join(packageRoot, `tsconfig.${name}.json`), JSON.stringify({
           extends: './tsconfig.json', compilerOptions: { composite: true, noEmit: false,
             emitDeclarationOnly: true, disableSourceOfProjectReferenceRedirect: true,
             outDir: `node_modules/.cache/${name}`, tsBuildInfoFile: `node_modules/.cache/${name}.tsbuildinfo` },
-          files: [name === 'test' ? 'src/index.test.ts' : 'src/foundation.ts'], include: [],
+          files: name === 'test-ui' ? [] : [name === 'test' ? 'src/index.test.ts' : 'src/foundation.ts'], include: [],
           references: projectNames.slice(0, index).map(previous => ({ path: `./tsconfig.${previous}.json` })),
         }));
       }
@@ -183,9 +243,13 @@ describe('buildCliDist', () => {
       writeFileSync(join(packageRoot, 'src/local.ts'), 'export const generation = "captured";\n');
       writeFileSync(join(packageRoot, 'src/index.ts'), [
         "import { generation } from '@/local';",
+        "import { z } from 'zod/mini';",
         "import { StoredMachinePublishedMetadataV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';",
         'const exactGeneration: "captured" = generation;',
-        'export const MachineMetadataSchema = StoredMachinePublishedMetadataV1Schema;',
+        // Match the published API owner: re-export its declaration identity,
+        // rather than inventing a new inferred schema value in the consumer.
+        "export { StoredMachinePublishedMetadataV1Schema as MachineMetadataSchema } from '@happier-dev/protocol/machines/machinePublishedContentV1';",
+        'export type MachineMetadata = z.infer<typeof StoredMachinePublishedMetadataV1Schema>;',
       ].join('\n'));
       const authoredConfig = JSON.stringify({
         compilerOptions: { target: 'ESNext', module: 'ESNext', moduleResolution: 'Bundler', rootDir: 'src',
@@ -381,7 +445,7 @@ describe('buildCliDist', () => {
         packageRoot,
         repoRoot: packageRoot,
         lockPath: join(packageRoot, 'build.lock'),
-        env: { HAPPIER_CLI_BUILD_OUTPUT_DIR: '' },
+        env: { HAPPIER_CLI_BUILD_OUTPUT_DIR: '', HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
         // Pkgroll is the compiler/process boundary. Keep source admission,
         // TypeScript, cache handling, the lock and publication real.
         runPkgrollBuildImpl: ({ packageJsonPath, outputDir }: { packageJsonPath: string; outputDir: string }) => {
@@ -435,6 +499,7 @@ describe('buildCliDist', () => {
       await buildCliDist({
         packageRoot,
         repoRoot: packageRoot,
+        env: { HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
         lockPath,
         lockTimeoutMs: 500,
         lockPollIntervalMs: 10,
@@ -492,6 +557,7 @@ describe('buildCliDist', () => {
       await buildCliDist({
         packageRoot,
         repoRoot: packageRoot,
+        env: { HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
         skipLock: true,
         rmDistImpl: async () => {},
         resolveTypeScriptCliInvocationImpl: () => ({
@@ -702,6 +768,7 @@ describe('buildCliDist', () => {
       await expect(buildCliDist({
         packageRoot,
         repoRoot: packageRoot,
+        env: { HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
         skipLock: true,
         rmDistImpl: async () => {},
         resolveTypeScriptCliInvocationImpl: () => ({
@@ -743,6 +810,7 @@ describe('buildCliDist', () => {
     try {
       await buildCliDist({
         packageRoot: aliasPackageRoot,
+        env: { HAPPIER_WORKSPACE_BUILD_MODE: 'strict' },
         rmDistImpl: async () => {},
         resolveTypeScriptCliInvocationImpl: () => ({
           argsPrefix: ['/canonical/runTypeScriptCli.mjs'],

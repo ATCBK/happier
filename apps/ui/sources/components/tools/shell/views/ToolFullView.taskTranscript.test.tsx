@@ -66,9 +66,11 @@ vi.mock('@/sync/sync', () => ({
     },
 }));
 
-vi.mock('@legendapp/list/react-native', async () => {
+vi.mock('@legendapp/list/react-native', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@legendapp/list/react-native')>();
     const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
     const mock = createCapturingLegendListMock({
+        original,
         resolveState: () => legendState.current,
     });
     legendState.mockState = mock.state;

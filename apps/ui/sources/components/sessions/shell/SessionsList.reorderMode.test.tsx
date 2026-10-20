@@ -147,18 +147,6 @@ installSessionShellCommonModuleMocks({
             Platform: {
                 OS: 'web',
             },
-            FlatList: ({ data, renderItem, keyExtractor, ListHeaderComponent, ...rest }: any) =>
-                React.createElement(
-                    'FlatList',
-                    { ...rest },
-                    React.isValidElement(ListHeaderComponent)
-                        ? ListHeaderComponent
-                        : ListHeaderComponent ? React.createElement(ListHeaderComponent) : null,
-                    (data ?? []).map((item: any, index: number) => {
-                        const key = keyExtractor ? keyExtractor(item, index) : String(index);
-                        return React.createElement(React.Fragment, { key }, renderItem({ item, index }));
-                    }),
-                ),
         });
     },
     router: async () => {
@@ -172,6 +160,10 @@ installSessionShellCommonModuleMocks({
         const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
         return createTextModuleMock({ translate: (key) => key });
     },
+});
+vi.mock('@legendapp/list/react-native', async () => {
+    const legendListModule = await import('@/dev/testkit/mocks/legendList');
+    return { LegendList: legendListModule.createCapturingLegendListMock({ renderItems: true }).module.LegendList };
 });
 vi.doUnmock('@/sync/domains/state/storage');
 vi.doUnmock('@/hooks/session/useDraft');
@@ -263,7 +255,7 @@ function SessionsList(props: React.ComponentProps<typeof SessionsListView>) {
 }
 async function renderSessionsList() {
     storage.getState().applySettingsLocal({
-        compactSessionView: false, compactSessionViewMinimal: false, sessionTagsEnabled: true,
+        sessionListDensity: 'detailed', sessionTagsEnabled: true,
         sessionListOrderingModeV1, sessionListFolderSortModeV1, sessionListSectionModeV1,
         sessionListActiveGroupingV1, sessionListInactiveGroupingV1, hideInactiveSessions,
     });

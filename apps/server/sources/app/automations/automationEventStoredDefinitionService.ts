@@ -340,7 +340,7 @@ export async function readAutomationEventStoredDefinitionsV1(params: Readonly<{
             durablePushEndpoints.map((endpoint) => [endpoint.webhookEndpointId, endpoint]),
         );
 
-        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+        const accountFence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
         if (accountFence.status !== "ready") fail("account_content_unavailable");
 
         const catalog = await tx.automationEventCatalogState.findUnique({
@@ -574,5 +574,5 @@ export async function readAutomationEventStoredDefinitionsV1(params: Readonly<{
                 })
                 : null,
         });
-    });
+    }, { transactionClass: "automation-event-definition-read" });
 }

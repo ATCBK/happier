@@ -20,6 +20,8 @@ export type HappierDecisionButtonProps = HappierDecisionAction & Readonly<{
 
 export type HappierDecisionBarProps = Readonly<{
   approve?: HappierDecisionAction;
+  /** A second way to approve with a wider consequence ("Always in happier"); drawn beside the primary. */
+  alternative?: HappierDecisionAction;
   reject?: HappierDecisionAction;
   /** Supplied only when the caller's consent contract offers dismissal or cancellation. */
   dismiss?: HappierDecisionAction;
@@ -35,6 +37,7 @@ export function HappierDecisionBar(props: HappierDecisionBarProps) {
   const { Button, size = 'normal', layout = 'inline' } = props;
   const actions = [
     { kind: 'approve', action: props.approve, emphasis: 'primary' },
+    { kind: 'alternative', action: props.alternative, emphasis: 'secondary' },
     { kind: 'dismiss', action: props.dismiss, emphasis: 'plain' },
     { kind: 'reject', action: props.reject, emphasis: 'secondary' },
   ] as const;

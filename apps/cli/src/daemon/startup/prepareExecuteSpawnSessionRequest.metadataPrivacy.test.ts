@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createAccountScopedCryptoMaterialSnapshotV1,
@@ -10,6 +10,9 @@ import {
 } from '@happier-dev/protocol';
 import type { Credentials } from '@/persistence';
 import { SPAWN_SESSION_ERROR_CODES } from '@/session/shared/spawnSessionContract';
+import { configuration } from '@/configuration';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 
 const mocks = vi.hoisted(() => ({
   fetchSessionByIdCompat: vi.fn(),
@@ -20,13 +23,6 @@ const mocks = vi.hoisted(() => ({
   })),
   prepareDaemonSpawnChildEnvironment: vi.fn(),
   routeSpawnModeAndWaitForWebhook: vi.fn(),
-  resolveCurrentExternalSessionAgentIdentity: vi.fn(async () => ({
-    identity: {
-      pluginId: 'happier.agent.codex',
-      localId: 'codex',
-    },
-    sourceKinds: ['codexHome'],
-  })),
 }));
 
 vi.mock('@/session/transport/http/sessionsHttp', () => ({
@@ -49,26 +45,31 @@ vi.mock('../spawn/routeSpawnModeAndWaitForWebhook', () => ({
   routeSpawnModeAndWaitForWebhook: mocks.routeSpawnModeAndWaitForWebhook,
 }));
 
-vi.mock('@/api/session/external/linking/qualifiedLinkIdentityRegistry', () => ({
-  resolveCurrentExternalSessionAgentIdentity:
-    mocks.resolveCurrentExternalSessionAgentIdentity,
-}));
-
-vi.mock('@/session/runtime/catalogHooks', () => ({
-  getVendorResumeSupport: vi.fn(async () => () => true),
-}));
-
 vi.mock('@/ui/logger', () => ({
   logger: {
     debug: vi.fn(),
     debugLargeJson: vi.fn(),
     info: vi.fn(),
+    infoFile: vi.fn(),
     warn: vi.fn(),
   },
 }));
 
 import { prepareExecuteSpawnSessionRequest } from './prepareExecuteSpawnSessionRequest';
 import { executeSpawnSessionRequest } from './executeSpawnSessionRequest';
+
+let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
+beforeAll(async () => {
+  runtime = await createAdmittedPluginRuntimeFixture({
+    happyHomeDir: configuration.happyHomeDir,
+    controller: pluginReloadController,
+    runtimeOptions: { pluginIds: ['happier.agent.codex'] },
+  });
+});
+afterAll(async () => {
+  try { await runtime?.dispose(); }
+  finally { await pluginReloadController.shutdown(); }
+});
 
 const credentials = {
   token: 'token',
@@ -121,7 +122,7 @@ describe('prepareExecuteSpawnSessionRequest metadata privacy authority', () => {
     const sessionCreationTag = SessionCreationTagV1Schema.parse(`create:v1:${'a'.repeat(43)}`);
     const ownerMetadata = SessionOwnerMetadataV1Schema.parse({
       v: 1, workspace: { path: '/private/chat', machineId: 'machine-1' },
-      runtime: { acpConfiguredBackendV1: { v: 1, updatedAt: 1, backendId: 'my-acp', title: 'My ACP' } },
+      nativeSession: { runtimeDescriptorV1: { v: 1, agentId: 'codex', agent: { backendMode: 'appServer' } } },
     });
     mocks.fetchSessionByIdCompat.mockResolvedValueOnce(buildSplitSession(sealSessionOwnerMetadataEnvelopeV1({
       material: credentials.encryption, ownerMetadata, randomBytes: (length) => new Uint8Array(length).fill(7),
@@ -143,7 +144,7 @@ describe('prepareExecuteSpawnSessionRequest metadata privacy authority', () => {
     const ownerMetadata = SessionOwnerMetadataV1Schema.parse({
       v: 1,
       workspace: { path: '/private/chat', machineId: 'machine-1', sessionDirectoryV1: { v: 1, kind: 'managed' } },
-      runtime: { acpConfiguredBackendV1: { v: 1, updatedAt: 1, backendId: 'my-acp', title: 'My ACP' } },
+      nativeSession: { runtimeDescriptorV1: { v: 1, agentId: 'codex', agent: { backendMode: 'appServer' } } },
     });
     mocks.fetchSessionByIdCompat.mockResolvedValueOnce(buildSplitSession(sealSessionOwnerMetadataEnvelopeV1({
       material: credentials.encryption, ownerMetadata, randomBytes: (length) => new Uint8Array(length).fill(7),

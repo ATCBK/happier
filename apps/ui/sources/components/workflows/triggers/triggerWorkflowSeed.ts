@@ -7,6 +7,7 @@ import {
 import { readMachineControlTargetForSession } from '@/sync/ops/sessionMachineTarget';
 import { readWorkflowEditorDraftSeed, storeWorkflowEditorDraftSeed } from '@/sync/domains/workflows/workflowEditorDraftSeed';
 import type { WorkflowActionCallerContext } from '@/sync/domains/workflows/callWorkflowAction';
+import type { ServerAccountScope, ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 /**
  * Save as workflow (F1; 04 §5.4; 07 S16b): a trigger that holds its own steps opens them as an
@@ -31,18 +32,18 @@ export function buildTriggerWorkflowSeed(target: TriggerTargetV1, retarget: Trig
     return target.kind === 'inline' ? { definition: target.definition, retarget } : null;
 }
 
-export function storeTriggerWorkflowSeed(seed: TriggerWorkflowSeed): string {
-    return storeWorkflowEditorDraftSeed(TRIGGER_WORKFLOW_SEED_KIND, seed);
+export function storeTriggerWorkflowSeed(seed: TriggerWorkflowSeed, accountLifetime?: ServerAccountScopeLifetime | null): string {
+    return storeWorkflowEditorDraftSeed(TRIGGER_WORKFLOW_SEED_KIND, seed, accountLifetime);
 }
 
 /** Read safely during render; committed intake consumes the handle against history reuse. */
-export function readTriggerWorkflowSeed(id: string): TriggerWorkflowSeed | null {
-    return readWorkflowEditorDraftSeed(TRIGGER_WORKFLOW_SEED_KIND, id);
+export function readTriggerWorkflowSeed(id: string, scope?: ServerAccountScope | null): TriggerWorkflowSeed | null {
+    return readWorkflowEditorDraftSeed(TRIGGER_WORKFLOW_SEED_KIND, id, scope);
 }
 
 /** Points the originating trigger at the saved workflow, through that trigger's own Action. */
 export async function retargetTriggerToWorkflow(retarget: TriggerRetarget, workflowRef: string,
-    caller?: WorkflowActionCallerContext): Promise<void> {
+    caller?: WorkflowActionCallerContext, accountLifetime?: ServerAccountScopeLifetime | null): Promise<void> {
     const target = { kind: 'workflow', ref: workflowRef } as const;
     if (retarget.scope === 'account') {
         await updateWorkflowTrigger({
@@ -50,7 +51,8 @@ export async function retargetTriggerToWorkflow(retarget: TriggerRetarget, workf
             ...(retarget.triggerId === undefined ? {} : { triggerId: retarget.triggerId }),
             expectedRevision: retarget.expectedRevision,
             patch: { target },
-        }, caller === undefined ? {} : { context: caller, signal: caller.signal });
+        }, { ...(caller === undefined ? {} : { context: caller, signal: caller.signal }),
+            ...(accountLifetime === undefined ? {} : { accountLifetime }) });
         return;
     }
     const machineId = readMachineControlTargetForSession(retarget.sessionId)?.machineId;

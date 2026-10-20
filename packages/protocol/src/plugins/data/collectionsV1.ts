@@ -14,9 +14,9 @@ import { PluginContributionLocalIdSchema } from '../contributionIdentity.js';
 import { PluginIdSchema } from '../pluginId.js';
 import { PluginUiArtifactDigestV1Schema } from '../ui/artifactIntegrity.js';
 import { PluginManifestV2Schema } from '../manifest/v2.js';
-import {
-  type PluginJsonSchemaV2,
-  type PluginJsonValueV2,
+import type {
+  PluginJsonSchemaV2,
+  PluginJsonValueV2,
 } from '../contributions/publicTypes.js';
 import {
   assertStrictPluginJsonValue,

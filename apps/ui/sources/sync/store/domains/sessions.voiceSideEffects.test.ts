@@ -169,6 +169,8 @@ describe('sessions domain: no voice side effects', () => {
                         state: 'error',
                         input: { q: 'continue?' },
                         createdAt: 100,
+                        startedAt: 100,
+                        description: null,
                         completedAt: 101,
                         result: { error: 'Request interrupted' },
                         permission: {
@@ -190,7 +192,7 @@ describe('sessions domain: no voice side effects', () => {
             isLoaded: true,
         });
         state.sessionMessages.s1.messagesMap = state.sessionMessages.s1.messagesById;
-        state.sessionListRowsByServerId.server_1 = { s1: createSessionListRenderableSessionFixture({
+        state.sessionListRowsByServerId = { ...state.sessionListRowsByServerId, server_1: { s1: createSessionListRenderableSessionFixture({
             id: 's1',
             seq: 0,
             createdAt: 1,
@@ -208,8 +210,8 @@ describe('sessions domain: no voice side effects', () => {
             presence: 'online',
             hasPendingPermissionRequests: false,
             hasPendingUserActionRequests: false,
-        }) };
-        state.ordinarySessionListMembershipByServerId.server_1 = ['s1'];
+        }) } };
+        state.ordinarySessionListMembershipByServerId = { ...state.ordinarySessionListMembershipByServerId, server_1: ['s1'] };
 
         domain.applySessions([
             createSessionFixture({

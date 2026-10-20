@@ -5,6 +5,7 @@ import {
 import * as React from 'react';
 import { AppState, Platform } from 'react-native';
 import { router } from 'expo-router';
+import { admitInternalRouteHref } from '@/utils/path/routeUtils';
 import { addUserInteractionListener } from 'expo-widgets';
 import { HAPPIER_FOCUS_LIVE_ACTIVITY_NAME } from '@happier-dev/protocol/activity/live/remoteUpdates';
 import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
@@ -530,16 +531,20 @@ export function ActivitySurfacesRuntime(): React.ReactElement | null {
         candidates: sourceOverview.candidates,
         surface: 'live_activity',
         resolveAccountSettings,
+        accountDeliveryMutesByServerId: activitySource.accountDeliveryMutesByServerId,
+        audienceScopes: activitySource.audienceScopes,
         localSettings,
         now: deliveryNow,
-    }), [deliveryNow, localSettings, resolveAccountSettings, sourceOverview]);
+    }), [activitySource.accountDeliveryMutesByServerId, activitySource.audienceScopes, deliveryNow, localSettings, resolveAccountSettings, sourceOverview]);
     const widgetAdmission = React.useMemo(() => resolveActivitySurfaceDeliveryAdmission({
         candidates: sourceOverview.candidates,
         surface: 'home_widget',
         resolveAccountSettings,
+        accountDeliveryMutesByServerId: activitySource.accountDeliveryMutesByServerId,
+        audienceScopes: activitySource.audienceScopes,
         localSettings,
         now: deliveryNow,
-    }), [deliveryNow, localSettings, resolveAccountSettings, sourceOverview]);
+    }), [activitySource.accountDeliveryMutesByServerId, activitySource.audienceScopes, deliveryNow, localSettings, resolveAccountSettings, sourceOverview]);
     const liveActivityOverview = React.useMemo(
         () => buildActivityOverviewFromCandidates(liveActivityAdmission.candidates),
         [liveActivityAdmission],
@@ -1076,7 +1081,7 @@ export function ActivitySurfacesRuntime(): React.ReactElement | null {
                     return;
                 }
 
-                router.push(command.route);
+                router.push(admitInternalRouteHref(command.route));
             });
         } catch {
             return () => undefined;

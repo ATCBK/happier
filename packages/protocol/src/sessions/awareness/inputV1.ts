@@ -1,5 +1,5 @@
 import type { PrimaryTurnStatusV1 } from '../control/runtimeIssueV1.js';
-import type { SessionReportsToV1, SessionReportsV1 } from '../relations/sessionReportsToV1.js';
+import type { SessionManagerV1, SessionManagedSessionsV1 } from '../follow/sessionManagerV1.js';
 import type { SessionRuntimeActivityState } from '../runtime/activity/sessionRuntimeActivity.js';
 import type { SessionWorkStateV1 } from '../work/state/sessionWorkStateV1.js';
 import type { SessionWorkflowActivityHeadlineV1 } from '../work/workflow/sessionWorkflowActivityHeadlineV1.js';
@@ -91,11 +91,13 @@ export type ProjectSessionAwarenessV1Input = Readonly<{
   nowMs: number;
   sessionId: string;
   origin?: SessionAwarenessOriginV1 | null;
-  reportsTo?: SessionReportsToV1 | null;
-  reports?: SessionReportsV1 | null;
+  manager?: SessionManagerV1 | null;
+  managedSessions?: SessionManagedSessionsV1 | null;
   pendingReviewRuns?: number | null;
   /** Already normalized and privacy-filtered by the acquisition owner. */
   title?: string | null;
+  /** Authored explanation only; never evidence for lifecycle or operational state. */
+  statusReason?: string | null;
   lifecycle: SessionLifecycleAwarenessInputV1;
   runtime: SessionRuntimeAwarenessInputV1;
   pending: SessionPendingAwarenessInputV1;

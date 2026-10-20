@@ -1,6 +1,9 @@
 import * as React from 'react';
 import {
     PLUGIN_SESSION_HOOK_STATUS_INVENTORY_MAX_ROWS,
+    PluginSessionHookInstallResponseV1Schema,
+    PluginSessionHookToggleResponseV1Schema,
+    PluginSessionHookUninstallResponseV1Schema,
     type PluginSessionHookInstallInputV1,
     type PluginSessionHookInstallResponseV1,
     type PluginSessionHookInstallationMutationInputV1,
@@ -18,6 +21,7 @@ import {
     machinePluginSessionHookStatusGet,
     machinePluginSessionHookUninstall,
 } from '@/sync/ops/machinePluginSessionHooks';
+import { createFrontDoorActionExecute, requireActionSuccess } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 
 import {
     isExternalSessionsIntegrationInventoryActionable,
@@ -26,7 +30,7 @@ import {
     type ExternalSessionsQualifiedAgent,
 } from './externalSessionsIntegrationModel';
 
-type ServerScoped<TInput> = Readonly<TInput & { serverId?: string | null }>;
+type ServerScoped<TInput> = Readonly<TInput & { serverId?: string | null; signal?: AbortSignal }>;
 type ExternalSessionsInventoryRefreshIntent =
     Extract<
         PluginSessionHookStatusInputV1['intent'],
@@ -39,15 +43,20 @@ export type ExternalSessionsHookManagementTransport = Readonly<{
     ) => Promise<PluginSessionHookStatusResponseV1>;
     install: (
         input: ServerScoped<PluginSessionHookInstallInputV1>,
+        presentConfirmation?: () => Promise<boolean>,
+        isCurrent?: () => boolean,
     ) => Promise<PluginSessionHookInstallResponseV1>;
     disable: (
         input: ServerScoped<PluginSessionHookInstallationMutationInputV1>,
+        isCurrent?: () => boolean,
     ) => Promise<PluginSessionHookToggleResponseV1>;
     enable: (
         input: ServerScoped<PluginSessionHookInstallationMutationInputV1>,
+        isCurrent?: () => boolean,
     ) => Promise<PluginSessionHookToggleResponseV1>;
     uninstall: (
         input: ServerScoped<PluginSessionHookInstallationMutationInputV1>,
+        isCurrent?: () => boolean,
     ) => Promise<PluginSessionHookUninstallResponseV1>;
 }>;
 
@@ -71,12 +80,43 @@ export type ExternalSessionsIntegrationControllerState = Readonly<{
     retryInventory: () => Promise<void>;
 }>;
 
+/** The screen selects its Machine; the shared executor owns every mutation decision. */
+async function executeHookMutation(
+    actionId: 'plugins.sessionHooks.install' | 'plugins.sessionHooks.disable' | 'plugins.sessionHooks.enable' | 'plugins.sessionHooks.uninstall',
+    input: ServerScoped<PluginSessionHookInstallInputV1 | PluginSessionHookInstallationMutationInputV1>,
+    presentConfirmation?: () => Promise<boolean>,
+    isCurrent?: () => boolean,
+): Promise<unknown> {
+    const { machineId, serverId, signal, ...actionInput } = input;
+    const execute = createFrontDoorActionExecute(undefined, {
+        ...(presentConfirmation ? { presentUserActionConfirmation: presentConfirmation } : {}),
+        pluginSessionHookManagementAction: async (args) => {
+            args.signal?.throwIfAborted();
+            if (isCurrent?.() === false) return { ok: false, errorCode: 'cancelled', error: 'cancelled' };
+            const target = { machineId, serverId: args.serverId ?? serverId,
+                ...((args.signal ?? signal) ? { signal: args.signal ?? signal } : {}) };
+            switch (args.actionId) {
+                case 'plugins.sessionHooks.status.get': return machinePluginSessionHookStatusGet({ ...args.input, ...target });
+                case 'plugins.sessionHooks.install': return machinePluginSessionHookInstall({ ...args.input, ...target });
+                case 'plugins.sessionHooks.disable': return machinePluginSessionHookDisable({ ...args.input, ...target });
+                case 'plugins.sessionHooks.enable': return machinePluginSessionHookEnable({ ...args.input, ...target });
+                case 'plugins.sessionHooks.uninstall': return machinePluginSessionHookUninstall({ ...args.input, ...target });
+            }
+        },
+    });
+    const result = await execute(actionId, actionInput, { surface: 'ui', authority: 'present_user',
+        actionCaller: { kind: 'host' }, externalActionTarget: { kind: 'machine', machineId },
+        ...(serverId ? { serverId } : {}), ...(signal ? { signal } : {}) });
+    requireActionSuccess(result);
+    return result.ok ? result.result : undefined;
+}
+
 export const machineExternalSessionsHookManagementTransport: ExternalSessionsHookManagementTransport = {
     status: machinePluginSessionHookStatusGet,
-    install: machinePluginSessionHookInstall,
-    disable: machinePluginSessionHookDisable,
-    enable: machinePluginSessionHookEnable,
-    uninstall: machinePluginSessionHookUninstall,
+    install: async (input, presentConfirmation, isCurrent) => PluginSessionHookInstallResponseV1Schema.parse(await executeHookMutation('plugins.sessionHooks.install', input, presentConfirmation, isCurrent)),
+    disable: async (input, isCurrent) => PluginSessionHookToggleResponseV1Schema.parse(await executeHookMutation('plugins.sessionHooks.disable', input, undefined, isCurrent)),
+    enable: async (input, isCurrent) => PluginSessionHookToggleResponseV1Schema.parse(await executeHookMutation('plugins.sessionHooks.enable', input, undefined, isCurrent)),
+    uninstall: async (input, isCurrent) => PluginSessionHookUninstallResponseV1Schema.parse(await executeHookMutation('plugins.sessionHooks.uninstall', input, undefined, isCurrent)),
 };
 
 function integrationKey(
@@ -114,6 +154,7 @@ async function loadExternalSessionsIntegrationInventoryPage(params: Readonly<{
     intent?: ExternalSessionsInventoryRefreshIntent;
     installationId?: string;
     serverId?: string | null;
+    signal?: AbortSignal;
     agent?: ExternalSessionsKnownAgent | null;
     knownAgents?: readonly ExternalSessionsKnownAgent[];
     transport?: ExternalSessionsHookManagementTransport;
@@ -127,6 +168,7 @@ async function loadExternalSessionsIntegrationInventoryPage(params: Readonly<{
         const common = {
             machineId: params.machineId,
             serverId: params.serverId,
+            ...(params.signal ? { signal: params.signal } : {}),
             ...(params.cursor ? { cursor: params.cursor } : {}),
             limit: PLUGIN_SESSION_HOOK_STATUS_INVENTORY_MAX_ROWS,
         };
@@ -135,6 +177,7 @@ async function loadExternalSessionsIntegrationInventoryPage(params: Readonly<{
                 ? await transport.status({
                     machineId: params.machineId,
                     serverId: params.serverId,
+                    ...(params.signal ? { signal: params.signal } : {}),
                     intent: 'install_preview',
                     agent: params.agent.agent,
                 })
@@ -150,6 +193,7 @@ async function loadExternalSessionsIntegrationInventoryPage(params: Readonly<{
                     ? await transport.status({
                         machineId: params.machineId,
                         serverId: params.serverId,
+                        ...(params.signal ? { signal: params.signal } : {}),
                         intent: 'installation_recheck',
                         agent: params.agent.agent,
                         installationId: params.installationId,
@@ -242,6 +286,7 @@ async function loadExternalSessionsIntegrationInventoryPage(params: Readonly<{
 export async function refreshExternalSessionsIntegrationStatuses(params: Readonly<{
     machineId: string;
     serverId?: string | null;
+    signal?: AbortSignal;
     agent?: ExternalSessionsKnownAgent | null;
     knownAgents?: readonly ExternalSessionsKnownAgent[];
     transport?: ExternalSessionsHookManagementTransport;
@@ -289,7 +334,7 @@ export function createExternalSessionsIntegrationOperations(params: Readonly<{
      * so a single shared revision let row B's preview silently finish row A's with no
      * confirmation, error or result.
      */
-    startRequest?: (integrationKey: string) => () => boolean;
+    startRequest?: (integrationKey: string) => Readonly<{ isCurrent: () => boolean; signal: AbortSignal }>;
     isCurrentScope?: () => boolean;
 }>): ExternalSessionsIntegrationOperations {
     const transport = params.transport ?? machineExternalSessionsHookManagementTransport;
@@ -299,16 +344,19 @@ export function createExternalSessionsIntegrationOperations(params: Readonly<{
         integration: ExternalSessionsIntegrationDescriptor,
         operation: (
             input: ServerScoped<PluginSessionHookInstallationMutationInputV1>,
+            isCurrent?: () => boolean,
         ) => Promise<PluginSessionHookToggleResponseV1>,
     ): Promise<void> {
         if (!isCurrentScope()) return;
-        const requestIsCurrent = params.startRequest?.(integration.key) ?? (() => true);
+        const request = params.startRequest?.(integration.key);
+        const requestIsCurrent = request?.isCurrent ?? (() => true);
         const result = await operation({
             machineId: integration.machineId,
             serverId: params.serverId,
+            ...(request ? { signal: request.signal } : {}),
             agent: integration.agent,
             installationId: requireInstallationId(integration),
-        });
+        }, () => requestIsCurrent() && isCurrentScope());
         if (!requestIsCurrent() || !isCurrentScope()) return;
         assertMutationSucceeded(result);
         if (result.ok) params.applyStatus(integration, result.status);
@@ -327,12 +375,14 @@ export function createExternalSessionsIntegrationOperations(params: Readonly<{
                     'external_session_hook_install_preview_unavailable',
                 );
             }
-            const requestIsCurrent = params.startRequest?.(integration.key) ?? (() => true);
+            const request = params.startRequest?.(integration.key);
+            const requestIsCurrent = request?.isCurrent ?? (() => true);
             const previewResult =
                 await loadExternalSessionsIntegrationInventoryPage({
                     machineId: integration.machineId,
                     intent: 'install_preview',
                     serverId: params.serverId,
+                    ...(request ? { signal: request.signal } : {}),
                     agent: {
                         agent: integration.agent,
                         agentTitle: integration.agentTitle,
@@ -371,14 +421,15 @@ export function createExternalSessionsIntegrationOperations(params: Readonly<{
                     'external_session_hook_install_preview_unavailable',
                 );
             }
-            if (!await confirm(candidate.installPreview)) return;
+            const installPreview = candidate.installPreview;
             if (!requestIsCurrent() || !isCurrentScope()) return;
             const result = await transport.install({
                 machineId: candidate.machineId,
                 serverId: params.serverId,
+                ...(request ? { signal: request.signal } : {}),
                 agent: candidate.agent,
-                expectedPreviewId: candidate.installPreview.previewId,
-            });
+                expectedPreviewId: installPreview.previewId,
+            }, () => confirm(installPreview), () => requestIsCurrent() && isCurrentScope());
             if (!isCurrentScope()) return;
             if (!result.ok) {
                 if (
@@ -400,13 +451,15 @@ export function createExternalSessionsIntegrationOperations(params: Readonly<{
         },
         uninstall: async (integration) => {
             if (!isCurrentScope()) return;
-            const requestIsCurrent = params.startRequest?.(integration.key) ?? (() => true);
+            const request = params.startRequest?.(integration.key);
+            const requestIsCurrent = request?.isCurrent ?? (() => true);
             const result = await transport.uninstall({
                 machineId: integration.machineId,
                 serverId: params.serverId,
+                ...(request ? { signal: request.signal } : {}),
                 agent: integration.agent,
                 installationId: requireInstallationId(integration),
-            });
+            }, () => requestIsCurrent() && isCurrentScope());
             if (!requestIsCurrent() || !isCurrentScope()) return;
             assertMutationSucceeded(result);
             if (result.ok) params.applyStatus(integration, result.status);
@@ -473,7 +526,8 @@ export function useExternalSessionsIntegrationController(params: Readonly<{
      * one row must never retire another row's in-flight recheck.
      */
     const rootRequestRevisionRef = React.useRef(0);
-    const requestRevisionByIntegrationKeyRef = React.useRef(new Map<string, number>());
+    const requestRevisionByIntegrationKeyRef = React.useRef(new Map<string, { controller: AbortController; kind: 'read' | 'mutation' }>());
+    const rootRequestControllerRef = React.useRef<AbortController | null>(null);
     const nextCursorRef = React.useRef<string | null>(null);
     const seenCursorsRef = React.useRef(new Set<string>());
     const nonInstallationCountByAgentStateRef = React.useRef(new Map<string, number>());
@@ -489,6 +543,15 @@ export function useExternalSessionsIntegrationController(params: Readonly<{
             status: 'idle',
             diagnosticCodes: [],
         });
+
+    const startRequest = React.useCallback((integrationKey: string, kind: 'read' | 'mutation' = 'mutation') => {
+        const requests = requestRevisionByIntegrationKeyRef.current;
+        requests.get(integrationKey)?.controller.abort();
+        const request = { controller: new AbortController(), kind };
+        requests.set(integrationKey, request);
+        return { signal: request.controller.signal, isCurrent: () => !request.controller.signal.aborted
+            && requestRevisionByIntegrationKeyRef.current.get(integrationKey) === request };
+    }, []);
 
     const refresh = React.useCallback(async (
         integration?: ExternalSessionsIntegrationDescriptor,
@@ -510,16 +573,15 @@ export function useExternalSessionsIntegrationController(params: Readonly<{
         const rootRequestRevision = integration
             ? rootRequestRevisionRef.current
             : ++rootRequestRevisionRef.current;
-        const rowRequestIsCurrent = integration
-            ? (() => {
-                const revisions = requestRevisionByIntegrationKeyRef.current;
-                const rowRevision = (revisions.get(integration.key) ?? 0) + 1;
-                revisions.set(integration.key, rowRevision);
-                return () => requestRevisionByIntegrationKeyRef.current.get(integration.key) === rowRevision;
-            })()
-            : () => true;
+        const rowRequest = integration ? startRequest(integration.key, 'read') : null;
+        const rowRequestIsCurrent = rowRequest?.isCurrent ?? (() => true);
         const requestScopeSignature = scopeSignatureRef.current;
         if (!integration) {
+            rootRequestControllerRef.current?.abort();
+            for (const request of requestRevisionByIntegrationKeyRef.current.values()) {
+                if (request.kind === 'read') request.controller.abort();
+            }
+            rootRequestControllerRef.current = new AbortController();
             nextCursorRef.current = null;
             seenCursorsRef.current = new Set();
             nonInstallationCountByAgentStateRef.current = new Map();
@@ -535,6 +597,7 @@ export function useExternalSessionsIntegrationController(params: Readonly<{
                 diagnosticCodes: current.diagnosticCodes,
             }));
         }
+        const signal = rowRequest?.signal ?? rootRequestControllerRef.current!.signal;
         const agent = integration
             ? {
                 agent: integration.agent,
@@ -545,6 +608,7 @@ export function useExternalSessionsIntegrationController(params: Readonly<{
             machineId,
             intent,
             serverId: params.serverId,
+            signal,
             agent,
             ...(intent === 'installation_recheck' && integration
                 ? { installationId: requireInstallationId(integration) }
@@ -556,7 +620,8 @@ export function useExternalSessionsIntegrationController(params: Readonly<{
                 : undefined,
         });
         if (
-            rootRequestRevisionRef.current !== rootRequestRevision
+            signal.aborted
+            || rootRequestRevisionRef.current !== rootRequestRevision
             || (integration
                 ? !rowRequestIsCurrent()
                 : requestRevisionRef.current !== requestRevision)
@@ -606,7 +671,7 @@ export function useExternalSessionsIntegrationController(params: Readonly<{
         });
         // The refreshed row is merged above; the inventory's own status describes the
         // root listing and is not restated from one row's result.
-    }, [enabled, params.machineId, params.serverId, params.transport, targetScopeSignature]);
+    }, [enabled, params.machineId, params.serverId, params.transport, startRequest, targetScopeSignature]);
 
     const loadMoreInventory = React.useCallback((): Promise<void> => {
         const existing = loadMorePromiseRef.current;
@@ -621,6 +686,7 @@ export function useExternalSessionsIntegrationController(params: Readonly<{
         ) return Promise.resolve();
 
         const requestRevision = requestRevisionRef.current;
+        const signal = rootRequestControllerRef.current?.signal;
         const request = (async () => {
             setLoadingMoreInventory(true);
             const result = await loadExternalSessionsIntegrationInventoryPage({
@@ -628,6 +694,7 @@ export function useExternalSessionsIntegrationController(params: Readonly<{
                 cursor,
                 intent: 'passive_inventory',
                 serverId: params.serverId,
+                ...(signal ? { signal } : {}),
                 agent: agentRef.current,
                 knownAgents: knownAgentsRef.current,
                 transport: params.transport,
@@ -635,7 +702,8 @@ export function useExternalSessionsIntegrationController(params: Readonly<{
                     nonInstallationCountByAgentStateRef.current,
             });
             if (
-                requestRevisionRef.current !== requestRevision
+                signal?.aborted
+                || requestRevisionRef.current !== requestRevision
                 || scopeSignatureRef.current !== scopeSignature
                 || isExecutionTargetCurrentRef.current?.() === false
             ) return;
@@ -708,6 +776,7 @@ export function useExternalSessionsIntegrationController(params: Readonly<{
         // A committed mutation supersedes any older root inventory replacement, but
         // targeted rechecks use their integration-local revision and remain independent.
         requestRevisionRef.current += 1;
+        rootRequestControllerRef.current?.abort();
         const next: ExternalSessionsIntegrationDescriptor = {
             key: integrationKey(
                 integration.machineId,
@@ -754,15 +823,6 @@ export function useExternalSessionsIntegrationController(params: Readonly<{
         ));
     }, []);
 
-    const startRequest = React.useCallback((integrationKey: string) => {
-        const revisions = requestRevisionByIntegrationKeyRef.current;
-        const requestRevision = (revisions.get(integrationKey) ?? 0) + 1;
-        revisions.set(integrationKey, requestRevision);
-        // Scope changes stay fenced by `isCurrentScope`; this only decides which of one
-        // integration's own overlapping preview round trips may still act.
-        return () => requestRevisionByIntegrationKeyRef.current.get(integrationKey) === requestRevision;
-    }, []);
-
     React.useEffect(() => {
         if (!enabled || !params.machineId || isExecutionTargetCurrentRef.current?.() === false) {
             requestRevisionRef.current += 1;
@@ -782,6 +842,10 @@ export function useExternalSessionsIntegrationController(params: Readonly<{
             return;
         }
         void refresh();
+        return () => {
+            rootRequestControllerRef.current?.abort();
+            for (const request of requestRevisionByIntegrationKeyRef.current.values()) request.controller.abort();
+        };
     }, [
         agentSignature,
         projectedAgentsSignature,

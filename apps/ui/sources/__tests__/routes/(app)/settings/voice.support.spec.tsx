@@ -7,8 +7,9 @@ import {
     renderSettingsView,
     standardCleanup,
 } from '@/dev/testkit';
+import { createLayoutChangeEvent } from '@/dev/testkit/fixtures/nativeEventFixtures';
 import { settingsParse } from '@/sync/domains/settings/settings';
-import { readLocalConversationVoiceSettings, voiceSettingsParse, writeLocalConversationVoiceSettings, writeVoiceProviderSettingsConfig } from '@/sync/domains/settings/voiceSettings';
+import { readLocalConversationVoiceSettings, readLocalDirectVoiceSettings, readVoiceProviderSettingsConfig, voiceSettingsParse, writeLocalConversationVoiceSettings, writeVoiceProviderSettingsConfig } from '@/sync/domains/settings/voiceSettings';
 import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
 import type { VoiceSettingsIntent } from '@/voice/settings/voiceSettingsIntents';
 import { ModalProvider } from '@/modal';
@@ -295,15 +296,15 @@ describe('VoiceSettingsScreen (voice settings UX)', () => {
 
         expect(privacySection).toBeTruthy();
         expect(scrollTo).toBeTruthy();
+        const { onContentSizeChange, onLayout } = list.props;
+        if (!onContentSizeChange || !onLayout) throw new Error('Settings list layout callbacks missing');
 
         await act(async () => {
-            list.props.onContentSizeChange(0, 1800);
+            onContentSizeChange(0, 1800);
             privacySection?.props.onLayout({
                 nativeEvent: { layout: { y: 1200, height: 320 } },
             });
-            list.props.onLayout({
-                nativeEvent: { layout: { y: 0, height: 400 } },
-            });
+            onLayout(createLayoutChangeEvent({ x: 0, y: 0, width: 1200, height: 400 }));
         });
 
         expect(scrollTo).toHaveBeenCalledTimes(1);
@@ -313,7 +314,7 @@ describe('VoiceSettingsScreen (voice settings UX)', () => {
         });
 
         await act(async () => {
-            list.props.onContentSizeChange(0, 1900);
+            onContentSizeChange(0, 1900);
             privacySection?.props.onLayout({
                 nativeEvent: { layout: { y: 1200, height: 320 } },
             });
@@ -330,15 +331,15 @@ describe('VoiceSettingsScreen (voice settings UX)', () => {
         const screen = await renderVoiceSettings("privacy");
         const list = screen.tree.root.findByType(ItemList);
         const privacySection = screen.findByTestId('settings.voice.section.privacy');
+        const { onContentSizeChange, onLayout } = list.props;
+        if (!onContentSizeChange || !onLayout) throw new Error('Settings list layout callbacks missing');
 
         await act(async () => {
-            list.props.onContentSizeChange(0, 1800);
+            onContentSizeChange(0, 1800);
             privacySection?.props.onLayout({
                 nativeEvent: { layout: { y: 1200, height: 320 } },
             });
-            list.props.onLayout({
-                nativeEvent: { layout: { y: 0, height: 400 } },
-            });
+            onLayout(createLayoutChangeEvent({ x: 0, y: 0, width: 1200, height: 400 }));
         });
 
         expect(scrollTo).not.toHaveBeenCalled();
@@ -639,7 +640,7 @@ describe('VoiceSettingsScreen (voice settings UX)', () => {
 
         expect(screen.findAllHostsByTestId('web-modal-confirm')).toHaveLength(0);
         const written = account!.persistedSettings.voice;
-        expect(written.providers[providerId].config.format).toBe('wav');
+        expect(readVoiceProviderSettingsConfig(written, providerId)).toMatchObject({ format: 'wav' });
         expect(written.providerId).toBe('local_direct');
     });
 
@@ -668,8 +669,8 @@ describe('VoiceSettingsScreen (voice settings UX)', () => {
         expect(screen.findAllHostsByTestId('web-prompt-input')).toHaveLength(0);
         const written = account!.persistedSettings.voice;
         expect(written.assistantLanguage).toBe('en');
-        expect(written.providers.local_direct.config.stt.localNeural.language).toBe('fr');
-        expect(written.providers.local_direct.config.stt.provider).toBe('local_neural');
+        expect(readLocalDirectVoiceSettings(written).stt.localNeural.language).toBe('fr');
+        expect(readLocalDirectVoiceSettings(written).stt.provider).toBe('local_neural');
     });
 
     it('has no Language section while conversations are off', async () => {

@@ -158,6 +158,13 @@ vi.mock('@/sync/sync', async () => (
     })
 ));
 
+// Compile the real transcript graph during collection, after installing its boundaries.
+await import('./ChatList');
+const {
+    readPersistedSessionMessagePins,
+    savePersistedSessionMessagePins,
+} = await import('@/sync/domains/state/sessionMessagePinsPersistence');
+
 const scopeA: ServerAccountScope = { serverId: 'server-a', accountId: 'account-a' };
 const scopeB: ServerAccountScope = { serverId: 'server-a', accountId: 'account-b' };
 
@@ -252,10 +259,6 @@ describe('ChatList message pins host wiring', () => {
     });
 
     it('loads scoped persisted pins and forwards pin state plus toggle callbacks to message and tool rows', async () => {
-        const {
-            readPersistedSessionMessagePins,
-            savePersistedSessionMessagePins,
-        } = await import('@/sync/domains/state/sessionMessagePinsPersistence');
         const scopedUserPin = pin();
         const otherScopePin = pin({
             seq: 99,

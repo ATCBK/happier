@@ -1,12 +1,14 @@
 import axios, { type AxiosResponse } from 'axios';
+import { readActionCredentialScopeDeniedHttpFailureV1, type ActionCredentialScopeDeniedFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
+import { classifyHomeDomainHttpMutationFailureV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
 import { createExternalActionAuthorizedRequestHeaders } from '@/api/externalActionExecutionAuthorization';
 import type { callMachineRpc } from '@/session/transport/rpc/machineRpc';
 import { readSessionCreationInitialTriggerError } from '@/api/session/sessionCreationInitialTriggerError';
 import { pickSessionCreateOriginFields } from '@/session/shared/sessionCreateOrigin';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { SESSION_CREATION_AUTHORIZATION_HEADER_V1 } from '@happier-dev/protocol/auth/accountApiTokens';
 import { agentEventLocalIdAttentionImpact } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
-import type { SessionMessageAttentionImpact, SessionStoredMessageContent, V2SessionByIdResponse, V2SessionListResponse, SessionLookupByTagsResponseV2, SessionMetadataInactiveModelIntentExpectationV1, SessionMetadataInactiveModelIntentOwnerPatchV1, SessionMetadataInactiveModelIntentPatchV1, SessionMetadataTuplePatchV1, SessionOrganizationPlacementV1, SessionTurnsProjectionV1, AccountEncryptionCurrentnessResponse, SessionListQueryV1, SessionListQueryResponseV1, SessionListUnavailableQueryV1, SessionInitialAccessDraftV1, SessionAttentionSetResultV1, SessionReportsToSetActionInputV1, SessionReportsToSetResultV1, SessionReportsToV1 } from '@happier-dev/protocol';
+import type { SessionMessageAttentionImpact, SessionStoredMessageContent, V2SessionByIdResponse, V2SessionListResponse, SessionLookupByTagsResponseV2, SessionMetadataInactiveModelIntentExpectationV1, SessionMetadataInactiveModelIntentOwnerPatchV1, SessionMetadataInactiveModelIntentPatchV1, SessionMetadataTuplePatchV1, SessionOrganizationPlacementV1, SessionTurnsProjectionV1, AccountEncryptionCurrentnessResponse, SessionListQueryV1, SessionListQueryResponseV1, SessionListUnavailableQueryV1, SessionInitialAccessDraftV1, SessionAttentionSetResultV1, SessionManagerSetActionInputV1, SessionManagerSetResultV1, SessionManagerV1 } from '@happier-dev/protocol';
 import { SessionStoredMessageContentSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
 import { SESSION_HISTORICAL_TRANSCRIPT_IMPORT_MAX_ITEMS, SessionTranscriptSurfaceItemReferenceInputV1Schema, type SessionTranscriptSurfaceItemReferenceInputV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import { SessionLookupByTagsRequestV2Schema, SessionLookupByTagsResponseV2Schema, V2SessionByIdResponseSchema, V2SessionListResponseSchema, V2SessionMessageResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
@@ -19,7 +21,7 @@ import { buildSessionListServerQueryV1, SessionListUnavailableQueryV1Schema } fr
 import { SessionAttentionSetResultV1Schema, buildSessionAttentionStandingHttpPath } from '@happier-dev/protocol/sessions/organization/attentionAction';
 import { SetSessionPinRequestSchema, SetSessionPinResponseSchema, type SetSessionPinRequest, type SetSessionPinResponse } from '@happier-dev/protocol/sessions/organization/mutations';
 import { buildSessionOrganizationPinHttpPathV1 } from '@happier-dev/protocol/sessions/organization/pins';
-import { SessionReportsToSetActionInputV1Schema, SessionReportsToSetResultV1Schema } from '@happier-dev/protocol/sessions/relations/sessionReportsToV1';
+import { SessionManagerSetActionInputV1Schema, SessionManagerSetResultV1Schema } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { SessionTeamCredentialBindingMutationRejectionV1Schema } from '@happier-dev/protocol/teams/credentials/sessionBindingV1';
 import type { SessionTeamCredentialBindingIntentV1, SessionTeamCredentialBindingIntentListV1, SessionTeamCredentialBindingMetadataPatchV1, SessionTeamCredentialBindingRejectionV1 } from '@happier-dev/protocol/teams';
 
@@ -27,7 +29,9 @@ import type { StoredCredentials } from '@/persistence';
 import { resolveCliFeatureDecision } from '@/features/featureDecisionService';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
 import { resolveSessionEncryptionContext } from '@/api/client/encryptionKey';
-import { createHttpStatusError, HttpStatusError, isAuthenticationStatus } from '@/api/client/httpStatusError';
+import { createHttpStatusError, HttpStatusError, isAuthenticationStatus, readHttpStatus } from '@/api/client/httpStatusError';
+import { readNormalizedConnectionErrorCode } from '@/api/client/classifyServerEndpointError';
+import { serializeAxiosErrorForLog } from '@/api/client/serializeAxiosErrorForLog';
 import { encodeBase64 } from '@/api/encryption';
 import {
   buildCurrentAccountStoredContentCompatibilityHttpHeaders,
@@ -60,7 +64,7 @@ export async function setSessionOrganizationPin(params: Readonly<{
   request: SetSessionPinRequest;
   signal?: AbortSignal;
   resolveAuthorizationHeaders?: (request: Readonly<{ method: 'PUT'; path: string; body: unknown }>) => Readonly<Record<string, string>> | null;
-}>): Promise<SetSessionPinResponse | Readonly<{
+}>): Promise<SetSessionPinResponse | ActionCredentialScopeDeniedFailureV1 | Readonly<{
   ok: false; errorCode: 'session_not_found' | 'session_pin_limit_exceeded' | 'unsupported_action'; error: string;
 }>> {
   const path = buildSessionOrganizationPinHttpPathV1(params.sessionId);
@@ -75,6 +79,8 @@ export async function setSessionOrganizationPin(params: Readonly<{
     validateStatus: () => true,
   });
   const payload: unknown = response.data;
+  const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(response.status, payload);
+  if (scopeDenial) return scopeDenial;
   const error = payload !== null && typeof payload === 'object' && 'error' in payload ? payload.error : undefined;
   if (response.status === 404) {
     const errorCode = error === 'Session not found' ? 'session_not_found' : 'unsupported_action';
@@ -90,16 +96,16 @@ export async function setSessionOrganizationPin(params: Readonly<{
   return result.data;
 }
 
-export async function setSessionReportsTo(params: SessionReportsToSetActionInputV1 & Readonly<{
+export async function setSessionManager(params: SessionManagerSetActionInputV1 & Readonly<{
   token: string;
   signal?: AbortSignal;
   resolveAuthorizationHeaders?: (request: Readonly<{ method: 'POST'; path: string; body: unknown }>) => Readonly<Record<string, string>> | null;
-}>): Promise<SessionReportsToSetResultV1> {
-  const request = SessionReportsToSetActionInputV1Schema.parse({
-    sessionId: params.sessionId, leadSessionId: params.leadSessionId, expectedLeadSessionId: params.expectedLeadSessionId,
+}>): Promise<SessionManagerSetResultV1 | ActionCredentialScopeDeniedFailureV1> {
+  const request = SessionManagerSetActionInputV1Schema.parse({
+    sessionId: params.sessionId, managerSessionId: params.managerSessionId, expectedManagerSessionId: params.expectedManagerSessionId,
   });
-  const path = `/v1/sessions/${encodeSessionIdPathSegment(request.sessionId)}/reports-to`;
-  const body = { leadSessionId: request.leadSessionId, expectedLeadSessionId: request.expectedLeadSessionId };
+  const path = `/v1/sessions/${encodeSessionIdPathSegment(request.sessionId)}/manager`;
+  const body = { managerSessionId: request.managerSessionId, expectedManagerSessionId: request.expectedManagerSessionId };
   const authorizationHeaders = params.resolveAuthorizationHeaders?.({ method: 'POST', path, body })
     ?? (params.resolveAuthorizationHeaders ? null : { Authorization: `Bearer ${params.token}` });
   if (!authorizationHeaders) throw new Error('External Action authorization unavailable');
@@ -109,19 +115,21 @@ export async function setSessionReportsTo(params: SessionReportsToSetActionInput
     timeout: configuration.sessionControlHttpTimeoutMs,
     validateStatus: () => true,
   });
-  const result = SessionReportsToSetResultV1Schema.safeParse(response.data);
+  const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(response.status, response.data);
+  if (scopeDenial) return scopeDenial;
+  const result = SessionManagerSetResultV1Schema.safeParse(response.data);
   if (result.success) {
-    const expectedStatus = result.data.ok ? 200 : result.data.error === 'reports_to_cycle' ? 400
-      : result.data.error === 'reports_to_cas_conflict' ? 409 : 403;
+    const expectedStatus = result.data.ok ? 200 : result.data.error === 'manager_cycle' ? 400
+      : result.data.error === 'manager_cas_conflict' ? 409 : 403;
     if (response.status !== expectedStatus) throwUnexpectedStatusError(path, response.status);
-    if (result.data.ok && (result.data.sessionId !== request.sessionId || result.data.leadSessionId !== request.leadSessionId)) {
-      throw new Error('Unexpected reportsTo attachment response');
+    if (result.data.ok && (result.data.sessionId !== request.sessionId || result.data.managerSessionId !== request.managerSessionId)) {
+      throw new Error('Unexpected manager attachment response');
     }
     return result.data;
   }
   if (isAuthenticationStatus(response.status)) throwAuthenticationStatusError(response.status);
   if (response.status !== 200) throwUnexpectedStatusError(path, response.status);
-  throw new Error('Unexpected reportsTo response shape');
+  throw new Error('Unexpected manager response shape');
 }
 /**
  * `session.attention.set` (ORC R-10) over the existing attention-standing route. The server route is
@@ -133,7 +141,7 @@ export async function setSessionAttentionStanding(params: Readonly<{
   request: Readonly<{ standing?: boolean | null; remindAt?: number | null }>;
   signal?: AbortSignal;
   resolveAuthorizationHeaders?: (request: Readonly<{ method: 'PUT'; path: string; body: unknown }>) => Readonly<Record<string, string>> | null;
-}>): Promise<SessionAttentionSetResultV1 | Readonly<{ ok: false; errorCode: 'session_not_found'; error: 'session_not_found' }>> {
+}>): Promise<SessionAttentionSetResultV1 | ActionCredentialScopeDeniedFailureV1 | Readonly<{ ok: false; errorCode: 'session_not_found'; error: 'session_not_found' }>> {
   const path = buildSessionAttentionStandingHttpPath(params.sessionId);
   const body = params.request;
   const authorizationHeaders = params.resolveAuthorizationHeaders?.({ method: 'PUT', path, body })
@@ -145,6 +153,8 @@ export async function setSessionAttentionStanding(params: Readonly<{
     timeout: configuration.sessionControlHttpTimeoutMs,
     validateStatus: () => true,
   });
+  const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(response.status, response.data);
+  if (scopeDenial) return scopeDenial;
   if (response.status === 404) return { ok: false, errorCode: 'session_not_found', error: 'session_not_found' };
   if (isAuthenticationStatus(response.status)) throwAuthenticationStatusError(response.status);
   if (response.status !== 200) throwUnexpectedStatusError(path, response.status);
@@ -226,7 +236,7 @@ class SessionListQueryHttpError extends HttpStatusError {
 
 type SessionByIdHttpResponse = AxiosResponse<unknown>;
 
-function parseSessionDetailSchema<T>(schema: z.ZodType<T>, payload: unknown, schemaName: string): T {
+function parseSessionDetailSchema<T>(schema: z.ZodMiniType<T>, payload: unknown, schemaName: string): T {
   const parsed = schema.safeParse(payload);
   if (!parsed.success) {
     // Keep only structural diagnostics. Zod messages/inputs can contain private values.
@@ -670,6 +680,7 @@ export async function fetchSessionByIdCompat(params: Readonly<{
 
 export async function patchSessionMetadata(params: Readonly<{
   token: string;
+  signal?: AbortSignal;
   resolveAuthorizationHeaders?: (request: Readonly<{
     method: 'PATCH'; path: string; body: unknown;
   }>) => Readonly<Record<string, string>> | null;
@@ -710,7 +721,10 @@ export async function patchSessionMetadata(params: Readonly<{
         ...authorizationHeaders,
         'Content-Type': 'application/json',
       },
-      timeout: configuration.sessionControlHttpTimeoutMs,
+      // The metadata mutation/currentness owner governs this operation, including
+      // Stop intent and retirement. A transport cutoff cannot shorten its lifetime.
+      timeout: 0,
+      ...(params.signal ? { signal: params.signal } : {}),
       validateStatus: () => true,
     },
   );
@@ -841,6 +855,7 @@ export type PatchSessionMetadataEnvelopeTupleResult =
  */
 export async function patchSessionMetadataEnvelopeTuple(params: Readonly<{
   token: string;
+  signal?: AbortSignal;
   resolveAuthorizationHeaders?: (request: Readonly<{
     method: 'PATCH'; path: string; body: unknown;
   }>) => Readonly<Record<string, string>> | null;
@@ -866,7 +881,8 @@ export async function patchSessionMetadataEnvelopeTuple(params: Readonly<{
         ...authorizationHeaders,
         'Content-Type': 'application/json',
       },
-      timeout: configuration.sessionControlHttpTimeoutMs,
+      timeout: 0,
+      ...(params.signal ? { signal: params.signal } : {}),
       validateStatus: () => true,
     },
   );
@@ -1038,10 +1054,10 @@ export type ApplySessionAgentTransitionCutoverHttpResult =
     }>
   | Readonly<{ ok: false; effect: 'unknown'; error: 'transport' }>;
 
-const SessionAgentTransitionCutoverSuccessSchema = z.object({
+const SessionAgentTransitionCutoverSuccessSchema = z.strictObject({
   success: z.literal(true),
-  dividerSeq: z.number().int().min(0),
-}).strict();
+  dividerSeq: z.number().check(z.int(), z.minimum(0)),
+});
 
 const SessionAgentTransitionCutoverNoEffectErrorSchema = z.enum([
   'invalid-params',
@@ -1060,14 +1076,14 @@ const SessionAgentTransitionCutoverCommittedErrorSchema = z.enum([
 ]);
 
 const SessionAgentTransitionCutoverConflictSchema = z.discriminatedUnion('effect', [
-  z.object({
+  z.looseObject({
     effect: z.literal('none'),
     error: SessionAgentTransitionCutoverNoEffectErrorSchema,
-  }).passthrough(),
-  z.object({
+  }),
+  z.looseObject({
     effect: z.literal('current_view_committed'),
     error: SessionAgentTransitionCutoverCommittedErrorSchema,
-  }).passthrough(),
+  }),
 ]);
 
 /**
@@ -1400,10 +1416,10 @@ export async function commitSessionStoredMessage(params: Readonly<{
   };
 }
 
-const V2HistoricalTranscriptImportResponseSchema = z.object({
-  imported: z.number().int().min(0),
-  cursor: z.number().int().min(0).nullable(),
-}).strict();
+const V2HistoricalTranscriptImportResponseSchema = z.strictObject({
+  imported: z.number().check(z.int(), z.minimum(0)),
+  cursor: z.nullable(z.number().check(z.int(), z.minimum(0))),
+});
 
 /**
  * Single HTTP adapter for transcript.import. Validate all rows before writing, then preserve their
@@ -1496,6 +1512,45 @@ export async function importHistoricalSessionTranscript(params: Readonly<{
   };
 }
 
+/** One HTTP boundary for the API client's and seeded creator's Session birth. */
+export async function postSessionCreationRequest<T>(params: Readonly<{
+  serverUrl: string;
+  token: string;
+  body: unknown;
+  creationAuthorizationToken?: string;
+  signal?: AbortSignal;
+  validateStatus?: (status: number) => boolean;
+}>): Promise<AxiosResponse<T>> {
+  params.signal?.throwIfAborted();
+  const response = await axios.post<T>(`${params.serverUrl}/v1/sessions`, params.body, {
+    headers: {
+      ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
+      ...(params.creationAuthorizationToken ? { [SESSION_CREATION_AUTHORIZATION_HEADER_V1]: params.creationAuthorizationToken } : {}),
+      Authorization: `Bearer ${params.token}`,
+      'Content-Type': 'application/json',
+    },
+    // An admitted creation operation owns its lifetime through native open.
+    // Standalone callers without that lifetime retain the existing timeout.
+    timeout: params.signal ? 0 : 60_000,
+    ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.validateStatus ? { validateStatus: params.validateStatus } : {}),
+  }).catch((cause: unknown) => {
+    // A response is handled by the existing refusal/rollback readers. Losing
+    // the response after dispatch cannot prove that Session birth rolled back.
+    if (readHttpStatus(cause) !== null || classifyHomeDomainHttpMutationFailureV1({
+      error: cause, issued: true, aborted: params.signal?.aborted === true,
+    }) !== 'outcome_unknown') throw cause;
+    throw Object.assign(new Error('Session creation outcome is unknown; reconcile the original creation key before retrying'), {
+      code: 'outcome_unknown' as const,
+      cause: { ...serializeAxiosErrorForLog(cause), code: readNormalizedConnectionErrorCode(cause) },
+    });
+  });
+  // Cancellation cannot undo a remote commit, but it cannot report success to
+  // an invocation that has already retired either.
+  params.signal?.throwIfAborted();
+  return response;
+}
+
 export async function getOrCreateSessionByTag(params: Readonly<import('@happier-dev/protocol').SessionCreateOriginFieldsV1 & {
   credentials: StoredCredentials;
   tag: string;
@@ -1506,11 +1561,13 @@ export async function getOrCreateSessionByTag(params: Readonly<import('@happier-
   shouldCommit?: () => boolean;
   initialAccess?: SessionInitialAccessDraftV1;
   initialTriggers?: readonly import('@happier-dev/protocol').SessionInitialTriggerAdmissionV1[];
-  reportsTo?: SessionReportsToV1;
+  manager?: SessionManagerV1;
   primaryTeamId?: string | null;
   teamCredentialBindings?: SessionTeamCredentialBindingIntentListV1;
   creationAuthorizationToken?: string;
+  prepareCreationAuthorizationProof?: import('@happier-dev/protocol/sessions/creation/sessionCreationAuthorizationV1').SessionCreationAuthorizationV1['prepareRequestProof'];
   accountEncryptionCurrentness?: AccountEncryptionCurrentnessResponse;
+  signal?: AbortSignal;
 }>): Promise<{
   session: RawSessionRecord;
   created: boolean;
@@ -1521,6 +1578,7 @@ export async function getOrCreateSessionByTag(params: Readonly<import('@happier-
   const encryptionModeResolution = await resolveSessionCreateEncryptionMode({
     token: params.credentials.token,
     serverBaseUrl: serverUrl,
+    ...(params.signal ? { signal: params.signal } : {}),
     ...(params.accountEncryptionCurrentness
       ? { accountEncryptionCurrentness: params.accountEncryptionCurrentness }
       : {}),
@@ -1581,14 +1639,15 @@ export async function getOrCreateSessionByTag(params: Readonly<import('@happier-
       : null,
     token: params.credentials.token,
     serverHttpBaseUrl: serverUrl,
+    ...(params.signal ? { signal: params.signal } : {}),
   });
 
   if (params.shouldCommit && !params.shouldCommit()) {
     throw new Error('Session creation commit precondition failed');
   }
-  const response = await axios.post(`${serverUrl}/v1/sessions`, {
+  const body = {
     ...pickSessionCreateOriginFields(params),
-    ...(params.reportsTo !== undefined ? { reportsTo: params.reportsTo } : {}),
+    ...(params.manager !== undefined ? { manager: params.manager } : {}),
     tag: params.tag,
     ...metadataEnvelopeFields,
     dataEncryptionKey: dataEncryptionKeyPayload,
@@ -1598,14 +1657,14 @@ export async function getOrCreateSessionByTag(params: Readonly<import('@happier-
     ...materializedInitialAccessFields,
     ...(params.initialTriggers !== undefined ? { initialTriggers: params.initialTriggers } : {}),
     ...(serverSupportsFeatureSnapshot ? { encryptionMode: desiredSessionEncryptionMode } : {}),
-  }, {
-    headers: {
-      ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
-      ...(params.creationAuthorizationToken ? { [SESSION_CREATION_AUTHORIZATION_HEADER_V1]: params.creationAuthorizationToken } : {}),
-      Authorization: `Bearer ${params.credentials.token}`,
-      'Content-Type': 'application/json',
-    },
-    timeout: 60_000,
+  };
+  const creationAuthorizationProof = await params.prepareCreationAuthorizationProof?.(body);
+  const response = await postSessionCreationRequest<unknown>({
+    serverUrl,
+    token: params.credentials.token,
+    body: { ...body, ...(creationAuthorizationProof ? { creationAuthorizationProof } : {}) },
+    ...(params.creationAuthorizationToken ? { creationAuthorizationToken: params.creationAuthorizationToken } : {}),
+    ...(params.signal ? { signal: params.signal } : {}),
     validateStatus: () => true,
   });
 
@@ -1662,7 +1721,9 @@ export async function getOrCreateSessionByTag(params: Readonly<import('@happier-
     token: params.credentials.token,
     serverHttpBaseUrl: serverUrl,
     ...(params.shouldCommit ? { isScopeCurrent: params.shouldCommit } : {}),
+    ...(params.signal ? { signal: params.signal } : {}),
   });
+  params.signal?.throwIfAborted();
   // Released and predecessor servers omit `created`; preserve their historical
   // create-or-load behavior while current servers report the exact race result.
   return {
@@ -1678,21 +1739,37 @@ async function postArchiveMutation(params: Readonly<{
   token: string;
   sessionId: string;
   op: 'archive' | 'unarchive';
+  signal?: AbortSignal;
+  resolveAuthorizationHeaders?: (request: Readonly<{ method: 'POST'; path: string; body: unknown }>) => Readonly<Record<string, string>> | null;
 }>): Promise<{ archivedAt: number | null }> {
+  params.signal?.throwIfAborted();
   const serverUrl = resolveServerHttpBaseUrl();
+  const path = `/v2/sessions/${encodeSessionIdPathSegment(params.sessionId)}/${params.op}`;
+  const body = {};
+  const authorizationHeaders = params.resolveAuthorizationHeaders?.({ method: 'POST', path, body })
+    ?? (params.resolveAuthorizationHeaders ? null : { Authorization: `Bearer ${params.token}` });
+  if (!authorizationHeaders) throw new Error('External Action authorization unavailable');
   const response = await axios.post(
-    `${serverUrl}/v2/sessions/${params.sessionId}/${params.op}`,
-    {},
+    `${serverUrl}${path}`,
+    body,
     {
       headers: {
         ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),
-        Authorization: `Bearer ${params.token}`,
+        ...authorizationHeaders,
         'Content-Type': 'application/json',
       },
-      timeout: 10_000,
+      // Archive can wait on the Home's transaction. The containing invocation
+      // owns cancellation; the generic read/control cutoff cannot settle it.
+      timeout: 0,
+      ...(params.signal ? { signal: params.signal } : {}),
       validateStatus: () => true,
     },
-  );
+  ).catch((cause: unknown) => {
+    const disposition = classifyHomeDomainHttpMutationFailureV1({ error: cause, issued: true, aborted: params.signal?.aborted === true });
+    throw Object.assign(new Error('Session archive mutation transport failed'), {
+      code: disposition === 'not_dispatched' ? 'server_unreachable' : 'outcome_unknown', cause,
+    });
+  });
 
   if (isAuthenticationStatus(response.status)) {
     throwAuthenticationStatusError(response.status);
@@ -1706,6 +1783,9 @@ async function postArchiveMutation(params: Readonly<{
     const err = new Error('Cannot archive an active session');
     (err as any).code = 'session_active';
     throw err;
+  }
+  if (response.status >= 500) {
+    throw Object.assign(new Error('Session archive mutation outcome is unknown'), { code: 'outcome_unknown' });
   }
   if (response.status !== 200) {
     throw new Error(`Unexpected status from /v2/sessions/${params.sessionId}/${params.op}: ${response.status}`);
@@ -1722,16 +1802,24 @@ async function postArchiveMutation(params: Readonly<{
   throw new Error(`Unexpected /v2/sessions/${params.sessionId}/${params.op} response shape`);
 }
 
-export async function archiveSession(params: Readonly<{ token: string; sessionId: string }>): Promise<{ archivedAt: number }> {
-  const res = await postArchiveMutation({ token: params.token, sessionId: params.sessionId, op: 'archive' });
+export async function archiveSession(params: Readonly<{
+  token: string; sessionId: string;
+  signal?: AbortSignal;
+  resolveAuthorizationHeaders?: Parameters<typeof postArchiveMutation>[0]['resolveAuthorizationHeaders'];
+}>): Promise<{ archivedAt: number }> {
+  const res = await postArchiveMutation({ ...params, op: 'archive' });
   if (typeof res.archivedAt !== 'number') {
     throw new Error('Unexpected archive response (archivedAt is null)');
   }
   return { archivedAt: res.archivedAt };
 }
 
-export async function unarchiveSession(params: Readonly<{ token: string; sessionId: string }>): Promise<{ archivedAt: null }> {
-  const res = await postArchiveMutation({ token: params.token, sessionId: params.sessionId, op: 'unarchive' });
+export async function unarchiveSession(params: Readonly<{
+  token: string; sessionId: string;
+  signal?: AbortSignal;
+  resolveAuthorizationHeaders?: Parameters<typeof postArchiveMutation>[0]['resolveAuthorizationHeaders'];
+}>): Promise<{ archivedAt: null }> {
+  const res = await postArchiveMutation({ ...params, op: 'unarchive' });
   if (res.archivedAt !== null) {
     throw new Error('Unexpected unarchive response (archivedAt is not null)');
   }

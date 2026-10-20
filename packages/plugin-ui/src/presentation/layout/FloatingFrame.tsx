@@ -12,6 +12,7 @@ import { Platform, View, type PointerEvent as NativePointerEvent, type ViewStyle
 
 import { useOptionalHappierUiTheme } from '../../environment/context.js';
 import { useOptionalPluginUiPresentationHost } from '../../presentationHost/context.js';
+import type { HappierPortableStyle } from '../portableTypes.js';
 import {
   projectCompanionRelease,
   type CompanionReleaseMotion,
@@ -27,6 +28,7 @@ import {
   resolveFloatingFrameCornerRect,
   resolveFloatingFrameRect,
   resolveFloatingFrameResizeRect,
+  resolveFloatingFrameAspectRatio,
   type FloatingFrameCorner,
   type FloatingFrameMode,
   type FrameRect,
@@ -161,7 +163,7 @@ const FLOATING_FRAME_SETTLE_PROPERTIES = 'transform, width, height';
  * Where a floating frame stands inside its container. On web its place is a transform so the settle
  * travels on the compositor; native places it by its own binding.
  */
-export function resolveFloatingFramePlacementStyle(rect: FrameRect): ViewStyle {
+export function resolveFloatingFramePlacementStyle(rect: FrameRect): HappierPortableStyle {
   return Platform.OS === 'web'
     ? {
         position: 'absolute',
@@ -241,8 +243,7 @@ export function resolveFloatingFrameHeight(
   aspectRatio: number,
   options?: FloatingFrameChromeOptions,
 ): number {
-  const aspect =
-    aspectRatio > 0 && Number.isFinite(aspectRatio) ? aspectRatio : 16 / 10;
+  const aspect = resolveFloatingFrameAspectRatio(aspectRatio);
   return resolveFloatingFrameChromeHeight(options) + width / aspect;
 }
 

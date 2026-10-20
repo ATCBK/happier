@@ -296,6 +296,8 @@ function createOutput(params: Readonly<{
       callId: `deepsec:${params.runId}`,
       backendId: 'deepsec',
     },
+    reviewOutcome: params.runResult.status === 'completed' ? 'complete'
+      : params.runResult.status === 'partial' ? 'partial' : 'failed',
     summary: readiness
       ? 'DeepSec review readiness failed.'
       : selectedScopeDiagnostics

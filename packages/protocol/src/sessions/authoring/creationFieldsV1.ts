@@ -29,16 +29,22 @@ const SessionAuthoringWindowsTerminalV1Schema = lazyZodSchema(() => z.strictObje
   windowName: z.optional(WindowsTerminalWindowNameSchema),
 }));
 
+export const SessionAuthoringTerminalModeV1Schema = lazyZodSchema(() => z.enum([
+  'integrated', 'plain', 'tmux', 'zellij', 'herdr', 'windows_terminal', 'windows_console',
+]));
+export const SessionAuthoringTmuxTerminalV1Schema = lazyZodSchema(() => z.strictObject({
+  sessionName: z.optional(z.string()),
+  isolated: z.optional(z.boolean()),
+  tmpDir: z.optional(z.union([z.string(), z.null()])),
+}));
+export const SessionAuthoringHerdrTerminalV1Schema = lazyZodSchema(() => z.strictObject({
+  sessionName: z.optional(z.string()),
+}));
+
 export const SessionAuthoringTerminalV1Schema = lazyZodSchema(() => z.strictObject({
-  mode: z.optional(z.enum(['integrated', 'plain', 'tmux', 'zellij', 'herdr', 'windows_terminal', 'windows_console'])),
-  tmux: z.optional(z.strictObject({
-    sessionName: z.optional(z.string()),
-    isolated: z.optional(z.boolean()),
-    tmpDir: z.optional(z.union([z.string(), z.null()])),
-  })),
-  herdr: z.optional(z.strictObject({
-    sessionName: z.optional(z.string()),
-  })),
+  mode: z.optional(SessionAuthoringTerminalModeV1Schema),
+  tmux: z.optional(SessionAuthoringTmuxTerminalV1Schema),
+  herdr: z.optional(SessionAuthoringHerdrTerminalV1Schema),
   windows: z.optional(SessionAuthoringWindowsTerminalV1Schema),
 }));
 

@@ -178,6 +178,25 @@ describe('normalizeNpmArtifactRequest', () => {
     });
   });
 
+  it.each(['registryOrigin', 'curatedExactOrigin'] as const)('uses an explicitly selected unscoped profile without making it the default registry (%s)', originField => {
+    const profile = {
+      version: 1 as const, id: 'selected', displayName: 'Selected registry', origin: 'https://private.example.test',
+      scopes: [], useAsDefault: false, credentialSecretRef: 'secret:selected', createdAtMs: 1, updatedAtMs: 1,
+    };
+    expect(normalizeNpmArtifactRequest({
+      [originField]: profile.origin, packageName: 'private-plugin', explicitProfileId: profile.id, profiles: [profile],
+    })).toMatchObject({
+      registryOrigin: profile.origin,
+      selection: { reason: originField === 'curatedExactOrigin' ? 'curatedExact' : 'explicitProfile', profileId: profile.id },
+      credentialSecretRef: 'secret:selected',
+    });
+    expect(normalizeNpmArtifactRequest({ packageName: 'another-plugin', profiles: [profile] }))
+      .toMatchObject({ registryOrigin: 'https://registry.npmjs.org', selection: { reason: 'publicDefault' } });
+    expect(() => normalizeNpmArtifactRequest({
+      [originField]: 'https://another.example.test', packageName: 'private-plugin', explicitProfileId: profile.id, profiles: [profile],
+    })).toThrow(/profile.*origin/i);
+  });
+
   it('rejects ambiguous profile ids, scope mappings, and defaults', () => {
     const profile = {
       version: 1 as const, displayName: 'Registry', origin: 'https://private.example.test',

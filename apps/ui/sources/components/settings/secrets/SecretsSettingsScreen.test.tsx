@@ -92,6 +92,7 @@ async function mount(editAccess = true, initializeSync = false, beforeRender?: (
     if (initializeSync) {
         connection = await restoreServerAccountForTest({ serverUrl: 'https://secret-editor.test', accountId: 'account-owner',
             credentials: { token: createAccountTokenForTests('account-owner', { currentAccount: true }) },
+            request: (input, init) => harness.request(input, init),
         });
     }
     const scope = { serverId, accountId: 'account-owner' };
@@ -188,6 +189,16 @@ async function initializeRemovalSettings(scope: ServerAccountScope, waiveApprova
 }
 
 describe('Saved Secrets editor continuity through the settings screen', () => {
+    it('honors waived shared-secret deletion without a caller confirmation', async () => {
+        const { screen, scope, entries } = await mount(false, true, scope => initializeRemovalSettings(scope, true));
+        const secret = entries[0]!;
+        const path = '/v1/account/saved-secrets/resources/delete';
+        harness.answer(scope.serverId, path, { body: { resourceId: 'secret-a' } });
+        await screen.pressByTestIdAsync(`saved-secret:${secret.ref}:header`);
+        await screen.pressByTestIdAsync(`saved-secret:${secret.ref}:delete`);
+        await vi.waitFor(() => expect(harness.requestsFor(path)).toHaveLength(1));
+        expect(confirm).not.toHaveBeenCalled();
+    });
     it('honors explicit Account Ask for deletion, reviews the Inbox-executed failure, and asks again for the exact manual retry', async () => {
         const { screen, scope, entries } = await mount(false, true, scope => initializeRemovalSettings(scope, false, false, true));
         const { storage } = await import('@/sync/domains/state/storage');
@@ -220,8 +231,18 @@ describe('Saved Secrets editor continuity through the settings screen', () => {
         expect(readApproval(firstId)).toMatchObject({ status: 'failed', execution: {
             ok: false, errorCode: 'managed_resources_review_required',
         } });
-        await vi.waitFor(() => expect(confirm).toHaveBeenCalledTimes(2));
-        expect(confirm.mock.calls[1]?.[1]).toContain('native-1');
+        const { readApprovalExecutionFailure } = await import('@happier-dev/protocol/approvals/approvalExecutionFailure');
+        expect(readApprovalExecutionFailure(readApproval(firstId))).toMatchObject({
+            errorCode: 'managed_resources_review_required',
+            details: { error: 'managed_resources_review_required', resources: [resource] },
+        });
+        await vi.waitFor(() => expect(confirm, JSON.stringify({
+            localStatus: storage.getState().artifacts[firstId]?.header?.approvalStatus,
+            localBodyAvailable: typeof storage.getState().artifacts[firstId]?.body === 'string',
+            approvalReads: harness.requestsFor(`/v1/artifacts/${firstId}`).length,
+            alerts: alert.mock.calls.map(([title]) => title),
+        })).toHaveBeenCalledTimes(1));
+        expect(confirm.mock.calls[0]?.[1]).toContain('native-1');
         await vi.waitFor(() => expect(artifacts.list()).toHaveLength(2));
         const retryId = artifacts.list()[1]!.id;
         const dispositions = [{ managedId: resource.managedId, expectedIntentRevision: resource.intentRevision,
@@ -301,7 +322,7 @@ describe('Saved Secrets editor continuity through the settings screen', () => {
         harness.answer(scope.serverId, path, { select: input => input && typeof input === 'object' && 'managedResourceDispositions' in input
             ? { status: 500, body: { error: 'unknown' } }
             : { status: 409, body: { error: 'managed_resources_review_required', resources: [resource] } } });
-        confirm.mockResolvedValueOnce(true).mockImplementationOnce(async () => {
+        confirm.mockImplementationOnce(async () => {
             if (choice === 'retired') {
                 await harness.switchAccount(scope.serverId, 'account-next');
                 // Publish the new Account through the actual scope producers, as
@@ -334,8 +355,8 @@ describe('Saved Secrets editor continuity through the settings screen', () => {
                 return parsed.success ? { expectedVersion: parsed.data.expectedVersion } : { read: true };
             }),
         })).not.toHaveLength(0);
-        await vi.waitFor(() => expect(confirm).toHaveBeenCalledTimes(2));
-        expect(confirm.mock.calls[1]?.[1]).toContain('native-1');
+        await vi.waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+        expect(confirm.mock.calls[0]?.[1]).toContain('native-1');
         const requests = harness.requestsFor(path);
         const accepted = choice === 'manual' || choice === 'corrupt';
         expect(requests).toHaveLength(accepted ? 2 : 1);

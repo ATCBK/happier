@@ -2,6 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import type { SessionDraftDocumentV1 } from '@happier-dev/protocol';
 import { createMachineFixture, flushHookEffects, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
@@ -54,21 +55,28 @@ describe('draft identity projection fan-out', () => {
             }
             return { protocolVersion: 1, projection: { v: 2, generation: 1, familiesById: {} } };
         });
-        vi.mocked(TokenStorage.getCredentialsForServerUrl).mockClear();
+        const credentialReads = vi.spyOn(TokenStorage, 'getCredentialsForServerUrl');
         const owner = await renderHook(() => useServerCredentialAccountScopeBindings([serverId]));
         await waitForHomeGovernance(() => expect(owner.getCurrent().get(serverId)?.isCurrent()).toBe(true));
         await loadDaemonMergedProjectionCacheEntry({ machineId: machine.id, serverId,
             accountLifetime: owner.getCurrent().get(serverId) });
-        const drafts: NewSessionDraftProjection[] = Array.from({ length: 60 }, (_, index) => ({
-            draftId: `draft-${index}`, status: 'pending', conflict: null, createdAt: 1, updatedAt: 2, localSupplement: {},
-            document: { v: 1, extensions: {}, composer: {
+        const drafts: NewSessionDraftProjection[] = Array.from({ length: 60 }, (_, index) => {
+            const document: SessionDraftDocumentV1 = { v: 1, extensions: {}, composer: {
                 text: { mutationId: 'text', value: 'A retained draft' }, mentions: { mutationId: 'mentions', value: [] },
                 attachments: { mutationId: 'attachments', value: [] },
             }, target: { kind: 'newSession', authoring: {
                 serverId: { mutationId: 'server', value: serverId }, machineId: { mutationId: 'machine', value: machine.id },
                 agentId: { mutationId: 'agent', value: 'claude' }, directory: { mutationId: 'directory', value: '/repo' },
-            } } },
-        }));
+            } } };
+            return {
+                draftId: `draft-${index}`, status: 'pending', conflict: null, createdAt: 1, updatedAt: 2, localSupplement: {},
+                document, readView: {
+                    address: { kind: 'newSession', draftId: `draft-${index}` }, revision: 0, materialized: true,
+                    status: 'pending', conflict: null, createdAt: 1, updatedAt: 2, localSupplement: {},
+                    composer: document.composer, documentVersion: 1, targetKind: 'newSession',
+                },
+            } satisfies NewSessionDraftProjection;
+        });
         let commits = 0;
         const screen = await renderScreen(<React.Profiler id="draft-cohort" onRender={() => { commits += 1; }}>
             <NewSessionDraftsSectionView drafts={drafts} density="minimal" serverId={serverId}
@@ -84,7 +92,7 @@ describe('draft identity projection fan-out', () => {
         expect(screen.findAllByTestId('session-draft-agent-logo:new-session:draft-59').length).toBeGreaterThan(0);
         // The one credential binding and daemon publication precede the cohort:
         // mounting summary consumers must not restart either owner.
-        expect(vi.mocked(TokenStorage.getCredentialsForServerUrl).mock.calls.filter(([, options]) => options?.serverId === serverId)).toHaveLength(1);
+        expect(credentialReads.mock.calls.filter(([, options]) => options?.serverId === serverId)).toHaveLength(1);
         expect(rpc).toHaveBeenCalledTimes(1);
         expect(commits).toBe(1);
         const marks = () => screen.tree.root.findAllByType(AgentCatalogIdentityIcon);
@@ -104,7 +112,7 @@ describe('draft identity projection fan-out', () => {
         await act(async () => owner.unmount());
         expect(marks().every(mark => mark.props.current === false)).toBe(true);
         expect(commits).toBe(4);
-        expect(vi.mocked(TokenStorage.getCredentialsForServerUrl).mock.calls.filter(([, options]) => options?.serverId === serverId)).toHaveLength(1);
+        expect(credentialReads.mock.calls.filter(([, options]) => options?.serverId === serverId)).toHaveLength(1);
         // A memoized, otherwise unchanged row must not retain the previous UI locale.
         await act(async () => setPreferredLanguageFromSettings('fr'));
         expect(screen.findByTestId('session-draft-delete:new-session:draft-0')?.props.accessibilityLabel).toBe('Supprimer le brouillon');

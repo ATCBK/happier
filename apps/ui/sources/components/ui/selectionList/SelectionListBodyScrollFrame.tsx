@@ -92,6 +92,8 @@ export function SelectionListBodyScrollFrame(props: Readonly<{
         padding: SELECTION_LIST_KEYBOARD_SCROLL_MARGIN_PX,
         alignment: 'nearest',
         animated: false,
+        // The list rests on a whole row, never with the row above the active one cut mid-text.
+        snapToRowStarts: true,
     });
     const { theme } = useUnistyles();
     // A bare picker does not know or paint the host's surface, including at the scrolling edge.

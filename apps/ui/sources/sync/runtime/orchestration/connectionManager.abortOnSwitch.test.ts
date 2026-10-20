@@ -1,644 +1,355 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createDeferred } from '@/dev/testkit';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createDesktopSecureStorageBoundary } from '@/dev/testkit/mocks/desktopSecureStorage';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
 
-type ServerRuntimeSnapshotFixture = Readonly<{
-    serverId: string;
-    serverUrl: string;
-    generation: number;
-}>;
+vi.mock('react-native', async () =>
+    (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 
-function createServerRuntimeMock(readSnapshot: () => ServerRuntimeSnapshotFixture) {
-    return {
-        getActiveServerSnapshot: () => readSnapshot(),
-        captureActiveServerRuntimeTarget: () => {
-            const snapshot = readSnapshot();
-            return { serverId: snapshot.serverId, generation: snapshot.generation };
-        },
-        getActiveServerHomeCarrier: () => null,
-    };
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
+// Observe cold startup before loading Sync or a Home harness. Prepare the real
+// graph during collection, like static imports, so transform cost is not part
+// of a connection-lifecycle test's setup hook.
+async function observeColdStartup() {
+    const connection = await import('./connectionManager');
+    const { installWebLockManagerMock } = await import('@/auth/storage/tokenStorage.web.testHelpers');
+    const locks = installWebLockManagerMock();
+    const { upsertServerProfile, setActiveServerId, removeServerProfile } = await import('@/sync/domains/server/serverProfiles');
+    const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+    const home = await upsertServerProfile({ name: 'Restored Home', serverUrl: 'https://restored.example.test' });
+    try {
+        await setActiveServerId(home.id);
+        const selected = getActiveServerSnapshot();
+        return {
+            appliedId: connection.getAppliedActiveServerId(),
+            applied: connection.getAppliedActiveServerSnapshot(),
+            expected: { serverId: home.id, serverUrl: home.serverUrl, generation: selected.generation },
+        };
+    } finally {
+        await removeServerProfile(home.id);
+        locks.restore();
+    }
 }
+const startup = await observeColdStartup();
+const { installDisconnectedServerSocketBoundary } = await import('@/dev/testkit/harness/serverAccountConnectionHarness');
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+const { createHomeGovernanceHarness } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+const homes = createHomeGovernanceHarness();
+const connection = await import('./connectionManager');
+const runtime = await import('@/sync/domains/server/serverRuntime');
+const scope = await import('@/sync/domains/scope/activeServerAccountScope');
 
-afterEach(() => {
-    vi.resetModules();
-    vi.clearAllMocks();
-});
-
-// `createDeferred` is imported from the UI testkit; reset before each mocked
-// manager import so its transitive modules cannot retain a pre-mock manager.
-beforeEach(() => {
-    vi.resetModules();
+describe('applied active Home snapshot', () => {
+    it('resolves the applied Home when it is first read, not when the module is imported', () => {
+        expect(startup.appliedId).toBe(startup.expected.serverId);
+        expect(startup.applied).toEqual(startup.expected);
+    });
 });
 
 describe('switchConnectionToActiveServer', () => {
-    it('uses server-scoped credentials for the active server when switching sync server', async () => {
-        const abortSpy = vi.fn();
-        const syncSwitchServerSpy = vi.fn(async (_credentials: { token: string; secret: string }) => {});
-        const getCredentialsSpy = vi.fn(async () => null);
-        const getCredentialsForServerUrlSpy = vi.fn(async () => ({ token: 'scoped-token', secret: 'scoped-secret' }));
+    const releases = new Set<() => void>();
+    const subscriptions = new Set<() => void>();
+    let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | undefined;
 
-        vi.doMock('@/sync/domains/server/serverRuntime', () => createServerRuntimeMock(() => ({
-                serverId: 'server-a',
-                serverUrl: 'https://api.example.test',
-                kind: 'custom',
-                generation: 42,
-            })));
-        vi.doMock('@/auth/storage/tokenStorage', () => ({
-            TokenStorage: {
-                getCredentials: getCredentialsSpy,
-                getCredentialsForServerUrl: getCredentialsForServerUrlSpy,
-            },
-        }));
-        vi.doMock('@/sync/sync', () => ({
-            syncSwitchServer: syncSwitchServerSpy,
-        }));
-        vi.doMock('@/sync/http/client', () => ({
-            abortServerFetches: abortSpy,
-        }));
+    beforeEach(async () => {
+        // Desktop secure custody is asynchronous even for already-cached
+        // credentials; hold its real storage port to exercise the read race.
+        vi.stubGlobal('__TAURI_INTERNALS__', createDesktopSecureStorageBoundary());
+        await homes.reset();
+    });
 
-        const { switchConnectionToActiveServer } = await import('./connectionManager');
-        const result = await switchConnectionToActiveServer();
-        expect(getCredentialsForServerUrlSpy).toHaveBeenCalledWith('https://api.example.test', { serverId: 'server-a' });
-        expect(result).toEqual({
-            token: 'scoped-token',
-            secret: 'scoped-secret',
+    afterEach(async () => {
+        for (const release of releases) release();
+        releases.clear();
+        for (const unsubscribe of subscriptions) unsubscribe();
+        subscriptions.clear();
+        await connection.disconnectActiveServerConnection();
+        await homes.reset();
+        browser?.restore();
+        browser = undefined;
+        vi.restoreAllMocks();
+    });
+
+    async function addHome(name: string, accountId: string | null = `account-${name}`) {
+        const serverUrl = `https://${name}.example.test`;
+        const serverId = await homes.addHome({ name, serverUrl, accountId, active: false });
+        const { createAccountTokenForTests } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+        return { serverId, serverUrl, accountId, credentials: accountId ? { token: createAccountTokenForTests(accountId) } : null };
+    }
+
+    async function selectHome(home: Awaited<ReturnType<typeof addHome>>) {
+        await runtime.setActiveServer({ serverId: home.serverId });
+        return runtime.getActiveServerSnapshot();
+    }
+
+    async function restoreHome(home: Awaited<ReturnType<typeof addHome>>) {
+        if (!home.credentials) throw new Error('A restored Home needs a signed-in Account');
+        await selectHome(home);
+        await connection.restoreConnectionToActiveServer(home.credentials);
+    }
+
+    async function holdDeviceRead(matches: (key: string) => boolean) {
+        const deviceStorage = await import('@/auth/storage/deviceLocalStorage');
+        const read = deviceStorage.readDeviceLocalStorageString;
+        const started = createDeferred<void>();
+        const released = createDeferred<void>();
+        let held = false;
+        // Device-local storage is an external persistence port. The credential,
+        // settings-key, Account and Sync owners above it all remain real.
+        vi.spyOn(deviceStorage, 'readDeviceLocalStorageString').mockImplementation(async (key) => {
+            if (matches(key)) {
+                if (!held) {
+                    held = true;
+                    started.resolve();
+                }
+                // A bootstrap read can reach the same port first. Keep every
+                // matching read held so it cannot let the operation under test
+                // bypass the boundary before selection changes.
+                await released.promise;
+            }
+            return await read(key);
         });
+        const release = () => released.resolve();
+        releases.add(release);
+        return { started: started.promise, release };
+    }
 
-        expect(getCredentialsSpy).not.toHaveBeenCalled();
-        expect(syncSwitchServerSpy).toHaveBeenCalledWith(
-            { token: 'scoped-token', secret: 'scoped-secret' },
-            expect.objectContaining({
-                serverId: 'server-a',
-                serverUrl: 'https://api.example.test',
-                generation: 42,
-            }),
-        );
+    it('uses server-scoped credentials for the active server when switching sync server', async () => {
+        const homeA = await addHome('a');
+        await addHome('b');
+        const selected = await selectHome(homeA);
+        const result = await connection.switchConnectionToActiveServer();
+        expect(result).toEqual(homeA.credentials);
+        expect(scope.getActiveServerAccountScope()).toEqual({ serverId: homeA.serverId, accountId: homeA.accountId });
+        expect(connection.getAppliedActiveServerSnapshot()).toEqual(expect.objectContaining({
+            serverId: homeA.serverId, serverUrl: homeA.serverUrl, generation: selected.generation,
+        }));
+        homes.answer(homeA.serverId, '/v1/scoped-probe', { body: { ok: true } });
+        const { serverFetch } = await import('@/sync/http/client');
+        await serverFetch('/v1/scoped-probe', undefined, { retry: 'none' });
+        expect(homes.requestsFor('/v1/scoped-probe')).toEqual([
+            expect.objectContaining({ serverId: homeA.serverId, token: homeA.credentials?.token }),
+        ]);
     });
 
     it('aborts in-flight server fetches before switching sync server', async () => {
-        const abortSpy = vi.fn();
-        const syncSwitchServerSpy = vi.fn(async (_credentials: { token: string; secret: string }) => {});
-        const getCredentialsSpy = vi.fn(async () => ({ token: 'fallback', secret: 'fallback-secret' }));
-        const getCredentialsForServerUrlSpy = vi.fn(async () => ({ token: 't', secret: 's' }));
-
-        vi.doMock('@/sync/domains/server/serverRuntime', () => createServerRuntimeMock(() => ({
-                serverId: 'server-a',
-                serverUrl: 'https://api.example.test',
-                kind: 'custom',
-                generation: 42,
-            })));
-        vi.doMock('@/auth/storage/tokenStorage', () => ({
-            TokenStorage: {
-                getCredentials: getCredentialsSpy,
-                getCredentialsForServerUrl: getCredentialsForServerUrlSpy,
+        const homeA = await addHome('a');
+        const homeB = await addHome('b');
+        await restoreHome(homeA);
+        const entered = createDeferred<void>();
+        const released = createDeferred<void>();
+        releases.add(() => released.resolve());
+        let requestSignal: AbortSignal | null | undefined;
+        homes.answer(homeA.serverId, '/v1/held-request', {
+            select: (_input, request) => {
+                requestSignal = request.signal;
+                entered.resolve();
+                return { body: {}, respondAfter: released.promise };
             },
+        });
+        const { serverFetch, StaleServerGenerationError } = await import('@/sync/http/client');
+        const result = serverFetch('/v1/held-request', undefined, { includeAuth: false, retry: 'none' }).catch(error => error);
+        await entered.promise;
+        let abortedBeforeSyncApplication = false;
+        subscriptions.add(connection.subscribeApplyingActiveServer(serverId => {
+            if (serverId === homeB.serverId) abortedBeforeSyncApplication = requestSignal?.aborted === true;
         }));
-        vi.doMock('@/sync/sync', () => ({
-            syncSwitchServer: syncSwitchServerSpy,
-        }));
-        vi.doMock('@/sync/http/client', () => ({
-            abortServerFetches: abortSpy,
-        }));
-
-        const { switchConnectionToActiveServer } = await import('./connectionManager');
-        await switchConnectionToActiveServer();
-
-        expect(getCredentialsForServerUrlSpy).toHaveBeenCalledWith('https://api.example.test', { serverId: 'server-a' });
-        expect(getCredentialsSpy).not.toHaveBeenCalled();
-        expect(abortSpy).toHaveBeenCalledTimes(1);
-        expect(syncSwitchServerSpy).toHaveBeenCalledTimes(1);
+        await selectHome(homeB);
+        await connection.switchConnectionToActiveServer();
+        expect(abortedBeforeSyncApplication).toBe(true);
+        expect(await result).toBeInstanceOf(StaleServerGenerationError);
+        expect(scope.getActiveServerAccountScope()).toEqual({ serverId: homeB.serverId, accountId: homeB.accountId });
     });
 
     it('applies latest server generation after a switch happens during an in-flight switch', async () => {
-        let generation = 1;
-        const abortSpy = vi.fn();
-        const switchStarted = createDeferred<void>();
-        const releaseSwitch = createDeferred<void>();
-        let syncCallCount = 0;
-        const getCredentialsSpy = vi.fn(async () => null);
-        const getCredentialsForServerUrlSpy = vi.fn(async (serverUrl: string) =>
-            serverUrl === 'https://a.example.test'
-                ? { token: 'token-a', secret: 's' }
-                : { token: 'token-b', secret: 's' },
-        );
-        const syncSwitchServerSpy = vi.fn(async (_credentials: { token: string; secret: string }) => {
-            syncCallCount += 1;
-            if (syncCallCount > 1) return;
-            switchStarted.resolve();
-            await releaseSwitch.promise;
-        });
-
-        vi.doMock('@/sync/domains/server/serverRuntime', () => createServerRuntimeMock(() => ({
-                serverId: generation === 1 ? 'server-a' : 'server-b',
-                serverUrl: generation === 1 ? 'https://a.example.test' : 'https://b.example.test',
-                kind: 'custom',
-                generation,
-            })));
-        vi.doMock('@/auth/storage/tokenStorage', () => ({
-            TokenStorage: {
-                getCredentials: getCredentialsSpy,
-                getCredentialsForServerUrl: getCredentialsForServerUrlSpy,
-            },
+        const homeA = await addHome('a');
+        const homeB = await addHome('b');
+        await restoreHome(homeA);
+        await selectHome(homeA);
+        const gate = await holdDeviceRead(key => key.startsWith('device-local-settings-secret-key:v1:'));
+        const first = connection.switchConnectionToActiveServer();
+        await gate.started;
+        const latest = await selectHome(homeB);
+        const second = connection.switchConnectionToActiveServer();
+        gate.release();
+        await expect(first).resolves.toEqual(homeB.credentials);
+        await expect(second).resolves.toEqual(homeB.credentials);
+        expect(connection.getAppliedActiveServerSnapshot()).toEqual(expect.objectContaining({
+            serverId: homeB.serverId, generation: latest.generation,
         }));
-        vi.doMock('@/sync/sync', () => ({
-            syncSwitchServer: syncSwitchServerSpy,
-        }));
-        vi.doMock('@/sync/http/client', () => ({
-            abortServerFetches: abortSpy,
-        }));
-
-        const { switchConnectionToActiveServer } = await import('./connectionManager');
-        const first = switchConnectionToActiveServer();
-        await switchStarted.promise;
-        generation = 2;
-        const second = switchConnectionToActiveServer();
-        releaseSwitch.resolve();
-        await Promise.all([first, second]);
-
-        expect(abortSpy).toHaveBeenCalledTimes(2);
-        expect(syncSwitchServerSpy).toHaveBeenCalledTimes(2);
-        expect(getCredentialsForServerUrlSpy).toHaveBeenNthCalledWith(1, 'https://a.example.test', { serverId: 'server-a' });
-        expect(getCredentialsForServerUrlSpy).toHaveBeenNthCalledWith(2, 'https://b.example.test', { serverId: 'server-b' });
-        expect(getCredentialsSpy).not.toHaveBeenCalled();
-        expect(syncSwitchServerSpy.mock.calls.at(-1)?.[0]).toEqual({ token: 'token-b', secret: 's' });
+        expect(scope.getActiveServerAccountScope()).toEqual({ serverId: homeB.serverId, accountId: homeB.accountId });
     });
 
     it('does not return stale credentials when a newer Home is requested during the already-applied credential read', async () => {
-        let snapshot = {
-            serverId: 'server-a',
-            serverUrl: 'https://a.example.test',
-            kind: 'custom',
-            generation: 1,
-        };
-        const staleCredentialReadStarted = createDeferred<void>();
-        const releaseStaleCredentialRead = createDeferred<void>();
-        let homeACredentialReads = 0;
-        const homeACredentials = { token: 'token-a', secret: 's-a' };
-        const homeBCredentials = { token: 'token-b', secret: 's-b' };
-        const getCredentialsForServerUrlSpy = vi.fn(async (serverUrl: string) => {
-            if (serverUrl === 'https://a.example.test') {
-                homeACredentialReads += 1;
-                // The first switch reads once before applying Sync and once
-                // again before returning the still-current credentials. Pause
-                // the next already-applied read to reproduce the A/B race.
-                if (homeACredentialReads === 3) {
-                    staleCredentialReadStarted.resolve();
-                    await releaseStaleCredentialRead.promise;
-                }
-                return homeACredentials;
-            }
-            return homeBCredentials;
-        });
-        const syncSwitchServerSpy = vi.fn(async () => {});
-
-        vi.doMock('@/sync/domains/server/serverRuntime', () => createServerRuntimeMock(() => snapshot));
-        vi.doMock('@/auth/storage/tokenStorage', () => ({
-            TokenStorage: {
-                getCredentials: vi.fn(async () => null),
-                getCredentialsForServerUrl: getCredentialsForServerUrlSpy,
-            },
-        }));
-        vi.doMock('@/sync/sync', () => ({
-            syncSwitchServer: syncSwitchServerSpy,
-        }));
-        vi.doMock('@/sync/http/client', () => ({
-            abortServerFetches: vi.fn(),
-        }));
-
-        const connection = await import('./connectionManager');
-        await expect(connection.switchConnectionToActiveServer()).resolves.toEqual(homeACredentials);
-
+        browser = await installBrowserRuntimeForTests({ url: 'https://connection-switch.test' });
+        const homeA = await addHome('a');
+        const homeB = await addHome('b');
+        await restoreHome(homeA);
+        const applied = connection.getAppliedActiveServerSnapshot();
+        expect(connection.getAppliedActiveServerSnapshot()).toEqual(applied);
+        expect(connection.isAppliedActiveServerRuntimeAvailable()).toBe(true);
+        const gate = await holdDeviceRead(key => key.startsWith('auth_credentials'));
         const alreadyAppliedRead = connection.switchConnectionToActiveServer();
-        await staleCredentialReadStarted.promise;
-        snapshot = {
-            serverId: 'server-b',
-            serverUrl: 'https://b.example.test',
-            kind: 'custom',
-            generation: 2,
-        };
+        await Promise.race([gate.started, alreadyAppliedRead.then(() => {
+            throw new Error('Credential lookup returned before reaching its platform boundary');
+        })]);
+        // A real tab selection does not wait for the device-wide mutation lock.
+        await runtime.setActiveServer({ serverId: homeB.serverId, scope: 'tab' });
+        const latest = runtime.getActiveServerSnapshot();
+        expect(latest.serverId).toBe(homeB.serverId);
         const newerRequest = connection.switchConnectionToActiveServer();
-        releaseStaleCredentialRead.resolve();
-
-        await expect(alreadyAppliedRead).resolves.toEqual(homeBCredentials);
-        await expect(newerRequest).resolves.toEqual(homeBCredentials);
-        expect(syncSwitchServerSpy).toHaveBeenLastCalledWith(
-            homeBCredentials,
-            expect.objectContaining({
-                serverId: 'server-b',
-                serverUrl: 'https://b.example.test',
-                generation: 2,
-            }),
-        );
+        gate.release();
+        await expect(alreadyAppliedRead).resolves.toEqual(homeB.credentials);
+        await expect(newerRequest).resolves.toEqual(homeB.credentials);
+        expect(connection.getAppliedActiveServerSnapshot()).toEqual(expect.objectContaining({
+            serverId: homeB.serverId, serverUrl: homeB.serverUrl, generation: latest.generation,
+        }));
     });
 
     it('publishes a same-Home applied event when its connection generation changes', async () => {
-        let snapshot = {
-            serverId: 'server-a',
-            serverUrl: 'https://a.example.test',
-            kind: 'custom',
-            generation: 1,
-        };
-        vi.doMock('@/sync/domains/server/serverRuntime', () => createServerRuntimeMock(() => snapshot));
-        vi.doMock('@/auth/storage/tokenStorage', () => ({
-            TokenStorage: {
-                getCredentials: vi.fn(async () => null),
-                getCredentialsForServerUrl: vi.fn(async () => ({ token: 'token-a', secret: 's' })),
-            },
-        }));
-        vi.doMock('@/sync/sync', () => ({
-            syncSwitchServer: vi.fn(async () => {}),
-        }));
-        vi.doMock('@/sync/http/client', () => ({
-            abortServerFetches: vi.fn(),
-        }));
-
-        const connection = await import('./connectionManager');
+        const home = await addHome('a');
+        await restoreHome(home);
+        const originalGeneration = connection.getAppliedActiveServerSnapshot().generation;
+        const applied: Array<{ serverId: string; generation: number }> = [];
+        subscriptions.add(connection.subscribeAppliedActiveServer((serverId, generation) => applied.push({ serverId, generation })));
+        const latest = await selectHome(home);
+        expect(latest.generation).toBeGreaterThan(originalGeneration);
         await connection.switchConnectionToActiveServer();
-        const applied: Array<{ serverId: string; generation: number | undefined }> = [];
-        const unsubscribe = connection.subscribeAppliedActiveServer((serverId, generation?: number) => {
-            applied.push({ serverId, generation });
-        });
-
-        snapshot = { ...snapshot, generation: 2 };
-        await connection.switchConnectionToActiveServer();
-
-        expect(applied).toEqual([{ serverId: 'server-a', generation: 2 }]);
-        unsubscribe();
+        expect(applied).toEqual([{ serverId: home.serverId, generation: latest.generation }]);
     });
 
     it('republishes the same Home when its singleton transport becomes available again', async () => {
-        const snapshot = {
-            serverId: 'server-a',
-            serverUrl: 'https://a.example.test',
-            kind: 'custom',
-            generation: 1,
-        };
-        const syncRestoreSpy = vi.fn(async () => {});
-        vi.doMock('@/sync/domains/server/serverRuntime', () => createServerRuntimeMock(() => snapshot));
-        vi.doMock('@/auth/storage/tokenStorage', () => ({
-            TokenStorage: {
-                getCredentials: vi.fn(async () => null),
-                getCredentialsForServerUrl: vi.fn(async () => ({ token: 'token-a', secret: 's' })),
-            },
-        }));
-        vi.doMock('@/sync/sync', () => ({
-            syncSwitchServer: vi.fn(async () => {}),
-            syncRestore: syncRestoreSpy,
-            syncHydrateLocalState: vi.fn(),
-        }));
-        vi.doMock('@/sync/http/client', () => ({ abortServerFetches: vi.fn() }));
-
-        const connection = await import('./connectionManager');
-        await connection.switchConnectionToActiveServer();
-        const applied: Array<{ serverId: string; generation: number | undefined }> = [];
+        const home = await addHome('a');
+        await restoreHome(home);
+        const applied: string[] = [];
         const availability: boolean[] = [];
-        const unsubscribe = connection.subscribeAppliedActiveServer((serverId, generation?: number) => {
-            applied.push({ serverId, generation });
-        });
-        const unsubscribeAvailability = connection.subscribeAppliedActiveServerRuntimeAvailability((available) => {
-            availability.push(available);
-        });
-
-        await connection.restoreConnectionToActiveServer({ token: 'token-a', secret: 's' });
-
-        expect(syncRestoreSpy).toHaveBeenCalledOnce();
+        subscriptions.add(connection.subscribeAppliedActiveServer(serverId => applied.push(serverId)));
+        subscriptions.add(connection.subscribeAppliedActiveServerRuntimeAvailability(available => availability.push(available)));
+        await connection.restoreConnectionToActiveServer(home.credentials!);
         expect(connection.isAppliedActiveServerRuntimeAvailable()).toBe(true);
+        expect(scope.getActiveServerAccountScope()).toEqual({ serverId: home.serverId, accountId: home.accountId });
         expect(applied).toEqual([]);
         expect(availability).toEqual([false, true]);
-        unsubscribe();
-        unsubscribeAvailability();
     });
 
     it('keeps the retained Home unavailable after its singleton transport is disconnected', async () => {
-        const snapshot = {
-            serverId: 'server-a',
-            serverUrl: 'https://a.example.test',
-            kind: 'custom',
-            generation: 1,
-        };
-        const syncSwitchServerSpy = vi.fn(async () => {});
-        vi.doMock('@/sync/domains/server/serverRuntime', () => createServerRuntimeMock(() => snapshot));
-        vi.doMock('@/auth/storage/tokenStorage', () => ({
-            TokenStorage: {
-                getCredentials: vi.fn(async () => null),
-                getCredentialsForServerUrl: vi.fn(async () => ({ token: 'token-a', secret: 's' })),
-            },
-        }));
-        vi.doMock('@/sync/sync', () => ({ syncSwitchServer: syncSwitchServerSpy }));
-        vi.doMock('@/sync/http/client', () => ({ abortServerFetches: vi.fn() }));
-
-        const connection = await import('./connectionManager');
-        await connection.switchConnectionToActiveServer();
-        expect(connection.isAppliedActiveServerRuntimeAvailable()).toBe(true);
-
+        const home = await addHome('a');
+        await restoreHome(home);
+        const applied = connection.getAppliedActiveServerSnapshot();
+        const lifetime = scope.captureActiveServerAccountScopeLifetime();
+        expect(lifetime?.isCurrent()).toBe(true);
         await connection.disconnectActiveServerConnection();
-
-        expect(syncSwitchServerSpy).toHaveBeenLastCalledWith(null);
-        expect(connection.getAppliedActiveServerSnapshot()).toEqual(expect.objectContaining({
-            serverId: 'server-a',
-            generation: 1,
-        }));
+        expect(connection.getAppliedActiveServerSnapshot()).toEqual(applied);
         expect(connection.isAppliedActiveServerRuntimeAvailable()).toBe(false);
+        expect(scope.getActiveServerAccountScope()).toBeNull();
+        expect(lifetime?.isCurrent()).toBe(false);
     });
 
     it('restores a disconnected Home at the same generation before reusing its applied shortcut', async () => {
-        const snapshot = {
-            serverId: 'server-a',
-            serverUrl: 'https://a.example.test',
-            kind: 'custom',
-            generation: 1,
-        };
-        const syncSwitchServerSpy = vi.fn(async () => {});
-        vi.doMock('@/sync/domains/server/serverRuntime', () => createServerRuntimeMock(() => snapshot));
-        vi.doMock('@/auth/storage/tokenStorage', () => ({
-            TokenStorage: {
-                getCredentials: vi.fn(async () => null),
-                getCredentialsForServerUrl: vi.fn(async () => ({ token: 'token-a', secret: 's' })),
-            },
-        }));
-        vi.doMock('@/sync/sync', () => ({ syncSwitchServer: syncSwitchServerSpy }));
-        vi.doMock('@/sync/http/client', () => ({ abortServerFetches: vi.fn() }));
-
-        const connection = await import('./connectionManager');
-        await connection.switchConnectionToActiveServer();
+        const home = await addHome('a');
+        await restoreHome(home);
+        const applied = connection.getAppliedActiveServerSnapshot();
+        const retired = scope.captureActiveServerAccountScopeLifetime();
         await connection.disconnectActiveServerConnection();
         expect(connection.isAppliedActiveServerRuntimeAvailable()).toBe(false);
-
         await connection.retryActiveServerConnection();
-
-        expect(syncSwitchServerSpy).toHaveBeenNthCalledWith(
-            3,
-            { token: 'token-a', secret: 's' },
-            expect.objectContaining({ serverId: 'server-a', generation: 1 }),
-        );
+        expect(connection.getAppliedActiveServerSnapshot()).toEqual(applied);
         expect(connection.isAppliedActiveServerRuntimeAvailable()).toBe(true);
+        expect(scope.getActiveServerAccountScope()).toEqual({ serverId: home.serverId, accountId: home.accountId });
+        expect(scope.captureActiveServerAccountScopeLifetime()).not.toBe(retired);
+        expect(retired?.isCurrent()).toBe(false);
     });
 
     it('starts Sync with the new credential when the same Home is signed into after a signed-out apply', async () => {
-        const snapshot = {
-            serverId: 'server-a',
-            serverUrl: 'https://a.example.test',
-            kind: 'custom',
-            generation: 1,
-        };
-        let storedCredentials: { token: string; secret: string } | null = null;
-        const syncSwitchServerSpy = vi.fn(async () => {});
-        vi.doMock('@/sync/domains/server/serverRuntime', () => createServerRuntimeMock(() => snapshot));
-        vi.doMock('@/auth/storage/tokenStorage', () => ({
-            TokenStorage: {
-                getCredentials: vi.fn(async () => null),
-                getCredentialsForServerUrl: vi.fn(async () => storedCredentials),
-            },
-        }));
-        vi.doMock('@/sync/sync', () => ({ syncSwitchServer: syncSwitchServerSpy }));
-        vi.doMock('@/sync/http/client', () => ({ abortServerFetches: vi.fn() }));
-
-        const connection = await import('./connectionManager');
-        // A signed-out tab applies the focused Home with no credential.
-        await connection.switchConnectionToActiveServer();
-        expect(syncSwitchServerSpy).toHaveBeenLastCalledWith(null, expect.objectContaining({ serverId: 'server-a' }));
-
-        // Signing in persists a credential for the same Home and generation.
-        storedCredentials = { token: 'token-a', secret: 's' };
-        await connection.switchConnectionToActiveServer();
-
-        expect(syncSwitchServerSpy).toHaveBeenLastCalledWith(
-            { token: 'token-a', secret: 's' },
-            expect.objectContaining({ serverId: 'server-a', generation: 1 }),
-        );
-
-        // An unchanged credential keeps reusing the applied runtime.
-        await connection.switchConnectionToActiveServer();
-        expect(syncSwitchServerSpy).toHaveBeenCalledTimes(2);
+        const home = await addHome('a', null);
+        const selected = await selectHome(home);
+        await expect(connection.switchConnectionToActiveServer()).resolves.toBeNull();
+        expect(scope.getActiveServerAccountScope()).toBeNull();
+        await homes.switchAccount(home.serverId, 'account-a');
+        const { createAccountTokenForTests } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+        const credentials = { token: createAccountTokenForTests('account-a') };
+        await expect(connection.switchConnectionToActiveServer()).resolves.toEqual(credentials);
+        expect(runtime.getActiveServerSnapshot().generation).toBe(selected.generation);
+        expect(scope.getActiveServerAccountScope()).toEqual({ serverId: home.serverId, accountId: 'account-a' });
+        const lifetime = scope.captureActiveServerAccountScopeLifetime();
+        await expect(connection.switchConnectionToActiveServer()).resolves.toEqual(credentials);
+        expect(scope.captureActiveServerAccountScopeLifetime()).toBe(lifetime);
+        expect(lifetime?.isCurrent()).toBe(true);
     });
 
     it('retires Sync when the same Home signs out, and restarts it for the next credential', async () => {
-        const snapshot = {
-            serverId: 'server-a',
-            serverUrl: 'https://a.example.test',
-            kind: 'custom',
-            generation: 1,
-        };
-        let storedCredentials: { token: string; secret: string } | null = { token: 'token-a', secret: 's' };
-        const syncSwitchServerSpy = vi.fn(async () => {});
-        vi.doMock('@/sync/domains/server/serverRuntime', () => createServerRuntimeMock(() => snapshot));
-        vi.doMock('@/auth/storage/tokenStorage', () => ({
-            TokenStorage: {
-                getCredentials: vi.fn(async () => null),
-                getCredentialsForServerUrl: vi.fn(async () => storedCredentials),
-            },
-        }));
-        vi.doMock('@/sync/sync', () => ({ syncSwitchServer: syncSwitchServerSpy }));
-        vi.doMock('@/sync/http/client', () => ({ abortServerFetches: vi.fn() }));
-
-        const connection = await import('./connectionManager');
-        await connection.switchConnectionToActiveServer();
-
-        storedCredentials = null;
+        const home = await addHome('a');
+        await restoreHome(home);
+        const generation = runtime.getActiveServerSnapshot().generation;
+        const retired = scope.captureActiveServerAccountScopeLifetime();
+        const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+        expect(await TokenStorage.removeCredentialsForServerUrl(home.serverUrl, { serverId: home.serverId })).toBe(true);
         await expect(connection.switchConnectionToActiveServer()).resolves.toBeNull();
-        expect(syncSwitchServerSpy).toHaveBeenLastCalledWith(null, expect.objectContaining({ serverId: 'server-a' }));
-
-        storedCredentials = { token: 'token-a2', secret: 's' };
-        await connection.switchConnectionToActiveServer();
-        expect(syncSwitchServerSpy).toHaveBeenLastCalledWith(
-            { token: 'token-a2', secret: 's' },
-            expect.objectContaining({ serverId: 'server-a', generation: 1 }),
-        );
-        expect(syncSwitchServerSpy).toHaveBeenCalledTimes(3);
+        expect(scope.getActiveServerAccountScope()).toBeNull();
+        expect(retired?.isCurrent()).toBe(false);
+        await homes.switchAccount(home.serverId, 'account-a2');
+        const { createAccountTokenForTests } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+        await expect(connection.switchConnectionToActiveServer()).resolves.toEqual({ token: createAccountTokenForTests('account-a2') });
+        expect(runtime.getActiveServerSnapshot().generation).toBe(generation);
+        expect(scope.getActiveServerAccountScope()).toEqual({ serverId: home.serverId, accountId: 'account-a2' });
     });
 
     it('publishes only the focused Home whose full Sync application has completed', async () => {
-        let snapshot = {
-            serverId: 'server-a',
-            serverUrl: 'https://a.example.test',
-            kind: 'custom',
-            generation: 1,
-        };
-        const firstSwitchStarted = createDeferred<void>();
-        const releaseFirstSwitch = createDeferred<void>();
-        let syncCallCount = 0;
-        const syncSwitchServerSpy = vi.fn(async () => {
-            syncCallCount += 1;
-            if (syncCallCount !== 1) return;
-            firstSwitchStarted.resolve();
-            await releaseFirstSwitch.promise;
-        });
-
-        vi.doMock('@/sync/domains/server/serverRuntime', () => createServerRuntimeMock(() => snapshot));
-        vi.doMock('@/auth/storage/tokenStorage', () => ({
-            TokenStorage: {
-                getCredentials: vi.fn(async () => null),
-                getCredentialsForServerUrl: vi.fn(async (serverUrl: string) => ({
-                    token: serverUrl.includes('a.example') ? 'token-a' : 'token-b',
-                    secret: 's',
-                })),
-            },
-        }));
-        vi.doMock('@/sync/sync', () => ({
-            syncSwitchServer: syncSwitchServerSpy,
-        }));
-        vi.doMock('@/sync/http/client', () => ({
-            abortServerFetches: vi.fn(),
-        }));
-
-        const connection = await import('./connectionManager');
-        expect(connection.getAppliedActiveServerSnapshot()).toEqual(expect.objectContaining({
-            serverId: 'server-a',
-            serverUrl: 'https://a.example.test',
-            generation: 1,
-        }));
+        const homeA = await addHome('a');
+        const homeB = await addHome('b');
+        await restoreHome(homeA);
+        const retained = connection.getAppliedActiveServerSnapshot();
+        await selectHome(homeA);
+        const gate = await holdDeviceRead(key => key.startsWith('device-local-settings-secret-key:v1:'));
         const applied: string[] = [];
         const applying: string[] = [];
-        const unsubscribe = connection.subscribeAppliedActiveServer((serverId) => {
-            applied.push(serverId);
-        });
-        const unsubscribeApplying = connection.subscribeApplyingActiveServer((serverId) => {
-            applying.push(serverId);
-        });
+        subscriptions.add(connection.subscribeAppliedActiveServer(serverId => applied.push(serverId)));
+        subscriptions.add(connection.subscribeApplyingActiveServer(serverId => applying.push(serverId)));
         const first = connection.switchConnectionToActiveServer();
-        await firstSwitchStarted.promise;
-
-        snapshot = {
-            serverId: 'server-b',
-            serverUrl: 'https://b.example.test',
-            kind: 'custom',
-            generation: 2,
-        };
+        await gate.started;
+        const latest = await selectHome(homeB);
         const second = connection.switchConnectionToActiveServer();
-
-        expect(connection.getAppliedActiveServerId()).toBe('server-a');
-        expect(connection.getAppliedActiveServerSnapshot()).toEqual(expect.objectContaining({
-            serverId: 'server-a',
-            serverUrl: 'https://a.example.test',
-            generation: 1,
-        }));
+        expect(connection.getAppliedActiveServerSnapshot()).toEqual(retained);
         expect(applied).toEqual([]);
-        expect(applying).toEqual(['server-a']);
-
-        releaseFirstSwitch.resolve();
+        expect(applying).toEqual([homeA.serverId]);
+        gate.release();
         await Promise.all([first, second]);
-
-        expect(connection.getAppliedActiveServerId()).toBe('server-b');
-        expect(connection.getAppliedActiveServerSnapshot()).toEqual(expect.objectContaining({
-            serverId: 'server-b',
-            serverUrl: 'https://b.example.test',
-            generation: 2,
-        }));
-        expect(applied).toEqual(['server-b']);
-        expect(applying).toEqual(['server-a', 'server-b']);
-        unsubscribe();
-        unsubscribeApplying();
+        expect(connection.getAppliedActiveServerSnapshot()).toEqual(expect.objectContaining({ serverId: homeB.serverId, generation: latest.generation }));
+        expect(applied).toEqual([homeB.serverId]);
+        expect(applying).toEqual([homeA.serverId, homeB.serverId]);
     });
 
     it('withdraws the singleton transport before the former applied Home is reset for a new target', async () => {
-        let snapshot = {
-            serverId: 'server-a',
-            serverUrl: 'https://a.example.test',
-            kind: 'custom',
-            generation: 1,
-        };
-        const bSwitchStarted = createDeferred<void>();
-        const releaseBSwitch = createDeferred<void>();
-        const syncSwitchServerSpy = vi.fn(async (_credentials: unknown, target?: { serverId?: string }) => {
-            if (target?.serverId !== 'server-b') return;
-            bSwitchStarted.resolve();
-            await releaseBSwitch.promise;
-        });
-        const activeQuerySpy = vi.fn(async () => ({ route: 'active' }));
-        const concurrentQuerySpy = vi.fn(async (serverId: string) => ({ route: `concurrent:${serverId}` }));
-
-        vi.doMock('@/sync/domains/server/serverRuntime', () => createServerRuntimeMock(() => snapshot));
-        vi.doMock('@/auth/storage/tokenStorage', async (importOriginal) => {
-            const actual = await importOriginal<typeof import('@/auth/storage/tokenStorage')>();
-            return {
-                ...actual,
-                TokenStorage: {
-                    ...actual.TokenStorage,
-                    getCredentials: vi.fn(async () => null),
-                    getCredentialsForServerUrl: vi.fn(async (serverUrl: string) => ({
-                        token: serverUrl.includes('a.example') ? 'token-a' : 'token-b',
-                        secret: 's',
-                    })),
-                },
-            };
-        });
-        vi.doMock('@/sync/sync', () => ({
-            syncSwitchServer: syncSwitchServerSpy,
-            sync: { fetchSessionListQueryPage: activeQuerySpy },
-        }));
-        vi.doMock('@/sync/http/client', async (importOriginal) => ({
-            ...await importOriginal<typeof import('@/sync/http/client')>(),
-            abortServerFetches: vi.fn(),
-        }));
-        vi.doMock('@/sync/runtime/orchestration/concurrentSessionCache', () => ({
-            fetchConcurrentSessionListQueryPage: concurrentQuerySpy,
-            getConcurrentSessionListQueryHomeAvailability: () => 'offline',
-            isConcurrentSessionListQueryHomeOnline: () => false,
-            retryConcurrentSessionListQueryHome: vi.fn(async () => {}),
-        }));
-
-        const connection = await import('./connectionManager');
-        await connection.switchConnectionToActiveServer();
-        expect(connection.isAppliedActiveServerRuntimeAvailable()).toBe(true);
-
-        snapshot = {
-            serverId: 'server-b',
-            serverUrl: 'https://b.example.test',
-            kind: 'custom',
-            generation: 2,
-        };
+        const homeA = await addHome('a');
+        const homeB = await addHome('b');
+        await restoreHome(homeA);
+        const retained = connection.getAppliedActiveServerSnapshot();
+        await selectHome(homeB);
+        const gate = await holdDeviceRead(key => key.startsWith('device-local-settings-secret-key:v1:'));
         const pendingSwitch = connection.switchConnectionToActiveServer();
-        await bSwitchStarted.promise;
-
-        expect(connection.getAppliedActiveServerSnapshot()).toEqual(expect.objectContaining({
-            serverId: 'server-a',
-            generation: 1,
-        }));
+        await gate.started;
+        expect(connection.getAppliedActiveServerSnapshot()).toEqual(retained);
         expect(connection.isAppliedActiveServerRuntimeAvailable()).toBe(false);
-
         const queryRuntime = await import('@/sync/domains/session/listing/sessionListQueryRuntime');
-        const page = {
-            source: { kind: 'ordinary' as const, path: '/v2/sessions', allowV1Fallback: false },
-            membership: 'ordinary' as const,
-            signal: new AbortController().signal,
-        };
-        await expect(queryRuntime.fetchSessionListQueryPageForHome('server-b', page))
-            .resolves.toEqual({ route: 'concurrent:server-b' });
-        expect(activeQuerySpy).not.toHaveBeenCalled();
-
-        releaseBSwitch.resolve();
+        expect(queryRuntime.isSyncOwnedOrdinarySessionListHome(homeA.serverId)).toBe(false);
+        expect(queryRuntime.isSyncOwnedOrdinarySessionListHome(homeB.serverId)).toBe(false);
+        const targetSessionRequests = () => homes.requests.filter(request => request.serverId === homeB.serverId
+            && request.path.startsWith('/v2/sessions'));
+        expect(targetSessionRequests()).toEqual([]);
+        // A staged/applying Home is withdrawn from concurrent ownership too;
+        // the real query owner reports unavailability rather than borrowing Sync.
+        await expect(queryRuntime.fetchSessionListQueryPageForHome(homeB.serverId, {
+            source: { kind: 'ordinary', path: '/v2/sessions', allowV1Fallback: false },
+            membership: 'ordinary', signal: new AbortController().signal,
+        })).rejects.toMatchObject({ code: 'home_unavailable' });
+        expect(targetSessionRequests()).toEqual([]);
+        gate.release();
         await pendingSwitch;
-
-        expect(connection.getAppliedActiveServerSnapshot()).toEqual(expect.objectContaining({
-            serverId: 'server-b',
-            generation: 2,
-        }));
+        expect(connection.getAppliedActiveServerSnapshot()).toEqual(expect.objectContaining({ serverId: homeB.serverId }));
         expect(connection.isAppliedActiveServerRuntimeAvailable()).toBe(true);
-    });
-});
-
-describe('applied active Home snapshot', () => {
-    it('resolves the applied Home when it is first read, not when the module is imported', async () => {
-        let snapshot: ServerRuntimeSnapshotFixture = { serverId: '', serverUrl: '', generation: 0 };
-        vi.doMock('@/sync/domains/server/serverRuntime', () => createServerRuntimeMock(() => snapshot));
-        vi.doMock('@/auth/storage/tokenStorage', () => ({
-            TokenStorage: {
-                getCredentials: vi.fn(async () => null),
-                getCredentialsForServerUrl: vi.fn(async () => null),
-            },
-        }));
-        vi.doMock('@/sync/sync', () => ({ syncSwitchServer: vi.fn(async () => {}) }));
-        vi.doMock('@/sync/http/client', () => ({ abortServerFetches: vi.fn() }));
-
-        // The module is loaded before the persisted Home has been restored, which
-        // is the real startup order for every consumer that imports Sync eagerly.
-        const connection = await import('./connectionManager');
-        snapshot = { serverId: 'server-a', serverUrl: 'https://api.example.test', generation: 7 };
-
-        expect(connection.getAppliedActiveServerId()).toBe('server-a');
-        expect(connection.getAppliedActiveServerSnapshot()).toEqual({
-            serverId: 'server-a',
-            serverUrl: 'https://api.example.test',
-            generation: 7,
-        });
     });
 });

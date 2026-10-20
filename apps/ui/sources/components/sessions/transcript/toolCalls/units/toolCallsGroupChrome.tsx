@@ -15,14 +15,15 @@ import { resolveInactiveSessionToolCallFailure } from '@/components/tools/shell/
 
 import type { GroupedToolCallChromeMode } from './groupedToolCallRowRenderDecision';
 import { Icon } from '@/components/ui/icons/Icon';
+import { ToolOutcomeStatus } from '@/components/tools/shell/presentation/ToolOutcomeStatus';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { workStatusGlyphColor } from '@/components/work/status/workStatusTreatment';
 import { shouldShowToolCallsGroupStatusIndicator } from '../resolveToolCallsGroupPresentation';
 
 export type ToolCallsGroupChromeVariant = 'cards' | 'feed' | 'feed_background';
 export type ToolCallsGroupUnitPosition = 'header' | 'middle' | 'footer';
-import type { ToolCallsGroupStatus } from '../resolveToolCallsGroupPresentation';
-export { resolveToolCallsGroupStatus, type ToolCallsGroupStatus } from '../resolveToolCallsGroupPresentation';
+import type { ToolCallsGroupStatus, ToolCallsGroupSummary } from '../resolveToolCallsGroupPresentation';
+export { resolveToolCallsGroupSummary, type ToolCallsGroupStatus, type ToolCallsGroupSummary } from '../resolveToolCallsGroupPresentation';
 
 export function resolveToolCallsGroupChromeVariant(
     toolChromeCommon: TranscriptToolChromeCommon,
@@ -121,9 +122,19 @@ export function ToolCallsGroupUnitRowScaffold(props: Readonly<{ children: React.
  * disclosure affordance in both states. Shared between the whole-card
  * ToolCallsGroupView and the per-unit header row.
  */
+/** One word per outcome: the header says what the failed row says, and both outcomes when the group has both. */
+function resolveGroupFailureLabel(outcomes: ToolCallsGroupSummary | undefined): string {
+    if (outcomes && outcomes.failed > 0 && outcomes.refused > 0) {
+        return t('toolView.actionOutcome.mixed', { failed: outcomes.failed, refused: outcomes.refused });
+    }
+    return outcomes?.failuresAreActionOutcomes ? t('toolView.actionOutcome.failed') : t('common.error');
+}
+
 export const ToolCallsGroupHeaderChrome = React.memo(function ToolCallsGroupHeaderChrome(props: Readonly<{
     chromeMode: GroupedToolCallChromeMode;
     status: ToolCallsGroupStatus;
+    /** How many calls failed or were refused, so the header names the outcomes the rows show. */
+    outcomes?: ToolCallsGroupSummary;
     count: number;
     expanded: boolean;
     onToggleExpanded: () => void;
@@ -132,8 +143,10 @@ export const ToolCallsGroupHeaderChrome = React.memo(function ToolCallsGroupHead
     const { theme } = useUnistyles();
     const terminalStatusLabel =
         props.status === 'error'
-            ? t('common.error')
-            : props.status === 'permission_denied'
+            ? resolveGroupFailureLabel(props.outcomes)
+            : props.status === 'refused'
+                ? t('toolView.actionOutcome.refused')
+                : props.status === 'permission_denied'
                 ? t('errors.permissionDenied')
                 : props.status === 'permission_canceled'
                     ? t('errors.permissionCanceled')
@@ -159,28 +172,25 @@ export const ToolCallsGroupHeaderChrome = React.memo(function ToolCallsGroupHead
                 <Text style={chromeStyles.subtitle}> · {props.count}</Text>
             </Text>
             <View style={chromeStyles.headerRight}>
-                {shouldShowToolCallsGroupStatusIndicator(props) ? <View
-                    testID={`tool-calls-group-status:${props.status}`}
-                    accessible={terminalStatusLabel !== null}
-                    accessibilityLabel={terminalStatusLabel ?? undefined}
-                    style={terminalStatusLabel ? chromeStyles.terminalStatus : chromeStyles.statusIconRight}
-                >
-                    {props.status === 'running' ? (
-                        <ActivitySpinner size={iconMatchedSpinnerSize(GROUP_STATUS_ICON_SIZE_PX)} color={workStatusGlyphColor(theme.colors, 'neutral')} />
-                    ) : props.status === 'error' ? (
-                        <Icon name="warning-circle" size={GROUP_STATUS_ICON_SIZE_PX} color={workStatusGlyphColor(theme.colors, 'danger')} />
-                    ) : props.status === 'permission_denied' || props.status === 'permission_canceled' ? (
-                        <Icon name="minus-circle" size={16} color={theme.colors.state.danger.foreground} />
+                {shouldShowToolCallsGroupStatusIndicator(props) ? (
+                    terminalStatusLabel ? (
+                        <ToolOutcomeStatus
+                            testID={`tool-calls-group-status:${props.status}`}
+                            label={terminalStatusLabel}
+                            glyph={props.status === 'error' ? 'warning-circle' : 'minus-circle'}
+                            tone={props.status === 'refused' ? 'quiet' : 'danger'}
+                        />
                     ) : (
-                        // Done is quiet: the group's check stays in the ink.
-                        <Icon name="check-circle" size={GROUP_STATUS_ICON_SIZE_PX} color={workStatusGlyphColor(theme.colors, 'neutral')} />
-                    )}
-                    {terminalStatusLabel ? (
-                        <Text style={chromeStyles.terminalStatusText} numberOfLines={1}>
-                            {terminalStatusLabel}
-                        </Text>
-                    ) : null}
-                </View> : null}
+                        <View testID={`tool-calls-group-status:${props.status}`} style={chromeStyles.statusIconRight}>
+                            {props.status === 'running' ? (
+                                <ActivitySpinner size={iconMatchedSpinnerSize(GROUP_STATUS_ICON_SIZE_PX)} color={workStatusGlyphColor(theme.colors, 'neutral')} />
+                            ) : (
+                                // Done is quiet: the group's check stays in the ink.
+                                <Icon name="check-circle" size={GROUP_STATUS_ICON_SIZE_PX} color={workStatusGlyphColor(theme.colors, 'neutral')} />
+                            )}
+                        </View>
+                    )
+                ) : null}
                 {/* The header is the group's disclosure in both states, so its caret says which way it goes:
                     the quietest mark in the header (lab `.l12-tg .cu`), one glyph per state. */}
                 <Icon
@@ -217,6 +227,14 @@ export const ToolCallsGroupExpandMoreChrome = React.memo(function ToolCallsGroup
 
 const GROUP_STATUS_ICON_SIZE_PX = 16;
 const GROUP_CARET_SIZE_PX = 14;
+
+/**
+ * The header ends in its caret, so its status stops this far from the group's edge. The rows under it
+ * end here too, which puts every outcome (header and rows) in one column.
+ */
+export function groupTrailingColumnPx(space: Readonly<{ s8: number }>): number {
+    return GROUP_CARET_SIZE_PX + space.s8;
+}
 
 const chromeStyles = StyleSheet.create((theme) => ({
     header: {
@@ -256,18 +274,6 @@ const chromeStyles = StyleSheet.create((theme) => ({
         width: GROUP_STATUS_ICON_SIZE_PX,
         alignItems: 'center',
         justifyContent: 'center',
-    },
-    terminalStatus: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'flex-end',
-        gap: theme.space.s4,
-        minWidth: 0,
-    },
-    terminalStatusText: {
-        color: theme.colors.state.danger.foreground,
-        ...Typography.variant('meta', 'semiBold'),
-        maxWidth: 160,
     },
     previewMore: {
         paddingHorizontal: 0,
@@ -351,5 +357,6 @@ const unitStyles = StyleSheet.create((theme) => ({
         flex: 1,
         minWidth: 0,
         paddingLeft: theme.space.s6,
+        paddingRight: groupTrailingColumnPx(theme.space),
     },
 }));

@@ -6,6 +6,7 @@
  * daemon-side credential resolution.
  */
 
+import { z } from 'zod/mini';
 import { ConnectedAccountServiceKeySchema, ConnectedServiceBindingsV2IngressSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
 import type { ConnectedServiceBindingsV2 as ProtocolConnectedServicesBindingsV2, ConnectedAccountServiceKey, QualifiedConnectedAccountRef } from '@happier-dev/protocol';
 
@@ -39,8 +40,8 @@ export type ConnectedServicesBindingsV2 = ProtocolConnectedServicesBindingsV2;
 
 // Admission preserves absence, but never recovers malformed explicit intent as native auth.
 // The protocol ingress is the sole owner of current validation and released V1 normalization.
-export const ConnectedServicesBindingsIngressSchema: ReturnType<typeof ConnectedServiceBindingsV2IngressSchema.optional> =
-  ConnectedServiceBindingsV2IngressSchema.optional();
+export const ConnectedServicesBindingsIngressSchema: z.ZodMiniOptional<typeof ConnectedServiceBindingsV2IngressSchema> =
+  z.optional(ConnectedServiceBindingsV2IngressSchema);
 
 export function parseConnectedServiceBindingSelections(raw: unknown): ConnectedServiceBindingSelection[] {
   // Recovering metadata projection only; execution admission must validate with the schema above.

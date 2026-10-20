@@ -18,6 +18,8 @@ import { Typography } from '@/constants/Typography';
 import { Modal } from '@/modal';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 import { machineResourceStore } from '@/sync/domains/machines/resources/machineResourceStore';
+import type { MachineResourceKey } from '@/sync/domains/machines/resources/machineRpc';
+import { useMachineDaemonReadIdentities } from '@/sync/domains/machines/useMachineDaemonReadTarget';
 import { useMachineOfflineAlert } from '@/sync/domains/machines/resources/useMachineOfflineAlert';
 import { useMachineResourcesPolicy } from '@/sync/domains/machines/resources/useMachineResourcesPolicy';
 import { t } from '@/text';
@@ -96,10 +98,11 @@ export function MachineAlertsPage(
   );
 
   const daemonState: unknown = props.machine.daemonState;
+  const readTarget = useMachineDaemonReadIdentities([{ serverId: props.serverId, machineId: props.machine.id }])[0]!;
   // The largest volume this app session has read bounds a custom amount (no read is issued for it).
   const largestVolumeBytes = React.useCallback(
-    () => readLargestRetainedVolumeBytes({ serverId: props.serverId, machineId: props.machine.id }),
-    [props.machine.id, props.serverId],
+    () => readTarget.accountMatches ? readLargestRetainedVolumeBytes(readTarget.key) : null,
+    [readTarget.accountMatches, readTarget.key],
   );
   const published = readMachinePublishedResources(daemonState);
   const readOnlyNote =
@@ -554,7 +557,7 @@ const styles = StyleSheet.create((theme) => ({
   },
 }));
 
-function readLargestRetainedVolumeBytes(key: Readonly<{ serverId: string; machineId: string }>): number | null {
+function readLargestRetainedVolumeBytes(key: MachineResourceKey): number | null {
   let largest: number | null = null;
   for (const view of ['overview', 'summary'] as const) {
     const disk = machineResourceStore.getState({ ...key, view }).snapshot?.sample?.disk;

@@ -18,6 +18,7 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
 import { useExecutePluginAction, useTabPanelActivity } from '@happier-dev/plugin-ui';
+import { useTriageDetailRequest } from '@happier-dev/triage-sources/ui';
 import {
     triagePagedPanelInitialState,
     triagePagedPanelReducer,
@@ -167,6 +168,7 @@ export function usePosthogActivityController(
         [],
     );
     const { execute } = useExecutePluginAction(action);
+    const { instance, localRef } = useTriageDetailRequest(input);
 
     const readPage = useCallback(async (
         token: number,
@@ -176,12 +178,8 @@ export function usePosthogActivityController(
         dispatch({ kind: 'requestStarted', token });
         const execution = await execute({
             v: 1,
-            instance: input.instance,
-            localRef: {
-                kindId: input.observation.entryRef.kindId,
-                collisionScope: input.observation.entryRef.collisionScope,
-                entryId: input.observation.entryRef.entryId,
-            },
+            instance,
+            localRef,
             // The provider projection owns this ceiling; the controller adds
             // no second page-size policy.
             limit: POSTHOG_ISSUE_ACTIVITY_MAX_LIMIT,
@@ -221,7 +219,7 @@ export function usePosthogActivityController(
             continuation: parsed.continuation ?? null,
             incomplete: parsed.incomplete ?? null,
         });
-    }, [execute, input.instance, input.observation.entryRef]);
+    }, [execute, instance, localRef]);
 
     useEffect(() => {
         if (!active) {

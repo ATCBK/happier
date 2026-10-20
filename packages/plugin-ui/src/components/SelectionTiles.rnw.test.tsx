@@ -7,6 +7,7 @@ import { ItemGroup, SelectionTiles, Text, type SelectionTilesOption } from './in
 import { PluginUiProvider } from './PluginUiProvider.js';
 import { HappierSelectionTiles } from '../presentation/form/SelectionTiles.js';
 import { HappierPageSheet } from '../presentation/layout/PageSection.js';
+import { HAPPIER_TYPE_SCALE, resolveHappierTypeScale, type HappierTypeRole } from '../presentation/text/typeScale.js';
 
 const ACTION_OPTIONS = [
   { id: 'phone', title: 'Add your phone', subtitle: 'Show a QR code', testID: 'action:phone' },
@@ -217,6 +218,26 @@ describe('SelectionTiles', () => {
     expect(onChange).toHaveBeenLastCalledWith('cozy');
     mount.unmount();
   });
+  it('keeps every wrapped row of natural-size visual tiles at one width, so a short last row lines up', async () => {
+    const options = ['a', 'b', 'c', 'd', 'e'].map((id) => ({ id, title: id.toUpperCase() }));
+    const mount = mountThroughReactNativeWeb(<HappierSelectionTiles
+      variant="visual"
+      accessibilityLabel="Theme" options={options} value="a" onChange={() => {}}
+      colors={TILE_COLORS}
+      renderText={({ text }) => <span>{text}</span>}
+      renderGlyph={() => null}
+    />);
+    const tiles = radios(mount.container);
+    const grid = tiles[0]!.parentElement!;
+    const handler = Reflect.get(grid, '__reactLayoutHandler');
+    expect(typeof handler).toBe('function');
+    // A phone sheet: three shrunken tiles per row, then a row of two. Every tile, including the
+    // short last row, takes the same width; nothing stretches to the natural maximum.
+    act(() => handler({ nativeEvent: { layout: { x: 0, y: 0, width: 330, height: 240 } } }));
+    expect(radios(mount.container).map((tile) => Number.parseFloat(tile.style.width)))
+      .toEqual(Array(5).fill((330 - 20) / 3));
+    mount.unmount();
+  });
   it('is one named radio group whose tiles say which option is chosen, and a press chooses', async () => {
     const onChange = vi.fn();
     const mount = mountTiles(<ControlledSingle onChange={onChange} />);
@@ -285,6 +306,38 @@ describe('SelectionTiles', () => {
     mount.unmount();
   });
 
+  it('draws every tile text slot on a canonical type role (scale roles R1/R4)', () => {
+    const roleMetrics = new Set((Object.keys(HAPPIER_TYPE_SCALE) as HappierTypeRole[]).map((role) => {
+      const step = resolveHappierTypeScale(role, 'web');
+      return `${step.fontSize}/${step.lineHeight}`;
+    }));
+    const mount = mountTiles(<>
+      <SelectionTiles accessibilityLabel="Card" value="card-a" onChange={() => undefined}
+        options={[{ id: 'card-a', title: 'Card title', subtitle: 'Card subtitle', badge: 'Card badge' }]} />
+      <SelectionTiles density="compact" accessibilityLabel="Compact" value="compact-a" onChange={() => undefined}
+        options={[{ id: 'compact-a', title: 'Compact title', subtitle: 'Compact subtitle' }]} />
+      <SelectionTiles variant="visual" accessibilityLabel="Visual" value="visual-a" onChange={() => undefined}
+        options={[{ id: 'visual-a', title: 'Visual chosen', subtitle: 'Visual sublabel', preview: <Text value="p" /> },
+          { id: 'visual-b', title: 'Visual other', preview: <Text value="q" /> }]} />
+      <SelectionTiles variant="action" accessibilityLabel="Actions" onPress={() => undefined}
+        options={[{ id: 'action-a', title: 'Action title', subtitle: 'Action subtitle' }]} />
+    </>);
+    const texts = ['Card title', 'Card subtitle', 'Card badge', 'Compact title', 'Compact subtitle', 'Visual chosen',
+      'Visual sublabel', 'Visual other', 'Action title', 'Action subtitle'];
+    for (const text of texts) {
+      const node = [...mount.container.querySelectorAll<HTMLElement>('*')]
+        .find((candidate) => candidate.children.length === 0 && candidate.textContent === text);
+      expect(node, text).toBeDefined();
+      // The text owner may nest a run inside its styled host; read the nearest element carrying the step.
+      let styled: HTMLElement | null = node!;
+      while (styled && styled.style.fontSize === '') styled = styled.parentElement;
+      expect(styled, `${text} carries a type step`).not.toBeNull();
+      const style = styled!.style;
+      expect(roleMetrics, `${text}: ${style.fontSize}/${style.lineHeight}`)
+        .toContain(`${Number.parseFloat(style.fontSize)}/${Number.parseFloat(style.lineHeight)}`);
+    }
+    mount.unmount();
+  });
   it('renders each visual tile as its preview with the label beneath, and rings the chosen one', async () => {
     const context = createSurfaceContext();
     function ControlledVisual() {

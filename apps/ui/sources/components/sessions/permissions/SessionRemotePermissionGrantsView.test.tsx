@@ -90,6 +90,7 @@ describe('SessionRemotePermissionGrantsView', () => {
             serverId,
             method: 'session.permission.remote.grants.list',
             payload: { sessionId: 'session-1', limit: 50 },
+            signal: expect.any(AbortSignal),
         });
         expect(screen.findByTestId('session-remote-permission-grant-grant-1')).toBeTruthy();
         expect(screen.getTextContent()).toContain('Active grant from external:alice');
@@ -103,6 +104,7 @@ describe('SessionRemotePermissionGrantsView', () => {
             sessionId: 'session-1',
             serverId,
             method: 'session.permission.remote.grants.revoke',
+            signal: expect.any(AbortSignal),
             payload: {
                 sessionId: 'session-1',
                 turnId: 'turn-1',
@@ -115,9 +117,11 @@ describe('SessionRemotePermissionGrantsView', () => {
             serverId,
             method: 'session.permission.remote.grants.list',
             payload: { sessionId: 'session-1', limit: 50 },
+            signal: expect.any(AbortSignal),
         });
         expect(screen.getTextContent()).toContain('Revoked grant from external:alice');
         expect(screen.findByTestId('session-remote-permission-grant-grant-1-revoke')).toBeNull();
+        expect(confirm).not.toHaveBeenCalled();
     });
 
     it('fails closed when a response lacks the owner-only grant projection', async () => {
@@ -166,6 +170,7 @@ describe('SessionRemotePermissionGrantsView', () => {
             serverId,
             method: 'session.permission.remote.grants.list',
             payload: { sessionId: 'session-1', limit: 50, cursor: 'cursor-2' },
+            signal: expect.any(AbortSignal),
         });
         expect(screen.findByTestId('session-remote-permission-grant-grant-1')).toBeTruthy();
         expect(screen.findByTestId('session-remote-permission-grant-grant-2')).toBeTruthy();

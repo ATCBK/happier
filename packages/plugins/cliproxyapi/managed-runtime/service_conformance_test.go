@@ -74,6 +74,7 @@ func TestPinnedSDKMixedServingUsesFinalLeaseAfterExecutorShaping(t *testing.T) {
 		t.Fatalf("managed health identity = %#v", healthIdentity)
 	}
 	catalog := gateway.Catalog()
+	assertGeneratedCatalogMatchesRegisteredSDK(t, catalog)
 	if !catalogContains(catalog, ProviderCodex, "gpt-5.5") {
 		t.Fatal("credential-free catalog omitted pinned Codex compatibility model")
 	}
@@ -166,6 +167,42 @@ func TestPinnedSDKMixedServingUsesFinalLeaseAfterExecutorShaping(t *testing.T) {
 	assertStrictSurface(t, cfg, http.MethodGet, "/")
 
 	assertNoRuntimeStateFiles(t, runtimeDir)
+}
+
+func assertGeneratedCatalogMatchesRegisteredSDK(t *testing.T, catalog []CatalogModel) {
+	t.Helper()
+	source, err := os.ReadFile("../src/provider/staticModels.generated.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const prefix = "export const CLIPROXYAPI_STATIC_MODELS = "
+	_, encoded, found := bytes.Cut(source, []byte(prefix))
+	if !found {
+		t.Fatal("generated model export missing")
+	}
+	encoded = bytes.TrimSuffix(encoded, []byte(" as const;\n"))
+	var generated map[Provider][]struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(encoded, &generated); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{}
+	for provider, models := range generated {
+		for _, model := range models {
+			want[string(provider)+"/"+model.ID] = true
+		}
+	}
+	for _, model := range catalog {
+		key := string(model.Provider) + "/" + model.ID
+		if !want[key] {
+			t.Fatalf("registered SDK model absent from generated catalog: %s", key)
+		}
+		delete(want, key)
+	}
+	if len(want) != 0 {
+		t.Fatalf("generated models absent from registered SDK catalog: %v", want)
+	}
 }
 
 func TestPinnedSDKSparseBindingsSeparateServingProtocolFromUpstreamAuthority(t *testing.T) {
@@ -1269,7 +1306,7 @@ func getStrictOpenAIModelCatalog(t *testing.T, cfg Config) []map[string]json.Raw
 	for i, row := range rows {
 		for key := range row {
 			switch key {
-			case "id", "object", "created", "owned_by":
+			case "id", "object", "created", "owned_by", "happier_connected_account_purposes":
 			default:
 				t.Fatalf("model catalog row %d has unexpected key %q", i, key)
 			}

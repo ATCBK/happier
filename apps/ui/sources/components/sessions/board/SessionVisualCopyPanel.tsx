@@ -51,9 +51,9 @@ export function SessionVisualCopyPanel(props: Readonly<{
         } catch { setState('failed'); }
         finally { inFlight.current = false; }
     };
-    return <WidgetFlowPanel title={t('widgetDefinition.visualSaveTitle')} hint={t('widgetDefinition.visualSaveHint')}
+    return <WidgetFlowPanel title={saved && props.share ? t('widgetDefinition.visualShareTitle') : t('widgetDefinition.visualSaveTitle')} hint={saved ? null : t('widgetDefinition.visualSaveHint')}
         testID={props.testID} onCancel={props.onClose}
-        note={saved ? t('widgetDefinition.visualSavedSnapshot') : state === 'pending' ? t('widgetAdd.areaApprovalPending') : null}
+        note={saved ? t('widgetDefinition.visualSavedCopy') : state === 'pending' ? t('widgetAdd.areaApprovalPending') : null}
         error={state === 'failed' ? t('widgetDefinition.visualSaveFailed') : null}
         primary={saved || state === 'pending' ? { label: t('common.done'), onPress: props.onClose }
             : { label: t('common.save'), testID: `${props.testID}.save`, onPress: () => { void save(); }, busy: state === 'busy' }}>

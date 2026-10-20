@@ -15,7 +15,7 @@ it.each(['same-row', 'newer-ack'] as const)('resumes pending ACP activation clea
     let holdHistory = false;
     let releaseHistory!: () => void;
     const held = new Promise<void>(resolve => { releaseHistory = resolve; });
-    const record = { v: 1, definitions: [] };
+    const record = { v: 1 as const, definitions: [] };
     const account = await restoreServerAccountForTest({ serverUrl: `https://acp-maintenance-${state}.example.test`, accountId: `acp-maintenance-${state}`,
         request: async (url, init) => {
             const path = new URL(String(url)).pathname;

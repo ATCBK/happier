@@ -1,8 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import tweetnacl from 'tweetnacl';
+import { SessionPermissionRespondRpcParamsV1Schema } from '@happier-dev/protocol/sessions/permissions/respondRpcParamsV1';
+import { buildConnectedServiceCredentialRefreshSpawnErrorResult } from '@/daemon/connectedServices/diagnostics/buildConnectedServiceDiagnosticSpawnErrorResult';
 
 const { mockAxiosGet, mockAxiosPost } = vi.hoisted(() => ({
   mockAxiosGet: vi.fn(),
@@ -18,17 +20,6 @@ vi.mock('axios', () => ({
     ),
   },
 }));
-
-vi.mock('@/configuration', async () => {
-  const actual = await vi.importActual<any>('@/configuration');
-  return {
-    ...actual,
-    configuration: {
-      ...actual.configuration,
-      apiServerUrl: 'http://127.0.0.1:24599',
-    },
-  };
-});
 
 const {
   fetchSessionById,
@@ -60,10 +51,6 @@ const {
   stopExecutionRun: vi.fn(),
   executeExecutionRunAction: vi.fn(),
   requestDaemonPluginActionExecution: vi.fn(),
-}));
-
-const { bootstrapAccountSettingsContext } = vi.hoisted(() => ({
-  bootstrapAccountSettingsContext: vi.fn(),
 }));
 
 const { validateStoredAuthTokenAgainstActiveServer } = vi.hoisted(() => ({
@@ -123,10 +110,6 @@ vi.mock('@/session/services/executionRuns', () => ({
   executeExecutionRunAction,
 }));
 
-vi.mock('@/settings/accountSettings/bootstrapAccountSettingsContext', () => ({
-  bootstrapAccountSettingsContext,
-}));
-
 vi.mock('@/auth/validateStoredAuthTokenAgainstActiveServer', () => ({
   validateStoredAuthTokenAgainstActiveServer,
 }));
@@ -147,8 +130,12 @@ vi.mock('@/session/transport/rpc/sessionRpc', () => ({
   callSessionRpc,
 }));
 
-vi.mock('@/session/transport/rpc/machineRpc', () => ({
+// Both names cross the Machine transport boundary; keep canonical disposition
+// and requester codecs real while exercising the exact-target call used today.
+vi.mock('@/session/transport/rpc/machineRpc', async importOriginal => ({
+  ...await importOriginal<typeof import('@/session/transport/rpc/machineRpc')>(),
   callMachineRpc,
+  callExactMachineRpc: callMachineRpc,
 }));
 
 vi.mock('@/api/machine/machineOperationProtocolCapabilities', () => ({
@@ -161,6 +148,7 @@ import { executeExternalAction } from '@/daemon/externalActions/executeExternalA
 import {
   resetActiveAccountSettingsSnapshotForTests,
   setActiveAccountSettingsSnapshot,
+  getActiveAccountSettingsSnapshot,
 } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { registerSessionSpawnNewRpcHandlers } from '@/rpc/handlers/sessionLifecycle';
@@ -176,6 +164,7 @@ import {
   SessionCreationKeyV1Schema,
   SessionOwnerMetadataV1Schema,
   type SessionSpawnNewInputV2,
+  SessionSpawnNewInputV2Schema,
   createActionExecutor,
   type ActionExecutorDeps,
   type ExecutionRunGetResponse,
@@ -187,7 +176,19 @@ import { createPluginStateStore, writeCommittedLocalPathPluginFixture } from '@/
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { createCustomAcpAdmittedRuntimeFixture } from '@/plugins/testkit/customAcp';
+import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { prepareAcpCatalogTransferV2 } from '@happier-dev/protocol/acp/catalog/transferAcpCatalogV2';
+import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
+import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1, ConnectedPurposeCatalogV1Schema, emptyConnectedAccountCatalogRecordV1, type ConnectedPurposeCatalogV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
+import { verifyExternalActionExecutionAuthorizationCurrent } from '@/api/externalActionExecutionAuthorization';
+import { bindExternalActionExecutionAuthorizationVerifyHttpPathV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { configuration } from '@/configuration';
+import { withConfiguredDaemonTestHome } from '@/daemon/testkit/fakeDaemonLifecycle.testkit';
+import { readStoredCredentials, writeCredentialsTokenOnly } from '@/persistence';
+import { PROFILE_ROWS_ROUTE_V1, PROFILE_REFERENCE_GUARD_ROUTE_V1, ProfileRecordV1Schema, ProfileRowsListResponseV1Schema } from '@happier-dev/protocol/profiles/profileRecordV1';
+import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
 import type { ComposerAttachmentRuntime, PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import {
   readHappierStructuredInputV1FromMeta,
@@ -196,8 +197,73 @@ import {
 import { createTargetComposerAttachmentRegistry } from '@/plugins/runtime/lifecycle/contributions/targetComposerAttachments';
 
 const env = process.env;
-const PLUGIN_ACTION_ID = 'acme.cli-action-exec.plugin/review-start';
-const ACTIVATED_PLUGIN_ACTION_ID = 'acme.cli-activated-action.plugin/review-start';
+const PLUGIN_ACTION_ID = 'acme.cli-action-exec.plugin/actions/review-start';
+const ACTIVATED_PLUGIN_ACTION_ID = 'acme.cli-activated-action.plugin/actions/review-start';
+
+function setAccountSettingsBoundary(input: Readonly<{ settings: Readonly<Record<string, unknown>>; purposes?: ConnectedPurposeCatalogV1; profileIds?: readonly string[];
+  token?: string; settingsVersion: number; source: string; loadedAtMs: number; settingsSecretsReadKeys: readonly Uint8Array[]; whenRefreshed: null }>) {
+  process.env.HAPPIER_ACCOUNT_SETTINGS_MODE = 'auto';
+  // A real Settings writer advances the revision; equal-revision publications
+  // are deliberately rejected by the live Account owner.
+  const settingsVersion = Math.max(input.settingsVersion, (getActiveAccountSettingsSnapshot()?.settingsVersion ?? -1) + 1);
+  const transferred = prepareAcpCatalogTransferV2({ rawSettings: input.settings, sourceSettingsVersion: settingsVersion });
+  if (transferred.status !== 'ready' && transferred.status !== 'not-required') {
+    throw new Error(`Invalid configured ACP fixture: ${transferred.status}`);
+  }
+  const record = transferred.status === 'ready' ? transferred.record : AcpCatalogRecordV1Schema.parse({ v: 1, definitions: [] });
+  const { acpCatalogSettingsV1: _retiredAcpSource, ...rawSettings } = input.settings;
+  setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse(rawSettings), rawSettings,
+    settingsVersion, loadedAtMs: input.loadedAtMs, settingsSecretsReadKeys: [],
+    scopeKey: resolveAccountSettingsScopeKeyForToken(input.token ?? 'token') });
+  mockAxiosGet.mockImplementation(async (url: string) => {
+    const path = new URL(url).pathname;
+    if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+      mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+    if (path === '/v2/account/settings') return { status: 200,
+      data: { version: settingsVersion, content: { t: 'plain', v: rawSettings } } };
+    if (path === '/v1/account/profile') return { status: 200, data: { id: input.token
+      ? JSON.parse(Buffer.from(input.token.split('.')[1]!, 'base64url').toString()).sub : 'account-1' } };
+    if (path === ACP_CATALOG_ROWS_ROUTE_V1) return { status: 200,
+      data: { status: 'present', revision: 1, content: { t: 'plain', v: record } } };
+    if (path === PROMPT_LIBRARY_ROWS_ROUTE_V1) return { status: 200, data: { status: 'listed',
+      rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: 1,
+        content: { t: 'plain', v: emptyPromptLibraryRecordV1(key) } })) } };
+    if (path.startsWith(`${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/`)) {
+      const key = path.endsWith('/purposes') ? 'purposes' : 'configurations';
+      return { status: 200, data: { status: 'present', revision: 1,
+        content: { t: 'plain', v: key === 'purposes' && input.purposes
+          ? { key, value: ConnectedPurposeCatalogV1Schema.parse(input.purposes) }
+          : emptyConnectedAccountCatalogRecordV1(key) } } };
+    }
+    if (path === '/v1/artifacts') return { status: 200, data: [] };
+    if (path === PROFILE_ROWS_ROUTE_V1) return { status: 200, data: ProfileRowsListResponseV1Schema.parse({ status: 'listed',
+      rows: (input.profileIds ?? []).map(id => ({ id, revision: 1, content: { t: 'plain', v: ProfileRecordV1Schema.parse({
+        v: 1, id, enabled: true, promptStack: [], secretBindings: {},
+        definition: { kind: 'inline', profile: { v: 2, id, name: id, createdAt: 1, updatedAt: 1 } },
+      }) } })), nextCursor: null, complete: true, referenceGuardRevision: 1, transferControl: { status: 'absent' }, diagnostics: [] }) };
+    if (path === PROFILE_REFERENCE_GUARD_ROUTE_V1) return { status: 200, data: { status: 'ready', revision: 1 } };
+    if (path === PROFILE_TRANSFER_ROUTE_V1) return { status: 200, data: { status: 'absent' } };
+    throw new Error(`Unexpected Account fixture request: ${path}`);
+  });
+}
+
+async function admitConfiguredAcpFixture(): Promise<void> {
+  const runtime = await createCustomAcpAdmittedRuntimeFixture({ controller: pluginReloadController });
+  onTestFinished(async () => {
+    await runtime.dispose();
+    // Retiring the fixture's publication must not leave later cases with an
+    // explicitly empty Agent catalog. Restore through the same real owner as
+    // the authored-plugin publication test below.
+    const restoredRegistry = await resolveExecutablePluginRuntimeRegistry({
+      happyHomeDir: configuration.happyHomeDir, pluginIds: [],
+    });
+    const restoration = await pluginReloadController.adoptPreparedRuntimeRegistry({
+      registry: restoredRegistry, changedPluginIds: ['happier.agent.custom-acp'],
+      runningSessionDisposition: 'retainRunningSessions',
+    });
+    expect(restoration.ok).toBe(true);
+  });
+}
 
 async function writePluginBackendFixture(rootDir: string): Promise<void> {
   const manifestDir = join(rootDir, '.happier-plugin');
@@ -385,10 +451,7 @@ function createPlainExecutor(extra: CliActionExecutorTestOverrides = {}) {
     credentials: {
       token: 'token',
       credentialProvenance: 'stored_session',
-      encryption: {
-        type: 'legacy',
-        secret: new Uint8Array([1, 2, 3, 4]),
-      },
+      encryption: null,
     },
     sessionId: 'sess-1',
     ...extra,
@@ -419,14 +482,8 @@ function createDataKeyExecutor(extra: CliActionExecutorTestOverrides = {}) {
 }
 
 function publishActionsSettings(actionsSettingsV1: unknown, settingsVersion = 1): void {
-  setActiveAccountSettingsSnapshot({
-    source: 'network',
-    settings: accountSettingsParse({ actionsSettingsV1 }),
-    settingsVersion,
-    loadedAtMs: settingsVersion,
-    settingsSecretsReadKeys: [],
-    scopeKey: resolveAccountSettingsScopeKeyForToken('token'),
-  });
+  setAccountSettingsBoundary({ settings: { actionsSettingsV1 }, source: 'network', settingsVersion,
+    loadedAtMs: Date.now(), settingsSecretsReadKeys: [], whenRefreshed: null });
 }
 
 const executionRunGetResponse = {
@@ -474,7 +531,7 @@ let latestSessionSpawnRequest: Readonly<Record<string, unknown>> | null = null;
 function createSessionSpawnInput(
   overrides: Partial<SessionSpawnNewInputV2> = {},
 ): SessionSpawnNewInputV2 {
-  return {
+  const input = {
     creationKey: SessionCreationKeyV1Schema.parse('create-cli-action-executor-test'),
     executionTarget: {
       serverId: configuration.activeServerId,
@@ -482,8 +539,13 @@ function createSessionSpawnInput(
     },
     directory: { kind: 'path' as const, path: '/repo/current' },
     agentTarget: SESSION_SPAWN_AGENT_TARGETS.claude,
+    connectedServices: { v: 2, bindingsByServiceId: {} },
     ...overrides,
   };
+  // Public Action producers omit optional fields; undefined is not JSON input.
+  return SessionSpawnNewInputV2Schema.parse(Object.fromEntries(
+    Object.entries(input).filter(([, value]) => value !== undefined),
+  ));
 }
 
 function createSpawnedSessionRecord(sessionId: string) {
@@ -561,7 +623,7 @@ describe('createCliActionExecutor', () => {
     executeExecutionRunAction.mockReset();
     requestDaemonPluginActionExecution.mockReset();
     requestDaemonPluginActionExecution.mockImplementation(async (request) => {
-      if (request.actionId === PLUGIN_ACTION_ID) {
+      if (request.actionId === 'acme.cli-action-exec.plugin/review-start') {
         if (request.surface !== 'cli') {
           return {
             matched: true,
@@ -578,21 +640,21 @@ describe('createCliActionExecutor', () => {
             ok: true,
             result: {
               pluginHandled: true,
-              actionId: request.actionId,
+              actionId: PLUGIN_ACTION_ID,
               input: request.input,
               surface: request.surface,
             },
           },
         };
       }
-      if (request.actionId === ACTIVATED_PLUGIN_ACTION_ID) {
+      if (request.actionId === 'acme.cli-activated-action.plugin/review-start') {
         return {
           matched: true,
           result: {
             ok: true,
             result: {
               pluginHandled: true,
-              actionId: request.actionId,
+              actionId: ACTIVATED_PLUGIN_ACTION_ID,
               input: request.input,
               surface: request.surface,
             },
@@ -601,7 +663,6 @@ describe('createCliActionExecutor', () => {
       }
       return { matched: false };
     });
-    bootstrapAccountSettingsContext.mockReset();
     validateStoredAuthTokenAgainstActiveServer.mockReset();
     validateStoredAuthTokenAgainstActiveServer.mockResolvedValue({ state: 'valid', httpStatus: 200 });
     fetchAccountEncryptionCurrentness.mockReset().mockResolvedValue({
@@ -618,7 +679,10 @@ describe('createCliActionExecutor', () => {
     mockMachineSpawnSuccess('sess-new');
     resolveMachineSpawnSessionByNonce.mockResolvedValue({ status: 'unsupported' });
     callMachineRpc.mockImplementation(async (call: MachineRpcCall) => {
-      if (call.method === RPC_METHODS.DAEMON_SESSION_CREATION_PREPARE) {
+      if (
+        call.method === RPC_METHODS.DAEMON_SESSION_CREATION_PREPARE
+        || call.method === RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT
+      ) {
         const directory = call.request.directory;
         return {
           ok: true,
@@ -669,6 +733,8 @@ describe('createCliActionExecutor', () => {
     mockAxiosPost.mockReset();
     process.env = { ...env };
     delete process.env.HAPPIER_ACTIONS_SETTINGS_V1;
+    setAccountSettingsBoundary({ settings: {}, source: 'network', settingsVersion: 1,
+      loadedAtMs: Date.now(), settingsSecretsReadKeys: [], whenRefreshed: null });
   });
 
   afterEach(() => {
@@ -676,7 +742,8 @@ describe('createCliActionExecutor', () => {
   });
 
   it('resolves execution backend options on the MCP surface', async () => {
-    bootstrapAccountSettingsContext.mockResolvedValueOnce({
+    await admitConfiguredAcpFixture();
+    setAccountSettingsBoundary({
       source: 'network',
       settingsVersion: 1,
       loadedAtMs: 1,
@@ -685,8 +752,8 @@ describe('createCliActionExecutor', () => {
       settings: {
         schemaVersion: 2,
         backendEnabledByTargetKey: {
-          'acpBackend:review-bot': true,
-          'acpBackend:disabled-bot': false,
+          'agent:happier.agent.custom-acp/custom-acp:definition:review-bot': true,
+          'agent:happier.agent.custom-acp/custom-acp:definition:disabled-bot': false,
         },
         acpCatalogSettingsV1: {
           v: 2,
@@ -756,7 +823,7 @@ describe('createCliActionExecutor', () => {
           label: expect.any(String),
         }),
         expect.objectContaining({
-          value: 'backend:review-bot:configured:review-bot',
+          value: 'agent:happier.agent.custom-acp/custom-acp:definition:review-bot',
           label: 'Review Bot',
         }),
       ]),
@@ -767,7 +834,7 @@ describe('createCliActionExecutor', () => {
           value: 'agent:customAcp',
         }),
         expect.objectContaining({
-          value: 'backend:disabled-bot:configured:disabled-bot',
+          value: 'agent:happier.agent.custom-acp/custom-acp:definition:disabled-bot',
         }),
       ]),
     );
@@ -799,7 +866,7 @@ describe('createCliActionExecutor', () => {
     });
 
     expect(requestDaemonPluginActionExecution).toHaveBeenCalledWith({
-      actionId: PLUGIN_ACTION_ID,
+      actionId: 'acme.cli-action-exec.plugin/review-start',
       input: { scope: 'diff' },
       surface: 'cli',
       defaultSessionId: 'sess-1',
@@ -875,7 +942,7 @@ describe('createCliActionExecutor', () => {
         },
       },
     });
-    bootstrapAccountSettingsContext.mockResolvedValueOnce({
+    setAccountSettingsBoundary({
       source: 'network',
       settingsVersion: 1,
       loadedAtMs: 1,
@@ -1104,7 +1171,8 @@ describe('createCliActionExecutor', () => {
   });
 
   it('returns configured ACP backends from agents.backends.list when disabled entries are requested', async () => {
-    bootstrapAccountSettingsContext.mockResolvedValueOnce({
+    await admitConfiguredAcpFixture();
+    setAccountSettingsBoundary({
       source: 'cache',
       settingsVersion: 2,
       loadedAtMs: 2,
@@ -1113,8 +1181,8 @@ describe('createCliActionExecutor', () => {
       settings: {
         schemaVersion: 2,
         backendEnabledByTargetKey: {
-          'acpBackend:review-bot': true,
-          'acpBackend:disabled-bot': false,
+          'agent:happier.agent.custom-acp/custom-acp:definition:review-bot': true,
+          'agent:happier.agent.custom-acp/custom-acp:definition:disabled-bot': false,
         },
         acpCatalogSettingsV1: {
           v: 2,
@@ -1179,12 +1247,12 @@ describe('createCliActionExecutor', () => {
             enabled: true,
           }),
           expect.objectContaining({
-            targetKey: 'backend:review-bot:configured:review-bot',
+            targetKey: 'agent:happier.agent.custom-acp/custom-acp:definition:review-bot',
             label: 'Review Bot',
             enabled: true,
           }),
           expect.objectContaining({
-            targetKey: 'backend:disabled-bot:configured:disabled-bot',
+            targetKey: 'agent:happier.agent.custom-acp/custom-acp:definition:disabled-bot',
             label: 'Disabled Bot',
             description: 'Disabled review backend',
             enabled: false,
@@ -1195,7 +1263,7 @@ describe('createCliActionExecutor', () => {
   });
 
   it('omits account-settings-disabled built-in backends from execution backend options by default', async () => {
-    bootstrapAccountSettingsContext.mockResolvedValueOnce({
+    setAccountSettingsBoundary({
       source: 'network',
       settingsVersion: 3,
       loadedAtMs: 3,
@@ -1242,7 +1310,8 @@ describe('createCliActionExecutor', () => {
   });
 
   it('resolves review engine options on the MCP surface', async () => {
-    bootstrapAccountSettingsContext.mockResolvedValueOnce({
+    await admitConfiguredAcpFixture();
+    setAccountSettingsBoundary({
       source: 'network', settingsVersion: 1, loadedAtMs: 1,
       settingsSecretsReadKeys: [], whenRefreshed: null,
       settings: {
@@ -1277,7 +1346,7 @@ describe('createCliActionExecutor', () => {
           expect.objectContaining({ value: 'opencode' }),
           expect.objectContaining({ value: 'coderabbit' }),
           expect.objectContaining({ value: 'deepsec' }),
-          expect.objectContaining({ value: 'backend:review-bot:configured:review-bot', label: 'Review Bot' }),
+          expect.objectContaining({ value: 'agent:happier.agent.custom-acp/custom-acp:definition:review-bot', label: 'Review Bot' }),
         ]),
       },
     });
@@ -1414,18 +1483,27 @@ describe('createCliActionExecutor', () => {
     // external admission beneath its verified stamp remain real.
     const executionAuthorization = { v: 1, token: 'test-home-proof', binding: {
       serverIdentityId: 'home-identity', accountId: principal.accountId, principalId: principal.principalId,
+      custodianAccountId: principal.accountId, installationId: 'installation-1',
       credentialId: principal.credentialId, machineId: target.machineId, actionId: 'action.spec.search',
       requestId: envelope.requestId, requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
       target, grant: principal.grant,
     } } as const;
+    const privateKey = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(7)).secretKey;
+    mockAxiosPost.mockImplementation(async (url: string) => {
+      expect(url).toBe(`https://home-policy.test${bindExternalActionExecutionAuthorizationVerifyHttpPathV1('action.spec.search')}`);
+      return { status: 200, data: { ok: true } };
+    });
     const execute = async () => await executeExternalAction({
       actionId: 'action.spec.search',
       envelope,
       principal,
       executionAuthorization,
-      externalActionMachineRequestPrivateKey: tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(7)).secretKey,
+      externalActionMachineRequestPrivateKey: privateKey,
       currentMachineId: 'machine-1',
       currentServerId: 'server-a',
+      currentInstallationId: 'installation-1',
+      verifyExecutionAuthorization: request => verifyExternalActionExecutionAuthorizationCurrent({ ...request,
+        privateKey, installationId: 'installation-1', serverHttpBaseUrl: 'https://home-policy.test' }),
       resolveTarget: async () => ({ kind: 'machine', machineId: 'machine-1' }),
       executor,
     });
@@ -1456,8 +1534,8 @@ describe('createCliActionExecutor', () => {
         'action.spec.search': { approvalRequiredSurfaces: ['api'] },
       },
     }, 2);
-    mockAxiosPost.mockImplementationOnce(async (_url: string, body: { id: string }) => ({
-      status: 200, data: { id: body.id, headerVersion: 1, bodyVersion: 1 },
+    mockAxiosPost.mockImplementation(async (url: string, body: { id: string }) => ({
+      status: 200, data: url.endsWith('/verify') ? { ok: true } : { id: body.id, headerVersion: 1, bodyVersion: 1 },
     }));
     mockAxiosGet.mockResolvedValueOnce({ status: 200, data: { mode: 'e2ee', updatedAt: 1 } });
     await expect(execute()).resolves.toMatchObject({
@@ -1537,7 +1615,8 @@ describe('createCliActionExecutor', () => {
       encryptionMode: 'plain',
       metadata: '{}',
     });
-    callSessionRpc.mockResolvedValue({ ok: true });
+    // The native permission owner acknowledges successful responses with void.
+    callSessionRpc.mockResolvedValue(undefined);
 
     const result = await executor.execute(
       'session.permission.respond',
@@ -1584,7 +1663,8 @@ describe('createCliActionExecutor', () => {
       encryptionMode: 'plain',
       metadata: '{}',
     });
-    callSessionRpc.mockResolvedValue({ ok: true });
+    // The native permission owner acknowledges successful answers with void.
+    callSessionRpc.mockResolvedValue(undefined);
 
     const result = await executor.execute(
       'session.user_action.answer',
@@ -1602,6 +1682,12 @@ describe('createCliActionExecutor', () => {
     );
 
     expect(result).toEqual({ ok: true, result: { ok: true } });
+    // Parse the real Action producer's wire payload with the runtime's strict consumer.
+    expect(SessionPermissionRespondRpcParamsV1Schema.parse(callSessionRpc.mock.calls.at(-1)?.[0].request)).toMatchObject({
+      approved: true,
+      decision: 'approved',
+      answers: { 'Where should this run?': ['Washington, D.C.', 'Virginia', 'A custom, exact answer'] },
+    });
     expect(callSessionRpc).toHaveBeenCalledWith(expect.objectContaining({
       token: 'token',
       sessionId: 'sess-1',
@@ -1659,13 +1745,15 @@ describe('createCliActionExecutor', () => {
       { surface: 'rpc', authority: 'present_user', defaultSessionId: 'sess-1' },
     );
 
+    for (const [request] of callSessionRpc.mock.calls) {
+      expect(SessionPermissionRespondRpcParamsV1Schema.safeParse(request.request).success).toBe(true);
+    }
     expect(callSessionRpc).toHaveBeenNthCalledWith(1, expect.objectContaining({
       method: 'sess-1:session.user_action.answer',
       request: expect.objectContaining({
         id: 'ua-reject',
         approved: false,
         decision: 'denied',
-        actionDecision: 'reject',
         reason: 'not acceptable',
       }),
     }));
@@ -1675,7 +1763,6 @@ describe('createCliActionExecutor', () => {
         id: 'ua-request-changes',
         approved: false,
         decision: 'abort',
-        actionDecision: 'request_changes',
         reason: 'revise first',
       }),
     }));
@@ -1709,7 +1796,7 @@ describe('createCliActionExecutor', () => {
   });
 
   it('resolves the stored encryption mode for execution.run.get when targeting a different session id', async () => {
-    const executor = createPlainExecutor();
+    const executor = createDataKeyExecutor();
     fetchSessionById.mockResolvedValue({
       id: 'sess-2-aaaaaaaaaaaa',
       createdAt: 1,
@@ -1848,11 +1935,17 @@ describe('createCliActionExecutor', () => {
       };
     });
 
-    const result = await createPlainExecutor().execute('session.spawn_new', createSessionSpawnInput(), {
+    const result = await createPlainExecutor().execute('session.spawn_new', createSessionSpawnInput({
+      checkoutCreationDraft: {
+        kind: 'git_worktree', displayName: 'initial-trigger', baseRef: null,
+        branchMode: created ? 'new' : 'existing',
+      },
+    }), {
       surface: 'cli', defaultSessionId: 'sess-1', signal: controller.signal,
     });
 
     expect(result).toEqual({ ok: true, result: { type: 'error', code: 'target_unavailable', retryable: false } });
+    expect(latestSessionSpawnRequest).toMatchObject({ directory: '/repo/.dev/worktree/initial-trigger' });
     const compensations = callMachineRpc.mock.calls.filter(([call]) => call.method === RPC_METHODS.SCM_WORKTREE_REMOVE);
     expect(compensations).toEqual([]);
     expect(fetchSessionById).not.toHaveBeenCalled();
@@ -1876,30 +1969,30 @@ describe('createCliActionExecutor', () => {
       throw Object.assign(new Error('The spawn response was lost'), { code: 'MACHINE_RPC_TIMEOUT' });
     });
 
-    await expect(createPlainExecutor().execute('session.spawn_new', createSessionSpawnInput(), {
+    await expect(createPlainExecutor().execute('session.spawn_new', createSessionSpawnInput({
+      checkoutCreationDraft: {
+        kind: 'git_worktree', displayName: 'uncertain', baseRef: null, branchMode: 'new',
+      },
+    }), {
       surface: 'cli', defaultSessionId: 'sess-1', signal: controller.signal,
     })).resolves.toEqual({ ok: true, result: { type: 'pending', retryWithSameCreationKey: true, outcome: 'unknown' } });
+    expect(latestSessionSpawnRequest).toMatchObject({ directory: '/repo/.dev/worktree/uncertain' });
     expect(callMachineRpc.mock.calls.filter(([call]) => call.method === RPC_METHODS.SCM_WORKTREE_REMOVE)).toEqual([]);
   });
 
   it('enforces the live Account Agent spawn policy before daemon Session creation', async () => {
-    setActiveAccountSettingsSnapshot({
+    setAccountSettingsBoundary({
       source: 'network',
-      settings: accountSettingsParse({
+      settings: {
         sessionAgentSpawnPolicyV1: {
           v: 1,
           allowModelOverride: false,
         },
-      }),
+      },
       settingsVersion: 1,
       loadedAtMs: 1,
       settingsSecretsReadKeys: [],
-      // The executor binds its settings provider to the credential-derived
-      // Account scope (`createCliActionExecutor` → `createActionSettingsProvider`),
-      // and a snapshot published under any other scope is deliberately ignored so
-      // a different active Account cannot retarget a constructed runtime. The
-      // policy under test only reaches the Action executor through this scope.
-      scopeKey: resolveAccountSettingsScopeKeyForToken('token'),
+      whenRefreshed: null,
     });
     const executor = createPlainExecutor();
 
@@ -1921,7 +2014,7 @@ describe('createCliActionExecutor', () => {
         defaultSessionId: 'sess-1',
         callerPermissionMode: 'yolo',
         agentStartContext: {
-          caller: { kind: 'session', sessionId: 'sess-1', starterDepth: 0, turnDepth: 0 },
+          caller: { kind: 'session', sessionId: 'c123456789012345678901234', starterDepth: 0, turnDepth: 0 },
           baseline: { machineId: 'machine-1', directory: '/repo' },
           ledSubtreeSessionIds: [], roles: {}, workDepthLimit: 4, callerPermissionCeiling: 'yolo',
         },
@@ -2081,6 +2174,8 @@ describe('createCliActionExecutor', () => {
   });
 
   it('forwards the supported V2 creation fields without reviving removed raw spawn fields', async () => {
+    setAccountSettingsBoundary({ settings: {}, profileIds: ['codex-profile'], settingsVersion: 2,
+      loadedAtMs: Date.now(), source: 'network', settingsSecretsReadKeys: [], whenRefreshed: null });
     const executor = createPlainExecutor();
     const mcpSelection = {
       v: 1,
@@ -2133,7 +2228,7 @@ describe('createCliActionExecutor', () => {
       { surface: 'cli', defaultSessionId: 'sess-1' },
     );
 
-    expect(result).toMatchObject({
+    expect(result, JSON.stringify(result)).toMatchObject({
       ok: true,
       result: { type: 'success', sessionId: 'sess-rich', disposition: 'created' },
     });
@@ -2239,6 +2334,8 @@ describe('createCliActionExecutor', () => {
   });
 
   it('uses the target account connected-service defaults instead of parent bindings for a strict V2 Session request', async () => {
+    await withConfiguredDaemonTestHome({ prefix: 'executor-connected-default-' }, async () => {
+    await writeCredentialsTokenOnly({ token: 'token' });
     const executor = createPlainExecutor({
       rawSession: {
         machineId: 'machine-1',
@@ -2258,25 +2355,13 @@ describe('createCliActionExecutor', () => {
         },
       },
     });
-    bootstrapAccountSettingsContext.mockResolvedValueOnce({
+    setAccountSettingsBoundary({
       source: 'network',
-      settings: accountSettingsParse({
-        connectedServicesDefaultAuthByAgentIdV1: {
-          v: 1,
-          bindingsByAgentId: {
-            claude: {
-              v: 1,
-              bindingsByServiceId: {
-                'claude-subscription': {
-                  source: 'connected',
-                  selection: 'group',
-                  groupId: 'claude',
-                },
-              },
-            },
-          },
-        },
-      }),
+      settings: {},
+      purposes: { v: 1, bindings: [{
+        purpose: { consumer: { pluginId: 'happier.agent.claude', localId: 'claude' }, purpose: 'model_upstream' },
+        target: { kind: 'group', service: { pluginId: 'happier.agent.claude', localId: 'claude-subscription' }, groupId: 'claude' },
+      }] },
       settingsVersion: 7,
       loadedAtMs: 1234,
       settingsSecretsReadKeys: [],
@@ -2288,6 +2373,7 @@ describe('createCliActionExecutor', () => {
       'session.spawn_new',
       createSessionSpawnInput({
         agentTarget: SESSION_SPAWN_AGENT_TARGETS.claude,
+        connectedServices: undefined,
         modelSelection: {
           v: 1,
           updatedAt: 1710000000000,
@@ -2298,7 +2384,7 @@ describe('createCliActionExecutor', () => {
       { surface: 'cli', defaultSessionId: 'sess-1' },
     );
 
-    expect(result).toMatchObject({
+    expect(result, JSON.stringify(result)).toMatchObject({
       ok: true,
       result: {
         type: 'success',
@@ -2316,9 +2402,7 @@ describe('createCliActionExecutor', () => {
         ref: { agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: null, modelId: 'gpt-5' },
       },
       spawnNonce: expect.any(String),
-      // The one defaulting owner keys the spawn request by the Agent catalog's
-      // qualified Connected Account service ids; the bare ids above are the
-      // released legacy settings ingress, which upconverts to these.
+      // The current purpose row belongs to the target Account, not the parent Session.
       connectedServices: {
         v: 2,
         bindingsByServiceId: {
@@ -2331,11 +2415,16 @@ describe('createCliActionExecutor', () => {
         },
       },
     }));
+    });
   });
 
   it('resolves a fresh Team resource default through the bound Home catalog before Session dispatch', async () => {
+    await withConfiguredDaemonTestHome({ prefix: 'executor-team-default-' }, async () => {
     const serverId = configuration.activeServerId;
-    const token = `e30.${Buffer.from(JSON.stringify({ sub: 'recipient-account' })).toString('base64url')}.signature`;
+    const token = `e30.${Buffer.from(JSON.stringify({ sub: 'recipient-account', tokenEpoch: 4,
+      provenance: { v: 1, kind: 'terminal', authority: 'account_automation' } })).toString('base64url')}.signature`;
+    await writeCredentialsTokenOnly({ token });
+    expect((await readStoredCredentials())?.token).toBe(token);
     const homeDomainAction = vi.fn(async () => ({
       resources: [{
         id: 'resource-a', teamId: 'team-a', displayName: 'Shared Codex account',
@@ -2357,19 +2446,14 @@ describe('createCliActionExecutor', () => {
       sessionId: 'sess-1',
       accountServerActionDeps: { homeDomainAction }, mode: 'plain', ctx: null,
     });
-    bootstrapAccountSettingsContext.mockResolvedValueOnce({
+    setAccountSettingsBoundary({
       source: 'network',
-      settings: accountSettingsParse({
-        connectedServicesDefaultAuthByAgentIdV1: {
-          v: 1,
-          bindingsByAgentId: { codex: { v: 2, bindingsByServiceId: {
-            'happier.agent.codex/openai-codex': {
-              source: 'team_resource', serverId, accountId: 'recipient-account', teamId: 'team-a',
-              resourceId: 'resource-a', expectedResourceRevision: 7, deliveryMode: 'brokered',
-            },
-          } } },
-        },
-      }),
+      token,
+      settings: {},
+      purposes: { v: 1, bindings: [], teamResourceSelections: [{
+        purpose: { consumer: { pluginId: 'happier.agent.codex', localId: 'codex' }, purpose: 'primary' },
+        teamId: 'team-a', selection: { source: 'team_resource', resourceId: 'resource-a', deliveryMode: 'brokered' },
+      }] },
       settingsVersion: 8, loadedAtMs: 1234, settingsSecretsReadKeys: [], whenRefreshed: null,
     });
     readMachineOperationProtocolCapabilitiesV1.mockResolvedValue({
@@ -2380,11 +2464,11 @@ describe('createCliActionExecutor', () => {
 
     const result = await executor.execute(
       'session.spawn_new',
-      createSessionSpawnInput({ agentTarget: SESSION_SPAWN_AGENT_TARGETS.codex }),
+      createSessionSpawnInput({ agentTarget: SESSION_SPAWN_AGENT_TARGETS.codex, connectedServices: undefined }),
       { surface: 'cli', defaultSessionId: 'sess-1' },
     );
 
-    expect(result).toMatchObject({
+    expect(result, JSON.stringify(result)).toMatchObject({
       ok: true, result: { type: 'success', sessionId: 'sess-team-default' },
     });
     expect(homeDomainAction).toHaveBeenCalledWith({
@@ -2411,11 +2495,16 @@ describe('createCliActionExecutor', () => {
         teamId: 'team-a',
       }],
     }));
+    });
   });
 
   it('keeps an explicit Team slot choice over the defaulted Team slot binding', async () => {
+    await withConfiguredDaemonTestHome({ prefix: 'executor-team-explicit-' }, async () => {
     const serverId = configuration.activeServerId;
-    const token = `e30.${Buffer.from(JSON.stringify({ sub: 'recipient-account' })).toString('base64url')}.signature`;
+    const token = `e30.${Buffer.from(JSON.stringify({ sub: 'recipient-account', tokenEpoch: 4,
+      provenance: { v: 1, kind: 'terminal', authority: 'account_automation' } })).toString('base64url')}.signature`;
+    await writeCredentialsTokenOnly({ token });
+    expect((await readStoredCredentials())?.token).toBe(token);
     const homeDomainAction = vi.fn(async () => ({
       resources: [{
         id: 'resource-a', teamId: 'team-a', displayName: 'Shared Codex account',
@@ -2437,19 +2526,14 @@ describe('createCliActionExecutor', () => {
       sessionId: 'sess-1',
       accountServerActionDeps: { homeDomainAction }, mode: 'plain', ctx: null,
     });
-    bootstrapAccountSettingsContext.mockResolvedValueOnce({
+    setAccountSettingsBoundary({
       source: 'network',
-      settings: accountSettingsParse({
-        connectedServicesDefaultAuthByAgentIdV1: {
-          v: 1,
-          bindingsByAgentId: { codex: { v: 2, bindingsByServiceId: {
-            'happier.agent.codex/openai-codex': {
-              source: 'team_resource', serverId, accountId: 'recipient-account', teamId: 'team-a',
-              resourceId: 'resource-a', expectedResourceRevision: 7, deliveryMode: 'brokered',
-            },
-          } } },
-        },
-      }),
+      token,
+      settings: {},
+      purposes: { v: 1, bindings: [], teamResourceSelections: [{
+        purpose: { consumer: { pluginId: 'happier.agent.codex', localId: 'codex' }, purpose: 'primary' },
+        teamId: 'team-a', selection: { source: 'team_resource', resourceId: 'resource-a', deliveryMode: 'brokered' },
+      }] },
       settingsVersion: 8, loadedAtMs: 1234, settingsSecretsReadKeys: [], whenRefreshed: null,
     });
     readMachineOperationProtocolCapabilitiesV1.mockResolvedValue({
@@ -2470,6 +2554,7 @@ describe('createCliActionExecutor', () => {
       'session.spawn_new',
       createSessionSpawnInput({
         agentTarget: SESSION_SPAWN_AGENT_TARGETS.codex,
+        connectedServices: undefined,
         teamCredentialBindings: [explicitSlot],
       }),
       { surface: 'cli', defaultSessionId: 'sess-1' },
@@ -2477,6 +2562,7 @@ describe('createCliActionExecutor', () => {
     expect(spawnMachineSession).toHaveBeenLastCalledWith(expect.objectContaining({
       teamCredentialBindings: [explicitSlot],
     }));
+    });
   });
 
   it('fails closed for a strict V2 session.spawn_new when nonce recovery is unsupported', async () => {
@@ -2653,6 +2739,22 @@ describe('createCliActionExecutor', () => {
     expect(fetchSessionsPage).not.toHaveBeenCalled();
   });
 
+  it('preserves the selected Connected Account reconnect reason through the real Action dependency wiring', async () => {
+    const executor = createPlainExecutor();
+    const refusal = buildConnectedServiceCredentialRefreshSpawnErrorResult({ agentId: 'codex', error: {
+      name: 'ConnectedServiceSpawnCredentialRefreshError', kind: 'reconnect_required',
+      serviceId: 'happier.agent.codex/openai-codex', profileId: 'revoked',
+    } });
+    if (!refusal) throw new Error('Expected rejected grant');
+    spawnMachineSession.mockResolvedValue({ error: refusal.errorMessage,
+      errorCode: refusal.errorCode, errorDetail: refusal.errorDetail });
+    const result = await executor.execute('session.spawn_new',
+      createSessionSpawnInput({ agentTarget: SESSION_SPAWN_AGENT_TARGETS.codex }),
+      { surface: 'cli', defaultSessionId: 'sess-1' });
+    expect(result).toMatchObject({ ok: true, result: { type: 'error', code: 'spawn_failed', retryable: false,
+      launchError: { code: 'connected_service_credential_reconnect_required', message: expect.stringMatching(/reconnect/i) } } });
+  });
+
   it.each([
     'Daemon is not running, file is stale',
     'No daemon running, no state file found',
@@ -2682,7 +2784,8 @@ describe('createCliActionExecutor', () => {
     const executor = createPlainExecutor();
     spawnMachineSession.mockRejectedValue(Object.assign(
       new Error('Provider-bound session creation is unavailable'),
-      { code: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE },
+      { code: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
+        details: { incompatibleTarget: { reason: 'requester_credentials_unavailable' } } },
     ));
 
     const result = await executor.execute(
@@ -2691,12 +2794,13 @@ describe('createCliActionExecutor', () => {
       { surface: 'cli', defaultSessionId: 'sess-1' },
     );
 
-    expect(result).toMatchObject({
+    expect(result, JSON.stringify(result)).toMatchObject({
       ok: true,
       result: {
         type: 'error',
         code: 'incompatible_target',
         retryable: false,
+        incompatibleTarget: { reason: 'requester_credentials_unavailable' },
       },
     });
     expect(resolveMachineSpawnSessionByNonce).not.toHaveBeenCalled();

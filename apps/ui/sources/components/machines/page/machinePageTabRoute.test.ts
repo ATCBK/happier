@@ -1,15 +1,24 @@
 import { describe, expect, it, vi } from 'vitest';
+import * as React from 'react';
+import { renderScreen } from '@/dev/testkit';
 
-import { resolveCompactAppDestinations } from '@/components/appShell/destinations/compactAppDestinationCatalog';
+import { resolveCompactAppDestinations, resolveDestinationRefFromHref } from '@/components/appShell/destinations/compactAppDestinationCatalog';
+import { WorkspaceRouteEntry } from '@/components/appShell/workspace/createWorkspaceRouteEntry';
+import { WorkspaceRouteHostingContext } from '@/components/appShell/workspace/WorkspaceRouteHostingContext';
 import { createWorkspaceNavigationAdapter } from '@/components/appShell/workspace/workspaceNavigationAdapter';
 import { resolvePhoneWorkspaceTabHref } from '@/components/appShell/workspace/workspacePhoneProjection';
 import { createWorkspaceState, reduceWorkspaceState } from '@/components/appShell/workspace/workspaceState';
 import { installPanelCommonModuleMocks } from '@/components/ui/panels/panelTestHelpers';
 
 import { machinePageHref } from './machinePageHref';
+import { MACHINE_SUB_PAGES } from './machineSubPages';
 import { machinePageTabRouteParams, type MachinePageTabParams } from './machinePageTabQuery';
 
 installPanelCommonModuleMocks();
+const routeBoundary = vi.hoisted(() => ({ pathname: '/machines/m1', params: {} as Record<string, string> }));
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
+    pathname: () => routeBoundary.pathname, params: () => routeBoundary.params,
+}).module);
 // Recipient-envelope HTTP/process APIs are outside this deterministic route harness.
 vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', () => {
     const unavailable = () => { throw new Error('Unexpected recipient-envelope API in machine route test'); };
@@ -40,6 +49,30 @@ function workspace(href: string) {
 const target = { machineId: 'm1', serverId: 'home-a' };
 
 describe('machine page tabs in the workspace router', () => {
+    it.each(MACHINE_SUB_PAGES)('opens a query-addressed %s sub-page as the canonical pushed destination', page => {
+        for (const door of ['rail', 'settings'] as const) {
+            const root = machinePageHref({ door, target });
+            const routed = workspace(`${root}&page=${page}`);
+            expect(routed.href()).toBe(machinePageHref({ door, target, page }));
+            expect(routed.target().params).toMatchObject({ page });
+        }
+    });
+    it.each(['rail', 'settings'] as const)('reconstructs the %s door URL without repeating the path id as a query parameter', async door => {
+        const href = machinePageHref({ door, target, tab: { id: 'processes', sort: 'cpu' } });
+        routeBoundary.pathname = href.split('?')[0]!;
+        // Expo includes dynamic path params in useLocalSearchParams alongside actual query params.
+        routeBoundary.params = { id: target.machineId, serverId: target.serverId, tab: 'processes', sort: 'cpu' };
+        const catalog = resolveCompactAppDestinations({ builtins: { externalSessions: false, inbox: true, workflows: true, friends: false }, pages: [] });
+        const ownsHref = vi.fn((candidate: string) => resolveDestinationRefFromHref(catalog, candidate) !== null);
+        const warning = vi.spyOn(console, 'warn');
+        try {
+            const screen = await renderScreen(React.createElement(WorkspaceRouteHostingContext.Provider, { value: ownsHref },
+                React.createElement(WorkspaceRouteEntry, { Body: () => null })));
+            expect(ownsHref).toHaveBeenCalledWith(href);
+            expect(warning.mock.calls.filter(([message]) => String(message).includes('specified both in the path and as a param'))).toHaveLength(0);
+            await screen.unmount();
+        } finally { warning.mockRestore(); }
+    });
     it('honors a direct Guard link after the machine was opened on Processes, on desktop and phone', () => {
         const guardHref = machinePageHref({ door: 'rail', target, tab: { id: 'guard' } });
         const page = workspace(machinePageHref({ door: 'rail', target, tab: { id: 'processes', sort: 'memory' } }));

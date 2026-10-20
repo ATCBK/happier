@@ -6,9 +6,14 @@ import { db, prismaRuntime } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { materializeWorkflowAcceptedSnapshotFixture } from "@/testkit/workflowAcceptedSnapshot";
 import { buildInboxWorkGroups } from "../../../../ui/sources/activity/presentation/buildInboxWorkGroups";
+import { buildInboxItems } from "../../../../ui/sources/components/inbox/inboxItems";
 import { workflowRunRowFromSummary } from "../../../../ui/sources/sync/store/domains/workflowRuns";
+import type { Session } from "../../../../ui/sources/sync/domains/state/storageTypes";
+import { projectSessionAwarenessV1 } from "@happier-dev/protocol/sessions/awareness/projectV1";
+import type { InboxSessionAttentionEntry } from "../../../../ui/sources/activity/presentation/buildInboxSessionPresentation";
+import { listAutomationRuns } from "../automations/automationCrudService";
 import { workflowRunAttentionSql, workflowRunAttentionWhere, workflowRunSqlIdentifier } from "./workflowRunAttention";
-import { listWorkflowRuns } from "./workflowRunService";
+import { deleteWorkflowRun, listWorkflowRuns } from "./workflowRunService";
 
 describe("workflow Run attention to Inbox through SQLite", () => {
     let harness: LightSqliteHarness;
@@ -27,6 +32,8 @@ describe("workflow Run attention to Inbox through SQLite", () => {
             { state: "interrupted", lifecycle: "outcome_uncertain", attention: true },
             { state: "running", lifecycle: "waiting_for_review", attention: true },
             { state: "running", lifecycle: "waiting_for_approval", attention: true },
+            { state: "failed", lifecycle: "failed", attention: true },
+            { state: "succeeded", lifecycle: "completed", attention: false },
         ] as const;
         const expectedIds = new Set<string>();
         const expectedHeldCounts = new Map<string, number>();
@@ -79,5 +86,88 @@ describe("workflow Run attention to Inbox through SQLite", () => {
         const runItems = inbox.flatMap(group => group.items).filter(item => item.kind === "workflow_run");
         expect(new Set(runItems.map(item => item.runId))).toEqual(expectedIds);
         expect(runItems.filter(item => item.row.summary?.heldCount === 1)).toHaveLength(1);
+    });
+
+    it("surfaces each failed managed occurrence once through Workflow attention, including without any Session", async () => {
+        const account = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
+        const other = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
+        const machine = await db.machine.create({ data: { id: randomUUID(), accountId: account.id, metadata: "{}" } });
+        const automation = await db.automation.create({ data: { accountId: account.id,
+            name: "Failed manual Workflow", templateCiphertext: "unopened-private-definition" } });
+        const acceptedSnapshot = await materializeWorkflowAcceptedSnapshotFixture({
+            definition: { version: 1, inputs: [], defaults: {}, blocks: [{ kind: "wait", id: "human",
+                document: { text: "Review", references: [], attachments: [] } }] },
+            context: { source: { kind: "automation", automationId: automation.id }, inputs: {}, machineId: machine.id, executionTarget: { kind: "session" },
+                workspaceTarget: { project: { machineId: machine.id, directory: "/repo", checkoutRootPath: "/repo" } },
+                authorization: { principal: { kind: "host" } } },
+        });
+        const managedIds: string[] = [];
+        for (let occurrence = 0; occurrence < 2; occurrence += 1) {
+            const runId = randomUUID();
+            const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({
+                mode: "plain", binding: { v: 1, purpose: "accepted_snapshot", accountId: account.id, runId }, acceptedSnapshot,
+            }));
+            await db.automationRun.create({ data: { id: runId, accountId: account.id, originKind: "automation",
+                automationId: automation.id, causeKind: "manual", causeOccurredAt: new Date(),
+                workflowAcceptedSnapshotEnvelope: acceptedEnvelope, workflowCustodyState: "settled",
+                state: "failed", scheduledAt: new Date(), dueAt: new Date(),
+                assignments: { create: { machineId: machine.id, priority: 0 } } } });
+            managedIds.push(runId);
+        }
+        const ordinary = await db.automationRun.create({ data: { accountId: account.id, originKind: "automation",
+            automationId: automation.id, causeKind: "manual", causeOccurredAt: new Date(), state: "failed",
+            scheduledAt: new Date(), dueAt: new Date() } });
+        // Managed Session correspondence is Session.originRunId; producedSessionId
+        // remains null even after a real Workflow child Session exists.
+        const child = await db.session.create({ data: { accountId: account.id, tag: randomUUID(), metadata: "{}",
+            encryptionMode: "plain", originKind: "run_step", originRunId: managedIds[1] } });
+        expect(await db.automationRun.findMany({ where: { id: { in: managedIds } }, select: { producedSessionId: true } }))
+            .toEqual([{ producedSessionId: null }, { producedSessionId: null }]);
+        const request = { accountId: account.id, attention: "required" as const,
+            pageByteLimit: EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES };
+        const attention = await listWorkflowRuns(request);
+        expect(new Set(attention.runs.map(run => run.id))).toEqual(new Set(managedIds));
+        const ordinaryAttention = await listAutomationRuns({ accountId: account.id, attention: "required" });
+        expect(ordinaryAttention.runs.map(run => run.id)).toEqual([ordinary.id]);
+        expect((await listWorkflowRuns({ ...request, accountId: other.id })).runs).toEqual([]);
+        const session: Session = { id: child.id, serverId: "home", origin: { kind: "run_step", runId: child.originRunId! },
+            seq: child.seq, encryptionMode: "plain", createdAt: child.createdAt.getTime(), updatedAt: child.updatedAt.getTime(),
+            active: child.active, activeAt: child.lastActiveAt.getTime(), metadata: null, metadataVersion: child.metadataVersion,
+            agentState: null, agentStateVersion: child.agentStateVersion, thinking: child.thinking, thinkingAt: 0 };
+        const entry: InboxSessionAttentionEntry = { candidate: {
+            session, sessionId: session.id, serverId: "home", title: "Failed step", subtitle: "", attentionState: "failed",
+            hasAttention: true, priority: 0, lastTurnCompletedAt: null,
+            personalAttention: { needsAttention: true, reasons: ["failed"], primary: "failed", presentation: "full" },
+            awareness: projectSessionAwarenessV1({ sessionId: session.id, nowMs: 1, origin: session.origin,
+                lifecycle: {}, runtime: { presence: "offline" }, pending: {}, content: { mode: "plain" },
+                currentness: { lifecycle: "observed", runtime: "observed", pending: "observed" } }),
+            reasons: { hasUnread: false, hasPendingPermissionRequests: false, hasPendingUserActionRequests: false,
+                hasBlockedPendingDelivery: false, hasQueuedUserInput: false, isThinking: false },
+        }, pendingPermissions: [], pendingUserActions: [] };
+        const inbox = buildInboxWorkGroups({ workflowRuns: attention.runs.map(run =>
+            workflowRunRowFromSummary(WorkflowRunSummaryV1Schema.parse(run), null)), sessionEntries: [entry],
+            automationRuns: [], automationServerId: "home", openApprovals: [], stalledSessions: [], landings: [], snoozed: [],
+            resolveSession: id => id === session.id ? session : null,
+            resolveOriginRunId: value => value.candidate.awareness.origin?.kind === "run_step"
+                ? value.candidate.awareness.origin.runId ?? null : null });
+        expect(inbox).toHaveLength(2);
+        expect(inbox.flatMap(group => group.items).filter(item => item.kind === "workflow_run").map(item => item.runId).sort())
+            .toEqual([...managedIds].sort());
+        expect(inbox.find(group => group.root.kind === "run" && group.root.runId === managedIds[1])?.items)
+            .toContainEqual(expect.objectContaining({ kind: "session", foldedUnderRunId: managedIds[1] }));
+        expect(inbox.some(group => group.root.kind === "other")).toBe(false);
+        const items = buildInboxItems({ workGroups: inbox, workflowServerId: "home", accountServerId: "home", notices: [],
+            sessionPresentation: { sessionsNeedingAttention: [entry], readySessions: [],
+                markAllReadTargets: [], pendingRequestHydrationTargets: [] } });
+        for (const runId of managedIds) {
+            const rows = items.filter(item => item.source.id === runId);
+            expect(rows).toHaveLength(1);
+            expect(rows[0]?.source.kind).toBe("workflow_run");
+            expect(new URL(rows[0]!.pageRoute, "https://home.invalid").searchParams.get("serverId")).toBe("home");
+        }
+        // A fresh read (the reload path) retains the same canonical membership.
+        expect(new Set((await listWorkflowRuns(request)).runs.map(run => run.id))).toEqual(new Set(managedIds));
+        await deleteWorkflowRun({ accountId: account.id, runId: managedIds[0]!, expectedRevision: 0 });
+        expect((await listWorkflowRuns(request)).runs.map(run => run.id)).toEqual([managedIds[1]]);
     });
 });

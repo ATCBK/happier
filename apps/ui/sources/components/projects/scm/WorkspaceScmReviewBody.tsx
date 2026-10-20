@@ -4,6 +4,7 @@ import { View } from 'react-native';
 import { ScmComparisonBar, ScmComparisonExplainToggle, ScmComparisonStartReview, ScmComparisonViewSwitch } from '@/components/sessions/files/comparison/ScmComparisonBar';
 import { ScmComparisonHeader } from '@/components/sessions/files/comparison/ScmComparisonHeader';
 import { ScmComparisonPhoneHeader, type ScmComparisonMenuSection } from '@/components/sessions/files/comparison/ScmComparisonPhoneHeader';
+import { ScmComparisonMoreMenu } from '@/components/sessions/files/comparison/ScmComparisonMoreMenu';
 import { ScmComparisonScopePicker } from '@/components/sessions/files/comparison/ScmComparisonScopePicker';
 import type { FilesComparisonScopeOption } from '@/components/sessions/files/comparison/filesComparison';
 import { WalkthroughAnalysisFact, WalkthroughReviewedFact } from '@/components/sessions/files/walkthrough/WalkthroughAtoms';
@@ -21,7 +22,12 @@ import { t } from '@/text';
 export type ScmReviewComparisonChrome = NonNullable<React.ComponentProps<typeof ChangedFilesReview>['comparisonChrome']>;
 export type ScmReviewViewContext = Readonly<{
     layout: WalkthroughViewLayout;
-    renderBar: (actions?: React.ReactNode) => React.ReactNode;
+    /**
+     * The bar with a view's own actions and its menu rows (the wide `⋯`; on a phone, rows of the comparison menu).
+     * `review` is the review's status once one exists (lab WT5-R6): it takes Start review's place on the wide bar,
+     * and Start review moves into the `⋯`.
+     */
+    renderBar: (actions?: React.ReactNode, sections?: readonly ScmComparisonMenuSection[], review?: React.ReactNode) => React.ReactNode;
     onShowFiles: () => void;
 }>;
 
@@ -63,8 +69,12 @@ export type WorkspaceScmReviewBodyProps = Readonly<{
      * host's mode and the review's views sit on one line; a stacked header keeps it on its own line above.
      */
     hostSwitch?: React.ReactNode;
-    /** The host's own bar actions (the review comments disclosure), first in the bar's action group. */
+    /** The host's own Files bar actions (the review comments disclosure), first in the bar's action group. */
     barActions?: React.ReactNode;
+    /** The region a bar action opens (review comments): drawn under the Files bar, above the files. */
+    barPanel?: React.ReactNode;
+    /** The same host actions as rows of the Files menu (the bar's ⋯, or the phone header's menu). */
+    barMenuSection?: ScmComparisonMenuSection | null;
 }>;
 
 const REVIEW_VIEWS: readonly SessionScmReviewView[] = ['files', 'walkthrough'];
@@ -132,27 +142,51 @@ export const WorkspaceScmReviewBody = React.memo(function WorkspaceScmReviewBody
             currentEvidenceSessionId={props.evidenceSessionId}
             fileCount={countShown(fileCount)} onSelect={props.onSelectComparison} />
     </>;
+    // A comparison with no changes has nothing to review or to commit: no action is offered for it.
+    const noChanges = props.fileCount === 0;
+    const onStartReview = noChanges ? undefined : props.onStartReview;
+    const proposeCommits = noChanges ? null : props.proposeCommits;
+    const onProposeCommits = noChanges ? null : props.onProposeCommits;
     const trailing = <>
-        {props.barActions}
-        {props.onStartReview ? <ScmComparisonStartReview disabled={props.reviewDisabled} disabledReason={props.reviewDisabledReason}
-            onPress={props.onStartReview} /> : null}
-        {props.proposeCommits}
+        {onStartReview ? <ScmComparisonStartReview disabled={props.reviewDisabled} disabledReason={props.reviewDisabledReason}
+            onPress={onStartReview} /> : null}
+        {proposeCommits}
     </>;
+    // Once a review exists its status holds Start review's place (lab WT5-R6), so the bar stays one row; a
+    // second review is still one choice away, as the first row of the `⋯`.
+    const startReviewSection = React.useMemo<ScmComparisonMenuSection | null>(() => (onStartReview ? {
+        id: 'review',
+        items: [{ id: 'start', testID: 'scm-comparison-start-review', title: t('scmComparison.startReview'),
+            disabled: props.reviewDisabled, subtitle: props.reviewDisabledReason ?? undefined }],
+        onSelect: () => { if (!props.reviewDisabled) onStartReview(); },
+    } : null), [onStartReview, props.reviewDisabled, props.reviewDisabledReason]);
     // The phone menu already lists Start review and Propose commits as rows; only the view's own parts join it.
-    const renderPhoneHeader = (fileCount: number | null, actions?: React.ReactNode, sections?: readonly ScmComparisonMenuSection[]) => <ScmComparisonPhoneHeader
+    const renderPhoneHeader = (fileCount: number | null, actions?: React.ReactNode, sections?: readonly ScmComparisonMenuSection[], fileActions = true) => <ScmComparisonPhoneHeader
         view={props.view} views={views} scope={{ options: props.scopeOptions, current: props.comparison,
             currentEvidenceSessionId: props.evidenceSessionId,
             currentLabel: props.scopeLabel, fileCount: countShown(fileCount), onSelect: props.onSelectComparison }}
         onSelectView={selectView} onBack={props.onClose}
-        onStartReview={props.onStartReview ?? (() => {})} reviewDisabled={props.reviewDisabled || !props.onStartReview}
-        reviewDisabledReason={props.reviewDisabledReason} onProposeCommits={props.onProposeCommits} extraActions={actions} sections={sections} />;
-    const renderBar = (actions?: React.ReactNode) => stacked
-        ? renderPhoneHeader(props.fileCount ?? reading?.source.fileCount ?? null, actions)
-        : <ScmComparisonBar leading={renderLeading(props.fileCount ?? null)} trailing={<>{actions}{trailing}</>} />;
+        onStartReview={noChanges ? null : onStartReview ?? (() => {})} reviewDisabled={props.reviewDisabled || !onStartReview || !fileActions}
+        reviewDisabledReason={props.reviewDisabledReason} onProposeCommits={fileActions ? onProposeCommits : null} extraActions={actions} sections={sections} />;
+    // The host's actions belong to the files they act on (the review comments panel opens over Files).
+    const withBarMenu = (sections?: readonly ScmComparisonMenuSection[]) => props.barMenuSection ? [props.barMenuSection, ...(sections ?? [])] : sections;
+    const renderBar = (actions?: React.ReactNode, sections?: readonly ScmComparisonMenuSection[], review?: React.ReactNode) => {
+        if (stacked) return renderPhoneHeader(props.fileCount ?? reading?.source.fileCount ?? null, <>{actions}{review}</>, sections);
+        const menu = review && startReviewSection ? [startReviewSection, ...(sections ?? [])] : sections;
+        return <ScmComparisonBar leading={renderLeading(props.fileCount ?? null)}
+            trailing={<>{actions}{review ? <>{review}{proposeCommits}</> : trailing}{menu ? <ScmComparisonMoreMenu sections={menu} /> : null}</>} />;
+    };
+    // While a state stands in for the files (loading, not a repository, unreachable), the bar keeps its
+    // place and its views, but nothing offers to act on files that are not there.
+    const renderStateBar = () => stacked
+        ? renderPhoneHeader(null, undefined, undefined, false)
+        : <ScmComparisonBar leading={renderLeading(null)} trailing={props.barActions} />;
     const chrome: ScmReviewComparisonChrome = {
-        renderBar: stacked ? (coverage, actions, sections) => renderPhoneHeader(coverage.fileCount, actions, sections) : undefined,
+        renderBar: stacked ? (coverage, actions, sections) => renderPhoneHeader(coverage.fileCount, actions, withBarMenu(sections)) : undefined,
         renderBarLeading: (coverage) => renderLeading(coverage.fileCount),
-        barTrailing: trailing,
+        barTrailing: <>{props.barActions}{trailing}</>,
+        belowBar: props.barPanel,
+        menuSections: props.barMenuSection ? [props.barMenuSection] : undefined,
         // An empty comparison has nothing to head or explain: the review's own empty state stands alone.
         renderHeader: (coverage) => coverage.fileCount === 0 && !reading ? null : <><ScmComparisonHeader
             viewLabel={resolveSessionScmReviewViewLabel(props.view)} scopeLabel={props.scopeLabel} scopeDetail={props.scopeDetail}
@@ -186,6 +220,6 @@ export const WorkspaceScmReviewBody = React.memo(function WorkspaceScmReviewBody
         {stacked && props.hostSwitch ? <View style={HOST_SWITCH_STACKED_STYLE}>{props.hostSwitch}</View> : null}
         {props.view === 'walkthrough' ? props.renderWalkthrough(context)
             : props.view === 'commits' && props.renderCommits ? props.renderCommits(context)
-                : props.filesState ? <>{renderBar()}{props.filesState}</> : props.renderFiles(chrome)}
+                : props.filesState ? <>{renderStateBar()}{props.filesState}</> : props.renderFiles(chrome)}
     </View>;
 });

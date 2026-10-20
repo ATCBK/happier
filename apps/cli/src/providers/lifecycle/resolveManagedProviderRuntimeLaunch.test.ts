@@ -83,6 +83,44 @@ async function writeRuntimeRoot(input: Readonly<{
 }
 
 describe('managed Provider packaged runtime launch resolution', () => {
+  it('admits a physical executable from the exact executing source root without packaged metadata', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-source-managed-runtime-'));
+    try {
+      const runtime = await writeRuntimeRoot({ runtimeRoot: root, recordRuntimeAsset: false });
+      await rm(runtime.manifestPath);
+      await mkdir(join(root, 'src/chunks'), { recursive: true });
+      await writeFile(join(root, 'package.json'), JSON.stringify({ name: '@happier-dev/cli' }));
+      await expect(resolveManagedProviderRuntimeExecutable(MANAGED_RUNTIME_REF, {
+        platform: 'linux',
+        runtimeModuleUrl: pathToFileURL(join(root, 'src/chunks/managed-runtime.mjs')).href,
+        resolveAssetPath: (...segments) => join(root, ...segments),
+      })).resolves.toBe(await realpath(runtime.executablePath));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['different source root', 'packaged module'] as const)(
+    'does not exempt a %s from packaged asset integrity', async (kind) => {
+      const root = await mkdtemp(join(tmpdir(), 'happier-unproven-managed-runtime-'));
+      try {
+        const runtime = await writeRuntimeRoot({ runtimeRoot: root, recordRuntimeAsset: false });
+        await rm(runtime.manifestPath);
+        await mkdir(join(root, 'src'), { recursive: true });
+        await writeFile(join(root, 'package.json'), JSON.stringify({ name: '@happier-dev/cli' }));
+        const moduleRoot = kind === 'different source root' ? join(root, 'another-cli') : root;
+        await expect(resolveManagedProviderRuntimeExecutable(MANAGED_RUNTIME_REF, {
+          platform: 'linux',
+          runtimeModuleUrl: pathToFileURL(join(moduleRoot,
+            kind === 'different source root' ? 'src/chunks' : 'package-dist', 'managed-runtime.mjs')).href,
+          resolveAssetPath: (...segments) => join(root, ...segments),
+        })).resolves.toBeNull();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it('resolves retained version A directly after the installed current pointer advances to B', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-retained-version-'));
     const versionARoot = join(root, 'versions', 'A');

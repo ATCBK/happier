@@ -25,12 +25,13 @@ import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { Popover } from '@/components/ui/popover';
 import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
 import { resolveVerticalScrollEdgeMaskStyle } from '@/components/ui/scroll/resolveScrollEdgeMaskStyle';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
-import { WidgetFlowPanel, WidgetPreviewWell } from '@/components/widgets/flow/WidgetFlowPanel';
+import { WidgetFlowHeightBoundContext, WidgetFlowPanel, WidgetPreviewWell } from '@/components/widgets/flow/WidgetFlowPanel';
 import { WidgetFlowStep, WidgetSheetDone, WidgetSheetShell } from '@/components/widgets/flow/WidgetFlowShell';
 
 import { InstalledPluginMarkById } from '@/components/plugins/shared/InstalledPluginMarkById';
@@ -85,8 +86,8 @@ export type WidgetAddPanelProps = Readonly<{
     hint?: string;
     searchPlaceholder: string;
     sections: readonly WidgetAddSection[];
-    /** Your widgets and saved groups are still being read: a search that finds nothing yet says so quietly. */
-    loading?: boolean;
+    /** Sections still being read (Your widgets): only they say so; what is already here is searched and shown at once. */
+    pendingSections?: readonly Readonly<{ id: string; title: string }>[];
     ask?: WidgetAddAsk;
     /** Where an entry without its own setup goes ("Add to Home"). */
     addLabel: string;
@@ -166,6 +167,10 @@ export function WidgetAddSurface(props: Omit<WidgetAddPanelProps, 'composition' 
             // rather than squeezed into whatever room is left on one side of it (lab wsplit A).
             fit="shift"
             edgePadding={{ vertical: WIDGET_ADD_SURFACE_PX.marginY, horizontal: WIDGET_ADD_SURFACE_PX.marginX }}
+            // The margin is kept once, from the boundary's edge: the surface carries no transparent gutter
+            // of its own, so the whole room inside the margins counts toward the split (a Home pane beside
+            // the sidebar at 1440 splits, lab wsplit A2).
+            containerStyle={{ paddingHorizontal: 0 }}
             portal={{ web: true, native: true, matchAnchorWidth: false, anchorAlign: 'center' }}
             onRequestClose={props.onRequestClose}
             backdrop={{ effect: 'none', closeOnPan: true }}
@@ -197,7 +202,7 @@ function AnchoredWidgetAddContent(props: Readonly<{
     const height = Math.min(props.maxHeight, WIDGET_ADD_SURFACE_PX.height);
     return (
         <View style={{ alignSelf: 'center', width }}>
-            <FloatingOverlay maxHeight={height} scrollEnabled={false} keyboardShouldPersistTaps="always">
+            <FloatingOverlay role="panel" maxHeight={height} scrollEnabled={false} keyboardShouldPersistTaps="always">
                 <View style={{ height }}>
                     <WidgetAddPanel {...props.panel} composition={split ? 'split' : 'push'} />
                 </View>
@@ -228,7 +233,8 @@ export function WidgetAddPanel(props: WidgetAddPanelProps): React.ReactElement {
     const listboxId = `widget-add-${panelId}.listbox`;
 
     const sections = React.useMemo(() => filterWidgetAddSections(props.sections, query), [props.sections, query]);
-    const ask = props.ask && matchesWidgetAddAsk(props.ask, query) ? props.ask : null;
+    // Asking the agent is the way forward when a search finds nothing, so it stays offered then (lab A4).
+    const ask = props.ask && (matchesWidgetAddAsk(props.ask, query) || sections.length === 0) ? props.ask : null;
     const askEntry = React.useMemo<WidgetAddEntry | null>(() => (props.ask ? {
         id: ASK_ID, title: props.ask.title, subtitle: props.ask.note, icon: 'sparkle', closesOnPick: true,
         actionLabel: t('widgetAdd.askAction'), onPick: props.ask.onPick,
@@ -244,11 +250,18 @@ export function WidgetAddPanel(props: WidgetAddPanelProps): React.ReactElement {
     const activeId = selectedId !== null && visibleIds.includes(selectedId) ? selectedId : null;
 
     const split = props.composition === 'split';
+    // On a phone the sheet keeps one height while you browse, search and set up (its ceiling), so it
+    // never jumps between the list, a short search and a widget's setup; each step fills it.
+    const sheetHeight = React.useContext(WidgetFlowHeightBoundContext);
+    const phoneFixed = props.phone === true && sheetHeight !== null;
+    const fill = props.phone !== true || phoneFixed;
     const select = React.useCallback((id: string) => {
         setSelectedId(id);
         if (!split) { setPushed(true); setDirection('forward'); }
     }, [split]);
     const back = React.useCallback(() => { setPushed(false); setDirection('backward'); }, []);
+    // "Add another" returns to the picker: the split list stays beside an empty stage, a phone pops to the list.
+    const addAnother = React.useCallback(() => { if (split) setSelectedId(null); else back(); }, [back, split]);
 
     // The selected widget's Add, for ⌘↵ and ↵: its setup registers its own submit.
     const commandRef = React.useRef<(() => void) | null>(null);
@@ -314,6 +327,7 @@ export function WidgetAddPanel(props: WidgetAddPanelProps): React.ReactElement {
             activeId={activeId}
             feedback={feedback}
             onSelect={select}
+            fill={fill}
         />
     );
     const detail = (
@@ -322,11 +336,13 @@ export function WidgetAddPanel(props: WidgetAddPanelProps): React.ReactElement {
             ask={selectedId === ASK_ID ? props.ask ?? null : null}
             addLabel={props.addLabel}
             phone={props.phone === true}
+            fill={fill}
             feedback={feedback?.entryId === selected?.id ? feedback : null}
             busy={busy}
             commandRef={commandRef}
             onPick={pickEntry}
             onDone={onDone}
+            onAddAnother={addAnother}
             {...(split ? { onClose: close } : { onBack: back })}
             {...(props.serverId ? { serverId: props.serverId } : {})}
             {...(props.sessionId ? { sessionId: props.sessionId } : {})}
@@ -338,7 +354,7 @@ export function WidgetAddPanel(props: WidgetAddPanelProps): React.ReactElement {
         <View
             testID={props.testID}
             accessibilityLabel={props.title}
-            style={[styles.root, split ? styles.rootSplit : null]}
+            style={[styles.root, split ? styles.rootSplit : null, phoneFixed ? { height: sheetHeight, flexGrow: 0, flexShrink: 0, flexBasis: 'auto' } : null]}
             {...(Platform.OS === 'web' ? { onKeyDown } : {})}
         >
             <PoliteAccessibilityStatus
@@ -357,9 +373,9 @@ export function WidgetAddPanel(props: WidgetAddPanelProps): React.ReactElement {
                     <View style={styles.detailColumn}>{detail}</View>
                 </>
             ) : pushed && selected ? (
-                <WidgetFlowStep key={`detail:${selected.id}`} direction={direction} fill={!props.phone}>{detail}</WidgetFlowStep>
+                <WidgetFlowStep key={`detail:${selected.id}`} direction={direction} fill={fill}>{detail}</WidgetFlowStep>
             ) : (
-                <WidgetFlowStep key="list" direction={direction} fill={!props.phone}>{list}</WidgetFlowStep>
+                <WidgetFlowStep key="list" direction={direction} fill={fill}>{list}</WidgetFlowStep>
             )}
         </View>
     );
@@ -376,10 +392,13 @@ function WidgetAddList(props: WidgetAddPanelProps & Readonly<{
     activeId: string | null;
     feedback: AddFeedback | null;
     onSelect: (id: string) => void;
+    /** The list takes its step's whole height and scrolls inside it (desktop, and a phone sheet of one height). */
+    fill: boolean;
 }>): React.ReactElement {
     const styles = stylesheet;
     const split = props.composition === 'split';
-    const nothing = props.sections.length === 0 && !props.askEntry;
+    // Nothing found says so even when the ask is offered under it; an empty list with no search is the ask alone.
+    const nothing = props.sections.length === 0 && (!props.askEntry || props.query.trim().length > 0);
     // Rows that run past the surface fade at the cut edge, so the list never ends mid-row (web).
     const fades = useScrollEdgeFades({ enabledEdges: LIST_FADE_EDGES });
     const fadeMask = Platform.OS === 'web' && !props.phone ? resolveVerticalScrollEdgeMaskStyle(fades.visibility) : null;
@@ -390,7 +409,7 @@ function WidgetAddList(props: WidgetAddPanelProps & Readonly<{
             onSelect={props.onSelect} testID={`${props.testID}.entry.${entry.id}`} />
     );
     return (
-        <View style={props.phone ? null : styles.fill}>
+        <View style={props.fill ? styles.fill : null}>
             <View style={styles.listHeader}>
                 <View style={styles.titleBlock}>
                     <Text style={styles.title} accessibilityRole="header" numberOfLines={1}>{props.title}</Text>
@@ -424,7 +443,7 @@ function WidgetAddList(props: WidgetAddPanelProps & Readonly<{
             <ScrollView nativeID={props.listboxId} accessibilityLabel={props.searchPlaceholder}
                 {...(Platform.OS === 'web' ? { role: 'listbox' as const } : {})}
                 onLayout={fades.onViewportLayout} onContentSizeChange={fades.onContentSizeChange} onScroll={fades.onScroll} scrollEventThrottle={16}
-                style={props.phone ? null : [styles.fill, fadeMask ? { maskImage: fadeMask.maskImage, WebkitMaskImage: fadeMask.WebkitMaskImage } as object : null]}
+                style={!props.fill ? null : [styles.fill, fadeMask ? { maskImage: fadeMask.maskImage, WebkitMaskImage: fadeMask.WebkitMaskImage } as object : null]}
                 contentContainerStyle={styles.listContent} keyboardShouldPersistTaps="always">
                 {props.sections.map((section) => (
                     <View key={section.id} style={styles.section} accessibilityLabel={section.title}>
@@ -436,12 +455,27 @@ function WidgetAddList(props: WidgetAddPanelProps & Readonly<{
                         {section.entries.map(row)}
                     </View>
                 ))}
-                {props.askEntry ? <View style={styles.section}>{row(props.askEntry)}</View> : null}
-                {nothing && props.loading ? (
-                    <Text style={styles.empty} testID={`${props.testID}.loading`}>{t('common.loading')}</Text>
-                ) : nothing ? (
-                    <Text style={styles.empty} testID={`${props.testID}.noMatch`}>{t('widgetAdd.noMatch', { query: props.query.trim() })}</Text>
+                {nothing ? (
+                    // A search that finds nothing is never a dead end: it says so on one quiet line and
+                    // clears in place (lab wsplit A4), keeping the list column's size.
+                    <SurfaceStateCard
+                        testID={`${props.testID}.noMatch`}
+                        size="line"
+                        kind="empty"
+                        accessibilitySemantics="status"
+                        title={t('widgetAdd.noMatch', { query: props.query.trim() })}
+                        action={{ testID: `${props.testID}.clearSearch`, label: t('selectionList.clearInput'), onPress: () => props.onQueryChange('') }}
+                    />
                 ) : null}
+                {props.pendingSections?.map((section) => (
+                    <View key={section.id} style={styles.section} accessibilityLabel={section.title} testID={`${props.testID}.pending.${section.id}`}>
+                        <View style={styles.sectionHeader}>
+                            <Text style={styles.sectionTitle} accessibilityRole="header" numberOfLines={1}>{section.title}</Text>
+                            <Text style={styles.sectionHint} numberOfLines={1}>{t('common.loading')}</Text>
+                        </View>
+                    </View>
+                ))}
+                {props.askEntry ? <View style={styles.section}>{row(props.askEntry)}</View> : null}
             </ScrollView>
         </View>
     );
@@ -547,11 +581,13 @@ function WidgetAddDetail(props: Readonly<{
     ask: WidgetAddAsk | null;
     addLabel: string;
     phone: boolean;
+    fill: boolean;
     feedback: AddFeedback | null;
     busy: boolean;
     commandRef: React.MutableRefObject<(() => void) | null>;
     onPick: (entry: WidgetAddEntry) => void;
     onDone: (entry: WidgetAddEntry, result: WidgetSetupSubmitResult) => void;
+    onAddAnother: () => void;
     onBack?: () => void;
     onClose?: () => void;
     serverId?: string;
@@ -580,6 +616,7 @@ function WidgetAddDetail(props: Readonly<{
                 footerAccessory={keys}
                 commandRef={props.commandRef}
                 onDone={(result) => props.onDone(entry, result)}
+                onAddAnother={props.onAddAnother}
                 onRefused={(message) => props.onDone(entry, { ok: false, message })}
                 {...(props.serverId ? { serverId: props.serverId } : {})}
                 {...(props.sessionId ? { sessionId: props.sessionId } : {})}
@@ -600,7 +637,7 @@ function WidgetAddDetail(props: Readonly<{
                 key={entry.id}
                 testID={props.testID}
                 phone={props.phone}
-                fill={!props.phone}
+                fill={props.fill}
                 mark={entry.icon}
                 title={entry.title}
                 hint={entry.subtitle ?? null}
@@ -628,7 +665,7 @@ function WidgetAddDetail(props: Readonly<{
         <WidgetFlowPanel
             testID={props.testID}
             phone={props.phone}
-            fill={!props.phone}
+            fill={props.fill}
             title=""
             {...(props.onClose ? { onClose: props.onClose } : {})}
             noteTestID={`${props.testID}.why`}
@@ -711,7 +748,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     listHeader: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s8, paddingLeft: HAPPIER_COLLECTION_LIST_METRICS.contentInset - 4, paddingRight: theme.space.s10, paddingTop: HAPPIER_COLLECTION_LIST_METRICS.headerPaddingTop + 4, paddingBottom: theme.space.s8 },
     titleBlock: { flex: 1, minWidth: 0, gap: 1 },
     title: { ...listText('title'), color: theme.colors.text.primary },
-    hint: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary },
+    // Panel glass lets the page show through at a heavy coat; the faint ink here is the secondary role, which takes
+    // the stronger backed step over a picture (tertiary would sink into it).
+    hint: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.secondary },
     search: { marginHorizontal: theme.space.s10, marginBottom: theme.space.s4 },
     // The Collection list's column geometry and type rhythm (`HAPPIER_COLLECTION_LIST_*`).
     listContent: { paddingHorizontal: HAPPIER_COLLECTION_LIST_METRICS.rowInset - 4, paddingBottom: theme.space.s10 },
@@ -746,7 +785,9 @@ const stylesheet = StyleSheet.create((theme) => ({
     rowTitle: { ...listText('rowTitle'), color: theme.colors.text.primary, flex: 1, minWidth: 0 },
     rowTitleSelected: listText('rowTitleSelected'),
     rowTitleAdded: { color: theme.colors.text.secondary },
-    rowSubtitle: { ...listText('groupCount'), color: theme.colors.text.tertiary },
+    // A row's purpose line is the list's description ink (the Collection list's muted step), so it
+    // takes the stronger faint ink on glass with a picture behind it.
+    rowSubtitle: { ...listText('groupCount'), color: theme.colors.text.secondary },
     trailing: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s4, height: HAPPIER_COLLECTION_LIST_TEXT.rowTitle.lineHeight, flexShrink: 0 },
     count: { ...listText('groupCount'), color: theme.colors.text.secondary, fontVariant: ['tabular-nums'] },
     addedText: { ...listText('groupCount'), color: theme.colors.text.tertiary },
@@ -774,7 +815,7 @@ const stylesheet = StyleSheet.create((theme) => ({
     sketchCardHalf: { flex: 1, minWidth: 0 },
     legend: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s12, marginTop: theme.space.s12 },
     legendItem: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-    legendLabel: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.tertiary, marginLeft: 3 },
+    legendLabel: { ...Typography.default(), ...happierPageTextMetrics('meta'), color: theme.colors.text.secondary, marginLeft: 3 },
     askDraft: {
         borderRadius: MENU_ROW_METRICS.radiusPx,
         borderWidth: StyleSheet.hairlineWidth,

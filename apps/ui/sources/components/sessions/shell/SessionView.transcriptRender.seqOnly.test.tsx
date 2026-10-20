@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { createReactNavigationNativeMock } from '@/dev/testkit/mocks/reactNavigation';
 import { act } from 'react-test-renderer';
@@ -5,40 +6,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
-import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { renderScreen as renderCanonicalScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createStorageStoreMock } from '@/dev/testkit/mocks/storage';
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { renderHook } from '@/dev/testkit';
+import { createPlainSessionByIdResponseFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createPendingMessageFixture, createSessionMessagesFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
+import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { configureConnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import type { Socket } from 'socket.io-client';
+import type { StorageState } from '@/sync/store/types';
+import { shallow } from 'zustand/vanilla/shallow';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 import { clearSessionSurfaceVisibilityForServerScopeReset } from '@/sync/domains/session/sessionSurfaceVisibility';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
-import { activateSessionShellStorageBoundary, installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
+import { MINIMUM_CLI_PENDING_QUEUE_V2_VERSION } from '@/utils/system/versionUtils';
+import { DiscussionSelectionSourceV1Schema } from '@happier-dev/protocol/discussions/content';
+import { RpcError, RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpcErrors';
+import type { ChatListInternalProps } from '@/components/sessions/transcript/chatListTypes';
 
 
-/**
- * `installSessionShellCommonModuleMocks()` registers its React Native mock from
- * inside a function. Static imports above can already load the shared
- * presentation package before that factory executes, which would leave its
- * spinner on the setup-level native branch while this screen uses the web
- * branch. Hoist the same web boundary for the entire graph so this test covers
- * the real standalone-spinner accessibility contract.
- */
-vi.mock('react-native', async () => {
-    const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-    return createReactNativeWebMock({
-        View: 'View',
-        Text: 'Text',
-        Pressable: 'Pressable',
-        ActivityIndicator: 'ActivityIndicator',
-        Platform: {
-            OS: 'web',
-            select: (spec: Record<string, unknown>) =>
-                spec && Object.prototype.hasOwnProperty.call(spec, 'web')
-                    ? (spec as any).web
-                    : (spec as any).default,
-        },
-    });
-});
+// Static pane/runtime imports use the same Socket boundary as the restored Home.
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 // The patched streaming package is an external renderer boundary and can be absent
 // before the UI postinstall lane materializes it; this composer test does not exercise it.
@@ -50,11 +42,6 @@ vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () =
 
 const previousDev = (globalThis as { __DEV__?: boolean }).__DEV__;
 const shouldRenderChatTimelineForSessionMock = vi.fn();
-const realtimeStatusValue = vi.hoisted(() => ({ current: { status: 'connected' } as any }));
-const onSessionVisibleSpy = vi.hoisted(() => vi.fn());
-const markSessionLiveTailIntentSpy = vi.hoisted(() => vi.fn());
-const fetchPendingMessagesSpy = vi.hoisted(() => vi.fn(async (_sessionId: string) => undefined));
-const markSessionViewedSpy = vi.hoisted(() => vi.fn(async () => {}));
 const chatHeaderRenderSpy = vi.hoisted(() => vi.fn());
 const chatListRenderSpy = vi.hoisted(() => vi.fn());
 const transcriptSourceIdentitySpy = vi.hoisted(() => vi.fn());
@@ -84,15 +71,10 @@ const createReactiveRouteState = vi.hoisted(() => <TValue,>(initialValue: TValue
     return state;
 });
 const sessionScreenFocusState = vi.hoisted(() => createReactiveRouteState(true));
-const pendingMessagesHookSpy = vi.hoisted(() => vi.fn());
-const transcriptIdsHookSpy = vi.hoisted(() => vi.fn());
-const subagentSourceMessagesHookSpy = vi.hoisted(() => vi.fn());
 const sessionSubagentsHookSpy = vi.hoisted(() => vi.fn());
 const sessionExecutionRunsSupportedHookSpy = vi.hoisted(() => vi.fn());
-const selectSyncErrorForServerSpy = vi.hoisted(() => vi.fn((_syncError: unknown, _serverId: string | null) => null));
+const selectSyncErrorForServerSpy = vi.hoisted(() => vi.fn((_syncError: unknown, _serverId: string | null | undefined) => null));
 const approvalArtifactsSpy = vi.hoisted(() => vi.fn());
-const sendMessageSpy = vi.hoisted(() => vi.fn(async () => ({ localId: 'local-message-1' })));
-const enqueuePendingMessageSpy = vi.hoisted(() => vi.fn(async () => ({ localId: 'pending-message-1' })));
 const pendingOutboundSendPromises = vi.hoisted(() => [] as Promise<unknown>[]);
 const routerPathnameState = vi.hoisted(() => createReactiveRouteState('/'));
 const themeColors = vi.hoisted(() => ({
@@ -123,72 +105,101 @@ const themeColors = vi.hoisted(() => ({
     groupped: { background: '#F5F5F5', chevron: '#C7C7CC', sectionTitle: '#8E8E93' },
 }));
 
-let authCredentials: any = { token: 't', secret: 's' };
 let sessionState: any = null;
+let machineState = createMachineFixture({ id: 'm1', activeAt: Date.now() });
 let committedMessagesState: any[] = [];
 let pendingMessagesState: any[] = [];
 let committedMessagesLoadedState = true;
 let transcriptIdsState: string[] = [];
 let transcriptIdsLoadedState = true;
-let transcriptIdsSnapshot: { ids: readonly string[]; isLoaded: boolean } = { ids: transcriptIdsState, isLoaded: transcriptIdsLoadedState };
 let transcriptLoadIssueState: any = null;
 let concurrentSessionListCacheByServerIdState: Record<string, any> = {};
-const committedMessagesListeners = new Set<() => void>();
-const storageListeners = new Set<() => void>();
-const defaultStorageState = createStorageStoreMock({}).getState();
-let realUseOpenApprovalArtifactsForSession: typeof import('@/sync/store/hooks')['useOpenApprovalArtifactsForSession'];
+const fixtureSettings = {
+    ...settingsDefaults,
+    experiments: true,
+    sessionMessageSendMode: 'agent_queue' as const,
+    sessionBusySteerSendPolicy: 'steer_immediately' as const,
+    sessionNonSteerableSendPrompt: 'on' as const,
+};
+let messageFixtureInput: readonly unknown[] | null = null;
+let messageFixtureIds: readonly string[] | null = null;
+let messageFixtureLoaded: boolean | null = null;
+let messageFixture = createSessionMessagesFixture();
+let pendingFixtureInput: readonly unknown[] | null = null;
+let pendingFixture: StorageState['sessionPending'][string] = { messages: [], discarded: [], isLoaded: true };
 
 function getStorageStateForTest() {
+    if (messageFixtureInput !== committedMessagesState || messageFixtureIds !== transcriptIdsState
+        || messageFixtureLoaded !== transcriptIdsLoadedState) {
+        messageFixtureInput = committedMessagesState;
+        messageFixtureIds = transcriptIdsState;
+        messageFixtureLoaded = transcriptIdsLoadedState;
+        messageFixture = createSessionMessagesFixture({
+            messageIdsOldestFirst: transcriptIdsState,
+            messagesById: Object.fromEntries(committedMessagesState.map((message) => [message.id, message])),
+            // Canonical message publications replace the row snapshot, not
+            // the Session's in-place reducer. These fixtures have no reducer
+            // changes and must not manufacture another tool-route dependency.
+            reducerState: messageFixture.reducerState,
+            isLoaded: transcriptIdsLoadedState,
+            messagesVersion: messageFixture.messagesVersion + 1,
+        });
+    }
+    if (pendingFixtureInput !== pendingMessagesState) {
+        pendingFixtureInput = pendingMessagesState;
+        pendingFixture = {
+            messages: pendingMessagesState.map((message) => createPendingMessageFixture(message)),
+            discarded: [],
+            isLoaded: true,
+        };
+    }
     return {
-        ...defaultStorageState,
+        isDataReady: true,
+        isSessionDraftsReady: true,
         sessions: sessionState ? { [sessionState.id]: sessionState } : {},
-        machines: {},
-        sessionMessages: {},
-        sessionPending: {},
-        sessionListRowsByServerId: {},
-        ordinarySessionListMembershipByServerId: {},
+        sessionMessages: sessionState ? { [sessionState.id]: messageFixture } : {},
+        sessionPending: sessionState ? { [sessionState.id]: pendingFixture } : {},
         sessionTranscriptLoadIssues: transcriptLoadIssueState
             ? { [sessionState?.id ?? 's1']: transcriptLoadIssueState }
             : {},
-        settings: {
-            ...settingsDefaults,
-            sessionMessageSendMode: 'agent_queue',
-            sessionBusySteerSendPolicy: 'steer_immediately',
-            sessionNonSteerableSendPrompt: 'on',
-        },
         concurrentSessionListCacheByServerId: concurrentSessionListCacheByServerIdState,
     };
 }
 
-function getTranscriptIdsSnapshotForTest(): { ids: readonly string[]; isLoaded: boolean } {
-    if (transcriptIdsSnapshot.ids !== transcriptIdsState || transcriptIdsSnapshot.isLoaded !== transcriptIdsLoadedState) {
-        transcriptIdsSnapshot = { ids: transcriptIdsState, isLoaded: transcriptIdsLoadedState };
-    }
-    return transcriptIdsSnapshot;
-}
-
-function getVisibleReadSeqForTest(): number | null {
-    let latestSeq: number | null = null;
-    for (const message of committedMessagesState) {
-        const seq = typeof message?.seq === 'number' && Number.isFinite(message.seq)
-            ? Math.trunc(message.seq)
-            : null;
-        if (seq === null) continue;
-        latestSeq = latestSeq === null ? seq : Math.max(latestSeq, seq);
-    }
-    return latestSeq;
-}
-
 function emitCommittedMessagesChangeForTest(): void {
-    for (const listener of committedMessagesListeners) {
-        listener();
-    }
+    // A transcript publication is not a Session/pending/Machine snapshot. Those
+    // owners may have advanced since the cached fixture was first mounted.
+    const { sessionMessages } = getStorageStateForTest();
+    shellStorage.setState((current) => shallow(current.sessionMessages, sessionMessages)
+        ? current
+        : { ...current, sessionMessages });
 }
 
 function emitStorageChangeForTest(): void {
-    for (const listener of storageListeners) {
-        listener();
-    }
+    const { sessions } = getStorageStateForTest();
+    shellStorage.setState((current) => shallow(current.sessions, sessions)
+        ? current
+        : { ...current, sessions });
+}
+
+function readMountedSessionForTest() {
+    const session = shellStorage.getState().sessions[sessionState.id];
+    if (!session) throw new Error('Expected the mounted transcript Session');
+    return session;
+}
+
+function publishStorageFixture(): void {
+    const scope = runtime.accountScope;
+    if (!scope) throw new Error('Expected the real transcript Account scope');
+    shellStorage.getState().applyMachines([machineState], true, {
+        sourceServerId: scope.serverId, sourceAccountId: scope.accountId,
+    });
+    const fixture = getStorageStateForTest();
+    shellStorage.setState((current) => {
+        const patch = Object.fromEntries(Object.entries(fixture).filter(([key, value]) =>
+            !shallow(current[key as keyof StorageState], value)));
+        return Object.keys(patch).length ? { ...current, ...patch } : current;
+    });
 }
 
 vi.mock('expo-linear-gradient', () => ({
@@ -218,12 +229,8 @@ vi.mock('@react-navigation/native', () => ({
         sessionScreenFocusState.read,
     ),
 }));
-vi.mock('@/auth/context/AuthContext', () => ({
-    useAuth: () => ({ credentials: authCredentials }),
-}));
 
-installSessionShellCommonModuleMocks({
-    reactNative: async () => {
+vi.mock('react-native', async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
             View: 'View',
@@ -238,25 +245,28 @@ installSessionShellCommonModuleMocks({
                         : (spec as any).default,
             },
         });
-    },
-    unistyles: async () => {
+    });
+vi.mock('react-native-unistyles', async () => {
         const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
         return createUnistylesMock({
             theme: themeColors,
         });
-    },
-    text: async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({
+    });
+vi.mock('@/text', async () => {
+    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
+    return (await import('@/dev/testkit/mocks/text')).createTextModuleMock({
         translate: (key: string) => key,
-    }),
-    modal: async () => {
+    });
+});
+vi.mock('@/modal', async () => {
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
         return createModalModuleMock({
             spies: {
                 alertAsync: (...args) => nonSteerablePromptAlertAsyncSpy(...args),
             },
         }).module;
-    },
-    router: async () => {
+    });
+vi.mock('expo-router', async () => {
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         return createExpoRouterMock({
             pathname: () => React.useSyncExternalStore(
@@ -271,95 +281,10 @@ installSessionShellCommonModuleMocks({
                 setParams: vi.fn(),
             },
         }).module;
-    },
-    storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-                useActiveServerAccountScope: () => ({ serverId: 'server-1', accountId: 'account-1' }),
-                storage: Object.assign(
-                    (selector?: (state: any) => unknown) => {
-                        const readSnapshot = () => {
-                            const state = getStorageStateForTest();
-                            return typeof selector === 'function' ? selector(state) : state;
-                        };
-                        return React.useSyncExternalStore(
-                            (listener) => {
-                                storageListeners.add(listener);
-                                return () => storageListeners.delete(listener);
-                            },
-                            readSnapshot,
-                            readSnapshot,
-                        );
-                    },
-                    {
-                        getState: getStorageStateForTest,
-                        subscribe: (listener: () => void) => {
-                            storageListeners.add(listener);
-                            return () => storageListeners.delete(listener);
-                        },
-                    },
-                ) as any,
-	                useSession: () => sessionState,
-	                __setSessionForTest: (next: any) => {
-                    sessionState = next;
-                },
-                useIsDataReady: () => true,
-                useRealtimeStatus: () => realtimeStatusValue.current,
-                useSessionMessages: () => ({ messages: committedMessagesState, isLoaded: committedMessagesLoadedState }),
-                useSessionTranscriptIds: (sessionId: string) => {
-                    transcriptIdsHookSpy(sessionId);
-                    return React.useSyncExternalStore(
-                        (listener) => {
-                            committedMessagesListeners.add(listener);
-                            return () => committedMessagesListeners.delete(listener);
-                        },
-                        getTranscriptIdsSnapshotForTest,
-                        getTranscriptIdsSnapshotForTest,
-                    );
-                },
-                useSessionVisibleReadSeq: () => React.useSyncExternalStore(
-                    (listener) => {
-                        committedMessagesListeners.add(listener);
-                        return () => committedMessagesListeners.delete(listener);
-                    },
-                    getVisibleReadSeqForTest,
-                    getVisibleReadSeqForTest,
-                ),
-                useSessionPendingMessages: (sessionId: string) => {
-                    pendingMessagesHookSpy(sessionId);
-                    return { messages: pendingMessagesState };
-                },
-                useSessionSubagentSourceMessages: (sessionId: string) => {
-                    subagentSourceMessagesHookSpy(sessionId);
-                    return [];
-                },
-                useSessionReviewCommentsDrafts: () => [],
-                useOpenApprovalArtifactsForSession: (target: Parameters<typeof realUseOpenApprovalArtifactsForSession>[0]) =>
-                    realUseOpenApprovalArtifactsForSession(target),
-                useSessionUsage: () => null,
-                useLocalSetting: (key: string) => {
-                    if (key === 'acknowledgedCliVersions') return {};
-                    if (key === 'uiMultiPanePanelsEnabled') return false;
-                    if (key === 'detailsPaneTabsBehavior') return 'preview';
-                    if (key === 'rightPaneWidthPx') return 360;
-                    if (key === 'rightPaneWidthBasisPx') return 1200;
-                    if (key === 'detailsPaneWidthPx') return 520;
-                    if (key === 'detailsPaneWidthBasisPx') return 1200;
-                    return {};
-                },
-                useLocalSettingMutable: () => [null, vi.fn()],
-                // Collection-valued Account settings are always arrays for the
-                // real store, and the mounted shell maps over them directly.
-                useSetting: <K extends keyof typeof settingsDefaults>(key: K) => settingsDefaults[key],
-                useSettings: () => ({ ...settingsDefaults, experiments: true, featureToggles: {} }),
-                useAutomations: () => [],
-                useMachine: () => null,
-        });
-    },
-});
+    });
 
 vi.mock('@/components/sessions/transcript/AgentContentView', () => ({
-    AgentContentView: (props: any) => {
+    AgentContentView: React.memo((props: any) => {
         agentContentViewRenderSpy(props);
         return React.createElement(
             'AgentContentView',
@@ -372,13 +297,13 @@ vi.mock('@/components/sessions/transcript/AgentContentView', () => ({
                 props.input ?? null,
             ),
         );
-    },
+    }),
 }));
 vi.mock('@/components/appShell/panes/AppPaneScopeHost', () => ({
-    AppPaneScopeHost: (props: any) => {
+    AppPaneScopeHost: React.memo((props: any) => {
         appPaneScopeHostRenderSpy(props);
         return React.createElement('AppPaneScopeHost', props, props.main ?? null);
-    },
+    }),
 }));
 vi.mock('@/components/sessions/panes/useRegisterSessionPaneDriver', () => ({
     useRegisterSessionPaneDriver: () => 'pane-scope-test',
@@ -387,21 +312,29 @@ vi.mock('@/components/sessions/panes/url/useSessionPaneUrlSync', () => ({
     useSessionPaneUrlSync: () => {},
 }));
 vi.mock('@/components/sessions/transcript/ChatHeaderView', () => ({
-    ChatHeaderView: (props: any) => {
+    ChatHeaderView: React.memo((props: any) => {
         chatHeaderRenderSpy(props);
         return null;
-    },
+    }),
 }));
-vi.mock('@/components/sessions/transcript/ChatList', async () => {
+// Keep ChatList's real memo and source subscriptions; its visual leaf also has
+// a shallow React.memo boundary in production (ChatListInternal.tsx).
+vi.mock('@/components/sessions/transcript/ChatListInternal', async () => {
     const { useSessionTranscriptSource } = await import('@/components/sessions/transcript/source/SessionTranscriptSourceContext');
-    return ({
-    ChatList: (props: any) => {
-        const source = useSessionTranscriptSource();
-        transcriptSourceIdentitySpy({ sessionId: source.sessionId, serverId: source.serverId });
-        chatListRenderSpy(props);
-        return React.createElement('ChatList');
-    },
-    });
+    const { useTranscriptSelectionActions, useTranscriptSelectionState } = await import('@/components/sessions/transcript/messageSelection/TranscriptMessageSelectionContext');
+    return {
+        ChatListInternal: React.memo((props: ChatListInternalProps) => {
+            const source = useSessionTranscriptSource();
+            const selection = useTranscriptSelectionState();
+            const selectionActions = useTranscriptSelectionActions();
+            transcriptSourceIdentitySpy({ sessionId: source.sessionId, serverId: source.serverId });
+            chatListRenderSpy(props);
+            return React.createElement('ChatList', {
+                onSelectMessage: selectionActions.enter,
+                selectedMessageCount: selection.count,
+            });
+        }),
+    };
 });
 vi.mock('@/components/ui/empty/EmptyMessages', () => ({
     EmptyMessages: () => React.createElement('EmptyMessages'),
@@ -425,56 +358,26 @@ vi.mock('@/utils/platform/responsive', () => ({
     useIsLandscape: () => false,
     useIsTablet: () => false,
 }));
-vi.mock('@/components/sessions/model/inactiveSessionUi', () => ({
-    getInactiveSessionUiState: () => ({ noticeKind: 'none', inactiveStatusTextKey: null, shouldShowInput: true }),
-}));
-vi.mock('@/components/sessions/model/resolveSessionMachineReachability', () => ({
-    resolveSessionMachineReachability: () => true,
-}));
-vi.mock('@/components/sessions/model/useSessionMachineReachability', () => ({
-    useSessionMachineReachability: () => ({ machineReachable: true, machineOnline: true }),
-    useSessionReachableMachineTarget: () => null,
-}));
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot: () => ({ serverId: 'server-1' }),
-    subscribeActiveServer: () => () => {},
-}));
-vi.mock('@/sync/runtime/connectivity/syncErrorScope', () => ({
-    selectSyncErrorForServer: (syncError: unknown, serverId: string | null) => selectSyncErrorForServerSpy(syncError, serverId),
-}));
+vi.mock('@/sync/runtime/connectivity/syncErrorScope', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/sync/runtime/connectivity/syncErrorScope')>();
+    return { ...actual, selectSyncErrorForServer: (...args: Parameters<typeof actual.selectSyncErrorForServer>) => {
+        selectSyncErrorForServerSpy(...args);
+        return actual.selectSyncErrorForServer(...args);
+    } };
+});
 vi.mock('@/voice/session/voiceSession', () => ({
     useVoiceSessionSnapshot: () => ({ status: 'disconnected' }),
     voiceSessionManager: {},
 }));
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        getSessionAttachmentTransferContext: () => undefined,
-        markSessionViewed: markSessionViewedSpy,
-        fetchPendingMessages: fetchPendingMessagesSpy,
-        publishSessionPermissionModeToMetadata: async () => {},
-        publishSessionAcpSessionModeOverrideToMetadata: async () => {},
-        publishSessionAcpConfigOptionOverrideToMetadata: async () => {},
-        publishSessionModelOverrideToMetadata: async () => {},
-        refreshSessions: async () => {},
-        onSessionVisible: onSessionVisibleSpy,
-        markSessionLiveTailIntent: markSessionLiveTailIntentSpy,
-        getAcceptedExternalSessionTailCursor: () => null,
-        subscribeAcceptedExternalSessionTailCursor: () => () => {},
-        sendMessage: sendMessageSpy,
-        enqueuePendingMessage: enqueuePendingMessageSpy,
-        submitMessage: async () => {},
-        encryption: {
-            getMachineEncryption: () => null,
-        },
-    },
-}));
-vi.mock('@/utils/system/fireAndForget', () => ({
-    fireAndForget: (promise: Promise<unknown>, options?: Readonly<{ tag?: string }>) => {
+vi.mock('@/utils/system/fireAndForget', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('@/utils/system/fireAndForget')>();
+    return { ...actual, fireAndForget: (promise: Promise<unknown>, options?: Parameters<typeof actual.fireAndForget>[1]) => {
         if (options?.tag?.startsWith('SessionView.sendMessage.') || options?.tag === 'SessionView.composer.dispatch') {
             pendingOutboundSendPromises.push(promise);
         }
-    },
-}));
+        return actual.fireAndForget(promise, options);
+    } };
+});
 vi.mock('@/utils/timing/runAfterInteractionsWithFallback', () => ({
     runAfterInteractionsWithFallback: (callback: () => void) => {
         callback();
@@ -493,59 +396,21 @@ vi.mock('@/sync/ops', async (importOriginal) => {
         },
     });
 });
-vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
-    createDefaultActionExecutor: () => ({ execute: vi.fn() }),
-}));
 vi.mock('@/components/sessions/agentInput', () => ({
-    AgentInput: (props: any) => {
+    AgentInput: React.memo((props: any) => {
         agentInputRenderSpy(props);
         return React.createElement('AgentInput', props);
+    }),
+}));
+// Telemetry leaves the process through this SDK; tracking policy and Sync stay real.
+vi.mock('posthog-react-native', () => ({
+    default: class PostHogBoundary {
+        optIn = vi.fn(async () => {});
+        optOut = vi.fn(async () => {});
+        capture = vi.fn();
+        identify = vi.fn();
+        reset = vi.fn();
     },
-}));
-vi.mock('@/utils/system/versionUtils', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/utils/system/versionUtils')>(),
-    isVersionSupported: () => true,
-    MINIMUM_CLI_VERSION: '0.0.0',
-    MINIMUM_CLI_PENDING_QUEUE_V2_VERSION: '0.0.0',
-}));
-vi.mock('@/agents/catalog/catalog', async (importOriginal) => {
-    // The generated Agent catalog is real internal logic, not a boundary. A
-    // hand-written core drifts every time the catalog grows a field the shell
-    // reads, so keep the canonical entries and stub only the resume/install
-    // helpers this suite pins.
-    const original = await importOriginal<typeof import('@/agents/catalog/catalog')>();
-    return {
-        ...original,
-        buildResumeSessionExtrasFromUiState: () => null,
-        getAgentResumeExperimentsFromSettings: () => null,
-        getNewSessionRelevantInstallableDepKeys: () => [],
-        resolveAgentIdFromFlavor: () => 'codex',
-    };
-});
-vi.mock('@/agents/hooks/useResumeCapabilityOptions', () => ({
-    useResumeCapabilityOptions: () => ({ resumeCapabilityOptions: {} }),
-}));
-vi.mock('@/agents/runtime/resumeCapabilities', () => ({
-    canResumeSessionWithOptions: () => true,
-    canContinueSessionWithFreshSpawn: () => false,
-    canResumeOrContinueSessionWithOptions: () => true,
-    getAgentVendorResumeId: () => '',
-}));
-vi.mock('@/hooks/server/useMachineCapabilitiesCache', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/hooks/server/useMachineCapabilitiesCache')>(),
-    prefetchMachineCapabilities: async () => {},
-    getMachineCapabilitiesSnapshot: () => null,
-    useMachineCapabilitiesCache: () => ({ state: { status: 'idle' } }),
-}));
-vi.mock('@/utils/sessions/machineUtils', () => ({
-    isMachineOnline: () => true,
-}));
-vi.mock('@/track', () => ({
-    tracking: { track: vi.fn() },
-    trackMessageSent: vi.fn(),
-}));
-vi.mock('@/platform/randomUUID', () => ({
-    randomUUID: () => 'uuid',
 }));
 vi.mock('@/hooks/server/useAutomationsSupport', () => ({
     useAutomationsSupport: () => ({ enabled: false }),
@@ -570,20 +435,8 @@ vi.mock('@/sync/domains/artifacts/approvalArtifacts', async (importOriginal) => 
         return actual.listOpenApprovalArtifactsForSession(...args);
     } };
 });
-vi.mock('@/scm/scmStatusSync', () => ({
-    scmStatusSync: { run: async () => {}, invalidateFromAutoRefresh: () => {} },
-}));
-vi.mock('@/sync/ops/actions/sessionActionExecutor', () => ({
-    createSessionActionExecutor: () => ({ execute: vi.fn() }),
-}));
-vi.mock('@/sync/domains/input/slashCommands/resolveSessionComposerSend', () => ({
-    resolveSessionComposerSend: (args: { input: string }) => ({ kind: 'send', text: args.input }),
-}));
 vi.mock('@/sync/domains/permissions/permissionModeApply', () => ({
     applyPermissionModeSelection: async () => {},
-}));
-vi.mock('@/sync/domains/sessionControl/sessionModeControl', () => ({
-    supportsSessionModeOverrides: () => false,
 }));
 vi.mock('@/sync/domains/session/control/localControlSwitch', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/sync/domains/session/control/localControlSwitch')>();
@@ -592,20 +445,130 @@ vi.mock('@/sync/domains/session/control/localControlSwitch', async (importOrigin
         return actual.shouldRenderChatTimelineForSession(args);
     } };
 });
-vi.mock('@/sync/runtime/time', () => ({
-    nowServerMs: () => 0,
-}));
+vi.doUnmock('@/sync/domains/state/storage');
+vi.doUnmock('@/hooks/session/useDraft');
+await loadSyncSingletonForTests();
+const { sync } = await import('@/sync/sync');
+// These observe the real owner; the network boundary below owns every reply.
+const onSessionVisibleSpy = vi.spyOn(sync, 'onSessionVisible');
+const markSessionLiveTailIntentSpy = vi.spyOn(sync, 'markSessionLiveTailIntent');
+const fetchPendingMessagesSpy = vi.spyOn(sync, 'fetchPendingMessages');
+const markSessionViewedSpy = vi.spyOn(sync, 'markSessionViewed');
+const sendMessageSpy = vi.spyOn(sync, 'sendMessage');
+const enqueuePendingMessageSpy = vi.spyOn(sync, 'enqueuePendingMessage');
+let activeSocket: Socket | undefined;
+let firstPendingAck: Promise<void> | undefined;
+let transcriptReadGate: ReturnType<typeof createDeferred<void>> | undefined;
+let preparingSessionReadPath: string | undefined;
+const admittedSessionIds = new Set<string>();
+const homeSessionResponses = new Map<string, ReturnType<typeof createPlainSessionByIdResponseFixture>>();
+const observedHttpReads = new Set<string>();
+const runtime = installSessionPaneRuntimeTestHarness({
+    configureSocket: socket => { activeSocket = socket; },
+    rpc: async () => { throw new RpcError(RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE, RPC_ERROR_CODES.METHOD_NOT_AVAILABLE); },
+    request: async (url, init) => {
+        const path = new URL(String(url)).pathname;
+        // These cases measure cached/loading projection subscriptions. A concurrent
+        // transport migration is another input, so hold reads at the HTTP boundary
+        // until unmount; the real consumer still receives its canonical response.
+        if (/^\/v1\/sessions\/[^/]+\/messages$/.test(path) && (init?.method ?? 'GET') === 'GET') {
+            observedHttpReads.add(path);
+            await transcriptReadGate?.promise;
+            return Response.json({ messages: [], hasMore: false, nextBeforeSeq: null });
+        }
+        if (path.endsWith('/pending') && (init?.method ?? 'GET') === 'GET') {
+            observedHttpReads.add(path);
+            await transcriptReadGate?.promise;
+            return Response.json({ pending: [] });
+        }
+        if (/^\/v2\/sessions\/[^/]+$/.test(path) && (init?.method ?? 'GET') === 'GET') {
+            observedHttpReads.add(path);
+            // Retain the actual plain Home wire seed, not a later cached E2EE
+            // projection, when this request is released after unmount.
+            const response = homeSessionResponses.get(path);
+            if (path !== preparingSessionReadPath) await transcriptReadGate?.promise;
+            if (response) return Response.json(response);
+        }
+        if (path.endsWith('/pending') && init?.method === 'POST') {
+            const body: unknown = JSON.parse(String(init.body));
+            if (!body || typeof body !== 'object' || !('localId' in body) || typeof body.localId !== 'string') {
+                throw new Error('Expected the real pending enqueue wire request');
+            }
+            const acknowledgement = firstPendingAck;
+            firstPendingAck = undefined;
+            await acknowledgement;
+            return Response.json({ requestedAction: { v: 1, kind: 'enqueue' },
+                pending: { localId: body.localId }, didWrite: true });
+        }
+        return null;
+    },
+});
+const shellStorageModule = await import('@/sync/domains/state/storage');
+const { storage: shellStorage } = shellStorageModule;
+// Observe subscription placement without replacing the owners' behavior.
+const pendingMessagesHookSpy = vi.spyOn(shellStorageModule, 'useSessionPendingMessages');
+const transcriptIdsHookSpy = vi.spyOn(shellStorageModule, 'useSessionTranscriptIds');
+const subagentSourceMessagesHookSpy = vi.spyOn(shellStorageModule, 'useSessionSubagentSourceMessages');
 const { SessionView } = await import('./SessionView');
-({ useOpenApprovalArtifactsForSession: realUseOpenApprovalArtifactsForSession } = await import('@/sync/store/hooks'));
 
-const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
 const { NavigationContext, useNavigation } = await import('@react-navigation/native');
+
+async function prepareScreenStorage() {
+    const serverId = sessionState?.serverId ?? 'srv_transcript_primary';
+    if (runtime.serverId !== serverId) {
+        await act(async () => {
+            await runtime.restoreRealm({ serverUrl: `https://${serverId}`, serverIdentityId: serverId, accountId: 'account-1' });
+        });
+        admittedSessionIds.clear();
+        homeSessionResponses.clear();
+        applyFixturePreferences();
+    }
+    await act(async () => {
+        publishStorageFixture();
+        if (sessionState && !admittedSessionIds.has(sessionState.id)) {
+            // Store-only cached rows are not Home admission. Use the real exact
+            // reader once before testing retained projections, then hold refreshes.
+            const sessionId: string = sessionState.id;
+            const path = `/v2/sessions/${encodeURIComponent(sessionId)}`;
+            homeSessionResponses.set(path, createPlainSessionByIdResponseFixture(sessionState));
+            preparingSessionReadPath = path;
+            try {
+                const result = await sync.ensureSessionVisibleForMessageRoute(sessionId, {
+                    forceRefresh: true, serverId: runtime.serverId, hydrateMessages: false,
+                });
+                expect(result).toMatchObject({ kind: 'available', sessionId });
+                expect(observedHttpReads.has(path)).toBe(true);
+                admittedSessionIds.add(sessionId);
+            } finally {
+                preparingSessionReadPath = undefined;
+            }
+            publishStorageFixture();
+        }
+    });
+}
+
+async function renderScreen(...args: Parameters<typeof renderCanonicalScreen>) {
+    await prepareScreenStorage();
+    const screen = await renderCanonicalScreen(...args);
+    return {
+        ...screen,
+        update: async (...updateArgs: Parameters<typeof screen.update>) => {
+            await prepareScreenStorage();
+            return screen.update(...updateArgs);
+        },
+    };
+}
+
+function applyFixturePreferences() {
+    shellStorage.setState({ settings: fixtureSettings });
+    shellStorage.getState().applyLocalSettings({ uiMultiPanePanelsEnabled: false }, { persist: false });
+}
 
 describe('SessionView (transcript rendering for seq-only sessions)', () => {
     const AppPaneProviderWrapper = ({ children }: { children?: React.ReactNode }) => {
         const navigation = useNavigation<NonNullable<React.ContextType<typeof NavigationContext>>>();
         return <NavigationContext.Provider value={navigation}>
-            <AppPaneProvider>{children ?? null}</AppPaneProvider>
+            <runtime.Wrapper>{children ?? null}</runtime.Wrapper>
         </NavigationContext.Provider>;
     };
 
@@ -618,22 +581,37 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         );
     }
 
-    beforeEach(() => {
+    async function renderSendingSessionView() {
+        // A send passes the real Action front door, which freshly reads the
+        // Session before handing it to Sync. Projection-only tests hold those
+        // reads to isolate updates; an outbound journey must let them settle.
+        transcriptReadGate?.resolve();
+        return renderSessionView();
+    }
+
+    beforeEach(async () => {
+        await runtime.restoreRealm({ serverUrl: 'https://server-1', serverIdentityId: 'srv_transcript_primary', accountId: 'account-1' });
+        applyFixturePreferences();
         (globalThis as { __DEV__?: boolean }).__DEV__ = false;
-        authCredentials = { token: 't', secret: 's' };
-        realtimeStatusValue.current = { status: 'connected' };
+        firstPendingAck = undefined;
+        preparingSessionReadPath = undefined;
+        admittedSessionIds.clear();
+        homeSessionResponses.clear();
+        observedHttpReads.clear();
+        transcriptReadGate = createDeferred<void>();
+        machineState = createMachineFixture({ id: 'm1', activeAt: Date.now() });
         sessionState = createSessionFixture({
             id: 's1',
-            serverId: 'server-1',
+            serverId: 'srv_transcript_primary',
             seq: 25,
             updatedAt: 100,
             presence: 'online',
             active: true,
             agentStateVersion: 1,
-            accessLevel: 'edit',
             pendingVersion: 1,
             pendingCount: 0,
-            metadata: { machineId: 'm1', flavor: 'codex', version: '0.0.0', path: '/tmp', homeDir: '/tmp', host: 'tester.local' },
+            metadata: { machineId: 'm1', flavor: 'codex', version: MINIMUM_CLI_PENDING_QUEUE_V2_VERSION,
+                path: '/tmp', homeDir: '/tmp', host: 'tester.local' },
             agentState: {},
         });
         committedMessagesState = [];
@@ -641,10 +619,12 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         committedMessagesLoadedState = true;
         transcriptIdsState = [];
         transcriptIdsLoadedState = true;
+        messageFixture = createSessionMessagesFixture();
+        messageFixtureInput = null;
+        messageFixtureIds = null;
+        messageFixtureLoaded = null;
         transcriptLoadIssueState = null;
         concurrentSessionListCacheByServerIdState = {};
-        committedMessagesListeners.clear();
-        storageListeners.clear();
         shouldRenderChatTimelineForSessionMock.mockClear();
         onSessionVisibleSpy.mockClear();
         markSessionLiveTailIntentSpy.mockClear();
@@ -669,17 +649,19 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         pendingOutboundSendPromises.length = 0;
         sessionScreenFocusState.current = true;
         routerPathnameState.current = '/';
+        // Establish the default plain Session's real Home membership before a
+        // case changes its retained state (including already-opened E2EE content).
+        await prepareScreenStorage();
     });
 
-    afterEach(() => {
+    afterEach(async () => {
         syncPerformanceTelemetry.configure({ enabled: false });
         syncPerformanceTelemetry.reset();
         standardCleanup();
+        await act(async () => { transcriptReadGate?.resolve(); });
         vi.clearAllMocks();
         (globalThis as { __DEV__?: boolean }).__DEV__ = previousDev;
     });
-
-    beforeEach(activateSessionShellStorageBoundary);
 
     it('renders ChatList when session.seq > 0 even if visible committed messages are empty', async () => {
         const screen = await renderSessionView();
@@ -700,6 +682,7 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         const screen = await renderSessionView();
 
         expect(screen.findAllByType('ChatList')).toHaveLength(1);
+        await waitForHomeGovernance(() => expect(observedHttpReads.has('/v1/sessions/s1/messages')).toBe(true));
 
         await screen.unmount();
     });
@@ -746,7 +729,7 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         sessionState = {
             ...sessionState,
             id: hiddenSessionId,
-            serverId: 'server-a',
+            serverId: 'srv_transcript_a',
             seq: 2,
             lastViewedSessionSeq: 1,
             active: false,
@@ -776,7 +759,7 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
 
         const screen = await renderSessionView({
             id: hiddenSessionId,
-            routeServerId: 'server-a',
+            routeServerId: 'srv_transcript_a',
         });
 
         expect(onSessionVisibleSpy).toHaveBeenCalledTimes(1);
@@ -786,9 +769,9 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
                 committedMessagesCount: 1,
             }),
         );
-        expect(chatListRenderSpy.mock.calls.at(-1)?.[0]?.session).toMatchObject({
-            id: hiddenSessionId,
-            serverId: 'server-a',
+        expect(chatListRenderSpy.mock.calls.at(-1)?.[0]).toMatchObject({
+            sessionId: hiddenSessionId,
+            sessionServerId: 'srv_transcript_a',
             metadata: {
                 systemSessionV1: {
                     key: 'voice_conversation_retired',
@@ -839,6 +822,7 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
             kind: 'agent-text',
             role: 'agent',
             createdAt: 1,
+            text: 'Cached transcript content',
             content: [],
         }];
         committedMessagesLoadedState = true;
@@ -883,10 +867,10 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         committedMessagesLoadedState = false;
         transcriptIdsLoadedState = false;
         transcriptLoadIssueState = { kind: 'read_failed', errorCode: 'internal_error' };
-        sessionState = { ...sessionState, serverId: 'server-1' };
+        sessionState = { ...sessionState, serverId: 'srv_transcript_primary' };
         routerPathnameState.current = '/session/s1';
 
-        const screen = await renderSessionView({ routeServerId: 'server-1' });
+        const screen = await renderSessionView({ routeServerId: 'srv_transcript_primary' });
         const { WarningActionBanner } = await import('./view/WarningActionBanner');
 
         expect(screen.findAllHostsByTestId('session.externalTranscript.loadIssue')).toHaveLength(1);
@@ -900,14 +884,14 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
     });
 
     it('does not call a pending-only failed transcript a retained transcript', async () => {
-        sessionState = { ...sessionState, seq: 0, serverId: 'server-1' };
+        sessionState = { ...sessionState, seq: 0, serverId: 'srv_transcript_primary' };
         committedMessagesState = [];
         transcriptIdsState = [];
         pendingMessagesState = [{ id: 'pending-only' }];
         transcriptLoadIssueState = { kind: 'read_failed', errorCode: 'internal_error' };
         routerPathnameState.current = '/session/s1';
 
-        const screen = await renderSessionView({ routeServerId: 'server-1' });
+        const screen = await renderSessionView({ routeServerId: 'srv_transcript_primary' });
         const { WarningActionBanner } = await import('./view/WarningActionBanner');
 
         expect(screen.tree.root.findAllByType(WarningActionBanner)
@@ -944,7 +928,15 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
 
         expect(onSessionVisibleSpy).toHaveBeenCalledTimes(1);
 
-        realtimeStatusValue.current = { status: 'disconnected' };
+        await act(async () => {
+            if (!activeSocket) throw new Error('Expected the restored Account Socket boundary');
+            configureConnectedServerSocketBoundary(activeSocket);
+            activeSocket.connect();
+        });
+        expect(onSessionVisibleSpy).toHaveBeenCalledTimes(1);
+        await act(async () => {
+            activeSocket?.disconnect();
+        });
         await screen.update(<SessionView id="s1" />);
 
         expect(onSessionVisibleSpy).toHaveBeenCalledTimes(1);
@@ -1105,16 +1097,16 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
                 />
             );
         };
-        const screen = await renderScreen(render('server-a'), {
+        const screen = await renderScreen(render('srv_transcript_a'), {
             wrapper: AppPaneProviderWrapper,
             flushOptions: { cycles: 0, turns: 0 },
         });
         const serverAToken = mountedTokens.at(-1);
 
-        await screen.update(render('server-a'));
+        await screen.update(render('srv_transcript_a'));
         expect(mountedTokens.at(-1)).toBe(serverAToken);
 
-        await screen.update(render('server-b'));
+        await screen.update(render('srv_transcript_b'));
         expect(mountedTokens.at(-1)).not.toBe(serverAToken);
 
         await screen.unmount();
@@ -1122,31 +1114,29 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
 
     it('keeps the transcript data key qualified and remounts when hydration resolves a different Home', async () => {
         const { SessionView } = await import('./SessionView');
-        sessionState = { ...sessionState, serverId: 'server-a' };
-        await activateSessionShellStorageBoundary();
+        sessionState = { ...sessionState, serverId: 'srv_transcript_a' };
         const screen = await renderScreen(
             <SessionView
                 id="s1"
-                routeHydrationState={{ kind: 'loading', sessionId: 's1', serverId: 'server-a', reason: 'refreshing' }}
+                routeHydrationState={{ kind: 'loading', sessionId: 's1', serverId: 'srv_transcript_a', reason: 'refreshing' }}
             />,
             { wrapper: AppPaneProviderWrapper },
         );
 
         expect(chatListRenderSpy.mock.calls.at(-1)?.[0]?.sessionSurfaceKey).toBe(
-            JSON.stringify(['server-a', 's1']),
+            JSON.stringify(['srv_transcript_a', 's1']),
         );
 
-        sessionState = { ...sessionState, serverId: 'server-b' };
-        await activateSessionShellStorageBoundary();
+        sessionState = { ...sessionState, serverId: 'srv_transcript_b' };
         await screen.update(
             <SessionView
                 id="s1"
-                routeHydrationState={{ kind: 'available', sessionId: 's1', serverId: 'server-b' }}
+                routeHydrationState={{ kind: 'available', sessionId: 's1', serverId: 'srv_transcript_b' }}
             />,
         );
 
         expect(chatListRenderSpy.mock.calls.at(-1)?.[0]?.sessionSurfaceKey).toBe(
-            JSON.stringify(['server-b', 's1']),
+            JSON.stringify(['srv_transcript_b', 's1']),
         );
         await screen.unmount();
     });
@@ -1297,8 +1287,8 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         await screen.unmount();
     });
 
-    it('does not render a restore prompt for encrypted sessions when credentials include dataKey material', async () => {
-        authCredentials = { token: 't', encryption: { publicKey: 'pk', machineKey: 'mk' } };
+    it('does not render a restore prompt for an available encrypted Session in a real authenticated Account', async () => {
+        sessionState = { ...sessionState, encryptionMode: 'e2ee', encryptedContentAvailability: 'ready' };
 
         const screen = await renderSessionView();
 
@@ -1348,7 +1338,6 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
     });
 
     it('does not mark a route-rejected scoped session as viewed', async () => {
-        vi.useFakeTimers();
         try {
             committedMessagesState = [{
                 id: 'm1',
@@ -1361,10 +1350,10 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
             transcriptIdsState = ['m1'];
             sessionState = {
                 ...sessionState,
-                serverId: 'server-b',
+                serverId: 'srv_transcript_b',
             };
             concurrentSessionListCacheByServerIdState = {
-                'server-b': {
+                'srv_transcript_b': {
                     serverName: 'Server B',
                     sessions: {
                         s1: { id: 's1' },
@@ -1372,7 +1361,10 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
                 },
             };
 
-            const screen = await renderSessionView({ routeServerId: 'server-a' });
+            // Account restore is real asynchronous I/O, not part of the viewed timer.
+            await prepareScreenStorage();
+            vi.useFakeTimers();
+            const screen = await renderSessionView({ routeServerId: 'srv_transcript_a' });
 
             await act(async () => {
                 await vi.runOnlyPendingTimersAsync();
@@ -1385,8 +1377,8 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
             expect(sessionExecutionRunsSupportedHookSpy).not.toHaveBeenCalledWith('s1');
             expect(sessionSubagentsHookSpy).not.toHaveBeenCalledWith(expect.objectContaining({ sessionId: 's1' }));
             const scopedServerIds = selectSyncErrorForServerSpy.mock.calls.map((call) => call[1]);
-            expect(scopedServerIds).toContain('server-a');
-            expect(scopedServerIds).not.toContain('server-b');
+            expect(scopedServerIds).toContain('srv_transcript_a');
+            expect(scopedServerIds).not.toContain('srv_transcript_b');
 
             await screen.unmount();
         } finally {
@@ -1396,25 +1388,15 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
 
     it('shows the existing Home recovery surface when a deep link has no address yet', async () => {
         const { SessionInvalidLinkFallback } = await import('./SessionInvalidLinkFallback');
-        const storageModule = await import('@/sync/domains/state/storage');
-        (storageModule as any).__setSessionForTest(null);
-        expect((storageModule as any).useSession()).toBeNull();
+        const previousSession = sessionState;
+        sessionState = null;
 
         try {
             const screen = await renderSessionView();
             expect(screen.findAllByType(SessionInvalidLinkFallback)).toHaveLength(1);
             await screen.unmount();
         } finally {
-            (storageModule as any).__setSessionForTest({
-                id: 's1',
-                seq: 25,
-                updatedAt: 100,
-                presence: 'online',
-                active: true,
-                accessLevel: 'edit',
-                metadata: { machineId: 'm1', flavor: 'codex', version: '0.0.0', path: '/tmp', homeDir: '/tmp' },
-                agentState: {},
-            });
+            sessionState = previousSession;
         }
 
     });
@@ -1441,6 +1423,7 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         await flushHookEffects({ cycles: 2, turns: 1 });
         chatListRenderSpy.mockClear();
 
+        sessionState = readMountedSessionForTest();
         sessionState = {
             ...sessionState,
             updatedAt: 200,
@@ -1475,6 +1458,7 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         await flushHookEffects({ cycles: 2, turns: 1 });
         chatListRenderSpy.mockClear();
 
+        sessionState = readMountedSessionForTest();
         sessionState = {
             ...sessionState,
             lastViewedSessionSeq: 26,
@@ -1512,7 +1496,10 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         chatListRenderSpy.mockClear();
 
         await act(async () => {
-            committedMessagesState = [{ id: 'm1', seq: 26, role: 'assistant', content: 'hello' }];
+            committedMessagesState = [{
+                id: 'm1', kind: 'agent-text', localId: null, createdAt: 1,
+                seq: 26, role: 'agent', text: 'hello',
+            }];
             transcriptIdsState = ['m1'];
             emitCommittedMessagesChangeForTest();
             await Promise.resolve();
@@ -1524,7 +1511,63 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         expect(agentInputRenderSpy).not.toHaveBeenCalled();
         expect(chatListRenderSpy).toHaveBeenCalled();
 
+        await act(async () => { screen.findByType('ChatList').props.onSelectMessage('m1'); });
+        expect(screen.findByType('ChatList').props.selectedMessageCount).toBe(1);
+        await act(async () => {
+            committedMessagesState = [...committedMessagesState, {
+                id: 'm2', kind: 'agent-text', localId: null, createdAt: 2,
+                seq: 27, role: 'agent', text: 'another message',
+            }];
+            transcriptIdsState = ['m1', 'm2'];
+            emitCommittedMessagesChangeForTest();
+        });
+        await flushHookEffects({ cycles: 2, turns: 1 });
+        expect(screen.findByType('ChatList').props.selectedMessageCount).toBe(1);
+        await act(async () => {
+            committedMessagesState = [];
+            transcriptIdsState = [];
+            emitCommittedMessagesChangeForTest();
+        });
+        await flushHookEffects({ cycles: 2, turns: 1 });
+        expect(screen.findByType('ChatList').props.selectedMessageCount).toBe(0);
+        expect(appPaneScopeHostRenderSpy).not.toHaveBeenCalled();
+        expect(agentInputRenderSpy).not.toHaveBeenCalled();
+
         await screen.unmount();
+    });
+
+    it('uses the supplied activity Session without subscribing to an unused live Session', async () => {
+        const { useSessionAgentActivity } = await import('@/hooks/session/useSessionAgentActivity');
+        let suppliedSession: ReturnType<typeof readMountedSessionForTest> | null | undefined = readMountedSessionForTest();
+        let renders = 0;
+        const hook = await renderHook(() => {
+            renders += 1;
+            return useSessionAgentActivity({ sessionId: 's1', serverId: runtime.serverId, session: suppliedSession });
+        }, { wrapper: runtime.Wrapper });
+        const publishSequence = async () => {
+            await act(async () => {
+                shellStorage.setState(state => ({ sessions: { ...state.sessions,
+                    s1: { ...state.sessions.s1!, seq: (state.sessions.s1?.seq ?? 0) + 1 } } }));
+            });
+            await flushHookEffects({ cycles: 2, turns: 1 });
+        };
+
+        renders = 0;
+        await publishSequence();
+        expect(renders).toBe(0);
+
+        suppliedSession = null;
+        await hook.rerender();
+        renders = 0;
+        await publishSequence();
+        expect(renders).toBe(0);
+
+        suppliedSession = undefined;
+        await hook.rerender();
+        renders = 0;
+        await publishSequence();
+        expect(renders).toBeGreaterThan(0);
+        await hook.unmount();
     });
 
     it('keeps the session shell and composer stable for seq-only streaming updates', async () => {
@@ -1537,6 +1580,7 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         chatListRenderSpy.mockClear();
 
         await act(async () => {
+            sessionState = readMountedSessionForTest();
             sessionState = {
                 ...sessionState,
                 seq: 26,
@@ -1562,6 +1606,7 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         chatHeaderRenderSpy.mockClear();
 
         await act(async () => {
+            sessionState = readMountedSessionForTest();
             sessionState = {
                 ...sessionState,
                 metadata: {
@@ -1588,6 +1633,7 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         fetchPendingMessagesSpy.mockClear();
 
         await act(async () => {
+            sessionState = readMountedSessionForTest();
             sessionState = {
                 ...sessionState,
                 pendingVersion: 2,
@@ -1599,7 +1645,6 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         await flushHookEffects({ cycles: 5, turns: 5 });
 
         expect(chatListRenderSpy).not.toHaveBeenCalled();
-        expect(shouldRenderChatTimelineForSessionMock).not.toHaveBeenCalled();
         expect(fetchPendingMessagesSpy).toHaveBeenCalledWith('s1');
 
         await screen.unmount();
@@ -1634,6 +1679,7 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         await flushHookEffects({ cycles: 2, turns: 1 });
         chatListRenderSpy.mockClear();
 
+        sessionState = readMountedSessionForTest();
         sessionState = {
             ...sessionState,
             metadataVersion: 2,
@@ -1693,10 +1739,11 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
     });
 
     it('requests mounted transcript follow without duplicating the sync live-tail owner after send', async () => {
-        const screen = await renderSessionView();
+        const screen = await renderSendingSessionView();
         const outboundText = 'hello from the composer';
 
         const initialFollowBottomIntentKey = chatListRenderSpy.mock.calls.at(-1)?.[0]?.followBottomIntentKey;
+        markSessionLiveTailIntentSpy.mockClear();
         const initialAgentInputProps = agentInputRenderSpy.mock.calls.at(-1)?.[0];
         expect(typeof initialAgentInputProps?.onChangeText).toBe('function');
 
@@ -1719,21 +1766,18 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         const nextFollowBottomIntentKey = chatListRenderSpy.mock.calls.at(-1)?.[0]?.followBottomIntentKey;
         expect(enqueuePendingMessageSpy).toHaveBeenCalledOnce();
         expect(sendMessageSpy).not.toHaveBeenCalled();
-        expect(markSessionLiveTailIntentSpy).not.toHaveBeenCalled();
+        expect(markSessionLiveTailIntentSpy).toHaveBeenCalledExactlyOnceWith('s1');
         expect(nextFollowBottomIntentKey).not.toBe(initialFollowBottomIntentKey);
 
         await screen.unmount();
     });
 
     it('admits one same-tick composer send and releases after its outbound handoff', async () => {
-        const screen = await renderSessionView();
+        const screen = await renderSendingSessionView();
         const firstOutboundHandoff = createDeferred<void>();
         const firstText = 'first same-tick composer send';
         const secondText = 'second composer send after handoff';
-        enqueuePendingMessageSpy.mockImplementationOnce(async () => {
-            await firstOutboundHandoff.promise;
-            return { localId: 'pending-message-1' };
-        });
+        firstPendingAck = firstOutboundHandoff.promise;
 
         let agentInputProps = agentInputRenderSpy.mock.calls.at(-1)?.[0];
         await act(async () => {
@@ -1749,7 +1793,7 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         });
 
         try {
-            expect(enqueuePendingMessageSpy).toHaveBeenCalledOnce();
+            await vi.waitFor(() => expect(enqueuePendingMessageSpy).toHaveBeenCalledOnce());
         } finally {
             firstOutboundHandoff.resolve(undefined);
             await act(async () => {
@@ -1771,6 +1815,44 @@ describe('SessionView (transcript rendering for seq-only sessions)', () => {
         });
 
         expect(enqueuePendingMessageSpy).toHaveBeenCalledTimes(2);
+        await screen.unmount();
+    });
+
+    it.each(['current', 'foreign'] as const)('preserves only %s-Home Discussion provenance through the real outbound draft handoff', async (home) => {
+        const { getSessionDraftSnapshot, readSessionDiscussionSelectionSourceFromDraft, writeExistingSessionDraft } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+        const { findPendingOutboxMessage } = await import('@/sync/domains/state/pendingOutboxPersistence');
+        const scope = runtime.accountScope;
+        if (!scope) throw new Error('Expected the captured Session Account scope');
+        const source = DiscussionSelectionSourceV1Schema.parse({
+            kind: 'discussion', serverId: home === 'current' ? scope.serverId : 'foreign-home',
+            discussionId: 'discussion-a', messageIds: ['discussion-message-a'],
+        });
+        const screen = await renderSendingSessionView();
+        const text = 'Review the unsent Discussion selection';
+        await act(async () => {
+            agentInputRenderSpy.mock.calls.at(-1)?.[0].onChangeText(text);
+            writeExistingSessionDraft({ scope, sessionId: 's1', patch: { sessionDiscussionSelectionSourceV1: source } });
+        });
+        await flushHookEffects({ cycles: 2, turns: 1 });
+        expect(agentInputRenderSpy.mock.calls.at(-1)?.[0].value).toBe(text);
+        expect(readSessionDiscussionSelectionSourceFromDraft(getSessionDraftSnapshot(scope, { kind: 'session', sessionId: 's1' })?.document)).toEqual(source);
+        await act(async () => {
+            agentInputRenderSpy.mock.calls.at(-1)?.[0].onSend({ inputTextOverride: text });
+            await Promise.all(pendingOutboundSendPromises.splice(0));
+        });
+        await flushHookEffects({ cycles: 2, turns: 2 });
+        expect(enqueuePendingMessageSpy).toHaveBeenCalledOnce();
+        const handoff = await enqueuePendingMessageSpy.mock.results[0]!.value;
+        const stored = await findPendingOutboxMessage('s1', handoff.localId, scope);
+        expect(stored).not.toBeNull();
+        const expectedMeta = home === 'current'
+            ? expect.objectContaining({ happierStructuredInputV1: expect.objectContaining({ sessionDiscussionSelectionSourceV1: source }) })
+            : expect.not.objectContaining({ happierStructuredInputV1: expect.objectContaining({ sessionDiscussionSelectionSourceV1: expect.anything() }) });
+        // The real Sync owner accepted durable outbound custody; HTTP dispatch is
+        // separately owned by its outbox and need not have occurred at this point.
+        expect(enqueuePendingMessageSpy.mock.calls[0]?.slice(0, 2)).toEqual(['s1', text]);
+        expect(stored?.rawRecord).toMatchObject({ role: 'user', content: { type: 'text', text }, meta: expectedMeta });
+        expect(readSessionDiscussionSelectionSourceFromDraft(getSessionDraftSnapshot(scope, { kind: 'session', sessionId: 's1' })?.document)).toBeNull();
         await screen.unmount();
     });
 

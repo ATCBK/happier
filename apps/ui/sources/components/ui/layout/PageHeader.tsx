@@ -30,6 +30,9 @@ export type PageHeaderMetaFact = Readonly<{
     /** The fact is an address, path or id: drawn in the mono face. */
     mono?: boolean;
     testID?: string;
+    /** The fact is the link to what it names; `accessibilityLabel` says where it goes. */
+    onPress?: () => void;
+    accessibilityLabel?: string;
 }>;
 
 /**
@@ -49,6 +52,8 @@ export type PageHeaderProps = Readonly<{
     titleAccessory?: React.ReactNode;
     /** One sentence saying what the page is for (a node only when the sentence itself animates). */
     description?: React.ReactNode;
+    /** A description set by data (a skill's own frontmatter) of any length stops at this many lines; static copy omits it. */
+    descriptionLines?: number;
     /** Identity details under the description (an identifier to copy, a version and machine). */
     details?: React.ReactNode;
     /** Defaults to identity; column places the summary below title and actions at full content width. */
@@ -72,6 +77,8 @@ export type PageHeaderProps = Readonly<{
     actionsPlacement?: 'navigation' | 'page';
     /** Prefer the title row, wrapping controls beneath when the title needs its readable width. */
     actionsLayout?: 'wrap' | 'inline';
+    /** Keep a control's height on the title line while it has none yet (controls that arrive after the title). */
+    reserveControlLine?: boolean;
     /**
      * A status line under the actions (a save state and validity readout). It is the actions' own
      * row, as wide as they are, so its changing words never reflow the title.
@@ -89,6 +96,12 @@ export type PageHeaderProps = Readonly<{
     cancelAction?: PageHeaderPrimaryAction;
     /** Always show the title even when navigation chrome shows it (entity pages whose title is the entity). */
     alwaysShowTitle?: boolean;
+    /**
+     * Keep Back in the phone navigation bar even on a deep link with no history, without drawing the
+     * title in the body (a page whose entity cannot be shown, such as a Run that no longer exists).
+     * Where chrome does not show the title, the header draws the title and Back itself as usual.
+     */
+    alwaysShowBack?: boolean;
     /**
      * `column` (default): aligned with the page's content column. `pane`: spans the whole pane, for a
      * page whose body is full-bleed (a board's canvas), so the header lines up with it.
@@ -138,7 +151,7 @@ export const PageHeader = React.memo(function PageHeader(props: PageHeaderProps)
     const BackControl = useNavigationBackControl();
     // An entity page under retained title chrome puts its Back in that bar even on a deep link with no
     // history, so the identity starts on the same edge however the page was opened (DESIGN-9 P12).
-    const publishesBack = Boolean(setChromeBack && chromeShowsTitle && BackControl && (chromeShowsBack || props.alwaysShowTitle === true));
+    const publishesBack = Boolean(setChromeBack && chromeShowsTitle && BackControl && (chromeShowsBack || props.alwaysShowTitle === true || props.alwaysShowBack === true));
     const renderBack = React.useMemo(
         () => (BackControl && !chromeShowsBack && !publishesBack ? (style: StyleProp<ViewStyle>) => <BackControl style={style} /> : null),
         [BackControl, chromeShowsBack, publishesBack],
@@ -170,11 +183,22 @@ export const PageHeader = React.memo(function PageHeader(props: PageHeaderProps)
         text: fact.text,
         ...(fact.mono ? { mono: true } : {}),
         ...(fact.testID === undefined ? {} : { testID: fact.testID }),
+        ...(fact.onPress === undefined ? {} : { onPress: fact.onPress }),
+        ...(fact.accessibilityLabel === undefined ? {} : { accessibilityLabel: fact.accessibilityLabel }),
         ...(fact.icon
             ? { icon: <Icon name={fact.icon} size={ICON_SIZE.xs} color={theme.colors.text.secondary} /> }
             : {}),
     })), [props.meta, theme.colors.text.secondary]);
 
+    const { descriptionLines } = props;
+    const renderText = React.useMemo<HappierPageHeaderTextRender>(
+        () => descriptionLines === undefined
+            ? renderPageHeaderText
+            : (input) => input.role === 'pageDescription'
+                ? <Text numberOfLines={descriptionLines} style={stylesheet.description}>{input.text}</Text>
+                : renderPageHeaderText(input),
+        [descriptionLines],
+    );
     const titleNode = props.titleEditor
         ? <InlineTextField editor={props.titleEditor} style={stylesheet.titleInput} />
         : props.title;
@@ -201,10 +225,11 @@ export const PageHeader = React.memo(function PageHeader(props: PageHeaderProps)
             leading={props.leading}
             actions={actions}
             actionsLayout={props.actionsLayout}
+            reserveControlLine={props.reserveControlLine}
             status={props.status}
             renderBack={renderBack}
             columnMaxWidthPx={props.columnWidth === 'pane' ? undefined : maxWidth}
-            renderText={renderPageHeaderText}
+            renderText={renderText}
             testID={props.testID}
         />
         </>
@@ -232,10 +257,16 @@ function PageHeaderActionButton(props: Readonly<{ action: PageHeaderPrimaryActio
     );
 }
 
+/** The most lines a page title takes before it ends in an ellipsis. */
+const PAGE_TITLE_MAX_LINES = 2;
+
 /** Core's text owner for the shared header (font families and text scaling), for hosts drawing it directly. */
 export const renderPageHeaderText: HappierPageHeaderTextRender = (input) => (
     <Text
         accessibilityRole={input.header ? 'header' : undefined}
+        // An entity named by data (a Session titled by its first prompt) can be any length: the title
+        // stops at two lines, and the DOM text and screen readers still carry all of it.
+        numberOfLines={input.role === 'pageTitle' || input.role === 'heroTitle' ? PAGE_TITLE_MAX_LINES : undefined}
         style={input.role === 'heroTitle' ? stylesheet.heroTitle : input.role === 'pageTitle' ? stylesheet.title
             : input.role === 'meta' ? (input.mono ? [stylesheet.metaText, stylesheet.metaMono] : stylesheet.metaText) : stylesheet.description}
     >

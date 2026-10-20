@@ -16,13 +16,15 @@ import {
 import { createWorkflowDefinitionFixture } from '@/dev/testkit/fixtures/workflowRunFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { Message } from '@happier-dev/session-core/messages';
 import type { SessionTranscriptSource } from '../source/types';
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
+await loadSyncSingletonForTests();
 const { storage } = await import('@/sync/domains/state/storageStore');
-const { workflowRunRowFromSummary } = await import('@/sync/store/domains/workflowRuns');
+const { workflowRunRowFromSummary, workflowRunStoreKey } = await import('@/sync/store/domains/workflowRuns');
 const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
 const { useTranscriptRootMessages } = await import('./useTranscriptRootMessages');
@@ -127,14 +129,14 @@ describe('first-display workflow provenance', () => {
         ) }) });
         const probe = await mountTranscript(messagesFor('run-a', 2).slice(1), 'app', currentHome.id);
         expect(home.requestsFor(route)).toHaveLength(1);
-        expect(storage.getState().workflowRunInvocationsByRunId['run-a']?.factsById['step-run-a']).toMatchObject({ stepOrdinal: '3' });
+        expect(storage.getState().workflowRunInvocationsByRunId[workflowRunStoreKey('run-a', { serverId: currentHome.id, accountId: 'account-1' })]?.factsById['step-run-a']).toMatchObject({ stepOrdinal: '3' });
         evaluated = true;
         // A history-only index is not a transcript reference and must not be reopened.
         storage.getState().upsertWorkflowRunInvocation({ runId: 'run-a', parentRevision: 1,
             invocation: createWorkflowInvocationIndexFixture({ id: 'unopened-history', runId: 'run-a' }) });
         await act(async () => { await refreshWorkflowRunById('run-a'); });
         expect(home.requestsFor(route).at(-1)?.input).toMatchObject({ operation: 'list', request: { invocationProvenance: [{ runId: 'run-a', invocationRecordIds: ['step-run-a'] }] } });
-        expect(storage.getState().workflowRunInvocationsByRunId['run-a']?.factsById['step-run-a']).toMatchObject({ notificationCondition: 'suppressed' });
+        expect(storage.getState().workflowRunInvocationsByRunId[workflowRunStoreKey('run-a', { serverId: currentHome.id, accountId: 'account-1' })]?.factsById['step-run-a']).toMatchObject({ notificationCondition: 'suppressed' });
         expect(probe.getRenders()).toBe(1);
     });
     it('batches repeated and distinct Run references, retaining the visible transcript during hydration', async () => {
@@ -162,8 +164,8 @@ describe('first-display workflow provenance', () => {
             await pending.promise;
         });
         await flushHookEffects({ cycles: 40 });
-        expect(storage.getState().workflowRunsById['run-a']?.metadata).toMatchObject({ value: { title: 'Daily digest' } });
-        expect(storage.getState().workflowRunInvocationsByRunId['run-a']?.factsById['step-run-a']).toMatchObject({ stepOrdinal: '3', notificationCondition: 'suppressed' });
+        expect(storage.getState().workflowRunsById[workflowRunStoreKey('run-a', { serverId: currentHome.id, accountId: 'account-1' })]?.metadata).toMatchObject({ value: { title: 'Daily digest' } });
+        expect(storage.getState().workflowRunInvocationsByRunId[workflowRunStoreKey('run-a', { serverId: currentHome.id, accountId: 'account-1' })]?.factsById['step-run-a']).toMatchObject({ stepOrdinal: '3', notificationCondition: 'suppressed' });
         expect(probe.getRoot().messagesById).toBe(before.messagesById);
         expect(probe.getRoot().messageIdsOldestFirst).toBe(before.messageIdsOldestFirst);
         expect(probe.getRenders()).toBe(1);
@@ -194,6 +196,6 @@ describe('first-display workflow provenance', () => {
             await pending.promise;
         });
         await flushHookEffects({ cycles: 40 });
-        expect(storage.getState().workflowRunsById['run-a']).toBeUndefined();
+        expect(storage.getState().workflowRunsById[workflowRunStoreKey('run-a', { serverId: currentHome.id, accountId: 'account-1' })]).toBeUndefined();
     });
 });

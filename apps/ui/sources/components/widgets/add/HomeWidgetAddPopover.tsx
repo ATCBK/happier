@@ -62,7 +62,7 @@ function OpenHomeWidgetAddPopover(props: React.ComponentProps<typeof HomeWidgetA
     const groupId = props.groupId;
     const { addInstance: addToHome } = layout;
     const addInstance = React.useCallback((instance: WidgetInstanceV1, size?: WidgetSizeV1) => addToHome(instance, size, groupId), [addToHome, groupId]);
-    const { sections, loading } = useAccountWidgetAddSections({ scope, instances, addInstance, labels: HOME_LABELS, testID: props.testID });
+    const { sections, pendingSections } = useAccountWidgetAddSections({ scope, instances, addInstance, labels: HOME_LABELS, testID: props.testID });
 
     return (
         <WidgetAddSurface
@@ -75,7 +75,7 @@ function OpenHomeWidgetAddPopover(props: React.ComponentProps<typeof HomeWidgetA
             searchPlaceholder={t('widgetAdd.searchWidgets')}
             addLabel={t('widgetAdd.addToHome')}
             sections={sections}
-            loading={loading}
+            pendingSections={pendingSections}
             {...(scope ? { serverId: scope.serverId } : {})}
             testID={props.testID}
         />

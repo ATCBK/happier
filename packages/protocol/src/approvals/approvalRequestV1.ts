@@ -4,8 +4,9 @@ import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { asProtocolZod } from "../plugins/actions/internalProtocolZodAdapter.js";
 
-import { ActionApprovalSchema } from '../actions/actionApprovalMetadata.js';
+import { ActionApprovalSchema, resolveActionApprovalFlow } from '../actions/actionApprovalMetadata.js';
 import { ActionIdSchema } from '../actions/actionIds.js';
+import { ActionResolvedSessionTargetsV1Schema } from '../actions/sessionTargetV1.js';
 import { PluginContributionLocalIdSchema } from '../plugins/contributionIdentity.js';
 import { PluginIdSchema } from '../plugins/pluginId.js';
 import {
@@ -13,13 +14,22 @@ import {
 } from '../sessions/creation/sessionCreationTargetPreparationV1.js';
 import { HandoffTargetReplacementApprovalV1Schema } from '../sessions/control/handoff/handoffTargetReplacementApprovalV1.js';
 import { ActionRequiredAuthoritySchema } from '../actions/metadata.js';
-import { isAutomationApprovalRequestSurface } from '../actions/decisionAuthority.js';
+import { computeActionInputApprovalDigestV1, isAutomationApprovalRequestSurface } from '../actions/decisionAuthority.js';
+import type { ActionId } from '../actions/actionIds.js';
+import type { ActionExecutorContext } from '../actions/executor/types.js';
+import { ActionRequestAttributionV1Schema } from '../actions/actionRequestAttributionV1.js';
+import { ActionOperationCredentialUseV1Schema } from '../actions/actionExecutionResult.js';
+import { SessionMessageRefV1Schema } from '../sessions/messages/sessionMessageRefV1.js';
+import { SessionMessageDiscussionReplyReturnV1Schema } from '../sessions/messages/sessionMessageReplyV1.js';
+import { SessionMessageAccountActorV1Schema } from '../sessions/messages/sessionMessageAccountActorV1.js';
 import { getActionSpec, resolveActionExecutionPlacementForInput } from '../actions/actionSpecs.js';
 import {
   ExternalActionTargetV1Schema,
   ExternalActionExecutionAuthorizationV1Schema,
+  ExternalActionRequestEnvelopeSchema,
   isExternalActionResolvedTargetAllowedV1,
 } from '../actions/externalActionApi.js';
+import { isExternalActionAuthorizationBoundToEnvelope } from '../actions/externalActionExecutionAuthorization.js';
 import { AutomationRunCauseSchema } from '../automations/automationRunCause.js';
 import { AgentPermissionIntentV1Schema } from '../runtime/permissionIntentV1.js';
 import { SessionAgentSpawnPolicyV1StrictSchema } from '../account/settings/sessionAgentSpawnPolicyV1.js';
@@ -34,6 +44,9 @@ import { ComputerSecretFillRequestV1Schema, SecretFillSettlementV1Schema } from 
 import { BrowserAutomationSecretFillRequestV1Schema } from '../browser/automation/v1.js';
 import { sameStrictJsonValue, StrictJsonValueSchema } from '../json/strictJsonValue.js';
 import { MachineStorageTrashMoveInputV1Schema, PileApplyResultStoredV1Schema, PileApplyResultV1Schema } from '../storage/storageV1.js';
+import { prepareDocDiscussionMutationV1 } from '../artifacts/artifactCollaborationActionsV1.js';
+import { ApprovalStaleFailureDetailsSchema } from './approvalStaleReason.js';
+export { ApprovalStaleReasonSchema, ApprovalStaleFailureDetailsSchema, type ApprovalStaleReason } from './approvalStaleReason.js';
 
 export const ApprovalRequestStatusSchema = lazyZodSchema(() => z.enum(['open', 'approved', 'rejected', 'executed', 'failed', 'canceled']));
 export type ApprovalRequestStatus = z.infer<typeof ApprovalRequestStatusSchema>;
@@ -93,10 +106,22 @@ export type ApprovalDecisionV1 = z.infer<typeof ApprovalDecisionV1Schema>;
 
 // Current decision authority is host-stamped. Released V1 history retains its
 // original passthrough schema and never authorizes current operand edits.
-const ApprovalDecisionV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ApprovalDecisionV1Schema, {
+export const ApprovalDecisionV2Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ApprovalDecisionV1Schema, {
   authority: z.optional(z.literal('present_user')),
+  decidingAccountId: z.optional(SessionMessageAccountActorV1Schema.shape.accountId),
   narrowedInput: zMini.optional(StrictJsonValueSchema),
 })));
+
+/** Host-captured exact requester subject, covered by the incumbent installation signature. */
+export const ApprovalRequesterConfirmationV1Schema = lazyZodSchema(() => z.strictObject({
+  requestRef: z.string().check(z.minLength(1)),
+  requesterAccountId: SessionMessageAccountActorV1Schema.shape.accountId,
+  /** Admitting Bot Session, not the original cause persona preserved in attribution. */
+  personaSessionRef: SessionMessageRefV1Schema.shape.session,
+  executionAccountId: SessionMessageAccountActorV1Schema.shape.accountId,
+  inputDigest: z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/u)),
+}));
+export type ApprovalRequesterConfirmationV1 = z.infer<typeof ApprovalRequesterConfirmationV1Schema>;
 
 export const ApprovalExecutionV1Schema = lazyZodSchema(() => z.looseObject({
   executedAtMs: z.number().check(z.int(), z.minimum(0)),
@@ -113,13 +138,33 @@ export type ApprovalExecutionV1 = z.infer<typeof ApprovalExecutionV1Schema>;
  */
 export const ApprovalExecutionV2Schema = lazyZodSchema(() => z.strictObject({
   executedAtMs: z.number().check(z.int(), z.minimum(0)),
+  /** False only when the approval settled before its Action effect was invoked. */
+  effectAttempted: z.optional(z.boolean()),
   ok: z.boolean(),
   result: z.optional(z.unknown()),
   errorCode: z.optional(z.string().check(z.minLength(1))),
   error: z.optional(z.string().check(z.minLength(1))),
   details: z.optional(z.unknown()),
-}));
+  /** Host-stamped actual credential admissions, not plugin result data or replay authority. */
+  operationCredentialUses: z.optional(z.array(ActionOperationCredentialUseV1Schema)),
+}).check(z.superRefine((value, ctx) => {
+  if (value.effectAttempted === false && value.operationCredentialUses?.length) {
+    ctx.addIssue({ code: 'custom', path: ['operationCredentialUses'], message: 'Unattempted effects cannot claim credential use' });
+  }
+})));
 export type ApprovalExecutionV2 = z.infer<typeof ApprovalExecutionV2Schema>;
+
+/**
+ * Read-only receipt from the public approval projection, never replay authority.
+ * Additive display metadata is dropped; private execution origins are not parsed.
+ */
+export const ApprovalRequestPublicSettlementSchema = lazyZodSchema(() => z.object({
+  v: z.union([z.literal(1), z.literal(2)]),
+  actionId: ApprovalRequestV1HistoricalActionIdSchema,
+  status: z.enum(['executed', 'failed']),
+  execution: ApprovalExecutionV2Schema,
+}).check(z.refine(value => value.execution.ok === (value.status === 'executed'),
+  'Public approval status must match its execution outcome')));
 
 const ApprovalExecutionOriginSurfaceV1Schema = lazyZodSchema(() => z.enum([
   'ui',
@@ -181,10 +226,14 @@ export const ApprovalExecutionOriginV1Schema = lazyZodSchema(() => z.strictObjec
   principalId: z.optional(z.string().check(z.trim(), z.minLength(1))),
   credentialId: z.optional(z.string().check(z.trim(), z.minLength(1))),
   externalActionExecutionAuthorization: zMini.optional(ExternalActionExecutionAuthorizationV1Schema),
+  /** Exact signed invocation input retained only while finite daemon replay still needs it. */
+  originalActionEnvelope: zMini.optional(ExternalActionRequestEnvelopeSchema),
   externalActionInputSignature: z.optional(z.string().check(z.regex(/^[A-Za-z0-9_-]{86}$/u))),
   sessionId: z.optional(z.string().check(z.trim(), z.minLength(1))),
   /** Original host corpus binding; current resource admission remains mandatory. */
-  sessionListAccess: z.optional(z.enum(['current_session', 'led_subtree', 'unavailable'])),
+  sessionListAccess: z.optional(z.enum(['current_session', 'led_subtree', 'unavailable', 'mounted_ui'])),
+  /** Immutable qualified targets selected before confirmation; never re-expand a selector on replay. */
+  sessionTargetsV1: z.optional(ActionResolvedSessionTargetsV1Schema),
   machineId: z.optional(z.string().check(z.trim(), z.minLength(1))),
   runId: z.optional(z.string().check(z.trim(), z.minLength(1))),
   runOccurrenceId: z.optional(z.string().check(z.trim(), z.minLength(1))),
@@ -193,10 +242,34 @@ export const ApprovalExecutionOriginV1Schema = lazyZodSchema(() => z.strictObjec
   sessionAgentSpawnPolicyV1: zMini.optional(SessionAgentSpawnPolicyV1StrictSchema),
   causalPermissionAuthority: zMini.optional(zMini.nullable(SessionInputCausalPermissionAuthorityV1Schema)),
   sessionInputSource: zMini.optional(zMini.nullable(SessionInputSourceSessionV1Schema)),
+  discussionReplyReturn: z.optional(SessionMessageDiscussionReplyReturnV1Schema),
+  /** Exact admitted cause; never itself a deciding-person credential. */
+  actionRequestAttributionV1: z.optional(ActionRequestAttributionV1Schema),
   target: zMini.optional(ExternalActionTargetV1Schema),
   actionId: ActionIdSchema,
   requestId: z.string().check(z.trim(), z.minLength(1)),
 }).check(z.superRefine((value, ctx) => {
+  const discussionReturnSessionId = value.caller.kind === 'session' ? value.caller.sessionId
+    : value.caller.kind === 'host' && value.machineId ? value.sessionId : undefined;
+  if (value.discussionReplyReturn && (value.actionId !== 'discussion.reply' || !discussionReturnSessionId
+    || value.sessionId !== undefined && value.sessionId !== discussionReturnSessionId || value.discussionReplyReturn.serverId !== value.serverId
+    || value.sessionInputSource && (value.sessionInputSource.sourceSessionId !== discussionReturnSessionId
+      || value.sessionInputSource.sourceInputId !== value.discussionReplyReturn.requestLocalId
+      || value.sessionInputSource.sourceTurnId !== value.discussionReplyReturn.acceptedTurnId))) {
+    ctx.addIssue({ code: 'custom', path: ['discussionReplyReturn'], message: 'Discussion return must retain its exact original Session and Home' });
+  }
+  if (value.sessionTargetsV1) {
+    const declaration = getActionSpec(value.actionId).sessionTarget;
+    const targets = value.sessionTargetsV1;
+    if (!declaration || targets.actionId !== value.actionId || targets.field !== declaration.field
+      || declaration.cardinality === 'one' && (targets.targets.length !== 1 || targets.selector)) {
+      ctx.addIssue({ code: 'custom', path: ['sessionTargetsV1'], message: 'Resolved targets must match the declared Action operand and cardinality' });
+    }
+  }
+  if (value.sessionListAccess === 'mounted_ui' && (value.surface !== 'plugin' || value.caller.kind !== 'plugin')) {
+    ctx.addIssue({ code: 'custom', path: ['sessionListAccess'],
+      message: 'Mounted UI Session-list scope requires an exact plugin contribution origin' });
+  }
   if ((value.sessionListAccess === 'current_session' || value.sessionListAccess === 'led_subtree') && !value.sessionId) {
     ctx.addIssue({ code: "custom", path: ['sessionListAccess'],
       message: 'Current-Session list scope requires an exact Session binding' });
@@ -206,6 +279,7 @@ export const ApprovalExecutionOriginV1Schema = lazyZodSchema(() => z.strictObjec
     && (value.surface === 'agent' || value.surface === 'mcp' || value.surface === 'plugin')
     && value.sessionListAccess !== 'current_session'
     && value.sessionListAccess !== 'led_subtree'
+    && value.sessionListAccess !== 'mounted_ui'
   ) {
     ctx.addIssue({
       code: "custom",
@@ -214,6 +288,11 @@ export const ApprovalExecutionOriginV1Schema = lazyZodSchema(() => z.strictObjec
     });
   }
   const authorization = value.externalActionExecutionAuthorization;
+  if (value.originalActionEnvelope && (!authorization
+    || !isExternalActionAuthorizationBoundToEnvelope(authorization.binding, { actionId: value.actionId,
+      machineId: value.machineId ?? '', envelope: value.originalActionEnvelope }))) {
+    ctx.addIssue({ code: 'custom', path: ['originalActionEnvelope'], message: 'Original envelope must match the exact signed invocation' });
+  }
   if (authorization) {
     const binding = authorization.binding;
     const admittedTarget = value.target !== undefined
@@ -225,8 +304,11 @@ export const ApprovalExecutionOriginV1Schema = lazyZodSchema(() => z.strictObjec
     const principalMatches = 'authentication' in binding
       ? value.principalId === undefined && value.credentialId === undefined
         && (binding.sessionActionOrigin
-          ? value.surface === 'agent' && value.authority === 'account_automation'
-            && sameStrictJsonValue(value.caller, binding.sessionActionOrigin.caller)
+          ? value.authority === 'account_automation'
+            && (value.surface === 'agent' && sameStrictJsonValue(value.caller, binding.sessionActionOrigin.caller)
+              // A nested plugin remains the immediate caller; the original
+              // Session admission is retained by the signed source binding.
+              || value.surface === 'plugin' && value.caller.kind === 'plugin')
             && value.callerPermissionMode === binding.sessionActionOrigin.callerPermissionMode
             && sameStrictJsonValue(value.causalPermissionAuthority ?? null, binding.sessionActionOrigin.causalPermissionAuthority ?? null)
             && value.sessionInputSource?.sourceSessionId === binding.sessionActionOrigin.caller.sessionId
@@ -286,6 +368,69 @@ export const ApprovalExecutionOriginV1Schema = lazyZodSchema(() => z.strictObjec
   }
 })));
 export type ApprovalExecutionOriginV1 = z.infer<typeof ApprovalExecutionOriginV1Schema>;
+
+export function buildApprovalRequesterConfirmationV1(params: Readonly<{
+  context: ActionExecutorContext; actionId: ActionId; input: unknown;
+}>): ApprovalRequesterConfirmationV1 | null {
+  const cause = params.context.actionRequestAttributionV1;
+  const executionAccountId = params.context.runtimeAccountId;
+  const sessionId = params.context.defaultSessionId;
+  const serverId = params.context.serverId;
+  if (!cause?.requester || !executionAccountId || cause.requester.accountId === executionAccountId
+    || !sessionId || !serverId || cause.requester.serverId !== cause.persona.serverId) return null;
+  const parsed = ApprovalRequesterConfirmationV1Schema.safeParse({
+    requestRef: cause.requestRef, requesterAccountId: cause.requester.accountId,
+    personaSessionRef: { serverId, sessionId }, executionAccountId,
+    inputDigest: computeActionInputApprovalDigestV1(params.actionId, params.input),
+  });
+  return parsed.success ? parsed.data : null;
+}
+
+export function isApprovalRequesterConfirmationBoundToOriginV1(
+  subject: ApprovalRequesterConfirmationV1, origin: ApprovalExecutionOriginV1,
+): boolean {
+  const cause = origin.actionRequestAttributionV1;
+  const binding = origin.externalActionExecutionAuthorization?.binding;
+  const sessionId = origin.sessionInputSource?.sourceSessionId
+    ?? (origin.caller.kind === 'session' ? origin.caller.sessionId : undefined)
+    ?? (binding && 'authentication' in binding ? binding.sessionActionOrigin?.caller.sessionId : undefined);
+  // Shared requester consent must bind to the same immutable signed source
+  // that the original daemon's existing replay/currentness owner verifies.
+  return Boolean(origin.externalActionExecutionAuthorization && origin.externalActionInputSignature)
+    && subject.executionAccountId === origin.accountId
+    && subject.requesterAccountId !== subject.executionAccountId
+    && cause?.requestRef === subject.requestRef
+    && cause.requester?.accountId === subject.requesterAccountId
+    && cause.requester.serverId === cause.persona.serverId
+    && origin.serverId === subject.personaSessionRef.serverId
+    && (sessionId === undefined || sessionId === subject.personaSessionRef.sessionId);
+}
+
+/** Admission only: execution still rechecks its existing signed origin/currentness owner. */
+export async function admitApprovalRequesterDecisionV1(params: Readonly<{
+  request: Readonly<{ requesterConfirmation?: ApprovalRequesterConfirmationV1;
+    executionOriginV1?: ApprovalExecutionOriginV1; actionId: ActionId; actionArgs: unknown; status: string }>;
+  context: ActionExecutorContext;
+}>): Promise<Readonly<{ ok: true }> | Readonly<{
+  ok: false; errorCode: 'present_user_required' | 'approval_stale'; error: 'present_user_required' | 'approval_stale';
+}>> {
+  const { request, context } = params;
+  const subject = request.requesterConfirmation;
+  if (!subject) return { ok: true };
+  const proof = context.requesterApprovalDecision;
+  if (context.authority !== 'present_user' || !proof || proof.actor.kind !== 'accountUser'
+    || proof.actor.accountId !== subject.requesterAccountId || proof.sessionId !== subject.personaSessionRef.sessionId) {
+    return { ok: false, errorCode: 'present_user_required', error: 'present_user_required' };
+  }
+  if (!request.executionOriginV1 || !isApprovalRequesterConfirmationBoundToOriginV1(subject, request.executionOriginV1)
+    || context.runtimeAccountId !== undefined && context.runtimeAccountId !== subject.executionAccountId
+    || !['executed', 'failed', 'rejected', 'canceled'].includes(request.status)
+      && computeActionInputApprovalDigestV1(request.actionId, request.actionArgs) !== subject.inputDigest
+    || context.signal?.aborted || !await proof.isCurrent().catch(() => false) || context.signal?.aborted) {
+    return { ok: false, errorCode: 'approval_stale', error: 'approval_stale' };
+  }
+  return { ok: true };
+}
 
 function validateApprovalRequestLifecycle(
   value: Readonly<Record<string, unknown>>,
@@ -405,7 +550,8 @@ function validateConfidentialApprovalRequest(value: Readonly<Record<string, unkn
     const record = execution.data;
     if (record.result !== undefined && !SecretFillSettlementV1Schema.safeParse(record.result).success) issue(['execution', 'result']);
     if (record.ok && record.result === undefined) issue(['execution', 'result']);
-    if (record.details !== undefined) issue(['execution', 'details']);
+    if (record.details !== undefined && (record.ok || record.errorCode !== 'approval_stale'
+      || !ApprovalStaleFailureDetailsSchema.safeParse(record.details).success)) issue(['execution', 'details']);
     if (!record.ok && (!ConfidentialApprovalFailureCodeSchema.safeParse(record.errorCode).success || record.error !== record.errorCode)) issue(['execution', 'error']);
     if (record.ok && (record.error !== undefined || record.errorCode !== undefined)) issue(['execution', 'error']);
   }
@@ -449,6 +595,9 @@ export const ApprovalRequestV2Schema = lazyZodSchema(() => z.strictObject({
   requestedSurface: z.optional(ApprovalRequestedSurfaceSchema),
   origin: z.optional(ApprovalRequestOriginV1Schema),
   executionOriginV1: ApprovalExecutionOriginV1Schema,
+  requesterConfirmation: z.optional(ApprovalRequesterConfirmationV1Schema),
+  /** Immutable private presentation fact; it grants no publication or decision authority. */
+  discussionDraftReview: z.optional(z.literal(true)),
   approval: zMini.optional(ActionApprovalSchema),
   actionId: ActionIdSchema,
   actionArgs: z.unknown(),
@@ -463,6 +612,12 @@ export const ApprovalRequestV2Schema = lazyZodSchema(() => z.strictObject({
 }).check(z.superRefine((value, ctx) => {
   validateApprovalRequestLifecycle(value, ctx);
   validateStorageRetryResults(value, ctx);
+  if (value.discussionDraftReview && value.actionId !== 'discussion.post' && value.actionId !== 'discussion.reply') {
+    ctx.addIssue({ code: 'custom', path: ['discussionDraftReview'], message: 'Draft review describes a Discussion publication' });
+  }
+  if (value.requesterConfirmation && !isApprovalRequesterConfirmationBoundToOriginV1(value.requesterConfirmation, value.executionOriginV1)) {
+    ctx.addIssue({ code: 'custom', path: ['requesterConfirmation'], message: 'Requester confirmation must match the exact admitted cause and original executor' });
+  }
   if (value.executionOriginV1.actionId !== value.actionId) {
     ctx.addIssue({ code: "custom", path: ['executionOriginV1', 'actionId'], message: 'execution origin Action must match the approved Action' });
   }
@@ -534,6 +689,56 @@ const SURFACE_REQUIRES_EXACT_DAEMON_REPLAY_RECORD = {
   api: true,
 } as const satisfies Record<ApprovalExecutionOriginV1['surface'], boolean>;
 
+function resolveApprovalRequestAppExecutionPlacement(approval: ApprovalRequest): 'account' | 'client' | null {
+  const actionId = ActionIdSchema.safeParse(approval.actionId);
+  const spec = actionId.success ? getActionSpec(actionId.data) : null;
+  const input = spec?.inputSchema.safeParse(approval.actionArgs);
+  // The admitted request owns its flow; authored specs may omit the default
+  // or be routed as deferred proposals. A blocking show-once result belongs
+  // to the original invocation, never the approving app or durable history.
+  const retainedLiveResult = spec?.approvalResultCustody === 'live_only'
+    && resolveActionApprovalFlow(approval.approval ?? spec.approval) === 'blocking';
+  if (!spec || !input?.success || spec.workspaceWrite === true
+    || spec.approvalInputCustody === 'live_only' || retainedLiveResult) return null;
+  const placement = resolveActionExecutionPlacementForInput(spec, input.data);
+  return placement === 'account' || placement === 'client' ? placement : null;
+}
+
+/** Eligibility only: the host must still prove current source custody and own the live waiter. */
+export function isMountedPluginBlockingApprovalEligibleForLiveClient(approval: ApprovalRequest): boolean {
+  if (approval.v !== 2 || !approval.approval || resolveActionApprovalFlow(approval.approval) !== 'blocking'
+    || resolveApprovalRequestAppExecutionPlacement(approval) === null) return false;
+  const origin = approval.executionOriginV1;
+  return origin.surface === 'plugin' && origin.authority === 'account_automation'
+    && origin.caller.kind === 'plugin' && Boolean(origin.serverIdentityId && origin.accountId && origin.machineId)
+    && origin.externalActionExecutionAuthorization === undefined && origin.externalActionInputSignature === undefined
+    && origin.originalActionEnvelope === undefined && origin.principalId === undefined && origin.credentialId === undefined
+    && origin.sessionId === undefined && origin.sessionListAccess === undefined && origin.sessionInputSource === undefined
+    && origin.runId === undefined && origin.runOccurrenceId === undefined && origin.callerPermissionMode === undefined
+    && origin.causalPermissionAuthority === undefined && origin.sessionAgentSpawnPolicyV1 === undefined
+    && (origin.target === undefined || origin.target.kind === 'machine' && origin.target.machineId === origin.machineId);
+}
+
+/** Session publication custody and its replay witness share this one classification. */
+export function isSessionDiscussionApprovalPublicationV1(approval: ApprovalRequest): boolean {
+  if (approval.v !== 2) return false;
+  const origin = approval.executionOriginV1;
+  if (origin.caller.kind !== 'session' && !(origin.caller.kind === 'host'
+    && origin.discussionReplyReturn && origin.sessionId && origin.machineId)) return false;
+  let publicationActionId = approval.actionId;
+  if (approval.actionId === 'doc.comment.reply' || approval.actionId === 'doc.edit.propose') {
+    const serverId = approval.executionOriginV1.serverId;
+    // Unresolved/invalid publication intent never transfers to the approving
+    // app. Execution admission still validates before issuing a replay witness.
+    if (!serverId) return true;
+    const input = getActionSpec(approval.actionId).inputSchema.safeParse(approval.actionArgs);
+    if (!input.success) return true;
+    publicationActionId = prepareDocDiscussionMutationV1(approval.actionId, input.data, serverId).actionId;
+  }
+  return publicationActionId === 'discussion.create' || publicationActionId === 'discussion.post' || publicationActionId === 'discussion.reply'
+    || publicationActionId === 'discussion.second_opinion.start';
+}
+
 /**
  * True when this durable approval carries authority facts a client cannot
  * verify itself, so its replay belongs to the exact daemon named by the origin.
@@ -541,26 +746,30 @@ const SURFACE_REQUIRES_EXACT_DAEMON_REPLAY_RECORD = {
  * locally replayable, as do durable host-origin Account effects and,
  * by the 2026-10-12 owner ruling, signed Agent-Session proposals whose reviewed
  * effect is Account/client-only: the approving app runs that effect while the signed
- * carrier stays immutable proposal provenance. Other signed external origins
- * retain their admitting daemon's custody.
+ * carrier stays immutable proposal provenance. Discussion Agent publication is
+ * the exception: its actual Session publisher, not the approving person, must
+ * author the committed message. Other signed origins retain daemon custody.
  */
 export function requiresExactDaemonApprovalReplay(approval: ApprovalRequest): boolean {
   if (approval.v !== 2) return false;
+  if (approval.requesterConfirmation) return true;
   const origin = approval.executionOriginV1;
   const actionId = ActionIdSchema.safeParse(approval.actionId);
   const spec = actionId.success ? getActionSpec(actionId.data) : null;
   const input = spec?.inputSchema.safeParse(approval.actionArgs);
-  const clientEffect = spec && input?.success
-    && resolveActionExecutionPlacementForInput(spec, input.data) === 'client'
-    && spec.workspaceWrite !== true && spec.approvalInputCustody !== 'live_only';
-  const accountEffect = spec && input?.success
-    && resolveActionExecutionPlacementForInput(spec, input.data) === 'account'
-    && spec.workspaceWrite !== true && spec.approvalInputCustody !== 'live_only';
+  const appPlacement = resolveApprovalRequestAppExecutionPlacement(approval);
+  const clientEffect = appPlacement === 'client';
+  const accountEffect = appPlacement === 'account';
+  if (isSessionDiscussionApprovalPublicationV1(approval)) return true;
   const authorization = origin.externalActionExecutionAuthorization;
   if (authorization) {
     return !((accountEffect || clientEffect) && 'authentication' in authorization.binding
       && authorization.binding.sessionActionOrigin !== undefined);
   }
+  // The host-bound Session authors the proposal; the approving person executes
+  // its Account-only effect through the existing authenticated Account owner.
+  if (accountEffect && origin.caller.kind === 'session'
+    && (origin.surface === 'agent' || origin.surface === 'mcp')) return false;
   // Client effects belong to the approving app's mounted owner. The requesting
   // Session's Machine is provenance, not the location of its microphone or UI.
   // Plugin/Run custody and CLI/API transport authority still stay exact.

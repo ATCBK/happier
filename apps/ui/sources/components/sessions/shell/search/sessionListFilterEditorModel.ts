@@ -46,6 +46,8 @@ export type SessionListFilterEditorLabels = Readonly<{
     persistedSource: string;
     directSource: string;
     noOptions: string;
+    onlyCoordinators: string;
+    onlyCoordinatorsDescription: string;
 }>;
 
 export type SessionListFilterHomeOption = Readonly<{
@@ -158,6 +160,7 @@ function selectedIds(
     for (const starter of filters.startedBy) selected.add(`started-by:${starter}`);
     if (attentionAvailable) {
         selected.add(`attention:${filters.attention}`);
+        if (filters.coordinator === 'coordinator') selected.add('coordinator:only');
     }
     if (inactiveVisibilityAvailable) {
         selected.add(`inactive:${includeInactive ? 'show' : 'hide'}`);
@@ -297,6 +300,14 @@ export function buildSessionListFilterEditorModel(input: Readonly<{
                         { id: 'attention:any', label: input.labels.anyAttention },
                         { id: 'attention:needs_my_attention', label: input.labels.needsMyAttention },
                     ],
+                }, {
+                    // Coordinator is derived from the Follow relation on the Home that filters the listing,
+                    // so it is offered exactly where that filtered listing (like attention) is available.
+                    kind: 'static' as const,
+                    id: 'coordinator',
+                    options: [
+                        { id: 'coordinator:only', label: input.labels.onlyCoordinators, subtitle: input.labels.onlyCoordinatorsDescription },
+                    ],
                 }] : []),
                 ...(input.inactiveVisibilityAvailable !== false ? [{
                     kind: 'static' as const,
@@ -435,6 +446,10 @@ export function reduceSessionListFilterEditorSelection(
     }
     if (optionId === 'attention:any') return { ...filters, attention: 'any' };
     if (optionId === 'attention:needs_my_attention') return { ...filters, attention: 'needs_my_attention' };
+    if (optionId === 'coordinator:only') {
+        const { coordinator, ...rest } = filters;
+        return coordinator === 'coordinator' ? rest : { ...filters, coordinator: 'coordinator' };
+    }
     if (optionId === 'source:all') return { ...filters, source: 'all' };
     if (optionId === 'source:persisted') return { ...filters, source: 'persisted' };
     if (optionId === 'source:direct') return { ...filters, source: 'direct' };

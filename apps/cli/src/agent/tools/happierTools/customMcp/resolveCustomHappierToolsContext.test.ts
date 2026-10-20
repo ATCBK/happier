@@ -6,7 +6,7 @@ import { McpServerCatalogV1Schema } from '@happier-dev/protocol/mcp/servers/serv
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { resolveCustomHappierToolsContext } from './resolveCustomHappierToolsContext';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });

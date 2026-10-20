@@ -583,7 +583,7 @@ describe('createAgentUiBehaviorFromDescriptor', () => {
         expect(behavior.externalSessions?.browse?.getSourceOptions?.({
             agentId: 'ohMyPi',
             profile: null,
-            settings: makeSettings(),
+            labelsByKey: {},
         })).toEqual([
             {
                 key: 'ohMyPi:default-agent-dir',
@@ -981,9 +981,9 @@ describe('createAgentUiBehaviorFromDescriptor', () => {
         expect(behavior.guidance?.includeInSessionGettingStartedCliExamples).toBe(true);
         expect(behavior.externalSessions?.browse?.order).toBe(30);
         const sourceOptions = behavior.externalSessions?.browse?.getSourceOptions?.({
-            agentId: 'opencode' as any,
+            agentId: 'opencode',
             profile: null,
-            settings: makeSettings(),
+            labelsByKey: {},
         });
         expect(sourceOptions).toEqual([
             {

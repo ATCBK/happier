@@ -35,7 +35,8 @@ export function openWorkspaceSyncConflictDetails(resource: WorkspaceSyncConflict
         chrome: {
             kind: 'card',
             title: title ?? t('workspaceSync.conflictsTitle'),
-            subtitle: t('workspaceSync.title'),
+            // A link's sheet is already titled by its folders; the section says "Workspace sync" once, inside.
+            subtitle: title ? undefined : t('workspaceSync.title'),
             // The details view owns its responsive scroll surface. A second modal
             // scroller traps narrow/large-text content and can strand actions.
             bodyScroll: 'none',
@@ -51,8 +52,8 @@ export function openWorkspaceSyncRelationshipDetails(
 ): void {
     const resource = createWorkspaceSyncConflictDetailsResource(summary, localWorkspaceRefId);
     openWorkspaceSyncConflictDetails(resource, formatWorkspaceSyncRelationshipTitle({
-        alphaLabel: summary.alpha.label,
-        betaLabel: summary.beta.label,
+        alphaLabel: summary.alpha.name,
+        betaLabel: summary.beta.name,
         mode: summary.relationship.mode,
     }));
 }

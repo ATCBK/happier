@@ -46,6 +46,8 @@ export const roleActions = {
     setOverride: (override: RoleInstructionsOverrideV1) => run('roles.override.set', override),
     resetOverride: (roleId: string) => run('roles.override.reset', { roleId }),
     setSessionRole: (sessionId: string, roleId: string, scope?: SessionRoleActionScope) => runSession('session.role.set', sessionId, { roleId }, scope),
+    setSessionAnswersWorkerQuestions: (sessionId: string, enabled: boolean, scope?: SessionRoleActionScope) =>
+        runSession('session.role.set', sessionId, { answersWorkerQuestions: enabled }, scope),
     setSessionOverride: (sessionId: string, override: RoleOverrideV1, scope?: SessionRoleActionScope) =>
         runSession('session.roles.override.set', sessionId, override, scope),
     clearSessionOverride: (sessionId: string, roleId: string, scope?: SessionRoleActionScope) => runSession('session.roles.override.clear', sessionId, { roleId }, scope),

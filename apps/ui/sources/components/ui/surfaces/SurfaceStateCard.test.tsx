@@ -3,6 +3,7 @@ import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDeferred, renderScreen } from '@/dev/testkit';
+import { lightTheme } from '@/theme';
 import { SurfaceStateCard } from './SurfaceStateCard';
 
 const accessibilityPlatform = vi.hoisted(() => ({
@@ -44,6 +45,14 @@ describe('SurfaceStateCard', () => {
         expect(screen.findByTestId('vitals-details-toggle')).toBeFalsy();
         expect(screen.findByTestId('vitals-diagnostic-machine_rpc_failed')).toBeTruthy();
         await screen.unmount();
+    });
+    it('tints a failed line rose and a warning line amber: rose means failure, amber means it needs you (DESIGN.md)', async () => {
+        const glyphColor = async (kind: 'error' | 'warning') => {
+            const screen = await renderScreen(<SurfaceStateCard size="line" kind={kind} title="Couldn't update this comment" />);
+            return screen.findAll((node) => typeof node.props?.name === 'string' && node.props?.color !== undefined)[0]?.props.color;
+        };
+        expect(await glyphColor('error')).toBe(lightTheme.colors.state.danger.foreground);
+        expect(await glyphColor('warning')).toBe(lightTheme.colors.state.warning.foreground);
     });
     it.each([undefined, 'inline'] as const)('reads failure detail before recovery in %s layout', async (layout) => {
         const screen = await renderScreen(<SurfaceStateCard layout={layout} kind="error" title="Failed"

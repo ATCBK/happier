@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import type { ApiMachineClient } from '@/api/apiMachine';
 import type { ManagedControllerV1, ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
 import { ManagedMachineControllerError } from '@/machines/managed/acquire';
+import { logger } from '@/ui/logger';
 import type { createDaemonManagedMachineActionAdapter } from './managedMachineActionAdapter';
 import { createManagedPolicyCensusProofV1, ManagedPolicyCensusInputV1Schema, ManagedPolicyCensusOutputV1Schema,
     type ManagedPolicyPurposeV1 } from '@happier-dev/protocol/machines/managed/managedPolicyV1';
@@ -52,6 +53,13 @@ export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
     let stopped = false;
     let changed = false;
     let pump: Promise<void> | null = null;
+    const abortPolicy = (managedId: string, cancel: AbortController, reasonCode:
+        'retention_satisfied' | 'policy_replaced' | 'policy_target_missing' | 'controller_unavailable'
+        | 'policy_runtime_stopped', reason?: unknown) => {
+        if (cancel.signal.aborted) return;
+        try { logger.warnLocalFile('[managed-policy.abort]', { managedId, reasonCode }); } catch { /* Diagnostic only. */ }
+        cancel.abort(reason);
+    };
     const reconcile = (census: ManagedMachinePolicyCensus) => {
         const current = new Set<string>();
         for (const machine of census.machines) {
@@ -75,9 +83,27 @@ export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
                 ...(purpose.kind === 'accepted-input-start' ? { origin: purpose.target.origin } : {}) };
             const prior = active.get(machine.id);
             if (prior && isDeepStrictEqual(prior.signature, signature) && !prior.cancel.signal.aborted) continue;
-            prior?.cancel.abort();
+            // Pending may remain authorized until its Agent actually claims it.
+            // Running compute already satisfies its wake; keep any incumbent
+            // native reconciliation above, but do not create another Start/Ask.
+            if (purpose.kind === 'accepted-input-start' && !machine.submittedNativeEffect
+                && machine.observation?.availability === 'present' && machine.observation.power === 'running') {
+                if (prior) abortPolicy(machine.id, prior.cancel, 'policy_replaced');
+                continue;
+            }
+            // Native Stop satisfies a Stop policy until compute runs again.
+            // Keep an already-running driver's settlement above; a pending native
+            // effect still needs its incumbent reconciliation, and an accepted
+            // wake target takes precedence over retention in the purpose above.
+            if (purpose.kind === 'retention' && machine.retention.kind !== 'until-delete'
+                && machine.retention.effect === 'stop' && !machine.submittedNativeEffect
+                && machine.observation?.availability === 'present' && machine.observation.power === 'stopped') {
+                if (prior) abortPolicy(machine.id, prior.cancel, 'retention_satisfied');
+                continue;
+            }
+            if (prior) abortPolicy(machine.id, prior.cancel, 'policy_replaced');
             const cancel = new AbortController();
-            const onStop = () => cancel.abort(lifetime.signal.reason);
+            const onStop = () => abortPolicy(machine.id, cancel, 'policy_runtime_stopped', lifetime.signal.reason);
             lifetime.signal.addEventListener('abort', onStop, { once: true });
             if (lifetime.signal.aborted) onStop();
             const entry = { signature, cancel, task: Promise.resolve() };
@@ -96,7 +122,7 @@ export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
             })();
             active.set(machine.id, entry);
         }
-        for (const [id, entry] of active) if (!current.has(id)) entry.cancel.abort();
+        for (const [id, entry] of active) if (!current.has(id)) abortPolicy(id, entry.cancel, 'policy_target_missing');
     };
     const notifyChanged = () => {
         if (stopped) return;
@@ -107,14 +133,16 @@ export function createDaemonManagedMachinePolicyRuntime(params: Readonly<{
                 changed = false;
                 try {
                     if (params.isAvailable?.() === false) {
-                        for (const entry of active.values()) entry.cancel.abort();
+                        for (const [id, entry] of active) abortPolicy(id, entry.cancel, 'controller_unavailable');
                         continue;
                     }
                     const census = await params.readCensus(lifetime.signal);
                     lifetime.signal.throwIfAborted();
                     reconcile(census);
                 } catch (error) {
-                    for (const entry of active.values()) entry.cancel.abort(error);
+                    // A failed read does not withdraw an admitted origin.
+                    // Keep its held Ask/native owner; a successful census or
+                    // runtime stop retires it, and effect admission stays fresh.
                     if (!stopped) params.onUnavailable?.(error);
                 }
             }

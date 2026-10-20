@@ -45,6 +45,8 @@ export type MachinesDomain = {
     machineListStatusByServerId: Record<string, 'idle' | 'loading' | 'signedOut' | 'error'>;
     applyMachines: (machines: Machine[], replace?: boolean, options?: ApplyMachinesOptions) => void;
     replaceMachineDisplays: (machines: MachineDisplayRenderable[], options?: ApplyMachinesOptions & Readonly<{ replace?: boolean }>) => void;
+    /** The owning list read has published all rows, including selective hydration. */
+    markMachineListSettled: (serverId: string) => void;
     /** The Home's machine list could not be read; retained rows stay, the loading state ends. */
     markMachineListUnavailable: (serverId: string) => void;
 };
@@ -227,6 +229,15 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
         machinePresenceByServerId: {},
         machineListByServerId: {},
         machineListStatusByServerId: {},
+        markMachineListSettled: (serverIdRaw) =>
+            set((state) => {
+                const serverId = normalizeMachineServerId(serverIdRaw);
+                if (!serverId || state.machineListStatusByServerId[serverId] === 'idle') return state;
+                return {
+                    ...state,
+                    machineListStatusByServerId: { ...state.machineListStatusByServerId, [serverId]: 'idle' },
+                };
+            }),
         markMachineListUnavailable: (serverIdRaw) =>
             set((state) => {
                 const serverId = normalizeMachineServerId(serverIdRaw);
@@ -300,10 +311,11 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                         [sourceServerId]: nextScopedMachines ?? null,
                     }
                     : state.machineListByServerId;
-                const machineListStatusByServerId = sourceServerId
-                    ? (state.machineListStatusByServerId[sourceServerId] === 'idle'
-                        ? state.machineListStatusByServerId
-                        : { ...state.machineListStatusByServerId, [sourceServerId]: 'idle' as const })
+                // Socket/exact rows and warm hydration are not a completed list.
+                // Only the list reader settles it; incremental rows preserve a
+                // completed read or its failure until that owner reports recovery.
+                const machineListStatusByServerId = sourceServerId && state.machineListStatusByServerId[sourceServerId] === undefined
+                    ? { ...state.machineListStatusByServerId, [sourceServerId]: 'loading' as const }
                     : state.machineListStatusByServerId;
 
                 const scopedMachines = sourceServerId ? machineListByServerId[sourceServerId] : null;
@@ -316,6 +328,12 @@ export function createMachinesDomain<S extends MachinesDomain & MachinesDomainDe
                     )
                 ));
                 for (const machine of scopedMachinesWithAdvancedDaemonState) {
+                    if (!shouldUpdateActiveProjection && sourceServerId) {
+                        invalidateCachedTransferRoutesForMachine({
+                            serverId: sourceServerId,
+                            remoteMachineId: machine.id,
+                        });
+                    }
                     const previous = Array.isArray(currentScopedMachines)
                         ? currentScopedMachines.find((current) => current.id === machine.id)
                         : shouldUpdateActiveProjection ? state.machines[machine.id] : undefined;

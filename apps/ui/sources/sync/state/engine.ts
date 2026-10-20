@@ -19,6 +19,7 @@ const UI_SESSION_STATE_CAPABILITIES: SessionStateCapabilitiesV1 = {
         voicePreference: { supported: true, happierToProvider: { supported: false }, providerToHappier: { supported: false } },
     },
     display: {
+        statusReason: { supported: true, happierToProvider: { supported: false }, providerToHappier: { supported: false } },
         title: { supported: true, happierToProvider: { supported: false }, providerToHappier: { supported: false } },
         bot: { supported: true, happierToProvider: { supported: false }, providerToHappier: { supported: false } },
     },

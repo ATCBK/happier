@@ -1,11 +1,12 @@
 import { resolveProviderBindingCompatibilityWithFingerprintV1 } from '@happier-dev/protocol/providers/binding-compatibility';
-import type { AgentProviderRequirementsV1, ProviderApiKeyCredentialRequirementV1, ProviderBrokerApplicationBindingV1, ProviderEndpointTemplateV1 } from '@happier-dev/protocol';
+import type { AgentProviderRequirementsV1, ProviderApiKeyCredentialRequirementV1, ProviderBrokerApplicationBindingV1, ProviderEndpointTemplateV1, ProviderModelDescriptorV1 } from '@happier-dev/protocol';
 
 export function resolveReviewedRunnerBrokerApplicationCompatibility(input: Readonly<{
   agentTargetKey: string;
   agent: AgentProviderRequirementsV1;
   endpoints: readonly ProviderEndpointTemplateV1[];
   application: ProviderBrokerApplicationBindingV1;
+  model: ProviderModelDescriptorV1;
   credential?: ProviderApiKeyCredentialRequirementV1;
 }>): Readonly<{ status: 'ready' }>
   | Readonly<{ status: 'unavailable'; reason: 'reviewed_application_changed' | 'reviewed_application_incompatible' }> {
@@ -23,6 +24,7 @@ export function resolveReviewedRunnerBrokerApplicationCompatibility(input: Reado
     endpoints: [endpoint],
     credential: input.credential,
     agent: input.agent,
+    model: input.model,
   }).result;
   return assessed.status === 'incompatible'
     ? { status: 'unavailable', reason: 'reviewed_application_incompatible' }

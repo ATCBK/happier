@@ -45,9 +45,12 @@ describe('compiled registry credential input', () => {
     expect(JSON.stringify(h.registryWrites)).not.toContain('old-profile');
     expect(JSON.stringify(h.registryWrites)).not.toContain('secretRef');
   });
-  it('resolves a token on create without ever passing a secret value', async () => {
+  it.each([
+    ['https://github.com/acme/skills', '--token-secret', 'Acme'],
+    ['--input-json', '{"url":"https://github.com/acme/skills"}', '--token-secret', 'Acme'],
+  ])('resolves a token on create without ever passing a secret value: %j', async (...argv) => {
     const h = await harness();
-    expect(await h.run(['registries', 'add'], ['https://github.com/acme/skills', '--token-secret', 'Acme'])).toMatchObject({ ok: true });
+    expect(await h.run(['registries', 'add'], argv)).toMatchObject({ ok: true });
     expect(h.registryWrites).toEqual([expect.objectContaining({ key: 'registry-sources', value: expect.objectContaining({ sources: expect.arrayContaining([
       expect.objectContaining({ token: { secretRef: h.ref } }),
     ]) }) })]);

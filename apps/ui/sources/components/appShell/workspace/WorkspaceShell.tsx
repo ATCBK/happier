@@ -1,8 +1,7 @@
 import * as React from 'react';
 import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 import { View } from 'react-native';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { StyleSheet } from 'react-native-unistyles';
 
 import { hrefForDestinationRef, type CompactAppDestination } from '@/components/appShell/destinations/compactAppDestinationCatalog';
 import { DETAILS_TAB_STRIP_METRICS as M } from '@/components/appShell/panes/details/header/detailsTabHeaderMetrics';
@@ -31,21 +30,26 @@ import { executeWorkspaceUiAction } from './workspaceActionRuntime';
 import { resolveWorkspaceTopRowGroupIds, WorkspaceBarGeometryContext } from './titleBar/workspaceBarGeometry';
 // The body selector shares Expo's already-loaded context, not a second lazy graph.
 import { WorkspaceDestinationBody as DestinationBody } from './WorkspaceDestinationBody';
+import { getDeviceType } from '@/utils/platform/responsive';
 
-const SessionBody = retryableLazy(() => import('@/components/sessions/shell/SessionDestinationBody').then((module) => ({ default: module.SessionDestinationBody })));
-const SessionDetailsBody = retryableLazy(() => import('@/components/sessions/shell/SessionDetailsDestinationBody').then((module) => ({ default: module.SessionDetailsDestinationBody })));
+const SessionBody = retryableLazy(async () => ({
+    default: (await import('@/components/sessions/shell/SessionDestinationBody')).SessionDestinationBody,
+}));
+const SessionDetailsBody = retryableLazy(async () => ({
+    default: (await import('@/components/sessions/shell/SessionDetailsDestinationBody')).SessionDetailsDestinationBody,
+}));
 const renderSession = () => <SessionBody />;
 const renderSessionDetails = () => <SessionDetailsBody />;
 const leafMinimum = () => WORKSPACE_VIEW_MINIMUM;
 type GroupPayload = Readonly<{ groupId: string }>;
 
-const styles = StyleSheet.create((theme) => ({
+const styles = StyleSheet.create(() => ({
     group: { minWidth: 0, minHeight: 0 },
+    // A pane below the top row carries its tabs on the title bar's own material: the rail continued into the
+    // split, transparent over the window atmosphere and flush to the divider, so the gutter shows no second surface.
     strip: {
         flexDirection: 'row', alignItems: 'center', minHeight: M.heightPx,
         paddingLeft: M.paddingStartPx, paddingRight: M.paddingEndPx,
-        borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.colors.border.subtle,
-        backgroundColor: theme.colors.surface.inset,
     },
     body: { flex: 1, minWidth: 0, minHeight: 0 },
 }));
@@ -192,14 +196,13 @@ function WorkspaceGroupView(props: Readonly<{
     /** The pane's tabs live in the window's top strip (a top-row pane under a strip that carries them). */
     tabsInTitleBar: boolean;
 }>) {
-    const { theme } = useUnistyles();
-    const materialColor = useHappierMaterialColorResolver();
     const { workspace, group } = props;
     const safeGroup = toTestIdSafeValue(group.id);
     const geometry = React.useContext(WorkspaceBarGeometryContext);
     const frameRef = React.useRef<View | null>(null);
+    // Hidden title chrome retains its last real wide geometry; phone measurements cannot retire tabs.
     const publishFrame = React.useCallback(() => {
-        if (!geometry || !props.tabsInTitleBar) return;
+        if (!geometry || !props.tabsInTitleBar || getDeviceType() === 'phone') return;
         frameRef.current?.measureInWindow?.((x, _y, width) => {
             if (Number.isFinite(x) && Number.isFinite(width) && width > 0) geometry.setGroupFrame(group.id, { x, width });
         });
@@ -210,7 +213,7 @@ function WorkspaceGroupView(props: Readonly<{
         return () => geometry.setGroupFrame(group.id, null);
     }, [geometry, group.id, props.tabsInTitleBar, publishFrame]);
     return <View ref={frameRef} testID={`workspace-group-${safeGroup}`} style={styles.group} onLayout={publishFrame}>
-        {props.tabsInTitleBar || workspace.phone ? null : <View style={[styles.strip, { backgroundColor: materialColor(theme.colors.surface.inset, 'transparent') }]}>
+        {props.tabsInTitleBar || workspace.phone ? null : <View style={styles.strip}>
             <WorkspaceGroupTabs workspace={workspace} group={group} catalog={props.catalog}
                 focused={props.focused} placement="strip" />
         </View>}

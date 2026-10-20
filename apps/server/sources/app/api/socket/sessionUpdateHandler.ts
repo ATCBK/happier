@@ -11,6 +11,7 @@ import {
 } from "@/app/events/eventRouter";
 import { resolveSessionMessageAccountActor } from "@/app/session/messages/projectSessionMessageAccountActors";
 import { db } from "@/storage/db";
+import { RetainedContextPendingMaterializeRequestV5Schema } from '@happier-dev/protocol/sessions/pending/retainedPendingContextV1';
 import {
     SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_EVENT_V1,
     SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_V1,
@@ -24,6 +25,8 @@ import {
 import { isServerFeatureEnabledForHome } from "@/app/features/catalog/serverFeatureGate";
 import { AsyncLock, isLockAdmissionDeadlineExceededError } from "@/utils/runtime/lock";
 import { debug, error as logError, log } from "@/utils/logging/log";
+import { randomUUID } from 'node:crypto';
+import { timeWebLatencyPhase, withWebLatencyTrace } from '@/utils/webLatencyTrace';
 import { readHomeConfigEnv } from '@/app/home/settings/homeSettings';
 import { readServerConfig } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
 import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
@@ -33,6 +36,7 @@ import { z } from 'zod/mini';
 import type { VerifiedEphemeralSessionRunnerPrincipal } from "@happier-dev/protocol/ephemeralRunner/principal";
 import type { VerifiedApiTokenPrincipal } from "@/app/auth/auth";
 import { admitApiTokenSessionOperation } from "@/app/api/utils/apiTokenRouteAdmission";
+import { logUnexpectedRequestError } from '@/app/api/utils/logUnexpectedRequestError';
 import { API_TOKEN_SOCKET_EVENT_ACTIONS } from '@happier-dev/protocol/socketRpc';
 import { hasCurrentSocketCredential } from "./socketCredentialCurrentness";
 import {
@@ -81,22 +85,27 @@ import { SessionUserActionRequiredOccurrenceV1Schema } from '@happier-dev/protoc
 import { SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1, SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1, SessionFollowObservePendingRequestV1Schema, SessionFollowObservePendingResponseV1Schema, SessionFollowAcknowledgeRequestV1Schema, SessionFollowAcknowledgeResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { ACCOUNT_VOICE_FOLLOW_OBSERVE_PENDING_EVENT_V1, ACCOUNT_VOICE_FOLLOW_ACKNOWLEDGE_EVENT_V1, AccountVoiceFollowObservePendingRequestV1Schema, AccountVoiceFollowObservePendingResponseV1Schema, AccountVoiceFollowAcknowledgeRequestV1Schema, AccountVoiceFollowAcknowledgeResponseV1Schema } from '@happier-dev/protocol/sessions/follow/accountVoiceFollowTransportV1';
 import { supportsMachineSessionFollowContextV1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
-import { SESSION_DISCUSSION_AGENT_POST_EVENT_V1, SessionDiscussionAgentPostRequestV1Schema, SessionDiscussionAgentPostResponseV1Schema, isSessionDiscussionRequestWithinTransportBudgetV1 } from '@happier-dev/protocol/sessions/discussions/api';
+import { DISCUSSION_AGENT_POST_EVENT_V1, DiscussionAgentPublisherPublicationV1Schema, DiscussionAgentPublisherResponseV1Schema, isDiscussionRequestWithinTransportBudgetV1 } from '@happier-dev/protocol/discussions/api';
 import { TranscriptStreamSegmentDeltaEphemeralMessageSchema, TranscriptStreamSegmentEphemeralMessageSchema } from "@happier-dev/protocol/updates";
 import type { SessionEndAckResponse } from "@happier-dev/protocol/updates";
 import { refreshTrackedSessionAccountBadgePushes } from "@/app/activity/refreshAccountActivityBadgePushes";
 import { didSessionActivityBadgeSignalChange } from "@/app/activity/accountActivityBadge";
 import { canPublishFromSessionScopedSocket, canTargetSessionFromSocket } from "./sessionScopedBinding";
 import { hasExactCurrentPublisherAuthorityInTx } from "@/app/session/pending/hasExactCurrentPublisherAuthorityInTx";
+import { SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1, SessionMessageReplyMutationV1Schema, SessionMessageReplyMutationResultV1Schema,
+    SESSION_MESSAGE_REPLY_RELEASE_SOURCE_TURN_EVENT_V1, SessionMessageReplySourceTurnReleaseV1Schema, SessionMessageReplySourceTurnReleaseResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+import { isSessionInputSourceCurrentInTx, mutateSessionMessageReplyInTx, releaseSessionMessageReplySourceTurnInTx } from '@/app/session/messages/sessionMessageReply';
 import {
     acknowledgeSessionFollowFrontierInTx,
+    acknowledgeAdmittedSessionFollowInputInTx,
     observePendingSessionFollowForDestinationInTx,
 } from "@/app/session/follow/sessionFollowEdgeService";
 import {
     acknowledgeAccountVoiceFollowInTx,
     observePendingAccountVoiceFollowInTx,
 } from "@/app/session/follow/accountFollowService";
-import { postSessionDiscussionMessageInTx } from "@/app/session/discussions/mutations";
+import { createDiscussionInTx, postPreparedDiscussionMessageInTx, prepareDiscussionPostMutationAccounts } from "@/app/discussions/mutations";
+import { reconcileDiscussionCreationIdentityRace } from '@/app/discussions/createIdentityReconciliation';
 import type { createSessionPublisherPresence, CurrentSessionPublisherAuthority, SessionPublisherBinding } from "@/app/presence/sessionPublisherPresence";
 import type { TeamCredentialExecutionRunCurrentnessResolver } from "@/app/teams/credentials/providerBrokerAdmission";
 import { publishSessionPublisherClose } from "@/app/presence/publishSessionPublisherClose";
@@ -108,6 +117,7 @@ import {
 } from "@/app/session/sessionTranscriptPublicationPolicy";
 import {
     isTransactionAcquisitionUnavailableError,
+    isTransactionConflictExhaustedError,
     isTransactionDeadlineExceededError,
 } from "@/storage/inTx";
 
@@ -348,6 +358,38 @@ type TrustedSessionPublisher = Readonly<{
     binding: SessionPublisherBinding;
 }>;
 
+const FOLLOW_ACK_ERROR_NAMES = new Set([
+    'Error', 'TypeError', 'RangeError', 'SyntaxError', 'ZodError', '$ZodError',
+    'PrismaClientKnownRequestError', 'PrismaClientUnknownRequestError', 'PrismaClientValidationError',
+    'PrismaClientInitializationError', 'PrismaClientRustPanicError',
+    'TransactionConflictExhaustedError', 'TransactionAcquisitionUnavailableError',
+    'TransactionDeadlineExceededError', 'TransactionReplayRequiredError', 'LockAdmissionDeadlineExceededError',
+]);
+
+/** Prisma messages/metadata may contain query inputs; retain only typed failure codes and causes. */
+function sessionFollowAckErrorCauses(error: unknown) {
+    const causes: Array<{ name: string; code?: string; sqlState?: string }> = [];
+    const seen = new Set<unknown>();
+    let cause = error;
+    while (cause !== null && cause !== undefined && !seen.has(cause)) {
+        seen.add(cause);
+        const name = cause instanceof Error && FOLLOW_ACK_ERROR_NAMES.has(cause.name) ? cause.name : 'UnknownError';
+        const record = typeof cause === 'object' && cause !== null ? cause : null;
+        const code = record && 'code' in record && typeof record.code === 'string'
+            && (/^P\d{4}$/.test(record.code) || record.code === 'SQLITE_BUSY'
+                || record.code === 'database_transaction_conflict_exhausted')
+            ? record.code : undefined;
+        const meta = record && 'meta' in record && typeof record.meta === 'object' && record.meta !== null ? record.meta : null;
+        const sqlState = code === undefined && record && 'code' in record
+            && typeof record.code === 'string' && /^[0-9A-Z]{5}$/.test(record.code)
+            ? record.code : meta && 'code' in meta && typeof meta.code === 'string' && /^[0-9A-Z]{5}$/.test(meta.code)
+                ? meta.code : undefined;
+        causes.push({ name, ...(code ? { code } : {}), ...(sqlState ? { sqlState } : {}) });
+        cause = record && 'cause' in record ? record.cause : undefined;
+    }
+    return causes;
+}
+
 const releasedAliveOperationTails = new WeakMap<object, Promise<void>>();
 const RELEASED_ALIVE_PERSISTENCE_INTERVAL_MS = 60_000;
 const RELEASED_ALIVE_FAILURE_BACKOFF_BASE_MS = 2_000;
@@ -396,7 +438,12 @@ export function sessionUpdateHandler(
     const registerSessionEvent = (event: Parameters<Socket["on"]>[0], listener: Parameters<Socket["on"]>[1]) => {
         if (admission?.principalKind === "api-token-session-viewer" && event !== "disconnect"
             && !Object.prototype.hasOwnProperty.call(API_TOKEN_SOCKET_EVENT_ACTIONS, event)) return socket;
-        return socket.on(event, listener);
+        if (process.env.HAPPIER_WEB_LATENCY_TRACE !== '1' || event === 'disconnect') return socket.on(event, listener);
+        return socket.on(event, (...args: Parameters<typeof listener>) => withWebLatencyTrace(
+            randomUUID(),
+            () => timeWebLatencyPhase(`socket.${String(event)}`, () => listener.apply(socket, args)),
+            trustedSessionPublisher?.binding.sessionId,
+        ));
     };
     let legacyAliveInFlight = false;
     // Bound retained observations by expiry without changing the default settled-write cadence.
@@ -428,12 +475,22 @@ export function sessionUpdateHandler(
     // publisher authority and Machine kind.
     let ownerActivityDelivery: "rich_sender" | "home_required" | undefined;
 
+    const composeSessionActivityRuntimeComposition = (
+        publisherAuthority: CurrentSessionPublisherAuthority,
+        delivery = ownerActivityDelivery ?? "rich_sender",
+        wasReported = ownerActivityDelivery !== undefined,
+    ) => ({ publisherAuthority, ownerActivityDelivery: delivery,
+        ...(wasReported ? { ownerActivityDeliveryWasReported: true as const } : {}),
+    });
+
     const resolveSessionActivityRuntimeComposition = async (
         sessionId: string,
         delivery: "rich_sender" | "home_required",
+        wasReported = ownerActivityDelivery !== undefined,
     ): Promise<Readonly<{
         publisherAuthority: CurrentSessionPublisherAuthority;
         ownerActivityDelivery: "rich_sender" | "home_required";
+        ownerActivityDeliveryWasReported?: true;
     }> | undefined> => {
         const publisher = trustedSessionPublisher;
         if (!publisher || publisher.binding.sessionId !== sessionId) return undefined;
@@ -441,7 +498,7 @@ export function sessionUpdateHandler(
             socket,
             operation: async (authority) => authority,
         });
-        return publisherAuthority ? { publisherAuthority, ownerActivityDelivery: delivery } : undefined;
+        return publisherAuthority ? composeSessionActivityRuntimeComposition(publisherAuthority, delivery, wasReported) : undefined;
     };
 
     registerSessionEvent(
@@ -491,64 +548,113 @@ export function sessionUpdateHandler(
         },
     );
 
-    registerSessionEvent(SESSION_DISCUSSION_AGENT_POST_EVENT_V1, async (data: unknown, callback?: (response: unknown) => void) => {
-        const respond = (response: unknown) => callback?.(SessionDiscussionAgentPostResponseV1Schema.parse(response));
-        const request = SessionDiscussionAgentPostRequestV1Schema.safeParse(data);
-        if (!await isServerFeatureEnabledForHome("sessions.conversations")) {
-            respond({ ok: false, v: 1, error: "session_discussions_unavailable" });
-            return;
+    registerSessionEvent(SESSION_MESSAGE_REPLY_RELEASE_SOURCE_TURN_EVENT_V1, async (data: unknown, callback?: (response: unknown) => void) => {
+        const respond = (response: unknown) => callback?.(SessionMessageReplySourceTurnReleaseResultV1Schema.parse(response));
+        const request = SessionMessageReplySourceTurnReleaseV1Schema.safeParse(data);
+        if (!request.success || !trustedSessionPublisher || trustedSessionPublisher.binding.sessionId !== request.data.sessionId
+            || !canTargetSessionFromSocket({ socket, connection, sessionId: request.data.sessionId })) {
+            respond({ v: 1, ok: false, error: 'invalid_request' }); return;
         }
-        if (!request.success) {
-            respond({ ok: false, v: 1, error: "session_discussion_invalid_content" });
-            return;
-        }
-        // The trusted publisher carrier accepts exactly the same stored
-        // Discussion request budget as the canonical HTTP route. Provenance
-        // stamping is a transport distinction, not a larger body allowance.
-        if (!isSessionDiscussionRequestWithinTransportBudgetV1(request.data.request)) {
-            respond({ ok: false, v: 1, error: "session_discussion_invalid_content" });
-            return;
-        }
-        if (
-            !trustedSessionPublisher
-            || trustedSessionPublisher.binding.sessionId !== request.data.sessionId
-            || !canTargetSessionFromSocket({ socket, connection, sessionId: request.data.sessionId })
-        ) {
-            respond({ ok: false, v: 1, error: "session_discussion_post_denied" });
+        try {
+            const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({ socket, isolationLevel: 'Serializable',
+                operation: (publisherAuthority, tx) => releaseSessionMessageReplySourceTurnInTx(tx, { accountId: userId, request: request.data, publisherAuthority }) });
+            respond(result ?? { v: 1, ok: false, error: 'forbidden' });
+        } catch { respond({ v: 1, ok: false, error: 'unavailable' }); }
+    });
+
+    registerSessionEvent(SESSION_MESSAGE_REPLY_MUTATE_EVENT_V1, async (data: unknown, callback?: (response: unknown) => void) => {
+        const respond = (response: unknown) => callback?.(SessionMessageReplyMutationResultV1Schema.parse(response));
+        const request = SessionMessageReplyMutationV1Schema.safeParse(data);
+        if (!request.success || !trustedSessionPublisher || trustedSessionPublisher.binding.sessionId !== request.data.sessionId
+            || !canTargetSessionFromSocket({ socket, connection, sessionId: request.data.sessionId })) {
+            respond({ v: 1, ok: false, error: 'invalid_request' });
             return;
         }
         try {
-            const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({
+            const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({ socket, isolationLevel: 'Serializable',
+                operation: (publisherAuthority, tx) => mutateSessionMessageReplyInTx(tx, { accountId: userId,
+                    mutation: request.data, publisherAuthority, authentication: readSessionAccessAuthenticationFromSocket(socket) }) });
+            respond(result ?? { v: 1, ok: false, error: 'forbidden' });
+        } catch {
+            respond({ v: 1, ok: false, error: 'unavailable' });
+        }
+    });
+
+    registerSessionEvent(DISCUSSION_AGENT_POST_EVENT_V1, async (data: unknown, callback?: (response: unknown) => void) => {
+        const respond = (response: unknown) => callback?.(DiscussionAgentPublisherResponseV1Schema.parse(response));
+        const request = DiscussionAgentPublisherPublicationV1Schema.safeParse(data);
+        try {
+            if (!await isServerFeatureEnabledForHome("sessions.conversations")) {
+                respond({ ok: false, v: 1, error: "discussions_unavailable" });
+                return;
+            }
+            if (!request.success) {
+                respond({ ok: false, v: 1, error: "discussion_invalid_content" });
+                return;
+            }
+            // The trusted publisher carrier accepts exactly the same stored
+            // Discussion request budget as the canonical HTTP route. Provenance
+            // stamping is a transport distinction, not a larger body allowance.
+            if (!isDiscussionRequestWithinTransportBudgetV1(request.data.request)) {
+                respond({ ok: false, v: 1, error: "discussion_invalid_content" });
+                return;
+            }
+            if (
+                !trustedSessionPublisher
+                || trustedSessionPublisher.binding.sessionId !== request.data.sessionId
+                || !canTargetSessionFromSocket({ socket, connection, sessionId: request.data.sessionId })
+            ) {
+                respond({ ok: false, v: 1, error: "discussion_post_denied" });
+                return;
+            }
+            const publisher = trustedSessionPublisher;
+            const publication = request.data;
+            const actor = {
+                actorAccountId: userId,
+                producer: {
+                    v: 1 as const,
+                    kind: "agent" as const,
+                    sessionId: publication.sessionId,
+                    ...(publication.sourceSession ? { sourceSession: publication.sourceSession } : {}),
+                    ...(publication.runId ? { runId: publication.runId } : {}),
+                    ...(publication.toolCallId ? { toolCallId: publication.toolCallId } : {}),
+                },
+                authentication: readSessionAccessAuthenticationFromSocket(socket),
+            };
+            const append = 'discussionId' in publication ? { ...actor, discussionId: publication.discussionId,
+                request: publication.request,
+                ...(publication.draftReview ? { draftReview: publication.draftReview } : {}),
+                ...(publication.replyReturn ? { replyReturn: publication.replyReturn } : {}) } : null;
+            const publish = () => publisher.presence.runAsCurrentPublisherInTx({
                 socket,
-                deadlineAtMs: Date.now() + 5_000,
-                isolationLevel: "Serializable", // Discussion creation composes tracked-target admission with the message write.
+                // The Session publisher ACK is lifetime-bound. Waiting behind
+                // its current neighbor must not create a shorter publication
+                // deadline; authority is rechecked below and inTx owns its
+                // resource acquisition/execution budgets.
+                ...(append ? { prepare: () => prepareDiscussionPostMutationAccounts(append) }
+                    : { isolationLevel: "Serializable" as const }), // Creation retains its identity-race transaction.
                 operation: async (authority, tx) => {
                     if (!await hasExactCurrentPublisherAuthorityInTx(
                         tx,
                         authority,
                         userId,
                         request.data.sessionId,
+                        undefined,
+                        { lockMachineAuthority: append !== null },
                     )) {
                         return null;
                     }
-                    return await postSessionDiscussionMessageInTx(tx, {
-                        actorAccountId: userId,
-                        sessionId: request.data.sessionId,
-                        discussionId: request.data.discussionId,
-                        request: request.data.request,
-                        producer: {
-                            v: 1,
-                            kind: "agent",
-                            sessionId: request.data.sessionId,
-                            ...(request.data.runId ? { runId: request.data.runId } : {}),
-                            ...(request.data.toolCallId ? { toolCallId: request.data.toolCallId } : {}),
-                        },
-                        authentication: readSessionAccessAuthenticationFromSocket(socket),
-                    });
+                    if (request.data.sourceSession && (request.data.sourceSession.sourceSessionId !== request.data.sessionId
+                        || !await isSessionInputSourceCurrentInTx(tx, userId, request.data.sourceSession))) return null;
+                    return 'discussionId' in publication
+                        ? await postPreparedDiscussionMessageInTx(tx, append!)
+                        : await createDiscussionInTx(tx, { ...actor, request: publication.request });
                 },
             });
+            const result = 'operation' in request.data && request.data.operation === 'create'
+                ? await reconcileDiscussionCreationIdentityRace(publish) : await publish();
             if (result === null) {
-                respond({ ok: false, v: 1, error: "session_discussion_post_denied" });
+                respond({ ok: false, v: 1, error: "discussion_post_denied" });
                 return;
             }
             if (!result.ok) {
@@ -558,24 +664,26 @@ export function sessionUpdateHandler(
             respond({ ok: true, v: 1, value: result.value });
         } catch (error) {
             log({ module: "websocket", level: "warn" }, `Session Discussion Agent post failed: ${error}`);
-            respond({ ok: false, v: 1, error: "session_discussions_unavailable" });
+            respond({ ok: false, v: 1, error: "discussions_unavailable" });
         }
     });
 
     registerSessionEvent(SESSION_FOLLOW_OBSERVE_PENDING_EVENT_V1, async (data: unknown, callback?: (response: unknown) => void) => {
         const respond = (response: unknown) => callback?.(SessionFollowObservePendingResponseV1Schema.parse(response));
         const request = SessionFollowObservePendingRequestV1Schema.safeParse(data);
-        if (!await isServerFeatureEnabledForHome("sessions.following")) {
-            respond({ ok: false, v: 1, error: "unsupported" });
-            return;
-        }
-        if (!request.success || !trustedSessionPublisher || trustedSessionPublisher.binding.sessionId !== request.data.sessionId || !canTargetSessionFromSocket({ socket, connection, sessionId: request.data.sessionId })) {
-            respond({ ok: false, v: 1, error: request.success ? "forbidden" : "invalid_request" });
-            return;
-        }
         try {
+            if (!await isServerFeatureEnabledForHome("sessions.following")) {
+                respond({ ok: false, v: 1, error: "unsupported" });
+                return;
+            }
+            if (!request.success || !trustedSessionPublisher || trustedSessionPublisher.binding.sessionId !== request.data.sessionId || !canTargetSessionFromSocket({ socket, connection, sessionId: request.data.sessionId })) {
+                respond({ ok: false, v: 1, error: request.success ? "forbidden" : "invalid_request" });
+                return;
+            }
+            const autonomousExchangeEnabled = await isServerFeatureEnabledForHome('sessions.autonomousExchange');
             const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({
                 socket, deadlineAtMs: Date.now() + 5_000,
+                authorityMode: "snapshot",
                 isolationLevel: "Serializable", // Follow sources, access and frontiers must describe one observation.
                 operation: async (authority, tx) => {
                     if (!await hasExactCurrentPublisherAuthorityInTx(tx, authority, userId, request.data.sessionId)) return null;
@@ -589,7 +697,8 @@ export function sessionUpdateHandler(
                     const session = await tx.session.findUnique({ where: { id: request.data.sessionId }, select: { publisherGeneration: true } });
                     if (!session) return null;
                     const observation = await observePendingSessionFollowForDestinationInTx(tx, {
-                        includeReportsTo: request.data.includeReportsTo,
+                        includeManager: request.data.includeManager,
+                        inputLocalIds: request.data.inputLocalIds,
                         principal: admission?.principalKind === "ephemeral-session-runner"
                             ? admission.principal
                             : {
@@ -598,15 +707,34 @@ export function sessionUpdateHandler(
                             authentication: readSessionAccessAuthenticationFromSocket(socket),
                         },
                         destinationSessionId: request.data.sessionId,
+                        ...(autonomousExchangeEnabled && request.data.supportsWakeAdmission === true
+                            && request.data.wakeAdmission ? { wakeAdmission: request.data.wakeAdmission } : {}),
                     });
                     return { publisherGeneration: session.publisherGeneration, ...observation };
                 },
             });
             if (result === null) { respond({ ok: false, v: 1, error: "forbidden" }); return; }
             if ('unsupported' in result) { respond({ ok: false, v: 1, error: "unsupported" }); return; }
-            respond({ ok: true, v: 1, sessionId: request.data.sessionId, publisherGeneration: result.publisherGeneration.toString(), currentSourceSessionIds: result.currentSourceSessionIds, observations: result.observations });
+            respond({ ok: true, v: 1, sessionId: request.data.sessionId,
+                publisherGeneration: result.publisherGeneration.toString(),
+                currentSourceSessionIds: result.currentSourceSessionIds,
+                // A pre-contract host cannot run the final pre-effect check;
+                // never hand it wake work when this capability is active.
+                observations: autonomousExchangeEnabled && request.data.supportsWakeAdmission !== true
+                    ? [] : result.observations,
+                ...(request.data.wakeAdmission ? { wakeAdmission:
+                    autonomousExchangeEnabled && request.data.supportsWakeAdmission === true
+                        ? result.wakeAdmission ?? { status: 'held', code: 'session_input_target_unavailable' }
+                        : { status: 'held', code: 'session_input_target_unavailable' } } : {}),
+            });
         } catch (error) {
-            log({ module: "websocket", level: "warn" }, `Session Follow observation failed: ${error}`);
+            log({
+                module: "websocket",
+                level: "warn",
+                ...(isTransactionDeadlineExceededError(error) && error.transactionClass
+                    ? { transactionClass: error.transactionClass }
+                    : {}),
+            }, `Session Follow observation failed: ${error}`);
             respond({ ok: false, v: 1, error: "internal" });
         }
     });
@@ -614,21 +742,38 @@ export function sessionUpdateHandler(
     registerSessionEvent(SESSION_FOLLOW_ACKNOWLEDGE_EVENT_V1, async (data: unknown, callback?: (response: unknown) => void) => {
         const respond = (response: unknown) => callback?.(SessionFollowAcknowledgeResponseV1Schema.parse(response));
         const request = SessionFollowAcknowledgeRequestV1Schema.safeParse(data);
-        if (!await isServerFeatureEnabledForHome("sessions.following")) {
-            respond({ ok: false, v: 1, error: "unsupported" });
-            return;
-        }
-        if (!request.success) { respond({ ok: false, v: 1, error: "invalid_request" }); return; }
-        const destinationSessionId = request.data.destinationSessionId;
-        if (!trustedSessionPublisher || trustedSessionPublisher.binding.sessionId !== destinationSessionId || !canTargetSessionFromSocket({ socket, connection, sessionId: destinationSessionId })) {
-            respond({ ok: false, v: 1, error: "forbidden" }); return;
-        }
+        let phase = 'feature';
+        const diagnose = (causes: ReturnType<typeof sessionFollowAckErrorCauses>) => log({
+            module: 'websocket', level: 'warn', operation: 'session_follow_acknowledge', phase,
+            ...(request.success ? { destinationSessionId: request.data.destinationSessionId,
+                expectedPublisherGeneration: request.data.expectedPublisherGeneration,
+                ...('localInputId' in request.data ? { localInputId: request.data.localInputId } : {}),
+                ...('sourceSessionId' in request.data ? { sourceSessionId: request.data.sourceSessionId } : {}),
+                ...('relation' in request.data ? { relation: request.data.relation } : {}) } : {}),
+            causes,
+        }, 'Session Follow acknowledgment failed');
         try {
+            if (!await isServerFeatureEnabledForHome("sessions.following")) {
+                respond({ ok: false, v: 1, error: "unsupported" });
+                return;
+            }
+            if (!request.success) { respond({ ok: false, v: 1, error: "invalid_request" }); return; }
+            const destinationSessionId = request.data.destinationSessionId;
+            if (!trustedSessionPublisher || trustedSessionPublisher.binding.sessionId !== destinationSessionId || !canTargetSessionFromSocket({ socket, connection, sessionId: destinationSessionId })) {
+                respond({ ok: false, v: 1, error: "forbidden" }); return;
+            }
+            phase = 'publisher_transaction';
             const result = await trustedSessionPublisher.presence.runAsCurrentPublisherInTx({
                 socket, deadlineAtMs: Date.now() + 5_000,
+                // Legacy frontier ACK only advances private route progress.
+                // Admitted rule progress conditionally enters canonical Session
+                // publication admission and revalidates inside the edge owner.
+                authorityMode: "snapshot",
                 isolationLevel: "Serializable", // Frontier acceptance composes current edge, source and destination authority.
                 operation: async (authority, tx) => {
+                    phase = 'publisher_authority';
                     if (!await hasExactCurrentPublisherAuthorityInTx(tx, authority, userId, destinationSessionId)) return { ok: false as const, rejection: "stale_publisher_generation" as const };
+                    phase = 'machine_capability';
                     const machine = await tx.machine.findUnique({
                         where: { id: authority.machineId },
                         select: { operationProtocolCapabilities: true },
@@ -636,28 +781,46 @@ export function sessionUpdateHandler(
                     if (!supportsMachineSessionFollowContextV1(machine?.operationProtocolCapabilities)) {
                         return { ok: false as const, rejection: "unsupported" as const };
                     }
-                    return await acknowledgeSessionFollowFrontierInTx(tx, {
-                        principal: admission?.principalKind === "ephemeral-session-runner"
-                            ? admission.principal
-                            : {
-                            kind: "destination_runtime",
-                            destinationRuntimeAccountId: userId,
-                            authentication: readSessionAccessAuthenticationFromSocket(socket),
-                        },
-                        destinationSessionId, sourceSessionId: request.data.sourceSessionId,
-                        edgeKind: request.data.edgeKind, attachedAt: request.data.attachedAt,
-                        expectedPublisherGeneration: BigInt(request.data.expectedPublisherGeneration),
-                        expected: request.data.expected, observed: request.data.observed, consumed: request.data.consumed,
-                        acceptance: request.data.acceptance,
-                    });
+                    const principal = admission?.principalKind === 'ephemeral-session-runner' ? admission.principal : {
+                        kind: 'destination_runtime' as const, destinationRuntimeAccountId: userId,
+                        authentication: readSessionAccessAuthenticationFromSocket(socket),
+                    };
+                    phase = 'frontier';
+                    const acknowledgement = 'localInputId' in request.data
+                        ? await acknowledgeAdmittedSessionFollowInputInTx(tx, { principal, request: request.data })
+                        : await acknowledgeSessionFollowFrontierInTx(tx, {
+                            principal,
+                            destinationSessionId, sourceSessionId: request.data.sourceSessionId,
+                            policy: request.data.policy,
+                            relation: request.data.relation, attachedAt: request.data.attachedAt,
+                            expectedPublisherGeneration: BigInt(request.data.expectedPublisherGeneration),
+                            expected: request.data.expected, observed: request.data.observed, consumed: request.data.consumed,
+                            acceptance: request.data.acceptance,
+                        });
+                    if (acknowledgement.ok) phase = 'commit';
+                    return acknowledgement;
                 },
             });
-            if (result === null) { respond({ ok: false, v: 1, error: "forbidden" }); return; }
-            if (!result.ok) { respond({ ok: false, v: 1, error: result.rejection }); return; }
-            respond({ ok: true, v: 1, destinationSessionId, sourceSessionId: request.data.sourceSessionId, delivered: result.delivered });
+            if (result === null) {
+                diagnose([{ name: 'SessionFollowAcknowledgeRefusal', code: 'forbidden' }]);
+                respond({ ok: false, v: 1, error: "forbidden" });
+                return;
+            }
+            if (!result.ok) {
+                diagnose([{ name: 'SessionFollowAcknowledgeRefusal', code: result.rejection }]);
+                respond({ ok: false, v: 1, error: result.rejection });
+                return;
+            }
+            phase = 'response';
+            respond('original' in request.data
+                ? { ok: true, v: 1, destinationSessionId, localInputId: request.data.localInputId, original: request.data.original }
+                : { ok: true, v: 1, destinationSessionId, sourceSessionId: request.data.sourceSessionId, delivered: result.delivered });
         } catch (error) {
-            log({ module: "websocket", level: "warn" }, `Session Follow acknowledgment failed: ${error}`);
-            respond({ ok: false, v: 1, error: "internal" });
+            diagnose(sessionFollowAckErrorCauses(error));
+            respond({ ok: false, v: 1, error: isLockAdmissionDeadlineExceededError(error)
+                || isTransactionDeadlineExceededError(error)
+                || isTransactionConflictExhaustedError(error)
+                || isTransactionAcquisitionUnavailableError(error) ? "retryable" : "internal" });
         }
     });
 
@@ -668,16 +831,16 @@ export function sessionUpdateHandler(
             return;
         }
         const request = AccountVoiceFollowObservePendingRequestV1Schema.safeParse(data);
-        if (!await isServerFeatureEnabledForHome("sessions.following")) {
-            respond({ ok: false, v: 1, error: "unsupported" });
-            return;
-        }
-        if (!request.success || !trustedSessionPublisher || trustedSessionPublisher.binding.sessionId !== request.data.voiceSessionId
-            || !canTargetSessionFromSocket({ socket, connection, sessionId: request.data.voiceSessionId })) {
-            respond({ ok: false, v: 1, error: request.success ? "forbidden" : "invalid_request" });
-            return;
-        }
         try {
+            if (!await isServerFeatureEnabledForHome("sessions.following")) {
+                respond({ ok: false, v: 1, error: "unsupported" });
+                return;
+            }
+            if (!request.success || !trustedSessionPublisher || trustedSessionPublisher.binding.sessionId !== request.data.voiceSessionId
+                || !canTargetSessionFromSocket({ socket, connection, sessionId: request.data.voiceSessionId })) {
+                respond({ ok: false, v: 1, error: request.success ? "forbidden" : "invalid_request" });
+                return;
+            }
             const currentRun = await dependencies?.resolveExecutionRunCurrentness({
                 executionRunId: request.data.executionRunId,
                 requestingAccountId: userId,
@@ -743,16 +906,16 @@ export function sessionUpdateHandler(
             return;
         }
         const request = AccountVoiceFollowAcknowledgeRequestV1Schema.safeParse(data);
-        if (!await isServerFeatureEnabledForHome("sessions.following")) {
-            respond({ ok: false, v: 1, error: "unsupported" });
-            return;
-        }
-        if (!request.success || !trustedSessionPublisher || trustedSessionPublisher.binding.sessionId !== request.data.voiceSessionId
-            || !canTargetSessionFromSocket({ socket, connection, sessionId: request.data.voiceSessionId })) {
-            respond({ ok: false, v: 1, error: request.success ? "forbidden" : "invalid_request" });
-            return;
-        }
         try {
+            if (!await isServerFeatureEnabledForHome("sessions.following")) {
+                respond({ ok: false, v: 1, error: "unsupported" });
+                return;
+            }
+            if (!request.success || !trustedSessionPublisher || trustedSessionPublisher.binding.sessionId !== request.data.voiceSessionId
+                || !canTargetSessionFromSocket({ socket, connection, sessionId: request.data.voiceSessionId })) {
+                respond({ ok: false, v: 1, error: request.success ? "forbidden" : "invalid_request" });
+                return;
+            }
             const currentRun = await dependencies?.resolveExecutionRunCurrentness({
                 executionRunId: request.data.executionRunId,
                 requestingAccountId: userId,
@@ -788,6 +951,7 @@ export function sessionUpdateHandler(
                         expected: request.data.expected,
                         observed: request.data.observed,
                         consumed: request.data.consumed,
+                        ...(request.data.policy ? { policy: request.data.policy } : {}),
                         acceptance: request.data.acceptance,
                         authentication: readSessionAccessAuthenticationFromSocket(socket),
                         runtimeAuthority: {
@@ -954,6 +1118,7 @@ export function sessionUpdateHandler(
                         ? { ciphertext: observation.content }
                         : { content: observation.content }),
                     publisherAuthority,
+                    runtimeComposition: composeSessionActivityRuntimeComposition(publisherAuthority),
                     trustedSourceTimestamps: { createdAt: observation.createdAt, updatedAt: observation.updatedAt },
                     trustedTranscriptObservationProvenance: observation.provenance,
                     ...(observation.v === 2 && observation.surfaceItemReference !== undefined
@@ -1184,7 +1349,7 @@ export function sessionUpdateHandler(
             const parsedUserActionRequiredOccurrences =
                 rawUserActionRequiredOccurrences === undefined
                     ? null
-                    : SessionUserActionRequiredOccurrenceV1Schema.array().safeParse(
+                    : z.array(SessionUserActionRequiredOccurrenceV1Schema).safeParse(
                         rawUserActionRequiredOccurrences,
                     );
             // Validate input
@@ -1206,7 +1371,7 @@ export function sessionUpdateHandler(
             }
 
             const runtimeComposition = reportedOwnerActivityDelivery
-                ? await resolveSessionActivityRuntimeComposition(sid, reportedOwnerActivityDelivery)
+                ? await resolveSessionActivityRuntimeComposition(sid, reportedOwnerActivityDelivery, true)
                 : undefined;
             const updateAgentState = async (
                 publisherAuthority?: import("@/app/presence/sessionPublisherPresence").CurrentSessionPublisherAuthority,
@@ -1268,8 +1433,8 @@ export function sessionUpdateHandler(
                 return;
             }
 
-            if (trustedSessionPublisher?.binding.sessionId === sid) {
-                ownerActivityDelivery = reportedOwnerActivityDelivery ?? "rich_sender";
+            if (trustedSessionPublisher?.binding.sessionId === sid && reportedOwnerActivityDelivery !== undefined) {
+                ownerActivityDelivery = reportedOwnerActivityDelivery;
             }
 
             const agentStateUpdate = {
@@ -1355,11 +1520,11 @@ export function sessionUpdateHandler(
         }
 
         try {
-            const result = await trustedSessionPublisher.presence.publishSnapshot({
+            const result = await timeWebLatencyPhase('session.runtime_activity.commit', () => trustedSessionPublisher.presence.publishSnapshot({
                 socket,
                 binding: trustedSessionPublisher.binding,
                 completeSnapshot: request.data.snapshot,
-            });
+            }));
             if (result.status === "rejected") {
                 if (result.reason === "invalid-params") {
                     acknowledge?.(SessionRuntimeActivitySnapshotAckSchema.parse({
@@ -1392,7 +1557,7 @@ export function sessionUpdateHandler(
                 return;
             }
 
-            await publishRuntimeActivitySnapshotResult(request.data.sessionId, result);
+            await timeWebLatencyPhase('session.runtime_activity.publish', () => publishRuntimeActivitySnapshotResult(request.data.sessionId, result));
             const parsedProjection = parseSessionRuntimeActivityProjectionFields(result.projection);
             if (parsedProjection.kind !== "valid") {
                 throw new Error("Runtime Activity snapshot produced an invalid projection");
@@ -1608,7 +1773,6 @@ export function sessionUpdateHandler(
                         ? projectSessionTranscriptPublicationPendingProjection({
                             ...presenceResult.pendingState,
                             changedByAccountId: userId,
-                            pendingActivationAuthorization: null,
                         }, session, accountId)
                         : null;
                     if (realtimeProjection.kind === "publish") {
@@ -1989,7 +2153,8 @@ export function sessionUpdateHandler(
                         messageRole: admission?.principalKind === "api-token-session-viewer" ? "user" : parsedMessageRole?.data,
                         sidechainId,
                         ...(trustedSessionEventType ? { trustedSessionEventType } : {}),
-                        ...(publisherAuthority ? { publisherAuthority } : {}),
+                        ...(publisherAuthority ? { publisherAuthority,
+                            runtimeComposition: composeSessionActivityRuntimeComposition(publisherAuthority) } : {}),
                     });
                 const publisher = trustedSessionPublisher;
                 const result = publisher && publisher.binding.sessionId === sid
@@ -2258,6 +2423,7 @@ export function sessionUpdateHandler(
                             publisherAuthority,
                             diagnosticCorrelationId,
                             ...(parsed.data.acceptedDelivery === undefined ? {} : { acceptedDelivery: parsed.data.acceptedDelivery }),
+                            ...('acceptedTurn' in parsed.data && parsed.data.acceptedTurn !== undefined ? { acceptedTurn: parsed.data.acceptedTurn } : {}),
                             ...("recipient" in parsed.data ? { targetExecutionRunId: parsed.data.recipient.runId, expectedSidechainId: parsed.data.sidechainId } : {}),
                         }),
                     });
@@ -2321,6 +2487,14 @@ export function sessionUpdateHandler(
                 try {
                     if (targetRequest && !targetRequest.success) { respond({ ok: false, error: "invalid-params" }); return; }
                     const raw = data && typeof data === "object" ? data as Record<string, unknown> : {};
+                    // Proof-bearing V5 uses the shared closed parent and child;
+                    // incumbent no-proof revisions retain their existing ingress.
+                    const retainedContext = raw.retainedContext === undefined ? undefined
+                        : RetainedContextPendingMaterializeRequestV5Schema.safeParse(raw);
+                    if (retainedContext && (!retainedContext.success || executionRunTarget)) {
+                        respond({ ok: false, error: 'invalid-params' });
+                        return;
+                    }
                     const sid = targetRequest?.success ? targetRequest.data.sessionId : typeof raw.sid === 'string' ? raw.sid : null;
                     if (!sid) {
                         respond({ ok: false, error: 'invalid-params' });
@@ -2361,6 +2535,7 @@ export function sessionUpdateHandler(
                             deliveryState,
                             deliveryTiming,
                             foregroundState,
+                            ...(retainedContext?.success ? { retainedContext: retainedContext.data.retainedContext } : {}),
                             ...(expectedRuntimeActivityRevision !== null ? { expectedRuntimeActivityRevision } : {}),
                             publisherAuthority,
                             targetExecutionRunId: targetRequest?.success ? targetRequest.data.recipient.runId : null,
@@ -2425,7 +2600,7 @@ export function sessionUpdateHandler(
                         didMaterialize: true,
                         didWrite: result.didWriteMessage,
                         ...(executionRunTarget ? { authorAccountId: result.authorAccountId ?? null } : {}),
-                        message: serializePendingMaterializedMessage(result.message),
+                        message: serializePendingMaterializedMessage(result.message, { nativeAdmission: true }),
                         ...toPendingSocketState(result),
                         ...(result.deliveryState ? { deliveryState: result.deliveryState } : {}),
                     });
@@ -2481,7 +2656,9 @@ export function sessionUpdateHandler(
                         || isTransactionDeadlineExceededError(error)
                         || isTransactionAcquisitionUnavailableError(error)
                     ) throw error;
-                    log({ module: 'websocket', level: 'error' }, `Error in pending-materialize-next: ${error}`);
+                    logUnexpectedRequestError(error, { module: 'websocket', socketId: socket.id,
+                        sessionId: trustedSessionPublisher?.binding.sessionId,
+                        event: 'pending-materialization-failed', phase: 'materialization' });
                     const failure = mapPendingMaterializationError(error);
                     respond({
                         ok: false,
@@ -2493,6 +2670,9 @@ export function sessionUpdateHandler(
                 }
                 });
             } catch (error) {
+                logUnexpectedRequestError(error, { module: 'websocket', socketId: socket.id,
+                    sessionId: trustedSessionPublisher?.binding.sessionId,
+                    event: 'pending-materialization-failed', phase: 'admission' });
                 if (
                     isLockAdmissionDeadlineExceededError(error)
                     || isTransactionDeadlineExceededError(error)
@@ -2505,7 +2685,6 @@ export function sessionUpdateHandler(
                     });
                     return;
                 }
-                log({ module: 'websocket', level: 'error' }, `Error admitting pending-materialize-next: ${error}`);
                 respond({ ok: false, error: 'internal' });
             }
         });

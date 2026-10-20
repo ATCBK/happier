@@ -59,7 +59,7 @@ describe('Inbox session row line', () => {
     { total: 6, working: 2, needsYou: 1, stalled: 3 },
   ])('labels only server-bucketed working reports as still working: %j', (reports) => {
     const candidate = readyCandidate();
-    const line = buildInboxSessionContextLine({ ...candidate, session: { ...candidate.session, reports } }) ?? '';
+    const line = buildInboxSessionContextLine({ ...candidate, session: { ...candidate.session, managedSessions: reports } }) ?? '';
     if (reports.working === 0) {
       expect(line).not.toContain(t('sessionWork.strip.stillWorking', { count: reports.total }));
     } else {
@@ -114,7 +114,10 @@ describe('Inbox session row line', () => {
     for (const runtime of ['unknown', 'offline'] as const) {
       const unsettled = withHome('offline');
       const line = buildInboxSessionContextLine(
-        { ...unsettled, awareness: { ...unsettled.awareness, runtime } },
+        { ...unsettled, awareness: { ...unsettled.awareness, runtime, freshness: runtime,
+          // Retained ready/stale facts are their own statuses; these rows have neither.
+          operational: { ...unsettled.awareness.operational, primary: 'none' as const, reasons: [] },
+        } },
         { showHome: false, showNeed: false },
       ) ?? '';
       expect(line).not.toContain(offlineWords);

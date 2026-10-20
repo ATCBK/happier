@@ -80,8 +80,9 @@ const profileMutations: Array<ReturnType<typeof ProfileRowMutationV1Schema.parse
 const runtime = installSessionPaneRuntimeTestHarness({ configureSocket, request: async (url, init) => {
     const parsedUrl = new URL(String(url));
     const path = parsedUrl.pathname;
-    if (![PROFILE_ROWS_ROUTE_V1, PROFILE_RECORDS_ROUTE_V1, PROFILE_RECORD_READ_ROUTE_V1,
-        PROFILE_REFERENCE_GUARD_ROUTE_V1, PROFILE_TRANSFER_ROUTE_V1, ACP_CATALOG_ROWS_ROUTE_V1].includes(path)) return null;
+    const profileRoutes: readonly string[] = [PROFILE_ROWS_ROUTE_V1, PROFILE_RECORDS_ROUTE_V1, PROFILE_RECORD_READ_ROUTE_V1,
+        PROFILE_REFERENCE_GUARD_ROUTE_V1, PROFILE_TRANSFER_ROUTE_V1, ACP_CATALOG_ROWS_ROUTE_V1];
+    if (!profileRoutes.includes(path)) return null;
     expect(parsedUrl.origin).toBe('https://session-pane.test');
     const bearer = new Headers(init?.headers).get('authorization');
     expect(bearer?.startsWith('Bearer ')).toBe(true);
@@ -155,7 +156,7 @@ describe('ProfileEditScreen replace fallback', () => {
         if (!name || typeof name.props.onChangeText !== 'function') throw new Error('Expected actual profile name field');
         await act(async () => name.props.onChangeText('New Profile'));
         const rememberedProfile = storage.getState().authoringMemory.lastUsedProfile;
-        const retiredProfiles = storage.getState().settings.profiles;
+        const retiredProfiles = storage.getState().settings;
         const save = screen.findHostByTestId('profile-edit-save');
         if (!save || typeof save.props.onPress !== 'function') throw new Error('Expected actual profile save action');
         await act(async () => save.props.onPress());
@@ -166,7 +167,7 @@ describe('ProfileEditScreen replace fallback', () => {
         expect(getProfileCatalogSnapshot(scope)?.data).toEqual([expect.objectContaining({ revision: 4, record: expect.objectContaining({
             id: 'profile-new', definition: { kind: 'inline', profile: expect.objectContaining({ v: 2, name: 'New Profile' }) },
         }) })]);
-        expect(storage.getState().settings.profiles).toEqual(retiredProfiles);
+        expect(storage.getState().settings).toEqual(retiredProfiles);
         expect(storage.getState().authoringMemory.lastUsedProfile).toBe(rememberedProfile);
         expect(routerMock.replace).toHaveBeenCalledTimes(1);
         expect(routerMock.replace).toHaveBeenCalledWith({

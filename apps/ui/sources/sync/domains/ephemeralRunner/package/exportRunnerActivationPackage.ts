@@ -4,7 +4,7 @@ import { createNativeCacheFileSink, shareNativeCacheFile } from '@/sync/runtime/
 import { downloadWebFile } from '@/sync/runtime/files/downloadWebFile';
 import { assembleRunnerActivationPackage, type RunnerPackageAssemblyInput } from './assembleRunnerActivationPackage';
 import { readRunnerActivationExportFile } from '../runnerActivationCustody';
-import type { BulkTransferFileDestination } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/bulkTransferFileDestination';
+import type { BulkTransferFileDestination } from '@/sync/domains/transfers/runtime/transferRuntime';
 
 export type RunnerPackageExportInput = Omit<RunnerPackageAssemblyInput, 'destination' | 'activationFile'>
     & Parameters<typeof readRunnerActivationExportFile>[0];

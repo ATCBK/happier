@@ -122,7 +122,7 @@ describe.skipIf(!shouldRunDaemonReattachIntegration())(
       process.kill(pid, 0);
     });
 
-    it('heals an incomplete marker with the canonical OS command hash, not the longer discovery command', async () => {
+    it.each([true, false])('heals an incomplete marker and restores materialized custody only with its captured process generation (%s)', async (withCapturedGeneration) => {
       const { findHappyProcessByPid } = await import('./doctor');
       const { readProcessIdentityByPid } = await import('./processIdentity');
       const { writeSessionMarker, readSessionMarkerForPid, hashProcessCommand } = await import('./sessionRegistry');
@@ -133,12 +133,24 @@ describe.skipIf(!shouldRunDaemonReattachIntegration())(
       const discovery = await waitForPidInspection(findHappyProcessByPid, pid);
       const identity = await readProcessIdentityByPid(pid);
       expect(discovery?.command).toBe(identity!.command);
-      await writeSessionMarker({ pid, happySessionId: 'healed-canonical-reader', startedBy: 'daemon', cwd: process.cwd() });
+      const materializedStateObservationBinding: NonNullable<TrackedSession['materializedStateObservationBinding']> = {
+        agentId: 'fixture-agent', pluginId: 'fixture-plugin',
+        sourceCustody: { kind: 'development', registeredRootId: 'fixture-root' },
+        nativeHomeRoot: join(process.env.HAPPIER_HOME_DIR!, 'native-home'),
+        entries: [{ entryPath: 'projects', sourceEntryRoot: '/native/projects', materializedEntryPath: join(process.env.HAPPIER_HOME_DIR!, 'native-home/projects') }],
+      };
+      await writeSessionMarker({ pid, happySessionId: 'healed-canonical-reader', startedBy: 'daemon', cwd: process.cwd(),
+        ...(withCapturedGeneration ? { processStartTimeMs: identity!.processStartTimeMs } : {}),
+        materializedStateObservationBinding });
       const sessions = new Map<number, TrackedSession>();
       await reattach({ pidToTrackedSession: sessions });
       expect(sessions.get(pid)?.processCommandHash).toBe(hashProcessCommand(identity!.command));
-      expect((await readSessionMarkerForPid(pid))?.processCommandHash).toBe(hashProcessCommand(identity!.command));
+      // A start witness already admits exact adoption; only witness-less
+      // recovery heals the diagnostic command hash.
+      expect((await readSessionMarkerForPid(pid))?.processCommandHash).toBe(withCapturedGeneration ? undefined : hashProcessCommand(identity!.command));
       expect((await readSessionMarkerForPid(pid))?.processStartTimeMs).toBe(identity!.processStartTimeMs);
+      expect(sessions.get(pid)?.materializedStateObservationBinding).toEqual(withCapturedGeneration ? materializedStateObservationBinding : undefined);
+      expect((await readSessionMarkerForPid(pid))?.materializedStateObservationBinding).toEqual(withCapturedGeneration ? materializedStateObservationBinding : undefined);
     });
 
     it('rejects foreign scope in markerless and poisoned-marker recovery, including placeholder recovery', async () => {

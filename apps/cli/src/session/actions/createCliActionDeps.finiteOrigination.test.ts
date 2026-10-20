@@ -41,7 +41,7 @@ describe('original CLI Account finite Project admission', () => {
         requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope),
       } } };
       expect(url).toBe('https://home-a.test/v1/actions/machines.environment.apply');
-      expect(carrier.executionAuthorization.token).toBe('exact-home-root');
+      expect(carrier.executionAuthorization?.token).toBe('exact-home-root');
       delivered = true;
       return { status: 200, data: { v: 1, actionId: 'machines.environment.apply', requestId: envelope.requestId,
         execution: { ok: true, result: { operationId: 'actual-environment-operation' } } } };
@@ -173,7 +173,7 @@ describe('original CLI Account finite Project admission', () => {
     let credentialCurrent = true;
     let retireDuringInventory = false;
     const machine = { id: input.workspace.machineId, kind: 'persistent', active: false,
-      installationId: 'guest-installation', revokedAt: null, replacedByMachineId: null,
+      installationId: 'guest-installation', installationPublicKey: encodeBase64(nacl.sign.keyPair().publicKey), revokedAt: null, replacedByMachineId: null,
       dataEncryptionKey: null, runnerContentKeyBinding: null,
       access: { custodian: { accountId: 'terminal-owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } };
     vi.spyOn(axios, 'get').mockImplementation(async url => {
@@ -184,11 +184,13 @@ describe('original CLI Account finite Project admission', () => {
       return { status: 200, data: [machine] };
     });
     let delivered = 0;
+    let terminalApprovalWaived = false;
     const posts = vi.spyOn(axios, 'post').mockImplementation(async (url, body, config) => {
       expect(config?.headers).toMatchObject({ Authorization: `Bearer ${token}` });
       const carrier = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
       const envelope = ExternalActionRequestEnvelopeV1Schema.parse(carrier.envelope);
-      expect(envelope).toEqual({ v: 1, requestId: 'terminal-request', target: { kind: 'machine', machineId: input.workspace.machineId }, input });
+      expect(envelope).toEqual({ v: 1, requestId: terminalApprovalWaived ? 'terminal-request' : 'terminal-needs-approval',
+        target: { kind: 'machine', machineId: input.workspace.machineId }, input });
       if (url.endsWith('/execution-authorization')) return { status: 200, data: { v: 1, token: 'home-terminal-origin', binding: {
         accountId: 'terminal-owner', authentication: { kind: 'terminal', tokenEpoch: 4 }, accountEncryptionMode: 'plain',
         serverIdentityId: 'srv_finite_home', custodianAccountId: 'terminal-owner', machineId: machine.id, installationId: machine.installationId,
@@ -198,17 +200,20 @@ describe('original CLI Account finite Project admission', () => {
       expect(url).toBe('https://home-a.test/v1/actions/projects.prepare');
       expect(config?.timeout).toBeUndefined();
       expect(carrier.executionAuthorization).toMatchObject({ token: 'home-terminal-origin', binding: { authentication: { kind: 'terminal', tokenEpoch: 4 } } });
+      // Home admits the original finite Action. Its HTTP refusal must survive
+      // authorization preparation without a local daemon or a Project effect.
+      if (!terminalApprovalWaived) return { status: 200, data: { v: 1, actionId: 'projects.prepare',
+        requestId: envelope.requestId, execution: { ok: false, errorCode: 'approvals_not_supported', error: 'approvals_not_supported' } } };
       delivered += 1;
       return { status: 200, data: { v: 1, actionId: 'projects.prepare', requestId: 'terminal-request', execution: { ok: true, result } } };
     });
-    let terminalApprovalWaived = false;
     const owner = createCliActionExecutorFromCredentials({ credentials, readCredentials: async () => credentialCurrent ? credentials : null,
       externalActionClient: true, serverId: 'home-a', serverIdentityId: 'srv_finite_home', serverApiUrl: 'https://home-a.test',
       actionsSettingsProvider: { getActionsSettings: () => ActionsSettingsV1Schema.parse({ v: 1,
         ...(terminalApprovalWaived ? { approvalWaivedSurfaces: { 'projects.prepare': ['cli'] } } : {}) }) } });
     expect(await owner.execute('projects.prepare', input, { surface: 'cli', actionRequestId: 'terminal-needs-approval',
       presentUserConfirmation: { actionId: 'projects.prepare' } })).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
-    expect(posts).not.toHaveBeenCalled();
+    expect(delivered).toBe(0);
     terminalApprovalWaived = true;
     expect(await owner.execute('projects.prepare', input, { surface: 'cli', actionRequestId: 'terminal-request',
       presentUserConfirmation: { actionId: 'projects.prepare' } })).toEqual({ ok: true, result });
@@ -228,7 +233,8 @@ describe('original CLI Account finite Project admission', () => {
     const input = { workspace: { serverId: 'home-a', workspaceId: 'checkout', machineId: 'guest', rootPath: '/private-repo' }, phase: 'setup' };
     const binding = { serverIdentityId: 'srv_finite_home', accountId: 'encrypted-owner', authentication: { kind: 'account' as const, tokenEpoch: 3 },
       actionId: 'projects.prepare' as const, requestId: 'encrypted-request', target: { kind: 'machine' as const, machineId: 'guest' } };
-    const machine = { id: 'guest', kind: 'persistent', active: false, installationId: 'installation', revokedAt: null,
+    const machine = { id: 'guest', kind: 'persistent', active: false, installationId: 'installation',
+      installationPublicKey: encodeBase64(nacl.sign.keyPair().publicKey), revokedAt: null,
       replacedByMachineId: null, dataEncryptionKey: 'sealed-key', runnerContentKeyBinding: null,
       access: { custodian: { accountId: 'encrypted-owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'e2ee', accessState: 'ready' } };
     vi.spyOn(axios, 'get').mockImplementation(async url => {
@@ -284,7 +290,7 @@ describe('original CLI Account finite Project admission', () => {
       const rawGuest = vi.spyOn(machineTransport, 'callExactMachineRpc').mockRejectedValue(new Error('guest_offline'));
       const requests: unknown[] = [];
       const machine = { id: workspace.machineId, kind: 'persistent', active: false,
-        installationId: 'guest-installation', revokedAt: null, replacedByMachineId: null,
+        installationId: 'guest-installation', installationPublicKey: encodeBase64(nacl.sign.keyPair().publicKey), revokedAt: null, replacedByMachineId: null,
         dataEncryptionKey: null, runnerContentKeyBinding: null,
         access: { custodian: { accountId: 'finite-owner', displayName: 'Owner' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } };
       vi.spyOn(axios, 'get').mockImplementation(async (url, config) => {

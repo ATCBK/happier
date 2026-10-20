@@ -15,7 +15,7 @@ export type WorkspaceBarTranslation = Readonly<{
         closeTabsToLeft: string;
         closeTabsToRight: string;
         closeAllTabs: string;
-        moreTabs: (params: Readonly<{ count: number }>) => string;
+        allTabs: string;
         searchTabs: string;
         splitPane: string;
         openInNewTab: string;
@@ -42,7 +42,7 @@ export const en: WorkspaceBarTranslation = {
         closeTabsToLeft: 'Close tabs to the left',
         closeTabsToRight: 'Close tabs to the right',
         closeAllTabs: 'Close all tabs',
-        moreTabs: ({ count }) => (count === 1 ? '1 more tab' : `${count} more tabs`),
+        allTabs: 'All tabs',
         searchTabs: 'Search tabs',
         splitPane: 'Split the focused pane',
         openInNewTab: 'Open in new tab',

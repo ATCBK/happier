@@ -14,7 +14,7 @@ import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
@@ -193,8 +193,8 @@ async function startTestMcpHttpServer(onRequest?: (req: IncomingMessage, res: Se
       'echo',
       {
         description: 'Echo',
-        inputSchema: z.object({ text: z.string() }).passthrough(),
-        outputSchema: z.object({ echoed: z.string() }).passthrough(),
+        inputSchema: z.looseObject({ text: z.string() }),
+        outputSchema: z.looseObject({ echoed: z.string() }),
         annotations: { readOnlyHint: true },
         _meta: { 'acme.example/source': 'integration-test' },
       } as any,
@@ -251,7 +251,7 @@ async function startTestMcpSseServer(tls?: EphemeralTlsServerFixture, observe?: 
         'echo',
         {
           description: 'Echo',
-          inputSchema: z.object({ text: z.string() }).passthrough(),
+          inputSchema: z.looseObject({ text: z.string() }),
           outputSchema: z.object({ echoed: z.string() }),
           annotations: { readOnlyHint: true },
           _meta: { 'acme.example/source': 'sse-integration-test' },
@@ -301,13 +301,15 @@ async function startTestMcpSseServer(tls?: EphemeralTlsServerFixture, observe?: 
 }
 
 describe('remoteMcpStdioBridge', () => {
-  it('probes both upstream tool pages and the upstream initialize metadata through remote to stdio', async () => {
+  it('initializes before discovering tools and preserves upstream tool pages and metadata through stdio', async () => {
     const cursors: Array<string | undefined> = [];
+    let initialized = false;
     const upstream = createServer(async (request, response) => {
       const server = new Server({ name: 'upstream-pagination-fixture', version: '7.2.1' }, {
         capabilities: { tools: {} }, instructions: 'Use the upstream instructions.',
       });
       server.setRequestHandler(ListToolsRequestSchema, async message => {
+        if (!initialized) throw new Error('Tool discovery must follow the downstream initialize response');
         cursors.push(message.params?.cursor);
         return message.params?.cursor === undefined
           ? { tools: [{ name: 'first', inputSchema: { type: 'object' as const } }], nextCursor: 'page-two' }
@@ -320,19 +322,25 @@ describe('remoteMcpStdioBridge', () => {
     });
     await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
     const root = await mkdtemp(join(tmpdir(), 'happier-mcp-bridge-pages-'));
+    const client = new Client({ name: 'paginated-bridge-consumer', version: '1' });
     try {
       const address = upstream.address();
       if (!address || typeof address === 'string') throw new Error('Upstream address unavailable');
       const configPath = join(root, 'bridge.json');
       await writeFile(configPath, JSON.stringify({ transport: 'http', url: `http://127.0.0.1:${address.port}/mcp` }), { mode: 0o600 });
       const invocation = await resolveRemoteBridgeInvocation();
-      const result = await probeMcpStdioServerTools({ config: { ...invocation,
-        env: { ...invocation.env, HAPPIER_MCP_REMOTE_BRIDGE_CONFIG_FILE: configPath } } });
-      expect.soft(result.tools.map(tool => tool.name)).toEqual(['first', 'second']);
+      await client.connect(new StdioClientTransport({ ...invocation,
+        env: { ...resolveEnvRecord(), ...invocation.env, HAPPIER_MCP_REMOTE_BRIDGE_CONFIG_FILE: configPath } }));
+      initialized = true;
+      expect(cursors).toEqual([]);
+      const first = await client.listTools();
+      const second = await client.listTools({ cursor: first.nextCursor });
+      expect.soft([...first.tools, ...second.tools].map(tool => tool.name)).toEqual(['first', 'second']);
       expect.soft(cursors).toEqual([undefined, 'page-two']);
-      expect.soft(result).toMatchObject({ serverInfo: { name: 'upstream-pagination-fixture', version: '7.2.1' },
-        instructions: 'Use the upstream instructions.', protocolVersion: expect.any(String) });
+      expect.soft(client.getServerVersion()).toEqual({ name: 'upstream-pagination-fixture', version: '7.2.1' });
+      expect.soft(client.getInstructions()).toBe('Use the upstream instructions.');
     } finally {
+      await client.close().catch(() => undefined);
       upstream.closeAllConnections();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       await rm(root, { recursive: true, force: true });
@@ -548,6 +556,7 @@ describe('remoteMcpStdioBridge', () => {
     const client = new Client({ name: 'oauth-bridge-test', version: '1' });
     try {
       await client.connect(new StdioClientTransport({ ...invocation, env: { ...resolveEnvRecord(), ...invocation.env, NODE_EXTRA_CA_CERTS: tls.caCertificatePath, HAPPIER_MCP_REMOTE_BRIDGE_CONFIG_FILE: configPath } }));
+      await client.listTools();
       received.splice(0);
       auth.rotate();
       const first = await client.callTool({ name: 'echo', arguments: { text: 'fresh' } });
@@ -656,6 +665,7 @@ describe('remoteMcpStdioBridge', () => {
     const client = new Client({ name: 'scope-bridge-test', version: '1' });
     try {
       await client.connect(new StdioClientTransport({ ...invocation, env: { ...resolveEnvRecord(), ...invocation.env, NODE_EXTRA_CA_CERTS: tls.caCertificatePath, HAPPIER_MCP_REMOTE_BRIDGE_CONFIG_FILE: configPath } }));
+      await client.listTools();
       challenge = true;
       const result = await client.callTool({ name: 'echo', arguments: { text: 'write' } });
       expect(result.isError).toBe(true);

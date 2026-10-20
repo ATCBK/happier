@@ -7,9 +7,10 @@ import type {
 import type { WorkflowProjectTargetV1 } from '@happier-dev/protocol/workflows';
 
 import { readWorkflowEditorDraftSeed, storeWorkflowEditorDraftSeed } from './workflowEditorDraftSeed';
+import type { ServerAccountScope, ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 import { workflowDefinitionPromptTitle } from './workflowBlockLabel';
-import { setWorkflowStepExecutionTarget } from '@happier-dev/protocol/workflows/workflowDefinitionEditV1';
+import { prepareWorkflowRunStartV1 } from '@happier-dev/protocol/workflows';
 
 /**
  * An unsaved authored copy reviewed from a Run, for saving or fresh recovery.
@@ -61,20 +62,15 @@ export function buildWorkflowReviewedRunSeed(params: Readonly<{
     acceptedContext: WorkflowRunAcceptedContextV1;
     reasonCode?: string;
 }>): WorkflowReviewedRunSeed {
-    let repeatDraft = { ...params.definition, name: '' };
-    for (const leaf of params.acceptedContext.materializedLeaves) {
-        if (leaf.sourceKey === '$root' && leaf.kind === 'step') {
-            repeatDraft = setWorkflowStepExecutionTarget(repeatDraft, leaf.blockId, leaf.executionTarget.kind);
-        }
-    }
+    const prepared = prepareWorkflowRunStartV1(params);
     return {
         name: params.acceptedContext.metadata?.title ?? workflowDefinitionPromptTitle(params.definition) ?? '',
         ...(params.acceptedContext.metadata?.description === undefined
             ? {} : { description: params.acceptedContext.metadata.description }),
         project: params.acceptedContext.workspaceTarget.project,
-        definition: { ...params.definition, blocks: repeatDraft.blocks },
+        definition: prepared.definition,
         executionTarget: params.acceptedContext.executionTarget,
-        inputs: params.acceptedContext.inputs,
+        inputs: prepared.inputs!,
         sourceRunId: params.run.id,
         ...(params.reasonCode === undefined ? {} : {
             supersededRunId: params.run.id,
@@ -86,14 +82,14 @@ export function buildWorkflowReviewedRunSeed(params: Readonly<{
 const WORKFLOW_REVIEWED_RUN_SEED_KIND = 'happier.workflow-reviewed-run-seed.v1' as const;
 
 /** Returns the opaque route parameter for a reviewed new Run. */
-export function storeWorkflowReviewedRunSeed(seed: WorkflowReviewedRunSeed): string {
-    return storeWorkflowEditorDraftSeed(WORKFLOW_REVIEWED_RUN_SEED_KIND, seed);
+export function storeWorkflowReviewedRunSeed(seed: WorkflowReviewedRunSeed, accountLifetime?: ServerAccountScopeLifetime | null): string {
+    return storeWorkflowEditorDraftSeed(WORKFLOW_REVIEWED_RUN_SEED_KIND, seed, accountLifetime);
 }
 
 /**
  * Reads without consuming during render. The editor consumes after commit,
  * keeping initial render retries safe without permitting history reuse.
  */
-export function readWorkflowReviewedRunSeed(dataId: string): WorkflowReviewedRunSeed | null {
-    return readWorkflowEditorDraftSeed(WORKFLOW_REVIEWED_RUN_SEED_KIND, dataId);
+export function readWorkflowReviewedRunSeed(dataId: string, scope?: ServerAccountScope | null): WorkflowReviewedRunSeed | null {
+    return readWorkflowEditorDraftSeed(WORKFLOW_REVIEWED_RUN_SEED_KIND, dataId, scope);
 }

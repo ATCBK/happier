@@ -62,6 +62,24 @@ const retainedCorrespondence = {
 } as const;
 
 describe('SessionCreationCorrespondenceV1', () => {
+  it('retains Discussion slot ownership and the entire ordinary recipe in retry meaning', () => {
+    const discussionParticipant = { discussionId: 'discussion-1', participantSlotId: 'slot-1' };
+    const selected = { ...correspondence, recipe: { ...correspondence.recipe, discussionParticipant } };
+    expect(SessionCreationCorrespondenceV1Schema.parse(selected)).toEqual(selected);
+    expect(sessionCreationCorrespondenceMatchesV1(selected, correspondence)).toBe(false);
+    for (const recipe of [
+      { ...selected.recipe, discussionParticipant: { ...discussionParticipant, participantSlotId: 'slot-2' } },
+      { ...selected.recipe, execution: { ...selected.recipe.execution, machineId: 'different-machine' } },
+      { ...selected.recipe, requestedPermissionMode: 'read-only' },
+    ]) expect(sessionCreationCorrespondenceMatchesV1(selected, { ...selected, recipe })).toBe(false);
+    const seeded = { ...selected, recipe: { ...selected.recipe, capabilitySelection: { skills: {
+      v: 1, forceIncludeSkillIds: ['profile-skill'], forceExcludeSkillIds: [], excludeNativeSkillNames: [],
+    } } } };
+    expect(SessionCreationCorrespondenceV1Schema.parse(seeded)).toEqual(seeded);
+    expect(sessionCreationCorrespondenceMatchesV1(seeded, { ...seeded, recipe: { ...seeded.recipe,
+      capabilitySelection: { skills: { ...seeded.recipe.capabilitySelection.skills, forceIncludeSkillIds: ['changed-profile-skill'] } },
+    } })).toBe(false);
+  });
   it.each(['string', 'intent'] as const)('opens retained %s-directory creation provenance through the owner envelope without weakening current writes', directoryKind => {
     const retained = { ...retainedCorrespondence, recipe: { ...retainedCorrespondence.recipe,
       execution: { ...retainedCorrespondence.recipe.execution,
@@ -193,7 +211,7 @@ describe('SessionCreationCorrespondenceV1', () => {
     })).toBe(false);
   });
 
-  it('ignores only model ordering time while retaining semantic model, provider and configuration differences', () => {
+  it('ignores selection ordering times while retaining semantic model, provider and configuration differences', () => {
     const selected = {
       ...correspondence,
       recipe: {
@@ -233,6 +251,15 @@ describe('SessionCreationCorrespondenceV1', () => {
     };
     const configured = { ...selected, recipe: { ...selected.recipe, configuration } };
     expect(SessionCreationCorrespondenceV1Schema.safeParse(configured).success).toBe(true);
+    expect(sessionCreationCorrespondenceMatchesV1(configured, {
+      ...retried,
+      recipe: { ...retried.recipe, configuration: {
+        mode: { value: null, updatedAtMs: 2 },
+        model: { value: null, updatedAtMs: 2 },
+        permissionIntent: { value: null, updatedAtMs: 2 },
+        options: { reasoning: { value: 'medium', updatedAtMs: 2 } },
+      } },
+    })).toBe(true);
     expect(sessionCreationCorrespondenceMatchesV1(configured, {
       ...retried,
       recipe: {

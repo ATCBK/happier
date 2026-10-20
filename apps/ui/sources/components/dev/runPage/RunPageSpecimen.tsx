@@ -7,7 +7,10 @@ import { ExecutionRunContextChip } from '@/components/sessions/runs/ExecutionRun
 import { ExecutionRunStepsRow } from '@/components/sessions/runs/details/ExecutionRunStepsRow';
 import { ExecutionRunStopFailedState } from '@/components/sessions/runs/details/ExecutionRunStopFailedState';
 import { SessionExecutionRunInfoCard } from '@/components/sessions/runs/details/SessionExecutionRunInfoCard';
+import { ExecutionRunChildChoiceCard } from '@/components/sessions/runs/launcher/ExecutionRunChildChoiceCard';
 import { ExecutionRunLauncherOptions } from '@/components/sessions/runs/launcher/ExecutionRunLauncherOptions';
+import { GitCleanState } from '@/components/sessions/panes/git/GitCleanState';
+import { projectExecutionRunChildChoiceV1 } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SurfaceStateSizeProvider } from '@/components/ui/surfaces/surfaceStateSize';
 import { Text } from '@/components/ui/text/Text';
@@ -35,6 +38,8 @@ const styles = StyleSheet.create((theme) => ({
         borderColor: theme.colors.border.default,
     },
     columnPhone: { borderRadius: 0, borderWidth: 0, height: 844 },
+    // The launcher's question inset (SessionInteractiveExecutionRunDraftView `question`).
+    question: { paddingHorizontal: theme.space.s8 },
     caption: {  ...Typography.variant('body', 'semiBold'), color: theme.colors.text.secondary },
     states: { flexDirection: 'row', flexWrap: 'wrap', gap: theme.space.s24 },
     stateFrame: {
@@ -81,7 +86,7 @@ const conversationRun = {
     ioMode: 'streaming',
     status: 'running',
     startedAtMs: NOW - 360_000,
-    launchOrigin: { kind: 'session_discussion', sessionId: 'dev-specimen', discussionId: 'd1', messageIds: ['m1'] },
+    launchOrigin: { kind: 'discussion', serverId: 'server-a', discussionId: 'd1', messageIds: ['m1'] },
 } as const;
 
 const reviewPayload = {
@@ -189,6 +194,33 @@ export function RunPageSpecimen(props: Readonly<{ frame: string | null }>) {
                         </View>
                     </View>
                 </SurfaceStateSizeProvider>
+            ) : null}
+            {frame === 'IN' ? (
+                <RunColumn phone={phone}>
+                    <View style={styles.question}>
+                        <ExecutionRunChildChoiceCard
+                            choice={projectExecutionRunChildChoiceV1({ agentTargetKey: 'agent:codex' })}
+                            agentTitle="Codex"
+                            parentDetail="Claude subscription · Haiku 5.5"
+                            starting={false}
+                            onUseDefault={noop}
+                            onChooseModel={noop}
+                            onCancel={noop}
+                        />
+                    </View>
+                    <GitCleanState
+                        branch="relay-retry"
+                        upstream="origin/relay-retry"
+                        ahead={0}
+                        behind={0}
+                        lastCommitAt={NOW - 3_600_000}
+                        lastPushedAt={NOW - 1_800_000}
+                        phone={phone}
+                        onCreatePullRequest={noop}
+                        onOpenPullRequest={null}
+                        pullRequestNumber={null}
+                    />
+                </RunColumn>
             ) : null}
             {frame === 'LN' ? (
                 <RunColumn phone={phone}>

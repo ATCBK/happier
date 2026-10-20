@@ -26,13 +26,19 @@ export async function readWorkflowRunOriginWakeCandidatesInTx(tx: Tx, input:
 /** Public human-attention facts; physical Stop custody has its own recovery index. */
 const attention = {
     cancelled: "cancelled",
+    failed: "failed",
     invocations: WORKFLOW_ATTENTION_INVOCATION_LIFECYCLES_V1,
 } as const;
 
 export function workflowRunAttentionWhere(): Prisma.AutomationRunWhereInput {
     return {
         state: { not: attention.cancelled },
-        workflowInvocations: { some: { lifecycle: { in: [...attention.invocations] } } },
+        // A failed Run can have no Session or actionable invocation to surface it.
+        // Accepted Automation Runs use this owner too, never ordinary attention.
+        OR: [
+            { state: attention.failed },
+            { workflowInvocations: { some: { lifecycle: { in: [...attention.invocations] } } } },
+        ],
     };
 }
 
@@ -47,5 +53,6 @@ export function workflowRunAttentionSql(): Prisma.Sql {
     const id = workflowRunSqlIdentifier;
     const textType = prismaRuntime.raw(getDbProviderFromEnv(process.env, "postgres") === "mysql" ? "CHAR" : "TEXT");
     return prismaRuntime.sql`(CAST(r.${id("state")} AS ${textType}) <> ${attention.cancelled}
-        AND EXISTS (SELECT 1 FROM ${id("WorkflowRunInvocation")} i WHERE i.${id("runId")} = r.${id("id")} AND CAST(i.${id("lifecycle")} AS ${textType}) IN (${prismaRuntime.join([...attention.invocations])})))`;
+        AND (CAST(r.${id("state")} AS ${textType}) = ${attention.failed}
+            OR EXISTS (SELECT 1 FROM ${id("WorkflowRunInvocation")} i WHERE i.${id("runId")} = r.${id("id")} AND CAST(i.${id("lifecycle")} AS ${textType}) IN (${prismaRuntime.join([...attention.invocations])}))))`;
 }

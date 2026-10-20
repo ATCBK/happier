@@ -40,7 +40,7 @@ export class ClaudeCandidateSourceChangedError extends Error {
 export type ClaudeJsonlSessionScanPosition = Readonly<{
     projectId: string;
     sessionEntryOffset: number;
-    /** Captured recency boundary; later file writes must not move the cursor. */
+    /** Last fully visited recent-first file, independent of directory offsets. */
     recent?: Readonly<{ updatedAtMs: number; remoteSessionId: string }>;
 }>;
 
@@ -133,6 +133,8 @@ export async function pageClaudeJsonlSessionFiles(params: Readonly<{
     limit: number;
     order?: 'recent';
     signal?: AbortSignal;
+    recentWindow?: Readonly<{ startedAtMs: number; changedBeforeMs?: number }>;
+    unfinished?: ClaudeJsonlSessionScanPosition;
 }>): Promise<Readonly<{
     entries: readonly ClaudeJsonlSessionTraversalEntry[];
     hasMore: boolean;
@@ -140,6 +142,8 @@ export async function pageClaudeJsonlSessionFiles(params: Readonly<{
     sourceGeneration: string;
     nextScanPoint: ClaudeJsonlSessionScanPoint | null;
     scanned: number;
+    /** Physically admitted root for one page-wide native JSONL prefilter. */
+    contentSearchRoot?: Readonly<{ path: string; maxDepth: 1 | 2 }>;
 }>> {
     throwIfAborted(params.signal);
     const configDir = resolveClaudeConfigDir({ source: params.source, env: params.env });
@@ -190,7 +194,7 @@ export async function pageClaudeJsonlSessionFiles(params: Readonly<{
         capturedGenerations.set(key, generation);
         return generation;
     };
-    const sourceGeneration = await captureSourceGeneration(params.scanPosition?.projectId ?? null);
+    const sourceGeneration = params.order === 'recent' ? '' : await captureSourceGeneration(params.scanPosition?.projectId ?? null);
     const selected: ClaudeJsonlSessionTraversalEntry[] = [];
     let skipped = 0;
     let hasMore = false;
@@ -201,8 +205,11 @@ export async function pageClaudeJsonlSessionFiles(params: Readonly<{
             continue;
         }
         const projectPath = join(projectsDir, projectId);
-        const projectSourceGeneration = await captureSourceGeneration(projectId);
-        const directory = await opendir(projectPath).catch(() => null);
+        const projectSourceGeneration = params.order === 'recent' ? '' : await captureSourceGeneration(projectId);
+        // Content pages relist native names; only metadata cursors use raw directory offsets.
+        const directory = params.order === 'recent'
+            ? await readdir(projectPath, { withFileTypes: true }).catch(() => null)
+            : await opendir(projectPath).catch(() => null);
         if (!directory) continue;
         let sessionEntryOffset = 0;
         for await (const entry of directory) {
@@ -260,18 +267,19 @@ export async function pageClaudeJsonlSessionFiles(params: Readonly<{
         try {
             const file = await stat(entry.filePath);
             if (!file.isFile()) continue;
+            const updatedAtMs = Math.trunc(file.mtimeMs);
             entries.push({
                 ...entry,
-                updatedAtMs: Math.trunc(file.mtimeMs),
+                updatedAtMs,
                 ...(params.order === 'recent' ? { scanPosition: { ...entry.scanPosition,
-                    recent: { updatedAtMs: Math.trunc(file.mtimeMs), remoteSessionId: entry.remoteSessionId } } } : {}),
+                    recent: { updatedAtMs, remoteSessionId: entry.remoteSessionId } } } : {}),
             });
         } catch {
             throwIfAborted(params.signal);
         }
     }
     throwIfAborted(params.signal);
-    for (const [resumeKey, captured] of capturedGenerations) {
+    for (const [resumeKey, captured] of params.order === 'recent' ? [] : capturedGenerations) {
         const current = await resolveResumeProjectGeneration(
             projectsDir,
             resumeKey === '' ? null : resumeKey,
@@ -279,41 +287,43 @@ export async function pageClaudeJsonlSessionFiles(params: Readonly<{
         );
         if (current !== captured) {
             throw new ClaudeCandidateSourceChangedError(
-                'Claude candidate source changed during the bounded scan chunk.',
+                'external_sessions_frontier_anchor',
             );
         }
     }
     if (params.order === 'recent') {
         const position = params.scanPosition;
-        const anchor = position?.recent
-            ? entries.find(entry => entry.projectId === position.projectId
-                && entry.remoteSessionId === position.recent?.remoteSessionId)
-            : undefined;
-        if (position?.sessionEntryOffset && (!anchor || !position.recent)) {
-            throw new ClaudeCandidateSourceChangedError('Claude content-search resume point changed.');
+        const boundary = position?.recent ? {
+            projectId: position.projectId, remoteSessionId: position.recent.remoteSessionId,
+            updatedAtMs: position.recent.updatedAtMs,
+        } : null;
+        const window = params.recentWindow;
+        const pending = params.unfinished;
+        const unfinished = pending?.recent ? entries.find(entry => entry.projectId === pending.projectId
+            && entry.remoteSessionId === pending.recent?.remoteSessionId) : undefined;
+        if (pending && !unfinished) {
+            throw new ClaudeCandidateSourceChangedError('external_sessions_unfinished_file_missing');
         }
-        const boundary = anchor && position?.recent ? { ...anchor, updatedAtMs: position.recent.updatedAtMs } : null;
-        const remaining = entries.sort(compareClaudeJsonlSessionPrecedence).filter(entry => !boundary
-            || compareClaudeJsonlSessionPrecedence(entry, boundary) > 0);
-        // Fingerprint the unvisited ordering evidence, not only the anchor.
-        // A previously unvisited file crossing above the frozen boundary then
-        // changes this evidence and invokes the existing cursor-reset contract.
-        // Writes to consumed files and newer unrelated insertions do not move it.
-        let remainingGeneration = createHash('sha256').update('claude-recent-remaining').digest('base64url');
-        for (let index = remaining.length - 1; index >= 0; index -= 1) {
-            const entry = remaining[index]!;
-            remaining[index] = { ...entry, sourceGeneration: remainingGeneration };
-            remainingGeneration = createHash('sha256').update(JSON.stringify([
-                entry.projectId, entry.remoteSessionId, entry.updatedAtMs, entry.sourceGeneration, remainingGeneration,
-            ])).digest('base64url');
-        }
+        const remaining = entries.sort(compareClaudeJsonlSessionPrecedence).filter(entry => {
+            if (unfinished === entry) return false;
+            if (window && (window.changedBeforeMs === undefined
+                ? entry.updatedAtMs > window.startedAtMs
+                : entry.updatedAtMs <= window.startedAtMs || entry.updatedAtMs > window.changedBeforeMs)) return false;
+            return !boundary || compareClaudeJsonlSessionPrecedence(entry, boundary) > 0;
+        });
+        // The decoder revalidates the unfinished file's full identity. Keep its
+        // captured position until that one file is fully visited, even after a write.
+        if (unfinished && pending) remaining.unshift({ ...unfinished, scanPosition: pending });
         const skippedRemaining = remaining.slice(skip);
         const page = skippedRemaining.slice(0, limit);
         const last = page.at(-1);
         return {
             entries: page,
+            contentSearchRoot: preferredProjectId
+                ? { path: join(projectsDir, preferredProjectId), maxDepth: 1 }
+                : { path: projectsDir, maxDepth: 2 },
             hasMore: skippedRemaining.length > page.length,
-            sourceGeneration: remainingGeneration,
+            sourceGeneration: '',
             nextScanPoint: skippedRemaining.length > page.length && last
                 ? { scanPosition: last.scanPosition, sourceGeneration: last.sourceGeneration } : null,
             scanned: page.length,
@@ -340,8 +350,8 @@ function resolvePreferredProjectId(source: ClaudeExternalSessionSource): string 
  * opaque linkData tie-break; this leaf supplies only Claude's project identity.
  */
 function compareClaudeJsonlSessionPrecedence(
-    left: DiscoveredClaudeJsonlSession,
-    right: DiscoveredClaudeJsonlSession,
+    left: Pick<DiscoveredClaudeJsonlSession, 'projectId' | 'remoteSessionId' | 'updatedAtMs'>,
+    right: Pick<DiscoveredClaudeJsonlSession, 'projectId' | 'remoteSessionId' | 'updatedAtMs'>,
 ): number {
     return compareExternalSessionCandidatePrecedence(
         {

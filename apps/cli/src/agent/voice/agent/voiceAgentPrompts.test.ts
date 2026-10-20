@@ -11,7 +11,7 @@ describe('voiceAgentPrompts', () => {
   });
   it('uses the admitted welcome policy literal without a conflicting default greeting', () => {
     const prompt = buildVoiceAgentBootstrapPrompt({ verbosity: 'short', initialContext: '', mode: 'welcome',
-      voicePolicy: { welcome: { enabled: true, mode: 'immediate', text: '  ADMITTED_DOC\n' } },
+      voicePolicy: { assistantLanguage: null, welcome: { enabled: true, mode: 'immediate', text: '  ADMITTED_DOC\n' } },
     });
     expect(prompt).toContain('exactly this message:\n  ADMITTED_DOC\n\n\nThen, wait');
     expect(prompt).not.toContain('Start this session with a short friendly greeting');

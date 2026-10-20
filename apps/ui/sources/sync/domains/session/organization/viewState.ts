@@ -24,8 +24,10 @@ import { sessionAddressKey } from '../sessionAddress';
 import type {
     SessionOrganizationDisplayState,
     SessionOrganizationProjection,
+    UiSessionOrganizationLabel,
 } from './types';
 import { sessionFolderAddressKey } from '../folders/assignmentKeys';
+import { normalizeSessionFolderWorkspaceRef } from '../folders/workspaceRefs';
 import { buildSessionOrganizationTagLabelById } from './tagLabels';
 
 type HumanDisplayState =
@@ -106,7 +108,10 @@ function readFolderName(
     display: unknown,
 ): string | null {
     const record = readDisplayRecord(displayState, display);
-    const name = typeof record?.name === 'string' ? record.name.trim() : '';
+    // The canonical value is `{ name, workspace }`; a bare name is an Action caller's shorthand for the same folder.
+    const bare = displayState.status === 'available' && typeof displayState.value === 'string' ? displayState.value
+        : isRecord(display) && display.t === 'plain' && typeof display.v === 'string' ? display.v : null;
+    const name = typeof record?.name === 'string' ? record.name.trim() : (bare ?? '').trim();
     return name || null;
 }
 
@@ -119,19 +124,18 @@ function readLabel(
     return label || null;
 }
 
+/** The list and Project migration read the same opened, non-archived workspace label. */
+export function readSessionOrganizationWorkspaceLabel(label: UiSessionOrganizationLabel | undefined): string | undefined {
+    if (!label || label.labelKind !== 'workspace' || label.archivedAt != null) return undefined;
+    return readLabel(label.displayState, label.display) ?? undefined;
+}
+
 function readWorkspaceRef(
     displayState: SessionOrganizationDisplayState,
     display: unknown,
 ): SessionFolderWorkspaceRefV1 | null {
     const record = readDisplayRecord(displayState, display);
-    const workspace = record?.workspace;
-    if (!isRecord(workspace)) return null;
-    if (workspace.t !== 'workspaceScope') return null;
-    const serverId = typeof workspace.serverId === 'string' ? workspace.serverId.trim() : '';
-    const machineId = typeof workspace.machineId === 'string' ? workspace.machineId.trim() : '';
-    const rootPath = typeof workspace.rootPath === 'string' ? workspace.rootPath.trim() : '';
-    if (!serverId || !machineId || !rootPath) return null;
-    return { t: 'workspaceScope', serverId, machineId, rootPath };
+    return normalizeSessionFolderWorkspaceRef(record?.workspace);
 }
 
 function compareBySortKey(a: { sortKey?: string | null }, b: { sortKey?: string | null }): number {
@@ -602,7 +606,7 @@ export function buildSessionOrganizationListViewState(params: Readonly<{
     }
     for (const [labelKey, label] of Object.entries(projection.labelsByLabelKey)) {
         if (label.labelKind !== 'workspace' || label.archivedAt != null) continue;
-        const displayLabel = readLabel(label.displayState, label.display);
+        const displayLabel = readSessionOrganizationWorkspaceLabel(label);
         labelDisplayStatesByKey[labelKey] = displayLabel
             ? { status: 'available', value: displayLabel }
             : label.displayState.status === 'locked'

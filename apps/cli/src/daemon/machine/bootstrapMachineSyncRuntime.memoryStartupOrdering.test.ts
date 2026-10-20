@@ -25,6 +25,7 @@ describe('bootstrapMachineSyncRuntime memory startup ordering', () => {
     const memoryWorker: MemoryWorkerHandle = {
       stop: vi.fn(),
       reloadSettings: vi.fn(async () => {}),
+      clearIndex: vi.fn(async () => {}),
       ensureUpToDate: vi.fn(async () => {}),
       removeSessions,
       reconcileRetainedSessionAccess: vi.fn(async () => {}),
@@ -85,6 +86,7 @@ describe('bootstrapMachineSyncRuntime memory startup ordering', () => {
       pause: vi.fn(),
       resume: vi.fn(),
       handleServerUpdate: vi.fn(),
+      liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
     };
     const startMemoryWorkerForMachine = vi.fn(async () => await memoryStartup.promise);
     const machine: Machine = {
@@ -112,6 +114,7 @@ describe('bootstrapMachineSyncRuntime memory startup ordering', () => {
       startAutomationWorkerForMachine: vi.fn(() => automationWorker),
       startMemoryWorkerForMachine,
       startVoiceInferenceWorkerForMachine: vi.fn(async (): Promise<VoiceInferenceWorkerHandle | null> => null),
+      spawnSessionForInternalResume: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'session-1' })),
       spawnSession: vi.fn(async (): Promise<SpawnSessionResult> => ({ type: 'success', sessionId: 'session-1' })),
       stopSession: vi.fn(async () => ({ status: 'stopped' as const })),
       isSessionAlreadyRunning: vi.fn(async () => false),

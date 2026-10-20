@@ -32,7 +32,7 @@ function createExecutionRunConversationHarness(): Readonly<{
 }
 
 describe('Codex App Server detached execution conversation', () => {
-  it('projects provider conversation events without Session identity or Session-ended state', () => {
+  it('publishes idle provider termination as runtime-ended without a Session identity', () => {
     const appServer = createExecutionRunConversationHarness();
     const runtime = createCodexNativeAppServerExecutionRunConversationRuntime(
       appServer.runtime,
@@ -54,7 +54,12 @@ describe('Codex App Server detached execution conversation', () => {
       emittedAtMs: 2,
     });
 
-    expect(events).toEqual([{ kind: 'turn-complete', turnId: 'turn-1', emittedAtMs: 1 }]);
+    expect(events).toEqual([
+      { kind: 'turn-complete', turnId: 'turn-1', emittedAtMs: 1 },
+      { kind: 'runtime-ended', cause: 'providerEnded', retryable: false,
+        diagnostic: { code: 'codex_runtime_ended', severity: 'error', message: 'provider conversation closed' },
+        emittedAtMs: 2 },
+    ]);
     expect(events.every((event) => !('sessionId' in event) && !('sequence' in event))).toBe(true);
   });
 });

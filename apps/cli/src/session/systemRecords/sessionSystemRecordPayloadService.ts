@@ -8,9 +8,7 @@ import {
   openSessionStoredContent,
   sealSessionStoredContent,
   SessionStoredContentError,
-  type SessionEncryptionContext,
   type SessionStoredContentCryptoContext,
-  type SessionStoredContentEncryptionMode,
 } from '@/session/transport/encryption/sessionStoredContentCodec';
 
 /**
@@ -35,10 +33,7 @@ type SessionSystemRecordsService = Readonly<{
   }> | null>;
 }>;
 
-type StoredContentContext = Readonly<{
-  mode: SessionStoredContentEncryptionMode;
-  ctx?: SessionEncryptionContext;
-}>;
+type StoredContentContext = ReturnType<NonNullable<SessionClientPort['getStoredContentEncryptionContext']>>;
 
 type SessionSystemRecordPayloadPort = Pick<SessionClientPort,
   'sessionId' | 'getStoredContentEncryptionContext' | 'upsertSessionSystemRecord' | 'fetchSessionSystemRecord'>;

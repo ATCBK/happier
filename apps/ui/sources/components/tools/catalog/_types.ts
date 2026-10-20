@@ -1,7 +1,7 @@
 import type { Metadata } from '@happier-dev/session-core/state';
 import type { ToolCall, Message } from "@happier-dev/session-core/messages";
 import type { ReactNode } from 'react';
-import type * as z from 'zod';
+import type * as z from 'zod/mini';
 
 export type KnownToolDefinition = {
     title?: string | ((opts: { metadata: Metadata | null, tool: ToolCall }) => string);
@@ -9,8 +9,8 @@ export type KnownToolDefinition = {
     noStatus?: boolean;
     hideDefaultError?: boolean;
     isMutable?: boolean;
-    input?: z.ZodObject<any>;
-    result?: z.ZodObject<any>;
+    input?: z.core.$ZodObject;
+    result?: z.core.$ZodObject;
     minimal?: boolean | ((opts: { metadata: Metadata | null, tool: ToolCall, messages?: Message[] }) => boolean);
     extractDescription?: (opts: { metadata: Metadata | null, tool: ToolCall }) => string;
     extractSubtitle?: (opts: { metadata: Metadata | null, tool: ToolCall }) => string | null;

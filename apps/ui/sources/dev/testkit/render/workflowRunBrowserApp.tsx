@@ -1,4 +1,5 @@
 declare const require: (id: string) => unknown;
+import { workflowRunStoreKey } from '@/sync/store/domains/workflowRuns';
 
 // Match the real app entry: force canonical theme bootstrap before lazy consumers.
 require('@/unistyles');
@@ -61,8 +62,10 @@ const search = { open: () => {}, buildCommands: () => [] };
 /** External opaque storage fixture. Production Action, codec, store, routing and modal owners stay real. */
 export async function mount(phone: boolean, theme: 'light' | 'dark', initialState: WorkflowRunStateV1 = 'waiting_for_review', defaultWaitName = false, requiredAnswer = false, seams = false, columnProject = false,
     /** `release`: the design lab's multi-lane Run (DESIGN-13) through the same real owners. */
-    scene: 'hold' | 'release' | 'release-failed' | 'release-review' = 'hold') {
-    const design = scene === 'hold' ? null : createWorkflowRunReleaseScene({ runId, rootId, holdId, failed: scene === 'release-failed', review: scene === 'release-review' });
+    scene: 'hold' | 'release' | 'release-failed' | 'release-review' | 'release-usage-limit' = 'hold') {
+    const failedScene = scene === 'release-failed' || scene === 'release-usage-limit';
+    const design = scene === 'hold' ? null : createWorkflowRunReleaseScene({ runId, rootId, holdId, failed: failedScene,
+        ...(scene === 'release-usage-limit' ? { usageLimitResetAtMs: Date.parse('2026-10-20T12:00:00.000Z') } : {}), review: scene === 'release-review' });
     UnistylesRuntime.setAdaptiveThemes(false);
     UnistylesRuntime.setTheme(theme);
     // Plain text permits empty strings. Invalid-after-edit needs an authored required-field contract.
@@ -75,7 +78,7 @@ export async function mount(phone: boolean, theme: 'light' | 'dark', initialStat
         result: resultContract,
     }] });
     let run = createWorkflowRunSummaryFixture({ id: runId, ownerAccountId: accountId, machineId: 'machine-a',
-        state: initialState, origin: { kind: 'direct' }, revision: 7, attentionRequired: initialState === 'waiting_for_review' || (design !== null && scene !== 'release-failed') });
+        state: initialState, origin: { kind: 'direct' }, revision: 7, attentionRequired: initialState === 'waiting_for_review' || (design !== null && !failedScene) });
     // Exact server projection: succeeded + pending custody + existing invocation
     // (workflowRunService.ts#deriveWorkflowRunAvailability), not UI-derived policy.
     const completedAvailability = {
@@ -88,7 +91,7 @@ export async function mount(phone: boolean, theme: 'light' | 'dark', initialStat
         ],
     } satisfies WorkflowRunSummaryV1['availability'];
     // A settled design Run has nothing left to stop: its custody is settled, not pending.
-    if (scene === 'release-failed') run = { ...run, availability: completedAvailability, workflowCustodyState: 'settled' };
+    if (failedScene) run = { ...run, state: 'failed', availability: completedAvailability, workflowCustodyState: 'settled' };
     const acceptedSnapshot = WorkflowAcceptedSnapshotV1Schema.parse({ definition, authoredDefinition: definition,
         workDepth: 0, startedBy: 'user', metadata: { title: design?.title ?? 'Release review' }, frozenChildren: {},
         materializedLeaves: design?.materializedLeaves ?? [{ sourceKey: '$root', blockId: 'check', kind: 'wait', selection: {}, authoredWorkspace: { kind: 'inherit' }, executionTarget: { kind: 'session' } }],
@@ -275,14 +278,14 @@ export async function mount(phone: boolean, theme: 'light' | 'dark', initialStat
         },
         diagnostics: () => {
             const selected = getActiveServerSnapshot();
-            const invocations = storage.getState().workflowRunInvocationsByRunId[runId];
+            const invocations = storage.getState().workflowRunInvocationsByRunId[workflowRunStoreKey(runId)];
             return { selected: { serverId: selected.serverId, serverUrl: selected.serverUrl, generation: selected.generation },
                 applied: getAppliedActiveServerSnapshot(), backend: { state: run.state, revision: run.revision },
-                stored: storage.getState().workflowRunsById[runId]?.summary ?? null, reads: [...transportReads],
+                stored: storage.getState().workflowRunsById[workflowRunStoreKey(runId)]?.summary ?? null, reads: [...transportReads],
                 invocations: invocations ? { holdLifecycle: invocations.factsById[holdId]?.lifecycle ?? null,
                     historyRevision: invocations.history.parentRevision, attentionRevision: invocations.attention.parentRevision } : null };
         },
-        storedRunState: () => storage.getState().workflowRunsById[runId]?.summary?.state ?? null,
+        storedRunState: () => storage.getState().workflowRunsById[workflowRunStoreKey(runId)]?.summary?.state ?? null,
         setRunState: (state: WorkflowRunStateV1) => { run = { ...run, state, revision: run.revision + 1 };
             publishHomeAccountChange(home.id, [`workflow-run:${runId}`]); },
         setCompletedLeaves: () => { const row = rows.get(holdId)!;

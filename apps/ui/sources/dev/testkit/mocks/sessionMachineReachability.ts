@@ -18,6 +18,7 @@ export function createReachableSessionMachineReachability(): SessionMachineReach
         machineOnline: true,
         machineRpcTargetAvailable: true,
         machineReachability: 'reachable',
+        machineLastSeenAt: null,
     };
 }
 

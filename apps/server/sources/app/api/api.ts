@@ -1,6 +1,7 @@
 import fastify, { errorCodes, type FastifyBodyParser, type FastifyInstance } from "fastify";
 import type { FastifyCorsOptions } from "@fastify/cors";
 import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
+import type { HomeConnectionDescriptorV1 } from '@happier-dev/protocol/auth/accountDirectory';
 import { ACCOUNT_STORED_CONTENT_COMPATIBILITY_HTTP_HEADER } from '@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1';
 import { SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1 } from '@happier-dev/protocol/server/http/requestBodyBoundsV1';
 import { SESSION_SYSTEM_RECORDS_PROTOCOL_HTTP_HEADER } from '@happier-dev/protocol/sessions/system/records/sessionSystemRecordRoutes';
@@ -12,6 +13,7 @@ import { registerEphemeralRunnerRoutes } from "@/app/ephemeralRunner/routes";
 import { authRoutes } from "./routes/auth/authRoutes";
 import { pushRoutes } from "./routes/push/pushRoutes";
 import { sessionRoutes } from "./routes/session/sessionRoutes";
+import { registerDiscussionRoutes } from "./routes/discussions/registerDiscussionRoutes";
 import { connectRoutes } from "./routes/connect/connectRoutes";
 import { accountRoutes } from "./routes/account/accountRoutes";
 import { homeGovernanceRoutes } from "./routes/home/homeGovernanceRoutes";
@@ -86,7 +88,7 @@ import {
 } from '@/app/session/sessionTranscriptPublicationPolicy';
 import type { HomeConnectionDescriptorContinuityStore } from '@/app/features/homeConnectionDescriptorContinuity';
 import type { ResolveAuthEmailApplicationLinkTarget } from '@/app/auth/email/nativeAuthEmailOperations';
-import { readHomeConnectionDescriptor } from '@/app/features/homeConnectionDescriptorPublication';
+import { readHomeConnectionDescriptor, readPreparedHomeCredentialDestination } from '@/app/features/homeConnectionDescriptorPublication';
 
 export function resolveApiListenHost(env: Record<string, string | undefined>): string {
     const host = (env.HAPPIER_SERVER_HOST ?? env.HAPPY_SERVER_HOST ?? '').toString().trim();
@@ -100,6 +102,7 @@ export const API_CORS_ALLOWED_HEADERS = [
     AUTHORITY_CEILING_HEADER_V1,
     ACCOUNT_STORED_CONTENT_COMPATIBILITY_HTTP_HEADER,
     'idempotency-key',
+    'if-none-match',
     V2_SESSION_LIST_SERVER_TIMING_REQUEST_HEADER,
     SESSION_SYSTEM_RECORDS_PROTOCOL_HTTP_HEADER,
 ];
@@ -154,15 +157,20 @@ export function registerApiRoutes(typed: Fastify, params: Readonly<{
         'homeConnectionDescriptorContinuityStore',
     );
     const resolveHomeConnectionDescriptor = hasLifecycleSelectedDescriptorOwner
-        ? async (tx?: Tx) => {
+        ? async (tx?: Tx, prepared?: HomeConnectionDescriptorV1) => {
             const continuityStore = params.homeConnectionDescriptorContinuityStore;
             if (!continuityStore) return undefined;
             // The live overlay carries a stored or inferred public address (plan §3.2).
-            return readHomeConnectionDescriptor({
-                env: tx ? await readHomeConfigEnvInTx(tx) : await readHomeConfigEnv(),
+            const env = tx ? await readHomeConfigEnvInTx(tx) : await readHomeConfigEnv();
+            if (tx) {
+                return prepared
+                    ? readPreparedHomeCredentialDestination({ env, prepared })
+                    : undefined;
+            }
+            return await readHomeConnectionDescriptor({
+                env,
                 continuityStore,
                 visibility: 'authenticated',
-                tx,
             });
         }
         : undefined;
@@ -183,6 +191,7 @@ export function registerApiRoutes(typed: Fastify, params: Readonly<{
     });
     pushRoutes(typed);
     sessionRoutes(typed);
+    registerDiscussionRoutes(typed);
     registerEphemeralRunnerRoutes(typed);
     accountRoutes(typed);
     homeGovernanceRoutes(typed);

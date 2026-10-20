@@ -4,7 +4,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { CapabilityRow } from '@/components/capabilities/row/CapabilityRow';
-import { formatAgentNameList } from '@/components/capabilities/identity/agentNameList';
+import { formatAgentNameListFolded } from '@/components/capabilities/identity/agentNameList';
 import { useWhereItsOnNames } from '@/components/capabilities/where/useWhereItsOnNames';
 import { CapabilityStatusChip } from '@/components/capabilities/status/CapabilityStatusChip';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
@@ -38,7 +38,8 @@ import { skillHref } from '../skillsCollectionModel';
 import {
   foldFoundRows,
   foundAddAllItems,
-  foundAgentIds,
+  groupFoundRowsByName,
+  type FoundRowGroup,
   foundRowKind,
   orderFoundRows,
   partitionFoundMachines,
@@ -211,7 +212,7 @@ export const SkillsFoundPage = React.memo(function SkillsFoundPage(
           <SurfaceStateCard
             testID="skills.found.unseenOffline"
             size="line"
-            kind="offline"
+            kind="unavailable"
             title={t('capabilities.skillsFound.offlineUnseen', { count: unseenOffline })}
           />
         </ItemGroup>
@@ -247,9 +248,10 @@ const FoundMachineSection = React.memo(function FoundMachineSection(
   const [comparing, setComparing] = React.useState<string | null>(null);
   const body = resolveFoundMachineBody(scan);
   const items = body.kind === 'rows' ? body.items : NO_ITEMS;
-  const ordered = React.useMemo(() => orderFoundRows(items), [items]);
-  const folded = foldFoundRows(ordered, expanded);
-  const addAll = React.useMemo(() => foundAddAllItems(items), [items]);
+  // One row per skill name: the copies in other agents' folders fold into it.
+  const groups = React.useMemo(() => groupFoundRowsByName(orderFoundRows(items)), [items]);
+  const folded = foldFoundRows(groups, expanded);
+  const addAll = React.useMemo(() => foundAddAllItems(groups.map((group) => group.item)), [groups]);
   const canAdd = !machine.offline;
 
   const open = React.useCallback(
@@ -297,7 +299,7 @@ const FoundMachineSection = React.memo(function FoundMachineSection(
     <View style={styles.titleAccessory}>
       {body.kind === 'rows' ? (
         <Text variant="meta" style={styles.count}>
-          {String(items.length)}
+          {String(groups.length)}
         </Text>
       ) : null}
       {machine.offline ? (
@@ -314,7 +316,8 @@ const FoundMachineSection = React.memo(function FoundMachineSection(
     </View>
   );
 
-  const renderRow = (item: FoundItem) => {
+  const renderRow = (group: FoundRowGroup) => {
+    const { item } = group;
     const kind = foundRowKind(item);
     const busy = adding.has(item.path);
     const libraryId = item.inLibrary ?? props.libraryIdByName.get(item.name) ?? null;
@@ -326,7 +329,7 @@ const FoundMachineSection = React.memo(function FoundMachineSection(
           description={item.description}
           facts={{
             presentation: 'row',
-            extra: foundFacts(item, props.agentName, homeDir),
+            extra: foundFacts(group, props.agentName, homeDir),
           }}
           note={
             kind === 'masks' ? (
@@ -436,7 +439,11 @@ const FoundMachineSection = React.memo(function FoundMachineSection(
             testID={`skills.found.rootFailed.${machine.machineId}`}
             size="line"
             kind="error"
-            title={t('capabilities.skillsFound.rootFailed', { path: root.path })}
+            title={t('capabilities.skillsFound.rootFailed', { path: formatPathRelativeToHome(root.path, homeDir) })}
+            action={{
+              label: t('capabilities.skillsFound.checkAgain'),
+              onPress: () => void props.onScan(machine.machineId),
+            }}
           />
         ))}
       {folded.shown.map(renderRow)}
@@ -451,7 +458,7 @@ const FoundMachineSection = React.memo(function FoundMachineSection(
           />
         </SectionContentRow>
       ) : null}
-      {expanded && foldFoundRows(ordered, false).hidden > 0 ? (
+      {expanded && foldFoundRows(groups, false).hidden > 0 ? (
         <SectionContentRow showDivider testID={`skills.found.fewer.${machine.machineId}`}>
           <RoundButton
             size="small"
@@ -466,27 +473,27 @@ const FoundMachineSection = React.memo(function FoundMachineSection(
   );
 });
 
-/** "Claude, Codex read it · From the frontend plugin · Installed by Happier": who reads it, then provenance. */
+/** "Claude, Codex and 7 more read it · From the frontend plugin": who reads it, then provenance, then where it lives. */
 function foundFacts(
-  item: FoundItem,
+  group: FoundRowGroup,
   agentName: (agentId: string) => string,
   homeDir: string | undefined,
 ): readonly (string | Readonly<{ text: string; mono: true }>)[] {
+  const { item } = group;
   const facts: (string | Readonly<{ text: string; mono: true }>)[] = [];
-  const agents = foundAgentIds(item).map(agentName);
+  const agents = group.agents.map(agentName);
   if (agents.length > 0) {
-    facts.push(t('capabilities.skillsFound.readBy', { agents: formatAgentNameList(agents), count: agents.length }));
+    facts.push(t('capabilities.skillsFound.readBy', { agents: formatAgentNameListFolded(agents), count: agents.length }));
   }
   if (item.pluginOwned) {
     facts.push(t('capabilities.skillsFound.fromPlugin', { plugin: item.pluginOwned.pluginName }));
   } else if (item.happierInstalled) {
     facts.push(t('capabilities.skillsFound.installedByHappier'));
   }
-  // Where it lives: the same skill in two agents' folders reads as two rows, told apart by this.
-  facts.push({
-    text: formatPathRelativeToHome(item.path.replace(/[\\/][^\\/]*[\\/]*$/, ''), homeDir),
-    mono: true,
-  });
+  // Where it lives: its first folder, and how many other folders hold the same name.
+  const [folder, ...others] = group.folders;
+  if (folder !== undefined) facts.push({ text: formatPathRelativeToHome(folder, homeDir), mono: true });
+  if (others.length > 0) facts.push(t('capabilities.where.more', { count: others.length }));
   return facts;
 }
 

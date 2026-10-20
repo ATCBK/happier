@@ -4,12 +4,16 @@ import { initializeTerminalPresentUserPolicy } from '@/settings/accountSettings/
 
 export async function ensureCliActionPolicySettings(credentials: StoredCredentials | null | undefined, serverHttpBaseUrl?: string): Promise<void> {
   if (!credentials) return;
-  await initializeTerminalPresentUserPolicy({ token: credentials.token, ...(serverHttpBaseUrl ? { serverHttpBaseUrl } : {}) });
-  await bootstrapAccountSettingsContext({
-    credentials,
-    // Policy is an admission input: a successful first fetch must publish before
-    // prepare/execute can continue. Blocking bootstrap still falls back to the
-    // existing cache/default contract when the settings service is unavailable.
-    mode: 'blocking',
-  });
+  // Security and sealed Settings have independent readers. Join both before
+  // admission so loading Settings cannot grant authority ahead of security.
+  await Promise.all([
+    initializeTerminalPresentUserPolicy({ token: credentials.token, ...(serverHttpBaseUrl ? { serverHttpBaseUrl } : {}) }),
+    bootstrapAccountSettingsContext({
+      credentials,
+      // Policy is an admission input: a successful first fetch must publish before
+      // prepare/execute can continue. Blocking bootstrap still falls back to the
+      // existing cache/default contract when the settings service is unavailable.
+      mode: 'blocking',
+    }),
+  ]);
 }

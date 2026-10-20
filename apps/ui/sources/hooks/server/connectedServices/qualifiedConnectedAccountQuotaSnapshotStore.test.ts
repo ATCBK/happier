@@ -48,7 +48,7 @@ function installQuotaReadBoundary(): void {
     boundary.read.mockImplementation(async requestedRef => {
         const response = await getQuotaMock(requestedRef);
         if (response instanceof Response) return response;
-        if (!response) return new Response('{}', { status: 404 });
+        if (!response) return Response.json({ error: 'connect_quotas_not_found' }, { status: 404 });
         const snapshot = { ...snapshotFixture({ response }), activeAccountId: 'provider-work' };
         return Response.json(quotaTestResponse(snapshot, response.metadata?.status ?? 'ok'));
     });
@@ -202,7 +202,7 @@ describe('qualifiedConnectedAccountQuotaSnapshotStore', () => {
             await flushAsyncTurns();
             getQuotaMock.mockResolvedValue(null);
             await store.refreshQualifiedQuotaSnapshot(key, context);
-            expect(store.getQualifiedQuotaSnapshotEntry(key)).toMatchObject({ snapshot, refreshing: true });
+            expect(store.getQualifiedQuotaSnapshotEntry(key)).toMatchObject({ snapshot, refreshing: true, error: null });
         } finally {
             release();
         }
@@ -218,7 +218,7 @@ describe('qualifiedConnectedAccountQuotaSnapshotStore', () => {
         try {
             await vi.advanceTimersByTimeAsync(0);
             await store.refreshQualifiedQuotaSnapshot(key, context);
-            expect(store.getQualifiedQuotaSnapshotEntry(key).refreshing).toBe(true);
+            expect(store.getQualifiedQuotaSnapshotEntry(key)).toMatchObject({ snapshot: null, refreshing: true, error: null });
             release();
             expect(store.getQualifiedQuotaSnapshotEntry(key).refreshing).toBe(false);
             const reads = getQuotaMock.mock.calls.length;
@@ -542,6 +542,28 @@ describe('qualifiedConnectedAccountQuotaSnapshotStore', () => {
             }),
         );
         release();
+    });
+
+    it('settles an accepted refresh on a quota read refusal while retaining the last snapshot', async () => {
+        const store = await import('./qualifiedConnectedAccountQuotaSnapshotStore');
+        const context = buildContext('server-a', 1);
+        const key = store.buildQualifiedQuotaSnapshotScopeKey(context);
+        const snapshot = { v: 1, ref, activeAccountId: 'provider-work', fetchedAt: 1, staleAfterMs: 60_000, planLabel: null, accountLabel: null, meters: [] };
+        getQuotaMock.mockResolvedValue({ ref, sourceResolution });
+        snapshotFixture.mockReturnValue(snapshot);
+        const release = store.retainQualifiedQuotaSnapshotPolling(key, context);
+        try {
+            await flushAsyncTurns();
+            getQuotaMock.mockResolvedValue(Response.json({ error: 'not_found' }, { status: 404 }));
+            await store.refreshQualifiedQuotaSnapshot(key, context);
+            expect(boundary.refresh).toHaveBeenCalledWith(ref);
+            expect(store.getQualifiedQuotaSnapshotEntry(key)).toMatchObject({
+                snapshot, refreshing: false,
+                error: resolveConnectedServiceSettingsErrorMessage({ code: 'not_found' }),
+            });
+        } finally {
+            release();
+        }
     });
 
     it('does not claim quota support when the first read fails', async () => {

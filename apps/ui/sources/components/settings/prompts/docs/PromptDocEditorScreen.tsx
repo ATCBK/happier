@@ -32,7 +32,7 @@ import { useUnsavedDraftNavigationGuard } from '@/utils/navigation/useUnsavedDra
 import { PromptFolderFieldRow, PromptTagsFieldRow } from '@/components/settings/prompts/shared/PromptOrganizationFields';
 import { usePromptEditorDraftField } from '@/components/settings/prompts/shared/usePromptEditorDraftField';
 import { PromptEditorHeader } from '@/components/settings/prompts/collection/PromptEditorHeader';
-import { publishPromptCollectionDraftTitle } from '@/components/settings/prompts/collection/PromptCollectionList';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 import { promptCollectionItemHref, promptCollectionRoot } from '@/components/settings/prompts/collection/promptCollectionModel';
 import { usePromptLibraryEntryActions } from '@/components/settings/prompts/collection/usePromptLibraryEntryActions';
 import { usePromptLibraryEntryMeta } from '@/components/settings/prompts/collection/usePromptLibraryEntryMeta';
@@ -223,11 +223,12 @@ export const PromptDocEditorScreen = React.memo((props: Readonly<{ artifactId: s
     applyArtifactState(props.artifactId, { preserveDirty: true });
   }, [applyArtifactState, promptFoldersV1, props.artifactId]);
 
+  const draftTitle = useCollectionDraftTitle();
   React.useEffect(() => {
     if (!isNew) return undefined;
-    publishPromptCollectionDraftTitle('doc', title);
-    return () => publishPromptCollectionDraftTitle('doc', '');
-  }, [isNew, title]);
+    draftTitle.publish(title);
+    return () => draftTitle.publish('');
+  }, [draftTitle, isNew, title]);
 
   const changed = titleField.changed || markdownField.changed || folderField.changed || tagsField.changed;
   // A draft is dirty once anything was typed; saving makes its values pristine, so the saved

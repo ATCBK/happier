@@ -7,6 +7,7 @@ import {
     HOME_IDENTITY_MISMATCH_AUTH_CODE,
 } from '@/auth/flows/authenticationFailure';
 import { HappyError } from '@/utils/errors/errors';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 /**
  * The email/password journeys this surface can run. `provision` and `recover`
@@ -160,7 +161,7 @@ export function describeEmailPasswordFailure(
         || code === 'invalid_action_output') {
         return { field: 'form', messageKey: 'settingsAccount.nativePassword.linkExpired' };
     }
-    if (code === 'approval_rejected' || code === 'approval_canceled') {
+    if (isActionApprovalDeclinedErrorCode(code)) {
         return { field: 'form', messageKey: 'settingsAccount.nativePassword.cancelled' };
     }
     if (code === 'approval_pending') {

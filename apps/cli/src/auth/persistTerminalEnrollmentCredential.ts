@@ -2,20 +2,26 @@ import tweetnacl from 'tweetnacl';
 import type { ManagedEnrollmentCorrelationV1 } from '@happier-dev/protocol/machines/managed/actionsV1';
 
 import { ApiClient } from '@/api/api';
+import { configuration } from '@/configuration';
 import { ensureMachineRegistered } from '@/api/machine/ensureMachineRegistered';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { initialMachineMetadata } from '@/daemon/machine/metadata';
 import {
+  prepareCredentialsTokenOnlyForServerId,
+  readSettings,
+  readStoredCredentialsForServerId,
   writeCredentialsDataKey,
   writeCredentialsTokenOnly,
   type StoredCredentials,
 } from '@/persistence';
 import type { OpenTerminalProvisioningResponseResult } from '@/auth/terminalProvisioningResponse';
 import { ensureMachineIdForCredentials } from '@/ui/auth';
+import { retryHomeOperation, type HomeOperationRetry } from '@/api/client/retryHomeOperation';
 
 export async function persistTerminalEnrollmentCredential(params: Readonly<{
   token: string;
   opened: OpenTerminalProvisioningResponseResult;
+  previousAccountId?: string | null;
 }>): Promise<Readonly<{
   credentials: StoredCredentials;
   encryptionType: 'dataKey' | 'tokenOnly';
@@ -25,9 +31,11 @@ export async function persistTerminalEnrollmentCredential(params: Readonly<{
   if (encryption?.type === 'dataKey') {
     await writeCredentialsDataKey({ publicKey: encryption.publicKey, machineKey: encryption.machineKey, token: params.token });
   } else {
-    await writeCredentialsTokenOnly({ token: params.token });
+    await writeCredentialsTokenOnly({ token: params.token }, { previousAccountId: params.previousAccountId });
   }
-  return prepared;
+  const credentials = await readStoredCredentialsForServerId(configuration.activeServerId);
+  if (!credentials || credentials.token !== params.token) throw new Error('Stored credential changed during terminal enrollment');
+  return { ...prepared, credentials };
 }
 
 export function createTerminalEnrollmentCredential(params: Readonly<{
@@ -58,13 +66,22 @@ export async function registerAndPersistManagedTerminalEnrollmentCredential(para
   opened: OpenTerminalProvisioningResponseResult;
   runtimeOrigin: string;
   managedEnrollment: ManagedEnrollmentCorrelationV1;
+  homeRetry: HomeOperationRetry;
   assertCurrent(): void;
 }>): Promise<Readonly<{ machineId: string; encryptionType: 'dataKey' | 'tokenOnly' }>> {
   params.assertCurrent();
-  const prepared = createTerminalEnrollmentCredential(params);
-  const machineId = await registerTerminalEnrollmentMachine(prepared.credentials, params.runtimeOrigin, params.managedEnrollment);
+  // Machine registration updates lastTokenSub. Capture the predecessor's scope
+  // first so a tokenless historical key can never be rebound to a new Account.
+  const previousAccountId = (await readSettings()).lastTokenSubByServerId?.[configuration.activeServerId] ?? null;
   params.assertCurrent();
-  await persistTerminalEnrollmentCredential(params);
+  const prepared = createTerminalEnrollmentCredential(params);
+  const credentials = prepared.encryptionType === 'tokenOnly'
+    ? await prepareCredentialsTokenOnlyForServerId(configuration.activeServerId, { token: params.token }, { previousAccountId })
+    : prepared.credentials;
+  params.assertCurrent();
+  const machineId = await registerTerminalEnrollmentMachine(credentials, params.runtimeOrigin, params.managedEnrollment, params.homeRetry);
+  params.assertCurrent();
+  await persistTerminalEnrollmentCredential({ ...params, previousAccountId });
   return { machineId, encryptionType: prepared.encryptionType };
 }
 
@@ -72,8 +89,9 @@ export async function registerTerminalEnrollmentMachine(
   credentials: StoredCredentials,
   runtimeOrigin: string,
   managedEnrollment?: ManagedEnrollmentCorrelationV1,
+  homeRetry?: HomeOperationRetry,
 ): Promise<string> {
-  return await runWithServerHttpBaseUrl(runtimeOrigin, async () => {
+  const register = async () => await runWithServerHttpBaseUrl(runtimeOrigin, async () => {
     const { machineId } = await ensureMachineIdForCredentials(credentials);
     const api = await ApiClient.create(credentials);
     const registered = await ensureMachineRegistered({
@@ -85,4 +103,5 @@ export async function registerTerminalEnrollmentMachine(
     });
     return registered.machineId;
   });
+  return await (homeRetry ? retryHomeOperation(homeRetry, register) : register());
 }

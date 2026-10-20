@@ -832,7 +832,7 @@ describe('Home login approval continuation (explicit target, Home-authoritative)
             canonicalServerUrl: 'https://home-b.test',
             error: {
                 adoptionError: { message: 'Home credential adoption cancelled' },
-                rollbackOutcome: { kind: 'not_applied', reason: 'ownership_changed' },
+                rollbackOutcome: { kind: 'failed', error: rollbackError },
             },
         });
         expect(result).not.toEqual({ kind: 'failed' });

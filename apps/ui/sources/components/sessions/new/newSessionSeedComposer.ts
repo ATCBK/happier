@@ -1,13 +1,15 @@
 import {
     PluginUiNewSessionSeedV1Schema,
+    CURRENT_UI_CONTEXT_ATTACHMENT_IDENTITY_V1,
     type PluginUiNewSessionSeedV1,
     type SessionNewSessionSeedOutcome,
 } from '@happier-dev/protocol/plugins/ui';
+import { MAX_COMPOSER_ATTACHMENT_LABEL_CODE_POINTS_V1 } from '@happier-dev/protocol/runtime/input/composerAttachmentV1';
 
 import { randomUUID } from '@/platform/randomUUID';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
-import { seedNewSessionDraftV1, type NewSessionDraftSeedV1 } from './newSessionDraftSeed';
+import { seedNewSessionDraftV1 } from './newSessionDraftSeed';
 import type { NewSessionComposerAttachmentSeedV1, NewSessionDraft } from '@/sync/domains/state/persistence';
 import { storeTempData, type NewSessionData } from '@/utils/sessions/tempDataStore';
 
@@ -89,8 +91,6 @@ export function seedAndOpenNewSession(params: Readonly<{
      * so a seed with attachments and no caller identity places nothing.
      */
     pluginId?: string;
-    /** Incumbent host-owned provenance is not plugin-authored execution authority. */
-    zenTaskSource?: NewSessionDraftSeedV1['zenTaskSource'];
     /** Internal same-setup projection, never part of plugin-authored wire input. */
     configurationDraft?: NewSessionDraft;
     /** Replay remains a one-shot continuation intent, not remembered configuration. */
@@ -119,12 +119,12 @@ export function seedAndOpenNewSession(params: Readonly<{
         && seed.sessionName === undefined
         && seed.initialSessionFacts === undefined
         && seed.promptStack === undefined
+        && seed.currentUiContext === undefined
         && seed.profileId === undefined
         && seed.checkoutIntent === undefined
         && seed.placement === undefined
         && seed.candidates === undefined
         && seed.attachments === undefined
-        && params.zenTaskSource === undefined
     ) return { kind: 'invalid', reason: 'seed_empty' };
     // A seed that asks for attachments and names no caller cannot place any of
     // them, and opening the screen anyway would show the reader a New Session
@@ -150,13 +150,26 @@ export function seedAndOpenNewSession(params: Readonly<{
     // generation, presentation and the host-minted instance id. Their author
     // requests therefore wait in the Account + draft keyed pre-admission owner;
     // they never enter destructively consumed route data.
-    const attachmentSeeds: readonly NewSessionComposerAttachmentSeedV1[] = (seed.attachments ?? [])
-        .map((attachment) => ({
+    const attachmentSeeds: readonly NewSessionComposerAttachmentSeedV1[] = [
+        ...(seed.attachments ?? []).map((attachment) => ({
             instanceId: randomUUID(),
             pluginId: pluginId ?? '',
             attachmentLocalId: attachment.attachmentLocalId,
             value: attachment.value,
-        }));
+        })),
+        ...(seed.currentUiContext ? [{
+            instanceId: randomUUID(),
+            pluginId: CURRENT_UI_CONTEXT_ATTACHMENT_IDENTITY_V1.pluginId,
+            attachmentLocalId: CURRENT_UI_CONTEXT_ATTACHMENT_IDENTITY_V1.localId,
+            value: {
+                key: CURRENT_UI_CONTEXT_ATTACHMENT_IDENTITY_V1.localId,
+                value: seed.currentUiContext,
+                // Only the badge label is bounded; the typed snapshot keeps the complete title.
+                presentation: { label: Array.from(seed.currentUiContext.navigation.title ?? seed.currentUiContext.navigation.screen)
+                    .slice(0, MAX_COMPOSER_ATTACHMENT_LABEL_CODE_POINTS_V1).join('').trimEnd() },
+            },
+        }] : []),
+    ];
     const seededDraftId = (params.seedDraft ?? seedNewSessionDraftV1)({
         seed: {
             ...(seed.sessionName === undefined ? {} : { sessionName: seed.sessionName }),
@@ -168,7 +181,6 @@ export function seedAndOpenNewSession(params: Readonly<{
             ...(seed.placement === undefined ? {} : { placement: seed.placement }),
             ...(seed.candidates === undefined ? {} : { candidates: seed.candidates }),
             ...(seed.origin === undefined ? {} : { origin: seed.origin }),
-            ...(params.zenTaskSource === undefined ? {} : { zenTaskSource: params.zenTaskSource }),
             // The public seed retains author-shaped attachment requests in the
             // draft's local supplement. The Composer owner admits them later;
             // they must not be projected as canonical records here.

@@ -82,7 +82,7 @@ it.each([
     providerName: 'Codex', waitingForCommandLabel: 'Codex', agentMessageType: 'codex',
     runtimeActivityApplicability: 'not_applicable',
     machineMetadata: { host: 'test', platform: process.platform, happyCliVersion: 'test', homeDir: home, happyHomeDir: home, happyLibDir: home },
-    terminalDisplay: () => null,
+    loadTerminalDisplay: async () => () => null,
     formatPromptErrorMessage: String,
   })).rejects.toMatchObject(refusal);
   expect(vi.mocked(axios.post).mock.calls[0]?.[1]).toMatchObject({ initialAccess, primaryTeamId });

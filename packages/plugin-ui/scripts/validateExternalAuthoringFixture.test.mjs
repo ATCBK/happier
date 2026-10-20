@@ -52,7 +52,7 @@ test('the author components and root expose neutral owners while excluding mount
     'HappierItemGroupSelectionContext', 'HappierLiveStreamAvccInput', 'HappierLiveStreamPlayerDiagnostic',
     'HappierLiveStreamPlayerDisplayState', 'HappierLiveStreamPlayerHost', 'HappierLiveStreamPlayerRendererEvent',
     'HappierLiveStreamPlayerRenderEvent', 'HappierLiveStreamInputLayer', 'HappierLiveStreamPlayer',
-    'HappierPageChrome', 'HappierPageChromeProvider', 'HappierSpinnerHost', 'useHappierSpinnerKeyframes',
+    'HappierPageChrome', 'HappierPageChromeProvider', 'HappierColumnEdgeContext', 'HappierSpinnerHost', 'useHappierSpinnerKeyframes',
   ]);
   for (const name of hostControls) {
     assert.ok(!components.has(name), `components exposes mounted host control ${name}`);
@@ -80,6 +80,7 @@ async function installPackedExternalAuthoringSemanticSurfaceStub(consumerRoot) {
       version: '0.1.0',
       type: 'module',
       exports: {
+        '.': './dist-node/semanticSurface.js',
         './semantic-surface': './dist-node/semanticSurface.js',
       },
     })),
@@ -1197,6 +1198,52 @@ test('a caller-retained external fixture root cannot resolve into the workspace 
   } finally {
     await rm(externalParent, { recursive: true, force: true });
     await rm(workspaceRoot, { recursive: true, force: true });
+  }
+});
+
+test('public Plugin UI declarations preserve the Node consumer global contracts', async () => {
+  // Read the real workspace package declarations through its public export;
+  // no packed package, renderer stub or ambient-module replacement participates.
+  const consumerRoot = await mkdtemp(join(repositoryRoot, '.project/tmp/plugin-ui-node-declarations-'));
+  try {
+    const consumerPath = join(consumerRoot, 'consumer.mts');
+    await writeFile(consumerPath, [
+      "import type * as PublicComponents from '@happier-dev/plugin-ui/components';",
+      'declare const components: typeof PublicComponents;',
+      'void components;',
+      'const timeout: NodeJS.Timeout = setTimeout(() => {}, 0);',
+      'clearTimeout(timeout);',
+      'const form = new FormData();',
+      "const values: readonly (string | Blob)[] = form.getAll('image');",
+      'void values;',
+      '// @ts-expect-error Native transport parts are not part of the Node FormData contract.',
+      'form.getParts();',
+      '',
+    ].join('\n'));
+    const invocation = resolveTypeScriptCliInvocation({
+      repoRoot: repositoryRoot,
+      workspaceDir: repositoryRoot,
+      processExecPath: process.execPath,
+    });
+    let output;
+    try {
+      output = execFileSync(invocation.command, [
+        ...invocation.argsPrefix,
+        '--ignoreConfig', '--noEmit', '--strict', '--skipLibCheck', '--listFiles',
+        '--target', 'ES2022', '--lib', 'ES2022', '--types', 'node',
+        '--module', 'NodeNext', '--moduleResolution', 'NodeNext', consumerPath,
+      ], { cwd: repositoryRoot, encoding: 'utf8', stdio: 'pipe' });
+    } catch (error) {
+      assert.fail([
+        'Public Plugin UI declarations changed the Node consumer global contracts.',
+        String(error?.stdout ?? ''),
+        String(error?.stderr ?? ''),
+      ].filter(Boolean).join('\n'));
+    }
+    const nativeDeclarations = output.split(/\r?\n/u).filter(line => /[\\/]node_modules[\\/]react-native[\\/]/u.test(line));
+    assert.deepEqual(nativeDeclarations, [], 'The public declaration program must not load the host React Native singleton.');
+  } finally {
+    await rm(consumerRoot, { recursive: true, force: true });
   }
 });
 

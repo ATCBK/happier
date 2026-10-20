@@ -16,7 +16,9 @@ import type { DaemonSpeechStreamSender } from './DaemonSpeechStreamSender';
 import type { DaemonVoiceInferenceClient } from './DaemonVoiceInferenceClient';
 import { daemonSpeechStreamDiagnostics } from './daemonSpeechStreamDiagnostics';
 
-export type DaemonStreamingSttController = SttController;
+export type DaemonStreamingSttController = SttController & Readonly<{
+    setMuted: (muted: boolean) => Promise<void>;
+}>;
 
 type DaemonStreamingSttSender = Pick<DaemonSpeechStreamSender, 'start' | 'pushChunk' | 'finish' | 'cancel'>;
 type DaemonStreamingSttClient = Readonly<{
@@ -34,12 +36,15 @@ export type DaemonStreamingSttControllerDeps = Readonly<{
 }>;
 
 type ActiveDaemonStreamingStt = {
+    params: SttStartParams;
+    prefixText: string;
     sessionId: string | null;
     sender: DaemonStreamingSttSender;
     capture: DaemonSpeechPcmCapture;
     finalText: string;
     aborted: boolean;
     cancelAttempt: Promise<void> | null;
+    hasAudio: boolean;
     unlinkAbort: () => void;
 };
 
@@ -138,6 +143,7 @@ export function createDaemonStreamingSttController(
 ): DaemonStreamingSttController {
     let active: ActiveDaemonStreamingStt | null = null;
     let stopping: Promise<SttStopResult> | null = null;
+    let paused: Readonly<{ params: SttStartParams; result: Promise<SttStopResult> }> | null = null;
     const getSettings = deps.getSettings ?? (() => ({}));
     const createClient = deps.createClient ?? createDefaultDaemonVoiceInferenceClient;
     const createPcmCapture = deps.createPcmCapture ?? createDaemonSpeechPcmCapture;
@@ -148,7 +154,7 @@ export function createDaemonStreamingSttController(
         handle: ActiveDaemonStreamingStt,
         transcript: string,
     ): void => {
-        if (!handle.sessionId) {
+        if (!handle.sessionId || paused) {
             return;
         }
         endpointController?.signalEndpointDetected({
@@ -169,7 +175,7 @@ export function createDaemonStreamingSttController(
             }
             switch (event.type) {
                 case 'partial': {
-                    const text = event.text.trim();
+                    const text = [handle.prefixText, event.text.trim()].filter(Boolean).join(' ');
                     if (text.length > 0) {
                         sink.onPartial(text);
                     }
@@ -180,7 +186,7 @@ export function createDaemonStreamingSttController(
                     break;
                 }
                 case 'endpoint': {
-                    const text = event.transcript.trim();
+                    const text = [handle.prefixText, event.transcript.trim()].filter(Boolean).join(' ');
                     if (text.length > 0) {
                         handle.finalText = text;
                         sink.onFinal(text);
@@ -190,7 +196,7 @@ export function createDaemonStreamingSttController(
                     break;
                 }
                 case 'final': {
-                    const text = event.text.trim();
+                    const text = [handle.prefixText, event.text.trim()].filter(Boolean).join(' ');
                     if (text.length > 0) {
                         handle.finalText = text;
                         sink.onFinal(text);
@@ -222,214 +228,268 @@ export function createDaemonStreamingSttController(
         await attempt;
     };
 
-    return {
-        start: async ({ sessionId, micSession, sink, signal, capturePurpose }: SttStartParams) => {
+    const start = async (params: SttStartParams, prefixText = '') => {
+        const { sessionId, micSession, sink, signal, capturePurpose } = params;
+        paused = null;
+        if (signal?.aborted) {
+            return;
+        }
+        if (stopping) {
+            await stopping;
             if (signal?.aborted) {
                 return;
             }
-            if (stopping) {
-                await stopping;
-                if (signal?.aborted) {
-                    return;
-                }
+        }
+        if (active) {
+            const previous = active;
+            await cancelActive(previous);
+            if (active === previous) {
+                active = null;
             }
-            if (active) {
-                const previous = active;
-                await cancelActive(previous);
-                if (active === previous) {
-                    active = null;
-                }
-                if (signal?.aborted) {
-                    return;
-                }
-            }
-            const { packId, language } = resolveLocalNeuralSttCaptureSettings(getSettings(), capturePurpose);
-            if (!packId) {
-                sink.onError(createVoiceMachineError({
-                    kind: 'provider_error',
-                    reason: 'daemon_streaming_stt_pack_missing',
-                }));
+            if (signal?.aborted) {
                 return;
             }
+        }
+        if (micSession.isMuted()) {
+            paused = { params, result: Promise.resolve({ finalText: prefixText }) };
+            return;
+        }
+        const { packId, language } = resolveLocalNeuralSttCaptureSettings(getSettings(), capturePurpose);
+        if (!packId) {
+            sink.onError(createVoiceMachineError({
+                kind: 'provider_error',
+                reason: 'daemon_streaming_stt_pack_missing',
+            }));
+            return;
+        }
 
-            let handle: ActiveDaemonStreamingStt | null = null;
-            try {
-                const sender = await createClient().createStreamingSttSender({ sessionId, packId, language, signal });
-                if (signal?.aborted) {
-                    await sender.cancel().catch(() => {});
-                    return;
-                }
-                await sender.start();
-                if (signal?.aborted) {
-                    await sender.cancel().catch(() => {});
-                    return;
-                }
-                const capture = createPcmCapture({
-                    micSession,
-                    capturePurpose,
-                    signal,
-                    onAudioStarted: () => {
-                        if (active === handle) {
-                            sink.onAudioStarted();
+        let handle: ActiveDaemonStreamingStt | null = null;
+        try {
+            const sender = await createClient().createStreamingSttSender({ sessionId, packId, language, signal });
+            if (signal?.aborted) {
+                await sender.cancel().catch(() => {});
+                return;
+            }
+            await sender.start();
+            if (signal?.aborted) {
+                await sender.cancel().catch(() => {});
+                return;
+            }
+            const capture = createPcmCapture({
+                micSession,
+                capturePurpose,
+                signal,
+                onAudioStarted: () => {
+                    if (active === handle) {
+                        sink.onAudioStarted();
+                    }
+                },
+                onChunk: async (pcm16Bytes) => {
+                    if (!handle || active !== handle || handle.aborted) {
+                        return;
+                    }
+                    const admittedHandle = handle;
+                    admittedHandle.hasAudio = true;
+                    // pushChunk admits synchronously into the sender's bounded window.
+                    // Recognition replies must not hold the browser/native capture queue.
+                    void sender.pushChunk(pcm16Bytes).then((events) => {
+                        if (active === admittedHandle && !admittedHandle.aborted && !paused) {
+                            applyEvents(admittedHandle, sink, events);
                         }
-                    },
-                    onChunk: async (pcm16Bytes) => {
-                        if (!handle || active !== handle || handle.aborted) {
-                            return;
-                        }
-                        const admittedHandle = handle;
-                        // pushChunk admits synchronously into the sender's bounded window.
-                        // Recognition replies must not hold the browser/native capture queue.
-                        void sender.pushChunk(pcm16Bytes).then((events) => {
-                            if (active === admittedHandle && !admittedHandle.aborted) {
-                                applyEvents(admittedHandle, sink, events);
-                            }
-                        }).catch((error: unknown) => {
-                            if (active !== admittedHandle || admittedHandle.aborted) return;
-                            void cancelActive(admittedHandle).then(() => {
-                                if (active === admittedHandle) active = null;
-                                sink.onError(createVoiceMachineError({
-                                    kind: 'provider_error',
-                                    reason: error && typeof error === 'object' && 'code' in error
-                                        && error.code === 'daemon_speech_stream_backpressure'
-                                        ? 'daemon_streaming_stt_pcm_backpressure'
-                                        : 'daemon_streaming_stt_pcm_chunk_failed',
-                                }));
+                    }).catch((error: unknown) => {
+                        if (active !== admittedHandle || admittedHandle.aborted) return;
+                        void cancelActive(admittedHandle).then(() => {
+                            if (active === admittedHandle) active = null;
+                            const failure = createVoiceMachineError({
+                                kind: 'provider_error',
+                                reason: error && typeof error === 'object' && 'code' in error
+                                    && error.code === 'daemon_speech_stream_backpressure'
+                                    ? 'daemon_streaming_stt_pcm_backpressure'
+                                    : 'daemon_streaming_stt_pcm_chunk_failed',
                             });
+                            Object.defineProperty(failure, 'cause', { value: error, enumerable: false });
+                            sink.onError(failure);
                         });
-                    },
-                    onError: (error) => {
-                        if (!handle || active !== handle || handle.aborted) {
-                            return;
+                    });
+                },
+                onError: (error) => {
+                    if (!handle || active !== handle || handle.aborted) {
+                        return;
+                    }
+                    const failedHandle = handle;
+                    void cancelActive(failedHandle).then(() => {
+                        if (active === failedHandle) {
+                            active = null;
                         }
-                        const failedHandle = handle;
-                        void cancelActive(failedHandle).then(() => {
-                            if (active === failedHandle) {
-                                active = null;
-                            }
-                            sink.onError(error);
-                        });
-                    },
-                });
-                handle = {
-                    sessionId: typeof sessionId === 'string' && sessionId.trim().length > 0
-                        ? sessionId.trim()
-                        : null,
-                    sender,
-                    capture,
-                    finalText: '',
-                    aborted: false,
-                    cancelAttempt: null,
-                    unlinkAbort: () => {},
+                        sink.onError(error);
+                    });
+                },
+            });
+            handle = {
+                params,
+                prefixText,
+                sessionId: typeof sessionId === 'string' && sessionId.trim().length > 0
+                    ? sessionId.trim()
+                    : null,
+                sender,
+                capture,
+                finalText: prefixText,
+                aborted: false,
+                cancelAttempt: null,
+                hasAudio: false,
+                unlinkAbort: () => {},
+            };
+            active = handle;
+            if (handle.sessionId) {
+                endpointController?.startSession(handle.sessionId);
+            }
+            if (signal) {
+                const abort = () => {
+                    if (active === handle) {
+                        void cancelActive(handle);
+                    }
                 };
-                active = handle;
-                if (handle.sessionId) {
-                    endpointController?.startSession(handle.sessionId);
-                }
-                if (signal) {
-                    const abort = () => {
-                        if (active === handle) {
-                            void cancelActive(handle);
-                        }
-                    };
-                    signal.addEventListener('abort', abort, { once: true });
-                    handle.unlinkAbort = () => {
-                        signal.removeEventListener('abort', abort);
-                    };
-                }
-                if (signal?.aborted) {
-                    await cancelActive(handle);
-                    if (active === handle) {
-                        active = null;
-                    }
-                    return;
-                }
-                await capture.start();
-                if (signal?.aborted) {
-                    await cancelActive(handle);
-                    if (active === handle) {
-                        active = null;
-                    }
-                }
-            } catch (error) {
+                signal.addEventListener('abort', abort, { once: true });
+                handle.unlinkAbort = () => {
+                    signal.removeEventListener('abort', abort);
+                };
+            }
+            if (signal?.aborted) {
                 await cancelActive(handle);
                 if (active === handle) {
                     active = null;
                 }
-                if (signal?.aborted) {
-                    return;
+                return;
+            }
+            await capture.start();
+            if (signal?.aborted) {
+                await cancelActive(handle);
+                if (active === handle) {
+                    active = null;
                 }
-                recordStartFailure(error);
-                sink.onError(createVoiceMachineError({
-                    kind: 'provider_error',
-                    reason: resolveDaemonStreamingSttStartErrorReason(error),
-                }));
             }
-        },
-        stop: async () => {
-            if (stopping) {
-                return stopping;
+        } catch (error) {
+            await cancelActive(handle);
+            if (active === handle) {
+                active = null;
             }
-            const handle = active;
-            if (!handle) {
-                return { finalText: '' };
+            if (signal?.aborted) {
+                return;
             }
-            const pending = (async () => {
+            recordStartFailure(error);
+            const failure = createVoiceMachineError({
+                kind: 'provider_error',
+                reason: resolveDaemonStreamingSttStartErrorReason(error),
+            });
+            // Keep the actual transport/start exception available to local diagnostics
+            // without disclosing it in the machine projection or serialized state.
+            Object.defineProperty(failure, 'cause', { value: error, enumerable: false });
+            sink.onError(failure);
+        }
+    };
+    const finalize = async (): Promise<SttStopResult> => {
+        if (stopping) {
+            return stopping;
+        }
+        const handle = active;
+        if (!handle) {
+            return { finalText: '' };
+        }
+        const pending = (async () => {
+            try {
+                if (handle.sessionId) {
+                    endpointController?.clearSession(handle.sessionId);
+                }
+                if (handle.aborted) {
+                    await cancelActive(handle);
+                    return { finalText: handle.finalText };
+                }
                 try {
-                    if (handle.sessionId) {
-                        endpointController?.clearSession(handle.sessionId);
-                    }
+                    await handle.capture.finish();
                     if (handle.aborted) {
-                        await cancelActive(handle);
                         return { finalText: handle.finalText };
                     }
-                    try {
-                        await handle.capture.finish();
-                        if (handle.aborted) {
-                            return { finalText: handle.finalText };
-                        }
-                        const response = await handle.sender.finish();
-                        if (!response.ok) {
-                            throw createDaemonStreamingSttFinishResponseError(response);
-                        }
-                        applyEvents(handle, {
-                            onAudioStarted: () => {},
-                            onPartial: () => {},
-                            onFinal: (text) => {
-                                handle.finalText = text.trim() || handle.finalText;
-                            },
-                            onEndpoint: () => {},
-                            onError: () => {},
-                        }, response.events);
-                        const finalText = response.finalText.trim();
-                        if (finalText.length > 0) {
-                            handle.finalText = finalText;
-                        }
-                    } catch (error) {
-                        if (handle.aborted) {
-                            return { finalText: handle.finalText };
-                        }
-                        await cancelActive(handle);
-                        return {
-                            error: classifyDaemonStreamingSttFinalizationFailure(error),
-                        };
+                    const response = await handle.sender.finish();
+                    if (!response.ok) {
+                        throw createDaemonStreamingSttFinishResponseError(response);
                     }
-                    return { finalText: handle.finalText };
-                } finally {
-                    handle.unlinkAbort();
-                    if (active === handle) {
-                        active = null;
+                    applyEvents(handle, {
+                        onAudioStarted: () => {},
+                        onPartial: () => {},
+                        onFinal: (text) => {
+                            handle.finalText = text.trim() || handle.finalText;
+                        },
+                        onEndpoint: () => {},
+                        onError: () => {},
+                    }, response.events);
+                    const finalText = response.finalText.trim();
+                    if (finalText.length > 0) {
+                        handle.finalText = [handle.prefixText, finalText].filter(Boolean).join(' ');
                     }
+                } catch (error) {
+                    if (handle.aborted) {
+                        return { finalText: handle.finalText };
+                    }
+                    await cancelActive(handle);
+                    const failure = classifyDaemonStreamingSttFinalizationFailure(error);
+                    // Keep finish/capture details in local diagnostics only.
+                    Object.defineProperty(failure, 'cause', { value: error, enumerable: false });
+                    return { error: failure };
                 }
-            })();
-            stopping = pending;
-            try {
-                return await pending;
+                return { finalText: handle.finalText };
             } finally {
-                if (stopping === pending) {
-                    stopping = null;
+                handle.unlinkAbort();
+                if (active === handle) {
+                    active = null;
                 }
             }
+        })();
+        stopping = pending;
+        try {
+            return await pending;
+        } finally {
+            if (stopping === pending) {
+                stopping = null;
+            }
+        }
+    };
+    return {
+        start,
+        stop: async () => {
+            const held = paused;
+            paused = null;
+            return held ? await held.result : await finalize();
+        },
+        setMuted: async (muted) => {
+            if (muted) {
+                if (paused || !active) return;
+                const handle = active;
+                // Close the remote stream while it is still owned, retaining
+                // its final in this capture until Send. Muted input produces no
+                // traffic and must not depend on the daemon's abandoned-stream TTL.
+                const result = handle.hasAudio ? finalize() : cancelActive(handle).then(() => {
+                    if (active === handle) active = null;
+                    return { finalText: handle.finalText };
+                });
+                const held = { params: handle.params, result };
+                paused = held;
+                // Physical mute has already taken effect. Publish it without
+                // waiting for recognition; Send/Unmute consume this same final.
+                void result.then((final) => {
+                    if (paused === held && 'error' in final) {
+                        paused = null;
+                        handle.params.sink.onError(final.error);
+                    }
+                });
+                return;
+            }
+            const held = paused;
+            if (!held) return;
+            const final = await held.result;
+            if (paused !== held || held.params.signal?.aborted) return;
+            paused = null;
+            if ('error' in final) return;
+            await start(held.params, final.finalText);
         },
     };
 }

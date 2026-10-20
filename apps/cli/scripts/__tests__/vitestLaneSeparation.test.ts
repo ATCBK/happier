@@ -1,7 +1,9 @@
-import { existsSync, globSync, readFileSync } from 'node:fs';
+import { existsSync, globSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+import { createVitest } from 'vitest/node';
 
 import unitConfig from '../../vitest.config';
 import integrationConfig from '../../vitest.integration.config';
@@ -9,8 +11,49 @@ import g3ComposedConfig from '../../vitest.g3-composed.config';
 import providersTempConfig from '../../vitest.providers.temp.config';
 import slowConfig from '../../vitest.slow.config';
 import { workspacePackageSourcesPlugin } from '../vitestWorkspacePackageResolution';
+import { resolveVitestWorkers } from '../../../../scripts/testing/vitestWorkers';
+import { createTestTempDirectory } from '../../../../scripts/testing/process/temporaryDirectories.mjs';
 
 describe('Vitest lane separation', () => {
+    it('collects authored tests without treating AppleDouble metadata as test source', async () => {
+        const fixture = createTestTempDirectory('happier-cli-test-discovery-');
+        try {
+            mkdirSync(join(fixture.root, 'src'));
+            for (const suffix of ['test.ts', 'integration.test.ts', 'slow.test.ts']) {
+                writeFileSync(join(fixture.root, 'src', `example.${suffix}`), 'export {};\n');
+                writeFileSync(join(fixture.root, 'src', `._example.${suffix}`), Buffer.from([0, 5, 22, 7]));
+            }
+            for (const [config, authoredFile] of [
+                [unitConfig, 'src/example.test.ts'],
+                [integrationConfig, 'src/example.integration.test.ts'],
+                [slowConfig, 'src/example.slow.test.ts'],
+                [g3ComposedConfig, 'src/example.test.ts'],
+                [providersTempConfig, 'src/example.test.ts'],
+            ] as const) {
+                // Vitest includes dotfiles; Node's globSync does not and would
+                // conceal the metadata discovery defect this contract guards.
+                const vitest = await createVitest('test', {
+                    config: false,
+                    root: fixture.root,
+                    ...(config.test?.include ? { include: config.test.include } : {}),
+                    exclude: config.test?.exclude,
+                    watch: false,
+                }, { server: { watch: null } });
+                try {
+                    const collected = (await vitest.globTestSpecifications())
+                        .map(spec => relative(fixture.root, spec.moduleId).split(sep).join('/'));
+                    expect(collected).toContain(authoredFile);
+                    expect(collected.filter(file => file.split('/').some(part => part.startsWith('._'))))
+                        .toEqual([]);
+                } finally {
+                    await vitest.close();
+                }
+            }
+        } finally {
+            fixture.cleanup();
+        }
+    });
+
     it('uses lane-specific global setup entrypoints', () => {
         expect(unitConfig.test?.globalSetup).toEqual(['./src/test-setup.unit.ts']);
         expect(integrationConfig.test?.globalSetup).toEqual(['./src/test-setup.integration.ts']);
@@ -56,9 +99,12 @@ describe('Vitest lane separation', () => {
         );
     });
 
-    it('caps parallel CLI test workers at six', () => {
-        expect(unitConfig.test?.maxWorkers).toBe(6);
-        expect(slowConfig.test?.maxWorkers).toBe(6);
+    it('uses the canonical shared-host worker budget in parallel CLI lanes', () => {
+        for (const config of [unitConfig, slowConfig]) {
+            expect(config.test?.maxWorkers).toBe(resolveVitestWorkers().maxWorkers);
+        }
+        // Integration deliberately serializes its process/environment mutations.
+        expect(integrationConfig.test?.poolOptions?.forks?.singleFork).toBe(true);
     });
 
     it('does not force full dist builds in the fast CLI test scripts', () => {
@@ -159,7 +205,6 @@ describe('Vitest lane separation', () => {
         expect(integration.has('src/rpc/handlers/capabilities.integration.test.ts')).toBe(true);
         for (const owner of [
             'src/plugins/daemon/currentCatalog',
-            'src/api/machine/rpcHandlers.promptAssets',
             'src/rpc/handlers/capabilities.probeModes.cwd',
         ]) {
             expect(source.has(`${owner}.test.ts`), owner).toBe(false);

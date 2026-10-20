@@ -162,7 +162,9 @@ export function HappierInputField<Value>(props: HappierInputFieldProps<Value>): 
         value={presentation.value}
         placeholder={picker.affordance?.label}
         {...(props.valueLabel === undefined ? {} : { reading: props.valueLabel })}
-        disabled={disabled || props.optionsStatus === 'loading'}
+        // The host checks a picked value against the choices: while they load, or after their read
+        // failed, Browse cannot succeed, so it waits (the failed line's Retry is the next step).
+        disabled={disabled || !optionsSettled}
         theme={theme}
         onOpen={() => { void picker.open(); }}
         onChange={props.onChange}
@@ -209,8 +211,8 @@ export function HappierInputField<Value>(props: HappierInputFieldProps<Value>): 
     <HappierInputPickerButton
       picker={picker}
       theme={theme}
-      // A type with choices checks the picked value against them, so wait while they load.
-      disabled={disabled || props.optionsStatus === 'loading'}
+      // A type with choices checks the picked value against them, so wait while they load or failed.
+      disabled={disabled || !optionsSettled}
       {...(props.testID === undefined ? {} : { testID: `${props.testID}-picker` })}
     />
   );

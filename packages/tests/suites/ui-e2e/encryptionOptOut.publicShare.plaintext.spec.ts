@@ -205,7 +205,7 @@ test.describe('ui e2e: plaintext mode + public share', () => {
 
       const migrateOk = page.waitForResponse(
         (resp) =>
-          resp.url().endsWith('/v1/account/encryption/migrate') && resp.request().method() === 'POST' && resp.status() === 200,
+          new URL(resp.url()).pathname === '/v1/account/encryption/migrate' && resp.request().method() === 'POST' && resp.status() === 200,
         { timeout: 60_000 },
       );
       await page.getByTestId('settings-account-encryption-mode-switch').click();

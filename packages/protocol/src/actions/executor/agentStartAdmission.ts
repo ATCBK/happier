@@ -31,11 +31,15 @@ export async function resolveProfileSkillSeedsAtAdmissionV1(input: Readonly<Reco
     deps: Pick<ActionExecutorDeps, 'profileActionExecute'>, context: ActionExecutorContext,
 ): Promise<Readonly<{ ok: true; input: Readonly<Record<string, unknown>> }> | ActionExecuteFailure> {
     if (typeof input.profileId !== 'string') return { ok: true, input };
-    if (!deps.profileActionExecute) return { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
+    if (!deps.profileActionExecute) {
+        return actionStartTargetUnavailableV1(context, 'agent_start_context', 'profile_unavailable');
+    }
     const response = await deps.profileActionExecute(parseProfileActionRequestV1('launch_profiles.read', { id: input.profileId }), context);
     if (!response.ok) return response;
     const read = PROFILE_ACTION_OUTPUT_SCHEMAS_V1['launch_profiles.read'].safeParse(response.result);
-    if (!read.success || read.data.status !== 'present') return { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
+    if (!read.success || read.data.status !== 'present') {
+        return actionStartTargetUnavailableV1(context, 'agent_start_context', 'profile_unavailable');
+    }
     const seeds = read.data.profile.skillSeeds ?? [];
     if (seeds.length === 0) return { ok: true, input };
     const selection = SessionCapabilitySelectionAuthoringV1Schema.parse(input.capabilitySelection ?? {});
@@ -411,9 +415,10 @@ export function spawnStartFactsV1(input: Readonly<SpawnStartFactsInput>): AgentS
         capabilitySelection: input.capabilitySelection, transcriptStorage: input.transcriptStorage,
     };
 }
-export async function resolveActionAgentStartContextV1(deps: Pick<ActionExecutorDeps, 'resolveAgentStartContext'> & Partial<Pick<ActionExecutorDeps, 'sessionList'>>, context: ActionExecutorContext, targetSessionId?: string) {
+export async function resolveActionAgentStartContextV1(deps: Pick<ActionExecutorDeps, 'resolveAgentStartContext'> & Partial<Pick<ActionExecutorDeps, 'sessionList'>>, context: ActionExecutorContext, targetSessionId?: string,
+    options?: Readonly<{ purpose: 'session_scope' }>) {
     let resolved = context.agentStartContext ?? await measureActionStartPhaseV1(context, 'agent_start_context',
-      async () => await deps.resolveAgentStartContext?.(context) ?? null);
+      async () => await deps.resolveAgentStartContext?.(context, options) ?? null);
     if (context.actionCaller?.kind === 'session') {
         const caller = context.actionCaller;
         if (!resolved || resolved.caller.kind !== 'session' || resolved.caller.sessionId !== caller.sessionId) {
@@ -464,7 +469,7 @@ export function stampAgentStartSelectionV1(input: Readonly<Record<string, unknow
     const baseline = context.caller.kind === 'session' ? context.baseline : { machineId: context.baseline.machineId, directory: context.baseline.directory };
     return projectAgentStartSelectionV1(input, { ...stamped, engine: stamped.engine }, kind, baseline);
 }
-function projectAgentStartSelectionV1(input: Readonly<Record<string, unknown>>, selection: Readonly<{
+export function projectAgentStartSelectionV1(input: Readonly<Record<string, unknown>>, selection: Readonly<{
     engine: RoleEngineV1;
     profileId?: string;
     intent?: Extract<ReturnType<typeof admitAgentStartV1>, {

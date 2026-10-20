@@ -92,7 +92,8 @@ export async function replayApprovedAsDaemon(input: Readonly<{
         { captureLazyActionAccountContext }, { createMachineConnectionActionDeps },
         { writeApprovalRequestArtifact }, { isApprovalExecutionOriginCurrentForAccountContext },
         { createUiConnectedServiceAction }, { executeActionOperationActionV1 }, { machineRpcWithServerScope },
-        { resolveServerProfileScopeIdForIdentifier }, { createUiProviderActionExecuteV1 }] = await Promise.all([
+        { resolveServerProfileScopeIdForIdentifier }, { createUiProviderActionExecuteV1 }, { createUiProjectWorkerActionV1 },
+        { createUiFilesystemAction }] = await Promise.all([
         import('@happier-dev/protocol/actions/actionExecutor'),
         import('@happier-dev/protocol/approvals/approvalArtifactHeaderV1'),
         import('@/sync/ops/actions/actionAccountContext'),
@@ -104,6 +105,8 @@ export async function replayApprovedAsDaemon(input: Readonly<{
         import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc'),
         import('@/sync/domains/server/serverProfiles'),
         import('@/sync/ops/actions/providerActionDeps'),
+        import('@/sync/ops/actions/projectWorkerAction'),
+        import('@/sync/ops/actions/filesystemActionDeps'),
     ]);
     const account = await captureLazyActionAccountContext(input.serverId, input.signal);
     try {
@@ -114,6 +117,8 @@ export async function replayApprovedAsDaemon(input: Readonly<{
             ...(input.runtimeActionExecute ? { runtimeActionExecute: input.runtimeActionExecute } : {}),
             connectedServiceAction: createUiConnectedServiceAction(account),
             providerActionExecute: createUiProviderActionExecuteV1(account),
+            projectWorkerAction: createUiProjectWorkerActionV1(account),
+            filesystemActionExecute: createUiFilesystemAction(),
             actionOperationAction: args => executeActionOperationActionV1({ ...args,
                 transport: request => machineRpcWithServerScope({ ...request, accountId: account.accountId }),
             }),

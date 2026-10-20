@@ -66,6 +66,10 @@ export function resolveSessionFollowContextUtf8AllowanceV1(input: Readonly<{
 
 export type SessionFollowBudgetEnvelopeV1 = Readonly<{
   sourceSessionId: string;
+  /** Local packing address when multiple admitted originals share one source. */
+  candidateId?: string;
+  /** Selected original order within one source; unrelated sources retain recency priority. */
+  sourceOriginalSeq?: number;
   /** Canonical source Session recency; transcript sequence is not cross-Session comparable. */
   sourceRecencyMs: number;
   actionableAttention: boolean;
@@ -87,20 +91,24 @@ function compareBudgetEnvelopes(
   left: SessionFollowBudgetEnvelopeV1,
   right: SessionFollowBudgetEnvelopeV1,
 ): number {
+  if (left.sourceSessionId === right.sourceSessionId
+    && left.sourceOriginalSeq !== undefined && right.sourceOriginalSeq !== undefined
+    && left.sourceOriginalSeq !== right.sourceOriginalSeq) return left.sourceOriginalSeq - right.sourceOriginalSeq;
   if (left.actionableAttention !== right.actionableAttention) {
     return left.actionableAttention ? -1 : 1;
   }
   if (right.sourceRecencyMs !== left.sourceRecencyMs) {
     return right.sourceRecencyMs - left.sourceRecencyMs;
   }
-  return left.sourceSessionId < right.sourceSessionId ? -1 : left.sourceSessionId > right.sourceSessionId ? 1 : 0;
+  return left.sourceSessionId < right.sourceSessionId ? -1 : left.sourceSessionId > right.sourceSessionId ? 1
+    : (left.candidateId ?? '') < (right.candidateId ?? '') ? -1 : (left.candidateId ?? '') > (right.candidateId ?? '') ? 1 : 0;
 }
 
 function omittedResult(candidates: readonly SessionFollowBudgetEnvelopeV1[]): SessionFollowBudgetResultV1 {
   return {
     keptBySource: new Map(),
     truncatedBySource: new Map(),
-    omittedSources: Object.freeze([...candidates].sort(compareBudgetEnvelopes).map((candidate) => candidate.sourceSessionId)),
+    omittedSources: Object.freeze([...candidates].sort(compareBudgetEnvelopes).map((candidate) => candidate.candidateId ?? candidate.sourceSessionId)),
   };
 }
 
@@ -123,6 +131,7 @@ export function applySessionFollowContextBudgetV1(input: Readonly<{
   let used = 0;
 
   for (const candidate of ordered) {
+    const candidateId = candidate.candidateId ?? candidate.sourceSessionId;
     const ascending = [...candidate.recentMessages].sort((a, b) => a.seq - b.seq);
     const allSeqs = Object.freeze(ascending.map((message) => message.seq));
     const completeCost = measure(candidate.render({
@@ -159,13 +168,13 @@ export function applySessionFollowContextBudgetV1(input: Readonly<{
     if (normalizedSeqs.length !== candidate.recentMessages.length) sourceTruncated = true;
     const renderedCost = measure(candidate.render({ keptMessageSeqs: normalizedSeqs, truncated: sourceTruncated }));
     if (used + renderedCost > budget) {
-      omittedSources.push(candidate.sourceSessionId);
-      truncatedBySource.set(candidate.sourceSessionId, true);
+      omittedSources.push(candidateId);
+      truncatedBySource.set(candidateId, true);
       continue;
     }
     used += renderedCost;
-    keptBySource.set(candidate.sourceSessionId, normalizedSeqs);
-    if (sourceTruncated) truncatedBySource.set(candidate.sourceSessionId, true);
+    keptBySource.set(candidateId, normalizedSeqs);
+    if (sourceTruncated) truncatedBySource.set(candidateId, true);
   }
 
   return { keptBySource, truncatedBySource, omittedSources: Object.freeze(omittedSources) };

@@ -1,50 +1,86 @@
 import type { TransactionClient } from '@/storage/prisma';
 import type { ProviderAccountUsagePageProjectionDemandV1Schema, ProviderAccountUsagePageProjectionWriteV1Schema } from '@happier-dev/protocol/connect/providerAccountUsagePageProjection';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import type { Prisma } from '@prisma/client';
-import { StoredProviderAccountUsagePageProjectionV1Schema } from '@happier-dev/protocol/connect/providerAccountUsagePageProjection';
+import { StoredProviderAccountUsagePageProjectionV1Schema, ProviderAccountUsagePageProjectionMetadataV1Schema,
+    type ProviderAccountUsagePageProjectionCoverageV1Schema, type ProviderAccountUsagePageProjectionPrefixReadV1Schema } from '@happier-dev/protocol/connect/providerAccountUsagePageProjection';
 import { ProviderAccountUsagePayloadInvariantError } from './types';
+import { isAccountScopedBlobCiphertextForKind } from '@happier-dev/protocol/crypto/accountScopedCipherEnvelope';
+import { log } from '@/utils/logging/log';
 
 type ProjectionStorage = Pick<TransactionClient, 'providerAccountUsageRecord' | 'providerAccountUsageHistory'>;
 type ProjectionWrite = z.infer<typeof ProviderAccountUsagePageProjectionWriteV1Schema>;
+type StoredProjection = z.infer<typeof StoredProviderAccountUsagePageProjectionV1Schema>;
 
 export async function readProviderAccountUsagePageProjection(
-    params: Readonly<{ accountId: string; recordId: string; projection: z.infer<typeof ProviderAccountUsagePageProjectionDemandV1Schema> }>,
+    params: Readonly<{ accountId: string; recordId: string; projection?: z.infer<typeof ProviderAccountUsagePageProjectionDemandV1Schema>;
+        heldProjection?: z.infer<typeof ProviderAccountUsagePageProjectionCoverageV1Schema> }>,
     storage: ProjectionStorage,
-): Promise<{ projection: ProjectionWrite | null; complete: boolean }> {
-    const missing = { projection: null, complete: false };
-    const row = await storage.providerAccountUsageRecord.findUnique({
+    admittedRecord?: Readonly<{ metadata?: unknown }>,
+): Promise<{ projection: StoredProjection | null; complete: boolean; prefix?: z.infer<typeof ProviderAccountUsagePageProjectionPrefixReadV1Schema> }> {
+    const missing = (reason: 'absent' | 'superseded' | 'range' | 'prefix') => {
+        // The HTTP null is deliberately unchanged. Record only the admission
+        // branch: protected content and Account credentials never enter logs.
+        log({ module: 'provider-account-usage', event: 'page_projection_read',
+            recordId: params.recordId, range: params.projection?.range, reason });
+        return { projection: null, complete: false };
+    };
+    const row = admittedRecord ?? await storage.providerAccountUsageRecord.findUnique({
         where: { accountId_recordId: { accountId: params.accountId, recordId: params.recordId } }, select: { metadata: true },
     });
     const metadata = row?.metadata;
-    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata) || !('pageProjection' in metadata) || !metadata.pageProjection) return missing;
-    const parsed = StoredProviderAccountUsagePageProjectionV1Schema.safeParse(metadata.pageProjection);
-    if (!parsed.success || parsed.data.recordId !== params.recordId) throw new ProviderAccountUsagePayloadInvariantError('Invalid B page projection');
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata) || !('pageProjection' in metadata) || !metadata.pageProjection) return missing('absent');
+    const parsed = ProviderAccountUsagePageProjectionMetadataV1Schema.safeParse(metadata.pageProjection);
+    if (!parsed.success) throw new ProviderAccountUsagePayloadInvariantError('Invalid B page projection');
+    if (!parsed.data) return missing('superseded');
+    if (parsed.data.recordId !== params.recordId) throw new ProviderAccountUsagePayloadInvariantError('Invalid B page projection');
     const projection = parsed.data;
-    if (projection.demand.range.startAtMs > params.projection.range.startAtMs) return missing;
+    // A document read validates its own stored range. A demand read additionally
+    // checks coverage for the caller's range; both use this same prefix owner.
+    const demand = params.projection ?? projection.demand;
+    if (projection.demand.range.startAtMs > demand.range.startAtMs) return missing('range');
     const where = { accountId: params.accountId, recordId: params.recordId,
         observedAt: { gte: new Date(projection.demand.range.startAtMs), lt: new Date(projection.demand.range.endAtMs) } };
-    const prefix = projection.frontier ? { ...where, OR: [
-        { observedAt: { lt: new Date(projection.frontier.observedAtMs) } },
-        { observedAt: new Date(projection.frontier.observedAtMs), id: { lte: projection.frontier.id } },
-    ] } : where;
-    const [count, last] = await Promise.all([
-        storage.providerAccountUsageHistory.count({ where: prefix }),
-        storage.providerAccountUsageHistory.findFirst({ where: prefix, orderBy: [{ observedAt: 'desc' }, { id: 'desc' }], select: { id: true, observedAt: true } }),
-    ]);
     // A changed prefix needs a full backfill. Appending only a tail would lose
     // a late/backdated accepted observation or retain a removed witness.
-    if (!sameCoverage(projection, count, last)) return missing;
+    if (!await hasAcceptedPrefix(params, projection, storage)) return missing('prefix');
     const total = await storage.providerAccountUsageHistory.count({ where: { ...where,
-        observedAt: { gte: where.observedAt.gte, lt: new Date(Math.max(projection.demand.range.endAtMs, params.projection.range.endAtMs)) } } });
-    return { projection, complete: total === projection.observationCount };
+        observedAt: { gte: where.observedAt.gte, lt: new Date(Math.max(projection.demand.range.endAtMs, demand.range.endAtMs)) } } });
+    const complete = total === projection.observationCount;
+    const held = params.heldProjection;
+    // Revalidate the caller's actual prefix, not merely the current writer's
+    // frontier. Backdated/removed witnesses require the ordinary full read.
+    const prefix = held && held.contentMode === projection.content.t
+        && held.demand.range.startAtMs === projection.demand.range.startAtMs
+        && held.observationCount <= projection.observationCount
+        && await hasAcceptedPrefix(params, held, storage)
+        ? { held, complete: total === held.observationCount,
+            published: { demand: projection.demand, frontier: projection.frontier,
+                observationCount: projection.observationCount, contentMode: projection.content.t } }
+        : undefined;
+    return { projection, complete, ...(prefix ? { prefix } : {}) };
+}
+
+async function hasAcceptedPrefix(params: Readonly<{ accountId: string; recordId: string }>,
+    value: Pick<ProjectionWrite, 'demand' | 'frontier' | 'observationCount'>, storage: ProjectionStorage) {
+    const where = { accountId: params.accountId, recordId: params.recordId,
+        observedAt: { gte: new Date(value.demand.range.startAtMs), lt: new Date(value.demand.range.endAtMs) },
+        ...(value.frontier ? { OR: [
+            { observedAt: { lt: new Date(value.frontier.observedAtMs) } },
+            { observedAt: new Date(value.frontier.observedAtMs), id: { lte: value.frontier.id } },
+        ] } : {}) };
+    const [count, last] = await Promise.all([
+        storage.providerAccountUsageHistory.count({ where }),
+        storage.providerAccountUsageHistory.findFirst({ where, orderBy: [{ observedAt: 'desc' }, { id: 'desc' }], select: { id: true, observedAt: true } }),
+    ]);
+    return sameCoverage(value, count, last);
 }
 
 /** Called only after qualified source/Account-mode admission, in that transaction. */
 export async function writeProviderAccountUsagePageProjection(
     params: Readonly<{ accountId: string; value: ProjectionWrite }>,
     storage: ProjectionStorage,
-): Promise<boolean> {
+): Promise<StoredProjection | null> {
     const { value } = params;
     const where = { accountId: params.accountId, recordId: value.recordId,
         observedAt: { gte: new Date(value.demand.range.startAtMs), lt: new Date(value.demand.range.endAtMs) } };
@@ -53,16 +89,29 @@ export async function writeProviderAccountUsagePageProjection(
         storage.providerAccountUsageHistory.findFirst({ where, orderBy: [{ observedAt: 'desc' }, { id: 'desc' }], select: { id: true, observedAt: true } }),
         storage.providerAccountUsageRecord.findUnique({ where: { accountId_recordId: { accountId: params.accountId, recordId: value.recordId } }, select: { metadata: true } }),
     ]);
-    if (!row || !sameCoverage(value, count, last)) return false;
+    if (!row || !sameCoverage(value, count, last)) return null;
     const metadata = row.metadata && typeof row.metadata === 'object' && !Array.isArray(row.metadata) ? row.metadata : {};
+    const retained = 'pageProjection' in metadata ? StoredProviderAccountUsagePageProjectionV1Schema.safeParse(metadata.pageProjection) : null;
+    if (retained?.success && retained.data.encoding === value.encoding && retained.data.content.t === value.content.t
+        && (retained.data.content.t === 'plain' || isAccountScopedBlobCiphertextForKind({
+            kind: 'provider_account_usage_page_projection', ciphertext: retained.data.content.c }))) {
+        // Accepted history determines the document. Ciphertext changes when
+        // another client seals the same facts; it is not a material revision.
+        const existing = await readProviderAccountUsagePageProjection({ accountId: params.accountId,
+            recordId: value.recordId, projection: value.demand }, storage, row);
+        if (existing.complete && existing.projection) return existing.projection;
+    }
     await storage.providerAccountUsageRecord.update({
         where: { accountId_recordId: { accountId: params.accountId, recordId: value.recordId } },
         data: { metadata: { ...metadata, pageProjection: value } as Prisma.InputJsonValue },
+        // The admitted value is already in memory; do not return its packed
+        // body again while this transaction retains the usage tuple lock.
+        select: { id: true },
     });
-    return true;
+    return value;
 }
 
-function sameCoverage(value: ProjectionWrite, count: number, last: { id: string; observedAt: Date } | null) {
+function sameCoverage(value: Pick<ProjectionWrite, 'observationCount' | 'frontier'>, count: number, last: { id: string; observedAt: Date } | null) {
     return count === value.observationCount && (last ? last.id === value.frontier?.id
         && last.observedAt.getTime() === value.frontier.observedAtMs : value.frontier === null);
 }

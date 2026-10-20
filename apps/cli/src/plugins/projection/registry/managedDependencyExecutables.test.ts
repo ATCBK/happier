@@ -334,6 +334,7 @@ describe('selectExecutableManagedDependencies', () => {
 describe('pinned archive managed dependencies', () => {
     const PUBLISHED_HOSTS = [
         { targetKey: 'darwin-arm64', platform: 'darwin', architecture: 'arm64', executableSubpath: 'agy_acp_server.par' },
+        { targetKey: 'darwin-x64', platform: 'darwin', architecture: 'x64', executableSubpath: 'agy_acp_server.par' },
         { targetKey: 'linux-x64', platform: 'linux', architecture: 'x64', executableSubpath: 'agy_acp_server.par' },
         { targetKey: 'linux-arm64', platform: 'linux', architecture: 'arm64', executableSubpath: 'agy_acp_server.par' },
         { targetKey: 'win32-x64', platform: 'win32', architecture: 'x64', executableSubpath: 'agy_acp_server.exe' },
@@ -342,6 +343,9 @@ describe('pinned archive managed dependencies', () => {
 
     it('publishes the bundled Antigravity pinned ACP server through the canonical installables descriptor on every host it ships', () => {
         const contribution = readBundledAntigravityAcpServerContribution();
+        const declaration = PluginManagedDependencyContributionV2Schema.parse(contribution.definition);
+        const pinnedSource = declaration.sources.find(source => source.kind === 'pinnedArchive');
+        if (!pinnedSource || pinnedSource.kind !== 'pinnedArchive') throw new Error('Expected the bundled pinned ACP source');
 
         for (const host of PUBLISHED_HOSTS) {
             const registry = resolveExecutableManagedDependenciesRegistry([contribution], {
@@ -360,7 +364,7 @@ describe('pinned archive managed dependencies', () => {
                     key: 'dep.antigravity.agy-acp-server',
                     capabilityId: 'dep.antigravity.agy-acp-server',
                     display: { name: 'Antigravity ACP server' },
-                    source: { kind: 'pinned_archive', version: '1.1.1' },
+                    source: { kind: 'pinned_archive', version: pinnedSource.version },
                     binary: {
                         commands: ['agy_acp_server'],
                         systemFirst: false,
@@ -392,7 +396,7 @@ describe('pinned archive managed dependencies', () => {
 
         expect(resolveExecutableManagedDependenciesRegistry([contribution], {
             platform: 'darwin',
-            architecture: 'x64',
+            architecture: 'ia32',
         }).descriptors).toEqual([]);
         expect(resolveExecutableManagedDependenciesRegistry([contribution], {
             platform: 'freebsd',

@@ -43,6 +43,7 @@ export function projectTriageBulkEntrySessionStartInputV1(input: Readonly<{
     if (input.promptText === null || input.promptText.trim().length === 0) throw new Error('triage:bulk:instructionRequired');
     return {
         v: 1, workspaceMode: input.action.workspaceMode, entryRef: first.entryRef,
+        sourceInstanceId: first.sourceInstance.sourceInstanceId,
         display: first.display, destination: input.sessionDestination,
         finalOpen: input.destination === 'oneSessionForAllEntries' ? 'deferred' : 'suppressed',
         // Direct bulk overrides a single-entry compose default. Author-first

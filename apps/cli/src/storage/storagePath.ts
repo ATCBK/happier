@@ -1,6 +1,6 @@
 import { realpath } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import { canonicalAbsolutePathsEqual, isCanonicalAbsolutePathInsideRoot } from '@/utils/path/expandHomeDirPath';
+import { canonicalAbsolutePathsEqual, createCanonicalAbsolutePathComparator, isCanonicalAbsolutePathInsideRoot } from '@happier-dev/cli-common/path';
 import { physicalPathWithoutFollowingLeaf, realpathWithAbsentSuffix } from '@/utils/path/physicalAncestorPath';
 
 /** Native disk IDs carry non-UTF8 POSIX paths losslessly; display names are never filesystem authority. */
@@ -64,6 +64,22 @@ export function storagePathContains(parent: string, child: string, platform: Nod
     const root = bytes(parent); const path = bytes(child);
     return root.equals(path) || path.subarray(0, root.length).equals(root) && (root.length === 1 || path[root.length] === 47);
 }
+/** Per-read lexical reuse; native byte paths keep their existing lossless comparator. */
+export function createStoragePathComparator(platform: NodeJS.Platform = process.platform) {
+    const identity = createCanonicalAbsolutePathComparator();
+    const containment = createCanonicalAbsolutePathComparator({ platform });
+    return {
+        equal(left: string, right: string): boolean {
+            return left.startsWith('bytes:') || right.startsWith('bytes:')
+                ? storagePathsEqual(left, right, platform) : identity.equal(left, right);
+        },
+        contains(parent: string, child: string): boolean {
+            return parent.startsWith('bytes:') || child.startsWith('bytes:')
+                ? storagePathContains(parent, child, platform) : identity.equal(parent, child) || containment.contains(parent, child);
+        },
+    };
+}
+export type StoragePathComparator = ReturnType<typeof createStoragePathComparator>;
 export async function realStoragePathWithAbsentSuffix(path: string): Promise<string> {
     const decoded = storagePathToFs(path);
     if (typeof decoded === 'string') return realpathWithAbsentSuffix(decoded);

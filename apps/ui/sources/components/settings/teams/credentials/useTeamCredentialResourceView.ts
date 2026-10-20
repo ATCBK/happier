@@ -10,7 +10,7 @@ import {
     useTeamCredentialResource,
     useTeamCredentialResourceCatalog,
 } from '@/hooks/teams/useTeamCredentialResources';
-import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
+import type { HomeDomainFailure } from '@/sync/ops/teams/teamActionClient';
 
 import type { TeamSectionContext } from '../teamSectionContext';
 
@@ -93,9 +93,10 @@ export function useTeamCredentialResourceView(params: Readonly<{
         resource: exact.resource,
         catalogResource,
         viewer,
-        resolved: exact.resource !== null
-            || catalogResource !== null
-            || (exact.resolved && catalog.resolved),
+        // A recipient catalog row can render read-only detail, but it cannot
+        // settle the independent administration read used by the editor and
+        // activity screens. Keep those screens loading until that read answers.
+        resolved: exact.resource !== null || (exact.resolved && catalog.resolved),
         canManage: context.mutationsAvailable
             && !context.archived
             && managesResources,

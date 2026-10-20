@@ -1,9 +1,10 @@
 import * as React from 'react';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { renderScreen as renderRealScreen, standardCleanup } from '@/dev/testkit';
 import { installSettingsViewCommonModuleMocks, resetSettingsViewCommonModuleMockState } from '../settingsViewTestHelpers';
 import { createUseSettingMock, createUseSettingMutableMockFromReader } from '@/dev/testkit/mocks/storage';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import {
     createMachineAdministrationTargetSelectionFixture,
     createMachineAdministrationTargetSelectionMock,
@@ -127,8 +128,9 @@ installSettingsViewCommonModuleMocks({
                     : key === 'sessionAgentStartAllowListsV1'
                         ? [capture.rawAllowLists, capture.setAllowLists] as const
                         : [capture.rawSettings, (next: unknown) => {
-                    capture.rawSettings = next;
-                    capture.setRawSettings(next);
+                    const value = typeof next === 'function' ? next(capture.rawSettings) : next;
+                    capture.rawSettings = value;
+                    capture.setRawSettings(value);
                 }] as const),
                 useSetting: createUseSettingMock({ fallback: () => ({ privacy: { shareDeviceInventory: true } }) }),
             },
@@ -237,15 +239,15 @@ describe('ActionSettingsDetailView', () => {
         expect(renderedProps(Item).some((item) => item.testID === 'settings-actions:action:review.start:target:plugin')).toBe(true);
         expect(renderedProps(SegmentedTabBar).some((bar) =>
             bar.testIDPrefix === 'settings-actions:action:review.start:target:cli:mode'
-            && bar.activeTabId === 'default',
+            && bar.valueSource === 'inherited',
         )).toBe(true);
         expect(renderedProps(SegmentedTabBar).some((bar) =>
             bar.testIDPrefix === 'settings-actions:action:review.start:target:api:mode'
-            && bar.activeTabId === 'default',
+            && bar.valueSource === 'inherited',
         )).toBe(true);
         expect(renderedProps(SegmentedTabBar).some((bar) =>
             bar.testIDPrefix === 'settings-actions:action:review.start:target:plugin:mode'
-            && bar.activeTabId === 'default',
+            && bar.valueSource === 'inherited',
         )).toBe(true);
         const apiMode = renderedProps(SegmentedTabBar).find((bar) =>
             bar.testIDPrefix === 'settings-actions:action:review.start:target:api:mode',
@@ -263,6 +265,22 @@ describe('ActionSettingsDetailView', () => {
         expect(commandPaletteSwitch?.accessibilityLabel).toBe(commandPaletteRow?.title);
     });
 
+    it('renders a declared non-waivable Action without an Allowed or Default choice', async () => {
+        const actionId = 'workflow.trigger.add';
+        const spec = getActionSpec(actionId);
+        const descriptor = Object.getOwnPropertyDescriptor(spec, 'approvalPolicy')!;
+        Object.defineProperty(spec, 'approvalPolicy', { ...descriptor, value: { ...spec.approvalPolicy, nonWaivable: true } });
+        capture.rawSettings = { v: 1, approvalWaivedSurfaces: { [actionId]: ['agent'] } };
+        try {
+            const { ActionSettingsDetailContent } = await import('./ActionSettingsDetailView');
+            await renderScreen(<ActionSettingsDetailContent actionId={actionId} />);
+            const agentMode = renderedProps(SegmentedTabBar).find(bar =>
+                bar.testIDPrefix === `settings-actions:action:${actionId}:target:agent:mode`);
+            expect(agentMode?.activeTabId).toBe('ask_first');
+            expect((agentMode?.tabs as Array<{ id: string }>).map(tab => tab.id)).toEqual(['off', 'ask_first']);
+        } finally { Object.defineProperty(spec, 'approvalPolicy', descriptor); }
+    });
+
     it('renders dangerous Agent confirmation as the inherited default with explicit overrides', async () => {
         const { ActionSettingsDetailContent } = await import('./ActionSettingsDetailView');
 
@@ -272,10 +290,9 @@ describe('ActionSettingsDetailView', () => {
             bar.testIDPrefix === 'settings-actions:action:prompt_doc.update:target:agent:mode',
         );
         expect(sessionAgentMode).toBeTruthy();
-        expect(sessionAgentMode?.activeTabId).toBe('default');
+        expect(sessionAgentMode?.valueSource).toBe('inherited');
         expect((sessionAgentMode?.tabs as Array<{ id: string }>).map((tab) => tab.id)).toEqual([
             'off',
-            'default',
             'ask_first',
             'allowed',
         ]);
@@ -324,6 +341,22 @@ describe('ActionSettingsDetailView', () => {
                 },
             },
         });
+    });
+
+    it('persists the MCP Allowed choice for widget rename through the real detail control', async () => {
+        capture.rawSettings = { v: 1, actions: { 'widgets.item.rename': { disabledSurfaces: ['agent'] } } };
+        const { ActionSettingsDetailContent } = await import('./ActionSettingsDetailView');
+        const screen = await renderScreen(<ActionSettingsDetailContent actionId="widgets.item.rename" />);
+        const prefix = 'settings-actions:action:widgets.item.rename:target:mcp:mode';
+        // Inheriting: no way back to a default it is already on.
+        expect(screen.findByTestId(`${prefix}:useDefault`)).toBeNull();
+        await screen.pressByTestIdAsync(`${prefix}:allowed`);
+        expect(capture.rawSettings).toMatchObject({ actions: { 'widgets.item.rename': { disabledSurfaces: ['agent'] } },
+            approvalWaivedSurfaces: { 'widgets.item.rename': ['mcp'] } });
+        // The boundary fixture records persisted bytes; remount reads those acknowledged bytes.
+        await screen.update(<ActionSettingsDetailContent key="readback" actionId="widgets.item.rename" />);
+        expect(screen.findByTestId(`${prefix}:allowed`)?.props.accessibilityState.checked).toBe(true);
+        expect(screen.findByTestId(`${prefix}:useDefault`)).not.toBeNull();
     });
 
     it('renders tool exposure controls for eligible tool-backed integration surfaces', async () => {
@@ -473,6 +506,11 @@ describe('ActionSettingsDetailView', () => {
 
     it('moves approval mode controls into the target text column on narrow mobile widths', async () => {
         capture.windowWidth = 390;
+        const native = await import('react-native');
+        const viewport = vi.spyOn(native, 'useWindowDimensions').mockReturnValue({
+            width: 390, height: 844, scale: 2, fontScale: 1,
+        });
+        onTestFinished(() => viewport.mockRestore());
         const { ActionSettingsDetailContent } = await import('./ActionSettingsDetailView');
 
         await renderScreen(<ActionSettingsDetailContent actionId="review.start" />);
@@ -485,7 +523,7 @@ describe('ActionSettingsDetailView', () => {
         expect(cliTarget?.subtitleAccessory).toBeTruthy();
         expect(renderedProps(SegmentedTabBar).some((bar) =>
             bar.testIDPrefix === 'settings-actions:action:review.start:target:cli:mode'
-            && bar.activeTabId === 'default',
+            && bar.valueSource === 'inherited',
         )).toBe(true);
     });
 
@@ -545,10 +583,9 @@ describe('ActionSettingsDetailView', () => {
             ));
             expect(modeControl?.accessibilityLabel).toBe(target?.title);
             expect(modeControl?.targetSize).toBe('platform');
-            expect(modeControl?.activeTabId).toBe('default');
+            expect(modeControl?.valueSource).toBe('inherited');
             expect((modeControl?.tabs as Array<{ id: string }>).map((tab) => tab.id)).toEqual([
                 'off',
-                'default',
                 'ask_first',
                 'allowed',
             ]);

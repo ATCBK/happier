@@ -13,7 +13,7 @@ describe('sender-scoped provider readiness at the Channels authority', () => {
     const connection = createCurrentConversationConnectionFixture({ connectionId: 'readiness-connection', authority: {
       providerPluginId: materializationRef.pluginId, providerContributionSelection: { contributionId: 'provider' },
       providerSetupInput: {}, credentialRef: null, providerConfig: {}, providerConnectionKey: 'mailbox',
-      transportOrigin: { serverIdentityId: 'server', materializationRef }, routingIdentityKey: 'r'.repeat(43),
+      transportOrigin: { serverIdentityId: 'srv_account_one', materializationRef }, routingIdentityKey: 'r'.repeat(43),
       integrationPrincipal: { id: 'mailbox' }, authorityEpoch: 1,
     } });
     await state.put(connection, { expectedRevision: 'absent' });
@@ -28,6 +28,9 @@ describe('sender-scoped provider readiness at the Channels authority', () => {
     // Account storage and host-stamped invocation are genuine external boundaries;
     // the canonical schema, binding reader and readiness lifecycle remain real.
     const context = { signal: new AbortController().signal, caller: { kind: 'plugin', pluginId: materializationRef.pluginId,
+      contribution: { id: 'readiness', qualifiedId: `${materializationRef.pluginId}/actions/readiness` },
+      occurrenceId: 'readiness-occurrence', sourceCustody: { kind: 'development', registeredRootId: 'readiness-root' },
+      executionOrigin: { serverIdentityId: 'srv_account_one', materializationRef },
       materialization: materializationRef }, services: { storage: { account: { collection(definition: { id: string }) {
         if (definition.id !== CHANNEL_STATE_COLLECTION.id) throw new Error('Unexpected Collection');
         return state;

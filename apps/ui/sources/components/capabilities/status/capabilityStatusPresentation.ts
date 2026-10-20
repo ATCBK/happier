@@ -38,7 +38,11 @@ export type CapabilityStatus = Readonly<{
   kind: CapabilityStatusKind;
   /** "on nl2": the machine the status is about, by display name. */
   machineName?: string;
-  /** Quiet suffix ("· Oct 10"), e.g. last-known time. */
+  /**
+   * More about the status. A quiet suffix on the pill's line ("· Oct 10", a last-known time) for most kinds; for a
+   * stop or a run that cannot happen (`error`, `cantrun`) it is the reason, which the presentation hands on as
+   * `reason` so it reads whole on its own line.
+   */
   detail?: string;
   fix?: Readonly<{ kind: CapabilityFixKind; onPress: () => void }>;
 }>;
@@ -52,6 +56,8 @@ export type CapabilityStatusPresentation = Readonly<{
     label: string;
     detail?: string;
   }>;
+  /** Why, in words: drawn under the pill, wrapping, never inside it. Only for statuses whose detail is a reason. */
+  reason?: string;
   tone: 'needs_you' | 'failed' | 'neutral' | 'quiet';
   /** Higher blocks more; the more blocking status shows when there are two. */
   blockingRank: number;
@@ -74,6 +80,8 @@ type Spec = Readonly<{
     label: string;
   }>;
   fix?: CapabilityFixKind;
+  /** The status's `detail` is a reason (a sentence), not a suffix: it moves under the pill. */
+  detailIsReason?: true;
 }>;
 
 const needsYou = (label: () => string) => () => ({
@@ -98,6 +106,7 @@ const SPECS: Record<CapabilityStatusKind, Spec> = {
     tone: 'failed',
     rank: 100,
     fix: 'try_again',
+    detailIsReason: true,
     pill: (status) => ({
       variant: 'danger',
       chrome: 'pill',
@@ -138,6 +147,7 @@ const SPECS: Record<CapabilityStatusKind, Spec> = {
     tone: 'needs_you',
     rank: 80,
     fix: 'how_to_fix',
+    detailIsReason: true,
     pill: (status) => ({
       variant: 'attention',
       chrome: 'pill',
@@ -245,8 +255,9 @@ export function presentCapabilityStatus(
   const fix = status.fix?.kind ?? spec.fix;
   return {
     pill: pill
-      ? { ...pill, ...(status.detail ? { detail: status.detail } : {}) }
+      ? { ...pill, ...(status.detail && !spec.detailIsReason ? { detail: status.detail } : {}) }
       : null,
+    ...(pill && status.detail && spec.detailIsReason ? { reason: status.detail } : {}),
     tone: spec.tone,
     blockingRank: spec.rank,
     ...(pill && fix ? { fixLabel: fixLabel(fix) } : {}),

@@ -1,4 +1,8 @@
 export * from './accountFollow.js';
+export * from './followPolicyEditorV1.js';
+export * from './sessionFollowPolicyV1.js';
+export * from './sessionReceiverDeliveryV1.js';
+export * from './sessionFollowDeliveryProjectionV1.js';
 export * from './accountVoiceFollowTransportV1.js';
 export * from './api.js';
 export * from './changes.js';
@@ -9,5 +13,7 @@ export * from './sessionFollowSourceProjectionV1.js';
 export * from './actions.js';
 export * from './actionTransport.js';
 export * from './sessionFollowTransportV1.js';
+export * from './sessionManagerV1.js';
 export * from './sessionFollowUpdateEnvelopeV1.js';
 export * from './voiceTrackedTargetsCompatibilityV1.js';
+export * from './sessionFollowRuleV1.js';

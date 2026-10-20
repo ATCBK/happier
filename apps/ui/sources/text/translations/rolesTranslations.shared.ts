@@ -62,6 +62,8 @@ export type RolesTranslations = Readonly<{
         secondOpinionDescription: string;
         secondOpinionOff: string;
         secondOpinionEncouraged: string;
+        canDelegateToOtherRolesTitle: string;
+        canDelegateToOtherRolesDescription: string;
         enabledTitle: string;
         enabledDescription: string;
         advancedTitle: string;
@@ -218,8 +220,10 @@ export const rolesTranslationsEnglish = { en: {
             secondOpinionDescription: 'Encouraged asks it to consider a second opinion before a pull request or before calling work done.',
             secondOpinionOff: 'Off',
             secondOpinionEncouraged: 'Encouraged',
+            canDelegateToOtherRolesTitle: 'Can delegate to other roles',
+            canDelegateToOtherRolesDescription: 'Includes available roles and how to start them in its instructions.',
             enabledTitle: 'Available',
-            enabledDescription: 'Offered in the Roles rail and to orchestrators.',
+            enabledDescription: 'Offered in the Roles rail and to roles that delegate.',
             advancedTitle: 'Advanced',
             launchProfileTitle: 'Launch profile',
             launchProfileDescription: 'Env, permissions, machine',

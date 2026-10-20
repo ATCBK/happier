@@ -51,6 +51,10 @@ import { updateSettings } from '@/persistence';
 import { reloadConfiguration } from '@/configuration';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
+import { getActiveProjectAccountRowsSnapshot, readProjectAccountRows } from '@/workspaces/projectAccountRows';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
+import { projectApprovalExecutionFailureV2, readApprovalExecutionFailure } from '@happier-dev/protocol/approvals/approvalExecutionFailure';
 
 function createAccountProjectWorkerActionDeps(input: Parameters<typeof createAccountServerActionDeps>[0]) {
   const ctx = input.credentials ? resolveSessionEncryptionContextFromCredentials(input.credentials) : null;
@@ -174,6 +178,112 @@ describe('Account API token HTTP adapter', () => {
     restore = installAxiosFastifyAdapter({ app, origin: 'http://account.test' });
   });
   afterEach(async () => { restore(); await app.close(); });
+
+  it.each(['transport_timeout', 'transport_error', 'acknowledgement_schema'] as const)(
+    'retains only bounded Account HTTP %s diagnostics through durable approval settlement and read', category => {
+      const actionId = 'machines.managed.cancel';
+      const request = ApprovalRequestV2Schema.parse({ v: 2, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+        createdBy: { surface: 'cli' }, summary: 'Cancel creation', actionId,
+        actionArgs: { homeId: 'srv_managed', managedId: 'waiting', expectedIntentRevision: 0 },
+        executionOriginV1: { v: 1, actionId, authority: 'present_user', surface: 'ui', caller: { kind: 'host' },
+          serverId: 'home', requestId: 'cancel-request' } });
+      const failure = { ok: false as const, errorCode: 'outcome_unknown', error: 'outcome_unknown', details: { category } };
+      const execution = projectApprovalExecutionFailureV2({ request, failure, executedAtMs: 2 });
+      expect(execution).toMatchObject({ effectAttempted: true, ok: false, details: { category } });
+      const stored = ApprovalRequestV2Schema.parse({ ...request, status: 'failed', updatedAtMs: 2,
+        decision: { kind: 'approve', decidedAtMs: 2, authority: 'present_user' }, execution });
+      expect(readApprovalExecutionFailure(stored)).toEqual(failure);
+      expect(projectApprovalExecutionFailureV2({ request, executedAtMs: 2,
+        failure: { ...failure, details: { category, private: 'private-response' } } })).not.toHaveProperty('details');
+      const machinePlaced = ApprovalRequestV2Schema.parse({ ...request, actionId: 'machines.managed.inspect',
+        actionArgs: { homeId: 'srv_managed', managedId: 'waiting' },
+        executionOriginV1: { ...request.executionOriginV1, actionId: 'machines.managed.inspect' } });
+      expect(projectApprovalExecutionFailureV2({ request: machinePlaced, failure, executedAtMs: 2 })).not.toHaveProperty('details');
+    });
+
+  it('allows server-owned transaction recovery beyond the former Account HTTP cutoff', async () => {
+    // Actual HTTP is necessary: the in-process Axios adapter does not enforce timeouts.
+    // The response is valid after the old 15s cutoff; no server budget is enlarged.
+    const adapter = axios.defaults.adapter;
+    axios.defaults.adapter = axios.getAdapter('http');
+    app.post('/v1/machines/managed/actions/cancel', async () => {
+      await new Promise(resolve => setTimeout(resolve, 15_250));
+      return { machine: { id: 'waiting', homeId: 'srv_managed', custodianAccountId: 'account',
+        controller: { machineId: 'offline-controller', installationId: 'installation' },
+        launch: { provider: { pluginId: 'machine.example', localId: 'vm' }, schemaVersion: 1, name: 'Waiting VM', choices: {} },
+        allocation: 'confirmed-absent', creationState: 'canceled', desired: 'delete', desiredWhen: 'now', intentRevision: 1,
+        retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false } satisfies ManagedMachineV1 };
+    });
+    const origin = await app.listen({ host: '127.0.0.1', port: 0 });
+    try {
+      const executor = createActionExecutor(createAccountServerActionDeps({ token: 'interactive', serverId: 'home',
+        serverIdentityId: 'srv_managed', serverHttpBaseUrl: origin }) as Parameters<typeof createActionExecutor>[0]);
+      expect(await executor.execute('machines.managed.cancel', { homeId: 'srv_managed', managedId: 'waiting',
+        expectedIntentRevision: 0 }, { surface: 'cli', authority: 'present_user', bypassApprovals: true }))
+        .toMatchObject({ ok: true, result: { machine: { creationState: 'canceled', intentRevision: 1 } } });
+    } finally { axios.defaults.adapter = adapter; }
+  }, 30_000);
+
+  it.each(['confirmed', 'malformed'] as const)('dispatches approved Account managed effects with %s acknowledgement', async acknowledgement => {
+    const homeId = 'srv_managed';
+    const machine = { id: 'waiting', homeId, custodianAccountId: 'account',
+      controller: { machineId: 'offline-controller', installationId: 'installation' },
+      launch: { provider: { pluginId: 'machine.example', localId: 'vm' }, schemaVersion: 1, name: 'Waiting VM', choices: {} },
+      allocation: 'confirmed-absent', creationState: 'canceled', desired: 'delete', desiredWhen: 'now', intentRevision: 1,
+      retention: { kind: 'until-delete' }, wakeOnAcceptedMessage: false,
+    } satisfies ManagedMachineV1;
+    const bodies: unknown[] = [];
+    app.post('/v1/machines/managed/actions/cancel', async request => {
+      expect(request.headers.authorization).toBe('Bearer interactive');
+      bodies.push(request.body);
+      return acknowledgement === 'confirmed' ? { machine } : {};
+    });
+    app.post('/v1/machines/managed/actions/setup.skip', async request => {
+      bodies.push(request.body);
+      return machine;
+    });
+    const executor = createActionExecutor(createAccountServerActionDeps({ token: 'interactive', serverIdentityId: homeId,
+      serverId: 'route-managed', serverHttpBaseUrl: 'http://account.test' }) as Parameters<typeof createActionExecutor>[0]);
+    // The approval owner replays with confirmation already admitted; HTTP is
+    // the only substituted boundary, while family routing and schemas stay real.
+    const context = { surface: 'cli', authority: 'present_user', bypassApprovals: true } as const;
+    const target = { homeId, managedId: machine.id, expectedIntentRevision: 0 };
+    expect(await executor.execute('machines.managed.cancel', target, context)).toEqual(acknowledgement === 'confirmed'
+      ? { ok: true, result: { machine } }
+      : { ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown', details: { category: 'acknowledgement_schema' } });
+    expect(await executor.execute('machines.managed.setup.skip', target, context)).toEqual({ ok: true, result: machine });
+    expect(await executor.execute('machines.managed.inspect', { homeId, managedId: machine.id }, context))
+      .toMatchObject({ ok: false, errorCode: 'unsupported_action' });
+    expect(bodies).toEqual([target, target]);
+  });
+
+  it('preserves the Home confirmed rollback code for an approved managed Cancel', async () => {
+    app.post('/v1/machines/managed/actions/cancel', async (_request, reply) => reply.code(503).send({
+      error: 'database_transaction_conflict_exhausted', statusCode: 503,
+    }));
+    const executor = createActionExecutor(createAccountServerActionDeps({ token: 'interactive', serverId: 'home',
+      serverIdentityId: 'srv_managed', serverHttpBaseUrl: 'http://account.test' }) as Parameters<typeof createActionExecutor>[0]);
+    expect(await executor.execute('machines.managed.cancel', { homeId: 'srv_managed', managedId: 'waiting',
+      expectedIntentRevision: 0 }, { surface: 'cli', authority: 'present_user', bypassApprovals: true }))
+      .toEqual({ ok: false, errorCode: 'database_transaction_conflict_exhausted', error: 'database_transaction_conflict_exhausted' });
+  });
+
+  it.each([
+    { code: 'ECONNABORTED', category: 'transport_timeout' },
+    { code: 'ECONNRESET', category: 'transport_error' },
+  ])('diagnoses approved Cancel uncertainty as $category without retaining transport content', async ({ code, category }) => {
+    const adapter = axios.defaults.adapter;
+    axios.defaults.adapter = async () => { throw Object.assign(new Error('private-transport-body'), { code,
+      config: { headers: { Authorization: 'private-bearer' } }, response: { data: 'private-response' } }); };
+    try {
+      const executor = createActionExecutor(createAccountServerActionDeps({ token: 'private-token', serverId: 'home',
+        serverIdentityId: 'srv_managed', serverHttpBaseUrl: 'http://account.test' }) as Parameters<typeof createActionExecutor>[0]);
+      const result = await executor.execute('machines.managed.cancel', { homeId: 'srv_managed', managedId: 'waiting',
+        expectedIntentRevision: 0 }, { surface: 'cli', authority: 'present_user', bypassApprovals: true });
+      expect(result).toEqual({ ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown', details: { category } });
+      expect(JSON.stringify(result)).not.toContain('private-');
+    } finally { axios.defaults.adapter = adapter; }
+  });
 
   it('dispatches preset Actions to the fixed Home and retains typed revision/refusal outcomes', async () => {
     const bodies: unknown[] = [];
@@ -366,7 +476,7 @@ describe('Account API token HTTP adapter', () => {
         expect.soft(tokenListResult, JSON.stringify(tokenListResult)).toMatchObject({ ok: true, result: { tokens: [] } });
         const unsigned = await deps.machinePoolAction!({ actionId: 'machines.pools.get', input: { poolId }, context: {
           surface: 'api', serverId, authority: 'account_automation', externalActionTarget: { kind: 'machine', machineId: 'worker' },
-          externalActionExecutionAuthorization: { v: 1, token: 'proof-without-machine-signing-key', binding: {
+          externalActionExecutionAuthorization: { v: 1, token: 'proof-without-machine-signing-key', binding: { custodianAccountId: 'other-requester', installationId: 'installation-1',
             serverIdentityId: serverId, accountId: 'other-requester', principalId: 'principal', credentialId: 'credential',
             grant: API_TOKEN_FULL_GRANT_V1, machineId: 'worker', actionId: 'machines.pools.get', requestId: 'signed-pool',
             requestEnvelopeDigest: 'A'.repeat(43), target: { kind: 'machine', machineId: 'worker' },
@@ -374,7 +484,7 @@ describe('Account API token HTTP adapter', () => {
         } });
         expect.soft(unsigned, JSON.stringify(unsigned)).toMatchObject({ ok: false, errorCode: 'not_authenticated' });
         for (const scenario of ['wrong', 'ambiguous', 'retired'] as const) {
-          await updateSettings(settings => ({ ...settings, servers: scenario === 'wrong' ? { [profileId]: profile }
+          await updateSettings((settings): typeof settings => ({ ...settings, servers: scenario === 'wrong' ? { [profileId]: profile }
             : scenario === 'ambiguous' ? { [profileId]: profile, duplicate: { ...profile, id: 'duplicate' } }
               : { [profileId]: { ...profile, homeConnectionDescriptor: undefined } } }));
           expect(await read(scenario === 'wrong' ? 'srv_otherPreferences' : serverId))
@@ -527,7 +637,9 @@ describe('Account API token HTTP adapter', () => {
       contentPolicy: { ...policy, policyDigest: computeWorkspaceSyncPolicyDigest(policy) }, createdAtMs: 1, updatedAtMs: 1 }] };
     let graphRevision = 1;
     app.get('/v1/account/encryption', async () => ({ mode: 'plain', updatedAt: 0 }));
-    app.get('/v1/machines', async () => [sourceParent, workerParent, ...(kind === 'ordinary' ? [] : [child]), unrelated]
+    let machineReadFails = false;
+    app.get('/v1/machines', async (_request, reply) => machineReadFails ? reply.code(503).send({ error: 'unavailable' })
+      : [sourceParent, workerParent, ...(kind === 'ordinary' ? [] : [child]), unrelated]
       .map(ref => ({ id: ref.machineId, active: true, revokedAt: null, replacedByMachineId: null,
         devcontainerChild: ref.machineId === child.machineId ? projection : null })));
     app.get('/v1/machines/:id', async request => {
@@ -554,6 +666,7 @@ describe('Account API token HTTP adapter', () => {
       cwd: worker.rootPath, declaration: { workspaceRefId: worker.id, selection: { kind: 'manifest', name: 'web' } },
       serviceState: 'running', readiness: 'not_reported', title: 'web', state: 'available', confidence: 'high', actions: ['manage'] };
     let failWorker = false;
+    let reprojectRows = false;
     let sourceAlsoRunning = false;
     let workerRunning = true;
     // This replaces only the remote Machine RPC transport. Account rows, topology, strict
@@ -564,6 +677,15 @@ describe('Account API token HTTP adapter', () => {
       expect(request.request).toEqual({ machineId: request.machineId, scope: 'workspace',
         workspaceRoot: ref.rootPath, projection: 'managed_bindings' });
       if (failWorker && request.machineId === worker.machineId) throw new Error('Worker is offline');
+      if (reprojectRows) {
+        reprojectRows = false;
+        const before = getActiveProjectAccountRowsSnapshot();
+        const after = await runWithServerHttpBaseUrl('https://account.test', () =>
+          readProjectAccountRows({ credentials: { token: 'interactive', encryption: null }, serverId: homeId }));
+        expect(after.scopeKey).toBe(before?.scopeKey);
+        expect(after.workspaceRefs).toEqual(before?.workspaceRefs);
+        expect(after.relationships).toEqual(before?.relationships);
+      }
       return { protocolVersion: 1, snapshot: { v: 1, machineId: request.machineId, updatedAt: 1,
         targets: request.machineId === worker.machineId ? workerRunning ? [target] : [] : sourceAlsoRunning && request.machineId === source.machineId ? [{ ...target, machineId: source.machineId,
           workspaceId: source.id, workspace: { serverId: homeId, workspaceId: source.id, machineId: source.machineId, rootPath: source.rootPath },
@@ -576,10 +698,15 @@ describe('Account API token HTTP adapter', () => {
     try {
       expect(await get()).toMatchObject({ ok: true, result: { status: 'ready', provenance: 'default', placement: { runsOn: { kind: 'primary' } },
         actual: { status: 'present', target } } });
+      reprojectRows = true;
+      expect(await get()).toMatchObject({ ok: true, result: { actual: { status: 'present', target } } });
+      machineReadFails = true;
+      expect(await get()).toMatchObject({ ok: true, result: { actual: { status: 'unavailable', reasonCode: 'observation_unavailable' } } });
+      machineReadFails = false;
       sourceAlsoRunning = true;
       expect(await get()).toMatchObject({ ok: true, result: { actual: { status: 'ambiguous', targets: expect.arrayContaining([target]) } } });
       failWorker = true;
-      expect(await get()).toMatchObject({ ok: true, result: { actual: { status: 'unavailable' } } });
+      expect(await get()).toMatchObject({ ok: true, result: { actual: { status: 'present', target: { machineId: source.machineId } } } });
       failWorker = false;
       sourceAlsoRunning = false;
       workerRunning = false;
@@ -745,23 +872,23 @@ describe('Account API token HTTP adapter', () => {
     await expect(deps.accountApiTokensCreateAction!({
       input: { tokenId: '12345678-1234-4234-8234-123456789abc', label: 'malformed' },
       context,
-    })).resolves.toEqual({ ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' });
+    })).resolves.toEqual({ ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown', details: { category: 'acknowledgement_schema' } });
     await expect(deps.accountApiTokensUpdateAction!({
       input: { tokenId: '12345678-1234-4234-8234-123456789abc', label: 'malformed' },
       context,
-    })).resolves.toEqual({ ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' });
+    })).resolves.toEqual({ ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown', details: { category: 'acknowledgement_schema' } });
     await expect(deps.accountApiTokensRevokeAction!({
       input: { tokenId: '12345678-1234-4234-8234-123456789abc' },
       context,
-    })).resolves.toEqual({ ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' });
+    })).resolves.toEqual({ ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown', details: { category: 'acknowledgement_schema' } });
     await expect(deps.accountApiTokensRevokeAllAction!({
       input: {},
       context,
-    })).resolves.toEqual({ ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' });
+    })).resolves.toEqual({ ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown', details: { category: 'acknowledgement_schema' } });
     await expect(deps.accountApiTokensListAction!({
       input: {},
       context,
-    })).rejects.toMatchObject({ name: 'ZodError' });
+    })).rejects.toMatchObject({ issues: expect.arrayContaining([expect.objectContaining({ code: 'invalid_type', path: ['tokens'], expected: 'array' })]) });
   });
 
   it('retains outcome uncertainty when a dispatched API-token mutation loses its response through a nested socket reset', async () => {
@@ -787,6 +914,7 @@ describe('Account API token HTTP adapter', () => {
         ok: false,
         errorCode: 'outcome_unknown',
         error: 'outcome_unknown',
+        details: { category: 'transport_error' },
       });
 
       axios.defaults.adapter = async () => {
@@ -999,7 +1127,7 @@ describe('Account API token HTTP adapter', () => {
         await expect(deps.machinePoolAction!({
           ...action,
           context: { surface: 'cli', serverId: 'home' },
-        })).resolves.toEqual({ ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' });
+        })).resolves.toEqual({ ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown', details: { category: 'transport_error' } });
       }
 
       await expect(deps.machinePoolAction!({
@@ -1063,7 +1191,7 @@ describe('Account API token HTTP adapter', () => {
         input: { poolId: '99d55938-f860-4af8-8023-01fecec86f35', expectedRevision: 1 },
         context: { surface: 'cli', serverId: 'home' },
         signal: controller.signal,
-      })).resolves.toEqual({ ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' });
+      })).resolves.toEqual({ ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown', details: { category: 'transport_error' } });
       expect(requests).toBe(1);
     } finally {
       axios.defaults.adapter = originalAdapter;
@@ -1085,12 +1213,12 @@ describe('Account API token HTTP adapter', () => {
       actionId: 'machines.pools.create',
       input: { poolId, name: 'Development', members: [] },
       context: { surface: 'cli', serverId: 'home' },
-    })).resolves.toEqual({ ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' });
+    })).resolves.toEqual({ ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown', details: { category: 'acknowledgement_schema' } });
     await expect(deps.machinePoolAction!({
       actionId: 'machines.pools.delete',
       input: { poolId, expectedRevision: 1 },
       context: { surface: 'cli', serverId: 'home' },
-    })).resolves.toEqual({ ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' });
+    })).resolves.toEqual({ ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown', details: { category: 'acknowledgement_schema' } });
     await expect(deps.machinePoolAction!({
       actionId: 'machines.pools.list',
       input: {},
@@ -1254,7 +1382,7 @@ describe('Account API token HTTP adapter', () => {
     const authorization = {
       v: 1 as const,
       token: 'home-minted-exact-invocation',
-      binding: {
+      binding: { custodianAccountId: 'account-1', installationId: 'installation-1',
         serverIdentityId: 'home',
         accountId: 'account-1',
         principalId: 'principal-1',
@@ -1320,7 +1448,7 @@ describe('Account API token HTTP adapter', () => {
     const authorization = {
       v: 1 as const,
       token: 'home-minted-preset-invocation',
-      binding: {
+      binding: { custodianAccountId: 'account-1', installationId: 'installation-1',
         serverIdentityId: 'srv_preset', accountId: 'account-1', principalId: 'principal-1',
         credentialId: 'credential-1', grant: API_TOKEN_FULL_GRANT_V1, machineId: 'machine-1',
         actionId: 'machines.presets.archive', requestId: 'request-preset', requestEnvelopeDigest: 'A'.repeat(43),
@@ -1377,7 +1505,7 @@ describe('Account API token HTTP adapter', () => {
         externalActionExecutionAuthorization: {
           v: 1,
           token: 'proof-alone-is-insufficient',
-          binding: {
+          binding: { custodianAccountId: 'account-1', installationId: 'installation-1',
             serverIdentityId: 'home',
             accountId: 'account-1',
             principalId: 'principal-1',
@@ -2252,6 +2380,7 @@ describe('Session access HTTP adapter', () => {
       ok: false,
       errorCode: 'outcome_unknown',
       error: 'outcome_unknown',
+      details: { category: 'acknowledgement_schema' },
     });
   });
 
@@ -2749,6 +2878,7 @@ describe('Session access HTTP adapter', () => {
       ok: false,
       errorCode: 'outcome_unknown',
       error: 'outcome_unknown',
+      details: { category: 'transport_error' },
     });
   });
 

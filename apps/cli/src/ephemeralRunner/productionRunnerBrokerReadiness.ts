@@ -79,6 +79,7 @@ export async function checkProductionRunnerBrokerReadiness(input: Readonly<{
     agent,
     endpoints: provider.definition.endpointTemplates,
     application: selection.application,
+    model: input.manifest.reviewedProviderModel.descriptor,
     ...(provider.definition.credential ? { credential: provider.definition.credential } : {}),
   });
   if (compatibility.status !== 'ready') return { status: 'unavailable', reason: compatibility.reason };

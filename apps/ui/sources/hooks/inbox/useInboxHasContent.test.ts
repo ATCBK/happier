@@ -101,6 +101,7 @@ describe('useInboxHasContent', () => {
             artifacts: {},
             isDataReady: true,
         });
+        storage.getState().applySettingsLocal({ experiments: true, featureToggles: { 'social.friends': true } });
     });
 
     afterEach(async () => {

@@ -20,7 +20,7 @@ import {
 import type { releaseComposerContent, claimComposerContent } from '@/sync/domains/transfers/runtime/transferRuntime';
 import type { PluginUiComposerAttachmentProjection } from '@/sync/domains/plugins/ui/projection';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
-import { renderHook } from '@/dev/testkit';
+import { renderHook, requireComposerDraftDocument } from '@/dev/testkit';
 
 const persistentValues = vi.hoisted(() => new Map<string, string>());
 const activeScopeState = vi.hoisted(() => ({
@@ -2077,7 +2077,7 @@ function activatePersistentSessionDraft(sessionId: string, text: string): void {
 }
 
 function readPersistentSessionText(sessionId: string): string {
-    return getSessionDraftSnapshot(persistentSessionScope, { kind: 'session', sessionId })?.document.composer.text.value ?? '';
+    return requireComposerDraftDocument(getSessionDraftSnapshot(persistentSessionScope, { kind: 'session', sessionId })?.document)?.composer.text.value ?? '';
 }
 
 function readPersistentSessionSnapshot(sessionId: string): ComposerSnapshotV1 {

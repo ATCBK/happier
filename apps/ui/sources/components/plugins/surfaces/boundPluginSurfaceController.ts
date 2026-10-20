@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { randomUUID } from '@/platform/randomUUID';
+import { t } from '@/text';
 import { createPluginWidgetAreaHostHandler } from './pluginWidgetAreaHost';
 import { createPluginUiResourceStore, type PluginUiResourceStore } from '@happier-dev/plugin-ui/advanced';
 import { createPluginDeclaredResourceStore } from './PluginContextualResourceStoreProvider';
@@ -16,16 +17,22 @@ import type {
     PluginResourceContextV1,
     PluginUiResourceBindingCapabilityV1,
 } from '@happier-dev/protocol';
+import { PluginInvocableActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
+import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import {
+    PLUGIN_UI_HOST_METHODS_V1,
+    PluginUiExecuteActionRequestV1Schema,
     PluginUiApplyComposerRequestV1Schema,
     PluginUiHostMethodV1Schema,
     PluginUiJsonValueV1Schema,
     PluginUiPublishCurrentUiContextRequestV1Schema,
     normalizePluginUiSemanticCommandV1,
+    reconstructPluginUiSelectedActionInput,
     type PluginUiChannelV1,
     type PluginUiApplyComposerRequestV1,
     type PluginUiHostMethodV1,
     type PluginUiHostApiRequestEnvelopeV1,
+    type PluginUiHostApiErrorPayloadV1,
     type PluginUiInstanceKeyV1,
     type PluginUiExecuteActionRequestV1,
     type PluginUiJsonValueV1,
@@ -43,7 +50,11 @@ import {
     useEndpointStatus,
     useMachineCliDetectionTarget,
 } from '@/sync/domains/state/storage';
+import { storage } from '@/sync/domains/state/storageStore';
+import type { PluginMachineExecutionOriginStateV1, PluginMachineOriginRejectionReasonV1 } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
+import { describePluginExecutionOriginRefusal, resolveReasonCopy } from '@/sync/domains/surfaces/copy/resolveReasonCopy';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import type { PluginProjectionEntry } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 import type { PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
@@ -80,9 +91,12 @@ import {
     serializePluginActionInputSelectionFacts,
 } from './pluginActionInputSelectionHostApi';
 import { createPluginOpenNewSessionHostApiHandler } from './pluginOpenNewSessionHostApi';
+import { createPluginContributedActionController } from '@/components/plugins/actions/pluginContributedActionController';
+import { presentActionInputForm } from '@/components/plugins/actions/presentActionInputForm';
 import { createPluginSurfaceSessionHandlers } from './pluginSurfaceSessionState';
 import { createPluginSurfaceStoredImageOwner, type PluginStoredImageReadTransport } from './pluginSurfaceStoredImage';
 import { createPluginSurfaceLiveStreamOwner } from './pluginSurfaceLiveStream';
+import { WidgetFrameBodyNoticeContext, type WidgetFrameBodyNotice, type WidgetFrameBodyNoticeSource } from '@/components/widgets/frame/widgetFrameBodyCaption';
 
 /**
  * The bound surface controller (§3.1).
@@ -115,8 +129,8 @@ import { createPluginSurfaceLiveStreamOwner } from './pluginSurfaceLiveStream';
  * the mount distinguish a local-only facade from an offline exact target;
  * `daemonReachable` is their endpoint-plus-addressed-machine transport fact.
  * `enabled` additionally requires projection admission for daemon-owned
- * Action/Resource semantics. `daemonStateVersion` rides along because the same
- * observation is the authority generation a declarative surface writes against.
+ * Action/Resource semantics. `daemonStateVersion` is runtime metadata; declaration
+ * currentness belongs to the supplying catalog's projection generation.
  */
 export function usePluginSurfaceDaemonInteraction(input: Readonly<{
     machineId?: string | null;
@@ -174,6 +188,25 @@ export type BoundPluginSurfaceFacts = Readonly<{
     machineId?: string | null;
     /** Presentation-only label from the existing machine display projection. */
     machineDisplayName?: string | null;
+    /** Whether this Home has any machine at all, so "none can run it" is not worded as "add a machine". */
+    homeHasMachines?: boolean;
+    /** The plugin's display name, for sentences that name it. */
+    pluginDisplayName?: string | null;
+    /** Presentation consumes Administration's decision; absence of a pin is not a decision. */
+    executionOriginSelectionKind?: PluginMachineExecutionOriginStateV1['kind'];
+    /**
+     * Why Administration found no runnable Machine, when it has candidates. `machineDisplayName` names the
+     * one Machine that refused (`null` while its name loads); absent when several did.
+     */
+    executionOriginRefusal?: Readonly<{
+        reasons: readonly (PluginMachineOriginRejectionReasonV1 | 'no_materialization')[];
+        machineDisplayName?: string | null;
+    }>;
+    /** The target-read owner's classified failure; it does not establish Machine incapability. */
+    daemonConnectionFailure?: Readonly<{
+        code: PluginUiHostApiErrorPayloadV1['code'];
+        reasonCode: string;
+    }>;
     serverId?: string | null;
     /** The projection generation this mount is bound to. */
     projectionGeneration?: number | string | null;
@@ -200,8 +233,8 @@ export type BoundPluginSurfaceFacts = Readonly<{
     resourceCapability?: PluginUiResourceBindingCapabilityV1;
     /**
      * The exact already-validated context the host owns for this Resource
-     * consumer. Targeted children use the closed Protocol surface arm; ordinary
-     * destination/global/session mounts intentionally leave it absent.
+     * consumer. Instance-bearing mounts use the closed Protocol surface arm;
+     * a Composer Session uses its exact Session arm. Singleton mounts omit it.
      */
     resourceContext?: PluginResourceContextV1;
     /** Exact normalized daemon projection for the selected target/generation. */
@@ -256,11 +289,18 @@ export type BoundPluginSurfaceFacts = Readonly<{
      */
     daemonInteractionEnabled: boolean;
     /**
+     * Told, on this mount's first Machine-owned refusal, how to word it from then on (`undefined` once
+     * the Machine answers); a widget frame says it once above the body.
+     */
+    onMachineUnavailable?: (describe: WidgetFrameBodyNoticeSource) => void;
+    /**
      * The hook-owned live form of daemon availability. It narrows the already
      * bound daemon handlers during connectivity/projection refresh without
      * becoming a controller identity or lifecycle owner.
      */
     isDaemonInteractionEnabled?: () => boolean;
+    /** Positive loading fact from the physical host, distinct from settled unavailability. */
+    isDaemonConnectionPending?: () => boolean;
     /** Live projection admission narrows interaction without retiring this physical mount. */
     isInteractionEnabled?: () => boolean;
 }>;
@@ -316,8 +356,8 @@ export type BoundPluginSurfaceCurrentUiContextPublication = Readonly<{
  * a fact about the host around the surface, never a pre-composed API.
  */
 export type BoundPluginSurfaceBinding = Readonly<{
-    /** Invocation-time revalidation supplied by the canonical per-plugin target owner. */
-    isExecutionOriginCurrent?: () => boolean;
+    /** Revalidation is read-only unless an actual operation records the existing last-use hint. */
+    isExecutionOriginCurrent?: (options?: Readonly<{ recordUse?: boolean }>) => boolean;
     /**
      * The host-ActionSpec front door. Defaults to the canonical lazily-resolved
      * `ActionExecutor.execute`, so ActionsSettings enablement and approval routing
@@ -409,8 +449,8 @@ export type BoundPluginSurfaceController = Readonly<{
         destination: PluginContributionIdentityV1,
     ) => Promise<PluginUiJsonValueV1>;
     /**
-     * A declarative page's `widgetArea` node reaches the page's declared area through this same
-     * mounted facade; the installed area handler remains the one admission and currentness owner.
+     * Host-owned native/declarative widget-area controls. Public plugin code uses
+     * hostApi instead; both paths share declared-area admission and mount lifetime.
      */
     widgetArea?: (
         request: PluginUiWidgetAreaRequestV1,
@@ -612,7 +652,7 @@ function createBoundPluginSurfaceOpenDispatcher(input: Readonly<{
 
 function createBoundPluginSurfaceWidgetAreaDispatcher(input: Readonly<{
     surfaceContext: PluginUiSurfaceContextV1;
-    hostApi: PluginSurfaceHostApiV1;
+    hostApi: Pick<PluginSurfaceHostApiV1, 'handleRequest'>;
 }>): NonNullable<BoundPluginSurfaceController['widgetArea']> {
     let requestSequence = 0;
     return (payload, options) => {
@@ -904,11 +944,11 @@ export function createBoundPluginSurfaceController(input: Readonly<{
                 ? { currentUiContext: input.facts.readCurrentUiContext }
                 : {}),
         };
-    const isDaemonInteractionEnabled = () => (input.facts.isDaemonInteractionEnabled?.() ?? input.facts.daemonInteractionEnabled)
-        && binding?.isExecutionOriginCurrent?.() !== false;
+    const isDaemonInteractionEnabled = (recordUse = true) => (input.facts.isDaemonInteractionEnabled?.() ?? input.facts.daemonInteractionEnabled)
+        && binding?.isExecutionOriginCurrent?.({ recordUse }) !== false;
     // Home-family Actions and borrowed Resources share the exact same target scope.
     const homeFamilyScope = accountLifetime
-        && (!input.facts.serverId || input.facts.serverId === accountLifetime.scope.serverId)
+        && (!input.facts.serverId || areServerProfileIdentifiersEquivalent(input.facts.serverId, accountLifetime.scope.serverId))
         ? accountLifetime.scope
         : null;
     const canAdmitHostReads = Boolean(homeFamilyScope && callerBinding && !isOpenableContentViewer
@@ -920,13 +960,13 @@ export function createBoundPluginSurfaceController(input: Readonly<{
     const isMethodAvailable = (method: PluginUiHostMethodV1): boolean => (
         method === 'context' || method === 'openSurface' || method === 'openConnectedAccounts'
         || (isInteractionCurrent() && ((canAdmitHostReads && (method === 'readResource' || method === 'watchResource'))
-            || !isDaemonOwnedPluginSurfaceMethod(method) || isDaemonInteractionEnabled()))
+            || !isDaemonOwnedPluginSurfaceMethod(method) || isDaemonInteractionEnabled(false)))
     );
     // Keep host-Action target stamping compatible with the incumbent cold
     // offline facade. Reconnects change daemon-owned method availability live;
     // they do not retrospectively lend an initially offline host Action a
     // detached execution target.
-    const daemonBoundAtConstruction = isDaemonInteractionEnabled() ? daemon : null;
+    const daemonBoundAtConstruction = isDaemonInteractionEnabled(false) ? daemon : null;
     const resourceCapability = input.facts.resourceCapability;
     const canReadResource = resourceCapability?.readable === true;
     // A dynamic capability without a readable snapshot is not a usable
@@ -1021,6 +1061,16 @@ export function createBoundPluginSurfaceController(input: Readonly<{
     // daemon-backed Resource work. Replacements abort obsolete work rather than
     // merely withholding its eventual delivery.
     const targetedContributions = input.facts.targetedContributions;
+    const actionInputHost = {
+        machineId: daemon?.machineId,
+        machineDisplayName: input.facts.machineDisplayName ?? null,
+        serverId: daemon?.serverId ?? null,
+        targetPluginId: input.facts.pluginId,
+        ...(surfaceContext.sessionId ? { sessionId: surfaceContext.sessionId } : {}),
+        accountLifetime,
+        signal: mountLifetime.signal,
+        isCurrent,
+    };
     const selectActionInput = daemon
         ? createPluginActionInputSelectionHostApiHandler({
             ...(input.facts.pluginProjectionById
@@ -1037,16 +1087,7 @@ export function createBoundPluginSurfaceController(input: Readonly<{
             ...(input.facts.resolveContributedAction
                 ? { resolveContributedAction: input.facts.resolveContributedAction }
                 : {}),
-            host: {
-                machineId: daemon.machineId,
-                machineDisplayName: input.facts.machineDisplayName ?? null,
-                serverId: daemon.serverId ?? null,
-                targetPluginId: input.facts.pluginId,
-                ...(surfaceContext.sessionId ? { sessionId: surfaceContext.sessionId } : {}),
-                accountLifetime,
-                signal: mountLifetime.signal,
-                isCurrent,
-            },
+            host: actionInputHost,
             isCurrent,
         })
         : null;
@@ -1133,15 +1174,106 @@ export function createBoundPluginSurfaceController(input: Readonly<{
                 } finally { account.dispose(); }
             },
         }) : declaredResourceStore;
-    const widgetArea = createPluginWidgetAreaHostHandler({ facts: input.facts, isCurrent, lifetimeSignal: mountLifetime.signal, hostAction, callerBinding });
+    // The one sentence for a Machine-owned part that cannot run now: it names this mount's Run-on
+    // Machine and the next step. Every host method that refuses for that reason reuses it.
+    const isMachineUnavailable = (diagnostics: readonly string[], request?: PluginUiHostApiRequestEnvelopeV1): boolean => {
+        if (isDaemonInteractionEnabled(false)) return false;
+        if (request?.method === 'executeAction') {
+            // Account/local host Actions share caller custody, but Machine
+            // readiness is not their lifecycle.
+            const payload = PluginUiExecuteActionRequestV1Schema.safeParse(request.payload);
+            if (payload.success && PluginInvocableActionIdSchema.safeParse(payload.data.action).success) return false;
+        }
+        return diagnostics.includes('plugin_mounted_caller_unavailable')
+            || diagnostics.includes('plugin_surface_contributed_action_unavailable')
+            || diagnostics.includes('plugin_resource_transport_unavailable')
+            || diagnostics.some((diagnostic) => {
+                const prefix = 'host_api_method_unavailable:';
+                if (!diagnostic.startsWith(prefix)) return false;
+                const method = PluginUiHostMethodV1Schema.safeParse(diagnostic.slice(prefix.length));
+                return method.success && isDaemonOwnedPluginSurfaceMethod(method.data);
+            });
+    };
+    const isConnectionPending = (diagnostics: readonly string[], request?: PluginUiHostApiRequestEnvelopeV1) =>
+        input.facts.isDaemonConnectionPending?.() === true && isMachineUnavailable(diagnostics, request);
+    let machineNoticeLent = false;
+    const describeMachineNotice = (diagnostics: readonly string[], request?: PluginUiHostApiRequestEnvelopeV1): WidgetFrameBodyNotice | undefined => {
+        const daemonUnavailable = isMachineUnavailable(diagnostics, request);
+        if (!daemonUnavailable || input.facts.isDaemonConnectionPending?.() === true) return undefined;
+        if (input.facts.daemonConnectionFailure) {
+            return { sentence: resolveReasonCopy({ kind: 'pluginRuntime', reasonCode: input.facts.daemonConnectionFailure.reasonCode }).body };
+        }
+        // The plugin is installed somewhere but Administration refused it: say why, never "install it".
+        const refusal = input.facts.executionOriginRefusal;
+        const refusedPlugin = input.facts.pluginDisplayName?.trim();
+        if (refusal && refusedPlugin && input.facts.executionOriginSelectionKind === 'unavailable') {
+            const machine = refusal.machineDisplayName === undefined ? undefined
+                : refusal.machineDisplayName?.trim() || input.facts.machineDisplayName?.trim() || t('machine.thisMachineInSentence');
+            const explained = describePluginExecutionOriginRefusal({ reasons: refusal.reasons, plugin: refusedPlugin, machine });
+            if (explained) return explained.manage
+                ? { sentence: explained.sentence, managePluginId: input.facts.pluginId }
+                : { sentence: explained.sentence };
+        }
+        const machineId = input.facts.machineId?.trim();
+        if (!machineId) {
+            const kind = input.facts.executionOriginSelectionKind;
+            if (kind === 'selectionRequired' || kind === 'conflict') return { sentence: t('settingsPlugins.targetSelection.selectionRequired') };
+            // Machines exist but none runs this plugin: name that and lead to the plugin, not to adding a machine.
+            const plugin = input.facts.pluginDisplayName?.trim();
+            if (kind === 'unavailable' && input.facts.homeHasMachines === true && plugin) {
+                return { sentence: t('settingsPlugins.surfaces.noMachineRunsPlugin', { plugin }), managePluginId: input.facts.pluginId };
+            }
+            // No Machine can run it at all: say what to do, and lead to doing it, not "this machine" cannot.
+            if (kind === 'unavailable') return { sentence: t('settingsPlugins.targetSelection.noMachine'), addMachine: true };
+        }
+        // A Machine whose name has not loaded yet is "this machine" in a sentence, never its raw id.
+        const machine = input.facts.machineDisplayName?.trim() || t('machine.thisMachineInSentence');
+        return { sentence: t('settingsPlugins.surfaces.machineCapabilityUnavailable', { machine }) };
+    };
+    const describeMachineUnavailable = (diagnostics: readonly string[], request?: PluginUiHostApiRequestEnvelopeV1): string | undefined =>
+        describeMachineNotice(diagnostics, request)?.sentence;
+    const widgetArea = createPluginWidgetAreaHostHandler({ facts: input.facts, isCurrent, lifetimeSignal: mountLifetime.signal, hostAction, callerBinding,
+        isConnectionPending: reason => isConnectionPending([reason]),
+        describeUnavailable: (reason) => describeMachineUnavailable([reason]) });
+    const hostWidgetArea = createPluginWidgetAreaHostHandler({ facts: input.facts, isCurrent: isInteractionCurrent,
+        hostControl: true,
+        lifetimeSignal: mountLifetime.signal, callerBinding,
+        isConnectionPending: reason => isConnectionPending([reason]),
+        describeUnavailable: reason => describeMachineUnavailable([reason]),
+        hostAction,
+    });
     const hostApi = createPluginSurfaceActionHostApi({
         pluginUiProjection: input.facts.pluginUiProjection,
         surfaceContext,
+        // The generic host owns these methods even before an execution target
+        // exists. Resource declarations retain their own capability ceiling;
+        // opaque viewers retain only their concrete file binding's methods.
+        admissionMethods: isOpenableContentViewer ? [] : PLUGIN_UI_HOST_METHODS_V1.filter(method => {
+            if (!isDaemonOwnedPluginSurfaceMethod(method)
+                || method === 'statOpenableContent' || method === 'readOpenableContent') return false;
+            if (method === 'readResource') return canReadResource;
+            if (method === 'watchResource') return canWatchResource;
+            return true;
+        }),
         ...(targetedContributions
             ? { callerSourceCustody: targetedContributions.target.sourceCustody }
             : {}),
         ...(interactionRequester ? { interactionRequester } : {}),
         isMethodAvailable,
+        resolveUnavailableError: (error, request) => {
+            const sentence = describeMachineUnavailable(error.diagnostics, request);
+            if (sentence && !machineNoticeLent) {
+                machineNoticeLent = true;
+                input.facts.onMachineUnavailable?.(() => describeMachineNotice(error.diagnostics, request));
+            }
+            const failure = !isConnectionPending(error.diagnostics, request) && isMachineUnavailable(error.diagnostics, request)
+                ? input.facts.daemonConnectionFailure : undefined;
+            if (failure) return { code: failure.code,
+                diagnostics: [...error.diagnostics, failure.reasonCode],
+                ...(sentence ? { message: sentence } : {}) };
+            return error.message || !sentence ? undefined : { ...error, message: sentence };
+        },
+        isConnectionPending: (error, request) => isConnectionPending(error.diagnostics, request),
         isContributedActionAvailable: isDaemonInteractionEnabled,
         isCurrent,
         resourceLifetimeSignal: mountLifetime.signal,
@@ -1194,10 +1326,63 @@ export function createBoundPluginSurfaceController(input: Readonly<{
             ? { disposeMountedHostApiHandlers: disposeHostApiMountedHandlers }
             : {}),
     });
-    const dispatchAction = createBoundPluginSurfaceActionDispatcher({ surfaceContext, hostApi });
+    const dispatchStructuredAction = createBoundPluginSurfaceActionDispatcher({ surfaceContext, hostApi });
+    const pluginProjectionById = input.facts.pluginProjectionById;
+    const actionInputController = daemon && pluginProjectionById
+        ? createPluginContributedActionController({
+            resolveCurrent: () => ({
+                pluginProjectionById,
+                pluginUiProjection: input.facts.pluginUiProjection,
+                resolveContributedAction: input.facts.resolveContributedAction,
+                host: actionInputHost,
+            }),
+        })
+        : null;
+    // Declarative controls have no author-owned form. Omitted input borrows
+    // the declared Action's existing no-invoke form owner; explicit input and
+    // SDK executeAction requests keep their structured execution semantics.
+    const dispatchAction: BoundPluginSurfaceController['dispatchAction'] = async (action, actionInput) => {
+        const declared = typeof action === 'string' ? undefined
+            : pluginProjectionById?.[action.pluginId]?.actions.find(candidate => candidate.id === action.localId);
+        if (actionInput !== undefined || typeof action === 'string'
+            || !declared?.inputHints?.fields.length || !actionInputController) {
+            return await dispatchStructuredAction(action, actionInput);
+        }
+        if (!isInteractionCurrent() || !isDaemonInteractionEnabled()) {
+            return createPluginSurfaceHostApiError('unavailable', ['plugin_mounted_caller_unavailable']);
+        }
+        if (!declared.occurrenceId) {
+            return createPluginSurfaceHostApiError('unavailable', ['action_retired']);
+        }
+        const selected = await actionInputController.selectExactBoundActionInput({
+            action,
+            expectedOccurrenceId: declared.occurrenceId,
+            invocationSurface: 'ui',
+        });
+        if (selected.kind === 'unavailable') {
+            return createPluginSurfaceHostApiError('unavailable', [selected.reason]);
+        }
+        if (selected.kind === 'form') {
+            presentActionInputForm({ form: selected.form, signal: mountLifetime.signal,
+                actionId: buildQualifiedPluginContributionKey(action),
+                pickerContext: { machineId: actionInputHost.machineId, serverId: actionInputHost.serverId,
+                    sessionId: actionInputHost.sessionId, ...(accountLifetime ? { accountLifetime } : {}) } });
+        }
+        const result = selected.kind === 'form' ? await selected.result : selected.result;
+        if (result.kind === 'cancelled') return null;
+        if (result.kind === 'unavailable') {
+            return createPluginSurfaceHostApiError('unavailable', [result.reason]);
+        }
+        const structured = reconstructPluginUiSelectedActionInput(result);
+        if (!structured) return createPluginSurfaceHostApiError('invalid_payload', ['select_action_input_result_invalid']);
+        return await dispatchStructuredAction(action, structured);
+    };
     const applyComposer = createBoundPluginSurfaceComposerApplyDispatcher({ surfaceContext, hostApi });
     const openSurface = createBoundPluginSurfaceOpenDispatcher({ surfaceContext, hostApi });
-    const widgetAreaDispatch = createBoundPluginSurfaceWidgetAreaDispatcher({ surfaceContext, hostApi });
+    const widgetAreaDispatch = createBoundPluginSurfaceWidgetAreaDispatcher({ surfaceContext, hostApi: {
+        handleRequest: (request, options) => hostWidgetArea && isInteractionCurrent()
+            ? hostWidgetArea(request, options) : hostApi.handleRequest(request, options),
+    } });
     let accountRetirement: Readonly<{ dispose(): void }> | undefined;
     let parentRetirement: Readonly<{ dispose(): void }> | undefined;
     let disposed = false;
@@ -1263,6 +1448,14 @@ export function useBoundPluginSurfaceController(input: Readonly<{
 }>): BoundPluginSurfaceController {
     const facts = input.facts;
     const binding = input.binding;
+    const machineDisplayNameRef = React.useRef(facts.machineDisplayName);
+    machineDisplayNameRef.current = facts.machineDisplayName;
+    const executionOriginSelectionKindRef = React.useRef(facts.executionOriginSelectionKind);
+    executionOriginSelectionKindRef.current = facts.executionOriginSelectionKind;
+    const executionOriginRefusalRef = React.useRef(facts.executionOriginRefusal);
+    executionOriginRefusalRef.current = facts.executionOriginRefusal;
+    const daemonConnectionFailureRef = React.useRef(facts.daemonConnectionFailure);
+    daemonConnectionFailureRef.current = facts.daemonConnectionFailure;
     const interactionEnabledRef = React.useRef(facts.interactionEnabled);
     interactionEnabledRef.current = facts.interactionEnabled;
     const isInteractionEnabled = React.useCallback(() => interactionEnabledRef.current, []);
@@ -1275,23 +1468,35 @@ export function useBoundPluginSurfaceController(input: Readonly<{
     );
     const executionOriginCurrentRef = React.useRef(binding?.isExecutionOriginCurrent);
     executionOriginCurrentRef.current = binding?.isExecutionOriginCurrent;
-    const isExecutionOriginCurrent = React.useCallback(() => executionOriginCurrentRef.current?.() !== false, []);
+    const isExecutionOriginCurrent = React.useCallback<NonNullable<BoundPluginSurfaceBinding['isExecutionOriginCurrent']>>(
+        options => executionOriginCurrentRef.current?.(options) !== false, []);
+    // A widget mount's frame says the Machine sentence once; any other mount has no frame to lend it to.
+    const lendMachineNotice = React.useContext(WidgetFrameBodyNoticeContext);
+    const lendMachineNoticeRef = React.useRef(lendMachineNotice);
+    lendMachineNoticeRef.current = lendMachineNotice;
+    const onMachineUnavailable = React.useCallback(
+        (describe: WidgetFrameBodyNoticeSource) => lendMachineNoticeRef.current?.(describe), [],
+    );
     const daemonInteractionEnabledRef = React.useRef(facts.daemonInteractionEnabled);
     daemonInteractionEnabledRef.current = facts.daemonInteractionEnabled;
     const isDaemonInteractionEnabled = React.useCallback(
         () => daemonInteractionEnabledRef.current,
         [],
     );
+    const daemonConnectionPendingRef = React.useRef(input.facts.isDaemonConnectionPending);
+    daemonConnectionPendingRef.current = input.facts.isDaemonConnectionPending;
+    const isDaemonConnectionPending = React.useCallback(() => daemonConnectionPendingRef.current?.() === true, []);
     // Projection producers replace these read-only snapshots on semantic
     // changes. Reuse their existing complete key during unrelated host renders.
+    const actionInputTranslationsByPluginId = facts.pluginUiProjection?.translationsByPluginId;
     const actionInputSelectionFactsKey = React.useMemo(
         () => serializePluginActionInputSelectionFacts({
             pluginProjectionById: facts.pluginProjectionById,
-            pluginUiProjection: facts.pluginUiProjection,
+            translationsByPluginId: actionInputTranslationsByPluginId,
             targetedContributions: facts.targetedContributions,
             targetPluginId: facts.pluginId,
         }),
-        [facts.pluginProjectionById, facts.pluginUiProjection, facts.targetedContributions, facts.pluginId],
+        [facts.pluginProjectionById, actionInputTranslationsByPluginId, facts.targetedContributions, facts.pluginId],
     );
     const resourceFactsKey = React.useMemo(() => stableJsonStringify(Object.fromEntries(
         Object.entries(facts.pluginUiProjection?.resourcesById ?? {}).map(([key, entry]) => {
@@ -1301,7 +1506,11 @@ export function useBoundPluginSurfaceController(input: Readonly<{
     )), [facts.pluginUiProjection?.resourcesById]);
     const controller = React.useMemo(
         () => createBoundPluginSurfaceController({
-            facts: { ...facts, isDaemonInteractionEnabled, isInteractionEnabled,
+            facts: { ...facts, get machineDisplayName() { return machineDisplayNameRef.current; },
+                get executionOriginSelectionKind() { return executionOriginSelectionKindRef.current; },
+                get executionOriginRefusal() { return executionOriginRefusalRef.current; },
+                get daemonConnectionFailure() { return daemonConnectionFailureRef.current; },
+                isDaemonInteractionEnabled, isDaemonConnectionPending, isInteractionEnabled, onMachineUnavailable,
                 resolveContributedAction: hasContributedActionResolver ? resolveContributedAction : undefined },
             binding: { ...binding, isExecutionOriginCurrent },
         }),
@@ -1347,6 +1556,7 @@ export function useBoundPluginSurfaceController(input: Readonly<{
             binding?.createMountedHostApiHandlers,
         ],
     );
+    React.useEffect(() => () => lendMachineNoticeRef.current?.(null), [controller]);
     React.useInsertionEffect(() => (
         // StrictMode replays layout effects without recreating this memoized
         // controller. Insertion cleanup therefore only fences the exact

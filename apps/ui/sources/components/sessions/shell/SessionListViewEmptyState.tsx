@@ -78,7 +78,6 @@ export const SessionListViewEmptyState = React.memo((props: SessionListViewEmpty
         >
             <EmptyState
                 layout="line"
-                lineDensity="compact"
                 titleTestID="session-list-query-empty-title"
                 title={t(model.titleKey)}
                 primaryAction={action && label ? {

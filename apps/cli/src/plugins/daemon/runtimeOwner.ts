@@ -1,8 +1,10 @@
+import { realpath } from 'node:fs/promises';
 import { createDaemonArchivePluginChangePreparer } from '@/plugins/daemon/archiveChangePreparer';
 import { isPluginError } from '@happier-dev/plugin-sdk';
 import {
   createDaemonPluginChangeService,
   type DaemonPluginChangeOwner,
+  type DaemonPluginChangeService,
 } from '@/plugins/daemon/changeService';
 import { createDaemonNpmPluginChangePreparer } from '@/plugins/daemon/npmChangePreparer';
 import type { MarketplaceRegistrySourcesReaderV1 } from '@/plugins/store/marketplace/service';
@@ -30,6 +32,11 @@ import {
 import type { PluginRegistryCommitRecord } from '@/plugins/store/registry/commitRecord';
 import { logger } from '@/ui/logger';
 import { seedPluginMcpServerDefaults } from '@/mcp/runtime/seedPluginMcpServerDefaults';
+import { seedPluginSkillDefaults } from '@/prompts/skills/library/seedPluginSkillDefaults';
+import { readPluginSkills } from '@/prompts/skills/library/readPluginSkills';
+import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/artifactStore';
+import { readSkillLibraryCatalog } from '@happier-dev/protocol/prompts/library/skills/readSkillLibraryCatalog';
+import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import { createCliMcpServerStore, type CliMcpServerStore } from '@/settings/mcp/mcpServerStore';
 import { readCredentials } from '@/persistence';
 import type { StablePluginConnectedAccountsOwner } from '@/plugins/runtime/invocation/services/connectedAccounts';
@@ -61,6 +68,7 @@ import type { PluginDaemonDatabaseLimitsPolicy } from '@/plugins/runtime/context
 import type { AccountPluginDataStorageHostDependencies } from '@/plugins/runtime/context/accountPluginDataStorage';
 import type { CliServerFeaturesSnapshot } from '@/features/featureDecisionService';
 import type { CurrentMachineExecutionOriginContext } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
+import type { RequesterWorkAttributionV1 } from '@/daemon/lifecycle/requesterWorkAttribution';
 import type { RpcHandlerInvoker } from '@/api/rpc/types';
 import type { ClientContributedActionExecutor } from '@/plugins/runtime/invocation/actions/executeContributedAction';
 import type { ResolveSessionResourceAccess } from '@/plugins/runtime/invocation/services/resources';
@@ -106,6 +114,7 @@ export type DaemonPluginAvailabilityReporter = Readonly<{
  * subprocess host this owner; neither caller reimplements G3 decisions.
  */
 export function createDaemonPluginRuntimeOwner(params: Readonly<{
+  signal?: AbortSignal;
   readSpawnFailureLimits?: import('@/processes/spawnFailure/classifySpawnFailure').SpawnFailureLimitsReader;
   happyHomeDir: string;
   /** Captured daemon Account source owner, shared by staging and review revalidation. */
@@ -114,6 +123,7 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
   managedResourcePreflight?: PluginManagedResourcePreflightBinding;
   /** Daemon-owned live machine identity for host-stamped nested Action callers. */
   resolveCurrentMachineId?: () => string | null;
+  readDaemonRequesterWorkAttribution?: () => RequesterWorkAttributionV1 | null;
   executeClientAction?: ClientContributedActionExecutor;
   /** Existing authenticated Machine admission authority for protected Session input. */
   machineAdmissionTransport?: PluginRuntimeMachineAdmissionTransport;
@@ -158,6 +168,11 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
     publish(): void;
   }>) => Promise<void>;
   runtimeActionExecute?: RuntimeActionExecute;
+  /** Ordinary Inbox approval producer; candidate custody stays in changeService. */
+  publishDevelopmentReview?: (input: Readonly<{
+    sourceRootPath: string;
+    changeService: DaemonPluginChangeService;
+  }>) => Promise<void>;
   managedEndpointRead?: AgentExternalSessionsManagedEndpointReadHost;
   resolveManagedServiceSessionBaseUrl?: ManagedServiceSessionBaseUrlResolver;
   resolveManagedServiceSessionClientAccess?: ManagedServiceSessionClientAccessResolver;
@@ -203,13 +218,18 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
     params.onInitialRegistryPublished
     || params.awaitInitialRuntimeActivation
     || params.onDurableRegistryApplied
+    || params.signal
   )
     ? async (
         registry: Awaited<ReturnType<typeof resolveExecutablePluginRuntimeRegistry>>,
         publish: () => void,
       ) => {
-        if (beforePublish) await beforePublish(registry, publish);
-        else publish();
+        const publishCurrent = () => {
+          params.signal?.throwIfAborted();
+          publish();
+        };
+        if (beforePublish) await beforePublish(registry, publishCurrent);
+        else publishCurrent();
         params.onInitialRegistryPublished?.();
         await params.awaitInitialRuntimeActivation?.();
       }
@@ -220,19 +240,33 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
     input,
   ) => developmentRoots?.resolveDevelopmentSourceAuthority(input) ?? null;
   const runtimeLifecycle = createDaemonPluginRegistryRuntimeLifecycle({
-    beforeInstallPublish: async (registry, pluginIds) => {
+    ...(params.signal ? { signal: params.signal } : {}),
+    beforeInstallPublish: async (registry, pluginIds, firstInstallPluginIds) => {
       const declarations = (registry.contributes.mcpServers ?? []).filter(entry => entry.pluginId && pluginIds.includes(entry.pluginId));
-      if (declarations.length === 0) return;
-      const credentials = params.mcpServerStore ? null : await readCredentials();
-      const store = params.mcpServerStore ?? (credentials ? createCliMcpServerStore({ credentials }) : null);
-      if (!store) throw new Error('mcp_plugin_defaults_account_unavailable');
-      await seedPluginMcpServerDefaults({ declarations, store });
+      const skillDeclarations = (registry.contributes.skills ?? []).filter(entry => firstInstallPluginIds.includes(entry.pluginId));
+      if (declarations.length === 0 && skillDeclarations.length === 0) return;
+      const credentials = !params.mcpServerStore || skillDeclarations.length > 0 ? await readCredentials() : null;
+      if (declarations.length > 0) {
+        const store = params.mcpServerStore ?? (credentials ? createCliMcpServerStore({ credentials }) : null);
+        if (!store) throw new Error('mcp_plugin_defaults_account_unavailable');
+        await seedPluginMcpServerDefaults({ declarations, store });
+      }
+      if (skillDeclarations.length > 0) {
+        if (!credentials) throw new Error('skill_plugin_defaults_account_unavailable');
+        const skills = await readPluginSkills(undefined, undefined, { ...registry.contributes, skills: skillDeclarations });
+        const port = createCliApprovalsArtifactStore({ credentials }).skillRules;
+        await seedPluginSkillDefaults({ skills, port: { ...port, listSkills: (signal, skillIds) =>
+          readSkillLibraryCatalog({ ...createCredentialedAccountArtifactStore(credentials), readPluginSkills: async () => skills }, signal, skillIds) } });
+      }
     },
     readSpawnFailureLimits: params.readSpawnFailureLimits,
     happyHomeDir: params.happyHomeDir,
     ...(params.executeClientAction ? { executeClientAction: params.executeClientAction } : {}),
     ...(params.resolveCurrentMachineId
       ? { resolveCurrentMachineId: params.resolveCurrentMachineId }
+      : {}),
+    ...(params.readDaemonRequesterWorkAttribution
+      ? { readDaemonRequesterWorkAttribution: params.readDaemonRequesterWorkAttribution }
       : {}),
     ...(params.machineAdmissionTransport
       ? { machineAdmissionTransport: params.machineAdmissionTransport }
@@ -438,6 +472,13 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
           }
         }
         await prepared.adopt();
+        const occurrenceId = params.reloadController.readCurrentPluginOccurrenceId?.(candidate.pluginId);
+        developmentRoots?.recordSourceCommit({
+          sourceRootPath: candidate.sourceAuthority.registeredRootId,
+          observedRevision: candidate.sourceAuthority.observedRevision,
+          pluginId: candidate.pluginId,
+          ...(occurrenceId ? { occurrenceId } : {}),
+        });
         return Object.freeze({
           kind: 'committed' as const,
           pluginId: candidate.pluginId,
@@ -453,6 +494,7 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
   });
   developmentRoots = createDaemonPluginDevelopmentRootsOwner({
     happyHomeDir: params.happyHomeDir,
+    hasPendingSourceChange: baseChangeService.hasPendingDevelopmentSourceChange,
     prepareSourceRemoval: async (input) => {
       const prepared = runtimeLifecycle.prepareDevelopmentRemoval
         ? await runtimeLifecycle.prepareDevelopmentRemoval(input)
@@ -488,12 +530,18 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
           : {}),
       };
       const result = await baseChangeService.requestPluginChange(request);
-      const pluginId = observation.request.pluginId ?? ('pluginId' in result ? result.pluginId : undefined);
-      const occurrenceId = result.kind === 'committed' && pluginId
+      if (result.kind === 'reviewRequired') await publishDevelopmentReview(request.sourceRootPath);
+      const status = result.kind === 'reviewRequired'
+        ? await baseChangeService.statusPluginChange({ pendingChangeId: result.pendingChangeId }) : null;
+      // A user-waived install can finish during ordinary Action admission.
+      // Project that same owner's terminal result rather than a stale review.
+      const outcome = status?.kind === 'terminal' ? status.result : result;
+      const pluginId = observation.request.pluginId ?? ('pluginId' in outcome ? outcome.pluginId : undefined);
+      const occurrenceId = outcome.kind === 'committed' && pluginId
         ? params.reloadController.readCurrentPluginOccurrenceId?.(pluginId) ?? null
         : null;
       return {
-        ...result,
+        ...outcome,
         ...(pluginId ? { pluginId } : {}),
         ...(occurrenceId ? { occurrenceId } : {}),
       };
@@ -513,9 +561,61 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
     developmentRoots?.readPendingProjectTrusts()
       .find((pending) => pending.pendingChangeId === pendingChangeId) ?? null
   );
+  async function publishDevelopmentReview(sourceRootPath: string): Promise<void> {
+    try {
+      await params.publishDevelopmentReview?.({ sourceRootPath, changeService: baseChangeService });
+    } catch (error) {
+      // Retain the candidate on transport failure. Rejoining the root or the
+      // public install Action republishes its same ordinary approval.
+      logger.warnLocalFile('[plugins] Development approval publication failed', {
+        sourceRootPath, error: projectPluginFailureText(error),
+      });
+    }
+  }
   const changeService: DaemonPluginChangeOwner = Object.freeze({
     ...baseChangeService,
-    controlPluginDevelopment: developmentRoots.control,
+    async requestPluginChange(request, options) {
+      if (request.kind === 'development' && request.observedRevision === undefined) {
+        const registeredRootId = await realpath(request.sourceRootPath).catch(() => null);
+        if (registeredRootId && !options?.signal?.aborted && !baseChangeService.isQuiescing()
+          && !baseChangeService.hasPendingDevelopmentSourceChange(registeredRootId)) {
+          let observation = developmentRoots!.resolveRegisteredSourceObservation(registeredRootId);
+          if (!observation) {
+            // Direct development installs enter the same custody owner as
+            // author submissions; its initial observation owns the review.
+            const registration = await developmentRoots!.control({
+              kind: 'registerExplicit', rootPath: registeredRootId,
+              ...(request.sdkRegistryOrigin ? { sdkRegistryOrigin: request.sdkRegistryOrigin } : {}),
+            });
+            if (baseChangeService.hasPendingDevelopmentSourceChange(registeredRootId)) {
+              return await baseChangeService.requestPluginChange(request, options);
+            }
+            if (registration.kind === 'failed') {
+              return Object.freeze({ kind: 'failed' as const, code: registration.code, message: registration.message });
+            }
+            observation = developmentRoots!.resolveRegisteredSourceObservation(registeredRootId);
+          }
+          if (observation) {
+            return await baseChangeService.requestPluginChange({
+              ...request,
+              sourceRootPath: observation.registeredRootId,
+              observedRevision: observation.observedRevision,
+            }, options);
+          }
+        }
+      }
+      return await baseChangeService.requestPluginChange(request, options);
+    },
+    async controlPluginDevelopment(request) {
+      const sourceRootPath = request.kind === 'registerExplicit' || request.kind === 'reload' || request.kind === 'invalidate'
+        ? await realpath(request.rootPath).catch(() => null) : null;
+      const rejoinsReview = sourceRootPath !== null && baseChangeService.hasPendingDevelopmentSourceChange(sourceRootPath);
+      const result = await developmentRoots!.control(request);
+      if (rejoinsReview && sourceRootPath && baseChangeService.hasPendingDevelopmentSourceChange(sourceRootPath)) {
+        await publishDevelopmentReview(sourceRootPath);
+      }
+      return result;
+    },
     async listPendingPluginChanges() {
       const base = await baseChangeService.listPendingPluginChanges();
       return Object.freeze({
@@ -572,7 +672,8 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
     const failures = error instanceof AggregateError
       ? error.errors.flatMap((failure: unknown) => {
         if (!isPluginError(failure) || !failure.details || typeof failure.details !== 'object'
-          || Array.isArray(failure.details) || typeof failure.details.pluginId !== 'string') return [];
+          || Array.isArray(failure.details) || !('pluginId' in failure.details)
+          || typeof failure.details.pluginId !== 'string') return [];
         return [{ pluginId: failure.details.pluginId, code: failure.code }];
       })
       : [];
@@ -633,19 +734,25 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
   return Object.freeze({
     changeService,
     async initialize() {
+      params.signal?.throwIfAborted();
       if (params.staleCandidateCleanup === 'exclusiveHome') {
         await cleanupStaleDaemonPluginCandidateRoots(params.happyHomeDir);
       }
       await stateStore.initialize();
+      params.signal?.throwIfAborted();
       const initialLease = await params.reloadController.acquireRuntimeRegistry({
         resolveRuntimeRegistry: async () => {
           const registry = await resolveExecutablePluginRuntimeRegistry({
+            ...(params.signal ? { signal: params.signal } : {}),
             readSpawnFailureLimits: params.readSpawnFailureLimits,
             happyHomeDir: params.happyHomeDir,
             ...(params.executeClientAction ? { executeClientAction: params.executeClientAction } : {}),
             generation: params.reloadController.getState().generation + 1,
             ...(params.resolveCurrentMachineId
               ? { resolveCurrentMachineId: params.resolveCurrentMachineId }
+              : {}),
+            ...(params.readDaemonRequesterWorkAttribution
+              ? { readDaemonRequesterWorkAttribution: params.readDaemonRequesterWorkAttribution }
               : {}),
             ...(params.machineAdmissionTransport
               ? { machineAdmissionTransport: params.machineAdmissionTransport }
@@ -761,8 +868,10 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
             run: () => Promise<void>,
           ): Promise<void> => {
             try {
+              params.signal?.throwIfAborted();
               await run();
             } catch (error) {
+              params.signal?.throwIfAborted();
               const reason = `${COLD_START_READINESS_STAGE_REASONS[stage]}: ${
                 projectPluginFailureText(error)
               }`;
@@ -805,6 +914,7 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
                 });
               });
             }));
+            params.signal?.throwIfAborted();
             if (registry.prepareDaemonDatabases) {
               const daemonDatabasePluginIds = [...new Set(
                 coldStartActivationTargets
@@ -832,6 +942,7 @@ export function createDaemonPluginRuntimeOwner(params: Readonly<{
                 });
               });
             }));
+            params.signal?.throwIfAborted();
             return registry;
           } catch (error) {
             try {

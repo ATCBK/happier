@@ -185,15 +185,48 @@ it('keeps approval input signatures separate from network request signatures', (
   expect(verifyExternalActionMachineRequestV1({ authorizationToken: 'invocation', effectActionId: 'teams.archive', target: approval.target, installationId: 'installation-1', requestId: 'request-1', method: 'POST', path: 'teams.archive', body: approval.input, signature, publicKey: key.publicKey })).toBe(false);
 });
 
+it('binds the shared requester and Bot identity into the existing approval signature', () => {
+  const key = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(31));
+  const approval = { authorizationToken: 'original-bot-invocation', actionId: 'session.message.send',
+    target: { kind: 'session' as const, sessionId: 'destination' }, input: { sessionId: 'destination', message: 'hello' },
+    requesterConfirmation: { requestRef: 'bob-request', requesterAccountId: 'bob', executionAccountId: 'alice',
+      personaSessionRef: { serverId: 'home', sessionId: 'bot-session' }, inputDigest: 'd'.repeat(43) } };
+  const signature = signExternalActionApprovalInputV1({ ...approval, privateKey: key.secretKey });
+  expect(verifyExternalActionApprovalInputV1({ ...approval, signature, publicKey: key.publicKey })).toBe(true);
+  for (const subject of [
+    { ...approval.requesterConfirmation, requesterAccountId: 'carol' },
+    { ...approval.requesterConfirmation, executionAccountId: 'bob' },
+    { ...approval.requesterConfirmation, requestRef: 'later-bob-request' },
+    { ...approval.requesterConfirmation, personaSessionRef: { serverId: 'home', sessionId: 'another-bot' } },
+    { ...approval.requesterConfirmation, inputDigest: 'e'.repeat(43) },
+    undefined,
+  ]) expect(verifyExternalActionApprovalInputV1({ ...approval, requesterConfirmation: subject,
+    signature, publicKey: key.publicKey })).toBe(false);
+});
+
+it('binds resolved Session targets independently of an unchanged selector input', () => {
+  const key = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(32));
+  const approval = { authorizationToken: 'original-bot-invocation', actionId: 'session.message.send',
+    target: { kind: 'session' as const, sessionId: 'bot' }, input: { sessionId: 'workers', message: 'exact write' },
+    sessionTargetsV1: { actionId: 'session.message.send', field: 'sessionId', selector: true,
+      targets: [{ serverId: 'home', sessionId: 'reviewed-worker' }] } };
+  const signature = signExternalActionApprovalInputV1({ ...approval, privateKey: key.secretKey });
+  expect(verifyExternalActionApprovalInputV1({ ...approval, signature, publicKey: key.publicKey })).toBe(true);
+  expect(verifyExternalActionApprovalInputV1({ ...approval,
+    sessionTargetsV1: { ...approval.sessionTargetsV1, targets: [{ serverId: 'home', sessionId: 'unreviewed-worker' }] },
+    signature, publicKey: key.publicKey })).toBe(false);
+});
+
 it('binds Machine possession to the invocation and exact downstream request', () => {
   const key = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(7));
-  const request = { authorizationToken: 'home-authorization', effectActionId: 'teams.rename', target: { kind: 'machine' as const, machineId: 'machine-1' }, installationId: 'installation-1', requestId: 'request-1', method: 'POST', path: '/v1/teams/t/rename', body: { name: 'Acme', revision: 2 } };
+  const request = { authorizationToken: 'home-authorization', effectActionId: 'teams.rename', target: { kind: 'machine' as const, machineId: 'machine-1' }, installationId: 'installation-1', requestId: 'request-1', method: 'POST', path: '/v1/teams/t/rename', body: { name: 'Acme', revision: 2 }, idempotencyKey: 'manual-retry' };
   const signature = signExternalActionMachineRequestV1({ ...request, privateKey: key.secretKey });
   expect(verifyExternalActionMachineRequestV1({ ...request, signature, publicKey: key.publicKey })).toBe(true);
   expect(verifyExternalActionMachineRequestV1({ ...request, body: { revision: 2, name: 'Acme' }, signature, publicKey: key.publicKey })).toBe(true);
   for (const changed of [
     { authorizationToken: 'other-invocation' }, { effectActionId: 'teams.archive' }, { installationId: 'installation-2' }, { requestId: 'request-2' }, { method: 'DELETE' }, { path: '/v1/teams/other/rename' }, { body: { name: 'Other', revision: 2 } },
     { target: { kind: 'machine' as const, machineId: 'machine-2' } },
+    { idempotencyKey: 'another-retry' }, { idempotencyKey: undefined },
   ]) expect(verifyExternalActionMachineRequestV1({ ...request, ...changed, signature, publicKey: key.publicKey })).toBe(false);
   expect(verifyExternalActionMachineRequestV1({ ...request, signature, publicKey: tweetnacl.sign.keyPair().publicKey })).toBe(false);
   expect(verifyExternalActionMachineRequestV1({ ...request, signature: 'malformed', publicKey: key.publicKey })).toBe(false);

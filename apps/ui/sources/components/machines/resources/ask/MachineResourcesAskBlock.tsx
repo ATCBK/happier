@@ -15,7 +15,8 @@ import { seedAndOpenNewSession } from '@/components/sessions/new/newSessionSeedC
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { readHappierStorageBytes } from '@/components/machines/storage/storageViewModel';
 import { useAutomationsSupport } from '@/hooks/server/useAutomationsSupport';
-import { useMachineTabFacts } from '@/components/machines/page/useMachineTabFacts';
+import { resolveServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachine';
+import { storage as appStorage } from '@/sync/domains/state/storageStore';
 import { useMachineResourceSummary } from '@/sync/domains/machines/resources/useMachineResourceSummary';
 import { useMachineResourcesPolicy } from '@/sync/domains/machines/resources/useMachineResourcesPolicy';
 import { useMachinePresenceSummary } from '@/sync/domains/machines/reachability/useMachinePresenceSummary';
@@ -47,7 +48,9 @@ export const MachineResourcesAskBlock = React.memo(
     const language = usePreferredLanguage();
     const presence = useMachinePresenceSummary(props.serverId, props.machineId);
     const online = presence.reachability === 'reachable';
-    const { homeDir } = useMachineTabFacts(props.serverId, props.machineId);
+    const homeDir = appStorage(React.useCallback((state: ReturnType<typeof appStorage.getState>) =>
+      resolveServerScopedMachine(state, props.serverId, props.machineId)?.metadata?.homeDir || undefined,
+    [props.machineId, props.serverId]));
     const summary = useMachineResourceSummary({
       serverId: props.serverId,
       machineId: props.machineId,
@@ -65,10 +68,16 @@ export const MachineResourcesAskBlock = React.memo(
     const leftBehindCount = processes.answer?.state === 'live'
       ? selectMachineProcessesLeftBehind(processes.answer.leftBehind).count : null;
     const reported = summary?.kind === 'reporting' ? summary.summary : null;
+    const hasLastReport = reported !== null;
+    const memoryPressure = reported?.memory.pressure;
+    const diskAvailableBytes = reported?.disk.availableBytes ?? null;
+    const diskTotalBytes = reported?.disk.totalBytes ?? null;
+    const diskTone = reported?.disk.tone;
     const calm = summary?.kind === 'reporting' && summary.attention?.level === 'calm';
     const guardEnabled = policy.policy
       ? policy.policy.guard?.memoryGuard?.enabled === true
       : null;
+    const previousSuggestions = React.useRef<ReturnType<typeof deriveMachineResourceSuggestions>>(undefined);
     const suggestions = React.useMemo(
       () =>
         deriveMachineResourceSuggestions({
@@ -79,14 +88,15 @@ export const MachineResourcesAskBlock = React.memo(
             directory: homeDir ?? '',
           },
           online,
-          ...(reported
+          hasLastReport,
+          calm: hasLastReport && calm,
+          memoryPressure,
+          ...(diskTone !== undefined
             ? {
-                calm,
-                memoryPressure: reported.memory.pressure,
                 disk: {
-                  availableBytes: reported.disk.availableBytes,
-                  totalBytes: reported.disk.totalBytes,
-                  tone: reported.disk.tone,
+                  availableBytes: diskAvailableBytes,
+                  totalBytes: diskTotalBytes,
+                  tone: diskTone,
                 },
               }
             : {}),
@@ -94,7 +104,7 @@ export const MachineResourcesAskBlock = React.memo(
           happierStorageBytes,
           leftBehindCount,
           automationsEnabled: automations.enabled,
-        }),
+        }, previousSuggestions.current),
       [
         language,
         automations.enabled,
@@ -107,9 +117,16 @@ export const MachineResourcesAskBlock = React.memo(
         props.machineName,
         online,
         props.serverId,
-        reported,
+        hasLastReport,
+        memoryPressure,
+        diskAvailableBytes,
+        diskTotalBytes,
+        diskTone,
       ],
     );
+    React.useEffect(() => {
+      previousSuggestions.current = suggestions;
+    }, [suggestions]);
     const fillGlobalComposer = React.useCallback((suggestion: HomeComposerSuggestionFill) => {
       const lifetime = captureActiveServerAccountScopeLifetime();
       const scope = selectActiveServerAccountScopeForServer(lifetime?.scope ?? null, props.serverId);
@@ -131,11 +148,9 @@ export const MachineResourcesAskBlock = React.memo(
       <ItemGroup
         surface="none"
         title={t('machineResources.ask.title')}
-        description={
-          online
-            ? t('machineResources.ask.description')
-            : t('machineResources.ask.offline', { machine: props.machineName })
-        }
+        // Offline, the machine page has already said so once (its Overview banner): the block just offers the prompts,
+        // which open a new session wherever the person chooses.
+        {...(online ? { description: t('machineResources.ask.description') } : {})}
       >
         <View testID="machine-resources-ask" style={styles.stack}>
           {online ? (
@@ -160,7 +175,7 @@ export const MachineResourcesAskBlock = React.memo(
 );
 
 /** The composer is bound to this machine: the draft's placement starts here, and prompts fill it. */
-function AskComposer(
+const AskComposer = React.memo(function AskComposer(
   props: Readonly<{
     serverId: string;
     machineId: string;
@@ -207,6 +222,8 @@ function AskComposer(
           <ComposerBannerCollapseProvider key={draftId}>
             <NewSessionScreen
               presentation="embedded"
+              // The lab's minimal ask box: where it runs and which model answers; the page is the context.
+              composerControlPreset="compact"
               inputPlaceholder={t('machineResources.ask.placeholder', { machine: props.machineName })}
             />
           </ComposerBannerCollapseProvider>
@@ -218,7 +235,7 @@ function AskComposer(
       />
     </>
   );
-}
+});
 
 const styles = StyleSheet.create(() => ({
   // A sheetless section (anatomy): the composer is its own card and the prompts their own tiles.

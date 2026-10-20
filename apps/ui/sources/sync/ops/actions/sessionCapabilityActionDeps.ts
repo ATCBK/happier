@@ -5,7 +5,7 @@ import { readPendingCapabilityApplyV1, readCapabilitySelectionApplyV1 } from '@h
 import { readRuntimeDescriptorV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor-compat';
 import { SpawnCapabilitiesPreviewOutputV1Schema, SessionCapabilitiesGetOutputV1Schema } from '@happier-dev/protocol/actions/specs/sessionCapabilities';
 import type { ActionExecutorDeps, ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
-import { resolveSessionCapabilityItemIdentityV1, type SessionCapabilitiesActionPortV1 } from '@happier-dev/protocol/actions/executor/sessionCapabilities';
+import { resolveSessionCapabilityItemIdentityV1, resolveSessionCapabilitiesGetFailureV1, type SessionCapabilitiesActionPortV1 } from '@happier-dev/protocol/actions/executor/sessionCapabilities';
 import { isRpcMethodNotAvailableError, isRpcMethodNotFoundError } from '@happier-dev/protocol/rpcErrors';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { readSessionSnapshotForAuthority, SessionSnapshotReadError } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority';
@@ -15,7 +15,7 @@ import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSession
 import { readMcpServerCatalogInContext } from '@/sync/api/account/apiMcpServerCatalog';
 import { readPromptLibraryCatalogProjectionInContext } from '@/sync/api/account/apiPromptLibraryCatalog';
 import { readPromptLibraryCatalogRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
-import { readSkillLibraryCatalog } from '@happier-dev/protocol/prompts/library/skills/readSkillLibraryCatalog';
+import { readUiSkillLibraryCatalogV1 } from './pluginSkillActionDeps';
 import { resolveSessionCapabilitiesV1 } from '@happier-dev/protocol/reach/resolveSessionCapabilitiesV1';
 import { projectManagedMcpSelectionV1, projectManagedMcpPreviewEntriesV1 } from '@happier-dev/protocol/mcp/servers/previewV1';
 import { EPHEMERAL_RUNNER_UNMATERIALIZED_MACHINE_ID_V1 } from '@happier-dev/protocol/ephemeralRunner/runnerMcpMaterial';
@@ -25,7 +25,7 @@ import { readCurrentProjectedAgentCapabilities } from '@/agents/backendCatalog/c
 import { readMcpPluginItemMetadataFromProjectionV1 } from '@happier-dev/protocol/mcp/servers/pluginItemsV1';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { isMachineRequestReachabilityFailure } from '@/sync/domains/machines/reachability/machineReachability';
-import type { LazyActionAccountContext } from './actionAccountContext';
+import { withActionAccountRequestSignal, type LazyActionAccountContext } from './actionAccountContext';
 import { sync } from '@/sync/sync';
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -68,7 +68,7 @@ export function createUiSessionCapabilityActionDeps(account: LazyActionAccountCo
             if (session.active && readRuntimeDescriptorV1FromMetadata(metadata) && !actual) {
                 throw Object.assign(new Error('Session capability facts unavailable'), { code: 'session_unavailable' });
             }
-            return { metadata, revision: session.metadataVersion, sessionRunning: session.active,
+            return { metadata, sessionRunning: session.active,
                 agent: actual ?? { vendorResume: runtime?.resume.vendorResume ?? (agentId ? getAgentResumeConfig(agentId)?.vendorResume : null)
                     ?? (projected?.capabilities?.sessions?.open.includes('resume') ? 'supported' : 'unsupported'),
                     skillsLiveReload: projected?.capabilities?.skills?.liveReload ?? core?.skills?.liveReload ?? 'unsupported' },
@@ -78,7 +78,13 @@ export function createUiSessionCapabilityActionDeps(account: LazyActionAccountCo
             assertCurrent(context);
             if (input.kind === 'native_skill') return input.id;
             if (input.kind === 'skill') {
-                const items = await readSkillLibraryCatalog({ list: options => account.listArtifacts(options) }, context.signal);
+                // Picker rows already carry an identity. Validate that one item without
+                // making its selection depend on unrelated Account inventory reads.
+                const addressed = await readUiSkillLibraryCatalogV1(account, context.signal, [input.id], context);
+                assertCurrent(context);
+                const exact = addressed.find(item => item.id === input.id);
+                if (exact) return exact.id;
+                const items = await readUiSkillLibraryCatalogV1(account, context.signal, undefined, context);
                 assertCurrent(context);
                 return resolveSessionCapabilityItemIdentityV1(items, input.id);
             }
@@ -97,9 +103,9 @@ export function createUiSessionCapabilityActionDeps(account: LazyActionAccountCo
             assertCurrent(context);
             let committed = false;
             try {
-                await sync.patchSessionMetadataWithRetry(input.sessionId, () => {
-                    assertCurrent(context); return MetadataSchema.parse(input.metadata);
-                }, { serverId: account.serverId, accountLifetime: account.accountLifetime, expectedMetadataRevision: input.expectedRevision,
+                await sync.patchSessionMetadataWithRetry(input.sessionId, metadata => {
+                    assertCurrent(context); return MetadataSchema.parse(input.update(metadata));
+                }, { serverId: account.serverId, accountLifetime: account.accountLifetime,
                     onMetadataCommitted: () => { committed = true; } });
                 return committed ? 'updated' : 'conflict';
             } catch (failure) {
@@ -115,7 +121,7 @@ export function createUiSessionCapabilityActionDeps(account: LazyActionAccountCo
             if (input.machineId === EPHEMERAL_RUNNER_UNMATERIALIZED_MACHINE_ID_V1) {
                 const [catalog, library, projection] = await Promise.all([
                     readMcpServerCatalogInContext(account, context.signal),
-                    readSkillLibraryCatalog({ list: options => account.listArtifacts(options) }, context.signal),
+                    readUiSkillLibraryCatalogV1(account, context.signal, undefined, context),
                     readPromptLibraryCatalogProjectionInContext(account, context.signal),
                 ]);
                 assertCurrent(context);
@@ -142,8 +148,8 @@ export function createUiSessionCapabilityActionDeps(account: LazyActionAccountCo
                     applyTiming: { mcp: { t: 'session_not_running' }, skills: { t: 'session_not_running' } },
                 });
             }
-            const response = record(await machineRpcWithServerScope({ machineId: input.machineId, serverId: account.serverId, accountId: account.accountId,
-                method: RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW, payload: input, signal: context.signal }));
+            const response = record(await withActionAccountRequestSignal(account, context.signal, signal => machineRpcWithServerScope({ machineId: input.machineId, serverId: account.serverId, accountId: account.accountId,
+                method: RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW, payload: input, operationTimeoutMs: null, signal })));
             assertCurrent(context);
             if (response?.ok !== true) return { ok: false, reason: isMachineRequestReachabilityFailure(response)
                 || isMachineRequestReachabilityFailure({ code: response?.errorCode }) ? 'machine_unreachable' : 'invalid_input' };
@@ -164,13 +170,14 @@ export function createUiSessionCapabilityActionDeps(account: LazyActionAccountCo
                 if (!session) return { ok: false, code: 'not_found' };
                 const metadata = readSessionOwnerMetadataView(session);
                 if (!metadata || !metadata.machineId) return { ok: false, code: 'session_unavailable' };
+                const machineId = metadata.machineId;
                 const agentId = resolveAgentIdFromSessionMetadata(metadata);
                 if (!agentId) return { ok: false, code: 'session_unavailable' };
-                const response = record(await machineRpcWithServerScope({ machineId: metadata.machineId, serverId: account.serverId, accountId: account.accountId,
-                    method: RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW, payload: { machineId: metadata.machineId, sessionId: input.sessionId, agentId,
-                        ...(metadata.path ? { directory: metadata.path } : {}) }, signal: context.signal }));
+                const response = record(await withActionAccountRequestSignal(account, context.signal, signal => machineRpcWithServerScope({ machineId, serverId: account.serverId, accountId: account.accountId,
+                    method: RPC_METHODS.DAEMON_MCP_SERVERS_PREVIEW, payload: { machineId, sessionId: input.sessionId, agentId,
+                        ...(metadata.path ? { directory: metadata.path } : {}) }, operationTimeoutMs: null, signal })));
                 assertCurrent(context);
-                if (response?.ok !== true) return { ok: false, code: 'session_unavailable' };
+                if (response?.ok !== true) return resolveSessionCapabilitiesGetFailureV1(response);
                 const mcp = record(response?.mcp);
                 const pending = readCapabilitySelectionApplyV1(metadata);
                 const detail = pending.mcp ?? pending.skills;
@@ -178,7 +185,7 @@ export function createUiSessionCapabilityActionDeps(account: LazyActionAccountCo
                     pendingApply: { ...readPendingCapabilityApplyV1(metadata), ...(detail ?? {}) }, applyTiming: response?.applyTiming });
             } catch (failure) {
                 assertCurrent(context);
-                return { ok: false, code: 'session_unavailable' };
+                return resolveSessionCapabilitiesGetFailureV1(failure);
             }
         } };
 }

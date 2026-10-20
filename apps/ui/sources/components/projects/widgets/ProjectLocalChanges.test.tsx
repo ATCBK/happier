@@ -1,12 +1,12 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 import { AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryListResponseV1Schema } from '@happier-dev/protocol/account/authoringMemory';
 import { PROJECT_ACCOUNT_ROWS_ROUTE_V1, ProjectAccountRowListResponseV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { ScmWorkingSnapshotSchema } from '@happier-dev/protocol/scm';
+import { SCM_OPERATION_ERROR_CODES, ScmWorkingSnapshotSchema } from '@happier-dev/protocol/scm';
 import { ScmComparisonSchema } from '@happier-dev/protocol/scm/comparison';
 
 import { createMachineFixture, flushHookEffects, renderHook, renderScreen } from '@/dev/testkit';
@@ -14,16 +14,31 @@ import { installSessionDetailsPanelNonRnModuleMocks } from '@/components/session
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import { readProjectManifestDocument } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestDocument';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
-import type { IModal } from '@/modal';
 import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
-import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import type { AppPaneScopeApi } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
 
 let disposeActionLoader: (() => void) | undefined;
-beforeAll(async () => { disposeActionLoader = await installRealActionExecutorModuleLoader(); });
+let projectInspection: Awaited<ReturnType<typeof createExternalActionAccountHttpBoundary>>;
+beforeAll(async () => {
+    disposeActionLoader = await installRealActionExecutorModuleLoader();
+    projectInspection = await createExternalActionAccountHttpBoundary({
+        serverUrl: 'https://session-pane.test', serverIdentityId: 'srv_session_pane', accountId: 'account-a', machineId: 'm1',
+        actionId: 'projects.inspect', tokenEpoch: 0, requesterInvocation: 'none',
+        execute: () => ({
+            definition: boundary.manifestPresent ? { basis: { kind: 'present', hash: 'a'.repeat(64) }, document: readProjectManifestDocument(
+                JSON.stringify({ version: 1, scripts: { build: { source: { kind: 'command', command: 'make build' } } } })) }
+                : { basis: { kind: 'absent' }, document: null },
+            detection: { entries: [{ usage: 'script', source: { kind: 'native', tool: 'package_script', file: 'package.json', target: 'test' } }],
+                environments: [], devcontainers: [], coverage: 'complete', diagnostics: [] },
+            importCandidates: [],
+        }),
+    });
+});
 afterAll(() => disposeActionLoader?.());
 
 const boundary = vi.hoisted(() => ({ navigate: vi.fn(), denied: false, confirmDiscard: false, confirmPush: false, rootReadme: false,
@@ -36,8 +51,7 @@ vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({
     // Native confirmation is the boundary; SCM policy, lock, transport and store remain real.
-    spies: { confirm: async () => boundary.confirmDiscard,
-        alertAsync: async (...args: Parameters<IModal['alertAsync']>) => { args[2]?.[boundary.confirmPush ? 1 : 0]?.onPress?.(); } },
+    spies: { confirm: async () => boundary.confirmDiscard || boundary.confirmPush },
 }).module);
 
 const { useWorkspaceScmCommitControls } = await import('@/components/projects/scm/useWorkspaceScmCommitControls');
@@ -80,8 +94,11 @@ function snapshot(paths: readonly string[]) {
 }
 let currentSnapshot = snapshot(['src/a.ts', 'src/b.ts']);
 const runtime = installSessionPaneRuntimeTestHarness({
+    credentials: { token: createAccountTokenForTests('account-a', { currentAccount: true }) },
     request: async (url, init) => {
         const path = new URL(String(url)).pathname;
+        const inspection = await projectInspection.handle(new URL(String(url)), init);
+        if (inspection) return inspection;
         // The real Account bootstrap and Action front door read these Home-owned baselines.
         if (path === AUTHORING_MEMORY_ROUTE_V1 && (init?.method ?? 'GET') === 'GET')
             return Response.json(AuthoringMemoryListResponseV1Schema.parse({ rows: [] }));
@@ -91,7 +108,6 @@ const runtime = installSessionPaneRuntimeTestHarness({
             return Response.json(accountSettings ? { content: { t: 'plain', v: accountSettings }, version: accountSettingsVersion } : { content: null, version: 0 });
         const artifactResponse = approvalArtifacts.handle(path, init);
         if (artifactResponse) return artifactResponse;
-        if (path === '/v1/machines') return Response.json([createPlainMachineRowFixture({ id: 'm1', accountId: 'account-a' })]);
         if (path === '/v1/machines/m1')
             return Response.json({ machine: { id: 'm1', kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } });
         return null;
@@ -106,21 +122,13 @@ const runtime = installSessionPaneRuntimeTestHarness({
         });
         vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event, payload) => {
             if (event !== 'rpc-call') throw new Error(`Unexpected event: ${event}`);
-            const request = z.object({ method: z.string(), params: z.unknown() }).passthrough().parse(payload);
+            const request = z.looseObject({ method: z.string(), params: z.unknown() }).parse(payload);
             if (request.method.endsWith(`:${RPC_METHODS.DAEMON_FILESYSTEM_LIST_DIRECTORY}`)) return { ok: true, result: {
-                ok: true, path: z.object({ path: z.string() }).passthrough().parse(request.params).path, truncated: false,
+                ok: true, path: z.looseObject({ path: z.string() }).parse(request.params).path, truncated: false,
                 entries: boundary.rootReadme ? [{ name: 'readme.MD', path: '/repo/readme.MD', type: 'file' }] : [],
             } };
-            if (request.method.endsWith('daemon.projects.inspect.v1')) return { ok: true, result: {
-                definition: boundary.manifestPresent ? { basis: { kind: 'present', hash: 'a'.repeat(64) }, document: readProjectManifestDocument(
-                    JSON.stringify({ version: 1, scripts: { build: { source: { kind: 'command', command: 'make build' } } } })) }
-                    : { basis: { kind: 'absent' }, document: null },
-                detection: { entries: [{ usage: 'script', source: { kind: 'native', tool: 'package_script', file: 'package.json', target: 'test' } }],
-                    environments: [], devcontainers: [], coverage: 'complete', diagnostics: [] },
-                importCandidates: [],
-            } };
             if (request.method.endsWith(`:${RPC_METHODS.SCM_STATUS_SNAPSHOT}`)) return { ok: true, result: boundary.denied
-                ? { success: false, errorCode: 'permission_denied', error: 'Denied' }
+                ? { success: false, errorCode: SCM_OPERATION_ERROR_CODES.BACKEND_UNAVAILABLE, error: 'Denied' }
                 : { success: true, snapshot: currentSnapshot } };
             if (request.method.endsWith(`:${RPC_METHODS.SCM_COMMIT_CREATE}`)) {
                 boundary.writes.push(request);
@@ -134,14 +142,14 @@ const runtime = installSessionPaneRuntimeTestHarness({
             }
             if (request.method.endsWith(`:${RPC_METHODS.SCM_CHANGE_DISCARD}`)) {
                 boundary.writes.push(request);
-                const { entries } = z.object({ entries: z.array(z.object({ path: z.string() }).passthrough()) }).passthrough().parse(request.params);
+                const { entries } = z.looseObject({ entries: z.array(z.looseObject({ path: z.string() })) }).parse(request.params);
                 currentSnapshot = snapshot(currentSnapshot.entries.filter(entry => !entries.some(item => item.path === entry.path)).map(entry => entry.path));
                 return { ok: true, result: { success: true } };
             }
             if (request.method.endsWith(`:${RPC_METHODS.SCM_CHANGE_INCLUDE}`) || request.method.endsWith(`:${RPC_METHODS.SCM_CHANGE_EXCLUDE}`)) {
                 boundary.writes.push(request);
                 const include = request.method.endsWith(`:${RPC_METHODS.SCM_CHANGE_INCLUDE}`);
-                const { paths } = z.object({ paths: z.array(z.string()) }).passthrough().parse(request.params);
+                const { paths } = z.looseObject({ paths: z.array(z.string()) }).parse(request.params);
                 currentSnapshot = ScmWorkingSnapshotSchema.parse({ ...currentSnapshot, fetchedAt: currentSnapshot.fetchedAt + 1,
                     entries: currentSnapshot.entries.map(entry => paths.includes(entry.path) ? { ...entry,
                         hasIncludedDelta: include, hasPendingDelta: !include, includeStatus: include ? 'M' : '', pendingStatus: include ? '' : 'M' } : entry) });
@@ -264,10 +272,14 @@ describe('Project Local Changes', () => {
         const draftsBefore = listNewSessionDraftProjections(scope);
         const { ProjectShellHeaderHost } = await import('@/components/projects/shell/ProjectShellHeaderHost');
         const { WorkspaceDetailsPanel } = await import('@/components/projects/panes/WorkspaceDetailsPanel');
-        const screen = await renderScreen(<runtime.Wrapper>{source === 'header'
+        const screen = await renderScreen(<runtime.Wrapper><DestinationInstanceHost tabId="project-authoring"
+            ref={{ kind: 'project', params: { workspaceRefId: checkout.id, serverId: runtime.serverId, ...boundary.routeParams } }}
+            pathname={boundary.pathname} focused visible
+            navigation={{ push: boundary.navigate, replace: boundary.navigate, back: () => {}, setParams: () => {} }}>
+            {source === 'header'
             ? <ProjectShellHeaderHost workspaceRef={checkout} activeRootPath={workspaceScope.rootPath} onSelectRootPath={() => {}} page="overview" />
             : <WorkspaceDetailsPanel workspaceRef={checkout} activeRootPath={workspaceScope.rootPath} scopeId="project:wr_1" />
-        }</runtime.Wrapper>);
+        }</DestinationInstanceHost></runtime.Wrapper>);
         const trigger = source === 'header' ? 'project-shell-header.newSession' : 'workspace-details-open-review-comments-session';
         await screen.pressByTestIdAsync(trigger);
         await vi.waitFor(() => expect(screen.findHostByTestId('project-new-session-approval')).not.toBeNull());
@@ -372,6 +384,19 @@ describe('Project Local Changes', () => {
         expect(url.searchParams.get('initialFile')).toBe(relation === 'same-project' ? 'src/current.ts' : null);
         expect(url.searchParams.get('comparisonId')).toBe(relation === 'same-project' ? 'saved-comparison' : null);
     });
+    it('names a checkout on a machine the Home does not list as unlisted, never by its raw machine id', async () => {
+        const accountScope = storage.getState().profileScope;
+        if (!accountScope) throw new Error('Connected fixture has no Account scope');
+        const checkout = { id: 'wr_1', serverId: runtime.serverId, machineId: 'm1', rootPath: '/repo', projectKey: 'project', createdAtMs: 1 };
+        const elsewhere = { ...checkout, id: 'wr_2', machineId: 'machine-not-in-inventory-4d2e', rootPath: '/srv/repo' };
+        storage.getState().activateProjectAccountRowsScope(accountScope);
+        storage.getState().applyProjectAccountRowsForScope(accountScope, { scope: accountScope, status: 'ready', coverage: 'complete',
+            workspaceRefs: [checkout, elsewhere], relationships: [], organizations: [], revisionsByPhysicalKey: {} });
+        const screen = await mount('/repo', 'project_checkouts');
+        const text = screen.getTextContent();
+        expect(text).not.toContain('machine-not-in-inventory-4d2e');
+        expect(text).toMatch(/machine\.unlistedMachine|Unlisted machine/);
+    });
     it('publishes Clear only for atomic selection and clears the real shared checkout selection', async () => {
         const scope = { serverId: runtime.serverId, machineId: 'm1', rootPath: '/repo' };
         storage.getState().applySettingsLocal({ experiments: true, featureToggles: { 'scm.writeOperations': true }, scmCommitStrategy: 'git_staging' });
@@ -441,7 +466,7 @@ describe('Project Local Changes', () => {
         expect(boundary.writes).toEqual([]);
         expect(storage.getState().sessions).toEqual({});
     });
-    it('shows unpushed commits as non-clean and pushes only after explicit checkout confirmation', async () => {
+    it('shows unpushed commits as non-clean and pushes only after the push Action’s confirmation', async () => {
         storage.getState().applySettingsLocal({ experiments: true, featureToggles: { 'scm.writeOperations': true }, scmRemoteConfirmPolicy: 'always' });
         currentSnapshot = ScmWorkingSnapshotSchema.parse({ ...snapshot([]),
             capabilities: { ...currentSnapshot.capabilities, writeRemotePush: true },
@@ -538,6 +563,8 @@ describe('Project Local Changes', () => {
         // Checkouts keeps the row and says this one is offline.
         const here = screen.root.findAll(node => node.props.testID === 'project_checkouts.here' && node.props.fact !== undefined)[0];
         expect(String(here?.props.fact)).toContain('offline');
+        // "Here" and "offline" would contradict each other on one row.
+        expect(here?.props.tag).toBeUndefined();
         expect(boundary.writes).toEqual([]);
     });
     it('keeps the Code widget the folder itself in any framed placement, sized or not', async () => {
@@ -802,7 +829,9 @@ describe('Project Local Changes', () => {
         expect(denied.findHostByTestId('local-changes-clean')).toBeNull();
         expect(denied.findHostByTestId('local-changes-files')).toBeNull();
         expect(denied.findHostByTestId('local-changes-error')).not.toBeNull();
-        expect(storage.getState().getWorkspaceScmSnapshotError(scope)).toMatchObject({ errorCode: 'permission_denied' });
+        expect(storage.getState().getWorkspaceScmSnapshotError(scope)).toMatchObject({
+            errorCode: SCM_OPERATION_ERROR_CODES.BACKEND_UNAVAILABLE, message: 'Denied',
+        });
         expect(storage.getState().sessions).toEqual({});
     });
 });

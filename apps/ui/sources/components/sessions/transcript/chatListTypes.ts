@@ -18,6 +18,7 @@ import type {
 } from '@/components/sessions/transcript/events/transcriptEventEmphasis';
 import type { ExternalSessionOperationActionRef } from '@/components/sessions/external/progress/ExternalImportProgressCard';
 import type { ExternalSessionOperationProgressV1 } from '@happier-dev/protocol';
+import type { ForkAwareMessageMetadata } from './forkContext/buildForkAwareMessageDescriptors';
 
 export type ChatTranscriptListItem = TranscriptRowShellItem;
 
@@ -29,10 +30,10 @@ export type ChatTranscriptListItem = TranscriptRowShellItem;
  * This is what makes a per-session fact — above all `seq`, which counts from each session's own
  * origin — answerable for a row in a mixed list.
  */
-export type TranscriptForkMessageMetadataById = Readonly<Record<string, {
-    originSessionId: string;
-    isReadOnlyContext: boolean;
-}>>;
+export type TranscriptForkMessageMetadataById = Readonly<Record<string, Pick<
+    ForkAwareMessageMetadata,
+    'originSessionId' | 'isReadOnlyContext' | 'visualContext'
+>>>;
 
 export type ChatListBottomNotice = {
     title: string;

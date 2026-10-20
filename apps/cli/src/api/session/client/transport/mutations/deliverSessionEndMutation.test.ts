@@ -21,7 +21,9 @@ describe('deliverSessionEndMutation', () => {
     beforeEach(() => {
         vi.mocked(axios.post).mockReset();
         vi.mocked(axios.get).mockReset();
-        vi.mocked(axios.get).mockRejectedValue(new Error('session-end proof unavailable'));
+        vi.mocked(axios.get).mockResolvedValue({
+            status: 200, data: { session: { id: 's1', active: true, activeAt: 0 } },
+        } as never);
         vi.spyOn(Date, 'now').mockReturnValue(legacyDeliveryAttemptAt);
         delete process.env.HAPPIER_SESSION_END_DELIVERY_CONCURRENCY;
     });
@@ -61,6 +63,40 @@ describe('deliverSessionEndMutation', () => {
         expect(vi.mocked(axios.post).mock.calls[0]?.[0]).toContain('/v1/sessions/s1/end');
     });
 
+    it('settles a retained end without closing a publisher resumed after that end', async () => {
+        vi.mocked(axios.post).mockRejectedValue({ response: { status: 404 } });
+        let active = true;
+        vi.mocked(axios.get).mockImplementation(async () => ({
+            status: 200,
+            data: { session: { id: 's1', active, activeAt: mutation.observedAt + 1 } },
+        }) as never);
+        const socket = {
+            connected: true,
+            emit: vi.fn(() => { active = false; }),
+            emitWithAck: vi.fn(async () => {
+                active = false;
+                return { ok: true, applied: true };
+            }),
+        };
+
+        await expect(deliverSessionEndMutation({ token: 'tok', socket, mutation })).resolves.toBe(true);
+
+        expect(active).toBe(true);
+        expect(socket.emit).not.toHaveBeenCalled();
+        expect(socket.emitWithAck).not.toHaveBeenCalled();
+    });
+
+    it('retains an end without a socket effect when current publisher state is unavailable', async () => {
+        vi.mocked(axios.post).mockRejectedValue({ response: { status: 404 } });
+        vi.mocked(axios.get).mockRejectedValue(new Error('Home unavailable'));
+        const socket = { connected: true, emit: vi.fn(), emitWithAck: vi.fn() };
+
+        await expect(deliverSessionEndMutation({ token: 'tok', socket, mutation })).resolves.toBe(false);
+
+        expect(socket.emit).not.toHaveBeenCalled();
+        expect(socket.emitWithAck).not.toHaveBeenCalled();
+    });
+
     it('preserves legacy session-end emit without confirming unsupported HTTP delivery', async () => {
         vi.mocked(axios.post).mockRejectedValue({ response: { status: 404 } });
         const socket = {
@@ -79,7 +115,7 @@ describe('deliverSessionEndMutation', () => {
         let active = true;
         vi.mocked(axios.get).mockImplementation(async () => ({
             status: 200,
-            data: { session: { id: 's1', active } },
+            data: { session: { id: 's1', active, activeAt: 0 } },
         }) as never);
         const socket = {
             connected: true,
@@ -97,7 +133,7 @@ describe('deliverSessionEndMutation', () => {
         expect(mutation.observedAt).toBe(1_000);
     });
 
-    it('confirms unsupported HTTP session-end through socket ack before proof polling', async () => {
+    it('confirms unsupported HTTP session-end through socket ack after observing the current publisher', async () => {
         vi.mocked(axios.post).mockRejectedValue({ response: { status: 404 } });
         const socket = {
             connected: true,
@@ -109,7 +145,7 @@ describe('deliverSessionEndMutation', () => {
 
         expect(socket.emitWithAck).toHaveBeenCalledWith('session-end', { sid: 's1', time: legacyDeliveryAttemptAt });
         expect(socket.emit).not.toHaveBeenCalled();
-        expect(vi.mocked(axios.get)).not.toHaveBeenCalled();
+        expect(vi.mocked(axios.get).mock.calls[0]?.[0]).toEqual(expect.stringContaining('/v2/sessions/s1'));
     });
 
     it('confirms unsupported HTTP session-end when legacy socket delivery is proven inactive from v1 list state', async () => {
@@ -131,7 +167,7 @@ describe('deliverSessionEndMutation', () => {
 
         await expect(deliverSessionEndMutation({ token: 'tok', socket, mutation })).resolves.toBe(true);
 
-        expect(socket.emit).toHaveBeenCalledWith('session-end', { sid: 's1', time: legacyDeliveryAttemptAt });
+        expect(socket.emit).not.toHaveBeenCalled();
         expect(vi.mocked(axios.get).mock.calls.map(([url]) => String(url))).toEqual([
             expect.stringContaining('/v2/sessions/s1'),
             expect.stringContaining('/v1/sessions'),
@@ -151,7 +187,7 @@ describe('deliverSessionEndMutation', () => {
 
         await expect(deliverSessionEndMutation({ token: 'tok', socket, mutation })).resolves.toBe(true);
 
-        expect(socket.emit).toHaveBeenCalledWith('session-end', { sid: 's1', time: legacyDeliveryAttemptAt });
+        expect(socket.emit).not.toHaveBeenCalled();
         expect(vi.mocked(axios.get).mock.calls[0]?.[0]).toEqual(expect.stringContaining('/v2/sessions/s1'));
         expect(vi.mocked(axios.get).mock.calls[0]?.[1]?.headers).toMatchObject({
             'X-Happier-Request-Purpose': 'session-detail:legacy-compat-proof',
@@ -162,7 +198,7 @@ describe('deliverSessionEndMutation', () => {
         vi.mocked(axios.post).mockRejectedValue({ response: { status: 404 } });
         vi.mocked(axios.get).mockResolvedValueOnce({
             status: 200,
-            data: { session: { id: 's1', active: true } },
+            data: { session: { id: 's1', active: true, activeAt: 0 } },
         } as never);
         const socket = {
             connected: true,

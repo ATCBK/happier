@@ -144,7 +144,7 @@ describe('PageHeader back control placement', () => {
         const screen = await renderScreen(header(null));
         const wrapper = screen.root.find((node: ReactTestInstance) => typeof node.type === 'string' && node.props.testID === 'page-header');
         act(() => { wrapper.props.onLayout?.({ nativeEvent: { layout: { x: 0, y: 0, width: 390, height: 80 } } }); });
-        await act(async () => { screen.tree.update(header(BackArrow)); });
+        await screen.update(header(BackArrow));
         expect(gutterBacks(screen)).toBe(0);
         const line = screen.findHostByTestId('page-header-back-line');
         expect(line?.findAllByType('BackArrow' as never)).toHaveLength(1);

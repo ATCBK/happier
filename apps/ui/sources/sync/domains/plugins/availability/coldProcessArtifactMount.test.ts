@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
-const activeAccountHostedArtifactSource = vi.hoisted(() => ({ create: vi.fn() }));
-vi.mock('@/sync/api/plugins/availability/activePluginAccountHostedArtifactRead', () => ({
-    createActivePluginAccountHostedArtifactSourceCandidate: (input: unknown) => (
-        activeAccountHostedArtifactSource.create(input)
-    ),
-}));
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+
+installHomeGovernanceBoundaries(createHomeGovernanceHarness());
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
 
 import {
     computePluginUiArtifactFileSetSha256DigestV1,
@@ -26,7 +27,7 @@ import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/acti
 import type { PluginReactNativeBundleCacheIdentity } from '@/sync/domains/plugins/ui/reactNativeRuntime';
 
 import { createPluginAccountAvailabilityReader, type PluginAccountAvailabilitySnapshot } from './reader';
-import { createPluginReactNativeArtifactAvailabilityProducer } from './reactNativeArtifactAvailability';
+const { createPluginReactNativeArtifactAvailabilityProducer } = await import('./reactNativeArtifactAvailability');
 
 const scope = { serverId: 'server-a', accountId: 'account-a' } as const;
 
@@ -37,7 +38,6 @@ const accountLifetime: ActiveServerAccountScopeLifetime = Object.freeze({
 });
 
 const inactiveAppExactSource = Object.freeze({ kind: 'appExact' as const, fetch: async () => null });
-const inactiveAccountHostedSource = Object.freeze({ kind: 'accountHosted' as const, fetch: async () => null });
 
 /**
  * The device's persistent Artifact custody survives a process restart. This
@@ -207,7 +207,6 @@ function fixture() {
 
 describe('cold process Artifact mount with every daemon unreachable', () => {
     it('mounts Account-qualified bytes from device custody and refuses once that custody is empty', async () => {
-        activeAccountHostedArtifactSource.create.mockReturnValue(inactiveAccountHostedSource);
         const current = fixture();
         const cacheStorage = createDurableCacheStorage();
         const browserStore = createBrowserPluginUiPersistentArtifactStore(cacheStorage);

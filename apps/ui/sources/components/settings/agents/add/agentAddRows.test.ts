@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mapAcpRegistryAgentToDefinitionV1 } from '@happier-dev/protocol/acp/catalog/registry/mapAcpRegistryAgentV1';
-import { createRegistryHostV1, BUILT_IN_REGISTRY_SOURCES_V1 } from '@happier-dev/protocol/registries';
+import { createRegistryHostV1, BUILT_IN_REGISTRY_SOURCES_V1, REGISTRY_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/registries';
 import { summarizeAcpRegistryDistributionV1 } from '@happier-dev/protocol/acp/catalog/registry/acpPlatformFitV1';
 import { ACP_REGISTRY_V1_FIXTURE } from '../../../../../../../packages/protocol/src/registries/formats/fixtures/acpRegistryV1Fixture';
 import {
@@ -131,8 +131,9 @@ describe('buildAgentAddRows', () => {
     const unused = async (): Promise<never> => { throw new Error('Unexpected transport'); };
     const host = createRegistryHostV1({ host: 'web', readSources: async () => BUILT_IN_REGISTRY_SOURCES_V1,
       http: { getJson: async () => ({ ok: true, value: ACP_REGISTRY_V1_FIXTURE, fetchedAt: 1 }), getText: unused, getBytes: unused } });
-    const response = await host.execute('registries.items.list', { kind: 'agent', sourceIds: [ACP] });
-    if (!('pages' in response)) throw new Error('Missing registry list');
+    const response = REGISTRY_ACTION_OUTPUT_SCHEMAS_V1['registries.items.list'].parse(
+      await host.execute('registries.items.list', { kind: 'agent', sourceIds: [ACP] }),
+    );
     const items = response.pages.flatMap(page => page.items).map(item => RegistryItemSummaryV1Schema.parse(item));
     const build = (knownMachines: readonly AgentAddMachine[]) => buildAgentAddRows({ items, machines: knownMachines,
       catalogEntries: [], definitions: [] }).rows;

@@ -1,4 +1,5 @@
 import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
+import { PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -17,11 +18,44 @@ import {
     EMPTY_PLUGIN_UI_PROJECTION,
     createPluginUiProjectedActionResolver,
     normalizePluginUiProjection,
+    readPluginUiProjectionSnapshot,
     resolvePluginUiProjectionState,
 } from './projection';
 
 const PREVIEW_OCCURRENCE_ID = 'preview-runtime-occurrence-a';
 import { resolvePluginUiText } from './i18n';
+import { unionPluginUiProjections, readPluginUiContributionSupplies, mergeInstalledPluginUiProjections } from './projectionUnion';
+
+it('preserves external plugin skill declarations through the UI projection', () => {
+    const executionOrigin = PluginMachineExecutionOriginV1Schema.parse({
+        serverIdentityId: 'srv_skills',
+        sourceRef: { machineId: 'supplier', pluginId: 'com.acme.skills',
+            sourceCustody: { kind: 'development', registeredRootId: 'acme-skills-root' } },
+    });
+    const selectedOrigins = new Map([['com.acme.skills', executionOrigin]]);
+    const entry = { id: 'com.acme.skills/check', pluginId: 'com.acme.skills', pluginName: 'Acme Skills',
+        pluginVersion: '1.0.0', occurrenceId: 'acme-skills-runtime', executionOrigin,
+        definition: { id: 'check', directory: './resources/skills/check' } };
+    const model = normalizePluginUiProjection(PluginProjectionV2Schema.parse({ v: 2, generation: 1,
+        agentsById: {}, actionsById: {}, toolsById: {}, commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [],
+        installedPackagesById: { [entry.pluginId]: { id: entry.pluginId, displayName: 'Acme Skills', version: '1.0.0', enabled: true,
+            occurrenceId: entry.occurrenceId, executionOrigin,
+            sourceCustody: { kind: 'development', registeredRootId: 'acme-skills-root' },
+            source: { kind: 'path', locator: '/plugins/acme' } } },
+        familiesById: { skills: { family: 'skills', entriesById: { [entry.id]: entry } } } }));
+    expect(model.skillsById).toEqual({ [entry.id]: entry });
+    expect(normalizePluginUiProjection(null).skillsById).toEqual({});
+    const member = { machineId: 'supplier', serverId: 'server', serverIdentityId: 'srv_skills',
+        phase: 'current' as const, interactionEnabled: true, projection: model };
+    const projected = unionPluginUiProjections([member], selectedOrigins).pluginUiProjection;
+    expect(projected?.skillsById[entry.id]).toMatchObject(entry);
+    expect(readPluginUiContributionSupplies(projected?.skillsById[entry.id])).toMatchObject([{ machineId: 'supplier' }]);
+    expect(mergeInstalledPluginUiProjections([model], null)?.skillsById[entry.id]).toEqual(entry);
+    const disabled = { ...model, installedPackagesById: { ...model.installedPackagesById,
+        [entry.pluginId]: { ...model.installedPackagesById[entry.pluginId]!, enabled: false } } };
+    expect(unionPluginUiProjections([{ ...member, projection: disabled }], selectedOrigins).pluginUiProjection?.skillsById[entry.id]).toBeUndefined();
+    expect(unionPluginUiProjections([member], selectedOrigins).pluginUiProjection?.skillsById[entry.id]).toMatchObject(entry);
+});
 
 function binding(input: Parameters<typeof normalizePluginUiDestinationBindingV1>[0]) {
     const normalized = normalizePluginUiDestinationBindingV1(input);
@@ -628,9 +662,11 @@ describe('plugin UI projection normalization', () => {
             platforms: ['web'],
         });
 
-        const web = normalizePluginUiProjection(projection, 'web');
-        const ios = normalizePluginUiProjection(projection, 'ios');
-        const android = normalizePluginUiProjection(projection, 'android');
+        const web = readPluginUiProjectionSnapshot(projection, 'web');
+        const ios = readPluginUiProjectionSnapshot(projection, 'ios');
+        const android = readPluginUiProjectionSnapshot(projection, 'android');
+        expect(readPluginUiProjectionSnapshot(projection, 'web')).toBe(web);
+        expect(readPluginUiProjectionSnapshot(projection, 'ios')).toBe(ios);
 
         // Web admits both web-capable rows and rejects the native-only one; a
         // publish-everything normalizer would keep all three on every platform.

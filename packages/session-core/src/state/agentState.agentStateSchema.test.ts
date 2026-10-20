@@ -1,8 +1,46 @@
 import { describe, expect, it } from 'vitest';
+import { CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY } from '@happier-dev/protocol/sessions/presentation/currentSessionPresentationV1';
 
 import { AgentStateSchema } from "./agentState.js";
+import { listPendingRequests } from '../pending/listPendingRequests.js';
 
 describe('AgentStateSchema', () => {
+    it('retains the host question mode and its one current handler across a stored read', () => {
+        const request = { tool: 'AskUserQuestion', kind: 'user_action', arguments: { questions: [] }, createdAt: 1,
+            questionV1: { mode: 'continue', assumption: 'Use revision 3', lasting: true },
+            currentHandler: { kind: 'person' } };
+        expect(AgentStateSchema.parse(JSON.stringify({ requests: { question: request } })).requests?.question)
+            .toMatchObject(request);
+        expect(listPendingRequests({ sessionId: 'worker', active: false,
+            agentState: AgentStateSchema.parse({ requests: { question: request } }),
+            actionConfirmations: null, presentationCompletedRequests: null, projected: null,
+        }, [])).toMatchObject([{ questionV1: request.questionV1, currentHandler: request.currentHandler }]);
+        expect(AgentStateSchema.safeParse({ requests: { question: { ...request,
+            currentHandler: { kind: 'session', sessionId: '' } } } }).success).toBe(false);
+        expect(AgentStateSchema.safeParse({ requests: { question: { ...request,
+            currentHandler: { kind: 'person', sessionId: 'unproven-manager' } } } }).success).toBe(false);
+        expect(AgentStateSchema.safeParse({ requests: { question: { ...request,
+            questionV1: { ...request.questionV1, targetAccountId: 'other' } } } }).success).toBe(false);
+    });
+    it('accepts absent and present protocol-owned current Session presentation state', () => {
+        expect(AgentStateSchema.safeParse({}).success).toBe(true);
+        expect(AgentStateSchema.parse({
+            [CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]: {
+                v: 1,
+                hostNonce: 'host-nonce',
+                revision: 0,
+                statuses: [],
+                widgets: [],
+            },
+        })).toMatchObject({
+            [CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY]: {
+                v: 1,
+                hostNonce: 'host-nonce',
+                revision: 0,
+            },
+        });
+    });
+
     it('retains witnessed completion identity and client category without inventing historical facts', () => {
         const parsed = AgentStateSchema.parse({ completedRequests: {
             current: { tool: 'Write', arguments: {}, createdAt: 100, completedAt: 200,

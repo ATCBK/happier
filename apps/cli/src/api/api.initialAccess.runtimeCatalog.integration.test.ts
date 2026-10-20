@@ -17,6 +17,12 @@ import { initializeBackendRunSession } from '@/agent/runtime/initializeBackendRu
 import { createSpawnedSession } from '@/session/services/createSpawnedSession';
 import { resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
 import { readSessionCreationTerminalSpawnErrorDetail } from './session/sessionCreationTerminalSpawnErrorDetail';
+import { resolveConnectedServicesServerApiTimeoutMs } from './client/connectedServicesServerApiTimeout';
+import { commitDaemonLaunchSession } from '@/daemon/spawn/commitDaemonLaunchSession';
+import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
+import { createHostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
+import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
+import { SessionRuntimeIssueV1Schema } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 
 const initialAccess: SessionInitialAccessDraftV1 = {
   grants: [{ subject: { kind: 'team', teamId: 'team-1' }, accessLevel: 'edit', canApprovePermissions: false }],
@@ -71,7 +77,9 @@ for (const owner of ['api', 'http'] as const) {
       // URL; each case stubs its own Home answer at the fetch boundary.
       resetServerFeaturesClientForTests();
       vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(features(true)))));
-      vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: {
+      vi.spyOn(axios, 'get').mockImplementation(async url => String(url).endsWith('/v2/account/settings')
+        ? { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } }
+        : { status: 200, data: {
         mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
         recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' },
       } });
@@ -86,6 +94,156 @@ for (const owner of ['api', 'http'] as const) {
       });
     });
     afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
+
+    it.each([true, false])('respects caller lifetime and the legacy POST cutoff (callerLifetime=%s)', async (hasLifetime) => {
+      vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_MAX_ATTEMPTS', '1');
+      vi.useFakeTimers();
+      const lifetime = new AbortController();
+      const post = vi.mocked(axios.post).getMockImplementation()!;
+      vi.mocked(axios.post).mockImplementation(async (url, body, options) => await new Promise<Awaited<ReturnType<typeof post>>>((resolve, reject) => {
+        // Axios is the network boundary: enforce its configured timeout so a
+        // delayed server receipt cannot pass through a shorter transport cutoff.
+        const response = setTimeout(() => {
+          if (deadline !== undefined) clearTimeout(deadline);
+          resolve(post(url, body, options));
+        }, 60_001);
+        const deadline = options?.timeout && options.timeout > 0 ? setTimeout(() => {
+          clearTimeout(response);
+          reject(new axios.AxiosError('Session creation timed out', 'ECONNABORTED'));
+        }, options.timeout) : undefined;
+      }));
+      try {
+        const pending = create(hasLifetime ? { signal: lifetime.signal } : {});
+        const completed = hasLifetime ? expect(pending).resolves.toMatchObject(owner === 'api'
+          ? { id: 'created-session' } : { session: { id: 'created-session' } })
+          : expect(pending).rejects.toMatchObject({ code: 'outcome_unknown', cause: { code: 'ECONNABORTED' } });
+        void completed.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(60_001);
+        await completed;
+        expect(axios.post).toHaveBeenCalledTimes(1);
+      } finally {
+        lifetime.abort();
+        vi.useRealTimers();
+      }
+    });
+
+    it('keeps uncertain creation diagnostics free of request credentials and content', async () => {
+      vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_MAX_ATTEMPTS', '1');
+      const secret = 'fixture-creation-private-content';
+      vi.mocked(axios.post).mockRejectedValueOnce(Object.assign(new Error('Response lost'), {
+        isAxiosError: true, code: 'ECONNRESET',
+        config: { url: `https://home.example/v1/sessions?token=${secret}`, method: 'post',
+          headers: { Authorization: `Bearer ${secret}` }, data: { metadata: secret } },
+      }));
+      const failure = await create({}).catch((error: unknown) => error);
+      expect(failure).toMatchObject({ code: 'outcome_unknown', cause: { code: 'ECONNRESET' } });
+      expect(JSON.stringify(failure)).not.toContain(secret);
+    });
+
+    if (owner === 'api') it('cancels daemon creation through the retained Action lifetime after the old POST cutoff', async () => {
+      vi.useFakeTimers();
+      const operations = createHostActionOperationRuntime({ machineId: 'machine-1', resolveAccountId: async () => 'owner-1',
+        generateOperationId: () => 'creation-operation', supportsCoreCancellation: () => true });
+      let postEntered!: () => void;
+      const entered = new Promise<void>(resolve => { postEntered = resolve; });
+      vi.mocked(axios.post).mockImplementation(async (_url, _body, options) => await new Promise<never>((_resolve, reject) => {
+        const onAbort = () => {
+          if (deadline !== undefined) clearTimeout(deadline);
+          reject(new axios.CanceledError());
+        };
+        const deadline = options?.timeout && options.timeout > 0 ? setTimeout(() => {
+          options?.signal?.removeEventListener?.('abort', onAbort);
+          reject(new axios.AxiosError('Session creation timed out', 'ECONNABORTED'));
+        }, options.timeout) : undefined;
+        options?.signal?.addEventListener?.('abort', onAbort, { once: true });
+        postEntered();
+      }));
+      const api = await ApiClient.create(credentials);
+      let settled = false;
+      const pending = operations.observeExecution({ actionId: 'session.spawn_new', input: { creationKey: 'creation-key' },
+        execute: async operation => ({ ok: true, result: await commitDaemonLaunchSession({ api, credentials,
+          options: { directory: '/workspace', projectSetupOperation: operation }, directory: '/workspace', accountSettings: {} }) }),
+      });
+      void pending.then(() => { settled = true; }, () => { settled = true; });
+      try {
+        await entered;
+        await vi.advanceTimersByTimeAsync(60_001);
+        expect(settled).toBe(false);
+        expect(operations.runner.cancel({ accountId: 'owner-1', machineId: 'machine-1' }, 'creation-operation'))
+          .toEqual({ kind: 'requested' });
+        await expect(pending).rejects.toMatchObject({ code: 'outcome_unknown' });
+        expect(axios.post).toHaveBeenCalledTimes(1);
+      } finally {
+        operations.runner.cancel({ accountId: 'owner-1', machineId: 'machine-1' }, 'creation-operation');
+        await vi.advanceTimersByTimeAsync(60_001);
+        await pending.catch(() => undefined);
+        vi.useRealTimers();
+      }
+    });
+
+    it('creates the Session when Account currentness arrives within its canonical HTTP budget', async () => {
+      vi.useFakeTimers();
+      vi.stubEnv('HAPPIER_CONNECTED_SERVICES_API_TIMEOUT_MS', '30000');
+      const currentnessBudget = resolveConnectedServicesServerApiTimeoutMs();
+      const responseDelay = currentnessBudget / 2;
+      vi.mocked(axios.get).mockImplementation(async (url, options) => {
+        if (!String(url).endsWith('/v1/account/encryption/currentness')) throw new Error('Unexpected GET');
+        const currentnessResponse = { status: 200, data: {
+          mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+          recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' },
+        } };
+        return await new Promise<typeof currentnessResponse>((resolve, reject) => {
+          const response = setTimeout(() => {
+            clearTimeout(deadline);
+            resolve(currentnessResponse);
+          }, responseDelay);
+          // Axios is the real network boundary: honor its supplied timeout,
+          // rather than making a delayed response succeed under any budget.
+          const deadline = setTimeout(() => {
+            clearTimeout(response);
+            reject(new axios.AxiosError('Account read timed out', 'ECONNABORTED'));
+          }, options?.timeout ?? currentnessBudget);
+        });
+      });
+      try {
+        const created = create({});
+        const settled = expect(created).resolves.toMatchObject(owner === 'api'
+          ? { id: 'created-session' }
+          : { session: { id: 'created-session' } });
+        void settled.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(responseDelay - 1);
+        expect(axios.post).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        await settled;
+        expect(axios.post).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(axios.post).mock.calls[0]?.[1]).toMatchObject({ encryptionMode: 'plain' });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    if (owner === 'api') it('reports an offline preflight distinctly before any durable Session creation attempt', async () => {
+      vi.mocked(axios.get).mockRejectedValue(new axios.AxiosError('Account read timed out', 'ECONNABORTED'));
+      const api = await ApiClient.create(credentials);
+      const result = await commitDaemonLaunchSession({ api, credentials, options: { directory: '/workspace' },
+        directory: '/workspace', accountSettings: {} });
+      expect(result).toMatchObject({ ok: false, result: { type: 'error', errorCode: 'SPAWN_FAILED',
+        errorMessage: expect.stringMatching(/offline|unreachable/i) } });
+      expect(axios.post).not.toHaveBeenCalled();
+    });
+
+    if (owner === 'api') it('retains an exhausted server transaction as a server failure through daemon launch commitment', async () => {
+      vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_MAX_ATTEMPTS', '1');
+      vi.mocked(axios.post).mockRejectedValue(new axios.AxiosError('Request failed with status code 503', undefined,
+        undefined, undefined, { status: 503, data: { error: 'database_transaction_conflict_exhausted', statusCode: 503 },
+          headers: {}, statusText: 'Service Unavailable', config: { headers: new axios.AxiosHeaders() } }));
+      const api = await ApiClient.create(credentials);
+      const error: unknown = await commitDaemonLaunchSession({ api, credentials, options: { directory: '/workspace' },
+        directory: '/workspace', accountSettings: {} }).catch((failure: unknown) => failure);
+      expect(error).toMatchObject({ code: 'database_transaction_conflict_exhausted', response: { status: 503 } });
+      expect(classifyServerEndpointError(error)).toMatchObject({ kind: 'server_error', retryable: true, statusCode: 503 });
+      expect(axios.post).toHaveBeenCalledTimes(1);
+    });
 
     it('transports initial grants and explicit Team context only as create fields', async () => {
       await create({ initialAccess, primaryTeamId: 'team-1' });
@@ -149,7 +307,12 @@ for (const owner of ['api', 'http'] as const) {
       expect(vi.mocked(axios.get).mock.calls.some((call) => String(call[0]).includes('/v1/user/'))).toBe(false);
     });
 
-    it.each([true, false])('prepares collective E2EE access using the returned Session key (created=%s)', async (created) => {
+    it.each([
+      { created: true, lostReceipt: false },
+      { created: false, lostReceipt: false },
+      ...(owner === 'api' ? [{ created: false, lostReceipt: true }] : []),
+    ])('prepares collective E2EE access using the returned Session key ($created, lostReceipt=$lostReceipt)', async ({ created, lostReceipt }) => {
+      vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_BASE_DELAY_MS', '0');
       const callerMachineKey = new Uint8Array(32).fill(7);
       const recipient = tweetnacl.box.keyPair();
       const signing = tweetnacl.sign.keyPair();
@@ -189,6 +352,9 @@ for (const owner of ['api', 'http'] as const) {
         originalPayload ??= body as NonNullable<typeof originalPayload>;
         const payload = originalPayload;
         returnedOwnerEnvelope = payload.dataEncryptionKey;
+        if (firstCreate && lostReceipt) {
+          throw new axios.AxiosError('Committed creation response lost', 'ECONNRESET');
+        }
         return { status: 200, data: { created: firstCreate || created, organizationPlacement: { folderId: null, tagIds: [] }, session: {
           id: 'created-session', seq: 0, createdAt: 1, updatedAt: 1, active: true, activeAt: 1,
           encryptionMode: 'e2ee', metadataLayoutVersion: 1, metadata: payload.sharedMetadata.ciphertext,
@@ -196,7 +362,7 @@ for (const owner of ['api', 'http'] as const) {
           agentState: payload.agentState, agentStateVersion: 0, dataEncryptionKey: returnedOwnerEnvelope,
         } } };
       });
-      if (!created) {
+      if (!created && !lostReceipt) {
         const originalParams = { ...creation, credentials: e2eeCredentials, initialAccess };
         if (owner === 'http') await getOrCreateSessionByTag(originalParams);
         else await (await ApiClient.create(e2eeCredentials)).getOrCreateSession(originalParams);
@@ -212,6 +378,12 @@ for (const owner of ['api', 'http'] as const) {
         envelope: decodeBase64(committed!.entries[0]!.encryptedDataKey), recipientSecretKeyOrSeed: recipient.secretKey,
       })).toEqual(openEncryptedDataKeyEnvelopeV1({ envelope: decodeBase64(returnedOwnerEnvelope), recipientSecretKeyOrSeed: callerMachineKey }));
       expect(vi.mocked(axios.post).mock.calls[0]?.[1]).not.toHaveProperty('primaryTeamId');
+      if (lostReceipt) {
+        expect(vi.mocked(axios.post).mock.calls.map(call => call[1])).toMatchObject([
+          { tag: creation.tag, initialAccess },
+          { tag: creation.tag, initialAccess },
+        ]);
+      }
     });
 
     it('materializes a ready direct E2EE recipient envelope only at the physical create boundary', async () => {
@@ -349,10 +521,24 @@ for (const owner of ['api', 'http'] as const) {
       expect(axios.post).not.toHaveBeenCalled();
     });
 
-    if (owner === 'http') it('creates Replay access once and removes it from the existing-row runner attachment', async () => {
+    if (owner === 'http') it('creates Replay access under its caller lifetime and removes it from the existing-row runner attachment', async () => {
+      vi.useFakeTimers();
       const transportFailure = new Error('transport unavailable');
+      const lifetime = new AbortController();
+      const post = vi.mocked(axios.post).getMockImplementation()!;
+      vi.mocked(axios.post).mockImplementation(async (url, body, options) => await new Promise<Awaited<ReturnType<typeof post>>>((resolve, reject) => {
+        const response = setTimeout(() => {
+          if (deadline !== undefined) clearTimeout(deadline);
+          resolve(post(url, body, options));
+        }, 60_001);
+        const deadline = options?.timeout && options.timeout > 0 ? setTimeout(() => {
+          clearTimeout(response);
+          reject(new axios.AxiosError('Session creation timed out', 'ECONNABORTED'));
+        }, options.timeout) : undefined;
+      }));
       let attached: unknown;
-      await expect(createSpawnedSession({
+      const pending = createSpawnedSession({
+        signal: lifetime.signal,
         credentials, directory: metadata.path, initialAccess, initialTriggers, primaryTeamId: 'team-1',
         replaySeededCreation: {
           tag: creation.tag, flavor: 'codex', metadata,
@@ -362,7 +548,16 @@ for (const owner of ['api', 'http'] as const) {
           spawn: async (request) => { attached = request; throw transportFailure; },
           resolveSpawnSessionByNonce: async () => ({ status: 'not_found' }),
         },
-      })).rejects.toBe(transportFailure);
+      });
+      const completed = expect(pending).rejects.toBe(transportFailure);
+      void completed.catch(() => undefined);
+      try {
+        await vi.advanceTimersByTimeAsync(60_001);
+        await completed;
+      } finally {
+        lifetime.abort();
+        vi.useRealTimers();
+      }
       expect(vi.mocked(axios.post).mock.calls[0]?.[1]).toMatchObject({ initialAccess, initialTriggers, primaryTeamId: 'team-1' });
       expect(attached).toMatchObject({ existingSessionId: 'created-session' });
       expect(attached).not.toHaveProperty('initialAccess');
@@ -388,6 +583,74 @@ for (const owner of ['api', 'http'] as const) {
         startupMetadataOverrides: { permissionModeOverride: { mode: 'default', updatedAt: 1 } },
       })).rejects.toMatchObject(refusal);
       expect(vi.mocked(axios.post).mock.calls[0]?.[1]).toMatchObject({ initialAccess, primaryTeamId: 'team-1' });
+    });
+
+    if (owner === 'api') it.each([true, false])(
+      'reconciles an unknown Machine binding receipt within the creation budget (committed=%s)', async committed => {
+        vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_MAX_ATTEMPTS', '2');
+        vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_BASE_DELAY_MS', '0');
+        const post = vi.mocked(axios.post).getMockImplementation()!;
+        const get = vi.mocked(axios.get).getMockImplementation()!;
+        const sessionRequests: unknown[] = [];
+        const bindingPaths: string[] = [];
+        let bound = false;
+        let loseReceipt = true;
+        vi.mocked(axios.get).mockImplementation(async (url, options) => String(url).includes('/v1/access-keys/')
+          ? { status: 200, data: { accessKey: bound ? { data: 'incumbent-binding' } : null } }
+          : get(url, options));
+        vi.mocked(axios.post).mockImplementation(async (url, body, options) => {
+          if (String(url).includes('/v1/access-keys/')) {
+            bindingPaths.push(String(url));
+            if (loseReceipt) {
+              loseReceipt = false;
+              bound = committed;
+              throw new axios.AxiosError('Private binding response lost', 'ECONNABORTED', {
+                url: String(url), headers: new axios.AxiosHeaders(),
+              });
+            }
+            bound = true;
+            return { status: 200, data: { success: true } };
+          }
+          sessionRequests.push(body);
+          return post(url, body, options);
+        });
+        const api = await ApiClient.create(credentials);
+        api.setLocalMachineId(`receipt-machine-${committed}`);
+        await expect(api.getOrCreateSession({ ...creation, initialAccess })).resolves.toMatchObject({ id: 'created-session' });
+        expect(bound).toBe(true);
+        expect(sessionRequests).toHaveLength(2);
+        expect(sessionRequests[1]).toEqual(sessionRequests[0]);
+        expect(new Set(bindingPaths.map(path => new URL(path).pathname))).toEqual(new Set([
+          `/v1/access-keys/created-session/receipt-machine-${committed}`,
+        ]));
+        // A committed lost receipt rejoins by GET; an uncommitted one writes
+        // the same tuple. Neither may replace an established access key.
+        expect(bindingPaths).toHaveLength(committed ? 1 : 2);
+      },
+    );
+
+    if (owner === 'api') it('preserves preparation classification when the Machine binding budget is exhausted', async () => {
+      vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_MAX_ATTEMPTS', '2');
+      vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_BASE_DELAY_MS', '0');
+      const post = vi.mocked(axios.post).getMockImplementation()!;
+      const get = vi.mocked(axios.get).getMockImplementation()!;
+      vi.mocked(axios.get).mockImplementation(async (url, options) => String(url).includes('/v1/access-keys/')
+        ? { status: 200, data: { accessKey: null } } : get(url, options));
+      const bindingPaths: string[] = [];
+      vi.mocked(axios.post).mockImplementation(async (url, body, options) => {
+        if (!String(url).includes('/v1/access-keys/')) return post(url, body, options);
+        bindingPaths.push(String(url));
+        throw new axios.AxiosError('Private binding response lost', 'ECONNABORTED', {
+          url: String(url), headers: new axios.AxiosHeaders(),
+        });
+      });
+      const api = await ApiClient.create(credentials);
+      api.setLocalMachineId('receipt-machine-exhausted');
+      const failure: unknown = await api.getOrCreateSession({ ...creation }).catch((error: unknown) => error);
+      expect(bindingPaths).toHaveLength(2);
+      const issue = SessionRuntimeIssueV1Schema.parse(classifyPrimarySessionRuntimeIssue({ cause: 'session_error', error: failure }));
+      expect(issue).toMatchObject({ code: 'preparation_pending', source: 'dependency_failure' });
+      expect(JSON.stringify(issue)).not.toMatch(/Private|localhost|token-1/);
     });
 
     it('refuses explicit initial access before POST when Session sharing is disabled', async () => {
@@ -418,12 +681,47 @@ for (const owner of ['api', 'http'] as const) {
       expect(axios.post).toHaveBeenCalledTimes(1);
     });
 
-    it('does not retry without access or infer no effect after a transport timeout', async () => {
+    it('preserves access and the creation key after a transport timeout', async () => {
+      vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_BASE_DELAY_MS', '0');
       vi.mocked(axios.post).mockRejectedValueOnce({ isAxiosError: true, code: 'ETIMEDOUT', message: 'timeout' });
       const result = await create({ initialAccess }).catch((error: unknown) => error);
-      expect(result).not.toMatchObject({ kind: 'update_required' });
-      expect(axios.post).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(axios.post).mock.calls[0]?.[1]).toMatchObject({ initialAccess });
+      expect(result).toMatchObject(owner === 'api'
+        ? { id: 'created-session' }
+        : { code: 'outcome_unknown' });
+      expect(axios.post).toHaveBeenCalledTimes(owner === 'api' ? 2 : 1);
+      for (const call of vi.mocked(axios.post).mock.calls) {
+        expect(call[1]).toMatchObject({ tag: creation.tag, initialAccess });
+      }
+    });
+
+    if (owner === 'api') it.each(['ECONNRESET', 'ENOTFOUND', 'access_refusal'])(
+      'keeps the original unknown receipt when reconciliation exhausts or fails (%s)', async (nextFailure) => {
+        vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_MAX_ATTEMPTS', '2');
+        vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_BASE_DELAY_MS', '0');
+        const lostReceipt = new axios.AxiosError('Committed creation response lost', 'ECONNRESET');
+        vi.mocked(axios.post).mockRejectedValueOnce(lostReceipt).mockRejectedValueOnce(nextFailure === 'access_refusal'
+          ? { isAxiosError: true, response: { status: 503, data: { error: 'session_access_authentication_unavailable' } } }
+          : new axios.AxiosError('Reconciliation unavailable', nextFailure));
+        await expect(create({ initialAccess })).rejects.toMatchObject({ code: 'outcome_unknown', cause: { code: 'ECONNRESET' } });
+        expect(axios.post).toHaveBeenCalledTimes(2);
+      },
+    );
+
+    if (owner === 'api') it('cancels reconciliation without losing the original unknown creation outcome', async () => {
+      vi.useFakeTimers();
+      const lifetime = new AbortController();
+      vi.mocked(axios.post).mockRejectedValue(new axios.AxiosError('Committed creation response lost', 'ECONNRESET'));
+      const pending = create({ signal: lifetime.signal }).catch((error: unknown) => error);
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(axios.post).toHaveBeenCalledTimes(1);
+        lifetime.abort(new Error('Caller cancelled'));
+        expect(await pending).toMatchObject({ code: 'outcome_unknown', cause: { code: 'ECONNRESET' } });
+        expect(axios.post).toHaveBeenCalledTimes(1);
+      } finally {
+        lifetime.abort();
+        vi.useRealTimers();
+      }
     });
 
     it('preserves create-or-load settlement without a follow-up access mutation', async () => {

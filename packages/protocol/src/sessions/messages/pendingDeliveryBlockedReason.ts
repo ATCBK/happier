@@ -11,10 +11,14 @@ export const PENDING_DELIVERY_BLOCKED_REASONS = [
   'capture_style_unavailable',
   'delivery_outcome_uncertain',
   'provider_unavailable_before_acceptance',
+  'autonomous_check_in',
   'session_input_target_unavailable',
   'ambiguous_terminal_delivery',
   'terminal_host_unreachable',
   'runtime_disposed_before_delivery',
+  // Current host proof; historical runtime_disposed_before_delivery rows do not
+  // establish that the input never crossed the native dispatch boundary.
+  'host_retired_before_dispatch',
   'runtime_config_blocked',
   'invalid_prompt_text',
   'manual_user_handled',

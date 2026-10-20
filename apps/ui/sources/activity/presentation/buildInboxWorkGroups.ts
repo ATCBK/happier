@@ -1,4 +1,5 @@
 import type { InboxSessionAttentionEntry } from '@/activity/presentation/buildInboxSessionPresentation';
+import { readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import type { WorkflowRunRow } from '@/sync/store/domains/workflowRuns';
@@ -60,7 +61,7 @@ export type InboxWorkGroupsInput = Readonly<{
     stalledSessions: readonly Session[];
     landings: readonly Readonly<{ session: Session; link: InboxPullRequestLink }>[];
     snoozed: readonly Readonly<{ session: Session; remindAt: number }>[];
-    /** Store lookup used to walk `reportsTo`; an unknown id stops the walk. */
+    /** Store lookup used to walk `manager`; an unknown id stops the walk. */
     resolveSession: (sessionId: string) => Session | null | undefined;
     /**
      * The server origin link of a step session (ORC §3.1 `originRunId`, awareness `origin.runId`).
@@ -85,11 +86,11 @@ function normalizeId(value: string | null | undefined): string | null {
 }
 
 function hasReports(session: Session | null | undefined): boolean {
-    return (session?.reports?.total ?? 0) > 0;
+    return (session?.managedSessions?.total ?? 0) > 0;
 }
 
 /**
- * The work root of a session: the top of its `reportsTo` chain, or the session itself when it leads
+ * The work root of a session: the top of its `manager` chain, or the session itself when it leads
  * others, or null for a loose session. The walk visits each id once, so a transiently cyclic store
  * (an edge seen before its reparent landed) cannot loop, and an unreadable lead stops it there.
  */
@@ -98,14 +99,14 @@ export function resolveInboxWorkRoot(
     resolveSession: InboxWorkGroupsInput['resolveSession'],
 ): string | null {
     const start = resolveSession(sessionId) ?? null;
-    let parent = normalizeId(start?.reportsTo?.sessionId);
+    let parent = normalizeId(readSessionManagerSessionIdV1(start));
     if (!parent) return hasReports(start) ? sessionId : null;
     const visited = new Set<string>([sessionId]);
     let current = sessionId;
     while (parent && !visited.has(parent)) {
         visited.add(parent);
         current = parent;
-        parent = normalizeId(resolveSession(current)?.reportsTo?.sessionId);
+        parent = normalizeId(readSessionManagerSessionIdV1(resolveSession(current)));
     }
     return current;
 }

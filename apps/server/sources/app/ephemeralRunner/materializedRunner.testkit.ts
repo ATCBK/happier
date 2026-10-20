@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import * as privacyKit from "privacy-kit";
 import tweetnacl from "tweetnacl";
+import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
 
 import {
     signMachineInstallationProof,
@@ -68,7 +69,8 @@ export async function createMaterializedEphemeralRunnerFixture(
             id: machineId,
             accountId: account.id,
             kind: "ephemeral_session_runner",
-            metadata: "{}",
+            metadata: encodePlainMachineStoredContent({}),
+            dataEncryptionKey: privacyKit.decodeBase64(MACHINE_PLAIN_DATA_KEY_MARKER),
             installationId,
             installationPublicKey: Buffer.from(installation.publicKey),
         },

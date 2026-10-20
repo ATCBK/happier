@@ -5,6 +5,7 @@ import type { ScmDiffSummaryResult } from '@happier-dev/protocol/scm/diffSummary
 import { parsePatch } from 'diff';
 
 import { countHunkLines, isMetadataOccurrence, locateComparisonOccurrences, type LocatedOccurrence } from '@/components/sessions/files/comparison/comparisonOccurrences';
+import { compareScmPaths } from '@/scm/scmStatusFiles';
 
 /**
  * The reading projection of one walkthrough over its exact comparison (Walkthrough lab WT1-A, WT2, WT8-F2).
@@ -311,16 +312,19 @@ export function buildWalkthroughReading(input: WalkthroughReadingInput): Walkthr
 
     const stopsById = new Map(stops.map((stop) => [stop.id, stop]));
     const explainNotesByHunk = new Map<string, WalkthroughExplainNote[][]>();
-    for (const [path, perHunk] of stopIdsByHunk) {
+    // One full note per stop, at its first hunk in Files' order; the stop's later files carry its title only.
+    const explained = new Set<string>();
+    for (const path of [...stopIdsByHunk.keys()].sort(compareScmPaths)) {
         const seen = new Set<string>();
-        explainNotesByHunk.set(path, perHunk.map((stopIds, hunkIndex) => {
+        explainNotesByHunk.set(path, stopIdsByHunk.get(path)!.map((stopIds, hunkIndex) => {
             if (stopIds.length === 0) return [{ key: `none:${hunkIndex}`, stop: null, secondary: false }];
             const notes: WalkthroughExplainNote[] = [];
             stopIds.forEach((stopId, order) => {
                 const stop = stopsById.get(stopId);
                 if (!stop || seen.has(stopId)) return;
                 seen.add(stopId);
-                notes.push({ key: stopId, stop, secondary: order > 0 });
+                notes.push({ key: stopId, stop, secondary: order > 0 || explained.has(stopId) });
+                explained.add(stopId);
             });
             return notes;
         }));
@@ -387,6 +391,12 @@ export function buildWalkthroughReading(input: WalkthroughReadingInput): Walkthr
         }
         return groups;
     }, new Map<string, WalkthroughCodeMapFile>()).values()];
+    // The map follows the walk: files the first stop explains lead, and the rest keep a natural path order
+    // (group-2 before group-10), so the outline a stop draws reads left to right with the stream.
+    const stopOrder = new Map(stops.map((stop, index) => [stop.id, index]));
+    const firstStop = (file: WalkthroughCodeMapFile) => Math.min(...file.stopIds.map((id) => stopOrder.get(id) ?? Infinity), Infinity);
+    codeMap.sort((left, right) => (firstStop(left) - firstStop(right))
+        || compareScmPaths(left.path, right.path));
 
     return {
         codeMap,

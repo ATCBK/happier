@@ -19,6 +19,9 @@ import {
     buildWidgetSurfaceArtifactIdV1, USAGE_WIDGET_PRESET_IDS, flattenWidgetLayoutWidgetsV1, type WidgetSurfaceRefV1,
 } from '@happier-dev/protocol/widgets';
 import type { ActionApprovalContinuation } from '@/components/approvals/actionApprovalContinuation';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/contributions/ui';
+import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
 
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 
@@ -46,15 +49,13 @@ beforeEach(async () => {
     connection = await restoreServerAccountForTest({ serverUrl: 'https://widget-seams.test', accountId, request: homes.request });
     installHomeGovernanceBoundaries(homes);
     // These are acknowledged semantic writes, not approval-creation cases.
-    homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: {
-        actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: {
+    setActionPolicy({ v: 1, approvalWaivedSurfaces: {
             'widgets.item.add': ['ui'], 'widgets.item.rename': ['ui'], 'widgets.item.move': ['ui'],
             'widgets.item.size.set': ['ui'], 'widgets.group.create': ['ui'],
             'widgets.fragment.create': ['ui'], 'widgets.area.layout.create': ['ui'],
             'widgets.area.layout.reset': ['ui'], 'widgets.area.layout.undo': ['ui'],
             'home.hub.layout.update': ['ui'], 'boards.apply': ['ui'],
-        } }),
-    } }, version: 1 } });
+    } });
 });
 afterEach(async () => {
     standardCleanup();
@@ -95,11 +96,55 @@ function setActionPolicy(raw: unknown) {
     state.applySettingsForScope(accountScope, settings, version);
     homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version } });
 }
-function waiveUiAction(actionId: 'session.reports_to.set' | 'widgets.item.remove') {
+function waiveUiAction(actionId: 'session.manager.set' | 'widgets.item.remove') {
     setActionPolicy({ v: 1, approvalWaivedSurfaces: { [actionId]: ['ui'] } });
 }
 
 describe('widget semantic Actions through production UI composition', () => {
+    it('retains a bound human area edit through explicit Ask with the supplied scoped executor', async () => {
+        const { scopedHomeActionExecutor } = await import('./scopedHomeActionExecutor');
+        const { createBoundPluginSurfaceController } = await import('@/components/plugins/surfaces/boundPluginSurfaceController');
+        const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const pluginId = 'examples.widget-areas';
+        const pageId = 'overview';
+        const surfaceId = 'surfacePlacement:examples.widget-areas:overview';
+        const surface = scope({ kind: 'pluginArea', pluginId, pageId, area: 'pinned' });
+        const binding = normalizePluginUiDestinationBindingV1({ pluginId, destinationId: pageId,
+            container: 'appPage', target: { kind: 'app' }, rendererId: 'native', instancePolicy: 'singleton' });
+        if (!binding) throw new Error('Destination admission failed');
+        let approvalId: string | undefined;
+        const controller = createBoundPluginSurfaceController({ facts: {
+            pluginId, contributionId: pageId, surfaceId, placement: 'appPage', platform: 'web', serverId,
+            accountLifetime: captureActiveServerAccountScopeLifetime(), interactionEnabled: true, daemonInteractionEnabled: false,
+            pluginUiProjection: { ...EMPTY_PLUGIN_UI_PROJECTION, surfacePlacementsById: {
+                [surfaceId]: { id: surfaceId, pluginId, occurrenceId: 'widget-areas-current', contributionKind: 'surfacePlacement',
+                    descriptorId: pageId, binding, target: {}, renderer: {}, display: {}, headerActions: [],
+                    availability: { state: 'available', reason: 'available', diagnostics: [] },
+                    widgetAreas: [{ name: 'pinned', contextSchema: { type: 'object', additionalProperties: false } }],
+                },
+            } },
+        }, binding: { executeHostAction: scopedHomeActionExecutor({ serverId, accountId }, {
+            onBlockingApprovalPending: ({ artifactId }) => { approvalId = artifactId; },
+        }) } });
+        setActionPolicy({ v: 1, actions: { 'widgets.item.add': { approvalRequiredSurfaces: ['ui'] } } });
+        let settled = false;
+        let observedResult: unknown;
+        const pending = controller.widgetArea!({ area: 'pinned', operation: { actionId: 'widgets.item.add', instance: instance('asked-copy') } })
+            .then(result => { observedResult = result; return result; })
+            .finally(() => { settled = true; });
+        try {
+            await vi.waitFor(() => expect({ approvalId, observedResult }).toMatchObject({ approvalId: expect.any(String) }));
+            expect(settled).toBe(false);
+            expect(homes.artifacts(serverId).read(buildWidgetSurfaceArtifactIdV1(surface))).toBeNull();
+            expect(ApprovalRequestV2Schema.parse(storedBody(approvalId!)))
+                .toMatchObject({ status: 'open', approval: { flow: 'blocking' }, executionOriginV1: { caller: { kind: 'host' } } });
+            expect(await decideApprovalAsInbox(serverId, approvalId!, 'approve')).toMatchObject({ ok: true });
+            expect(await pending).toMatchObject({ ok: true, result: { instance: { id: 'asked-copy' } } });
+            expect(WidgetAreaLayoutV1Schema.parse(storedBody(buildWidgetSurfaceArtifactIdV1(surface))).items)
+                .toEqual(expect.arrayContaining([expect.objectContaining({ instance: expect.objectContaining({ id: 'asked-copy' }) })]));
+        } finally { controller.dispose(); await pending; }
+    });
+
     it('resizes a private Home widget through its real writer without a pre-admission confirmation', async () => {
         const executor = createDefaultActionExecutor();
         const account = await captureLazyActionAccountContext(serverId);
@@ -142,18 +187,18 @@ describe('widget semantic Actions through production UI composition', () => {
     );
 
     it('uses current Home relation evidence for Put under after an unopened list relation becomes stale', async () => {
-        waiveUiAction('session.reports_to.set');
+        waiveUiAction('session.manager.set');
         storage.setState({ sessions: {
-            child: createSessionFixture({ id: 'child', serverId, reportsTo: { sessionId: 'old-lead' } }),
+            child: createSessionFixture({ id: 'child', serverId, manager: { sessionId: 'old-lead' } }),
             lead: createSessionFixture({ id: 'lead', serverId }),
         } });
-        homes.answer(serverId, '/v1/sessions/child/reports-to/options', { body: { sessionId: 'child', currentLeadSessionId: null,
+        homes.answer(serverId, '/v1/sessions/child/manager/options', { body: { sessionId: 'child', currentManagerSessionId: null,
             candidates: [{ sessionId: 'lead', allowed: true }] } });
-        homes.answer(serverId, '/v1/sessions/child/reports-to', { body: { ok: true, sessionId: 'child', leadSessionId: 'lead', attachedAt: 1 } });
-        const result = await putSessionUnderLead({ serverId, sessionId: 'child', leadSessionId: 'lead', accountId });
-        expect(result, JSON.stringify(homes.requests.filter(request => request.path.includes('/reports-to')).map(request => ({ path: request.path, input: request.input })))).toBe('applied');
-        expect(homes.requestsFor('/v1/sessions/child/reports-to').at(-1)?.input)
-            .toEqual({ leadSessionId: 'lead', expectedLeadSessionId: null });
+        homes.answer(serverId, '/v1/sessions/child/manager', { body: { ok: true, sessionId: 'child', managerSessionId: 'lead', attachedAt: 1 } });
+        const result = await putSessionUnderLead({ serverId, sessionId: 'child', managerSessionId: 'lead', accountId });
+        expect(result, JSON.stringify(homes.requests.filter(request => request.path.includes('/manager')).map(request => ({ path: request.path, input: request.input })))).toBe('applied');
+        expect(homes.requestsFor('/v1/sessions/child/manager').at(-1)?.input)
+            .toEqual({ managerSessionId: 'lead', expectedManagerSessionId: null });
     });
     it('keeps a Home group and its children when removal is awaiting approval or canceled, and honors the removal waiver', async () => {
         const surface = scope({ kind: 'home' });
@@ -165,12 +210,20 @@ describe('widget semantic Actions through production UI composition', () => {
             .toMatchObject({ ok: true });
         const before = HomeHubLayoutV1Schema.parse(storedBody(buildHomeHubArtifactIdV1(accountId)));
         const account = await captureLazyActionAccountContext(serverId);
+        setActionPolicy({ v: 1, actions: { 'widgets.item.remove': { approvalRequiredSurfaces: ['ui'] } } });
         let continuation: ActionApprovalContinuation | undefined;
         const pending = executeHomeHubLayoutIntent({ intent: { kind: 'remove', instanceId: 'group' },
             scope: { serverId, accountId }, transport: account.homeHubArtifactTransport, execute: executor.execute,
             onApprovalPending: registration => { continuation = registration; registration.onTerminal?.('canceled'); } });
         await expect(pending).rejects.toThrow();
         expect(continuation).toBeDefined();
+        expect(HomeHubLayoutV1Schema.parse(storedBody(buildHomeHubArtifactIdV1(accountId)))).toEqual(before);
+        setActionPolicy({ v: 1 });
+        await expect(executeHomeHubLayoutIntent({ intent: { kind: 'remove', instanceId: 'group' },
+            scope: { serverId, accountId }, transport: account.homeHubArtifactTransport, execute: executor.execute,
+            onApprovalPending: () => { throw new Error('Default confirmation incorrectly entered approval custody'); } }))
+            .rejects.toMatchObject({ code: 'approval_canceled' });
+        expect(Modal.confirm).toHaveBeenCalledTimes(1);
         expect(HomeHubLayoutV1Schema.parse(storedBody(buildHomeHubArtifactIdV1(accountId)))).toEqual(before);
         waiveUiAction('widgets.item.remove');
         const after = await executeHomeHubLayoutIntent({ intent: { kind: 'remove', instanceId: 'group' },
@@ -274,8 +327,8 @@ describe('widget semantic Actions through production UI composition', () => {
     it('writes Board placements through both native and widget Actions and refuses a mis-bound Board', async () => {
         const executor = createDefaultActionExecutor();
         const surface = scope({ kind: 'workBoard', boardId: 'board' });
-        expect(await executor.execute('boards.apply', { intent: { kind: 'create', board: { id: 'board', name: 'Checks' } } }, context()))
-            .toMatchObject({ ok: true });
+        const created = await executor.execute('boards.apply', { intent: { kind: 'create', board: { id: 'board', name: 'Checks' } } }, context());
+        expect(created, JSON.stringify(created)).toMatchObject({ ok: true });
         const ref = { surface, instanceId: 'board-copy' };
         expect(await executor.execute('boards.apply', { intent: { kind: 'widget_add', boardId: 'board', ref, instance: instance(ref.instanceId) } }, context()))
             .toMatchObject({ ok: true });
@@ -324,8 +377,8 @@ describe('widget semantic Actions through production UI composition', () => {
         const executor = createDefaultActionExecutor();
         const base = scope({ kind: 'corePage', pageId: 'usage', area: 'main' });
         const surface = scope({ kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'checks' });
-        expect(await executor.execute('widgets.area.layout.create', { surface: base, layoutId: 'checks', name: 'Checks' }, context()))
-            .toMatchObject({ ok: true });
+        const created = await executor.execute('widgets.area.layout.create', { surface: base, layoutId: 'checks', name: 'Checks' }, context());
+        expect(created, JSON.stringify(created)).toMatchObject({ ok: true });
         expect(await executor.execute('widgets.item.add', { surface, instance: instance('area-copy') }, context())).toMatchObject({ ok: true });
         const layout = WidgetAreaLayoutV1Schema.parse(storedBody(buildWidgetSurfaceArtifactIdV1(surface)));
         expect(layout).toMatchObject({ surface, items: [{ instance: instance('area-copy') }] });

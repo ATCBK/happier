@@ -196,6 +196,7 @@ async function createDescriptorPlugin(params?: Readonly<{
   optionalSessions?: boolean;
   daemon?: boolean;
   development?: boolean;
+  developmentEntryPath?: string;
   reactNative?: boolean;
   requiredNetworkOrigins?: readonly string[];
 }>): Promise<string> {
@@ -230,7 +231,7 @@ async function createDescriptorPlugin(params?: Readonly<{
     ...((params?.daemon || params?.development) ? {
       entrypoints: {
         ...(params.daemon ? { daemon: './dist/index.js' } : {}),
-        ...(params.development ? { development: './src/index.ts' } : {}),
+        ...(params.development ? { development: `./${params.developmentEntryPath ?? 'src/index.ts'}` } : {}),
       },
     } : {}),
     contributes: params?.reactNative ? {
@@ -249,7 +250,7 @@ async function createDescriptorPlugin(params?: Readonly<{
   await writeFile(join(root, '.happier-plugin', 'plugin.json'), JSON.stringify(manifest));
   if (params?.development) {
     await mkdir(join(root, 'src'), { recursive: true });
-    await writeFile(join(root, 'src', 'index.ts'), [
+    await writeFile(join(root, params.developmentEntryPath ?? 'src/index.ts'), [
       `export const manifest = ${JSON.stringify(manifest)};`,
       'export function activate(): void {}',
       '',
@@ -369,20 +370,64 @@ describe('createDaemonPathPluginChangePreparer', () => {
     }
   });
 
-  it.each([false, true])('builds code-defined development UI from the evaluated manifest (hosted UI: %s)', async (hostedUi) => {
+  it('admits an already materialized author root without reinstalling, but prepares observed dependency edits', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-plugin-materialized-author-home-'));
+    const pluginRoot = await createDescriptorPlugin({ development: true });
+    roots.push(happyHomeDir);
+    await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+      name: 'materialized-author', type: 'module',
+      dependencies: { '@happier-dev/plugin-sdk': '0.0.0' },
+    }));
+    const sdkRoot = join(pluginRoot, 'node_modules', '@happier-dev', 'plugin-sdk');
+    await mkdir(sdkRoot, { recursive: true });
+    await writeFile(join(sdkRoot, 'package.json'), JSON.stringify({
+      name: '@happier-dev/plugin-sdk', version: '0.0.0',
+    }));
+    const prepare = createDaemonPathPluginChangePreparer({
+      happyHomeDir,
+      runtimeLifecycle: { prepare: async () => ({ abort: async () => undefined, adopt: async () => undefined }) },
+      // The package-manager boundary is unavailable, as on a disconnected host.
+      runManagedPluginPnpm: async () => ({ ok: false, message: 'managed materializer unavailable' }),
+    });
+
+    const candidate = await prepare({ kind: 'development', sourceRootPath: pluginRoot });
+    expect(candidate).toMatchObject({ kind: 'preparedDevelopmentCandidate', pluginId: 'acme.descriptor' });
+    await candidate.cleanup();
+
+    await expect(prepare({
+      kind: 'development', sourceRootPath: pluginRoot,
+      sdkRegistryOrigin: 'https://registry.example.test',
+    })).rejects.toMatchObject({ code: 'plugin_dev_dependency_preparation_failed' });
+
+    await expect(prepare({
+      kind: 'development', sourceRootPath: pluginRoot, pluginId: 'acme.descriptor',
+      changedPaths: ['package.json'],
+    })).rejects.toMatchObject({ code: 'plugin_dev_dependency_preparation_failed' });
+  });
+
+  it.each([
+    { hostedUi: false, sourceEntry: 'src/index.ts' },
+    { hostedUi: true, sourceEntry: 'src/index.ts' },
+    { hostedUi: true, sourceEntry: 'src/author.mjs' },
+  ])('builds code-defined development UI from the evaluated manifest ($sourceEntry, hosted UI: $hostedUi)', async ({ hostedUi, sourceEntry }) => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-plugin-code-ui-home-'));
     const pluginRoot = await mkdtemp(join(tmpdir(), 'happier-plugin-code-ui-root-'));
     roots.push(happyHomeDir, pluginRoot);
     await mkdir(join(pluginRoot, 'src'));
-    await writeFile(join(pluginRoot, 'package.json'), '{"name":"code-defined-plugin","type":"module"}', 'utf8');
+    await writeFile(join(pluginRoot, 'package.json'), JSON.stringify({
+      name: 'code-defined-plugin', type: 'module',
+      main: sourceEntry.endsWith('.mjs') ? `./${sourceEntry}` : './dist/index.js',
+    }), 'utf8');
     const manifest = createPluginManifestV2Fixture({
       id: 'acme.code-ui',
-      entrypoints: { development: './src/index.ts' },
+      entrypoints: sourceEntry.endsWith('.mjs')
+        ? { daemon: `./${sourceEntry}` }
+        : { development: `./${sourceEntry}` },
       ...(hostedUi ? { contributes: { ui: { views: [], translations: [], renderers: [{
         id: 'panel', kind: 'hostedWeb', source: { kind: 'artifact', artifact: 'panel' }, requiredHostMethods: ['context'],
       }] } } } : {}),
     });
-    await writeFile(join(pluginRoot, 'src/index.ts'), `export const manifest = ${JSON.stringify(manifest)};\nexport function activate() {}\n`, 'utf8');
+    await writeFile(join(pluginRoot, sourceEntry), `export const manifest = ${JSON.stringify(manifest)};\nexport function activate() {}\n`, 'utf8');
     if (hostedUi) {
       await mkdir(join(pluginRoot, '.happier-plugin/ui/hosted-web/panel'), { recursive: true });
       await writeFile(join(pluginRoot, '.happier-plugin/ui/hosted-web/panel/index.html'), '<p>Current code-defined panel</p>', 'utf8');
@@ -395,14 +440,17 @@ describe('createDaemonPathPluginChangePreparer', () => {
     });
     const candidate = await prepare({ kind: 'development', sourceRootPath: pluginRoot, observedRevision: 1 });
     expect(candidate).toMatchObject({ kind: 'preparedDevelopmentCandidate', pluginId: 'acme.code-ui' });
+    expect(candidate.review?.uiArtifacts).toEqual({
+      status: hostedUi ? 'verified' : 'none', contributionIds: hostedUi ? ['panel'] : [],
+    });
     const inventory = JSON.parse(await readFile(join(pluginRoot, 'dist/happier-plugin-ui/ui-artifacts.json'), 'utf8')) as { entries: { artifactId: string }[] };
     expect(inventory.entries.map((entry) => entry.artifactId)).toEqual(hostedUi ? ['panel'] : []);
     await expect(readFile(join(pluginRoot, '.happier-plugin/plugin.json'))).rejects.toMatchObject({ code: 'ENOENT' });
     await candidate.cleanup();
     if (hostedUi) {
       const nextManifest = { ...manifest, contributes: {} };
-      await writeFile(join(pluginRoot, 'src/index.ts'), `export const manifest = ${JSON.stringify(nextManifest)};\nexport function activate() {}\n`, 'utf8');
-      const next = await prepare({ kind: 'development', sourceRootPath: pluginRoot, pluginId: 'acme.code-ui', observedRevision: 2, changedPaths: ['src/index.ts'] });
+      await writeFile(join(pluginRoot, sourceEntry), `export const manifest = ${JSON.stringify(nextManifest)};\nexport function activate() {}\n`, 'utf8');
+      const next = await prepare({ kind: 'development', sourceRootPath: pluginRoot, pluginId: 'acme.code-ui', observedRevision: 2, changedPaths: [sourceEntry] });
       const nextInventory = JSON.parse(await readFile(join(pluginRoot, 'dist/happier-plugin-ui/ui-artifacts.json'), 'utf8')) as { entries: unknown[] };
       expect(nextInventory.entries).toEqual([]);
       await expect(readFile(join(pluginRoot, 'dist/happier-plugin-ui/hosted-web/panel/index.html'))).rejects.toMatchObject({ code: 'ENOENT' });
@@ -569,12 +617,10 @@ describe('createDaemonPathPluginChangePreparer', () => {
     await candidate.cleanup();
   });
 
-  it('never reopens review for a development change after restart, even when it widens required access', async () => {
+  it('keeps watcher changes review-free while retaining disclosure for an enclosing install approval after restart', async () => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-plugin-development-authority-restart-'));
     roots.push(happyHomeDir);
-    const pluginRoot = await createDescriptorPlugin({ development: true });
-    await mkdir(join(pluginRoot, 'src'), { recursive: true });
-    await writeFile(join(pluginRoot, 'src', 'index.ts'), 'export function activate() {}\n', 'utf8');
+    const pluginRoot = await createDescriptorPlugin({ development: true, developmentEntryPath: 'src/activate.ts' });
     const runtimeLifecycle: PluginRegistryRuntimeLifecycle = {
       prepare: async () => ({ abort: async () => undefined, adopt: async () => undefined }),
     };
@@ -616,14 +662,34 @@ describe('createDaemonPathPluginChangePreparer', () => {
       pluginId: first.pluginId,
       sourceRootPath: pluginRoot,
       observedRevision: 2,
-      changedPaths: ['src/index.ts'],
+      changedPaths: ['src/activate.ts'],
     });
     expect(neutralAfterRestart).toMatchObject({
       kind: 'preparedDevelopmentCandidate',
       requiresReview: false,
       authorityExpansion: [],
+      review: { pluginId: first.pluginId },
     });
     await neutralAfterRestart.cleanup();
+
+    const actionService = createDaemonPluginChangeService({
+      prepare: createPrepare(),
+      createPendingChangeId: () => 'pending-trusted-development-install',
+    });
+    const retainedForAction = await actionService.requestPluginChange({
+      kind: 'development',
+      sourceRootPath: pluginRoot,
+    }, { retainReview: true });
+    expect(retainedForAction).toMatchObject({
+      kind: 'reviewRequired',
+      pendingChangeId: 'pending-trusted-development-install',
+      review: { pluginId: first.pluginId },
+    });
+    await expect(actionService.requestPluginChange({
+      kind: 'development',
+      sourceRootPath: pluginRoot,
+    }, { retainReview: true })).resolves.toEqual(retainedForAction);
+    await actionService.shutdown();
 
     const manifestPath = join(pluginRoot, '.happier-plugin', 'plugin.json');
     const widenedManifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
@@ -1189,7 +1255,10 @@ describe('createDaemonPathPluginChangePreparer', () => {
       observer.stop();
     }
     await new Promise<void>((resolveStopped) => setTimeout(resolveStopped, 100));
-    expect(preservedReviewResults).toEqual(Array.from({ length: 10 }, () => undefined));
+    expect(preservedReviewResults).toHaveLength(10);
+    for (const review of preservedReviewResults) {
+      expect(review).toMatchObject({ pluginId: 'acme.repeated-development' });
+    }
     if (process.env.HAPPIER_REPORT_PLUGIN_DEV_TIMING === '1') {
       const sorted = [...editToInvocationDurationsMs].sort((left, right) => left - right);
       const median = (sorted[4]! + sorted[5]!) / 2;
@@ -1275,7 +1344,7 @@ describe('createDaemonPathPluginChangePreparer', () => {
         signalFirstSourceOnlyBuild();
         await firstSourceOnlyBuildBlocked;
       }
-      return { ok: true as const, projectRoot: input.projectRoot, built: true };
+      return await buildUiWithManagedProcessBoundary(input);
     });
     const service = createDaemonPluginChangeService({
       prepare: createDaemonPathPluginChangePreparer({
@@ -1867,11 +1936,12 @@ describe('createDaemonPathPluginChangePreparer', () => {
     const uiBuildRoots: string[] = [];
     const runPluginUiArtifactBuild = vi.fn(async (input: Readonly<{ projectRoot: string }>) => {
       uiBuildRoots.push(input.projectRoot);
+      const built = await buildUiWithManagedProcessBoundary(input);
       const uiByte = await readFile(join(input.projectRoot, 'src', 'ui-byte.txt'), 'utf8');
       const artifactRoot = join(input.projectRoot, 'dist', 'happier-plugin-ui');
       await mkdir(artifactRoot, { recursive: true });
       await writeFile(join(artifactRoot, 'ui-byte.txt'), uiByte, 'utf8');
-      return { ok: true as const, projectRoot: input.projectRoot, built: true };
+      return built;
     });
     const runtimeLifecycle = {
       prepare: async () => ({ abort: async () => undefined, adopt: async () => undefined }),
@@ -2242,40 +2312,58 @@ describe('createDaemonPathPluginChangePreparer', () => {
     expect(snapshot.state.plugins).not.toHaveProperty('acme.second');
   });
 
-  // Local development remains externally admitted even when its source is also
-  // used to generate a bundled artifact. Exact generated artifact custody is a
-  // separate fact owned by the generated-artifact resolver.
-  it('requires an explicit development entrypoint for a bundled source working tree', async () => {
-    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-plugin-home-bundled-dev-'));
-    roots.push(happyHomeDir);
-    const bundledManifest = JSON.parse(
-      await readFile(join(BUNDLED_PLUGIN_ROOT, '.happier-plugin', 'plugin.json'), 'utf8'),
-    ) as Readonly<{ id: string }>;
-    expect(bundledManifest.id.startsWith('happier.')).toBe(true);
+  it('keeps a bundled manifest projected by an author working tree under external source review', async () => {
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-plugin-bundled-author-home-'));
+    const pluginRoot = await mkdtemp(join(tmpdir(), 'happier-plugin-bundled-author-source-'));
+    roots.push(happyHomeDir, pluginRoot);
+    const bundledManifest = JSON.parse(await readFile(
+      join(BUNDLED_PLUGIN_ROOT, '.happier-plugin', 'plugin.json'), 'utf8',
+    )) as Record<string, unknown>;
+    expect(bundledManifest.id).toMatch(/^happier\./u);
+    await mkdir(join(pluginRoot, '.happier-plugin'));
+    await mkdir(join(pluginRoot, 'src'));
+    await writeFile(join(pluginRoot, '.happier-plugin', 'plugin.json'), JSON.stringify(bundledManifest), 'utf8');
+    // Reuse the actual bundled declaration, with a deterministic activation
+    // leaf so this source-authority check does not import vendor runtime code.
+    await writeFile(join(pluginRoot, 'src', 'index.ts'),
+      `export const manifest = ${JSON.stringify(bundledManifest)};\nexport function activate() {}\n`, 'utf8');
     const prepare = createDaemonPathPluginChangePreparer({
       happyHomeDir,
       runtimeLifecycle: {
         prepare: async () => ({ abort: async () => undefined, adopt: async () => undefined }),
       },
       runManagedPluginPnpm: successfulManagedPnpmBoundary,
-      runPluginUiArtifactBuild: async (input) => ({ ok: true as const, projectRoot: input.projectRoot, built: false }),
     });
 
-    await expect(prepare({
-      kind: 'development',
-      sourceRootPath: BUNDLED_PLUGIN_ROOT,
-    })).rejects.toThrow('has no development entrypoint');
-  }, 180_000);
+    const candidate = await prepare({ kind: 'development', sourceRootPath: pluginRoot });
+
+    expect(candidate).toMatchObject({
+      kind: 'preparedDevelopmentCandidate', pluginId: bundledManifest.id,
+      requiresReview: true, reviewReason: 'firstInstall',
+      catalogRecord: { source: { kind: 'path', devWatch: true } },
+      review: { source: { kind: 'path' } },
+    });
+    await candidate.cleanup();
+  });
 
   // C1: an external plugin developed from a local working tree is the same
   // record shape as a bundled one — a path the operator authored on this
   // machine. Provenance, not authorship, decides the registry-lifecycle rules,
   // so the reserved namespace must not lock an external author out of the dev
   // loop that the discovery owner already admitted.
-  it('prepares a development install of an external local path plugin under a reserved id', async () => {
+  it.each(['code', 'manifest'] as const)('prepares a development install of an external %s path plugin under a reserved id', async (authoringKind) => {
     const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-plugin-home-external-reserved-'));
     roots.push(happyHomeDir);
-    const pluginRoot = await createDescriptorPlugin({ pluginId: 'happier.agent.fake', development: true });
+    const pluginRoot = await createDescriptorPlugin({
+      pluginId: 'happier.agent.fake', development: true,
+      ...(authoringKind === 'manifest' ? { developmentEntryPath: 'src/activate.ts' } : {}),
+    });
+    if (authoringKind === 'code') {
+      const manifestPath = join(pluginRoot, '.happier-plugin', 'plugin.json');
+      const generated = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
+      delete generated.entrypoints;
+      await writeFile(manifestPath, JSON.stringify(generated), 'utf8');
+    }
     const prepare = createDaemonPathPluginChangePreparer({
       happyHomeDir,
       runtimeLifecycle: {

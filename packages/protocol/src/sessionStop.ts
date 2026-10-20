@@ -3,6 +3,7 @@ import { z } from 'zod/mini';
 
 export const StopSessionIncompleteReasonSchema = lazyZodSchema(() => z.enum([
   'invalid_session_id',
+  'explicit_stop_failed',
   'legacy_attachment',
   'missing_attachment_identity',
   'tracked_runner_absent',

@@ -5,9 +5,32 @@ import { withCliPromptLibraryArtifactReader } from '@/agent/prompts/library/reso
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { configuration } from '@/configuration';
 import { ProjectSourcesReadOutputV1Schema } from '@happier-dev/protocol/projects/sources/projectSourceV1';
-import { migrateProjectPromptStackSkillRules, type ProjectStackSkillMigrationResult } from '@/workspaces/projectAccountRows';
+import { migrateProjectPromptStackSkillRules, readProjectAccountRows, type ProjectStackSkillMigrationResult } from '@/workspaces/projectAccountRows';
+import { readProjectContextEntriesV1 } from '@happier-dev/protocol/projects/projectContextV1';
+import type { QualifiedProjectKeyV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
+import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 
 export type { SessionProjectPromptStackInput } from '@/workspaces/resolveSessionProjectKey';
+
+/** Read a named Project without Session inference or preparation-time mutations. */
+export async function readCliProjectPromptStackContext(input: Readonly<{
+  credentials: SessionProjectPromptStackInput['credentials']; projectRef: QualifiedProjectKeyV1; signal?: AbortSignal;
+}>): ReturnType<typeof readProjectContextEntriesV1> {
+  const { credentials, projectRef, signal } = input;
+  const sourceOwner = createCliProjectSourceActionDeps({ serverHttpBaseUrl: resolveServerHttpBaseUrl(),
+    admitAccount: async target => await isServerProfileHomeIdentity(projectRef.serverId, target)
+      ? null : { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' },
+    resolveRequestHeaders: () => ({ Authorization: `Bearer ${credentials.token}` }),
+    readArtifact: (ref, options) => withCliPromptLibraryArtifactReader(async reader => {
+      const artifact = await reader.readArtifact(ref);
+      return artifact ? { artifactId: artifact.id, header: artifact.header } : null;
+    }, { credentials, serverId: projectRef.serverId, signal: options?.signal ?? signal }),
+  });
+  return readProjectContextEntriesV1({
+    readRows: () => readProjectAccountRows({ credentials, serverId: projectRef.serverId, signal }),
+    readSource: request => sourceOwner.projectSourcesRead!(request, { signal }),
+  }, projectRef);
+}
 
 export async function resolveSessionProjectPromptStack(input: SessionProjectPromptStackInput): Promise<Readonly<{
   entries: readonly PromptStackEntryV1[]; projectKey: string | null; skillMigration: ProjectStackSkillMigrationResult;
@@ -26,7 +49,8 @@ export async function resolveSessionProjectPromptStack(input: SessionProjectProm
   if (workspaceRef.source) {
     const sourceOwner = createCliProjectSourceActionDeps({
       serverHttpBaseUrl,
-      admitAccount: target => target === serverId ? null : { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' },
+      admitAccount: async target => await isServerProfileHomeIdentity(serverId, target)
+        ? null : { ok: false, errorCode: 'server_scope_mismatch', error: 'server_scope_mismatch' },
       resolveRequestHeaders: () => ({ Authorization: `Bearer ${input.credentials.token}` }),
       readArtifact: (ref, options) => withCliPromptLibraryArtifactReader(async reader => {
         const artifact = await reader.readArtifact(ref);

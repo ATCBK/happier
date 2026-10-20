@@ -3,9 +3,10 @@
 // Node, Bun, and a Bun-compiled executable; --package-root points Node/Bun at
 // an extracted release payload while a compiled smoke beside node_modules
 // exercises the loader's production default discovery.
-import { statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { performance } from "node:perf_hooks";
-import { loadIrohNodeNative } from "../dist/nodeNative.js";
+import assert from "node:assert/strict";
+import { loadIrohNodeNative, loadIrohNodeNativeAddon } from "../dist/nodeNative.js";
 
 const packageRootFlag = process.argv.indexOf("--package-root");
 const packageRoot = packageRootFlag >= 0
@@ -21,6 +22,22 @@ if (!loaded.available) {
   throw new Error(loaded.message);
 }
 const native = loaded.native;
+const addon = loadIrohNodeNativeAddon(loaded.addonPath);
+assert.equal(typeof addon.trimProcessAllocator, "function");
+// Allocator maintenance also serves standard-only daemons, which must not
+// start Iroh's CPU-sized worker pool merely to release unused memory.
+const tokioWorkers = () => process.platform === "linux"
+  ? readdirSync('/proc/self/task').filter(id => {
+    try { return readFileSync(`/proc/self/task/${id}/comm`, 'utf8').trim().startsWith('tokio'); }
+    catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+  }).length : 0;
+const workersBeforeTrim = tokioWorkers();
+const trim = addon.trimProcessAllocator();
+assert.equal(typeof trim.then, "function");
+const released = await trim;
+assert.equal(typeof released, "boolean");
+if (process.platform !== "linux") assert.equal(released, false);
+assert.equal(tokioWorkers(), workersBeforeTrim, "allocator maintenance started the Iroh runtime");
 
 // Real loopback endpoint lifecycle (relay disabled: no external traffic).
 const endpointStartupStartedAt = performance.now();

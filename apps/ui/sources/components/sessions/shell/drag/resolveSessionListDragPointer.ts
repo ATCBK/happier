@@ -62,8 +62,8 @@ export type ResolveSessionListDragPointerParams = Readonly<{
     viewport: TreeViewportMetrics;
     /** Effective policy for the dragged Session's current visible group. */
     canReorderSessionSiblings?: boolean;
-    /** Whether the dragged Session may be put under a target Session (`reportsTo`, R-03). */
-    canPutSessionUnder?: (sessionId: string, leadSessionId: string) => boolean;
+    /** Whether the dragged Session may be put under a target Session (`manager`, R-03). */
+    canPutSessionUnder?: (sessionId: string, managerSessionId: string) => boolean;
 }>;
 
 export type ResolveSessionListDragPointerResult = Readonly<{

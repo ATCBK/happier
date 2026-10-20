@@ -7,6 +7,7 @@ import { createLocalServicePreviewRegistry, registerLocalServicePreview } from '
 import { createLocalServiceLauncherFeed } from './feed';
 import { createManagedServicesOwner } from '@/plugins/runtime/invocation/services/managedServicesOwner';
 import { createManagedServiceProcessSupervisorHost } from '@/plugins/runtime/invocation/services/managedProcessSupervisor';
+import { buildLocalServiceRows } from '../../../../../../../apps/ui/sources/sync/domains/local/services/serviceRow';
 
 function inventoryEntry(
     overrides: Partial<NormalizedLocalServiceInventoryEntry> = {},
@@ -65,6 +66,80 @@ function inventoryEntry(
 }
 
 describe('createLocalServiceLauncherFeed', () => {
+    it('keeps the managed occurrence for its native listener bindings and preserves an unrelated listener on the same port', async () => {
+        const owner = createManagedServicesOwner({
+            processSupervisorHost: createManagedServiceProcessSupervisorHost({ custodyOwner: 'daemon' }),
+            // This literal Project command does not install plugin dependencies.
+            dependencies: Object.freeze({}) as never, resolveScope: scope => scope,
+        });
+        const inventoryRegistry = createLocalServiceInventoryRegistry();
+        const previewRegistry = createLocalServicePreviewRegistry();
+        try {
+            const handle = await owner.superviseProject({
+                workspace: { id: 'checkout', serverId: 'home', machineId: 'machine-a', rootPath: process.cwd(), createdAtMs: 1 },
+                declaration: { workspaceRefId: 'checkout', selection: { kind: 'manifest', name: 'httpPort' } },
+                cwd: process.cwd(), serviceId: 'project-service:httpPort', specIdentity: 'httpPort', isCurrent: () => true,
+                requester: { serverId: 'home', accountId: 'owner', machineId: 'machine-a', installationId: 'installation' },
+                processSpec: { mode: { kind: 'managedSpawn', host: '127.0.0.1' } },
+                authorizeLaunch: async input => ({ command: process.execPath,
+                    args: ['-e', `require('node:http').createServer((req,res)=>res.end('ok')).listen(${input.endpoint!.port},'127.0.0.1')`],
+                    env: {}, release: async () => undefined }),
+            });
+            const root = owner.readProcessRoots()[0];
+            if (!root) throw new Error('Managed native process root is missing');
+            const port = Number(new URL(handle.snapshot().baseUrl!).port);
+            const direct = inventoryEntry({ id: 'owned-loopback', port, provenance: {
+                process: { pid: root.pid, lineagePids: [root.pid], command: 'http server', cwd: process.cwd(), redacted: true },
+            } });
+            const child = inventoryEntry({ id: 'owned-wildcard', port,
+                address: { kind: 'wildcard', host: '0.0.0.0', family: 'ipv4' },
+                provenance: { process: { pid: root.pid + 1, lineagePids: [root.pid + 1, root.pid],
+                    command: 'http child', cwd: process.cwd(), redacted: true } },
+            });
+            const unrelated = inventoryEntry({ id: 'unrelated', port,
+                address: { kind: 'lan', host: '192.168.1.20', family: 'ipv4' },
+                endpoint: { scheme: 'http', host: '192.168.1.20', port, probeState: 'ready', probedAt: 2_000 },
+                provenance: { process: { pid: root.pid + 2, lineagePids: [root.pid + 2], command: 'http server', cwd: process.cwd(), redacted: true } },
+            });
+            inventoryRegistry.replaceSnapshot({ v: 1, machineId: 'machine-a', generatedAt: 2_000,
+                refreshState: 'idle', entries: [direct, child, unrelated], diagnostics: [] });
+            const preview = registerLocalServicePreview(previewRegistry, { previewId: 'owned-preview', machineId: 'machine-a',
+                owner: { kind: 'user', id: 'owner' }, target: { scheme: 'http', host: '127.0.0.1', port },
+                initialPath: { pathname: '/', search: '' }, display: { title: 'httpPort', addressLabel: `localhost:${port}` }, originMode: 'host' });
+            expect(preview.ok).toBe(true);
+            const feed = createLocalServiceLauncherFeed({ machineId: 'machine-a', projectManagedServices: owner,
+                inventoryRegistry, previewRegistry });
+            const snapshot = LocalServiceLauncherSnapshotV1Schema.parse(await feed.getSnapshot());
+            expect(snapshot.targets.map(target => target.id)).toEqual([handle.serviceId, 'inventory:unrelated']);
+            expect(snapshot.targets[0]).toMatchObject({ title: 'httpPort', actions: ['manage', 'open_preview', 'register_preview'],
+                sourceClass: { kind: 'managed_service', managedServiceId: handle.instanceId, inventoryEntryId: direct.id },
+                browserTarget: { kind: 'localServicePreview', targetId: 'owned-preview' } });
+            expect(buildLocalServiceRows({ inventoryRows: [], launchTargets: snapshot.targets, sessionId: null, scope: 'machine' })
+                .map(row => row.id)).toEqual([handle.serviceId, 'inventory:unrelated']);
+            const bindings = LocalServiceLauncherSnapshotV1Schema.parse(await feed.getSnapshot({ projection: 'managed_bindings' }));
+            expect(bindings.targets).toEqual([snapshot.targets[0]]);
+            // The native listener may belong only to a descendant, with no direct-root binding.
+            inventoryRegistry.replaceSnapshot({ v: 1, machineId: 'machine-a', generatedAt: 3_000,
+                refreshState: 'idle', entries: [child, unrelated], diagnostics: [] });
+            const descendantSnapshot = LocalServiceLauncherSnapshotV1Schema.parse(await feed.getSnapshot());
+            expect(descendantSnapshot.targets.map(target => target.id)).toEqual([handle.serviceId, 'inventory:unrelated']);
+            expect(descendantSnapshot.targets[0]?.sourceClass).toMatchObject({ inventoryEntryId: child.id });
+            // A snapshot without listener evidence still reports authoritative managed custody.
+            inventoryRegistry.replaceSnapshot({ v: 1, machineId: 'machine-a', generatedAt: 4_000,
+                refreshState: 'idle', entries: [], diagnostics: [] });
+            expect((await feed.getSnapshot({ projection: 'managed_bindings' })).targets).toEqual([
+                expect.objectContaining({ id: handle.serviceId, actions: ['manage'] }),
+            ]);
+            inventoryRegistry.replaceSnapshot({ v: 1, machineId: 'machine-a', generatedAt: 5_000,
+                refreshState: 'idle', entries: [direct, child, unrelated], diagnostics: [] });
+            // Once custody settles, the feed must not hide a later listener at the same address.
+            await handle.stop();
+            expect((await feed.getSnapshot()).targets.map(target => target.id)).toEqual([
+                'inventory:owned-loopback', 'inventory:owned-wildcard', 'inventory:unrelated',
+            ]);
+        } finally { await owner.dispose(); }
+    });
+
     it.each(['unknown', 'stopped'] as const)('projects %s native custody as uncertain while preserving exact manage rights', async nativePhase => {
         let phase: 'running' | 'stopped' | 'unknown' = nativePhase;
         const owner = createManagedServicesOwner({
@@ -76,6 +151,7 @@ describe('createLocalServiceLauncherFeed', () => {
             workspace: { id: 'checkout', serverId: 'home', machineId: 'machine-a', rootPath: process.cwd(), createdAtMs: 1 },
             declaration: { workspaceRefId: 'checkout', selection: { kind: 'manifest', name: 'native-service' } },
             cwd: process.cwd(), serviceId: 'native-service', specIdentity: 'native-service', isCurrent: () => true,
+            ...(nativePhase === 'unknown' ? { execution: 'portable' as const } : {}),
             requester: { serverId: 'home', accountId: 'owner', machineId: 'machine-a', installationId: 'installation' },
             processSpec: { mode: { kind: 'native',
                 instance: { adapter: { pluginId: 'fixture.plugin', localId: 'native-service' }, nativeResourceId: 'exact-instance' },
@@ -94,6 +170,8 @@ describe('createLocalServiceLauncherFeed', () => {
                 unavailableReason: nativePhase === 'unknown' ? 'managed_service_native_state_unknown' : 'managed_service_native_cleanup_unconfirmed',
             })]);
             expect(owner.listProjectServices()).toEqual([handle]);
+            if (nativePhase === 'unknown') expect(snapshot.targets[0]).toHaveProperty('execution', 'portable');
+            else expect(snapshot.targets[0]).not.toHaveProperty('execution');
         } finally { await handle.stop(); await owner.dispose(); }
     });
 

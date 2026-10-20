@@ -1,9 +1,9 @@
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 import type { PluginJsonSchema } from '@happier-dev/plugin-sdk/protocol';
+import { ConversationConnectionTransportOriginV1JsonSchema, ConversationPendingEndpointRetargetIntentV1JsonSchema } from './connectionLifecycle.js';
 import {
   defineAccountCollection,
   PLUGIN_COLLECTION_REVISION_MAX,
-  PluginMachineExecutionOriginV1JsonSchema,
 } from '@happier-dev/plugin-sdk/collections';
 import { QualifiedConnectedAccountRefJsonSchema } from '@happier-dev/plugin-sdk/connected-accounts';
 import {
@@ -292,15 +292,8 @@ const OLD_TRANSPORT_STOP_REQUEST_DELETE_SCHEMA: PluginJsonSchema = {
   ],
 };
 
-// Channels freezes materialized transport authority for caller reconciliation,
-// pairing and webhook targets. Reuse the canonical origin grammar while
-// excluding source custody, which cannot fulfill those retained obligations.
-const CONNECTION_TRANSPORT_ORIGIN_SCHEMA: PluginJsonSchema = {
-  allOf: [
-    PluginMachineExecutionOriginV1JsonSchema,
-    { type: 'object', required: ['materializationRef'] },
-  ],
-};
+// Connections follow the current admitted provider at one Home/Machine.
+const CONNECTION_TRANSPORT_ORIGIN_SCHEMA = ConversationConnectionTransportOriginV1JsonSchema;
 
 const CHECKPOINTED_POLL_INVOCATION_BASIS_SCHEMA: PluginJsonSchema = {
   type: 'object',
@@ -355,13 +348,12 @@ function pendingOldTransportStopSchema(input: Readonly<{
 }
 
 /**
- * The retained endpoint-retarget obligation. Only a retired durable-push
- * transport can owe one; the canonical slot decoder is the owner of that
- * cross-field rule, so the persisted shape stays a plain bounded field.
+ * Provider-stop custody never also carries an endpoint move. The separate
+ * closed endpoint-intent arm owns those exact convergence facts.
  */
 const PENDING_ENDPOINT_RETARGET_SCHEMA: PluginJsonSchema = {
   type: 'string',
-  enum: ['notRequired', 'pending'],
+  const: 'notRequired',
 };
 
 const PENDING_OLD_TRANSPORT_STOP_SCHEMA = pendingOldTransportStopSchema({
@@ -392,7 +384,7 @@ const PENDING_OLD_TRANSPORT_STOP_DELETE_ACCEPTED_SCHEMA = pendingOldTransportSto
   acceptedPossibleLoss: { type: 'boolean', const: true },
 });
 
-const NULLABLE_PENDING_OLD_TRANSPORT_STOP_SCHEMA = nullable(PENDING_OLD_TRANSPORT_STOP_SCHEMA);
+const NULLABLE_PENDING_OLD_TRANSPORT_STOP_SCHEMA = nullable({ anyOf: [PENDING_OLD_TRANSPORT_STOP_SCHEMA, ConversationPendingEndpointRetargetIntentV1JsonSchema] });
 
 const CONNECTION_DELETION_CONSISTENCY_SCHEMA: PluginJsonSchema = {
   oneOf: [
@@ -401,7 +393,7 @@ const CONNECTION_DELETION_CONSISTENCY_SCHEMA: PluginJsonSchema = {
       properties: {
         deletionState: { type: 'string', const: 'none' },
         pendingOldTransportStop: {
-          anyOf: [NULL_SCHEMA, PENDING_OLD_TRANSPORT_STOP_TRANSFER_SCHEMA],
+          anyOf: [NULL_SCHEMA, PENDING_OLD_TRANSPORT_STOP_TRANSFER_SCHEMA, ConversationPendingEndpointRetargetIntentV1JsonSchema],
         },
       },
       required: ['deletionState', 'pendingOldTransportStop'],
@@ -532,6 +524,7 @@ export const ConversationConnectionPollFailureJsonSchema = nullable({
 const CONNECTION_PAYLOAD_SCHEMA = {
   type: 'object',
   properties: {
+    configurationRevision: COLLECTION_ROW_REVISION_SCHEMA,
     providerPluginId: PluginIdJsonSchema,
     providerContributionSelection: ConversationProviderContributionSelectionJsonSchema,
     // This opaque JSON belongs to the selected provider setup contract. Its
@@ -608,6 +601,7 @@ const CONNECTION_PAYLOAD_SCHEMA = {
     observationAgeExpansionFloorOccurredAt: NON_NEGATIVE_SAFE_INTEGER_SCHEMA,
   },
   required: [
+    'configurationRevision',
     'providerPluginId',
     'providerContributionSelection',
     'providerSetupInput',
@@ -888,7 +882,7 @@ const FROZEN_EVENT_INGRESS_TARGET_SCHEMA: PluginJsonSchema = {
     candidate: ConversationIngressAutomationEventCandidateV1JsonSchema,
     providerPluginId: PluginIdJsonSchema,
     providerContributionSelection: ConversationProviderContributionSelectionJsonSchema,
-    executionOrigin: PluginMachineExecutionOriginV1JsonSchema,
+    executionOrigin: CONNECTION_TRANSPORT_ORIGIN_SCHEMA,
   },
   required: [
     'kind',
@@ -1441,14 +1435,14 @@ const STATE_RECORDS: readonly StateRecordDefinition[] = [
 
 
 /**
- * One strict V5 Account Collection contract for all Channels configuration,
+ * One strict V9 Account Collection contract for all Channels configuration,
  * ingress, checkpoint, projection-frontier, and rotation state. Every row
  * family remains explicit; no later core phase gets an opaque escape hatch.
  */
 export const CHANNEL_STATE_COLLECTION = defineAccountCollection({
   id: CHANNEL_STATE_COLLECTION_ID,
-  schemaVersion: 5,
-  readableSchemaVersions: [1, 2, 3, 4],
+  schemaVersion: 9,
+  readableSchemaVersions: [1, 2, 3, 4, 5, 6, 7, 8],
   schema: {
     type: 'object',
     properties: {

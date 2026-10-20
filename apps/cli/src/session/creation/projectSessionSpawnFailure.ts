@@ -1,6 +1,7 @@
 import { normalizeSpawnSessionNonceResolution } from '@happier-dev/protocol/sessions/spawnSessionNonce';
-import { SessionSpawnLaunchErrorV1Schema, SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol/spawnSession';
+import { isConnectedServiceUxDiagnosticSpawnErrorDetail, SessionSpawnLaunchErrorV1Schema, SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol/spawnSession';
 import type { SessionSpawnNewResultV1 } from '@happier-dev/protocol/sessions/creation/sessionSpawnNewResultV1';
+import { sanitizeConnectedServiceDiagnosticString } from '@/daemon/connectedServices/runtimeAuth/sanitizeConnectedServiceDiagnosticString';
 
 /** The creation adapter retains the daemon's redacted cause, not just its outcome. */
 export function projectSessionSpawnFailure(input: Readonly<{
@@ -10,10 +11,26 @@ export function projectSessionSpawnFailure(input: Readonly<{
   errorDetail?: unknown;
 }>): Extract<SessionSpawnNewResultV1, { type: 'error' }> {
   const normalized = normalizeSpawnSessionNonceResolution({ status: 'error', ...input });
+  if (isConnectedServiceUxDiagnosticSpawnErrorDetail(input.errorDetail)) {
+    const diagnostic = input.errorDetail.uxDiagnostic;
+    const reason = diagnostic.diagnostics?.reason;
+    const cause = typeof reason === 'string' && reason !== 'spawn_preflight' && reason !== 'profile_action_required'
+      ? sanitizeConnectedServiceDiagnosticString(reason) : '';
+    return { type: 'error', code: 'spawn_failed', retryable: diagnostic.retryable,
+      launchError: { kind: 'launch_error', code: diagnostic.code,
+        message: diagnostic.code === 'connected_service_credential_reconnect_required'
+          ? 'Reconnect the selected Connected Account profile, then retry.'
+          : `The selected Connected Account could not be prepared.${cause ? ` Reason: ${cause}.` : ''} Review Connected Accounts, then retry.` } };
+  }
   if (normalized.status === 'error' && normalized.agentId
     && (normalized.errorCode === SPAWN_SESSION_ERROR_CODES.AGENT_CLI_MISSING
       || normalized.errorCode === SPAWN_SESSION_ERROR_CODES.AGENT_SIGNED_OUT)) {
-    return { type: 'error', code: normalized.errorCode, agentId: normalized.agentId, retryable: false };
+    return { type: 'error', code: normalized.errorCode, agentId: normalized.agentId, retryable: false,
+      ...(normalized.errorCode === SPAWN_SESSION_ERROR_CODES.AGENT_SIGNED_OUT ? { launchError: {
+        kind: 'launch_error' as const, code: normalized.errorCode,
+        message: 'Sign in to the Agent on the target Machine. If using Connected Accounts, select a Connected Account profile for this Session or recipe, or configure an Account default profile before retrying.',
+      } } : {}),
+    };
   }
   const detail = SessionSpawnLaunchErrorV1Schema.safeParse(input.errorDetail);
   const fallback = SessionSpawnLaunchErrorV1Schema.safeParse({ kind: 'launch_error',

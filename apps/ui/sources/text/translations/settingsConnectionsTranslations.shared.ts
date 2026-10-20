@@ -12,6 +12,7 @@ export const en = {
     directOffDescription: 'Everything goes through Happier. Nothing connects to your machines directly; on the same network this is a little slower.',
     serverDenied: 'Your Home’s server sends everything through Happier, so there’s nothing to choose here.',
     machineTitle: ({ machine }: MachineParams) => `Connect to ${machine}`,
+    machineSettingTitle: 'Connection for this machine',
     machineOptionDefault: 'Default',
     machineOptionDirect: 'Directly',
     machineOptionRelay: 'Through Happier',

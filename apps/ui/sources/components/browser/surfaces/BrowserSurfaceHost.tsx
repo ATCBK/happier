@@ -14,8 +14,9 @@ import { BrowserShell } from '@/components/browser/BrowserShell';
 import type { BrowserDaemonControlCommandSender } from '@/sync/domains/browser/control/machineRpc';
 import { isDaemonAuthoritativeBrowserView } from '@/sync/domains/browser/control/commands';
 import { useBrowserAutomationRuntime } from '@/components/browser/automation/useBrowserAutomationRuntime';
-import { useBrowserStreamedSurfaceRuntime } from '@/components/browser/streamed/useBrowserStreamedSurfaceRuntime';
+import { BrowserStreamedSurfaceRuntimeHost } from '@/components/browser/streamed/useBrowserStreamedSurfaceRuntime';
 import { useBrowserDiagnosticsRuntime } from '@/components/browser/diagnostics/useBrowserDiagnosticsRuntime';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import type { BrowserLaunchpadOpenTargetOptions } from '@/components/browser/launchpad/BrowserLaunchpad';
 import { useFeatureDecision } from '@/hooks/server/useFeatureDecision';
 import {
@@ -45,7 +46,9 @@ import { resolveLocalBrowserProfile } from '@/sync/domains/browser/profiles/loca
 import { selectActiveBrowserView } from '@/sync/domains/browser/shell';
 import { resolveBrowserViewIdForTarget } from '@/sync/domains/browser/store';
 import { useSession } from '@/sync/domains/state/storage';
-import { useSessionCompletedBrowserActionKey } from '@/sync/store/hooks';
+import { useMachineDisplayNamesById, useSessionCompletedBrowserActionKey } from '@/sync/store/hooks';
+import { allowBrowserSandbox } from '@/sync/domains/browser/firstUse/browserFirstUse';
+import { useBrowserOpenFirstUse } from '@/components/browser/streamed/useBrowserOpenFirstUse';
 import type { DesktopWebViewNativeAvailability } from '@/sync/domains/browser/adapters/desktopWebView';
 import { useDesktopWebViewNativeAvailability } from '@/sync/domains/browser/adapters/useDesktopWebViewNativeAvailability';
 import { useDesktopBrowserRecordingReverseCaptureHandler } from '@/sync/domains/browser/recording/reverseCaptureAvailability';
@@ -79,8 +82,8 @@ import {
 import { BrowserPluginSurfacePlacements } from './BrowserPluginSurfacePlacements';
 import { BrowserSurfaceFallback, type BrowserSurfaceUnavailableReason } from './BrowserSurfaceFallback';
 import { RetainedPresentationSlotBinder } from '@/components/ui/presentation/retainedPresentationSlots';
-import { useOptionalCurrentUiContextReader } from '@/components/appShell/currentUiContext/CurrentUiContextProvider';
 import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
+import { useOptionalCurrentUiContextReader } from '@/components/appShell/currentUiContext/CurrentUiContextProvider';
 
 type BrowserSurfaceState = Readonly<{
     browserState: BrowserControlState;
@@ -334,12 +337,29 @@ export function BrowserSurfaceHost(props: Readonly<{
         return () => { mountedRef.current = false; };
     }, []);
     const previousLifecycleSnapshotRef = React.useRef<BrowserSurfaceLifecycleSnapshot | null>(null);
+    const borrowedAccountLifetime = useSessionViewerSourceAccountLifetime();
+    const browserActionAccountLifetime = React.useMemo(() => props.pluginAccountLifetime
+        ?? borrowedAccountLifetime ?? captureActiveServerAccountScopeLifetime(),
+    [borrowedAccountLifetime, props.pluginAccountLifetime, resetKey]);
     const presenceSessionId = props.pluginBrowserActionContext?.sessionId ?? null;
     const presenceServerId = props.pluginBrowserActionContext?.serverId ?? null;
     const session = useSession(presenceSessionId ?? '', presenceServerId);
+    const browserMachineId = props.pluginBrowserActionContext?.machineId?.trim() ?? null;
+    const browserOperationScope = browserActionAccountLifetime?.isCurrent()
+        && (!presenceServerId || areServerProfileIdentifiersEquivalent(presenceServerId, browserActionAccountLifetime.scope.serverId))
+        ? browserActionAccountLifetime.scope : null;
+    const discoveryOperationScope = React.useMemo(() => (browserOperationScope
+        ? { ...browserOperationScope, machineId: browserMachineId } : null), [browserMachineId, browserOperationScope]);
     const discoveryRefreshKey = useSessionCompletedBrowserActionKey(presenceSessionId ?? '', {
         enabled: Boolean(presenceSessionId && session && props.visible !== false && policy.viewTargetsEnabled),
+        operationScope: discoveryOperationScope,
     });
+    const firstUseScope = React.useMemo(() => (browserOperationScope && browserMachineId && presenceSessionId && session
+        ? { serverId: browserOperationScope.serverId, accountId: browserOperationScope.accountId, machineId: browserMachineId, sessionId: presenceSessionId }
+        : null), [browserMachineId, browserOperationScope, presenceSessionId, session]);
+    const firstUse = useBrowserOpenFirstUse(firstUseScope);
+    const machineIds = React.useMemo(() => (browserMachineId ? [browserMachineId] : []), [browserMachineId]);
+    const browserMachineName = useMachineDisplayNamesById(machineIds)[browserMachineId ?? ''] ?? null;
     const focusedView = selectActiveBrowserView(surfaceState.browserState, props.browserSessionId)
         ?? (presenceSessionId ? selectActiveBrowserView(surfaceState.browserState, presenceSessionId) : null);
     const applyDaemonEvents = React.useCallback((events: readonly BrowserEventV1[]) => {
@@ -376,12 +396,21 @@ export function BrowserSurfaceHost(props: Readonly<{
         void annotationAdapter?.dispatch(request);
     }, [props.browserSessionId]);
 
+    const mountedDiagnosticsActions = useMountedActionExecution(browserActionAccountLifetime?.scope, { retainInvocation: true, openOnRequest: true });
     const liveBrowserDiagnostics = useBrowserDiagnosticsRuntime({
         view: focusedView ?? null,
         enabled: policy.diagnosticsEnabled === true,
         automationEnabled: policy.automationEnabled === true,
         daemonSnapshotServerId: props.localServicePreviewServerId,
         onElementPickerResult: handleElementPickerAnnotationBridge,
+        actionExecute: mountedDiagnosticsActions.execute,
+        actionContext: { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+            defaultSessionId: props.pluginBrowserActionContext?.sessionId ?? undefined,
+            serverId: browserActionAccountLifetime?.scope.serverId,
+            expectedAccountId: browserActionAccountLifetime?.scope.accountId },
+        isCurrent: () => mountedRef.current && !unavailableReason && Object.is(previousResetKeyRef.current, resetKey)
+            && browserActionAccountLifetime?.isCurrent() === true
+            && (!presenceServerId || areServerProfileIdentifiersEquivalent(presenceServerId, browserActionAccountLifetime.scope.serverId)),
     });
     const renderableLiveBrowserDiagnostics = hasRenderableBrowserDiagnostics(liveBrowserDiagnostics, focusedView)
         ? liveBrowserDiagnostics
@@ -395,20 +424,7 @@ export function BrowserSurfaceHost(props: Readonly<{
         enabled: policy.automationEnabled === true,
         engineBridge: liveBrowserDiagnostics?.bridge,
     });
-    // The presence capsule names the session's agent and follows its turn; the host is the one that
-    // knows which session this surface belongs to.
-    // The agent's own browser (a daemon-owned view) is shown as its live stream: the daemon's
-    // discovery names the capture source, the shared relay owner opens it.
     const hostActivelyViewed = useHostActivelyViewed();
-    const streamedBrowserRuntime = useBrowserStreamedSurfaceRuntime({
-        view: focusedView ?? null,
-        browserSessionId: presenceSessionId,
-        refreshKey: discoveryRefreshKey,
-        enabled: policy.browserEnabled && policy.viewTargetsEnabled && props.visible !== false && hostActivelyViewed,
-        machineId: props.pluginBrowserActionContext?.machineId,
-        serverId: props.pluginBrowserActionContext?.serverId,
-        onBrowserEvent: receiveBrowserEvent,
-    });
     const baseBrowserAutomation = props.browserAutomation ?? liveBrowserAutomation;
     // The session whose agent drives this surface's browser: named by the presence capsule for every
     // view, whether or not in-app automation is enabled.
@@ -500,10 +516,6 @@ export function BrowserSurfaceHost(props: Readonly<{
             : null;
         return controlService ? { controlService } : undefined;
     }, [policy.automationEnabled, productModels?.browserAutomation?.controlService]);
-    const borrowedAccountLifetime = useSessionViewerSourceAccountLifetime();
-    const browserActionAccountLifetime = React.useMemo(() => props.pluginAccountLifetime
-        ?? borrowedAccountLifetime ?? captureActiveServerAccountScopeLifetime(),
-    [borrowedAccountLifetime, props.pluginAccountLifetime, resetKey]);
     const browserActionServerId = props.pluginBrowserActionContext?.serverId;
     const browserActionTarget = React.useMemo<ActionExecutorContext['externalActionTarget']>(() => {
         const machineId = props.pluginBrowserActionContext?.machineId?.trim();
@@ -539,14 +551,16 @@ export function BrowserSurfaceHost(props: Readonly<{
     }, [isBrowserActionCurrent, props.onViewTargetChange]);
 
     const daemonCommandSender = props.sendDaemonCommand ?? productModels?.browserContext?.daemonControl?.sendCommand;
+    const receiveDaemonEvents = React.useCallback((events: readonly BrowserEventV1[]) => {
+        if (isBrowserActionCurrent()) applyDaemonEvents(events);
+    }, [applyDaemonEvents, isBrowserActionCurrent]);
     const sendDaemonCommand = React.useMemo(() => daemonCommandSender
-        ? (command: BrowserCommandV1) => daemonCommandSender(command, (events) => {
-            if (isBrowserActionCurrent()) applyDaemonEvents(events);
-        })
-        : undefined, [daemonCommandSender, applyDaemonEvents, isBrowserActionCurrent]);
+        ? (command: BrowserCommandV1) => daemonCommandSender(command, receiveDaemonEvents)
+        : undefined, [daemonCommandSender, receiveDaemonEvents]);
     const runtimeControlAdapter = React.useMemo<BrowserRuntimeControlAdapter>(() => ({
         readState: () => isBrowserActionCurrent() && !browserActionFactsRef.current.unavailableReason ? surfaceStateRef.current.browserState : null,
         applyDispatchResult: applyRuntimeDispatchResult,
+        applyDaemonEvents: receiveDaemonEvents,
         readDispatchOptions: (command) => {
             const facts = browserActionFactsRef.current;
             return { desktopWebViewAvailability: facts.desktopWebViewAvailability,
@@ -558,7 +572,7 @@ export function BrowserSurfaceHost(props: Readonly<{
             };
         },
         ...(sendDaemonCommand ? { sendDaemonCommand } : {}),
-    }), [isBrowserActionCurrent, applyRuntimeDispatchResult, sendDaemonCommand]);
+    }), [isBrowserActionCurrent, applyRuntimeDispatchResult, receiveDaemonEvents, sendDaemonCommand]);
     const executeBrowserAction = React.useMemo(() => createFrontDoorActionExecute(undefined, {
         runtimeActions: { browserControl: runtimeControlAdapter, browserAutomation: runtimeAutomationAdapter },
         isActionEnabled: () => isBrowserActionCurrent() && !browserActionFactsRef.current.unavailableReason,
@@ -595,15 +609,16 @@ export function BrowserSurfaceHost(props: Readonly<{
         }
         const unregister = [...new Set([props.browserSessionId, focusedView?.browserSessionId].filter((id): id is string => Boolean(id)))].map(browserSessionId =>
             registerBrowserRuntimeControlAdapter({ browserSessionId, control: runtimeControlAdapter,
+                ...(liveBrowserDiagnostics?.runtimeAdapter ? { diagnostics: liveBrowserDiagnostics.runtimeAdapter } : {}),
                 ...(runtimeAutomationAdapter ? { automation: runtimeAutomationAdapter } : {}) }));
         return () => unregister.forEach(dispose => dispose());
-    }, [runtimeControlAdapter, props.browserSessionId, focusedView?.browserSessionId, runtimeAutomationAdapter, unavailableReason]);
+    }, [runtimeControlAdapter, props.browserSessionId, focusedView?.browserSessionId, runtimeAutomationAdapter, liveBrowserDiagnostics?.runtimeAdapter, unavailableReason]);
 
     React.useEffect(() => {
         const machineId = props.pluginBrowserActionContext?.machineId?.trim();
         const sessionId = props.pluginBrowserActionContext?.sessionId?.trim();
-        if (!machineId || !sessionId || !focusedView || !runtimeAutomationAdapter || unavailableReason
-            || policy.automationEnabled !== true
+        if (!machineId || !sessionId || !focusedView || (!runtimeAutomationAdapter && !liveBrowserDiagnostics?.bridge) || unavailableReason
+            || (policy.automationEnabled !== true && policy.diagnosticsEnabled !== true)
             || (focusedView.engineKind !== 'webIframe' && focusedView.engineKind !== 'nativeWebView'
                 && focusedView.engineKind !== 'desktopWebView')) return;
         const lifetime = captureActiveServerAccountScopeLifetime();
@@ -628,7 +643,7 @@ export function BrowserSurfaceHost(props: Readonly<{
             unregister?.();
         };
     }, [focusedView?.browserSessionId, focusedView?.viewId, focusedView?.engineKind,
-        policy.automationEnabled, props.pluginBrowserActionContext?.machineId,
+        policy.automationEnabled, policy.diagnosticsEnabled, Boolean(liveBrowserDiagnostics?.bridge), props.pluginBrowserActionContext?.machineId,
         props.pluginBrowserActionContext?.serverId, props.pluginBrowserActionContext?.sessionId,
         runtimeAutomationAdapter, unavailableReason]);
 
@@ -648,6 +663,9 @@ export function BrowserSurfaceHost(props: Readonly<{
             defaultSessionId: props.pluginBrowserActionContext?.sessionId ?? undefined,
             externalActionTarget: browserActionTarget,
         }), [executeBrowserAction, browserActionAccountLifetime, props.pluginBrowserActionContext?.sessionId, browserActionTarget]);
+
+    const onAllowBrowserSandbox = React.useMemo(() => (firstUseScope
+        ? () => allowBrowserSandbox(executeBrowserAction, firstUseScope) : undefined), [executeBrowserAction, firstUseScope]);
 
     const onCheckAgain = React.useCallback(async (target: Readonly<{ browserSessionId: string; viewId: string }>) => {
         const view = runtimeControlAdapter.readState()?.viewsById[target.viewId];
@@ -818,6 +836,17 @@ export function BrowserSurfaceHost(props: Readonly<{
             visible={props.visible ?? true}
             enabled={props.keepAliveAboveRouter === true && typeof props.presentationSlotId === 'string'}
         >
+            <BrowserStreamedSurfaceRuntimeHost input={{
+                view: focusedView ?? null,
+                browserSessionId: presenceSessionId,
+                refreshKey: discoveryRefreshKey,
+                enabled: policy.browserEnabled && policy.viewTargetsEnabled && props.visible !== false && hostActivelyViewed,
+                machineId: props.pluginBrowserActionContext?.machineId,
+                serverId: props.pluginBrowserActionContext?.serverId,
+                machineName: browserMachineName,
+                firstUse,
+                onBrowserEvent: receiveBrowserEvent,
+            }}>
             <BrowserShell
                 agent={browserAgent}
                 browserSessionId={focusedView?.browserSessionId ?? props.browserSessionId}
@@ -826,6 +855,7 @@ export function BrowserSurfaceHost(props: Readonly<{
                 state={surfaceState.browserState}
                 onCommand={onCommand}
                 onCheckAgain={onCheckAgain}
+                onAllowBrowserSandbox={onAllowBrowserSandbox}
                 onOpenInSystemBrowser={onOpenInSystemBrowser}
                 daemonControlAvailable={sendDaemonCommand !== undefined}
                 onViewLifecycle={applyViewLifecycleSignal}
@@ -847,7 +877,6 @@ export function BrowserSurfaceHost(props: Readonly<{
                 pluginBrowserPolicyContext={pluginBrowserPolicyContext}
                 onPluginBrowserAction={props.pluginUiInteractionEnabled === true ? onPluginBrowserAction : undefined}
                 simulatorPreviewRuntime={props.simulatorPreviewRuntime}
-                streamedBrowserRuntime={streamedBrowserRuntime}
                 browserContext={browserContextForShell}
                 browserDiagnostics={browserDiagnosticsForShell}
                 browserAutomation={policy.automationEnabled === true ? productModels?.browserAutomation : null}
@@ -857,6 +886,7 @@ export function BrowserSurfaceHost(props: Readonly<{
                 supplementalDiagnostics={policy.diagnosticsEnabled ? productModels?.supplementalDiagnostics : null}
                 panels={(
                     <BrowserPluginSurfacePlacements
+                        browserSessionId={props.browserSessionId}
                         focusedTarget={focusedView?.target}
                         platform={props.platform}
                         pluginUiProjection={props.pluginUiProjection}
@@ -872,6 +902,7 @@ export function BrowserSurfaceHost(props: Readonly<{
                 nowMs={props.nowMs}
                 testID={props.testID}
             />
+            </BrowserStreamedSurfaceRuntimeHost>
         </RetainedPresentationSlotBinder>
     );
 }

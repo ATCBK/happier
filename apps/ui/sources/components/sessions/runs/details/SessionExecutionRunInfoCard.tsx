@@ -15,7 +15,7 @@ import {
 import { ExecutionRunAgentMark } from '@/components/sessions/runs/ExecutionRunAgentMark';
 import { resolveExecutionRunBackendLabel } from '@/components/sessions/runs/resolveExecutionRunBackendLabel';
 import { resolveExecutionRunTitle } from '@/components/sessions/runs/resolveExecutionRunTitle';
-import { resolveExecutionRunSelectionLabel } from '@/components/sessions/runs/resolveExecutionRunSelectionLabel';
+import { resolveExecutionRunSelectionLabel, resolveRunNativeModelLabel } from '@/components/sessions/runs/resolveExecutionRunSelectionLabel';
 import { useExecutionRunSourceLabel } from '@/components/sessions/runs/useExecutionRunSourceLabel';
 import { useProviderSettingsForServer } from '@/providers/hooks/useProviderSettings';
 import { ExecutionRunActionsMenu, type ExecutionRunMenuFact } from '@/components/sessions/runs/details/ExecutionRunActionsMenu';
@@ -73,7 +73,7 @@ function resolvePermissionLabel(run: ExecutionRunPublicState, agentId: string | 
 function resolveLaunchOriginLabel(run: ExecutionRunPublicState, hostSessionId: string | null, originTitle: string | null): string | null {
     const origin = run.launchOrigin;
     if (!origin) return null;
-    if (origin.kind === 'session_discussion') return formatRunDiscussionOriginLabel(originTitle);
+    if (origin.kind === 'discussion') return formatRunDiscussionOriginLabel(originTitle);
     if (origin.kind === 'session') {
         if (origin.sessionId === hostSessionId) return null;
         return t('executionRuns.details.launchOrigin.crossSession', { sessionId: origin.sessionId });
@@ -145,13 +145,14 @@ export const SessionExecutionRunInfoCard = React.memo((props: Readonly<{
         ?? props.run.resolvedSelection?.modelId
         ?? props.run.requestedConfiguration?.modelId)?.trim() || null;
     const agentLabel = resolveExecutionRunBackendLabel(props.run.backendTarget, props.acpCatalogSnapshot);
+    const nativeModelLabel = resolveRunNativeModelLabel(props.run.backendTarget);
     const providerConnections = useProviderSettingsForServer(props.serverId ?? undefined).connections;
     const resolvedSourceLabel = useExecutionRunSourceLabel(props.run.resolvedSelection, props.serverId);
     // D9: "Inherit session · <route> · <model>" or "Chosen for this run · …" when the host recorded it.
     const selectionLabel = resolveExecutionRunSelectionLabel(props.run.resolvedSelection, (connectionId) => (
         providerConnections.find((connection) => connection.id === connectionId)?.displayName ?? null
-    ), resolvedSourceLabel);
-    const agentAndModel = [agentLabel, selectionLabel ?? modelId].filter((part): part is string => Boolean(part)).join(' · ') || null;
+    ), resolvedSourceLabel, nativeModelLabel);
+    const agentAndModel = [agentLabel, selectionLabel ?? (modelId && nativeModelLabel(modelId)) ?? modelId].filter((part): part is string => Boolean(part)).join(' · ') || null;
     const permissionLabel = resolvePermissionLabel(props.run, agentId);
     // `> 0`, not `typeof === 'number'`: an unrecorded start or finish arrives as 0, and a time or a
     // duration made from it would be presented as though it were a fact (D-8).

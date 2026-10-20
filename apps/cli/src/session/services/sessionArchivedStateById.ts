@@ -8,15 +8,21 @@ export async function setSessionArchivedStateById(params: Readonly<{
   token: string;
   sessionId: string;
   archived: boolean;
+  signal?: AbortSignal;
+  resolveAuthorizationHeaders?: Parameters<typeof archiveSession>[0]['resolveAuthorizationHeaders'];
 }>): Promise<Readonly<{ archivedAt: number | null }>> {
   const result = params.archived
     ? await archiveSession({
         token: params.token,
         sessionId: params.sessionId,
+        ...(params.signal ? { signal: params.signal } : {}),
+        ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
       })
     : await unarchiveSession({
         token: params.token,
         sessionId: params.sessionId,
+        ...(params.signal ? { signal: params.signal } : {}),
+        ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
       });
 
   return {

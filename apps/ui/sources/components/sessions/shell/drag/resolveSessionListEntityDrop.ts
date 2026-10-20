@@ -131,11 +131,11 @@ export function resolveSessionListEntityDrop(params: Readonly<{
     const admission = resolveSessionListDragIntent({ intent, context: currentContext });
     if (!admission.ok) return refuse(admission.relationReason ?? admission.reason,
         intent.targetRowId ? tree.rowMetadataById.get(intent.targetRowId) ?? null : null);
-    if (admission.effect === 'reports-to') {
-        if (!context.resolvePutSessionUnder || admission.expectedLeadSessionId === undefined) return refuse('unavailable');
-        return { status: 'allowed', effect: { actionId: 'session.reports_to.set', input: {
-            sessionId: admission.source.sessionId!, leadSessionId: admission.lead.sessionId!,
-            expectedLeadSessionId: admission.expectedLeadSessionId,
+    if (admission.effect === 'manager') {
+        if (!context.resolvePutSessionUnder || admission.expectedManagerSessionId === undefined) return refuse('unavailable');
+        return { status: 'allowed', effect: { actionId: 'session.manager.set', input: {
+            sessionId: admission.source.sessionId!, managerSessionId: admission.lead.sessionId!,
+            expectedManagerSessionId: admission.expectedManagerSessionId,
         }, preview: params.preview(admission) } };
     }
     const { sourceSnapshotSignature: _signature, ...semanticInput } = intent;

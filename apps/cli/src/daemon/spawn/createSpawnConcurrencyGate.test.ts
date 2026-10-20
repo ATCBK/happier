@@ -19,6 +19,39 @@ function createDeferred<T>(): Deferred<T> {
 }
 
 describe('createSpawnConcurrencyGate', () => {
+  it('withdraws a cancelled queued launch without consuming the next slot', async () => {
+    const gate = createSpawnConcurrencyGate(1);
+    const active = createDeferred<void>();
+    const started = createDeferred<void>();
+    const first = gate.run(async () => { started.resolve(); await active.promise; });
+    await started.promise;
+    const controller = new AbortController();
+    let cancelledStarted = false;
+    const queued = gate.run(async () => { cancelledStarted = true; }, controller.signal);
+    const rejected = expect(queued).rejects.toMatchObject({ name: 'AbortError' });
+    controller.abort();
+    try { await rejected; } finally { active.resolve(); await first; }
+    expect(cancelledStarted).toBe(false);
+    await expect(gate.run(async () => 'next')).resolves.toBe('next');
+  });
+  it('returns a granted slot when cancellation wins before work starts', async () => {
+    const gate = createSpawnConcurrencyGate(1);
+    const active = createDeferred<void>();
+    const started = createDeferred<void>();
+    const first = gate.run(async () => { started.resolve(); await active.promise; });
+    await started.promise;
+    const controller = new AbortController();
+    let cancelledStarted = false;
+    const second = gate.run(async () => { cancelledStarted = true; }, controller.signal);
+    const rejected = expect(second).rejects.toMatchObject({ name: 'AbortError' });
+    active.resolve();
+    await first;
+    controller.abort();
+    await rejected;
+    expect(cancelledStarted).toBe(false);
+    await expect(gate.run(async () => 'next')).resolves.toBe('next');
+  });
+
   it('limits in-flight work to the configured max', async () => {
     const gate = createSpawnConcurrencyGate(2);
 

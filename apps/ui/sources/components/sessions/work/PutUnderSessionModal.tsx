@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
@@ -9,13 +10,13 @@ import { Modal, type CustomModalInjectedProps } from '@/modal';
 import { useModalCardChrome } from '@/modal/components/card/useModalCardChrome';
 import { getStorage } from '@/sync/domains/state/storage';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { setSessionReportsTo } from '@/sync/ops/relations/setSessionReportsTo';
+import { setSessionManager } from '@/sync/ops/relations/setSessionManager';
 import { t } from '@/text';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
 
-import { loadSessionReportsToEligibility, type SessionReportsToEligibilitySnapshot } from '@/sync/ops/relations/sessionReportsToEligibility';
+import { loadSessionManagerEligibility, type SessionManagerEligibilitySnapshot } from '@/sync/ops/relations/sessionManagerEligibility';
 
-import { describeReportsToRefusal } from './putSessionUnderLead';
+import { describeManagerRefusal } from './putSessionUnderLead';
 import { buildPutUnderChooserSections, PUT_UNDER_TOP_LEVEL_OPTION_ID } from './putUnderChooser';
 import { resolvePutUnderEligibility } from './putUnderCandidates';
 import { describeSessionListDropReason } from '@/components/sessions/shell/dropPreview/sessionListDropPresentation';
@@ -26,7 +27,7 @@ import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMe
  * "Put under…" (ORC §3.8, R-03; DnD lab K1c): the keyboard, phone and screen-reader equivalent of
  * dragging a Session under a lead. It asks the Home once for the relation facts, lists the Sessions
  * that can lead this one and, under "Can't take reports", the ones that cannot with the owner's
- * reason, and asks the one `session.reports_to.set` Action with the lead it saw as the expected
+ * reason, and asks the one `session.manager.set` Action with the lead it saw as the expected
  * current lead. The server's fence and compare-and-set decide; a refusal is said in words.
  */
 
@@ -62,7 +63,7 @@ export function PutUnderSessionModal(props: PutUnderSessionModalProps) {
         const state = getStorage().getState();
         const sessions = selectSessionRelationRecords(state.sessions, props.serverId, state.sessionListRowsByServerId);
         const self = sessions[props.sessionId] ?? null;
-        return { sessions, currentLeadId: self?.reportsTo?.sessionId ?? null,
+        return { sessions, currentLeadId: readSessionManagerSessionIdV1(self),
             sessionId: props.sessionId, serverId: props.serverId,
             lifetime: captureActiveServerAccountScopeLifetime() };
     });
@@ -75,18 +76,18 @@ export function PutUnderSessionModal(props: PutUnderSessionModalProps) {
         return () => retirement.dispose();
     }, [close, snapshot]);
     // One relation-facts batch per open; `undefined` while the Home is being asked.
-    const [facts, setFacts] = React.useState<SessionReportsToEligibilitySnapshot | null | undefined>(undefined);
+    const [facts, setFacts] = React.useState<SessionManagerEligibilitySnapshot | null | undefined>(undefined);
     React.useEffect(() => {
         if (!props.serverId || !snapshot.lifetime?.isCurrent() || snapshot.lifetime.scope.serverId !== props.serverId) {
             setFacts(null);
             return;
         }
         const abort = new AbortController();
-        let loaded: SessionReportsToEligibilitySnapshot | null = null;
+        let loaded: SessionManagerEligibilitySnapshot | null = null;
         const candidateSessionIds = Object.values(snapshot.sessions)
             .filter((session) => (session.serverId ?? null) === props.serverId && session.id !== props.sessionId)
             .map((session) => session.id);
-        void loadSessionReportsToEligibility({
+        void loadSessionManagerEligibility({
             serverId: props.serverId,
             sessionId: props.sessionId,
             candidateSessionIds,
@@ -147,14 +148,14 @@ export function PutUnderSessionModal(props: PutUnderSessionModalProps) {
             return;
         }
         if (!facts?.isCurrent() || facts.serverId !== snapshot.serverId || facts.accountId !== snapshot.lifetime.scope.accountId
-            || facts.sessionId !== snapshot.sessionId || facts.currentLeadSessionId !== snapshot.currentLeadId
-            || (self.reportsTo?.sessionId ?? null) !== snapshot.currentLeadId) {
+            || facts.sessionId !== snapshot.sessionId || facts.currentManagerSessionId !== snapshot.currentLeadId
+            || readSessionManagerSessionIdV1(self) !== snapshot.currentLeadId) {
             setError(describeSessionListDropReason('unavailable').message);
             return;
         }
-        const leadSessionId = optionId === PUT_UNDER_TOP_LEVEL_OPTION_ID ? null : optionId;
-        if (leadSessionId !== null) {
-            const eligibility = resolvePutUnderEligibility(sessions, props.sessionId, leadSessionId, facts, {
+        const managerSessionId = optionId === PUT_UNDER_TOP_LEVEL_OPTION_ID ? null : optionId;
+        if (managerSessionId !== null) {
+            const eligibility = resolvePutUnderEligibility(sessions, props.sessionId, managerSessionId, facts, {
                 serverId: snapshot.serverId, accountId: snapshot.lifetime.scope.accountId, allowCurrentLead: true,
             });
             if (!eligibility.allowed) {
@@ -166,16 +167,16 @@ export function PutUnderSessionModal(props: PutUnderSessionModalProps) {
             setError(describeSessionListDropReason('unavailable').message);
             return;
         }
-        if (leadSessionId === snapshot.currentLeadId) {
+        if (managerSessionId === snapshot.currentLeadId) {
             onClose();
             return;
         }
         setPendingId(optionId);
         setError(null);
-        void setSessionReportsTo({
+        void setSessionManager({
             sessionId: props.sessionId,
-            leadSessionId,
-            expectedLeadSessionId: snapshot.currentLeadId,
+            managerSessionId,
+            expectedManagerSessionId: snapshot.currentLeadId,
             serverId: props.serverId,
             expectedAccountId: snapshot.lifetime.scope.accountId,
         }).then((result) => {
@@ -184,10 +185,10 @@ export function PutUnderSessionModal(props: PutUnderSessionModalProps) {
                 return;
             }
             setPendingId(null);
-            setError(describeReportsToRefusal(result.errorCode));
+            setError(describeManagerRefusal(result.errorCode));
         }, () => {
             setPendingId(null);
-            setError(describeReportsToRefusal(undefined));
+            setError(describeManagerRefusal(undefined));
         });
     }, [busy, facts, onClose, props.serverId, props.sessionId, snapshot]);
 

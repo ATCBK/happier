@@ -29,6 +29,15 @@ vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createT
 
 afterEach(() => { standardCleanup(); });
 
+/** The strings the binding control draws (its value, then the quieter second half). */
+function bindingText(screen: Awaited<ReturnType<typeof renderScreen>>, testID: string): string[] {
+    const trigger = screen.findByTestId(`${testID}.trigger`);
+    if (!trigger) throw new Error(`no binding trigger ${testID}`);
+    return trigger.findAll((node: { type: unknown; props: { children?: unknown } }) => typeof node.type !== 'string'
+        && typeof node.props.children === 'string').map((node: { props: { children?: unknown } }) => node.props.children as string)
+        .filter((text: string, index: number, all: string[]) => all.indexOf(text) === index);
+}
+
 const declared: ResolvedInputTypeV1 = {
     identity: repositoryInputTypeRef,
     occurrenceId: 'occurrence-1',
@@ -70,7 +79,29 @@ describe('widget setup fields share the typed-field owners', () => {
         expect(screen.findByTestId('setup.cost.option.1')?.props.accessibilityState.disabled).toBe(true);
         await screen.unmount();
     });
-    it('pins a Usage scope as a collection when changing a following field and toggles its own selections', async () => {
+    it('shows a following input as its one binding control, and opens its own editor from the current value only when Own value is chosen (FA18 P2)', async () => {
+        const { HappierInputField } = await import('@happier-dev/plugin-ui/presentation');
+        const entry: WidgetSetupField = { field: { path: 'directory', title: 'Directory', widget: 'text' },
+            follow: { slot: 'directory', label: 'This page', values: [{ value: 'src', label: 'src' }] } };
+        const changes: WidgetSetupFieldChange[] = [];
+        const render = (row: React.ComponentProps<typeof WidgetSetupFieldRow>['row'], plainValue?: string) => <WidgetSetupFieldRow entry={entry} row={row}
+            options={[]} optionsStatus="ready" plainValue={plainValue} phone={false} onChange={change => changes.push(change)} testID="setup.dir" />;
+        const screen = await renderScreen(render({ kind: 'follows', label: 'This page', valueLabel: 'src' }));
+        // Following: the value is said once, by the binding; no second control repeats it.
+        expect(screen.findAllByType(HappierInputField)).toHaveLength(0);
+        expect(screen.findAllByType(DropdownMenu)).toHaveLength(1);
+        expect(screen.findByType(DropdownMenu).props.items.map((item: { id: string }) => item.id)).toEqual(['follow', 'own']);
+        act(() => { screen.findByType(DropdownMenu).props.onSelect('own'); });
+        expect(changes).toEqual([{ kind: 'pin', value: 'src' }]);
+        await act(async () => screen.update(render({ kind: 'pinned', value: null, label: 'src' }, 'src')));
+        // Own value: the binding says whose value it is and the typed editor beneath holds it.
+        expect(screen.findAllByType(HappierInputField)).toHaveLength(1);
+        expect(bindingText(screen, 'setup.dir')).toEqual(['widgetAdd.ownValue']);
+        act(() => { screen.findByType(DropdownMenu).props.onSelect('follow'); });
+        expect(changes.at(-1)).toEqual({ kind: 'follow', slot: 'directory' });
+        await screen.unmount();
+    });
+    it('pins a Usage scope as a collection from Own value and toggles its own selections', async () => {
         const candidate = selectBuiltinWidgetCandidates().find(candidate => candidate.definition?.kind === 'builtin'
             && candidate.definition.id === 'usage_daily')!;
         const setup = buildWidgetCandidateSetup({ candidate, context: { slots: { agents: {
@@ -83,9 +114,14 @@ describe('widget setup fields share the typed-field owners', () => {
         const screen = await renderScreen(<WidgetSetupFieldRow entry={entry} row={{ kind: 'follows', label: 'This page', valueLabel: 'Claude' }}
             options={options} optionsStatus="ready" plainValue={undefined} phone={false}
             onChange={change => changes.push(change)} testID="setup.agents" />);
+        act(() => { screen.findByType(DropdownMenu).props.onSelect('own'); });
+        expect(changes).toEqual([{ kind: 'pin', value: ['claude'] }]);
+        await act(async () => screen.update(<WidgetSetupFieldRow entry={entry} row={{ kind: 'pinned', value: null, label: 'Claude' }}
+            options={options} optionsStatus="ready" plainValue={['claude']} phone={false}
+            onChange={change => changes.push(change)} testID="setup.agents" />));
         await screen.pressByTestIdAsync('setup.agents.control.trigger');
         await screen.pressByTestIdAsync('setup.agents.option.1');
-        expect(changes).toEqual([{ kind: 'pin', value: ['claude', 'codex'] }]);
+        expect(changes.at(-1)).toEqual({ kind: 'pin', value: ['claude', 'codex'] });
         await act(async () => screen.update(<WidgetSetupFieldRow entry={entry} row={{ kind: 'pinned', value: null, label: 'Claude · Codex' }}
             options={options} optionsStatus="ready" plainValue={['claude', 'codex']} phone={false}
             onChange={change => changes.push(change)} testID="setup.agents" />));
@@ -123,10 +159,9 @@ describe('widget setup fields share the typed-field owners', () => {
         const screen = await renderScreen(<WidgetSetupFieldRow entry={entry} row={{ kind: 'needed' }}
             options={[{ value: 'repo', label: 'Repo' }]} optionsStatus="ready" plainValue={undefined}
             phone={false} onChange={() => {}} testID="setup.prompt" />);
-        const trigger = screen.findByType(DropdownMenu).props.itemTrigger;
         const { Item } = await import('@/components/ui/lists/Item');
         expect(screen.findAllByType(Item).filter(row => row.props.title === 'Which repository?')).toHaveLength(1);
-        expect(trigger.itemProps.accessibilityLabel).toContain('Which repository?');
+        expect(screen.findByTestId('setup.prompt.trigger')!.props.accessibilityLabel).toContain('Which repository?');
         expect(entry.field.title).toBe('Repository');
     });
     it('offers the Usage Period in place as its named choices, never a dialog holding one dropdown (final-acceptance 4)', async () => {
@@ -265,12 +300,19 @@ describe('widget setup fields share the typed-field owners', () => {
         const render = async (row: Extract<React.ComponentProps<typeof WidgetSetupFieldRow>['row'], { kind: 'follows' }>) => {
             const screen = await renderScreen(<WidgetSetupFieldRow entry={entry} row={row} options={[]} optionsStatus="ready"
                 plainValue={undefined} phone={false} onChange={() => {}} testID="setup.agents" />);
-            const trigger = screen.findByType(DropdownMenu).props.itemTrigger;
-            return { detail: trigger.detailFormatter(), secondary: trigger.field.secondary ?? null };
+            return bindingText(screen, 'setup.agents');
         };
-        expect(await render({ kind: 'follows', label: 'This page', valueLabel: 'All agents' })).toEqual({ detail: 'This page', secondary: 'All agents' });
+        expect(await render({ kind: 'follows', label: 'This page', valueLabel: 'All agents' })).toEqual(['This page', 'All agents']);
         // A source whose value reads the same says it once.
-        expect(await render({ kind: 'follows', label: 'Agents', valueLabel: 'Agents' })).toEqual({ detail: 'Agents', secondary: null });
+        expect(await render({ kind: 'follows', label: 'Agents', valueLabel: 'Agents' })).toEqual(['Agents']);
+    });
+    it('moves a wide field beneath its label in a narrow row and keeps only a switch beside it (FA21 S1)', async () => {
+        const { Item } = await import('@/components/ui/lists/Item');
+        const layoutOf = async (field: WidgetSetupField['field']) => (await renderScreen(<WidgetSetupFieldRow entry={{ field }} row={{ kind: 'needed' }}
+            options={[]} optionsStatus="ready" plainValue={undefined} phone={false} onChange={() => {}} testID="setup.field" />)).findByType(Item).props.accessoryLayout;
+        // A text field is as wide as a select: in a pane column it goes beneath, never squeezing its label.
+        expect(await layoutOf({ path: 'directory', title: 'Directory on the serving machine', widget: 'text', required: true })).toBe('adaptive');
+        expect(await layoutOf({ path: 'hidden', title: 'Include hidden files', widget: 'boolean' })).toBe('inline');
     });
     it('offers two to four short choices as the shared field segmented control beside its title, not stacked tiles (F4 D-13)', async () => {
         const { HappierSegmentedChoice } = await import('@happier-dev/plugin-ui/presentation');

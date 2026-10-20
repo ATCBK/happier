@@ -1,3 +1,5 @@
+import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unexpectedProjectNativeAdapterResolution";
 import { unexpectedCaptureSourceResolution } from "@/plugins/testkit/unexpectedCaptureSourceResolution";
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
@@ -36,6 +38,16 @@ import {
 import { executeContributedAction } from '@/plugins/runtime/invocation/actions/executeContributedAction';
 import { createDaemonPluginActionExecutor } from '@/session/actions/createDaemonPluginActionExecutor';
 import { createClientActionMachineRpcExecutor } from '@/plugins/runtime/invocation/actions/clientActionMachineRpc';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { UiContributedActionExecuteRequestV1Schema } from '@happier-dev/protocol/plugins/actions/clientInvocationV1';
+import { pluginActionRequiresPresentUserIntent } from '@happier-dev/protocol/plugins/actions/invocation';
+import { CHANNELS_PLUGIN, CHANNELS_PROVIDER_POINT_REF, PLUGIN_MANIFEST as CHANNELS_MANIFEST } from '@happier-dev/plugins-channels/manifest';
+import { activate as activateTelegram, PLUGIN_MANIFEST as TELEGRAM_MANIFEST } from '@happier-dev/plugins-channel-telegram';
+import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
+import { loadCurrentBundledPluginLocatorResult } from '@/plugins/projection/registry/builtIn/locators';
+import { projectLoadedPluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
+import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
+import { channelsTargetedContributionServices } from '../../../../../../packages/plugins/channels/src/testkit/operationOnlyTargetedContributionsFixture';
 
 type SafeResolvedActionContribution = Omit<ResolvedActionContribution, 'definition'> & Readonly<{
   definition: Extract<ResolvedActionDefinition, Readonly<{ dangerLevel: 'safe' }>>;
@@ -177,23 +189,7 @@ function createRegistry(
 ): ResolvedContributionRegistry {
   const commands = options.commands ?? [];
   const tools = options.tools ?? [];
-  return {
-    uiViewsV2: [],
-    uiRenderersV2: [],
-    uiTranslationsV2: [],
-    agents: [],
-        actions: [action],
-    commands,
-    tools,
-    resources: [],
-    activationTargets: [],
-    actionsById: new Map([[action.definition.id, action]]),
-    commandsById: new Map(commands.map((command) => [command.definition.id, command])),
-    toolsById: new Map(tools.map((tool) => [tool.definition.id, tool])),
-        catalogEntriesById: {},
-    agentDefinitionsById: new Map(),
-        pluginDiagnosticsByPluginId: {},
-  };
+  return createResolvedContributionRegistry({ actions: [action], commands, tools });
 }
 
 function createAction(
@@ -298,22 +294,24 @@ function createToolContribution(
   };
 }
 
-function createExecutableRegistry(params: Readonly<{
+async function createExecutableRegistry(params: Readonly<{
   action: ResolvedActionContribution;
   commands?: readonly ResolvedCommandContribution[];
   tools?: readonly ResolvedToolContribution[];
   targetActionInvocations?: ReturnType<typeof createTargetActionInvocationRegistry>;
   readPluginOccurrenceId?: ResolvedExecutablePluginRuntimeRegistry['readPluginOccurrenceId'];
   resolveCurrentPluginExecutionOrigin?: ResolvedExecutablePluginRuntimeRegistry['resolveCurrentPluginExecutionOrigin'];
+  resolveCurrentPluginApprovalReplayPlacement?: ResolvedExecutablePluginRuntimeRegistry['resolveCurrentPluginApprovalReplayPlacement'];
   activateContributionsOnDemand: ResolvedExecutablePluginRuntimeRegistry['activateContributionsOnDemand'];
-}>): ResolvedExecutablePluginRuntimeRegistry {
+}>): Promise<ResolvedExecutablePluginRuntimeRegistry> {
   const contributes = createRegistry(params.action, {
     commands: params.commands,
     tools: params.tools,
   });
 
   return {
-    contributes: contributes as ResolvedExecutablePluginRuntimeRegistry['contributes'],
+        ...await resolveExecutablePluginRuntimeRegistry({ contributes: contributes, pluginIds: [] }),
+    contributes: contributes,
     generation: 7,
     targetActionInvocations: params.targetActionInvocations,
     readPluginOccurrenceId: params.readPluginOccurrenceId ?? readFixtureOccurrenceId,
@@ -325,6 +323,9 @@ function createExecutableRegistry(params: Readonly<{
     activateContributionsOnDemand: params.activateContributionsOnDemand,
     ...(params.resolveCurrentPluginExecutionOrigin
       ? { resolveCurrentPluginExecutionOrigin: params.resolveCurrentPluginExecutionOrigin }
+      : {}),
+    ...(params.resolveCurrentPluginApprovalReplayPlacement
+      ? { resolveCurrentPluginApprovalReplayPlacement: params.resolveCurrentPluginApprovalReplayPlacement }
       : {}),
     createAgentInvocationServices: async () => createUnavailablePluginServices(),
     resolveCaptureSource: unexpectedCaptureSourceResolution,
@@ -356,11 +357,11 @@ describe('executeContributedAction', () => {
         const activateContributionsOnDemand = vi.fn(async () => []);
 
         await expect(executeContributedAction({
-          runtimeRegistry: createExecutableRegistry({
+          runtimeRegistry: (await createExecutableRegistry({
             action,
             targetActionInvocations,
             activateContributionsOnDemand,
-          }),
+          })),
           actionId: action.definition.id,
           input: {},
           context: { surface: 'cli' },
@@ -424,11 +425,11 @@ describe('executeContributedAction', () => {
       const activateContributionsOnDemand = vi.fn(async () => []);
 
       await expect(executeContributedAction({
-        runtimeRegistry: createExecutableRegistry({
+        runtimeRegistry: (await createExecutableRegistry({
           action,
           targetActionInvocations,
           activateContributionsOnDemand,
-        }),
+        })),
         actionId: action.definition.id,
         input: {},
         context: { surface: 'api', invocationSurface: 'api' },
@@ -448,11 +449,11 @@ describe('executeContributedAction', () => {
       // live Account settings gate reads the `plugin` surface entry (not
       // disabled here) even though the `api` entry above is disabled.
       await expect(executeContributedAction({
-        runtimeRegistry: createExecutableRegistry({
+        runtimeRegistry: (await createExecutableRegistry({
           action,
           targetActionInvocations,
           activateContributionsOnDemand,
-        }),
+        })),
         actionId: action.definition.id,
         input: {},
         context: {
@@ -470,11 +471,11 @@ describe('executeContributedAction', () => {
       // live Account settings before the handler is entered.
       handler.mockClear();
       await expect(executeContributedAction({
-        runtimeRegistry: createExecutableRegistry({
+        runtimeRegistry: (await createExecutableRegistry({
           action,
           targetActionInvocations,
           activateContributionsOnDemand,
-        }),
+        })),
         actionId: action.definition.id,
         input: {},
         context: {
@@ -548,11 +549,11 @@ describe('executeContributedAction', () => {
       const targetActionInvocations = createTargetActionInvocationRegistry({
         actions: [createTargetActionRegistration({ action, handler })],
       });
-      const runtimeRegistry = createExecutableRegistry({
+      const runtimeRegistry = (await createExecutableRegistry({
         action,
         targetActionInvocations,
         activateContributionsOnDemand: async () => [],
-      });
+      }));
       const invoke = async (requestCurrentIntent?: (request: TargetActionCurrentIntentRequest) => Promise<
         Readonly<{ status: 'approved'; fingerprint: string } | { status: 'rejected' | 'unavailable'; code: string }>
       >) => await executeContributedAction({
@@ -628,6 +629,94 @@ describe('executeContributedAction', () => {
     }
   });
 
+  it.each(['agent', 'mcp', 'ui'] as const)('applies Off, Ask and Allowed to the real Channels setup remediation from %s', async (surface) => {
+    const previousSettings = process.env.HAPPIER_ACTIONS_SETTINGS_V1;
+    delete process.env.HAPPIER_ACTIONS_SETTINGS_V1;
+    const qualifiedId = 'happier.channels/actions/connection/setup-remediate-v1';
+    const publish = (settings: unknown, settingsVersion: number) => setActiveAccountSettingsSnapshot({
+      source: 'network', settings: accountSettingsParse({ actionsSettingsV1: settings }), settingsVersion,
+      loadedAtMs: settingsVersion, settingsSecretsReadKeys: [], scopeKey: 'account:channels-remediation-policy',
+    });
+    let repairs = 0;
+    const unavailable = createUnavailablePluginServices();
+    // Only Connected Account materialization and provider HTTP are substituted.
+    // The SDK host runs the real Channels registration and Telegram handler.
+    const telegram = await createPluginTestkit({ manifest: TELEGRAM_MANIFEST, module: { activate: activateTelegram }, services: {
+      connectedAccounts: { ...unavailable.connectedAccounts, materialize: async () => ({ kind: 'environment', env: { TELEGRAM_BOT_TOKEN: '123:fixture' } }) },
+      http: { ...unavailable.http, request: async ({ url }) => {
+        if (url.endsWith('/deleteWebhook')) repairs += 1;
+        return { status: 200, finalUrl: url, headers: { 'content-type': 'application/json' }, body: new TextEncoder().encode(JSON.stringify({ ok: true,
+          result: url.endsWith('/deleteWebhook') ? true : url.endsWith('/getWebhookInfo') ? { url: repairs === 0 ? 'https://previous.example.test/hook' : '', pending_update_count: 0 }
+            : { id: 123, is_bot: true, first_name: 'Fixture bot', username: 'FixtureBot' },
+        })) };
+      } },
+    } });
+    const core = await createPluginTestkit({ manifest: CHANNELS_MANIFEST, module: CHANNELS_PLUGIN, targetedContributionContributors: [telegram] });
+    try {
+      const snapshot = core.readTargetedContributionFixture(CHANNELS_PROVIDER_POINT_REF);
+      const contributor = snapshot.contributions[0]?.contributor;
+      if (!contributor) throw new Error('Expected the current Telegram provider contribution.');
+      const selection = { target: { pluginId: 'happier.channels', sourceCustody: snapshot.sourceCustody },
+        point: { pointId: CHANNELS_PROVIDER_POINT_REF.id, protocol: CHANNELS_PROVIDER_POINT_REF.protocol },
+        contributor: { pluginId: contributor.pluginId, contributionId: contributor.contributionId, sourceCustody: contributor.sourceCustody } };
+      const credentialRef = { service: { pluginId: TELEGRAM_MANIFEST.id, localId: 'telegram-bot' }, accountId: 'fixture-account' };
+      const services = channelsTargetedContributionServices(core);
+      const setup = { providerSelection: selection, providerSetupInput: { credentialRef }, credentialRef };
+      expect(await core.invokeAction('connection/prepare-v1', setup, { services, surface })).toEqual({ kind: 'requiresRemediation' });
+      const loaded = loadCurrentBundledPluginLocatorResult();
+      const projected = projectLoadedPluginContributes({ loadResult: {
+        loadedPlugins: loaded.loadedPlugins.filter(plugin => plugin.pluginId === CHANNELS_MANIFEST.id)
+          .map(plugin => ({ ...plugin, manifest: normalizePluginManifestV2(CHANNELS_MANIFEST) })), diagnosticsByPluginId: {},
+      }, provenance: 'first_party' });
+      const action = projected.actions?.find(entry => entry.definition.id === 'connection/setup-remediate-v1');
+      const prepareAction = projected.actions?.find(entry => entry.definition.id === 'connection/prepare-v1');
+      if (!action || !prepareAction) throw new Error('Expected the current Channels setup repair and prepare Action declarations.');
+      const providerRepair = TELEGRAM_MANIFEST.contributes.actions.find(entry => entry.id === 'telegram/remove-webhook');
+      if (!providerRepair) throw new Error('Expected the current provider repair Action declaration.');
+      // The nested provider role is a trusted-plugin invocation: its default
+      // does not add a second Ask, but explicit per-Action policy still wins.
+      expect(pluginActionRequiresPresentUserIntent(providerRepair, 'plugin')).toBe(false);
+      expect(pluginActionRequiresPresentUserIntent({ ...providerRepair, approvalRequiredByActionSettings: true }, 'plugin')).toBe(true);
+      expect(pluginActionRequiresPresentUserIntent({ ...providerRepair, approvalRequiredByActionSettings: false }, 'plugin')).toBe(false);
+      const targetActionInvocations = createTargetActionInvocationRegistry({ actions: [action, prepareAction].map(entry => {
+        const registration = createTargetActionRegistration({ action: entry, handler: async input => await core.invokeAction(entry.definition.id, input, { services, surface }) });
+        return { ...registration, definition: { ...registration.definition, dangerLevel: entry.definition.dangerLevel,
+          ...('confirmation' in entry.definition ? { confirmation: entry.definition.confirmation } : {}) } };
+      }) });
+      const runtimeRegistry = { ...await createExecutableRegistry({ action, targetActionInvocations,
+        activateContributionsOnDemand: async () => [],
+        resolveCurrentPluginApprovalReplayPlacement: async () => ({ serverId: 'channels-policy-home', machineId: 'channels-policy-machine' }),
+      }), contributes: createResolvedContributionRegistry({ actions: [action, prepareAction] }) };
+      const requestCurrentIntent = vi.fn(async (request: TargetActionCurrentIntentRequest) => {
+        expect(repairs).toBe(0);
+        return { status: 'approved' as const, fingerprint: request.fingerprint };
+      });
+      const invoke = () => executeContributedAction({ runtimeRegistry, actionId: action.definition.id,
+        input: { providerSelection: selection, providerRemediationInput: { credentialRef }, credentialRef }, requestCurrentIntent,
+        context: { surface },
+      });
+      const prepare = () => executeContributedAction({ runtimeRegistry, actionId: prepareAction.definition.id, input: setup, requestCurrentIntent, context: { surface } });
+      publish({ v: 1, actions: { [qualifiedId]: { disabledSurfaces: [surface] } } }, 1);
+      expect(await invoke()).toMatchObject({ result: { ok: false, errorCode: 'plugin_action_unavailable', actionHandlerInvocation: 'notStarted' } });
+      expect(repairs).toBe(0);
+      expect(requestCurrentIntent).not.toHaveBeenCalled();
+      expect(await prepare()).toMatchObject({ result: { ok: true, result: { kind: 'requiresRemediation' } } });
+      publish({ v: 1, actions: { [qualifiedId]: { approvalRequiredSurfaces: [surface] } } }, 2);
+      expect(await invoke()).toMatchObject({ result: { ok: true, result: { kind: 'remediated' } } });
+      expect(repairs).toBe(1);
+      expect(requestCurrentIntent).toHaveBeenCalledOnce();
+      publish({ v: 1, actions: {}, approvalWaivedSurfaces: { [qualifiedId]: [surface] } }, 3);
+      expect(await invoke()).toMatchObject({ result: { ok: true, result: { kind: 'remediated' } } });
+      expect(repairs).toBe(2);
+      expect(requestCurrentIntent).toHaveBeenCalledOnce();
+      expect(await prepare()).toMatchObject({ result: { ok: true, result: { kind: 'ready' } } });
+    } finally {
+      await core.dispose(); await telegram.dispose(); resetActiveAccountSettingsSnapshotForTests();
+      if (previousSettings === undefined) delete process.env.HAPPIER_ACTIONS_SETTINGS_V1;
+      else process.env.HAPPIER_ACTIONS_SETTINGS_V1 = previousSettings;
+    }
+  });
+
   it('requires current intent for a safe contributed Action when Action settings require approval', async () => {
     const previousSettings = process.env.HAPPIER_ACTIONS_SETTINGS_V1;
     process.env.HAPPIER_ACTIONS_SETTINGS_V1 = JSON.stringify({
@@ -651,11 +740,12 @@ describe('executeContributedAction', () => {
       }));
 
       const invocation = executeContributedAction({
-        runtimeRegistry: createExecutableRegistry({
+        runtimeRegistry: (await createExecutableRegistry({
           action,
           targetActionInvocations,
           activateContributionsOnDemand: async () => [],
-        }),
+          resolveCurrentPluginApprovalReplayPlacement: async () => ({ serverId: 'home-approval', machineId: 'machine-approval' }),
+        })),
         actionId: action.definition.id,
         input: {},
         requestCurrentIntent,
@@ -708,11 +798,11 @@ describe('executeContributedAction', () => {
     });
 
     await expect(executeContributedAction({
-      runtimeRegistry: createExecutableRegistry({
+      runtimeRegistry: (await createExecutableRegistry({
         action,
         targetActionInvocations,
         activateContributionsOnDemand: async () => [],
-      }),
+      })),
       actionId: action.definition.id,
       input: { destination: 'preview' },
       context: { surface: 'ui' },
@@ -731,6 +821,7 @@ describe('executeContributedAction', () => {
 
   it.each(['agent', 'mcp', 'cli'] as const)('executes a client-target Action on the answering UI with the real %s surface', async (surface) => {
     const requests: unknown[] = [];
+    let advertisedMethod: string = RPC_METHODS.UI_CONTRIBUTED_ACTION_EXECUTE;
     const fixture = await createAuthoredAdmittedPluginRuntimeFixture({
       plugins: [{
         manifest: createPluginManifestV2Fixture({
@@ -745,9 +836,9 @@ describe('executeContributedAction', () => {
       }],
       runtimeOptions: {
       executeClientAction: createClientActionMachineRpcExecutor(() => ({
-        hasConnectedClientRpcHandler: () => true,
+        hasConnectedClientRpcHandler: (method) => method === advertisedMethod,
         callConnectedClientRpc: async (_method, request, options) => {
-          requests.push(request);
+          requests.push(UiContributedActionExecuteRequestV1Schema.parse(request));
           options.onIssued();
           return { ok: true, result: { ok: true, result: { handledBy: 'client' } } };
         },
@@ -764,7 +855,10 @@ describe('executeContributedAction', () => {
       }),
     });
     await expect(executor.execute('action.invoke', { action: { pluginId: 'acme.action.plugin', localId: 'open-client' }, input: { destination: 'preview' } }, {
-      surface, defaultSessionId: 'session-current', requiredContributedActionDangerLevel: 'safe',
+      surface, authority: 'account_automation', actionCaller: { kind: 'host' },
+      serverId: 'home-current', executionRunTargetMachineId: 'machine-current',
+      actionRequestId: 'client-action-request', defaultSessionId: 'session-current',
+      requiredContributedActionDangerLevel: 'safe',
     })).resolves.toEqual({ ok: true, result: { handledBy: 'client' } });
     if (!fixture.registry.readPluginOccurrenceId) throw new Error('Expected admitted plugin occurrence reader');
     expect(requests).toEqual([{
@@ -773,6 +867,15 @@ describe('executeContributedAction', () => {
       expectedContributorOccurrenceId: fixture.registry.readPluginOccurrenceId('acme.action.plugin'),
       defaultSessionId: 'session-current', requiredDangerLevel: 'safe',
     }]);
+    // Advertising only the built-in client method must not stand in for the
+    // contributed-Action receiver. No handler is entered on a mis-bound route.
+    advertisedMethod = RPC_METHODS.UI_ACTION_EXECUTE;
+    await expect(executor.execute('action.invoke', {
+      action: { pluginId: 'acme.action.plugin', localId: 'open-client' }, input: {},
+    }, { surface, serverId: 'home-current', actionCaller: { kind: 'host' } })).resolves.toMatchObject({
+      ok: false, errorCode: 'plugin_action_client_target_unavailable',
+    });
+    expect(requests).toHaveLength(1);
     } finally {
       await fixture.dispose();
     }
@@ -787,7 +890,7 @@ describe('executeContributedAction', () => {
       },
     };
     const runtimeRegistry = {
-      ...createExecutableRegistry({ action, activateContributionsOnDemand: async () => [] }),
+      ...(await createExecutableRegistry({ action, activateContributionsOnDemand: async () => [] })),
       executeClientAction: async () => { throw new Error('A refused caller must not issue a client Action'); },
     };
     expect(await executeContributedAction({
@@ -982,11 +1085,11 @@ describe('executeContributedAction', () => {
       targetActionInvocations.refresh();
       return [];
     });
-    const baseRegistry = createExecutableRegistry({
+    const baseRegistry = (await createExecutableRegistry({
       action: alpha,
       targetActionInvocations,
       activateContributionsOnDemand,
-    });
+    }));
     const activeRuntimeRegistry: ResolvedExecutablePluginRuntimeRegistry = {
       ...baseRegistry,
       contributes: {
@@ -1077,11 +1180,11 @@ describe('executeContributedAction', () => {
     // press is refused before the handler is entered instead of riding the
     // plugin declaration.
     await expect(executeContributedAction({
-      runtimeRegistry: createExecutableRegistry({
+      runtimeRegistry: (await createExecutableRegistry({
         action,
         targetActionInvocations,
         activateContributionsOnDemand: async () => [],
-      }),
+      })),
       actionId: action.definition.id,
       input: {},
       context: {
@@ -1115,7 +1218,7 @@ describe('executeContributedAction', () => {
     expect(target).not.toHaveBeenCalled();
   });
 
-  it.each(['materialization', 'source'] as const)('returns the %s target execution origin only after rereading it at settlement', async (kind) => {
+  it.each(['materialization', 'source', 'bundled'] as const)('returns the %s target execution origin only after rereading it at settlement', async (kind) => {
     const externalAction = createAction('/unused/daemon.mjs', 'publish');
     const action: ResolvedActionContribution = {
       ...externalAction,
@@ -1137,7 +1240,9 @@ describe('executeContributedAction', () => {
         materializationId: 'materialization-target-current',
       }) } : { sourceRef: Object.freeze({
         pluginId: 'acme.target', machineId: 'machine-target',
-        sourceCustody: { kind: 'development' as const, registeredRootId: 'target-source-root' },
+        sourceCustody: kind === 'bundled'
+          ? { kind: 'bundled_first_party' as const, packagedRuntime: { kind: 'cli_version_root' as const, versionRootId: 'cli-current' } }
+          : { kind: 'development' as const, registeredRootId: 'target-source-root' },
       }) }),
     });
     const resolveCurrentPluginExecutionOrigin = vi.fn(async (pluginId: string) => (
@@ -1150,15 +1255,16 @@ describe('executeContributedAction', () => {
     const signal = new AbortController().signal;
 
     await expect(executeContributedAction({
-      runtimeRegistry: createExecutableRegistry({
+      runtimeRegistry: (await createExecutableRegistry({
         action,
         targetActionInvocations,
         resolveCurrentPluginExecutionOrigin,
         activateContributionsOnDemand: async () => [],
-      }),
+      })),
       actionId: action.definition.id,
       input: { title: 'Ready' },
       captureExecutionOrigin: true,
+      expectedExecutionRouting: { serverIdentityId: 'srv_action_origin_fixture', machineId: 'machine-target', pluginId: 'acme.target' },
       context: {
         surface: 'plugin',
         signal,
@@ -1188,7 +1294,14 @@ describe('executeContributedAction', () => {
     expect(resolveCurrentPluginExecutionOrigin).toHaveBeenNthCalledWith(2, 'acme.target', signal);
   });
 
-  it('rejects a mismatched expected target origin before the handler without replacement disclosure', async () => {
+  it.each([
+    { expectedExecutionOrigin: { serverIdentityId: 'srv_action_origin_fixture', materializationRef: {
+      pluginId: 'acme.target', machineId: 'machine-target', materializationId: 'materialization-target-before',
+    } } },
+    { expectedExecutionRouting: { serverIdentityId: 'srv_other_home', machineId: 'machine-target', pluginId: 'acme.target' } },
+    { expectedExecutionRouting: { serverIdentityId: 'srv_action_origin_fixture', machineId: 'machine-other', pluginId: 'acme.target' } },
+    { expectedExecutionRouting: { serverIdentityId: 'srv_action_origin_fixture', machineId: 'machine-target', pluginId: 'acme.other' } },
+  ] as const)('rejects a mismatched expected target before the handler without replacement disclosure (%j)', async (expectation) => {
     const externalAction = createAction('/unused/daemon.mjs', 'publish');
     const action: ResolvedActionContribution = {
       ...externalAction,
@@ -1202,14 +1315,6 @@ describe('executeContributedAction', () => {
         contributionSurfaces: ['plugin'],
       },
     };
-    const expectedExecutionOrigin = Object.freeze({
-      serverIdentityId: 'srv_action_origin_fixture',
-      materializationRef: Object.freeze({
-        pluginId: 'acme.target',
-        machineId: 'machine-target',
-        materializationId: 'materialization-target-before',
-      }),
-    });
     const resolveCurrentPluginExecutionOrigin = vi.fn(async (pluginId: string) => (
       pluginId === 'acme.target'
         ? Object.freeze({
@@ -1228,15 +1333,15 @@ describe('executeContributedAction', () => {
     });
 
     const attempt = await executeContributedAction({
-      runtimeRegistry: createExecutableRegistry({
+      runtimeRegistry: (await createExecutableRegistry({
         action,
         targetActionInvocations,
         resolveCurrentPluginExecutionOrigin,
         activateContributionsOnDemand: async () => [],
-      }),
+      })),
       actionId: action.definition.id,
       input: { title: 'Ready' },
-      expectedExecutionOrigin,
+      ...expectation,
       context: {
         surface: 'plugin',
         caller: {
@@ -1288,11 +1393,11 @@ describe('executeContributedAction', () => {
     });
 
     await expect(executeContributedAction({
-      runtimeRegistry: createExecutableRegistry({
+      runtimeRegistry: (await createExecutableRegistry({
         action,
         targetActionInvocations,
         activateContributionsOnDemand: async () => [],
-      }),
+      })),
       actionId: action.definition.id,
       input: { title: 'Ready' },
       captureExecutionOrigin: true,
@@ -1358,12 +1463,12 @@ describe('executeContributedAction', () => {
     });
 
     const attempt = await executeContributedAction({
-      runtimeRegistry: createExecutableRegistry({
+      runtimeRegistry: (await createExecutableRegistry({
         action,
         targetActionInvocations,
         resolveCurrentPluginExecutionOrigin,
         activateContributionsOnDemand: async () => [],
-      }),
+      })),
       actionId: action.definition.id,
       input: { title: 'Ready' },
       captureExecutionOrigin: true,
@@ -1443,12 +1548,12 @@ describe('executeContributedAction', () => {
     });
 
     const attempt = await executeContributedAction({
-      runtimeRegistry: createExecutableRegistry({
+      runtimeRegistry: (await createExecutableRegistry({
         action,
         targetActionInvocations,
         resolveCurrentPluginExecutionOrigin,
         activateContributionsOnDemand: async () => [],
-      }),
+      })),
       actionId: action.definition.id,
       input: { title: 'Ready' },
       captureExecutionOrigin: true,
@@ -1517,12 +1622,12 @@ describe('executeContributedAction', () => {
     });
 
     const attempt = await executeContributedAction({
-      runtimeRegistry: createExecutableRegistry({
+      runtimeRegistry: (await createExecutableRegistry({
         action,
         targetActionInvocations,
         resolveCurrentPluginExecutionOrigin,
         activateContributionsOnDemand: async () => [],
-      }),
+      })),
       actionId: action.definition.id,
       input: { title: 'Ready' },
       context: {
@@ -1579,7 +1684,7 @@ describe('executeContributedAction', () => {
         createTargetActionRegistration({ action: unrelatedAction, handler: unrelatedHandler }),
       ],
     });
-    const baseRuntimeRegistry = createExecutableRegistry({
+    const baseRuntimeRegistry = (await createExecutableRegistry({
       action: replacementAction,
       targetActionInvocations,
       readPluginOccurrenceId: (pluginId) => ({
@@ -1587,7 +1692,7 @@ describe('executeContributedAction', () => {
         'acme.unrelated': 'occurrence-b-stable',
       }[pluginId] as never ?? null),
       activateContributionsOnDemand: async () => [],
-    });
+    }));
     const runtimeRegistry: ResolvedExecutablePluginRuntimeRegistry = {
       ...baseRuntimeRegistry,
       contributes: {
@@ -1683,14 +1788,14 @@ describe('executeContributedAction', () => {
     const targetActionInvocations = createTargetActionInvocationRegistry({
       actions: [createTargetActionRegistration({ action, handler })],
     });
-    const runtimeRegistry = createExecutableRegistry({
+    const runtimeRegistry = (await createExecutableRegistry({
       action,
       targetActionInvocations,
       readPluginOccurrenceId: (pluginId) => (
         pluginId === 'acme.contributor' ? occurrenceId as never : null
       ),
       activateContributionsOnDemand: async () => [],
-    });
+    }));
 
     const request = {
       runtimeRegistry,
@@ -1745,14 +1850,14 @@ describe('executeContributedAction', () => {
       actions: [createTargetActionRegistration({ action, handler })],
     });
     const runtimeRegistry = {
-      ...createExecutableRegistry({
+      ...(await createExecutableRegistry({
         action,
         targetActionInvocations,
         readPluginOccurrenceId: (pluginId) => (
           pluginId === 'acme.contributor' ? 'occurrence-a' as never : null
         ),
         activateContributionsOnDemand: async () => [],
-      }),
+      })),
       resolveCurrentPluginMaterializationRef: (pluginId: string) => (
         pluginId === 'acme.contributor'
           ? Object.freeze({
@@ -1830,11 +1935,11 @@ describe('executeContributedAction', () => {
         handler: target,
       }],
     });
-    const baseRegistry = createExecutableRegistry({
+    const baseRegistry = (await createExecutableRegistry({
       action,
       targetActionInvocations,
       activateContributionsOnDemand: async () => [],
-    });
+    }));
     const registry: ResolvedExecutablePluginRuntimeRegistry = {
       ...baseRegistry,
       contributes: {
@@ -1883,11 +1988,11 @@ describe('executeContributedAction', () => {
     const targetActionInvocations = createTargetActionInvocationRegistry({
       actions: [createTargetActionRegistration({ action, handler: async () => null })],
     });
-    const registry = createExecutableRegistry({
+    const registry = (await createExecutableRegistry({
       action,
       targetActionInvocations,
       activateContributionsOnDemand: async () => [],
-    });
+    }));
 
     await expect(executeContributedAction({
       runtimeRegistry: registry,
@@ -1913,11 +2018,11 @@ describe('executeContributedAction', () => {
     const targetActionInvocations = createTargetActionInvocationRegistry({
       actions: [createTargetActionRegistration({ action, handler: target })],
     });
-    const registry = createExecutableRegistry({
+    const registry = (await createExecutableRegistry({
       action,
       targetActionInvocations,
       activateContributionsOnDemand: async () => [],
-    });
+    }));
 
     await expect(executeContributedAction({
       runtimeRegistry: registry,
@@ -1977,11 +2082,11 @@ describe('executeContributedAction', () => {
     const targetActionInvocations = createTargetActionInvocationRegistry({
       actions: [createTargetActionRegistration({ action, handler })],
     });
-    const registry = createExecutableRegistry({
+    const registry = (await createExecutableRegistry({
       action,
       targetActionInvocations,
       activateContributionsOnDemand: async () => [],
-    });
+    }));
 
     await expect(executeContributedAction({
       runtimeRegistry: registry,
@@ -2010,9 +2115,9 @@ describe('executeContributedAction', () => {
     const targetActionInvocations = createTargetActionInvocationRegistry({
       actions: [], expectedActions: [{ pluginId: 'acme.action.plugin', localId: 'run' }],
     });
-    const registry = createExecutableRegistry({
+    const registry = (await createExecutableRegistry({
       action, targetActionInvocations, activateContributionsOnDemand,
-    });
+    }));
 
     await expect(executeContributedAction({
       runtimeRegistry: registry, actionId: 'run', input: {}, context: { surface: 'cli' },
@@ -2099,7 +2204,7 @@ describe('executeContributedAction', () => {
       expectedActions: [{ pluginId: 'acme.action.plugin', localId: action.definition.id }],
       readActions: () => targetActions,
     });
-    const registry = createExecutableRegistry({
+    const registry = (await createExecutableRegistry({
       action,
       commands: [createCommandContribution(action, 'acme.command.start')],
       targetActionInvocations,
@@ -2117,7 +2222,7 @@ describe('executeContributedAction', () => {
         targetActionInvocations.refresh();
         return [{ pluginId: action.pluginId ?? '', diagnostics: [] }];
       },
-    });
+    }));
 
     const result = await executeContributedAction({
       runtimeRegistry: registry,
@@ -2158,7 +2263,7 @@ describe('executeContributedAction', () => {
       expectedActions: [{ pluginId: 'acme.action.plugin', localId: action.definition.id }],
       readActions: () => targetActions,
     });
-    const registry = createExecutableRegistry({
+    const registry = (await createExecutableRegistry({
       action,
       tools: [createToolContribution(action, 'acme.tool.inspect')],
       targetActionInvocations,
@@ -2176,7 +2281,7 @@ describe('executeContributedAction', () => {
         targetActionInvocations.refresh();
         return [{ pluginId: action.pluginId ?? '', diagnostics: [] }];
       },
-    });
+    }));
 
     const result = await executeContributedAction({
       runtimeRegistry: registry,
@@ -2215,7 +2320,7 @@ describe('executeContributedAction', () => {
       actions: [],
       expectedActions: [{ pluginId: 'acme.action.plugin', localId: action.definition.id }],
     });
-    const registry = createExecutableRegistry({
+    const registry = (await createExecutableRegistry({
       action,
       targetActionInvocations,
       activateContributionsOnDemand: async () => [{
@@ -2225,7 +2330,7 @@ describe('executeContributedAction', () => {
           message: 'Activation failed for Acme',
         }],
       }],
-    });
+    }));
 
     const result = await executeContributedAction({
       runtimeRegistry: registry,
@@ -2263,7 +2368,7 @@ describe('executeContributedAction', () => {
     const targetActionInvocations = createTargetActionInvocationRegistry({
       actions: [createTargetActionRegistration({ action, handler })],
     });
-    const registry = createExecutableRegistry({ action, targetActionInvocations, activateContributionsOnDemand });
+    const registry = (await createExecutableRegistry({ action, targetActionInvocations, activateContributionsOnDemand }));
 
     const result = await executeContributedAction({
       runtimeRegistry: registry,
@@ -2358,11 +2463,11 @@ describe('executeContributedAction', () => {
     });
 
     const result = await executeContributedAction({
-      runtimeRegistry: createExecutableRegistry({
+      runtimeRegistry: (await createExecutableRegistry({
         action,
         targetActionInvocations,
         activateContributionsOnDemand: async () => [],
-      }),
+      })),
       actionId: action.definition.id,
       input: { selection },
       context: { surface: 'cli' },
@@ -2401,11 +2506,11 @@ describe('executeContributedAction', () => {
     });
 
     const result = await executeContributedAction({
-      runtimeRegistry: createExecutableRegistry({
+      runtimeRegistry: (await createExecutableRegistry({
         action,
         targetActionInvocations,
         activateContributionsOnDemand: async () => [],
-      }),
+      })),
       actionId: action.definition.id,
       input: { selection },
       context: { surface: 'cli' },

@@ -190,11 +190,8 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
             // One press offers the actions this row
             // actually has, as explicit choices. The
             // chooser's body describes reissuing
-            // whenever reissue is offered, so the one
-            // irreversible choice states its own
-            // consequence in its own confirmation
-            // below — the same two step the Team logo
-            // and member removals already use. "Send again" on an undelivered email is
+            // whenever reissue is offered. The selected
+            // Action owns confirmation. "Send again" on an undelivered email is
             // that same retry, asked for directly.
             // Widened on purpose: the chooser's callbacks assign it, which control flow cannot see.
             let chosen = preset as 'revoke' | 'retry' | 'change_email' | null;
@@ -221,12 +218,6 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
                 );
             }
             if (chosen === null) return;
-
-            if (chosen === 'revoke' && !await Modal.confirm(
-                t('teams.invitations.revokeTitle'),
-                t('teams.invitations.revokeBody'),
-                { confirmText: t('teams.invitations.revoke'), destructive: true },
-            )) return;
 
             setBusy(true);
             setNotice(null);
@@ -510,7 +501,6 @@ const InvitationsList = React.memo(function InvitationsList(props: Readonly<{
                 ...(Platform.OS === 'web' ? { minHeight: 0 } : {}),
             }}
             contentContainerStyle={{ paddingBottom: Platform.OS === 'ios' ? 34 : 16 }}
-            backendPreference="auto"
             initialNumToRender={6}
             maxToRenderPerBatch={4}
             windowSize={7}

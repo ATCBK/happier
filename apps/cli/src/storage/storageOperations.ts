@@ -5,7 +5,7 @@ import {
     type MachineStorageDeleteNowInputV1, type MachineStorageTrashEmptyInputV1, type MachineStorageTrashRestoreInputV1,
     type MachineStorageWorktreesListInputV1, type MachineStorageSuggestionsListInputV1,
     type MachineStorageSuggestionsDeclineInputV1, type PileItemRefV1, type StorageItemV1, type HappierStorageSummaryV1,
-    type DiskNodeV1, type StorageItemRefV1, type PileReviewV1,
+    type DiskNodeV1, type StorageItemRefV1, type PileReviewV1, type TrashEntryV1,
 } from '@happier-dev/protocol/storage/storageV1';
 import { storagePathsEqual as canonicalAbsolutePathsEqual, storagePathContains,
     physicalStoragePathWithoutFollowingLeaf as physicalPathWithoutFollowingLeaf } from './storagePath';
@@ -19,14 +19,24 @@ import { measureNativeDisk } from './measure/nativeDiskMeasure';
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { createTrashStore, resolveTrashOsUserId, type TrashStore } from './trash/trashStore';
 import { readStoragePathIdentity } from './trash/removeStoragePath';
-import { classifyPath, type StorageProtectionFacts } from './protection/protectedPaths';
+import { classifyPath, classifyPaths, type StoragePathClassification, type StorageProtectionFacts } from './protection/protectedPaths';
 import { createStorageSuggestions, recognizeStorageCandidate } from './suggestions/recognizers';
 import { readStorageIgnoredPaths } from './worktrees/readStorageIgnoredPaths';
-import type { StorageCategoryVerdict, StorageCleanupItem } from './categories/types';
+import type { SizedStorageCategoryItem, StorageCategoryVerdict, StorageCleanupItem } from './categories/types';
 
 type ActorOptions = Readonly<{ actor: StorageOperationActor; signal?: AbortSignal }>;
 type Catalog = ReturnType<typeof createStorageCategoryCatalog>;
-type SizedItem = StorageItemV1 & Pick<StorageCategoryItem, 'sessionId' | 'projectIds'>;
+type SizedItem = SizedStorageCategoryItem;
+
+function classifiedItemVerdict(item: StorageCleanupItem, classification: StoragePathClassification): StorageCategoryVerdict {
+    const verdict = item.verdict === 'forbidden' || classification.tier === 'forbidden' ? 'forbidden'
+        : item.verdict === 'keep' || classification.tier === 'keep' ? 'keep'
+        : item.verdict === 'check' ? 'check' : classification.tier === 'caution' ? 'caution' : item.verdict;
+    return { verdict, reason: classification.tier === verdict ? classification.reason! : item.reason,
+        collectable: item.collectable && verdict !== 'forbidden',
+        ...(classification.loses === undefined && item.loses === undefined ? {}
+            : { loses: [...(item.loses ?? []), ...(classification.loses ?? [])] }) };
+}
 
 /** The lazy service composes the catalog, pile and Trash owners; Actions do not own cleanup policy. */
 export function createStorageOperations(input: Readonly<{
@@ -52,9 +62,9 @@ export function createStorageOperations(input: Readonly<{
             && contains(parent.path, child.path)));
     }
     async function assertActor(actor: StorageOperationActor) { assertActive(); await actor.assertCurrentAuthority(); assertActive(); }
-    async function protectionSnapshot(paths: readonly string[] = []) {
+    async function protectionSnapshot(paths: readonly string[] = [], current?: readonly StorageCategoryItem[]) {
         const [projects, use, discovered, environment] = await Promise.all([
-            deps.catalog.readProjects?.(), deps.catalog.readInUsePaths?.(), catalog.discover(paths), deps.readStorageProtectionFacts?.(),
+            deps.catalog.readProjects?.(), deps.catalog.readInUsePaths?.(), catalog.discover(paths, current), deps.readStorageProtectionFacts?.(),
         ]);
         const trashRoots = trash ? (await (await trash).roots()).map(root => root.path) : [];
         const facts: StorageProtectionFacts = { ...environment, homeDir: deps.homeDir ?? homedir(),
@@ -73,13 +83,7 @@ export function createStorageOperations(input: Readonly<{
     async function classifyItem(item: StorageCleanupItem, path = item.path, facts?: StorageProtectionFacts): Promise<StorageCategoryVerdict> {
         const classification = await classifyPath(path, { ...(facts ?? await protectionFacts()),
             ...(item.categoryId === undefined ? {} : { managedItemPath: item.path }) });
-        const verdict = item.verdict === 'forbidden' || classification.tier === 'forbidden' ? 'forbidden'
-            : item.verdict === 'keep' || classification.tier === 'keep' ? 'keep'
-            : item.verdict === 'check' ? 'check' : classification.tier === 'caution' ? 'caution' : item.verdict;
-        return { verdict, reason: classification.tier === verdict ? classification.reason! : item.reason,
-            collectable: item.collectable && verdict !== 'forbidden',
-            ...(classification.loses === undefined && item.loses === undefined ? {}
-                : { loses: [...(item.loses ?? []), ...(classification.loses ?? [])] }) };
+        return classifiedItemVerdict(item, classification);
     }
     function getTrash(): Promise<TrashStore> {
         assertActive();
@@ -129,6 +133,7 @@ export function createStorageOperations(input: Readonly<{
         if (!indexed || !indexed.complete || indexed.node.nodeId !== ref.itemId
             || !canonicalAbsolutePathsEqual(await physicalPathWithoutFollowingLeaf(indexed.path), physical)) return null;
         discovered = await catalog.discover([physical], discovered);
+        if (snapshot) snapshot.discovered = discovered;
         await assertActor(actor);
         const exact = discovered.find(item => canonicalAbsolutePathsEqual(item.path, physical));
         if (exact) return { item: { ...exact, itemId: ref.itemId, canonicalItemId: exact.itemId },
@@ -150,15 +155,17 @@ export function createStorageOperations(input: Readonly<{
             verdict: recognized?.verdict ?? 'caution', reason: recognized?.reason ?? { code: 'not_rebuildable' },
             evidence: ['trusted_disk_index', ...(recognized?.evidence ?? [])], collectable: true,
             ...(worktree && worktree.verdict !== 'safe' ? { verdict: worktree.verdict, reason: worktree.reason, loses: worktree.loses } : {}) };
-        return { item: { ...item, ...foldStorageDescendantVerdicts(item, children) }, retirementChildren: children };
+        return { item: { ...item, ownVerdict: item, ...foldStorageDescendantVerdicts(item, children) }, retirementChildren: children };
     }
-    async function reviewDeps(actor: StorageOperationActor): Promise<PileReviewDeps> {
+    async function reviewDeps(actor: StorageOperationActor, readSnapshot?: Awaited<ReturnType<typeof protectionSnapshot>>): Promise<PileReviewDeps> {
         const store = await getTrash();
-        return { resolve: ref => resolveRef(ref, actor), measure: request => measureNativeDisk(request, { signal: lifecycle.signal }),
+        return { resolve: ref => resolveRef(ref, actor, readSnapshot), measure: request => measureNativeDisk(request, { signal: lifecycle.signal }),
             cleanupLimitation: (path, items) => catalog.cleanupLimitation(path, items),
             freshFacts: async () => {
                 await assertActor(actor);
-                const snapshot = await protectionSnapshot();
+                // Read-only consumers share their operation's facts. Apply never supplies
+                // this snapshot, so each execution/effect recheck inspects current SCM.
+                const snapshot = readSnapshot ?? await protectionSnapshot();
                 await assertActor(actor);
                 return { resolve: (ref: PileItemRefV1) => resolveRef(ref, actor, snapshot),
                     classify: async (path: string, item: StorageCleanupItem) => classifyItem(item, path, snapshot.facts),
@@ -172,21 +179,23 @@ export function createStorageOperations(input: Readonly<{
             },
         };
     }
-    async function pileProjection(actor: StorageOperationActor) {
+    async function pileProjection(actor: StorageOperationActor, readSnapshot?: Awaited<ReturnType<typeof protectionSnapshot>>) {
         const state = await pile.get(actor.accountId);
         if (state.droppedSinceLastView.length) input.invalidate();
+        const snapshot = readSnapshot ?? (state.items.length
+            ? await protectionSnapshot(actor.sessionIds === undefined ? state.items.map(ref => ref.path) : []) : undefined);
         const visible: PileItemRefV1[] = [];
         const bindings: StorageCleanupItem[] = [];
         for (const ref of state.items) {
             try {
-                const resolved = await resolveRef(ref, actor);
+                const resolved = await resolveRef(ref, actor, snapshot);
                 if (resolved && permitted(resolved.item, actor)) { visible.push({ ...ref, title: resolved.item.title }); bindings.push(resolved.item); }
             }
             catch (error) {
                 if (!(error !== null && typeof error === 'object' && 'code' in error && error.code === 'unauthorized')) throw error;
             }
         }
-        const review = visible.length ? await reviewPile(visible, await reviewDeps(actor)) : null;
+        const review = visible.length ? await reviewPile(visible, await reviewDeps(actor, snapshot)) : null;
         await assertActor(actor);
         // Native review can await OS/SCM facts while current Session custody changes.
         // Never disclose the earlier projection after its private scope proof expired.
@@ -199,13 +208,16 @@ export function createStorageOperations(input: Readonly<{
                 droppedSinceLastView: actor.sessionIds === undefined ? state.droppedSinceLastView : [] } };
         return { result, review };
     }
-    async function pileResult(actor: StorageOperationActor) { return (await pileProjection(actor)).result; }
+    async function pileResult(actor: StorageOperationActor, snapshot?: Awaited<ReturnType<typeof protectionSnapshot>>) {
+        return (await pileProjection(actor, snapshot)).result;
+    }
     async function suggestions(actor?: StorageOperationActor, request: Pick<MachineStorageSuggestionsListInputV1, 'group' | 'quickestForVolume'> = {},
         suppliedItems?: readonly SizedItem[]) {
         const owner = createStorageSuggestions({
             readCatalogItems: async () => (suppliedItems ?? await input.readSizedItems())
                 .filter(item => !actor || permitted(item, actor)).map(publicStorageItem),
-            readProtectionFacts: protectionFacts, now: deps.nowMs, suggestUnusedAfterDays: () => policy().suggestUnusedAfterDays,
+            readProtectionFacts: async () => (await protectionSnapshot([], suppliedItems)).facts,
+            now: deps.nowMs, suggestUnusedAfterDays: () => policy().suggestUnusedAfterDays,
             readCompletedScan: !actor || actor.sessionIds === undefined ? deps.readCompletedStorageScan : undefined,
             readIgnoredPaths: repositoryRoot => readStorageIgnoredPaths({ repositoryRoot, happyHomeDir: deps.catalog.happyHomeDir, registry: deps.scmRegistry }),
             volumeForPath: path => deps.readVolumes().filter(volume => contains(volume.mount, path)).sort((a, b) => b.mount.length - a.mount.length)[0]?.id,
@@ -216,16 +228,24 @@ export function createStorageOperations(input: Readonly<{
         });
         return owner.list({ callerKind: actor?.kind ?? 'person', ...request });
     }
+    async function entrySessionId(entry: TrashEntryV1, ownerData?: JsonValue): Promise<string | undefined> {
+        if (entry.categoryId !== 'sessionFolders' || ownerData === undefined) return undefined;
+        return (await catalog.adapterForEntry(entry.categoryId, ownerData)).sessionId;
+    }
+    function permittedEntry(entry: TrashEntryV1, sessionId: string | undefined, actor: StorageOperationActor): boolean {
+        return actor.sessionIds === undefined || entry.categoryId === 'sessionFolders' && entry.movedBy.accountId === actor.accountId
+            && sessionId !== undefined && actor.sessionIds.has(sessionId);
+    }
     function entryAuthority(actor: StorageOperationActor) {
-        return async (entry: Readonly<{ categoryId?: StorageCategoryItem['categoryId']; movedBy: Readonly<{ accountId: string }> }>, ownerData?: JsonValue) => {
+        return async (entry: TrashEntryV1, ownerData?: JsonValue) => {
             await assertActor(actor);
             if (actor.sessionIds === undefined) return;
             if (entry.categoryId !== 'sessionFolders' || ownerData === undefined || entry.movedBy.accountId !== actor.accountId) {
                 throw Object.assign(new Error('Storage entry is not owned by this Account'), { code: 'unauthorized' });
             }
-            const adapter = await catalog.adapterForEntry(entry.categoryId, ownerData);
+            const sessionId = await entrySessionId(entry, ownerData);
             await assertActor(actor);
-            if (!adapter.sessionId || !actor.sessionIds.has(adapter.sessionId)) {
+            if (!permittedEntry(entry, sessionId, actor)) {
                 throw Object.assign(new Error('Session folder is not owned by this Account'), { code: 'unauthorized' });
             }
         };
@@ -265,29 +285,36 @@ export function createStorageOperations(input: Readonly<{
             }));
         },
         async projectCatalogItems<T extends StorageCategoryItem>(items: readonly T[]): Promise<readonly (Omit<T, keyof StorageCategoryVerdict> & StorageCategoryVerdict)[]> {
-            const facts = await protectionFacts();
-            return Promise.all(items.map(async item => ({ ...item, ...await classifyItem(item, item.path, facts) })));
+            const { facts } = await protectionSnapshot([], items);
+            const classifications = await classifyPaths(items.map(item => ({ path: item.path,
+                ...(item.categoryId === undefined ? {} : { managedItemPath: item.path }) })), facts);
+            return items.map((item, index) => ({ ...item, ...classifiedItemVerdict(item, classifications[index]) }));
         },
         async pileGet({ actor }: ActorOptions) { await assertActor(actor); return pileResult(actor); },
         async pileSet(request: MachineStoragePileSetInputV1, { actor }: ActorOptions) {
             await assertActor(actor);
+            // Indexed paths are custodian-only; recipient refs need catalog scope
+            // proof before any caller-supplied path can trigger SCM inspection.
+            const snapshot = request.add?.length
+                ? await protectionSnapshot(actor.sessionIds === undefined ? request.add.map(ref => ref.path) : []) : undefined;
             for (const ref of request.add ?? []) {
-                const resolved = await resolveRef(ref, actor);
-                if (!resolved || !(await classifyItem(resolved.item)).collectable) {
+                const resolved = await resolveRef(ref, actor, snapshot);
+                if (!resolved || !(await classifyItem(resolved.item, resolved.item.path, snapshot?.facts)).collectable) {
                     throw Object.assign(new Error('Storage item cannot be collected'), { code: 'storage_item_not_collectable' });
                 }
             }
-            await pile.set(actor.accountId, request, { accountId: actor.accountId, kind: actor.kind }, async ref => (await resolveRef(ref, actor))?.fingerprint);
-            await assertActor(actor); input.invalidate(); return pileResult(actor);
+            await pile.set(actor.accountId, request, { accountId: actor.accountId, kind: actor.kind }, async ref => (await resolveRef(ref, actor, snapshot))?.fingerprint);
+            await assertActor(actor); input.invalidate(); return pileResult(actor, snapshot);
         },
         async itemsCheck(refs: readonly StorageItemRefV1[], { actor }: ActorOptions) {
             await assertActor(actor);
+            const snapshot = refs.length ? await protectionSnapshot(actor.sessionIds === undefined ? refs.map(ref => ref.path) : []) : undefined;
             const fresh: PileItemRefV1[] = [];
             const unavailable: PileReviewV1['staying'] = [];
             for (const ref of refs) {
                 let title: string | undefined;
                 try {
-                    const resolved = await resolveRef(ref, actor);
+                    const resolved = await resolveRef(ref, actor, snapshot);
                     if (!resolved) throw new PileFactError('facts_unavailable');
                     title = resolved.item.title;
                     const path = await physicalPathWithoutFollowingLeaf(resolved.item.path);
@@ -301,7 +328,7 @@ export function createStorageOperations(input: Readonly<{
                             : error instanceof PileFactError && error.code !== 'storage_forbidden' ? error.code : 'facts_unavailable' } });
                 }
             }
-            const result = await reviewPile(fresh, await reviewDeps(actor));
+            const result = await reviewPile(fresh, await reviewDeps(actor, snapshot));
             result.staying.push(...unavailable);
             await assertActor(actor); return result;
         },
@@ -363,9 +390,24 @@ export function createStorageOperations(input: Readonly<{
             if (!deps.activityLog || !deps.machineId) return;
             input.setTrashRoots((await (await getTrash()).roots()).map(root => root.path));
         },
-        async trashEntries() { return deps.activityLog && deps.machineId ? (await getTrash()).list() : []; },
+        async trashEntries(actor?: StorageOperationActor) {
+            if (actor) await assertActor(actor);
+            if (!deps.activityLog || !deps.machineId) return [];
+            const sessionBindings = new Map<string, string | undefined>();
+            const entries = await (await getTrash()).list({}, actor?.sessionIds === undefined ? undefined : async (entry, ownerData) => {
+                if (entry.categoryId !== 'sessionFolders' || entry.movedBy.accountId !== actor.accountId) return false;
+                sessionBindings.set(entry.entryId, await entrySessionId(entry, ownerData));
+                return true;
+            });
+            if (!actor) return entries;
+            // Refresh once after local owner bindings resolve, then project the
+            // current scope without an Account RPC for every retained entry.
+            await assertActor(actor);
+            return entries.filter(entry => permittedEntry(entry, sessionBindings.get(entry.entryId), actor));
+        },
         async summarySuggestions(candidates: readonly SizedItem[]) { return (await suggestions(undefined, {}, candidates)).items; },
-        async summaryForActor(current: HappierStorageSummaryV1, actor: StorageOperationActor): Promise<HappierStorageSummaryV1> {
+        async summaryForActor(current: HappierStorageSummaryV1, actor: StorageOperationActor,
+            candidates: readonly SizedItem[]): Promise<HappierStorageSummaryV1> {
             const projection = await pileProjection(actor);
             const volumes = deps.readVolumes();
             const byVolume = new Map<string, number>();
@@ -374,7 +416,7 @@ export function createStorageOperations(input: Readonly<{
                 if (volume) byVolume.set(volume.id, (byVolume.get(volume.id) ?? 0) + item.size.allocatedBytes);
             }
             return { ...current, revision: input.revision(), pile: projection.result.summary,
-                suggestionsTop: (await suggestions(actor)).items,
+                suggestionsTop: (await suggestions(actor, {}, candidates)).items,
                 volumes: current.volumes.map(volume => {
                     const { canGoBytes, ...sharedVolume } = volume;
                     return { ...sharedVolume, ...(actor.sessionIds === undefined && canGoBytes !== undefined ? { canGoBytes } : {}),

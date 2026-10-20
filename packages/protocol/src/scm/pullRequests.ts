@@ -19,20 +19,24 @@ import {
 import { ScmRequestBaseSchema } from './requestBase.js';
 import { RepositoryCheckpointCommitEvidenceSchema } from '../sessions/changes/schemas.js';
 import { ScmBranchWorkIdentitySchema } from './branches.js';
+import { defineProtocolLiteral, defineProtocolUnion } from '../plugins/actions/protocolComposableSchema.js';
+import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
 
 export {
   ScmDefaultBranchPushPolicySchema,
   type ScmDefaultBranchPushPolicy,
 } from './defaultBranchPushPolicy.js';
 
-export const ScmHostingProviderKindSchema = lazyZodSchema(() => z.enum([
-  'github',
-  'gitlab',
-  'bitbucket',
-  'azure-devops',
-  'custom',
-  'unknown',
-]));
+/** One hosting-kind grammar for native readers and public feature protocols. */
+export const ScmHostingProviderKindProtocolSchema = defineProtocolUnion([
+  defineProtocolLiteral('github'),
+  defineProtocolLiteral('gitlab'),
+  defineProtocolLiteral('bitbucket'),
+  defineProtocolLiteral('azure-devops'),
+  defineProtocolLiteral('custom'),
+  defineProtocolLiteral('unknown'),
+]);
+export const ScmHostingProviderKindSchema = asProtocolZod(ScmHostingProviderKindProtocolSchema);
 export type ScmHostingProviderKind = z.infer<typeof ScmHostingProviderKindSchema>;
 
 const ScmHostingProviderPullRequestCapabilitiesSchema = lazyZodSchema(() => z._default(z.strictObject({
@@ -132,7 +136,7 @@ function normalizeLegacyScmHostingProviderRef(value: unknown): unknown {
   }
 }
 
-export const ScmHostingProviderRefSchema = lazyZodSchema(() => z.pipe(z.transform(normalizeLegacyScmHostingProviderRef), z.looseObject({
+export const ScmHostingProviderRefSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeLegacyScmHostingProviderRef), z.looseObject({
     id: z.string().check(z.minLength(1)),
     kind: ScmHostingProviderKindSchema,
     displayName: z.string().check(z.minLength(1)),

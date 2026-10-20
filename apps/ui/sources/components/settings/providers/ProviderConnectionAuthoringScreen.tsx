@@ -37,7 +37,7 @@ import { providerApprovalHref, useProviderActionClient } from '@/providers/actio
 import { useAllMachines } from '@/sync/domains/state/storage';
 import { useProviderCatalogForServer } from '@/sync/store/useProviderCatalog';
 import { t } from '@/text';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { ProviderFeatureAvailabilityNotice, useProviderFeatureAvailability } from './ProviderFeatureAvailability';
 import { useUnsavedChangesBeforeRemoveGuard } from '@/utils/navigation/useUnsavedChangesBeforeRemoveGuard';
 import { promptUnsavedChangesAlert } from '@/utils/ui/promptUnsavedChangesAlert';
@@ -48,7 +48,7 @@ import { MachineAdministrationContextBar } from '@/components/settings/machines/
 
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
-import { publishProviderDraftTitle } from './collection/providerDraftTitle';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 import { ProviderFieldRow } from './authoring/ProviderFieldRow';
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
@@ -182,6 +182,7 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
     const [pastedKey, setPastedKey] = React.useState('');
     const [saveInProgress, setSaveInProgress] = React.useState(false);
     const saveOperation = React.useRef<{ promise: Promise<boolean> | null; controller: AbortController } | null>(null);
+    const pendingProbe = React.useRef<AbortController | null>(null);
     React.useEffect(() => () => {
         saveOperation.current?.controller.abort();
         saveOperation.current = null;
@@ -355,9 +356,16 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
 
     React.useEffect(() => {
         probeGenerationRef.current += 1;
+        pendingProbe.current?.abort();
+        pendingProbe.current = null;
         setProbeState('idle');
         setProbeError(null);
-    }, [probeObservationKey]);
+        return () => {
+            probeGenerationRef.current += 1;
+            pendingProbe.current?.abort();
+            pendingProbe.current = null;
+        };
+    }, [focused, probeObservationKey, serverId]);
 
     React.useEffect(() => {
         if (candidateContextRef.current.machineId === candidateMachineId && candidateContextRef.current.serverId === serverId) return;
@@ -378,6 +386,10 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
     React.useEffect(() => {
         const generation = authoringPreviewGenerationRef.current + 1;
         authoringPreviewGenerationRef.current = generation;
+        if (!focused) {
+            setAuthoringPreviewLoading(false);
+            return;
+        }
         if (!accountStillCurrent() || !enabled || !props.contributionKey) {
             setAuthoringPreview(null);
             setAuthoringPreviewError(null);
@@ -391,6 +403,7 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
             return;
         }
         setAuthoringPreviewLoading(true);
+        const controller = new AbortController();
         void describeProviderConnections({
             ...(machineId ? { machineId } : {}),
             serverId,
@@ -401,7 +414,7 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
                 selectedCandidateId,
                 endpointOverrides: contributionEndpointOverrides,
             },
-        }).then((result) => {
+        }, { signal: controller.signal }).then((result) => {
             if (!accountStillCurrent() || authoringPreviewGenerationRef.current !== generation) return;
             setAuthoringPreviewLoading(false);
             if (result.status === 'error') {
@@ -420,7 +433,11 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
             setAuthoringPreviewLoading(false);
             setAuthoringPreviewError(providerErrorFromRpcFailure(caught, { connectionId, ...(machineId ? { machineId } : {}) }));
         });
-    }, [accountLifetime, accountStillCurrent, describeProviderConnections, authoringPreviewRefreshNonce, connectionId, contributionDisplayName, contributionEndpointOverridesKey, contributionEndpointsComplete, enabled, machineId, props.contributionKey, selectedCandidateId, serverId]);
+        return () => {
+            authoringPreviewGenerationRef.current += 1;
+            controller.abort();
+        };
+    }, [accountLifetime, accountStillCurrent, describeProviderConnections, authoringPreviewRefreshNonce, connectionId, contributionDisplayName, contributionEndpointOverridesKey, contributionEndpointsComplete, enabled, focused, machineId, props.contributionKey, selectedCandidateId, serverId]);
     const retryAuthoringPreview = React.useCallback(async (): Promise<void> => {
         if (!accountStillCurrent()) return;
         setAuthoringPreviewRefreshNonce((current) => current + 1);
@@ -604,10 +621,13 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
     const testDraft = React.useCallback(async () => {
         // Re-resolve immediately before the probe so a draft is never tested
         // against a machine the selection has since moved away from.
-        if (!accountStillCurrent()) return;
+        if (!focused || !accountStillCurrent()) return;
         const target = resolveCurrentTarget();
         if (!machineId || props.contributionKey || !target || target.machineId !== machineId) return;
-        const generation = probeGenerationRef.current;
+        const generation = ++probeGenerationRef.current;
+        pendingProbe.current?.abort();
+        const controller = new AbortController();
+        pendingProbe.current = controller;
         setProbeState('probing');
         setProbeError(null);
         setLocalError(null);
@@ -630,7 +650,7 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
                 template,
                 savedSecretId: draftRequiresApiKey ? effectiveSecretId : null,
                 actionNonce: `probe_${randomUUID()}`,
-            });
+            }, { signal: controller.signal });
             if (!accountStillCurrent() || probeGenerationRef.current !== generation) return;
             if (result.status === 'error') {
                 setProbeState('idle');
@@ -645,8 +665,10 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
                 connectionId,
                 machineId,
             }));
+        } finally {
+            if (pendingProbe.current === controller) pendingProbe.current = null;
         }
-    }, [accountStillCurrent, probeProviderDraft, connectionId, draft, draftRequiresApiKey, effectiveSecretId, machineId, props.contributionKey, resolveCurrentTarget]);
+    }, [accountStillCurrent, focused, probeProviderDraft, connectionId, draft, draftRequiresApiKey, effectiveSecretId, machineId, props.contributionKey, resolveCurrentTarget]);
 
     const requestUnsavedChangesDecision = React.useCallback(async () => {
         if (!accountStillCurrent()) return 'keepEditing' as const;
@@ -703,14 +725,15 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
         onOpen: () => router.pushRetainingCurrent(pendingApprovalHref as never),
     } : null, [pendingApprovalHref, router]);
     // The collection's draft row shows the name being written here.
+    const { publish: publishProviderDraftTitle } = useCollectionDraftTitle();
     const draftTitle = props.contributionKey
         ? contributionDisplayName ?? contribution?.name ?? ''
         : draft.name;
     React.useEffect(() => {
         // Only a new provider has a draft row in the rail; an edited one keeps its saved row.
         publishProviderDraftTitle(props.edit ? '' : draftTitle);
-    }, [draftTitle, props.edit]);
-    React.useEffect(() => () => publishProviderDraftTitle(''), []);
+    }, [draftTitle, props.edit, publishProviderDraftTitle]);
+    React.useEffect(() => () => publishProviderDraftTitle(''), [publishProviderDraftTitle]);
     const retryMutation = React.useCallback(async (): Promise<void> => {
         if (!accountStillCurrent() || !mutation.retry) return;
         await mutation.retry();
@@ -746,7 +769,7 @@ export const ProviderConnectionAuthoringScreen = React.memo(function ProviderCon
             : undefined;
     const localEndpoint = localEndpointHint(draft);
     const targetMachine = machines.find((machine) => machine.id === machineId);
-    const currentMachineName = getMachineDisplayName(targetMachine) ?? machineId ?? '';
+    const currentMachineName = targetMachine ? getMachineSentenceName(targetMachine) : machineId ?? '';
 
     // The catalog entry is still arriving: reserve the page rather than draw a generic form.
     if (props.contributionKey && !contribution && !query.data && !query.error) {

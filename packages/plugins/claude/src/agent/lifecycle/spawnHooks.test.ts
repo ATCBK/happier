@@ -48,6 +48,21 @@ describe('resolveClaudeDaemonSpawnPrerequisites', () => {
 });
 
 describe('augmentClaudeDaemonSpawnEnv', () => {
+    it('restores the saved native directory before the daemon default, while honoring an explicit launch selection', () => {
+        vi.stubEnv('CLAUDE_CONFIG_DIR', '/daemon-default');
+        try {
+            const runtimeDescriptorV1 = { v: 1, agentId: 'claude', agent: { configDir: '/saved-account' } };
+            expect(augmentClaudeDaemonSpawnEnv({ payload: { runtimeDescriptorV1 } }))
+                .toMatchObject({ CLAUDE_CONFIG_DIR: '/saved-account' });
+            expect(augmentClaudeDaemonSpawnEnv({ payload: { runtimeDescriptorV1, env: { OTHER: 'value' } } }))
+                .toMatchObject({ CLAUDE_CONFIG_DIR: '/saved-account' });
+            expect(augmentClaudeDaemonSpawnEnv({ payload: { runtimeDescriptorV1, env: { CLAUDE_CONFIG_DIR: '/selected-account' } } }))
+                .toMatchObject({ CLAUDE_CONFIG_DIR: '/selected-account' });
+        } finally {
+            vi.unstubAllEnvs();
+        }
+    });
+
     it('does not force CLAUDE_CONFIG_DIR when no override is set', () => {
         expect(augmentClaudeDaemonSpawnEnv({
             payload: {

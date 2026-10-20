@@ -1,6 +1,6 @@
 import { type Fastify } from "../../types";
 import { db } from "@/storage/db";
-import { z } from "zod";
+import { z } from "zod/mini";
 import { resolveSessionAccessForOperation } from "@/app/session/access/sessionAccess";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
 import { createSessionMetadataPrivacyUpgradeRequiredResponse } from "@/app/session/metadata/sessionMetadataRecipientProjection";
@@ -18,21 +18,23 @@ export function registerPublicShareOwnerRoutes(app: Fastify): void {
     app.post('/v1/sessions/:sessionId/public-share', {
         preHandler: app.authenticate,
         config: {
+            apiTokenSessionAction: 'session.public_link.create',
+            restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId', allowSessionRuntime: false },
             rateLimit: resolveApiHotEndpointRateLimit(process.env, "share.public.manage"),
         },
         schema: {
             params: z.object({
                 sessionId: z.string()
             }),
-            body: z.object({
-                lookupId: z.string().min(1).optional(), // fragment-link lookup capability (required when creating or rotating)
-                keyDerivation: z.literal("fragment_v1").optional(),
-                encryptedDataKey: z.string().optional(), // base64 encoded (required when creating or rotating)
-                expiresAt: z.number().optional(), // timestamp
-                maxUses: z.number().int().positive().optional(),
-                isConsentRequired: z.boolean().optional(), // require consent for detailed logging
-                networkOff: z.boolean().optional(),
-            }).strict()
+            body: z.strictObject({
+                lookupId: z.optional(z.string().check(z.minLength(1))), // fragment-link lookup capability (required when creating or rotating)
+                keyDerivation: z.optional(z.literal("fragment_v1")),
+                encryptedDataKey: z.optional(z.string()), // base64 encoded (required when creating or rotating)
+                expiresAt: z.optional(z.number()), // timestamp
+                maxUses: z.optional(z.number().check(z.int(), z.positive())),
+                isConsentRequired: z.optional(z.boolean()), // require consent for detailed logging
+                networkOff: z.optional(z.boolean()),
+            })
         }
     }, async (request, reply) => {
         const userId = request.userId;
@@ -105,6 +107,8 @@ export function registerPublicShareOwnerRoutes(app: Fastify): void {
      */
     app.get('/v1/sessions/:sessionId/public-share', {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.public_link.get',
+            restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId', allowSessionRuntime: false } },
         schema: {
             params: z.object({
                 sessionId: z.string()
@@ -157,6 +161,8 @@ export function registerPublicShareOwnerRoutes(app: Fastify): void {
      */
     app.delete('/v1/sessions/:sessionId/public-share', {
         preHandler: app.authenticate,
+        config: { apiTokenSessionAction: 'session.public_link.remove',
+            restrictedCredentialBinding: { scope: 'session', session: 'params.sessionId', allowSessionRuntime: false } },
         schema: {
             params: z.object({
                 sessionId: z.string()

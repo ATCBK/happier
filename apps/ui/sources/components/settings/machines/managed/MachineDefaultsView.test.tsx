@@ -3,7 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MachineRetentionDefaultsV1 } from '@happier-dev/protocol/account/settings/machineRetentionDefaultsV1';
 import { MachineRetentionDefaultsV1Schema } from '@happier-dev/protocol/account/settings/machineRetentionDefaultsV1';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { renderSettingsView } from '@/dev/testkit/harness/settingsViewHarness';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
@@ -53,7 +53,7 @@ vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOrigin
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
 const { resetScopedHomeActionExecutorsForTests } = await import('@/sync/ops/actions/scopedHomeActionExecutor');
-const settingsWrite = z.object({ expectedVersion: z.number().int(), content: z.object({
+const settingsWrite = z.object({ expectedVersion: z.number().check(z.int()), content: z.object({
   t: z.literal('plain'), v: z.record(z.string(), z.unknown()),
 }) });
 let home: string;
@@ -90,7 +90,9 @@ async function render() {
     actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { 'settings.set': ['ui'] } }),
   };
   const { settingsParse } = await import('@/sync/domains/settings/settings');
-  storage.setState({ settings: settingsParse(current), settingsVersion: 1 });
+  const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
+  const scope = { serverId: resolveServerProfileScopeIdForIdentifier(home), accountId: 'owner' };
+  storage.setState({ settings: settingsParse(current), settingsVersion: 1, settingsScope: scope, profileScope: scope });
   let version = 1;
   harness.answer(home, '/v2/account/settings', { select: () => ({ body: { content: { t: 'plain', v: current }, version } }) });
   harness.answer(home, 'POST /v2/account/settings', { select: input => {

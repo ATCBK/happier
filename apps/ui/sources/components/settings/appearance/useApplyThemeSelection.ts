@@ -2,33 +2,26 @@ import * as React from 'react';
 import { useUnistyles } from 'react-native-unistyles';
 
 import type { ThemePreference } from '@/components/ui/layout/statusBarStyle';
-import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
-import { storage, useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useLocalSettingMutable } from '@/sync/domains/state/storage';
 import { DEFAULT_THEME_PROFILES_LOCAL_STATE } from '@/theme/profiles/themeProfilePersistence';
-import { commitThemeSelection } from '@/theme/profiles/themeProfileRuntime';
 import type { ThemeProfilesLocalStateV1 } from '@/theme/profiles/themeProfileTypes';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
+import { SettingsDeclarationValueV1Schema } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 
 export { commitThemeSelection, previewThemeSelection } from '@/theme/profiles/themeProfileRuntime';
 
-/** `commitThemeSelection` bound to this screen's local settings and reduced-motion preference. */
+/** Admit the complete selection; its existing local owner applies storage, transition and runtime. */
 export function useApplyThemeSelection(beforeCommit?: () => void): (
     nextThemePreference: ThemePreference,
     nextThemeProfiles: ThemeProfilesLocalStateV1,
-) => Promise<void> {
-    const reduceMotion = useReducedMotionPreference();
-    const [themePreference] = useLocalSettingMutable('themePreference');
-    return React.useCallback((nextThemePreference, nextThemeProfiles) => {
-        return commitThemeSelection({
-            currentPreference: themePreference,
-            nextPreference: nextThemePreference,
-            nextThemeProfiles,
-            reduceMotion,
-            writeLocal: (delta) => {
-                beforeCommit?.();
-                storage.getState().applyLocalSettings(delta);
-            },
-        });
-    }, [beforeCommit, reduceMotion, themePreference]);
+) => Promise<boolean> {
+    const { setSetting } = useSettingActionFeedback({ beforeLocalCommit: beforeCommit });
+    return React.useCallback(async (nextThemePreference, nextThemeProfiles) => {
+        beforeCommit?.();
+        return await setSetting({ anchor: 'appearance.themeMode' }, SettingsDeclarationValueV1Schema.parse({
+            themePreference: nextThemePreference, themeProfiles: nextThemeProfiles,
+        }));
+    }, [beforeCommit, setSetting]);
 }
 
 /** The theme mode a stored preference means; anything unrecognised follows the system. */
@@ -46,7 +39,7 @@ export function useToggleThemeMode(): () => Promise<void> {
     const [themeProfiles] = useLocalSettingMutable('themeProfiles');
     const applyThemeSelection = useApplyThemeSelection();
     const screenDark = theme.dark;
-    return React.useCallback(() => {
-        return applyThemeSelection(screenDark ? 'light' : 'dark', themeProfiles ?? DEFAULT_THEME_PROFILES_LOCAL_STATE);
+    return React.useCallback(async () => {
+        await applyThemeSelection(screenDark ? 'light' : 'dark', themeProfiles ?? DEFAULT_THEME_PROFILES_LOCAL_STATE);
     }, [applyThemeSelection, screenDark, themeProfiles]);
 }

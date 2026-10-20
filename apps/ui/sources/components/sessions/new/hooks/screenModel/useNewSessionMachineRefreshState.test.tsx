@@ -2,23 +2,20 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createMachineFixture, renderHook } from '@/dev/testkit';
 import type { Machine, Session } from '@/sync/domains/state/storageTypes';
+import { act } from 'react-test-renderer';
+
+const capabilityBoundary = vi.hoisted(() => ({ rpc: vi.fn() }));
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
+    const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
+    return createServerScopedMachineRpcBoundaryMock(capabilityBoundary.rpc);
+});
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock('react-native-reanimated', () => ({ __esModule: true, default: {}, Easing: { bezier: () => (value: number) => value, linear: (value: number) => value } }));
-vi.mock('react-native-reanimated/lib/module', () => ({ __esModule: true, default: {}, Easing: { bezier: () => (value: number) => value, linear: (value: number) => value } }));
-vi.mock('react-native-reanimated/lib/module/index.js', () => ({ __esModule: true, default: {}, Easing: { bezier: () => (value: number) => value, linear: (value: number) => value } }));
-vi.mock('react-native-reanimated/lib/module/index', () => ({ __esModule: true, default: {}, Easing: { bezier: () => (value: number) => value, linear: (value: number) => value } }));
-vi.mock('react-native-reanimated/lib/module/publicGlobals', () => ({ __esModule: true, Easing: { bezier: () => (value: number) => value, linear: (value: number) => value } }));
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        refreshMachinesThrottled: vi.fn(async () => undefined),
-    },
-}));
-vi.mock('@/hooks/server/useMachineCapabilitiesCache', () => ({
-    prefetchMachineCapabilities: vi.fn(async () => undefined),
-    prefetchMachineCapabilitiesIfStale: vi.fn(async () => undefined),
-}));
+// The package owns Reanimated's native SDK fixture. Keep Sync and capability
+// decisions real; these projection-only cases never request a machine refresh.
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 type UseNewSessionMachineRefreshState = typeof import('./useNewSessionMachineRefreshState').useNewSessionMachineRefreshState;
 type HookParams = Parameters<UseNewSessionMachineRefreshState>[0];
@@ -67,6 +64,7 @@ function createSession(input: Readonly<{
 }
 
 async function renderMachineRefreshState(initialProps: HookParams) {
+    await import('@/sync/syncEngine');
     const { useNewSessionMachineRefreshState } = await import('./useNewSessionMachineRefreshState');
     return renderHook((props: HookParams) => useNewSessionMachineRefreshState(props), {
         initialProps,
@@ -74,6 +72,33 @@ async function renderMachineRefreshState(initialProps: HookParams) {
 }
 
 describe('useNewSessionMachineRefreshState', () => {
+    it('cancels a manual refresh on target change and retries on the next target', async () => {
+        let signal: AbortSignal | undefined;
+        capabilityBoundary.rpc.mockImplementationOnce((args: { signal?: AbortSignal }) => {
+            signal = args.signal;
+            return new Promise(() => {});
+        });
+        const initialProps: HookParams = {
+            capabilityServerId: 'refresh-cancel-home', selectedMachineId: 'refresh-old-machine',
+            machines: [makeMachine({ id: 'refresh-old-machine' }), makeMachine({ id: 'refresh-next-machine' })],
+            recentMachinePaths: [], favoriteMachines: [], useEnhancedSessionWizard: false,
+            refreshMachineEnvPresence: () => {}, sessions: [],
+        };
+        const hook = await renderMachineRefreshState(initialProps);
+        await act(async () => { hook.getCurrent().refreshMachineData(); });
+        await vi.waitFor(() => expect(signal).toBeDefined());
+        await hook.rerender({ ...initialProps, selectedMachineId: 'refresh-next-machine' });
+        expect(signal?.aborted).toBe(true);
+        const { getMachineCapabilitiesCacheState } = await import('@/hooks/server/useMachineCapabilitiesCache');
+        expect(getMachineCapabilitiesCacheState('refresh-old-machine', initialProps.capabilityServerId, 0)?.status).toBe('idle');
+        capabilityBoundary.rpc.mockResolvedValueOnce({ protocolVersion: 1, results: {
+            'tool.tmux': { ok: true, checkedAt: 1, data: { available: true } },
+        } });
+        await act(async () => { hook.getCurrent().refreshMachineData(); });
+        await vi.waitFor(() => expect(getMachineCapabilitiesCacheState('refresh-next-machine', initialProps.capabilityServerId, 0)?.status).toBe('loaded'));
+        await hook.unmount();
+    });
+
     it('keeps recent and favorite machine arrays stable when only heartbeat changes', async () => {
         const machine = makeMachine({ id: 'machine-1', metadata: { homeDir: '/Users/test' } });
         const initialProps: HookParams = {

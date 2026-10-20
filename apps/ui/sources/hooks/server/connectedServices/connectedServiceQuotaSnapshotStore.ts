@@ -55,17 +55,22 @@ export type LegacyQuotaSnapshotLoadContext = Readonly<{
     serviceId: ConnectedServiceId;
     profileId: string;
     resolveAccountMode: () => Promise<CredentialScopedAccountMode>;
-    assertOperationAllowed(
-        operation: BuiltInLegacyConnectedAccountOperation,
-    ): Promise<void>;
 }>;
 
 export type QuotaSnapshotLoadContext = LegacyQuotaSnapshotLoadContext;
 
+export type QuotaSnapshotRefreshContext = QuotaSnapshotLoadContext & Readonly<{
+    assertOperationAllowed(
+        operation: BuiltInLegacyConnectedAccountOperation,
+        signal?: AbortSignal,
+    ): Promise<void>;
+}>;
+
 export type QuotaRecoveryConsumeContext =
-    LegacyQuotaSnapshotLoadContext & Readonly<{
+    QuotaSnapshotRefreshContext & Readonly<{
     machineId: string;
     providerCreditId?: string | null;
+    signal?: AbortSignal;
 }>;
 
 export type QuotaRecoveryConsumeResult =
@@ -84,6 +89,7 @@ type InternalEntry = {
     consecutiveErrors: number;
     loadPromise: Promise<ConnectedServiceQuotaSnapshotV1 | null> | null;
     refreshPromise: Promise<void> | null;
+    refreshController: AbortController | null;
     refreshSinceFetchedAt: number | null;
     pollRetainCount: number;
     observation: ReturnType<typeof observeUsageProjection> | null;
@@ -122,6 +128,7 @@ function getOrCreateEntry(key: string): InternalEntry {
         consecutiveErrors: 0,
         loadPromise: null,
         refreshPromise: null,
+        refreshController: null,
         refreshSinceFetchedAt: null,
         pollRetainCount: 0,
         observation: null,
@@ -183,6 +190,7 @@ function reconcilePolling(key: string, initialReadCompleted = false): void {
     const ctx = entry.pollContext;
     if (!hasPollingDemand(key, entry) || !ctx || !isScopeActive(ctx.credentialScope)) {
         entry.observation?.dispose();
+        entry.refreshController?.abort();
         entry.observation = null;
         return;
     }
@@ -232,6 +240,7 @@ export function subscribeQuotaSnapshotEntry(key: string | null, listener: () => 
         if (listeners && listeners.size === 0) listenersByKey.delete(key);
         const entry = entries.get(key);
         if (entry && !hasPollingDemand(key, entry)) {
+            entry.refreshController?.abort();
             entry.refreshSinceFetchedAt = null;
             entry.refreshing = false;
             publish(key, entry);
@@ -352,6 +361,7 @@ export function retainQuotaSnapshotPolling(key: string, ctx: QuotaSnapshotLoadCo
         if (current !== entry) return;
         current.pollRetainCount = Math.max(0, current.pollRetainCount - 1);
         if (!hasPollingDemand(key, current)) {
+            current.refreshController?.abort();
             current.pollContext = null;
             current.observation?.dispose();
             current.observation = null;
@@ -362,7 +372,7 @@ export function retainQuotaSnapshotPolling(key: string, ctx: QuotaSnapshotLoadCo
     };
 }
 
-export async function refreshQuotaSnapshot(key: string, ctx: QuotaSnapshotLoadContext): Promise<void> {
+export async function refreshQuotaSnapshot(key: string, ctx: QuotaSnapshotRefreshContext): Promise<void> {
     const entry = getOrCreateEntry(key);
     const previousRefresh = entry.refreshPromise;
     if (previousRefresh && entry.refreshing) {
@@ -373,6 +383,8 @@ export async function refreshQuotaSnapshot(key: string, ctx: QuotaSnapshotLoadCo
 
     if (!isScopeActive(ctx.credentialScope)) return;
     entry.pollContext = ctx;
+    const controller = new AbortController();
+    entry.refreshController = controller;
     entry.refreshing = true;
     entry.error = null;
     publish(key, entry);
@@ -387,7 +399,7 @@ export async function refreshQuotaSnapshot(key: string, ctx: QuotaSnapshotLoadCo
         try {
             const mode = await ctx.resolveAccountMode();
             if (entry.refreshPromise !== promise || !isScopeActive(ctx.credentialScope) || !entry.refreshing) return;
-            await ctx.assertOperationAllowed('quota_refresh');
+            await ctx.assertOperationAllowed('quota_refresh', controller.signal);
             if (entry.refreshPromise !== promise || !isScopeActive(ctx.credentialScope) || !entry.refreshing) return;
             const ok = await (mode === 'plain'
                 ? requestConnectedServiceQuotaSnapshotRefreshV3(
@@ -422,6 +434,7 @@ export async function refreshQuotaSnapshot(key: string, ctx: QuotaSnapshotLoadCo
         await promise;
     } finally {
         if (entry.refreshPromise === promise) {
+            entry.refreshController = null;
             entry.refreshPromise = null;
             if (!isScopeActive(ctx.credentialScope) || !hasPollingDemand(key, entry)) {
                 entry.refreshSinceFetchedAt = null;
@@ -439,7 +452,7 @@ export async function consumeQuotaRecoveryCredit(
 ): Promise<QuotaRecoveryConsumeResult> {
     const entry = getOrCreateEntry(key);
     try {
-        await ctx.assertOperationAllowed('recovery_credit_consume');
+        await ctx.assertOperationAllowed('recovery_credit_consume', ctx.signal);
         if (!isScopeActive(ctx.credentialScope)) {
             return {
                 ok: false,
@@ -448,6 +461,7 @@ export async function consumeQuotaRecoveryCredit(
         }
         const result = await connectedServiceQuotaRecoveryCreditConsume({
             machineId: ctx.machineId,
+            ...(ctx.signal ? { signal: ctx.signal } : {}),
             serverId: ctx.serverBasis.serverId,
             expectedActiveServer: ctx.serverBasis,
             serviceId: ctx.serviceId,
@@ -475,6 +489,7 @@ export async function consumeQuotaRecoveryCredit(
 export function __resetConnectedServiceQuotaSnapshotStore(): void {
     for (const entry of entries.values()) {
         entry.observation?.dispose();
+        entry.refreshController?.abort();
     }
     entries.clear();
     listenersByKey.clear();

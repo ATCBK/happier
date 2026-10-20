@@ -23,7 +23,7 @@ export const AutomationTemplatePayloadV1Schema = lazyZodSchema(() => z.strictObj
     displayText: z.optional(z.string()),
     agent: z.optional(z.string()),
     agentTarget: z.optional(AgentExecutionTargetV1Schema),
-    backendTarget: z.optional(z.pipe(z.transform(normalizeBackendTargetRefV2InputToV2), BackendTargetRefV2Schema)),
+    backendTarget: z.optional((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeBackendTargetRefV2InputToV2), BackendTargetRefV2Schema)),
     connectedServices: z.optional(z.unknown()),
     transcriptStorage: z.optional(z.enum(['persisted', 'direct'])),
     profileId: z.optional(z.string()),

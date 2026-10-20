@@ -1,4 +1,4 @@
-import type { TranscriptSessionPort } from '../transcriptPort';
+import type { CommittedTranscriptAdmission, TranscriptSessionPort } from '../transcriptPort';
 import type { StreamedTranscriptSegmentKind } from './segmentKey';
 import type { StreamedTranscriptSegmentState } from './segmentRuntime';
 
@@ -12,6 +12,13 @@ export type StreamedTranscriptWriter = Readonly<{
   enableDurableCommits: () => void;
   discard: () => void;
   hasPendingSegments: () => boolean;
+  finalizeSegment: (opts: {
+    kind: StreamedTranscriptSegmentKind;
+    sidechainId: string | null;
+    text: string;
+    sourceMessageId: string;
+    admission?: CommittedTranscriptAdmission;
+  }) => Promise<StreamedTranscriptFlushSummary | null>;
   flushAll: (opts: {
     reason: 'tool-call-boundary' | 'turn-end' | 'abort';
     interruptedReason?: string;
@@ -23,6 +30,8 @@ export type StreamedTranscriptSegmentFlushSummary = Readonly<{
   sidechainId: string | null;
   sawText: boolean;
   didDurablyFlush: boolean;
+  /** The final snapshot reached Home, rather than only the local durable outbox. */
+  didDeliver: boolean;
   lastCommittedState: StreamedTranscriptSegmentState | null;
 }>;
 

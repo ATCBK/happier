@@ -3,7 +3,7 @@ import { View } from 'react-native';
 import { HappierLink } from '@happier-dev/plugin-ui/presentation';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { FieldTextInput } from '@/components/ui/forms/FieldTextInput';
 import { Item } from '@/components/ui/lists/Item';
 import { t } from '@/text';
@@ -36,10 +36,7 @@ export function ProviderKeyEntryItem(
   }>,
 ): React.ReactElement {
   const { theme } = useUnistyles();
-  const presentationTheme = React.useMemo(
-    () => projectPluginUiTheme(theme),
-    [theme],
-  );
+  const presentationTheme = usePluginUiTheme(theme);
   const title = t('settingsProviders.authoring.apiKey');
   if (!props.secretSelected && props.savedSecretSelectionEnabled) {
     return (

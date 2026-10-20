@@ -2,6 +2,7 @@ import {
   copyFileSync,
   type Dirent,
   existsSync,
+  globSync,
   lstatSync,
   mkdirSync,
   readFileSync,
@@ -19,6 +20,7 @@ import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from '
 import {
   assertPhysicalPathWithinApprovedRoot,
   assertResolvedRuntimeDependencyMatchesDeclaration,
+  collectBundledPrepublicationAuthorPackageNames,
   collectExternalRuntimeDependencies,
   copyDirDereferenceContainedSync,
   omitWorkspaceSourceCondition,
@@ -634,7 +636,7 @@ function collectWorkspacePackageReferencedFiles(rawPackageJson: any, includeType
 function collectWorkspacePackageDeclaredFileEntries(rawPackageJson: any): string[] {
   if (rawPackageJson?.files === undefined) return [];
   if (!Array.isArray(rawPackageJson.files) || rawPackageJson.files.some((entry: unknown) => typeof entry !== 'string')) {
-    throw new Error('Bundled workspace package files must be an array of exact relative paths');
+    throw new Error('Bundled workspace package files must be an array of relative paths or patterns');
   }
   return [...new Set(rawPackageJson.files as string[])].filter((entry) => {
     if (
@@ -642,7 +644,7 @@ function collectWorkspacePackageDeclaredFileEntries(rawPackageJson: any): string
       || entry.includes('\\')
       || entry.startsWith('/')
       || entry.split('/').some((segment) => !segment || segment === '.' || segment === '..')
-      || /[*?{}[\]]/u.test(entry)
+      || (isPrepublicationAuthorPackage(rawPackageJson) && /[*?{}[\]]/u.test(entry))
     ) {
       throw new Error(`Bundled workspace package file must be an exact relative path: '${entry}'`);
     }
@@ -653,10 +655,24 @@ function collectWorkspacePackageDeclaredFileEntries(rawPackageJson: any): string
   });
 }
 
+/** Resolve the package-owned files declaration for both workspace and native payload staging. */
+export function resolveWorkspacePackageDeclaredFileEntries(packageDir: string, relativePrefix?: string): string[] {
+  const entries = collectWorkspacePackageDeclaredFileEntries(readJson(resolve(packageDir, 'package.json')));
+  return [...new Set(entries
+    .filter((entry) => !relativePrefix || entry === relativePrefix || entry.startsWith(`${relativePrefix}/`))
+    .flatMap((entry) => {
+      if (!/[*?{}[\]]/u.test(entry)) return [entry];
+      const matches = globSync(entry, { cwd: packageDir }).sort();
+      // Keep missing declarations visible: publication rejects them, while
+      // health/identity readers retain their existing missing-input behavior.
+      return matches.length > 0 ? matches : [entry];
+    }))];
+}
+
 function collectPrepublicationAuthoringFileEntries(rawPackageJson: any): string[] | undefined {
   if (rawPackageJson?.files === undefined) return undefined;
 
-  // The workspace copier already owns the exact relative-path validation for
+  // The workspace copier already owns the relative-path/pattern validation for
   // declared package files. Keep the complete canonical inventory here (rather
   // than its copy-only subset) because npm still needs dist/package.json entries
   // when this flattened package is later materialized for external authors.
@@ -688,7 +704,7 @@ function copyBundledWorkspacePackageContents(params: Readonly<{
     resolve(params.tempDir, '.happier-plugin'),
   );
 
-  const declaredFiles = new Set(collectWorkspacePackageDeclaredFileEntries(params.rawPackageJson));
+  const declaredFiles = new Set(resolveWorkspacePackageDeclaredFileEntries(params.srcDir));
   const files = params.includeFiles ?? ['README.md'];
   for (const f of files) {
     // Required declarations own overlapping paths. Copying a read-only bundle
@@ -955,14 +971,15 @@ function assertMaterializedPrepublicationWorkspaceClosure(params: Readonly<{
 }
 
 /**
- * Materialize marked, flattened prepublication packages into caller-selected
- * transient author roots. Their preserved package manifests declare the internal
- * closure; the host publisher never performs this nesting in its own tree.
+ * Materialize requested public prepublication packages and their satisfying
+ * public runtime dependencies/peers, returning the materialized root names.
+ * Explicit bundled dependencies retain their nested closure; the host publisher
+ * never performs this nesting in its own tree.
  */
 export function materializePrepublicationWorkspacePackageRoots(params: Readonly<{
   bundles: ReadonlyArray<WorkspacePackageBundle>;
   rootPackageNames?: readonly string[];
-}>): void {
+}>): readonly string[] {
   const bundlesByPackageName = new Map(params.bundles.map((bundle) => [bundle.packageName, bundle] as const));
   if (bundlesByPackageName.size !== params.bundles.length) {
     throw new Error('Prepublication materialization received duplicate workspace package bundles');
@@ -973,21 +990,33 @@ export function materializePrepublicationWorkspacePackageRoots(params: Readonly<
   if (selectedRootNames && selectedRootNames.size !== params.rootPackageNames?.length) {
     throw new Error('Prepublication materialization received duplicate root package names');
   }
-  const prepublicationRoots = params.bundles
+  const availableRoots = params.bundles
     .map((bundle) => ({ bundle, rawPackageJson: readPrepublicationWorkspacePackageManifest(bundle) }))
     .filter(({ rawPackageJson }) => isPrepublicationAuthorPackage(rawPackageJson))
-    .filter(({ bundle }) => selectedRootNames === null || selectedRootNames.has(bundle.packageName))
     .sort((left, right) => left.bundle.packageName.localeCompare(right.bundle.packageName));
+  const rootsByName = new Map(availableRoots.map((root) => [root.bundle.packageName, root] as const));
   if (selectedRootNames) {
-    const resolvedRootNames = new Set(prepublicationRoots.map(({ bundle }) => bundle.packageName));
-    const unsupportedRootName = params.rootPackageNames?.find((packageName) => !resolvedRootNames.has(packageName));
+    const unsupportedRootName = params.rootPackageNames?.find((packageName) => !rootsByName.has(packageName));
     if (unsupportedRootName) {
       throw new Error(`Bundled host package '${unsupportedRootName}' is not classified for public author use`);
     }
   }
-  if (prepublicationRoots.length === 0) return;
-
-  const rootNames = new Set(prepublicationRoots.map(({ bundle }) => bundle.packageName));
+  const rootNames = selectedRootNames ?? new Set(rootsByName.keys());
+  for (const packageName of rootNames) {
+    const { rawPackageJson } = rootsByName.get(packageName)!;
+    const bundledNames = new Set(readBundledWorkspacePackageNames(rawPackageJson));
+    // Public runtime dependencies and peers need their own pnpm overrides.
+    // Explicit bundled dependencies retain their existing nested custody;
+    // development-only tools do not belong to an installed package's closure.
+    for (const dependencyName of collectBundledPrepublicationAuthorPackageNames({
+      dependencies: rawPackageJson.dependencies,
+      optionalDependencies: rawPackageJson.optionalDependencies,
+      peerDependencies: rawPackageJson.peerDependencies,
+    })) {
+      if (!bundledNames.has(dependencyName) && rootsByName.has(dependencyName)) rootNames.add(dependencyName);
+    }
+  }
+  const prepublicationRoots = availableRoots.filter(({ bundle }) => rootNames.has(bundle.packageName));
   const assignedPackageNames = new Set(rootNames);
   for (const { bundle: rootBundle, rawPackageJson } of prepublicationRoots) {
     const declaredClosureNames = readDeclaredPrepublicationWorkspaceClosureNames(
@@ -1061,6 +1090,7 @@ export function materializePrepublicationWorkspacePackageRoots(params: Readonly<
       },
     });
   }
+  return prepublicationRoots.map(({ bundle }) => bundle.packageName);
 }
 
 export function resolveWorkspaceBundlesFromPackageJson(params: Readonly<{
@@ -1344,7 +1374,7 @@ function hasBundledWorkspaceSourceContentParity(
   const expectedOutputPaths: string[] = [];
   const contentEntries = new Set([
     ...collectWorkspacePackageReferencedFiles(workspacePackageJson),
-    ...collectWorkspacePackageDeclaredFileEntries(workspacePackageJson),
+    ...resolveWorkspacePackageDeclaredFileEntries(workspacePackageDir),
   ]);
   for (const declaredEntry of contentEntries) {
     if (declaredEntry === 'package.json') continue;

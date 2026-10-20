@@ -5,7 +5,8 @@ import { randomUUID } from 'node:crypto';
 import { UsagePromptCompositionSchema, type UsagePromptComposition, type UsagePromptCompositionComponent } from '@happier-dev/protocol/usage/coach/usagePromptComposition';
 import { createPromptCompositionScope, type PromptCompositionScope } from '@/agent/prompting/promptComposition';
 import { logger } from '@/ui/logger';
-import type { PermissionModeQueuedPrompt } from '@/agent/runtime/permissions/queuedPrompt';
+import { normalizePermissionModeQueuedPromptLocalIds, type PermissionModeQueuedPrompt } from '@/agent/runtime/permissions/queuedPrompt';
+import type { SessionClientInteractionApi } from '@/api/session/client/transport/sessionClientInteractionApi';
 import { isAbortLikeError } from '@/agent/runtime/lifecycle/classifyAbortLikeError';
 import {
   resolveStructuredInputProviderDispatchContext,
@@ -53,6 +54,7 @@ export function projectSessionComposerAttachmentDispatchInput(
 
 export type SessionInputDispatchServices = Readonly<{
   sessionId?: string;
+  reconcileSessionInputForProviderDispatch?: SessionClientInteractionApi['reconcileSessionInputForProviderDispatch'];
   catalogs?: StructuredInputCatalogReaders;
   resolveComposerReference?: StructuredInputComposerReferenceResolver['resolve'];
   resolveComposerAttachmentForDispatch?: ComposerAttachmentDispatchResolver;
@@ -95,21 +97,33 @@ export async function prepareSessionInputForProviderDispatch(input: Readonly<{
           return await attachmentResolver(projectSessionComposerAttachmentDispatchInput(request, sessionId));
         } catch (error) {
           if (isAbortLikeError(error) || error instanceof StructuredInputComposerAttachmentResolutionError) throw error;
-          throw new StructuredInputComposerAttachmentUnavailableError();
+          throw new StructuredInputComposerAttachmentResolutionError(
+            'composer_attachment_resolution_failed',
+            true,
+            'Composer attachment resolver failed before provider dispatch',
+          );
         }
       },
     } } : {}),
   });
-  const renderPrompt = (optionalContext: Pick<Parameters<typeof renderSessionInputContextPromptV1>[0], 'sessionFollowUpdates' | 'workerUpdates'> = {}) => {
+  const renderPrompt = (optionalContext: Pick<Parameters<typeof renderSessionInputContextPromptV1>[0], 'sessionFollowUpdates' | 'workerUpdates'> & {
+    runFollowDeliveries?: PermissionModeQueuedPrompt['followDeliveries'];
+  } = {}) => {
     const rendered = renderSessionInputContextPromptV1({
       provenanceBlock: input.prompt.inputContextBlock ?? '',
       ...context.promptContext,
       ...optionalContext,
-      transformedUserText: input.providerNativeCommand ? '' : input.transformedUserText,
+      returnedAnswers: [...input.prompt.returnedAnswerContext ?? [],
+        ...(input.prompt.returnedAnswer ? [{ reply: input.prompt.returnedAnswer, text: input.transformedUserText }] : [])],
+      transformedUserText: input.providerNativeCommand || input.prompt.returnedAnswer ? '' : input.transformedUserText,
     });
-    finalPrompt = input.providerNativeCommand
+    const runFollowNotices = (optionalContext.runFollowDeliveries ?? []).flatMap(({ delivery }) => 'source' in delivery.original
+      ? [`<happier_run_follow>${JSON.stringify({ original: delivery.original,
+        ...('event' in delivery ? { event: delivery.event } : {}) }).replaceAll('<', '\\u003c').replaceAll('>', '\\u003e')}</happier_run_follow>\nRead the original Run result.`] : []);
+    const nativePrompt = input.providerNativeCommand
       ? [input.transformedUserText, rendered].filter(Boolean).join('\n\n')
       : rendered;
+    finalPrompt = [nativePrompt, ...runFollowNotices].filter(Boolean).join('\n');
     return finalPrompt;
   };
   const requiredPrompt = renderPrompt();
@@ -139,6 +153,27 @@ export async function prepareSessionInputForProviderDispatch(input: Readonly<{
     catch { logger.debug('[Usage composition] Session detail retention unavailable'); }
   };
   return {
+    async assertAdmission(): Promise<void> {
+      // Context-only input has its own host admission boundary. Every durable
+      // protected input must re-enter Pending after arbitrary-duration prompt
+      // preparation: materialization into the local queue is custody, not a
+      // grant to dispatch an input that has since been discarded.
+      if (input.prompt.hostContextOnly || (!input.prompt.discussionAddressing && !input.prompt.causalPermissionAuthority)) return;
+      const reconcile = services?.reconcileSessionInputForProviderDispatch;
+      const localIds = normalizePermissionModeQueuedPromptLocalIds(input.prompt);
+      if (!reconcile || localIds.length === 0) throw new SessionInputDispatchAdmissionError('outcomeUnknown');
+      for (const localId of localIds) {
+        let status: Awaited<ReturnType<typeof reconcile>>;
+        try {
+          status = await reconcile({ localId, ...(input.prompt.discussionAddressing
+            ? { discussionAddressing: input.prompt.discussionAddressing } : {}), signal: input.signal });
+        } catch (error) {
+          if (isAbortLikeError(error)) throw error;
+          throw new SessionInputDispatchAdmissionError('outcomeUnknown');
+        }
+        if (status !== 'admitted') throw new SessionInputDispatchAdmissionError(status);
+      }
+    },
     readComposition,
     retainComposition,
     renderPrompt,
@@ -150,7 +185,18 @@ export async function prepareSessionInputForProviderDispatch(input: Readonly<{
   };
 }
 
+class SessionInputDispatchAdmissionError extends Error {
+  readonly code: string;
+  readonly retryable: boolean;
+  constructor(status: 'rejected' | 'held' | 'outcomeUnknown') {
+    super('Session input is not currently admitted for provider dispatch');
+    this.code = status === 'rejected' ? 'session_input_rejected' : status === 'held' ? 'session_input_held' : 'session_input_admission_unavailable';
+    this.retryable = status !== 'rejected';
+  }
+}
+
 export function readStructuredInputPreparationFailure(error: unknown): Readonly<{ code: string; message: string; retryable: boolean }> | null {
+  if (error instanceof SessionInputDispatchAdmissionError) return { code: error.code, message: error.message, retryable: error.retryable };
   if (error instanceof StructuredInputComposerAttachmentResolutionError) {
     return {
       code: error.code,

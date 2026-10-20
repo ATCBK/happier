@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { sessionDraftPhysicalKey } from "@/app/account/sessionDrafts/sessionDraftPhysicalKey";
 import { db } from "@/storage/db";
+import { sourceKeyForSessionFollowSourceV1 } from '@/app/session/follow/sessionFollowSourceIdentity';
 import { inTx } from "@/storage/inTx";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import {
@@ -112,7 +113,8 @@ describe("Account-status Session access effects (SQLite integration)", () => {
             });
         }
         await db.sessionFollowEdge.create({
-            data: { sourceSessionId: teamDerived.id, destinationSessionId: owned.id },
+            data: { sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: teamDerived.id }), sourceSessionId: teamDerived.id,
+                destinationSessionId: owned.id, policyJson: JSON.stringify({ preset: 'quiet' }) },
         });
         return { target, affected, unrelated, teamDerived, owned };
     }
@@ -140,9 +142,10 @@ describe("Account-status Session access effects (SQLite integration)", () => {
         expect(effects.revokedSessionIds).toEqual(f.affected.map(session => session.id).sort());
         expect(await db.accountSessionFollow.count({ where: { accountId: f.target.id } })).toBe(0);
         expect(await db.sessionFollowEdge.findUnique({ where: {
-            destinationSessionId_sourceSessionId: {
+            destinationSessionId_sourceSessionId_relation: {
                 destinationSessionId: f.owned.id,
                 sourceSessionId: f.teamDerived.id,
+                relation: 'follower',
             },
         } })).toBeNull();
         expect(await db.session.count({ where: {

@@ -9,6 +9,7 @@ import {
 } from '@happier-dev/plugin-sdk';
 import type { ActionHandler } from '@happier-dev/plugin-sdk/actions';
 import type { PluginManifest } from '@happier-dev/plugin-sdk/manifest';
+import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 import { createPluginTestkit } from '@happier-dev/plugin-sdk/testing';
 import * as actionContractProducer from '../../../../../../packages/plugin-sdk/examples/action-contract-producer/src/index';
 import type { MessageActionAvailableSnapshotV1, PluginHostAccessRequestV2 } from '@happier-dev/protocol';
@@ -21,6 +22,8 @@ import {
 import type { HostCurrentSessionPresentationService } from '@/agent/runtime/state/currentSessionUiTypes';
 
 import { createTargetActionInvocationRegistry } from './targetActionRegistry';
+import { logger } from '@/ui/logger';
+import { runTracedExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
 import { createTargetActionCurrentIntentAdapter, targetActionApprovalMatchesCurrentIntent } from '@/session/actions/approvals/targetActionCurrentIntent';
 import { StoredTargetActionApprovalRequestV1Schema, type TargetActionApprovalRequestV1 } from '@happier-dev/protocol/approvals/targetActionApprovalRequestV1';
 import type { TargetActionCurrentIntentRequest } from './actionExecutor';
@@ -34,6 +37,8 @@ import {
 import type { PluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 import { createManagedPluginSourceCustody } from '@/plugins/runtime/lifecycle/contributions/runtimeIdentity.testkit';
 import { createProductionPluginInvocationServiceOwners } from './services/production';
+import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import { createProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/createHandler';
 import {
     createPluginInvocationLogger,
     createPluginInvocationSecretRedactor,
@@ -101,18 +106,122 @@ function createRegistry(
 }
 
 describe('target action invocation registry', () => {
+    it('splits preparation, account binding and authored execution under the ingress request without content', async () => {
+        vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
+        const sink = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => undefined);
+        const requestId = '70cc64d3-0386-4914-b7d8-713b7879e99f';
+        const registry = createRegistry({
+            actions: [{ ...action(), handler: async () => ({ echoed: 'private-result-marker' }) }],
+        });
+        try {
+            expect(await runTracedExternalActionStage('action.invoke', `rpc_${requestId}`, 'contributed.target_invoke', () =>
+                registry.invoke({ pluginId: 'acme.alpha', localId: 'run', surface: 'cli', input: { value: 'private-input-marker' } })))
+                .toMatchObject({ status: 'executed', value: { echoed: 'private-result-marker' } });
+            const records = sink.mock.calls.filter(([message]) => message === '[external-action-stage]');
+            for (const phase of ['contributed.services.prepare', 'contributed.connected_account.bind', 'contributed.handler']) {
+                expect(records).toContainEqual(['[external-action-stage]', expect.objectContaining({
+                    rootRequestId: requestId, stage: `${phase}.end`, elapsedMs: expect.any(Number),
+                })]);
+            }
+            expect(JSON.stringify(records)).not.toContain('private-');
+        } finally { registry.dispose(); sink.mockRestore(); vi.unstubAllEnvs(); }
+    });
+
+    it('uses the authored reversible own-UI default without weakening automation or explicit Ask', async () => {
+        const { createCollectionDetailPlugin } = await import('../../../../../../packages/plugin-sdk/fixtures/qa-plugin-authoring/qa-collection-detail/index');
+        const module = createCollectionDetailPlugin();
+        const plugin = await createPluginTestkit({ manifest: module.manifest, module });
+        const declaration = normalizePluginManifestV2(module.manifest).contributes.actions.find(candidate => candidate.id === 'set-complete');
+        if (!declaration) throw new Error('Collection completion declaration missing');
+        const handler = plugin.registration('actions', declaration.id);
+        if (!handler) throw new Error('Collection completion handler missing');
+        const contexts: PluginInvocationContext[] = [];
+        const caller = {
+            kind: 'plugin', pluginId: module.manifest.id,
+            contribution: { id: 'reviews', qualifiedId: `${module.manifest.id}/ui.views/reviews` },
+            occurrenceId: '7', sourceCustody: createManagedPluginSourceCustody('qa-collection-generation'),
+            originSurface: 'ui',
+        } as const;
+        const registry = createRegistry({ actions: [{
+            ...action(), pluginId: module.manifest.id, localId: declaration.id,
+            sourceCustody: caller.sourceCustody,
+            definition: { ...declaration, inputSchema: declaration.inputSchema ?? undefined },
+            handler: (input, context) => { contexts.push(context); return handler(input, context); },
+        }] });
+        const read = async () => {
+            const resource = plugin.registration('resources', 'rows');
+            if (!resource) throw new Error('Rows Resource missing');
+            return JSON.parse(String(await resource.read({ context: { kind: 'global' }, signal: new AbortController().signal })));
+        };
+        const invoke = (surface: 'ui' | 'agent' | 'mcp', completed: boolean, ask?: boolean,
+            invocationAuthority: 'present_user' | 'account_automation' = surface === 'ui' ? 'present_user' : 'account_automation') => registry.invoke({
+            pluginId: module.manifest.id, localId: declaration.id, surface,
+            invocationAuthority,
+            ...(surface === 'ui' ? { caller } : {}),
+            input: { rowId: 'release-guide', completed },
+            isApprovalRequiredByActionSettings: manifestDefault => ask ?? manifestDefault,
+        });
+        try {
+            expect(await invoke('ui', true)).toMatchObject({ status: 'executed', value: { row: { completed: true } } });
+            expect((await read()).rows[0].completed).toBe(true);
+            expect(await invoke('ui', false, undefined, 'account_automation'))
+                .toMatchObject({ status: 'unavailable', code: 'plugin_action_current_intent_unavailable' });
+            expect((await read()).rows[0].completed).toBe(true);
+            for (const surface of ['agent', 'mcp', 'ui'] as const) {
+                expect(await invoke(surface, false, surface === 'ui' ? true : undefined))
+                    .toMatchObject({ status: 'unavailable', code: 'plugin_action_current_intent_unavailable' });
+                expect((await read()).rows[0].completed).toBe(true);
+            }
+            expect(await invoke('ui', false)).toMatchObject({ status: 'executed', value: { row: { completed: false } } });
+            expect((await read()).rows[0].completed).toBe(false);
+            expect(contexts).toHaveLength(2);
+            for (const context of contexts) {
+                expect(context).toMatchObject({ surface: 'ui', caller,
+                    contribution: { qualifiedId: `${module.manifest.id}/actions/set-complete` } });
+            }
+        } finally { registry.dispose(); await plugin.dispose(); }
+    });
+
+    it('classifies normalized external Action input while preserving required approvals and replay admission', async () => {
+        const registry = createRegistry({ actions: [{
+            ...action({
+                inputSchema: {}, resultSchema: {}, dangerLevel: 'writesLocal',
+                confirmation: { title: 'Change bindings?' },
+                confirmationWhen: { op: 'not', predicate: { op: 'eq', path: 'kind', value: 'list' } },
+            }),
+            inputParser: input => ({ success: true, data: { kind: isJsonRecord(input) ? input.normalizedKind : null } }),
+            handler: async input => input,
+        }] });
+        const base = { pluginId: 'acme.alpha', localId: 'run', surface: 'cli' as const };
+        try {
+            const listed = await registry.invoke({ ...base, input: { kind: 'attach', normalizedKind: 'list' },
+                isApprovalRequiredByActionSettings: manifestDefault => manifestDefault,
+            });
+            expect(listed, JSON.stringify(listed)).toMatchObject({ status: 'executed', value: { kind: 'list' } });
+            expect(await registry.invoke({ ...base, input: { kind: 'list', normalizedKind: 'attach' },
+                isApprovalRequiredByActionSettings: manifestDefault => manifestDefault,
+            })).toMatchObject({ status: 'unavailable', code: 'plugin_action_current_intent_unavailable' });
+            expect(await registry.invoke({ ...base, input: { normalizedKind: 'list' },
+                isApprovalRequiredByActionSettings: () => true,
+            })).toMatchObject({ status: 'unavailable', code: 'plugin_action_current_intent_unavailable' });
+            expect(await registry.invoke({ ...base, input: { kind: 'list' }, requireCurrentIntent: true,
+                isApprovalRequiredByActionSettings: () => false,
+            })).toMatchObject({ status: 'unavailable', code: 'plugin_action_current_intent_unavailable' });
+        } finally { registry.dispose(); }
+    });
+
     it.each((['agent', 'mcp', 'cli'] as const).flatMap(surface =>
         (['handler', 'result'] as const).map(phase => ({ surface, phase })),
     ))('keeps raw confidential operands classified after normalization for $phase on $surface', async ({ surface, phase }) => {
         const records: PluginInvocationLogRecord[] = [];
         const owners = createProductionPluginInvocationServiceOwners({ loggerSink: { write: record => records.push(record) } });
         const raw = { bundle: phase === 'result' ? 738291642 : { pin: 738291642, enabled: true, optional: null }, public: 31 };
-        let parsedOperand: unknown;
+        let parsedOperand: JsonValue = null;
         const registry = createRegistry({ ...owners, actions: [{
             ...action({ inputSchema: {}, resultSchema: {}, secretInputPaths: ['bundle'], surfaces: ['agent', 'mcp', 'cli'],
                 dangerLevel: 'writesRemote', confirmation: { title: 'Publish' } }),
             inputParser: candidate => {
-                parsedOperand = isJsonRecord(candidate) ? candidate.bundle : undefined;
+                parsedOperand = isJsonRecord(candidate) ? candidate.bundle ?? null : null;
                 return { success: true as const, data: { public: 31 } };
             },
             ...(phase === 'result' ? { resultParser: () => ({ success: false as const,
@@ -310,6 +419,7 @@ describe('target action invocation registry', () => {
                     stored = StoredTargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request)));
                     return { artifactId: `parser-${surface}` };
                 },
+                update: async () => ({ ok: true }),
                 read: async () => stored ? { ...stored, status: 'approved',
                     decision: { kind: 'approve', decidedAtMs: stored.updatedAtMs } } : null,
             });
@@ -362,6 +472,7 @@ describe('target action invocation registry', () => {
                     stored = StoredTargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request)));
                     return { artifactId: `confidential-egress-${surface}` };
                 },
+                update: async () => ({ ok: true }),
                 read: async () => stored ? {
                     ...stored, status: 'approved', decision: { kind: 'approve', decidedAtMs: stored.updatedAtMs },
                 } : null,
@@ -401,7 +512,7 @@ describe('target action invocation registry', () => {
                     }
                     expect(JSON.stringify(result)).toContain(normalized.endpoint);
                     expect(JSON.stringify(records)).toContain(normalized.endpoint);
-                    if (!context) throw new Error('Handler did not start');
+                    if (!context?.invocationId) throw new Error('Handler did not start with an invocation id');
                     // The incumbent scope ends after failure projection, rather than
                     // retaining raw invocation material after the result settles.
                     expect(owners.redactDiagnosticText({ pluginId: context.plugin.id, occurrenceId: '7',
@@ -448,7 +559,7 @@ describe('target action invocation registry', () => {
 
     it.each(['agent', 'mcp', 'cli'] as const)('keeps the real rotation token out of an approvable Artifact on %s', async surface => {
         const localId = 'rotate-document-review-webhook-token';
-        const declaration = actionContractProducer.manifest.contributes?.actions?.find(entry => entry.id === localId);
+        const declaration = normalizePluginManifestV2(actionContractProducer.manifest).contributes.actions.find(entry => entry.id === localId);
         if (!declaration) throw new Error('Rotation example declaration missing');
         // This maintained producer must declare its credential operand; unrelated
         // undeclared strings remain literal under the declaration-only rule.
@@ -472,6 +583,7 @@ describe('target action invocation registry', () => {
                 requests.push(StoredTargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request))));
                 return { artifactId: `confidential-rotation-${surface}` };
             },
+            update: async () => ({ ok: true }),
             read: async () => {
                 const request = requests.at(-1);
                 return request ? { ...request, status: 'approved', updatedAtMs: 2, decision: { kind: 'approve', decidedAtMs: 2 } } : null;
@@ -489,7 +601,7 @@ describe('target action invocation registry', () => {
                 scopes: declaration.scopes,
                 surfaces: declaration.surfaces,
                 inputSchema: declaration.inputSchema,
-                resultSchema: declaration.outputSchema,
+                resultSchema: declaration.resultSchema,
                 secretInputPaths: (declaration.inputHints?.fields ?? []).filter(field => field.widget === 'secret').map(field => field.path),
             },
             handler: input => plugin.invokeAction(localId, input, { surface }),
@@ -515,6 +627,7 @@ describe('target action invocation registry', () => {
                 requests.push(StoredTargetActionApprovalRequestV1Schema.parse(JSON.parse(JSON.stringify(request))));
                 return { artifactId: `confidential-release-${surface}` };
             },
+            update: async () => ({ ok: true }),
             read: async () => {
                 const request = requests.at(-1);
                 return request ? { ...request, status: 'approved', updatedAtMs: 2, decision: { kind: 'approve', decidedAtMs: 2 } } : null;
@@ -1182,17 +1295,13 @@ describe('target action invocation registry', () => {
     });
 
     it('binds target-action services and context.ui to the same validated current-session interaction owner', async () => {
-        const handleToolCall = vi.fn(async () => ({ decision: 'approved' as const }));
-        const presentation = Object.freeze({
-            notify: vi.fn(async () => ({ status: 'applied' as const, revision: 'r1' })),
-            setStatus: vi.fn(),
-            setWidget: vi.fn(),
-            purgeOwner: vi.fn(async () => ({ status: 'applied' as const, revision: 'r1' })),
-            replaceComposerText: vi.fn(),
-            present: vi.fn(),
+        // Only the Session state/transport boundary is in memory; policy and reply parsing stay real.
+        const session = createMutableApiSessionClientFixture({ sessionId: 'session-1' });
+        const permissionHandler = createProviderEnforcedPermissionHandler({
+            session, logPrefix: '[Target action interaction]', getWorkspaceWrites: () => 'allow',
         });
         const currentSession = createNativeAgentCurrentSessionUiServices({
-            permissionHandler: { handleToolCall },
+            permissionHandler,
             pluginId: 'acme.alpha',
             contributionId: 'run',
             runtimeId: 'run',
@@ -1201,14 +1310,12 @@ describe('target action invocation registry', () => {
             interactionDeadlineMs: 1_000,
             isCurrent: () => true,
             signal: new AbortController().signal,
-            presentation,
         });
         const serviceOwners = createProductionPluginInvocationServiceOwners({
             loggerSink: { write: () => {} },
         });
-        const createServices = vi.fn(serviceOwners.createServices);
         const registry = createRegistry({
-            createServices,
+            createServices: serviceOwners.createServices,
             resolveHostBinding: serviceOwners.resolveHostBinding,
             resolveCurrentSessionUi: (sessionId) => (
                 sessionId === 'session-1' ? currentSession : null
@@ -1224,19 +1331,33 @@ describe('target action invocation registry', () => {
             }],
         });
 
-        await expect(registry.invoke({
-            pluginId: 'acme.alpha',
-            localId: 'run',
-            input: { value: 'x' },
-            surface: 'cli',
-            sessionId: 'session-1',
-        })).resolves.toEqual({ status: 'executed', value: { echoed: 'approved' } });
-        expect(handleToolCall).toHaveBeenCalledOnce();
-        expect(createServices).toHaveBeenCalledWith(
-            expect.objectContaining({ currentSession }),
-            expect.any(Object),
-        );
-        await serviceOwners.dispose();
+        try {
+            const pending = registry.invoke({
+                pluginId: 'acme.alpha',
+                localId: 'run',
+                input: { value: 'x' },
+                surface: 'cli',
+                sessionId: 'session-1',
+            });
+            await vi.waitFor(() => expect(Object.keys(session.__getAgentState().requests ?? {})).toHaveLength(1));
+            const [[id, request]] = Object.entries(session.__getAgentState().requests ?? {});
+            expect(request).toMatchObject({
+                kind: 'user_action', tool: 'AskUserQuestion',
+                arguments: { questions: [expect.objectContaining({
+                    id: 'confirmation', question: 'Use the selected account?',
+                })] },
+            });
+            await expect(session.rpcHandlerManager.invokeLocal('session.user_action.answer', {
+                id, approved: true, answers: { confirmation: ['confirm'] },
+            })).resolves.toBeUndefined();
+            await expect(pending).resolves.toEqual({ status: 'executed', value: { echoed: 'approved' } });
+            expect(Object.keys(session.__getAgentState().requests ?? {})).toHaveLength(0);
+            expect(Object.keys(session.__getAgentState().completedRequests ?? {})).toHaveLength(1);
+        } finally {
+            await permissionHandler.abortPendingRequestsAndFlush('test cleanup');
+            await serviceOwners.dispose();
+            await session.close();
+        }
     });
 
     it('fails closed when late-bound occurrence currentness no longer matches the registered action', async () => {
@@ -1874,7 +1995,7 @@ describe('target action invocation registry', () => {
                     seed.retainCleanup!({ dispose: async () => { throw removalFailure; } });
                     return unavailableServices(seed, binding);
                 },
-                actions: [{ ...action(), handler: async () => validResult ? { echoed: 'x' } : { wrong: true } }],
+                actions: [{ ...action(), handler: async (): Promise<JsonValue> => validResult ? { echoed: 'x' } : { wrong: true } }],
             });
             await expect(registry.invoke({
                 pluginId: 'acme.alpha', localId: 'run', input: { value: 'x' }, surface: 'cli',

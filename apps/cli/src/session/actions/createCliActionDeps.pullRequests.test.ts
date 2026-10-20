@@ -6,7 +6,7 @@ const boundary = vi.hoisted(() => ({ get: vi.fn(), rpc: vi.fn() }));
 // Only authenticated HTTP and Machine RPC are replaced; Session routing and Actions stay real.
 vi.mock('axios', () => ({ default: { get: boundary.get, isAxiosError: () => false } }));
 vi.mock('@/session/transport/rpc/machineRpc', async (original) => ({
-  ...await original<typeof import('@/session/transport/rpc/machineRpc')>(), callMachineRpc: boundary.rpc,
+  ...await original<typeof import('@/session/transport/rpc/machineRpc')>(), callMachineRpc: boundary.rpc, callExactMachineRpc: boundary.rpc,
 }));
 const sessionId = 'c111111111111111111111111';
 const pullRequest = { provider: { id: 'github', kind: 'github', displayName: 'GitHub', baseUrl: 'https://github.com', nameWithOwner: 'acme/widgets' },
@@ -24,7 +24,9 @@ describe('CLI session pull request binding', () => {
     });
   });
   it.each([sessionId, 'different-session'] as const)('accepts only PR-link reads qualified for the requested Session: %s', async (echoSessionId) => {
-    boundary.rpc.mockResolvedValue({ kind: 'links', sessionId: echoSessionId, pullRequestLinks: [{ provider: 'github', repository: 'acme/widgets', number: 42 }] });
+    boundary.rpc.mockResolvedValue({ kind: 'links', sessionId: echoSessionId, pullRequestLinks: [{
+      provider: 'github', repository: 'acme/widgets', number: 42, url: pullRequest.url,
+    }] });
     const deps = createCliActionDeps({ token: 'token', credentials: { token: 'token', encryption: null }, sessionId, mode: 'plain', ctx: null,
       resolveServerFeaturesSnapshot: () => ({ status: 'ready', provenance: 'authenticated', features: FeaturesResponseSchema.parse({
         features: { automations: { enabled: true }, workflows: { enabled: true } }, capabilities: {},

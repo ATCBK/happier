@@ -23,6 +23,8 @@ import type {
     ComposerReferenceRuntime,
 } from './activation.js';
 import type { PluginDynamicResourceRuntime } from './services/resources.js';
+import type { PluginUiSchema } from './ui/publicContract.js';
+import type { ProtocolComposerRefV1 } from './protocol/composerRef.js';
 import type {
     DaemonDatabaseIncumbentQueryFixture,
     DaemonDatabaseMigration,
@@ -56,6 +58,7 @@ import type {
     PluginJsonSchema,
 } from './identity.js';
 import type { ActionContribution as PublicActionContribution } from './actions/service.js';
+import type { InputPredicate } from './actions/inputHints.js';
 import type {
     ManagedProviderRuntime,
     ProviderCatalogParser,
@@ -96,6 +99,7 @@ import type { VoiceProviderContribution, VoiceProvidersRegistrationApi } from '.
 import {
     type PluginManifest,
     type PluginLocalizedStringV2,
+    type PluginSkillContributionV1,
 } from './manifest.js';
 import {
     projectUiSurfaceDefinitions,
@@ -189,6 +193,8 @@ export type ActionOperationDeclarationV1 = Readonly<{
     }>;
 }>;
 
+export type ActionConfirmationWhen = InputPredicate | Readonly<{ presentUserUi: boolean | InputPredicate }>;
+
 /**
  * SDK-owned author projection of one Action declaration. Protocol remains the
  * parser and runtime manifest owner; this structural spelling keeps ordinary
@@ -227,6 +233,8 @@ type ActionContribution = Readonly<{
     hostAccess?: readonly string[];
     priority?: number;
     dangerLevel: 'safe' | 'writesLocal' | 'writesRemote' | 'externalSideEffect' | 'destructive';
+    /** Conditional default over normalized input, optionally scoped to present-user UI. */
+    confirmationWhen?: ActionConfirmationWhen;
     confirmation?: Readonly<{
         title: PluginLocalizedStringV2;
         body?: PluginLocalizedStringV2;
@@ -265,6 +273,7 @@ export type PluginActionDeclaration = Readonly<{
     slash?: Readonly<{ tokens: readonly string[] }>;
     inputSchema?: PluginJsonSchema | ProtocolComposableSchema<unknown, JsonValue>;
     inputHints?: NonNullable<PublicActionContribution['inputHints']>;
+    sessionTarget?: NonNullable<PublicActionContribution['sessionTarget']>;
     connectedAccountPurposeBindings?: readonly Readonly<{
         path: string;
         purpose: string;
@@ -273,6 +282,8 @@ export type PluginActionDeclaration = Readonly<{
     availability?: NonNullable<PublicActionContribution['availability']>;
     hostAccess?: readonly string[];
     priority?: number;
+    /** Explicit user approval settings take precedence over this conditional default. */
+    confirmationWhen?: ActionConfirmationWhen;
     confirmation?: Readonly<{
         title: PluginLocalizedStringV2;
         body?: PluginLocalizedStringV2;
@@ -539,8 +550,8 @@ export interface PluginComposerAttachmentDefinition<
     TDraft extends JsonValue = JsonValue,
     TPrepared extends JsonValue = TDraft,
 > extends ComposerAttachmentAuthorDeclaration {
-    readonly value: ProtocolComposableSchema<unknown, TDraft>;
-    readonly preparedValue?: ProtocolComposableSchema<unknown, TPrepared>;
+    readonly value: PluginUiSchema<TDraft> & Readonly<{ jsonSchema: PluginJsonSchema }>;
+    readonly preparedValue?: PluginUiSchema<TPrepared> & Readonly<{ jsonSchema: PluginJsonSchema }>;
     readonly runtime?: ComposerAttachmentRuntime<TDraft, TPrepared>;
 }
 
@@ -590,14 +601,7 @@ export type ComposerControlAuthorInteraction =
 export interface PluginComposerControlDefinition {
     readonly label: PluginLocalizedStringV2;
     readonly icon: PluginUiIconTokenV1;
-    readonly scopes?: readonly (
-        | 'session'
-        | 'newSession'
-        | 'pendingMessage'
-        | 'participantMessage'
-        | 'automationAuthoring'
-        | 'workflowAuthoring'
-    )[];
+    readonly scopes?: readonly ProtocolComposerRefV1['kind'][];
     readonly order?: number;
     readonly labelPolicy?: 'always' | 'auto-hide';
     readonly state?: Readonly<{ resource: string }>;
@@ -616,14 +620,7 @@ export interface PluginComposerControlDefinition {
 export type PluginComposerRegionDefinition = Readonly<{
     placement: 'beforeComposer' | 'afterComposer';
     renderer: ComposerRendererChainAuthorInput;
-    scopes?: readonly (
-        | 'session'
-        | 'newSession'
-        | 'pendingMessage'
-        | 'participantMessage'
-        | 'automationAuthoring'
-        | 'workflowAuthoring'
-    )[];
+    scopes?: readonly ProtocolComposerRefV1['kind'][];
     order?: number;
 }>;
 
@@ -888,7 +885,9 @@ export type DefinePluginInput<
             PluginContributionLocalId,
             Omit<NonNullable<NonNullable<PluginManifest['contributes']>['registrySources']>[number], 'id'>
         >>;
+        skills?: Readonly<Record<PluginContributionLocalId, Omit<PluginSkillContributionV1, 'id'>>>;
         dragSources?: Readonly<Record<PluginContributionLocalId, Omit<NonNullable<NonNullable<PluginManifest['contributes']>['dragSources']>[number], 'id'>>>;
+        workItems?: Readonly<{ 'work-items'?: Omit<NonNullable<NonNullable<PluginManifest['contributes']>['workItems']>[number], 'id'> }>;
         dropTargets?: Readonly<Record<PluginContributionLocalId, Omit<NonNullable<NonNullable<PluginManifest['contributes']>['dropTargets']>[number], 'id'>>>;
         notifications?: Readonly<Record<
             PluginContributionLocalId,
@@ -1341,7 +1340,23 @@ function projectActionContracts(
 }
 
 function projectAgent(localId: string, definition: PluginAgentDefinition) {
-    return Object.freeze({ ...definition.declaration, id: localId });
+    const sharing = definition.connectedAccountLaunch?.stateSharingDescriptor;
+    return Object.freeze({ ...definition.declaration, id: localId,
+        capabilities: {
+            ...definition.declaration.capabilities,
+            // The executable descriptor is the owner. Publish only its public
+            // support and consent facts, never its native-home paths or entries.
+            ...(sharing ? { providerStateSharing: {
+                config: { supported: sharing.config.supported, modes: [...sharing.config.modes],
+                    ...(sharing.config.unavailableReason ? { unavailableReason: sharing.config.unavailableReason } : {}) },
+                state: { supported: sharing.state.supported, modes: [...sharing.state.modes],
+                    ...(sharing.state.sharedStatePrivacyRiskAcknowledgementRequired === undefined ? {} : {
+                        sharedStatePrivacyRiskAcknowledgementRequired: sharing.state.sharedStatePrivacyRiskAcknowledgementRequired,
+                    }),
+                    ...(sharing.state.unavailableReason ? { unavailableReason: sharing.state.unavailableReason } : {}) },
+            } } : {}),
+        },
+    });
 }
 
 function projectPromptAsset(
@@ -2417,7 +2432,9 @@ const WORKFLOWS_ADAPTER = descriptorFamilyAdapter('workflows');
 const INPUT_TYPES_ADAPTER = descriptorFamilyAdapter('inputTypes');
 const ATMOSPHERE_PICTURES_ADAPTER = descriptorFamilyAdapter('atmospherePictures');
 const REGISTRY_SOURCES_ADAPTER = descriptorFamilyAdapter('registrySources');
+const SKILLS_ADAPTER = descriptorFamilyAdapter('skills');
 const DRAG_SOURCES_ADAPTER = descriptorFamilyAdapter('dragSources');
+const WORK_ITEMS_ADAPTER = descriptorFamilyAdapter('workItems');
 const DROP_TARGETS_ADAPTER = descriptorFamilyAdapter('dropTargets');
 const NOTIFICATIONS_ADAPTER = descriptorFamilyAdapter('notifications');
 const MANAGED_DEPENDENCIES_ADAPTER = descriptorFamilyAdapter('managedDependencies');
@@ -2616,7 +2633,9 @@ export const DEFINE_PLUGIN_FAMILY_POLICY_V2 = Object.freeze({
     inputTypes: { classification: 'descriptor-only', authorKey: 'inputTypes', inputShape: 'descriptor', adapter: INPUT_TYPES_ADAPTER },
     atmospherePictures: { classification: 'descriptor-only', authorKey: 'atmospherePictures', inputShape: 'descriptor', adapter: ATMOSPHERE_PICTURES_ADAPTER },
     registrySources: { classification: 'descriptor-only', authorKey: 'registrySources', inputShape: 'descriptor', adapter: REGISTRY_SOURCES_ADAPTER },
+    skills: { classification: 'descriptor-only', authorKey: 'skills', inputShape: 'descriptor', adapter: SKILLS_ADAPTER },
     dragSources: { classification: 'adapter', authorKey: 'dragSources', inputShape: 'descriptor', adapter: DRAG_SOURCES_ADAPTER },
+    workItems: { classification: 'adapter', authorKey: 'workItems', inputShape: 'descriptor', adapter: WORK_ITEMS_ADAPTER },
     dropTargets: { classification: 'adapter', authorKey: 'dropTargets', inputShape: 'descriptor', adapter: DROP_TARGETS_ADAPTER },
     notifications: { classification: 'descriptor-only', authorKey: 'notifications', inputShape: 'descriptor', adapter: NOTIFICATIONS_ADAPTER },
     managedDependencies: { classification: 'descriptor-only', authorKey: 'managedDependencies', inputShape: 'descriptor', adapter: MANAGED_DEPENDENCIES_ADAPTER },

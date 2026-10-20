@@ -1,4 +1,4 @@
-import { EXPLICIT_SESSION_UNFOLLOW_STATE_V1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
+import { EXPLICIT_SESSION_UNFOLLOW_STATE_V1, projectAccountSessionFollowEditorStateV1, type PersonalFollowOnceV1, type SessionFollowNotificationLevel } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import type {
     GetSessionFollowResponse,
     RemoveSessionFollowResponse,
@@ -8,6 +8,8 @@ import type {
 } from '@happier-dev/protocol';
 
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
+import type { FollowEventKindV1, FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+import { editFollowPolicyV1, projectFollowPolicyEditorV1, type FollowPolicyEditorEditV1 } from '@happier-dev/protocol/sessions/follow/followPolicyEditorV1';
 
 import {
     createIdleSessionFollowMutationIntent,
@@ -19,9 +21,11 @@ type AccountSessionFollowIntent =
     | Readonly<{ kind: 'set'; preferences: SetSessionFollowRequest }>
     | Readonly<{ kind: 'remove' }>;
 
+type FollowTransportError = SessionFollowErrorCodeV1 | 'credential_scope_denied' | 'unavailable';
+
 export type FollowTransportResult<T> =
     | Readonly<{ kind: 'ok'; value: T }>
-    | Readonly<{ kind: 'failed'; error: SessionFollowErrorCodeV1 | 'unavailable' }>;
+    | Readonly<{ kind: 'failed'; error: FollowTransportError }>;
 
 export type AccountSessionFollowTransport = Readonly<{
     get(address: SessionAddress): Promise<FollowTransportResult<GetSessionFollowResponse>>;
@@ -32,14 +36,36 @@ export type AccountSessionFollowTransport = Readonly<{
 export type AccountSessionFollowEditorSnapshot = Readonly<{
     projection: GetSessionFollowResponse | null;
     /** An uncommitted form selection. Never publishes Follow interest or read state. */
-    draft: SetSessionFollowRequest | null;
+    draft: Readonly<{ notificationLevel: SessionFollowNotificationLevel; includeInVoice: boolean }> | null;
+    policyDraft?: FollowPolicyV1 | null;
     loading: boolean;
     saving: boolean;
     online: boolean;
-    error: SessionFollowErrorCodeV1 | 'unavailable' | null;
+    error: FollowTransportError | null;
     /** Feedback for this editor's explicit enable interaction, not a delivery acknowledgement. */
     voiceInitialSnapshotPending: boolean;
 }>;
+
+/** Personal adapter for the same event/channel editor used by Session and rule follows. */
+export function projectAccountSessionFollowPolicyEditor(
+    snapshot: AccountSessionFollowEditorSnapshot,
+    supportedEvents?: readonly FollowEventKindV1[],
+) {
+    const effective = snapshot.projection ? projectAccountSessionFollowEditorStateV1({
+        follow: snapshot.projection.follow, isSessionOwner: snapshot.projection.isSessionOwner,
+    }) : null;
+    const policy = snapshot.policyDraft ?? effective?.policy ?? null;
+    return {
+        /** Owner relevance is independent of an active delivery choice. */
+        following: effective?.tracked === true,
+        suppressed: effective?.suppressed === true,
+        deliveryEnabled: effective?.policy != null,
+        model: policy ? projectFollowPolicyEditorV1(policy, supportedEvents) : null,
+        once: snapshot.projection?.follow?.once ?? null,
+        hasDraft: snapshot.policyDraft != null,
+        canEdit: snapshot.projection?.capabilities.manageFollow === true && snapshot.online && !snapshot.saving,
+    };
+}
 
 /**
  * One editor lifetime over the canonical Home projection. All hosts use this
@@ -54,6 +80,7 @@ export function createAccountSessionFollowController(
     let snapshot: AccountSessionFollowEditorSnapshot = Object.freeze({
         projection: null,
         draft: null,
+        policyDraft: null,
         loading: false,
         saving: false,
         online: true,
@@ -68,7 +95,7 @@ export function createAccountSessionFollowController(
     // passive refresh reconciles the Home projection *beneath* it rather than erasing it.
     let mutation = createIdleSessionFollowMutationIntent<
         AccountSessionFollowIntent,
-        SessionFollowErrorCodeV1 | 'unavailable'
+        FollowTransportError
     >();
 
     function update(patch: Partial<AccountSessionFollowEditorSnapshot>) {
@@ -78,20 +105,23 @@ export function createAccountSessionFollowController(
     }
 
     function applyMutation(
-        event: SessionFollowMutationIntentEvent<AccountSessionFollowIntent, SessionFollowErrorCodeV1 | 'unavailable'>,
+        event: SessionFollowMutationIntentEvent<AccountSessionFollowIntent, FollowTransportError>,
         patch: Partial<AccountSessionFollowEditorSnapshot> = {},
     ) {
         mutation = reduceSessionFollowMutationIntent(mutation, event);
         const outstanding = mutation.pending ?? mutation.failed;
         update({
-            draft: outstanding?.kind === 'set' ? { ...outstanding.preferences } : null,
+            draft: outstanding?.kind === 'set' && outstanding.preferences.notificationLevel !== undefined && outstanding.preferences.includeInVoice !== undefined
+                ? { notificationLevel: outstanding.preferences.notificationLevel, includeInVoice: outstanding.preferences.includeInVoice } : null,
+            policyDraft: outstanding?.kind === 'set' ? outstanding.preferences.policy ?? null : null,
             error: mutation.error,
             ...patch,
         });
     }
 
-    function failed(error: SessionFollowErrorCodeV1 | 'unavailable') {
-        const accessLost = error === 'session_not_found' || error === 'account_inactive' || error === 'feature_unavailable';
+    function failed(error: FollowTransportError) {
+        const accessLost = error === 'session_not_found' || error === 'account_inactive' || error === 'feature_unavailable'
+            || error === 'credential_scope_denied';
         if (accessLost) {
             applyMutation({ kind: 'abandoned' }, {
                 error,
@@ -196,6 +226,12 @@ export function createAccountSessionFollowController(
         }
     }
 
+    function currentEditorPolicy(): FollowPolicyV1 {
+        return snapshot.policyDraft ?? (snapshot.projection ? projectAccountSessionFollowEditorStateV1({
+            follow: snapshot.projection.follow, isSessionOwner: snapshot.projection.isSessionOwner,
+        }).policy : null) ?? { preset: 'important' };
+    }
+
     return {
         getSnapshot: () => snapshot,
         subscribe(listener: () => void) {
@@ -204,6 +240,12 @@ export function createAccountSessionFollowController(
         },
         refresh,
         set,
+        setOnce: (once: PersonalFollowOnceV1 | null) => set({ once }),
+        setPolicy: (policy: FollowPolicyV1) => set({ policy }),
+        getPolicyEditorState: (supportedEvents?: readonly FollowEventKindV1[]) => projectAccountSessionFollowPolicyEditor(snapshot, supportedEvents),
+        getPolicyEditorModel: (supportedEvents?: readonly FollowEventKindV1[]) => snapshot.projection
+            ? projectFollowPolicyEditorV1(currentEditorPolicy(), supportedEvents) : null,
+        editPolicy: (edit: FollowPolicyEditorEditV1) => set({ policy: editFollowPolicyV1(currentEditorPolicy(), edit) }),
         remove,
         retry: async () => {
             const intent = mutation.failed;

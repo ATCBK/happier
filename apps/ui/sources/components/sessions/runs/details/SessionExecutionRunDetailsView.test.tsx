@@ -6,6 +6,7 @@ import {
     ExecutionRunCancelTurnRequestSchema, ExecutionRunEnsureRequestSchema, ExecutionRunGetRequestSchema,
     ExecutionRunGetResponseSchema, ExecutionRunPublicStateSchema,
     ExecutionRunStopRequestSchema, FeaturesResponseSchema,
+    normalizeActionsSettingsV1,
     SessionAgentActivityHeadlineV1Schema, SessionMessagesPageV1Schema, SessionStoredMessageContentSchema, V2SessionByIdResponseSchema,
     type ExecutionRunPublicState,
 } from '@happier-dev/protocol';
@@ -19,9 +20,11 @@ import { createMachineFixture, createPendingMessageFixture, createSessionFixture
 import { createSessionMessagesFixture, createToolCallMessageFixture } from '@/dev/testkit/fixtures/transcriptFixtures';
 import { createPlainSessionCurrentProjectionRecordFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { serveActionHomes, type ServedHomeRequest } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createArtifactStoreBoundary, type ArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
-import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
+import { reportPopoverContentLayout, withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
@@ -113,6 +116,7 @@ await loadSyncSingletonForTests();
 type Screen = Awaited<ReturnType<typeof renderScreen>>;
 let screen: Screen;
 let home: Awaited<ReturnType<typeof serveActionHomes>>;
+let approvalArtifacts: ArtifactStoreBoundary;
 let serverId: string;
 let sequence = 0;
 let runState: ExecutionRunPublicState;
@@ -173,6 +177,8 @@ async function refresh() {
 }
 async function menu() {
     await screen.pressByTestIdAsync('session-run-details-actions-menu');
+    // Test Renderer cannot emit the native layout event that reveals measured portal content.
+    await act(async () => reportPopoverContentLayout(screen, { width: 340, height: 300 }));
 }
 async function setActionPolicy(actionsSettingsV1: NonNullable<typeof settingsDefaults.actionsSettingsV1>) {
     const { sync } = await import('@/sync/sync');
@@ -205,7 +211,9 @@ let restorePopoverWebGlobals: (() => void) | undefined;
 const animationFrames = new Set<ReturnType<typeof setTimeout>>();
 beforeEach(async ({ task }) => {
     const commandSuite = task.suite?.name === 'Teammate command Action admission';
-    const portableIdentity = commandSuite || task.suite?.name === 'Neighboring user Run Stop admission'
+    const stopFallbackPolicySuite = task.suite?.name === 'Session Stop fallback Action policy';
+    const portableIdentity = commandSuite || task.suite?.name === 'Neighboring user Run Stop admission' || task.suite?.name === 'Session Stop fallback custody'
+        || task.suite?.name === 'Session Stop fallback Action policy'
         ? 'srv_run_details_' + (sequence + 1) : undefined;
     const stopPolicy = portableIdentity && task.name.startsWith('refuses ')
         ? { actionsSettingsV1: { v: 1 as const, actions: {
@@ -238,6 +246,14 @@ beforeEach(async ({ task }) => {
     boundary.frames.length = 0;
     vi.mocked(Modal.alert).mockReset();
     vi.mocked(Modal.confirm).mockReset();
+    // The alert is a presentation boundary: keep recovery choices open until
+    // their public button is pressed, just as ModalManager.alertAsync does.
+    vi.mocked(Modal.alertAsync).mockImplementation((title, message, buttons) => new Promise(resolve => {
+        Modal.alert(title, message, buttons?.map(button => ({ ...button, onPress: () => {
+            button.onPress?.();
+            resolve();
+        } })));
+    }));
     boundary.call.mockImplementation(async (method, input) => {
         if (method === SESSION_RPC_METHODS.EXECUTION_RUN_GET) { ExecutionRunGetRequestSchema.parse(input); return getReply(); }
         if (method === SESSION_RPC_METHODS.EXECUTION_RUN_STOP) { ExecutionRunStopRequestSchema.parse(input); return stopReply(); }
@@ -254,10 +270,19 @@ beforeEach(async ({ task }) => {
         return { errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND, error: 'Method not found' };
     });
     httpReads.length = 0;
+    approvalArtifacts = createArtifactStoreBoundary({ ownerAccountId: () => 'account-1', encryptionMode: 'plain' });
     home = await serveActionHomes({
         homes: [{ key: 'home', serverUrl: 'https://run-details-' + (++sequence) + '.test',
-            serverIdentityId: 'srv_run_details_' + sequence, accountId: 'account-1', settings: stopPolicy }],
+            serverIdentityId: 'srv_run_details_' + sequence, accountId: 'account-1', settings: stopPolicy,
+            currentAccount: stopFallbackPolicySuite }],
         route(request) {
+            if (stopFallbackPolicySuite) {
+                const artifactResponse = approvalArtifacts.handle(request.url.pathname + request.url.search, {
+                    method: request.method, headers: request.headers, signal: request.signal,
+                    ...(request.body !== undefined ? { body: JSON.stringify(request.body) } : {}),
+                });
+                if (artifactResponse) return artifactResponse;
+            }
             if (request.path === '/v1/features') return Response.json(FeaturesResponseSchema.parse({
                 features: { execution: { runs: { enabled: true } }, encryption: { plaintextStorage: { enabled: true }, accountOptOut: { enabled: true } } },
                 capabilities: { session: { pendingInput: { protocolVersion: 3 } },
@@ -270,7 +295,7 @@ beforeEach(async ({ task }) => {
             if (request.path === '/v2/sessions/s1' && !httpSessionAvailable) return new Response(null, { status: 404 });
             if (request.path === '/v2/sessions/s1') return Response.json(V2SessionByIdResponseSchema.parse({
                 session: { ...createPlainSessionCurrentProjectionRecordFixture({ id: 's1', active: true,
-                    metadata: getStorage().getState().sessions.s1?.metadata ?? {},
+                    metadata: getStorage().getState().sessions.s1?.metadata ?? { path: '/worktree', host: 'localhost' },
                 }),
                     effectiveAccess: { v: 1, level: 'owner', sources: [{ kind: 'owner' }],
                         capabilities: getStorage().getState().sessions.s1!.access!.capabilities },
@@ -360,7 +385,10 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
         getReply = () => new Promise(resolve => { finishRetarget = resolve; });
         const tab = screen.root.findByType('RunTabTitles').props as { navigation: WorkspaceNavigationContextValue; tabId: string };
         await act(async () => { tab.navigation.openHref(`/session/s1/runs/run_2?serverId=${serverId}`, { tabId: tab.tabId }); });
-        expect(titles()).toEqual([]);
+        const retargeted = screen.root.findByType('RunTabTitles').props;
+        expect(retargeted.navigation.destinationTitles[retargeted.tabId]).toMatchObject({ ref: retargeted.target, title: null });
+        // Unnamed registered destinations use their catalog title after the old page withdraws its identity.
+        expect(titles()).toEqual(['tabs.sessions']);
         if (!finishRetarget) throw new Error('Retarget must start a new exact Run read');
         runState = createRun({ runId: 'run_2', display: { title: 'New exact Run' } });
         await act(async () => { finishRetarget?.(wireResult()); });
@@ -545,6 +573,31 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
         await act(async () => resolveOlder({ run: createRun({ status: 'running' }) }));
         expect(info().run.status).toBe('succeeded');
     });
+    it.each([SESSION_RPC_METHODS.EXECUTION_RUN_GET, RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST])(
+        'cancels an unanswered %s when the Run view unmounts', async method => {
+            const original = boundary.call.getMockImplementation()!;
+            let release!: () => void;
+            const pending = new Promise<void>(resolve => { release = resolve; });
+            boundary.call.mockImplementation(async (candidate, input) => {
+                if (candidate === method) await pending;
+                return original(candidate, input);
+            });
+            try {
+                await mount();
+                await vi.waitFor(() => expect(calls(method).length).toBeGreaterThan(0));
+                const frame = boundary.frames.find(frame => frame.event === SOCKET_RPC_EVENTS.CALL
+                    && frame.payload !== null && typeof frame.payload === 'object'
+                    && String(Reflect.get(frame.payload, 'method')).endsWith(`:${method}`));
+                if (!frame || !frame.payload || typeof frame.payload !== 'object') throw new Error('Missing issued Run read');
+                const requestId = Reflect.get(frame.payload, 'requestId');
+                await screen.unmount();
+                expect(boundary.frames.filter(frame => frame.event === SOCKET_RPC_EVENTS.CANCEL)).toContainEqual({
+                    serverUrl: home.homes.home!.serverUrl, event: SOCKET_RPC_EVENTS.CANCEL,
+                    payload: { requestId: requestId ?? expect.any(String) },
+                });
+            } finally { release(); }
+        },
+    );
     it('cancels only the witnessed current turn through the rendered Run menu, not the whole Run', async () => {
         runState = liveRun({ inputTurns: { occurrenceId: 'occurrence-1', current: { turnId: 'turn-1', inputIds: ['input-1'], state: 'active' } } });
         await mount(); await loaded(); await menu();
@@ -589,9 +642,9 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
     });
     it('refuses Resume through Action policy before issuing its transport', async () => {
         runState = liveRun({ status: 'succeeded', interaction: undefined, lifecycle: { v: 1, state: 'recoverable' } });
-        await setActionPolicy({
+        await setActionPolicy(normalizeActionsSettingsV1({
             v: 1, actions: { 'execution.run.ensure': { disabledSurfaces: ['ui'] } },
-        });
+        }));
         await mount(); await loaded();
         await screen.pressByTestIdAsync('session-run-details-resume');
         await vi.waitFor(() => expect(JSON.stringify(screen.tree.toJSON())).toContain('action_disabled'));
@@ -604,9 +657,9 @@ describe('SessionExecutionRunDetailsView — real Home, transcript and interacti
         runState = liveRun({ inputTurns: { occurrenceId: 'occurrence-1', current: {
             turnId: 'turn-1', inputIds: ['input-1'], state: 'active',
         } } });
-        await setActionPolicy({
+        await setActionPolicy(normalizeActionsSettingsV1({
             v: 1, actions: { [actionId]: { disabledSurfaces: ['ui'] } },
-        });
+        }));
         await mount(); await loaded(); await menu();
         await screen.pressByTestIdAsync(testId);
         if (actionId === 'execution.run.stop') {
@@ -871,9 +924,9 @@ describe('Neighboring user Run Stop admission', () => {
     }
 
     it.each(['runs', 'machine', 'subagent'] as const)('refuses %s Stop through Action policy before transport or Session fallback', async surface => {
-        await setActionPolicy({ v: 1, actions: {
+        await setActionPolicy(normalizeActionsSettingsV1({ v: 1, actions: {
             'execution.run.stop': { enabled: false, enabledPlacements: [], disabledSurfaces: [], disabledPlacements: [] },
-        } });
+        } }));
         const stop = await mountStopSurface(surface);
         const listsBeforeStop = calls(RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST).length;
         await stop();
@@ -900,10 +953,17 @@ describe('Neighboring user Run Stop admission', () => {
     it.each(['runs', 'machine'] as const)('preserves %s explicit Session fallback after an issued Run Stop fails', async surface => {
         stopReply = async () => ({ ok: false, error: 'Unsupported response from session RPC' });
         vi.mocked(Modal.confirm).mockResolvedValueOnce(true);
-        const stop = await mountStopSurface(surface);
-        await stop();
+        await mountStopSurface(surface);
+        let operation!: Promise<void>;
+        await act(async () => {
+            operation = screen.findAllByProps({ accessibilityLabel: 'runs.stop.stopRunA11y' })[0]!.props.onPress();
+        });
+        await vi.waitFor(() => expect(vi.mocked(Modal.alert)).toHaveBeenCalledWith('runs.stop.stopRunFailedTitle',
+            'runs.stop.stopRunFailedBody', expect.any(Array)));
+        await pressSessionStopRecovery();
+        await operation;
         expect(calls(SESSION_RPC_METHODS.EXECUTION_RUN_STOP)).toHaveLength(1);
-        expect(vi.mocked(Modal.confirm)).toHaveBeenCalledOnce();
+        expect(vi.mocked(Modal.confirm)).not.toHaveBeenCalled();
         // Both surfaces reach the real daemon Session-stop producer. A valid
         // stopped response must not fall through to a second runner stop.
         const method = RPC_METHODS.STOP_SESSION;
@@ -911,7 +971,7 @@ describe('Neighboring user Run Stop admission', () => {
         expect(boundary.requests.filter(request => request.method === method)).toEqual([
             { serverUrl: home.homes.home!.serverUrl, targetId: 'm1', method, payload: { sessionId: 's1' } },
         ]);
-        expect(vi.mocked(Modal.alert)).not.toHaveBeenCalled();
+        expect(vi.mocked(Modal.alert).mock.calls.filter(([title]) => title === 'common.error')).toEqual([]);
         expect(calls(RPC_METHODS.KILL_SESSION)).toEqual([]);
     });
 
@@ -948,6 +1008,141 @@ describe('Neighboring user Run Stop admission', () => {
         await act(async () => settle({ ok: false, error: 'The retired Run Stop was not confirmed', errorCode: 'rpc_timeout' }));
         expect(vi.mocked(Modal.confirm)).not.toHaveBeenCalled();
         expect(calls(RPC_METHODS.STOP_SESSION)).toEqual([]);
+    });
+});
+
+function sessionStopRecovery() {
+    const recovery = vi.mocked(Modal.alert).mock.calls.find(([title]) => title === 'runs.stop.stopRunFailedTitle');
+    const stop = recovery?.[2]?.find(button => button.text === 'runs.stop.stopSession');
+    expect(stop?.onPress).toBeTypeOf('function');
+    return stop!.onPress!;
+}
+async function pressSessionStopRecovery() {
+    await act(async () => { await sessionStopRecovery()(); });
+}
+
+describe('Session Stop fallback Action policy', () => {
+    const cases = (['runs', 'details', 'machine'] as const).flatMap(surface => [
+        { surface, policy: 'Off', stops: 0, stopStatus: 'stopped' },
+        { surface, policy: 'Ask rejected', stops: 0, stopStatus: 'stopped' },
+        { surface, policy: 'Ask approved', stops: 1, stopStatus: 'stopped' },
+        { surface, policy: 'Allowed', stops: 1, stopStatus: 'stopped' },
+        { surface, policy: 'Allowed pending', stops: 1, stopStatus: 'requested' },
+    ]);
+    it.each(cases)('honors $policy for the $surface Session fallback after an issued Run Stop fails', async ({ surface, policy, stops, stopStatus }) => {
+        await setActionPolicy(normalizeActionsSettingsV1({ v: 1, actions: { 'session.stop': policy === 'Off'
+            ? { enabled: false } : policy.startsWith('Ask') ? { approvalRequiredSurfaces: ['ui'] } : {} } }));
+        stopReply = async () => ({ ok: false, error: 'Not confirmed', errorCode: 'rpc_timeout' });
+        vi.mocked(Modal.confirm).mockResolvedValue(true);
+        const original = boundary.call.getMockImplementation()!;
+        boundary.call.mockImplementation(async (method, input) => method === RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST
+            ? { runs: [{ ...runState, happyHomeDir: '/tmp/happier', happySessionId: 's1', pid: 123 }] }
+            : method === RPC_METHODS.STOP_SESSION ? StopSessionResultSchema.parse({ status: stopStatus })
+            : original(method, input));
+        let operation: Promise<void> | undefined;
+        if (surface !== 'details') {
+            const { router } = await import('expo-router');
+            router.setParams(surface === 'machine' ? { id: 'm1', page: 'work', serverId } : {});
+            const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+            const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+            const credentials = await TokenStorage.getCredentialsForServerUrl(home.homes.home!.serverUrl);
+            const Runs = surface === 'runs' ? (await import('@/app/(app)/runs')).default
+                : (await import('@/app/(app)/machines/[id]/[page]')).WorkspaceRouteBody;
+            screen = await renderScreen(<InjectedAuthProvider credentials={credentials}><AppPaneProvider><Runs /></AppPaneProvider></InjectedAuthProvider>);
+            await vi.waitFor(() => expect(screen.findAllByProps({ accessibilityLabel: 'runs.stop.stopRunA11y' }).length).toBeGreaterThan(0));
+            await act(async () => { operation = screen.findAllByProps({ accessibilityLabel: 'runs.stop.stopRunA11y' })[0]!.props.onPress(); });
+            await vi.waitFor(() => expect(vi.mocked(Modal.alert)).toHaveBeenCalledWith('runs.stop.stopRunFailedTitle',
+                'runs.stop.stopRunFailedBody', expect.any(Array)));
+        } else {
+            await mount(); await loaded(); await menu(); await screen.pressByTestIdAsync('session-run-details-stop');
+            await vi.waitFor(() => expect(screen.findByTestId('session-run-details-stop-failed')).not.toBeNull());
+        }
+        expect(calls(SESSION_RPC_METHODS.EXECUTION_RUN_STOP)).toHaveLength(1);
+        expect(calls(RPC_METHODS.STOP_SESSION)).toEqual([]);
+        expect(vi.mocked(Modal.confirm)).not.toHaveBeenCalled();
+        const { SurfaceStateCard } = await import('@/components/ui/surfaces/SurfaceStateCard');
+        const fallback = surface !== 'details' ? sessionStopRecovery()
+            : screen.findAllByType(SurfaceStateCard).find(node => node.props.testID === 'session-run-details-stop-failed')!.props.secondaryAction.onPress;
+        let fallbackOperation!: Promise<void>;
+        await act(async () => { fallbackOperation = Promise.resolve(fallback()); });
+        if (policy.startsWith('Ask')) {
+            await vi.waitFor(() => expect(approvalArtifacts.list()).toHaveLength(1));
+            expect(calls(RPC_METHODS.STOP_SESSION)).toEqual([]);
+            const artifactId = approvalArtifacts.list()[0]!.id;
+            const decision = await decideApprovalAsInbox(serverId, artifactId, policy === 'Ask approved' ? 'approve' : 'reject');
+            expect(decision).toMatchObject({ ok: true, result: { status: policy === 'Ask approved' ? 'executed' : 'rejected' } });
+        } else {
+            expect(approvalArtifacts.list()).toEqual([]);
+        }
+        await act(async () => { await fallbackOperation; });
+        if (operation) await act(async () => { await operation; });
+        expect(calls(RPC_METHODS.STOP_SESSION)).toHaveLength(stops);
+        expect(vi.mocked(Modal.confirm)).not.toHaveBeenCalled();
+        if (policy === 'Off') expect(vi.mocked(Modal.alert)).toHaveBeenCalledWith('common.error', 'action_disabled');
+        if (stops) expect(boundary.requests.filter(request => request.method === RPC_METHODS.STOP_SESSION)).toEqual([
+            { serverUrl: home.homes.home!.serverUrl, targetId: 'm1', method: RPC_METHODS.STOP_SESSION, payload: { sessionId: 's1' } },
+        ]);
+        if (stops) expect(vi.mocked(Modal.alert).mock.calls.filter(([title]) => title === 'common.error')).toEqual([]);
+        expect(calls(RPC_METHODS.KILL_SESSION)).toEqual([]);
+    });
+});
+
+describe('Session Stop fallback custody', () => {
+    it.each(['runs', 'details'] as const)('retires the %s fallback observer without retracting its issued Session Stop', async surface => {
+        stopReply = async () => ({ ok: false, error: 'Not confirmed', errorCode: 'rpc_timeout' });
+        vi.mocked(Modal.confirm).mockResolvedValueOnce(true);
+        let settle!: (result: unknown) => void;
+        const original = boundary.call.getMockImplementation()!;
+        boundary.call.mockImplementation(async (method, input) => method === RPC_METHODS.STOP_SESSION
+            ? new Promise(resolve => { settle = resolve; }) : method === RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST
+                ? { runs: [{ ...runState, happyHomeDir: '/tmp/happier', happySessionId: 's1', pid: 123 }] }
+                : original(method, input));
+        if (surface === 'runs') {
+            const { router } = await import('expo-router');
+            router.setParams({});
+            const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+            const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
+            const credentials = await TokenStorage.getCredentialsForServerUrl(home.homes.home!.serverUrl);
+            const Runs = (await import('@/app/(app)/runs')).default;
+            screen = await renderScreen(<InjectedAuthProvider credentials={credentials}><AppPaneProvider><Runs /></AppPaneProvider></InjectedAuthProvider>);
+            await vi.waitFor(() => expect(screen.findAllByProps({ accessibilityLabel: 'runs.stop.stopRunA11y' }).length).toBeGreaterThan(0));
+        } else {
+            await mount(); await loaded(); await menu(); await screen.pressByTestIdAsync('session-run-details-stop');
+            await vi.waitFor(() => expect(screen.findByTestId('session-run-details-stop-failed')).not.toBeNull());
+        }
+        let settled = false;
+        let operation!: Promise<void>;
+        const { SurfaceStateCard } = await import('@/components/ui/surfaces/SurfaceStateCard');
+        await act(async () => {
+            const onPress = surface === 'runs'
+                ? screen.findAllByProps({ accessibilityLabel: 'runs.stop.stopRunA11y' })[0]!.props.onPress
+                : screen.findAllByType(SurfaceStateCard).find(node => node.props.testID === 'session-run-details-stop-failed')!.props.secondaryAction.onPress;
+            operation = Promise.resolve(onPress()).finally(() => { settled = true; });
+        });
+        if (surface === 'runs') {
+            await vi.waitFor(() => expect(vi.mocked(Modal.alert)).toHaveBeenCalledWith('runs.stop.stopRunFailedTitle',
+                'runs.stop.stopRunFailedBody', expect.any(Array)));
+            await pressSessionStopRecovery();
+        }
+        await vi.waitFor(() => expect(calls(RPC_METHODS.STOP_SESSION)).toHaveLength(1));
+        const issued = boundary.frames.find(frame => frame.event === SOCKET_RPC_EVENTS.CALL
+            && frame.payload !== null && typeof frame.payload === 'object'
+            && Reflect.get(frame.payload, 'method') === `m1:${RPC_METHODS.STOP_SESSION}`);
+        if (!issued?.payload || typeof issued.payload !== 'object') throw new Error('Missing issued Session Stop');
+        try {
+            await screen.unmount();
+            await vi.waitFor(() => expect(settled).toBe(true));
+            const requestId = SocketRpcRequestIdSchema.parse(Reflect.get(issued.payload, 'requestId'));
+            expect(boundary.frames.filter(frame => frame.event === SOCKET_RPC_EVENTS.CANCEL)
+                .some(frame => frame.payload && typeof frame.payload === 'object' && Reflect.get(frame.payload, 'requestId') === requestId)).toBe(false);
+            await home.switchAccount('home', 'account-2');
+            await vi.waitFor(() => expect(boundary.frames.filter(frame => frame.event === SOCKET_RPC_EVENTS.CANCEL)).toContainEqual({
+                serverUrl: home.homes.home!.serverUrl, event: SOCKET_RPC_EVENTS.CANCEL, payload: { requestId },
+            }));
+            expect(vi.mocked(Modal.alert)).not.toHaveBeenCalled();
+            expect(calls(RPC_METHODS.STOP_SESSION)).toHaveLength(1);
+            expect(calls(RPC_METHODS.KILL_SESSION)).toEqual([]);
+        } finally { await act(async () => settle({ status: 'stopped' })); await operation; }
     });
 });
 

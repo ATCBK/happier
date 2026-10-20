@@ -8,7 +8,7 @@ import {
   classifyVoiceProviderHttpFailure,
   type VoiceAccountOperationService,
 } from '@happier-dev/plugin-sdk/voice';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { OpenAiRealtimeClientAuthProviderResponseSchema } from '../../protocol/voice/clientAuth.js';
 import { OPENAI_CLIENT_AUTH_EXPIRY_SAFETY_WINDOW_MS } from './connection.js';
@@ -19,15 +19,15 @@ import {
 
 const DEFAULT_API_BASE_URL = 'https://api.openai.com/v1';
 const MAX_RESPONSE_BYTES = 64 * 1024;
-const AudienceSchema = z.object({
-  model: z.string().trim().min(1).max(128),
-  voice: z.string().trim().min(1).max(128),
+const AudienceSchema = z.strictObject({
+  model: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
+  voice: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
   // The host composes tool guidance and prompt-stack blocks with the user's
   // saved instructions. The declared HTTP body budget owns this payload size.
-  instructions: z.string().trim().nullable().optional(),
-  turnDetection: z.enum(['server_vad', 'semantic_vad', 'manual']).optional(),
-  inputTranscriptionModel: z.string().trim().max(128).nullable().optional(),
-}).strict();
+  instructions: z.optional(z.nullable(z.string().check(z.trim()))),
+  turnDetection: z.optional(z.enum(['server_vad', 'semantic_vad', 'manual'])),
+  inputTranscriptionModel: z.optional(z.nullable(z.string().check(z.trim(), z.maxLength(128)))),
+});
 
 function providerError(
   code: 'invalid_parameters' | 'credential_unavailable' | 'provider_response_invalid',

@@ -130,7 +130,7 @@
                       "-Command",
                       "Invoke-RestMethod https://app.factory.ai/cli/windows | Invoke-Expression"
                     ],
-                    "cmd": "powershell"
+                    "cmd": "powershell.exe"
                   }
                 ]
               }
@@ -211,6 +211,7 @@
     "sessionHeaderActions": [],
     "sessionInfoSections": [],
     "settings": [],
+    "skills": [],
     "systemTools": [
       {
         "executableNames": [
@@ -342,6 +343,7 @@
     "voiceModelPacks": [],
     "voiceProviders": [],
     "webhooks": [],
+    "workItems": [],
     "workflows": []
   },
   "displayName": "Factory Droid",

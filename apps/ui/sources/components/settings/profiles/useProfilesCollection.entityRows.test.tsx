@@ -5,7 +5,7 @@ import { createDeferred, createModalModuleMock, renderHook, renderScreen, standa
 import { Modal } from '@/modal';
 import { getStorage } from '@/sync/domains/state/storageStore';
 import { applyProfileCatalogSnapshot, getProfileCatalogSnapshot, resetProfileCatalogSnapshotsForTests } from '@/sync/store/settings/profileCatalogSnapshot';
-import { useAiLaunchProfiles, useHomeAiLaunchProfiles } from '@/sync/store/useAiLaunchProfiles';
+import { useAiLaunchProfiles, useAiLaunchProfilesForLegacyUi, useHomeAiLaunchProfiles } from '@/sync/store/useAiLaunchProfiles';
 import { useApplyProfileSave, useDeleteAiLaunchProfile } from '@/sync/store/settingsWriters';
 import { useSaveLaunchProfile } from '@/components/profiles/edit/useSaveLaunchProfile';
 import { useLaunchProfileEditorDraft } from '@/components/profiles/edit/useLaunchProfileEditorDraft';
@@ -13,6 +13,7 @@ import { LaunchProfileEditForm } from '@/components/profiles/edit/LaunchProfileE
 import { AIBackendProfileSchema } from '@happier-dev/protocol/profiles/backendProfileSchema';
 import { migrateLegacyAiLaunchProfilesV1 } from '@happier-dev/protocol/providers/migrations/legacyProfilesV1';
 import { DEFAULT_PROVIDER_SETTINGS_V1 } from '@happier-dev/protocol/providers/settings/v1';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
 import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { refreshAcpCatalog, resetAcpCatalogEngineForTests } from '@/sync/engine/settings/acpCatalogEngine';
 import { resetAcpCatalogSnapshotsForTests, getAcpCatalogSnapshot } from '@/sync/store/settings/acpCatalogSnapshot';
@@ -34,6 +35,7 @@ import { resetRuntimeFetch, setRuntimeFetch, type RuntimeFetch } from '@/utils/s
 import { PROFILE_ROWS_ROUTE_V1, PROFILE_RECORDS_ROUTE_V1, PROFILE_REFERENCE_GUARD_ROUTE_V1,
     ProfileRecordV1Schema, ProfileRowMutationV1Schema, type ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { getBuiltInBackendProfile } from '@happier-dev/protocol/profiles/builtInBackendProfiles';
 import { PROFILE_TRANSFER_ROUTE_V1, type ProfileTransferRowReadResponseV1 } from '@happier-dev/protocol/profiles/profileTransferV1';
 import { AUTHORING_MEMORY_ROUTE_V1 } from '@happier-dev/protocol/account/authoringMemory';
@@ -101,8 +103,8 @@ describe('Profile collection entity projection', () => {
         expect(saveAs.getCurrent().draft).toMatchObject({ status: 'migration', profile: { id: legacy.id }, sourceRevision: 7 });
         const migrated = migrateLegacyAiLaunchProfilesV1({ profiles: [legacy] }, DEFAULT_PROVIDER_SETTINGS_V1, { migratedAt: 20,
             pendingCustomProfileIds: [], candidates: [{ kind: 'connection', sourceProfileId: legacy.id,
-                connection: { v: 1, id: 'pc-azure', source: { kind: 'contribution', contributionKey: 'happier.provider.openai/openai' },
-                    role: 'default', displayName: 'Azure', displayNameMode: 'automatic', revision: 0, createdAt: 20, updatedAt: 20 },
+                connection: { v: 1, id: ProviderConnectionIdSchema.parse('pc-azure'), source: { kind: 'contribution', contributionKey: 'happier.provider.openai/openai' },
+                    role: 'default', displayName: 'Azure', displayNameMode: 'automatic', deployment: { kind: 'external' }, revision: 0, createdAt: 20, updatedAt: 20 },
                 removedEnvironmentVariableNames: ['AZURE_OPENAI_ENDPOINT'], selectedModel: { agentTargetKey: 'agent:codex', modelId: 'deployment-a' } }] },
             { lastUsedProfile: null }, { profileRecordIds: [legacy.id], records: [{ record: source, revision: 7 }] });
         if (!migrated.ok) throw new Error('Expected accepted Provider conversion');
@@ -312,6 +314,70 @@ describe('Profile editor entity writer', () => {
         } finally { confirm.mockRestore(); await hook.unmount(); }
     });
 
+    it('deletes a reviewed new-session Profile through its entity writer without another confirmation', async () => {
+        accountSettings = { actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'launch_profiles.delete': ['ui'] } } };
+        getStorage().setState({ settings: settingsParse(accountSettings), settingsVersion: accountSettingsVersion });
+        mutation.mockImplementation(async (_url, init) => {
+            const request = ProfileRowMutationV1Schema.parse(JSON.parse(String(init?.body)));
+            expect(request).toMatchObject({ operation: 'remove', id: profile.id, expectedRevision: 7 });
+            revision = 8;
+            guardRevision = 4;
+            rowDeleted = true;
+            return Response.json({ status: 'updated', revision, cursor: 27, referenceGuardRevision: guardRevision });
+        });
+        const { useNewSessionProfileActions } = await import('@/components/sessions/new/hooks/screenModel/useNewSessionProfileActions');
+        const alert = vi.spyOn(Modal, 'alert').mockImplementation(() => {});
+        const confirm = vi.spyOn(Modal, 'confirm').mockResolvedValue(false);
+        const hook = await renderHook(() => {
+            const [selectedProfileId, setSelectedProfileId] = React.useState<string | null>(profile.id);
+            const profiles = useAiLaunchProfilesForLegacyUi();
+            const deleteProfile = useDeleteAiLaunchProfile();
+            return { selectedProfileId, profiles, ...useNewSessionProfileActions({
+                selectedProfileId, setSelectedProfileId, deleteProfile,
+            }) };
+        });
+        try {
+            const reviewed = hook.getCurrent().profiles.find(entry => entry.id === profile.id);
+            if (!reviewed) throw new Error('Expected an admitted new-session Profile');
+            await act(async () => { await hook.getCurrent().handleDeleteProfile(reviewed); });
+            expect(rowDeleted).toBe(true);
+            expect(hook.getCurrent().selectedProfileId).toBeNull();
+            expect(getProfileCatalogSnapshot(homeScope)?.data).toEqual([]);
+            expect(alert).not.toHaveBeenCalled();
+            expect(confirm).not.toHaveBeenCalled();
+        } finally { alert.mockRestore(); confirm.mockRestore(); await hook.unmount(); }
+    });
+
+    it('retains a selected new-session Profile when its reviewed removal revision conflicts', async () => {
+        accountSettings = { actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'launch_profiles.delete': ['ui'] } } };
+        getStorage().setState({ settings: settingsParse(accountSettings), settingsVersion: accountSettingsVersion });
+        mutation.mockImplementation(async (_url, init) => {
+            const request = ProfileRowMutationV1Schema.parse(JSON.parse(String(init?.body)));
+            expect(request).toMatchObject({ operation: 'remove', id: profile.id, expectedRevision: 7 });
+            revision = 8;
+            return Response.json({ status: 'conflict', revision });
+        });
+        const { useNewSessionProfileActions } = await import('@/components/sessions/new/hooks/screenModel/useNewSessionProfileActions');
+        const alert = vi.spyOn(Modal, 'alert').mockImplementation(() => {});
+        const hook = await renderHook(() => {
+            const [selectedProfileId, setSelectedProfileId] = React.useState<string | null>(profile.id);
+            const profiles = useAiLaunchProfilesForLegacyUi();
+            const deleteProfile = useDeleteAiLaunchProfile();
+            return { selectedProfileId, profiles, ...useNewSessionProfileActions({
+                selectedProfileId, setSelectedProfileId, deleteProfile,
+            }) };
+        });
+        try {
+            const reviewed = hook.getCurrent().profiles.find(entry => entry.id === profile.id);
+            if (!reviewed) throw new Error('Expected an admitted new-session Profile');
+            await act(async () => { await hook.getCurrent().handleDeleteProfile(reviewed); });
+            expect(rowDeleted).toBe(false);
+            expect(hook.getCurrent().selectedProfileId).toBe(profile.id);
+            expect(alert).toHaveBeenCalledWith((await import('@/text')).t('common.error'), 'profile_revision_conflict');
+            expect(settingsWrites).not.toHaveBeenCalled();
+        } finally { alert.mockRestore(); await hook.unmount(); }
+    });
+
     it('hydrates saved Profiles after the same Account lifetime changes during a cold read', async () => {
         resetProfileCatalogSnapshotsForTests();
         const firstRead = createDeferred<void>();
@@ -355,7 +421,8 @@ describe('Profile editor entity writer', () => {
 
     it.each([true, false])('atomically captures and retires the builtin no-entity enablement preference on first attachment (key present: %s)', async hasPreference => {
         accountSettings = { profileEnabledById: { ...(hasPreference ? { 'azure-openai': false } : {}), 'gemini-api-key': false },
-            favoriteProfiles: ['keep-favorite'], lastUsedAgent: 'codex', futurePreference: { retain: 'opaque' } };
+            favoriteProfiles: ['keep-favorite'], lastUsedAgent: 'codex', futurePreference: { retain: 'opaque' },
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, approvalWaivedSurfaces: { 'launch_profiles.secrets.select': ['ui'] } }) };
         getStorage().setState({ settings: settingsParse(accountSettings), settingsVersion: accountSettingsVersion });
         rowDeleted = true;
         const snapshot = getProfileCatalogSnapshot(homeScope);
@@ -801,6 +868,10 @@ describe('Profile editor entity writer', () => {
     });
 
     it('keeps an inherited Artifact binding absent after selecting None and receiving the private row ACK', async () => {
+        accountSettings = { actionsSettingsV1: ActionsSettingsV1Schema.parse({
+            v: 1, approvalWaivedSurfaces: { 'launch_profiles.secrets.select': ['ui'] },
+        }) };
+        getStorage().setState({ settings: settingsParse(accountSettings), settingsVersion: accountSettingsVersion });
         const content = LaunchProfileArtifactV1Schema.parse({ kind: 'launch-profile.v1', profile,
             secretBindings: { TOKEN: 'happier:shared-secret:v1:profile-token' } });
         const artifact: Artifact = { id: 'inherited-binding-profile', ownerAccountId: 'resource-owner', access: 'view',

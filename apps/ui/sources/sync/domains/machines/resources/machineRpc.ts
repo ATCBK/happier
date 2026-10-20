@@ -16,19 +16,19 @@ import type { FrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntime
 
 import { machineRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc';
 import { resolveServerCredentialAccountScope } from '@/sync/domains/scope/serverCredentialAccountScope';
-import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { resolveMachineDaemonReadServerId } from '../useMachineDaemonReadTarget';
 
 export type MachineResourceKey = Readonly<{ machineId: string; serverId?: string | null; expectedAccountId?: string | null; daemonStateVersion?: number | null }>;
 export type MachineVitalsView = 'summary' | 'overview';
 export type MachineVitalsRange = MachineVitalsHistoryV1['range'];
 export type MachineVitalsReadInput = MachineResourceKey & Readonly<{ view: MachineVitalsView; signal?: AbortSignal }>;
 export type MachineVitalsHistoryReadInput = MachineResourceKey & Readonly<{ range: MachineVitalsRange; signal?: AbortSignal }>;
-export type MachineVitalsWatchInput = MachineVitalsReadInput & Readonly<{ sinceSampledAt?: number }>;
+export type MachineVitalsWatchInput = MachineVitalsReadInput & Readonly<{ sinceSampledAt?: number; onDispatched?: () => void }>;
 export type MachineResourceRpcResult<T> = Readonly<{ ok: true; value: T }> | Readonly<{ ok: false; reason: 'older_happier' | 'request_failed' | 'invalid_response'; errorCode?: string }>;
 
 /** One-shot pointer/focus reads capture the same credential-owned key as mounted daemon readers. */
 export async function resolveMachineResourceKey(input: MachineResourceKey): Promise<MachineResourceKey | null> {
-    const serverId = resolveServerProfileScopeIdForIdentifier(input.serverId);
+    const serverId = resolveMachineDaemonReadServerId(input.serverId);
     const resolution = await resolveServerCredentialAccountScope(serverId);
     if (resolution.kind !== 'bound' || (input.expectedAccountId && input.expectedAccountId !== resolution.scope.accountId)) return null;
     return { ...input, serverId: resolution.scope.serverId, expectedAccountId: resolution.scope.accountId };
@@ -72,6 +72,7 @@ export function watchMachineVitalsViaMachineRpc(input: MachineVitalsWatchInput):
     return read(input, () => machineRpcWithServerScope({ machineId: input.machineId, serverId: input.serverId,
         ...(input.expectedAccountId ? { accountId: input.expectedAccountId } : {}),
         method: RPC_METHODS.DAEMON_VITALS_WATCH, payload, ...(input.signal ? { signal: input.signal } : {}),
+        ...(input.onDispatched ? { onDispatched: input.onDispatched } : {}),
         // The retained watch is transport demand, with its existing parking margin.
         timeoutMs: MACHINE_WATCH_WINDOW_MS + 10_000 }), (raw) => MachineVitalsWatchResultV1Schema.safeParse(raw));
 }

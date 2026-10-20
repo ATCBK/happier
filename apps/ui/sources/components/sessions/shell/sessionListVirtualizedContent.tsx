@@ -34,10 +34,6 @@ type SessionListLayoutEvent = Readonly<{
     }>;
 }>;
 
-const WEB_LIST_NON_VIRTUALIZED_MAX_ITEMS = 120;
-const WEB_LIST_INITIAL_NUM_TO_RENDER = 12;
-const WEB_LIST_MAX_TO_RENDER_PER_BATCH = 8;
-const WEB_LIST_WINDOW_SIZE = 3;
 const WEB_LIST_SCROLL_EVENT_THROTTLE_MS = 32;
 const NATIVE_LIST_SCROLL_EVENT_THROTTLE_MS = 16;
 // Row taps must work while the session-search keyboard is open ('handled'), and a
@@ -93,45 +89,10 @@ export function SessionListFilteredNoResultsMessage(props: Readonly<{
         <View accessibilityLiveRegion="polite" testID="session-list-filtered-no-results">
             <EmptyState
                 layout="line"
-                lineDensity="compact"
                 title={t(props.message ?? SESSION_LIST_FILTERED_NO_RESULTS_MESSAGE_KEY)}
             />
         </View>
     );
-}
-
-function isPrioritySessionListHeaderNode(node: SessionListVirtualizedNode): boolean {
-    const headerKind = node.kind === 'header' ? node.headerKind : undefined;
-    return headerKind === 'attention'
-        || headerKind === 'working'
-        || headerKind === 'pinned'
-        || headerKind === 'active';
-}
-
-function isInactiveSessionListHeaderNode(node: SessionListVirtualizedNode): boolean {
-    return node.kind === 'header' && node.headerKind === 'inactive';
-}
-
-function resolveWebListInitialNumToRender(nodes: ReadonlyArray<SessionListVirtualizedNode>): number {
-    if (nodes.length <= WEB_LIST_INITIAL_NUM_TO_RENDER) return WEB_LIST_INITIAL_NUM_TO_RENDER;
-
-    let hasPrioritySection = false;
-    let firstInactiveIndex = -1;
-    for (let index = 0; index < nodes.length; index += 1) {
-        const node = nodes[index];
-        if (!node) continue;
-        if (isPrioritySessionListHeaderNode(node)) {
-            hasPrioritySection = true;
-        }
-        if (isInactiveSessionListHeaderNode(node)) {
-            firstInactiveIndex = index;
-            break;
-        }
-    }
-
-    if (!hasPrioritySection) return WEB_LIST_INITIAL_NUM_TO_RENDER;
-    const priorityPrefixLength = firstInactiveIndex >= 0 ? firstInactiveIndex : nodes.length;
-    return Math.max(WEB_LIST_INITIAL_NUM_TO_RENDER, priorityPrefixLength);
 }
 
 export type SessionListRowDensity = 'default' | 'compact' | 'minimal';
@@ -264,12 +225,9 @@ export const SessionListVirtualizedContent = React.memo(function SessionListVirt
         [rowDensity],
     );
     const isWeb = Platform.OS === 'web';
-    const useWebFlatList = isWeb && props.nodes.length <= WEB_LIST_NON_VIRTUALIZED_MAX_ITEMS;
-    const initialNumToRender = useWebFlatList ? resolveWebListInitialNumToRender(props.nodes) : undefined;
     return (
         <VirtualizedList
             ref={props.listRef as React.Ref<VirtualizedListRef>}
-            backendPreference={isWeb ? 'flat' : 'legend'}
             data={props.nodes as any}
             renderItem={props.renderItem as any}
             extraData={props.rowExtraData}
@@ -300,11 +258,6 @@ export const SessionListVirtualizedContent = React.memo(function SessionListVirt
             keyboardDismissMode={SESSION_LIST_KEYBOARD_DISMISS_MODE}
             ListHeaderComponent={headerComponent as any}
             ListFooterComponent={footerComponent as any}
-            disableVirtualization={useWebFlatList ? true : undefined}
-            initialNumToRender={initialNumToRender}
-            maxToRenderPerBatch={isWeb ? WEB_LIST_MAX_TO_RENDER_PER_BATCH : undefined}
-            windowSize={isWeb ? WEB_LIST_WINDOW_SIZE : undefined}
-            removeClippedSubviews={isWeb ? false : undefined}
             // Session rows carry drag state, images, menus, and focus. Keep
             // recycling off until those local-state seams have been audited.
             recycleItems={false}

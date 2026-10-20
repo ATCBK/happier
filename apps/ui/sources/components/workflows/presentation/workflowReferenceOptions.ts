@@ -5,6 +5,7 @@ import type { BuiltinWorkflowPurposeV1 } from '@happier-dev/protocol/workflows/b
 import { useWorkflowDefinitionLibrary } from '@/components/workflows/library/workflowLibraryReads';
 import { t } from '@/text';
 import { formatWorkflowDefinitionContentUnavailableReason, formatWorkflowDefinitionLibraryTitle } from './workflowProblemPresentation';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 /** A workflow a Run a workflow step can name, as the picker and the block both present it. */
 export type WorkflowReferenceOption = Readonly<{
@@ -26,12 +27,12 @@ export function listBuiltinWorkflowReferenceOptions(): readonly WorkflowReferenc
  * read. Mounted only where it is demanded (an open Run a workflow picker, or a
  * block that names a saved workflow), so an editor without either reads nothing.
  */
-export function useWorkflowLibraryReferenceOptions(options?: Readonly<{ enabled?: boolean }>): readonly WorkflowReferenceOption[] {
+export function useWorkflowLibraryReferenceOptions(options?: Readonly<{ enabled?: boolean; accountLifetime?: ServerAccountScopeLifetime | null }>): readonly WorkflowReferenceOption[] {
     return useWorkflowReferenceLibrary(options).options;
 }
 
 /** Reference presentation borrows pagination/retry from the one library reader. */
-export function useWorkflowReferenceLibrary(options?: Readonly<{ enabled?: boolean }>) {
+export function useWorkflowReferenceLibrary(options?: Readonly<{ enabled?: boolean; accountLifetime?: ServerAccountScopeLifetime | null }>) {
     const library = useWorkflowDefinitionLibrary(options);
     const references = React.useMemo(
         (): readonly WorkflowReferenceOption[] => [

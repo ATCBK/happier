@@ -20,18 +20,18 @@ import { MAX_VOICE_TIMER_DELAY_MS } from './timing.js';
  * malformed fact must not void the whole Voice profile — and the selection
  * then keeps resolving through its legacy raw `agentId`.
  */
-const VoiceAgentSelectionTargetKeySchema = z._default(z.pipe(z.transform((value) => (typeof value === 'string' && BackendTargetKeyV2Schema.safeParse(value).success ? value : null)), z.nullable(z.string())), null);
+const VoiceAgentSelectionTargetKeySchema = z._default((<I extends zMini.core.$ZodType, O extends zMini.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as zMini.ZodMiniPipe<I, O>)(z.transform((value) => (typeof value === 'string' && BackendTargetKeyV2Schema.safeParse(value).success ? value : null)), z.nullable(z.string())), null);
 const VoiceAgentSelectionIdentityValueSchema = zMini.nullable(asProtocolZod(PluginContributionIdentityV1Schema));
-const VoiceAgentSelectionIdentitySchema = z._default(z.pipe(z.transform((value) => {
+const VoiceAgentSelectionIdentitySchema = z._default((<I extends zMini.core.$ZodType, O extends zMini.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as zMini.ZodMiniPipe<I, O>)(z.transform((value) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
     return PluginContributionIdentityV1Schema.safeParse(value).success ? value : null;
   }), VoiceAgentSelectionIdentityValueSchema), null);
-defineStoredReadProjection(VoiceAgentSelectionIdentitySchema, () => z._default(z.pipe(z.transform((value) => {
+defineStoredReadProjection(VoiceAgentSelectionIdentitySchema, () => z._default((<I extends zMini.core.$ZodType, O extends zMini.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as zMini.ZodMiniPipe<I, O>)(z.transform((value) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const parsed = createStoredReadSchema(asProtocolZod(PluginContributionIdentityV1Schema)).safeParse(value);
   return parsed.success ? parsed.data : null;
 }), VoiceAgentSelectionIdentityValueSchema), null));
-const VoiceAgentSelectionProjectionGenerationSchema = z._default(z.pipe(z.transform((value) => {
+const VoiceAgentSelectionProjectionGenerationSchema = z._default((<I extends zMini.core.$ZodType, O extends zMini.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as zMini.ZodMiniPipe<I, O>)(z.transform((value) => {
     if (value === null || value === undefined) return null;
     const parsed = Number(value);
     return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : null;

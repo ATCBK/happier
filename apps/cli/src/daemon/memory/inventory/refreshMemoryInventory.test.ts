@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import nacl from 'tweetnacl';
 import { createPlainSessionOwnerMetadataEnvelopeV1, sealSessionOwnerMetadataEnvelopeV1,
   SessionOwnerMetadataV1Schema, projectSessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
 import { encodeBase64, encryptLegacy } from '@/api/encryption';
@@ -11,6 +12,7 @@ import {
   refreshMemoryInventoryOnce,
   resolveMemoryInventoryScopes,
   isMemorySessionOnMachine,
+  createMemorySessionLocalityReader,
   type MemoryInventoryScope,
 } from './refreshMemoryInventory';
 
@@ -59,6 +61,42 @@ describe('resolveMemoryInventoryScopes', () => {
 });
 
 describe('refreshMemoryInventoryOnce', () => {
+  it('opens unchanged owner ciphertext once per worker locality lifetime and reopens changed or forgotten content', () => {
+    const secret = new Uint8Array(32).fill(19);
+    const credentials: StoredCredentials = { token: 'test', encryption: { type: 'legacy', secret } };
+    const envelope = (machineId: string) => sealSessionOwnerMetadataEnvelopeV1({
+      ownerMetadata: SessionOwnerMetadataV1Schema.parse({ v: 1, workspace: { machineId, path: '/workspace' } }),
+      material: { type: 'legacy', secret }, randomBytes: n => new Uint8Array(n).fill(7),
+    });
+    const session = row('local', { encryptionMode: 'e2ee', metadataLayoutVersion: 1, ownerMetadata: envelope('here') });
+    const read = createMemorySessionLocalityReader({ credentials, machineId: 'here' });
+    // Transparent measurement: actual authentication and schema parsing run.
+    const opens = vi.spyOn(nacl.secretbox, 'open');
+    try {
+      expect(read.isOnMachine(session, 'e2ee')).toBe(true);
+      expect(read.isOnMachine({ ...session, updatedAt: 200, ownerMetadata: { ...session.ownerMetadata! } }, 'e2ee')).toBe(true);
+      expect(opens).toHaveBeenCalledTimes(1);
+      const changed = { ...session, ownerMetadata: envelope('elsewhere') };
+      expect(read.isOnMachine(changed, 'e2ee')).toBe(false);
+      expect(opens).toHaveBeenCalledTimes(2);
+      expect(read.isOnMachine(session, 'plain')).toBe(false);
+      expect(read.isOnMachine(session, 'e2ee')).toBe(true);
+      read.forget(['local']);
+      expect(read.isOnMachine(session, 'e2ee')).toBe(true);
+      expect(opens).toHaveBeenCalledTimes(4);
+      read.clear();
+      expect(read.isOnMachine(session, 'e2ee')).toBe(true);
+      expect(opens).toHaveBeenCalledTimes(5);
+      secret[0] ^= 1;
+      expect(read.isOnMachine(session, 'e2ee')).toBe(false);
+      secret[0] ^= 1;
+      expect(read.isOnMachine(session, 'e2ee')).toBe(true);
+      expect(read.isOnMachine({ ...session, ownerMetadata: null, machineId: 'here' }, 'e2ee')).toBe(false);
+      const foreignCredential = createMemorySessionLocalityReader({ machineId: 'here',
+        credentials: { token: 'other', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(20) } } });
+      expect(foreignCredential.isOnMachine(session, 'e2ee')).toBe(false);
+    } finally { opens.mockRestore(); }
+  });
   it.each(['plain', 'e2ee'] as const)('reads layout-one locality without opening shared presentation metadata (%s)', mode => {
     const secret = new Uint8Array(32).fill(19);
     const credentials: StoredCredentials = { token: 'test', encryption: mode === 'plain' ? null : { type: 'legacy', secret } };

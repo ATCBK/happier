@@ -128,13 +128,13 @@ export function selectAttentionSubjects<T extends MachineAttentionSubject>(subje
 
 /**
  * The fleet in one title (All machines, the popover, the phone Settings row): "2 machines need a look",
- * "edge-1 is short on memory", "All calm", "Calm" (one machine). `null` while no machine reports
+ * "edge-1 is short on memory", "All calm". `null` while no machine reports
  * resources, so the surface keeps its plain title.
  */
 export function describeFleetTitle(input: Readonly<{ subjects: readonly MachineAttentionSubject[]; reportingCount: number }>): string | null {
     if (input.reportingCount === 0) return null;
     const attention = selectAttentionSubjects(input.subjects);
-    if (attention.length === 0) return input.reportingCount === 1 ? t('machineAttention.fleet.calmOne') : t('machineAttention.fleet.calm');
+    if (attention.length === 0) return t('machineAttention.fleet.calm');
     if (attention.length === 1) {
         const reason = selectHeadlineReason(attention[0]!.attention)!;
         return describeMachineReasonPhrase(attention[0]!.name, reason);

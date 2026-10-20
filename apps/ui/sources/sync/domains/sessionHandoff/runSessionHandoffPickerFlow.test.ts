@@ -78,6 +78,16 @@ describe('runSessionHandoffPickerFlow', () => {
         routerPushMock.mockClear();
     });
 
+    it('keeps an unavailable source out of the picker and transfer admission', async () => {
+        const { runSessionHandoffPickerFlow } = await import('./runSessionHandoffPickerFlow');
+        await expect(runSessionHandoffPickerFlow({
+            execute: vi.fn(), sessionId: 'sess_1', sourceMachineId: 'source', serverId: 'server', placement: 'session_info',
+            availability: { available: false, reason: 'runtime_direct_peer_unavailable' },
+        })).resolves.toBeNull();
+        expect(openSessionHandoffPickerMock).not.toHaveBeenCalled();
+        expect(acquireUserRequestLeaseMock).not.toHaveBeenCalled();
+    });
+
     it('keeps deferred approval out of operation progress and opens its exact artifact', async () => {
         openSessionHandoffPickerMock.mockResolvedValueOnce({ targetMachineId: 'target', workspaceAction: { kind: 'none' } });
         executeSessionHandoffActionMock.mockResolvedValueOnce({ ok: true, kind: 'approval_required', artifactId: 'approval-1' });

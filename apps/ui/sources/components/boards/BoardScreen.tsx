@@ -2,7 +2,8 @@ import * as React from 'react';
 import { useIsFocused } from '@react-navigation/native';
 import { Pressable, View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { buildWorkBoardItemKeyV1, buildWorkBoardWidgetKeyV1, type BoardItemRefV1, type WorkBoardIntentV1, type WorkBoardV1 } from '@happier-dev/protocol/boards/workBoardV1';
+import { createWorkBoardV1, buildWorkBoardItemKeyV1, buildWorkBoardWidgetKeyV1, type BoardItemRefV1, type WorkBoardIntentV1, type WorkBoardV1 } from '@happier-dev/protocol/boards/workBoardV1';
+import type { SessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import { normalizeWidgetSizeForSurfaceV1, type WidgetInstanceV1 } from '@happier-dev/protocol/widgets';
 import { HappierSurfaceStateFrame } from '@happier-dev/plugin-ui/presentation';
 
@@ -31,9 +32,9 @@ import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
 
 import { BoardByStatus } from './byStatus/BoardByStatus';
-import { BoardCanvas, type BoardCanvasWidget, type BoardCanvasWidgetRender } from './canvas/BoardCanvas';
+import { BoardCanvas, type BoardCanvasLayoutSnapshot, type BoardCanvasWidget, type BoardCanvasWidgetRender } from './canvas/BoardCanvas';
 import { BoardWidgetCard, describeBoardWidgetTitle } from './cards/BoardWidgetCard';
-import { AddToBoardButton } from './header/AddToBoardPopover';
+import { AddToBoardButton, AddToBoardPopover } from './header/AddToBoardPopover';
 import { BoardSettingsButton } from './header/BoardSettingsPopover';
 import { countBoardCardsNeedingYou, hasWorkBoardContent, type BoardCard } from './model/boardCards';
 import { describeBoardSources } from './model/boardSourcePresentation';
@@ -52,6 +53,7 @@ import { BOARDS_ROUTE } from './boardsRoutes';
 import { BoardSaveFailureLine, describeBoardSaveFailure } from './BoardSaveFailureLine';
 import { machinePageHref } from '@/components/settings/machines/collection/machineCollectionModel';
 import { PopoverScope } from '@/components/ui/popover';
+import { buildPluginAppPageRoutePath } from '@/components/appShell/plugins/pluginAppPageRoute';
 
 /**
  * One board (lab `boards-B1`…`B5`): the header — title, the source line, Canvas | By status, Add to
@@ -59,11 +61,26 @@ import { PopoverScope } from '@/components/ui/popover';
  */
 export const BoardScreen = React.memo(function BoardScreen(props: Readonly<{ boardId: string }>) {
     const board = useWorkBoard(props.boardId);
-    const read = useWorkBoardReadState();
-    if (!board && read.status !== 'ready') return <BoardReadState />;
+    const read = useWorkBoardReadState(props.boardId);
+    if (!board && read.status !== 'ready') return <BoardReadState boardId={props.boardId} />;
     if (!board) return <MissingBoard boardId={props.boardId} />;
     // The Needs you section reads the Inbox's own model, mounted once for the open board.
     return <BoardsInboxBoundary boards={[board]}><BoardBody board={board} /></BoardsInboxBoundary>;
+});
+
+/** The same Board read projection over a URL filter, with no Artifact or edit binding. */
+export const FilteredBoardScreen = React.memo(function FilteredBoardScreen(props: Readonly<{ filter: SessionListFilterV1 }>) {
+    const routeFocused = useIsFocused();
+    const phone = useDeviceType() === 'phone';
+    const board = React.useMemo(() => ({ ...createWorkBoardV1({ id: 'filtered-view', name: t('boards.title') }),
+        mode: 'by_status' as const, source: { picked: [], filter: props.filter } }), [props.filter]);
+    const { cards } = useBoardLiveCards(board, { enabled: routeFocused });
+    const onOpen = useOpenBoardCard();
+    useLoadPickedRuns(cards);
+    return <View style={styles.root} testID="board-filter-view">
+        <PageHeader title={board.name} alwaysShowTitle columnWidth="pane" />
+        <BoardByStatus cards={cards} onOpen={onOpen} onAction={onOpen} stacked={phone} active={routeFocused} />
+    </View>;
 });
 
 /**
@@ -74,7 +91,7 @@ const MissingBoard = React.memo(function MissingBoard(props: Readonly<{ boardId:
     const saveQueue = useWorkBoardSaveQueue();
     const failure = resolveBoardSaveFailure(useWorkBoardSaveState(), props.boardId);
     const summary = useWorkBoardSummaries().find(board => board.id === props.boardId);
-    const read = useWorkBoardReadState();
+    const read = useWorkBoardReadState(props.boardId);
     if (failure) {
         return (
             <EmptyState
@@ -117,6 +134,13 @@ function useOpenBoardCard(): (card: BoardCard, action?: BoardCardAction) => void
         }
         const { serverId, id } = target.ref.qualifiedId;
         switch (target.ref.kind) {
+            case 'task': {
+                if (card.body.kind !== 'task' || !card.body.item.page) return;
+                const page = card.body.item.page;
+                router.push(buildPluginAppPageRoutePath({ pluginId: target.ref.pluginId, localId: page.pageId,
+                    ...(page.subPath === undefined ? {} : { subPath: page.subPath }) }) as never);
+                return;
+            }
             case 'session':
                 router.push(buildScopedSessionRouteHref({ sessionId: id, serverId }) as never);
                 return;
@@ -164,8 +188,11 @@ const BoardBody = React.memo(function BoardBody(props: Readonly<{ board: WorkBoa
     const phone = useDeviceType() === 'phone';
     const mode = phone ? 'by_status' : board.mode;
     const binding = useWorkBoardEntityBinding({ board, membership, isHomeMounted: homes.isHomeMounted }, routeFocused);
+    const canvasLayout = React.useMemo<React.RefObject<BoardCanvasLayoutSnapshot | null>>(
+        () => ({ current: null }), [board.id, binding?.scope]);
     const [addOpen, setAddOpen] = React.useState(false);
     const [settingsOpen, setSettingsOpen] = React.useState(false);
+    const addAnchorRef = React.useRef<View>(null);
     /** The card just added with ⌘↵ "Add and place": focused on Canvas so arrows or a drag place it. */
     const [placingKey, setPlacingKey] = React.useState<string | null>(null);
     const onOpen = useOpenBoardCard();
@@ -219,8 +246,13 @@ const BoardBody = React.memo(function BoardBody(props: Readonly<{ board: WorkBoa
         const ref = { surface: widgetSurface, instanceId: instance.id };
         ownAdds.current.add(instance.id);
         const outcome = await dispatchIntent({ kind: 'widget_add', boardId: board.id, ref, instance, ...(options.size ? { size: options.size } : {}) });
-        if (outcome.status !== 'applied') throw new Error(outcome.code);
+        if (outcome.status === 'pending') return { ok: true as const, approvalPending: true as const };
+        if (outcome.status !== 'applied') throw Object.assign(new Error(outcome.code), {
+            code: outcome.status === 'unknown' ? 'outcome_unknown' : outcome.code,
+            ...('details' in outcome ? { details: outcome.details } : {}),
+        });
         if (options.place && mode === 'canvas') setPlacingKey(buildWorkBoardWidgetKeyV1(ref));
+        return { ok: true as const };
     }, [board.id, dispatchIntent, mode, widgetSurface]);
     const addWidgets = React.useMemo(() => ({ scope: widgetSurface, instances: widgetInstances, addInstance: addWidgetInstance }),
         [addWidgetInstance, widgetInstances, widgetSurface]);
@@ -305,11 +337,7 @@ const BoardBody = React.memo(function BoardBody(props: Readonly<{ board: WorkBoa
                             />
                         )}
                         <AddToBoardButton
-                            board={board}
-                            homes={homes}
-                            onBoardKeys={onBoardKeys}
-                            onAdd={onAdd}
-                            widgets={addWidgets}
+                            anchorRef={addAnchorRef}
                             open={addOpen}
                             onOpenChange={setAddOpen}
                         />
@@ -318,7 +346,7 @@ const BoardBody = React.memo(function BoardBody(props: Readonly<{ board: WorkBoa
                             homes={homes}
                             pickedCards={pickedCards}
                             canvasAvailable={!phone}
-                            dispatch={dispatch}
+                            dispatch={dispatchIntent}
                             onRemoveItem={onRemoveItem}
                             open={settingsOpen}
                             onOpenChange={setSettingsOpen}
@@ -328,7 +356,16 @@ const BoardBody = React.memo(function BoardBody(props: Readonly<{ board: WorkBoa
                     </View>
                 )}
             />
-            <BoardReadState retained />
+            <AddToBoardPopover
+                anchorRef={addAnchorRef}
+                homes={homes}
+                onBoardKeys={onBoardKeys}
+                onAdd={onAdd}
+                widgets={addWidgets}
+                open={addOpen}
+                onOpenChange={setAddOpen}
+            />
+            <BoardReadState boardId={board.id} retained />
             {failure ? (
                 <View style={styles.failure}>
                     <BoardSaveFailureLine testID="board-save-failed" failure={failure} context={{ board, membership, isHomeMounted: homes.isHomeMounted }} />
@@ -355,7 +392,7 @@ const BoardBody = React.memo(function BoardBody(props: Readonly<{ board: WorkBoa
                         scene="emptyBoard"
                         title={t('boards.empty.title')}
                         subtitle={t('boards.empty.body')}
-                        action={<RoundButton size="normal" title={t('boards.empty.action')}
+                        action={<RoundButton testID="board-empty.add" size="normal" title={t('boards.empty.action')}
                             leading={<Icon name="plus" color={theme.colors.button.primary.tint} />}
                             onPress={() => setAddOpen(true)} />}
                     />
@@ -363,6 +400,7 @@ const BoardBody = React.memo(function BoardBody(props: Readonly<{ board: WorkBoa
             ) : <>
             {mode === 'canvas' && binding ? (
                 <BoardCanvas
+                    retainedLayout={canvasLayout}
                     cards={cards}
                     widgets={canvasWidgets}
                     renderWidget={renderWidget}
@@ -384,7 +422,7 @@ const BoardBody = React.memo(function BoardBody(props: Readonly<{ board: WorkBoa
     );
 });
 
-/** The header's one meta line: the source chip (opens Board settings), the item count, and who needs you. */
+/** The header's one meta line: the source chip (opens Board settings), the item count when there is one, and who needs you. */
 const BoardSourceLine = React.memo(function BoardSourceLine(props: Readonly<{
     board: WorkBoardV1;
     itemCount: number;
@@ -407,7 +445,8 @@ const BoardSourceLine = React.memo(function BoardSourceLine(props: Readonly<{
                 <Text numberOfLines={1} style={styles.meta}>{source}</Text>
                 <Icon name="caret-down" size={12} color={theme.colors.text.secondary} />
             </Pressable>
-            <Text style={styles.meta}>· {props.itemCount === 0 ? t('boards.settings.addedByHandNone') : t('boards.meta.items', { count: props.itemCount })}</Text>
+            {/* An empty board's empty state already says so; the meta line only counts what is there. */}
+            {props.itemCount === 0 ? null : <Text style={styles.meta}>· {t('boards.meta.items', { count: props.itemCount })}</Text>}
             {props.needYou > 0 ? (
                 <Text testID="board-header.need-you" style={[styles.meta, workStatusWordStyle('attention')]}>
                     · {t('boards.meta.needYou', { count: props.needYou })}

@@ -71,3 +71,26 @@ it.each([true, false])('keeps report selection %s explicit through the options o
     await act(async () => hook.getCurrent().onPatch({ notifyParentOnCompletion: !initial }));
     expect(hook.getCurrent().selectedNotifyParentOnCompletion).toBe(!initial);
 });
+
+it('keeps the authored reviewers while the Machine has not answered, then settles them against its answer', async () => {
+    let machineBackends: Record<string, { available: boolean; intents: string[] }> | null = null;
+    const hook = await renderHook(() => {
+        const [actionInput, setActionInput] = React.useState<Record<string, unknown>>({ engineIds: ['claude', 'codex'], permissionMode: 'read_only' });
+        const model = useExecutionRunLauncherOptionsModel({
+            sessionId: 'session_1', intent: 'review', actionInput, setActionInput,
+            enabledAgentIds: ['claude', 'codex'], executionRunsBackends: machineBackends,
+            acpCatalogSnapshot: { status: 'ready', revision: 1, record: { v: 1, definitions: [] } },
+            initialBackendTarget: { kind: 'backend', backendId: 'claude' }, fallbackAgentId: 'claude',
+            machineCapabilitiesState: { status: 'loading' },
+        });
+        return { actionInput, model };
+    });
+    expect(hook.getCurrent().actionInput.engineIds).toEqual(['claude', 'codex']);
+    expect(hook.getCurrent().model.backendChoices.every((choice) => choice.disabled)).toBe(true);
+    expect(hook.getCurrent().model.initialBackendChoice?.backendId).toBe('claude');
+
+    machineBackends = { claude: { available: true, intents: ['review'] }, codex: { available: true, intents: ['review'] } };
+    await hook.rerender();
+    expect(hook.getCurrent().model.backendChoices.map((choice) => choice.disabled)).toEqual([false, false]);
+    expect(hook.getCurrent().actionInput.engineIds).toEqual(['claude', 'codex']);
+});

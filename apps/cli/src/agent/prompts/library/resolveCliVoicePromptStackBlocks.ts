@@ -5,6 +5,7 @@ import {
 import { PromptStackPreparationError } from '@happier-dev/protocol/prompts/library/resolvePromptStackSystemAppendBlocksV1';
 import { configuration } from '@/configuration';
 import { resolveCliHomeTarget } from '@/server/homeTarget';
+import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken,
   readActiveAccountPromptStackSources } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -95,7 +96,8 @@ async function prepareTarget(input?: CliVoicePromptStackInput) {
         scope: input.scope ? { serverId: input.scope.serverId, accountId: input.scope.accountId } : null };
     } else {
       targetId = binding.data.targetSessionId;
-      if (binding.data.targetServerId && binding.data.targetServerId !== input.serverId) {
+      if (binding.data.targetServerId && (!input.serverId
+        || !await isServerProfileHomeIdentity(input.serverId, binding.data.targetServerId))) {
         const home = await resolveCliHomeTarget({ kind: 'saved_profile', profileRef: binding.data.targetServerId });
         const targetCredentials = home.profileId ? await readStoredCredentialsForServerId(home.profileId) : null;
         if (!targetCredentials) throw new PromptStackPreparationError('unavailable');
@@ -108,7 +110,7 @@ async function prepareTarget(input?: CliVoicePromptStackInput) {
   if (args.sessionId !== null) {
     const metadata = target.metadata;
     let roleContext = args.roleContext;
-    if (roleContext === undefined && (readSessionRolesV1(metadata) || target.rawSession.reportsTo)) {
+    if (roleContext === undefined && (readSessionRolesV1(metadata) || target.rawSession.manager)) {
       const scopeKey = resolveAccountSettingsScopeKey(args.credentials!);
       const lifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
       const roleOwner = createSessionRoleContext({ readMetadata: () => metadata,
@@ -201,17 +203,16 @@ async function resolveBlocks(input?: CliVoicePromptStackInput): Promise<string[]
   };
   try {
     assertCurrent();
-    if (args.serverId && args.serverId !== activeServerId) {
-      const target = await resolveCliHomeTarget({ kind: 'saved_profile', profileRef: args.serverId });
-      if (target.profileId !== activeServerId) throw new PromptStackPreparationError('unavailable');
-    }
+    if (args.serverId && !await isServerProfileHomeIdentity(activeServerId, args.serverId))
+      throw new PromptStackPreparationError('unavailable');
     assertCurrent();
     const snapshot = getActiveAccountSettingsSnapshot();
-    const [voice] = await Promise.all([
-      prepareActivePromptLibraryRecord({ credentials, scopeKey, lifetimeToken, key: 'voice', signal: args.signal }),
-      args.profileId && (!snapshot?.profileCatalog || snapshot.profileCatalog.status === 'loading')
-        ? refreshActiveProfileCatalog({ credentials, signal: args.signal }) : undefined,
-    ]);
+    if (args.profileId && (!snapshot?.profileCatalog || snapshot.profileCatalog.status === 'loading')) {
+      await refreshActiveProfileCatalog({ credentials, signal: args.signal });
+    }
+    // A Profile read can observe an Account wake. Await the prompt inventory
+    // through its owner after that prerequisite, before consuming its rows.
+    const voice = await prepareActivePromptLibraryRecord({ credentials, scopeKey, lifetimeToken, key: 'voice', signal: args.signal });
     assertCurrent();
     if (voice.status !== 'ready') throw new PromptStackPreparationError('unavailable');
     const current = getActiveAccountSettingsSnapshot();

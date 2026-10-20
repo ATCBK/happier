@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const inodeProbe = vi.hoisted(() => ({ reportZeroInode: false }));
+const inodeProbe = vi.hoisted(() => ({ reportZeroInode: false, duringAnchorRead: null as (() => Promise<void>) | null, bytesRead: 0 }));
 
 // The filesystem is the genuine system boundary, and the inode is the part of it
 // this suite has to vary: a Windows share or network mount reports zero, and the
@@ -27,12 +27,27 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     )) as typeof actual.stat;
     const open = (async (...args: unknown[]) => {
         const handle = await (actual.open as (...a: unknown[]) => Promise<Record<string, unknown>>)(...args);
+        let anchorStarted = false;
         return new Proxy(handle, {
             get(target, property, receiver) {
                 if (property === 'stat') {
-                    return async (...statArgs: unknown[]) => patchStats(
-                        await (target.stat as (...a: unknown[]) => Promise<object>).call(target, ...statArgs),
-                    );
+                    return async (...statArgs: unknown[]) => {
+                        const stats = await (target.stat as (...a: unknown[]) => Promise<object>).call(target, ...statArgs);
+                        anchorStarted = true;
+                        return patchStats(stats);
+                    };
+                }
+                if (property === 'read') {
+                    return async (...readArgs: unknown[]) => {
+                        if (anchorStarted && inodeProbe.duringAnchorRead) {
+                            const append = inodeProbe.duringAnchorRead;
+                            inodeProbe.duringAnchorRead = null;
+                            await append();
+                        }
+                        const result = await (target.read as (...a: unknown[]) => Promise<{ bytesRead: number }>).call(target, ...readArgs);
+                        inodeProbe.bytesRead += result.bytesRead;
+                        return result;
+                    };
                 }
                 const value = Reflect.get(target, property, receiver) as unknown;
                 return typeof value === 'function' ? value.bind(target) : value;
@@ -51,6 +66,8 @@ const roots: string[] = [];
 
 afterEach(async () => {
     inodeProbe.reportZeroInode = false;
+    inodeProbe.duringAnchorRead = null;
+    inodeProbe.bytesRead = 0;
     while (roots.length > 0) {
         const root = roots.pop();
         if (root) await rm(root, { recursive: true, force: true });
@@ -133,6 +150,74 @@ async function rewriteInPlace(path: string, position: number, replacement: strin
 }
 
 describe('Claude external transcript continuity evidence', () => {
+    it('keeps current-tail and small append work bounded independently of native history size', async () => {
+        const fixture = await createTranscript(16_000, 1024);
+        const cursor = await mintTailCursor(fixture);
+        inodeProbe.bytesRead = 0;
+        const current = await readAfter(fixture, cursor);
+        expect(current).toMatchObject({ items: [], truncated: false, hasMore: false });
+        expect(inodeProbe.bytesRead).toBeLessThanOrEqual(64 * 1024);
+
+        await appendFile(fixture.transcriptPath, [
+            { type: 'assistant', uuid: 'discarded', parentUuid: 'continuity-15999', message: { content: [{ type: 'text', text: 'discarded branch' }] } },
+            { type: 'assistant', uuid: 'active', parentUuid: 'continuity-15999', message: { content: [{ type: 'text', text: 'active branch' }] } },
+            { type: 'future-native-message' },
+        ].map(row => JSON.stringify(row) + '\n').join(''));
+        inodeProbe.bytesRead = 0;
+        const discarded = await readAfterClaudeExternalSessionTranscript({ source: fixture.source, env: fixture.env,
+            providerSessionId: fixture.remoteSessionId, cursor, maxBytes: 64 * 1024, maxItems: 1 });
+        expect(discarded).toMatchObject({ items: [], truncated: false, hasMore: true });
+        expect(discarded.diagnostics).toContainEqual(expect.objectContaining({ code: 'non_transcript_record_skipped', count: 1 }));
+        expect(inodeProbe.bytesRead).toBeLessThanOrEqual(3 * 64 * 1024);
+        inodeProbe.bytesRead = 0;
+        const advanced = await readAfter(fixture, String(discarded.nextCursor));
+        expect(advanced).toMatchObject({ truncated: false, hasMore: false });
+        expect(advanced.items).toHaveLength(2);
+        expect(JSON.stringify(advanced.items)).toContain('active branch');
+        expect(JSON.stringify(advanced.items)).not.toContain('discarded branch');
+        expect(advanced.diagnostics).toContainEqual(expect.objectContaining({ code: 'unsupported_record_skipped', count: 1 }));
+        // One forward page, one backward branch page, and bounded cursor anchors.
+        expect(inodeProbe.bytesRead).toBeLessThanOrEqual(3 * 64 * 1024);
+    });
+
+    it('anchors the acknowledged prefix while a native writer appends during evidence capture', async () => {
+        const fixture = await createTranscript(2, 40);
+        inodeProbe.duringAnchorRead = () => appendFile(fixture.transcriptPath, transcriptLine(1000, 40));
+        const cursor = await mintTailCursor(fixture);
+        const next = await readAfter(fixture, cursor);
+        expect(next.readAfterOutcome).toBeUndefined();
+        expect(JSON.stringify(next.items)).toContain('answer');
+        expect(next.truncated).toBe(false);
+    });
+    it.each(['stdout', 'stderr'] as const)('publishes live shell %s before its ordered observation while ordinary prompts stay observation-only', async (stream) => {
+        const fixture = await createTranscript(1, 0);
+        const cursor = await mintTailCursor(fixture);
+        const outputText = `SYNTHETIC_COMMAND_RESULT\n  literal </bash-${stream}> tail &lt;value&gt;\n`;
+        const output = {
+            type: 'user', uuid: `shell-${stream}`, parentUuid: 'continuity-0000', sessionId: fixture.remoteSessionId,
+            timestamp: '2026-10-17T00:00:01.000Z',
+            message: { role: 'user', content: `<bash-${stream}>${outputText}</bash-${stream}>` },
+        };
+        const prompt = {
+            type: 'user', uuid: 'ordinary-next-prompt', parentUuid: output.uuid, sessionId: fixture.remoteSessionId,
+            timestamp: '2026-10-17T00:00:02.000Z', message: { role: 'user', content: 'next ordinary prompt' },
+        };
+        await appendFile(fixture.transcriptPath, `${JSON.stringify(output)}\n${JSON.stringify(prompt)}\n`);
+        const params = { source: fixture.source, env: fixture.env, providerSessionId: fixture.remoteSessionId,
+            projection: 'terminal' as const, maxBytes: 64 * 1024, maxItems: 10 };
+        const live = await readAfterClaudeExternalSessionTranscript({ ...params, cursor });
+        expect(live.items).toMatchObject([
+            { raw: { role: 'agent', content: { type: 'acp', agentId: 'claude', data: {
+                type: 'message', message: outputText,
+            } } } },
+            { raw: { role: 'source_observation', content: { uuid: output.uuid } } },
+            { raw: { role: 'source_observation', content: { uuid: prompt.uuid } } },
+        ]);
+        const historical = await pageClaudeExternalSessionTranscript({ ...params, direction: 'older' });
+        expect(historical.items.filter(item => item.raw.role === 'agent'
+            && JSON.stringify(item.raw).includes('SYNTHETIC_COMMAND_RESULT'))).toHaveLength(1);
+    });
+
     it('publishes a delivered peer attachment through the live terminal stream as visible recipient text', async () => {
         const fixture = await createTranscript(1, 0);
         const cursor = await mintTailCursor(fixture);
@@ -190,6 +275,25 @@ describe('Claude external transcript continuity evidence', () => {
         expect(advanced.readAfterOutcome).toBeUndefined();
     });
 
+    it.each([false, true])('reports an oversized valid UTF-8 row as incomplete with newer row=%s', async (withNewerRow) => {
+        const fixture = await createTranscript(0, 0);
+        await writeFile(fixture.transcriptPath, JSON.stringify({ type: 'assistant', uuid: 'oversized',
+            message: { content: [{ type: 'text', text: 'answer' }] }, pad: '🙂'.repeat(2_100_000) }) + '\n');
+        if (withNewerRow) await appendFile(fixture.transcriptPath, transcriptLine(1, 40));
+        const request = { source: fixture.source, env: fixture.env, providerSessionId: fixture.remoteSessionId,
+            direction: 'older' as const, projection: 'terminal' as const, maxBytes: 64 * 1024, maxItems: 10 };
+        const initial = await pageClaudeExternalSessionTranscript(request);
+        if (withNewerRow) {
+            expect(initial.items.length).toBeGreaterThan(0);
+            expect(initial).toMatchObject({ hasMore: true, nextCursor: expect.any(String) });
+        }
+        const page = withNewerRow
+            ? await pageClaudeExternalSessionTranscript({ ...request, cursor: initial.nextCursor! })
+            : initial;
+        expect(page).toMatchObject({ items: [], truncated: true, hasMore: false, nextCursor: null });
+        expect(page.tailCursor).toEqual(expect.any(String));
+    });
+
     it.each([false, true])('reports bounded continuation with result budgeting %s', async (withBudget) => {
         const fixture = await createTranscript(1, 40);
         const cursor = await mintTailCursor(fixture);
@@ -205,6 +309,30 @@ describe('Claude external transcript continuity evidence', () => {
         expect(remainder.items).toHaveLength(1);
         expect(remainder.items[0]?.id).not.toBe(page.items[0]?.id);
         expect(remainder).toMatchObject({ truncated: false, hasMore: false });
+    });
+
+    it.each([false, true])('keeps unknown and malformed appended records visible with result budgeting %s', async withBudget => {
+        const fixture = await createTranscript(1, 40);
+        const cursor = await mintTailCursor(fixture);
+        await appendFile(fixture.transcriptPath, transcriptLine(1000, 40)
+            + JSON.stringify({ type: 'future-native-message', private: 'unreadable private payload' }) + '\n'
+            + '{malformed complete record}\n' + transcriptLine(1001, 40));
+        const page = await readAfterClaudeExternalSessionTranscript({ source: fixture.source, env: fixture.env,
+            providerSessionId: fixture.remoteSessionId, cursor, maxBytes: 64 * 1024, maxItems: 10,
+            ...(withBudget ? { resultBudget: { fits: () => true } } : {}) });
+        expect(page.truncated).toBe(false);
+        expect(page.items).toHaveLength(4);
+        expect(page.diagnostics).toContainEqual(expect.objectContaining({
+            code: 'unsupported_record_skipped', severity: 'benign', count: 2,
+        }));
+        expect(JSON.stringify(page.items)).not.toContain('unreadable private payload');
+        expect(JSON.stringify(page.items)).not.toContain('malformed complete record');
+        expect(page.items.slice(1, 3).every(item => JSON.stringify(item).includes('Agent emitted an unsupported content block.'))).toBe(true);
+        const older = await pageClaudeExternalSessionTranscript({ source: fixture.source, env: fixture.env,
+            providerSessionId: fixture.remoteSessionId, direction: 'older', maxBytes: 64 * 1024, maxItems: 10,
+            ...(withBudget ? { resultBudget: { fits: () => true } } : {}) });
+        expect(older.truncated).not.toBe(true);
+        expect(older.items).toHaveLength(5);
     });
 
     it('continues across an append', async () => {

@@ -472,15 +472,13 @@ async function assertReviewCommentAccountWriteCurrentnessInTx(
 ): Promise<void> {
     const fence = await acquireAccountEncryptionTransitionFenceInTx(
         tx,
-        params.accountId,
+        params.accountId, "content",
     );
+    // Account.seq tracks all Account changes, including unrelated Session
+    // activity. The locked persisted mode and key binding own this admission.
     if (
         fence.status !== "ready"
         || fence.account.currentness.encryptionMode !== params.storageMode
-        || (
-            typeof params.accountVersion === "number"
-            && fence.account.version !== params.accountVersion
-        )
         || (
             params.accountEncryptionCurrentness
             && !accountEncryptionCurrentnessMatches(
@@ -1164,7 +1162,7 @@ export function createSqlReviewCommentStore(): ReviewCommentStore {
             const provider = getDbProviderFromEnv(process.env, "postgres");
             const lockClause = provider === "sqlite" ? Prisma.empty : Prisma.sql`FOR UPDATE`;
             const assertPublicationAccountCurrent = async (tx: Tx) => {
-                const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId);
+                const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "content");
                 if (fence.status !== "ready"
                     || fence.account.currentness.encryptionMode !== params.storageMode
                     || (params.storageMode === "e2ee"

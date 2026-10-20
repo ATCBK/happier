@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildQualifiedPluginContributionKey, PluginAgentContributionV2Schema } from '@happier-dev/protocol';
+import { buildQualifiedPluginContributionKey, PluginAgentContributionV2Schema, PluginManifestV2Schema } from '@happier-dev/protocol';
 import { projectAgentConnectedAccountLaunchCatalogEntry } from '@/plugins/projection/registry/agentCatalogEntryHooks';
 import { createConnectedAccountPurposeBindingOwner } from '../purposeBindings/ConnectedAccountPurposeBindingOwner';
 import { resolveQualifiedPurposeBindingSnapshotForAgentSpawn } from '../requestAuth/prepareConnectedAccountRequestAuthForSpawn';
@@ -7,6 +7,7 @@ import { PLUGIN_MANIFEST } from '../../../../../../packages/plugins/antigravity/
 import { antigravityConnectedAccountLaunch } from '../../../../../../packages/plugins/antigravity/src/agent/connectedServices/continuity';
 import { antigravityConnectedAccountRuntime } from '../../../../../../packages/plugins/antigravity/src/connectedAccounts/antigravityConnectedAccountRuntime';
 import { stripUnsetEnvironmentVariables } from '@/utils/processEnv/buildScopedProcessEnv';
+import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
 
 import {
   materializeQualifiedConnectedAccountLaunchUses,
@@ -33,7 +34,7 @@ describe('materializeQualifiedConnectedAccountLaunchUses', () => {
     const account = { service, accountId: 'selected-account' };
     const catalogEntry = projectAgentConnectedAccountLaunchCatalogEntry({
       pluginId: identity.pluginId, agentId, isCurrent: () => true,
-      hostAccess: PLUGIN_MANIFEST.hostAccess,
+      hostAccess: PluginManifestV2Schema.parse(PLUGIN_MANIFEST).hostAccess,
       connectedAccountLaunch: antigravityConnectedAccountLaunch,
     });
     const owner = createConnectedAccountPurposeBindingOwner({
@@ -47,9 +48,12 @@ describe('materializeQualifiedConnectedAccountLaunchUses', () => {
         ? { displayName: target.account.accountId, account: target.account } : null,
       // The host account boundary invokes the genuine provider materializer.
       materializeAccount: async ({ request, signal }) => antigravityConnectedAccountRuntime.materialize(request, {
-        account, signal, credentials: { async get() { return null; } },
+        account, plugin: { id: service.pluginId, version: PLUGIN_MANIFEST.version },
+        contribution: { id: service.localId, qualifiedId: buildQualifiedPluginContributionKey(service) },
+        surface: 'background', invokedAtMs: 0, services: createUnavailablePluginServices(),
+        signal, credentials: { async get() { return null; } },
         configuration: { target: { kind: 'account', account, modeId: 'oauth-personal' }, revision: 'configuration-1', values: {}, async getSecret() { return null; } },
-      } as Parameters<typeof antigravityConnectedAccountRuntime.materialize>[1]),
+      }),
       projectTargetAccounts: async () => { throw new Error('No Account listing needed'); },
       assertTargetAccountMaterializable: async () => { throw new Error('No Account listing needed'); },
     });

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createDbMocks, createDbTransactionMock, installDbModuleMock } from "../api/testkit/dbMocks";
+import { createDbMocks, createDbTransactionMock, inTxPostgresControlStatementMock, installDbModuleMock } from "../api/testkit/dbMocks";
 
 vi.mock("@/utils/logging/log", () => ({ log: vi.fn() }));
 
@@ -21,6 +21,7 @@ const dbMocks = createDbMocks({
     machine: ["findUnique", "updateMany"],
 } as const);
 const transactionMock = createDbTransactionMock(() => ({
+    ...inTxPostgresControlStatementMock,
     session: {
         update: dbMocks.db.session.update,
     },
@@ -134,9 +135,9 @@ describe("ActivityCache machine presence", () => {
 
         await (activityCache as any).flushPendingUpdates();
 
+        // One interactive transaction owned by inTx carries both machine writes.
         expect(transactionMock.transaction).toHaveBeenCalledTimes(1);
-        expect(Array.isArray(transactionMock.transaction.mock.calls[0]?.[0])).toBe(true);
-        expect(transactionMock.transaction.mock.calls[0]?.[0]).toHaveLength(2);
+        expect(typeof transactionMock.transaction.mock.calls[0]?.[0]).toBe("function");
         expect(dbMocks.db.machine.updateMany).toHaveBeenCalledTimes(2);
     });
 
@@ -163,8 +164,8 @@ describe("ActivityCache machine presence", () => {
 
         await (activityCache as any).flushPendingUpdates();
 
-        // First flush builds the full batch, but no cached entry is marked flushed when the transaction rejects.
-        expect(dbMocks.db.machine.updateMany).toHaveBeenCalledTimes(2);
+        // The batch runs in order and stops at the failing write; no cached entry is marked flushed when the transaction rejects.
+        expect(dbMocks.db.machine.updateMany).toHaveBeenCalledTimes(1);
         expect((activityCache as any).machineCache.get("m1")?.pendingUpdate).not.toBeNull();
         expect((activityCache as any).machineCache.get("m2")?.pendingUpdate).not.toBeNull();
 
@@ -179,7 +180,7 @@ describe("ActivityCache machine presence", () => {
 
         // Second flush retries the full batch.
         await (activityCache as any).flushPendingUpdates();
-        expect(dbMocks.db.machine.updateMany).toHaveBeenCalledTimes(4);
+        expect(dbMocks.db.machine.updateMany).toHaveBeenCalledTimes(3);
         expect((activityCache as any).machineCache.get("m1")?.pendingUpdate).toBeNull();
         expect((activityCache as any).machineCache.get("m2")?.pendingUpdate).toBeNull();
     });

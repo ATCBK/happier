@@ -1,15 +1,16 @@
-import { openSessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
+import { openSessionOwnerMetadataEnvelopeV1, openSessionOwnerMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
 import { projectSessionOwnerCompatibilityViewV1, validateSessionOwnerMetadataEnvelopeForAccountModeV1, type SessionOwnerMetadataEnvelopeV1, type SessionOwnerMetadataV1, type SessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
 
 import { isSessionAccessOwner, type NormalizedSessionAccessProjection } from './normalizeSessionAccessProjection';
 import { ComposerOptionsInputV1Schema, projectComposerOptionsInputV1, type ComposerOptionsInputV1 } from '@happier-dev/protocol/embed';
 
-import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import { isDataKeyAuthCredentials, type AuthCredentials } from '@/auth/storage/tokenStorage';
 import { MetadataSchema, type Metadata } from '@happier-dev/session-core/state';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
 import { isSessionContentReadable, type SessionContentAvailability } from '@/sync/domains/session/encryptedContentAvailability';
 import { readSessionMetadataLayoutVersion } from './parsePlainSessionPayload';
+import { SESSION_OWNER_METADATA_PROJECTION, type SessionOwnerMetadataProjection } from '@/sync/domains/session/readSessionOwnerMetadataView';
 
 /** Full AgentState is owner-private in layout 1, including presentation commands. */
 export function isSessionAgentStateVisible(params: Readonly<{
@@ -35,7 +36,9 @@ export function buildSessionOwnerMetadataUnavailableShell<T extends Readonly<{
     composerOptionsInput?: unknown;
     agentState: unknown;
     encryptedContentAvailability?: SessionContentAvailability | null;
-}>>(session: T): Omit<T, 'metadata' | 'ownerMetadataView' | 'composerOptionsInput' | 'agentState' | 'encryptedContentAvailability'> & Readonly<{
+    [SESSION_OWNER_METADATA_PROJECTION]?: unknown;
+}>>(session: T): Omit<T, 'metadata' | 'ownerMetadataView' | 'composerOptionsInput' | 'agentState' | 'encryptedContentAvailability' | typeof SESSION_OWNER_METADATA_PROJECTION> & Readonly<{
+    [SESSION_OWNER_METADATA_PROJECTION]: null;
     metadata: null;
     ownerMetadataView: null;
     composerOptionsInput: null;
@@ -48,10 +51,12 @@ export function buildSessionOwnerMetadataUnavailableShell<T extends Readonly<{
         composerOptionsInput: _composerOptionsInput,
         agentState: _agentState,
         encryptedContentAvailability: _contentAvailability,
+        [SESSION_OWNER_METADATA_PROJECTION]: _ownerMetadataProjection,
         ...safeSession
     } = session;
     return {
         ...safeSession,
+        [SESSION_OWNER_METADATA_PROJECTION]: null,
         metadata: null,
         ownerMetadataView: null,
         composerOptionsInput: null,
@@ -84,11 +89,7 @@ export type SessionLayout1OwnerProjection =
 export type SessionLayout1OwnerMetadataRead =
     | Readonly<{ kind: 'recipient' }>
     | Extract<SessionLayout1OwnerProjection, { kind: 'composer' }>
-    | Readonly<{
-        kind: 'owner';
-        ownerMetadataEnvelope: SessionOwnerMetadataEnvelopeV1;
-        ownerMetadata: SessionOwnerMetadataV1;
-      }>
+    | SessionOwnerMetadataProjection
     | Extract<SessionLayout1OwnerProjection, { kind: 'unavailable' }>;
 
 /**
@@ -116,6 +117,7 @@ export function readSessionLayout1OwnerMetadata(params: Readonly<{
     ownerMetadataEnvelope: unknown;
     credentials: AuthCredentials;
     composerOptionsInput?: ComposerOptionsInputV1 | null;
+    previousProjection?: SessionOwnerMetadataProjection | null;
 }>): SessionLayout1OwnerMetadataRead {
     if (!params.access) return { kind: 'unavailable', reason: 'access_unavailable' };
     if (params.composerOptionsInput !== undefined) {
@@ -137,7 +139,7 @@ export function readSessionLayout1OwnerMetadata(params: Readonly<{
         return { kind: 'recipient' };
     }
     if (params.ownerMetadataEnvelope === null || params.ownerMetadataEnvelope === undefined) {
-        return { kind: 'recipient' };
+        return { kind: 'unavailable', reason: 'invalid_envelope' };
     }
     if (!params.accountMode) {
         return {
@@ -145,6 +147,8 @@ export function readSessionLayout1OwnerMetadata(params: Readonly<{
             reason: 'account_currentness_unavailable',
         };
     }
+
+    if (params.previousProjection?.canReuse?.(params)) return params.previousProjection;
 
     const validated = validateSessionOwnerMetadataEnvelopeForAccountModeV1({
         accountMode: params.accountMode,
@@ -165,18 +169,36 @@ export function readSessionLayout1OwnerMetadata(params: Readonly<{
     if (validated.envelope.t === 'encrypted' && !material) {
         return { kind: 'unavailable', reason: 'material_unavailable' };
     }
-    const opened = openSessionOwnerMetadataEnvelopeV1({
-        accountMode: params.accountMode,
-        envelope: validated.envelope,
-        material,
-    });
-    if (!opened.ok) {
-        return { kind: 'unavailable', reason: opened.reason };
-    }
+    // The envelope and persisted mode were admitted above. Use the same canonical
+    // ciphertext codec without sending that parsed envelope through the raw-input reader again.
+    const ownerMetadata = validated.envelope.t === 'plain'
+        ? validated.envelope.v
+        : material ? openSessionOwnerMetadataV1({ material, ciphertext: validated.envelope.c }) : null;
+    if (!ownerMetadata) return { kind: 'unavailable', reason: 'invalid_ciphertext' };
+    const { credentials, accountMode } = params;
+    const ciphertext = validated.envelope.t === 'encrypted' ? validated.envelope.c : null;
+    const token = credentials.token;
+    const secret = 'secret' in credentials ? credentials.secret : undefined;
+    const machineKey = isDataKeyAuthCredentials(credentials) ? credentials.encryption.machineKey : undefined;
+    const publicKey = isDataKeyAuthCredentials(credentials) ? credentials.encryption.publicKey : undefined;
     return {
         kind: 'owner',
         ownerMetadataEnvelope: validated.envelope,
-        ownerMetadata: opened.ownerMetadata,
+        ownerMetadata,
+        ...(ciphertext === null ? {} : { canReuse: (next: Parameters<NonNullable<SessionOwnerMetadataProjection['canReuse']>>[0]) => {
+            if (next.credentials !== credentials || next.accountMode !== accountMode) return false;
+            if (credentials.token !== token
+                || ('secret' in credentials ? credentials.secret : undefined) !== secret
+                || (isDataKeyAuthCredentials(credentials) ? credentials.encryption.machineKey : undefined) !== machineKey
+                || (isDataKeyAuthCredentials(credentials) ? credentials.encryption.publicKey : undefined) !== publicKey) return false;
+            const envelope = next.ownerMetadataEnvelope;
+            // Identity comparison only: unknown extensions still take the canonical strict reader.
+            return envelope !== null && typeof envelope === 'object' && !Array.isArray(envelope)
+                && Object.keys(envelope).length === 2
+                && Object.keys(envelope).every(key => key === 't' || key === 'c')
+                && 't' in envelope && envelope.t === 'encrypted'
+                && 'c' in envelope && envelope.c === ciphertext;
+        } }),
     };
 }
 

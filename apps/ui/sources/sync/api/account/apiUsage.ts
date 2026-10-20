@@ -89,6 +89,14 @@ export function getRecordTotal(record: Record<string, number>): number {
 /**
  * Query usage data from the server
  */
+export function queryUsage(
+    credentials: AuthCredentials, params: UsageQueryParams | undefined,
+    options: Readonly<{ request?: ServerFetch; signal?: AbortSignal; analyticsRequest: UsageAnalyticsQueryRequest }>,
+): Promise<UsageAnalyticsQueryResponse>;
+export function queryUsage(
+    credentials: AuthCredentials, params?: UsageQueryParams,
+    options?: Readonly<{ request?: ServerFetch; signal?: AbortSignal; analyticsRequest?: UsageAnalyticsQueryRequest }>,
+): Promise<UsageResponse>;
 export async function queryUsage(
     credentials: AuthCredentials,
     params: UsageQueryParams = {},
@@ -182,7 +190,7 @@ export async function queryUsageAnalytics(
     request: UsageAnalyticsQueryRequest,
     options: Readonly<{ request: ServerFetch; signal?: AbortSignal }>,
 ): Promise<UsageAnalyticsQueryResponse> {
-    return UsageAnalyticsQueryResponseSchema.parse(await queryUsage(credentials, {}, { ...options, analyticsRequest: request }));
+    return await queryUsage(credentials, {}, { ...options, analyticsRequest: request });
 }
 
 async function queryLegacyUsage(

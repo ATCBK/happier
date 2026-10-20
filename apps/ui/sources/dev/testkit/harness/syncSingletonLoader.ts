@@ -1,4 +1,5 @@
 import { afterAll } from 'vitest';
+import 'fake-indexeddb/auto';
 import { loadVitestModuleForNodeRequire } from '@/dev/vitestRnShim';
 import { getVitestNodeBuiltin } from '@/dev/vitestNodeBuiltins';
 

@@ -37,6 +37,33 @@ const publicationPlan = {
 };
 
 describe('review comment helpers', () => {
+    it('admits canonical snapshot-less conversation publication without synthetic file content', () => {
+        const plan = {
+            ...publicationPlan,
+            baseRevision: null,
+            headRevision: null,
+            entries: [{
+                happierCommentId: 'canonical-conversation-comment',
+                expectedServerRevision: 1,
+                anchor: { kind: 'workspace', workspaceId: 'review-workspace' },
+                snapshot: { kind: 'none', capturedAt: 1 },
+                body: 'A conversation comment has no file snapshot.',
+            }],
+            verdict: null,
+        };
+        const canonical = parseReviewCommentPublicationPlanV1(plan);
+        expect(ReviewCommentUnversionedSingleEntryPublicationPlanV1ProtocolSchema.parse(plan)).toEqual(canonical);
+        expect(ReviewCommentPublicationPlanV1ProtocolSchema.parse(plan)).toEqual(canonical);
+        for (const snapshot of [
+            { kind: 'none', capturedAt: -1 },
+            { kind: 'none', capturedAt: 1, filePath: 'invented.ts' },
+        ]) {
+            expect(ReviewCommentUnversionedSingleEntryPublicationPlanV1ProtocolSchema.safeParse({
+                ...plan, entries: [{ ...plan.entries[0], snapshot }],
+            }).success).toBe(false);
+        }
+    });
+
     it('projects native publication identity through the same closed canonical plan', () => {
         const { configuredAccountId: _accountId, ...entryTarget } = publicationPlan.target;
         const nativePlan = { ...publicationPlan, target: {

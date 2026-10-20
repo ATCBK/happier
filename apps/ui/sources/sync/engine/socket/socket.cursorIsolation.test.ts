@@ -6,7 +6,8 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 import * as persistence from '@/sync/domains/state/persistence';
 import { storage } from '@/sync/domains/state/storage';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
-import { flushActivityUpdates, handleUpdateContainer } from './socket';
+import { flushActivityUpdates, handleSocketUpdate, handleUpdateContainer } from './socket';
+import { markSessionSurfaceVisible, resetSessionSurfaceVisibilityForTests } from '@/sync/domains/session/sessionSurfaceVisibility';
 
 import { Encryption } from '@/sync/encryption/encryption';
 import { encodeBase64 } from '@/encryption/base64';
@@ -17,6 +18,8 @@ import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernance
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createDeferred } from '@/dev/testkit';
 import { V2SessionRecordSchema, projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol';
+import { SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
+import { SESSION_ORGANIZATION_SNAPSHOT_VERSION } from '@happier-dev/protocol/sessions/organization/constants';
 
 vi.mock('socket.io-client', async (importOriginal) => (
     await import('@/dev/testkit/harness/serverAccountConnectionHarness')
@@ -80,6 +83,7 @@ describe('socket update handling cursor isolation', () => {
 
     beforeEach(async () => {
         storage.setState(initialStorageState, true);
+        resetSessionSurfaceVisibilityForTests();
         const secret = new Uint8Array(32).fill(7);
         encryption = await Encryption.create(secret);
         sessionRequests.length = 0;
@@ -99,6 +103,10 @@ describe('socket update handling cursor isolation', () => {
                 });
                 if (path === '/v2/account/settings') return Response.json({ content: null, version: 0 });
                 if (path === '/v2/cursor') return Response.json({ cursor: 0, changesFloor: 0 });
+                if (path === '/v2/session-organization') return Response.json(SessionOrganizationSnapshotResponseSchema.parse({ snapshot: {
+                    schemaVersion: SESSION_ORGANIZATION_SNAPSHOT_VERSION, version: 0, pins: [], folders: [], folderAssignments: [],
+                    tags: [], tagAssignments: [], orderEntries: [], labels: [],
+                } }));
                 if (path.startsWith('/v2/sessions')) sessionRequests.push(path);
                 if (path === '/v2/sessions/s_new' && heldSessionDetail) return heldSessionDetail;
                 if (path === '/v2/sessions' || path === '/v2/sessions/active') {
@@ -118,8 +126,89 @@ describe('socket update handling cursor isolation', () => {
 
     afterEach(async () => {
         vi.useRealTimers();
+        resetSessionSurfaceVisibilityForTests();
         await account.dispose();
         vi.restoreAllMocks();
+    });
+
+    it('keeps unsolicited new Sessions out of full storage until their surface demands them', async () => {
+        const sessionId = 's_unseen_new';
+        const hydrateSessionById = vi.fn();
+        const params = buildBaseParams({
+            sourceServerId: account.serverId,
+            applySessions: rows => storage.getState().applySessions(rows),
+            hydrateSessionById,
+        });
+        const update: ApiUpdateContainer = {
+            id: 'unseen-new', seq: 2, createdAt: 2,
+            body: {
+                t: 'new-session', id: sessionId, seq: 1,
+                metadata: JSON.stringify({ path: '/work', host: 'test' }), metadataVersion: 1,
+                agentState: JSON.stringify({}), agentStateVersion: 1,
+                encryptionMode: 'plain', dataEncryptionKey: null,
+                active: true, activeAt: 2, createdAt: 1, updatedAt: 2,
+            },
+        };
+
+        await handleSocketUpdate({ ...params, update });
+        expect(storage.getState().sessions[sessionId]).toBeUndefined();
+        expect(hydrateSessionById).not.toHaveBeenCalled();
+        expect(params.invalidateSessions).toHaveBeenCalled();
+
+        markSessionSurfaceVisible(sessionId, account.serverId);
+        await handleSocketUpdate({ ...params, update });
+        expect(storage.getState().sessions[sessionId]?.metadata).toEqual({ path: '/work', host: 'test' });
+        expect(hydrateSessionById).toHaveBeenCalledWith(sessionId, 'socket-new-session-reconcile');
+    });
+
+    it.each(['update-session', 'pending-changed', 'session-shared'] as const)(
+        'refreshes list projections instead of hydrating an unseen missing row after %s',
+        async (type) => {
+            const sessionId = `s_unseen_${type}`;
+            const hydrateSessionById = vi.fn();
+            const params = buildBaseParams({ sourceServerId: account.serverId, hydrateSessionById });
+            const body = type === 'update-session'
+                ? { t: type, id: sessionId, active: true, activeAt: 2 }
+                : type === 'pending-changed'
+                    ? { t: type, sid: sessionId, pendingCount: 1, pendingVersion: 1 }
+                    : { t: type, sessionId, shareId: 'share-test', accessLevel: 'view', canApprovePermissions: false,
+                        sharedBy: { id: 'owner', firstName: null, lastName: null, username: 'owner', avatar: null }, createdAt: 2 };
+            await handleSocketUpdate({ ...params, update: { id: 'unseen-update', seq: 2, createdAt: 2, body } });
+            expect(hydrateSessionById).not.toHaveBeenCalled();
+            expect(params.invalidateSessions).toHaveBeenCalled();
+            expect(storage.getState().sessions[sessionId]).toBeUndefined();
+        },
+    );
+
+    it('defers encrypted cache-only metadata until the Session has a content consumer', async () => {
+        const sessionId = 's_unseen_cached_metadata';
+        await encryption.initializeSessions(new Map([[sessionId, new Uint8Array(32).fill(8)]]));
+        const sessionEncryption = encryption.getSessionEncryption(sessionId)!;
+        const metadata = { path: '/new-work', host: 'test' };
+        const ciphertext = await sessionEncryption.encryptRaw(metadata);
+        const decryptMetadata = vi.spyOn(sessionEncryption, 'decryptMetadata');
+        storage.getState().applyServerScopedSessionListRows(account.serverId, [
+            buildSessionListRenderableFromSession({ ...buildSession(sessionId), serverId: account.serverId,
+                metadata: { path: '/old-work', host: 'test' }, metadataVersion: 1 }),
+        ], { source: 'ordinary', mode: 'replace' });
+        const markSessionStateHydrationDeferred = vi.fn();
+        const params = buildBaseParams({ sourceServerId: account.serverId, markSessionStateHydrationDeferred });
+        const update: ApiUpdateContainer = { id: 'unseen-metadata', seq: 2, createdAt: 2,
+            body: { t: 'update-session', id: sessionId, metadata: { version: 2, value: ciphertext },
+                pendingPermissionRequestCount: 1, pendingUserActionRequestCount: 0 } };
+
+        await handleSocketUpdate({ ...params, update });
+        expect(decryptMetadata).not.toHaveBeenCalled();
+        expect(storage.getState().sessions[sessionId]).toBeUndefined();
+        expect(storage.getState().sessionListRowsByServerId[account.serverId][sessionId]).toMatchObject({
+            metadataVersion: 1, metadata: { path: '/old-work', host: 'test' }, hasPendingPermissionRequests: true,
+        });
+        expect(markSessionStateHydrationDeferred).toHaveBeenCalledWith(sessionId);
+
+        markSessionSurfaceVisible(sessionId, account.serverId);
+        await handleSocketUpdate({ ...params, update });
+        expect(decryptMetadata).toHaveBeenCalled();
+        expect(storage.getState().sessionListRowsByServerId[account.serverId][sessionId].metadata?.path).toBe('/new-work');
     });
 
     it('targets an absent envelope and clears pending availability when a valid socket envelope arrives', async () => {
@@ -127,6 +216,7 @@ describe('socket update handling cursor isolation', () => {
         const { encodeBase64 } = await import('@/encryption/base64');
         const { sealEncryptedDataKeyEnvelopeV1 } = await import('@happier-dev/protocol');
         const sessionId = 'socket_pending_recipient';
+        markSessionSurfaceVisible(sessionId);
         const encryption = await Encryption.create(new Uint8Array(32).fill(7));
         const writer = await Encryption.create(new Uint8Array(32).fill(7));
         const sessionKey = new Uint8Array(32).fill(8);
@@ -183,6 +273,7 @@ describe('socket update handling cursor isolation', () => {
     });
 
     it('applies self-sufficient new-session socket updates without full list invalidation', async () => {
+        markSessionSurfaceVisible('s_new');
         const saveChangesCursorSpy = vi.spyOn(persistence, 'saveChangesCursor');
         const { Encryption } = await import('@/sync/encryption/encryption');
         const { encodeBase64 } = await import('@/encryption/base64');
@@ -268,6 +359,7 @@ describe('socket update handling cursor isolation', () => {
     });
 
     it('falls back to targeted hydration when a new-session socket payload cannot be decrypted', async () => {
+        markSessionSurfaceVisible('s_decrypt_fail');
         const hydrateSessionById = vi.fn();
         const applySessions = vi.fn<Parameters<typeof handleUpdateContainer>[0]['applySessions']>();
         const params = buildBaseParams({
@@ -307,6 +399,7 @@ describe('socket update handling cursor isolation', () => {
     });
 
     it('falls back to targeted hydration using sid when a new-session socket payload has no id', async () => {
+        markSessionSurfaceVisible('s_sid_only_decrypt_fail');
         const hydrateSessionById = vi.fn();
         const params = buildBaseParams({
             hydrateSessionById,

@@ -4,6 +4,9 @@ import { AuthenticatedAppRuntimeMounts } from '@/components/appShell/runtime/Aut
 import { DesktopMainWindowRuntimes } from '@/desktop/DesktopMainWindowRuntimes';
 import { beginOnboardingJourneySession, endOnboardingJourneySession } from '@/components/onboarding/tour/state/journeySession';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { createDesktopSecureStorageBoundary } from '@/dev/testkit/mocks/desktopSecureStorage';
 
 

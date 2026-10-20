@@ -1,3 +1,5 @@
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -10,7 +12,8 @@ import { ACP_REGISTRY_V1_FIXTURE } from '../../../../../../packages/protocol/src
 import { AcpCatalogSettingsV1Schema } from '@happier-dev/protocol/acp/catalog/settingsV1';
 import { AgentsAcpBackendsInstallFromRegistryOutputV1Schema } from '@happier-dev/protocol/acp/catalog/registry/registryInstallActionV1';
 import { projectAcpCatalogForMachineInventory } from '@happier-dev/protocol/capabilities/machineAgentInventory';
-import type { CapabilitiesDetectRequest } from '@happier-dev/protocol/capabilities';
+import type { CapabilitiesDetectRequest } from '@/capabilities/types';
+import { CHECKLIST_IDS } from '@/capabilities/checklistIds';
 import type { AcpBackendDefinitionV1 } from '@happier-dev/protocol/acp/catalog/settingsV1';
 import type { ActionCliExecutionDeps } from '../executeCommand';
 import { tryHandleAgentCliCommand } from './agentsArgv';
@@ -52,7 +55,9 @@ describe('registry Agent CLI through the real registry and Action owners', () =>
     const machineDeps = new Map([...homes].map(([id, home]) => {
       const service = createCapabilitiesService({ capabilities: [createAcpAgentInventoryCapability({ accountId: 'alice',
         env: { HAPPIER_HOME_DIR: home }, platform: id === 'windows-arm' ? 'win32' : 'linux',
-        arch: id === 'windows-arm' ? 'arm64' : 'x64' })], checklists: {}, buildContext: async () => ({ cliSnapshot: null }) });
+        arch: id === 'windows-arm' ? 'arm64' : 'x64' })], checklists: {
+          [CHECKLIST_IDS.MACHINE_DETAILS]: [], [CHECKLIST_IDS.NEW_SESSION]: [],
+        }, buildContext: async () => ({ cliSnapshot: null }) });
       return [id, createCliActionDeps({ token, credentials, sessionId: '', mode: 'plain', ctx: null,
         machineActionDirectTargetTransport: { machineId: id, invoke: async (method, request) => {
           if (method !== 'capabilities.detect') throw new Error('Unexpected machine transport');
@@ -60,10 +65,10 @@ describe('registry Agent CLI through the real registry and Action owners', () =>
           return service.detect(request as CapabilitiesDetectRequest);
         } } })] as const;
     }));
-    const executor = createActionExecutor({
-      isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, { v: 1,
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+      isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, normalizeActionsSettingsV1({ v: 1,
         approvalWaivedSurfaces: approval ? {} : { 'agents.acp.backends.installFromRegistry': ['cli'], 'machines.agents.uninstall': ['cli'] },
-      }, context),
+      }), context),
       registryActionExecute: ({ actionId, input }) => registry.execute(actionId, input),
       updateAccountAcpCatalogSettings: async ({ mutate }) => {
         catalog = AcpCatalogSettingsV1Schema.parse(mutate(catalog));

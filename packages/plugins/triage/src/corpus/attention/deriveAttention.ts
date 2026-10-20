@@ -35,12 +35,12 @@ const INVOLVEMENT_REASONS: readonly (readonly [
     TriageSourceViewerFactsV1['involvement'][number],
     InvolvementReason,
 ])[] = Object.freeze([
-    ['reviewRequested', { level: 'required', reasonId: 'involvement/review-requested', reasonLabel: 'Your review was requested', reasonIcon: 'review' }],
+    ['reviewRequested', { level: 'required', reasonId: 'involvement/review-requested', reasonLabel: 'Review requested', reasonIcon: 'review' }],
     ['assignee', { level: 'required', reasonId: 'involvement/assignee', reasonLabel: 'Assigned to you', reasonIcon: 'assigned' }],
-    ['mentioned', { level: 'suggested', reasonId: 'involvement/mentioned', reasonLabel: 'You were mentioned', reasonIcon: 'mention' }],
-    ['author', { level: 'suggested', reasonId: 'involvement/author', reasonLabel: 'You opened it' }],
-    ['participating', { level: 'suggested', reasonId: 'involvement/participating', reasonLabel: 'You are participating' }],
-    ['subscribed', { level: 'suggested', reasonId: 'involvement/subscribed', reasonLabel: 'You are subscribed' }],
+    ['mentioned', { level: 'suggested', reasonId: 'involvement/mentioned', reasonLabel: 'Mentioned', reasonIcon: 'mention' }],
+    ['author', { level: 'suggested', reasonId: 'involvement/author', reasonLabel: 'Opened by you' }],
+    ['participating', { level: 'suggested', reasonId: 'involvement/participating', reasonLabel: 'Participating' }],
+    ['subscribed', { level: 'suggested', reasonId: 'involvement/subscribed', reasonLabel: 'Subscribed' }],
 ] as const);
 
 const LEVEL_RANK: Readonly<Record<'required' | 'suggested', number>> = Object.freeze({

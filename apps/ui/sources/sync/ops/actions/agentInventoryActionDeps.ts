@@ -1,9 +1,9 @@
-import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { BackendTargetKeyV2InputSchema, buildBackendTargetKeyV2, parseBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { resolveActionBackendTargetSelection } from '@happier-dev/protocol/actions/resolveActionBackendTargetSelection';
 import type { BackendTargetRefV1 } from '@happier-dev/protocol/backends/targets/backendTargetRef';
-import type { AgentExecutionTargetV1, BackendTargetRefV2 } from '@happier-dev/protocol';
+import type { AgentExecutionTargetV1, BackendTargetRefV2, PluginProjectionV2 } from '@happier-dev/protocol';
 import type { AgentInventoryProbeInput } from '@happier-dev/protocol/actions/actionSpecs';
-import { AgentModelsProbeObservationSchema, AgentSessionModesProbeObservationSchema, AgentConfigOptionsProbeObservationSchema } from '@happier-dev/protocol/capabilities';
+import { AgentModelsProbeObservationSchema, AgentSessionModesProbeObservationSchema, AgentConfigOptionsProbeObservationSchema, type AgentModelsProbeObservation } from '@happier-dev/protocol/capabilities';
 import type { ConnectedServicesProfileOption } from '@happier-dev/agents';
 
 import { getAgentCore, isBundledAgentId } from '@/agents/catalog/catalog';
@@ -51,10 +51,19 @@ export type AgentInventoryProbeTarget = Readonly<{
     backendTargetParam: BackendTargetRefV1 | BackendTargetRefV2 | null;
 }>;
 
+function findProjectedAgentByIdentity(projection: PluginProjectionV2, identity: AgentExecutionTargetV1['identity']) {
+    return Object.values(projection.agentsById).find((candidate) => (
+        candidate.identity?.pluginId === identity.pluginId
+        && candidate.identity.localId === identity.localId
+    ));
+}
+
 export async function resolveSessionSpawnAgentInventorySelectionForActions(args: Readonly<{
     agentTarget: AgentExecutionTargetV1;
     machineId?: string;
     serverId?: string;
+    signal?: AbortSignal;
+    accountLifetime?: import('@/sync/domains/scope/serverAccountScope').ServerAccountScopeLifetime;
 }>): Promise<Readonly<{ agentId: string; backendTargetKey: string }> | null> {
     const machineId = normalizeId(args.machineId);
     if (!machineId) return null;
@@ -62,12 +71,11 @@ export async function resolveSessionSpawnAgentInventorySelectionForActions(args:
     const projection = (await loadDaemonMergedProjectionInputs({
         machineId,
         ...(serverId ? { serverId } : {}),
+        signal: args.signal,
+        accountLifetime: args.accountLifetime,
     }))?.pluginProjectionV2;
     if (!projection) return null;
-    const entry = Object.values(projection.agentsById).find((candidate) => (
-        candidate.identity?.pluginId === args.agentTarget.identity.pluginId
-        && candidate.identity.localId === args.agentTarget.identity.localId
-    ));
+    const entry = findProjectedAgentByIdentity(projection, args.agentTarget.identity);
     if (!entry) return null;
     return {
         agentId: entry.id,
@@ -139,7 +147,10 @@ async function probeAgentInventory(
                 ...(target.backendTargetParam ? { backendTarget: target.backendTargetParam } : {}),
             },
         },
-        { ...(serverId ? { serverId } : {}), ...(transportTimeoutMs ? { timeoutMs: transportTimeoutMs } : {}) },
+        { ...(serverId ? { serverId } : {}), ...(transportTimeoutMs ? { timeoutMs: transportTimeoutMs } : {}),
+            // Model preflight owns its native timeout, credential preparation and cleanup.
+            // The transport budget bounds setup; its ACK must not preempt that owner's reply.
+            ...(method === 'probeModels' ? { operationTimeoutMs: null } : {}) },
     );
     if (!res.supported || !res.response.ok) return { ok: false };
     const result = res.response.result;
@@ -184,7 +195,13 @@ export async function invokeAgentInventoryProbeAction(params: Readonly<{
 }
 
 /** Admitted native model transport, below the Action executor and shared cache. */
-export async function probeAgentModelsForActions(args: Readonly<{ machineId: string; serverId?: string; probe: AgentInventoryProbeInput }>, target: AgentInventoryProbeTarget): Promise<unknown> {
+export async function probeAgentModelsForActions(args: Readonly<{ machineId: string; serverId?: string; probe: AgentInventoryProbeInput }>, target: AgentInventoryProbeTarget): Promise<Readonly<{
+    agentId: string;
+    items: readonly Readonly<{ modelId: string; label: string; description?: string }>[];
+    supportsFreeform?: boolean;
+    source: 'dynamic' | 'static' | 'unavailable' | 'preflight';
+    probeObservation?: AgentModelsProbeObservation;
+}>> {
     const probe = await probeAgentInventory(args.machineId, target, 'probeModels', args.serverId, args.probe);
     if (!probe.ok) return { agentId: target.agentId, items: [], source: 'unavailable' };
     const parsed = AgentModelsProbeObservationSchema.parse(probe.result);
@@ -401,6 +418,7 @@ export type SpawnConnectedServicesListArgs = Readonly<{
     machineId?: string;
     serverId?: string;
     includeUnavailable?: boolean;
+    signal?: AbortSignal;
 }>;
 
 /**
@@ -408,39 +426,42 @@ export type SpawnConnectedServicesListArgs = Readonly<{
  * qualified through the one V4 → session-options projection every Session
  * connected-account surface shares.
  *
- * A bundled Agent contributes its declared supported-service set (resolved to
- * canonical qualified keys); an external qualified Agent's set is open, so the
- * Account's own connected services are the supported facts. Unknown services
- * and disconnected profiles never invent rows, and no bundled Codex/Claude
- * declaration is ever substituted for an external Agent.
+ * Machine declarations supply the supported-service set. A qualified target
+ * resolves its contribution through that same projection, including configured
+ * definitions; the definition's command does not grant another Agent's purposes.
+ * Bundled declarations remain the fallback when machine facts are unavailable.
  */
 export async function listSpawnConnectedServicesForActions(args: SpawnConnectedServicesListArgs): Promise<unknown> {
-    const agentId = normalizeId(args.agentId);
-    if (!agentId) {
+    let agentId = normalizeId(args.agentId);
+    const parsedKey = BackendTargetKeyV2InputSchema.safeParse(args.backendTargetKey);
+    const target = parsedKey.success ? parseBackendTargetKeyV2(parsedKey.data) : null;
+    if (!agentId && target?.kind !== 'agent') {
         return { ok: false, errorCode: 'unknown_agent', errorMessage: 'unknown_agent' };
     }
     const serverId = normalizeId(args.serverId) || normalizeId(getActiveServerSnapshot()?.serverId);
     if (!serverId) return { ok: false, errorCode: 'action_home_not_found', errorMessage: 'action_home_not_found' };
     const { captureLazyActionAccountContext } = await import('./actionAccountContext');
-    const account = await captureLazyActionAccountContext(serverId);
+    const account = await captureLazyActionAccountContext(serverId, args.signal);
     try {
-        const agentCore = isBundledAgentId(agentId) ? getAgentCore(agentId) : null;
-        let projectedConnectedAccounts: readonly Readonly<{
-            service: { pluginId: string; localId: string };
-            credentialKinds?: readonly ('oauth' | 'token')[];
-        }>[] = [];
+        let projectedAgent: PluginProjectionV2['agentsById'][string] | undefined;
         const machineId = normalizeId(args.machineId);
         if (machineId) {
             const projection = (await loadDaemonMergedProjectionInputs({
                 machineId,
                 serverId: account.serverId,
                 accountLifetime: account.accountLifetime,
+                signal: args.signal,
             }))?.pluginProjectionV2;
             if (projection) {
-                projectedConnectedAccounts = projection.agentsById[agentId]?.connectedAccounts ?? [];
+                projectedAgent = agentId ? projection.agentsById[agentId]
+                    : target?.kind === 'agent' ? findProjectedAgentByIdentity(projection, target.identity) : undefined;
+                agentId = projectedAgent?.id ?? agentId;
             }
         }
-        const supportedServiceIds = projectedConnectedAccounts.length > 0
+        if (!agentId) return { ok: false, errorCode: 'unknown_agent', errorMessage: 'unknown_agent' };
+        const agentCore = isBundledAgentId(agentId) ? getAgentCore(agentId) : null;
+        const projectedConnectedAccounts = projectedAgent?.connectedAccounts ?? [];
+        const supportedServiceIds = projectedAgent
             ? resolveProjectedConnectedAccountServiceKeys(projectedConnectedAccounts)
             : agentCore
             ? (agentCore.connectedServices?.supportedServiceIds ?? [])

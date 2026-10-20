@@ -9,6 +9,7 @@ const BUILTIN_PROMPT_KEYS = {
   'Which projects?': 'widgetAdd.prompts.projects',
   'Which session?': 'widgetAdd.prompts.session',
   'Which workspace?': 'widgetAdd.prompts.workspace',
+  'Which checkout?': 'widgetAdd.prompts.checkout',
   'Which machine?': 'widgetAdd.prompts.machine',
 } as const satisfies Record<string, TranslationKeyNoParams>;
 

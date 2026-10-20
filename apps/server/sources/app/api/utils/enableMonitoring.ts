@@ -16,6 +16,8 @@ import {
 } from "@/app/monitoring/readiness";
 import { isShutdown } from "@/utils/process/shutdown";
 import { redactHttpRequestUrlForLog } from "@/utils/logging/redactHttpRequestUrlForLog";
+import { randomUUID } from 'node:crypto';
+import { recordWebLatencyPhase, withWebLatencyTrace } from '@/utils/webLatencyTrace';
 
 type EnableMonitoringOptions = Readonly<{
     env?: MonitoringReadinessEnv;
@@ -24,8 +26,11 @@ type EnableMonitoringOptions = Readonly<{
 
 export function enableMonitoring(app: Fastify, options: EnableMonitoringOptions = {}) {
     // Add metrics hooks
-    app.addHook('onRequest', async (request, _reply) => {
+    app.addHook('onRequest', (request, _reply, done) => {
         request.startTime = Date.now();
+        // Continue Fastify inside the diagnostic scope so authentication and DB
+        // reads share it too. Caller headers and query values never supply ids.
+        withWebLatencyTrace(process.env.HAPPIER_WEB_LATENCY_TRACE === '1' ? randomUUID() : null, done);
     });
 
     app.addHook('onResponse', async (request, reply) => {
@@ -36,6 +41,7 @@ export function enableMonitoring(app: Fastify, options: EnableMonitoringOptions 
             || redactHttpRequestUrlForLog(request.url)
             || 'unknown';
         const status = reply.statusCode.toString();
+        recordWebLatencyPhase(`http.${method}.${request.routeOptions?.url ?? 'unmatched'}`, duration * 1000);
 
         // Increment request counter
         httpRequestsCounter.inc({ method, route, status });

@@ -52,6 +52,8 @@ export const AgentDetailHeader = React.memo(function AgentDetailHeader(props: Re
     identityCurrent: boolean;
     enabled: AgentDetailEnabledControl | null;
     menuActions?: readonly AgentDetailMenuAction[];
+    /** A registry agent's own mark (its registry icon) in place of the catalog identity icon. */
+    mark?: React.ReactNode;
 }>) {
     const { theme } = useUnistyles();
     const styles = stylesheet;
@@ -67,14 +69,14 @@ export const AgentDetailHeader = React.memo(function AgentDetailHeader(props: Re
             description={props.description}
             leading={(
                 <PageHeaderMarkSlot>
-                    <AgentCatalogIdentityIcon
+                    {props.mark ?? <AgentCatalogIdentityIcon
                         entry={props.projection}
                         machineId={props.machineId}
                         serverId={props.serverId}
                         current={props.identityCurrent}
                         color={theme.colors.text.secondary}
                         size={24}
-                    />
+                    />}
                 </PageHeaderMarkSlot>
             )}
             actions={enabled || (props.menuActions?.length ?? 0) > 0 ? (

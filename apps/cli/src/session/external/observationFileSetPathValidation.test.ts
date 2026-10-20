@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -16,6 +16,34 @@ function linkedSource(root: string): AgentExternalSessionsResolvedIdentity {
 }
 
 describe('external-session observation path validation', () => {
+    it('retains a removed authorized file but refuses its replacement by a dangling link outside the source', async () => {
+        const root = await realpath(await mkdtemp(join(tmpdir(), 'external-observation-file-removed-')));
+        try {
+            const source = join(root, 'source');
+            const outside = join(root, 'outside');
+            const file = join(source, 'native.jsonl');
+            await mkdir(source);
+            await mkdir(outside);
+            await writeFile(file, '{}\n');
+            const admitted = validateExternalSessionObservationWatchFileChanges({
+                requested: { files: [file] }, linkedSource: linkedSource(source),
+                filesystemReadAllowedPaths: new Set(['']),
+            });
+            expect(admitted?.files).toEqual([file]);
+            await unlink(file);
+            const validate = () => validateExternalSessionObservationWatchFileChanges({
+                requested: { files: [file] }, linkedSource: linkedSource(source),
+                filesystemReadAllowedPaths: new Set(['']),
+                previouslyAuthorizedFiles: new Set(admitted!.files),
+            });
+            expect(validate()?.files).toEqual([file]);
+            await symlink(join(outside, 'absent.jsonl'), file, 'file');
+            expect(validate()).toBeNull();
+        } finally {
+            await rm(root, { recursive: true, force: true });
+        }
+    });
+
     it('admits canonical topology directories inside the resolved source grant', async () => {
         const root = await mkdtemp(join(tmpdir(), 'external-observation-topology-'));
         const sessions = join(root, 'sessions');
@@ -82,9 +110,11 @@ describe('external-session observation path validation', () => {
         await writeFile(file, '{}\n', 'utf8');
         const escapedLink = join(sourceRoot, 'escaped');
         await symlink(outsideRoot, escapedLink, 'dir');
+        const danglingLink = join(sourceRoot, 'dangling');
+        await symlink(join(outsideRoot, 'absent'), danglingLink, 'dir');
 
-        for (const topologyDirectory of [outsideRoot, escapedLink]) {
-            expect(validateExternalSessionObservationWatchFileChanges({
+        for (const topologyDirectory of [outsideRoot, escapedLink, join(escapedLink, 'not-yet-created'), join(danglingLink, 'not-yet-created')]) {
+            expect.soft(validateExternalSessionObservationWatchFileChanges({
                 requested: {
                     files: [await realpath(file)],
                     topologyDirectories: [topologyDirectory],

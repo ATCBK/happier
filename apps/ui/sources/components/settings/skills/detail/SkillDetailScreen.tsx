@@ -1,6 +1,10 @@
 import * as React from 'react';
 import * as Clipboard from 'expo-clipboard';
-import { readSkillFrontmatterV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import {
+  isReadOnlySkillProvenanceV1,
+  readSkillFrontmatterV1,
+  type SkillProvenanceV1,
+} from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 import { SKILL_ACTION_OUTPUT_SCHEMAS_V1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
@@ -66,6 +70,7 @@ import {
   type SkillMachineTruth,
 } from './useSkillMachineTruth';
 import { useSkillPlaces } from '../useSkillPlaces';
+import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 
 
 function formatDay(ms: number): string {
@@ -105,8 +110,14 @@ export const SkillDetailScreen = React.memo(function SkillDetailScreen(
   );
 });
 
+/** Why a plugin's skill cannot be edited here. A built-in one says it once, in its Source row. */
+function hostOwnedNote(provenance: SkillProvenanceV1): string | undefined {
+  return provenance.kind === 'plugin' ? t('capabilities.skillDetail.instructions.readOnlyPlugin') : undefined;
+}
+
 function SavedSkill(props: Readonly<{ skillId: string }>) {
   const { skillId } = props;
+  const { pluginUiProjection } = useAppShellPluginUiProjection();
   const router = useRouter();
   const detail = useSkillDetail(skillId);
   const places = useSkillPlaces();
@@ -141,28 +152,29 @@ function SavedSkill(props: Readonly<{ skillId: string }>) {
     ready: detail.ready,
   });
   const { read, listItem } = detail;
-  const firstParty =
-    (read?.provenance ?? listItem?.provenance)?.kind === 'first_party';
+  const provenance = read?.provenance ?? listItem?.provenance;
+  // Built-in and plugin Skills are host-owned: list, read and copy only.
+  const hostOwned = provenance ? isReadOnlySkillProvenanceV1(provenance) : false;
   const [removing, setRemoving] = React.useState(false);
 
   // Never a raw id: until the library answers, the title stays empty (its space is kept).
   const name = read?.name ?? listItem?.name ?? '';
-  const purpose =
+  // A folded YAML description keeps its source newlines; the header reads it as one sentence.
+  const purpose = (
     listItem?.description ??
-    (read ? readSkillFrontmatterV1(read.skillMd).description : undefined) ??
-    undefined;
-  const provenance = read?.provenance ?? listItem?.provenance;
+    (read ? readSkillFrontmatterV1(read.skillMd).description : undefined)
+  )?.replace(/\s+/g, ' ').trim();
   const facts = React.useMemo(
     () => ({
       ...(provenance
-        ? { source: skillSource({ provenance }, places.names.machineName) }
+        ? { source: skillSource({ provenance }, places.names.machineName, pluginUiProjection?.installedPackagesById) }
         : {}),
       ...(read || listItem ? { trust: (read ?? listItem)!.trust } : {}),
       ...(read || listItem
         ? { cost: { tokensWhenUsed: (read ?? listItem)!.cost.bodyTokens } }
         : {}),
     }),
-    [listItem, places.names.machineName, provenance, read],
+    [listItem, places.names.machineName, pluginUiProjection?.installedPackagesById, provenance, read],
   );
   const statuses = React.useMemo(
     (): readonly CapabilityStatus[] =>
@@ -174,14 +186,15 @@ function SavedSkill(props: Readonly<{ skillId: string }>) {
         : [],
     [detail.library.usageObservedSince, listItem],
   );
-  const headerStatus = pickMostBlockingCapabilityStatus(statuses, 'header');
+  // "Off" is said once, by Where it's on; the title carries only what that section does not.
+  const headerStatus = pickMostBlockingCapabilityStatus(statuses.filter((status) => status.kind !== 'off'), 'header');
 
   const menuItems = React.useMemo((): readonly PageHeaderMenuAction[] => {
     const items: PageHeaderMenuAction[] = [
       {
         id: 'duplicate',
         testID: 'skill.detail.duplicate',
-        title: firstParty
+        title: hostOwned
           ? t('capabilities.skillDetail.menu.makeCopy')
           : t('capabilities.skillDetail.menu.duplicate'),
         onSelect: async () => {
@@ -192,7 +205,7 @@ function SavedSkill(props: Readonly<{ skillId: string }>) {
       },
     ];
     const folders = detail.folders.value?.folders ?? [];
-    if (!firstParty && detail.folders.status === 'ready') {
+    if (!hostOwned && detail.folders.status === 'ready') {
       const current = listItem?.folderId ?? null;
       items.push({
         id: 'move',
@@ -243,7 +256,7 @@ function SavedSkill(props: Readonly<{ skillId: string }>) {
         },
       });
     return items;
-  }, [detail, firstParty, listItem?.folderId, provenance, router]);
+  }, [detail, hostOwned, listItem?.folderId, provenance, router]);
 
   const remove = React.useCallback(async () => {
     setRemoving(true);
@@ -333,7 +346,7 @@ function SavedSkill(props: Readonly<{ skillId: string }>) {
             testID="skill.detail.instructions"
             skillId={skillId}
             skillMd={read.skillMd}
-            readOnly={firstParty}
+            readOnly={hostOwned ? { note: hostOwnedNote(read.provenance) } : false}
             onSave={saveInstructions}
             onDirtyChange={detail.setHold}
             readTheirs={readTheirs}
@@ -342,13 +355,14 @@ function SavedSkill(props: Readonly<{ skillId: string }>) {
           <SkillFilesSection
             testID="skill.detail.files"
             read={read}
-            readOnly={firstParty}
+            readOnly={hostOwned}
             update={detail.update}
             readFile={readFile}
           />
           <SkillSourceSection
             testID="skill.detail.source"
             read={read}
+            pluginSource={facts.source?.kind === 'plugin' ? facts.source : undefined}
             updatePolicy={listItem?.updatePolicy ?? 'manual'}
             machineName={places.names.machineName}
             checkNow={() => {
@@ -380,7 +394,7 @@ function SavedSkill(props: Readonly<{ skillId: string }>) {
           testID="skill.detail.details"
           skillId={skillId}
           revision={read.revision}
-          allowInstall={!firstParty}
+          allowInstall={!hostOwned}
           onlineMachines={places.placeMachines.filter(
             (machine) => machine.online,
           )}
@@ -388,7 +402,7 @@ function SavedSkill(props: Readonly<{ skillId: string }>) {
           execute={detail.execute}
         />
       ) : null}
-      {!firstParty && read ? (
+      {!hostOwned && read ? (
         <PageLeaveActions
           testID="skill.detail.leave"
           footnote={t('capabilities.skillDetail.leave.footnote')}

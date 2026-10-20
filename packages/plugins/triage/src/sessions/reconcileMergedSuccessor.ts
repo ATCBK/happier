@@ -7,7 +7,8 @@ import type { CorpusCollectionsV1 } from '../corpus/collections/bindCorpusCollec
 import { CORPUS_SESSION_LINKS_INDEX_ID } from '../corpus/collections/ids.js';
 import { fromCorpusStoredRow, toCorpusStoredValue } from '../corpus/collections/rowCodec.js';
 import type { CorpusSessionLinkRowV1 } from '../corpus/collections/rows.js';
-import { deriveSessionLinkEntryTag, deriveSessionLinkTag } from '../corpus/identity/tags.js';
+import { deriveSessionLinkEntryTag } from '../corpus/identity/tags.js';
+import { findTriageEntrySessionLinkV1 } from './readEntrySessionLinks.js';
 
 /**
  * The one durable effect an authoritative `merged(successor)` observation has.
@@ -141,13 +142,10 @@ async function moveOneLink(
     successor: Readonly<{ successorEntryRef: TriageEntryRefV1; successorEntryTag: string }>,
     options?: PluginCancellationOptions,
 ): Promise<boolean> {
-    const successorLinkTag = await deriveSessionLinkTag(
-        sessionLinks,
-        successor.successorEntryRef,
-        row.sessionId,
-        options,
-    );
-    if (successorLinkTag !== row.linkTag && await sessionLinks.get(successorLinkTag, options) !== null) {
+    const successorLink = await findTriageEntrySessionLinkV1(sessionLinks, {
+        entryRef: successor.successorEntryRef, sessionId: row.sessionId,
+    }, options);
+    if (successorLink !== null && successorLink.linkTag !== row.linkTag) {
         const collapsed = await sessionLinks.batch(
             [{ kind: 'delete', rowId: row.linkTag, expectedRevision: revision }],
             options,

@@ -32,6 +32,19 @@ set, and tunnel-lease map. The binding adds no runtime, no lifecycle logic,
 and no payload APIs: requests and responses are validated JSON envelopes, and
 tunnel bytes never cross.
 
+In 0.3 development source, the binding dispatches synchronous lifecycle calls
+to that native runtime's blocking pool and settles JavaScript promises through
+NAPI deferreds. Pending peer dials therefore leave Node's shared filesystem/DNS
+workers available for daemon logging, heartbeat persistence and request admission.
+Existing processes need the rebuilt addon and a runtime restart to consume this
+correction; changing TypeScript source alone does not replace a loaded addon.
+
+The development transport also retains Iroh's default keepalives and dead-peer
+idle timeout, so an abruptly retired peer cannot leave native streams waiting
+forever. Healthy application-idle connections remain usable. See the
+[carrier lifetime contract](../../docs/peer-mediation.md) for the distinction
+between transport liveness and application deadlines.
+
 ```ts
 import { loadIrohNodeNative } from '@happier-dev/iroh-native/node';
 

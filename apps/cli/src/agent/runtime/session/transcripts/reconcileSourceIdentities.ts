@@ -1,16 +1,16 @@
 import { PluginError } from '@happier-dev/plugin-sdk';
 import type { AgentTranscriptIdentityCodec, AgentTranscriptSessionEventPublisher } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
-const opaqueId = z.string().refine((value) => value.trim().length > 0);
-const requestSchema = z.object({ providerSessionId: opaqueId, facts: z.array(z.object({
+const opaqueId = z.string().check(z.refine((value) => value.trim().length > 0));
+const requestSchema = z.strictObject({ providerSessionId: opaqueId, facts: z.array(z.strictObject({
     sourceMessageId: opaqueId, role: z.enum(['user', 'assistant']), localId: opaqueId,
-}).strict()) }).strict();
-const resultSchema = z.object({
+})) });
+const resultSchema = z.strictObject({
     committedSourceMessageIds: z.array(opaqueId), hostAuthoredUserMessageIds: z.array(opaqueId),
-    coverage: z.object({ complete: z.boolean(), unmappedUsers: z.number().int().nonnegative(), unmappedAgents: z.number().int().nonnegative() }).strict(),
-}).strict();
+    coverage: z.strictObject({ complete: z.boolean(), unmappedUsers: z.number().check(z.int(), z.nonnegative()), unmappedAgents: z.number().check(z.int(), z.nonnegative()) }),
+});
 
 function projectFields(value: Readonly<Record<string, unknown>> | null, fields: readonly string[]): Readonly<Record<string, unknown>> {
     return Object.fromEntries(fields.filter((field) => value && Object.hasOwn(value, field)).map((field) => [field, value![field]]));

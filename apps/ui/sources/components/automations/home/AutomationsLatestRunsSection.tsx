@@ -15,7 +15,8 @@ import { useAutomationsSupport } from '@/hooks/server/useAutomationsSupport';
 import type { AutomationDefinitionRun } from '@/sync/domains/automations/automationTypes';
 import { storage } from '@/sync/domains/state/storageStore';
 import { useAutomations } from '@/sync/domains/state/storage';
-import { createAutomationRunDetailRoute } from '@/sync/domains/workflows/workflowRunRoute';
+import { createWorkflowRunRoute } from '@/sync/domains/workflows/workflowRunRoute';
+import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { resolveAutomationRunProjections } from '@/sync/store/domains/workflowRuns';
 import { sync } from '@/sync/sync';
 import { t } from '@/text';
@@ -116,11 +117,11 @@ function AutomationsLatestRunsWidget(props: HubSectionProps) {
         router.push(AUTOMATIONS_ROUTE as never);
     }, [router]);
     const openRun = React.useCallback((row: LatestAutomationRunRow) => {
-        router.push(createAutomationRunDetailRoute({
+        router.push(createWorkflowRunRoute({
+            kind: 'occurrence',
             automationId: row.run.automationId,
             runId: row.run.id,
-            targetType: row.targetType,
-        }) as never);
+        }, getActiveServerAccountScope()?.serverId) as never);
     }, [router]);
 
     const hasRows = rows.length > 0;

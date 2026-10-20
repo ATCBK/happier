@@ -25,6 +25,13 @@ import { VoiceComposerPlanet } from '../composer/VoiceComposerPlanet';
 import { AppShellTitleStrip } from '@/components/navigation/shell/appRail/AppShellTitleStrip';
 
 const host = vi.hoisted(() => ({ os: 'web' }));
+// Browser hardware, rather than viewport width, establishes the mobile-web touch floor.
+vi.hoisted(() => {
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: (query: string) => ({
+        matches: query === '(pointer: coarse)' || query === '(hover: none)',
+        addEventListener() {}, removeEventListener() {},
+    }) });
+});
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
     const mock = await createReactNativeWebMock();

@@ -16,14 +16,14 @@ export const manifest = {
             id: 'usage', container: 'widget', target: { kind: 'app' }, renderer: 'usage-summary', title: 'Usage',
             sizeDeclaration: { sizes: ['small', 'medium', 'wide', 'full', 'tall', 'large'], defaultSize: 'medium' },
             inputs: { fields: [
-                // The host validates the assembled query. Children remain independently bindable.
-                { path: 'query', title: 'Query', widget: 'json', inputType: { hostType: 'usageQuery' } },
+                // Declare the independently bindable leaves. The usage.query Action
+                // validates the assembled query through the canonical host schema.
                 { path: 'query.period', title: 'Period', widget: 'select', required: true,
                     inputType: { hostType: 'usageQuery', field: 'period' }, contextMode: 'follow' },
-                { path: 'query.agents', title: 'Agents', widget: 'text_list', required: true, contextMode: 'follow' },
-                { path: 'query.machines', title: 'Machines', widget: 'text_list', required: true, contextMode: 'follow' },
-                { path: 'query.projects', title: 'Projects', widget: 'text_list', required: true, contextMode: 'follow' },
-                { path: 'query.sources', title: 'Sources', widget: 'text_list', required: true, contextMode: 'follow' },
+                { path: 'query.agents', title: 'Agents', widget: 'text_list', listSeparator: 'newline', required: true, contextMode: 'follow' },
+                { path: 'query.machines', title: 'Machines', widget: 'text_list', listSeparator: 'newline', required: true, contextMode: 'follow' },
+                { path: 'query.projects', title: 'Projects', widget: 'text_list', listSeparator: 'newline', required: true, contextMode: 'follow' },
+                { path: 'query.sources', title: 'Sources', widget: 'text_list', listSeparator: 'newline', required: true, contextMode: 'follow' },
                 { path: 'query.session', title: 'Session', widget: 'select', required: true,
                     inputType: { hostType: 'usageQuery', field: 'session' }, contextMode: 'follow' },
                 { path: 'query.costBasis', title: 'Cost basis', widget: 'select', required: true, contextMode: 'follow',

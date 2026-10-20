@@ -100,6 +100,7 @@ export type { PluginUiHostReadReference } from './hostApi.js';
 export type { PluginUiIconTokenV1 } from '../ui.js';
 export type { PluginUiJsonObjectV1 } from './hostedWeb.js';
 export type { PluginUiJsonValueV1 } from './hostedWeb.js';
+export { PluginUiLaunchInputV1Schema } from './hostApi.js';
 export type { PluginUiMountContextV1 } from './hostApi.js';
 export type { PluginUiPageHeaderActionV1 } from '../ui.js';
 export type { PluginUiPlatform } from '../ui.js';

@@ -1,4 +1,4 @@
-import * as z from 'zod';
+import * as z from 'zod/mini';
 import type { CustomerInfo } from './types';
 
 //
@@ -6,8 +6,8 @@ import type { CustomerInfo } from './types';
 //
 
 export const PurchasesSchema = z.object({
-    activeSubscriptions: z.array(z.string()).describe('Active subscription product IDs'),
-    entitlements: z.record(z.string(), z.boolean()).describe('Map of entitlement IDs to their active status'),
+    activeSubscriptions: z.array(z.string()).check(z.describe('Active subscription product IDs')),
+    entitlements: z.record(z.string(), z.boolean()).check(z.describe('Map of entitlement IDs to their active status')),
 });
 
 //
@@ -18,7 +18,7 @@ export const PurchasesSchema = z.object({
 // - Preserved through schema changes
 //
 
-const PurchasesSchemaPartial = PurchasesSchema.passthrough().partial();
+const PurchasesSchemaPartial = z.partial((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(PurchasesSchema));
 
 export type Purchases = z.infer<typeof PurchasesSchema>;
 

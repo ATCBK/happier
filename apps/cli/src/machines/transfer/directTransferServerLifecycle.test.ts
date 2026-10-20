@@ -424,7 +424,7 @@ describe('createDirectTransferServerLifecycle', () => {
 
   it('can prepare a direct import session and advertise upload endpoint candidates through the same lazy server', async () => {
     const stop = vi.fn(async () => {});
-    const openTrustedImportSession = vi.fn(async () => ({
+    const openTrustedImportSession = vi.fn<StartServerResult['openTrustedImportSession']>(async () => ({
       success: true as const,
       response: {
         uploadId: 'upload-1',
@@ -499,6 +499,7 @@ describe('createDirectTransferServerLifecycle', () => {
     const startServer = vi.fn(async (params: StartServerParams) => {
       onImportSessionCountChanged = params.onImportSessionCountChanged;
       return {
+        ...createStubDirectTransferServer(stop),
         port: 46001,
         stop,
         requestPreparedTransfer: async () => ({ status: 404, body: '' }),
@@ -1198,7 +1199,7 @@ describe('createDirectTransferServerLifecycle', () => {
       resolveOnDemandTransferOnOpen: vi.fn(async () => null),
       completeFilesystemExport: async () => ({ success: false as const, error: "unused" }),
       waitForFilesystemExportSettlement: async () => ({ success: false as const, error: "unused", errorCode: "indeterminate" }),
-      clearPublishedTransfer: vi.fn(() => undefined),
+      clearPublishedTransfer: vi.fn(() => true),
       dispose: vi.fn(async () => undefined),
       hasPublishedTransfers: vi.fn(() => true),
       countPublishedTransfers: vi.fn(() => 1),
@@ -1272,7 +1273,7 @@ describe('createDirectTransferServerLifecycle', () => {
       resolveOnDemandTransferOnOpen: vi.fn(async () => null),
       completeFilesystemExport: async () => ({ success: false as const, error: "unused" }),
       waitForFilesystemExportSettlement: async () => ({ success: false as const, error: "unused", errorCode: "indeterminate" }),
-      clearPublishedTransfer: vi.fn(() => undefined),
+      clearPublishedTransfer: vi.fn(() => true),
       dispose: vi.fn(async () => undefined),
       hasPublishedTransfers: vi.fn(() => true),
       countPublishedTransfers: vi.fn(() => 1),
@@ -1356,7 +1357,7 @@ describe('createDirectTransferServerLifecycle', () => {
       resolveOnDemandTransferOnOpen: vi.fn(async () => null),
       completeFilesystemExport: async () => ({ success: false as const, error: "unused" }),
       waitForFilesystemExportSettlement: async () => ({ success: false as const, error: "unused", errorCode: "indeterminate" }),
-      clearPublishedTransfer: vi.fn(() => undefined),
+      clearPublishedTransfer: vi.fn(() => true),
       dispose: vi.fn(async () => undefined),
       hasPublishedTransfers: vi.fn(() => true),
       countPublishedTransfers: vi.fn(() => 1),

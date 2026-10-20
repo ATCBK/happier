@@ -1,3 +1,5 @@
+import { createHash, getHashes } from 'node:crypto';
+
 // Vitest runs in a Node environment; `expo-modules-core` is designed for Expo/Metro and
 // imports `react-native` (Flow) via its TS source entrypoint. For unit tests we only need
 // a minimal subset of the surface area used by other Expo packages (e.g. `expo-localization`).
@@ -44,10 +46,29 @@ export function requireOptionalNativeModule<T extends object = Record<string, un
     return (moduleName ? optionalNativeModules.get(moduleName) as T | undefined : undefined) ?? null;
 }
 
-export function requireNativeModule(moduleName: string): never {
-    // Return a dummy module so packages can be imported in Vitest without exploding at import-time.
-    // Tests that actually rely on native behavior should mock the specific module.
-    return {} as never;
+function digestBytes(algorithm: string, data: BufferSource): Uint8Array<ArrayBuffer> {
+    const normalized = algorithm.replaceAll('-', '').toLowerCase();
+    if (!getHashes().includes(normalized)) {
+        throw new DOMException('Unrecognized algorithm name', 'NotSupportedError');
+    }
+    const bytes = ArrayBuffer.isView(data)
+        ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+        : new Uint8Array(data);
+    return new Uint8Array(createHash(normalized).update(bytes).digest());
+}
+
+const expoCryptoModule = {
+    digest(algorithm: string, output: Uint8Array, data: BufferSource): void {
+        output.set(digestBytes(algorithm, data));
+    },
+    async digestAsync(algorithm: string, data: BufferSource): Promise<ArrayBuffer> {
+        return digestBytes(algorithm, data).buffer;
+    },
+};
+
+export function requireNativeModule<T = never>(moduleName: string): T {
+    if (moduleName === 'ExpoCrypto') return expoCryptoModule as T;
+    return {} as T;
 }
 
 export default {

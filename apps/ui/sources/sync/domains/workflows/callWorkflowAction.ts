@@ -35,7 +35,7 @@ export type WorkflowActionCallerContext = Pick<ActionExecutorContext,
     | 'causalPermissionAuthority' | 'sessionInputSource' | 'agentStartContext' | 'sessionRoleConfiguration'
     | 'requesterWorkAttributionV1' | 'actionsSettings' | 'approvalOrigin' | 'externalActionCredential'
     | 'externalActionTarget' | 'rpcSessionAuthorization' | 'requiredContributedActionDangerLevel'
-    | 'expectedContributedActionOccurrenceId' | 'signal'>;
+    | 'expectedContributedActionOccurrenceId' | 'signal' | 'onTransportIssued'>;
 
 let sharedExecute: WorkflowActionExecute | null = null;
 

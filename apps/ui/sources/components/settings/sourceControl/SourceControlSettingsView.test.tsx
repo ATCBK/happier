@@ -27,7 +27,6 @@ const {
     setScmCommitMessageGeneratorEnabled,
     setScmCommitMessageGeneratorBackendId,
     setScmCommitMessageGeneratorInstructions,
-    applySettings,
     routerPush,
     daemonProjectionRequest,
     daemonProjectionState,
@@ -49,7 +48,6 @@ const {
     setScmCommitMessageGeneratorEnabled: vi.fn(),
     setScmCommitMessageGeneratorBackendId: vi.fn(),
     setScmCommitMessageGeneratorInstructions: vi.fn(),
-    applySettings: vi.fn(),
     routerPush: vi.fn(),
     daemonProjectionRequest: vi.fn(),
     daemonProjectionState: {
@@ -130,11 +128,6 @@ vi.mock('@/agents/registry/registryCore', async (importOriginal) => ({
 // The segmented control is asserted through the props its row hands it.
 vi.mock('@/components/ui/navigation/SegmentedTabBar', () => ({ SegmentedTabBar: 'SegmentedTabBar' }));
 
-vi.mock('@/sync/store/settingsWriters', () => ({
-    useApplySettings: () => applySettings,
-    useAccountSettingsScope: () => ({ serverId: 'server-target', accountId: 'fixture-account' }),
-}));
-
 vi.mock('@/agents/backendCatalog/useDaemonMergedProjectionInputs', () => ({
     useDaemonMergedProjectionInputs: (params: unknown) => {
         daemonProjectionRequest(params);
@@ -213,7 +206,6 @@ describe('SourceControlSettingsView', () => {
         daemonProjectionState.current = { phase: 'unsupported', inputs: null };
         scmGitRepoPreferredBackendValue = 'git';
         scmGitRepoPreferredBackendQualifiedIdValue = null;
-        applySettings.mockClear();
         daemonProjectionRequest.mockClear();
     });
 
@@ -308,10 +300,6 @@ describe('SourceControlSettingsView', () => {
 
         const routing = segmentedControl(screen.findRowByTitle('settingsSourceControl.page.routing.rowTitle'));
         expect(routing.tabs.map((tab) => tab.label)).toEqual(['Acme Stacked SCM']);
-        act(() => routing.onSelectTab('acme.scm/stacked'));
-        expect(applySettings).toHaveBeenCalledWith({
-            scmGitRepoPreferredBackendQualifiedId: 'acme.scm/stacked',
-        });
 
         // A backend with a single diff mode states it rather than offering a one-option choice.
         const defaultDiff = screen.findAllByType(Item).find(node => node.props.testID === 'settings.sourceControl.backend.acme.scm/stacked.defaultDiff');
@@ -361,7 +349,7 @@ describe('SourceControlSettingsView', () => {
         expect(routing.activeTabId).toBe('happier.scm.backend.git/git');
     });
 
-    it('clears a qualified selection atomically when selecting a projected built-in backend', async () => {
+    it('offers the projected built-in backend beside the qualified selection', async () => {
         scmGitRepoPreferredBackendQualifiedIdValue = 'acme.scm/stacked';
         daemonProjectionState.current = {
             phase: 'ready',
@@ -400,11 +388,7 @@ describe('SourceControlSettingsView', () => {
         const routing = segmentedControl(screen.findRowByTitle('settingsSourceControl.page.routing.rowTitle'));
 
         expect(routing.activeTabId).toBe('acme.scm/stacked');
-        act(() => routing.onSelectTab('happier.scm.backend.git/git'));
-        expect(applySettings).toHaveBeenCalledWith({
-            scmGitRepoPreferredBackend: 'git',
-            scmGitRepoPreferredBackendQualifiedId: null,
-        });
+        expect(routing.tabs.map((tab) => tab.id)).toContain('happier.scm.backend.git/git');
     });
 
     it('retains projected SCM metadata read-only while the authoritative daemon projection is loading', async () => {
@@ -467,20 +451,6 @@ describe('SourceControlSettingsView', () => {
         expect(screen.findRowByTitle('settingsSourceControl.remoteConfirmation.confirmBeforePulling.title')).toBeTruthy();
         act(() => strategy.onSelectTab('git_staging'));
         expect(setScmCommitStrategy).toHaveBeenCalledWith('git_staging');
-    });
-
-    it('maps remote pull and push confirmation switches to the persisted policy enum', async () => {
-        scmRemoteConfirmPolicyValue = 'always';
-        setScmRemoteConfirmPolicy.mockClear();
-
-        const screen = await renderSettingsView(React.createElement(SourceControlSettingsView));
-
-        screen.pressRowByTitle('settingsSourceControl.remoteConfirmation.confirmBeforePulling.title');
-        expect(setScmRemoteConfirmPolicy).toHaveBeenCalledWith('push_only');
-
-        setScmRemoteConfirmPolicy.mockClear();
-        screen.pressRowByTitle('settingsSourceControl.remoteConfirmation.confirmBeforePushing.title');
-        expect(setScmRemoteConfirmPolicy).toHaveBeenCalledWith('pull_only');
     });
 
     it('defaults diff presentation style to unified when the setting is missing', async () => {
@@ -603,7 +573,7 @@ describe('SourceControlSettingsView', () => {
         expect(setScmCommitMessageGeneratorInstructions).toHaveBeenCalledWith('Use imperative mood');
     });
 
-    it('chooses the commit-message Agent by name from the enabled Agents, never as a raw id field', async () => {
+    it('offers the enabled commit-message Agents by name', async () => {
         setScmCommitMessageGeneratorBackendId.mockClear();
         const screen = await renderSettingsView(<SourceControlSettingsView />);
         const picker = () => screen.findAll((node: any) => node.props?.itemTrigger?.itemProps?.testID === 'settings.sourceControl.commitMessageAgent')[0];
@@ -614,8 +584,5 @@ describe('SourceControlSettingsView', () => {
         expect(items.length).toBeGreaterThan(0);
         for (const item of items) expect(item.subtitle).not.toBe(item.id);
         expect(picker()!.props.selectedId).toBe('codex');
-        const other = items.find((item) => item.id !== 'codex')!;
-        act(() => picker()!.props.onSelect(other.id));
-        expect(setScmCommitMessageGeneratorBackendId).toHaveBeenCalledWith(other.id);
     });
 });

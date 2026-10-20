@@ -37,9 +37,35 @@ throw new PluginError({
 });
 ```
 
+In current 0.3 development source, declare
+`confirmationWhen: { presentUserUi: false }` for a reversible operation that
+people invoke in your UI, such as completing or reopening an item. The scoped
+value also accepts an input predicate when the consequence depends on the input.
+Keep accurate `dangerLevel` and `confirmation` wording: Agent, MCP, CLI, API,
+Voice and automation routed through UI retain their normal defaults. A flat
+input predicate in `confirmationWhen` instead controls the default on every
+surface. Local writes can overwrite data, so `writesLocal` alone does not make
+an operation direct; destructive and outward operations should retain review.
+The person's explicit Ask setting takes precedence. Approval waivers change
+prompts, not the caller's execution authority.
+
 Prefer stable error codes over parsing text. See
 [Diagnostics](/plugins/testing/diagnostics) for the public guard and the
 diagnostic workflow.
+
+For a mounted UI that writes Account KV or Collections directly, current 0.3
+development source provides `hostApi.admitAction(action, input, { signal })`.
+Await it before calling your existing domain writer. It returns `false` when
+the person declines, rejects an Off Action with `denied`, and rejects cancelled,
+retired or unavailable requests. Run the writer only after `true`, using the
+same signal. Account authorization, validation and conflict handling stay with
+that writer, and no daemon needs to be reachable.
+
+This operation checks the Action's conservative default when a condition would
+require validated input; it never treats unvalidated JSON as a confirmation
+waiver. Check the host's advertised methods before offering the operation on
+older hosts: a missing `admitAction` rejects with `unsupported_method`. Ordinary
+`confirm` is presentation, not a substitute for this Action admission.
 
 Secret-bearing Action inputs must declare each confidential path in
 `inputHints.fields` with `widget: 'secret'` and a readable `title`, including
@@ -71,6 +97,53 @@ invocation can find it with `approval.request.list {status: 'open'}` and read th
 same redacted request. Reading an approval does not grant permission to decide it.
 Do not infer confidentiality from a field's name or copy secrets into labels,
 summaries, progress or results.
+
+In current 0.3 development source, contributed Action calls through
+`executeWithExecutionOrigin` or
+`executeAdmittedTargetedOperationWithExecutionOrigin` can supply the closed
+`expectedExecutionRouting` option: `{ serverIdentityId, machineId, pluginId }`.
+The host compares it with the resolved target before running the handler; it
+is an equality precondition, not a target selector or Action input. Use this
+when retained configuration follows the current admitted plugin on one Home
+and machine. `getPluginMachineExecutionRouting` projects a host-stamped origin
+and `arePluginMachineExecutionRoutingsEqual` compares routes through the shared
+owner. A mismatch returns `plugin_action_execution_origin_mismatch` before
+handler effects. Invocation currentness still applies, and the existing
+`expectedExecutionOrigin` option keeps its full exact-custody meaning for
+operations that require it, including approval continuation.
+
+## Choose where a plugin runs
+
+In 0.3 development source, **Run on** remembers a Machine on the answering
+device, separately for each Account and Home. UI, Agent, MCP and CLI callers use
+the same `plugins.execution_origin.list`, `.set` and `.clear` Actions. List the
+admitted origins, pass one exact `origin` to set, or clear the local preference;
+no Account settings version is required. In 0.3 development, list returns
+`answeringClientId` and eligible `answeringClientIds`; pass an id as `clientId` to address that exact connected app
+from CLI or MCP. Without `clientId`, reads keep their current answering device,
+but set and clear return `client_ambiguous` when several apps can answer. A
+disconnected selected app is unavailable; reconnect and list again to obtain
+its current address. Only the answering device's choice changes.
+
+An explicit unavailable Machine remains named and its operations stay blocked.
+Clear it or choose an available Machine to change where effects run. Without an
+explicit choice, Happier automatically picks an online admitted Machine in the local
+Home after its Machine list completes. It prefers the rendered release's version,
+then the Machine last used for this plugin on this device, this device's own
+Machine when known, and the most recently active eligible Machine. If an automatic
+pick becomes unavailable, Happier picks again. List results report
+`selectionSource` as `auto`, `pinned`, or `null` when no Machine is selected.
+The remembered choice does not pin a source directory or code version:
+each operation resolves the Machine's current admitted source. Session panels
+retain their separate mounted contextual choice.
+
+If your plugin's work depends on choosing a particular Machine, declare
+`executionTarget: { autoPick: false }` in `definePlugin(...)`. This optional
+manifest field defaults to automatic selection when omitted. With `false`, a
+sole eligible candidate is still automatic, and several candidates ask the user.
+The existing `default: 'installation'` hint may share the same object. Target a
+host that admits this declaration through the SDK's engine compatibility contract;
+older strict manifest parsers reject it rather than ignoring placement policy.
 
 ## Keep a long daemon Action visible in Activity
 

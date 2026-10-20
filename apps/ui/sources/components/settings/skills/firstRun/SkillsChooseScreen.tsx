@@ -2,15 +2,16 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
+import { isReadOnlySkillProvenanceV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { CapabilityRow } from '@/components/capabilities/row/CapabilityRow';
-import { useWhereItsOnNames } from '@/components/capabilities/where/useWhereItsOnNames';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
 import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { PagePinnedBar } from '@/components/ui/layout/PagePinnedBar';
 import { PageContentColumn } from '@/components/ui/lists/PageContentColumn';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
@@ -19,13 +20,12 @@ import { useSkillsLibrary, type SkillsLibrary } from '@/sync/domains/skills/useS
 import { t } from '@/text';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { useAppShellPluginUiProjection } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 
 import { SKILLS_COLLECTION_ROUTE, skillSource } from '../skillsCollectionModel';
+import { useSkillPlaces } from '../useSkillPlaces';
 import { useSkillsFirstRun, type SkillsFirstRun } from './useSkillsFirstRun';
 
-const NO_AGENTS: readonly string[] = Object.freeze([]);
-const NO_MACHINES: readonly Readonly<{ machineId: string; name: string }>[] =
-  Object.freeze([]);
 
 function formatDay(ms: number): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -50,12 +50,11 @@ export const SkillsChoosePage = React.memo(function SkillsChoosePage(
   props: Readonly<{ library: SkillsLibrary; firstRun: SkillsFirstRun }>,
 ) {
   const { library, firstRun } = props;
+  const { pluginUiProjection } = useAppShellPluginUiProjection();
   const router = useRouter();
   const { theme } = useUnistyles();
-  const { names } = useWhereItsOnNames({
-    agentIds: NO_AGENTS,
-    machines: NO_MACHINES,
-  });
+  // A skill added from a machine names that machine, as the rail and homepage do.
+  const { names } = useSkillPlaces();
   const selected = React.useMemo(
     () => new Set(firstRun.selectedIds),
     [firstRun.selectedIds],
@@ -85,7 +84,7 @@ export const SkillsChoosePage = React.memo(function SkillsChoosePage(
   }, [allSelected, firstRun.items, firstRun.setSelected]);
 
   const total = library.items.filter(
-    (item) => item.provenance.kind !== 'first_party',
+    (item) => !isReadOnlySkillProvenanceV1(item.provenance),
   ).length;
   const migratedNames = firstRun.migrated.map((item) => item.name).join(', ');
 
@@ -103,19 +102,29 @@ export const SkillsChoosePage = React.memo(function SkillsChoosePage(
                   total,
                   off: firstRun.firstVisit.off,
                 })
-              : undefined
+              : t('capabilities.skillsUpdates.choose.purposeIdle')
           }
         />
         {library.status === 'loading' &&
         library.items.length === 0 ? null : !firstRun.eligible ? (
-          <ItemGroup surface="none">
-            <SurfaceStateCard
-              testID="skills.choose.nothingWaits"
-              size="line"
-              kind="empty"
-              title={t('capabilities.skillsUpdates.choose.nothingWaits')}
-            />
-          </ItemGroup>
+          <SurfaceStateCard
+            testID="skills.choose.nothingWaits"
+            size="page"
+            kind="empty"
+            scene="inboxZero"
+            title={t('capabilities.skillsUpdates.updates.nothingToChoose')}
+            reason={t('capabilities.skillsUpdates.choose.nothingWaits')}
+            // Nothing to decide here, so the way back is a plain bordered button under the words, not an invitation.
+            actionFooter={
+              <RoundButton
+                testID="skills.choose.nothingWaits.back"
+                display="secondary"
+                title={t('capabilities.skills.allSkills')}
+                style={styles.backAction}
+                onPress={home}
+              />
+            }
+          />
         ) : (
           <>
             {firstRun.migrated.length > 0 ? (
@@ -160,7 +169,7 @@ export const SkillsChoosePage = React.memo(function SkillsChoosePage(
                     }
                     facts={{
                       presentation: 'row',
-                      source: skillSource(item, names.machineName),
+                      source: skillSource(item, names.machineName, pluginUiProjection?.installedPackagesById),
                       trust: item.trust,
                       cost: { tokensWhenUsed: item.cost.bodyTokens },
                       ...(item.lastUsedAt !== undefined
@@ -183,7 +192,7 @@ export const SkillsChoosePage = React.memo(function SkillsChoosePage(
         )}
       </ItemList>
       {firstRun.eligible ? (
-        <View style={styles.bar} testID="skills.choose.bar">
+        <PagePinnedBar testID="skills.choose.bar" style={styles.barInset}>
           <PageContentColumn>
           <View style={styles.barRow}>
           <Text variant="body" style={styles.count}>
@@ -218,7 +227,7 @@ export const SkillsChoosePage = React.memo(function SkillsChoosePage(
           />
           </View>
           </PageContentColumn>
-        </View>
+        </PagePinnedBar>
       ) : null}
     </View>
   );
@@ -226,13 +235,11 @@ export const SkillsChoosePage = React.memo(function SkillsChoosePage(
 
 const styles = StyleSheet.create((theme) => ({
   page: { flex: 1, backgroundColor: theme.colors.surface.base },
-  bar: {
-    paddingVertical: theme.space.s12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: theme.colors.border.subtle,
-    backgroundColor: theme.colors.surface.base,
-  },
+  // The column carries the page gutter, as the list above it does.
+  barInset: { paddingHorizontal: 0 },
   barRow: { width: '100%', flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: theme.space.s16, paddingHorizontal: theme.space.s16 },
   count: { color: theme.colors.text.primary, fontVariant: ['tabular-nums'] },
   grow: { flex: 1 },
+  // The way back sits a step under the state's words.
+  backAction: { marginTop: theme.space.s16 },
 }));

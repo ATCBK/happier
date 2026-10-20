@@ -29,7 +29,7 @@ export function areServerProfileIdentifiersEquivalent(
   return Boolean(leftScope && rightScope && leftScope === rightScope);
 }
 
-const ServerIdentityIdSchema = lazyZodSchema(() => z.pipe(z.transform(normalizeServerIdentityIdCapability), z._default(z.optional(z.nullable(z.string())), null)));
+const ServerIdentityIdSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeServerIdentityIdCapability), z._default(z.optional(z.nullable(z.string())), null)));
 
 export const ServerIdentityCapabilitiesSchema = lazyZodSchema(() => z.object({
   serverIdentityId: ServerIdentityIdSchema,

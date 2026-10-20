@@ -5,16 +5,15 @@ import type { MachineLiveStreamControlSidebandV1, MachineLiveStreamInputControlK
 
 import { LiveStreamInputLayer } from '@/components/stream/LiveStreamInputLayer';
 import { LiveStreamPlayer, type LiveStreamPlayerDisplayState } from '@/components/stream/LiveStreamPlayer';
-import {
-    mapLiveStreamPointToContent,
-    type LiveStreamInputGesture,
-} from '@/sync/domains/machines/peer/mediation/stream/inputGesture';
+import type { LiveStreamInputGesture } from '@/sync/domains/machines/peer/mediation/stream/inputGesture';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { t } from '@/text';
+import type { BrowserDaemonControlDispatchClientResult } from '@/sync/domains/browser/control/machineRpc';
 
 import { BrowserFrameStatusCapsule } from '../frame/BrowserFrameStatusCapsule';
+import { buildBrowserStreamSidebandControl } from './browserStreamSidebandControl';
 
 const stylesheet = StyleSheet.create((theme) => ({
     root: {
@@ -43,8 +42,18 @@ export type BrowserStreamedSurfaceRuntime = Readonly<{
     playerState: (LiveStreamPlayerDisplayState & Readonly<{ avccChunks?: readonly Uint8Array[] }>) | null;
     /** The view's source is known and the stream is opening (no frame yet). */
     connecting?: boolean;
+    /** The discovery owner's typed prerequisite/failure, distinct from a stream failure. */
+    unavailableReason?: Extract<BrowserDaemonControlDispatchClientResult, { ok: false }>['reason'];
     /** Try to open the stream again after it failed. */
     onRetry?: () => void;
+    /**
+     * Where the agent's first open stands before its page can be streamed, read from the typed Machine
+     * Action operation and the discovery owner: `preparing` (the Machine is downloading Chromium),
+     * `opening` (the open went through; the page is on its way), `installFailed`, `sandboxUnavailable`.
+     */
+    firstUse?: 'preparing' | 'opening' | 'installFailed' | 'sandboxUnavailable';
+    /** The page the agent asked for while its browser is preparing or opening: the chrome's address shows it. */
+    firstUseTargetUrl?: string;
     /**
      * Viewer input back to the registered source: tap, scroll and typing reach the page, and the
      * daemon turns them into a human takeover. Absent when the source accepts no input.
@@ -63,43 +72,18 @@ const BROWSER_INPUT_KINDS: ReadonlySet<MachineLiveStreamInputControlKindV1> = ne
 const supportsBrowserInput = (kind: MachineLiveStreamInputControlKindV1): boolean => BROWSER_INPUT_KINDS.has(kind);
 
 /**
- * A viewer gesture as the browser source's registered sideband control, with points normalized to
- * the drawn page (the frame is fitted with `contain`, so the viewer surface can be letterboxed).
+ * Where a `contain`-fitted frame of `frame` size is drawn inside `viewport`. `maxScale` caps the fit
+ * (a picture that must not be drawn larger than its own pixels passes `1 / devicePixelRatio`).
  */
-export function buildBrowserStreamSidebandControl(input: Readonly<{
-    sourceId: string;
-    streamId: string;
-    eventId: string;
-    gesture: LiveStreamInputGesture;
-}>): MachineLiveStreamControlSidebandV1 | null {
-    const base = { v: 1 as const, streamId: input.streamId, sourceId: input.sourceId, eventId: input.eventId };
-    const gesture = input.gesture;
-    switch (gesture.kind) {
-        case 'tap': {
-            const point = mapLiveStreamPointToContent(gesture);
-            return point ? { ...base, kind: 'tap', x: point.x, y: point.y } : null;
-        }
-        case 'swipe': {
-            const from = mapLiveStreamPointToContent({ ...gesture, point: gesture.from });
-            const to = mapLiveStreamPointToContent({ ...gesture, point: gesture.to });
-            if (!from || !to) return null;
-            return { ...base, kind: 'swipe', fromX: from.x, fromY: from.y, toX: to.x, toY: to.y };
-        }
-        case 'keyboard_text':
-            return { ...base, kind: 'keyboard_text', text: gesture.text };
-        case 'keyboard_key':
-            return { ...base, kind: 'keyboard_key', key: gesture.key };
-        default:
-            return null;
-    }
-}
-
-/** Where a `contain`-fitted frame of `frame` size is drawn inside `viewport`. */
-export function containRect(viewport: Readonly<{ width: number; height: number }>, frame: Readonly<{ width: number; height: number }> | null) {
+export function containRect(
+    viewport: Readonly<{ width: number; height: number }>,
+    frame: Readonly<{ width: number; height: number }> | null,
+    maxScale: number = Number.POSITIVE_INFINITY,
+) {
     if (!frame || !(frame.width > 0 && frame.height > 0) || !(viewport.width > 0 && viewport.height > 0)) {
         return { x: 0, y: 0, width: viewport.width, height: viewport.height };
     }
-    const scale = Math.min(viewport.width / frame.width, viewport.height / frame.height);
+    const scale = Math.min(viewport.width / frame.width, viewport.height / frame.height, maxScale);
     const width = frame.width * scale;
     const height = frame.height * scale;
     return { x: (viewport.width - width) / 2, y: (viewport.height - height) / 2, width, height };
@@ -150,6 +134,19 @@ export function useFirstFrameSize(frameUrl: string | null | undefined, phase: st
         Image.getSize(frameUrl, (width, height) => setSize({ width, height }), () => undefined);
     }, [frameUrl, live]);
     return size;
+}
+
+/**
+ * The Connecting state (lab `browser` ST): a calm ring that names where the browser runs. Every wait
+ * before the first frame draws this one card, whether the stream is opening or the Machine is still
+ * preparing its browser, so the page never swaps presentation while it comes up.
+ */
+export function BrowserStreamedConnecting(props: Readonly<{ testID: string; title: string; reason?: string }>): React.ReactElement {
+    return (
+        <View testID={props.testID} style={stylesheet.root}>
+            <SurfaceStateCard kind="loading" title={props.title} reason={props.reason} />
+        </View>
+    );
 }
 
 function StreamedPicture(props: Readonly<{ stalled: boolean; children: React.ReactNode }>): React.ReactElement {
@@ -266,13 +263,11 @@ export function BrowserStreamedTarget(props: Readonly<{
 
     if (surfaceState === 'connecting' || (props.runtime?.connecting && surfaceState === 'unavailable')) {
         return (
-            <View testID={`${props.testID}-connecting`} style={stylesheet.root}>
-                <SurfaceStateCard
-                    kind="loading"
-                    title={t('browserPresence.stream.connectingTitle', { agent: props.agentName })}
-                    reason={machineName ? t('browserPresence.stream.connectingBody', { machine: machineName }) : undefined}
-                />
-            </View>
+            <BrowserStreamedConnecting
+                testID={`${props.testID}-connecting`}
+                title={t('browserPresence.stream.connectingTitle', { agent: props.agentName })}
+                reason={machineName ? t('browserPresence.stream.connectingBody', { machine: machineName }) : undefined}
+            />
         );
     }
     if (surfaceState === 'ended') {
@@ -285,7 +280,7 @@ export function BrowserStreamedTarget(props: Readonly<{
                     reason={t('browserPresence.stream.endedBody')}
                     action={props.onOpenPageHere ? { label: t('browserPresence.stream.openPageHere'), onPress: props.onOpenPageHere,
                         testID: `${props.testID}-ended-open` } : undefined}
-                    secondaryAction={props.onClosePage ? { label: t('detailsPanel.closeTabA11y'), onPress: props.onClosePage,
+                    secondaryAction={props.onClosePage ? { label: t('session.detailsPanel.closeTabA11y'), onPress: props.onClosePage,
                         testID: `${props.testID}-ended-close` } : undefined}
                 />
             </View>

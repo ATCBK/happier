@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { deriveBoxPublicKeyFromSeed } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { createSessionAttachmentTransferRouting, downloadDaemonSessionAttachmentToDestination, uploadDaemonSessionAttachmentFromReader } from './sessionAttachmentTransfers';
@@ -6,6 +6,102 @@ import { createEncryptedTransferChunkEnvelope } from '../plumbing/transferChunkE
 import { isTransferFinalizeRecoveryFailure } from '../plumbing/directTransferFinalizeRecovery';
 
 describe('session-bound attachment carrier', () => {
+    it.each(['upload', 'download'] as const)('settles cancelled %s while Account-owned abort cleanup awaits a late outcome', async direction => {
+        const cancellation = new AbortController();
+        let completeCleanup!: () => void;
+        let cleanedLocally = false;
+        let stallCleanup = true;
+        const call = async <T>(method: string, _request: unknown, signal?: AbortSignal | null): Promise<T> => {
+            if (method === RPC_METHODS.DAEMON_TRANSFER_UPLOAD_INIT || method === RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_INIT) {
+                if (stallCleanup) cancellation.abort();
+                return { success: true, uploadId: 'upload-a', downloadId: 'download-a', sizeBytes: 0, name: 'notes.txt', chunkSizeBytes: 2,
+                    recipientPublicKeyBase64: Buffer.from(deriveBoxPublicKeyFromSeed(new Uint8Array(32).fill(7))).toString('base64') } as T;
+            }
+            if (method === RPC_METHODS.DAEMON_TRANSFER_UPLOAD_ABORT || method === RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_ABORT) {
+                // The captured Session context owns Account retirement. The
+                // cancelled transfer must not stop that independent cleanup.
+                expect(signal?.aborted).not.toBe(true);
+                return await new Promise<T>((resolve, reject) => {
+                    completeCleanup = () => direction === 'upload' ? resolve({ success: true } as T) : reject(new Error('Late cleanup unavailable'));
+                });
+            }
+            return { success: true, path: 'notes.txt', sizeBytes: 0, sha256: 'hash',
+                attachmentHandle: { v: 1, sessionId: 'session-a', id: 'attachment-a' } } as T;
+        };
+        const transferContext = { kind: 'sessionBound', sessionId: 'session-a', call } as const;
+        const upload = (signal: AbortSignal) => uploadDaemonSessionAttachmentFromReader({ sessionId: 'session-a', transferContext, signal,
+            fileReader: { sizeBytes: 0, readBytes: async () => new Uint8Array(), close: async () => { cleanedLocally = true; } },
+            request: { messageLocalId: 'message-a', fileName: 'notes.txt', sizeBytes: 0, uploadLocation: 'workspace',
+                workspaceRelativeDir: '.happier/attachments', vcsIgnoreStrategy: 'none', vcsIgnoreWritesEnabled: false } });
+        const pending = direction === 'upload' ? upload(cancellation.signal) : downloadDaemonSessionAttachmentToDestination({
+            transferContext, signal: cancellation.signal, attachmentHandle: { v: 1, sessionId: 'session-a', id: 'attachment-a' },
+            destination: { writeBytes: async () => {}, close: async () => { cleanedLocally = true; } },
+        });
+        let settled = false;
+        void pending.then(() => { settled = true; });
+        try {
+            await vi.waitFor(() => expect(completeCleanup).toBeTypeOf('function'));
+            await vi.waitFor(() => expect(settled).toBe(true));
+            await expect(pending).resolves.toMatchObject(direction === 'upload' ? { success: false } : { ok: false });
+            expect(cleanedLocally).toBe(true);
+            completeCleanup();
+            stallCleanup = false;
+            await expect(upload(new AbortController().signal)).resolves.toMatchObject({ success: true });
+        } finally { completeCleanup?.(); await pending; }
+    });
+
+    it.each(['retry_finalize', 'discard_staged'] as const)('cancels a nonreplying recovery %s and keeps the staged upload retryable', async (action) => {
+        let finalizeCalls = 0;
+        let stallRecovery = true;
+        let staged = true;
+        let recoverySignal: AbortSignal | null | undefined;
+        const uploadController = new AbortController();
+        // Genuine Session RPC boundary; the upload and continuation lifecycle remain real.
+        const call = async <T>(method: string, _request: unknown, signal?: AbortSignal | null): Promise<T> => {
+            if (method === RPC_METHODS.DAEMON_TRANSFER_UPLOAD_INIT) return {
+                success: true, uploadId: 'upload-a', chunkSizeBytes: 2, expiresAt: 1234,
+                recipientPublicKeyBase64: Buffer.from(deriveBoxPublicKeyFromSeed(new Uint8Array(32).fill(7))).toString('base64'),
+            } as T;
+            if (method === RPC_METHODS.DAEMON_TRANSFER_UPLOAD_FINALIZE && finalizeCalls++ === 0) return {
+                success: false, error: 'Destination unavailable', errorCode: 'TRANSFER_FINALIZE_RECOVERY_REQUIRED', expiresAt: 1234,
+            } as T;
+            if (stallRecovery) {
+                recoverySignal = signal;
+                return await new Promise<T>((_resolve, reject) => {
+                    if (signal?.aborted) reject(signal.reason);
+                    else signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+                });
+            }
+            staged = false;
+            return { success: true, path: 'notes.txt', sizeBytes: 0, sha256: 'hash',
+                attachmentHandle: { v: 1, sessionId: 'session-a', id: 'attachment-a' } } as T;
+        };
+        const uploaded = await uploadDaemonSessionAttachmentFromReader({
+            sessionId: 'session-a', transferContext: { kind: 'sessionBound', sessionId: 'session-a', call },
+            signal: uploadController.signal,
+            fileReader: { sizeBytes: 0, readBytes: async () => new Uint8Array(), close: async () => {} },
+            request: { messageLocalId: 'message-a', fileName: 'notes.txt', sizeBytes: 0, uploadLocation: 'workspace',
+                workspaceRelativeDir: '.happier/attachments', vcsIgnoreStrategy: 'none', vcsIgnoreWritesEnabled: false },
+        });
+        if (!isTransferFinalizeRecoveryFailure(uploaded)) throw new Error('Expected actionable recovery');
+        // The failed transfer lifetime may already have ended. Recovery belongs
+        // to the new explicit user request, not that retired transfer.
+        uploadController.abort();
+        const observer = new AbortController();
+        const pending = uploaded.recovery.invoke(action, observer.signal);
+        await vi.waitFor(() => expect(recoverySignal).toBe(observer.signal));
+        observer.abort(new Error('Recovery view retired'));
+        await expect(pending).resolves.toMatchObject({ status: 'unavailable' });
+        expect(staged).toBe(true);
+        expect(uploaded.recovery.isActionable()).toBe(true);
+        stallRecovery = false;
+        await expect(uploaded.recovery.invoke(action, new AbortController().signal)).resolves.toMatchObject({
+            status: action === 'retry_finalize' ? 'finalized' : 'discarded',
+        });
+        expect(staged).toBe(false);
+        expect(uploaded.recovery.isActionable()).toBe(false);
+    });
+
     it('previews a handle using the encrypted download loop without sending a filesystem path', async () => {
         let recipientPublicKeyBase64 = '';
         let downloadOpen = false;

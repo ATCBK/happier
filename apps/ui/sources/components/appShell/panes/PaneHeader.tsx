@@ -1,10 +1,12 @@
 import * as React from 'react';
-import { View, type StyleProp, type TextStyle } from 'react-native';
+import { Platform, View, useWindowDimensions, type StyleProp, type TextStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { happierPageTextMetrics, useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
+import { HappierPressable, HAPPIER_PRESS_FEEDBACK_V1, happierPageTextMetrics, useHappierMaterialColorResolver, useHappierTextPresentation } from '@happier-dev/plugin-ui/presentation';
 import type { PluginUiDetailsPanePresentation } from '@happier-dev/plugin-ui/advanced';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
+import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import { focusRingStyle } from '@/components/ui/interactions/interactionFeedback';
 import {
     HEADER_BAND_HORIZONTAL_PADDING_PX,
     HEADER_BAND_SUBTITLE_TEXT,
@@ -13,6 +15,7 @@ import {
 import { pageTitleTypography } from '@/components/ui/layout/pageTitleTypography';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
+import { useLocalSetting } from '@/sync/store/hooks';
 import { t } from '@/text';
 import { useHeaderHeight } from '@/utils/platform/responsive';
 
@@ -20,9 +23,34 @@ import type { PaneHeaderLine, PaneHeaderLineSegment } from './paneHeaderSlot';
 
 export type { PaneHeaderLine, PaneHeaderLineSegment } from './paneHeaderSlot';
 
+const NO_BREAK_SPACE = '\u00A0';
+
 /** `+4 −2` reads as one fact: two change counts in a row are spaced, not dotted. */
 function isToneSegment(segment: PaneHeaderLineSegment): boolean {
     return typeof segment !== 'string' && 'tone' in segment;
+}
+
+function isLinkSegment(segment: PaneHeaderLineSegment): boolean {
+    return typeof segment !== 'string' && 'icon' in segment && segment.onPress !== undefined;
+}
+
+function readSegmentText(segment: PaneHeaderLineSegment): string {
+    return typeof segment === 'string' ? segment : segment.text;
+}
+
+/**
+ * The height of one line of facts as the facts' own text renders it. The row clips to this height,
+ * so it follows the same effective line height as the child `Text`: the in-app text size
+ * (web scales Text through a CSS variable the View's height never sees, native pre-scales the
+ * style) and, on native, the OS font scale the host applies on top.
+ */
+function useFactsLineHeight(large: boolean): number {
+    const uiFontScale = useLocalSetting('uiFontScale');
+    const { metricScale } = useHappierTextPresentation({ textScale: uiFontScale });
+    const { fontScale } = useWindowDimensions();
+    const hostScale = Platform.OS === 'web' ? 1 : fontScale;
+    const lineHeight = large ? happierPageTextMetrics('pageDescription').lineHeight : HEADER_BAND_SUBTITLE_TEXT.lineHeight;
+    return lineHeight * metricScale * hostScale;
 }
 
 /**
@@ -39,25 +67,65 @@ export const PaneHeaderLineView = React.memo(function PaneHeaderLineView(props: 
     lineTrailing?: React.ReactNode;
 }>) {
     const styles = stylesheet;
+    const { theme } = useUnistyles();
     const { line, large } = props;
     const testID = props.testID ?? 'pane-header';
+    const factsLineHeight = useFactsLineHeight(large === true);
     return (
         <View style={[styles.line, large ? styles.largeLine : null]}>
             {line?.leading ? <View style={[styles.lineLeading, line.segments.length === 0 ? styles.leadingOnly : null]}>{line.leading}</View> : null}
-            {line && line.segments.length > 0 ? <Text testID={`${testID}.subtitle`} numberOfLines={1} style={[styles.subtitle, large ? styles.largeSubtitle : null]}>
-                {line.segments.map((segment, index) => (
-                    <React.Fragment key={index}>
-                        {index > 0 ? (isToneSegment(segment) && isToneSegment(line.segments[index - 1]!) ? ' ' : ' · ') : null}
-                        {typeof segment === 'string'
-                            ? segment
-                            : 'tone' in segment
-                                ? <Text style={segment.tone === 'added' ? styles.added : styles.removed}>{segment.text}</Text>
-                                : 'attention' in segment
-                                    ? <Text style={styles.attention}>{segment.text}</Text>
-                                    : <Text style={styles.emphasis}>{segment.text}</Text>}
-                    </React.Fragment>
-                ))}
-            </Text> : null}
+            {line && line.segments.length > 0 ? (
+                // One line of facts. A fact that does not fit wraps below the clip and drops whole, so
+                // the band never ends on half a word ("6 wo…"); a lone long fact still ellipsizes.
+                <View
+                    testID={`${testID}.subtitle`}
+                    // One spoken line, unless a fact on it is a link of its own to reach.
+                    accessible={!line.segments.some(isLinkSegment)}
+                    accessibilityLabel={line.segments.some(isLinkSegment) ? undefined : line.segments.map(readSegmentText).join(', ')}
+                    style={[styles.facts, large ? styles.largeFacts : null, { height: factsLineHeight }]}
+                >
+                    {line.segments.map((segment, index) => {
+                        // Each fact is its own flex item, where web collapses a leading space; a no-break space keeps the gap.
+                        const separator = index === 0 ? '' : isToneSegment(segment) && isToneSegment(line.segments[index - 1]!) ? NO_BREAK_SPACE : `${NO_BREAK_SPACE}·${NO_BREAK_SPACE}`;
+                        if (typeof segment !== 'string' && 'icon' in segment) {
+                            // A glyph-led fact stays one item: the separator, its glyph, then its words.
+                            const onPress = segment.onPress;
+                            const fact = (hovered: boolean) => <>
+                                <Icon name={segment.icon} size={ICON_SIZE.xs} color={hovered ? theme.colors.text.primary : theme.colors.text.secondary} />
+                                <Text numberOfLines={1} style={[styles.subtitle, large ? styles.largeSubtitle : null, styles.iconFactText, hovered ? styles.linkHovered : null]}>{segment.text}</Text>
+                            </>;
+                            return (
+                                <View key={index} style={[styles.iconFact, index === 0 ? null : styles.followingFact]}>
+                                    {separator ? <Text style={[styles.subtitle, large ? styles.largeSubtitle : null]}>{separator}</Text> : null}
+                                    {onPress ? (
+                                        <HappierPressable testID={segment.testID} accessibilityRole="link" accessibilityLabel={segment.accessibilityLabel ?? segment.text}
+                                            onPress={onPress} style={(state) => [styles.iconFact, state.pressed ? { opacity: HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle } : null,
+                                                focusRingStyle({ focused: state.focused, color: theme.colors.border.focus })]}>
+                                            {(state) => fact(state.hovered || state.focused)}
+                                        </HappierPressable>
+                                    ) : fact(false)}
+                                </View>
+                            );
+                        }
+                        return (
+                            <Text
+                                key={index}
+                                numberOfLines={1}
+                                style={[styles.subtitle, large ? styles.largeSubtitle : null, index === 0 ? null : styles.followingFact]}
+                            >
+                                {separator}
+                                {typeof segment === 'string'
+                                    ? segment
+                                    : 'tone' in segment
+                                        ? <Text style={segment.tone === 'added' ? styles.added : styles.removed}>{segment.text}</Text>
+                                        : 'attention' in segment
+                                            ? <Text style={styles.attention}>{segment.text}</Text>
+                                            : <Text style={styles.emphasis}>{segment.text}</Text>}
+                            </Text>
+                        );
+                    })}
+                </View>
+            ) : null}
             {props.lineEnd}
             {props.lineTrailing ? <View style={styles.lineTrailing}>{props.lineTrailing}</View> : null}
         </View>
@@ -213,12 +281,41 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...Typography.default('semiBold'),
         color: theme.colors.chrome.header.foreground,
     },
+    // The facts' row is exactly one line tall (height set from useFactsLineHeight): what wraps beneath it is clipped.
+    facts: {
+        flexShrink: 1,
+        minWidth: 0,
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        overflow: 'hidden',
+        marginTop: HEADER_BAND_SUBTITLE_TEXT.marginTop,
+    },
+    largeFacts: {
+        marginTop: 0,
+    },
     subtitle: {
         ...HEADER_BAND_SUBTITLE_TEXT,
         ...Typography.default(),
+        marginTop: 0,
         flexShrink: 1,
         minWidth: 0,
         color: theme.colors.text.secondary,
+    },
+    // A fact after the first keeps its own width: it either fits whole or wraps away.
+    followingFact: {
+        flexShrink: 0,
+    },
+    iconFact: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flexShrink: 1,
+        minWidth: 0,
+    },
+    iconFactText: {
+        marginLeft: theme.space.s4,
+    },
+    linkHovered: {
+        color: theme.colors.text.primary,
     },
     largeSubtitle: {
         ...happierPageTextMetrics('pageDescription'),

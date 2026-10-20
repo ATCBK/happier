@@ -2,28 +2,21 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen, standardCleanup } from '@/dev/testkit';
-import type { PluginMachineMaterializationAdmission } from '@/sync/domains/plugins/availability/reader';
+import { createMachineFixture, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { PluginAccountAvailabilityIntentReadResponseV1Schema, PluginAvailabilityActionHttpPathsV1,
+    PluginAvailabilityIntentsListActionOutputV1Schema, PluginAvailabilityMaterializationsReadActionOutputV1Schema } from '@happier-dev/protocol/plugins/availability';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import type { InstalledPluginEntry } from '../model/pluginMarketplaceModel';
+import type { InvalidateSync } from '@/utils/sessions/sync';
 
 vi.mock('@react-navigation/native', async () => (await import('@/dev/testkit/mocks/reactNavigation')).createReactNavigationNativeMock());
 
-type AccountSettingsOneShotMutation = Readonly<{
-    expectedSettingsVersion: number;
-    mutate: (raw: Readonly<Record<string, unknown>>) => {
-        settings: Record<string, unknown>;
-        value: unknown;
-    };
-}>;
-
 const fixture = vi.hoisted(() => ({
-    accountSettings: {} as Record<string, unknown>,
     installedPluginById: new Map<string, InstalledPluginEntry>(),
-    materializationAdmission: null as unknown,
-    selections: null as unknown,
-    snapshots: [] as readonly unknown[],
 }));
-const mutateAccountSettingsOnceMock = vi.hoisted(() => vi.fn());
 const administrationTargetSelectorSpy = vi.hoisted(() => vi.fn());
 /** The plugins.home administration selection: a DIFFERENT fact from the origin. */
 const administrationTargetSelection = vi.hoisted(() => Object.freeze({
@@ -36,7 +29,35 @@ const administrationTargetSelection = vi.hoisted(() => Object.freeze({
     clearTarget: () => {},
     resolveExecutionTarget: () => null,
 }));
-const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
+const logRequests: Array<Readonly<{ machineId: string; serverUrl: string | undefined; payload: unknown }>> = [];
+const account = createProviderSettingsAccountHarness();
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+const { readPluginMachineExecutionTargetPreference } = await import('@/sync/domains/machines/administration/selectionPreferences');
+const { useAllProfileMachineInventorySnapshots } = await import('@/sync/domains/machines/useMachineInventorySnapshots');
+const { buildMachineAdministrationCandidatesFromSnapshots } = await import('@/sync/domains/machines/administration/targetState');
+let peerServerId = '';
+
+function installLogSocketBoundary() {
+    installDisconnectedServerSocketBoundary((socket, serverUrl) => {
+        socket.connect = vi.fn<typeof socket.connect>(() => {
+            socket.connected = true;
+            for (const listener of socket.listeners('connect')) listener();
+            return socket;
+        });
+        socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event: string, packet: unknown) => {
+            if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
+            if (!packet || typeof packet !== 'object' || !('method' in packet)
+                || typeof packet.method !== 'string' || !('params' in packet)) throw new Error('Malformed log RPC fixture packet');
+            const separator = packet.method.indexOf(':');
+            if (packet.method.slice(separator + 1) !== RPC_METHODS.DAEMON_PLUGIN_INVOCATION_LOGS_READ) {
+                throw new Error(`Unexpected log RPC fixture method: ${packet.method.slice(separator + 1)}`);
+            }
+            logRequests.push({ machineId: packet.method.slice(0, separator), serverUrl, payload: packet.params });
+            return { ok: true, result: availableLogResponse() };
+        });
+    });
+}
 
 const ORIGIN_A = {
     serverIdentityId: 'srv_a',
@@ -69,46 +90,56 @@ function materializationFor(origin: typeof ORIGIN_A | typeof ORIGIN_B) {
         enabled: true,
         trustState: 'trusted',
         observedAt: 1,
+        archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
     } as const;
 }
 
-/** Complete current `PluginMachineMaterializationAdmission` available arm. */
-function availableAdmission(
+async function publishAvailability(
     availabilityCursor: number,
     materializations: readonly ReturnType<typeof materializationFor>[],
-): PluginMachineMaterializationAdmission {
-    return {
-        kind: 'available',
+): Promise<void> {
+    const lifetime = captureActiveServerAccountScopeLifetime();
+    if (!lifetime) throw new Error('Origin fixture needs an applied Account lifetime');
+    const intent = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({
         availabilityCursor,
-        intentReads: [],
-        materializations: materializations.map((row) => ({ ...row })),
-        snapshots: materializations.map((row, index) => ({
-            serverIdentityId: row.serverIdentityId,
-            machineId: row.machineId,
-            revision: index + 1,
-            materializations: [{ ...row }],
-        })),
-    };
+        hostingCapability: { enabled: true, maxArtifactBytes: 1024, maxAccountBytes: 2048 },
+        intent: null,
+        release: {
+            ref: { pluginId: 'acme.plugin', version: '1.0.0' },
+            archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
+            normalizedManifest: { schemaVersion: 2, id: 'acme.plugin', version: '1.0.0', displayName: 'Acme plugin',
+                engines: { happier: '^1.0.0' }, runtime: { apiVersion: 1 }, contributes: {} },
+            collectionContracts: [], uiSlots: [],
+            packageAssetArchive: { archiveDigestSha256: `sha256:${'c'.repeat(64)}`, resources: [] },
+        },
+        packageAssets: [], uiArtifacts: [],
+    });
+    account.home.answer(account.serverId, PluginAvailabilityActionHttpPathsV1['account.plugins.availability.intents.list'], {
+        body: PluginAvailabilityIntentsListActionOutputV1Schema.parse({ availabilityCursor, pluginIds: ['acme.plugin'],
+            intentReads: [{ pluginId: 'acme.plugin', response: { ...intent, release: null } }], failedPluginIds: [] }),
+    });
+    account.home.answer(account.serverId, PluginAvailabilityActionHttpPathsV1['account.plugins.availability.materializations.read'], {
+        body: PluginAvailabilityMaterializationsReadActionOutputV1Schema.parse({
+            availabilityCursor,
+            releases: [intent.release!],
+            snapshots: materializations.map((row) => ({
+                serverIdentityId: row.serverIdentityId,
+                machineId: row.machineId,
+                materializations: [{ ...row }],
+            })),
+        }),
+    });
+    const { sync } = await import('@/sync/sync');
+    // Drive the incumbent Sync reader; a second hydrator can race its bootstrap census.
+    const queue = Reflect.get(sync, 'pluginAvailabilitySync') as Pick<InvalidateSync, 'invalidate' | 'awaitQueue'>;
+    queue.invalidate();
+    await queue.awaitQueue();
 }
 
-function snapshotsFor(origin: typeof ORIGIN_A | typeof ORIGIN_B) {
-    const observedAt = Date.now();
-    return [{
-        kind: 'resolved',
-        profileId: `profile-${origin.serverIdentityId}`,
-        serverIdentityId: origin.serverIdentityId,
-        serverName: origin.serverIdentityId,
-        observation: 'live',
-        machines: [{
-            id: origin.materializationRef.machineId,
-            updatedAt: 1,
-            active: true,
-            activeAt: observedAt,
-            revokedAt: null,
-            metadataVersion: 1,
-            metadata: null,
-        }],
-    }] as const;
+function machineFor(origin: typeof ORIGIN_A | typeof ORIGIN_B) {
+    return createMachineFixture({ id: origin.materializationRef.machineId, active: true, activeAt: Date.now(),
+        metadata: { ...createMachineFixture().metadata!, displayName: origin.materializationRef.machineId,
+            host: origin.materializationRef.machineId } });
 }
 
 function availableLogResponse() {
@@ -125,11 +156,9 @@ function flushAsync(): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-vi.mock('expo-router', () => ({
-    Redirect: 'Redirect',
-    useNavigation: () => ({ setOptions: vi.fn() }),
-    usePathname: () => '/settings/plugins/acme.tools',
-}));
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
+    pathname: '/settings/plugins/acme.plugin',
+}).module);
 
 vi.mock('@/components/ui/lists/Item', () => ({
     Item: (props: React.PropsWithChildren) => React.createElement('Item', props, props.children),
@@ -143,56 +172,8 @@ vi.mock('@/components/ui/lists/ItemList', () => ({
 vi.mock('@/components/sessions/new/components/ServerScopedMachineSelector', () => ({
     ServerScopedMachineSelector: (props: React.PropsWithChildren) => React.createElement('ServerScopedMachineSelector', props, props.children),
 }));
-vi.mock('@/modal', () => ({ Modal: { prompt: vi.fn() } }));
-vi.mock('@/text', () => ({ t: (key: string) => key }));
-
-vi.mock('@/sync/domains/plugins/availability/projection', () => ({
-    useActivePluginAccountAvailabilityReader: () => ({
-        readCurrentSettingsDeclaration: () => ({
-            kind: 'unavailable',
-            code: 'account_availability_not_loaded',
-        }),
-        readMaterializations: () => fixture.materializationAdmission,
-    }),
-    useActivePluginAccountAvailabilityReleaseClassifier: () => () => ({
-        releaseContent: 'matched',
-        validation: { kind: 'admitted' },
-    }),
-}));
-vi.mock('@/sync/domains/machines/useMachineInventorySnapshots', () => ({
-    useAllProfileMachineInventorySnapshots: () => fixture.snapshots,
-}));
-// Persistent storage boundary: the module's whole runtime surface is
-// `storage` + `getStorage`, both backed by the canonical live store mock, so
-// the real settings hooks read the fixture's selections and version.
-vi.mock('@/sync/domains/state/storageStore', async () => {
-    const { createLiveStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
-    const store = createLiveStorageStoreMock(() => ({
-        settings: { machineAdministrationSelectionsV1: fixture.selections } as never,
-        settingsVersion: 7,
-        settingsScope: { serverId: 'server-account', accountId: 'account-origin-detail' },
-    }));
-    return { storage: store, getStorage: () => store };
-});
-vi.mock('@/sync/runtime/getSyncSingleton', () => ({
-    getSyncSingleton: () => ({ mutateAccountSettingsOnce: mutateAccountSettingsOnceMock }),
-}));
-vi.mock('@/sync/domains/machines/administration/useTargetSelection', () => ({
-    resolveFreshMachineAdministrationExecutionTarget: ({ serverIdentityId, machineId }: {
-        serverIdentityId: string;
-        machineId: string;
-    }) => ({
-        target: { serverIdentityId, machineId },
-        serverId: serverIdentityId === 'srv_a' ? 'server-profile-a' : 'server-profile-b',
-        machine: {
-            id: machineId,
-            daemonStateVersion: 1,
-        },
-    }),
-}));
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: (...args: readonly unknown[]) => machineRpcWithServerScopeMock(...args),
-}));
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 
 vi.mock('@/components/settings/machines/MachineAdministrationTargetSelector', () => ({
     MachineAdministrationTargetSelector: (props: Readonly<Record<string, unknown>>) => {
@@ -215,7 +196,9 @@ vi.mock('./PluginDetailLeaveActions', () => ({ PluginDetailLeaveActions: 'Plugin
 vi.mock('../PluginAccountReleaseSelectionSection', () => ({ PluginAccountReleaseSelectionSection: 'PluginAccountReleaseSelectionSection' }));
 vi.mock('../PluginReadOnlySnapshotNotice', () => ({ PluginReadOnlySnapshotNotice: 'PluginReadOnlySnapshotNotice' }));
 vi.mock('../model/usePluginSettingsScreenState', () => ({
-    usePluginSettingsScreenState: () => ({
+    usePluginSettingsScreenState: () => {
+        const candidates = buildMachineAdministrationCandidatesFromSnapshots({ snapshots: useAllProfileMachineInventorySnapshots() });
+        return {
         accountServerIdentityId: null,
         selectedServerIdentityId: administrationTargetSelection.selectedTarget?.serverIdentityId ?? null,
         canRefreshInstalledPlugins: false,
@@ -227,18 +210,28 @@ vi.mock('../model/usePluginSettingsScreenState', () => ({
         installedPlugins: [...fixture.installedPluginById.values()],
         isPluginActionInFlight: () => false,
         isDaemonSettingsTargetCurrent: () => true,
-        administrationTargetSelection,
+        administrationTargetSelection: { ...administrationTargetSelection, candidates },
         pluginProjectionById: {},
         pluginProjectionV2: null,
         readOnlySnapshotNotice: null,
         refreshPluginTruth: vi.fn(),
         registryDiagnostics: [],
         runInstalledPluginAction: vi.fn(),
-    }),
+        };
+    },
 }));
 
 describe('PluginDetailScreen execution-origin ownership', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
+        installLogSocketBoundary();
+        await account.restore({ accountId: 'account-origin-detail', serverIdentityId: ORIGIN_A.serverIdentityId,
+            machines: [machineFor(ORIGIN_A)] });
+        peerServerId = await account.addHome({ name: 'Peer Home', serverUrl: 'https://origin-peer.example.test',
+            serverIdentityId: ORIGIN_B.serverIdentityId, accountId: 'account-origin-detail', active: false });
+        await account.publishMachines(peerServerId, [machineFor(ORIGIN_B)]);
+        await account.home.selectHomes([account.serverId, peerServerId]);
+        await publishAvailability(1, [materializationFor(ORIGIN_A)]);
+        logRequests.length = 0;
         fixture.installedPluginById = new Map([['acme.plugin', {
             pluginId: 'acme.plugin',
             title: 'Acme plugin',
@@ -257,33 +250,12 @@ describe('PluginDetailScreen execution-origin ownership', () => {
             compatibility: { status: 'compatible', diagnostics: [] },
             diagnostics: [],
         }]]);
-        fixture.selections = {
-            v: 1,
-            pluginExecutionOriginsByPluginId: {},
-        };
-        fixture.materializationAdmission = availableAdmission(1, [materializationFor(ORIGIN_A)]);
-        fixture.snapshots = snapshotsFor(ORIGIN_A);
-        fixture.accountSettings = {
-            machineAdministrationSelectionsV1: fixture.selections,
-        };
-        mutateAccountSettingsOnceMock.mockReset();
-        mutateAccountSettingsOnceMock.mockImplementation(async (params: AccountSettingsOneShotMutation) => {
-            const mutation = params.mutate(fixture.accountSettings);
-            fixture.accountSettings = mutation.settings;
-            fixture.selections = mutation.settings.machineAdministrationSelectionsV1;
-            return {
-                status: 'applied' as const,
-                settingsVersion: params.expectedSettingsVersion + 1,
-                value: undefined,
-            };
-        });
-        machineRpcWithServerScopeMock.mockReset();
-        machineRpcWithServerScopeMock.mockResolvedValue(availableLogResponse());
         administrationTargetSelectorSpy.mockClear();
     });
 
-    afterEach(() => {
-        standardCleanup();
+    afterEach(async () => {
+        await standardCleanup();
+        await account.reset();
     });
 
     it('projects one sole origin without persisting and keeps the log reader on its exact target through an origin change', async () => {
@@ -297,8 +269,9 @@ describe('PluginDetailScreen execution-origin ownership', () => {
             await flushAsync();
         });
 
-        expect(mutateAccountSettingsOnceMock).not.toHaveBeenCalled();
-        expect(fixture.accountSettings).toMatchObject({ machineAdministrationSelectionsV1: { pluginExecutionOriginsByPluginId: {} } });
+        expect(account.home.requestsFor('/v2/account/settings').filter(request => request.input !== null)).toHaveLength(0);
+        expect(readPluginMachineExecutionTargetPreference(storage.getState().settings.machineAdministrationTargetsLocalV1,
+            'acme.plugin')).toBeNull();
         await act(async () => {
             await screen.update(<RerenderablePluginDetailScreen pluginId="acme.plugin" revision={2} />);
             await flushAsync();
@@ -306,9 +279,9 @@ describe('PluginDetailScreen execution-origin ownership', () => {
         // The current-origin row names the server and, on its own line, the
         // materialized version running there.
         expect(screen.findByTestId('settings.plugins.detail.executionOrigin.current')?.props)
-            .toMatchObject({ title: 'machine-a', subtitle: 'settingsAccount.thisHomeTitle\ncommon.version 1.0.0', selected: true });
+            .toMatchObject({ title: 'machine-a', subtitle: 'Provider settings\nsettingsPlugins.surfaces.runOnAutoHint · common.version 1.0.0', selected: true });
         expect(screen.findByTestId('settings.plugins.detail.acme.plugin.invocationLogs.target')?.props)
-            .toMatchObject({ title: 'machine-a', subtitle: 'settingsAccount.thisHomeTitle', selected: true });
+            .toMatchObject({ title: 'machine-a', subtitle: 'Provider settings', selected: true });
         expect(screen.findByTestId('settings.plugins.detail.acme.plugin.accountRelease')?.props)
             .toMatchObject({
                 pluginId: 'acme.plugin',
@@ -320,44 +293,39 @@ describe('PluginDetailScreen execution-origin ownership', () => {
             screen.pressByTestId('settings.plugins.detail.acme.plugin.invocationLogs.refresh');
             await flushAsync();
         });
-        expect(machineRpcWithServerScopeMock).toHaveBeenLastCalledWith(expect.objectContaining({
+        expect(logRequests.at(-1)).toMatchObject({
             machineId: 'machine-a',
-            serverId: 'server-profile-a',
-        }));
+            serverUrl: 'https://provider-settings-account.test',
+        });
 
-        fixture.selections = {
-            v: 1,
-            pluginExecutionOriginsByPluginId: { 'acme.plugin': ORIGIN_B },
-        };
-        fixture.materializationAdmission = availableAdmission(2, [materializationFor(ORIGIN_B)]);
-        fixture.snapshots = snapshotsFor(ORIGIN_B);
         await act(async () => {
+            await publishAvailability(2, [materializationFor(ORIGIN_B)]);
             await screen.update(<RerenderablePluginDetailScreen pluginId="acme.plugin" revision={3} />);
             await flushAsync();
         });
 
-        expect(mutateAccountSettingsOnceMock).not.toHaveBeenCalled();
+        expect(account.home.requestsFor('/v2/account/settings').filter(request => request.input !== null)).toHaveLength(0);
         // The current-origin row names the server and, on its own line, the
         // materialized version running there.
         expect(screen.findByTestId('settings.plugins.detail.executionOrigin.current')?.props)
-            .toMatchObject({ title: 'machine-b', subtitle: 'settingsAccount.thisHomeTitle\ncommon.version 1.0.0', selected: true });
+            .toMatchObject({ title: 'machine-b', subtitle: 'Peer Home\nsettingsPlugins.surfaces.runOnAutoHint · common.version 1.0.0', selected: true });
         expect(screen.findByTestId('settings.plugins.detail.acme.plugin.invocationLogs.target')?.props)
-            .toMatchObject({ title: 'machine-b', subtitle: 'settingsAccount.thisHomeTitle', selected: true });
+            .toMatchObject({ title: 'machine-b', subtitle: 'Peer Home', selected: true });
         await act(async () => {
             screen.pressByTestId('settings.plugins.detail.acme.plugin.invocationLogs.refresh');
             await flushAsync();
         });
-        expect(machineRpcWithServerScopeMock).toHaveBeenLastCalledWith(expect.objectContaining({
+        expect(logRequests.at(-1)).toMatchObject({
             machineId: 'machine-b',
-            serverId: 'server-profile-b',
-        }));
+            serverUrl: 'https://origin-peer.example.test',
+        });
 
         // Execution origin moved A -> B, but the administration target this
         // screen's Settings, Secrets and lifecycle operations address is a
         // SEPARATE preference and must be presented as itself rather than
         // silently inherited from — or collapsed into — the origin.
         expect(administrationTargetSelectorSpy).toHaveBeenCalledWith(expect.objectContaining({
-            selection: administrationTargetSelection,
+            selection: expect.objectContaining({ selectedTarget: administrationTargetSelection.selectedTarget }),
             testIDPrefix: 'settings.plugins.detail.administration.target',
         }));
         expect(administrationTargetSelection.selectedTarget).not.toMatchObject({
@@ -382,7 +350,7 @@ describe('PluginDetailScreen execution-origin ownership', () => {
         // The administration target is the "Manage on [machine]" context bar:
         // its label names the fact, its chip is the canonical selector.
         expect(administrationTargetSelectorSpy).toHaveBeenCalledWith(expect.objectContaining({
-            selection: administrationTargetSelection,
+            selection: expect.objectContaining({ selectedTarget: administrationTargetSelection.selectedTarget }),
             presentation: 'chip',
             testIDPrefix: 'settings.plugins.detail.administration.target',
         }));

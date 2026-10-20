@@ -5,6 +5,10 @@ import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionO
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 
+const initialNetwork = await installSessionOpsNetworkBoundary();
+await loadSyncSingletonForTests();
+await initialNetwork.dispose();
+
 describe('syncTodos fetchTodos retry semantics at the HTTP boundary', () => {
     let network: Awaited<ReturnType<typeof installSessionOpsNetworkBoundary>>;
     let credentials: AuthCredentials;
@@ -12,7 +16,8 @@ describe('syncTodos fetchTodos retry semantics at the HTTP boundary', () => {
     let kvStatus: number;
 
     beforeEach(async () => {
-        vi.resetModules();
+        // The network fixture replaces transport resources; the real Sync graph
+        // stays app-owned across cases, as it does across Account replacement.
         kvStatus = 200;
         network = await installSessionOpsNetworkBoundary();
         const home = await network.addHome('https://todos-retry.example.test', 'account-todos');

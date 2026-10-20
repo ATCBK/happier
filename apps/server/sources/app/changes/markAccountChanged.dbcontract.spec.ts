@@ -3,8 +3,10 @@ import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { db, initDbMysql, initDbPostgres } from "@/storage/db";
-import { inTx } from "@/storage/inTx";
-import { markAccountChanged, markAccountsChanged } from "./markAccountChanged";
+import { sourceKeyForSessionFollowSourceV1 } from '@/app/session/follow/sessionFollowSourceIdentity';
+import { inTx, transactionResult } from "@/storage/inTx";
+import { eventRouter } from "@/app/events/connectionEventRouter";
+import { markAccountChanged, markAccountsChanged, markSessionAccountsChanged } from "./markAccountChanged";
 import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 
 function resolveContractProvider(): "postgres" | "mysql" {
@@ -38,6 +40,7 @@ describe("AccountChange coalescing database contract", () => {
     });
 
     afterEach(async () => {
+        eventRouter.clearIo();
         await db.session.deleteMany({ where: { account: { publicKey: { startsWith: publicKeyPrefix } } } });
         await db.account.deleteMany({
             where: { publicKey: { startsWith: publicKeyPrefix } },
@@ -48,51 +51,90 @@ describe("AccountChange coalescing database contract", () => {
         if (dbConnected) await db.$disconnect();
     });
 
-    it.skipIf(provider !== "postgres")("keeps higher cursors invisible until the earlier Account change commits", async () => {
+    it(`retains queued Session and Machine removal changes after domain work deletes their rows on ${provider}`, async () => {
         const account = await db.account.create({ data: { publicKey: `${publicKeyPrefix}${randomUUID()}` } });
-        let allocated!: () => void;
-        const firstAllocated = new Promise<void>(resolve => { allocated = resolve; });
+        const pointSession = await db.session.create({ data: { accountId: account.id, tag: randomUUID(), metadata: "{}" } });
+        const batchSession = await db.session.create({ data: { accountId: account.id, tag: randomUUID(), metadata: "{}" } });
+        const pointMachine = await db.machine.create({ data: { id: randomUUID(), accountId: account.id, metadata: "{}" } });
+        const batchMachine = await db.machine.create({ data: { id: randomUUID(), accountId: account.id, metadata: "{}" } });
+        const emit = vi.fn();
+        eventRouter.setIo({ to: () => ({ emit, disconnectSockets: vi.fn() }) });
+
+        const changes = await inTx(async tx => {
+            const pointSessionChange = await markAccountChanged(tx, {
+                accountId: account.id, kind: "session", entityId: pointSession.id, hint: { removed: true },
+            });
+            const [batchSessionChange] = await markSessionAccountsChanged(tx, new Map([[batchSession.id, [account.id]]]));
+            const pointMachineChange = await markAccountChanged(tx, {
+                accountId: account.id, kind: "machine", entityId: pointMachine.id, hint: { removed: true },
+            });
+            const [batchMachineChange] = await markAccountsChanged(tx, {
+                accountIds: [account.id], kind: "machine", entityId: batchMachine.id, hint: { removed: true, batch: true },
+            });
+            await tx.session.deleteMany({ where: { id: { in: [pointSession.id, batchSession.id] } } });
+            await tx.machine.deleteMany({ where: { id: { in: [pointMachine.id, batchMachine.id] } } });
+            expect(emit).not.toHaveBeenCalled();
+            return transactionResult(() => [
+                { kind: "session", entityId: pointSession.id, cursor: pointSessionChange.resolveCursor(), hint: { removed: true } },
+                { kind: "session", entityId: batchSession.id, cursor: batchSessionChange.resolveCursor(), hint: null },
+                { kind: "machine", entityId: pointMachine.id, cursor: pointMachineChange.resolveCursor(), hint: { removed: true } },
+                { kind: "machine", entityId: batchMachine.id, cursor: batchMachineChange.resolveCursor(), hint: { removed: true, batch: true } },
+            ]);
+        });
+
+        expect(changes.map(change => change.cursor).sort((left, right) => left - right)).toEqual([1, 2, 3, 4]);
+        await expect(db.accountChange.findMany({ where: { accountId: account.id }, orderBy: { cursor: "asc" },
+            select: { kind: true, entityId: true, cursor: true, hint: true,
+                sessionId: true, machineId: true, artifactId: true, accountPetPackageId: true } }))
+            .resolves.toEqual(changes.map(change => ({ ...change,
+                sessionId: null, machineId: null, artifactId: null, accountPetPackageId: null,
+            })).sort((left, right) => left.cursor - right.cursor));
+        expect(emit).toHaveBeenCalledWith("update", expect.objectContaining({ seq: 4, body: { t: "account-change" } }));
+    });
+
+    it.skipIf(provider !== "postgres")("allocates cursors in terminal commit order and never exposes a late cursor below the checkpoint", async () => {
+        const account = await db.account.create({ data: { publicKey: `${publicKeyPrefix}${randomUUID()}` } });
+        let recorded!: () => void;
+        const firstRecorded = new Promise<void>(resolve => { recorded = resolve; });
         let release!: () => void;
         const mayCommit = new Promise<void>(resolve => { release = resolve; });
         const first = inTx(async tx => {
-            const cursor = await markAccountChanged(tx, { accountId: account.id, kind: "account", entityId: "first" });
-            allocated();
+            const publication = await markAccountChanged(tx, { accountId: account.id, kind: "account", entityId: "first" });
+            expect(() => publication.resolveCursor()).toThrow();
+            recorded();
             await mayCommit;
-            return cursor;
+            return publication;
         }, { isolationLevel: "ReadCommitted" });
         const firstOutcome = Promise.allSettled([first]);
-        await firstAllocated;
-        let secondPid = -1;
-        let secondSettled = false;
-        const second = inTx(async tx => {
-            const rows = await tx.$queryRawUnsafe<{ pid: number }[]>("SELECT pg_backend_pid() AS pid");
-            secondPid = rows[0].pid;
-            return markAccountChanged(tx, { accountId: account.id, kind: "account", entityId: "second" });
-        }, { isolationLevel: "ReadCommitted" });
-        const secondOutcome = Promise.allSettled([second]).finally(() => { secondSettled = true; });
+        await Promise.race([firstRecorded, firstOutcome.then(() => { throw new Error("First writer ended before recording publication"); })]);
+        let checkpoint = 0;
+        let setupFailure: unknown;
         try {
-            // Observe the PostgreSQL wait instead of relying on timing.
-            while (!secondSettled) {
-                const rows = await db.$queryRawUnsafe<{ waiting: boolean }[]>(
-                    "SELECT cardinality(pg_blocking_pids($1::int)) > 0 AS waiting", secondPid,
-                );
-                if (rows[0].waiting) break;
-            }
-            expect(secondSettled).toBe(false);
             expect(await db.accountChange.findMany({ where: { accountId: account.id } })).toEqual([]);
             expect(await db.account.findUniqueOrThrow({ where: { id: account.id }, select: { seq: true } }))
                 .toEqual({ seq: 0 });
+            const second = await inTx(tx => markAccountChanged(tx, {
+                accountId: account.id, kind: "account", entityId: "second",
+            }), { isolationLevel: "ReadCommitted" });
+            checkpoint = second.resolveCursor();
+            expect(checkpoint).toBe(1);
+            expect(await db.accountChange.findMany({ where: { accountId: account.id },
+                select: { cursor: true, entityId: true } })).toEqual([{ cursor: checkpoint, entityId: "second" }]);
+        } catch (error) {
+            setupFailure = error;
         } finally { release(); }
-        const outcomes = [...await firstOutcome, ...await secondOutcome];
+        const outcomes = await firstOutcome;
+        if (setupFailure !== undefined) throw setupFailure;
         for (const outcome of outcomes) if (outcome.status === "rejected") throw outcome.reason;
         const page = (after: number) => db.accountChange.findMany({ where: { accountId: account.id, cursor: { gt: after } },
             orderBy: { cursor: "asc" }, take: 1, select: { cursor: true, entityId: true } });
-        expect(await page(0)).toEqual([{ cursor: 1, entityId: "first" }]);
-        expect(await page(1)).toEqual([{ cursor: 2, entityId: "second" }]);
+        expect(await page(0)).toEqual([{ cursor: 1, entityId: "second" }]);
+        expect(await page(checkpoint)).toEqual([{ cursor: 2, entityId: "first" }]);
         expect(await page(2)).toEqual([]);
     });
 
-    it.skipIf(provider !== "postgres").each([false, true])("waits for the first ordered Account before locking a later physical row (hinted=%s)", async hinted => {
+    it.skipIf(provider !== "postgres").each(["batch", "hinted", "separate"] as const)("locks the complete terminal audience in order before a later physical row (%s)", async mode => {
+        const hinted = mode === "hinted";
         const stem = `batch-lock-${randomUUID()}`;
         // Put b before a in the heap so an unordered UPDATE's scan disagrees
         // with the Session cursor owner's sorted Account acquisition order.
@@ -104,7 +146,7 @@ describe("AccountChange coalescing database contract", () => {
         let holderReady!: () => void;
         const holderHasAccount = new Promise<void>(resolve => { holderReady = resolve; });
         const holder = inTx(async tx => {
-            await acquireSessionAccountCursorLocksInTx(tx, [], [first.id]);
+            await tx.$queryRawUnsafe('SELECT "id" FROM "Account" WHERE "id" = $1 FOR NO KEY UPDATE', first.id);
             holderReady();
             await holderMayContinue;
         }, { isolationLevel: "ReadCommitted" });
@@ -119,6 +161,13 @@ describe("AccountChange coalescing database contract", () => {
             // planner choosing an index scan that accidentally sorts the writes.
             await tx.$executeRawUnsafe("SET LOCAL enable_indexscan = off");
             await tx.$executeRawUnsafe("SET LOCAL enable_bitmapscan = off");
+            if (mode === "separate") {
+                // Separate point calls must join the same complete sorted
+                // terminal audience, even when recorded in reverse order.
+                await markAccountChanged(tx, { accountId: second.id, kind: "account", entityId: stem });
+                await markAccountChanged(tx, { accountId: first.id, kind: "account", entityId: stem });
+                return;
+            }
             return markAccountsChanged(tx, { accountIds: [second.id, first.id], entityId: stem,
                 ...(hinted ? { hintForAccount: (accountId: string) => ({ recipient: accountId }) } : {}),
             });
@@ -147,6 +196,39 @@ describe("AccountChange coalescing database contract", () => {
         })));
     });
 
+    it.skipIf(provider !== "postgres")("admits the complete Follow destination audience compatibly while excluding authority changes", async () => {
+        const stem = `follow-publication-${randomUUID()}`;
+        const destinationOwner = await db.account.create({ data: { id: `${stem}-a`, publicKey: `${publicKeyPrefix}${randomUUID()}` } });
+        const sourceOwner = await db.account.create({ data: { id: `${stem}-z`, publicKey: `${publicKeyPrefix}${randomUUID()}` } });
+        const source = await db.session.create({ data: { accountId: sourceOwner.id, tag: `${stem}-source`, metadata: '{}' } });
+        const destination = await db.session.create({ data: { accountId: destinationOwner.id, tag: `${stem}-destination`, metadata: '{}' } });
+        await db.sessionFollowEdge.create({ data: { sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: source.id }), sourceSessionId: source.id, destinationSessionId: destination.id, policyJson: '{"preset":"quiet"}' } });
+        let release!: () => void;
+        const mayCommit = new Promise<void>(resolve => { release = resolve; });
+        let ready!: () => void;
+        const locked = new Promise<void>(resolve => { ready = resolve; });
+        const first = inTx(async tx => {
+            await acquireSessionAccountCursorLocksInTx(tx, [source.id]);
+            ready();
+            await mayCommit;
+        }, { isolationLevel: 'ReadCommitted' });
+        const firstOutcome = Promise.allSettled([first]);
+        vi.stubEnv('HAPPIER_DB_TX_MAX_RETRIES', '0');
+        try {
+            await Promise.race([locked, firstOutcome.then(() => { throw new Error('Publication ended before lock acquisition'); })]);
+            await expect(inTx(tx => tx.$queryRawUnsafe(
+                'SELECT "id" FROM "Account" WHERE "id" = $1 FOR NO KEY UPDATE NOWAIT', destinationOwner.id,
+            ), { isolationLevel: 'ReadCommitted' })).resolves.toEqual([{ id: destinationOwner.id }]);
+            await expect(inTx(tx => tx.$queryRawUnsafe(
+                'SELECT "id" FROM "Account" WHERE "id" = $1 FOR UPDATE NOWAIT', destinationOwner.id,
+            ), { isolationLevel: 'ReadCommitted' })).rejects.toThrow();
+        } finally {
+            release();
+            vi.unstubAllEnvs();
+            for (const outcome of await firstOutcome) if (outcome.status === 'rejected') throw outcome.reason;
+        }
+    });
+
     it.skipIf(provider !== "postgres").each(["unpublished", "inactive"] as const)("fences a granted %s reader before publication can expand the audience", async state => {
         const stem = `audience-prospective-${randomUUID()}`;
         const owner = await db.account.create({ data: {
@@ -167,6 +249,9 @@ describe("AccountChange coalescing database contract", () => {
         const locksAcquired = new Promise<void>(resolve => { locked = resolve; });
         let release!: () => void;
         const mayCommit = new Promise<void>(resolve => { release = resolve; });
+        // This probe deliberately observes NOWAIT refusal while the holder is
+        // live; do not spend the production retry/backoff before releasing it.
+        vi.stubEnv("HAPPIER_DB_TX_MAX_RETRIES", "0");
         const holder = inTx(async tx => {
             await acquireSessionAccountCursorLocksInTx(tx, [session.id]);
             locked();
@@ -178,10 +263,12 @@ describe("AccountChange coalescing database contract", () => {
                 throw new Error("Publication ended before Account acquisition");
             })]);
             await expect(inTx(tx => tx.$queryRawUnsafe(
-                'SELECT "id" FROM "Account" WHERE "id" = $1 FOR NO KEY UPDATE NOWAIT', reader.id,
-            ), { isolationLevel: "ReadCommitted" })).rejects.toMatchObject({ code: "P2010", meta: { code: "55P03" } });
+                'SELECT "id" FROM "Account" WHERE "id" = $1 FOR UPDATE NOWAIT', reader.id,
+            ), { isolationLevel: "ReadCommitted" })).rejects.toMatchObject({ code: "database_transaction_conflict_exhausted",
+                cause: { code: "P2010", meta: { code: "55P03" } } });
         } finally {
             release();
+            vi.unstubAllEnvs();
             for (const outcome of await holderOutcome) if (outcome.status === "rejected") throw outcome.reason;
         }
     });
@@ -209,14 +296,8 @@ describe("AccountChange coalescing database contract", () => {
         const oldAudienceDiscovered = new Promise<void>(resolve => { discovered = resolve; });
         let allowInitialLock!: () => void;
         const grantMayCommitFirst = new Promise<void>(resolve => { allowInitialLock = resolve; });
-        let locked!: () => void;
-        const ownerLocked = new Promise<void>(resolve => { locked = resolve; });
-        let allowFanout!: () => void;
-        const peerMayWaitFirst = new Promise<void>(resolve => { allowFanout = resolve; });
         let interceptInitialLock = true;
-        let firstPid = -1;
-        let peerPid = -1;
-        let peerFinished = false;
+        let attempts = 0;
 
         // The real DB transport alone is intercepted: every grant, audience
         // resolver, Account lock and cursor publication executes unchanged.
@@ -224,19 +305,15 @@ describe("AccountChange coalescing database contract", () => {
             get(target, key) {
                 if (key === "$queryRawUnsafe") return async <T>(query: string, ...values: unknown[]): Promise<T> => {
                     const pause = interleave && interceptInitialLock
-                        && query.includes('FROM "Account"') && query.includes("FOR NO KEY UPDATE");
+                        && query.includes('FROM "Account"') && query.includes("FOR KEY SHARE");
                     if (pause) {
                         interceptInitialLock = false;
-                        expect(values[0]).toEqual([owner.id]);
+                        expect(Array.isArray(values[0]) ? values[0] : [values[0]]).toEqual([owner.id]);
                         discovered();
                         await grantMayCommitFirst;
                     }
                     try {
                         const result = await target.$queryRawUnsafe<T>(query, ...values);
-                        if (pause) {
-                            locked();
-                            await peerMayWaitFirst;
-                        }
                         return result;
                     } catch (error) {
                         rawDriverFailures.push(error);
@@ -248,17 +325,17 @@ describe("AccountChange coalescing database contract", () => {
             },
         });
         const first = inTx(async tx => {
-            const [backend] = await tx.$queryRawUnsafe<{ pid: number }[]>("SELECT pg_backend_pid() AS pid");
-            firstPid = backend.pid;
+            attempts += 1;
             const observed = observeTransport(tx, true);
             await acquireSessionAccountCursorLocksInTx(observed, [session.id]);
+            await observed.session.update({ where: { id: session.id }, data: { metadataVersion: { increment: 1 } } });
             return markSessionProjectionRecipientsChanged({ tx: observed, sessionId: session.id });
         }, { isolationLevel: "ReadCommitted" });
         const firstOutcome = Promise.allSettled([first]);
-        let peerOutcome: Promise<PromiseSettledResult<Awaited<typeof first>>[]> | undefined;
         let setupFailure: unknown;
         try {
-            await Promise.race([oldAudienceDiscovered, firstOutcome.then(() => {
+            await Promise.race([oldAudienceDiscovered, firstOutcome.then(([outcome]) => {
+                if (outcome.status === "rejected") throw outcome.reason;
                 throw new Error("Publication ended before initial audience discovery");
             })]);
             await expect(inTx(tx => putSessionAccessGrantInTx(tx, {
@@ -269,35 +346,18 @@ describe("AccountChange coalescing database contract", () => {
                 authentication: { env: process.env, authority: "present_user", authenticationEvidence: [] },
             }), { isolationLevel: "Serializable" })).resolves.toMatchObject({ ok: true, changed: true });
             allowInitialLock();
-            await Promise.race([ownerLocked, firstOutcome.then(() => {
-                throw new Error("Publication ended before acquiring the owner Account");
-            })]);
-            const peer = inTx(async tx => {
-                const [backend] = await tx.$queryRawUnsafe<{ pid: number }[]>("SELECT pg_backend_pid() AS pid");
-                peerPid = backend.pid;
-                const observed = observeTransport(tx, false);
-                await acquireSessionAccountCursorLocksInTx(observed, [session.id]);
-                return markSessionProjectionRecipientsChanged({ tx: observed, sessionId: session.id });
-            }, { isolationLevel: "ReadCommitted" });
-            peerOutcome = Promise.allSettled([peer]).finally(() => { peerFinished = true; });
-            while (!peerFinished) {
-                const [blocking] = await db.$queryRawUnsafe<{ waiting: boolean }[]>(
-                    "SELECT $1::int = ANY(pg_blocking_pids($2::int)) AS waiting", firstPid, peerPid,
-                );
-                if (blocking.waiting) break;
-            }
-            expect(peerFinished).toBe(false);
         } catch (error) {
             setupFailure = error;
         } finally {
             allowInitialLock();
-            allowFanout();
         }
-        const outcomes = [...await firstOutcome, ...(peerOutcome ? await peerOutcome : [])];
+        const outcomes = await firstOutcome;
         if (setupFailure !== undefined) throw setupFailure;
         // A swallowed/retried 40P01 still falsifies the Account-order contract.
         expect(rawDriverFailures).toEqual([]);
-        expect(outcomes).toHaveLength(2);
+        expect(attempts).toBeGreaterThanOrEqual(2);
+        expect(await db.session.findUniqueOrThrow({ where: { id: session.id }, select: { metadataVersion: true } }))
+            .toEqual({ metadataVersion: session.metadataVersion + 1 });
         for (const outcome of outcomes) {
             if (outcome.status === "rejected") throw outcome.reason;
             expect(outcome.value.map(cursor => cursor.accountId)).toEqual([reader.id, owner.id]);
@@ -316,9 +376,10 @@ describe("AccountChange coalescing database contract", () => {
                 accountId: account.id, kind: "session", entityId: session.id, hint: { sharedMetadataVersion: 7 },
             });
         });
-        const cursors = await inTx(tx => markAccountsChanged(tx, {
+        const publications = await inTx(tx => markAccountsChanged(tx, {
             accountIds: accounts.map(account => account.id), entityId: session.id, kind: "session",
         }));
+        const cursors = publications.map(publication => ({ accountId: publication.accountId, cursor: publication.resolveCursor() }));
         expect(cursors.map(cursor => cursor.accountId)).toEqual(accounts.map(account => account.id).sort());
         const changes = await db.accountChange.findMany({ where: { entityId: session.id, kind: "session" },
             orderBy: { accountId: "asc" }, select: { accountId: true, cursor: true, sessionId: true, hint: true } });
@@ -346,7 +407,8 @@ describe("AccountChange coalescing database contract", () => {
                 accountId: account.id, entityId, kind: "account", hint: { full: true },
             });
         });
-        const cursors = await inTx(tx => markAccountsChanged(tx, { accountIds: accounts.map(account => account.id), entityId }));
+        const publications = await inTx(tx => markAccountsChanged(tx, { accountIds: accounts.map(account => account.id), entityId }));
+        const cursors = publications.map(publication => ({ accountId: publication.accountId, cursor: publication.resolveCursor() }));
         expect(await db.accountChange.findMany({ where: { entityId }, orderBy: { accountId: "asc" },
             select: { accountId: true, cursor: true, hint: true, sessionId: true } }))
             .toEqual(cursors.map(cursor => ({ ...cursor, hint: null, sessionId: null })));
@@ -368,7 +430,7 @@ describe("AccountChange coalescing database contract", () => {
         const pluginId = "example.contract";
         const collectionId = "tasks";
         const entityId = `pluginDomain/${pluginId}/data-collection/${collectionId}`;
-        const fullCursor = await inTx(async (tx) => (
+        const fullPublication = await inTx(async (tx) => (
             await markAccountChanged(tx, {
                 accountId: account.id,
                 kind: "pluginDomain",
@@ -383,7 +445,7 @@ describe("AccountChange coalescing database contract", () => {
                 },
             })
         ));
-        const exactCursor = await inTx(async (tx) => (
+        const exactPublication = await inTx(async (tx) => (
             await markAccountChanged(tx, {
                 accountId: account.id,
                 kind: "pluginDomain",
@@ -399,6 +461,8 @@ describe("AccountChange coalescing database contract", () => {
             })
         ));
 
+        const fullCursor = fullPublication.resolveCursor();
+        const exactCursor = exactPublication.resolveCursor();
         expect(exactCursor).toBeGreaterThan(fullCursor);
         await expect(db.accountChange.findUniqueOrThrow({
             where: {
@@ -420,6 +484,36 @@ describe("AccountChange coalescing database contract", () => {
                 full: true,
             },
         });
+    });
+
+    it(`coalesces queued Collection hints without narrowing a full reread on ${provider}`, async () => {
+        const account = await db.account.create({
+            data: { publicKey: `${publicKeyPrefix}${randomUUID()}` }, select: { id: true },
+        });
+        const pluginId = "example.contract";
+        const collectionId = "queued";
+        const entityId = `pluginDomain/${pluginId}/data-collection/${collectionId}`;
+        const [full, exact] = await inTx(async tx => {
+            const full = await markAccountChanged(tx, {
+                accountId: account.id, kind: "pluginDomain", entityId,
+                hint: { pluginDomain: "dataCollection", pluginId, collectionId,
+                    contractDigest: "a".repeat(43), revision: 4, full: true },
+            });
+            const exact = await markAccountChanged(tx, {
+                accountId: account.id, kind: "pluginDomain", entityId,
+                hint: { pluginDomain: "dataCollection", pluginId, collectionId,
+                    contractDigest: "b".repeat(43), revision: 5, rowIds: ["task-1"] },
+            });
+            return [full, exact] as const;
+        });
+
+        expect(exact.resolveCursor()).toBeGreaterThanOrEqual(full.resolveCursor());
+        await expect(db.accountChange.findMany({ where: { accountId: account.id },
+            select: { entityId: true, cursor: true, hint: true } })).resolves.toEqual([{
+            entityId, cursor: exact.resolveCursor(),
+            hint: { pluginDomain: "dataCollection", pluginId, collectionId,
+                contractDigest: "b".repeat(43), revision: 5, full: true },
+        }]);
     });
 
     it(`preserves exact-only and separate Collection identities on ${provider}`, async () => {
@@ -448,7 +542,7 @@ describe("AccountChange coalescing database contract", () => {
                 },
             })
         ));
-        const fullCursor = await inTx(async (tx) => (
+        const fullPublication = await inTx(async (tx) => (
             await markAccountChanged(tx, {
                 accountId: account.id,
                 kind: "pluginDomain",
@@ -463,7 +557,7 @@ describe("AccountChange coalescing database contract", () => {
                 },
             })
         ));
-        const exactCursor = await inTx(async (tx) => (
+        const exactPublication = await inTx(async (tx) => (
             await markAccountChanged(tx, {
                 accountId: account.id,
                 kind: "pluginDomain",
@@ -479,6 +573,8 @@ describe("AccountChange coalescing database contract", () => {
             })
         ));
 
+        const fullCursor = fullPublication.resolveCursor();
+        const exactCursor = exactPublication.resolveCursor();
         await expect(db.accountChange.findMany({
             where: { accountId: account.id, kind: "pluginDomain" },
             orderBy: { entityId: "asc" },

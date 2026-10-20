@@ -44,7 +44,7 @@ function readRuntimePermissionCapability(
 }
 
 export function createLazyExecutionRunHostRuntime(params: Readonly<{
-  resolveRuntime: () => Promise<ExecutionRunHostRuntime>;
+  resolveRuntime: (signal: AbortSignal) => Promise<ExecutionRunHostRuntime>;
   onProvisionRuntime?: (runtimeId: string) => Promise<void>;
   /** Exact materialization recovery; only a proven, unaccepted initial input reaches it. */
   recoverRejectedStart?: (error: ExecutionRunRejectedStartError) => Promise<boolean>;
@@ -86,7 +86,7 @@ export function createLazyExecutionRunHostRuntime(params: Readonly<{
     }
 
     resolvedRuntimePromise = (async () => {
-      const runtime = await params.resolveRuntime();
+      const runtime = await params.resolveRuntime(lifetime.signal);
       if (disposed) {
         await runtime.dispose();
         throw new Error('Lazy execution-run runtime is disposed');

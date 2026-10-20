@@ -15,7 +15,8 @@ export function ProcessesStateCard(props: Readonly<{
 }>) {
   if (!props.online) {
     return <SurfaceStateCard testID="machine-processes-offline-empty" kind="unavailable"
-      title={t('machineProcesses.states.offlineEmpty', { machine: props.machineName })} />;
+      title={t('machineProcesses.states.offlineTitle', { machine: props.machineName })}
+              reason={t('machineProcesses.states.offlineReason')} />;
   }
   if (props.status === 'loading') {
     return <SurfaceStateCard testID="machine-processes-loading" kind="loading" title={t('machineProcesses.states.loading')} />;

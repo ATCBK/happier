@@ -1,11 +1,9 @@
 import type {
   AgentSessionGoalControl,
-  AgentSessionGoalControlContext,
   AgentSessionGoalMutation,
   AgentSessionGoalMutationResult,
 } from '@happier-dev/plugin-sdk/agents/runtime';
-
-import { CLAUDE_GOAL_WORK_STATE_ITEM_ID } from '../../transcripts/goalStatus.js';
+import { SessionGoalControlFailureV1Schema } from '@happier-dev/plugin-sdk/agents/runtime';
 
 export type ClaudeNativeGoalOperations = Readonly<{
   setGoal?(
@@ -42,46 +40,18 @@ function requestsUnsupportedMutation(mutation: AgentSessionGoalMutation): boolea
     || ('tokenBudget' in mutation && mutation.tokenBudget !== undefined);
 }
 
-function readLiveFailure(value: unknown): string | null {
+function readLiveFailure(value: unknown): AgentSessionGoalMutationResult | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const record = value as Readonly<Record<string, unknown>>;
-  return record.ok === false && typeof record.errorCode === 'string'
-    ? record.errorCode
-    : null;
-}
-
-function publicationResult(
-  result: Awaited<ReturnType<AgentSessionGoalControlContext['goalSource']['publish']>>,
-): AgentSessionGoalMutationResult {
-  if (result.status === 'applied' || result.status === 'unchanged') {
-    return { status: result.status, revision: result.revision };
-  }
-  if (result.status === 'ignoredStale') {
-    return { status: 'unchanged', revision: result.revision };
-  }
-  if (result.status === 'unavailable') {
-    return unavailable(result.diagnostic.code);
-  }
-  if (result.status === 'conflict') {
-    return {
-      status: 'rejected',
-      retryable: false,
-      diagnostic: result.diagnostic,
-    };
-  }
-  return unavailable('claude_goal_publication_unavailable');
+  if (record.ok !== false || typeof record.errorCode !== 'string') return null;
+  const failure = SessionGoalControlFailureV1Schema.safeParse(record.goalControlFailure);
+  return { status: 'unsupported', diagnostic: diagnostic(record.errorCode),
+    ...(failure.success ? { goalControlFailure: failure.data } : {}) };
 }
 
 export function createClaudeNativeGoalControl() {
   const liveOperations = new Map<string, ClaudeNativeGoalOperations>();
-  const sourceSequences = new Map<string, number>();
   let operationOrdinal = 0;
-
-  const nextSourceSequence = (sessionId: string): number => {
-    const next = (sourceSequences.get(sessionId) ?? 0) + 1;
-    sourceSequences.set(sessionId, next);
-    return next;
-  };
   const pending = (sessionId: string) => ({
     status: 'pending' as const,
     operationId: `claude-goal:${sessionId}:${++operationOrdinal}`,
@@ -94,7 +64,7 @@ export function createClaudeNativeGoalControl() {
         revision: `claude-goal:${context.session.id}:current`,
       };
     },
-    async set(mutation, context, options) {
+    async set(mutation, context) {
       if (requestsUnsupportedMutation(mutation)) {
         return unsupported('claude_goal_mutation_unsupported');
       }
@@ -106,39 +76,24 @@ export function createClaudeNativeGoalControl() {
         if (!operations?.setGoal) return unavailable('claude_goal_live_session_unavailable');
         const result = await operations.setGoal(objective, undefined);
         const failure = readLiveFailure(result);
-        return failure ? unsupported(failure) : pending(context.session.id);
+        return failure ?? pending(context.session.id);
       }
 
-      const observedAtMs = Date.now();
-      return publicationResult(await context.goalSource.publish({
-        sourceSequence: nextSourceSequence(context.session.id),
-        observedAtMs,
-        items: [{
-          localId: CLAUDE_GOAL_WORK_STATE_ITEM_ID,
-          kind: 'goal',
-          origin: 'vendor',
-          status: 'active',
-          title: objective,
-          updatedAtMs: observedAtMs,
-        }],
-        primaryLocalId: CLAUDE_GOAL_WORK_STATE_ITEM_ID,
-      }, { signal: options?.signal }));
+      // Only the live /goal effector can change Claude's objective. The host
+      // may explicitly resume and invoke that same control; publishing a badge
+      // here would acknowledge a native write that never happened.
+      return unsupported('inactive_agent_control_unsupported');
     },
-    async clear(context, options) {
+    async clear(context) {
       if (context.session.activity === 'active') {
         const operations = liveOperations.get(context.session.id);
         if (!operations?.clearGoal) return unavailable('claude_goal_live_session_unavailable');
         const result = await operations.clearGoal();
         const failure = readLiveFailure(result);
-        return failure ? unsupported(failure) : pending(context.session.id);
+        return failure ?? pending(context.session.id);
       }
 
-      return publicationResult(await context.goalSource.publish({
-        sourceSequence: nextSourceSequence(context.session.id),
-        observedAtMs: Date.now(),
-        items: [],
-        primaryLocalId: null,
-      }, { signal: options?.signal }));
+      return unsupported('inactive_agent_control_unsupported');
     },
   };
 

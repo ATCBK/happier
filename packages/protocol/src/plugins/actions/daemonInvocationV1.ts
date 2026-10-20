@@ -86,6 +86,7 @@ function messageActionReferencesMatch(
 
 function composerRefSessionId(ref: ComposerRefV1): string | null {
   switch (ref.kind) {
+    case 'discussion':
     case 'newSession':
     case 'workflowAuthoring':
       return null;
@@ -209,6 +210,8 @@ export const DaemonPluginStructuredMessageActionExecuteRequestSchema = lazyZodSc
   selectedActionInputCarrier: PluginActionDaemonInvocationV1Shape.selectedActionInputCarrier,
   invocation: PluginActionDaemonInvocationV1Shape.invocation,
   messageActionReference: PluginActionDaemonInvocationV1Shape.messageActionReference,
+  /** Resolve the existing Message carrier for a client handler, without executing it on the daemon. */
+  resolveClientMessageContext: z.optional(z.literal(true)),
   /**
    * The present user's settled confirmation, given in the invoking UI before
    * this request was sent. It is the only current-intent carrier for a `ui` or
@@ -221,6 +224,16 @@ export const DaemonPluginStructuredMessageActionExecuteRequestSchema = lazyZodSc
   presentUserIntent: z.optional(z.literal('confirmed')),
 }).check(z.superRefine((request, context) => {
   validatePluginActionDaemonDispatch(request, context);
+  if (request.resolveClientMessageContext) {
+    if (request.invocation?.kind !== 'hostPresentedMessage' && !isAutomatedClientActionInvocation(request)) {
+      context.addIssue({ code: 'custom', path: ['resolveClientMessageContext'],
+        message: 'Client Message context requires host-presented Message intent or an automated client Action binding.' });
+    }
+    if (!request.messageActionReference || (request.sessionId !== undefined && request.sessionId !== request.messageActionReference.sessionId)) {
+      context.addIssue({ code: 'custom', path: ['messageActionReference'],
+        message: 'Client Message context requires its exact committed Message reference and Session.' });
+    }
+  }
   if (request.presentUserIntent !== undefined
     && request.executionSurface !== 'ui'
     && request.executionSurface !== 'voice'

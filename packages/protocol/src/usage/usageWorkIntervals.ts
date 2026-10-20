@@ -30,6 +30,25 @@ export interface UsageWorkPermissionFact {
     answeringClientCategory: 'ios' | 'android' | 'web' | 'desktop' | null;
 }
 
+/** One population for Human loop and Coach: decisions belong to their answer period, including zero waits. */
+export function selectUsageWorkPermissions<T extends UsageWorkPermissionFact>(
+    facts: readonly T[], period: Readonly<{ startMs: number; endMs: number }>, asOfMs?: number | null,
+): Readonly<{ requests: readonly T[]; paired: readonly T[] }> {
+    const inPeriod = (time: number) => Number.isSafeInteger(time) && time >= period.startMs && time < period.endMs
+        && (asOfMs == null || time <= asOfMs);
+    const seen = new Set<string>();
+    const requests = facts.filter(fact => {
+        const key = JSON.stringify([fact.workId, fact.requestId]);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return fact.requestedAtMs !== null && inPeriod(fact.requestedAtMs)
+            || fact.decidedAtMs !== null && inPeriod(fact.decidedAtMs);
+    });
+    const paired = requests.filter(fact => fact.requestedAtMs !== null && Number.isSafeInteger(fact.requestedAtMs)
+        && fact.decidedAtMs !== null && inPeriod(fact.decidedAtMs) && fact.decidedAtMs >= fact.requestedAtMs);
+    return { requests, paired };
+}
+
 export interface UsageWorkIntervalsInput {
     period: Readonly<{ startMs: number; endMs: number }>;
     timeZoneOffsetMinutes: number;

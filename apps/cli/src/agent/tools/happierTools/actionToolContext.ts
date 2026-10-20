@@ -2,7 +2,7 @@ import { getActionContextualDefaults, getActionSpec } from '@happier-dev/protoco
 import { RuntimeActionIdV1Schema } from '@happier-dev/protocol/actions/actionIds';
 import { resolveRuntimeActionExecutionFamily } from '@happier-dev/protocol/actions/executor/dispatch';
 import type { ActionContextualDefaults } from '@happier-dev/protocol';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 
@@ -20,9 +20,9 @@ function normalizeContextValue(value: unknown): string | null {
 }
 
 function schemaDeclaresField(schema: unknown, field: string): boolean {
-  if (schema instanceof z.ZodObject) return Object.prototype.hasOwnProperty.call(schema.shape, field);
-  if (schema instanceof z.ZodIntersection) {
-    return schemaDeclaresField(schema.def.left, field) || schemaDeclaresField(schema.def.right, field);
+  if (schema instanceof z.core.$ZodObject) return Object.prototype.hasOwnProperty.call(schema._zod.def.shape, field);
+  if (schema instanceof z.core.$ZodIntersection) {
+    return schemaDeclaresField(schema._zod.def.left, field) || schemaDeclaresField(schema._zod.def.right, field);
   }
   return false;
 }
@@ -111,33 +111,35 @@ export function projectSessionBoundActionToolInputSchema(params: Readonly<{
 
   // Each declared union arm owns its scope and refinements. Project only the
   // host-supplied fields in those existing arms, rather than flattening them.
-  if (params.inputSchema instanceof z.ZodUnion) {
-    const options = params.inputSchema.options.map((inputSchema: unknown) => (
+  if (params.inputSchema instanceof z.core.$ZodUnion) {
+    const options = params.inputSchema._zod.def.options.map((inputSchema: unknown) => (
       projectSessionBoundActionToolInputSchema({ ...params, inputSchema })
     ));
-    return options.every((option): option is z.ZodType => option instanceof z.ZodType)
-      ? z.union(options)
+    return options.every((option): option is z.core.$ZodType => option instanceof z.core.$ZodType)
+      ? z.core.clone(params.inputSchema, { ...params.inputSchema._zod.def, options })
       : params.inputSchema;
   }
 
   // Browser automation combines the strict request with its action-kind refinement. Project
   // both sides so host defaults are accepted without dropping either validation contract.
-  if (params.inputSchema instanceof z.ZodIntersection) {
-    const left = projectSessionBoundActionToolInputSchema({ ...params, inputSchema: params.inputSchema.def.left });
-    const right = projectSessionBoundActionToolInputSchema({ ...params, inputSchema: params.inputSchema.def.right });
-    return left instanceof z.ZodType && right instanceof z.ZodType ? z.intersection(left, right) : params.inputSchema;
+  if (params.inputSchema instanceof z.core.$ZodIntersection) {
+    const left = projectSessionBoundActionToolInputSchema({ ...params, inputSchema: params.inputSchema._zod.def.left });
+    const right = projectSessionBoundActionToolInputSchema({ ...params, inputSchema: params.inputSchema._zod.def.right });
+    return left instanceof z.core.$ZodType && right instanceof z.core.$ZodType
+      ? z.core.clone(params.inputSchema, { ...params.inputSchema._zod.def, left, right }) : params.inputSchema;
   }
 
-  if (params.inputSchema instanceof z.ZodObject) {
-    const shape = params.inputSchema.shape as Record<string, z.ZodTypeAny>;
+  if (params.inputSchema instanceof z.core.$ZodObject) {
+    const shape = params.inputSchema._zod.def.shape;
     const optionalShape = Object.fromEntries(
       [...optionalFields]
         .filter((field) => Object.prototype.hasOwnProperty.call(shape, field))
-        .map((field) => [field, shape[field]!.optional()]),
+        .map((field) => [field, z.optional(shape[field]!)]),
     );
     return Object.keys(optionalShape).length === 0
       ? params.inputSchema
-      : params.inputSchema.safeExtend(optionalShape);
+      // Preserve the original Classic/Mini constructor, checks and strictness.
+      : z.core.clone(params.inputSchema, { ...params.inputSchema._zod.def, shape: { ...shape, ...optionalShape } });
   }
 
   if (!params.inputSchema || typeof params.inputSchema !== 'object' || Array.isArray(params.inputSchema)) {

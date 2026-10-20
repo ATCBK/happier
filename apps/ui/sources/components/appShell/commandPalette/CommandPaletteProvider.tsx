@@ -22,7 +22,8 @@ import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerS
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { resolvePreferredServerIdForSessionId } from '@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId';
-import { resetDesktopActivityOverlayPosition } from '@/activity/adapters/desktop/runtime/desktopActivityOverlayBridge';
+import { useSettingActionWriter } from '@/components/settings/catalog/useSettingActionWriter';
+import { DESKTOP_SETTINGS } from '@/components/settings/desktop/desktopSettings';
 import { requestCodexPetRefresh } from '@/components/settings/pets/petSettingsCommandEvents';
 import {
     SEARCH_DESTINATION_ID,
@@ -61,6 +62,7 @@ import { buildWorkflowAgentAuthoringSeed } from '@/sync/domains/workflows/workfl
 import { registerCommandPaletteActionCatalog } from './commandPaletteActionRuntime';
 import { KeyboardShortcutProvider, buildKeyboardShortcutLabels, resolveKeyboardPlatform, type KeyboardShortcutHandlers } from '@/keyboard';
 import { useOptionalCurrentUiContextReader } from '@/components/appShell/currentUiContext/CurrentUiContextProvider';
+import { readCurrentUiContextActionReader } from '@/components/appShell/currentUiContext/currentUiContextActionRuntime';
 import { usePluginSurfaceDestinationNavigationBinding } from '@/components/plugins/surfaces/pluginSurfaceDestinationNavigation';
 import { normalizeSessionId } from '@/sync/domains/session/normalizeSessionId';
 import { projectParameterFreeRoute } from '@/track/parameterFreeRouteProjection';
@@ -258,7 +260,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
     const petsCompanionEnabled = useFeatureEnabled('pets.companion');
     const { available: workflowsEnabled } = useWorkflowsAvailability();
     const openWorkflowAgentDraft = useWorkflowAgentAuthoring();
-    const startAskHappier = useAskHappierStarter();
+    const { start: startAskHappier } = useAskHappierStarter();
     const openNewWorkflow = useCallback(() => { router.push('/workflows/new' as never); }, [router]);
     const openWorkflowAgentAuthoring = useCallback(() => {
         openWorkflowAgentDraft(buildWorkflowAgentAuthoringSeed({ kind: 'create' }));
@@ -272,6 +274,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
     const activateCompactAppDestination = useActivateAppDestination();
     const applySettings = useApplySettings();
     const applyLocalSettings = useApplyLocalSettings();
+    const writeSetting = useSettingActionWriter();
     const keyboardPlatform = useMemo(resolveKeyboardPlatform, []);
     const labelHandlers = useMemo<KeyboardShortcutHandlers>(
         () => ({
@@ -340,13 +343,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
             },
             resetPosition: desktop
                 ? () => {
-                    applyLocalSettings({
-                        desktopOverlayPlacementMode: 'anchored',
-                        desktopOverlayAnchor: 'top_center',
-                        desktopOverlayOffsetX: 0,
-                        desktopOverlayOffsetY: 0,
-                    });
-                    fireAndForget(resetDesktopActivityOverlayPosition(), {
+                    fireAndForget(writeSetting(DESKTOP_SETTINGS.settings.placementMode, 'anchored'), {
                         tag: 'CommandPaletteProvider.resetDesktopActivityOverlayPosition',
                     });
                 }
@@ -356,7 +353,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
                 requestCodexPetRefresh();
             },
         };
-    }, [applyLocalSettings, applySettings, router]);
+    }, [applyLocalSettings, applySettings, router, writeSetting]);
 
     const openNewSession = useCallback(() => {
         const { draftId, draftOrigin } = resolveNewSessionOrdinaryEntryRoute();
@@ -382,7 +379,7 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
             ? pluginActionPresentation
             : null;
         const askHappierLifetime = captureActiveServerAccountScopeLifetime();
-        const askHappierCurrentContext = currentUiContextReader?.readCurrentUiContext() ?? null;
+        const askHappierCurrentContext = readCurrentUiContextActionReader({ surface: 'ui' })?.readCurrentUiContext() ?? null;
         return buildCommandPaletteCommands({
             sessionsById: storage.getState().sessions,
             isDev: __DEV__ === true,
@@ -493,15 +490,17 @@ function WebCommandPaletteProvider({ children }: { children: React.ReactNode }) 
         }
         if (openUniversalSearchModalRef.current) return;
         let modalId = '';
+        const clearOpenPalette = () => {
+            if (openUniversalSearchModalRef.current?.id === modalId) {
+                openUniversalSearchModalRef.current = null;
+                setPaletteOpen(false);
+            }
+        };
         modalId = Modal.show({
             component: UniversalSearchModal,
             webPlacement: COMMAND_SURFACE_WEB_PLACEMENT,
-            onRequestClose: () => {
-                if (openUniversalSearchModalRef.current?.id === modalId) {
-                    openUniversalSearchModalRef.current = null;
-                    setPaletteOpen(false);
-                }
-            },
+            onRequestClose: clearOpenPalette,
+            onHostUnmount: clearOpenPalette,
             props: {
                 commands: buildCommands(invocationScope.sessionId, invocationScope),
                 ...(initialQuery ? { initialQuery } : {}),

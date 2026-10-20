@@ -12,9 +12,13 @@ import { storage, useSessionDisplayNameProjections, type SessionDisplayNameSourc
 import { readProjectWorkspaceRefs } from '@/sync/store/domains/projectAccountRows';
 import { resolveWorkspaceDisplayPresentation } from '@/sync/domains/workspaces/workspaceDisplayPresentation';
 import { getSessionName } from '@/utils/sessions/sessionUtils';
+import { useSessionContentDemand } from '@/sync/domains/session/useSessionContentDemand';
 import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
 import { resolveExactServerScopedMachine } from '@/sync/domains/machines/resolveServerScopedMachines';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+
+/** A typed location (absolute, home-relative or UNC path) says where, not what: it never names a copy. */
+const TYPED_LOCATION = /^(?:[\\/~]|[A-Za-z]:[\\/])/;
 
 export type WidgetBindingValueLabels = Readonly<Record<string, string | null>>;
 
@@ -50,6 +54,8 @@ export function useWidgetBindingValueLabels(
         });
     }, [bindings, candidate, fieldCandidates]);
     const addresses = React.useMemo(() => entries.flatMap(entry => entry.session ? [entry.session] : []), [entries]);
+    // The pinned Sessions are named from encrypted content: they demand it like visible list rows.
+    useSessionContentDemand(addresses, { tag: 'widgets.hydrateBoundSessions', hydrate: 'unsettled' });
     const sessionNames = useSessionDisplayNameProjections(addresses, sessionName);
     // Select the displayed words only: unrelated workspace changes do not invalidate these pins.
     const workspaceNames = storage(useShallow(state => entries.map(entry => entry.workspace ? resolveWorkspaceDisplayPresentation({
@@ -76,7 +82,9 @@ export function useWidgetBindingValueLabels(
             else if (value !== undefined && field) {
                 const option = field.options?.find(option => isSameInputOptionValue(option.value, value));
                 if (option) label = option.label;
-                else if (!field.options && !field.optionsSourceId && !field.inputType) label = describeWidgetBindingValue(value);
+                else if (!field.options && !field.optionsSourceId && !field.inputType) {
+                    label = typeof value === 'string' && TYPED_LOCATION.test(value) ? null : describeWidgetBindingValue(value);
+                }
             }
             return [entry.path, label];
         }));

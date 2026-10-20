@@ -124,7 +124,8 @@ function displayKey(rule: ParsedKeybindingRule): string {
     if (rule.key === '?') return '?';
     if (rule.code?.startsWith('Key')) return rule.code.slice(3);
     if (rule.code?.startsWith('Digit')) return rule.code.slice(5);
-    if (rule.code && labelByCode[rule.code]) return labelByCode[rule.code];
+    const label = labelByCode[rule.code ?? rule.key ?? ''];
+    if (label) return label;
     return String(rule.key ?? rule.code ?? '').toUpperCase();
 }
 

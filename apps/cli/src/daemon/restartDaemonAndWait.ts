@@ -13,6 +13,7 @@ import { spawnDetachedDaemonStartSync } from '@/daemon/runtime/spawnDetachedDaem
 import { readDaemonStartWaitPollMs, readDaemonStartWaitTimeoutMs } from '@/daemon/startupWaitDefaults';
 import {
   hasObservableDaemonStartProcessExited,
+  hasObservableDaemonStartProcessRunning,
   waitForDaemonRunningWithinBudget,
 } from '@/daemon/waitForDaemonRunningWithinBudget';
 import { readPositiveIntEnv } from '@/utils/readPositiveIntEnv';
@@ -42,6 +43,7 @@ export type RestartDaemonAndWaitParams = Readonly<{
   takeover?: boolean;
   restartSessionRunners?: boolean;
   restartSessionRunnersMode?: DaemonSessionRunnerRestartMode;
+  signal?: AbortSignal;
 }>;
 
 /** Which half of the restart did not complete. */
@@ -121,6 +123,7 @@ export async function restartDaemonAndWait(params: RestartDaemonAndWaitParams = 
   const started = await waitForDaemonRunningWithinBudget({
     isRunning: () => checkIfDaemonRunningAndCleanupStaleState(),
     shouldAbort: () => hasObservableDaemonStartProcessExited(child),
+    isStillStarting: () => hasObservableDaemonStartProcessRunning(child),
     timeoutMs,
     pollMs,
   });
@@ -156,7 +159,7 @@ export async function restartDaemonAndWait(params: RestartDaemonAndWaitParams = 
         mode: params.restartSessionRunnersMode ?? 'force_current_cli',
         dryRun: false,
         reason: 'daemon_restart_session_runners',
-      });
+      }, { signal: params.signal });
       if (!sessionRunnerRestart.ok || sessionRunnerRestart.failedCount > 0) {
         return await restartFailed({
           failedPhase: 'session-runners',

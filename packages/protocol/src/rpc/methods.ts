@@ -2,6 +2,11 @@
  * Canonical RPC method literals, separated from the RPC barrel so browser-safe
  * consumers can read ActionSpecs without evaluating daemon-only projections.
  */
+export const CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD = 'session.presentation.bind' as const;
+export const CURRENT_SESSION_PRESENTATION_ACK_RPC_METHOD = 'session.presentation.ack' as const;
+export const CURRENT_SESSION_PRESENTATION_UNBIND_RPC_METHOD = 'session.presentation.unbind' as const;
+export const CURRENT_SESSION_PRESENTATION_APPLY_RPC_METHOD = 'session.presentation.apply' as const;
+
 export const RPC_METHODS = {
   USAGE_SOURCES_DISCOVER: 'usage.sources.discover',
   USAGE_SOURCES_GET: 'usage.sources.get',
@@ -25,10 +30,13 @@ export const RPC_METHODS = {
   DAEMON_SPAWN_SESSION_RESOLVE_BY_NONCE: 'daemon.spawnSession.resolveByNonce',
   DAEMON_SPAWN_SESSION_ABANDON: 'daemon.spawnSession.abandon',
   DAEMON_SESSION_CREATION_PREPARE: 'daemon.sessionCreation.prepare.v1',
+  /** Read-only directory approval facts; registration is the mixed-version support boundary. */
+  DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT: 'daemon.sessionCreation.directoryPreflight.v1',
   STOP_SESSION: 'stop-session',
   STOP_DAEMON: 'stop-daemon',
   DAEMON_EXECUTION_RUNS_LIST: 'daemon.executionRuns.list',
   DAEMON_EXECUTION_RUN_BROKER_AUTHORITY_RESOLVE: 'daemon.executionRuns.brokerAuthority.resolve.v1',
+  DAEMON_SERVICE_MOVE_START_CLAIM: 'actionOperation.serviceMoveStart.claim.v1',
   DAEMON_EXECUTION_RUN_PERMISSION_RESPOND: 'daemon.executionRuns.permission.respond.v1',
   DAEMON_TERMINAL_ENSURE: 'daemon.terminal.ensure',
   DAEMON_TERMINAL_LIST: 'daemon.terminal.list',
@@ -532,11 +540,20 @@ export const RPC_METHODS = {
 } as const;
 
 export const SESSION_RPC_METHODS = {
+  SESSION_NEEDS_YOU_RAISE: 'session.needs_you.raise',
+  /** Lossless structured-answer wire alias retained for supported 0.2 clients. */
+  SESSION_STRUCTURED_QUESTION_RESPOND_V1: 'session.structuredQuestion.respond.v1',
   /** FIN coordinator control for an exact prepared Session workflow-step input. */
   SESSION_WORKFLOW_STEP_WITHDRAW: 'session.workflowStep.withdraw',
   SESSION_USER_MESSAGE_SEND: 'session.userMessage.send',
   /** Host-private native Agent tool transport; the live Session stamps all authority. */
   SESSION_AGENT_TOOL_CALL_V1: 'session.agentTool.call.v1',
+  /** Host-private Discussion publication through the exact authenticated Session client. */
+  DISCUSSION_AGENT_POST_V1: 'discussion.agentPost.v1',
+  /** Explicit answer/pass through the exact receiving Session publisher. */
+  SESSION_MESSAGE_REPLY: 'session.message.reply',
+  /** Original-source inline/release through its current authenticated Session publisher. */
+  SESSION_MESSAGE_REPLY_OBSERVE_V1: 'session.message.reply.observe.v1',
   /** Host-private freshness hint; executable admission remains daemon-owned. */
   SESSION_PLUGIN_CATALOG_INVALIDATE_V1: 'session.pluginCatalog.invalidate.v1',
   SESSION_PENDING_MESSAGE_COMPOSER_ADMISSION_PREPARE_V1: 'session.pendingMessage.composerAdmission.prepare.v1',
@@ -594,6 +611,8 @@ export const SESSION_RPC_METHODS = {
   EXECUTION_RUN_STOP: 'execution.run.stop',
   EXECUTION_RUN_LIST: 'execution.run.list',
   EXECUTION_RUN_GET: 'execution.run.get',
+  /** Content-free exact retained occurrence for Follow baselines and admission. */
+  EXECUTION_RUN_FOLLOW_FRONTIER: 'execution.run.followFrontier',
   EXECUTION_RUN_WAIT: 'execution.run.wait',
   EXECUTION_RUN_ACTION: 'execution.run.action',
   SESSION_ROLLBACK: 'session.rollback',

@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import { DEFAULT_PENDING_REQUESTED_ACTION_V1, type PendingRequestedActionV1 } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
-import { SessionDraftRecipientValueV1Schema, type SessionDraftRecipientValueV1 } from '@happier-dev/protocol/drafts/sessionDrafts';
+import { SessionDraftRecipientValueV1Schema, SessionDraftSessionMessagingValueV1Schema, type SessionDraftRecipientValueV1, type SessionDraftSessionMessagingValueV1 } from '@happier-dev/protocol/drafts/sessionDrafts';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
 import type { ParticipantRecipientV1 } from '@happier-dev/protocol/messages/structured/participantMessageV1';
 
@@ -15,9 +15,11 @@ import {
 } from '@/sync/domains/scope/serverAccountScope';
 import {
     getSessionDraftSnapshot,
+    SESSION_MESSAGING_DRAFT_FIELD_PATH,
     subscribeSessionDraft,
     writeExistingSessionDraft,
 } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
+import { getSessionDraftDocumentField } from '@/sync/ops/sessionDrafts/sessionDraftDocumentFields';
 import { readExecutionRunRequestedAction } from '@/sync/domains/input/participants/executionRunRequestedAction';
 
 export type SessionRecipientDraftPersistence = Readonly<{
@@ -37,6 +39,9 @@ export function useSessionRecipientState(params: Readonly<{
     clearPersistedManualRecipient: () => void;
     executionRunRequestedAction: PendingRequestedActionV1;
     setExecutionRunRequestedAction: (next: PendingRequestedActionV1) => void;
+    sessionMessage: SessionDraftSessionMessagingValueV1 | null;
+    setSessionMessage: (next: SessionDraftSessionMessagingValueV1 | null) => void;
+    clearPersistedSessionMessage: () => void;
     scmDiffSummaryDiscussion: Extract<NonNullable<SessionDraftRecipientValueV1>, { mode: 'scm_diff_summary' }>['target'] | null;
 }> {
     const scope = params.accountLifetime?.isCurrent() === true
@@ -58,6 +63,7 @@ export function useSessionRecipientState(params: Readonly<{
         return JSON.stringify([
             routing?.recipient.value ?? null,
             routing?.executionRunDelivery.value ?? null,
+            getSessionDraftDocumentField(snapshot?.document ?? null, SESSION_MESSAGING_DRAFT_FIELD_PATH)?.value ?? null,
         ]);
     }, [persistedSessionId, persistenceEnabled, scope, scopeIsCurrent]);
     const routingSignature = React.useSyncExternalStore(
@@ -70,6 +76,23 @@ export function useSessionRecipientState(params: Readonly<{
         const parsed = SessionDraftRecipientValueV1Schema.safeParse(JSON.parse(routingSignature)[0]);
         return parsed.success ? parsed.data : null;
     }, [routingSignature]);
+    const persistedSessionMessage = React.useMemo(() => {
+        if (routingSignature === 'disabled') return null;
+        const parsed = SessionDraftSessionMessagingValueV1Schema.safeParse(JSON.parse(routingSignature)[2]);
+        return parsed.success ? parsed.data : null;
+    }, [routingSignature]);
+    const [ephemeralSessionMessage, setEphemeralSessionMessage] = React.useState<Readonly<{
+        lifetime: ServerAccountScopeLifetime | null | undefined;
+        sessionId: string | null;
+        value: SessionDraftSessionMessagingValueV1 | null;
+    }> | null>(null);
+    const sessionMessage = persistenceEnabled
+        ? persistedSessionMessage
+        : params.accountLifetime && !scopeIsCurrent()
+            ? null
+            : ephemeralSessionMessage && ephemeralSessionMessage.lifetime === params.accountLifetime && ephemeralSessionMessage.sessionId === persistedSessionId
+                ? ephemeralSessionMessage.value
+                : null;
     const scmDiffSummaryDiscussion = persistedRouting?.mode === 'scm_diff_summary' ? persistedRouting.target : null;
     const [manualRecipient, setManualRecipientState] = React.useState<ParticipantRecipientV1 | null>(null);
     const [didManualOverride, setDidManualOverride] = React.useState(false);
@@ -180,6 +203,18 @@ export function useSessionRecipientState(params: Readonly<{
         }
     }, [persistedSessionId, persistenceEnabled, scope, scopeIsCurrent]);
 
+    const setSessionMessage = React.useCallback((next: SessionDraftSessionMessagingValueV1 | null) => {
+        if (params.accountLifetime && !scopeIsCurrent()) return;
+        const value = next === null ? null : SessionDraftSessionMessagingValueV1Schema.parse(next);
+        if (persistenceEnabled) {
+            if (!persistedSessionId || !scope || !scopeIsCurrent()) return;
+            writeExistingSessionDraft({ scope, sessionId: persistedSessionId, patch: { sessionMessaging: value } });
+            return;
+        }
+        setEphemeralSessionMessage({ lifetime: params.accountLifetime, sessionId: persistedSessionId, value });
+    }, [params.accountLifetime, persistedSessionId, persistenceEnabled, scope, scopeIsCurrent]);
+    const clearPersistedSessionMessage = React.useCallback(() => setSessionMessage(null), [setSessionMessage]);
+
     return {
         recipient: effectiveRecipient,
         didManualOverride: scmDiffSummaryDiscussion !== null || didManualOverride,
@@ -188,6 +223,9 @@ export function useSessionRecipientState(params: Readonly<{
         clearPersistedManualRecipient,
         executionRunRequestedAction,
         setExecutionRunRequestedAction: setPersistedExecutionRunRequestedAction,
+        sessionMessage,
+        setSessionMessage,
+        clearPersistedSessionMessage,
     };
 }
 

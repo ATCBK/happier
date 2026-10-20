@@ -2,8 +2,8 @@
 /**
  * Session Hook Forwarder
  *
- * This script is executed by a non-controlling Agent lifecycle hook.
- * It makes one bounded attempt to forward JSON from stdin to Happier's existing hook server.
+ * This script forwards Agent lifecycle hooks without making native policy decisions.
+ * Hosted identity-proof hooks share the native hook lifetime; observational hooks make one bounded attempt.
  *
  * Usage: echo '{"session_id":"..."}' | node session_hook_forwarder.cjs <port> [hook_event_name] [--qualified-external-session] --secret-file <path>
  */
@@ -34,7 +34,11 @@ function finish() {
     process.exit(0);
 }
 
-const deadline = setTimeout(finish, FORWARDING_DEADLINE_MS);
+// The synchronous native hook already owns cancellation and its timeout. Returning early here
+// would let accepted input and its transcript outrun the host's authenticated grant/follower.
+const waitsForNativeHookLifetime = !qualifiedExternalSession
+    && (hookEventName === 'SessionStart' || hookEventName === 'UserPromptSubmit');
+const deadline = waitsForNativeHookLifetime ? null : setTimeout(finish, FORWARDING_DEADLINE_MS);
 
 function readFlagValue(args, flag) {
     const index = args.indexOf(flag);
@@ -169,6 +173,8 @@ process.stdin.on('end', async () => {
     }, (res) => {
         res.resume(); // Drain response
         res.on('end', finish);
+        res.on('aborted', finish);
+        res.on('error', finish);
     });
 
     request.on('error', finish);

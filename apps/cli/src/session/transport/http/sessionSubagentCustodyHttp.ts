@@ -1,5 +1,6 @@
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import axios from 'axios';
+import { readActionCredentialScopeDeniedHttpFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
 import { SessionSubagentCustodyCapabilityV1Schema, SessionSubagentCustodyMutationRequestV1Schema, SessionSubagentCustodyMutationResponseV1Schema, SessionSubagentCustodyPageV1Schema, SessionSubagentCustodyRetirementRequestV1Schema, SessionSubagentCustodyRetirementResponseV1Schema } from '@happier-dev/protocol/sessions/subagents/durableCustodyV1';
 import type { SessionSubagentCustodyMutationRequestV1, SessionSubagentCustodyRecordV1, SessionSubagentCustodyScopeV1, PluginSourceCustodyV1 } from '@happier-dev/protocol';
 
@@ -33,6 +34,8 @@ function parse<T>(schema: { safeParse(value: unknown): { success: boolean; data?
 }
 
 function throwForStatus(status: number, data: unknown): never {
+  const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(status, data);
+  if (scopeDenial) throw new SessionSubagentCustodyHttpError(scopeDenial.errorCode);
   if (status === 401 || status === 403) throw new SessionSubagentCustodyHttpError('not_authenticated');
   if (status === 404) throw new SessionSubagentCustodyHttpError('plugin_subagent_durable_custody_unavailable');
   const error = data && typeof data === 'object' && !Array.isArray(data)

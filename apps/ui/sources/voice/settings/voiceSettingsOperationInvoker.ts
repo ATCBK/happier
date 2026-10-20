@@ -1,12 +1,13 @@
 import { Platform } from 'react-native';
 import { HAPPIER_PRIVACY_POLICY_URL } from '@/constants/legalUrls';
 import { StrictJsonValueSchema } from '@happier-dev/protocol/json/strictJsonValue';
-import { getDefaultModelPackId, listModelPackCatalogEntries, resolveCanonicalModelPackId } from '@happier-dev/protocol/voice/modelPacks/catalog';
+import { getDefaultModelPackId, resolveCanonicalModelPackId } from '@happier-dev/protocol/voice/modelPacks/catalog';
 import type { SettingOperationContext, SettingOperationResult } from '@/components/settings/catalog/settingDeclarations';
 import { Modal } from '@/modal';
 import type { Settings } from '@/sync/domains/settings/settings';
 import { readLocalConversationVoiceSettings, readLocalDirectVoiceSettings, readVoiceDiagnosticsSettings, voiceSettingsParse, writeVoiceDiagnosticsSettings } from '@/sync/domains/settings/voiceSettings';
 import { storage } from '@/sync/domains/state/storage';
+import { areServerAccountScopesEqual } from '@/sync/domains/scope/serverAccountScope';
 import { resolveVoiceExecutionMachinePresentationFromState } from '@/voice/credentials/useExecutionMachinePresentation';
 import { t, tLoose } from '@/text';
 import { throwIfAborted } from '@/utils/runtime/abortSignals';
@@ -25,6 +26,8 @@ import { invokeDaemonModelPackOperation } from './panels/modelCatalog/invokeDaem
 import { projectVoiceProcessingDisclosures } from './projectVoiceProcessingDisclosures';
 import { inspectVoiceSettingsSemanticReadiness } from './voiceProviderReadinessInspection';
 import type { VoiceSettingsOperation } from './voiceSettingsOperation';
+import { captureVoiceModelCancellation } from './voiceModelCancellation';
+import { captureDaemonVoiceModelCatalogObservation } from './panels/modelCatalog/daemonVoiceModelCatalogObservation';
 
 const unavailable = (reason: string): SettingOperationResult => ({ status: 'unavailable', reason });
 const completed = (value?: unknown): SettingOperationResult => ({ status: 'completed', ...(value === undefined ? {} : { value: StrictJsonValueSchema.parse(value) }) });
@@ -32,12 +35,14 @@ const completed = (value?: unknown): SettingOperationResult => ({ status: 'compl
 /** Actions adapt the existing operation owners. They never infer success from opening a row. */
 export async function invokeVoiceSettingsOperation(operation: VoiceSettingsOperation, purpose: 'conversation' | 'dictation', context: SettingOperationContext): Promise<SettingOperationResult> {
     const input = context.input;
+    const cancelsModel = operation === 'model_cancel' || operation === 'stt_cancel' || operation === 'tts_cancel';
     if (['model_install', 'model_remove', 'model_default'].includes(operation) && input?.kind !== 'model_pack'
+        || cancelsModel && input?.kind !== 'model_pack'
         || operation === 'diagnostics_export' && input?.kind !== 'diagnostics_export'
         || operation === 'diagnostics_session_opt_out' && input?.kind !== 'diagnostics_session'
         || operation === 'diagnostics_retry_shutdown' && input?.kind !== 'diagnostics_revocation'
         || operation === 'diagnostics_enabled' && input?.kind !== 'diagnostics_enabled') return unavailable('operation_input_required');
-    const acceptsModel = ['model_install', 'model_remove', 'model_default', 'stt_prepare', 'stt_remove', 'stt_update', 'tts_prepare', 'tts_remove', 'tts_update'].includes(operation);
+    const acceptsModel = cancelsModel || ['model_install', 'model_remove', 'model_default', 'stt_prepare', 'stt_remove', 'stt_update', 'tts_prepare', 'tts_remove', 'tts_update'].includes(operation);
     if (input && !(acceptsModel && input.kind === 'model_pack'
         || operation === 'tts_preview' && input.kind === 'voice_preview'
         || operation === 'diagnostics_export' && input.kind === 'diagnostics_export'
@@ -46,6 +51,11 @@ export async function invokeVoiceSettingsOperation(operation: VoiceSettingsOpera
         || operation === 'diagnostics_enabled' && input.kind === 'diagnostics_enabled')) return unavailable('operation_input_invalid');
     const current = () => !context.signal?.aborted && context.isCurrent();
     if (!current()) return { status: 'cancelled' };
+    const cancellation = cancelsModel && input?.kind === 'model_pack'
+        ? captureVoiceModelCancellation(resolveCanonicalModelPackId(input.packId)) : null;
+    if (cancelsModel && (!cancellation || !areServerAccountScopesEqual(context.accountScope, cancellation.target.account.scope))) {
+        return unavailable('model_operation_changed');
+    }
     try {
         if (operation === 'privacy_policy_open') {
             const { openExternalUrl } = await import('@/utils/url/openExternalUrl');
@@ -170,6 +180,15 @@ export async function invokeVoiceSettingsOperation(operation: VoiceSettingsOpera
         const cfg = adapterId === 'local_direct' ? readLocalDirectVoiceSettings(runtimeSettings.voice) : readLocalConversationVoiceSettings(runtimeSettings.voice);
         const stt = parseLocalVoiceSttSettings(cfg.stt);
         const tts = parseLocalVoiceTtsSettings(cfg.tts);
+        if (operation === 'tts_catalog' || operation === 'tts_catalog_retry') {
+            if (voice.providerId !== 'local_direct' && voice.providerId !== 'local_conversation') return unavailable('local_voice_service_not_selected');
+            if (tts.provider !== 'local_neural') return unavailable('local_neural_engine_not_selected');
+            const { readLocalNeuralVoiceCatalog } = await import('@/voice/kokoro/assets/readLocalNeuralVoiceCatalog');
+            const { projectVoiceSettingsCatalogList } = await import('./panels/realtime/voiceCatalog');
+            const catalog = await readLocalNeuralVoiceCatalog({ config: tts.localNeural,
+                originMachineId: machineId, signal: context.signal });
+            return await operationCurrent() ? completed({ rows: projectVoiceSettingsCatalogList(catalog.rows, true) }) : { status: 'cancelled' };
+        }
         if (operation === 'tts_test' || operation === 'tts_preview') {
             if (voice.providerId !== 'local_direct' && voice.providerId !== 'local_conversation') return unavailable('local_voice_service_not_selected');
             if (Platform.OS === 'web' && typeof navigator !== 'undefined' && !navigator.userActivation?.isActive) return unavailable('audio_user_gesture_required');
@@ -210,6 +229,12 @@ export async function invokeVoiceSettingsOperation(operation: VoiceSettingsOpera
             : resolveCanonicalModelPackId(selected.localNeural.assetId ?? getDefaultModelPackId(role) ?? '');
         if (isRoleModel && input?.kind === 'model_pack' && packId !== resolveCanonicalModelPackId(selected.localNeural.assetId ?? getDefaultModelPackId(role) ?? '')) return unavailable('selected_model_pack_changed');
         const execution = isRoleModel ? resolveLocalNeuralExecutionPolicy({ requestedExecution: selected.localNeural.execution }).preferredExecution : 'daemon';
+        if (cancelsModel) {
+            if (!cancellation || cancellation.target.execution !== execution
+                || execution === 'daemon' && cancellation.target.machineId !== machineId) return unavailable('model_operation_changed');
+            if (!await operationCurrent()) return { status: 'cancelled' };
+            return await cancellation.cancel(context.signal) ? completed({ packId }) : unavailable('model_operation_changed');
+        }
         if (isRoleModel && execution === 'device') {
             if (!packId) return unavailable('model_pack_unselected');
             const { invokeVoiceDeviceModelPackOperation } = await import('./voiceDeviceModelPackOperation');
@@ -225,14 +250,15 @@ export async function invokeVoiceSettingsOperation(operation: VoiceSettingsOpera
         if (!machineId) return unavailable('execution_machine_unavailable');
         const client = new DaemonVoiceInferenceClient();
         const scope = { machineId };
+        const catalog = captureDaemonVoiceModelCatalogObservation(machineId);
         if (operation === 'models_inspect') {
-            const [discovered, canonical] = await Promise.all([client.listModels(scope), client.getModelsStatus(listModelPackCatalogEntries().map(entry => entry.packId), scope)]);
-            const statuses = [...new Map([...discovered, ...canonical].map(status => [status.packId, status])).values()];
-            return await operationCurrent() ? completed({ machineId, models: statuses }) : { status: 'cancelled' };
+            const statuses = await catalog.read({ client, requireNewObservation: true, isCurrent: selectionCurrent, signal: context.signal });
+            return statuses && await operationCurrent() ? completed({ machineId, models: statuses }) : { status: 'cancelled' };
         }
         if (!packId) return unavailable('model_pack_unselected');
         if (operation.endsWith('_update')) return unavailable('daemon_model_update_unsupported');
-        const statuses = await client.getModelsStatus([packId], scope);
+        const statuses = await catalog.read({ client, packIds: [packId], requireNewObservation: true, isCurrent: selectionCurrent, signal: context.signal });
+        if (!statuses) return { status: 'cancelled' };
         const rows = buildModelCatalogRows({ statuses, selectedSttPackId: stt.localNeural.assetId, selectedTtsPackId: tts.localNeural.assetId });
         const row = [...rows.stt, ...rows.tts].find(candidate => candidate.packId === packId);
         if (!row) return unavailable('model_pack_unavailable');

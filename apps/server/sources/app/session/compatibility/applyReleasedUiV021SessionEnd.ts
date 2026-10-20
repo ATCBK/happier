@@ -18,8 +18,10 @@ import {
     applyLatestSessionTurnEndInTx,
     writeSessionRuntimeActivityObserverLossInTx,
 } from "@/app/session/sessionWriteService";
-import { inTx } from "@/storage/inTx";
+import { inTx, transactionResult } from "@/storage/inTx";
+import { resolveSessionAccountChangePublications } from "@/app/session/changeTracking/markAccountChangesForSessionAccounts";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
+import { resolveSessionTurnUpdateSkipSenderConnection } from "@/app/session/turns/publishSessionTurnMutationUpdate";
 import { PrimaryTurnStatusV1Schema, SessionRuntimeIssueV1Schema, type PrimaryTurnStatusV1, type SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 
 function readMillis(value: unknown): number | null {
@@ -144,26 +146,25 @@ export async function applyReleasedUiV021SessionEnd(params: Readonly<{
             active: false,
             latestTurnStatus,
             lastRuntimeIssue: nextStoredRuntimeIssue,
-            ...(turn?.ok ? turn.pendingRequestProjection : {}),
         });
-        return {
+        return transactionResult(() => ({
             status: "applied" as const,
-            recipientCursors,
+            recipientCursors: resolveSessionAccountChangePublications(recipientCursors),
             badgeAttentionChanged,
             activeChanged: session.active,
             activeAt: params.observedAt,
             activityChanged: activity.status === "applied",
             activityProjection: activity.projection,
             turnChanged: turnApplied,
-            pendingRequestProjection: turn?.ok ? turn.pendingRequestProjection : undefined,
             latestTurnId: turn?.ok ? turn.latestTurnId : session.latestTurnId,
             latestTurnStatus,
             latestTurnStatusObservedAt,
             lastRuntimeIssue,
-        };
+        }));
     });
 
     if (result.status !== "applied") return result;
+    const skipSenderConnection = resolveSessionTurnUpdateSkipSenderConnection(params.connection);
     if (result.activeChanged) {
         activityCache.markSessionInactive(params.sessionId, params.accountId, params.observedAt);
     }
@@ -179,7 +180,6 @@ export async function applyReleasedUiV021SessionEnd(params: Readonly<{
                         latestTurnStatus: result.latestTurnStatus,
                         latestTurnStatusObservedAt: result.latestTurnStatusObservedAt,
                         lastRuntimeIssue: result.lastRuntimeIssue,
-                        ...result.pendingRequestProjection,
                     } : {}),
                 },
                 session,
@@ -197,8 +197,8 @@ export async function applyReleasedUiV021SessionEnd(params: Readonly<{
                     projection.value,
                 ),
                 recipientFilter: { type: "all-interested-in-session", sessionId: params.sessionId },
-                ...(accountId === params.accountId && params.connection
-                    ? { skipSenderConnection: params.connection }
+                ...(accountId === params.accountId && skipSenderConnection
+                    ? { skipSenderConnection }
                     : {}),
             });
         }));

@@ -20,6 +20,7 @@ import { readCurrentServerIdentityId } from "@/app/serverIdentity/serverIdentity
 import { classifyMachineAvailabilityState } from "@/app/machines/machineStateGuards";
 import { applyMachineReplacement } from "@/app/machines/applyMachineReplacement";
 import { assertManagedWakeOriginCurrentInTx } from './managedWake';
+import { doesManagedNativeObservationSettleIntent } from './managedNativeObservation';
 import {
     ManagedMachineError, requireCurrentManagedMachineInTx, resolveManagedDeclarationInTx,
     projectManagedMachine, invalidateManagedMachineInTx, sameManagedInput,
@@ -31,16 +32,17 @@ import {
     type StoredManagedMachine,
     readManagedAdmissionState, readManagedCurrentRequestId,
     readManagedJsonEqualityOperand,
+    inManagedMachinePublicationTx,
 } from "./managedRows";
 
-/** A declared, retained native handle can identify partial cleanup before resource binding. */
-async function hasPendingManagedCleanupTargetInTx(tx: Tx, row: StoredManagedMachine): Promise<boolean> {
-    if (row.allocation !== 'may-exist' || row.resource !== null || row.nativeOperationRef === null) return false;
+/** Declared reconciliation can recover partial cleanup; native submission still requires its concrete target. */
+async function hasPendingManagedCleanupTargetInTx(tx: Tx, row: StoredManagedMachine, allowCorrelation = false): Promise<boolean> {
+    if (row.allocation !== 'may-exist' || row.resource !== null) return false;
     const launch = readManagedLaunchSnapshot(row.launch);
     const declaration = await resolveManagedDeclarationInTx(tx, { homeId: row.homeId, custodianAccountId: row.custodianAccountId,
         controller: { machineId: row.controllerMachineId, installationId: row.controllerInstallationId }, provider: launch.provider });
     if (!declaration?.reconciliation || declaration.schemaVersion !== launch.schemaVersion) return false;
-    return projectManagedMachine(row, declaration).nativeOperationRef !== undefined;
+    return row.nativeOperationRef === null ? allowCorrelation : projectManagedMachine(row, declaration).nativeOperationRef !== undefined;
 }
 
 /** Policy execution consumes committed row intent, guest drain or an accepted origin, never caller ids alone. */
@@ -110,7 +112,7 @@ export async function prepareManagedPolicy(params: Readonly<{ custodianAccountId
 
 async function readOrAdmitManagedPolicy(params: Readonly<{ custodianAccountId: string; input: ManagedPolicyAdmissionInputV1; actionOrigin?: ExternalActionExecutionAuthorizationV1 }>, admit: boolean) {
     const input = ManagedPolicyAdmissionInputV1Schema.parse(params.input);
-    return inTx(async tx => {
+    const execute = async (tx: Tx) => {
         const row = await readManagedMachineInTx(tx, input);
         if (row.custodianAccountId !== params.custodianAccountId || row.controllerMachineId !== input.controller.machineId
             || row.controllerInstallationId !== input.controller.installationId) throw new ManagedMachineError('permission_denied');
@@ -150,10 +152,8 @@ async function readOrAdmitManagedPolicy(params: Readonly<{ custodianAccountId: s
         const current = await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } });
         await invalidateManagedMachineInTx(tx, current);
         return { machine: await projectManagedMachineInTx(tx, current), requestId: readManagedCurrentRequestId(current), replayed: false };
-    }, {
-        // Policy admission combines current controller, guest activity and retained allocation facts.
-        isolationLevel: "Serializable",
-    });
+    };
+    return admit ? inManagedMachinePublicationTx(input, execute) : inTx(execute, { isolationLevel: 'Serializable' });
 }
 
 /** Same-row admission owns immediate CAS, fire-time idle intent, policy and future controller custody. */
@@ -162,7 +162,9 @@ export async function admitManagedControl(params: Readonly<{
     input: ManagedControlAdmissionInputV1;
 }>) {
     const request = ManagedControlAdmissionInputV1Schema.parse(params.input);
-    return await inTx(async tx => {
+    return await inManagedMachinePublicationTx({ homeId: request.input.homeId,
+        managedId: 'managedMachineId' in request.input ? request.input.managedMachineId : request.input.managedId,
+        ...(request.action === 'machines.managed.controller.update' ? { nextControllerMachineId: request.input.controller.machineId } : {}) }, async tx => {
         const input = request.input;
         const row = await readManagedMachineInTx(tx, { homeId: input.homeId,
             managedId: 'managedMachineId' in input ? input.managedMachineId : input.managedId });
@@ -188,8 +190,12 @@ export async function admitManagedControl(params: Readonly<{
             data.cleanup = { disposition: "unavailable", reason: "manual_responsibility" };
         } else {
             const pendingCleanup = request.action === 'machines.managed.delete' && request.input.when === 'now'
-                && await hasPendingManagedCleanupTargetInTx(tx, row);
-            if (row.creationState !== "active" || (!(row.allocation === "bound" && row.resource) && !pendingCleanup)) throw new ManagedMachineError("resource_mismatch");
+                && await hasPendingManagedCleanupTargetInTx(tx, row, true);
+            const canceledCleanup = request.action === 'machines.managed.delete' && request.input.when === 'now'
+                && row.creationState === 'canceled' && row.archivedAt === null
+                && row.desired === 'delete' && row.desiredWhen === 'now';
+            if ((row.creationState !== "active" && !canceledCleanup)
+                || (!(row.allocation === "bound" && row.resource) && !pendingCleanup)) throw new ManagedMachineError("resource_mismatch");
             const launch = readManagedLaunchSnapshot(row.launch);
             const declaration = await resolveManagedDeclarationInTx(tx, { homeId: row.homeId, custodianAccountId: row.custodianAccountId, controller, provider: launch.provider });
             if (!declaration || declaration.schemaVersion !== launch.schemaVersion) throw new ManagedMachineError("provider_unavailable");
@@ -227,16 +233,13 @@ export async function admitManagedControl(params: Readonly<{
         await invalidateManagedMachineInTx(tx, row);
         if (row.controllerMachineId !== current.controllerMachineId) await invalidateManagedMachineInTx(tx, current);
         return { machine: await projectManagedMachineInTx(tx, current), replayed: false };
-    }, {
-        // Controller and credential admission must compose with retirement and replacement writers.
-        isolationLevel: "Serializable",
     });
 }
 
 /** Claim only the current single native effect before IO; submitted ambiguity survives policy/Move edits. */
 export async function submitManagedIntent(input: ManagedControllerCurrentnessV1) {
     const canonical = ManagedControllerCurrentnessV1Schema.parse(input);
-    return await inTx(async tx => {
+    return await inManagedMachinePublicationTx(canonical, async tx => {
         const row = await requireCurrentManagedMachineInTx(tx, canonical, { allowInactiveCurrentIntent: true });
         const pendingCleanup = row.archivedAt === null && row.desired === 'delete' && row.desiredWhen === 'now'
             && await hasPendingManagedCleanupTargetInTx(tx, row);
@@ -255,16 +258,13 @@ export async function submitManagedIntent(input: ManagedControllerCurrentnessV1)
         const current = await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } });
         if (changed.count) await invalidateManagedMachineInTx(tx, current);
         return { machine: await projectManagedMachineInTx(tx, current), submitted: changed.count === 1 };
-    }, {
-        // Serialize submitted-effect admission with allocation and observation settlement.
-        isolationLevel: "Serializable",
     });
 }
 
 /** Native command settlement is not an observation. Late exact submitted reports cannot replace current intent. */
 export async function reportManagedIntent(input: ManagedControllerIntentReportV1) {
     const canonical = ManagedControllerIntentReportV1Schema.parse(input);
-    return await inTx(async tx => {
+    return await inManagedMachinePublicationTx(canonical, async tx => {
         const row = await readManagedMachineInTx(tx, canonical);
         const admitted = readManagedAdmissionState(row.admittedInput);
         const pending = admitted.submittedEffect;
@@ -344,11 +344,8 @@ export async function reportManagedIntent(input: ManagedControllerIntentReportV1
                 data.nativeOperationRef = getActivePrismaRuntime().DbNull;
             }
         }
-        const observedSettlement = pending.intent !== 'rebuild' && currentObservation && (pending.intent === 'delete'
-            ? currentObservation.availability === 'absent'
-            : currentObservation.availability === 'present' && currentObservation.power === (
-                pending.intent === 'stop' ? 'stopped' : pending.intent === 'suspend' ? 'suspended'
-                    : pending.intent === 'start' || pending.intent === 'resume' ? 'running' : undefined));
+        const observedSettlement = doesManagedNativeObservationSettleIntent(pending.intent, currentObservation,
+            previousObservation.success ? previousObservation.data : undefined);
         if (canonical.result.kind !== "refused" && !observedSettlement) {
             // Retire transfers cleanup to the user; an unresolved native
             // effect retains its fact without reclaiming that responsibility.
@@ -365,16 +362,13 @@ export async function reportManagedIntent(input: ManagedControllerIntentReportV1
         const current = await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } });
         await invalidateManagedMachineInTx(tx, row);
         return { machine: await projectManagedMachineInTx(tx, current) };
-    }, {
-        // Observation ordering and allocation settlement are not fully covered by the intent CAS.
-        isolationLevel: "Serializable",
     });
 }
 
 /** Only the successful unsubmitted -> may-exist transition permits native acquisition. */
 export async function submitManagedAcquire(input: ManagedControllerSubmitInputV1) {
     const canonical = ManagedControllerSubmitInputV1Schema.parse(input);
-    return await inTx(async (tx) => {
+    return await inManagedMachinePublicationTx(canonical, async (tx) => {
         const row = await requireCurrentManagedMachineInTx(tx, canonical, { requestAuthority: 'creation' });
         const launch = readManagedLaunchSnapshot(row.launch);
         const credentials = launch.credentials ?? [];
@@ -390,16 +384,13 @@ export async function submitManagedAcquire(input: ManagedControllerSubmitInputV1
         const current = changed.count ? await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } }) : row;
         if (changed.count) await invalidateManagedMachineInTx(tx, current);
         return { machine: await projectManagedMachineInTx(tx, current), submitted: changed.count === 1 };
-    }, {
-        // Serialize allocation submission with cancellation and resource reports.
-        isolationLevel: "Serializable",
     });
 }
 
 /** Bound identity is saved before bootstrap, including an exact late cleanup identity. */
 export async function reportManagedAcquire(input: ManagedControllerReportV1, options: Readonly<{ requestAuthority?: 'creation' | 'intent' }> = {}) {
     const canonical = ManagedControllerReportV1Schema.parse(input);
-    return await inTx(async (tx) => {
+    return await inManagedMachinePublicationTx(canonical, async (tx) => {
         const row = await requireCurrentManagedMachineInTx(tx, canonical, { requestAuthority: options.requestAuthority ?? 'creation',
             allowCanceledResourceReport: (canonical.result.kind === "bound" || canonical.result.kind === "pending") && options.requestAuthority !== 'intent',
             allowInactiveCurrentIntent: options.requestAuthority === 'intent' });
@@ -441,16 +432,13 @@ export async function reportManagedAcquire(input: ManagedControllerReportV1, opt
         const updated = await tx.managedMachine.findUniqueOrThrow({ where: { id: row.id } });
         await invalidateManagedMachineInTx(tx, updated);
         return { machine: projectManagedMachine(updated, declaration) };
-    }, {
-        // Bound resource and observation reads are not all covered by the allocation CAS.
-        isolationLevel: "Serializable",
     });
 }
 
 /** Creates the private key at SavedSecret's owner and retains only its reference atomically. */
 export async function createManagedBootstrapCredential(input: ManagedBootstrapCredentialCreateV1) {
     const canonical = ManagedBootstrapCredentialCreateV1Schema.parse(input);
-    return await inTx(async (tx) => {
+    return await inManagedMachinePublicationTx(canonical, async (tx) => {
         const row = await requireCurrentManagedMachineInTx(tx, canonical, { requestAuthority: 'creation' });
         if (row.bootstrapCredentialRef !== null) return { machine: await projectManagedMachineInTx(tx, row) };
         // Acquire the owning row's database write lock before creating a secret.
@@ -473,9 +461,6 @@ export async function createManagedBootstrapCredential(input: ManagedBootstrapCr
         const updated = await tx.managedMachine.update({ where: { id: row.id }, data: { bootstrapCredentialRef: { kind: "shared_resource", resourceId: created.value.resourceId } } });
         await invalidateManagedMachineInTx(tx, updated);
         return { machine: await projectManagedMachineInTx(tx, updated) };
-    }, {
-        // SavedSecret mode/key admission precedes the retained bootstrap reference write.
-        isolationLevel: "Serializable",
     });
 }
 

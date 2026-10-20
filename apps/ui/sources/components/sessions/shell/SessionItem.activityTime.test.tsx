@@ -1218,6 +1218,7 @@ describe('SessionItem activity time', () => {
                 session={createSession('stale_prop_session')}
                 rowViewModel={{
                     groupKey: 'group:model',
+                    guardState: null,
                     sessionKey: 'server_a:sess_model_backed',
                     session: rowSession,
                     sessionStatus: {

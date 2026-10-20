@@ -44,8 +44,9 @@ describe('action operation inbox presentation', () => {
         for (const kind of ['outcome_uncertain', 'stop_unconfirmed'] as const) {
             const snapshot = operation({ observation: { kind, code: 'owner_not_observed' } });
             expect(classifyActionOperationSection(snapshot, 'available')).toBe('needsAttention');
+            // An unconfirmed outcome says so, and where to look; an unconfirmed Stop keeps the generic status line.
             expect(resolveActionOperationStatus(snapshot, 'available')).toEqual({
-                tone: 'muted', label: { kind: 'host', value: 'unavailable' },
+                tone: 'muted', label: { kind: 'host', value: kind === 'outcome_uncertain' ? 'outcome_uncertain' : 'unavailable' },
             });
             expect(snapshot.state).toBe('running');
         }

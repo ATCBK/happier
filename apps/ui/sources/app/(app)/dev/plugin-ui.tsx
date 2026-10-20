@@ -40,6 +40,7 @@ import {
     Spinner as PluginSpinner,
     State as PluginState,
     Status as PluginStatus,
+    ReviewSeverity as PluginReviewSeverity,
     Surface as PluginSurface,
     Text as PluginText,
     Tabs as PluginTabs,
@@ -233,6 +234,9 @@ function createDemoSurfaceHost(initial: SurfaceContext): DemoSurfaceHost {
         selectActionInput: async () => {
             throw new Error('dev surface has no Action input selector');
         },
+        admitAction: async () => {
+            throw new Error('dev surface has no Account Action admission');
+        },
         openNewSession: async () => {
             throw new Error('dev surface cannot open New Session');
         },
@@ -254,6 +258,9 @@ function createDemoSurfaceHost(initial: SurfaceContext): DemoSurfaceHost {
             throw new Error('dev surface has no Composer');
         },
         readComposer: async () => {
+            throw new Error('dev surface has no Composer');
+        },
+        readDiscussionComposer: async () => {
             throw new Error('dev surface has no Composer');
         },
         watchComposer: async () => {
@@ -405,6 +412,15 @@ function PluginStateSamples() {
                 <PluginStatus tone="success" label="Connected" testID="plugin-status-success" />
                 <PluginStatus tone="warning" label="Degraded" pulsing />
                 <PluginStatus tone="danger" label="Disconnected" />
+            </Sample>
+            <Sample title="Plugin ReviewSeverity">
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
+                    {(['blocker', 'high', 'medium', 'low', 'nit'] as const).map((severity) => (
+                        <PluginReviewSeverity key={severity} severity={severity} label={severity[0]!.toUpperCase() + severity.slice(1)} />
+                    ))}
+                    <PluginReviewSeverity severity="high" presentation="badge" label="High" />
+                    <PluginReviewSeverity severity="low" presentation="badge" label="Low" />
+                </View>
             </Sample>
             <PluginButtonSamples />
             <PluginActionSamples />

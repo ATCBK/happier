@@ -1,12 +1,17 @@
+import { maxCodeUnits } from '../strings/maxCodeUnits.js';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import {
-  ApprovalDecisionV1Schema,
   ApprovalExecutionOriginV1Schema,
-  ApprovalExecutionV1Schema,
+  ApprovalExecutionV2Schema,
   ApprovalRequestCreatedBySchema,
+  ApprovalRequesterConfirmationV1Schema,
+  ApprovalDecisionV2Schema,
+  isApprovalRequesterConfirmationBoundToOriginV1,
 } from './approvalRequestV1.js';
+import { parseQualifiedPluginActionId } from '../plugins/actions/qualifiedActionId.js';
+import { computeActionInputApprovalDigestV1 } from '../actions/decisionAuthority.js';
 import { AgentRuntimeJsonValueV1Schema } from '../runtime/agentSessionV1.js';
 import { PluginSourceCustodyV1Schema } from '../plugins/runtime/sourceCustody.js';
 import { InputPathSchema } from '../inputs/inputPredicates.js';
@@ -19,7 +24,7 @@ export const TARGET_ACTION_APPROVAL_LIMITS_V1 = Object.freeze({
   detailUtf16Units: 4_096,
 });
 
-const boundedId = z.string().check(z.minLength(1), z.maxLength(TARGET_ACTION_APPROVAL_LIMITS_V1.idUtf16Units));
+const boundedId = z.string().check(z.minLength(1), maxCodeUnits(TARGET_ACTION_APPROVAL_LIMITS_V1.idUtf16Units));
 
 const TargetActionApprovalStatusV1Schema = lazyZodSchema(() => z.enum([
   'open', 'approved', 'executing', 'rejected', 'executed', 'failed', 'canceled',
@@ -42,23 +47,37 @@ export const TargetActionApprovalRequestV1Schema = lazyZodSchema(() => z.strictO
   v: z.literal(1), kind: z.literal('plugin_target_action'), status: TargetActionApprovalStatusV1Schema,
   createdAtMs: z.number().check(z.int(), z.minimum(0)), updatedAtMs: z.number().check(z.int(), z.minimum(0)),
   createdBy: ApprovalRequestCreatedBySchema,
-  requestedSurface: z.string().check(z.minLength(1), z.maxLength(TARGET_ACTION_APPROVAL_LIMITS_V1.surfaceUtf16Units)),
-  qualifiedActionId: z.string().check(z.maxLength(TARGET_ACTION_APPROVAL_LIMITS_V1.idUtf16Units), z.regex(/^[a-z0-9][a-z0-9._-]*\/actions\/[a-z0-9][a-z0-9/-]*$/)),
+  requestedSurface: z.string().check(z.minLength(1), maxCodeUnits(TARGET_ACTION_APPROVAL_LIMITS_V1.surfaceUtf16Units)),
+  qualifiedActionId: z.string().check(maxCodeUnits(TARGET_ACTION_APPROVAL_LIMITS_V1.idUtf16Units), z.regex(/^[a-z0-9][a-z0-9._-]*\/actions\/[a-z0-9][a-z0-9/-]*$/)),
   input: AgentRuntimeJsonValueV1Schema, accountId: z.optional(boundedId), resourceId: z.optional(boundedId),
   /** Absent on older development requests, which remain readable but cannot disclose their input safely. */
   secretInputPaths: z.optional(z.array(InputPathSchema)),
   secretInputLabels: z.optional(z.record(InputPathSchema, z.string())),
-  /** Raw operands stay exclusively with the admitted blocking invocation. */
+  /** Replay requires the original live invocation, including any confidential raw operands. */
   approvalInputCustody: z.optional(z.literal('live_only')),
   sourceCustody: PluginSourceCustodyV1Schema,
   policyFingerprint: z.string().check(z.regex(/^[a-f0-9]{64}$/)),
   subjectFingerprint: z.string().check(z.regex(/^[a-f0-9]{64}$/)),
   replayPlacement: z.optional(TargetActionApprovalReplayPlacementV1Schema),
   executionOriginV1: z.optional(ApprovalExecutionOriginV1Schema),
-  summary: z.string().check(z.minLength(1), z.maxLength(TARGET_ACTION_APPROVAL_LIMITS_V1.summaryUtf16Units)),
-  detail: z.optional(z.string().check(z.minLength(1), z.maxLength(TARGET_ACTION_APPROVAL_LIMITS_V1.detailUtf16Units))),
-  decision: z.optional(ApprovalDecisionV1Schema), execution: z.optional(ApprovalExecutionV1Schema),
+  requesterConfirmation: z.optional(ApprovalRequesterConfirmationV1Schema),
+  summary: z.string().check(z.minLength(1), maxCodeUnits(TARGET_ACTION_APPROVAL_LIMITS_V1.summaryUtf16Units)),
+  detail: z.optional(z.string().check(z.minLength(1), maxCodeUnits(TARGET_ACTION_APPROVAL_LIMITS_V1.detailUtf16Units))),
+  decision: z.optional(ApprovalDecisionV2Schema), execution: z.optional(ApprovalExecutionV2Schema),
 }).check(z.superRefine((value, ctx) => {
+  if (value.requesterConfirmation) {
+    const invocation = projectTargetActionApprovalInvocationV1(value);
+    if (!value.executionOriginV1 || !isApprovalRequesterConfirmationBoundToOriginV1(value.requesterConfirmation, value.executionOriginV1)
+      || !invocation || value.requesterConfirmation.inputDigest !== computeActionInputApprovalDigestV1(invocation.actionId, invocation.actionArgs)) {
+      ctx.addIssue({ code: 'custom', path: ['requesterConfirmation'], message: 'Requester confirmation must bind the original target Action and execution origin' });
+    }
+    if (value.decision && (!ApprovalDecisionV2Schema.safeParse(value.decision).success
+      || value.decision.authority !== 'present_user'
+      || value.decision.decidingAccountId !== value.requesterConfirmation.requesterAccountId
+      || value.decision.narrowedInput !== undefined)) {
+      ctx.addIssue({ code: 'custom', path: ['decision'], message: 'Requester confirmation requires the exact deciding person' });
+    }
+  }
   if (value.status === 'open' && (value.decision || value.execution)) ctx.addIssue({ code: 'custom', message: 'open target-action approval cannot contain a decision or execution' });
   if ((value.status === 'approved' || value.status === 'executing' || value.status === 'executed' || value.status === 'failed') && value.decision?.kind !== 'approve') ctx.addIssue({ code: 'custom', message: `${value.status} target-action approval requires approve` });
   if (value.status === 'rejected' && value.decision?.kind !== 'reject') ctx.addIssue({ code: 'custom', message: 'rejected target-action approval requires reject' });
@@ -94,3 +113,15 @@ export const TargetActionApprovalRequestV1Schema = lazyZodSchema(() => z.strictO
 })));
 export type TargetActionApprovalRequestV1 = z.infer<typeof TargetActionApprovalRequestV1Schema>;
 export const StoredTargetActionApprovalRequestV1Schema = createStoredReadSchema(TargetActionApprovalRequestV1Schema);
+
+/** One canonical public invocation retained by the target approval subject. */
+export function projectTargetActionApprovalInvocationV1(
+  request: Pick<TargetActionApprovalRequestV1, 'qualifiedActionId' | 'input'>,
+): { actionId: 'action.invoke'; actionArgs: {
+  action: { pluginId: string; localId: string }; input: TargetActionApprovalRequestV1['input'];
+} } | null {
+  const action = parseQualifiedPluginActionId(request.qualifiedActionId);
+  return action ? { actionId: 'action.invoke' as const, actionArgs: {
+    action: { pluginId: action.pluginId, localId: action.localId }, input: request.input,
+  } } : null;
+}

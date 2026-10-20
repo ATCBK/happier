@@ -1,5 +1,7 @@
 import { accountSettingsParse, resolveAttentionDeliveryPolicyDecision, type AccountSettings, type AttentionDeliveryPolicyV1 } from '@happier-dev/protocol/account/settings/accountSettings';
 import { composeAttentionDeliveryPolicyDeviceOverrides } from '@happier-dev/protocol/account/settings/attentionDeliveryPolicy';
+import { readNextAttentionQuietHoursBoundaryMs } from '@happier-dev/protocol/account/settings/attentionDeliveryPolicyDecision';
+import type { ResolveAttentionDeliveryPolicyDecisionParams } from '@happier-dev/protocol/account/settings/attentionDeliveryPolicy';
 
 import {
     AttentionDeviceOverridesV1Schema,
@@ -34,21 +36,38 @@ type ResolveActivityAttentionDeliveryPlanParams = Readonly<{
     staleAfterMs?: number | null;
     dwellMs?: number | null;
     updateBudget?: ActivityAttentionUpdateBudgetHint | null;
+    follow?: ResolveAttentionDeliveryPolicyDecisionParams['follow'];
+    inboxItemType?: ResolveAttentionDeliveryPolicyDecisionParams['inboxItemType'];
 }>;
 
-// Badge and delivery selectors resolve the policy on every store change, and a
-// full Account settings parse dominated those passes. Settings objects are
-// replaced, never mutated, so the parsed policy is cached by object identity;
-// callers receive their own copy because policy composition mutates its result.
-const accountPolicyBySettings = new WeakMap<object, AttentionDeliveryPolicyV1>();
+type EffectivePolicy = Readonly<{
+    policy: AttentionDeliveryPolicyV1;
+    overrides: AttentionDeviceOverridesV1;
+}>;
 
-function readAccountPolicy(accountSettings: Partial<AccountSettings> | Readonly<Record<string, unknown>>): AttentionDeliveryPolicyV1 {
-    let policy = accountPolicyBySettings.get(accountSettings);
-    if (!policy) {
-        policy = accountSettingsParse(accountSettings).attentionDeliveryPolicyV1;
-        accountPolicyBySettings.set(accountSettings, policy);
+// Account and device settings are immutable revisions. Reuse their admission and
+// composition across events; time and foreground facts still enter each decision.
+const accountPolicyBySettings = new WeakMap<object, {
+    policy: AttentionDeliveryPolicyV1;
+    devices: WeakMap<object, EffectivePolicy>;
+}>();
+
+function readEffectivePolicy(params: Readonly<{
+    accountSettings: Partial<AccountSettings> | Readonly<Record<string, unknown>>;
+    localSettings: Partial<LocalSettings> | Readonly<Record<string, unknown>>;
+}>): EffectivePolicy {
+    let account = accountPolicyBySettings.get(params.accountSettings);
+    if (!account) {
+        account = { policy: accountSettingsParse(params.accountSettings).attentionDeliveryPolicyV1, devices: new WeakMap() };
+        accountPolicyBySettings.set(params.accountSettings, account);
     }
-    return structuredClone(policy);
+    let effective = account.devices.get(params.localSettings);
+    if (!effective) {
+        const overrides = readDeviceOverrides(params.localSettings);
+        effective = { policy: buildEffectivePolicy({ accountPolicy: account.policy, overrides }), overrides };
+        account.devices.set(params.localSettings, effective);
+    }
+    return effective;
 }
 
 function setChannelEventEnabled(
@@ -177,10 +196,10 @@ function readDeviceOverrides(
 }
 
 function buildEffectivePolicy(params: Readonly<{
-    accountSettings: Partial<AccountSettings> | Readonly<Record<string, unknown>>;
+    accountPolicy: AttentionDeliveryPolicyV1;
     overrides: AttentionDeviceOverridesV1;
 }>): AttentionDeliveryPolicyV1 {
-    const accountPolicy = readAccountPolicy(params.accountSettings);
+    const accountPolicy = structuredClone(params.accountPolicy);
     const overrides = params.overrides;
 
     if (!overrides.enabled) {
@@ -209,10 +228,18 @@ export function resolveEffectiveAttentionDeliveryPolicy(params: Readonly<{
     accountSettings: Partial<AccountSettings> | Readonly<Record<string, unknown>>;
     localSettings: Partial<LocalSettings> | Readonly<Record<string, unknown>>;
 }>): AttentionDeliveryPolicyV1 {
-    return buildEffectivePolicy({
-        accountSettings: params.accountSettings,
-        overrides: readDeviceOverrides(params.localSettings),
-    });
+    // Settings summaries may edit their returned projection; never expose the
+    // retained policy used by delivery admission to those consumers.
+    return structuredClone(readEffectivePolicy(params).policy);
+}
+
+/** Scheduling reads the same admitted device policy as delivery decisions. */
+export function readNextActivityAttentionDeliveryBoundaryMs(params: Readonly<{
+    accountSettings: Partial<AccountSettings> | Readonly<Record<string, unknown>>;
+    localSettings: Partial<LocalSettings> | Readonly<Record<string, unknown>>;
+    now: Date;
+}>): number | null {
+    return readNextAttentionQuietHoursBoundaryMs(readEffectivePolicy(params).policy, params.now);
 }
 
 function resolveActivitySurface(
@@ -229,11 +256,7 @@ function resolveActivitySurface(
 export function resolveActivityAttentionDeliveryPlan(
     params: ResolveActivityAttentionDeliveryPlanParams,
 ): ActivityAttentionDeliveryPlan {
-    const overrides = readDeviceOverrides(params.localSettings);
-    const policy = buildEffectivePolicy({
-        accountSettings: params.accountSettings,
-        overrides,
-    });
+    const { policy, overrides } = readEffectivePolicy(params);
     const terminalFrontmost = overrides.enabled && overrides.terminalSmartSuppression.enabled === false
         ? false
         : params.terminalFrontmost;
@@ -248,6 +271,8 @@ export function resolveActivityAttentionDeliveryPlan(
         terminalFrontmost,
         featureEnabled: params.featureEnabled,
         platformSupported: params.platformSupported,
+        follow: params.follow,
+        inboxItemType: params.inboxItemType,
     });
     const privacySurface = resolveActivitySurface(params.surface, params.channel);
     const previewBehavior = privacySurface

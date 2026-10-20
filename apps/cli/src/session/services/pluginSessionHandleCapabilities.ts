@@ -21,6 +21,9 @@ import { createPluginSessionSystemRecordsService } from '@/session/systemRecords
 import { setSessionTitle } from './setSessionTitle';
 import type { PluginSessionHandleCapabilities } from './pluginSessionsInventory';
 import type { PluginSourceCustodyV1 } from '@happier-dev/protocol';
+import type { AgentInvocationTurnAdmissionWitness } from '@/plugins/runtime/invocation/services/types';
+import { readActiveTurnPermissionContext } from '@/plugins/runtime/invocation/services/interactions';
+import { isAgentStructuredQuestionToolName } from '@/agent/permissions/requestKind';
 
 export type PluginSessionLiveCapabilities = Readonly<{
   scopeId: symbol;
@@ -30,6 +33,7 @@ export type PluginSessionLiveCapabilities = Readonly<{
   media?: SessionMediaService;
   signal?: AbortSignal;
   isCurrent?: () => boolean;
+  readActiveTurnAdmissionWitness?(): AgentInvocationTurnAdmissionWitness | null;
 }>;
 
 export type PluginSessionCapabilityCaller = Readonly<{
@@ -203,12 +207,16 @@ export function createPluginSessionHandleCapabilitiesFactory(
         const requestId = request.toolCallId?.trim()
           || request.requestId?.trim()
           || `plugin-session-permission:${randomUUID()}`;
+        const permissionContext = readActiveTurnPermissionContext(live);
+        const occurrenceQuestion = isAgentStructuredQuestionToolName(toolName);
         const result = await live.permissionHandler.handleToolCall(
           requestId,
           toolName,
           request.input ?? Object.freeze({}),
           {
             owner,
+            ...permissionContext,
+            ...(occurrenceQuestion ? { origin: 'host_occurrence_question' as const, lifetime: 'occurrence' as const } : {}),
             ...(request.source?.trim() ? { source: request.source.trim() } : {}),
             signal: operationSignal(live, options?.signal),
             ...(options?.acknowledgeDecisionApplication

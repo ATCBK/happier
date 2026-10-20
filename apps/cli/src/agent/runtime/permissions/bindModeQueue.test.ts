@@ -8,8 +8,12 @@ import type {
   PermissionModeQueuedPromptMode,
 } from '@/agent/runtime/permissions/queuedPrompt';
 import { combinePermissionModeQueuedPrompts } from '@/agent/runtime/permissions/queuedPrompt';
+import { buildTrustedHostSessionInputAdmissionV1, SessionInputRequestV1Schema, SessionInputRequestV2Schema, settleSessionInputRequestV1, settleSessionInputRequestV2,
+  withSessionInputAuthorityV1, withSessionInputAuthority } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { SessionFollowInputV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
 import {
   ProviderConnectionIdSchema,
+  withParticipantRecipientV1,
   buildMentionRefForKindV1,
   MENTION_KIND_V1,
   type ProviderBoundModelRef,
@@ -20,6 +24,124 @@ source_kind="legacyUnknown"
 </happier_input_context>`;
 
 describe('registerPermissionModeMessageQueueBinding', () => {
+  it('keeps independently cancellable wake replies separate even with the same admitted cause', async () => {
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(mode => JSON.stringify(mode), {
+      batcher: combinePermissionModeQueuedPrompts,
+    });
+    const harness = createSessionHarness();
+    registerPermissionModeMessageQueueBinding({ session: harness.session, queue,
+      getCurrentPermissionMode: () => 'default', setCurrentPermissionMode() {} });
+    const request = SessionInputRequestV1Schema.parse({ ...buildTrustedHostSessionInputAdmissionV1('agent').request,
+      returnedAnswer: { requestSessionId: 'receiver', requestLocalId: 'question', outcome: 'answer', delivery: 'wake' } });
+    const authority = settleSessionInputRequestV1({ request, currentSessionPermissionCeiling: 'default',
+      inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine' } });
+    for (const localId of ['cancelled-reply', 'valid-reply']) harness.emit({ role: 'user', localId,
+      content: { type: 'text', text: localId }, meta: withSessionInputAuthority({}, authority) });
+    const first = await queue.waitForMessagesAndGetAsString();
+    expect(first?.message).toMatchObject({ text: 'cancelled-reply', localIds: ['cancelled-reply'] });
+    expect((await queue.waitForMessagesAndGetAsString())?.message).toMatchObject({ text: 'valid-reply', localIds: ['valid-reply'] });
+  });
+
+  it('keeps only public-safe matched reasons from the exact admitted Follow receipt on its queued original', async () => {
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(() => 'mode', {
+      batcher: combinePermissionModeQueuedPrompts,
+    });
+    const harness = createSessionHarness();
+    registerPermissionModeMessageQueueBinding({ session: harness.session, queue,
+      getCurrentPermissionMode: () => 'default', setCurrentPermissionMode: () => {} });
+    const delivery = SessionFollowInputV1Schema.parse({ v: 1, delivery: 'next_turn',
+      original: { sourceSessionId: 'source', sourceMessage: { localId: 'source-original', seq: 2 } },
+      event: { kind: 'update_posted' } });
+    const inputAdmissionReceipt = { v: 1 as const, issuer: 'authenticatedMachine' as const,
+      admittedTarget: { homeId: 'home', accountId: 'owner', sessionId: 'receiver', machineId: 'machine', installationId: 'installation' },
+      followDeliveryV1: delivery,
+      followRelations: [{ relation: 'manager' as const, attachedAt: 1 }, { relation: 'follower' as const }],
+      followSources: [{ rule: { ruleId: 'private-rule', ruleVersion: 1 }, sourceSessionId: 'source',
+        destinationSessionId: 'receiver', evaluation: 'receiver' as const,
+        sourceMessage: { localId: 'source-original', seq: 2 } }],
+    };
+    const request = SessionInputRequestV1Schema.parse({ ...buildTrustedHostSessionInputAdmissionV1('agent').request,
+      followDeliveryV1: delivery });
+    const authority = settleSessionInputRequestV1({ request, currentSessionPermissionCeiling: 'default', inputAdmissionReceipt });
+    harness.emit({ role: 'user', content: { type: 'text', text: '' }, localId: 'follow-input', inputAdmissionReceipt,
+      meta: withSessionInputAuthorityV1({}, authority) });
+    const queued = await queue.waitForMessagesAndGetAsString();
+    expect(queued?.message.followDeliveries).toEqual([{ delivery, localInputId: 'follow-input', userMessageSeq: null,
+      followMatches: [{ kind: 'relation', relation: 'manager' }, { kind: 'relation', relation: 'follower' }, { kind: 'rule' }],
+    }]);
+    expect(JSON.stringify(queued)).not.toContain('private-rule');
+  });
+
+  it.each([1, 2] as const)('dequeues two admitted V%s Discussion questions as separate native prompts before a later peer answer', async version => {
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(() => 'same-provider-mode', {
+      batcher: combinePermissionModeQueuedPrompts,
+    });
+    const harness = createSessionHarness();
+    registerPermissionModeMessageQueueBinding({ session: harness.session, queue,
+      getCurrentPermissionMode: () => 'default', setCurrentPermissionMode: () => {} });
+    for (const [index, text] of ['first-question', 'second-question'].entries()) {
+      const discussionAddressing = { discussionId: 'discussion', messageId: `question-${index}`, throughSeq: index + 2, participantSessionId: 'receiver' };
+      const request = version === 1 ? SessionInputRequestV1Schema.parse({ ...buildTrustedHostSessionInputAdmissionV1('agent').request,
+        discussionAddressing, replyIntent: { mode: 'return' } }) : SessionInputRequestV2Schema.parse({ v: 2,
+        producer: 'workflow', caller: { kind: 'host' }, permission: {},
+        workflow: { purpose: 'invocation', runId: 'workflow', invocationRecordId: `invocation-${index}` },
+        discussionAddressing, replyIntent: { mode: 'wait' } });
+      const inputAdmissionReceipt = { v: 1 as const, issuer: 'authenticatedMachine' as const, discussionAddressing,
+        admittedTarget: { homeId: 'home', accountId: 'owner', sessionId: 'receiver', machineId: 'machine', installationId: 'installation' } };
+      const authority = request.v === 1 ? settleSessionInputRequestV1({ request, currentSessionPermissionCeiling: 'default', inputAdmissionReceipt })
+        : settleSessionInputRequestV2({ request, currentSessionPermissionCeiling: 'default', inputAdmissionReceipt });
+      harness.emit({ role: 'user', content: { type: 'text', text }, localId: `input-${index}`, inputAdmissionReceipt,
+        meta: withSessionInputAuthority({}, authority) });
+    }
+    harness.emit({ role: 'user', content: { type: 'text', text: 'later-peer-answer' }, localId: 'later', meta: {} });
+    const first = await queue.waitForMessagesAndGetAsString();
+    expect(first).toMatchObject({ isolate: true, message: { localId: 'input-0', discussionAddressing: { messageId: 'question-0', throughSeq: 2 } } });
+    expect(first?.message.text).toContain('first-question');
+    expect(first?.message.text).not.toContain('second-question');
+    expect(first?.message.text).not.toContain('later-peer-answer');
+    const second = await queue.waitForMessagesAndGetAsString();
+    expect(second).toMatchObject({ isolate: true, message: { localId: 'input-1', discussionAddressing: { messageId: 'question-1', throughSeq: 3 } } });
+    expect(second?.message.text).toContain('second-question');
+    expect(second?.message.text).not.toContain('later-peer-answer');
+    expect((await queue.waitForMessagesAndGetAsString())?.message.text).toContain('later-peer-answer');
+  });
+  it.each([
+    { kind: 'agent_team_member' as const, teamId: 'team-a', memberId: 'member-a' },
+    { kind: 'agent_team_broadcast' as const, teamId: 'team-a' },
+  ])('refuses retained $kind input before config changes, steer or primary batching', async (recipient) => {
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>((mode) => JSON.stringify(mode), { batcher: combinePermissionModeQueuedPrompts });
+    const harness = createSessionHarness();
+    let current: PermissionMode | undefined = 'default';
+    let inFlight = false;
+    const rejected = vi.fn();
+    const steerText = vi.fn(async () => {});
+    registerPermissionModeMessageQueueBinding({
+      session: harness.session, queue,
+      getCurrentPermissionMode: () => current,
+      setCurrentPermissionMode: (mode) => { current = mode; },
+      inFlightSteer: { isTurnInFlight: () => inFlight, supportsInFlightSteer: () => true,
+        steerText, registerProviderAcceptedEffect: () => {}, rejectPromptBeforeProvider: rejected },
+    });
+    harness.emit({ role: 'user', content: { type: 'text', text: 'primary before' }, localId: 'primary-before', meta: {} });
+    for (const busy of [false, true]) {
+      inFlight = busy;
+      harness.emit({ role: 'user', content: { type: 'text', text: 'native-only secret' }, localId: `native-${busy}`,
+        meta: withParticipantRecipientV1({ permissionMode: 'bypassPermissions' }, recipient) });
+    }
+    inFlight = false;
+    harness.emit({ role: 'user', content: { type: 'text', text: 'primary after' }, localId: 'primary-after', meta: {} });
+    expect(current).toBe('default');
+    expect(harness.getMetadata().permissionMode).toBe('default');
+    expect(rejected.mock.calls.map(([info]) => info)).toMatchObject([
+      { localIds: ['native-false'], reason: 'unsupported_action' },
+      { localIds: ['native-true'], reason: 'unsupported_action' },
+    ]);
+    expect((await queue.waitForMessagesAndGetAsString())?.message).toMatchObject({
+      text: 'primary before\nprimary after', localIds: ['primary-before', 'primary-after'],
+    });
+    expect(steerText).not.toHaveBeenCalled();
+  });
+
   it('rejects a restricted mode before metadata mutation and preserves unrestricted input', async () => {
     const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>((mode) => JSON.stringify(mode), { batcher: combinePermissionModeQueuedPrompts });
     const harness = createSessionHarness();
@@ -116,6 +238,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
       session: sessionHarness.session,
       agentTargetKey: 'agent:happier.agent.opencode/opencode',
       queue: {
+        getContextOnlyMessages: () => [],
         push: (message: PermissionModeQueuedPrompt, mode: PermissionModeQueuedPromptMode) =>
           queueCalls.push({ type: 'push', message, mode }),
         pushIsolate: (message: PermissionModeQueuedPrompt, mode: PermissionModeQueuedPromptMode) =>
@@ -233,6 +356,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
     const binding = registerPermissionModeMessageQueueBinding({
       session,
       queue: {
+        getContextOnlyMessages: () => [],
         push: (message: PermissionModeQueuedPrompt) => queueCalls.push({ message }),
         pushIsolate: (message: PermissionModeQueuedPrompt) => queueCalls.push({ message }),
         pushIsolateAndClear: (message: PermissionModeQueuedPrompt) => queueCalls.push({ message }),
@@ -283,6 +407,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
     registerPermissionModeMessageQueueBinding({
       session: sessionHarness.session,
       queue: {
+        getContextOnlyMessages: () => [],
         push: (message: PermissionModeQueuedPrompt) => queueCalls.push({ type: 'push', message }),
         pushIsolate: (message: PermissionModeQueuedPrompt) => queueCalls.push({ type: 'isolate', message }),
         pushIsolateAndClear: (message: PermissionModeQueuedPrompt) => queueCalls.push({ type: 'clear', message }),
@@ -331,6 +456,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
     registerPermissionModeMessageQueueBinding({
       session: sessionHarness.session,
       queue: {
+        getContextOnlyMessages: () => [],
         push: (message: PermissionModeQueuedPrompt) => queueCalls.push({ type: 'push', message }),
         pushIsolate: (message: PermissionModeQueuedPrompt) => queueCalls.push({ type: 'isolate', message }),
         pushIsolateAndClear: (message: PermissionModeQueuedPrompt) => queueCalls.push({ type: 'clear', message }),
@@ -550,6 +676,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
         getCommittedUserMessageSeq: (localId: string) => (localId === 'local-seq-1' ? 42 : null),
       },
       queue: {
+        getContextOnlyMessages: () => [],
         push: (message: PermissionModeQueuedPrompt) => queueCalls.push({ message }),
         pushIsolate: (message: PermissionModeQueuedPrompt) => queueCalls.push({ message }),
         pushIsolateAndClear: (message: PermissionModeQueuedPrompt) => queueCalls.push({ message }),
@@ -592,6 +719,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
         getCommittedUserMessageSeq: (localId: string) => (localId === 'local-dup-1' ? 7 : null),
       },
       queue: {
+        getContextOnlyMessages: () => [],
         push: (message: PermissionModeQueuedPrompt) => queueCalls.push({ message }),
         pushIsolate: (message: PermissionModeQueuedPrompt) => queueCalls.push({ message }),
         pushIsolateAndClear: (message: PermissionModeQueuedPrompt) => queueCalls.push({ message }),
@@ -900,6 +1028,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
     registerPermissionModeMessageQueueBinding({
       session: sessionHarness.session,
       queue: {
+        getContextOnlyMessages: () => [],
         push: (message: PermissionModeQueuedPrompt) => {
           queueCalls.push(message);
         },
@@ -976,6 +1105,7 @@ describe('registerPermissionModeMessageQueueBinding', () => {
     registerPermissionModeMessageQueueBinding({
       session,
       queue: {
+        getContextOnlyMessages: () => [],
         push: (message: PermissionModeQueuedPrompt) => queueCalls.push(message),
         pushIsolate: (message: PermissionModeQueuedPrompt) => queueCalls.push(message),
         pushIsolateAndClear: (message: PermissionModeQueuedPrompt) => queueCalls.push(message),

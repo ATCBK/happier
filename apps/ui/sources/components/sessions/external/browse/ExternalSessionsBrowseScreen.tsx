@@ -55,7 +55,8 @@ import {
     ExternalSessionBrowseCandidatesList,
     type ExternalSessionBrowseScope,
 } from './ExternalSessionBrowseCandidatesList';
-import { openExternalSessionCandidate, type ExternalSessionCandidateOpenState } from './openExternalSessionCandidate';
+import { cancelExternalSessionCandidateOpen, openExternalSessionCandidate, type ExternalSessionCandidateOpenState } from './openExternalSessionCandidate';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import {
     readExternalSessionBrowseCandidateKey,
     readExternalSessionBrowseCandidatePath,
@@ -69,7 +70,7 @@ import {
 import { readMachineName } from '@/utils/sessions/machineDisplayNames';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { useConversationSearch } from '@/sync/domains/search/useConversationSearch';
-import { hasConversationSearchScanFallback } from '@/sync/domains/search/searchConversations';
+import { hasConversationSearchScanFallback, isConversationSearchOnDemandOff } from '@/sync/domains/search/searchConversations';
 import { useMemorySearchProvider } from '@/sync/domains/memory/useMemorySearchProvider';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
@@ -144,6 +145,8 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
     );
     const autoLinkMutationPendingRef = React.useRef(false);
     const candidateOpenStateRef = React.useRef<ExternalSessionCandidateOpenState>({ requestToken: 0, linkingCandidateKey: null });
+    const presentationActive = useLayoutPresentationActive();
+    const deleteControllerRef = React.useRef<AbortController | null>(null);
     const [autoLinkMutationPending, setAutoLinkMutationPending] = React.useState(false);
     const [daemonProjectionRefreshKey, setDaemonProjectionRefreshKey] = React.useState(0);
     const administrationTargetSelection = useMachineAdministrationTargetSelection(
@@ -459,10 +462,15 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
         enabled: searchTarget === 'content' && daemonMergedProjectionReady && contentSource !== undefined,
     });
     const contentCandidates = contentSource && effectiveSelectedMachineId
-        ? projectConversationSearchCandidates(contentResults.result?.hits ?? [], { ...contentSource, machineId: effectiveSelectedMachineId }) : [];
+        ? projectConversationSearchCandidates(contentResults.result?.hits ?? [], { ...contentSource, machineId: effectiveSelectedMachineId }, searchQuery) : [];
+    const contentFailure = contentResults.result?.failures?.find(failure => failure.machineId === effectiveSelectedMachineId
+        && failure.agentId === contentSource?.agentId && failure.sourceKey === contentSource.sourceKey);
     const contentContinuation = contentResults.result?.continuations?.[0];
     const contentIndexReady = contentResults.result?.sources?.[0]?.indexReady === true;
     const contentScanAvailable = contentSearchSupported && hasConversationSearchScanFallback(contentResults.result);
+    // Return runs a scan; with Search on demand off on this machine (and no ready index) it cannot, so say why.
+    const contentOnDemandOff = contentSearchSupported && !contentIndexReady
+        && isConversationSearchOnDemandOff(contentResults.result, effectiveSelectedMachineId);
     const contentSearchSubmitted = searchTarget === 'content' && searchQuery.trim().length > 0
         && (explicitContentSearchSubmitted || contentIndexReady || contentCandidates.length > 0);
     const {
@@ -494,7 +502,8 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
         loading: contentResults.loading && contentCandidates.length === 0, loadingMore: contentResults.loading && contentCandidates.length > 0,
         searchAugmenting: false, searchIncomplete: false, annotationsIncomplete: false, preparation: null, preparationStopped: false,
         cancelled: contentResults.cancelled === true, autoLinkPolicyScope: null, candidateDeleteSupported: false,
-        error: contentResults.error ? t('externalSessions.browseFailedToLoad') : null,
+        error: contentFailure ? resolveExternalSessionBrowseRpcErrorMessage(contentFailure.errorCode, 'list', { retryable: contentFailure.retryable })
+            : contentResults.error ? resolveExternalSessionBrowseThrownErrorMessage(contentResults.error, 'list') : null,
         loadMore: () => contentContinuation ? contentResults.loadMore(contentContinuation) : Promise.resolve(),
         cancelPreparation: contentResults.cancel, reload: contentResults.reload, removeCandidate: metadataResults.removeCandidate,
     };
@@ -636,7 +645,7 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
         // A machine with no name is "this machine" in the copy, never its id.
         return candidate ? readMachineAdministrationCandidateName(candidate) : null;
     }, [administrationTargetSelection, effectiveSelectedMachineId, lockScope, machines]);
-    const contentCoverageLabel = contentResults.result ? describeConversationSearchCoverage({
+    const contentCoverageLabel = contentResults.result && !contentFailure ? describeConversationSearchCoverage({
         machines: contentResults.result.machines, machineName: () => selectedMachineLabel ?? effectiveSelectedMachineId ?? '',
     }) : '';
     const selectedMachineHomeDir = React.useMemo(() => {
@@ -654,13 +663,17 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
      * pending row.
      */
     React.useEffect(() => {
-        candidateOpenStateRef.current.requestToken += 1;
-        candidateOpenStateRef.current.linkingCandidateKey = null;
+        cancelExternalSessionCandidateOpen(candidateOpenStateRef.current);
         setLinkingSessionId(null);
         deleteRequestTokenRef.current += 1;
         deletingCandidateKeyRef.current = null;
         setDeletingCandidateKey(null);
-    }, [candidateActionAuthorityGeneration]);
+        return () => {
+            cancelExternalSessionCandidateOpen(candidateOpenStateRef.current);
+            deleteRequestTokenRef.current += 1;
+            deleteControllerRef.current?.abort();
+        };
+    }, [candidateActionAuthorityGeneration, presentationActive]);
 
     const handleOpenCandidate = React.useCallback(async (
         candidate: ExternalSessionBrowseCandidate,
@@ -668,7 +681,7 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
     ) => {
         await openExternalSessionCandidate({
             candidate, agentId: selectedProviderId, source: selectedSource, interaction,
-            actionsAllowed: candidateActionsAllowed && effectiveSelectedMachineId !== null
+            actionsAllowed: presentationActive && candidateActionsAllowed && effectiveSelectedMachineId !== null
                 && (searchTarget !== 'content' || candidate.match !== undefined),
             offline: selectedMachineIsOffline,
             isSelectionCurrent: () => candidateActionAuthorityRef.current.generation === selectionAuthorityGeneration,
@@ -682,7 +695,7 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
             } : {}),
             openSession: (sessionId, target, find) => {
                 const authority = props.accountLifetime ?? (target.serverId
-                    ? paneContext?.fileFindSeedAccountBindings.get(target.serverId) : null);
+                    ? paneContext?.fileFindSeedAccountBindings.get(resolveServerProfileScopeIdForIdentifier(target.serverId)) : null);
                 return openChatWithFindSeed({
                     handoff: paneContext?.fileFindSeedHandoff,
                     destination: { sessionId, serverId: target.serverId ?? '' }, seed: find, authority,
@@ -690,7 +703,7 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
                 });
             },
         });
-    }, [candidateActionsAllowed, searchQuery, effectiveSelectedMachineId, interaction, paneContext, props, resolveCurrentOperationTarget, router, searchTarget, selectedMachineIsOffline, selectedProviderId, selectedSource]);
+    }, [presentationActive, candidateActionsAllowed, searchQuery, effectiveSelectedMachineId, interaction, paneContext, props, resolveCurrentOperationTarget, router, searchTarget, selectedMachineIsOffline, selectedProviderId, selectedSource]);
 
     /**
      * Delete one Agent-owned session behind the canonical destructive
@@ -708,7 +721,7 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
          * ref written here can stop the second from opening its own
          * confirmation and sending its own irreversible deletion.
          */
-        if (deletingCandidateKeyRef.current !== null) return;
+        if (!presentationActive || deletingCandidateKeyRef.current !== null) return;
         /**
          * The press carries the generation of the listing that rendered the
          * row. A confirmation opened on the previous scope's row must not be
@@ -726,8 +739,12 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
         // resolves after an Account switch may neither alert nor mutate rows in
         // the Account the user moved to.
         const accountCurrentness = captureActiveServerAccountScopeCurrentness();
+        const controller = new AbortController();
+        deleteControllerRef.current = controller;
+        const retirement = accountCurrentness.onRetire(() => controller.abort());
         const requestIsCurrent = () => (
             deleteRequestTokenRef.current === requestToken
+            && !controller.signal.aborted
             && candidateActionAuthorityRef.current.generation === selectionAuthorityGeneration
             && accountCurrentness.isCurrent()
         );
@@ -761,8 +778,8 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
                 remoteSessionId: candidate.remoteSessionId,
             };
             const result = currentTarget.serverId
-                ? await machineExternalSessionCandidateDelete(request, { serverId: currentTarget.serverId })
-                : await machineExternalSessionCandidateDelete(request);
+                ? await machineExternalSessionCandidateDelete(request, { serverId: currentTarget.serverId, signal: controller.signal })
+                : await machineExternalSessionCandidateDelete(request, { signal: controller.signal });
             if (!requestIsCurrent()) return;
             if (!result.ok) {
                 Modal.alert(
@@ -782,12 +799,15 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
                 resolveExternalSessionBrowseThrownErrorMessage(deleteError, 'delete'),
             );
         } finally {
+            retirement.dispose();
+            if (deleteControllerRef.current === controller) deleteControllerRef.current = null;
             if (deleteRequestTokenRef.current === requestToken) {
                 deletingCandidateKeyRef.current = null;
                 setDeletingCandidateKey(null);
             }
         }
     }, [
+        presentationActive,
         removeCandidate,
         resolveCurrentOperationTarget,
         selectedAgentProjection?.title,
@@ -951,7 +971,7 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
     ]);
     const onRequestClose = props.onRequestClose ?? (() => router.back());
     // Titles | Conversations is part of asking (Find lab H2): beside the field on wide layouts, its own row
-    // on a phone where the field needs the width.
+    // on a phone where the field needs the width, a row beneath the field like a search scope bar.
     const searchTargetControl = (
         <SegmentedTabBar
             role="radiogroup"
@@ -968,8 +988,9 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
                 setSearchTarget(target);
             }}
             compact
-            // Each choice hugs its word: an even split clipped "Conversations" inside its segment.
-            segmentSizing="content"
+            // In the band each choice hugs its word (an even split clipped "Conversations"); on a phone the bar
+            // spans its row, where an even split has room for both.
+            segmentSizing={phone ? 'equal' : 'content'}
             targetSize="platform"
         />
     );
@@ -1002,7 +1023,6 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
                 // The band has no title; the dialog keeps its name.
                 accessibilityLabel={t('externalSessions.browseHeaderTitle')}
             >
-                {phone ? searchTargetControl : null}
                 <ExternalSessionBrowseCandidatesList
                     candidates={candidates}
                     loading={loading}
@@ -1034,6 +1054,7 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
                     scope={browseScope}
                     filters={filters}
                     bandTrailing={bandTrailing}
+                    searchTargetRow={phone ? searchTargetControl : undefined}
                     searchPlaceholder={searchPlaceholder}
                     alternativeAgent={alternativeAgent}
                     searchQuery={searchQuery}
@@ -1042,6 +1063,10 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
                     contentSearchExplicitlyUnsupported={contentSearchCapability === false && !contentIndexReady}
                     contentSearchSubmitted={contentSearchSubmitted}
                     contentScanAvailable={contentScanAvailable}
+                    {...(contentOnDemandOff ? { onOpenContentSearchSettings: () => {
+                        if (props.closeButton) onRequestClose();
+                        router.push(SETTINGS_ROUTES.search as never);
+                    } } : {})}
                     contentCoverageLabel={contentCoverageLabel}
                     contentCoverage={contentCoverage}
                     onSearchSubmit={handleContentSearchSubmit}
@@ -1062,12 +1087,13 @@ export const ExternalSessionsBrowseScreen = React.memo((props: Readonly<{
                         : {})}
                     onLoadMore={() => { void loadMore(); }}
                     onCancelPreparation={cancelPreparation}
-                    onRetry={() => {
+                    onRetry={searchTarget === 'content' && contentFailure?.retryable === false ? undefined : () => {
                         if (daemonMergedProjection.phase !== 'ready' && effectiveSelectedMachineId) {
                             setDaemonProjectionRefreshKey((current) => current + 1);
                             return;
                         }
-                        void (nextCursor ? loadMore() : reload());
+                        void (searchTarget === 'content' && contentFailure ? contentResults.loadMore(contentFailure)
+                            : nextCursor ? loadMore() : reload());
                     }}
                     onRequestClose={onRequestClose}
                 />

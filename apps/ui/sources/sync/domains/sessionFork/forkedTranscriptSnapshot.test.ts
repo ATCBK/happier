@@ -18,7 +18,7 @@ function userMessage(id: string, seq: number, text: string): Message {
   };
 }
 
-function visualToolMessage(id: string, seq: number): Message {
+function visualToolMessage(id: string, seq: number): Extract<Message, { kind: 'tool-call' }> {
   return { kind: 'tool-call', id, seq, localId: null, createdAt: seq * 10, children: [],
     tool: { id: 'visual-provider-call', name: 'session_board_item_upsert', state: 'completed', input: {},
       createdAt: seq * 10, startedAt: seq * 10, completedAt: seq * 10, description: null } };
@@ -76,8 +76,9 @@ describe('getForkedTranscriptSnapshotCached', () => {
       status: 'copied' as const, itemId: 'child-chart' }];
     const imported = { ...userMessage('retained-imported', 20, 'visual'),
       meta: { forkVisualOriginV1: { ...origin, retired: true } } };
+    const retainedVisuals = { v: 1 as const, copies: copies.map(copy => ({ ...copy, retired: { enabled: true } })), retired: true };
     const state = createState({ sessions: { 'retained-child': sessionRow('retained-child', { path: '', host: '',
-      forkVisualsV1: { v: 1, copies: copies.map(copy => ({ ...copy, retired: { enabled: true } })), retired: true },
+      forkVisualsV1: retainedVisuals,
     }) }, sessionMessages: { 'retained-child': sessionMessagesRow({ idsOldestFirst: ['retained-imported'],
       messagesById: { 'retained-imported': imported }, messagesVersion: 1, isLoaded: true }) } });
 

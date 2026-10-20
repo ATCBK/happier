@@ -1,4 +1,4 @@
-import type { ActionId, RuntimeActionExecute } from '@happier-dev/protocol';
+import type { ActionId, RuntimeActionExecuteArgs } from '@happier-dev/protocol';
 import { ActionApprovalRequestCreatedResultSchema, type ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { HappyError } from '@/utils/errors/errors';
 
@@ -7,14 +7,27 @@ import { createDefaultActionExecutor, type UiActionExecutorContext } from './def
 type ActionExecutorLike = Pick<ReturnType<typeof createDefaultActionExecutor>, 'execute'> &
   Partial<Pick<ReturnType<typeof createDefaultActionExecutor>, 'prepare'>>;
 export type FrontDoorActionExecute = ActionExecutorLike['execute'] & Pick<ReturnType<typeof createDefaultActionExecutor>, 'prepare'>;
+/** The UI front door admits the full Action catalog, including setup before a runtime effect. */
+export type FrontDoorRuntimeActionExecute = (
+  args: Omit<RuntimeActionExecuteArgs, 'actionId'> & Readonly<{ actionId: ActionId }>,
+  options?: Pick<NonNullable<Parameters<typeof createDefaultActionExecutor>[0]>, 'presentUserActionConfirmation'>,
+) => Promise<unknown>;
 export type UiActionOperation = Pick<UiActionExecutorContext,
-  'signal' | 'presentUserConfirmation' | 'defaultSessionId' | 'actionRequestId' | 'onTransportIssued'>;
+  'signal' | 'presentUserConfirmation' | 'defaultSessionId' | 'actionRequestId' | 'onTransportIssued' | 'isPluginSettingsIntentCurrent'
+  | 'executionRunTargetMachineId' | 'executionRunLaunchOrigin' | 'externalActionTarget' | 'openRoute'>;
 
-/** Retain typed refusal and pending-approval custody for callers with a void effect contract. */
-export function requireActionSuccess(result: ActionExecuteResult): void {
+/** Retain typed refusal and pending custody instead of exposing either as a completed effect. */
+export function requireActionSuccess(result: ActionExecuteResult): asserts result is Extract<ActionExecuteResult, { ok: true }> {
   if (!result.ok) throw new HappyError(result.error, false, { code: result.errorCode, details: result.details });
   const approval = ActionApprovalRequestCreatedResultSchema.safeParse(result.result);
   if (approval.success) throw new HappyError(approval.data.kind, false, { code: approval.data.kind, details: approval.data });
+}
+
+/** The deferred approval {@link requireActionSuccess} threw, so a caller can wait on it instead of failing. */
+export function readActionApprovalRequestCreatedError(error: unknown): Readonly<{ artifactId: string }> | null {
+  if (!(error instanceof HappyError) || error.code !== 'approval_request_created') return null;
+  const approval = ActionApprovalRequestCreatedResultSchema.safeParse(error.details);
+  return approval.success ? { artifactId: approval.data.artifactId } : null;
 }
 
 /**
@@ -78,10 +91,13 @@ export function createFrontDoorUiActionExecutor(
       ...(options?.defaultSessionId ? { defaultSessionId: options.defaultSessionId } : {}),
       ...(options?.actionRequestId ? { actionRequestId: options.actionRequestId } : {}),
       ...(options?.onTransportIssued ? { onTransportIssued: options.onTransportIssued } : {}),
+      ...(options?.isPluginSettingsIntentCurrent ? { isPluginSettingsIntentCurrent: options.isPluginSettingsIntentCurrent } : {}),
+      ...(options?.executionRunTargetMachineId ? { executionRunTargetMachineId: options.executionRunTargetMachineId } : {}),
+      ...(options?.executionRunLaunchOrigin ? { executionRunLaunchOrigin: options.executionRunLaunchOrigin } : {}),
+      ...(options?.externalActionTarget ? { externalActionTarget: options.externalActionTarget } : {}),
+      ...(options?.openRoute ? { openRoute: options.openRoute } : {}),
     });
-    if (!result.ok) {
-      throw new Error(result.error);
-    }
+    requireActionSuccess(result);
     return result.result;
   };
 }
@@ -102,10 +118,12 @@ export function createFrontDoorUiActionExecutor(
  */
 export function createFrontDoorRuntimeActionExecutor(
   executor?: ActionExecutorLike,
-): RuntimeActionExecute {
+): FrontDoorRuntimeActionExecute {
   const execute = createFrontDoorActionExecute(executor);
-  return async ({ actionId, input, context }) => {
-    const result = await execute(actionId, input, context);
+  return async ({ actionId, input, context }, options) => {
+    // Presentation stays private to this invocation; the shared policy still decides whether to ask.
+    const dispatch = options?.presentUserActionConfirmation ? createFrontDoorActionExecute(executor, options) : execute;
+    const result = await dispatch(actionId, input, context);
     return result.ok ? result.result : result;
   };
 }

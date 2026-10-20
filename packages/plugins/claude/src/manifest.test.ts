@@ -11,14 +11,22 @@ describe('Claude plugin manifest', () => {
     expect(result.manifest.contributes.agents[0]?.capabilities.skills?.nativeRoots?.plugin)
       .toEqual([['.claude', 'plugins', 'cache', '*', '{plugin}', '*', 'skills']]);
   });
-  it('makes both native team launch Actions callable by agents with their strict input schemas', () => {
+  it('makes both native team launch Actions callable across UI, agent, CLI and MCP with their strict input schemas', () => {
     const admitted = ingestPluginManifestV2(PLUGIN_MANIFEST);
     expect(admitted).toMatchObject({ ok: true });
     for (const id of ['subagent-team-launch', 'subagent-member-launch'] as const) {
       const action = PLUGIN_MANIFEST.contributes.actions.find((entry) => entry.id === id);
       expect(action).toMatchObject({
-        surfaces: expect.arrayContaining(['ui', 'agent']),
+        surfaces: ['ui', 'agent', 'cli', 'mcp'],
+        hostAccess: ['claude-session-runtime-control'],
         inputSchema: { type: 'object', additionalProperties: false },
+        inputHints: { fields: expect.arrayContaining([
+          expect.objectContaining({ path: 'teamId', required: true, widget: 'text' }),
+          ...(id === 'subagent-member-launch' ? [
+            expect.objectContaining({ path: 'memberLabel', required: true, widget: 'text' }),
+            expect.objectContaining({ path: 'instructions', required: true, widget: 'textarea' }),
+          ] : []),
+        ]) },
       });
     }
   });

@@ -104,6 +104,24 @@ function sessionSpawnSuccess(sessionId: string) {
 }
 
 describe('happier session create (action executor)', () => {
+  it.each([
+    { status: 'accepted', localId: 'initial-input' },
+    { status: 'rejected', code: 'session_input_storage_unavailable' },
+    { status: 'outcomeUnknown', localId: 'initial-input', code: 'session_input_admission_outcome_unknown' },
+  ] as const)('preserves nested initial input $status after successful Session creation', async (initialInput) => {
+    const success = sessionSpawnSuccess('sess-input');
+    execute.mockResolvedValueOnce({ ...success, result: { ...success.result, initialInput } });
+    const output = captureConsoleJsonOutput();
+    try {
+      await handleSessionCommand(['create', '--path', '/tmp', '--prompt', 'Hello', '--json'], {
+        readCredentialsFn: async () => ({ token: 'token_test', encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) } }),
+      });
+      expect(output.json()).toMatchObject({ ok: true, kind: 'session_create', data: {
+        created: true, session: { id: 'sess-input' }, initialInput,
+      } });
+    } finally { output.restore(); }
+  });
+
   it('prints usage and does not execute any action when --help is requested', async () => {
       const output = captureConsoleText();
     try {
@@ -227,7 +245,7 @@ describe('happier session create (action executor)', () => {
         v: 1,
         ok: true,
         kind: 'session_create',
-        data: { created: true, session: { id: 'sess-wait' } },
+        data: { created: true, session: { id: 'sess-wait' }, initialInput: { status: 'notRequested' } },
       });
     } finally {
       output.restore();
@@ -328,7 +346,7 @@ describe('happier session create (action executor)', () => {
           v: 1,
           ok: true,
           kind: 'session_create',
-          data: { created: true, session: { id: 'sess-follow' } },
+          data: { created: true, session: { id: 'sess-follow' }, initialInput: { status: 'notRequested' } },
         },
         {
           id: 'row-1',
@@ -380,7 +398,7 @@ describe('happier session create (action executor)', () => {
         v: 1,
         ok: true,
         kind: 'session_create',
-        data: { created: true, session: { id: 'sess-empty' } },
+        data: { created: true, session: { id: 'sess-empty' }, initialInput: { status: 'notRequested' } },
       }]);
       expect(process.exitCode ?? 0).toBe(0);
     } finally {
@@ -447,7 +465,7 @@ describe('happier session create (action executor)', () => {
           v: 1,
           ok: true,
           kind: 'session_create',
-          data: { created: true, session: { id: 'sess-follow-failure' } },
+          data: { created: true, session: { id: 'sess-follow-failure' }, initialInput: { status: 'notRequested' } },
         },
         {
           v: 1,

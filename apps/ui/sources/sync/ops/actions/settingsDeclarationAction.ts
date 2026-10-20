@@ -1,4 +1,7 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
+import { ActionPolicyInputSchemas, isActionPolicyActionId, readActionAudiencePolicy,
+    setActionAudiencePolicy, type ActionPolicyActionId, type ActionAudiencePolicyResult } from '@happier-dev/protocol/actions';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { SettingsDeclarationActionInputSchemasV1, SettingsDeclarationActionOutputSchemasV1, SettingsDeclarationValueV1Schema, SettingsDeclarationMutationReversalV1Schema, SettingsDeclarationCapturedMutationV1Schema, type SettingsDeclarationActionIdV1, type SettingsDeclarationDescriptorV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 import { AccountSettingMutationV1Schema, applyAccountSettingMutationV1 } from '@happier-dev/protocol/account/settings/accountSettingMutationV1';
 import { captureSettingMutationV1, restoreSettingMutationV1 } from '@happier-dev/protocol/actions/settings/settingMutationReversal';
@@ -11,7 +14,7 @@ import type { ActionApprovalRequestCreatedResult } from '@happier-dev/protocol/a
 import { isAccountSettingActionSurfaceAllowedV1 } from '@happier-dev/protocol/actions/accountSettingDeclarations';
 
 import { getSettingsPageDeclarations } from '@/components/settings/catalog/settingsPageDeclarations';
-import { buildSettingHref, settingRendersOnHost, settingTargetKinds, SETTING_VALUE_UNAVAILABLE, type SettingRef, type SettingsHost, type SettingsMutationServices } from '@/components/settings/catalog/settingDeclarations';
+import { buildSettingHref, readBuiltInAccountSettingUiRef, settingRendersOnHost, settingTargetKinds, SETTING_VALUE_UNAVAILABLE, type SettingRef, type SettingsHost, type SettingsMutationServices } from '@/components/settings/catalog/settingDeclarations';
 import { flattenSettingsPageCatalog, SETTINGS_PAGE_CATALOG } from '@/components/settings/catalog/pageCatalog';
 import type { SettingsPageGate } from '@/components/settings/catalog/types';
 import { resolveSettingsPageGateUnavailableReason } from '@/components/settings/catalog/settingsPageGateAvailability';
@@ -35,7 +38,7 @@ import { MachineInstallablePolicyKeySchema, MachineInstallablePolicyChangeSchema
 import { MachineOfflineAlertSettingKeySchema, MachineOfflineAlertSettingChangeSchema,
     readMachineOfflineAlertSetting, buildMachineOfflineAlertSettingMutation } from '@happier-dev/protocol/actions/settings/machineOfflineAlertSetting';
 import { machineDirectConnectionStorage } from '@happier-dev/protocol/actions/settings/accountSettingBindings';
-import { readBuiltInSettingDeclarationV1, resolveBuiltInAccountSettingResetValueV1 } from '@happier-dev/protocol/actions/settings/settingsDeclarations';
+import { BUILT_IN_SETTINGS_DECLARATIONS_V1, readBuiltInSettingDeclarationV1, resolveBuiltInAccountSettingResetValueV1 } from '@happier-dev/protocol/actions/settings/settingsDeclarations';
 import type { AccountSettingsScope } from '@/sync/domains/settings/scope/accountSettingsScope';
 import { ProjectAtmosphereSchema } from '@happier-dev/protocol/account/settings/accountSettings';
 import { normalizeProjectAtmosphere } from '@/components/atmosphere/atmosphereSettings';
@@ -75,6 +78,7 @@ function refuse(errorCode: string) {
 
 class RejectedSettingMutation extends Error {}
 type SettingsDeclarationActionResult = z.output<(typeof SettingsDeclarationActionOutputSchemasV1)[SettingsDeclarationActionIdV1]>
+    | ActionAudiencePolicyResult
     | ReturnType<typeof refuse> | ActionApprovalRequestCreatedResult;
 class ConditionalSettingConflict extends Error {}
 
@@ -85,14 +89,23 @@ export function resolveSettingsDeclarationOperationApprovalRequired(anchor: stri
     return ref?.operation?.kind !== 'invoke' || ref.operation.requiresApproval !== false;
 }
 
+/** Only existing writable built-in device preferences admit a local UI interaction without an Account. */
+export function isBuiltInLocalSettingMutation(actionId: string | undefined, input: unknown): boolean {
+    if (actionId !== 'settings.set' && actionId !== 'settings.reset') return false;
+    const parsed = SettingsDeclarationActionInputSchemasV1[actionId].safeParse(input);
+    if (!parsed.success) return false;
+    const declaration = readBuiltInSettingDeclarationV1(parsed.data.anchor);
+    return declaration?.storage?.scope === 'local' && declaration.storage.access === 'read_write';
+}
+
 /** Storage readers recover malformed persisted values. Action writes must reject them, never save a fallback. */
 function writeSchema(schema: z.core.$ZodType): z.core.$ZodType {
-    return schema instanceof z.ZodCatch ? writeSchema(schema.removeCatch()) : schema;
+    return schema instanceof z.ZodMiniCatch ? writeSchema(schema._zod.def.innerType) : schema;
 }
 
 /** U4 declarations own discovery; existing preference and domain writers own every mutation. */
 export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner): (args: Readonly<{
-    actionId: SettingsDeclarationActionIdV1;
+    actionId: SettingsDeclarationActionIdV1 | ActionPolicyActionId;
     input: unknown;
     context?: ActionExecutorContext;
 }>) => Promise<SettingsDeclarationActionResult> {
@@ -103,7 +116,7 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
         const homeRead = homeBinding && !sensitive && readHome ? await readHome() : null;
         const homeUnavailable = homeBinding ? !homeRead?.ok ? 'not_bound' as const
             : homeSettingDeclarationUnavailable(homeBinding.key, homeRead.projection.entries.find(entry => entry.key === homeBinding.key)) : undefined;
-        const domainReadAction = ref.storage?.scope === 'home' ? homeBinding ? 'home.settings.get' : 'session.follow.preferences.get'
+        const domainReadAction = ref.storage?.scope === 'home' ? homeBinding ? 'home.settings.get' : 'follow.preferences.get'
             : ref.storage?.scope === 'team' ? ref.storage.kind === 'teamIdentityConnection' ? 'teams.identity.connections.list' : 'teams.get' : null;
         const ownerSurfaceAllowed = !domainReadAction || !context?.surface
             || getActionSpec(domainReadAction).surfaces[context.surface] === true;
@@ -148,19 +161,54 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
         };
     }
 
-    return async ({ actionId, input, context }: Readonly<{ actionId: SettingsDeclarationActionIdV1; input: unknown; context?: ActionExecutorContext }>) => {
+    return async ({ actionId, input, context }) => {
         throwIfAborted(context?.signal);
         const currentOwner = () => !context?.signal?.aborted && owner.isCurrent?.() !== false;
+        if (isActionPolicyActionId(actionId)) {
+            const requested = actionId === 'actions.policy.set' ? ActionPolicyInputSchemas[actionId].parse(input)
+                : { ...ActionPolicyInputSchemas[actionId].parse(input), mode: 'default' as const };
+            if (!currentOwner()) return refuse('setting_not_bound');
+            if (actionId === 'actions.policy.get') {
+                const current = await owner.readAccountSettings();
+                if (!currentOwner()) return refuse('setting_not_bound');
+                return readActionAudiencePolicy(current.actionsSettingsV1, requested.actionId, requested.audience);
+            }
+            const mode = requested.mode;
+            let applied: ReturnType<typeof readActionAudiencePolicy> | undefined;
+            try {
+                await owner.mutateAccountSettings(raw => {
+                    throwIfAborted(context?.signal);
+                    if (!currentOwner()) throw new RejectedSettingMutation();
+                    const settings = setActionAudiencePolicy(normalizeActionsSettingsV1(raw.actionsSettingsV1), requested.actionId, requested.audience, mode);
+                    applied = readActionAudiencePolicy(settings, requested.actionId, requested.audience);
+                    return { ...raw, actionsSettingsV1: settings };
+                }, { signal: context?.signal });
+            } catch (error) {
+                if (error instanceof RejectedSettingMutation) return refuse('setting_not_bound');
+                throw error;
+            }
+            return applied ?? refuse('setting_not_bound');
+        }
         let homeRead: Promise<HomeSettingsDeclarationRead> | undefined;
         const readHome = () => homeRead ??= owner.mutationServices?.executeSettingsOwnerAction
             ? readHomeSettingsDeclarationOwner(owner.mutationServices.executeSettingsOwnerAction, context ?? {}, currentOwner)
             : Promise.resolve({ ok: false as const, result: refuse('setting_not_bound') });
-        const declarations = getSettingsPageDeclarations(undefined, await owner.readAccountSettings());
+        // Static device-local declarations do not acquire Account data or sign-in requirements.
+        const localDeclaration = input && typeof input === 'object' && 'anchor' in input
+            && readBuiltInSettingDeclarationV1(input.anchor)?.storage?.scope === 'local';
+        const declarations = getSettingsPageDeclarations(undefined, localDeclaration ? undefined : await owner.readAccountSettings());
         if (actionId === 'settings.list') {
             const parsed = SettingsDeclarationActionInputSchemasV1[actionId].parse(input);
+            const pageAnchors = new Set(declarations.flatMap(page => Object.values(page.settings).map(ref => ref.anchor)));
+            const portablePreferences = BUILT_IN_SETTINGS_DECLARATIONS_V1.flatMap(declaration => {
+                if (pageAnchors.has(declaration.anchor) || parsed.pageId && declaration.pageId !== parsed.pageId) return [];
+                const ref = readBuiltInAccountSettingUiRef(declaration.anchor);
+                return ref ? [{ pageId: declaration.pageId, ref }] : [];
+            });
             const items = await Promise.all(declarations
                 .filter((page) => !parsed.pageId || page.pageId === parsed.pageId)
-                .flatMap((page) => Object.values(page.settings).map((ref) => descriptor(page.pageId, ref, context, readHome))));
+                .flatMap((page) => Object.values(page.settings).map((ref) => descriptor(page.pageId, ref, context, readHome)))
+                .concat(portablePreferences.map(({ pageId, ref }) => descriptor(pageId, ref, context, readHome))));
             const connection = readBuiltInSettingDeclarationV1('machines.connection.direct');
             if (connection && (!parsed.pageId || parsed.pageId === 'machines')) {
                 items.push({ anchor: connection.anchor, pageId: connection.pageId, title: connection.title,
@@ -321,8 +369,10 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
         }
         if ('key' in parsed && parsed.key !== undefined) return refuse('setting_key_unsupported');
         const page = declarations.find((candidate) => Object.values(candidate.settings).some((ref) => ref.anchor === parsed.anchor));
-        const ref = page && Object.values(page.settings).find((candidate) => candidate.anchor === parsed.anchor);
-        if (!page || !ref) return refuse('setting_not_found');
+        const ref = page ? Object.values(page.settings).find((candidate) => candidate.anchor === parsed.anchor)
+            : readBuiltInAccountSettingUiRef(parsed.anchor);
+        const pageId = page?.pageId ?? readBuiltInSettingDeclarationV1(parsed.anchor)?.pageId;
+        if (!pageId || !ref) return refuse('setting_not_found');
         const versionedRead = actionId === 'settings.get' && SettingsDeclarationActionInputSchemasV1['settings.get'].parse(input).includeVersion === true;
         const settingWrite = actionId === 'settings.set' ? SettingsDeclarationActionInputSchemasV1['settings.set'].parse(input) : undefined;
         const resetRequest = actionId === 'settings.reset' ? SettingsDeclarationActionInputSchemasV1[actionId].parse(input) : undefined;
@@ -338,9 +388,10 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
             return { ...refuse('setting_target_mismatch'), details: { targetKinds } };
         }
         if (actionId !== 'settings.invoke' && (ref.storage?.scope === 'team' || ref.storage?.scope === 'project') && !target) return { ...refuse('setting_target_required'), details: { targetKinds } };
-        const access = await descriptor(page.pageId, ref, context, readHome);
+        const access = await descriptor(pageId, ref, context, readHome);
         const isCurrent = () => !context?.signal?.aborted && owner.isCurrent?.() !== false && (!ref.contribution || owner.canUseRuntimeContributions?.() === true);
         throwIfAborted(context?.signal);
+        if (!isCurrent()) return refuse('setting_not_bound');
         if (actionId === 'settings.reset') {
             if (!access.writable || !ref.storage) return refuse(`setting_${access.unavailableReason ?? 'read_only'}`);
             if (!isCurrent()) return refuse('setting_not_bound');
@@ -382,7 +433,7 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
             if (!access.operation || !ref.operation) return refuse(`setting_${access.unavailableReason ?? 'operation_unavailable'}`);
             if (!isCurrent()) return refuse('setting_not_bound');
             if (ref.operation.kind === 'interaction') {
-                const route = page.subpage?.route ?? flattenSettingsPageCatalog(SETTINGS_PAGE_CATALOG).find((candidate) => candidate.id === page.pageId)?.route;
+                const route = page?.subpage?.route ?? flattenSettingsPageCatalog(SETTINGS_PAGE_CATALOG).find((candidate) => candidate.id === pageId)?.route;
                 const href = route ? buildSettingHref(route, ref) : null;
                 if (!href || !owner.openHumanInteraction) return { anchor: ref.anchor, status: 'unavailable' as const, reason: 'human_interaction_unavailable' };
                 throwIfAborted(context?.signal);
@@ -394,6 +445,7 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
             }
             const operationInput = SettingsDeclarationActionInputSchemasV1['settings.invoke'].parse(input);
             const result = await ref.operation.invoke({ signal: context?.signal, input: operationInput.input, isCurrent,
+                accountScope: owner.accountScope,
                 services: owner.mutationServices,
                 isFeatureEnabled: owner.isFeatureEnabled,
                 readSettings: owner.readAccountSettings,
@@ -505,7 +557,14 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
                         throwIfAborted(context?.signal);
                         if (!isCurrent()) throw new RejectedSettingMutation();
                         const mutation = mutationFor(raw);
-                        const restore = reversal?.kind === 'restore' || reversal?.kind === 'reset' ? restoreSettingMutationV1(raw, mutation, reversal) : undefined;
+                        const restore = reversal?.kind === 'restore' || reversal?.kind === 'reset'
+                            ? restoreSettingMutationV1(raw, mutation, reversal, currentRaw => {
+                                const settings = settingsParse(currentRaw);
+                                return 'key' in binding
+                                    ? binding.invertBoolean ? !settings[binding.key] : settings[binding.key]
+                                    : binding.read(settings);
+                            })
+                            : undefined;
                         if (restore?.status === 'conflict') throw new ConditionalSettingConflict();
                         if (restore?.status === 'invalid') throw new RejectedSettingMutation();
                         const next = applyAccountSettingMutationV1(raw, restore?.status === 'prepared' ? restore.mutation : mutation);
@@ -526,6 +585,7 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
                     throw error;
                 }
                 if (!result) return refuse('setting_conditional_mutation_unsupported');
+                if (result.status === 'invalid') return refuse('account_settings_mutation_invalid');
                 if (result.status !== 'applied') return refuse(`account_settings_mutation_${result.status === 'conflict' ? 'conflict' : 'outcome_unknown'}`);
                 const response = { anchor: ref.anchor, ...(projected === undefined ? { unset: true as const } : { value: SettingsDeclarationValueV1Schema.parse(projected) }),
                     settingsVersion: result.settingsVersion };
@@ -545,7 +605,11 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
                 });
                 return receipt.success ? { ...response, reversal: receipt.data } : response;
             }
-            if (binding.allowedValues && !binding.allowedValues.some(allowed => allowed === requested.value)) return refuse('invalid_setting_value');
+            // Scalar choice descriptors remain useful even when a local domain owner also
+            // accepts a strict compound intent (for example theme mode plus profile selection).
+            const structuredLocalIntent = 'kind' in binding && binding.kind === 'localOwner'
+                && requested.value !== null && typeof requested.value === 'object';
+            if (binding.allowedValues && !structuredLocalIntent && !binding.allowedValues.some(allowed => allowed === requested.value)) return refuse('invalid_setting_value');
             if (binding.invertBoolean && typeof requested.value !== 'boolean') return refuse('invalid_setting_value');
             const storedValue = binding.invertBoolean ? !requested.value : requested.value;
             if (!('key' in binding)) {
@@ -555,7 +619,9 @@ export function createSettingsDeclarationAction(owner: SettingsDeclarationOwner)
                     throwIfAborted(context?.signal);
                     if (!isCurrent()) return refuse('setting_not_bound');
                     if (binding.read(owner.readLocalSettings()) === SETTING_VALUE_UNAVAILABLE) return refuse('setting_value_unavailable');
-                    const committed = await binding.commit(owner.readLocalSettings(), parsedValue.value, owner.writeLocalSettings, { signal: context?.signal, isCurrent });
+                    const committed = await binding.commit(owner.readLocalSettings(), parsedValue.value, owner.writeLocalSettings, {
+                        signal: context?.signal, isCurrent, readLocalSettings: owner.readLocalSettings,
+                    });
                     throwIfAborted(context?.signal);
                     if (!isCurrent()) return refuse('setting_not_bound');
                     if (committed === SETTING_VALUE_UNAVAILABLE) return refuse('setting_value_unavailable');

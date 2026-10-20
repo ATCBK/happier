@@ -31,16 +31,18 @@ describe('formatPathRelativeToHome', () => {
 });
 
 describe('formatSessionPath', () => {
-    it('labels the machine home and literal home aliases as No folder, leaving generic filesystem labels intact', () => {
-        expect(formatSessionPath('~\\', 'C:\\Users\\alice\\\\')).toBe('No folder');
-        expect(formatSessionPath('/home/alice/', '/home/alice')).toBe('No folder');
+    it('shows the machine home and literal home aliases as ~, never as the managed "No folder" label', () => {
+        expect(formatSessionPath('~\\', 'C:\\Users\\alice\\\\')).toBe('~');
+        expect(formatSessionPath('/home/alice/', '/home/alice')).toBe('~');
+        for (const alias of ['~', '~/', '~\\']) {
+            expect(formatSessionPath(alias, undefined)).toBe('~');
+        }
+        expect(formatSessionPath('~/', '')).toBe('~');
+    });
+
+    it('keeps folders below home relative and generic filesystem labels intact', () => {
         expect(formatSessionPath('/home/alice/repo', '/home/alice')).toBe('~/repo');
         expect(formatSessionPath('C:\\Users\\alice2', 'C:\\Users\\alice')).toBe('C:\\Users\\alice2');
-        for (const alias of ['~', '~/', '~\\']) {
-            expect(formatSessionPath(alias, undefined)).toBe('No folder');
-        }
-        expect(formatSessionPath('~/', '')).toBe('No folder');
         expect(formatSessionPath('/home/alice', undefined)).toBe('/home/alice');
-        expect(formatPathRelativeToHome('/home/alice', '/home/alice')).toBe('~');
     });
 });

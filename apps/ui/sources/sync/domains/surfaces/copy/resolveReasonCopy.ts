@@ -1,6 +1,8 @@
 import type { BrowserSurfaceUnavailableReason } from '@/components/browser/surfaces/BrowserSurfaceFallback';
 import type { BrowserAdapterUnavailableReasonCode } from '@/sync/domains/browser/adapters/availability';
+import type { BrowserPreviewRefusalReasonCode } from '@/sync/domains/browser/adapters/targets/localPreview';
 import { t } from '@/text';
+import type { PluginMachineOriginRejectionReasonV1 } from '@/sync/domains/machines/administration/pluginExecutionOrigin';
 import type { LocalServiceNativePrerequisiteV1, LocalServiceEstablishmentFailureV1 } from '@happier-dev/protocol/local/services/launcher/v1';
 
 /**
@@ -19,7 +21,8 @@ export type ReasonCopyKind =
     | 'simulatorPreview' // simulator preview availability reason codes
     | 'streamPlayer' // live-stream player error/diagnostic reason codes
     | 'pluginRuntime' // plugin runtime load/fallback diagnostic codes
-    | 'widget'; // native/authored widget host admission, not plugin-runtime availability
+    | 'widget' // native/authored widget host admission, not plugin-runtime availability
+    | 'browserDiagnosticsInteraction'; // why the diagnostics drawer's interactive tools are off
 
 export type ResolvedReasonCopy = Readonly<{
     /** Localized card title for terminal-state surfaces. */
@@ -142,16 +145,37 @@ const BROWSER_REASON_KEYS = {
     simulator_preview_unavailable: 'browserShell.unavailable.simulatorPreviewUnavailable',
     sidecar_runtime_unavailable: 'browserShell.unavailable.sidecarRuntimeUnavailable',
     streamed_browser_unavailable: 'browserShell.unavailable.streamedBrowserUnavailable',
+    managed_package_missing: 'browserShell.unavailable.managedPackageMissing',
+    browser_runtime_provisioning_failed: 'browserShell.unavailable.provisioningFailed',
+    sandbox_unavailable: 'browserShell.unavailable.sandboxUnavailable',
     tauri_host_unavailable: 'browserShell.unavailable.hostUnavailable',
     target_kind_unavailable: 'browserShell.unavailable.targetKindUnavailable',
     browser_profile_missing: 'browserShell.unavailable.browserProfileMissing',
     hosted_plugin_security_policy_blocked: 'browserShell.unavailable.hostedPluginBlocked',
     invalid_url: 'browserShell.unavailable.invalidUrl',
     owner_disconnected: 'browserShell.unavailable.ownerDisconnected',
+    browser_context_annotation_iframe_capture_unavailable: 'browserShell.unavailable.annotationIframeCaptureUnavailable',
+    browser_context_annotation_capture_unavailable: 'browserShell.unavailable.annotationCaptureUnavailable',
+    preview_ended: 'browserShell.unavailable.previewEnded',
+    preview_transport_unavailable: 'browserShell.unavailable.previewTransportUnavailable',
 } as const satisfies Record<
-    BrowserAdapterUnavailableReasonCode | 'browser_profile_missing' | 'hosted_plugin_security_policy_blocked' | 'invalid_url' | 'owner_disconnected',
+    BrowserAdapterUnavailableReasonCode | 'managed_package_missing' | 'browser_runtime_provisioning_failed' | 'sandbox_unavailable' | 'browser_profile_missing' | 'hosted_plugin_security_policy_blocked' | 'invalid_url' | 'owner_disconnected'
+    | 'browser_context_annotation_iframe_capture_unavailable' | 'browser_context_annotation_capture_unavailable'
+    | BrowserPreviewRefusalReasonCode,
     BrowserMessageKey
 >;
+
+const BROWSER_DIAGNOSTICS_INTERACTION_KEYS = {
+    adapter_unavailable: 'browserDiagnostics.host.interaction.unavailableReason.adapter',
+    collector_unavailable: 'browserDiagnostics.host.interaction.unavailableReason.collector',
+    policy_denied: 'browserDiagnostics.host.interaction.unavailableReason.policy',
+} as const;
+
+/** A relay preview's refusals name what happened to the page, not that a surface is unavailable. */
+const BROWSER_FRAME_TITLE_KEYS = {
+    preview_ended: 'browserShell.unavailable.previewEndedTitle',
+    preview_transport_unavailable: 'browserShell.unavailable.previewTransportUnavailableTitle',
+} as const satisfies Record<BrowserPreviewRefusalReasonCode, string>;
 
 const BROWSER_SURFACE_KEYS = {
     disabled: 'browserShell.unavailable.surface.disabled',
@@ -167,6 +191,9 @@ const LOCAL_SERVICE_LAUNCHER_KEYS = {
     preview_registration_unavailable: 'localServices.launcher.unavailableReason.previewRegistrationUnavailable',
     browser_target_unavailable: 'localServices.launcher.unavailableReason.browserTargetUnavailable',
     starting: 'localServices.launcher.unavailableReason.starting',
+    stopping: 'localServices.rowStatus.stopping',
+    stopped: 'localServices.rowStatus.stopped',
+    failed: 'localServices.rowStatus.failed',
     stale: 'localServices.launcher.unavailableReason.stale',
     unavailable: 'localServices.launcher.unavailableReason.unavailable',
     // Unsettled native custody (CA2-02): not Running, and Stop is the cleanup.
@@ -259,12 +286,19 @@ type BrowserMessageKey =
     | 'browserShell.unavailable.simulatorPreviewUnavailable'
     | 'browserShell.unavailable.sidecarRuntimeUnavailable'
     | 'browserShell.unavailable.streamedBrowserUnavailable'
+    | 'browserShell.unavailable.managedPackageMissing'
+    | 'browserShell.unavailable.provisioningFailed'
+    | 'browserShell.unavailable.sandboxUnavailable'
     | 'browserShell.unavailable.hostUnavailable'
     | 'browserShell.unavailable.targetKindUnavailable'
     | 'browserShell.unavailable.browserProfileMissing'
     | 'browserShell.unavailable.hostedPluginBlocked'
     | 'browserShell.unavailable.invalidUrl'
-    | 'browserShell.unavailable.ownerDisconnected';
+    | 'browserShell.unavailable.ownerDisconnected'
+    | 'browserShell.unavailable.annotationIframeCaptureUnavailable'
+    | 'browserShell.unavailable.annotationCaptureUnavailable'
+    | 'browserShell.unavailable.previewEnded'
+    | 'browserShell.unavailable.previewTransportUnavailable';
 
 type BrowserSurfaceMessageKey =
     | 'browserShell.unavailable.surface.disabled'
@@ -296,6 +330,12 @@ const STREAM_PLAYER_KEYS = {
  * `diagnosticCode` for QA channels.
  */
 const PLUGIN_RUNTIME_KEYS = {
+    plugin_daemon_unsupported: 'pluginSurfaces.originReason.daemon_unsupported',
+    plugin_daemon_invalid_response: 'pluginSurfaces.originReason.daemon_invalid_response',
+    plugin_daemon_unavailable: 'pluginSurfaces.originReason.daemon_unavailable',
+    plugin_activation_failed: 'pluginSurfaces.originReason.activation_refused',
+    activation_failed: 'pluginSurfaces.originReason.activation_refused',
+    plugin_source_not_ready: 'pluginSurfaces.originReason.source_not_ready',
     plugin_collection_contract_conflict: 'pluginRuntime.collectionConflict',
     plugin_resource_admission_unavailable: 'pluginRuntime.resourceAdmissionUnavailable',
     plugin_host_access_disclosure_mismatch: 'pluginRuntime.hostAccessMismatch',
@@ -312,6 +352,11 @@ const PLUGIN_RUNTIME_KEYS = {
     targeted_contributions_timeout: 'pluginRuntime.transportUnavailable',
     targeted_contributions_error: 'pluginRuntime.transportUnavailable',
     artifact_source_unavailable: 'pluginRuntime.sourceUnavailable',
+    artifact_not_current: 'pluginRuntime.viewNotCurrent',
+    plugin_generation_stale: 'pluginRuntime.viewNotCurrent',
+    plugin_occurrence_stale: 'pluginRuntime.viewNotCurrent',
+    plugin_action_generation_retired: 'pluginRuntime.viewNotCurrent',
+    artifact_lease_revoked: 'pluginRuntime.viewNotCurrent',
     source_unavailable: 'pluginRuntime.sourceUnavailable',
     response_invalid: 'pluginRuntime.responseInvalid',
     details_destination_policy_unavailable: 'pluginRuntime.disabledByPolicy',
@@ -346,7 +391,7 @@ const PLUGIN_RUNTIME_KEYS = {
     missing_native_capability: 'pluginRuntime.missingRequirement',
     required_permission_missing: 'pluginRuntime.missingRequirement',
     entry_missing: 'pluginRuntime.missingRequirement',
-    plugin_machine_unreachable: 'pluginSurfaces.state.offline.reason',
+    plugin_machine_unreachable: 'pluginSurfaces.originReason.home_unreachable',
     runtime_mismatch: 'pluginRuntime.missingRequirement',
     artifact_source_integrity_invalid: 'pluginRuntime.integrityFailed',
     artifact_graph_mismatch: 'pluginRuntime.integrityFailed',
@@ -366,6 +411,20 @@ const PLUGIN_RUNTIME_KEYS = {
     artifact_graph_invalid: 'pluginRuntime.authorFailure',
     hosted_web_artifact_tier_invalid: 'pluginRuntime.authorFailure',
     native_artifact_response_table_invalid: 'pluginRuntime.authorFailure',
+    // The daemon's generated-UI artifact owner: the installed plugin carries no
+    // usable built view for this platform. Waiting never changes that answer.
+    generated_react_native_artifact_missing: 'pluginRuntime.authorFailure',
+    generated_react_native_artifact_ambiguous: 'pluginRuntime.authorFailure',
+    generated_react_native_artifact_graph_invalid: 'pluginRuntime.authorFailure',
+    generated_react_native_bundler_mismatch: 'pluginRuntime.authorFailure',
+    generated_react_native_export_missing: 'pluginRuntime.authorFailure',
+    generated_react_native_platform_undeclared: 'pluginRuntime.authorFailure',
+    generated_hosted_web_artifact_missing: 'pluginRuntime.authorFailure',
+    generated_hosted_web_artifact_ambiguous: 'pluginRuntime.authorFailure',
+    generated_hosted_web_artifact_graph_invalid: 'pluginRuntime.authorFailure',
+    generated_hosted_web_bundler_mismatch: 'pluginRuntime.authorFailure',
+    generated_react_native_plugin_root_unavailable: 'pluginRuntime.sourceUnavailable',
+    generated_hosted_web_plugin_root_unavailable: 'pluginRuntime.sourceUnavailable',
     plugin_revoked: 'pluginRuntime.retired',
     plugin_uninstalled: 'pluginRuntime.retired',
     revoked: 'pluginRuntime.retired',
@@ -386,6 +445,7 @@ type StreamPlayerMessageKey =
     | 'streamPlayer.status.decoderUnavailable';
 
 type PluginRuntimeMessageKey =
+    | `pluginSurfaces.originReason.${'home_unreachable' | 'daemon_unsupported' | 'daemon_invalid_response' | 'daemon_unavailable' | 'activation_refused' | 'source_not_ready'}`
     | 'pluginRuntime.collectionConflict'
     | 'pluginRuntime.resourceAdmissionUnavailable'
     | 'pluginRuntime.hostAccessMismatch'
@@ -393,6 +453,7 @@ type PluginRuntimeMessageKey =
     | 'pluginRuntime.responseInvalid'
     | 'pluginRuntime.transportUnavailable'
     | 'pluginRuntime.sourceUnavailable'
+    | 'pluginRuntime.viewNotCurrent'
     | 'pluginSurfaces.state.offline.reason'
     | 'pluginRuntime.crashLoop'
     | 'pluginRuntime.installationConflict'
@@ -410,6 +471,70 @@ type PluginRuntimeMessageKey =
     | 'pluginRuntime.authorFailure'
     | 'pluginRuntime.retired'
     | 'pluginRuntime.unavailableGeneric';
+
+/** Picker rows and the surrounding surface explain the same Administration refusal. */
+export function resolvePluginExecutionOriginReasonDetail(reason: PluginMachineOriginRejectionReasonV1 | 'no_materialization' | 'different_versions'): string {
+    switch (reason) {
+        case 'home_unreachable':
+        case 'release_unavailable':
+        case 'non_portable':
+        case 'source_not_ready':
+        case 'daemon_unsupported':
+        case 'daemon_invalid_response':
+        case 'daemon_unavailable':
+        case 'activation_refused':
+        case 'no_materialization': return t(`pluginSurfaces.originReason.${reason}`);
+        case 'content_conflict': return t('settingsPlugins.executionOriginReleaseContentConflict');
+        case 'disabled': return t('settingsPlugins.machineMatrix.state.disabled');
+        case 'untrusted': return t('settingsPlugins.machineMatrix.state.untrusted');
+        case 'incompatible': return t('settingsPlugins.machineMatrix.state.incompatible');
+        case 'machine_local': return t('settingsPlugins.machineMatrix.state.localOnly');
+        case 'offline': return t('settingsProviders.detail.machineOffline');
+        case 'stale': return t('settingsPlugins.machineMatrix.state.staleOffline');
+        case 'missing': return t('settingsPlugins.targetSelection.missing');
+        case 'replaced': return t('settingsPlugins.targetSelection.replaced');
+        case 'revoked': return t('settingsPlugins.targetSelection.revoked');
+        case 'plugin_mismatch': return t('settingsPlugins.targetSelection.pluginMismatch');
+        case 'different_versions': return t('settingsPlugins.targetSelection.differentVersions');
+        case 'unknown': return t('settingsPlugins.targetSelection.unknown');
+    }
+}
+
+/**
+ * One honest sentence for a plugin that Administration found on a Machine but could not use, and
+ * whether the way forward is the plugin's own page. `machine` is the one Machine that refused, or
+ * `undefined` when several did. Returns `null` when nothing is installed (the caller leads to installing)
+ * so "install it" is only ever said when it is true.
+ */
+export function describePluginExecutionOriginRefusal(params: Readonly<{
+    reasons: readonly (PluginMachineOriginRejectionReasonV1 | 'no_materialization')[];
+    plugin: string;
+    machine: string | undefined;
+}>): Readonly<{ sentence: string; manage: boolean }> | null {
+    const reasons = params.reasons.filter((reason): reason is PluginMachineOriginRejectionReasonV1 => reason !== 'no_materialization' && reason !== 'missing');
+    if (reasons.length === 0) return null;
+    if (params.machine === undefined) {
+        return { sentence: t('settingsPlugins.surfaces.pluginNotReadyAnywhere', { plugin: params.plugin }), manage: true };
+    }
+    const groupOf = (reason: PluginMachineOriginRejectionReasonV1) => {
+        switch (reason) {
+            case 'activation_refused':
+            case 'daemon_unsupported':
+            case 'daemon_invalid_response': return 'start';
+            case 'offline':
+            case 'stale':
+            case 'home_unreachable':
+            case 'daemon_unavailable': return 'unreachable';
+            default: return 'notReady';
+        }
+    };
+    // Mixed causes have no single next step: lead to the plugin's page, where each Machine's state is shown.
+    const groups = new Set(reasons.map(groupOf));
+    const values = { plugin: params.plugin, machine: params.machine };
+    if (groups.size === 1 && groups.has('start')) return { sentence: t('settingsPlugins.surfaces.pluginCouldNotStart', values), manage: false };
+    if (groups.size === 1 && groups.has('unreachable')) return { sentence: t('settingsPlugins.surfaces.pluginMachineUnreachable', values), manage: false };
+    return { sentence: t('settingsPlugins.surfaces.pluginNotReady', values), manage: true };
+}
 
 /**
  * The one reason → next-step classification for plugin surfaces.
@@ -432,6 +557,8 @@ function resolvePluginSurfaceRecoveryAction(
         case 'hosted_web_bridge_timeout':
         case 'artifact_source_unavailable':
         case 'source_unavailable':
+        case 'generated_react_native_plugin_root_unavailable':
+        case 'generated_hosted_web_plugin_root_unavailable':
         case 'artifact_unavailable':
         case 'transport_unavailable':
         case 'plugin_resource_transport_unavailable':
@@ -461,6 +588,7 @@ function resolvePluginSurfaceRecoveryAction(
         case 'host_ui_api_incompatible':
             return Object.freeze({ kind: 'updateCompatible', label: t('common.update') });
         case 'required_permission_missing':
+        case 'artifact_not_current':
         case 'plugin_collection_contract_conflict':
         case 'plugin_resource_admission_unavailable':
         case 'plugin_host_access_disclosure_mismatch':
@@ -472,6 +600,16 @@ function resolvePluginSurfaceRecoveryAction(
         case 'artifact_graph_invalid':
         case 'hosted_web_artifact_tier_invalid':
         case 'native_artifact_response_table_invalid':
+        case 'generated_react_native_artifact_missing':
+        case 'generated_react_native_artifact_ambiguous':
+        case 'generated_react_native_artifact_graph_invalid':
+        case 'generated_react_native_bundler_mismatch':
+        case 'generated_react_native_export_missing':
+        case 'generated_react_native_platform_undeclared':
+        case 'generated_hosted_web_artifact_missing':
+        case 'generated_hosted_web_artifact_ambiguous':
+        case 'generated_hosted_web_artifact_graph_invalid':
+        case 'generated_hosted_web_bundler_mismatch':
             return Object.freeze({ kind: 'managePlugin', label: t('settingsPlugins.managePlugin') });
         case 'feature_disabled':
         case 'disabled':
@@ -489,11 +627,16 @@ function resolvePluginSurfaceRecoveryAction(
 }
 
 type LocalServiceLauncherMessageKey =
+    | 'localServices.rowStatus.stopping'
+    | 'localServices.rowStatus.stopped'
+    | 'localServices.rowStatus.failed'
     | 'localServices.launcher.unavailableReason.launchUnavailable'
     | 'localServices.launcher.unavailableReason.previewRegistrationUnavailable'
     | 'localServices.launcher.unavailableReason.browserTargetUnavailable'
     | 'localServices.launcher.unavailableReason.starting'
     | 'localServices.launcher.unavailableReason.stale'
+    | 'localServices.launcher.unavailableReason.nativeStateUnknown'
+    | 'localServices.launcher.unavailableReason.nativeCleanupUnconfirmed'
     | 'localServices.launcher.unavailableReason.unavailable';
 
 type LocalServiceActionMessageKey =
@@ -523,6 +666,8 @@ function resolveGenericMessage(kind: ReasonCopyKind): string {
             return t('pluginRuntime.unavailableGeneric');
         case 'widget':
             return t('common.unavailable');
+        case 'browserDiagnosticsInteraction':
+            return t('browserDiagnostics.host.interaction.unavailableReason.generic');
         case 'browserFrame':
         case 'browserStatus':
         case 'browserSurface':
@@ -550,6 +695,8 @@ function resolveTitle(kind: ReasonCopyKind): string {
         case 'browserLaunchpad':
         case 'localServiceLauncher':
             return t('common.unavailable');
+        case 'browserDiagnosticsInteraction':
+            return t('browserDiagnostics.host.interaction.title');
     }
 }
 
@@ -557,6 +704,10 @@ function resolveKnownMessage(kind: ReasonCopyKind, reasonCode: string): string |
     switch (kind) {
         case 'widget':
             return null;
+        case 'browserDiagnosticsInteraction': {
+            const key = BROWSER_DIAGNOSTICS_INTERACTION_KEYS[reasonCode as keyof typeof BROWSER_DIAGNOSTICS_INTERACTION_KEYS];
+            return key ? t(key) : null;
+        }
         case 'browserFrame':
         case 'browserStatus': {
             const key = BROWSER_REASON_KEYS[reasonCode as keyof typeof BROWSER_REASON_KEYS];
@@ -611,9 +762,12 @@ export function resolveReasonCopy(input: Readonly<{
     kind: ReasonCopyKind;
     prerequisite?: LocalServiceNativePrerequisiteV1;
     establishmentFailure?: LocalServiceEstablishmentFailureV1;
+    machineName?: string;
 }>): ResolvedReasonCopy {
     const rawCode = input.reasonCode ?? null;
-    const title = resolveTitle(input.kind);
+    const frameTitleKey = input.kind === 'browserFrame' && rawCode
+        ? BROWSER_FRAME_TITLE_KEYS[rawCode as keyof typeof BROWSER_FRAME_TITLE_KEYS] : undefined;
+    const title = frameTitleKey ? t(frameTitleKey) : resolveTitle(input.kind);
     if (rawCode === null || rawCode === '') {
         const body = resolveGenericMessage(input.kind);
         return {
@@ -627,7 +781,9 @@ export function resolveReasonCopy(input: Readonly<{
     const prerequisite = input.kind === 'localServiceAction' && rawCode === 'native_tool_unavailable' ? input.prerequisite : undefined;
     const failure = input.kind === 'localServiceAction' && rawCode === 'plugin_managed_service_establishment_failed'
         ? input.establishmentFailure : undefined;
-    const body = prerequisite ? t(`localServices.actions.failure.docker.${prerequisite.cause}`, { machine: prerequisite.machineName })
+    const body = input.kind === 'localServiceLauncher' && rawCode === 'project_service_binding_unavailable' && input.machineName
+        ? t('localServices.launcher.unavailableReason.bindingUnavailableOnMachine', { machine: input.machineName })
+        : prerequisite ? t(`localServices.actions.failure.docker.${prerequisite.cause}`, { machine: prerequisite.machineName })
         : failure?.cause === 'port_in_use' && failure.port !== undefined ? t(failure.sameProject
             ? 'localServices.actions.failure.portInUseSameProject' : 'localServices.actions.failure.portInUse', { port: failure.port })
         : failure?.exitCode !== undefined ? t('localServices.actions.failure.processExit', { code: String(failure.exitCode) })
@@ -656,6 +812,11 @@ export function resolvePluginSurfaceStatePresentation(input: Readonly<{
     title?: string;
     /** Only the factual content owner may assert that its last-known-good content is retained. */
     hasRetainedContent?: boolean;
+    /**
+     * The plugin's display name. A terminal card that fills a whole page has no
+     * header around it, so it names what failed instead of a bare "Unavailable".
+     */
+    subjectName?: string | null;
 }>): PluginSurfaceStatePresentation {
     const reasonCode = input.reasonKind !== 'widget'
         && (!input.reasonCode || input.reasonCode === 'unavailable' || input.reasonCode === 'plugin_resource_unavailable')
@@ -665,9 +826,17 @@ export function resolvePluginSurfaceStatePresentation(input: Readonly<{
         reasonCode,
         kind: input.reasonKind ?? 'pluginRuntime',
     });
+    const subjectName = input.subjectName?.trim();
+    const namedTitle = !subjectName
+        ? undefined
+        : input.state === 'unavailable'
+            ? t('pluginSurfaces.state.namedUnavailable', { name: subjectName })
+            : input.state === 'failedRetry'
+                ? t('pluginSurfaces.state.namedFailed', { name: subjectName })
+                : undefined;
     const copy = resolvePluginSurfacePresentationCopy({
         state: input.state,
-        title: input.title,
+        title: namedTitle ?? input.title,
         reason,
         hasSpecificReason: !!reasonCode && resolveKnownMessage(input.reasonKind ?? 'pluginRuntime', reasonCode) !== null,
     });

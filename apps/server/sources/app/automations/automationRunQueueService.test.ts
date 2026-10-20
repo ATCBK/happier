@@ -9,7 +9,7 @@ import {
 const transaction = vi.hoisted(() => vi.fn());
 // Only Prisma is faked; Run admission, Account changes and after-commit behavior stay real.
 vi.mock("@/storage/db", () => ({ db: { $transaction: transaction } }));
-import { inTx, type Tx } from "@/storage/inTx";
+import { inTx, type ResolvedTransactionResult, type Tx } from "@/storage/inTx";
 
 import {
     admitDueAutomationScheduleTriggerTx as admitDueAutomationScheduleTriggerOwner,
@@ -17,7 +17,7 @@ import {
     resolveScheduledRunDueAt,
 } from "./automationRunQueueService";
 
-async function inFixtureTransaction<T>(tx: Tx, operation: (tx: Tx) => Promise<T>): Promise<T> {
+async function inFixtureTransaction<T>(tx: Tx, operation: (tx: Tx) => Promise<T>): Promise<ResolvedTransactionResult<T>> {
     transaction.mockImplementationOnce(async (callback: (tx: Tx) => Promise<unknown>) => callback(tx));
     return inTx(operation);
 }

@@ -37,6 +37,11 @@ function accountToken(accountId: string): string {
 
 type SendToAllDevicesAsync = (title: string, body: string, data: Record<string, unknown>) => Promise<boolean>;
 
+function requireNotificationData(data: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!data) throw new Error('Expected quota notification navigation data');
+  return data;
+}
+
 function buildSettings(topics: Readonly<{ blocked: boolean; recovered: boolean }>) {
   return accountSettingsParse({
     attentionDeliveryPolicyV1: {
@@ -145,7 +150,7 @@ describe('dispatchConnectedServiceQuotaLifecycleNotificationAsync', () => {
     const snapshot = { ...usageSnapshot(600, 95), recoveryCredits: previous.recoveryCredits };
     const emit = async (settings: ReturnType<typeof accountSettingsParse>, current = snapshot) => {
       await dispatchNotification({ settings, notificationChannelCatalog, pluginNotifications: null,
-        expoPushSender: { sendToAllDevicesAsync: async (_title, _body, data) => { sent.push(data); return true; } },
+        expoPushSender: { sendToAllDevicesAsync: async (_title, _body, data) => { sent.push(requireNotificationData(data)); return true; } },
         transition: { phase: 'observed', serviceId: 'happier.agent.codex/openai-codex', profileId: 'account', previous, snapshot: current },
         nowMs: () => 600, dedupeWindowMs: 0 });
     };
@@ -175,7 +180,7 @@ describe('dispatchConnectedServiceQuotaLifecycleNotificationAsync', () => {
       credits: [{ ...prior.recoveryCredits.credits[0], status: 'expired' as const }] } };
     const emit = async (previous: ReturnType<typeof usageSnapshot> | null, snapshot: ReturnType<typeof usageSnapshot>) => {
       await dispatchNotification({ settings, notificationChannelCatalog, pluginNotifications: null,
-        expoPushSender: { sendToAllDevicesAsync: async (_title, _body, data) => { sent.push(data); return true; } },
+        expoPushSender: { sendToAllDevicesAsync: async (_title, _body, data) => { sent.push(requireNotificationData(data)); return true; } },
         transition: { phase: 'observed', serviceId: 'happier.agent.codex/openai-codex', profileId: 'account', previous, snapshot },
         nowMs: () => snapshot.observedAtMs, dedupeWindowMs: 0 });
     };
@@ -206,7 +211,7 @@ describe('dispatchConnectedServiceQuotaLifecycleNotificationAsync', () => {
       settingsSecretsReadKeys: [], scopeKey: 'usage-crossing-test', notificationChannelCatalog });
     const emit = async (previous: ReturnType<typeof usageSnapshot> | null, snapshot: ReturnType<typeof usageSnapshot>) => {
       await dispatchConnectedServiceQuotaLifecycleNotificationAsync({ settings, notificationChannelCatalog,
-        expoPushSender: { sendToAllDevicesAsync: async (_title, _body, data) => { sent.push(data); return true; } },
+        expoPushSender: { sendToAllDevicesAsync: async (_title, _body, data) => { sent.push(requireNotificationData(data)); return true; } },
         transition: { ...{sessionIds: ['session'], groupId: 'pool', activeProfileId: 'account', resetAtMs: 1000, reason: 'observation'},
           phase: 'observed', serviceId: 'happier.agent.codex/openai-codex', profileId: 'account', previous, snapshot },
         nowMs: () => snapshot.observedAtMs, dedupeWindowMs: 0 });
@@ -252,7 +257,7 @@ describe('dispatchConnectedServiceQuotaLifecycleNotificationAsync', () => {
       notificationChannelCatalog: { status: 'ready', revision: 1, diagnostics: [], channels: [NotificationChannelRecordV1Schema.parse({
         v: 1, id: 'push', kind: 'expo_push', enabled: true, topics: {},
       })] },
-      expoPushSender: { sendToAllDevicesAsync: async (_title, _body, data) => { sent.push(data); return true; } },
+      expoPushSender: { sendToAllDevicesAsync: async (_title, _body, data) => { sent.push(requireNotificationData(data)); return true; } },
       transition: { phase: 'observed', serviceId: 'happier.agent.codex/openai-codex', profileId: 'account',
         previous: usageSnapshot(500, 40), snapshot: usageSnapshot(600, 70) },
       nowMs: () => 600, dedupeWindowMs: 0,
@@ -262,7 +267,7 @@ describe('dispatchConnectedServiceQuotaLifecycleNotificationAsync', () => {
       notificationChannelCatalog: { status: 'ready', revision: 1, diagnostics: [], channels: [NotificationChannelRecordV1Schema.parse({
         v: 1, id: 'push', kind: 'expo_push', enabled: true, topics: { connectedServiceUsage: true },
       })] },
-      expoPushSender: { sendToAllDevicesAsync: async (_title, _body, data) => { sent.push(data); return true; } },
+      expoPushSender: { sendToAllDevicesAsync: async (_title, _body, data) => { sent.push(requireNotificationData(data)); return true; } },
       transition: { phase: 'observed', serviceId: 'happier.agent.codex/openai-codex', profileId: 'account',
         previous: usageSnapshot(500, 40), snapshot: usageSnapshot(600, 70) },
       nowMs: () => 600, dedupeWindowMs: 0,

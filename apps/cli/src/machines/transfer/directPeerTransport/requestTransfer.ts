@@ -12,7 +12,7 @@ import { estimateJsonUtf8BytesBounded } from '@/transfers/shared/estimateJsonUtf
 import { isSafeDirectTransferEndpointCandidate } from '@happier-dev/protocol/machines/transfer/directPeerUrls';
 import { TransferChunkEnvelopeSchema, TransferEndpointCandidateSchema } from '@happier-dev/protocol/machines/transfer/transferStream';
 import type { TransferEndpointCandidate } from '@happier-dev/protocol';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
   DIRECT_PEER_RECIPIENT_PUBLIC_KEY_HEADER,
@@ -28,15 +28,13 @@ const DIRECT_PEER_OPEN_BODY_STREAMING_THRESHOLD_BYTES = 8 * 1024;
 const DIRECT_PEER_REQUEST_RETRY_ATTEMPTS = 3;
 const DIRECT_PEER_REQUEST_RETRY_DELAY_MS = 150;
 
-const DirectPeerTransferResponseSchema = z
-  .object({
-    transferId: z.string().min(1),
-    manifestHash: z.string().min(1),
-    totalChunks: z.number().int().positive(),
-    sizeBytes: z.number().int().nonnegative().optional(),
-    name: z.string().min(1).optional(),
-  })
-  .strict();
+const DirectPeerTransferResponseSchema = z.strictObject({
+    transferId: z.string().check(z.minLength(1)),
+    manifestHash: z.string().check(z.minLength(1)),
+    totalChunks: z.number().check(z.int(), z.positive()),
+    sizeBytes: z.optional(z.number().check(z.int(), z.nonnegative())),
+    name: z.optional(z.string().check(z.minLength(1))),
+  });
 
 function readDirectPeerChunkBytes(): number {
   return resolveDirectPeerTransferChunkBytes();

@@ -12,6 +12,7 @@ import {
 } from '@/notifications/activity/liveActivity/resolveLiveActivityRemoteSender';
 import { logger } from '@/ui/logger';
 import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import type { FollowEventV1, FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 
 export type PermissionRequestPushSender = LiveActivityRemoteSenderCandidate & SessionNotificationContextReader & ExpoPushActivityNotificationSender;
 
@@ -31,6 +32,9 @@ export async function sendAgentRequestPushNotificationAsync(params: Readonly<{
   settingsSecretsReadKeys?: ReadonlyArray<Uint8Array | null | undefined>;
   toolInput?: unknown;
   toolDetails?: string | null;
+  followEvent?: FollowEventV1;
+  admittedRulePolicies?: readonly FollowPolicyV1[];
+  isCurrent?: () => boolean;
 }>): Promise<AgentRequestPushNotificationResult> {
   const details = typeof params.toolDetails === 'string' && params.toolDetails.trim()
     ? params.toolDetails.trim()
@@ -41,7 +45,11 @@ export async function sendAgentRequestPushNotificationAsync(params: Readonly<{
       settingsSecretsReadKeys: params.settingsSecretsReadKeys,
       expoPushSender: params.pushSender,
       fetchSessionNotificationContext: params.pushSender.fetchSessionNotificationContext?.bind(params.pushSender),
+      readAccountSessionDeliveryMutedScopes: params.pushSender.readAccountSessionDeliveryMutedScopes?.bind(params.pushSender),
       liveActivityRemoteSender: resolveLiveActivityRemoteSender(params.pushSender),
+      followEvent: params.followEvent,
+      admittedRulePolicies: params.admittedRulePolicies,
+      isCurrent: params.isCurrent,
       event: {
         topic: params.kind === 'user_action' ? 'user_action_request' : 'permission_request',
         sessionId: params.sessionId,

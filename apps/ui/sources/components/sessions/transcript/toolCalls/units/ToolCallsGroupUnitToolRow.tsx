@@ -90,6 +90,7 @@ export const ToolCallsGroupUnitToolRowWithSessionCommon = React.memo(function To
         transcriptBlockIndex: message.transcriptBlockIndex ?? null,
         routeMessageId: nestedMessageId ?? null,
         pins: props.messagePins,
+        pinActionEnabled: props.messageDisplayCommon.transcriptMessagePinActionEnabled,
         readOnlyContext: props.interaction.permissionDisabledReason === 'readOnly',
         onTogglePin: props.onToggleToolPin,
         testID: `transcript-tool-call-pin:${message.id}`,

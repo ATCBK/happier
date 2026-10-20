@@ -28,7 +28,6 @@ import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprov
 import { useNotificationChannelCatalog } from '@/sync/store/useNotificationChannelCatalog';
 import { Modal } from '@/modal';
 
-import { SessionAutoFollowPreferencesSection } from '@/components/sessions/follow/SessionAutoFollowPreferencesSection';
 import { ActivitySurfacesSettingsSection } from './ActivitySurfacesSettingsSection';
 import { NotificationBadgesSection } from './NotificationBadgesSection';
 import { NotificationForegroundBehaviorSection } from './NotificationForegroundBehaviorSection';
@@ -227,7 +226,6 @@ export const NotificationsSettingsView = React.memo(function NotificationsSettin
                 setAccountQuietHours={(preset) => { void writeSetting(NOTIFICATIONS_SETTINGS.settings.quietHoursAccount, preset); }}
                 setDeviceQuietHoursOverride={(quietHoursOverride) => { void writeSetting(NOTIFICATIONS_SETTINGS.settings.quietHoursDevice, quietHoursOverride); }}
             />
-            <SessionAutoFollowPreferencesSection key={activeServer.serverId} serverId={activeServer.serverId} />
             <SettingSection section={NOTIFICATIONS_SETTINGS.sectionRefs.remoteAlerts}>
             {followingEnabled ? <NotificationRemoteAlertsSection
                 homeName={activeHomeName}

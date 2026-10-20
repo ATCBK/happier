@@ -10,11 +10,7 @@ function draftWithActivation(value: unknown, launchUserAttemptId?: string, draft
         draftId,
         document: {
             v: 2,
-            composer: {
-                text: { mutationId, value: 'Inspect this project' },
-                mentions: { mutationId, value: [] },
-                attachments: { mutationId, value: [] },
-            },
+            composer: null,
             target: {
                 kind: 'newSession',
                 authoring: {
@@ -22,7 +18,8 @@ function draftWithActivation(value: unknown, launchUserAttemptId?: string, draft
                 },
             },
             extensions: {},
-        } as NewSessionDraftProjection['document'],
+        },
+        readView: null,
         status: 'clean',
         conflict: null,
         createdAt: 1,
@@ -37,21 +34,10 @@ describe('projectMaterializedTemporaryComputerRecoveryCandidates', () => {
             v: 1,
             activationId: '00000000-0000-4000-8000-000000000001',
             createdOnDeviceLabel: 'MacBook',
+            retainedFutureMetadata: true,
         }, 'attempt-a');
         const malformed = draftWithActivation({ v: 1, activationId: 'not-an-activation' }, undefined, 'draft-b');
-        const refs = new Map([
-            [valid.draftId, {
-                v: 1 as const,
-                activationId: '00000000-0000-4000-8000-000000000001',
-                createdOnDeviceLabel: 'MacBook',
-            }],
-            [malformed.draftId, { v: 1 as const, activationId: 'not-an-activation' }],
-        ]);
-
-        expect(projectMaterializedTemporaryComputerRecoveryCandidates(
-            [valid, malformed],
-            (draftId) => refs.get(draftId),
-        )).toEqual([{
+        expect(projectMaterializedTemporaryComputerRecoveryCandidates([valid, malformed])).toEqual([{
             draftId: 'draft-a',
             activationId: '00000000-0000-4000-8000-000000000001',
             launchUserAttemptId: 'attempt-a',

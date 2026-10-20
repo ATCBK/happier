@@ -1,24 +1,29 @@
+import { deriveArtifactCoarseKindV1, type ArtifactCoarseKindV1 } from './artifactKindV1.js';
+
 export type ArtifactListSelectionOptionsV1 = Readonly<{
   limit?: number; cursor?: string; search?: string; kind?: string;
+  coarseKind?: ArtifactCoarseKindV1;
   sort?: 'updated_desc' | 'created_desc' | 'title_asc'; includeBody?: boolean; signal?: AbortSignal;
 }>;
 
 type ArtifactListHeader = Readonly<{
   artifactId: string; header: Readonly<Record<string, unknown>>; createdAt: number; updatedAt: number;
 }>;
-type ArtifactListPage<T> = Readonly<{ items: readonly T[]; nextCursor?: string; coverage?: 'complete' | 'partial' }>;
+type ArtifactListPage<T> = Readonly<{ items: readonly T[]; nextCursor?: string; coverage?: 'complete' | 'partial'; hasUnclassified?: boolean }>;
 
 /** Decrypted selection shared by keyholding hosts; transport pages retain their own codecs and custody. */
 export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params: Readonly<{
   options?: ArtifactListSelectionOptionsV1;
-  readPage: (options?: Readonly<{ limit?: number; cursor?: string; includeBody?: boolean; signal?: AbortSignal }>) => Promise<ArtifactListPage<T>>;
+  /** Apply requested coarse-kind filtering and report any readable unclassified rows. */
+  readPage: (options?: Readonly<{ limit?: number; cursor?: string; includeBody?: boolean; coarseKind?: ArtifactCoarseKindV1; signal?: AbortSignal }>) => Promise<ArtifactListPage<T>>;
+  readBodies?: (items: readonly T[]) => Promise<readonly T[]>;
   encodeCursor: (item: T) => string;
 }>): Promise<Readonly<{ items: readonly T[]; nextCursor?: string; coverage: 'complete' | 'partial' }>> {
   const options = params.options;
   options?.signal?.throwIfAborted();
   // The incumbent /v1/artifacts route admits at most 500 structural rows per request.
   if (!options || (options.limit !== undefined && options.limit <= 500
-    && options.search === undefined && options.kind === undefined
+    && options.search === undefined && options.kind === undefined && options.coarseKind === undefined
     && (options.sort === undefined || options.sort === 'updated_desc'))) {
     const page = await params.readPage(options);
     options?.signal?.throwIfAborted();
@@ -27,17 +32,36 @@ export async function listArtifactHeadersV1<T extends ArtifactListHeader>(params
   const all: T[] = [];
   let coverage: 'complete' | 'partial' = 'complete';
   let cursor: string | undefined;
+  let coarseKind = options.coarseKind;
   do {
     const page = await params.readPage({ limit: 500, ...(cursor ? { cursor } : {}),
-      ...(options.includeBody ? { includeBody: true } : {}), ...(options.signal ? { signal: options.signal } : {}) });
+      ...(coarseKind ? { coarseKind } : {}),
+      ...(options.includeBody && !params.readBodies ? { includeBody: true } : {}), ...(options.signal ? { signal: options.signal } : {}) });
     options.signal?.throwIfAborted();
+    if (coarseKind && page.hasUnclassified === true) {
+      // Unknown membership is not an empty library. Restart from the complete
+      // inventory; no classifier or backfill at a consumer can prove absence.
+      coarseKind = undefined;
+      all.length = 0;
+      coverage = 'complete';
+      cursor = undefined;
+      continue;
+    }
     if (page.coverage === 'partial') coverage = 'partial';
     all.push(...page.items);
     cursor = page.nextCursor;
-  } while (cursor);
+    if (!cursor) break;
+  } while (true);
   const search = options.search?.trim().toLocaleLowerCase();
   const title = (item: T) => typeof item.header.title === 'string' ? item.header.title : '';
-  const items = all.filter(item => (!options.kind || item.header.kind === options.kind)
+  const unclassifiedScanKind = coarseKind === undefined ? options.coarseKind : undefined;
+  const matchesKind = (item: T) => (!options.kind || item.header.kind === options.kind)
+    && (!unclassifiedScanKind || deriveArtifactCoarseKindV1(item.header) === unclassifiedScanKind);
+  const matching = all.filter(matchesKind);
+  // Open selected bodies before sorting/cursors so a fresh read keeps content and revisions aligned.
+  const selected = options.includeBody && params.readBodies ? await params.readBodies(matching) : matching;
+  options.signal?.throwIfAborted();
+  const items = selected.filter(item => matchesKind(item)
     && (!search || title(item).toLocaleLowerCase().includes(search)));
   items.sort((left, right) => {
     const primary = options.sort === 'title_asc' ? title(left).localeCompare(title(right))

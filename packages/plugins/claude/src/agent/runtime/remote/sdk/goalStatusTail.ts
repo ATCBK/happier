@@ -13,9 +13,9 @@ import type { ClaudeRuntimeLogger } from '../../dependencies.js';
  * goal changes — that attachment is FILE-ONLY. This helper replays the session's
  * persisted transcript JSONL through the SAME host `transcripts.fileFollow.follow`
  * mechanism the unified runner uses, extracts ONLY `goal_status` attachment rows,
- * and feeds them to the goal source. Every other row (assistant/user/system/other
- * attachments) is ignored here — the live stream is the source of truth for those,
- * so this never double-renders the transcript.
+ * and feeds them to the goal source. Native user echoes establish the command's
+ * observation boundary without rendering. Other rows are ignored here — the
+ * live stream owns their display, so this never double-renders the transcript.
  */
 
 type GoalStatusTailContext = Readonly<{
@@ -28,6 +28,7 @@ type GoalStatusTailContext = Readonly<{
 }>;
 
 export type ClaudeAgentSdkGoalStatusTail = Readonly<{
+  drainNow(): Promise<void>;
   dispose(): Promise<void>;
 }>;
 
@@ -44,7 +45,8 @@ function isGoalStatusAttachmentRow(value: unknown): boolean {
 export function createClaudeAgentSdkGoalStatusTail(params: Readonly<{
   ctx: GoalStatusTailContext;
   transcriptPath: string;
-  observeGoalStatusRow: (row: unknown) => void;
+  observeGoalStatusRow: (row: unknown) => void | Promise<void>;
+  resetGoalCommandObservation: () => void;
 }>): ClaudeAgentSdkGoalStatusTail {
   let disposed = false;
   let handle: AgentTranscriptFileFollowHandle | null = null;
@@ -68,15 +70,20 @@ export function createClaudeAgentSdkGoalStatusTail(params: Readonly<{
           } catch {
             return;
           }
-          if (!isGoalStatusAttachmentRow(parsed)) return;
+          // The native user echo establishes the command's position even when
+          // this follower starts by replaying a resumed transcript.
+          if (!isGoalStatusAttachmentRow(parsed) && !(isRecord(parsed) && parsed.type === 'user')) return;
           try {
-            params.observeGoalStatusRow(parsed);
+            await params.observeGoalStatusRow(parsed);
           } catch (error) {
             params.ctx.logger.debug('[ClaudeAgentSdk] goal_status observer callback failed (non-fatal)', { error });
           }
         },
         onError: (error) => {
           params.ctx.logger.debug('[ClaudeAgentSdk] goal_status transcript observer error (non-fatal)', { error });
+        },
+        onReset: () => {
+          if (!disposed) params.resetGoalCommandObservation();
         },
       });
       if (disposed) {
@@ -90,6 +97,10 @@ export function createClaudeAgentSdkGoalStatusTail(params: Readonly<{
   })();
 
   return {
+    async drainNow() {
+      await started;
+      await handle?.drainNow();
+    },
     async dispose() {
       disposed = true;
       await started.catch(() => undefined);

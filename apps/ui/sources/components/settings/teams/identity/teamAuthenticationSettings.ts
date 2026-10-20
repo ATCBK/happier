@@ -65,7 +65,7 @@ const IDENTITY_CONNECTION_SECTIONS = {
             workosCheckSetup: {},
             remove: {},
         } },
-};
+} as const;
 export const TEAM_IDENTITY_CONNECTION_SETTINGS = defineSettingsPage({
     pageId: 'teams',
     subpage: {

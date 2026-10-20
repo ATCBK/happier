@@ -1,5 +1,38 @@
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
+import { SessionGoalControlFailureV1Schema } from '../sessions/work/state/sessionWorkStateRpc.js';
+import { PluginContributionIdentityV1Schema } from '../plugins/contributionIdentity.js';
+import { QualifiedConnectedAccountPurposeV1Schema } from '../connect/connectedAccountPurposeIdentity.js';
+import { asProtocolZod } from '../plugins/actions/internalProtocolZodAdapter.js';
+
+/** Historical, content-free admission facts. Not credential authority or a live readiness claim. */
+export const ActionOperationCredentialUseV1Schema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1),
+  kind: z.enum(['connected_account', 'team_resource']),
+  label: z.nullable(z.string().check(z.minLength(1))),
+  owner: z.nullable(z.union([
+    z.strictObject({ kind: z.literal('account'), accountId: z.string().check(z.minLength(1)) }),
+    z.strictObject({ kind: z.literal('team'), teamId: z.string().check(z.minLength(1)) }),
+  ])),
+  service: asProtocolZod(PluginContributionIdentityV1Schema),
+  why: z.strictObject({
+    kind: z.literal('purpose_binding'),
+    purpose: QualifiedConnectedAccountPurposeV1Schema,
+    target: z.enum(['account', 'group', 'listed_account']),
+  }),
+  currentness: z.strictObject({
+    kind: z.literal('current_at_materialization'),
+    resourceRevision: z.optional(z.number().check(z.int(), z.minimum(0))),
+  }),
+}).check(z.superRefine((value, ctx) => {
+  if (value.owner && (value.kind === 'team_resource') !== (value.owner.kind === 'team')) {
+    ctx.addIssue({ code: 'custom', path: ['owner'], message: 'Owner must describe the admitted credential kind' });
+  }
+  if (value.kind !== 'team_resource' && value.currentness.resourceRevision !== undefined) {
+    ctx.addIssue({ code: 'custom', path: ['currentness'], message: 'Resource revision requires a Team resource' });
+  }
+})));
+export type ActionOperationCredentialUseV1 = z.infer<typeof ActionOperationCredentialUseV1Schema>;
 
 /** A policy-deferred Action has not failed or executed; the present user owns the next step. */
 export const ActionApprovalRequestCreatedResultSchema = lazyZodSchema(() => z.strictObject({
@@ -11,6 +44,12 @@ export const ActionApprovalRequestCreatedResultSchema = lazyZodSchema(() => z.st
 export type ActionApprovalRequestCreatedResult = Readonly<
   z.infer<typeof ActionApprovalRequestCreatedResultSchema>
 >;
+
+/** Content-free diagnosis of a Home mutation whose acknowledgement was lost. */
+export const AccountActionHttpFailureDetailsV1Schema = lazyZodSchema(() => z.strictObject({
+  category: z.enum(['transport_timeout', 'transport_error', 'acknowledgement_schema']),
+}));
+export type AccountActionHttpFailureDetailsV1 = z.infer<typeof AccountActionHttpFailureDetailsV1Schema>;
 
 /**
  * The canonical outcome shape shared by Action execution projections.
@@ -26,13 +65,83 @@ export const ActionExecuteFailureSchema = lazyZodSchema(() => z.strictObject({
   // producers decide their shape; this public envelope only excludes extra
   // top-level transit metadata.
   details: z.optional(z.unknown()),
+  goalControlFailure: z.optional(SessionGoalControlFailureV1Schema),
 }));
 
 export type ActionExecuteFailure = Readonly<z.infer<typeof ActionExecuteFailureSchema>>;
 
-export type ActionExecuteResult =
+export type ActionExecuteResult = Readonly<{
+  /** Host-only settlement annotation; public failure envelopes remain unchanged. Never Action input. */
+  operationCredentialUses?: readonly ActionOperationCredentialUseV1[];
+}> & (
   | Readonly<{ ok: true; result: unknown }>
-  | ActionExecuteFailure;
+  | ActionExecuteFailure);
+
+/** Failure of confirmation is not proof that an admitted effect did not happen. */
+export const UNEXPECTED_ACTION_FAILURE_CODES_V1 = ['action_not_admitted', 'action_outcome_unknown'] as const;
+
+export function projectUnexpectedActionFailureV1(admissionCommitted: boolean | null, requestId?: string): ActionExecuteFailure & Readonly<{
+  errorCode: typeof UNEXPECTED_ACTION_FAILURE_CODES_V1[number];
+}> {
+  const errorCode = admissionCommitted === false ? 'action_not_admitted' : 'action_outcome_unknown';
+  return { ok: false, errorCode,
+    error: errorCode === 'action_not_admitted'
+      ? 'Creation could not be confirmed; nothing was created.'
+      : 'The Action outcome is unknown. Check its state before trying again.',
+    ...(requestId ? { details: { requestId } } : {}),
+  };
+}
+
+/** Code-only diagnostic shared by the existing Home and daemon log owners. */
+export function readUnexpectedActionErrorDiagnosticV1(error: unknown): Readonly<{
+  errorClass: string;
+  errorCode: string | null;
+  httpStatus: number | null;
+  stackFrames: readonly Readonly<{ file: string; line: number; column: number }>[];
+}> {
+  let errorClass = 'UnknownThrownValue';
+  let errorCode: string | null = null;
+  let httpStatus: number | null = null;
+  const stackFrames: Array<{ file: string; line: number; column: number }> = [];
+  try {
+    errorClass = error instanceof TypeError ? 'TypeError' : error instanceof RangeError ? 'RangeError'
+      : error instanceof SyntaxError ? 'SyntaxError' : error instanceof Error ? 'Error' : 'UnknownThrownValue';
+    if (error && typeof error === 'object') {
+      const name = 'name' in error ? error.name : undefined;
+      if (typeof name === 'string' && ['Error', 'TypeError', 'RangeError', 'SyntaxError', 'ZodError', '$ZodError',
+        'AxiosError', 'HttpStatusError', 'AbortError', 'PrismaClientKnownRequestError', 'PrismaClientUnknownRequestError',
+        'PrismaClientValidationError', 'PrismaClientInitializationError', 'TransactionConflictExhaustedError',
+        'TransactionAcquisitionUnavailableError', 'TransactionDeadlineExceededError', 'ManagedMachineError'].includes(name)) errorClass = name;
+      const code = 'code' in error ? error.code : undefined;
+      // Only known platform/database/Session codes; arbitrary fields may be private content.
+      if (typeof code === 'string' && (/^P\d{4}$/u.test(code) || [
+        'EACCES', 'EPERM', 'ENOENT', 'EEXIST', 'EIO', 'ENOSPC', 'EMFILE', 'ENFILE', 'EBUSY', 'EINVAL',
+        'ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'EPIPE', 'ENOTFOUND', 'EAI_AGAIN',
+        'SQLITE_BUSY', 'SQLITE_LOCKED', 'SQLITE_IOERR', 'SQLITE_FULL', 'SQLITE_CONSTRAINT', 'SQLITE_ERROR',
+        'SQLITE_CANTOPEN', 'SQLITE_CORRUPT',
+        'session_detail_invalid_response', 'session_detail_projection_unavailable', 'not_authenticated', 'client-upgrade-required',
+      ].includes(code))) errorCode = code;
+      const response = 'response' in error ? error.response : undefined;
+      const status = response && typeof response === 'object' && 'status' in response ? response.status
+        : 'status' in error ? error.status : undefined;
+      if (typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599) httpStatus = status;
+      const stack = 'stack' in error ? error.stack : undefined;
+      const message = 'message' in error ? error.message : undefined;
+      // V8 renders the entire (possibly multiline) message before its frames.
+      // Without that exact header, a source-looking line has no established
+      // provenance and must not be persisted as a code-only diagnostic.
+      const header = typeof name === 'string' && typeof message === 'string'
+        ? (name ? (message ? `${name}: ${message}` : name) : message) : undefined;
+      const frames = typeof stack === 'string' && header !== undefined && stack.startsWith(`${header}\n`)
+        ? stack.slice(header.length + 1).split('\n') : [];
+      for (const frame of frames) {
+        const pointer = /^\s*at (?:.*\()?((?:file:\/\/\/|\/|[A-Za-z]:[\\/])[\w./\\:@+-]+\.(?:[cm]?js|tsx?)):(\d+):(\d+)\)?$/u.exec(frame);
+        if (pointer) stackFrames.push({ file: pointer[1], line: Number(pointer[2]), column: Number(pointer[3]) });
+      }
+    }
+  } catch { /* Hostile Error accessors cannot replace the original failure. */ }
+  return { errorClass, errorCode, httpStatus, stackFrames };
+}
 
 
 /**
@@ -41,13 +150,35 @@ export type ActionExecuteResult =
  * while bridge-private top-level metadata cannot cross the Action boundary.
  */
 export function projectActionExecuteFailure(result: ActionExecuteFailure): ActionExecuteFailure {
+  const goalControlFailure = SessionGoalControlFailureV1Schema.safeParse(result.goalControlFailure);
   const projected = ActionExecuteFailureSchema.safeParse({
     ok: false,
     errorCode: result.errorCode,
     error: result.error,
     ...(result.details === undefined ? {} : { details: result.details }),
+    ...(goalControlFailure.success ? { goalControlFailure: goalControlFailure.data } : {}),
   });
   return projected.success
     ? projected.data
     : { ok: false, errorCode: 'action_failed', error: 'action_failed' };
+}
+
+/**
+ * A present person (or their approver) answered an Action's confirmation or approval with "no":
+ * `approval_rejected` is an explicit rejection, `approval_canceled` is the dialog or request being
+ * withdrawn. Either way the Action did not run and nothing failed, so a caller that has no reason to
+ * tell the two apart stays quiet. This is the one predicate over those codes; callers that present
+ * the two differently (for example "rejected" versus "canceled" wording) still read the code itself.
+ */
+export function isActionApprovalDeclinedErrorCode(code: unknown): boolean {
+  return code === 'approval_rejected' || code === 'approval_canceled';
+}
+
+/**
+ * A person turned this Action off in Settings, Actions: it did not run and nothing failed. In-app
+ * callers present a calm notice that leads to that setting instead of an error, and this is the one
+ * predicate over that code.
+ */
+export function isActionTurnedOffErrorCode(code: unknown): boolean {
+  return code === 'action_disabled';
 }

@@ -54,6 +54,8 @@ export type ModelPackCoreProgress = Readonly<{
   loaded: number;
   total: number;
   file?: string;
+  filesDone: number;
+  filesTotal: number;
 }>;
 
 /** A streamed HTTP body the core reads incrementally. */
@@ -177,6 +179,9 @@ export type ModelPackStagingHandle = Readonly<{
    */
   partialByteLength: (filePath: string) => Promise<number>;
 
+  /** Copy a live file into scratch; false means no source file was present. The core verifies it. */
+  copyInstalledFile: (filePath: string) => Promise<boolean>;
+
   /**
    * Stream existing partial bytes into `onChunk` for resume re-hashing. Returns
    * the byte count streamed. Hosts must not materialize the full partial.
@@ -230,6 +235,55 @@ function throwIfAborted(signal: AbortSignal): void {
   }
 }
 
+// Source measurements on the 254 small Kokoro assets justify six simultaneous transfers.
+const MAX_PARALLEL_FILE_DOWNLOADS = 6;
+// GitHub release edges can retain a failing exact URL; retry with a distinct query.
+const TRANSIENT_RETRY_DELAYS_MS = [1_000, 2_000, 4_000];
+
+class RetryableTransferFailure {
+  constructor(readonly original: unknown) {}
+}
+
+function isTransientTransferFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message;
+  const status = /^model_pack_download_failed:(\d+)(?::|$)/.exec(message);
+  if (status) {
+    const code = Number(status[1]);
+    return code === 408 || code === 429 || (code >= 500 && code < 600);
+  }
+  if (/ENOSPC|EACCES|EROFS|no space left|permission denied|read-only file system/i.test(message)) return false;
+  // The adapter may include platform-specific native/network errors. Local file operations,
+  // policy rejection, verification, and setup errors must never enter the retry loop.
+  // Expo iOS includes NSError.description. Restrict its domain to actual transport codes;
+  // NSURLErrorDomain also contains permanent filesystem errors (-3000 through -3005).
+  const appleCode = /NSURLErrorDomain\s+Code=(-?\d+)/.exec(message);
+  if (appleCode) return [-1001, -1003, -1004, -1005, -1006, -1009].includes(Number(appleCode[1]));
+  // Node fetch preserves the socket/DNS error in cause; pinned HTTP usually preserves it directly.
+  const cause = error.cause instanceof Error ? error.cause : undefined;
+  const codes = [error, cause].map(value => value && 'code' in value ? String(value.code) : '');
+  return codes.some(code => /^(ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH)$/.test(code))
+    || message === 'timeout'
+    || /UnknownHostException|Unable to resolve host|Socket(?:Timeout)?Exception|connection (?:reset|refused)|network request failed|network is unreachable|native_transport_failed|model_pack_download_transport_failed|pinned_http_(?:wall|idle)_timeout/i.test(message);
+}
+
+async function transferBoundary<T>(operation: () => Promise<T>): Promise<T> {
+  try { return await operation(); } catch (error) {
+    if (isTransientTransferFailure(error)) throw new RetryableTransferFailure(error);
+    throw error;
+  }
+}
+
+async function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {
+  throwIfAborted(signal);
+  await new Promise<void>((resolve) => {
+    const onAbort = () => { clearTimeout(timer); resolve(); };
+    const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  throwIfAborted(signal);
+}
+
 /**
  * Download one manifest file into staging with Range-resume, incremental hashing,
  * and size validation. Throws (after resetting the partial) on size/hash mismatch.
@@ -242,6 +296,7 @@ async function downloadFileResumable(opts: {
   signal: AbortSignal;
   onFileProgress: (loadedForFile: number) => void;
   urlPolicy?: ModelPackUrlPolicy;
+  transferUrl?: string;
 }): Promise<void> {
   const { host, staging, entry, signal } = opts;
   const expectedSha = entry.sha256.trim().toLowerCase();
@@ -301,13 +356,13 @@ async function downloadFileResumable(opts: {
 
   throwIfAborted(signal);
 
-  const stream = await host.openDownload({
-    url: entry.url,
+  const stream = await transferBoundary(() => host.openDownload({
+    url: opts.transferUrl ?? entry.url,
     packId: opts.packId,
     onProgress: (written) => opts.onFileProgress(Math.min(expectedSize, loaded + Math.max(0, written))),
     rangeStart: loaded > 0 ? loaded : undefined,
     signal,
-  });
+  }));
   try {
     assertModelPackUrlAllowed(stream.finalUrl ?? entry.url, opts.urlPolicy);
     assertModelPackResolvedAddressesAllowed(stream.resolvedAddresses ?? [], {
@@ -323,7 +378,7 @@ async function downloadFileResumable(opts: {
     }
 
     await consumeStream({
-      stream,
+      stream: { ...stream, read: () => transferBoundary(() => stream.read()) },
       hasher,
       staging,
       entry,
@@ -406,6 +461,7 @@ export async function installModelPackWithHost(opts: {
   resourcePolicy?: VoiceModelPackResourcePolicyV1;
   sourceBinding?: ModelPackInstallSourceBinding;
   priorInstall?: ModelPackPromotionPriorInstallV1;
+  priorManifest?: ModelPackManifest;
   onProgress?: (progress: ModelPackCoreProgress) => void;
   durableCommit?: Readonly<{
     recovery: ModelPackDurableRecoveryRecord;
@@ -445,24 +501,73 @@ export async function installModelPackWithHost(opts: {
   let promotion: ModelPackPromotionTransaction | null = null;
   let durableCommitted = false;
   try {
-    for (const entry of opts.manifest.files) {
+    const priorFiles = new Map((opts.priorManifest?.packId === packId ? opts.priorManifest.files : [])
+      .map((file) => [file.path, file]));
+    const pack = new AbortController();
+    const forwardAbort = () => pack.abort();
+    opts.signal.addEventListener('abort', forwardAbort, { once: true });
+    if (opts.signal.aborted) pack.abort();
+    let next = 0;
+    let filesDone = 0;
+    const failures: unknown[] = [];
+    const report = (file: string) => opts.onProgress?.({
+      loaded: loadedTotal, total, file, filesDone, filesTotal: opts.manifest.files.length,
+    });
+    const installFile = async (entry: ModelPackManifest['files'][number]) => {
+      const prior = priorFiles.get(entry.path);
+      if (prior && prior.sizeBytes === entry.sizeBytes && prior.sha256.toLowerCase() === entry.sha256.toLowerCase()
+        && await staging.partialByteLength(entry.path) === 0 && await staging.copyInstalledFile(entry.path)) {
+        // A copied live file is not a resumable prefix. Corrupt/truncated live bytes must be
+        // replaced from byte zero; the existing helper verifies complete copies by digest.
+        if (await staging.partialByteLength(entry.path) !== entry.sizeBytes) await staging.resetPartial(entry.path);
+      }
       let loadedThisFile = 0;
-      await downloadFileResumable({
-        host: opts.host,
-        packId,
-        staging,
-        entry,
-        signal: opts.signal,
-        onFileProgress: (loadedForFile) => {
-          const nextLoaded = Math.max(loadedThisFile, loadedForFile);
-          const delta = nextLoaded - loadedThisFile;
-          loadedThisFile = nextLoaded;
-          loadedTotal += delta;
-          opts.onProgress?.({ loaded: loadedTotal, total, file: entry.path });
-        },
-        urlPolicy: opts.urlPolicy,
-      });
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          let transferUrl = entry.url;
+          if (attempt > 0) {
+            const url = new URL(entry.url);
+            url.searchParams.set('happierCacheBust', String(Date.now()));
+            transferUrl = url.toString();
+          }
+          await downloadFileResumable({
+            host: opts.host, packId, staging, entry, signal: pack.signal, urlPolicy: opts.urlPolicy, transferUrl,
+            onFileProgress: (loadedForFile) => {
+              const nextLoaded = Math.max(loadedThisFile, loadedForFile);
+              loadedTotal += nextLoaded - loadedThisFile;
+              loadedThisFile = nextLoaded;
+              report(entry.path);
+            },
+          });
+          break;
+        } catch (error) {
+          if (!(error instanceof RetryableTransferFailure)) throw error;
+          const delay = TRANSIENT_RETRY_DELAYS_MS[attempt];
+          if (pack.signal.aborted || delay === undefined) throw error.original;
+          console.warn('model_pack_download_retry', { attempt: attempt + 1, error: error.original });
+          await waitForRetry(delay, pack.signal);
+        }
+      }
+      loadedTotal += Math.max(0, entry.sizeBytes - loadedThisFile);
+      filesDone += 1;
+      report(entry.path);
+    };
+    const worker = async () => {
+      while (!pack.signal.aborted && next < opts.manifest.files.length) {
+        const entry = opts.manifest.files[next++]!;
+        try { await installFile(entry); } catch (error) {
+          failures.push(error);
+          pack.abort();
+        }
+      }
+    };
+    try {
+      await Promise.all(Array.from({ length: Math.min(MAX_PARALLEL_FILE_DOWNLOADS, opts.manifest.files.length) }, worker));
+    } finally {
+      opts.signal.removeEventListener('abort', forwardAbort);
     }
+    throwIfAborted(opts.signal);
+    if (failures.length > 0) throw failures[0];
 
     throwIfAborted(opts.signal);
     await staging.writeManifest(opts.manifest);
@@ -506,11 +611,10 @@ export async function installModelPackWithHost(opts: {
     if (promotion && bytesRolledBack && metadataRolledBack) {
       await promotion.completeRollback().catch(() => undefined);
     }
-    await staging.cleanup().catch(() => undefined);
     throw error;
   } finally {
     // promote() owns backup cleanup on success; this is a best-effort safety net
     // for staging scratch left by a thrown-and-rethrown failure.
-    await staging.cleanup().catch(() => undefined);
+    await staging.cleanup().catch((error) => console.warn('model_pack_staging_cleanup_failed', error));
   }
 }

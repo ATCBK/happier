@@ -2,9 +2,11 @@ import {
     SessionAccessErrorCodeV1Schema,
     type SessionAccessErrorCodeV1,
 } from '@happier-dev/protocol/sessions/access/sessionAccessOperationsV1';
+import { readActionCredentialScopeDeniedHttpFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
 
 export type SessionAccessHttpFailureCode =
     | SessionAccessErrorCodeV1
+    | 'credential_scope_denied'
     | 'public_share_isolation_unavailable'
     | 'session_access_request_failed';
 
@@ -23,6 +25,8 @@ export function readSessionAccessHttpFailureCode(
     payload: unknown,
     status: number,
 ): SessionAccessHttpFailureCode {
+    const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(status, payload);
+    if (scopeDenial) return scopeDenial.errorCode;
     const record = typeof payload === 'object' && payload !== null
         ? payload as Readonly<Record<string, unknown>>
         : {};

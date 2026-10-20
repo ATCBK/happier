@@ -1,6 +1,10 @@
 // Native MMKV identifies its backing store by configuration, not JS instance.
 type StoredValue = string | number | boolean | ArrayBuffer;
-const stores = new Map<string, Map<string, StoredValue>>();
+type NativeStores = Map<string, Map<string, StoredValue>>;
+const storesKey = Symbol.for('happier.vitest.mmkvStores');
+const nativeRuntime = globalThis as unknown as { [key: symbol]: NativeStores | undefined };
+// The native backing outlives JS module reloads, including handles held by cached SDK mocks.
+const stores = nativeRuntime[storesKey] ??= new Map<string, Map<string, StoredValue>>();
 
 /** Clear native backing contents without invalidating existing MMKV handles. */
 export function resetMmkvStoresForTests(): void {

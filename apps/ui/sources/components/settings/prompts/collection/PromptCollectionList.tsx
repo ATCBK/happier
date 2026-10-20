@@ -5,6 +5,7 @@ import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { SettingsPageHeader } from '@/components/settings/shell/SettingsPageHeader';
 import { SettingsCollectionLayout } from '@/components/settings/shell/SettingsCollectionLayout';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 import {
     resolveSettingsNestedRouteName,
     type SettingsNestedNavigator,
@@ -43,7 +44,6 @@ import {
 } from './promptCollectionModel';
 import { CollectionDraftRow, CollectionList, CollectionListGroupLabel, collectionListStyles } from '@/components/ui/lists/collection/CollectionList';
 import {
-    createHappierCollectionDraftTitleStore,
     useHappierCollectionIndexView,
     useHappierCollectionLayout,
 } from '@happier-dev/plugin-ui/presentation';
@@ -57,17 +57,6 @@ const NAVIGATORS: Readonly<Record<Exclude<PromptCollectionKind, 'bundle'>, Setti
     doc: 'prompts/docs',
     template: 'prompts/templates',
 };
-
-/** The name typed into each collection's open draft, shown by its draft row. */
-const draftTitles: Readonly<Record<PromptCollectionKind, ReturnType<typeof createHappierCollectionDraftTitleStore>>> = {
-    doc: createHappierCollectionDraftTitleStore(),
-    bundle: createHappierCollectionDraftTitleStore(),
-    template: createHappierCollectionDraftTitleStore(),
-};
-
-export function publishPromptCollectionDraftTitle(kind: PromptCollectionKind, title: string): void {
-    draftTitles[kind].publish(title);
-}
 
 function collectionCopy(kind: PromptCollectionKind) {
     switch (kind) {
@@ -177,11 +166,12 @@ export const PromptCollectionAddButton = React.memo(function PromptCollectionAdd
 });
 
 const PromptCollectionDraftRow = React.memo(function PromptCollectionDraftRow(props: Readonly<{ kind: PromptCollectionKind }>) {
+    const titles = useCollectionDraftTitle();
     const copy = collectionCopy(props.kind);
     return (
         <CollectionDraftRow
             testID={`${copy.testID}.draft`}
-            titles={draftTitles[props.kind]}
+            titles={titles}
             placeholder={copy.draft}
             mark={null}
         />

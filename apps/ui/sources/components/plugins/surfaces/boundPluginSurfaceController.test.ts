@@ -7,7 +7,9 @@ import {
 } from '@happier-dev/protocol';
 import { createWidgetAreaActionPortV1, createWidgetSurfaceArtifactPortV1, createWidgetActionInputResolverV1, readBuiltinWidgetDescriptorV1 } from '@happier-dev/protocol/widgets';
 import type { HomeHubArtifactTransportV1 } from '@happier-dev/protocol/home';
-import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { createWorkBoardArtifactBoundary } from '@/dev/testkit/harness/workBoardArtifactBoundary';
+import { EMPTY_PLUGIN_UI_PROJECTION, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
 import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/contributions/ui';
 import {
     PluginUiSelectActionInputResultV1Schema,
@@ -23,12 +25,16 @@ import { createMachineFixture, renderHook } from '@/dev/testkit';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import type { PluginProjectionEntry } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 import { log } from '@/log';
+import { t } from '@/text';
+import { settlePluginSurfaceHostApiRequest } from './createPluginSurfaceHostApi';
+import { WidgetFrameBodyNoticeContext, type WidgetFrameBodyNoticeSource } from '@/components/widgets/frame/widgetFrameBodyCaption';
 import { storage } from '@/sync/domains/state/storageStore';
 import {
     createBoundPluginSurfaceController,
     useBoundPluginSurfaceController,
     usePluginSurfaceDaemonInteraction,
     type BoundPluginSurfaceBinding,
+    type BoundPluginSurfaceFacts,
 } from './boundPluginSurfaceController';
 import type { PluginSurfaceResourceReadTransport } from './pluginSurfaceResourceRead';
 import type { PluginSurfaceResourceWatchTransport } from './pluginSurfaceResourceWatch';
@@ -237,6 +243,297 @@ function request(method: string, payload?: unknown) {
 }
 
 describe('BoundPluginSurfaceController (§3.1)', () => {
+    it('classifies host readiness as pending without changing caller refusals or Account activity', async () => {
+        for (const occurrenceId of [null, FACTS.occurrenceId]) {
+            let connecting = true;
+            const facts = { ...FACTS, occurrenceId, executionOrigin: null, daemonInteractionEnabled: false,
+                isDaemonConnectionPending: () => connecting };
+            const controller = createBoundPluginSurfaceController({ facts });
+            try {
+                const invocation = request('executeAction', { action: 'refresh-index', input: {} });
+                const read = () => settlePluginSurfaceHostApiRequest(invocation, () => controller.hostApi.handleRequest(invocation));
+                const original = occurrenceId ? 'plugin_surface_contributed_action_unavailable' : 'plugin_mounted_caller_unavailable';
+                expect(await read()).toMatchObject({ kind: 'error', payload: { code: 'unavailable',
+                    diagnostics: [original, 'plugin_surface_connection_pending'] } });
+                expect(controller.interactive).toBe(true);
+                expect(controller.hostApi.handleRequest(request('context'))).toMatchObject({ pluginId: FACTS.pluginId });
+                const localInvocation = request('executeAction', { action: 'plugins.reload', input: {} });
+                const localResult = await settlePluginSurfaceHostApiRequest(localInvocation,
+                    () => controller.hostApi.handleRequest(localInvocation));
+                if (localResult.kind === 'error') {
+                    expect(localResult.payload.diagnostics).not.toContain('plugin_surface_connection_pending');
+                }
+                // The same refusal during an actual outage is terminal. A code
+                // allowlist alone cannot infer that a host is still connecting.
+                connecting = false;
+                expect(await read()).toMatchObject({ kind: 'error', payload: { code: 'unavailable', diagnostics: [original] } });
+            } finally { controller.dispose(); }
+        }
+    });
+
+    it('keeps supported Machine methods structurally admitted without an execution target', async () => {
+        const controller = createBoundPluginSurfaceController({ facts: {
+            ...FACTS, machineId: null, occurrenceId: null, executionOrigin: null, daemonInteractionEnabled: false,
+            executionOriginSelectionKind: 'selectionRequired',
+        } });
+        try {
+            for (const method of ['readStoredImage', 'watchLiveStream', 'selectActionInput', 'readResource', 'watchResource'] as const) {
+                expect(controller.admissionMethods).toContain(method);
+                expect(controller.installedMethods).not.toContain(method);
+                const invocation = request(method);
+                await expect(settlePluginSurfaceHostApiRequest(invocation, () => controller.hostApi.handleRequest(invocation)))
+                    .resolves.toMatchObject({ kind: 'error', payload: {
+                        code: 'unavailable', diagnostics: [`host_api_method_unavailable:${method}`],
+                        message: t('settingsPlugins.targetSelection.selectionRequired'),
+                    } });
+            }
+            expect(controller.admissionMethods).not.toContain('readOpenableContent');
+            expect(controller.admissionMethods).not.toContain('statOpenableContent');
+            expect(controller.interactive).toBe(true);
+            const withoutResources = createBoundPluginSurfaceController({ facts: {
+                ...FACTS, machineId: null, occurrenceId: null, executionOrigin: null,
+                resourceCapability: undefined, daemonInteractionEnabled: false,
+            } });
+            expect(withoutResources.admissionMethods).not.toContain('readResource');
+            expect(withoutResources.admissionMethods).not.toContain('watchResource');
+            withoutResources.dispose();
+        } finally { controller.dispose(); }
+    });
+
+    it.each([
+        { occurrenceId: FACTS.occurrenceId, machineDisplayName: 'Studio Mac' },
+        { occurrenceId: null, machineDisplayName: 'Studio Mac' },
+        { occurrenceId: null, machineDisplayName: null },
+    ])('names the unavailable target in real Action and Resource refusals while keeping Account content interactive (%j)', async ({ occurrenceId, machineDisplayName }) => {
+        const controller = createBoundPluginSurfaceController({ facts: {
+            ...FACTS, occurrenceId, executionOrigin: null, machineDisplayName, daemonInteractionEnabled: false,
+        } });
+        try {
+            for (const [method, payload, diagnostic] of [
+                ['executeAction', { action: 'refresh-index', input: {} }, occurrenceId ? 'plugin_surface_contributed_action_unavailable' : 'plugin_mounted_caller_unavailable'],
+                ['readResource', { resource: 'status' }, occurrenceId ? 'plugin_resource_transport_unavailable' : 'host_api_method_unavailable:readResource'],
+            ] as const) {
+                const invocation = request(method, payload);
+                const result = await settlePluginSurfaceHostApiRequest(invocation, () => controller.hostApi.handleRequest(invocation));
+                expect(result).toMatchObject({ kind: 'error', payload: {
+                    code: 'unavailable', diagnostics: [diagnostic], message: expect.stringContaining(machineDisplayName ?? t('machine.thisMachineInSentence')),
+                } });
+                // A Machine whose name has not loaded is "this machine" in a sentence, never its raw id.
+                expect((result as { payload: { message: string } }).payload.message).not.toContain(FACTS.machineId);
+            }
+            expect(controller.interactive).toBe(true);
+            expect(controller.isCurrent()).toBe(true);
+            expect(controller.hostApi.handleRequest(request('context'))).toMatchObject({ pluginId: FACTS.pluginId });
+        } finally { controller.dispose(); }
+    });
+
+    it('names the unavailable Run-on Machine supplied by the surface host without a bound execution origin', async () => {
+        const controller = createBoundPluginSurfaceController({ facts: {
+            ...FACTS, machineId: 'machine_pinned_offline', machineDisplayName: 'Old laptop',
+            occurrenceId: null, executionOrigin: null, daemonInteractionEnabled: false,
+            executionOriginSelectionKind: 'unavailable',
+        } });
+        try {
+            const invocation = request('executeAction', { action: 'refresh-index', input: {} });
+            const result = await settlePluginSurfaceHostApiRequest(invocation, () => controller.hostApi.handleRequest(invocation));
+            expect(result).toMatchObject({ kind: 'error', payload: { code: 'unavailable',
+                message: t('settingsPlugins.surfaces.machineCapabilityUnavailable', { machine: 'Old laptop' }) } });
+        } finally {
+            controller.dispose();
+        }
+    });
+
+    it('preserves a failed target read through Action and Resource refusals instead of claiming Machine incapability', async () => {
+        let failed = true;
+        let pending = true;
+        const facts = {
+            ...FACTS,
+            machineDisplayName: 'Studio Mac',
+            isDaemonConnectionPending: () => pending,
+            get daemonInteractionEnabled() { return !failed; },
+            get daemonConnectionFailure() {
+                return failed ? { code: 'timeout' as const, reasonCode: 'targeted_contributions_timeout' } : undefined;
+            },
+        };
+        const executeContributedAction = vi.fn(async () => ({ supported: true as const, result: { ok: true as const, result: { refreshed: true } } }));
+        const controller = createBoundPluginSurfaceController({ facts, binding: { executeContributedAction } });
+        try {
+            const waiting = request('executeAction', { action: 'refresh-index', input: {} });
+            await expect(settlePluginSurfaceHostApiRequest(waiting, () => controller.hostApi.handleRequest(waiting)))
+                .resolves.toMatchObject({ kind: 'error', payload: { code: 'unavailable',
+                    diagnostics: expect.arrayContaining(['plugin_surface_connection_pending']) } });
+            pending = false;
+            for (const [method, payload] of [
+                ['executeAction', { action: 'refresh-index', input: {} }],
+                ['readResource', { resource: 'status' }],
+            ] as const) {
+                const invocation = request(method, payload);
+                const result = await settlePluginSurfaceHostApiRequest(invocation, () => controller.hostApi.handleRequest(invocation));
+                expect(result).toMatchObject({ kind: 'error', payload: {
+                    code: 'timeout', diagnostics: expect.arrayContaining(['targeted_contributions_timeout']),
+                    message: t('pluginRuntime.transportUnavailable'),
+                } });
+            }
+            expect(executeContributedAction).not.toHaveBeenCalled();
+            expect(controller.isCurrent()).toBe(true);
+            failed = false;
+            await expect(controller.dispatchAction({ pluginId: FACTS.pluginId, localId: 'refresh-index' }, {}))
+                .resolves.toEqual({ refreshed: true });
+        } finally { controller.dispose(); }
+    });
+
+    it('says once what to do when no Machine exists at all, instead of naming a Machine that is not there', async () => {
+        const controller = createBoundPluginSurfaceController({ facts: {
+            ...FACTS, machineId: null, machineDisplayName: null, occurrenceId: null, executionOrigin: null,
+            daemonInteractionEnabled: false, executionOriginSelectionKind: 'unavailable',
+        } });
+        try {
+            await expect(controller.dispatchAction({ pluginId: FACTS.pluginId, localId: 'refresh-index' })).resolves.toMatchObject({
+                code: 'unavailable', message: t('settingsPlugins.targetSelection.noMachine'),
+            });
+        } finally { controller.dispose(); }
+    });
+
+    it('lends the Machine sentence it gave a refusal to the enclosing widget frame, and withdraws it when the mount ends', async () => {
+        const lend = vi.fn();
+        const hook = await renderHook(() => useBoundPluginSurfaceController({ facts: {
+            ...FACTS, occurrenceId: null, executionOrigin: null, machineDisplayName: 'Studio Mac', daemonInteractionEnabled: false,
+        } }), { wrapper: ({ children }) => React.createElement(WidgetFrameBodyNoticeContext.Provider, { value: lend }, children) });
+        const controller = hook.getCurrent();
+        // Account-owned content is not a Machine refusal: nothing to say.
+        controller.hostApi.handleRequest(request('context'));
+        expect(lend).not.toHaveBeenCalled();
+        const invocation = request('executeAction', { action: 'refresh-index', input: {} });
+        await settlePluginSurfaceHostApiRequest(invocation, () => controller.hostApi.handleRequest(invocation));
+        // Lent once, as a way to word it that follows the Machine's state.
+        await settlePluginSurfaceHostApiRequest(invocation, () => controller.hostApi.handleRequest(invocation));
+        expect(lend).toHaveBeenCalledTimes(1);
+        const describe = lend.mock.calls[0]![0] as WidgetFrameBodyNoticeSource;
+        expect(describe()).toEqual({ sentence: t('settingsPlugins.surfaces.machineCapabilityUnavailable', { machine: 'Studio Mac' }) });
+        await hook.unmount();
+        expect(lend).toHaveBeenLastCalledWith(null);
+    });
+
+    it('tells the widget frame that no Machine exists, so it leads to adding one instead of retrying', async () => {
+        const lend = vi.fn();
+        const hook = await renderHook(() => useBoundPluginSurfaceController({ facts: {
+            ...FACTS, machineId: null, machineDisplayName: null, occurrenceId: null, executionOrigin: null,
+            daemonInteractionEnabled: false, executionOriginSelectionKind: 'unavailable',
+        } }), { wrapper: ({ children }) => React.createElement(WidgetFrameBodyNoticeContext.Provider, { value: lend }, children) });
+        const invocation = request('executeAction', { action: 'refresh-index', input: {} });
+        await settlePluginSurfaceHostApiRequest(invocation, () => hook.getCurrent().hostApi.handleRequest(invocation));
+        const describe = lend.mock.calls[0]![0] as WidgetFrameBodyNoticeSource;
+        expect(describe()).toEqual({ sentence: t('settingsPlugins.targetSelection.noMachine'), addMachine: true });
+        await hook.unmount();
+    });
+
+    it('says none of the Home’s machines runs the plugin, and leads to the plugin, when machines exist but none can', async () => {
+        const lend = vi.fn();
+        const hook = await renderHook(() => useBoundPluginSurfaceController({ facts: {
+            ...FACTS, machineId: null, machineDisplayName: null, occurrenceId: null, executionOrigin: null,
+            daemonInteractionEnabled: false, executionOriginSelectionKind: 'unavailable',
+            homeHasMachines: true, pluginDisplayName: 'PRs & Issues',
+        } }), { wrapper: ({ children }) => React.createElement(WidgetFrameBodyNoticeContext.Provider, { value: lend }, children) });
+        const invocation = request('executeAction', { action: 'refresh-index', input: {} });
+        await settlePluginSurfaceHostApiRequest(invocation, () => hook.getCurrent().hostApi.handleRequest(invocation));
+        const describe = lend.mock.calls[0]![0] as WidgetFrameBodyNoticeSource;
+        expect(describe()).toEqual({ sentence: t('settingsPlugins.surfaces.noMachineRunsPlugin', { plugin: 'PRs & Issues' }), managePluginId: FACTS.pluginId });
+        await hook.unmount();
+    });
+
+    describe('a Machine that has the plugin but cannot run it', () => {
+        const refused = (executionOriginRefusal: NonNullable<BoundPluginSurfaceFacts['executionOriginRefusal']>) => {
+            const lend = vi.fn();
+            const mounted = renderHook(() => useBoundPluginSurfaceController({ facts: {
+                ...FACTS, machineId: null, machineDisplayName: null, occurrenceId: null, executionOrigin: null,
+                daemonInteractionEnabled: false, executionOriginSelectionKind: 'unavailable',
+                homeHasMachines: true, pluginDisplayName: 'PRs & Issues', executionOriginRefusal,
+            } }), { wrapper: ({ children }) => React.createElement(WidgetFrameBodyNoticeContext.Provider, { value: lend }, children) });
+            return { lend, mounted };
+        };
+        const noticeFor = async (executionOriginRefusal: NonNullable<BoundPluginSurfaceFacts['executionOriginRefusal']>) => {
+            const { lend, mounted } = refused(executionOriginRefusal);
+            const hook = await mounted;
+            const invocation = request('executeAction', { action: 'refresh-index', input: {} });
+            await settlePluginSurfaceHostApiRequest(invocation, () => hook.getCurrent().hostApi.handleRequest(invocation));
+            const notice = (lend.mock.calls[0]![0] as WidgetFrameBodyNoticeSource)();
+            await hook.unmount();
+            return notice;
+        };
+
+        it.each([
+            [['activation_refused'], 'pluginCouldNotStart', undefined],
+            [['offline'], 'pluginMachineUnreachable', undefined],
+            [['untrusted'], 'pluginNotReady', FACTS.pluginId],
+            [['activation_refused', 'offline'], 'pluginNotReady', FACTS.pluginId],
+        ] as const)('words %j for the Machine it names, never as "install it"', async (reasons, key, managePluginId) => {
+            const notice = await noticeFor({ reasons, machineDisplayName: 'QA Machine' });
+            expect(notice).toEqual({
+                sentence: t(`settingsPlugins.surfaces.${key}`, { plugin: 'PRs & Issues', machine: 'QA Machine' }),
+                ...(managePluginId ? { managePluginId } : {}),
+            });
+            expect(notice?.sentence).not.toBe(t('settingsPlugins.surfaces.noMachineRunsPlugin', { plugin: 'PRs & Issues' }));
+        });
+
+        it('says the plugin could not start on the Machine, in words, with the way forward', async () => {
+            const notice = await noticeFor({ reasons: ['activation_refused'], machineDisplayName: 'QA Machine' });
+            expect(notice?.sentence).toBe('PRs & Issues couldn’t start on QA Machine. Restart Happier there, or choose another machine with Run on.');
+        });
+
+        it('does not name one Machine when several refused', async () => {
+            const notice = await noticeFor({ reasons: ['activation_refused', 'offline'] });
+            expect(notice).toEqual({
+                sentence: t('settingsPlugins.surfaces.pluginNotReadyAnywhere', { plugin: 'PRs & Issues' }),
+                managePluginId: FACTS.pluginId,
+            });
+        });
+
+        it('still leads to installing when no Machine has it', async () => {
+            const notice = await noticeFor({ reasons: ['no_materialization'] });
+            expect(notice).toEqual({ sentence: t('settingsPlugins.surfaces.noMachineRunsPlugin', { plugin: 'PRs & Issues' }), managePluginId: FACTS.pluginId });
+        });
+    });
+
+    it.each(['selectionRequired', 'conflict'] as const)('asks for a target only when Administration reports %s', async executionOriginSelectionKind => {
+        const controller = createBoundPluginSurfaceController({ facts: {
+            ...FACTS, machineId: null, executionOrigin: null, daemonInteractionEnabled: false,
+            executionOriginSelectionKind,
+        } });
+        try {
+            await expect(controller.dispatchAction({ pluginId: FACTS.pluginId, localId: 'refresh-index' })).resolves.toMatchObject({
+                code: 'unavailable', diagnostics: ['plugin_mounted_caller_unavailable'],
+                message: t('settingsPlugins.targetSelection.selectionRequired'),
+            });
+            expect(controller.isCurrent()).toBe(true);
+        } finally { controller.dispose(); }
+    });
+
+    it('does not reinterpret a local host Action custody refusal as Machine unavailability', async () => {
+        const controller = createBoundPluginSurfaceController({ facts: {
+            ...FACTS, occurrenceId: null, executionOrigin: null, machineDisplayName: 'Studio Mac', daemonInteractionEnabled: false,
+        } });
+        try {
+            await expect(controller.hostApi.handleRequest(request('executeAction', { action: 'plugins.reload', input: {} }))).resolves.toEqual({
+                code: 'unavailable', diagnostics: ['plugin_mounted_caller_unavailable'],
+            });
+        } finally { controller.dispose(); }
+    });
+
+    it('hydrates the unavailable target label without replacing its mounted controller', async () => {
+        const hook = await renderHook((machineDisplayName: string | null) => useBoundPluginSurfaceController({ facts: {
+            ...FACTS, occurrenceId: null, executionOrigin: null, machineDisplayName, daemonInteractionEnabled: false,
+        } }), { initialProps: null as string | null });
+        try {
+            const first = hook.getCurrent();
+            const action = { pluginId: FACTS.pluginId, localId: 'refresh-index' };
+            await expect(first.dispatchAction(action)).resolves.toMatchObject({ message: t('settingsPlugins.surfaces.machineCapabilityUnavailable', { machine: t('machine.thisMachineInSentence') }) });
+            const updated = await hook.rerender('Studio Mac');
+            expect(updated).toBe(first);
+            expect(first.isCurrent()).toBe(true);
+            await expect(first.dispatchAction(action)).resolves.toMatchObject({ message: expect.stringContaining('Studio Mac') });
+        } finally { await hook.unmount(); }
+    });
+
     it('refuses an existing mounted Host API when its containing document admission is withdrawn', () => {
         let documentCurrent = true;
         const controller = createBoundPluginSurfaceController({ facts: { ...FACTS, isHostCurrent: () => documentCurrent } });
@@ -250,7 +547,69 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         controller.dispose();
         renewed.dispose();
     });
-    it('installs a declared page area on the actual mounted host port and persists its Action result', async () => {
+    it.each([false, true])('keeps human area edits distinct from plugin and agent requests, honoring explicit Ask (%s)', async ask => {
+        const scope = CURRENT_ACCOUNT_LIFETIME.scope;
+        const boundary = createWorkBoardArtifactBoundary({ v: 1, boards: [] });
+        const surface = { ...scope, owner: { kind: 'pluginArea', pluginId: FACTS.pluginId, pageId: FACTS.contributionId, area: 'pinned' } } as const;
+        const store = createWidgetSurfaceArtifactPortV1(boundary.forAccount(scope.accountId), { surface, isCurrent: () => true });
+        const executor = createActionExecutor(createActionExecutorBoundaryFixture({ widgetAccountScope: () => scope,
+            widgetSurfaceActions: { pluginArea: createWidgetAreaActionPortV1(() => store) },
+            widgetInputs: createWidgetActionInputResolverV1({ readDescriptor: async request => readBuiltinWidgetDescriptorV1(request.instance.definition),
+                readContext: async () => ({}), readViewerValues: async () => ({ values: {} }), validateValue: async () => ({ status: 'valid' }),
+                resolveOptions: async () => [{ value: { serverId: scope.serverId, sessionId: 'readable-session' } }] }),
+        }));
+        const destination = normalizePluginUiDestinationBindingV1({ pluginId: FACTS.pluginId, destinationId: FACTS.contributionId,
+            container: 'appPage', target: { kind: 'app' }, rendererId: 'native', instancePolicy: 'singleton' });
+        if (!destination) throw new Error('Destination admission failed');
+        const settings = normalizeActionsSettingsV1(ask ? { v: 1, actions: {
+            'widgets.item.add': { approvalRequiredSurfaces: ['ui'] }, 'widgets.item.remove': { approvalRequiredSurfaces: ['ui'] },
+        } } : { v: 1 });
+        const controller = createBoundPluginSurfaceController({ facts: { ...FACTS,
+            pluginUiProjection: { ...EMPTY_PLUGIN_UI_PROJECTION, surfacePlacementsById: {
+                [FACTS.surfaceId]: { id: FACTS.surfaceId, pluginId: FACTS.pluginId, occurrenceId: FACTS.occurrenceId,
+                    contributionKind: 'surfacePlacement', descriptorId: FACTS.contributionId, binding: destination,
+                    target: {}, renderer: {}, display: {}, headerActions: [], availability: { state: 'available', reason: 'available', diagnostics: [] },
+                    widgetAreas: [{ name: 'pinned', contextSchema: { type: 'object', additionalProperties: false } }],
+                },
+            } },
+        }, binding: { executeHostAction: (id, input, context) => executor.execute(id, input, { ...context, actionsSettings: settings }) } });
+        const instance = { v: 1, id: 'copy', definition: { kind: 'builtin', id: 'session_summary' }, bindings: {
+            session: { kind: 'value', value: { serverId: scope.serverId, sessionId: 'readable-session' } },
+        } } as const;
+        const add = { area: 'pinned', operation: { actionId: 'widgets.item.add', instance } } as const;
+        const remove = { area: 'pinned', operation: { actionId: 'widgets.item.remove', instanceId: instance.id } } as const;
+        try {
+            // The public plugin transport cannot inherit the person's UI authority.
+            expect(await controller.hostApi.handleRequest(request('widgetArea', add)))
+                .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+            expect(await controller.hostApi.handleRequest(request('executeAction', { action: 'widgets.item.add', input: { surface, instance } })))
+                .toMatchObject({ code: 'unavailable', diagnostics: ['approvals_not_supported'] });
+            expect(await executor.execute('widgets.item.add', { surface, instance }, { surface: 'agent', authority: 'account_automation' }))
+                .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+            expect(boundary.rows.size).toBe(0);
+            const added = await controller.widgetArea!(add);
+            if (ask) {
+                expect(added).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+                expect(boundary.rows.size).toBe(0);
+                await store.apply({ kind: 'add', instance });
+            } else {
+                expect(added).toMatchObject({ ok: true, result: { instance } });
+            }
+            expect((await store.read()).items).toHaveLength(1);
+            expect(await controller.hostApi.handleRequest(request('widgetArea', remove)))
+                .toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+            expect(await controller.hostApi.handleRequest(request('executeAction', { action: 'widgets.item.remove', input: { ref: { surface, instanceId: instance.id } } })))
+                .toMatchObject({ code: 'unavailable', diagnostics: ['approvals_not_supported'] });
+            expect(await executor.execute('widgets.item.remove', { ref: { surface, instanceId: instance.id } },
+                { surface: 'agent', authority: 'account_automation' })).toMatchObject({ ok: false, errorCode: 'approvals_not_supported' });
+            const removed = await controller.widgetArea!(remove);
+            expect(removed).toMatchObject(ask ? { ok: false, errorCode: 'approvals_not_supported' } : { ok: true, result: { instance: null } });
+            expect((await store.read()).items).toHaveLength(ask ? 1 : 0);
+            controller.retire();
+            expect(await controller.widgetArea!(add)).toMatchObject({ code: 'stale_surface' });
+        } finally { controller.dispose(); }
+    });
+    it.each(['available', 'pending', 'unavailable'] as const)('installs a declared page area independently of Machine availability and preserves Action custody (target: %s)', async (targetState) => {
         const scope = CURRENT_ACCOUNT_LIFETIME.scope;
         let row: Awaited<ReturnType<HomeHubArtifactTransportV1['read']>> = null;
         let onRead: (() => void) | undefined;
@@ -269,7 +628,10 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         const destination = normalizePluginUiDestinationBindingV1({ pluginId: FACTS.pluginId, destinationId: FACTS.contributionId,
             container: 'appPage', target: { kind: 'app' }, rendererId: 'native', instancePolicy: 'singleton' });
         if (!destination) throw new Error('Destination admission failed');
-        const facts = { ...FACTS, pluginUiProjection: { ...EMPTY_PLUGIN_UI_PROJECTION, surfacePlacementsById: {
+        const facts = { ...FACTS,
+            ...(targetState !== 'available' ? { occurrenceId: null, executionOrigin: null, daemonInteractionEnabled: false } : {}),
+            isDaemonConnectionPending: () => targetState === 'pending',
+            pluginUiProjection: { ...EMPTY_PLUGIN_UI_PROJECTION, surfacePlacementsById: {
             [FACTS.surfaceId]: { id: FACTS.surfaceId, pluginId: FACTS.pluginId, occurrenceId: FACTS.occurrenceId,
                 contributionKind: 'surfacePlacement' as const, descriptorId: FACTS.contributionId, binding: destination,
                 target: {}, renderer: {}, display: {}, headerActions: [], availability: { state: 'available' as const, reason: 'available', diagnostics: [] },
@@ -278,11 +640,22 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         } } };
         const controller = createBoundPluginSurfaceController({ facts, binding: { executeHostAction: (id, input, context) =>
             executor.execute(id, input, { ...context, bypassApprovals: true }) } });
+        expect(controller.admissionMethods).toContain('widgetArea');
         expect(controller.installedMethods).toContain('widgetArea');
         const instance = { v: 1, id: 'copy', definition: { kind: 'builtin', id: 'session_summary' }, bindings: {
             session: { kind: 'value', value: { serverId: scope.serverId, sessionId: 'readable-session' } },
         } };
         const added = await controller.hostApi.handleRequest(request('widgetArea', { area: 'pinned', operation: { actionId: 'widgets.item.add', instance } }));
+        if (targetState !== 'available') {
+            const errorCode = targetState === 'pending' ? 'plugin_surface_connection_pending' : 'plugin_mounted_caller_unavailable';
+            expect(await controller.hostApi.handleRequest(request('widgetArea', { area: 'pinned', operation: { actionId: 'widgets.item.list' } })))
+                .toMatchObject({ ok: false, errorCode });
+            expect(added).toMatchObject({ ok: false, errorCode });
+            expect(row).toBeNull();
+            expect(controller.interactive).toBe(true);
+            controller.dispose();
+            return;
+        }
         if (added && typeof added === 'object' && !Array.isArray(added) && 'ok' in added && added.ok === false) throw new Error(JSON.stringify(added));
         expect(added)
             .toMatchObject({ ok: true, result: { instance, ref: { surface: { ...scope, owner: { kind: 'pluginArea', pluginId: FACTS.pluginId, pageId: FACTS.contributionId, area: 'pinned' } } } } });
@@ -621,8 +994,28 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
 
     it('keeps one controller for equivalent daemon target snapshots and retires it for semantic projection or target-generation replacement', async () => {
         let projectionTraversals = 0;
-        const pluginUiProjection = Object.freeze({
+        let unrelatedTranslationTraversals = 0;
+        let selectedTranslationTraversals = 0;
+        const pluginUiProjection: PluginUiProjectionModel = Object.freeze({
             ...EMPTY_PLUGIN_UI_PROJECTION,
+            translationsByPluginId: Object.freeze({
+                'acme.browser': { id: 'translations:acme.browser', pluginId: 'acme.browser',
+                    contributionKind: 'translations' as const, locales: ['en'], bundles: new Proxy({ en: { 'action.title': 'Configure browser' } }, {
+                        ownKeys(target) {
+                            selectedTranslationTraversals += 1;
+                            return Reflect.ownKeys(target);
+                        },
+                    }) },
+                'acme.unrelated': { id: 'translations:acme.unrelated', pluginId: 'acme.unrelated',
+                    contributionKind: 'translations' as const, locales: ['en'], bundles: new Proxy({ en: Object.fromEntries(
+                        Array.from({ length: 1024 }, (_, index) => [`unrelated.${index}`, 'Unrelated catalog text '.repeat(8)]),
+                    ) }, {
+                        ownKeys(target) {
+                            unrelatedTranslationTraversals += 1;
+                            return Reflect.ownKeys(target);
+                        },
+                    }) },
+            }),
             // Observe real materialization of an immutable public input, not
             // the serializer implementation or an incidental invocation count.
             unknownEntriesById: new Proxy(EMPTY_PLUGIN_UI_PROJECTION.unknownEntriesById, {
@@ -735,6 +1128,10 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
 
         const initialTraversals = projectionTraversals;
         expect(initialTraversals).toBe(0);
+        // A mounted selector cannot consume another plugin's translations.
+        // Catalog growth must not grow its render-time serialization work.
+        expect(unrelatedTranslationTraversals).toBe(0);
+        expect(selectedTranslationTraversals).toBe(1);
         const unchanged = await hook.rerender(initialDaemonFacts);
         // Settled parent refreshes must not repeatedly walk an unchanged
         // projection, and must preserve its mounted interaction lifetime.
@@ -742,6 +1139,17 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         expect(unchanged).toBe(first);
         expect(first.isCurrent()).toBe(true);
         expect(firstRetirement).not.toHaveBeenCalled();
+
+        for (let index = 0; index < 12; index += 1) {
+            const refreshed = await hook.rerender({
+                ...initialDaemonFacts,
+                pluginUiProjection: { ...pluginUiProjection, generation: index },
+            });
+            expect(refreshed).toBe(first);
+        }
+        // Producer delivery changes retain the same consumed immutable inputs.
+        expect(selectedTranslationTraversals).toBe(1);
+        expect(unrelatedTranslationTraversals).toBe(0);
 
         const equivalentDaemonFacts = daemonFactsFor({
             targetGeneration: 'browser-generation-a',
@@ -813,7 +1221,7 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
             ...targetReplacementFacts,
             pluginUiProjection: { ...pluginUiProjection, translationsByPluginId: {
                 'acme.browser': { id: 'translations:acme.browser', pluginId: 'acme.browser',
-                    contributionKind: 'translations', locales: ['en'], bundles: { en: { 'action.title': 'Configure browser' } } },
+                    contributionKind: 'translations', locales: ['en'], bundles: { en: { 'action.title': 'Configure revised browser' } } },
             } },
         });
         expect(translatedProjection).not.toBe(targetReplacement);
@@ -1134,6 +1542,7 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
             actionRequestId: 'req:executeAction',
             serverId: 'server-1',
             surface: 'plugin',
+            authority: 'account_automation',
             actionCaller: {
                 kind: 'plugin',
                 pluginId: FACTS.pluginId,
@@ -1732,6 +2141,18 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         });
     });
 
+    it('does not infer a Run-on choice request from the absence of a bound Machine', async () => {
+        const controller = createBoundPluginSurfaceController({
+            facts: { ...FACTS, machineId: null, daemonInteractionEnabled: false },
+        });
+        try {
+            expect(await controller.hostApi.handleRequest(request('readResource', {
+                resource: { pluginId: FACTS.pluginId, localId: 'latest' },
+            }))).toMatchObject({ code: 'unavailable',
+                message: t('settingsPlugins.surfaces.machineCapabilityUnavailable', { machine: t('machine.thisMachineInSentence') }) });
+        } finally { controller.dispose(); }
+    });
+
     it('keeps canonical Connected Accounts navigation available without daemon interaction', async () => {
         const openConnectedAccounts = vi.fn(async () => undefined);
         const controller = createBoundPluginSurfaceController({
@@ -1775,6 +2196,7 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         expect(controller.installedMethods).toEqual([
             'context',
             'executeAction',
+            'admitAction',
             'readResource',
             'watchResource',
             'notify',
@@ -1795,6 +2217,7 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
         }))).resolves.toEqual({
             code: 'unavailable',
             diagnostics: ['plugin_surface_contributed_action_unavailable'],
+            message: t('settingsPlugins.surfaces.machineCapabilityUnavailable', { machine: t('machine.thisMachineInSentence') }),
         });
         expect(executeContributedAction).not.toHaveBeenCalled();
         expect(controller.hostApi.handleRequest(request('diagnostic', {
@@ -1985,6 +2408,109 @@ describe('BoundPluginSurfaceController (§3.1)', () => {
                 },
             },
         });
+    });
+
+    it('refuses an uncommitted declarative Action before presenting an input form or dispatching', async () => {
+        const action = {
+            id: 'launch', occurrenceId: null, title: 'Launch a worker',
+            description: null, icon: null, scopes: ['session'], surfaces: ['ui', 'plugin'],
+            placementBindings: [], slash: null, priority: null, dangerLevel: 'safe',
+            confirmation: null, available: true,
+            inputHints: { fields: [{ path: 'name', title: 'Name', widget: 'text', required: true }] },
+        } satisfies PluginProjectionEntry['actions'][number];
+        const plugin = {
+            pluginId: FACTS.pluginId, immutableGenerationId: FACTS.occurrenceId,
+            title: 'Worker tools', description: null, version: '1.0.0', enabled: true,
+            generation: 12, generationLabel: '12', status: null, provenance: null,
+            diagnostics: [], actions: [action], resources: [], editableSettingsGroups: [],
+        } satisfies PluginProjectionEntry;
+        const { Modal } = await import('@/modal');
+        const show = vi.spyOn(Modal, 'show').mockImplementation(() => 'unexpected-action-input');
+        const executeContributedAction = vi.fn(async () => ({
+            supported: true as const, result: { ok: true as const, result: { launched: true } },
+        }));
+        const controller = createBoundPluginSurfaceController({
+            facts: { ...FACTS, sessionId: 'session-worker', pluginProjectionById: { [FACTS.pluginId]: plugin },
+                resolveContributedAction: identity => ({ ...resolveDaemonTargetAction(identity),
+                    surfaces: ['ui', 'plugin'], inputHints: action.inputHints }) },
+            binding: { executeContributedAction },
+        });
+        try {
+            await expect(controller.dispatchAction({ pluginId: FACTS.pluginId, localId: action.id }))
+                .resolves.toEqual({ code: 'unavailable', diagnostics: ['action_retired'] });
+            expect(show).not.toHaveBeenCalled();
+            expect(executeContributedAction).not.toHaveBeenCalled();
+        } finally {
+            controller.dispose();
+            show.mockRestore();
+        }
+    });
+
+    it.each(['submit', 'cancel', 'retire'] as const)('collects omitted declarative Action input before mounted dispatch (%s)', async (settlement) => {
+        const action = {
+            id: 'launch', occurrenceId: 'daemon-action-occurrence-a', title: 'Launch a worker',
+            description: null, icon: null, scopes: ['session'], surfaces: ['ui'],
+            placementBindings: [], slash: null, priority: null, dangerLevel: 'safe',
+            confirmation: null, available: true,
+            inputHints: { fields: [{ path: 'name', title: 'Name', widget: 'text', required: true }] },
+        } satisfies PluginProjectionEntry['actions'][number];
+        const plugin = {
+            pluginId: FACTS.pluginId, immutableGenerationId: FACTS.occurrenceId,
+            title: 'Worker tools', description: null, version: '1.0.0', enabled: true,
+            generation: 12, generationLabel: '12', status: null, provenance: null,
+            diagnostics: [], actions: [action], resources: [], editableSettingsGroups: [],
+        } satisfies PluginProjectionEntry;
+        const rpc = await import('@/sync/ops/machineContributionRegistryProjection');
+        // The daemon's exact schema read and the app-shell modal are system boundaries.
+        const readSchemas = vi.spyOn(rpc, 'machinePluginActionSchemasRead').mockResolvedValue({
+            supported: true, result: DaemonPluginActionSchemasReadResponseSchema.parse({
+                ok: true, inputSchema: { type: 'object', additionalProperties: false,
+                    properties: { name: { type: 'string', minLength: 1 } }, required: ['name'] },
+            }),
+        });
+        const { Modal } = await import('@/modal');
+        type Form = import('@/components/plugins/actions/pluginContributedActionController').PluginContributedActionSelectionForm;
+        let form: Form | undefined;
+        const show = vi.spyOn(Modal, 'show').mockImplementation(config => {
+            form = (config.props as Readonly<{ form: Form }>).form;
+            return 'declarative-worker-input';
+        });
+        const hide = vi.spyOn(Modal, 'hide').mockImplementation(() => {});
+        const executeContributedAction = vi.fn(async () => ({
+            supported: true as const, result: { ok: true as const, result: { launched: true } },
+        }));
+        const controller = createBoundPluginSurfaceController({
+            facts: { ...FACTS, sessionId: 'session-worker', pluginProjectionById: { [FACTS.pluginId]: plugin },
+                resolveContributedAction: identity => ({ ...resolveDaemonTargetAction(identity),
+                    inputHints: action.inputHints }) },
+            binding: { executeContributedAction },
+        });
+        try {
+            const pending = controller.dispatchAction({ pluginId: FACTS.pluginId, localId: action.id });
+            await vi.waitFor(() => expect(form).toBeDefined());
+            expect(form!.getFields().map(field => field.path)).toEqual(['name']);
+            expect(executeContributedAction).not.toHaveBeenCalled();
+            if (settlement === 'submit') {
+                form!.replaceInput({ name: 'Research' });
+                await form!.submit();
+                await expect(pending).resolves.toEqual({ launched: true });
+                expect(executeContributedAction).toHaveBeenCalledWith('machine_1', expect.objectContaining({
+                    input: { name: 'Research' }, sessionId: 'session-worker',
+                    invocation: { kind: 'mountedPluginSurface', mountedBinding: expect.objectContaining({
+                        occurrenceId: FACTS.occurrenceId, materializationRef: FACTS.executionOrigin.materializationRef,
+                    }) },
+                }));
+            } else {
+                if (settlement === 'cancel') form!.cancel();
+                else controller.dispose();
+                await pending;
+                expect(executeContributedAction).not.toHaveBeenCalled();
+                expect(form!.isRetired()).toBe(true);
+            }
+        } finally {
+            controller.dispose();
+            readSchemas.mockRestore(); show.mockRestore(); hide.mockRestore();
+        }
     });
 
     it('routes declarative composerApply through the mounted Host API with the host-owned Composer ref', async () => {

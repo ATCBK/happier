@@ -12,9 +12,10 @@ import {
     signMachineInstallationProof, signAccountContentKeyBindingV1,
 } from '@happier-dev/protocol';
 import {
-    ExternalActionDaemonDispatchRequestSchema, createExternalActionDaemonDispatchResponseV1,
+    ExternalActionDaemonDispatchRequestSchema, createExternalActionDaemonDispatchResponseV1, createExternalActionDaemonDispatchResponse,
     ExternalActionRequestEnvelopeSchema,
-    prepareExternalActionResponseEnvelopeV1, sealExternalActionRequestV2, ExternalActionExecutionAuthorizationV1Schema,
+    prepareExternalActionResponseEnvelopeV1, prepareExternalActionResponseV2, openExternalActionResponseV2,
+    sealExternalActionRequestV2, ExternalActionExecutionAuthorizationV1Schema,
     bindExternalActionExecutionAuthorizationHttpPathV1, computeExternalActionRequestEnvelopeDigestV1,
     bindExternalActionExecutionAuthorizationVerifyHttpPathV1,
     EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER,
@@ -136,7 +137,7 @@ describe('ordinary Account managed Action origination', () => {
         // the actual persistence/presence owner, never a fixture fence.
         const io = { in: (room: string) => ({ fetchSockets: async () => discovery.visible
             && room === getAccountSessionSocketRoom(selected.account.id, session.id) ? [publisher] : [] }) } as unknown as Server;
-        return { session, presence, io, discovery };
+        return { session, presence, io, discovery, publisher };
     }
 
     async function app(forwardRpc: ExternalActionForwardRpcCall, afterSessionAuthentication?: () => Promise<void>,
@@ -176,6 +177,74 @@ describe('ordinary Account managed Action origination', () => {
         await instance.ready();
         return instance;
     }
+
+    it.each([
+        { kind: 'account', mode: 'plain' }, { kind: 'terminal', mode: 'plain' }, { kind: 'terminal', mode: 'e2ee' },
+    ] as const)('routes $kind/$mode Session input through committed custody during a publisher gap', async ({ kind, mode }) => {
+        const selected = await fixture(true, mode);
+        await db.machine.update({ where: { id: selected.controller.machineId }, data: {
+            operationProtocolCapabilities: MachineOperationProtocolCapabilitiesV1Schema.parse({ ...capabilities,
+                sessionInputAdmission: { protocolVersions: [1, 2] } }),
+        } });
+        const source = await sourceFixture(selected);
+        const material = { type: 'dataKey' as const, machineKey: new Uint8Array(32).fill(7) };
+        const target = { kind: 'session' as const, sessionId: source.session.id };
+        const binding = (actionId: string, requestId: string) => ({ serverIdentityId: homeId,
+            accountId: selected.account.id, authentication: { kind, tokenEpoch: selected.account.tokenEpoch },
+            actionId, requestId, target });
+        const token = await auth.createToken(selected.account.id, undefined, {
+            kind, authority: kind === 'account' ? 'present_user' : 'account_automation',
+        });
+        expect((await source.presence.closePublisher({ socket: source.publisher })).status).toBe('closed');
+        source.discovery.visible = false;
+        expect(await externalActionDispatcher.resolveCurrentSessionMachineFromServer({
+            io: source.io, presence: source.presence, accountId: selected.account.id, sessionId: source.session.id,
+        })).toBeNull();
+        const instance = await app(async request => {
+            const admitted = ExternalActionDaemonDispatchRequestSchema.parse(request.callParams);
+            expect(admitted.executionAuthorization?.binding).toMatchObject({
+                accountId: selected.account.id, machineId: selected.controller.machineId,
+                installationId: selected.controller.installationId,
+                target: { kind: 'session', sessionId: source.session.id },
+            });
+            const execution = { ok: true as const, result: { status: 'accepted', localId: 'restart-gap-input' } };
+            if (admitted.envelope.v === 2) return { ok: true, result: createExternalActionDaemonDispatchResponse(prepareExternalActionResponseV2({
+                binding: binding(admitted.actionId, admitted.envelope.requestId), request: admitted.envelope,
+                executedMachineId: selected.controller.machineId, execution, material, randomBytes: length => new Uint8Array(length).fill(8),
+            })) };
+            return { ok: true, result: createExternalActionDaemonDispatchResponseV1(prepareExternalActionResponseEnvelopeV1({
+                v: 1, actionId: admitted.actionId, requestId: admitted.envelope.requestId,
+                execution,
+            })) };
+        }, undefined, source);
+        const input = { sessionId: source.session.id, message: 'queued during replacement', localId: 'restart-gap-input' };
+        const requestId = crypto.randomUUID();
+        const envelope = mode === 'plain' ? { v: 1 as const, requestId, target, input }
+            : sealExternalActionRequestV2({ binding: binding('session.message.send', requestId), material,
+                input, randomBytes: length => new Uint8Array(length).fill(9) });
+        const send = (actionId = 'session.message.send') => instance.inject({ method: 'POST', url: `/v1/actions/${actionId}`,
+            headers: { authorization: `Bearer ${token}` }, payload: actionId === 'session.message.send' ? envelope
+                : { v: 1, requestId: crypto.randomUUID(), target, input } });
+        const expectUnavailable = (response: Awaited<ReturnType<typeof send>>) => {
+            if (mode === 'e2ee') expect(response.json()).toMatchObject({ code: 'target_unavailable' });
+            else expect(response.json()).toMatchObject({ execution: { ok: false, errorCode: 'target_unavailable' } });
+        };
+        try {
+            const response = await send();
+            expect(response.statusCode, response.body).toBe(200);
+            const opened = envelope.v === 2 ? openExternalActionResponseV2({ envelope: response.json(),
+                binding: binding('session.message.send', requestId), material, request: envelope }) : response.json().execution;
+            expect(opened).toMatchObject({ ok: true, result: { status: 'accepted', localId: 'restart-gap-input' } });
+            // Other Session effects still require the current publisher. Archived
+            // Sessions and replacement installations cannot inherit input custody.
+            expect((await send('session.stop')).json()).toMatchObject({ execution: { ok: false, errorCode: 'target_unavailable' } });
+            await db.session.update({ where: { id: source.session.id }, data: { archivedAt: new Date() } });
+            expectUnavailable(await send());
+            await db.session.update({ where: { id: source.session.id }, data: { archivedAt: null } });
+            await db.machine.update({ where: { id: selected.controller.machineId }, data: { installationId: crypto.randomUUID() } });
+            expectUnavailable(await send());
+        } finally { await instance.close(); }
+    });
 
     it.each([
         ['terminal', 'account_automation'], ['account', 'account_automation'], ['account', 'present_user'],
@@ -893,8 +962,7 @@ describe('ordinary Account managed Action origination', () => {
         const instance = await app(async () => { throw new Error('Offline admission must not deliver to a daemon'); });
         try {
             const response = await instance.inject({ method: 'POST', url: '/v1/actions/machines.managed.acquire',
-                headers: { authorization: `Bearer ${selected.token}` }, payload: { ...sealed,
-                    managedAdmission: { actionId: 'machines.managed.acquire', input: selected.input, continuationPresent: true } } });
+                headers: { authorization: `Bearer ${selected.token}` }, payload: sealed });
             expect(response.statusCode).toBe(409);
             const row = await db.managedMachine.findUniqueOrThrow({ where: { homeId_admittedActionRequestId: {
                 homeId, admittedActionRequestId: selected.requestId } } });
@@ -906,6 +974,25 @@ describe('ordinary Account managed Action origination', () => {
             expect(JSON.stringify(response.json())).not.toContain(prompt);
             expect(response.json()).not.toHaveProperty('payload');
             expect(response.json()).not.toHaveProperty('execution');
+        } finally { await instance.close(); }
+    });
+
+    it('refuses a sealed acquire with missing managed admission before retaining or forwarding it', async () => {
+        const selected = await fixture(true, 'e2ee');
+        const sealed = sealExternalActionRequestV2({ binding: { serverIdentityId: homeId, accountId: selected.account.id,
+            actionId: 'machines.managed.acquire', requestId: selected.requestId,
+            target: { kind: 'machine', machineId: selected.controller.machineId },
+            authentication: { kind: 'account', tokenEpoch: selected.account.tokenEpoch } },
+            input: ManagedAcquireInputV1Schema.parse(selected.input), material: { type: 'dataKey', machineKey: new Uint8Array(32).fill(9) },
+            randomBytes: length => new Uint8Array(length).fill(2) });
+        const { managedAdmission: _admission, ...miswired } = sealed;
+        const instance = await app(async () => { throw new Error('Missing admission must not reach a daemon'); });
+        try {
+            const response = await instance.inject({ method: 'POST', url: '/v1/actions/machines.managed.acquire',
+                headers: { authorization: `Bearer ${selected.token}` }, payload: miswired });
+            expect(response.statusCode).toBe(400);
+            expect(response.json()).toEqual({ error: 'invalid_request', code: 'invalid_envelope', requestId: selected.requestId });
+            expect(await db.managedMachine.count({ where: { admittedActionRequestId: selected.requestId } })).toBe(0);
         } finally { await instance.close(); }
     });
 

@@ -226,9 +226,14 @@ export function buildConnectedServicesIndexModel(input: Readonly<{
             ? input.qualifiedGroups.filter((group) => sameService(group.ref.service, service))
             : [];
         const groupCount = serviceGroups.length;
-        const diagnostics = entry && published
-            ? input.presentDiagnostics(entry)
-            : { primary: null, supportDetails: null };
+        // Pending inputs cannot establish an unavailable verdict from retained
+        // descriptor diagnostics. This model owns the state every index surface uses.
+        const pending = input.transport === 'indeterminate' || entry?.projectionStatus === 'loading';
+        const diagnostics = pending
+            ? { primary: input.loadingLabel, supportDetails: null }
+            : entry && published
+                ? input.presentDiagnostics(entry)
+                : { primary: null, supportDetails: null };
         const canOpen = entry !== null;
         const canAdd = entry !== null && canExecuteConnectedServiceAction(entry, input.transport);
 
@@ -311,8 +316,7 @@ export function buildConnectedServicesIndexModel(input: Readonly<{
             attentionAccountId: sorted.find(
                 (account) => normalizeConnectedServiceCredentialHealthStatus(account.status) === 'needs_reauth',
             )?.accountId ?? null,
-            statusLine: diagnostics.primary
-                ?? (input.transport === 'indeterminate' ? input.loadingLabel : null),
+            statusLine: diagnostics.primary,
             supportDetails: diagnostics.supportDetails,
             usedBy,
             usedByAgentIds: usedByAgentIdsOf(service),
@@ -359,10 +363,9 @@ export function buildConnectedServicesIndexModel(input: Readonly<{
         }
     }
 
-    sheets.sort((left, right) => {
-        const rank = compareAccountHealthSeverity(left.health, right.health);
-        return rank !== 0 ? rank : left.label.localeCompare(right.label);
-    });
-    connectable.sort((left, right) => left.label.localeCompare(right.label));
+    // Descriptors, localized names and credential health arrive independently.
+    // Identity orders services; health still orders accounts inside their sheet.
+    sheets.sort((left, right) => left.serviceKey.localeCompare(right.serviceKey));
+    connectable.sort((left, right) => left.serviceKey.localeCompare(right.serviceKey));
     return { sheets, connectable };
 }

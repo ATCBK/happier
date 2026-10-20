@@ -18,6 +18,7 @@ export const machineSharing = createMachineSharingTranslations({
     plain: 'Les dades no estan xifrades d’extrem a extrem i el Home les pot llegir.', saved: 'Compartició actualitzada', yourAccess: 'El teu accés',
     ownHistory: "Les sessions que inicies aquí continuen sent teves a Happier, fins i tot quan perds l'accés.", through: "A través de {audience}",
     leave: 'Deixa aquesta compartició', inherited: 'Encara tens accés a través de {audience}. Demana al seu gestor que canviï el teu accés.', unavailable: 'No s’ha pogut comprovar l’accés a {machine}.',
+    saveFailed: 'No s’ha pogut desar «{draft}» per a {person}. Encara té «{current}».',
     effectiveLoss: 'A qui perdi l’últim accés se li aturaran les sessions, scripts, execucions, treball en cua o en preparació, terminals i serveis. L’historial de Happier continua sent seu; les dades ja obtingudes no es poden retirar.',
     overlap: 'Es manté un altre accés vàlid. El treball continuarà executant-se.', custodianProtected: 'El propietari original de la màquina no es pot eliminar ni substituir aquí.',
 });

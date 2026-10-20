@@ -24,7 +24,7 @@ import {
 } from '@/components/machines/processes/useProcessesController';
 import { COMPOSITION_INK } from '@/components/machines/vitals/MemoryTile';
 import { formatMachineBytes } from '@/components/machines/vitals/machineVitalsPresentation';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { publishPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
 import { RowActionRevealSlot } from '@/components/ui/lists/RowActionRevealSlot';
 import {
@@ -38,6 +38,7 @@ import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useMachineProcesses } from '@/sync/domains/machines/processes/useMachineProcesses';
+import type { MachineProcessesActionScope } from '@/sync/domains/machines/processes/machineProcessesActions';
 import { useMachineResourceSummary } from '@/sync/domains/machines/resources/useMachineResourceSummary';
 import { useSession } from '@/sync/store/hooks';
 import { t } from '@/text';
@@ -209,8 +210,27 @@ function TopConsumersBody(
     () => open({ id: 'processes', sort: 'memory' }),
     [open],
   );
-  const [confirming, setConfirming] = React.useState<ProcessesOwnerItem | null>(
-    null,
+  const [confirming, setConfirming] = React.useState<((accepted: boolean) => void) | null>(null);
+  const pendingConfirmation = React.useRef<((accepted: boolean) => void) | null>(null);
+  React.useEffect(() => () => pendingConfirmation.current?.(false), []);
+  const requestStopConfirmation = React.useCallback<NonNullable<MachineProcessesActionScope['confirmation']>>(
+    ({ context }) => new Promise<boolean>((resolve) => {
+      pendingConfirmation.current?.(false);
+      if (context.signal?.aborted) { resolve(false); return; }
+      const settle = (accepted: boolean) => {
+        context.signal?.removeEventListener('abort', onAbort);
+        if (pendingConfirmation.current === settle) {
+          pendingConfirmation.current = null;
+          setConfirming(null);
+        }
+        resolve(accepted);
+      };
+      const onAbort = () => settle(false);
+      pendingConfirmation.current = settle;
+      context.signal?.addEventListener('abort', onAbort, { once: true });
+      setConfirming(() => settle);
+    }),
+    [],
   );
   const accessory = React.useCallback(
     (item: ProcessesItem) =>
@@ -219,11 +239,11 @@ function TopConsumersBody(
           item={item}
           serverId={target.serverId}
           controller={controller}
-          onConfirm={setConfirming}
+          onConfirm={requestStopConfirmation}
           testID={testID}
         />
       ) : null,
-    [controller, target.serverId, testID, unavailableReason],
+    [controller, requestStopConfirmation, target.serverId, testID, unavailableReason],
   );
 
   const wideTable = size === 'large';
@@ -368,9 +388,7 @@ function TopConsumersBody(
       />
       {confirming ? (
         <ConfirmStop
-          item={confirming}
-          controller={controller}
-          onDone={() => setConfirming(null)}
+          onDone={confirming}
           testID={testID}
         />
       ) : null}
@@ -445,13 +463,13 @@ function TopConsumersBody(
   );
 }
 
-/** One Stop where it wakes or restarts on demand; a working or waiting session asks in place first. */
+/** One Stop where it wakes or restarts on demand; shared policy can ask about working sessions in place. */
 function StopAccessory(
   props: Readonly<{
     item: ProcessesOwnerItem;
     serverId: string;
     controller: ProcessesController;
-    onConfirm: (item: ProcessesOwnerItem) => void;
+    onConfirm: NonNullable<MachineProcessesActionScope['confirmation']>;
     testID: string;
   }>,
 ) {
@@ -473,7 +491,7 @@ function StopAccessory(
   const alwaysShown = useDeviceType() === 'phone' || readCoarsePrimaryPointer();
   const name = controller.titleOf(item);
   const press = React.useCallback(
-    () => (working ? onConfirm(item) : controller.stop(item)),
+    () => controller.stop(item, working ? onConfirm : undefined),
     [controller, item, onConfirm, working],
   );
   return (
@@ -497,16 +515,14 @@ function StopAccessory(
   );
 }
 
-/** In place, once (lab `rw` C confirm): stopping something that is working. */
+/** The shared policy's in-place presentation (lab `rw` C confirm), with no separate dispatch. */
 function ConfirmStop(
   props: Readonly<{
-    item: ProcessesOwnerItem;
-    controller: ProcessesController;
-    onDone: () => void;
+    onDone: (accepted: boolean) => void;
     testID: string;
   }>,
 ) {
-  const { item, controller, onDone } = props;
+  const { onDone } = props;
   return (
     <View
       style={styles.confirm}
@@ -520,17 +536,14 @@ function ConfirmStop(
         size="small"
         display="secondary"
         title={t('machines.widgets.body.topConsumers.cancel')}
-        onPress={onDone}
+        onPress={() => onDone(false)}
         testID={`${props.testID}.confirm-cancel`}
       />
       <RoundButton
         size="small"
         title={t('machines.widgets.body.topConsumers.confirmStop')}
         testID={`${props.testID}.confirm-stop`}
-        onPress={() => {
-          controller.stop(item);
-          onDone();
-        }}
+        onPress={() => onDone(true)}
       />
     </View>
   );
@@ -625,7 +638,7 @@ function OwnerComposition(
 ) {
   const language = usePreferredLanguage();
   const { theme } = useUnistyles();
-  const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+  const pluginTheme = usePluginUiTheme(theme);
   const segments = React.useMemo(() => {
     const bytes = new Map<string, number>();
     for (const owner of props.answer.owners) {

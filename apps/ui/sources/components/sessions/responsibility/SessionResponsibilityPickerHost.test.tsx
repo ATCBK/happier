@@ -433,8 +433,8 @@ describe('responsibility picker host lifetime', () => {
                 <MountedResponsibilitySection sessionId="session-1" scope={scope} actingAccountId="account-owner" />
             </ModalProvider>,
             {
-                createNodeMock: (element: React.ReactElement) => (
-                    (element.props as Readonly<{ testID?: string }>).testID === 'session-responsibility-row'
+                createNodeMock: (element) => (
+                    element.props.testID === 'session-responsibility-row'
                         ? rowNode
                         : null
                 ),

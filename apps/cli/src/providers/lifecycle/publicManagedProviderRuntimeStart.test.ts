@@ -99,7 +99,7 @@ describe('public managed Provider runtime start coordinator', () => {
     const scope = createProviderLaunchResourceScope();
     const result = await startPublicManagedProviderRuntime({
       identity: { pluginId: 'cliproxyapi', localId: 'cliproxyapi' },
-      request: { reason: 'sessionDemand', connectionId: 'connection-1', connectionRevision: 1, endpointTemplateIds: ['responses'] },
+      request: { reason: 'sessionDemand', connectionId: ProviderConnectionIdSchema.parse('connection-1'), connectionRevision: 1, endpointTemplateIds: ['responses'] },
       acquireRuntime: async () => runtime,
       connectedAccounts: connectedAccounts(),
       custody: {

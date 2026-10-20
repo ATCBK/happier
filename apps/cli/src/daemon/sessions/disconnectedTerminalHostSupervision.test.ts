@@ -3,6 +3,8 @@ import type { TerminalHostAdapter, TerminalHostHandle } from '@happier-dev/agent
 import axios, { AxiosHeaders } from 'axios';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { readProcessInstanceFingerprintSync } from '@happier-dev/cli-common/processInstance';
 import { withHerdrApi } from '@/integrations/herdr/herdrApi.testkit';
 
@@ -40,6 +42,21 @@ function attachment() {
 }
 
 describe('disconnected terminal-host supervision', () => {
+  it.each(['absent', 'unreadable', 'replacement'] as const)('distinguishes missing final-exit attachment from unresolved custody: %s', async state => {
+    await withConfiguredDaemonTestHome({ prefix: 'final-host-exit-' }, async ({ homeDir }) => {
+      const tracked = { pid: 999_123_456, startedBy: 'daemon' as const, happySessionId: 'session-live-1',
+        hostedTerminal: { mode: 'tmux' as const }, publishedTerminalControlServiceabilityAttachmentId: 'old-host' };
+      if (state !== 'absent') {
+        await writeTerminalHostAttachmentInfo({ happyHomeDir: homeDir, sessionId: tracked.happySessionId, handle });
+        if (state === 'unreadable') await writeFile(join(homeDir, 'terminal', 'sessions', 'session-live-1.host.json'), '{');
+      }
+      expect(await shouldRetainTrackedTerminalHostExitMarker({ tracked, happyHomeDir: homeDir })).toBe(state !== 'absent');
+      const candidate = resolveTrackedSessionTerminalHostExitCandidate({ tracked, pid: tracked.pid,
+        happyHomeDir: homeDir, attachmentInfo: null });
+      if (state === 'absent') await expect(candidate).resolves.toBeNull();
+      else await expect(candidate).rejects.toThrow('terminal_host_attachment_unavailable_after_runner_exit');
+    });
+  });
   it('retires an exited plain runner without resolving the Account catalog', async () => {
     await withConfiguredDaemonTestHome({ prefix: 'plain-exit-offline-' }, async ({ homeDir }) => {
       const get = vi.spyOn(axios, 'get').mockRejectedValue(Object.assign(new Error('Home unreachable'), { code: 'ECONNREFUSED' }));

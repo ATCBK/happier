@@ -89,6 +89,55 @@ describe('readAfterOhMyPiSessionTranscript', () => {
 });
 
 describe('pageOhMyPiSessionTranscript', () => {
+  it.each([false, true])('marks history incomplete when an oversized valid row blocks backward progress (continuation: %s)', async (continuation) => {
+    const agentDir = await mkdtemp(join(tmpdir(), 'happier-ohmypi-oversized-row-'));
+    tempDirs.add(agentDir);
+    const sessionRoot = join(agentDir, 'sessions', '-repo');
+    await mkdir(sessionRoot, { recursive: true });
+    const transcriptPath = join(sessionRoot, 'oversized-session.jsonl');
+    await writeFile(transcriptPath, [
+      jsonlLine({ type: 'session', id: 'oversized-session', timestamp: '2026-04-10T10:00:00.000Z', cwd: '/repo' }),
+      jsonlLine({
+        type: 'message', id: 'root', parentId: null,
+        timestamp: '2026-04-10T10:00:01.000Z',
+        message: { role: 'user', content: 'root' }, pad: '🙂'.repeat(2_100_000),
+      }),
+      ...(continuation ? [jsonlLine({
+        type: 'message', id: 'leaf', parentId: 'root',
+        timestamp: '2026-04-10T10:00:02.000Z',
+        message: { role: 'assistant', content: 'latest answer' },
+      })] : []),
+    ].join(''), 'utf8');
+    const request = {
+      source: { kind: 'ohMyPiAgentDir' as const, agentDir }, env: {},
+      providerSessionId: 'oversized-session', direction: 'older' as const,
+      maxBytes: 4_096, maxItems: 10,
+    };
+    const first = await pageOhMyPiSessionTranscript(request);
+    const blocked = continuation && first.nextCursor
+      ? await pageOhMyPiSessionTranscript({ ...request, cursor: first.nextCursor })
+      : first;
+    if (continuation) expect(first).toMatchObject({ hasMore: true, nextCursor: expect.any(String) });
+    expect(blocked).toMatchObject({ items: [], hasMore: false, nextCursor: null, truncated: true });
+    expect(blocked.tailCursor).toBeUndefined();
+  });
+
+  it('rejects genuinely malformed UTF-8 in backward transcript records', async () => {
+    const agentDir = await mkdtemp(join(tmpdir(), 'happier-ohmypi-malformed-utf8-'));
+    tempDirs.add(agentDir);
+    const sessionRoot = join(agentDir, 'sessions', '-repo');
+    await mkdir(sessionRoot, { recursive: true });
+    const transcriptPath = join(sessionRoot, 'malformed-session.jsonl');
+    await writeFile(transcriptPath, Buffer.concat([
+      Buffer.from(jsonlLine({ type: 'session', id: 'malformed-session', timestamp: '2026-04-10T10:00:00.000Z', cwd: '/repo' })),
+      Buffer.from('{"type":"message","pad":"'), Buffer.from([0xc3, 0x28]), Buffer.from('"}\n'),
+    ]));
+    await expect(pageOhMyPiSessionTranscript({
+      source: { kind: 'ohMyPiAgentDir', agentDir }, env: {},
+      providerSessionId: 'malformed-session', direction: 'older', maxBytes: 4_096, maxItems: 10,
+    })).rejects.toThrow('malformed UTF-8');
+  });
+
   it('bounds physical source reads for the initial page instead of loading the whole file', async () => {
     const agentDir = await mkdtemp(join(tmpdir(), 'happier-ohmypi-bounded-initial-'));
     tempDirs.add(agentDir);
@@ -244,6 +293,7 @@ describe('pageOhMyPiSessionTranscript', () => {
     expect(pages.flat()).toEqual([
       expect.stringContaining(':leaf:text:0'),
       expect.stringContaining(':compact:compaction'),
+      expect.stringContaining(':offset:'),
       expect.stringContaining(':summary:branch_summary'),
       expect.stringContaining(':root'),
     ]);

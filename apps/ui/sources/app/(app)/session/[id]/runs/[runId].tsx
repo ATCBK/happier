@@ -49,7 +49,7 @@ export function SessionRunDetailsScreen() {
     const headerTint = theme.colors.chrome.header.foreground ?? theme.colors.text.primary;
     const parentSessionHref = sessionId
         ? buildScopedSessionRouteHref({ sessionId, serverId: exactSessionServerId })
-        : '/session';
+        : '/';
 
     const headerRight = React.useCallback(() => (
         <Pressable

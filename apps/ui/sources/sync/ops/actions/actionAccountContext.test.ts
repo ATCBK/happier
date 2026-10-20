@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { storage } from '@/sync/domains/state/storage';
 import { getActiveServerSnapshot, setActiveServer } from '@/sync/domains/server/serverRuntime';
 import { publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
@@ -16,15 +17,15 @@ beforeEach(async () => {
     accountMode = 'plain';
     homes = await serveAccountHomes({ homes: [
         { key: 'e', serverUrl: 'https://home-e.example.test', accountId: 'account-a', accountMode: 'e2ee',
-            credentials: { token: 'fixture', secret: Buffer.alloc(32, 7).toString('base64url') } },
+            credentials: { token: createAccountTokenForTests('account-a'), secret: Buffer.alloc(32, 7).toString('base64url') } },
         { key: 'c', serverUrl: 'https://home-c.example.test', accountId: 'account-a' },
         { key: 'b', serverUrl: 'https://home-b.example.test', accountId: 'account-a' },
         { key: 'a', serverUrl: 'https://home-a.example.test', accountId: 'account-a' },
     ], route: () => undefined });
     publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
     network.mockReset();
-    network.mockImplementation(async url => url.pathname === '/v1/account/encryption'
-        ? Response.json({ mode: url.origin === 'https://home-e.example.test' ? 'e2ee' : accountMode, updatedAt: 1 }) : new Response(null, { status: 204 }));
+    network.mockImplementation(async (url, init) => url.pathname === '/v1/account/encryption'
+        ? Response.json({ mode: url.origin === 'https://home-e.example.test' ? 'e2ee' : accountMode, updatedAt: 1 }) : homes.fetch(url, init));
     setRuntimeFetch(async (input, init) => network(new URL(String(input)), init));
 });
 afterEach(async () => {
@@ -73,13 +74,15 @@ describe('captureActionAccountContext encryption authority', () => {
 describe('captureLazyActionAccountContext encryption on demand', () => {
     it('returns committed self-revocation without opening the now-inaccessible Artifact', async () => {
         const revoked = { artifactId: 'artifact', ownerAccountId: 'owner', access: null, grants: [], changed: true };
-        network.mockImplementation(async (_url, init) => init?.method === 'DELETE'
-            ? Response.json(revoked) : Response.json({ error: 'Artifact not found' }, { status: 404 }));
+        network.mockImplementation(async (url, init) => url.pathname.startsWith('/v1/artifacts/')
+            ? init?.method === 'DELETE' ? Response.json(revoked) : Response.json({ error: 'Artifact not found' }, { status: 404 })
+            : homes.fetch(url, init));
         const context = await captureLazyActionAccountContext(homes.homes.a!.id);
         try {
             await expect(context.artifactAccessGrants.remove({ artifactId: 'artifact', principal: { kind: 'account', accountId: 'account-a' } })).resolves.toEqual(revoked);
-            expect(network.mock.calls).toHaveLength(1);
-            expect(network.mock.calls[0]?.[1]?.method).toBe('DELETE');
+            const artifactCalls = network.mock.calls.filter(([url]) => url.pathname.startsWith('/v1/artifacts/'));
+            expect(artifactCalls).toHaveLength(1);
+            expect(artifactCalls[0]?.[1]?.method).toBe('DELETE');
             expect(storage.getState().artifacts.artifact).toBeUndefined();
         } finally { context.dispose(); }
     });
@@ -87,21 +90,26 @@ describe('captureLazyActionAccountContext encryption on demand', () => {
         const context = await captureLazyActionAccountContext(homes.homes.e!.id);
         try {
             expect(context.accountId).toBe('account-a');
-            expect(network).not.toHaveBeenCalled();
+            const encryptionReads = () => network.mock.calls.filter(([url]) =>
+                url.origin === 'https://home-e.example.test' && url.pathname === '/v1/account/encryption');
+            expect(encryptionReads()).toHaveLength(0);
             const first = await context.resolveAccountEncryption();
             expect(await context.resolveAccountEncryption()).toBe(first);
             expect(first.accountMode).toBe('e2ee');
             expect(first.encryption).toBeInstanceOf(Encryption);
-            expect(network.mock.calls.filter(([url]) => url.pathname === '/v1/account/encryption')).toHaveLength(1);
+            expect(encryptionReads()).toHaveLength(1);
         } finally { context.dispose(); }
     });
     it('fails a mode-dependent operation closed when the Account encryption mode cannot be read', async () => {
-        network.mockRejectedValue(new Error('encryption_mode_unavailable'));
+        network.mockImplementation(async (url, init) => {
+            if (url.pathname === '/v1/account/encryption') throw new Error('encryption_mode_unavailable');
+            return homes.fetch(url, init);
+        });
         const context = await captureLazyActionAccountContext(homes.homes.a!.id);
         try {
             await expect(context.resolveAccountEncryption()).rejects.toThrow('encryption_mode_unavailable');
             await expect(context.fetchArtifact('artifact-a')).rejects.toThrow('encryption_mode_unavailable');
-            expect(network.mock.calls.every(([url]) => url.pathname === '/v1/account/encryption')).toBe(true);
+            expect(network.mock.calls.filter(([url]) => url.pathname.startsWith('/v1/artifacts/'))).toHaveLength(0);
         } finally { context.dispose(); }
     });
 });

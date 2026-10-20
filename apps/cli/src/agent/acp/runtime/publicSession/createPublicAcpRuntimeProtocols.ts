@@ -3,6 +3,7 @@ import type { SessionMediaService } from '@happier-dev/plugin-sdk/sessions';
 import type {
   AgentAcpRuntimeOptions,
   AgentAcpRuntimeDefinition,
+  AgentExecutionRunConversationRuntimeV1,
   AgentExecutionRunOpenRequest,
   AgentExecutionRunRuntime,
   AgentRuntimeContext,
@@ -19,6 +20,7 @@ import {
 
 import {
   createPublicAcpExecutionRun,
+  createPublicAcpExecutionRunConversation,
   createPublicAcpSession,
   type PublicAcpComposerDependencies,
   type PublicAcpHostLaunchResolver,
@@ -68,6 +70,7 @@ export function createPublicAcpRuntimeProtocols(params: Readonly<{
   signal: AbortSignal;
   isCurrent(): boolean;
   services: PluginServices;
+  nativeLaunch?: PublicAcpComposerDependencies['nativeLaunch'];
   interactions?: HostCurrentSessionInteractionsService;
   media?: SessionMediaService;
   models?: AgentSessionHostServices['models'];
@@ -91,6 +94,8 @@ export function createPublicAcpRuntimeProtocols(params: Readonly<{
     agentId: params.agentId,
     signal: params.signal,
     isCurrent: params.isCurrent,
+    exec: params.services.exec,
+    ...(params.nativeLaunch ? { nativeLaunch: params.nativeLaunch } : {}),
     systemTools: createPublicAcpSystemTools(params.services.exec, params.pluginId),
     managedDependencies: createPublicAcpManagedDependencies(params.services.exec, params.pluginId),
     interactions: params.interactions ?? createPublicInteractionsAdapter(params.services),
@@ -121,6 +126,14 @@ export function createPublicAcpRuntimeProtocols(params: Readonly<{
         options: AgentAcpRuntimeOptions,
       ): Promise<AgentExecutionRunRuntime> {
         return await createPublicAcpExecutionRun(request,
+          params.runtimeDefinition ? { ...options, definition: params.runtimeDefinition } : options,
+          createDependencies('execution_run'));
+      },
+      async openExecutionRunConversationV1(
+        request: AgentExecutionRunOpenRequest,
+        options: AgentAcpRuntimeOptions,
+      ): Promise<AgentExecutionRunConversationRuntimeV1> {
+        return await createPublicAcpExecutionRunConversation(request,
           params.runtimeDefinition ? { ...options, definition: params.runtimeDefinition } : options,
           createDependencies('execution_run'));
       },

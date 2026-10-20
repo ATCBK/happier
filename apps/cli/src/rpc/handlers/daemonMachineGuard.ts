@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { RpcAdmissionPredicate, RpcHandlerContext, RpcHandlerRegistrar } from '@/api/rpc/types';
 import type { ActivityLog } from '@/daemon/guard/activityLog';
 import type { createGuardWatch, GuardViewRequester } from '@/daemon/guard/view/guardWatch';
-import { getActionSpec, type ActionExecuteResult, type ActionExecutorDeps } from '@happier-dev/protocol/actions';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
+import type { ActionExecuteResult, ActionExecutorDeps } from '@happier-dev/protocol/actions';
 import type { RpcActionExecutorContext } from './_actionDispatchAdapter';
 import { ActionApprovalRequestCreatedResultSchema, ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { BrowserCommandDispatchResultV1Schema } from '@happier-dev/protocol/browser/control/v1';
@@ -113,10 +114,17 @@ export function registerDaemonMachineGuardRpcHandlers(rpc: RpcHandlerRegistrar, 
     const failure = (errorCode: string) => ({ ok: false as const, errorCode, error: errorCode });
     if (!wayBack) return failure('activity_entry_unavailable');
     const spec = getActionSpec(wayBack.actionId);
-    const input = spec.inputSchema.safeParse(wayBack.input);
+    const recordedInput = wayBack.input;
+    // Activity omits local Home aliases; terminal reopening needs the currently admitted target.
+    const boundInput = wayBack.actionId === 'machines.terminal.open'
+      && recordedInput !== null && typeof recordedInput === 'object' && !Array.isArray(recordedInput)
+      && !('serverId' in recordedInput)
+      ? { ...recordedInput, serverId: admitted.target.serverId }
+      : recordedInput;
+    const input = spec.inputSchema.safeParse(boundInput);
     if (!input.success) return failure('invalid_action_input');
     await admitted.assertCurrent();
-    const result = await executeCanonicalAction(wayBack.actionId, wayBack.input);
+    const result = await executeCanonicalAction(wayBack.actionId, input.data);
     await admitted.assertCurrent();
     if (!result.ok) return result;
     const nestedFailure = ActionExecuteFailureSchema.safeParse(result.result);

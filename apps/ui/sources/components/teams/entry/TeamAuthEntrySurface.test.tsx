@@ -6,6 +6,7 @@ import type { HomeTargetInput } from '@happier-dev/cli-common/homeTarget';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { t } from '@/text';
+import { setActiveServerId, setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 
 import { TeamAuthEntrySurface } from './TeamAuthEntrySurface';
 
@@ -74,7 +75,7 @@ const target: HomeTargetInput = Object.freeze({
     authority: 'trusted_enrollment',
     descriptor: {
         v: 1 as const,
-        homeServerIdentityId: 'home-team',
+        homeServerIdentityId: 'srv_team-home',
         canonicalServerUrl: 'https://home.example.test',
         revision: 1,
         endpoints: [{ kind: 'https' as const, url: 'https://edge.example.test' }],
@@ -108,7 +109,7 @@ function readyResponse(
         v: 1,
         state: 'admission_required',
         scope: { kind: scope },
-        home: { serverId: 'home-team', displayName: homeDisplayName, storageMode: 'plain' },
+        home: { serverId: 'srv_team-home', displayName: homeDisplayName, storageMode: 'plain' },
         ...(account ? { account } : {}),
         team: {
             teamId: 'team-1',
@@ -147,7 +148,7 @@ function nativeMtlsReadyResponse() {
  */
 function activePreview(overrides: Record<string, unknown> = {}) {
     return {
-        home: { serverId: 'home-team', displayName: 'home.example.test', storageMode: null, hosting: null },
+        home: { serverId: 'srv_team-home', displayName: 'home.example.test', storageMode: null, hosting: null },
         team: {
             teamId: 'team-1',
             name: 'A very long Team name that remains fully available to assistive technology',
@@ -199,8 +200,12 @@ function authEntryCalls(): unknown[][] {
 }
 
 describe('TeamAuthEntrySurface', () => {
-    beforeEach(() => {
+    beforeEach(async () => {
         standardCleanup();
+        if (target.kind !== 'descriptor') throw new Error('Expected the canonical Home descriptor fixture');
+        const profile = await upsertServerProfile({ serverUrl: target.descriptor.canonicalServerUrl, name: 'Acme Home' });
+        await setServerProfileIdentityForUrl(profile.serverUrl, target.descriptor.homeServerIdentityId);
+        await setActiveServerId(profile.id, { scope: 'device' });
         endpointFetch.mockReset();
         authorityFetch.mockReset();
         acceptTeamInvitation.mockReset();
@@ -480,7 +485,7 @@ describe('TeamAuthEntrySurface', () => {
                 v: 1,
                 state: 'admission_required',
                 scope: { kind: 'team' },
-                home: { serverId: 'home-team', displayName: 'Acme Home', storageMode: 'plain' },
+                home: { serverId: 'srv_team-home', displayName: 'Acme Home', storageMode: 'plain' },
                 team: { teamId: 'team-other', name: 'Other', logo: null },
                 actions: [],
                 autoRedirect: null,
@@ -620,12 +625,12 @@ describe('TeamAuthEntrySurface', () => {
     });
 
     it('offers an already-admitted member continuation instead of another sign-in', async () => {
-        const accountScope = Object.freeze({ serverId: 'home-team', accountId: 'account-1' });
+        const accountScope = Object.freeze({ serverId: 'srv_team-home', accountId: 'account-1' });
         authorityFetch.mockResolvedValueOnce(new Response(JSON.stringify({
             v: 1,
             state: 'already_member',
             scope: { kind: 'team' },
-            home: { serverId: 'home-team', displayName: 'Acme Home', storageMode: 'plain' },
+            home: { serverId: 'srv_team-home', displayName: 'Acme Home', storageMode: 'plain' },
             account: { firstName: 'Alice', lastName: 'Chen', username: 'alice', avatarUrl: null },
             team: { teamId: 'team-1', name: 'Acme', logo: null },
             actions: [{ kind: 'continue' }],
@@ -667,8 +672,8 @@ describe('TeamAuthEntrySurface', () => {
             .mockResolvedValueOnce(readyResponse('team', undefined, {
                 firstName: 'Bob', lastName: null, username: 'bob', avatarUrl: null,
             }));
-        const firstScope = Object.freeze({ serverId: 'home-team', accountId: 'account-alice' });
-        const secondScope = Object.freeze({ serverId: 'home-team', accountId: 'account-bob' });
+        const firstScope = Object.freeze({ serverId: 'srv_team-home', accountId: 'account-alice' });
+        const secondScope = Object.freeze({ serverId: 'srv_team-home', accountId: 'account-bob' });
         const screen = await renderScreen(
             <TeamAuthEntrySurface
                 teamId="team-1"
@@ -703,7 +708,7 @@ describe('TeamAuthEntrySurface', () => {
             <TeamAuthEntrySurface
                 teamId="team-1"
                 target={target}
-                accountScope={{ serverId: 'home-team', accountId: 'account-1' }}
+                accountScope={{ serverId: 'srv_team-home', accountId: 'account-1' }}
                 onContinue={onContinue}
                 onSelectAction={() => {}}
             />,
@@ -772,7 +777,7 @@ describe('TeamAuthEntrySurface', () => {
         previewResult = {
             outcome: 'ok',
             preview: activePreview({
-                home: { serverId: 'home-team', displayName: 'Stale Preview Home', storageMode: null },
+                home: { serverId: 'srv_team-home', displayName: 'Stale Preview Home', storageMode: null },
             }),
         };
         endpointFetch.mockImplementation(async (path: string) => (
@@ -802,7 +807,7 @@ describe('TeamAuthEntrySurface', () => {
             value: { outcome: 'joined', teamId: 'team-1' },
         });
         const onAdmissionComplete = vi.fn();
-        const accountScope = Object.freeze({ serverId: 'home-team', accountId: 'account-1' });
+        const accountScope = Object.freeze({ serverId: 'srv_team-home', accountId: 'account-1' });
         const token = 'A'.repeat(43);
         const screen = await renderScreen(
             <TeamAuthEntrySurface
@@ -848,7 +853,7 @@ describe('TeamAuthEntrySurface', () => {
             kind: 'succeeded',
             value: { outcome: 'joined', teamId: 'team-1' },
         });
-        const accountScope = Object.freeze({ serverId: 'home-team', accountId: 'account-1' });
+        const accountScope = Object.freeze({ serverId: 'srv_team-home', accountId: 'account-1' });
         const continuation = Object.freeze({
             v: 1 as const,
             kind: 'post_auth_invitation' as const,
@@ -885,7 +890,7 @@ describe('TeamAuthEntrySurface', () => {
         const screen = await renderScreen(<TeamAuthEntrySurface
             invitation={{
                 continuation: { v: 1, kind: 'post_auth_invitation', reference: 'oauth_pending_exact_1', teamId: 'team-1' },
-                accountScope: { serverId: 'home-team', accountId: 'account-1' },
+                accountScope: { serverId: 'srv_team-home', accountId: 'account-1' },
             }}
             target={target}
             onSelectAction={() => {}}
@@ -902,7 +907,7 @@ describe('TeamAuthEntrySurface', () => {
             ? new Response(JSON.stringify({ malformed: true }), { status })
             : readyResponse('invitation'));
         const screen = await renderScreen(<TeamAuthEntrySurface
-            invitation={{ token: 'G'.repeat(43), accountScope: { serverId: 'home-team', accountId: 'account-1' } }}
+            invitation={{ token: 'G'.repeat(43), accountScope: { serverId: 'srv_team-home', accountId: 'account-1' } }}
             target={target}
             onSelectAction={() => {}}
             onAdmissionComplete={() => {}}
@@ -920,7 +925,7 @@ describe('TeamAuthEntrySurface', () => {
         };
         authorityFetch.mockResolvedValueOnce(readyResponse('invitation', 'verification_required'));
         const onRecoverIdentity = vi.fn();
-        const accountScope = Object.freeze({ serverId: 'home-team', accountId: 'account-1' });
+        const accountScope = Object.freeze({ serverId: 'srv_team-home', accountId: 'account-1' });
         const token = 'G'.repeat(43);
         const screen = await renderScreen(
             <TeamAuthEntrySurface
@@ -961,7 +966,7 @@ describe('TeamAuthEntrySurface', () => {
             kind: 'succeeded',
             value: { outcome: 'joined', teamId: 'team-1' },
         });
-        const accountScope = Object.freeze({ serverId: 'home-team', accountId: 'account-1' });
+        const accountScope = Object.freeze({ serverId: 'srv_team-home', accountId: 'account-1' });
         const token = 'J'.repeat(43);
         const screen = await renderScreen(
             <TeamAuthEntrySurface
@@ -1013,7 +1018,7 @@ describe('TeamAuthEntrySurface', () => {
             v: 1,
             state: 'already_member',
             scope: { kind: 'invitation' },
-            home: { serverId: 'home-team', displayName: 'Acme Home', storageMode: 'plain' },
+            home: { serverId: 'srv_team-home', displayName: 'Acme Home', storageMode: 'plain' },
             account: { firstName: 'Alice', lastName: 'Chen', username: 'alice', avatarUrl: null },
             team: { teamId: 'team-1', name: 'Acme Team', logo: null },
             actions: [{ kind: 'continue' }],
@@ -1024,7 +1029,7 @@ describe('TeamAuthEntrySurface', () => {
             <TeamAuthEntrySurface
                 invitation={{
                     token: 'K'.repeat(43),
-                    accountScope: { serverId: 'home-team', accountId: 'account-1' },
+                    accountScope: { serverId: 'srv_team-home', accountId: 'account-1' },
                 }}
                 target={target}
                 onSelectAction={() => {}}
@@ -1051,7 +1056,7 @@ describe('TeamAuthEntrySurface', () => {
             <TeamAuthEntrySurface
                 invitation={{
                     token: 'H'.repeat(43),
-                    accountScope: { serverId: 'home-team', accountId: 'account-1' },
+                    accountScope: { serverId: 'srv_team-home', accountId: 'account-1' },
                 }}
                 target={target}
                 onSelectAction={() => {}}
@@ -1073,7 +1078,7 @@ describe('TeamAuthEntrySurface', () => {
             <TeamAuthEntrySurface
                 invitation={{
                     token: 'D'.repeat(43),
-                    accountScope: { serverId: 'home-team', accountId: 'account-1' },
+                    accountScope: { serverId: 'srv_team-home', accountId: 'account-1' },
                 }}
                 target={target}
                 onSelectAction={() => {}}
@@ -1094,7 +1099,7 @@ describe('TeamAuthEntrySurface', () => {
             outcome: 'ok',
             preview: activePreview({
                 role: 'guest',
-                home: { serverId: 'home-team', displayName: 'home.example.test', storageMode: 'plain', hosting: null },
+                home: { serverId: 'srv_team-home', displayName: 'home.example.test', storageMode: 'plain', hosting: null },
                 recipientEmailMask: 'a\u2026e@example.test',
             }),
         };
@@ -1102,7 +1107,7 @@ describe('TeamAuthEntrySurface', () => {
             <TeamAuthEntrySurface
                 invitation={{
                     token: 'E'.repeat(43),
-                    accountScope: { serverId: 'home-team', accountId: 'account-1' },
+                    accountScope: { serverId: 'srv_team-home', accountId: 'account-1' },
                 }}
                 target={target}
                 onSelectAction={() => {}}
@@ -1152,14 +1157,14 @@ describe('TeamAuthEntrySurface', () => {
         previewResult = {
             outcome: 'ok',
             preview: activePreview({
-                home: { serverId: 'home-team', displayName: 'home.example.test', storageMode: null, hosting: 'personal' },
+                home: { serverId: 'srv_team-home', displayName: 'home.example.test', storageMode: null, hosting: 'personal' },
             }),
         };
         const screen = await renderScreen(
             <TeamAuthEntrySurface
                 invitation={{
                     token: 'F'.repeat(43),
-                    accountScope: { serverId: 'home-team', accountId: 'account-1' },
+                    accountScope: { serverId: 'srv_team-home', accountId: 'account-1' },
                 }}
                 target={target}
                 onSelectAction={() => {}}
@@ -1186,7 +1191,7 @@ describe('TeamAuthEntrySurface', () => {
             <TeamAuthEntrySurface
                 invitation={{
                     token,
-                    accountScope: { serverId: 'home-team', accountId: 'account-1' },
+                    accountScope: { serverId: 'srv_team-home', accountId: 'account-1' },
                 }}
                 target={target}
                 onSelectAction={() => {}}
@@ -1225,7 +1230,7 @@ describe('TeamAuthEntrySurface', () => {
             <TeamAuthEntrySurface
                 invitation={{
                     token: 'M'.repeat(43),
-                    accountScope: { serverId: 'home-team', accountId: 'account-1' },
+                    accountScope: { serverId: 'srv_team-home', accountId: 'account-1' },
                 }}
                 target={target}
                 onSelectAction={() => {}}
@@ -1264,7 +1269,7 @@ describe('TeamAuthEntrySurface', () => {
             <TeamAuthEntrySurface
                 invitation={{
                     token: 'C'.repeat(43),
-                    accountScope: { serverId: 'home-team', accountId: 'account-1' },
+                    accountScope: { serverId: 'srv_team-home', accountId: 'account-1' },
                 }}
                 target={target}
                 onSelectAction={() => {}}

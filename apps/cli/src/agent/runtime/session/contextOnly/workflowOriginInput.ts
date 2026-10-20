@@ -1,10 +1,12 @@
 import { composeWorkflowRunWorkerUpdateV1 } from '@happier-dev/protocol/workflows/composeWorkflowRunWorkerUpdateV1';
+import { classifyWorkerUpdateEventV1 } from '@happier-dev/protocol/sessions/relations/workerUpdateV1';
+import { resolveWorkerUpdateFollowDeliveryV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
 import { openWorkflowAcceptedSnapshotStoredEnvelopeV1, openWorkflowFinalResultStoredEnvelopeV1, openWorkflowProgressStoredEnvelopeV1, parseWorkflowStoredContentEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowStoredContentV1';
 import { resolveWorkflowRunDataKeyV1 } from '@happier-dev/protocol/workflows/workflowRunDataKeyV1';
 import { WorkflowRunRecipientCensusResponseV1Schema } from '@happier-dev/protocol/workflows/workflowRunKeyV1';
 import { deriveWorkflowSessionInputLocalIdV2, SessionInputCausalPermissionAuthorityV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES } from '@happier-dev/protocol/actions/externalActionLimits';
-import { WorkflowAuthoredInputV1Schema, WorkflowRunSummaryV1Schema, WorkflowRunInvocationIndexV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
+import { WORKFLOW_ATTENTION_INVOCATION_LIFECYCLES_V1, WorkflowAuthoredInputV1Schema, WorkflowRunSummaryV1Schema, WorkflowRunInvocationIndexV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import type { WorkflowAcceptedSnapshotV1, WorkflowRunSummaryV1, WorkflowRunInvocationIndexV1, WorkflowProgressEnvelopeV1, WorkflowRunEncryptionV1, ValidatedAutomationAccountEncryptionV1 } from '@happier-dev/protocol';
 import type { WorkflowRunStorageOperation } from '@/daemon/workflows/workflowRunStorageClient';
 import { readSessionFollowWakeInvalidationGeneration, waitForSessionFollowWakeInvalidation } from '../follow/sessionFollowWakeSignal';
@@ -66,6 +68,32 @@ export function createWorkflowOriginContextInputPort(options: WorkflowOriginInpu
     if (row && (row.index.runId !== runId || row.index.id !== invocationId)) throw new Error('workflow_delivery_binding_mismatch');
     return row;
   };
+  const readFailure = async (run: WorkflowRunSummaryV1, encryption: WorkflowRunEncryptionV1, signal: AbortSignal) => {
+    const event = classifyWorkerUpdateEventV1({ workerKind: 'workflow_run', ownerState: run.state,
+      ...(run.attentionRequired ? { wake: 'needs_you' } : {}) });
+    const lifecycles = event === 'failed_or_stopped' ? ['failed', 'outcome_uncertain'] as const
+      : event === 'needs_you' ? WORKFLOW_ATTENTION_INVOCATION_LIFECYCLES_V1 : undefined;
+    if (!lifecycles) return undefined;
+    let cursor: string | undefined;
+    let first: Parameters<typeof composeWorkflowRunWorkerUpdateV1>[0]['failure'];
+    do {
+      const page = await execute({ operation: 'invocations.list', runId: run.id, lifecycles,
+        progressEnvelopes: true, pageByteLimit: EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES, ...(cursor ? { cursor } : {}) }, signal);
+      if (!Array.isArray(page.invocations)) throw new Error('workflow_delivery_response_invalid');
+      const envelopes = record(page.progressEnvelopesByInvocationId);
+      for (const value of page.invocations) {
+        const index = WorkflowRunInvocationIndexV1Schema.parse(value);
+        if (index.runId !== run.id) throw new Error('workflow_delivery_binding_mismatch');
+        const row = openRow({ index, contentEnvelope: envelopes[index.id] }, encryption);
+        if (!row?.progress.reason) continue;
+        const failure = { recordId: index.id, reason: row.progress.reason };
+        if (failure.reason.runtimeIssueV1) return failure;
+        first ??= failure;
+      }
+      cursor = typeof page.nextCursor === 'string' ? page.nextCursor : undefined;
+    } while (cursor && !signal.aborted);
+    return first;
+  };
   const openSnapshot = (raw: Readonly<Record<string, unknown>>, encryption: WorkflowRunEncryptionV1) => {
     const run = WorkflowRunSummaryV1Schema.parse(raw.run);
     const opened = openWorkflowAcceptedSnapshotStoredEnvelopeV1({ ...encryption.runCrypto,
@@ -111,9 +139,10 @@ export function createWorkflowOriginContextInputPort(options: WorkflowOriginInpu
   };
   const updates = async (signal: AbortSignal): Promise<Readonly<{ workers: PreparedWorkerContextItem[]; steps: Array<{
     localInputId: string; runId: string; row: OpenRow; accepted: WorkflowAcceptedSnapshotV1;
-  }> }>> => {
+  }>; wakeWorker: PreparedWorkerContextItem | null }>> => {
     await flushAcks(signal);
     const workers: PreparedWorkerContextItem[] = [];
+    let wakeWorker: PreparedWorkerContextItem | null = null;
     const steps: Array<{ localInputId: string; runId: string; row: OpenRow; accepted: WorkflowAcceptedSnapshotV1 }> = [];
     let cursor: string | undefined;
     do {
@@ -155,10 +184,17 @@ export function createWorkflowOriginContextInputPort(options: WorkflowOriginInpu
           if (finalResult && finalResult.kind !== 'available') throw new Error('workflow_delivery_content_unavailable');
           const final = finalResult?.kind === 'available' ? finalResult.content : undefined;
           const producer = final ? await readRow(run.id, final.producerInvocation.recordId, encryption, signal) : null;
+          const failure = await readFailure(run, encryption, signal);
           const update = composeWorkflowRunWorkerUpdateV1({ run, ...(final ? { finalResult: final } : {}),
+            ...(failure ? { failure } : {}),
             ...(producer?.progress.review === undefined ? {} : { finalProducerReview: producer.progress.review }) });
           if (!update) continue;
-          workers.push({ localId: `workflow-run:${run.id}:${run.revision}`, update,
+          const delivery = resolveWorkerUpdateFollowDeliveryV1({ update,
+            ...(accepted.resultDelivery?.kind === 'originating_session' && accepted.resultDelivery.reportPolicy
+              ? { policies: [accepted.resultDelivery.reportPolicy] } : {}),
+          });
+          if (!delivery?.selected) continue;
+          const worker = { localId: `workflow-run:${run.id}:${run.revision}`, update,
             recheckAdmission: async (recheckSignal) => {
               const current = openSnapshot(await execute({ operation: 'get', runId: run.id }, recheckSignal), await requireEncryption(run.id, recheckSignal));
               return !recheckSignal.aborted && current.run.revision === run.revision
@@ -169,7 +205,9 @@ export function createWorkflowOriginContextInputPort(options: WorkflowOriginInpu
               acceptedRevisions.set(run.id, Math.max(acceptedRevisions.get(run.id) ?? 0, run.revision));
               pendingAcks.set(run.id, Math.max(pendingAcks.get(run.id) ?? 0, run.revision));
             },
-          });
+          } satisfies PreparedWorkerContextItem;
+          workers.push(worker);
+          if (delivery.session.wake && !wakeWorker) wakeWorker = worker;
         } catch (error) {
           if (signal.aborted) throw error;
           options.onError(error);
@@ -177,14 +215,14 @@ export function createWorkflowOriginContextInputPort(options: WorkflowOriginInpu
       }
       cursor = typeof page.nextCursor === 'string' ? page.nextCursor : undefined;
     } while (cursor && !signal.aborted);
-    return { workers, steps };
+    return { workers, steps, wakeWorker };
   };
   const readUpdates = async (signal: AbortSignal) => {
     try {
       return await updates(signal);
     } catch (error) {
       if (!signal.aborted) options.onError(error);
-      return { workers: [], steps: [] };
+      return { workers: [], steps: [], wakeWorker: null };
     }
   };
   return {
@@ -193,8 +231,8 @@ export function createWorkflowOriginContextInputPort(options: WorkflowOriginInpu
       const pulled = await readUpdates(signal);
       const step = pulled.steps[0];
       if (!step) {
-        const terminal = pulled.workers.find((worker) => worker.update.wake === 'finished');
-        return terminal ? { kind: 'worker_update', ...terminal } : null;
+        const worker = pulled.wakeWorker;
+        return worker ? { kind: 'worker_update', ...worker } : null;
       }
       const authored = WorkflowAuthoredInputV1Schema.parse(step.row.progress.input);
       if (authored.renderedText === undefined) throw new Error('workflow_delivery_input_not_frozen');

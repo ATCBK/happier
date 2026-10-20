@@ -1,25 +1,20 @@
-import { spawnSync } from 'node:child_process';
-import { join, resolve } from 'node:path';
+import { once } from 'node:events';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { writeFile } from 'node:fs/promises';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFailed, onTestFinished } from 'vitest';
 
 import { projectPath } from '@/projectPath';
 import { withTempDir } from '@/testkit/fs/tempDir';
+import { spawnTestProcess } from '@/testkit/process/spawn';
+import { resolveCliTsxTsconfigPath } from '@/utils/spawnHappyCLI';
 
 describe('daemon source imports', () => {
   it('loads the daemon voice bootstrap through the TSX source loader', async () => {
     const cliRoot = projectPath();
-    const tsconfigPath = join(cliRoot, 'tsconfig.json');
-    const tsxCommandPath = resolve(
-      cliRoot,
-      '..',
-      '..',
-      'node_modules',
-      '.bin',
-      process.platform === 'win32' ? 'tsx.cmd' : 'tsx',
-    );
+    const tsconfigPath = resolveCliTsxTsconfigPath();
+    const sourceRuntimeUrl = pathToFileURL(join(cliRoot, '..', '..', 'packages', 'cli-common', 'registerSourceRuntime.mjs')).href;
     const daemonBootstrapUrl = pathToFileURL(join(
       cliRoot,
       'src',
@@ -33,8 +28,12 @@ describe('daemon source imports', () => {
       await writeFile(
         probePath,
         [
+          'const report = (phase) => process.stdout.write(JSON.stringify({ phase, uptimeMs: Math.round(process.uptime() * 1000), tsxCacheDisabled: process.env.TSX_DISABLE_CACHE === "1", resources: process.getActiveResourcesInfo() }) + "\\n");',
+          'process.once("beforeExit", () => report("before-exit"));',
           '(async () => {',
+          '  report("import-started");',
           `  await import(${JSON.stringify(daemonBootstrapUrl)});`,
+          '  report("import-completed");',
           '})().catch((error) => {',
           '  console.error(error);',
           '  process.exitCode = 1;',
@@ -43,18 +42,38 @@ describe('daemon source imports', () => {
         'utf8',
       );
 
-      const result = spawnSync(tsxCommandPath, ['--tsconfig', tsconfigPath, probePath], {
+      // Source checks must read the current workspace closure, not combine
+      // source CLI imports with stale emitted dependency exports. The canonical
+      // source preload owns TSX and its cache policy; this test owns only its probe.
+      const child = spawnTestProcess(process.execPath, ['--import', sourceRuntimeUrl, probePath], {
         cwd: cliRoot,
         env: {
           ...process.env,
           TSX_TSCONFIG_PATH: tsconfigPath,
         },
-        encoding: 'utf8',
-        timeout: 20_000,
+        stdio: ['ignore', 'pipe', 'pipe'],
       });
-
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
+      const spawnedAtMs = performance.now();
+      const closed = once(child, 'close');
+      const diagnostics: string[] = [];
+      child.stdout?.on('data', chunk => diagnostics.push(String(chunk)));
+      child.stderr?.on('data', chunk => diagnostics.push(String(chunk)));
+      onTestFailed(() => {
+        console.error('Daemon source import probe:', {
+          parentElapsedSinceSpawnMs: Math.round(performance.now() - spawnedAtMs),
+        });
+        console.error(diagnostics.join(''));
+      });
+      onTestFinished(async () => {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill();
+          await closed;
+        }
+      });
+      const [code] = await closed;
+      expect(code, diagnostics.join('')).toBe(0);
+      expect(diagnostics.join('')).toContain('"phase":"import-completed"');
+      expect(diagnostics.join('')).toContain('"phase":"before-exit"');
     });
   });
 });

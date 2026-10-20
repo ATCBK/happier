@@ -44,7 +44,7 @@ import { shadowLevelStyle } from '@/shadowElevation';
 import { t } from '@/text';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { MiddleEllipsisText } from '@/components/ui/text/MiddleEllipsisText';
-import { WidgetFrameResourceActivityContext } from './widgetFrameResourceActivity';
+import { isWidgetResourceQuietRefresh, WidgetFrameResourceActivityContext } from './widgetFrameResourceActivity';
 import { WidgetFrameBodyRowsContext } from './widgetFrameBody';
 import { useScrollEdgeFades } from '@/components/ui/scroll/useScrollEdgeFades';
 import { resolveVerticalScrollEdgeMaskStyle } from '@/components/ui/scroll/resolveScrollEdgeMaskStyle';
@@ -84,7 +84,9 @@ export type WidgetFrameBody =
 export type WidgetFrameFooter =
     | Readonly<{ kind: 'open'; label: string; onPress: () => void;
         secondary?: Readonly<{ label: string; onPress: () => void }> }>
-    | Readonly<{ kind: 'refreshFailed'; reason: string; onRetry?: () => void | Promise<unknown> }>;
+    | Readonly<{ kind: 'refreshFailed'; reason: string; onRetry?: () => void | Promise<unknown> }>
+    /** A change to this card waits for someone's approval. */
+    | Readonly<{ kind: 'pending'; reason: string }>;
 
 export type WidgetFrameProps = Readonly<{
     testID: string;
@@ -118,6 +120,8 @@ export type WidgetFrameProps = Readonly<{
     sourcePlacement?: 'inline' | 'below';
     /** The widget's controls at the end of the header: its ⋯ menu. */
     menu?: React.ReactNode;
+    /** The card's move grip (Canvas, Session Board): always the last control of the header, after the ⋯ menu. */
+    grip?: React.ReactNode;
     /** The move handle, before the mark, while the widget's surface is being arranged. */
     leading?: React.ReactNode;
     /** Mounted viewer-local disclosure; never writes the layout or alters Resource activity. */
@@ -151,6 +155,8 @@ export type WidgetFrameProps = Readonly<{
      * surface and the dividers, so this frame (always plain there) draws no hairline of its own.
      */
     grouped?: boolean;
+    /** First in its area: a plain widget's hairline separates it from the one above, so the first draws none. */
+    leadsArea?: boolean;
     accessibilityLabel?: string;
 }>;
 
@@ -190,6 +196,12 @@ const FRESH_RING_FADE_MS = 600;
  * Happier's theme, text owner, glyphs, the W1 state bodies and the arrival ring.
  */
 /** The room a rendered viewport holds right now, read from the DOM (web only); null until it has one. */
+/** A plugin's widget often names its plugin ("New in PRs & Issues"): the header says it once. */
+function sourceRepeatsTitle(source: WidgetFrameProps['source'], title: WidgetFrameProps['title']): boolean {
+    return typeof source === 'string' && typeof title === 'string'
+        && title.toLocaleLowerCase().includes(source.trim().toLocaleLowerCase());
+}
+
 function readViewportRoom(node: unknown): WidgetBodyPresentation['geometry'] | null {
     const measure = (node as { getBoundingClientRect?: () => { width: number; height: number } } | null)?.getBoundingClientRect;
     if (typeof measure !== 'function') return null;
@@ -233,22 +245,34 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
     // A widget lays itself out from its measured room (columns, strips, plot height). On the web a layout event
     // reaches it only after the first paint, and a busy page can hold that event for seconds, so the first commit
     // reads the room itself: nothing paints in a layout it is about to leave.
-    const viewportRef = React.useRef<View | null>(null);
     const viewportContentRef = React.useRef<View | null>(null);
-    React.useLayoutEffect(() => {
-        if (Platform.OS !== 'web' || geometry !== undefined) return;
-        // A fixed body's viewport is the scroll area that holds its content row.
-        const content = viewportContentRef.current as unknown as Element | null;
-        const room = readViewportRoom(viewportRef.current ?? content?.closest?.(`[data-testid="${props.testID}.viewport"]`) ?? null);
-        if (room) setGeometry(room);
-    }, [geometry, props.testID]);
     const inset = resolveHappierWidgetFrameInsetPx(props.frameStyle);
     // Inside a group nothing clips (A6): a grid cell keeps its rows' room and grows; a phone's stack is its content.
     const bodyHeight = props.bodyHeight ?? (props.grouped ? phone ? 'content' : 'grow' : 'fixed');
-    // A half-width cell, grouped or standalone (its footprint, never its caller), keeps the title's room:
-    // the activity label is its spinner alone (lab wgpres D). A phone stacks every card full width.
-    const compactHeader = !phone && props.widgetPresentation !== undefined
-        && props.widgetPresentation.footprint.columnSpan * 2 <= props.widgetPresentation.footprint.columns;
+    // A body that sizes itself (a grown or content-height cell) is told its own room: the box its content takes, at
+    // least the rows a grown cell keeps. Never the band's: a frame stretched by a taller partner column, or by a
+    // partner that grows while it refreshes, leaves that space empty instead of handing it to a chart (lab wgusage-CD).
+    const declaredBodyHeight = bodyHeight === 'grow' ? props.viewportHeight ?? rows * rowHeight : 0;
+    // A content-height body's own box is only what its content already draws, so a chart sized from it can never
+    // draw taller than its first frame (it settles at its floor). Its room is what its footprint declares, at
+    // least: nothing is stretched to it (no minHeight), a chart simply reads how tall its cell is meant to be.
+    // A phone stacks content with no cell to declare.
+    const declaredRoomHeight = bodyHeight === 'content' && !phone && props.widgetPresentation
+        ? props.viewportHeight ?? rows * rowHeight : declaredBodyHeight;
+    const onBodyBoxLayout = React.useCallback((event: HappierLayoutChangeEvent) => {
+        const { width, height } = event.nativeEvent.layout;
+        if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return;
+        const room = Math.max(height, declaredRoomHeight);
+        setGeometry(previous => previous?.width === width && previous.height === room ? previous : { width, height: room });
+    }, [declaredRoomHeight]);
+    React.useLayoutEffect(() => {
+        if (Platform.OS !== 'web' || geometry !== undefined) return;
+        // A fixed body's viewport is the scroll area that holds its content row; a sizing body's room is its own box.
+        const content = viewportContentRef.current as unknown as Element | null;
+        const room = readViewportRoom(bodyHeight !== 'fixed' && props.widgetPresentation ? content
+            : content?.closest?.(`[data-testid="${props.testID}.viewport"]`) ?? null);
+        if (room) setGeometry(bodyHeight !== 'fixed' ? { ...room, height: Math.max(room.height, declaredRoomHeight) } : room);
+    }, [geometry, props.testID, props.widgetPresentation, bodyHeight, declaredRoomHeight]);
     // A fixed body whose rows run past it fades at the cut edge, so no line reads as cut off mid-height.
     const bodyFades = useScrollEdgeFades({ enabledEdges: FIXED_BODY_FADE_EDGES });
     const onFixedViewportLayout = React.useCallback((event: HappierLayoutChangeEvent) => {
@@ -273,17 +297,31 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
     // While a read refreshes, the meta slot says so in place of its time (lab ST "Refreshing"): the
     // shared activity glyph and the word, then the time returns. The content below never moves.
     const refreshing = refreshingResources.size > 0;
-    // Where the header is narrow the word leaves and the glyph stays, named for assistive technology.
+    // A refresh nobody asked for is quiet work however long it runs: the glyph alone. The frame owns the one
+    // refresh button the person presses (the footer's Retry), so only a refresh that button started says the word.
+    const [retrying, setRetrying] = React.useState(false);
+    const refreshingWords = refreshing && !isWidgetResourceQuietRefresh(true, retrying);
+    const retryFooter = footer?.kind === 'refreshFailed' ? footer.onRetry : undefined;
+    const onRetry = React.useMemo(() => retryFooter ? () => {
+        setRetrying(true);
+        return Promise.resolve(retryFooter()).finally(() => setRetrying(false));
+    } : undefined, [retryFooter]);
+    // Where the header is narrow (the frame's own measured width, never its footprint) the word leaves and the glyph
+    // stays, named for assistive technology: a lone dot-matrix glyph beside the grip reads as a second grip, so it
+    // is only the fallback for a header with no room for the word.
     const refreshingMark = refreshing ? (
         <View testID={`${props.testID}.refreshing`} style={styles.refreshing} accessibilityLiveRegion="polite"
             accessible accessibilityLabel={t('widgetDefinition.refreshing')}>
             <ActivitySpinner size={ICON_SIZE.xs - 2} color={theme.colors.text.tertiary} />
         </View>
     ) : undefined;
-    const meta = !refreshing ? props.meta : compactHeader ? refreshingMark : (
-        <View testID={`${props.testID}.refreshing`} style={styles.refreshing} accessibilityLiveRegion="polite">
+    // A frame drawn headerless (`title={null}`: a page section that owns its title) stays headerless: a refresh
+    // never grows an empty header row around a lone spinner; the body's own freshness line speaks for it.
+    const meta = !refreshing || props.title === null ? props.meta : (
+        <View testID={`${props.testID}.refreshing`} style={styles.refreshing} accessibilityLiveRegion="polite"
+            accessible accessibilityLabel={t('widgetDefinition.refreshing')}>
             <ActivitySpinner size={ICON_SIZE.xs - 2} color={theme.colors.text.tertiary} />
-            <Text style={styles.source} numberOfLines={1}>{t('widgetDefinition.refreshing')}</Text>
+            {refreshingWords ? <Text style={styles.source} numberOfLines={1}>{t('widgetDefinition.refreshing')}</Text> : null}
         </View>
     );
     // The frame sizes every state inside it (W1 bodies, a refusal, a plugin's own): a card's states on
@@ -351,8 +389,12 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
                 testID={`${props.testID}.stale`}
                 reason={footer.reason}
                 tone="warning"
-                {...(footer.onRetry ? { action: { label: t('common.retry'), onPress: footer.onRetry } } : {})}
+                {...(onRetry ? { action: { label: t('common.retry'), onPress: onRetry } } : {})}
             />
+        </View>
+    ) : footer?.kind === 'pending' ? (
+        <View style={styles.footerFill}>
+            <SurfaceFreshnessLine testID={`${props.testID}.pending`} reason={footer.reason} busy />
         </View>
     ) : null;
 
@@ -371,7 +413,7 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
             cardStyle={styles.card}
             gradient={resolveThemeSurfaceFinish(theme, 'card')}
             renderMaterialSurface={renderThemeMaterialSurface}
-            {...(props.grouped ? {} : { dividerColor: theme.colors.border.default })}
+            {...(props.grouped || (props.leadsArea && props.frameStyle === 'plain') ? {} : { dividerColor: theme.colors.border.default })}
             mark={mark}
             title={props.titleMeta && typeof props.title === 'string' ? (
                 <View style={styles.titleWithMeta}>
@@ -379,13 +421,13 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
                     {props.titleMeta}
                 </View>
             ) : props.title}
-            {...(props.source ? { source: props.source } : {})}
+            {...(props.source && !sourceRepeatsTitle(props.source, props.title) ? { source: props.source } : {})}
             renderSourceGlyph={renderSourceGlyph}
             sourcePlacement={props.sourcePlacement ?? (phone || props.titleMeta ? 'below' : 'inline')}
             meta={meta}
-            {...(refreshingMark && !compactHeader ? { compactMeta: refreshingMark } : {})}
+            {...(refreshingMark ? { compactMeta: refreshingMark } : {})}
             {...(props.leading ? { leading: props.leading } : {})}
-            accessory={props.menu}
+            accessory={props.grip ? <View style={styles.chrome}>{props.menu}{props.grip}</View> : props.menu}
             disclosure={props.disclosure}
             // The public driver erases Reanimated's host-private value types, as at the plugin presentation boundary.
             disclosureMotion={reanimatedDisclosureMotion as unknown as HappierDisclosureMotionDriver}
@@ -411,10 +453,14 @@ export const WidgetFrame = React.memo(function WidgetFrame(props: WidgetFramePro
                 {props.widgetPresentation && bodyHeight !== 'fixed' ? (
                     // Nothing clips or scrolls here: the body is measured (its size and width still
                     // reach it) and the frame takes the height that results. A frame stretched by its band
-                    // (a group's shorter column) hands the extra height to this viewport, so the body fills it.
-                    <View ref={viewportRef} testID={`${props.testID}.viewport`} onLayout={onViewportLayout}
+                    // (a group's shorter column) grows this viewport, but the body keeps its own box: the
+                    // extra height stays empty under it, so nothing it draws stretches or jumps.
+                    <View testID={`${props.testID}.viewport`}
                         style={{ minHeight: bodyHeight === 'grow' ? props.viewportHeight ?? rows * rowHeight : undefined, flexGrow: 1, minWidth: 0 }}>
-                        <WidgetFrameBodyView testID={props.testID} body={props.body} rows={rows} />
+                        <View ref={viewportContentRef} testID={`${props.testID}.viewportBody`} onLayout={onBodyBoxLayout}
+                            style={{ minWidth: 0, ...(bodyHeight === 'grow' ? { minHeight: declaredBodyHeight } : {}) }}>
+                            <WidgetFrameBodyView testID={props.testID} body={props.body} rows={rows} />
+                        </View>
                     </View>
                 ) : props.widgetPresentation ? (
                     <HappierScrollArea testID={`${props.testID}.viewport`} onLayout={onFixedViewportLayout}
@@ -553,6 +599,11 @@ const stylesheet = StyleSheet.create((theme) => {
         },
         // Fills the fixed viewport (a state body keeps its room) and grows past it when the rows do.
         fixedBodyContent: { flexGrow: 1 },
+        chrome: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: theme.space.s2,
+        },
         titleWithMeta: {
             flexDirection: 'row',
             alignItems: 'baseline',

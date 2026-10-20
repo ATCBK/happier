@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { THEME_PROFILE_MAX_PROFILES, THEME_PROFILE_SCHEMA_VERSION } from './themeProfileConstants';
 import {
@@ -170,9 +170,8 @@ export const migrateThemeProfileLocalStateTokenIds = (state: ThemeProfilesLocalS
     };
 };
 
-export const ThemeProfilesLocalStateSchema: z.ZodType<ThemeProfilesLocalStateV1> = z
-    .unknown()
-    .transform((value) => parseThemeProfilesLocalState(value).state);
+export const ThemeProfilesLocalStateSchema: z.ZodMiniType<ThemeProfilesLocalStateV1> = z.pipe(z
+    .unknown(), z.transform((value) => parseThemeProfilesLocalState(value).state));
 
 export const findThemeProfileById = (
     state: ThemeProfilesLocalStateV1,

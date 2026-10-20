@@ -5,11 +5,47 @@ import { PluginUiArtifactsManifestV2Schema } from '@happier-dev/protocol/plugins
 import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 
-import { createVerifiedPortablePluginInstallationAvailability } from './releaseFacts';
+import { createVerifiedPortablePluginInstallationAvailability, projectVerifiedPluginUiReleaseSlotsV2 } from './releaseFacts';
 
 const digest = (character: string): `sha256:${string}` => `sha256:${character.repeat(64)}`;
 
 describe('verified portable Plugin Availability facts', () => {
+  it('does not publish a native declaration backed by the wrong artifact tier', () => {
+    const manifest = normalizePluginManifestV2(createPluginManifestV2Fixture({
+      id: 'com.acme.invalid-ui', contributes: { ui: { renderers: [
+        { id: 'native-panel', kind: 'reactNative', artifact: 'panel' },
+      ] } },
+    }));
+    const generatedUiArtifacts = PluginUiArtifactsManifestV2Schema.parse({ version: 2, entries: [{
+      artifactId: 'panel', tier: 'hostedWeb', entry: 'hosted-web/panel/index.html',
+      files: [{ relativePath: 'hosted-web/panel/index.html', digest: digest('b'), byteSize: 12 }],
+      digest: digest('c'), builtWith: { staging: 'staticDirectory' }, hostUiApiRange: '^1.0.0',
+    }] });
+    expect(projectVerifiedPluginUiReleaseSlotsV2({ manifest, generatedUiArtifacts })).toEqual([]);
+  });
+
+  it('omits missing artifacts while preserving a verified neighbouring contribution', () => {
+    const manifest = normalizePluginManifestV2(createPluginManifestV2Fixture({
+      id: 'com.acme.partial-ui',
+      contributes: { ui: { renderers: [
+        { id: 'missing-panel', kind: 'reactNative', artifact: 'missing-bundle' },
+        { id: 'ready-panel', kind: 'reactNative', artifact: 'ready-bundle' },
+      ] } },
+    }));
+    const generatedUiArtifacts = PluginUiArtifactsManifestV2Schema.parse({ version: 2, entries: [{
+      artifactId: 'ready-bundle', tier: 'reactNative',
+      entry: 'react-native/ready-bundle/entry.cjs.bundle',
+      files: [{ relativePath: 'react-native/ready-bundle/entry.cjs.bundle', digest: digest('b'), byteSize: 12 }],
+      digest: digest('c'), builtWith: { bundler: 'esbuild', version: '0.27.2' },
+      executable: { exports: ['renderSurface'] }, hostUiApiRange: '^1.0.0',
+    }] });
+    expect(projectVerifiedPluginUiReleaseSlotsV2({ manifest, generatedUiArtifacts }))
+      .toEqual(['web', 'ios', 'android'].map(platform => ({
+        contributionId: 'ready-panel', artifactId: 'ready-bundle', tier: 'reactNative', platform,
+        artifactDigest: digest('c'), hostUiApiRange: '^1.0.0',
+      })));
+  });
+
   it('binds every verified generated UI artifact slot using only artifact-declared compatibility', () => {
     const manifest = normalizePluginManifestV2(createPluginManifestV2Fixture({
       id: 'com.acme.artifacts',

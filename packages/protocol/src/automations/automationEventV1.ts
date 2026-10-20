@@ -975,7 +975,7 @@ export const AutomationRunResultCorrespondenceV1Schema = defineStoredReadProject
   AutomationRunOnlyCorrespondenceV1Schema,
 ]), () => z.union([
   createStoredReadSchema(AutomationReplyHandoffCorrespondenceV1Schema),
-  z.pipe(z.transform((value) => value !== null && typeof value === 'object' && 'handoffId' in value ? null : value), createStoredReadSchema(AutomationRunOnlyCorrespondenceV1Schema)),
+  (<I extends zMini.core.$ZodType, O extends zMini.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as zMini.ZodMiniPipe<I, O>)(z.transform((value) => value !== null && typeof value === 'object' && 'handoffId' in value ? null : value), createStoredReadSchema(AutomationRunOnlyCorrespondenceV1Schema)),
 ]));
 export type AutomationRunResultCorrespondenceV1 = z.infer<
   typeof AutomationRunResultCorrespondenceV1Schema

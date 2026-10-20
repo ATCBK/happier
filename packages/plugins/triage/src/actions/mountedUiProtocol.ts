@@ -7,7 +7,7 @@ import {
 } from '@happier-dev/plugin-sdk/protocol';
 import { TriageEntryRefV1Schema } from '@happier-dev/triage-protocol/v1';
 import { TriageSourcePanelSelectionV1Schema, TriageSourcePanelRevealV1Schema, TriageSourcePanelInsertV1Schema } from '@happier-dev/triage-sources/runtime';
-import { TriageListFilterSelectionV1Schema, TriageListSettledQueryV1Schema, TriageSmartPolicyV1Schema } from './listEntriesProtocol.js';
+import { TriageSurfaceFilterSelectionV1Schema, TriageListSettledQueryV1Schema, TriageSmartPolicyV1Schema } from './listEntriesProtocol.js';
 
 export const TRIAGE_MOUNTED_UI_ACTION_LOCAL_ID_V1 = 'ui/mounted-v1';
 const identifier = defineProtocolString({ minLength: 1 });
@@ -21,10 +21,11 @@ export const TriageMountedUiOperationV1Schema = defineProtocolUnion([
   defineProtocolObject({ kind: defineProtocolLiteral('closeDetail') }, closed),
   defineProtocolObject({ kind: defineProtocolLiteral('attachEntry'), entryRef: TriageEntryRefV1Schema }, closed),
   defineProtocolObject({ kind: defineProtocolLiteral('removeEntry'), entryRef: TriageEntryRefV1Schema }, closed),
+  defineProtocolObject({ kind: defineProtocolLiteral('setPickerQuery'), query: defineProtocolString() }, closed),
   defineProtocolObject({ kind: defineProtocolLiteral('selectDetailTab'), tab: identifier }, closed),
   defineProtocolObject({ kind: defineProtocolLiteral('selectLinkedSession'), sessionId: identifier }, closed),
   defineProtocolObject({ kind: defineProtocolLiteral('switchView'), view: defineProtocolUnion([defineProtocolLiteral('list'), defineProtocolLiteral('board')]) }, closed),
-  defineProtocolObject({ kind: defineProtocolLiteral('setLens'), query: TriageListSettledQueryV1Schema, filters: TriageListFilterSelectionV1Schema,
+  defineProtocolObject({ kind: defineProtocolLiteral('setLens'), query: TriageListSettledQueryV1Schema, filters: TriageSurfaceFilterSelectionV1Schema,
     order: defineProtocolUnion([defineProtocolLiteral('newest'), defineProtocolLiteral('oldest'), defineProtocolLiteral('smart')]),
     smartPolicy: TriageSmartPolicyV1Schema.optional() }, closed),
   defineProtocolObject({ kind: defineProtocolLiteral('selectSavedView'), viewId: identifier.nullable() }, closed),

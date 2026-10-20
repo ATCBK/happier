@@ -9,6 +9,7 @@ import {
 } from "vitest";
 
 import { db } from "@/storage/db";
+import { sourceKeyForSessionFollowSourceV1 } from '@/app/session/follow/sessionFollowSourceIdentity';
 import {
     createLightSqliteHarness,
     type LightSqliteHarness,
@@ -139,8 +140,10 @@ describe("deleteOwnedSession stored-content compatibility (SQLite)", () => {
             metadataLayoutVersion: 1,
         }] });
         await db.sessionFollowEdge.create({ data: {
+            sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: 'follow-source-delete' }),
             sourceSessionId: "follow-source-delete",
             destinationSessionId: "follow-destination-survives",
+            policyJson: '{"preset":"quiet"}',
         } });
 
         const { deleteOwnedSession } = await import("./deleteOwnedSession");
@@ -175,8 +178,10 @@ describe("deleteOwnedSession stored-content compatibility (SQLite)", () => {
             metadataLayoutVersion: 1,
         } });
         await db.sessionFollowEdge.create({ data: {
+            sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: 'delete-condition-lost' }),
             sourceSessionId: "delete-condition-lost",
             destinationSessionId: "delete-condition-destination",
+            policyJson: '{"preset":"quiet"}',
         } });
 
         const { deleteOwnedSession } = await import(

@@ -18,6 +18,38 @@ import { DaemonProviderConnectionMutationResponseV1Schema } from '../rpc/provide
 const context = { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } } as const;
 
 describe('Provider Settings Actions', () => {
+  it('preserves the typed probe refusal through real Provider dispatch and approval decision observation', async () => {
+    let stored: ApprovalRequestV2 | null = null;
+    const error = createProviderErrorV1('provider_endpoint_unavailable', { connectionId: 'gateway', machineId: 'hub' });
+    const executor = createActionExecutor({
+      isApprovalExecutionOriginCurrent: async () => true,
+      approvalsCreate: async ({ request }) => {
+        stored = ApprovalRequestV2Schema.parse(request);
+        return { artifactId: 'probe-approval' };
+      },
+      approvalsGet: async () => stored && structuredClone(stored),
+      approvalsUpdate: async ({ request }) => {
+        if (!stored) throw new Error('Missing approval');
+        const next = ApprovalRequestV2Schema.parse(request);
+        const transition = decideApprovalRequestTransition(stored, next);
+        if (!transition.ok) return transition;
+        stored = structuredClone(next);
+        return { ok: true };
+      },
+      // Only Artifact persistence and daemon RPC are replaced; Provider result
+      // parsing, approval transitions and observation projection remain real.
+      providerActionExecute: createProviderActionExecuteV1({ assertCurrent() {},
+        rpc: async () => ({ status: 'error', error }),
+        setDefault: async () => ({ status: 'applied' }),
+      }),
+    });
+    const invocation = { ...context, serverId: 'test-home', actionRequestId: 'probe-request',
+      machineId: 'hub' };
+    expect(await executor.execute('providers.probe', { connectionId: 'gateway', machineId: 'hub' }, invocation))
+      .toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    expect(await executor.execute('approval.request.decide', { artifactId: 'probe-approval', decision: 'approve' }, invocation))
+      .toMatchObject({ ok: true, result: { execution: { ok: true, result: { status: 'error', error } } } });
+  });
   it.each(['updated', 'refused', 'conflict', 'terminal_lost'] as const)(
     'settles a deferred Account gateway slot approval with %s disposition without daemon replay', async disposition => {
       const connection = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_approval_gateway', role: 'named',

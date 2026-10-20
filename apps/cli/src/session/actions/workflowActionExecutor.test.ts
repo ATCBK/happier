@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-
+import { createAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
+import { createWorkflowDefinitionActions } from './workflowDefinitions';
 import { createWorkflowActionExecutor } from './workflowActionExecutor';
+
+const interchange = createWorkflowDefinitionActions({ artifactStore: createAccountArtifactStore({
+  credentials: { token: 'workflow-fixture', encryption: null }, getAccountEncryptionMode: async () => 'plain',
+}) });
+const interchangePorts = { importDocument: interchange.importDocument, exportDocument: interchange.exportDocument };
 
 const WORKFLOW_ACTION_IDS = [
   'workflow.validate',
@@ -35,7 +41,7 @@ describe('workflow Action host', () => {
     const list = vi.fn(async () => ({ definitions: [] }));
     const execute = createWorkflowActionExecutor({
       isWorkflowFeatureEnabled: async () => true,
-      definitions: { list, get: vi.fn(), create: vi.fn(), update: vi.fn(), edit: vi.fn(), delete: vi.fn() },
+      definitions: { ...interchangePorts, list, get: vi.fn(), create: vi.fn(), update: vi.fn(), edit: vi.fn(), delete: vi.fn() },
       runs: { execute: vi.fn() },
     });
 
@@ -49,7 +55,7 @@ describe('workflow Action host', () => {
   it('does not claim target validation when the host has no target diagnostics owner', async () => {
     const execute = createWorkflowActionExecutor({
       isWorkflowFeatureEnabled: async () => true,
-      definitions: { list: vi.fn(), get: vi.fn(), create: vi.fn(), update: vi.fn(), edit: vi.fn(), delete: vi.fn() },
+      definitions: { ...interchangePorts, list: vi.fn(), get: vi.fn(), create: vi.fn(), update: vi.fn(), edit: vi.fn(), delete: vi.fn() },
       runs: { execute: vi.fn() },
     });
 
@@ -67,7 +73,7 @@ describe('workflow Action host', () => {
     const runExecute = vi.fn(async () => unavailable);
     const execute = createWorkflowActionExecutor({
       isWorkflowFeatureEnabled: async () => true,
-      definitions: { list: vi.fn(), get: vi.fn(), create: vi.fn(), update: vi.fn(), edit: vi.fn(), delete: vi.fn() },
+      definitions: { ...interchangePorts, list: vi.fn(), get: vi.fn(), create: vi.fn(), update: vi.fn(), edit: vi.fn(), delete: vi.fn() },
       runs: { execute: runExecute },
     });
     await expect(execute({
@@ -80,7 +86,7 @@ describe('workflow Action host', () => {
     const runExecute = vi.fn(async (_args: Readonly<{ actionId: string }>) => unavailable);
     const execute = createWorkflowActionExecutor({
       isWorkflowFeatureEnabled: async () => true,
-      definitions: { list: vi.fn(), get: vi.fn(), create: vi.fn(), update: vi.fn(), edit: vi.fn(), delete: vi.fn() },
+      definitions: { ...interchangePorts, list: vi.fn(), get: vi.fn(), create: vi.fn(), update: vi.fn(), edit: vi.fn(), delete: vi.fn() },
       runs: { execute: runExecute },
     });
     // The lean background-refresh selection travels inside the existing
@@ -100,7 +106,7 @@ describe('workflow Action host', () => {
 
   it('covers the complete catalog through one workflow-family executor', async () => {
     const called = new Set<string>();
-    const definitions = {
+    const definitions = { ...interchangePorts,
       list: vi.fn(async () => { called.add('workflow.definition.list'); return unavailable; }),
       get: vi.fn(async () => { called.add('workflow.definition.get'); return unavailable; }),
       create: vi.fn(async () => { called.add('workflow.definition.create'); return unavailable; }),
@@ -127,7 +133,7 @@ describe('workflow Action host', () => {
       'workflow.run.delete': { runId: '550e8400-e29b-41d4-a716-446655440000', expectedRevision: 1 },
       'workflow.definition.list': {},
       'workflow.definition.get': { definitionId: 'definition-1' },
-      'workflow.definition.create': { definitionId: 'definition-1', definition: { defaults: { agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.test', localId: 'test' } } }, blocks: ['work'] }, metadata: { title: 'Work' } },
+      'workflow.definition.create': { definitionId: '11111111-1111-4111-8111-111111111111', definition: { defaults: { agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.test', localId: 'test' } } }, blocks: ['work'] }, metadata: { title: 'Work' } },
       'workflow.definition.update': { definitionId: 'definition-1', expectedRevision: { headerVersion: 1, bodyVersion: 1 }, definition: { defaults: { agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.test', localId: 'test' } } }, blocks: ['work'] }, metadata: { title: 'Work' } },
       'workflow.definition.edit': { definitionId: 'definition-1', expectedRevision: { headerVersion: 1, bodyVersion: 1 }, ops: [{ kind: 'rename', name: 'Changed' }] },
       'workflow.definition.delete': { definitionId: 'definition-1' },
@@ -140,7 +146,7 @@ describe('workflow Action host', () => {
   });
 
   it('fails the whole family closed before parsing or invoking an owner', async () => {
-    const definitions = {
+    const definitions = { ...interchangePorts,
       list: vi.fn(), get: vi.fn(), create: vi.fn(), update: vi.fn(), edit: vi.fn(), delete: vi.fn(),
     };
     const runs = { execute: vi.fn() };
@@ -153,7 +159,7 @@ describe('workflow Action host', () => {
     await expect(execute({ actionId: 'workflow.run.start', input: null as never, context: {} }))
       .resolves.toEqual({ ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' });
     expect(runs.execute).not.toHaveBeenCalled();
-    expect(Object.values(definitions).every((owner) => owner.mock.calls.length === 0)).toBe(true);
+    expect(Object.values(definitions).every((owner) => !vi.isMockFunction(owner) || owner.mock.calls.length === 0)).toBe(true);
   });
 
   it('resolves one trusted ingress context for validate, inline start, create, and update', async () => {
@@ -168,7 +174,7 @@ describe('workflow Action host', () => {
     const execute = createWorkflowActionExecutor({
       isWorkflowFeatureEnabled: async () => true,
       resolveIngressContext,
-      definitions: { list: vi.fn(), get: vi.fn(), create, update, edit: vi.fn(), delete: vi.fn() },
+      definitions: { ...interchangePorts, list: vi.fn(), get: vi.fn(), create, update, edit: vi.fn(), delete: vi.fn() },
       runs: { execute: runExecute },
     });
     const promptOnly = { blocks: ['Work'] };
@@ -176,7 +182,7 @@ describe('workflow Action host', () => {
     await expect(execute({ actionId: 'workflow.validate', input: { definition: promptOnly }, context: { defaultSessionId: 'session-1' } }))
       .resolves.toMatchObject({ valid: true, normalizedDefinition: { defaults: { agentTarget: ingress.agentTarget } } });
     await execute({ actionId: 'workflow.run.start', input: { runId: '550e8400-e29b-41d4-a716-446655440000', source: { kind: 'inline', definition: promptOnly } }, context: { defaultSessionId: 'session-1' } });
-    await execute({ actionId: 'workflow.definition.create', input: { definitionId: 'definition-1', definition: promptOnly, metadata: { title: 'One' } }, context: { defaultSessionId: 'session-1' } });
+    await execute({ actionId: 'workflow.definition.create', input: { definitionId: '11111111-1111-4111-8111-111111111111', definition: promptOnly, metadata: { title: 'One' } }, context: { defaultSessionId: 'session-1' } });
     await execute({ actionId: 'workflow.definition.update', input: { definitionId: 'definition-1', expectedRevision: { headerVersion: 1, bodyVersion: 1 }, definition: promptOnly, metadata: { title: 'Two' } }, context: { defaultSessionId: 'session-1' } });
 
     expect(resolveIngressContext).toHaveBeenCalledTimes(4);
@@ -189,7 +195,7 @@ describe('workflow Action host', () => {
     const runs = { execute: vi.fn(async () => unavailable) };
     const execute = createWorkflowActionExecutor({
       isWorkflowFeatureEnabled: async () => true,
-      definitions: { list: vi.fn(), get: vi.fn(), create: vi.fn(), update: vi.fn(), edit: vi.fn(), delete: vi.fn() },
+      definitions: { ...interchangePorts, list: vi.fn(), get: vi.fn(), create: vi.fn(), update: vi.fn(), edit: vi.fn(), delete: vi.fn() },
       runs,
     });
     const input = { runId: '550e8400-e29b-41d4-a716-446655440000' } as const;
@@ -211,7 +217,7 @@ describe('workflow Action host', () => {
     const execute = createWorkflowActionExecutor({
       isWorkflowFeatureEnabled: async () => true,
       resolveTargetValidation,
-      definitions: { list: vi.fn(), get: vi.fn(), create: vi.fn(), update: vi.fn(), edit: vi.fn(), delete: vi.fn() },
+      definitions: { ...interchangePorts, list: vi.fn(), get: vi.fn(), create: vi.fn(), update: vi.fn(), edit: vi.fn(), delete: vi.fn() },
       runs: { execute: vi.fn() },
     });
 

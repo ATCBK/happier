@@ -107,7 +107,7 @@ async function readConnectedAccountCatalogWithAdmissionInContext(context: Connec
                                     import('@/agents/backendCatalog/agentCatalogProjection'),
                                 ]);
                             const projectionTarget = { machineId, serverId: context.serverId, accountLifetime: context.accountLifetime };
-                            await loadDaemonMergedProjectionCacheEntry({ ...projectionTarget, reuseFreshReady: true });
+                            await loadDaemonMergedProjectionCacheEntry({ ...projectionTarget, reuseFreshReady: true, signal });
                             context.assertCurrent();
                             const projection = readReusableDaemonMergedProjectionCacheEntry(projectionTarget);
                             const purposeDefaultAgents = projection?.kind === 'ready' ? getResolvedAgentCatalogEntries({

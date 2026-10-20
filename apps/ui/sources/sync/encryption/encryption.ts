@@ -10,9 +10,10 @@ import {
 } from "./encryptor";
 import { encodeHex } from "@/encryption/hex";
 import { EncryptionCache } from "./encryptionCache";
+import { createUiAccountKvCipher } from './accountKvCipher';
 import { mapCryptoBatchWithYield } from "./cryptoBatchYield";
 import { SessionEncryption } from "./sessionEncryption";
-import { MachineEncryption } from "./machineEncryption";
+import { areMachineEncryptionContextInputsEqual, MachineEncryption } from "./machineEncryption";
 import { encodeBase64, decodeBase64 } from "@/encryption/base64";
 import sodium, { type LibsodiumKeyPair } from '@/encryption/libsodium.lib';
 import { decryptBox, encryptBox } from "@/encryption/libsodium";
@@ -195,6 +196,7 @@ export class Encryption {
     // data key are sealed with it, so it is also their input-equality material.
     private readonly masterSecret: Uint8Array;
     private readonly accountScopedCryptoMaterial: AccountScopedCryptoMaterial;
+    private readonly rawAccountCipher: ReturnType<typeof createUiAccountKvCipher>;
     readonly anonID: string;
     readonly contentDataKey: Uint8Array;
 
@@ -205,17 +207,20 @@ export class Encryption {
     private machineKeyFingerprints = new Map<string, string>();
     private machineEncryptionContexts = new Map<string, MachineEncryptionContext>();
     private machineEncryptionOpenings = new Map<string, object>();
-    // Only in-flight envelope work is shared. Row/key custody stays with its
-    // existing Machine/Session owner; failed or completed opens are not retained.
+    // The Account encryption owner retains successful pure envelope work in the
+    // same scope as in-flight work. This never grants access to a row; callers
+    // still admit its mode, access and current envelope before requesting a key.
     private dataKeyOpenings = new Map<string, {
         entries: Map<string, {
             result: Promise<Uint8Array | null>;
-            resolve: (value: Uint8Array | null) => void;
-            reject: (error: unknown) => void;
+            settledKey?: Uint8Array;
+            resolve?: (value: Uint8Array | null) => void;
+            reject?: (error: unknown) => void;
         }>;
         pending: string[];
         scheduled: boolean;
     }>();
+    private dataKeyOpeningRecipient: Uint8Array;
     private cache: EncryptionCache;
     private aesBatchConcurrencyLimit = DEFAULT_AES_BATCH_CONCURRENCY_LIMIT;
     // Per-instance worker object. This is the cross-account fence: the queue registry
@@ -238,10 +243,12 @@ export class Encryption {
     ) {
         this.anonID = anonID;
         this.contentKeyPair = contentKeyPair;
+        this.dataKeyOpeningRecipient = contentKeyPair.privateKey.slice();
         this.masterSecret = masterSecret;
         this.accountScopedCryptoMaterial = useDataKeyFallback
             ? { type: 'dataKey', machineKey: masterSecret }
             : { type: 'legacy', secret: masterSecret };
+        this.rawAccountCipher = createUiAccountKvCipher('e2ee', this.accountScopedCryptoMaterial);
         this.fallbackEncryption = useDataKeyFallback
             ? new AES256Encryption(masterSecret, {
                 nativeCryptoWorker: this.createNativeJsonDecryptWorkerBinding(),
@@ -281,6 +288,9 @@ export class Encryption {
             this.nativeCryptoWorkerServerId = scope.serverId;
             const generation = Math.max(0, Math.trunc(Number.isFinite(params.scope.generation) ? params.scope.generation : 0));
             const key = getScopeKey(scope);
+            if (generation > this.getGenerationForScope(scope)) {
+                this.dataKeyOpenings.delete(`${key}\u0000${this.getGenerationForScope(scope)}`);
+            }
             this.nativeCryptoWorkerGenerations.set(key, Math.max(this.nativeCryptoWorkerGenerations.get(key) ?? 0, generation));
         }
     }
@@ -342,6 +352,7 @@ export class Encryption {
     }
 
     private bumpGenerationForScope(scope: ResolvedEncryptionScope): void {
+        this.dataKeyOpenings.delete(`${getScopeKey(scope)}\u0000${this.getGenerationForScope(scope)}`);
         this.nativeCryptoWorkerGenerations.set(getScopeKey(scope), this.getGenerationForScope(scope) + 1);
     }
 
@@ -541,9 +552,7 @@ export class Encryption {
 
     captureMachineEncryptionContext(machineId: string, input: MachineEncryptionContextInput): MachineEncryptionContext {
         const existing = this.machineEncryptionContexts.get(machineId);
-        if (existing && existing.dataEncryptionKey === input.dataEncryptionKey
-            && existing.expectedDataEncryptionKey === input.expectedDataEncryptionKey
-            && existing.resourceMode === input.resourceMode && existing.accessState === input.accessState) return existing;
+        if (existing && areMachineEncryptionContextInputsEqual(existing, input)) return existing;
         this.removeMachineEncryption(machineId);
         const context: MachineEncryptionContext = {
             ...input,
@@ -630,29 +639,27 @@ export class Encryption {
     }
 
     //
-    // Legacy methods for machine metadata (temporary until machines are migrated)
+    // Raw Account JSON. Session/Machine fallback encryption is separately owned.
     //
 
-    async encryptRaw(data: any): Promise<string> {
+    async encryptRaw(data: unknown): Promise<string> {
         return syncPerformanceTelemetry.measureAsync(
             'sync.encryption.account.encryptRaw',
             { items: 1 },
             async () => {
-                const encrypted = await this.fallbackEncryption.encrypt([data]);
-                return encodeBase64(encrypted[0], 'base64');
+                return await this.rawAccountCipher.seal(data);
             },
         );
     }
 
     async decryptRaw(encrypted: string): Promise<any | null> {
         try {
-            const encryptedData = decodeBase64(encrypted, 'base64');
-            const decrypted = await syncPerformanceTelemetry.measureAsync(
+            const opened = await syncPerformanceTelemetry.measureAsync(
                 'sync.encryption.account.decryptRaw',
                 { items: 1 },
-                async () => this.fallbackEncryption.decrypt([encryptedData]),
+                async () => this.rawAccountCipher.open(encrypted),
             );
-            return decrypted[0] || null;
+            return opened.value;
         } catch (error) {
             return null;
         }
@@ -778,13 +785,17 @@ export class Encryption {
 
     async decryptEncryptionKeys(encryptedValues: readonly string[], scopeInput: EncryptionScopeInput = {}): Promise<Array<Uint8Array | null>> {
         if (encryptedValues.length === 0) return [];
-        // Signal-bearing batches retain their native queue's cancellation custody.
-        // Ordinary Machine hydration/RPC opens share only their pure envelope work.
-        if (scopeInput.signal) {
-            return this.openDataKeyEnvelopes(encryptedValues, scopeInput);
+        if (this.dataKeyOpeningRecipient.length !== this.contentKeyPair.privateKey.length
+            || !this.dataKeyOpeningRecipient.every((byte, index) => byte === this.contentKeyPair.privateKey[index])) {
+            this.dataKeyOpenings.clear();
+            this.dataKeyOpeningRecipient = this.contentKeyPair.privateKey.slice();
         }
         const scope = this.getCurrentNativeCryptoWorkerScope(scopeInput);
+        const recipient = this.dataKeyOpeningRecipient;
         const isCurrent = () => this.isCurrentNativeCryptoWorkerScope(scope)
+            && this.dataKeyOpeningRecipient === recipient
+            && recipient.every((byte, index) => byte === this.contentKeyPair.privateKey[index])
+            && scopeInput.signal?.aborted !== true
             && scopeInput.shouldContinue?.() !== false;
         if (!isCurrent()) return encryptedValues.map(() => null);
         const scopeKey = `${getScopeKey(scope)}\u0000${scope.generation}`;
@@ -794,6 +805,22 @@ export class Encryption {
             this.dataKeyOpenings.set(scopeKey, batch);
         }
         const opening = batch;
+        // A cancellable native request owns its queue and cannot borrow another
+        // caller's in-flight promise. Completed pure opens can be reused safely.
+        if (scopeInput.signal) {
+            const misses = [...new Set(encryptedValues.filter(value => !opening.entries.get(value)?.settledKey))];
+            const keys = misses.length > 0 ? await this.openDataKeyEnvelopes(misses, scopeInput) : [];
+            if (!isCurrent()) return encryptedValues.map(() => null);
+            const opened = new Map(misses.map((value, index) => [value, keys[index] ?? null]));
+            for (const [value, key] of opened) {
+                if (!key) continue;
+                const retained = key.slice();
+                // Leave an independently queued ordinary caller in charge of its
+                // promise; it will publish its own successful result.
+                if (!opening.entries.has(value)) opening.entries.set(value, { result: Promise.resolve(retained), settledKey: retained });
+            }
+            return encryptedValues.map(value => (opened.get(value) ?? opening.entries.get(value)?.settledKey)?.slice() ?? null);
+        }
         const results = encryptedValues.map(value => {
             let entry = opening.entries.get(value);
             if (!entry) {
@@ -814,12 +841,19 @@ export class Encryption {
                 opening.scheduled = false;
                 try {
                     const keys = await this.openDataKeyEnvelopes(values, scope);
-                    values.forEach((value, index) => opening.entries.get(value)!.resolve(keys[index] ?? null));
+                    values.forEach((value, index) => {
+                        const entry = opening.entries.get(value)!;
+                        const key = keys[index] ?? null;
+                        if (key && isCurrent()) entry.settledKey = key.slice();
+                        entry.resolve!(key);
+                    });
                 } catch (error) {
-                    for (const value of values) opening.entries.get(value)!.reject(error);
+                    for (const value of values) opening.entries.get(value)!.reject!(error);
                 } finally {
-                    for (const value of values) opening.entries.delete(value);
-                    if (opening.entries.size === 0) this.dataKeyOpenings.delete(scopeKey);
+                    for (const value of values) {
+                        if (!opening.entries.get(value)?.settledKey) opening.entries.delete(value);
+                    }
+                    if (opening.entries.size === 0 && this.dataKeyOpenings.get(scopeKey) === opening) this.dataKeyOpenings.delete(scopeKey);
                 }
             });
         }
@@ -865,7 +899,7 @@ export class Encryption {
                     payloadBytes,
                     capabilityCacheKey: this.nativeCryptoWorker,
                     probe: () => this.nativeCryptoWorker.probe(),
-                    nativeRun: async () => {
+                    nativeRun: async (dispatchSignal) => {
                         const shouldMeasureSerialization = routing.telemetryEnabled && syncPerformanceTelemetry.isEnabled();
                         const serializeStartedAtMs = shouldMeasureSerialization ? nowMs() : 0;
                         let serializeMs = 0;
@@ -892,7 +926,7 @@ export class Encryption {
                                 items: nativeItems,
                                 telemetry: syncPerformanceTelemetry,
                                 telemetryEnabled: routing.telemetryEnabled,
-                                signal: scopeInput.signal,
+                                signal: dispatchSignal,
                                 dispatch: async (queuedItems, context) => {
                                     if (refreshCancellation() || context.signal?.aborted === true) {
                                         return queuedItems.map(() => null);

@@ -17,7 +17,7 @@ import { UsageRhythmWidget } from './UsageRhythmWidget';
 import { usageQaAccountingFixture } from '@/dev/testkit/fixtures/usageQaAccountingFixture';
 import type { UsageWidgetBodyModel } from '../useUsageWidgetResource';
 import { usageSourceAgentId } from '@/sync/domains/usage/usageLabels';
-import { describeUsagePagePendingSources, readUsagePageAsOfMs, readUsageCoverageGaps, isUsageReadOutstanding, UsageCoverageLine, usageCoverageDescription, usageCoverageLineMode, usageCoverageSummary, usagePeriodPhrase, usageDimensionLabel, usageAgentTitle, usageSourceTitle, useSettledBodyHeightFloor, useUsageMeterListFirstReadReserve } from './usageBodyKit';
+import { describeUsagePageFailedSources, describeUsagePagePendingSources, readUsagePageAsOfMs, readUsageCoverageGaps, isUsageReadOutstanding, UsageCoverageLine, usageCoverageDescription, usageCoverageLineMode, usageCoverageSummary, usagePeriodPhrase, usageDimensionLabel, usageAgentTitle, usageSourceTitle, useSettledBodyHeightFloor, useUsageMeterListFirstReadReserve } from './usageBodyKit';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
@@ -42,8 +42,11 @@ describe('shared Usage identity and dependent coverage', () => {
         const unbounded = resolveUsagePageAggregation({ queries: [normalizeUsageQuery({ period: {} })] }).results[0]!;
         expect(isUsageReadOutstanding(unbounded, ['comparison'])).toBe(false);
     });
-    it('retains the full numeric version in a newer model absent from the static Agent catalog', () => {
-        expect(usageDimensionLabel('model', 'claude-haiku-6-1')).toBe('Claude Haiku 6.1');
+    it('preserves unknown model ids exactly instead of inventing names or casing', () => {
+        for (const id of ['claude-haiku-6-1', 'gpt-6.1-sol', 'third-party/MODEL-snapshot']) {
+            expect(usageDimensionLabel('model', id)).toBe(id);
+            expect(usageDimensionLabel('model', id, id)).toBe(id);
+        }
     });
     it('holds an unanswered usage read as loading, never as "No usage in this period"', async () => {
         const query = normalizeUsageQuery({ period: { relative: '7days' }, granularity: 'day' });
@@ -54,21 +57,25 @@ describe('shared Usage identity and dependent coverage', () => {
         expect(screen.getTextContent()).not.toContain(t('usage.board.page.noUsageTitle'));
         expect(screen.findByTestId('daily.loading')).toBeTruthy();
     });
-    it('holds a phone-width Daily body at its settled height while the first read is outstanding, and nothing at a wide card', async () => {
+    it('holds the settled Daily chart room at every width while the first read is outstanding', async () => {
         const query = normalizeUsageQuery({ period: { relative: '7days' }, granularity: 'day' });
         const slice = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, status: 'pending' }] }).results[0]!;
         const model: UsageWidgetBodyModel = { requestedQuery: null, shownQuery: null, slice, pending: true, error: null,
             freshness: 'fresh', updatingPreviousPeriod: false, refreshing: false, refresh: async () => {} };
-        const heldRoom = async (width: number) => {
+        const heldRoom = async (width: number, height = 260) => {
             const screen = await renderScreen(<WidgetPresentationProvider value={{ size: 'medium',
-                footprint: { columns: 2, columnSpan: 1, rowSpan: 2, width: 'half', height: 'regular' }, geometry: { width, height: 260 } }}>
+                footprint: { columns: 2, columnSpan: 1, rowSpan: 2, width: 'half', height: 'regular' }, geometry: { width, height } }}>
                 <UsageDailyWidget query={query} slice={slice} model={model} serverId="home" id="usage_daily" testID="daily" />
             </WidgetPresentationProvider>);
-            const style = ([] as unknown[]).concat(screen.findHostByTestId('daily.reading')?.props.style ?? []).flat(2);
+            const style = ([] as unknown[]).concat(screen.findHostByTestId('daily.loading')?.props.style ?? []).flat(2);
             return style.reduce<number>((held, entry) => (entry && typeof entry === 'object' && 'minHeight' in entry ? Number(entry.minHeight) : held), 0);
         };
-        expect(await heldRoom(326)).toBeGreaterThan(0);
-        expect(await heldRoom(640)).toBe(0);
+        // The plot, its axis and legend: a narrow frame wraps its legend and note, so it keeps more chrome room.
+        expect(await heldRoom(326)).toBe(Math.max(88, 260 - 136) + 136);
+        expect(await heldRoom(640)).toBe(260 - 84 + 84);
+        // A Board's Medium card (232 px of body): the plot gives way to the peak figure, so the held chart never outgrows it
+        // and the coverage note stays inside the card.
+        expect(await heldRoom(326, 232)).toBe(232);
     });
     it('keeps Rhythm reading until activity answers and retains known activity during refresh', async () => {
         const query = normalizeUsageQuery({ period: { relative: '7days' }, includeActivity: true, activityResolution: 'both' });
@@ -157,7 +164,10 @@ describe('shared Usage identity and dependent coverage', () => {
         expect(usageCoverageLineMode([gap('partial'), gap('stale'), gap('unsupported')], true)).toBe('hidden');
         // A source still being read is one cause: the page header says it once, the bodies hold their room.
         expect(usageCoverageLineMode([gap('pending'), gap('not_loaded')], true)).toBe('hidden');
-        expect(usageCoverageLineMode([gap('partial'), gap('error')], true)).toBe('failed');
+        // A failed page read is one cause too: the header says it once and the bodies inherit it quietly.
+        expect(usageCoverageLineMode([gap('partial'), gap('error')], true)).toBe('hidden');
+        // A widget's own read (a comparison, a pool selection) is not in the header, so its body says it.
+        expect(usageCoverageLineMode([{ source: 'comparison', status: 'error' }], true)).toBe('failed');
         // Off the page (Home, Project, Session hosts) nothing else says it, so the detail stays.
         expect(usageCoverageLineMode([gap('partial')], false)).toBe('detail');
         expect(usageCoverageLineMode([], false)).toBe('hidden');
@@ -208,6 +218,27 @@ describe('shared Usage identity and dependent coverage', () => {
         expect(describeUsagePagePendingSources([slice([{ source: 'accounting', status: 'partial' }])])).toBeNull();
         // A widget's own read (a pool selection) is said by that widget, not listed in the page header.
         expect(describeUsagePagePendingSources([slice([{ source: 'selection:openai-codex-pool', status: 'pending' }])])).toBeNull();
+    });
+    it('names a failed page read once for the header, never a widget-own read', () => {
+        const slice = (sources: readonly { source: string; status: string }[]) =>
+            ({ sources }) as unknown as Parameters<typeof describeUsagePageFailedSources>[0][number];
+        expect(describeUsagePageFailedSources([slice([{ source: 'work', status: 'error' }]), slice([{ source: 'work', status: 'error' }])]))
+            .toBe(t('usage.board.page.coverageFailed', { sources: usageSourceTitle('work') }));
+        expect(describeUsagePageFailedSources([slice([{ source: 'comparison', status: 'error' }])])).toBeNull();
+        expect(describeUsagePageFailedSources([slice([{ source: 'work', status: 'pending' }])])).toBeNull();
+    });
+    it('keeps admitted sources quiet during background refresh while naming an unanswered sibling', () => {
+        const sources: UsageQueryResultSlice['sources'] = [
+            { source: 'accounting', status: 'pending', asOfMs: 100 },
+            { source: 'work', status: 'pending', asOfMs: 100 },
+            { source: 'how_you_work', status: 'pending', asOfMs: 100 },
+            { source: 'quota', status: 'available', asOfMs: 100 },
+            { source: 'quota:answered', status: 'pending', asOfMs: 100 },
+        ];
+        expect(describeUsagePagePendingSources([{ sources }])).toBeNull();
+        expect(readUsagePageAsOfMs([{ sources }])).toBe(100);
+        expect(describeUsagePagePendingSources([{ sources: [...sources, { source: 'quota:unanswered', status: 'pending' }] }]))
+            .toBe(t('usage.board.page.coveragePending', { sources: usageSourceTitle('quota') }));
     });
     it('discloses a held account read after sibling allowances have arrived', () => {
         // The aggregate Resource publishes each qualified account independently of its siblings.
@@ -290,9 +321,9 @@ describe('shared Usage identity and dependent coverage', () => {
         expect(usageDimensionLabel('machine', 'machine-uuid', 'machine-uuid', new Map([['machine-uuid', 'Build Mac']]))).toBe('Build Mac');
         expect(usageDimensionLabel('machine', 'missing-uuid', undefined, new Map())).toBe(t('machine.unlistedMachine'));
     });
-    it('preserves genuine contributed model and source titles while humanizing raw fallback keys', () => {
+    it('preserves genuine contributed model and source titles and raw unknown model ids', () => {
         expect(usageDimensionLabel('model', 'third-party/model-snapshot', 'Research-Lab Model / Preview')).toBe('Research-Lab Model / Preview');
-        expect(usageDimensionLabel('model', 'third-party/model-snapshot', 'third-party/model-snapshot')).toBe('Third Party Model Snapshot');
+        expect(usageDimensionLabel('model', 'third-party/model-snapshot', 'third-party/model-snapshot')).toBe('third-party/model-snapshot');
         expect(usageSourceTitle('native:third.party/research:remote', 'Research-Lab Capture / Preview')).toBe('Research-Lab Capture / Preview');
     });
     it('keeps the date of historical coverage instead of presenting an old observation as today', () => {
@@ -309,10 +340,11 @@ describe('shared Usage identity and dependent coverage', () => {
         const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 86_400_000 }, metric: 'tokens' });
         const tokens = { input: 10, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 10 };
         const cost = { reportedUsd: 1, estimatedUsd: 0, currency: 'USD' };
+        const totalCost = { ...cost, reportedUsd: 3 };
         const slice = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, status: 'available', value: {
-            v: 1, totals: { eventCount: 3, tokens: { ...tokens, total: 30, input: 30 }, cost },
+            v: 1, totals: { eventCount: 3, tokens: { ...tokens, total: 30, input: 30 }, cost: totalCost },
             engineTimeline: [{ bucketStartMs: 0, bucketEndMs: 86_400_000, leaders: [{ key: 'codex:local', eventCount: 3,
-                tokens: { ...tokens, total: 30, input: 30 }, cost, sources: [
+                tokens: { ...tokens, total: 30, input: 30 }, cost: totalCost, sources: [
                     { source: 'runtime', path: 'runtime', execution: 'happier', eventCount: 1, tokens, cost },
                     { source: 'native', path: 'native', execution: 'outside', eventCount: 1, tokens, cost },
                     { source: 'older', path: 'unknown', execution: 'unknown', eventCount: 1, tokens, cost },
@@ -457,6 +489,40 @@ describe('shared Usage identity and dependent coverage', () => {
         expect(detail).toContain(t('usage.board.page.coverageReason_incomplete_history'));
         expect(detail).toContain(t('usage.board.sources.unsupported'));
     });
+    it('dates incomplete source observations explicitly and advances only when that source changes', async () => {
+        const query = normalizeUsageQuery({ period: { startMs: 0 } });
+        const observedAt = Date.UTC(2026, 9, 9, 15, 55);
+        const later = Date.UTC(2026, 9, 18, 12);
+        const sliceFor = (sourceAt: number) => resolveUsagePageAggregation({ queries: [query], accounting: [{
+            query, status: 'available', value: { ...usageQaAccountingFixture(), coverage: {
+                status: 'partial', reasons: ['incomplete_history'], missingDimensions: [], ranked: [], range: { complete: false },
+                sources: [
+                    { source: 'native:claude', path: 'native', status: 'partial', eventCount: 1, asOfMs: sourceAt },
+                    { source: 'runtime:codex', path: 'runtime', status: 'available', eventCount: 1, asOfMs: later },
+                ],
+            } },
+        }] }).results[0]!;
+        const render = (sourceAt: number) => <UsageCoverageLine slice={sliceFor(sourceAt)} sources={['accounting']} testID="source-date" />;
+        const screen = await renderScreen(render(observedAt));
+        const expected = (at: number) => `Oldest source update ${formatUsageObservedAt(at)}`;
+        expect(screen.getTextContent()).toContain(expected(observedAt));
+        // A successful reread of identical producer evidence cannot invent a newer observation.
+        await screen.update(render(observedAt));
+        expect(screen.getTextContent()).toContain(expected(observedAt));
+        await screen.update(render(later));
+        expect(screen.getTextContent()).toContain(expected(later));
+        expect(screen.getTextContent()).not.toContain(formatUsageObservedAt(observedAt));
+        // An available source can be older than the incomplete source. The aggregate
+        // accounting observation remains the oldest source update in that case too.
+        const olderAvailable = sliceFor(later);
+        const accounting = olderAvailable.accounting!;
+        const oldest = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, status: 'available', value: {
+            ...accounting, coverage: { ...accounting.coverage!, sources: accounting.coverage!.sources.map(source =>
+                source.status === 'available' ? { ...source, asOfMs: observedAt } : source) },
+        } }] }).results[0]!;
+        await screen.update(<UsageCoverageLine slice={oldest} sources={['accounting']} testID="source-date" />);
+        expect(screen.getTextContent()).toContain(expected(observedAt));
+    });
     it('does not treat an available transport without coverage metadata as complete history', () => {
         const query = normalizeUsageQuery({ period: { startMs: 0, endMs: 1000 } });
         const slice = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, status: 'available', value: {
@@ -496,17 +562,33 @@ describe('a settled list body keeps the tallest height it has drawn', () => {
         await hook.rerender({ settled: true, shapeKey: 'wide' });
         await act(async () => { hook.getCurrent()!.onLayout(layout(457)); });
         await act(async () => { hook.getCurrent()!.onLayout(layout(491)); });
-        // A re-read drops the pace alert: the body is shorter, the floor is not.
-        await act(async () => { hook.getCurrent()!.onLayout(layout(457)); });
-        expect(hook.getCurrent()!.minHeight).toBe(491);
         // A re-read puts accounts back to pending: the floor holds.
         await hook.rerender({ settled: false, shapeKey: 'wide' });
         expect(hook.getCurrent()!.minHeight).toBe(491);
         await hook.rerender({ settled: true, shapeKey: 'wide' });
+        // The re-read drops the pace alert: the body is shorter, the floor is not.
+        await act(async () => { hook.getCurrent()!.onLayout(layout(457)); });
+        expect(hook.getCurrent()!.minHeight).toBe(491);
         // Show all / a resize is a deliberate new shape, not a re-read.
         await hook.rerender({ settled: true, shapeKey: 'narrow' });
         expect(hook.getCurrent()!.minHeight).toBeUndefined();
         await act(async () => { hook.getCurrent()!.onLayout(layout(300)); });
         expect(hook.getCurrent()!.minHeight).toBe(300);
+    });
+
+    it('lets the first settle after a cold read follow the drawn height down once, then keeps the ratchet for re-reads (R5)', async () => {
+        const hook = await renderHook(({ settled }: { settled: boolean }) => useSettledBodyHeightFloor(settled, 'phone'),
+            { initialProps: { settled: false } });
+        // Cold read: the evidence settles with three findings (403), then the stored dismissals arrive and one is left (213).
+        await hook.rerender({ settled: true });
+        await act(async () => { hook.getCurrent()!.onLayout(layout(403)); });
+        await act(async () => { hook.getCurrent()!.onLayout(layout(213)); });
+        expect(hook.getCurrent()!.minHeight).toBe(213);
+        // A re-read begins: from here the body only keeps its tallest height, so nothing below it moves.
+        await hook.rerender({ settled: false });
+        await hook.rerender({ settled: true });
+        await act(async () => { hook.getCurrent()!.onLayout(layout(260)); });
+        await act(async () => { hook.getCurrent()!.onLayout(layout(180)); });
+        expect(hook.getCurrent()!.minHeight).toBe(260);
     });
 });

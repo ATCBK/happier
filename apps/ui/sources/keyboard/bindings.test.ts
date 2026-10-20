@@ -108,6 +108,32 @@ describe('keyboard bindings', () => {
         expect(formatKeybindingLabel(parseKeybindingRule('?'), 'linux')).toBe('?');
     });
 
+    it.each(['macos', 'ios', 'windows', 'linux', 'android', 'web'] as const)(
+        'formats named and literal backslash chords with the modifiers for %s',
+        (platform) => {
+            const alt = platform === 'macos' || platform === 'ios' ? 'Option' : 'Alt';
+            const mod = platform === 'macos' || platform === 'ios' ? 'Cmd' : 'Ctrl';
+            for (const key of ['Backslash', '\\']) {
+                expect(formatKeybindingLabel({ binding: `Alt+${key}` }, platform)).toBe(`${alt}+\\`);
+                expect(formatKeybindingLabel(parseKeybindingRule(`Alt+Shift+${key}`), platform)).toBe(`${alt}+Shift+\\`);
+                expect(formatKeybindingLabel({ binding: `Mod+${key}` }, platform)).toBe(`${mod}+\\`);
+            }
+        },
+    );
+
+    it.each([
+        ['Period', '.'],
+        ['BracketLeft', '['],
+        ['BracketRight', ']'],
+        ['Backquote', '`'],
+        ['Enter', 'Enter'],
+        ['ArrowDown', 'ArrowDown'],
+        ['Slash', 'Slash'],
+    ])('uses the same display label for the named %s key and its physical code', (key, label) => {
+        expect(formatKeybindingLabel({ binding: `Alt+${key}` }, 'linux')).toBe(`Alt+${label}`);
+        expect(formatKeybindingLabel({ binding: `Alt+${key}`, code: key, alt: true }, 'linux')).toBe(`Alt+${label}`);
+    });
+
     it('formats captured keyboard events into editable shortcut bindings', () => {
         expect(formatKeybindingCaptureEvent({ key: 'h', code: 'KeyH', metaKey: true }, 'macos')).toBe('Mod+H');
         expect(formatKeybindingCaptureEvent({ key: 'h', code: 'KeyH', ctrlKey: true }, 'windows')).toBe('Mod+H');

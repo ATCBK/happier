@@ -1,5 +1,8 @@
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 import axios from 'axios';
+import { HttpStatusError } from '@/api/client/httpStatusError';
+import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 
 import type { AgentId } from '@happier-dev/agents';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
@@ -133,11 +136,11 @@ function readRawAccountSettingsObject(value: unknown): Readonly<Record<string, u
     : {};
 }
 
-class AccountSettingsV2RequestError extends Error {
+class AccountSettingsV2RequestError extends HttpStatusError {
   readonly status: number;
 
   constructor(status: number) {
-    super(`Failed to fetch /v2/account/settings (${status})`);
+    super(status, `Failed to fetch /v2/account/settings (${status})`);
     this.status = status;
   }
 }
@@ -222,6 +225,8 @@ function resolveLiveApplyDisposition(params: Readonly<{
 export async function applyAccountSettingsV2Update(params: Readonly<{
   credentials: StoredCredentials;
   update: AccountSettingsV2GetResponse;
+  publication?: 'active' | 'invocation';
+  expectedAccountEncryptionMode?: 'plain' | 'e2ee';
   shouldCommit?: () => boolean;
   nowMs?: number;
   deps?: Partial<ApplyAccountSettingsV2UpdateDeps>;
@@ -235,7 +240,7 @@ export async function applyAccountSettingsV2Update(params: Readonly<{
   const scopeKey = createAccountSettingsScopeKey({ cachePath, token: params.credentials.token });
   const activeAtStart = getActiveAccountSettingsSnapshot();
   const activeLifetimeTokenAtStart = getActiveAccountSettingsSnapshotLifetimeToken();
-  const reusableAtStart = resolveLiveApplyDisposition({
+  const reusableAtStart = params.publication === 'invocation' ? null : resolveLiveApplyDisposition({
     active: activeAtStart,
     activeAtStart,
     activeLifetimeToken: activeLifetimeTokenAtStart,
@@ -246,6 +251,10 @@ export async function applyAccountSettingsV2Update(params: Readonly<{
   if (reusableAtStart) return reusableAtStart;
 
   const content = params.update.content;
+  if (content && params.expectedAccountEncryptionMode
+    && (params.expectedAccountEncryptionMode === 'plain' ? content.t !== 'plain' : content.t !== 'encrypted')) {
+    throw new AccountSettingsContentInvalidError(new Error('account_settings_mode_mismatch'));
+  }
   let rawSettings: unknown = null;
   if (content?.t === 'plain') {
     rawSettings = content.v;
@@ -272,6 +281,11 @@ export async function applyAccountSettingsV2Update(params: Readonly<{
       'ACCOUNT_SETTINGS_SOURCE_STALE',
       'The live account settings source closed before the update could be committed.',
     );
+  }
+  if (params.publication === 'invocation') {
+    return { source: 'network', settings, rawSettings: readRawAccountSettingsObject(rawSettings),
+      settingsVersion: params.update.version, loadedAtMs: nowMs, scopeKey,
+      settingsSecretsReadKeys: deriveSettingsSecretsReadKeysForCredentials(params.credentials), whenRefreshed: null };
   }
   const reusableBeforeCommit = resolveLiveApplyDisposition({
     active: getActiveAccountSettingsSnapshot(),
@@ -449,6 +463,7 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
   refresh?: AccountSettingsRefreshMode;
   /** Finite requester admission reads must not retarget the daemon's Account or process defaults. */
   publication?: 'active' | 'invocation';
+  expectedAccountEncryptionMode?: 'plain' | 'e2ee';
   /**
    * When false, ignore `HAPPIER_ACCOUNT_SETTINGS_MODE` (defense-in-depth for
    * security-sensitive surfaces like external MCP, where the spawning client
@@ -472,6 +487,30 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
   const mode = params.mode ?? 'blocking';
   const minSettingsVersion = normalizeAccountSettingsVersionHint(params.minSettingsVersion);
   const settingsSecretsReadKeys = deriveSettingsSecretsReadKeysForCredentials(params.credentials);
+
+  // File-only phase facts deliberately exclude Account content, paths and errors.
+  const bootstrapId = randomUUID();
+  const bootstrapStartedAt = performance.now();
+  const beginPhase = (phase: 'cache_read' | 'network_read' | 'content_parse' | 'publication' | 'cache_write') => {
+    const startedAt = performance.now();
+    const record = (status: 'started' | 'completed' | 'failed') => logger.infoFile('[accountSettings] Bootstrap phase', {
+      bootstrapId, phase, status, durationMs: Math.round(performance.now() - startedAt),
+      elapsedMs: Math.round(performance.now() - bootstrapStartedAt),
+    });
+    record('started');
+    return record;
+  };
+  const observePhase = async <T>(phase: Parameters<typeof beginPhase>[0], work: () => Promise<T>): Promise<T> => {
+    const record = beginPhase(phase);
+    try {
+      const result = await work();
+      record('completed');
+      return result;
+    } catch (error) {
+      record('failed');
+      throw error;
+    }
+  };
 
   const deps: BootstrapDeps = {
     resolveCachePath: params.deps?.resolveCachePath ?? resolveAccountSettingsCachePath,
@@ -683,7 +722,7 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
       : applyPublicationSideEffects(currentPublication).context;
   }
 
-  const readCache = await deps.readCache(cachePath);
+  const readCache = await observePhase('cache_read', () => deps.readCache(cachePath));
   const cache =
     readCache?.version === 2 && readCache.settingsContent?.t === 'plain'
       ? null
@@ -693,6 +732,20 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
     rawSettings: Readonly<Record<string, unknown>>;
     settings: AccountSettings;
   }>> => {
+    const parseSettings = (raw: Readonly<Record<string, unknown>>): AccountSettings => {
+      // Reuse only the current Account owner's already-admitted projection.
+      // Fresh HTTP/decryption and publication still run; changed raw content or
+      // a different Account/Home scope must go through the canonical parser.
+      const active = getActiveAccountSettingsSnapshot();
+      return active?.scopeKey === scopeKey && active.rawSettings !== undefined
+        && isDeepStrictEqual(active.rawSettings, raw)
+        ? active.settings
+        : parseBootstrapAccountSettings(raw);
+    };
+    if (content && params.expectedAccountEncryptionMode
+      && (params.expectedAccountEncryptionMode === 'plain' ? content.t !== 'plain' : content.t !== 'encrypted')) {
+      throw new AccountSettingsContentInvalidError(new Error('account_settings_mode_mismatch'));
+    }
     if (!content) {
       return {
         rawSettings: {},
@@ -701,7 +754,7 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
     }
     if (content.t === 'plain') {
       const rawSettings = readRawAccountSettingsObject(content.v);
-      const settings = parseBootstrapAccountSettings(rawSettings);
+      const settings = parseSettings(rawSettings);
       assertAccountEncryptionModeAllowedByEffectiveClientRequirement('plain', settings);
       return {
         rawSettings,
@@ -719,7 +772,7 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
     }
     return {
       rawSettings: decrypted,
-      settings: parseBootstrapAccountSettings(decrypted),
+      settings: parseSettings(decrypted),
     };
   };
 
@@ -753,14 +806,14 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
 
   const fetchAndPersist = async (): Promise<AccountSettingsContext> => {
     params.signal?.throwIfAborted();
-    const fetched = await deps.fetchFromServer({ credentials: params.credentials, signal: params.signal }) as any;
+    const fetched = await observePhase('network_read', () => deps.fetchFromServer({ credentials: params.credentials, signal: params.signal }));
     params.signal?.throwIfAborted();
     const settingsVersion = typeof fetched.settingsVersion === 'number' ? fetched.settingsVersion : 0;
     const settingsContent: AccountSettingsContentEnvelope | null =
       'settingsContent' in fetched
         ? (fetched.settingsContent ?? null)
         : (fetched.settingsCiphertext ? { t: 'encrypted', c: fetched.settingsCiphertext } : null);
-    const parsed = await parseFromContent(settingsContent);
+    const parsed = await observePhase('content_parse', () => parseFromContent(settingsContent));
     const candidate: AccountSettingsContext = {
       source: 'network',
       settings: parsed.settings,
@@ -773,7 +826,15 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
     if (!shouldTreatVersionAsFresh(candidate.settingsVersion, minSettingsVersion)) {
       throw new AccountSettingsStaleError();
     }
-    const publication = publishContext(candidate);
+    const recordPublication = beginPhase('publication');
+    let publication: ReturnType<typeof publishContext>;
+    try {
+      publication = publishContext(candidate);
+      recordPublication('completed');
+    } catch (error) {
+      recordPublication('failed');
+      throw error;
+    }
     if (!publication.didCommit && publication.context.settingsVersion > candidate.settingsVersion) {
       return publication.context;
     }
@@ -781,7 +842,7 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
 
     if (settingsContent?.t !== 'plain') {
       try {
-        await deps.writeCache(cachePath, {
+        await observePhase('cache_write', () => deps.writeCache(cachePath, {
           version: 2,
           cachedAt: nowMs,
           settingsContent,
@@ -789,7 +850,7 @@ export async function bootstrapAccountSettingsContext(params: Readonly<{
         }, {
           shouldCommit: () => params.shouldCommit?.() !== false
             && activeSnapshotPublicationIsCurrent(publication),
-        });
+        }));
       } catch (err) {
         logger.debug('[accountSettings] cache write failed; continuing without persistence', serializeAxiosErrorForLog(err));
       }

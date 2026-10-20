@@ -74,6 +74,31 @@ Capture comparison evidence first, then optionally ask one analysis Run for
 `summary`, `walkthrough`, `commitPlan`, or a combination. Capture requires no
 model. Opening a Walkthrough destination does not start generation; Start does.
 
+Attached Review and generation admission use the existing Execution Run start
+RPC under the caller's cancellation lifetime, without the generic Session RPC
+acknowledgement deadline. The response identifies the admitted Run; existing
+Run and saved-result observation reports progress and completion. A delayed
+acknowledgement does not authorize another start.
+The Review dialog carries its mounted Action lifetime through the launcher.
+Dismissing or unmounting ends that caller's wait and suppresses late local
+navigation; it does not prove that an admitted Run was cancelled. A late receipt
+never causes an automatic replacement start. The canonical forwarding owner
+settles target-socket departure before acknowledgement as the existing uncertain
+outcome, not proof that no Run was admitted. Caller cancellation and target
+departure remain separate facts. In 0.3 development source the same transport
+cleanup serves local and clustered forwarding; complete clustered cleanup
+requires updated participating server dependencies.
+
+Review output reports inspection separately from its findings array. The shared
+Review normalizer preserves an explicit `reviewOutcome` of `complete`, `partial`
+or `failed`; omission stays partial rather than establishing a clean review.
+Reported failure, truncated findings and incomplete captured inventory cannot
+be promoted to complete. The common review brief requires this outcome and
+directs reviewers to available read-only workspace/SCM tools when shell
+inspection fails. Unavailable inspection is failed, and partial inspection
+retains supported findings. These are unreleased source semantics; previously
+saved reports are not rewritten by this normalization change.
+
 The host generation Action reads the Account's Explain setting before capturing
 or reading comparison evidence, saving a result, or admitting a Run. Disabled
 generation returns `SCM_DIFF_SUMMARY_DISABLED` for Session, detached and automatic
@@ -109,6 +134,19 @@ Headless Actions and direct Runs use the same Account preference resolver;
 without a prose override they use Account `preferredLanguage` when available.
 The Settings Action anchor is `sourceControl.outputLanguage`.
 
+The saved generator also retains its admitted Connected Services selection,
+including explicit absence of Connected Services. A model selection with no Provider
+connection does not imply native credential routing. Replacement replays the
+saved binding through ordinary current credential admission; no credentials are
+stored in the generator. Account defaults can resolve after profile preparation;
+the initial result bind takes the admitted Run's route so those late-resolved
+bindings are retained as well. Earlier records without that selection can recover it
+from the original retained Run only when its Agent, model and Provider agree
+with the saved choice. If that Run is unavailable, its omitted binding cannot be
+reconstructed from the model tuple. A known original Team route without a
+representable saved credential choice refuses replacement rather than switching
+to current defaults.
+
 Output notification opt-in uses the existing `RunWorkNotifications` owner and
 configured notification channels; it does not change Account preferences. An
 explicit selected comparison, saved result and output are checked against
@@ -123,6 +161,12 @@ application of accepted commits: application has its separate saved-result
 state. The commit proposal keeps its existing notification control mounted while
 that selected output is pending or writing, including when usable partial groups
 are visible. Live delivery and populated presentation have not been certified here.
+
+Cancelled pending or partial outputs retain their usable value and publish
+`reasonCode: 'generation_cancelled'` through the existing strict saved-result
+contract. The UI maps that code to the existing cancellation notice; it does not
+parse diagnostic prose. Already complete outputs remain complete when their
+retained conversation is stopped.
 
 `scm.diffSummary.investigateSurroundingFiles` is off by default in unreleased
 0.3 source. Generation uses the Account preference when the request omits
@@ -179,6 +223,27 @@ proven JSON model. Unknown ACP capability evidence never becomes JSON support.
 All Account reads and currentness checks use the invocation's captured operation
 context and Home; Connected Account purpose requests retain its request
 authorization. These observations do not replace the daemon's ambient Account.
+Summary catalog preparation reads only the admitted purposes row and Account
+encryption currentness through the existing catalog refresh/publication owner;
+it does not transfer retained Settings or clean their history. Its signed
+Account root cannot read the full Settings envelope or `/v1/account/encryption`.
+An absent, unadmitted or unreachable purposes row withholds automatic candidates
+whose authentication depends on that metadata and returns the strict observation's optional
+`unavailableReason: 'account_metadata_unavailable'`, including when configured
+ACP profiles remain available. Consumers can explain incomplete automatic
+choices, retain configured/last-good choices and retry without representing
+missing Account metadata as native sign-out or an Agent launch failure. The
+reason is absent after a successful purposes read; picker presentation is a
+separate UI handoff.
+The same observation retains enabled Agent discovery targets even when their
+default route cannot authenticate. Its optional `unavailableTargets` distinguishes
+`native_sign_in_required`, `native_auth_unavailable`, `account_metadata_unavailable`
+and `connected_default_unavailable` for automatic authentication. Explicit models
+and discovery remain available in `profiles`, including when several connected
+accounts exist without an Account default. They do not enter `automaticProfiles`
+without the existing sign-in or canonical default evidence. Choosing a model does
+not choose or persist a connected credential; the existing Session/Run admission
+still resolves an explicit or applied-parent route.
 A missing observation supplies
 no candidates; static UI descriptors and failed native probes cannot create a
 default or restore a signed-out route.
@@ -195,7 +260,10 @@ evidence and failed saved result available. This typed refusal carries
 reclassified as an unavailable model or retried.
 A Machine-custodian request that names a Session derives that Session's backend target from
 its metadata, as the Session route does, so an unset model preference can inherit the attached
-parent there too.
+parent there too. When Run start is refused before any Run exists, the failed output's reason carries
+the typed refusal code and its reason text (for example `execution_run_profile_preparation_failed:
+<reason>`), and the host logs the same reason; a refusal that already has its own typed code keeps it.
+Clients surface that reason through the existing generation-failed state rather than inventing a copy key.
 The relative cost tier is not a token price: current catalogs supply no unit pricing,
 so clients must keep that cost unavailable rather than invent an amount.
 
@@ -209,8 +277,15 @@ panel replay remain part of the program's live validation.
 
 The unreleased PR triage default catalog includes a PR-only explanation action.
 It reuses configured-action recipients and canonical context attachments, sends an
-ordinary session message, then opens the session. A stored customized or empty
-action catalog remains authoritative; new defaults do not overwrite it.
+ordinary session message, then opens the session. The catalog parser preserves
+configured rows and their order, then appends missing built-ins in default order,
+including for a stored empty catalog. Explicitly disabled built-ins stay disabled;
+deleting one records `enabled: false`, while deleting a custom action removes it.
+Reset removes the stored override and restores the current built-ins. Unreadable
+catalogs remain unavailable. UI offers, configured-run admission, bulk retry and
+review continuation consume the same enabled/coherent/subject-aware selection;
+none may dispatch a disabled built-in through an alternate entrance. See
+[Triage sources](triage-sources.md) for the catalog owner.
 
 Current comparison/generation sources do not supply a repository PR template.
 The Git PR writer applies its existing template only when no body was supplied;
@@ -265,8 +340,14 @@ it does not replace an explicit draft with generated prose. Template-aware
   not a workspace permission id. Missing or ambiguous accepted workspace refs
   leave Project analysis unavailable rather than manufacturing a Session.
 - [`walkthroughReading.ts`](../apps/ui/sources/components/sessions/files/walkthrough/walkthroughReading.ts)
-  projects each stop's first Explain occurrence per file once per reading.
-  Hunk annotations look up those notes directly; they do not rebuild the reading.
+  projects Explain notes once per reading. Each stop's first matched hunk carries
+  its gist; later files and secondary stops use title-only notes. Hunk annotations
+  look up those notes directly; they do not rebuild the reading or generate prose.
+- [`resolveMobileBottomChromeModel.ts`](../apps/ui/sources/components/navigation/mobile/chrome/resolveMobileBottomChromeModel.ts)
+  hides cockpit bottom tabs for a pushed Session Details `scmReview` destination,
+  before considering a registered cockpit fallback. Files and Walkthrough retain
+  their own reading controls and Back; unrelated Details routes retain their
+  existing chrome.
 
 The existing Action catalog and machine/Session RPC dispatcher remain the public
 entry points. See [Actions](actions.md) and the generated
@@ -435,6 +516,10 @@ Triage's ordinary app page to select this input.
 The Triage PR-detail Walk entrance reads a source-owned PR comparison locator
 from the transient `get` result, not from the persisted entry snapshot. It opens
 the canonical comparison destination through typed `session.open` navigation.
+That development destination supports `files`, `walkthrough` and `commits`.
+`commits` requires a `workingTree` comparison; Session, turn, branch, commit and
+PR sources return `commits_require_working_tree` before navigation. Opening the
+view grants no commit authority; acceptance remains a separate SCM Action.
 The same unreleased `scmReview` destination accepts `explain: true|false` for
 Files. UI toggles and Action callers update that shared pane target; the choice
 only displays saved walkthrough notes and does not generate another output.
@@ -507,6 +592,24 @@ marks or replace exact occurrence selection.
 
 ## Saved edits, personal marks and offline access
 
+Files, Walkthrough and Commits restore through `useScmWalkthroughState` and the
+same machine saved-result reader. Its `idle|restoring|ready|unavailable` state is
+separate from generation: a pending read is not an empty result, and a failed read
+offers retry rather than a new-generation empty state. An exact metadata target
+can be read before presence hydrates; unknown reachability is not offline.
+An unavailable or ambiguous Session target settles as unavailable. Only confirmed
+unreachability warrants offline copy; unknown presence uses a reachability notice.
+
+Restoration and in-memory selection are scoped to Home, Account, host, repository,
+comparison and requested output, ordered by saved inventory recency. A newer
+failed/cancelled attempt without that output's value can fall back to an older
+published value. Failure of a sibling output cannot hide a newer usable commit
+plan or relabel a completed walkthrough. Pending/writing/failed/complete projection
+also follows the requested output when it was added after the original request.
+Run-observation refusal preserves the last saved projection and does not establish
+generation failure. Typed admission failures remain visible over retained content;
+only model-related failures offer model selection as recovery.
+
 `scm.diffSummary.result.*`, `refine` and `addOutputs` use the existing authenticated
 machine/Session transport. Writes bind `resultId` and `expectedRevision`; the
 machine uses protected atomic local state under the existing runtime directory
@@ -521,6 +624,10 @@ unrelated outputs. Merge retains the chosen title and exact coverage. Undo is
 revision-checked and preserves current generator linkage. Accepted application
 states `applying|paused|unknown` lock editing, refinement, Undo and deletion.
 Already-published leading commit groups remain immutable after the lock releases.
+A completed application is no longer editable. When an unlocked application has
+unlanded groups, only those remaining groups can be edited; left-out/move controls
+follow that same proposal editability predicate. Landed rows retain their SHA and
+actual message without offering to rewrite them.
 
 The result revision owner also persists walkthrough/stop edited-title provenance,
 each stop's latest changed/moved revision, and an update notice identifying the
@@ -563,6 +670,10 @@ The runtime contract is `retentionPolicy: 'resumable'`, `runClass: 'long_lived'`
 with existing Session-owned or detached Run interaction. It is not a new retention enum.
 A settled output can leave a healthy generator idle. Per-turn structured output
 is published by the host, not by observing arbitrary transcript JSON or prose.
+The host reads a turn's reply through the shared Run-output JSON reader, so a reply a model
+wraps in prose or a code fence still publishes; the strict protocol schema and complete
+coverage check remain the contract.
+The commit-message Run reads its reply through the same reader and keeps its plain-text title and body fallback.
 The host remains the lifecycle, input-custody and streaming owner.
 Fresh pending results retain their generation prompt; an existing usable
 reading supplies saved context without overriding the current request. Agent codecs correlate foreground committed

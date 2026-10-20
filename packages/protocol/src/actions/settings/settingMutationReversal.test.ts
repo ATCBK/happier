@@ -39,6 +39,17 @@ describe('bound setting mutation receipts', () => {
         expect(applyAccountSettingMutationV1(raw, reset.mutation)).toMatchObject({ status: 'applied',
             raw: { voice: { enabled: false, assistantLanguage: 'fr' } } });
     });
+    it('compares a conditional reset against the declaration leaf rather than its storage object', () => {
+        const homeAtmosphere = accountSettingsParse({}).homeAtmosphere;
+        const raw = { homeAtmosphere: { ...homeAtmosphere, planet: { ...homeAtmosphere.planet, digits: false } } };
+        const mutation = AccountSettingMutationV1Schema.parse({ operations: [{ op: 'set', key: 'homeAtmosphere',
+            value: { ...homeAtmosphere, planet: { ...homeAtmosphere.planet, digits: true } } }] });
+        const readDigits = (settings: Readonly<Record<string, unknown>>) => accountSettingsParse(settings).homeAtmosphere.planet.digits;
+        expect(restoreSettingMutationV1(raw, mutation, { kind: 'reset', expected: { value: false } }, readDigits))
+            .toEqual({ status: 'prepared', mutation });
+        expect(restoreSettingMutationV1({ homeAtmosphere: { ...homeAtmosphere, planet: { ...homeAtmosphere.planet, digits: true } } },
+            mutation, { kind: 'reset', expected: { value: false } }, readDigits)).toEqual({ status: 'conflict' });
+    });
     it('does not disclose a nested SecretString through an otherwise readable object setting receipt', () => {
         const voice = { enabled: false, retained: { apiKey: { _isSecretValue: true, value: 'test-only-secret' } } };
         const mutation = AccountSettingMutationV1Schema.parse({ operations: [{ op: 'set', key: 'voice', value: { ...voice, enabled: true } }] });

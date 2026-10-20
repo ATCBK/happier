@@ -2,6 +2,7 @@ import * as React from 'react';
 import type { SessionListScopeV1 } from '@happier-dev/protocol';
 
 import { t } from '@/text';
+import type { SelectionListFilter } from '@/components/ui/selectionList';
 import type { SessionOrganizationProjection } from '@/sync/domains/session/organization/types';
 
 import {
@@ -75,6 +76,8 @@ export function buildSessionListFilterEditorLabels(): SessionListFilterEditorPro
         persistedSource: t('sessionsList.filtersSourceHappier'),
         directSource: t('sessionsList.filtersSourceDirect'),
         noOptions: t('sessionsList.filtersNoOptions'),
+        onlyCoordinators: t('sessionsList.filtersOnlyCoordinators'),
+        onlyCoordinatorsDescription: t('sessionsList.filtersOnlyCoordinatorsDescription'),
         clear: t('common.reset'),
         done: t('sessionsList.filtersDone'),
         catalogLoading: t('common.loading'),
@@ -111,6 +114,26 @@ export function readSessionListWorkFilterSummary(
         .filter(([starter]) => filters.startedBy.includes(starter))
         .map(([, label]) => label);
     return `${showLabel} · ${selectedStarters.length > 0 ? selectedStarters.join(', ') : t('sessionsList.filtersStartedByNone')}`;
+}
+
+/**
+ * Facets that narrow the list without a word in the title ("Only coordinators"): each is a chip beneath the
+ * title that names it, and pressing it turns just that facet off.
+ */
+export function buildSessionListActiveFilterChips(
+    controller: Pick<SessionListViewFilterController, 'filters' | 'updateFilters'>,
+    icon: React.ReactNode,
+): readonly SelectionListFilter[] {
+    if (controller.filters.coordinator !== 'coordinator') return [];
+    return [{
+        id: 'coordinator',
+        testID: 'session-list-filter-chip-coordinator',
+        label: t('sessionsList.filtersOnlyCoordinators'),
+        valueLabel: t('sessionsList.filtersCoordinatorsChip'),
+        icon,
+        onClear: () => controller.updateFilters(({ coordinator: _coordinator, ...rest }) => rest),
+        clearAccessibilityLabel: t('sessionsList.filtersCoordinatorsChipClear'),
+    }];
 }
 
 export const SessionListFilterControl = React.memo(function SessionListFilterControl(props: Readonly<{

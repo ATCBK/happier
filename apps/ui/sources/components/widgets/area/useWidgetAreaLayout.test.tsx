@@ -9,6 +9,59 @@ import { useWidgetAreaLayout, type WidgetAreaPort } from './useWidgetAreaLayout'
 import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 
+it('keeps a connecting plugin area loading, retains authorized data, and clears it on a terminal refusal', async () => {
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://area-connection-pending.test', accountId: 'actor' });
+    const surface: WidgetSurfaceRefV1 = { serverId: connection.home.id, accountId: 'actor', owner: { kind: 'pluginArea', pluginId: 'acme.widgets', pageId: 'overview', area: 'pinned', layoutId: 'default' } };
+    const transport: HomeHubArtifactTransportV1 = {
+        read: async () => null,
+        create: async () => { throw new Error('Unexpected create'); },
+        update: async () => { throw new Error('Unexpected update'); },
+    };
+    const area = createWidgetAreaActionPortV1(() => createWidgetSurfaceArtifactPortV1(transport, { surface, isCurrent: () => true,
+        presets: [{ id: 'default', name: 'Pinned', items: [{ kind: 'widget', instance: {
+            v: 1, id: 'vitals', definition: { kind: 'builtin', id: 'machine_vitals' }, bindings: {},
+        } }] }],
+    }));
+    let readiness: 'pending' | 'ready' | 'failed' | 'denied' = 'pending';
+    let retireOnRead = false;
+    const port: WidgetAreaPort = { execute: async () => {
+        if (retireOnRead) retireActiveServerAccountScopeLifetime();
+        return readiness === 'ready'
+            ? PluginUiWidgetAreaResultV1Schema.parse({ ok: true, result: await area.read(surface, {}) })
+            : { ok: false, errorCode: readiness === 'pending' ? 'plugin_surface_connection_pending'
+                : readiness === 'failed' ? 'widget_area_unavailable' : 'plugin_action_caller_forbidden', error: readiness };
+    } };
+    const context = {};
+    const hook = await renderHook(() => useWidgetAreaLayout(port, context));
+    try {
+        await flushHookEffects();
+        expect(hook.getCurrent().state).toEqual({ status: 'loading' });
+        readiness = 'ready';
+        await act(async () => { await hook.getCurrent().reload(); });
+        const admitted = hook.getCurrent().state;
+        expect(admitted).toMatchObject({ status: 'ready', surface, placements: [{ instance: { id: 'vitals' } }] });
+        readiness = 'pending';
+        await act(async () => { await hook.getCurrent().reload(); });
+        expect(hook.getCurrent().state).toBe(admitted);
+        readiness = 'failed';
+        await act(async () => {
+            expect(await hook.getCurrent().reload()).toMatchObject({ status: 'unavailable', reasonCode: 'widget_area_unavailable', reason: 'failed' });
+        });
+        const retained = hook.getCurrent().state;
+        expect(retained).toMatchObject({ status: 'ready', readFailure: { reasonCode: 'widget_area_unavailable', reason: 'failed' } });
+        expect(retained.status === 'ready' && retained.isReadPending()).toBe(false);
+        readiness = 'denied';
+        await act(async () => { await hook.getCurrent().reload(); });
+        expect(hook.getCurrent().state).toMatchObject({ status: 'unavailable', reasonCode: 'plugin_action_caller_forbidden' });
+        readiness = 'pending';
+        await act(async () => { await hook.getCurrent().reload(); });
+        expect(hook.getCurrent().state).toEqual({ status: 'loading' });
+        retireOnRead = true;
+        await act(async () => { await hook.getCurrent().reload(); });
+        expect(hook.getCurrent().state).toMatchObject({ status: 'unavailable', reasonCode: 'widget_area_scope_retired' });
+    } finally { await hook.unmount(); await connection.dispose(); }
+});
+
 it('distinguishes a pending observation from retired Account authority and rejects its late completion', async () => {
     const connection = await restoreServerAccountForTest({ serverUrl: 'https://area-pending-retirement.test', accountId: 'actor' });
     const surface: WidgetSurfaceRefV1 = { serverId: connection.home.id, accountId: 'actor', owner: { kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'work' } };
@@ -191,11 +244,13 @@ it('withdraws mounted effect admission on exact Artifact publication before a de
     const publication = { id: artifactId, title: 'Named', isDecrypted: true as const, ownerAccountId: 'owner', access: 'view' as const,
         storageMode: 'plain' as const, headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 };
     let revoked = false;
+    let readFails = false;
     let releaseRead: (() => void) | undefined;
     let waitForRead = false;
     const transport: HomeHubArtifactTransportV1 = {
         read: async () => {
             if (waitForRead) await new Promise<void>(resolve => { releaseRead = resolve; });
+            if (readFails) throw new Error('Artifact read failed');
             if (!revoked) storage.getState().applyArtifacts([{ ...publication }]);
             return revoked ? null : row;
         },
@@ -224,7 +279,13 @@ it('withdraws mounted effect admission on exact Artifact publication before a de
     expect(admitted.isCurrent()).toBe(false);
     expect(admitted.isReadPending()).toBe(true);
     expect(hook.getCurrent().state.status).toBe('ready'); // Last admitted layout remains during the read.
+    // A transient failure cannot keep admission after its exact publication has changed.
+    readFails = true;
     await act(async () => { waitForRead = false; releaseRead?.(); });
+    await flushHookEffects();
+    expect(hook.getCurrent().state).toMatchObject({ status: 'unavailable', reasonCode: 'widget_area_unavailable' });
+    readFails = false;
+    await act(async () => { await hook.getCurrent().reload(); });
     await flushHookEffects();
     const renewed = hook.getCurrent().state;
     if (renewed.status !== 'ready') throw new Error('Expected read to renew admission');
@@ -239,6 +300,80 @@ it('withdraws mounted effect admission on exact Artifact publication before a de
     await flushHookEffects();
     expect(hook.getCurrent().state).toMatchObject({ status: 'unavailable' });
     await hook.unmount();
+});
+
+it('applies a reversible edit to the displayed area during a publication refresh without losing concurrent edits', async () => {
+    const connection = await restoreServerAccountForTest({ serverUrl: 'https://area-write-refresh.test', accountId: 'actor' });
+    const surface: WidgetSurfaceRefV1 = { serverId: connection.home.id, accountId: 'actor',
+        owner: { kind: 'corePage', pageId: 'usage', area: 'main', layoutId: 'overview' } };
+    const artifactId = buildWidgetSurfaceArtifactIdV1(surface);
+    const layout: WidgetAreaLayoutV1 = { v: 1, surface, items: ['first', 'sibling'].map(id => ({ kind: 'widget',
+        instance: { v: 1, id, definition: { kind: 'builtin', id: 'project_about' }, bindings: {} } })) };
+    let row: HomeHubArtifactV1 = { artifactId, ownerAccountId: 'actor', access: 'owner',
+        header: buildWidgetSurfaceArtifactHeaderV1(layout), body: JSON.stringify(layout), revision: { headerVersion: 1, bodyVersion: 1 } };
+    const transport: HomeHubArtifactTransportV1 = {
+        read: async () => row,
+        create: async () => { throw new Error('Unexpected create'); },
+        update: async input => {
+            if (input.expectedRevision.bodyVersion !== row.revision.bodyVersion) return { ok: false, errorCode: 'version_mismatch', error: 'Conflict' };
+            row = { ...row, header: input.header, body: input.body,
+                revision: { headerVersion: row.revision.headerVersion + 1, bodyVersion: row.revision.bodyVersion + 1 } };
+            return { ok: true, revision: row.revision };
+        },
+    };
+    const owner = createWidgetSurfaceArtifactPortV1(transport, { surface, isCurrent: () => true });
+    const area = createWidgetAreaActionPortV1(() => owner);
+    let blockRead = false;
+    let release: (() => void) | undefined;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const port: WidgetAreaPort = { execute: async (operation, signal, target) => {
+        const selected = target?.surface ?? surface;
+        if (operation.actionId === 'widgets.item.list') {
+            if (blockRead) await pending;
+            return PluginUiWidgetAreaResultV1Schema.parse({ ok: true, result: await area.read(selected, {}, signal) });
+        }
+        if (operation.actionId !== 'widgets.item.frame.set') throw new Error('Unexpected operation');
+        return PluginUiWidgetAreaResultV1Schema.parse(await area.apply(selected,
+            { kind: 'frame', instanceId: operation.instanceId, frameStyle: operation.frameStyle }, {}, signal));
+    } };
+    const context = {};
+    const hook = await renderHook(() => useWidgetAreaLayout(port, context));
+    try {
+        await flushHookEffects();
+        const retained = hook.getCurrent().state;
+        if (retained.status !== 'ready') throw new Error('Expected admitted area');
+        await owner.apply({ kind: 'rename', instanceId: 'sibling', displayName: 'Concurrent edit' });
+        blockRead = true;
+        await act(async () => storage.getState().applyArtifacts([{ id: artifactId, title: 'Overview', isDecrypted: true,
+            ownerAccountId: 'actor', access: 'owner', storageMode: 'plain', headerVersion: 2, bodyVersion: 2,
+            seq: 2, createdAt: 1, updatedAt: 2 }]));
+        expect(retained.isCurrent()).toBe(false);
+        expect(retained.isReadPending()).toBe(true);
+        await act(async () => {
+            expect(await hook.getCurrent().write({ actionId: 'widgets.item.frame.set', instanceId: 'first', frameStyle: 'plain' }))
+                .toEqual({ kind: 'applied' });
+        });
+        expect((await owner.read()).items).toMatchObject([
+            { kind: 'widget', frameStyle: 'plain', instance: { id: 'first' } },
+            { kind: 'widget', instance: { id: 'sibling', displayName: 'Concurrent edit' } },
+        ]);
+        // Refresh-time editing still rechecks the writer's latest access, not the retained read.
+        row = { ...row, access: 'view' };
+        await act(async () => {
+            expect(await hook.getCurrent().write({ actionId: 'widgets.item.frame.set', instanceId: 'first', frameStyle: 'card' }))
+                .toEqual({ kind: 'refused', errorCode: 'artifact_access_forbidden' });
+        });
+        await act(async () => { blockRead = false; release?.(); });
+        await flushHookEffects();
+        expect(hook.getCurrent().state).toMatchObject({ status: 'ready', canEdit: false, items: [
+            { frameStyle: 'plain' }, { instance: { displayName: 'Concurrent edit' } },
+        ] });
+    } finally {
+        release?.();
+        await hook.unmount();
+        storage.getState().deleteArtifact(artifactId);
+        await connection.dispose();
+    }
 });
 
 it('keeps the newly selected area when an earlier captured durable write acknowledges late', async () => {
@@ -348,4 +483,22 @@ it('writes the displayed Artifact rather than the newly selected same-id copy wh
         expect(flattenWidgetLayoutWidgetsV1(displayed.items)[0]!.instance.displayName).toBe('Edited displayed');
         expect(flattenWidgetLayoutWidgetsV1(selected.items)[0]!.instance.displayName).toBe('Selected');
     } finally { await act(async () => { release?.(); }); await hook.unmount(); }
+});
+
+it('keeps the host\'s sentence for a refused area, so the area can say which Machine cannot answer', async () => {
+    // D1: a plugin page's widget area whose Run-on Machine is unreachable is refused with a code and the
+    // host's sentence naming that Machine. The area keeps both; a sentence that only repeats the code is not a reason.
+    let error = 'This operation is unavailable on studio-mac. Reconnect it or choose another machine with Run on.';
+    const port: WidgetAreaPort = { execute: async () => ({ ok: false, errorCode: 'plugin_mounted_caller_unavailable', error }) };
+    const hook = await renderHook(() => useWidgetAreaLayout(port, {}));
+    try {
+        await flushHookEffects();
+        expect(hook.getCurrent().state).toEqual({ status: 'unavailable', reasonCode: 'plugin_mounted_caller_unavailable', reason: error });
+    } finally { await hook.unmount(); }
+    error = 'plugin_mounted_caller_unavailable';
+    const bare = await renderHook(() => useWidgetAreaLayout(port, {}));
+    try {
+        await flushHookEffects();
+        expect(bare.getCurrent().state).toEqual({ status: 'unavailable', reasonCode: 'plugin_mounted_caller_unavailable' });
+    } finally { await bare.unmount(); }
 });

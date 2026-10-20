@@ -1,8 +1,8 @@
 import React from 'react';
 import { Platform, type TextStyle } from 'react-native';
 import {
-    HAPPIER_SELECTION_TILE_TEXT,
     HappierSelectionTiles,
+    resolveHappierSelectionTileText,
     type HappierSelectionTileTextRole,
     type HappierSelectionTilesColors,
     type HappierSelectionTilesGlyphRenderer,
@@ -18,7 +18,7 @@ import { Typography } from '@/constants/Typography';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { useListPresentation } from '@/components/ui/lists/listPresentation';
 import { projectPluginUiHostPalette, projectPluginUiTheme, readPluginUiHostTypography } from '@/components/plugins/surfaces/pluginUiThemeProjection';
-import { useLocalSetting } from '@/sync/store/hooks';
+import { useLocalSetting } from '@/sync/store/settingsReadHooks';
 import { useItemDensityInputs } from '@/components/ui/lists/useResolvedItemDensity';
 import { isTouchPrimaryPointer, resolvePageRowDensityInput, resolvePageRowMetrics } from '@/components/ui/lists/pageRowMetrics';
 
@@ -211,62 +211,54 @@ function textStyle(
     }
 }
 
-// The tiles' type scale is the shared owner's (`HAPPIER_SELECTION_TILE_TEXT`, which the plugin tiles
-// draw with too); this adapter adds Happier's face per weight and its colours.
-const TILE_TEXT = HAPPIER_SELECTION_TILE_TEXT;
-function tileMetrics(role: keyof typeof TILE_TEXT) {
-    const step = TILE_TEXT[role];
-    return { fontSize: step.fontSize, lineHeight: step.lineHeight };
+// Each tile text slot is a role of the shared type scale (`resolveHappierSelectionTileText`, which the
+// plugin tiles draw with too); this adapter adds Happier's face per weight and its colours.
+function tileVariant(slot: HappierSelectionTileTextRole, state?: Readonly<{ selected?: boolean; compact?: boolean }>) {
+    const { role, emphasis } = resolveHappierSelectionTileText(slot, state);
+    return Typography.variant(role, emphasis);
 }
 
 const stylesheet = StyleSheet.create((theme) => ({
     actionTitle: {
-        ...Typography.default(TILE_TEXT.actionTitle.weight),
-        ...tileMetrics('actionTitle'),
+        ...tileVariant('actionTitle'),
         color: theme.colors.text.primary,
     },
     actionSubtitle: {
-        ...Typography.default(TILE_TEXT.actionSubtitle.weight),
-        ...tileMetrics('actionSubtitle'),
+        ...tileVariant('actionSubtitle'),
         color: theme.colors.text.secondary,
     },
     visualLabel: {
-        ...Typography.default(TILE_TEXT.visualLabel.weight),
-        ...tileMetrics('visualLabel'),
+        ...tileVariant('visualLabel'),
         textAlign: 'center',
         color: theme.colors.text.secondary,
     },
     visualLabelSelected: {
-        ...Typography.default(TILE_TEXT.visualLabel.selectedWeight ?? 'medium'),
+        ...tileVariant('visualLabel', { selected: true }),
         color: theme.colors.text.primary,
     },
     visualSublabel: {
-        ...Typography.default(TILE_TEXT.visualSublabel.weight),
-        ...tileMetrics('visualSublabel'),
+        ...tileVariant('visualSublabel'),
         textAlign: 'center',
         color: theme.colors.text.tertiary,
         marginTop: -4,
     },
     title: {
-        ...Typography.default(TILE_TEXT.cardTitle.weight),
-        fontSize: TILE_TEXT.cardTitle.fontSize,
+        ...tileVariant('cardTitle'),
         color: theme.colors.text.primary,
     },
     titleCompact: {
-        fontSize: TILE_TEXT.cardTitle.compactFontSize ?? TILE_TEXT.cardTitle.fontSize,
+        ...tileVariant('cardTitle', { compact: true }),
     },
     subtitle: {
-        ...Typography.default(TILE_TEXT.cardSubtitle.weight),
-        fontSize: TILE_TEXT.cardSubtitle.fontSize,
+        ...tileVariant('cardSubtitle'),
         color: theme.colors.text.secondary,
     },
     subtitleCompact: {
-        fontSize: TILE_TEXT.cardSubtitle.compactFontSize ?? TILE_TEXT.cardSubtitle.fontSize,
+        ...tileVariant('cardSubtitle', { compact: true }),
         marginTop: theme.space.s2,
     },
     badgeText: {
-        ...Typography.default(TILE_TEXT.badge.weight),
-        ...tileMetrics('badge'),
+        ...tileVariant('badge'),
         color: theme.colors.text.secondary,
     },
 }));

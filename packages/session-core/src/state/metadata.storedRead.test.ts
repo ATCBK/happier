@@ -4,7 +4,7 @@ import { MetadataSchema } from './metadata.js';
 
 describe('stored Session metadata', () => {
     it('projects known nested fields while preserving the root native extension carrier', () => {
-        const source = { kind: 'session_discussion', sessionId: 'session-a', discussionId: 'discussion-a', messageIds: ['message-a'] };
+        const source = { kind: 'discussion', serverId: 'server-a', discussionId: 'discussion-a', messageIds: ['message-a'] };
         const native = { futureNativeContext: { retained: 'opaque' } };
         const runtimeDescriptorV1 = { v: 1, agentId: 'claude', agent: { providerSessionId: 'native-session',
             nativeRecovery: { cursor: 'retained' }, agentExtra: { owner: 'claude', schemaId: 'recovery', v: 1, native: { retained: true } } } };

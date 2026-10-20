@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 describe('UI testkit barrel', () => {
-    it('loads hook and transcript native boundaries without UI Settings or plugin catalogs', async () => {
+    it('loads hook and transcript native boundaries without the full Protocol, UI Settings or plugin catalogs', async () => {
         const { renderHook } = await import('./index');
         const hook = await renderHook(() => 'ready');
         expect(hook.getCurrent()).toBe('ready');
@@ -20,7 +20,8 @@ describe('UI testkit barrel', () => {
         expect(cache).toBeDefined();
         const loaded = [...cache!].filter(([id, entry]) => !id.startsWith('mock:') && entry.exports)
             .map(([id]) => id.replaceAll('\\', '/'));
-        expect(loaded.filter(id => id.endsWith('/sync/domains/settings/settings.ts')
+        expect(loaded.filter(id => id.endsWith('/packages/protocol/src/index.ts')
+            || id.endsWith('/sync/domains/settings/settings.ts')
             || id.endsWith('/agents/registry/registryCore.ts')
             || id.endsWith('/voice/registry/generatedBundledVoiceEntries.ts'))).toEqual([]);
     });
@@ -43,5 +44,21 @@ describe('UI testkit barrel', () => {
         const barrelSource = await readFile(fileURLToPath(new URL('./index.ts', import.meta.url)), 'utf8');
 
         expect(barrelSource).not.toContain("./fixtures/agentCatalogFixtures");
+    });
+
+    it('loads shared text and material readers without the aggregate store hooks or command runtime', async () => {
+        await import('@/components/ui/text/Text');
+        await import('@/components/ui/glass/useGlassMaterialSettings');
+        await import('@/components/ui/lists/SegmentedChoiceItem');
+        await import('@/components/ui/layout/PageHeader');
+        const cache = (globalThis as {
+            __vitest_worker__?: { moduleCache?: ReadonlyMap<string, { exports?: unknown }> };
+        }).__vitest_worker__?.moduleCache;
+        expect(cache).toBeDefined();
+        const loaded = [...cache!].filter(([id, entry]) => !id.startsWith('mock:') && entry.exports)
+            .map(([id]) => id.replaceAll('\\', '/'));
+        expect(loaded.filter(id => id.endsWith('/sync/store/hooks.ts')
+            || id.endsWith('/sync/store/settingsWriters.ts')
+            || id.endsWith('/sync/syncEngine.ts'))).toEqual([]);
     });
 });

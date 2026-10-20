@@ -10,6 +10,7 @@ import type { SessionPendingQueueDeliveryTiming, ProviderBoundModelRef, SessionM
 import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaqueIdentifier';
 
 import type { ApiSessionClient } from '@/api/session/sessionClient';
+import { resolveOfflineReconnectionBackoffDelayMs } from '@/api/offline/serverConnectionErrors';
 import type { ACPProvider } from '@/api/session/sessionMessageTypes';
 import type { PermissionMode } from '@/api/types';
 import { parseSpecialCommand } from '@/cli/parsers/specialCommands';
@@ -38,6 +39,7 @@ import {
   normalizePermissionModeQueuedPromptLocalIds,
   normalizePermissionModeQueuedPromptUserMessageSeqs,
   readHighestPermissionModeQueuedPromptUserMessageSeq,
+  isNextTurnContextQueuedPrompt,
 } from '@/agent/runtime/permissions/queuedPrompt';
 import { fitHappierReplaySeedWithinTotalBudget } from '@happier-dev/agents';
 
@@ -54,7 +56,7 @@ import {
   createSessionProviderInputConsumer,
   PendingQueueMaterializationAuthError,
 } from '@/agent/runtime/session/input/sessionProviderInputConsumer';
-import type { SessionProviderInputRejectedBeforeEffectReason } from '@/agent/runtime/session/input/providerInputOutcome';
+import type { RegisterProviderAcceptedEffect, SessionProviderInputRejectedBeforeEffectReason } from '@/agent/runtime/session/input/providerInputOutcome';
 import type {
   DrainPendingResult,
   MessageBatch,
@@ -102,6 +104,7 @@ export type PermissionModePromptLoopTurnOperations = RuntimeTurnOperations & Rea
     requiredPrompt: string;
     contextOnlyWorkerUpdate?: import('@happier-dev/protocol').WorkerUpdateV1;
     contextOnlyWorkerLocalId?: string;
+    followDeliveries?: PermissionModeQueuedPrompt['followDeliveries'];
   }>) => Promise<HostPreparedContext | null>;
 }>;
 
@@ -112,7 +115,7 @@ export type PromptLoopOverrideSynchronizer = Readonly<{
 
 export type PromptLoopPermissionHandler = Readonly<
   Pick<ProviderEnforcedPermissionHandler, 'setPermissionMode'> & {
-    reset: () => void | Promise<void>;
+    reset: (options?: Parameters<ProviderEnforcedPermissionHandler['reset']>[0]) => void | Promise<void>;
   }
 >;
 
@@ -120,6 +123,8 @@ type QueuedPermissionModeMessage = {
   message: PermissionModeQueuedPrompt;
   mode: PermissionModeQueuedPromptMode;
   hash: string;
+  userEchoPublished?: true;
+  preparationFailureCount?: number;
 };
 
 export type PromptLoopResetReason =
@@ -204,23 +209,22 @@ async function parkAfterPendingMaterializationAuthFailure(params: Readonly<{
 }
 
 /**
- * Sleep until a natural wake while an accepted replay seed's metadata retirement keeps
- * failing. Wakes are the queue growing beyond the depth captured at park entry (new input
- * seeking admission), the incumbent Session metadata/reconnect wake, or shutdown. The queue is
+ * Retain prompt custody until recovery. Wakes are the queue growing
+ * beyond the depth captured before the failed attempt (new input
+ * seeking admission), the incumbent Session metadata/reconnect wake, an optional
+ * paced preparation retry, or shutdown. The queue is
  * never consumed: already-queued input stays queued as the single custody holder for the normal
- * pop path, and each wake grants exactly one retry when the loop re-enters the admission gate.
+ * pop path, and each wake grants one new preparation/admission attempt.
  *
- * The metadata wake is what makes an already-queued follow-up recoverable. Queue growth alone
- * required a further, third prompt to arrive before the blocked one could ever dispatch, so a
- * user who sent exactly one more message stayed blocked indefinitely. Retirement is a metadata
- * write, and this is the same signal the loop already uses to observe a metadata write becoming
- * possible again — no background retry, timer cadence, or poll is introduced.
+ * Already-queued input cannot spin this wait. Only transient prompt preparation
+ * requests paced retries; replay-seed retirement remains event-driven.
  */
-async function parkWhileReplaySeedRetirementUnsettled(params: Readonly<{
+async function parkUntilPromptRecovery(params: Readonly<{
   messageQueue: MessageQueue2<QueuedPermissionModeMessage['mode'], PermissionModeQueuedPrompt>;
   session: ApiSessionClient;
-  queuedDepthBeforeRetirementAttempt: number;
+  queuedDepthBeforeAttempt: number;
   abortSignal: AbortSignal;
+  preparationRetryDelayMs?: number;
 }>): Promise<void> {
   const controller = new AbortController();
   const onAbort = () => controller.abort(params.abortSignal.reason);
@@ -228,15 +232,29 @@ async function parkWhileReplaySeedRetirementUnsettled(params: Readonly<{
   if (params.abortSignal.aborted) controller.abort(params.abortSignal.reason);
 
   try {
+    const preparationRetry = params.preparationRetryDelayMs === undefined ? null
+      : waitForSessionMetadataRetryBackoff({
+        abortSignal: controller.signal,
+        backoffMs: params.preparationRetryDelayMs,
+      });
     const winner = await Promise.race([
       params.messageQueue
-        .waitForQueueGrowthBeyond(params.queuedDepthBeforeRetirementAttempt, controller.signal)
+        .waitForQueueGrowthBeyond(params.queuedDepthBeforeAttempt, controller.signal)
         .then(() => 'queue' as const),
       params.session
         .waitForMetadataUpdate(controller.signal)
-        .then((ok) => (ok ? 'metadata' as const : 'metadata-unavailable' as const)),
+        .then(async (ok) => {
+          // A closed metadata subscription must not shorten Home outage pacing.
+          // Queue growth still races this wait and can wake preparation early.
+          if (!ok && preparationRetry) {
+            await preparationRetry;
+            return 'preparation-retry' as const;
+          }
+          return ok ? 'metadata' as const : 'metadata-unavailable' as const;
+        }),
+      ...(preparationRetry ? [preparationRetry.then(() => 'preparation-retry' as const)] : []),
     ]);
-    controller.abort('replay-seed-retirement-park-wake');
+    controller.abort('prompt-recovery-park-wake');
     if (winner === 'metadata-unavailable' && !params.abortSignal.aborted) {
       await waitForSessionMetadataRetryBackoff({
         abortSignal: params.abortSignal,
@@ -245,7 +263,7 @@ async function parkWhileReplaySeedRetirementUnsettled(params: Readonly<{
     }
   } finally {
     params.abortSignal.removeEventListener('abort', onAbort);
-    controller.abort('replay-seed-retirement-park-dispose');
+    controller.abort('prompt-recovery-park-dispose');
   }
 }
 
@@ -384,7 +402,7 @@ function readPreTurnFailure(error: unknown): PreTurnFailure {
   const structuredFailure = readStructuredInputPreparationFailure(error);
   if (structuredFailure) return structuredFailure;
   const candidate = error && typeof error === 'object' && !Array.isArray(error)
-    ? error as Readonly<{ code?: unknown; retryable?: unknown }>
+    ? error as Readonly<{ code?: unknown; status?: unknown; retryable?: unknown }>
     : null;
   const code = typeof candidate?.code === 'string' && candidate.code.trim().length > 0
     ? candidate.code
@@ -395,7 +413,11 @@ function readPreTurnFailure(error: unknown): PreTurnFailure {
   return {
     code,
     message,
-    retryable: candidate?.retryable === true,
+    // Prompt preparation owns this status. Preserve its pending custody instead
+    // of turning an unavailable required source into a terminal provider refusal.
+    retryable: typeof candidate?.retryable === 'boolean'
+      ? candidate.retryable
+      : candidate?.status === 'preparation_pending',
   };
 }
 
@@ -616,6 +638,8 @@ export async function runPermissionModePromptLoop(opts: {
     resumeId: string;
     error: unknown;
   }>) => void | Promise<void>) | null;
+  /** Host lifecycle records preparation/dispatch failures that have no native turn event. */
+  onPromptFailure?: (error: unknown) => void | Promise<void>;
   startRuntimeBeforeFirstPrompt?: boolean;
   onAfterStart?: (() => void | Promise<void>) | null;
   onBeforeReset?: ((params: { reason: PromptLoopResetReason }) => void | Promise<void>) | null;
@@ -683,10 +707,7 @@ export async function runPermissionModePromptLoop(opts: {
    * Registers replay/Follow effects against the exact localId settled by the host's canonical
    * provider-input outcome normalizer. Transport send completion is never provider acceptance.
    */
-  registerProviderAcceptedEffect: (
-    localId: string,
-    onAccepted: (() => void) | null,
-  ) => void;
+  registerProviderAcceptedEffect: RegisterProviderAcceptedEffect;
   /** Host lifecycle freezes protected cause facts immediately before runtime begin. */
   onBeforeTurnBegin?: (
     input: PermissionModeQueuedPrompt,
@@ -1007,10 +1028,10 @@ export async function runPermissionModePromptLoop(opts: {
           : await opts.replaySeedRetirement.settleBeforeAdmitting())
         : null;
       if (unsettledRetirementOutcome === 'failed') {
-        await parkWhileReplaySeedRetirementUnsettled({
+        await parkUntilPromptRecovery({
           messageQueue: opts.messageQueue,
           session: opts.session,
-          queuedDepthBeforeRetirementAttempt,
+          queuedDepthBeforeAttempt: queuedDepthBeforeRetirementAttempt,
           abortSignal: opts.getAbortSignal(),
         });
         continue;
@@ -1037,7 +1058,22 @@ export async function runPermissionModePromptLoop(opts: {
       message = { message: next.message, mode: next.mode, hash: next.hash };
     }
     if (!message) continue;
+    // Optional quiet inputs keep queue custody until their exact original
+    // occurrence reaches the provider. A local command, blocked user input or
+    // omitted context must leave them available to the next real turn.
+    for (const follow of message.message.followDeliveries ?? []) {
+      if (opts.messageQueue.isClosed()) break;
+      if (follow.localInputId === message.message.localId) continue;
+      const retained: PermissionModeQueuedPrompt = { text: '', localId: follow.localInputId,
+        ...(follow.userMessageSeq === null ? {} : { userMessageSeq: follow.userMessageSeq }),
+        followDeliveries: [follow] };
+      if (!isNextTurnContextQueuedPrompt(retained)) continue;
+      opts.messageQueue.discardMatching(prompt => prompt.localId === follow.localInputId
+        && Boolean(prompt.followDeliveries?.some(item => item.localInputId === follow.localInputId)));
+      opts.messageQueue.push(retained, { permissionMode: message.mode.permissionMode });
+    }
     const inputPreparationStartedAt = performance.now();
+    const queuedDepthBeforePreparation = opts.messageQueue.size();
     logger.infoFile('[PermissionModePromptLoop] Input collected', {
       sessionId: opts.session.sessionId,
       localIds: normalizePermissionModeQueuedPromptLocalIds(message.message),
@@ -1115,8 +1151,9 @@ export async function runPermissionModePromptLoop(opts: {
     syncPermissionModeFromMetadata();
     overrideSync.syncFromMetadata();
     await overrideSync.flushPendingAfterStart();
-    if (!message.mode.suppressUserEcho) {
+    if (!message.mode.suppressUserEcho && !message.userEchoPublished) {
       opts.messageBuffer.addMessage(message.message.text, 'user');
+      message.userEchoPublished = true;
     }
 
     const providerPromptAlreadyResolved = message.mode.providerPromptAlreadyResolved === true;
@@ -1124,6 +1161,7 @@ export async function runPermissionModePromptLoop(opts: {
       ? { type: null } as const
       : parseSpecialCommand(message.message.text);
     if (special.type === 'clear') {
+      opts.session.markPendingProviderInputDispatched(normalizePermissionModeQueuedPromptLocalIds(message.message));
       opts.messageBuffer.addMessage(`Resetting ${opts.providerName} session…`, 'status');
       await opts.onBeforeReset?.({ reason: 'clear' });
       resetAssistantTextSnapshotTurnScope(opts.session, 'clear');
@@ -1199,7 +1237,9 @@ export async function runPermissionModePromptLoop(opts: {
     try {
       turnInFlight = true;
       const promptDeliveryIdentity = readQueuedPromptDeliveryIdentity(message.message);
-      const { localIds, userMessageSeq, userMessageSeqs } = promptDeliveryIdentity;
+      const localIds = [...promptDeliveryIdentity.localIds];
+      const userMessageSeqs = [...promptDeliveryIdentity.userMessageSeqs];
+      let { userMessageSeq } = promptDeliveryIdentity;
       const localId = localIds[0] ?? null;
       currentCheckpointMessageId = localId ?? message.hash;
       if (!wasStarted) {
@@ -1287,6 +1327,7 @@ export async function runPermissionModePromptLoop(opts: {
         const dispatchCompactContext = async (): Promise<void> => {
           try {
             if (typeof opts.runtime.compactContext === 'function') {
+              opts.session.markPendingProviderInputDispatched(localIds);
               await opts.runtime.compactContext(special.originalMessage ?? message.message.text.trim());
             } else {
               throw new Error('/compact is not supported by this runtime');
@@ -1445,6 +1486,7 @@ export async function runPermissionModePromptLoop(opts: {
           || (marker !== undefined && (marker.id !== lastDeliveredSessionSystemPrompt.marker?.id
             || marker.revision !== lastDeliveredSessionSystemPrompt.marker?.revision));
         const canReopenForNativePlan = planDeliveryState?.startupInstructionsSupported === true
+          && opts.runtime.readSessionStartupInstructionsSupport?.() !== false
           && planDeliveryState.revisionChanges === 'resume';
         const nativePlanMatches = () => planDeliveryState?.startupInstructionsSupported === true
           && opts.runtime.readSessionStartupInstructions?.()?.instructions === effectiveAppendSystemPrompt.normalize('NFC')
@@ -1519,6 +1561,7 @@ export async function runPermissionModePromptLoop(opts: {
           localId: localIds.length === 1 ? localId : null,
           services: {
             sessionId: opts.session.sessionId,
+            reconcileSessionInputForProviderDispatch: input => opts.session.reconcileSessionInputForProviderDispatch(input),
             ...(opts.readActiveModelSelection ? { modelRequest: { scope: modelRequestScope,
               startupInstructions: effectiveAppendSystemPrompt,
               toolSelection: agentComposition ? { managedPluginIds: agentComposition.managedPluginIds,
@@ -1563,6 +1606,7 @@ export async function runPermissionModePromptLoop(opts: {
           : await prepareHostContext?.({
               signal: dispatchAbortSignal,
               requiredPrompt: requiredProviderContextForBudget,
+              ...(message.message.followDeliveries?.length ? { followDeliveries: message.message.followDeliveries } : {}),
               ...(hostContextOnly?.kind === 'worker_update' ? {
                 contextOnlyWorkerUpdate: hostContextOnly.update,
                 ...(localId ? { contextOnlyWorkerLocalId: localId } : {}),
@@ -1570,6 +1614,12 @@ export async function runPermissionModePromptLoop(opts: {
             }) ?? null;
         if (!hostContextOnly && preparedHostContext?.recheckAdmission
           && !await preparedHostContext.recheckAdmission(dispatchAbortSignal)) preparedHostContext = null;
+        if (message.message.followDeliveries?.some(delivery => delivery.localInputId === message.message.localId)
+          && !preparedHostContext?.representedFollowLocalInputIds?.includes(localId ?? '')) {
+          throw new PreTurnPromptFailure({ code: 'session_follow_context_unavailable',
+            message: 'Follow context is unavailable before provider dispatch', retryable: true,
+            reason: 'provider_unavailable_before_acceptance' });
+        }
         const contextOnlyWorkerUpdate = hostContextOnly?.kind === 'worker_update'
           ? preparedHostContext?.contextOnlyWorkerUpdate === undefined
             ? hostContextOnly.update
@@ -1626,22 +1676,35 @@ export async function runPermissionModePromptLoop(opts: {
             return;
           }
         }
+        const representedFollowDeliveries = message.message.followDeliveries?.filter(follow =>
+          preparedHostContext?.representedFollowLocalInputIds?.includes(follow.localInputId)) ?? [];
+        const representedPendingInputs = [
+          ...representedFollowDeliveries.map(follow => ({ localId: follow.localInputId, userMessageSeq: follow.userMessageSeq })),
+          ...(message.message.returnedAnswerContext ?? []).flatMap(answer => answer.localId
+            ? [{ localId: answer.localId, userMessageSeq: answer.userMessageSeq }] : []),
+        ].filter(input => input.localId !== localId);
         // Native grammar stays first; the canonical resolved context follows as arguments.
         const dispatchPrompt = preparedDispatch.renderPrompt({
           ...(preparedHostContext && !providerNativeCommand
             ? { sessionFollowUpdates: preparedHostContext.updates, workerUpdates: preparedHostContext.workerUpdates }
             : {}),
           ...(contextOnlyWorkerUpdate && !providerNativeCommand ? { workerUpdates: [contextOnlyWorkerUpdate, ...(preparedHostContext?.workerUpdates ?? [])] } : {}),
+          // Only exact originals re-admitted by the Follow owner earn native
+          // representation, including quiet originals joining a real input.
+          runFollowDeliveries: representedFollowDeliveries,
         });
 
         if (localIds.length > 0 && opts.readActiveModelSelection && opts.onProviderPromptDispatchPrepared) {
           opts.onProviderPromptDispatchPrepared({
-            localIds,
+            localIds: [...new Set([...localIds, ...representedPendingInputs.map(input => input.localId)])],
             selection: opts.readActiveModelSelection(),
           });
         }
         const resolvedStructuredInput = preparedDispatch.structuredInput;
         const promptDeliveryMeta = {
+          ...(message.message.discussionAddressing ? { discussionAddressing: message.message.discussionAddressing } : {}),
+          ...(message.message.actionRequestAttributionV1
+            ? { actionRequestAttributionV1: message.message.actionRequestAttributionV1 } : {}),
           ...(localId === null ? {} : { localId }),
           ...(localIds.length === 0 ? {} : { localIds }),
           ...(userMessageSeq === null ? {} : { userMessageSeq }),
@@ -1668,18 +1731,20 @@ export async function runPermissionModePromptLoop(opts: {
         // Awaited context and checkpoint preparation can withdraw the resolved plan.
         if (resolveSessionPlan) opts.resolveFreshSessionSystemPrompt?.assertPreparedPlanCurrent?.();
         recordPreparationPhase('host_context');
+        if (!hostContextOnly) await preparedHostContext?.commitWorkerUpdateEvents?.();
+        await preparedDispatch.assertAdmission();
         assistantTextSnapshotScope = beginAssistantTextSnapshotTurnScope(opts.session);
         const readyTurnContext = opts.onBeforeTurnBegin?.(message.message, assistantTextSnapshotScope);
         if (typeof readyTurnContext === 'function') readReadyTurnContext = readyTurnContext;
         opts.runtime.beginTurnLifecycle();
         beganTurn = true;
         startActiveTurnPendingPump();
-        const acknowledgeHostContextAccepted = (): void => {
+        const acknowledgeHostContextAccepted = (pendingSettlement?: Promise<void>): void => {
           if (!localId) return;
           if (hostContextOnly && hostContextOnly.kind !== 'session_follow') hostContextOnly.acknowledgeAccepted();
           preparedHostContext?.acknowledgeAccepted(message.message.hostContextOnly
             ? { kind: 'context_only_wake', eventLocalId: localId }
-            : { kind: 'admitted_input', localInputId: localId, userMessageSeq });
+            : { kind: 'admitted_input', localInputId: localId, userMessageSeq }, pendingSettlement);
         };
         if (localId) {
           const sessionSystemPromptDelivery = shouldApplyFreshSessionSystemPrompt || preparedNativePlan
@@ -1689,9 +1754,9 @@ export async function runPermissionModePromptLoop(opts: {
           opts.registerProviderAcceptedEffect(
             localId,
             pendingReplaySeedSettlement || preparedHostContext || hostContextOnly || sessionSystemPromptDelivery
-              ? () => {
+              ? (pendingSettlement) => {
                   if (pendingReplaySeedSettlement) confirmProviderAccepted();
-                  acknowledgeHostContextAccepted();
+                  acknowledgeHostContextAccepted(pendingSettlement);
                   if (sessionSystemPromptDelivery && pendingSessionSystemPromptDelivery === sessionSystemPromptDelivery) {
                     lastDeliveredSessionSystemPrompt = sessionSystemPromptDelivery;
                     pendingSessionSystemPromptDelivery = null;
@@ -1699,11 +1764,31 @@ export async function runPermissionModePromptLoop(opts: {
                   }
                 }
               : null,
+            representedPendingInputs,
           );
+        }
+        for (const follow of representedFollowDeliveries) {
+          if (follow.localInputId === localId) continue;
+          opts.registerProviderAcceptedEffect(follow.localInputId, (pendingSettlement) => {
+            preparedHostContext?.acknowledgeAccepted({ kind: 'admitted_input',
+              localInputId: follow.localInputId, userMessageSeq: follow.userMessageSeq }, pendingSettlement);
+          });
         }
         // Invoking the runtime is the effect boundary. From here onward a thrown transport or
         // AbortError is ambiguous, so the durable association must remain for reconciliation.
+        opts.session.markPendingProviderInputDispatched([
+          ...localIds, ...representedPendingInputs.map(input => input.localId),
+        ]);
         releaseUndispatchedReplaySeed = null;
+        for (const follow of representedFollowDeliveries) {
+          opts.messageQueue.discardMatching(prompt => prompt.localId === follow.localInputId
+            && Boolean(prompt.followDeliveries?.some(item => item.localInputId === follow.localInputId)));
+        }
+        for (const answer of message.message.returnedAnswerContext ?? []) {
+          if (!answer.localId) continue;
+          opts.messageQueue.discardMatching(prompt => prompt.localId === answer.localId
+            && prompt.returnedAnswer?.delivery === 'next_turn');
+        }
         recordPreparationPhase('native_send_entered');
         const providerSend = Object.keys(promptDeliveryMeta).length === 0
           ? opts.runtime.sendTurnPrompt(dispatchPrompt)
@@ -1731,6 +1816,32 @@ export async function runPermissionModePromptLoop(opts: {
       const preTurnFailure = !beganTurn && !isAbortLikeError(error)
         ? readPreTurnFailure(error)
         : null;
+      if (preTurnFailure?.retryable && error !== null && typeof error === 'object'
+        && 'status' in error && error.status === 'preparation_pending') {
+        // No native effect occurred. Keep this exact input in the existing loop
+        // custody instead of durably blocking it and publishing a failed turn.
+        // Each event or paced retry re-runs full preparation/currentness checks.
+        // Reuse offline reconnection's 5s..60s jittered policy with saturation at
+        // ten failures (not an attempt cap); no separate prompt retry budget.
+        message.preparationFailureCount = (message.preparationFailureCount ?? 0) + 1;
+        opts.setThinking(false);
+        opts.keepAlive();
+        logger.infoFile('[PermissionModePromptLoop] Prompt preparation waiting for recovery', {
+          code: 'preparation_pending',
+        });
+        await parkUntilPromptRecovery({
+          messageQueue: opts.messageQueue,
+          session: opts.session,
+          queuedDepthBeforeAttempt: queuedDepthBeforePreparation,
+          abortSignal: opts.getAbortSignal(),
+          preparationRetryDelayMs: resolveOfflineReconnectionBackoffDelayMs(message.preparationFailureCount),
+        });
+        if (opts.getAbortSignal().aborted) return;
+        pending = message;
+        handledPreTurnFailure = true;
+        shouldSendReady = false;
+        continue;
+      }
       if (preTurnFailure) {
         await observePreTurnFailureSettlement({
           session: opts.session,
@@ -1762,6 +1873,7 @@ export async function runPermissionModePromptLoop(opts: {
         throw error;
       }
       if (!isAbortLikeError(error) && !isRuntimeTurnFailureAlreadySurfaced(error)) {
+        await opts.onPromptFailure?.(error);
         await publishPromptLoopAgentMessage(opts, { type: 'message', message: opts.formatPromptErrorMessage(error) });
         if (currentCheckpointMessageId) {
           await publishPromptLoopAgentMessage(

@@ -9,7 +9,7 @@ import { projectGuardActivityRowsForRequester } from '../activityLog';
 import { MACHINE_WATCH_WINDOW_MS } from '@happier-dev/protocol/rpc/machineWatchWindow';
 import { createParkWatch } from '../../lifecycle/parkWatch';
 import { waitForChangeOrDeadline } from '../../lifecycle/waitForChangeOrDeadline';
-import { planGuard, projectGuardLadderV1, type GuardTarget } from '../guardPlanner';
+import { projectGuardLadderV1, type GuardTarget } from '../guardPlanner';
 import type { RequesterWorkAttributionV1 } from '../../lifecycle/requesterWorkAttribution';
 import type { createGuardRuntime } from '../guardRuntime';
 import type { MachineGuardPolicyV1 } from '@happier-dev/protocol/machines/guard/guardPolicyV1';
@@ -26,14 +26,14 @@ export type GuardTerminalPreview = Readonly<{
 export type GuardViewRequester = Readonly<{ serverId: string; accountId: string; isCustodian: boolean; machineId?: string; installationId?: string }>;
 export type GuardWatchInput = Readonly<{
   policy: Pick<MachineResourcesPolicyRuntime, 'read' | 'subscribe'>;
-  sampler: Pick<MachineVitalsSampler, 'latest'>;
+  sampler: Pick<MachineVitalsSampler, 'latest' | 'demand' | 'subscribe'>;
   ownership: Pick<ReturnType<typeof createProcessOwnershipRuntime>, 'readOwners'>;
   readFacts(ownership: GuardOwnership, signal?: AbortSignal): Promise<GuardFacts>;
   readState(): MachineGuardStateV1;
   readTarget(): Readonly<{ serverId: string; machineId: string; installationId: string }>;
   activityLog: Pick<ActivityLog, 'list' | 'subscribe'>;
   readLeftBehind(ownership: GuardOwnership): MachineGuardViewV1['leftBehind'];
-  sessionState: Pick<ReturnType<typeof createGuardRuntime>, 'readSessionWarning' | 'readKeepRunningAnchor' | 'observeFacts'>;
+  sessionState: Pick<ReturnType<typeof createGuardRuntime>, 'readSessionWarning' | 'readKeepRunningAnchor' | 'observeFacts' | 'planMemory'>;
   terminalState?: Readonly<{ readPreview(input: Readonly<{ ownership: GuardOwnership; policy: MachineGuardPolicyV1; now: number }>): readonly GuardTerminalPreview[] | undefined }>;
   subscribe(listener: () => void): () => void;
   readManagedRetentionRef?: () => string | undefined;
@@ -86,7 +86,7 @@ export function createGuardWatch(input: GuardWatchInput) {
       && attribution.installationId === target.installationId;
   };
   const projectLadder = (facts: GuardFacts, policy: MachineGuardViewV1['policy'], state: MachineGuardStateV1, now: number) => {
-    const ladder = projectGuardLadderV1(planGuard({ ...facts, policy: policy.memoryGuard, now }).ladder);
+    const ladder = projectGuardLadderV1(input.sessionState.planMemory(facts, policy.memoryGuard, now).ladder);
     if (state.episode?.state === 'acting' || state.episode?.state === 'verifying') {
       ladder.steps = ladder.steps.map((step, index) => state.episode?.step === index + 1 ? { ...step, status: 'run' } : step);
     }
@@ -212,9 +212,9 @@ export function createGuardWatch(input: GuardWatchInput) {
     if (releases.length) return;
     observation = new AbortController();
     // Subscribe before the gap-closing read so owner changes cannot be missed.
-    // A parked Guard watch must not create vitals demand: each refresh includes a
-    // full native ownership census, while state/fact owners already publish changes.
-    releases = [input.policy.subscribe(refresh), input.subscribe(refresh), input.activityLog.subscribe(refresh)];
+    // Viewed previews share the sampler's summary clock and the canonical census.
+    releases = [input.sampler.demand('summary'), input.sampler.subscribe(refresh),
+      input.policy.subscribe(refresh), input.subscribe(refresh), input.activityLog.subscribe(refresh)];
     refresh();
   } });
   return {

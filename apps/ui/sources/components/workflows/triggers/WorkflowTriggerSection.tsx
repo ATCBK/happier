@@ -13,9 +13,10 @@ import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessL
 import { formatWorkflowInputValue, parseWorkflowInputText } from '@/sync/domains/workflows/workflowInputText';
 import { t } from '@/text';
 import { Modal } from '@/modal';
-import { useAllMachines } from '@/sync/domains/state/storage';
+import { useAllMachines, useMachineListForServer } from '@/sync/domains/state/storage';
 import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
 import { useSessionListRuntimeDeadlineNowMs } from '@/hooks/session/sessionListRuntimeClock';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 import { formatNextScheduledRun, formatScheduledRunQualifier, formatTriggerSummary, readNextScheduledRunRefreshAtMs } from './formatTriggerSummary';
 import { createDefaultThen, readScheduleWhen, readTriggerWhen, type TriggerFormValue, type TriggerWhenValue } from './sessionTriggerForm';
@@ -31,6 +32,7 @@ import {
 } from './workflowTriggerDraft';
 
 export type WorkflowTriggerSectionProps = Readonly<{
+    accountLifetime?: ServerAccountScopeLifetime | null;
     testIDPrefix: string;
     /** This Account's trigger set on this workflow, as last read; `null` with none. */
     set: WorkflowTriggerSetV1 | null;
@@ -91,7 +93,9 @@ function LegacyWorkflowTriggerSummary(props: Readonly<{ legacy: NonNullable<Retu
  * popover has no Then.
  */
 export function WorkflowTriggerSection(props: WorkflowTriggerSectionProps): React.ReactElement {
-    const machines = useAllMachines();
+    const activeMachines = useAllMachines();
+    const addressedMachines = useMachineListForServer(props.accountLifetime?.scope.serverId ?? '');
+    const machines = props.accountLifetime === undefined ? activeMachines : addressedMachines ?? [];
     const rows = React.useMemo(() => projectWorkflowTriggerRows(props.set, props.draft), [props.draft, props.set]);
     const [open, setOpen] = React.useState<Readonly<{ row: WorkflowTriggerRowModel | null; anchor: React.RefObject<View | null> }> | null>(null);
     const addAnchorRef = React.useRef<View>(null);
@@ -190,6 +194,8 @@ export function WorkflowTriggerSection(props: WorkflowTriggerSectionProps): Reac
             </View>
             {open !== null && (row === null || initial !== null) ? (
                 <WorkflowTriggerPopover
+                    accountLifetime={props.accountLifetime}
+                    serverId={props.accountLifetime?.scope.serverId}
                     key={row?.key ?? 'new'}
                     testID={`${props.testIDPrefix}-trigger-popover`}
                     anchorRef={open.anchor}
@@ -205,6 +211,7 @@ export function WorkflowTriggerSection(props: WorkflowTriggerSectionProps): Reac
                         ? { eventEdit: { automationId: props.set.automationId, triggerId: row.triggerId } } : {})}
                     setRows={(
                         <TriggerRunsOnRow
+                            accountLifetime={props.accountLifetime}
                             testID={`${props.testIDPrefix}-trigger-runs-on`}
                             target={runsOn}
                             onChange={(project) => change(editWorkflowTriggerDraft(props.draft, { kind: 'setContext', context: { project } }))}

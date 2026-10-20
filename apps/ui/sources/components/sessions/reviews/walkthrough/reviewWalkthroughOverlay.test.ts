@@ -1,13 +1,16 @@
 import * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { projectReviewFindingsOverlay, type ReviewFinding, type ReviewFindingsOverlayReview } from '@happier-dev/protocol';
+import { projectReviewFindingsOverlay, type ReviewFindingsOverlayReview } from '@happier-dev/protocol/reviews/projectReviewFindingsOverlay';
+import type { ReviewFinding } from '@happier-dev/protocol';
 
 import { SPECIMEN_COMPARISON, SPECIMEN_WALKTHROUGH } from '@/components/dev/changes/walkthroughSpecimenFixture';
 
 import { buildWalkthroughReviewOverlay } from './reviewWalkthroughOverlay';
 import { buildWalkthroughReviewSlots } from './walkthroughReviewSlots';
+import { resolveReviewWalkthroughProgress } from './reviewWalkthroughProgress';
 import { sanitizeEnrichedMarkdownWithInlineReferences } from '@/components/markdown/enriched/enrichedMarkdownLinkHandling';
 import { buildWalkthroughReading } from '@/components/sessions/files/walkthrough/walkthroughReading';
+import { t } from '@/text';
 
 const SHEET = 'apps/ui/sources/components/settings/SettingsSheet.tsx';
 const KEY = 'apps/ui/sources/components/settings/useSettingsRouteKey.ts';
@@ -33,6 +36,36 @@ function overlayOf(reviews: ReviewFindingsOverlayReview[], walkthrough = SPECIME
 }
 
 describe('buildWalkthroughReviewOverlay', () => {
+    it('keeps the reading in review until findings exist, then labels narration as writing', () => {
+        const slotsFor = (reviews: ReviewFindingsOverlayReview[]) => buildWalkthroughReviewSlots({
+            overlay: overlayOf(reviews), phone: false, writing: true,
+            severityColors: () => ({ foreground: '#c00', tint: '#fee' }),
+        });
+        expect(slotsFor([review('run-claude', 'claude', [], { status: 'running', hasOutput: false })]).writingLabel)
+            .toBe(t('reviewWalkthrough.steps.reviewing'));
+        expect(slotsFor([review('run-claude', 'claude', [], { reviewOutcome: 'complete' })]).writingLabel)
+            .toBe(t('reviewWalkthrough.writingWithFindings'));
+    });
+
+    it('keeps reviewing after an engine fails until the remaining reviewers finish', () => {
+        const failed = review('run-claude', 'claude', [], { status: 'failed', hasOutput: false });
+        const active = overlayOf([failed, review('run-codex', 'codex', [], { status: 'running', hasOutput: false })]);
+        expect(active.summary).toMatchObject({ state: 'running', runningEngines: 1,
+            failedEngineLabels: ['Claude'], failedEngineIds: ['claude'] });
+        const narration = { state: 'writing', mode: 'continued_review', narratorLabel: 'Codex' } as const;
+        expect(resolveReviewWalkthroughProgress({ review: active.summary, narration }))
+            .toEqual({ review: { state: 'running', kind: 'reviewing' }, narration: { state: 'waiting', kind: 'writing' } });
+        expect(buildWalkthroughReviewSlots({ overlay: active, phone: false, writing: true,
+            severityColors: () => ({ foreground: '#c00', tint: '#fee' }) }).writingLabel)
+            .toBe(t('reviewWalkthrough.steps.reviewing'));
+
+        const terminal = overlayOf([failed, review('run-codex', 'codex', [])]);
+        expect(terminal.summary).toMatchObject({ state: 'partial', runningEngines: 0, finishedEngines: 1,
+            failedEngineLabels: ['Claude'], failedEngineIds: ['claude'] });
+        expect(resolveReviewWalkthroughProgress({ review: terminal.summary, narration }))
+            .toEqual({ review: { state: 'partial', kind: 'partial', findings: 0 }, narration: { state: 'running', kind: 'writing' } });
+    });
+
     it('navigates a citation to the findings tail when its exact code is outdated', () => {
         const walkthrough = { ...SPECIMEN_WALKTHROUGH, stops: SPECIMEN_WALKTHROUGH.stops.map((stop) =>
             stop.id === 'key' ? { ...stop, explanationMarkdown: 'See [this finding](finding:run-codex:old).', findingRefs: ['run-codex:old'] } : stop) };
@@ -67,10 +100,13 @@ describe('buildWalkthroughReviewOverlay', () => {
         const scrollToStop = vi.fn();
         const findings = slots.renderStopFindings?.(reading.stops.find((stop) => stop.id === 'key')!, { scrollToStop, scrollToFindings: vi.fn() });
         const references = findings?.proseReferences;
-        expect(references?.resolve(encoded)).toMatchObject({ foreground: '#c00', background: '#fee' });
+        expect(references?.resolve(encoded)).toMatchObject({ severity: 'high', foreground: '#c00', background: '#fee' });
         references?.onPress?.(encoded);
         expect(scrollToStop).toHaveBeenCalledExactlyOnceWith('sheet');
-        const rendered = sanitizeEnrichedMarkdownWithInlineReferences(markdown, references).markdown;
+        const sanitized = sanitizeEnrichedMarkdownWithInlineReferences(markdown, references);
+        expect(sanitized.references.get(`happier-ref:finding:${encoded}`)).toMatchObject({ severity: 'high' });
+        const rendered = sanitized.markdown;
+        expect(rendered).not.toContain('●');
         expect(rendered.match(/\]\(happier-ref:finding:/g)).toHaveLength(1);
         expect(rendered).toContain(`](happier-ref:finding:${encoded})`);
         const trailingRefs = findings?.refs;
@@ -100,6 +136,19 @@ describe('buildWalkthroughReviewOverlay', () => {
         expect(projected.stops.get('key')!.refs.map((ref) => ref.findingId)).toEqual(['f1']);
         expect(projected.stops.get('key')!.cards).toEqual([]);
         expect(projected.stops.get('sheet')!.cards.map((card) => card.findingId)).toEqual(['f1']);
+    });
+
+    it('places a finding in an overlapping modified hunk even when the narrator also cites it and no comment supplies a side', () => {
+        const stops = SPECIMEN_WALKTHROUGH.stops.map((stop) => stop.id === 'sheet' ? {
+            ...stop, explanationMarkdown: 'See [the finding](finding:run-codex:f1).', findingRefs: ['run-codex:f1'],
+        } : stop);
+        const projected = overlayOf([review('run-codex', 'codex', [
+            finding('f1', 'high', { filePath: SHEET, startLine: 11 }),
+        ], { anchorsByFindingId: {} })], { ...SPECIMEN_WALKTHROUGH, stops });
+        expect(projected.stops.get('sheet')?.cards.map((card) => card.findingId)).toEqual(['f1']);
+        expect(projected.stops.get('sheet')?.refs.map((ref) => ref.findingId)).toEqual(['f1']);
+        expect(projected.tail).toEqual([]);
+        expect(projected.summary).toMatchObject({ total: 1, inStory: 1, elsewhere: 0 });
     });
 
     it('keeps findings without a file, outdated ones and ones no stop explains in a reachable tail', () => {

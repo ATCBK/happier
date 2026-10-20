@@ -47,6 +47,54 @@ export function readBuiltInSettingDeclarationV1(anchor: unknown): PortableSettin
   return typeof anchor === 'string' ? declarationsByAnchor.get(anchor) ?? null : null;
 }
 
+function readRecord(value: unknown): Readonly<Record<string, unknown>> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Readonly<Record<string, unknown>> : null;
+}
+
+const THEME_MODE_PHRASES: Readonly<Record<string, string>> = {
+  adaptive: 'Follow the system appearance', light: 'Switch to light mode', dark: 'Switch to dark mode',
+};
+
+/** A preset id such as `premiumDark` reads as "Premium dark" when the value carries no profile name. */
+function humanizeThemeProfileId(id: string): string {
+  const words = id.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').trim().toLowerCase();
+  return words ? `${words[0]!.toUpperCase()}${words.slice(1)}` : id;
+}
+
+function describeThemeModeValue(value: unknown): string | null {
+  if (typeof value === 'string') return THEME_MODE_PHRASES[value] ?? null;
+  const record = readRecord(value);
+  if (!record) return null;
+  const activation = readRecord(record.activation);
+  if (activation) {
+    const profile = readRecord(activation.profile);
+    const profileId = typeof activation.profileId === 'string' ? activation.profileId : null;
+    const name = typeof profile?.name === 'string' && profile.name.trim() ? profile.name.trim()
+      : profileId ? humanizeThemeProfileId(profileId) : 'Default';
+    const scope = activation.profileMode === 'light' ? ' for light mode' : activation.profileMode === 'dark' ? ' for dark mode'
+      : ' for light and dark mode';
+    return `Use “${name}”${scope}`;
+  }
+  return typeof record.themePreference === 'string' ? THEME_MODE_PHRASES[record.themePreference] ?? null : null;
+}
+
+/**
+ * A device-owned compound value (a theme selection carries profile ids, timestamps and schema versions)
+ * reads as the choice it makes. Declarations whose value is already a short scalar need no description.
+ */
+export function describeSettingsDeclarationValueV1(declaration: PortableSettingDeclarationV1, value: unknown): string | null {
+  return declaration.storage?.owner === 'themeModeStorageBinding' ? describeThemeModeValue(value) : null;
+}
+
+/** The review shows a described value in place of its raw members; other inputs pass through unchanged. */
+export function projectSettingsDeclarationApprovalInputV1(actionId: SettingsDeclarationActionIdV1, input: unknown): unknown {
+  const parsed = SettingsDeclarationActionInputSchemasV1[actionId].safeParse(input);
+  if (!parsed.success || actionId !== 'settings.set' || !('anchor' in parsed.data) || !('value' in parsed.data)) return input;
+  const declaration = readBuiltInSettingDeclarationV1(parsed.data.anchor);
+  const described = declaration ? describeSettingsDeclarationValueV1(declaration, parsed.data.value) : null;
+  return described === null ? input : { ...parsed.data, value: described };
+}
+
 /** Approval copy consumes the same declaration that names the setting on its page and in discovery. */
 export function describeSettingsDeclarationApprovalSummaryV1(actionId: SettingsDeclarationActionIdV1, input: unknown): string | null {
   const parsed = SettingsDeclarationActionInputSchemasV1[actionId].safeParse(input);
@@ -54,7 +102,8 @@ export function describeSettingsDeclarationApprovalSummaryV1(actionId: SettingsD
   const declaration = readBuiltInSettingDeclarationV1(parsed.data.anchor);
   if (!declaration) return null;
   const name = `“${declaration.title}”`;
-  const effect = actionId === 'settings.set'
+  const described = actionId === 'settings.set' && 'value' in parsed.data ? describeSettingsDeclarationValueV1(declaration, parsed.data.value) : null;
+  const effect = described !== null ? `${described}.` : actionId === 'settings.set'
     ? `Change ${name}${!declaration.sensitive && 'value' in parsed.data && (parsed.data.value === null || typeof parsed.data.value !== 'object')
       ? ` to ${JSON.stringify(parsed.data.value)}` : ''}.`
     : actionId === 'settings.reset' ? `Reset ${name} to its default.`
@@ -64,7 +113,7 @@ export function describeSettingsDeclarationApprovalSummaryV1(actionId: SettingsD
 
 /** No headless default: the current row's meaning depends on its observed UI platform. */
 export function readPortablePlatformAccountSettingBindingV1(declaration: PortableSettingDeclarationV1, platform: 'web' | 'native' | null):
-  Readonly<{ scope: 'account'; key: AccountSettingKey; access: PortableSettingStorageV1['access'] }> | null {
+  Readonly<{ scope: 'account'; key: 'agentInputEnterToSend' | 'agentInputEnterToSendNative'; access: PortableSettingStorageV1['access'] }> | null {
   const storage = declaration.storage;
   if (storage?.scope !== 'account' || storage.owner !== 'composerEnterToSend' || (platform !== 'web' && platform !== 'native')) return null;
   const key = storage.options?.[platform === 'web' ? 0 : 1];

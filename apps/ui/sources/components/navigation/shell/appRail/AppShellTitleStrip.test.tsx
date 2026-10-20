@@ -60,4 +60,22 @@ describe('AppShellTitleStrip', () => {
         const opened = [...router.navigate.mock.calls, ...router.push.mock.calls].map((call) => call[0]);
         expect(opened).toEqual(['/']);
     });
+    it('keeps the workspace tabs clear of the trailing accessories when the window widens without resizing them', async () => {
+        const { View } = await import('react-native');
+        const { act } = await import('react-test-renderer');
+        const { AppShellTitleStrip } = await import('./AppShellTitleStrip');
+        const { WorkspaceTitleBar } = await import('@/components/appShell/workspace/titleBar/WorkspaceTitleBar');
+        const screen = await renderScreen(
+            <AppShellTitleStrip columnVisible columnToggleAvailable onToggleColumn={() => {}} workspaceCatalog={[]} trailing={<View />} />,
+        );
+        const layout = (testID: string, x: number, width: number) => screen.findByTestId(testID)?.props.onLayout?.({ nativeEvent: { layout: { x, y: 0, width, height: 40 } } });
+        await act(async () => {
+            layout('app-shell-title-strip', 0, 1400);
+            layout('app-shell-title-strip-trailing', 1328, 60);
+        });
+        expect(screen.root.findByType(WorkspaceTitleBar).props.trailingStartPx).toBe(1400 - 12 - 60 - 12);
+        // Widening moves the accessories without resizing them: only the strip reports a new size.
+        await act(async () => { layout('app-shell-title-strip', 0, 1920); });
+        expect(screen.root.findByType(WorkspaceTitleBar).props.trailingStartPx).toBe(1920 - 12 - 60 - 12);
+    });
 });

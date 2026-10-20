@@ -1,10 +1,11 @@
+import { $ZodError } from 'zod/v4/core';
 import { randomUUID } from 'node:crypto';
 import { CURRENT_SESSION_PRESENTATION_APPLY_RPC_METHOD, CurrentSessionPresentationActionInputV1Schema, type CurrentSessionPresentationActionResultV1 } from '@happier-dev/protocol/sessions/presentation/currentSessionPresentationV1';
 import type { ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import { CURRENT_SESSION_PRESENTATION_ACK_RPC_METHOD, CURRENT_SESSION_PRESENTATION_AGENT_STATE_KEY, CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD, CURRENT_SESSION_PRESENTATION_UNBIND_RPC_METHOD, CurrentSessionPresentationAckV1Schema, CurrentSessionPresentationBindV1Schema, CurrentSessionPresentationUnbindV1Schema, CurrentSessionPresentationIntentResultV1Schema, CurrentSessionPresentationOwnerV1Schema, CurrentSessionPresentationStateV1Schema, sameCurrentSessionPresentationOwnerV1 } from '@happier-dev/protocol/sessions/presentation/currentSessionPresentationV1';
 import type { CurrentSessionPresentationAckV1, CurrentSessionPresentationBindV1, CurrentSessionPresentationIntentResultV1, CurrentSessionPresentationIntentV1, CurrentSessionPresentationOwnerV1, CurrentSessionPresentationStateV1 } from '@happier-dev/protocol/sessions';
-import { isSocketRpcCurrentSessionPresentationOriginAuthorizationContext } from '@happier-dev/protocol/rpc';
+import { isSocketRpcCurrentSessionPresentationOriginAuthorizationContext } from '@happier-dev/protocol/socketRpc';
 import type { SocketRpcCurrentSessionPresentationOriginAuthorizationContext } from '@happier-dev/protocol/rpc';
 
 import type { AgentState } from '@/api/types';
@@ -18,6 +19,7 @@ import type {
   HostSessionPresentationStatefulResult,
 } from '@/agent/runtime/state/currentSessionUiTypes';
 import type { HostRuntimeLimitMeasurementRecorder } from '@/agent/runtime/state/runtimeLimitMeasurement';
+import { AsyncLock } from '@/utils/lock';
 import {
   delayUnrefAbortable,
   exponentialBackoffDelay,
@@ -196,7 +198,7 @@ function isKnownPreApplicationFailure(error: unknown): boolean {
 }
 
 function isLocalContractFailure(error: unknown): boolean {
-  return error instanceof Error && error.name === 'ZodError';
+  return error instanceof $ZodError;
 }
 
 function abortPromise(signal: AbortSignal): Promise<null> {
@@ -270,6 +272,7 @@ export function createCurrentSessionPresentationService(params: Readonly<{
   const ackTimeoutMs = params.ackTimeoutMs ?? 15_000;
   let revision = 0;
   let boundClient: BoundClient | null = null;
+  const bindingLock = new AsyncLock();
   const pendingCommands = new Map<string, PendingCommand>();
   // This is a host-lifetime-only retirement intent. It prevents a stale
   // invocation from reappearing while the bounded persistence retry is still
@@ -397,7 +400,7 @@ export function createCurrentSessionPresentationService(params: Readonly<{
 
   params.session.rpcHandlerManager.registerHandler(
     CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD,
-    async (raw, context) => {
+    async (raw, context) => await bindingLock.inLock(async () => {
       const parsed = CurrentSessionPresentationBindV1Schema.safeParse(raw);
       const origin = context?.authorization;
       if (
@@ -469,7 +472,7 @@ export function createCurrentSessionPresentationService(params: Readonly<{
         hostNonce,
         revision: snapshot.revision,
       });
-    },
+    }),
   );
 
   params.session.rpcHandlerManager.registerHandler(

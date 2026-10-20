@@ -1,4 +1,4 @@
-import { BrowserActiveTargetV1Schema } from '@happier-dev/protocol/browser/events/activeTarget';
+import { BrowserActiveTargetV1Schema, type BrowserActiveTargetV1 } from '@happier-dev/protocol/browser/events/activeTarget';
 import { browserViewKey } from '@happier-dev/protocol/browser/view/key';
 import type { BrowserAutomationControllerStateV1 } from '@happier-dev/protocol/browser/automation/v1';
 
@@ -56,6 +56,13 @@ export type BrowserCopresence =
      */
     | Readonly<{ kind: 'unconfirmed'; controlEpoch: number }>
     | Readonly<{ kind: 'human'; controlEpoch: number; interruptedCompletion: 'unknown' | null }>;
+
+/**
+ * The agent's latest pointer action on a view: its request id and the control epoch it ran in, with the
+ * target it reported. The controller owners keep it until the next action replaces it, because the live
+ * `activeTarget` can come and go between two renders; the cursor presents each id once.
+ */
+export type BrowserAgentPoint = Readonly<{ id: string; controlEpoch: number; target: BrowserActiveTargetV1 }>;
 
 export type BrowserAgentTargetPoint = Readonly<{ x: number; y: number; width?: number; height?: number; label?: string }>;
 
@@ -123,6 +130,7 @@ type ControllerRecord = Readonly<{
     activeActionKind?: unknown;
     activeTarget?: unknown;
     activeAutomationRequestId?: unknown;
+    lastPoint?: unknown;
     interruptionSettling?: unknown;
     uncertain?: unknown;
 }>;
@@ -189,4 +197,25 @@ export function selectBrowserCopresence(input: Readonly<{
         return { kind: 'agent', activity: classifyBrowserAgentActivity(last.actionKind), target: null, controlEpoch };
     }
     return { kind: 'idle', controlEpoch };
+}
+
+/**
+ * The agent's latest pointer action to show, or none: never while a person drives or is stopping the
+ * agent, and never one from an earlier control epoch (a takeover or hand-back starts a new one).
+ */
+export function selectBrowserAgentPoint(input: Readonly<{
+    lastPoint: BrowserAgentPoint | null | undefined;
+    presence: BrowserCopresence;
+}>): Readonly<{ id: string; target: BrowserAgentTargetPoint }> | null {
+    const { lastPoint, presence } = input;
+    if (!lastPoint || presence.kind === 'human' || presence.kind === 'stopping' || presence.kind === 'unconfirmed') return null;
+    if (lastPoint.controlEpoch !== presence.controlEpoch) return null;
+    const target = readTarget(lastPoint.target);
+    return target ? { id: lastPoint.id, target } : null;
+}
+
+/** The in-app automation owner's retained point for a view, from its controller snapshot. */
+export function readBrowserAgentPoint(snapshot: unknown, view: Readonly<{ browserSessionId: string; viewId: string }>): BrowserAgentPoint | null {
+    const record = readControllerRecord(snapshot, browserViewKey(view));
+    return (record?.lastPoint as BrowserAgentPoint | null | undefined) ?? null;
 }

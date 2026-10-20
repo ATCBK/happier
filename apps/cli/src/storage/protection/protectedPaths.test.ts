@@ -2,8 +2,9 @@ import { mkdtemp, mkdir, realpath, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, win32 } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { classifyPath, classifyPhysicalPath, type StorageProtectionFacts } from './protectedPaths';
+import { classifyPath, classifyPaths, classifyPhysicalPath, type StorageProtectionFacts } from './protectedPaths';
 import { physicalPathWithoutFollowingLeaf } from '@/utils/path/physicalAncestorPath';
+import { createDaemonEventLoopStallMonitor } from '@/daemon/diagnostics/daemonEventLoopStallMonitor';
 
 const fixtures: string[] = [];
 async function fixture() {
@@ -13,6 +14,42 @@ async function fixture() {
 }
 afterEach(async () => { await Promise.all(fixtures.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 describe('storage physical path protection', () => {
+  it('projects repeated Session process bindings without starving the daemon or losing a holder', async () => {
+    const paths = Array.from({ length: 1500 }, (_, index) => `/projects/work-${index % 15}`);
+    const warnings: Readonly<Record<string, unknown>>[] = [];
+    const monitor = createDaemonEventLoopStallMonitor({ getActiveRpcOperations: () => [],
+      warn: (_message, data) => warnings.push(data) });
+    monitor.start();
+    try {
+      const result = classifyPhysicalPath('/projects', { homeDir: '/people/alice', platform: 'linux',
+        inUsePaths: paths, inUseSessions: paths.map((path, index) => ({ path, sessionId: `session-${index % 15}` })) });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(result.loses).toHaveLength(15);
+      expect(new Set(result.loses?.map(reason => reason.detail?.sessionId)).size).toBe(15);
+      expect(warnings).toEqual([]);
+    } finally { monitor.stop(); }
+  });
+  it('shares only one read’s physical rules, preserving managed children, aliases and fresh protection', async () => {
+    const { root, home } = await fixture();
+    const data = join(home, '.happier'); const child = join(data, 'cache');
+    const system = join(root, 'system'); const alias = join(home, 'alias');
+    await mkdir(child, { recursive: true }); await mkdir(join(system, 'child'), { recursive: true });
+    await symlink(system, alias, 'junction');
+    const candidates = [{ path: data, managedItemPath: data }, { path: child, managedItemPath: child },
+      { path: child }, { path: alias }, { path: join(alias, 'child') }];
+    const facts = { homeDir: home, dataHomes: [data], systemPaths: [system] };
+    const first = await classifyPaths(candidates, facts);
+    expect(first.map(value => value.tier)).toEqual(['forbidden', null, 'forbidden', null, 'forbidden']);
+    expect(await classifyPaths(candidates, facts)).toEqual(await Promise.all(candidates.map(candidate =>
+      classifyPath(candidate.path, { ...facts, managedItemPath: candidate.managedItemPath }))));
+    expect((await classifyPaths([{ path: child, managedItemPath: child }], { ...facts, userProtectedFolders: [child] }))[0].tier).toBe('keep');
+    const aliasFacts = { homeDir: home, dataHomes: [data], systemPaths: [alias] };
+    const managedChild = [{ path: child, managedItemPath: child }];
+    expect((await classifyPaths(managedChild, aliasFacts))[0].tier).toBeNull();
+    // A different read resolves a changed OS symlink afresh, not a retained rule cache.
+    await rm(alias); await symlink(data, alias, 'junction');
+    expect((await classifyPaths(managedChild, aliasFacts))[0].tier).toBe('forbidden');
+  });
   it.skipIf(process.platform !== 'win32')('keeps private and locked Windows system leaves protected without blocking ordinary NTFS candidates', async () => {
     const { home } = await fixture(); const cache = join(home, 'cache'); await mkdir(cache);
     const drive = process.env.SystemDrive ?? win32.parse(home).root;
@@ -94,11 +131,15 @@ describe('storage physical path protection', () => {
     ]);
     expect(classifyPhysicalPath('/cloud/files', { ...facts, cloudSyncedFolders: ['/cloud'] }).reason?.detail).toMatchObject({ cloudSynced: true });
     expect(classifyPhysicalPath('/projects', { ...facts, mainCheckouts: [], cloudSyncedFolders: ['/projects/cloud'] }).reason?.detail).toMatchObject({ cloudSynced: true, containsSyncedFolder: true });
+    expect(classifyPhysicalPath('/projects', { ...facts, cloudSyncedFolders: ['/projects'] }).loses).toContainEqual({
+      code: 'not_rebuildable', detail: { path: '/projects', cloudSynced: true },
+    });
   });
   it('names each holding Session without attributing non-Session holders or choosing only the first holder', () => {
     const facts: StorageProtectionFacts = { homeDir: '/people/alice', platform: 'linux',
-      inUsePaths: ['/projects/one', '/projects/other'],
-      inUseSessions: [{ path: '/projects/one', sessionId: 's1' }, { path: '/projects/one', sessionId: 's2' }] };
+      inUsePaths: ['/projects/one', '/projects/other', '/projects/one'],
+      inUseSessions: [{ path: '/projects/one', sessionId: 's1' }, { path: '/projects/one', sessionId: 's2' },
+        { path: '/projects/one', sessionId: 's1' }] };
     const result = classifyPhysicalPath('/projects', facts);
     expect(result.loses).toEqual([
       { code: 'in_use', detail: { path: '/projects/one', sessionId: 's1' } },

@@ -93,6 +93,52 @@ test('shouldReuseRuntimePortsOnRestart stays false when restart was not requeste
   );
 });
 
+test('source reload preserves an omitted daemon and retires a requested remote replacement', () => {
+  const incumbentRuntimeState = { remoteTargets: { nl3: {
+    services: { daemon: true }, status: 'running', serviceStatus: { daemon: 'running' },
+  } } };
+  assert.equal(
+    stackEnvRunner.shouldPreserveDaemonForRestart({
+      args: ['--restart', '--no-daemon'],
+      preparedSourceRuntimeReload: { remote: true, remoteDaemon: true },
+      incumbentRuntimeState,
+    }),
+    true,
+    'a server-only restart must preserve the incumbent remote daemon',
+  );
+  assert.equal(
+    stackEnvRunner.shouldPreserveDaemonForRestart({
+      env: { HAPPIER_STACK_DAEMON: '0' },
+      preparedSourceRuntimeReload: { remote: true, remoteDaemon: true },
+      incumbentRuntimeState,
+    }),
+    true,
+    'the canonical environment-based daemon opt-out has the same preservation contract',
+  );
+  assert.equal(
+    stackEnvRunner.shouldPreserveDaemonForRestart({
+      preparedSourceRuntimeReload: { remoteDaemon: true },
+    }),
+    false,
+  );
+  assert.equal(
+    stackEnvRunner.shouldPreserveDaemonForRestart({
+      preparedSourceRuntimeReload: { remote: true, remoteDaemon: false },
+    }),
+    true,
+    'a remote server alone does not transfer daemon retirement ownership',
+  );
+  assert.equal(
+    stackEnvRunner.shouldPreserveDaemonForRestart({
+      preparedSourceRuntimeReload: { remote: false, remoteDaemon: false },
+      incumbentRuntimeState,
+    }),
+    false,
+    'an incumbent remote daemon is retired even when replacement placement changed',
+  );
+  assert.equal(stackEnvRunner.shouldPreserveDaemonForRestart(), true);
+});
+
 test('fresh non-restart allocation excludes a stale recorded port held by a foreign listener', async () => {
   const staleForeignPort = 3012;
   const reservedPorts = new Set();

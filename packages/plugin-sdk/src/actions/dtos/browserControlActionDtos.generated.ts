@@ -19,6 +19,36 @@ export type BrowserControlActionInputById = {
                 tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
             } | undefined;
             sessionId?: string | undefined;
+            serviceTarget?: {
+                kind: 'managed_service';
+                machineId: string;
+                managedServiceId: string;
+                cwd: string;
+                declaration: {
+                    workspaceRefId: string;
+                    selection: {
+                        kind: 'manifest';
+                        name: string;
+                    } | {
+                        kind: 'native';
+                        source: {
+                            kind: 'native';
+                            tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                            file: string;
+                            target: string;
+                        } | {
+                            kind: 'pluginNative';
+                            adapter: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            file: string;
+                            target: string;
+                        };
+                    };
+                };
+                workspaceId?: string | undefined;
+            } | undefined;
         } | {
             targetId: string;
             kind: 'hostedPluginWeb';
@@ -99,6 +129,36 @@ export type BrowserControlActionInputById = {
                 tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
             } | undefined;
             sessionId?: string | undefined;
+            serviceTarget?: {
+                kind: 'managed_service';
+                machineId: string;
+                managedServiceId: string;
+                cwd: string;
+                declaration: {
+                    workspaceRefId: string;
+                    selection: {
+                        kind: 'manifest';
+                        name: string;
+                    } | {
+                        kind: 'native';
+                        source: {
+                            kind: 'native';
+                            tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                            file: string;
+                            target: string;
+                        } | {
+                            kind: 'pluginNative';
+                            adapter: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            file: string;
+                            target: string;
+                        };
+                    };
+                };
+                workspaceId?: string | undefined;
+            } | undefined;
         } | {
             targetId: string;
             kind: 'hostedPluginWeb';
@@ -186,6 +246,36 @@ export type BrowserControlActionInputById = {
                 tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
             } | undefined;
             sessionId?: string | undefined;
+            serviceTarget?: {
+                kind: 'managed_service';
+                machineId: string;
+                managedServiceId: string;
+                cwd: string;
+                declaration: {
+                    workspaceRefId: string;
+                    selection: {
+                        kind: 'manifest';
+                        name: string;
+                    } | {
+                        kind: 'native';
+                        source: {
+                            kind: 'native';
+                            tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                            file: string;
+                            target: string;
+                        } | {
+                            kind: 'pluginNative';
+                            adapter: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            file: string;
+                            target: string;
+                        };
+                    };
+                };
+                workspaceId?: string | undefined;
+            } | undefined;
         } | {
             targetId: string;
             kind: 'hostedPluginWeb';
@@ -314,6 +404,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -388,7 +508,7 @@ export type BrowserControlActionResultById = {
                     proxyTunnel?: 'unavailable' | 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | undefined;
                 };
                 contextKinds: ('browserPageReference' | 'browserScreenshot' | 'browserTextSelection' | 'browserPageTextSummary' | 'browserDomSnapshotSummary' | 'browserSelectedElement' | 'browserAnnotation' | 'browserRecordingEvidence' | 'browserNetworkSummary' | 'browserConsoleSummary')[];
-                inputRouting: 'none' | 'native' | 'pmsControlSideband';
+                inputRouting: 'native' | 'none' | 'pmsControlSideband';
                 supportsDownloads: boolean;
                 supportsUploads: boolean;
                 supportsPopups: boolean;
@@ -549,6 +669,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -764,6 +914,17 @@ export type BrowserControlActionResultById = {
     readonly "browser.control.takeControl": {
         v: 1;
         commandId: string;
+        status: 'failed';
+        error: {
+            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
+            message: string;
+            retryable?: boolean | undefined;
+        };
+        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
+        completion?: 'unknown' | 'known' | undefined;
+    } | {
+        v: 1;
+        commandId: string;
         status: 'dispatched';
         adapterKind: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface';
         events: ({
@@ -796,6 +957,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -870,7 +1061,7 @@ export type BrowserControlActionResultById = {
                     proxyTunnel?: 'unavailable' | 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | undefined;
                 };
                 contextKinds: ('browserPageReference' | 'browserScreenshot' | 'browserTextSelection' | 'browserPageTextSummary' | 'browserDomSnapshotSummary' | 'browserSelectedElement' | 'browserAnnotation' | 'browserRecordingEvidence' | 'browserNetworkSummary' | 'browserConsoleSummary')[];
-                inputRouting: 'none' | 'native' | 'pmsControlSideband';
+                inputRouting: 'native' | 'none' | 'pmsControlSideband';
                 supportsDownloads: boolean;
                 supportsUploads: boolean;
                 supportsPopups: boolean;
@@ -1031,6 +1222,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -1235,17 +1456,6 @@ export type BrowserControlActionResultById = {
             reasonCode: string;
             navigationGeneration?: number | undefined;
         })[];
-    } | {
-        v: 1;
-        commandId: string;
-        status: 'failed';
-        error: {
-            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
-            message: string;
-            retryable?: boolean | undefined;
-        };
-        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
-        completion?: 'unknown' | 'known' | undefined;
     } | {
         v: 1;
         status: 'interrupted';
@@ -1255,6 +1465,17 @@ export type BrowserControlActionResultById = {
     readonly "browser.control.handBack": {
         v: 1;
         commandId: string;
+        status: 'failed';
+        error: {
+            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
+            message: string;
+            retryable?: boolean | undefined;
+        };
+        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
+        completion?: 'unknown' | 'known' | undefined;
+    } | {
+        v: 1;
+        commandId: string;
         status: 'dispatched';
         adapterKind: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface';
         events: ({
@@ -1287,6 +1508,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -1361,7 +1612,7 @@ export type BrowserControlActionResultById = {
                     proxyTunnel?: 'unavailable' | 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | undefined;
                 };
                 contextKinds: ('browserPageReference' | 'browserScreenshot' | 'browserTextSelection' | 'browserPageTextSummary' | 'browserDomSnapshotSummary' | 'browserSelectedElement' | 'browserAnnotation' | 'browserRecordingEvidence' | 'browserNetworkSummary' | 'browserConsoleSummary')[];
-                inputRouting: 'none' | 'native' | 'pmsControlSideband';
+                inputRouting: 'native' | 'none' | 'pmsControlSideband';
                 supportsDownloads: boolean;
                 supportsUploads: boolean;
                 supportsPopups: boolean;
@@ -1522,6 +1773,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -1726,17 +2007,6 @@ export type BrowserControlActionResultById = {
             reasonCode: string;
             navigationGeneration?: number | undefined;
         })[];
-    } | {
-        v: 1;
-        commandId: string;
-        status: 'failed';
-        error: {
-            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
-            message: string;
-            retryable?: boolean | undefined;
-        };
-        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
-        completion?: 'unknown' | 'known' | undefined;
     } | {
         v: 1;
         status: 'interrupted';
@@ -1746,6 +2016,17 @@ export type BrowserControlActionResultById = {
     readonly "browser.view.open": {
         v: 1;
         commandId: string;
+        status: 'failed';
+        error: {
+            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
+            message: string;
+            retryable?: boolean | undefined;
+        };
+        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
+        completion?: 'unknown' | 'known' | undefined;
+    } | {
+        v: 1;
+        commandId: string;
         status: 'dispatched';
         adapterKind: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface';
         events: ({
@@ -1778,6 +2059,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -1852,7 +2163,7 @@ export type BrowserControlActionResultById = {
                     proxyTunnel?: 'unavailable' | 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | undefined;
                 };
                 contextKinds: ('browserPageReference' | 'browserScreenshot' | 'browserTextSelection' | 'browserPageTextSummary' | 'browserDomSnapshotSummary' | 'browserSelectedElement' | 'browserAnnotation' | 'browserRecordingEvidence' | 'browserNetworkSummary' | 'browserConsoleSummary')[];
-                inputRouting: 'none' | 'native' | 'pmsControlSideband';
+                inputRouting: 'native' | 'none' | 'pmsControlSideband';
                 supportsDownloads: boolean;
                 supportsUploads: boolean;
                 supportsPopups: boolean;
@@ -2013,6 +2324,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -2219,19 +2560,27 @@ export type BrowserControlActionResultById = {
         })[];
     } | {
         v: 1;
+        status: 'in_progress';
+        phase: 'browser_runtime_provisioning';
         commandId: string;
-        status: 'failed';
-        error: {
-            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
-            message: string;
-            retryable?: boolean | undefined;
-        };
-        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
-        completion?: 'unknown' | 'known' | undefined;
+        browserSessionId: string;
+        viewId: string;
+        operationId: string;
     };
     readonly "browser.view.openExternal": {
         v: 1;
         commandId: string;
+        status: 'failed';
+        error: {
+            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
+            message: string;
+            retryable?: boolean | undefined;
+        };
+        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
+        completion?: 'unknown' | 'known' | undefined;
+    } | {
+        v: 1;
+        commandId: string;
         status: 'dispatched';
         adapterKind: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface';
         events: ({
@@ -2264,6 +2613,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -2338,7 +2717,7 @@ export type BrowserControlActionResultById = {
                     proxyTunnel?: 'unavailable' | 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | undefined;
                 };
                 contextKinds: ('browserPageReference' | 'browserScreenshot' | 'browserTextSelection' | 'browserPageTextSummary' | 'browserDomSnapshotSummary' | 'browserSelectedElement' | 'browserAnnotation' | 'browserRecordingEvidence' | 'browserNetworkSummary' | 'browserConsoleSummary')[];
-                inputRouting: 'none' | 'native' | 'pmsControlSideband';
+                inputRouting: 'native' | 'none' | 'pmsControlSideband';
                 supportsDownloads: boolean;
                 supportsUploads: boolean;
                 supportsPopups: boolean;
@@ -2499,6 +2878,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -2703,21 +3112,21 @@ export type BrowserControlActionResultById = {
             reasonCode: string;
             navigationGeneration?: number | undefined;
         })[];
-    } | {
-        v: 1;
-        commandId: string;
-        status: 'failed';
-        error: {
-            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
-            message: string;
-            retryable?: boolean | undefined;
-        };
-        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
-        completion?: 'unknown' | 'known' | undefined;
     };
     readonly "browser.view.close": {
         v: 1;
         commandId: string;
+        status: 'failed';
+        error: {
+            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
+            message: string;
+            retryable?: boolean | undefined;
+        };
+        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
+        completion?: 'unknown' | 'known' | undefined;
+    } | {
+        v: 1;
+        commandId: string;
         status: 'dispatched';
         adapterKind: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface';
         events: ({
@@ -2750,6 +3159,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -2824,7 +3263,7 @@ export type BrowserControlActionResultById = {
                     proxyTunnel?: 'unavailable' | 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | undefined;
                 };
                 contextKinds: ('browserPageReference' | 'browserScreenshot' | 'browserTextSelection' | 'browserPageTextSummary' | 'browserDomSnapshotSummary' | 'browserSelectedElement' | 'browserAnnotation' | 'browserRecordingEvidence' | 'browserNetworkSummary' | 'browserConsoleSummary')[];
-                inputRouting: 'none' | 'native' | 'pmsControlSideband';
+                inputRouting: 'native' | 'none' | 'pmsControlSideband';
                 supportsDownloads: boolean;
                 supportsUploads: boolean;
                 supportsPopups: boolean;
@@ -2985,6 +3424,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -3189,21 +3658,21 @@ export type BrowserControlActionResultById = {
             reasonCode: string;
             navigationGeneration?: number | undefined;
         })[];
-    } | {
-        v: 1;
-        commandId: string;
-        status: 'failed';
-        error: {
-            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
-            message: string;
-            retryable?: boolean | undefined;
-        };
-        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
-        completion?: 'unknown' | 'known' | undefined;
     };
     readonly "browser.view.focus": {
         v: 1;
         commandId: string;
+        status: 'failed';
+        error: {
+            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
+            message: string;
+            retryable?: boolean | undefined;
+        };
+        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
+        completion?: 'unknown' | 'known' | undefined;
+    } | {
+        v: 1;
+        commandId: string;
         status: 'dispatched';
         adapterKind: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface';
         events: ({
@@ -3236,6 +3705,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -3310,7 +3809,7 @@ export type BrowserControlActionResultById = {
                     proxyTunnel?: 'unavailable' | 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | undefined;
                 };
                 contextKinds: ('browserPageReference' | 'browserScreenshot' | 'browserTextSelection' | 'browserPageTextSummary' | 'browserDomSnapshotSummary' | 'browserSelectedElement' | 'browserAnnotation' | 'browserRecordingEvidence' | 'browserNetworkSummary' | 'browserConsoleSummary')[];
-                inputRouting: 'none' | 'native' | 'pmsControlSideband';
+                inputRouting: 'native' | 'none' | 'pmsControlSideband';
                 supportsDownloads: boolean;
                 supportsUploads: boolean;
                 supportsPopups: boolean;
@@ -3471,6 +3970,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -3675,21 +4204,21 @@ export type BrowserControlActionResultById = {
             reasonCode: string;
             navigationGeneration?: number | undefined;
         })[];
-    } | {
-        v: 1;
-        commandId: string;
-        status: 'failed';
-        error: {
-            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
-            message: string;
-            retryable?: boolean | undefined;
-        };
-        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
-        completion?: 'unknown' | 'known' | undefined;
     };
     readonly "browser.target.set": {
         v: 1;
         commandId: string;
+        status: 'failed';
+        error: {
+            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
+            message: string;
+            retryable?: boolean | undefined;
+        };
+        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
+        completion?: 'unknown' | 'known' | undefined;
+    } | {
+        v: 1;
+        commandId: string;
         status: 'dispatched';
         adapterKind: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface';
         events: ({
@@ -3722,6 +4251,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -3796,7 +4355,7 @@ export type BrowserControlActionResultById = {
                     proxyTunnel?: 'unavailable' | 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | undefined;
                 };
                 contextKinds: ('browserPageReference' | 'browserScreenshot' | 'browserTextSelection' | 'browserPageTextSummary' | 'browserDomSnapshotSummary' | 'browserSelectedElement' | 'browserAnnotation' | 'browserRecordingEvidence' | 'browserNetworkSummary' | 'browserConsoleSummary')[];
-                inputRouting: 'none' | 'native' | 'pmsControlSideband';
+                inputRouting: 'native' | 'none' | 'pmsControlSideband';
                 supportsDownloads: boolean;
                 supportsUploads: boolean;
                 supportsPopups: boolean;
@@ -3957,6 +4516,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -4161,21 +4750,21 @@ export type BrowserControlActionResultById = {
             reasonCode: string;
             navigationGeneration?: number | undefined;
         })[];
-    } | {
-        v: 1;
-        commandId: string;
-        status: 'failed';
-        error: {
-            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
-            message: string;
-            retryable?: boolean | undefined;
-        };
-        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
-        completion?: 'unknown' | 'known' | undefined;
     };
     readonly "browser.navigate": {
         v: 1;
         commandId: string;
+        status: 'failed';
+        error: {
+            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
+            message: string;
+            retryable?: boolean | undefined;
+        };
+        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
+        completion?: 'unknown' | 'known' | undefined;
+    } | {
+        v: 1;
+        commandId: string;
         status: 'dispatched';
         adapterKind: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface';
         events: ({
@@ -4208,6 +4797,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -4282,7 +4901,7 @@ export type BrowserControlActionResultById = {
                     proxyTunnel?: 'unavailable' | 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | undefined;
                 };
                 contextKinds: ('browserPageReference' | 'browserScreenshot' | 'browserTextSelection' | 'browserPageTextSummary' | 'browserDomSnapshotSummary' | 'browserSelectedElement' | 'browserAnnotation' | 'browserRecordingEvidence' | 'browserNetworkSummary' | 'browserConsoleSummary')[];
-                inputRouting: 'none' | 'native' | 'pmsControlSideband';
+                inputRouting: 'native' | 'none' | 'pmsControlSideband';
                 supportsDownloads: boolean;
                 supportsUploads: boolean;
                 supportsPopups: boolean;
@@ -4443,6 +5062,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -4647,21 +5296,21 @@ export type BrowserControlActionResultById = {
             reasonCode: string;
             navigationGeneration?: number | undefined;
         })[];
-    } | {
-        v: 1;
-        commandId: string;
-        status: 'failed';
-        error: {
-            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
-            message: string;
-            retryable?: boolean | undefined;
-        };
-        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
-        completion?: 'unknown' | 'known' | undefined;
     };
     readonly "browser.reload": {
         v: 1;
         commandId: string;
+        status: 'failed';
+        error: {
+            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
+            message: string;
+            retryable?: boolean | undefined;
+        };
+        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
+        completion?: 'unknown' | 'known' | undefined;
+    } | {
+        v: 1;
+        commandId: string;
         status: 'dispatched';
         adapterKind: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface';
         events: ({
@@ -4694,6 +5343,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -4768,7 +5447,7 @@ export type BrowserControlActionResultById = {
                     proxyTunnel?: 'unavailable' | 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | undefined;
                 };
                 contextKinds: ('browserPageReference' | 'browserScreenshot' | 'browserTextSelection' | 'browserPageTextSummary' | 'browserDomSnapshotSummary' | 'browserSelectedElement' | 'browserAnnotation' | 'browserRecordingEvidence' | 'browserNetworkSummary' | 'browserConsoleSummary')[];
-                inputRouting: 'none' | 'native' | 'pmsControlSideband';
+                inputRouting: 'native' | 'none' | 'pmsControlSideband';
                 supportsDownloads: boolean;
                 supportsUploads: boolean;
                 supportsPopups: boolean;
@@ -4929,6 +5608,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -5133,21 +5842,21 @@ export type BrowserControlActionResultById = {
             reasonCode: string;
             navigationGeneration?: number | undefined;
         })[];
-    } | {
-        v: 1;
-        commandId: string;
-        status: 'failed';
-        error: {
-            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
-            message: string;
-            retryable?: boolean | undefined;
-        };
-        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
-        completion?: 'unknown' | 'known' | undefined;
     };
     readonly "browser.goBack": {
         v: 1;
         commandId: string;
+        status: 'failed';
+        error: {
+            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
+            message: string;
+            retryable?: boolean | undefined;
+        };
+        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
+        completion?: 'unknown' | 'known' | undefined;
+    } | {
+        v: 1;
+        commandId: string;
         status: 'dispatched';
         adapterKind: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface';
         events: ({
@@ -5180,6 +5889,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -5254,7 +5993,7 @@ export type BrowserControlActionResultById = {
                     proxyTunnel?: 'unavailable' | 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | undefined;
                 };
                 contextKinds: ('browserPageReference' | 'browserScreenshot' | 'browserTextSelection' | 'browserPageTextSummary' | 'browserDomSnapshotSummary' | 'browserSelectedElement' | 'browserAnnotation' | 'browserRecordingEvidence' | 'browserNetworkSummary' | 'browserConsoleSummary')[];
-                inputRouting: 'none' | 'native' | 'pmsControlSideband';
+                inputRouting: 'native' | 'none' | 'pmsControlSideband';
                 supportsDownloads: boolean;
                 supportsUploads: boolean;
                 supportsPopups: boolean;
@@ -5415,6 +6154,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -5619,21 +6388,21 @@ export type BrowserControlActionResultById = {
             reasonCode: string;
             navigationGeneration?: number | undefined;
         })[];
-    } | {
-        v: 1;
-        commandId: string;
-        status: 'failed';
-        error: {
-            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
-            message: string;
-            retryable?: boolean | undefined;
-        };
-        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
-        completion?: 'unknown' | 'known' | undefined;
     };
     readonly "browser.goForward": {
         v: 1;
         commandId: string;
+        status: 'failed';
+        error: {
+            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
+            message: string;
+            retryable?: boolean | undefined;
+        };
+        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
+        completion?: 'unknown' | 'known' | undefined;
+    } | {
+        v: 1;
+        commandId: string;
         status: 'dispatched';
         adapterKind: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface';
         events: ({
@@ -5666,6 +6435,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -5740,7 +6539,7 @@ export type BrowserControlActionResultById = {
                     proxyTunnel?: 'unavailable' | 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | undefined;
                 };
                 contextKinds: ('browserPageReference' | 'browserScreenshot' | 'browserTextSelection' | 'browserPageTextSummary' | 'browserDomSnapshotSummary' | 'browserSelectedElement' | 'browserAnnotation' | 'browserRecordingEvidence' | 'browserNetworkSummary' | 'browserConsoleSummary')[];
-                inputRouting: 'none' | 'native' | 'pmsControlSideband';
+                inputRouting: 'native' | 'none' | 'pmsControlSideband';
                 supportsDownloads: boolean;
                 supportsUploads: boolean;
                 supportsPopups: boolean;
@@ -5901,6 +6700,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -6105,21 +6934,21 @@ export type BrowserControlActionResultById = {
             reasonCode: string;
             navigationGeneration?: number | undefined;
         })[];
-    } | {
-        v: 1;
-        commandId: string;
-        status: 'failed';
-        error: {
-            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
-            message: string;
-            retryable?: boolean | undefined;
-        };
-        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
-        completion?: 'unknown' | 'known' | undefined;
     };
     readonly "browser.stop": {
         v: 1;
         commandId: string;
+        status: 'failed';
+        error: {
+            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
+            message: string;
+            retryable?: boolean | undefined;
+        };
+        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
+        completion?: 'unknown' | 'known' | undefined;
+    } | {
+        v: 1;
+        commandId: string;
         status: 'dispatched';
         adapterKind: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface';
         events: ({
@@ -6152,6 +6981,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -6226,7 +7085,7 @@ export type BrowserControlActionResultById = {
                     proxyTunnel?: 'unavailable' | 'cdp' | 'previewProxy' | 'injectedPage' | 'nativeCallback' | 'streamFrame' | undefined;
                 };
                 contextKinds: ('browserPageReference' | 'browserScreenshot' | 'browserTextSelection' | 'browserPageTextSummary' | 'browserDomSnapshotSummary' | 'browserSelectedElement' | 'browserAnnotation' | 'browserRecordingEvidence' | 'browserNetworkSummary' | 'browserConsoleSummary')[];
-                inputRouting: 'none' | 'native' | 'pmsControlSideband';
+                inputRouting: 'native' | 'none' | 'pmsControlSideband';
                 supportsDownloads: boolean;
                 supportsUploads: boolean;
                 supportsPopups: boolean;
@@ -6387,6 +7246,36 @@ export type BrowserControlActionResultById = {
                     tone?: 'success' | 'neutral' | 'info' | 'warning' | 'danger' | 'accent' | undefined;
                 } | undefined;
                 sessionId?: string | undefined;
+                serviceTarget?: {
+                    kind: 'managed_service';
+                    machineId: string;
+                    managedServiceId: string;
+                    cwd: string;
+                    declaration: {
+                        workspaceRefId: string;
+                        selection: {
+                            kind: 'manifest';
+                            name: string;
+                        } | {
+                            kind: 'native';
+                            source: {
+                                kind: 'native';
+                                tool: 'package_script' | 'mise' | 'make' | 'just' | 'taskfile' | 'turbo' | 'compose' | 'procfile' | 'devbox' | 'devenv' | 'flox';
+                                file: string;
+                                target: string;
+                            } | {
+                                kind: 'pluginNative';
+                                adapter: {
+                                    pluginId: string;
+                                    localId: string;
+                                };
+                                file: string;
+                                target: string;
+                            };
+                        };
+                    };
+                    workspaceId?: string | undefined;
+                } | undefined;
             } | {
                 targetId: string;
                 kind: 'hostedPluginWeb';
@@ -6591,16 +7480,5 @@ export type BrowserControlActionResultById = {
             reasonCode: string;
             navigationGeneration?: number | undefined;
         })[];
-    } | {
-        v: 1;
-        commandId: string;
-        status: 'failed';
-        error: {
-            code: 'adapter_unavailable' | 'sandbox_unavailable' | 'command_malformed' | 'feature_disabled' | 'permission_denied' | 'policy_unavailable' | 'waiting_for_memory' | 'session_not_found' | 'unsupported_command' | 'view_not_found';
-            message: string;
-            retryable?: boolean | undefined;
-        };
-        adapterKind?: 'externalUrl' | 'simulatorPreview' | 'localPreview' | 'hostedPlugin' | 'chromiumSidecar' | 'streamedBrowserSurface' | undefined;
-        completion?: 'unknown' | 'known' | undefined;
     };
 };

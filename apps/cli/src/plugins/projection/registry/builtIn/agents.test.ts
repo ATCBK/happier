@@ -18,6 +18,7 @@ import { BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS } from '../sources/generatedBundled
 import { readBundledPluginManifest } from './locators';
 import { BUNDLED_FIRST_PARTY_AGENT_REGISTRATION_BINDINGS } from '../sources/generatedBundledPlugins';
 import { ingestCanonicalPluginManifest } from '../../../manifest/ingest';
+import { normalizePluginManifestV2 } from '../../../manifest/normalize';
 
 function manifestAgents(): readonly ResolvedAgentContribution[] {
     return getAllAgentDefinitionContracts().map((definition) => {
@@ -93,7 +94,7 @@ describe('built-in Agent projection overlays', () => {
     });
     it('keeps a declared bundled Agent without native CLI metadata alongside native CLI Agents', () => {
         const manifestAgents = [CUSTOM_ACP_MANIFEST, QWEN_MANIFEST].map((manifest) => projectManifestAgentContribution({
-            definition: manifest.contributes.agents![0]!,
+            definition: normalizePluginManifestV2(manifest).contributes.agents![0]!,
             pluginId: manifest.id,
             provenance: 'first_party',
             source: { kind: 'bundled' },
@@ -261,7 +262,7 @@ describe('built-in Agent projection overlays', () => {
 
     it('fails closed when a bundled manifest owner lacks projected CLI metadata', () => {
         const first = projectManifestAgentContribution({
-            definition: QWEN_MANIFEST.contributes.agents![0]!, pluginId: QWEN_MANIFEST.id,
+            definition: normalizePluginManifestV2(QWEN_MANIFEST).contributes.agents![0]!, pluginId: QWEN_MANIFEST.id,
             provenance: 'first_party', source: { kind: 'bundled' },
         });
         expect(() => projectBuiltInAgents({

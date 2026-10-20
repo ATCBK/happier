@@ -12,8 +12,10 @@ import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testki
 import { setRuntimeFetch, resetRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { McpServerCatalogRowMutationV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
+import { McpServersSettingsV1Schema } from '@happier-dev/protocol/mcp/servers/settingsV1';
 import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { pressTestInstance } from '@/dev/testkit/render/renderScreen';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { SharedSavedSecretCreateInputV1Schema, SharedSavedSecretPromoteInputV1Schema, SHARED_SAVED_SECRET_ACTION_PATHS_V1 } from '@happier-dev/protocol/account/settings/savedSecretResourceActionsV1';
@@ -30,8 +32,10 @@ import { createArtifactStoreBoundary, type ArtifactStoreBoundary } from '@/dev/t
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { runGuardedNavigation } from '@/utils/navigation/runGuardedNavigation';
+import { mcpServerRoute } from './collection/mcpServerCollectionModel';
 import { SessionOrganizationSnapshotResponseSchema } from '@happier-dev/protocol/sessions/organization/snapshot';
 import { SESSION_ORGANIZATION_SNAPSHOT_VERSION } from '@happier-dev/protocol/sessions/organization/constants';
+import { CollectionDraftTitleScope, useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -159,6 +163,7 @@ const mcpServersCommonModuleMockOptions = {
         const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
         return createModalModuleMock({
             confirmResult: true,
+            renderCustomModals: true,
             spies: {
                 alert: (title, message, buttons) => {
                     modalAlertSpy(title, message);
@@ -242,13 +247,14 @@ vi.mock('@/platform/randomUUID', () => ({
     randomUUID: () => ++uuidBoundary.sequence === 1 ? 'uuid' : `uuid-${uuidBoundary.sequence}`,
 }));
 
-/** The draft rule's target select (the page header also holds a `⋯` menu). */
-function findBindingTargetDropdown(screen: Awaited<ReturnType<typeof renderEditorScreen>>) {
-    return screen.find((node) => node.props.itemTrigger?.title === 'settings.mcpServersBindingTarget');
+function CollectionDraftTitleObservation() {
+    const title = useCollectionDraftTitle().useTitle();
+    return React.createElement('CollectionDraftTitleObservation', { testID: 'mcp.server.editor.published-title', title });
 }
 
 async function renderEditorScreen(options: Readonly<{ activeAccount?: boolean; ask?: boolean;
-    mcpUpdatePolicy?: 'disabled' | 'ask'; hosted?: boolean }> = {}) {
+    mcpUpdatePolicy?: 'disabled' | 'ask'; mcpDeletePolicy?: 'ask' | 'allowed'; hosted?: boolean; machineDifferenceModal?: boolean;
+    observeDraftTitle?: boolean }> = {}) {
     const configuredHome = await upsertServerProfileOnly({ serverUrl: options.mcpUpdatePolicy
         ? `https://mcp-editor-update-${options.mcpUpdatePolicy}.test` : options.ask ? 'https://mcp-editor-ask-row.test' : options.activeAccount
         ? 'https://mcp-editor-active-row.test' : 'https://mcp-editor-row.test', name: 'MCP editor' });
@@ -284,10 +290,12 @@ async function renderEditorScreen(options: Readonly<{ activeAccount?: boolean; a
             ...(options.ask ? { 'mcp.servers.import': { approvalRequiredSurfaces: ['ui'] } } : {}),
             ...(options.mcpUpdatePolicy === 'disabled' ? { 'mcp.servers.update': { disabledSurfaces: ['ui'] } } : {}),
             ...(options.mcpUpdatePolicy === 'ask' ? { 'mcp.servers.update': { approvalRequiredSurfaces: ['ui'] } } : {}),
+            ...(options.mcpDeletePolicy === 'ask' ? { 'mcp.servers.delete': { approvalRequiredSurfaces: ['ui'] } } : {}),
         }, approvalWaivedSurfaces: {
             ...(!options.ask ? { 'secrets.shared.promote': ['ui'], 'secrets.shared.create': ['ui'] } : {}),
             ...(!options.ask ? { 'mcp.servers.import': ['ui'] } : {}),
             'mcp.servers.create': ['ui'],
+            ...(options.mcpDeletePolicy === 'allowed' ? { 'mcp.servers.delete': ['ui'] } : {}),
             ...(!options.mcpUpdatePolicy ? { 'mcp.servers.update': ['ui'] } : {}),
         } }) };
     approvalArtifacts = createArtifactStoreBoundary({ ownerAccountId: () => accountId, encryptionMode: 'plain' });
@@ -433,7 +441,13 @@ async function renderEditorScreen(options: Readonly<{ activeAccount?: boolean; a
     try { expect(route.getCurrent()).toEqual(mcpServersModuleState.routerSearchParams); }
     finally { await route.unmount(); }
     const { McpServerEditorScreen } = await import('./McpServerEditorScreen');
-    const editor = React.createElement(McpServerEditorScreen);
+    const { ModalProvider } = await import('@/modal');
+    const editor = options.machineDifferenceModal
+        ? <ModalProvider><McpServerEditorScreen /></ModalProvider>
+        : React.createElement(McpServerEditorScreen);
+    const scopedEditor = options.observeDraftTitle
+        ? <CollectionDraftTitleScope>{editor}<CollectionDraftTitleObservation /></CollectionDraftTitleScope>
+        : editor;
     const screen = await renderScreen(options.hosted ? <DestinationInstanceHost
         tabId="mcp-editor" ref={{ kind: 'settings', params: { pageId: 'mcp', serverId: 'server-1' } }}
         pathname="/settings/mcp/servers/server-1" focused visible navigation={{
@@ -441,7 +455,7 @@ async function renderEditorScreen(options: Readonly<{ activeAccount?: boolean; a
             pushRetainingCurrent: retainedApprovalNavigationSpy,
             replace: routerReplaceSpy,
             back: routerBackSpy,
-        }}>{editor}</DestinationInstanceHost> : editor);
+        }}>{scopedEditor}</DestinationInstanceHost> : scopedEditor);
     await act(async () => { await refreshMcpServerCatalog(accountScope!); });
     return screen;
 }
@@ -492,6 +506,30 @@ async function leaveConfig(screen: Awaited<ReturnType<typeof renderEditorScreen>
 }
 
 describe('McpServerEditorScreen', () => {
+    it('saves Session folder from the real machine difference modal into the catalog', async () => {
+        liveMcpSettings = { v: 1, strictMode: false, servers: [{ id: 'server-1', name: 'hard-drives', transport: 'stdio',
+            stdio: { command: 'echo', args: [], cwd: { t: 'path', path: '/base-folder' } }, env: {}, createdAt: 1, updatedAt: 1,
+            configOverrides: [{ target: { t: 'machine', machineId: 'machine-1' }, stdio: { cwd: { t: 'path', path: '/machine-folder' } } }],
+        }], bindings: [] };
+        const screen = await renderEditorScreen({ machineDifferenceModal: true });
+        await act(async () => {
+            const disclosure = screen.findHostByTestId('mcp.server.differences.toggle')!;
+            pressTestInstance(disclosure.findAll(node => typeof node.props.onPress === 'function')[0]);
+        });
+        await act(async () => { screen.pressByTestId('mcp.server.differences.row.0'); });
+        const folder = screen.findAllByTestId('mcp.server.config.folder')
+            .filter(node => typeof node.props.onSelect === 'function' && node.props.selectedId === 'path').pop();
+        expect(folder).toBeDefined();
+        // The modal's picker clears cwd for Session folder; Save must encode that as an explicit override.
+        await act(async () => { folder!.props.onSelect('session'); });
+        await act(async () => { screen.pressByTestId('mcp.server.differences.save'); });
+        await vi.waitFor(() => expect(rowMutationRequests).toHaveLength(1));
+        expect(rowMutationRequests[0]?.content).toMatchObject({ t: 'plain', v: { servers: [{
+            stdio: { cwd: { t: 'path', path: '/base-folder' } },
+            configOverrides: [{ target: { t: 'machine', machineId: 'machine-1' }, stdio: { cwd: { t: 'session' } } }],
+        }], bindings: [] } });
+        expect(screen.findAllByTestId('mcp.server.differences.save')).toHaveLength(0);
+    });
     it('saves a saved server\'s Configuration when focus leaves a value, keeping its machine differences and reach rules', async () => {
         const configOverrides = [{ target: { t: 'machine', machineId: 'machine-1' }, stdio: { command: 'machine-command' } }];
         const bindings = [{ id: 'binding-1', serverId: 'server-1', target: { t: 'allMachines' }, enabled: false,
@@ -611,6 +649,234 @@ describe('McpServerEditorScreen', () => {
         expect(modalAlertSpy).not.toHaveBeenCalled();
     });
 
+    it('rebases an open dirty configuration over an observed Test snapshot without losing either change', async () => {
+        const screen = await renderEditorScreen();
+        await typeConfig(screen, 'mcp.server.editor.args.item.0', 'local-argument');
+        await typeConfig(screen, 'mcp.server.editor.command', 'local-command');
+        const current = McpServersSettingsV1Schema.parse(liveMcpSettings);
+        const toolsSnapshot = { checkedAt: 10, machineId: 'machine-1', tools: [{ name: 'read', tokens: 12 }] };
+        liveMcpSettings = { ...current, servers: current.servers.map(server => ({ ...server, toolsSnapshot, updatedAt: 10 })) };
+        catalogRevision = 4;
+        await act(async () => { await refreshMcpServerCatalog(accountScope!); });
+        expect(configField(screen, 'mcp.server.editor.command').props.value).toBe('local-command');
+        await leaveConfig(screen, 'mcp.server.editor.command');
+        await vi.waitFor(() => expect(rowMutationRequests).toHaveLength(1));
+        expect(rowMutationRequests[0]?.expectedRevision).toBe(4);
+        expect(rowMutationRequests[0]?.content).toMatchObject({ t: 'plain', v: { servers: [{
+            stdio: { command: 'local-command', args: ['local-argument'] }, toolsSnapshot,
+        }] } });
+        expect(modalAlertSpy).not.toHaveBeenCalled();
+    });
+
+    it('saves the rebased entry when a catalog publication and blur share an effect flush', async () => {
+        const screen = await renderEditorScreen();
+        const { McpServerDetailPage } = await import('./detail/McpServerDetailPage');
+        const { applyMcpServerCatalogSnapshot } = await import('@/sync/store/settings/mcpServerCatalogSnapshot');
+        const { McpServerCatalogV1Schema } = await import('@happier-dev/protocol/mcp/servers/serverRowsV1');
+        const current = McpServersSettingsV1Schema.parse(liveMcpSettings);
+        const toolsSnapshot = { checkedAt: 10, machineId: 'machine-1', tools: [{ name: 'read', tokens: 12 }] };
+        const { strictMode: _strictMode, ...catalog } = current;
+        const next = McpServerCatalogV1Schema.parse({ ...catalog,
+            servers: catalog.servers.map(server => ({ ...server, toolsSnapshot, updatedAt: 10 })) });
+        liveMcpSettings = { ...next, strictMode: false };
+        catalogRevision = 4;
+        // Publish through the real subscription owner in the same React turn as the committed field intent.
+        await act(async () => {
+            applyMcpServerCatalogSnapshot(accountScope!, { status: 'ready', authority: 'active', revision: 4,
+                catalog: next, diagnostics: [] }, true);
+            const detail = screen.findByType(McpServerDetailPage);
+            detail.props.onChangeServer((server: (typeof next.servers)[number]) => ({ ...server,
+                stdio: { ...server.stdio!, command: 'same-turn-command' } }));
+            detail.props.onCommitConfiguration();
+        });
+        await vi.waitFor(() => expect(rowMutationRequests).toHaveLength(1));
+        expect(rowMutationRequests[0]?.expectedRevision).toBe(4);
+        expect(rowMutationRequests[0]?.content).toMatchObject({ t: 'plain', v: { servers: [{
+            stdio: { command: 'same-turn-command' }, toolsSnapshot,
+        }] } });
+    });
+
+    it('preserves a real concurrent edit for Review and saves only after the current version is reviewed', async () => {
+        const screen = await renderEditorScreen();
+        const { McpServerDetailPage } = await import('./detail/McpServerDetailPage');
+        await typeConfig(screen, 'mcp.server.editor.command', 'local-command');
+        const current = McpServersSettingsV1Schema.parse(liveMcpSettings);
+        liveMcpSettings = { ...current, servers: current.servers.map(server => ({ ...server,
+            stdio: { ...server.stdio!, command: 'remote-command', args: ['remote-argument'] }, updatedAt: 10 })) };
+        catalogRevision = 4;
+        await act(async () => { await refreshMcpServerCatalog(accountScope!); });
+        await leaveConfig(screen, 'mcp.server.editor.command');
+        await flushHookEffects();
+        expect(rowMutationRequests).toHaveLength(0);
+        expect(modalAlertSpy).not.toHaveBeenCalled();
+        const conflict = screen.findByType(McpServerDetailPage).props.configurationConflict;
+        expect(conflict).toMatchObject({ phase: 'detected', currentServer: { stdio: { command: 'remote-command' } } });
+        expect(configField(screen, 'mcp.server.editor.command').props.value).toBe('local-command');
+        const beforeReview = McpServersSettingsV1Schema.parse(liveMcpSettings);
+        liveMcpSettings = { ...beforeReview, servers: beforeReview.servers.map(server => ({ ...server,
+            env: { REGION: { t: 'literal', v: 'eu' } }, updatedAt: 11 })) };
+        catalogRevision = 5;
+        await act(async () => { await conflict.onReview(); });
+        expect(screen.findByType(McpServerDetailPage).props.configurationConflict.phase).toBe('reviewing');
+        await leaveConfig(screen, 'mcp.server.editor.command');
+        await vi.waitFor(() => expect(rowMutationRequests).toHaveLength(1));
+        expect(rowMutationRequests[0]?.expectedRevision).toBe(5);
+        expect(rowMutationRequests[0]?.content).toMatchObject({ t: 'plain', v: { servers: [{
+            stdio: { command: 'local-command', args: ['remote-argument'] },
+            env: { REGION: { t: 'literal', v: 'eu' } },
+        }] } });
+    });
+
+    async function openConcurrentReview() {
+        const screen = await renderEditorScreen();
+        await typeConfig(screen, 'mcp.server.editor.command', 'local-command');
+        const current = McpServersSettingsV1Schema.parse(liveMcpSettings);
+        liveMcpSettings = { ...current, servers: current.servers.map(server => ({ ...server,
+            stdio: { ...server.stdio!, command: 'remote-command' }, updatedAt: 10 })) };
+        catalogRevision = 4;
+        await act(async () => { await refreshMcpServerCatalog(accountScope!); });
+        await leaveConfig(screen, 'mcp.server.editor.command');
+        await flushHookEffects();
+        return screen;
+    }
+
+    it('shows Changed elsewhere · Review on the page, lays both versions side by side, and Keep mine saves the open one', async () => {
+        const screen = await openConcurrentReview();
+        expect(screen.findByTestId('mcp.server.conflict.line')).not.toBeNull();
+        expect(screen.findByTestId('mcp.server.conflict.review')).toBeNull();
+        await act(async () => { screen.pressByTestId('mcp.server.conflict.line-action'); });
+        await vi.waitFor(() => expect(screen.findByTestId('mcp.server.conflict.field.command')).not.toBeNull(), { timeout: 5000 });
+        const review = screen.getTextContent();
+        expect(review).toContain('remote-command');
+        expect(review).toContain('local-command');
+        expect(rowMutationRequests).toHaveLength(0);
+        await act(async () => { screen.pressByTestId('mcp.server.conflict.keepMine'); });
+        await vi.waitFor(() => expect(rowMutationRequests).toHaveLength(1));
+        expect(rowMutationRequests[0]?.expectedRevision).toBe(4);
+        expect(rowMutationRequests[0]?.content).toMatchObject({ t: 'plain', v: { servers: [{ stdio: { command: 'local-command' } }] } });
+        await vi.waitFor(() => expect(screen.findByTestId('mcp.server.conflict')).toBeNull());
+        expect(modalAlertSpy).not.toHaveBeenCalled();
+    });
+
+    it('Use current drops the open edit without writing anything', async () => {
+        const screen = await openConcurrentReview();
+        await act(async () => { screen.pressByTestId('mcp.server.conflict.line-action'); });
+        await vi.waitFor(() => expect(screen.findByTestId('mcp.server.conflict.useCurrent')).not.toBeNull(), { timeout: 5000 });
+        await act(async () => { screen.pressByTestId('mcp.server.conflict.useCurrent'); });
+        await vi.waitFor(() => expect(screen.findByTestId('mcp.server.conflict')).toBeNull());
+        expect(configField(screen, 'mcp.server.editor.command').props.value).toBe('remote-command');
+        expect(rowMutationRequests).toHaveLength(0);
+        expect(navigationPreventRemove.enabled).toBe(false);
+    });
+
+    it('says the server was removed elsewhere, and discarding the edit closes the page without recreating it', async () => {
+        const screen = await renderEditorScreen();
+        await typeConfig(screen, 'mcp.server.editor.command', 'retained-command');
+        liveMcpSettings = { v: 1, strictMode: false, servers: [], bindings: [] };
+        catalogRevision = 4;
+        await act(async () => { await refreshMcpServerCatalog(accountScope!); });
+        await act(async () => { screen.pressByTestId('mcp.server.conflict.line-action'); });
+        await vi.waitFor(() => expect(screen.findByTestId('mcp.server.conflict.removed')).not.toBeNull(), { timeout: 5000 });
+        expect(screen.findByTestId('mcp.server.conflict.keepMine')).toBeNull();
+        await act(async () => { screen.pressByTestId('mcp.server.conflict.discard'); });
+        expect(routerReplaceSpy).toHaveBeenCalledOnce();
+        expect(rowMutationRequests).toHaveLength(0);
+        expect(McpServersSettingsV1Schema.parse(liveMcpSettings).servers).toEqual([]);
+    });
+
+    it('turns an unobserved CAS refusal into the same Review continuation rather than a raw alert', async () => {
+        const screen = await renderEditorScreen();
+        const { McpServerDetailPage } = await import('./detail/McpServerDetailPage');
+        await typeConfig(screen, 'mcp.server.editor.command', 'local-command');
+        rowMutationOutcome = 'conflict';
+        await leaveConfig(screen, 'mcp.server.editor.command');
+        await vi.waitFor(() => expect(screen.findByType(McpServerDetailPage).props.configurationConflict).toBeTruthy());
+        expect(screen.findByType(McpServerDetailPage).props.configurationConflict.phase).toBe('detected');
+        expect(modalAlertSpy).not.toHaveBeenCalled();
+        expect(configField(screen, 'mcp.server.editor.command').props.value).toBe('local-command');
+    });
+
+    it('removes a machine difference after an observed Test snapshot while preserving the snapshot and reach', async () => {
+        const initial = McpServersSettingsV1Schema.parse(liveMcpSettings);
+        liveMcpSettings = { ...initial, servers: initial.servers.map(server => ({ ...server,
+            configOverrides: [{ target: { t: 'machine', machineId: 'machine-1' }, stdio: { cwd: { t: 'session' } } }],
+        })) };
+        const screen = await renderEditorScreen();
+        const current = McpServersSettingsV1Schema.parse(liveMcpSettings);
+        const toolsSnapshot = { checkedAt: 10, machineId: 'machine-1', tools: [{ name: 'read', tokens: 12 }] };
+        liveMcpSettings = { ...current, servers: current.servers.map(server => ({ ...server, toolsSnapshot, updatedAt: 10 })) };
+        catalogRevision = 4;
+        await act(async () => { await refreshMcpServerCatalog(accountScope!); });
+        await act(async () => {
+            const disclosure = screen.findHostByTestId('mcp.server.differences.toggle')!;
+            pressTestInstance(disclosure.findAll(node => typeof node.props.onPress === 'function')[0]);
+        });
+        await act(async () => { screen.pressByTestId('mcp.server.differences.row.0.remove'); });
+        await vi.waitFor(() => expect(rowMutationRequests).toHaveLength(1));
+        expect(rowMutationRequests[0]?.expectedRevision).toBe(4);
+        expect(rowMutationRequests[0]?.content).toMatchObject({ t: 'plain', v: {
+            servers: [{ configOverrides: [], toolsSnapshot }], bindings: initial.bindings,
+        } });
+        expect(modalAlertSpy).not.toHaveBeenCalled();
+    });
+
+    it('keeps a server after a delete CAS conflict and offers the same Review continuation', async () => {
+        const screen = await renderEditorScreen();
+        const { McpServerDetailPage } = await import('./detail/McpServerDetailPage');
+        rowMutationOutcome = 'conflict';
+        await act(async () => { screen.pressByTestId('mcp.server.editor.remove'); });
+        await vi.waitFor(() => expect(screen.findByType(McpServerDetailPage).props.configurationConflict).toBeTruthy());
+        expect(McpServersSettingsV1Schema.parse(liveMcpSettings).servers.map(server => server.id)).toEqual(['server-1']);
+        expect(routerReplaceSpy).not.toHaveBeenCalled();
+        expect(modalAlertSpy).not.toHaveBeenCalled();
+    });
+
+    it('keeps typing made during its own pending save without treating the acknowledgement as a concurrent edit', async () => {
+        const screen = await renderEditorScreen();
+        const { McpServerDetailPage } = await import('./detail/McpServerDetailPage');
+        rowMutationGate = new Promise(resolve => { releaseRowMutation = resolve; });
+        await typeConfig(screen, 'mcp.server.editor.command', 'first-command');
+        await leaveConfig(screen, 'mcp.server.editor.command');
+        await vi.waitFor(() => expect(rowMutationRequests).toHaveLength(1));
+        await typeConfig(screen, 'mcp.server.editor.command', 'later-command');
+        await act(async () => { releaseRowMutation?.(); });
+        await vi.waitFor(() => expect(catalogRevision).toBe(4));
+        await act(async () => { await refreshMcpServerCatalog(accountScope!); });
+        expect(configField(screen, 'mcp.server.editor.command').props.value).toBe('later-command');
+        expect(screen.findByType(McpServerDetailPage).props.configurationConflict).toBeNull();
+        await leaveConfig(screen, 'mcp.server.editor.command');
+        await vi.waitFor(() => expect(catalogRevision).toBe(5));
+        expect(McpServersSettingsV1Schema.parse(liveMcpSettings).servers[0]?.stdio?.command).toBe('later-command');
+        expect(modalAlertSpy).not.toHaveBeenCalled();
+    });
+
+    it('leaves a saved editor pristine when a typed field returns to its acknowledged value', async () => {
+        const screen = await renderEditorScreen();
+        await typeConfig(screen, 'mcp.server.editor.command', 'temporary-command');
+        await typeConfig(screen, 'mcp.server.editor.command', 'node');
+        await leaveConfig(screen, 'mcp.server.editor.command');
+        expect(rowMutationRequests).toHaveLength(0);
+        expect(navigationPreventRemove.enabled).toBe(false);
+    });
+
+    it('retains an edited server after another writer deletes it and never recreates it on Review', async () => {
+        const screen = await renderEditorScreen();
+        const { McpServerDetailPage } = await import('./detail/McpServerDetailPage');
+        await typeConfig(screen, 'mcp.server.editor.command', 'retained-command');
+        liveMcpSettings = { v: 1, strictMode: false, servers: [], bindings: [] };
+        catalogRevision = 4;
+        await act(async () => { await refreshMcpServerCatalog(accountScope!); });
+        expect(configField(screen, 'mcp.server.editor.command')).toBeDefined();
+        expect(configField(screen, 'mcp.server.editor.command').props.value).toBe('retained-command');
+        const conflict = screen.findByType(McpServerDetailPage).props.configurationConflict;
+        expect(conflict).toMatchObject({ phase: 'detected', currentServer: null });
+        await act(async () => { await conflict.onReview(); });
+        await leaveConfig(screen, 'mcp.server.editor.command');
+        expect(rowMutationRequests).toHaveLength(0);
+        expect(McpServersSettingsV1Schema.parse(liveMcpSettings).servers).toEqual([]);
+        expect(modalAlertSpy).not.toHaveBeenCalled();
+    });
+
     it('prompts to discard an unsaved new server when navigating away via the navigation back action', async () => {
         // A saved server saves on blur; only a server being added holds unsaved edits.
         mcpServersModuleState.routerSearchParams = {};
@@ -666,8 +932,17 @@ describe('McpServerEditorScreen', () => {
         } });
     });
 
-    it('falls back to the MCP settings screen after delete when there is no back stack entry', async () => {
-        const screen = await renderEditorScreen();
+    it('uses the Action Ask policy without a caller dialog or an unapproved catalog delete', async () => {
+        const screen = await renderEditorScreen({ mcpDeletePolicy: 'ask' });
+        await act(async () => { screen.pressByTestId('mcp.server.editor.remove'); });
+        await vi.waitFor(() => expect(approvalArtifacts!.list()).toHaveLength(1));
+        expect(rowMutationRequests).toHaveLength(0);
+        expect(modalConfirmSpy).not.toHaveBeenCalled();
+        expect(routerReplaceSpy).not.toHaveBeenCalled();
+    });
+
+    it('honors Allowed and falls back to the MCP settings screen after delete without a dialog', async () => {
+        const screen = await renderEditorScreen({ mcpDeletePolicy: 'allowed' });
 
         // Remove is the page's way out, at its foot.
         await act(async () => {
@@ -681,8 +956,36 @@ describe('McpServerEditorScreen', () => {
             v: 1, servers: [], bindings: [],
         } });
         expect(approvalArtifacts!.list()).toHaveLength(0);
-        expect(modalConfirmSpy).toHaveBeenCalledTimes(1);
+        expect(modalConfirmSpy).not.toHaveBeenCalled();
         expect(routerBackSpy).not.toHaveBeenCalled();
+    });
+
+    it('duplicates the saved server from the header menu without a confirmation and opens the new row', async () => {
+        const screen = await renderEditorScreen();
+        // Another device saves after this screen renders. Duplicate must read
+        // the current source and revision at the Account Action owner.
+        const current = McpServersSettingsV1Schema.parse(liveMcpSettings);
+        liveMcpSettings = { ...current, servers: current.servers.map(server => ({ ...server,
+            stdio: { command: 'current-command', args: ['current-argument'] } })) };
+        catalogRevision += 1;
+        const { PageHeaderMenu } = await import('@/components/ui/layout/PageHeaderEntityParts');
+        const menu = () => screen.findByType(PageHeaderMenu);
+        expect(menu().props.actions.map((action: { id: string }) => action.id)).toContain('duplicate');
+        await act(async () => {
+            await menu().props.actions.find((action: { id: string }) => action.id === 'duplicate').onSelect();
+            await flushHookEffects({ cycles: 1, turns: 1 });
+        });
+
+        await vi.waitFor(() => expect(rowMutationRequests).toHaveLength(1));
+        const written = (rowMutationRequests[0]!.content as { v: { servers: { id: string; name: string }[]; bindings: unknown[] } }).v;
+        expect(written.servers.map((server) => server.name)).toEqual(['hard-drives', 'hard-drives_copy']);
+        expect(written.servers[1]).toMatchObject({ stdio: { command: 'current-command', args: ['current-argument'] } });
+        const copyId = written.servers[1]!.id;
+        expect(copyId).not.toBe('server-1');
+        // The copy gets the default reach, never the source's rules.
+        expect(written.bindings).not.toContainEqual(expect.objectContaining({ serverId: copyId, target: { t: 'machine', machineId: 'machine-1' } }));
+        await vi.waitFor(() => expect(routerPushSpy).toHaveBeenCalledWith(mcpServerRoute(copyId)));
+        expect(modalConfirmSpy).not.toHaveBeenCalled();
     });
 
     it('confirms deleting the saved server by the name the collection shows, not an unsaved edit', async () => {
@@ -717,38 +1020,46 @@ describe('McpServerEditorScreen', () => {
                 await flushHookEffects({ cycles: 1, turns: 1 });
             });
 
-            expect(modalConfirmSpy).toHaveBeenCalledWith(
-                'settings.mcpServersDeleteTitle',
-                expect.stringContaining('GitHub tools'),
-                expect.anything(),
-            );
-            expect(modalConfirmSpy.mock.calls.at(-1)?.[1]).not.toContain('github_renamed_unsaved');
+            await vi.waitFor(() => expect(modalConfirmSpy).toHaveBeenCalledTimes(1));
+            const presentation = modalConfirmSpy.mock.calls[0]?.slice(0, 2).join(' ');
+            expect(presentation).toContain('GitHub tools');
+            expect(presentation).not.toContain('github_renamed_unsaved');
+            expect(rowMutationRequests).toHaveLength(0);
+            expect(modalAlertSpy).not.toHaveBeenCalled();
         } finally { translate.mockRestore(); }
+    });
+
+    it('renders the custom draft as the detail body in create mode: one name, Where it\'s on and Configuration, nothing to test before it exists', async () => {
+        mcpServersModuleState.routerSearchParams = {};
+        liveMcpSettings = { v: 1, strictMode: false, servers: [], bindings: [] };
+
+        const screen = await renderEditorScreen();
+
+        expect(screen.findByTestId('mcp.server.editor.name')).not.toBeNull();
+        expect(screen.findByTestId('mcp.server.config')).not.toBeNull();
+        expect(screen.findAllByProps({ kind: 'mcp_server', presentation: 'section' }).length).toBeGreaterThan(0);
+        expect(screen.findByTestId('mcp.server.editor.title')).toBeNull();
+        expect(screen.findByTestId('mcp.server.test.run')).toBeNull();
+        expect(screen.findByTestId('settings.mcpServers.administration.target')).toBeNull();
+        expect(screen.findAllByProps({ testIDPrefix: 'settings.mcpServers.administration.target' })).toHaveLength(0);
+        expect(screen.find((node) => node.props?.testID === 'mcp.server.editor.header' && typeof node.props?.primaryAction === 'object')
+            .props.primaryAction.testID).toBe('mcp.server.editor.save');
     });
 
     it('titles a new server with the placeholder until the user names it', async () => {
         mcpServersModuleState.routerSearchParams = {};
         liveMcpSettings = { v: 1, strictMode: false, servers: [], bindings: [] };
-        const { mcpServerDraftTitle } = await import('./collection/mcpServerCollectionModel');
-        const published: string[] = [];
-        const originalPublish = mcpServerDraftTitle.publish;
-        const publishSpy = vi.spyOn(mcpServerDraftTitle, 'publish').mockImplementation((title) => {
-            published.push(title);
-            originalPublish(title);
-        });
-
-        const screen = await renderEditorScreen();
+        const screen = await renderEditorScreen({ observeDraftTitle: true });
         expect(screen.find((node) => node.props?.testID === 'mcp.server.editor.header' && typeof node.props?.title === 'string').props.title)
             .toBe('mcpSettings.newServer');
-        expect(published.at(-1)).toBe('');
+        expect(screen.findByTestId('mcp.server.editor.published-title')?.props.title).toBe('');
 
         await act(async () => {
             screen.changeTextByTestId('mcp.server.editor.name', 'playwright');
         });
         expect(screen.find((node) => node.props?.testID === 'mcp.server.editor.header' && typeof node.props?.title === 'string').props.title)
             .toBe('playwright');
-        expect(published.at(-1)).toBe('playwright');
-        publishSpy.mockRestore();
+        expect(screen.findByTestId('mcp.server.editor.published-title')?.props.title).toBe('playwright');
     });
 
     it('writes admitted known fields canonically without persisting unsupported catalog extras', async () => {
@@ -817,7 +1128,7 @@ describe('McpServerEditorScreen', () => {
             && typeof node.props.onSelectTab === 'function').props.activeTabId).toBe('http');
     });
 
-    it('keeps a new machine rule local until the server is saved, then persists its selected scope', async () => {
+    it('keeps the chosen place local until the server is saved, then creates the server on it', async () => {
         mcpServersModuleState.routerSearchParams = {};
         liveMcpSettings = {
             v: 1,
@@ -828,29 +1139,9 @@ describe('McpServerEditorScreen', () => {
 
         const screen = await renderEditorScreen();
 
-        expect(screen.findAllByProps({ accessibilityLabel: 'settings.mcpServersBindingEnabled' })).toHaveLength(0);
-
-        const addBindingExpander = screen.find((node) => node.props.title === 'settings.mcpServersAddApplyRule'
-            && typeof node.props.onOpenChange === 'function');
-        expect(addBindingExpander).toBeTruthy();
-        expect(addBindingExpander.props.isOpen).toBe(false);
-
         await act(async () => {
-            addBindingExpander.props.onOpenChange?.(true);
-        });
-
-        const addBindingExpanderAfterOpen = screen.find((node) => node.props.title === 'settings.mcpServersAddApplyRule'
-            && typeof node.props.onOpenChange === 'function');
-        expect(screen.findAllByProps({ accessibilityLabel: 'settings.mcpServersBindingEnabled' })).toHaveLength(0);
-        expect(addBindingExpanderAfterOpen?.props.isOpen).toBe(true);
-        expect(rowMutationRequests).toHaveLength(0);
-        await act(async () => { findBindingTargetDropdown(screen).props.onSelect('machine'); });
-        await act(async () => {
-            screen.find(node => node.props.itemTrigger?.title === 'settings.mcpServersBindingMachine').props.onSelect('machine-1');
-        });
-        await act(async () => {
-            screen.find(node => node.props.title === 'settings.mcpServersAddApplyRule'
-                && typeof node.props.onSave === 'function').props.onSave();
+            await screen.find((node) => node.props.kind === 'mcp_server' && typeof node.props.onChange === 'function')
+                .props.onChange({ kind: 'replace', rules: [{ target: { t: 'machine', machineId: 'machine-1' }, enabled: true }] });
         });
         expect(rowMutationRequests).toHaveLength(0);
         await typeConfig(screen, 'mcp.server.editor.command', 'machine-server');
@@ -863,34 +1154,37 @@ describe('McpServerEditorScreen', () => {
         } });
     });
 
-    it('refuses a machine rule without a machine and preserves the everywhere draft', async () => {
+    it('creates a custom server with a variable selected from the real Saved Secret picker', async () => {
         mcpServersModuleState.routerSearchParams = {};
-        liveMachines = [];
-        liveMcpSettings = {
-            v: 1,
-            strictMode: false,
-            servers: [],
-            bindings: [],
-        };
-
-        const screen = await renderEditorScreen();
-
+        liveMcpSettings = { v: 1, strictMode: false, servers: [], bindings: [] };
+        const screen = await renderEditorScreen({ machineDifferenceModal: true });
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const { PERSONAL_SAVED_SECRET_ACTION_OUTPUT_SCHEMAS_V1 } = await import('@happier-dev/protocol/account/settings/personalSavedSecretActionsV1');
+        const created = await createDefaultActionExecutor().execute('secrets.create', {
+            name: 'Notebook access', value: 'synthetic-private-value',
+        }, { surface: 'ui', authority: 'present_user', serverId: accountScope!.serverId, expectedAccountId: accountScope!.accountId });
+        expect(created.ok).toBe(true);
+        if (!created.ok) throw new Error(created.errorCode);
+        const { secretRef } = PERSONAL_SAVED_SECRET_ACTION_OUTPUT_SCHEMAS_V1['secrets.create'].parse(created.result);
+        const { refreshSavedSecretCatalog } = await import('@/sync/engine/settings/savedSecretCatalogEngine');
+        await act(async () => { await refreshSavedSecretCatalog(accountScope!); });
+        await typeConfig(screen, 'mcp.server.editor.command', 'echo');
+        await leaveConfig(screen, 'mcp.server.editor.command');
+        await screen.pressByTestIdAsync('mcp.server.env.add');
+        await act(async () => { screen.changeTextByTestId('mcp.server.env.row.new.name', 'API_KEY'); });
+        const { ToolbarSelect } = await import('@/components/ui/forms/ToolbarSelect');
         await act(async () => {
-            screen.find((node) => node.props.title === 'settings.mcpServersAddApplyRule'
-                && typeof node.props.onOpenChange === 'function').props.onOpenChange(true);
+            screen.findAllByType(ToolbarSelect).find(node => node.props.testID === 'mcp.server.env.row.new.type')!.props.onSelect('savedSecret');
         });
-
-        expect(screen.findAllByProps({ title: 'settings.mcpServersBindingMachine' })).toHaveLength(0);
-        expect(findTestInstanceByTypeContainingText(screen, 'Text', 'settings.mcpServersBindingTargetAllMachines')).toBeTruthy();
-
-        await act(async () => {
-            findBindingTargetDropdown(screen).props.onSelect?.('machine');
-        });
-
-        expect(modalAlertSpy).toHaveBeenCalledWith('common.error', 'settings.mcpServersNoMachineSelected');
-        expect(findBindingTargetDropdown(screen).props.selectedId).toBe('allMachines');
-        expect(screen.findAllByProps({ title: 'settings.mcpServersBindingMachine' })).toHaveLength(0);
-        expect(screen.findAllByProps({ accessibilityLabel: 'settings.mcpServersBindingEnabled' })).toHaveLength(0);
-        expect(rowMutationRequests).toHaveLength(0);
+        await vi.waitFor(() => expect(screen.findByTestId(`saved-secret:${secretRef}`)).not.toBeNull());
+        await screen.pressByTestIdAsync(`saved-secret:${secretRef}`);
+        await screen.pressByTestIdAsync('mcp.server.editor.save');
+        await vi.waitFor(() => expect(rowMutationRequests).toHaveLength(1));
+        const persisted = McpServersSettingsV1Schema.parse(liveMcpSettings);
+        expect(persisted.servers[0]?.env.API_KEY).toEqual({ t: 'savedSecret', secretId: secretRef });
+        expect(JSON.stringify(rowMutationRequests).includes('synthetic-private-value')).toBe(false);
+        expect(rowMutationRequests[0]?.savedSecretRevisions).toHaveLength(1);
+        expect(routerReplaceSpy).toHaveBeenCalledWith(mcpServerRoute(persisted.servers[0]!.id));
+        expect(modalAlertSpy).not.toHaveBeenCalled();
     });
 });

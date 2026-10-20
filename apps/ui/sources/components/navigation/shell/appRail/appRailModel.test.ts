@@ -170,6 +170,14 @@ describe('app rail model', () => {
         expect(resolveAppRailEntryColumn(rail.plugins.find((entry) => entry.id === 'plugin:acme.notes:notes')!)).toBeNull();
     });
 
+    it('reserves and peeks no column for an unavailable plugin page, whose column renderer mounts nothing', () => {
+        const disabled = { ...page('triage', undefined, undefined, { columnPlacement: {} as PluginAppPage['placement'] }), disabledReason: 'plugin_disabled' } as PluginAppPage;
+        const destinations = catalog([disabled]);
+        expect(resolveAppShellLocation(destinations, '/plugins/acme.triage/triage').column).toEqual({ kind: 'none' });
+        const entry = buildAppRailEntries(destinations).plugins.find((candidate) => candidate.id === 'plugin:acme.triage:triage');
+        expect(entry && resolveAppRailEntryColumn(entry)).toBeFalsy();
+    });
+
     it('never places a plugin in the Settings column: settings contributions are settings pages', () => {
         const destinations = catalog([page('prefs', { kind: 'column', column: 'settings' })]);
         expect(destinations.find((destination) => destination.id === 'plugin:acme.prefs:prefs')?.placement)

@@ -6,6 +6,9 @@ import { composeUsageRecap } from './composeUsageRecap.js';
 import { resolveUsageHowYouWork } from './resolveUsageHowYouWork.js';
 import { UsageRecapComposeInputSchema, UsageRecapComposeResultSchema, USAGE_RECAP_STYLES, USAGE_RECAP_FORMATS } from './usageRecap.js';
 import { ScmPullRequestWorkEvidenceSchema } from '../scm/pullRequests.js';
+import { projectUsagePageCost } from './usageCostFacts.js';
+import { buildUsageFileResult } from './usageExport.js';
+import { decodeBase64 } from '../crypto/base64.js';
 
 const query = normalizeUsageQuery({ period: { startMs: 1000, endMs: 9000 }, timeZoneOffsetMinutes: 120,
   session: 'private-session', projects: ['private-project'], includeInsights: true, includeActivity: true });
@@ -21,6 +24,66 @@ const response = UsageAnalyticsQueryResponseSchema.parse({
 const snapshot = resolveUsagePageAggregation({ queries: [query], accounting: [{ query, value: response, status: 'available', asOfMs: 9500 }] }).results[0]!;
 
 describe('private recap composition', () => {
+  it('keeps public Agent identity when private names are off, while model labels stay private', () => {
+    const agent = { ...response.breakdowns!.model![0]!, key: 'claude', label: 'Claude' };
+    const result = composeUsageRecap({ input: UsageRecapComposeInputSchema.parse({ query, selectedFields: ['agentMix', 'modelMix'] }),
+      snapshot: { ...snapshot, accounting: { ...response, breakdowns: { ...response.breakdowns, agent: [agent] } } } });
+    expect(result).toMatchObject({ kind: 'composed', facts: { agentMix: [{ agentId: 'claude' }], modelMix: [{ tokens: 120 }] } });
+    expect(JSON.stringify(result)).not.toContain('Private Model');
+    expect(UsageRecapComposeResultSchema.safeParse(result).success).toBe(true);
+  });
+  it('uses the query cost owner and merges comparison facts across private pricing sources', () => {
+    const fact = { kind: 'reported' as const, amountUsd: 1.5, currency: 'USD', tokens: response.totals.tokens,
+      eventCount: 1, source: 'private-first', asOfMs: 9500, complete: true };
+    const accounting = { ...response, costFacts: [fact, { ...fact, amountUsd: 2, source: 'private-second' }] };
+    const input = UsageRecapComposeInputSchema.parse({ query, selectedFields: ['dollars'] });
+    const result = composeUsageRecap({ input, snapshot: { ...snapshot, accounting } });
+    expect(result.kind).toBe('composed');
+    if (result.kind !== 'composed') return;
+    expect(result.facts.dollars).toMatchObject({ selected: {
+      kind: 'reported', currency: 'USD', amountUsd: projectUsagePageCost(accounting, 'auto').amountUsd,
+    }, facts: [{ kind: 'reported', amountUsd: 3.5, eventCount: 2 }] });
+    expect(result.facts.dollars?.facts).toHaveLength(1);
+    expect(JSON.stringify(result)).not.toContain('private-first');
+    expect(UsageRecapComposeResultSchema.parse(result)).toEqual(result);
+  });
+  it('keeps unavailable scoped money unavailable even when raw whole-report facts are present', () => {
+    const accounting = { ...response, contributions: [], costPresentation: undefined,
+      costFacts: [{ kind: 'reported' as const, amountUsd: 3.5, currency: 'USD', tokens: response.totals.tokens,
+        eventCount: 1, source: 'whole-report', asOfMs: 9500, complete: false }] };
+    const result = composeUsageRecap({ input: UsageRecapComposeInputSchema.parse({ query, selectedFields: ['dollars'] }),
+      snapshot: { ...snapshot, accounting } });
+    expect(result).toMatchObject({ kind: 'composed', facts: { dollars: { selected: null } } });
+  });
+  it('retains selected query money when there are no raw comparison facts', () => {
+    const result = composeUsageRecap({ input: UsageRecapComposeInputSchema.parse({ query, selectedFields: ['dollars'] }), snapshot });
+    expect(result).toMatchObject({ kind: 'composed', facts: { dollars: {
+      selected: { kind: 'reported', currency: 'USD', amountUsd: 1.5 }, facts: [],
+    } } });
+  });
+  it('preserves the selected total through the query projection, recap and serialized export', () => {
+    const cost = { reportedUsd: 0, estimatedUsd: 1, apiEquivalentUsd: 0.0002,
+      currency: 'USD', costSource: 'pricing_estimate' as const, reportedTotalId: 'final' };
+    const accounting = UsageAnalyticsQueryResponseSchema.parse({ v: 1, totals: response.totals,
+      contributions: [
+        { id: 'inference', observedAtMs: 2000, sessionId: 'private-session', turnId: null, agentId: null,
+          modelId: null, machineId: null, projectKey: null, workspaceId: null, source: 'runtime', tokens: response.totals.tokens, cost },
+        { id: 'final', observedAtMs: 3000, sessionId: 'private-session', turnId: null, agentId: null,
+          modelId: null, machineId: null, projectKey: null, workspaceId: null, source: 'final',
+          tokens: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          cost: { reportedUsd: 0.12, estimatedUsd: 0, apiEquivalentUsd: 0, currency: 'USD',
+            costSource: 'provider_reported', reportedTotalContributionIds: ['inference'] } },
+      ] });
+    const shown = resolveUsagePageAggregation({ queries: [query], pricingOverrides: {},
+      accounting: [{ query, value: accounting, status: 'available' }] }).results[0]!;
+    const result = composeUsageRecap({ input: UsageRecapComposeInputSchema.parse({ query, selectedFields: ['dollars'] }), snapshot: shown });
+    expect(result).toMatchObject({ kind: 'composed', facts: { dollars: {
+      selected: { kind: 'reported', currency: 'USD', amountUsd: 0.12 },
+    } } });
+    const exported = buildUsageFileResult({ query, format: 'json', fields: ['costPresentation'] }, shown.accounting!, null);
+    expect(JSON.parse(new TextDecoder().decode(decodeBase64(exported.base64))).accounting.costPresentation.effectiveUsd)
+      .toBeCloseTo(0.12, 10);
+  });
   it('composes a relative selection using witnessed accounting bounds, never a new viewer clock', () => {
     const relative = normalizeUsageQuery({ ...query, period: { relative: '7days' } });
     const endMs = Date.parse('2026-10-11T20:30:00Z');
@@ -69,7 +132,7 @@ describe('private recap composition', () => {
     expect(Object.keys(result.facts)).toEqual(['modelMix', 'dollars']);
     expect(result.facts.modelMix?.[0]?.name).toBe('Private Model');
     const { source: _source, ...projected } = costFact;
-    expect(result.facts.dollars).toEqual({ basis: 'auto', facts: [projected] });
+    expect(result.facts.dollars).toEqual({ basis: 'auto', selected: { kind: 'reported', currency: 'USD', amountUsd: 1.5 }, facts: [projected] });
   });
 
   it('does not invent streak, night, parallel, work or coach highlights from accounting totals', () => {
@@ -226,11 +289,12 @@ describe('private recap composition', () => {
     const result = composeUsageRecap({ input, snapshot: costSnapshot });
     expect(result.kind).toBe('composed');
     if (result.kind !== 'composed') return;
-    expect(result.facts.dollars).toEqual({ basis: 'auto', facts: costFacts.map(({ source: _source, ...fact }) => fact) });
+    expect(result.facts.dollars).toEqual({ basis: 'auto', selected: null, facts: costFacts.map(({ source: _source, ...fact }) => fact) });
     expect(JSON.stringify(result)).not.toContain('private-native-source');
     expect(JSON.stringify(result)).not.toContain('private-unpriced-source');
     expect(JSON.stringify(result.facts.dollars)).not.toContain('reportedUsd');
-    const missing = composeUsageRecap({ input, snapshot });
+    const missing = composeUsageRecap({ input, snapshot: { ...snapshot, accounting: { ...response,
+      totals: { ...response.totals, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD', costSource: 'none' } } } } });
     expect(missing.kind === 'composed' && missing.facts.dollars).toBeUndefined();
     expect(missing.kind === 'composed' && missing.unavailableFields).toEqual(['dollars']);
   });

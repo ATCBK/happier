@@ -12,7 +12,7 @@ import type {
   AgentMcpToolPolicyPermissionObservation, AgentMcpToolPolicyCallObservation,
 } from '@happier-dev/plugin-sdk/testing';
 import { createAgentLaunchObserver } from '../../../../../../packages/plugin-sdk/src/testing/observeAgentLaunch';
-import type { AgentSessionRuntimeContext, AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { AgentAcpRuntimeOptions, AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { AgentRuntimeFactory } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { AgentContribution } from '@happier-dev/plugin-sdk/agents';
 import type { PluginAgentAcpNativeSessionMcpConfigV2 } from '@happier-dev/protocol';
@@ -22,8 +22,8 @@ import {
 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
 import { createMcpServerActionExecuteV1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
 import type { McpServerCatalogV1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
-import { parseMcpToolWireNameV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
-import { projectMcpServerMaterializationV1, resolveSessionCapabilitiesV1 } from '@happier-dev/protocol';
+import { parseMcpToolWireNameV1, ResolvedMcpToolIdentityV1Schema } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
+import { PluginAgentContributionV2Schema, projectMcpServerMaterializationV1, resolveSessionCapabilitiesV1 } from '@happier-dev/protocol';
 import { createGeminiAgentRuntime } from '../../../../../../packages/plugins/gemini/src/agent/runtime/factory';
 import { PLUGIN_MANIFEST } from '../../../../../../packages/plugins/gemini/src/manifest';
 import { writeAcpTestAgentScript } from '@/agent/acp/testkit/subprocessHarness';
@@ -32,11 +32,11 @@ import { ServerBoundPermissionRpcHandlerManager } from '@/agent/permissions/test
 import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
 import { createNativeAgentCurrentSessionUiServices } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionInteractions';
 import { createNativeAgentSessionPublications } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionPublications';
-import { createNativeAgentSessionWorkStateService } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionWorkState';
+import { createAcpSessionRuntimeContextFixture } from '@/agent/acp/testkit/runtimeContextFixture';
 import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
 import { materializeMcpServerConfigRecord } from '@/mcp/servers/materializeMcpServerConfigRecord';
 import { resolveNodeBackedMcpServerCommand } from '@/mcp/runtime/resolveNodeBackedMcpServerCommand';
-import { createPublicAcpSession } from '../runtime/publicSession/createPublicAcpSession';
+import { createPublicAcpExecutionRun, createPublicAcpSession, type PublicAcpComposerDependencies } from '../runtime/publicSession/createPublicAcpSession';
 import { isPrimaryAgentContributionDefinition, readAgentSessionCapabilities } from '@/plugins/projection/registry/agentContributionDefinition';
 
 const require = createRequire(import.meta.url);
@@ -218,6 +218,7 @@ export function createAcpMcpPolicyFixture(params: Readonly<{
   let nativeConfigFiles: string[] = [];
   let vendorEnvironment: Readonly<Record<string, string>> = {};
   let permissionObservationAbort = new AbortController();
+  const sessionDisposals: Array<() => Promise<void>> = [];
   const receipt = createServer(async (request, response) => {
     if (request.method !== 'POST' || request.url !== '/receipt') { response.statusCode = 404; response.end(); return; }
     let raw = ''; for await (const chunk of request) raw += String(chunk);
@@ -314,11 +315,17 @@ export function createAcpMcpPolicyFixture(params: Readonly<{
           if (!result.ok) throw new Error(JSON.stringify(result));
         }
         if (input.runtime) handlers.get(input.runtime)?.setPermissionMode(input.permissionMode);
-        if (input.runtime) await input.runtime.updateConfiguration(input.configuration);
+        if (input.runtime) {
+          if (!input.runtime.updateConfiguration) throw new Error('The MCP policy runtime cannot update configuration');
+          await input.runtime.updateConfiguration(input.configuration);
+        }
       },
       async dispose() { permissionObservationAbort.abort(); materialized?.cleanup(); materialized = undefined;
         try { if (receipt.listening) await new Promise<void>((resolve, reject) => receipt.close(error => error ? reject(error) : resolve())); }
-        finally { await params.vendor?.dispose(); } },
+        finally {
+          try { for (const dispose of sessionDisposals.splice(0)) await dispose(); }
+          finally { await params.vendor?.dispose(); }
+        } },
     },
     async openSession(request) {
       const signal = new AbortController().signal;
@@ -327,10 +334,17 @@ export function createAcpMcpPolicyFixture(params: Readonly<{
       session.rpcHandlerManager.registerHandler = (name, callback) => rpc.registerHandler(name, callback);
       const prompted = new Set<string>();
       const updateAgentState = session.updateAgentState.bind(session);
-      session.updateAgentState = updater => {
-        updateAgentState(updater);
+      session.updateAgentState = async updater => {
+        await updateAgentState(updater);
         for (const [id, pending] of Object.entries(session.__getAgentState().requests ?? {})) {
           if (prompted.has(id)) continue;
+          const identity = parseMcpToolWireNameV1(pending.tool, new Set(keys));
+          if (identity) {
+            const resolved = ResolvedMcpToolIdentityV1Schema.parse(pending.mcpTool);
+            assert.equal(resolved.server, identity.server);
+            assert.equal(resolved.tool, identity.tool);
+            assert.equal(resolved.item.serverId, catalog.servers.find(server => server.name === identity.server)!.id);
+          }
           prompted.add(id);
           // The authenticated client responds to a published request, not to a guessed
           // synchronous handler return. Automatic policy decisions publish no request.
@@ -344,7 +358,8 @@ export function createAcpMcpPolicyFixture(params: Readonly<{
       const handler = new ProviderEnforcedPermissionHandler(session, { logPrefix: '[ACP MCP contract]', getWorkspaceWrites: () => 'allow',
         getMcpToolContext: () => ({ catalog: { status: 'ready', authority: 'active', revision, diagnostics: [], catalog },
           mcpServerIdentities: Object.fromEntries(keys.map((key, index) => [key, { serverId: `item-${index}`, serverTitle: 'Team docs' }])) }) });
-      handler.setPermissionMode(request.configuration!.permissionIntent.value);
+      const permissionMode = request.configuration?.permissionIntent.value;
+      if (permissionMode !== null && permissionMode !== undefined) handler.setPermissionMode(permissionMode);
       const observedHandler = { async handleToolCall(...args: Parameters<ProviderEnforcedPermissionHandler['handleToolCall']>) {
         const identity = parseMcpToolWireNameV1(args[1], new Set(keys));
         // Genuine native shell calls use the ordinary host policy. A lost MCP
@@ -363,18 +378,41 @@ export function createAcpMcpPolicyFixture(params: Readonly<{
       const publications = createNativeAgentSessionPublications({ agentId: params.agent.id, session: null, signal,
         isCurrent: () => true, supportsInFlightSteer: false });
       const runtime = await params.factory({ plugin: { id: params.pluginId, version: '0.0.0' }, agent: { id: params.agent.id }, signal });
+      const unavailableServices = createUnavailablePluginServices();
+      const createComposerDependencies = (options: AgentAcpRuntimeOptions): PublicAcpComposerDependencies => {
+        const auth = options.definition?.auth;
+        const script = params.vendor ? writeVendorObserver(cwd, params.vendor.executablePath)
+          : writeAgent(cwd, params.toolWireFormat ?? 'canonical', tool, params.nativeConfig,
+            auth && 'methodId' in auth ? [auth.methodId] : params.authMethods);
+        return { pluginId: params.pluginId, agentId: params.agent.id, signal,
+          isCurrent: () => true, interactions: ui.interactions, modes: publications.services.modes, models: publications.services.models,
+          media: { registerSourceRoot: async () => { throw new Error('No media in MCP fixture'); } },
+          systemTools: { resolve: async request => ({ toolId: request.toolId, launch: { kind: 'binary', executablePath: process.execPath,
+            args: [script], env: { CAPTURE: join(cwd, 'capture.json') } } }) },
+          managedDependencies: { resolve: async request => {
+            assert.equal(request.pluginId, params.pluginId);
+            return { command: process.execPath, args: [script], env: { CAPTURE: join(cwd, 'capture.json') }, release() {} };
+          } } };
+      };
       // Only system executable/help and Session transport are boundary fixtures; the leaf, native
       // home shaping, public composer, transient owner, permission policy and catalog CAS are real.
-      const context = { signal, services: {
-        ...createUnavailablePluginServices(),
-        settings: { forScope: () => ({ get: async () => null }) },
+      const contextFixture = createAcpSessionRuntimeContextFixture({ agent: params.agent, pluginId: params.pluginId,
+        occurrenceId: 'contract-occurrence',
+        sessionId: request.sessionId, signal, directory: cwd, session, permissionHandler: observedHandler, publications,
+        readToolExecutionCapability: () => runtime.toolExecution?.capability ?? null,
+        services: {
+        ...unavailableServices,
+        settings: { ...unavailableServices.settings, forScope: scope => ({
+          ...unavailableServices.settings.forScope(scope), get: async () => null,
+        }) },
         connectedAccounts: {
-          watch(_purpose: string, listener: (event: { kind: 'resync' }) => void) {
+          ...unavailableServices.connectedAccounts,
+          watch(_purpose, listener) {
             listener({ kind: 'resync' }); return { dispose() {} };
           },
           getBinding: async () => null,
         },
-        exec: { run: async (request: Readonly<{ args?: readonly string[]; env?: Readonly<Record<string, string>> }>) => {
+        exec: { ...unavailableServices.exec, run: async (request: Readonly<{ args?: readonly string[]; env?: Readonly<Record<string, string>> }>) => {
           if (params.vendor) {
             const output = await promisify(execFile)(params.vendor.executablePath, [...request.args ?? []], {
               env: { ...vendorEnvironment, ...request.env, ...(process.env.PATH ? { PATH: process.env.PATH } : {}) },
@@ -387,23 +425,8 @@ export function createAcpMcpPolicyFixture(params: Readonly<{
         termination: { observed: { kind: 'exit', exitCode: 0 }, requestedBy: { kind: 'none' } },
         stdout: new TextEncoder().encode('--acp'), stderr: new Uint8Array(), stdoutTruncated: false, stderrTruncated: false };
         } } },
-        workState: createNativeAgentSessionWorkStateService({ session, pluginId: params.pluginId, contributionId: params.agent.id,
-          agentId: params.agent.id, occurrenceId: 'contract-occurrence',
-          declarations: readAgentSessionCapabilities(params.agent)?.workStateSources ?? [], isCurrent: () => true }),
         protocols: { acp: { open: async (openRequest, options) => {
-          const auth = options.definition?.auth;
-          const script = params.vendor ? writeVendorObserver(cwd, params.vendor.executablePath)
-            : writeAgent(cwd, params.toolWireFormat ?? 'canonical', tool, params.nativeConfig,
-              auth && 'methodId' in auth ? [auth.methodId] : params.authMethods);
-          const composed = await createPublicAcpSession(openRequest, options, { pluginId: params.pluginId, agentId: params.agent.id, signal,
-            isCurrent: () => true, interactions: ui.interactions, modes: publications.services.modes, models: publications.services.models,
-            media: { registerSourceRoot: async () => { throw new Error('No media in MCP fixture'); } },
-            systemTools: { resolve: async request => ({ toolId: request.toolId, launch: { kind: 'binary', executablePath: process.execPath,
-              args: [script], env: { CAPTURE: join(cwd, 'capture.json') } } }) },
-            managedDependencies: { resolve: async request => {
-              assert.equal(request.pluginId, params.pluginId);
-              return { command: process.execPath, args: [script], env: { CAPTURE: join(cwd, 'capture.json') }, release() {} };
-            } } });
+          const composed = await createPublicAcpSession(openRequest, options, createComposerDependencies(options));
           const capture: { argv: string[]; env: Record<string, string>; acpSessionNew: unknown } = JSON.parse(await readFile(join(cwd, 'capture.json'), 'utf8'));
           const boundaries = launchObserver.boundaries as AgentLaunchObserverBoundaries;
           boundaries.recordLaunch(capture); boundaries.recordAcpSessionNew(capture.acpSessionNew);
@@ -412,7 +435,10 @@ export function createAcpMcpPolicyFixture(params: Readonly<{
             nativeConfigFiles.push(join(capture.env[rootKey]!, params.nativeConfig.directory, params.nativeConfig.fileName));
           }
           return composed;
-        } } } } as AgentSessionRuntimeContext;
+        }, openExecutionRunV1: (openRequest, options) =>
+          createPublicAcpExecutionRun(openRequest, options, createComposerDependencies(options)),
+        } } });
+      sessionDisposals.push(() => contextFixture.dispose());
       if (!runtime.sessions) throw new Error('The Agent has no Session factory');
       const sessionRuntime = await runtime.sessions.open({ ...request, launchEnvironment: {
         values: { HOME: join(cwd, 'native-home'), ...(params.vendor ? vendorEnvironment : {
@@ -420,7 +446,7 @@ export function createAcpMcpPolicyFixture(params: Readonly<{
         }),
           ...(process.env.PATH ? { PATH: process.env.PATH } : {}) },
         unset: Object.keys(process.env).filter(key => key !== 'HOME' && key !== 'PATH'),
-      } }, context);
+      } }, contextFixture.context);
       handlers.set(sessionRuntime, handler);
       return sessionRuntime;
     },
@@ -504,7 +530,7 @@ export function createGeminiMcpPolicyFixture(vendor?: AcpMcpPolicyVendorBoundary
   if (!parsed.ok) throw new Error(JSON.stringify(parsed.diagnostics));
   const agent = parsed.manifest.contributes.agents?.find(agent => agent.id === 'gemini');
   if (!agent) throw new Error('Missing authored Gemini Agent');
-  return createAcpMcpPolicyFixture({ agent, pluginId: parsed.manifest.id, factory,
+  return createAcpMcpPolicyFixture({ agent: PluginAgentContributionV2Schema.parse(agent), pluginId: parsed.manifest.id, factory,
     toolWireFormat: 'gemini', ...(vendor ? { vendor } : {}) });
 }
 
@@ -533,7 +559,7 @@ export async function createPluginAcpMcpPolicyFixtures(): Promise<AgentMcpToolPo
     if (!parsed.ok) throw new Error(JSON.stringify(parsed.diagnostics));
     const agent = parsed.manifest.contributes.agents?.find(agent => agent.id === entry.id);
     if (!agent) throw new Error(`Missing authored Agent ${entry.id}`);
-    return createAcpMcpPolicyFixture({ agent, pluginId: parsed.manifest.id, factory: entry.factory,
+    return createAcpMcpPolicyFixture({ agent: PluginAgentContributionV2Schema.parse(agent), pluginId: parsed.manifest.id, factory: entry.factory,
       ...('authMethods' in entry ? { authMethods: entry.authMethods } : {}) });
   });
 }

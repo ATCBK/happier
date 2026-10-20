@@ -2,7 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import { selectAcpRegistryDistributionV1 } from '@happier-dev/protocol/acp/catalog/registry/mapAcpRegistryAgentV1';
-import type { AcpRegistryAgentV1 } from '@happier-dev/protocol/registries';
+import type { RegistryItemV1 } from '@happier-dev/protocol/registries';
 
 import type { ResolvedAgentCatalogEntry } from '@/agents/backendCatalog/agentCatalogProjection';
 import { AgentCatalogIdentityIcon } from '@/agents/presentation/AgentCatalogIdentityIcon';
@@ -40,7 +40,7 @@ export type AgentInstallChoice = 'now' | 'firstUse';
 
 /** What the footer needs from the open details: the read registry entry and the Install choice. */
 export type AgentAddDraft = Readonly<{
-  agent: AcpRegistryAgentV1 | null;
+  payload: Extract<RegistryItemV1['payload'], { kind: 'agent' | 'plugin' }> | null;
   choice: AgentInstallChoice;
 }>;
 
@@ -104,14 +104,17 @@ export function AgentRegistryDetail(
     kind: 'agent',
     sourceId: props.row.summary.sourceId,
     itemId: props.row.summary.itemId,
+    version: props.row.summary.version,
   });
+  const payload = read.item?.payload.kind === 'agent' || read.item?.payload.kind === 'plugin'
+    ? read.item.payload : null;
   const agent =
-    read.item?.payload.kind === 'agent' ? read.item.payload.agent : null;
+    payload?.kind === 'agent' ? payload.agent : null;
   const [choice, setChoice] = React.useState<AgentInstallChoice>('now');
   const { onDraft } = props;
   React.useEffect(() => {
-    onDraft({ agent, choice });
-  }, [agent, choice, onDraft]);
+    onDraft({ payload, choice });
+  }, [payload, choice, onDraft]);
 
   const name = agent?.name ?? props.row.summary.title;
   const fits = React.useMemo(
@@ -188,13 +191,13 @@ export function AgentRegistryDetail(
             }}
             testID={`${props.testID}.detail.readFailed`}
           />
-        ) : (
+        ) : read.loading ? (
           <SurfaceStateCard
             kind="loading"
             size="line"
             title={t('capabilities.agentAdd.detail.loading')}
           />
-        )}
+        ) : null}
       </View>
     );
   }

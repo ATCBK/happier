@@ -25,10 +25,7 @@ import {
   compareExternalSessionCandidatePrecedence,
   createAgentExternalSessionsProducerOverflowFailure,
   getAgentExternalSessionsInvocationFailure,
-  HAPPIER_BASE_SYSTEM_PROMPT_ATTACHMENTS_V1,
-  HAPPIER_BASE_SYSTEM_PROMPT_LINKED_WORKSPACE_FILES_V1,
-  HAPPIER_BASE_SYSTEM_PROMPT_OPTIONS_V1,
-  HAPPIER_BASE_SYSTEM_PROMPT_SESSION_TITLE_INITIAL_V1,
+  readSessionInputPromptUserTextV1,
   isAgentExternalSessionsResultWithinByteBudget,
 } from '@happier-dev/plugin-sdk/sessions/external';
 import {
@@ -39,6 +36,7 @@ import {
   parseTimestampMs } from '@happier-dev/plugin-sdk';
 import {
   readJsonlFileBackwardPage,
+  createExternalSessionUnsupportedTranscriptItem,
   readJsonlFileForward,
   scanJsonlSessionFile,
   discoverAgentAccountingJsonlSource,
@@ -72,7 +70,7 @@ type PiCandidateCursorV2 = Readonly<{
   sourceGeneration: string;
   scanId: string;
   scanned: number;
-  contentCursor?: string;
+  contentCursor?: string | null;
 }>;
 
 type PiTranscriptOlderProjectionCursor = Readonly<{
@@ -147,34 +145,13 @@ const PI_CANDIDATE_TITLE_MAX_CHARS = 120;
 const PI_CANDIDATE_INSPECTION_MAX_BYTES = 1_048_576;
 
 /**
- * Happier prepends its own base system prompt to the first Pi user turn and Pi
- * persists that whole block as the first user message, so a title derived from it
- * would render a wall of instructions. Which block opens the preamble depends on
- * the session's prompt settings, so every opening the canonical producer can emit
- * disqualifies the message. Anchoring on the producer's own block headings — rather
- * than a hand-copied phrase list — keeps this honest as the prompt body evolves.
- */
-const HAPPIER_BASE_SYSTEM_PROMPT_HEADINGS = [
-  HAPPIER_BASE_SYSTEM_PROMPT_SESSION_TITLE_INITIAL_V1,
-  HAPPIER_BASE_SYSTEM_PROMPT_OPTIONS_V1,
-  HAPPIER_BASE_SYSTEM_PROMPT_ATTACHMENTS_V1,
-  HAPPIER_BASE_SYSTEM_PROMPT_LINKED_WORKSPACE_FILES_V1,
-]
-  .map((block) => (block.split('\n', 1)[0] ?? '').trim().toLowerCase())
-  .filter((heading) => heading.length > 0);
-
-/**
  * Pi never persists an agent-authored title, so a candidate's only title evidence
  * is the first user message the bounded session scan already returned.
  */
 function formatPiCandidateTitle(value: string | null): string | null {
   if (typeof value !== 'string') return null;
-  const normalized = value.replace(/\s+/g, ' ').trim();
+  const normalized = readSessionInputPromptUserTextV1(value).replace(/\s+/g, ' ').trim();
   if (!normalized) return null;
-  const lowerNormalized = normalized.toLowerCase();
-  if (HAPPIER_BASE_SYSTEM_PROMPT_HEADINGS.some((heading) => lowerNormalized.startsWith(heading))) {
-    return null;
-  }
   return normalized.length <= PI_CANDIDATE_TITLE_MAX_CHARS
     ? normalized
     : `${normalized.slice(0, PI_CANDIDATE_TITLE_MAX_CHARS - 3).trimEnd()}...`;
@@ -202,8 +179,8 @@ function failed(
  * smaller transcript — it is a WRONG one. A duplicate id silently shadows one
  * record, and a cycle silently truncates the walk, so the page that carries the
  * result looks like ordinary success while history is missing and the cursor
- * advances past it. Both fail closed on the same malformed-provider-record
- * contract this leaf already uses two checks earlier.
+ * advances past it. These are branch-integrity failures; an unsupported native
+ * body is represented separately and does not invalidate the tree.
  *
  * A missing parent is deliberately NOT an integrity failure: every page folds a
  * WINDOW of the file, so its oldest entry always names a parent outside that
@@ -250,7 +227,7 @@ function decodeCandidateCursor(raw: string | undefined): PiCandidateCursorV2 | n
     || !readOptionalString(record.scanId)
     || !Number.isSafeInteger(record.scanned)
     || (record.scanned as number) < 0
-    || (record.contentCursor !== undefined && !readOptionalString(record.contentCursor))
+    || (record.contentCursor !== undefined && record.contentCursor !== null && !readOptionalString(record.contentCursor))
   ) {
     return null;
   }
@@ -261,7 +238,7 @@ function decodeCandidateCursor(raw: string | undefined): PiCandidateCursorV2 | n
     sourceGeneration: String(record.sourceGeneration),
     scanId: String(record.scanId),
     scanned: record.scanned as number,
-    ...(record.contentCursor === undefined ? {} : { contentCursor: String(record.contentCursor) }),
+    ...(record.contentCursor === undefined ? {} : { contentCursor: record.contentCursor === null ? null : String(record.contentCursor) }),
   };
 }
 
@@ -476,15 +453,11 @@ type PiCandidateScanState = {
   closeStarted: boolean;
 };
 
-type PiContentSearchProgress = {
+type PiContentSearchProgress = NonNullable<Parameters<typeof searchExternalSessionContent>[0]['pageProgress']> & {
   readonly filePath: string;
   readonly sourceIdentity: string;
   readonly maxItems: number;
   readonly maxSerializedBytes: number;
-  cursor: string | undefined;
-  complete: boolean;
-  itemCount: number;
-  match: Readonly<{ cursor: string | undefined; id: string; distanceFromEnd: number }> | null;
 };
 
 async function readContentSourceIdentity(filePath: string): Promise<string> {
@@ -714,6 +687,7 @@ async function inspectPiCandidateFile(params: Readonly<{
     updatedAtMs: Math.max(header.createdAtMs, lastRecordTimestampMs ?? header.createdAtMs),
     createdAtMs: header.createdAtMs,
     linkData: { sessionFile: params.filePath },
+    ...(scanned.cwd ? { cwd: scanned.cwd } : {}),
   };
 }
 
@@ -1080,11 +1054,22 @@ type PiTranscriptBranchProjection = Readonly<{
 function projectBranch(
   remoteSessionId: string,
   entries: readonly PiV3SessionTreeEntry[],
+  records: readonly Readonly<{ value: unknown; startOffsetBytes: number }>[],
 ): PiTranscriptBranchProjection {
   const items: AgentExternalSessionTranscriptItem[] = [];
   const knownNonTranscriptPositions: number[] = [];
   const unsupportedPositions: number[] = [];
-  for (const [index, entry] of entries.entries()) {
+  const entriesByRecord = new Map(entries.map((entry) => [entry.record, entry]));
+  for (const [index, scanned] of records.entries()) {
+    const entry = isRecord(scanned.value) ? entriesByRecord.get(scanned.value) : undefined;
+    if (!entry) {
+      if (isPiV3SessionFileRecord(scanned.value)) continue;
+      unsupportedPositions.push(index);
+      const id = `pi:${remoteSessionId}:offset:${scanned.startOffsetBytes}`;
+      items.push(createExternalSessionUnsupportedTranscriptItem({ agentId: 'pi', id, localId: id,
+        createdAtMs: isRecord(scanned.value) ? parseTimestampMs(scanned.value.timestamp) ?? 0 : 0 }));
+      continue;
+    }
     const projected = projectEntry(remoteSessionId, entry);
     if (projected.kind === 'item') {
       items.push(...projected.items);
@@ -1092,6 +1077,9 @@ function projectBranch(
       knownNonTranscriptPositions.push(index);
     } else {
       unsupportedPositions.push(index);
+      const id = `pi:${remoteSessionId}:${entry.id}`;
+      items.push(createExternalSessionUnsupportedTranscriptItem({ agentId: 'pi', id, localId: id,
+        createdAtMs: entry.timestampMs ?? 0 }));
     }
   }
   return { items, knownNonTranscriptPositions, unsupportedPositions };
@@ -1128,16 +1116,21 @@ async function readTranscriptCursorAnchor(params: Readonly<{
   maxBytes: number;
 }>): Promise<Readonly<{
   records: readonly unknown[];
-  matches: boolean;
+  matches: boolean | null;
 }>> {
   const page = await readJsonlFileBackwardPage({
     filePath: params.file.filePath,
     endOffsetBytes: params.cursor.endOffsetBytes,
     maxBytes: params.maxBytes,
-    maxItems: 1,
+    // The byte window bounds this scan; malformed standalone rows cannot
+    // displace the last addressable native entry used as the branch anchor.
+    maxItems: params.maxBytes,
     maxOversizeLineBytes: params.maxBytes,
   });
   const records = page.items.map((item) => item.value);
+  if (!page.reachedStart && page.nextEndOffsetBytes >= params.cursor.endOffsetBytes) {
+    return { records, matches: null };
+  }
   const folded = foldPiV3SessionTree(records);
   const activeLeaf = folded.activeBranch.at(-1) ?? null;
   const matches = params.cursor.activeLeafId === null
@@ -1162,7 +1155,7 @@ async function readCurrentTail(params: Readonly<{
     filePath: params.file.filePath,
     endOffsetBytes: params.file.fileSize,
     maxBytes: params.maxBytes,
-    maxItems: 1,
+    maxItems: params.maxBytes,
     maxOversizeLineBytes: params.maxBytes,
   });
   const folded = foldPiV3SessionTree(tail.items.map((item) => item.value));
@@ -1299,9 +1292,11 @@ export function createPiExternalSessionsContribution(params: Readonly<{
       if (stopped) return stopped;
       const resolved = resolvePiSource({ source: request.source, env: readEnv() });
       if (!resolved.ok) return resolved;
+      if (request.includeAccountingSource === false) return ok({ source: resolved.value.source });
       const inventory = await discoverAgentAccountingJsonlSource([resolved.value.sessionsRoot], request.signal);
       return ok({ source: resolved.value.source, accountingSource: {
         accountingSources: [PI_NATIVE_ACCOUNTING_SOURCE],
+        discoveredFileCount: inventory.files.length,
         rootPath: resolved.value.sessionsRoot, rootField: 'sessionsRoot',
         resourceKey: `pi:accounting:${createHash('sha256').update(resolved.value.sessionsRoot).digest('base64url')}`,
         changeObservation: 'watch_file_changes' as const,
@@ -1358,7 +1353,7 @@ export function createPiExternalSessionsContribution(params: Readonly<{
           && (
             decodedCursor.sourceGeneration !== scan.sourceGeneration
             || decodedCursor.scanned !== scan.scanned
-            || decodedCursor.contentCursor !== scan.contentProgress?.cursor
+            || decodedCursor.contentCursor !== (scan.contentProgress ? scan.contentProgress.cursor ?? null : undefined)
             || scan.sourceKey !== sourceKey(resolved.value)
             || scan.searchTerm !== searchTerm
             || (scan.searchTarget ?? 'metadata') !== searchTarget
@@ -1404,7 +1399,6 @@ export function createPiExternalSessionsContribution(params: Readonly<{
           if (!filePath) break;
           let candidate: AgentExternalSessionCandidate | null;
           try {
-            control?.checkWork();
             if (scan.contentProgress && (scan.contentProgress.filePath !== filePath
               || scan.contentProgress.sourceIdentity !== await readContentSourceIdentity(filePath))) {
               throw new PiCandidateSourceChangedError('Pi transcript changed during content search.');
@@ -1436,53 +1430,30 @@ export function createPiExternalSessionsContribution(params: Readonly<{
                 ...(resumingContent ? {} : { paths: [filePath] }),
                 ripgrep: request.ripgrep,
                 control,
-                isScanComplete: () => progress.complete,
-                async decode(matchText) {
-                  while (!progress.complete) {
-                    control.checkWork();
-                    const pageCursor = progress.cursor;
-                    const page = await readPage(pageCursor);
-                    if (!page.ok || page.value.truncated) {
-                      progress.complete = true;
-                      return { records: [], partial: true };
-                    }
-                    // Pages arrive newest first; the first match in an older
-                    // page supersedes a newer one. Retain locators, never text.
-                    const matchIndex = page.value.items.findIndex((item) => {
-                      const text = readContentItemText(item);
-                      return text !== null && matchText(text) !== null;
-                    });
-                    if (matchIndex >= 0) {
-                      progress.match = { cursor: pageCursor, id: page.value.items[matchIndex]!.id,
-                        distanceFromEnd: progress.itemCount + page.value.items.length - matchIndex };
-                    }
-                    progress.itemCount += page.value.items.length;
-                    progress.cursor = page.value.nextCursor ?? undefined;
-                    progress.complete = !progress.cursor;
-                    if (!progress.complete) control.checkWork();
-                  }
-                  control.assertNotYielded();
+                pageProgress: progress,
+                async decode(matchText, cursor) {
                   if (await readContentSourceIdentity(filePath) !== progress.sourceIdentity) {
                     throw new PiCandidateSourceChangedError('Pi transcript changed during content search.');
                   }
-                  if (!progress.match) return { records: [], partial: false };
-                  // Finalization re-decodes and re-matches the native page;
-                  // the retained locator cannot authorize returned content.
-                  const page = await readPage(progress.match.cursor);
+                  const page = await readPage(cursor);
+                  if (await readContentSourceIdentity(filePath) !== progress.sourceIdentity) {
+                    throw new PiCandidateSourceChangedError('Pi transcript changed during content search.');
+                  }
                   if (!page.ok || page.value.truncated) return { records: [], partial: true };
-                  const item = page.value.items.find((item) => item.id === progress.match?.id);
-                  const text = item ? readContentItemText(item) : null;
-                  const snippet = text === null ? null : matchText(text);
-                  if (await readContentSourceIdentity(filePath) !== progress.sourceIdentity) {
-                    throw new PiCandidateSourceChangedError('Pi transcript changed during content search.');
-                  }
-                  return { records: item && snippet !== null ? [{ id: item.id, snippet,
-                    messageIndex: progress.itemCount - progress.match.distanceFromEnd }] : [], partial: false };
+                  return { records: page.value.items.map((item) => {
+                    const text = readContentItemText(item);
+                    const snippet = text === null ? null : matchText(text);
+                    return { id: item.id, ...(snippet === null ? {} : { snippet }) };
+                  }), nextCursor: page.value.nextCursor, partial: false };
                 },
               });
+              if (await readContentSourceIdentity(filePath) !== progress.sourceIdentity) {
+                throw new PiCandidateSourceChangedError('Pi transcript changed during content search.');
+              }
               scan.contentProgress = null;
               partial ||= searched.partial;
-              candidate = searched.match ? { ...candidate, match: searched.match } : null;
+              candidate = searched.match ? { ...candidate, match: searched.match,
+                ...(!searched.partial ? { messageCount: progress.itemCount } : {}) } : null;
             }
           } catch (error) {
             if (!(error instanceof ExternalSessionContentSearchYield)) throw error;
@@ -1506,7 +1477,7 @@ export function createPiExternalSessionsContribution(params: Readonly<{
             sourceGeneration: scan.sourceGeneration,
             scanId: scan.scanId,
             scanned: scan.scanned,
-            ...(scan.contentProgress?.cursor ? { contentCursor: scan.contentProgress.cursor } : {}),
+            ...(scan.contentProgress ? { contentCursor: scan.contentProgress.cursor ?? null } : {}),
           });
           const proposed = ok({
             candidates: [...candidates, candidate],
@@ -1563,7 +1534,7 @@ export function createPiExternalSessionsContribution(params: Readonly<{
             sourceGeneration: scan.sourceGeneration,
             scanId: scan.scanId,
             scanned: scan.scanned,
-            ...(scan.contentProgress?.cursor ? { contentCursor: scan.contentProgress.cursor } : {}),
+            ...(scan.contentProgress ? { contentCursor: scan.contentProgress.cursor ?? null } : {}),
           })
           : null;
         const value: AgentExternalSessionsListCandidatesResult = {
@@ -1726,6 +1697,7 @@ export function createPiExternalSessionsContribution(params: Readonly<{
       const page = await readJsonlFileBackwardPage({
         filePath: file.filePath,
         endOffsetBytes,
+        includeMalformedRecords: true,
         maxBytes: projection?.nativeMaxSerializedBytes ?? request.maxSerializedBytes,
         maxItems: projection?.nativeMaxItems ?? Math.trunc(request.maxItems),
         maxOversizeLineBytes: projection?.nativeMaxSerializedBytes ?? request.maxSerializedBytes,
@@ -1736,10 +1708,15 @@ export function createPiExternalSessionsContribution(params: Readonly<{
       if (page.diagnostics?.some((diagnostic) => diagnostic.code === 'malformed_source_utf8')) {
         return failed('agent_error', 'Pi transcript source contains malformed UTF-8.');
       }
-      const values = page.items.map((item) => item.value);
-      if (values.some((value) => !isPiV3SessionFileRecord(value))) {
-        return failed('agent_error', 'Pi transcript contains a structurally malformed provider record.');
+      if (!page.reachedStart && page.nextEndOffsetBytes >= endOffsetBytes) {
+        const result = ok({ items: [], nextCursor: null, hasMore: false, truncated: true });
+        return isAgentExternalSessionsResultWithinByteBudget(result, request.maxSerializedBytes)
+          ? result
+          : createAgentExternalSessionsProducerOverflowFailure(
+            'Pi transcript result byte budget cannot fit the page envelope.',
+          );
       }
+      const values = page.items.map((item) => item.value);
       const expectedLeafPresent = expectedLeafId === undefined
         || expectedLeafId === null
         || values.some((value) => isRecord(value) && value.id === expectedLeafId);
@@ -1747,16 +1724,12 @@ export function createPiExternalSessionsContribution(params: Readonly<{
         return failed('source_invalid', 'Pi transcript changed while replaying a partial record.', true);
       }
       const folded = foldPiV3SessionTree(values, {
-        ...(expectedLeafId === undefined ? {} : { activeLeafId: expectedLeafId }),
+        ...(expectedLeafId == null ? {} : { activeLeafId: expectedLeafId }),
       });
       const foldIntegrity = foldIntegrityFailure(folded);
       if (foldIntegrity) return foldIntegrity;
-      const projectedBranch = expectedLeafPresent
-        ? projectBranch(request.remoteSessionId, folded.activeBranch)
-        : { items: [], knownNonTranscriptPositions: [], unsupportedPositions: [] };
-      if (projectedBranch.unsupportedPositions.length > 0) {
-        return failed('agent_error', 'Pi transcript contains an unsupported provider record.');
-      }
+      const projectedBranch = projectBranch(request.remoteSessionId,
+        expectedLeafPresent ? folded.activeBranch : [], page.items);
       const items = projectedBranch.items;
       const earliest = expectedLeafPresent ? folded.activeBranch[0] ?? null : null;
       const nextActiveLeafId = expectedLeafPresent
@@ -1767,7 +1740,7 @@ export function createPiExternalSessionsContribution(params: Readonly<{
       }
       const limit = Math.trunc(request.maxItems);
       let emittedItems: readonly AgentExternalSessionTranscriptItem[] = items;
-      let hasMore = Boolean(nextActiveLeafId) && !page.reachedStart;
+      let hasMore = !page.reachedStart && (Boolean(nextActiveLeafId) || folded.activeBranch.length === 0);
       let nextCursor: string | null = hasMore
         ? encodeTranscriptCursor({
           file,
@@ -1846,7 +1819,13 @@ export function createPiExternalSessionsContribution(params: Readonly<{
         nextCursor,
         ...(tail ? { tailCursor: tail.cursor } : {}),
         hasMore,
-        ...(sourceReplaced ? { truncated: true } : {}),
+        ...(projectedBranch.unsupportedPositions.length > 0 ? { diagnostics: [{
+          code: 'external_sessions_transcript_unsupported_record',
+          severity: 'benign' as const,
+          count: projectedBranch.unsupportedPositions.length,
+          positions: projectedBranch.unsupportedPositions.slice(0, 200),
+        }] } : {}),
+        ...(sourceReplaced || page.tailOffsetBytes !== endOffsetBytes ? { truncated: true } : {}),
       });
       return isAgentExternalSessionsResultWithinByteBudget(result, request.maxSerializedBytes)
         ? result
@@ -1893,6 +1872,7 @@ export function createPiExternalSessionsContribution(params: Readonly<{
       });
       const afterAnchor = getAgentExternalSessionsInvocationFailure(request);
       if (afterAnchor) return afterAnchor;
+      if (anchor.matches === null) return ok({ outcome: 'read_failed' });
       if (!anchor.matches) {
         return ok({ outcome: 'source_replaced' });
       }
@@ -1903,6 +1883,7 @@ export function createPiExternalSessionsContribution(params: Readonly<{
       const page = await readJsonlFileForward({
         filePath: file.filePath,
         offsetBytes: cursor.endOffsetBytes,
+        includeMalformedRecords: true,
         maxBytes: projection?.nativeMaxSerializedBytes ?? request.maxSerializedBytes,
         maxItems: projection?.nativeMaxItems ?? Math.trunc(request.maxItems),
         maxOversizeLineBytes: projection?.nativeMaxSerializedBytes ?? request.maxSerializedBytes,
@@ -1910,9 +1891,6 @@ export function createPiExternalSessionsContribution(params: Readonly<{
       const afterPage = getAgentExternalSessionsInvocationFailure(request);
       if (afterPage) return afterPage;
       const pageValues = page.items.map((item) => item.value);
-      if (pageValues.some((value) => !isPiV3SessionFileRecord(value))) {
-        return failed('agent_error', 'Pi transcript contains a structurally malformed provider record.');
-      }
       const anchorAfterPage = await readTranscriptCursorAnchor({
         file,
         cursor,
@@ -1920,11 +1898,9 @@ export function createPiExternalSessionsContribution(params: Readonly<{
       });
       const afterAnchorRecheck = getAgentExternalSessionsInvocationFailure(request);
       if (afterAnchorRecheck) return afterAnchorRecheck;
+      if (anchorAfterPage.matches === null) return ok({ outcome: 'read_failed' });
       if (!anchorAfterPage.matches) {
         return ok({ outcome: 'source_replaced' });
-      }
-      if (anchor.records.some((value) => !isPiV3SessionFileRecord(value))) {
-        return failed('agent_error', 'Pi transcript contains a structurally malformed provider record.');
       }
 
       const folded = foldPiV3SessionTree([
@@ -1955,13 +1931,15 @@ export function createPiExternalSessionsContribution(params: Readonly<{
       const newBranch = previousLeafIndex === null
         ? folded.activeBranch
         : folded.activeBranch.slice(previousLeafIndex + 1);
-      const projectedBranch = projectBranch(request.remoteSessionId, newBranch);
-      if (projectedBranch.unsupportedPositions.length > 0) {
-        return failed('agent_error', 'Pi transcript contains an unsupported provider record.');
-      }
+      const projectedBranch = projectBranch(request.remoteSessionId, newBranch, page.items);
       const items = projectedBranch.items;
       const knownNonTranscriptPositions = projectedBranch.knownNonTranscriptPositions;
       const diagnostics = [
+        ...(projectedBranch.unsupportedPositions.length > 0 ? [{
+          code: 'external_sessions_transcript_unsupported_record', severity: 'benign' as const,
+          count: projectedBranch.unsupportedPositions.length,
+          positions: projectedBranch.unsupportedPositions.slice(0, 200),
+        }] : []),
         ...(knownNonTranscriptPositions.length > 0
           ? [{
               code: 'non_transcript_record_skipped',

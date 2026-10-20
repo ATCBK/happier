@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MachineGuardViewV1Schema } from '@happier-dev/protocol/machines/guard/guardRpcV1';
 import { localServiceProcfsFixture } from '../../local/services/inventory/platform/censusFixture.testkit';
 import { createManagedActivityInventory, type LiveWorkItemV1 } from '../../lifecycle/managedActivity';
@@ -22,6 +22,13 @@ import { createGuardStatePublication } from '../guardStatePublication';
 import type { TrackedSession } from '../../types';
 import { createGuardWatch } from './guardWatch';
 import { createIdleTerminalPolicyFixture } from '../idleTerminalPolicy.testkit';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+
+let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
+beforeAll(async () => { runtime = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+  runtimeOptions: { pluginIds: ['happier.agent.codex'] } }); });
+afterAll(async () => { await runtime?.dispose(); });
 
 const epoch = Date.UTC(2026, 9, 10);
 const target = { serverId: 'home', machineId: 'machine', installationId: 'installation' };
@@ -40,7 +47,7 @@ describe('Guard requester view and parked watch', () => {
     vi.useRealTimers(); await rm(directory, { recursive: true, force: true });
   });
 
-  async function setup(otherAccount = 'bob', workState: 'settled' | 'active' = 'settled', withProjectServices = false, withTerminals = false) {
+  async function setup(otherAccount = 'bob', workState: 'settled' | 'active' = 'settled', withProjectServices = false, withTerminals = false, failBrowser = false) {
     const os = await createLinuxVitalsFixture(); cleanup.push(os.cleanup);
     const readers = createLinuxMachineVitalsReader({ root: os.root });
     const historyStore = await createMinuteHistoryStore({ directory: join(directory, 'history'), nowMs: Date.now });
@@ -117,7 +124,7 @@ describe('Guard requester view and parked watch', () => {
     }
     const readFacts = async (owners: GuardFacts['ownership']): Promise<GuardFacts> => {
       const facts = await inventory.read();
-      const targets: GuardTarget[] = owners.status !== 'ok' ? [] : owners.roots.map(root => {
+      const targets: GuardTarget[] = owners.status !== 'ok' ? [] : await Promise.all(owners.roots.map(async (root): Promise<GuardTarget> => {
         if (root.owner.kind === 'service') {
           const project = projects[root.pid - 1006]!;
           return { kind: 'service', root, ownerRef: project, label: `private-${project.id}-service`,
@@ -132,11 +139,11 @@ describe('Guard requester view and parked watch', () => {
           wayBack: [{ label: 'reopen', actionId: 'browser.view.open', input: { machineId: 'machine' } }] };
         const session = tracked.find(item => item.pid === root.pid)!;
         return { kind: 'session', root, tracked: session, label: `private-${session.happySessionId}`,
-          eligibility: evaluateSessionEligibility({ tracked: session, inventory: facts, draft: { status: 'absent' }, resume: {
+          eligibility: (await evaluateSessionEligibility({ tracked: session, inventory: facts, draft: { status: 'absent' }, resume: {
             sessionId: session.happySessionId!, rawSession: { machineId: 'machine', path: '/project' },
-            metadata: { machineId: 'machine', path: '/project', flavor: 'codex', codexSessionId: `native-${session.happySessionId}` },
-          } }) };
-      });
+            metadata: { runtimeDescriptorV1: { v: 1 as const, agentId: 'codex', agent: { backendMode: 'appServer' } }, machineId: 'machine', path: '/project', flavor: 'codex', codexSessionId: `native-${session.happySessionId}` },
+          } })) };
+      }));
       return { ownership: owners, inventory: facts, targets };
     };
     const changes = new Set<() => void>();
@@ -150,7 +157,8 @@ describe('Guard requester view and parked watch', () => {
     }, subscribePolicy: policy.subscribe, subscribe: () => () => {},
       readFacts: async () => readFacts(await ownership.readOwners({ freshness: 'fresh' })),
       // Real owner logic runs until its genuine process-stop boundary; cancellation releases it.
-      stop: async (_candidate, signal) => new Promise(resolve => {
+      stop: async (candidate, signal) => candidate.kind === 'browser' && failBrowser
+        ? { status: 'failed', reason: 'browser_still_running' } : new Promise(resolve => {
         reachedStop(); signal.addEventListener('abort', () => resolve({ status: 'failed', reason: 'cancelled' }), { once: true });
       }), notice: async () => true,
       activity: activityLog, notifyEpisode: async () => {}, nowMs: Date.now, onError: error => { throw error; },
@@ -198,7 +206,9 @@ describe('Guard requester view and parked watch', () => {
       parked: () => changes.size ? Promise.resolve() : new Promise<void>(resolve => { waitingForPark.add(resolve); }),
       enableMemory: async () => {
         const current = policy.read(); if (current.status !== 'ready') throw new Error('Policy unavailable');
-        await policy.set({ expectedRevision: current.revision, patch: { guard: { memoryGuard: { enabled: true, sustainMs: 60_000 } } } });
+        await policy.set({ expectedRevision: current.revision, patch: { guard: {
+          memoryGuard: { enabled: true, sustainMs: 60_000 }, ...(failBrowser ? { idleSessions: { warnBeforeMs: 0 } } : {}),
+        } } });
         await os.put('/proc/zoneinfo', 'Node 0, zone Normal\n pages free 0\n min 10\n low 20\n high 30\n');
         await os.put('/proc/pressure/memory', 'some avg10=1.00 avg60=1.00 avg300=1.00 total=1\nfull avg10=1.00 avg60=1.00 avg300=1.00 total=1\n');
       },
@@ -249,7 +259,7 @@ describe('Guard requester view and parked watch', () => {
     expect(own.idleTerminals?.[0]).not.toHaveProperty('attribution');
   });
 
-  it('returns owner-invalidated census changes without accelerating vitals, and releases on cancellation', async () => {
+  it('refreshes parked previews on summary samples and releases demand on cancellation', async () => {
     const h = await setup();
     const first = await h.view.watch({ machineId: 'machine' }, requester);
     expect(first.changed).toBe(true);
@@ -258,12 +268,13 @@ describe('Guard requester view and parked watch', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     const controller = new AbortController();
     const pending = h.view.watch({ machineId: 'machine', since: first.since }, requester, controller.signal);
-    // Admission and the gap-closing read finish without creating sampler demand.
+    // Only parked observations hold the sampler's canonical summary demand.
     await h.parked();
     expect(h.listeners()).toBe(1);
     h.setGuardName('systemd-oomd');
     h.setMemory(2);
     await vi.advanceTimersByTimeAsync(15_000); await h.sampler.start();
+    expect(h.sampler.latest()?.intervalMs).toBe(15_000);
     const changed = await pending;
     expect(changed.changed).toBe(true);
     if (!changed.changed) throw new Error('Expected changed preview');
@@ -278,7 +289,7 @@ describe('Guard requester view and parked watch', () => {
     const reads = h.nativeReads();
     await vi.advanceTimersByTimeAsync(15_000);
     expect(h.nativeReads()).toBe(reads);
-    expect(h.sampler.latest()?.intervalMs).toBe(60_000);
+    expect(h.sampler.latest()?.intervalMs).toBe(15_000);
     await vi.advanceTimersByTimeAsync(30_000); await h.sampler.start();
     expect(h.sampler.latest()?.intervalMs).toBe(60_000);
   });
@@ -414,5 +425,19 @@ describe('Guard requester view and parked watch', () => {
     expect(view.ladder.steps[0]?.status).toBe('run');
     expect(view.ladder.steps[0]?.candidates[0]?.label).toBe('private-browser');
     expect(view.ladder.steps.slice(1).some(step => step.status === 'done')).toBe(false);
+  });
+
+  it('excludes a failed still-present browser from the executable preview and shows the next session', async () => {
+    const h = await setup('bob', 'settled', false, false, true);
+    await h.enableMemory();
+    await vi.advanceTimersByTimeAsync(60_000); await h.sampler.start();
+    await h.runMemory();
+    const view = await h.view.readView({ ...requester, isCustodian: true });
+    expect(view.state.episode).toMatchObject({ state: 'acting', step: 3 });
+    expect(view.ladder.steps[0]?.candidates).toEqual([]);
+    expect(view.ladder.excluded).toContainEqual(expect.objectContaining({ label: 'private-browser', reason: 'stop_failed' }));
+    expect(view.ladder.steps[2]?.status).toBe('run');
+    expect(view.ladder.steps[2]?.candidates[0]?.label).toBe('private-s0');
+    expect(view.recentActivity).toContainEqual(expect.objectContaining({ kind: 'stop_failed', note: 'browser_still_running' }));
   });
 });

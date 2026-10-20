@@ -1,15 +1,16 @@
+import * as z from 'zod/mini';
+import { lazyZodSchema } from '@happier-dev/protocol/lazyZodSchema';
 import { realpathSync } from 'node:fs';
 import { copyFile, lstat, mkdir, mkdtemp, open, rename, rm, stat, writeFile } from 'fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from 'path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
-import type { ZodType } from 'zod';
+import type { ZodMiniType as ZodType } from 'zod/mini';
 
 import { HARD_OPENABLE_CONTENT_MAX_BYTES_V1 } from '@happier-dev/protocol/plugins/openableContent';
 import type { WorkspaceStatFileRequestV1 } from '@happier-dev/protocol';
 
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
-import type { ActionId } from '@happier-dev/protocol/actions';
 import { logger } from '@/ui/logger';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import {
@@ -19,6 +20,7 @@ import {
   FilesystemCopyInputSchema,
   FilesystemLocalCopyInputSchema,
   type FilesystemMutationActionId,
+  type FilesystemActionId,
   type FilesystemCreateDirectoryInput,
   type FilesystemRenameInput,
   type FilesystemDeleteInput,
@@ -58,7 +60,7 @@ export type FilesystemMutationDeps = Readonly<{
 export type FilesystemMutationActionIngress = Readonly<{
   actionExecutor?: RpcActionExecutor;
   /** Late binding to the daemon's current full Action admission owner. */
-  resolveMutationActionExecutor?: () => RpcActionExecutor<FilesystemMutationActionId> | null;
+  resolveMutationActionExecutor?: () => RpcActionExecutor<FilesystemActionId> | null;
   mutationMachineId?: string;
 }>;
 
@@ -71,9 +73,9 @@ const unavailableMutationExecutor: RpcActionExecutor = {
 /** Rooted mutations share one admission route; only predecessor aliases retain incumbent effects. */
 export function resolveFilesystemMutationActionExecutor(
   ingress: FilesystemMutationActionIngress,
-  request: Readonly<{ actionId: ActionId; isAlias: boolean; input: unknown }>,
+  request: Readonly<{ actionId: FilesystemActionId; isAlias: boolean; input: unknown }>,
   incumbentExecutor: RpcActionExecutor,
-): RpcActionExecutor {
+): RpcActionExecutor<FilesystemActionId> {
   const data = request.input && typeof request.input === 'object' && !Array.isArray(request.input)
     ? request.input as Record<string, unknown> : null;
   if (request.isAlias && request.actionId !== 'daemon.filesystem.copy' && data
@@ -147,9 +149,9 @@ type FilesystemLocalMutationInput = Readonly<{ rootPath?: string }> & (
 
 function mutationSchema(actionId: FilesystemMutationActionId, incumbentPolicyScope = false): ZodType<FilesystemLocalMutationInput> {
   switch (actionId) {
-    case 'daemon.filesystem.createDirectory': return incumbentPolicyScope ? FilesystemCreateDirectoryInputSchema.omit({ rootPath: true }) : FilesystemCreateDirectoryInputSchema;
-    case 'daemon.filesystem.rename': return incumbentPolicyScope ? FilesystemRenameInputSchema.omit({ rootPath: true }) : FilesystemRenameInputSchema;
-    case 'daemon.filesystem.delete': return incumbentPolicyScope ? FilesystemDeleteInputSchema.omit({ rootPath: true }) : FilesystemDeleteInputSchema;
+    case 'daemon.filesystem.createDirectory': return incumbentPolicyScope ? lazyZodSchema(() => z.omit(FilesystemCreateDirectoryInputSchema, { rootPath: true })) : FilesystemCreateDirectoryInputSchema;
+    case 'daemon.filesystem.rename': return incumbentPolicyScope ? lazyZodSchema(() => z.omit(FilesystemRenameInputSchema, { rootPath: true })) : FilesystemRenameInputSchema;
+    case 'daemon.filesystem.delete': return incumbentPolicyScope ? lazyZodSchema(() => z.omit(FilesystemDeleteInputSchema, { rootPath: true })) : FilesystemDeleteInputSchema;
     case 'daemon.filesystem.copy': return FilesystemLocalCopyInputSchema;
   }
 }

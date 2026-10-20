@@ -1,5 +1,8 @@
-import { showPutUnderSessionModal } from '@/components/sessions/work/PutUnderSessionModal';
 import { roleActions } from '@/sync/ops/roles/roleActions';
+import { readSessionAnswersWorkerQuestionsV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
+import { showPutUnderSessionModal } from '@/components/sessions/work/PutUnderSessionModal';
+import { showMakeCoordinatorDialog } from '@/components/sessions/coordinator/MakeCoordinatorDialog';
+import { sessionCoordinatorActions } from '@/sync/ops/sessions/sessionCoordinatorActions';
 import { sessionDisplayActions, undoSessionBotChange } from '@/sync/ops/sessions/sessionDisplayActions';
 import { readSessionBotV1, type SessionBotV1 } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
 import { announceBotMarkerAccepted } from '@/components/sessions/bots/botMarkerFeedback';
@@ -19,6 +22,8 @@ import { serializeSessionPaneUrlState } from '@/components/sessions/panes/url/se
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import { classifyHomeActionOutcome } from '@/sync/ops/home/homeActionOutcome';
 import { VoiceConversationActionOutputSchemas } from '@happier-dev/protocol/actions/voiceConversationActionFamily';
+import { SessionArchiveActionResultV1Schema } from '@happier-dev/protocol/sessions/control/contract';
+import { archiveSessionReports } from './confirmSessionArchive';
 import {
     sessionSetManualReadStateWithServerScope,
 } from '@/sync/ops';
@@ -48,9 +53,11 @@ import {
     SESSION_ACTION_MOVE_TO_FOLDER_ID,
     SESSION_ACTION_PIN_ID,
     SESSION_ACTION_RENAME_ID,
-    SESSION_ACTION_MAKE_ORCHESTRATOR_ID,
-    ORCHESTRATOR_ROLE_ID,
     SESSION_ACTION_PUT_UNDER_ID,
+    SESSION_ACTION_COORDINATOR_MAKE_ID,
+    SESSION_ACTION_COORDINATOR_EDIT_ID,
+    SESSION_ACTION_COORDINATOR_ANSWERS_ID,
+    SESSION_ACTION_COORDINATOR_STOP_ID,
     SESSION_ACTION_RESUME_ID,
     SESSION_ACTION_SET_ATTENTION_STANDING_ID,
     SESSION_ACTION_STOP_ID,
@@ -65,6 +72,7 @@ import type {
     SessionActionId,
     SessionActionOperationResult,
     SessionActionTarget,
+    SessionDeletePresentUserConfirmation,
 } from './sessionActionTypes';
 
 const executeVoiceAction = createFrontDoorActionExecute();
@@ -72,11 +80,23 @@ const executeVoiceAction = createFrontDoorActionExecute();
 export async function executeSessionLifecycleAction(
     actionId: 'session.stop' | 'session.archive' | 'session.unarchive' | 'session.delete' | 'session.title.set',
     sessionId: string,
-    options?: Readonly<{ serverId?: string | null }>,
+    options?: Readonly<{
+        serverId?: string | null;
+        alsoArchiveReports?: boolean;
+        presentUserConfirmation?: SessionDeletePresentUserConfirmation;
+    }>,
     title?: string,
 ): Promise<SessionActionOperationResult> {
-    const outcome = await executeVoiceAction(actionId, { sessionId, ...(title === undefined ? {} : { title }) }, {
-        surface: 'ui', defaultSessionId: sessionId, ...(options?.serverId ? { serverId: options.serverId } : {}),
+    const outcome = await executeVoiceAction(actionId, { sessionId, ...(title === undefined ? {} : { title }),
+        ...(actionId === 'session.archive' && options?.alsoArchiveReports !== undefined ? { alsoArchiveReports: options.alsoArchiveReports } : {}) }, {
+        surface: 'ui',
+        defaultSessionId: sessionId,
+        ...(options?.serverId ? { serverId: options.serverId } : {}),
+        ...(options?.presentUserConfirmation ? {
+            authority: 'present_user' as const,
+            actionCaller: { kind: 'host' as const },
+            presentUserConfirmation: options.presentUserConfirmation,
+        } : {}),
     });
     if (!outcome.ok) {
         const details = outcome.details;
@@ -91,6 +111,10 @@ export async function executeSessionLifecycleAction(
     // The title Action acknowledges a metadata write; lifecycle transports retain
     // their success/recovery envelope for the incumbent stop/archive flow.
     if (actionId === 'session.title.set') return { success: true };
+    if (actionId === 'session.archive') {
+        const archived = SessionArchiveActionResultV1Schema.safeParse(result);
+        return archived.success ? archived.data : { success: false, code: 'invalid_action_output', message: 'invalid_action_output' };
+    }
     if (!result || typeof result !== 'object' || !('success' in result) || typeof result.success !== 'boolean') {
         return { success: false, code: 'invalid_action_output', message: 'invalid_action_output' };
     }
@@ -141,6 +165,35 @@ function publishSessionBotChangeNotice(params: Readonly<{
     });
 }
 
+/**
+ * Stop coordinating's receipt (lab P3 L): the rules it removed come back with Undo, each through the
+ * version-bound Follow writer. A partial stop says so; nothing pretends the session still coordinates.
+ */
+function publishCoordinatorStopNotice(
+    target: SessionActionTarget,
+    address: SessionAddress,
+    stopped: Awaited<ReturnType<typeof sessionCoordinatorActions.stop>>,
+) {
+    const name = getSessionName(target.session, target.serverId);
+    const key = `session-coordinator-stop:${address.serverId}:${address.sessionId}`;
+    publishPresentationNotice({
+        key,
+        severity: stopped.status === 'partial' ? 'error' : 'info',
+        message: stopped.status === 'partial' ? t('sessionCoordinator.menu.stopPartial', { name }) : t('sessionCoordinator.menu.stopped', { name }),
+        emphasis: name,
+        ...(stopped.undo.removed.length > 0 ? { undo: {
+            label: t('bots.undo'),
+            run: () => {
+                retirePresentationNotice(key);
+                fireAndForget((async () => {
+                    const restored = await sessionCoordinatorActions.undoStop(stopped.undo);
+                    if (restored.status !== 'restored') publishPresentationNotice({ key, severity: 'error', message: t('sessionCoordinator.menu.undoStopFailed') });
+                })(), { tag: 'sessionActionExecution.undoCoordinatorStop' });
+            },
+        } } : {}),
+    });
+}
+
 function resolveStopArchiveFlow(context: SessionActionExecutionContext | undefined) {
     return context?.operations?.stopArchiveFlow ?? stopSessionAndMaybeArchive;
 }
@@ -150,7 +203,12 @@ function resolveStopSession(context: SessionActionExecutionContext | undefined):
 }
 
 function resolveArchiveSession(context: SessionActionExecutionContext | undefined): NonNullable<SessionActionExecutionOperations['archiveSession']> {
-    return context?.operations?.archiveSession ?? ((sessionId, options) => executeSessionLifecycleAction('session.archive', sessionId, options));
+    const archive = context?.operations?.archiveSession ?? ((sessionId, options) => executeSessionLifecycleAction('session.archive', sessionId, options));
+    return async (sessionId, options) => {
+        const result = await archive(sessionId, options);
+        if (result.success) await archiveSessionReports({ ...result, serverId: options?.serverId });
+        return result;
+    };
 }
 
 function resolveUnarchiveSession(context: SessionActionExecutionContext | undefined): NonNullable<SessionActionExecutionOperations['unarchiveSession']> {
@@ -159,10 +217,6 @@ function resolveUnarchiveSession(context: SessionActionExecutionContext | undefi
 
 function resolveRenameSession(context: SessionActionExecutionContext | undefined): NonNullable<SessionActionExecutionOperations['renameSession']> {
     return context?.operations?.renameSession ?? ((sessionId, title, options) => executeSessionLifecycleAction('session.title.set', sessionId, options, title));
-}
-
-function resolveSetSessionRole(context: SessionActionExecutionContext | undefined) {
-    return context?.operations?.setSessionRole ?? roleActions.setSessionRole;
 }
 
 function resolveDeleteSession(context: SessionActionExecutionContext | undefined): NonNullable<SessionActionExecutionOperations['deleteSession']> {
@@ -216,6 +270,7 @@ async function runStopArchiveFlow(params: Readonly<{
     address: SessionAddress;
     context?: SessionActionExecutionContext;
     archiveAfterStop: 'always' | 'never';
+    alsoArchiveReports?: boolean;
 }>): Promise<void> {
     const stopArchiveFlow = resolveStopArchiveFlow(params.context);
     const stopSession = resolveStopSession(params.context);
@@ -233,7 +288,8 @@ async function runStopArchiveFlow(params: Readonly<{
             }
             return result;
         },
-        archiveSession: async () => await archiveSession(params.address.sessionId, { serverId: params.address.serverId }),
+        archiveSession: async () => await archiveSession(params.address.sessionId, { serverId: params.address.serverId,
+            ...(params.alsoArchiveReports !== undefined ? { alsoArchiveReports: params.alsoArchiveReports } : {}) }),
         stopErrorMessage: t('sessionInfo.failedToStopSession'),
         archiveErrorMessage: t('sessionInfo.failedToArchiveSession'),
     });
@@ -243,18 +299,20 @@ async function executeArchiveAction(
     target: SessionActionTarget,
     address: SessionAddress,
     context?: SessionActionExecutionContext,
+    alsoArchiveReports?: boolean,
 ): Promise<void> {
     const archiveSession = resolveArchiveSession(context);
 
     if (target.isActive || target.hasRecoverableTerminalHost) {
-        await runStopArchiveFlow({ target, address, context, archiveAfterStop: 'always' });
+        await runStopArchiveFlow({ target, address, context, archiveAfterStop: 'always', alsoArchiveReports });
         return;
     }
 
-    const result = await archiveSession(address.sessionId, { serverId: address.serverId });
+    const result = await archiveSession(address.sessionId, { serverId: address.serverId,
+        ...(alsoArchiveReports !== undefined ? { alsoArchiveReports } : {}) });
     if (!result.success) {
         if (isSessionActiveArchiveResult(result)) {
-            await runStopArchiveFlow({ target, address, context, archiveAfterStop: 'always' });
+            await runStopArchiveFlow({ target, address, context, archiveAfterStop: 'always', alsoArchiveReports });
             return;
         }
         throw new HappyError(result.message || t('sessionInfo.failedToArchiveSession'), false);
@@ -320,11 +378,6 @@ export async function executeSessionAction(params: Readonly<{
             );
             return;
         }
-        case SESSION_ACTION_MAKE_ORCHESTRATOR_ID: {
-            const result = await resolveSetSessionRole(params.context)(params.target.sessionId, ORCHESTRATOR_ROLE_ID, { serverId: params.target.serverId });
-            if (!result.ok) throw new HappyError(t('sessionWork.actions.makeOrchestratorFailed'), false);
-            return;
-        }
         case SESSION_ACTION_MAKE_BOT_ID:
         case SESSION_ACTION_MAKE_REGULAR_ID: {
             const accepted = params.actionId === SESSION_ACTION_MAKE_BOT_ID ? { kind: 'bot' as const } : null;
@@ -358,6 +411,32 @@ export async function executeSessionAction(params: Readonly<{
             openPicker({ sessionId: params.target.sessionId, serverId: params.target.serverId });
             return;
         }
+        case SESSION_ACTION_COORDINATOR_MAKE_ID:
+            if (!targetAddress) throwUnsupportedSingleTargetAction();
+            showMakeCoordinatorDialog(targetAddress);
+            return;
+        case SESSION_ACTION_COORDINATOR_EDIT_ID:
+            if (!targetAddress) throwUnsupportedSingleTargetAction();
+            // People, on what it follows (its Following section; coordination lab P1p).
+            router.push(buildScopedSessionRouteHref({ ...targetAddress,
+                query: { ...serializeSessionPaneUrlState({ rightTabId: 'collaboration' }), collaborationFocus: 'following' },
+            }) as Parameters<typeof router.push>[0]);
+            return;
+        case SESSION_ACTION_COORDINATOR_ANSWERS_ID: {
+            if (!targetAddress) throwUnsupportedSingleTargetAction();
+            const setAnswers = params.context?.operations?.setSessionAnswersWorkerQuestions ?? roleActions.setSessionAnswersWorkerQuestions;
+            const enabled = !readSessionAnswersWorkerQuestionsV1(params.target.session.metadata);
+            const result = await setAnswers(targetAddress.sessionId, enabled, { serverId: targetAddress.serverId });
+            if (!result.ok) throw new HappyError(t('errors.unknownError'), false);
+            return;
+        }
+        case SESSION_ACTION_COORDINATOR_STOP_ID: {
+            if (!targetAddress) throwUnsupportedSingleTargetAction();
+            const stopped = await sessionCoordinatorActions.stop(targetAddress.sessionId, { serverId: targetAddress.serverId });
+            if (stopped.status === 'unavailable') throw new HappyError(t('sessionCoordinator.menu.stopFailed'), false);
+            publishCoordinatorStopNotice(params.target, targetAddress, stopped);
+            return;
+        }
         case SESSION_ACTION_RESUME_ID: {
             const resumeSession = resolveResumeSession(params.context);
             if (!resumeSession) throwUnsupportedSingleTargetAction();
@@ -375,7 +454,7 @@ export async function executeSessionAction(params: Readonly<{
             return;
         case SESSION_ACTION_ARCHIVE_ID:
             if (!targetAddress) throwUnsupportedSingleTargetAction();
-            await executeArchiveAction(params.target, targetAddress, params.context);
+            await executeArchiveAction(params.target, targetAddress, params.context, params.input?.alsoArchiveReports);
             return;
         case SESSION_ACTION_UNARCHIVE_ID:
             throwIfFailed(
@@ -385,7 +464,12 @@ export async function executeSessionAction(params: Readonly<{
             return;
         case SESSION_ACTION_DELETE_ID:
             throwIfFailed(
-                await resolveDeleteSession(params.context)(params.target.sessionId, { serverId: params.target.serverId }),
+                await resolveDeleteSession(params.context)(params.target.sessionId, {
+                    serverId: params.target.serverId,
+                    ...(params.context?.presentUserConfirmation
+                        ? { presentUserConfirmation: params.context.presentUserConfirmation }
+                        : {}),
+                }),
                 t('sessionInfo.failedToDeleteSession'),
             );
             return;

@@ -190,7 +190,7 @@ describe('Summary model discovery', () => {
         await screen.unmount();
     });
     /** One configured Agent on one Machine whose strict catalog observation is whatever `execute` answers. */
-    async function mountPickerOver(name: string, execute: () => unknown) {
+    async function mountPickerOver(name: string, execute: (input: unknown) => unknown) {
         const serverUrl = `https://${name}.example.test`;
         const serverIdentityId = `srv_${name.replaceAll('-', '_')}`;
         const accountId = `${name}-account`;
@@ -219,11 +219,17 @@ describe('Summary model discovery', () => {
         }
         getStorage().setState({ settingsScope: scope, profileScope: scope,
             machines: { [machine.id]: machine }, machineListByServerId: { [homeId]: [machine] } });
-        const screen = await renderSettingsView(<ScmDiffSummaryModelPicker value="" onChange={vi.fn()}
-            machineId={machine.id} serverId={homeId} defaultBackendTarget={target} />);
+        const change = vi.fn();
+        const selection = vi.fn();
+        const availability = vi.fn();
+        const picker = (machineId: string) => <ScmDiffSummaryModelPicker value="" onChange={change}
+            onSelection={selection} onAvailabilityChange={availability}
+            machineId={machineId} serverId={homeId} defaultBackendTarget={target} />;
+        const screen = await renderSettingsView(picker(machine.id));
         const menu = () => screen.findAll(node => node.type === DropdownMenu)[0];
         await act(async () => { menu().props.onOpenChange(true); });
-        return { screen, menu, target };
+        return { screen, menu, target, change, selection, availability,
+            switchMachine: (machineId: string) => screen.update(picker(machineId)) };
     }
     const catalogOf = (target: { kind: 'backend'; backendId: string; configuredBackendId: string }, failure?: unknown) => ({ items: [],
         scmDiffSummaryCatalog: { profiles: [], automaticProfiles: [], discoveryTargetKeys: [buildBackendTargetKeyV2(target)],
@@ -243,6 +249,118 @@ describe('Summary model discovery', () => {
         // No model row is invented, and neither the errno nor the command's path reaches the person.
         expect(items()[0]).toMatchObject({ id: `backend-discovery:${buildBackendTargetKeyV2(reviewBot)}`, subtitle: next });
         expect(JSON.stringify(items())).not.toMatch(/E[A-Z]{3,}\b|review-cli/u);
+        await screen.unmount();
+    });
+    const modelRow = { id: 'real-model', name: 'Real model', costTier: 'low' as const, capabilities: { structuredOutput: 'supported' as const } };
+    const catalogWithModel = (extra: Record<string, unknown> = {}) => ({ items: [], scmDiffSummaryCatalog: {
+        profiles: buildScmDiffSummaryModelProfiles({ backendTarget: readBackendTargetRefV2(reviewBot), models: [modelRow] }),
+        automaticProfiles: [], discoveryTargetKeys: [buildBackendTargetKeyV2(reviewBot)], ...extra } });
+    type MenuItem = Readonly<{ id: string; title: string; subtitle?: string; disabled?: boolean; category?: string }>;
+    const discoveryId = `backend-discovery:${buildBackendTargetKeyV2(reviewBot)}`;
+    it('keeps the last readable choices when a refresh fails, says so, and recovers on retry', async () => {
+        let refusing = false;
+        const { screen, menu, change, selection, availability } = await mountPickerOver('summary-refresh-failure', () => {
+            if (refusing) throw new Error('machine unreachable');
+            return catalogWithModel({ automaticProfiles: catalogWithModel().scmDiffSummaryCatalog.profiles });
+        });
+        const items = () => menu().props.items as ReadonlyArray<MenuItem>;
+        await vi.waitFor(() => expect(items().map(item => item.title)).toContain('Real model'));
+        const modelId = items().find(item => item.title === 'Real model')!.id;
+        expect(items().find(item => item.id === modelId)?.subtitle).toBe('Default · Low cost');
+        expect(menu().props.selectedId).toBe(modelId);
+        await vi.waitFor(() => expect(availability).toHaveBeenLastCalledWith(true));
+        expect(items().some(item => item.id === 'catalog-refresh')).toBe(false);
+        refusing = true;
+        await act(async () => { menu().props.onSelect(discoveryId); });
+        await vi.waitFor(() => expect(items().find(item => item.id === 'catalog-refresh')).toMatchObject({
+            title: 'Couldn’t refresh models', subtitle: 'Showing the last list. Try again.' }));
+        // The choices the person already saw stay readable and selectable; the failure is a quiet row, not an empty menu.
+        expect(items().find(item => item.title === 'Real model')?.disabled).not.toBe(true);
+        expect(items().find(item => item.id === modelId)?.subtitle).toBe('Low cost');
+        expect(menu().props.selectedId).toBe('');
+        await vi.waitFor(() => expect(availability).toHaveBeenLastCalledWith(false));
+        await act(async () => { menu().props.onSelect(modelId); });
+        expect(change).toHaveBeenLastCalledWith(modelId);
+        expect(selection).toHaveBeenLastCalledWith(expect.objectContaining({
+            modelSelector: expect.objectContaining({ modelId: modelRow.id }),
+        }));
+        expect(menu().props.emptyLabel).toBe('No models found');
+        refusing = false;
+        await act(async () => { menu().props.onOpenChange(true); menu().props.onSelect('catalog-refresh'); });
+        await vi.waitFor(() => expect(items().some(item => item.id === 'catalog-refresh')).toBe(false));
+        expect(items().map(item => item.title)).toContain('Real model');
+        expect(items().find(item => item.id === modelId)?.subtitle).toBe('Default · Low cost');
+        expect(menu().props.selectedId).toBe(modelId);
+        await vi.waitFor(() => expect(availability).toHaveBeenLastCalledWith(true));
+        await screen.unmount();
+    });
+    it('retires the retained choices when the Machine changes instead of showing another Machine\u2019s list', async () => {
+        let refusing = false;
+        const { screen, menu, switchMachine } = await mountPickerOver('summary-refresh-identity', () => {
+            if (refusing) throw new Error('machine unreachable');
+            return catalogWithModel();
+        });
+        const titles = () => (menu().props.items as ReadonlyArray<MenuItem>).map(item => item.title);
+        await vi.waitFor(() => expect(titles()).toContain('Real model'));
+        refusing = true;
+        await act(async () => { await switchMachine('another-machine'); });
+        await vi.waitFor(() => expect(menu().props.emptyLabel).toBe('Couldn’t load models. Try again.'));
+        expect(titles()).not.toContain('Real model');
+        await screen.unmount();
+    });
+    it.each([
+        { reason: 'native_sign_in_required', next: 'Not picked automatically until you sign in on this machine.' },
+        { reason: 'native_auth_unavailable', next: 'Sign-in couldn’t be checked, so it isn’t picked automatically. Try again.' },
+        { reason: 'connected_default_unavailable', next: 'Its connected account isn’t available, so it isn’t picked automatically. Check Connected services.' },
+    ])('explains why automatic choice skips an Agent ($reason) while its explicit models stay selectable', async ({ reason, next }) => {
+        const { screen, menu } = await mountPickerOver(`summary-unavailable-${reason.replaceAll('_', '-')}`,
+            () => catalogWithModel({ unavailableTargets: [{ backendTargetKey: buildBackendTargetKeyV2(reviewBot), reason }] }));
+        const items = () => menu().props.items as ReadonlyArray<MenuItem>;
+        await vi.waitFor(() => expect(items().find(item => item.id === discoveryId)).toMatchObject({ title: 'Find more models', subtitle: next }));
+        // Explicit choices are not labelled by the automatic route's availability.
+        const model = items().find(item => item.title === 'Real model');
+        expect(model).toBeDefined();
+        expect(model?.disabled).not.toBe(true);
+        expect(model?.subtitle ?? '').not.toMatch(/sign|auth|unavailable/iu);
+        expect(items().some(item => item.id === 'catalog-refresh')).toBe(false);
+        await screen.unmount();
+    });
+    it('groups Agents that offer no models yet under one message with one retry, instead of repeating it per Agent', async () => {
+        const agents = [{ kind: 'backend' as const, backendId: 'codex' }, { kind: 'backend' as const, backendId: 'opencode' }, reviewBot];
+        const keys = agents.map(agent => buildBackendTargetKeyV2(agent));
+        let reads = 0;
+        const { screen, menu } = await mountPickerOver('summary-grouped-auth-unknown', () => (reads++, { items: [], scmDiffSummaryCatalog: {
+            profiles: [], automaticProfiles: [], discoveryTargetKeys: keys,
+            unavailableTargets: keys.map(backendTargetKey => ({ backendTargetKey, reason: 'native_auth_unavailable' })) } }));
+        const items = () => menu().props.items as ReadonlyArray<MenuItem>;
+        await vi.waitFor(() => expect(items().filter(item => item.id.startsWith('backend-discovery:'))).toHaveLength(3));
+        // The shared reason is said once, with its count and the next action; no Agent row repeats it.
+        const mentions = items().filter(item => /Sign-in couldn’t be checked/u.test(`${item.title} ${item.subtitle ?? ''}`));
+        expect(mentions).toHaveLength(1);
+        expect(mentions[0]!.title).toMatch(/3 agents/u);
+        // Each Agent stays one row, named for itself, that still asks that Agent for its models.
+        const rows = items().filter(item => item.id.startsWith('backend-discovery:'));
+        expect(new Set(rows.map(row => row.category)).size).toBe(1);
+        expect(rows.every(row => row.subtitle === undefined && row.title !== 'Find more models')).toBe(true);
+        expect(rows.map(row => row.id).sort()).toEqual(keys.map(key => `backend-discovery:${key}`).sort());
+        // The message row retries the Machine's catalog.
+        expect(mentions[0]!.category).toBe(rows[0]!.category);
+        const before = reads;
+        await act(async () => { menu().props.onSelect(mentions[0]!.id); });
+        await vi.waitFor(() => expect(reads).toBeGreaterThan(before));
+        await screen.unmount();
+    });
+    it.each([
+        { name: 'summary-account-metadata-catalog', extra: { unavailableReason: 'account_metadata_unavailable' } },
+        { name: 'summary-account-metadata-target', extra: { unavailableTargets: [{ backendTargetKey: buildBackendTargetKeyV2(reviewBot), reason: 'account_metadata_unavailable' }] } },
+    ])('tells the person connected accounts could not be read, once, with a retry ($name)', async ({ name, extra }) => {
+        const { screen, menu } = await mountPickerOver(name, () => catalogWithModel(extra));
+        const items = () => menu().props.items as ReadonlyArray<MenuItem>;
+        await vi.waitFor(() => expect(items().filter(item => item.id === 'catalog-refresh')).toEqual([
+            expect.objectContaining({ title: 'Some models may be missing', subtitle: 'Couldn’t read your connected accounts. Try again.' })]));
+        // The reason lives in the catalog notice, not repeated on the Agent's row.
+        expect(items().find(item => item.id === discoveryId)?.subtitle).toBeUndefined();
+        expect(items().map(item => item.title)).toContain('Real model');
         await screen.unmount();
     });
     it.each([

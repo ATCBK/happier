@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { PetAssetMediaTypeV1Schema } from '@happier-dev/protocol/pets/accountLibrary';
 import { PetPackageManifestV1Schema } from '@happier-dev/protocol/pets/manifest';
 
@@ -10,8 +10,8 @@ function localPetSourcesBySourceKeyKey(): string {
     return 'local-pet-sources-v1';
 }
 
-const SourceKeySchema = z.string().min(1).max(500);
-const PackagePathSchema = z.string().min(1).max(10_000);
+const SourceKeySchema = z.string().check(z.minLength(1), z.maxLength(500));
+const PackagePathSchema = z.string().check(z.minLength(1), z.maxLength(10_000));
 
 const LocalPetPackageSourceSchema = z.discriminatedUnion('kind', [
     z.object({
@@ -20,27 +20,27 @@ const LocalPetPackageSourceSchema = z.discriminatedUnion('kind', [
         homePath: PackagePathSchema,
         packagePath: PackagePathSchema,
         sourceKey: SourceKeySchema,
-    }).strip(),
+    }),
     z.object({
         kind: z.literal('happierManagedLocal'),
         packagePath: PackagePathSchema,
         sourceKey: SourceKeySchema,
-    }).strip(),
+    }),
 ]);
 
 const LocalPetSourceMetadataSchema = z.object({
     sourceKey: SourceKeySchema,
     source: LocalPetPackageSourceSchema,
-    displayName: z.string().min(1).max(200),
+    displayName: z.string().check(z.minLength(1), z.maxLength(200)),
     manifest: PetPackageManifestV1Schema,
     mediaType: PetAssetMediaTypeV1Schema,
-    digest: z.string().min(1).max(500).nullable(),
-    sizeBytes: z.number().int().min(0).nullable(),
+    digest: z.nullable(z.string().check(z.minLength(1), z.maxLength(500))),
+    sizeBytes: z.nullable(z.number().check(z.int(), z.minimum(0))),
     daemonTarget: z.object({
-        serverId: z.string().min(1).max(500),
-        machineId: z.string().min(1).max(500),
-    }).strip(),
-}).strip();
+        serverId: z.string().check(z.minLength(1), z.maxLength(500)),
+        machineId: z.string().check(z.minLength(1), z.maxLength(500)),
+    }),
+});
 
 function parseLocalPetSourcesBySourceKey(input: unknown): Record<string, LocalPetSourceMetadata> {
     if (!input || typeof input !== 'object' || Array.isArray(input)) return {};

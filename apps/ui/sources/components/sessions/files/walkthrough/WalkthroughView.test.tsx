@@ -10,6 +10,8 @@ import {
     SPECIMEN_WALKTHROUGH,
 } from '@/components/dev/changes/walkthroughSpecimenFixture';
 
+import { SCM_DIFF_SUMMARY_GENERIC_FAILURE } from '@/sync/domains/scm/diffSummary/state';
+
 import { buildWalkthroughReading, EMPTY_WALKTHROUGH_READING, type WalkthroughReadingInput } from './walkthroughReading';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -122,6 +124,13 @@ function diffsUnder(screen: Awaited<ReturnType<typeof renderScreen>>, testID: st
 }
 
 describe('WalkthroughView (lab WT1-A)', () => {
+    it.each(['restoring', 'unavailable'] as const)('does not offer a new walkthrough while saved data is %s', async restoreState => {
+        const screen = await renderScreen(<WalkthroughView reading={EMPTY_WALKTHROUGH_READING} scopeLabel="Pending changes" layout="wide"
+            restoreState={restoreState} start={{ options: null, onStart: vi.fn(), busy: false, disabled: false }} />);
+        expect(Boolean(screen.findByTestId('walkthrough-none'))).toBe(false);
+        expect(Boolean(screen.findByTestId('walkthrough-start'))).toBe(false);
+        expect(Boolean(screen.findByTestId(`walkthrough-${restoreState}`))).toBe(true);
+    });
     it('shows the captured rename, untracked and conflict kinds before narration, and opens their exact files', async () => {
         const reading = buildWalkthroughReading({ ...COMPLETE, walkthrough: { state: 'pending' } });
         const onOpenFile = vi.fn();
@@ -224,7 +233,7 @@ describe('WalkthroughView (lab WT1-A)', () => {
         const failed = await renderScreen(view({ ...COMPLETE, walkthrough: { state: 'failed', value: SPECIMEN_WALKTHROUGH, reason: 'overloaded' } }));
         expect(failed.findHostByTestId('walkthrough-notice-failed')?.props.accessibilityRole).toBe('alert');
         const quiet = await renderScreen(view(COMPLETE, {
-            update: { message: 'Merged stops 2 and 3', onUndo: vi.fn() },
+            update: { title: 'Merged stops 2 and 3', onUndo: vi.fn() },
             stale: { onRefresh: vi.fn() },
         }));
         for (const testID of ['walkthrough-notice-update', 'walkthrough-notice-stale']) {
@@ -233,5 +242,36 @@ describe('WalkthroughView (lab WT1-A)', () => {
             expect(band?.props.accessibilityRole).not.toBe('alert');
             expect(band?.props.accessibilityLiveRegion).toBe('polite');
         }
+    });
+
+    it('renders the owner’s genuine refinement failure even after its conversation ended', async () => {
+        const ended = { onStartNew: vi.fn(), onAskSession: vi.fn() };
+        // Run-observation refusals are removed by the state owner; an explicit generation refusal stays actionable.
+        const generic = await renderScreen(view(COMPLETE, { endedConversation: ended, failure: SCM_DIFF_SUMMARY_GENERIC_FAILURE, onRetry: vi.fn() }));
+        expect(generic.findByTestId('walkthrough-notice-ended')).toBeTruthy();
+        expect(Boolean(generic.findByTestId('walkthrough-notice-failed'))).toBe(true);
+        // A typed reason the reader can act on is never hidden behind it.
+        const typed = await renderScreen(view(COMPLETE, { endedConversation: ended, onChooseModel: vi.fn(),
+            failure: { reason: 'modelUnavailable', messageKey: 'walkthrough.generationFailure.modelUnavailable', nextAction: 'chooseModel', nextActionKey: 'walkthrough.notice.chooseModel' } }));
+        expect(typed.findByTestId('walkthrough-notice-failed')).toBeTruthy();
+    });
+});
+
+describe('stop arrival motion', () => {
+    const fading = (screen: Awaited<ReturnType<typeof renderScreen>>) => screen.tree.root
+        .findAll((node) => node.props.entering !== undefined && node.findAll((inner) => typeof inner.props.testID === 'string'
+            && inner.props.testID.startsWith('walkthrough-stop-')).length > 0, { deep: false }).length;
+
+    it('shows a restored saved reading in place; only stops written while reading fade into their slot', async () => {
+        const screen = await renderScreen(<WalkthroughView reading={EMPTY_WALKTHROUGH_READING} restoreState="restoring" scopeLabel="Pending changes" layout="phone" />);
+        await screen.update(<WalkthroughView reading={buildWalkthroughReading(COMPLETE)} restoreState="ready" scopeLabel="Pending changes" layout="phone" />);
+        expect(fading(screen)).toBe(0);
+
+        const first = { ...SPECIMEN_WALKTHROUGH, stops: SPECIMEN_WALKTHROUGH.stops.slice(0, 1) };
+        const writing = await renderScreen(<WalkthroughView reading={buildWalkthroughReading({ ...COMPLETE, walkthrough: { state: 'writing', value: first } })}
+            scopeLabel="Pending changes" layout="phone" />);
+        await writing.update(<WalkthroughView reading={buildWalkthroughReading({ ...COMPLETE, walkthrough: { state: 'writing', value: SPECIMEN_WALKTHROUGH } })}
+            scopeLabel="Pending changes" layout="phone" />);
+        expect(fading(writing)).toBe(SPECIMEN_WALKTHROUGH.stops.length - 1);
     });
 });

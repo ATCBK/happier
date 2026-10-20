@@ -1,11 +1,11 @@
 import React from 'react';
 import { View, Platform, type StyleProp, type ViewProps, type ViewStyle } from 'react-native';
-import { GestureDetector } from 'react-native-gesture-handler';
 import Animated from 'react-native-reanimated';
 
 import { SessionItem, type SessionItemProps } from './SessionItem';
 import {
     useSessionInlineDrag,
+    type UseSessionInlineDragStart,
     type UseSessionInlineDragCancelEvent,
     type UseSessionInlineDragDropResultEvent,
     type UseSessionInlineDragResolvedDrop,
@@ -33,7 +33,7 @@ export type SessionListRowProps = Readonly<
         groupKey: string;
         reorderEnabled: boolean;
         organizeMode: boolean;
-        onDragStart: (sessionKey: string) => void;
+        onDragStart: UseSessionInlineDragStart;
         resolveDropResult: (event: UseSessionInlineDragResolveDropResultEvent) => UseSessionInlineDragResolvedDrop;
         onDropResult: (event: UseSessionInlineDragDropResultEvent) => void | Promise<void>;
         onDragUpdate?: (event: UseSessionInlineDragDropResultEvent) => void;
@@ -111,7 +111,7 @@ export const SessionListRow = React.memo(function SessionListRow(props: SessionL
             cellWrapper.style.zIndex = '9999';
             cellWrapper.style.overflow = 'visible';
         }
-        onDragStart(nextSessionKey);
+        return onDragStart(nextSessionKey);
     }, [getCellWrapper, handleNativeContextMenuOpenChange, onDragStart]);
 
     const handleInlineDropResult = React.useCallback((event: UseSessionInlineDragDropResultEvent) => {
@@ -127,7 +127,7 @@ export const SessionListRow = React.memo(function SessionListRow(props: SessionL
     const touchPrimary = isTouchPrimaryPointer();
     const inlineDragEnabled = reorderEnabled && (!touchPrimary || organizeMode);
 
-    const { gesture, animatedStyle } = useSessionInlineDrag({
+    const { gesture, animatedStyle, dragSourceRef } = useSessionInlineDrag({
         enabled: inlineDragEnabled,
         sessionKey,
         groupKey,
@@ -199,13 +199,14 @@ export const SessionListRow = React.memo(function SessionListRow(props: SessionL
 
     const handleWrapperRef = React.useCallback((node: View | null) => {
         wrapperRef.current = node;
+        dragSourceRef(node);
         const measurementRef = measurementTarget?.ref;
         if (typeof measurementRef === 'function') {
             measurementRef(node);
         } else if (measurementRef) {
             measurementRef.current = node;
         }
-    }, [measurementTarget?.ref]);
+    }, [dragSourceRef, measurementTarget?.ref]);
 
     const handleRowLayout = React.useCallback((event: Parameters<NonNullable<ViewProps['onLayout']>>[0]) => {
         onRegisterTreeRowBounds(treeRowId, wrapperRef.current);
@@ -236,16 +237,10 @@ export const SessionListRow = React.memo(function SessionListRow(props: SessionL
         </View>
     );
 
-    const row = !touchPrimary && reorderGesture ? (
-        <GestureDetector gesture={reorderGesture}>
-            {rowNode}
-        </GestureDetector>
-    ) : rowNode;
-
     // Lab ST4: a move its owner refused late (or could not confirm) stays under this row in words.
     return (
         <SessionListRowSettledFeedback sessionId={itemProps.session.id} serverId={itemServerId} testID={`session-list-row:${treeRowId}`}>
-            {row}
+            {rowNode}
         </SessionListRowSettledFeedback>
     );
 });

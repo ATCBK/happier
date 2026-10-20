@@ -41,6 +41,7 @@ async function render() {
 beforeEach(() => storage.getState().updateSessionProjectScmSnapshot('s1', createSnapshot(), runtime.serverId));
 describe('SessionRightPanelGitView (keep mounted sub-tabs)', () => {
     it('mounts History after activation and preserves it when returning to Changes', async () => {
+        const { StyleSheet } = await import('react-native');
         const screen = await render();
         expect(screen.findHostByTestId('session-rightpanel-git-surface:commit')).not.toBeNull();
         expect(screen.findHostByTestId('session-rightpanel-git-surface:history')).toBeNull();
@@ -49,7 +50,7 @@ describe('SessionRightPanelGitView (keep mounted sub-tabs)', () => {
         expect(history).not.toBeNull();
         await screen.pressByTestIdAsync('session-rightpanel-git-subtab:commit');
         expect(screen.findHostByTestId('session-rightpanel-git-surface:history')).toBe(history);
-        expect(history?.props.pointerEvents).toBe('none');
+        expect(StyleSheet.flatten(history?.props.style).pointerEvents).toBe('none');
     });
 
     it('offers Changes and History in Tabs layout and no sub-tabs in Unified', async () => {

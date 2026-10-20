@@ -450,22 +450,20 @@ export function registerMachineVoiceInferenceTransferRpcHandlers(params: Readonl
         normalization: parsed.data.normalization,
         filePath: uploaded.path,
         inputMimeType: uploaded.inputMimeType,
+        onTranscribed: async () => {
+          if (parsed.data.diagnostics?.captureAllowed !== true || !diagnosticFormat) return;
+          await params.voiceDiagnostics?.captureFile({
+            direction: 'stt_input',
+            format: diagnosticFormat,
+            filePath: uploaded.path,
+            durationMs: parsed.data.diagnostics.durationMs,
+            sessionId: parsed.data.diagnostics.sessionId,
+            authorizationId: parsed.data.diagnostics.authorizationId,
+            providerId: parsed.data.packId ?? 'daemon-default',
+            attemptId: parsed.data.requestId,
+          });
+        },
       });
-      // Diagnostics are evidence of a completed provider operation, not merely an accepted
-      // upload. Persist only after transcription succeeds so failed/cancelled attempts never
-      // leave a misleading audio artifact behind.
-      if (parsed.data.diagnostics?.captureAllowed === true && diagnosticFormat) {
-        await params.voiceDiagnostics?.captureFile({
-          direction: 'stt_input',
-          format: diagnosticFormat,
-          filePath: uploaded.path,
-          durationMs: parsed.data.diagnostics.durationMs,
-          sessionId: parsed.data.diagnostics.sessionId,
-          authorizationId: parsed.data.diagnostics.authorizationId,
-          providerId: parsed.data.packId ?? 'daemon-default',
-          attemptId: parsed.data.requestId,
-        });
-      }
       return parseVoiceInferenceResponse(DaemonVoiceInferenceSttTranscribeResponseSchema, {
         ok: true,
         ...transcribed,

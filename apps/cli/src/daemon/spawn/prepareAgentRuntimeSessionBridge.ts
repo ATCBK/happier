@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 
 import { PluginAgentContributionV2Schema } from '@happier-dev/protocol/plugins/contributions/v2';
 import type { BackendTargetRefV2 } from '@happier-dev/protocol';
+import { writePersistedBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 
 import type {
     AgentRuntimeDaemonSessionDescriptorV1,
@@ -10,14 +11,14 @@ import type {
 import { activateAgentRuntimeContributionOnDemand } from '@/agent/runtime/registry/activationDemand';
 import { configuration } from '@/configuration';
 import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
-import { resolveContributedAgentRoutingId } from '@/plugins/projection/registry/agentRoutingIdentity';
+import { indexAgentRoutingIdsByContributionIdentity, readAgentRoutingIdForContributionIdentity, resolveContributedAgentRoutingId } from '@/plugins/projection/registry/agentRoutingIdentity';
 
 import {
   createForegroundAgentRuntimeBootstrapAuthorization,
   createRunnerAgentSessionBootstrapAuthorization,
 } from '../agentRuntime/sessionBridgeAuthorization';
 import type { SpawnPluginRuntimeLease } from './spawnPluginRuntimeLease';
-import { resolveEngineRuntimeContribution } from '@/agent/runtime/registry/engineRegistry/contributions';
+import { resolveEngineBackendIdForCatalogAgent, resolveEngineRuntimeContribution } from '@/agent/runtime/registry/engineRegistry/contributions';
 import {
   snapshotActivatedPluginRuntimeAuthority,
 } from '@/plugins/runtime/lifecycle/activation/runtimeAuthority';
@@ -79,12 +80,24 @@ export async function resolveRunnerAgentSessionDescriptorForLease(
   }>,
 ): Promise<AgentRuntimeDaemonSessionDescriptorV1 | null> {
   const lease = input.lease;
-  const backend = resolveEngineRuntimeContribution(
+  // A configured definition is an instance of its declared Agent. Resolve that
+  // identity in this lease rather than looking up the definition as an Agent id.
+  const isConfigured = input.target.configuredBackendId !== undefined || input.target.sourceKind === 'configured';
+  const selected = isConfigured ? writePersistedBackendTargetRefV2(input.target) : null;
+  const configuredAgentId = selected?.kind === 'agent' ? readAgentRoutingIdForContributionIdentity(
+      indexAgentRoutingIdsByContributionIdentity([...lease.registry.contributes.agentDefinitionsById.values()]),
+      selected.identity,
+    )
+    : null;
+  const backendId = isConfigured
+    ? configuredAgentId ? resolveEngineBackendIdForCatalogAgent(lease.registry.contributes, configuredAgentId) : null
+    : input.target.backendId;
+  const backend = backendId ? resolveEngineRuntimeContribution(
     lease.registry.contributes,
-    input.target.backendId,
-  );
+    backendId,
+  ) : null;
   if (!backend) {
-    if (input.target.sourceKind === 'configured') return null;
+    if (isConfigured) return null;
     throw new Error(
       `Runner Agent backend '${input.target.backendId}' is unavailable in the admitted plugin registry`,
     );

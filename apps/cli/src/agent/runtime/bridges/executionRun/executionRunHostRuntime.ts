@@ -13,6 +13,8 @@ export type ExecutionRunInputContext = Omit<RuntimeTurnPromptMeta, 'structuredIn
 
 export type ExecutionRunNativeInputContext = ExecutionRunInputContext & Readonly<{
     resultContract?: ExecutionRunResultContractV1;
+    /** Current input's private caller mode; never part of an Agent SDK send. */
+    effectiveCallerPermissionMode?: string;
 }>;
 
 export type ExecutionRunHostRuntimeMessageHandler = (message: AgentMessage) => void;

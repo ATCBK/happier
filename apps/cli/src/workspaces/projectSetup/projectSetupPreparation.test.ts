@@ -17,13 +17,15 @@ import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots'
 import { createRegisteredScmBackendAdapter } from '@/scm/pluginBackends/registeredScmBackendAdapter';
 import { createHostScmHostingProviderRuntimeServices } from '@/scm/hostingProviders/runtimeServices';
 import { createScmBackendRegistry } from '@/scm/registry';
-import { createLocalScmRepositoryFixture, runScmExecutable } from '@/scm/contracts/scmBackendContractFixtures';
+import { createLocalScmRepositoryFixture, runScmExecutable } from '@/testkit/scm/scmBackendContractFixtures';
 import { createGitScmBackendRuntimeRegistration } from '../../../../../packages/plugins/scm-git/src/backend';
 import { pixiAdapter, pixiPlugin, pixiRuntime, importedPixiEnvironment } from '../../../../../packages/plugin-sdk/fixtures/external-targeted-packages/project-native-source';
 
 import { createProjectSetupSuccessStore } from './projectSetupSuccess';
-import { prepareProjectSetup, reviewProjectSetupEffect, inspectProjectSetupReadiness, type ProjectSetupPreparationInput } from './projectSetupPreparation';
+import { prepareProjectSetup, reviewProjectSetupEffect, inspectProjectSetup, inspectProjectSetupReadiness, type ProjectSetupPreparationInput } from './projectSetupPreparation';
 import { projectNativeSystemIo } from './projectNativeSystemIo';
+import * as scmProcess from '@/scm/runtime';
+import { performance } from 'node:perf_hooks';
 
 describe('current Project setup effect and preparation admission', () => {
     const roots: string[] = [];
@@ -90,6 +92,17 @@ describe('current Project setup effect and preparation admission', () => {
         expect(await inspectProjectSetupReadiness(input)).toMatchObject({ kind: 'needsReview', code: 'project_environment_binding_unavailable' });
     });
 
+    it('reports target setup consent through canonical admission without running setup or writing trust', async () => {
+        const { input } = await fixture({ version: 1, workspace: { setup: [{ kind: 'command', command: 'echo setup' }] } });
+        const plan = await reviewed(input);
+        trustTransport(null);
+        expect(await inspectProjectSetup(input, { reviewConsent: true })).toMatchObject({ setupConsent: { kind: 'required', code: 'project_setup_consent_required' },
+            setupReview: { reviewedEffectDigest: plan.reviewedEffectDigest } });
+        vi.restoreAllMocks();
+        trustTransport(plan.reviewedEffectDigest);
+        expect(await inspectProjectSetup(input, { reviewConsent: true })).toMatchObject({ setupConsent: { kind: 'admitted' } });
+    });
+
     it.skipIf(process.platform === 'win32')('reviews installed package-manager identity without binding cross-Machine trust to runtime prefix paths or host PATH', async () => {
         const manifest = { version: 1, workspace: { setup: [{ kind: 'native', tool: 'package_script', file: 'package.json', target: 'setup' }] } };
         const files = { 'package.json': JSON.stringify({ packageManager: 'npm@4.6.0', scripts: { setup: 'echo prepared' } }) };
@@ -138,11 +151,32 @@ describe('current Project setup effect and preparation admission', () => {
         })]);
         const workspace = { ...input.workspace, rootPath: repository.rootPath };
         const provenanceInput = { ...input, workspace, projectAssociation: { ...input.projectAssociation, workspace }, scmRegistry };
+        // Observe real OS commands without substituting SCM or effect logic.
+        const commands = vi.spyOn(scmProcess, 'runScmCommand');
+        const statusReads = () => commands.mock.calls.filter(([request]) => request.args.includes('status')).length;
+        const initialStartedAt = performance.now();
         const untracked = await reviewed(provenanceInput);
+        const initialDurationMs = Math.round(performance.now() - initialStartedAt);
         expect(untracked.reviewedEffect).toMatchObject({ presentation: { provenance: {
             file: '.happier/project.json', kind: 'repository', headCommit: repository.headCommit,
             branch: repository.branchName, fileState: 'untracked',
         } } });
+        const initialStatusReads = statusReads();
+        expect(initialStatusReads).toBeGreaterThan(0);
+        const checkpointStartedAt = performance.now();
+        const checkpoint = await reviewProjectSetupEffect(provenanceInput, untracked.reviewedEffect.presentation);
+        expect(checkpoint).toMatchObject({ kind: 'reviewed', plan: { reviewedEffectDigest: untracked.reviewedEffectDigest } });
+        console.info('R7 Project provenance source measurement', { initialDurationMs,
+            checkpointDurationMs: Math.round(performance.now() - checkpointStartedAt), initialStatusReads,
+            checkpointStatusReads: statusReads() - initialStatusReads });
+        expect(statusReads()).toBe(initialStatusReads);
+        await writeFile(join(repository.rootPath, '.happier/project.json'), JSON.stringify({ ...manifest,
+            workspace: { setup: [{ kind: 'command', command: 'echo changed' }] } }));
+        const changed = await reviewProjectSetupEffect(provenanceInput, untracked.reviewedEffect.presentation);
+        if (changed.kind !== 'reviewed') throw new Error(changed.code);
+        expect(changed.plan.reviewedEffectDigest).not.toBe(untracked.reviewedEffectDigest);
+        expect(statusReads()).toBe(initialStatusReads);
+        await writeFile(join(repository.rootPath, '.happier/project.json'), JSON.stringify(manifest));
         // Temporary-repository fixture mutations never touch the shared checkout.
         runScmExecutable(repository.rootPath, 'git', ['add', '.happier/project.json']);
         runScmExecutable(repository.rootPath, 'git', ['commit', '-m', 'record project fixture']);

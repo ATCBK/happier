@@ -28,7 +28,6 @@ import type {
     EngineResolutionAgent,
     EngineResolutionBackend,
 } from '@/agent/runtime/registry/engineRegistryTypes';
-import { createProviderTerminalDisplay } from '@/ui/providers/providerTerminalDisplay';
 import {
     getAgentResumeConfig,
     resolveModelSelectionIntentFromSessionMetadata,
@@ -85,6 +84,7 @@ type NativeAgentSessionOpenIntent =
 
 type NativeAgentSessionRuntimeCreation = Readonly<{
     operations: PluginRuntimeHookOperations;
+    runtimeDescriptorV1?: HostSessionRuntimeFactoryResult<PluginRuntimeHookOperations>['runtimeDescriptorV1'];
     configuration?: AgentSessionConfigurationSnapshot | null;
     runtimeCapabilities?: HostSessionRuntimeFactoryResult<PluginRuntimeHookOperations>['runtimeCapabilities'];
     skillsDelivered?: boolean;
@@ -171,6 +171,18 @@ function bindReplaceableNativeAgentSessionOperations(params: Readonly<{
     let runtimeBindingEpoch = 0;
     let stableRuntimeOperations: PluginRuntimeHookOperations | null = null;
     let replacementLifecycle: HostRuntimeReplacementLifecycle | null = null;
+    const pendingGoalControls = new Set<Promise<unknown>>();
+    let goalControlReplacement: Promise<void> | null = null;
+    const runGoalControl = async (effect: () => unknown): Promise<unknown> => {
+        if (goalControlReplacement) await goalControlReplacement;
+        const result = Promise.resolve().then(effect);
+        pendingGoalControls.add(result);
+        try {
+            return await result;
+        } finally {
+            pendingGoalControls.delete(result);
+        }
+    };
     const runtimeEventHandlers = new Set<RuntimeTurnMessageHandler>();
     let runtimeEventUnsubscribe: (() => void) | null = null;
     let promptDeliveryOutcomeHandler: ((outcome: PluginRuntimePromptDeliveryOutcome) => void) | null = null;
@@ -262,7 +274,10 @@ function bindReplaceableNativeAgentSessionOperations(params: Readonly<{
         const bindingEpoch = runtimeBindingEpoch;
         currentOperations.setOnPromptDeliveryOutcome(promptDeliveryOutcomeHandler
             ? (outcome) => {
-                if (runtimeClosed || bindingEpoch !== runtimeBindingEpoch) return;
+                // Retirement itself publishes exact unresolved custody. Keep
+                // that path bound until native disposal has finished; all
+                // other runtime sources are fenced as soon as closing begins.
+                if (bindingEpoch !== runtimeBindingEpoch) return;
                 promptDeliveryOutcomeHandler?.(outcome);
             }
             : null);
@@ -407,11 +422,11 @@ function bindReplaceableNativeAgentSessionOperations(params: Readonly<{
             : {}),
         ...(hasRefreshGoal
             ? {
-                refreshGoal: () => currentOperations.refreshGoal?.() ?? {
+                refreshGoal: () => runGoalControl(() => currentOperations.refreshGoal?.() ?? {
                     ok: false as const,
                     errorCode: 'native_goal_control_unavailable',
                     error: 'native_goal_control_unavailable',
-                },
+                }),
             }
             : {}),
         ...(hasSetGoal
@@ -419,20 +434,20 @@ function bindReplaceableNativeAgentSessionOperations(params: Readonly<{
                 setGoal: (
                     objective: Parameters<NonNullable<PluginRuntimeHookOperations['setGoal']>>[0],
                     options?: Parameters<NonNullable<PluginRuntimeHookOperations['setGoal']>>[1],
-                ) => currentOperations.setGoal?.(objective, options) ?? {
+                ) => runGoalControl(() => currentOperations.setGoal?.(objective, options) ?? {
                     ok: false as const,
                     errorCode: 'native_goal_control_unavailable',
                     error: 'native_goal_control_unavailable',
-                },
+                }),
             }
             : {}),
         ...(hasClearGoal
             ? {
-                clearGoal: () => currentOperations.clearGoal?.() ?? {
+                clearGoal: () => runGoalControl(() => currentOperations.clearGoal?.() ?? {
                     ok: false as const,
                     errorCode: 'native_goal_control_unavailable',
                     error: 'native_goal_control_unavailable',
-                },
+                }),
             }
             : {}),
         ...(hasListVendorPlugins
@@ -553,6 +568,7 @@ function bindReplaceableNativeAgentSessionOperations(params: Readonly<{
             return currentOperations.readSessionIdentity();
         },
         readSessionStartupInstructions: () => currentOperations.readSessionStartupInstructions?.() ?? null,
+        readSessionStartupInstructionsSupport: () => currentOperations.readSessionStartupInstructionsSupport?.(),
         ...(hasRefreshSkills ? {
             async refreshSkills(request: Parameters<NonNullable<PluginRuntimeHookOperations['refreshSkills']>>[0],
                 options?: Parameters<NonNullable<PluginRuntimeHookOperations['refreshSkills']>>[1]) {
@@ -565,41 +581,59 @@ function bindReplaceableNativeAgentSessionOperations(params: Readonly<{
             return await currentOperations.updateSessionRuntimeConfig(update);
         },
         async resetOrDisposeRuntime(reason, nextSessionOpenIntent) {
-            await replacementLifecycle?.beforeReplacement();
-            runtimeClosed = true;
-            runtimeBindingEpoch += 1;
-            let detachError: unknown;
-            let detachFailed = false;
+            // A startup-plan reopen must retain the native Goal's source and
+            // publisher until its accepted control has settled. Terminal disposal
+            // still cancels immediately; it also invalidates a waiting reopen.
+            const pendingControls = nextSessionOpenIntent ? [...pendingGoalControls] : [];
+            const bindingEpoch = runtimeBindingEpoch;
+            let releaseGoalControls: (() => void) | undefined;
+            const replacement = pendingControls.length > 0
+                ? new Promise<void>(resolve => { releaseGoalControls = resolve; }) : null;
+            if (replacement) goalControlReplacement = replacement;
             try {
-                detachRuntimeSources();
-            } catch (error) {
-                detachError = error;
-                detachFailed = true;
-            }
-            if (hasModelsSource) publishModelSnapshot({ models: null });
-            try {
-                await currentOperations.resetOrDisposeRuntime(reason);
-            } finally {
+                if (pendingControls.length > 0) {
+                    await Promise.allSettled(pendingControls);
+                    if (bindingEpoch !== runtimeBindingEpoch) return;
+                }
+                await replacementLifecycle?.beforeReplacement();
                 runtimeClosed = true;
-            }
-            if (detachFailed) throw detachError;
-            if (nextSessionOpenIntent) {
-                const recreated = await recreateClosedRuntime(nextSessionOpenIntent);
-                if (recreated) {
-                    try {
-                        await replacementLifecycle?.onSuccessorUsable();
-                    } catch (error) {
-                        runtimeClosed = true;
-                        runtimeBindingEpoch += 1;
+                let detachError: unknown;
+                let detachFailed = false;
+                try {
+                    detachRuntimeSources();
+                } catch (error) {
+                    detachError = error;
+                    detachFailed = true;
+                }
+                if (hasModelsSource) publishModelSnapshot({ models: null });
+                try {
+                    await currentOperations.resetOrDisposeRuntime(reason);
+                } finally {
+                    runtimeClosed = true;
+                    runtimeBindingEpoch += 1;
+                }
+                if (detachFailed) throw detachError;
+                if (nextSessionOpenIntent) {
+                    const recreated = await recreateClosedRuntime(nextSessionOpenIntent);
+                    if (recreated) {
                         try {
-                            detachRuntimeSources();
-                        } catch {
-                            // Preserve the successor usability failure while still disposing it.
+                            await replacementLifecycle?.onSuccessorUsable();
+                        } catch (error) {
+                            runtimeClosed = true;
+                            runtimeBindingEpoch += 1;
+                            try {
+                                detachRuntimeSources();
+                            } catch {
+                                // Preserve the successor usability failure while still disposing it.
+                            }
+                            await currentOperations.resetOrDisposeRuntime().catch(() => undefined);
+                            throw error;
                         }
-                        await currentOperations.resetOrDisposeRuntime().catch(() => undefined);
-                        throw error;
                     }
                 }
+            } finally {
+                if (goalControlReplacement === replacement) goalControlReplacement = null;
+                releaseGoalControls?.();
             }
         },
     });
@@ -913,11 +947,6 @@ export async function createNativeAgentHostSessionRuntimePlan(params: Readonly<{
             ? { registeredAgentIdentity: params.registeredAgentIdentity }
             : {}),
     });
-    const TerminalDisplay = createProviderTerminalDisplay({
-        title: displayName,
-        footerName: displayName,
-        accentColor: 'cyan',
-    });
     const providerSessionMetadataKey = resolveNativeAgentVendorResumeIdField(policyAgentId);
     const augmentSessionMetadata: HostSessionRuntimeConfig['augmentSessionMetadata'] = (metadata) => {
         const projected = params.sessionProjection?.augmentSessionMetadata?.(metadata) ?? metadata;
@@ -946,6 +975,7 @@ export async function createNativeAgentHostSessionRuntimePlan(params: Readonly<{
                     ? { augmentSessionMetadata }
                     : {}),
                 policyAgentId,
+                readSessionAgentCatalogEntry: () => params.agent.catalogEntry ?? null,
                 providerRequirements:
                     params.agent.richDefinition?.definition
                         .providerRequirements,
@@ -969,7 +999,14 @@ export async function createNativeAgentHostSessionRuntimePlan(params: Readonly<{
                 ...(params.agent.catalogEntry?.runtimeActivityApplicability !== undefined
                     ? { runtimeActivityApplicability: params.agent.catalogEntry.runtimeActivityApplicability }
                     : {}),
-                terminalDisplay: TerminalDisplay,
+                loadTerminalDisplay: async () => {
+                    const { createProviderTerminalDisplay } = await import('@/ui/providers/providerTerminalDisplay');
+                    return createProviderTerminalDisplay({
+                        title: displayName,
+                        footerName: displayName,
+                        accentColor: 'cyan',
+                    });
+                },
                 formatPromptErrorMessage: (error) => `Error: ${error instanceof Error ? error.message : String(error)}`,
                 ...(providerSessionMetadataKey ? { providerSessionMetadataKey } : {}),
                 createNativeRuntime: async (runtimeParams) => {
@@ -1005,6 +1042,9 @@ export async function createNativeAgentHostSessionRuntimePlan(params: Readonly<{
                     return {
                         operations,
                         nativeRuntime: operations,
+                        ...(initialRuntime.runtimeDescriptorV1
+                            ? { runtimeDescriptorV1: initialRuntime.runtimeDescriptorV1 }
+                            : {}),
                         ...(initialRuntime.configuration
                             ? { configuration: initialRuntime.configuration }
                             : {}),

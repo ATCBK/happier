@@ -146,7 +146,7 @@ function MountedWorkflowRunReference(props: Readonly<{
     const stateLabel = summary ? describeWorkflowRunState(summary.state, { workflowCustodyState: summary.workflowCustodyState }).label : null;
     const open = (): void => {
         navigateWithBlurOnWeb(() => {
-            transcriptSource.navigate?.(createWorkflowRunRoute(runId));
+            transcriptSource.navigate?.(createWorkflowRunRoute(runId, props.serverId));
         });
     };
 

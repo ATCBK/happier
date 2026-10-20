@@ -2,8 +2,11 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import { HappierSkeletonRows } from '@happier-dev/plugin-ui/presentation';
+import { CollectionLoadingRows } from '@happier-dev/plugin-ui/components';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { PluginSurfacePageHeaderContext } from '@/components/plugins/shared/pluginSurfaceInteractionAvailability';
+import { PageFrame } from '@/components/ui/layout/PageFrame';
 import {
     SurfaceStateCard,
     type SurfaceStateAction,
@@ -86,25 +89,41 @@ export function PluginSurfaceFallback(props: Readonly<{
     accessibilitySemantics?: SurfaceStateAccessibilitySemantics;
     /** Glyph-only decoration; semantic title and reason remain the shared owner's strings. */
     renderText?: (field: 'title' | 'reason', text: string) => React.ReactNode;
+    /** The plugin's display name, so a whole-page card says which plugin failed. */
+    subjectName?: string;
 }>): React.ReactElement {
     const presentation = resolvePluginSurfaceStatePresentation({
         state: props.state ?? 'unavailable',
         reasonCode: props.reasonCode,
+        subjectName: props.subjectName,
     });
+    // On a plugin page route that has loaded nothing, the page keeps its identity (title, mark, the
+    // route's Back) above the state, in the page column the loaded page will use, like the offline
+    // state (`PluginSurfaceInteractionBoundary`). Mounted content resets this to null.
+    const pageIdentity = React.useContext(PluginSurfacePageHeaderContext);
+    const pageHeader = pageIdentity?.header;
     const card = presentation.card;
     if (!card) {
         throw new Error('plugin_surface_unavailable_presentation_missing_card');
     }
     if (card.kind === 'loading') {
-        return (
+        const skeleton = (
             <PluginSurfaceLoadingSkeleton
                 testID={props.testID}
                 accessibilityLabel={card.title}
                 diagnosticCode={presentation.diagnosticCode}
+                shape={pageIdentity?.loadingFrame === 'collection' ? 'collection' : 'list'}
             />
         );
+        if (!pageHeader) return skeleton;
+        // A Collection page fills its content area under its toolbar; every other page sits in the page column.
+        return pageIdentity?.loadingFrame === 'collection'
+            ? <View style={{ flex: 1 }}>{pageHeader}{skeleton}</View>
+            : <PageFrame content="column" style={{ flex: 1 }}>{pageHeader}{skeleton}</PageFrame>;
     }
     return (
+        <>
+        {pageHeader}
         <SurfaceStateCard
             testID={props.testID}
             kind={card.kind}
@@ -120,6 +139,7 @@ export function PluginSurfaceFallback(props: Readonly<{
             })}
             accessibilitySemantics={props.accessibilitySemantics ?? card.accessibilitySemantics}
         />
+        </>
     );
 }
 
@@ -132,19 +152,30 @@ function PluginSurfaceLoadingSkeleton(props: Readonly<{
     testID: string;
     accessibilityLabel: string;
     diagnosticCode: string | null;
+    /** `collection`: the rows of the Collection page that is coming, in its table frame; `list`: a generic list. */
+    shape: 'list' | 'collection';
 }>): React.ReactElement {
     const { theme } = useUnistyles();
-    const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const pluginTheme = usePluginUiTheme(theme);
     const reducedMotion = useReducedMotionPreference();
     return (
-        <View testID={props.testID} style={{ flex: 1, paddingTop: pluginTheme.spacing.small }}>
-            <HappierSkeletonRows
-                testID={`${props.testID}-loading-skeleton`}
-                rows={LOADING_SKELETON_ROWS}
-                theme={pluginTheme}
-                accessibilityLabel={props.accessibilityLabel}
-                reducedMotion={reducedMotion}
-            />
+        <View testID={props.testID} style={{ flex: 1, paddingTop: props.shape === 'collection' ? 0 : pluginTheme.spacing.small }}>
+            {props.shape === 'collection' ? (
+                <CollectionLoadingRows
+                    testID={`${props.testID}-loading-skeleton`}
+                    theme={pluginTheme}
+                    accessibilityLabel={props.accessibilityLabel}
+                    reducedMotion={reducedMotion}
+                />
+            ) : (
+                <HappierSkeletonRows
+                    testID={`${props.testID}-loading-skeleton`}
+                    rows={LOADING_SKELETON_ROWS}
+                    theme={pluginTheme}
+                    accessibilityLabel={props.accessibilityLabel}
+                    reducedMotion={reducedMotion}
+                />
+            )}
             {props.diagnosticCode ? (
                 <View
                     testID={`${props.testID}-diagnostic-${props.diagnosticCode}`}

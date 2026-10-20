@@ -7,6 +7,7 @@ import { createTestExecutionRunHostRuntime } from './testkit';
 import { startExecutionRun } from './startExecutionRun';
 import type { ExecutionRunState } from './executionRunTypes';
 import { createDaemonAdmissionDrain } from '@/daemon/lifecycle/admissionDrain';
+import { isDeepStrictEqual } from 'node:util';
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>();
@@ -20,6 +21,34 @@ describe('structured analysis Run admission', () => {
     vi.stubEnv('HAPPIER_CLAUDE_DYNAMIC_MODEL_PROBE_ENABLED', '0');
   });
   afterEach(() => vi.unstubAllEnvs());
+  it.each(['review', 'scm_diff_summary'] as const)('admits %s using the selected Connected Services catalog', async intent => {
+    const connectedServices = { v: 2, bindingsByServiceId: {
+      'happier.agent.codex/openai-codex': { source: 'connected', selection: 'profile', profileId: 'connected-account' },
+    } } as const;
+    const runs = new Map<string, ExecutionRunState>();
+    const voiceAgentManager = new VoiceAgentManager({ createRuntime: () => { throw new Error('Unused Voice boundary'); } });
+    try {
+      const reviewer = resolveRoleSelectionV1({ roleId: 'reviewer' });
+      if (!reviewer.ok) throw new Error('Missing canonical Reviewer role');
+      const result = await startExecutionRun({
+        params: { sessionId: 'parent-session', intent, backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+          ...(intent === 'review' ? { resolvedRole: reviewer.selection } : {}),
+          modelId: 'selected-account-model', connectedServices,
+          modelSelection: { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'selected-account-model' },
+          // Native catalog transport is the boundary: only the selected launch
+          // environment offers this model; the ordinary native catalog does not.
+          readNativeOfferedModel: async request => isDeepStrictEqual(Reflect.get(request, 'connectedServices'), connectedServices)
+            ? { id: request.modelId, name: 'Selected model', capabilities: { structuredOutput: 'supported' } } : undefined,
+          instructions: 'Review the selected scope.', permissionMode: 'read_only', retentionPolicy: 'resumable',
+          runClass: 'long_lived', ioMode: 'request_response' },
+        parentProvider: 'codex', sendAcp: async () => {}, streamedTranscriptSession: null,
+        createRuntime: () => createTestExecutionRunHostRuntime(), getNowMs: () => 1,
+        budgetRegistry: null, runs, controllers: new Map(), enqueueMarkerWrite: async () => {}, writeActivityMarker: async () => {},
+        finishRun: async () => {}, executeBoundedRun: async () => {}, send: async () => ({ ok: true }), voiceAgentManager,
+      });
+      expect(runs.get(result.runId)).toMatchObject({ intent, status: 'running' });
+    } finally { await voiceAgentManager.dispose(); }
+  });
   it('refuses a drained start before publishing a Run or constructing its native runtime', async () => {
     const drain = createDaemonAdmissionDrain();
     drain.beginTemporaryDrain();
@@ -38,6 +67,32 @@ describe('structured analysis Run admission', () => {
         budgetRegistry: null, runs, controllers: new Map(), enqueueMarkerWrite: async () => {}, writeActivityMarker: async () => {},
         finishRun: async () => {}, executeBoundedRun: async () => {}, send: async () => ({ ok: true }), voiceAgentManager,
       })).rejects.toMatchObject({ code: 'daemon_draining', details: { executionRunStart: { runCreation: 'noRunCreated' } } });
+      expect(runs.size).toBe(0);
+      expect(runtimeCreated).toBe(false);
+    } finally { await voiceAgentManager.dispose(); }
+  });
+  it.each(['review', 'scm_diff_summary'] as const)('preserves a failed native catalog read when admitting %s', async intent => {
+    const runs = new Map<string, ExecutionRunState>();
+    let runtimeCreated = false;
+    const voiceAgentManager = new VoiceAgentManager({ createRuntime: () => { throw new Error('Unused Voice boundary'); } });
+    const reviewer = resolveRoleSelectionV1({ roleId: 'reviewer' });
+    if (!reviewer.ok) throw new Error('Missing canonical Reviewer role');
+    try {
+      await expect(startExecutionRun({
+        params: { sessionId: 'parent-session', intent, backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+          ...(intent === 'review' ? { resolvedRole: reviewer.selection } : {}),
+          modelId: 'gpt-6-luna',
+          // The runner-to-daemon catalog transport failed before a model was read.
+          readNativeOfferedModel: async () => { throw Object.assign(new Error('Snapshot read unavailable'),
+            { code: 'execution_run_contribution_snapshot_unavailable' }); },
+          instructions: '', permissionMode: 'read_only', retentionPolicy: 'resumable',
+          runClass: 'long_lived', ioMode: 'request_response' },
+        parentProvider: 'codex', sendAcp: async () => {}, streamedTranscriptSession: null,
+        createRuntime: () => { runtimeCreated = true; return createTestExecutionRunHostRuntime(); }, getNowMs: () => 1,
+        budgetRegistry: null, runs, controllers: new Map(), enqueueMarkerWrite: async () => {}, writeActivityMarker: async () => {},
+        finishRun: async () => {}, executeBoundedRun: async () => {}, send: async () => ({ ok: true }), voiceAgentManager,
+      })).rejects.toMatchObject({ code: 'execution_run_contribution_snapshot_unavailable',
+        details: { executionRunStart: { runCreation: 'noRunCreated' } } });
       expect(runs.size).toBe(0);
       expect(runtimeCreated).toBe(false);
     } finally { await voiceAgentManager.dispose(); }
@@ -66,10 +121,12 @@ describe('structured analysis Run admission', () => {
     } finally { await voiceAgentManager.dispose(); }
   });
   it.each([
-    ['scm_diff_summary', 'freeform-not-in-native-catalog', false],
-    ['scm_diff_summary', 'offered-native-model', true],
-    ['review', 'freeform-not-in-native-catalog', false],
-  ] as const)('admits %s model %s only when the native catalog establishes JSON support (%s)', async (intent, modelId, allowed) => {
+    ['scm_diff_summary', 'freeform-not-in-native-catalog', false, false],
+    ['scm_diff_summary', 'offered-native-model', true, false],
+    ['review', 'freeform-not-in-native-catalog', false, true],
+    ['review', 'freeform-not-in-native-catalog', false, false],
+    ['review', 'offered-native-model', true, false],
+  ] as const)('admits %s model %s only when the native catalog establishes JSON support (%s; walkthrough: %s)', async (intent, modelId, allowed, walkthrough) => {
     const selectedModelId = allowed ? getAgentStaticModels('claude', { catalogOnly: true })[0]?.id : modelId;
     if (allowed && !selectedModelId) throw new Error('The native Claude offered-model catalog is unavailable');
     const runs = new Map<string, ExecutionRunState>();
@@ -81,7 +138,7 @@ describe('structured analysis Run admission', () => {
       const result = startExecutionRun({
         params: {
           sessionId: 'parent-session', intent,
-          ...(intent === 'review' ? { intentInput: { outputs: ['walkthrough'] } } : {}),
+          ...(walkthrough ? { intentInput: { outputs: ['walkthrough'] } } : {}),
           ...(reviewer?.ok ? { resolvedRole: reviewer.selection } : {}),
           backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
           modelId: selectedModelId,

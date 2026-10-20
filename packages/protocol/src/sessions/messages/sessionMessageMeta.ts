@@ -19,6 +19,7 @@ import {
 import { VendorPluginMentionV1Schema } from '../../runtime/input/vendorPluginMentionV1.js';
 import { SkillMentionV1Schema } from '../../runtime/input/skillMentionV1.js';
 import { ExecutionRunInputTurnV1Schema } from '../../execution/runs/responseSchemas.js';
+import { SessionFollowRuleSourceEvidenceV1Schema } from '../follow/sessionFollowRuleOccurrenceV1.js';
 import { SessionForkVisualOriginV1Schema } from '../board/forkVisualCopies.js';
 import { SESSION_MESSAGE_MODEL_SELECTION_V1_META_KEY } from '../../providers/selection/v1.js';
 import {
@@ -52,6 +53,7 @@ export const SessionMessageStreamSegmentV1Schema = lazyZodSchema(() => z.strictO
   startedAtMs: z.catch(z.nullish(z.number()), undefined),
   updatedAtMs: z.catch(z.nullish(z.number()), undefined),
   interruptedReason: z.catch(z.optional(z.string()), undefined),
+  sourceMessageId: z.optional(z.string().check(z.refine((value) => value.trim().length > 0))),
 }));
 
 export const SESSION_USER_MESSAGE_DELIVERY_INTENT_META_KEY = 'happierDeliveryIntentV1';
@@ -104,6 +106,8 @@ export function createSessionMessageMetaSchema(zod: typeof z) {
     lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(HappierMetaEnvelopeSchema).check(z.refine((value) => value.kind !== SESSION_MEDIA_MESSAGE_META_KIND_V1))),
   ]);
   return zod.looseObject({
+      // Source-owned facts, sealed with this original record; never delivery or Account-rule authority.
+      happierFollowRuleEvidenceV1: zod.optional(SessionFollowRuleSourceEvidenceV1Schema),
       ...createClaudePredecessorMessageMetaShape(zod),
       sentFrom: z.optional(createSentFromSchema(zod)),
       /**

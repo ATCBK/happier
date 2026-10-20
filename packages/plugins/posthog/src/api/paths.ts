@@ -55,6 +55,11 @@ export function errorTrackingIssueCrudPath(
     return `${errorTrackingBase(teamRouteId)}/issues/${encodeURIComponent(issueId)}/`;
 }
 
+/** PATCH — assignment is separate from the issue status writer. */
+export function errorTrackingIssueAssignPath(teamRouteId: PosthogTeamRouteId, issueId: string): string {
+    return `${errorTrackingIssueCrudPath(teamRouteId, issueId)}assign/`;
+}
+
 /**
  * GET — one page of the item-scoped activity log for a single issue.
  *

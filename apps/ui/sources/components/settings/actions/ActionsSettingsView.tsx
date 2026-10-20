@@ -136,11 +136,13 @@ function ActionSettingsRowAccessory(props: Readonly<{
 function getActionSettingsEntryStatusText(
     entry: ActionSettingsEntry,
     settings: ActionsSettingsV1,
+    scmRemoteConfirmPolicy: unknown,
 ): string {
     const statusSummary = resolveActionSettingsEntryStatusSummary({
         settings,
         actionId: entry.actionId,
         targets: entry.targets,
+        scmRemoteConfirmPolicy,
     });
     return (
         listActionSettingsEntryStatusParts(statusSummary)
@@ -159,6 +161,7 @@ export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
     const styles = stylesheet;
     const [searchQuery, setSearchQuery] = React.useState('');
     const [rawSettings, setRawSettings] = useSettingMutable('actionsSettingsV1');
+    const scmRemoteConfirmPolicy = useSetting('scmRemoteConfirmPolicy');
     const voice = useSetting('voice') as Readonly<{ privacy?: { shareDeviceInventory?: boolean } }> | null;
     const executionRunsEnabled = useFeatureEnabled('execution.runs');
     const memorySearchEnabled = useFeatureEnabled('memory.search');
@@ -224,13 +227,13 @@ export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
         [entries, familySections],
     );
 
-    const commitSettings = React.useCallback((next: unknown) => {
-        setRawSettings(normalizeActionsSettings(next));
+    const commitSettings = React.useCallback((update: (current: ActionsSettingsV1) => unknown) => {
+        setRawSettings(current => normalizeActionsSettings(update(normalizeActionsSettings(current))));
     }, [setRawSettings]);
 
     const handleActionEnabledChange = React.useCallback((actionId: ActionSettingsActionId, enabled: boolean) => {
-        commitSettings(setActionEnabled({ settings, actionId, enabled }));
-    }, [commitSettings, settings]);
+        commitSettings(current => setActionEnabled({ settings: current, actionId, enabled }));
+    }, [commitSettings]);
 
     const openActionDetails = React.useCallback((actionId: ActionSettingsActionId) => {
         router.push(`/settings/actions/${encodeURIComponent(actionId)}`);
@@ -238,7 +241,7 @@ export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
 
     const renderEntryRow = React.useCallback((entry: ActionSettingsEntry) => {
         const actionTestIdPrefix = `settings-actions:action:${entry.actionId}`;
-        const statusText = getActionSettingsEntryStatusText(entry, settings);
+        const statusText = getActionSettingsEntryStatusText(entry, settings, scmRemoteConfirmPolicy);
 
         return (
             <Item
@@ -266,7 +269,7 @@ export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
                 onPress={() => openActionDetails(entry.actionId)}
             />
         );
-    }, [handleActionEnabledChange, openActionDetails, settings, styles.actionStatusSubtitle]);
+    }, [handleActionEnabledChange, openActionDetails, scmRemoteConfirmPolicy, settings, styles.actionStatusSubtitle]);
 
     const renderSegment = React.useCallback(({ item: segment }: Readonly<{ item: ActionSettingsVirtualizedSegment }>) => {
         const pluginId = segment.first && segment.items[0]?.entry.kind !== 'host'
@@ -339,7 +342,6 @@ export const ActionsSettingsView = React.memo(function ActionsSettingsView() {
                     ...(Platform.OS === 'web' ? { minHeight: 0 } : {}),
                 }}
                 contentContainerStyle={{ paddingBottom: Platform.OS === 'ios' ? 34 : 16 }}
-                backendPreference="auto"
                 initialNumToRender={6}
                 maxToRenderPerBatch={4}
                 windowSize={7}

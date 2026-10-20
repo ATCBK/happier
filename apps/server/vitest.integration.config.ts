@@ -6,6 +6,7 @@ import { dirname, resolve } from 'node:path';
 import { resolveVitestFeatureTestExcludeGlobs } from '../../scripts/testing/featureTestGating';
 import { serverWorkspacePackageSourcesPlugin } from './vitestWorkspacePackageResolution';
 import { workspacePackageSourcesPlugin as cliWorkspacePackageSourcesPlugin } from '../cli/scripts/vitestWorkspacePackageResolution';
+import { createTestHomeEnvironment } from '../../scripts/testing/testHomeEnvironment.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const homeIrohRealIntegrationTest = 'sources/app/iroh/homeIrohEndpoint.real.integration.test.ts';
@@ -14,7 +15,8 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    setupFiles: ['./sources/configureZodLocale.ts'],
+    setupFiles: [resolve(__dirname, '../../scripts/testing/vitestHomeSetup.mjs'), './sources/configureZodLocale.ts'],
+    sequence: { setupFiles: 'list' },
     testTimeout: 60_000,
     hookTimeout: 60_000,
     fileParallelism: false,
@@ -28,10 +30,17 @@ export default defineConfig({
     ],
     exclude: [
       ...resolveVitestFeatureTestExcludeGlobs(),
+      // The public integration lane runs this with the UI's native/Expo boundary harness.
+      'sources/app/api/routes/connect/qualifiedConnectedAccounts/usagePageProjection.composed.integration.spec.ts',
+      'sources/app/session/sessionSharedActionConfirmation.sqlite.composed.integration.spec.ts',
+      'sources/app/automations/automationCrudService.composed.integration.spec.ts',
+      'sources/app/workflows/workflowRunAttention.composed.integration.spec.ts',
+      'sources/app/discussions/discussionExternalComposer.sqlite.composed.integration.spec.ts',
       ...(process.env.HAPPIER_IROH_REQUIRE_NODE_ADDON === '1' ? [] : [homeIrohRealIntegrationTest]),
     ],
     isolate: true,
     env: {
+      ...createTestHomeEnvironment().env,
       HAPPIER_FEATURE_POLICY_ENV: '',
       S3_HOST: 'localhost',
       S3_PORT: '9000',

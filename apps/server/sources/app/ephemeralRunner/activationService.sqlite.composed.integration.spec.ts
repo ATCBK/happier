@@ -1421,6 +1421,24 @@ describe('Runner activation and draft lifecycle (SQLite)', () => {
         }
     });
 
+    it('materializes initial access for another Account through the canonical Session audience', async () => {
+        const fixture = await materializationFixture('plain');
+        const viewer = await db.account.create({ data: { encryptionMode: 'plain' } });
+        await db.teamMembership.create({ data: { teamId: fixture.team.id, accountId: viewer.id, role: 'member' } });
+        const baseRequest = materializationRequest(fixture);
+        const request = { ...baseRequest, session: { ...baseRequest.session, initialAccess: { grants: [{
+            subject: { kind: 'account' as const, accountId: viewer.id }, accessLevel: 'view' as const,
+            canApprovePermissions: false,
+        }] } } };
+        expect(await materializeEphemeralRunner({ creatorAccountId: fixture.account.id, request,
+            authentication: presentUserAuthentication, env: process.env })).toMatchObject({ status: 'materialized' });
+        expect(await db.sessionShare.findFirst({ where: {
+            sessionId: fixture.created.activation.sessionId, sharedWithUserId: viewer.id,
+        } })).toMatchObject({ accessLevel: 'view' });
+        expect(await db.accountChange.findFirst({ where: { accountId: viewer.id,
+            kind: 'session', entityId: fixture.created.activation.sessionId } })).toMatchObject({ accountId: viewer.id });
+    });
+
     it.each([
         ['Session row', 'AFTER INSERT ON "Session"'],
         ['owner DEK tuple', 'AFTER INSERT ON "SessionDataKeyEnvelope"'],

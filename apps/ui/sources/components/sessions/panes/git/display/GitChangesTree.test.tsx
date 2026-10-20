@@ -2,7 +2,7 @@ import * as React from 'react';
 import { act } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
+import { createThemeFixture, renderScreen } from '@/dev/testkit';
 import { createTextModuleMock } from '@/dev/testkit/mocks/text';
 import { toTestIdSafeValue } from '@/utils/ui/toTestIdSafeValue';
 import { selectScmChangedFiles } from '@/scm/scmStatusFiles';
@@ -79,7 +79,7 @@ const SNAPSHOT = {
     totals: {},
 } as any;
 
-const theme = {
+const theme = createThemeFixture({
     colors: {
         text: { primary: '#111', link: '#09f', secondary: '#aaa', tertiary: '#ccc' },
         surface: { pressed: '#222', base: '#fff', inset: '#eee' },
@@ -90,7 +90,7 @@ const theme = {
             danger: { foreground: '#d00' },
         },
     },
-} as any;
+});
 
 const rowId = (path: string) => `repository-tree-row-${toTestIdSafeValue(path)}`;
 const textOf = (node: any): string => (node == null ? '' : typeof node === 'string' ? node : (node.children ?? []).map(textOf).join(''));

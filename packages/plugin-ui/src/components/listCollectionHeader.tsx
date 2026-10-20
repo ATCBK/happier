@@ -43,7 +43,7 @@ export type ListCollectionSearch = Readonly<{
 /** The `/` key focuses the field (web, with focus inside the list); the field says so as a key cap. */
 const SEARCH_FOCUS_KEY = '/';
 
-export function useListCollectionSearch(search: ListCollectionSearch | undefined, rootRef: RefObject<View | null>) {
+export function useListCollectionSearch(search: ListCollectionSearch | undefined, rootRef: RefObject<unknown>) {
   const [uncontrolledQuery, setUncontrolledQuery] = useState(search?.defaultValue ?? '');
   const query = search?.value ?? uncontrolledQuery;
   const [composingQuery, setComposingQuery] = useState<string | null>(null);

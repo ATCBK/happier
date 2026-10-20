@@ -32,3 +32,8 @@ export const ReviewCommentsV1Schema = lazyZodSchema(() => z.strictObject({
 }));
 
 export type ReviewCommentsV1 = z.infer<typeof ReviewCommentsV1Schema>;
+
+export const ReviewCommentsMessageMetaV1Schema = lazyZodSchema(() => z.strictObject({
+  kind: z.literal('review_comments.v1'),
+  payload: ReviewCommentsV1Schema,
+}));

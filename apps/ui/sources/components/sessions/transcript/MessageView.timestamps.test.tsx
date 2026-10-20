@@ -2,9 +2,11 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createMessageStructuredPresentationV1 } from '@happier-dev/protocol';
-import { renderWithSessionTranscriptSource as renderScreen, standardCleanup } from '@/dev/testkit';
-import { installMessageViewCommonModuleMocks } from './messageViewTestHelpers';
-import { createUseSettingMock } from '@/dev/testkit/mocks/storage';
+import { renderWithSessionTranscriptSource, standardCleanup } from '@/dev/testkit';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { getStorage } from '@/sync/domains/state/storageStore';
+import { settingsDefaults } from '@/sync/domains/settings/settings';
 import type {
     PluginProjectionAction,
     PluginProjectionEntry,
@@ -17,7 +19,7 @@ const platformState = vi.hoisted(() => ({
     os: 'web' as 'web' | 'ios',
 }));
 
-let timestampDisplayMode = 'hover_web_hidden_mobile';
+let timestampDisplayMode: 'hover_web_hidden_mobile' | 'always' | 'never' | 'hover_web_always_mobile' = 'hover_web_hidden_mobile';
 let copyButtonsVisible = false;
 
 function flattenStyle(style: unknown): Record<string, unknown> {
@@ -27,8 +29,9 @@ function flattenStyle(style: unknown): Record<string, unknown> {
     return style && typeof style === 'object' ? style as Record<string, unknown> : {};
 }
 
-installMessageViewCommonModuleMocks({
-    reactNative: async () => {
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+vi.mock('react-native', async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
             Platform: {
@@ -39,28 +42,23 @@ installMessageViewCommonModuleMocks({
                     values?.[platformState.os] ?? values?.default,
             },
         });
-    },
-    storage: async (importOriginal) => {
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleMock({
-            importOriginal,
-            overrides: {
-                useSetting: createUseSettingMock({ fallback: (key) => {
-                    if (key === 'transcriptMessageTimestampDisplayMode') return timestampDisplayMode;
-                    if (key === 'sessionThinkingDisplayMode') return 'inline';
-                    if (key === 'sessionThinkingInlinePresentation') return 'summary';
-                    if (key === 'sessionThinkingInlineChrome') return 'plain';
-                    if (key === 'toolViewTimelineChromeMode') return 'cards';
-                    return null;
-                } }),
-                useSessionForkSupportSource: () => null,
-                useSessionWorkspacePath: () => null,
-                useSessionMessagesById: () => ({}),
-                useSessionMessagesReducerState: () => ({} as any),
-            },
-        });
-    },
 });
+vi.mock('react-native-unistyles', async () =>
+    (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@/text', async () =>
+    (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
+vi.mock('@/modal', async () =>
+    (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
+vi.mock('expo-router', async () =>
+    (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+
+async function renderScreen(element: React.ReactElement) {
+    getStorage().setState({ settings: { ...settingsDefaults,
+        transcriptMessageTimestampDisplayMode: timestampDisplayMode,
+        sessionThinkingDisplayMode: 'inline', sessionThinkingInlinePresentation: 'summary',
+        sessionThinkingInlineChrome: 'plain', toolViewTimelineChromeMode: 'cards' } });
+    return renderWithSessionTranscriptSource(element);
+}
 
 vi.mock('@/components/markdown/MarkdownView', () => ({
     MarkdownView: (props: any) => React.createElement('MarkdownView', props),
@@ -109,10 +107,6 @@ vi.mock('@/components/sessions/attachments/messages/AttachmentsInlineImages', ()
     AttachmentsInlineImages: () => null,
 }));
 
-vi.mock('@/components/sessions/media/SessionMediaInlineImages', () => ({
-    SessionMediaInlineImages: () => null,
-}));
-
 vi.mock('@/hooks/server/useFeatureEnabled', () => ({
     useFeatureEnabled: () => false,
 }));
@@ -121,6 +115,8 @@ vi.mock('@expo/vector-icons', () => ({
     Ionicons: 'Ionicons',
 }));
 
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
 await import('./MessageView');
 
 describe('MessageView timestamps', () => {
@@ -137,6 +133,7 @@ describe('MessageView timestamps', () => {
     afterEach(() => {
         vi.restoreAllMocks();
         standardCleanup();
+        getStorage().setState(getStorage().getInitialState(), true);
     });
 
     it('does not render message timestamps by default before web hover actions are visible', async () => {

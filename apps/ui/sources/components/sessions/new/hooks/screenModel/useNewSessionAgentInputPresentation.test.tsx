@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { createNewSessionPromptStore } from '@/components/sessions/new/hooks/screenModel/newSessionPromptStore';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderHook, renderScreen, flushHookEffects } from '@/dev/testkit';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
@@ -25,8 +25,10 @@ const sessionAgentInputTheme = {
 
 const network = await installSessionOpsNetworkBoundary();
 const scope = { serverId: 'srv', accountId: 'presentation-account' };
-beforeAll(async () => { await network.addHome('https://srv', scope.accountId); });
-beforeEach(() => network.resetRequests());
+beforeEach(async () => {
+    network.resetRequests();
+    await network.addHome('https://srv', scope.accountId);
+});
 afterAll(() => network.dispose());
 
 // Load the real graph during collection, not inside the first hook's timeout.
@@ -152,6 +154,14 @@ describe('useNewSessionAgentInputPresentation', () => {
             text: 'machineRequester.keyPending(machine=host-1)', isPulsing: false, recovery: 'machine',
         });
         expect(canAttemptMachineSpawn({ scope, selectedMachineId: 'm1', machine, spawnReadiness: readiness })).toBe(false);
+        // A machine whose details this device cannot read is "this machine" in the sentence, never its raw id.
+        const readableMachine = machine;
+        machine = { ...machine, metadata: null, availability: { kind: 'locked', reason: 'encryption_material_unavailable' } } as unknown as Machine;
+        readiness = resolveMachineSpawnReadiness({ scope, selectedMachineId: 'm1', machine, keyAvailable: false, rpcAvailable: true });
+        await hook.rerender();
+        expect(hook.getCurrent().connectionStatus?.text).toBe('machineRequester.keyPending(machine=machine.thisMachineInSentence)');
+        machine = readableMachine;
+        readiness = resolveMachineSpawnReadiness({ scope, selectedMachineId: 'm1', machine, keyAvailable: false, rpcAvailable: true });
         machine = { ...machine, active: false, activeAt: 0 };
         readiness = resolveMachineSpawnReadiness({ scope, selectedMachineId: 'm1', machine, keyAvailable: false, rpcAvailable: true });
         await hook.rerender();

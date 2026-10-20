@@ -1,16 +1,17 @@
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { EntityDropOutcomeV1 } from '@happier-dev/protocol/plugins/ui';
-import { describeReportsToRefusal } from '@/components/sessions/work/putUnderPresentation';
+import { describeManagerRefusal, isManagerRefusal } from '@/components/sessions/work/putUnderPresentation';
 import { t } from '@/text';
 import { describeSessionListDropReason } from './sessionListDropPresentation';
-
-const RELATION_REFUSAL_CODES = new Set(['reports_to_cycle', 'reports_to_cas_conflict', 'reports_to_forbidden']);
 
 /** Acknowledged applied/refused or unknown, in the owner's words. */
 export function projectActionOutcome(actionId: string, result: ActionExecuteResult): EntityDropOutcomeV1 {
     if (!result.ok) {
-        if (RELATION_REFUSAL_CODES.has(result.errorCode)) {
-            return { status: 'refused', reason: { code: result.errorCode, message: describeReportsToRefusal(result.errorCode) } };
+        if (actionId === 'session.manager.set' && isManagerRefusal(result.errorCode)) {
+            return { status: 'refused', reason: { code: result.errorCode, message: describeManagerRefusal(result.errorCode) } };
+        }
+        if (result.errorCode === 'credential_scope_denied') {
+            return { status: 'refused', reason: { code: result.errorCode, message: t('errors.permissionDenied') } };
         }
         return { status: 'unknown', reason: { code: result.errorCode || 'unknown', message: t('entityDragDrop.preview.unknownDetail') } };
     }

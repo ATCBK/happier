@@ -2,7 +2,7 @@ import { sanitizeBugReportUrl } from '@happier-dev/protocol/bugs/reports/sanitiz
 import { sanitizeDoctorSnapshotUrls, type DoctorSnapshot } from '@happier-dev/protocol/diagnostics/doctorSnapshot';
 import type { DiagnosisReportV1 } from '@happier-dev/protocol/actions/diagnosticsActionFamily';
 
-import { createServerUrlComparableKey } from '@/sync/domains/server/url/serverUrlCanonical';
+import { createDiagnosticServerUrlKey as createComparableServerUrlKey } from '@/sync/domains/server/url/serverUrlCanonical';
 import { isDaemonOfAnotherAccount } from '@/sync/domains/server/relayDrift/relayDriftModel';
 
 export type DiagnosisFinding = Readonly<DiagnosisReportV1['findings'][number]>;
@@ -36,17 +36,6 @@ export type DiagnosisReport = Readonly<DiagnosisReportV1>;
 function normalizeUrl(raw: string): string {
   const sanitized = sanitizeBugReportUrl(raw) ?? raw;
   return sanitized.replace(/\/+$/, '');
-}
-
-function createComparableServerUrlKey(raw: string): string {
-  const normalized = normalizeUrl(raw);
-  if (!normalized) return '';
-
-  try {
-    return createServerUrlComparableKey(normalized);
-  } catch {
-    return normalized;
-  }
 }
 
 function pushFinding(findings: DiagnosisFinding[], finding: DiagnosisFinding): void {

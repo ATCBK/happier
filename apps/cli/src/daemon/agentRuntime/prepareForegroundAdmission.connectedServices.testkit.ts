@@ -69,7 +69,7 @@ export function createForegroundPurposeOwnerFixture(input: Readonly<{
 /** Physical external Agent plus the canonical purpose owner over an Account-store boundary. */
 export function createExternalConnectedAccountForegroundFixture(input: Readonly<{
   service: QualifiedConnectedAccountServiceRef;
-  materializationKinds: readonly ('files' | 'httpHeaders')[];
+  materializationKinds: readonly ('files' | 'httpHeaders' | 'environment')[];
   launch?: AgentConnectedAccountLaunchContributionV1;
   materializeAccount: ConnectedAccountPurposeBindingOwnerDependencies['materializeAccount'];
   resolveCredentialRevision?: ConnectedAccountPurposeBindingOwnerDependencies['resolveCredentialRevision'];
@@ -103,6 +103,7 @@ export function createExternalConnectedAccountForegroundFixture(input: Readonly<
   const launchEnvironmentKeys = [...new Set([
     ...(input.launch?.fileEnvironmentUses ?? []).map(use => use.environmentKey),
     ...(input.launch?.environmentUses ?? []).map(use => use.environmentKey),
+    ...(input.launch?.environmentUnsetUses ?? []).map(use => use.environmentKey),
     ...(input.launch?.stateSharingDescriptor?.nativeHome?.environmentKey
       ? [input.launch.stateSharingDescriptor.nativeHome.environmentKey] : []),
   ])];
@@ -123,7 +124,11 @@ export function createExternalConnectedAccountForegroundFixture(input: Readonly<
   ];
   // Admit the real referenced descriptor alongside the Agent. The purpose
   // owner below supplies the isolated Account-store boundary, not a catalog mock.
-  const descriptorPlugins = input.service.pluginId === pluginId ? [] : [{
+  const bundledService = loadCurrentBundledPluginLocatorResult().loadedPlugins.some(plugin => (
+    plugin.manifest.id === input.service.pluginId
+    && plugin.manifest.contributes.connectedAccountDescriptors?.some(descriptor => descriptor.id === input.service.localId)
+  ));
+  const descriptorPlugins = input.service.pluginId === pluginId || bundledService ? [] : [{
     manifest: createPluginManifestV2Fixture({
       id: input.service.pluginId,
       contributes: { connectedAccountDescriptors: [descriptor] },
@@ -157,43 +162,6 @@ export function createExternalConnectedAccountForegroundFixture(input: Readonly<
       ].join('\n'),
     },
   }];
-  const bundledService = loadCurrentBundledPluginLocatorResult().loadedPlugins.some(plugin => (
-    plugin.manifest.id === input.service.pluginId
-    && plugin.manifest.contributes.connectedAccountDescriptors?.some(descriptor => descriptor.id === input.service.localId)
-  ));
-  if (!bundledService) {
-    // A cross-plugin reference needs a genuinely admitted declaration producer.
-    // Bundled services already have that canonical declaration; novel services
-    // are authored and committed alongside this external Agent instead.
-    plugins.push({
-      manifest: createPluginManifestV2Fixture({
-        id: input.service.pluginId,
-        contributes: { connectedAccountDescriptors: [{
-          id: input.service.localId, title: 'Foreground fixture Account',
-          authentication: {
-            defaultModeId: 'manual',
-            modes: [{
-              id: 'manual', kind: 'manual', outcomeReconciliation: 'none',
-              fields: [{ id: 'token', title: 'Token', schema: { type: 'string' }, secret: true }],
-            }],
-          },
-        }] },
-      }),
-      files: {
-        'daemon.mjs': [
-          'export function activate(api) {',
-          `  api.connectedAccounts.register(${JSON.stringify(input.service.localId)}, {`,
-          '    authentication: { modes: { manual: { kind: "manual", async complete() { return { status: "rejected" }; } } } },',
-          '    async refresh() { return { status: "connected" }; },',
-          '    async revoke() { return { status: "remoteUnsupported" }; },',
-          '    async status() { return { status: "connected" }; },',
-          '    async materialize() { throw new Error("Account materialization belongs to the fixture Account-store boundary"); },',
-          '  });',
-          '}',
-        ].join('\n'),
-      },
-    });
-  }
   const dependencies: Pick<PrepareForegroundAgentRuntimeAdmissionDependencies,
     'activateSessionPurposeBindings' | 'resolveExternalAgentSessionPurposeBindingSnapshot'> = {
     activateSessionPurposeBindings: owner.activateSessionPurposeBindings,

@@ -3,16 +3,18 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUILT_IN_ROLES_V1, RoleActionInputSchemasV1, RoleActionOutputSchemasV1 } from '@happier-dev/protocol';
 import { resolveRolesSnapshotV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
-import { snapshotSessionRolesAtSpawnV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
+import { readSessionRolesV1, SessionRolesV1Schema, snapshotSessionRolesAtSpawnV1, writeSessionRoleConfigurationV1ToMetadata } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
+import { projectSessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { isRoleActionIdV1 } from '@happier-dev/protocol/prompts/roles/roleActionIdsV1';
 import { PROMPT_LIBRARY_ROWS_ROUTE_V1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import type { Metadata } from '@happier-dev/session-core/state';
 
-import { createSessionFixture, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createSessionAccessFixture, createSessionFixture, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { serveSessionActionHome } from '@/dev/testkit/harness/sessionActionHome';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { parseDecryptedSessionMetadata } from '@/sync/engine/sessions/parsePlainSessionPayload';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -41,6 +43,7 @@ vi.mock('@/modal', async () => {
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc', async importOriginal => {
     const { createServerScopedSessionRpcModuleMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
     shared.rpc.mockImplementation(async ({ method, payload, serverId, sessionId }: Parameters<typeof import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc')['sessionRpcWithServerScope']>[0]) => {
+            if (!serverId) throw new Error('Session RPC requires its exact Home');
             if (!isRoleActionIdV1(method)) throw new Error(`Unexpected Session RPC: ${method}`);
             const input = RoleActionInputSchemasV1[method].parse(payload);
             shared.calls.push({ method, payload: input, serverId, sessionId });
@@ -77,11 +80,16 @@ let previousAvailable = isAppliedActiveServerRuntimeAvailable();
 let connection: Awaited<ReturnType<typeof serveSessionActionHome>> | undefined;
 const enabledBuiltInCount = Object.values(BUILT_IN_ROLES_V1).filter(role => role.enabled).length;
 
-function setMetadata(metadata: Partial<Metadata> | null) {
+function setMetadata(metadata: Partial<Metadata> | null, metadataLayoutVersion = 1) {
     const sessionMetadata = metadata ? { path: '/repo', host: 'test-machine', ...metadata } : null;
+    const sharedMetadata = sessionMetadata ? parseDecryptedSessionMetadata(projectSessionSharedMetadataV1({ metadata: sessionMetadata }), 1) : null;
     storage.setState({ sessions: {
-        lead: createSessionFixture({ id: 'lead', serverId: connection!.serverId, metadata: sessionMetadata }),
-        worker: createSessionFixture({ id: 'worker', serverId: connection!.serverId, metadata: sessionMetadata }),
+        lead: createSessionFixture({ id: 'lead', serverId: connection!.serverId, metadataLayoutVersion,
+            metadata: metadataLayoutVersion === 0 ? sessionMetadata : sharedMetadata,
+            ...(metadataLayoutVersion === 1 ? { ownerMetadataView: sessionMetadata } : {}) }),
+        worker: createSessionFixture({ id: 'worker', serverId: connection!.serverId, metadataLayoutVersion,
+            metadata: metadataLayoutVersion === 0 ? sessionMetadata : sharedMetadata,
+            ...(metadataLayoutVersion === 1 ? { ownerMetadataView: sessionMetadata } : {}) }),
     } });
 }
 
@@ -109,9 +117,15 @@ describe('Work › Roles and Notes', () => {
         const inherited = snapshotSessionRolesAtSpawnV1({ leadSessionId: 'lead', roles: resolveRolesSnapshotV1({
             ...(layer === 'snapshot' ? { settingsOverrides: { builder: { roleId: 'builder', instructionsOverride: 'Inherited build instructions.' } } } : {}),
         }) });
-        setMetadata({ work: { sessionRolesV1: { ...inherited,
+        const produced = writeSessionRoleConfigurationV1ToMetadata({ path: '/repo', host: 'test-machine' }, { ...inherited,
             overrides: layer === 'override' ? { builder: { roleId: 'builder', workspaceWrites: 'deny' } } : {},
-        } } });
+        });
+        setMetadata(produced);
+        // The real configuration writer's output satisfies the exact strict consumer; public metadata carries no role facts.
+        expect(SessionRolesV1Schema.parse(readSessionRolesV1(storage.getState().sessions.worker.ownerMetadataView))).toEqual({ ...inherited,
+            overrides: layer === 'override' ? { builder: { roleId: 'builder', workspaceWrites: 'deny' } } : {},
+        });
+        expect(readSessionRolesV1(storage.getState().sessions.worker.metadata)).toBeNull();
         const screen = await renderScreen(<SessionRolesSection sessionId="worker" />);
         const rows = screen.findAll(node => node.props.testID === 'session-work-roles.row.builder' && node.props.title !== undefined);
         expect(rows).toHaveLength(1);
@@ -120,7 +134,7 @@ describe('Work › Roles and Notes', () => {
         await screen.pressByTestIdAsync('session-work-roles.row.builder.reset');
         expect(writes()).toEqual([{ actionId: layer === 'override' ? 'session.roles.override.clear' : 'session.roles.remove',
             input: { sessionId: 'worker', roleId: 'builder' } }]);
-        expect(storage.getState().sessions.worker.metadata).toMatchObject({ work: { sessionRolesV1: { sessionRoles: inherited.sessionRoles } } });
+        expect(storage.getState().sessions.worker.ownerMetadataView).toMatchObject({ work: { sessionRolesV1: { sessionRoles: inherited.sessionRoles } } });
     });
 
     beforeEach(async () => {
@@ -200,8 +214,8 @@ describe('Work › Roles and Notes', () => {
         expect(screen.findByTestId('session-work-roles.useDefaults')).toBeNull();
     });
 
-    it('summarises only what exists: no changes means no count and just All roles', async () => {
-        setMetadata({ work: { sessionRolesV1: { roleId: 'orchestrator', overrides: {}, sessionRoles: {}, notes: '' } } });
+    it.each([0, 1])('summarises only what exists in layout %s: no changes means no count and just All roles', async layout => {
+        setMetadata({ work: { sessionRolesV1: { roleId: 'orchestrator', overrides: {}, sessionRoles: {}, notes: '' } } }, layout);
         const screen = await renderScreen(<SessionRolesSection sessionId="lead" />);
         expect(screen.findByTestId('session-agents-section-count:session-work-roles')).toBeNull();
         expect(screen.findByTestId('session-work-roles.row.builder')).toBeNull();
@@ -364,6 +378,19 @@ describe('Work › Roles and Notes', () => {
         expect(Boolean(notes.findByTestId('session-work-notes.add'))).toBe(false);
         expect(Boolean(notes.findByTestId('session-work-notes.edit'))).toBe(false);
         expect(writes()).toEqual([]);
+    });
+
+    it.each(['owner', 'view'] as const)('does not borrow role differences or notes from the public carrier for %s access while the owner view is unavailable', async level => {
+        const session = storage.getState().sessions.worker;
+        await act(async () => { storage.setState({ sessions: { worker: {
+            ...session, access: createSessionAccessFixture(level), metadata: session.ownerMetadataView ?? null, ownerMetadataView: null,
+        } } }); });
+        const roles = await renderScreen(<SessionRolesSection sessionId="worker" serverId={connection!.serverId} />);
+        expect(roles.findByTestId('session-work-roles.row.builder')).toBeNull();
+        const notes = await renderScreen(<SessionNotesSection sessionId="worker" serverId={connection!.serverId} />);
+        expect(notes.findByTestId('session-work-notes.add')).toBeNull();
+        expect(notes.findByTestId('session-work-notes.edit')).toBeNull();
+        expect(notes.findByTestId('session-work-notes.text')).toBeNull();
     });
 
     it('withdraws an open notes editor when its Home changes', async () => {

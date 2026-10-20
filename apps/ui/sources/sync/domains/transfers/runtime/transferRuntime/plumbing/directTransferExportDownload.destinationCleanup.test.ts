@@ -58,4 +58,22 @@ describe('prepared file download destination failures', () => {
         await expect(result).rejects.toThrow(/Destination initialization failed.*File deletion failed/);
     });
 
+    it('does not delete an already-cleaned destination again when its transfer is canceled', async () => {
+        const controller = new AbortController();
+        const chunk = harness.deferNextChunk();
+        let allocated = true;
+        const result = downloadDaemonWorkspaceFileToDestination({
+            ...harness.scope, request: { path: 'clip.mp4', asZip: false }, signal: controller.signal,
+            destination: { writeBytes: async () => {}, close: async () => {}, cleanup: async () => {
+                if (!allocated) throw new Error('File already removed');
+                allocated = false;
+            } },
+        });
+        await chunk.entered;
+        controller.abort();
+        chunk.release();
+        await expect(result).resolves.toMatchObject({ ok: false });
+        expect(allocated).toBe(false);
+    });
+
 });

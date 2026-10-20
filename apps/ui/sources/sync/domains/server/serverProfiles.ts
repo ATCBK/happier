@@ -579,13 +579,33 @@ function findProfileByServerIdentifier(
 ): ServerProfile | null {
     const id = normalizeServerId(idRaw);
     if (!id) return null;
-    const direct = servers[id];
-    if (direct) return direct;
-    for (const profile of Object.values(servers)) {
-        if (profile.serverIdentityId === id) return profile;
-        if ((profile.legacyServerIds ?? []).includes(id)) return profile;
+    return readProfileIdentifierProjection(servers).get(id)?.profile ?? null;
+}
+
+let profileIdentifierProjectionCache: {
+    servers: Record<string, ServerProfile>;
+    byIdentifier: ReadonlyMap<string, Readonly<{ profile: ServerProfile; scopeId: string }>>;
+} | null = null;
+
+function readProfileIdentifierProjection(servers: Record<string, ServerProfile>) {
+    // Only the canonical parsed snapshot is immutable. Mutation working copies
+    // also use this classifier, but must never retain a projection while edited.
+    const retain = persistedStateParseCache?.state.servers === servers;
+    if (retain && profileIdentifierProjectionCache?.servers === servers) {
+        return profileIdentifierProjectionCache.byIdentifier;
     }
-    return null;
+    const byIdentifier = new Map<string, Readonly<{ profile: ServerProfile; scopeId: string }>>();
+    for (const [id, profile] of Object.entries(servers)) {
+        byIdentifier.set(id, { profile, scopeId: resolveServerProfileScopeId(profile) });
+    }
+    // Direct ids win over every alias; otherwise preserve first-profile order.
+    for (const entry of [...byIdentifier.values()]) {
+        for (const alias of [entry.profile.serverIdentityId, ...entry.profile.legacyServerIds ?? []]) {
+            if (alias && !byIdentifier.has(alias)) byIdentifier.set(alias, entry);
+        }
+    }
+    if (retain) profileIdentifierProjectionCache = { servers, byIdentifier };
+    return byIdentifier;
 }
 
 function createUniqueServerId(
@@ -2314,8 +2334,7 @@ export function resolveServerProfileForPortableIdentity(
 export function resolveServerProfileScopeIdForIdentifier(idRaw: string | null | undefined): string {
     const id = normalizeServerId(idRaw);
     if (!id) return '';
-    const profile = findProfileByServerIdentifier(readPersistedState().servers, id);
-    return profile ? resolveServerProfileScopeId(profile) : id;
+    return readProfileIdentifierProjection(readPersistedState().servers).get(id)?.scopeId ?? id;
 }
 
 export function areServerProfileIdentifiersEquivalent(
@@ -2325,8 +2344,7 @@ export function areServerProfileIdentifiersEquivalent(
     let state: ReturnType<typeof readPersistedState> | undefined;
     return areProfileIdentifiersEquivalent(leftRaw, rightRaw, id => {
         state ??= readPersistedState();
-        const profile = findProfileByServerIdentifier(state.servers, id);
-        return profile ? resolveServerProfileScopeId(profile) : null;
+        return readProfileIdentifierProjection(state.servers).get(id)?.scopeId ?? null;
     });
 }
 
@@ -2827,14 +2845,16 @@ export function setServerProfileShareableUrl(
     });
 }
 
-/** Resets process-local profile caches between owner tests without reloading the module graph. */
-export function resetServerProfilesRuntimeForTests(): void {
-    activeServerGeneration = 0;
-    activeRuntimeTargetGeneration = 0;
+/** Resets fixture caches; integrated suites may retain the connection owner's generation lifetime. */
+export function resetServerProfilesRuntimeForTests(options?: Readonly<{ preserveGenerations?: boolean }>): void {
+    if (!options?.preserveGenerations) {
+        activeServerGeneration = 0;
+        activeRuntimeTargetGeneration = 0;
+        serverProfilesGeneration = 0;
+    }
     activeServerSnapshotCache = null;
     activeServerSnapshotBasis = null;
     activeRuntimeOriginLease = null;
-    serverProfilesGeneration = 0;
     persistedStateStorage = null;
     persistedStateParseCache = null;
     demoPersistenceSuspendDepth = 0;

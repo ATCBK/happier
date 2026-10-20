@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { readLocalConversationVoiceSettings, voiceSettingsDefaults, writeLocalConversationVoiceSettings } from './voiceSettings';
 import { DEFAULT_PROVIDER_SETTINGS_V1, ProviderSettingsV1Schema } from '@happier-dev/protocol/providers/settings/v1';
 import { normalizeCustomProviderTemplateV1 } from '@happier-dev/protocol/providers/connections/normalizeCustomTemplateV1';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
 import { settingsParse } from './settings';
 import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/settings/savedSecretReferenceV1';
 import { readSavedSecretTransferSourceV1 } from '@happier-dev/protocol/account/settings/savedSecretMutationOwner';
@@ -45,7 +46,7 @@ function legacyAccount(agent: Readonly<{ agentSource: 'session' | 'agent'; agent
 
 describe('legacy Voice OpenAI-compatible Chat Provider migration', () => {
     it('derives predecessor generation settings only from the acknowledged Provider connection', () => {
-        const id = 'voice-openai-compatible-chat';
+        const id = ProviderConnectionIdSchema.parse('voice-openai-compatible-chat');
         const target = 'agent:happier.agent.opencode/opencode';
         const local = readLocalConversationVoiceSettings(voiceSettingsDefaults);
         const voice = writeLocalConversationVoiceSettings(voiceSettingsDefaults, { ...local, agent: {
@@ -90,7 +91,7 @@ describe('legacy Voice OpenAI-compatible Chat Provider migration', () => {
         const voice = settingsParse(normalized).voice;
         const local = readLocalConversationVoiceSettings(voice);
         for (const providerChat of [null, { status: 'needs_selection' as const,
-            providerConnectionId: 'voice-openai-compatible-chat', chatModelId: 'qwen-chat', commitModelId: 'qwen-commit',
+            providerConnectionId: ProviderConnectionIdSchema.parse('voice-openai-compatible-chat'), chatModelId: 'qwen-chat', commitModelId: 'qwen-commit',
         }]) {
             const changedVoice = writeLocalConversationVoiceSettings(voice, { ...local, agent: { ...local.agent, providerChat } });
             const retired = normalizeVoiceSettingsServerDelta({ ...normalized,

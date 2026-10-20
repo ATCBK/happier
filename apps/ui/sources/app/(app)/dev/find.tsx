@@ -6,6 +6,7 @@ import { FindBarSpecimen } from '@/components/dev/pluginUi/FindBarSpecimen';
 import { NextPendingSpecimen } from '@/components/dev/pluginUi/NextPendingSpecimen';
 import { SearchTextInFilesSpecimen } from '@/components/dev/pluginUi/SearchTextInFilesSpecimen';
 import { HistoryPreviewSpecimen } from '@/components/dev/pluginUi/HistoryPreviewSpecimen';
+import { ConversationSearchResultsSpecimen } from '@/components/dev/pluginUi/ConversationSearchResultsSpecimen';
 
 /** Dev-only: the shared Find bar in every Find lab state (`fx` / `ffind`) and Next (`fnext`), credential-free for clean-browser visual QA. */
 export default function FindDevScreen() {
@@ -16,6 +17,7 @@ export default function FindDevScreen() {
                 <NextPendingSpecimen />
                 <SearchTextInFilesSpecimen />
                 <HistoryPreviewSpecimen />
+                <ConversationSearchResultsSpecimen />
             </View>
         </ScrollView>
     );

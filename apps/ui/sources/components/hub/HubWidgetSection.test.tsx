@@ -3,7 +3,7 @@ import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/ui';
 import { PluginProjectionV2Schema } from '@happier-dev/protocol';
-import { WIDGET_SIZE_POLICY_V1 } from '@happier-dev/protocol/widgets';
+import { WIDGET_SIZE_POLICY_V1, type WidgetInstanceV1 } from '@happier-dev/protocol/widgets';
 
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import { normalizePluginUiProjection, type PluginUiProjectionModel } from '@/sync/domains/plugins/ui/projection';
@@ -16,6 +16,7 @@ import { clearActiveUnsavedChangesGuard, setActiveUnsavedChangesGuard } from '@/
 import { HubWidgetSection } from './HubWidgetSection';
 import { AppShellPluginUiProjectionValueProvider } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { storage } from '@/sync/domains/state/storage';
+import { widgetExecutionOrigin, widgetInstalledPackage } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
 
 const boundary = vi.hoisted(() => ({ projection: null as PluginUiProjectionModel | null, pushed: [] as unknown[], stage: null as ((open: { pageId: string; subPath: string; input: { selection: string } }) => boolean) | null, moments: {} as Record<string, boolean> }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
@@ -49,8 +50,11 @@ function projection(availability: 'available' | 'disabled' = 'available', phase:
         if (!binding) throw new Error('admitted page binding required');
         return { id: `surfacePlacement:acme.notes:${localId}`, pluginId: 'acme.notes', occurrenceId: 'acme.notes#1', contributionKind: 'surfacePlacement', descriptorId: localId, binding, target: binding.target, renderer: { kind: 'declarative', contributionId: 'notes-native' }, display: { title: 'Notes' }, availability: { state: availability, reason: availability === 'available' ? 'available' : 'plugin_disabled', diagnostics: [] } };
     });
-    const normalized = normalizePluginUiProjection(PluginProjectionV2Schema.parse({ v: 2, generation: 1, familiesById: { pluginUi: { family: 'pluginUi', entriesById: Object.fromEntries(entries.map((entry) => [entry.id, entry])) } } }));
-    return unionPluginUiProjections([{ machineId: 'machine-a', serverId: 'home-a', projection: normalized, phase, interactionEnabled: phase === 'current' }], new Map()).pluginUiProjection;
+    const executionOrigin = widgetExecutionOrigin('acme.notes', 'machine-a');
+    const normalized = normalizePluginUiProjection(PluginProjectionV2Schema.parse({ v: 2, generation: 1,
+        installedPackagesById: { 'acme.notes': { ...widgetInstalledPackage('acme.notes', 'Notes'), occurrenceId: 'acme.notes#1', executionOrigin } },
+        familiesById: { pluginUi: { family: 'pluginUi', entriesById: Object.fromEntries(entries.map((entry) => [entry.id, entry])) } } }));
+    return unionPluginUiProjections([{ machineId: 'machine-a', serverId: 'home-a', projection: normalized, phase, interactionEnabled: phase === 'current' }], new Map([['acme.notes', executionOrigin]])).pluginUiProjection;
 }
 const widget = { sizeDeclaration: { sizes: [...WIDGET_SIZE_POLICY_V1.home.sizes], defaultSize: WIDGET_SIZE_POLICY_V1.home.defaultSize }, key: 'acme.notes/status', surface: { pluginId: 'acme.notes', localId: 'status' }, title: 'Notes status', pluginName: 'Notes', sharedPluginName: false, icon: 'note' as const, homeDefault: 'shown' as const, target: 'app' as const };
 const instance = { v: 1 as const, id: 'notes-copy', definition: { kind: 'installed' as const, surface: widget.surface }, bindings: {} };
@@ -149,5 +153,34 @@ describe('a card that owns its row', () => {
         expect(await presentedSize({ size: 'small' })).toBe('small');
         // A widget that declares no full-row size keeps the size it was saved at.
         expect(await presentedSize({ size: 'small', ownsRow: true, sizes: ['small', 'medium'] })).toBe('small');
+    });
+});
+
+describe('a card whose definition has not arrived', () => {
+    const frameTitle = async (node: React.ReactElement) => {
+        const screen = await renderScreen(node);
+        const frame = screen.root.findAll(node => node.props.testID === 'home-pending.frame' && 'title' in node.props)[0]!;
+        const result = { title: frame.props.title as unknown, text: screen.getTextContent() };
+        standardCleanup();
+        return result;
+    };
+    const pending = (extra: Partial<React.ComponentProps<typeof HubWidgetSection>>, nameless: WidgetInstanceV1 = instance) => <HubWidgetSection
+        instance={nameless} frameStyle="card" menu={null} tracker={createNearViewportTracker({ quantum: 40, initialViewportHeight: 0 })}
+        testID="home-pending" {...extra} />;
+
+    it('draws a skeleton title rather than the word "Widget", and uses the first name it knows', async () => {
+        const unknown = await frameTitle(pending({}));
+        expect(React.isValidElement(unknown.title)).toBe(true);
+        expect(unknown.text).not.toContain('boards.widgets.kind');
+        // A settled installed widget whose surface cannot mount is named by the plugin it belongs to, not a placeholder word.
+        const settled = await frameTitle(<Projection>{pending({})}</Projection>);
+        expect(settled.title).toBe('Notes');
+        // With the plugin unknown to the app there is no name to wait for: the generic word, not a skeleton.
+        boundary.projection = null;
+        expect((await frameTitle(<Projection>{pending({})}</Projection>)).title).toBe('boards.widgets.kind');
+        expect((await frameTitle(<Projection>{pending({}, { ...instance, definition: { kind: 'artifact', artifactId: 'definition-1' } })}</Projection>)).title)
+            .toSatisfy((title: unknown) => React.isValidElement(title));
+        expect((await frameTitle(pending({ widget }))).title).toBe('Notes status');
+        expect((await frameTitle(pending({}, { ...instance, displayName: 'Ops table' }))).title).toBe('Ops table');
     });
 });

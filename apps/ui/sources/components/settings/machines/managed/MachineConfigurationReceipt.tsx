@@ -118,7 +118,8 @@ export const MachineConfigurationReceipt = React.memo(
             rightElement={
               <View style={styles.factValue}>
                 {fact.leading ?? null}
-                <Text style={styles.factText} numberOfLines={2}>
+                {/* A value wraps whole in the narrow aside (an image file name runs three lines), never clipped mid-name. */}
+                <Text style={styles.factText} numberOfLines={3}>
                   {fact.value}
                 </Text>
               </View>

@@ -6,6 +6,9 @@ export type ActionConfirmationTranslations = Readonly<{
     sessionTarget: (params: Readonly<{ sessionId: string }>) => string;
     oneShotConsequence: string;
     homeUnavailable: string;
+    turnedOffTitle: string;
+    turnedOffMessage: string;
+    openActionSettings: string;
 }>;
 
 
@@ -15,4 +18,7 @@ export const actionConfirmationTranslationsEnglish = { en: {
         sessionTarget: ({ sessionId }) => `Target session: ${sessionId}`,
         oneShotConsequence: 'Approval applies only to this request. It does not grant future Action or native permissions.',
         homeUnavailable: 'This approval belongs to a Home that is unavailable on this device. Reconnect that Home to decide it.',
+        turnedOffTitle: 'Action turned off',
+        turnedOffMessage: 'This action is turned off, so nothing was changed. You can turn it back on in Settings → Actions.',
+        openActionSettings: 'Open Actions settings',
     } } as const satisfies Pick<Record<string, ActionConfirmationTranslations>, "en">;

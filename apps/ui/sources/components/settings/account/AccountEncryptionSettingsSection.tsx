@@ -29,6 +29,7 @@ import { createServerFetchAtEndpoint } from '@/sync/http/client';
 import { buildAccountEncryptionMigrationStorageDirectives } from '@/sync/ops/account/buildAccountEncryptionMigrationStorageDirectives';
 import { fetchAccountEncryptionMigrationSessionInventory } from '@/sync/ops/account/fetchAccountEncryptionMigrationSessionInventory';
 import { fetchAccountEncryptionMigrationArtifactInventory } from '@/sync/ops/account/fetchAccountEncryptionMigrationArtifactInventory';
+import { fetchAccountEncryptionMigrationDiscussionInventory } from '@/sync/ops/account/buildAccountEncryptionDiscussionsDirective';
 import { fetchAccountEncryptionMigrationAutomationsInventory } from '@/sync/ops/account/fetchAccountEncryptionMigrationAutomationsInventory';
 import { fetchReviewCommentAccountEncryptionMigrationInventory } from '@/sync/domains/reviews/comments/accountEncryptionMigrationApi';
 import { fetchSessionOrganizationAccountEncryptionMigrationInventory } from '@/sync/ops/account/fetchSessionOrganizationAccountEncryptionMigrationInventory';
@@ -40,6 +41,7 @@ import { acknowledgeNewSessionDraftEncryptionMigration, listNewSessionDraftEncry
 import { fetchAccountEncryptionWorkspaceExecutionConfigMigrationCandidates } from '@/sync/ops/account/fetchAccountEncryptionWorkspaceExecutionConfigMigrationCandidates';
 import { fetchAccountEncryptionProjectTrustMigrationCandidates } from '@/sync/ops/account/fetchAccountEncryptionProjectTrustMigrationCandidates';
 import { runAccountEncryptionModeMigration } from '@/sync/ops/account/runAccountEncryptionModeMigration';
+import { fetchAccountEncryptionSessionFollowRulesMigrationCandidates } from '@/sync/ops/account/fetchAccountEncryptionSessionFollowRulesMigrationCandidates';
 import { fetchAccountEncryptionAuthoringMemoryMigrationCandidates } from '@/sync/ops/account/fetchAccountEncryptionAuthoringMemoryMigrationCandidates';
 import { fetchAccountEncryptionProjectRowsMigrationCandidates } from '@/sync/ops/account/fetchAccountEncryptionProjectRowsMigrationCandidates';
 import { readProfileCatalog } from '@/sync/api/account/apiProfileCatalog';
@@ -515,6 +517,7 @@ export const AccountEncryptionSettingsSection = React.memo(function AccountEncry
                                                 reviewCommentsInventory,
                                                 sessionOrganizationInventory,
                                                 automationsInventory,
+                                                discussionsInventory,
                                             ] = await Promise.all([
                                                 fetchMachineRows({
                                                     credentials,
@@ -533,6 +536,7 @@ export const AccountEncryptionSettingsSection = React.memo(function AccountEncry
                                                 fetchReviewCommentAccountEncryptionMigrationInventory({ request: homeRequest }),
                                                 fetchSessionOrganizationAccountEncryptionMigrationInventory({ request: homeRequest }),
                                                 fetchAccountEncryptionMigrationAutomationsInventory({ request: homeRequest }),
+                                                fetchAccountEncryptionMigrationDiscussionInventory({ request: homeRequest, token: credentials.token, scope: capturedRequest }),
                                             ]);
                                             requireCurrentScope();
                                             const automations = automationsInventory.templates.map(row => ({
@@ -553,6 +557,7 @@ export const AccountEncryptionSettingsSection = React.memo(function AccountEncry
                                                     todos: todoRows,
                                                     workspace: workspaceRows,
                                                     artifacts: artifactRows,
+                                                    discussionsInventory,
                                                     readArtifactRecipients: createArtifactAccessApi(credentials, { request: homeRequest }).readRecipients,
                                                     readArtifactBlob: (artifactId, blobId) => fetchArtifactBlob(credentials, artifactId, blobId, currentness.mode, { request: homeRequest }),
                                                     stageArtifactBlob: async (artifactId, blobId, content) => {
@@ -585,6 +590,9 @@ export const AccountEncryptionSettingsSection = React.memo(function AccountEncry
                                                 : [];
                                             const authoringMemory = await fetchAccountEncryptionAuthoringMemoryMigrationCandidates({
                                                 credentials, mode: currentness.mode, request: homeRequest,
+                                            });
+                                            const sessionFollowRules = await fetchAccountEncryptionSessionFollowRulesMigrationCandidates({
+                                                credentials, mode: currentness.mode, request: homeRequest, assertCurrent: requireCurrentScope,
                                             });
                                             const projectRows = await fetchAccountEncryptionProjectRowsMigrationCandidates({
                                                 credentials, mode: currentness.mode, request: homeRequest,
@@ -655,6 +663,7 @@ export const AccountEncryptionSettingsSection = React.memo(function AccountEncry
                                                     automations,
                                                     sessionDrafts,
                                                     authoringMemory,
+                                                    sessionFollowRules,
                                                     projectRows,
                                                     workspaceExecutionConfig,
                                                     profileRows,
@@ -698,6 +707,7 @@ export const AccountEncryptionSettingsSection = React.memo(function AccountEncry
                                                     automations,
                                                     sessionDrafts,
                                                     authoringMemory,
+                                                    sessionFollowRules,
                                                     projectRows,
                                                     workspaceExecutionConfig,
                                                     profileRows,
@@ -866,7 +876,7 @@ export const AccountEncryptionSettingsSection = React.memo(function AccountEncry
                                             if (e instanceof HappyError) {
                                                 if (nextMode === 'e2ee' && e.status === 400) {
                                                     if (
-                                                        e.code === AccountEncryptionMigrateInvalidParamsReasonSchema.enum.restore_required
+                                                        e.code === AccountEncryptionMigrateInvalidParamsReasonSchema.def.entries.restore_required
                                                     ) {
                                                         await Modal.alertAsync(
                                                             t('settingsAccount.restoreRequiredTitle'),
@@ -885,7 +895,7 @@ export const AccountEncryptionSettingsSection = React.memo(function AccountEncry
                                                         );
                                                         return;
                                                     }
-                                                    if (e.code === AccountEncryptionMigrateInvalidParamsReasonSchema.enum.key_proof_required) {
+                                                    if (e.code === AccountEncryptionMigrateInvalidParamsReasonSchema.def.entries.key_proof_required) {
                                                         await Modal.alertAsync(t('common.error'), t('settingsAccount.secretKeyMissing'));
                                                         return;
                                                     }

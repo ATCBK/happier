@@ -48,13 +48,24 @@ export const TriageSourceConnectedAccountBindingV1Schema = defineProtocolObject(
 }, { policy: 'closed' });
 export type TriageSourceConnectedAccountBindingV1 = ReturnType<typeof TriageSourceConnectedAccountBindingV1Schema.parse>;
 
-/** Native selection names only the service whose machine login is used. */
-export const TriageSourceAccountBindingV1Schema = defineProtocolUnion([
+/** Exact source authority: a connected Account, native service, or current Account data. */
+const triageCredentialBindingArmsV1 = [
     TriageSourceConnectedAccountBindingV1Schema,
     defineProtocolObject({
         purpose: TriageIdentifierV1ProtocolSchema,
         source: defineProtocolLiteral('native'),
         service: PluginContributionIdentityV1Schema,
+    }, { policy: 'closed' }),
+] as const;
+export const TriageSourceCredentialBindingV1Schema = defineProtocolUnion(triageCredentialBindingArmsV1);
+export type TriageSourceCredentialBindingV1 = ReturnType<typeof TriageSourceCredentialBindingV1Schema.parse>;
+export const TriageSourceAccountBindingV1Schema = defineProtocolUnion([
+    ...triageCredentialBindingArmsV1,
+    // Account data uses the invocation's authenticated Account service. It has
+    // no credential selector or service login to materialize.
+    defineProtocolObject({
+        purpose: TriageIdentifierV1ProtocolSchema,
+        source: defineProtocolLiteral('accountData'),
     }, { policy: 'closed' }),
 ]);
 export type TriageSourceAccountBindingV1 = ReturnType<
@@ -63,12 +74,15 @@ export type TriageSourceAccountBindingV1 = ReturnType<
 
 /**
  * Exact binding identity; account tuples retain their original persisted order.
- * Native tuples have a distinct arity, so no contract-valid account components
- * can impersonate a native selection.
+ * Native and Account-data tuples have distinct arities, so no contract-valid
+ * binding components can impersonate another authority arm.
  */
 export function triageSourceBindingComponentsV1(binding: TriageSourceAccountBindingV1): readonly string[] {
-    return 'account' in binding
-        ? [binding.purpose, binding.account.service.pluginId, binding.account.service.localId, binding.account.accountId]
+    if ('account' in binding) {
+        return [binding.purpose, binding.account.service.pluginId, binding.account.service.localId, binding.account.accountId];
+    }
+    return binding.source === 'accountData'
+        ? [binding.purpose, 'source', binding.source]
         : [binding.purpose, 'source', binding.source, binding.service.pluginId, binding.service.localId];
 }
 
@@ -149,9 +163,9 @@ export type TriageSourceInstanceDraftV1 = ReturnType<
 /**
  * The exact configured instance the target passes to `scan`, `get`, `detail`,
  * and optional review-workspace preparation. `instance` carries the
- * target-minted stable ref; the source reauthorizes the exact connected account
- * or native service login on every invocation and never falls through to an
- * alternative credential source.
+ * target-minted stable ref; the source reauthorizes the exact connected account,
+ * native service login, or current Account-data access on every invocation and
+ * never falls through to an alternative authority.
  */
 const triageConfiguredSourceInstanceFieldsV1 = {
     v: defineProtocolLiteral(1),
@@ -168,6 +182,11 @@ export const TriageConfiguredSourceConnectedAccountInstanceV1Schema = defineProt
     ...triageConfiguredSourceInstanceFieldsV1,
     binding: TriageSourceConnectedAccountBindingV1Schema,
 }, { policy: 'closed' });
+export const TriageConfiguredSourceCredentialInstanceV1Schema = defineProtocolObject({
+    ...triageConfiguredSourceInstanceFieldsV1,
+    binding: TriageSourceCredentialBindingV1Schema,
+}, { policy: 'closed' });
+export type TriageConfiguredSourceCredentialInstanceV1 = ReturnType<typeof TriageConfiguredSourceCredentialInstanceV1Schema.parse>;
 export type TriageConfiguredSourceConnectedAccountInstanceV1 = ReturnType<typeof TriageConfiguredSourceConnectedAccountInstanceV1Schema.parse>;
 export type TriageConfiguredSourceInstanceV1 = ReturnType<
     typeof TriageConfiguredSourceInstanceV1Schema.parse

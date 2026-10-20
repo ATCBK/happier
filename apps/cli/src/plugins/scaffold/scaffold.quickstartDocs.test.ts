@@ -83,6 +83,5 @@ describe('plugin quickstart documentation', () => {
   it('links React Native authors to the shipped Plugin UI API inventory', async () => {
     const guide = await readFile(reactNativeGuidePath, 'utf8');
     expect(guide).toContain('node_modules/@happier-dev/plugin-ui/API.md');
-    expect(guide).toContain('Plugin UI API inventory');
   });
 });

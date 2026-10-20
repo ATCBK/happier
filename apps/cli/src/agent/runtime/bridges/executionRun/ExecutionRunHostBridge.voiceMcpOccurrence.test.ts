@@ -125,6 +125,7 @@ describe('Voice Run MCP provisioning occurrence', () => {
       const parent = createMutableApiSessionClientFixture({ sessionId: 'voice-parent', metadata: createTestMetadata({ path: home }),
         overrides: { getMcpRequestAuthPort: () => port } });
       bridge = new ExecutionRunHostBridge({ parentProvider: 'claude', cwd: home, happyHomeDir: home, sendAcp: async () => {},
+        resolveRunReportPolicy: async () => ({ preset: 'important' }),
         getNowMs: () => 1_700_000_000_000, resolveAccountSettingsSnapshot: async () => snapshot,
         sessionInteractionHost: { session: parent, machineId: 'voice-machine', permissionHandler: new ProviderEnforcedPermissionHandler(parent, { logPrefix: '[Voice MCP]' }),
           // Compose the native host's tool-binding port with its real MCP owner,

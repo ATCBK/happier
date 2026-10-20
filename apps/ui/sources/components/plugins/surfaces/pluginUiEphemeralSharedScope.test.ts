@@ -51,6 +51,38 @@ function executionOrigin(machineId: string) {
 }
 
 describe('plugin UI ephemeral shared scope', () => {
+    it('binds admitted presentation bytes without a Machine occurrence and retires values when those bytes change', () => {
+        const accountLifetime = createAccountLifetime();
+        const mountLifetime = Object.freeze({ isCurrent: () => true });
+        let observedScope: PluginUiEphemeralSharedScope | null = null;
+        function Probe(props: Readonly<{ artifactDigest: `sha256:${string}` }>) {
+            observedScope = usePluginUiEphemeralSharedScopeBinding({
+                accountLifetime,
+                pluginId: 'acme.triage',
+                artifactDigest: props.artifactDigest,
+                mountLifetime,
+            });
+            return null;
+        }
+        let mounted: ReturnType<typeof create> | undefined;
+        const dispose = vi.fn();
+        try {
+            act(() => { mounted = create(createElement(Probe, { artifactDigest: `sha256:${'a'.repeat(64)}` })); });
+            const first = observedScope as PluginUiEphemeralSharedScope | null;
+            expect(first).not.toBeNull();
+            const lease = first?.acquire('window', () => ({ value: { rows: [] }, dispose }));
+            expect(lease).not.toBeNull();
+            act(() => { mounted?.update(createElement(Probe, { artifactDigest: `sha256:${'b'.repeat(64)}` })); });
+            expect(dispose).toHaveBeenCalledOnce();
+            expect(first?.acquire('window', () => ({ value: {}, dispose() {} }))).toBeNull();
+            const second = observedScope as PluginUiEphemeralSharedScope | null;
+            expect(second?.acquire('window', () => ({ value: { ready: true }, dispose() {} }))?.value).toEqual({ ready: true });
+        } finally {
+            act(() => { mounted?.unmount(); });
+            accountLifetime.retire();
+        }
+    });
+
     it('shares one value within an Account, plugin, and process occurrence until the final lease releases', () => {
         const accountLifetime = createAccountLifetime();
         const scopeA = getPluginUiEphemeralSharedScope({

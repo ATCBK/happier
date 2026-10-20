@@ -1,6 +1,7 @@
 import { buildWorkBoardItemKeyV1, type BoardItemRefV1, type WorkBoardV1 } from '@happier-dev/protocol/boards/workBoardV1';
 import type { WorkflowRunStateV1, WorkflowRunSummaryV1 } from '@happier-dev/protocol/workflows/workflowProgressV1';
 import type { WorkflowTriggerSummaryInputV1 } from '@happier-dev/protocol/workflows/triggers/workflowTriggerActionsV1';
+import type { PluginWorkItemV1 } from '@happier-dev/protocol/plugins/contributions/workItems';
 
 import {
     resolveWorkStatusTone,
@@ -37,6 +38,7 @@ export type BoardCardAvailability = 'ready' | 'not_loaded' | 'home_unavailable' 
 export type MachineSessionCounts = Readonly<{ running: number; needsYou: number }>;
 
 export type BoardCardBody =
+    | Readonly<{ kind: 'task'; item: PluginWorkItemV1 }>
     | Readonly<{ kind: 'session'; serverId: string; sessionId: string; statusDetail?: string }>
     | Readonly<{ kind: 'workflow_run'; runId: string; state: WorkflowRunStateV1; attentionLabel: string | null; startedAt: string | null;
         progress: WorkflowRunSummaryV1['stepProgress'] }>
@@ -72,10 +74,11 @@ export type BoardWorkflowFacts = Readonly<{
     }> | null;
 }>;
 
-/** Lookups into the existing owners; `null` means the item is not (yet) loaded on this device. */
+/** Lookups into the existing owners; missingEntityReason distinguishes a settled miss from loading. */
 export type BoardCardFacts = Readonly<{
     nowMs: number;
     session: (ref: BoardItemRefV1) => SessionListRenderableSession | null;
+    task?: (ref: Extract<BoardItemRefV1, { kind: 'task' }>) => PluginWorkItemV1 | null;
     workflowRun: (ref: BoardItemRefV1) => WorkflowRunRow | null;
     machine: (ref: BoardItemRefV1) => Machine | null;
     /** The credential-bound Account for this exact Machine Home; absent authority fails closed. */
@@ -84,6 +87,8 @@ export type BoardCardFacts = Readonly<{
     /** Counts from the already-loaded Session rows, by the machine's qualified item key (no extra read). */
     machineSessionCounts: ReadonlyMap<string, MachineSessionCounts>;
     workflow: (ref: BoardItemRefV1) => BoardWorkflowFacts | null;
+    /** An absent entity is loading until its canonical reader settles; absence alone is not deletion. */
+    missingEntityReason?: (ref: BoardItemRefV1) => string | null;
     /**
      * Whether a Home's workflows and runs are the ones the Account-scoped stores hold (the focused Home).
      * Another Home's workflow or run is unavailable here, never read as the focused Home's same-id item.
@@ -126,7 +131,9 @@ function notLoaded(member: BoardMember, availability: Exclude<BoardCardAvailabil
         ref: member.ref,
         picked: member.picked,
         availability,
-        title: t('boards.card.untitled'),
+        // Only a still-arriving item is loading; a settled miss or an unavailable Home is named by its kind, and
+        // the status and one reason line say why. No placeholder title repeats them.
+        title: availability === 'not_loaded' ? t('common.loading') : t(`boards.kinds.${member.ref.kind}`),
         // Not work state: the item cannot be read here. It sits with Offline and never claims trouble.
         status: unavailableStatus(availability),
         body: { kind: 'none' },
@@ -135,9 +142,15 @@ function notLoaded(member: BoardMember, availability: Exclude<BoardCardAvailabil
 
 function unavailableStatus(availability: Exclude<BoardCardAvailability, 'ready'>): WorkStatusPresentation {
     return {
-        bucket: availability === 'home_unavailable' ? 'offline' : 'idle', tone: 'neutral',
-        word: availability === 'home_unavailable' ? t('boards.card.unavailable') : t('boards.card.notLoaded'),
+        bucket: availability === 'not_loaded' ? 'idle' : 'offline', tone: 'neutral',
+        word: availability === 'not_loaded' ? t('common.loading') : t('boards.card.unavailable'),
     };
+}
+
+function missingEntity(member: BoardMember, facts: BoardCardFacts): BoardCard {
+    const reason = facts.missingEntityReason?.(member.ref) ?? null;
+    return reason === null ? notLoaded(member, 'not_loaded')
+        : { ...notLoaded(member, 'content_unavailable'), unavailableReason: reason };
 }
 
 /** Card and chrome classification share this owner; title, trigger and body projections are
@@ -146,10 +159,20 @@ function readBoardWorkStatus(member: BoardMember, facts: BoardCardFacts): WorkSt
     if (!member.available || ((member.ref.kind === 'workflow_run' || member.ref.kind === 'workflow')
         && !facts.accountScopedHome(member.ref.qualifiedId.serverId))) return unavailableStatus('home_unavailable');
     switch (member.ref.kind) {
+        case 'task': {
+            const task = facts.task?.(member.ref);
+            if (!task) return missingEntity(member, facts).status;
+            const linkedStatuses = task.linkedSessions.map(link => {
+                const ref = { kind: 'session' as const, qualifiedId: { serverId: link.serverId, id: link.sessionId } };
+                return readBoardWorkStatus({ ...member, ref, key: buildWorkBoardItemKeyV1(ref) }, facts);
+            });
+            return resolveWorkStatusTone({ kind: 'task', facts: { category: task.category,
+                word: task.categoryLabel, linkedStatuses } });
+        }
         case 'session': {
             const row = facts.session(member.ref);
             return row ? resolveWorkStatusTone({ kind: 'session', facts: readSessionWorkStatusFacts(row, facts.nowMs) })
-                : unavailableStatus('not_loaded');
+                : missingEntity(member, facts).status;
         }
         case 'workflow_run': {
             const row = facts.workflowRun(member.ref);
@@ -157,11 +180,11 @@ function readBoardWorkStatus(member: BoardMember, facts: BoardCardFacts): WorkSt
                 state: row.summary.state,
                 word: describeWorkflowRunState(row.summary.state, { inAttentionWindow: row.summary.attentionRequired === true }).label,
                 inAttentionWindow: row.summary.attentionRequired === true,
-            } }) : unavailableStatus('not_loaded');
+            } }) : missingEntity(member, facts).status;
         }
         case 'machine': {
             const machine = facts.machine(member.ref);
-            if (!machine) return unavailableStatus('not_loaded');
+            if (!machine) return missingEntity(member, facts).status;
             const online = isMachineReachable(facts.machineScope?.(member.ref.qualifiedId.serverId), machine, facts.nowMs);
             const counts = facts.machineSessionCounts.get(member.key) ?? NO_SESSIONS;
             return resolveWorkStatusTone({ kind: 'machine', facts: {
@@ -175,12 +198,12 @@ function readBoardWorkStatus(member: BoardMember, facts: BoardCardFacts): WorkSt
         }
         case 'workflow': {
             const workflow = facts.workflow(member.ref);
-            if (!workflow) return unavailableStatus('not_loaded');
-            if (workflow.unavailableReason) return { bucket: 'idle', tone: 'neutral', word: t('boards.card.unavailable') };
+            if (!workflow) return missingEntity(member, facts).status;
+            if (workflow.unavailableReason) return unavailableStatus('content_unavailable');
             const lastRun = workflow.summary?.lastRun ?? null;
             const lastRunWord = lastRun ? describeWorkflowRunState(lastRun.state).label : null;
             return resolveWorkStatusTone({ kind: 'workflow', facts: {
-                word: lastRunWord ?? (workflow.summary === null ? t('boards.card.notLoaded') : t('boards.card.workflow.noRuns')),
+                word: lastRunWord ?? (workflow.summary === null ? t('common.loading') : t('boards.card.workflow.noRuns')),
                 needsYouCount: workflow.summary?.needsYouCount ?? 0,
                 hasActiveRun: lastRun !== null && resolveWorkStatusTone({ kind: 'workflow_run',
                     facts: { state: lastRun.state, word: lastRunWord ?? '' } }).bucket === 'working',
@@ -196,24 +219,32 @@ function buildCard(member: BoardMember, facts: BoardCardFacts): BoardCard {
     const base = { key: member.key, ref: member.ref, picked: member.picked, availability: 'ready' as const };
     const { serverId, id } = member.ref.qualifiedId;
     switch (member.ref.kind) {
+        case 'task': {
+            const task = facts.task?.(member.ref);
+            return task ? { ...base, title: task.title, status: readBoardWorkStatus(member, facts), body: { kind: 'task', item: task } }
+                : missingEntity(member, facts);
+        }
         case 'session': {
             const row = facts.session(member.ref);
-            if (!row) return notLoaded(member, 'not_loaded');
+            if (!row) return missingEntity(member, facts);
             const sessionFacts = readSessionWorkStatusFacts(row, facts.nowMs);
             const readable = sessionFacts.awareness.encryption !== undefined
                 && isSessionAwarenessContentReadableV1(sessionFacts.awareness.encryption);
+            // An unreadable Session has no name to show: it is titled by its kind, like every other
+            // settled unavailable card, and gives one reason (its own, else that it cannot be read).
             return {
                 ...base,
-                title: getSessionName(row, serverId),
+                title: readable ? getSessionName(row, serverId) : t('boards.kinds.session'),
                 status: resolveWorkStatusTone({ kind: 'session', facts: { ...sessionFacts,
                     word: readable ? sessionFacts.word : t('boards.card.unavailable') } }),
                 body: { kind: 'session', serverId, sessionId: id,
-                    ...(!readable && sessionFacts.awareness.encryption !== 'unknown' ? { statusDetail: sessionFacts.word } : {}) },
+                    ...(readable ? {} : { statusDetail: sessionFacts.awareness.encryption === 'unknown'
+                        ? t('boards.card.readFailed') : sessionFacts.word }) },
             };
         }
         case 'workflow_run': {
             const row = facts.workflowRun(member.ref);
-            if (!row?.summary) return notLoaded(member, 'not_loaded');
+            if (!row?.summary) return missingEntity(member, facts);
             const lifecycle = describeWorkflowRunState(row.summary.state, {
                 inAttentionWindow: row.summary.attentionRequired === true,
             });
@@ -227,7 +258,7 @@ function buildCard(member: BoardMember, facts: BoardCardFacts): BoardCard {
         }
         case 'machine': {
             const machine = facts.machine(member.ref);
-            if (!machine) return notLoaded(member, 'not_loaded');
+            if (!machine) return missingEntity(member, facts);
             const online = isMachineReachable(facts.machineScope?.(serverId), machine, facts.nowMs);
             const counts = facts.machineSessionCounts.get(member.key) ?? NO_SESSIONS;
             return {
@@ -239,13 +270,13 @@ function buildCard(member: BoardMember, facts: BoardCardFacts): BoardCard {
         }
         case 'workflow': {
             const workflow = facts.workflow(member.ref);
-            if (!workflow) return notLoaded(member, 'not_loaded');
+            if (!workflow) return missingEntity(member, facts);
             if (workflow.unavailableReason) return {
                 ...base,
                 availability: 'content_unavailable',
                 title: workflow.title,
                 unavailableReason: workflow.unavailableReason,
-                status: { bucket: 'idle', tone: 'neutral', word: t('boards.card.unavailable') },
+                status: unavailableStatus('content_unavailable'),
                 body: { kind: 'none' },
             };
             const lastRun = workflow.summary?.lastRun ?? null;
@@ -280,6 +311,21 @@ function createBoardProjection<T>(project: (member: BoardMember, facts: BoardCar
             let refreshAt: number | null = null;
             let machineOnline: boolean | null = null;
             switch (member.ref.kind) {
+                case 'task': {
+                    const task = facts.task?.(member.ref);
+                    source = task;
+                    if (task) {
+                        const linkedRows = task.linkedSessions.map(link => facts.session({ kind: 'session',
+                            qualifiedId: { serverId: link.serverId, id: link.sessionId } }));
+                        // Include linked rows in the projection inputs: unchanged tracker facts cannot freeze agent state.
+                        for (const row of linkedRows) {
+                            if (!row) continue;
+                            const at = readSessionStatusNextRefreshAtMs(row, facts.nowMs);
+                            if (at !== null) refreshAt = refreshAt === null ? at : Math.min(refreshAt, at);
+                        }
+                    }
+                    break;
+                }
                 case 'session': {
                     const row = facts.session(member.ref);
                     source = row;
@@ -301,7 +347,14 @@ function createBoardProjection<T>(project: (member: BoardMember, facts: BoardCar
             const counts = member.ref.kind === 'machine' ? facts.machineSessionCounts.get(member.key) : undefined;
             const inputs = [source, member.available, member.picked, facts.accountScopedHome(member.ref.qualifiedId.serverId),
                 machineOnline, counts?.needsYou ?? 0, counts?.running ?? 0,
-                member.ref.kind === 'machine' ? facts.managedMachine?.(member.ref) : undefined];
+                member.ref.kind === 'machine' ? facts.managedMachine?.(member.ref) : undefined,
+                facts.missingEntityReason?.(member.ref) ?? null];
+            if (member.ref.kind === 'task') {
+                for (const link of facts.task?.(member.ref)?.linkedSessions ?? []) {
+                    const ref = { kind: 'session' as const, qualifiedId: { serverId: link.serverId, id: link.sessionId } };
+                    inputs.push(facts.session(ref), facts.missingEntityReason?.(ref) ?? null);
+                }
+            }
             const prior = entries.get(member.key);
             const entry = prior && inputs.every((input, index) => input === prior.inputs[index])
                 && (prior.refreshAt === null || facts.nowMs < prior.refreshAt)

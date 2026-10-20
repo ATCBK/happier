@@ -1,7 +1,18 @@
-import type { ScmComparison, ScmComparisonSource, ScmDiffSummaryOutputKind } from '@happier-dev/protocol/scm';
+import type { ScmComparison, ScmComparisonSource, ScmComparisonView, ScmDiffSummaryOutputKind, ScmDiffSummaryOutputs } from '@happier-dev/protocol/scm';
 import type { ScmDiffSummaryState } from './state';
 
 type SourceSelector = (ScmComparisonSource | ScmReviewComparisonSelector) & Readonly<{ comparisonId?: string }>;
+
+/** Shared by semantic navigation and the comparison surface's reading-view fallback. */
+export function scmReviewViewUnavailableReason(view: ScmComparisonView,
+    comparison: Pick<ScmReviewComparisonSelector, 'kind'> | null | undefined): 'commits_require_working_tree' | null {
+    return view === 'commits' && comparison?.kind !== 'workingTree' ? 'commits_require_working_tree' : null;
+}
+
+/** Only a terminal attempt with no published value needs an older saved output. */
+export function scmDiffSummaryOutputNeedsPublishedFallback(output: ScmDiffSummaryOutputs[ScmDiffSummaryOutputKind]): boolean {
+    return Boolean(output && output.value === undefined && (output.state === 'failed' || output.state === 'cancelled'));
+}
 
 /** The selector a comparison view names, before the Session it belongs to is attached. */
 export type ScmReviewComparisonSelector = (
@@ -73,7 +84,8 @@ export function selectScmWalkthroughKey(state: ScmDiffSummaryState,
     host: Readonly<{ sessionId: string }> | Readonly<{ machineId: string; cwd: string }>,
     comparison: SourceSelector | null, output: ScmDiffSummaryOutputKind = 'walkthrough', scopeKey?: string): string | null {
     if (!comparison) return null;
-    let best: { key: string; at: number } | null = null;
+    let best: { key: string; at: number; needsPublishedFallback: boolean } | null = null;
+    let published: { key: string; at: number } | null = null;
     for (const entry of Object.values(state.entriesByKey)) {
         const captured = entry.latestOutput?.comparison ?? entry.finalSummary?.output.comparison ?? entry.lastKnownSummary?.output.comparison;
         if (scopeKey !== undefined && entry.scopeKey !== scopeKey) continue;
@@ -83,12 +95,18 @@ export function selectScmWalkthroughKey(state: ScmDiffSummaryState,
         if (comparison.comparisonId && comparison.comparisonId !== (entry.latestOutput?.comparison?.id
             ?? entry.finalSummary?.output.comparison?.id ?? entry.lastKnownSummary?.output.comparison?.id
             ?? entry.input.comparisonId)) continue;
+        const requestedOutput = entry.latestOutput?.outputs?.[output] ?? entry.finalSummary?.output.outputs?.[output]
+            ?? entry.lastKnownSummary?.output.outputs?.[output];
+        if (entry.savedResult && !requestedOutput) continue;
         if (!(entry.input.outputs ?? ['summary']).includes(output)
             && !entry.latestOutput?.outputs?.[output]
             && !entry.finalSummary?.output.outputs?.[output]
             && !entry.lastKnownSummary?.output.outputs?.[output]) continue;
         const at = entry.requestedAtMs ?? 0;
-        if (!best || at >= best.at) best = { key: entry.key, at };
+        if (requestedOutput?.value !== undefined && (!published || at >= published.at)) published = { key: entry.key, at };
+        if (!best || at >= best.at) best = { key: entry.key, at,
+            needsPublishedFallback: Boolean(entry.savedResult && scmDiffSummaryOutputNeedsPublishedFallback(requestedOutput)) };
     }
+    if (best?.needsPublishedFallback && published) return published.key;
     return best?.key ?? null;
 }

@@ -26,6 +26,7 @@ import { createPluginInvocationActionsService } from '@/plugins/runtime/invocati
 import { createAutomationEventActionExecutor } from '@/plugins/runtime/automations/automationEventActionExecutor';
 import { createAutomationEventAdoptedDefinitionSetHostV1 } from '@/plugins/runtime/automations/automationEventAdoptedDefinitionSetHost';
 import { createBackgroundServiceRunnerHost } from '@/plugins/runtime/lifecycle/contributions/backgroundServices';
+import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 import { getAutomationRunInvalidationAction } from '@/daemon/automation/automationRunInvalidation';
 import {
   bindDeclaredEventSubscriptions,
@@ -190,18 +191,19 @@ describe('External plugin as a first-class Automation Event source', () => {
         provenance: 'external',
       }),
       immutableGenerationIdsByPluginId: { [PLUGIN_ID]: IMMUTABLE_GENERATION_ID },
+      occurrenceIdsByPluginId: { [PLUGIN_ID]: createPluginRuntimeOccurrenceId(PLUGIN_ID) },
     });
     expect(registry.automationEligibleEvents).toEqual([
       expect.objectContaining({
         event: expect.objectContaining({
           id: `${PLUGIN_ID}/${EVENT_LOCAL_ID}`,
           identity: eventRef,
-          immutableGenerationId: IMMUTABLE_GENERATION_ID,
+          occurrenceId: registry.occurrenceIdsByPluginId?.[PLUGIN_ID],
           title: 'Ledger entry appended',
         }),
         setupAction: expect.objectContaining({
           identity: { pluginId: PLUGIN_ID, localId: 'setup-ledger-source' },
-          immutableGenerationId: IMMUTABLE_GENERATION_ID,
+          occurrenceId: registry.occurrenceIdsByPluginId?.[PLUGIN_ID],
         }),
         historyGapResetAction: expect.objectContaining({
           identity: { pluginId: PLUGIN_ID, localId: 'reset-ledger-baseline' },
@@ -337,7 +339,9 @@ describe('External plugin as a first-class Automation Event source', () => {
       revalidateCallerOccurrence: async (caller) => (
         caller.occurrenceId === OCCURRENCE_ID
       ),
-      resolveAdoptedDefinitionSet: () => adoptedSet,
+      resolveAdoptedDefinitionSet: (_materialization, _occurrence, transport) => (
+        transport.kind === 'checkpointedPull' ? adoptedSet : null
+      ),
       transport: {
         execute: async <TActionId extends AutomationEventActionIdV1>(
           actionId: TActionId,
@@ -386,6 +390,8 @@ describe('External plugin as a first-class Automation Event source', () => {
         throw new Error('this proof never reaches a contributed Action');
       },
     });
+    await expect(actionsService.execute('automation.event.sources.list', { transport: { kind: 'checkpointedPull' } }))
+      .resolves.toMatchObject({ kind: 'page', definitions: [expect.objectContaining({ automationId: AUTOMATION_ID })] });
 
     // 6. The real host background-service owner starts the external plugin's
     //    OWN declared service. The runner comes from the plugin's activation

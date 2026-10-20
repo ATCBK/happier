@@ -1,14 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-    encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER,
     SessionCurrentProjectionRecordV1Schema, type HomeConnectionDescriptorV1,
 } from '@happier-dev/protocol';
 
 import { createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createSocketIoBoundaryStub } from '@/dev/testkit/mocks/socketIo';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 const HOME_B = 'https://iroh-home-b.example.test';
 const ORIGIN = 'http://127.0.0.1:45991';
@@ -19,31 +20,8 @@ const descriptor: HomeConnectionDescriptorV1 = {
 let cleanup: (() => Promise<void>) | null = null;
 
 async function installHarness(options: { additionalHome?: boolean; failIdentity?: boolean } = {}) {
-    const network = await installSessionOpsNetworkBoundary();
-    const homeA = await network.addHome('https://iroh-home-a.example.test', 'account-a');
-    const homeB = await network.addHome(HOME_B, 'account-b');
-    const homeC = options.additionalHome
-        ? await network.addHome('https://iroh-home-c.example.test', 'account-c') : null;
-    const profiles = await import('@/sync/domains/server/serverProfiles');
-    await profiles.adoptHomeProfile({ descriptor, source: 'manual' });
-    const homeBScope = profiles.resolveServerProfileScopeIdForIdentifier(homeB.id);
-    await profiles.setActiveServerId(homeA.id, { scope: 'device' });
-    await profiles.updateHomeViewState((state) => ({
-        ...state,
-        groups: [{ id: 'main', name: 'Main', serverIds: [homeA.id, homeBScope, ...(homeC ? [homeC.id] : [])], presentation: 'grouped' }],
-        activeTargetKind: 'group', activeTargetId: 'main',
-    }));
     const io = vi.fn();
     const sockets: Array<ReturnType<typeof createSocketIoBoundaryStub>> = [];
-    vi.doMock('socket.io-client', async (importOriginal) => ({
-        ...await importOriginal<typeof import('socket.io-client')>(),
-        io: (...args: unknown[]) => {
-            io(...args);
-            const socket = createSocketIoBoundaryStub();
-            sockets.push(socket);
-            return socket.socket;
-        },
-    }));
     const starts: Array<Record<string, unknown>> = [];
     const stops: string[] = [];
     const closedNativeLeases = new Set<string>();
@@ -77,16 +55,37 @@ async function installHarness(options: { additionalHome?: boolean; failIdentity?
             throw new Error(`Unexpected native command: ${command}`);
         },
     });
+    // Publish credentials only after the native device-store boundary exists;
+    // installing Tauri later changes which real storage port TokenStorage reads.
+    const network = await installSessionOpsNetworkBoundary();
+    const homeA = await network.addHome('https://iroh-home-a.example.test', 'account-a');
+    const homeB = await network.addHome(HOME_B, 'account-b');
+    const homeC = options.additionalHome
+        ? await network.addHome('https://iroh-home-c.example.test', 'account-c') : null;
+    const profiles = await import('@/sync/domains/server/serverProfiles');
+    await profiles.adoptHomeProfile({ descriptor, source: 'manual' });
+    const homeBScope = profiles.resolveServerProfileScopeIdForIdentifier(homeB.id);
+    await profiles.setActiveServerId(homeA.id, { scope: 'device' });
+    await profiles.updateHomeViewState((state) => ({
+        ...state,
+        groups: [{ id: 'main', name: 'Main', serverIds: [homeA.id, homeBScope, ...(homeC ? [homeC.id] : [])], presentation: 'grouped' }],
+        activeTargetKind: 'group', activeTargetId: 'main',
+    }));
+    network.setSocketConfigurator(boundary => {
+        io(boundary.serverUrl, boundary.options);
+        sockets.push(boundary);
+    });
     const fetchedUrls: string[] = [];
     let sessions: string[] = [];
     let machines: string[] = [];
     let reconcileNumber = 0;
+    let currentDescriptor = descriptor;
     let featureResponse: (() => Promise<Response>) | null = null;
     const features = () => createRootLayoutFeaturesResponse({
         capabilities: { serverIdentity: { serverIdentityId: failIdentity ? 'srv_wrong_home' : descriptor.homeServerIdentityId } },
         // Authenticated discovery describes the same adopted generation, not a
         // fabricated descriptor that would rotate the carrier on every refresh.
-        homeConnectionDescriptor: descriptor,
+        homeConnectionDescriptor: currentDescriptor,
     });
     const { setRuntimeFetch } = await import('@/utils/system/runtimeFetch');
     setRuntimeFetch(async (input) => {
@@ -125,13 +124,22 @@ async function installHarness(options: { additionalHome?: boolean; failIdentity?
                 });
             }), nextCursor: null, hasNext: false });
         }
-        if (url.pathname === '/v1/machines') return Response.json(machines.map((id) => ({
-            id, seq: 1, createdAt: 1, updatedAt: 1, active: true, activeAt: 1,
-            metadataVersion: 1, metadata: encodePlainMachineStoredContent({ host: 'test' }),
-            daemonStateVersion: 1, daemonState: null, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
-        })));
+        // A retained row omitted by the refreshed head needs the real exact
+        // access read, not an indistinguishable missing-route 404.
+        if (url.pathname.startsWith('/v2/sessions/')) {
+            return Response.json({ error: 'Session not found' }, { status: 404 });
+        }
+        if (url.pathname === '/v1/machines') {
+            const accountId = url.origin === ORIGIN ? homeB.accountId
+                : url.origin === homeA.serverUrl ? homeA.accountId : homeC?.accountId;
+            if (!accountId) throw new Error('Machine census has no fixture Account');
+            return Response.json(machines.map(id => createPlainMachineRowFixture({ id, accountId })));
+        }
         return Response.json({}, { status: 404 });
     });
+    // Exact removal delegates to the real Sync lifetime owner through its
+    // Node require bridge, just as the canonical concurrent-cache harness does.
+    const bridge = await loadSyncSingletonForTests();
     const pool = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
     pool.setServerReachabilityNetworkAllowed(true);
     const cache = await import('./concurrentSessionCache');
@@ -143,12 +151,12 @@ async function installHarness(options: { additionalHome?: boolean; failIdentity?
         await (await import('@/sync/runtime/nativeIrohTunnels/runtime')).disposeIrohHomeTunnelRuntime();
         (await import('@/sync/api/capabilities/serverFeaturesClient')).resetServerFeaturesClientForTests();
         await network.dispose();
-        vi.doUnmock('socket.io-client');
         for (const home of [homeB, homeA, ...(homeC ? [homeC] : [])]) {
             const profile = profiles.getServerProfileById(home.id);
             if (profile) await profiles.removeServerProfile(profile.id);
         }
         storage.getState().clearSessionListRowsForServerScope(homeBScope);
+        bridge.dispose();
     };
     return {
         ...cache, network, profiles, homeB, homeC, homeBScope, storage, starts, stops, io, sockets, fetchedUrls, pool,
@@ -159,8 +167,10 @@ async function installHarness(options: { additionalHome?: boolean; failIdentity?
         closeNativeLease() { closedNativeLeases.add('native-home-1'); },
         async reconcile() { await profiles.upsertServerProfile({ serverUrl: HOME_B, name: `Home B ${++reconcileNumber}` }); await vi.advanceTimersByTimeAsync(1); },
         async changeEndpoint() {
+            currentDescriptor = { ...descriptor, revision: 8,
+                endpoints: [{ kind: 'iroh', endpointId: 'c'.repeat(64), relayUrls: ['https://relay.example.test'] }] };
             await profiles.adoptHomeProfile({
-                descriptor: { ...descriptor, revision: 8, endpoints: [{ kind: 'iroh', endpointId: 'c'.repeat(64), relayUrls: ['https://relay.example.test'] }] },
+                descriptor: currentDescriptor,
                 source: 'manual',
             });
             await vi.advanceTimersByTimeAsync(1);
@@ -177,20 +187,30 @@ async function installHarness(options: { additionalHome?: boolean; failIdentity?
     };
 }
 
-beforeEach(() => {
-    vi.resetModules();
-    vi.useFakeTimers();
-    process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = '1';
-});
-afterEach(async () => {
+async function resetHarness(): Promise<void> {
     await cleanup?.();
     cleanup = null;
     vi.unstubAllGlobals();
     vi.useRealTimers();
     vi.restoreAllMocks();
-    vi.resetModules();
     delete process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT;
+}
+
+// Load the real Sync graph only after installing its native/network ports.
+// Cold transforms exceeded a case's deadline before its race even started;
+// collect them once and retire resources through their real lifecycle owners.
+vi.useFakeTimers();
+try {
+    await installHarness();
+} finally {
+    await resetHarness();
+}
+
+beforeEach(() => {
+    vi.useFakeTimers();
+    process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = '1';
 });
+afterEach(resetHarness);
 
 describe('concurrent session cache Iroh Home routing', () => {
     it('starts an independent secondary Home while another Home transport acquisition is held', async () => {
@@ -231,7 +251,7 @@ describe('concurrent session cache Iroh Home routing', () => {
         const h = await installHarness();
         h.startConcurrentSessionCacheSync();
         await h.settle();
-        await vi.waitFor(() => expect(h.fetchedUrls).toContain(`${ORIGIN}/v1/machines`));
+        await vi.waitFor(() => expect(h.fetchedUrls).toContain(`${ORIGIN}/v1/machines?includeRevoked=true`));
         expect(h.starts).toEqual([{
             homeServerIdentityId: descriptor.homeServerIdentityId, endpointId: 'b'.repeat(64),
             policy: 'automatic', relayUrls: ['https://relay.example.test'],

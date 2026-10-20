@@ -6,7 +6,7 @@ import { CodeLinesView } from '@/components/ui/code/view/CodeLinesView';
 import { useCodeLinesSyntaxHighlighting } from '@/components/ui/code/highlighting/useCodeLinesSyntaxHighlighting';
 import { useIntraLineWordDiffConfig } from '@/components/ui/code/diff/useIntraLineWordDiffConfig';
 import { HorizontalOverflowScrollView } from '@/components/ui/scroll/HorizontalOverflowScrollView';
-import { useSetting } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/store/settingsReadHooks';
 
 import type { UnifiedDiffViewerProps } from '../diffViewerTypes';
 import type { CodeLine } from '@/components/ui/code/model/codeLineTypes';
@@ -95,6 +95,14 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
         return map;
     }, [folded.regions]);
 
+    const refold = React.useCallback(() => {
+        if (!findOpenedRegion) return 'noRevealedFold' as const;
+        setRefoldedFindLine(props.scrollToLineId ?? null);
+        return 'refolded' as const;
+    }, [findOpenedRegion, props.scrollToLineId]);
+    React.useEffect(() => canFold ? props.registerFindRefold?.(refold) : undefined,
+        [canFold, props.registerFindRefold, refold]);
+
     const openedBandColor = React.useMemo(() => resolveThemeColor(theme.colors.find.matchCurrent).alpha(0.1).rgb().string(), [theme.colors]);
     const renderAfterLine = React.useCallback((line: CodeLine) => {
         // The fold Find opened (Find lab F1d): a faint band in the current-match tint, the reason on the left
@@ -103,7 +111,7 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
             <Icon name="arrows-down-up" size={ICON_SIZE.xs} color={theme.colors.text.tertiary} />
             <Text style={{ flex: 1, color: theme.colors.text.tertiary, ...Typography.variant('meta') }} numberOfLines={1}>{t('find.openedForMatch')}</Text>
             <TextLinkButton testID="diff-find-fold-again" label={t('find.foldAgain')}
-                onPress={() => setRefoldedFindLine(props.scrollToLineId ?? null)} />
+                onPress={() => { refold(); }} />
         </View>;
         const region = foldRegionsByAfterLineId.get(line.id) ?? null;
         if (!region) return null;
@@ -121,7 +129,7 @@ export const HappierUnifiedDiffViewer = React.memo<UnifiedDiffViewerProps>((prop
                 }}
             />
         );
-    }, [foldRegionsByAfterLineId, findOpenedRegion, openedBandColor, props.scrollToLineId, theme.colors.text.tertiary]);
+    }, [foldRegionsByAfterLineId, findOpenedRegion, openedBandColor, refold, theme.colors.text.tertiary]);
 
     const view = (
         <View style={props.virtualized ? styles.virtualizedBody : undefined}>

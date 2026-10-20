@@ -1,8 +1,10 @@
 import {
   SESSION_FOLLOW_SOURCE_KEY_PREPARATION_REJECTION_CODE_V1,
+  buildSessionFollowSourceKeyPrepareRequestV1,
 } from '@happier-dev/protocol';
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { SessionFollowSessionPendingObservationV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { readRpcErrorCode } from '@happier-dev/protocol/rpcErrors';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -20,6 +22,32 @@ import { encryptSessionPayload } from '@/session/transport/encryption/sessionEnc
 import { registerRestrictedSessionFollowSourceKeyReceiver } from './registerRestrictedSessionFollowSourceKeyReceiver';
 
 describe('restricted Follow source-key receiver', () => {
+  it('rejects a different admitted input even when both Session identities match', async () => {
+    const handlers = new Map<string, RpcHandler>();
+    const sourceMaterial = createSessionFollowSourceMaterialResolver();
+    registerRestrictedSessionFollowSourceKeyReceiver({
+      destinationSessionId: 'destination', sourceMaterial,
+      onSourceMaterialInstalled: () => {},
+      rpc: { registerHandler: (method, handler) => handlers.set(method, handler) },
+    });
+    const first = buildSessionFollowSourceKeyPrepareRequestV1({
+      sourceSessionId: 'source', destinationSessionId: 'destination', localInputId: 'first-input',
+      sourceDataEncryptionKeyBase64: encodeBase64(new Uint8Array(32).fill(17)),
+    });
+    const second = buildSessionFollowSourceKeyPrepareRequestV1({
+      sourceSessionId: 'source', destinationSessionId: 'destination', localInputId: 'second-input',
+      sourceDataEncryptionKeyBase64: encodeBase64(new Uint8Array(32).fill(17)),
+    });
+    const handler = handlers.get(RPC_METHODS.DAEMON_SESSION_FOLLOW_SOURCE_KEY_PREPARE)!;
+    const rejected = await handler(first.request, { signal: new AbortController().signal,
+      authorization: second.authorization }).catch((error: unknown) => error);
+    expect(readRpcErrorCode(rejected)).toBe(SESSION_FOLLOW_SOURCE_KEY_PREPARATION_REJECTION_CODE_V1);
+    expect(sourceMaterial.resolveForHydration({ sourceSessionId: 'source', signal: new AbortController().signal }))
+      .toEqual({ mode: 'unavailable' });
+    await expect(handler(first.request, { signal: new AbortController().signal,
+      authorization: first.authorization })).resolves.toEqual({ v: 1, outcome: 'installed' });
+  });
+
   it('installs only a request whose inner and authorized edge target this runtime', async () => {
     const handlers = new Map<string, RpcHandler>();
     const sourceMaterial = createSessionFollowSourceMaterialResolver();
@@ -111,10 +139,11 @@ describe('restricted Follow source-key receiver', () => {
         ok: true as const,
         v: 1 as const,
         sessionId: 'destination',
-        publisherGeneration: 'runner-generation-1',
+        publisherGeneration: '1',
         currentSourceSessionIds: edgeIsCurrent ? ['source'] : [],
         observations: edgeIsCurrent
-          ? [{ sourceSessionId: 'source', destinationSessionId: 'destination', delivered, observed }]
+          ? [SessionFollowSessionPendingObservationV1Schema.parse({ sourceSessionId: 'source', destinationSessionId: 'destination',
+            delivered, observed, policy: { preset: 'everything' } })]
           : [],
       })),
       acknowledgeSessionFollow,
@@ -213,7 +242,9 @@ describe('restricted Follow source-key receiver', () => {
     prepared?.acknowledgeAccepted({ kind: 'admitted_input', localInputId: 'accepted-input', userMessageSeq: 2 });
     await vi.waitFor(() => expect(acknowledgeSessionFollow).toHaveBeenCalledWith({
       sourceSessionId: 'source',
-      expectedPublisherGeneration: 'runner-generation-1',
+      expectedPublisherGeneration: '1',
+      policy: { preset: 'everything' },
+      relation: 'follower',
       expected: delivered,
       observed,
       consumed: observed,

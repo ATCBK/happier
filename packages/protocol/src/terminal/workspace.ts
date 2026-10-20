@@ -12,10 +12,13 @@ export const SessionTerminalTargetV1Schema = lazyZodSchema(() => z.discriminated
   z.strictObject({ kind: z.literal('workspace_shell'), workspace: z.optional(WorkspaceAddressV1Schema), ...shellLaunch }),
   z.strictObject({ kind: z.literal('session_attach') }),
   z.strictObject({ kind: z.literal('machine_shell'), machineId: id, cwd: id, ...shellLaunch }),
-  z.strictObject({ kind: z.literal('terminal_view'), machineId: id, terminalId: id, terminalKey: id, cwd: id, sessionId: z.optional(id) }),
+  z.strictObject({ kind: z.literal('terminal_view'), machineId: id, terminalId: id, terminalKey: id, cwd: id,
+    workspace: z.optional(WorkspaceAddressV1Schema), sessionId: z.optional(id) }),
 ]).check(z.refine((target) => !('initialCommand' in target && target.initialCommand !== undefined && target.launch !== undefined)
   && !('launch' in target && target.launch?.kind === 'session_attach'), {
   message: 'Shell command and launch are exclusive; agent attachments use the dedicated target',
+}), z.refine(target => target.kind !== 'terminal_view' || !target.workspace || target.workspace.machineId === target.machineId, {
+  message: 'Borrowed output and its checkout must address the same Machine',
 })));
 export type SessionTerminalTargetV1 = z.infer<typeof SessionTerminalTargetV1Schema>;
 /** Reference only: the existing approval Artifact owns the original strict Action input and receipt. */
@@ -26,7 +29,9 @@ export const SessionTerminalPendingActionApprovalV1Schema = lazyZodSchema(() => 
 }));
 export type SessionTerminalPendingActionApprovalV1 = z.infer<typeof SessionTerminalPendingActionApprovalV1Schema>;
 export const SessionTerminalMemberV1Schema = lazyZodSchema(() => z.strictObject({ id, target: SessionTerminalTargetV1Schema,
-  title: z.optional(id), pendingActionApproval: z.optional(SessionTerminalPendingActionApprovalV1Schema) }));
+  title: z.optional(id), pendingActionApproval: z.optional(SessionTerminalPendingActionApprovalV1Schema),
+  // A declined open belongs to this pane member, across responsive leaf replacement.
+  openCancelled: z.optional(z.literal(true)) }));
 export type SessionTerminalMemberV1 = z.infer<typeof SessionTerminalMemberV1Schema>;
 export type SessionTerminalLayoutV1 =
   | { kind: 'leaf'; terminalId: string }

@@ -4,6 +4,7 @@ import { MessageMeta } from "./messageMetaTypes.js";
 import type { TranscriptObservationMetadata } from "./transcriptObservationProvenance.js";
 import type { TranscriptAccountActorMetadata } from "./transcriptAccountActor.js";
 import type { ResolvedMcpToolIdentityV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
+import type { SessionQuestionHandlerV1 } from '@happier-dev/protocol/sessions/permissions/v1';
 
 export type ToolCall = {
     // Provider-side identifier for this tool call (e.g. ACP callId, Claude tool_use id).
@@ -32,6 +33,8 @@ export type ToolCall = {
         allowedTools?: string[];
         decision?: 'approved' | 'approved_for_session' | 'approved_execpolicy_amendment' | 'denied' | 'abort';
         decisionActor?: SessionPermissionDecisionActorV1;
+        /** Answer disposition stamped by the question owner, not the worker's requester. */
+        answeredBy?: SessionQuestionHandlerV1;
         date?: number;
         /**
          * Provider-suggested permission updates that can be applied by the user when approving.

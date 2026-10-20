@@ -9,7 +9,8 @@ import {
 import type { SessionAuthoringDraft } from '@/components/sessions/authoring/draft/sessionAuthoringDraft';
 import { resolveNewSessionCompatAgentType } from '@/components/sessions/new/modules/resolveNewSessionCompatAgentType';
 import { writeNewSessionAuthoringDraftToRepository } from '@/components/sessions/composer/newSessionDraftRepositoryAdapter';
-import { resolveTerminalSpawnOptions } from '@/sync/domains/settings/terminalSettings';
+import { resolveTerminalSpawnOptions, type TerminalSpawnSettings } from '@/sync/domains/settings/terminalSettings';
+import { getStorage } from '@/sync/domains/state/storageStore';
 import { normalizeSessionAuthoringConnectedServices } from '@/sync/domains/sessionAuthoring/sessionAuthoringNormalization';
 import type { NewSessionAutomationDraft } from '@/sync/domains/automations/automationDraft';
 import type { Machine } from '@/sync/domains/state/storageTypes';
@@ -75,7 +76,7 @@ export function useNewSessionAuthoringState(params: Readonly<{
     modelSelection: SessionModelSelectionV1 | null;
     capabilitySelection: BuildResolvedInputs['capabilitySelection'];
     agentNewSessionOptions: Record<string, unknown> | null;
-    settings: Settings;
+    settings: TerminalSpawnSettings & Pick<Settings, 'sessionWindowsTerminalWindowName'>;
     effectiveWindowsRemoteSessionLaunchMode: BuildResolvedInputs['windowsRemoteSessionLaunchMode'];
     acpSessionModeId: string | null;
     sessionConfigOptionOverrides: BuildResolvedInputs['sessionConfigOptionOverrides'];
@@ -89,7 +90,6 @@ export function useNewSessionAuthoringState(params: Readonly<{
     draftId?: string;
     launchUserAttemptId?: string | null;
     placementCandidates?: readonly PluginUiSessionPlacementCandidateV1[];
-    zenTaskSource?: NewSessionDraft['zenTaskSource'];
     authoringOrigin?: NewSessionDraft['authoringOrigin'];
 }>): Readonly<{
     authoringContext: ReturnType<typeof buildNewSessionAuthoringContext>;
@@ -134,9 +134,9 @@ export function useNewSessionAuthoringState(params: Readonly<{
     }, [params.draftScope, params.temporaryComputerActivationRef]);
     const draftAgentId = React.useMemo(() => resolveNewSessionCompatAgentType({
         backendTarget: params.backendTarget,
-        persistedAgentId: params.settings.lastUsedAgent,
+        persistedAgentId: getStorage().getState().settings.lastUsedAgent,
         selectedBuiltInAgentId: params.staticAgentId,
-    }), [params.backendTarget, params.settings.lastUsedAgent, params.staticAgentId]);
+    }), [params.backendTarget, params.staticAgentId]);
 
     // The live composer text is read from its store at build time instead of being a render
     // dependency: typing must not rebuild the authoring draft, but every build (render-time
@@ -178,7 +178,9 @@ export function useNewSessionAuthoringState(params: Readonly<{
         }) ?? null,
         windowsRemoteSessionLaunchMode: params.effectiveWindowsRemoteSessionLaunchMode ?? null,
         windowsRemoteSessionConsole: null,
-        windowsTerminalWindowName: typeof params.settings.sessionWindowsTerminalWindowName === 'string'
+        // Reuse the destination's Windows applicability decision for its Account default.
+        windowsTerminalWindowName: params.effectiveWindowsRemoteSessionLaunchMode != null
+            && typeof params.settings.sessionWindowsTerminalWindowName === 'string'
             ? params.settings.sessionWindowsTerminalWindowName.trim() || null
             : null,
         runtimeDescriptorV1: null,
@@ -282,7 +284,6 @@ export function useNewSessionAuthoringState(params: Readonly<{
             : '';
         return {
             ...persistedDraft,
-            ...(params.zenTaskSource === undefined ? {} : { zenTaskSource: params.zenTaskSource }),
             ...(params.authoringOrigin === undefined ? {} : { authoringOrigin: params.authoringOrigin }),
             ...(launchUserAttemptId ? { launchUserAttemptId } : {}),
             agentType: resolveNewSessionCompatAgentType({
@@ -304,7 +305,6 @@ export function useNewSessionAuthoringState(params: Readonly<{
         draftAgentId,
         params.getSessionOnlySecretValueEncByProfileIdByEnvVarName,
         params.launchUserAttemptId,
-        params.zenTaskSource,
         params.authoringOrigin,
         params.selectedMachineId,
         params.selectedSecretId,

@@ -7,7 +7,7 @@ import type { PromptExternalLinkEntryV1 } from '@happier-dev/protocol/prompts/li
 import { AccountSettingsV2UpdateRequestSchema, type AccountSettingsV2UpdateRequest } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import type { RegistrySourceV1 } from '@happier-dev/protocol/registries';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
 import { removeTempDir } from '@/testkit/fs/tempDir';
 import { readSettings, updateSettings } from '@/persistence';
@@ -97,6 +97,7 @@ describe('CLI Action prompt catalog admission', () => {
             for await (const chunk of request) body += String(chunk);
             if (request.headers.authorization !== `Bearer ${token}`) { status = 401; data = { error: 'unauthorized' }; }
             else if (!available) { status = 503; data = { error: 'unavailable' }; }
+            else if (path === '/v1/account/profile') data = { id: 'account' };
             else if (path === '/v1/account/encryption') data = { mode: 'plain', updatedAt: 0 };
             else if (path === '/v1/account/encryption/currentness') data = { mode: 'plain', version: 0, settingsVersion,
                 signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 };
@@ -189,10 +190,10 @@ describe('CLI Action prompt catalog admission', () => {
     });
     const publish = () => publication.setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse(rawSettings), rawSettings,
         settingsVersion, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: scope.resolveAccountSettingsScopeKey(credentials) });
-    const createDeps = () => factory.createCliActionDeps({ token, credentials, sessionId: 'session', serverId: 'alpha', serverHttpBaseUrl: url });
+    const createDeps = () => factory.createCliActionDeps({ token, credentials, sessionId: 'session', mode: 'plain', ctx: null, serverId: 'alpha', serverHttpBaseUrl: url });
     it('F8 routes Account stack Actions through the real captured keyless catalog transport and refuses stale edits', async () => {
-        const retained = { id: 'skill', ref: { kind: 'bundle' as const, artifactId: 'body' }, enabled: true,
-            placement: 'skill_instructions' as const };
+        const retained = { id: 'instructions', ref: { kind: 'doc' as const, artifactId: 'body' }, enabled: true,
+            placement: 'system_append' as const };
         codingStack = { v: 1, scope: { kind: 'coding' }, entries: [retained] };
         publish();
         const executor = createActionExecutor(createDeps());
@@ -215,7 +216,7 @@ describe('CLI Action prompt catalog admission', () => {
         const deps = createDeps();
         if (!deps.promptInvocationsList) throw new Error('Missing invocation Action owner');
         const listed = await deps.promptInvocationsList({});
-        expect(listed, JSON.stringify(requests)).toEqual({ items: [], coverage: 'complete' });
+        expect(listed, JSON.stringify(requests)).toEqual({ items: [], coverage: 'complete', revision: 7 });
         available = false;
         expect(await deps.promptInvocationsList({})).toEqual({ items: [], coverage: 'unavailable' });
     });
@@ -237,7 +238,8 @@ describe('CLI Action prompt catalog admission', () => {
             behavior: 'insert', allowArgs: false, availableIn: 'session_only' }];
         publish();
         const deps = createDeps();
-        expect(await deps.promptInvocationsList?.({})).toMatchObject({ coverage: 'complete', items: [{ id: 'local' }] });
+        expect(await deps.promptInvocationsList?.({})).toMatchObject({ coverage: 'complete', revision: 7,
+            items: [{ id: 'local', target: { kind: 'doc', artifactId: 'body' } }] });
         expect(await deps.promptInvocationResolve?.({ invocationId: 'local', sessionId: null }))
             .toEqual({ status: 'unavailable', invocationId: 'local' });
         expect(requests).not.toContain('/v1/artifacts/body');

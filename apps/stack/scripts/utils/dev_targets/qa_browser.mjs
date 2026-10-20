@@ -7,8 +7,8 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
-import { runCaptureResult, spawnProc, killProcessTree } from '../proc/proc.mjs';
-import { runDevTargetCommand } from './executor.mjs';
+import { redactFailureDiagnostic, runCaptureResult, spawnProc, killProcessTree } from '../proc/proc.mjs';
+import { prepareDevTargetSourceCommand, runDevTargetCommand } from './executor.mjs';
 import { resolveDevTargetSshConfigFile } from './mutagen_runtime.mjs';
 import { runDevTargetSshProcess } from './ssh_transport.mjs';
 import { buildRemoteQaBrowserStopCommand, buildSshForwardArgs, buildSshWorkerArgs, resolveRemoteStackStatePaths } from './remote_commands.mjs';
@@ -268,6 +268,13 @@ export async function stopStackQaBrowsers({ stackName, baseDir, sourceDir, env }
   // have browsers on any configured POSIX target and no runtime state at all.
   const targets = loaded.config.targets.filter(target => target.platform === 'posix');
   const results = await Promise.allSettled(targets.map(async target => {
+    try {
+      await prepareDevTargetSourceCommand({ target, stackBaseDir: loaded.authority.producerStackBaseDir ?? baseDir,
+        sourceDir, env }, { runCaptureResult: input => capture(input.command, input.args, { env: input.env }) });
+    } catch (error) {
+      return { warning: { code: `browser_cleanup_unconfirmed:${target.name}`,
+        error: redactFailureDiagnostic(error instanceof Error ? error.message : String(error), env) } };
+    }
     const sshConfig = resolveDevTargetSshConfigFile(target, { stackBaseDir: loaded.authority.producerStackBaseDir ?? baseDir, env });
     let result;
     try {
@@ -277,15 +284,15 @@ export async function stopStackQaBrowsers({ stackName, baseDir, sourceDir, env }
       }), { env, capture });
     } catch (error) {
       return { warning: { code: `browser_cleanup_unconfirmed:${target.name}`,
-        error: error instanceof Error ? error.message : String(error) } };
+        error: redactFailureDiagnostic(error instanceof Error ? error.message : String(error), env) } };
     }
     // SSH transport loss cannot confirm disposable browser retirement, but it
     // must not prevent the reachable Stack resources from stopping.
     if (!result.ok && (result.exitCode === 255 || result.exitCode == null)) {
       return { warning: { code: `browser_cleanup_unconfirmed:${target.name}`,
-        error: result.err || result.error?.message || 'browser cleanup transport unavailable' } };
+        error: redactFailureDiagnostic(result.err || result.error?.message || 'browser cleanup transport unavailable', env) } };
     }
-    if (!result.ok) throw new Error(`[dev-targets] ${target.name} browser cleanup failed: ${result.err || result.exitCode}`);
+    if (!result.ok) throw new Error(`[dev-targets] ${target.name} browser cleanup failed: ${redactFailureDiagnostic(result.err || result.exitCode, env)}`);
     let observed;
     try { observed = JSON.parse(result.out.trim()); } catch { /* Missing confirmation is not retirement. */ }
     if (observed?.stackName !== stackName || !Array.isArray(observed.pids)
@@ -435,7 +442,10 @@ export async function runQaBrowserSession({ target, stackName, stackBaseDir, ses
     })().catch(error => { if (!cancelled) failure = error; closeWorker(); });
   };
   try {
-    const args = ['./apps/stack/scripts/utils/dev_targets/qa_browser.mjs', '--worker', sessionName, 'remote'];
+    // Remote SSH workers do not inherit the controller's NODE_OPTIONS.
+    // Select the same authored Stack runtime before linking the worker graph.
+    const args = ['--import=./apps/stack/bin/localSourceRuntimeBootstrap.mjs',
+      './apps/stack/scripts/utils/dev_targets/qa_browser.mjs', '--worker', sessionName, 'remote'];
     if (trustSpki || fakeAudio || gpu) args.push(trustSpki);
     if (fakeAudio || gpu) args.push(fakeAudio ? (audioBytes ? 'file' : 'device') : '');
     if (gpu) args.push('gpu');

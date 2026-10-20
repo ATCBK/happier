@@ -42,7 +42,14 @@ export async function resolveProjectActionMachineV1(args: Readonly<{
     || context.executionRunTargetMachineId !== undefined)) {
     const executeRead = args.executeCanonicalAction;
     if (!executeRead) return failure('project_placement_unavailable');
-    const inspection = await executeRead('projects.inspect', { workspace });
+    const inspectionRead = executeRead('projects.inspect', { workspace });
+    const address = { serverId: workspace.serverId, refId: workspace.workspaceId };
+    const preferenceRead = executeRead('projects.worker.preferences.get', { workspace: address });
+    // These independent reads share this invocation's captured authority. SOURCE
+    // validation still owns refusal precedence; observe an early Home rejection
+    // until that validation decides whether its result is needed below.
+    void preferenceRead.catch(() => {});
+    const inspection = await inspectionRead;
     if (!inspection.ok) return inspection;
     const opened = ProjectDefinitionInspectOutputSchema.safeParse(inspection.result);
     if (!opened.success) return failure('invalid_action_output');
@@ -51,8 +58,7 @@ export async function resolveProjectActionMachineV1(args: Readonly<{
     const script = actionId === 'projects.script.run' ? PROJECT_ACTION_INPUT_SCHEMAS_V1['projects.script.run'].parse(parsed.data) : undefined;
     const named = script?.selection.kind === 'named' ? manifest?.scripts?.[script.selection.name] : undefined;
     if (script?.selection.kind === 'named' && !named) return failure('project_script_not_found');
-    const address = { serverId: workspace.serverId, refId: workspace.workspaceId };
-    const preference = await executeRead('projects.worker.preferences.get', { workspace: address });
+    const preference = await preferenceRead;
     if (!preference.ok) return preference;
     const observed = ProjectWorkerActionOutputSchemasV1['projects.worker.preferences.get'].safeParse(preference.result);
     if (!observed.success) return failure('invalid_action_output');

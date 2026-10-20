@@ -9,7 +9,8 @@ import { buildPromptBundleBodyFromDirectory } from '@/prompts/assets/shared/prom
 import { expandHomeDirPath, isCanonicalAbsolutePathInsideRoot } from '@/utils/path/expandHomeDirPath';
 
 type NativeRoots = PluginAgentSkillsCapabilityV2['nativeRoots'];
-type MaskingScanInput = Readonly<{ purpose?: 'masking'; nativeRoots: NativeRoots; directory?: string | null; home?: string }>;
+type MaskingScanInput = Readonly<{ purpose?: 'masking'; nativeRoots: NativeRoots; directory?: string | null; home?: string;
+  additionalProjectDirectories?: readonly string[] }>;
 export type FoundNativeSkillScanInput = Readonly<{
   purpose: 'found'; agents: readonly Readonly<{ agentId: string; nativeRoots: NativeRoots }>[];
   directory?: string | null; home?: string;
@@ -18,7 +19,7 @@ export type FoundNativeSkillRoot = Readonly<{
   path: string; scope: 'user' | 'project' | 'plugin'; agents: readonly string[]; status: 'ok' | 'failed';
 }>;
 export type FoundNativeSkillItem = Readonly<{
-  name: string; description: string | null; path: string; digest: string;
+  name: string; description: string | null; path: string; digest: string; userInvocable: boolean;
   agents: readonly string[]; scope: FoundNativeSkillRoot['scope']; pluginOwned: Readonly<{ pluginName: string }> | null;
 }>;
 export type FoundNativeSkillScan = Readonly<{ roots: readonly FoundNativeSkillRoot[]; items: readonly FoundNativeSkillItem[] }>;
@@ -104,6 +105,11 @@ export async function scanNativeSkillRoots(input: MaskingScanInput | FoundNative
     for (const agentId of agentIds) if (agentId && !root.agents.includes(agentId)) root.agents.push(agentId);
   }
   for (const agent of agents) for (const segments of agent.nativeRoots?.user ?? []) addRoot(join(home, ...segments), 'user', [agent.agentId]);
+  if (input.purpose !== 'found') for (const extra of input.additionalProjectDirectories ?? []) {
+    const directory = resolve(input.directory ? expandHomeDirPath(input.directory, { ...process.env, HOME: home, USERPROFILE: home }) : process.cwd(),
+      expandHomeDirPath(extra, { ...process.env, HOME: home, USERPROFILE: home }));
+    for (const segments of input.nativeRoots?.project ?? []) addRoot(join(directory, ...segments), 'project', []);
+  }
   const failed: string[] = [];
   if (input.directory) {
     let directory = resolve(expandHomeDirPath(input.directory, { ...process.env, HOME: home, USERPROFILE: home }));
@@ -136,28 +142,46 @@ export async function scanNativeSkillRoots(input: MaskingScanInput | FoundNative
     for (const { pattern, agentIds } of patterns.values()) for (const root of await expandPluginRoots(home, pattern)) addRoot(root.path, 'plugin', agentIds, root);
   }
   const names: Array<{ name: string; path: string; root: string }> = [];
-  const items: FoundNativeSkillItem[] = [];
+  const items: Array<Omit<FoundNativeSkillItem, 'agents'> & { agents: string[] }> = [];
+  const physicalItems = new Map<string, (typeof items)[number]>();
+  const physicalNames = new Set<string>();
   for (const root of roots.values()) {
     if (root.status === 'failed') continue;
     let children: string[];
     try { children = await readdir(root.path); }
     catch (error) {
-      if (missing(error)) continue;
+      if (missing(error)) {
+        // Absent native folders are normal; an existing broken alias is not an empty scan.
+        try { await lstat(root.path); }
+        catch (metadataError) { if (missing(metadataError)) continue; }
+      }
       root.status = 'failed'; failed.push(root.path); continue;
     }
     for (const child of children.sort()) {
       const skillDirectory = join(root.path, child);
       const path = join(skillDirectory, 'SKILL.md');
       try {
-        const contentRoot = input.purpose === 'found' ? await resolveContentRoot(skillDirectory, root.confinementRoot) : null;
+        const contentRoot = await resolveContentRoot(skillDirectory, root.confinementRoot);
         if (root.confinementRoot) await resolveContentRoot(path, root.confinementRoot);
+        // Follow native links, rejecting special entries before the content read.
+        if (!(await stat(path)).isFile()) throw new Error('Native skill entry is not a regular file');
         const frontmatter = readSkillFrontmatterV1(await readFile(path, 'utf8'));
         // Native Agents may accept names outside the library's authoring pattern.
         const name = frontmatter.name ?? child;
-        names.push({ name, path, root: root.path });
-        if (contentRoot) items.push({ name, description: frontmatter.description ?? null, path: skillDirectory,
-          digest: computePromptBundleDigestV1(buildPromptBundleBodyFromDirectory({ rootDirectory: contentRoot, preferredFirstPath: 'SKILL.md' })),
-          agents: [...root.agents], scope: root.scope, pluginOwned: root.pluginName === null ? null : { pluginName: root.pluginName } });
+        if (!physicalNames.has(contentRoot)) { names.push({ name, path, root: root.path }); physicalNames.add(contentRoot); }
+        if (input.purpose === 'found') {
+          // Plugin provenance remains distinct from user/project masking identity.
+          const key = JSON.stringify([contentRoot, root.scope === 'plugin' ? 'plugin' : 'native', root.pluginName]);
+          const existing = physicalItems.get(key);
+          if (existing) {
+            for (const agent of root.agents) if (!existing.agents.includes(agent)) existing.agents.push(agent);
+          } else {
+            const item = { name, description: frontmatter.description ?? null, path: skillDirectory, userInvocable: frontmatter.userInvocable,
+              digest: computePromptBundleDigestV1(buildPromptBundleBodyFromDirectory({ rootDirectory: contentRoot, preferredFirstPath: 'SKILL.md' })),
+              agents: [...root.agents], scope: root.scope, pluginOwned: root.pluginName === null ? null : { pluginName: root.pluginName } };
+            items.push(item); physicalItems.set(key, item);
+          }
+        }
       } catch (error) {
         if (error && typeof error === 'object' && ['ENOENT', 'ENOTDIR'].includes(String(Reflect.get(error, 'code')))) continue;
         root.status = 'failed';

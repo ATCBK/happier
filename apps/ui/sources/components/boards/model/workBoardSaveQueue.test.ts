@@ -16,6 +16,65 @@ function boundary() {
 }
 
 describe('WorkBoard Account Artifact save queue', () => {
+    it.each(['inputs', 'size'] as const)('does not acknowledge an older uncertain add as a changed %s request', async changed => {
+        const b = boundary();
+        let readable = true;
+        const store = createWorkBoardAccountStore({ ...b.transport,
+            read: async (id, options) => { if (!readable) throw new Error('Read-back unavailable'); return b.transport.read(id, options); },
+            update: async input => { await b.transport.update(input); readable = false; throw new Error('Acknowledgement lost'); },
+        }, () => true);
+        const instance = { v: 1, id: 'changed-copy', definition: { kind: 'builtin', id: 'changes' }, bindings: {} } as const;
+        const ref = { surface: { serverId: 'home-a', accountId: 'owner', owner: { kind: 'workBoard', boardId: 'b1' } }, instanceId: instance.id } as const;
+        expect(await store.queue.dispatch({ kind: 'widget_add', boardId: 'b1', ref, instance, size: 'medium' })).toMatchObject({ status: 'unknown' });
+        const committed = b.rows.get('b1');
+        readable = true;
+        expect(await store.queue.dispatch({ kind: 'widget_add', boardId: 'b1', ref,
+            instance: changed === 'inputs' ? { ...instance, bindings: { session: { kind: 'value', value: 'changed-session' } } } : instance,
+            size: changed === 'size' ? 'wide' : 'medium',
+        })).toMatchObject({ status: 'refused', code: 'widget_instance_already_exists' });
+        expect(b.rows.get('b1')).toBe(committed);
+    });
+    it('reads back a committed add after its acknowledgement is lost', async () => {
+        const b = boundary();
+        const store = createWorkBoardAccountStore({ ...b.transport, update: async input => {
+            await b.transport.update(input);
+            throw new Error('Acknowledgement lost');
+        } }, () => true);
+        const instance = { v: 1, id: 'lost-ack', definition: { kind: 'builtin', id: 'changes' }, bindings: {} } as const;
+        const ref = { surface: { serverId: 'home-a', accountId: 'owner', owner: { kind: 'workBoard', boardId: 'b1' } }, instanceId: instance.id } as const;
+        expect(await store.queue.dispatch({ kind: 'widget_add', boardId: 'b1', ref, instance })).toMatchObject({ status: 'applied' });
+        expect(store.queue.getState()).toEqual({ pending: [], failure: null });
+        expect(store.getBoard('b1')?.widgets?.map(item => item.instance.id)).toEqual(['lost-ack']);
+        expect(b.rows.get('b1')?.revision.bodyVersion).toBe(2);
+    });
+    it.each(['before_retry', 'during_retry'] as const)('reconciles one add when its original write commits %s', async lateCommit => {
+        const b = boundary();
+        let original: Parameters<typeof b.transport.update>[0] | undefined;
+        let readUnavailable = true;
+        const store = createWorkBoardAccountStore({ ...b.transport,
+            read: async (id, options) => {
+                if (original && readUnavailable) throw new Error('Read-back unavailable');
+                return b.transport.read(id, options);
+            },
+            update: async input => {
+                if (!original) { original = input; throw new Error('Write outcome unknown'); }
+                if (lateCommit === 'during_retry') await b.transport.update(original);
+                return b.transport.update(input);
+            },
+        }, () => true);
+        const instance = { v: 1, id: 'late-copy', definition: { kind: 'builtin', id: 'changes' }, bindings: {} } as const;
+        const ref = { surface: { serverId: 'home-a', accountId: 'owner', owner: { kind: 'workBoard', boardId: 'b1' } }, instanceId: instance.id } as const;
+        expect(await store.queue.dispatch({ kind: 'widget_add', boardId: 'b1', ref, instance })).toMatchObject({ status: 'unknown' });
+        // An unavailable read-back cannot authorize another write.
+        expect(await store.queue.retry()).toMatchObject({ status: 'unknown' });
+        expect(b.rows.get('b1')?.revision.bodyVersion).toBe(1);
+        readUnavailable = false;
+        if (lateCommit === 'before_retry') await b.transport.update(original!);
+        expect(await store.queue.retry()).toMatchObject({ status: 'applied' });
+        expect(store.queue.getState()).toEqual({ pending: [], failure: null });
+        expect(store.getBoard('b1')?.widgets?.map(item => item.instance.id)).toEqual(['late-copy']);
+        expect(b.rows.get('b1')?.revision.bodyVersion).toBe(2);
+    });
     it('keeps every external-store snapshot stable when an inventory refresh changes nothing', async () => {
         const b = boundary();
         const releaseView = b.store.retainView(() => () => {}, 'headers');
@@ -116,6 +175,7 @@ describe('WorkBoard Account Artifact save queue', () => {
         await b.store.refresh(); b.offline(true);
         await b.store.refresh();
         expect(b.store.getReadState()).toMatchObject({ status: 'error', hasSnapshot: true });
+        expect(b.store.getBoardReadState('b1')).toMatchObject({ status: 'error', hasSnapshot: true });
         expect(b.store.getBoards()).toEqual(base);
         b.offline(false); await b.store.refresh();
         expect(b.store.getReadState()).toMatchObject({ status: 'ready', hasSnapshot: true });
@@ -150,6 +210,28 @@ describe('WorkBoard Account Artifact save queue', () => {
             expect(store.getBoards().boards.map(board => board.id)).toEqual(['b2']);
             expect(store.getSummaries().map(board => board.id)).toEqual(['b1', 'b2']);
             expect(persistence.rows.get('b1')).toBe(broken);
+        } finally { release(); }
+    });
+
+    it('keeps a failed body local to its Board while the index and readable neighbor remain ready', async () => {
+        const persistence = createWorkBoardArtifactBoundary(WorkBoardsV1Schema.parse({ v: 1,
+            boards: [...base.boards, createWorkBoardV1({ id: 'b2', name: 'Other' })] }));
+        let failed = true;
+        const store = createWorkBoardAccountStore({ ...persistence.transport, read: async (id, options) => {
+            if (id === 'b1' && failed) throw new Error('Network unavailable');
+            return persistence.transport.read(id, options);
+        } }, () => true);
+        const release = store.retainView(() => () => {}, 'all');
+        try {
+            await store.refresh();
+            expect(store.getReadState()).toMatchObject({ status: 'ready', hasSnapshot: true });
+            expect(store.getBoardReadState('b1')).toMatchObject({ status: 'error', hasSnapshot: false });
+            expect(store.getBoardReadState('b2')).toMatchObject({ status: 'ready', hasSnapshot: true });
+            expect(store.getBoards().boards.map(board => board.id)).toEqual(['b2']);
+            failed = false;
+            await store.refresh();
+            expect(store.getBoardReadState('b1')).toMatchObject({ status: 'ready', hasSnapshot: true });
+            expect(store.getBoards().boards.map(board => board.id)).toEqual(['b1', 'b2']);
         } finally { release(); }
     });
 
@@ -261,6 +343,28 @@ describe('WorkBoard Account Artifact save queue', () => {
         await store.refresh();
         expect(persistence.reads).toEqual(['b1']);
         releaseBody(); releaseHeaders();
+    });
+
+    it('settles the index as soon as headers arrive while demanded bodies remain pending', async () => {
+        const persistence = createWorkBoardArtifactBoundary(base);
+        let finish!: (value: WorkBoardArtifactV1 | null) => void;
+        let started!: () => void;
+        const reading = new Promise<void>(resolve => { started = resolve; });
+        const store = createWorkBoardAccountStore({ ...persistence.transport, read: async () => {
+            started(); return new Promise(resolve => { finish = resolve; });
+        } }, () => true);
+        const release = store.retainView(() => () => {}, 'all');
+        const refreshing = store.refresh();
+        try {
+            await reading;
+            expect(store.getSummaries().map(board => board.id)).toEqual(['b1']);
+            expect(store.getReadState()).toMatchObject({ status: 'ready', hasSnapshot: true });
+            expect(store.getBoardReadState('b1')).toMatchObject({ status: 'loading', hasSnapshot: false });
+        } finally {
+            finish(persistence.rows.get('b1')!);
+            await refreshing;
+            release();
+        }
     });
 
     it('acknowledges a newly created Board after its same id was deleted', async () => {

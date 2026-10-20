@@ -3,18 +3,26 @@ import type { PendingActivationAuthorizationV1 } from '@happier-dev/protocol/ses
 import type { PendingMessage } from '@/sync/domains/state/storageTypes';
 
 export type ManagedWakeProjectionInput = Readonly<{
-    managed: Pick<ManagedMachineV1, 'id' | 'homeId' | 'creationState' | 'enrolledMachineId' | 'allocation' | 'controller' | 'observation' | 'submittedNativeEffect'> | null;
+    managed: Pick<ManagedMachineV1, 'id' | 'homeId' | 'creationState' | 'enrolledMachineId' | 'allocation' | 'controller' | 'observation' | 'submittedNativeEffect' | 'wakeOnAcceptedMessage'> | null;
     pending: Pick<PendingMessage, 'source' | 'pendingDeliveryStatus'> | null;
     activation: PendingActivationAuthorizationV1 | null;
     runtimeResuming: boolean;
+    /** False while the Session's pending list has not been read: a missing row is then unread, not unconfirmed. */
+    pendingLoaded?: boolean;
+    pendingReadState?: 'loading' | 'error';
+    managedReadState?: 'loading' | 'read';
+    machineInventoryState?: 'loading' | 'read';
 }>;
 
 export type ManagedWakeProjection = Readonly<{
-    kind: 'waiting' | 'starting' | 'connecting' | 'resuming' | 'agentStartFailed' | 'resourceAbsent' | 'storageLost' | 'unavailable' | 'unknown' | 'deliveryUnknown';
+    kind: 'loading' | 'waiting' | 'starting' | 'connecting' | 'resuming' | 'agentStartFailed' | 'resourceAbsent' | 'storageLost' | 'unavailable' | 'unknown' | 'deliveryUnknown';
     inputCustody: 'queued' | 'unknown';
     canWithdraw: boolean;
     canRetryAgentStart: boolean;
+    canRequestWake: boolean;
     canResumeRuntime: boolean;
+    /** Typed terminal cause for the presenter; never native or approval error prose. */
+    failureCode?: Extract<PendingActivationAuthorizationV1, { status: 'failed' }>['failureCode'];
     observedAt?: number;
 }>;
 
@@ -34,9 +42,15 @@ export function deriveManagedWakeProjection(input: ManagedWakeProjectionInput): 
         inputCustody: queued ? 'queued' as const : 'unknown' as const,
         canWithdraw: queued,
         canRetryAgentStart: false,
+        canRequestWake: false,
         canResumeRuntime: false,
         ...(observation ? { observedAt: observation.observedAt } : {}),
     };
+    // Hold genuinely unread inputs, but a failed read has settled without
+    // proving custody. Retained snapshots remain useful during refresh failure.
+    if ((input.pendingLoaded === false && input.pendingReadState !== 'error') || input.managedReadState === 'loading' || input.machineInventoryState === 'loading') {
+        return { ...base, kind: 'loading' };
+    }
     if (!managed) return { ...base, kind: 'unknown' };
     if (target && (managed.id !== target.managedId || managed.homeId !== target.homeId
         || managed.enrolledMachineId !== target.enrolledMachineId || managed.creationState !== 'active')) return null;
@@ -47,17 +61,25 @@ export function deriveManagedWakeProjection(input: ManagedWakeProjectionInput): 
     if (observation?.availability === 'unavailable') return { ...base, kind: 'unavailable' };
     if (!queued) return { ...base, kind: 'deliveryUnknown' };
     if (ready && input.runtimeResuming) return { ...base, kind: 'resuming' };
+    // A submitted native Start outlives a failed activation until its own
+    // observation advances; it cannot be unsent or retried by the queue.
+    if (managed.submittedNativeEffect?.intent === 'start' && observation?.power !== 'running') {
+        return { ...base, kind: 'starting' };
+    }
     if (activation?.status === 'failed') {
-        return { ...base, kind: 'agentStartFailed', canRetryAgentStart: ready };
+        // Retry re-admits the intent through the managed owner. Unknown storage
+        // is not loss (handled above) or a UI-owned native-effect refusal.
+        return { ...base, kind: 'agentStartFailed', failureCode: activation.failureCode, canRetryAgentStart: ready,
+            canRequestWake: managed.wakeOnAcceptedMessage === true && !managed.submittedNativeEffect
+                && managed.creationState === 'active' && managed.allocation === 'bound'
+                && observation?.availability === 'present'
+                && (observation.power === 'stopped' || observation.power === 'suspended') };
     }
     if (!observation) return { ...base, kind: 'unknown' };
     if (observation.power === 'running') {
         if (observation.daemon === 'disconnected') return { ...base, kind: 'connecting' };
         if (ready) return { ...base, kind: 'waiting', canResumeRuntime: activation?.status === 'waiting' };
     }
-    // Submission remains factual across policy/Move edits, but a current
-    // running observation has already advanced past the native Start stage.
-    if (managed.submittedNativeEffect?.intent === 'start') return { ...base, kind: 'starting' };
     if (observation.storage === 'retained' && (observation.power === 'stopped' || observation.power === 'suspended')) {
         return { ...base, kind: 'waiting' };
     }

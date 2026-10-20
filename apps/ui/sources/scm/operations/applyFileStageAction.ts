@@ -16,6 +16,7 @@ import { withSessionProjectScmOperationLock } from '@/scm/operations/withOperati
 import { reportSessionScmOperation, trackBlockedScmOperation } from '@/scm/operations/reporting';
 import { tracking } from '@/track';
 import { tryShowDaemonUnavailableAlertForScmOperationFailure } from '@/scm/operations/scmDaemonUnavailableAlert';
+import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 
 export async function applyFileStageAction(input: Readonly<{
     sessionId: string;
@@ -117,6 +118,8 @@ export async function applyFileStageAction(input: Readonly<{
                     });
                 }
             }
+
+            if (isScmActionNotRun(response)) return;
 
             if (!response.success) {
                 const shownDaemonUnavailable = tryShowDaemonUnavailableAlertForScmOperationFailure({

@@ -5,7 +5,8 @@ import type { WorkflowAuthoringTarget } from '@/sync/domains/workflows/workflowP
 import type { AuthoringComposerScope } from '@/components/sessions/authoring/ScopedAuthoringComposer';
 import type { SessionAuthoringControlFacts } from '@/components/sessions/authoring/controls/sessionAuthoringFieldControls';
 import { useSessionAuthoringControlFacts } from '@/components/sessions/authoring/controls/useSessionAuthoringControlFacts';
-import { useActiveServerAccountScope, useAllMachines } from '@/sync/domains/state/storage';
+import { useActiveServerAccountScope, useAllMachines, useMachineListForServer } from '@/sync/domains/state/storage';
+import { useWorkflowAccountLifetime } from '../workflowAccountScope';
 import type { EntityDragScopeV1 } from '@happier-dev/protocol/plugins/ui';
 import type { WorkflowExistingSessionOption } from '@/sync/domains/workflows/workflowAuthoring';
 import { useWorkflowExistingSessionOptions } from './useWorkflowExistingSessionOptions';
@@ -51,9 +52,13 @@ export function useWorkflowAuthoringHost(params: Readonly<{
     const { capturedSession, serverId } = params;
     const machineId = params.projectTarget?.machineId ?? null;
     const activeScope = useActiveServerAccountScope();
-    const sessionBindingScope = activeScope?.serverId === serverId ? activeScope : null;
+    const accountLifetime = useWorkflowAccountLifetime();
+    const scope = accountLifetime === undefined ? activeScope : accountLifetime?.scope ?? null;
+    const sessionBindingScope = scope?.serverId === serverId ? scope : null;
     const directory = typeof params.projectTarget?.directory === 'string' ? params.projectTarget.directory : null;
-    const machines = useAllMachines();
+    const activeMachines = useAllMachines();
+    const addressedMachines = useMachineListForServer(serverId ?? '');
+    const machines = accountLifetime === undefined ? activeMachines : addressedMachines ?? [];
     const machineHomeDir = React.useMemo(() => (
         machineId === null
             ? null

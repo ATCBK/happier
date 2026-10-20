@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { getActionSpec } from '../../actions/actionSpecs.js';
+import { actionSpecToActionDefinitionV1 } from '../../actions/actionCatalog.js';
+import { compileProtocolJsonSchema } from '../../plugins/actions/jsonSchemaCompiler.js';
+import { PLUGIN_INVOCABLE_ACTION_IDS } from '../../actions/pluginActionSurface.js';
 
 import {
   SESSION_BOARD_ACTION_IDS_V1,
@@ -46,6 +49,40 @@ const item = {
 } as const;
 
 describe('Session Board Action contracts', () => {
+  it('advertises declarative document grammar without bypassing native preflight and audience admission', () => {
+    const definition = actionSpecToActionDefinitionV1(getActionSpec('session.board.item.upsert'), { includeOutputSchema: false });
+    // The document already carries the complete Action id vocabulary for
+    // capabilities. The plugin subset must reuse it plus its exclusions.
+    expect(JSON.stringify(definition.inputSchema).includes(JSON.stringify(PLUGIN_INVOCABLE_ACTION_IDS))).toBe(false);
+    const validate = compileProtocolJsonSchema(definition.inputSchema, 'draft-07');
+    const input = { sessionId: 'session', itemId: 'note', expectedItemRevision: revision, item };
+    expect(validate(input)).toBe(true);
+    expect(SessionBoardItemUpsertInputV1Schema.safeParse(input).success).toBe(true);
+    for (const [hostAction, accepted] of [['session.message.send', true], ['session.handoff.prepare_target', false]] as const) {
+      const actionInput = { ...input, item: { ...item, source: { kind: 'declarative', document: {
+        version: 1, root: { kind: 'action', hostAction, label: 'Send' },
+      } } } };
+      expect(SessionBoardItemUpsertInputV1Schema.safeParse(actionInput).success).toBe(accepted);
+      expect(validate(actionInput)).toBe(accepted);
+    }
+    for (const document of [
+      { version: 1, root: { kind: 'unknown' } },
+      { version: 1 },
+      { version: 1, root: { kind: 'text', text: 42 } },
+    ]) {
+      const invalid = { ...input, item: { ...item, source: { kind: 'declarative', document } } };
+      expect(SessionBoardItemUpsertInputV1Schema.safeParse(invalid).success).toBe(false);
+      expect(validate(invalid)).toBe(false);
+    }
+    // JSON Schema describes the author grammar. Native preflight and audience
+    // refinements still run before storage and are not replaced by projection.
+    for (const root of [
+      { kind: 'markdown', text: 'x'.repeat(512 * 1024) },
+      { kind: 'action', label: 'Plugin-only action', action: { pluginId: 'com.acme.test', localId: 'run' } },
+    ]) expect(SessionBoardItemUpsertInputV1Schema.safeParse({ ...input, item: { ...item,
+      source: { kind: 'declarative', document: { version: 1, root } },
+    } }).success).toBe(false);
+  });
   it('accepts only exact cross-Session create sources as an alternative to authored content', () => {
     const copy = { sessionId: 'destination-session', itemId: 'copy', expectedItemRevision: null,
       copySource: { serverId: 'home', sessionId: 'source-session', itemId: 'source', expectedItemRevision: revision } };

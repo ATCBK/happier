@@ -12,7 +12,7 @@ import { HOME_SIGN_IN_PROVIDERS_SETTINGS } from '../signInProviders/homeSignInPr
 import { TEAM_AUTHENTICATION_SETTINGS } from '@/components/settings/teams/identity/teamAuthenticationSettings';
 import { t } from '@/text';
 
-import type { ManagedGitHubAppSurface } from './managedGitHubAppSurface';
+import type { ManagedGitHubAppCreatePath, ManagedGitHubAppSurface } from './managedGitHubAppSurface';
 import type { HomeAdministrationContext } from '../governance/homeAdministrationContext';
 import {
     homeAdministrationGitHubAppCreatePath,
@@ -44,7 +44,7 @@ export function managedGitHubAppStateLabel(state: string): string {
  * Authentication document.
  */
 export const ManagedGitHubAppsSection = React.memo(function ManagedGitHubAppsSection(
-    props: Readonly<{ surface: ManagedGitHubAppSurface; createPath: string; createAvailable?: boolean }>,
+    props: Readonly<{ surface: ManagedGitHubAppSurface; createPath: ManagedGitHubAppCreatePath; createAvailable?: boolean }>,
 ) {
     const router = useRouter();
     const { state, refresh } = useManagedGitHubApps(props.surface.scope, props.surface.owner);
@@ -103,6 +103,6 @@ export function homeManagedGitHubAppSurface(context: HomeAdministrationContext):
     };
 }
 
-export function homeManagedGitHubAppCreatePath(context: HomeAdministrationContext): string {
+export function homeManagedGitHubAppCreatePath(context: HomeAdministrationContext): ReturnType<typeof homeAdministrationGitHubAppCreatePath> {
     return homeAdministrationGitHubAppCreatePath(context.scope.serverId);
 }

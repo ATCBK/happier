@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { listSharedRoleArtifactsV1, roleArtifactSharingAdapterV1 } from './roleArtifactSharingV1.js';
 
-const role = { name: 'Builder', instructions: 'Build', runsAs: { kind: 'session' }, workspaceWrites: 'allow', secondOpinion: 'off', enabled: true };
+const role = { name: 'Builder', instructions: 'Build', runsAs: { kind: 'session' }, workspaceWrites: 'allow', secondOpinion: 'off', canDelegateToOtherRoles: true, enabled: true };
 const artifact = { artifactId: 'shared-role', ownerAccountId: 'other', access: 'view' as const,
   header: { kind: 'role.v1', name: 'Builder' }, body: JSON.stringify(role), revision: { headerVersion: 1, bodyVersion: 1 } };
 

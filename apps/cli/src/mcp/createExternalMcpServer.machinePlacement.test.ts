@@ -5,8 +5,8 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { Server } from 'socket.io';
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
-import { ACTION_IDS, encodeBase64, getActionSpec, normalizeActionsSettingsV1, RPC_METHODS, SOCKET_RPC_EVENTS, V2SessionByIdResponseSchema } from '@happier-dev/protocol';
+import { z } from 'zod/mini';
+import { ACTION_IDS, getActionSpec, normalizeActionsSettingsV1, RPC_METHODS, SOCKET_RPC_EVENTS, V2SessionByIdResponseSchema } from '@happier-dev/protocol';
 import { createExternalMcpServer } from './createExternalMcpServer';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
@@ -55,8 +55,8 @@ describe('standalone MCP machine placement', () => {
         // header/body validation, policy and blocking waiter stay real.
         const chunks: Buffer[] = [];
         for await (const chunk of request) chunks.push(Buffer.from(chunk));
-        const written = z.object({ id: z.string(), header: z.string(), body: z.string(),
-          dataEncryptionKey: z.literal(ARTIFACT_PLAIN_DATA_KEY_MARKER) }).passthrough()
+        const written = z.looseObject({ id: z.string(), header: z.string(), body: z.string(),
+          dataEncryptionKey: z.literal(ARTIFACT_PLAIN_DATA_KEY_MARKER) })
           .parse(JSON.parse(Buffer.concat(chunks).toString('utf8')));
         const decoded = z.object({ body: z.string() }).parse(decodePlainArtifactStoredContent(written.body));
         const approval = ApprovalRequestV2Schema.parse(JSON.parse(decoded.body));
@@ -184,8 +184,8 @@ describe('standalone MCP machine placement', () => {
     const http = createServer((request, response) => {
       response.setHeader('content-type', 'application/json');
       if (request.url === '/v1/machines/addressed-machine') {
-        response.end(JSON.stringify({ machine: { id: 'addressed-machine', kind: 'persistent',
-          dataEncryptionKey: encodeBase64(new TextEncoder().encode(JSON.stringify({ t: 'plain', v: null }))),
+        response.end(JSON.stringify({ machine: { id: 'addressed-machine', kind: 'persistent', storageMode: 'plain',
+          dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
         } }));
       } else if (request.url === '/v1/account/encryption/currentness') {
         response.end(JSON.stringify({ mode: 'plain', version: 1, updatedAt: 1,

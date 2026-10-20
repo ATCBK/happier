@@ -13,7 +13,7 @@ import { testkitEntryRef } from '../../corpus/testkit/observations.test-support.
 import { GITHUB_TRIAGE_SOURCE_DESCRIPTOR_V1, GITHUB_TRIAGE_CONTRIBUTION_LOCAL_ID_V1 } from '../../../../scm-github/src/triage/contribution.js';
 import { decodeGithubSearchItem, projectGithubEntry } from '../../../../scm-github/src/triage/mapping/entry.js';
 import { GITHUB_FIXTURE_REPOSITORY_ID, GITHUB_SEARCH_ISSUE_ITEM, GITHUB_SEARCH_PULL_REQUEST_ITEM } from '../../../../scm-github/src/triage/__fixtures__/githubResponses.js';
-import { readTriageEntryGlyphV1 } from '../list/rows.js';
+import { readTriageEntryGlyphV1 } from '../window/entryDisplay.js';
 
 import {
     resolveTriageSourceDescriptorV1,

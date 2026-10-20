@@ -15,6 +15,8 @@ export function resolveProjectGroupHeaderMenuItems(input: Readonly<{
     canAddFolder: boolean;
     canRename: boolean;
     hasCustomLabel: boolean;
+    canMoveUp?: boolean;
+    canMoveDown?: boolean;
     actionIconColor: string;
 }>): ReadonlyArray<DropdownMenuItem> {
     const cacheKey = [
@@ -23,6 +25,8 @@ export function resolveProjectGroupHeaderMenuItems(input: Readonly<{
         input.canAddFolder ? '1' : '0',
         input.canRename ? '1' : '0',
         input.hasCustomLabel ? '1' : '0',
+        input.canMoveUp ? '1' : '0',
+        input.canMoveDown ? '1' : '0',
         input.actionIconColor,
     ].join('|');
     const cached = PROJECT_GROUP_HEADER_MENU_ITEMS_CACHE.get(cacheKey);
@@ -31,6 +35,8 @@ export function resolveProjectGroupHeaderMenuItems(input: Readonly<{
     }
 
     const next: DropdownMenuItem[] = [
+        ...(input.canMoveUp ? [{ id: 'moveUp', title: t('common.moveUp') } satisfies DropdownMenuItem] : []),
+        ...(input.canMoveDown ? [{ id: 'moveDown', title: t('common.moveDown') } satisfies DropdownMenuItem] : []),
         ...(input.canOpenProject ? [{
             id: 'openProject',
             title: t('sessionsList.openProject'),

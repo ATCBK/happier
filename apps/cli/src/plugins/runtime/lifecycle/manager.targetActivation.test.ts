@@ -1,4 +1,6 @@
 import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unexpectedProjectNativeAdapterResolution";
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { unexpectedCaptureSourceResolution } from "@/plugins/testkit/unexpectedCaptureSourceResolution";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -33,12 +35,14 @@ import { createHostActionOperationRuntime } from '@/daemon/actionOperations/crea
 import { executeProjectFiniteProcess } from '@/workspaces/projectSetup/projectSetupExecution';
 import { createProjectFiniteAction, type ProjectFiniteActionRuntime } from '@/workspaces/projectSetup/projectFiniteAction';
 import { prepareProjectSetup } from '@/workspaces/projectSetup/projectSetupPreparation';
-import { inspectProjectSetupReadinessFromRuntime } from '@/workspaces/projectSetup/projectSetupReadiness';
+import { inspectProjectSetupFromRuntime } from '@/workspaces/projectSetup/projectSetupReadiness';
 import { resolveProjectNativeCommand } from '@/workspaces/projectSetup/projectNativeResolution';
 import { createProjectSetupTrustClient } from '@/workspaces/projectSetup/projectSetupTrust';
 import { createDaemonAdmissionDrain } from '@/daemon/lifecycle/admissionDrain';
 import { createProjectWorkerAdmission } from '@/workspaces/execution/projectWorkerAdmission';
 import { createTerminalPtySessionManager } from '@/terminal/pty/sessions';
+import { createPtyTerminalHostAdapter } from '@/terminal/pty/hostAdapter';
+import { createPluginTerminalHostService, installAgentChildLaunchEnvironmentTransformerForTerminalHost } from '@/plugins/runtime/context/terminalHost';
 import { createDaemonSpawnToolResolutionContext } from '@/daemon/spawnHooks';
 import { getRuntimeInstallableAdapter } from '@/packagedRuntime/installables/registry';
 import type { PtyProvider, PtyExitEvent, PtySpawnParams } from '@/terminal/pty/provider';
@@ -47,7 +51,6 @@ import { pixiPlugin, pixiRuntime, pixiAdapter, importedPixiTask, importedPixiEnv
 import { authorizePluginExecLaunchForHost, authorizeResolvedProjectExecLaunchForHost, createStablePluginExecService } from '../invocation/services/exec';
 import { createLoadedMachineProvisionerFixture, machineProvisionerFixtureRoleIds } from '../../projection/registry/machineProvisioners.testkit';
 import { projectLoadedPluginContributes } from '../../projection/registry/resolvePluginContributions';
-import { createResolvedContributionRegistry } from '../../projection/registry/createResolvedContributionRegistry';
 import { buildPluginProjectionV2 } from '../../projection/registry/projection/v2';
 import { resolveExecutableManagedDependenciesRegistry } from '../../projection/registry/managedDependencyExecutables';
 import { createStableManagedExecutableResolver } from '../invocation/services/managedExecutableResolver';
@@ -55,6 +58,7 @@ import { createStablePluginManagedDependenciesHost } from '../invocation/service
 import { resolveManifestHostAccessRequestsForQualifiedContribution } from '../hostAccess/manifestRequests';
 import * as processTreeBoundary from '@/processes/terminate/terminateProcessTree';
 import { readSupervisedPluginProcessIdForHost } from '../exec/processSupervisor';
+import { PROCESS_OWNER_ENV_KEY, parseProcessOwnerTag } from '@/processes/ownerTag';
 
 type TargetPluginRegistrationApi = ReturnType<typeof createPluginRegistrationScope>['api'];
 
@@ -155,9 +159,9 @@ describe('target activation publication', () => {
         let inspectedProduction: ProjectNativeAdapterProductionV1 | undefined;
         try {
             expect(load).not.toHaveBeenCalled();
-            await expect(resolveProjectNativeAdapter({ reference: pixiAdapter, role: 'nativeServiceLifecycle', targets, registry })).resolves.toEqual({ kind: 'refused', code: 'native_adapter_unsupported' });
+            await expect(resolveProjectNativeAdapter({ reference: pixiAdapter, role: 'nativeServiceLifecycle', targets, registry })).resolves.toMatchObject({ kind: 'ready' });
             await expect(resolveProjectNativeAdapter({ reference: pixiAdapter, role: 'detect', targets, registry, isAdmitted: () => false })).resolves.toEqual({ kind: 'refused', code: 'native_adapter_retired' });
-            expect(load).not.toHaveBeenCalled();
+            expect(load).toHaveBeenCalledTimes(1);
             expect(JSON.parse(persistedQualifiedArms)).toMatchObject({ scripts: { check: { source: importedPixiTask } }, environment: importedPixiEnvironment });
             const inspectAction = createProjectDefinitionAction({ serverId: 'home-a', machineId: 'machine-a', workingDirectory: projectRoot,
                 accessPolicy: { kind: 'restrictedRoots', roots: [projectRoot] },
@@ -209,7 +213,12 @@ describe('target activation publication', () => {
             if (inspected.kind !== 'ready') throw new Error(inspected.code);
             inspectedProduction = inspected.production;
             await expect(inspectedProduction.resolveCommand({ ...request, source: { ...importedPixiTask, target: 'unowned-native-resource' } }))
-                .resolves.toEqual({ kind: 'unsupported', code: 'native_adapter_unsupported' });
+                .resolves.toMatchObject({ kind: 'resolved', nativeInstance: { adapter: pixiAdapter, nativeResourceId: 'fixture-resource' } });
+            await expect(resolveProjectNativeCommand({ root: projectRoot,
+                source: { ...importedPixiTask, target: 'unowned-native-resource' }, usage: 'script',
+                io: { async resolveTool() { throw new Error('Plugin-native resource cannot fall back to built-in tools'); } },
+                plugin: { lease: inspectedProduction } }))
+                .resolves.toMatchObject({ kind: 'refused', code: 'native_service_only' });
             await expect(inspectedProduction.resolveCommand({ ...request, source: importedPixiTask })).resolves.toMatchObject({
                 kind: 'resolved', executable: { kind: 'systemTool', id: 'pixi' }, args: ['run', 'check'], cwd: projectRoot,
                 reviewInputs: request.files, environmentApplied: importedPixiEnvironment,
@@ -276,6 +285,55 @@ describe('target activation publication', () => {
                 expect(wrapped).toMatchObject({ command: installedPixiPath, args: ['run', '--', '/bin/echo', 'checked'] });
                 expect(environmentSignal.aborted).toBe(false);
                 wrapped.release();
+                // The real external adapter must deliver its entire wrapper tuple
+                // through native Session terminals, rather than an env-only projection.
+                const terminalSpawns: PtySpawnParams[] = [];
+                const terminalAdapter = createPtyTerminalHostAdapter({ ptyProvider: {
+                    spawn(input) {
+                        terminalSpawns.push(input);
+                        return { pid: 4321, write() {}, resize() {}, kill() {},
+                            onData: () => ({ dispose() {} }), onExit: () => ({ dispose() {} }) };
+                    },
+                } });
+                let terminalPreparations = 0;
+                const terminalExec = createStablePluginExecService({
+                    allowedExecutables: [], signal: environmentSignal, isOccurrenceCurrent: environmentProduction.production.isCurrent,
+                    resolveExecutable: async () => { throw new Error('Installed Agent must not be resolved as the wrapper'); },
+                    resolvePath: async () => projectRoot,
+                    prepareAgentNativeLaunch: async () => {
+                        terminalPreparations++;
+                        return { nativeExecutableOwner: environmentProduction.production.exec,
+                            projectLaunch: { status: 'ready', reviewedEffectDigest: 'terminal-retained-selected-invocation',
+                                environment: { root: projectRoot, selection: importedPixiEnvironment, platform: 'linux', io: {
+                                    resolveTool: async () => { throw new Error('Plugin environment cannot use builtin resolution'); },
+                                    run: async () => { throw new Error('Plugin environment cannot use builtin execution'); },
+                                } }, nativeAdapter: { lease: environmentProduction.production, files: request.files },
+                            } };
+                    },
+                });
+                const terminal = createPluginTerminalHostService({
+                    hasCapability: () => true,
+                    resolveTerminalHost: () => ({ status: 'resolved', adapter: terminalAdapter, reason: 'windows_console_forced' }),
+                    resolveAgentCliLaunch: () => ({ command: '/bin/echo', args: ['checked'], env: { KEEP: 'terminal' } }),
+                    disposeHost: async ({ handle, adapter }) => adapter.dispose(handle),
+                });
+                const terminalBinding = installAgentChildLaunchEnvironmentTransformerForTerminalHost(terminal, env => env, { exec: terminalExec });
+                const terminalRequest = { preference: 'windows_console' as const, sessionName: 'external-native-terminal',
+                    workingDirectory: projectRoot, isolatedEnv: true,
+                    launch: { kind: 'agent-cli' as const, agentId: 'claude', args: ['literal $() ; " argument \\'] } };
+                let terminalHandle: Awaited<ReturnType<typeof terminal.createOrAttachHost>> | undefined;
+                try {
+                    terminalHandle = await terminal.createOrAttachHost(terminalRequest);
+                    expect(terminalSpawns).toMatchObject([{ file: installedPixiPath,
+                        args: ['run', '--', '/bin/echo', 'checked', 'literal $() ; " argument \\'],
+                        options: { cwd: projectRoot, env: { KEEP: 'terminal' } } }]);
+                    await terminal.createOrAttachHost(terminalRequest);
+                    expect(terminalSpawns).toHaveLength(1);
+                    expect(terminalPreparations).toBe(1);
+                } finally {
+                    if (terminalHandle) await terminal.dispose(terminalHandle, { kind: 'destroy_owned_host', reason: 'session_closed' });
+                    terminalBinding.dispose();
+                }
                 expect(completedInvocations).toBe(completedBeforeProduction);
                 await expect(commandProduction.production.resolveCommand({ ...request, root: join(projectRoot, 'another-root'), source: importedPixiTask }))
                     .resolves.toEqual({ kind: 'failed', code: 'native_adapter_reference_mismatch' });
@@ -385,15 +443,14 @@ describe('target activation publication', () => {
                     })).result,
                 })).resolves.toMatchObject({ ok: true, result: { operation: { operationId: 'native-fixture-finite' } } });
                 expect(nativeSpawn).toMatchObject({ file: admitted.command, args: admitted.args, options: { cwd: projectRoot } });
-                expect(nativeSpawn?.options.env).toEqual(admitted.env);
+                const { [PROCESS_OWNER_ENV_KEY]: processOwner, ...nativeEnvironment } = nativeSpawn!.options.env!;
+                expect(nativeEnvironment).toEqual(admitted.env);
                 const running = operation.store.get(operationScope, 'native-fixture-finite');
                 expect(running).toMatchObject({ state: 'running', domainRef: { kind: 'projectCommand', purpose: 'exec', workspaceRefId: 'workspace-a', cwd: projectRoot } });
                 if (running?.domainRef?.kind !== 'projectCommand' || !running.domainRef.terminalId) throw new Error('Expected observed native terminal');
                 const terminalId = running.domainRef.terminalId;
-                const capacityProbe = { terminalKey: 'native-fixture-capacity-probe', cwd: projectRoot,
-                    requesterAccountId: operationScope.accountId, holdUntilExit: true as const,
-                    launchProcess: { file: admitted.command, args: admitted.args, env: admitted.env } };
-                expect(terminals.ensure(capacityProbe)).toMatchObject({ ok: false, errorCode: 'terminal_busy' });
+                expect(parseProcessOwnerTag(processOwner)?.owner).toEqual({ kind: 'terminal', terminalId });
+                expect(terminals.isFiniteHeld(terminalId)).toBe(true);
                 emitData('native fixture output\n');
                 emitExit({ exitCode: 0 });
                 await expect(operation.runner.waitForTerminal(operationScope, 'native-fixture-finite')).resolves.toMatchObject({ state: 'succeeded', result: { kind: 'success' } });
@@ -401,8 +458,7 @@ describe('target activation publication', () => {
                 expect(output).toMatchObject({ ok: true, done: true });
                 if (!output.ok) throw new Error(output.errorCode);
                 expect(output.events.some(event => event.t === 'data' && event.data.includes('native fixture output'))).toBe(true);
-                expect(terminals.ensure(capacityProbe)).toMatchObject({ ok: true });
-                emitExit({ exitCode: 0 });
+                expect(terminals.isFiniteHeld(terminalId)).toBe(false);
             } finally { terminals.dispose(); admitted.release(); }
             admitted.release(); admitted.release();
             expect(originalExecutableReleased).toBe(1);
@@ -472,7 +528,8 @@ describe('target activation publication', () => {
         } finally { release(); inspectedProduction?.release(); finalEnvironmentProduction?.release(); await registry.dispose(); await serviceOwners.dispose(); await rm(projectRoot, { recursive: true, force: true }); }
     });
 
-    async function exerciseSelectedNativeInvocations(holdCapacity: boolean, stopNativePreparation = false, passiveOnly = false) {
+    async function exerciseSelectedNativeInvocations(holdCapacity: boolean, stopNativePreparation = false, passiveOnly = false,
+        fresh?: 'wrapped' | 'direct' | 'retired') {
         const projectRoot = await mkdtemp(join(tmpdir(), 'happier-native-environment-owner-'));
         const cleanups: Array<() => void | Promise<void>> = [() => rm(projectRoot, { recursive: true, force: true })];
         try {
@@ -488,8 +545,8 @@ describe('target activation publication', () => {
             writeFile(join(projectRoot, 'command.native'), commandContent), writeFile(join(projectRoot, 'pixi.toml'), configContent),
             mkdir(join(projectRoot, '.happier'))]);
         if (process.platform !== 'win32') await Promise.all([chmod(commandPath, 0o755), chmod(wrapperPath, 0o755)]);
-        await writeFile(join(projectRoot, '.happier/project.json'), JSON.stringify({ version: 1,
-            workspace: { setup: [!passiveOnly && (holdCapacity || stopNativePreparation) ? { ...commandSource, target: 'hold' } : commandSource] }, scripts: { check: { source: commandSource },
+        await writeFile(join(projectRoot, '.happier/project.json'), fresh === 'direct' ? persistedQualifiedArms : JSON.stringify({ version: 1,
+            workspace: { setup: fresh ? [] : [!passiveOnly && (holdCapacity || stopNativePreparation) ? { ...commandSource, target: 'hold' } : commandSource] }, scripts: { check: { source: commandSource },
                 ...(holdCapacity || stopNativePreparation ? { hold: { source: { ...commandSource, target: 'hold' } } } : {}) }, environment: importedPixiEnvironment }));
         let environmentEffects = 0;
         let commandEffects = 0;
@@ -533,7 +590,7 @@ describe('target activation publication', () => {
                 },
             } } },
         });
-        const plugins = [commandPlugin, environmentPlugin];
+        const plugins = [commandPlugin, fresh ? pixiPlugin : environmentPlugin];
         const manifests = plugins.map(plugin => {
             const admitted = ingestCanonicalPluginManifest(plugin.manifest, { sourceProvenance: 'registryCustodied' });
             if (!admitted.ok) throw new Error(`Public fixture manifest refused: ${JSON.stringify(admitted.diagnostics)}`);
@@ -549,7 +606,7 @@ describe('target activation publication', () => {
         })) } });
         const contributes = createResolvedContributionRegistry({ ...inputs, activationTargets: targets });
         const registry = await activatePluginRuntimeRegistry({ contributes, occurrenceIdsByPluginId: occurrenceIds, generation: 40,
-            resolveActivationSource: target => ({ kind: 'bundled', moduleId: `${target.pluginId}/daemon/${passiveOnly ? 'passive-inspection' : stopNativePreparation ? 'preparation-stop' : holdCapacity ? 'capacity' : 'selected'}`,
+            resolveActivationSource: target => ({ kind: 'bundled', moduleId: `${target.pluginId}/daemon/${fresh ?? (passiveOnly ? 'passive-inspection' : stopNativePreparation ? 'preparation-stop' : holdCapacity ? 'capacity' : 'selected')}`,
                 load: async () => {
                     const plugin = plugins.find(candidate => candidate.manifest.id === target.pluginId);
                     if (!plugin) throw new Error('Selected native module fixture is unavailable');
@@ -574,11 +631,19 @@ describe('target activation publication', () => {
         const commandInvocations: Array<{ signal: AbortSignal }> = [];
         let completedCommandInvocations = 0;
         const executableOwners: string[] = [];
+        let resumeWrapperResolution!: () => void;
+        const wrapperResolution = new Promise<void>(resolve => { resumeWrapperResolution = resolve; });
+        let wrapperResolutionPending = false;
+        cleanups.push(() => { resumeWrapperResolution(); });
         const owners = createProductionPluginInvocationServiceOwners({ loggerSink: { write() {} }, exec: {
             resolvePath: async () => projectRoot,
             async resolveExecutable(reference, pluginId, context) {
                 executableOwners.push(pluginId);
                 if (pluginId === pixiAdapter.pluginId) expect(environmentInvocations.some(invocation => !invocation.signal.aborted)).toBe(true);
+                if (fresh === 'retired' && pluginId === pixiAdapter.pluginId) {
+                    wrapperResolutionPending = true;
+                    await wrapperResolution;
+                }
                 return resolveExecutable(reference, pluginId, context);
             },
         } });
@@ -698,7 +763,7 @@ describe('target activation publication', () => {
                 role: 'manage' as const, encryptionMode: 'plain' as const }, verifyMachineAdmissionCurrent: async () => true };
             const inspect = createProjectDefinitionAction({ serverId: runtime.serverId, machineId: runtime.machineId,
                 workingDirectory: projectRoot, accessPolicy: { kind: 'restrictedRoots', roots: [projectRoot] }, nativeIo: runtime.nativeIo,
-                inspectSetupReadiness: ({ workspace, context }) => inspectProjectSetupReadinessFromRuntime({ runtime, ingress, workspace, context }) });
+                inspectSetup: ({ workspace, context }) => inspectProjectSetupFromRuntime({ runtime, ingress, workspace, context }) });
             const result = await inspect({ actionId: 'projects.inspect', input: { workspace: {
                 serverId: workspace.serverId, machineId: workspace.machineId, rootPath: projectRoot, workspaceId: workspace.id,
             } }, context: { authority: 'account_automation', serverId: runtime.serverId } });
@@ -727,7 +792,7 @@ describe('target activation publication', () => {
                 requester: { credentials: runtime.credentials, serverHttpBaseUrl: runtime.serverHttpBaseUrl }, purpose: 'setup',
                 platform: { os: process.platform === 'win32' ? 'windows' : process.platform, arch: process.arch }, nativeIo: runtime.nativeIo, plugins: selectedFactories,
                 successHomeDir: runtime.successHomeDir, retainNativeInvocation: production => reviewedInvocations.add(production) });
-            if (reviewed.kind !== 'pendingApproval') throw new Error(`Expected actual unremembered review: ${reviewed.kind}`);
+            if (reviewed.kind !== 'pendingApproval') throw new Error(`Expected actual unremembered review: ${reviewed.kind}${reviewed.kind === 'refused' ? ` (${reviewed.code})` : ''}`);
             expect(commandInvocations).toEqual([]); expect(reviewedInvocations.size).toBe(0); expect(commandEffects).toBe(0);
             expect(environmentEffects).toBe(0); expect(executableOwners).toEqual([]); expect(spawned).toEqual([]);
             await createProjectSetupTrustClient({ credentials: runtime.credentials, serverHttpBaseUrl: runtime.serverHttpBaseUrl }).approveReviewedEffect({
@@ -804,6 +869,35 @@ describe('target activation publication', () => {
                 });
                 spawned[1]!.exit({ exitCode: 0 });
             }
+            if (fresh) {
+                if (fresh === 'retired') {
+                    await expect.poll(() => wrapperResolutionPending).toBe(true);
+                    await registry.dispose();
+                    resumeWrapperResolution();
+                    await waitForRunningOperation('native-owner-operation');
+                    expect(operationRuntime.store.get(scope, 'native-owner-operation')).toMatchObject({
+                        state: 'failed', error: { errorCode: 'plugin_generation_stale' },
+                    });
+                    expect(spawned).toEqual([]);
+                    return;
+                }
+                await waitForRunningOperation('native-owner-operation');
+                const current = operationRuntime.store.get(scope, 'native-owner-operation');
+                expect(current?.error).toBeUndefined();
+                expect(current).toMatchObject({ state: 'running', domainRef: { purpose: 'script', workspaceRefId: workspace.id } });
+                expect(spawned).toHaveLength(1);
+                expect(spawned[0]!.params).toMatchObject({ file: wrapperPath,
+                    args: fresh === 'direct' ? ['run', 'check'] : ['run', '--', commandPath, 'check'],
+                    options: { cwd: projectRoot, env: {} } });
+                // A zero-step prerequisite cannot activate the selected environment
+                // before the actual tuple, nor claim target setup success for it.
+                if (fresh === 'wrapped') expect(environmentInvocations).toHaveLength(1);
+                expect(executableOwners.filter(owner => owner === pixiAdapter.pluginId)).toHaveLength(1);
+                spawned[0]!.exit({ exitCode: 0 });
+                await expect.poll(() => operationRuntime.store.get(scope, 'native-owner-operation')?.state).toBe('succeeded');
+                expect(environmentInvocations.every(invocation => invocation.signal.aborted)).toBe(true);
+                return;
+            }
             // Observe the owning operation's transition, not a shorter polling
             // deadline competing with real native process-tree settlement.
             await waitForRunningOperation('native-owner-operation');
@@ -836,6 +930,9 @@ describe('target activation publication', () => {
     }
 
     it('runs a finite native command through the selected environment plugin invocation rather than the command plugin owner', () => exerciseSelectedNativeInvocations(false));
+    it('launches a fresh zero-step public native environment around the actual finite command once', () => exerciseSelectedNativeInvocations(false, false, false, 'wrapped'));
+    it('launches the public native command with its already-applied environment once on a fresh checkout', () => exerciseSelectedNativeInvocations(false, false, false, 'direct'));
+    it('refuses a fresh public environment retired while its final wrapper executable is resolving', () => exerciseSelectedNativeInvocations(false, false, false, 'retired'));
     it('passively inspects installed native setup without acquiring production or executing its resolver', () => exerciseSelectedNativeInvocations(true, false, true));
     it('parks primary native command effects behind the same finite reservation while capacity is held', () => exerciseSelectedNativeInvocations(true));
     it('settles the original uncertain native preparation through repeated public Stop before admitting the next FIFO job', () => exerciseSelectedNativeInvocations(false, true));
@@ -2449,15 +2546,7 @@ describe('target activation publication', () => {
     });
 
     it('settles only changed-plugin runtime disposables before successor publication', async () => {
-        const contributes: ResolvedContributionRegistry = {
-            agents: Object.freeze([]),
-            actions: Object.freeze([]),
-            resources: Object.freeze([]),
-            activationTargets: Object.freeze([]),
-            catalogEntriesById: Object.freeze({}),
-            agentDefinitionsById: new Map(),
-            pluginDiagnosticsByPluginId: Object.freeze({}),
-        };
+        const contributes = createResolvedContributionRegistry({});
         const changedCleanup = vi.fn(async () => undefined);
         const retainedPeerCleanup = vi.fn(async () => undefined);
         const activated = await activatePluginRuntimeRegistry({
@@ -2484,15 +2573,7 @@ describe('target activation publication', () => {
 
     it('publishes the fenced successor without waiting for changed-plugin runtime disposal', async () => {
         const pluginId = 'acme.changed';
-        const contributes: ResolvedContributionRegistry = {
-            agents: Object.freeze([]),
-            actions: Object.freeze([]),
-            resources: Object.freeze([]),
-            activationTargets: Object.freeze([]),
-            catalogEntriesById: Object.freeze({}),
-            agentDefinitionsById: new Map(),
-            pluginDiagnosticsByPluginId: Object.freeze({}),
-        };
+        const contributes = createResolvedContributionRegistry({});
         const activated = await activatePluginRuntimeRegistry({
             contributes,
             generation: 12,
@@ -2515,10 +2596,11 @@ describe('target activation publication', () => {
             },
         }));
 
-        const executableRegistry = (
+        const executableRegistry = async (
             dispose: () => Promise<void>,
             occurrenceId: string,
-        ): ResolvedExecutablePluginRuntimeRegistry => ({
+        ): Promise<ResolvedExecutablePluginRuntimeRegistry> => ({
+            ...await resolveExecutablePluginRuntimeRegistry({ contributes, pluginIds: [] }),
             claimReleaseLessDeclarations: async () => undefined,
             contributes,
             hookHandlersByHookId: new Map(),
@@ -2542,12 +2624,12 @@ describe('target activation publication', () => {
             addRuntimeDisposable: activated.addRuntimeDisposable,
             dispose,
         });
-        const previous = executableRegistry(
+        const previous = await executableRegistry(
             async () => await activated.dispose(),
             'previous-occurrence',
         );
         const replacementDispose = vi.fn(async () => undefined);
-        const replacement = executableRegistry(replacementDispose, 'replacement-occurrence');
+        const replacement = await executableRegistry(replacementDispose, 'replacement-occurrence');
         const controller = createPluginReloadController({
             resolveRuntimeRegistry: async () => previous,
         });

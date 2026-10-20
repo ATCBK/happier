@@ -2,13 +2,14 @@ import * as React from 'react';
 
 import type { AutomationEventFilterV1 } from '@happier-dev/protocol/automations/automationEventFilterV1';
 import type { DaemonContributionRegistryProjectionAutomationEligibleEventV1, PluginProjectionInstalledPackageV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
-import { type PluginMachineExecutionOriginV1, arePluginMachineMaterializationRefsEqual } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
+import { type PluginMachineMaterializationExecutionOriginV1, arePluginMachineMaterializationRefsEqual } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { validateAutomationEventFilterAgainstPayloadSchemaV1 } from '@happier-dev/protocol/automations/event';
 
 import { loadDaemonMergedProjectionInputs } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import type { DaemonMergedProjectionInputs } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import type { DaemonMergedProjectionPhase } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import {
     buildPluginMachineExecutionOriginCandidates,
@@ -35,6 +36,7 @@ import {
 } from './pluginEventAutomationDraft';
 import {
     applyRefreshedPluginEventAutomationWebhookEndpoint,
+    ensurePluginEventAutomationWebhookEndpoint,
     readPluginEventAutomationWebhookEndpoint,
     type PluginEventAutomationWebhookEndpointBinding,
     type PluginEventAutomationWebhookEndpoint,
@@ -124,7 +126,7 @@ export type PluginEventAutomationComposerModel = Readonly<{
     refreshWebhookEndpoint: (() => void) | null;
     webhookEndpointRefreshing: boolean;
     watcherCandidates: readonly PluginMachineExecutionOriginCandidateV1[];
-    selectedWatcherOrigin: PluginMachineExecutionOriginV1 | null;
+    selectedWatcherOrigin: PluginMachineMaterializationExecutionOriginV1 | null;
     selectWatcher: (candidate: PluginMachineExecutionOriginCandidateV1) => void;
     payloadBrowser: PluginEventAutomationPayloadBrowser;
     filterClauses: readonly PluginEventAutomationFilterClauseDraft[];
@@ -242,6 +244,7 @@ export function usePluginEventAutomationComposer(params: Readonly<{
     initialEventRef?: Readonly<{ pluginId: string; localId: string }> | null;
 }>): PluginEventAutomationComposerModel {
     const accountLifetime = captureActiveServerAccountScopeLifetime();
+    const { executeValue: executeWebhookAction } = useMountedActionExecution(accountLifetime?.scope, { openOnRequest: true });
     const availabilityReader = useActivePluginAccountAvailabilityReader();
     const classifyRelease = useActivePluginAccountAvailabilityReleaseClassifier();
     const machineSnapshots = useAllProfileMachineInventorySnapshots();
@@ -311,7 +314,7 @@ export function usePluginEventAutomationComposer(params: Readonly<{
         setConfiguredSourceAccount(accountLifetime);
         eraseConfiguredSource();
     }
-    const [selectedWatcherOrigin, setSelectedWatcherOrigin] = React.useState<PluginMachineExecutionOriginV1 | null>(null);
+    const [selectedWatcherOrigin, setSelectedWatcherOrigin] = React.useState<PluginMachineMaterializationExecutionOriginV1 | null>(null);
     const [filterClauses, setFilterClauses] = React.useState<readonly PluginEventAutomationFilterClauseDraft[]>([]);
     const nextFilterClauseIdRef = React.useRef(0);
     const [maximumObservationAgeMsText, setMaximumObservationAgeMsText] = React.useState('');
@@ -615,6 +618,7 @@ export function usePluginEventAutomationComposer(params: Readonly<{
                 expectedSourceInstanceId: seededPushRoutingSourceInstanceId,
                 accountLifetime,
                 signal: controller.signal,
+                executeAction: executeWebhookAction,
             });
             if (!alive || controller.signal.aborted || !accountLifetime.isCurrent()) return;
             setSeededWebhookRead(result.kind === 'available' ? { binding: result.binding, accountLifetime } : null);
@@ -627,6 +631,7 @@ export function usePluginEventAutomationComposer(params: Readonly<{
         };
     }, [
         accountLifetime,
+        executeWebhookAction,
         seededPushEndpointId,
         seededPushPluginId,
         seededPushRoutingSourceInstanceId,
@@ -782,6 +787,7 @@ export function usePluginEventAutomationComposer(params: Readonly<{
                 filter: filter.value,
                 maximumObservationAgeMs: maximumObservationAgeMs.value,
                 accountLifetime,
+                ensureWebhookEndpoint: input => ensurePluginEventAutomationWebhookEndpoint({ ...input, executeAction: executeWebhookAction }),
                 signal: setupScope.signal,
                 resolveExecutionOrigin,
                 loadCurrentProjection: async (target) => await loadDaemonMergedProjectionInputs({
@@ -818,6 +824,7 @@ export function usePluginEventAutomationComposer(params: Readonly<{
     }, [
         accountLifetime,
         effectiveObservationTransport,
+        executeWebhookAction,
         eligibleEvents,
         filter.valid,
         filter.value,
@@ -858,6 +865,7 @@ export function usePluginEventAutomationComposer(params: Readonly<{
                 expectedSourceInstanceId: webhookEndpointSourceInstanceId,
                 accountLifetime,
                 signal: request.setupScope.signal,
+                executeAction: executeWebhookAction,
             });
             const activeRefresh = activeWebhookEndpointRefreshRef.current;
             if (
@@ -884,6 +892,7 @@ export function usePluginEventAutomationComposer(params: Readonly<{
     }, [
         accountLifetime,
         setupScope,
+        executeWebhookAction,
         webhookEndpointId,
         webhookEndpointPluginId,
         webhookEndpointSourceInstanceId,

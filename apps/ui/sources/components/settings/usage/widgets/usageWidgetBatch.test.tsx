@@ -1,8 +1,18 @@
 import * as React from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { act } from 'react-test-renderer';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as pageAggregation from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
+import * as usageCost from '@happier-dev/protocol/usage/usageCost';
+import { buildProviderAccountUsageRecordId, ProviderAccountUsageSnapshotV1Schema } from '@happier-dev/protocol/connect/account-usage-primitives';
+import { ProviderAccountUsagePageProjectionWriteV1Schema, QualifiedProviderAccountUsageHistoryRequestV4Schema } from '@happier-dev/protocol/connect/providerAccountUsageHistory';
+import { parseQualifiedConnectedAccountV4StructuredQueryValue } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4QueryCodec';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { getServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { UsageAnalyticsQueryRequestSchema, type UsageAnalyticsQueryResponse } from '@happier-dev/protocol';
 import { renderScreen, standardCleanup, flushHookEffects } from '@/dev/testkit';
 import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { invalidateUsageQueryResources } from '@/sync/api/account/usageQueryResource';
@@ -24,6 +34,7 @@ import { storage } from '@/sync/domains/state/storage';
 import { createSessionAccessFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 import { CoreCollectionScope } from '@/components/ui/lists/collection/CoreCollectionScope';
+import { HappierDataMetric, HappierDataRows } from '@happier-dev/plugin-ui/presentation';
 
 const accounting: UsageAnalyticsQueryResponse = {
   v: 1,
@@ -58,6 +69,7 @@ afterEach(async () => {
   invalidateUsageQueryResources();
   await home?.dispose();
   home = undefined;
+  vi.restoreAllMocks();
 });
 
 /** The page chrome's view of the batch: one decoded Resource value for every mounted body. */
@@ -83,6 +95,155 @@ function Body(
 }
 
 describe('Usage page batch', () => {
+  it('keeps a Project setup preview out of the mounted Account page batch', async () => {
+    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-preview-isolation.test', accountId: 'account-a' }],
+      route: request => request.path === '/v2/usage/query' ? Response.json(accounting) : undefined });
+    const serverId = home.homes.a!.id;
+    publishAppliedActiveServerSnapshot({ serverId, serverUrl: home.homes.a!.serverUrl, generation: 0 });
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
+    storage.setState({ profileScope: { serverId, accountId: 'account-a' }, profile: AccountProfileSchema.parse({ id: 'account-a' }) });
+    const { WidgetSetupPreview } = await import('@/components/widgets/surface/WidgetSetupPreview');
+    const { AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
+    const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+    const { readWidgetDescriptor } = await import('@/components/widgets/widgetCatalog');
+    const candidate = readWidgetDescriptor(null, { kind: 'builtin', id: 'usage_daily' })!;
+    const seen = new Map<string, UsageWidgetBodyModel>();
+    let slices: ReturnType<typeof useUsageWidgetBatchSlices> = [];
+    function Probe() { slices = useUsageWidgetBatchSlices(); return <Body name="account" metric="tokens" seen={seen} />; }
+    const input = { ...scope, projects: ['destination-project'], metric: 'tokens' };
+    const runtime = { pluginUiProjection: null, pluginBrowserProjection: null, phase: 'current' as const, interactionEnabled: true,
+      machineId: null, serverId, platform: 'web' as const, accountLifetime: captureActiveServerAccountScopeLifetime(),
+      reloadConnectedAccountProjection: () => {}, clientExecutableActivation: { status: 'ready' as const }, reloadClientExecutables: () => {} };
+    const view = (preview: boolean) => <InjectedAuthProvider credentials={credentials}><AppShellPluginUiProjectionValueProvider value={runtime}><CoreCollectionScope>
+      <UsageWidgetBatchProvider clauses={clauses}><Probe />{preview ? <WidgetSetupPreview candidate={candidate}
+        scope={{ serverId, accountId: 'account-a', owner: { kind: 'project', projectId: 'destination-project' } }}
+        providedContext={{ projects: [['destination-project']] }} draft={{ bindings: {
+          ...Object.fromEntries(Object.entries(input).map(([path, value]) => [path, { kind: 'value' as const, value }])),
+          projects: { kind: 'context', slot: 'projects' },
+        } }} testID="project-preview" /> : null}</UsageWidgetBatchProvider>
+    </CoreCollectionScope></AppShellPluginUiProjectionValueProvider></InjectedAuthProvider>;
+    const screen = await renderScreen(view(false));
+    try {
+      await expect.poll(() => seen.get('account')?.slice?.accounting?.totals.eventCount).toBe(1);
+      const entry = seen.get('account')!.slice!.key;
+      await screen.update(view(true));
+      await expect.poll(() => home!.requests.filter(request => request.path === '/v2/usage/query').some(request =>
+        UsageAnalyticsQueryRequestSchema.parse(request.body).filters?.projectKeys?.includes('destination-project'))).toBe(true);
+      expect(slices.map(slice => slice.key)).toEqual([entry]);
+      expect(slices[0]?.requestedQuery.projects).toEqual([]);
+      await screen.update(view(false));
+      expect(slices.map(slice => slice.key)).toEqual([entry]);
+    } finally { await screen.unmount(); }
+  });
+  it('feeds Sources panels from one admitted accounting Resource through their real builtin dispatch', async () => {
+    const value: UsageAnalyticsQueryResponse = { ...accounting,
+      totals: { ...accounting.totals, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD', costSource: 'none' } },
+      contributions: [{ id: 'unpriced', sessionId: null, turnId: null, observedAtMs: 1, eventCount: 1,
+        agentId: 'codex', modelId: null, machineId: null, projectKey: null, workspaceId: null,
+        source: 'codex-native-accounting', sourceContext: { path: 'native', execution: 'outside' },
+        tokens: accounting.totals.tokens, cost: { reportedUsd: 0, estimatedUsd: 0, currency: 'USD', costSource: 'none' } }],
+      coverage: { status: 'partial', reasons: ['unpriced_tokens'], missingDimensions: [], range: { complete: false }, ranked: [],
+        sources: [{ source: 'codex-native-accounting', path: 'native', status: 'partial', eventCount: 1, captureKind: 'from_logs' }] } };
+    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-source-panels.test', accountId: 'account-a' }],
+      route: request => request.path === '/v2/usage/query' ? Response.json(value) : undefined });
+    publishAppliedActiveServerSnapshot({ serverId: home.homes.a!.id, serverUrl: home.homes.a!.serverUrl, generation: 0 });
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
+    storage.setState({ profileScope: { serverId: home.homes.a!.id, accountId: 'account-a' }, profile: AccountProfileSchema.parse({ id: 'account-a' }) });
+    const screen = await renderScreen(<InjectedAuthProvider credentials={credentials}><CoreCollectionScope>
+      <UsageWidgetBatchProvider clauses={clauses}>{(['usage_source_coverage', 'usage_unpriced'] as const).map(id =>
+        <UsageWidgetBody key={id} id={id} input={{ ...scope, period: { startMs: 0, endMs: 1000 } }} serverId={home!.homes.a!.id} testID={id} />)}
+      </UsageWidgetBatchProvider></CoreCollectionScope></InjectedAuthProvider>);
+    await expect.poll(() => screen.findAllByType(HappierDataMetric).find(metric => metric.props.testID === 'usage_unpriced.tokens')?.props.value).toBe(15);
+    expect(screen.findByType(HappierDataRows).props.rows).toHaveLength(1);
+    expect(home.requests.filter(request => request.path === '/v2/sessions/read-batch'
+      || request.path.endsWith('/messages') || request.path.endsWith('/turns'))).toEqual([]);
+    await screen.unmount();
+  });
+  it('keeps standalone Capacity independent of accounting across unrelated Account and current-record wakes', async () => {
+    const now = Date.now();
+    const ref = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, accountId: 'capacity' };
+    const source = { bindingKind: 'account' as const, ref };
+    const recordKey = { providerId: 'codex', accountSubjectId: ref.accountId, subjectKind: 'account', quotaScope: 'account' } as const;
+    let record = ProviderAccountUsageSnapshotV1Schema.parse({ v: 1, recordId: buildProviderAccountUsageRecordId(recordKey), recordKey,
+      providerId: 'codex', accountSubject: { kind: 'providerSubject', id: ref.accountId }, observedAtMs: now, fetchedAtMs: now,
+      staleAfterMs: 600_000, source: 'providerHttp', confidence: 'confirmed', state: 'loaded_data',
+      meters: [{ meterId: 'weekly', label: 'Weekly', usedPct: 40, utilizationPct: 40, used: null, limit: null,
+        unit: 'count', status: 'ok', resetsAt: now + 86_400_000, windowDurationMs: 7 * 86_400_000 }] });
+    let projection: ReturnType<typeof ProviderAccountUsagePageProjectionWriteV1Schema.parse> | null = null;
+    const currentRead = createDeferred<void>();
+    let holdCurrentRead = false;
+    const profile = AccountProfileSchema.parse({ id: 'account-a', connectedAccountsV4: [{ ref, status: 'connected', authenticationModeId: 'manual',
+      revisionSemantics: 'revisioned', credentialRevision: 'csr_abcdefghijklmnopqrstuvwxyz', configurationReady: false,
+      configurationRevision: null, scopes: [] }] });
+    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-capacity-demand.test', accountId: 'account-a', profile }],
+      route: async request => {
+        if (request.path === '/v1/features') return Response.json(createRootLayoutFeaturesResponse());
+        if (request.path === '/v2/usage/query') return Response.json(accounting);
+        if (request.path === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 1,
+          signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
+        if (request.path === '/v4/connect/qualified/provider-account-usage/sources/resolve') return Response.json({
+          source, recordId: record.recordId, providerAccountId: ref.accountId, fetchedAt: record.fetchedAtMs, staleAfterMs: 600_000 });
+        if (request.path === '/v4/connect/qualified/provider-account-usage/record') {
+          if (holdCurrentRead) await currentRead.promise;
+          return Response.json({ content: { t: 'plain', v: record },
+            metadata: { fetchedAt: record.fetchedAtMs, staleAfterMs: 600_000, status: 'ok' }, sources: [source] });
+        }
+        if (request.path === '/v4/connect/qualified/provider-account-usage/history') {
+          if (request.method === 'HEAD') return new Response(null, { status: 405 });
+          if (request.method === 'PUT') { projection = ProviderAccountUsagePageProjectionWriteV1Schema.parse(request.body); return Response.json({ success: true }); }
+          const query = parseQualifiedConnectedAccountV4StructuredQueryValue(QualifiedProviderAccountUsageHistoryRequestV4Schema,
+            request.url.searchParams.get('query'));
+          return Response.json('projection' in query ? { projection, complete: projection !== null } : { entries: [], nextCursor: null });
+        }
+        return undefined;
+      } });
+    publishAppliedActiveServerSnapshot({ serverId: home.homes.a!.id, serverUrl: home.homes.a!.serverUrl, generation: 0 });
+    const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+    const credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
+    storage.setState({ profileScope: { serverId: home.homes.a!.id, accountId: 'account-a' },
+      profile });
+    await getServerFeaturesSnapshot({ serverId: home.homes.a!.id, force: true });
+    // Transparent observers: the production projector and price logic remain real.
+    const aggregate = vi.spyOn(pageAggregation, 'resolveUsagePageAggregation');
+    const reprice = vi.spyOn(usageCost, 'repriceUsageAnalyticsResponse');
+    const seen: UsageWidgetBodyModel[] = [];
+    function Capacity() { seen.push(useUsageWidgetModel({ ...scope, metric: 'tokens', breakdown: [] }, 'usage_capacity').model); return null; }
+    const screen = await renderScreen(<InjectedAuthProvider credentials={credentials}><Capacity /></InjectedAuthProvider>);
+    try {
+      await expect.poll(() => seen.at(-1)?.slice?.pending).toBe(false);
+      const first = seen.at(-1)!.slice!;
+      expect(first.accounting).toBeUndefined();
+      expect(first.quota?.[0]?.current?.meters[0]?.usedPct).toBe(40);
+      const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+      const { PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1 } = await import('@happier-dev/protocol/changes');
+      for (let index = 0; index < 8; index++) {
+        await act(async () => {
+          storage.setState(state => ({ profile: { ...state.profile } }));
+          publishHomeAccountChange(home!.homes.a!.id, [`unrelated-${index}`], { changeKinds: ['session'], usageQueryAffects: false });
+          record = { ...record, fetchedAtMs: now + index + 1, observedAtMs: now + index + 1,
+            meters: record.meters.map(meter => ({ ...meter, usedPct: 41 + index, utilizationPct: 41 + index })) };
+          publishHomeAccountChange(home!.homes.a!.id, [PROVIDER_ACCOUNT_USAGE_ACCOUNT_CHANGE_ENTITY_ID_V1], { usageQueryAffects: true });
+          await flushHookEffects({ cycles: 5 });
+        });
+        await expect.poll(async () => { await flushHookEffects({ cycles: 2 });
+          return seen.at(-1)!.slice!.quota?.[0]?.current?.meters[0]?.usedPct; }).toBe(41 + index);
+      }
+      await flushHookEffects({ cycles: 10 });
+      expect(home.requests.filter(request => request.path === '/v2/usage/query')).toHaveLength(0);
+      expect(aggregate).toHaveBeenCalledTimes(0);
+      expect(reprice).toHaveBeenCalledTimes(0);
+      expect(seen.at(-1)!.slice!.quota?.[0]?.current?.meters[0]?.usedPct).toBe(48);
+      holdCurrentRead = true;
+      let refreshing: Promise<void> | undefined;
+      await act(async () => { refreshing = seen.at(-1)!.refresh(); await flushHookEffects({ cycles: 5 }); });
+      try {
+        await expect.poll(() => seen.at(-1)!.refreshing).toBe(true);
+        expect(seen.at(-1)!.slice!.quota?.[0]?.current?.meters[0]?.usedPct).toBe(48);
+      } finally { currentRead.resolve(); await refreshing; }
+    } finally { currentRead.resolve(); await screen.unmount(); }
+  });
   it('owns coverage from the first frame, before the inventory has answered', async () => {
     const seen: boolean[] = [];
     function CoverageProbe() { seen.push(useUsageWidgetPageHasCoverageDetail()); return null; }
@@ -94,9 +255,8 @@ describe('Usage page batch', () => {
     await screen.update(<CoverageProbe />);
     expect(seen.at(-1)).toBe(false);
   });
-  it.each(['usage_daily', 'usage_outcomes', 'usage_footprint'] as const)('admits private evidence through the real %s body only when its projection consumes it', async narrowId => {
-    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-widget-demand.test', accountId: 'account-a' }],
-      route: request => {
+  it.each(['usage_daily', 'usage_outcomes', 'usage_footprint', 'usage_source_coverage', 'usage_unpriced'] as const)('admits private evidence through the real %s body only when its projection consumes it', async narrowId => {
+    const sessionReads = createSessionReadBatchHttpBoundary(request => {
         if (request.path === '/v2/usage/query') return Response.json(accounting);
         if (request.path === '/v1/account/encryption/currentness') return Response.json({ mode: 'plain', version: 1,
           signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
@@ -110,27 +270,47 @@ describe('Usage page batch', () => {
           turns: [{ turnId: 'turn', agentId: 'codex', status: 'completed', startedAt: 100, terminalAt: 400, updatedAt: 900 }] });
         if (request.path === '/v1/sessions/work/messages') return Response.json({ messages: [], hasMore: false });
         return undefined;
-      } });
+      });
+    home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://usage-widget-demand.test', accountId: 'account-a' }],
+      route: sessionReads.handle });
     publishAppliedActiveServerSnapshot({ serverId: home.homes.a!.id, serverUrl: home.homes.a!.serverUrl, generation: 0 });
     const { TokenStorage } = await import('@/auth/storage/tokenStorage');
     const credentials = (await TokenStorage.getCredentialsForServerUrl(home.homes.a!.serverUrl))!;
     storage.setState({ profileScope: { serverId: home.homes.a!.id, accountId: 'account-a' },
       profile: AccountProfileSchema.parse({ id: 'account-a' }),
       sessions: { work: createSessionFixture({ id: 'work', serverId: home.homes.a!.id, encryptionMode: 'plain' }) } });
-    const body = (id: typeof narrowId | 'usage_period_summary') => <InjectedAuthProvider credentials={credentials}>
-      <CoreCollectionScope><UsageWidgetBatchProvider clauses={clauses}><UsageWidgetBody id={id}
+    let slices: ReturnType<typeof useUsageWidgetBatchSlices> = [];
+    function EvidenceProbe() { slices = useUsageWidgetBatchSlices(); return null; }
+    const body = (id: typeof narrowId | 'usage_period_summary' | 'usage_coach') => <InjectedAuthProvider credentials={credentials}>
+      <CoreCollectionScope><UsageWidgetBatchProvider clauses={clauses}><EvidenceProbe /><UsageWidgetBody id={id}
         input={{ ...scope, period: { startMs: 0, endMs: 1000 }, metric: 'tokens', breakdown: [] }}
         serverId={home!.homes.a!.id} testID="widget-demand" /></UsageWidgetBatchProvider></CoreCollectionScope>
     </InjectedAuthProvider>;
     const screen = await renderScreen(body(narrowId));
     await expect.poll(() => home!.requests.filter(request => request.path === '/v2/usage/query').length).toBeGreaterThan(0);
     await flushHookEffects({ cycles: 30 });
-    expect(home.requests.filter(request => request.path === '/v2/sessions/work'
+    expect(home.requests.filter(request => request.path === '/v2/sessions/read-batch' || request.path === '/v2/sessions/work'
       || request.path.startsWith('/v1/sessions/work/'))).toEqual([]);
     await screen.update(body('usage_period_summary'));
-    await expect.poll(() => home!.requests.filter(request => request.path === '/v1/sessions/work/messages').length).toBe(1);
+    await expect.poll(() => sessionReads.componentRequests.filter(request => request.path === '/v1/sessions/work/turns').length).toBe(1);
     await flushHookEffects({ cycles: 30 });
-    expect(home.requests.filter(request => request.path === '/v2/sessions/work')).toHaveLength(1);
+    expect(sessionReads.componentRequests.filter(request => request.path === '/v1/sessions/work/messages')).toHaveLength(0);
+    expect(home.requests.filter(request => request.path === '/v2/sessions/read-batch').map(request => [request.method, request.body]))
+      .toEqual([['POST', expect.objectContaining({ sessionIds: ['work'], includeSnapshot: true, includeMessages: false })]]);
+    await expect.poll(() => slices.find(slice => slice.howYouWork)?.howYouWork?.intervals?.agentTimeMs).toBe(300);
+    expect(slices.find(slice => slice.howYouWork)?.sources).toContainEqual({ source: 'how_you_work:transcripts', status: 'not_loaded' });
+    await screen.update(body('usage_coach'));
+    await expect.poll(() => sessionReads.componentRequests.filter(request => request.path === '/v1/sessions/work/messages').length).toBe(1);
+    await flushHookEffects({ cycles: 30 });
+    expect(sessionReads.componentRequests.filter(request => request.path === '/v2/sessions/work')).toHaveLength(1);
+    expect(home.requests.filter(request => request.path === '/v2/sessions/read-batch').map(request => [request.method, request.body]))
+      .toEqual([
+        ['POST', expect.objectContaining({ sessionIds: ['work'], includeSnapshot: true, includeMessages: false })],
+        ['POST', expect.objectContaining({ sessionIds: ['work'], includeSnapshot: false, includeMessages: true })],
+      ]);
+    expect(home.requests.filter(request => request.path === '/v2/sessions/work' || request.path.startsWith('/v1/sessions/work/'))).toEqual([]);
+    await expect.poll(() => slices.find(slice => slice.howYouWork)?.sources)
+      .toContainEqual({ source: 'how_you_work:transcripts', status: 'available' });
   });
 
   it.each([false, true])('requests both consumed activity sections despite route includeActivity=%s and partial resolution, preserving independently pinned scope', async includeActivity => {

@@ -3,6 +3,7 @@ import { useGlobalSearchParams, useSegments } from 'expo-router';
 import { Platform } from 'react-native';
 
 import { randomUUID } from '@/platform/randomUUID';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { useVisibleModalKind } from '@/modal';
 import { useAppPaneContext } from '@/components/appShell/panes/AppPaneProvider';
 import {
@@ -17,7 +18,7 @@ import {
     resolvePluginAppPages,
     selectPluginAppPagePlacements,
 } from '@/components/appShell/plugins/pluginAppPages';
-import { useResolvedSettingsPageCatalog } from '@/components/settings/catalog/runtime/useResolvedSettingsPageCatalog';
+import { useResolvedSettingsPageIdentity } from '@/components/settings/catalog/runtime/useResolvedSettingsPageIdentity';
 import { useMainAppTabState } from '@/components/navigation/mobile/chrome/MainAppTabStateProvider';
 import { usePluginSurfaceCurrentUiContextEligibility } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { normalizeSessionId } from '@/sync/domains/session/normalizeSessionId';
@@ -64,6 +65,7 @@ type CurrentUiContextMountRecord = Readonly<{
     semanticCommands: readonly Readonly<{
         id: string;
         command: CurrentUiContextMountedCommand;
+        retirement: AbortController;
     }>[];
 }>;
 
@@ -132,6 +134,21 @@ export type CurrentUiContextReader = Readonly<{
 const CurrentUiContextMountPublisherContext = React.createContext<CurrentUiContextMountPublisher | null>(null);
 const CurrentUiContextReaderContext = React.createContext<CurrentUiContextReader | null>(null);
 
+/** Re-provide the incumbent ports after modal reparenting without creating another context owner. */
+export function CurrentUiContextBridge(props: Readonly<{
+    publisher: CurrentUiContextMountPublisher | null;
+    reader: CurrentUiContextReader | null;
+    children: React.ReactNode;
+}>): React.ReactElement {
+    return (
+        <CurrentUiContextMountPublisherContext.Provider value={props.publisher}>
+            <CurrentUiContextReaderContext.Provider value={props.reader}>
+                {props.children}
+            </CurrentUiContextReaderContext.Provider>
+        </CurrentUiContextMountPublisherContext.Provider>
+    );
+}
+
 function retiresCurrentUiContextMountWhenNotViewed(): boolean {
     return Platform.OS !== 'web' && !isDesktopHost();
 }
@@ -140,9 +157,15 @@ function readCurrentUiContextMountLifecycleActive(): boolean {
     return !retiresCurrentUiContextMountWhenNotViewed() || readHostActivelyViewed();
 }
 
-function retireCurrentUiContextMountRecord(record: CurrentUiContextMountRecord | null): void {
+function retireCurrentUiContextMountRecord(
+    record: CurrentUiContextMountRecord | null,
+    replacement?: CurrentUiContextMountRecord | null,
+): void {
     if (record !== null && !record.retirement.signal.aborted) {
         record.retirement.abort();
+        for (const command of record.semanticCommands) {
+            if (!replacement?.semanticCommands.includes(command)) command.retirement.abort();
+        }
     }
 }
 
@@ -161,12 +184,27 @@ function createMountRecord(input: Readonly<{
     owner: CurrentUiContextMountOwner;
     enrichment: CurrentUiContextMountedEnrichment;
     nextCommandId: () => string;
+    previous: CurrentUiContextMountRecord | null;
 }>): CurrentUiContextMountRecord {
     const retirement = new AbortController();
-    const semanticCommands = Object.freeze((input.enrichment.commands ?? []).map((entry) => Object.freeze({
-        id: input.nextCommandId(),
-        command: entry.command,
-    })));
+    const previous = input.previous?.owner === input.owner
+        && sameStrictJsonValue(input.previous.enrichment.entity, input.enrichment.entity)
+        ? input.previous : null;
+    const retained = new Set<CurrentUiContextMountRecord['semanticCommands'][number]>();
+    const semanticCommands = Object.freeze((input.enrichment.commands ?? []).map((entry) => {
+        const unchanged = previous?.semanticCommands.find((candidate, index) => {
+            const descriptor = previous.projection.commands[index]!;
+            return !retained.has(candidate) && descriptor.title === entry.title && descriptor.description === entry.description
+                && (candidate.command === entry.command
+                    || ((entry.command.kind === 'openSurface' || entry.command.kind === 'executeAction')
+                        && sameStrictJsonValue(candidate.command, entry.command)));
+        });
+        if (unchanged) {
+            retained.add(unchanged);
+            return unchanged;
+        }
+        return Object.freeze({ id: input.nextCommandId(), command: entry.command, retirement: new AbortController() });
+    }));
     const projection: CurrentUiContextMountProjection = Object.freeze({
         ...(input.enrichment.entity === undefined ? {} : { entity: input.enrichment.entity }),
         ...(input.enrichment.detail === undefined ? {} : { detail: input.enrichment.detail }),
@@ -233,7 +271,7 @@ function CurrentUiContextProviderContent(props: Readonly<{ children: React.React
         () => readVoicePrivacySettings({ voice: voiceSettings }),
         [voiceSettings],
     );
-    const settingsCatalog = useResolvedSettingsPageCatalog();
+    const settingsCatalog = useResolvedSettingsPageIdentity();
     const settingsPage = React.useMemo(
         () => readCurrentUiContextSettingsPage({
             tree: settingsCatalog.tree,
@@ -282,7 +320,7 @@ function CurrentUiContextProviderContent(props: Readonly<{ children: React.React
         const commands = enrichment.commands ?? [];
         const record = createMountRecord({ owner, enrichment: { ...enrichment, commands: [
             ...commands, ...localCommandsRef.current.filter(local => !commands.some(entry => entry.command === local.command)),
-        ] }, nextCommandId: () => `current-ui-command:${randomUUID()}` });
+        ] }, previous: currentMountRecordRef.current, nextCommandId: () => `current-ui-command:${randomUUID()}` });
         return Object.freeze({ ...record, enrichment });
     }, []);
     React.useLayoutEffect(() => {
@@ -292,7 +330,7 @@ function CurrentUiContextProviderContent(props: Readonly<{ children: React.React
         const author = mountLifecycleActive && previous?.owner !== localOwner ? previous : null;
         const enrichment = author?.enrichment ?? {};
         const record = mountLifecycleActive && (author || localCommands.length) ? composeRecord(author?.owner ?? localOwner, enrichment) : null;
-        retireCurrentUiContextMountRecord(previous);
+        retireCurrentUiContextMountRecord(previous, record);
         currentMountRecordRef.current = record;
         if (record) dispatchMountRecord({ kind: 'activate', record });
         else if (previous) dispatchMountRecord({ kind: 'clear', owner: previous.owner });
@@ -366,7 +404,7 @@ function CurrentUiContextProviderContent(props: Readonly<{ children: React.React
             return Object.freeze({
                 id: semantic.id,
                 command: semantic.command,
-                retirementSignal: record.retirement.signal,
+                retirementSignal: semantic.retirement.signal,
             });
         },
         subscribe: (listener: () => void) => {
@@ -398,7 +436,7 @@ function CurrentUiContextProviderContent(props: Readonly<{ children: React.React
         };
         const replaceCurrent = (enrichment: CurrentUiContextMountedEnrichment, kind: 'replace' | 'activate') => {
             const record = composeRecord(owner, enrichment);
-            retireCurrentUiContextMountRecord(currentMountRecordRef.current);
+            retireCurrentUiContextMountRecord(currentMountRecordRef.current, record);
             currentMountRecordRef.current = record;
             dispatchMountRecord({ kind, record });
             return record;
@@ -505,11 +543,9 @@ function CurrentUiContextProviderContent(props: Readonly<{ children: React.React
     }, [hostActivelyViewed, mountRecord, notifyReaderListeners, sessionActive, sessionRouteId, snapshot]);
 
     return (
-        <CurrentUiContextMountPublisherContext.Provider value={mountPublisher}>
-            <CurrentUiContextReaderContext.Provider value={reader}>
-                {props.children}
-            </CurrentUiContextReaderContext.Provider>
-        </CurrentUiContextMountPublisherContext.Provider>
+        <CurrentUiContextBridge publisher={mountPublisher} reader={reader}>
+            {props.children}
+        </CurrentUiContextBridge>
     );
 }
 

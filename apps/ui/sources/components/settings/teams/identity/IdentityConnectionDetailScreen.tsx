@@ -118,20 +118,6 @@ function workosCandidateSummary(candidate: Pick<WorkosCandidate, 'strategy' | 's
 }
 
 /**
- * What removing the connection does, in the person's terms: who signs in with it, and what is kept.
- * The Home refuses removal while anything else depends on it, so a confirmable removal only ever
- * affects the people who sign in with it.
- */
-function teamConnectionRemovalBody(impact: TeamConnectionRemovalImpact): string {
-    return impact.linkedAccounts > 0
-        ? [
-            t('identityAdministration.removeImpactPeople', { count: impact.linkedAccounts }),
-            t('identityAdministration.removeImpactKept'),
-        ].join('\n')
-        : t('identityAdministration.removeImpactNobody');
-}
-
-/**
  * Why removal is refused, blocker first: each typed blocker becomes its own counted sentence when
  * the preview carries its count, otherwise the shared presenter's sentence, followed by where it is
  * resolved.
@@ -209,7 +195,7 @@ export const IdentityConnectionDetailContent = React.memo(function IdentityConne
     const [workosReturn, setWorkosReturn] = React.useState<'portal' | 'route' | null>(
         props.workosPortalReturn ? 'portal' : null,
     );
-    const portalReturnController = React.useRef(createWorkosPortalReturnController()).current;
+    const portalReturnController = React.useRef(createWorkosPortalReturnController(props.connectionId)).current;
     const handledTestReturnRef = React.useRef<string | null>(null);
     const connection = state.kind === 'ready'
         ? state.items.find((candidate) => candidate.id === props.connectionId) ?? null
@@ -259,7 +245,7 @@ export const IdentityConnectionDetailContent = React.memo(function IdentityConne
     }, [connection, reloadConnectionSettings, settingsDirty, settingsOrigin]);
 
     const reconcileWorkos = React.useCallback(async () => {
-        if (!props.mutationsAvailable || !connection || !connection.allowedActions.includes(identityAdministrationActionId('teams.identity.workos.reconcile', props.teamId))) return;
+        if (!props.mutationsAvailable || !connection || !connection.allowedActions.some(action => action === identityAdministrationActionId('teams.identity.workos.reconcile', props.teamId))) return;
         setPending('workos:reconcile'); setActionFailure(null);
         try {
             const applyResult = (value: TeamIdentityActionOutput<'teams.identity.workos.reconcile'>) => {
@@ -322,7 +308,7 @@ export const IdentityConnectionDetailContent = React.memo(function IdentityConne
         const canReconcile = state.kind === 'ready'
             && !state.stale
             && props.mutationsAvailable
-            && connection?.allowedActions.includes(identityAdministrationActionId('teams.identity.workos.reconcile', props.teamId)) === true;
+            && connection?.allowedActions.some(action => action === identityAdministrationActionId('teams.identity.workos.reconcile', props.teamId)) === true;
         if (workosReturn === 'portal') {
             const clearReturnedMarker = () => {
                 // Only a fresh-document return has a URL marker. Foreground
@@ -400,7 +386,7 @@ export const IdentityConnectionDetailContent = React.memo(function IdentityConne
     const testStatusLabel = signInConnectionStatusLabel(resolveTestedSignInConnectionStatus({
         enabled: true, testable: true, lastSuccessfulTest: connection.lastSuccessfulTest,
     }));
-    const can = (actionId: import('@happier-dev/protocol/teams').TeamIdentityActionIdV1) => connection.allowedActions.includes(identityAdministrationActionId(actionId, props.teamId));
+    const can = (actionId: import('@happier-dev/protocol/teams').TeamIdentityActionIdV1) => connection.allowedActions.some(action => action === identityAdministrationActionId(actionId, props.teamId));
     const projectionCurrent = !state.refreshing && !state.stale;
     const workosReturnRefreshing = workosReturn === 'portal'
         || (workosReturn === 'route' && connection !== null && isWorkosSetupAwaitingCheck(connection));
@@ -489,7 +475,6 @@ export const IdentityConnectionDetailContent = React.memo(function IdentityConne
 
     const openWorkosPortal = async () => {
         if (!props.mutationsAvailable || mutationBusy || !can('teams.identity.workos.adminPortalLink.create')) return;
-        if (!await Modal.confirm(t('identityAdministration.workosSetupSso'), t('identityAdministration.workosPortalConfirmBody'), { cancelText: t('common.cancel'), confirmText: t('common.continue') })) return;
         const intent = 'sso' as const;
         setPending(`workos:${intent}`); setActionFailure(null);
         try {
@@ -555,15 +540,14 @@ export const IdentityConnectionDetailContent = React.memo(function IdentityConne
                 );
                 return;
             }
-            const removalBody = props.teamId === null ? t('identityAdministration.removeBody', { name: connection.provider.displayName }) : teamConnectionRemovalBody(preflight.value.impact);
-            if (!await Modal.confirm(t('identityAdministration.removeTitle', { name: connection.provider.displayName }), removalBody, { cancelText: t('common.cancel'), confirmText: t('identityAdministration.remove'), destructive: true })) return;
             if (signal.aborted) return;
             const finishRemoval = () => router.back();
             const result = await client.execute(
                 'teams.identity.connections.remove',
                 { v: 1, teamId: props.teamId, connectionId: connection.id, expectedRevision: preflight.value.connection.revision },
-                { onApprovalSucceeded: finishRemoval, onApprovalFailed: reportActionFailure },
+                { signal, onApprovalSucceeded: finishRemoval, onApprovalFailed: reportActionFailure },
             );
+            if (signal.aborted) return;
             if (!result.ok) {
                 if ('approvalPending' in result) return;
                 reportActionFailure(result.failure.code);
@@ -572,6 +556,15 @@ export const IdentityConnectionDetailContent = React.memo(function IdentityConne
     };
 
     const setupSteps = workosSetupSteps(connection);
+    // Which Teams accept this Home connection in their sign-in policy; unknown (older Home) shows nothing.
+    const teamsUsingItRow = props.teamId === null && connection.teamsUsingIt ? <Item
+        testID="identity-connection-teams-using-it"
+        title={t('identityAdministration.homeTeamsUsingIt')}
+        subtitle={connection.teamsUsingIt.length > 0
+            ? connection.teamsUsingIt.map((team) => team.name).join(', ')
+            : t('identityAdministration.homeTeamsUsingItNone')}
+        showChevron={false}
+    /> : null;
     const isWorkos = connection.provider.kind === 'workos_sso';
     const workosObservation = connection.lastObservation?.kind === 'workos_sso' ? connection.lastObservation.presentation : null;
     const chosenCandidate = workosCandidates.find((candidate) => candidate.connectionId === chosenWorkosCandidateId) ?? null;
@@ -704,6 +697,7 @@ export const IdentityConnectionDetailContent = React.memo(function IdentityConne
                 accessibilityLiveRegion={pending === 'test:return' ? 'polite' : undefined}
                 showChevron={false}
             />}
+            {teamsUsingItRow}
         </ItemGroup></SettingSection>}
         {setupSteps ? (
             // The WorkOS path as visible steps: only the current step offers its
@@ -741,6 +735,7 @@ export const IdentityConnectionDetailContent = React.memo(function IdentityConne
                     ) : undefined}
                     showChevron={false}
                 />
+                {teamsUsingItRow}
                 {props.teamId !== null ? <Item
                     testID="identity-workos-required-for-team"
                     title={t('identityAdministration.workosRequiredForTeamWork')}

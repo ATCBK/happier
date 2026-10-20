@@ -15,7 +15,7 @@ import { peekInferredPublicServerUrl } from "@/app/integrations/publicUrl/public
 import { SERVER_CONFIG_REGISTRY } from "@/config/serverConfigRegistry";
 import { decryptString, encryptString } from "@/modules/encrypt";
 import { db, isPrismaErrorCode } from "@/storage/db";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 
 import { buildHomeConfigEnv, composeHomeConfigEnv, projectHomeSettings } from "./homeConfigOverlay";
 import { readHomeDeploymentEnv, readStartupHomeEnv, type StoredHomeSettings } from "./startupHomeEnv";
@@ -145,14 +145,14 @@ export function buildHomeConfigEnvFromRecord(
 }
 
 /**
- * The request/job overlay (§3.1 "Request/job-scoped configuration"): one indexed row read, then the
+ * The request/job overlay (§3.1 "Request/job-scoped configuration"): settings and policy reads, then the
  * `apply: 'live'` Home values over `base` for every key the deployment leaves unset. Restart keys keep
  * the values this process started with. No process cache: every replica reads the same row.
  */
 export async function readHomeConfigEnv(base: ServerConfigEnv = process.env): Promise<ServerConfigEnv> {
-    const [record, policyValues] = await inTx(tx => Promise.all([
+    const [record, policyValues] = await inReadSnapshot(tx => Promise.all([
         readHomeSettingsInTx(tx), readHomeAuthenticationPolicyValues(tx),
-    ]), { isolationLevel: "Serializable", /* Home settings and authentication policy are captured as one effective configuration snapshot. */ readOnly: true });
+    ]));
     return buildHomeConfigEnvFromRecord(base, record, SERVER_CONFIG_REGISTRY, policyValues);
 }
 

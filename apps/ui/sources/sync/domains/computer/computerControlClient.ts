@@ -1,10 +1,11 @@
 import { ComputerActionResultV1Schema, ComputerCaptureResponseV1Schema, ComputerControlStatusResponseV1Schema, ComputerOpenSettingsResponseV1Schema, ComputerSelectedTargetResponseV1Schema, ComputerTargetsListResponseV1Schema, type ComputerActionResultV1, type ComputerAccessV1, type ComputerCaptureResponseV1, type ComputerControlStatusResponseV1, type ComputerSelectedTargetResponseV1, type ComputerTargetsListResponseV1, type ComputerTargetV1 } from '@happier-dev/protocol/computer/v1';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
+import { resolveComputerAccess } from '@happier-dev/protocol/computer/v1';
 import type { ActionExecutorContext } from '@happier-dev/protocol/actions/executor/types';
 import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import type { MachineLiveStreamFrameV1 } from '@happier-dev/protocol/machines/peer/mediation/stream/v1';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import { decodeBase64 } from '@/encryption/base64';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
@@ -40,7 +41,7 @@ export function createComputerControlClient(scope: ComputerSessionScope, execute
         ...(accountLifetime ? { expectedAccountId: accountLifetime.scope.accountId } : {}),
     };
     const machine = { machineId: scope.machineId };
-    async function run<T>(actionId: ActionId, input: unknown, schema: z.ZodType<T>): Promise<ComputerOutcome<T>> {
+    async function run<T>(actionId: ActionId, input: unknown, schema: z.ZodMiniType<T>): Promise<ComputerOutcome<T>> {
         if (!isCurrent()) return { ok: false, code: 'action_account_scope_changed' };
         let result: ActionExecuteResult;
         try {
@@ -62,8 +63,8 @@ export function createComputerControlClient(scope: ComputerSessionScope, execute
         isCurrent,
         getTarget: () => run<ComputerSelectedTargetResponseV1>('computer.target.get', machine, ComputerSelectedTargetResponseV1Schema),
         listTargets: () => run<ComputerTargetsListResponseV1>('computer.targets.list', machine, ComputerTargetsListResponseV1Schema),
-        selectTarget: (target: ComputerTargetV1, access: ComputerAccessV1 = 'use') => run<ComputerSelectedTargetResponseV1>(
-            'computer.target.select', { ...machine, target, access }, ComputerSelectedTargetResponseV1Schema),
+        selectTarget: (target: ComputerTargetV1, access?: ComputerAccessV1) => run<ComputerSelectedTargetResponseV1>(
+            'computer.target.select', { ...machine, target, access: resolveComputerAccess(access) }, ComputerSelectedTargetResponseV1Schema),
         openSettings: (permission: 'capture' | 'input') => run(
             'computer.permissions.openSettings', { ...machine, permission }, ComputerOpenSettingsResponseV1Schema),
         status: () => run<ComputerControlStatusResponseV1>('computer.control.status', machine, ComputerControlStatusResponseV1Schema),
@@ -72,7 +73,22 @@ export function createComputerControlClient(scope: ComputerSessionScope, execute
         /** A fresh look at the window by the person: what confirms an unconfirmed stop. */
         observe: (identity?: Readonly<{ target: ComputerTargetV1; sourceId: string }>) => run<ComputerCaptureResponseV1>(
             'computer.capture', { ...machine, ...identity }, ComputerCaptureResponseV1Schema),
-        stopSharing: () => run<ComputerActionResultV1>('computer.target.close', machine, ComputerActionResultV1Schema),
+        stopSharing: async (): Promise<ComputerOutcome<ComputerActionResultV1>> => {
+            const result = await run<ComputerActionResultV1>('computer.target.close', machine, ComputerActionResultV1Schema);
+            if (!result.ok || result.value.status !== 'dispatched') return result;
+            // A dispatched close is not permission to hide a still-selected source.
+            // Both the viewer and picker consume this same canonical confirmation.
+            const confirmed = await run<ComputerSelectedTargetResponseV1>('computer.target.get', machine, ComputerSelectedTargetResponseV1Schema);
+            if (!confirmed.ok) return confirmed;
+            if (confirmed.value.sourceId || confirmed.value.selectedTarget || confirmed.value.consentGranted
+                || !confirmed.value.approvalDisplay.requiresTargetSelection) {
+                return { ok: false, code: 'control_not_drained' };
+            }
+            for (const projection of mountedProjections.get(projectionKey(scope)) ?? []) {
+                projection.applySelection(confirmed.value);
+            }
+            return result;
+        },
     };
 }
 
@@ -127,7 +143,11 @@ function createComputerSessionProjection(scope: ComputerSessionScope, execute: C
     }
     function applyFailure(code: string): void {
         if (!client.isCurrent()) return;
-        publish({ ...snapshot, selection: null, status: null, failure: code });
+        const cause = resolveComputerRecovery({ kind: 'failed', code }, 'use')?.cause;
+        // An unreadable observation does not establish that sharing stopped.
+        // Retain its release affordance, but withdraw stale control/input facts.
+        const selection = cause === 'failed' || cause === 'offline' ? snapshot.selection : null;
+        publish({ ...snapshot, selection, status: null, failure: code });
     }
     function applyReadiness(targets: ComputerTargetsListResponseV1): void {
         if (!client.isCurrent()) return;
@@ -155,6 +175,10 @@ function createComputerSessionProjection(scope: ComputerSessionScope, execute: C
                 if (!hasDemand()) break;
                 if (invalidated) continue;
                 if (!selection.ok) { applyFailure(selection.code); continue; }
+                const previousStatus = selection.value.sourceId === snapshot.selection?.sourceId ? snapshot.status : null;
+                // Grant discovery and control observation are independent reads.
+                // Start both together, but keep capture permission as the picture's admission gate.
+                const statusRead = selection.value.sourceId ? client.status() : null;
                 // OS grants can change while a viewer is parked or Settings is open.
                 // Re-observe them at this existing refresh boundary before restoring a source.
                 if (selection.value.sourceId) {
@@ -165,9 +189,8 @@ function createComputerSessionProjection(scope: ComputerSessionScope, execute: C
                     applyReadiness(targets.value);
                 }
                 applySelection(selection.value, false);
-                if (!snapshot.selection?.sourceId || !hasDemand()) continue;
-                const previousStatus = snapshot.status;
-                const status = await client.status();
+                if (!statusRead || !snapshot.selection?.sourceId || !hasDemand()) continue;
+                const status = await statusRead;
                 if (!hasDemand()) break;
                 if (invalidated) continue;
                 // A stream transition delivered during the read is fresher than that read's answer.

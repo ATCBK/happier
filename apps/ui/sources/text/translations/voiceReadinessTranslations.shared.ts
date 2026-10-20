@@ -102,7 +102,7 @@ export const voiceReadinessTranslationsEnglish = { en: defineVoiceReadinessTrans
     server_feature_unknown: 'Server support for this Voice provider could not be checked.',
     execution_machine_missing: 'Choose a machine that can run this service.',
     execution_machine_installing: 'The selected Voice execution machine is still being prepared.',
-    execution_machine_incompatible: 'The selected machine is incompatible with this Voice provider.',
+    execution_machine_incompatible: 'The selected machine isn’t reachable right now.',
     execution_machine_unknown: 'The Voice execution machine could not be checked.',
     daemon_unreachable: 'The selected machine has no available route for Voice audio.',
     daemon_relay_disabled: 'The selected machine needs the Voice audio relay, but relay use is disabled.',

@@ -59,9 +59,9 @@ function readPiV3Header(record: unknown): PiV3SessionHeader | null {
 
 function readTreeEntry(record: unknown): PiV3SessionTreeEntry | null {
   if (!isRecord(record)) return null;
-  const type = readString(record.type);
+  const type = readString(record.type) ?? '';
   const id = readString(record.id);
-  if (!type || type === 'session' || !id) return null;
+  if (type === 'session' || !id) return null;
   if (record.parentId !== null && typeof record.parentId !== 'string') return null;
   const parentId = record.parentId === null ? null : readString(record.parentId);
   if (record.parentId !== null && !parentId) return null;
@@ -76,9 +76,9 @@ function readTreeEntry(record: unknown): PiV3SessionTreeEntry | null {
 }
 
 /**
- * A raw JSONL value is safe to advance past only when it is Pi's file header
- * or a structurally complete tree entry. Semantic admission remains with the
- * external-session projection owner.
+ * Identifies Pi's header and addressable tree entries. An unknown or malformed
+ * body can retain its native id/parent links; unaddressable values stay outside
+ * this tree and are represented by source offset in the external projection.
  */
 export function isPiV3SessionFileRecord(record: unknown): boolean {
   return readPiV3Header(record) !== null || readTreeEntry(record) !== null;

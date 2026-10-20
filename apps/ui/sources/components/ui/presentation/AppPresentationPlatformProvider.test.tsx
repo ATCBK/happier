@@ -108,12 +108,28 @@ describe('AppPresentationPlatformProvider', () => {
         expect(pressable?.props.hitSlop).toBe(8);
     });
 
-    it('is mounted once above the production root boot gate', () => {
+    it('is mounted once above the boot gate in each independently selected production root', () => {
         const rootLayout = readFileSync(join(process.cwd(), 'sources/app/_layout.tsx'), 'utf8');
 
-        expect(rootLayout.match(/<AppPresentationPlatformProvider>/g)).toHaveLength(1);
-        expect(rootLayout).toMatch(
-            /<AppPresentationPlatformProvider>[\s\S]*<WebCryptoStartupGate>[\s\S]*<AppBoot/,
-        );
+        for (const [start, end, boot] of [
+            ['EmbedRootLayout', 'EmbedAppBoot', 'EmbedAppBoot'],
+            ['FullAppRootLayout', 'AppBoot', 'AppBoot'],
+        ]) {
+            const root = rootLayout.slice(
+                rootLayout.indexOf(`function ${start}()`),
+                rootLayout.indexOf(`function ${end}(`),
+            );
+            expect(root.match(/<AppPresentationPlatformProvider>/g)).toHaveLength(1);
+            expect(root).toMatch(new RegExp(
+                `<AppPresentationPlatformProvider>(?:(?!</AppPresentationPlatformProvider>)[\\s\\S])*`
+                + `<WebCryptoStartupGate>(?:(?!</WebCryptoStartupGate>)[\\s\\S])*<${boot}(?:\\s|/|>)`,
+            ));
+        }
+    });
+    it('shares native no-drag admission between routed viewers and floating companions', () => {
+        const rootLayout = readFileSync(join(process.cwd(), 'sources/app/_layout.tsx'), 'utf8');
+        const runtimeMounts = readFileSync(join(process.cwd(), 'sources/components/appShell/runtime/AuthenticatedAppRuntimeMounts.tsx'), 'utf8');
+        expect(/<CompanionNoDragRegionProvider>(?:(?!<\/CompanionNoDragRegionProvider>)[\s\S])*<AppBoot/.test(rootLayout)).toBe(true);
+        expect(runtimeMounts.includes('<CompanionNoDragRegionProvider>')).toBe(false);
     });
 });

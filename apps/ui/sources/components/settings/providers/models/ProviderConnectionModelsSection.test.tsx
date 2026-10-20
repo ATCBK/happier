@@ -27,7 +27,7 @@ const state = vi.hoisted(() => ({
     error: null as null | ReturnType<typeof createProviderErrorV1>,
     models: [{ id: 'manual-a', name: 'Manual A', source: 'manual', stale: false, loadState: 'unknown', visibility: 'visible' }] as DaemonProviderModelRowV1[],
 }));
-const refresh = vi.hoisted(() => vi.fn(async () => undefined));
+const refresh = vi.hoisted(() => vi.fn<() => Promise<void>>(async () => {}));
 const confirm = vi.hoisted(() => vi.fn(async () => true));
 const alert = vi.hoisted(() => vi.fn());
 const loadModel = vi.hoisted(() => vi.fn<(_connectionId: string, _modelId: string) => Promise<ProviderModelLoadUiResult>>(
@@ -450,7 +450,7 @@ describe('ProviderConnectionModelsSection', () => {
             await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce());
         });
 
-        expect(confirm).toHaveBeenCalledOnce();
+        expect(confirm).not.toHaveBeenCalled();
         expect(catalogMutations()).toEqual([{
             expectedRevision: 1, content: { t: 'plain', v: stored.catalog },
             referencedSavedSecretIds: [], savedSecretRevisions: [],
@@ -944,7 +944,7 @@ describe('ProviderConnectionModelsSection', () => {
         expect(catalogMutations()).toHaveLength(1);
     });
 
-    it('applies show-only as one exact atomic bulk mutation and honors cancellation', async () => {
+    it('applies show-only as one exact atomic bulk mutation without a caller-owned confirmation', async () => {
         state.models = [
             ...state.models,
             { id: 'manual-a-other', name: 'Other model', source: 'static', stale: false, loadState: 'unknown', visibility: 'visible' },
@@ -956,12 +956,6 @@ describe('ProviderConnectionModelsSection', () => {
         const exactRef = { scope: 'allAgents' as const, providerConnectionId: connectionId, modelId: 'manual-a' };
 
         confirm.mockResolvedValueOnce(false);
-        await act(async () => { await screen.findByType(ProviderModelManager).props.onShowOnly?.(exactRef); });
-        expect(stored.writes).toBe(0);
-        expect(catalogMutations()).toEqual([]);
-        expect(stored.catalog.modelVisibilityByRef).toEqual({});
-
-        confirm.mockResolvedValueOnce(true);
         await act(async () => {
             screen.findByType(ProviderModelManager).props.onShowOnly?.(exactRef);
             await vi.waitFor(() => expect(stored.writes).toBe(1));
@@ -974,6 +968,7 @@ describe('ProviderConnectionModelsSection', () => {
         expect(stored.catalog.modelVisibilityByRef).toEqual({
             [serializeModelVisibilityRefV1({ ...exactRef, modelId: 'manual-a-other' })]: 'hidden',
         });
+        expect(confirm).not.toHaveBeenCalled();
     });
 
     it('delegates one exact Load action through the contained load hook', async () => {

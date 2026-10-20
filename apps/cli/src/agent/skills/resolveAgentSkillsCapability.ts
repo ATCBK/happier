@@ -1,6 +1,11 @@
 import type { PluginAgentSkillsCapabilityV2 } from '@happier-dev/protocol';
 
 import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
+import type { AgentCatalogEntry } from '@/agent/catalog/types';
+import { readRuntimeDescriptorV1FromMetadata } from '@happier-dev/protocol/sessions/metadata/runtime-descriptor-compat';
+
+type SkillCatalog = Readonly<{ catalogEntriesById: Readonly<Record<string,
+  Pick<AgentCatalogEntry, 'skills' | 'resolveNativeSkillDirectories' | 'resolveProbePluginSettings'>>> }>;
 
 const NO_SKILLS: PluginAgentSkillsCapabilityV2 = Object.freeze({
   delivery: 'none', nativeDisable: 'unsupported', liveReload: 'unsupported',
@@ -9,7 +14,22 @@ const NO_SKILLS: PluginAgentSkillsCapabilityV2 = Object.freeze({
 /** Reads the same current lazy catalog projection used for Agent tool delivery. */
 export function resolveAgentSkillsCapability(
   agentId: string,
-  catalog: Readonly<{ catalogEntriesById: Readonly<Record<string, Readonly<{ skills?: PluginAgentSkillsCapabilityV2 }>>> }> = readAgentCatalogSnapshot(),
+  catalog: SkillCatalog = readAgentCatalogSnapshot(),
 ): PluginAgentSkillsCapabilityV2 {
   return catalog.catalogEntriesById[agentId]?.skills ?? NO_SKILLS;
+}
+
+/** The Agent interprets its exact non-secret Settings; the host owns filesystem discovery. */
+export async function resolveAgentNativeSkillDirectories(agentId: string, input: Readonly<{
+  catalog?: SkillCatalog; sessionMetadata?: unknown; signal?: AbortSignal;
+}> = {}): Promise<readonly string[]> {
+  const entry = (input.catalog ?? readAgentCatalogSnapshot()).catalogEntriesById[agentId];
+  if (!entry?.resolveNativeSkillDirectories) return [];
+  const pluginSettings = await entry.resolveProbePluginSettings?.({ signal: input.signal });
+  if (!pluginSettings) throw new Error('Native skill launch settings are unavailable');
+  input.signal?.throwIfAborted();
+  const directories = await entry.resolveNativeSkillDirectories({ pluginSettings,
+    runtimeDescriptorV1: readRuntimeDescriptorV1FromMetadata(input.sessionMetadata) ?? undefined });
+  input.signal?.throwIfAborted();
+  return directories;
 }

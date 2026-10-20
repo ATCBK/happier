@@ -34,7 +34,9 @@ export type UsageActionInputById = {
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | undefined;
+            includeAccounting?: boolean | undefined;
             includeSessionEvidence?: boolean | undefined;
+            includeTranscriptEvidence?: boolean | undefined;
             includeWorkEvidence?: boolean | undefined;
             breakdown?: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[] | undefined;
             modelIds?: string[] | undefined;
@@ -89,7 +91,9 @@ export type UsageActionInputById = {
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | undefined;
+            includeAccounting?: boolean | undefined;
             includeSessionEvidence?: boolean | undefined;
+            includeTranscriptEvidence?: boolean | undefined;
             includeWorkEvidence?: boolean | undefined;
             breakdown?: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[] | undefined;
             modelIds?: string[] | undefined;
@@ -127,7 +131,9 @@ export type UsageActionInputById = {
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | undefined;
+            includeAccounting?: boolean | undefined;
             includeSessionEvidence?: boolean | undefined;
+            includeTranscriptEvidence?: boolean | undefined;
             includeWorkEvidence?: boolean | undefined;
             breakdown?: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[] | undefined;
             modelIds?: string[] | undefined;
@@ -165,7 +171,9 @@ export type UsageActionInputById = {
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | undefined;
+            includeAccounting?: boolean | undefined;
             includeSessionEvidence?: boolean | undefined;
+            includeTranscriptEvidence?: boolean | undefined;
             includeWorkEvidence?: boolean | undefined;
             breakdown?: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[] | undefined;
             modelIds?: string[] | undefined;
@@ -200,7 +208,9 @@ export type UsageActionInputById = {
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | undefined;
+            includeAccounting?: boolean | undefined;
             includeSessionEvidence?: boolean | undefined;
+            includeTranscriptEvidence?: boolean | undefined;
             includeWorkEvidence?: boolean | undefined;
             breakdown?: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[] | undefined;
             modelIds?: string[] | undefined;
@@ -208,7 +218,7 @@ export type UsageActionInputById = {
             backendModes?: string[] | undefined;
         };
         format: 'json' | 'csv' | 'text';
-        fields: ('breakdowns' | 'totals' | 'series' | 'insights' | 'activity' | 'leaders' | 'modelTimeline' | 'engineTimeline' | 'messageStats' | 'costPresentation' | 'costFacts' | 'priceCatalog' | 'coverage' | 'tokenCategories' | 'contributions')[];
+        fields: ('breakdowns' | 'totals' | 'series' | 'insights' | 'activity' | 'leaders' | 'modelTimeline' | 'engineTimeline' | 'messageStats' | 'costPresentation' | 'costFacts' | 'priceCatalog' | 'coverage' | 'contributions' | 'tokenCategories')[];
     };
     readonly "usage.coach.apply": {
         query: {
@@ -237,7 +247,9 @@ export type UsageActionInputById = {
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | undefined;
+            includeAccounting?: boolean | undefined;
             includeSessionEvidence?: boolean | undefined;
+            includeTranscriptEvidence?: boolean | undefined;
             includeWorkEvidence?: boolean | undefined;
             breakdown?: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[] | undefined;
             modelIds?: string[] | undefined;
@@ -273,7 +285,9 @@ export type UsageActionInputById = {
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | undefined;
+            includeAccounting?: boolean | undefined;
             includeSessionEvidence?: boolean | undefined;
+            includeTranscriptEvidence?: boolean | undefined;
             includeWorkEvidence?: boolean | undefined;
             breakdown?: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[] | undefined;
             modelIds?: string[] | undefined;
@@ -286,22 +300,42 @@ export type UsageActionInputById = {
             anchor: string;
             appliedValue: unknown;
             owner: {
+                before: {
+                    unset: true;
+                } | {
+                    value: unknown;
+                };
+                applied: {
+                    unset: true;
+                } | {
+                    value: unknown;
+                };
                 scope: {
                     serverId: string;
                     accountId: string;
                 };
                 beforeVersion: number;
                 appliedVersion: number;
-                before: {
-                    unset: true;
-                } | {
-                    value: string | number | boolean | null;
+            } | {
+                changes: {
+                    before: {
+                        unset: true;
+                    } | {
+                        value: unknown;
+                    };
+                    applied: {
+                        unset: true;
+                    } | {
+                        value: unknown;
+                    };
+                    key: string;
+                }[];
+                scope: {
+                    serverId: string;
+                    accountId: string;
                 };
-                applied: {
-                    unset: true;
-                } | {
-                    value: string | number | boolean | null;
-                };
+                beforeVersion: number;
+                appliedVersion: number;
             };
         } | {
             kind: 'model';
@@ -361,8 +395,50 @@ export type UsageActionInputById = {
                 updatedAt: number;
             };
         } | {
-            [x: string]: any;
             kind: 'mcp_binding';
+            owner: {
+                serverId: string;
+                rules: {
+                    id: string;
+                    target: {
+                        t: 'allMachines';
+                    } | {
+                        t: 'machine';
+                        machineId: string;
+                    } | {
+                        t: 'project';
+                        projectKey: string;
+                    } | {
+                        t: 'workspace';
+                        machineId: string;
+                        workspaceRoot: string;
+                    };
+                    enabled: boolean;
+                    createdAt: number;
+                    updatedAt: number;
+                    agentId?: string | undefined;
+                }[];
+                previous: {
+                    id: string;
+                    target: {
+                        t: 'allMachines';
+                    } | {
+                        t: 'machine';
+                        machineId: string;
+                    } | {
+                        t: 'project';
+                        projectKey: string;
+                    } | {
+                        t: 'workspace';
+                        machineId: string;
+                        workspaceRoot: string;
+                    };
+                    enabled: boolean;
+                    createdAt: number;
+                    updatedAt: number;
+                    agentId?: string | undefined;
+                }[];
+            };
             appliedRevision: number;
         };
     };
@@ -393,7 +469,9 @@ export type UsageActionInputById = {
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | undefined;
+            includeAccounting?: boolean | undefined;
             includeSessionEvidence?: boolean | undefined;
+            includeTranscriptEvidence?: boolean | undefined;
             includeWorkEvidence?: boolean | undefined;
             breakdown?: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[] | undefined;
             modelIds?: string[] | undefined;
@@ -430,7 +508,9 @@ export type UsageActionInputById = {
             session?: string | string[] | null | undefined;
             costBasis?: 'auto' | 'reported' | 'estimated' | 'api_equivalent' | undefined;
             metric?: 'tokens' | 'cost' | undefined;
+            includeAccounting?: boolean | undefined;
             includeSessionEvidence?: boolean | undefined;
+            includeTranscriptEvidence?: boolean | undefined;
             includeWorkEvidence?: boolean | undefined;
             breakdown?: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[] | undefined;
             modelIds?: string[] | undefined;
@@ -487,7 +567,7 @@ export type UsageActionResultById = {
         mediaType: string;
         fileName: string;
         base64: string;
-        fields: ('breakdowns' | 'totals' | 'series' | 'insights' | 'activity' | 'leaders' | 'modelTimeline' | 'engineTimeline' | 'messageStats' | 'costPresentation' | 'costFacts' | 'priceCatalog' | 'coverage' | 'tokenCategories' | 'contributions' | 'resets' | 'renewals')[];
+        fields: ('breakdowns' | 'totals' | 'series' | 'insights' | 'activity' | 'leaders' | 'modelTimeline' | 'engineTimeline' | 'messageStats' | 'costPresentation' | 'costFacts' | 'priceCatalog' | 'coverage' | 'contributions' | 'tokenCategories' | 'resets' | 'renewals')[];
         asOfMs: number | null;
     };
     readonly "usage.recap.export": {
@@ -507,7 +587,7 @@ export type UsageActionResultById = {
             asOfMs: number | null;
             coverage: {
                 accounting: {
-                    status: 'unknown' | 'partial' | 'complete';
+                    status: 'unknown' | 'complete' | 'partial';
                     reasons: ('missing_baseline' | 'counter_discontinuity' | 'ambiguous_overlap' | 'unattributed_model' | 'unpriced_tokens' | 'unknown_source' | 'incomplete_history' | 'ranked_truncation' | 'unknown_token_categories')[];
                     missingDimensions: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
                     range: {
@@ -539,7 +619,7 @@ export type UsageActionResultById = {
                 coach?: {
                     currentness: 'unknown' | 'stale' | 'current';
                     asOfMs: number | null;
-                    findings: ('unknown' | 'partial' | 'complete')[];
+                    findings: ('unknown' | 'complete' | 'partial')[];
                 } | undefined;
                 intervals?: {
                     method: 'witnessed_intervals_v1';
@@ -571,6 +651,7 @@ export type UsageActionResultById = {
                     tokens: number;
                     events: number;
                     name?: string | undefined;
+                    agentId?: string | undefined;
                 }[] | undefined;
                 cache?: {
                     readTokens: number;
@@ -620,6 +701,11 @@ export type UsageActionResultById = {
                 })[] | undefined;
                 dollars?: {
                     basis: 'auto' | 'reported' | 'estimated' | 'api_equivalent';
+                    selected: {
+                        kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'mixed';
+                        currency: string;
+                        amountUsd: number;
+                    } | null;
                     facts: {
                         kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'unpriced';
                         currency: string;
@@ -668,7 +754,7 @@ export type UsageActionResultById = {
             asOfMs: number | null;
             coverage: {
                 accounting: {
-                    status: 'unknown' | 'partial' | 'complete';
+                    status: 'unknown' | 'complete' | 'partial';
                     reasons: ('missing_baseline' | 'counter_discontinuity' | 'ambiguous_overlap' | 'unattributed_model' | 'unpriced_tokens' | 'unknown_source' | 'incomplete_history' | 'ranked_truncation' | 'unknown_token_categories')[];
                     missingDimensions: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
                     range: {
@@ -700,7 +786,7 @@ export type UsageActionResultById = {
                 coach?: {
                     currentness: 'unknown' | 'stale' | 'current';
                     asOfMs: number | null;
-                    findings: ('unknown' | 'partial' | 'complete')[];
+                    findings: ('unknown' | 'complete' | 'partial')[];
                 } | undefined;
                 intervals?: {
                     method: 'witnessed_intervals_v1';
@@ -732,6 +818,7 @@ export type UsageActionResultById = {
                     tokens: number;
                     events: number;
                     name?: string | undefined;
+                    agentId?: string | undefined;
                 }[] | undefined;
                 cache?: {
                     readTokens: number;
@@ -781,6 +868,11 @@ export type UsageActionResultById = {
                 })[] | undefined;
                 dollars?: {
                     basis: 'auto' | 'reported' | 'estimated' | 'api_equivalent';
+                    selected: {
+                        kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'mixed';
+                        currency: string;
+                        amountUsd: number;
+                    } | null;
                     facts: {
                         kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'unpriced';
                         currency: string;
@@ -819,7 +911,7 @@ export type UsageActionResultById = {
         asOfMs: number | null;
         coverage: {
             accounting: {
-                status: 'unknown' | 'partial' | 'complete';
+                status: 'unknown' | 'complete' | 'partial';
                 reasons: ('missing_baseline' | 'counter_discontinuity' | 'ambiguous_overlap' | 'unattributed_model' | 'unpriced_tokens' | 'unknown_source' | 'incomplete_history' | 'ranked_truncation' | 'unknown_token_categories')[];
                 missingDimensions: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
                 range: {
@@ -851,7 +943,7 @@ export type UsageActionResultById = {
             coach?: {
                 currentness: 'unknown' | 'stale' | 'current';
                 asOfMs: number | null;
-                findings: ('unknown' | 'partial' | 'complete')[];
+                findings: ('unknown' | 'complete' | 'partial')[];
             } | undefined;
             intervals?: {
                 method: 'witnessed_intervals_v1';
@@ -883,6 +975,7 @@ export type UsageActionResultById = {
                 tokens: number;
                 events: number;
                 name?: string | undefined;
+                agentId?: string | undefined;
             }[] | undefined;
             cache?: {
                 readTokens: number;
@@ -932,6 +1025,11 @@ export type UsageActionResultById = {
             })[] | undefined;
             dollars?: {
                 basis: 'auto' | 'reported' | 'estimated' | 'api_equivalent';
+                selected: {
+                    kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'mixed';
+                    currency: string;
+                    amountUsd: number;
+                } | null;
                 facts: {
                     kind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice' | 'unpriced';
                     currency: string;
@@ -978,7 +1076,9 @@ export type UsageActionResultById = {
                 session: string | string[] | null;
                 costBasis: 'auto' | 'reported' | 'estimated' | 'api_equivalent';
                 metric: 'tokens' | 'cost';
+                includeAccounting: boolean;
                 includeSessionEvidence: boolean;
+                includeTranscriptEvidence: boolean;
                 includeWorkEvidence: boolean;
                 breakdown: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
                 modelIds: string[];
@@ -1011,7 +1111,9 @@ export type UsageActionResultById = {
                 session: string | string[] | null;
                 costBasis: 'auto' | 'reported' | 'estimated' | 'api_equivalent';
                 metric: 'tokens' | 'cost';
+                includeAccounting: boolean;
                 includeSessionEvidence: boolean;
+                includeTranscriptEvidence: boolean;
                 includeWorkEvidence: boolean;
                 breakdown: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
                 modelIds: string[];
@@ -1032,7 +1134,6 @@ export type UsageActionResultById = {
             }[];
             pending: boolean;
             accounting?: {
-                [x: string]: any;
                 v: 1;
                 totals: {
                     eventCount: number;
@@ -1883,8 +1984,27 @@ export type UsageActionResultById = {
                     complete: boolean;
                     source: string;
                 }[] | undefined;
+                priceCatalog?: {
+                    v: 1;
+                    models: Record<string, {
+                        inputUsdPerMillion: number;
+                        outputUsdPerMillion: number;
+                        cacheReadUsdPerMillion?: number | undefined;
+                        cacheWriteUsdPerMillion?: number | undefined;
+                        reasoningUsdPerMillion?: number | undefined;
+                        provider?: string | undefined;
+                        sourceUrl?: string | undefined;
+                    }>;
+                    provenance: {
+                        source: 'litellm';
+                        origin: 'bundled' | 'fetched' | 'cached';
+                        asOfMs: number;
+                        revision: string;
+                        fetchStatus: 'error' | 'ready' | 'disabled';
+                        errorCode?: string | undefined;
+                    };
+                } | undefined;
                 contributions?: {
-                    [x: string]: any;
                     id: string;
                     observedAtMs: number;
                     sessionId: string | null;
@@ -1923,6 +2043,8 @@ export type UsageActionResultById = {
                         windowTokens?: number | null | undefined;
                     } | undefined;
                     backendMode?: string | null | undefined;
+                    providerId?: string | null | undefined;
+                    providerConnectionId?: string | null | undefined;
                     providerAttribution?: 'unknown' | 'known' | undefined;
                     providerSource?: 'unknown' | 'native' | 'provider' | undefined;
                     connectedAccount?: {
@@ -1954,7 +2076,7 @@ export type UsageActionResultById = {
                     total: number;
                 } | undefined;
                 coverage?: {
-                    status: 'unknown' | 'partial' | 'complete';
+                    status: 'unknown' | 'complete' | 'partial';
                     reasons: ('missing_baseline' | 'counter_discontinuity' | 'ambiguous_overlap' | 'unattributed_model' | 'unpriced_tokens' | 'unknown_source' | 'incomplete_history' | 'ranked_truncation' | 'unknown_token_categories')[];
                     missingDimensions: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
                     range: {
@@ -2074,7 +2196,7 @@ export type UsageActionResultById = {
                         source?: 'unknown' | 'cached' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | undefined;
                         scope?: 'unknown' | 'model' | 'session' | 'tokens' | 'requests' | 'primary' | 'secondary' | 'daily' | 'weekly' | 'monthly' | 'five_hour' | 'seven_day' | 'rolling' | undefined;
                         limitScope?: 'unknown' | 'model' | 'session' | 'workspace' | 'account' | 'provider' | 'organization' | undefined;
-                        confidence?: 'unknown' | 'estimated' | 'exact' | 'stale' | 'derived' | undefined;
+                        confidence?: 'unknown' | 'exact' | 'estimated' | 'stale' | 'derived' | undefined;
                     }[];
                     planLabel?: string | null | undefined;
                     accountLabel?: string | null | undefined;
@@ -2132,7 +2254,7 @@ export type UsageActionResultById = {
                         totalCount?: number | undefined;
                         nextExpiresAtMs?: number | null | undefined;
                         source?: 'unknown' | 'cached' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | undefined;
-                        confidence?: 'unknown' | 'estimated' | 'exact' | 'stale' | 'derived' | undefined;
+                        confidence?: 'unknown' | 'exact' | 'estimated' | 'stale' | 'derived' | undefined;
                     } | undefined;
                     recoveryCreditDetails?: Record<string, {
                         remainingCount: number;
@@ -2178,7 +2300,7 @@ export type UsageActionResultById = {
                         depletesAtMs?: number | null | undefined;
                     } | {
                         status: 'unavailable';
-                        reason: 'stale' | 'not_loaded' | 'unknown_window' | 'zero_elapsed' | 'outside_window' | 'unknown_utilization' | 'inconsistent_counters' | 'counter_reset' | 'reset_changed' | 'denominator_changed' | 'entitlement_changed' | 'non_renewing_end';
+                        reason: 'stale' | 'not_loaded' | 'unknown_window' | 'entitlement_changed' | 'denominator_changed' | 'reset_changed' | 'inconsistent_counters' | 'counter_reset' | 'zero_elapsed' | 'outside_window' | 'unknown_utilization' | 'non_renewing_end';
                     };
                 }[];
                 targets: {
@@ -2212,7 +2334,7 @@ export type UsageActionResultById = {
                             status: 'ready';
                         } | {
                             status: 'waiting';
-                            reason: 'unknown_window' | 'denominator_changed' | 'entitlement_changed' | 'authority_unavailable' | 'witness_unavailable' | 'before_reset' | 'quota_unavailable' | 'quota_stale' | 'reset_not_observed' | 'window_changed' | 'window_expired';
+                            reason: 'unknown_window' | 'entitlement_changed' | 'denominator_changed' | 'authority_unavailable' | 'witness_unavailable' | 'before_reset' | 'quota_unavailable' | 'quota_stale' | 'reset_not_observed' | 'window_changed' | 'window_expired';
                             nextCheckAtMs?: number | undefined;
                         };
                     }[];
@@ -2283,7 +2405,7 @@ export type UsageActionResultById = {
                                 source?: 'unknown' | 'cached' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | undefined;
                                 scope?: 'unknown' | 'model' | 'session' | 'tokens' | 'requests' | 'primary' | 'secondary' | 'daily' | 'weekly' | 'monthly' | 'five_hour' | 'seven_day' | 'rolling' | undefined;
                                 limitScope?: 'unknown' | 'model' | 'session' | 'workspace' | 'account' | 'provider' | 'organization' | undefined;
-                                confidence?: 'unknown' | 'estimated' | 'exact' | 'stale' | 'derived' | undefined;
+                                confidence?: 'unknown' | 'exact' | 'estimated' | 'stale' | 'derived' | undefined;
                             }[];
                             planLabel?: string | null | undefined;
                             accountLabel?: string | null | undefined;
@@ -2341,7 +2463,7 @@ export type UsageActionResultById = {
                                 totalCount?: number | undefined;
                                 nextExpiresAtMs?: number | null | undefined;
                                 source?: 'unknown' | 'cached' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | undefined;
-                                confidence?: 'unknown' | 'estimated' | 'exact' | 'stale' | 'derived' | undefined;
+                                confidence?: 'unknown' | 'exact' | 'estimated' | 'stale' | 'derived' | undefined;
                             } | undefined;
                             recoveryCreditDetails?: Record<string, {
                                 remainingCount: number;
@@ -2372,6 +2494,7 @@ export type UsageActionResultById = {
                         startAtMs: number;
                         endAtMs: number;
                     };
+                    encoding: 'meter_readings_runs_v1';
                     bases: {
                         source: 'unknown' | 'cached' | 'runtimeSignal' | 'providerHttp' | 'proxy' | 'connectedServiceProbe' | 'manual';
                         v: 1;
@@ -2412,7 +2535,7 @@ export type UsageActionResultById = {
                             totalCount?: number | undefined;
                             nextExpiresAtMs?: number | null | undefined;
                             source?: 'unknown' | 'cached' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | undefined;
-                            confidence?: 'unknown' | 'estimated' | 'exact' | 'stale' | 'derived' | undefined;
+                            confidence?: 'unknown' | 'exact' | 'estimated' | 'stale' | 'derived' | undefined;
                         } | undefined;
                         recoveryCreditDetails?: Record<string, {
                             remainingCount: number;
@@ -2429,40 +2552,45 @@ export type UsageActionResultById = {
                             retryAtMs?: number | undefined;
                         }[] | undefined;
                     }[];
-                    meters: {
-                        meterId: string;
-                        label: string;
-                        used: number | null;
-                        limit: number | null;
-                        unit: 'unknown' | 'tokens' | 'count' | 'credits' | 'usd' | 'requests';
-                        utilizationPct: number | null;
-                        resetsAt: number | null;
-                        status: 'estimated' | 'unavailable' | 'ok';
+                    meterDefinitions: {
                         details: {
-                            note?: string | null | undefined;
                             code?: string | undefined;
-                            rawScope?: string | undefined;
-                            remainingPct?: number | null | undefined;
                             scope?: 'unknown' | 'model' | 'session' | 'tokens' | 'requests' | 'primary' | 'secondary' | 'daily' | 'weekly' | 'monthly' | 'five_hour' | 'seven_day' | 'rolling' | undefined;
                             providerLimitId?: string | undefined;
+                            note?: string | null | undefined;
+                            rawScope?: string | undefined;
                             limitCategory?: 'unknown' | 'disabled' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | undefined;
                         };
-                        remaining?: number | null | undefined;
-                        remainingPct?: number | null | undefined;
-                        usedPct?: number | null | undefined;
-                        resetAtMs?: number | null | undefined;
+                        meterId: string;
+                        label: string;
+                        status: 'estimated' | 'unavailable' | 'ok';
+                        unit: 'unknown' | 'tokens' | 'count' | 'credits' | 'usd' | 'requests';
+                        source?: 'unknown' | 'cached' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | undefined;
+                        modelId?: string | null | undefined;
+                        scope?: 'unknown' | 'model' | 'session' | 'tokens' | 'requests' | 'primary' | 'secondary' | 'daily' | 'weekly' | 'monthly' | 'five_hour' | 'seven_day' | 'rolling' | undefined;
+                        confidence?: 'unknown' | 'exact' | 'estimated' | 'stale' | 'derived' | undefined;
                         resetSource?: 'unknown' | 'provider' | 'manual' | 'in_band_snapshot' | 'header' | 'body' | 'provider_event' | 'provider_probe' | 'computed' | 'retry_after' | undefined;
                         providerLimitId?: string | undefined;
                         windowDurationMs?: number | undefined;
-                        modelId?: string | null | undefined;
                         isExhausted?: boolean | undefined;
                         isSoftLimited?: boolean | undefined;
                         isCapacityLimited?: boolean | undefined;
-                        source?: 'unknown' | 'cached' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | undefined;
-                        scope?: 'unknown' | 'model' | 'session' | 'tokens' | 'requests' | 'primary' | 'secondary' | 'daily' | 'weekly' | 'monthly' | 'five_hour' | 'seven_day' | 'rolling' | undefined;
                         limitScope?: 'unknown' | 'model' | 'session' | 'workspace' | 'account' | 'provider' | 'organization' | undefined;
-                        confidence?: 'unknown' | 'estimated' | 'exact' | 'stale' | 'derived' | undefined;
                     }[];
+                    meters: [
+                        number,
+                        number | null,
+                        number | null,
+                        number | null,
+                        number | null,
+                        {
+                            remaining?: number | null | undefined;
+                            remainingPct?: number | null | undefined;
+                            usedPct?: number | null | undefined;
+                            resetAtMs?: number | null | undefined;
+                            detailsRemainingPct?: number | null | undefined;
+                        }
+                    ][];
                     subscriptions: {
                         renewal: 'unknown' | 'on' | 'off';
                         status: 'none' | 'unavailable' | 'subscribed';
@@ -2499,15 +2627,191 @@ export type UsageActionResultById = {
                         } | undefined;
                     }[];
                     observations: [
-                        string,
-                        number,
-                        number,
-                        number,
                         number,
                         number[],
                         number | null,
-                        number | null
+                        [
+                            string,
+                            number,
+                            number,
+                            number | null
+                        ][]
                     ][];
+                } | undefined;
+                pageFacts?: {
+                    historyStatus: 'complete' | 'partial';
+                    earlierCurves: {
+                        meterId: string;
+                        value: {
+                            status: 'unavailable';
+                            reason: 'not_loaded' | 'unknown_window';
+                        } | {
+                            status: 'available';
+                            curves: {
+                                window: {
+                                    recordId: string;
+                                    meterId: string;
+                                    resetAtMs: number;
+                                    windowStartAtMs: number;
+                                    windowDurationMs: number;
+                                };
+                                points: {
+                                    elapsedFraction: number;
+                                    usedFraction: number;
+                                }[];
+                            }[];
+                            excluded: {
+                                window: {
+                                    recordId: string;
+                                    meterId: string;
+                                    resetAtMs: number;
+                                    windowStartAtMs: number;
+                                    windowDurationMs: number;
+                                };
+                                reason: 'unknown_window' | 'entitlement_changed' | 'denominator_changed' | 'reset_changed' | 'inconsistent_counters' | 'counter_reset' | 'single_reading';
+                            }[];
+                        };
+                    }[];
+                    resetWitness: {
+                        id: string;
+                        observedAtMs: number;
+                        snapshot: {
+                            v: 1;
+                            recordId: string;
+                            recordKey: {
+                                providerId: string;
+                                accountSubjectId: string;
+                                subjectKind: 'unknown' | 'project' | 'workspace' | 'account' | 'organization' | 'tenant' | 'subscription' | 'modelFamily';
+                                quotaScope: 'unknown' | 'model' | 'project' | 'workspace' | 'account' | 'provider' | 'organization';
+                                quotaScopeId?: string | undefined;
+                            };
+                            providerId: string;
+                            accountSubject: {
+                                kind: 'providerSubject' | 'provisionalLocalSubject';
+                                id: string;
+                                mergeKey?: string | undefined;
+                            };
+                            observedAtMs: number;
+                            fetchedAtMs: number;
+                            staleAfterMs: number;
+                            source: 'unknown' | 'cached' | 'runtimeSignal' | 'providerHttp' | 'proxy' | 'connectedServiceProbe' | 'manual';
+                            confidence: 'unknown' | 'estimated' | 'confirmed';
+                            state: 'not_loaded' | 'loaded_empty' | 'loaded_data' | 'stale_data' | 'error_last_known_good';
+                            meters: {
+                                meterId: string;
+                                label: string;
+                                used: number | null;
+                                limit: number | null;
+                                unit: 'unknown' | 'tokens' | 'count' | 'credits' | 'usd' | 'requests';
+                                utilizationPct: number | null;
+                                resetsAt: number | null;
+                                status: 'estimated' | 'unavailable' | 'ok';
+                                details: {
+                                    note?: string | null | undefined;
+                                    code?: string | undefined;
+                                    rawScope?: string | undefined;
+                                    remainingPct?: number | null | undefined;
+                                    scope?: 'unknown' | 'model' | 'session' | 'tokens' | 'requests' | 'primary' | 'secondary' | 'daily' | 'weekly' | 'monthly' | 'five_hour' | 'seven_day' | 'rolling' | undefined;
+                                    providerLimitId?: string | undefined;
+                                    limitCategory?: 'unknown' | 'disabled' | 'usage_limit' | 'rate_limit' | 'capacity' | 'temporary_throttle' | 'auth_invalid' | 'plan_invalid' | 'validation_failed' | undefined;
+                                };
+                                remaining?: number | null | undefined;
+                                remainingPct?: number | null | undefined;
+                                usedPct?: number | null | undefined;
+                                resetAtMs?: number | null | undefined;
+                                resetSource?: 'unknown' | 'provider' | 'manual' | 'in_band_snapshot' | 'header' | 'body' | 'provider_event' | 'provider_probe' | 'computed' | 'retry_after' | undefined;
+                                providerLimitId?: string | undefined;
+                                windowDurationMs?: number | undefined;
+                                modelId?: string | null | undefined;
+                                isExhausted?: boolean | undefined;
+                                isSoftLimited?: boolean | undefined;
+                                isCapacityLimited?: boolean | undefined;
+                                source?: 'unknown' | 'cached' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | undefined;
+                                scope?: 'unknown' | 'model' | 'session' | 'tokens' | 'requests' | 'primary' | 'secondary' | 'daily' | 'weekly' | 'monthly' | 'five_hour' | 'seven_day' | 'rolling' | undefined;
+                                limitScope?: 'unknown' | 'model' | 'session' | 'workspace' | 'account' | 'provider' | 'organization' | undefined;
+                                confidence?: 'unknown' | 'exact' | 'estimated' | 'stale' | 'derived' | undefined;
+                            }[];
+                            planLabel?: string | null | undefined;
+                            accountLabel?: string | null | undefined;
+                            subscription?: {
+                                status: 'none' | 'unavailable' | 'subscribed';
+                                renewal: 'unknown' | 'on' | 'off';
+                                observedAtMs: number;
+                                staleAfterMs: number;
+                                currentPeriodStartAtMs?: number | undefined;
+                                currentPeriodEndAtMs?: number | undefined;
+                                monetaryFacts?: {
+                                    kind: 'paid' | 'list';
+                                    amount: number;
+                                    currency: string;
+                                    period: {
+                                        startAtMs: number;
+                                        endAtMs: number;
+                                    };
+                                    source: {
+                                        kind: 'provider' | 'published';
+                                        id: string;
+                                        version: string;
+                                    };
+                                    effectiveAtMs: number;
+                                    asOfMs: number;
+                                    tier?: string | undefined;
+                                    region?: string | undefined;
+                                }[] | undefined;
+                                enteredMonthlyPrice?: {
+                                    amount: number;
+                                    currency: string;
+                                    enteredAtMs: number;
+                                } | undefined;
+                                lastRefreshError?: {
+                                    observedAtMs: number;
+                                    code: 'network' | 'malformed' | 'provider_backoff' | 'auth_failure' | 'missing_auth';
+                                    status?: number | undefined;
+                                } | undefined;
+                            } | undefined;
+                            recoveryCredits?: {
+                                availableCount: number;
+                                credits: {
+                                    kind: 'unknown' | 'usage_limit_reset' | 'rate_limit_reset' | 'quota_reset';
+                                    status: 'unknown' | 'available' | 'unavailable' | 'redeeming' | 'redeemed' | 'expired';
+                                    id?: string | undefined;
+                                    providerResetType?: string | undefined;
+                                    appliesToProviderLimitId?: string | null | undefined;
+                                    grantedAtMs?: number | null | undefined;
+                                    expiresAtMs?: number | null | undefined;
+                                    redeemStartedAtMs?: number | null | undefined;
+                                    redeemedAtMs?: number | null | undefined;
+                                    title?: string | null | undefined;
+                                    description?: string | null | undefined;
+                                }[];
+                                totalCount?: number | undefined;
+                                nextExpiresAtMs?: number | null | undefined;
+                                source?: 'unknown' | 'cached' | 'provider_api' | 'background_fetch' | 'runtime_event' | 'runtime_probe' | 'in_band_snapshot' | 'in_band_provider_snapshot' | 'manual_refresh' | 'user_probe' | undefined;
+                                confidence?: 'unknown' | 'exact' | 'estimated' | 'stale' | 'derived' | undefined;
+                            } | undefined;
+                            recoveryCreditDetails?: Record<string, {
+                                remainingCount: number;
+                                appliesToProviderLimitIds: string[];
+                                unavailableReason?: 'unknown' | 'expired' | 'paused' | 'cooldown' | 'ineligible' | 'not_selected' | 'provider_unavailable' | 'not_started' | 'consumed' | undefined;
+                            }> | undefined;
+                            diagnostics?: {
+                                kind: 'unknown' | 'unavailable' | 'validation' | 'provider_http' | 'runtime_signal' | 'projection' | 'storage';
+                                code?: string | undefined;
+                                message?: string | undefined;
+                                status?: number | undefined;
+                                headers?: Record<string, string> | undefined;
+                                observedAtMs?: number | undefined;
+                                retryAtMs?: number | undefined;
+                            }[] | undefined;
+                        };
+                    } | null;
+                    witnessedResets: {
+                        recordId: string;
+                        meterId: string;
+                        resetAtMs: number;
+                        windowStartAtMs: number;
+                        windowDurationMs: number;
+                    }[];
                 } | undefined;
                 unusedCapacity?: {
                     historyStatus: 'partial' | 'not_loaded' | 'unavailable' | 'returned_page';
@@ -2664,7 +2968,7 @@ export type UsageActionResultById = {
                             startMs?: number | undefined;
                             endMs?: number | undefined;
                         };
-                        coverage: 'partial' | 'complete';
+                        coverage: 'complete' | 'partial';
                         pricedContributionCount: number;
                         unpricedContributionCount: number;
                         unknownAccountContributionCount: number;
@@ -2765,7 +3069,7 @@ export type UsageActionResultById = {
                     observedWaitMs: number | null;
                     asOfMs: number | null;
                     coverage: 'partial' | 'complete_recorded_history';
-                    accountingCoverage: 'partial' | 'complete';
+                    accountingCoverage: 'complete' | 'partial';
                     intervalCoverage: 'unknown' | 'partial' | 'complete_for_supplied_facts';
                     method: 'recorded_calendar_week';
                     humanPresence: 'unknown';
@@ -2792,7 +3096,9 @@ export type UsageActionResultById = {
                     session: string | string[] | null;
                     costBasis: 'auto' | 'reported' | 'estimated' | 'api_equivalent';
                     metric: 'tokens' | 'cost';
+                    includeAccounting: boolean;
                     includeSessionEvidence: boolean;
+                    includeTranscriptEvidence: boolean;
                     includeWorkEvidence: boolean;
                     breakdown: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
                     modelIds: string[];
@@ -2812,7 +3118,6 @@ export type UsageActionResultById = {
                     errorCode?: string | undefined;
                 };
                 accounting?: {
-                    [x: string]: any;
                     v: 1;
                     totals: {
                         eventCount: number;
@@ -3663,8 +3968,27 @@ export type UsageActionResultById = {
                         complete: boolean;
                         source: string;
                     }[] | undefined;
+                    priceCatalog?: {
+                        v: 1;
+                        models: Record<string, {
+                            inputUsdPerMillion: number;
+                            outputUsdPerMillion: number;
+                            cacheReadUsdPerMillion?: number | undefined;
+                            cacheWriteUsdPerMillion?: number | undefined;
+                            reasoningUsdPerMillion?: number | undefined;
+                            provider?: string | undefined;
+                            sourceUrl?: string | undefined;
+                        }>;
+                        provenance: {
+                            source: 'litellm';
+                            origin: 'bundled' | 'fetched' | 'cached';
+                            asOfMs: number;
+                            revision: string;
+                            fetchStatus: 'error' | 'ready' | 'disabled';
+                            errorCode?: string | undefined;
+                        };
+                    } | undefined;
                     contributions?: {
-                        [x: string]: any;
                         id: string;
                         observedAtMs: number;
                         sessionId: string | null;
@@ -3703,6 +4027,8 @@ export type UsageActionResultById = {
                             windowTokens?: number | null | undefined;
                         } | undefined;
                         backendMode?: string | null | undefined;
+                        providerId?: string | null | undefined;
+                        providerConnectionId?: string | null | undefined;
                         providerAttribution?: 'unknown' | 'known' | undefined;
                         providerSource?: 'unknown' | 'native' | 'provider' | undefined;
                         connectedAccount?: {
@@ -3734,7 +4060,7 @@ export type UsageActionResultById = {
                         total: number;
                     } | undefined;
                     coverage?: {
-                        status: 'unknown' | 'partial' | 'complete';
+                        status: 'unknown' | 'complete' | 'partial';
                         reasons: ('missing_baseline' | 'counter_discontinuity' | 'ambiguous_overlap' | 'unattributed_model' | 'unpriced_tokens' | 'unknown_source' | 'incomplete_history' | 'ranked_truncation' | 'unknown_token_categories')[];
                         missingDimensions: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
                         range: {
@@ -3782,7 +4108,6 @@ export type UsageActionResultById = {
             work?: {
                 allocations: {
                     contribution: {
-                        [x: string]: any;
                         id: string;
                         observedAtMs: number;
                         sessionId: string | null;
@@ -3821,6 +4146,8 @@ export type UsageActionResultById = {
                             windowTokens?: number | null | undefined;
                         } | undefined;
                         backendMode?: string | null | undefined;
+                        providerId?: string | null | undefined;
+                        providerConnectionId?: string | null | undefined;
                         providerAttribution?: 'unknown' | 'known' | undefined;
                         providerSource?: 'unknown' | 'native' | 'provider' | undefined;
                         connectedAccount?: {
@@ -4009,7 +4336,6 @@ export type UsageActionResultById = {
                 }[];
                 branchAllocations: {
                     contribution: {
-                        [x: string]: any;
                         id: string;
                         observedAtMs: number;
                         sessionId: string | null;
@@ -4048,6 +4374,8 @@ export type UsageActionResultById = {
                             windowTokens?: number | null | undefined;
                         } | undefined;
                         backendMode?: string | null | undefined;
+                        providerId?: string | null | undefined;
+                        providerConnectionId?: string | null | undefined;
                         providerAttribution?: 'unknown' | 'known' | undefined;
                         providerSource?: 'unknown' | 'native' | 'provider' | undefined;
                         connectedAccount?: {
@@ -4237,8 +4565,12 @@ export type UsageActionResultById = {
                         estimatedTokenCount: 0;
                     };
                 } | null;
+                sessionCoverage?: {
+                    selected: number;
+                    admitted: number;
+                } | undefined;
                 autopsy?: {
-                    coverage: 'partial' | 'complete';
+                    coverage: 'complete' | 'partial';
                     events: {
                         evidenceId: string;
                         sessionId: string;
@@ -4272,7 +4604,7 @@ export type UsageActionResultById = {
                         };
                         asOfMs: number | null;
                         currentness: 'unknown' | 'stale' | 'current';
-                        coverage: 'unknown' | 'partial' | 'complete';
+                        coverage: 'unknown' | 'complete' | 'partial';
                         severity: 'info' | 'warning';
                         classification: 'informational' | 'cost_linked';
                         basis: {
@@ -4540,7 +4872,7 @@ export type UsageActionResultById = {
                             candidateCost: number;
                             currency: string;
                             costKind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice';
-                            costCoverage?: 'partial' | 'complete' | undefined;
+                            costCoverage?: 'complete' | 'partial' | undefined;
                             providerAttribution?: 'unknown' | 'known' | undefined;
                             modelResponseSource?: {
                                 kind: 'native';
@@ -4552,8 +4884,8 @@ export type UsageActionResultById = {
                                     accountId: string;
                                 } | null;
                             } | {
-                                [x: string]: any;
                                 kind: 'provider';
+                                providerId: string | null;
                                 providerConnectionId: string;
                             } | undefined;
                             candidateResponseSource?: {
@@ -4566,8 +4898,8 @@ export type UsageActionResultById = {
                                     accountId: string;
                                 } | null;
                             } | {
-                                [x: string]: any;
                                 kind: 'provider';
+                                providerId: string | null;
                                 providerConnectionId: string;
                             } | undefined;
                         } | undefined;
@@ -4601,7 +4933,7 @@ export type UsageActionResultById = {
                     };
                     asOfMs: number | null;
                     currentness: 'unknown' | 'stale' | 'current';
-                    coverage: 'unknown' | 'partial' | 'complete';
+                    coverage: 'unknown' | 'complete' | 'partial';
                     severity: 'info' | 'warning';
                     classification: 'informational' | 'cost_linked';
                     basis: {
@@ -4869,7 +5201,7 @@ export type UsageActionResultById = {
                         candidateCost: number;
                         currency: string;
                         costKind: 'reported' | 'estimated' | 'api_equivalent' | 'invoice';
-                        costCoverage?: 'partial' | 'complete' | undefined;
+                        costCoverage?: 'complete' | 'partial' | undefined;
                         providerAttribution?: 'unknown' | 'known' | undefined;
                         modelResponseSource?: {
                             kind: 'native';
@@ -4881,8 +5213,8 @@ export type UsageActionResultById = {
                                 accountId: string;
                             } | null;
                         } | {
-                            [x: string]: any;
                             kind: 'provider';
+                            providerId: string | null;
                             providerConnectionId: string;
                         } | undefined;
                         candidateResponseSource?: {
@@ -4895,8 +5227,8 @@ export type UsageActionResultById = {
                                 accountId: string;
                             } | null;
                         } | {
-                            [x: string]: any;
                             kind: 'provider';
+                            providerId: string | null;
                             providerConnectionId: string;
                         } | undefined;
                     } | undefined;
@@ -4906,6 +5238,10 @@ export type UsageActionResultById = {
                         premiumUsd: number | null;
                     }[] | undefined;
                 }[];
+                sessionCoverage?: {
+                    selected: number;
+                    admitted: number;
+                } | undefined;
                 digestSuggestion?: {
                     kind: 'recurring_automation';
                     queryKey: string;
@@ -4929,7 +5265,9 @@ export type UsageActionResultById = {
                         session: string | string[] | null;
                         costBasis: 'auto' | 'reported' | 'estimated' | 'api_equivalent';
                         metric: 'tokens' | 'cost';
+                        includeAccounting: boolean;
                         includeSessionEvidence: boolean;
+                        includeTranscriptEvidence: boolean;
                         includeWorkEvidence: boolean;
                         breakdown: ('agent' | 'model' | 'session' | 'project' | 'workspace' | 'backendMode' | 'source' | 'machine')[];
                         modelIds: string[];
@@ -4956,8 +5294,10 @@ export type UsageActionResultById = {
                                 name: string;
                                 valueType: 'string' | 'number' | 'boolean' | 'json';
                                 required: boolean;
+                                multiple?: boolean | undefined;
                                 enum?: string[] | undefined;
                                 default?: JsonValue | undefined;
+                                defaultFrom?: 'origin_session' | undefined;
                                 description?: string | undefined;
                                 optionsSourceId?: string | undefined;
                                 inputType?: {
@@ -4967,7 +5307,7 @@ export type UsageActionResultById = {
                                     hostType: 'usageQuery';
                                     field?: 'period' | 'session' | undefined;
                                 } | {
-                                    hostType: 'session' | 'workspace' | 'machine';
+                                    hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                                 } | undefined;
                             }[];
                             defaults: {
@@ -5099,6 +5439,9 @@ export type UsageActionResultById = {
                                 } | {
                                     kind: 'origin_session';
                                 } | {
+                                    kind: 'input';
+                                    name: string;
+                                } | {
                                     kind: 'from_step';
                                     producer: {
                                         blockId: string;
@@ -5184,6 +5527,23 @@ export type UsageActionResultById = {
                                         updatedAt: number;
                                     } | null | undefined;
                                     effort?: string | undefined;
+                                } | {
+                                    kind: 'input';
+                                    name: string;
+                                    path?: (string | number)[] | undefined;
+                                } | {
+                                    kind: 'item';
+                                    field: 'value';
+                                    path?: (string | number)[] | undefined;
+                                } | undefined;
+                                participant?: {
+                                    kind: 'input';
+                                    name: string;
+                                    path?: (string | number)[] | undefined;
+                                } | {
+                                    kind: 'item';
+                                    field: 'value';
+                                    path?: (string | number)[] | undefined;
                                 } | undefined;
                                 executionTarget?: {
                                     kind: 'session';
@@ -5207,6 +5567,7 @@ export type UsageActionResultById = {
                                 profileId?: string | undefined;
                                 workspaceWrites?: 'deny' | 'allow' | undefined;
                                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                                canDelegateToOtherRoles?: boolean | undefined;
                             } | {
                                 roleId: string;
                                 name: string;
@@ -5225,6 +5586,7 @@ export type UsageActionResultById = {
                                 profileId?: string | undefined;
                                 workspaceWrites?: 'deny' | 'allow' | undefined;
                                 secondOpinion?: 'off' | 'encouraged' | undefined;
+                                canDelegateToOtherRoles?: boolean | undefined;
                             })[] | undefined;
                             blocks: readonly PluginActionWorkflowBlockV1[];
                             finalOutput?: {
@@ -5259,7 +5621,7 @@ export type UsageActionResultById = {
         mediaType: string;
         fileName: string;
         base64: string;
-        fields: ('breakdowns' | 'totals' | 'series' | 'insights' | 'activity' | 'leaders' | 'modelTimeline' | 'engineTimeline' | 'messageStats' | 'costPresentation' | 'costFacts' | 'priceCatalog' | 'coverage' | 'tokenCategories' | 'contributions' | 'resets' | 'renewals')[];
+        fields: ('breakdowns' | 'totals' | 'series' | 'insights' | 'activity' | 'leaders' | 'modelTimeline' | 'engineTimeline' | 'messageStats' | 'costPresentation' | 'costFacts' | 'priceCatalog' | 'coverage' | 'contributions' | 'tokenCategories' | 'resets' | 'renewals')[];
         asOfMs: number | null;
     };
     readonly "usage.coach.apply": {
@@ -5365,22 +5727,42 @@ export type UsageActionResultById = {
             anchor: string;
             appliedValue: JsonValue;
             owner: {
+                before: {
+                    unset: true;
+                } | {
+                    value: JsonValue;
+                };
+                applied: {
+                    unset: true;
+                } | {
+                    value: JsonValue;
+                };
                 scope: {
                     serverId: string;
                     accountId: string;
                 };
                 beforeVersion: number;
                 appliedVersion: number;
-                before: {
-                    unset: true;
-                } | {
-                    value: string | number | boolean | null;
+            } | {
+                changes: {
+                    before: {
+                        unset: true;
+                    } | {
+                        value: JsonValue;
+                    };
+                    applied: {
+                        unset: true;
+                    } | {
+                        value: JsonValue;
+                    };
+                    key: string;
+                }[];
+                scope: {
+                    serverId: string;
+                    accountId: string;
                 };
-                applied: {
-                    unset: true;
-                } | {
-                    value: string | number | boolean | null;
-                };
+                beforeVersion: number;
+                appliedVersion: number;
             };
         } | {
             kind: 'model';
@@ -5440,8 +5822,50 @@ export type UsageActionResultById = {
                 updatedAt: number;
             };
         } | {
-            [x: string]: any;
             kind: 'mcp_binding';
+            owner: {
+                serverId: string;
+                rules: {
+                    id: string;
+                    target: {
+                        t: 'allMachines';
+                    } | {
+                        t: 'machine';
+                        machineId: string;
+                    } | {
+                        t: 'project';
+                        projectKey: string;
+                    } | {
+                        t: 'workspace';
+                        machineId: string;
+                        workspaceRoot: string;
+                    };
+                    enabled: boolean;
+                    createdAt: number;
+                    updatedAt: number;
+                    agentId?: string | undefined;
+                }[];
+                previous: {
+                    id: string;
+                    target: {
+                        t: 'allMachines';
+                    } | {
+                        t: 'machine';
+                        machineId: string;
+                    } | {
+                        t: 'project';
+                        projectKey: string;
+                    } | {
+                        t: 'workspace';
+                        machineId: string;
+                        workspaceRoot: string;
+                    };
+                    enabled: boolean;
+                    createdAt: number;
+                    updatedAt: number;
+                    agentId?: string | undefined;
+                }[];
+            };
             appliedRevision: number;
         } | undefined;
         spawnedSessionId?: string | undefined;

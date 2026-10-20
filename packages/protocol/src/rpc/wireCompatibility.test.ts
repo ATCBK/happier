@@ -38,9 +38,12 @@ import {
 describe('rpc wire compatibility', () => {
   it('pins the current negotiation and Session access refusal literals', () => {
     expect(RPC_ERROR_CODES).toEqual({
+      CLIENT_AMBIGUOUS: 'RPC_CLIENT_AMBIGUOUS',
+      CLIENT_NOT_AVAILABLE: 'RPC_CLIENT_NOT_AVAILABLE',
       UPDATE_REQUIRED: 'RPC_UPDATE_REQUIRED',
       METHOD_NOT_AVAILABLE: 'RPC_METHOD_NOT_AVAILABLE',
       METHOD_NOT_FOUND: 'RPC_METHOD_NOT_FOUND',
+      OUTCOME_UNKNOWN: 'RPC_OUTCOME_UNKNOWN',
       FORBIDDEN: 'RPC_FORBIDDEN',
       SESSION_MACHINE_CONTROL_UNAVAILABLE: 'RPC_SESSION_MACHINE_CONTROL_UNAVAILABLE',
       TEAM_AUTHENTICATION_REQUIRED: 'RPC_TEAM_AUTHENTICATION_REQUIRED',
@@ -178,7 +181,7 @@ describe('rpc wire compatibility', () => {
     })).toBeNull();
   });
 
-  it('classifies only permission-decision RPCs and accepts only a strict server-stamped account actor', () => {
+  it('classifies decision RPCs and accepts only a strict server-stamped account actor', () => {
     expect(SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS.SESSION_PERMISSION_RESPOND).toBe(
       'session.permission.respond',
     );
@@ -186,10 +189,20 @@ describe('rpc wire compatibility', () => {
       `session-1:${RPC_METHODS.SESSION_PERMISSION_RESPOND}`,
     )).toBe(RPC_METHODS.SESSION_PERMISSION_RESPOND);
     expect(resolveSocketRpcSessionPermissionDecisionAuthorizationMethod('session-1:permission')).toBe('permission');
+    expect(resolveSocketRpcSessionPermissionDecisionAuthorizationMethod('session-1:approval.request.decide')).toBe('approval.request.decide');
     expect(resolveSocketRpcSessionPermissionDecisionAuthorizationMethod(
       `session-1:${RPC_METHODS.SESSION_USER_ACTION_ANSWER}`,
-    )).toBeNull();
+    )).toBe(RPC_METHODS.SESSION_USER_ACTION_ANSWER);
     expect(resolveSocketRpcSessionPermissionDecisionAuthorizationMethod('session-1:permission.extra')).toBeNull();
+
+    const requesterDecision = { kind: SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS.SESSION_PERMISSION_RESPOND,
+      sessionId: 'session-1', actor: { kind: 'accountUser', accountId: 'requester', relationship: 'sharedApprover' },
+      authentication: { tokenEpoch: 4, evidence: { v: 1, evidence: [{ kind: 'home_method', methodId: 'key_challenge' }] } } };
+    expect(parseSocketRpcAuthorizationContext(requesterDecision)).toEqual(requesterDecision);
+    expect(parseSocketRpcAuthorizationContext({ ...requesterDecision,
+      authentication: { ...requesterDecision.authentication, authority: 'present_user' } })).toBeNull();
+    expect(parseSocketRpcAuthorizationContext({ ...requesterDecision,
+      authentication: { tokenEpoch: -1 } })).toBeNull();
 
     expect(parseSocketRpcAuthorizationContext({
       kind: SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS.SESSION_PERMISSION_RESPOND,

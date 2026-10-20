@@ -1,11 +1,10 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { applyProjectAccountRowsFixture, createDeferred, renderHook, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { decideApprovalAsInbox, installOwnMachineApprovalReplayBoundary, replayApprovedAsDaemon } from '@/dev/testkit/harness/approvalInbox';
-import { renderHook } from '@/dev/testkit/hooks/renderHook';
-import { applyProjectAccountRowsFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
 
@@ -38,16 +37,24 @@ const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/act
 const { inspectMachineTerminalMemberApproval } = await import('@/components/sessions/terminal/machineTerminalApproval');
 const { ApprovalRequestV2Schema } = await import('@happier-dev/protocol/approvals/approvalRequestV1');
 const { buildApprovalRequestArtifactHeaderV1 } = await import('@happier-dev/protocol/approvals/approvalArtifactHeaderV1');
-const { createDeferred } = await import('@/dev/testkit');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
 const { settingsParse } = await import('@/sync/domains/settings/settings');
 const { useMachineTerminalSession } = await import('./useMachineTerminalSession');
 
 const wrapper: React.ComponentType<React.PropsWithChildren> = ({ children }) => <AppPaneProvider>{children}</AppPaneProvider>;
+let restoredAccount: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 async function setup() {
     const serverId = await harness.addHome({ name: 'Project Home', serverUrl: 'https://project-approval-continuity.test',
         serverIdentityId: 'srv_project-approval-continuity', accountId: 'bob', currentAccount: true });
     await installOwnMachineApprovalReplayBoundary({ harness, serverId, accountId: 'bob', machineId: 'machine' });
     await harness.requireUiApproval(serverId, 'machines.terminal.open');
+    const serverUrl = 'https://project-approval-continuity.test';
+    const credentials = await TokenStorage.getCredentialsForServerUrl(serverUrl);
+    if (!credentials) throw new Error('Expected saved Home credentials');
+    // Saving a Home does not admit its Account. Restore through real Sync before
+    // installing Project rows or capturing the terminal's Account lifetime.
+    restoredAccount = await restoreServerAccountForTest({ serverUrl, serverIdentityId: 'srv_project-approval-continuity',
+        credentials, request: async (url, init) => harness.request(url, init) });
     publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
     const scope = storage.getState().profileScope;
     if (!scope) throw new Error('Expected admitted Account scope');
@@ -71,7 +78,8 @@ async function setup() {
 
 describe('pending terminal creation follows its existing member, not its mounted view', () => {
     let disposeLoader: (() => void) | undefined;
-    afterEach(() => { disposeLoader?.(); disposeLoader = undefined; });
+    afterEach(async () => { disposeLoader?.(); disposeLoader = undefined;
+        await restoredAccount?.dispose(); restoredAccount = undefined; });
     beforeEach(async () => { await standardCleanup(); await harness.reset();
         storage.getState().applyLocalSettings({ appPaneScopesV1: {} });
         disposeLoader = await installRealActionExecutorModuleLoader();
@@ -429,7 +437,7 @@ describe('pending terminal creation follows its existing member, not its mounted
         try {
             await waitForHomeGovernance(() => expect(hook.getCurrent().approvalPending).toBe(true));
             const artifact = await account.fetchArtifact(hook.getCurrent().approvalId!);
-            if (typeof artifact?.body !== 'string') throw new Error('Expected inline real pending approval Artifact');
+            if (!artifact?.isDecrypted || typeof artifact.body !== 'string') throw new Error('Expected inline real pending approval Artifact');
             const member = readSessionTerminalWorkspaceForScope(fixture.scopeId)?.tabs.flatMap(tab => tab.terminals)
                 .find(member => member.id === fixture.memberId);
             if (!member?.pendingActionApproval) throw new Error('Expected actual member Artifact association');

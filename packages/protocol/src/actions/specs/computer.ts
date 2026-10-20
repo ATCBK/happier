@@ -14,6 +14,7 @@ import {
   ComputerSelectedTargetResponseV1Schema,
   ComputerOpenSettingsRequestV1Schema,
   ComputerOpenSettingsResponseV1Schema,
+  resolveComputerAccess,
 } from '../../computer/v1.js';
 import type { RuntimeActionSpecFamily } from './common.js';
 import type { ApprovalNarrowing } from '../../approvals/approvalNarrowing.js';
@@ -27,7 +28,7 @@ export const computerTargetSelectionNarrowing: ApprovalNarrowing = {
     const { target: _sourceTarget, access: sourceAccess, ...sourceSubject } = source.data;
     const { target: _chosenTarget, access: chosenAccess, ...chosenSubject } = selection.data;
     if (!sameStrictJsonValue(sourceSubject, chosenSubject)
-      || (sourceAccess === 'see' && (chosenAccess ?? 'use') !== 'see')) return null;
+      || (sourceAccess === 'see' && resolveComputerAccess(chosenAccess) !== 'see')) return null;
     return selection.data;
   },
 };
@@ -38,7 +39,36 @@ export function projectComputerObservationInput(input: unknown): unknown {
   return observation;
 }
 
-export const COMPUTER_RUNTIME_ACTION_INPUT_SCHEMAS = Object.freeze({
+type ComputerRuntimeActionInputSchemas = Readonly<{
+  'computer.targets.list': typeof ComputerTargetsListRequestV1Schema;
+  'computer.target.get': typeof ComputerMachineRequestV1Schema;
+  'computer.target.select': typeof ComputerTargetSelectRequestV1Schema;
+  'computer.permissions.openSettings': typeof ComputerOpenSettingsRequestV1Schema;
+  'computer.capture': typeof ComputerTargetRequestV1Schema;
+  'computer.query': typeof ComputerTargetRequestV1Schema;
+  'computer.input': typeof ComputerInputRequestV1Schema;
+  'computer.secret.fill': typeof ComputerSecretFillRequestV1Schema;
+  'computer.control.status': typeof ComputerTargetRequestV1Schema;
+  'computer.control.interrupt': typeof ComputerTargetRequestV1Schema;
+  'computer.control.handBack': typeof ComputerTargetRequestV1Schema;
+  'computer.target.close': typeof ComputerTargetRequestV1Schema;
+}>;
+type ComputerRuntimeActionOutputSchemas = Readonly<{
+  'computer.targets.list': typeof ComputerTargetsListResponseV1Schema;
+  'computer.target.get': typeof ComputerSelectedTargetResponseV1Schema;
+  'computer.target.select': typeof ComputerSelectedTargetResponseV1Schema;
+  'computer.permissions.openSettings': typeof ComputerOpenSettingsResponseV1Schema;
+  'computer.capture': typeof ComputerCaptureResponseV1Schema;
+  'computer.query': typeof ComputerQueryResponseV1Schema;
+  'computer.input': typeof ComputerActionResultV1Schema;
+  'computer.secret.fill': typeof SecretFillSettlementV1Schema;
+  'computer.control.status': typeof ComputerControlStatusResponseV1Schema;
+  'computer.control.interrupt': typeof ComputerActionResultV1Schema;
+  'computer.control.handBack': typeof ComputerActionResultV1Schema;
+  'computer.target.close': typeof ComputerActionResultV1Schema;
+}>;
+
+export const COMPUTER_RUNTIME_ACTION_INPUT_SCHEMAS: ComputerRuntimeActionInputSchemas = Object.freeze({
   'computer.targets.list': ComputerTargetsListRequestV1Schema,
   'computer.target.get': ComputerMachineRequestV1Schema,
   'computer.target.select': ComputerTargetSelectRequestV1Schema,
@@ -53,7 +83,7 @@ export const COMPUTER_RUNTIME_ACTION_INPUT_SCHEMAS = Object.freeze({
   'computer.target.close': ComputerTargetRequestV1Schema,
 });
 
-export const COMPUTER_RUNTIME_ACTION_OUTPUT_SCHEMAS = Object.freeze({
+export const COMPUTER_RUNTIME_ACTION_OUTPUT_SCHEMAS: ComputerRuntimeActionOutputSchemas = Object.freeze({
   'computer.targets.list': ComputerTargetsListResponseV1Schema,
   'computer.target.get': ComputerSelectedTargetResponseV1Schema,
   'computer.target.select': ComputerSelectedTargetResponseV1Schema,

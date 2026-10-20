@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { spawn } from 'node:child_process';
 import { setImmediate } from 'node:timers/promises';
 import { MachineGuardPolicyV1Schema } from '@happier-dev/protocol/machines/guard/guardPolicyV1';
@@ -23,6 +23,16 @@ import { MachineProcessesAnswerV1Schema } from '@happier-dev/protocol/machines/p
 import { createMachineVitalsSampler } from '../../vitals/createMachineVitalsSampler';
 import { createMachineVitalsReader } from '../../vitals/createMachineVitalsReader';
 import { createMinuteHistoryStore } from '../../vitals/history/minuteHistoryStore';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+
+let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
+beforeAll(async () => { runtime = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+  runtimeOptions: { pluginIds: ['happier.agent.codex'] } }); });
+afterAll(async () => {
+  try { await runtime?.dispose(); }
+  finally { await pluginReloadController.shutdown(); }
+});
 
 const releases: Array<() => void | Promise<void>> = [];
 afterEach(async () => { for (const release of releases.splice(0).reverse()) await release(); });
@@ -101,8 +111,8 @@ async function fixture() {
       if (heldDraftRead && notifications.length > 0) { const held = heldDraftRead; heldDraftRead = undefined; held.entered(); await held.wait; }
       const inventory: LiveWorkInventoryV1 = { coverage: 'complete', items: [{ category: 'session', ownerRef: runner,
         attribution: { kind: 'unknown' }, state: active ? 'active' : 'settled', settledAt: now }] };
-      return evaluateSessionEligibility({ tracked: runner, inventory, draft: { status: 'absent' }, resume: { sessionId: 'session',
-        rawSession: { machineId: 'machine', path: '/project' }, metadata: { machineId: 'machine', path: '/project', flavor: 'codex', codexSessionId: 'native' } } });
+      return (await evaluateSessionEligibility({ tracked: runner, inventory, draft: { status: 'absent' }, resume: { sessionId: 'session',
+        rawSession: { machineId: 'machine', path: '/project' }, metadata: { runtimeDescriptorV1: { v: 1 as const, agentId: 'codex', agent: { backendMode: 'appServer' } }, machineId: 'machine', path: '/project', flavor: 'codex', codexSessionId: 'native' } } }));
     },
     stopSession: async (_id, runner) => {
       stops.push(runner);

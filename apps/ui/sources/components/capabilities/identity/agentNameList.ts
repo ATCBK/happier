@@ -1,9 +1,18 @@
-import { getPreferredLanguage } from '@/text';
+import { getPreferredLanguage, t } from '@/text';
 import { joinList } from '@/utils/text/joinList';
 
 /** "Claude, Codex and OpenCode" in the reader's language (or `locale`). */
 export function formatAgentNameList(names: readonly string[], locale?: string): string {
     return joinList(names, locale);
+}
+
+/**
+ * The list for a line that must not wrap or cut a name: up to `shown` names, then the rest as a count ("Claude, Codex
+ * and 7 more"). A list that is one name over `shown` is written out, because "and 1 more" says less than the name.
+ */
+export function formatAgentNameListFolded(names: readonly string[], shown = 2, locale?: string): string {
+    if (names.length <= shown + 1) return formatAgentNameList(names, locale);
+    return formatAgentNameList([...names.slice(0, shown), t('capabilities.where.more', { count: names.length - shown })], locale);
 }
 
 export type AgentNameListPart = Readonly<{ kind: 'name'; index: number }> | Readonly<{ kind: 'literal'; text: string }>;

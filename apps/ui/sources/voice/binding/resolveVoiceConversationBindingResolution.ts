@@ -45,9 +45,10 @@ async function ensureVoiceHomeConversationSessionIdWithRecovery(params: Readonly
     transcriptMode: VoiceAdapterTranscriptMode;
     controlSessionId: string;
     settings: any;
+    signal?: AbortSignal;
 }>): Promise<string> {
     try {
-        return await ensureVoiceConversationSessionForVoiceHome();
+        return await ensureVoiceConversationSessionForVoiceHome(null, params.signal);
     } catch (error) {
         const isGlobalNativeSessionVoiceAgent =
             params.controlSessionId === VOICE_AGENT_GLOBAL_SESSION_ID
@@ -57,7 +58,7 @@ async function ensureVoiceHomeConversationSessionIdWithRecovery(params: Readonly
         const recoveryDecision = await recoverUnavailableGlobalVoiceAutoMachine();
         if (recoveryDecision.kind !== 'retry' && recoveryDecision.kind !== 'switch') throw error;
         applyRecoveredGlobalVoiceMachineDecision(recoveryDecision);
-        return await ensureVoiceConversationSessionForVoiceHome();
+        return await ensureVoiceConversationSessionForVoiceHome(null, params.signal);
     }
 }
 
@@ -67,6 +68,7 @@ export async function ensureVoiceConversationBindingResolution(params: Readonly<
     requestedTargetSessionId?: string | null;
     requestedTargetServerId?: string | null;
     settings: any;
+    signal?: AbortSignal;
 }>): Promise<VoiceConversationBindingResolution | null> {
     const providerId = normalizeNonEmptyString(params.providerId);
     if (!providerId) return null;
@@ -81,6 +83,7 @@ export async function ensureVoiceConversationBindingResolution(params: Readonly<
         controlSessionId,
         requestedTargetSessionAddress: targetSessionAddress,
         settings: params.settings,
+        signal: params.signal,
     });
     if (providerOwnedResolution) {
         const conversationSessionAddress = normalizeSessionAddress(
@@ -109,7 +112,7 @@ export async function ensureVoiceConversationBindingResolution(params: Readonly<
     }
     if (targetSessionAddress && isVoiceConversationSystemSessionMetadata(requestedMetadata)
         && !shouldRetireLegacyVoiceConversationSession({ metadata: requestedMetadata })) {
-        const conversationSessionId = await ensureVoiceConversationSessionForSessionRoot({ sessionRootAddress: targetSessionAddress });
+        const conversationSessionId = await ensureVoiceConversationSessionForSessionRoot({ sessionRootAddress: targetSessionAddress, signal: params.signal });
         const existing = readPreferredVoiceConversationBindingMetadata({ conversationSessionId,
             preferredMetadata: requestedMetadata, sourceServerId: targetSessionAddress.serverId });
         const scope = readVoiceConversationScopeMetadata(requestedMetadata);
@@ -128,11 +131,12 @@ export async function ensureVoiceConversationBindingResolution(params: Readonly<
 
     const conversationSessionId =
         rootSessionAddress && !shouldForceVoiceHomeForLocalConversation(params.settings)
-            ? await ensureVoiceConversationSessionForSessionRoot({ sessionRootAddress: rootSessionAddress })
+            ? await ensureVoiceConversationSessionForSessionRoot({ sessionRootAddress: rootSessionAddress, signal: params.signal })
             : await ensureVoiceHomeConversationSessionIdWithRecovery({
                   transcriptMode,
                   controlSessionId,
                   settings: params.settings,
+                  signal: params.signal,
               });
     const conversationSessionAddress = normalizeSessionAddress(
         rootSessionAddress?.serverId ?? targetServerId,

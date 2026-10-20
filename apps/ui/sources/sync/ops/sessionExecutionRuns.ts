@@ -106,6 +106,13 @@ export function isExecutionRunNotRunningMutationError(result: unknown): boolean 
     return error.includes('not running') || error.includes('already finished');
 }
 
+/** Withdrawal of a caller's observation is not a daemon refusal and must not offer destructive fallback. */
+export function isExecutionRunMutationCancelled(result: unknown): boolean {
+    const errorCode = result && typeof result === 'object' && 'errorCode' in result
+        ? result.errorCode : readRpcErrorCode(result);
+    return errorCode === 'SOCKET_RPC_ABORTED' || errorCode === 'MACHINE_RPC_ABORTED';
+}
+
 function createInactiveSessionRpcUnavailableResult(): { ok: false; error: string; errorCode: string } {
     return {
         ok: false,
@@ -117,12 +124,15 @@ function createInactiveSessionRpcUnavailableResult(): { ok: false; error: string
 function resolveExecutionRunSessionServerId(
     sessionId: string,
     requestedServerId?: string | null,
+    access: 'read' | 'mutate' = 'mutate',
 ): string | null {
     const explicitServerId = typeof requestedServerId === 'string' ? requestedServerId.trim() : '';
     const session = storage.getState().sessions[sessionId] ?? null;
     const storedServerId = typeof session?.serverId === 'string' ? session.serverId.trim() : '';
     if (explicitServerId) {
-        if (storedServerId && !areServerProfileIdentifiersEquivalent(storedServerId, explicitServerId)) {
+        // Reads authenticate the exact requested Home below; an ambient row on
+        // another Home cannot revoke that address or supply mutation eligibility.
+        if (access === 'mutate' && storedServerId && !areServerProfileIdentifiersEquivalent(storedServerId, explicitServerId)) {
             return null;
         }
         return explicitServerId;
@@ -173,7 +183,8 @@ function notifyExecutionRunMutationSuccess(
 export async function sessionExecutionRunStart(
     sessionId: string,
     request: ExecutionRunStartRequest,
-    opts?: Readonly<{ serverId?: string | null; expectedMachineId?: string | null; scope?: ServerAccountScope }>,
+    opts?: Readonly<{ serverId?: string | null; expectedMachineId?: string | null; scope?: ServerAccountScope;
+        signal?: AbortSignal; onIssued?: () => void }>,
 ): Promise<SessionExecutionRunStartResult> {
     const protectedSelection = requiresProviderSafeExecutionRunStartRpc(request, true);
     try {
@@ -199,6 +210,10 @@ export async function sessionExecutionRunStart(
             ...(opts?.scope ? { scope: opts.scope } : {}),
             method: protectedSelection ? SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1 : SESSION_RPC_METHODS.EXECUTION_RUN_START,
             payload: protectedSelection ? { runId: null, resume: false, start: request } : request,
+            // Admission owns its preparation lifetime; progress follows the returned Run.
+            timeoutMs: null,
+            signal: opts?.signal,
+            onIssued: opts?.onIssued,
         });
         const errorResponse = readErrorResponseShape(response);
         if (errorResponse) return errorResponse;
@@ -256,7 +271,7 @@ export async function sessionExecutionRunStop(
 export async function sessionExecutionRunCancelTurn(
     sessionId: string,
     request: ExecutionRunCancelTurnRequest,
-    opts?: Readonly<{ serverId?: string | null; scope?: ServerAccountScope }>,
+    opts?: Readonly<{ serverId?: string | null; scope?: ServerAccountScope; signal?: AbortSignal }>,
 ): Promise<SessionExecutionRunCancelTurnResult> {
     try {
         const serverId = opts?.scope?.serverId ?? resolveExecutionRunSessionServerId(sessionId, opts?.serverId);
@@ -267,6 +282,7 @@ export async function sessionExecutionRunCancelTurn(
             scope: opts?.scope,
             method: SESSION_RPC_METHODS.EXECUTION_RUN_CANCEL_TURN_V1,
             payload: request,
+            signal: opts?.signal,
         });
         const errorResponse = readErrorResponseShape(response);
         if (errorResponse) return errorResponse;
@@ -288,7 +304,7 @@ export async function sessionExecutionRunCancelTurn(
 export async function sessionExecutionRunEnsure(
     sessionId: string,
     request: ExecutionRunEnsureRequest,
-    opts?: Readonly<{ serverId?: string | null; scope?: ServerAccountScope }>,
+    opts?: Readonly<{ serverId?: string | null; scope?: ServerAccountScope; signal?: AbortSignal }>,
 ): Promise<SessionExecutionRunEnsureResult> {
     try {
         const serverId = opts?.scope?.serverId ?? resolveExecutionRunSessionServerId(sessionId, opts?.serverId);
@@ -299,6 +315,7 @@ export async function sessionExecutionRunEnsure(
             scope: opts?.scope,
             method: SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE,
             payload: request,
+            signal: opts?.signal,
         });
         const errorResponse = readErrorResponseShape(response);
         if (errorResponse) return errorResponse;
@@ -319,10 +336,10 @@ export async function sessionExecutionRunEnsure(
 export async function sessionExecutionRunList(
     sessionId: string,
     request: ExecutionRunListRequest,
-    opts?: Readonly<{ serverId?: string | null; scope?: ServerAccountScope }>,
+    opts?: Readonly<{ serverId?: string | null; scope?: ServerAccountScope; signal?: AbortSignal }>,
 ): Promise<SessionExecutionRunListResult> {
     try {
-        const serverId = opts?.scope?.serverId ?? resolveExecutionRunSessionServerId(sessionId, opts?.serverId);
+        const serverId = opts?.scope?.serverId ?? resolveExecutionRunSessionServerId(sessionId, opts?.serverId, 'read');
         if (!serverId) return createExecutionRunHomeUnavailableResult();
         const response = await executionRunSessionRpc<unknown, ExecutionRunListRequest>({
             sessionId,
@@ -330,6 +347,7 @@ export async function sessionExecutionRunList(
             scope: opts?.scope,
             method: SESSION_RPC_METHODS.EXECUTION_RUN_LIST,
             payload: request,
+            signal: opts?.signal,
         });
         const errorResponse = readErrorResponseShape(response);
         if (errorResponse) return errorResponse;
@@ -353,7 +371,7 @@ export async function sessionExecutionRunGet(
     opts?: Readonly<{ serverId?: string | null; scope?: ServerAccountScope; signal?: AbortSignal }>,
 ): Promise<SessionExecutionRunGetResult> {
     try {
-        const serverId = opts?.scope?.serverId ?? resolveExecutionRunSessionServerId(sessionId, opts?.serverId);
+        const serverId = opts?.scope?.serverId ?? resolveExecutionRunSessionServerId(sessionId, opts?.serverId, 'read');
         if (!serverId) return createExecutionRunHomeUnavailableResult();
         const response = await executionRunSessionRpc<unknown, ExecutionRunGetRequest>({
             sessionId,
@@ -386,7 +404,7 @@ export async function sessionExecutionRunWait(
     opts?: Readonly<{ serverId?: string | null; signal?: AbortSignal }>,
 ): Promise<unknown> {
     try {
-        const serverId = resolveExecutionRunSessionServerId(sessionId, opts?.serverId);
+        const serverId = resolveExecutionRunSessionServerId(sessionId, opts?.serverId, 'read');
         if (!serverId) return createExecutionRunHomeUnavailableResult();
         return await sessionRpcWithServerScope<unknown, unknown>({
             sessionId,
@@ -407,7 +425,7 @@ export async function sessionExecutionRunWait(
 export async function sessionExecutionRunAction(
     sessionId: string,
     request: ExecutionRunActionRequest,
-    opts?: Readonly<{ serverId?: string | null; scope?: ServerAccountScope }>,
+    opts?: Readonly<{ serverId?: string | null; scope?: ServerAccountScope; signal?: AbortSignal }>,
 ): Promise<SessionExecutionRunActionResult> {
     try {
         const serverId = opts?.scope?.serverId ?? resolveExecutionRunSessionServerId(sessionId, opts?.serverId);
@@ -420,6 +438,7 @@ export async function sessionExecutionRunAction(
             scope: opts?.scope,
             method: SESSION_RPC_METHODS.EXECUTION_RUN_ACTION,
             payload: request,
+            signal: opts?.signal,
         });
         const errorResponse = readErrorResponseShape(response);
         if (errorResponse) return errorResponse;
@@ -432,7 +451,7 @@ export async function sessionExecutionRunAction(
         return {
             ok: false,
             error: error instanceof Error ? error.message : 'Unknown error',
-            errorCode: readRpcErrorCode(error),
+            errorCode: readRpcErrorCode(error) ?? 'execution_run_target_unavailable',
         };
     }
 }

@@ -34,23 +34,30 @@ export type ExactHomeArrival = Readonly<{
 export function useExactHomeArrival(): ExactHomeArrival {
     const [state, setState] = React.useState<ExactHomeDestinationState>(IDLE);
     const mountedRef = React.useRef(true);
+    const openingRef = React.useRef<Promise<boolean> | null>(null);
 
     React.useEffect(() => {
         mountedRef.current = true;
-        return () => { mountedRef.current = false; };
+        return () => {
+            mountedRef.current = false;
+            openingRef.current = null;
+        };
     }, []);
 
     const continueThrough = React.useCallback(async (open: () => Promise<boolean>): Promise<void> => {
         setState(FOCUSING);
+        const opening = Promise.resolve().then(open);
+        openingRef.current = opening;
         let reached = false;
         try {
-            reached = await open();
+            reached = await opening;
         } catch {
             // A rejected focus/refresh is the same recoverable arrival failure as
             // an explicit false result. The committed operation happened before
             // this owner, so retry must retain only this opener.
         }
-        if (!mountedRef.current) return;
+        if (!mountedRef.current || openingRef.current !== opening) return;
+        openingRef.current = null;
         if (reached) {
             setState(IDLE);
             return;

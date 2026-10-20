@@ -6,6 +6,7 @@ import {
 } from '@/components/appShell/rightSidebar/rightSidebarMobileProjection';
 import { resolveRightSidebarTabs } from '@/components/appShell/rightSidebar/rightSidebarTabRegistry';
 import {
+    resolveSessionCockpitLandingSurface,
     resolveSessionMobileSurfaceIntent,
     resolveSessionCockpitRouteFromPathname,
     resolveSessionRoutePathForSurface,
@@ -15,6 +16,13 @@ import {
 } from './sessionCockpitState';
 
 describe('sessionCockpitState', () => {
+    it('lands a cockpit that mounts with the Session viewer presented on Chat, where it docks, whatever projection was retained', () => {
+        expect(resolveSessionCockpitLandingSurface('browser', true)).toBe('chat');
+        expect(resolveSessionCockpitLandingSurface('tabs', true)).toBe('chat');
+        expect(resolveSessionCockpitLandingSurface('plugin:acme:panel', true)).toBe('chat');
+        expect(resolveSessionCockpitLandingSurface('browser', false)).toBe('browser');
+    });
+
     it('preserves Collaboration intent and exact Home through the root route', () => {
         expect(resolveSessionMobileSurfaceIntent({ routeKind: 'index', persistedSurface: 'collaboration' })).toBe('collaboration');
         expect(resolveSessionMobileSurfaceIntent({ routeKind: 'index', activeRightTabId: 'collaboration' })).toBe('collaboration');
@@ -33,12 +41,14 @@ describe('sessionCockpitState', () => {
         expect(agents && resolveRightSidebarMobileSurface(agents, 'session')).toBe('agents');
     });
 
-    it('admits Collaboration through the shared registry only when this Home supports it', () => {
+    it('admits People on every session, shared or not, through the shared registry', () => {
+        // People answers who hears about a session and what it follows (coordination lab P1p), which
+        // does not depend on whether this Home offers sharing.
         const tabs = resolveRightSidebarTabs({ scope: 'session', presentation: 'mobile', sessionSharingAvailable: true });
         const collaboration = tabs.find((tab) => tab.id === 'collaboration');
         expect(collaboration).toBeDefined();
         expect(collaboration && resolveRightSidebarMobileSurface(collaboration, 'session')).toBe('collaboration');
-        expect(resolveRightSidebarTabs({ scope: 'session' }).some((tab) => tab.id === 'collaboration')).toBe(false);
+        expect(resolveRightSidebarTabs({ scope: 'session' }).some((tab) => tab.id === 'collaboration')).toBe(true);
         expect(resolveRightSidebarTabs({ scope: 'project', sessionSharingAvailable: true }).some((tab) => tab.id === 'collaboration')).toBe(false);
     });
     it('maps legacy fullscreen subroutes to cockpit surfaces', () => {

@@ -19,7 +19,7 @@ vi.mock('@/components/tools/normalization/policy/toolNameInference', () => ({
 
 vi.mock('@/components/tools/renderers/system/MCPToolView', () => ({
     formatMCPTitle: (name: string) => `MCP:${name}`,
-    formatMCPSubtitle: (input: any) => `sub:${String(input?.x ?? '')}`,
+    formatMCPToolSubtitle: (_name: string, input: any) => `sub:${String(input?.x ?? '')}`,
 }));
 
 function makeToolCall(overrides: Partial<ToolCall> = {}): ToolCall {
@@ -39,6 +39,27 @@ function makeToolCall(overrides: Partial<ToolCall> = {}): ToolCall {
 }
 
 describe('resolveToolHeaderTextPresentation', () => {
+    it.each([{ kind: 'person' }, { kind: 'session', sessionId: 'manager' }] as const)(
+        'reads the completed question byline for $kind without using authored answer labels', async answeredBy => {
+        const { resolveToolHeaderTextPresentation } = await import('./resolveToolHeaderTextPresentation');
+        const tool = makeToolCall({ name: 'AskUserQuestion',
+            input: { answeredBy: { kind: 'session', sessionId: 'forged' } },
+            permission: { id: 'question', kind: 'user_action', status: 'approved', answeredBy } });
+        const model = resolveToolHeaderTextPresentation({ tool, metadata: null,
+            answeringSession: { sessionId: 'manager', name: 'Daily' } });
+        expect(model.answeredBy).toEqual(answeredBy);
+        expect(model.answeredByLabel).toBeTruthy();
+        expect(resolveToolHeaderTextPresentation({ tool: { ...tool, permission: { ...tool.permission!, answeredBy: undefined } },
+            metadata: null }).answeredByLabel).toBeNull();
+    });
+
+    it('reads an unknown snake_case tool id as words, not as the raw identifier', async () => {
+        const { resolveToolHeaderTextPresentation } = await import('./resolveToolHeaderTextPresentation');
+        const tool = makeToolCall({ name: 'codex_command_execution' });
+        inferred = { normalizedToolName: 'codex_command_execution', source: 'original' };
+        expect(resolveToolHeaderTextPresentation({ tool, metadata: null }).title).toBe('Codex command execution');
+    });
+
     it('uses tool name as title when inference did not fall back', async () => {
         const { resolveToolHeaderTextPresentation } = await import('./resolveToolHeaderTextPresentation');
         const tool = makeToolCall({ name: 'UnknownTool', description: 'Execute' });

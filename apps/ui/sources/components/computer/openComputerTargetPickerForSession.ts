@@ -4,7 +4,7 @@ import { getAgentCore, type AgentId } from '@/agents/catalog/catalog';
 import { readSessionPresentationAgentId } from '@/sync/domains/session/presentation/readSessionPresentationAgentId';
 import { findSessionListLookupSession } from '@/sync/domains/session/listing/sessionListLookupState';
 import { noteSessionComputerMachine } from '@/sync/domains/computer/sessionComputerMachines';
-import { getStorage } from '@/sync/domains/state/storage';
+import { getStorage, selectSessionDisplayNameSource } from '@/sync/domains/state/storage';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
 import { readMachineControlTargetForSession } from '@/sync/ops/sessionMachineTarget';
@@ -55,7 +55,8 @@ export function resolveComputerTargetPickerForSession(params: ComputerTargetPick
     const serverId = params.serverId ?? accountLifetime?.scope.serverId ?? null;
     if (accountLifetime !== undefined && (!accountLifetime?.isCurrent()
         || !selectActiveServerAccountScopeForServer(accountLifetime.scope, serverId))) return null;
-    const session = findSessionListLookupSession(getStorage().getState(), serverId
+    const state = getStorage().getState();
+    const session = findSessionListLookupSession(state, serverId
         ? { serverId, sessionId: params.sessionId }
         : params.sessionId)?.session ?? null;
     // Computer use targets the Session's own machine (orchestrator ruling 2026-10-01): a request naming
@@ -64,7 +65,8 @@ export function resolveComputerTargetPickerForSession(params: ComputerTargetPick
         ? { serverId, sessionId: params.sessionId }
         : params.sessionId)?.machineId ?? null;
     const refusalCode = sessionMachineId && sessionMachineId !== params.machineId ? 'computer_machine_mismatch' : null;
-    const agentId = session ? readSessionPresentationAgentId(session) : null;
+    const displaySource = selectSessionDisplayNameSource(state, params.sessionId, serverId);
+    const agentId = displaySource ? readSessionPresentationAgentId(displaySource) : null;
     const core = agentId ? getAgentCore(agentId as AgentId) : null;
     const sessionName = session ? getSessionName(session, serverId) : null;
     const project = session ? readProjectLabel(getSessionSubtitle(session, serverId)) : null;

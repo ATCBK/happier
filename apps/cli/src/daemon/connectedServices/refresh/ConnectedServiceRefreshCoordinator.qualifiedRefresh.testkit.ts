@@ -134,11 +134,12 @@ export async function createBuiltInQualifiedRefreshHarness(input: Readonly<{
     if (credential.revisionSemantics !== 'revisioned') throw new Error('Work fixture credential must be revisioned');
     return credential;
   });
+  const getAccountEncryptionMode = vi.fn(async () => 'plain' as const);
   const establishedRuntimeOwner =
     createQualifiedConnectedAccountEstablishedRuntimeOwner({
       reloadController: controller,
       credentials,
-      getAccountEncryptionMode: vi.fn(async () => 'plain' as const),
+      getAccountEncryptionMode,
       readCredential,
       readConfiguration: vi.fn(async () => null),
       configuration: {
@@ -298,7 +299,7 @@ export async function createBuiltInQualifiedRefreshHarness(input: Readonly<{
   return {
     coordinator, api, admittedRuntime, registry: admittedRuntime.registry, controller, establishedRuntimeOwner, credentials, happyHomeDir, purposeRuntime,
     account, service, firstRevision, secondRevision, thirdRevision, now,
-    acquireRefreshLease, mutateCredential, mutateCredentialHealth, readCredential,
+    acquireRefreshLease, mutateCredential, mutateCredentialHealth, readCredential, getAccountEncryptionMode,
     async dispose() {
       try { await admittedRuntime.dispose(); }
       finally { if (ownsHome) await rm(happyHomeDir, { recursive: true, force: true }); }

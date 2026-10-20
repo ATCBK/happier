@@ -1,9 +1,10 @@
-import { useMemo, type ReactElement, type ReactNode } from 'react';
+import { useContext, useMemo, type ReactElement, type ReactNode } from 'react';
 import { View } from 'react-native';
 import type { ResourceContent } from '@happier-dev/plugin-sdk/ui';
 import type { PluginUiResourceSnapshot } from '../hostApi/resourceStore.js';
 
 import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
+import { PluginUiSurfaceNoticeContext, useClaimedPluginUiSurfaceNotice } from '../presentationHost/surfaceNotice.js';
 import { resolveHappierFreshnessText } from '../presentation/state/asOfTime.js';
 import { usePluginSurfaceActivity } from '../hostApi/context.js';
 import { HappierSkeletonRows } from '../presentation/feedback/Skeleton.js';
@@ -28,6 +29,7 @@ import {
   type HappierSurfaceStateBindings,
 } from '../presentation/state/SurfaceState.js';
 import { useHappierPageChrome } from '../presentation/layout/pageChrome.js';
+import { useHappierColumnEdgeRemainder } from '../presentation/layout/columnEdge.js';
 import { useHappierUiAnimationActivityInternal, useOptionalHappierUiPalette } from '../environment/context.js';
 import {
   HAPPIER_SCENE_ART_METRICS,
@@ -221,6 +223,7 @@ export function EmptyState(props: EmptyStateProps): ReactElement {
   const chrome = useHappierPageChrome();
   const stateSize = useStateSize(props.size);
   const scene = useStateScene(props.scene, props.layout ?? 'centered', stateSize, props.testID);
+  const pageSheetInsetPx = useHappierColumnEdgeRemainder(HAPPIER_EMPTY_STATE_FRAME.page.marginHorizontal);
   const unavailableReason = resolveAuthorText(
     translate,
     props.actionUnavailableReason,
@@ -284,6 +287,8 @@ export function EmptyState(props: EmptyStateProps): ReactElement {
           style={[
             { width: '100%', maxWidth: chrome?.columnMaxWidthPx },
             HAPPIER_EMPTY_STATE_FRAME.page,
+            // On the sheet edge, also inside a column that already draws part of it (a detail's body).
+            { marginHorizontal: pageSheetInsetPx },
             add ? HAPPIER_EMPTY_STATE_FRAME.pageAdd : null,
             add && palette ? { borderColor: palette.sheetBorder } : null,
           ]}
@@ -484,7 +489,18 @@ const STATE_DEFAULT_GLYPH: Partial<Record<HappierSurfaceStateKind, IconName>> = 
 const UNSIZED_STATE_GLYPH_PX = 32;
 const UNSIZED_STATE_GLYPH_GAP_PX = 8;
 
-function SurfaceStateAdapter(props: SurfaceStateProps & Readonly<{ actionSlot?: ReactNode }>): ReactElement {
+function SurfaceStateAdapter(authored: SurfaceStateProps & Readonly<{ actionSlot?: ReactNode }>): ReactElement {
+  // While the host has one sentence about a part that cannot run now (its Machine cannot be reached), a
+  // failure state says that sentence in its own place, with its own action, instead of its own copy:
+  // the cause is said once, where it failed, and the host draws nothing of its own beside it.
+  const hostSentence = useClaimedPluginUiSurfaceNotice(authored.kind === 'error' || authored.kind === 'unavailable');
+  const hostAction = useContext(PluginUiSurfaceNoticeContext)?.action;
+  const props = hostSentence === null ? authored : {
+    ...authored, kind: 'warning' as const, title: hostSentence, titleKey: undefined,
+    ...(hostAction ? { action: { label: hostAction.label, onPress: hostAction.onPress }, actionSlot: undefined } : {}),
+    description: undefined, descriptionKey: undefined, note: undefined, noteKey: undefined, details: undefined, icon: undefined,
+    body: undefined, live: undefined, actionCaption: undefined, secondaryAction: undefined, learnMore: undefined,
+  };
   const translate = usePluginTranslation();
   const theme = usePluginTheme();
   const surfaceActivity = usePluginSurfaceActivity();
@@ -512,12 +528,12 @@ function SurfaceStateAdapter(props: SurfaceStateProps & Readonly<{ actionSlot?: 
         />
       : undefined;
   const bindings: HappierSurfaceStateBindings = {
-    renderText: ({ role, metrics: textMetrics, testID, onPress, children }) => {
+    renderText: ({ role, metrics: textMetrics, align, testID, onPress, children }) => {
       if (role === 'quietLink') {
         return <HappierText testID={testID} accessibilityRole="link" onPress={onPress} tone="secondary" style={{ textDecorationLine: 'underline' }}>{children}</HappierText>;
       }
       if (role === 'lineAction') return <HappierText tone="neutral" style={{ ...textMetrics, fontWeight: '600' }}>{children}</HappierText>;
-      if (role === 'quiet') return <HappierText testID={testID} tone="muted" style={{ ...textMetrics, textAlign: 'center' }}>{children}</HappierText>;
+      if (role === 'quiet') return <HappierText testID={testID} tone="muted" style={{ ...textMetrics, textAlign: align === 'start' ? 'auto' : 'center' }}>{children}</HappierText>;
       return <HappierText testID={testID} tone="secondary" tabularNumbers={role === 'live'} style={textMetrics}>{children}</HappierText>;
     },
     renderButton: ({ action, emphasis, tone, testID }) => (

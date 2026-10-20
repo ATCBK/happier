@@ -1,14 +1,15 @@
 import * as React from 'react';
-import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import type { ExecutionRunPublicState } from '@happier-dev/protocol/execution/runs/responseSchemas';
-import { ReviewFindingsV1Schema, type ReviewFindingsV1 } from '@happier-dev/protocol/messages/structured/reviewFindingsV1';
-import { ReviewFindingsV2Schema, type ReviewFindingsV2 } from '@happier-dev/protocol/messages/structured/reviewFindingsV2';
+import type { ReviewFindingsV1 } from '@happier-dev/protocol/messages/structured/reviewFindingsV1';
+import type { ReviewFindingsV2 } from '@happier-dev/protocol/messages/structured/reviewFindingsV2';
 
 import { sessionExecutionRunGet, sessionExecutionRunList } from '@/sync/ops/sessionExecutionRuns';
 import { subscribeExecutionRunActivity } from '@/sync/runtime/executionRuns/executionRunActivityBus';
 import { serverAccountScopeKeySuffix, type ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { fireAndForget } from '@/utils/system/fireAndForget';
+import { readReviewPayload } from './readReviewPayload';
+import { resolveReviewRunStatus } from './resolveReviewRunStatus';
 
 /** Another reviewer of the same review: its run and, once it has finished, its result. */
 export type ReviewGroupSibling = Readonly<{
@@ -20,27 +21,6 @@ export type ReviewGroupSibling = Readonly<{
 }>;
 
 const NO_SIBLINGS: readonly ReviewGroupSibling[] = Object.freeze([]);
-
-/** A review Run's structured result (findings v1 or v2), or null while it has none. */
-export function readReviewPayload(meta: unknown, retainedFindings?: unknown): ReviewFindingsV1 | ReviewFindingsV2 | null {
-    if (retainedFindings !== undefined) {
-        const v2 = createStoredReadSchema(ReviewFindingsV2Schema).safeParse(retainedFindings);
-        if (v2.success) return v2.data;
-        const v1 = createStoredReadSchema(ReviewFindingsV1Schema).safeParse(retainedFindings);
-        if (v1.success) return v1.data;
-    }
-    if (!meta || typeof meta !== 'object') return null;
-    const { kind, payload } = meta as { kind?: unknown; payload?: unknown };
-    if (kind === 'review_findings.v2') {
-        const parsed = createStoredReadSchema(ReviewFindingsV2Schema).safeParse(payload);
-        return parsed.success ? parsed.data : null;
-    }
-    if (kind === 'review_findings.v1') {
-        const parsed = createStoredReadSchema(ReviewFindingsV1Schema).safeParse(payload);
-        return parsed.success ? parsed.data : null;
-    }
-    return null;
-}
 
 /**
  * The other reviewers of a review started on several engines at once: the runs that share this
@@ -72,11 +52,12 @@ export function useReviewGroupSiblings(params: Readonly<{
         // One read per other reviewer: a review has as many as the person chose.
         const next = await Promise.all(members.map(async (run): Promise<ReviewGroupSibling> => {
             const got = await sessionExecutionRunGet(sessionId, { runId: run.runId, includeStructured: true }, { serverId: scope.serverId, scope });
+            const payload = 'run' in got ? readReviewPayload(got.structuredMeta, got.reviewFindings) : null;
             return {
                 runId: run.runId,
                 backendTarget: run.backendTarget,
-                status: 'run' in got ? got.run.status : run.status,
-                payload: 'run' in got ? readReviewPayload(got.structuredMeta, got.reviewFindings) : null,
+                status: resolveReviewRunStatus({ run: 'run' in got ? got.run : run, payload }) ?? run.status,
+                payload,
             };
         }));
         if (!isCurrent()) return;

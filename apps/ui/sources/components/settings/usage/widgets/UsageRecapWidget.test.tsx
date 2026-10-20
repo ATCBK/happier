@@ -13,6 +13,7 @@ import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/act
 import { UsageRecapWidget } from './UsageRecapWidget';
 import { Modal } from '@/modal';
 import { UsageRecapComposer } from './recap/UsageRecapComposer';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import type { UsageBodyProps } from './usageBodyKit';
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
@@ -29,7 +30,8 @@ let home: Awaited<ReturnType<typeof serveAccountHomes>> | undefined;
 afterEach(async () => { standardCleanup(); retireActiveServerAccountScopeLifetime(); await home?.dispose(); home = undefined;
   vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-async function mount(denied = false, queryResponse?: () => Response | Promise<Response>, hasAccounting = true, requestedQuery = shownQuery) {
+async function mount(denied = false, queryResponse?: () => Response | Promise<Response>, hasAccounting = true, requestedQuery = shownQuery,
+  accountingStatus: 'available' | 'pending' | 'error' = 'available') {
   // Load the real lazy Action entry before a short assertion wait; no internal owner is mocked.
   await import('@/sync/ops/actions/defaultActionExecutor');
   home = await serveAccountHomes({ homes: [{ key: 'a', serverUrl: 'https://table-export.test', accountId: 'a' }],
@@ -39,7 +41,7 @@ async function mount(denied = false, queryResponse?: () => Response | Promise<Re
   const authority = { serverId: server.id, accountId: 'a' };
   publishAppliedActiveServerSnapshot({ serverId: server.id, serverUrl: server.serverUrl, generation: 0 });
   const slice = { key: getUsageQueryKey(shownQuery), requestedQuery: shownQuery, shownQuery, ...(hasAccounting ? { accounting } : {}),
-    pending: false, sources: [{ source: 'accounting', status: 'available' as const }] };
+    pending: accountingStatus === 'pending', sources: [{ source: 'accounting', status: accountingStatus }] };
   const props: UsageBodyProps = { id: 'usage_recap', serverId: server.id, testID: 'recap', query: requestedQuery, slice,
     model: { requestedQuery: { query: { ...shownQuery, period: { startMs: 1000, endMs: 1900 } }, authority },
       shownQuery: { query: shownQuery, authority }, slice,
@@ -57,12 +59,31 @@ describe('Recap table/text controls through the admitted export Action', () => {
   });
   it('keeps the admitted single-session autopsy visible when summary accounting is unavailable', async () => {
     const screen = await mount(false, undefined, false);
-    expect(Boolean(screen.findByTestId('recap.empty'))).toBe(true);
+    expect(Boolean(screen.findByTestId('recap.unavailable'))).toBe(true);
+    expect(screen.findByTestId('recap.empty')).toBeFalsy();
     // The autopsy is the shared Work owner's: its body (turns, or its own empty state) stays mounted.
     expect(Boolean(screen.findByTestId('recap.autopsy'))).toBe(true);
     // No Work facts in this read: the autopsy says so instead of drawing an empty table.
     expect(Boolean(screen.findByTestId('recap.autopsy.workUnavailable'))).toBe(true);
-    expect(home!.requests).toHaveLength(0);
+    // Home bootstrap is independent of the passive autopsy; no Usage owner may
+    // fetch accounting, private Session evidence or B history for this body.
+    expect(home!.requests.filter(request => request.path === '/v2/usage/query'
+      || request.path.startsWith('/v2/sessions/s1') || request.path.startsWith('/v1/sessions/s1/')
+      || request.path.includes('/provider-account-usage'))).toEqual([]);
+  });
+  it.each(['pending', 'error'] as const)('does not claim no recap when accounting is %s', async status => {
+    const screen = await mount(false, undefined, false, shownQuery, status);
+    expect(screen.findByTestId(status === 'pending' ? 'recap.loading' : 'recap.unavailable')).toBeTruthy();
+    expect(screen.findByTestId('recap.empty')).toBeFalsy();
+    expect(screen.findByTestId('recap.autopsy')).toBeTruthy();
+    if (status === 'error') expect(screen.findAllByType(SurfaceStateCard)
+      .find(node => node.props.testID === 'recap.unavailable')?.props.kind).toBe('error');
+  });
+  it.each(['pending', 'error'] as const)('keeps admitted recap facts while accounting is %s', async status => {
+    const screen = await mount(false, undefined, true, shownQuery, status);
+    expect(screen.findByTestId('recap.highlights')).toBeTruthy();
+    expect(screen.findByTestId('recap.loading')).toBeFalsy();
+    expect(screen.findByTestId('recap.unavailable')).toBeFalsy();
   });
   it('copies the Action text bytes for the exact shown query with explicit summary fields', async () => {
     const clipboard = vi.spyOn(Clipboard, 'setStringAsync').mockResolvedValue(true);

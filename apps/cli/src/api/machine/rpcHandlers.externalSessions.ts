@@ -543,6 +543,9 @@ export function registerMachineExternalSessionsRpcHandlers(params: Readonly<{
   installExternalSessionHostOperations?: (
     operations: ExternalSessionHostOperationSet,
   ) => Promise<ExternalSessionHostOperationInstallation>;
+  readMaterializedStateObservationBinding?: NonNullable<Parameters<
+    typeof createExternalSessionObservationDaemonProjection
+  >[0]>['readMaterializedStateObservationBinding'];
   statusDemand?: Readonly<{
     channel: ExternalSessionStatusDemandChannel;
     machineId: string;
@@ -589,6 +592,7 @@ export function registerMachineExternalSessionsRpcHandlers(params: Readonly<{
       : {}),
   });
   const observationProjection = createExternalSessionObservationDaemonProjection({
+    readMaterializedStateObservationBinding: params.readMaterializedStateObservationBinding,
     shouldSendReadyNotification: (sessionId) =>
       followLeaseManager.isBackgroundFollowEnabled(sessionId)
       && followLeaseManager.countActiveLeases(sessionId) === 0,

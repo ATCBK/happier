@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { resolveLiveActivityRemoteTransportConfig } from "@/app/activity/liveActivities/resolveLiveActivityRemoteTransport";
 import { encryptLiveActivityTargetSecret } from "@/app/activity/liveActivities/providers/directApnsLiveActivityProvider";
@@ -294,7 +294,7 @@ export function liveActivityTargetsRoutes(app: Fastify) {
     app.delete("/v1/live-activity-targets/:id", {
         preHandler: app.authenticate,
         schema: {
-            params: z.object({ id: z.string().trim().min(1) }),
+            params: z.object({ id: z.string().check(z.trim(), z.minLength(1)) }),
         },
     }, async (request, reply) => {
         await db.accountLiveActivityTarget.updateMany({

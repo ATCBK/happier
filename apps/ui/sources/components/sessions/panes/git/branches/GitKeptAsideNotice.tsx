@@ -57,7 +57,7 @@ export function GitKeptAsideNotice(props: GitKeptAsideNoticeProps): React.ReactE
                 operation: 'stash_restore',
                 cwd: snapshot?.repo.rootPath ?? null,
                 fallbackError: t('sessionGitBranches.notice.restoreFailed'),
-                run: () => sessionScmStashPop(sessionId, { stashRef }, serverId),
+                run: (call) => sessionScmStashPop(sessionId, { stashRef }, serverId, call),
                 refreshAfterMutation: () => scmStatusSync.invalidateFromMutationAndAwait(sessionId, serverId),
             });
         } finally {

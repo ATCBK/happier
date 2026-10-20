@@ -18,7 +18,7 @@ import type { WorkspaceAction } from './workspaceState';
 import { collectWorkspaceTabIntents, projectWorkspaceSharedTabs, type SharedWorkspaceTabs, type WorkspaceTabIntent } from './workspaceSyncedTabs';
 import { createWorkspaceTabsSync, type WorkspaceTabsSyncSnapshot } from './workspaceTabsSync';
 import { createWorkspaceTabsHandoffPublisher, WorkspaceTabsHandoffSourceUnavailableError, type WorkspaceTabsHandoffSource, type WorkspaceTabsHandoffPublisher } from './workspaceTabsHandoff';
-import { normalizeWorkspaceSingletonTabs, workspaceSingletonDestinationIds } from './workspaceDestinationPolicy';
+import { normalizeWorkspaceSingletonTabs, workspaceDestinationAdmissionIdentity, workspaceSingletonDestinationIds } from './workspaceDestinationPolicy';
 
 export type WorkspaceTabSyncStatus = WorkspaceTabsSyncSnapshot['status'] | 'off';
 type LocalOwner = ReturnType<typeof useWorkspaceState>;
@@ -107,6 +107,7 @@ export function useWorkspaceTabSync(input: Readonly<{
         const controller = syncEnabled ? createWorkspaceTabsSync({
             transport: createAccountKvJsonTransport({ credentials, request, key: 'workspace:tabs:v1', shouldContinue }),
             shouldContinue, normalizeRecord,
+            destinationIdentity: target => workspaceDestinationAdmissionIdentity(target, latest.current.catalog),
             getLocalRecord: () => projectWorkspaceSharedTabs(latest.current.local.getState()),
             onRecord: (_record, localRecord) => {
                 if (!shouldContinue()) return;

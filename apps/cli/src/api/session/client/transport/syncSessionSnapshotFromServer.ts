@@ -31,7 +31,8 @@ export async function syncSessionSnapshotFromServer(
         isClosed: () => boolean;
         setMetadataSnapshot: (metadata: Metadata | null, version: number, layoutVersion: number) => void;
         setAgentStateSnapshot: (agentState: AgentState | null, version: number) => void;
-        setOrganizationSnapshot?: (organization: Pick<V2SessionByIdResponse['session'], 'reportsTo' | 'origin'>) => void;
+        setArchivedAtSnapshot?: (archivedAt: number | null) => void | Promise<void>;
+        setOrganizationSnapshot?: (organization: Pick<V2SessionByIdResponse['session'], 'manager' | 'origin'>) => void;
         setMetadataEnvelopeTupleSnapshot: (
             snapshot: SessionMetadataEnvelopeTupleSnapshot,
         ) => void;
@@ -94,6 +95,8 @@ export async function syncSessionSnapshotFromServer(
     if (!update.metadataTuple && !update.sharedMetadataTuple && update.agentState) {
         params.setAgentStateSnapshot(update.agentState.agentState, update.agentState.agentStateVersion);
     }
+
+    if (update.archivedAt !== undefined) await params.setArchivedAtSnapshot?.(update.archivedAt);
 
     if (update.pendingQueueState) {
         params.applyPendingQueueState(update.pendingQueueState);

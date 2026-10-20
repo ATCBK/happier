@@ -94,6 +94,7 @@ describe('prepareManagedAgentCliLaunch', () => {
         resolvedPath: managedCommand,
         command: managedCommand,
         args: [],
+        providerExitOwnership: 'direct',
       });
 
       // An endpoint override that appears after readiness must not reach the

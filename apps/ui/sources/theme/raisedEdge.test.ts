@@ -22,13 +22,32 @@ function profile(mode: 'light' | 'dark', overrides: Record<string, string>): The
 }
 
 describe('raised edge colours', () => {
+    it('confines the surface finish to a short band at one edge, leaving the middle of a tall surface flat', () => {
+        // The ink alpha the finish paints at y px down a surface `height` px tall, as both renderers draw it.
+        const alphaAt = (gradient: NonNullable<typeof lightTheme.colors.edge.finishGradient>, y: number, height: number) => {
+            const band = gradient.band;
+            const from = band ? (band.edge === 'top' ? 0 : height - band.height) : 0;
+            const span = band ? band.height : height;
+            const t = (y - from) / span;
+            if (t < 0 || t > 1) return 0;
+            const [a, b] = gradient.locations;
+            const k = Math.min(1, Math.max(0, (t - a) / (b - a)));
+            return alpha(gradient.colors[0]) * (1 - k) + alpha(gradient.colors[1]) * k;
+        };
+        for (const theme of [lightTheme, darkTheme]) {
+            const finish = theme.colors.edge.finishGradient!;
+            for (let y = 60; y <= 540; y += 10) expect(alphaAt(finish, y, 600), `${theme.dark ? 'dark' : 'light'} at ${y}px`).toBe(0);
+            // Light shades its bottom edge; dark lights its top edge.
+            const edge = theme.dark ? 0 : 600;
+            expect(alphaAt(finish, edge, 600)).toBeGreaterThan(0);
+            expect(alphaAt(finish, 600 - edge, 600)).toBe(0);
+        }
+    });
     it('derives one translucent ink overlay independent of the surface underneath', () => {
         const light = lightTheme.colors.edge.finishGradient;
         const dark = darkTheme.colors.edge.finishGradient;
-        expect(light?.locations).toEqual([0.3, 1]);
-        expect(dark?.locations).toEqual([0, 0.7]);
         expect(light?.colors.map(alpha)).toEqual([0, 0.024]);
-        expect(dark?.colors.map(alpha)).toEqual([0.025, 0.025 * (2 / 9)]);
+        expect(dark?.colors.map(alpha)).toEqual([0.025, 0]);
         expect(lightTheme.colors.edge.primaryFinishGradient?.colors.map(alpha)).toEqual([0.14, 0]);
         expect(darkTheme.colors.edge.primaryFinishGradient?.colors.map(alpha)).toEqual([0, 0.025 * (8 / 3)]);
         expect(lightTheme.colors.edge.secondaryFinishGradient?.colors.map(alpha)).toEqual([0, 0.025]);

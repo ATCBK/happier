@@ -225,6 +225,13 @@ export type InventoryActionInputById = {
         refresh?: boolean | undefined;
     };
     readonly "agents.models.list": {
+        purpose?: 'scm_diff_summary' | undefined;
+        discoveryTargetKey?: string | undefined;
+        modelSelector?: {
+            profileId?: string | undefined;
+            modelId?: string | undefined;
+            backendTargetKey?: string | undefined;
+        } | undefined;
         agentId?: string | undefined;
         backendTargetKey?: string | undefined;
         machineId?: string | undefined;
@@ -644,12 +651,18 @@ export type InventoryActionResultById = {
         errorCode: string;
         error: string;
         details?: unknown;
+        goalControlFailure?: {
+            phase: 'native_effect' | 'provider_completion' | 'tail_drain' | 'missing_matching_publication' | 'host_publication_rejected';
+        } | undefined;
     };
     readonly "projects.workspace.forget": {
         ok: false;
         errorCode: string;
         error: string;
         details?: unknown;
+        goalControlFailure?: {
+            phase: 'native_effect' | 'provider_completion' | 'tail_drain' | 'missing_matching_publication' | 'host_publication_rejected';
+        } | undefined;
     } | {
         ok: true;
         workspaceId: string;

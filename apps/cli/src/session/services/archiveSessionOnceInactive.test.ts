@@ -39,3 +39,25 @@ it('retries archive on an inactive event after parking without reads or writes',
   await expect(result).resolves.toEqual({ archivedAt: 123 });
   expect(socket.eventNames()).toEqual([]);
 });
+
+it('closes inactive observation when its containing caller cancels', async () => {
+  vi.useFakeTimers();
+  const socket = Object.assign(new EventEmitter(), { connected: false, connect: vi.fn(), disconnect: vi.fn(), close: vi.fn() });
+  boundary.create.mockReturnValue(socket);
+  const sessionId = 'c' + 'e'.repeat(24);
+  vi.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { session:
+    createSessionRecordFixture({ id: sessionId, active: true, encryptionMode: 'plain', metadata: '{}' }) } });
+  const post = vi.spyOn(axios, 'post').mockResolvedValue({ status: 409, data: { error: 'session_active' } });
+  const controller = new AbortController();
+  const cancelled = new Error('Caller cancelled archive');
+  let failure: unknown;
+  const result = archiveSessionOnceInactive({ token: 'token', sessionId, signal: controller.signal })
+    .catch(error => { failure = error; });
+  await vi.advanceTimersByTimeAsync(0);
+  controller.abort(cancelled);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(failure).toBe(cancelled);
+  await result;
+  expect(post).toHaveBeenCalledTimes(1);
+  expect(socket.eventNames()).toEqual([]);
+});

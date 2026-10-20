@@ -8,7 +8,7 @@ import {
     TRIAGE_SOURCES_CONTRIBUTION_POINT_ID_V1,
     TRIAGE_SOURCES_TARGET_PLUGIN_ID_V1,
 } from '../../v1/bounds.js';
-import { TriageSourceConnectedAccountInputsV1, TriageSourcesContributionProtocolV1 } from '../../v1/contribution.js';
+import { TriageSourceConnectedAccountInputsV1, TriageSourceCredentialInputsV1, TriageSourcesContributionProtocolV1 } from '../../v1/contribution.js';
 import {
     admitTriageSourceDescriptorV1,
     TriageSourceDescriptorV1Schema,
@@ -170,11 +170,12 @@ export function checkTriageSourceContributionV1(
         if (!pluginJsonValuesEqual(action.resultSchema, declaration.resultSchema.jsonSchema)) {
             errors.push(`Triage source role '${role}' Action '${actionId}' has an incompatible result schema.`);
         }
-        // Sources may support the generic native-capable contract or the exact
-        // canonical connected-Account specialization, never an arbitrary narrowing.
+        // Sources use the generic authority contract or one exact canonical
+        // credential specialization, never an arbitrary narrowing.
         if (declaration.input.kind !== 'protocolDefined'
             || (!pluginJsonValuesEqual(action.inputSchema, declaration.input.schema.jsonSchema)
-                && !pluginJsonValuesEqual(action.inputSchema, TriageSourceConnectedAccountInputsV1[role].jsonSchema))) {
+                && !pluginJsonValuesEqual(action.inputSchema, TriageSourceConnectedAccountInputsV1[role].jsonSchema)
+                && !pluginJsonValuesEqual(action.inputSchema, TriageSourceCredentialInputsV1[role].jsonSchema))) {
             errors.push(`Triage source role '${role}' Action '${actionId}' has an incompatible input schema.`);
         }
     }

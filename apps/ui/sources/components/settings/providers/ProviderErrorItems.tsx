@@ -1,13 +1,24 @@
 import * as React from 'react';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { ProviderErrorV1Schema } from '@happier-dev/protocol/providers/errors';
-import { useUnistyles } from 'react-native-unistyles';
+import { View } from 'react-native';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+
+import { PAGE_LIST_METRICS } from '@/components/ui/lists/pageListMetrics';
 
 import { SurfaceStateCard, type SurfaceStateSize } from '@/components/ui/surfaces/SurfaceStateCard';
 import { presentProviderError, presentProviderRecoveryAction } from '@/providers/connection/errorPresentation';
 import { dispatchProviderRecoveryAction } from '@/providers/connection/recovery';
 import { t } from '@/text';
 import { NoticeLine } from '@/components/ui/lists/NoticeLine';
+
+const styles = StyleSheet.create({
+    /** A state inside a settings group stands on the rows' own padding, like the rows around it. */
+    inlineInGroup: {
+        paddingHorizontal: PAGE_LIST_METRICS.rowPaddingHorizontalPx,
+        paddingVertical: PAGE_LIST_METRICS.rowPaddingVerticalPx,
+    },
+});
 
 export const ProviderErrorItems = React.memo(function ProviderErrorItems(props: Readonly<{
     error: unknown;
@@ -20,6 +31,10 @@ export const ProviderErrorItems = React.memo(function ProviderErrorItems(props: 
     presentation?: 'rows' | 'line';
     /** Rails use the shared compact state; page errors keep the enclosing surface's size. */
     size?: SurfaceStateSize;
+    /** `'inline'`: the failure sits in a settings group beside the control that caused it, so it takes the compact inline anatomy on the rows' padding instead of a page-sized centred card. */
+    layout?: 'inline';
+    /** The source the failure is about (a connection); a `'line'` leads with it so a list of failures stays attributable. */
+    subject?: string | null;
     retry?: () => void | Promise<void>;
     loadModel?: () => void | Promise<void>;
     reviewAndRestart?: () => void | Promise<void>;
@@ -87,6 +102,7 @@ export const ProviderErrorItems = React.memo(function ProviderErrorItems(props: 
                 iconName={iconName}
                 iconColor={iconColor}
                 tooltip={t(presentation.descriptionKey)}
+                subject={props.subject}
                 title={t(presentation.titleKey)}
                 action={actionTitle ? {
                     testID: `provider-error-action:${code}`,
@@ -100,9 +116,10 @@ export const ProviderErrorItems = React.memo(function ProviderErrorItems(props: 
     }
 
     const code = typedError.success ? typedError.data.code : 'unknown';
-    return <SurfaceStateCard
+    const card = <SurfaceStateCard
         testID={`provider-error:${code}`}
         size={props.size}
+        layout={props.layout}
         kind={presentation.severity === 'danger' ? 'error' : presentation.severity === 'warning' ? 'warning' : 'unavailable'}
         title={t(presentation.titleKey)}
         reason={t(presentation.descriptionKey)}
@@ -116,4 +133,5 @@ export const ProviderErrorItems = React.memo(function ProviderErrorItems(props: 
             onPress: runRecovery,
         } : undefined}
     />;
+    return props.layout === 'inline' ? <View style={styles.inlineInGroup}>{card}</View> : card;
 });

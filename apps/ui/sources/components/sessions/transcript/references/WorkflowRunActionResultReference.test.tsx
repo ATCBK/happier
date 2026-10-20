@@ -62,7 +62,7 @@ installDisconnectedServerSocketBoundary();
 await import('react-native-enriched-markdown/lib/module/web/streamingReveal.js');
 await loadSyncSingletonForTests();
 const { storage } = await import('@/sync/domains/state/storage');
-const { workflowRunRowFromSummary } = await import('@/sync/store/domains/workflowRuns');
+const { workflowRunRowFromSummary, workflowRunStoreKey } = await import('@/sync/store/domains/workflowRuns');
 const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
 const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 const { deleteServerFeaturesSnapshot, primeServerFeaturesSnapshot, resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
@@ -104,6 +104,7 @@ async function getResult(
 ) {
     const run = createWorkflowRunSummaryFixture({ id: RUN_ID, ownerAccountId: ACCOUNT_ID,
         origin: { kind: 'direct', originSessionId: 'session-1' }, state, revision });
+    if (run.origin.kind !== 'direct') throw new Error('direct_run_fixture_required');
     const accepted = await materializeWorkflowAcceptedSnapshotV1({
         definition: createWorkflowDefinitionFixture({ blocks: [{ kind: 'wait', id: 'wait',
             document: { text: 'Continue', references: [], attachments: [] } }] }),
@@ -201,7 +202,7 @@ describe('inline transcript workflow Run result', () => {
         expect(home.requestsFor(STORAGE_ROUTE).map(request => request.input)).toEqual([
             expect.objectContaining({ operation: 'list', request: WorkflowRunListRequestV1Schema.parse({ runId: RUN_ID, limit: 1 }) }),
         ]);
-        expect(storage.getState().workflowRunsById[RUN_ID]?.summary?.state).toBe('running');
+        expect(storage.getState().workflowRunsById[workflowRunStoreKey(RUN_ID)]?.summary?.state).toBe('running');
         expect(screen.findByTestId(`transcript-workflow-run-${RUN_ID}-state`)).toBeTruthy();
         const text = collectHostText(screen.tree);
         expect(text).toContain('workflows.runState.running');
@@ -261,8 +262,8 @@ describe('inline transcript workflow Run result', () => {
         const screen = await renderCardRow();
         await settle();
 
-        expect(storage.getState().workflowRunsById[RUN_ID]?.summary?.state).toBe('running');
-        expect(storage.getState().workflowRunsById[RUN_ID]?.metadata).toBeNull();
+        expect(storage.getState().workflowRunsById[workflowRunStoreKey(RUN_ID)]?.summary?.state).toBe('running');
+        expect(storage.getState().workflowRunsById[workflowRunStoreKey(RUN_ID)]?.metadata).toBeNull();
         const text = collectHostText(screen.tree);
         expect(text).toContain('workflows.run.untitled');
         expect(text).not.toContain('workflows.contentUnavailable');
@@ -305,7 +306,7 @@ describe('inline transcript workflow Run result', () => {
         await settle();
 
         await screen.pressByTestIdAsync(`transcript-workflow-run-${RUN_ID}-open`);
-        expect(pushSpy).toHaveBeenCalledWith(`/workflows/runs/${RUN_ID}`);
+        expect(pushSpy).toHaveBeenCalledWith(`/workflows/runs/${RUN_ID}?serverId=${encodeURIComponent(serverId)}`);
     });
 
     it('mirrors the same row-level outcome in the timeline chrome', async () => {
@@ -326,7 +327,7 @@ describe('inline transcript workflow Run result', () => {
         expect(screen.findByTestId(`transcript-workflow-run-${RUN_ID}`)).toBeTruthy();
         expect(screen.findByTestId(`transcript-workflow-run-${RUN_ID}-open`)).toBeTruthy();
         expect(screen.findAllHostsByTestId(`transcript-workflow-run-${RUN_ID}-state`)).toHaveLength(0);
-        expect(storage.getState().workflowRunsById[RUN_ID]).toBeUndefined();
+        expect(storage.getState().workflowRunsById[workflowRunStoreKey(RUN_ID)]).toBeUndefined();
         // Unknown is not "unavailable": nothing authoritative said the content
         // cannot be read on this device.
         const text = collectHostText(screen.tree);
@@ -363,7 +364,8 @@ describe('inline transcript workflow Run result', () => {
             await deferred.promise;
             await flushHookEffects({ cycles: 40 });
         });
-        expect(storage.getState().workflowRunsById[RUN_ID]).toBeUndefined();
+        expect(storage.getState().workflowRunsById[workflowRunStoreKey(RUN_ID, { serverId, accountId: ACCOUNT_ID })]).toBeUndefined();
+        expect(storage.getState().workflowRunsById[workflowRunStoreKey(RUN_ID)]).toBeUndefined();
     });
 
     it('mounts nothing for a failed start, a read Action or an unrelated tool', async () => {

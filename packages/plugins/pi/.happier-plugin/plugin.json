@@ -362,6 +362,7 @@
         "version": 1
       }
     ],
+    "skills": [],
     "systemTools": [
       {
         "executableNames": [
@@ -505,6 +506,7 @@
     "voiceModelPacks": [],
     "voiceProviders": [],
     "webhooks": [],
+    "workItems": [],
     "workflows": []
   },
   "displayName": "Pi",

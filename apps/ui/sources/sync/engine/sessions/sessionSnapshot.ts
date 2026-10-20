@@ -62,7 +62,7 @@ import {
     type SessionListPageSource,
 } from './sessionHttpCompat';
 import { orderRowsForSessionListHydration } from './sessionListHydrationPriority';
-import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { readSessionOwnerMetadataView, SESSION_OWNER_METADATA_PROJECTION } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { hasAuthoritativeSessionRouteData } from '@/sync/domains/session/hasAuthoritativeSessionRouteData';
 import {
     buildSessionOwnerMetadataUnavailableShell,
@@ -146,9 +146,9 @@ type SessionListRenderablePatch = Readonly<{
     patch: Readonly<Partial<Omit<SessionListRenderableSession, 'id'>>>;
 }>;
 
-// Bound one cold-sync pump so a malformed or moving server cursor cannot make a
-// single fetch open-ended. The owning runtime retains and resumes the returned
-// attention cursor; this is a work bound, never a corpus-completeness limit.
+// Explicit multi-page callers retain this existing continuation work bound.
+// Ordinary acquisitions default to no extra attention pages; their list owner
+// retains the unfinished cursor until page demand resumes it.
 const DEFAULT_SESSION_LIST_ATTENTION_CONTINUATION_MAX_PAGES = 100;
 
 function readSessionListRowAgentStateVersion(row: SessionListRow): number {
@@ -235,6 +235,7 @@ function buildHydratedSessionFromRowState(params: {
     metadata: any;
     agentState: any;
     ownerMetadataView?: Session['ownerMetadataView'];
+    ownerMetadataProjection?: Session[typeof SESSION_OWNER_METADATA_PROJECTION];
     composerOptionsInput?: Session['composerOptionsInput'];
     cachedEntry?: SessionListCacheEntryV1;
     serverId?: string | null;
@@ -289,6 +290,7 @@ function buildHydratedSessionFromRowState(params: {
         metadata: mergedMetadata,
         metadataProjection: undefined,
         ownerMetadataView: metadataLayoutVersion === 0 ? undefined : params.ownerMetadataView ?? null,
+        [SESSION_OWNER_METADATA_PROJECTION]: params.ownerMetadataProjection ?? null,
         composerOptionsInput: params.composerOptionsInput ?? (metadataLayoutVersion === 0 && mergedMetadata
             ? projectComposerOptionsInputV1(mergedMetadata) : null),
         agentState: params.agentState,
@@ -315,6 +317,7 @@ function readSessionListRowOwnerMetadata(params: Readonly<{
     row: SessionListRow;
     credentials: AuthCredentials;
     accountCurrentness: AccountEncryptionCurrentnessResponse | undefined;
+    previousProjection?: Session[typeof SESSION_OWNER_METADATA_PROJECTION];
 }>): SessionLayout1OwnerMetadataRead | null {
     if (readSessionMetadataLayoutVersion(params.row.metadataLayoutVersion) !== 1) {
         return null;
@@ -324,6 +327,7 @@ function readSessionListRowOwnerMetadata(params: Readonly<{
         accountMode: params.accountCurrentness?.mode,
         ownerMetadataEnvelope: params.row.ownerMetadata,
         credentials: params.credentials,
+        previousProjection: params.previousProjection,
     });
 }
 
@@ -353,17 +357,13 @@ function buildPlainHydratedSessionFromRow(
     accountCurrentness: AccountEncryptionCurrentnessResponse | undefined,
     cachedEntry?: SessionListCacheEntryV1,
     serverId?: string | null,
+    ownerMetadataRead: SessionLayout1OwnerMetadataRead | null = readSessionListRowOwnerMetadata({ row, credentials, accountCurrentness }),
 ): HydratedSession {
     const metadataLayoutVersion = readSessionMetadataLayoutVersion(row.metadataLayoutVersion);
     const metadata = parsePlainSessionMetadata(row.metadata, row.metadataLayoutVersion);
     const sharedMetadata = metadataLayoutVersion === 1
         ? StoredSessionSharedMetadataV1Schema.safeParse(metadata)
         : null;
-    const ownerMetadataRead = readSessionListRowOwnerMetadata({
-        row,
-        credentials,
-        accountCurrentness,
-    });
     const ownerProjection = sharedMetadata?.success && ownerMetadataRead
         ? projectSessionLayout1OwnerMetadata({
             sharedMetadata: sharedMetadata.data,
@@ -379,6 +379,7 @@ function buildPlainHydratedSessionFromRow(
         encryptionMode: 'plain',
         metadata: readableMetadata,
         ownerMetadataView: isOwner ? ownerProjection.ownerMetadataView : null,
+        ownerMetadataProjection: ownerMetadataRead?.kind === 'owner' && ownerMetadataRead.canReuse ? ownerMetadataRead : null,
         composerOptionsInput: isOwner ? ownerProjection.composerOptionsInput : null,
         agentState: row.agentState == null
             ? null
@@ -395,7 +396,7 @@ function buildPlainHydratedSessionFromRow(
         : hydratedSession;
 }
 
-function buildRenderableFromRowAndCache(
+export function buildRenderableFromRowAndCache(
     row: SessionListRow,
     credentials: AuthCredentials,
     accountCurrentness: AccountEncryptionCurrentnessResponse | undefined,
@@ -420,6 +421,8 @@ function buildRenderableFromRowAndCache(
         row,
         credentials,
         accountCurrentness,
+        previousProjection: currentRenderable?.[SESSION_OWNER_METADATA_PROJECTION]
+            ?? existingSession?.[SESSION_OWNER_METADATA_PROJECTION],
     });
     if (ownerMetadataRead?.kind === 'unavailable') {
         const lockedSession = buildSessionOwnerMetadataUnavailableShell(buildLockedHydratedSessionFromRow(
@@ -443,6 +446,8 @@ function buildRenderableFromRowAndCache(
             credentials,
             accountCurrentness,
             cachedEntry,
+            undefined,
+            ownerMetadataRead,
         );
         const renderable = preserveSessionListRenderableStaleFields(
             existingRenderable ?? cachedRenderable,
@@ -452,12 +457,9 @@ function buildRenderableFromRowAndCache(
             ? { ...renderable, metadataUnavailable: true }
             : renderable;
     }
-    // E2EE: no key opens here, so the row goes through the one projector as a Session whose
-    // projection is undecided. The projection this device already holds for the row's revision is
-    // the previous row the projector keeps: the matching warm-cache row, else the hydrated Session's,
-    // else a same-layout warm-cache row from an older revision (its own, truthful revision is kept,
-    // so warm hydration re-reads it). With none, the row carries no projection and the store's
-    // apply keeps the applied row's (`preserveSessionListRenderableStaleFields`), as before.
+    // The Session key and shared content stay unopened, while the Account-owned envelope
+    // can independently prove visibility. Keep same-layout readable details from the matching
+    // cache/Session projection or the applied row, retaining their truthful metadata revision.
     const cachedProjectionUsable = cachedRenderable?.metadata != null
         && readSessionMetadataLayoutVersion(cachedEntry?.metadataLayoutVersion) === rowMetadataLayoutVersion;
     const existingSessionProjectionMatches = existingSessionRenderable?.metadata != null
@@ -477,13 +479,16 @@ function buildRenderableFromRowAndCache(
             metadata: null,
             agentState: null,
             encryptedContentAvailability: knownContentAvailability,
+            ownerMetadataView: projectSessionLayout1LockedOwnerVisibility(ownerMetadataRead),
+            ownerMetadataProjection: ownerMetadataRead?.kind === 'owner' && ownerMetadataRead.canReuse ? ownerMetadataRead : null,
         }) as Session,
         // The Home-qualified applied row may retain the store's safe title even with no metadata.
         // Carry only that memory projection; buildHydratedSessionFromRowState stripped wire input.
         lockedDisplayTitle: currentRenderable?.lockedDisplayTitle,
         metadataUndecided: true,
     };
-    return buildSessionListRenderableFromSession(undecidedSession, projectionSource ?? undefined);
+    return buildSessionListRenderableFromSession(undecidedSession, projectionSource
+        ?? (ownerMetadataRead?.kind === 'owner' ? existingRenderable : undefined));
 }
 
 function buildRenderableFromCachedEntry(cachedEntry: SessionListCacheEntryV1): SessionListRenderableSession {
@@ -815,6 +820,9 @@ function buildHydratedSessionRenderablePatch(
         patch.encryptedContentAvailability = hydratedRenderable.encryptedContentAvailability;
     }
     if (tupleCurrentness.metadataCurrent) {
+        if (hydratedRenderable[SESSION_OWNER_METADATA_PROJECTION] !== currentRenderable[SESSION_OWNER_METADATA_PROJECTION]) {
+            patch[SESSION_OWNER_METADATA_PROJECTION] = hydratedRenderable[SESSION_OWNER_METADATA_PROJECTION];
+        }
         const patchSummary = <K extends 'workState' | 'workflowHeadline' | 'agentActivityHeadline' | 'guardState'>(field: K) => {
             if (JSON.stringify(hydratedRenderable[field] ?? null) !== JSON.stringify(currentRenderable[field] ?? null)) {
                 patch[field] = hydratedRenderable[field];
@@ -845,7 +853,7 @@ function buildHydratedSessionRenderablePatch(
         }
     }
 
-    if (Object.keys(patch).length === 0) return null;
+    if (Reflect.ownKeys(patch).length === 0) return null;
     return {
         sessionId: session.id,
         patch,
@@ -969,6 +977,7 @@ async function decryptSessionRow(
     cachedEntry?: SessionListCacheEntryV1,
     hydrationState: SessionDataKeyHydrationState = 'missing_envelope',
     recipientReadiness?: RecipientEncryptionReadiness,
+    previousProjection?: Session[typeof SESSION_OWNER_METADATA_PROJECTION],
 ): Promise<HydratedSession | null> {
     return syncPerformanceTelemetry.measureAsync(
         'sync.sessions.snapshot.decryptRow',
@@ -989,6 +998,7 @@ async function decryptSessionRow(
                 row,
                 credentials,
                 accountCurrentness,
+                previousProjection,
             });
             const lockedOwnerVisibility = projectSessionLayout1LockedOwnerVisibility(
                 ownerMetadataRead,
@@ -1115,6 +1125,7 @@ async function decryptSessionRow(
                     ownerMetadataView: ownerProjection?.kind === 'owner'
                         ? ownerProjection.ownerMetadataView
                         : null,
+                    ownerMetadataProjection: ownerMetadataRead?.kind === 'owner' && ownerMetadataRead.canReuse ? ownerMetadataRead : null,
                     composerOptionsInput: ownerProjection?.kind === 'owner' ? ownerProjection.composerOptionsInput : null,
                     agentState,
                     cachedEntry,
@@ -1425,12 +1436,12 @@ export async function fetchAndApplySessions(params: {
     const sessionListPageSize = Math.max(1, Math.min(200, Math.trunc(params.sessionListPageSize ?? 50)));
     const sessionListMaxPages = Math.max(1, Math.trunc(params.sessionListMaxPages ?? 1));
     const sessionListAttentionMaxPages = Math.max(
-        1,
+        0,
         Math.min(
             DEFAULT_SESSION_LIST_ATTENTION_CONTINUATION_MAX_PAGES,
             Math.trunc(
                 params.sessionListAttentionMaxPages
-                ?? DEFAULT_SESSION_LIST_ATTENTION_CONTINUATION_MAX_PAGES,
+                ?? 0,
             ),
         ),
     );
@@ -1523,6 +1534,10 @@ export async function fetchAndApplySessions(params: {
             includeAttentionRows: includeSessionListAttentionRows,
         })
         : undefined;
+    const getPreviousOwnerMetadataEnvelope = (sessionId: string) => (
+        params.getCurrentSessionListRenderable?.(sessionId)?.[SESSION_OWNER_METADATA_PROJECTION]
+        ?? params.getExistingSession?.(sessionId)?.[SESSION_OWNER_METADATA_PROJECTION]
+    )?.ownerMetadataEnvelope;
 
     if (!isQuerySource && params.includeActiveSessionRows === true && !cursor && !params.sessionListPath) {
         const activePageFields = {
@@ -1543,6 +1558,7 @@ export async function fetchAndApplySessions(params: {
                 limit: 500,
                 allowLegacyV1Fallback: false,
                 telemetryFields: activePageFields,
+                getPreviousOwnerMetadataEnvelope,
             }),
         );
         appendRows(activePage.sessions);
@@ -1571,6 +1587,7 @@ export async function fetchAndApplySessions(params: {
                 limit: pageLimit,
                 allowLegacyV1Fallback: (params.sessionListPath ?? initialSessionListPath) ? false : undefined,
                 telemetryFields: fetchPageFields,
+                getPreviousOwnerMetadataEnvelope,
             }),
         );
 
@@ -1603,7 +1620,8 @@ export async function fetchAndApplySessions(params: {
                     shouldStopAfterPage = !page.hasNext || !page.nextCursor || page.source === 'v1';
                     nextCursor = page.nextCursor;
                     nextCursorForMore = page.nextCursor;
-                    hasNextForMore = page.hasNext === true && typeof page.nextCursor === 'string' && page.source === 'v2';
+                    // Missing continuation is incomplete coverage, never proof that this is the last page.
+                    hasNextForMore = page.hasNext === true && page.source === 'v2';
                     if (fetchedPages === 0 && includeSessionListAttentionRows) {
                         attentionNextCursor = page.attentionNextCursor;
                         attentionHasNext = page.attentionHasNext;
@@ -1638,9 +1656,11 @@ export async function fetchAndApplySessions(params: {
                 token: credentials.token,
                 source: params.source,
                 sessionListPath: isQuerySource ? undefined : DEFAULT_SESSION_LIST_PATH,
+                cursor: null,
                 attentionCursor: attentionNextCursor,
                 limit: sessionListPageSize,
                 allowLegacyV1Fallback: false,
+                getPreviousOwnerMetadataEnvelope,
             });
             appendRows(attentionPage.sessions);
             metadataUpgradeRequiredCount += attentionPage.metadataUpgradeRequiredCount;
@@ -1693,16 +1713,6 @@ export async function fetchAndApplySessions(params: {
             .map((sessionId) => String(sessionId ?? '').trim())
             .filter(Boolean),
     );
-    for (const row of sessions) {
-        const existingSession = params.getExistingSession?.(row.id);
-        if (
-            existingSession
-            && readSessionMetadataLayoutVersion(row.metadataLayoutVersion)
-                > readSessionMetadataLayoutVersion(existingSession.metadataLayoutVersion)
-        ) {
-            requiredHydrationSessionIds.add(row.id);
-        }
-    }
     const requiredSnapshotRows = countRowsWithIds(sessions, requiredHydrationSessionIds);
     const backgroundSnapshotRows = countBackgroundRows(sessions.length, requiredSnapshotRows);
 
@@ -1799,8 +1809,23 @@ export async function fetchAndApplySessions(params: {
     const stagedSessionDataKeyEnvelopes = sessionDataKeyEnvelopes
         ? new Map(sessionDataKeyEnvelopes)
         : undefined;
+    const priorityHydrationSessionIds = new Set(normalizeSessionListHydrationSessionIds(params.priorityHydrationSessionIds));
+    // Choose demand from the full page before removing already hydrated rows.
+    // Otherwise each refresh promotes another eager slice of historical Sessions.
+    const hydrationPriority = orderRowsForSessionListHydration({
+        rows: sessions.filter(row => isSessionCurrent(row.id)),
+        requiredSessionIds: requiredHydrationSessionIds,
+        routeSessionIds: params.prioritizeSessionIds,
+        activeSessionIds: params.activeSessionIds,
+        prioritySessionIds: priorityHydrationSessionIds,
+        eagerHydrationCount: params.sessionListEagerHydrationCount,
+        maxBackgroundHydrationRows: params.sessionListBackgroundHydrationMaxRows,
+    });
+    const demandedSessionIds = new Set(hydrationPriority.rows.map(row => row.id));
     const dataKeyHydrationPlan = createSessionDataKeyHydrationPlan({
-        sessions: sessions.map((session) => ({
+        // Retaining a previously opened key is not current consumer demand.
+        // Reconcile changed envelopes when the row is demanded again.
+        sessions: sessions.filter(session => !shouldApplyRenderables || demandedSessionIds.has(session.id)).map((session) => ({
             id: session.id,
             encryptionMode: session.encryptionMode,
             dataEncryptionKey: session.dataEncryptionKey,
@@ -1914,16 +1939,7 @@ export async function fetchAndApplySessions(params: {
     }
 
     if (shouldApplyRenderables) {
-        const priorityHydrationSessionIds = new Set([
-            ...normalizeSessionListHydrationSessionIds(params.priorityHydrationSessionIds),
-        ]);
-        for (const row of sessions) {
-            if (isSessionListRowAttentionHydrationPriority(row)) {
-                priorityHydrationSessionIds.add(row.id);
-            }
-        }
-        const hydrationPriority = orderRowsForSessionListHydration({
-            rows: sessions.filter((row) =>
+        const rowsNeedingHydration = hydrationPriority.rows.filter((row) =>
                 isSessionCurrent(row.id) && needsWarmHydration({
                     row,
                     cachedEntry: cachedSessionListEntries[row.id],
@@ -1932,15 +1948,7 @@ export async function fetchAndApplySessions(params: {
                     isRequiredHydrationRow: requiredHydrationSessionIds.has(row.id),
                     isAttentionHydrationRow: isSessionListRowAttentionHydrationPriority(row),
                 }),
-            ),
-            requiredSessionIds: requiredHydrationSessionIds,
-            routeSessionIds: params.prioritizeSessionIds,
-            activeSessionIds: params.activeSessionIds,
-            prioritySessionIds: priorityHydrationSessionIds,
-            eagerHydrationCount: params.sessionListEagerHydrationCount,
-            maxBackgroundHydrationRows: params.sessionListBackgroundHydrationMaxRows,
-        });
-        const rowsNeedingHydration = hydrationPriority.rows;
+            );
         const skippedBackgroundHydrationRows = hydrationPriority.reasonCounts.skippedBackground;
         syncPerformanceTelemetry.count(
             'sync.sessions.snapshot.hydrationPriority',
@@ -2110,6 +2118,8 @@ export async function fetchAndApplySessions(params: {
                                             cachedSessionListEntries[row.id],
                                             hydrationStates.get(row.id),
                                             recipientReadiness,
+                                            params.getCurrentSessionListRenderable?.(row.id)?.[SESSION_OWNER_METADATA_PROJECTION]
+                                                ?? params.getExistingSession?.(row.id)?.[SESSION_OWNER_METADATA_PROJECTION],
                                         );
                                         addBackgroundHydrationDuration(
                                             hydrationAttribution,
@@ -2315,6 +2325,8 @@ export async function fetchAndApplySessions(params: {
                     cachedSessionListEntries[row.id],
                     hydrationStates.get(row.id),
                     recipientReadiness,
+                    params.getCurrentSessionListRenderable?.(row.id)?.[SESSION_OWNER_METADATA_PROJECTION]
+                        ?? params.getExistingSession?.(row.id)?.[SESSION_OWNER_METADATA_PROJECTION],
                 )),
             concurrencyLimit,
         ),

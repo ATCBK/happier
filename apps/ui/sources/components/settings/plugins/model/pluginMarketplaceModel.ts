@@ -1,3 +1,4 @@
+import { z } from 'zod/mini';
 import type { DaemonMergedProjectionPhase } from '@/agents/backendCatalog/useDaemonMergedProjectionInputs';
 import type { useMachineCapabilitiesCache } from '@/hooks/server/useMachineCapabilitiesCache';
 import type { StatusPillVariant } from '@/components/ui/status/StatusPill';
@@ -83,6 +84,14 @@ export type InstalledPluginEntry = InstalledPluginCapabilityEntryV1 & Readonly<{
     accountInstallations?: readonly PluginAccountInstalledPluginInstallation[];
 }>;
 
+/** An Account installation's source class, in the installed record's source vocabulary (its locator stays on its machine). */
+const ACCOUNT_INSTALLATION_SOURCE_KIND = {
+    registryPackage: 'npm',
+    versionedArchive: 'archive',
+    localPath: 'localPath',
+    bundledFirstParty: 'bundled',
+} as const satisfies Record<PluginAccountInstalledPluginInstallation['materialization']['sourceClass'], string>;
+
 /** Account discovery extends the display; the administered daemon's records stay exact. */
 export function projectAccountInstalledPlugins(
     administered: readonly InstalledPluginEntry[],
@@ -104,7 +113,7 @@ export function projectAccountInstalledPlugins(
             description: resolvePluginLocalizedText({ projection: null, pluginId: plugin.pluginId, value: presentation?.description }) || null,
             version: versions.length === 1 ? versions[0]! : '',
             enabled: plugin.installations.some((installation) => installation.materialization.enabled),
-            source: { kind: first.materialization.sourceClass === 'bundledFirstParty' ? 'bundled' : 'account', locator: '' },
+            source: { kind: ACCOUNT_INSTALLATION_SOURCE_KIND[first.materialization.sourceClass], locator: '' },
             install: { mode: 'observed', manifestVersion: '' },
             compatibility: { status: 'unknown', diagnostics: [] },
             diagnostics: [],
@@ -156,7 +165,12 @@ export function projectInstalledPluginLifecycleCapabilities(
 }
 
 export type DevelopmentPluginEntry = PluginDevelopmentStatusV1['plugins'][number] & Readonly<{
-    installed: InstalledPluginEntry;
+    /**
+     * The installed plugin this source produced. Null while the daemon has not
+     * loaded it (unavailable, still preparing, no readable manifest): that source
+     * still belongs on the page, since it is exactly the one its author must fix.
+     */
+    installed: InstalledPluginEntry | null;
     actions: Readonly<{
         test: boolean;
         pack: boolean;
@@ -513,6 +527,18 @@ export function readPluginChangeKind(
     return readNonEmptyString(value.change.kind);
 }
 
+/** Projects the installed owner's Action result into the existing UI mutation reader. */
+export function projectPluginInstallActionResult(value: unknown, action: 'install' | 'update', pluginId: string) {
+    const change = isRecord(value) && isRecord(value.change)
+        ? value.change
+        : isRecord(value) && 'outcome' in value
+            ? value.outcome === 'applied'
+                ? { kind: 'committed' as const }
+                : { kind: 'failed' as const, code: 'plugin_install_failed' }
+            : null;
+    return { action, pluginId, change };
+}
+
 /** Only the daemon's exact, strict recovery census can become a removal acknowledgment. */
 export function readPluginManagedResourceRemovalReview(
     value: unknown,
@@ -523,7 +549,7 @@ export function readPluginManagedResourceRemovalReview(
         || !isRecord(value) || !isRecord(value.change)
         || value.change.pluginId !== expectedPluginId
         || !hasOnlyKeys(value.change, ['kind', 'pluginId', 'resources'])) return null;
-    const parsed = ManagedResourceDependencyV1Schema.array().safeParse(value.change.resources);
+    const parsed = z.array(ManagedResourceDependencyV1Schema).safeParse(value.change.resources);
     return parsed.success ? parsed.data : null;
 }
 
@@ -602,28 +628,22 @@ export function readDevelopmentPlugins(
     const explicitRoots = new Set(developmentStatus.roots
         .filter((root) => root.kind === 'explicit')
         .map((root) => root.rootPath));
-    return developmentStatus.plugins.flatMap((source) => {
-        if (!source.pluginId) return [];
-        const installed = installedById.get(source.pluginId);
-        return installed ? [{
-            ...source,
-            installed,
-            actions: Object.freeze({
-                test: true,
-                pack: true,
-                unregister: explicitRoots.has(source.sourceRootPath),
-            }),
-        }] : [];
-    });
+    // Every reported source is listed; its root, not an installation, is its identity.
+    return developmentStatus.plugins.map((source) => ({
+        ...source,
+        installed: source.pluginId ? installedById.get(source.pluginId) ?? null : null,
+        actions: Object.freeze({
+            test: true,
+            pack: true,
+            unregister: explicitRoots.has(source.sourceRootPath),
+        }),
+    }));
 }
 
 /**
- * The changes this machine's daemon is still waiting on a present user for.
- *
- * A change an Agent prepared has no caller left to hand its issued id to, so
- * this read is the only way it becomes visible in the app at all. Entries the
- * app cannot fully type are dropped rather than shown: a user must never be
- * asked to approve a payload their client could not read.
+ * The daemon-owned changes that are already applying. Install/trust questions
+ * are ordinary approval Artifacts and belong in the Inbox; projecting a raw
+ * daemon review here would recreate the retired second decision owner.
  */
 export function readPendingPluginChanges(
     state: ReturnType<typeof useMachineCapabilitiesCache>['state'],
@@ -632,7 +652,7 @@ export function readPendingPluginChanges(
     if (!Array.isArray(pendingChanges)) return [];
     return pendingChanges.flatMap((entry) => {
         const listing = readPendingPluginChangeListing(entry);
-        return listing ? [listing] : [];
+        return listing?.kind === 'applying' ? [listing] : [];
     });
 }
 
@@ -707,8 +727,7 @@ export function formatPendingPluginChangeTitle(entry: PendingPluginChangeListing
         });
 }
 
-export function formatPendingPluginChangeSubtitle(entry: PendingPluginChangeListing): string {
-    if (entry.kind === 'applying') return entry.pendingChangeId;
+export function formatPendingPluginChangeSubtitle(entry: PendingPluginChangeDecision): string {
     return entry.kind === 'projectTrust'
         ? t('settingsPlugins.pendingChangeSourceRootSubtitle', {
             path: entry.projectTrustReview.review.source.locator,
@@ -957,22 +976,29 @@ export type DevelopmentPluginPresentation = Readonly<{
      * shown through the one repository home-relative formatter so it reads the
      * same way an ordinary Session working directory does.
      */
+    title: string;
     sourcePathLabel: string;
     attentionLabel: string | null;
 }>;
+
+function readPathBaseName(path: string): string {
+    const parts = path.split(/[\\/]+/).filter(Boolean);
+    return parts[parts.length - 1] ?? path;
+}
 
 export function projectDevelopmentPluginPresentation(
     entry: DevelopmentPluginEntry,
     homeDir?: string,
 ): DevelopmentPluginPresentation {
-    const statusId: PluginRowStatusId = entry.installed.compatibility.status !== 'compatible'
+    const installed = entry.installed;
+    const statusId: PluginRowStatusId = installed && installed.compatibility.status !== 'compatible'
         ? 'incompatible'
         : entry.phase === 'retained_incumbent' || entry.phase === 'unavailable'
             ? 'needsAttention'
-            : entry.installed.enabled
+            : !installed || installed.enabled
                 ? 'enabled'
                 : 'disabled';
-    const diagnostic = entry.diagnostic ?? entry.installed.compatibility.diagnostics[0] ?? null;
+    const diagnostic = entry.diagnostic ?? installed?.compatibility.diagnostics[0] ?? null;
     const phaseKey = {
         observing: 'observing',
         preparing_dependencies: 'preparingDependencies',
@@ -995,14 +1021,29 @@ export function projectDevelopmentPluginPresentation(
         variant: phaseVariant,
     });
     return Object.freeze({
+        // A source the daemon never loaded is named by its id, else by its folder.
+        title: installed?.title ?? entry.pluginId ?? readPathBaseName(entry.sourceRootPath),
         status: statusId === 'incompatible' || statusId === 'disabled'
             ? createPluginRowStatus(statusId)
             : daemonPhaseStatus,
         sourcePathLabel: formatPathRelativeToHome(entry.sourceRootPath, homeDir),
         attentionLabel: statusId === 'incompatible'
-            ? diagnostic?.message ?? t('settingsPlugins.rowAttention.incompatible')
+            ? readDevelopmentDiagnosticCopy(diagnostic) ?? t('settingsPlugins.rowAttention.incompatible')
             : statusId === 'needsAttention'
-                ? diagnostic?.message ?? null
+                ? readDevelopmentDiagnosticCopy(diagnostic)
                 : null,
     });
+}
+
+/**
+ * The row already shows the source folder, so a diagnostic about that folder is
+ * said in the reader's language instead of repeating the daemon's English text
+ * with the absolute path inside it. Other diagnostics keep the daemon's message.
+ */
+function readDevelopmentDiagnosticCopy(
+    diagnostic: Readonly<{ code?: string; message?: string }> | null,
+): string | null {
+    if (diagnostic?.code === 'plugin_manifest_missing') return t('settingsPlugins.developmentDiagnostic.manifestMissing');
+    if (diagnostic?.code === 'plugin_dev_project_missing') return t('settingsPlugins.developmentDiagnostic.projectMissing');
+    return diagnostic?.message ?? null;
 }

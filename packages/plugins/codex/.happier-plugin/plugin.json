@@ -143,7 +143,11 @@
             "externalSessions"
           ],
           "tools": {
-            "delivery": "native_mcp"
+            "delivery": "native_mcp",
+            "mcpToolControl": {
+              "approval": "host",
+              "off": "hidden"
+            }
           }
         },
         "catalog": {
@@ -209,6 +213,10 @@
                   {
                     "archivePath": "bin/codex-code-mode-host",
                     "destinationPath": "bin/codex-code-mode-host"
+                  },
+                  {
+                    "archivePath": "codex-resources/bwrap",
+                    "destinationPath": "codex-resources/bwrap"
                   }
                 ],
                 "win32": [
@@ -250,7 +258,8 @@
               },
               "binaryName": "codex",
               "githubRepo": "openai/codex",
-              "kind": "github_release_binary"
+              "kind": "github_release_binary",
+              "releaseTag": "rust-v0.162.1"
             },
             "manual": {
               "kind": "command"
@@ -727,6 +736,7 @@
         "version": 1
       }
     ],
+    "skills": [],
     "systemTools": [
       {
         "executableNames": [
@@ -913,6 +923,7 @@
       }
     ],
     "webhooks": [],
+    "workItems": [],
     "workflows": []
   },
   "description": "OpenAI Codex coding agent.",

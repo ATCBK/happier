@@ -7,6 +7,7 @@ import { ScmComparisonSchema } from '@happier-dev/protocol/scm/comparison';
 
 import type { ACPMessageData } from '@/api/session/sessionMessageTypes';
 import type { RpcHandlerContext } from '@/api/rpc/types';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { normalizeServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { ExecutionRunController } from '@/agent/executionRuns/controllers/types';
 import {
@@ -21,12 +22,12 @@ import type { ExecutionRunState } from './executionRunTypes';
 import type { ExecutionRunStructuredMeta } from '@/agent/executionRuns/profiles/ExecutionRunIntentProfile';
 import { VoiceAgentManager } from '@/agent/voice/agent/VoiceAgentManager';
 import { ExecutionBudgetRegistry } from '@/daemon/executionBudget/ExecutionBudgetRegistry';
-import { accountSettingsParse, BUILT_IN_ROLES_V1, resolveRoleSelectionV1 } from '@happier-dev/protocol';
+import { accountSettingsParse, BUILT_IN_ROLES_V1, resolveRoleSelectionV1, ProviderBoundModelRefSchema } from '@happier-dev/protocol';
 import { TaskProfile } from '@/agent/executionRuns/profiles/task/TaskProfile';
 import { projectRetainedExecutionRunState, projectExecutionRunHostLoss } from './retainedState';
 import { projectExecutionRunPublicState } from './publicState';
 import { resumeBackendControllerForResumableRun } from './resumeBackendController';
-import { createLocalScmRepositoryFixture } from '@/scm/contracts/scmBackendContractFixtures';
+import { createLocalScmRepositoryFixture } from '@/testkit/scm/scmBackendContractFixtures';
 import { removeTempDir } from '@/testkit/fs/tempDir';
 import { scmDiffSummaryResultStore } from '@/agent/executionRuns/tasks/scmDiffSummary/results/resultStore';
 import { ScmDiffSummaryProfile } from './kinds/scmDiffSummary/ScmDiffSummaryProfile';
@@ -40,7 +41,7 @@ import axios from 'axios';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { registerExecutionRunRpcHandlers } from '@/rpc/handlers/executionRuns/registerExecutionRunRpcHandlers';
 import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
-import { ExecutionRunStartResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { ExecutionRunErrorSchema, ExecutionRunStartResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
 import { buildExecutionRunProfileCatalog } from '@/agent/executionRuns/profiles/intentRegistry';
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { bindRequesterSessionCredentialScope, readStoredCredentials, writeCredentialsTokenOnly } from '@/persistence';
@@ -48,6 +49,11 @@ import { configuration } from '@/configuration';
 import * as daemonControlHttp from '@/daemon/controlHttp';
 import type { ExecutionRunHostBridge } from './ExecutionRunHostBridge';
 import { prepareSessionMemoryInheritance } from '@/agent/prompting/coding/sessionPromptStack';
+import { createExecutionRunAccountSettingsSnapshotResolver } from '@/api/machine/resolveExecutionRunAccountSettingsSnapshot';
+import { emptyPromptLibraryRecordV1 } from '@happier-dev/protocol/prompts/library/promptLibraryCatalogV1';
+import { PromptLibraryCatalogKeyV1Schema } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
+import { resolveReviewScmScope } from '@/agent/reviews/scope/resolve';
+import { createScmBackendRegistry } from '@/scm/registry';
 
 const TEST_BACKEND_ID = `${'summary'}.${'backend'}` as never;
 
@@ -125,8 +131,10 @@ function createScmDiffSummaryStreamingRuntime(): TestExecutionRunHostRuntime {
 
   runtime = createTestExecutionRunHostRuntime({
     onSendPrompt: async () => {
-      runtime.emitMessage({ type: 'model-output', fullText: 'Inspecting checkpoint diff evidence...\n' });
-      runtime.emitMessage({ type: 'model-output', fullText: finalJson });
+      const progress = 'Inspecting checkpoint diff evidence...\n';
+      runtime.emitMessage({ type: 'model-output', fullText: progress });
+      // Unkeyed fullText is the authoritative whole-turn snapshot, not a delta.
+      runtime.emitMessage({ type: 'model-output', fullText: progress + finalJson });
     },
     onWaitForTurnCompletion: async () => {},
   });
@@ -158,6 +166,124 @@ describe('startExecutionRun', () => {
     vi.stubEnv('HAPPIER_CLAUDE_DYNAMIC_MODEL_PROBE_ENABLED', '0');
   });
   afterEach(() => vi.unstubAllEnvs());
+  it.each([
+    Object.assign(new Error('Native setup refused'), { executionRunErrorCode: 'execution_run_interaction_unavailable' }),
+    Object.assign(new Error('Native setup refused'), { rpcErrorCode: 'RPC_FORBIDDEN' }),
+    { code: 'agent_startup_failed', message: 'Native setup refused' },
+  ])('preserves the typed cause when bounded Plan provisioning fails', async failure => {
+    const voiceAgentManager = new VoiceAgentManager({ createRuntime: () => { throw new Error('Unused Voice boundary'); } });
+    const runs = new Map<string, ExecutionRunState>();
+    const controllers = new Map<string, ExecutionRunController>();
+    const enqueueMarkerWrite: StartExecutionRunArgs['enqueueMarkerWrite'] = (_runId, write) => write();
+    const finishRun: StartExecutionRunArgs['finishRun'] = async (runId, next, toolResult, structuredMeta) => {
+      await finishExecutionRun({ runId, next, toolResult, structuredMeta, runs, controllers, budgetRegistry: null,
+        parentProvider: TEST_BACKEND_ID, sendAcp: async () => {}, enqueueMarkerWrite,
+        terminalMarkerWritePromises: new Map() });
+    };
+    const expectedCode = 'executionRunErrorCode' in failure ? failure.executionRunErrorCode
+      : 'rpcErrorCode' in failure ? failure.rpcErrorCode : failure.code;
+    try {
+      const started = await startExecutionRun({
+        params: { sessionId: 'parent-session', intent: 'plan',
+          backendTarget: { kind: 'builtInAgent', agentId: TEST_BACKEND_ID }, instructions: 'Plan the change.',
+          permissionMode: 'read_only', retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response' },
+        parentProvider: TEST_BACKEND_ID, sendAcp: async () => {}, streamedTranscriptSession: null,
+        // Native startup is the external boundary; admission and settlement remain real.
+        createRuntime: () => createTestExecutionRunHostRuntime({ onProvisionRuntime: async () => { throw failure; } }),
+        getNowMs: () => 1, budgetRegistry: null, runs, controllers,
+        enqueueMarkerWrite, writeActivityMarker: async () => {}, finishRun,
+        executeBoundedRun: async () => { throw new Error('Provisioning refusal must not dispatch a native turn'); },
+        send: async () => ({ ok: true }), voiceAgentManager,
+      });
+      await controllers.get(started.runId)?.terminalPromise;
+      await vi.waitFor(() => expect(runs.get(started.runId)).toMatchObject({
+        status: 'failed', error: { code: expectedCode, message: 'Native setup refused' },
+        latestToolResult: { error: { code: expectedCode, message: 'Native setup refused' } },
+      }));
+      expect(ExecutionRunErrorSchema.parse(runs.get(started.runId)?.error)).toEqual({
+        code: expectedCode, message: 'Native setup refused',
+      });
+    } finally { await voiceAgentManager.dispose(); }
+  });
+  it.each(['ready', 'unavailable', 'retired'] as const)('admits implicit Review roles through the captured owner catalog (%s)', async catalogStatus => {
+    vi.stubEnv('HAPPIER_FEATURE_EXECUTION_RUNS__ENABLED', '1');
+    const ownerUrl = 'http://review-owner-home.test';
+    const sessionId = `review-parent-${catalogStatus}`;
+    const credentials = bindRequesterSessionCredentialScope({
+      token: `header.${Buffer.from(JSON.stringify({ sub: 'review-owner' })).toString('base64url')}.signature`, encryption: null,
+    }, { serverId: 'review-owner-home', serverHttpBaseUrl: ownerUrl });
+    const previous = getActiveAccountSettingsSnapshot();
+    publishEmptyAccountRoleOverrides();
+    const focused = getActiveAccountSettingsSnapshot();
+    let ownerCurrent = true;
+    const paths: string[] = [];
+    // Home HTTP and native execution are the only replaced boundaries. The real
+    // RPC registration, captured Account holder, catalog loader and role resolver compose here.
+    const read = vi.spyOn(axios, 'get').mockImplementation(async (url, options) => {
+      const address = new URL(String(url));
+      expect(address.origin).toBe(ownerUrl);
+      expect(options?.headers?.Authorization).toBe(`Bearer ${credentials.token}`);
+      paths.push(address.pathname);
+      if (address.pathname === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: {} } } };
+      if (address.pathname === '/v1/account/encryption/currentness') return { status: 200, data: {
+        mode: 'plain', version: 1, settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      if (address.pathname === '/v1/account/entity-rows/prompt-library') {
+        if (catalogStatus === 'retired') ownerCurrent = false;
+        return catalogStatus === 'unavailable' ? { status: 503, data: {} } : { status: 200, data: { status: 'listed', rows: PromptLibraryCatalogKeyV1Schema.options.map(key => ({
+          key, revision: 1, content: { t: 'plain', v: key === 'role-overrides'
+            ? { key, value: { v: 1, overrides: { reviewer: { roleId: 'reviewer', instructionsOverride: 'OWNER_REVIEW_INSTRUCTIONS' } } } }
+            : emptyPromptLibraryRecordV1(key) },
+        })) } };
+      }
+      if (address.pathname === '/v1/account/entity-rows/profiles/transfer') return { status: 200, data: { status: 'absent' } };
+      if (address.pathname === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
+      throw new Error(`Unexpected Review owner boundary: ${address.pathname}`);
+    });
+    const admission = vi.spyOn(daemonControlHttp, 'daemonPost').mockResolvedValue({ admitted: true });
+    const resolver = createExecutionRunAccountSettingsSnapshotResolver({ machineId: 'review-machine', serverHttpBaseUrl: ownerUrl,
+      readCredentials: async () => ownerCurrent ? credentials : null, isOwnerCurrent: () => ownerCurrent, onSettings: () => {} });
+    const handlers = new Map<string, (request: unknown, context?: RpcHandlerContext) => Promise<unknown>>();
+    const rpc = new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain' });
+    const captured: { manager?: ExecutionRunHostBridge } = {};
+    try {
+      registerExecutionRunRpcHandlers({ registerHandler: (method, handler) => {
+        rpc.registerHandler(method, handler);
+        handlers.set(method, (request, context) => rpc.invokeLocal(method, request, context));
+      } }, {
+        sessionId, cwd: tmpdir(), parentProvider: TEST_BACKEND_ID,
+        resolveRunReportPolicy: async () => ({ preset: 'important' }),
+        serverId: 'review-owner-home', serverUrl: ownerUrl, sendAcp: async () => {},
+        resolveAccountSettings: async () => (await resolver()).settings, resolveAccountSettingsSnapshot: resolver,
+        readPromptCredentials: async () => credentials, executionRunProfileCatalog: buildExecutionRunProfileCatalog([], {
+          resolveReviewScmScope: input => resolveReviewScmScope({ ...input, registry: createScmBackendRegistry([]) }),
+        }),
+        onManagerCreated: manager => { captured.manager = manager; },
+      });
+      const start = handlers.get(SESSION_RPC_METHODS.EXECUTION_RUN_START);
+      if (!start || !captured.manager) throw new Error('Missing Review Run registration');
+      await captured.manager.recoverRetainedRuns();
+      const retainedRunIds = captured.manager.listPublic().map(run => run.runId);
+      const response = await start({ intent: 'review', backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        instructions: 'Review the provided design.', modelId: readOfferedSummaryModelId(), modelSelection: null,
+        permissionMode: 'read_only', retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response' },
+        { signal: new AbortController().signal, callerAuthority: 'present_user' });
+      if (catalogStatus === 'ready') {
+        expect(response).toMatchObject({ runId: expect.any(String) });
+        const result = ExecutionRunStartResponseSchema.parse(response);
+        expect(captured.manager.get(result.runId)?.instructions).toContain('OWNER_REVIEW_INSTRUCTIONS');
+      } else {
+        expect(response).toMatchObject({ ok: false, error: 'account_role_overrides_unavailable',
+          details: { executionRunStart: { runCreation: 'noRunCreated' } } });
+        expect(captured.manager.listPublic().map(run => run.runId)).toEqual(retainedRunIds);
+      }
+      expect(paths).toContain('/v1/account/entity-rows/prompt-library');
+      expect(getActiveAccountSettingsSnapshot()).toBe(focused);
+    } finally {
+      await captured.manager?.dispose(); await resolver.dispose();
+      read.mockRestore(); admission.mockRestore();
+      if (previous) setActiveAccountSettingsSnapshot(previous); else clearActiveAccountSettingsSnapshot();
+    }
+  });
   it.each(['delegate', 'voice_agent'] as const)('prepares the Account Launch Profile for a no-role %s run', async intent => {
     const runs = new Map<string, ExecutionRunState>();
     const controllers = new Map<string, ExecutionRunController>();
@@ -301,6 +427,7 @@ describe('startExecutionRun', () => {
       ] } });
       const captured: { manager?: ExecutionRunHostBridge } = {};
       const handlers = new Map<string, (request: unknown, context?: RpcHandlerContext) => Promise<unknown>>();
+      const rpc = new RpcHandlerManager({ scopePrefix: 'parent_session_1', encryptionMode: 'plain' });
       const admission = vi.spyOn(daemonControlHttp, 'daemonPost').mockImplementation(async path => {
         if (path !== '/execution-run/admission') throw new Error(`Unexpected daemon effect: ${path}`);
         return { admitted: true };
@@ -323,14 +450,18 @@ describe('startExecutionRun', () => {
         throw new Error(`Unexpected delegate Context read: ${address.pathname}`);
       });
       try {
-        registerExecutionRunRpcHandlers({ registerHandler: (method, handler) => { handlers.set(method, handler); } }, {
+        registerExecutionRunRpcHandlers({ registerHandler: (method, handler) => {
+          rpc.registerHandler(method, handler);
+          handlers.set(method, (request, context) => rpc.invokeLocal(method, request, context));
+        } }, {
           sessionId: 'parent_session_1', cwd: taskHome, parentProvider: TEST_BACKEND_ID,
+          resolveRunReportPolicy: async () => ({ preset: 'important' }),
           ...(scenario === 'home_unavailable' ? {} : { serverId: ownerHome, serverUrl: ownerUrl }),
           resolveAccountSettings: () => ({}), sendAcp: async () => {},
           ...(scenario === 'reader_unavailable' ? {} : { readPromptCredentials: async () => scenario === 'owner_unavailable' ? null : credentials }),
           executionRunProfileCatalog: buildExecutionRunProfileCatalog(), onManagerCreated: manager => { captured.manager = manager; },
           sessionInteractionHost: { session: {
-            sessionId: 'parent_session_1', getMetadataSnapshot: () => metadata, updateMetadata: () => {}, updateAgentState: () => {},
+            sessionId: 'parent_session_1', getMetadataSnapshot: () => metadata, updateMetadata: async () => {}, updateAgentState: async () => {},
             enqueueAgentMessageCommitted: async () => ({ persisted: true, delivered: false }),
           }, machineId: 'context-machine', permissionHandler: { handleToolCall: async () => { throw new Error('Unexpected tool permission request'); } } },
         });
@@ -368,6 +499,53 @@ describe('startExecutionRun', () => {
       }
     },
   );
+  it.each([true, false])('joins parent startup only for an omitted Voice role (explicit commit: %s)', async explicitCommit => {
+    const runs = new Map<string, ExecutionRunState>();
+    const controllers = new Map<string, ExecutionRunController>();
+    const createRuntime = () => createProvisioningRuntime();
+    const voiceAgentManager = new VoiceAgentManager({ createRuntime });
+    const backendTarget = { kind: 'builtInAgent', agentId: 'codex' } as const;
+    const chatSelection = { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'voice-chat' };
+    const commitSelection = { ...chatSelection, modelId: 'voice-commit' };
+    let releaseInstallation!: () => void;
+    const installation = new Promise<void>(resolve => { releaseInstallation = resolve; });
+    const startupWaits: boolean[] = [];
+    const starting = startExecutionRun({
+      params: { sessionId: 'parent_session_1', intent: 'voice_agent', backendTarget,
+        modelSelection: chatSelection, ...(explicitCommit ? { intentInput: { commitModelSelection: commitSelection } } : {}),
+        permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming',
+        bootstrapMode: 'none' },
+      childSelectionContext: { lifecycle: 'attached', readAppliedParentSelection: async options => {
+        startupWaits.push(options?.waitForReady === true);
+        if (explicitCommit) throw new Error('Complete explicit Voice choices must never read parent startup');
+        if (!options?.waitForReady) return { status: 'unavailable' };
+        // Applied native parent configuration is an external runtime fact.
+        await installation;
+        return { status: 'applied', backendTarget, modelId: 'parent-model', connectedServices: null };
+      } },
+      parentProvider: 'codex', sendAcp: async () => {}, streamedTranscriptSession: null, createRuntime,
+      getNowMs: () => 1, budgetRegistry: null, runs, controllers, enqueueMarkerWrite: async () => {},
+      writeActivityMarker: async () => {}, finishRun: async () => {}, executeBoundedRun: async () => {},
+      send: async () => ({ ok: true }), voiceAgentManager,
+    });
+    try {
+      if (!explicitCommit) {
+        await vi.waitFor(() => expect(startupWaits).toEqual([true]));
+        expect(runs.size).toBe(0);
+        releaseInstallation();
+      }
+      const started = await starting;
+      expect(startupWaits).toEqual(explicitCommit ? [] : [true]);
+      expect(runs.get(started.runId)?.voiceAgentConfig).toMatchObject({
+        chatModelId: 'voice-chat', commitModelId: explicitCommit ? 'voice-commit' : 'parent-model',
+      });
+    } finally {
+      releaseInstallation();
+      await starting.catch(() => undefined);
+      await voiceAgentManager.dispose();
+    }
+  });
+
   it('refuses unsupported inherited Team Voice custody before publishing a Run', async () => {
     const runs = new Map<string, ExecutionRunState>();
     const controllers = new Map<string, ExecutionRunController>();
@@ -402,7 +580,7 @@ describe('startExecutionRun', () => {
       status: 'applied' as const,
       backendTarget: { kind: 'builtInAgent' as const, agentId: 'claude' },
       modelId: 'parent-model',
-      modelSelection: { agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: 'parent-provider', modelId: 'parent-model' },
+      modelSelection: ProviderBoundModelRefSchema.parse({ agentTargetKey: 'agent:happier.agent.claude/claude', providerConnectionId: 'parent-provider', modelId: 'parent-model' }),
       connectedServices: null,
     };
     try {
@@ -417,7 +595,7 @@ describe('startExecutionRun', () => {
       });
       const retained = projectRetainedExecutionRunState(runs.get(started.runId)!);
       applied.modelId = 'later-parent-model';
-      applied.modelSelection = { ...applied.modelSelection, providerConnectionId: 'later-parent-provider', modelId: 'later-parent-model' };
+      applied.modelSelection = ProviderBoundModelRefSchema.parse({ ...applied.modelSelection, providerConnectionId: 'later-parent-provider', modelId: 'later-parent-model' });
       expect(retained.launch).toMatchObject({
         modelId: 'parent-model', selectionSource: 'inherited', connectedServicesSelection: null,
         modelSelection: { providerConnectionId: 'parent-provider', modelId: 'parent-model' },
@@ -519,22 +697,28 @@ describe('startExecutionRun', () => {
 
   it('retains an admitted Workflow origin through host loss and public terminal observation', async () => {
     const runs = new Map<string, ExecutionRunState>();
+    const controllers = new Map<string, ExecutionRunController>();
+    const workflowScope = { actionRequestId: 'origin-workflow/invocation-1/0', invocationId: 'invocation-1',
+      sessions: [{ serverId: 'home', sessionId: 'parent_session_1' }] };
     const voiceAgentManager = new VoiceAgentManager({ createRuntime: () => { throw new Error('unused'); } });
     try {
       const started = await startExecutionRun({
-        params: { sessionId: 'parent_session_1', workflowRunId: 'origin-workflow', intent: 'task',
+        params: { sessionId: 'parent_session_1', workflowRunId: 'origin-workflow', workflowScope, intent: 'task',
           backendTarget: { kind: 'builtInAgent', agentId: TEST_BACKEND_ID }, instructions: 'Continue.',
           permissionMode: 'read_only', retentionPolicy: 'resumable', runClass: 'bounded', ioMode: 'request_response' },
         parentProvider: TEST_BACKEND_ID, sendAcp: async () => {}, streamedTranscriptSession: null,
         createRuntime: () => createProvisioningRuntime(), getNowMs: () => 1, budgetRegistry: null,
-        runs, controllers: new Map(), enqueueMarkerWrite: async () => {}, writeActivityMarker: async () => {},
+        runs, controllers, enqueueMarkerWrite: async () => {}, writeActivityMarker: async () => {},
         finishRun: async () => {}, executeBoundedRun: async () => {}, send: async () => ({ ok: true }), voiceAgentManager,
       });
       const retained = projectRetainedExecutionRunState(runs.get(started.runId)!);
+      expect(controllers.get(started.runId)).toMatchObject({ workflowRunId: 'origin-workflow', workflowScope });
+      expect(retained).not.toHaveProperty('workflowScope');
       const terminal = projectExecutionRunHostLoss({ ownerPid: 1, state: retained }, 2);
       expect(projectExecutionRunPublicState(terminal.state)).toMatchObject({
         runId: started.runId, status: 'failed', originWorkflowRunId: 'origin-workflow',
       });
+      expect(projectExecutionRunPublicState(terminal.state)).not.toHaveProperty('workflowScope');
     } finally { await voiceAgentManager.dispose(); }
   });
   it('refuses a role start without Account role-override authority before creating a run', async () => {
@@ -569,6 +753,7 @@ describe('startExecutionRun', () => {
           promptCredentials: { token: 'synthetic-account-token', encryption: null },
           backendTarget: { kind: 'builtInAgent', agentId: TEST_BACKEND_ID }, instructions: 'Assess this change.',
           cwd: tmpdir(), accountSettings: {}, permissionMode: 'yolo', retentionPolicy: 'resumable', runClass: 'bounded', ioMode: 'request_response' },
+        resolveAccountSettingsSnapshot: async () => { throw new Error('An accepted Role must not demand later Account authority'); },
         parentProvider: TEST_BACKEND_ID, sendAcp: async () => {}, streamedTranscriptSession: null,
         createRuntime, getNowMs: () => 1, budgetRegistry: null, runs, controllers: new Map(),
         enqueueMarkerWrite: async () => {}, writeActivityMarker: async () => {}, finishRun: async () => {}, executeBoundedRun,
@@ -613,7 +798,8 @@ describe('startExecutionRun', () => {
       const result = await startExecutionRun({
         params: {
           sessionId: 'parent_session_1', intent, runClass, notifyParentOnCompletion,
-          backendTarget: { kind: 'builtInAgent', agentId: TEST_BACKEND_ID },
+          backendTarget: { kind: 'builtInAgent', agentId: intent === 'review' ? 'claude' : TEST_BACKEND_ID },
+          ...(intent === 'review' ? { modelId: readOfferedSummaryModelId(), modelSelection: null } : {}),
           instructions: '', permissionMode: 'read_only', retentionPolicy: 'resumable', ioMode: 'request_response',
           accountSettings: { executionRunsNotifyParentOnCompletionDefault: false },
         },
@@ -676,7 +862,53 @@ describe('startExecutionRun', () => {
     }
   });
 
-  it('rejoins the Run allocated for one host-stamped Action request without repeating start effects', async () => {
+  it.each([
+    SESSION_RPC_METHODS.EXECUTION_RUN_START,
+    SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START,
+  ])('ignores caller retry identity through the registered %s Action/RPC path', async method => {
+    vi.stubEnv('HAPPIER_FEATURE_EXECUTION_RUNS__ENABLED', '1');
+    const sessionId = `public-run-identity-${method}`;
+    const rpc = new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain' });
+    const captured: { manager?: ExecutionRunHostBridge } = {};
+    // Only daemon admission and native Agent execution are replaced. Registration,
+    // both public schemas, the Action executor and Run allocation remain real.
+    const admission = vi.spyOn(daemonControlHttp, 'daemonPost').mockResolvedValue({ admitted: true });
+    const registration = registerExecutionRunRpcHandlers(rpc, {
+      sessionId, cwd: tmpdir(), parentProvider: TEST_BACKEND_ID, sendAcp: async () => {},
+      resolveRunReportPolicy: async () => ({ preset: 'important' }),
+      resolveAccountSettings: async () => ({}),
+      executionRunProfileCatalog: buildExecutionRunProfileCatalog(),
+      onManagerCreated: manager => { captured.manager = manager; },
+    });
+    const start = async (instructions: string, actionRequestId: string) => {
+      const input = {
+        intent: 'agent', backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        instructions, modelSelection: null, permissionMode: 'read_only',
+        retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'request_response',
+        actionRequestId: 'caller-selected-host-key',
+      };
+      const response = await rpc.invokeLocal(method,
+        method === SESSION_RPC_METHODS.EXECUTION_RUN_START ? input : { start: input }, {
+          signal: new AbortController().signal,
+          localActionContext: { authority: 'present_user', actionRequestId },
+        });
+      return ExecutionRunStartResponseSchema.parse(response);
+    };
+    try {
+      const first = await start('First execution.', 'public-action-1');
+      const second = await start('Second execution.', 'public-action-2');
+      expect(second.runId).not.toBe(first.runId);
+      expect(second.callId).not.toBe(first.callId);
+      expect(captured.manager?.get(first.runId)?.instructions).toBe('First execution.');
+      expect(captured.manager?.get(second.runId)?.instructions).toBe('Second execution.');
+    } finally {
+      registration.dispose();
+      await captured.manager?.dispose();
+      admission.mockRestore();
+    }
+  });
+
+  it.each(['sequential', 'overlapping'] as const)('rejoins %s starts for one host-stamped Action request without repeating start effects', async timing => {
     const runs = new Map<string, ExecutionRunState>();
     const controllers = new Map<string, ExecutionRunController>();
     const runtime = createProvisioningRuntime();
@@ -684,6 +916,10 @@ describe('startExecutionRun', () => {
     const enqueueMarkerWrite = vi.fn(async () => {});
     const sendAcp = vi.fn(async () => {});
     const send = vi.fn(async () => ({ ok: true as const }));
+    const occurrences: ExecutionRunController[] = [];
+    let admissionCalls = 0;
+    let releaseFinalAdmission!: () => void;
+    const finalAdmission = new Promise<void>(resolve => { releaseFinalAdmission = resolve; });
     const voiceAgentManager = new VoiceAgentManager({
       createRuntime: () => {
         throw new Error('voice runtime should not be used by agent runs');
@@ -717,18 +953,28 @@ describe('startExecutionRun', () => {
       executeBoundedRun: async () => {},
       send,
       voiceAgentManager,
+      registerRunOccurrence: ({ controller }) => { occurrences.push(controller); },
+      admitStart: async () => {
+        if (timing !== 'overlapping') return;
+        admissionCalls += 1;
+        if (admissionCalls < 3) return;
+        if (admissionCalls === 4) releaseFinalAdmission();
+        await finalAdmission;
+      },
     } satisfies StartExecutionRunArgs;
 
     try {
-      const first = await startExecutionRun(args);
-      const second = await startExecutionRun(args);
-      await (controllers.get(first.runId) as (ExecutionRunController & {
-        provisioningPromise?: Promise<void>;
-      }) | undefined)?.provisioningPromise;
+      const [first, second] = timing === 'overlapping'
+        ? await Promise.all([startExecutionRun(args), startExecutionRun(args)])
+        : [await startExecutionRun(args), await startExecutionRun(args)];
+      await Promise.all(occurrences.map(controller => controller.kind === 'backend' ? controller.provisioningPromise : undefined));
 
       expect(second).toEqual(first);
       expect(first.runId).toMatch(/^run_request_/);
       expect(runs.size).toBe(1);
+      expect(controllers.size).toBe(1);
+      expect(occurrences).toHaveLength(1);
+      expect(runs.get(first.runId)).toMatchObject({ callId: first.callId, sidechainId: first.sidechainId });
       expect(projectRetainedExecutionRunState(runs.get(first.runId)!).launch)
         .toMatchObject({ allowedTools: ['mcp__wilson-brief__*'], unlistedTools: 'deny' });
       expect(createRuntime.mock.calls[0]?.[0]).toMatchObject({ start: {
@@ -739,6 +985,8 @@ describe('startExecutionRun', () => {
       expect(sendAcp).not.toHaveBeenCalled();
       expect(send).toHaveBeenCalledTimes(1);
     } finally {
+      releaseFinalAdmission();
+      await runtime.dispose();
       await voiceAgentManager.dispose();
     }
   });
@@ -1043,6 +1291,8 @@ describe('startExecutionRun', () => {
           sessionId: 'session_1',
           intent: 'review',
           backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+          modelId: readOfferedSummaryModelId(),
+          modelSelection: null,
           instructions: 'Review the selected pull request.',
           intentInput,
           permissionMode: 'read_only',
@@ -1754,6 +2004,7 @@ describe('startExecutionRun', () => {
         .join('');
       expect(streamedText).toContain('Inspecting checkpoint diff evidence');
       expect(streamedText).not.toContain('## Summary');
+      expect(sidechainCommits.at(-1)?.body.message).toBe('Inspecting checkpoint diff evidence...');
       expect(sidechainCommits[0]?.meta?.happierStreamSegmentV1).toMatchObject({ segmentState: 'streaming' });
       expect(sidechainCommits.at(-1)?.meta?.happierStreamSegmentV1).toMatchObject({ segmentState: 'complete' });
 

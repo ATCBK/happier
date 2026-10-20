@@ -6,14 +6,14 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ActionsSettingsV1Schema, PluginProjectionV2Schema } from '@happier-dev/protocol';
 
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
-import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE } from '@/dev/testkit/fixtures/pluginProviderDaemonProjection';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { reportPopoverContentLayout, withPopoverWebGlobals } from '@/dev/testkit';
+import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { StoredApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { SEARCH_SETTINGS } from './searchSettings';
@@ -21,9 +21,8 @@ import { SEARCH_SETTINGS } from './searchSettings';
 const machineRpcSpy = vi.hoisted(() => vi.fn());
 const modalConfirm = vi.hoisted(() => vi.fn());
 const routeParams = vi.hoisted(() => ({ value: {} as Record<string, string> }));
-const homes = createHomeGovernanceHarness();
-installHomeGovernanceBoundaries(homes);
-installDisconnectedServerSocketBoundary();
+const account = createProviderSettingsAccountHarness();
+const homes = account.home;
 const { MACHINE_ADMINISTRATION_SELECTION_KEYS_V1 } = await import('@/sync/domains/machines/administration/selectionPreferences');
 await loadSyncSingletonForTests();
 const [
@@ -63,38 +62,30 @@ vi.mock('expo-router', async () => {
     return createExpoRouterMock({ params: () => routeParams.value }).module;
 });
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: machineRpcSpy }));
+// Search settings never renders the vendor's DOM streaming renderer.
+vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
+    splitStreamingRevealTextParts: () => { throw new Error('Unexpected Markdown reveal in Search settings'); },
+}));
 
 beforeEach(async () => {
     routeParams.value = {};
-    await homes.reset();
-    serverId = await homes.addHome({ serverUrl: 'https://search-settings.example.test', serverIdentityId, name: 'Search Home', accountId: 'search-account' });
-    vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async (url) => {
-        const token = homes.findByServerUrl(url)?.token;
-        return token ? { token } : null;
-    });
+    await account.reset();
     const machines = ['m1', 'm2'].map((id) => createMachineFixture({ id, activeAt: Date.now(), metadata: {
         ...createMachineFixture().metadata!, displayName: id === 'm1' ? 'Studio' : 'Laptop',
     } }));
-    const scope = { serverId: serverIdentityId, accountId: 'search-account' };
-    storage.setState((state) => ({
-        isDataReady: true,
-        profile: { ...state.profile, id: scope.accountId },
-        profileScope: scope,
-        settingsScope: scope,
-        machines: Object.fromEntries(machines.map((machine) => [machine.id, machine])),
-        machineListByServerId: { [serverId]: machines },
-        machineListStatusByServerId: { [serverId]: 'idle' },
-        settings: { ...settingsDefaults, experiments: true, featureToggles: { 'memory.search': true },
-            machineAdministrationTargetsLocalV1: { [MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.memory]: { serverIdentityId, machineId: 'm1' } },
-        },
+    ({ serverId } = await account.restore({
+        serverIdentityId, accountId: 'search-account', currentAccount: true, machines,
+        settings: { ...settingsDefaults, experiments: true, featureToggles: { 'memory.search': true } },
     }));
+    await account.selectMachine(serverId, 'm1', MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.memory);
     clearDaemonMergedProjectionCacheForTests();
     expect(resolveFreshMachineAdministrationExecutionTarget({ serverIdentityId, machineId: 'm1' })).not.toBeNull();
     // Cleanup restores the canonical modal mock between cases. Rebind its
     // external confirmation handler without replacing any UI owner.
     const { Modal } = await import('@/modal');
     vi.mocked(Modal.confirm).mockImplementation((...args) => modalConfirm(...args));
-    vi.useFakeTimers();
+    // Flush UI delays without advancing wall-clock Machine presence past its grace.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
 });
 
 afterEach(async () => {
@@ -103,7 +94,7 @@ afterEach(async () => {
     modalConfirm.mockReset();
     vi.useRealTimers();
     vi.restoreAllMocks();
-    await homes.reset();
+    await account.reset();
 });
 
 type RpcRequest = Readonly<{ machineId: string; serverId: string; method: string; payload: unknown }>;
@@ -230,15 +221,113 @@ async function pendingClearApproval() {
 }
 
 async function decideClear(artifactId: string, decision: 'approve' | 'reject') {
-    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+    const { createDefaultActionExecutor, isApprovalExecutionOriginCurrentForAccountContext } = await import('@/sync/ops/actions/defaultActionExecutor');
+    const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+    const { createActionExecutor } = await import('@happier-dev/protocol/actions/actionExecutor');
+    const { ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } = await import('@happier-dev/protocol/actions/externalActionApi');
+    const { approvalArtifactBodyMatchesHeaderV1 } = await import('@happier-dev/protocol/approvals/approvalArtifactHeaderV1');
+    const { createActionExecutorBoundaryFixture } = await import('@/dev/testkit/fixtures/actionExecutorBoundary');
+    const { writeApprovalRequestArtifact } = await import('@/sync/ops/actions/approvalArtifactWriter');
+    const { clearDaemonMemoryIndex } = await import('@/sync/domains/memory/clearDaemonMemoryIndex');
+    // Explicit Ask-first Machine effects replay at their exact daemon. Model that
+    // HTTP boundary with the real executor, strict envelopes and Artifact CAS.
+    homes.answer(serverId, '/v1/machines', { body: ['m1', 'm2'].map(id =>
+        createPlainMachineRowFixture({ id, accountId: 'search-account' })) });
+    const captured = await captureLazyActionAccountContext(serverId);
+    const read = (id: string) => captured.fetchArtifact(id);
+    const receiver = createActionExecutor(createActionExecutorBoundaryFixture({
+        approvalsGet: async ({ artifactId }) => {
+            const artifact = await read(artifactId);
+            const matched = artifact?.header && typeof artifact.body === 'string'
+                ? approvalArtifactBodyMatchesHeaderV1(artifact.header, artifact.body) : null;
+            return matched?.family === 'built_in' ? matched.request : null;
+        },
+        approvalsUpdate: ({ artifactId, request }) => writeApprovalRequestArtifact({ artifactId, request, read,
+            write: (basis, header, body) => captured.updateArtifact(artifactId, header, body, basis) }),
+        isApprovalExecutionOriginCurrent: async ({ origin }) => isApprovalExecutionOriginCurrentForAccountContext({
+            origin, accountServerId: captured.serverId, accountId: captured.accountId,
+        }),
+        daemonMemoryClearIndex: async ({ machineId, signal }) => {
+            await clearDaemonMemoryIndex({ machineId, serverId: serverIdentityId, accountId: captured.accountId, signal });
+            return { ok: true };
+        },
+    }));
+    homes.answer(serverId, 'POST /v1/actions/approval.request.decide', { select: async input => {
+        const envelope = ExternalActionRequestEnvelopeV1Schema.parse(input);
+        expect(envelope.target).toEqual({ kind: 'machine', machineId: 'm1' });
+        const execution = await receiver.execute('approval.request.decide', envelope.input, {
+            surface: 'ui', authority: 'present_user', serverId: serverIdentityId, serverIdentityId,
+            runtimeAccountId: captured.accountId, actionRequestId: envelope.requestId,
+        });
+        return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId: 'approval.request.decide',
+            requestId: envelope.requestId, execution }) };
+    } });
     let result: unknown;
-    await act(async () => { result = await createDefaultActionExecutor().execute('approval.request.decide', { artifactId, decision },
-        { surface: 'ui', authority: 'present_user', serverId, expectedAccountId: 'search-account' }); });
-    expect(result).toMatchObject({ ok: true });
+    try {
+        await act(async () => { result = await createDefaultActionExecutor().execute('approval.request.decide', { artifactId, decision },
+            { surface: 'ui', authority: 'present_user', serverId, expectedAccountId: 'search-account' }); });
+    } finally { captured.dispose(); }
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
     await flushHookEffects({ runOnlyPendingTimers: true });
 }
 
 describe('SearchSettingsView', () => {
+    it.each(['parked', 'remounted'] as const)('reads the selected machine again after navigating away and returning to Search (%s)', lifecycle => withPopoverWebGlobals(async () => {
+        const daemons = installDaemons({ enabled: true, indexMode: 'deep' });
+        const { SearchSettingsView } = await import('./SearchSettingsView');
+        const { RetainedPanelSurface } = await import('@/components/ui/panels/RetainedPanelSurface');
+        const page = (visible: boolean) => React.createElement(React.Fragment, null,
+            !visible && lifecycle === 'remounted' ? null
+                : React.createElement(RetainedPanelSurface, { isActive: visible, suspendWhenHidden: true,
+                    children: React.createElement(SearchSettingsView) }));
+        const screen = await renderScreen(page(true), { flushOptions: { runOnlyPendingTimers: true } });
+        await renderedControl(screen, 'search-settings-standard');
+        await screen.update(page(false));
+        // A Home refresh/presence update may settle while this tab is parked.
+        await act(async () => { storage.setState(state => ({
+            machines: Object.fromEntries(Object.values(state.machines).map(machine => [machine.id, { ...machine }])),
+            machineListStatusByServerId: { ...state.machineListStatusByServerId, [serverIdentityId]: 'loading' },
+        })); });
+        await screen.update(page(true));
+        await screen.pressByTestIdAsync('search-settings-target.chip');
+        await act(async () => { reportPopoverContentLayout(screen.tree, { width: 320, height: 400 }); });
+        await screen.pressByTestIdAsync('search-settings-target.picker-option:m1');
+        expect((await renderedControl(screen, 'search-settings-standard')).props.value).toBe(true);
+        await enabledClearControl(screen);
+        await toggle(screen, 'search-settings-standard');
+        expect(daemons.m1.settings.conversationSearch.standardSearch.enabled).toBe(false);
+        expect(daemons.m2.settings.conversationSearch.standardSearch.enabled).toBe(true);
+    }));
+
+    it('reads the selected online machine while its scoped inventory refreshes and exposes the search controls', () => withPopoverWebGlobals(async () => {
+        const daemons = installDaemons({ enabled: true, indexMode: 'deep' });
+        await account.selectMachine(serverId, null, MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.memory);
+        // A refresh retains the admitted Home rows while socket presence has
+        // already replaced the active display objects for those same machines.
+        storage.setState((state) => ({
+            machines: Object.fromEntries(Object.values(state.machines).map(machine => [machine.id, { ...machine }])),
+            machineListStatusByServerId: { ...state.machineListStatusByServerId, [serverIdentityId]: 'loading' },
+        }));
+        const screen = await renderSearchSettings();
+        expect(screen.findHostByTestId('search-settings-standard')).toBeNull();
+
+        await screen.pressByTestIdAsync('search-settings-target.chip');
+        await act(async () => { reportPopoverContentLayout(screen.tree, { width: 320, height: 400 }); });
+        const option = screen.findHostByTestId('search-settings-target.picker-option:m1');
+        expect(option).not.toBeNull();
+        expect(option!.props.disabled ?? option!.props.accessibilityState?.disabled ?? option!.props['aria-disabled']).not.toBe(true);
+        await screen.pressByTestIdAsync('search-settings-target.picker-option:m1');
+        expect(storage.getState().settings.machineAdministrationTargetsLocalV1[MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.memory])
+            .toEqual({ serverIdentityId, machineId: 'm1' });
+        expect((await renderedControl(screen, 'search-settings-standard')).props.value).toBe(true);
+        await enabledClearControl(screen);
+        expect(machineRpcSpy.mock.calls.filter(([request]) => request.method === RPC_METHODS.DAEMON_MEMORY_SETTINGS_GET)
+            .map(([request]) => request)).toContainEqual(expect.objectContaining({ machineId: 'm1', serverId }));
+        await toggle(screen, 'search-settings-standard');
+        expect(daemons.m1.settings.conversationSearch.standardSearch.enabled).toBe(false);
+        expect(daemons.m2.settings.conversationSearch.standardSearch.enabled).toBe(true);
+    }));
+
     it.each(['error', 'unsupported'] as const)('ends loading after a terminal %s Agent projection and offers recovery', async (projectionFailure) => {
         const held = createDeferred<void>();
         const options: { readProjectionAfter: PromiseLike<void>; projectionFailure?: 'error' | 'unsupported' } = { readProjectionAfter: held.promise, projectionFailure };
@@ -262,7 +351,7 @@ describe('SearchSettingsView', () => {
         const { NavigationTitleChromeProvider } = await import('@/components/ui/layout/PageHeader');
         const { SearchSettingsView } = await import('./SearchSettingsView');
         const screen = await renderScreen(
-            React.createElement(NavigationTitleChromeProvider, { showsTitle: true }, React.createElement(SearchSettingsView)),
+            React.createElement(NavigationTitleChromeProvider, { showsTitle: true, children: React.createElement(SearchSettingsView) }),
             { flushOptions: { runOnlyPendingTimers: true } },
         );
         await renderedControl(screen, 'search-settings-target.chip');
@@ -301,6 +390,17 @@ describe('SearchSettingsView', () => {
         await renderedControl(screen, 'search-settings-agent:claude');
         expect(screen.findHostByTestId(`setting-reveal.${SEARCH_SETTINGS.settings.agents.anchor}`)).not.toBeNull();
         expect(screen.findHostByTestId(`setting-reveal.${SEARCH_SETTINGS.sectionRefs.external.id}`)).toBeNull();
+    });
+
+    it('says nothing is indexed while every Agent is off, and goes back to the usual line once one is on', async () => {
+        installDaemons({ enabled: true, conversationSearch: { indexExternal: { enabled: true, agents: [] } } });
+        const screen = await renderSearchSettings();
+        await renderedControl(screen, 'search-settings-agent:acme.archive');
+        expect(screen.getTextContent()).toContain('conversationSearch.agentsNoneOn');
+        expect(screen.getTextContent()).not.toContain('conversationSearch.agentsDescription');
+        await toggle(screen, 'search-settings-agent:acme.archive');
+        expect(screen.getTextContent()).toContain('conversationSearch.agentsDescription');
+        expect(screen.getTextContent()).not.toContain('conversationSearch.agentsNoneOn');
     });
 
     it('reveals the indexing prerequisite when settings search requests unavailable Agent controls', async () => {
@@ -348,21 +448,27 @@ describe('SearchSettingsView', () => {
 
     it.each([false, true])('uses canonical approval before clearing (explicit requirement: %s)', async (explicit) => {
         const daemons = installDaemons({ enabled: true });
+        const confirmation = createDeferred<boolean>();
+        modalConfirm.mockReturnValue(confirmation.promise);
         installActionSettings(explicit ? { v: 1, approvalWaivedSurfaces: { 'memory.clear_index': ['ui'] },
             actions: { 'memory.clear_index': { approvalRequiredSurfaces: ['ui'] } } } : { v: 1 });
         const screen = await renderSearchSettings();
         await startClear(screen);
-        const artifactId = await pendingClearApproval();
+        const artifactId = explicit ? await pendingClearApproval() : null;
+        if (!explicit) await vi.waitFor(() => expect(modalConfirm).toHaveBeenCalledTimes(1));
         expect(daemons.m1.cleared).toBe(0);
-        expect(screen.findHostByTestId('search-settings-clear-approval')).not.toBeNull();
-        expect(modalConfirm).not.toHaveBeenCalled();
+        if (explicit) {
+            expect(screen.findHostByTestId('search-settings-clear-approval')).not.toBeNull();
+            expect(modalConfirm).not.toHaveBeenCalled();
+        } else expect(homes.artifacts(serverId).list()).toEqual([]);
         const readsBefore = daemons.m1.statusReads;
         // Changing the page's selected machine cannot retarget admitted custody.
         await act(async () => storage.setState((state) => ({ settings: { ...state.settings,
             machineAdministrationTargetsLocalV1: { [MACHINE_ADMINISTRATION_SELECTION_KEYS_V1.memory]: { serverIdentityId, machineId: 'm2' } },
         } })));
         await flushHookEffects({ runOnlyPendingTimers: true });
-        await decideClear(artifactId, 'approve');
+        if (artifactId) await decideClear(artifactId, 'approve');
+        else await act(async () => confirmation.resolve(true));
         await settledClear(screen);
         expect(daemons.m1.cleared).toBe(1);
         expect(daemons.m1.statusReads).toBe(readsBefore + 1);
@@ -389,15 +495,18 @@ describe('SearchSettingsView', () => {
 
     it('does not clear or refresh after canonical approval is rejected', async () => {
         const daemons = installDaemons({ enabled: true });
+        const confirmation = createDeferred<boolean>();
+        modalConfirm.mockReturnValue(confirmation.promise);
         installActionSettings();
         const screen = await renderSearchSettings();
         await startClear(screen);
-        const artifactId = await pendingClearApproval();
+        await vi.waitFor(() => expect(modalConfirm).toHaveBeenCalledTimes(1));
         const readsBefore = daemons.m1.statusReads;
-        await decideClear(artifactId, 'reject');
+        await act(async () => confirmation.resolve(false));
         await settledClear(screen);
         expect(daemons.m1.cleared).toBe(0);
         expect(daemons.m1.statusReads).toBe(readsBefore);
+        expect(homes.artifacts(serverId).list()).toEqual([]);
     });
 
     it.each(['throw', 'refused'] as const)('keeps %s clear failure presentation without refreshing an unacknowledged clear', async (clearFailure) => {
@@ -416,11 +525,15 @@ describe('SearchSettingsView', () => {
 
     it('withdraws the original clear continuation when its Account retires during approval', async () => {
         const daemons = installDaemons({ enabled: true });
+        const confirmation = createDeferred<boolean>();
+        modalConfirm.mockReturnValue(confirmation.promise);
         installActionSettings();
         const screen = await renderSearchSettings();
         await startClear(screen);
-        await pendingClearApproval();
-        await act(async () => { await TokenStorage.removeCredentialsForServerUrl('https://search-settings.example.test', { serverId }); });
+        await vi.waitFor(() => expect(modalConfirm).toHaveBeenCalledTimes(1));
+        const { getServerProfileById } = await import('@/sync/domains/server/serverProfiles');
+        await act(async () => { await TokenStorage.removeCredentialsForServerUrl(getServerProfileById(serverId)!.serverUrl, { serverId }); });
+        await act(async () => confirmation.resolve(true));
         await vi.waitFor(async () => {
             await flushHookEffects({ runOnlyPendingTimers: true });
             expect(screen.findHostByTestId('search-settings-clear-approval')).toBeNull();

@@ -142,17 +142,13 @@ export function createSessionScopedMcpServices(
                     });
                 }
                 try {
-                    const { mcpElicitationFormContent, mcpElicitationFormQuestions, parseMcpElicitationFormSchema } = await import('@/plugins/runtime/invocation/services/mcpElicitationForm');
+                    const { mcpElicitationFormContent, mcpElicitationFormRequest, parseMcpElicitationFormSchema } = await import('@/plugins/runtime/invocation/services/mcpElicitationForm');
                     throwIfAborted(options?.signal);
                     const schema = parseMcpElicitationFormSchema(request.schema);
-                    const questions = mcpElicitationFormQuestions(schema);
                     const title = readTrimmedString(request.prompt) ?? toolName;
-                    if (questions === null) {
-                        const result = await params.interactions.confirm({
-                            kind: 'confirmation',
-                            title: 'MCP request',
-                            message: title,
-                        }, {
+                    const interaction = mcpElicitationFormRequest(schema, title);
+                    if (interaction.kind === 'confirmation') {
+                        const result = await params.interactions.confirm(interaction, {
                             ...(options?.signal ? { signal: options.signal } : {}),
                         });
                         throwIfAborted(options?.signal);
@@ -172,11 +168,7 @@ export function createSessionScopedMcpServices(
                                 ? Object.freeze({ status: 'declined' as const, decision: 'denied' as const })
                                 : Object.freeze({ status: 'cancelled' as const, decision: 'abort' as const });
                     }
-                    const result = await params.interactions.askQuestions({
-                        kind: 'questions',
-                        title,
-                        questions: [...questions],
-                    }, {
+                    const result = await params.interactions.askQuestions(interaction, {
                         ...(options?.signal ? { signal: options.signal } : {}),
                     });
                     throwIfAborted(options?.signal);

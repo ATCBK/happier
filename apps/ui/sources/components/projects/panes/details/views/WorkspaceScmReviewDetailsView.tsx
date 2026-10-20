@@ -1,9 +1,10 @@
+import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
 import * as React from 'react';
 import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import { ReviewCommentsSessionSurface } from '@/components/reviews/ReviewCommentsSessionSurface';
-import { ReviewCommentsHeaderButton } from '@/components/reviews/ReviewCommentsHeaderButton';
+import { ReviewCommentsHeaderButton, useReviewCommentsMenuSection } from '@/components/reviews/ReviewCommentsHeaderButton';
 import { buildReviewCommentsHeaderLabels } from '@/components/reviews/sessionSurfaceLabels';
 import { buildWorkspaceChangedFilesData } from '@/hooks/workspaces/scm/buildWorkspaceChangedFilesData';
 import { useWorkspaceScmSnapshotController } from '@/hooks/workspaces/scm/useWorkspaceScmSnapshotController';
@@ -20,7 +21,7 @@ import { PaneLoadingFallback } from '@/components/ui/panels/PaneLoadingFallback'
 import { CheckoutUnreachableState, useCheckoutReachability } from '@/components/workspaces/reachability/checkoutReachability';
 import { createPluginPermissionGrantActions } from '@/sync/domains/plugins/permissions/actions';
 import { usePluginPermissionGrants } from '@/sync/domains/plugins/permissions/usePluginPermissionGrants';
-import { createFrontDoorUiActionExecutor } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
 import {
     selectPluginPermissionPendingRequests,
 } from '@/sync/domains/plugins/permissions/store';
@@ -171,11 +172,15 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
         [activeReviewFileKey, presented],
     );
     const reviewCommentsEnabled = useFeatureEnabled('files.reviewComments') === true;
-    // Review comments open from the comparison bar (one line of chrome); their panel opens under it.
+    // Review comments open from the Files menu (the bar's ⋯ or the phone menu); while some are unresolved,
+    // or the panel is open, the bar also carries them as one action. Their panel opens under the bar.
     const [commentsOpen, setCommentsOpen] = React.useState(false);
     const [commentsCount, setCommentsCount] = React.useState<number | null>(null);
     const commentsLabels = React.useMemo(() => buildReviewCommentsHeaderLabels(), []);
     const scmWriteEnabled = useFeatureEnabled('scm.writeOperations') === true;
+    const toggleComments = React.useCallback(() => setCommentsOpen((open) => !open), []);
+    const commentsMenuSection = useReviewCommentsMenuSection({ enabled: reviewCommentsEnabled, labels: commentsLabels,
+        unresolvedCount: commentsCount, expanded: commentsOpen, onToggle: toggleComments, testID: 'workspace-review-comments-menu' });
     const reviewCommentDrafts = useWorkspaceReviewCommentsDrafts(scope);
     const reviewDraftHandlers = useWorkspaceReviewCommentDraftHandlers(scope);
     const { snapshot, loading, error, refresh } = useWorkspaceScmSnapshotController(scope);
@@ -200,15 +205,13 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
     currentReadingIdentity.current = readingIdentity;
     const readingIsCurrent = React.useCallback(() => bound.isCurrent() && currentReadingIdentity.current === readingIdentity,
         [bound.isCurrent, readingIdentity]);
+    const { executeValue } = useMountedActionExecution(bound.scope, { openOnRequest: true });
     const frontDoorActionExecutor = React.useMemo(() => {
-        const execute = createFrontDoorUiActionExecutor(undefined, bound.scope ? {
-            serverId: bound.scope.serverId, expectedAccountId: bound.scope.accountId,
-        } : undefined);
-        return ((...args: Parameters<typeof execute>) => {
+        return ((...args: Parameters<typeof executeValue>) => {
             if (!bound.isCurrent()) return Promise.reject(new Error('action_account_scope_unavailable'));
-            return execute(...args);
+            return executeValue(...args);
         });
-    }, [bound.isCurrent, bound.scope?.serverId, bound.scope?.accountId]);
+    }, [bound.isCurrent, executeValue]);
     const pluginPermissionGrantActions = React.useMemo(
         () => createPluginPermissionGrantActions({ execute: frontDoorActionExecutor }), [frontDoorActionExecutor]);
     const capture = useCapturedScmComparison({ host: props.host, machine: bound.machine,
@@ -233,8 +236,8 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
             if (basis.isCurrent() && outcome.kind === 'unavailable') Modal.alert(t('common.error'), t('common.unavailable'));
         });
     };
-    const onExplain = props.onExplain ?? ((basis: Parameters<NonNullable<typeof props.onExplain>>[0]) => authoringDraft({ ...basis, scope }));
-    const onAsk = props.onAsk ?? ((basis: Parameters<NonNullable<typeof props.onAsk>>[0]) => authoringDraft({ ...basis, scope }));
+    const onExplain = props.onExplain ?? ((basis: Parameters<NonNullable<WorkspaceScmReviewDetailsViewProps['onExplain']>>[0]) => authoringDraft({ ...basis, scope }));
+    const onAsk = props.onAsk ?? ((basis: Parameters<NonNullable<WorkspaceScmReviewDetailsViewProps['onAsk']>>[0]) => authoringDraft({ ...basis, scope }));
     const explainFiles = async () => {
         if (!bound.scope || !bound.machine || !displayedIsCurrent()) return;
         if (displayedComparison) {
@@ -382,39 +385,43 @@ const WorkspaceReviewBody = React.memo((props: WorkspaceScmReviewDetailsViewProp
         snapshot,
     ]);
 
+    // The comments the Files bar's toggle opens: drawn by Review under that bar, above the files.
+    const reviewCommentsPanel = reviewCommentsEnabled ? (
+        <ReviewCommentsSessionSurface
+            scope={bound.scope ?? undefined}
+            workspaceId={checkoutRef?.id}
+            workspace={{ machineId: props.machineId, path: props.rootPath }}
+            execute={frontDoorActionExecutor}
+            directWriteGrants={directWriteGrants}
+            pendingDirectWriteGrantRequests={pendingDirectWriteGrantRequests}
+            onGrantDirectWrite={pluginPermissionGrants.grant}
+            onCancelDirectWriteGrant={pluginPermissionGrants.dismissRequest}
+            onRevokeDirectWrite={pluginPermissionGrants.revoke}
+            permissionGrantStatus={pluginPermissionGrants.state.status}
+            permissionGrantError={pluginPermissionGrants.state.error}
+            onRefreshPermissionGrants={() => { void pluginPermissionGrants.refresh(); }}
+            header="external"
+            open={view === 'files' && commentsOpen}
+            onUnresolvedCountChange={setCommentsCount}
+            testID="workspace-review-comments"
+                />
+    ) : null;
+
     return (
         <View style={{ flex: 1, minHeight: 0, minWidth: 0, backgroundColor: theme.colors.surface.base }}>
             {authoringApproval.approvalId ? <ActionApprovalPendingNotice message={t('approvals.status.open')} summary={authoringApproval.approvalSummary}
                 testID="workspace-review-authoring-approval" onOpenApproval={() => router.push(
-                    `/inbox/approvals/${encodeURIComponent(authoringApproval.approvalId!)}?serverId=${encodeURIComponent(props.serverId)}`,
+                    buildApprovalHref(authoringApproval.approvalId!, props.serverId),
                 )} /> : null}
-            {reviewCommentsEnabled ? (
-                <ReviewCommentsSessionSurface
-                    scope={bound.scope ?? undefined}
-                    workspaceId={checkoutRef?.id}
-                    workspace={{ machineId: props.machineId, path: props.rootPath }}
-                    execute={frontDoorActionExecutor}
-                    directWriteGrants={directWriteGrants}
-                    pendingDirectWriteGrantRequests={pendingDirectWriteGrantRequests}
-                    onGrantDirectWrite={pluginPermissionGrants.grant}
-                    onCancelDirectWriteGrant={pluginPermissionGrants.dismissRequest}
-                    onRevokeDirectWrite={pluginPermissionGrants.revoke}
-                    permissionGrantStatus={pluginPermissionGrants.state.status}
-                    permissionGrantError={pluginPermissionGrants.state.error}
-                    onRefreshPermissionGrants={() => { void pluginPermissionGrants.refresh(); }}
-                    header="external"
-                    open={commentsOpen}
-                    onUnresolvedCountChange={setCommentsCount}
-                    testID="workspace-review-comments"
-                />
-            ) : null}
             {snapshot ? <SourceControlStaleSnapshotNotice error={error} onRetry={() => { void refresh(); }} testID="workspace-review-stale" /> : null}
             <InputTypePickerHostProvider enabled={presented} machineId={props.machineId} serverId={props.serverId}
                 contextKey={JSON.stringify([props.serverId, props.machineId, props.rootPath])}>
             <WorkspaceScmReviewBody activeReviewFile={activeReviewFile} comparison={comparison} view={view} scopeLabel={scopeLabel} scopeDetail={scopeDetail}
                 hostSwitch={props.hostSwitch}
-                barActions={reviewCommentsEnabled ? <ReviewCommentsHeaderButton compact labels={commentsLabels} unresolvedCount={commentsCount}
-                    expanded={commentsOpen} onPress={() => setCommentsOpen(open => !open)} testID="workspace-review-comments-trigger" /> : null}
+                barMenuSection={commentsMenuSection}
+                barPanel={reviewCommentsPanel}
+                barActions={reviewCommentsEnabled && (commentsOpen || (commentsCount ?? 0) > 0) ? <ReviewCommentsHeaderButton compact labels={commentsLabels} unresolvedCount={commentsCount}
+                    expanded={commentsOpen} onPress={toggleComments} testID="workspace-review-comments-trigger" /> : null}
                 views={pendingComparison ? ['files', 'walkthrough', 'commits'] : ['files', 'walkthrough']}
                 commitsCount={commitPlan?.outputs?.commitPlan?.value?.groups.length ?? null}
                 onStartReview={startReview} reviewDisabled={reviewDisabled}

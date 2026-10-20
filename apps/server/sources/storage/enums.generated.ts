@@ -146,16 +146,10 @@ export const SessionFollowDeliveredTurnStatus = {
     completed: "completed",
     failed: "failed",
     cancelled: "cancelled",
+    waiting: "waiting",
 } as const;
 
 export type SessionFollowDeliveredTurnStatus = (typeof SessionFollowDeliveredTurnStatus)[keyof typeof SessionFollowDeliveredTurnStatus];
-
-export const SessionFollowMode = {
-    next_turn: "next_turn",
-    wake_on_human_change: "wake_on_human_change",
-} as const;
-
-export type SessionFollowMode = (typeof SessionFollowMode)[keyof typeof SessionFollowMode];
 
 export const SessionPendingMessageStatus = {
     queued: "queued",

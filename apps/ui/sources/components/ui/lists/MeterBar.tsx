@@ -1,10 +1,12 @@
 import * as React from 'react';
-import { View, type StyleProp, type ViewStyle } from 'react-native';
+import { Animated, Platform, View, type StyleProp, type ViewStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
 import { Text } from '@/components/ui/text/Text';
+import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { HappierProgress } from '@happier-dev/plugin-ui/presentation';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 
 export type MeterTone = 'success' | 'warning' | 'danger' | 'neutral';
 
@@ -22,6 +24,8 @@ export interface MeterBarProps {
     trackColor?: string;
     /** A host surface may bind an existing neutral text fill instead of a state tint. */
     fillColor?: string;
+    /** Animate transfer progress through native-supported transforms. */
+    animated?: boolean;
     /** Optional visible floor for positive fills; zero remains empty. */
     minimumVisibleFraction?: number;
     fillOpacity?: number;
@@ -47,12 +51,32 @@ const stylesheet = StyleSheet.create((theme) => ({
     },
 }));
 
+function AnimatedMeterFill(props: Readonly<{ percentage: number; color: string; testID?: string }>) {
+    const reducedMotion = useReducedMotionPreference();
+    const fraction = props.percentage / 100;
+    const value = React.useRef(new Animated.Value(fraction)).current;
+    React.useEffect(() => {
+        if (reducedMotion) {
+            value.setValue(fraction);
+            return;
+        }
+        const animation = Animated.timing(value, {
+            toValue: fraction, duration: motionTokens.durationMs.fast,
+            easing: motionTokens.easing.standard, useNativeDriver: Platform.OS !== 'web',
+        });
+        animation.start();
+        return () => animation.stop();
+    }, [fraction, reducedMotion, value]);
+    return <Animated.View testID={props.testID} style={{ width: '100%', height: '100%',
+        backgroundColor: props.color, transformOrigin: 'left', transform: [{ scaleX: value }] }} />;
+}
+
 export const MeterBar = React.memo<MeterBarProps>((props) => {
     const { theme } = useUnistyles();
     const styles = stylesheet;
 
     const height = props.height ?? DEFAULT_TRACK_HEIGHT_PX;
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const fill = Number.isFinite(props.fillFraction) ? props.fillFraction : 0;
     // Read the token directly — never apply a runtime opacity/rgba transform to a
     // theme token (web var-ification turns such transforms into silent no-ops).
@@ -67,6 +91,10 @@ export const MeterBar = React.memo<MeterBarProps>((props) => {
             <HappierProgress
                 testID={props.testID ? `${props.testID}:track` : undefined}
                 fillTestID={props.testID ? `${props.testID}:fill` : undefined}
+                renderFill={props.animated ? (percentage) => (
+                    <AnimatedMeterFill percentage={percentage} color={fillColor}
+                        testID={props.testID ? `${props.testID}:fill` : undefined} />
+                ) : undefined}
                 value={fill}
                 label={props.progressAccessibilityLabel ?? ''}
                 semantics={props.progressAccessibilityLabel ? 'progress' : 'none'}

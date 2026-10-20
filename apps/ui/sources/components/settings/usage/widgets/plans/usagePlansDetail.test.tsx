@@ -234,6 +234,11 @@ it('shows the canonical capacity weather and insufficient model/reset basis insi
   const screen = await renderScreen(wrap(<UsagePlanFitWidget {...bodyProps([read, other])} id="usage_plan_fit" testID="fit" />));
   // A plan is one row; its basis lines open under Details.
   expect(screen.findByTestId('fit.plan.work.weather.weekly')).toBeFalsy();
+  // An unknown plan value is never a lone dash at the row's far edge; when no row has a price, that is said
+  // once for the list (R9), never repeated on every row.
+  expect(screen.getTextContent()).not.toContain('—');
+  expect(screen.getTextContent()).not.toContain(t('usage.board.plans.planNoPriceShort'));
+  expect(String(screen.findByTestId('fit.once')!.props.children)).toBe(t('usage.board.plans.planNoPriceAll'));
   await screen.pressByTestIdAsync('fit.plan.work.details-header');
   expect(screen.findByTestId('fit.plan.work.weather.weekly')).toBeTruthy();
   // What no account has a basis for yet is one line for the whole widget, never one per account.
@@ -247,6 +252,18 @@ it('shows the canonical capacity weather and insufficient model/reset basis insi
   expect(screen.findByTestId('fit.plan.work.pricePerReset.weekly.insufficient')).toBeFalsy();
   expect(screen.findAllByType((await import('@/components/settings/connectedServices/ConnectedServiceMark')).ConnectedServiceMark)
     .find(node => node.props.legacyServiceId === 'claude-subscription')).toBeTruthy();
+});
+
+it('shows the entered monthly amount without inventing a provider billing period', async () => {
+  const now = Date.now();
+  const read = quotaRead('work', now, [], {}, { subscription: { status: 'unavailable', renewal: 'unknown',
+    observedAtMs: now, staleAfterMs: 60000, enteredMonthlyPrice: { amount: 1.23, currency: 'USD', enteredAtMs: now } } });
+  const { UsagePlanFitWidget } = await import('../UsagePlanFitWidget');
+  const screen = await renderScreen(wrap(<UsagePlanFitWidget {...bodyProps([read])} id="usage_plan_fit" testID="fit" />));
+  expect(screen.getTextContent()).toContain('$1.23');
+  expect(screen.getTextContent()).not.toContain(t('usage.board.plans.planNoPriceShort'));
+  expect(read.current?.subscription).not.toHaveProperty('currentPeriodStartAtMs');
+  await screen.unmount();
 });
 
 it('names available model-meter headroom through the catalog and readable unknown fallback', async () => {
@@ -263,9 +280,9 @@ it('names available model-meter headroom through the catalog and readable unknow
   expect(screen.findByTestId('fit.plan.work.modelHeadroom.known')).toBeTruthy();
   expect(screen.findByTestId('fit.plan.work.modelHeadroom.external')).toBeTruthy();
   expect(screen.getTextContent()).toContain('Fable 5');
-  expect(screen.getTextContent()).toContain('Third Party Model Snapshot');
+  // An id outside the catalog is shown exactly (2a2cc0979c), never title-cased into a name.
+  expect(screen.getTextContent()).toContain('third-party/model-snapshot');
   expect(screen.getTextContent()).not.toContain('claude-fable-5');
-  expect(screen.getTextContent()).not.toContain('third-party/model-snapshot');
 });
 
 it('keeps unreported windows reachable behind one count and shows each reset once', async () => {
@@ -354,6 +371,27 @@ it('does not declare all projections missing when a settled paced window is behi
   expect(text).not.toContain(t('usage.board.plans.paceSharedReason', { reason: '' }));
 });
 
+it('does not materialize curve points for the meter-list presentation', async () => {
+  const now = Date.now();
+  const read = quotaRead('work', now, [{ meterId: 'weekly', label: 'Weekly', usedPct: 80,
+    resetAtMs: now + DAY, windowDurationMs: 7 * DAY }]);
+  const props = bodyProps([read]);
+  let curveReads = 0;
+  const pace = props.slice.quota![0]!.pace[0]!.value;
+  if (pace.status !== 'available') throw new Error('Expected available pace');
+  for (const point of pace.observedCurve ?? []) {
+    const value = point.usedFraction;
+    Object.defineProperty(point, 'usedFraction', { get: () => { curveReads += 1; return value; } });
+  }
+  const { UsageProjectionsWidget } = await import('../UsageProjectionsWidget');
+  const screen = await renderScreen(wrap(<WidgetPresentationProvider value={{ size: 'medium',
+    footprint: { columns: 2, columnSpan: 1, rowSpan: 2, width: 'half', height: 'regular' }, geometry: { width: 520, height: 260 } }}>
+    <UsageProjectionsWidget {...props} id="usage_projections" testID="proj" />
+  </WidgetPresentationProvider>));
+  expect(screen.findByTestId('proj.window.work.weekly')).toBeTruthy();
+  expect(curveReads).toBe(0);
+});
+
 it('lists every reported window with its projection beside other widgets, without the burn-up or disclosures', async () => {
   const now = Date.now();
   const read = quotaRead('work', now, [{ meterId: 'weekly', label: 'Weekly', usedPct: 30,
@@ -378,8 +416,8 @@ it('lists every reported window with its projection beside other widgets, withou
   // Neither window has a pace for the same reason: it is said once under the list, not on each row.
   // Each window has its own projection, so no shared reason is said.
   expect(screen.findByTestId('proj.sharedReason')).toBeFalsy();
-  // The unreported window is one quiet count; its row lives on the Plans view.
-  expect(screen.findByTestId('proj.unreported')).toBeTruthy();
+  // The unreported window is one quiet count in the list's one footer; its row lives on the Plans view.
+  expect(screen.findByTestId('proj.showAll.unlisted')).toBeTruthy();
   expect(screen.findByTestId('proj.window.work.unknown')).toBeFalsy();
   // No window has a pace for the same reason: it is said once under the list, not on each row.
   const unpaced = ConnectedServiceQuotaGetResultV1Schema.parse({ ...partial, pace: [] });
@@ -701,6 +739,36 @@ it('states one unreadable-order cause once under every pool that shares it (H30)
   expect(screen.getTextContent()).not.toContain(`${t('usage.board.plans.queueTitle')} ·`);
 });
 
+it('keeps one unordered pool on one quiet line, and titles the unordered pools "Other pools" beside an ordered one (D2, R4)', async () => {
+  const now = Date.now();
+  const weekly: Meter = { meterId: 'weekly', label: 'Weekly', usedPct: 20, resetAtMs: now + 2 * DAY, windowDurationMs: 7 * DAY };
+  const unread = (groupId: string, memberAccountIds: string[]) => ({
+    group: { service, groupId }, memberAccountIds, activeAccountId: memberAccountIds[0]!,
+    selection: { status: 'unsupported' as const, errorCode: 'no_machine' as const },
+  });
+  const { UsageCapacityWidget } = await import('../UsageCapacityWidget');
+  const text = (screen: Awaited<ReturnType<typeof renderScreen>>) => screen.getTextContent();
+  const used = t('usage.board.plans.queueTitle');
+  const other = t('usage.board.plans.queueOtherTitle');
+  // One unordered pool: the label and the name are one line, not a label standing over the name.
+  const single = bodyProps(['a', 'b'].map((id) => quotaRead(id, now, [weekly])), [{ query, value: [unread('first', ['a', 'b'])] }]);
+  const alone = await renderScreen(wrap(<UsageCapacityWidget {...single} serverId="home" id="usage_capacity" testID="cap" />));
+  expect(alone.findAll((node) => typeof node.type === 'string' && typeof node.props.testID === 'string' && node.props.testID.startsWith('cap.usedFirst.first'))).not.toHaveLength(0);
+  expect(text(alone)).toMatch(new RegExp(`${used} · \\S`));
+  // Beside a pool that shows an order, the unordered pools are not a second "Used first".
+  const candidate = (profileId: string, priority: number) => ({ profileId, priority, createdAtMs: 1, enabled: true, leastLimitedScore: 62, preferenceDeadlineMs: now + 2 * DAY });
+  const ordered = { group: { service, groupId: 'ordered' }, memberAccountIds: ['a', 'b'], activeAccountId: 'a',
+    selection: { status: 'available' as const, machineId: 'witnessed-selector', value: { group: { service, groupId: 'ordered' }, observedAtMs: now,
+      selection: { selected: candidate('a', 0), reason: 'selected' as const, excluded: [], decisionTrace: { activeProfileId: 'a', reason: 'selected' as const,
+        strategy: 'expiry_first' as const, selectionBasis: 'active_stickiness' as const, sticky: true,
+        orderedEligibleCandidates: [candidate('a', 0), candidate('b', 1)], candidates: [] } } } } };
+  const mixed = bodyProps(['a', 'b', 'c', 'd'].map((id) => quotaRead(id, now, [weekly])), [{ query, value: [ordered, unread('second', ['c']), unread('third', ['d'])] }]);
+  const both = await renderScreen(wrap(<UsageCapacityWidget {...mixed} serverId="home" id="usage_capacity" testID="cap" />));
+  expect(text(both).split(other).length - 1).toBe(1);
+  expect(text(both).split(`${used} ·`).length - 1).toBe(1);
+  expect(text(both).split(used).length - 1).toBe(1);
+});
+
 /** One earlier week of the same record and meter in accepted history: two readings, one and three days in. */
 function withEarlierWeek(read: ConnectedServiceQuotaGetResultV1, weekly: Meter): ConnectedServiceQuotaGetResultV1 {
   const current = read.current!;
@@ -796,6 +864,7 @@ it('charts the picked window in the same chart, labels the empirical range with 
   expect(range).toContain('60%');
   expect(range).toContain('90%');
   expect(range).toContain('7');
+  expect(screen.findByTestId('proj.multiple.work.session')).toBeNull();
   await screen.pressByTestIdAsync('proj.reported-header');
   expect(screen.findByTestId('proj.multiple.work.session')).toBeTruthy();
   expect(screen.findByTestId('proj.pastCycles.row.0')).toBeNull();

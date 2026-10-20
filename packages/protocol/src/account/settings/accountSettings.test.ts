@@ -9,6 +9,7 @@ import {
   ACCOUNT_SETTINGS_SUPPORTED_SCHEMA_VERSION,
   accountCatalogDefinition,
   accountSettingsParse,
+  resolveCoordinatorKeepDefault,
   parseRetainedAccountSettingsEntitySourceV1,
   isRetiredAccountSettingsRootKey,
   DEFAULT_SESSION_HANDOFF_DEFAULTS_V1,
@@ -26,6 +27,43 @@ import type { ActionId } from '../../actions/actionIds.js';
 import { MAX_PLUGIN_IDENTIFIER_BYTES } from '../../plugins/pluginId.js';
 import { AccountSettingsPersistedObjectSchema } from './accountSettingsPersistedObject.js';
 import { readRetainedConnectedAccountCatalogRecordV1 } from '../../connect/connectedAccountCatalogV1.js';
+
+describe('numeric glass tint storage', () => {
+  it('reads absent and obsolete string values as 12, retaining canonical integers without clamping', () => {
+    for (const value of [undefined, 'subtle', 'medium', 'strong', -1, 101, 20.5]) {
+      expect(accountSettingsParse({ glassTintIntensity: value }).glassTintIntensity).toBe(12);
+    }
+    for (const value of [0, 12, 35, 50, 73, 100]) {
+      const stored = AccountSettingsPersistedObjectSchema.parse(JSON.parse(JSON.stringify({ glassTintIntensity: value })));
+      expect(accountSettingsParse(stored).glassTintIntensity).toBe(value);
+      expect(ACCOUNT_SETTING_DEFINITIONS.glassTintIntensity.parseMutationValue(value)).toEqual({ success: true, data: value });
+    }
+    for (const value of [-1, 101, 20.5, '20']) {
+      expect(ACCOUNT_SETTING_DEFINITIONS.glassTintIntensity.parseMutationValue(value).success).toBe(false);
+    }
+  });
+});
+
+describe('coordinator creation preferences', () => {
+  it('supplies defaults for retained Account settings', () => {
+    const defaults = accountSettingsParse({});
+    expect(defaults).toMatchObject({
+      coordinationCoordinatorRoleId: 'orchestrator',
+      coordinationCoordinatorKeep: 'suggest',
+      coordinationCoordinatorSuggestProjectRule: true,
+      coordinationCoordinatorSuggestHomeRule: true,
+      coordinationCoordinatorAnswersWorkerQuestions: true,
+    });
+  });
+  it('resolves suggested placement from the selected scope and preserves fixed choices', () => {
+    expect(resolveCoordinatorKeepDefault('suggest', 'home')).toBe('rail_bot');
+    expect(resolveCoordinatorKeepDefault('suggest', 'project')).toBe('list_pin');
+    for (const keep of ['rail_bot', 'list_pin', 'none'] as const) {
+      expect(resolveCoordinatorKeepDefault(keep, 'home')).toBe(keep);
+      expect(resolveCoordinatorKeepDefault(keep, 'project')).toBe(keep);
+    }
+  });
+});
 import { readAcpCatalogTransferSourceV2 } from '../../acp/catalog/transferAcpCatalogV2.js';
 import { applyAccountSettingMutationV1 } from './accountSettingMutationV1.js';
 
@@ -1464,7 +1502,9 @@ describe('accountSettings', () => {
     expectActionSurfaceEnabled('session.unarchive', settings, 'agent', false);
     expectActionSurfaceEnabled('session.usageLimit.consumeResetCredit', settings, 'agent', false);
     expectActionSurfaceEnabled('session.permission.respond', settings, 'agent', false);
-    expectActionSurfaceEnabled('session.user_action.answer', settings, 'agent', false);
+    // Execution still requires present-user authority or the question owner's
+    // per-call Session admission; catalog availability grants neither.
+    expectActionSurfaceEnabled('session.user_action.answer', settings, 'agent', true);
 
     // Coordination and non-destructive runtime controls are Allowed by default.
     // Title changes are safe and are required for provider UX (auto-title on first message).
@@ -1569,6 +1609,22 @@ describe('accountSettings', () => {
     expectActionSurfaceEnabled('session.stop', parsed.actionsSettingsV1, 'cli', false);
   });
 
+  it('preserves saved question answer overrides instead of inferring a former default', () => {
+    for (const override of [
+      { disabledSurfaces: ['agent'] },
+      { enabled: false },
+      { enabled: false, disabledSurfaces: ['agent'] },
+      { enabled: true, disabledSurfaces: ['agent', 'mcp'], approvalRequiredSurfaces: ['cli'] },
+      { enabled: true, disabledSurfaces: [] },
+    ]) {
+      const settings = accountSettingsParse({ actionsSettingsV1: { v: 1,
+        actions: { 'session.user_action.answer': override } } }).actionsSettingsV1;
+      expect(settings.actions['session.user_action.answer']).toMatchObject(override);
+      expectActionSurfaceEnabled('session.user_action.answer', settings, 'agent',
+        override.enabled !== false && !override.disabledSurfaces?.includes('agent'));
+    }
+  });
+
   it('migrates legacy default agent action settings to the current agent default matrix', () => {
     const legacyDefaultDisabled = [
       'session.stop',
@@ -1605,6 +1661,7 @@ describe('accountSettings', () => {
     expectActionSurfaceEnabled('session.list', settings, 'agent', true);
     expectActionSurfaceEnabled('session.permission_mode.set', settings, 'agent', true);
     expectActionSurfaceEnabled('session.usageLimit.consumeResetCredit', settings, 'agent', false);
+    expectActionSurfaceEnabled('session.user_action.answer', settings, 'agent', false);
   });
 
   it('migrates legacy agent locks while preserving unrelated action settings fields', () => {
@@ -1711,7 +1768,8 @@ describe('accountSettings', () => {
     expect(parsed.promptFoldersV1).toEqual({ v: 1, folders: [] });
     expect(parsed.promptInvocationsV1).toEqual({ v: 1, entries: [] });
     expect(parsed.promptExternalLinksV1).toEqual({ v: 1, links: [] });
-    expect(parsed.promptRegistrySourcesV1).toEqual({ v: 1, sources: [] });
+    // Registry rows own admission; Settings retains their original transfer source.
+    expect(parsed.promptRegistrySourcesV1).toEqual({});
     expect(parsed.contextSelectionsV1).toEqual({ v: 1, selectionsByKey: {} });
   });
 
@@ -1721,13 +1779,16 @@ describe('accountSettings', () => {
       promptFoldersV1: { v: 2, folders: [] },
       promptInvocationsV1: { v: 2, entries: [] },
       promptExternalLinksV1: { v: 2, links: [] },
-      promptRegistrySourcesV1: { v: 2, sources: [] },
       contextSelectionsV1: { v: 2, selectionsByKey: {} },
     };
     for (const [key, value] of Object.entries(raw)) {
       expect(parseRetainedAccountSettingsEntitySourceV1(key, value)).toMatchObject({ success: false, reason: 'invalidValue' });
       expect(accountSettingsParse(raw)).not.toHaveProperty(key);
     }
+    const registrySource = { v: 2, sources: [] };
+    expect(parseRetainedAccountSettingsEntitySourceV1('promptRegistrySourcesV1', registrySource))
+      .toEqual({ success: true, data: registrySource });
+    expect(accountSettingsParse({ promptRegistrySourcesV1: registrySource })).not.toHaveProperty('promptRegistrySourcesV1');
   });
 
   it('preserves valid prompt-library provenance while applying its owned read defaults', () => {
@@ -1812,16 +1873,14 @@ describe('accountSettings', () => {
         scope: 'project',
         machineId: 'machine-1',
         externalRef: { relativePath: 'review.md' },
+        syncMode: 'manual',
       }],
     });
     expect(parsed.promptRegistrySourcesV1).toEqual({
-      v: 1,
       sources: [{
         id: 'source-1',
         adapterId: 'git',
         title: 'Repository',
-        enabled: true,
-        config: {},
       }],
     });
     expect(parsed.contextSelectionsV1).toEqual({

@@ -5,12 +5,15 @@ import { CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION } from '@happier-dev/pr
 import { renderScreen } from '@/dev/testkit';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { installTokenStorageWebPlatformMocks } from '@/auth/storage/tokenStorage.testHelpers';
-import { installLocalStorageMock, installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { encodeBase64 } from '@/encryption/base64';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { AuthProvider } from '@/auth/context/AuthContext';
 import { adoptHomeProfile, getActiveServerId, setActiveServerId, resolveServerProfileScopeId, setAccountServiceEndpoint } from '@/sync/domains/server/serverProfiles';
 import { createDirectoryHttpFixture } from '@/sync/ops/accountDirectory/accountDirectoryTestFixtures';
 import { getActiveServerSnapshot, subscribeActiveServer } from '@/sync/domains/server/serverRuntime';
+import { disconnectActiveServerConnection } from '@/sync/runtime/orchestration/connectionManager';
 import { useOnboardingWizardController } from '@/components/onboarding/surfaces/useOnboardingWizardController';
 import { useAuthEntryOptions } from '@/components/account/auth/useAuthEntryOptions';
 import { useAccountServiceEntryOptions } from '@/components/account/auth/useAccountServiceEntryOptions';
@@ -29,33 +32,31 @@ vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
+vi.mock('@/utils/web/reactDomCjs', async () =>
+    (await import('@/dev/testkit/mocks/reactDomCjs')).createReactDomCjsRendererMock());
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
+await loadSyncSingletonForTests();
 
 let screen: Awaited<ReturnType<typeof renderScreen>> | undefined;
-let restore: (() => void) | undefined;
+let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>> | undefined;
 let unsubscribeFocus: (() => void) | undefined;
-let webLocks: ReturnType<typeof installWebLockManagerMock> | undefined;
 afterEach(async () => {
     await screen?.unmount();
+    await disconnectActiveServerConnection();
     unsubscribeFocus?.();
-    webLocks?.restore();
-    restore?.();
+    browser?.restore();
     screen = undefined;
     unsubscribeFocus = undefined;
-    webLocks = undefined;
-    restore = undefined;
+    browser = undefined;
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
 });
 
-function installStorageGlobals() {
-    webLocks = installWebLockManagerMock();
+async function installStorageGlobals() {
     boundary.request.mockReset();
-    const tabStorage = installLocalStorageMock();
-    vi.stubGlobal('sessionStorage', globalThis.localStorage);
-    tabStorage.restore();
-    restore = installLocalStorageMock().restore;
-    vi.stubGlobal('window', { localStorage: globalThis.localStorage, location: { origin: 'https://app.happier.dev' },
-        addEventListener: vi.fn(), removeEventListener: vi.fn() });
-    vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: vi.fn(), removeEventListener: vi.fn() });
+    browser = await installBrowserRuntimeForTests({ url: 'https://app.happier.dev' });
 }
 
 const json = (value: unknown) => new Response(JSON.stringify(value), { headers: { 'Content-Type': 'application/json' } });
@@ -103,7 +104,7 @@ it('exits the account-entry route when a key sign-in completion is acknowledged'
     // Settings › Account › Sign in with a key (intent `refresh`) ends on the
     // `account_connected` card. Its Done belongs to the route host, not to the
     // key form's own Back (which would reopen the sign-in method list).
-    installStorageGlobals();
+    await installStorageGlobals();
     const fixture = createDirectoryHttpFixture();
     const { homeA, homeB } = await adoptHomes(fixture);
     boundary.request.mockImplementation(async (endpoint: string, path: string, init?: RequestInit) =>
@@ -126,7 +127,7 @@ it('exits the account-entry route when a key sign-in completion is acknowledged'
 });
 
 it('reports Back before authentication as an exit without a completion', async () => {
-    installStorageGlobals();
+    await installStorageGlobals();
     const fixture = createDirectoryHttpFixture();
     const { homeA, homeB } = await adoptHomes(fixture);
     const focusAtEntry = getActiveServerId();
@@ -145,7 +146,8 @@ it('reports Back before authentication as an exit without a completion', async (
 });
 
 it.each(['route', 'wizard', 'cancel'])('%s retains service-key continuation until exact Home authentication and material are ready', async (surface) => {
-    installStorageGlobals();
+    await installStorageGlobals();
+    const materialCompletion = vi.spyOn(await import('@/sync/ops/accountDirectory/completeAccountServicePostAuth'), 'supplyAccountServiceHomeMaterial');
     const fixture = createDirectoryHttpFixture();
     if (surface !== 'wizard') {
         fixture.state.homes = [];
@@ -219,12 +221,23 @@ it.each(['route', 'wizard', 'cancel'])('%s retains service-key continuation unti
         expect(await TokenStorage.getCredentialsForServerUrl(homeB.serverUrl, { serverId: fixture.home.homeServerIdentityId })).toEqual(credentialsBeforeCancellation);
         return;
     }
-    await submitKey();
-    expect(await TokenStorage.getCredentialsForServerUrl(homeB.serverUrl, { serverId: fixture.home.homeServerIdentityId })).toEqual(
-        surface === 'route' ? { token: fixture.token } : { token: fixture.token, secret: 'A'.repeat(43) });
-    await vi.waitFor(() => expect(onExit, `${screen?.getTextContent()} ${JSON.stringify(boundary.request.mock.calls.map(([endpoint, path]) => ({ endpoint, path })))}`).toHaveBeenCalledWith(
-        '/', ...(surface === 'wizard' ? [] : [{ kind: 'home_entered', homeServerIdentityId: fixture.home.homeServerIdentityId, selection: 'explicit' }]),
-    ));
+    if (surface === 'wizard') {
+        await act(async () => screen!.findByTestId('restore-manual-secret-input')!.props.onChangeText(encodeBase64(fixture.homeRecoverySecret, 'base64url')));
+        await screen.pressByTestIdAsync('restore-manual-submit');
+        expect(materialCompletion).toHaveBeenCalledOnce();
+        const completion = materialCompletion.mock.results[0];
+        if (completion?.type !== 'return') throw new Error('Expected material completion to return its real operation');
+        await act(async () => { await completion.value; });
+    } else {
+        await submitKey();
+    }
+    expect(await TokenStorage.getCredentialsForServerUrl(homeB.serverUrl, { serverId: fixture.home.homeServerIdentityId })).toEqual({
+        token: fixture.token,
+        ...(surface === 'wizard' ? { secret: encodeBase64(fixture.homeRecoverySecret, 'base64url') } : {}),
+    });
+    await vi.waitFor(() => expect(onExit).toHaveBeenCalledWith('/', ...(surface === 'wizard' ? [] : [{
+        kind: 'home_entered', homeServerIdentityId: fixture.home.homeServerIdentityId, selection: 'explicit',
+    }])));
     expect(getActiveServerSnapshot().serverId).toBe(resolveServerProfileScopeId(homeB));
     expect(fixture.state.calls.filter(({ path }) => path.includes('/login-assertion'))).toHaveLength(surface === 'route' ? 0 : 1);
 });

@@ -48,6 +48,18 @@ describe('LocalServiceLauncherSnapshotV1Schema', () => {
     expect(LocalServiceLaunchTargetV1Schema.parse(target)).toEqual(target);
   });
 
+  it('retains admitted execution in native bindings without inventing absent execution', () => {
+    const target = LocalServiceLaunchTargetV1Schema.parse({ id: 'managed:worker', source: 'managed_service',
+      machineId: 'worker-machine', sourceClass: { kind: 'managed_service', managedServiceId: 'actual-instance' },
+      title: 'Worker', confidence: 'high', state: 'available', serviceState: 'running', actions: ['manage'] });
+    expect(target).not.toHaveProperty('execution');
+    for (const execution of ['primary', 'portable']) {
+      const admitted = { ...target, execution };
+      expect(LocalServiceLaunchTargetV1Schema.parse(admitted)).toEqual(admitted);
+    }
+    expect(LocalServiceLaunchTargetV1Schema.safeParse({ ...target, execution: 'automatic' }).success).toBe(false);
+  });
+
   it('retains the source-qualified declaration on a sessionless native service target', () => {
     const target = {
       id: 'declaration:workspace-a:web', source: 'managed_service', machineId: 'machine-a',

@@ -170,10 +170,12 @@ function row<const TId extends WorkspaceActionId>(actionId: TId, title: string,
   description = 'Operate on the mounted client workspace in its current Home, Account and window. A headless host without that workspace returns unsupported_action.') {
   return {
     id: actionId, approval: { result: 'required' }, title,
+    ...(actionId === 'workspace.tabs.open' ? { toolExposure: { agent: 'direct' as const } } : {}),
     description,
     safety: 'safe', sideEffectClass: actionId === 'workspace.tabs.list' || actionId === 'workspace.tabs.closed.list' ? 'read' : 'external',
     executionPlacement: 'client', placements: [],
-    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: false, rpc: false },
+    surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true, rpc: false },
+    cli: { acceptsServerId: true, commands: [] },
     bindings: { mcpToolName: actionId.replaceAll('.', '_'), voiceClientToolName: actionId.replaceAll('.', '_') },
     inputSchema: WORKSPACE_ACTION_INPUT_SCHEMAS[actionId], outputSchema: WORKSPACE_ACTION_OUTPUT_SCHEMAS[actionId],
     inputHints: { title, fields: inputFields[actionId] },

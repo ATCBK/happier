@@ -117,6 +117,8 @@ export const LocalServiceLaunchTargetV1Schema = lazyZodSchema(() => z.strictObje
     workspace: z.optional(WorkspaceAddressV1Schema),
     cwd: z.optional(WorkspaceRefV1WriteSchema.shape.rootPath),
     declaration: z.optional(ProjectServiceDeclarationRefV1Schema),
+    // Captured by the admitted native start; omission grants no execution class.
+    execution: z.optional(z.enum(['primary', 'portable'])),
     // Observed managed lifetime is separate from an available launcher action/HTTP readiness.
     serviceState: z.optional(z.enum(['starting', 'running', 'detecting', 'healthy', 'unhealthy', 'stopping', 'stopped', 'failed'])),
     readiness: z.optional(z.enum(['ready', 'not_ready', 'not_reported'])),
@@ -131,6 +133,8 @@ export const LocalServiceLaunchTargetV1Schema = lazyZodSchema(() => z.strictObje
     confidence: LocalServiceInventoryConfidenceV1Schema,
     state: LocalServiceLaunchTargetStateV1Schema,
     unavailableReason: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
+    /** Exact Machine whose Project native-binding census could not settle. */
+    unavailableMachineId: z.optional(WorkspaceRefV1WriteSchema.shape.machineId),
     actions: z._default(z.array(LocalServiceLaunchTargetActionV1Schema), []),
     browserTarget: z.optional(BrowserViewTargetV1Schema),
   }).check(z.superRefine((target, ctx) => {
@@ -157,6 +161,23 @@ export const LocalServiceLaunchTargetV1Schema = lazyZodSchema(() => z.strictObje
     }
   })));
 export type LocalServiceLaunchTargetV1 = z.infer<typeof LocalServiceLaunchTargetV1Schema>;
+
+/** A live managed lifetime, independently of HTTP readiness. Starting/stopping are transitions.
+ * Native custody must still be qualified separately before an executable action.
+ */
+export function isLocalServiceStateRunningV1(state: LocalServiceLaunchTargetV1['serviceState']): boolean {
+  return state === 'running' || state === 'detecting' || state === 'healthy' || state === 'unhealthy';
+}
+
+/** An unhealthy observation can instead mean native custody has not settled. */
+export function hasUncertainLocalServiceNativeCustodyV1(
+  target: Pick<LocalServiceLaunchTargetV1, 'source' | 'unavailableReason'>,
+): boolean {
+  return target.source === 'managed_service' && (
+    target.unavailableReason === 'managed_service_native_state_unknown'
+    || target.unavailableReason === 'managed_service_native_cleanup_unconfirmed'
+  );
+}
 
 export const LocalServiceLauncherSnapshotV1Schema = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),

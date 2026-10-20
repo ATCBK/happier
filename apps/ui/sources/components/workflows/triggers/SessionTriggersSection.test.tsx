@@ -170,7 +170,7 @@ describe('SessionTriggersSectionView', () => {
         );
         const text = screen.getTextContent();
 
-        expect(text).toContain('workflows.triggers.section.title');
+        expect(text).toContain('workflows.triggers.section.habitsHere');
         // Only switched-on triggers count.
         expect(text).toContain('workflows.triggers.section.countOn(count=2)');
         expect(screen.findByTestId('session-work-triggers-info')?.props.accessibilityLabel).toBe('workflows.triggers.section.info');

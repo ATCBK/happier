@@ -4,6 +4,7 @@ import * as z from 'zod/mini';
 import { z as classicZ } from 'zod/mini';
 import { createStoredReadSchema, defineStoredReadProjection } from '../../json/storedReadSchema.js';
 import { GlassSurfaceMaterialsSchema, GlassSurfaceMaterialsStoredSchema } from './glassSurfaceMaterials.js';
+import { DEFAULT_GLASS_TINT_INTENSITY, GlassTintIntensitySchema } from './glassTint.js';
 import { HomeAtmosphereSchema, DEFAULT_HOME_ATMOSPHERE } from './homeAtmosphere.js';
 export { HomeAtmosphereSchema, ProjectAtmosphereSchema, DEFAULT_HOME_ATMOSPHERE, type HomeAtmosphere, type ProjectAtmosphere, type AtmosphereLookOverride } from './homeAtmosphere.js';
 import { DEFAULT_MACHINE_RETENTION_DEFAULTS_V1, MachineRetentionDefaultsV1Schema } from './machineRetentionDefaultsV1.js';
@@ -34,6 +35,7 @@ export { DEFAULT_SESSION_AGENT_START_ALLOW_LISTS_V1, SessionAgentStartAllowLists
 import { SessionReminderPresetsV1Schema } from './sessionReminderPresetsV1.js';
 import { buildSettingArtifacts, type SettingArtifacts } from '../../settings/registry/buildSettingArtifacts.js';
 import {
+  BackendTargetKeyV2Schema,
   BackendTargetKeyV2InputSchema,
   buildBackendTargetKeyV2,
   readBackendTargetRefV2,
@@ -155,6 +157,32 @@ function rekeyLegacyBuiltInAgentMap<T>(
 }
 
 export const ACCOUNT_SETTINGS_SUPPORTED_SCHEMA_VERSION = 7;
+
+/** Shared picker recovery and favorite ordering; incoming writes validate every target first. */
+export const FavoriteBackendTargetKeysV1Schema = lazyZodSchema(() => z.pipe(z.transform((value) => {
+  const values = Array.isArray(value) ? value : [];
+  const uniqueKeys: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of values) {
+    if (typeof raw !== 'string') continue;
+    const key = raw.trim();
+    if (!BackendTargetKeyV2Schema.safeParse(key).success || seen.has(key)) continue;
+    seen.add(key);
+    uniqueKeys.push(key);
+  }
+  return uniqueKeys;
+}), z.array(BackendTargetKeyV2Schema)));
+export type FavoriteBackendTargetKeysV1 = z.infer<typeof FavoriteBackendTargetKeysV1Schema>;
+
+/** The upload-folder control and its Action admit the same workspace-relative directory. */
+export function normalizeAttachmentsUploadsWorkspaceRelativeDir(input: string): string | null {
+  const trimmed = input.trim();
+  if (!trimmed || trimmed.startsWith('/') || trimmed.startsWith('\\')) return null;
+  const parts = trimmed.split(/[\\/]+/g).filter(Boolean);
+  if (parts.some(part => part === '.' || part === '..')) return null;
+  return parts.join('/');
+}
+
 export const ForegroundBehaviorSchema = lazyZodSchema(() => classicZ.enum(['full', 'silent', 'off']));
 export type ForegroundBehavior = z.infer<typeof ForegroundBehaviorSchema>;
 
@@ -172,7 +200,7 @@ function normalizeNotificationsSettingsV1Input(raw: unknown): unknown {
   }
   return raw;
 }
-export const NotificationsSettingsV1Schema = lazyZodSchema(() => classicZ.catch(z.pipe(z.transform(normalizeNotificationsSettingsV1Input), z.object({
+export const NotificationsSettingsV1Schema = lazyZodSchema(() => classicZ.catch((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeNotificationsSettingsV1Input), z.object({
     v: z._default(z.literal(1), 1),
     pushEnabled: z._default(z.boolean(), true),
     mutePhoneWhenComputerFocused: z.catch(z.optional(z.boolean()), undefined),
@@ -203,19 +231,28 @@ export type NotificationsSettingsV1 = z.infer<typeof NotificationsSettingsV1Sche
 
 export const DEFAULT_NOTIFICATIONS_SETTINGS_V1: NotificationsSettingsV1 = NotificationsSettingsV1Schema.parse({});
 
-export const DEFAULT_ACTIONS_SETTINGS_V1: ActionsSettingsV1 = ActionsSettingsV1Schema.parse({
+function defaultAgentDisabledActionSettings(): ActionSettingsOverride {
+  return {
+    enabledPlacements: [],
+    disabledSurfaces: ['agent'],
+    disabledPlacements: [],
+    approvalRequiredSurfaces: [],
+    toolExposureModes: {},
+  };
+}
+
+export const DEFAULT_ACTIONS_SETTINGS_V1: ActionsSettingsV1 = {
   v: 1,
   actions: {
     // Agent-surface coordination is enabled by default; destructive or human-decision
     // actions stay opt-in as a product courtesy.
-    'session.stop': { disabledSurfaces: ['agent'] },
-    'session.archive': { disabledSurfaces: ['agent'] },
-    'session.unarchive': { disabledSurfaces: ['agent'] },
-    'session.usageLimit.consumeResetCredit': { disabledSurfaces: ['agent'] },
-    'session.permission.respond': { disabledSurfaces: ['agent'] },
-    'session.user_action.answer': { disabledSurfaces: ['agent'] },
+    'session.stop': defaultAgentDisabledActionSettings(),
+    'session.archive': defaultAgentDisabledActionSettings(),
+    'session.unarchive': defaultAgentDisabledActionSettings(),
+    'session.usageLimit.consumeResetCredit': defaultAgentDisabledActionSettings(),
+    'session.permission.respond': defaultAgentDisabledActionSettings(),
   },
-});
+};
 
 const CURRENT_DEFAULT_SESSION_AGENT_DISABLED_ACTION_IDS_V1 = Object.freeze([
   'session.stop',
@@ -223,7 +260,6 @@ const CURRENT_DEFAULT_SESSION_AGENT_DISABLED_ACTION_IDS_V1 = Object.freeze([
   'session.unarchive',
   'session.usageLimit.consumeResetCredit',
   'session.permission.respond',
-  'session.user_action.answer',
 ] as const satisfies readonly string[]);
 
 const CURRENT_DEFAULT_SESSION_AGENT_DISABLED_ACTION_ID_SET_V1 = new Set<string>(
@@ -340,6 +376,10 @@ function migrateLegacyDefaultActionsSettingsV1(settings: ActionsSettingsV1): Act
 
   const shouldMigrateAllLegacyDefaults = isLegacyDefaultSessionAgentActionLockdownV1(settings);
   for (const id of Object.keys(actions)) {
+    // The new default opens question-owner admission, not execution authority.
+    // A saved answer override may be deliberate even in the old full vector;
+    // without preference provenance, never silently remove that choice.
+    if (id === 'session.user_action.answer') continue;
     if (!shouldMigrateAllLegacyDefaults && !LEGACY_DEFAULT_SESSION_AGENT_DISABLED_ACTION_ID_SET_V1.has(id)) continue;
     if (CURRENT_DEFAULT_SESSION_AGENT_DISABLED_ACTION_ID_SET_V1.has(id)) continue;
     const existing = actions[id];
@@ -592,9 +632,14 @@ type AccountCatalogDefinitionOptions = Readonly<{
 export type AccountSettingValueRefusalReason = 'tooLarge' | 'tooDeep' | 'invalidValue';
 
 function classifyAccountSettingSchemaIssues(
-  issues: readonly Readonly<{ code: string }>[],
+  issues: readonly Readonly<{ code: string; params?: Readonly<Record<string, unknown>> }>[],
 ): AccountSettingValueRefusalReason {
-  return issues.some((issue) => issue.code === 'too_big') ? 'tooLarge' : 'invalidValue';
+  for (const issue of issues) {
+    if (issue.code === 'too_big') return 'tooLarge';
+    const boundReason = issue.code === 'custom' ? issue.params?.accountSettingBoundsReason : undefined;
+    if (boundReason === 'tooLarge' || boundReason === 'tooDeep') return boundReason;
+  }
+  return 'invalidValue';
 }
 
 export type AccountSettingValueParseResult =
@@ -706,6 +751,17 @@ export const TRANSCRIPT_MESSAGE_TIMESTAMP_DISPLAY_MODE_VALUES = [
 ] as const;
 export type TranscriptMessageTimestampDisplayMode =
   typeof TRANSCRIPT_MESSAGE_TIMESTAMP_DISPLAY_MODE_VALUES[number];
+
+export const COORDINATOR_KEEP_DEFAULT_VALUES = ['suggest', 'rail_bot', 'list_pin', 'none'] as const;
+export type CoordinatorKeepDefault = typeof COORDINATOR_KEEP_DEFAULT_VALUES[number];
+
+/** Resolve the creation preference after the person selects what this coordinator follows. */
+export function resolveCoordinatorKeepDefault(
+    preference: CoordinatorKeepDefault,
+    scope: 'project' | 'home',
+): Exclude<CoordinatorKeepDefault, 'suggest'> {
+    return preference === 'suggest' ? (scope === 'home' ? 'rail_bot' : 'list_pin') : preference;
+}
 
 export const DEFAULT_TRANSCRIPT_TOOL_CALLS_COLLAPSED_PREVIEW_COUNT = 3;
 export const SessionTmuxMachineOverrideSchema = lazyZodSchema(() => classicZ.pipe(z.looseObject({
@@ -836,7 +892,7 @@ const ACCOUNT_CORE_CATALOG_DEFINITIONS = {
     agentInputHistoryScope: accountPreference(z.enum(['perSession', 'global']), 'perSession', 'composer history presentation'),
     agentInputActionBarLayout: accountPreference(z.enum(['auto', 'wrap', 'scroll', 'collapsed']), 'auto', 'composer presentation'),
     agentInputChipDensity: accountPreference(z.enum(['auto', 'labels', 'icons']), 'auto', 'composer presentation'),
-    sessionListDensity: accountPreference(z.pipe(z.transform((raw): unknown => raw === 'compact' ? 'cozy' : raw), z.enum(['detailed', 'cozy', 'narrow'])), 'narrow', 'session list presentation'),
+    sessionListDensity: accountPreference((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((raw): unknown => raw === 'compact' ? 'cozy' : raw), z.enum(['detailed', 'cozy', 'narrow'])), 'narrow', 'session list presentation'),
     sessionListIdentityDisplay: accountPreference(z.enum(['avatar', 'agentLogo', 'none']), 'agentLogo', 'session list presentation'),
     sessionHeaderIdentityDisplay: accountPreference(z.enum(['avatar', 'agentLogo', 'none']), 'avatar', 'session header presentation'),
     sessionListOrderingModeV1: accountPreference(z.enum(['custom', 'created', 'updated']), 'custom', 'session list presentation'),
@@ -872,6 +928,8 @@ const ACCOUNT_DISPLAY_CATALOG_DEFINITIONS = {
     sessionThinkingInlineChrome: accountPreference(z.enum(['plain', 'card']), 'plain', 'transcript presentation'),
     showLineNumbers: accountPreference(z.boolean(), true, 'code presentation'),
     showLineNumbersInToolViews: accountPreference(z.boolean(), false, 'tool presentation'),
+    showChatCodeBlockWrapControls: accountPreference(z.boolean(), true, 'code presentation'),
+    wrapChatCodeBlocks: accountPreference(z.boolean(), false, 'code presentation'),
     wrapLinesInDiffs: accountPreference(z.boolean(), false, 'code presentation'),
     sessionReplayStrategy: accountPreference(z.enum(['recent_messages', 'summary_plus_recent']), 'recent_messages', 'session replay'),
     // Bounds come from the one Replay-budget owner. A stored value outside them
@@ -885,7 +943,11 @@ const ACCOUNT_DISPLAY_CATALOG_DEFINITIONS = {
     executionRunsNotifyParentOnCompletionDefault: accountPreference(z.boolean(), false, 'execution guidance'),
     executionRunsGuidanceMaxChars: accountPreference(z.number().check(z.int(), z.minimum(1), z.maximum(64 * 1024)), 4000, 'execution guidance'),
     attachmentsUploadsUploadLocation: accountPreference(z.enum(['workspace', 'os_temp']), 'workspace', 'attachment uploads'),
-    attachmentsUploadsWorkspaceRelativeDir: accountPreference(z.string().check(z.minLength(1), z.maxLength(4 * 1024)), '.happier/uploads', 'attachment uploads'),
+    attachmentsUploadsWorkspaceRelativeDir: accountCatalogDefinition(z.string().check(z.minLength(1), z.maxLength(4 * 1024)), '.happier/uploads', {
+        semanticDomain: 'attachment uploads', classification: 'preference', maximumSerializedValueBytes: 4 * 1024,
+        mutationSchema: z.pipe(z.pipe(z.string().check(z.minLength(1), z.maxLength(4 * 1024)),
+            z.transform(normalizeAttachmentsUploadsWorkspaceRelativeDir)), z.string()),
+    }),
     attachmentsUploadsVcsIgnoreStrategy: accountPreference(z.enum(['git_info_exclude', 'gitignore', 'none']), 'git_info_exclude', 'attachment uploads'),
     attachmentsUploadsVcsIgnoreWritesEnabled: accountPreference(z.boolean(), true, 'attachment uploads'),
     attachmentsUploadsMaxFileBytes: accountPolicy(z.number().check(z.int(), z.minimum(1), z.maximum(512 * 1024 * 1024)), 25 * 1024 * 1024, 'attachment uploads'),
@@ -910,7 +972,7 @@ const ACCOUNT_DISPLAY_CATALOG_DEFINITIONS = {
     tabBarSize: accountPreference(z.enum(['compact', 'regular', 'large']), 'regular', 'application chrome'),
     glassBlurEnabled: accountPreference(z.boolean(), true, 'application chrome'),
     glassBlurIntensity: accountPreference(z.enum(['light', 'regular', 'strong']), 'regular', 'application chrome'),
-    glassTintIntensity: accountPreference(z.enum(['subtle', 'medium', 'strong']), 'subtle', 'application chrome'),
+    glassTintIntensity: accountPreference(GlassTintIntensitySchema, DEFAULT_GLASS_TINT_INTENSITY, 'application chrome'),
     glassSurfaceMaterials: accountCatalogDefinition(z.nullable(GlassSurfaceMaterialsStoredSchema), null, {
         semanticDomain: 'application chrome', classification: 'preference', maximumSerializedValueBytes: 4 * 1024,
         mutationSchema: z.nullable(GlassSurfaceMaterialsSchema),
@@ -923,7 +985,7 @@ const ACCOUNT_DISPLAY_CATALOG_DEFINITIONS = {
 } as const;
 const BoundedLegacyArraySchema = defineStoredReadProjection(lazyDefinition(() => z.array(BoundedLegacyJsonValueSchema).check(z.maxLength(256))), () => z.array(createStoredReadSchema(BoundedLegacyJsonValueSchema)));
 const BoundedLegacyRecordSchema = defineStoredReadProjection(lazyDefinition(() => z.record(z.string().check(z.maxLength(64 * 1024)), BoundedLegacyJsonValueSchema)), () => z.record(z.string(), createStoredReadSchema(BoundedLegacyJsonValueSchema)));
-const SavedSecretsSchema = defineStoredReadProjection(lazyDefinition(() => z.array(SavedSecretSchema).check(z.maxLength(SAVED_SECRET_COLLECTION_MAX_ENTRIES))), () => z.pipe(z.transform((value): unknown => {
+const SavedSecretsSchema = defineStoredReadProjection(lazyDefinition(() => z.array(SavedSecretSchema).check(z.maxLength(SAVED_SECRET_COLLECTION_MAX_ENTRIES))), () => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value): unknown => {
     if (!Array.isArray(value))
         return value;
     const storedSecretSchema = createStoredReadSchema(SavedSecretSchema);
@@ -1001,7 +1063,11 @@ const ACCOUNT_SIMPLE_COLLECTION_CATALOG_DEFINITIONS = {
     }),
     // Preferences keep the bound, not the legacy carrier's size-tolerant read projection.
     favoriteModelSelectionsV1: accountPreference(z.core.clone(BoundedLegacyArraySchema), [], 'favorite model selections', 64 * 1024),
-    favoriteBackendTargetKeysV1: accountPreference(z.array(z.string().check(z.maxLength(1024))).check(z.maxLength(256)), [], 'favorite backend targets', 32 * 1024),
+    favoriteBackendTargetKeysV1: accountCatalogDefinition(z.array(z.string().check(z.maxLength(1024))).check(z.maxLength(256)), [], {
+        semanticDomain: 'favorite backend targets', classification: 'preference', maximumSerializedValueBytes: 32 * 1024,
+        mutationSchema: z.pipe(z.array(z.pipe(z.string().check(z.trim(), z.maxLength(1024)), BackendTargetKeyV2Schema)).check(z.maxLength(256)),
+            z.transform(value => FavoriteBackendTargetKeysV1Schema.parse(value))),
+    }),
 } as const;
 const KeyboardShortcutRuleSchema = lazyDefinition(() => z.object({
     binding: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
@@ -1012,7 +1078,7 @@ const KeyboardShortcutRuleSchema = lazyDefinition(() => z.object({
     conflictScope: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(256))),
 }));
 const KeyboardShortcutCommandIdSchema = lazyDefinition(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(256)));
-const KeyboardShortcutOverridesSchema = lazyDefinition(() => z.pipe(z.transform((value): unknown => {
+const KeyboardShortcutOverridesSchema = lazyDefinition(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value): unknown => {
     if (!value || typeof value !== 'object' || Array.isArray(value))
         return {};
     const normalized: Record<string, unknown> = {};
@@ -1035,7 +1101,7 @@ const KeyboardShortcutOverridesSchema = lazyDefinition(() => z.pipe(z.transform(
     }
     return normalized;
 }), z.record(KeyboardShortcutCommandIdSchema, z.array(KeyboardShortcutRuleSchema).check(z.minLength(1), z.maxLength(32)))));
-const KeyboardShortcutDisabledCommandIdsSchema = lazyDefinition(() => z.pipe(z.transform((value): unknown => {
+const KeyboardShortcutDisabledCommandIdsSchema = lazyDefinition(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value): unknown => {
     if (!Array.isArray(value))
         return [];
     return value.slice(0, 256).flatMap((candidate) => {
@@ -1083,7 +1149,7 @@ export function resolveNewSessionWizardSectionPresentation(
 ): NewSessionWizardSectionPresentation {
   return setting?.[sectionId] ?? 'auto';
 }
-const NewSessionWizardSectionPresentationByIdSchema = lazyDefinition(() => z.pipe(z.transform((value): unknown => {
+const NewSessionWizardSectionPresentationByIdSchema = lazyDefinition(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value): unknown => {
     const record = value && typeof value === 'object' && !Array.isArray(value)
         ? value as Record<string, unknown>
         : {};
@@ -1200,7 +1266,7 @@ const ACCOUNT_TRANSCRIPT_AND_TOOL_CATALOG_DEFINITIONS = {
     transcriptShowToolCalls: accountPreference(z.boolean(), true, 'transcript presentation'),
     transcriptGroupToolCalls: accountPreference(z.boolean(), true, 'transcript presentation'),
     transcriptTurnToolCallsGroupStrategy: accountPreference(z.enum(['consecutive_tools', 'all_tools_in_turn']), 'consecutive_tools', 'transcript presentation'),
-    transcriptToolCallsCollapsedPreviewCount: accountPreference(z.pipe(z.transform((value): unknown => typeof value === 'number' && Number.isFinite(value)
+    transcriptToolCallsCollapsedPreviewCount: accountPreference((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value): unknown => typeof value === 'number' && Number.isFinite(value)
         ? Math.max(0, Math.min(15, Math.trunc(value)))
         : value), accountNonNegativeInteger(15)), DEFAULT_TRANSCRIPT_TOOL_CALLS_COLLAPSED_PREVIEW_COUNT, 'transcript presentation'),
     transcriptToolCallsGroupShowBackground: accountPreference(z.boolean(), true, 'transcript presentation'),
@@ -1278,7 +1344,7 @@ const ACCOUNT_SETTING_CANDIDATES = {
     backendEnabledByTargetKey: accountCatalogDefinition(z._default(BackendEnabledByTargetKeySchema, {}), {}, { semanticDomain: 'backend availability', classification: 'preference', maximumSerializedValueBytes: 16 * 1024 }),
     backendCliSourcePreferenceByTargetKey: accountCatalogDefinition(BackendCliSourcePreferenceByTargetKeySchema, {}, { semanticDomain: 'backend installation policy', classification: 'preference', maximumSerializedValueBytes: 16 * 1024 }),
     scmIncludeCoAuthoredBy: accountCatalogDefinition(z.catch(z.optional(z.boolean()), undefined), undefined, { semanticDomain: 'source control', classification: 'preference', maximumSerializedValueBytes: 8 }),
-    actionsSettingsV1: accountCatalogDefinition(z.pipe(z.transform((value): unknown => tryNormalizeActionsSettingsV1(value) ?? DEFAULT_ACTIONS_SETTINGS_V1), ActionsSettingsV1Schema), DEFAULT_ACTIONS_SETTINGS_V1, { semanticDomain: 'action policy', classification: 'policy', maximumSerializedValueBytes: 64 * 1024 }),
+    actionsSettingsV1: accountCatalogDefinition((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value): unknown => tryNormalizeActionsSettingsV1(value) ?? DEFAULT_ACTIONS_SETTINGS_V1), ActionsSettingsV1Schema), DEFAULT_ACTIONS_SETTINGS_V1, { semanticDomain: 'action policy', classification: 'policy', maximumSerializedValueBytes: 64 * 1024 }),
     notificationsSettingsV1: accountCatalogDefinition(z._default(NotificationsSettingsV1Schema, DEFAULT_NOTIFICATIONS_SETTINGS_V1), DEFAULT_NOTIFICATIONS_SETTINGS_V1, {
         semanticDomain: 'legacy notification preferences',
         classification: 'legacy',
@@ -1307,6 +1373,16 @@ const ACCOUNT_SETTING_CANDIDATES = {
     sessionAgentSpawnPolicyV1: accountCatalogDefinition(z._default(SessionAgentSpawnPolicyV1Schema, DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1), DEFAULT_SESSION_AGENT_SPAWN_POLICY_V1, { semanticDomain: 'agent spawn policy', classification: 'policy', maximumSerializedValueBytes: 8 * 1024, recoverMalformed: false, mutationSchema: SessionAgentSpawnPolicyV1StrictSchema }),
     sessionAgentStartAllowListsV1: accountCatalogDefinition(z._default(SessionAgentStartAllowListsV1Schema, DEFAULT_SESSION_AGENT_START_ALLOW_LISTS_V1), DEFAULT_SESSION_AGENT_START_ALLOW_LISTS_V1, { semanticDomain: 'agent start allow-lists', classification: 'policy', maximumSerializedValueBytes: 8 * 1024, recoverMalformed: false, mutationSchema: SessionAgentStartAllowListsV1StrictSchema }),
     approvalReviewerEnabled: accountCatalogDefinition(z.catch(z._default(z.boolean(), false), false), false, { semanticDomain: 'approval reviewer', classification: 'policy', maximumSerializedValueBytes: 64 }),
+    coordinationAutonomousCheckIn: accountPreference(
+        z.strictObject({ afterTurns: z.nullable(z.number().check(z.int(), z.positive())) }),
+        { afterTurns: 5 },
+        'autonomous exchange check-in',
+    ),
+    coordinationCoordinatorRoleId: accountPreference(z.string().check(z.minLength(1)), 'orchestrator', 'new coordinator role'),
+    coordinationCoordinatorKeep: accountPreference(z.enum(COORDINATOR_KEEP_DEFAULT_VALUES), 'suggest', 'new coordinator placement'),
+    coordinationCoordinatorSuggestProjectRule: accountPreference(z.boolean(), true, 'new coordinator project rule suggestion'),
+    coordinationCoordinatorSuggestHomeRule: accountPreference(z.boolean(), true, 'new coordinator Home rule suggestion'),
+    coordinationCoordinatorAnswersWorkerQuestions: accountPreference(z.boolean(), true, 'new coordinator worker questions'),
     workDepthLimit: accountCatalogDefinition(z.catch(z._default(z.number().check(z.int(), z.nonnegative()), 4), 4), 4, { semanticDomain: 'agent delegation depth', classification: 'policy', maximumSerializedValueBytes: 64 }),
     connectedServicesDefaultAuthByAgentIdV1: accountCatalogDefinition(z._default(BuiltInLegacyConnectedServicesDefaultAuthByAgentIdV1IngressSchema, DEFAULT_CONNECTED_SERVICES_DEFAULT_AUTH_BY_AGENT_ID_V1), DEFAULT_CONNECTED_SERVICES_DEFAULT_AUTH_BY_AGENT_ID_V1, { semanticDomain: 'connected service defaults', classification: 'preference', maximumSerializedValueBytes: 16 * 1024 }),
     connectedServicesAdditionalDefaultAuthByAgentIdV1: accountCatalogDefinition(z._default(BuiltInLegacyAdditionalConnectedServicesDefaultAuthByAgentIdV1IngressSchema, DEFAULT_CONNECTED_SERVICES_DEFAULT_AUTH_BY_AGENT_ID_V1), DEFAULT_CONNECTED_SERVICES_DEFAULT_AUTH_BY_AGENT_ID_V1, { semanticDomain: 'predecessor connected account defaults ingress', classification: 'legacy', maximumSerializedValueBytes: 16 * 1024, compatibility: LEGACY_COMPATIBILITY, recoverMalformed: false }),

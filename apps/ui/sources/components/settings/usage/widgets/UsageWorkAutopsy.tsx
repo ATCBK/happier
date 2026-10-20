@@ -25,6 +25,7 @@ import {
   type UsageBodyProps,
 } from './usageBodyKit';
 import { useUsageWork } from './useUsageWork';
+import { useUsageChartDetails } from './usageMountedControls';
 import { usageCostKindPhrase } from '../usageCostPresentation';
 import { useMachineDisplayNamesById, useSessionMetadata } from '@/sync/store/hooks';
 import { findModelOptionForEffectiveModelId, getModelOptionsForSession } from '@/sync/domains/models/modelOptions';
@@ -97,6 +98,9 @@ export function UsageWorkAutopsy(
     const machine = row?.machineId ? machineNames[row.machineId] ?? usageDimensionLabel('machine', row.machineId) : t('usage.board.howYouWork.notRecorded');
     return `${model} · ${machine}`;
   };
+  const width = presentation?.geometry?.width;
+  const details = useUsageChartDetails(`${t(`usage.widgets.${props.id}`)}: ${t('usage.board.work.costOverTime')}`,
+    selected !== null && Boolean(autopsy?.costTimeline.length) && (width === undefined || width >= PLOT_MIN_WIDTH_PX));
   if (!selected) return null;
   const turns = autopsy?.turns ?? [];
   // A turn is named by its place in the witnessed order, never by its raw id.
@@ -187,7 +191,6 @@ export function UsageWorkAutopsy(
       : phases
         ? { start: phases.period.startMs, end: phases.period.endMs }
         : null;
-  const width = presentation?.geometry?.width;
   const caption = { fontSize: rowMetrics.subtitle.fontSize, lineHeight: rowMetrics.subtitle.lineHeight };
   const metricLabel = metric === 'cost' ? t('usage.cost') : t('usage.tokens');
   const outcomes = autopsy?.outcomes ?? [];
@@ -260,6 +263,7 @@ export function UsageWorkAutopsy(
             ? `${usageCostKindPhrase(autopsy.costTimelineBasis.kind)} · ${autopsy.costTimelineBasis.currency}`
             : t('usage.board.recap.money_unpriced')}>{t('usage.board.work.costOverTime')}</UsageWorkSectionTitle>
           <StackedSeriesChart
+            {...details}
             theme={theme}
             testID={`${props.testID}.costTimeline`}
             label={t('usage.board.work.costOverTime')}

@@ -3,7 +3,7 @@ import type { ScmOperationState } from '@happier-dev/protocol';
 
 type ScmRepositoryOperationKind = ScmOperationState['kind'];
 
-import { runSessionScmMutation, type ScmMutationResponse } from '@/scm/operations/runSessionScmMutation';
+import { runSessionScmMutation, type ScmMutationCall, type ScmMutationResponse } from '@/scm/operations/runSessionScmMutation';
 import { scmStatusSync } from '@/scm/scmStatusSync';
 import { storage } from '@/sync/domains/state/storage';
 import {
@@ -38,7 +38,7 @@ export function useSessionGitRepositoryMutations(input: Readonly<{
     const run = React.useCallback(async <T extends ScmMutationResponse>(mutation: {
         operation: ScmProjectOperationKind;
         fallbackError: string;
-        call: () => Promise<T>;
+        call: (call: ScmMutationCall) => Promise<T>;
         refreshAfterMutation?: () => Promise<void>;
     }): Promise<ScmMutationResponse> => {
         const result = await runSessionScmMutation({
@@ -63,48 +63,48 @@ export function useSessionGitRepositoryMutations(input: Readonly<{
         undoLastCommit: (expectedHeadOid: string) => run({
             operation: 'commit_undo',
             fallbackError: t('sessionGitPane.flow.undo.failed'),
-            call: () => sessionScmCommitUndoLast(sessionId, { expectedHeadOid }, serverId),
+            call: (call) => sessionScmCommitUndoLast(sessionId, { expectedHeadOid }, serverId, call),
             refreshAfterMutation: input.refreshAfterUndo ?? refresh,
         }),
         addRemote: (request: Parameters<typeof sessionScmRemoteAdd>[1]) => run({
             operation: 'remote_add',
             fallbackError: t('files.sourceControlOperations.update.remotes.errors.addFailed'),
-            call: () => sessionScmRemoteAdd(sessionId, request, serverId),
+            call: (call) => sessionScmRemoteAdd(sessionId, request, serverId, call),
         }),
         setRemoteUrl: (request: Parameters<typeof sessionScmRemoteSetUrl>[1]) => run({
             operation: 'remote_set_url',
             fallbackError: t('files.sourceControlOperations.update.remotes.errors.saveFailed'),
-            call: () => sessionScmRemoteSetUrl(sessionId, request, serverId),
+            call: (call) => sessionScmRemoteSetUrl(sessionId, request, serverId, call),
         }),
         removeRemote: (name: string) => run({
             operation: 'remote_remove',
             fallbackError: t('files.sourceControlOperations.update.remotes.errors.removeFailed'),
-            call: () => sessionScmRemoteRemove(sessionId, { name }, serverId),
+            call: (call) => sessionScmRemoteRemove(sessionId, { name }, serverId, call),
         }),
         mergeBranch: (sourceRef: string) => run({
             operation: 'branch_merge',
             fallbackError: t('files.sourceControlOperations.update.branchIntegration.errors.mergeFailed'),
-            call: () => sessionScmBranchMerge(sessionId, { sourceRef }, serverId),
+            call: (call) => sessionScmBranchMerge(sessionId, { sourceRef }, serverId, call),
         }),
         rebaseBranch: (sourceRef: string) => run({
             operation: 'branch_rebase',
             fallbackError: t('files.sourceControlOperations.update.branchIntegration.errors.rebaseFailed'),
-            call: () => sessionScmBranchRebase(sessionId, { sourceRef }, serverId),
+            call: (call) => sessionScmBranchRebase(sessionId, { sourceRef }, serverId, call),
         }),
         continueBranchOperation: (operation: ScmRepositoryOperationKind) => run({
             operation: 'branch_operation_continue',
             fallbackError: t('files.sourceControlOperations.update.branchIntegration.errors.continueFailed'),
-            call: () => sessionScmBranchOperationContinue(sessionId, { operation }, serverId),
+            call: (call) => sessionScmBranchOperationContinue(sessionId, { operation }, serverId, call),
         }),
         skipBranchOperation: (operation: ScmRepositoryOperationKind) => run({
             operation: 'branch_operation_skip',
             fallbackError: t('files.sourceControlOperations.update.branchIntegration.errors.continueFailed'),
-            call: () => sessionScmBranchOperationSkip(sessionId, { operation }, serverId),
+            call: (call) => sessionScmBranchOperationSkip(sessionId, { operation }, serverId, call),
         }),
         abortBranchOperation: (operation: ScmRepositoryOperationKind) => run({
             operation: 'branch_operation_abort',
             fallbackError: t('files.sourceControlOperations.update.branchIntegration.errors.abortFailed'),
-            call: () => sessionScmBranchOperationAbort(sessionId, { operation }, serverId),
+            call: (call) => sessionScmBranchOperationAbort(sessionId, { operation }, serverId, call),
         }),
     }), [input.refreshAfterUndo, refresh, run, serverId, sessionId]);
 }

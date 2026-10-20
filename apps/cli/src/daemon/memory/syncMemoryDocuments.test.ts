@@ -1,23 +1,28 @@
 import axios from 'axios';
 import { join } from 'node:path';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, onTestFailed, vi } from 'vitest';
 import { applyEnvValues, restoreEnvValues, snapshotEnvValues } from '@/testkit/env/envSnapshot';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import type { DeepIndexDbHandle } from './deepIndex/deepIndexDb';
 import type { MemoryDocumentSearchScope } from './syncMemoryDocuments';
 
-// Cold transformation belongs to collection, outside the admission workload deadline.
+// Transform the API graph during collection; per-test resets reload it below.
 await import('@/api/api');
+await import('./syncMemoryDocuments');
 
-const envBackup = snapshotEnvValues(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL']);
+const envBackup = snapshotEnvValues(['HAPPIER_HOME_DIR', 'HAPPIER_SERVER_URL', 'HAPPIER_WEBAPP_URL', 'HAPPIER_ACTIVE_SERVER_ID']);
 let homeDir: string;
+let admissionPhase = 'not_started';
 
 beforeEach(async () => {
   homeDir = await createTempDir('happier-document-admission-');
   applyEnvValues({ HAPPIER_HOME_DIR: homeDir, HAPPIER_SERVER_URL: 'https://api.example.test', HAPPIER_WEBAPP_URL: 'https://app.example.test' });
   vi.resetModules();
-  // Load the shared schema graph during setup; Session HTTP is installed below before its owner loads.
-  await import('@happier-dev/protocol');
+  // Environment isolation invalidates collection's module instances. Reload the
+  // real owners during fixture setup, before the admission workload starts.
+  admissionPhase = 'fixture_module_setup';
+  await import('@/api/api');
+  await import('./syncMemoryDocuments');
 });
 
 afterEach(async () => {
@@ -34,7 +39,7 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
   scope: MemoryDocumentSearchScope;
   db: DeepIndexDbHandle;
   dbPath: string;
-  prepare: (options?: Readonly<{ includeArchivedSessions?: boolean; signal?: AbortSignal }>) => Promise<MemoryDocumentSearchScope>;
+  prepare: (options?: Readonly<{ includeArchivedSessions?: boolean; signal?: AbortSignal; scope?: import('@happier-dev/protocol/memory/memorySearch').MemorySearchScope }>) => Promise<MemoryDocumentSearchScope>;
   serverId: string;
   artifactId: string;
   replaceAccount: () => void;
@@ -45,9 +50,11 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
   setSessionDetailUnavailable: (unavailable: boolean) => void;
   setInventoryState: (state: 'paged' | 'incomplete' | 'unreadable' | 'archived') => void;
   setSessionCount: (count: number) => void;
+  setSessionProject: (index: number, projectKey: string) => void;
   setSessionSharedContentUnavailable: (unavailable: boolean) => void;
-}>) => Promise<void>, machineId = 'session-machine', memory = false): Promise<void> {
-  const { accountSettingsParse } = await import('@happier-dev/protocol');
+}>) => Promise<void>, machineId = 'session-machine', memory = false, qualifiedHome = false): Promise<void> {
+  admissionPhase = 'fixture_schemas';
+  const { accountSettingsParse } = await import('@happier-dev/protocol/account/settings/accountSettings');
   const { encodePlainArtifactStoredContent, ARTIFACT_PLAIN_DATA_KEY_MARKER } = await import('@happier-dev/protocol/storage/artifactStoredContent');
   const { emptyPromptLibraryRecordV1 } = await import('@happier-dev/protocol/prompts/library/promptLibraryCatalogV1');
   const { PromptLibraryCatalogKeyV1Schema } = await import('@happier-dev/protocol/prompts/library/promptLibraryRowsV1');
@@ -58,7 +65,24 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
   const { buildSessionMetadataEnvelopeFields } = await import('@/session/metadata/buildSessionMetadataEnvelopeCreateFields');
   const { sealSessionOwnerMetadataEnvelopeV1 } = await import('@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1');
   const { configuration } = await import('@/configuration');
-  const serverId = configuration.activeServerId;
+  admissionPhase = 'fixture_http';
+  let serverId = configuration.activeServerId;
+  if (qualifiedHome) {
+    const { addServerProfile, setActiveServerProfileHomeConnectionDescriptor, getServerProfile, resolveServerProfileHomeIdentityId } = await import('@/server/serverProfiles');
+    const profile = await addServerProfile({ name: 'project-search', serverUrl: 'https://api.example.test',
+      webappUrl: 'https://app.example.test', use: true });
+    applyEnvValues({ HAPPIER_ACTIVE_SERVER_ID: profile.id });
+    const { reloadConfiguration } = await import('@/configuration');
+    reloadConfiguration();
+    const bound = await setActiveServerProfileHomeConnectionDescriptor({ v: 1, homeServerIdentityId: 'srv_project_search',
+      canonicalServerUrl: 'https://api.example.test', revision: 1, endpoints: [{ kind: 'https', url: 'https://api.example.test' }] });
+    serverId = 'srv_project_search';
+    expect(bound.id).toBe(profile.id);
+    expect(await getServerProfile(profile.id)).toMatchObject({ homeConnectionDescriptorAuthority: 'exact',
+      homeConnectionDescriptor: { homeServerIdentityId: serverId } });
+    expect((await import('@/configuration')).configuration.activeServerId).toBe(profile.id);
+    expect(await resolveServerProfileHomeIdentityId(profile.id)).toBe(serverId);
+  }
   const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'account' })).toString('base64url')}.signature`, encryption: null };
   const entry = { id: 'project.instructions', ref: { kind: 'doc' as const, artifactId: 'project-context' }, enabled: true, placement: 'system_append' as const,
     ...(memory ? { maxChars: '- Key preference [id: key; added: 1970-01-01]'.length } : {}) };
@@ -82,16 +106,17 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
   let sessionDetailUnavailable = false;
   let inventoryState: 'paged' | 'incomplete' | 'unreadable' | 'archived' | undefined;
   let sessionCount = 1;
+  const sessionProjects = new Map<number, string>();
   let sessionSharedContentUnavailable = false;
   let sessionWork: Record<string, unknown> | undefined = memory ? { memoryEnabled: true } : undefined;
-  const sessionRecord = () => {
+  const sessionRecord = (index = 0) => {
     const fields = buildSessionMetadataEnvelopeFields({ credentials, accountEncryptionMode: 'plain',
       ...(sessionSharedContentUnavailable
         ? { storedContentMode: 'e2ee', encryptionKey: new Uint8Array(32).fill(19), encryptionVariant: 'dataKey' } as const
         : { storedContentMode: 'plain' } as const),
       agentState: null, metadata: { ...createTestMetadata({ machineId: 'session-machine', path: '/container/checkout',
       sessionWorkspaceLocationV1: { v: 1, machineId: 'session-machine', agentPath: '/container/checkout', machinePath: '/remote/repo' } }),
-      workspaceId: 'checkout', projectId: 'project', ...(sessionWork ? { work: sessionWork } : {}) } });
+      workspaceId: 'checkout', projectId: sessionProjects.get(index) ?? 'project', ...(sessionWork ? { work: sessionWork } : {}) } });
     return { id: 'remote-session', seq: 1, createdAt: 1, updatedAt: 1, active: false, activeAt: 0,
       encryptionMode: sessionSharedContentUnavailable ? 'e2ee' as const : 'plain' as const,
       metadataVersion: 1, dataEncryptionKey: null, share: null,
@@ -110,7 +135,7 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
       if (inventoryState === 'paged' && !new URL(String(url)).searchParams.has('cursor')) {
         return { status: 200, data: { sessions: [], nextCursor: 'next-page', hasNext: true } };
       }
-      return { status: 200, data: { sessions: Array.from({ length: sessionCount }, (_, i) => ({ ...sessionRecord(),
+      return { status: 200, data: { sessions: Array.from({ length: sessionCount }, (_, i) => ({ ...sessionRecord(i),
         id: i === 0 ? 'remote-session' : `remote-session-${i}`,
         ...(path.endsWith('/archived') ? { archivedAt: 1 } : {}),
         })), nextCursor: null, hasNext: false,
@@ -144,22 +169,28 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
     } } } },
     { key: organizationKey, revision: 1, content: { t: 'plain', v: { key: organizationKey, value: { promptStack: [entry] } } } },
   ] } });
+  admissionPhase = 'fixture_sqlite_and_admission_imports';
   const { openDeepIndexDb } = await import('./deepIndex/deepIndexDb');
   const { syncMemoryDocuments } = await import('./syncMemoryDocuments');
+  const { readCliProjectPromptStackContext } = await import('@/agent/prompting/coding/sessionProjectPromptStack');
   const dbPath = join(homeDir, 'deep.sqlite');
   const db = openDeepIndexDb({ dbPath });
-  const prepare = (options?: Readonly<{ includeArchivedSessions?: boolean; signal?: AbortSignal }>) => syncMemoryDocuments({ credentials, machineId,
-    scope: memory ? { type: 'session', sessionId: 'remote-session' } : { type: 'global' },
+  const prepare = (options?: Readonly<{ includeArchivedSessions?: boolean; signal?: AbortSignal; scope?: import('@happier-dev/protocol/memory/memorySearch').MemorySearchScope }>) => syncMemoryDocuments({ credentials, machineId,
+    scope: options?.scope ?? (memory ? { type: 'session', sessionId: 'remote-session' } : { type: 'global' }),
+    readProjectContext: (projectRef, signal) => readCliProjectPromptStackContext({ credentials, projectRef, signal }),
     includeArchivedSessions: options?.includeArchivedSessions ?? false, signal: options?.signal, db, assertCurrent: () => {} });
   try {
+    admissionPhase = 'initial_document_admission';
     const scope = await prepare();
     expect(scope.state).toBe('ready');
+    admissionPhase = 'fixture_callback';
     await run({ scope, db, dbPath, prepare, serverId, artifactId: artifact.id, credentials,
       setArtifactState: state => { artifactState = state; },
       setCurrentnessStatus: status => { currentnessStatus = status; },
       setSessionDetailUnavailable: unavailable => { sessionDetailUnavailable = unavailable; },
       setInventoryState: state => { inventoryState = state; },
       setSessionCount: count => { sessionCount = count; },
+      setSessionProject: (index, projectKey) => { sessionProjects.set(index, projectKey); },
       setSessionSharedContentUnavailable: unavailable => { sessionSharedContentUnavailable = unavailable; },
       setSessionWork: work => { sessionWork = work; }, replaceAccount: () => {
       const replacement = { token: `header.${Buffer.from(JSON.stringify({ sub: 'replacement-account' })).toString('base64url')}.signature`, encryption: null };
@@ -172,6 +203,111 @@ async function withCurrentDocumentFixture(run: (fixture: Readonly<{
     withdrawActiveProjectAccountRowsSnapshot();
   }
 }
+
+it('searches direct Project memory with zero Sessions, excludes other Projects and fails closed after revocation', async () => {
+  await withCurrentDocumentFixture(async ({ prepare, db, serverId, setSessionCount, setArtifactState }) => {
+    setSessionCount(0);
+    const scope = { type: 'project' as const, projectRef: { serverId, projectKey: 'project' } };
+    const admitted = await prepare({ scope });
+    expect(admitted).toMatchObject({ state: 'ready', eligibleSessionIds: [], eligibleDocuments: [{ ref: { serverId, artifactId: 'project-context' } }] });
+    expect(db.searchDocuments({ query: 'preference', eligibleDocuments: admitted.eligibleDocuments, maxResults: 1 }))
+      .toHaveLength(1);
+    const other = await prepare({ scope: { type: 'project', projectRef: { serverId, projectKey: 'unrelated-project' } } });
+    expect(other).toMatchObject({ state: 'unavailable', eligibleDocuments: [] });
+    setArtifactState('missing');
+    expect(await prepare({ scope })).toMatchObject({ state: 'unavailable', eligibleDocuments: [] });
+  }, 'daemon-machine', true);
+});
+
+it('uses the exact saved Home binding for portable Project refs without accepting another Home', async () => {
+  await withCurrentDocumentFixture(async ({ prepare, serverId, setSessionCount }) => {
+    setSessionCount(0);
+    expect(await prepare({ scope: { type: 'project', projectRef: { serverId, projectKey: 'project' } } }))
+      .toMatchObject({ state: 'ready', eligibleDocuments: [{ ref: { serverId, artifactId: 'project-context' } }] });
+    expect(await prepare({ scope: { type: 'project', projectRef: { serverId: 'srv_unrelated_home', projectKey: 'project' } } }))
+      .toMatchObject({ state: 'unavailable', eligibleDocuments: [] });
+  }, 'daemon-machine', true, true);
+});
+
+it('admits only matching Project Sessions and reports unreadable Project membership explicitly', async () => {
+  await withCurrentDocumentFixture(async ({ prepare, serverId, setInventoryState }) => {
+    const scope = { type: 'project' as const, projectRef: { serverId, projectKey: 'project' } };
+    expect(await prepare({ scope })).toMatchObject({ state: 'ready', eligibleSessionIds: ['remote-session'] });
+    setInventoryState('unreadable');
+    expect(await prepare({ scope })).toMatchObject({ state: 'partial', eligibleSessionIds: [],
+      eligibleDocuments: [{ ref: { serverId, artifactId: 'project-context' } }] });
+  }, 'daemon-machine');
+});
+
+it('applies current Project eligibility before deep and hints paging and rechecks revocation after embedding', async () => {
+  await withCurrentDocumentFixture(async ({ prepare, db, dbPath, serverId, setSessionCount, setSessionProject, setArtifactState }) => {
+    setSessionCount(3);
+    setSessionProject(0, 'other-project');
+    const scope = { type: 'project' as const, projectRef: { serverId, projectKey: 'project' } };
+    const started = performance.now();
+    const admitted = await prepare({ scope });
+    const admissionMs = performance.now() - started;
+    expect(admitted).toMatchObject({ state: 'ready', eligibleSessionIds: ['remote-session-1', 'remote-session-2'] });
+    const { openSummaryShardIndexDb } = await import('./summaryShardIndexDb');
+    const { searchTier1Memory, searchTier2Memory } = await import('./searchMemory');
+    const summaryPath = join(homeDir, 'project-summary.sqlite');
+    const summary = openSummaryShardIndexDb({ dbPath: summaryPath });
+    try {
+      for (const [sessionId, time, text] of [
+        ['remote-session', 9, 'quartz project evidence'],
+        ['remote-session-1', 1, 'quartz project evidence'],
+        ['remote-session-2', 2, 'quartz project evidence'],
+      ] as const) {
+        db.insertChunk({ sessionId, seqFrom: 1, seqTo: 1, createdAtFromMs: time, createdAtToMs: time, text });
+        summary.insertSummaryShard({ sessionId, seqFrom: 1, seqTo: 1, createdAtFromMs: time, createdAtToMs: time,
+          summary: text, keywords: [], entities: [], decisions: [] });
+      }
+    } finally { summary.close(); }
+    const query = { v: 1 as const, query: 'quartz', scope, mode: 'deep' as const, corpora: ['sessions' as const], maxResults: 1 };
+    const queryStarted = performance.now();
+    for (const mode of ['deep', 'hints'] as const) {
+      let cursor: string | undefined;
+      const found: string[] = [];
+      do {
+        const current = { ...query, mode, ...(cursor ? { cursor } : {}) };
+        const result = mode === 'deep'
+          ? await searchTier2Memory({ dbPath, query: current, previewChars: 64,
+            resolveDocuments: scope => prepare({ scope }) })
+          : searchTier1Memory({ dbPath: summaryPath, query: current, projectScope: await prepare({ scope }) });
+        expect(result).toMatchObject({ ok: true, project: { state: 'ready' } });
+        if (!result.ok) throw new Error(result.error);
+        for (const hit of result.hits) { if (hit.type === undefined) found.push(hit.sessionId); }
+        cursor = result.nextCursor;
+      } while (cursor);
+      expect(found).toEqual(['remote-session-2', 'remote-session-1']);
+    }
+    console.info('[C6-U3 scoped cost]', { inventorySessions: 3, admittedSessions: 2, admissionMs,
+      deepAndHintsPagingMs: performance.now() - queryStarted });
+    const projectDefaultQuery = { ...query, corpora: undefined };
+    const mixed = await searchTier2Memory({ dbPath, query: projectDefaultQuery, previewChars: 64,
+      resolveDocuments: scope => prepare({ scope }) });
+    expect(mixed).toMatchObject({ ok: true, documents: { state: 'ready' }, hasMore: true });
+    if (!mixed.ok || !mixed.nextCursor) throw new Error('Expected Project default corpus continuation');
+    expect(await searchTier2Memory({ dbPath, query: { ...query, cursor: mixed.nextCursor }, previewChars: 64,
+      resolveDocuments: scope => prepare({ scope }) })).toMatchObject({ ok: false, errorCode: 'memory_invalid_query' });
+    const changedMembership = await searchTier2Memory({ dbPath, query, previewChars: 64,
+      resolveDocuments: scope => prepare({ scope }),
+      embeddings: { enabled: true, mode: 'custom', presetId: null, providerKind: 'local_transformers', modelId: 'test',
+        providerConfig: null, blend: { ftsWeight: 0.1, embeddingWeight: 0.9 } },
+      embedQuery: async () => { setSessionProject(2, 'other-project'); return new Float32Array([1]); },
+    });
+    expect(changedMembership).toMatchObject({ ok: true, project: { state: 'partial' } });
+    expect(changedMembership.ok && changedMembership.hits.some(hit => hit.type === undefined && hit.sessionId === 'remote-session-2')).toBe(false);
+    setSessionProject(2, 'project');
+    const revoked = await searchTier2Memory({ dbPath, query, previewChars: 64,
+      resolveDocuments: scope => prepare({ scope }),
+      embeddings: { enabled: true, mode: 'custom', presetId: null, providerKind: 'local_transformers', modelId: 'test',
+        providerConfig: null, blend: { ftsWeight: 0.1, embeddingWeight: 0.9 } },
+      embedQuery: async () => { setArtifactState('missing'); return new Float32Array([1]); },
+    });
+    expect(revoked).toMatchObject({ ok: true, hits: [], project: { state: 'unavailable' } });
+  }, 'daemon-machine');
+});
 
 it('qualifies global Project documents using the owning Session Machine and workspace mapping', async () => {
   await withCurrentDocumentFixture(async ({ scope, db, serverId, artifactId }) => {
@@ -254,10 +390,13 @@ it('admits archived Session records only when requested and retains the index on
 });
 
 it('reuses daemon Account observation across idle memory inventory admissions and refuses disconnect or a pushed mode change', async () => {
+  onTestFailed(() => console.error('Memory observation regression failed during:', admissionPhase));
   await withCurrentDocumentFixture(async ({ credentials, prepare, scope }) => {
     expect(scope.state).toBe('ready');
+    admissionPhase = 'user_socket_harness';
     const { createRequesterCurrentnessSocketHarness } = await import('@/testkit/backends/requesterCurrentnessSocketHarness');
     const channel = await createRequesterCurrentnessSocketHarness();
+    admissionPhase = 'machine_transport_imports';
     const { ApiMachineClient } = await import('@/api/apiMachine');
     const machineTransport = await import('@/api/machine/connection/createMachineSocketTransport');
     const { createSocketTransportAdapter } = await import('@happier-dev/sync-client');
@@ -272,28 +411,31 @@ it('reuses daemon Account observation across idle memory inventory admissions an
     vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => Response.json({ features: {},
       capabilities: { serverIdentity: { serverIdentityId: 'fixture-home' } } })));
     const client = new ApiMachineClient(credentials.token, { id: 'daemon-machine', encryptionMode: 'plain',
-      encryptionKey: null, encryptionVariant: 'plain', metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
+      metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
     const counts = () => vi.mocked(axios.get).mock.calls.reduce((total, [url]) => {
       const path = new URL(String(url)).pathname;
       return total + Number(path === '/v1/account/encryption' || path === '/v1/account/encryption/currentness');
     }, 0);
     try {
       const foreign = new ApiMachineClient(`header.${Buffer.from(JSON.stringify({ sub: 'other-account' })).toString('base64url')}.signature`,
-        { id: 'foreign-machine', encryptionMode: 'plain', encryptionKey: null, encryptionVariant: 'plain',
+        { id: 'foreign-machine', encryptionMode: 'plain',
           metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
       try {
+        admissionPhase = 'foreign_profile_refusal';
         await expect(foreign.resolvePluginResourceSessionAccess({ accountId: 'other-account', sessionId: 'remote-session',
           signal: new AbortController().signal })).rejects.toThrow();
         expect(channel.clients).toHaveLength(0);
-      } finally { await foreign.shutdown(); }
+      } finally { admissionPhase = 'foreign_profile_shutdown'; await foreign.shutdown(); }
       // Real Machine identity admission authenticates the Profile before owning the observation.
       const beforeAdmission = counts();
+      admissionPhase = 'machine_connect_observation';
       client.connect();
       await vi.waitFor(() => expect(channel.clients).toHaveLength(1));
-      const { fetchAccountEncryptionCurrentness } = await import('@/api/client/connectedServiceCredentialApi');
-      await fetchAccountEncryptionCurrentness({ token: credentials.token });
+      const { readObservedAccountEncryptionCurrentness } = await import('@/api/client/accountEncryptionCurrentnessObservation');
+      await readObservedAccountEncryptionCurrentness({ token: credentials.token, serverBaseUrl: 'https://api.example.test' });
       expect(counts() - beforeAdmission).toBe(1);
       const initial = counts();
+      admissionPhase = 'idle_admission_workload';
       vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
       for (let tick = 0; tick < 12; tick++) {
         await vi.advanceTimersByTimeAsync(50_000);
@@ -302,12 +444,15 @@ it('reuses daemon Account observation across idle memory inventory admissions an
       expect(counts() - initial).toBe(0);
       expect(channel.clients).toHaveLength(1);
       vi.useRealTimers();
+      admissionPhase = 'disconnect_refusal';
       await channel.disconnect();
       expect((await prepare()).state).not.toBe('ready');
       await channel.reconnect();
+      admissionPhase = 'reconnect_admission';
       expect((await prepare()).state).toBe('ready');
       await channel.push('account', { mode: 'e2ee', version: 2, updatedAt: 2,
         signingKeyFingerprint: 'changed-signing', contentKeyFingerprint: 'changed-content' });
+      admissionPhase = 'pushed_mode_refusal';
       expect((await prepare()).state).not.toBe('ready');
     } finally {
       vi.useRealTimers();
@@ -338,7 +483,7 @@ it.each([503, 404])('keeps transient initial observation recoverable while retai
     const { ApiMachineClient } = await import('@/api/apiMachine');
     const { ApiClient } = await import('@/api/api');
     const client = new ApiMachineClient(credentials.token, { id: 'daemon-machine', encryptionMode: 'plain',
-      encryptionKey: null, encryptionVariant: 'plain', metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
+      metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 });
     try {
       setCurrentnessStatus(status);
       await client.resolvePluginResourceSessionAccess({ accountId: 'account', sessionId: 'remote-session', signal: new AbortController().signal });

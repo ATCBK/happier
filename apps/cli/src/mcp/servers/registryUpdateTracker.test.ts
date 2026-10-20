@@ -144,7 +144,8 @@ describe('MCP registry update tracker', () => {
       await tracker.record([{ key: 'registered', upstream }, { key: 'custom', upstream }]);
       expect(fixture.revision()).toBe(2);
       const entry = fixture.catalog().servers[0]!;
-      expect(entry).toEqual({ ...original.servers[0], origin: { ...original.servers[0]!.origin, upstream } });
+      expect(entry).toEqual({ ...original.servers[0], updatedAt: expect.any(Number), origin: { ...original.servers[0]!.origin, upstream } });
+      expect(entry.updatedAt).toBeGreaterThan(original.servers[0]!.updatedAt);
       expect(fixture.catalog().bindings).toEqual(original.bindings);
       expect(RegistryUpstreamV1Schema.parse(entry.origin?.kind === 'registry' ? entry.origin.upstream : undefined)).toEqual(upstream);
       await tracker.list();

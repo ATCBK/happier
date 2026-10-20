@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { buildApprovalRequestArtifactHeaderV1, type ApprovalRequestV2 } from '@happier-dev/protocol';
+import { ActionsSettingsV1Schema, buildApprovalRequestArtifactHeaderV1, type ApprovalRequestV2 } from '@happier-dev/protocol';
 import { StoredApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
 import { decodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { installApprovalCommonModuleMocks } from '@/components/approvals/approvalsTestHelpers';
@@ -29,7 +29,7 @@ describe('pending withdrawal persisted Ask continuation', () => {
         // The active Account's live Settings are the canonical policy owner;
         // an HTTP baseline alone does not replace that already-mounted record.
         storage.getState().applySettings({ ...storage.getState().settings,
-            actionsSettingsV1: { v: 1, actions: { 'session.pending.withdraw': { approvalRequiredSurfaces: ['ui'] } } },
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: { 'session.pending.withdraw': { approvalRequiredSurfaces: ['ui'] } } }),
         }, 1);
         vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockResolvedValue({ token: createAccountTokenForTests(scope.accountId) });
         let recordedRequest: ApprovalRequestV2 | null = null;

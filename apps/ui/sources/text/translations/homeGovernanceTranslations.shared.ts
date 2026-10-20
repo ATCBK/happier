@@ -471,6 +471,8 @@ export const en = {
         relayAutomatic: 'Automatic',
         relayOff: 'Off',
         relayCustom: ({ count }: { count: number }) => `Your relays (${count}) · Applies after restart`,
+        relayServers: 'Relay servers',
+        relayServersDescription: 'Your own relays, used instead of the built-in ones. Leave empty to use the built-in relays.',
         appliesAfterRestart: 'Applies after restart',
         appliesAfterRestartPending: 'Applies after restart · Pending',
         exposureInternetTitle: ({ method }: { method: string }) => `Reachable from the internet through ${method}`,

@@ -80,17 +80,12 @@ function harness(options: Readonly<{ approve?: boolean }> = {}) {
   let version = 5;
   const settings = ActionsSettingsV1Schema.parse({
     v: 1,
-    ...(options.approve === false
-      ? {}
-      : {
-          approvalWaivedSurfaces: {
-            'usage.coach.apply': ['ui'],
-            'usage.coach.undo': ['ui'],
-            'usage.coach.dismiss': ['ui'],
-            'usage.coach.snooze': ['ui'],
-            'settings.set': ['ui'],
-          },
-        }),
+    ...(options.approve === false ? { actions: {
+      'usage.coach.apply': { approvalRequiredSurfaces: ['ui'] },
+      'usage.coach.undo': { approvalRequiredSurfaces: ['ui'] },
+      'usage.coach.dismiss': { approvalRequiredSurfaces: ['ui'] },
+      'usage.coach.snooze': { approvalRequiredSurfaces: ['ui'] },
+    } } : {}),
   });
   const deps = {
     usageActions: {
@@ -170,7 +165,10 @@ function harness(options: Readonly<{ approve?: boolean }> = {}) {
   const executor = createActionExecutor(createActionExecutorBoundaryFixture(deps));
   const controller = createUsageCoachController({
     lifetime: scope.lifetime,
-    executor,
+    // The substituted host ingress supplies the authenticated human identity;
+    // production gets this from the front door, never from the Coach caller.
+    executor: { execute: (id, input, context) => executor.execute(id, input,
+      { ...context, authority: 'present_user', actionCaller: { kind: 'host' } }) },
   });
   return {
     ...scope,

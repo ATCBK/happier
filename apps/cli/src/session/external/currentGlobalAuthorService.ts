@@ -12,6 +12,7 @@ import {
   readAgentRoutingIdForContributionIdentity,
 } from '@/plugins/projection/registry/agentRoutingIdentity';
 import type { StoredCredentials } from '@/persistence';
+import type { AgentCatalogEntry } from '@/agent/catalog/types';
 import { createExternalSessionSourceKeyOwnerFromAgentProjection } from '@/plugins/projection/registry/externalSessionSources';
 import {
   getActiveAccountSettingsSnapshot,
@@ -59,6 +60,7 @@ type CurrentAgentRuntime = Readonly<{
 
 export type CurrentGlobalExternalSessionsAuthorServiceParams = Readonly<{
   agents: readonly ConfiguredExternalSessionSourceAgentContribution[];
+  resolveCatalogEntry: (agentId: string) => Promise<AgentCatalogEntry | null>;
   activeServerDir?: string;
   activeServerId?: string;
   readCredentials(): Promise<StoredCredentials | null>;
@@ -632,6 +634,7 @@ export async function createCurrentGlobalExternalSessionsAuthorService(
     configuredExternalSessionSourcesUseConnectedProfiles(params.agents);
   lifecycle = await createLiveConfiguredPluginExternalSessionsAdapter({
     agents: params.agents,
+    resolveCatalogEntry: params.resolveCatalogEntry,
     ...(params.activeServerDir ? { activeServerDir: params.activeServerDir } : {}),
     readAccount: async () => readsConnectedProfiles
       ? await fetchAccountProfile({ token: (await requireCredentials(params)).token })
@@ -640,9 +643,13 @@ export async function createCurrentGlobalExternalSessionsAuthorService(
     ...(params.activeServerId ? { activeServerId: params.activeServerId } : {}),
     readAccountRevision: () => resolveActiveAccountConfiguredExternalSessionSourceRevision(
       getActiveAccountSettingsSnapshot(),
+      params.agents.flatMap(agent => agent.richDefinition?.definition.surfaces?.externalSession.sources ?? []),
+      params.activeServerId ?? null,
     ),
     subscribeAccountRevision: (listener) => subscribeActiveAccountSettingsSnapshot(
-      (_previous, next) => listener(resolveActiveAccountConfiguredExternalSessionSourceRevision(next)),
+      (_previous, next) => listener(resolveActiveAccountConfiguredExternalSessionSourceRevision(next,
+        params.agents.flatMap(agent => agent.richDefinition?.definition.surfaces?.externalSession.sources ?? []),
+        params.activeServerId ?? null)),
     ),
     isCurrent: params.isCurrent,
     resolveAgentOccurrence: (agentId) => {
@@ -685,6 +692,8 @@ export async function createCurrentGlobalExternalSessionsAuthorService(
               readAccountRevision: () =>
                 resolveActiveAccountConfiguredExternalSessionSourceRevision(
                   getActiveAccountSettingsSnapshot(),
+                  agent.richDefinition?.definition.surfaces?.externalSession.sources,
+                  params.activeServerId ?? null,
                 ),
               occurrenceRetirementSignal: runtime.retirementSignal,
               isOccurrenceCurrent: () => params.isCurrent() && runtime.isCurrent(),

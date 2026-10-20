@@ -379,8 +379,8 @@ export const ProcessPortChip = React.memo(function ProcessPortChip(
         run: () =>
           fireAndForget(
             (async () => {
-              // R42.5: the listener is the terminal's own shell, so freeing the port ends the terminal.
-              if (closesTerminal) {
+              // Policy owns whether to ask; this invocation supplies its terminal-loss facts.
+              const confirmation = closesTerminal ? async () => {
                 const decision = await showProcessConfirmDialog({
                   testID: 'machine-processes-port-close-terminal',
                   title: t('machineProcesses.portMenu.closeTerminalTitle', {
@@ -397,8 +397,8 @@ export const ProcessPortChip = React.memo(function ProcessPortChip(
                     'machineProcesses.portMenu.confirmCloseTerminal',
                   ),
                 });
-                if (decision !== 'confirm') return;
-              }
+                return decision === 'confirm';
+              } : undefined;
               await run({
                 id: `port:${props.inventoryEntryId}`,
                 failureTitle: managed
@@ -410,8 +410,8 @@ export const ProcessPortChip = React.memo(function ProcessPortChip(
                     }),
                 action: async () =>
                   managed
-                    ? handlers.onStopManagedService?.(row.target)
-                    : handlers.onTerminateDetectedService?.(row.target),
+                    ? handlers.onStopManagedService?.(row.target, { confirmation })
+                    : handlers.onTerminateDetectedService?.(row.target, { confirmation }),
               });
             })(),
             { tag: 'MachineProcesses.portStop' },

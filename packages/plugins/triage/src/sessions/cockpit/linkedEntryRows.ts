@@ -4,6 +4,8 @@ import type { TriageEntryRefV1, TriageSourceWorkflowSubjectV1 } from '@happier-d
 import { CORPUS_SESSION_LINKS_FIELD } from '../../corpus/collections/ids.js';
 import { triageEntryRowKey, type TriageListRowV1 } from '../../projection/listWindow.js';
 import { projectTriageSessionLinkedEntrySummary, type TriageSessionLinkedEntrySummaryV1 } from './linkedEntrySummary.js';
+import type { TriageSourceSessionLinkV1 } from '../sourceSessionRelations.js';
+import type { TriageSourceSessionLinksLaneV1 } from '../../actions/sessionLinksProtocol.js';
 export type { TriageSessionLinkedEntrySummaryV1 } from './linkedEntrySummary.js';
 
 /**
@@ -64,6 +66,7 @@ export type TriageSessionLinkedEntryPresentationV1 =
 
 export type TriageSessionLinkedEntryRowV1 = Readonly<{
     key: string;
+    sourceOwned?: true;
     /** Our clock, from the plaintext projection; the presentation order only. */
     linkedAtMs: number;
     presentation: TriageSessionLinkedEntryPresentationV1;
@@ -169,24 +172,41 @@ export function projectTriageSessionLinkedEntries(input: Readonly<{
     hydration: TriageSessionLinkHydrationMapV1;
     entries?: readonly TriageListRowV1[];
     workflowSubject?: (entryRef: TriageEntryRefV1) => TriageSourceWorkflowSubjectV1 | null;
+    sourceLinks?: readonly TriageSourceSessionLinkV1[];
+    sourceLinksStatus?: 'loading' | 'ready' | 'partial' | 'failed';
+    sourceLanes?: readonly TriageSourceSessionLinksLaneV1[];
 }>): TriageSessionLinkedEntriesViewV1 {
     const { query, hydration } = input;
-    const failed = query.status === 'unavailable' || query.status === 'error';
+    const queryFailed = query.status === 'unavailable' || query.status === 'error';
+    const sourceFailed = input.sourceLinksStatus === 'failed' || input.sourceLinksStatus === 'partial';
+    const unavailableSources = [...new Set((input.sourceLanes ?? []).filter((lane) => lane.health.kind !== 'complete').map((lane) => lane.displayLabel))];
+    const message = queryFailed || unavailableSources.length === 0 ? describeFailure(query.failure)
+        : `Some linked entries could not be read: ${unavailableSources.join(', ')}.`;
+    const failed = queryFailed || sourceFailed;
 
-    if (query.rows.length === 0) {
+    if (query.rows.length === 0 && (input.sourceLinks?.length ?? 0) === 0) {
         // Absence is only authoritative from a settled page.
-        if (failed) return { kind: 'unavailable', message: describeFailure(query.failure) };
-        return query.status === 'ready' ? { kind: 'empty' } : { kind: 'loading' };
+        if (failed) return { kind: 'unavailable', message };
+        return query.status === 'ready' && input.sourceLinksStatus !== 'loading' ? { kind: 'empty' } : { kind: 'loading' };
     }
 
     const entries = new Map((input.entries ?? []).map((row) => [triageEntryRowKey(row.entryRef), projectTriageSessionLinkedEntrySummary(row, input.workflowSubject?.(row.entryRef) ?? null)]));
-    const ordered = query.rows
+    const external = query.rows
         .map((row) => Object.freeze({
             key: row.rowId,
             linkedAtMs: readLinkedAtMs(row),
             presentation: presentationFor(row, hydration, entries),
-        }))
-        .sort(compareRows);
+        }));
+    const sourceRows = (input.sourceLinks ?? []).map((link): TriageSessionLinkedEntryRowV1 => ({
+        key: `source:${triageEntryRowKey(link.entryRef)}`,
+        sourceOwned: true,
+        linkedAtMs: link.linkedAtMs,
+        presentation: { kind: 'linked', displayPath: link.displayPath, entryRef: link.entryRef,
+            entry: entries.get(triageEntryRowKey(link.entryRef)) ?? null },
+    }));
+    const sourceKeys = new Set((input.sourceLinks ?? []).map((link) => triageEntryRowKey(link.entryRef)));
+    const ordered = [...external.filter((row) => row.presentation.kind !== 'linked'
+        || !sourceKeys.has(triageEntryRowKey(row.presentation.entryRef))), ...sourceRows].sort(compareRows);
     return Object.freeze({
         kind: 'linked',
         // The Data pager owns the accumulated row window. Dropping rows here
@@ -196,7 +216,7 @@ export function projectTriageSessionLinkedEntries(input: Readonly<{
         more: query.hasMore,
         // Last-known-good rows stay on screen; the reason they may be stale is
         // said out loud rather than implied by their silence.
-        notice: failed ? describeFailure(query.failure) : null,
+        notice: failed ? message : null,
     });
 }
 

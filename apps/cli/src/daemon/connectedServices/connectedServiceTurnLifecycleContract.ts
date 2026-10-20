@@ -1,34 +1,25 @@
 import { PendingRequestedActionV1Schema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import {
   TrackedSessionTurnLifecycleResultSchema,
   type TrackedSessionTurnLifecycleResult,
 } from '../sessions/applyTrackedSessionTurnLifecycle';
 
 export const ConnectedServiceTurnLifecycleRequestBodySchema =
-  z.object({
-    sessionId: z.string().min(1),
-    turnId: z.string().trim().min(1).max(512).optional(),
+  z.strictObject({
+    sessionId: z.string().check(z.minLength(1)),
+    turnId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(512))),
     event: z.enum([
       'prompt_or_steer',
       'task_started',
       'assistant_message_end',
       'turn_cancelled',
     ]),
-    terminalStatus: z.enum(['completed', 'failed'])
-      .optional(),
-    connectedServiceSelectionsEnvRaw: z.string()
-      .min(1)
-      .max(64 * 1024)
-      .optional(),
-    requestedAction: PendingRequestedActionV1Schema.optional(),
-    activeTurnId: z.string()
-      .trim()
-      .min(1)
-      .max(512)
-      .nullable()
-      .optional(),
-  }).strict();
+    terminalStatus: z.optional(z.enum(['completed', 'failed'])),
+    connectedServiceSelectionsEnvRaw: z.optional(z.string().check(z.minLength(1), z.maxLength(64 * 1024))),
+    requestedAction: z.optional(PendingRequestedActionV1Schema),
+    activeTurnId: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1), z.maxLength(512)))),
+  });
 
 export type ConnectedServiceTurnLifecycleRequestBody =
   z.infer<
@@ -37,14 +28,14 @@ export type ConnectedServiceTurnLifecycleRequestBody =
 
 export const ConnectedServiceTurnLifecycleResultSchema =
   z.discriminatedUnion('status', [
-    z.object({
+    z.strictObject({
       status: z.literal('continue'),
       turnCustody: TrackedSessionTurnLifecycleResultSchema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
       status: z.literal('input_blocked'),
       reason: z.literal('request_auth_source_cutover'),
-    }).strict(),
+    }),
   ]);
 
 export type ConnectedServiceTurnLifecycleResult =

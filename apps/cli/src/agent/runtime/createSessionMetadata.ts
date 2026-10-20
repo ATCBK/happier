@@ -9,7 +9,7 @@
 
 import os from 'node:os';
 import { resolve } from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { buildSessionWorkspaceLocationV1 } from '@happier-dev/protocol/sessions/metadata/sessionWorkspaceLocationV1';
 import { writeSessionCapabilitySelectionToMetadataV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
@@ -136,7 +136,7 @@ export type SessionLaunchControlMetadata = Readonly<{
     sessionDirectoryKind: 'path' | 'managed';
 }>;
 
-const sessionToolPolicyLaunchSchema = z.object(AgentSessionToolPolicyShapeV1).strict();
+const sessionToolPolicyLaunchSchema = z.strictObject(AgentSessionToolPolicyShapeV1);
 
 export function captureSessionLaunchControlMetadata(params: Readonly<{
     explicitEnvironment?: Readonly<Record<string, string>> | null;
@@ -192,13 +192,14 @@ export function captureSessionLaunchControlMetadata(params: Readonly<{
 /** All fresh row creators use the same birth facts; source metadata cannot choose a child's kind. */
 export function applyInitialSessionCreationFactsToMetadata<TMetadata extends SessionMetadata & Pick<Metadata, 'work'>>(
     metadata: TMetadata,
-    facts: Readonly<{ allowedTools?: readonly string[]; unlistedTools?: 'ask' | 'deny'; identity?: SessionIdentityAdditions;
+    facts: Readonly<{ allowedTools?: readonly string[]; unlistedTools?: 'ask' | 'deny'; workspaceWrites?: 'allow' | 'deny'; identity?: SessionIdentityAdditions;
         attestedContext?: SessionAttestedContextV1; memoryEnabled?: boolean; promptStack?: SessionPromptStackV1;
         accountSettings?: Readonly<Record<string, unknown>> }>,
-): Omit<TMetadata, 'bot' | 'createdAsBot' | 'work' | 'allowedTools' | 'unlistedTools' | 'attestedContext'> & SessionIdentityAdditions
-    & Pick<SessionMetadata, 'allowedTools' | 'unlistedTools' | 'attestedContext'> & { work: NonNullable<Metadata['work']> } {
+): Omit<TMetadata, 'bot' | 'createdAsBot' | 'work' | 'allowedTools' | 'unlistedTools' | 'workspaceWrites' | 'attestedContext'> & SessionIdentityAdditions
+    & Pick<Metadata, 'allowedTools' | 'unlistedTools' | 'workspaceWrites' | 'attestedContext'> & { work: NonNullable<Metadata['work']> } {
     const { bot: _inheritedBot, createdAsBot: _inheritedBirthFact, allowedTools: _inheritedAllowedTools,
-        unlistedTools: _inheritedUnlistedTools, attestedContext: _inheritedAttestation, work, ...base } = metadata;
+        unlistedTools: _inheritedUnlistedTools, workspaceWrites: _inheritedWorkspaceWrites,
+        attestedContext: _inheritedAttestation, work, ...base } = metadata;
     const identity = facts.identity === undefined ? undefined : SessionIdentityAdditionsV1Schema.parse(facts.identity);
     const settings = accountSettingsParse(facts.accountSettings ?? {});
     return {
@@ -207,6 +208,7 @@ export function applyInitialSessionCreationFactsToMetadata<TMetadata extends Ses
         ...(facts.attestedContext === undefined ? {} : { attestedContext: SessionAttestedContextV1Schema.parse(facts.attestedContext) }),
         ...(facts.allowedTools === undefined ? {} : { allowedTools: [...facts.allowedTools] }),
         ...(facts.unlistedTools === undefined ? {} : { unlistedTools: facts.unlistedTools }),
+        ...(facts.workspaceWrites === undefined ? {} : { workspaceWrites: facts.workspaceWrites }),
         work: { ...work,
             ...(facts.promptStack === undefined ? {} : { promptStack: SessionPromptStackV1Schema.parse(facts.promptStack) }),
             memoryEnabled: facts.memoryEnabled ?? (identity?.bot?.kind === 'bot'
@@ -245,6 +247,7 @@ export function buildCommittedLaunchMetadata(input: Readonly<{
     const { options } = input;
     let metadata: SessionMetadata = {
         path: input.directory, host: os.hostname(),
+        ...(options.machineId ? { machineId: options.machineId } : {}),
         ...(options.sessionCreationCorrespondence ? { sessionCreationCorrespondenceV1: options.sessionCreationCorrespondence } : {}),
         ...(options.placementOrigin ? { placementOrigin: options.placementOrigin } : {}),
         ...(options.runtimeDescriptorV1 ? { runtimeDescriptorV1: options.runtimeDescriptorV1 } : {}),
@@ -340,7 +343,6 @@ export function createSessionMetadata(opts: CreateSessionMetadataOptions): Sessi
         os: os.platform(),
         ...(opts.terminalRuntime ? { terminal: buildTerminalMetadataFromRuntimeFlags(opts.terminalRuntime) } : {}),
         ...('profileId' in launchControlMetadata ? { profileId: launchControlMetadata.profileId } : {}),
-        machineId: opts.machineId,
         homeDir: os.homedir(),
         happyHomeDir: configuration.happyHomeDir,
         happyLibDir: projectPath(),
@@ -354,11 +356,14 @@ export function createSessionMetadata(opts: CreateSessionMetadataOptions): Sessi
         lifecycleStateSince: Date.now(),
         flavor: opts.flavor,
         ...(opts.runtimeDescriptorV1 ? { runtimeDescriptorV1: opts.runtimeDescriptorV1 } : {}),
-        sessionWorkspaceLocationV1: buildSessionWorkspaceLocationV1({
+        ...(opts.machineId ? {
             machineId: opts.machineId,
-            agentPath: sessionPath,
-            machinePath: launchControlMetadata.machineWorkspacePath ?? sessionPath,
-        }),
+            sessionWorkspaceLocationV1: buildSessionWorkspaceLocationV1({
+                machineId: opts.machineId,
+                agentPath: sessionPath,
+                machinePath: launchControlMetadata.machineWorkspacePath ?? sessionPath,
+            }),
+        } : {}),
         ...(launchControlMetadata.sessionDirectoryKind === 'managed'
             ? { sessionDirectoryV1: { v: 1 as const, kind: 'managed' as const } }
             : {}),

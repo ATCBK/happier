@@ -21,8 +21,12 @@ beforeEach(async () => {
     boundary.resetRequests();
     resetScopedMachineTransportCacheForTests();
     home = await boundary.addHome('https://restart.example.test', 'account-a');
-    boundary.setHttpResponder(async input => new URL(String(input)).pathname === '/v1/account/encryption'
-        ? Response.json({ mode: 'plain', updatedAt: 1 }) : null);
+    boundary.setHttpResponder(async input => {
+        const path = new URL(String(input)).pathname;
+        if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+        if (path === '/v2/account/settings') return Response.json({ version: 1, content: { t: 'plain', v: {} } });
+        return null;
+    });
     decodedRequests.length = 0;
     response = () => ({ ok: true, status: 'restarted', sessionId: 's1' });
     boundary.setRpcResponder(async request => {
@@ -93,16 +97,40 @@ const restartCases = [
 ] as const;
 
 describe('session runner restart op', () => {
-    it.each(restartCases)('accepts a %s restart acknowledgement after the generic 30 second budget', async (_name, restart, method) => {
+    it('refreshes from the public Action through the banner primitive and exact Home RPC', async () => {
+        response = method => method === RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART
+            ? { ok: true, status: 'restarted', sessionId: 's1' } : statusResponse(runtimeState);
+        const { createDefaultActionExecutor } = await import('./actions/defaultActionExecutor');
+        const { ActionIdSchema } = await import('@happier-dev/protocol/actions/actionIds');
+        const result = await createDefaultActionExecutor().execute(ActionIdSchema.parse('session.runtime.refresh'),
+            { sessionId: 's1', machineId: 'm1', serverId: home.id },
+            { surface: 'ui', authority: 'present_user', serverId: home.id, actionCaller: { kind: 'host' } });
+        expect(result).toMatchObject({ ok: true, result: { ok: true, status: 'restarted', sessionId: 's1' } });
+        expect(decodedRequests).toContainEqual({ method: RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART, payload: {
+            sessionId: 's1', mode: 'if_stale', reason: 'ui_stale_runner_banner', expectedRunnerPid: 123,
+            expectedProcessCommandHash: 'hash-old', expectedRunnerEntrypointIdentity: 'runner-runtime-old',
+        } });
+    });
+
+    it.each(restartCases)('accepts a %s restart acknowledgement after deferred child work', async (_name, restart, method) => {
         let release: (() => void) | undefined;
-        response = () => new Promise(resolve => { release = () => resolve({ ok: true, status: 'restarted', sessionId: 's1' }); });
+        response = requestedMethod => requestedMethod === method
+            ? new Promise(resolve => { release = () => resolve({ ok: true, status: 'restarted', sessionId: 's1' }); })
+            : statusResponse(runtimeState);
         vi.useFakeTimers();
         const pending = restart();
+        let settled = false;
+        void pending.finally(() => { settled = true; });
         await vi.waitFor(() => expect(release).toBeDefined());
-        await vi.advanceTimersByTimeAsync(35_000);
-        release?.();
+        try {
+            expect(boundary.requests.find(request => request.method === method)?.timeoutMs).toBeNull();
+            await vi.advanceTimersByTimeAsync(120_000);
+            expect(settled).toBe(false);
+        } finally {
+            release?.();
+        }
         await expect(pending).resolves.toMatchObject({ ok: true, status: 'restarted' });
-        expect(boundary.requests.find(request => request.method === method)?.timeoutMs).toBeGreaterThan(60_000);
+        expect(boundary.requests.find(request => request.method === method)?.timeoutMs).toBeNull();
     });
 
     it('sends V1 aggregate guards and session-write authorization on the selected Home', async () => {
@@ -117,6 +145,20 @@ describe('session runner restart op', () => {
         expect(sent).toContainEqual(expect.arrayContaining([expect.objectContaining({ authorization: {
             kind: SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS.SESSION_WRITE, sessionId: 's1',
         } })]));
+    });
+
+    it('cancels deferred refresh with the caller lifetime without starting reconciliation', async () => {
+        response = () => new Promise(() => {});
+        const controller = new AbortController();
+        const pending = ops.restartSessionRunnerOnCurrentRuntime({ runtimeState, serverId: home.id,
+            signal: controller.signal });
+        let settled: unknown;
+        void pending.then(value => { settled = value; }, error => { settled = error; });
+        await vi.waitFor(() => expect(decodedRequests).toHaveLength(1));
+        controller.abort();
+        await vi.waitFor(() => expect(settled).toBeDefined());
+        expect(settled).toMatchObject({ name: 'AbortError' });
+        expect(decodedRequests.map(request => request.method)).toEqual([RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART]);
     });
 
     it('confirms the exact provider security change through V2', async () => {
@@ -177,7 +219,7 @@ describe('session runner restart op', () => {
         await expect(restartCases[1][1]()).resolves.toMatchObject({ ok: false, status: 'partial_failure' });
     });
 
-    it.each(['busy', 'ineligible', 'version_unknown', 'unsupported_daemon', 'not_tracked', 'runner_not_active', 'missing_resume_snapshot', 'missing_spawn_options'] as const)('retains definitive %s outcomes without observing', async status => {
+    it.each(['busy', 'ineligible', 'version_unknown', 'unsupported_daemon', 'restart_admission_unsupported', 'not_tracked', 'runner_not_active', 'missing_resume_snapshot', 'missing_spawn_options'] as const)('retains definitive %s outcomes without observing', async status => {
         response = () => ({ ok: false, status, sessionId: 's1' });
         await expect(restartCases[0][1]()).resolves.toMatchObject({ ok: false, status });
         expect(decodedRequests.map(request => request.method)).toEqual([RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART]);

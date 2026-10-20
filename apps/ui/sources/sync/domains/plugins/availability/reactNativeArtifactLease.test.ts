@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as React from 'react';
+import { renderHook, flushHookEffects } from '@/dev/testkit';
 
 const activeAccountHostedArtifactSource = vi.hoisted(() => ({
     create: vi.fn(),
@@ -11,6 +13,10 @@ vi.mock('@/sync/api/plugins/availability/activePluginAccountHostedArtifactRead',
     createActivePluginAccountHostedArtifactSourceCandidate: (input: unknown) => (
         activeAccountHostedArtifactSource.create(input)
     ),
+    createActivePluginAccountHostedArtifactTargetSourceCandidate: (input: unknown) => (
+        activeAccountHostedArtifactSource.create(input)
+    ),
+    publishActivePluginAccountHostedArtifact: async () => ({ kind: 'published', value: { outcome: 'created' } }),
 }));
 vi.mock('./reactNativeArtifactDaemonTransport', () => ({
     fetchReactNativeExactArtifactBytesViaMachineRpc: reactNativeArtifactDaemonTransport.fetch,
@@ -296,6 +302,119 @@ function fixture(input: Readonly<{
 }
 
 describe('React Native Artifact lease acquisition', () => {
+    it('reads immutable bytes once across mounted effects and reacquires after Account retirement', async () => {
+        const current = fixture();
+        const cache = createPluginReactNativeBundleCache();
+        const fetchDaemonArtifactBytes = vi.fn(async () => current.daemonResponse);
+        const producer = createPluginReactNativeArtifactAvailabilityProducer({
+            getCache: () => cache, appExact: inactiveAppExactSource, fetchDaemonArtifactBytes,
+        });
+        let account = createLifetime();
+        const mount = () => renderHook(() => {
+            const [ready, setReady] = React.useState(false);
+            React.useEffect(() => {
+                let handle: Awaited<ReturnType<typeof producer.acquire>> | undefined;
+                let mounted = true;
+                void producer.acquire({
+                    reader: current.reader, artifactGraph: current.graph, cacheIdentity: current.cacheIdentity,
+                    accountLifetime: account.lifetime,
+                    daemon: { machineId: current.origin.materializationRef.machineId, serverId: scope.serverId },
+                    isCurrent: () => mounted,
+                }).then(value => { handle = value; setReady(value.kind === 'available'); });
+                return () => { mounted = false; if (handle?.kind === 'available') handle.dispose(); };
+            }, []);
+            return ready;
+        });
+        for (let cohort = 0; cohort < 6; cohort++) {
+            const hooks = [await mount(), await mount(), await mount()];
+            for (const hook of hooks) {
+                await vi.waitFor(() => expect(hook.getCurrent()).toBe(true));
+                await hook.unmount();
+            }
+        }
+        expect(fetchDaemonArtifactBytes).toHaveBeenCalledTimes(1);
+        expect(cache.readInstalledArtifact(current.cacheIdentity, { ...scope, accountId: 'another-account' })).toBeNull();
+        await cache.removePersistentArtifact({ accountScope: scope, artifactDigest: current.cacheIdentity.artifactDigest });
+        const evicted = await mount();
+        await vi.waitFor(() => expect(evicted.getCurrent()).toBe(true));
+        expect(fetchDaemonArtifactBytes).toHaveBeenCalledTimes(2);
+        await evicted.unmount();
+        account.retire();
+        await flushHookEffects();
+        account = createLifetime();
+        const next = await mount();
+        await flushHookEffects();
+        await vi.waitFor(() => expect(next.getCurrent()).toBe(true));
+        expect(fetchDaemonArtifactBytes).toHaveBeenCalledTimes(3);
+        await next.unmount();
+    });
+
+    it('materializes the Account-selected digest from another supplier when the primary daemon misses', async () => {
+        const current = fixture();
+        const reader = createPluginAccountAvailabilityReader({
+            scope,
+            snapshot: { ...current.snapshot, materializations: [], snapshots: [] },
+        });
+        const cache = createPluginReactNativeBundleCache();
+        const primary = { machineId: 'unavailable-machine', serverId: scope.serverId };
+        const supplier = { machineId: 'byte-supplier', serverId: 'another-home' };
+        const producer = createPluginReactNativeArtifactAvailabilityProducer({
+            getCache: () => cache,
+            appExact: inactiveAppExactSource,
+            // The transport boundary varies; Account selection, verification and cache remain real.
+            fetchDaemonArtifactBytes: async ({ transport }) => transport.machineId === supplier.machineId
+                ? current.daemonResponse
+                : { ok: false, code: 'artifact_unavailable', diagnostics: [] },
+        });
+        const input = {
+            reader,
+            artifactGraph: current.graph,
+            cacheIdentity: current.cacheIdentity,
+            accountLifetime: permanentlyCurrentLifetime,
+            isCurrent: () => true,
+            daemon: primary,
+        };
+
+        expect((await producer.acquire(input)).kind).toBe('unavailable');
+        const acquired = await producer.acquire({ ...input, daemons: [primary, supplier] });
+
+        expect(acquired.kind).toBe('available');
+        if (acquired.kind !== 'available') throw new Error('Expected the alternate supplier to satisfy the selected digest.');
+        expect(cache.readInstalledArtifact(current.cacheIdentity)?.bytes).toEqual(current.entryBytes);
+        expect(acquired.isCurrent()).toBe(true);
+        acquired.dispose();
+    });
+
+    it('carries exact installed origin through the real RN producer, lease and cache without Account selection', async () => {
+        const current = fixture();
+        const response = current.snapshot.intentReads[0]!.response;
+        const store = createPluginAccountAvailabilityReaderStore();
+        store.replace({ scope, snapshot: { ...current.snapshot, releases: [response.release!],
+            intentReads: [{ pluginId: current.cacheIdentity.pluginId, response: PluginAccountAvailabilityIntentReadResponseV1Schema.parse({
+                ...response, intent: null, release: null, uiArtifacts: [],
+            }) }],
+        } });
+        const cache = createPluginReactNativeBundleCache();
+        const producer = createPluginReactNativeArtifactAvailabilityProducer({
+            getCache: () => cache, appExact: inactiveAppExactSource,
+            // Only the daemon byte RPC is replaced; admission, custody, integrity and cache are real.
+            fetchDaemonArtifactBytes: async () => current.daemonResponse,
+        });
+        const input = { reader: store.bind(scope), artifactGraph: current.graph, cacheIdentity: current.cacheIdentity,
+            accountLifetime: permanentlyCurrentLifetime, isCurrent: () => true,
+            daemon: { machineId: current.origin.materializationRef.machineId, serverId: scope.serverId },
+        };
+        // Mis-binding the producer's origin forwarding must refuse the identical byte request.
+        expect(await producer.acquire(input)).toMatchObject({ kind: 'unavailable', code: 'artifact_not_current' });
+        const acquired = await producer.acquire({ ...input, executionOrigin: current.origin });
+        expect(acquired.kind).toBe('available');
+        if (acquired.kind !== 'available') throw new Error('Expected installed RN Artifact');
+        expect(acquired.cacheKey).toEqual(expect.any(String));
+        expect(acquired.isCurrent()).toBe(true);
+        store.retire([current.cacheIdentity.pluginId]);
+        expect(acquired.isCurrent()).toBe(false);
+        acquired.dispose();
+    });
     function daemonProjectionSelection() {
         return Object.freeze({
             occurrenceId: 'com.acme.preview-occurrence-a',
@@ -797,9 +916,12 @@ describe('React Native Artifact lease acquisition', () => {
             ...current.cacheIdentity,
             contributionId: 'replacement-renderer',
         };
+        // The new semantic slot must be selected by its actual Account release;
+        // digest cache reuse does not grant admission to an undeclared slot.
+        const replacement = fixture({ artifactContributionId: identityWithChangedSlotMetadata.contributionId });
 
         const acquired = await acquire({
-            reader: current.reader,
+            reader: replacement.reader,
             artifactGraph: current.graph,
             cacheIdentity: identityWithChangedSlotMetadata,
             daemonProjectionSelection: {

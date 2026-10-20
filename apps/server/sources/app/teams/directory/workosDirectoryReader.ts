@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { randomUUID } from "node:crypto";
 import { readAccountNameFromLegacyProfileV1 } from '@happier-dev/protocol/account/accountDisplayProfileV1';
 import type {
@@ -27,32 +27,32 @@ const WORKOS_DIRECTORY_EVENT_TYPES = [
 ] as const;
 type WorkosDirectoryEventName = typeof WORKOS_DIRECTORY_EVENT_TYPES[number];
 
-const NonEmptyStringSchema = z.string().min(1);
-const ExternalIdSchema = NonEmptyStringSchema.max(256);
-const ExternalSubjectSchema = z.string().max(512);
-const ExternalEmailSchema = z.string().max(320);
-const ExternalLabelSchema = z.string().max(256);
+const NonEmptyStringSchema = z.string().check(z.minLength(1));
+const ExternalIdSchema = NonEmptyStringSchema.check(z.maxLength(256));
+const ExternalSubjectSchema = z.string().check(z.maxLength(512));
+const ExternalEmailSchema = z.string().check(z.maxLength(320));
+const ExternalLabelSchema = z.string().check(z.maxLength(256));
 const WorkosUserSchema = z.object({
     id: ExternalIdSchema,
     directoryId: ExternalIdSchema,
-    organizationId: NonEmptyStringSchema.max(512).nullable(),
+    organizationId: z.nullable(NonEmptyStringSchema.check(z.maxLength(512))),
     idpId: ExternalSubjectSchema,
-    firstName: ExternalLabelSchema.nullable(),
-    lastName: ExternalLabelSchema.nullable(),
-    email: ExternalEmailSchema.nullable(),
+    firstName: z.nullable(ExternalLabelSchema),
+    lastName: z.nullable(ExternalLabelSchema),
+    email: z.nullable(ExternalEmailSchema),
     state: z.enum(["active", "inactive"]),
     updatedAt: NonEmptyStringSchema,
 });
 const WorkosGroupSchema = z.object({
     id: ExternalIdSchema,
     directoryId: ExternalIdSchema,
-    organizationId: NonEmptyStringSchema.max(512).nullable(),
-    name: ExternalLabelSchema.min(1),
+    organizationId: z.nullable(NonEmptyStringSchema.check(z.maxLength(512))),
+    name: ExternalLabelSchema.check(z.minLength(1)),
     updatedAt: NonEmptyStringSchema,
 });
 const WorkosDirectorySchema = z.object({
     id: ExternalIdSchema,
-    organizationId: NonEmptyStringSchema.max(512).optional(),
+    organizationId: z.optional(NonEmptyStringSchema.check(z.maxLength(512))),
 });
 const WorkosEventEnvelopeSchema = z.object({
     id: ExternalIdSchema,
@@ -60,7 +60,7 @@ const WorkosEventEnvelopeSchema = z.object({
     data: z.unknown(),
 });
 const WorkosPageMetadataSchema = z.object({
-    after: NonEmptyStringSchema.nullable().optional(),
+    after: z.optional(z.nullable(NonEmptyStringSchema)),
 });
 
 type WorkosDirectoryPageOptions = Readonly<{

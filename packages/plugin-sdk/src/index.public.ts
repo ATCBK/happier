@@ -1,3 +1,5 @@
+export type { ActionConfirmationWhen } from './definePlugin.js';
+export type { PluginWorkItemsRuntime, PluginWorkItemV1, PluginWorkItemCategoryV1, PluginWorkItemsContributionV1, PluginWorkItemsResolveRequestV1, PluginWorkItemsResolveResultV1, PluginWorkItemsFindLinkedRequestV1, PluginWorkItemsWatchRequestV1, PluginWorkItemTransitionInputV1 } from './workItems.js';
 export { ComposerReferenceCandidateIdV1Schema } from './composerReferenceProviders.js';
 export type { ComposerReferenceCandidatePageV1 } from './composerReferenceProviders.js';
 export type {
@@ -14,6 +16,7 @@ export type { PluginProjectNativeAdapterContributionV1 } from './manifest.js';
 export type { PluginInputTypeReferenceV1 } from './manifest.js';
 export type { PluginAtmospherePictureContributionV1 } from './manifest.js';
 export type { PluginRegistrySourceContributionV1 } from './manifest.js';
+export type { PluginSkillContributionV1 } from './manifest.js';
 export { MAX_PLUGIN_SEARCH_ITEM_COMMAND_UTF8_BYTES_V1 } from './searchProviders.js';
 export { PluginSearchItemV1Schema } from './searchProviders.js';
 export { PluginSearchQueryV1Schema } from './searchProviders.js';
@@ -29,6 +32,7 @@ export type {
     ComposerContentHandleV1,
     ComposerContentInspectRequestV1,
     ComposerContentInspectResultV1,
+    ComposerValueSchema,
     ComposerContentMediaKindV1,
     ComposerContentMimeTypeV1,
     ComposerContentPickMediaRequestV1,
@@ -169,6 +173,7 @@ export type { PluginSettingsMutationResult } from './services/core.js';
 export type { PluginSettingsSnapshot } from './services/core.js';
 export {
   arePluginMachineExecutionOriginsEqual,
+  getPluginMachineExecutionOriginRef,
   arePluginMachineMaterializationRefsEqual,
 } from './executionOrigin.js';
 export { definePlugin } from './definePlugin.js';
@@ -182,6 +187,7 @@ export type {
 export { isRecord } from './sessions/fileStores/records.js';
 export { parseJsonLine } from './sessions/fileStores/records.js';
 export { parseTimestampMs } from './sessions/fileStores/records.js';
+export { projectPluginFailureText } from './diagnostics.js';
 export { readString } from './sessions/fileStores/records.js';
 export { readTrimmedString } from './sessions/fileStores/records.js';
 export { redactBugReportSensitiveText } from './diagnostics.js';

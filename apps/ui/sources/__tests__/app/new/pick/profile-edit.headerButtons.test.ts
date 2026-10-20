@@ -7,6 +7,12 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import type { IModal } from '@/modal';
 import type { ProfileRecordV1 } from '@happier-dev/protocol/profiles/profileRecordV1';
+import { PROFILE_ROWS_ROUTE_V1, PROFILE_RECORDS_ROUTE_V1, PROFILE_RECORD_READ_ROUTE_V1, PROFILE_REFERENCE_GUARD_ROUTE_V1,
+    ProfileRecordV1Schema, ProfileRowsListResponseV1Schema, ProfileRowMutationV1Schema,
+    ProfileRowMutationResponseV1Schema, ProfileRowReadRequestV1Schema, ProfileRowReadResponseV1Schema } from '@happier-dev/protocol/profiles/profileRecordV1';
+import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
+import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { readAiLaunchProfileRecords } from '@happier-dev/protocol/profiles/read';
 import { applyProfileCatalogSnapshot, resetProfileCatalogSnapshotsForTests } from '@/sync/store/settings/profileCatalogSnapshot';
 import {
     createNavigationMock, createRouterMock, createStackOptionsCapture,
@@ -45,13 +51,45 @@ installPickerCommonModuleMocks({
         spies: { alert: alertSpy },
     }).module,
 });
-const runtime = installSessionPaneRuntimeTestHarness();
+const profileRows = new Map<string, Readonly<{ record: ProfileRecordV1; revision: number }>>();
+let profileRevision = 1;
+const runtime = installSessionPaneRuntimeTestHarness({ request: async (url, init) => {
+    const path = new URL(String(url)).pathname;
+    if (path === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json(AcpCatalogRowReadResponseV1Schema.parse({
+        status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: [] } },
+    }));
+    if (path === PROFILE_RECORDS_ROUTE_V1 && init?.method === 'POST') {
+        const mutation = ProfileRowMutationV1Schema.parse(JSON.parse(String(init.body)));
+        if (mutation.content?.t !== 'plain') throw new Error('Expected plain Profile authoring');
+        const record = ProfileRecordV1Schema.parse(mutation.content.v);
+        profileRows.set(record.id, { record, revision: ++profileRevision });
+        return Response.json(ProfileRowMutationResponseV1Schema.parse({ status: 'updated', revision: profileRevision,
+            cursor: profileRevision, referenceGuardRevision: profileRevision }));
+    }
+    if (path === PROFILE_RECORD_READ_ROUTE_V1 && init?.method === 'POST') {
+        const { id } = ProfileRowReadRequestV1Schema.parse(JSON.parse(String(init.body)));
+        const row = profileRows.get(id);
+        return Response.json(ProfileRowReadResponseV1Schema.parse(row
+            ? { status: 'present', revision: row.revision, content: { t: 'plain', v: row.record } }
+            : { status: 'absent' }));
+    }
+    if (path === PROFILE_ROWS_ROUTE_V1) return Response.json(ProfileRowsListResponseV1Schema.parse({
+        status: 'listed', rows: [...profileRows.values()].map(row => ({ id: row.record.id,
+            revision: row.revision, content: { t: 'plain', v: row.record } })),
+        nextCursor: null, complete: true, diagnostics: [], referenceGuardRevision: profileRevision,
+        transferControl: { status: 'absent' },
+    }));
+    if (path === PROFILE_REFERENCE_GUARD_ROUTE_V1) return Response.json({ status: 'ready', revision: profileRevision });
+    if (path === PROFILE_TRANSFER_ROUTE_V1) return Response.json({ status: 'absent' });
+    return null;
+} });
 
 beforeEach(async () => {
     const { createEmptyCustomProfile } = await import('@/sync/domains/profiles/profileMutations');
     profileData = JSON.stringify({ ...createEmptyCustomProfile(), id: 'p1', name: 'Test profile' });
     profileId = undefined;
-    storage.getState().applySettingsLocal({ profiles: [] });
+    profileRows.clear();
+    profileRevision = 1;
     stackOptionsCapture.reset();
     alertSpy.mockClear();
     navigationMock.goBack.mockClear();
@@ -79,6 +117,7 @@ async function closeAndFlush() {
     await act(async () => { pressHeaderClose(); });
 }
 async function editName(screen: Awaited<ReturnType<typeof renderProfileEditor>>, name = 'Edited profile') {
+    await vi.waitFor(() => expect(screen.findHostByTestId('profile-slim-name') ?? screen.findHostByTestId('profile-legacy-name')).not.toBeNull());
     const field = screen.findHostByTestId('profile-slim-name') ?? screen.findHostByTestId('profile-legacy-name');
     if (!field || typeof field.props.onChangeText !== 'function') throw new Error('Expected actual profile name input');
     await act(async () => field.props.onChangeText(name));
@@ -91,7 +130,10 @@ async function chooseDecision(text: string) {
     await act(async () => { button.onPress?.(); });
 }
 function savedProfiles() {
-    return storage.getState().settings.profiles;
+    return readAiLaunchProfileRecords([...profileRows.values()].map(row => row.record)).entries.map(entry => {
+        if (entry.kind === 'opaque') throw new Error('Expected readable saved Profile');
+        return entry.profile;
+    });
 }
 
 describe('ProfileEditScreen (header buttons)', () => {
@@ -117,11 +159,15 @@ describe('ProfileEditScreen (header buttons)', () => {
         if (!scope) throw new Error('Expected connected runtime Home');
         const record: ProfileRecordV1 = { v: 1, id: 'p1', definition: { kind: 'inline',
             profile: { ...createEmptyCustomProfile(), id: 'p1', name: 'Test profile' } },
-            enabled: true, promptStack: [], secretBindings: { MASKED: null } };
-        const publish = (revision: number) => applyProfileCatalogSnapshot(scope, {
+            enabled: true, promptStack: [], secretBindings: { MASKED: null }, skillSeeds: [] };
+        const publish = (revision: number) => {
+            profileRevision = revision;
+            profileRows.set(record.id, { record, revision });
+            applyProfileCatalogSnapshot(scope, {
             status: 'ready', source: 'destination', authority: 'active', control: null,
             controlRevision: 1, referenceGuardRevision: 1, diagnostics: [], records: [{ record, revision }],
-        }, true);
+            }, true);
+        };
         publish(7);
         profileData = '';
         profileId = 'p1';
@@ -178,13 +224,17 @@ describe('ProfileEditScreen (header buttons)', () => {
         const { DEFAULT_PROFILES, getBuiltInProfile } = await import('@/sync/domains/profiles/profileUtils');
         const builtIn = getBuiltInProfile(DEFAULT_PROFILES[0].id);
         if (!builtIn) throw new Error('Expected canonical built-in profile');
-        profileData = JSON.stringify(builtIn);
+        // Match the current picker's Edit producer and its named Profile lookup.
+        profileData = '';
+        profileId = builtIn.id;
         const screen = await renderProfileEditor();
         await editName(screen, 'Saved built-in copy');
         await closeAndFlush();
         expect(alertSpy.mock.calls.at(-1)?.[2]?.some((button) => button.text === 'common.saveAs')).toBe(true);
         await chooseDecision('common.saveAs');
-        expect(savedProfiles()).toEqual([expect.objectContaining({ v: 2, name: 'Saved built-in copy' })]);
+        await vi.waitFor(() => {
+            expect(savedProfiles()).toEqual([expect.objectContaining({ v: 2, name: 'Saved built-in copy' })]);
+        });
         const { readAiLaunchProfileCollection } = await import('@happier-dev/protocol');
         const entry = readAiLaunchProfileCollection(savedProfiles()).entries[0];
         if (!entry || entry.kind === 'opaque') throw new Error('Expected saved current profile');

@@ -106,6 +106,15 @@ function insertWavChunk(
 }
 
 describe('voice fixture testkit', () => {
+    it('loads the pinned human recording and requires its complete reference transcript', async () => {
+        const fixture = await readVoiceFixture('natural-librispeech-61-70968-0000-16k');
+
+        expect(fixture.metadata.provenance.speechEngine).toBe('human recording');
+        expect(matchesVoiceFixtureTranscript(fixture.metadata, fixture.metadata.sourceText ?? '')).toBe(true);
+        expect(matchesVoiceFixtureTranscript(fixture.metadata, 'A confused complaint against the wizard who had vanished behind the curtain on the left')).toBe(false);
+        expect(matchesVoiceFixtureTranscript(fixture.metadata, 'curtain left')).toBe(false);
+    });
+
     it('loads a checked-in PCM fixture and its manifest contract', async () => {
         const fixture = await readVoiceFixture('short-command-16k');
 

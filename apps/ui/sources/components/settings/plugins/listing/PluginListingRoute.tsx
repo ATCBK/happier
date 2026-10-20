@@ -1,7 +1,8 @@
 import * as React from 'react';
 import { Redirect, useLocalSearchParams } from '@/components/appShell/workspace/destinationRoute';
 
-import { buildPluginsHomeRoute, readPluginListingRouteParams, usePluginsSurfaceHost } from '../model/pluginsSurfaceRoutes';
+import { buildPluginsHomeRoute, readPluginListingRouteParams } from '../model/pluginsSurfaceRoutes';
+import { usePluginsSurfaceHost } from '../model/usePluginsSurfaceHost';
 import { PluginListingScreen } from './PluginListingScreen';
 
 /**

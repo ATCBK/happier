@@ -198,6 +198,7 @@ export async function sendWebhookActivityNotificationAsync(params: Readonly<{
     // the process; raw Account evidence never bypasses preview policy.
     ...(params.event.topic === 'connected_service_usage' || params.event.topic === 'resource_limit' ? { metadata: built.data } : {}),
     ...(params.event.topic === 'notify_me' ? { notificationOpen: params.event.open } : {}),
+    ...(params.event.topic === 'follow_update' ? { follow: params.event.follow } : {}),
     channelId: params.channel.id,
     createdAt: (params.nowMs ?? (() => Date.now()))(),
     topic: params.event.topic,

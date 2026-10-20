@@ -1,5 +1,5 @@
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
-import { type ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
+import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { ScmComparisonCaptureInputSchema, ScmDiffSummaryGenerateInputSchema,
     buildScmReviewedMarksKey, createScmReviewedMarksRecordPort } from '@happier-dev/protocol/scm';
@@ -16,7 +16,7 @@ export function createScmDiffSummaryResultOperationsWithTransport(
     params: Parameters<typeof createScmDiffSummaryResultOperations>[0] & Readonly<{ rpc?: ScmDiffSummaryResultRpc }>,
 ) {
     const { rpc, ...captured } = params;
-    const actionExecutor = captured.actionExecutor ?? (rpc ? createActionExecutor({
+    const actionExecutor = captured.actionExecutor ?? (rpc ? createActionExecutor(createActionExecutorBoundaryFixture({
         isActionApprovalRequired: () => false,
         scmActionExecute: ({ actionId, input, context }) => {
             const method = getActionSpec(actionId).bindings?.rpcMethod;
@@ -25,7 +25,7 @@ export function createScmDiffSummaryResultOperationsWithTransport(
             return rpc(method, input as Readonly<{ cwd: string }>, { signal: context.signal });
         },
     // Unrelated transports are intentionally absent from this boundary fixture.
-    } satisfies Partial<ActionExecutorDeps> as ActionExecutorDeps) : undefined);
+    })) : undefined);
     return createScmDiffSummaryResultOperations({ ...captured, ...(actionExecutor ? { actionExecutor } : {}) });
 }
 
@@ -36,7 +36,7 @@ export function createScmDiffSummaryOperationsWithTransport(
     }> = {},
 ) {
     const { generateSummary, captureComparison, ...captured } = params;
-    const actionExecutor = captured.actionExecutor ?? ((generateSummary || captureComparison) ? createActionExecutor({
+    const actionExecutor = captured.actionExecutor ?? ((generateSummary || captureComparison) ? createActionExecutor(createActionExecutorBoundaryFixture({
         isActionApprovalRequired: () => false,
         scmActionExecute: ({ actionId, input, context }) => {
             const accountId = context.runtimeAccountId ?? context.expectedAccountId;
@@ -52,7 +52,7 @@ export function createScmDiffSummaryOperationsWithTransport(
             throw new Error(`Unexpected SCM transport for ${actionId}`);
         },
     // These suites own generator/capture boundaries, not unrelated Action transports.
-    } satisfies Partial<ActionExecutorDeps> as ActionExecutorDeps) : undefined);
+    })) : undefined);
     return createScmDiffSummaryOperations({ ...captured, ...(actionExecutor ? { actionExecutor } : {}) });
 }
 
@@ -60,7 +60,7 @@ export function createScmDiffSummaryOperationsWithTransport(
 export function createScmReviewedMarksOperationsWithTransport(params: Parameters<typeof createScmReviewedMarksOperations>[0]) {
     const transport = createAccountKvJsonTransport({ ...params, key: buildScmReviewedMarksKey(params.comparison.id) });
     const port = createScmReviewedMarksRecordPort({ comparison: params.comparison, transport });
-    const executor = createActionExecutor({ isActionApprovalRequired: () => false,
+    const executor = createActionExecutor(createActionExecutorBoundaryFixture({ isActionApprovalRequired: () => false,
         scmActionExecute: ({ actionId, input }) => {
             if (actionId !== 'scm.diffSummary.reviewed.mark' && actionId !== 'scm.diffSummary.reviewed.unmark')
                 throw new Error(`Unexpected SCM transport for ${actionId}`);
@@ -68,7 +68,7 @@ export function createScmReviewedMarksOperationsWithTransport(params: Parameters
             return port.setReviewed(refs, actionId === 'scm.diffSummary.reviewed.mark');
         },
     // Only the Machine marks transport is simulated; Account record behavior remains real.
-    } satisfies Partial<ActionExecutorDeps> as ActionExecutorDeps);
+    }));
     const operations = createScmDiffSummaryResultOperations({ machineId: 'marks-machine', shouldContinue: params.shouldContinue, actionExecutor: executor });
     return createScmReviewedMarksOperations({ ...params, setReviewedAction: params.setReviewedAction ?? ((refs, reviewed) =>
         operations.setReviewed({ v: 2, cwd: params.comparison.repository.rootPath, comparisonId: params.comparison.id,

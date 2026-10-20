@@ -5,7 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { withWorkspaceBundleLock } from '../../../packages/cli-common/workspaceBundleLock.mjs';
+import { WORKSPACE_BUNDLE_LOCK_BUSY_ERROR_CODE, WORKSPACE_BUNDLE_LOCK_TIMEOUT_ERROR_CODE, withWorkspaceBundleLock } from '../../../packages/cli-common/workspaceBundleLock.mjs';
 
 describe('ensureBuildArtifactsReadyOnce', () => {
   const tempDirs: string[] = [];
@@ -75,7 +75,8 @@ describe('ensureBuildArtifactsReadyOnce', () => {
           throw new Error('runBuild should not be reached while a live owner remains');
         },
       }),
-    ).rejects.toThrow(/Timed out waiting for CLI shared deps build lock/);
+    ).rejects.toMatchObject({ code: process.env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED === '0'
+      ? WORKSPACE_BUNDLE_LOCK_BUSY_ERROR_CODE : WORKSPACE_BUNDLE_LOCK_TIMEOUT_ERROR_CODE });
 
     await expect(access(lockPath)).resolves.toBeUndefined();
     await expect(access(markerPath)).rejects.toThrow();
@@ -173,7 +174,8 @@ describe('ensureBuildArtifactsReadyOnce', () => {
           throw new Error('runBuild should not be reached while an active lock remains');
         },
       }),
-    ).rejects.toThrow(/Timed out waiting for CLI shared deps build lock/);
+    ).rejects.toMatchObject({ code: process.env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_WAIT_ALLOWED === '0'
+      ? WORKSPACE_BUNDLE_LOCK_BUSY_ERROR_CODE : WORKSPACE_BUNDLE_LOCK_TIMEOUT_ERROR_CODE });
 
     await expect(access(markerPath)).resolves.toBeUndefined();
   });

@@ -1,6 +1,7 @@
 import type { ActionOperationSnapshotV1 } from '@happier-dev/protocol';
 import { isSameInputOptionValue } from '@happier-dev/protocol/inputs';
 import { normalizeWorkspaceRootPathV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
+import { areServerProfileIdentifiersEquivalent } from '../server/serverProfiles';
 
 import { isActionOperationTerminal, resolveActionOperationObservation, type ActionOperationObservation, type ActionOperationStoreSnapshot } from './actionOperationStore';
 import {
@@ -14,6 +15,7 @@ import {
     type ActionOperationProjectWorkspaceQuery,
     type ActionOperationProjectScriptQuery,
     type ActionOperationManagedMachineQuery,
+    type ActionOperationProjectServicesQuery,
     type QualifiedActionOperation,
 } from './qualifiedActionOperation';
 
@@ -56,6 +58,7 @@ export type ActionOperationSelectors = Readonly<{
     selectForProjectScript(state: ActionOperationStoreSnapshot, query: ActionOperationProjectScriptQuery): ActionOperationProjection | null;
     selectForProjectSetup(state: ActionOperationStoreSnapshot, query: ActionOperationProjectWorkspaceQuery): ActionOperationProjection | null;
     selectForManagedMachine(state: ActionOperationStoreSnapshot, query: ActionOperationManagedMachineQuery): ActionOperationProjection | null;
+    selectForProjectServices(state: ActionOperationStoreSnapshot, query: ActionOperationProjectServicesQuery): readonly ActionOperationProjection[];
     selectInbox(state: ActionOperationStoreSnapshot): readonly InboxActionOperationEntry[];
     selectActivitySummary(state: ActionOperationStoreSnapshot): ActionOperationActivitySummary;
     selectInboxSummary(state: ActionOperationStoreSnapshot): InboxActionOperationSummary;
@@ -138,6 +141,7 @@ export function createActionOperationSelectors(): ActionOperationSelectors {
     let previousInboxSummary: InboxActionOperationSummary = Object.freeze({ count: 0, hasAttention: false });
     const projectionCache = new Map<string, ActionOperationProjection>();
     const sessionCache = new Map<string, readonly ActionOperationProjection[]>();
+    const serviceCache = new Map<string, readonly ActionOperationProjection[]>();
 
     const readProjection = (state: ActionOperationStoreSnapshot, key: string, operation: QualifiedActionOperation): ActionOperationProjection => {
         const snapshot = operation.snapshot;
@@ -227,6 +231,33 @@ export function createActionOperationSelectors(): ActionOperationSelectors {
         snapshot.actionId === 'projects.prepare' && snapshot.domainRef?.kind === 'projectCommand'
         && snapshot.domainRef.purpose === 'setup' && snapshot.domainRef.script === undefined
     ));
+
+    const selectForProjectServices = (state: ActionOperationStoreSnapshot, query: ActionOperationProjectServicesQuery) => {
+        const serverId = normalizeActionOperationServerId(query.serverId);
+        if (!serverId || !query.accountId) return EMPTY_OPERATIONS;
+        const key = JSON.stringify([serverId, query.accountId, query.machineId, query.refId]);
+        const services = new Map<string, ActionOperationProjection>();
+        for (const operation of selectAll(state)) {
+            const { snapshot } = operation;
+            const domain = snapshot.domainRef;
+            if (operation.serverId !== serverId || snapshot.scope.accountId !== query.accountId
+                || snapshot.scope.machineId !== query.machineId || snapshot.actionId !== 'projects.service.relocate'
+                || domain?.kind !== 'projectService' || domain.declaration.selection.kind !== 'manifest') continue;
+            const sourceMatches = domain.sourceWorkspace
+                ? areServerProfileIdentifiersEquivalent(domain.sourceWorkspace.serverId, serverId) && domain.sourceWorkspace.refId === query.refId
+                : areServerProfileIdentifiersEquivalent(domain.workspace.serverId, serverId) && domain.workspace.machineId === query.machineId
+                    && domain.workspace.workspaceId === query.refId;
+            if (!sourceMatches) continue;
+            // selectAll orders active work first, then most recent settled work.
+            const name = domain.declaration.selection.name;
+            if (!services.has(name)) services.set(name, operation);
+        }
+        const next = [...services.values()];
+        const previous = serviceCache.get(key) ?? EMPTY_OPERATIONS;
+        const result = hasSameItems(previous, next) ? previous : Object.freeze(next);
+        serviceCache.set(key, result);
+        return result;
+    };
 
     const selectForManagedMachine = (state: ActionOperationStoreSnapshot, query: ActionOperationManagedMachineQuery) => {
         const serverId = normalizeActionOperationServerId(query.serverId);
@@ -392,6 +423,7 @@ export function createActionOperationSelectors(): ActionOperationSelectors {
         selectForProjectScript,
         selectForProjectSetup,
         selectForManagedMachine,
+        selectForProjectServices,
         selectInbox,
         selectActivitySummary,
         selectInboxSummary,

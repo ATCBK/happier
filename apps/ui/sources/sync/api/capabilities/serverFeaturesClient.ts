@@ -1,6 +1,6 @@
 import { FeaturesResponseSchema, type FeaturesResponse as ServerFeatures } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { AsyncTtlCache } from '@happier-dev/protocol/common/asyncTtlCache';
 import { armDeadlineTimer } from '@happier-dev/protocol/common/deadlineTimer';
 
@@ -72,8 +72,8 @@ const transientRetryAtByProjectionKey = new Map<string, number>();
 const PUBLIC_SNAPSHOT_STORAGE_PREFIX = 'server-features-snapshot-v1:';
 const StoredPublicSnapshotSchema = z.object({
     serverUrl: z.string(),
-    updatedAt: z.number().finite(),
-    expiresAt: z.number().finite(),
+    updatedAt: z.number(),
+    expiresAt: z.number(),
     features: createStoredReadSchema(FeaturesResponseSchema),
 });
 

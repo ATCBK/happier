@@ -1,12 +1,18 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 import { ScmComparisonSchema, ScmDiffSummaryResultSchema } from '@happier-dev/protocol/scm';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import type { ScmComparison } from '@happier-dev/protocol/scm';
 import type { SessionScmReviewComparison } from '@/components/sessions/panes/details/sessionDetailsTabBuilders';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+
+// Account policy reads also cross HTTP before SCM dispatch; keep that boundary
+// real-shaped alongside the Machine RPC boundary below.
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
 
 const boundary = vi.hoisted(() => ({ calls: [] as Array<{ method: string; payload: unknown; accountId?: string | null }>,
-    response: null as unknown, savedResponse: null as unknown,
+    response: null as unknown, savedResponse: null as unknown, savedResponses: null as Record<string, unknown> | null, savedInventory: null as unknown,
     list: null as import('@/dev/testkit/mocks/legendList').CapturingLegendListMockState | null }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
@@ -18,18 +24,15 @@ vi.mock('@legendapp/list/react-native', async (importOriginal) => {
     boundary.list = mock.state;
     return mock.module;
 });
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
-    return createTokenStorageModuleMock({ importOriginal, tokenStorage: {
-        getCredentialsForServerUrl: async () => ({ token: `header.${Buffer.from(JSON.stringify({ sub: 'captured-account' })).toString('base64')}.signature`, secret: 'fixture-secret' }),
-    } });
-});
 // Authenticated Machine RPC is the external boundary; source mapping, capture decoding and scope lifetime stay real.
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
     const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
     const rpc = async (request: { method: string; payload: unknown; accountId?: string | null }) => {
         boundary.calls.push(request);
         if (request.method === RPC_METHODS.SCM_DIFF_SUMMARY_CAPTURE) return boundary.response;
+        if (request.method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_LIST) return boundary.savedInventory ?? { success: true,
+            results: [], count: 0, bytes: 0, sevenDayCost: { status: 'unavailable', pricedRunCount: 0, unpricedRunCount: 0, sinceMs: 0, untilMs: 0 } };
+        if (request.method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_READ && boundary.savedResponses) return boundary.savedResponses[(request.payload as { resultId: string }).resultId];
         if (request.method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_READ && boundary.savedResponse) return boundary.savedResponse;
         throw new Error(`Unexpected machine boundary: ${request.method}`);
     };
@@ -37,7 +40,6 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', a
 });
 const { renderHook, renderScreen, standardCleanup, createSessionFixture, createMachineFixture } = await import('@/dev/testkit');
 const { getStorage } = await import('@/sync/domains/state/storage');
-const { upsertServerProfile, setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
 const { useSessionCapturedScmComparison } = await import('./useSessionCapturedScmComparison');
 // Router mounts after the app entry publishes the real sync runtime; reproduce that bootstrap.
 await import('@/sync/syncEngine');
@@ -48,25 +50,88 @@ const { readSessionScmReviewTarget } = await import('@/components/sessions/panes
 const { loadSavedScmDiffSummaryResult, retireScmDiffSummaryScope } = await import('@/sync/ops/scmDiffSummary/generate');
 const initialStorage = getStorage().getState();
 const scopes: Array<{ serverId: string; accountId: string }> = [];
+// Saved-result discovery is legitimate alongside capture; it is not a checkout read.
+function comparisonCalls() {
+    return boundary.calls.filter(call => call.method !== RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_LIST
+        && call.method !== RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_READ);
+}
 function PaneProbe({ scopeId }: { scopeId: string }) {
     return React.createElement('PaneProbe', { state: useAppPaneScope(scopeId).scopeState });
 }
-afterEach(() => { standardCleanup(); for (const scope of scopes.splice(0)) retireScmDiffSummaryScope(scope);
-    getStorage().setState(initialStorage, true); boundary.calls = []; boundary.response = null; boundary.savedResponse = null; });
+// The global UI cleanup resets runtimeFetch after every case. Reinstall the
+// canonical HTTP boundary before the next case uses the real scoped request path.
+beforeEach(() => installHomeGovernanceBoundaries(homes));
+afterEach(async () => { standardCleanup(); for (const scope of scopes.splice(0)) retireScmDiffSummaryScope(scope);
+    await homes.reset();
+    getStorage().setState(initialStorage, true); boundary.calls = []; boundary.response = null; boundary.savedResponse = null; boundary.savedResponses = null; boundary.savedInventory = null; });
 
 async function mount(comparison: SessionScmReviewComparison) {
     const sessionId = `capture-${comparison.kind}`;
-    const home = await upsertServerProfile({ name: sessionId, serverUrl: `https://${sessionId}.example.test` });
-    await setActiveServerId(home.id, { scope: 'device' });
+    const serverId = await homes.addHome({ name: sessionId, serverUrl: `https://${sessionId}.example.test`, accountId: 'captured-account' });
     const machine = createMachineFixture({ id: `machine:${sessionId}`, activeAt: Date.now() });
-    const session = createSessionFixture({ id: sessionId, serverId: home.id, active: true,
+    const session = createSessionFixture({ id: sessionId, serverId, active: true,
         metadata: { path: '/repo/exact', host: 'tester.local', machineId: machine.id, flavor: 'codex' } });
-    getStorage().setState({ sessions: { [sessionId]: session }, machines: { [machine.id]: machine }, machineListByServerId: { [home.id]: [machine] } });
+    getStorage().setState({ sessions: { [sessionId]: session }, machines: { [machine.id]: machine }, machineListByServerId: { [serverId]: [machine] } });
     return renderHook<ReturnType<typeof useSessionCapturedScmComparison>, ScmComparison | null>(
-        (knownComparison) => useSessionCapturedScmComparison({ sessionId, serverId: home.id, comparison, knownComparison }), { initialProps: null });
+        (knownComparison) => useSessionCapturedScmComparison({ sessionId, serverId, comparison, knownComparison }), { initialProps: null });
 }
 
+// Review is only offered for a comparison that changed something.
+const changedFile = { path: 'src/changed.ts', changeKind: 'modified', binary: false, generated: false, lockfile: false,
+    evidence: { state: 'available', unifiedDiff: 'diff --git a/src/changed.ts b/src/changed.ts\n--- a/src/changed.ts\n+++ b/src/changed.ts\n@@ -1 +1 @@\n-old\n+new\n' }, occurrences: [] } as const;
+
 describe('Files reads the canonical captured comparison through authenticated RPC', () => {
+    it('restores a published walkthrough for Files Explain without first opening Walkthrough', async () => {
+        const source = { kind: 'commit' as const, commit: 'saved-head' };
+        const comparison = ScmComparisonSchema.parse({ id: 'published-comparison', source, repository: { rootPath: '/repo/exact' },
+            endpoints: {}, inventory: { state: 'complete', files: [], reasons: [] } });
+        const result = ScmDiffSummaryResultSchema.parse({ resultId: 'published-result', revision: 1, canUndo: false,
+            output: { success: true, resultId: 'published-result', revision: 1, sourceKey: comparison.id,
+                metadata: { sourceKey: comparison.id, source }, comparison, requestedOutputs: ['walkthrough'],
+                outputs: { walkthrough: { state: 'complete', value: { title: 'Published reading', intro: 'Already generated', stops: [], otherChangeRefs: [] } } },
+                analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] } } });
+        boundary.response = { success: true, comparison, metadata: { sourceKey: comparison.id, source } };
+        boundary.savedResponse = { success: true, result };
+        boundary.savedInventory = { success: true, results: [{ cwd: '/repo/exact', sessionId: 'capture-commit',
+            resultId: result.resultId, revision: result.revision, comparisonId: comparison.id, source, bytes: 1, updatedAtMs: 1 }],
+            count: 1, bytes: 1, sevenDayCost: { status: 'unavailable', pricedRunCount: 0, unpricedRunCount: 0, sinceMs: 0, untilMs: 1 } };
+        const hook = await mount(source);
+        await hook.unmount();
+        const serverId = getStorage().getState().sessions['capture-commit']!.serverId!;
+        scopes.push({ serverId, accountId: 'captured-account' });
+        const screen = await renderScreen(<AppPaneProvider><SessionScmReviewDetailsView sessionId="capture-commit"
+            serverId={serverId} scopeId="session:capture-commit" target={{ comparison: source, view: 'files' }} /></AppPaneProvider>);
+        await vi.waitFor(() => expect(screen.findByTestId('captured-comparison-files')).toBeTruthy());
+        await vi.waitFor(() => expect(screen.findByTestId('scm-comparison-explain')).toBeTruthy());
+        expect(boundary.calls.some(call => call.method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_READ)).toBe(true);
+        expect(boundary.calls.some(call => call.method === RPC_METHODS.SCM_DIFF_SUMMARY_GENERATE)).toBe(false);
+    });
+    it('keeps the published reading visible when a newer saved attempt failed before writing anything', async () => {
+        const source = { kind: 'commit' as const, commit: 'saved-head' };
+        const comparison = ScmComparisonSchema.parse({ id: 'published-comparison', source, repository: { rootPath: '/repo/exact' },
+            endpoints: {}, inventory: { state: 'complete', files: [], reasons: [] } });
+        const saved = (resultId: string, walkthrough: unknown) => ScmDiffSummaryResultSchema.parse({ resultId, revision: 1, canUndo: false,
+            output: { success: true, resultId, revision: 1, sourceKey: comparison.id, metadata: { sourceKey: comparison.id, source },
+                comparison, requestedOutputs: ['walkthrough'], outputs: { walkthrough },
+                analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] } } });
+        const published = saved('published-result', { state: 'complete', value: { title: 'Published reading', intro: 'Already generated', stops: [], otherChangeRefs: [] } });
+        const failedLater = saved('failed-later-result', { state: 'failed', reason: 'Generation failed' });
+        boundary.response = { success: true, comparison, metadata: { sourceKey: comparison.id, source } };
+        boundary.savedResponses = { 'published-result': { success: true, result: published }, 'failed-later-result': { success: true, result: failedLater } };
+        const listed = (resultId: string, updatedAtMs: number) => ({ cwd: '/repo/exact', sessionId: 'capture-commit', resultId, revision: 1,
+            comparisonId: comparison.id, source, bytes: 1, updatedAtMs });
+        // The inventory is newest first: the failed attempt is what a plain "first match" restores.
+        boundary.savedInventory = { success: true, results: [listed('failed-later-result', 2), listed('published-result', 1)],
+            count: 2, bytes: 2, sevenDayCost: { status: 'unavailable', pricedRunCount: 0, unpricedRunCount: 0, sinceMs: 0, untilMs: 2 } };
+        const hook = await mount(source);
+        await hook.unmount();
+        const serverId = getStorage().getState().sessions['capture-commit']!.serverId!;
+        scopes.push({ serverId, accountId: 'captured-account' });
+        const screen = await renderScreen(<AppPaneProvider><SessionScmReviewDetailsView sessionId="capture-commit"
+            serverId={serverId} scopeId="session:capture-commit" target={{ comparison: source, view: 'files' }} /></AppPaneProvider>);
+        await vi.waitFor(() => expect(screen.findByTestId('captured-comparison-files')).toBeTruthy());
+        await vi.waitFor(() => expect(screen.findByTestId('scm-comparison-explain')).toBeTruthy());
+    });
     it.each([
         { state: 'complete', reasons: [], before: 'initial-tree', after: 'initial-tree' },
         { state: 'unavailable', reasons: ['Session initial checkpoint is unavailable'], before: undefined, after: undefined },
@@ -84,7 +149,7 @@ describe('Files reads the canonical captured comparison through authenticated RP
             serverId={serverId} scopeId="session:capture-session" target={{ comparison: source, view: 'files' }} /></AppPaneProvider>);
         await vi.waitFor(() => expect(screen.findByTestId('captured-comparison-files')).toBeTruthy());
         expect(Boolean(screen.findByTestId('captured-inventory-incomplete'))).toBe(state === 'unavailable');
-        expect(boundary.calls.map((call) => call.method)).toEqual([RPC_METHODS.SCM_DIFF_SUMMARY_CAPTURE]);
+        expect(comparisonCalls().map((call) => call.method)).toEqual([RPC_METHODS.SCM_DIFF_SUMMARY_CAPTURE]);
         const capturedView = screen.findByType((await import('./CapturedComparisonFilesView')).CapturedComparisonFilesView);
         expect(capturedView.props.comparison).toEqual(comparison);
         expect(capturedView.props.comparison.inventory.files).toEqual([]);
@@ -117,7 +182,7 @@ describe('Files reads the canonical captured comparison through authenticated RP
         await act(async () => screen.pressByTestId('scm-comparison-view:walkthrough'));
         expect(screen.findByType('PaneProbe' as never).props.state.details.tabs[0]?.resource)
             .toMatchObject({ comparison: { ...source, comparisonId: comparison.id }, view: 'walkthrough' });
-        expect(boundary.calls.map((call) => call.method)).toEqual([RPC_METHODS.SCM_DIFF_SUMMARY_CAPTURE]);
+        expect(comparisonCalls().map((call) => call.method)).toEqual([RPC_METHODS.SCM_DIFF_SUMMARY_CAPTURE]);
     });
     it('loads PR inventory before any narration or working-copy snapshot exists', async () => {
         const source = { kind: 'pullRequest' as const, locator: { providerId: 'github', repository: 'owner/repo', number: 42 } };
@@ -131,7 +196,7 @@ describe('Files reads the canonical captured comparison through authenticated RP
     });
     it('reads a pinned identity and preserves an unavailable response without recapturing source', async () => {
         const source = { kind: 'commit' as const, commit: 'old-ref' };
-        boundary.response = { success: false, error: 'saved_evidence_missing', errorCode: 'SCM_DIFF_SUMMARY_SOURCE_UNAVAILABLE' };
+        boundary.response = { success: false, error: 'saved_evidence_missing', errorCode: 'DIFF_UNAVAILABLE' };
         const comparisonId = 'c'.repeat(64);
         const hook = await mount({ ...source, comparisonId });
         await vi.waitFor(() => expect(hook.getCurrent().error).toBe('saved_evidence_missing'));
@@ -141,10 +206,10 @@ describe('Files reads the canonical captured comparison through authenticated RP
     it('clears a failed read when exact saved evidence becomes available without recapturing', async () => {
         const source = { kind: 'commit' as const, commit: 'old-ref' };
         const id = 'c'.repeat(64);
-        boundary.response = { success: false, error: 'saved_evidence_missing', errorCode: 'SCM_DIFF_SUMMARY_SOURCE_UNAVAILABLE' };
+        boundary.response = { success: false, error: 'saved_evidence_missing', errorCode: 'DIFF_UNAVAILABLE' };
         const hook = await mount({ ...source, comparisonId: id });
         await vi.waitFor(() => expect(hook.getCurrent().error).toBe('saved_evidence_missing'));
-        const saved = ScmComparisonSchema.parse({ id, source, repository: { rootPath: '/old/exact' }, endpoints: { before: 'before', after: 'after' },
+        const saved = ScmComparisonSchema.parse({ id, source, repository: { rootPath: '/repo/exact' }, endpoints: { before: 'before', after: 'after' },
             inventory: { state: 'complete', files: [], reasons: [] } });
         await hook.rerender(saved);
         expect(hook.getCurrent()).toMatchObject({ comparison: saved, loading: false, error: null });
@@ -174,11 +239,11 @@ describe('Files reads the canonical captured comparison through authenticated RP
         expect(screen.findByTestId('captured-comparison-endpoints')).toBeNull();
         expect(screen.findByTestId('captured-file-unavailable-missing.png')).toBeTruthy();
         expect(screen.findByTestId('scm-review-diff-area-menu')).toBeNull();
-        expect(boundary.calls.map((call) => call.method)).toEqual([RPC_METHODS.SCM_DIFF_SUMMARY_CAPTURE]);
+        expect(comparisonCalls().map((call) => call.method)).toEqual([RPC_METHODS.SCM_DIFF_SUMMARY_CAPTURE]);
     });
     it('opens direct Walkthrough with its saved exact evidence and enables review without recapturing', async () => {
         const source = { kind: 'commit' as const, commit: 'old-ref' };
-        boundary.response = { success: false, error: 'must_not_recapture' };
+        boundary.response = { success: false, error: 'must_not_recapture', errorCode: 'DIFF_UNAVAILABLE' };
         const hook = await mount(source);
         await hook.unmount();
         boundary.calls = [];
@@ -188,8 +253,8 @@ describe('Files reads the canonical captured comparison through authenticated RP
         const id = 'c'.repeat(64);
         const result = ScmDiffSummaryResultSchema.parse({ resultId: 'saved-result', revision: 1, canUndo: false,
             output: { success: true, resultId: 'saved-result', revision: 1, sourceKey: id, metadata: { sourceKey: id, source },
-                comparison: { id, source, repository: { rootPath: '/old/exact' }, endpoints: { before: 'old-before', after: 'old-after' },
-                    inventory: { state: 'complete', files: [], reasons: [] } }, requestedOutputs: ['walkthrough'],
+                comparison: { id, source, repository: { rootPath: '/repo/exact' }, endpoints: { before: 'old-before', after: 'old-after' },
+                    inventory: { state: 'complete', files: [changedFile], reasons: [] } }, requestedOutputs: ['walkthrough'],
                 outputs: { walkthrough: { state: 'pending' } }, analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] } } });
         loadSavedScmDiffSummaryResult({ sessionId: 'capture-commit', scope, result });
         boundary.savedResponse = { success: true, result };
@@ -198,12 +263,12 @@ describe('Files reads the canonical captured comparison through authenticated RP
         await vi.waitFor(() => expect(screen.findByTestId('scm-comparison-start-review')?.props.disabled).toBe(false));
         expect(boundary.calls.filter((call) => call.method === RPC_METHODS.SCM_DIFF_SUMMARY_CAPTURE)).toEqual([]);
         expect(boundary.calls.find((call) => call.method === RPC_METHODS.SCM_DIFF_SUMMARY_RESULT_READ)?.payload)
-            .toEqual({ cwd: '/old/exact', resultId: 'saved-result' });
+            .toEqual({ cwd: '/repo/exact', resultId: 'saved-result' });
     });
     it('keeps captured Files readable and disables review with a reason when its Machine goes offline', async () => {
         const source = { kind: 'commit' as const, commit: 'old-ref' };
         const comparison = ScmComparisonSchema.parse({ id: 'offline-comparison', source, repository: { rootPath: '/repo/exact' }, endpoints: {},
-            inventory: { state: 'complete', files: [], reasons: [] } });
+            inventory: { state: 'complete', files: [changedFile], reasons: [] } });
         boundary.response = { success: true, comparison, metadata: { sourceKey: comparison.id, source } };
         const hook = await mount(source);
         await hook.unmount();
@@ -266,7 +331,7 @@ describe('Files reads the canonical captured comparison through authenticated RP
     it('shows saved reading coverage in phone Files and jumps between captured files without opening the checkout', async () => {
         const { SPECIMEN_COMPARISON, SPECIMEN_WALKTHROUGH, SPECIMEN_ANALYSIS_COMPLETE } = await import('@/components/dev/changes/walkthroughSpecimenFixture');
         const source = { kind: 'commit' as const, commit: 'saved-ref' };
-        const comparison = ScmComparisonSchema.parse({ ...SPECIMEN_COMPARISON, source });
+        const comparison = ScmComparisonSchema.parse({ ...SPECIMEN_COMPARISON, source, id: 'd'.repeat(64), repository: { rootPath: '/repo/exact' } });
         boundary.response = { success: true, comparison, metadata: { sourceKey: comparison.id, source } };
         const hook = await mount(source);
         await hook.unmount();

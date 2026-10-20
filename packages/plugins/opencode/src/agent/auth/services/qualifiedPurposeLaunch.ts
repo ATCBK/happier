@@ -1,10 +1,10 @@
 import { isPluginError, isRecord, type PluginContributionRef } from '@happier-dev/plugin-sdk';
+import { createSecureTempDirectorySync, type SecureTempDirectory } from '@happier-dev/plugin-sdk/fs';
 import {
   CLAUDE_SUBSCRIPTION_MATERIALIZATION_CONTRACT_V1,
   CLAUDE_SUBSCRIPTION_SETUP_TOKEN_ENVIRONMENT_REQUEST_V1,
 } from '@happier-dev/plugin-sdk/first-party/connected-accounts';
 import type {
-  AgentExecutionRunOpenRequest,
   AgentExecutionRunRuntime,
   AgentExecutionRunEvent,
   AgentRuntimeContext,
@@ -14,7 +14,10 @@ import type {
 } from '@happier-dev/plugin-sdk/agents/runtime';
 import { AgentRuntimeJsonValueSchema } from '@happier-dev/plugin-sdk/agents/runtime';
 
-import { buildOpenCodeQualifiedAuthContent } from './materialize/index.js';
+import { buildOpenCodeQualifiedAuthContent, materializeOpenCodeAuthEnvironment } from './materialize/index.js';
+import { OPEN_CODE_REQUEST_AUTH_CAPABILITY_PATH_ENV } from './requestAuth/env.js';
+import { OPEN_CODE_REQUEST_AUTH_CONSUMER } from './requestAuth/purposes.js';
+import { buildOpenCodeConfigLaunchEnvironment } from '../../runtime/server/spawnSpec.js';
 import {
   OPEN_CODE_ANTHROPIC_API_KEY_PURPOSE_ID,
   OPEN_CODE_ANTHROPIC_REQUEST_AUTH_PURPOSE_ID,
@@ -56,8 +59,14 @@ const OPEN_CODE_NATIVE_AUTH_ENV_KEYS = Object.freeze([
   CLAUDE_SUBSCRIPTION_MATERIALIZATION_CONTRACT_V1.setupToken.environmentKey,
 ] as const);
 
+type OpenCodeAccountLaunchRequest = Pick<AgentSessionOpenRequest, 'launchEnvironment' | 'providerBinding'>;
+type OpenCodeAccountLaunchContext = Readonly<{
+  signal?: AbortSignal;
+  services: Readonly<{ connectedAccounts: Pick<AgentRuntimeContext['services']['connectedAccounts'], 'getBinding' | 'materialize' | 'watch'> }>;
+}>;
+
 export type PreparedOpenCodeQualifiedConnectedAccounts<
-  Request extends AgentSessionOpenRequest | AgentExecutionRunOpenRequest,
+  Request extends OpenCodeAccountLaunchRequest,
 > = Readonly<{
   request: Request;
   isInvalidated(): boolean;
@@ -103,11 +112,18 @@ function readExactEnvironmentValue(
   return value;
 }
 
-function mergeQualifiedLaunchEnvironment(input: Readonly<{
-  request: AgentSessionOpenRequest | AgentExecutionRunOpenRequest;
+function mergeQualifiedLaunchEnvironment<Request extends OpenCodeAccountLaunchRequest>(input: Readonly<{
+  request: Request;
   authContent: string;
-}>): AgentSessionOpenRequest | AgentExecutionRunOpenRequest {
-  const values = { ...(input.request.launchEnvironment?.values ?? {}) };
+  requestAuthEnvironment?: Awaited<ReturnType<typeof materializeOpenCodeAuthEnvironment>>;
+}>): Request {
+  const launchValues = {
+    ...(input.request.launchEnvironment?.values ?? {}),
+    ...input.requestAuthEnvironment?.env,
+  };
+  const values = { ...(input.requestAuthEnvironment?.configPart
+    ? buildOpenCodeConfigLaunchEnvironment(launchValues, [input.requestAuthEnvironment.configPart])
+    : launchValues) };
   for (const key of OPEN_CODE_NATIVE_AUTH_ENV_KEYS) delete values[key];
   Object.assign(values, {
     OPENCODE_AUTH_CONTENT: input.authContent,
@@ -152,18 +168,10 @@ async function waitForInitialPurposeObservations(
   }
 }
 
-export function prepareOpenCodeQualifiedConnectedAccounts(
-  request: AgentSessionOpenRequest,
-  context: AgentRuntimeContext,
-): Promise<PreparedOpenCodeQualifiedConnectedAccounts<AgentSessionOpenRequest>>;
-export function prepareOpenCodeQualifiedConnectedAccounts(
-  request: AgentExecutionRunOpenRequest,
-  context: AgentRuntimeContext,
-): Promise<PreparedOpenCodeQualifiedConnectedAccounts<AgentExecutionRunOpenRequest>>;
-export async function prepareOpenCodeQualifiedConnectedAccounts(
-  request: AgentSessionOpenRequest | AgentExecutionRunOpenRequest,
-  context: AgentRuntimeContext,
-): Promise<PreparedOpenCodeQualifiedConnectedAccounts<AgentSessionOpenRequest | AgentExecutionRunOpenRequest>> {
+export async function prepareOpenCodeQualifiedConnectedAccounts<Request extends OpenCodeAccountLaunchRequest>(
+  request: Request,
+  context: OpenCodeAccountLaunchContext,
+): Promise<PreparedOpenCodeQualifiedConnectedAccounts<Request>> {
   // A Provider binding is the complete model credential authority. Selected
   // native OpenCode accounts must not be consulted or merged into that launch.
   if (request.providerBinding !== undefined) {
@@ -179,13 +187,20 @@ export async function prepareOpenCodeQualifiedConnectedAccounts(
   let invalidated = false;
   let invalidationHandler: (() => Promise<void>) | null = null;
   let disposed = false;
+  let requestAuthAssets: SecureTempDirectory | undefined;
   const initialObservations = new Map<OpenCodeConnectedAccountPurposeId, Promise<void>>();
   const resolveInitial = new Map<OpenCodeConnectedAccountPurposeId, () => void>();
 
-  const dispose = async (): Promise<void> => {
+  const retirePurposeObservations = (): void => {
     if (disposed) return;
     disposed = true;
     for (const subscription of subscriptions) subscription.dispose();
+  };
+  const dispose = async (): Promise<void> => {
+    retirePurposeObservations();
+    const assets = requestAuthAssets;
+    requestAuthAssets = undefined;
+    assets?.cleanup();
   };
   const invalidate = async (): Promise<void> => {
     invalidated = true;
@@ -294,8 +309,37 @@ export async function prepareOpenCodeQualifiedConnectedAccounts(
       ), service: anthropicBinding.service };
     }
 
+    let requestAuthEnvironment: Awaited<ReturnType<typeof materializeOpenCodeAuthEnvironment>> | undefined;
+    if (requiredRequestAuthProviders.length > 0) {
+      const capabilityPath = request.launchEnvironment?.values[OPEN_CODE_REQUEST_AUTH_CAPABILITY_PATH_ENV];
+      if (!capabilityPath?.trim()) {
+        throw new Error('OpenCode request-auth materialization requires the host child capability');
+      }
+      context.signal?.throwIfAborted();
+      requestAuthAssets = createSecureTempDirectorySync({ prefix: 'opencode-request-auth' });
+      // The host has already selected and authorized these purposes. Materialize
+      // only native transport assets here; OAuth bytes stay with request auth.
+      requestAuthEnvironment = await materializeOpenCodeAuthEnvironment({
+        rootDir: requestAuthAssets.path,
+        materializationId: requestAuthAssets.path,
+        connectedAccountMaterializationAuthority: 'qualified',
+        requestAuth: {
+          capabilityPath,
+          purposeBindings: requiredRequestAuthProviders.map((provider) => {
+            const purpose = provider === 'openai'
+              ? OPEN_CODE_OPENAI_CODEX_REQUEST_AUTH_PURPOSE_ID
+              : OPEN_CODE_ANTHROPIC_REQUEST_AUTH_PURPOSE_ID;
+            return {
+              purpose: { consumer: OPEN_CODE_REQUEST_AUTH_CONSUMER, purpose },
+              target: { kind: 'account', account: bindings[purpose]!.account },
+            };
+          }),
+        },
+      });
+      context.signal?.throwIfAborted();
+    }
     const qualifiedAuth = usedBinding ? buildOpenCodeQualifiedAuthContent({
-      baseAuthContent: request.launchEnvironment?.values.OPENCODE_AUTH_CONTENT,
+      baseAuthContent: requestAuthEnvironment?.env.OPENCODE_AUTH_CONTENT,
       directAccountCredentials,
       requiredRequestAuthProviders,
     }) : null;
@@ -303,6 +347,7 @@ export async function prepareOpenCodeQualifiedConnectedAccounts(
       ? mergeQualifiedLaunchEnvironment({
           request,
           authContent: qualifiedAuth.authContent,
+          requestAuthEnvironment,
         })
       : request;
 
@@ -341,8 +386,12 @@ export async function prepareOpenCodeQualifiedConnectedAccounts(
           async dispose(reason) {
             if (sessionDisposed) return;
             sessionDisposed = true;
-            await dispose();
-            await session.dispose(reason);
+            retirePurposeObservations();
+            try {
+              await session.dispose(reason);
+            } finally {
+              await dispose();
+            }
           },
         };
         invalidationHandler = async () => await preparedSession.dispose('runtime_recovery');
@@ -358,8 +407,12 @@ export async function prepareOpenCodeQualifiedConnectedAccounts(
           async dispose() {
             if (runtimeDisposed) return;
             runtimeDisposed = true;
-            await dispose();
-            await runtime.dispose();
+            retirePurposeObservations();
+            try {
+              await runtime.dispose();
+            } finally {
+              await dispose();
+            }
           },
         };
         invalidationHandler = async () => await preparedRuntime.dispose();

@@ -7,6 +7,7 @@ import type { HappierUiPalette, HappierUiTypography } from '../environment/types
 import type { HappierFocusable, HappierStyleProp } from '../presentation/portableTypes.js';
 import type { HappierMaterialRole } from '../presentation/layout/material.js';
 import type { HappierDiffViewerRequest } from '../presentation/content/DiffViewer.js';
+import type { HappierMarkdownRenderInput } from '../presentation/content/Markdown.js';
 import type { HappierPageChromeInternal } from '../presentation/layout/pageChrome.js';
 import type { HappierCollectionMotionDriver } from '../presentation/collection/collectionMotion.js';
 import type { CollectionVirtualizer } from '../presentation/collection/collectionVirtualizer.js';
@@ -24,6 +25,7 @@ import type { SetupBlockGridProps, SetupBlockTileProps } from '../components/Set
 import type { DictationButtonProps, StatusCellProps, VoiceMarkArtProps } from '../components/Voice.js';
 import type { PluginUiScrollActivityTracker } from './scrollActivity.js';
 import type { FindSurfaceRegistrationHost } from '../presentation/find/useFindSurfaceRegistration.js';
+import type { ExecutableParticipantPickerProps } from '../components/ExecutableParticipantPicker.js';
 
 export type PluginUiPopoverPresentation = 'popover' | 'menu' | 'dropdown' | 'context';
 
@@ -35,6 +37,11 @@ export type PluginUiPopoverContentControls = Readonly<{
   requestClose(reason: 'selection' | 'escape'): void;
   /** Current viewport height computed by the incumbent host Popover. */
   maxHeight: number;
+  /**
+   * `sheet`: the host drew the content as its phone bottom sheet (a requested `sheet`), which is the surface,
+   * scrolls the rows and pins the requested footer. Absent, the content is anchored and draws its own surface.
+   */
+  presentation?: 'sheet';
 }>;
 
 /**
@@ -310,6 +317,8 @@ export type PluginUiPresentationHost = Readonly<{
    * (isolated tests, hosted-web realms): the author's fallback renders instead.
    */
   renderSessionPart?(input: PluginUiSessionPartPresentation): ReactNode;
+  /** One controlled choice/search presenter; no participant inventory or execution authority. */
+  renderExecutableParticipantPicker?(input: ExecutableParticipantPickerProps): ReactNode;
   /**
    * Render one declared widget area of this page through the host's one widget area owner (the
    * public `WidgetSurface`). Absent where the host cannot present widgets (isolated tests, a
@@ -322,11 +331,7 @@ export type PluginUiPresentationHost = Readonly<{
    * plugin code never receives either owner.
    */
   focusTarget?(target: HappierFocusable): boolean;
-  renderMarkdown(input: Readonly<{
-    value: string;
-    selectable: boolean;
-    testID?: string;
-  }>): ReactNode;
+  renderMarkdown(input: HappierMarkdownRenderInput): ReactNode;
   renderCodeBlock(input: Readonly<{
     code: string;
     language?: string;
@@ -358,6 +363,12 @@ export type PluginUiPresentationHost = Readonly<{
     width?: 'anchor' | 'content';
     /** Menu-like content asks the incumbent host Popover to move focus on open. */
     autoFocusOnOpen?: boolean;
+    /**
+     * On a phone, present the content as the host's bottom sheet under `title`, with `footer` pinned below the
+     * scrolling rows (the content then receives `presentation: 'sheet'`). Wider viewports, and hosts without a
+     * sheet, keep the anchored popover.
+     */
+    sheet?: Readonly<{ title: string; footer?: ReactNode }>;
     onRequestClose(): void;
     content(controls: PluginUiPopoverContentControls): ReactNode;
   }>): ReactNode;

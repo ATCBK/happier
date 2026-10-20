@@ -8,6 +8,7 @@ import {
 } from '../sessions/presentation/currentSessionPresentationV1.js';
 import {
   isSessionActionRpcMethodV1,
+  isSocketRpcSessionAuthorizationNamespace,
   isSocketRpcCurrentSessionPresentationOriginAuthorizationContext,
   parseSocketRpcAuthorizationContext,
   resolveSocketRpcSessionWriteAuthorization,
@@ -22,6 +23,12 @@ import {
  * "run mutation" family, or read projection may inherit write authority.
  */
 describe('Session-control RPC write classification', () => {
+  it('routes the current 0.2 structured answer carrier to the conversational question owner', () => {
+    expect(resolveSocketRpcSessionAuthorization('session-1:session.structuredQuestion.respond.v1')).toMatchObject({
+      authority: 'submitAgentInput', actionId: 'session.user_action.answer', routeToSessionOwnerDaemon: true,
+    });
+    expect(isSessionActionRpcMethodV1('session-1:session.structuredQuestion.respond.v1')).toBe(false);
+  });
   it('keeps fork and replay creation on the Machine while checking the source Session owner', () => {
     for (const method of [RPC_METHODS.SESSION_FORK, RPC_METHODS.SESSION_FORK_PROVIDER_SAFE,
       RPC_METHODS.SESSION_CONTINUE_WITH_REPLAY]) {
@@ -53,6 +60,14 @@ describe('Session-control RPC write classification', () => {
     expect(isSessionActionRpcMethodV1('report:session.roles.configuration.set')).toBe(true);
     expect(isSessionActionRpcMethodV1('report:session.notes.set')).toBe(true);
     expect(isSessionActionRpcMethodV1('report:skills.read')).toBe(true);
+    expect(resolveSocketRpcSessionAuthorization('report:session.update.post')).toMatchObject({
+      authority: 'submitAgentInput', actionId: 'session.update.post', routeToSessionOwnerDaemon: true,
+    });
+    expect(isSessionActionRpcMethodV1('report:session.user_action.answer')).toBe(true);
+    expect(isSessionActionRpcMethodV1('report:session.message.reply.observe.v1')).toBe(true);
+    expect(resolveSocketRpcSessionAuthorization('report:session.user_action.answer')).toMatchObject({
+      authority: 'submitAgentInput', serverMintedContext: 'session.permission.respond',
+    });
     expect(resolveSocketRpcSessionAuthorization('report:skills.read')).toMatchObject({
       authority: 'readTranscript', actionId: 'skills.read', routeToSessionOwnerDaemon: true,
     });
@@ -114,6 +129,7 @@ describe('Session-control RPC write classification', () => {
       expect(resolveSocketRpcSessionWriteAuthorization(`session-1:${method}`)).toEqual({
         method,
         authority: 'submitAgentInput',
+        machineScope: true,
         routeToSessionOwnerDaemon: true,
       });
     }
@@ -123,13 +139,23 @@ describe('Session-control RPC write classification', () => {
     expect(resolveSocketRpcSessionWriteAuthorization(`session-1:${SESSION_RPC_METHODS.EXECUTION_RUN_STOP}`)).toEqual({
       method: SESSION_RPC_METHODS.EXECUTION_RUN_STOP,
       authority: 'sessionOwner',
+      machineScope: true,
       routeToSessionOwnerDaemon: true,
     });
   });
 
   it('keeps publisher/runtime truth methods owner-only while human steering stays capability-based', () => {
+    expect(isSocketRpcSessionAuthorizationNamespace('session-1:discussion.agentPost.v1')).toBe(true);
+    expect(isSocketRpcSessionAuthorizationNamespace('session-1:discussion.unlisted')).toBe(true);
+    expect(resolveSocketRpcSessionAuthorization('session-1:discussion.unlisted')).toBeNull();
+    expect(resolveSocketRpcSessionAuthorization('session-1:discussion.agentPost.v1')).toMatchObject({
+      authority: 'sessionOwner',
+      routeToSessionOwnerDaemon: true,
+    });
     for (const method of [
       SESSION_RPC_METHODS.SESSION_AGENT_TOOL_CALL_V1,
+      SESSION_RPC_METHODS.DISCUSSION_AGENT_POST_V1,
+      SESSION_RPC_METHODS.SESSION_MESSAGE_REPLY_OBSERVE_V1,
       SESSION_RPC_METHODS.SESSION_PROVIDER_INPUT_ADMISSION,
       SESSION_RPC_METHODS.SESSION_PENDING_QUEUE_MATERIALIZE_NEXT,
       SESSION_RPC_METHODS.SESSION_CONNECTED_SERVICE_AUTH_INVALIDATE_TRANSPORTS,

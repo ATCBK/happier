@@ -722,6 +722,39 @@ describe('GitLab get', () => {
     expect(result.viewer.involvement).toEqual(['author']);
   });
 
+  it.each([false, true])('keeps a viewer rate limit unresolved for a review-requested item (subscribed=%s)', async (subscribed) => {
+    const itemPath = `/api/v4/projects/${ENCODED_REPOSITORY_KEY}/merge_requests/7`;
+    const item = { ...mergeRequestList[0], subscribed };
+    const viewer = { id: 2, username: 'example-reviewer' };
+    const current = await get({
+      [itemPath]: { body: item },
+      '/api/v4/user': { body: viewer },
+    });
+    expect(current.result).toMatchObject({
+      kind: 'present',
+      viewer: { involvement: subscribed ? ['reviewRequested', 'subscribed'] : ['reviewRequested'] },
+    });
+
+    const throttled = await get({
+      [itemPath]: { body: item },
+      '/api/v4/user': { status: 429, headers: { 'Retry-After': '30' } },
+    });
+
+    expect(throttled.seam.requested.map((url) => new URL(url).pathname)).toEqual([
+      itemPath,
+      '/api/v4/user',
+    ]);
+    expect(throttled.result).toEqual({
+      kind: 'unresolved',
+      localRef,
+      failure: {
+        class: 'rateLimit',
+        code: 'too-many-requests',
+        retryNotBeforeMs: NOW_MS + 30_000,
+      },
+    });
+  });
+
   it('never concludes absence from a 404, even when the owning project reads', async () => {
     // `sources/SCM.md` §4.6: **GitLab V1 never emits `absent`.** GitLab documents the
     // item `404` as project-or-item-not-found and authorization hides resources behind

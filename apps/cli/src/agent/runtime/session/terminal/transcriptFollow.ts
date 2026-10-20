@@ -160,7 +160,7 @@ export function createHostTerminalTranscriptFollowService(params: Readonly<{
                 if (!committedBaseline.complete) {
                     throw terminalFollowFailure('plugin_external_follow_unavailable', 'Committed transcript baseline is incomplete');
                 }
-                const committedLocalIds = new Set(committedBaseline.localIds);
+                const committedLocalIds = committedBaseline.localIds;
                 let admittingSource = true;
                 result = await params.followProviderSession(
                     {
@@ -175,11 +175,14 @@ export function createHostTerminalTranscriptFollowService(params: Readonly<{
                         const isInitialReplay =
                             event.kind === 'data'
                             && event.phase === 'initial_replay';
+                        const isFreshAdmission = event.kind === 'data'
+                            && event.phase === undefined
+                            && admittingSource && request.replay === 'fresh';
                         let publishEvent = event;
-                        if (isInitialReplay) {
+                        if (isInitialReplay || isFreshAdmission) {
                             const items = event.items.filter((item) => {
                                 // Correlation belongs to the current observer even when
-                                // its historical display row already has durable custody.
+                                // its display row already has durable custody.
                                 if (item.kind === 'source_observation') return true;
                                 const localId = item.localId ?? item.id;
                                 return !committedLocalIds.has(localId);

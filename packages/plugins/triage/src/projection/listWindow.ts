@@ -1,4 +1,5 @@
 import type { PluginContributionIdentity } from '@happier-dev/plugin-sdk/manifest';
+import type { TriageListInvocationErrorV1 } from '../actions/listEntriesProtocol.js';
 import {
     type TriageEntryRefV1,
     type TriageSourceFailureV1,
@@ -64,12 +65,13 @@ export const MAX_TRIAGE_LIST_WINDOW_ROWS_V1 = 56;
  * page with a deadline and classifies a lane that reaches it as `failed` with a
  * transient failure, because "this source did not answer in time" is a typed,
  * retryable statement about the source — whereas `unavailable` stays for an
- * invocation that rejected outright, where there is nothing typed to carry.
+ * invocation that rejected outright. Its optional diagnostic describes the
+ * invocation refusal, never provider evidence about the source.
  */
 export type TriageListLaneHealthV1 =
     | TriageSourceScanEvidenceV1
     | Readonly<{ kind: 'failed'; failure: TriageSourceFailureV1 }>
-    | Readonly<{ kind: 'unavailable' }>;
+    | Readonly<{ kind: 'unavailable'; error?: TriageListInvocationErrorV1 }>;
 
 export type TriageListLaneV1 = Readonly<{
     sourceInstanceId: string;
@@ -118,11 +120,12 @@ export function triageListCoverageLanes(input: Readonly<{
 /**
  * The one observation a row's content comes from.
  *
- * It is a member rather than a rule each reader applies, because a row whose
+ * It is an explicit projection rather than a rule each reader applies, because a row whose
  * title, lane, ordinal and locator are each chosen by their own reader is a row
  * that can say *open* in the title and file itself under *Done* — silently, with
  * nothing to error on. This is the observation `core/CORPUS.md` §3.2 names, and
- * every surface reads it instead of choosing again.
+ * every surface reads it instead of choosing again. An unresolved exact reread retains
+ * this last-good display value while its current observation remains unresolved.
  */
 export type TriageListRowContentV1 = Readonly<{
     sourceInstanceId: string;
@@ -135,7 +138,8 @@ export type TriageListRowV1 = Readonly<{
     entryRef: TriageEntryRefV1;
     /**
      * The observation this row's content, lane and ordinal come from, or `null`
-     * when no connection reports the entry at all.
+     * when no connection has reported the entry. It may be last-good display
+     * content after an unresolved exact reread; selection still uses current observations.
      */
     content: TriageListRowContentV1 | null;
     lane: CorpusLaneV1;
@@ -181,13 +185,26 @@ export type CorpusScopeFilterValueV1 = Readonly<{ source: PluginContributionIden
 export type CorpusStateFilterValueV1 = 'open' | 'done' | 'absent' | 'unresolved';
 export type CorpusAttentionFilterValueV1 = 'required' | 'suggested' | 'none';
 
+/** The key one Scope value is named under in `TriageListFacetCensusV1.scopeNames`. */
+export function triageFacetScopeKeyV1(source: PluginContributionIdentity, collisionScope: string): string {
+    return JSON.stringify([source.pluginId, source.localId, collisionScope]);
+}
+
 export type TriageListFacetCensusV1 = Readonly<{
     types: readonly CorpusTypeFilterValueV1[];
     scopes: readonly CorpusScopeFilterValueV1[];
+    /**
+     * Each observed Scope's display name, by `triageFacetScopeKeyV1`: the same name its rows say
+     * ("happier"), not the protocol identity (`github:1117388084`). A scope no observation named is
+     * absent, and the rail falls back to its identity.
+     */
+    scopeNames: Readonly<Record<string, string>>;
     coverage: 'complete' | 'partial';
 }>;
 
 export type SurfaceFilterSelectionV1 = Readonly<{
+    /** Tasks is a lens over the same materialized rows; links are joined by the Collection projector. */
+    tasks?: 'mine' | 'agents' | 'everyone';
     sources: readonly CorpusSourceFilterValueV1[];
     types: readonly CorpusTypeFilterValueV1[];
     scopes: readonly CorpusScopeFilterValueV1[];
@@ -522,7 +539,13 @@ export function foldTriageListWindow(input: Readonly<{
 
     const typeValues = new Map<string, CorpusTypeFilterValueV1>();
     const scopeValues = new Map<string, CorpusScopeFilterValueV1>();
+    const scopeNames: Record<string, string> = {};
     for (const row of unfilteredRows) {
+        const snapshot = row.content?.outcome.snapshot;
+        const scopeName = snapshot?.scopeDisplayName ?? snapshot?.scopeLabel;
+        if (scopeName !== undefined && scopeName.length > 0) {
+            scopeNames[triageFacetScopeKeyV1(row.entryRef.source, row.entryRef.collisionScope)] ??= scopeName;
+        }
         const sourceKey = JSON.stringify([row.entryRef.source.pluginId, row.entryRef.source.localId]);
         typeValues.set(`${sourceKey}:${JSON.stringify(row.entryRef.kindId)}`, Object.freeze({
             source: row.entryRef.source,
@@ -538,6 +561,7 @@ export function foldTriageListWindow(input: Readonly<{
             .map(([, value]) => value)),
         scopes: Object.freeze([...scopeValues.entries()].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
             .map(([, value]) => value)),
+        scopeNames: Object.freeze(scopeNames),
         coverage: censusComplete ? 'complete' : 'partial',
     });
 
@@ -549,6 +573,21 @@ export function foldTriageListWindow(input: Readonly<{
         coverage: complete ? 'complete' : 'partial',
         assembledAtMs: input.assembledAtMs,
     });
+}
+
+function keepPriorViewerFacts(input: Readonly<{
+    row: TriageListRowV1;
+    observation: CorpusQualifiedObservationV1;
+}>): CorpusQualifiedObservationV1 {
+    const read = input.observation.outcome;
+    const prior = input.row.observations.find(
+        (candidate) => candidate.sourceInstanceId === input.observation.sourceInstanceId,
+    )?.outcome;
+    if (read.kind !== 'present' || read.viewer.involvement.length > 0
+        || prior?.kind !== 'present' || prior.viewer.involvement.length === 0) {
+        return input.observation;
+    }
+    return { ...input.observation, outcome: { ...read, viewer: prior.viewer } };
 }
 
 /**
@@ -564,20 +603,39 @@ export function foldTriagePostMutationObservation(input: Readonly<{
     /** Current configured-source lanes; observations outside this set are retained but retired. */
     lanes: readonly TriageListLaneV1[];
     assembledAtMs: number;
+    /**
+     * The read was only to open the entry. It states the revision's facts and no viewer facts (only a
+     * list scan learns why an entry is the reader's), so the connection's earlier viewer facts stay.
+     * Absent after a press, where the read is the new truth.
+     */
+    keepViewerFacts?: boolean;
 }>): TriageListRowV1 | null {
     if (triageEntryRowKey(input.row.entryRef) !== triageEntryRowKey(input.observation.entryRef)) {
         return null;
     }
+    const observation = input.keepViewerFacts === true ? keepPriorViewerFacts(input) : input.observation;
     const retained: CorpusQualifiedObservationV1[] = input.row.observations
         .filter((observation) => observation.sourceInstanceId !== input.observation.sourceInstanceId)
         .map((observation) => ({ ...observation, entryRef: input.row.entryRef }));
     const folded = foldTriageListWindow({
-        observations: [...retained, input.observation],
+        observations: [...retained, observation],
         lanes: input.lanes,
         configuredSourcesStatus: 'complete',
         activeSourceInstanceIds: input.lanes.map((lane) => lane.sourceInstanceId),
         lens: { ...TRIAGE_LIST_DEFAULT_LENS_V1, limit: 1 },
         assembledAtMs: input.assembledAtMs,
     });
-    return folded.rows[0] ?? null;
+    const row = folded.rows[0];
+    if (row === undefined) return null;
+    if (observation.outcome.kind !== 'unresolved' || row.content !== null) return row;
+    // A failed exact read says nothing new about content or attention. Keep the
+    // existing display facts, but retain the new failure/presence/selection so
+    // the last-good snapshot cannot become current source authority.
+    return Object.freeze({
+        ...row,
+        content: input.row.content,
+        lane: input.row.lane,
+        sortAtMs: input.row.sortAtMs,
+        attention: input.row.attention,
+    });
 }

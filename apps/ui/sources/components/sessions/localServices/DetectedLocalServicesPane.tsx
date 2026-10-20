@@ -74,6 +74,7 @@ function TargetServiceRow(props: React.ComponentProps<typeof ServiceRowView> & R
     const sourceRow = !sourceMachineId || target.machineId === sourceMachineId;
     const observedMachine = useMachinePresenceSummary(serverId, sourceRow ? null : target.machineId);
     const machine = sourceRow ? sourceMachine : observedMachine;
+    const unavailableMachine = useMachinePresenceSummary(serverId, target.unavailableMachineId);
     // Explicit snapshots are scoped to their Machine; a Source snapshot never supplies worker policy.
     const suppliedState = props.publicPreviewState;
     const hasSuppliedState = suppliedState !== undefined && (suppliedState === null
@@ -84,6 +85,7 @@ function TargetServiceRow(props: React.ComponentProps<typeof ServiceRowView> & R
         statusClient: publicPreviewStatusClient,
     });
     return <ServiceRowView {...rowProps} machineName={machine?.name ?? null}
+        unavailableMachineName={unavailableMachine.name}
         offline={machine?.reachability === 'unreachable'}
         publicPreviewState={hasSuppliedState ? suppliedState : publicPreviewEnabled ? preview.state : null} />;
 }
@@ -188,6 +190,8 @@ function buildHeaderLine(input: Readonly<{
     offline: boolean;
     /** The first scan is still running or failed: nothing is known about what runs, so the line says none of it. */
     scanUnknown: boolean;
+    /** The rows' scope. An empty workspace says nothing about the rest of the machine. */
+    scope: ServicesScope;
     runningCount: number;
     machineName: string | null;
     runningMark: React.ReactNode;
@@ -214,7 +218,9 @@ function buildHeaderLine(input: Readonly<{
     }
     return {
         leading: input.idleMark,
-        segments: [machine ? t('localServices.pane.nothingRunningOn', { machine }) : t('localServices.pane.nothingRunning')],
+        segments: [input.scope === 'workspace'
+            ? t('localServices.pane.nothingRunningInWorkspace')
+            : machine ? t('localServices.pane.nothingRunningOn', { machine }) : t('localServices.pane.nothingRunning')],
     };
 }
 
@@ -425,12 +431,13 @@ export function DetectedLocalServicesPane(props: Readonly<{
     const headerLine = React.useMemo(() => buildHeaderLine({
         offline,
         scanUnknown,
+        scope,
         runningCount,
         machineName,
         runningMark,
         idleMark,
         offlineMark,
-    }), [idleMark, machineName, offline, offlineMark, runningCount, runningMark, scanUnknown]);
+    }), [idleMark, machineName, offline, offlineMark, runningCount, runningMark, scanUnknown, scope]);
     const onRefresh = props.onRefresh;
     const isRefreshing = viewModel.isRefreshing;
     const headerAction = React.useMemo(() => (onRefresh ? (

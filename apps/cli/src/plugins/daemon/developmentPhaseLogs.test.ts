@@ -4,6 +4,10 @@ import { join } from 'node:path';
 
 import { expect, it } from 'vitest';
 
+import { handlePluginsCommand } from '@/cli/commands/plugins';
+import { reloadConfiguration } from '@/configuration';
+import { createEnvKeyScope } from '@/testkit/env/envScope';
+import { captureStdoutJsonOutput } from '@/testkit/logger/captureOutput';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { createPluginReloadController } from '@/plugins/runtime/reload/controller';
@@ -47,7 +51,27 @@ it('logs real candidate evaluation and adoption, then logs a failed edit while r
     const occurrenceId = reloadController.readCurrentPluginOccurrenceId?.(pluginId);
     expect(occurrenceId).toBeTruthy();
     await writeFile(entryPath, "throw new Error('phase candidate evaluation failed');\n");
-    await control({ kind: 'reload', rootPath: entryPath });
+    const envScope = createEnvKeyScope(['HAPPIER_HOME_DIR']);
+    envScope.patch({ HAPPIER_HOME_DIR: root });
+    reloadConfiguration();
+    const output = captureStdoutJsonOutput();
+    try {
+      await handlePluginsCommand(['reload', pluginId, '--json'], {
+        ensureDaemon: async () => undefined,
+        controlPluginDevelopment: control,
+      });
+      expect(output.json()).toMatchObject({
+        ok: false,
+        kind: 'plugins_reload',
+        error: { code: expect.any(String) },
+      });
+      expect(process.exitCode).toBe(1);
+    } finally {
+      output.restore();
+      process.exitCode = undefined;
+      envScope.restore();
+      reloadConfiguration();
+    }
     expect(reloadController.readCurrentPluginOccurrenceId?.(pluginId)).toBe(occurrenceId);
     localLogger.flushSync();
     const log = await readFile(logPath, 'utf8');

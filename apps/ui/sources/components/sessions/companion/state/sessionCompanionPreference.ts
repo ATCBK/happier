@@ -1,5 +1,5 @@
 import { SessionCompanionPresentationItemRefV1Schema, SessionCompanionPresentationItemRefV1StoredSchema, SESSION_COMPANION_BUILTIN_ITEM_IDS, type SessionCompanionPresentationItemRefV1 } from '@happier-dev/protocol/sessions/presentation/currentSessionPresentationV1';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { WidgetExpectedPresentationV1, WidgetInputBindingsV1, WidgetInstanceV1 } from '@happier-dev/protocol/widgets';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { UiSurfaceNetworkRequestV1 } from '@happier-dev/protocol/plugins/contributions/ui/hostedHtmlCapabilitiesV1';
@@ -83,8 +83,7 @@ const sessionCompanionPreferenceV1Schema = z.object({
  * discard every other Session's preference, and a malformed root must not fail
  * the whole local-settings parse and reset unrelated settings.
  */
-export const SessionCompanionPreferencesV1Schema = z.preprocess(
-    (value) => {
+export const SessionCompanionPreferencesV1Schema = z.catch((<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((value) => {
         if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
         const admitted: Record<string, unknown> = {};
         for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
@@ -93,9 +92,7 @@ export const SessionCompanionPreferencesV1Schema = z.preprocess(
             }
         }
         return admitted;
-    },
-    z.record(z.string(), sessionCompanionPreferenceV1Schema),
-).catch({});
+    }), z.record(z.string(), sessionCompanionPreferenceV1Schema)), {});
 
 export type SessionCompanionPreferencesV1 = z.infer<typeof SessionCompanionPreferencesV1Schema>;
 

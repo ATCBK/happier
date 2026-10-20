@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import axios from 'axios';
 import { randomBytes } from 'node:crypto';
 import tweetnacl from 'tweetnacl';
@@ -237,7 +238,7 @@ async function redeemNativePasswordChallenge(input: Readonly<{
   }
   // /v1/auth includes `success: true`; the native-email finalizer's response
   // schema is strict and only describes its own { token } endpoint.
-  return NativeEmailPasswordLoginResponseV1Schema.passthrough().parse(response.data).token;
+  return (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(NativeEmailPasswordLoginResponseV1Schema).parse(response.data).token;
 }
 
 /** Verified existing-Account sign-in shared by explicit recovery and retained-secret repair. */

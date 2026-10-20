@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { ScrollView } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
 
 import { resolveAgentUiBehaviorFromSessionMetadata } from '@/agents/registry/registryUiBehavior';
 import type { DetailsTab } from '@/components/appShell/panes/model/appPaneReducer';
@@ -90,6 +92,25 @@ export function hasSessionTeammateLauncher(session: Session | null): boolean {
     return typeof behavior?.sessionSubagents?.createTeammateLauncherDetailsTab === 'function';
 }
 
+const launchTabStyles = StyleSheet.create((theme) => ({
+    content: {
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s12,
+    },
+}));
+
+/**
+ * A launch surface is `content`: the host owns its bounds, gutters and scroll. In a Details tab that
+ * host is this frame, so the plugin's buttons never sit on the pane edge.
+ */
+function SessionSubagentLaunchTabFrame(props: Readonly<{ children: React.ReactNode }>): React.ReactElement {
+    return (
+        <ScrollView contentContainerStyle={launchTabStyles.content} keyboardShouldPersistTaps="handled">
+            {props.children}
+        </ScrollView>
+    );
+}
+
 export function renderProviderSessionDetailsTab(params: Readonly<{
     sessionId: string;
     scopeId: string;
@@ -99,15 +120,17 @@ export function renderProviderSessionDetailsTab(params: Readonly<{
     const inline = readInlineDetailsResource(params.tab);
     if (inline && inline.mode === LAUNCH_DETAILS_MODE) {
         return (
-            <AgentInlineSurface
-                pluginId={inline.pluginId}
-                surfaceId={inline.surfaceId}
-                sessionId={params.sessionId}
-                serverId={params.serverId}
-                agentId={inline.agentId}
-                inlineMount={{ role: 'sessionSubagentLaunch', presentation: 'content' }}
-                launchInput={{ teamIds: inline.teamIds }}
-            />
+            <SessionSubagentLaunchTabFrame>
+                <AgentInlineSurface
+                    pluginId={inline.pluginId}
+                    surfaceId={inline.surfaceId}
+                    sessionId={params.sessionId}
+                    serverId={params.serverId}
+                    agentId={inline.agentId}
+                    inlineMount={{ role: 'sessionSubagentLaunch', presentation: 'content' }}
+                    launchInput={{ teamIds: inline.teamIds }}
+                />
+            </SessionSubagentLaunchTabFrame>
         );
     }
     if (inline) {

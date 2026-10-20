@@ -45,6 +45,13 @@ export const APPEARANCE_PAGE_SETTINGS = defineSettingsPage({
                 density: {},
             },
         },
+        chatCodeBlocks: {
+            titleKey: 'settingsAppearance.chatCodeBlocks.title',
+            settings: {
+                showChatCodeBlockWrapControls: {},
+                wrapChatCodeBlocks: {},
+            },
+        },
         display: {
             titleKey: 'settingsAppearance.display',
             settings: {

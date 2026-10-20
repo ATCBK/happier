@@ -3605,6 +3605,9 @@ export async function publishBundledPluginSemanticProjection(
   const bundledPluginPackageNames = readBundledPluginPackageNames(options.rootDir);
   const serialized = sourceResult
     ?? readSerializedBundledPluginPackages(options.rootDir, bundledPluginPackageNames, dependencies);
+  // Invalid declarations cannot supply complete membership. Optional runtime
+  // preparation failures remain separate from this semantic input validation.
+  if (serialized.failures.length > 0) throwBundledPluginPackageFailures(serialized.failures);
   const failures = mergeBundledPluginFailures(publicationFailures, serialized.failures);
   assertNoBundledPluginPublicationFailures(failures, options.mode);
   const pluginPackages = serialized.pluginPackages;

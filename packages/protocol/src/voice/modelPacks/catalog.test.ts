@@ -6,6 +6,7 @@ import {
   KOKORO_DEFAULT_TTS_PACK_ID,
   MODEL_PACK_CATALOG,
   getModelPackCatalogEntry,
+  getDefaultModelPackId,
   listModelPackCatalogEntries,
   resolveCanonicalModelPackId,
 } from './catalog.js';
@@ -77,6 +78,22 @@ describe('MODEL_PACK_CATALOG', () => {
     expect(ttsDefaults).toHaveLength(1);
     expect(sttDefaults).toHaveLength(1);
     expect(ttsDefaults[0]?.packId).toBe(KOKORO_DEFAULT_TTS_PACK_ID);
+    expect(getDefaultModelPackId('stt_sherpa')).toBe('sherpa-onnx-streaming-zipformer-en-2023-06-26');
+    expect(getModelPackCatalogEntry(getDefaultModelPackId('stt_sherpa')!)).toMatchObject({
+      publicationStatus: 'published',
+      streamingCapable: true,
+      runtimeFamily: 'sherpa_zipformer_streaming',
+      runtimeArtifacts: {
+        encoder: { type: 'file', path: 'encoder.onnx' },
+        decoder: { type: 'file', path: 'decoder.onnx' },
+        joiner: { type: 'file', path: 'joiner.onnx' },
+        tokens: { type: 'file', path: 'tokens.txt' },
+      },
+    });
+    expect(getModelPackCatalogEntry('sherpa-onnx-streaming-zipformer-en-20M-2023-02-17')).toMatchObject({
+      publicationStatus: 'published',
+      streamingCapable: true,
+    });
   });
 
   it('surfaces the verified local STT/TTS packs alongside the streaming defaults', () => {

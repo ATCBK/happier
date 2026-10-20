@@ -19,8 +19,12 @@ import { usePluginMessageActions } from './PluginMessageActions';
 import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { Modal } from '@/modal';
 import { t } from '@/text';
+import { parseSessionMessageRefV1, type SessionMessageRefV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageRefV1';
+import type { DiscussionSecondOpinionSourceV1 } from '@happier-dev/protocol/discussions/secondOpinion';
+import { readSessionMemoryEnabledV1 } from '@happier-dev/protocol/sessions/context/sessionContextV1';
+import { useSessionSelector } from '@/sync/store/hooks';
 
-export type CommittedMessageActionId = 'copy' | 'fork' | 'rollback' | 'select' | 'pin' | 'savePrompt' | 'plugins' | 'makeRepeatable';
+export type CommittedMessageActionId = 'copy' | 'fork' | 'rollback' | 'select' | 'pin' | 'savePrompt' | 'plugins' | 'makeRepeatable' | 'secondOpinion' | 'discuss' | 'saveDecision';
 export type CommittedMessageAction = Readonly<{
     id: CommittedMessageActionId;
     available: boolean;
@@ -46,6 +50,10 @@ export type CommittedMessageActionInput = Readonly<{
     messagePins?: readonly PersistedSessionMessagePinV1[];
     onToggleMessagePin?: (pin: PersistedSessionMessagePinV1) => void;
     openSavePrompt: () => void;
+    /** Opens the Save as decision sheet for this exact committed message (C6). */
+    openSaveDecision?: (source: SessionMessageRefV1) => void;
+    /** The L7 presentation owner opens a prepared draft; entry never grants or asks. */
+    openDiscussionSource?: (source: DiscussionSecondOpinionSourceV1, intent: 'second_opinion' | 'discuss') => void;
 }>;
 
 /** Eligibility and preferences drive BOTH presentations, including recycled rows. */
@@ -79,7 +87,8 @@ export function useCommittedMessageActions(input: CommittedMessageActionInput) {
         routeMessageId: buildMessageRouteId(message),
         role: message.kind === 'user-text' ? 'user' : 'assistant',
         pins: input.messagePins ?? [],
-    }), [input.sessionId, seq, message, input.messagePins]);
+        pinActionEnabled: settings.transcriptMessagePinActionEnabled,
+    }), [input.sessionId, seq, message, input.messagePins, settings.transcriptMessagePinActionEnabled]);
     const pinned = pinAvailability.status === 'available' && pinAvailability.pinned;
     const pluginActions = usePluginMessageActions({
         enabled: settings.transcriptMessagePluginActionsEnabled !== false,
@@ -93,6 +102,17 @@ export function useCommittedMessageActions(input: CommittedMessageActionInput) {
     const { copy: copyWithFeedback, isCopied } = useHappierCopyFeedback();
     const copyKey = React.useMemo(() => JSON.stringify([message.id, input.copyText]), [message.id, input.copyText]);
     const copied = isCopied(copyKey);
+    const sourceReference = message.messageActionReference;
+    // The exact committed agent answer, when this row has one; Discuss, Second opinion and Save as decision share it.
+    const committedMessage = input.serverId && sourceReference?.sessionId === input.sessionId
+        && message.kind === 'agent-text' && !message.isThinking && input.selectableText != null
+        && !input.isStructuredOnly && !input.hasUnsupportedContent
+        ? parseSessionMessageRefV1({ kind: 'session', session: { serverId: input.serverId, sessionId: input.sessionId },
+            messageId: sourceReference.messageId }) : null;
+    const committedSource = input.openDiscussionSource ? committedMessage : null;
+    // Save as decision writes to this Session's memory; with memory off there is nothing it could save to.
+    const memoryEnabled = useSessionSelector(input.sessionId, input.serverId,
+        (session) => session !== null && readSessionMemoryEnabledV1(session.metadata));
     const copy = async () => {
         if (!await copyWithFeedback(() => setClipboardStringSafe(input.copyText), copyKey)) {
             Modal.alert(t('common.error'), t('items.failedToCopyToClipboard'));
@@ -129,10 +149,18 @@ export function useCommittedMessageActions(input: CommittedMessageActionInput) {
         { id: 'makeRepeatable', available: makeRepeatable?.available === true,
             icon: 'arrows-clockwise', title: t('workflows.authoring.repeatable'),
             accessibilityHint: t('workflows.authoring.repeatableDescription'), onPress: () => makeRepeatable?.openRepeatable() },
-        { id: 'pin', available: input.onToggleMessagePin != null && pinAvailability.status === 'available'
-            && (settings.transcriptMessagePinActionEnabled !== false || pinned),
+        { id: 'secondOpinion', available: committedSource !== null,
+            icon: 'scales', title: t('workflows.page.fields.secondOpinion'),
+            onPress: () => { if (committedSource) input.openDiscussionSource?.({ kind: 'session', message: committedSource }, 'second_opinion'); } },
+        { id: 'discuss', available: committedSource !== null,
+            icon: 'chats-circle', title: t('workflows.review.discuss'),
+            onPress: () => { if (committedSource) input.openDiscussionSource?.({ kind: 'session', message: committedSource }, 'discuss'); } },
+        { id: 'saveDecision', available: committedMessage !== null && memoryEnabled && input.openSaveDecision != null,
+            icon: 'check-circle', title: t('memoryContext.memory.saveAsDecision'),
+            onPress: () => { if (committedMessage) input.openSaveDecision?.(committedMessage); } },
+        { id: 'pin', available: input.onToggleMessagePin != null && pinAvailability.status === 'available',
             icon: pinned ? 'push-pin-slash' : 'push-pin', title: pinned ? t('session.transcriptNavigation.unpinMessageA11y') : t('session.transcriptNavigation.pinMessageA11y'),
             onPress: () => { if (pinAvailability.status === 'available') input.onToggleMessagePin?.(buildSessionMessagePinAtPressTime(pinAvailability.pinTarget)); } },
     ];
-    return { actions, pinAvailability, pluginActions, makeRepeatableSource, setMakeRepeatableCapability };
+    return { actions, pinAvailability, pluginActions, makeRepeatableSource, setMakeRepeatableCapability, committedMessage };
 }

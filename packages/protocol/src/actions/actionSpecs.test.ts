@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import * as protocol from '../index.js';
 import { RPC_METHODS, SESSION_RPC_METHODS } from '../rpc/index.js';
@@ -16,6 +16,7 @@ import {
 } from '../execution/runs/index.js';
 import { actionSpecToActionDefinitionV1, listActionSpecsForCatalogSurface, serializeActionSpec } from './actionCatalog.js';
 import { listVoiceToolActionSpecs } from './actionSpecs.js';
+import { resolveActionExecutionPlacementForInput } from './actionSpecs.js';
 import { ActionInputHintsSchema, ActionSpecSchema, PUBLIC_ACTION_IDS, PUBLIC_ACTION_INPUT_SCHEMAS, PUBLIC_ACTION_OUTPUT_SCHEMAS, PublicActionIdSchema, SIGNED_ROOT_ACTION_IDS, SignedRootActionIdSchema, SESSION_TRANSCRIPT_GET_MAX_LIMIT, ActionSurfaceSchema, PLUGIN_ACTION_INPUT_SCHEMAS, PLUGIN_ACTION_OUTPUT_SCHEMAS, PLUGIN_INVOCABLE_ACTION_IDS, PluginInvocableActionIdSchema, SessionTranscriptGetExternalShareableInputV1Schema, getActionContextualDefaults, getActionSpec, isActionSpecSurfacedOn, isHumanSecretApiExcludedActionId, isInternalActionId, isPluginProvenanceOnlyActionId, isPluginSurfaceExcludedActionId, isVoicePromptHotPathSpec, isVoiceSdkSafeActionSpec, listActionSpecs, listActionSpecsForSurface, listVoicePromptHotPathSpecs, projectSessionSpawnNewApiRequest, resolveRuntimeActionHostEffectClass } from './actionSpecs.js';
 import { HOME_GOVERNANCE_ACTION_IDS_V1 } from '../home/governance/actionsV1.js';
 import { TEAM_ACTION_IDS_V1 } from '../teams/actionsV1.js';
@@ -28,16 +29,41 @@ import { MANAGED_GITHUB_APP_ACTION_IDS_V1 } from '../identity/githubApps.js';
 import { resolveRuntimeActionSurfaces } from './surfaces.js';
 import { resolveActionSurfaceAvailability } from './actionSurfaceAvailability.js';
 import { resolveActionApprovalRouting } from './actionApprovalPolicy.js';
+import { evaluateInputPredicate } from '../inputs/inputPredicates.js';
 import { normalizeActionsSettingsV1 } from './actionSettings.js';
 import { LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS, resolveLocalServiceDomainActionRpcBinding } from './specs/localServices.js';
 import type { ActionSpec } from './actionSpecs.js';
 import {
   ActionIdSchema,
+  ACTION_IDS,
   PLUGIN_DEV_LOOP_ACTION_IDS_V1,
   RuntimeActionIdV1Schema,
   type ActionId,
   type RuntimeActionIdV1,
 } from './actionIds.js';
+
+it('publishes receiver mute and autonomous exchange controls to the Voice catalog', () => {
+  const voiceActions = listVoiceToolActionSpecs().map(spec => spec.id);
+  expect(voiceActions).toEqual(expect.arrayContaining([
+    'session.delivery.mute.set',
+    'session.delivery.mute.remove',
+    'session.delivery.mute.list',
+    'session.exchange.control',
+  ]));
+});
+
+it('exposes status explanations without admitting target selectors or runtime status writes', () => {
+  const spec = getActionSpec('session.status.set_reason');
+  expect(spec.inputSchema.safeParse({ reason: 'Waiting for the build' }).success).toBe(true);
+  expect(spec.inputSchema.safeParse({ reason: null }).success).toBe(true);
+  for (const extra of [{ sessionId: 'other' }, { status: 'done' }, { thinking: false }]) {
+    expect(spec.inputSchema.safeParse({ reason: 'Done', ...extra }).success).toBe(false);
+  }
+  for (const surface of ['ui', 'voice', 'agent', 'mcp', 'cli'] as const) {
+    expect(isActionSpecSurfacedOn(spec, surface)).toBe(true);
+  }
+  expect(resolveActionApprovalRouting({ actionId: spec.id, spec, context: { surface: 'agent' } }).required).toBe(false);
+});
 
 it('PARITY2 publishes hook inventory and registry installation with user-changeable approval defaults', () => {
   for (const id of ['plugins.sessionHooks.status.get', 'prompt_registry.install', 'plugins.permissions.grants.list', 'plugins.permissions.grants.revoke'] as const) {
@@ -81,6 +107,15 @@ it('looks up canonical Action specs without scanning the catalog on each call', 
   }
 });
 
+it('registers every declared Action before approval defaults read the catalog', () => {
+  expect(listActionSpecs().map(spec => spec.id).sort()).toEqual([...ACTION_IDS].sort());
+  const spec = getActionSpec('tasks.internal.reorder');
+  expect(spec.executionPlacement).toBe('account');
+  expect(() => resolveActionApprovalRouting({
+    actionId: spec.id, spec, context: { surface: 'agent' },
+  })).not.toThrow();
+});
+
 describe('Profile entity operation parity', () => {
   it('admits typed row edits and requires consent for deletion and secret selection', () => {
     const edit = listActionSpecs().find((spec) => spec.id === 'launch_profiles.save');
@@ -94,12 +129,13 @@ describe('Profile entity operation parity', () => {
 });
 
 describe('Composer state mutation Actions', () => {
-  it('keeps the reversible config-option mutation UI-only', () => {
+  it('shares the reversible config-option mutation through its answering client', () => {
     expect(getActionSpec('session.config_option.set')).toMatchObject({
       sideEffectClass: 'write',
       safety: 'safe',
+      executionPlacement: 'client',
       placements: [],
-      surfaces: { ui: true, voice: false, agent: false, mcp: false, cli: false, rpc: false },
+      surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },
     });
   });
   it('uses one Session capability Action on the UI and automation surfaces', () => {
@@ -115,8 +151,9 @@ describe('Composer state mutation Actions', () => {
     expect(getActionSpec('session.connected_services_auth.set')).toMatchObject({
       sideEffectClass: 'write',
       safety: 'danger',
+      executionPlacement: 'client',
       placements: [],
-      surfaces: { ui: true, voice: false, agent: false, mcp: false, cli: false, rpc: false },
+      surfaces: { ui: true, voice: false, agent: true, mcp: true, cli: false, rpc: false },
     });
   });
 });
@@ -351,6 +388,7 @@ const WORKFLOW_READ_ACTION_ID_SET = new Set([
 ] as const);
 
 const RESULT_REQUIRED_BLOCKING_ACTION_IDS = [
+  'reviews.comments.claimPublicationDispatch',
   'plugin.webhook.delivery.movePending',
   ...ROLE_ACTION_IDS_V1,
   'artifact.public_link.create',
@@ -366,8 +404,8 @@ const RESULT_REQUIRED_BLOCKING_ACTION_IDS = [
   'agents.acp.backends.upsert',
   'agents.acp.backends.delete',
   'secrets.shared.list',
-  'session.follow.get',
-  'session.follow.preferences.get',
+  'follow.get',
+  'follow.preferences.get',
   'action.spec.search',
   'action.spec.get',
   'action.options.resolve',
@@ -431,9 +469,11 @@ const RESULT_REQUIRED_BLOCKING_ACTION_IDS = [
   'session.events.get',
   'session.wait.idle',
   'session.board.get',
-  'session.discussion.list',
-  'session.discussion.get',
-  'session.discussion.read',
+  'discussion.list',
+  'discussion.get',
+  'discussion.read',
+  'discussion.participants.list',
+  'discussion.access.grants.list',
   'session.list',
   'session.activity.get',
   'session.messages.recent.get',
@@ -508,7 +548,8 @@ const RESULT_NONE_DEFERRED_ACTION_IDS = [
   'session.access.grants.list',
   'session.public_link.get',
   'session.responsibility.candidates.list',
-  'session.follow.sources.list',
+  'follow.list',
+  'follow.preview',
   'session.stop',
   'session.delete',
   'session.folder.set',
@@ -568,13 +609,12 @@ const RESULT_NONE_DEFERRED_ACTION_IDS = [
   'reviews.comments.setDisposition',
   'reviews.comments.attachEvidence',
   'reviews.comments.bulkTransition',
-  'reviews.comments.claimPublicationDispatch',
 ] as const;
 
 const RESULT_OPTIONAL_DEFERRED_ACTION_IDS = [
   'prompt_registry.install',
   'plugins.permissions.grants.revoke',
-  'session.reports_to.set',
+  'session.manager.set',
   // Session-access mutations, mirrored from their owner's rows now that the
   // declared family is projected into the canonical id list.
   'session.access.grant.set',
@@ -589,11 +629,9 @@ const RESULT_OPTIONAL_DEFERRED_ACTION_IDS = [
   ...WORKFLOW_ACTION_IDS_V1.filter((id) => !WORKFLOW_READ_ACTION_ID_SET.has(id)),
   'sessions.runner.activation.create',
   'sessions.runner.activation.cancel',
-  'session.follow.set',
-  'session.follow.remove',
-  'session.follow.preferences.set',
-  'session.follow.sources.set',
-  'session.follow.sources.remove',
+  'follow.set',
+  'follow.remove',
+  'follow.preferences.set',
   'review.start',
   'subagents.plan.start',
   'subagents.delegate.start',
@@ -625,12 +663,19 @@ const RESULT_OPTIONAL_DEFERRED_ACTION_IDS = [
   'session.board.item.upsert',
   'session.board.item.remove',
   'session.board.layout.update',
-  'session.discussion.create',
-  'session.discussion.post',
-  'session.discussion.rename',
-  'session.discussion.archive',
-  'session.discussion.restore',
-  'session.discussion.read_state.set',
+  'discussion.create',
+  'discussion.post',
+  'discussion.reply',
+  'discussion.invite',
+  'discussion.participant.remove',
+  'discussion.leave',
+  'discussion.owner.transfer',
+  'discussion.access.grants.set',
+  'discussion.access.grants.remove',
+  'discussion.rename',
+  'discussion.archive',
+  'discussion.restore',
+  'discussion.read_state.set',
   'session.permission.respond',
   'session.user_action.answer',
   'session.mode.set',
@@ -701,6 +746,11 @@ describe('Action Spec Registry', () => {
       ['plugins.scaffold', 'danger'],
       ['plugins.install', 'danger'],
       ['plugins.uninstall', 'danger'],
+      ['plugins.enable', 'danger'],
+      ['plugins.disable', 'danger'],
+      ['plugins.rollback', 'danger'],
+      ['plugins.trust.forget', 'danger'],
+      ['plugins.update_policy.set', 'danger'],
       ['plugins.dev.submit', 'danger'],
       ['plugins.dev.unregister', 'danger'],
       ['plugins.dev.install', 'danger'],
@@ -730,7 +780,7 @@ describe('Action Spec Registry', () => {
     expect(PUBLIC_ACTION_IDS).toEqual(expect.arrayContaining(
       expectations
         .map(([actionId]) => actionId)
-        .filter((actionId) => getActionSpec(actionId).requiredAuthority === 'account_automation'),
+        .filter((actionId) => getActionSpec(actionId).surfaces.api),
     ));
     expect(PUBLIC_ACTION_IDS).not.toContain('plugins.dev');
   });
@@ -832,7 +882,7 @@ describe('Action Spec Registry', () => {
     }
   });
 
-  it('keeps package trust approval on trusted interactive surfaces but off PAT', () => {
+  it('defaults package trust to an ordinary approval Artifact with user-changeable policy', () => {
     for (const retiredActionId of ['plugins.call', 'plugins.trust']) {
       expect(ActionIdSchema.safeParse(retiredActionId).success).toBe(false);
       expect(() => getActionSpec(retiredActionId as ActionId)).toThrow();
@@ -841,12 +891,20 @@ describe('Action Spec Registry', () => {
     const install = getActionSpec('plugins.install');
     expect(install.approval.result).toBe('optional');
     expect(resolveExpectedApprovalFlow(install.approval)).toBe('deferred');
+    expect(install.approvalPolicy).toMatchObject({ uiConfirmation: 'policy' });
+    for (const surface of ['ui', 'cli', 'agent', 'mcp', 'plugin'] as const) {
+      const context = { surface, authority: surface === 'ui' || surface === 'cli' ? 'present_user' as const : 'account_automation' as const };
+      expect(resolveActionApprovalRouting({ actionId: install.id, spec: install, context }).required).toBe(true);
+      expect(resolveActionApprovalRouting({ actionId: install.id, spec: install, context,
+        settings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [install.id]: [surface] } }),
+      }).required).toBe(false);
+    }
     expect(install.surfaces.rpc).toBe(false);
     expect(install.surfaces.api).toBe(false);
     expect(SignedRootActionIdSchema.safeParse(install.id).success).toBe(true);
     expect(PublicActionIdSchema.safeParse(install.id).success).toBe(false);
     expect(install.surfaces.plugin).toBe(true);
-    expect(install.requiredAuthority).toBe('present_user');
+    expect(install.requiredAuthority).toBe('account_automation');
 
     for (const actionId of [
       'plugins.permissions.grants.request',
@@ -855,17 +913,17 @@ describe('Action Spec Registry', () => {
       'plugins.permissions.grants.dismissRequest',
     ] as const) {
       const spec = getActionSpec(actionId);
-      expect(spec.surfaces.agent).toBe(spec.requiredAuthority === 'present_user');
-      expect(spec.surfaces.mcp).toBe(spec.requiredAuthority === 'present_user');
+      expect(spec.surfaces.agent).toBe(actionId !== 'plugins.permissions.grants.request');
+      expect(spec.surfaces.mcp).toBe(actionId !== 'plugins.permissions.grants.request');
     }
   });
 
-  it('surfaces plugin inspection and install to UI while keeping scaffold and uninstall internal', () => {
+  it('surfaces plugin inspection, scaffold, install and uninstall to UI', () => {
     expect(getActionSpec('plugins.list').surfaces.ui).toBe(true);
     expect(getActionSpec('plugins.reload').surfaces.ui).toBe(true);
-    expect(getActionSpec('plugins.scaffold').surfaces.ui).toBe(false);
+    expect(getActionSpec('plugins.scaffold').surfaces.ui).toBe(true);
     expect(getActionSpec('plugins.install').surfaces).toMatchObject({ ui: true, agent: true, mcp: true });
-    expect(getActionSpec('plugins.uninstall').surfaces.ui).toBe(false);
+    expect(getActionSpec('plugins.uninstall').surfaces.ui).toBe(true);
   });
 
   it('requires a plugin id for plugin uninstall', () => {
@@ -934,7 +992,7 @@ describe('Action Spec Registry', () => {
       },
       bindings: { mcpToolName: 'review_start' },
       outputSchema: z.unknown(),
-      inputSchema: z.object({}).strict(),
+      inputSchema: z.strictObject({}),
     } as const;
 
     expect(ActionSpecSchema.parse({
@@ -981,14 +1039,14 @@ describe('Action Spec Registry', () => {
         api: false,
         plugin: true,
       },
-      inputSchema: z.object({}).strict(),
+      inputSchema: z.strictObject({}),
     } as const;
 
     expect(ActionSpecSchema.safeParse(base).success).toBe(false);
     expect(ActionSpecSchema.safeParse({ ...base, outputSchema: z.unknown() }).success).toBe(false);
     expect(ActionSpecSchema.safeParse({
       ...base,
-      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      outputSchema: z.strictObject({ ok: z.boolean() }),
     }).success).toBe(true);
   });
 
@@ -1009,8 +1067,8 @@ describe('Action Spec Registry', () => {
         api: false,
         plugin: true,
       },
-      inputSchema: z.object({}).strict(),
-      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      inputSchema: z.strictObject({}),
+      outputSchema: z.strictObject({ ok: z.boolean() }),
     } as const;
 
     expect(ActionSpecSchema.safeParse(base).success).toBe(false);
@@ -1037,8 +1095,8 @@ describe('Action Spec Registry', () => {
         api: false,
         plugin: true,
       },
-      inputSchema: z.object({}).strict(),
-      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      inputSchema: z.strictObject({}),
+      outputSchema: z.strictObject({ ok: z.boolean() }),
     } as const;
 
     expect(ActionSpecSchema.safeParse({
@@ -1105,22 +1163,22 @@ describe('Action Spec Registry', () => {
         api: true,
         plugin: true,
       },
-      inputSchema: z.object({ semantic: z.string() }).strict(),
-      outputSchema: z.object({ result: z.string() }).strict(),
+      inputSchema: z.strictObject({ semantic: z.string() }),
+      outputSchema: z.strictObject({ result: z.string() }),
       surfaceBindings: {
         rpc: {
-          inputSchema: z.object({ carrier: z.string() }).strict(),
+          inputSchema: z.strictObject({ carrier: z.string() }),
           decodeInput: transform,
-          outputSchema: z.object({ carrierResult: z.string() }).strict(),
+          outputSchema: z.strictObject({ carrierResult: z.string() }),
           encodeOutput: transform,
         },
         plugin: {
-          inputSchema: z.object({ callerInput: z.string() }).strict(),
+          inputSchema: z.strictObject({ callerInput: z.string() }),
           bindInput: transform,
           projectOutput: transform,
         },
         api: {
-          inputSchema: z.object({ callerInput: z.string() }).strict(),
+          inputSchema: z.strictObject({ callerInput: z.string() }),
           bindInput: transform,
         },
       },
@@ -1131,12 +1189,34 @@ describe('Action Spec Registry', () => {
     expect(parsed.surfaceBindings?.plugin?.projectOutput).toBe(transform);
   });
 
+  it('keeps plugin installation on signed roots and out of the public API catalog', () => {
+    expect(getActionSpec('plugins.install').surfaces.api).toBe(false);
+    expect(SIGNED_ROOT_ACTION_IDS).toContain('plugins.install');
+    expect(PUBLIC_ACTION_IDS).not.toContain('plugins.install');
+    expect(PublicActionIdSchema.safeParse('plugins.install').success).toBe(false);
+    expect(Object.hasOwn(PUBLIC_ACTION_INPUT_SCHEMAS, 'plugins.install')).toBe(false);
+    expect(Object.hasOwn(PUBLIC_ACTION_OUTPUT_SCHEMAS, 'plugins.install')).toBe(false);
+  });
+
   it('exposes stable action specs', () => {
     const all = listActionSpecs();
     expect(all.length).toBeGreaterThan(0);
     for (const spec of all) {
       // Runtime safety: registry objects must validate against the schema.
       expect.soft(ActionSpecSchema.safeParse(spec).error?.issues, spec.id).toBeUndefined();
+    }
+  });
+
+  it('keeps the workflow trigger patch editable for updates and reviewed legacy conversions', () => {
+    const spec = getActionSpec('workflow.trigger.update');
+    expect(ActionSpecSchema.safeParse(spec).error?.issues).toBeUndefined();
+    const hints = serializeActionSpec(spec).inputHints;
+    expect(ActionInputHintsSchema.safeParse(hints).error?.issues).toBeUndefined();
+    for (const input of [{ patch: { enabled: false } }, { confirmLegacyConversion: true, patch: { enabled: false } }]) {
+      const editable = hints?.fields.filter((field) => !field.visibleWhen || evaluateInputPredicate(field.visibleWhen, input));
+      expect(editable).toEqual(expect.arrayContaining([
+        expect.objectContaining({ path: 'patch', widget: 'json', required: true }),
+      ]));
     }
   });
 
@@ -1316,6 +1396,7 @@ describe('Action Spec Registry', () => {
   });
 
   it('classifies every current ActionSpec explicitly for API and plugin invocation', () => {
+    expect(SignedRootActionIdSchema.safeParse('account.apiTokens.list').success).toBe(true);
     for (const spec of listActionSpecs()) {
       expect(Object.prototype.hasOwnProperty.call(spec.surfaces, 'api')).toBe(true);
       expect(typeof spec.surfaces.api).toBe('boolean');
@@ -1324,7 +1405,7 @@ describe('Action Spec Registry', () => {
           && !isPluginProvenanceOnlyActionId(spec.id)
           && !isHumanSecretApiExcludedActionId(spec.id)
           && !['plugins.settings.secret.bind', 'plugins.settings.secret.unbind', 'plugins.settings.secret.delete',
-            'plugin.webhook.delivery.movePending'].includes(spec.id)
+            'plugin.webhook.delivery.movePending', 'account.apiTokens.list', 'plugins.install'].includes(spec.id)
           && (spec.requiredAuthority === 'account_automation'
             || ['approval.request.decide', 'session.permission.respond', 'session.user_action.answer'].includes(spec.id)),
       );
@@ -1462,14 +1543,15 @@ describe('Action Spec Registry', () => {
     }
   });
 
-  it('publishes the caller’s private Discussion read position to granted API callers', () => {
-    const spec = getActionSpec('session.discussion.read_state.set');
+  it('keeps private Discussion read-position writes present-user gated on signed roots', () => {
+    const spec = getActionSpec('discussion.read_state.set');
     expect(spec.surfaces.ui).toBe(true);
     expect(spec.surfaces.cli).toBe(true);
-    expect(spec.requiredAuthority).toBe('account_automation');
-    expect(spec.surfaces.api).toBe(true);
-    expect(PUBLIC_ACTION_IDS).toContain('session.discussion.read_state.set');
-    expect(PublicActionIdSchema.safeParse('session.discussion.read_state.set').success).toBe(true);
+    expect(spec.requiredAuthority).toBe('present_user');
+    expect(spec.surfaces.api).toBe(false);
+    expect(PUBLIC_ACTION_IDS).not.toContain('discussion.read_state.set');
+    expect(PublicActionIdSchema.safeParse('discussion.read_state.set').success).toBe(false);
+    expect(SignedRootActionIdSchema.safeParse('discussion.read_state.set').success).toBe(true);
   });
 
   it('gives remote permission mediation an Account-automation minimum so a host-stamped plugin caller can reach it', () => {
@@ -1540,6 +1622,22 @@ describe('Action Spec Registry', () => {
     expect(userAction.outputSchema.parse({ ok: true })).toEqual({ ok: true });
   });
 
+  it('preserves a plugin worker question target and defaults only an omitted Session operand', async () => {
+    const spec = getActionSpec('session.user_action.answer');
+    const binding = spec.surfaceBindings?.plugin;
+    const context = { actionId: spec.id, surface: 'plugin' as const,
+      caller: { kind: 'plugin' as const, pluginId: 'example' }, defaultSessionId: 'manager' };
+    const response = { requestId: 'worker-question', disposition: 'pass_up' };
+    for (const sessionId of ['worker', { selector: 'manager', of: 'worker' }]) {
+      const input = binding?.inputSchema.parse({ ...response, sessionId });
+      expect(await binding?.bindInput?.(input, context)).toEqual({ ...response, sessionId });
+    }
+    expect(await binding?.bindInput?.(binding.inputSchema.parse(response), context))
+      .toEqual({ ...response, sessionId: 'manager' });
+    expect(binding?.inputSchema.safeParse({ ...response, sessionId: { selector: 'manager', accountId: 'foreign' } }).success).toBe(false);
+    expect(binding?.inputSchema.safeParse({ ...response, readSessionActionRpcOrigin: {} }).success).toBe(false);
+  });
+
   it('exposes the remote permission mediation Actions only through their canonical caller surfaces', () => {
     const pending = getActionSpec('session.permission.remote.pending.list' as any);
     const respond = getActionSpec('session.permission.remote.respond' as any);
@@ -1564,8 +1662,8 @@ describe('Action Spec Registry', () => {
       mcp: false,
       voice: false,
     });
-    expect(grantsList.surfaces).toMatchObject({ plugin: true, ui: true, cli: true, rpc: true, agent: false, mcp: false, voice: false });
-    expect(grantsRevoke.surfaces).toMatchObject({ plugin: true, ui: true, cli: true, rpc: true, agent: false, mcp: false, voice: false });
+    expect(grantsList.surfaces).toMatchObject({ plugin: true, ui: true, cli: true, rpc: true, agent: true, mcp: true, voice: false });
+    expect(grantsRevoke.surfaces).toMatchObject({ plugin: true, ui: true, cli: true, rpc: true, agent: true, mcp: true, voice: false });
 
     expect(respond.inputSchema.safeParse({
       sessionId: 'session-1',
@@ -1752,6 +1850,9 @@ describe('Action Spec Registry', () => {
     );
     const publicInput = PUBLIC_ACTION_INPUT_SCHEMAS['session.message.send'];
     expect(publicInput.parse(input)).toEqual(input);
+    const structuredInput = { v: 1, mentions: [{ kind: 'happier.session', ref: 'session:s1', token: '@session' }] };
+    expect(publicInput.parse({ ...input, message: '@session Continue', structuredInput }))
+      .toEqual({ ...input, message: '@session Continue', structuredInput });
     for (const extra of [
       { source: { sourceRef: 'private-source' } },
       { attachments: [] },
@@ -1769,9 +1870,6 @@ describe('Action Spec Registry', () => {
     expect(publicInput.safeParse(launch).success).toBe(false);
 
     const publicOutput = PUBLIC_ACTION_OUTPUT_SCHEMAS['session.message.send'];
-    expect(getActionSpec('session.message.send').outputSchema).toBe(
-      protocol.SessionMessageSendResultV1Schema,
-    );
     expect(publicOutput.parse({ status: 'accepted', localId: 'caller-local-id' })).toEqual({
       status: 'accepted',
       localId: 'caller-local-id',
@@ -1799,6 +1897,57 @@ describe('Action Spec Registry', () => {
       localId: 'caller-local-id',
       executorDiagnostic: 'must-not-cross-the-public-boundary',
     }).success).toBe(false);
+  });
+
+  it('admits one canonical reply mode while refusing mixed legacy wait intent', () => {
+    for (const [schema, input] of [
+      [PUBLIC_ACTION_INPUT_SCHEMAS['session.message.send'], { sessionId: 's1', message: 'Which revision?' }],
+      [PLUGIN_ACTION_INPUT_SCHEMAS['session.message.send'], { sessionId: 's1', message: 'Which revision?', idempotencyKey: 'ask-one' }],
+    ] as const) {
+      for (const reply of ['none', 'wait', 'return']) {
+        expect(schema.safeParse({ ...input, reply, timeoutSeconds: 3601 }).success).toBe(true);
+        for (const wait of [false, true]) expect(schema.safeParse({ ...input, reply, wait }).success).toBe(false);
+      }
+      expect(schema.safeParse({ ...input, reply: 'eventually' }).success).toBe(false);
+      expect(schema.safeParse({ ...input, reply: 'wait', timeoutSeconds: 0 }).success).toBe(false);
+      expect(schema.safeParse({ ...input, wait: true }).success).toBe(true);
+    }
+  });
+
+  it('exposes exact committed reply outcomes without admitting a destination or authored turn', () => {
+    const id = ActionIdSchema.parse('session.message.reply');
+    const input = { sessionId: 's1', requestLocalId: 'original-input', reply: { kind: 'pass' } };
+    for (const schema of [getActionSpec(id).inputSchema, PUBLIC_ACTION_INPUT_SCHEMAS[id], PLUGIN_ACTION_INPUT_SCHEMAS[id]]) {
+      expect(schema.parse(input)).toEqual(input);
+      for (const extra of [{ destinationSessionId: 's2' }, { turnId: 'guessed-turn' }, { message: 'uncommitted answer' }]) {
+        expect(schema.safeParse({ ...input, ...extra }).success).toBe(false);
+      }
+      expect(schema.parse({ ...input, reply: { kind: 'answer', message: 'The checked revision is 42.' } }))
+        .toMatchObject({ reply: { kind: 'answer', message: 'The checked revision is 42.' } });
+      expect(schema.safeParse({ ...input, reply: { kind: 'answer', message: '   ' } }).success).toBe(false);
+      expect(schema.safeParse({ ...input, outcome: { kind: 'answer', publicationRef: {
+        kind: 'session', session: { serverId: 'home', sessionId: 's1' }, messageId: 'unrelated' },
+      } }).success).toBe(false);
+    }
+    const messageRef = { kind: 'session', session: { serverId: 'home', sessionId: 's1' }, messageId: 'committed-answer' };
+    const replied = { status: 'replied', localId: 'original-input', outcome: { kind: 'answer', text: '42', messageRef } };
+    expect(PUBLIC_ACTION_OUTPUT_SCHEMAS['session.message.send'].parse(replied)).toEqual(replied);
+    expect(PUBLIC_ACTION_OUTPUT_SCHEMAS['session.message.send'].safeParse({ ...replied,
+      outcome: { kind: 'answer', text: '42', localId: 'not-a-message-ref' } }).success).toBe(false);
+  });
+
+  it('exposes one original-input exchange control with a required observed revision', () => {
+    const id = ActionIdSchema.parse('session.exchange.control');
+    const input = { sessionId: 's1', originInputLocalId: 'original-input', decision: 'continue_more' };
+    for (const schema of [PUBLIC_ACTION_INPUT_SCHEMAS[id], PLUGIN_ACTION_INPUT_SCHEMAS[id]]) {
+      expect(schema.parse(input)).toEqual(input);
+      expect(schema.safeParse({ ...input, observedRevision: 'session-message-row-revision:v1:3' }).success).toBe(false);
+      expect(schema.safeParse({ ...input, additionalTurns: 100 }).success).toBe(false);
+    }
+    expect(getActionSpec(id).inputSchema.parse({ ...input,
+      observedRevision: 'session-message-row-revision:v1:3' })).toMatchObject(input);
+    expect(getActionSpec(id)).toMatchObject({ safety: 'danger', requiredAuthority: 'account_automation',
+      surfaces: { ui: true, voice: true, agent: true, mcp: true, cli: true } });
   });
 
   it('keeps public transcript and wait inputs closed and their outputs exact', () => {
@@ -2276,7 +2425,7 @@ describe('Action Spec Registry', () => {
       },
       bindings: { mcpToolName: 'review_start' },
       outputSchema: z.unknown(),
-      inputSchema: z.object({}).strict(),
+      inputSchema: z.strictObject({}),
     };
 
     expect(() => ActionSpecSchema.parse({
@@ -2316,7 +2465,7 @@ describe('Action Spec Registry', () => {
         plugin: false,
       },
       outputSchema: z.unknown(),
-      inputSchema: z.object({}).strict(),
+      inputSchema: z.strictObject({}),
       toolExposure: {
         agent: 'discoverable_only',
       },
@@ -2366,7 +2515,7 @@ describe('Action Spec Registry', () => {
         api: false,
         plugin: false,
       },
-      inputSchema: z.object({}).strict(),
+      inputSchema: z.strictObject({}),
     });
 
     expect(parsed.success).toBe(false);
@@ -2889,11 +3038,10 @@ describe('Action Spec Registry', () => {
       const publicProjection = !isInternalActionId(id);
       const controlRpcMethod = Object.hasOwn(LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS, id)
         ? LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS[id as keyof typeof LOCAL_SERVICE_CONTROL_ACTION_RPC_METHODS] : undefined;
-      const answeringClient = id === 'localServices.actions.copyUrl' || id === 'localServices.actions.openPreview'
+      const answeringClient = id === 'localServices.actions.copyUrl'
         || id === 'localServices.launcher.openPreview' || id === 'localServices.publicPreview.copyUrl';
       const domainRpc = resolveLocalServiceDomainActionRpcBinding(id as RuntimeActionIdV1);
       const serviceFrontDoor = id === 'localServices.launcher.start' || controlRpcMethod !== undefined;
-      const domainRpc = resolveLocalServiceDomainActionRpcBinding(id as RuntimeActionIdV1);
       expect(spec.surfaces, id).toEqual({
         ...resolveRuntimeActionSurfaces(id as RuntimeActionIdV1),
         // The family now declares actual native-control ingress separately
@@ -2976,6 +3124,27 @@ describe('Action Spec Registry', () => {
     expect(() => getActionSpec('daemon.browser.recording.start' as ActionId)).toThrow();
     expect(() => getActionSpec('daemon.localServices.preview.snapshot' as ActionId)).toThrow();
     expect(() => getActionSpec('daemon.devices.simulator.preview.action' as ActionId)).toThrow();
+  });
+
+  it('places injected diagnostics approval at the mounted client while CDP remains on its Machine', () => {
+    const spec = getActionSpec('browser.diagnostics.eval');
+    const input = spec.inputSchema.parse({ v: 1, browserSessionId: 'browser_session_1', viewId: 'view_1', navigationGeneration: 0,
+      tier: 'injectedPage', evalRequestId: 'eval_1', expression: 'document.title', objectGroupId: 'group_1', diagnosticsInteractionEnabled: true });
+    expect(resolveActionExecutionPlacementForInput(spec, input)).toBe('client');
+    expect(resolveActionExecutionPlacementForInput(spec, { ...input, tier: 'cdp' })).toBe('machine');
+    expect(spec.executionPlacements).toEqual(['client', 'machine']);
+  });
+
+  it('binds each diagnostics picker Action to its admitted engine verb and exact Browser Session', () => {
+    for (const action of ['start', 'cancel'] as const) {
+      const schema = getActionSpec(`browser.diagnostics.elementPicker.${action}`).inputSchema;
+      const input = { v: 1, browserSessionId: 'browser_session_1', viewId: 'view_1', navigationGeneration: 0,
+        tier: 'injectedPage', pickerRequestId: 'picker_1', diagnosticsInteractionEnabled: true, action };
+      expect(schema.safeParse(input).success).toBe(true);
+      expect(schema.safeParse({ ...input, action: action === 'start' ? 'cancel' : 'start' }).success).toBe(false);
+      const { browserSessionId: _session, ...unqualified } = input;
+      expect(schema.safeParse(unqualified).success).toBe(false);
+    }
   });
 
   it('does not declare retired unbacked runtime actions', () => {
@@ -3806,9 +3975,9 @@ describe('Action Spec Registry', () => {
     ] as const;
     for (const [actionId, canonicalSchema] of streamingCases) {
       const projectedSchema = getActionSpec(actionId).outputSchema;
-      expect(projectedSchema, actionId).toBeInstanceOf(z.ZodLazy);
-      if (!(projectedSchema instanceof z.ZodLazy)) throw new Error(`${actionId} must remain cycle-safe`);
-      expect(projectedSchema.unwrap(), actionId).toBe(canonicalSchema);
+      expect(projectedSchema, actionId).toBeInstanceOf(z.ZodMiniLazy);
+      if (!(projectedSchema instanceof z.ZodMiniLazy)) throw new Error(`${actionId} must remain cycle-safe`);
+      expect(projectedSchema._zod.innerType, actionId).toBe(canonicalSchema);
     }
   });
 
@@ -4523,7 +4692,7 @@ describe('Action Spec Registry', () => {
         },
         bindings: { mcpToolName: 'review_start' },
         outputSchema: z.unknown(),
-        inputSchema: z.object({}).strict(),
+        inputSchema: z.strictObject({}),
         inputHints: {
           fields: [
             {
@@ -4556,7 +4725,7 @@ describe('Action Spec Registry', () => {
       },
       bindings: { mcpToolName: 'review_start' },
       outputSchema: z.unknown(),
-      inputSchema: z.object({}).strict(),
+      inputSchema: z.strictObject({}),
       inputHints: {
         fields: [
           {
@@ -4597,7 +4766,7 @@ describe('Action Spec Registry', () => {
       },
       bindings: { mcpToolName: 'session_spawn_new' },
       outputSchema: z.unknown(),
-      inputSchema: z.object({}).passthrough(),
+      inputSchema: z.looseObject({}),
       inputHints: {
         fields: [
           {
@@ -4654,7 +4823,7 @@ describe('Action Spec Registry', () => {
         },
         bindings: { mcpToolName: 'review_start' },
         outputSchema: z.unknown(),
-        inputSchema: z.object({}).strict(),
+        inputSchema: z.strictObject({}),
         inputHints: {
           fields: [
             {
@@ -4686,7 +4855,7 @@ describe('Action Spec Registry', () => {
         },
         bindings: { mcpToolName: 'review_start' },
         outputSchema: z.unknown(),
-        inputSchema: z.object({}).strict(),
+        inputSchema: z.strictObject({}),
         inputHints: {
           fields: [
             {
@@ -4720,7 +4889,7 @@ describe('Action Spec Registry', () => {
         },
         bindings: { mcpToolName: 'review_start' },
         outputSchema: z.unknown(),
-        inputSchema: z.object({}).strict(),
+        inputSchema: z.strictObject({}),
         inputHints: {
           fields: [
             {
@@ -4804,12 +4973,12 @@ describe('Action Spec Registry', () => {
       ['bypassPermissions', 'yolo'],
       ['yolo', 'yolo'],
     ] as const) {
-      const parsed = (spec.inputSchema as z.ZodTypeAny).safeParse({ ...baseInput, permissionMode });
+      const parsed = (spec.inputSchema as z.ZodMiniType).safeParse({ ...baseInput, permissionMode });
       expect(parsed.success, permissionMode).toBe(true);
       if (parsed.success) expect(parsed.data.permissionMode).toBe(expected);
     }
 
-    const invalid = (spec.inputSchema as z.ZodTypeAny).safeParse({
+    const invalid = (spec.inputSchema as z.ZodMiniType).safeParse({
       ...baseInput,
       permissionMode: 'workspace_read',
     });
@@ -4863,18 +5032,18 @@ describe('Action Spec Registry', () => {
     expect(spec.inputSchema.safeParse({ sessionId: 's1', permissionMode: 'default', applyTiming: 'eventually' }).success).toBe(false);
 
     expect(spec.description).toContain('read_only/default/auto/yolo');
-    expect((spec.inputSchema as z.ZodTypeAny).parse({
+    expect((spec.inputSchema as z.ZodMiniType).parse({
       sessionId: 'session-1',
       permissionMode: 'auto',
     })).toEqual({
       sessionId: 'session-1',
       permissionMode: 'safe-yolo',
     });
-    expect((spec.inputSchema as z.ZodTypeAny).parse({
+    expect((spec.inputSchema as z.ZodMiniType).parse({
       sessionId: 'session-1',
       permissionMode: 'workspace_write',
     }).permissionMode).toBe('safe-yolo');
-    expect((spec.inputSchema as z.ZodTypeAny).safeParse({
+    expect((spec.inputSchema as z.ZodMiniType).safeParse({
       sessionId: 'session-1',
       permissionMode: 'not-a-mode',
     }).success).toBe(false);

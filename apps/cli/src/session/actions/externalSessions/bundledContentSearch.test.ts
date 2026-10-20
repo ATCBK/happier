@@ -1,10 +1,10 @@
 // Initialize the real Workflow schema before the SDK during its ongoing Mini migration.
 import '@happier-dev/protocol/workflows/workflowV1';
-import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { ExternalSessionsCandidatesListResponseSchema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
+import { ExternalSessionCandidateMatchV1Schema, ExternalSessionsCandidatesListResponseSchema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
 
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { resolveBuiltInContributions } from '@/plugins/projection/registry/resolveBuiltInContributions';
@@ -13,6 +13,7 @@ import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 import { registerMachineExternalSessionsRpcHandlers } from '@/api/machine/rpcHandlers.externalSessions';
 
 const fixture = vi.hoisted(() => ({ activeServerDir: '', slowPath: '', nowMs: 0,
+    duringOpen: null as ((path: unknown) => Promise<void>) | null,
     cancelDuringAnnotation: null as (() => void) | null, annotationSignalAborted: false }));
 vi.mock('@/configuration', async (importOriginal) => {
     const actual = await importOriginal<typeof import('@/configuration')>();
@@ -23,6 +24,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     const actual = await importOriginal<typeof import('node:fs/promises')>();
     return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
         const handle = await actual.open(...args);
+        await fixture.duringOpen?.(args[0]);
         if (args[0] === fixture.slowPath) fixture.nowMs += 3_000;
         return handle;
     } };
@@ -105,37 +107,68 @@ describe('bundled conversation content search', () => {
                 { remoteSessionId: 'session', match: { snippet: 'bundled body-only needle', messageIndex: 1 } },
             ] });
 
+            // A damaged native row must not turn later readable text into a
+            // successful zero-hit page at the shared directory prefilter.
+            const nulPath = join(configDir, 'projects', 'zz-recent', 'nul.jsonl');
+            await writeFile(nulPath, '\0\n' + JSON.stringify({ type: 'assistant', uuid: 'nul-body', parentUuid: null,
+                message: { role: 'assistant', content: [{ type: 'text', text: 'test-r101 traced all 23' }] } }) + '\n');
+            const rpc = new RpcHandlerManager({ scopePrefix: 'fixture-machine', encryptionMode: 'plain' });
+            registration = registerMachineExternalSessionsRpcHandlers({ rpcHandlerManager: rpc });
+            const nulResult = ExternalSessionsCandidatesListResponseSchema.parse(await rpc.handleRequest({
+                method: 'fixture-machine:daemon.externalSessions.candidates.list', timeoutMs: null,
+                params: { machineId: 'fixture-machine', agentId: 'claude', source: { kind: 'claudeConfig' },
+                    searchTarget: 'content', searchTerm: 'test-r101 traced all 23', limit: 50 },
+            }));
+            expect(nulResult).toMatchObject({ ok: true, contentCoverage: 'partial', candidates: [{ remoteSessionId: 'nul',
+                // The canonical projection retains the unsupported damaged row.
+                match: { snippet: 'test-r101 traced all 23', messageIndex: 1 } }], nextCursor: null });
+
             // Native layout: a completed hit precedes a large escaped JSONL file.
             // The receiving RPC budget must reach Claude through real registration;
             // cancellation alone loses that hit and its Search-more continuation.
             await mkdir(join(configDir, 'projects', 'a-slow'), { recursive: true });
             fixture.slowPath = join(configDir, 'projects', 'a-slow', 'large.jsonl');
-            await writeFile(fixture.slowPath, Array.from({ length: 1500 }, (_, index) => JSON.stringify({
-                type: 'user', uuid: `large-${index}`, parentUuid: index ? `large-${index - 1}` : null,
-                message: { role: 'user', content: index === 1499 ? 'bundled body-only needle' : 'ordinary \\text '.repeat(40) },
-            })).join('\n') + '\n');
-            await utimes(fixture.slowPath, new Date('2026-01-01'), new Date('2026-01-01'));
-            const rpc = new RpcHandlerManager({ scopePrefix: 'fixture-machine', encryptionMode: 'plain' });
-            registration = registerMachineExternalSessionsRpcHandlers({ rpcHandlerManager: rpc });
             fixture.nowMs = Date.now();
             const clock = vi.spyOn(Date, 'now').mockImplementation(() => fixture.nowMs);
             // A dropped receiving deadline must fail on response time even
             // if another native budget still yields a partial page.
             const receivingBudgetMs = 10_000;
-            const deadlineAtMs = fixture.nowMs + receivingBudgetMs;
             const input = {
                 machineId: 'fixture-machine', agentId: 'claude', source: { kind: 'claudeConfig' },
                 searchTarget: 'content', searchTerm: 'bundled body-only needle',
                 budgetMs: receivingBudgetMs,
             };
+            await writeFile(fixture.slowPath, Array.from({ length: 1500 }, (_, index) => JSON.stringify({
+                type: 'user', uuid: `large-${index}`, parentUuid: index ? `large-${index - 1}` : null,
+                message: { role: 'user', content: index === 1499 ? 'bundled body-only needle' : 'ordinary \\text '.repeat(40) },
+            })).join('\n') + '\n');
+            await utimes(fixture.slowPath, new Date('2026-01-01'), new Date('2026-01-01'));
+            const olderPath = join(configDir, 'projects', 'a-slow', 'older.jsonl');
+            await writeFile(olderPath, JSON.stringify({ type: 'user', uuid: 'older', parentUuid: null,
+                message: { role: 'user', content: 'bundled body-only needle' } }) + '\n');
+            await utimes(olderPath, new Date('2025-01-01'), new Date('2025-01-01'));
+            const firstDeadlineAtMs = fixture.nowMs + receivingBudgetMs;
             const first = ExternalSessionsCandidatesListResponseSchema.parse(await rpc.handleRequest({
                 method: 'fixture-machine:daemon.externalSessions.candidates.list', params: input, timeoutMs: null,
             }));
             expect(first).toMatchObject({ ok: true, contentCoverage: 'partial', candidates: [
                 { remoteSessionId: 'session', match: { messageIndex: 1 } },
             ], nextCursor: expect.any(String) });
-            expect(fixture.nowMs).toBeLessThan(deadlineAtMs);
+            expect(fixture.nowMs).toBeLessThan(firstDeadlineAtMs);
             if (!first.ok) throw new Error('Expected a partial search page');
+            // Visited/unrelated appends cannot reset the main frontier. An
+            // unvisited file crossing it is reached once in the final T1 pass.
+            await writeFile(join(configDir, 'projects', 'a-slow', 'newer.jsonl'), '{}\n');
+            await utimes(join(configDir, 'projects', 'a-slow', 'newer.jsonl'), new Date('2026-11-01'), new Date('2026-11-01'));
+            await appendFile(join(configDir, 'projects', 'zz-recent', 'session.jsonl'), JSON.stringify({
+                type: 'user', uuid: 'follow-up', parentUuid: 'body', message: { role: 'user', content: 'bundled body-only needle' },
+            }) + '\n');
+            await appendFile(join(configDir, 'projects', 'a-miss', 'unrelated.jsonl'), JSON.stringify({
+                type: 'user', uuid: 'unrelated-next', parentUuid: 'unrelated', message: { role: 'user', content: 'ordinary follow-up' },
+            }) + '\n');
+            fixture.nowMs += 1000;
+            await utimes(olderPath, new Date(fixture.nowMs), new Date(fixture.nowMs));
+            await utimes(join(configDir, 'projects', 'zz-recent', 'session.jsonl'), new Date(fixture.nowMs), new Date(fixture.nowMs));
             let cursor = first.nextCursor;
             const hits = [...first.candidates];
             for (let page = 0; cursor && page < 30; page += 1) {
@@ -144,6 +177,7 @@ describe('bundled conversation content search', () => {
                     params: { ...input, cursor }, timeoutMs: null,
                 }));
                 if (!next.ok) throw new Error(`Candidate page failed: ${next.code}`);
+                if (page === 0) expect(next.candidates.some(candidate => candidate.remoteSessionId === 'session')).toBe(false);
                 hits.push(...next.candidates);
                 if (next.nextCursor) {
                     expect(next.contentCoverage).toBe('partial');
@@ -155,22 +189,13 @@ describe('bundled conversation content search', () => {
             expect(hits).toMatchObject([
                 { remoteSessionId: 'session', match: { messageIndex: 1 } },
                 { remoteSessionId: 'large', match: { messageIndex: 1499 } },
+                { remoteSessionId: 'older', match: { messageIndex: 0 } },
+                { remoteSessionId: 'session', match: { messageIndex: 1 } },
             ]);
-            const recency = ExternalSessionsCandidatesListResponseSchema.parse(await rpc.handleRequest({
-                method: 'fixture-machine:daemon.externalSessions.candidates.list', params: { ...input, limit: 1 }, timeoutMs: null,
-            }));
-            if (!recency.ok) throw new Error('Expected a recency page');
-            expect(recency.candidates.map(row => row.remoteSessionId)).toEqual(['session']);
-            expect(recency.nextCursor).toEqual(expect.any(String));
-            await utimes(fixture.slowPath, new Date('2026-11-01'), new Date('2026-11-01'));
-            const reset = ExternalSessionsCandidatesListResponseSchema.parse(await rpc.handleRequest({
-                method: 'fixture-machine:daemon.externalSessions.candidates.list',
-                params: { ...input, limit: 1, cursor: recency.nextCursor }, timeoutMs: null,
-            }));
-            expect(reset).toMatchObject({ ok: true, candidates: [], nextCursor: null, cursorReset: true });
             // Annotation is optional enrichment of an already decoded native
             // page. A transport cancellation here must not replace found hits.
             await utimes(fixture.slowPath, new Date('2026-01-01'), new Date('2026-01-01'));
+            await utimes(olderPath, new Date('2025-01-01'), new Date('2025-01-01'));
             const beforeAnnotationCancellation = ExternalSessionsCandidatesListResponseSchema.parse(await rpc.handleRequest({
                 method: 'fixture-machine:daemon.externalSessions.candidates.list', params: input, timeoutMs: null,
             }));
@@ -184,11 +209,60 @@ describe('bundled conversation content search', () => {
             expect(fixture.annotationSignalAborted).toBe(true);
             expect(annotationCancelled).toMatchObject({ ok: true,
                 candidates: beforeAnnotationCancellation.candidates,
-                nextCursor: beforeAnnotationCancellation.nextCursor,
+                nextCursor: expect.any(String),
                 contentCoverage: 'partial', annotationsIncomplete: true });
             fixture.cancelDuringAnnotation = null;
             clock.mockRestore();
+            fixture.slowPath = '';
+            // Census-equivalent inventory only: no private text or 3.32 GB of
+            // native bodies is needed to reproduce the cursor admission defect.
+            const scaleConfigDir = join(root, 'scale');
+            const projects = Array.from({ length: 84 }, (_, index) => `synthetic-project-${index}-${'p'.repeat(32)}`);
+            await Promise.all(projects.map(project => mkdir(join(scaleConfigDir, 'projects', project), { recursive: true })));
+            await Promise.all(Array.from({ length: 661 }, (_, index) => writeFile(
+                join(scaleConfigDir, 'projects', projects[index % projects.length]!, `native-session-${index}-${'s'.repeat(24)}.jsonl`),
+                JSON.stringify({ type: 'user', uuid: 'scale-user', parentUuid: null,
+                    message: { role: 'user', content: 'synthetic scale needle' } }) + '\n',
+            )));
+            process.env.CLAUDE_CONFIG_DIR = scaleConfigDir;
+            const opened = new Map<string, number>();
+            // Shape-equivalent 84-project/661-file live corpus. Every selected
+            // file appends bookkeeping between its snapshot anchor and decoder
+            // read, including fresh and between-file continuation requests.
+            fixture.duringOpen = async path => {
+                if (typeof path !== 'string' || !path.startsWith(`${scaleConfigDir}/`)) return;
+                const count = (opened.get(path) ?? 0) + 1;
+                opened.set(path, count);
+                if (count === 2) await appendFile(path, JSON.stringify({ type: 'cost-state', totalCostUSD: 0 }) + '\n');
+            };
+            const scaleHits = new Set<string>();
+            let scaleCursor: string | null = null;
+            for (let page = 0; page < 3; page += 1) {
+                const result = ExternalSessionsCandidatesListResponseSchema.parse(await rpc.handleRequest({
+                    method: 'fixture-machine:daemon.externalSessions.candidates.list', timeoutMs: null,
+                    params: { machineId: 'fixture-machine', agentId: 'claude', source: { kind: 'claudeConfig' },
+                        searchTarget: 'content', searchTerm: 'synthetic scale needle', limit: 1,
+                        ...(scaleCursor ? { cursor: scaleCursor } : {}) },
+                }));
+                if (!result.ok) throw new Error(`Scale page failed: ${result.code}`);
+                for (const candidate of result.candidates) {
+                    expect(candidate.match?.snippet).toContain('synthetic scale needle');
+                    expect(scaleHits.has(candidate.remoteSessionId)).toBe(false);
+                    scaleHits.add(candidate.remoteSessionId);
+                }
+                expect(result.candidates).toHaveLength(1);
+                expect(result.nextCursor).toEqual(expect.any(String));
+                expect(result.nextCursor!.length).toBeLessThanOrEqual(4096);
+                expect(result.nextCursor).not.toBe(scaleCursor);
+                // Candidate metadata is additive-open; its match envelope is strict.
+                expect(ExternalSessionCandidateMatchV1Schema.safeParse({ ...result.candidates[0]!.match, unexpected: true }).success).toBe(false);
+                expect(ExternalSessionsCandidatesListResponseSchema.safeParse({ ...result, nextCursor: {} }).success).toBe(false);
+                scaleCursor = result.nextCursor ?? null;
+            }
+            expect(scaleHits.size).toBe(3);
+            expect([...opened.values()].filter(count => count >= 2).length).toBeGreaterThanOrEqual(3);
         } finally {
+            fixture.duringOpen = null;
             fixture.slowPath = '';
             fixture.cancelDuringAnnotation = null;
             fixture.annotationSignalAborted = false;

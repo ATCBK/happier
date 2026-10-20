@@ -85,6 +85,8 @@ export type PluginInvocationCaller =
         sourceCustody: PluginSourceCustodyV1;
         /** Current host-stamped materialization when the caller has Account-release custody. */
         materialization?: PluginMachineMaterializationRefV1;
+        /** Exact source or materialized Machine origin, resolved and stamped by the host. */
+        executionOrigin?: PluginMachineExecutionOriginV1;
         originSurface?: PluginInvocationOriginSurface;
     }>
     | Readonly<{

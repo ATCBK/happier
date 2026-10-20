@@ -1,35 +1,14 @@
+import { HAPPIER_REVIEW_SEVERITY_RANK } from '@happier-dev/plugin-ui/presentation';
 import type { ReviewFinding } from '@happier-dev/protocol';
 
 import { t } from '@/text';
 
-/** Most severe first; the order the wire gives is kept within a severity. */
-export const REVIEW_SEVERITY_RANK: Readonly<Record<ReviewFinding['severity'], number>> = {
-    blocker: 0,
-    high: 1,
-    medium: 2,
-    low: 3,
-    nit: 4,
-};
+/** Most severe first; the order the wire gives is kept within a severity (the shared severity owner's rank). */
+export const REVIEW_SEVERITY_RANK: Readonly<Record<ReviewFinding['severity'], number>> = HAPPIER_REVIEW_SEVERITY_RANK;
 
 /** Blocker and High are the findings that speak (colour, the "1 high" count); the rest stay quiet. */
 export function isHighReviewSeverity(severity: ReviewFinding['severity']): boolean {
     return severity === 'blocker' || severity === 'high';
-}
-
-/**
- * The colour role of a severity where a finding sits beside code (Walkthrough lab WT5): severity colour
- * appears only on findings and their chips, never on explanation, comments or reviewed marks.
- */
-export type ReviewSeverityTone = 'danger' | 'warning' | 'accent' | 'quiet';
-
-export function reviewSeverityTone(severity: ReviewFinding['severity']): ReviewSeverityTone {
-    switch (severity) {
-        case 'blocker':
-        case 'high': return 'danger';
-        case 'medium': return 'warning';
-        case 'low': return 'accent';
-        case 'nit': return 'quiet';
-    }
 }
 
 export function reviewSeverityLabel(severity: ReviewFinding['severity']): string {
@@ -42,7 +21,7 @@ export function reviewSeverityLabel(severity: ReviewFinding['severity']): string
     }
 }
 
-export function formatReviewFindingLocation(finding: ReviewFinding): string | null {
+export function formatReviewFindingLocation(finding: Pick<ReviewFinding, 'filePath' | 'startLine' | 'endLine'>): string | null {
     if (!finding.filePath) return null;
     if (typeof finding.startLine === 'number' && typeof finding.endLine === 'number' && finding.endLine !== finding.startLine) {
         return `${finding.filePath}:${finding.startLine}-${finding.endLine}`;

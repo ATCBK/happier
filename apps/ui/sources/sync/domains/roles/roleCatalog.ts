@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { BUILT_IN_ROLE_IDS_V1, BUILT_IN_ROLES_V1, type BuiltInRoleIdV1 } from '@happier-dev/protocol/prompts/roles/builtInRolesV1';
 import { t } from '@/text';
 import { RoleActionEntryV1Schema } from '@happier-dev/protocol/prompts/roles/roleActionsV1';

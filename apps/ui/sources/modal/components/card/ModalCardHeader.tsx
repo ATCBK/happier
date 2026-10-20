@@ -1,6 +1,7 @@
 import * as React from 'react';
-import { View, type StyleProp, type ViewStyle } from 'react-native';
+import { type StyleProp, type ViewStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { HappierModalHeader, type HappierModalHeaderTextRender, type HappierStyleProp } from '@happier-dev/plugin-ui/presentation';
 
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -14,6 +15,8 @@ type ModalCardHeaderProps = Readonly<{
     subtitle?: React.ReactNode;
     actions?: React.ReactNode;
     onClose?: () => void;
+    /** `wide`: the band stands on the content's 24 edge; a phone keeps the page gutter. */
+    inset?: 'wide';
     testID?: string;
     titleTestID?: string;
     subtitleTestID?: string;
@@ -21,39 +24,7 @@ type ModalCardHeaderProps = Readonly<{
     style?: StyleProp<ViewStyle>;
 }>;
 
-/**
- * The task-modal title band (craft pass S3): a compact row — title, optional actions, close — with no
- * divider, so the content starts right under it. It is the one card header; search and the command
- * palette pass `header: 'none'` to the card chrome and render none.
- */
-const TITLE_BAND_MIN_HEIGHT = 52;
-
 const stylesheet = StyleSheet.create((theme) => ({
-    header: {
-        minHeight: TITLE_BAND_MIN_HEIGHT,
-        paddingHorizontal: theme.space.s16,
-        paddingVertical: theme.space.s10,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: theme.space.s12,
-    },
-    headerWithSubtitle: {
-        alignItems: 'flex-start',
-        paddingTop: 14,
-    },
-    headerLeadingWrap: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        flex: 1,
-        minWidth: 0,
-        gap: theme.space.s10,
-    },
-    titleWrap: {
-        flex: 1,
-        minWidth: 0,
-        gap: theme.space.s2,
-    },
     title: {
         ...Typography.variant('heading'),
         color: theme.colors.text.primary,
@@ -62,91 +33,38 @@ const stylesheet = StyleSheet.create((theme) => ({
         ...Typography.variant('body'),
         color: theme.colors.text.secondary,
     },
-    actionsWrap: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: theme.space.s10,
-    },
-    stacked: {
-        paddingHorizontal: theme.space.s16,
-        paddingTop: 14,
-        paddingBottom: theme.space.s10,
-        gap: theme.space.s8,
-    },
-    stackedTop: {
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        gap: theme.space.s12,
-    },
-    stackedActions: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        alignItems: 'center',
-        gap: theme.space.s10,
-    },
 }));
 
+/**
+ * Happier core's binding of the shared task-modal title band (`HappierModalHeader`): the app's text,
+ * density-scaled spacing, close control and phone decision. Layout and the phone rule live in plugin-ui.
+ * Search and the command palette pass `header: 'none'` to the card chrome and render none.
+ */
 export function ModalCardHeader(props: ModalCardHeaderProps) {
-    useUnistyles();
+    const { theme } = useUnistyles();
     const styles = stylesheet;
-    const hasVisibleTitle = props.title != null || props.subtitle != null;
-    const showClose = typeof props.onClose === 'function';
-    const stackOnPhone = useDeviceType() === 'phone';
-
-    if (!hasVisibleTitle && !props.leading && !props.actions && !showClose) {
-        return null;
-    }
-
-    // A phone card is too narrow to share one row between the title and wide actions (a machine chip
-    // squeezed the title into a two-word column): the title keeps the row with the close button, and
-    // the subtitle and the actions take the full width beneath it.
-    if (stackOnPhone && props.actions != null && hasVisibleTitle) {
-        return (
-            <View testID={props.testID ?? 'modal-card-header'} style={[styles.stacked, props.style]}>
-                <View style={styles.stackedTop}>
-                    <View style={styles.headerLeadingWrap}>
-                        {props.leading}
-                        <View style={styles.titleWrap}>
-                            {props.title != null ? (
-                                <Text testID={props.titleTestID} style={styles.title}>{props.title}</Text>
-                            ) : null}
-                        </View>
-                    </View>
-                    {showClose ? <ModalCloseButton testID={props.closeButtonTestID} onPress={props.onClose} /> : null}
-                </View>
-                {props.subtitle != null ? (
-                    <Text testID={props.subtitleTestID} style={styles.subtitle}>{props.subtitle}</Text>
-                ) : null}
-                <View style={styles.stackedActions} testID="modal-card-header-actions-row">{props.actions}</View>
-            </View>
-        );
-    }
+    const compact = useDeviceType() === 'phone';
+    const renderText = React.useCallback<HappierModalHeaderTextRender>((input) => (
+        <Text testID={input.testID} style={input.role === 'title' ? styles.title : styles.subtitle}>{input.children}</Text>
+    ), [styles]);
 
     return (
-        <View
-            testID={props.testID ?? 'modal-card-header'}
-            style={[styles.header, props.subtitle != null ? styles.headerWithSubtitle : null, props.style]}
-        >
-            <View style={styles.headerLeadingWrap}>
-                {props.leading}
-                {hasVisibleTitle ? (
-                    <View style={styles.titleWrap}>
-                        {props.title != null ? (
-                            <Text testID={props.titleTestID} style={styles.title}>{props.title}</Text>
-                        ) : null}
-                        {props.subtitle != null ? (
-                            <Text testID={props.subtitleTestID} style={styles.subtitle}>{props.subtitle}</Text>
-                        ) : null}
-                    </View>
-                ) : (
-                    <View style={styles.titleWrap} />
-                )}
-            </View>
-
-            <View style={styles.actionsWrap}>
-                {props.actions}
-                {showClose ? <ModalCloseButton testID={props.closeButtonTestID} onPress={props.onClose} /> : null}
-            </View>
-        </View>
+        <HappierModalHeader
+            leading={props.leading}
+            title={props.title}
+            subtitle={props.subtitle}
+            actions={props.actions}
+            close={typeof props.onClose === 'function'
+                ? <ModalCloseButton testID={props.closeButtonTestID} onPress={props.onClose} />
+                : null}
+            compact={compact}
+            space={theme.space}
+            renderText={renderText}
+            testID={props.testID}
+            titleTestID={props.titleTestID}
+            subtitleTestID={props.subtitleTestID}
+            // The app's own header style overrides (a card's `headerStyle`) are React Native view styles.
+            style={[props.inset === 'wide' && !compact ? { paddingHorizontal: theme.space.s24 } : null, props.style] as HappierStyleProp}
+        />
     );
 }

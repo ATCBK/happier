@@ -27,6 +27,28 @@ inventory](https://github.com/happier-dev/happier/blob/v0.3/packages/plugin-ui/A
 `node_modules/@happier-dev/plugin-ui/API.md` in the generated project is the
 exact installed inventory. Do not guess exports from examples or app source.
 
+## Coach evaluator values (0.3 development)
+
+An evaluator declares an ordinary dynamic Resource and Action, then registers
+them in `activate(api)` through `api.resources.registerDynamicResource` and
+`api.actions.register`. The maintained
+[public-authoring example](https://github.com/happier-dev/happier/blob/v0.3/packages/plugin-sdk/examples/public-authoring/usageCoach.ts)
+returns `UsageCoachFinding` from `@happier-dev/plugin-sdk/actions`. There is no
+separate public detector registration family; these registrations do not add a
+detector to the built-in Coach. Use the type's closed detector and summary-code
+vocabulary.
+
+Each finding needs authorized evidence references and observation times, its
+query and evidence keys, a half-open period, coverage and currentness, plus a
+basis with dated citations, limitations and advice. `current` requires a
+witnessed `asOfMs`; stale or unknown evidence cannot offer Apply. A remedy and
+its Action must occur together and identify the same current evidence. Leave
+both null for an informational observation, and do not label repeated reads as
+measured savings. Reads and handlers honor cancellation; changing Resource
+producers invalidate through `observe` and dispose subscriptions on retirement.
+This is a development-source contract; check the installed SDK's capability
+matrix before targeting a published host.
+
 ## Find and Search (0.3 development)
 
 A trusted same-realm surface can join the host's Find shortcuts and `ui.find`
@@ -113,10 +135,12 @@ picture cannot fit. Your domain still owns the mode and settled rectangle.
 In the native app, the host supplies finger drag through its optional
 `companionNativeFrame` presentation binding. Only a floating frame with
 `moveInput="surface"` moves by its body; use `moveInput="chrome"` while the
-content owns input. Controls keep their presses, and keyboard/menu placement
-remains available. A custom same-realm host can supply `nativeBinding`, a React
+content owns input. In either mode, chrome backgrounds move the frame and the
+corner grip resizes the picture while preserving its aspect ratio. Registered
+no-drag controls keep their presses, and keyboard/menu placement remains
+available. A custom same-realm host can supply `nativeBinding`, a React
 component accepting `HappierFloatingFrameNativeBindingProps` from
-`/components`. Keep native gesture/animation dependencies in that host, not
+`/components`; render its supplied `grip` with the host's resize binding. Keep native gesture/animation dependencies in that host, not
 the plugin bundle. Without a native binding, placement is keyboard/menu only.
 These are 0.3 development-source interfaces, not a shipped native-device QA
 claim; Happier phone viewers continue using their sticky slot.
@@ -269,6 +293,10 @@ Each point has a stable `id`, `x` label/coordinate and `y` number or `null`, wit
 optional `label`, `annotation`, `color` and `opacity`. Missing measurements stay
 unknown, rather than becoming zero.
 
+Series without an explicit `color` use the ordered ramp from
+`theme.colors.dataAccent` against the theme surface. Older snapshots omit
+`dataAccent`; the shared chart then uses `theme.colors.accent`.
+
 Use `width`/`viewportHeight` for explicit plot room. `normalized` changes share
 geometry while preserving exact numbers; `fitLine`, `minimumMaximum` and
 `domain: { min, max }` control the value scale. `strokeWidth`, `plotInset`,
@@ -277,6 +305,15 @@ geometry and formatting. `showAxis`, `showLegend`, `showGrid`, `showScaleValues`
 `showReadout`, `showPointLabels`, `showPeakValue` and `showAnnotations` choose
 visible context. Provide localized `summary`, `unknownLabel`, `valuesLabel`
 and `valuesCollapseLabel` where needed; `testID` identifies the chart.
+Each `axisTicks` entry can be a `{ label, bucket }` pair, with a zero-based
+bucket index, to put the label at that observation. String ticks spread in order
+over the buckets, from the first observation to the last.
+
+Full charts offer a Details control for exact values. Pass `valuesExpanded`
+and `onValuesExpandedChange(expanded)` to control that disclosure from your
+own UI or agent command. A press requests the next value through the callback;
+the chart changes only when you supply the updated prop. Omit `valuesExpanded`
+to keep the chart's own initially collapsed disclosure state.
 
 `bands` uses `StackedSeriesBand` (`id`, `lowerSeriesId`, `upperSeriesId`, optional
 `color`/`opacity`) to shade caller-produced line bounds. `reference` is a
@@ -311,6 +348,16 @@ polling timer. Optional `barMotion` supplies `identity` (`bucket`/`slot`),
     { id: 'first', x: '09:00', y: 20 }, { id: 'second', x: '09:01', y: 40 },
   ] }]} />
 ```
+
+### IntervalTimeline
+
+Import `IntervalTimeline` from `@happier-dev/plugin-ui/components` or the
+package root. With `layout="lanes"`, native interaction is one adjustable scrub
+target per track, at 44 pt on iOS or 48 dp on Android. Press or drag to select a
+run; accessibility increment/decrement steps through the track. Web uses dense
+per-run pointer controls. Details retains the exact rows when the plot cannot
+fit. The renderer displays caller-supplied coordinates and labels; it does not
+infer durations from point events.
 
 ### CapacityBar
 
@@ -460,6 +507,7 @@ export const mainSurface = defineUiSurfaceDefinition({
   id: 'main',
   placement: 'appPage',
   title: 'My plugin',
+  description: { key: 'main.purpose', fallback: 'Review incoming work.' },
   renderer: {
     kind: 'reactNative',
     requiredHostMethods: ['context', 'executeAction'],
@@ -622,6 +670,16 @@ component; the shared list owner retains row semantics, accessibility,
 virtualization, and host presentation behavior. Do not replace it with a raw
 list implementation just to reproduce a curated List surface.
 
+In 0.3 development source, `leadHappierListRows` and
+`HappierListOverflowFooter` are public `/components` and root exports for a
+bounded list. Call `leadHappierListRows(rows, expanded)` and render its returned
+`rows` in their existing order; short lists stay whole. Pass its `hidden` count
+to the footer with `theme`, a list `label`, the held `total`, `expanded` and
+`onToggle`. It offers Show all / Show less; `complete={false}` uses Show
+available. Its optional `unlisted` sentence explains missing source data once
+beside the toggle. Supply localized `labels` where needed. Expansion is
+caller-owned and does not fetch missing pages.
+
 For a virtualized list, use its `search` and `selection` props: `search` names
 the visible filter control and receives the item's local filter predicate;
 `selection` reports one stable row key. Both operate only on the `items` array
@@ -631,8 +689,9 @@ query instead.
 
 In the **0.3 development / Developer Preview** source contract, an optional
 `virtualizer` prop on `List` and `Collection` accepts the public
-`CollectionVirtualizer` interface from the root, components or presentation
-entry point. Most authors should omit it and keep the default native lists.
+`CollectionVirtualizer` interface from the root or `/components`
+entrypoint. The `presentation` entrypoint is host-internal and rejected by the
+artifact build. Most authors should omit it and keep the default native lists.
 A custom host adapter renders the supplied flat or sectioned window and its
 semantic cells, reports actual scrolling/content size, and publishes a
 positioning handle after mount (withdrawing it on unmount). It must preserve
@@ -794,6 +853,92 @@ a custom animated composition may supply a public `HappierDisclosureMotionDriver
 while honoring `reducedMotion`. Its header receives the toggle and expanded
 accessibility state together. Keep `defineUiSurface` as the provider boundary.
 
+### Interactive row controls and spanning fields (0.3 development)
+
+These additions describe **unreleased 0.3 development source**, not shipped
+package availability. Check your installed API inventory before using them.
+
+Put an interactive control beside a row's primary press target with
+`anatomy.titleControls`: it follows `titleSuffix` in the table and ends the
+byline in the list. Each control has its own press and focus target; activating
+it does not open the row. Keep passive facts in `titleSuffix` or `byline`.
+Never put a button inside the row's button.
+
+For a row that cannot report its figures, `CollectionField.spanRest` lets one
+field explain why across its own and the following field columns, suppressing
+those later cells for that row. Other rows keep their figures. It applies only
+to the table; keep the list's explanation in its own anatomy too:
+
+```tsx
+import { Button, type CollectionAnatomy } from '@happier-dev/plugin-ui';
+
+type Connection = {
+  id: string; title: string; online: boolean; cpu: string; memory: string;
+};
+
+function connectionAnatomy(inspect: (id: string) => void): CollectionAnatomy<Connection> {
+  return {
+    glyph: () => null,
+    title: (item) => item.title,
+    accessibilityLabel: (item) => item.title,
+    columnTitles: { title: 'Connection' },
+    byline: (item) => item.online ? item.cpu : 'Offline — figures unavailable',
+    titleControls: (item) => (
+      <Button title="Inspect connection" size="small" onPress={() => inspect(item.id)} />
+    ),
+    fields: [
+      {
+        key: 'cpu', title: 'CPU', minWidth: 120, priority: 1,
+        render: (item) => item.online ? item.cpu : 'Offline — figures unavailable',
+        spanRest: (item) => !item.online,
+      },
+      { key: 'memory', title: 'Memory', minWidth: 120, priority: 1, render: (item) => item.memory },
+    ],
+  };
+}
+```
+
+A custom `List.Item` whose children contain controls can use
+`contentBesidePressable` for the same sibling structure. Its content sits above
+the row target; a custom control wrapper must opt into pointer events with
+`pointerEvents="auto"`, while passive content lets presses through. Collection
+handles that layering for `titleControls`. For a trailing control, use the
+existing `accessory` and `accessoryOutsidePressable` instead.
+
+For example, with your own `openServer` and `openPortMenu` handlers:
+
+```tsx
+import { View } from 'react-native';
+import { Button, List } from '@happier-dev/plugin-ui';
+
+<List.Item title="Development server" onPress={openServer} contentBesidePressable>
+  <View pointerEvents="auto">
+    <Button title="Port 5173" size="small" onPress={openPortMenu} />
+  </View>
+</List.Item>;
+```
+
+`detail="none"` suppresses the open/back/peek keyboard hint line; it does not
+remove the window's coverage or continuation information. Do not add a manual
+hint line for a collection that has no built-in detail.
+
+### Phone headers and page sheets (0.3 development)
+
+In the same unreleased contract, pass the page's `title` to Collection and place
+the `title` slot from `header` beside its other controls. That slot is `null`
+when the host navigation already shows the title, as on a phone; drawing the
+title yourself would repeat it. With `detail="auto"`, a pushed phone detail
+replaces the collection toolbar and uses the shared back control and
+`detailHeader`. Its body should honor `headerHosted`, as in the example above.
+
+For a page-scrolling `presentation="list"` (`scroll="page"`) in Happier's page
+theme, an ungrouped list with an active field in `sort` keeps a compact header
+on the same sheet as its rows and summary totals: `columnTitles.title` on the
+left and the active field's sort control on the right. Grouped or unsorted
+lists use their section anatomy without that header. Inside an existing page
+section's sheet, Collection reuses the enclosing sheet rather than nesting
+another one. Let the shared owner compose this phone layout.
+
 In the 0.3 development contract, pass `Collection.sort` with the active `key`,
 `direction` and `onChange(key)` to make `sortable` field titles interactive.
 Optional `orders: [{ key, label }]` adds a named-order menu to the table's title
@@ -861,7 +1006,9 @@ instead, exactly like a `Button`'s leading icon: use it for a primary action tha
 opens a choice ("+ Link a PR or issue"). The primary trigger is the same button as
 `Button variant="primary"`. `triggerDisclosure` adds a caret after a plain `text`
 trigger, for a title that opens a menu (a table's column header); labelled
-appearances are buttons and ignore it.
+appearances are buttons and ignore it. `triggerAppearance="well"` with a
+`triggerIcon` draws the glyph in a round resting fill, for buttons that are the
+object on their row (the phone toolbar's Filters and ⋯ beside the search).
 
 A `Popover`, `Dropdown` or `Menu` opened from anything but a field-box `Select`
 sizes to its content: the trigger's width is only its minimum, so a narrow "Views"
@@ -871,6 +1018,11 @@ groups (a Filters menu). `Status` takes `value`, a second quieter line under its
 label ("Loaded 10:42"), so one notice can carry the reason beside its `action`.
 `BrandMark size="small"` sits at text size beside a label; larger sizes keep their
 image steps.
+
+A `Popover` that holds a large panel (a form, a picker with search, a detail view) sets
+`floatingRole="panel"`, so Happier draws it with the same heavier coat as its own dialogs and
+panels and its words stay legible over the page. Leave it off for a small popover; menus keep the
+lighter coat. The coat is Happier's to paint: there is no opacity or colour prop.
 
 In the Developer Preview source contract, a page Collection can supply
 `detailHeader(key)` with the item's `title`, optional `subtitle` and `actions`,
@@ -1013,8 +1165,13 @@ const hostApi = usePluginHostApi();
 - **`AgentCursor`** draws the agent's hand where it acts and a ring around the
   element. `target` is normalized to the page (0..1, with optional `width` and
   `height` for the ring); pass `pageRect` when the page is letterboxed inside the
-  box. It is decorative: it takes no input and is hidden from screen readers, so
-  pair it with a `PresenceCapsule`.
+  box. Actions can be shorter than a render, so also keep the agent's latest
+  action as `point={{ id, target }}` (its request id and the same target) until
+  the next action replaces it: each new `id` is shown once, arriving fully,
+  holding while `target` is live, then leaving, even when the action began and
+  ended between two renders. With reduced motion it appears at once and stays
+  until you withdraw the point. It is decorative: it takes no input and is
+  hidden from screen readers, so pair it with a `PresenceCapsule`.
 - **`StatusCapsule`** is one quiet sentence at the top edge while something is
   not normal, with an optional `action` as the way out. Keep it mounted and flip
   `visible` so it leaves smoothly; healthy is quiet.
@@ -1244,6 +1401,48 @@ Leave it neutral for requests the person started.
 confirmed result. Change the trigger only after success, and expose that result
 in words outside decorative feedback. First mount is static; reduced motion
 settles immediately. The shared motion owner supplies timing and easing.
+
+Use `ModalHeader` for the title band of a dialog or sheet your surface draws.
+It takes `title`, `subtitle`, an optional `leading` mark, context `actions` and
+`onClose`. Pass `compact` on a phone: when there are actions, the title keeps
+its row beside the close control and the subtitle and actions move beneath it,
+the way Happier's own dialogs recompose. Happier's dialogs use the same
+component.
+
+```tsx
+<ModalHeader
+  title="Link a pull request"
+  subtitle="Pick the change this review covers."
+  actions={<RepositoryChip />}
+  onClose={close}
+  compact={onPhone}
+/>
+```
+
+Use `TechnicalDetailsDisclosure` for the exact ids, codes and raw causes behind
+a readable page, the way Happier's approval and Run step pages fold theirs. Pass
+a translated `title` and `lines`, each `{ key, label, value }`. The row stays
+folded until the person opens it; each value is then selectable in mono under
+its label. With no lines it draws nothing, so you can always render it. Put the
+readable outcome on the page and keep the code here.
+
+```tsx
+<TechnicalDetailsDisclosure
+  title={t('Technical details')}
+  lines={[
+    { key: 'code', label: t('Failure code'), value: failure.code },
+    { key: 'run', label: t('Run ID'), value: run.id },
+  ]}
+/>
+```
+
+Centred state copy and capsule titles that need two lines split them evenly on
+the web rather than leaving one word alone on the last line. `EmptyState`,
+`LoadingState`, `ErrorState` and the capsules do this for you. For centred text
+of your own, add `HAPPIER_BALANCED_TEXT_WRAP` from
+`@happier-dev/plugin-ui/components` to its style; it is `null` on native.
+Hosted HTML pages don't run these components: use a `<details>` element with a
+`<summary>` for technical details, and CSS `text-wrap: balance` for centred copy.
 
 These additions describe the current 0.3 development source. Check the installed
 API inventory before using them in a published plugin.

@@ -40,6 +40,21 @@ function sidechainState(permissions: readonly Readonly<{
 }
 
 describe('deriveSessionSubagentPendingAttentionKinds', () => {
+    it('finds a Run startup question in the parent request table even with a loaded sidechain', () => {
+        const requestId = 'execution-run:review-run:occurrence:folder%3Aquestion';
+        const run = { ...subagent, kind: 'execution_run' as const, runRef: { runId: 'review-run' } };
+        const reducerState = { sidechains: new Map([['toolu_alpha', [{ tool: {} }]]]), permissions: new Map([
+            [requestId, { status: 'pending', kind: 'user_action' }],
+            ['execution-run:review-run-other:occurrence:question', { status: 'pending', kind: 'permission' }],
+            ['execution-run:review-run:occurrence:answered', { status: 'approved', kind: 'permission' }],
+        ]) };
+        expect(deriveSessionSubagentPendingAttentionKinds({ subagent: run, reducerState })).toEqual(['user_action']);
+        expect(listSessionSubagentPendingPrompts({ subagent: run, reducerState })).toEqual([{ id: requestId, kind: 'user_action' }]);
+        expect(deriveSessionSubagentPendingAttentionKinds({ subagent, reducerState })).toEqual([]);
+        reducerState.permissions.set(requestId, { status: 'approved', kind: 'user_action' });
+        expect(listSessionSubagentPendingPrompts({ subagent: run, reducerState })).toEqual([]);
+    });
+
     it('reports permission attention for a pending tool approval', () => {
         expect(deriveSessionSubagentPendingAttentionKinds({
             subagent,

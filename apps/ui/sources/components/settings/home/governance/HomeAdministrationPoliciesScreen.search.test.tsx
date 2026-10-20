@@ -36,7 +36,7 @@ describe('Home policy settings search', () => {
         const projection = homeGovernanceProjectionFixture({
             authenticationOptions: {
                 methods: [{ id: 'key_challenge', displayName: 'Device key', actions: [{ id: 'login', enabled: true, mode: 'keyed' }] }],
-                permittedAccountModes: ['e2ee'],
+                permittedAccountModes: ['e2ee', 'plain'],
                 recommendedProvisioningMode: 'e2ee',
                 signInService: { deploymentMode: null, canDisable: false },
             },

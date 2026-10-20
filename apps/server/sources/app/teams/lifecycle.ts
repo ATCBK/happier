@@ -1,4 +1,4 @@
-import { withTeamSessionAccessEffectsInTx } from "./memberships/sessionAccessEffects";
+import { acquireTeamMutationAccountAdmissionInTx, withTeamSessionAccessEffectsInTx } from "./memberships/sessionAccessEffects";
 import { createHash } from "node:crypto";
 
 import { NO_TEAM_CAPABILITIES_V1, validateTeamDescriptionV1, validateTeamNameV1 } from '@happier-dev/protocol/teams';
@@ -11,7 +11,8 @@ import {
     resolveHomeGovernanceAuthority,
     resolveHomeTeamCreationCapability,
 } from "@/app/home/governance/homeCapabilities";
-import type { Tx } from "@/storage/inTx";
+import { TransactionReplayRequiredError, type Tx } from "@/storage/inTx";
+import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
 import { defaultRepeatKeyExpiresAt, fetchRepeatKey, saveRepeatKey } from "@/storage/queue/repeatKey";
 import { readTransactionDatabaseTime } from "@/storage/transactionDatabaseTime";
 import { AccountStatus } from "@/storage/enums.generated";
@@ -20,8 +21,9 @@ import { revokeActiveTeamInvitationsForTeamInTx } from "./invitations/invitation
 import { admitTeamMemberInTx } from "./memberships/membershipService";
 import { TEAM_PROJECTION_SELECT, projectTeamSummaryV1, type TeamRecord } from "./projections";
 import { readTeamSummaryCountsInTx } from "./teamSummaryCounts";
-import { publishTeamChangedInTx } from "./teamChanges";
+import { publishTeamChangedInTx, readTeamCreationPublicationAudienceInTx } from "./teamChanges";
 import {
+    acquireTeamMutationLockInTx,
     qualifyTeamOperationAuthenticationInTx,
     qualifyTeamProjectionReadAuthenticationInTx,
     resolveTeamActorContextForTeamInTx,
@@ -132,6 +134,13 @@ export async function createTeamInTx(
     tx: Tx,
     input: CreateTeamInput,
 ): Promise<TeamLifecycleResult<CreateTeamError>> {
+    const initialAccountIds = [input.actorAccountId, input.initialOwnerAccountId ?? input.actorAccountId];
+    const admissionAccountIds = await readTeamCreationPublicationAudienceInTx(tx, initialAccountIds);
+    await acquireAccountChangePublicationLocksInTx(tx, admissionAccountIds, { includeSingleAccount: true });
+    const admitted = new Set(admissionAccountIds);
+    if ((await readTeamCreationPublicationAudienceInTx(tx, initialAccountIds)).some(accountId => !admitted.has(accountId))) {
+        throw new TransactionReplayRequiredError("transaction-account-audience-changed");
+    }
     const teamsEnabled = await isServerFeatureEnabledForHome("teams", { tx, env: input.env });
     if (!teamsEnabled) return denied("teams_unavailable");
 
@@ -245,6 +254,9 @@ export type UpdateTeamInput = Readonly<{
 
 /** Team metadata. Branding and policy have their own owners and capabilities. */
 export async function updateTeamInTx(tx: Tx, input: UpdateTeamInput): Promise<TeamLifecycleResult> {
+    const recheckAdmission = await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId] });
+    await acquireTeamMutationLockInTx(tx, input.teamId);
+    await recheckAdmission();
     if (!await isServerFeatureEnabledForHome("teams", { tx, env: input.env })) return denied("teams_unavailable");
     const context = await resolveTeamActorContextInTx(tx, {
         teamId: input.teamId,
@@ -310,6 +322,9 @@ export type ArchiveTeamInput = Readonly<{
  * caller.
  */
 export async function archiveTeamInTx(tx: Tx, input: ArchiveTeamInput): Promise<TeamLifecycleResult> {
+    const recheckAdmission = await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId], membershipChange: { kind: "teamMembership", teamId: input.teamId } });
+    await acquireTeamMutationLockInTx(tx, input.teamId);
+    await recheckAdmission();
     if (!await isServerFeatureEnabledForHome("teams", { tx, env: input.env })) return denied("teams_unavailable");
     const context = await resolveTeamActorContextInTx(tx, {
         teamId: input.teamId,
@@ -343,7 +358,7 @@ export async function archiveTeamInTx(tx: Tx, input: ArchiveTeamInput): Promise<
     }
 
     const now = await readTransactionDatabaseTime(tx);
-    return withTeamSessionAccessEffectsInTx(tx, { teamId: input.teamId, origin: "retained_lifecycle" }, async () => {
+    return withTeamSessionAccessEffectsInTx(tx, { teamId: input.teamId }, async () => {
         const archived = await tx.team.update({
             where: { id: input.teamId },
             data: { archivedAt: now },
@@ -369,6 +384,9 @@ export type RestoreTeamInput = Readonly<{
  * and does not recreate removed members or rotate keys.
  */
 export async function restoreTeamInTx(tx: Tx, input: RestoreTeamInput): Promise<TeamLifecycleResult> {
+    const recheckAdmission = await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId], membershipChange: { kind: "teamMembership", teamId: input.teamId } });
+    await acquireTeamMutationLockInTx(tx, input.teamId);
+    await recheckAdmission();
     if (!await isServerFeatureEnabledForHome("teams", { tx, env: input.env })) return denied("teams_unavailable");
     const context = await resolveTeamActorContextInTx(tx, {
         teamId: input.teamId,
@@ -400,9 +418,8 @@ export async function restoreTeamInTx(tx: Tx, input: RestoreTeamInput): Promise<
         if (!qualification.ok) return denied(qualification.error);
     }
 
-    // Restoration re-enables exactly the retained memberships, Groups and grants
-    // it paused, so it is not a qualifying transition for prospective auto-follow.
-    return withTeamSessionAccessEffectsInTx(tx, { teamId: input.teamId, origin: "retained_lifecycle" }, async () => {
+    // Restoration re-enables exactly the retained memberships, Groups and grants.
+    return withTeamSessionAccessEffectsInTx(tx, { teamId: input.teamId }, async () => {
         const restored = await tx.team.update({
             where: { id: input.teamId },
             data: { archivedAt: null },

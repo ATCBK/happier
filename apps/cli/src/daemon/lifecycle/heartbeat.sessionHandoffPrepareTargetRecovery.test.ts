@@ -3,13 +3,6 @@ import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-vi.mock('fs', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('fs')>();
-    return {
-        ...actual,
-        readFileSync: vi.fn(() => JSON.stringify({ version: '1.0.0' }) as any),
-    };
-});
 vi.mock('@/persistence', () => ({
     readDaemonState: vi.fn(),
     writeDaemonState: vi.fn(),
@@ -111,7 +104,7 @@ describe('startDaemonHeartbeatLoop session handoff prepare-target recovery', () 
                 startedWithCliVersion: '1.0.0',
                 daemonLogPath: '/tmp/daemon.log',
             },
-            currentCliVersion: '1.0.0',
+            currentCliVersion: configuration.currentCliVersion,
             requestShutdown: vi.fn(),
       writeDaemonStateForCurrentOwner: vi.fn(() => true),
         });
@@ -219,7 +212,7 @@ describe('startDaemonHeartbeatLoop session handoff prepare-target recovery', () 
                 startedWithCliVersion: '1.0.0',
                 daemonLogPath: '/tmp/daemon.log',
             },
-            currentCliVersion: '1.0.0',
+            currentCliVersion: configuration.currentCliVersion,
             requestShutdown: vi.fn(),
       writeDaemonStateForCurrentOwner: vi.fn(() => true),
         });

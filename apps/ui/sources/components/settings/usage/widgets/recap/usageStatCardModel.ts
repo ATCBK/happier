@@ -5,6 +5,7 @@ import type {
 import { t } from '@/text';
 import { formatTokenCount, formatUsageCost } from '@/utils/format/usageNumbers';
 import { formatUsageCalendarPeriod } from '@/sync/domains/usage/usageCalendarPresentation';
+import { usageAgentTitle } from '@/sync/domains/usage/usageLabels';
 
 export type UsageRecapComposed = Extract<
   UsageRecapComposeResult,
@@ -33,11 +34,24 @@ export type UsageStatCardStat = Readonly<{
     | 'dollars';
   value: string;
   label: string;
+  /**
+   * Money only. `lead` is the selected total; `comparison` is a separate population (not an extra
+   * charge) drawn quieter beneath it. Every other fact has no tier.
+   */
+  tier?: 'lead' | 'comparison';
 }>;
 export type UsageStatCardMixRow = Readonly<{
   id: string;
+  /** Public Agent catalog identity, independent of the private Names selection. */
+  agentId?: string;
   share: number;
   label: string | null;
+}>;
+/** One selected population (Agents or Models): its own rows, shares of its own `totalTokens`. */
+export type UsageStatCardMixGroup = Readonly<{
+  kind: 'agentMix' | 'modelMix';
+  rows: readonly UsageStatCardMixRow[];
+  totalTokens: number;
 }>;
 
 /**
@@ -51,10 +65,8 @@ export type UsageStatCardModel = Readonly<{
   manifest: readonly UsageRecapField[];
   unavailable: readonly UsageRecapField[];
   headline: Readonly<{ value: string; unit: string }> | null;
-  /** Existing single-mix renderer adapter; derived from the first canonical group. */
-  mix: readonly UsageStatCardMixRow[];
   /** Distinct selected populations; render each group, never blend their shares. */
-  mixGroups: readonly Readonly<{ kind: 'agentMix' | 'modelMix'; rows: readonly UsageStatCardMixRow[] }>[];
+  mixGroups: readonly UsageStatCardMixGroup[];
   stats: readonly UsageStatCardStat[];
   /** Day activity for art that draws the rhythm (Skyline, Terminal); counts only. */
   days: readonly number[];
@@ -67,11 +79,16 @@ const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
 const MONEY_ORDER: readonly MoneyKind[] = [
   'invoice',
-  'reported',
   'estimated',
   'api_equivalent',
   'unpriced',
 ];
+
+function moneyLabel(kind: MoneyKind | 'mixed'): string {
+  if (kind === 'mixed') return t('usage.board.page.costBasisAuto');
+  if (kind === 'invoice') return t('usage.board.page.factInvoice');
+  return t(`usage.board.recap.money_${kind}`);
+}
 
 function formatCount(value: number): string {
   return new Intl.NumberFormat().format(Math.round(value));
@@ -84,20 +101,28 @@ export function formatUsageRecapPeriod(
   return formatUsageCalendarPeriod(period);
 }
 
-function mixRows(
+function mixGroup(
+  kind: UsageStatCardMixGroup['kind'],
   rows: NonNullable<UsageRecapComposed['facts']['agentMix']>,
   named: boolean,
-): UsageStatCardMixRow[] {
-  const total = rows.reduce((sum, row) => sum + row.tokens, 0);
-  if (total <= 0) return [];
-  return rows
-    .filter((row) => row.tokens > 0)
-    .sort((a, b) => b.tokens - a.tokens)
-    .map((row, index) => ({
-      id: `mix-${index}`,
-      share: row.tokens / total,
-      label: named ? (row.name ?? null) : null,
-    }));
+): UsageStatCardMixGroup {
+  const totalTokens = rows.reduce((sum, row) => sum + row.tokens, 0);
+  return {
+    kind,
+    totalTokens,
+    rows: totalTokens <= 0
+      ? []
+      : rows
+          .filter((row) => row.tokens > 0)
+          .sort((a, b) => b.tokens - a.tokens)
+          .map((row, index) => ({
+            id: `${kind}-${index}`,
+            share: row.tokens / totalTokens,
+            ...(kind === 'agentMix' && row.agentId ? { agentId: row.agentId } : {}),
+            label: kind === 'agentMix' && row.agentId ? usageAgentTitle(row.agentId)
+              : named ? (row.name ?? null) : null,
+          })),
+  };
 }
 
 export function buildUsageStatCardModel(
@@ -106,6 +131,7 @@ export function buildUsageStatCardModel(
   const { facts } = result;
   const selected = new Set(result.selectedFields);
   const stats: UsageStatCardStat[] = [];
+  const moneyStats: UsageStatCardStat[] = [];
   if (facts.activeDays !== undefined)
     stats.push({
       id: 'activeDays',
@@ -165,17 +191,23 @@ export function buildUsageStatCardModel(
   for (const highlight of facts.highlights ?? []) {
     if (highlight.kind === 'observed_peak') stats.push({ id: 'observedPeak', value: formatTokenCount(highlight.tokens),
       label: t('usage.banner.peakTokens') });
-    else stats.push({ id: 'highlightOutcomes', value: formatCount(highlight.count), label: t('usage.board.recap.statLinkedOutcomes') });
+    else if (!facts.work) stats.push({ id: 'highlightOutcomes', value: formatCount(highlight.count), label: t('usage.board.recap.statLinkedOutcomes') });
   }
   if (facts.dollars) {
-    // Each money truth stays its own kind; nothing is summed or repriced here.
+    const money = facts.dollars.selected;
+    // An unknown selected total is absent, never a bare dash: the comparisons below then lead on their own.
+    if (money) moneyStats.push({ id: 'dollars', tier: 'lead', value: formatUsageCost(money.amountUsd, money.currency),
+      label: `${moneyLabel(money.kind)} · ${money.currency}` });
+    // Raw whole reports cannot establish scoped spend. Only the selected owner
+    // supplies reported money; other kinds are separate comparison populations.
     for (const kind of MONEY_ORDER) {
       for (const fact of facts.dollars.facts.filter(
-        (row) => row.kind === kind,
+        (row) => row.kind === kind && !(money?.kind === kind && money.currency === row.currency),
       )) {
-        stats.push({
+        moneyStats.push({
           id: 'dollars',
-          label: t(`usage.board.recap.money_${kind}`),
+          tier: 'comparison',
+          label: `${moneyLabel(kind)} · ${fact.currency}`,
           value:
             fact.amountUsd === null
               ? t('usage.board.recap.tokensValue', {
@@ -186,8 +218,10 @@ export function buildUsageStatCardModel(
       }
     }
   }
-  const mixGroups = (['agentMix', 'modelMix'] as const).flatMap(kind => facts[kind]
-    ? [{ kind, rows: mixRows(facts[kind], selected.has('names')) }] : []);
+  const mixGroups = (['agentMix', 'modelMix'] as const).flatMap((kind) => {
+    const rows = facts[kind];
+    return rows ? [mixGroup(kind, rows, selected.has('names'))] : [];
+  });
   const days = facts.rhythm?.calendarDays.map((day) => day.eventCount) ?? [];
   return {
     style: result.style,
@@ -200,9 +234,9 @@ export function buildUsageStatCardModel(
           unit: t('usage.board.recap.tokensUnit'),
         }
       : null,
-    mix: mixGroups[0]?.rows ?? [],
     mixGroups,
-    stats,
+    // The selected money and its comparisons come first: the card reads total, then what else was counted.
+    stats: [...moneyStats, ...stats],
     days,
     period: result.period,
     periodLabel: formatUsageRecapPeriod(result.period),

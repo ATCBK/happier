@@ -48,6 +48,7 @@ const LIST_PATH = '/v1/teams/credential-resources/list';
 const GET_PATH = '/v1/teams/credential-resources/get';
 const ENTITLED_LIST_PATH = '/v1/teams/credential-resources/entitled/list';
 const UPDATE_PATH = '/v1/teams/credential-resources/update';
+const DELETE_PATH = '/v1/teams/credential-resources/delete';
 const PREPARATION_READ_PATH = '/v2/teams/team-1/credential-resources/resource-1/direct-material?view=readiness';
 const ARTIFACT_CREATE_PATH = '/v1/artifacts';
 
@@ -428,6 +429,7 @@ describe('TeamCredentialDetailScreen', () => {
         harness.answer(serverId, GET_PATH, {
             body: teamCredentialResourceFixture({ id: 'resource-1', enabled: true }),
         });
+        harness.answer(serverId, DELETE_PATH, { body: { resourceId: 'resource-1', revision: 2 } });
         const confirmation = createDeferred<boolean>();
         modalConfirm.mockImplementationOnce(() => confirmation.promise);
 
@@ -435,8 +437,9 @@ describe('TeamCredentialDetailScreen', () => {
         const screen = await renderScreen(
             <TeamCredentialDetailScreen serverId={serverId} teamId="team-1" resourceId="resource-1" />,
         );
-        await vi.waitFor(() => expect(screen.findByTestId('team-credential-toggle-enabled')).toBeTruthy());
-        screen.pressByTestId('team-credential-toggle-enabled');
+        await vi.waitFor(() => expect(screen.findByTestId('team-credential-delete')).toBeTruthy());
+        screen.pressByTestId('team-credential-delete');
+        await vi.waitFor(() => expect(modalConfirm).toHaveBeenCalledOnce());
         harness.answer(serverId, GET_PATH, {
             body: teamCredentialResourceFixture({ id: 'resource-2', enabled: true }),
         });
@@ -446,10 +449,10 @@ describe('TeamCredentialDetailScreen', () => {
         confirmation.resolve(true);
         await flushHookEffects();
 
-        expect(harness.requestsFor(UPDATE_PATH)).toHaveLength(0);
+        expect(harness.requestsFor(DELETE_PATH)).toHaveLength(0);
     });
 
-    it('does not disable a resource when the person cancels the consequence confirmation', async () => {
+    it('disables a resource directly through the reversible Action default', async () => {
         const serverId = await harness.addHome({
             name: 'Home A',
             serverUrl: 'https://home-a.example',
@@ -464,6 +467,7 @@ describe('TeamCredentialDetailScreen', () => {
         harness.answer(serverId, GET_PATH, {
             body: teamCredentialResourceFixture({ enabled: true }),
         });
+        harness.answer(serverId, UPDATE_PATH, { body: { resourceId: 'resource-1', revision: 2 } });
         modalConfirm.mockResolvedValueOnce(false);
 
         const { TeamCredentialDetailScreen } = await import('./TeamCredentialDetailScreen');
@@ -475,8 +479,8 @@ describe('TeamCredentialDetailScreen', () => {
         });
         await screen.pressByTestIdAsync('team-credential-toggle-enabled');
 
-        expect(modalConfirm).toHaveBeenCalledOnce();
-        expect(harness.requestsFor(UPDATE_PATH)).toHaveLength(0);
+        await vi.waitFor(() => expect(harness.requestsFor(UPDATE_PATH)).toHaveLength(1));
+        expect(modalConfirm).not.toHaveBeenCalled();
     });
 
     it('holds Test while this screen already has an unresolved approval', async () => {
@@ -544,8 +548,10 @@ describe('TeamCredentialDetailScreen', () => {
         });
         const refresh = createDeferred<void>();
         if (approved) {
+            modalConfirm.mockClear();
             await screen.pressByTestIdAsync('team-credential-toggle-enabled');
             await vi.waitFor(() => expect(harness.requestsFor(ARTIFACT_CREATE_PATH)).toHaveLength(1));
+            expect(modalConfirm).not.toHaveBeenCalled();
         }
         harness.answer(serverId, GET_PATH, {
             ...(refreshFails ? { status: 503 } : { body: { ...resource, enabled: false, revision: 4 } }),

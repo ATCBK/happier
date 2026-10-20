@@ -19,6 +19,7 @@ import {
     type ComposerSuggestionKindDefinition,
     type ComposerSuggestionKindId,
 } from './composerSuggestionKinds';
+import type { SkillComposerSource } from '@/sync/domains/skills/skillComposerGroups';
 import { COMPOSER_SUGGESTION_KIND_DEADLINE_MS as SHARED_COMPOSER_SUGGESTION_KIND_DEADLINE_MS } from './composerSuggestionDeadlines';
 import type { PluginContributedActionDescriptor } from '@/components/plugins/actions/pluginContributedActionController';
 import {
@@ -64,17 +65,17 @@ export const COMPOSER_SUGGESTION_KIND_DEADLINE_MS = SHARED_COMPOSER_SUGGESTION_K
  * while a transport is stuck: without a second bound the query never settles
  * and the picker never learns the query is over.
  *
- * The bound is not chosen, it is inherited. Every cold producer here — catalog
- * hydration and the file index alike — bottoms out on a server-scoped daemon
- * RPC whose unqualified operation ceiling is
- * `DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS`. Anything still unsettled past that is
- * stuck rather than slow, so the total wait for one query is exactly that
- * ceiling and this grace is the part of it the deadline has not already spent.
+ * This existing picker-completion budget uses
+ * `DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS`; it is not a default operation timeout
+ * on the underlying daemon RPC. This grace is the part of the picker budget
+ * that the kind deadline has not already spent.
+ * Kinds with non-RPC sources declare producer-owned cold completion in the registry.
  *
  * When it fires: the pending kinds are aborted, one diagnostic per kind names
  * what was dropped, and the query completes with no rows — the same terminal
- * publication a genuinely empty query makes. Catalog hydration is deliberately
- * signal-independent, so it keeps running and warms the next keystroke.
+ * publication a genuinely empty query makes. Catalog hydration belongs to the
+ * containing query, so finishing one kind doesn't cancel discovery that can
+ * warm the next read. Superseding the query or leaving the composer cancels it.
  */
 export const COMPOSER_SUGGESTION_COLD_START_GRACE_MS =
     DEFAULT_SERVER_SCOPED_RPC_TIMEOUT_MS - COMPOSER_SUGGESTION_KIND_DEADLINE_MS;
@@ -107,8 +108,8 @@ export type GetSuggestionsOptions = Readonly<{
      * Aborts when this query is superseded or the host goes away (D-15).
      *
      * Public reference and file search receive this signal all the way to their
-     * daemon effects. Catalog hydration remains deliberately independent so a
-     * cold query can warm the next one after its picker work is superseded.
+     * daemon effects, including Session catalog hydration. Launch-scoped native
+     * discovery has its containing selection's lifetime and probe budget.
      */
     signal?: AbortSignal;
     /** Current session-composer daemon facts for the reference kind only. */
@@ -117,6 +118,8 @@ export type GetSuggestionsOptions = Readonly<{
     contributedActions?: readonly PluginContributedActionDescriptor[];
     /** Current aggregate rows as individual kinds settle; final settlement is marked complete. */
     onUpdate?: AutocompleteSuggestionUpdate;
+    /** The host's library/Found source, for the `$` skill kind only. */
+    skillSource?: SkillComposerSource | null;
     /** A human discussion's Account search, for the `accountMention` kind only. */
     accountMentions?: ComposerAccountMentionSource | null;
 }>;
@@ -221,57 +224,67 @@ function startKindWork(
 }
 
 /**
- * The deadline is allowed to trim a kind only after another kind has produced
- * rows. When every section is still empty, keep this one-shot query alive for
- * the first late result — bounded by `COMPOSER_SUGGESTION_COLD_START_GRACE_MS`,
- * and still releasable early through `signal`.
+ * The deadline trims pending work only after usable rows have arrived. When every
+ * section is still empty, keep this one-shot query alive for the first late
+ * result or partial publication. Daemon-backed work uses the RPC grace; other
+ * producers own their completion. Both remain releasable through `signal`.
  */
 function waitForColdSuggestionRows(
     pending: readonly PendingColdSuggestionKind[],
     signal: AbortSignal | undefined,
+    subscribeToRows: (publish: (rows: AutocompleteSuggestion[]) => void) => () => void,
 ): Promise<AutocompleteSuggestion[]> {
     if (signal?.aborted) return Promise.resolve([]);
 
     return new Promise<AutocompleteSuggestion[]>((resolve) => {
         let settled = false;
-        let remaining = pending.length;
+        const remaining = new Set(pending);
+        const rpcBounded = pending.filter(({ definition }) => definition.coldStartWait !== 'producer');
         let graceTimer: ReturnType<typeof setTimeout> | undefined;
+        let unsubscribe: (() => void) | undefined;
 
         const finish = (suggestions: AutocompleteSuggestion[]) => {
             if (settled) return;
             settled = true;
             clearTimeout(graceTimer);
             signal?.removeEventListener('abort', onAbort);
+            unsubscribe?.();
             for (const item of pending) item.abort();
             resolve(suggestions);
         };
         const onAbort = () => finish([]);
-        graceTimer = setTimeout(() => {
-            if (settled) return;
-            for (const { definition } of pending) {
-                log.log(`[composer-suggestions] stopped waiting on ${definition.id} after ${COMPOSER_SUGGESTION_KIND_DEADLINE_MS + COMPOSER_SUGGESTION_COLD_START_GRACE_MS}ms`);
-            }
-            finish([]);
-        }, COMPOSER_SUGGESTION_COLD_START_GRACE_MS);
+        if (rpcBounded.length > 0) {
+            graceTimer = setTimeout(() => {
+                if (settled) return;
+                for (const item of rpcBounded) {
+                    if (!remaining.delete(item)) continue;
+                    log.log(`[composer-suggestions] stopped waiting on ${item.definition.id} after ${COMPOSER_SUGGESTION_KIND_DEADLINE_MS + COMPOSER_SUGGESTION_COLD_START_GRACE_MS}ms`);
+                    item.abort();
+                }
+                if (remaining.size === 0) finish([]);
+            }, COMPOSER_SUGGESTION_COLD_START_GRACE_MS);
+        }
 
         signal?.addEventListener('abort', onAbort);
-        for (const { definition, work } of pending) {
+        unsubscribe = subscribeToRows((rows) => {
+            if (rows.length > 0) finish(rows);
+        });
+        for (const item of pending) {
+            const { definition, work } = item;
             void work.then(
                 (rows) => {
-                    if (settled) return;
+                    if (settled || !remaining.delete(item)) return;
                     const suggestions = rows.slice(0, definition.limit);
                     if (suggestions.length > 0) {
                         finish(suggestions);
                         return;
                     }
-                    remaining -= 1;
-                    if (remaining === 0) finish([]);
+                    if (remaining.size === 0) finish([]);
                 },
                 (reason: unknown) => {
-                    if (settled) return;
+                    if (settled || !remaining.delete(item)) return;
                     log.log(`[composer-suggestions] kind "${definition.id}" contributed no rows: ${describeSuggestionFailure(reason)}`);
-                    remaining -= 1;
-                    if (remaining === 0) finish([]);
+                    if (remaining.size === 0) finish([]);
                 },
             );
         }
@@ -288,15 +301,19 @@ type KindResolveArgs = Readonly<{
     scope: string | null;
     catalogOverrides: ComposerSuggestionCatalogs | undefined;
     loadCatalogs: (() => Promise<ComposerSuggestionCatalogs>) | undefined;
+    /** The containing query outlives a kind's presentation deadline. */
+    catalogSignal: AbortSignal | undefined;
     signal: AbortSignal | undefined;
     composerReferenceHost: ComposerReferenceSearchHost | null | undefined;
     contributedActions: readonly PluginContributedActionDescriptor[] | undefined;
     accountMentions: ComposerAccountMentionSource | null | undefined;
+    skillSource: SkillComposerSource | null | undefined;
     publish?: (suggestions: readonly AutocompleteSuggestion[]) => void;
 }>;
 
 /**
- * Hydrates only the catalog this kind declares, then resolves it.
+ * Supplies only the catalog this kind declares. The kind chooses when to await it,
+ * so independent sources within a kind can publish without waiting for Machine discovery.
  *
  * The hydration lives inside the per-kind promise on purpose: a shared `ensure`
  * awaited before the fan-out would put the plugin catalog's daemon RPC on the
@@ -307,23 +324,27 @@ async function resolveKindCandidates(
     definition: ComposerSuggestionKindDefinition,
     args: KindResolveArgs,
 ): Promise<readonly AutocompleteSuggestion[]> {
-    let catalogs = args.catalogOverrides ?? EMPTY_CATALOGS;
-    // Running sessions hydrate their owner metadata; pre-session hosts supply their
-    // launch-scoped native catalog source. Command metadata needs no catalog RPC.
-    if (definition.catalog && definition.catalog !== 'commands' && !args.catalogOverrides && args.sessionId) {
-        const catalogRequest: { vendorPlugins?: boolean; skills?: boolean } = {};
-        catalogRequest[definition.catalog] = true;
-        await ensureSessionSuggestionCatalogs(args.sessionId, catalogRequest);
-        catalogs = readComposerSuggestionCatalogs(args.sessionId);
-    }
-    if (definition.catalog && !args.catalogOverrides && !args.sessionId && args.loadCatalogs) {
-        try {
-            catalogs = await args.loadCatalogs();
-        } catch (error: unknown) {
-            if (definition.catalog !== 'commands') throw error;
-            if (!args.signal?.aborted) log.log('[composer-suggestions] pre-session native commands unavailable');
+    const catalogs = args.catalogOverrides
+        ?? (definition.catalog && args.sessionId ? readComposerSuggestionCatalogs(args.sessionId) : EMPTY_CATALOGS);
+    const loadCatalogs = async () => {
+        // Running sessions hydrate their owner metadata; pre-session hosts supply their
+        // launch-scoped native catalog source. Command metadata needs no catalog RPC.
+        if (definition.catalog && definition.catalog !== 'commands' && !args.catalogOverrides && args.sessionId) {
+            const catalogRequest: { vendorPlugins?: boolean; skills?: boolean } = {};
+            catalogRequest[definition.catalog] = true;
+            await ensureSessionSuggestionCatalogs(args.sessionId, catalogRequest, { signal: args.catalogSignal });
+            return readComposerSuggestionCatalogs(args.sessionId);
         }
-    }
+        if (definition.catalog && !args.catalogOverrides && !args.sessionId && args.loadCatalogs) {
+            try {
+                return await args.loadCatalogs();
+            } catch (error: unknown) {
+                if (definition.catalog !== 'commands') throw error;
+                if (!args.signal?.aborted) log.log('[composer-suggestions] pre-session native commands unavailable');
+            }
+        }
+        return catalogs;
+    };
     return await definition.resolve({
         sessionId: args.sessionId,
         workspace: args.workspace,
@@ -333,11 +354,13 @@ async function resolveKindCandidates(
         scopedQuery: args.scopedQuery,
         scope: args.scope,
         catalogs,
+        loadCatalogs,
         limit: definition.limit,
         signal: args.signal,
         composerReferenceHost: args.composerReferenceHost,
         contributedActions: args.contributedActions,
         accountMentions: args.accountMentions,
+        skillSource: args.skillSource,
         ...(args.publish ? { publish: args.publish } : {}),
     });
 }
@@ -375,14 +398,17 @@ export async function getSuggestions(
         scope: scope.scope,
         catalogOverrides: options?.catalogs,
         loadCatalogs: options?.loadCatalogs,
+        catalogSignal: signal,
         signal,
         composerReferenceHost: options?.composerReferenceHost,
         contributedActions: options?.contributedActions,
         accountMentions: options?.accountMentions,
+        skillSource: options?.skillSource,
     };
 
     const rowsByKind: Array<readonly AutocompleteSuggestion[] | null> = definitions.map(() => null);
     let acceptsLiveUpdates = true;
+    let publishColdRows: ((rows: AutocompleteSuggestion[]) => void) | undefined;
     let lastPublishedRows: AutocompleteSuggestion[] | null = null;
     let lastPublicationWasComplete = false;
     const publishCurrentRows = (complete: boolean) => {
@@ -404,6 +430,7 @@ export async function getSuggestions(
             if (!acceptsLiveUpdates || signal?.aborted) return;
             rowsByKind[index] = rows.slice(0, definition.limit);
             publishCurrentRows(false);
+            publishColdRows?.(collectSuggestionRows(definitions, rowsByKind));
         },
     }));
     for (let index = 0; index < work.length; index += 1) {
@@ -426,7 +453,6 @@ export async function getSuggestions(
     // caused by the user typing the next character is not a diagnostic.
     if (signal?.aborted) return [];
 
-    acceptsLiveUpdates = false;
     const pendingColdKinds: PendingColdSuggestionKind[] = [];
     for (let index = 0; index < settled.length; index += 1) {
         const definition = definitions[index]!;
@@ -447,6 +473,7 @@ export async function getSuggestions(
     }
     const suggestions = collectSuggestionRows(definitions, rowsByKind);
     if (suggestions.length > 0) {
+        acceptsLiveUpdates = false;
         for (const { definition, abort } of pendingColdKinds) {
             log.log(`[composer-suggestions] kind "${definition.id}" contributed no rows: exceeded ${COMPOSER_SUGGESTION_KIND_DEADLINE_MS}ms`);
             abort();
@@ -462,12 +489,17 @@ export async function getSuggestions(
         for (const { definition } of pendingColdKinds) {
             log.log(`[composer-suggestions] still waiting on ${definition.id} after ${COMPOSER_SUGGESTION_KIND_DEADLINE_MS}ms`);
         }
-        const lateSuggestions = await waitForColdSuggestionRows(pendingColdKinds, signal);
+        const lateSuggestions = await waitForColdSuggestionRows(pendingColdKinds, signal, (publish) => {
+            publishColdRows = publish;
+            return () => { publishColdRows = undefined; };
+        });
+        acceptsLiveUpdates = false;
         if (!signal?.aborted) {
             options?.onUpdate?.(lateSuggestions, { complete: true });
         }
         return lateSuggestions;
     }
+    acceptsLiveUpdates = false;
     publishCurrentRows(true);
     return [];
 }

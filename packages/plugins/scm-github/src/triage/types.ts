@@ -1,3 +1,5 @@
+import type { TriageEntryStateV1, TriageSourceEntrySnapshotV1, TriageTaskFieldsV1 } from '@happier-dev/triage-protocol/v1';
+
 /**
  * GitHub-local Triage shapes.
  *
@@ -65,6 +67,8 @@ export type GithubTriageRowFactV1 = Readonly<{
 export type GithubTriageEntryStateV1 = Readonly<{
   presentation: GithubTriagePresentationV1;
   nativeLabel: string;
+  stage?: TriageEntryStateV1['stage'];
+  completionReason?: TriageEntryStateV1['completionReason'];
 }>;
 
 /** The one provider read's base/head/native revision for a pull request. */
@@ -99,6 +103,7 @@ export type GithubTriageEntrySnapshotV1 = Readonly<{
   /** Present only on an authoritative pull-request read with all three revisions. */
   reviewRevision?: GithubTriageReviewRevisionV1;
   state: GithubTriageEntryStateV1;
+  relations?: TriageSourceEntrySnapshotV1['relations'];
   rowFacts: readonly GithubTriageRowFactV1[];
   projectionTruncated: boolean;
 }>;
@@ -119,6 +124,8 @@ export type GithubTriageFailureClassV1 =
 export type GithubTriageFailureV1 = Readonly<{
   class: GithubTriageFailureClassV1;
   code: string;
+  /** Classified, non-secret detail accepted by the public Triage failure contract. */
+  detail?: string;
   /** Absolute epoch milliseconds, derived only from provider retry evidence. */
   retryNotBeforeMs?: number;
 }>;
@@ -129,6 +136,8 @@ export type GithubTriagePresentObservationV1 = Readonly<{
   locator: GithubTriageEntryLocatorV1;
   snapshot: GithubTriageEntrySnapshotV1;
   viewer: GithubTriageViewerFactsV1;
+  /** Exact-read-only values; the scan/observation mapper never copies these. */
+  taskFields?: TriageTaskFieldsV1;
 }>;
 
 export type GithubTriageObservationV1 =
@@ -187,7 +196,8 @@ export type GithubTriageScanEvidenceV1 =
   | Readonly<{ kind: 'walkFinished' }>
   | Readonly<{
     kind: 'partial';
-    reason: GithubTriageScanPartialReasonV1;
+    /** Walk reason or an already-classified optional Checks read failure code. */
+    reason: string;
     omittedItemCount?: number;
   }>;
 

@@ -1,7 +1,6 @@
 import type { PluginCancellationOptions } from '@happier-dev/plugin-sdk';
 import { throwIfAborted } from '@happier-dev/plugin-sdk/async';
 import {
-    MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1,
     type TriageEntryPresentationStateV1,
     type TriageEntryRefV1,
     type TriageFixPullRequestStatusV1,
@@ -15,7 +14,7 @@ import type {
     CorpusFixPullRequestLinkV1,
     CorpusUserMarkRowV1,
 } from '../collections/rows.js';
-import { sameTriageEntryReference } from '../identity/components.js';
+import { entryReferenceComponents, sameTriageEntryReference } from '../identity/components.js';
 import { deriveUserMarkTag } from '../identity/tags.js';
 import { readTriageSessionLinksPageV1 } from '../../sessions/readEntrySessionLinks.js';
 
@@ -71,27 +70,22 @@ export async function readFixPullRequestSources(input: Readonly<{
     const sessions = await readTriageSessionLinksPageV1(collections.sessionLinks, { relation: { entryRef } }, options);
     if (sessions.nextCursor !== undefined) incomplete = true;
 
-    const coLinked: TriageCoLinkedEntryV1[] = [];
+    const coLinked = new Map<string, TriageCoLinkedEntryV1>();
     for (const { sessionId } of sessions.links) {
         const siblings = await readTriageSessionLinksPageV1(collections.sessionLinks, { relation: { sessionId } }, options);
         if (siblings.nextCursor !== undefined) incomplete = true;
         for (const sibling of siblings.links) {
             if (sameTriageEntryReference(sibling.entryRef, entryRef)) continue;
-            const seen = coLinked.findIndex((entry) => sameTriageEntryReference(entry.entryRef, sibling.entryRef));
-            if (seen === -1) {
-                // The derived set is bounded like every other relationship page
-                // the detail reads; past it the answer says it is incomplete.
-                if (coLinked.length >= MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1) {
-                    incomplete = true;
-                    continue;
-                }
-                coLinked.push({
+            const key = JSON.stringify(entryReferenceComponents(sibling.entryRef));
+            const seen = coLinked.get(key);
+            if (seen === undefined) {
+                coLinked.set(key, {
                     entryRef: sibling.entryRef,
                     displayPath: sibling.displayPathAtLink,
                     linkedAtMs: sibling.linkedAtMs,
                 });
-            } else if (coLinked[seen]!.linkedAtMs < sibling.linkedAtMs) {
-                coLinked[seen] = { ...coLinked[seen]!, linkedAtMs: sibling.linkedAtMs };
+            } else if (seen.linkedAtMs < sibling.linkedAtMs) {
+                coLinked.set(key, { ...seen, linkedAtMs: sibling.linkedAtMs });
             }
         }
     }
@@ -99,7 +93,7 @@ export async function readFixPullRequestSources(input: Readonly<{
     return Object.freeze({
         linked: choice?.linked ?? [],
         dismissed: choice?.dismissed ?? [],
-        coLinked: Object.freeze(coLinked),
+        coLinked: Object.freeze([...coLinked.values()]),
         incomplete,
     });
 }
@@ -152,11 +146,12 @@ export async function readResolvedFixPullRequests(input: Readonly<{
         }
     }));
     throwIfAborted(input.signal);
+    const presentationsByEntry = new Map(candidates.map(({ entryRef }, index) => [
+        JSON.stringify(entryReferenceComponents(entryRef)), presentations[index] ?? null,
+    ]));
     return resolveFixPullRequests(sources, {
         workflowSubjectOf: input.projection.workflowSubjectOf,
-        presentationOf: (entryRef) => presentations[candidates.findIndex(
-            (candidate) => sameTriageEntryReference(candidate.entryRef, entryRef),
-        )] ?? null,
+        presentationOf: (entryRef) => presentationsByEntry.get(JSON.stringify(entryReferenceComponents(entryRef))) ?? null,
     });
 }
 
@@ -185,6 +180,11 @@ const STATUS_RANK: Readonly<Record<TriageFixPullRequestStatusV1, number>> = {
     closed: 3,
 };
 
+/** The first usable candidate in the canonical ranking; closed PRs never supply panels. */
+export function selectPrimaryFixPullRequest(candidates: readonly TriageFixPullRequestV1[]): TriageFixPullRequestV1 | null {
+    return candidates.find((candidate) => candidate.status !== 'closed') ?? null;
+}
+
 export function resolveFixPullRequests(
     sources: TriageFixPullRequestSourcesV1,
     projection: Readonly<{
@@ -194,16 +194,16 @@ export function resolveFixPullRequests(
         presentationOf(entryRef: TriageEntryRefV1): TriageFixPullRequestPresentationV1 | null;
     }>,
 ): TriageResolvedFixPullRequestsV1 {
-    const isDismissed = (entryRef: TriageEntryRefV1) =>
-        sources.dismissed.some((dismissed) => sameTriageEntryReference(dismissed, entryRef));
+    const dismissed = new Set(sources.dismissed.map((entryRef) => JSON.stringify(entryReferenceComponents(entryRef))));
 
     type Draft = { candidate: TriageFixPullRequestV1; user: boolean; linkedAtMs: number };
     const drafts: Draft[] = [];
+    const draftsByEntry = new Map<string, Draft>();
 
     for (const link of sources.linked) {
         const subject = projection.workflowSubjectOf(link.entryRef);
         if (isKnownNonPullRequestSubject(subject)) continue;
-        drafts.push({
+        const draft: Draft = {
             candidate: {
                 entryRef: link.entryRef,
                 origins: ['user'],
@@ -212,19 +212,23 @@ export function resolveFixPullRequests(
             },
             user: true,
             linkedAtMs: link.linkedAtMs,
-        });
+        };
+        drafts.push(draft);
+        const key = JSON.stringify(entryReferenceComponents(link.entryRef));
+        if (!draftsByEntry.has(key)) draftsByEntry.set(key, draft);
     }
     for (const coLinked of sources.coLinked) {
         // A co-linked issue, error group or anything a source did not declare as
         // a pull request is not a fix candidate.
         if (projection.workflowSubjectOf(coLinked.entryRef) !== 'pullRequest') continue;
-        if (isDismissed(coLinked.entryRef)) continue;
-        const existing = drafts.find((draft) => sameTriageEntryReference(draft.candidate.entryRef, coLinked.entryRef));
+        const key = JSON.stringify(entryReferenceComponents(coLinked.entryRef));
+        if (dismissed.has(key)) continue;
+        const existing = draftsByEntry.get(key);
         if (existing) {
             existing.candidate = { ...existing.candidate, origins: ['user', 'session'] };
             continue;
         }
-        drafts.push({
+        const draft: Draft = {
             candidate: {
                 entryRef: coLinked.entryRef,
                 origins: ['session'],
@@ -233,7 +237,9 @@ export function resolveFixPullRequests(
             },
             user: false,
             linkedAtMs: coLinked.linkedAtMs,
-        });
+        };
+        drafts.push(draft);
+        draftsByEntry.set(key, draft);
     }
 
     drafts.sort((left, right) =>
@@ -242,6 +248,6 @@ export function resolveFixPullRequests(
         || right.linkedAtMs - left.linkedAtMs);
 
     const candidates = Object.freeze(drafts.map((draft) => Object.freeze(draft.candidate)));
-    const primary = candidates.find((candidate) => candidate.status !== 'closed') ?? null;
+    const primary = selectPrimaryFixPullRequest(candidates);
     return Object.freeze({ candidates, primary, incomplete: sources.incomplete });
 }

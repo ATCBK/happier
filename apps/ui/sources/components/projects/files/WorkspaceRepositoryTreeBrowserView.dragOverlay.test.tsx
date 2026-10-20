@@ -131,7 +131,7 @@ describe('WorkspaceRepositoryTreeBrowserView (drag overlay)', () => {
     async function drag(host: HTMLElement, type: string, dataTransfer: Readonly<{ types: string[]; files?: File[] }>) {
         const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: 120, clientY: 60 });
         Object.defineProperty(event, 'dataTransfer', { value: dataTransfer });
-        await act(async () => host.dispatchEvent(event));
+        await act(async () => { host.dispatchEvent(event); });
     }
 
     it('surfaces the hovered upload destination in the drop overlay', async () => {

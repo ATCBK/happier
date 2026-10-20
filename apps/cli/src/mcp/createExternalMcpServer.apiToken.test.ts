@@ -48,10 +48,15 @@ describe('createExternalMcpServer with an API token', () => {
       const response = CallToolResultSchema.parse(await client.callTool({ name: 'action_execute',
         arguments: { actionId: 'session.status.get', input: {} } }));
       expect(response.isError, JSON.stringify(response)).not.toBe(true);
-      expect(response.structuredContent).toEqual(status);
       const text = response.content.find(content => content.type === 'text');
       expect(text?.type === 'text' ? JSON.parse(text.text) : null).toEqual(status);
       expect(requests).toHaveLength(1);
+      // The generic action_execute tool has no fixed output schema. The typed
+      // tool publishes this Action's declared structured output to MCP clients.
+      const direct = CallToolResultSchema.parse(await client.callTool({ name: 'session_status_get', arguments: {} }));
+      expect(direct.isError, JSON.stringify(direct)).not.toBe(true);
+      expect(direct.structuredContent).toEqual(status);
+      expect(requests).toHaveLength(2);
     } finally {
       await client.close();
       await mcp.close();

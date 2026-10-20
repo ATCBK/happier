@@ -6,8 +6,9 @@ import { resolveSkillCatalogOriginV1 } from '@happier-dev/protocol/runtime/catal
 
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import type { FileItem } from '@/sync/domains/input/suggestionFile';
-import type { ComposerSessionSuggestionItem } from '@/sync/domains/input/suggestionSession';
+import type { ComposerSessionSuggestionDisplay } from '@/sync/domains/input/suggestionSession';
 import { storage } from '@/sync/domains/state/storage';
+import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 
 /**
  * Session catalog snapshots the composer suggestion kinds read from.
@@ -54,15 +55,15 @@ export type ComposerSuggestionSkillItem = Readonly<{
 export type ComposerSuggestionCatalogs = Readonly<{
     commands?: readonly Pick<CommandItem, 'command' | 'description'>[];
     files?: readonly FileItem[];
-    sessions?: readonly ComposerSessionSuggestionItem[];
+    sessions?: readonly ComposerSessionSuggestionDisplay[];
     vendorPlugins?: readonly ComposerSuggestionVendorPluginItem[];
     skills?: readonly ComposerSuggestionSkillItem[];
 }>;
 
 /**
- * A mounted pre-session selection owns one successful native catalog snapshot, just as
- * session metadata retains the running composer's snapshot. Query changes share it;
- * changing the launch scope creates a new source. Failed discovery leaves the next
+ * A mounted pre-session selection owns one successful native catalog snapshot per
+ * current launch inputs. Query changes share it; actual discovery intent re-reads
+ * lazy inputs before reusing it. Failed discovery leaves the next
  * query free to retry. The lazy params keep unopened controls from decrypting secrets.
  */
 export type PreflightComposerSuggestionCatalogSource = (() => Promise<ComposerSuggestionCatalogs>) & Readonly<{
@@ -80,14 +81,32 @@ export function createPreflightComposerSuggestionCatalogSource(
     }>,
 ): PreflightComposerSuggestionCatalogSource {
     let snapshot: Promise<ComposerSuggestionCatalogs> | null = null;
+    let snapshotKey: string | null = null;
     let current: ComposerSuggestionCatalogs | undefined;
     const listeners = new Set<() => void>();
+    const withdrawCurrent = () => {
+        if (current === undefined) return;
+        current = undefined;
+        listeners.forEach((listener) => listener());
+    };
     const load = () => {
-        if (!snapshot) {
-            snapshot = Promise.resolve().then(async () => {
+        let capabilityParams: MachineSessionCatalogProbeParams['capabilityParams'];
+        try {
+            capabilityParams = typeof params.capabilityParams === 'function' ? params.capabilityParams() : params.capabilityParams;
+        } catch (error: unknown) {
+            snapshot = null;
+            snapshotKey = null;
+            withdrawCurrent();
+            return Promise.reject<ComposerSuggestionCatalogs>(error);
+        }
+        const key = stableJsonStringify(capabilityParams);
+        if (!snapshot || snapshotKey !== key) {
+            const inputsChanged = snapshotKey !== key;
+            snapshotKey = key;
+            const pending: Promise<ComposerSuggestionCatalogs> = Promise.resolve().then(async () => {
                 const catalogs = await probeMachineSessionCatalogs({
                     ...params,
-                    capabilityParams: typeof params.capabilityParams === 'function' ? params.capabilityParams() : params.capabilityParams,
+                    capabilityParams,
                 });
                 if (!catalogs) return {};
                 for (const [kind, catalog] of Object.entries(catalogs)) {
@@ -100,13 +119,17 @@ export function createPreflightComposerSuggestionCatalogSource(
                         : [],
                 };
             }).then((catalogs) => {
-                current = catalogs;
-                listeners.forEach((listener) => listener());
+                if (snapshot === pending) {
+                    current = catalogs;
+                    listeners.forEach((listener) => listener());
+                }
                 return catalogs;
             }).catch((error: unknown) => {
-                snapshot = null;
+                if (snapshot === pending) snapshot = null;
                 throw error;
             });
+            snapshot = pending;
+            if (inputsChanged) withdrawCurrent();
         }
         return snapshot;
     };
@@ -117,12 +140,10 @@ export function createPreflightComposerSuggestionCatalogSource(
             return () => { listeners.delete(listener); };
         },
         read: () => {
-            if (!snapshot) {
-                void load().catch((error: unknown) => {
-                    const reason = error instanceof Error ? error.message : 'unknown error';
-                    log.log(`[composer-suggestions] pre-session catalog discovery unavailable: ${reason}`);
-                });
-            }
+            void load().catch((error: unknown) => {
+                const reason = error instanceof Error ? error.message : 'unknown error';
+                log.log(`[composer-suggestions] pre-session catalog discovery unavailable: ${reason}`);
+            });
             return Promise.resolve(current ?? EMPTY_PREFLIGHT_CATALOGS);
         },
     });

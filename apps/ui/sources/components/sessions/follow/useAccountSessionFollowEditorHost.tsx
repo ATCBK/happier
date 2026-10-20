@@ -3,14 +3,13 @@ import { Pressable, View } from 'react-native';
 import { useRouter, type Href } from '@/components/appShell/workspace/destinationRoute';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 
-import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
-import { Popover } from '@/components/ui/popover';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import { t } from '@/text';
 import { useIsTablet } from '@/utils/platform/responsive';
 
 import { AccountSessionFollowControl } from './AccountSessionFollowControl';
+import { FollowEditorPanel } from './FollowEditorPanel';
 import { openFollowNotificationSettings } from './openFollowNotificationSettings';
 
 type FollowEditorTarget = Readonly<{ address: SessionAddress; archived?: boolean }>;
@@ -52,34 +51,23 @@ export function useAccountSessionFollowEditorHost(params: Readonly<{
     }, [enabled, params.serverId, params.sessionId, router, usePopover]);
 
     const editor = openedTarget ? (
-        <Popover
-            open
-            anchorRef={anchorRef}
-            placement="bottom"
-            maxWidthCap={480}
-            maxHeightCap={640}
-            autoFocusOnOpen
-            focusReturnRef={triggerRef}
-            onRequestClose={close}
-            portal={{ web: true, native: true, matchAnchorWidth: false }}
-        >
-            {({ maxHeight }) => (
-                <FloatingOverlay maxHeight={maxHeight} scrollEnabled>
-                    <View testID="account-session-follow-popover" accessibilityLabel={t('session.follow.editor.title')}>
-                        <AccountSessionFollowControl {...openedTarget} onClose={close}
-                            onOpenNotificationSettings={() => {
-                                close();
-                                void openFollowNotificationSettings({
-                                    serverId: openedTarget.address.serverId,
-                                    navigate: () => router.push('/settings/notifications'),
-                                });
-                            }}
-                        />
-                    </View>
-                </FloatingOverlay>
+        <AccountSessionFollowControl {...openedTarget} onClose={close}
+            onOpenNotificationSettings={() => {
+                close();
+                void openFollowNotificationSettings({
+                    serverId: openedTarget.address.serverId,
+                    navigate: () => router.push('/settings/notifications'),
+                });
+            }}
+            frame={(parts) => (
+                <FollowEditorPanel anchorRef={anchorRef} focusReturnRef={triggerRef} onRequestClose={close}
+                    testID="account-session-follow-popover" accessibilityLabel={t('session.follow.editor.title')}
+                    title={parts.title} subtitle={parts.subtitle} mark={parts.mark} footer={parts.footer}>
+                    {parts.body}
+                </FollowEditorPanel>
             )}
-        </Popover>
+        />
     ) : null;
 
-    return { enabled, anchorRef, triggerRef, openEditor, editor };
+    return { enabled, open: openedTarget !== null, anchorRef, triggerRef, openEditor, editor };
 }

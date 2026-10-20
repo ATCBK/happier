@@ -81,15 +81,17 @@ function hasCatalogSnapshot(metadata: unknown, key: 'sessionVendorPluginCatalogV
 async function listVendorPluginCatalog(
     sessionId: string,
     cwd: string | undefined,
+    signal: AbortSignal | undefined,
 ): Promise<SessionVendorPluginCatalogListResponseV1 | undefined> {
     try {
         const response = isInactiveSession(sessionId)
-            ? await listInactiveVendorPluginCatalog(sessionId)
+            ? await listInactiveVendorPluginCatalog(sessionId, signal)
             : await sessionRpcWithServerScope<unknown, { cwd?: string }>({
                 sessionId,
                 serverId: resolvePreferredServerIdForSessionId(sessionId),
                 method: SESSION_RPC_METHODS.SESSION_VENDOR_PLUGIN_CATALOG_LIST,
                 payload: cwd ? { cwd } : {},
+                signal,
             });
         const parsed = SessionVendorPluginCatalogListResponseV1Schema.safeParse(response);
         if (parsed.success) return parsed.data;
@@ -102,15 +104,17 @@ async function listVendorPluginCatalog(
 async function listSkillCatalog(
     sessionId: string,
     cwd: string | undefined,
+    signal: AbortSignal | undefined,
 ): Promise<SessionSkillCatalogListResponseV1 | undefined> {
     try {
         const response = isInactiveSession(sessionId)
-            ? await listInactiveSkillCatalog(sessionId)
+            ? await listInactiveSkillCatalog(sessionId, signal)
             : await sessionRpcWithServerScope<unknown, { cwd?: string }>({
                 sessionId,
                 serverId: resolvePreferredServerIdForSessionId(sessionId),
                 method: SESSION_RPC_METHODS.SESSION_SKILL_CATALOG_LIST,
                 payload: cwd ? { cwd } : {},
+                signal,
             });
         const parsed = SessionSkillCatalogListResponseV1Schema.safeParse(response);
         if (parsed.success) return parsed.data;
@@ -120,7 +124,7 @@ async function listSkillCatalog(
     return undefined;
 }
 
-async function listInactiveVendorPluginCatalog(sessionId: string): Promise<unknown> {
+async function listInactiveVendorPluginCatalog(sessionId: string, signal: AbortSignal | undefined): Promise<unknown> {
     const target = readMachineControlTargetForSession(sessionId);
     if (!target) return undefined;
     return await machineRpcWithServerScope<unknown, { sessionId: string; cwd?: string }>({
@@ -128,10 +132,11 @@ async function listInactiveVendorPluginCatalog(sessionId: string): Promise<unkno
         serverId: resolvePreferredServerIdForSessionId(sessionId),
         method: RPC_METHODS.DAEMON_SESSION_VENDOR_PLUGIN_CATALOG_LIST,
         payload: { sessionId, cwd: target.basePath },
+        signal,
     });
 }
 
-async function listInactiveSkillCatalog(sessionId: string): Promise<unknown> {
+async function listInactiveSkillCatalog(sessionId: string, signal: AbortSignal | undefined): Promise<unknown> {
     const target = readMachineControlTargetForSession(sessionId);
     if (!target) return undefined;
     return await machineRpcWithServerScope<unknown, { sessionId: string; cwd?: string }>({
@@ -139,6 +144,7 @@ async function listInactiveSkillCatalog(sessionId: string): Promise<unknown> {
         serverId: resolvePreferredServerIdForSessionId(sessionId),
         method: RPC_METHODS.DAEMON_SESSION_SKILL_CATALOG_LIST,
         payload: { sessionId, cwd: target.basePath },
+        signal,
     });
 }
 
@@ -176,7 +182,9 @@ function applyCatalogSnapshots(
 export async function ensureSessionSuggestionCatalogs(
     sessionId: string,
     request: SessionSuggestionCatalogRequest,
+    options?: Readonly<{ signal?: AbortSignal }>,
 ): Promise<void> {
+    if (options?.signal?.aborted) return;
     const session = storage.getState().sessions[sessionId];
     const metadata = session ? readSessionOwnerMetadataView(session) : null;
     const shouldLoadVendorPlugins = request.vendorPlugins === true
@@ -188,10 +196,11 @@ export async function ensureSessionSuggestionCatalogs(
 
     const cwd = readSessionCwd(sessionId);
     const [vendorPluginCatalog, skillCatalog] = await Promise.all([
-        shouldLoadVendorPlugins ? listVendorPluginCatalog(sessionId, cwd) : Promise.resolve(undefined),
-        shouldLoadSkills ? listSkillCatalog(sessionId, cwd) : Promise.resolve(undefined),
+        shouldLoadVendorPlugins ? listVendorPluginCatalog(sessionId, cwd, options?.signal) : Promise.resolve(undefined),
+        shouldLoadSkills ? listSkillCatalog(sessionId, cwd, options?.signal) : Promise.resolve(undefined),
     ]);
 
+    if (options?.signal?.aborted) return;
     applyCatalogSnapshots(sessionId, {
         ...(vendorPluginCatalog ? { vendorPluginCatalog } : {}),
         ...(skillCatalog ? { skillCatalog } : {}),

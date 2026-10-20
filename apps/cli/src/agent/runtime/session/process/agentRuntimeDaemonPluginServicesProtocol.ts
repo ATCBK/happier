@@ -1,5 +1,6 @@
 import { lazyZodSchema } from '@happier-dev/protocol/lazyZodSchema';
-import { z } from 'zod';
+import { z } from 'zod/mini';
+import { z as zMini } from 'zod/mini';
 
 import { ConnectedAccountMaterializationRequestSchema } from '@happier-dev/protocol/connect/connected-account-purposes';
 import { ConnectedAccountRequestAuthUsesV1Schema } from '@happier-dev/protocol/connect/connected-account-request-auth';
@@ -26,8 +27,9 @@ import {
     AgentRuntimeDaemonServiceTurnWitnessV1Schema,
 } from './agentRuntimeDaemonServiceTurnWitness';
 import { asHostProtocolZod } from '@/plugins/runtime/protocolComposableZodAdapter';
+import { AccountNoticeItemTypeV1Schema, AccountNoticePageV1Schema } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 
-const BoundedIdSchema = lazyZodSchema(() => z.string().trim().min(1).max(512));
+const BoundedIdSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(512)));
 const HostPluginContributionIdentityV1Schema = lazyZodSchema(() => asHostProtocolZod(
     PluginContributionIdentityV1Schema,
 ));
@@ -42,13 +44,11 @@ const HostExternalSessionOperationReferenceV1Schema = lazyZodSchema(() => asHost
 const HostExternalSessionTranscriptFollowEventV1Schema = lazyZodSchema(() => asHostProtocolZod(
     ExternalSessionTranscriptFollowEventV1Schema,
 ));
-const BoundedTextSchema = lazyZodSchema(() => z.string().max(65_536));
-const Base64Schema = lazyZodSchema(() => z.string().regex(
-    /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u,
-));
+const BoundedTextSchema = lazyZodSchema(() => z.string().check(z.maxLength(65_536)));
+const Base64Schema = lazyZodSchema(() => z.string().check(z.regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u)));
 const SafeNonNegativeIntegerSchema =
-    lazyZodSchema(() => z.number().int().nonnegative().safe());
-const CursorSchema = lazyZodSchema(() => z.string().max(32_768));
+    lazyZodSchema(() => z.number().check(z.int(), z.nonnegative(), z.int()));
+const CursorSchema = lazyZodSchema(() => z.string().check(z.maxLength(32_768)));
 const PluginStorageScopeSchema =
     lazyZodSchema(() => z.enum(['ephemeral', 'daemonSession', 'daemon']));
 export const RunnerDaemonPluginSettingsScopeV1Schema =
@@ -59,113 +59,113 @@ export type RunnerDaemonPluginSettingsScopeV1 = z.infer<
 const ManagedProviderManifestAuthoritySchema =
     lazyZodSchema(() => z.enum(['external', 'bundled_first_party']));
 const OptionalConnectedAccountsServiceScopeSchema = {
-    serviceScope: z.literal('managedProvider').optional(),
+    serviceScope: z.optional(z.literal('managedProvider')),
 };
 const HttpMethodSchema =
     lazyZodSchema(() => z.enum(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']));
 const StringRecordSchema = lazyZodSchema(() => z.record(
-    z.string().trim().min(1).max(256),
+    z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
     BoundedTextSchema,
-).refine((value) => Object.keys(value).length <= 512));
+).check(z.refine((value) => Object.keys(value).length <= 512)));
 const RunnerDaemonHostEventDeliveryScopeV1Schema = lazyZodSchema(() => z.union([
-    z.object({
+    z.strictObject({
         kind: z.literal('session'),
         sessionId: HostSessionIdSchema,
-    }).strict(),
-    z.object({ kind: z.literal('account') }).strict(),
+    }),
+    z.strictObject({ kind: z.literal('account') }),
 ]));
 
 const RunnerDaemonExternalSessionRemediationV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('retry') }).strict(),
-    z.object({ kind: z.literal('openSettings'), path: BoundedTextSchema }).strict(),
-    z.object({
+    z.strictObject({ kind: z.literal('retry') }),
+    z.strictObject({ kind: z.literal('openSettings'), path: BoundedTextSchema }),
+    z.strictObject({
         kind: z.literal('selectAccount'),
-        service: z.object({ pluginId: BoundedIdSchema, localId: BoundedIdSchema }).strict(),
-    }).strict(),
-    z.object({ kind: z.literal('installDependency'), dependencyId: BoundedIdSchema }).strict(),
-    z.object({ kind: z.literal('openUrl'), url: z.string().url().max(8_192) }).strict(),
+        service: z.strictObject({ pluginId: BoundedIdSchema, localId: BoundedIdSchema }),
+    }),
+    z.strictObject({ kind: z.literal('installDependency'), dependencyId: BoundedIdSchema }),
+    z.strictObject({ kind: z.literal('openUrl'), url: z.string().check(z.url(), z.maxLength(8_192)) }),
 ]));
 const RunnerDaemonExternalSessionAvailabilityV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-    z.object({ status: z.literal('available') }).strict(),
-    z.object({
+    z.strictObject({ status: z.literal('available') }),
+    z.strictObject({
         status: z.literal('unavailable'),
         code: BoundedIdSchema,
-        remediation: RunnerDaemonExternalSessionRemediationV1Schema.optional(),
-    }).strict(),
-    z.object({
+        remediation: z.optional(RunnerDaemonExternalSessionRemediationV1Schema),
+    }),
+    z.strictObject({
         status: z.literal('denied'),
         code: BoundedIdSchema,
-        remediation: RunnerDaemonExternalSessionRemediationV1Schema.optional(),
-    }).strict(),
+        remediation: z.optional(RunnerDaemonExternalSessionRemediationV1Schema),
+    }),
 ]));
 const RunnerDaemonExternalSessionTakeoverCapabilityV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
-    z.object({ status: z.literal('unavailable'), code: BoundedIdSchema }).strict(),
-    z.object({
+    z.strictObject({ status: z.literal('unavailable'), code: BoundedIdSchema }),
+    z.strictObject({
         status: z.literal('available'),
-        storageModes: z.array(z.enum(['external-linked', 'persisted'])).max(2),
-    }).strict(),
+        storageModes: z.array(z.enum(['external-linked', 'persisted'])).check(z.maxLength(2)),
+    }),
 ]));
-const RunnerDaemonExternalSessionDiagnosticV1Schema = lazyZodSchema(() => z.object({
+const RunnerDaemonExternalSessionDiagnosticV1Schema = lazyZodSchema(() => z.strictObject({
     code: BoundedIdSchema,
     severity: z.enum(['info', 'warning', 'error']),
-    message: BoundedTextSchema.optional(),
-    details: AgentRuntimeJsonValueV1Schema.optional(),
-    remediation: RunnerDaemonExternalSessionRemediationV1Schema.optional(),
-}).strict());
-const RunnerDaemonExternalSessionTranscriptItemV1Schema = lazyZodSchema(() => z.object({
+    message: z.optional(BoundedTextSchema),
+    details: zMini.optional(AgentRuntimeJsonValueV1Schema),
+    remediation: z.optional(RunnerDaemonExternalSessionRemediationV1Schema),
+}));
+const RunnerDaemonExternalSessionTranscriptItemV1Schema = lazyZodSchema(() => z.strictObject({
     id: ExternalSessionTranscriptItemIdV1Schema,
-    timestampMs: ExternalSessionTranscriptSourceTimestampV1Schema.optional(),
+    timestampMs: zMini.optional(ExternalSessionTranscriptSourceTimestampV1Schema),
     kind: z.enum(['user', 'agent', 'system', 'event']),
     data: AgentRuntimeJsonValueV1Schema,
-}).strict());
+}));
 
-export const RunnerDaemonExternalSessionsCapabilitiesResultV1Schema = lazyZodSchema(() => z.object({
+export const RunnerDaemonExternalSessionsCapabilitiesResultV1Schema = lazyZodSchema(() => z.strictObject({
     list: RunnerDaemonExternalSessionAvailabilityV1Schema,
     attach: RunnerDaemonExternalSessionAvailabilityV1Schema,
     takeover: RunnerDaemonExternalSessionTakeoverCapabilityV1Schema,
     transcript: RunnerDaemonExternalSessionAvailabilityV1Schema,
     follow: RunnerDaemonExternalSessionAvailabilityV1Schema,
-}).strict());
-export const RunnerDaemonExternalSessionsListResultV1Schema = lazyZodSchema(() => z.object({
-    items: z.array(z.object({
+}));
+export const RunnerDaemonExternalSessionsListResultV1Schema = lazyZodSchema(() => z.strictObject({
+    items: z.array(z.strictObject({
         ref: HostExternalSessionRefSchema,
-        title: BoundedTextSchema.optional(),
-        updatedAtMs: SafeNonNegativeIntegerSchema.optional(),
-        capabilities: z.array(z.enum(['attach', 'transcript', 'follow'])).max(3),
+        title: z.optional(BoundedTextSchema),
+        updatedAtMs: z.optional(SafeNonNegativeIntegerSchema),
+        capabilities: z.array(z.enum(['attach', 'transcript', 'follow'])).check(z.maxLength(3)),
         takeover: RunnerDaemonExternalSessionTakeoverCapabilityV1Schema,
-    }).strict()).max(1_000),
-    nextCursor: CursorSchema.nullable(),
-    diagnostics: z.array(RunnerDaemonExternalSessionDiagnosticV1Schema).max(1_000).optional(),
-}).strict());
-export const RunnerDaemonExternalSessionsAttachResultV1Schema = lazyZodSchema(() => z.object({
+    })).check(z.maxLength(1_000)),
+    nextCursor: z.nullable(CursorSchema),
+    diagnostics: z.optional(z.array(RunnerDaemonExternalSessionDiagnosticV1Schema).check(z.maxLength(1_000))),
+}));
+export const RunnerDaemonExternalSessionsAttachResultV1Schema = lazyZodSchema(() => z.strictObject({
     sessionId: BoundedIdSchema,
-}).strict());
-const RunnerDaemonExternalSessionsReadAfterDiagnosticV1Schema = lazyZodSchema(() => z.object({
+}));
+const RunnerDaemonExternalSessionsReadAfterDiagnosticV1Schema = lazyZodSchema(() => z.strictObject({
     code: BoundedIdSchema,
     severity: z.enum(['benign', 'required']),
-    count: z.number().int().positive().safe(),
-    positions: z.array(SafeNonNegativeIntegerSchema).max(200),
-}).strict());
+    count: z.number().check(z.int(), z.positive(), z.int()),
+    positions: z.array(SafeNonNegativeIntegerSchema).check(z.maxLength(200)),
+}));
 export const RunnerDaemonExternalSessionsTranscriptResultV1Schema = lazyZodSchema(() => z.union([
-    z.object({
+    z.strictObject({
         mode: z.literal('page'),
-        items: z.array(RunnerDaemonExternalSessionTranscriptItemV1Schema).max(1_000),
-        nextCursor: CursorSchema.nullable(),
-        tailCursor: CursorSchema.nullable().optional(),
-        hasMore: z.boolean().optional(),
-        truncated: z.boolean().optional(),
-    }).strict(),
-    z.object({ mode: z.literal('readAfter'), outcome: z.literal('already_current') }).strict(),
-    z.object({
+        items: z.array(RunnerDaemonExternalSessionTranscriptItemV1Schema).check(z.maxLength(1_000)),
+        nextCursor: z.nullable(CursorSchema),
+        tailCursor: z.optional(z.nullable(CursorSchema)),
+        hasMore: z.optional(z.boolean()),
+        truncated: z.optional(z.boolean()),
+    }),
+    z.strictObject({ mode: z.literal('readAfter'), outcome: z.literal('already_current') }),
+    z.strictObject({
         mode: z.literal('readAfter'),
         outcome: z.literal('advanced'),
-        items: z.array(RunnerDaemonExternalSessionTranscriptItemV1Schema).max(1_000),
+        items: z.array(RunnerDaemonExternalSessionTranscriptItemV1Schema).check(z.maxLength(1_000)),
         nextCursor: CursorSchema,
         boundary: BoundedTextSchema,
         hasMore: z.boolean(),
-        diagnostics: z.array(RunnerDaemonExternalSessionsReadAfterDiagnosticV1Schema).max(32).optional(),
-    }).strict(),
-    z.object({
+        diagnostics: z.optional(z.array(RunnerDaemonExternalSessionsReadAfterDiagnosticV1Schema).check(z.maxLength(32))),
+    }),
+    z.strictObject({
         mode: z.literal('readAfter'),
         outcome: z.enum([
             'gap_or_cursor_expired',
@@ -173,7 +173,7 @@ export const RunnerDaemonExternalSessionsTranscriptResultV1Schema = lazyZodSchem
             'source_unavailable',
             'read_failed',
         ]),
-    }).strict(),
+    }),
 ]));
 export const RunnerDaemonExternalSessionsTakeoverResultV1Schema =
     HostExternalSessionOperationReferenceV1Schema;
@@ -206,7 +206,7 @@ export type RunnerDaemonManagedProviderBootstrapV1 = Readonly<{
 }>;
 
 export const RunnerDaemonManagedProviderCustodyScopeV1Schema:
-    z.ZodType<RunnerDaemonManagedProviderCustodyScopeV1> = lazyZodSchema(() => z.object({
+    z.ZodMiniType<RunnerDaemonManagedProviderCustodyScopeV1> = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     sessionId: BoundedIdSchema,
     runtimeBindingBasis: ProviderRuntimeBindingBasisV1Schema,
@@ -216,7 +216,7 @@ export const RunnerDaemonManagedProviderCustodyScopeV1Schema:
     sourceCustody: asHostProtocolZod(PluginSourceCustodyV1Schema),
     manifestAuthority: ManagedProviderManifestAuthoritySchema,
     operationClaimId: BoundedIdSchema,
-}).strict().superRefine((value, context) => {
+}).check(z.superRefine((value, context) => {
     const basis = value.runtimeBindingBasis;
     if (
         basis.deployment.kind !== 'managedLocal'
@@ -232,22 +232,22 @@ export const RunnerDaemonManagedProviderCustodyScopeV1Schema:
                 'Managed Provider bootstrap identity must match its runtime binding basis',
         });
     }
-}));
+})));
 
 export const RunnerDaemonManagedProviderBootstrapV1Schema:
-    z.ZodType<RunnerDaemonManagedProviderBootstrapV1> = lazyZodSchema(() => z.object({
+    z.ZodMiniType<RunnerDaemonManagedProviderBootstrapV1> = lazyZodSchema(() => z.strictObject({
     v: z.literal(1),
     scope: RunnerDaemonManagedProviderCustodyScopeV1Schema,
-    custody: z.literal('daemonShared').optional(),
-    requestAuth: z.object({
-        capabilityPath: z.string().trim().min(1).max(32_768),
+    custody: z.optional(z.literal('daemonShared')),
+    requestAuth: z.nullable(z.strictObject({
+        capabilityPath: z.string().check(z.trim(), z.minLength(1), z.maxLength(32_768)),
         requestAuthUses: ConnectedAccountRequestAuthUsesV1Schema,
-    }).strict().nullable(),
+    })),
     providerPluginHardRevocationRevisionAtAdmission:
         SafeNonNegativeIntegerSchema,
     sessionBindingMetadata:
-        SessionProviderBindingMetadataV1Schema.optional(),
-}).strict().superRefine((value, context) => {
+        zMini.optional(SessionProviderBindingMetadataV1Schema),
+}).check(z.superRefine((value, context) => {
     const expectedUses = value.scope.runtimeBindingBasis.deployment.kind
         === 'managedLocal'
         ? value.scope.runtimeBindingBasis.deployment.managedRuntime
@@ -287,7 +287,7 @@ export const RunnerDaemonManagedProviderBootstrapV1Schema:
                 'Managed Provider bootstrap metadata must match its exact runtime binding basis',
         });
     }
-}));
+})));
 
 export type RunnerDaemonManagedProviderRetentionV1 = Readonly<{
     v: 1;
@@ -297,44 +297,44 @@ export type RunnerDaemonManagedProviderRetentionV1 = Readonly<{
 }>;
 
 export const RunnerDaemonManagedProviderRetentionV1Schema:
-    z.ZodType<RunnerDaemonManagedProviderRetentionV1> = lazyZodSchema(() => z.object({
+    z.ZodMiniType<RunnerDaemonManagedProviderRetentionV1> = lazyZodSchema(() => z.strictObject({
         v: z.literal(1),
-        custody: z.literal('daemonShared').optional(),
+        custody: z.optional(z.literal('daemonShared')),
         scope: RunnerDaemonManagedProviderCustodyScopeV1Schema,
         providerPluginHardRevocationRevisionAtAdmission:
             SafeNonNegativeIntegerSchema,
-    }).strict());
+    }));
 
 /** Credential-bearing result stays on the authenticated host-private channel. */
-export const RunnerDaemonSharedGatewayHttpBindingV1Schema = lazyZodSchema(() => z.object({
-    endpointUrl: z.string().url().max(8_192).refine((value) => {
+export const RunnerDaemonSharedGatewayHttpBindingV1Schema = lazyZodSchema(() => z.strictObject({
+    endpointUrl: z.string().check(z.url(), z.maxLength(8_192), z.refine((value) => {
         const url = new URL(value);
         return url.protocol === 'http:' && ['127.0.0.1', '[::1]'].includes(url.hostname)
             && url.username === '' && url.password === '' && url.hash === '' && url.search === '';
-    }),
+    })),
     headers: StringRecordSchema,
-}).strict());
+}));
 export type RunnerDaemonSharedGatewayHttpBindingV1 = z.infer<typeof RunnerDaemonSharedGatewayHttpBindingV1Schema>;
 
-const RunnerDaemonPluginServiceWireValueV1Schema: z.ZodType<
+const RunnerDaemonPluginServiceWireValueV1Schema: z.ZodMiniType<
     RunnerDaemonPluginServiceWireValueV1
 > = z.lazy(() => z.discriminatedUnion('t', [
-    z.object({ t: z.literal('null') }).strict(),
-    z.object({ t: z.literal('boolean'), value: z.boolean() }).strict(),
-    z.object({ t: z.literal('number'), value: z.number().finite() }).strict(),
-    z.object({ t: z.literal('string'), value: BoundedTextSchema }).strict(),
-    z.object({ t: z.literal('bytes'), base64: Base64Schema }).strict(),
-    z.object({
+    z.strictObject({ t: z.literal('null') }),
+    z.strictObject({ t: z.literal('boolean'), value: z.boolean() }),
+    z.strictObject({ t: z.literal('number'), value: z.number() }),
+    z.strictObject({ t: z.literal('string'), value: BoundedTextSchema }),
+    z.strictObject({ t: z.literal('bytes'), base64: Base64Schema }),
+    z.strictObject({
         t: z.literal('array'),
-        value: z.array(RunnerDaemonPluginServiceWireValueV1Schema).max(65_536),
-    }).strict(),
-    z.object({
+        value: z.array(RunnerDaemonPluginServiceWireValueV1Schema).check(z.maxLength(65_536)),
+    }),
+    z.strictObject({
         t: z.literal('object'),
         value: z.record(
-            z.string().max(4_096),
+            z.string().check(z.maxLength(4_096)),
             RunnerDaemonPluginServiceWireValueV1Schema,
-        ).refine((value) => Object.keys(value).length <= 65_536),
-    }).strict(),
+        ).check(z.refine((value) => Object.keys(value).length <= 65_536)),
+    }),
 ]));
 
 export type RunnerDaemonPluginServiceWireValueV1 =
@@ -439,38 +439,38 @@ export function decodeRunnerDaemonPluginServiceWireValueV1(
 }
 
 const PluginPathSchema = lazyZodSchema(() => z.discriminatedUnion('root', [
-    z.object({
+    z.strictObject({
         root: z.literal('pluginData'),
-        relativePath: z.string().max(32_768),
-    }).strict(),
-    z.object({
+        relativePath: z.string().check(z.maxLength(32_768)),
+    }),
+    z.strictObject({
         root: z.literal('workspace'),
-        relativePath: z.string().max(32_768),
-    }).strict(),
-    z.object({
+        relativePath: z.string().check(z.maxLength(32_768)),
+    }),
+    z.strictObject({
         root: z.literal('project'),
         projectId: BoundedIdSchema,
-        relativePath: z.string().max(32_768),
-    }).strict(),
+        relativePath: z.string().check(z.maxLength(32_768)),
+    }),
 ]));
 
 const PaginationSchema = {
-    cursor: CursorSchema.optional(),
-    limit: z.number().int().min(1).max(1_000).optional(),
+    cursor: z.optional(CursorSchema),
+    limit: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(1_000))),
 };
 const OperationBaseSchema = {
     requestId: BoundedIdSchema,
     invocationId: BoundedIdSchema,
 };
 const ExpectedRevisionSchema = {
-    expectedRevision: BoundedIdSchema.optional(),
+    expectedRevision: z.optional(BoundedIdSchema),
 };
 const OptionalWitnessSchema = {
     witness:
-        AgentRuntimeDaemonServiceTurnWitnessV1Schema.optional(),
+        z.optional(AgentRuntimeDaemonServiceTurnWitnessV1Schema),
 };
 const OptionalSignalTimeoutSchema = {
-    timeoutMs: SafeNonNegativeIntegerSchema.optional(),
+    timeoutMs: z.optional(SafeNonNegativeIntegerSchema),
 };
 
 export const RUNNER_DAEMON_PROVIDER_OPERATION_IDS_V1 = [
@@ -492,57 +492,58 @@ const RunnerDaemonProviderOperationIdV1Schema = lazyZodSchema(() => z.enum(
     RUNNER_DAEMON_PROVIDER_OPERATION_IDS_V1,
 ));
 
-const ExecSpawnRequestSchema = lazyZodSchema(() => z.object({
+const ExecSpawnRequestSchema = lazyZodSchema(() => z.strictObject({
     executable: ManagedExecutableRefSchema,
-    args: z.array(BoundedTextSchema).max(4_096).optional(),
-    cwd: z.union([PluginPathSchema, z.string().max(32_768)]).optional(),
-    env: StringRecordSchema.optional(),
-    stdin: Base64Schema.optional(),
-    maxStdoutBytes: SafeNonNegativeIntegerSchema.optional(),
-    maxStderrBytes: SafeNonNegativeIntegerSchema.optional(),
-    timeoutMs: SafeNonNegativeIntegerSchema.optional(),
-}).strict());
+    args: z.optional(z.array(BoundedTextSchema).check(z.maxLength(4_096))),
+    cwd: z.optional(z.union([PluginPathSchema, z.string().check(z.maxLength(32_768))])),
+    env: z.optional(StringRecordSchema),
+    stdin: z.optional(Base64Schema),
+    maxStdoutBytes: z.optional(SafeNonNegativeIntegerSchema),
+    maxStderrBytes: z.optional(SafeNonNegativeIntegerSchema),
+    timeoutMs: z.optional(SafeNonNegativeIntegerSchema),
+}));
 
 export const RUNNER_DAEMON_PLUGIN_SERVICE_OPERATION_V1_SCHEMAS = [
-    lazyZodSchema(() => z.object({
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_services.prepare_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
+        executionRunCwd: z.optional(z.string().check(z.minLength(1))),
         managedProviderRetention:
-            RunnerDaemonManagedProviderRetentionV1Schema.optional(),
-    }).strict()),
-    lazyZodSchema(() => z.object({
+            z.optional(RunnerDaemonManagedProviderRetentionV1Schema),
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal(
             'plugin_services.managed_provider.start_v1',
         ),
         ...OperationBaseSchema,
         retained: RunnerDaemonManagedProviderRetentionV1Schema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal(
             'plugin_services.managed_provider.materialize_agent_binding_v1',
         ),
         ...OperationBaseSchema,
         retained: RunnerDaemonManagedProviderRetentionV1Schema,
-        endpointUrl: z.string().url().max(8_192),
+        endpointUrl: z.string().check(z.url(), z.maxLength(8_192)),
         credentialPlaceholder:
-            z.string().min(32).max(512).nullable(),
-    }).strict()),
-    lazyZodSchema(() => z.object({
+            z.nullable(z.string().check(z.minLength(32), z.maxLength(512))),
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_services.managed_provider.read_shared_gateway_access_v1'),
         ...OperationBaseSchema,
         retained: RunnerDaemonManagedProviderRetentionV1Schema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_services.close_v1'),
         ...OperationBaseSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_logger.write_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         entry: z.discriminatedUnion('kind', [
-            z.object({
+            z.strictObject({
                 kind: z.literal('log'),
                 level: z.enum([
                     'debug',
@@ -552,132 +553,130 @@ export const RUNNER_DAEMON_PLUGIN_SERVICE_OPERATION_V1_SCHEMAS = [
                 ]),
                 message: BoundedTextSchema,
                 fields:
-                    RunnerDaemonPluginServiceWireValueV1Schema
-                        .optional(),
-            }).strict(),
-            z.object({
+                    z.optional(RunnerDaemonPluginServiceWireValueV1Schema),
+            }),
+            z.strictObject({
                 kind: z.literal('diagnostic'),
-                data: z.object({
+                data: z.strictObject({
                     code: BoundedIdSchema,
                     severity: z.enum([
                         'info',
                         'warning',
                         'error',
                     ]),
-                    message: BoundedTextSchema.optional(),
+                    message: z.optional(BoundedTextSchema),
                     details:
-                        RunnerDaemonPluginServiceWireValueV1Schema
-                            .optional(),
-                    remediation: z.discriminatedUnion('kind', [
-                        z.object({
+                        z.optional(RunnerDaemonPluginServiceWireValueV1Schema),
+                    remediation: z.optional(z.discriminatedUnion('kind', [
+                        z.strictObject({
                             kind: z.literal('retry'),
-                        }).strict(),
-                        z.object({
+                        }),
+                        z.strictObject({
                             kind: z.literal('openSettings'),
-                            path: z.string().max(32_768),
-                        }).strict(),
-                        z.object({
+                            path: z.string().check(z.maxLength(32_768)),
+                        }),
+                        z.strictObject({
                             kind: z.literal('selectAccount'),
                             service:
                                 HostPluginContributionIdentityV1Schema,
-                        }).strict(),
-                        z.object({
+                        }),
+                        z.strictObject({
                             kind: z.literal('installDependency'),
                             dependencyId: BoundedIdSchema,
-                        }).strict(),
-                        z.object({
+                        }),
+                        z.strictObject({
                             kind: z.literal('openUrl'),
-                            url: z.string().url().max(8_192),
-                        }).strict(),
-                    ]).optional(),
-                }).strict(),
-            }).strict(),
+                            url: z.string().check(z.url(), z.maxLength(8_192)),
+                        }),
+                    ])),
+                }),
+            }),
         ]),
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_storage.get_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         scope: PluginStorageScopeSchema,
         key: BoundedIdSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_storage.set_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         scope: PluginStorageScopeSchema,
         key: BoundedIdSchema,
         value: RunnerDaemonPluginServiceWireValueV1Schema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_storage.delete_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         scope: PluginStorageScopeSchema,
         key: BoundedIdSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_storage.list_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         scope: PluginStorageScopeSchema,
-        prefix: z.string().max(4_096).optional(),
+        prefix: z.optional(z.string().check(z.maxLength(4_096))),
         ...PaginationSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_storage.transaction.open_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         transactionId: BoundedIdSchema,
         scope: PluginStorageScopeSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_storage.transaction.get_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         transactionId: BoundedIdSchema,
         key: BoundedIdSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_storage.transaction.set_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         transactionId: BoundedIdSchema,
         key: BoundedIdSchema,
         value: RunnerDaemonPluginServiceWireValueV1Schema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_storage.transaction.delete_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         transactionId: BoundedIdSchema,
         key: BoundedIdSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_storage.transaction.commit_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         transactionId: BoundedIdSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_storage.transaction.rollback_v1'),
         ...OperationBaseSchema,
         transactionId: BoundedIdSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_settings.snapshot_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         scope: RunnerDaemonPluginSettingsScopeV1Schema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_settings.get_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         scope: RunnerDaemonPluginSettingsScopeV1Schema,
         id: BoundedIdSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_settings.set_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
@@ -685,65 +684,65 @@ export const RUNNER_DAEMON_PLUGIN_SERVICE_OPERATION_V1_SCHEMAS = [
         scope: RunnerDaemonPluginSettingsScopeV1Schema,
         id: BoundedIdSchema,
         value: RunnerDaemonPluginServiceWireValueV1Schema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_settings.reset_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         ...ExpectedRevisionSchema,
         scope: RunnerDaemonPluginSettingsScopeV1Schema,
         id: BoundedIdSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_settings.watch.open_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         scope: RunnerDaemonPluginSettingsScopeV1Schema,
         subscriptionId: BoundedIdSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_secrets.status_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         id: BoundedIdSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_secrets.get_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         id: BoundedIdSchema,
-        reason: z.string().trim().min(1).max(4_096).optional(),
-    }).strict()),
-    lazyZodSchema(() => z.object({
+        reason: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(4_096))),
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_secrets.set_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         ...ExpectedRevisionSchema,
         id: BoundedIdSchema,
         value: BoundedTextSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_secrets.delete_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         ...ExpectedRevisionSchema,
         id: BoundedIdSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_events.emit_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         eventId: BoundedIdSchema,
         payload: RunnerDaemonPluginServiceWireValueV1Schema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_events.subscribe.open_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         subscriptionId: BoundedIdSchema,
         event: HostPluginContributionIdentityV1Schema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal(
             'plugin_events.host.subscribe.open_v1',
         ),
@@ -751,52 +750,52 @@ export const RUNNER_DAEMON_PLUGIN_SERVICE_OPERATION_V1_SCHEMAS = [
         ...OptionalWitnessSchema,
         subscriptionId: BoundedIdSchema,
         target: HostEventTargetV1Schema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_fetch.request_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
-        request: z.object({
-            url: z.string().url().max(8_192),
-            method: HttpMethodSchema.optional(),
-            headers: StringRecordSchema.optional(),
-            body: Base64Schema.optional(),
+        request: z.strictObject({
+            url: z.string().check(z.url(), z.maxLength(8_192)),
+            method: z.optional(HttpMethodSchema),
+            headers: z.optional(StringRecordSchema),
+            body: z.optional(Base64Schema),
             redirect: z.enum(['error', 'follow', 'manual']),
-            timeoutMs: SafeNonNegativeIntegerSchema.optional(),
+            timeoutMs: z.optional(SafeNonNegativeIntegerSchema),
             credentialBinding:
-                RunnerDaemonPluginServiceWireValueV1Schema.optional(),
-        }).strict(),
-    }).strict()),
-    lazyZodSchema(() => z.object({
+                z.optional(RunnerDaemonPluginServiceWireValueV1Schema),
+        }),
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_actions.execute_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         actionId: PluginInvocableActionIdSchema,
         input: RunnerDaemonPluginServiceWireValueV1Schema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_sessions.external.capabilities_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_sessions.external.list_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
-        query: RunnerDaemonPluginServiceWireValueV1Schema.optional(),
-    }).strict()),
-    lazyZodSchema(() => z.object({
+        query: z.optional(RunnerDaemonPluginServiceWireValueV1Schema),
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_sessions.external.close_list_v1'),
         ...OperationBaseSchema,
         cursor: CursorSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_sessions.external.attach_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         ref: RunnerDaemonPluginServiceWireValueV1Schema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal(
             'plugin_sessions.external.read_transcript_v1',
         ),
@@ -804,8 +803,8 @@ export const RUNNER_DAEMON_PLUGIN_SERVICE_OPERATION_V1_SCHEMAS = [
         ...OptionalWitnessSchema,
         ref: RunnerDaemonPluginServiceWireValueV1Schema,
         query: RunnerDaemonPluginServiceWireValueV1Schema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal(
             'plugin_sessions.external.follow_transcript.open_v1',
         ),
@@ -814,201 +813,205 @@ export const RUNNER_DAEMON_PLUGIN_SERVICE_OPERATION_V1_SCHEMAS = [
         subscriptionId: BoundedIdSchema,
         ref: RunnerDaemonPluginServiceWireValueV1Schema,
         options: RunnerDaemonPluginServiceWireValueV1Schema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_sessions.external.takeover_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         ref: RunnerDaemonPluginServiceWireValueV1Schema,
         request: RunnerDaemonPluginServiceWireValueV1Schema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_providers.invoke_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         operation: RunnerDaemonProviderOperationIdV1Schema,
         request: RunnerDaemonPluginServiceWireValueV1Schema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_fs.read_file_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         path: PluginPathSchema,
-        maxBytes: SafeNonNegativeIntegerSchema.optional(),
-    }).strict()),
-    lazyZodSchema(() => z.object({
+        maxBytes: z.optional(SafeNonNegativeIntegerSchema),
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_fs.write_file_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         path: PluginPathSchema,
         data: Base64Schema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_fs.stat_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         path: PluginPathSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_fs.list_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         path: PluginPathSchema,
         ...PaginationSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_fs.remove_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         path: PluginPathSchema,
-        recursive: z.boolean().optional(),
-    }).strict()),
-    lazyZodSchema(() => z.object({
+        recursive: z.optional(z.boolean()),
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_resources.describe_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         id: BoundedIdSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_resources.read_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         id: BoundedIdSchema,
-        maxBytes: SafeNonNegativeIntegerSchema.optional(),
-    }).strict()),
-    lazyZodSchema(() => z.object({
+        maxBytes: z.optional(SafeNonNegativeIntegerSchema),
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_resources.watch.open_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         subscriptionId: BoundedIdSchema,
         id: BoundedIdSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_mcp.list_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
-        sessionId: BoundedIdSchema.optional(),
+        sessionId: z.optional(BoundedIdSchema),
         ...PaginationSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_mcp.discover_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         provider: HostPluginContributionIdentityV1Schema,
-        input: RunnerDaemonPluginServiceWireValueV1Schema.optional(),
+        input: z.optional(RunnerDaemonPluginServiceWireValueV1Schema),
         ...PaginationSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_mcp.connect_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         clientId: BoundedIdSchema,
         ref: HostPluginContributionIdentityV1Schema,
-        sessionId: BoundedIdSchema.optional(),
+        sessionId: z.optional(BoundedIdSchema),
         elicitation: z.discriminatedUnion('mode', [
-            z.object({
+            z.strictObject({
                 mode: z.literal('hostMediated'),
                 sessionId: BoundedIdSchema,
-            }).strict(),
-            z.object({ mode: z.literal('reject') }).strict(),
+            }),
+            z.strictObject({ mode: z.literal('reject') }),
         ]),
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_mcp.client.list_tools_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         clientId: BoundedIdSchema,
         ...PaginationSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_mcp.client.call_tool_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         clientId: BoundedIdSchema,
         name: BoundedIdSchema,
         input: RunnerDaemonPluginServiceWireValueV1Schema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_mcp.client.list_resources_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         clientId: BoundedIdSchema,
         ...PaginationSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_mcp.client.list_resource_templates_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         clientId: BoundedIdSchema,
         ...PaginationSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_mcp.client.read_resource_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         clientId: BoundedIdSchema,
-        uri: z.string().trim().min(1).max(8_192),
-    }).strict()),
-    lazyZodSchema(() => z.object({
+        uri: z.string().check(z.trim(), z.minLength(1), z.maxLength(8_192)),
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_mcp.client.subscribe_resource.open_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         clientId: BoundedIdSchema,
         subscriptionId: BoundedIdSchema,
-        uri: z.string().trim().min(1).max(8_192),
-    }).strict()),
-    lazyZodSchema(() => z.object({
+        uri: z.string().check(z.trim(), z.minLength(1), z.maxLength(8_192)),
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_mcp.client.list_prompts_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         clientId: BoundedIdSchema,
         ...PaginationSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_mcp.client.get_prompt_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         clientId: BoundedIdSchema,
         name: BoundedIdSchema,
-        args: StringRecordSchema.optional(),
-    }).strict()),
-    lazyZodSchema(() => z.object({
+        args: z.optional(StringRecordSchema),
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_mcp.client.close_v1'),
         ...OperationBaseSchema,
         clientId: BoundedIdSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_notifications.send_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
-        request: z.object({
+        request: z.strictObject({
             clientRequestId: BoundedIdSchema,
             categoryId: BoundedIdSchema,
             title: BoundedTextSchema,
-            body: BoundedTextSchema.optional(),
-            channelIds: z.array(BoundedIdSchema).max(256).optional(),
-            data: RunnerDaemonPluginServiceWireValueV1Schema.optional(),
-        }).strict(),
-    }).strict()),
-    lazyZodSchema(() => z.object({
+            body: z.optional(BoundedTextSchema),
+            channelIds: z.optional(z.array(BoundedIdSchema).check(z.maxLength(256))),
+            data: z.optional(RunnerDaemonPluginServiceWireValueV1Schema),
+            itemId: z.optional(z.string().check(z.minLength(1))),
+            type: z.optional(lazyZodSchema(() => asHostProtocolZod(AccountNoticeItemTypeV1Schema))),
+            page: z.optional(lazyZodSchema(() => asHostProtocolZod(AccountNoticePageV1Schema))),
+            resolved: z.optional(z.boolean()),
+        }),
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_notifications.list_channels_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         ...PaginationSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_notifications.list_categories_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         ...PaginationSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_notifications.preferences_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         categoryId: BoundedIdSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal(
             'plugin_notifications.watch_preferences.open_v1',
         ),
@@ -1016,40 +1019,40 @@ export const RUNNER_DAEMON_PLUGIN_SERVICE_OPERATION_V1_SCHEMAS = [
         ...OptionalWitnessSchema,
         subscriptionId: BoundedIdSchema,
         categoryId: BoundedIdSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_connected_accounts.get_binding_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         ...OptionalConnectedAccountsServiceScopeSchema,
         purpose: BoundedIdSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_connected_accounts.request_selection_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         ...OptionalConnectedAccountsServiceScopeSchema,
         purpose: BoundedIdSchema,
-        reason: z.string().trim().min(1).max(4_096),
-    }).strict()),
-    lazyZodSchema(() => z.object({
+        reason: z.string().check(z.trim(), z.minLength(1), z.maxLength(4_096)),
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_connected_accounts.materialize_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         ...OptionalConnectedAccountsServiceScopeSchema,
         purpose: BoundedIdSchema,
-        expectedAccount: HostQualifiedConnectedAccountRefSchema.optional(),
+        expectedAccount: z.optional(HostQualifiedConnectedAccountRefSchema),
         request: ConnectedAccountMaterializationRequestSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_connected_accounts.list_accounts_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         ...OptionalConnectedAccountsServiceScopeSchema,
         purpose: BoundedIdSchema,
-        limit: z.number().int().min(1).max(1_000).optional(),
-    }).strict()),
-    lazyZodSchema(() => z.object({
+        limit: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(1_000))),
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal(
             'plugin_connected_accounts.materialize_listed_account_v1',
         ),
@@ -1059,8 +1062,8 @@ export const RUNNER_DAEMON_PLUGIN_SERVICE_OPERATION_V1_SCHEMAS = [
         purpose: BoundedIdSchema,
         account: HostQualifiedConnectedAccountRefSchema,
         request: ConnectedAccountMaterializationRequestSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal(
             'plugin_connected_accounts.watch.open_v1',
         ),
@@ -1069,8 +1072,8 @@ export const RUNNER_DAEMON_PLUGIN_SERVICE_OPERATION_V1_SCHEMAS = [
         ...OptionalConnectedAccountsServiceScopeSchema,
         subscriptionId: BoundedIdSchema,
         purpose: BoundedIdSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal(
             'plugin_connected_accounts.watch.next_v1',
         ),
@@ -1078,63 +1081,81 @@ export const RUNNER_DAEMON_PLUGIN_SERVICE_OPERATION_V1_SCHEMAS = [
         ...OptionalWitnessSchema,
         ...OptionalConnectedAccountsServiceScopeSchema,
         subscriptionId: BoundedIdSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal(
             'plugin_services.subscription.next_v1',
         ),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
         subscriptionId: BoundedIdSchema,
-        acknowledgement: z.enum([
+        acknowledgement: z.optional(z.enum([
             'settled',
             'rejected',
-        ]).optional(),
-    }).strict()),
-    lazyZodSchema(() => z.object({
+        ])),
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal(
             'plugin_services.subscription.close_v1',
         ),
         ...OperationBaseSchema,
         subscriptionId: BoundedIdSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_exec.agent_cli.check_readiness_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
-        request: z.object({
-            candidates: z.array(BoundedIdSchema).min(1).max(256),
+        request: z.strictObject({
+            candidates: z.array(BoundedIdSchema).check(z.minLength(1), z.maxLength(256)),
             requirement: z.enum(['any', 'all']),
-            includeVersion: z.boolean().optional(),
-            cwd: z.string().max(32_768).optional(),
-            projectId: BoundedIdSchema.optional(),
-            workspaceId: BoundedIdSchema.optional(),
-        }).strict(),
-    }).strict()),
-    lazyZodSchema(() => z.object({
+            includeVersion: z.optional(z.boolean()),
+            cwd: z.optional(z.string().check(z.maxLength(32_768))),
+            projectId: z.optional(BoundedIdSchema),
+            workspaceId: z.optional(BoundedIdSchema),
+        }),
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_exec.system_tools.resolve_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
-        request: z.object({
+        request: z.strictObject({
             toolId: BoundedIdSchema,
-            purpose: z.string().trim().min(1).max(4_096),
-            cwd: z.string().max(32_768).optional(),
+            purpose: z.string().check(z.trim(), z.minLength(1), z.maxLength(4_096)),
+            cwd: z.optional(z.string().check(z.maxLength(32_768))),
             preferredPath:
-                z.string().max(32_768).nullable().optional(),
-        }).strict(),
-    }).strict()),
-    lazyZodSchema(() => z.object({
+                z.optional(z.nullable(z.string().check(z.maxLength(32_768)))),
+        }),
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_exec.launch.authorize_v1'),
         ...OperationBaseSchema,
         ...OptionalWitnessSchema,
-        systemToolResolutionId: BoundedIdSchema.optional(),
+        systemToolResolutionId: z.optional(BoundedIdSchema),
+        agentNativeLaunch: z.optional(z.literal(true)),
         request: ExecSpawnRequestSchema,
-    }).strict()),
-    lazyZodSchema(() => z.object({
+    })),
+    lazyZodSchema(() => z.strictObject({
+        kind: z.literal('plugin_exec.resolved_agent_launch.authorize_v1'),
+        ...OperationBaseSchema,
+        ...OptionalWitnessSchema,
+        launch: z.strictObject({
+            command: z.string().check(z.minLength(1)),
+            args: z.array(z.string()),
+            env: StringRecordSchema,
+            cwd: z.optional(z.string()),
+            stdin: z.optional(Base64Schema),
+            timeoutMs: z.optional(SafeNonNegativeIntegerSchema),
+            maxStdoutBytes: z.optional(SafeNonNegativeIntegerSchema),
+            maxStderrBytes: z.optional(SafeNonNegativeIntegerSchema),
+            processOwnerTag: z.optional(BoundedTextSchema),
+            waitForGracefulRootExitBeforeTreeStop: z.optional(z.literal(true)),
+        }),
+    })),
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_exec.launch.release_v1'),
         ...OperationBaseSchema,
         authorizationId: BoundedIdSchema,
-    }).strict()),
+    })),
 ] as const;
 
 export const RunnerDaemonPluginServiceOperationV1Schema =
@@ -1149,143 +1170,143 @@ export type RunnerDaemonPluginServiceOperationV1 = z.infer<
 
 export const RunnerDaemonPluginServiceSubscriptionEventV1Schema =
     lazyZodSchema(() => z.discriminatedUnion('kind', [
-        z.object({
+        z.strictObject({
                 kind: z.literal(
                     'plugin_settings.watch.event_v1',
                 ),
                 invocationId: BoundedIdSchema,
                 subscriptionId: BoundedIdSchema,
                 scope: RunnerDaemonPluginSettingsScopeV1Schema,
-                change: z.object({
+                change: z.strictObject({
                 revision: BoundedIdSchema,
-                changedIds: z.array(BoundedIdSchema).max(65_536),
+                changedIds: z.array(BoundedIdSchema).check(z.maxLength(65_536)),
                 values: z.record(
-                    z.string().max(4_096),
+                    z.string().check(z.maxLength(4_096)),
                     RunnerDaemonPluginServiceWireValueV1Schema,
                 ),
-            }).strict(),
-        }).strict(),
-        z.object({
+            }),
+        }),
+        z.strictObject({
             kind: z.literal(
                 'plugin_events.subscribe.event_v1',
             ),
             invocationId: BoundedIdSchema,
             subscriptionId: BoundedIdSchema,
-            event: z.object({
+            event: z.strictObject({
                 ref: HostPluginContributionIdentityV1Schema,
                 payload:
                     RunnerDaemonPluginServiceWireValueV1Schema,
                 sequence:
-                    z.number().int().nonnegative().safe(),
-            }).strict(),
-        }).strict(),
-        z.object({
+                    z.number().check(z.int(), z.nonnegative(), z.int()),
+            }),
+        }),
+        z.strictObject({
             kind: z.literal(
                 'plugin_events.host.subscribe.event_v1',
             ),
             invocationId: BoundedIdSchema,
             subscriptionId: BoundedIdSchema,
-            event: z.object({
+            event: z.strictObject({
                 eventId: HostEventIdV1Schema,
                 scope: RunnerDaemonHostEventDeliveryScopeV1Schema,
                 payload:
                     RunnerDaemonPluginServiceWireValueV1Schema,
-            }).strict(),
-        }).strict(),
-        z.object({
+            }),
+        }),
+        z.strictObject({
             kind: z.literal(
                 'plugin_resources.watch.event_v1',
             ),
             invocationId: BoundedIdSchema,
             subscriptionId: BoundedIdSchema,
-            change: z.object({
+            change: z.strictObject({
                 digest: BoundedTextSchema,
-            }).strict(),
-        }).strict(),
-        z.object({
+            }),
+        }),
+        z.strictObject({
             kind: z.literal(
                 'plugin_sessions.external.follow_transcript.event_v1',
             ),
             invocationId: BoundedIdSchema,
             subscriptionId: BoundedIdSchema,
             event: RunnerDaemonPluginServiceWireValueV1Schema,
-        }).strict(),
-        z.object({
+        }),
+        z.strictObject({
             kind: z.literal(
                 'plugin_sessions.external.follow_transcript.opened_v1',
             ),
             invocationId: BoundedIdSchema,
             subscriptionId: BoundedIdSchema,
             result: z.discriminatedUnion('status', [
-                z.object({
+                z.strictObject({
                     status: z.literal('following'),
                     startingCursor:
-                        z.string().max(4_096).nullable(),
-                }).strict(),
-                z.object({
+                        z.nullable(z.string().check(z.maxLength(4_096))),
+                }),
+                z.strictObject({
                     status: z.literal('unavailable'),
                     code: BoundedIdSchema,
-                }).strict(),
-                z.object({
+                }),
+                z.strictObject({
                     status: z.literal('failed'),
                     code: BoundedIdSchema,
                     message: BoundedTextSchema,
-                }).strict(),
+                }),
             ]),
-        }).strict(),
-        z.object({
+        }),
+        z.strictObject({
             kind: z.literal(
                 'plugin_mcp.client.subscribe_resource.event_v1',
             ),
             invocationId: BoundedIdSchema,
             subscriptionId: BoundedIdSchema,
-            event: z.object({
-                uri: z.string().trim().min(1).max(8_192),
-            }).strict(),
-        }).strict(),
-        z.object({
+            event: z.strictObject({
+                uri: z.string().check(z.trim(), z.minLength(1), z.maxLength(8_192)),
+            }),
+        }),
+        z.strictObject({
             kind: z.literal(
                 'plugin_notifications.watch_preferences.event_v1',
             ),
             invocationId: BoundedIdSchema,
             subscriptionId: BoundedIdSchema,
-            preferences: z.object({
+            preferences: z.strictObject({
                 categoryId: BoundedIdSchema,
                 enabled: z.boolean(),
                 channelIds:
-                    z.array(BoundedIdSchema).max(65_536),
+                    z.array(BoundedIdSchema).check(z.maxLength(65_536)),
                 revision: BoundedIdSchema,
-            }).strict(),
-        }).strict(),
-        z.object({
+            }),
+        }),
+        z.strictObject({
             kind: z.literal(
                 'plugin_connected_accounts.watch.event_v1',
             ),
             invocationId: BoundedIdSchema,
             subscriptionId: BoundedIdSchema,
-            event: z.object({
+            event: z.strictObject({
                 kind: z.literal('resync'),
-            }).strict(),
-        }).strict(),
+            }),
+        }),
     ]));
 
 export type RunnerDaemonPluginServiceSubscriptionEventV1 = z.infer<
     typeof RunnerDaemonPluginServiceSubscriptionEventV1Schema
 >;
 
-export const RunnerDaemonAgentCliReadinessResultV1Schema = lazyZodSchema(() => z.object({
-    launchable: z.array(z.object({
+export const RunnerDaemonAgentCliReadinessResultV1Schema = lazyZodSchema(() => z.strictObject({
+    launchable: z.array(z.strictObject({
         agentId: BoundedIdSchema,
-        version: z.string().trim().min(1).optional(),
-    }).strict()),
-}).strict());
+        version: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    })),
+}));
 
 export const RunnerDaemonPluginServiceResultV1Schema =
-    lazyZodSchema(() => z.object({
+    lazyZodSchema(() => z.strictObject({
         kind: z.literal('plugin_services.result_v1'),
         requestId: BoundedIdSchema,
         value: RunnerDaemonPluginServiceWireValueV1Schema,
-    }).strict());
+    }));
 
 export type RunnerDaemonPluginServiceResultV1 = z.infer<
     typeof RunnerDaemonPluginServiceResultV1Schema

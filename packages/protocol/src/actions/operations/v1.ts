@@ -4,12 +4,22 @@ import { z } from 'zod/mini';
 import { SessionForkStrategySchema } from '../../sessions/fork.js';
 import { ProjectSetupConsentFailureDetailsV1Schema, ProjectScriptEffectChangedFailureDetailsV1Schema } from '../projectSetupConsentFailure.js';
 import { ProjectWorkerNoAcceptanceFailureDetailsV1Schema, readProjectWorkerNoAcceptanceFailureV1 } from '../projectWorkerRefusal.js';
+import { ApprovalStaleFailureDetailsSchema } from '../../approvals/approvalStaleReason.js';
 import { WorkspaceAddressV1Schema } from '../../workspaces/workspaceRefV1.js';
 import { ProjectCommandSourceV1Schema } from '../../workspaces/projectSetup/projectManifestV1.js';
 import { LocalServiceManagedServiceActionTargetV1Schema, ProjectServiceDeclarationRefV1Schema } from '../../local/services/actions/v1.js';
 import { createCanonicalJsonSigningInput } from '../../crypto/canonicalJson.js';
 import { ManagedControllerV1Schema } from '../../machines/managed/managedMachineV1.js';
 import { ManagedResourceV1Schema } from '../../machines/managed/providerFactsV1.js';
+import { ActionApprovalRequestCreatedResultSchema, ActionOperationCredentialUseV1Schema } from '../actionExecutionResult.js';
+import { WorkspaceExecutionConfigAddressV1Schema } from '../../workspaces/projectWorkerPreferencesV1.js';
+
+/** Existing operations that may hold their original Project setup invocation. */
+export function canRetainProjectSetupReviewV1(actionId: string): boolean {
+  return actionId === 'projects.prepare' || actionId === 'projects.script.run' || actionId === 'projects.compute.exec'
+    || actionId === 'session.spawn_new' || actionId === 'session.fork' || actionId === 'session.handoff'
+    || actionId === 'execution.run.start' || actionId === 'execution.run.ensure_or_start';
+}
 
 export const ACTION_OPERATION_RPC_METHODS_V1 = Object.freeze({
   list: 'actionOperation.list.v1',
@@ -74,8 +84,12 @@ export const ActionOperationProgressV1Schema = lazyZodSchema(() => z.discriminat
     label: ActionOperationProgressLabelV1Schema,
     /** Current target FIFO observation, not a percentage or admission token. */
     queueAhead: z.optional(z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER))),
+    /** The shared Action executor's blocking Ask; observation only, never decision authority. */
+    approval: z.optional(ActionApprovalRequestCreatedResultSchema),
   }).check(z.refine(value => value.queueAhead === undefined || value.phase === 'queued', {
     path: ['queueAhead'], message: 'FIFO ahead is available only during the queued phase.',
+  }), z.refine(value => value.approval === undefined || value.phase === 'waiting_for_approval', {
+    path: ['approval'], message: 'An open Ask is available only during the approval wait.',
   })),
   z.strictObject({
     kind: z.literal('determinate'),
@@ -91,12 +105,25 @@ export type ActionOperationProgressV1 = Readonly<z.infer<typeof ActionOperationP
 
 /** Public, redacted projection of the canonical terminal Action failure. */
 const ActionOperationErrorCodeV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(ACTION_OPERATION_ERROR_CODE_MAX_LENGTH_V1)));
+/** Credential-free controller diagnostics on the current operation read epoch. */
+export const ManagedControllerRequestFailureDetailsV1Schema = lazyZodSchema(() => z.strictObject({
+  kind: z.literal('managedControllerRequest'),
+  path: z.string().check(z.regex(/^\/v1\/machines\/managed\/(?:controller|actions)\/[a-z.-]+$/)),
+  category: z.enum(['transport', 'status', 'schema', 'currentness']),
+  status: z.optional(z.number().check(z.int(), z.minimum(100), z.maximum(599))),
+  code: z.optional(z.string().check(z.regex(/^[a-z][a-z0-9_-]*$/i), z.maxLength(ACTION_OPERATION_ERROR_CODE_MAX_LENGTH_V1))),
+}));
+export type ManagedControllerRequestFailureDetailsV1 = Readonly<z.infer<typeof ManagedControllerRequestFailureDetailsV1Schema>>;
 export const ActionOperationFailureV1Schema = lazyZodSchema(() => z.strictObject({
   errorCode: ActionOperationErrorCodeV1Schema,
   error: z.string().check(z.trim(), z.minLength(1), z.maxLength(ACTION_OPERATION_ERROR_MAX_LENGTH_V1)),
   details: z.optional(z.union([ProjectSetupConsentFailureDetailsV1Schema, ProjectScriptEffectChangedFailureDetailsV1Schema,
-    ProjectWorkerNoAcceptanceFailureDetailsV1Schema])),
-}).check(z.refine(failure => !failure.details || (failure.details.kind === 'pendingApproval'
+    ProjectWorkerNoAcceptanceFailureDetailsV1Schema, ApprovalStaleFailureDetailsSchema, ManagedControllerRequestFailureDetailsV1Schema])),
+}).check(z.refine(failure => !failure.details || (!('kind' in failure.details)
+  ? failure.errorCode === 'approval_stale'
+  : failure.details.kind === 'managedControllerRequest'
+  ? !failure.details.code || failure.details.code === failure.errorCode
+  : failure.details.kind === 'pendingApproval'
   ? failure.details.code === failure.errorCode
   : readProjectWorkerNoAcceptanceFailureV1({ ok: false, ...failure }) !== null), {
   path: ['details'], message: 'Public refusal facts must match their terminal failure code.',
@@ -148,6 +175,8 @@ export const ActionOperationDomainRefV1Schema = lazyZodSchema(() => z.discrimina
     resource: z.optional(z.lazy(() => ManagedResourceV1Schema)),
     bootstrapTask: z.optional(z.strictObject({ id: ActionOperationIdentifierV1Schema,
       taskKind: z.literal('remote.ssh.bootstrapMachine.v1'),
+      /** The task's current unanswered question, so the waiting surface can ask it; answered through `tool.systemTasks` `respond`. */
+      prompt: z.optional(z.strictObject({ kind: ActionOperationProgressPhaseV1Schema, message: ActionOperationProgressLabelV1Schema })),
     })),
   }),
   z.strictObject({
@@ -177,6 +206,9 @@ export const ActionOperationDomainRefV1Schema = lazyZodSchema(() => z.discrimina
   z.strictObject({
     kind: z.literal('projectService'),
     purpose: z.literal('relocation'),
+    /** Original checkout remains stable while native custody changes Machines. */
+    sourceWorkspace: z.optional(WorkspaceExecutionConfigAddressV1Schema),
+    destinationWorkspace: z.optional(WorkspaceAddressV1Schema),
     workspace: WorkspaceAddressV1Schema,
     declaration: ProjectServiceDeclarationRefV1Schema,
     currentTarget: z.optional(LocalServiceManagedServiceActionTargetV1Schema),
@@ -233,6 +265,8 @@ export const ActionOperationSnapshotV1Schema = lazyZodSchema(() => z.strictObjec
   settledAt: z.optional(ActionOperationTimestampV1Schema),
   progress: z.optional(ActionOperationProgressV1Schema),
   result: z.optional(z.unknown()),
+  /** Current V2 read only: historical host-observed actors, never credential authority. */
+  operationCredentialUses: z.optional(z.array(ActionOperationCredentialUseV1Schema)),
   error: z.optional(ActionOperationFailureV1Schema),
   domainRef: z.optional(ActionOperationDomainRefV1Schema),
   observation: z.optional(ActionOperationObservationV1Schema),
@@ -262,8 +296,10 @@ export const ActionOperationSnapshotV1Schema = lazyZodSchema(() => z.strictObjec
     context.addIssue({ code: 'custom', path: ['observation'], message: 'Unconfirmed observations cannot accompany terminal process evidence.' });
   }
   if (snapshot.setupReview && (terminal || snapshot.domainRef?.kind !== 'projectCommand'
-    || !['projects.prepare', 'projects.script.run', 'projects.compute.exec'].includes(snapshot.actionId))) {
-    context.addIssue({ code: 'custom', path: ['setupReview'], message: 'Only live finite commands may retain a no-effect setup review.' });
+    || !canRetainProjectSetupReviewV1(snapshot.actionId)
+    || !['projects.prepare', 'projects.script.run', 'projects.compute.exec'].includes(snapshot.actionId)
+      && snapshot.domainRef.purpose !== 'setup')) {
+    context.addIssue({ code: 'custom', path: ['setupReview'], message: 'Only live Project preparation operations may retain a no-effect setup review.' });
   }
   if (snapshot.startedAt !== undefined && snapshot.startedAt < snapshot.createdAt) {
     context.addIssue({ code: 'custom', path: ['startedAt'], message: 'startedAt cannot precede createdAt.' });
@@ -279,7 +315,8 @@ export type ActionOperationSnapshotV1 = Readonly<z.infer<typeof ActionOperationS
  * current readers use V2 and the store retains the complete owner observation.
  * Remove this projection when that supported predecessor reader is retired. */
 export function projectActionOperationSnapshotForV1Reader(snapshot: ActionOperationSnapshotV1): ActionOperationSnapshotV1 {
-  const { domainRef, setupReview: _review, observation: _observation, error, progress, ...projection } = snapshot;
+  const { domainRef, setupReview: _review, observation: _observation, operationCredentialUses: _credentialUses,
+    error, progress, ...projection } = snapshot;
   const legacyDomainRef = domainRef?.kind === 'forkRequest' || domainRef?.kind === 'spawnAttempt'
     || domainRef?.kind === 'handoff' ? domainRef : undefined;
   const legacyProgress = progress?.kind === 'phase'

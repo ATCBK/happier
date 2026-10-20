@@ -24,6 +24,7 @@ bundledBrands.push({ pluginId: 'happier.provider.deepseek', resourceId: 'brand-i
 const rpc = createProviderSettingsHarness();
 installProviderSettingsRpcBoundary(rpc);
 const account = createProviderSettingsAccountHarness();
+const { renderSelectionListAccessory } = await import('@/components/ui/selectionList');
 const { ProviderIcon } = await import('./ProviderIcon');
 const { Icon } = await import('@/components/ui/icons/Icon');
 const { SessionModelSourceBrowseHandoffContext } = await import('@/components/sessions/modelPicker/SessionModelSourceBrowseHandoff');
@@ -62,7 +63,7 @@ describe('packaged Provider marks through admitted consumers', () => {
         function Probe() {
             const sections = useSessionRouteSourceSections(sources);
             return <>{sections.flatMap(section => section.kind === 'static' ? section.options.map(option =>
-                <React.Fragment key={option.id}>{option.icon}</React.Fragment>) : [])}</>;
+                <React.Fragment key={option.id}>{renderSelectionListAccessory(option.icon)}</React.Fragment>) : [])}</>;
         }
         const screen = await renderScreen(<SessionModelSourceBrowseHandoffContext.Provider value={{ request: null, browse: () => {} }}>
             <Probe />
@@ -82,7 +83,7 @@ describe('packaged Provider marks through admitted consumers', () => {
         function Probe() {
             const sections = useSessionRouteSourceSections(sources);
             return <>{sections.flatMap(section => section.kind === 'static' ? section.options.map(option =>
-                <React.Fragment key={option.id}>{option.icon}</React.Fragment>) : [])}</>;
+                <React.Fragment key={option.id}>{renderSelectionListAccessory(option.icon)}</React.Fragment>) : [])}</>;
         }
         const screen = await renderScreen(<SessionModelSourceBrowseHandoffContext.Provider value={{ request: null, browse: () => {} }}>
             <Probe />

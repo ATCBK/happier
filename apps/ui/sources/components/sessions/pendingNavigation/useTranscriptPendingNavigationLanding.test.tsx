@@ -1,24 +1,25 @@
 import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ToolCallMessage, TranscriptOlderPageLoadResult } from '@happier-dev/session-core/messages';
-import { renderHook, renderScreen, standardCleanup, createSessionMessagesFixture, flushHookEffects } from '@/dev/testkit';
-import { createReducer } from '@happier-dev/session-core/reducer';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
-import { getStorage } from '@/sync/domains/state/storageStore';
-import { sync } from '@/sync/sync';
-import { AppSessionTranscriptSourceProvider } from '@/components/sessions/transcript/source/appSessionTranscriptSource';
-import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
-import { setPendingNavigationLanding, clearPendingNavigationState } from '@/activity/source/pendingNavigationRuntime';
-import { usePendingPromptLanding } from '@/components/tools/shell/permissions/usePendingPromptPrimaryFocus';
-import { createTranscriptJumpHostTestHarness, restoreTranscriptJumpEnvironment } from '@/components/sessions/transcript/viewport/jump/host/transcriptJumpHostTestHarness';
-import { TranscriptPendingNavigationLanding, useTranscriptPendingNavigationLanding } from './useTranscriptPendingNavigationLanding';
-import { PendingNavigationSettledNotice } from './PendingNavigationSettledNotice';
-import { usePendingNavigationLanding } from '@/activity/source/pendingNavigationRuntime';
 import type { TranscriptJumpResult } from '@/components/sessions/transcript/viewport/jump/transcriptJumpTargetTypes';
 
+// The socket boundary must be installed before any runtime consumer loads socket.io-client.
 installDisconnectedServerSocketBoundary();
+const { renderHook, renderScreen, standardCleanup, createSessionMessagesFixture, flushHookEffects } = await import('@/dev/testkit');
+const { createReducer } = await import('@happier-dev/session-core/reducer');
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+const { getStorage } = await import('@/sync/domains/state/storageStore');
+const { AppSessionTranscriptSourceProvider } = await import('@/components/sessions/transcript/source/appSessionTranscriptSource');
+const { useSessionTranscriptSource } = await import('@/components/sessions/transcript/source/SessionTranscriptSourceContext');
+const { setPendingNavigationLanding, clearPendingNavigationState, usePendingNavigationLanding } = await import('@/activity/source/pendingNavigationRuntime');
+const { usePendingPromptLanding } = await import('@/components/tools/shell/permissions/usePendingPromptPrimaryFocus');
+const { createTranscriptJumpHostTestHarness, restoreTranscriptJumpEnvironment } = await import('@/components/sessions/transcript/viewport/jump/host/transcriptJumpHostTestHarness');
+const { TranscriptPendingNavigationLanding, useTranscriptPendingNavigationLanding } = await import('./useTranscriptPendingNavigationLanding');
+const { PendingNavigationSettledNotice } = await import('./PendingNavigationSettledNotice');
 await loadSyncSingletonForTests();
+// `sync` is assigned by the singleton loader, so read it only after loading.
+const { sync } = await import('@/sync/sync');
 afterEach(() => { clearPendingNavigationState(); standardCleanup(); });
 
 function sessionSnapshot(id: string) {

@@ -1,5 +1,6 @@
 import type { BrowserCommandV1 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RpcError } from '@happier-dev/protocol/rpcErrors';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const machineRpcWithServerScopeMock = vi.hoisted(() => vi.fn());
@@ -11,6 +12,7 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
 import {
     createBrowserDaemonControlCommandSender,
     dispatchBrowserDaemonControlCommandViaMachineRpc,
+    listBrowserDaemonViewsViaMachineRpc,
 } from './machineRpc';
 
 const MACHINE_ID = 'machine_1';
@@ -105,6 +107,16 @@ describe('dispatchBrowserDaemonControlCommandViaMachineRpc', () => {
         });
 
         expect(result).toEqual({ ok: false, reason: 'request_failed' });
+    });
+
+    it.each(['result', 'throw'] as const)('keeps the managed-browser prerequisite from a typed %s', async (kind) => {
+        if (kind === 'result') machineRpcWithServerScopeMock.mockResolvedValue({ error: 'Browser prerequisite', errorCode: 'managed_package_missing' });
+        else machineRpcWithServerScopeMock.mockRejectedValue(new RpcError('Browser prerequisite', 'managed_package_missing'));
+        const scope = { machineId: MACHINE_ID, serverId: SERVER_ID };
+        expect(await dispatchBrowserDaemonControlCommandViaMachineRpc({ ...scope, command: RELOAD_COMMAND }))
+            .toEqual({ ok: false, reason: 'managed_package_missing' });
+        expect(await listBrowserDaemonViewsViaMachineRpc({ ...scope, browserSessionId: RELOAD_COMMAND.browserSessionId }))
+            .toEqual({ ok: false, reason: 'managed_package_missing' });
     });
 });
 

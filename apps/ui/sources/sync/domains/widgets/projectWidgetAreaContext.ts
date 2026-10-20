@@ -1,5 +1,5 @@
 import { WorkspaceRefV1Schema } from '@happier-dev/protocol/workspaces/workspaceRefV1';
-import type { WidgetBindingResolutionInputV1 } from '@happier-dev/protocol/widgets';
+import { composeWidgetGroupContextV1, type WidgetBindingResolutionInputV1 } from '@happier-dev/protocol/widgets';
 import { projectWorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefResolutionV1';
 import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { sameWorkspaceProject } from '@/sync/domains/workspaces/workspaceRefs';
@@ -24,10 +24,11 @@ export function readProjectWidgetAreaContextV1(input: Readonly<{
     const source = input.source && sourceId === input.source.source.id
         && areServerProfileIdentifiersEquivalent(input.source.serverId, input.serverId)
         ? { serverId: resolveServerProfileScopeIdForIdentifier(input.source.serverId), ...input.source.source } : null;
+    const providedContext = composeWidgetGroupContextV1({
+        ...(projectIdentity ? { surfaceOwner: { kind: 'project', projectId: projectIdentity.projectKey } } : {}),
+        providedContext: { project: source ? [source] : [], checkout: activeCheckout ? [activeCheckout] : [],
+            ...(!projectIdentity ? { projects: [] } : {}) },
+    });
     return { status: source ? 'ready' : 'unavailable', ...(!source ? { reasonCode: 'widget_project_source_unavailable' as const } : {}),
-        sourceId, projectIdentity, providedContext: {
-        project: source ? [source] : [],
-        checkout: activeCheckout ? [activeCheckout] : [],
-        projects: projectIdentity ? [[projectIdentity.projectKey]] : [],
-    } };
+        sourceId, projectIdentity, providedContext };
 }

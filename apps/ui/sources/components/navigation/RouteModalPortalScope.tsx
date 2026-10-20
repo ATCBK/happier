@@ -3,6 +3,7 @@ import { useIsFocused } from '@/components/appShell/workspace/destinationRoute';
 
 import { PopoverScope } from '@/components/ui/popover';
 import { ModalProvider } from '@/modal';
+import { PluginSurfaceFocusEligibilityProvider } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 /**
  * Portal scope for routes presented modally (e.g. `/new`, settings on tablet/desktop).
@@ -20,10 +21,12 @@ export function RouteModalPortalScope(props: Readonly<{ children: React.ReactNod
     const isFocused = useIsFocused();
 
     return (
-        <PopoverScope>
-            <ModalProvider active={isFocused}>
-                {props.children}
-            </ModalProvider>
-        </PopoverScope>
+        <PluginSurfaceFocusEligibilityProvider active={isFocused}>
+            <PopoverScope>
+                <ModalProvider active={isFocused}>
+                    {props.children}
+                </ModalProvider>
+            </PopoverScope>
+        </PluginSurfaceFocusEligibilityProvider>
     );
 }

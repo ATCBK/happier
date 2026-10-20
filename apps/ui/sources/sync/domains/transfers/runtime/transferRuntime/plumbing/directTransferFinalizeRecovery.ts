@@ -13,6 +13,7 @@ import {
     type MachineCarrierHttpLease,
 } from './machineCarrierHttpLease';
 import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 
 export type TransferFinalizeRecoveryActionResult<TResponse> =
     | Readonly<{ status: 'finalized'; response: TResponse }>
@@ -36,6 +37,7 @@ export type TransferFinalizeRecoveryContinuation<TResponse> = Readonly<{
     isActionable: () => boolean;
     invoke: (
         action: TransferFinalizeRecoveryAction,
+        signal?: AbortSignal | null,
     ) => Promise<TransferFinalizeRecoveryActionResult<TResponse>>;
 }>;
 
@@ -107,19 +109,20 @@ export function settleTransferFinalizeRecovery<TResponse = never>(
 /** One continuation lifecycle shared by direct-machine and Session-bound carriers. */
 export function createTransferFinalizeRecovery<TResponse>(params: Readonly<{
     expiresAt: number;
-    retryFinalize: () => Promise<TransferFinalizeRecoveryOperationOutcome<TResponse>>;
-    discard: () => Promise<TransferFinalizeRecoveryOperationOutcome<TResponse>>;
+    retryFinalize: (signal?: AbortSignal | null) => Promise<TransferFinalizeRecoveryOperationOutcome<TResponse>>;
+    discard: (signal?: AbortSignal | null) => Promise<TransferFinalizeRecoveryOperationOutcome<TResponse>>;
     onSettled?: () => void;
 }>): TransferFinalizeRecoveryContinuation<TResponse> {
     let inFlight: Promise<TransferFinalizeRecoveryActionResult<TResponse>> | null = null;
     let settled: TransferFinalizeRecoveryActionResult<TResponse> | null = null;
-    const invoke = (action: TransferFinalizeRecoveryAction): Promise<TransferFinalizeRecoveryActionResult<TResponse>> => {
+    const invoke = (action: TransferFinalizeRecoveryAction, signal?: AbortSignal | null): Promise<TransferFinalizeRecoveryActionResult<TResponse>> => {
         if (action !== 'retry_finalize' && action !== 'discard_staged') {
             return Promise.resolve(createUnavailableResult({ reason: 'invalid_action', error: 'Unsupported transfer recovery action' }));
         }
         if (settled) return Promise.resolve(settled);
+        if (signal?.aborted) return Promise.reject(signal.reason);
         if (inFlight) return inFlight;
-        inFlight = (action === 'retry_finalize' ? params.retryFinalize() : params.discard()).then((outcome) => {
+        inFlight = (action === 'retry_finalize' ? params.retryFinalize(signal) : params.discard(signal)).then((outcome) => {
             if (outcome.settlesContinuation) { settled = outcome.result; params.onSettled?.(); }
             return outcome.result;
         }).finally(() => { inFlight = null; });
@@ -206,17 +209,18 @@ export function createDirectTransferFinalizeRecovery<TResponse>(params: Readonly
         });
     };
 
-    const retryFinalize = async (): Promise<TransferFinalizeRecoveryOperationOutcome<TResponse>> => {
+    const retryFinalize = async (signal?: AbortSignal | null): Promise<TransferFinalizeRecoveryOperationOutcome<TResponse>> => {
         if (params.accountLifetime && !params.accountLifetime.isCurrent()) return settleTransferFinalizeRecovery(createUnavailableResult({
             reason: 'session_unavailable', error: 'The original transfer Account is no longer current' }));
         const retirement = new AbortController();
         const subscription = params.accountLifetime?.onRetire(() => retirement.abort());
+        const cancellation = mergeAbortSignals([signal ?? undefined, retirement.signal]);
         let carrier: MachineCarrierHttpLease | null = null;
         try {
             let carrierRequest: ReturnType<typeof resolveDirectImportCarrierRequest>;
             try {
                 carrier = params.acquireCarrier
-                    ? await params.acquireCarrier({ operationId: params.uploadId, ...(params.accountLifetime ? { signal: retirement.signal } : {}) })
+                    ? await params.acquireCarrier({ operationId: params.uploadId, signal: cancellation.signal })
                     : null;
                 carrierRequest = resolveDirectImportCarrierRequest({
                     endpointUrl: params.baseUrl,
@@ -233,14 +237,17 @@ export function createDirectTransferFinalizeRecovery<TResponse>(params: Readonly
 
             let response: DirectTransferImportFinalizeResponse;
             try {
-                retirement.signal.throwIfAborted();
+                cancellation.signal.throwIfAborted();
                 response = await finalizeDirectImportSession({
                     baseUrl: carrierRequest.url,
                     timeoutMs: params.timeoutMs ?? null,
-                    ...(params.accountLifetime ? { signal: retirement.signal } : {}),
+                    signal: cancellation.signal,
                     ...(carrierRequest.request ? { request: carrierRequest.request } : {}),
                 });
             } catch {
+                if (signal?.aborted) return retainTransferFinalizeRecovery(createUnavailableResult({
+                    reason: 'session_unavailable', error: MACHINE_CARRIER_INTERRUPTED_TRANSFER_ERROR,
+                }));
                 return settleTransferFinalizeRecovery(createUnavailableResult({
                     reason: 'session_unavailable',
                     error: 'The staged upload is no longer available',
@@ -250,28 +257,30 @@ export function createDirectTransferFinalizeRecovery<TResponse>(params: Readonly
             return finalizeResponseOutcome(response);
         } finally {
             subscription?.dispose();
+            cancellation.dispose();
             // Custody returns to the lease owner exactly as the upload does; a
             // failed release stays retained and retryable there.
             await Promise.resolve(carrier?.release()).catch(() => undefined);
         }
     };
 
-    const discard = async (): Promise<TransferFinalizeRecoveryOperationOutcome<TResponse>> => {
+    const discard = async (signal?: AbortSignal | null): Promise<TransferFinalizeRecoveryOperationOutcome<TResponse>> => {
         if (params.accountLifetime && !params.accountLifetime.isCurrent()) return settleTransferFinalizeRecovery(createUnavailableResult({
             reason: 'session_unavailable', error: 'The original transfer Account is no longer current' }));
         let carrier: MachineCarrierHttpLease | null = null;
         const retirement = new AbortController();
         const subscription = params.accountLifetime?.onRetire(() => retirement.abort());
+        const cancellation = mergeAbortSignals([signal ?? undefined, retirement.signal]);
         try {
             if (params.filesystemRootPath) {
                 carrier = params.acquireCarrier ? await params.acquireCarrier({ operationId: params.uploadId,
-                    ...(params.accountLifetime ? { signal: retirement.signal } : {}) }) : null;
-                retirement.signal.throwIfAborted();
+                    signal: cancellation.signal }) : null;
+                cancellation.signal.throwIfAborted();
                 const endpoint = resolveDirectImportCarrierRequest({ endpointUrl: params.baseUrl, carrier });
                 const failed = await abortOwnedDirectImportSession({ machineId: params.machineId, serverId: params.serverId,
                     accountId: params.accountId, uploadId: params.uploadId, filesystemRootPath: params.filesystemRootPath,
                     preparedSession: { baseUrls: [endpoint.url], ...(endpoint.request ? { request: endpoint.request } : {}) },
-                    timeoutMs: params.timeoutMs });
+                    timeoutMs: params.timeoutMs, signal: cancellation.signal });
                 return failed ? retainTransferFinalizeRecovery(createUnavailableResult({ reason: 'session_unavailable', error: failed.error }))
                     : settleTransferFinalizeRecovery({ status: 'discarded' });
             }
@@ -282,6 +291,7 @@ export function createDirectTransferFinalizeRecovery<TResponse>(params: Readonly
                 uploadId: params.uploadId,
                 filesystemRootPath: params.filesystemRootPath,
                 timeoutMs: params.timeoutMs ?? null,
+                signal: cancellation.signal,
             });
             if (result.aborted !== true) {
                 return settleTransferFinalizeRecovery(createUnavailableResult({
@@ -295,7 +305,7 @@ export function createDirectTransferFinalizeRecovery<TResponse>(params: Readonly
                 reason: 'session_unavailable',
                 error: 'The staged upload could not be discarded because its session is unavailable',
             }));
-        } finally { subscription?.dispose(); await Promise.resolve(carrier?.release()).catch(() => undefined); }
+        } finally { subscription?.dispose(); cancellation.dispose(); await Promise.resolve(carrier?.release()).catch(() => undefined); }
     };
     return createTransferFinalizeRecovery({ expiresAt: params.expiresAt, retryFinalize, discard, onSettled: params.onSettled });
 }

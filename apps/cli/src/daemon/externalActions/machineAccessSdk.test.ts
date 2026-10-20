@@ -9,6 +9,7 @@ import { signAccountContentKeyBindingV1 } from '@happier-dev/protocol/crypto/acc
 import { computeContentPublicKeyFingerprint } from '@happier-dev/protocol/machines/identity/contentPublicKeyFingerprint';
 import { computeMachineOwnerEnvelopeFingerprintV1 } from '@happier-dev/protocol/machines/machineOwnerEnvelopeFingerprintV1';
 import { MachineRecipientKeyEnvelopeCommitInputV1Schema, type MachineAccessRecipientCensusResponseV1 } from '@happier-dev/protocol/machines/machineAccessV1';
+import { MachinePublishedRowV1Schema } from '@happier-dev/protocol/machines/machineContentKeyTransitionV1';
 import { createMachineContentCodec } from '@/api/machine/machineStoredContent';
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
 import { reconcileExternalActionTarget, resolveExternalActionMachineTarget } from './reconcileExternalActionTarget';
@@ -42,6 +43,14 @@ describe('advertised SDK key preparation on a distinct trusted key holder', () =
     const app = fastify();
     let delivered: Uint8Array | null = null;
     let origin = '';
+    app.get('/v1/machines/alice-resource', async request => {
+      expect(request.headers.authorization).toBe(`Bearer ${token}`);
+      return { machine: MachinePublishedRowV1Schema.parse({
+        id: resource.machineId, ...page.content, dataEncryptionKey: callerDataEncryptionKey,
+        access: { custodian: { accountId: 'alice', displayName: 'Alice' }, role: 'manage',
+          resourceMode: 'e2ee', accessState: 'ready' },
+      }) };
+    });
     app.get('/v1/machines/alice-resource/data-key-envelopes', async request => {
       // The network fixture stands in for current server Manage admission.
       expect(request.headers.authorization).toBe(`Bearer ${token}`);

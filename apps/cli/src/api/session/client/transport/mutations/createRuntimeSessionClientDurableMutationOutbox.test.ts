@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
 import { createSessionProviderInputConsumer } from '@/agent/runtime/session/input/sessionProviderInputConsumer';
+import { prepareSessionEventMessageViaPort } from '../../transcript/sendMessages';
+import { SESSION_CAPABILITY_NOTICE_SIDECAR_KEY } from '@happier-dev/protocol/sessions/messages/sessionCapabilityNoticeV1';
 import {
     SESSION_TRANSCRIPT_OBSERVATION_CAPABILITY_EVENT_V1,
     SESSION_TRANSCRIPT_OBSERVATION_EVENT_V1,
@@ -54,6 +56,36 @@ function createDeferred<T = void>() {
 }
 
 describe('runtime session client durable mutation outbox', () => {
+    it('keeps startup capability facts on one transcript identity across runner delivery lifetimes', async () => {
+        const sessionId = 'startup-notice-retry';
+        const committed = new Set<string>();
+        // The Home transport is the boundary; preparation, durable journal and
+        // successor delivery all run through their production owners.
+        const socket = { connected: true, emit: vi.fn(), emitWithAck: async (_event: string, input: unknown) => {
+            const { localId } = input as { localId: string };
+            const didWrite = !committed.has(localId);
+            committed.add(localId);
+            return { ok: true, status: 'observed', id: localId, seq: committed.size, localId, didWrite, ingestedAt: 200 };
+        } };
+        for (const [index, detail] of ['content_unreadable', 'content_unreadable', 'permission_denied'].entries()) {
+            const outbox = createRuntimeSessionClientDurableMutationOutbox({ token: 'token', sessionId,
+                getSocket: () => socket, requestReconnect: () => undefined });
+            try {
+                await outbox.setSessionSyncPendingInputServerContract(serverContract('session_sync_v2_pending_input_v1'));
+                const prepared = prepareSessionEventMessageViaPort({
+                    buildOutboundSessionMessagePayload: content => ({ t: 'plain', v: content }),
+                }, { type: 'message', message: 'Skill unavailable', [SESSION_CAPABILITY_NOTICE_SIDECAR_KEY]: { v: 1,
+                    items: [{ kind: 'skill', name: 'Review', itemId: 'skill-1', code: 'skills_unavailable', detail }] } });
+                const result = await outbox.enqueueTranscriptMessage(createTranscriptMessageAppendMutation({ sessionId,
+                    localId: prepared.localId, content: prepared.payload, createdAt: 100 + index,
+                    provenance: { kind: 'non_dependent', source: 'background' } }));
+                expect(result).toMatchObject({ persisted: true, delivered: true });
+                expect(committed.size).toBe(index < 2 ? 1 : 2);
+            } finally {
+                await outbox.close();
+            }
+        }
+    });
     it('cancels only the selected delivery handle on close and preserves the same transcript for its successor', async () => {
         const started = createDeferred();
         const lateAck = createDeferred<unknown>();

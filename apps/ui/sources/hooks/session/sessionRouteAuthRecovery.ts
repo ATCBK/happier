@@ -2,7 +2,7 @@ import type { SessionAuthSurfaceState } from '@/components/sessions/shell/sessio
 import { resolveSessionAuthSurfaceState } from '@/components/sessions/shell/sessionAuthSurfaceState';
 import { selectSyncErrorForServer } from '@/sync/runtime/connectivity/syncErrorScope';
 import { normalizeSessionId } from '@/sync/domains/session/normalizeSessionId';
-import { createSessionRouteServerScope } from './sessionRouteServerScope';
+import { createSessionRouteServerScope, type SessionRouteServerScope } from './sessionRouteServerScope';
 
 type SessionRouteAuthRecoverySyncError = Readonly<{
     message: string;
@@ -14,7 +14,7 @@ type SessionRouteParams = Readonly<Record<string, string | string[] | undefined>
 
 export type SessionRouteAuthRecoveryState = Readonly<{
     sessionId: string;
-    baseHref: string | null;
+    baseHref: ReturnType<SessionRouteServerScope['buildHref']> | null;
     currentRouteServerId: string | null;
     authSurfaceState: SessionAuthSurfaceState | null;
 }>;

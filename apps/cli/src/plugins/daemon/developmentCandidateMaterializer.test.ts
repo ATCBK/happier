@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { preparePluginDevelopmentRoot } from './developmentCandidateMaterializer';
-import { runManagedPluginPnpm, runPluginAuthorToolchain, type PluginAuthorToolchainDeps } from '@/plugins/authoring/toolchain';
+import { isPluginAuthorRootMaterialized, runManagedPluginPnpm, runPluginAuthorToolchain, type PluginAuthorToolchainDeps } from '@/plugins/authoring/toolchain';
 
 describe('preparePluginDevelopmentRoot', () => {
   it('prepares the first-party source workspace without a managed tool or primary dependency refresh', async () => {
@@ -51,6 +51,11 @@ describe('preparePluginDevelopmentRoot', () => {
         name: '@happier-dev/plugins-fixture',
         dependencies: { '@fixture/dependency': '^1.0.0' },
       }));
+      const sdkRoot = join(sourceRootPath, 'node_modules', '@happier-dev', 'plugin-sdk');
+      await mkdir(sdkRoot, { recursive: true });
+      await writeFile(join(sdkRoot, 'package.json'), JSON.stringify({
+        name: '@happier-dev/plugin-sdk', version: '0.0.0',
+      }));
       if (installedVersion) {
         const dependencyRoot = join(repoRoot, 'node_modules', '@fixture', 'dependency');
         await mkdir(dependencyRoot, { recursive: true });
@@ -58,6 +63,7 @@ describe('preparePluginDevelopmentRoot', () => {
           name: '@fixture/dependency', version: installedVersion,
         }));
       }
+      await expect(isPluginAuthorRootMaterialized(sourceRootPath)).resolves.toBe(false);
       const result = await runPluginAuthorToolchain({ operation: 'install', projectRoot: sourceRootPath }, {
         ensureManagedPnpmCommand,
         managedPnpmBinPath: () => '/unused-managed-pnpm',

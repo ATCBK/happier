@@ -1,14 +1,13 @@
-import type { SessionDiscussionSelectionSourceV1 } from '@happier-dev/protocol';
+import type { DiscussionSelectionSourceV1 } from '@happier-dev/protocol';
 import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 
-import { useSessionDiscussionTitles } from '@/components/sessions/conversations/useSessionDiscussionTitles';
+import { useDiscussionTitles } from '@/components/discussions/useDiscussionTitles';
 import { ExecutionRunAgentMark } from '@/components/sessions/runs/ExecutionRunAgentMark';
 import { ExecutionRunContextChip } from '@/components/sessions/runs/ExecutionRunContextChip';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
-import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { t } from '@/text';
 
 const stylesheet = StyleSheet.create((theme) => ({
@@ -42,15 +41,15 @@ const stylesheet = StyleSheet.create((theme) => ({
 export const ExecutionRunDraftSelectionContext = React.memo((props: Readonly<{
     sessionId: string;
     serverId: string | null;
-    origin: SessionDiscussionSelectionSourceV1;
+    origin: DiscussionSelectionSourceV1;
     contextText: string;
     agentId: string | null;
 }>) => {
     const styles = stylesheet;
     useUnistyles();
-    const address = React.useMemo(() => normalizeSessionAddress(props.serverId, props.sessionId), [props.serverId, props.sessionId]);
+    const address = React.useMemo(() => ({ serverId: props.origin.serverId }), [props.origin.serverId]);
     const discussionIds = React.useMemo(() => [props.origin.discussionId], [props.origin.discussionId]);
-    const titles = useSessionDiscussionTitles({ address, discussionIds });
+    const titles = useDiscussionTitles({ address, discussionIds });
     return (
         <View testID="execution-run-draft-context" style={styles.root}>
             <View style={styles.lead}>

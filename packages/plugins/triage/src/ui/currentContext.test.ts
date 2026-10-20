@@ -254,7 +254,7 @@ describe('Triage current UI context projection', () => {
         level: 'required' as const,
         fromSourceInstanceId: INSTANCE,
         reasonId: 'involvement/review-requested',
-        reasonLabel: 'Your review was requested',
+        reasonLabel: 'Review requested',
       },
     };
     const issueB = row({ entryId: 'B', title: 'Focused issue B' });

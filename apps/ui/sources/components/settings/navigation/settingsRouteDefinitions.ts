@@ -40,6 +40,7 @@ export const SETTINGS_ROUTE_CHROME_DEFINITIONS: readonly SettingsRouteChromeDefi
     { name: 'appearance/themes/export', titleKey: 'settingsAppearance.themeProfiles.exportProfile' },
     { name: 'attachments', titleKey: 'settings.attachments' },
     { name: 'connect/claude', headerShown: false },
+    { name: 'coordination', titleKey: 'settingsCoordination.title' },
     // Connected services is one collection (its rail + the detail) under its own nested stack; the
     // index of every service is its unselected detail (lab `csvc` C1/C2).
     { name: 'connected-services', titleKey: 'settings.connectedServices' },
@@ -185,7 +186,7 @@ export const SETTINGS_ROUTE_CHROME_DEFINITIONS: readonly SettingsRouteChromeDefi
     { name: '[agentId]', navigator: 'agents', titleKey: 'settingsAgents.title' },
     { name: '[agentId]/models', navigator: 'agents', titleKey: 'settingsAgents.models' },
     { name: 'custom/index', navigator: 'agents', titleKey: 'settingsAgents.customAcp.newTitle' },
-    { name: 'custom/[backendId]', navigator: 'agents', titleKey: 'settingsAgents.collection.customAgents' },
+    { name: 'custom/[backendId]', navigator: 'agents', titleKey: 'settingsAgents.title' },
     { name: 'providers', titleKey: 'settingsProviders.title' },
     { name: 'index', navigator: 'providers', titleKey: 'settingsProviders.title' },
     { name: '[connectionId]', navigator: 'providers', titleKey: 'settingsProviders.title' },

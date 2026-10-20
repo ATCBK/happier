@@ -156,8 +156,10 @@ describe('BaseModal over a route modal (web)', () => {
             await act(async () => { pressEscape(); });
             await expect(result).resolves.toBeNull();
             await act(async () => { await Promise.resolve(); });
-            expect(document.querySelector('[aria-modal="true"]')).toBeNull();
-            expect(document.activeElement).toBe(opener);
+            await vi.waitFor(() => {
+                expect(document.querySelector('[aria-modal="true"]')).toBeNull();
+                expect(document.activeElement).toBe(opener);
+            });
         } finally {
             await act(async () => { root.unmount(); });
             container.remove();

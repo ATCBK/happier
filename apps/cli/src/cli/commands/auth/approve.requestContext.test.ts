@@ -9,6 +9,7 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { captureStdoutJsonOutput } from '@/testkit/logger/captureOutput';
+import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
 
 describe('auth approve request pairing context', () => {
   const envKeys = [
@@ -59,6 +60,7 @@ describe('auth approve request pairing context', () => {
 
     const postedBodies: Array<Record<string, unknown>> = [];
     const app = fastify({ logger: false });
+    app.get('/v1/account/encryption/currentness', async () => createAccountEncryptionCurrentnessFixture({ mode: 'plain' }));
     app.post('/v1/auth/response', async (req, reply) => {
       postedBodies.push(req.body as Record<string, unknown>);
       return reply.send({ success: true });

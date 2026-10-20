@@ -49,7 +49,7 @@ import { createReactNativePersistentArtifactStore } from './artifactFileMaterial
 
 /** Bytes are content-addressed inside the existing Account privacy partition. */
 export function derivePluginReactNativeBundleCacheKey(
-    identity: PluginReactNativeBundleCacheIdentity,
+    identity: PluginReactNativeBundleCacheIdentity | Pick<PluginReactNativeBundleCacheIdentity, 'artifactDigest'>,
 ): string {
     return identity.artifactDigest;
 }
@@ -126,7 +126,7 @@ export type PluginReactNativeBundleCache = Readonly<{
         entryRelativePath?: string;
         files?: readonly PluginReactNativeCachedArtifactFile[];
     }>, writeFence?: PluginReactNativeBundleCacheWriteFence) => PluginReactNativeBundleCachePutResult;
-    readInstalledArtifact: (identity: PluginReactNativeBundleCacheIdentity) => PluginReactNativeCachedArtifact | null;
+    readInstalledArtifact: (identity: PluginReactNativeBundleCacheIdentity | Pick<PluginReactNativeBundleCacheIdentity, 'artifactDigest'>, accountScope?: ServerAccountScope) => PluginReactNativeCachedArtifact | null;
     readPersistentArtifact: (
         identity: PluginReactNativePersistentArtifactIdentity,
     ) => Promise<PluginReactNativePersistentArtifactRecord | null>;
@@ -466,9 +466,19 @@ export function createPluginReactNativeArtifactLeasePersistentScope(input: Reado
     const canRemovePersistentArtifact = () => operation !== null && isCurrent();
     const store: PluginUiPersistentArtifactStore = Object.freeze({
         read: async (identity) => {
-            if (!canUseStore()) {
-                return null;
-            }
+            if (!isCurrent()) return null;
+            await operation?.awaitPendingPersistentArtifactRemoval(identity);
+            if (!isCurrent()) return null;
+            // The executable cache already holds the verified complete file set.
+            // Reuse its Account-qualified bytes even on hosts without persistent storage.
+            const hot = input.cache.readInstalledArtifact(identity, identity.accountScope);
+            if (hot?.entryRelativePath && hot.files) return Object.freeze({
+                persistentIdentity: identity,
+                bytes: hot.bytes,
+                entryRelativePath: hot.entryRelativePath,
+                files: hot.files,
+            });
+            if (!canUseStore()) return null;
             const record = await operation?.readPersistentArtifact(identity) ?? null;
             return canUseStore() ? record : null;
         },
@@ -550,14 +560,18 @@ export function createPluginReactNativeBundleCache(
         }
     }
 
-    async function retireAccount(scope: ServerAccountScope): Promise<void> {
-        await persistentCustody.retireAccount(scope);
+    function evictAccountHotArtifacts(scope: ServerAccountScope): void {
         const key = accountScopeKey(scope);
         for (const [cacheKey, entryScope] of hotEntryAccountScopes.entries()) {
             if (entryScope !== key) continue;
             entries.delete(cacheKey);
             hotEntryAccountScopes.delete(cacheKey);
         }
+    }
+
+    async function retireAccount(scope: ServerAccountScope): Promise<void> {
+        evictAccountHotArtifacts(scope);
+        await persistentCustody.retireAccount(scope);
     }
 
     /**
@@ -569,6 +583,11 @@ export function createPluginReactNativeBundleCache(
         identity: PluginUiPersistentArtifactIdentity,
         isCurrent: () => boolean = () => true,
     ): Promise<void> {
+        const key = derivePluginReactNativeBundleCacheKey(identity);
+        if (isCurrent() && hotEntryAccountScopes.get(key) === accountScopeKey(identity.accountScope)) {
+            entries.delete(key);
+            hotEntryAccountScopes.delete(key);
+        }
         await persistentCustody.removePersistentArtifact(identity, isCurrent);
     }
 
@@ -617,8 +636,11 @@ export function createPluginReactNativeBundleCache(
             }
             return Object.freeze({ ok: true, cacheKey });
         },
-        readInstalledArtifact: (identity) => {
-            const entry = entries.get(derivePluginReactNativeBundleCacheKey(identity));
+        readInstalledArtifact: (identity, scope) => {
+            const key = derivePluginReactNativeBundleCacheKey(identity);
+            if (scope && (!persistentCustody.isAccountCurrent(scope)
+                || hotEntryAccountScopes.get(key) !== accountScopeKey(scope))) return null;
+            const entry = entries.get(key);
             return entry
                 ? Object.freeze({
                     ...entry,
@@ -660,12 +682,19 @@ export function createPluginReactNativeBundleCache(
                 operation.release();
             }
         },
-        removePersistentArtifact: (identity, isCurrent) => persistentCustody.removePersistentArtifact(identity, isCurrent),
+        removePersistentArtifact,
         removePersistentArtifactsForAccount: async (scope) => {
+            evictAccountHotArtifacts(scope);
             await persistentCustody.removePersistentArtifactsForAccount(scope);
         },
         bindAccountLifetime: (lifetime) => {
-            persistentCustody.bindAccountLifetime(lifetime);
+            persistentCustody.bindAccountLifetime({
+                ...lifetime,
+                onRetire: (retire) => lifetime.onRetire(() => {
+                    evictAccountHotArtifacts(lifetime.scope);
+                    retire();
+                }),
+            });
         },
         isAccountCurrent: persistentCustody.isAccountCurrent,
         capturePersistentAccountOperation: persistentCustody.capturePersistentAccountOperation,

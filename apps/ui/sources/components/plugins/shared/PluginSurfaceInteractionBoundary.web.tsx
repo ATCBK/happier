@@ -1,7 +1,13 @@
 import * as React from 'react';
 
-import { t } from '@/text';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import {
+    PluginSurfaceCompanionContext,
+    PluginSurfaceInteractionAvailabilityContext,
+    PluginSurfacePageHeaderContext,
+    useOfflineSurfaceNotice,
+} from './pluginSurfaceInteractionAvailability';
 
 type PluginSurfaceInteractionBoundaryProps = Readonly<{
     children: React.ReactNode;
@@ -11,6 +17,8 @@ type PluginSurfaceInteractionBoundaryProps = Readonly<{
      */
     focusEligible?: boolean;
     enabled: boolean;
+    /** The renderer already holds readable content, independently of effect availability. */
+    hasContent?: boolean;
     snapshotTitle: string;
     surfaceId: string;
     /** Host-stamped, non-authoritative loaded-runtime evidence for diagnostics/QA. */
@@ -36,6 +44,9 @@ export function PluginSurfaceInteractionBoundary(
     // Availability remains the sole owner of offline/recovery semantics.
     // Presentation eligibility only makes an otherwise available retained or
     // covered snapshot inert; it must not create another focus-return owner.
+    const offlineNotice = useOfflineSurfaceNotice(props.enabled, props.snapshotTitle, props.hasContent);
+    const companion = React.useContext(PluginSurfaceCompanionContext);
+    const pageIdentity = React.useContext(PluginSurfacePageHeaderContext);
     const interactionEnabled = props.enabled && props.focusEligible !== false;
     const wasEnabledRef = React.useRef(props.enabled);
     const wasInteractionEnabledRef = React.useRef(interactionEnabled);
@@ -111,19 +122,34 @@ export function PluginSurfaceInteractionBoundary(
                     }}
                     {...blockedCaptureProps}
                 >
-                    {props.children}
+                    {offlineNotice.nothingLoaded ? null : (
+                        <PluginSurfaceInteractionAvailabilityContext.Provider value={props.enabled}>
+                            <PluginSurfacePageHeaderContext.Provider value={null}>
+                                {props.children}
+                            </PluginSurfacePageHeaderContext.Provider>
+                        </PluginSurfaceInteractionAvailabilityContext.Provider>
+                    )}
                 </div>
             </div>
-            {!props.enabled ? (
+            {offlineNotice.nothingLoaded && !companion ? pageIdentity?.header : null}
+            {offlineNotice.nothingLoaded && companion ? null : offlineNotice.nothingLoaded ? (
+                <SurfaceStateCard
+                    testID={`plugin-surface-offline-state:${props.surfaceId}`}
+                    kind={offlineNotice.kind}
+                    replacesContent
+                    title={offlineNotice.title}
+                    reason={offlineNotice.reason}
+                />
+            ) : !props.enabled ? (
                 <div
                     data-testid={`plugin-surface-offline-summary:${props.surfaceId}`}
                     role="status"
                     aria-live="polite"
-                    aria-label={t('pluginSurfaces.offlineSnapshot.accessibilityLabel', { title: props.snapshotTitle })}
+                    aria-label={offlineNotice.accessibilityLabel}
                 >
                     <SurfaceFreshnessLine
                         testID={`plugin-surface-offline-summary:${props.surfaceId}-freshness`}
-                        reason={t('pluginSurfaces.state.offline.reason')}
+                        reason={offlineNotice.reason}
                     />
                 </div>
             ) : null}

@@ -11,6 +11,8 @@ import { createSessionSystemRecordPayloadService } from '@/session/systemRecords
 import type { ActivityNotificationEvent } from '@/notifications/activity/activityNotificationEvent';
 import { commitRuntimeSessionEvent } from '@/agent/runtime/session/transcripts/publishRuntimeSessionEvent';
 import type { RuntimeTranscriptProjectionSession } from '@/agent/runtime/session/transcripts/projectRuntimeTranscriptEvent';
+import { NotificationChannelCatalogUnavailableError } from '@/notifications/activity/dispatchActivityNotification';
+import { logger } from '@/ui/logger';
 
 export type SessionGuardNoticeOwner = Readonly<{
   session: Pick<ApiSessionClient, 'sessionId' | 'getMetadataSnapshot' | 'checkCurrentPublisherAuthority' | 'updateMetadataAsCurrentPublisher'>
@@ -41,23 +43,34 @@ export function registerSessionGuardNoticeRpc(params: SessionGuardNoticeOwner & 
     const request = SessionGuardNoticeRequestV1Schema.safeParse(raw);
     if (!request.success || request.data.sessionId !== session.sessionId) return { ok: false };
     const state = request.data.state;
-    const isCurrent = async () => params.session === session && await session.checkCurrentPublisherAuthority();
+    let phase = 'publisher_authority';
+    const logRefusal = (reason: 'publisher_not_current' | 'machine_unavailable') => {
+      logger.debug('[Guard] Session notice refused', { sessionId: session.sessionId, stateKind: state.kind, phase, reason });
+    };
+    const isCurrent = async () => {
+      const current = params.session === session && await session.checkCurrentPublisherAuthority();
+      if (!current) logRefusal('publisher_not_current');
+      return current;
+    };
     try {
       if (!await isCurrent()) return { ok: false };
       if (state.kind === 'notify_ceiling') {
-        if (!params.machineId) return { ok: false };
+        phase = 'notification';
+        if (!params.machineId) { logRefusal('machine_unavailable'); return { ok: false }; }
         await params.notify({ topic: 'guard_attention', machineId: params.machineId,
           sessionId: session.sessionId, kind: state.notice });
         return { ok: await isCurrent() };
       }
       if (state.kind === 'notify_terminal_warning') {
-        if (!params.machineId) return { ok: false };
+        phase = 'notification';
+        if (!params.machineId) { logRefusal('machine_unavailable'); return { ok: false }; }
         const { kind: _kind, ...warning } = state;
         await params.notify({ topic: 'guard_stop_warning', machineId: params.machineId,
           ...warning, rule: 'idle_terminals' });
         return { ok: await isCurrent() };
       }
       if (state.kind === 'stopped') {
+        phase = 'stop_record';
         const { kind: _kind, ...facts } = state;
         const localId = buildSessionStopSystemRecordLocalId({ at: state.at });
         const event = buildSessionStopTranscriptEventV1({ v: 1, ...facts, status: 'requested' });
@@ -66,9 +79,11 @@ export function registerSessionGuardNoticeRpc(params: SessionGuardNoticeOwner & 
           localId, payload: event.sessionStopV1,
         });
         if (!await isCurrent()) return { ok: false };
+        phase = 'transcript';
         await commitRuntimeSessionEvent({ session, agentId: params.agentId, localId, event });
         if (!await isCurrent()) return { ok: false };
       }
+      phase = 'metadata';
       await session.updateMetadataAsCurrentPublisher(metadata => {
         const ceilingBytes = readSessionMemoryCeilingOverride(metadata);
         if (state.kind === 'clear') {
@@ -86,7 +101,8 @@ export function registerSessionGuardNoticeRpc(params: SessionGuardNoticeOwner & 
       });
       if (!await isCurrent()) return { ok: false };
       if (state.kind === 'stopping') {
-        if (!params.machineId) return { ok: false };
+        phase = 'notification';
+        if (!params.machineId) { logRefusal('machine_unavailable'); return { ok: false }; }
         // The warning names what stops and where (lab `rg` G3-3); these words never enter the routing data.
         const snapshot = session.getMetadataSnapshot();
         const sessionTitle = typeof snapshot?.name === 'string' && snapshot.name.trim() ? snapshot.name.trim() : undefined;
@@ -97,7 +113,19 @@ export function registerSessionGuardNoticeRpc(params: SessionGuardNoticeOwner & 
         if (!await isCurrent()) return { ok: false };
       }
       return { ok: true };
-    } catch {
+    } catch (error) {
+      const errorCode = error instanceof NotificationChannelCatalogUnavailableError ? error.code
+        : error !== null && typeof error === 'object' && 'code' in error
+          && (error.code === 'context_source_unavailable' || error.code === 'session_publisher_authority_lost') ? error.code : undefined;
+      // Only the known catalog error carries a content-free domain reason.
+      // Arbitrary messages, causes and server payloads can contain private data.
+      logger.debug('[Guard] Session notice publication failed', {
+        sessionId: session.sessionId, stateKind: state.kind, phase,
+        errorClass: error instanceof NotificationChannelCatalogUnavailableError ? 'NotificationChannelCatalogUnavailableError'
+          : error instanceof TypeError ? 'TypeError' : error instanceof Error ? 'Error' : 'UnknownError',
+        ...(errorCode === undefined ? {} : { errorCode }),
+        ...(error instanceof NotificationChannelCatalogUnavailableError ? { reason: error.reason } : {}),
+      });
       // No stop is admitted by the daemon unless this exact runner acknowledges its durable receipt.
       return { ok: false };
     }

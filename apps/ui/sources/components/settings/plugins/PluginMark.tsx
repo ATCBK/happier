@@ -1,11 +1,12 @@
 import * as React from 'react';
-import { HappierCollectionListMark } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_PAGE_METRICS, HappierCollectionListMark } from '@happier-dev/plugin-ui/presentation';
 import type { PluginProjectionInstalledPackageV2 } from '@happier-dev/protocol';
 
 import { PageHeaderMarkSlot } from '@/components/ui/layout/PageHeaderMarkSlot';
 import { InstalledPluginBrandMark } from '@/components/plugins/shared/InstalledPluginBrandMark';
 import { useBundledPluginBrandPresentation, useInstalledPluginBrandPresentation, type InstalledPluginBrandPresentation } from '@/components/plugins/shared/installedPluginBrandPresentation';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { selectActiveServerAccountScopeForServer } from '@/sync/domains/scope/activeServerAccountScope';
+import { useActiveServerAccountScopeLifetime } from '@/sync/domains/state/storage';
 import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 
 /** Generic plugin category chrome (package identities use the brand owner below). */
@@ -42,11 +43,16 @@ export function useServerInstalledPluginBrand(input: Readonly<{
     machineId?: string | null;
     serverId?: string | null;
 }>): InstalledPluginBrandPresentation | null {
-    const bindings = useServerCredentialAccountScopeBindings(input.serverId ? [input.serverId] : []);
-    const credentialBinding = input.serverId ? bindings.values().next().value ?? null : null;
-    const accountLifetime = input.serverId
-        ? credentialBinding
-        : captureActiveServerAccountScopeLifetime();
+    const activeLifetime = useActiveServerAccountScopeLifetime();
+    const activeHome = input.serverId
+        ? selectActiveServerAccountScopeForServer(activeLifetime?.scope ?? null, input.serverId) !== null
+        : true;
+    // The applied Home already owns proven Account custody. Only routed Homes
+    // need a credential read; resolving the active Home separately per mark
+    // produces an asynchronous admission/render cascade when a shelf opens.
+    const bindings = useServerCredentialAccountScopeBindings(!activeHome && input.serverId ? [input.serverId] : []);
+    const credentialBinding = !activeHome && input.serverId ? bindings.values().next().value ?? null : null;
+    const accountLifetime = activeHome ? activeLifetime : credentialBinding;
     const controller = React.useMemo(() => new AbortController(), [input.installedPackage, input.machineId, input.serverId, accountLifetime]);
     React.useEffect(() => () => controller.abort(), [controller]);
     return useInstalledPluginBrandPresentation({
@@ -70,7 +76,7 @@ function PluginIdentityMark(props: PluginMarkProps) {
     const page = props.size === 'page';
     const mark = <InstalledPluginBrandMark
         brand={props.brand ?? bundledBrand ?? { displayName: props.title }} pluginId={props.pluginId} iconAgentId={props.iconAgentId}
-        pixelSize={28} externallyLabelled testID={props.testID}
+        pixelSize={HAPPIER_PAGE_METRICS.pageHeaderMarkGlyphPx} externallyLabelled testID={props.testID}
     />;
     if (page) {
         return (

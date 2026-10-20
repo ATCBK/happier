@@ -83,6 +83,91 @@ test('stack-scoped invocations initialize a canonical profile and use loopback o
   assert.equal(parsed.settings.servers[id].localServerUrl, parsed.localServerUrl);
 });
 
+test('stack convenience session create keeps the borrowed UI through wrapper bootstrap and daemon preflight', async (t) => {
+  const rootDir = stackRootDirFromMeta(import.meta.url);
+  const fixture = await createMonorepoFixture(t, { prefix: 'hstack-happier-borrowed-preflight-' });
+  const storageDir = join(fixture.dir, 'storage');
+  const stackDir = join(storageDir, 'test-stack');
+  const cliHomeDir = join(stackDir, 'cli');
+  const producerStackName = 'repo-expo-producer';
+  const producerDir = join(storageDir, producerStackName);
+  const port = await reserveUnusedPort();
+  const webappUrl = 'http://happier-test-stack.localhost:19364';
+  await mkdir(cliHomeDir, { recursive: true });
+  await mkdir(producerDir, { recursive: true });
+  const stackConfig = [
+    `HAPPIER_STACK_REPO_DIR=${fixture.dir}`,
+    `HAPPIER_STACK_SERVER_PORT=${port}`,
+    `HAPPIER_STACK_EXPO_SOURCE_STACK=${producerStackName}`,
+    'HAPPIER_STACK_AUTO_AUTH_SEED=0',
+    'HAPPIER_STACK_MIGRATE_CREDENTIALS=0',
+    '',
+  ].join('\n');
+  await writeFile(join(stackDir, 'env'), stackConfig, 'utf8');
+  await writeFile(join(producerDir, 'stack.runtime.json'), JSON.stringify({
+    expo: { webPort: 19364 }, processes: {},
+  }), 'utf8');
+  const env = createHappierCommandEnv({ fixtureDir: fixture.dir, storageDir });
+  env.HAPPIER_STACK_ENV_FILE = join(stackDir, 'env');
+  env.HAPPIER_STACK_CLI_HOME_DIR = cliHomeDir;
+  // The nested wrapper must recover the selected origin from runtime state;
+  // its env bootstrap deliberately scrubs inherited unprefixed Stack defaults.
+  env.HAPPIER_WEBAPP_URL = webappUrl;
+  await writeFile(join(cliHomeDir, 'access.key'), 'fixture-access-key\n', 'utf8');
+  const statePath = join(cliHomeDir, 'servers', buildStackStableScopeId({
+    stackName: 'test-stack', cliIdentity: 'default',
+  }), 'daemon.state.json');
+  const fixtureOwnerPath = join(fixture.dir, 'daemon-owner.mjs');
+  await writeFile(fixtureOwnerPath, [
+    `import { startDaemonLikeProcess } from ${JSON.stringify(join(rootDir, 'scripts/testkit/core/spawn_daemon_like_process.mjs'))};`,
+    `await startDaemonLikeProcess({ statePaths: [${JSON.stringify(statePath)}] });`,
+    'process.stdout.write("ready\\n");',
+  ].join('\n'), 'utf8');
+  const owner = spawn(process.execPath, [fixtureOwnerPath, 'daemon', 'start-sync'], {
+    env: { ...env, HAPPIER_HOME_DIR: cliHomeDir, HAPPIER_SERVER_URL: `http://127.0.0.1:${port}`,
+      HAPPIER_WEBAPP_URL: webappUrl, HAPPIER_DAEMON_STARTUP_SOURCE: 'background-service' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  t.after(() => terminateChildProcess(owner));
+  await new Promise((resolve, reject) => {
+    owner.stdout.once('data', resolve);
+    owner.once('error', reject);
+    owner.once('exit', code => reject(new Error(`fixture daemon exited before readiness (${code})`)));
+  });
+  const runtimeState = {
+    version: 1, stackName: 'test-stack', ownerPid: owner.pid, processes: { daemonPid: owner.pid },
+    sourceUi: 'borrowed', ports: {}, placement: { server: 'external', daemon: 'local' },
+    serverConnection: { internalServerUrl: `http://127.0.0.1:${port}`,
+      publicServerUrl: `http://happier-test-stack.localhost:${port}` },
+    sourceRuntimeLaunch: { entrypoint: join(fixture.cliDir, 'dist/index.mjs'), cliDir: fixture.cliDir, env: {} },
+    sourceRuntimeIdentities: { daemon: { selected: 'fixture-source', loaded: 'fixture-source' } },
+  };
+  await writeFile(join(stackDir, 'stack.runtime.json'), JSON.stringify(runtimeState), 'utf8');
+
+  const res = await runNodeCapture([hstackBinPath(rootDir), 'stack', 'happier', 'test-stack', '--', 'session', 'create', '--json'], {
+    cwd: rootDir, env,
+  });
+  assert.equal(res.code, 0, `stderr:\n${res.stderr}\nstdout:\n${res.stdout}`);
+  assert.match(res.stdout, /daemon already running for stack home/);
+  const forwarded = JSON.parse(res.stdout.trim().split('\n').at(-1));
+  assert.equal(forwarded.webappUrl, webappUrl);
+  assert.equal(forwarded.serverUrl, `http://127.0.0.1:${port}`);
+  process.kill(owner.pid, 0);
+
+  for (const [sourceUi, explicitWebappUrl, expected] of [
+    ['export', null, `http://happier-test-stack.localhost:${port}`],
+    ['borrowed', 'https://explicit.example.test', 'https://explicit.example.test'],
+  ]) {
+    await writeFile(join(stackDir, 'stack.runtime.json'), JSON.stringify({ ...runtimeState, sourceUi }), 'utf8');
+    await writeFile(join(stackDir, 'env'), stackConfig + (explicitWebappUrl ? `HAPPIER_WEBAPP_URL=${explicitWebappUrl}\n` : ''), 'utf8');
+    const neighbor = await runNodeCapture([hstackBinPath(rootDir), 'stack', 'happier', 'test-stack', '--', 'auth', 'status', '--json'], {
+      cwd: rootDir, env,
+    });
+    assert.equal(neighbor.code, 0, neighbor.stderr);
+    assert.equal(JSON.parse(neighbor.stdout.trim()).webappUrl, expected);
+  }
+});
+
 test('a fresh stack CLI home fails closed when the CLI does not persist its profile', async (t) => {
   const rootDir = stackRootDirFromMeta(import.meta.url);
   const fixture = await createMonorepoFixture(t, {

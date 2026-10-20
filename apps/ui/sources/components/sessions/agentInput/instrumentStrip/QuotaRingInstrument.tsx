@@ -68,6 +68,8 @@ export const QuotaRingInstrument = React.memo(function QuotaRingInstrument(props
         value: ringAccessibilityValues.join(', '),
     });
     const providerCaption = viewModel.scopePrefix ?? viewModel.providerDisplayName;
+    // Each ring says what is left beside it ("9% left"), at every width: a bare number inside the ring
+    // next to the context gauge reads as another percentage used. A compact strip drops only the caption.
 
     return (
         <>
@@ -98,13 +100,18 @@ export const QuotaRingInstrument = React.memo(function QuotaRingInstrument(props
                                         used={ring.usedPct}
                                         limit={100}
                                         label={rings.length === 1 ? accessibilityLabel : ringAccessibilityValues[index]!}
-                                        value={ring.ringValueLabel}
                                         tone={mapQuotaToneToTokenTone(ring.tone)}
                                         size={16}
                                         strokeWidth={2}
                                         ringTestID={`session-instrument-quota-ring-arc${testIDSuffix}`}
-                                        valueTestID={`session-instrument-quota-ring-value${testIDSuffix}`}
                                     />
+                                    <Text
+                                        testID={`session-instrument-quota-ring-value${testIDSuffix}`}
+                                        style={instrumentStripStyles.instrumentValueText}
+                                        numberOfLines={1}
+                                    >
+                                        {ring.valueLabel}
+                                    </Text>
                                 </View>
                             );
                         })}

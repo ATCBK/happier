@@ -53,6 +53,52 @@ it.each(['profile', 'group'] as const)('resolves the Account Claude %s default b
   } finally { get.mockRestore(); stored.mockRestore(); resetInMemoryAccountSettingsContextForTests(); }
 });
 
+it('admits a fresh Account default without waiting for legacy history maintenance', async () => {
+  resetInMemoryAccountSettingsContextForTests();
+  const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'admission-owner' })).toString('base64url')}.signature`, encryption: null } as const;
+  const stored = vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
+  const scope = resolveQualifiedPurposeDeclarationSnapshotForAgentSpawn({ agentId: 'claude',
+    contributions: runtime.registry.contributes })?.authorizedPurposes.find(entry => entry.serviceRefs[0]?.localId === 'claude-subscription');
+  if (!scope?.serviceRefs[0]) throw new Error('Real Claude purpose unavailable');
+  let historyStarted!: () => void;
+  let releaseHistory!: () => void;
+  const started = new Promise<void>(resolve => { historyStarted = resolve; });
+  const blockedHistory = new Promise<void>(resolve => { releaseHistory = resolve; });
+  const get = vi.spyOn(axios, 'get').mockImplementation(async (input) => {
+    const path = new URL(String(input)).pathname;
+    if (path === '/v2/account/settings') return { status: 200,
+      data: { content: { t: 'plain', v: {} }, version: 9 } };
+    if (path === '/v1/account/encryption/currentness') return { status: 200,
+      data: createAccountEncryptionCurrentnessFixture({ settingsVersion: 9 }) };
+    if (path === `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/purposes`) return { status: 200,
+      data: ConnectedAccountCatalogRowReadResponseV1Schema.parse({ status: 'present', revision: 3,
+        content: { t: 'plain', v: { key: 'purposes', value: { v: 1, bindings: [{ purpose: scope.purpose,
+          target: { kind: 'account', account: { service: scope.serviceRefs[0], accountId: 'connected-claude' } } }] } } } }) };
+    if (path === '/v2/account/settings/history') {
+      historyStarted();
+      await blockedHistory;
+      return { status: 200, data: { snapshots: [] } };
+    }
+    return { status: 404, data: { error: 'unsupported' } };
+  });
+  try {
+    const defaults = runWithServerHttpBaseUrl('https://workflow-home.example', () => resolveSessionSpawnConnectedServicesDefaultsPayload({
+      agentId: 'claude', credentials,
+    }));
+    await expect(Promise.race([
+      defaults,
+      started.then(() => Promise.reject(new Error('legacy history maintenance blocked Session admission'))),
+    ])).resolves.toMatchObject({ connectedServices: { bindingsByServiceId: {
+      'happier.agent.claude/claude-subscription': { source: 'connected', selection: 'profile', profileId: 'connected-claude' },
+    } } });
+  } finally {
+    releaseHistory();
+    get.mockRestore();
+    stored.mockRestore();
+    resetInMemoryAccountSettingsContextForTests();
+  }
+});
+
 it('resolves fresh requester defaults without replacing the custodian Account snapshot', async () => {
   resetInMemoryAccountSettingsContextForTests();
   const alice = { source: 'network' as const, settings: accountSettingsParse({}), settingsVersion: 2,

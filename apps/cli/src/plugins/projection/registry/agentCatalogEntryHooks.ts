@@ -36,8 +36,6 @@ import type { ManagedExecutableRef, PluginAgentCliMetadata, RuntimeDescriptorV1 
 import { type PluginSystemToolContributionV1 } from '@happier-dev/protocol/plugins/contributions/system-tools';
 
 import { probeAcpCatalogs, probeAcpSessionControls } from '@/capabilities/probes/probeAcpCatalogs';
-import { normalizeAcpModelsSnapshot } from '@/capabilities/probes/agentModelsProbe';
-import { normalizeAcpModesSnapshot } from '@/capabilities/probes/agentModesProbe';
 import type { PreflightSessionControlsProbeParams } from '@/capabilities/probes/preflightSessionControlsProbeAdapterTypes';
 import type { CliAuthSpec, CliAuthStatusDraft } from '@/capabilities/cliAuth/types';
 import { runCliCommandBestEffort } from '@/capabilities/cliAuth/shared';
@@ -955,6 +953,8 @@ export function projectAgentPreflightSessionControlsCatalogEntry(params: Readonl
     isCurrent(): boolean;
 }>): Pick<ResolvedCatalogEntry,
     | 'needsAccountSettingsForProbes'
+    | 'preparePreflightLaunchEnvironment'
+    | 'resolveNativeSkillDirectories'
     | 'resolveProbePluginSettings'
     | 'resolveModelsProbeVariant'
     | 'resolveSessionControlsProbeVariant'
@@ -1207,6 +1207,20 @@ export function projectAgentPreflightSessionControlsCatalogEntry(params: Readonl
                     ...(request.authenticationMethodId ? { authenticationMethodId: request.authenticationMethodId } : {}),
                 })
             ));
+        const probeDeclaredAcpSessionControls: NonNullable<AgentPreflightSessionControlsProbeContextV1['probeDeclaredAcpSessionControls']> =
+            async (request) => await withDeclaredJsonRpcClient(request, async (client, scopedSignal) => {
+                const controls = await probeAcpSessionControls({ client, signal: scopedSignal, cwd: probeParams.cwd,
+                    ...(request.authenticationMethodId ? { authenticationMethodId: request.authenticationMethodId } : {}) });
+                const { normalizeAcpModelsSnapshot } = await import('@/capabilities/probes/agentModelsProbe');
+                const { normalizeAcpModesSnapshot } = await import('@/capabilities/probes/agentModesProbe');
+                return {
+                    models: normalizeAcpModelsSnapshot(controls.models, controls.configOptions)
+                        ?? (Array.isArray(controls.models) && controls.models.length === 0 ? [] : null),
+                    modes: normalizeAcpModesSnapshot(controls.modes, controls.configOptions)
+                        ?? (Array.isArray(controls.modes) && controls.modes.length === 0 ? [] : null),
+                    configOptions: controls.configOptions,
+                };
+            });
         return Object.freeze({
             ...input,
             cwd: probeParams.cwd,
@@ -1214,6 +1228,7 @@ export function projectAgentPreflightSessionControlsCatalogEntry(params: Readonl
             signal,
             runDeclaredSystemToolCommand,
             probeDeclaredAcpCatalogs,
+            probeDeclaredAcpSessionControls,
             withDeclaredJsonRpcClient,
             resolveDeclaredSystemTool,
             withDeclaredManagedService,
@@ -1253,6 +1268,25 @@ export function projectAgentPreflightSessionControlsCatalogEntry(params: Readonl
         : Promise.resolve(null);
     return Object.freeze({
         ...(params.resolvePluginSettings ? { resolveProbePluginSettings: params.resolvePluginSettings } : {}),
+        ...(contribution.resolveNativeSkillDirectories ? { resolveNativeSkillDirectories: async (
+            input: Parameters<NonNullable<AgentPreflightSessionControlsContributionV1['resolveNativeSkillDirectories']>>[0],
+        ) => {
+            if (!params.isCurrent()) throw new Error('Agent native skill discovery belongs to a retired generation');
+            const directories = await contribution.resolveNativeSkillDirectories!(input);
+            if (!params.isCurrent()) throw new Error('Agent native skill discovery belongs to a retired generation');
+            return directories;
+        } } : {}),
+        ...(contribution.prepareLaunchEnvironment ? { preparePreflightLaunchEnvironment: async (
+            input: Parameters<NonNullable<AgentPreflightSessionControlsContributionV1['prepareLaunchEnvironment']>>[0],
+        ) => {
+            if (!params.isCurrent() || input.signal.aborted) throw new Error('Agent preflight belongs to a retired or cancelled generation');
+            const prepared = await contribution.prepareLaunchEnvironment!(input);
+            if (!params.isCurrent() || input.signal.aborted) {
+                await prepared.dispose();
+                throw new Error('Agent preflight belongs to a retired or cancelled generation');
+            }
+            return prepared;
+        } } : {}),
         ...(requiresAccountSettings ? { needsAccountSettingsForProbes: true } : {}),
         ...(contribution.resolveProbeVariant
             ? {
@@ -1331,11 +1365,13 @@ export function projectAgentPreflightSessionControlsCatalogEntry(params: Readonl
             } : {}),
             ...(acpDeclaration ? {
                 probeModelsRaw: async (probeParams: PreflightSessionControlsProbeParams) => await invoke(async (context) => {
+                    const { normalizeAcpModelsSnapshot } = await import('@/capabilities/probes/agentModelsProbe');
                     const controls = await withDeclaredAcpPreflight(context, acpDeclaration, probeAcpSessionControls);
                     return normalizeAcpModelsSnapshot(controls.models, controls.configOptions)
                         ?? (Array.isArray(controls.models) && controls.models.length === 0 ? [] : null);
                 }, probeParams),
                 probeModesRaw: async (probeParams: PreflightSessionControlsProbeParams) => await invoke(async (context) => {
+                    const { normalizeAcpModesSnapshot } = await import('@/capabilities/probes/agentModesProbe');
                     const controls = await withDeclaredAcpPreflight(context, acpDeclaration, probeAcpSessionControls);
                     return normalizeAcpModesSnapshot(controls.modes, controls.configOptions)
                         ?? (Array.isArray(controls.modes) && controls.modes.length === 0 ? [] : null);

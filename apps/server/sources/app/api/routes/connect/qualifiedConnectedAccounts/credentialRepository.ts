@@ -13,8 +13,10 @@ import { acceptsManagedResourceDispositions, readManagedResourceDependenciesInTx
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 
 import { deriveAccountEncryptionCurrentnessFromRow } from "@/app/encryption/accountContentKeyAdmission";
+import { acquireAccountEncryptionTransitionFenceInTx } from "@/app/encryption/accountEncryptionTransition";
+import { acquireAccountCredentialSourceTeamAdmissionInTx } from '@/app/teams/teamChanges';
 import { db } from "@/storage/db";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 import {
     decodeAccountContentFromAtRestStorage,
     encodeAccountContentForAtRestStorage,
@@ -799,6 +801,7 @@ async function mutateQualifiedConnectedServiceCredentialWithPreparedInTx(
     preparedCreate: QualifiedConnectedAccountPreparedCreate | null,
     accountEncryptionTransitionMode?: "plain" | "e2ee",
 ): Promise<QualifiedConnectedServiceCredentialMutationResult> {
+    const recheckAdmission = await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'exclusive' });
     if (params.expectedCredentialRevision === null) {
         if (params.expectedConfigurationRevision !== undefined) {
             throw new Error(
@@ -1003,6 +1006,7 @@ async function mutateQualifiedConnectedServiceCredentialWithPreparedInTx(
                     : {}),
             },
         });
+        await recheckAdmission();
         return {
             status: "written",
             credentialRevision,
@@ -1037,6 +1041,7 @@ async function mutateQualifiedConnectedServiceCredentialWithPreparedInTx(
             configurationRevision: latest?.configurationRevision ?? null,
         };
     }
+    await recheckAdmission();
     return {
         status: "written",
         credentialRevision,
@@ -1261,7 +1266,7 @@ export async function settlePreparedQualifiedConnectedServiceCredentialCreate(
                 });
             }
             return result;
-        }, { /* Credential mode, group membership and full Account profile projection share this family. */ isolationLevel: "Serializable" });
+        });
     } catch (error) {
         if (!isUniqueConstraintError(error)) throw error;
         const current = await readCurrentByQualifiedRef(
@@ -1333,7 +1338,7 @@ export async function mutateQualifiedConnectedServiceCredential(
             });
         }
         return result;
-    }, { /* Credential mode, group membership and full Account profile projection share this family. */ isolationLevel: "Serializable" });
+    });
 }
 
 export async function readQualifiedConnectedAccountConfiguration(params: Readonly<{
@@ -1348,7 +1353,7 @@ export async function readQualifiedConnectedAccountConfiguration(params: Readonl
         QualifiedConnectedAccountConfigurationTargetV4Schema.parse(
             params.target,
         );
-    return await inTx(async (tx) => {
+    return await inReadSnapshot(async (tx) => {
         const accountModeResult =
             await readEffectiveAccountEncryptionMode(tx, params.accountId);
         if (accountModeResult.status === "not_found") return null;
@@ -1410,7 +1415,7 @@ export async function readQualifiedConnectedAccountConfiguration(params: Readonl
                 revisionSemantics: "legacy_unfenced" as const,
                 credentialRevision: null,
             };
-    }, { /* Credential mode, group membership and full Account profile projection share this family. */ isolationLevel: "Serializable" });
+    });
 }
 
 export type QualifiedConnectedAccountConfigurationMutationParams = Readonly<{
@@ -1450,6 +1455,7 @@ async function mutateQualifiedConnectedAccountConfigurationForModeInTx(
     params: QualifiedConnectedAccountConfigurationMutationParams,
     accountEncryptionTransitionMode?: "plain" | "e2ee",
 ): Promise<QualifiedConnectedAccountConfigurationMutationResult> {
+    const recheckAdmission = await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'content' });
     const account = await tx.account.findUnique({
         where: { id: params.accountId },
         select: {
@@ -1546,6 +1552,7 @@ async function mutateQualifiedConnectedAccountConfigurationForModeInTx(
             configurationRevision: latest.configurationRevision,
         };
     }
+    await recheckAdmission();
     return {
         status: "written",
         credentialRevision,
@@ -1578,7 +1585,7 @@ export async function mutateQualifiedConnectedAccountConfiguration(
             });
         }
         return result;
-    }, { /* Credential mode, group membership and full Account profile projection share this family. */ isolationLevel: "Serializable" });
+    });
 }
 
 type QualifiedConnectedAccountListStorage = Pick<
@@ -1948,8 +1955,10 @@ export async function listQualifiedConnectedAccounts(
         service: QualifiedConnectedAccountServiceRef;
     }>,
 ): Promise<QualifiedConnectedAccountProfileV4[]> {
-    return await inTx(async (tx) =>
-        await listQualifiedConnectedAccountsInTx(tx, params), { /* Credential mode, group membership and full Account profile projection share this family. */ isolationLevel: "Serializable" });
+    // This projection reads one credential-row SELECT, then maps synchronously.
+    // Its statement snapshot already keeps identities and revisions coherent;
+    // there is no multi-statement admission invariant that needs SSI tracking.
+    return await listQualifiedConnectedAccountsInTx(db, params);
 }
 
 function withQualifiedCredentialHealthForStoredFormat(params: Readonly<{
@@ -1984,105 +1993,132 @@ function withQualifiedCredentialHealthForStoredFormat(params: Readonly<{
     return null;
 }
 
+type QualifiedCredentialHealthMutationParams = Readonly<{
+    accountId: string;
+    ref: QualifiedConnectedAccountRef;
+    health: ConnectedServiceCredentialHealthV1;
+    expectedCredentialRevision: string;
+    expectedConfigurationRevision: string | null;
+}>;
+
+/** Admission and equality are shared by the read acknowledgement and fenced write. */
+async function readQualifiedCredentialHealthMutationInTx(
+    tx: Tx,
+    canonical: QualifiedCredentialHealthMutationParams,
+): Promise<QualifiedConnectedServiceCredentialHealthMutationResult | Readonly<{
+    status: "change_required";
+    current: NonNullable<Awaited<ReturnType<typeof readCurrentByQualifiedRef>>>;
+    metadata: Prisma.InputJsonValue;
+    credentialRevision: string;
+}>> {
+    const accountModeResult =
+        await readEffectiveAccountEncryptionMode(
+            tx,
+            canonical.accountId,
+        );
+    if (accountModeResult.status !== "resolved") {
+        return accountModeResult;
+    }
+    const current = await readCurrentByQualifiedRef(
+        tx,
+        canonical.accountId,
+        canonical.ref,
+    );
+    if (!current) return { status: "not_found" };
+    const projection = resolveQualifiedConnectedAccountStoredMetadata({
+        rowId: current.id,
+        metadata: current.metadata,
+    });
+    if (projection.revisionSemantics === "legacy_unfenced") {
+        return { status: "revision_required" };
+    }
+    const content =
+        decodeQualifiedConnectedServiceCredentialRowContent({
+            accountId: canonical.accountId,
+            ref: canonical.ref,
+            row: current,
+            isV4: projection.format === "v4",
+        });
+    if (!content) return { status: "unsupported_format" };
+    if (!isEnvelopeModeCompatible(
+        accountModeResult.accountMode,
+        content,
+    )) {
+        return { status: "storage_mode_mismatch" };
+    }
+    const configuration =
+        decodeQualifiedConnectedAccountConfigurationRowContent({
+            accountId: canonical.accountId,
+            ref: canonical.ref,
+            row: current,
+        });
+    if (
+        configuration
+        && !isEnvelopeModeCompatible(
+            accountModeResult.accountMode,
+            configuration.configurationContent,
+        )
+    ) {
+        return { status: "storage_mode_mismatch" };
+    }
+    if (
+        canonical.expectedCredentialRevision
+            !== projection.credentialRevision
+    ) {
+        return {
+            status: "superseded",
+            reason: "credential_revision_mismatch",
+            credentialRevision: projection.credentialRevision,
+            configurationRevision: current.configurationRevision,
+        };
+    }
+    if (
+        canonical.expectedConfigurationRevision
+            !== current.configurationRevision
+    ) {
+        return {
+            status: "superseded",
+            reason: "configuration_revision_mismatch",
+            credentialRevision: projection.credentialRevision,
+            configurationRevision: current.configurationRevision,
+        };
+    }
+    const metadata = withQualifiedCredentialHealthForStoredFormat({
+        metadata: current.metadata,
+        health: canonical.health,
+    });
+    if (!metadata) return { status: "unsupported_format" };
+    if (sameStrictJsonValue(metadata, current.metadata)) {
+        return {
+            status: "written",
+            credentialRevision: projection.credentialRevision,
+            configurationRevision: current.configurationRevision,
+        };
+    }
+    return { status: "change_required", current, metadata, credentialRevision: projection.credentialRevision };
+}
+
 export async function mutateQualifiedConnectedServiceCredentialHealth(
-    params: Readonly<{
-        accountId: string;
-        ref: QualifiedConnectedAccountRef;
-        health: ConnectedServiceCredentialHealthV1;
-        expectedCredentialRevision: string;
-        expectedConfigurationRevision: string | null;
-    }>,
+    params: QualifiedCredentialHealthMutationParams,
 ): Promise<QualifiedConnectedServiceCredentialHealthMutationResult> {
     const canonical = {
         ...params,
         ref: QualifiedConnectedAccountRefSchema.parse(params.ref),
         health: ConnectedServiceCredentialHealthV1Schema.parse(params.health),
     };
+    // An equal committed observation publishes no cursor. It can acknowledge
+    // that coherent snapshot without joining unrelated Account writers.
+    const observed = await inReadSnapshot(tx => readQualifiedCredentialHealthMutationInTx(tx, canonical), {
+        transactionClass: "connected-account-credential-health-read",
+    });
+    if (observed.status !== "change_required") return observed;
     return await inTx(async (tx) => {
-        const accountModeResult =
-            await readEffectiveAccountEncryptionMode(
-                tx,
-                canonical.accountId,
-            );
-        if (accountModeResult.status !== "resolved") {
-            return accountModeResult;
-        }
-        const current = await readCurrentByQualifiedRef(
-            tx,
-            canonical.accountId,
-            canonical.ref,
-        );
-        if (!current) return { status: "not_found" };
-        const projection = resolveQualifiedConnectedAccountStoredMetadata({
-            rowId: current.id,
-            metadata: current.metadata,
-        });
-        if (projection.revisionSemantics === "legacy_unfenced") {
-            return { status: "revision_required" };
-        }
-        const content =
-            decodeQualifiedConnectedServiceCredentialRowContent({
-                accountId: canonical.accountId,
-                ref: canonical.ref,
-                row: current,
-                isV4: projection.format === "v4",
-            });
-        if (!content) return { status: "unsupported_format" };
-        if (!isEnvelopeModeCompatible(
-            accountModeResult.accountMode,
-            content,
-        )) {
-            return { status: "storage_mode_mismatch" };
-        }
-        const configuration =
-            decodeQualifiedConnectedAccountConfigurationRowContent({
-                accountId: canonical.accountId,
-                ref: canonical.ref,
-                row: current,
-            });
-        if (
-            configuration
-            && !isEnvelopeModeCompatible(
-                accountModeResult.accountMode,
-                configuration.configurationContent,
-            )
-        ) {
-            return { status: "storage_mode_mismatch" };
-        }
-        if (
-            canonical.expectedCredentialRevision
-                !== projection.credentialRevision
-        ) {
-            return {
-                status: "superseded",
-                reason: "credential_revision_mismatch",
-                credentialRevision: projection.credentialRevision,
-                configurationRevision: current.configurationRevision,
-            };
-        }
-        if (
-            canonical.expectedConfigurationRevision
-                !== current.configurationRevision
-        ) {
-            return {
-                status: "superseded",
-                reason: "configuration_revision_mismatch",
-                credentialRevision: projection.credentialRevision,
-                configurationRevision: current.configurationRevision,
-            };
-        }
-        const metadata = withQualifiedCredentialHealthForStoredFormat({
-            metadata: current.metadata,
-            health: canonical.health,
-        });
-        if (!metadata) return { status: "unsupported_format" };
-        if (sameStrictJsonValue(metadata, current.metadata)) {
-            return {
-                status: "written",
-                credentialRevision: projection.credentialRevision,
-                configurationRevision: current.configurationRevision,
-            };
-        }
+        const recheckAdmission = await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: canonical.accountId, intent: 'content' });
+        // A real publication still admits mode, credential/configuration CAS
+        // and equality after the Account fence; the earlier read grants nothing.
+        const admitted = await readQualifiedCredentialHealthMutationInTx(tx, canonical);
+        if (admitted.status !== "change_required") return admitted;
+        const { current, metadata } = admitted;
         const write = await tx.serviceAccountToken.updateMany({
             where: {
                 id: current.id,
@@ -2117,16 +2153,17 @@ export async function mutateQualifiedConnectedServiceCredentialHealth(
                 configurationRevision: latest.configurationRevision,
             };
         }
+        await recheckAdmission();
         await recordConnectedServiceAccountProfileChange({
             tx,
             accountId: canonical.accountId,
         });
         return {
             status: "written",
-            credentialRevision: projection.credentialRevision,
+            credentialRevision: admitted.credentialRevision,
             configurationRevision: current.configurationRevision,
         };
-    }, { /* Credential mode, group membership and full Account profile projection share this family. */ isolationLevel: "Serializable" });
+    }, { transactionClass: "connected-account-credential-health-write" });
 }
 
 type QualifiedConnectedServiceCredentialSnapshotBase = Readonly<{
@@ -2394,11 +2431,11 @@ export async function readQualifiedConnectedServiceCredentialForLegacyProjection
     }>,
 ): Promise<QualifiedConnectedServiceCredentialLegacyReadResult> {
     const ref = QualifiedConnectedAccountRefSchema.parse(params.ref);
-    return await inTx(async (tx) =>
+    return await inReadSnapshot(async (tx) =>
         await readQualifiedConnectedServiceCredentialInTx(tx, {
             accountId: params.accountId,
             ref,
-        }), { /* Credential mode, group membership and full Account profile projection share this family. */ isolationLevel: "Serializable" });
+        }));
 }
 
 export async function readQualifiedConnectedServiceCredential(params: Readonly<{
@@ -2406,11 +2443,11 @@ export async function readQualifiedConnectedServiceCredential(params: Readonly<{
     ref: QualifiedConnectedAccountRef;
 }>): Promise<QualifiedConnectedServiceCredentialReadResult> {
     const ref = QualifiedConnectedAccountRefSchema.parse(params.ref);
-    const result = await inTx(async (tx) =>
+    const result = await inReadSnapshot(async (tx) =>
         await readQualifiedConnectedServiceCredentialInTx(tx, {
             accountId: params.accountId,
             ref,
-        }), { /* Credential mode, group membership and full Account profile projection share this family. */ isolationLevel: "Serializable" });
+        }));
     if (result.status === "storage_mode_mismatch") {
         return { status: "storage_mode_mismatch" };
     }
@@ -2509,14 +2546,14 @@ export async function deleteQualifiedConnectedServiceCredential(
     const ref = QualifiedConnectedAccountRefSchema.parse(params.ref);
     try {
         return await inTx(async (tx) => {
-            const accountModeResult =
-                await readEffectiveAccountEncryptionMode(
-                    tx,
-                    params.accountId,
-                );
-            if (accountModeResult.status !== "resolved") {
-                return accountModeResult;
-            }
+            const recheckAdmission = await acquireAccountCredentialSourceTeamAdmissionInTx(tx, { accountId: params.accountId, intent: 'exclusive' });
+            // Fence before the first credential/dependency read. This shares
+            // the Account-mode and managed-resource publication boundary;
+            // ordinary Account cursor traffic must not invalidate deletion.
+            const fence = await acquireAccountEncryptionTransitionFenceInTx(tx, params.accountId, "exclusive");
+            if (fence.status === "account_not_found") return { status: "not_found" };
+            if (fence.status === "account_inconsistent") return { status: "storage_mode_mismatch" };
+            const accountMode = fence.account.currentness.encryptionMode;
             const current = await readCurrentByQualifiedRef(
                 tx,
                 params.accountId,
@@ -2607,7 +2644,7 @@ export async function deleteQualifiedConnectedServiceCredential(
             if (
                 !content
                 || !isEnvelopeModeCompatible(
-                    accountModeResult.accountMode,
+                    accountMode,
                     content,
                 )
             ) {
@@ -2615,7 +2652,7 @@ export async function deleteQualifiedConnectedServiceCredential(
             }
             if (params.expectedStorageMode !== undefined) {
                 if (
-                    (accountModeResult.accountMode === "plain")
+                    (accountMode === "plain")
                     !== (params.expectedStorageMode === "plain")
                 ) {
                     return { status: "storage_mode_mismatch" };
@@ -2682,6 +2719,7 @@ export async function deleteQualifiedConnectedServiceCredential(
                 }
             }
 
+            await recheckAdmission();
             if (memberships.length > 0) {
                 const groups = new Map<
                     string,
@@ -2749,7 +2787,7 @@ export async function deleteQualifiedConnectedServiceCredential(
                 accountId: params.accountId,
             });
             return { status: "deleted" };
-        }, { /* Credential mode, group membership and full Account profile projection share this family. */ isolationLevel: "Serializable" });
+        }, { transactionClass: "connected-account-credential-delete" });
     } catch (error) {
         if (!(error instanceof QualifiedCredentialGroupCasConflictError)) {
             throw error;

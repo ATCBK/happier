@@ -1,9 +1,11 @@
-import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol';
-import { EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1 } from '@happier-dev/protocol/actions';
-import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1 } from '@happier-dev/protocol/actions/externalActionApi';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { Server } from 'socket.io';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RpcAckResponseEmitter } from './_types';
 
 const machineFindFirstMock = vi.hoisted(() => vi.fn());
 
@@ -26,6 +28,22 @@ vi.mock('@/app/monitoring/metrics/index', () => ({
 import { forwardRpcCall } from './forwardRpcCall';
 
 describe('forwardRpcCall', () => {
+    it('refuses an ambiguous answering-client mutation before either app receives it', async () => {
+        const emitWithAck = vi.fn(async () => 'applied');
+        const targets = ['app-a', 'app-b'].map(id => ({ id, data: { clientType: 'user-scoped' }, timeout: () => ({ emitWithAck }) }));
+        const io = { in: () => ({ fetchSockets: async () => targets,
+            timeout: () => ({ fetchSockets: async () => targets }) }) } as unknown as Server;
+        const args = { io, targetUserId: 'user-1', method: `machine-1:${RPC_METHODS.UI_ACTION_EXECUTE}`,
+            callParams: 'sealed-action', answeringClient: { requireSingle: true as const } };
+        expect(await forwardRpcCall(args)).toMatchObject({ ok: false, errorCode: 'RPC_CLIENT_AMBIGUOUS' });
+        expect(emitWithAck).not.toHaveBeenCalled();
+        expect(await forwardRpcCall({ ...args, answeringClient: { clientId: 'app-b' } }))
+            .toMatchObject({ ok: true, answeringClientId: 'app-b' });
+        expect(emitWithAck).toHaveBeenCalledOnce();
+        expect(await forwardRpcCall({ ...args, answeringClient: { clientId: 'disconnected-app' } }))
+            .toMatchObject({ ok: false, errorCode: 'RPC_CLIENT_NOT_AVAILABLE' });
+        expect(emitWithAck).toHaveBeenCalledOnce();
+    });
     it.each(['absent', 'connected', 'other-machine', 'lookup-failed', 'session'] as const)(
         'distinguishes an unavailable Machine from an unavailable operation (%s)', async state => {
             const target = { id: 'daemon', data: { clientType: 'machine-scoped', machineId: state === 'other-machine' ? 'machine-2' : 'machine-1' },
@@ -431,7 +449,7 @@ describe('forwardRpcCall', () => {
                     event: { kind: 'terminal', reason: 'upstream_closed' },
                 },
             });
-            expect(timeout).toHaveBeenCalledWith(2_147_483_647);
+            expect(timeout).toHaveBeenCalledWith(2_147_483_647, { rejectOnDisconnect: true });
             expect(emitWithAck).toHaveBeenCalledWith(
                 SOCKET_RPC_EVENTS.REQUEST,
                 {
@@ -497,7 +515,7 @@ describe('forwardRpcCall', () => {
                 ok: true,
                 result: daemonResponse,
             });
-            expect(timeout).toHaveBeenCalledWith(2_147_483_647);
+            expect(timeout).toHaveBeenCalledWith(2_147_483_647, { rejectOnDisconnect: true });
             expect(emitWithAck).toHaveBeenCalledWith(
                 SOCKET_RPC_EVENTS.REQUEST,
                 {
@@ -512,57 +530,63 @@ describe('forwardRpcCall', () => {
         }
     });
 
-    it.each([EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1, RPC_METHODS.CAPABILITIES_INVOKE, 'unrelated.method'])('keeps a submitted %s relay open for the daemon cancellation response', async (method) => {
+    it('settles a cancelled submitted caller lifetime as unknown without resending', async () => {
         const controller = new AbortController();
+        const io = new Server();
         let resolveDaemonResponse!: (value: unknown) => void;
         let markSubmitted!: () => void;
         const submitted = new Promise<void>((resolve) => {
             markSubmitted = resolve;
         });
-        const pendingDaemonResponse = new Promise<unknown>((resolve) => {
-            resolveDaemonResponse = resolve;
-        });
-        const emitWithAck = vi.fn(() => {
-            markSubmitted();
-            return pendingDaemonResponse;
-        });
+        // Only the network adapter is replaced; cancellation and ACK timer
+        // disposal run through Socket.IO's real BroadcastOperator.
+        const dispatch = vi.spyOn(io.of('/').adapter, 'broadcastWithAck').mockImplementation(
+            (_packet, _options, clientCount, acknowledgement) => {
+                resolveDaemonResponse = acknowledgement;
+                clientCount(1);
+                markSubmitted();
+            },
+        );
         const target = {
             id: 'machine-daemon-socket',
-            timeout: vi.fn(() => ({ emitWithAck })),
+            timeout: (ms: number, lifetime?: Readonly<{ rejectOnDisconnect?: boolean; signal?: AbortSignal }>) =>
+                (io.to('machine-daemon-socket') as unknown as RpcAckResponseEmitter).timeout(ms, lifetime),
         };
         const fetchSockets = vi.fn().mockResolvedValue([target]);
-        const io = {
-            in: vi.fn(() => ({
-                timeout: vi.fn(() => ({ fetchSockets })),
-                fetchSockets,
-            })),
-        } as unknown as Server;
+        vi.spyOn(io, 'in').mockReturnValue({
+            timeout: () => ({ fetchSockets }), fetchSockets,
+        } as unknown as ReturnType<Server['in']>);
+        const onSubmittedUnknown = vi.fn();
+        try {
+            const forwarded = forwardRpcCall({
+                io,
+                targetUserId: 'user-1',
+                method: `machine-1:${EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1}`,
+                callParams: { actionId: 'session.wait.idle' },
+                timeoutMs: null,
+                onSubmittedUnknown,
+                cancellation: {
+                    targetRequestId: 'relay-request-1',
+                    signal: controller.signal,
+                    onTargetSelected: vi.fn(),
+                },
+            });
 
-        let settled = false;
-        const forwarded = forwardRpcCall({
-            io,
-            targetUserId: 'user-1',
-            method: `machine-1:${method}`,
-            callParams: { actionId: 'session.wait.idle' },
-            timeoutMs: null,
-            cancellation: {
-                targetRequestId: 'relay-request-1',
-                signal: controller.signal,
-                onTargetSelected: vi.fn(),
-            },
-        }).finally(() => {
-            settled = true;
-        });
-
-        await submitted;
-        controller.abort(new Error('HTTP caller disconnected'));
-        await new Promise<void>((resolve) => setImmediate(resolve));
-        expect(settled).toBe(false);
-        resolveDaemonResponse({ authenticatedCancellation: true });
-        await expect(forwarded).resolves.toEqual({
-            ok: true,
-            result: { authenticatedCancellation: true },
-        });
+            await submitted;
+            controller.abort(new Error('HTTP caller disconnected'));
+            let result: unknown;
+            void forwarded.then(value => { result = value; });
+            try {
+                await vi.waitFor(() => expect(result).toMatchObject({ ok: false, errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN }));
+            } finally {
+                resolveDaemonResponse({ authenticatedCancellation: true });
+            }
+            await expect(forwarded).resolves.toMatchObject({ ok: false, errorCode: RPC_ERROR_CODES.OUTCOME_UNKNOWN });
+            expect(onSubmittedUnknown).toHaveBeenCalledOnce();
+            expect(dispatch).toHaveBeenCalledOnce();
+        } finally {
+            vi.restoreAllMocks();
+        }
     });
 
     it('marks a timeout after target emission as a submitted-unknown settlement', async () => {

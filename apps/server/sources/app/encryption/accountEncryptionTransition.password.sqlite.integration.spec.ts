@@ -48,6 +48,19 @@ describe("Account password credential mode transition", () => {
         expect(await db.accountPasswordCredential.findUnique({ where: { accountId: "passwordless-transition" } })).toBeNull();
     });
 
+    it("refuses to strand an owned Discussion when no content conversion was supplied", async () => {
+        const binding = createSignedAccountContentBinding();
+        const account = await db.account.create({ data: { encryptionMode: "plain", ...binding } });
+        await db.discussion.create({ data: { ownerAccountId: account.id, encryptionMode: "plain",
+            dataEncryptionKey: new Uint8Array([0]), creationLocalId: crypto.randomUUID(),
+            creationEqualityEvidenceV1: { kind: "plainDigest", digest: "A".repeat(43) },
+            titleContent: { t: "plain", v: { v: 1, title: "Retained conversation" } }, lastMessageAt: new Date() } });
+        await expect(inTx(tx => applyAccountEncryptionTransitionInTx(tx, { accountId: account.id,
+            expectedVersion: account.seq, toMode: "e2ee", contentKey: { kind: "preserve" } })))
+            .rejects.toThrow("discussion_encryption_transition_incomplete");
+        expect(await db.account.findUniqueOrThrow({ where: { id: account.id } })).toMatchObject({ encryptionMode: "plain" });
+    });
+
     it("refuses a mode flip that would strand an enrolled password in its source mode", async () => {
         const binding = createSignedAccountContentBinding();
         await db.account.create({ data: {

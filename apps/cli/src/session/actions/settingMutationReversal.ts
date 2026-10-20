@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import type { AccountSettingMutationV1 } from '@happier-dev/protocol/account/settings/accountSettingMutationV1';
 import { SettingsDeclarationActionInputSchemasV1, SettingsDeclarationMutationReversalV1Schema, SettingsDeclarationValueV1Schema, type SettingsDeclarationResetExpectedV1 } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 import type { PortableSettingDeclarationV1 } from '@happier-dev/protocol/actions/settings/settingsDeclarations';
@@ -43,7 +43,7 @@ export async function executeCliSettingMutationReversal(params: Readonly<{
       const restore = async (raw: Readonly<Record<string, unknown>>) => {
         await assertCurrent();
         const mutation = await params.prepareMutation(raw);
-        const restored = restoreSettingMutationV1(raw, mutation, reversal);
+        const restored = restoreSettingMutationV1(raw, mutation, reversal, params.readValue);
         if (restored.status !== 'prepared') throw new SettingReversalRefused(restored.status === 'conflict' ? 'account_settings_conflict' : 'invalid_setting_value');
         return restored.mutation;
       };

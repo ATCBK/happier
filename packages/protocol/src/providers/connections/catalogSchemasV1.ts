@@ -1,5 +1,5 @@
 import { ProviderDefaultModelSelectionsByAgentTargetKeyV1Schema, type ProviderDefaultModelSelectionsByAgentTargetKeyV1 } from '../selection/v1.js';
-import { type ProviderSettingsV1 } from '../settings/v1.js';
+import type { ProviderSettingsV1 } from '../settings/v1.js';
 import { z } from 'zod/mini';
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
@@ -19,15 +19,15 @@ export const ProviderConnectionsContentV1Schema = lazyZodSchema(() => z.discrimi
 ]));
 export type ProviderConnectionsContentV1 = z.infer<typeof ProviderConnectionsContentV1Schema>;
 
-function admitProviderCatalogJson(value: unknown, context: z.core.$RefinementCtx) {
+function admitProviderCatalogJson(value: unknown, context: z.core.ParsePayload) {
   const parsed = StrictJsonValueSchema.safeParse(value);
   if (parsed.success) return parsed.data;
-  for (const issue of parsed.error.issues) context.addIssue({ ...issue });
+  for (const issue of parsed.error.issues) context.issues.push({ ...issue, input: 'input' in issue ? issue.input ?? context.value : context.value } as z.core.$ZodRawIssue);
   return z.NEVER;
 }
 
 /** Keep the original body until the domain opener has checked the complete inventory. */
-export const StoredProviderConnectionsContentV1Schema = lazyZodSchema(() => z.pipe(z.transform(admitProviderCatalogJson), z.discriminatedUnion('t', [
+export const StoredProviderConnectionsContentV1Schema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(admitProviderCatalogJson), z.discriminatedUnion('t', [
   z.catchall(z.object({ t: z.literal('plain'), v: PluginJsonValueV2Schema }), PluginJsonValueV2Schema),
   z.catchall(z.object({ t: z.literal('encrypted'), c: z.string().check(z.minLength(1)) }), PluginJsonValueV2Schema),
 ])));

@@ -58,7 +58,7 @@ import { measureInWindow } from '@/components/ui/popover/measure';
 import { collectMachineAttention } from '@/components/machines/attention/collectMachineAttention';
 
 import { MachinesNeedsYouGroup, MachinesSinceYouLastLooked } from './MachinesPopoverAttention';
-import { RailPopoverRoster, resolveRailPopoverRosterListMaxHeight } from './RailPopoverRoster';
+import { RAIL_POPOVER_ROSTER_LIST_STYLE, RailPopoverRoster } from './RailPopoverRoster';
 import type { SidebarFooterPopoverContentProps } from './SidebarFooterPopoverButton';
 
 /**
@@ -192,6 +192,7 @@ const MachinesPopoverBody = React.memo(function MachinesPopoverBody(props: Sideb
     return (
         <RailPopoverRoster
             testID="sidebar-machines-popover-content"
+            maxHeight={props.maxHeight}
             title={describeFleetTitle({ subjects: attention.entries, reportingCount: attention.reportingCount }) ?? t('settings.machines')}
             summary={(
                 <PageHeaderMenu
@@ -250,7 +251,7 @@ const MachinesPopoverBody = React.memo(function MachinesPopoverBody(props: Sideb
             {/* The list scrolls inside a fixed frame: the header and the add rows never move. */}
             <ScrollView
                 testID="sidebar-machines-list"
-                style={{ maxHeight: resolveRailPopoverRosterListMaxHeight(props.maxHeight) }}
+                style={RAIL_POPOVER_ROSTER_LIST_STYLE}
                 keyboardShouldPersistTaps="always"
             >
                 {loading ? (
@@ -318,7 +319,8 @@ const MachinesPopoverSection = React.memo(function MachinesPopoverSection(props:
 /**
  * One machine: its mark, its name and a quiet tag (This computer, a created machine's power), and on
  * the right what it is doing — "3 working" / "No work" — or, when it is not online, one quiet line
- * saying why ("Offline · last seen yesterday", "Asleep · …"). Every state keeps the same height.
+ * saying why ("Offline · last seen yesterday", "Asleep · …"), which closes the name's line, or sits under it
+ * when the two cannot share the line.
  */
 const MachinesPopoverRow = React.memo(function MachinesPopoverRow(props: Readonly<{
     row: MachineCollectionRow;
@@ -350,15 +352,20 @@ const MachinesPopoverRow = React.memo(function MachinesPopoverRow(props: Readonl
                 availability={availability} style={setting.style} metrics={setting.metrics} layout="under" />
         )
     ) : undefined;
+    // An offline or away machine says why in one quiet line under its name, where an online row has its strip
+    // (MPG-18), so a long "last seen" sentence never wraps the name's line.
+    const awayLine = row.online ? undefined : <Text style={styles.quietLine} numberOfLines={1}>{detail}</Text>;
     return (
         <Item
             testID={`sidebar-machines-row.${row.serverId}.${id}`}
             title={row.title}
             // A roster row keeps the name on its one line, as the list column does (lab `rm` P).
             titleLines={1}
-            subtitle={strip}
+            subtitle={awayLine ?? strip}
             titleAccessory={tag ? <Text style={styles.tag} numberOfLines={1}>{tag}</Text> : undefined}
-            detail={detail}
+            // What it is doing (or why it is away) closes the name's line, level with the name, never centred
+            // against the strip beneath it (lab `rm` P).
+            titleMeta={awayLine ? undefined : <Text style={styles.rowMeta} numberOfLines={1}>{detail}</Text>}
             accessibilityLabel={[row.title, tag, detail].filter(Boolean).join(', ')}
             icon={(
                 <View ref={markRef} collapsable={false}>
@@ -415,6 +422,12 @@ const styles = StyleSheet.create((theme) => ({
         ...Typography.default(),
         ...happierPageTextMetrics('meta'),
         color: theme.colors.text.secondary,
+    },
+    rowMeta: {
+        ...Typography.default(),
+        ...happierPageTextMetrics('meta'),
+        color: theme.colors.text.secondary,
+        fontVariant: ['tabular-nums'],
     },
     quietLine: {
         ...Typography.default(),

@@ -5,6 +5,8 @@ import { resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 
 import dotenv from 'dotenv'
+import { fileURLToPath } from 'node:url'
+import { createTestHomeEnvironment } from '../../scripts/testing/testHomeEnvironment.mjs'
 // X1 scratch harness: the real config imports the protocol BARREL (dist) at
 // config-load time, and the shared protocol dist is currently a stale broken
 // artifact from a concurrent lane. Nothing else differs.
@@ -52,7 +54,8 @@ export default defineConfig({
         // CLI "unit" tests include real filesystem/process work; 5s default is too tight under fork pools.
         testTimeout: 30_000,
         hookTimeout: 30_000,
-        setupFiles: ['./src/vitestSetup.ts'],
+        setupFiles: [fileURLToPath(new URL('../../scripts/testing/vitestHomeSetup.mjs', import.meta.url)), './src/vitestSetup.ts'],
+        sequence: { setupFiles: 'list' },
         include: ['src/**/*.test.{ts,tsx}', 'scripts/**/*.test.ts'],
         exclude: [
             ...configDefaults.exclude,
@@ -77,6 +80,7 @@ export default defineConfig({
         },
         env: {
             ...mergedTestEnv,
+            ...createTestHomeEnvironment().env,
         }
     },
     optimizeDeps: {

@@ -8,6 +8,7 @@ import {
   type AgentExternalSessionLinkDataValue,
   type AgentExternalSessionTranscriptItem,
 } from '@happier-dev/plugin-sdk/sessions/external';
+import { createExternalSessionUnsupportedTranscriptItem } from '@happier-dev/plugin-sdk/sessions/file-stores';
 
 type AgentExternalSessionTranscriptRawRecord = AgentExternalSessionTranscriptItem['raw'];
 
@@ -224,16 +225,31 @@ const ANTIGRAVITY_KNOWN_RECORD_TYPES: ReadonlySet<string> = new Set<string>([
 ]);
 
 /**
- * Whether this mapper recognizes the record's own declared kind.
+ * Whether this mapper recognizes the record's kind and supplied transcript fields.
  *
  * A recognized record that projects to no transcript item (a checkpoint, an
- * empty system message) is a deliberate omission. An UNRECOGNIZED nonempty
- * record is Antigravity history this build cannot read, which readers must be
- * able to tell apart from an omission before they finalize a transcript.
+ * empty system message) is a deliberate omission. Unknown or malformed supplied
+ * content gets a safe visible fallback instead of disappearing from history.
  */
 export function isKnownAntigravityTranscriptRecord(record: JsonRecord): boolean {
   const type = (readString(record.type) ?? readString(record.eventType))?.toLowerCase();
-  return Boolean(type) && ANTIGRAVITY_KNOWN_RECORD_TYPES.has(type!);
+  if (!type || !ANTIGRAVITY_KNOWN_RECORD_TYPES.has(type)) return false;
+  if ((ANTIGRAVITY_USER_RECORD_TYPES as readonly string[]).includes(type)
+    || (ANTIGRAVITY_ASSISTANT_RECORD_TYPES as readonly string[]).includes(type)
+    || (ANTIGRAVITY_SYSTEM_RECORD_TYPES as readonly string[]).includes(type)) {
+    if (['text', 'content'].some((key) => record[key] != null && typeof record[key] !== 'string')) return false;
+    const message = record.message;
+    if (message != null && typeof message !== 'string') {
+      if (!isRecord(message)
+        || ['text', 'content'].some((key) => message[key] != null && typeof message[key] !== 'string')) return false;
+    }
+  }
+  if ((ANTIGRAVITY_ASSISTANT_RECORD_TYPES as readonly string[]).includes(type)) {
+    const calls = record.tool_calls ?? record.toolCalls;
+    if (calls != null && (!Array.isArray(calls)
+      || calls.some((call) => !isRecord(call) || readToolCallName(call) === null))) return false;
+  }
+  return true;
 }
 
 function mapAntigravityTranscriptRecordToStepsWithContext(
@@ -456,7 +472,8 @@ export function projectAntigravityTranscriptRecordGroupsWithCorrelation(params: 
   const groups = params.records.map((entry) => {
     let fallbackToolCallId = 0;
     const namespace = `${params.conversationId}-byte-${entry.startOffsetBytes}`;
-    const steps = mapAntigravityTranscriptRecordToStepsWithContext(entry.record, {
+    const unsupported = !isKnownAntigravityTranscriptRecord(entry.record);
+    const steps = unsupported ? [] : mapAntigravityTranscriptRecordToStepsWithContext(entry.record, {
       pendingToolCallIds,
       generatedIdNamespace: namespace,
       nextFallbackToolCallId: () => `antigravity-turn-${namespace}-tool-${fallbackToolCallId += 1}`,
@@ -465,9 +482,12 @@ export function projectAntigravityTranscriptRecordGroupsWithCorrelation(params: 
     return {
       startOffsetBytes: entry.startOffsetBytes,
       endOffsetBytes: entry.endOffsetBytes,
-      unsupported: Object.keys(entry.record).length > 0
-        && !isKnownAntigravityTranscriptRecord(entry.record),
-      items: steps.flatMap((step, index) => {
+      unsupported,
+      items: unsupported ? [createExternalSessionUnsupportedTranscriptItem({
+        agentId: 'antigravity',
+        id: `antigravity-${namespace}-unsupported`,
+        createdAtMs,
+      })] : steps.flatMap((step, index) => {
         const item = projectStep({
           step,
           createdAtMs,

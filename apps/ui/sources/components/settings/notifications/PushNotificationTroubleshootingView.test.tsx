@@ -1,12 +1,10 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PermissionStatus } from 'expo-modules-core';
 
 import { renderSettingsView as renderSettingsViewBoundary } from '@/dev/testkit/harness/settingsViewHarness';
 import { flushHookEffects, standardCleanup } from '@/dev/testkit';
 import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 
@@ -17,8 +15,6 @@ const modalAlertMock = vi.fn();
 let settingsValue: Record<string, unknown> = {
     notificationsSettingsV1: { v: 1, pushEnabled: true },
 };
-const harness = createHomeGovernanceHarness();
-installHomeGovernanceBoundaries(harness);
 afterEach(standardCleanup);
 let home: string;
 let deleteDisabled = false;
@@ -114,6 +110,14 @@ installSettingsViewCommonModuleMocks({
         return createUnistylesMock();
     },
 });
+
+// Install the native boundary before Home credential storage imports React Native.
+const { PermissionStatus } = await import('expo-modules-core');
+const { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } = await import(
+    '@/dev/testkit/harness/homeGovernanceHarness'
+);
+const harness = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(harness);
 
 vi.mock('@/components/ui/lists/ItemList', () => ({
     ItemList: createPassthroughComponentMock('ItemList'),

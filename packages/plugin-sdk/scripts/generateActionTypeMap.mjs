@@ -37,7 +37,7 @@ export function projectActionDtoDeclarations({ repoRoot = REPO_ROOT, recordInput
     path: resolve(repoRoot, 'packages/plugin-sdk/src/identity.ts'), name,
   }]));
   canonicalSdkTypes.set('ScmComparisonSource', {
-    path: resolve(repoRoot, 'packages/plugin-sdk/src/scm/projections.ts'), name: 'ScmComparisonSource',
+    path: resolve(repoRoot, 'packages/plugin-sdk/src/scm/comparisonSource.ts'), name: 'ScmComparisonSource',
   });
   const sources = new Map();
   const sourceTexts = new Map();
@@ -436,7 +436,7 @@ export async function prepareActionTypeMap() {
     inputDigests: [...inputDigests],
     output,
     outputs,
-    obsoleteOutputs: ['strictJsonValue.generated.ts', 'jsonSchema.generated.ts'].map((name) =>
+    obsoleteOutputs: ['strictJsonValue.generated.ts', 'jsonSchema.generated.ts', 'sessionDiscussionActionDtos.generated.ts'].map((name) =>
       resolve(PACKAGE_ROOT, 'src/actions/dtos', name)),
     resultKeys,
     stale: false,

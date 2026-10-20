@@ -42,8 +42,6 @@ export const en = {
             push: 'Force push with lease…',
             description: 'Replace the observed remote history',
             fetchFirst: 'Fetch first to observe the remote branch',
-            confirmTitle: 'Replace the remote branch?',
-            confirmBody: ({ target, oid }: { target: string; oid: string }) => `Replace ${target} with your local history only if it still points to ${oid}. Other people’s commits may be removed from that branch. If it has changed, Git refuses the push.`,
         },
         choices: {
             dirtyTitle: ({ count, formatted }: { count: number; formatted: string }) => (count === 1 ? `You have 1 uncommitted change` : `You have ${formatted} uncommitted changes`),
@@ -187,8 +185,6 @@ export const en = {
             askAgent: 'Ask the agent to resolve',
             continue: ({ operation }: { operation: string }) => `Continue ${operation}`,
             abort: ({ operation }: { operation: string }) => `Abort ${operation}`,
-            abortTitle: ({ operation }: { operation: string }) => `Abort the ${operation}?`,
-            abortBody: 'The branch goes back to where it was before it started. Resolutions made so far are lost.',
             needsYou: 'Needs you',
             mergedCleanly: 'Merged cleanly',
         },

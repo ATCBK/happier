@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createCliSettingsDeclarationAction } from './settingsDeclarationAction';
+import { createCliSettingsDeclarationActionFixture as createCliSettingsDeclarationAction } from './settingsDeclarationAction.test-support';
 import { API_TOKEN_FULL_GRANT_V1, ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol';
 
 afterEach(() => vi.restoreAllMocks());
@@ -25,7 +25,7 @@ describe('headless settings conditional writes', () => {
         expect(write).not.toHaveBeenCalled();
     });
 
-    it.each(['settings.workflowRuns.maxActiveRunsPerMachine', 'notifications.autoFollowAssigned'])
+    it.each(['settings.workflowRuns.maxActiveRunsPerMachine', 'coordination.autoFollowAssigned'])
         ('keeps non-Account reset unsupported for %s without borrowing an owner', async anchor => {
             const read = vi.spyOn(axios, 'get');
             const write = vi.spyOn(axios, 'post');

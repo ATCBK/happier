@@ -19,6 +19,11 @@ import { summarizeSessionRecord } from '@/cli/output/session/sessionSummary';
 import { projectCliSessionAwarenessFromMaterialV1 } from '@/cli/output/session/sessionAwareness';
 import type { SessionTransportEncryptionMaterial } from '@/session/transport/encryption/sessionEncryptionContext';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
+import { evaluateFollowRulePreviewV1, type FollowRulePreviewCandidateV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRulePreviewV1';
+import { projectSessionListFilterAfterHomeQueryV1, projectSessionListFilterHomeQueriesV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterQueryV1';
+import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
+import { readRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionContext';
+import { readRequesterHomeWithinActionLifetime } from '@/daemon/sessionEncryption/requesterCurrentness';
 
 /** The one typed answer for a query arm an admitted one-Session corpus cannot serve. */
 function unsupportedSessionListQueryArmsResult(arms: readonly string[]) {
@@ -161,14 +166,15 @@ export function createRestrictedCurrentSessionListActionDependency(params: Reado
 }
 
 /** One CLI/daemon adapter from the shared Action contract to Session listing. */
-export function createSessionListActionDependency(params: Readonly<{
+export function createSessionListActionDeps(params: Readonly<{
   readWorkspaceRefs?: (input: Parameters<ActionExecutorDeps['sessionList']>[0]) => Promise<readonly WorkspaceRefV1[]>;
   credentials: StoredCredentials;
+  isCredentialCurrent?: () => boolean | Promise<boolean>;
   resolveAccountSettings?: () => AccountSettings | null;
   serverHttpBaseUrl?: string;
-}> & ExternalActionHomeBinding): ActionExecutorDeps['sessionList'] {
+}> & ExternalActionHomeBinding): Pick<ActionExecutorDeps, 'sessionList' | 'sessionFollowPreview'> {
   const serverId = params.serverId ?? configuration.activeServerId;
-  return async ({
+  const read = async ({
     project,
     context,
     query,
@@ -182,7 +188,8 @@ export function createSessionListActionDependency(params: Readonly<{
     includeRows,
     includeLastMessagePreview,
     signal,
-  }) => {
+  }: Parameters<ActionExecutorDeps['sessionList']>[0], filterCandidates?: Parameters<typeof listSessions>[0]['filterCandidates'],
+  workspaceRefs?: readonly WorkspaceRefV1[]) => {
     const normalizedActiveOnly = activeOnly === true;
     const normalizedArchivedOnly = archivedOnly === true;
     if (context?.serverId && context.serverId !== serverId) {
@@ -204,7 +211,9 @@ export function createSessionListActionDependency(params: Readonly<{
     }>) => {
       const resolved = resolveExternalActionServerRequestHeaders({
         context,
-        effectActionId: 'session.list',
+        // Scope/start admission observes the caller's subtree under the
+        // original Action. It does not originate a second session.list root.
+        effectActionId: context?.externalActionExecutionAuthorization?.binding.actionId ?? 'session.list',
         method: request.method,
         path: request.path,
         ...(request.body === undefined ? {} : { body: request.body }),
@@ -229,9 +238,14 @@ export function createSessionListActionDependency(params: Readonly<{
       && params.resolveAccountSettings
       ? params.resolveAccountSettings()
       : undefined;
+    const requester = filterCandidates ? readRequesterAccountActionContext(context.externalActionExecutionAuthorization) : null;
+    if (filterCandidates && context.externalActionExecutionAuthorization && (!requester || !await requester.isCurrent())) {
+      return { ok: false as const, errorCode: 'follow_rule_account_scope_unavailable', error: 'follow_rule_account_scope_unavailable' };
+    }
     const run = async () => await listSessions({
       ...(project ? { project, workspaceRefs: await params.readWorkspaceRefs?.({ context, project, signal }) } : {}),
-      credentials: params.credentials,
+      ...(filterCandidates ? { filterCandidates, workspaceRefs, accountSettings: params.resolveAccountSettings?.() ?? null } : {}),
+      credentials: requester?.credentials ?? params.credentials,
       resolveAuthorizationHeaders,
       ...(externalActionAccountSettings !== undefined
         ? { accountSettings: externalActionAccountSettings }
@@ -254,9 +268,12 @@ export function createSessionListActionDependency(params: Readonly<{
       ...(allowedSessionIds ? { allowedSessionIds } : {}),
     });
     try {
-      return params.serverHttpBaseUrl
-        ? await runWithServerHttpBaseUrl(params.serverHttpBaseUrl, run)
-        : await run();
+      // Scope observation is a preparation read, not the Action effect. Retain
+      // its admitted lifetime through transient Home failures before the scope
+      // guard classifies an unavailable observation as an unsupported corpus.
+      return await readRequesterHomeWithinActionLifetime(() => params.serverHttpBaseUrl
+        ? runWithServerHttpBaseUrl(params.serverHttpBaseUrl, run)
+        : run(), signal);
     } catch (error) {
       // The admitted one-Session corpus cannot answer every query arm; that is a
       // typed contract answer, not a transport failure.
@@ -265,5 +282,39 @@ export function createSessionListActionDependency(params: Readonly<{
       }
       throw error;
     }
+  };
+  return {
+    sessionList: read,
+    sessionFollowPreview: async ({ context, input, serverId: requestedServerId, signal }) => {
+      if (requestedServerId && requestedServerId !== serverId) return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
+      const candidates: FollowRulePreviewCandidateV1[] = [];
+      const requester = readRequesterAccountActionContext(context.externalActionExecutionAuthorization);
+      const isAccountCurrent = () => requester ? requester.isCurrent() : params.isCredentialCurrent?.() ?? true;
+      if (!await isAccountCurrent()) return { ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' };
+      const credentials = requester?.credentials ?? params.credentials;
+      const viewerAccountId = readAccountIdFromToken(credentials.token) ?? undefined;
+      const queries = projectSessionListFilterHomeQueriesV1(input.filter, { storage: 'active', includeInactive: true,
+        mountedHomeServerIds: [serverId] });
+      const unservedHome = input.filter.homeServerIds.some(home => home !== serverId);
+      let coverage: 'complete' | 'partial' | 'unavailable' = unservedHome || input.filter.show !== 'sessions'
+        || context.sessionListAccess === 'current_session' ? 'partial' : 'complete';
+      if (input.filter.show === 'runs') return evaluateFollowRulePreviewV1({ filter: input.filter, candidates, coverage: 'unavailable' });
+      let workspaceRefs: readonly WorkspaceRefV1[] | undefined;
+      if (input.filter.projects && params.readWorkspaceRefs) {
+        try { workspaceRefs = await params.readWorkspaceRefs({ context, signal }); }
+        catch (error) { signal?.throwIfAborted(); coverage = 'partial'; }
+      }
+      for (const home of queries) {
+        const page = await read({ context, query: home.query, includeSystem: false, signal },
+          { serverId: home.serverId, viewerAccountId, filters: [input.filter], collect: candidate => candidates.push(candidate) }, workspaceRefs);
+        if ('ok' in page && page.ok === false) return page;
+        if ('hasNext' in page && (page.hasNext || 'attentionHasNext' in page && page.attentionHasNext)
+          || 'metadataUpgradeRequiredCount' in page && Number(page.metadataUpgradeRequiredCount) > 0) coverage = 'partial';
+      }
+      if (!await isAccountCurrent()) return { ok: false, errorCode: 'action_account_scope_changed', error: 'action_account_scope_changed' };
+      signal?.throwIfAborted();
+      return evaluateFollowRulePreviewV1({ filter: projectSessionListFilterAfterHomeQueryV1(input.filter, serverId), candidates,
+        coverage: queries.length === 0 && unservedHome ? 'unavailable' : coverage });
+    },
   };
 }

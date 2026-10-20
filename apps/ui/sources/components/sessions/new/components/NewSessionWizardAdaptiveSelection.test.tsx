@@ -1,7 +1,9 @@
 import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
+import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { installNewSessionComponentsCommonModuleMocks } from './newSessionComponentsTestHelpers';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -15,6 +17,9 @@ installNewSessionComponentsCommonModuleMocks({
 });
 
 describe('NewSessionWizardAdaptiveSelection', () => {
+    let restorePopoverGlobals: () => void;
+    beforeEach(() => { restorePopoverGlobals = withPopoverWebGlobals(); });
+    afterEach(() => restorePopoverGlobals());
     it('resolves explicit wizard presentation before auto presentation', async () => {
         const { resolveWizardAdaptivePresentation } = await import('./NewSessionWizardAdaptiveSelection');
 
@@ -24,7 +29,7 @@ describe('NewSessionWizardAdaptiveSelection', () => {
         expect(resolveWizardAdaptivePresentation(undefined, 'expanded')).toBe('expanded');
     });
 
-    it('renders compact dropdown triggers with selected value as subtitle only', async () => {
+    it('draws the compact select as the wizard value row and opens its menu from it', async () => {
         const { NewSessionWizardDropdownSelectionItem } = await import('./NewSessionWizardAdaptiveSelection');
         const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
         const screen = await renderScreen(<NewSessionWizardDropdownSelectionItem
@@ -38,19 +43,18 @@ describe('NewSessionWizardAdaptiveSelection', () => {
             onSelect={() => {}}
         />);
 
-        const dropdown = screen.findByType(DropdownMenu);
-        expect(dropdown.props.itemTrigger).toMatchObject({
-            title: 'Select Thing',
-            subtitle: 'Current Thing',
-            showSelectedDetail: false,
-            showSelectedSubtitle: false,
-            itemProps: { testID: 'trigger' },
-        });
+        expect(screen.getTextContent()).toContain('Select Thing');
+        expect(screen.findByType(DropdownMenu).props.open).toBe(false);
+        await screen.pressByTestIdAsync('trigger');
+        // The dropdown opens on the next frame, after the press that asked for it has finished.
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+        expect(screen.findByType(DropdownMenu).props.open).toBe(true);
     });
 
     it('retires pending work when the mounted wizard popover closes', async () => {
         const { AgentInputContentPopover } = await import('@/components/sessions/agentInput/components/AgentInputContentPopover');
         const { NewSessionWizardPopoverItem } = await import('./NewSessionWizardAdaptiveSelection');
+        const { OverlayPortalHost, OverlayPortalProvider } = await import('@/components/ui/popover/OverlayPortal');
         const retirePendingWork = vi.fn();
         const screen = await renderScreen(<NewSessionWizardPopoverItem
             testID="trigger"
@@ -61,12 +65,13 @@ describe('NewSessionWizardAdaptiveSelection', () => {
                 renderContent: () => null,
                 onRequestClose: retirePendingWork,
             }}
-        />);
+        />, { wrapper: ({ children }) => <OverlayPortalProvider>{children}<OverlayPortalHost /></OverlayPortalProvider> });
 
         await screen.pressByTestIdAsync('trigger');
         const popover = screen.findByType(AgentInputContentPopover);
-        popover.props.onRequestClose();
+        await act(async () => { popover.props.onRequestClose(); });
 
         expect(retirePendingWork).toHaveBeenCalledOnce();
+        await screen.unmount();
     });
 });

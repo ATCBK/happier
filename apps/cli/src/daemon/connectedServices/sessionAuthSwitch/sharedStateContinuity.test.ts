@@ -2,13 +2,29 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { accountSettingsParse } from '@happier-dev/protocol';
+
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 
 import { resolveSharedStateRequiredSwitchContinuity } from './sharedStateContinuity';
 
 describe('resolveSharedStateRequiredSwitchContinuity', () => {
   const tempDirs: string[] = [];
+  let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
+
+  beforeAll(async () => {
+    runtime = await createAdmittedPluginRuntimeFixture({
+      controller: pluginReloadController,
+      runtimeOptions: { pluginIds: ['happier.agent.codex', 'happier.agent.pi', 'happier.agent.opencode'] },
+    });
+  });
+
+  afterAll(async () => {
+    await runtime?.dispose();
+    await pluginReloadController.shutdown();
+  });
 
   afterEach(async () => {
     await Promise.all(tempDirs.map(async (dir) => {
@@ -36,14 +52,14 @@ describe('resolveSharedStateRequiredSwitchContinuity', () => {
     await expect(resolveSharedStateRequiredSwitchContinuity({
       agentId: 'codex',
       accountSettings,
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       targetMaterializedRoot: '/tmp/materialized',
       targetMaterializedEnv: {},
       materializationIdentity: { v: 1, id: 'csm_1' },
       vendorResumeId: 'resume-id',
       cwd: '/tmp/project',
       warnings: ['codex_shared_state_required'],
-    } as any)).resolves.toMatchObject({
+    })).resolves.toMatchObject({
       mode: 'unsupported',
       errorCode: 'provider_session_state_unavailable_for_resume',
       warnings: ['codex_shared_state_required', 'codex_session_file_not_found'],
@@ -77,15 +93,15 @@ describe('resolveSharedStateRequiredSwitchContinuity', () => {
     const materializedRoot = await mkdtemp(join(tmpdir(), 'happier-codex-shared-state-'));
     tempDirs.push(materializedRoot);
     const rolloutDir = join(materializedRoot, 'sessions', '2026', '05', '28');
-    const rolloutPath = join(rolloutDir, 'rollout-2026-05-28-resume-id.jsonl');
+    const rolloutPath = join(rolloutDir, 'rollout-2026-05-28T12-00-00-resume-id.jsonl');
     await mkdir(rolloutDir, { recursive: true });
-    await writeFile(rolloutPath, '{}\n');
+    await writeFile(rolloutPath, `${JSON.stringify({ type: 'session_meta', payload: { id: 'resume-id' } })}\n`);
 
     await expect(resolveSharedStateRequiredSwitchContinuity({
       agentId: 'codex',
       accountSettings,
       warnings: ['codex_shared_state_required'],
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       targetMaterializedRoot: materializedRoot,
       targetMaterializedEnv: {
         CODEX_HOME: materializedRoot,
@@ -93,7 +109,7 @@ describe('resolveSharedStateRequiredSwitchContinuity', () => {
       materializationIdentity: { v: 1, id: 'csm_1' },
       vendorResumeId: 'resume-id',
       cwd: '/tmp/project',
-    } as any)).resolves.toEqual({
+    })).resolves.toEqual({
       mode: 'restart_rematerialize',
       warnings: ['codex_shared_state_required'],
     });
@@ -119,7 +135,7 @@ describe('resolveSharedStateRequiredSwitchContinuity', () => {
       agentId: 'pi',
       accountSettings,
       warnings: ['pi_session_state_sharing_required'],
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       targetMaterializedRoot: '/tmp/materialized',
       targetMaterializedEnv: {
         PI_CODING_AGENT_DIR: '/tmp/materialized/pi-agent-dir',
@@ -127,7 +143,7 @@ describe('resolveSharedStateRequiredSwitchContinuity', () => {
       materializationIdentity: { v: 1, id: 'csm_1' },
       vendorResumeId: 'pi-session-1',
       cwd: '/tmp/project',
-    } as any)).resolves.toMatchObject({
+    })).resolves.toMatchObject({
       mode: 'unsupported',
       errorCode: 'provider_session_state_unavailable_for_resume',
       warnings: ['pi_session_state_sharing_required', 'pi_session_file_not_found'],
@@ -156,14 +172,14 @@ describe('resolveSharedStateRequiredSwitchContinuity', () => {
     await expect(resolveSharedStateRequiredSwitchContinuity({
       agentId: 'codex',
       accountSettings,
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       targetMaterializedRoot: '/tmp/materialized',
       targetMaterializedEnv: {},
       materializationIdentity: { v: 1, id: 'csm_1' },
       vendorResumeId: 'resume-id',
       cwd: '/tmp/project',
       warnings: ['codex_shared_state_required'],
-    } as any)).resolves.toEqual({
+    })).resolves.toEqual({
       mode: 'unsupported',
       errorCode: 'provider_state_sharing_required',
       warnings: ['codex_shared_state_required'],
@@ -177,14 +193,14 @@ describe('resolveSharedStateRequiredSwitchContinuity', () => {
     await expect(resolveSharedStateRequiredSwitchContinuity({
       agentId: 'codex',
       accountSettings: null,
-      serviceId: 'openai-codex',
+      serviceId: 'happier.agent.codex/openai-codex',
       targetMaterializedRoot: '/tmp/materialized',
       targetMaterializedEnv: {},
       materializationIdentity: { v: 1, id: 'csm_1' },
       vendorResumeId: 'resume-id',
       cwd: '/tmp/project',
       warnings: ['codex_shared_state_required'],
-    } as any)).resolves.toEqual({
+    })).resolves.toEqual({
       mode: 'unsupported',
       errorCode: 'provider_state_sharing_settings_unavailable',
       warnings: ['codex_shared_state_required'],
@@ -212,7 +228,7 @@ describe('resolveSharedStateRequiredSwitchContinuity', () => {
       vendorResumeId: 'resume-id',
       cwd: '/tmp/project',
       warnings: ['opencode_shared_state_required'],
-    } as any)).resolves.toEqual({
+    })).resolves.toEqual({
       mode: 'unsupported',
       errorCode: 'provider_state_sharing_unavailable',
       warnings: ['opencode_shared_state_required'],

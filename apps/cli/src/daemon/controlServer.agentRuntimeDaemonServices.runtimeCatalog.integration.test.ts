@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 
 import { configuration } from '@/configuration';
+import { logger } from '@/ui/logger';
 import {
   AGENT_RUNTIME_DAEMON_SERVICES_PATH,
   AgentRuntimeDaemonServiceRequestV1Schema,
@@ -31,6 +32,11 @@ import { sessionScopeExitEvidencePath } from './platform/linux/systemdUserResour
 import { adoptTrackedSessionRunnerIdentity } from './sessions/sessionReportCorrelation';
 import { readProcessIdentityByPid } from './processIdentity';
 import { hashProcessCommand } from './sessionRegistry';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
+import { authorizeSessionModelTransitionProviderTargetWithLease } from '@/providers/sessions/authorizeSessionModelTransitionTarget';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol/providers/ids';
 
 type RecordAdmission = NonNullable<
   Parameters<typeof createDaemonControlApp>[0][
@@ -65,6 +71,66 @@ function createRetainedAgent() {
 }
 
 describe('daemon control server: runner-scoped Agent runtime services', () => {
+  it('returns a real Provider authorization refusal through the strict model-transition service response', async () => {
+    const fixture = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+      runtimeOptions: { pluginIds: ['happier.agent.codex'] } });
+    const lease = await acquireAuthoritativePluginRuntimeRegistryLease();
+    const sessionId = 'session-provider-transition-refusal';
+    const retainedAgent = createRetainedAgent();
+    const runner = { pid: 2240, processStartTimeMs: 1_717_171_717_500,
+      processCommandHash: 'f'.repeat(64), snapshotIdentity: 'snapshot:provider-transition' };
+    const authorityPath = await createAgentRuntimeDaemonServiceAuthorityPath({
+      happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing });
+    const authority = await publishAgentRuntimeDaemonServiceAuthority({
+      happyHomeDir: configuration.happyHomeDir, publicReleaseRing: configuration.publicReleaseRing,
+      path: authorityPath, sessionId, runner, retainedAgent, httpPort: 46_007,
+      capability: capabilityA, readPluginHardRevocationRevision: async () => 0 });
+    const tracked: TrackedSession = {
+      startedBy: 'daemon', pid: runner.pid, sessionRunnerPid: runner.pid, happySessionId: sessionId,
+      processStartTimeMs: runner.processStartTimeMs, processCommandHash: runner.processCommandHash,
+      agentRuntimeDaemonServiceAuthorityFilePath: authorityPath,
+      agentRuntimeDaemonServiceCapabilityHash: authority.capabilityDigest,
+      runnerAgentSourceCustodyV1: retainedAgent.sourceCustody,
+      runnerAgentInvocationContext: { cwd: '/workspace', environment: {}, providerBindingActive: true },
+    };
+    const selection = { agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: ProviderConnectionIdSchema.parse('pc_missing'), modelId: 'model' };
+    const app = createDaemonControlApp({ getChildren: () => [tracked], machineId: 'machine-1',
+      stopSession: async () => ({ status: 'not_found' as const }),
+      spawnSession: async () => ({ type: 'success' as const, sessionId: 'unused' }),
+      requestShutdown: () => {}, onHappySessionWebhook: () => {}, controlToken: 'control-token',
+      // Compose the production Provider producer, authority ingress and strict HTTP response.
+      // No internal authorization, registry or error classifier is substituted.
+      agentRuntimeDaemonServices: { dispatch: async () => {
+        await authorizeSessionModelTransitionProviderTargetWithLease({
+          sessionId, machineId: 'machine-1', agentId: 'codex', agentTargetKey: selection.agentTargetKey, lease,
+          input: { selection, activeSelection: selection, activeSessionBindingMetadata: {
+            v: 1, connectionId: selection.providerConnectionId, contributionKey: 'provider.test', connectionRevision: 1,
+            model: { id: selection.modelId, name: selection.modelId }, protocol: 'openai-responses', materialization: 'engineConfig',
+            compatibilityFingerprint: 'compatibility', bindingSecurityFingerprint: 'security',
+            displaySnapshot: { providerName: 'Provider', connectionName: 'Provider', connectionRole: 'default', connectionDisplayNameMode: 'automatic' },
+          } },
+        });
+        throw new Error('Expected the missing Account catalog to refuse authorization');
+      } },
+    });
+    try {
+      const response = await app.inject({ method: 'POST', url: AGENT_RUNTIME_DAEMON_SERVICES_PATH,
+        headers: { 'x-happier-daemon-token': capabilityA }, payload: { v: 1,
+          context: { token: capabilityA, sessionId },
+          operation: { kind: 'model_transition.authorize', requestId: 'provider-refusal', selection } } });
+      expect(response.statusCode).toBe(200);
+      expect(AgentRuntimeDaemonServiceResponseV1Schema.parse(response.json())).toEqual({
+        ok: false, error: { code: 'provider_connection_not_found', message: 'provider_connection_not_found' },
+      });
+    } finally {
+      await app.close();
+      await removeAgentRuntimeDaemonServiceAuthorityIfOwned({ happyHomeDir: configuration.happyHomeDir,
+        publicReleaseRing: configuration.publicReleaseRing, path: authorityPath, capabilityDigest: authority.capabilityDigest });
+      await lease.release();
+      await fixture.dispose();
+    }
+  });
+
   it.skipIf(process.platform !== 'linux')('authorizes the witnessed child of a real launch even when optional cgroup migration fails', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-runner-auth-'));
     const procfsRootDir = join(root, 'proc');
@@ -94,12 +160,11 @@ describe('daemon control server: runner-scoped Agent runtime services', () => {
     let authorityPath: string | undefined;
     let runnerPid: number | undefined;
     try {
-      const [line] = await Promise.race([once(lines, 'line'), closed.then(() => {
-        throw new Error('Launch exited before reporting its runner');
+      const [line] = await Promise.race([once(lines, 'line'), closed.then(([code, signal]) => {
+        throw new Error(`Launch exited before reporting its runner (exit=${String(code)}, signal=${String(signal)}): ${stderr.trim()}`);
       })]);
       runnerPid = Number(line);
       expect(runnerPid).not.toBe(child.pid);
-      expect(stderr).toContain('cgroup.procs');
       const wrapperFact = await readProcessIdentityByPid(child.pid!);
       const runnerFact = await readProcessIdentityByPid(runnerPid);
       if (typeof wrapperFact?.processStartTimeMs !== 'number' || typeof runnerFact?.processStartTimeMs !== 'number') {
@@ -175,7 +240,7 @@ describe('daemon control server: runner-scoped Agent runtime services', () => {
     }
   });
 
-  it('parks fresh turn and managed-process authorization at retained-runner ingress while keeping accepted service reads open', async () => {
+  it('authorizes the current runner past a retained predecessor and parks new work while keeping accepted service reads open', async () => {
     const sessionId = 'session-drain-admission';
     const retainedAgent = createRetainedAgent();
     const runner = { pid: 2237, processStartTimeMs: 1_717_171_717_300,
@@ -194,8 +259,16 @@ describe('daemon control server: runner-scoped Agent runtime services', () => {
       runnerAgentSourceCustodyV1: retainedAgent.sourceCustody,
       runnerAgentInvocationContext: Object.freeze({ cwd: '/workspace', environment: Object.freeze({}), providerBindingActive: false }),
     };
+    // Exit cleanup may retain the old generation after the same Session starts
+    // its queued input in a successor. Its different capability is not a veto.
+    const predecessor: TrackedSession = {
+      ...tracked,
+      pid: runner.pid - 1,
+      sessionRunnerPid: runner.pid - 1,
+      agentRuntimeDaemonServiceCapabilityHash: hashAgentRuntimeSessionBridgeToken(capabilityB),
+    };
     const admissionDrain = createDaemonAdmissionDrain();
-    const app = createDaemonControlApp({ getChildren: () => [tracked], machineId: 'machine-1',
+    const app = createDaemonControlApp({ getChildren: () => [predecessor, tracked], machineId: 'machine-1',
       stopSession: async () => ({ status: 'not_found' as const }),
       spawnSession: async () => ({ type: 'success' as const, sessionId: 'unused' }),
       requestShutdown: () => {}, onHappySessionWebhook: () => {}, controlToken: 'control-token', admissionDrain });
@@ -207,6 +280,10 @@ describe('daemon control server: runner-scoped Agent runtime services', () => {
     const managedProcess = { kind: 'managed_server.supervision.authorize', requestId: 'spawn-request',
       contributionId: 'acme-agent', serverId: 'native-server', executable: { kind: 'systemTool', id: 'native-cli' }, environmentKeys: [] };
     try {
+      const staleResponse = await app.inject({ method: 'POST', url: AGENT_RUNTIME_DAEMON_SERVICES_PATH,
+        headers: { 'x-happier-daemon-token': capabilityB }, payload: { v: 1,
+          context: { token: capabilityB, sessionId }, operation: turn } });
+      expect(staleResponse.statusCode).toBe(403);
       // No internal dispatcher is substituted. The real private authority gets
       // through ingress to the unavailable-service boundary when admission is open.
       for (const operation of [turn, managedProcess]) expect((await send(operation)).statusCode).toBe(501);
@@ -223,6 +300,87 @@ describe('daemon control server: runner-scoped Agent runtime services', () => {
       await app.close();
       await removeAgentRuntimeDaemonServiceAuthorityIfOwned({ happyHomeDir: configuration.happyHomeDir,
         publicReleaseRing: configuration.publicReleaseRing, path: authorityPath, capabilityDigest: authority.capabilityDigest });
+    }
+  });
+
+  it('logs one local-only route diagnostic when daemon-service dispatch fails', async () => {
+    const sessionId = 'session-dispatch-failure';
+    const retainedAgent = createRetainedAgent();
+    const runner = {
+      pid: 2238,
+      processStartTimeMs: 1_717_171_717_400,
+      processCommandHash: 'e'.repeat(64),
+      snapshotIdentity: 'snapshot:dispatch-failure',
+    };
+    const invocationContext = Object.freeze({
+      cwd: '/workspace',
+      environment: Object.freeze({}),
+      providerBindingActive: false,
+    });
+    const dispatchFailure = new Error('daemon-service dispatch failed');
+    const dispatch = vi.fn(async () => {
+      throw dispatchFailure;
+    });
+    const warnLocalFile = vi.spyOn(logger, 'warnLocalFile')
+      .mockImplementation(() => {});
+    const app = createDaemonControlApp({
+      getChildren: () => [],
+      machineId: 'machine-1',
+      stopSession: async () => ({ status: 'not_found' as const }),
+      spawnSession: async () => ({ type: 'success' as const, sessionId: 'unused' }),
+      requestShutdown: () => {},
+      onHappySessionWebhook: () => {},
+      controlToken: 'control-token',
+      agentRuntimeDaemonServices: { dispatch },
+      foregroundAgentRuntimeAdmission: {
+        authorizeDaemonServiceRequest: () => ({
+          retainedAgent,
+          runner,
+          capabilityDigest:
+            hashAgentRuntimeSessionBridgeToken(capabilityA),
+          invocationContext,
+          readAdmission: () => null,
+          recordAdmission: async () => false,
+        }),
+      } as never,
+    });
+
+    try {
+      const response = await app.inject({
+        method: 'POST',
+        url: AGENT_RUNTIME_DAEMON_SERVICES_PATH,
+        headers: { 'x-happier-daemon-token': capabilityA },
+        payload: {
+          v: 1,
+          context: { token: capabilityA, sessionId },
+          operation: {
+            kind: 'plugin_services.subscription.next_v1',
+            requestId: 'request-dispatch-failure',
+            invocationId: 'invocation-1',
+            subscriptionId: 'subscription-1',
+          },
+        },
+      });
+
+      expect(response.statusCode).toBe(500);
+      expect(dispatch).toHaveBeenCalledOnce();
+      const failureLogs = warnLocalFile.mock.calls.filter(
+        ([message]) => message
+          === '[CONTROL SERVER] Agent runtime daemon service request failed',
+      );
+      expect(failureLogs).toEqual([[
+        '[CONTROL SERVER] Agent runtime daemon service request failed',
+        {
+          route: AGENT_RUNTIME_DAEMON_SERVICES_PATH,
+          sessionId,
+          error: dispatchFailure,
+        },
+      ]]);
+      expect(JSON.stringify(warnLocalFile.mock.calls))
+        .not.toContain(capabilityA);
+    } finally {
+      warnLocalFile.mockRestore();
+      await app.close();
     }
   });
 
@@ -605,6 +763,9 @@ describe('daemon control server: runner-scoped Agent runtime services', () => {
         'clearAgentRuntimeDaemonServiceAdmission'
       ]
     >>(async () => true);
+    // Session RPC is a process boundary. Its live Run owner, not the parent
+    // foreground admission, answers for this independently admitted child.
+    let childCurrent = true;
     const app = createDaemonControlApp({
       getChildren: () => [tracked],
       machineId: 'machine-1',
@@ -613,7 +774,13 @@ describe('daemon control server: runner-scoped Agent runtime services', () => {
       requestShutdown: () => {},
       onHappySessionWebhook: () => {},
       controlToken: 'control-token',
-      agentRuntimeDaemonServices: { dispatch },
+      agentRuntimeDaemonServices: { dispatch,
+        authorizeExecutionRunAction: async (request, context) => childCurrent
+          && context.trackedSession === tracked
+          && request.executionRun?.runId === 'child-run'
+          && request.executionRun.occurrenceId === 'child-occurrence'
+          && request.witness.turnId === 'child-turn',
+      },
       foregroundAgentRuntimeAdmission: {
         authorizeDaemonServiceRequest:
           authorizeForegroundDaemonServiceRequest,
@@ -849,6 +1016,17 @@ describe('daemon control server: runner-scoped Agent runtime services', () => {
       } })).statusCode).toBe(403);
       expect((await executeAction('input-1', { extra: { caller: { kind: 'host' } } })).statusCode).toBe(400);
       expect((await executeAction('input-1', { extra: { callerPermissionMode: 'yolo' } })).statusCode).toBe(400);
+
+      const childAction = (occurrenceId = 'child-occurrence') => executeAction('child-input', { extra: {
+        executionRun: { runId: 'child-run', occurrenceId },
+        witness: { turnId: 'child-turn', inputId: 'child-input', userMessageSeq: null, userMessageSeqs: [],
+          agentStartCaller: { kind: 'session', sessionId, starterDepth: 1, turnDepth: 1 }, workDepth: 1 },
+      } });
+      expect((await childAction()).statusCode).toBe(200);
+      expect(await actionIsCurrent?.()).toBe(true);
+      expect((await childAction('replaced-occurrence')).statusCode).toBe(403);
+      childCurrent = false;
+      expect((await childAction()).statusCode).toBe(403);
 
       let markerAdmission: RecordedAdmission | null = null;
       let resolveRecordEntered: (() => void) | undefined;

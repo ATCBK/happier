@@ -86,7 +86,7 @@ export async function prepareSourceRuntimeReload({ stackName, stackBaseDir, repo
       await writeJsonAtomic(statusPath, { status: 'ready', logPath }).catch(error => console.error('[reload] diagnostic publication failed:', error));
       await log('[reload] replacement smoke passed; incumbent may now be retired by the restart owner')
         .catch(error => console.error('[reload] log publication failed:', error));
-      return { ui, remote: Boolean(remote) };
+      return { ui, remote: Boolean(remote), remoteDaemon: Boolean(placement?.daemonTarget) };
     } finally { await remote?.close(); }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

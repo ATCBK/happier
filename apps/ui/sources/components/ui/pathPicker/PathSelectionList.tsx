@@ -57,6 +57,7 @@ import {
 export type PathSelectionListFavorite = Readonly<{ path: string; label?: string }>;
 
 const NO_FOLDER_OPTION_ID = 'no-folder';
+const ROOT_TEST_ID = 'path-selection-list';
 export type PathSelectionListRecent = Readonly<{ path: string; lastUsedAt: number }>;
 
 /**
@@ -86,6 +87,12 @@ export type PathSelectionListProps = Readonly<{
      * and only starts folder suggestions after explicit user input.
      */
     initialSuggestionMode?: PathSelectionInitialSuggestionMode;
+    /**
+     * Focus the path field on web when the list mounts (default). A picker opened on purpose wants the
+     * keyboard there; a list embedded in a page form passes `false`, so opening the page neither moves
+     * focus nor scrolls the form to this field.
+     */
+    autoFocusInput?: boolean;
     favorites: ReadonlyArray<PathSelectionListFavorite>;
     recents: ReadonlyArray<PathSelectionListRecent>;
     machineHomeDir: string;
@@ -272,7 +279,6 @@ export function PathSelectionList(props: PathSelectionListProps): React.ReactEle
         maxHeight,
         noFolderOption,
     } = props;
-    const ROOT_TEST_ID = 'path-selection-list';
     const noFolderSelected = noFolderOption?.selected === true;
     const onSelectNoFolder = noFolderOption?.onSelect;
     const modalPortalTarget = useModalPortalTarget();
@@ -312,29 +318,21 @@ export function PathSelectionList(props: PathSelectionListProps): React.ReactEle
 
     // R16a: stabilize values captured by the dynamic-section's `resolve`
     // closure via refs so the resolver doesn't need to be re-created when the
-    // parent hands us new closure identities for `onCommit` / `machineHomeDir`
-    // / `serverId` / `machinePlatform`. The dynamic-sections hook now keys
+    // parent hands us new values for `machineHomeDir` / `serverId` /
+    // `machinePlatform`. The dynamic-sections hook now keys
     // invalidation on the explicit `resolverKey` (see _types.ts), so the
     // resolver closure can stay stable across re-renders without flashing the
     // loading skeleton. The `machineId` swap (which IS a meaningful identity
     // change because it rebinds the underlying RPC) is signalled via the
     // explicit `resolverKey` below.
-    const onCommitRef = React.useRef(onCommit);
     const machineHomeDirRef = React.useRef(machineHomeDir);
     const serverIdRef = React.useRef(serverId);
     const machinePlatformRef = React.useRef(machinePlatform);
     const machineIdRef = React.useRef(machineId);
-    const isFavoriteRef = React.useRef(isFavorite);
-    const onToggleFavoriteRef = React.useRef(onToggleFavorite);
-    const onChangeDraftPathRef = React.useRef(onChangeDraftPath);
-    React.useEffect(() => { onCommitRef.current = onCommit; }, [onCommit]);
     React.useEffect(() => { machineHomeDirRef.current = machineHomeDir; }, [machineHomeDir]);
     React.useEffect(() => { serverIdRef.current = serverId; }, [serverId]);
     React.useEffect(() => { machinePlatformRef.current = machinePlatform; }, [machinePlatform]);
     React.useEffect(() => { machineIdRef.current = machineId; }, [machineId]);
-    React.useEffect(() => { isFavoriteRef.current = isFavorite; }, [isFavorite]);
-    React.useEffect(() => { onToggleFavoriteRef.current = onToggleFavorite; }, [onToggleFavorite]);
-    React.useEffect(() => { onChangeDraftPathRef.current = onChangeDraftPath; }, [onChangeDraftPath]);
 
     // RUX-3: render the favorite-toggle star as the row's rightAccessory.
     // Returns `undefined` when the favorite callbacks are not supplied so the
@@ -343,10 +341,6 @@ export function PathSelectionList(props: PathSelectionListProps): React.ReactEle
     // the button doesn't pay the `t(...)` cost on every press.
     const favoriteAddLabel = t('newSession.pathPicker.favoriteAdd');
     const favoriteRemoveLabel = t('newSession.pathPicker.favoriteRemove');
-    const favoriteAddLabelRef = React.useRef(favoriteAddLabel);
-    const favoriteRemoveLabelRef = React.useRef(favoriteRemoveLabel);
-    React.useEffect(() => { favoriteAddLabelRef.current = favoriteAddLabel; }, [favoriteAddLabel]);
-    React.useEffect(() => { favoriteRemoveLabelRef.current = favoriteRemoveLabel; }, [favoriteRemoveLabel]);
     const renderFavoriteAccessoryStatic: FavoriteAccessoryFactory = React.useCallback(
         (absolutePath: string, optionTestIdPrefix: string) => {
             if (!isFavorite || !onToggleFavorite) return undefined;
@@ -363,6 +357,39 @@ export function PathSelectionList(props: PathSelectionListProps): React.ReactEle
         },
         [favoriteAddLabel, favoriteRemoveLabel, isFavorite, onToggleFavorite],
     );
+    const openFolderLabel = t('newSession.pathPicker.openFolderLabel');
+    const projectDirectoryOptions = React.useMemo(() => {
+        let previousOptions: readonly SelectionListOption[] | null = null;
+        let previousProjection: readonly SelectionListOption[] = [];
+        return (options: readonly SelectionListOption[]): readonly SelectionListOption[] => {
+            if (options.length === 0) return options;
+            if (options === previousOptions) return previousProjection;
+            const projection = options.map((option): SelectionListOption => {
+                const absolutePath = option.id.slice('in-folder:'.length);
+                const optionTestIdPrefix = `${ROOT_TEST_ID}:path-root:option:${option.id}`;
+                return {
+                    id: option.id,
+                    label: option.label,
+                    subtitle: option.subtitle,
+                    labelEllipsizeMode: option.labelEllipsizeMode,
+                    subtitleEllipsizeMode: option.subtitleEllipsizeMode,
+                    autocompleteValue: option.autocompleteValue,
+                    onSelect: () => onCommit(absolutePath),
+                    rightAccessory: () => <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                        {renderFavoriteAccessoryStatic(absolutePath, optionTestIdPrefix)}
+                        <PathDrillDownButton
+                            testID={`${optionTestIdPrefix}:drill`}
+                            accessibilityLabel={openFolderLabel}
+                            onPress={() => handleChangeInputValue(option.autocompleteValue ?? absolutePath)}
+                        />
+                    </View>,
+                };
+            });
+            previousOptions = options;
+            previousProjection = projection;
+            return projection;
+        };
+    }, [handleChangeInputValue, onCommit, openFolderLabel, renderFavoriteAccessoryStatic]);
 
     const visibleFavorites = React.useMemo(() => {
         const seenFavoriteKeys = new Set<string>();
@@ -459,12 +486,11 @@ export function PathSelectionList(props: PathSelectionListProps): React.ReactEle
     // changes (machine swap → resolverKey changes → cache invalidates), but a
     // plain parent re-render does NOT cause a re-fetch.
     const inThisFolderResolver = React.useCallback(
-        async (seed: string, _abortSignal: AbortSignal) => {
+        async (seed: string, signal: AbortSignal) => {
             const currentMachineId = machineIdRef.current;
             const currentMachineHomeDir = machineHomeDirRef.current;
             const currentServerId = serverIdRef.current;
             const currentMachinePlatform = machinePlatformRef.current;
-            const currentOnCommit = onCommitRef.current;
             if (currentMachineId === null) {
                 return { options: [] };
             }
@@ -480,6 +506,7 @@ export function PathSelectionList(props: PathSelectionListProps): React.ReactEle
                 serverId: currentServerId ?? null,
                 directoryPath,
                 includeFiles: false,
+                signal,
             });
             if (!result.ok) {
                 // RUX-1 Issue 6: distinguish "path doesn't exist" (ENOENT /
@@ -491,7 +518,8 @@ export function PathSelectionList(props: PathSelectionListProps): React.ReactEle
                 // dynamic section reports notFound).
                 const errorMessage = result.error ?? '';
                 if (isPathNotFoundErrorMessage(errorMessage)) {
-                    return { options: [], notFound: true };
+                    // A path that doesn't exist yet is still usable: Enter commits it as typed.
+                    return { options: [], notFound: true, notFoundHint: t('newSession.pathPicker.emptyNewFolder') };
                 }
                 // Sanitized: drop the raw OS-style traceback (which contains
                 // the absolute path and looks alarming). The orchestrator
@@ -515,7 +543,6 @@ export function PathSelectionList(props: PathSelectionListProps): React.ReactEle
                         currentMachinePlatform,
                         'directory',
                     );
-                    const optionTestIdPrefix = `${ROOT_TEST_ID}:path-root:option:in-folder:${entry.path}`;
                     return {
                         id: `in-folder:${entry.path}`,
                         label: entry.name,
@@ -523,50 +550,12 @@ export function PathSelectionList(props: PathSelectionListProps): React.ReactEle
                         labelEllipsizeMode: 'head',
                         subtitleEllipsizeMode: 'head',
                         autocompleteValue: drillValue,
-                        // Bug 4c fix: row press commits the absolute
-                        // path; the chevron in `rightAccessory` drills
-                        // into the directory WITHOUT committing.
-                        onSelect: () => currentOnCommit(entry.path),
-                        rightAccessory: () => {
-                            const currentIsFavorite = isFavoriteRef.current;
-                            const currentOnToggleFavorite = onToggleFavoriteRef.current;
-                            const favoriteAccessory = currentIsFavorite && currentOnToggleFavorite
-                                ? (
-                                    <FavoriteToggleButton
-                                        testID={`${optionTestIdPrefix}:favorite-toggle`}
-                                        id={entry.path}
-                                        isFavorite={currentIsFavorite(entry.path)}
-                                        addLabel={favoriteAddLabelRef.current}
-                                        removeLabel={favoriteRemoveLabelRef.current}
-                                        onToggle={currentOnToggleFavorite}
-                                    />
-                                )
-                                : null;
-                            return (
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                                    {favoriteAccessory}
-                                    <PathDrillDownButton
-                                        testID={`${optionTestIdPrefix}:drill`}
-                                        // FR3-11: the drill chevron only descends into the folder
-                                        // by updating the input shorthand — it does NOT open the
-                                        // tree-browser modal. Use a dedicated drill/descend label
-                                        // so screen-reader users hear the correct action; the
-                                        // tree-browser label remains on the input-suffix button.
-                                        accessibilityLabel={t('newSession.pathPicker.openFolderLabel')}
-                                        onPress={() => {
-                                            setHasUserEditedInput(true);
-                                            setInputValue(drillValue);
-                                            onChangeDraftPathRef.current?.(drillValue);
-                                        }}
-                                    />
-                                </View>
-                            );
-                        },
                     };
                 });
             return {
                 options,
-                emptyHint: t('newSession.pathPicker.emptyInThisFolder'),
+                // Enter commits the typed path whether or not it exists yet; the empty state says so.
+                emptyHint: t('newSession.pathPicker.emptyNewFolder'),
             };
         },
         // Empty deps — the closure is anchored at mount and reads volatile
@@ -619,6 +608,7 @@ export function PathSelectionList(props: PathSelectionListProps): React.ReactEle
                 // Auto-virtualize when the directory has many children.
                 virtualization: 'auto',
                 resolve: inThisFolderResolver,
+                projectOptions: projectDirectoryOptions,
                 // RUX-9.2: every path row's subtitle is the absolute path
                 // (parent directory always present), so tier-3 substring
                 // matches against subtitle would surface every sibling for
@@ -646,6 +636,8 @@ export function PathSelectionList(props: PathSelectionListProps): React.ReactEle
         return {
             id: 'path-root',
             inputPlaceholder: t('newSession.pathPicker.enterPathPlaceholder'),
+            // Nothing matches (a new folder name): Enter still uses the path as typed.
+            emptyStateLabel: t('newSession.pathPicker.emptyNewFolder'),
             sections,
             footerHints: [
                 { id: 'navigate', label: '↑↓', description: t('newSession.pathPicker.hints.navigate') },
@@ -666,6 +658,7 @@ export function PathSelectionList(props: PathSelectionListProps): React.ReactEle
         visibleFavorites,
         visibleRecents,
         renderFavoriteAccessoryStatic,
+        projectDirectoryOptions,
         onSelectNoFolder,
         // FR4-9: the dynamic section's resolverKey reads `serverId` from the
         // current render, so make memoization depend on it too.
@@ -694,7 +687,7 @@ export function PathSelectionList(props: PathSelectionListProps): React.ReactEle
             inputBehavior={inputBehavior}
             inputSuffix={inputSuffix}
             inputValueEllipsizeMode="head"
-            autoFocusInputOnWeb
+            autoFocusInputOnWeb={props.autoFocusInput !== false}
             maxHeight={maxHeight}
             heightBehavior={props.heightBehavior ?? (
                 maxHeight !== undefined ? 'stabilizedContentHeight' : undefined

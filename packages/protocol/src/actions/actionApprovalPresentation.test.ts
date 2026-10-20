@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { describeApprovalActionFields, projectTargetActionApprovalInput, resolveApprovalRequestApproveAdmission, resolveApprovalVisualPreview } from './actionApprovalPresentation.js';
-import { ApprovalRequestV2Schema, type ApprovalRequestV2 } from '../approvals/approvalRequestV1.js';
+import { describeApprovalActionFields, projectApprovalExecutionForObservation, projectApprovalRequestForPublicRead, projectTargetActionApprovalInput, resolveApprovalRequestApproveAdmission, resolveApprovalVisualPreview } from './actionApprovalPresentation.js';
+import { ApprovalRequestV1Schema, ApprovalRequestV2Schema, type ApprovalRequestV2 } from '../approvals/approvalRequestV1.js';
+import { ActionOperationCredentialUseV1Schema } from './actionExecutionResult.js';
 import { ActionSpecSchema, getActionSpec } from './actionSpecs.js';
 import { readActionSchemaTopLevelFieldNames } from './actionCliProjection.js';
 import { MACHINE_PRESET_ACTION_IDS_V1 } from '../machines/managed/machinePresetActionIdsV1.js';
@@ -12,13 +13,166 @@ import { skillFileFromBytesV1 } from '../prompts/library/skills/skillZipV1.js';
 import type { ActionId } from './actionIds.js';
 import { decideApprovalRequestTransition, settleApprovalRequestActionArgs } from '../approvals/approvalRequestTransition.js';
 import { describeApprovalRequestFields } from './actionApprovalPresentation.js';
+import { createPluginInstallationReviewFixture } from '../testing/pluginInstallationReviewFixture.js';
 import { TargetActionApprovalRequestV1Schema } from '../approvals/targetActionApprovalRequestV1.js';
 import { TriageStartEntrySessionInputV1Schema } from '../../../plugins/triage/src/actions/entrySessionProtocol.js';
 import { createTriageSelectedPrStartApprovalInput } from '../../../plugins/triage/src/sessions/testkit/entrySessionTestkit.test-support.js';
 import { SharedSavedSecretRefV1Schema } from '../machines/managed/providerFactsV1.js';
+import { computeWorkspaceSyncPolicyDigest } from '../sessions/control/handoff/workspaceSyncSchemas.js';
 
 describe('approval field presentation', () => {
+  it.each(['open', 'executed'] as const)('withholds private replay authority from %s built-in and target Ask observations', status => {
+    const actionId = 'machines.managed.delete';
+    const target = { kind: 'machine' as const, machineId: 'controller' };
+    const executionOriginV1 = {
+      v: 1, authority: 'account_automation', surface: 'cli', caller: { kind: 'host' },
+      serverId: 'home', serverIdentityId: 'srv_home', accountId: 'owner', machineId: 'controller',
+      actionId, requestId: 'delete-request', target,
+      externalActionInputSignature: 'a'.repeat(86),
+      externalActionExecutionAuthorization: { v: 1, token: 'synthetic-scoped-authorization', binding: {
+        serverIdentityId: 'srv_home', accountId: 'owner', authentication: { kind: 'account', tokenEpoch: 1 },
+        machineId: 'controller', custodianAccountId: 'owner', installationId: 'installation',
+        actionId, requestId: 'delete-request', requestEnvelopeDigest: 'a'.repeat(43), target,
+      } },
+    };
+    const base = {
+      status, createdAtMs: 1, updatedAtMs: status === 'open' ? 1 : 3,
+      createdBy: { surface: 'cli' }, requestedSurface: 'cli', summary: 'Delete machine', executionOriginV1,
+      ...(status === 'executed' ? { decision: { kind: 'approve', decidedAtMs: 2 },
+        execution: { executedAtMs: 3, ok: true, effectAttempted: true, result: { kind: 'accepted' } } } : {}),
+    };
+    const builtIn = ApprovalRequestV2Schema.parse({ ...base, v: 2, actionId,
+      actionArgs: { homeId: 'home', managedId: 'managed', when: 'now', expectedRevision: 2,
+        intent: 'delete', reviewedDependencies: true } });
+    const plugin = TargetActionApprovalRequestV1Schema.parse({ ...base, v: 1, kind: 'plugin_target_action',
+      qualifiedActionId: 'example.machine/actions/delete',
+      executionOriginV1: { ...executionOriginV1, actionId: 'action.invoke',
+        externalActionExecutionAuthorization: { ...executionOriginV1.externalActionExecutionAuthorization,
+          binding: { ...executionOriginV1.externalActionExecutionAuthorization.binding, actionId: 'action.invoke' } } },
+      sourceCustody: { kind: 'development', registeredRootId: 'machine-root' },
+      policyFingerprint: 'a'.repeat(64), subjectFingerprint: 'b'.repeat(64),
+      input: { managedId: 'managed' }, secretInputPaths: [],
+    });
+    for (const request of [builtIn, plugin]) {
+      const publicRead = projectApprovalRequestForPublicRead(request);
+      expect(publicRead).toMatchObject({ status, summary: 'Delete machine',
+        executionOriginV1: { requestId: 'delete-request', target } });
+      const serialized = JSON.stringify(publicRead);
+      expect(serialized).not.toContain('externalActionExecutionAuthorization');
+      expect(serialized).not.toContain('externalActionInputSignature');
+      expect(serialized).not.toContain('synthetic-scoped-authorization');
+      expect(request.executionOriginV1).toHaveProperty('externalActionExecutionAuthorization');
+      expect(request.executionOriginV1).toHaveProperty('externalActionInputSignature');
+    }
+  });
+  it.each([
+    ['machines.managed.power.set', 'now', 'stop', 'Stop'],
+    ['machines.managed.delete', 'after-idle', 'delete', 'Delete'],
+  ] as const)('carries declared option label keys into %s review without rewriting its operands', (actionId, when, intent, label) => {
+    const actionArgs = { homeId: 'srv_home', managedId: 'managed-guest', intent, when,
+      ...(when === 'now' ? { expectedRevision: 3 } : {}), ...(intent === 'delete' ? { reviewedDependencies: true } : {}) };
+    const presentation = describeApprovalActionFields({ actionId, actionArgs });
+    expect(presentation.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'when', value: when === 'now' ? 'Now' : 'After idle',
+        selectedOptions: [{ label: when === 'now' ? 'Now' : 'After idle', labelKey: `actionPresentation.options.${when === 'now' ? 'now' : 'afterIdle'}` }] }),
+      expect.objectContaining({ path: 'intent', value: label, selectedOptions: [{ label, labelKey: `actionPresentation.options.${intent}` }] }),
+    ]));
+    expect(actionArgs.when).toBe(when);
+    expect(actionArgs.intent).toBe(intent);
+  });
+  it('names a managed Start target with its own Home-qualified reference without changing approved operands', () => {
+    const actionArgs = { homeId: 'srv_home', managedId: 'managed-guest', intent: 'start', when: 'now', expectedRevision: 1 };
+    const presentation = describeApprovalActionFields({ actionId: 'machines.managed.power.set', actionArgs });
+    expect(presentation.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'managedId', reference: { kind: 'managedMachine', id: 'managed-guest', homeId: 'srv_home' } }),
+    ]));
+    expect(actionArgs).toEqual({ homeId: 'srv_home', managedId: 'managed-guest', intent: 'start', when: 'now', expectedRevision: 1 });
+  });
+  it('reads a managed review Home by its name and keeps its concurrency revision in Technical details', () => {
+    const presentation = describeApprovalActionFields({ actionId: 'machines.managed.power.set',
+      actionArgs: { homeId: 'srv_home', managedId: 'managed-guest', intent: 'stop', when: 'now', expectedRevision: 3 } });
+    expect(presentation.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'homeId', reference: { kind: 'home', id: 'srv_home' } }),
+      expect.objectContaining({ path: 'expectedRevision', technical: true }),
+    ]));
+    expect(presentation.rows.find(row => row.kind === 'value' && row.path === 'intent')).not.toHaveProperty('technical');
+  });
+  it('preserves the V2 pre-effect fact in the public terminal receipt', () => {
+    const request = ApprovalRequestV2Schema.parse({
+      v: 2,
+      status: 'failed',
+      createdAtMs: 1,
+      updatedAtMs: 3,
+      createdBy: { surface: 'cli' },
+      actionId: 'session.list',
+      actionArgs: {},
+      summary: 'List sessions',
+      executionOriginV1: {
+        v: 1,
+        authority: 'account_automation',
+        caller: { kind: 'host' },
+        requestId: 'request-a',
+        surface: 'cli',
+        serverId: 'home',
+        actionId: 'session.list',
+      },
+      decision: { kind: 'approve', decidedAtMs: 2 },
+      execution: {
+        executedAtMs: 3,
+        effectAttempted: false,
+        ok: false,
+        errorCode: 'approval_context_unavailable',
+        error: 'approval_context_unavailable',
+      },
+    });
 
+    expect(projectApprovalExecutionForObservation(request)).toMatchObject({ effectAttempted: false });
+  });
+
+  it('preserves admitted current target receipt metadata without disclosing legacy V1 actor claims', () => {
+    const use = ActionOperationCredentialUseV1Schema.parse({
+      v: 1, kind: 'connected_account', label: 'Release GitHub', owner: { kind: 'account', accountId: 'alice' },
+      service: { pluginId: 'acme.github', localId: 'github' },
+      why: { kind: 'purpose_binding', purpose: { consumer: { pluginId: 'acme.alpha', localId: 'run' }, purpose: 'write' }, target: 'account' },
+      currentness: { kind: 'current_at_materialization' },
+    });
+    const execution = { executedAtMs: 3, ok: true, effectAttempted: true, result: { ok: true }, operationCredentialUses: [use] };
+    const target = TargetActionApprovalRequestV1Schema.parse({
+      v: 1, kind: 'plugin_target_action', status: 'executed', createdAtMs: 1, updatedAtMs: 3,
+      createdBy: { surface: 'cli' }, requestedSurface: 'cli', qualifiedActionId: 'acme.alpha/actions/run',
+      input: { value: 'x' }, secretInputPaths: [], sourceCustody: { kind: 'development', registeredRootId: 'root-7' },
+      policyFingerprint: 'b'.repeat(64), subjectFingerprint: 'a'.repeat(64), summary: 'Run',
+      decision: { kind: 'approve', decidedAtMs: 2 }, execution,
+    });
+    expect(projectApprovalRequestForPublicRead(target)).toMatchObject({ execution });
+    expect(projectApprovalExecutionForObservation({ ...target, execution: { ...execution, details: { message: 'private-plugin-detail' } } }))
+      .not.toHaveProperty('details');
+    const notAttempted = TargetActionApprovalRequestV1Schema.parse({ ...target, status: 'failed',
+      execution: { executedAtMs: 3, ok: false, effectAttempted: false, errorCode: 'approval_stale', error: 'approval_stale' },
+    });
+    expect(projectApprovalRequestForPublicRead(notAttempted)).toMatchObject({ execution: notAttempted.execution });
+
+    const legacy = ApprovalRequestV1Schema.parse({
+      v: 1, status: 'executed', createdAtMs: 1, updatedAtMs: 3, createdBy: { surface: 'cli' },
+      actionId: 'session.list', actionArgs: {}, summary: 'List sessions',
+      decision: { kind: 'approve', decidedAtMs: 2 }, execution,
+      kind: 'plugin_target_action',
+    });
+    expect(projectApprovalExecutionForObservation(legacy)).toEqual({ executedAtMs: 3, ok: true, result: { ok: true } });
+    expect(projectApprovalRequestForPublicRead(legacy)).toMatchObject({
+      execution: { executedAtMs: 3, ok: true, result: { ok: true } },
+    });
+    expect(projectApprovalExecutionForObservation(legacy)).not.toHaveProperty('operationCredentialUses');
+  });
+
+  it('projects document references for every Artifact operation with an artifactId', () => {
+    const spec = getActionSpec('artifact.public_link.create');
+    const actionArgs = spec.inputSchema.parse({ artifactId: 'release-notes' });
+    const presentation = describeApprovalActionFields({ actionId: spec.id, actionArgs });
+    expect(presentation.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'value', path: 'artifactId', reference: { kind: 'artifact', id: 'release-notes' } }),
+    ]));
+  });
   it('discloses nested confidential operands by declared label and preserves exact public JSON', () => {
     const input = { rows: [{ releaseTag: 'private-release', target: ' endpoint ', enabled: false, count: 42,
       credential: { _isSecretValue: true, value: 'private-carrier' } }], token: 'public-routing-token' };
@@ -44,7 +198,41 @@ describe('approval field presentation', () => {
     expect(JSON.stringify(admission)).not.toContain('private');
   });
 
+  it('marks a destructive Session target for expanded identity presentation', () => {
+    expect(describeApprovalActionFields({
+      actionId: 'session.delete',
+      actionArgs: { sessionId: 'cmv9jgd3q016xmcvegf6icb89' },
+    }).rows).toContainEqual(expect.objectContaining({
+      path: 'sessionId',
+      reference: {
+        kind: 'session',
+        id: 'cmv9jgd3q016xmcvegf6icb89',
+        presentation: 'destructive_target',
+      },
+    }));
+  });
 
+  it.each([
+    ['attach', 'new-manager', null],
+    ['replace', 'new-manager', 'previous-manager'],
+    ['detach', null, 'previous-manager'],
+  ] as const)('names every Session operand in a manager %s review without changing null or exact input', (_operation, managerSessionId, expectedManagerSessionId) => {
+    const spec = getActionSpec('session.manager.set');
+    const actionArgs = spec.inputSchema.parse({ sessionId: 'managed-session', managerSessionId, expectedManagerSessionId });
+    const presentation = describeApprovalActionFields({ actionId: spec.id, actionArgs });
+
+    expect(presentation.unrepresentable).toBeNull();
+    for (const [path, id] of Object.entries(actionArgs)) {
+      if (id === null) {
+        expect(presentation.rows.some(row => row.path === path)).toBe(false);
+      } else {
+        expect(presentation.rows).toContainEqual(expect.objectContaining({
+          kind: 'value', path, value: id, reference: { kind: 'session', id },
+        }));
+      }
+    }
+    expect(actionArgs).toEqual({ sessionId: 'managed-session', managerSessionId, expectedManagerSessionId });
+  });
 
   it('discloses and admits the real Triage selected-PR credential identity', () => {
     const input = createTriageSelectedPrStartApprovalInput();
@@ -140,10 +328,6 @@ describe('approval field presentation', () => {
       .not.toBeNull();
   });
 
-
-
-
-
   it.each([undefined, 'own-trigger'])('admits an ordinary Automation pause review with trigger %s', (triggerId) => {
     const actionId = 'workflow.trigger.update' as const;
     const actionArgs = getActionSpec(actionId).inputSchema.parse({
@@ -169,6 +353,82 @@ describe('approval field presentation', () => {
     }));
   });
 
+  it('admits plugin install approval only with the daemon-evaluated install disclosure', () => {
+    const actionArgs = { path: '/plugins/acme.example', kind: 'path' as const };
+    const base = ApprovalRequestV2Schema.parse({
+      v: 2,
+      status: 'open',
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      createdBy: { surface: 'agent' },
+      actionId: 'plugins.install',
+      actionArgs,
+      summary: 'Install plugin',
+      executionOriginV1: {
+        v: 1,
+        authority: 'account_automation',
+        caller: { kind: 'host' },
+        requestId: 'plugin-install-request',
+        surface: 'agent',
+        serverId: 'home',
+        actionId: 'plugins.install',
+      },
+    });
+
+    expect(resolveApprovalRequestApproveAdmission({
+      ...base,
+      preview: {
+        actionId: 'plugins.install',
+        actionArgs,
+        pluginInstall: { permissionsDisclosure: 'pendingDaemonEvaluation' },
+      },
+    })).toMatchObject({
+      status: 'unavailable',
+      reason: 'context_unavailable',
+      details: { path: 'preview.pluginInstall.pendingReview' },
+    });
+
+    const review = createPluginInstallationReviewFixture({
+      requiredHostAccess: [{
+        id: 'network',
+        capability: 'network',
+        reason: 'Call the service.',
+        authorizationClass: 'cooperativeDisclosure',
+        normalizedScope: { targets: [{ kind: 'fixedOrigin', origin: 'https://example.test' }] },
+      }],
+    });
+    const admission = resolveApprovalRequestApproveAdmission({
+      ...base,
+      preview: {
+        actionId: 'plugins.install',
+        actionArgs,
+        pluginInstall: {
+          permissionsDisclosure: 'daemonEvaluated',
+          pendingReview: {
+            kind: 'reviewRequired',
+            reviewKind: 'installation',
+            pendingChangeId: 'pending-plugin-install',
+            reason: 'firstInstall',
+            currentVersion: null,
+            authorityExpansion: [],
+            review,
+          },
+        },
+      },
+    });
+
+    expect(admission).toMatchObject({ status: 'available' });
+    expect(admission.presentation.rows).toContainEqual(expect.objectContaining({
+      path: 'preview.pluginInstall.pendingReview.review',
+      title: 'Daemon-evaluated install and trust disclosure',
+      entries: expect.arrayContaining([
+        expect.objectContaining({ label: 'Plugin id', value: 'acme.example' }),
+        expect.objectContaining({ label: 'Required host access', value: null }),
+        expect.objectContaining({ label: 'Capability', value: 'network' }),
+      ]),
+    }));
+  });
+
   it('admits the neighboring capabilities families without disclosing live-only secret values', () => {
     const entry = { id: 'mcp-a', name: 'mcp-a', transport: 'stdio', stdio: { command: 'mcp-tool', args: [] }, env: {}, createdAt: 1, updatedAt: 1 };
     const file = skillFileFromBytesV1('SKILL.md', new TextEncoder().encode('---\nname: review\n---\nReview.'), 0o644);
@@ -184,7 +444,7 @@ describe('approval field presentation', () => {
       ['mcp.servers.tools.set', { serverId: 'mcp-a', tools: { search: 'ask' } }],
       ['mcp.servers.create', { entry, expectedRevision: 1 }], ['mcp.servers.create', { entries: [{ entry }], expectedRevision: 1 }],
       ['mcp.servers.update', { entry, expectedRevision: 1 }],
-      ['mcp.servers.duplicate', { serverId: 'mcp-a', entry: { ...entry, id: 'mcp-b' }, expectedRevision: 1 }],
+      ['mcp.servers.duplicate', { serverId: 'mcp-a' }],
       ['mcp.servers.delete', { serverId: 'mcp-a', expectedRevision: 1, removeBindings: true }],
       ['mcp.servers.import', { source: { kind: 'paste', text: '{}' }, dryRun: true }],
       ['mcp.found.adopt', { machineId: 'machine-a', items: [] }],
@@ -242,6 +502,17 @@ describe('approval field presentation', () => {
     expect(admission.presentation.rows).toContainEqual(expect.objectContaining({ title: 'Launch', entries: expect.arrayContaining([
       expect.objectContaining({ label: 'Method' }),
     ]) }));
+  });
+  it.each([['skill', 'skill'], ['mcp_server', 'mcpServer']] as const)('names the %s an Agent asks to turn on for its session, not its id', (kind, referenceKind) => {
+    const fields = describeApprovalActionFields({ actionId: 'session.capabilities.set',
+      actionArgs: { sessionId: 'session-a', kind, id: 'item-a', state: 'on', reason: 'Link the fix' } });
+    expect(fields.rows).toContainEqual(expect.objectContaining({ path: 'id', reference: { kind: referenceKind, id: 'item-a' } }));
+    expect(describeApprovalActionFields({ actionId: 'session.capabilities.set',
+      actionArgs: { sessionId: 'session-a', kind: 'native_skill', id: 'pdf', state: 'on' } }).rows)
+      .toContainEqual(expect.objectContaining({ path: 'id', value: 'pdf' }));
+    expect(describeApprovalActionFields({ actionId: 'session.capabilities.set',
+      actionArgs: { sessionId: 'session-a', kind: 'native_skill', id: 'pdf', state: 'on' } }).rows.find(row => row.path === 'id'))
+      .not.toHaveProperty('reference');
   });
   it.each(['skills.rules.set', 'mcp.rules.set'] as const)('admits %s with the exact reviewed items and Machine change', actionId => {
     const spec = getActionSpec(actionId);
@@ -329,6 +600,20 @@ describe('approval field presentation', () => {
     expect(getActionSpec('settings.reset').approvalPresentation?.summary({ anchor }))
       .toBe(`Reset “${declaration.title}” to its default.`);
     expect(getActionSpec('settings.set').approvalPresentation?.summary({ anchor: 'unknown.setting', value: 3 })).toBeNull();
+  });
+  it('reads a theme choice as the choice it makes, not as profile ids, timestamps and schema versions', () => {
+    const profile = { schemaVersion: 1, id: 'custom-2', name: 'Custom theme 2', createdAt: '2026-10-16T08:00:00.000Z',
+      updatedAt: '2026-10-16T08:00:00.000Z', base: { light: 'light', dark: 'dark' }, overrides: { light: {}, dark: {} } };
+    const activation = { anchor: 'appearance.themeMode', value: { activation: { profileId: 'custom-2', profileMode: 'light', profile } } };
+    expect(getActionSpec('settings.set').approvalPresentation?.summary(activation)).toBe('Use “Custom theme 2” for light mode.');
+    const presentation = describeApprovalActionFields({ actionId: 'settings.set', actionArgs: activation });
+    expect(presentation.unrepresentable).toBeNull();
+    expect(presentation.rows.find(row => row.path === 'value')).toMatchObject({ value: 'Use “Custom theme 2” for light mode' });
+    expect(JSON.stringify(presentation.rows)).not.toMatch(/2026-10-16|schemaVersion/);
+    expect(getActionSpec('settings.set').approvalPresentation?.summary({ anchor: 'appearance.themeMode', value: 'dark' }))
+      .toBe('Switch to dark mode.');
+    expect(getActionSpec('settings.set').approvalPresentation?.summary({ anchor: 'appearance.themeMode',
+      value: { activation: { profileId: 'premiumDark', profileMode: 'dark' } } })).toBe('Use “Premium dark” for dark mode.');
   });
   it('reads a Board visual by its title and destination, with its identity only in technical details', () => {
     const presentation = describeApprovalActionFields({ actionId: 'session.board.item.upsert', actionArgs: {
@@ -459,6 +744,27 @@ describe('approval field presentation', () => {
     );
   });
 
+  it('uses captured widget and page names while keeping plugin routing operands technical', () => {
+    const surface = { serverId: 'home', accountId: 'account', owner: {
+      kind: 'pluginArea', pluginId: 'examples.widget-areas', pageId: 'overview', area: 'pinned',
+    } };
+    const widgetPresentation = { widgetName: 'Directory count', pageName: 'Widget areas', areaName: 'Pinned' };
+    for (const actionId of ['widgets.item.add', 'widgets.item.remove'] as const) {
+      const actionArgs = actionId === 'widgets.item.add'
+        ? { surface, instance: { v: 1, id: 'copy', definition: { kind: 'installed', surface: { pluginId: 'examples.widget-areas', localId: 'count' } }, bindings: {} } }
+        : { ref: { surface, instanceId: 'copy' } };
+      expect(getActionSpec(actionId).approvalPresentation?.summary(actionArgs, { widgetPresentation }))
+        .toContain('“Directory count”');
+      expect(getActionSpec(actionId).approvalPresentation?.summary(actionArgs, { widgetPresentation }))
+        .toContain('Widget areas · Pinned');
+      const entries = describeApprovalActionFields({ actionId, actionArgs }).rows.flatMap(row => row.kind === 'value' ? row.entries ?? [] : []);
+      for (const value of ['examples.widget-areas', 'overview', 'pinned']) {
+        expect(entries.filter(entry => entry.value?.includes(value))).not.toEqual([]);
+        expect(entries.filter(entry => entry.value?.includes(value)).every(entry => entry.technical)).toBe(true);
+      }
+    }
+  });
+
   it('reads adding a saved widget by what it is and the network it gets, not by its routing operands', () => {
     const input = { surface: { serverId: 'home', accountId: 'account', owner: { kind: 'home' } },
       instance: { v: 1, id: 'qa-html-instance', definition: { kind: 'artifact', artifactId: '8807a622' }, bindings: {},
@@ -568,6 +874,21 @@ describe('approval field presentation', () => {
       surface: { serverId: 'srv_home', accountId: 'acct-1' }, groupId: 'usage-group', title: 'Usage' } });
     const row = presentation.rows.find((candidate) => candidate.path === 'groupId');
     expect(row).toEqual({ kind: 'value', path: 'groupId', title: 'Group id', value: 'usage-group' });
+  });
+
+  it('reads a Browser view command by its target, with its correlation ids and plumbing in technical details', () => {
+    const presentation = describeApprovalActionFields({ actionId: 'browser.view.open', actionArgs: {
+      commandId: 'cmd-1', browserSessionId: 'session-1', viewId: 'view-1', kind: 'openView',
+      target: { targetId: 'target-1', kind: 'externalUrl', url: 'http://127.0.0.1:4000' }, platform: 'web', focus: true } });
+    const technical = presentation.rows.filter((row) => row.kind === 'value' && row.technical).map((row) => row.path).sort();
+    expect(technical).toEqual(['browserSessionId', 'commandId', 'focus', 'kind', 'platform', 'viewId']);
+    const target = presentation.rows.find((row) => row.path === 'target');
+    expect(target).toMatchObject({ kind: 'value' });
+    expect(target?.kind === 'value' && target.technical).toBeFalsy();
+    const members = target?.kind === 'value' ? target.entries ?? [] : [];
+    expect(members.filter((entry) => entry.technical).map((entry) => entry.value)).toEqual(['target-1']);
+    expect(members.find((entry) => entry.label === 'Url')).toMatchObject({ value: 'http://127.0.0.1:4000' });
+    expect(members.find((entry) => entry.label === 'Url')?.technical).toBeFalsy();
   });
 
   it('shows custom Provider target, endpoint and proposed template without credential or header values', () => {
@@ -691,7 +1012,7 @@ describe('approval field presentation', () => {
     expect(describeApprovalActionFields({ actionId: 'machines.managed.delete', actionArgs: {
       homeId: 'home', managedId: 'managed', when: 'now', intent: 'delete', expectedRevision: 4, reviewedDependencies: true,
     } }).rows).toEqual(expect.arrayContaining([expect.objectContaining({ path: 'managedId', value: 'managed' }),
-      expect.objectContaining({ path: 'intent', value: 'delete' }), expect.objectContaining({ path: 'reviewedDependencies', value: 'true' })]));
+      expect.objectContaining({ path: 'intent', value: 'Delete' }), expect.objectContaining({ path: 'reviewedDependencies', value: 'true' })]));
     const deferred = describeApprovalActionFields({ actionId: 'machines.managed.delete', actionArgs: {
       homeId: 'home', managedId: 'managed', when: 'after-idle', intent: 'delete', reviewedDependencies: true, afterMs: 0,
     } });
@@ -766,10 +1087,15 @@ describe('approval field presentation', () => {
   });
 
   it('does not interpret an arbitrary configuration object as a typed target', () => {
-    const value = { kind: 'session', sessionId: 'session-1', empty: '', absent: null };
+    const value = { kind: 'session', sessionId: 'session-1', unrelatedSessionId: 'session-2', empty: '', absent: null };
     const rows = describeApprovalActionFields({ actionId: 'settings.set', actionArgs: { anchor: 'example', value } }).rows;
-    expect(rows.find(row => row.path === 'value')).toMatchObject({ value: JSON.stringify(value) });
-    expect(rows.find(row => row.path === 'value')).not.toHaveProperty('reference');
+    const row = rows.find(row => row.path === 'value');
+    expect(row).toMatchObject({ value: JSON.stringify(value) });
+    expect(row).not.toHaveProperty('reference');
+    if (row?.kind !== 'value') throw new Error('Missing configuration reading');
+    const unrelated = row.entries?.find(entry => entry.value === value.unrelatedSessionId);
+    expect(unrelated).toBeDefined();
+    expect(unrelated).not.toHaveProperty('reference');
   });
   it.each([
     ['ordered members', ['account-b', 'account-a']],
@@ -860,6 +1186,20 @@ describe('approval field presentation', () => {
       .toMatchObject({ path: 'machineId', reason: 'missing_required_context' });
   });
 
+  it.each(['sessions.external.link.ensure', 'sessions.external.transcript.page', 'sessions.external.transcript.readAfter'] as const)(
+    'reviews the canonical Agent identity after external-session ingress normalization: %s', actionId => {
+      for (const identity of [{ agentId: 'codex' }, { providerId: 'codex' }]) {
+        const actionArgs = getActionSpec(actionId).inputSchema.parse({
+          ...identity, machineId: 'machine', remoteSessionId: 'native-session', source: { kind: 'codexHome', home: 'user' },
+          ...(actionId === 'sessions.external.transcript.page' ? { direction: 'older' } : {}),
+          ...(actionId === 'sessions.external.transcript.readAfter' ? { cursor: 'native-cursor' } : {}),
+        });
+        const presentation = describeApprovalActionFields({ actionId, actionArgs });
+        expect(presentation.unrepresentable).toBeNull();
+        expect(presentation.rows).toContainEqual(expect.objectContaining({ path: 'agentId', value: 'codex' }));
+      }
+    });
+
   it('reads an encoded file in a visual by its size, never by its bytes', () => {
     const contentBase64 = Buffer.from('<main>Build health</main>'.repeat(60)).toString('base64');
     const item = { v: 1, title: 'Build health', frame: 'frameless', height: { mode: 'auto', fallback: 'regular' },
@@ -906,6 +1246,15 @@ describe('approval field presentation', () => {
       actionArgs: args({ kind: 'hostedHtml', source: html, requestedCapabilities: { network: 'open', actions: [] } }) }))
       .toEqual({ kind: 'html', title: 'Build health', source: html, requestedCapabilities: { network: 'none' } });
     expect(resolveApprovalVisualPreview({ actionId: 'settings.set', actionArgs: args({ kind: 'declarative', document }) })).toBeNull();
+  });
+
+  it('carries the declared HTML height into the approval preview', () => {
+    const source = { v: 1, entrypoint: 'index.html', files: { 'index.html': { mime: 'text/html', contentBase64: 'PGI+aGk8L2I+' } } };
+    for (const height of [{ mode: 'fixed', size: 'compact' }, { mode: 'auto', fallback: 'tall' }]) {
+      expect(resolveApprovalVisualPreview({ actionId: 'session.board.item.upsert', actionArgs: {
+        item: { title: 'Build health', height, source: { kind: 'hostedHtml', source } },
+      } })).toMatchObject({ kind: 'html', height });
+    }
   });
 
   it('keeps a previewed visual’s arguments under technical details, and its network in view', () => {
@@ -956,5 +1305,54 @@ describe('workspace file approvals read as the effect, not the mechanism', () =>
     const sized = describeApprovalActionFields({ actionId: 'daemon.filesystem.writeFile',
       actionArgs: { ...args, content: 'aGVsbG8gd29ybGQK' } });
     expect(sized.rows.find((row) => row.path === 'content')).toMatchObject({ value: '12 bytes' });
+  });
+});
+
+describe('plugin development confirmation summary', () => {
+  // PLUGQA 2026-10-15: "Submit plugin development snapshot" asked "Submit plugin development snapshot."
+  // — the confirmation repeated its title and never named the folder the daemon would build and run.
+  it('names the exact source each plugin development Action acts on instead of repeating its title', async () => {
+    const { buildApprovalPreviewSummary } = await import('./actionExecutor.js');
+    const cases = [
+      ['plugins.dev.submit', { projectRoot: '/home/ada/plugins/notes' }, '/home/ada/plugins/notes'],
+      ['plugins.dev.unregister', { projectRoot: '/home/ada/plugins/notes' }, '/home/ada/plugins/notes'],
+      ['plugins.dev.test', { projectRoot: '/home/ada/plugins/notes' }, '/home/ada/plugins/notes'],
+      ['plugins.pack', { locator: '/home/ada/plugins/notes' }, '/home/ada/plugins/notes'],
+      ['plugins.reload', { pluginId: 'acme.notes' }, 'acme.notes'],
+    ] as const;
+    for (const [actionId, input, subject] of cases) {
+      const spec = getActionSpec(actionId);
+      const summary = buildApprovalPreviewSummary(spec, input);
+      expect(summary, actionId).toContain(subject);
+      expect(summary.replace(/\.$/u, ''), actionId).not.toBe(spec.title);
+    }
+  });
+});
+
+describe('workspace sync approval operands', () => {
+  it.each([
+    'workspace.sync.relationship.disable',
+    'workspace.sync.relationship.enable',
+    'workspace.sync.relationship.flush',
+    'workspace.sync.relationship.terminate',
+  ] as const)('reads the controller machine and the linked folders of %s by reference, not as bare ids', (actionId) => {
+    const presentation = describeApprovalActionFields({ actionId,
+      actionArgs: { controllerMachineId: 'machine-1', relationshipId: 'relationship_abc' } });
+    expect(presentation.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'controllerMachineId', reference: { kind: 'machine', id: 'machine-1' } }),
+      expect.objectContaining({ path: 'relationshipId', reference: { kind: 'workspaceSyncRelationship', id: 'relationship_abc' } }),
+    ]));
+  });
+
+  it('reads the source folder and target machine of a new link by reference', () => {
+    const presentation = describeApprovalActionFields({ actionId: 'workspace.sync.relationship.create',
+      actionArgs: { v: 1, sourceWorkspaceRefId: 'ref-1', targetMachineId: 'machine-2', targetPath: '/home/me/copy',
+        mode: 'keep_synced', destinationIntent: 'use_existing', contentPolicy: { v: 1, selection: 'git_worktree',
+          extraIgnorePatterns: [], extraIncludePatterns: [], policyDigest: computeWorkspaceSyncPolicyDigest({
+            v: 1, selection: 'git_worktree', extraIgnorePatterns: [], extraIncludePatterns: [] }) } } });
+    expect(presentation.rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'sourceWorkspaceRefId', reference: { kind: 'workspace', id: 'ref-1' } }),
+      expect.objectContaining({ path: 'targetMachineId', reference: { kind: 'machine', id: 'machine-2' } }),
+    ]));
   });
 });

@@ -172,7 +172,7 @@ describe('EnvironmentVariablesList', () => {
                 await flushHookEffects({ cycles: 1, turns: 1 });
             });
 
-            const saveButton = screen.findByProps({ accessibilityLabel: 'common.save' });
+            const saveButton = screen.root.findAll((node) => typeof node.type === 'string' && node.props.testID === 'profile-environment-add-save')[0]!;
 
             await act(async () => {
                 saveButton.props.onPress?.();

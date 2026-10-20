@@ -220,6 +220,12 @@ const scopeCases: readonly Readonly<{
     resourceContext: Readonly<{ kind: 'global' }> | Readonly<{ kind: 'session'; sessionId: string }>;
 }>[] = [
     {
+        label: 'independent Discussion on its truthful app target',
+        composer: { kind: 'discussion', discussionId: 'discussion-1' },
+        physicalTarget: { kind: 'app' },
+        resourceContext: { kind: 'global' },
+    },
+    {
         label: 'new Session on its truthful app target',
         composer: { kind: 'newSession', instanceId: 'new-session-1' },
         physicalTarget: { kind: 'app' },
@@ -246,6 +252,59 @@ const scopeCases: readonly Readonly<{
 ];
 
 describe('useComposerScopePluginPresentation', () => {
+    it('projects only the selected contributor into an independent Discussion composer', async () => {
+        const projection = PluginProjectionV2Schema.parse({
+            v: 2, generation: 7,
+            familiesById: {
+                composerControls: { family: 'composerControls', entriesById: {
+                    [control.id]: control,
+                    'other.compose/refresh': { ...control, id: 'other.compose/refresh', pluginId: 'other.compose',
+                        identity: { pluginId: 'other.compose', localId: 'refresh' } },
+                } },
+                composerRegions: { family: 'composerRegions', entriesById: {
+                    [region.id]: region,
+                    'other.compose/summary': { ...region, id: 'other.compose/summary', pluginId: 'other.compose',
+                        identity: { pluginId: 'other.compose', localId: 'summary' } },
+                } },
+            },
+        });
+        const hook = await renderHook(() => useComposerScopePluginPresentation({
+            composer: { kind: 'discussion', discussionId: 'discussion-1' },
+            contributorPluginId: 'acme.compose', physicalTarget: { kind: 'app' }, resourceContext: { kind: 'global' },
+            machineId: 'machine-1', serverId: 'server-1', projectionPhase: 'ready',
+            projectionInputs: { pluginProjectionById: {}, pluginProjectionV2: projection, composerSurfaceCatalog: [] },
+            accountLifetime: null, isScopeCurrent: () => true, attachmentsEnabled: false, includeSessionActions: false,
+        }));
+        expect(hook.getCurrent().extraActionChips.map(chip => chip.controlId)).toEqual(['plugin:acme.compose/refresh']);
+        expect(hook.getCurrent().composerRegions.map(entry => entry.id)).toEqual(['acme.compose/summary']);
+        await hook.unmount();
+    });
+
+    it('shares normalized UI facts across composers consuming one published projection snapshot', async () => {
+        let projectionInputs = { pluginProjectionById: {}, pluginProjectionV2: createProjection(), composerSurfaceCatalog: [] };
+        function usePresentation(instanceId: string) {
+            return useComposerScopePluginPresentation({
+                composer: { kind: 'newSession', instanceId }, physicalTarget: { kind: 'app' }, resourceContext: { kind: 'global' },
+                machineId: 'machine-1', serverId: 'server-1', projectionPhase: 'ready', projectionInputs,
+                accountLifetime: null, isScopeCurrent: () => true, attachmentsEnabled: false,
+            });
+        }
+        const hook = await renderHook(() => [usePresentation('first'), usePresentation('second')] as const);
+        try {
+            const first = hook.getCurrent()[0].getCurrentActionSnapshot()!.pluginUiProjection;
+            if (!first) throw new Error('Expected a ready Composer projection');
+            expect(first.composerControlsById[control.id]).toBeDefined();
+            expect(hook.getCurrent()[1].getCurrentActionSnapshot()!.pluginUiProjection).toBe(first);
+            // Same-generation snapshots from another read are still new inputs;
+            // neither generation nor a machine id is sufficient as a cache key.
+            projectionInputs = { ...projectionInputs, pluginProjectionV2: createProjection() };
+            await hook.rerender();
+            const replacement = hook.getCurrent()[0].getCurrentActionSnapshot()!.pluginUiProjection;
+            expect(replacement).not.toBe(first);
+            expect(hook.getCurrent()[1].getCurrentActionSnapshot()!.pluginUiProjection).toBe(replacement);
+        } finally { await hook.unmount(); }
+    });
+
     it('projects admitted Composer controls and regions by declaration order, then qualified id', async () => {
         const controls = [
             createOrderedControl({ localId: 'late', order: 10 }),

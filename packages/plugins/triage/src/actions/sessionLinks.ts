@@ -2,61 +2,46 @@ import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import type { ActionHandler } from '@happier-dev/plugin-sdk/actions';
 
 import { bindCorpusCollections } from '../corpus/collections/bindCorpusCollections.js';
-import type { CorpusCollectionsV1 } from '../corpus/collections/bindCorpusCollections.js';
 import { requireTriageAccountStorage } from '../requiredAccountStorage.js';
-import { linkEntryToSession } from '../sessions/entrySessionLinks.js';
+import { createTriageSourceSessionRelations } from '../sessions/sourceSessionRelations.js';
+import { isTriageAccountCaller } from './callerSource.js';
 import type {
     TriageLinkEntryToSessionActionResultV1,
     TriageLinkEntryToSessionInputV1,
+    TriageReadSourceSessionLinksInputV1,
+    TriageReadSourceSessionLinksResultV1,
 } from './sessionLinksProtocol.js';
 
 /**
- * The registered `session-links` writer: the surface's only path to the one
- * canonical link owner.
+ * The registered source-neutral relationship transport.
  *
- * This is not a second authority. `linkEntryToSession` still owns the link's
+ * Source-declared roles own their relationships; `linkEntryToSession` owns external links'
  * derived address, its idempotency, the conditional tombstone rewrite, the
  * minted publication id and the conflict verdict; this module transports the
- * caller's intent to it and projects its answer back, discarding the storage
+ * caller's intent to the selected owner and projects its answer back, discarding the storage
  * tag on the way out.
  */
-
-export type TriageSessionLinksDepsV1 = Readonly<{
-    /** The `session-links` Collection. It is the only Collection this Action touches. */
-    collections: Pick<CorpusCollectionsV1, 'sessionLinks'>;
-    nowMs: () => number;
-    signal?: AbortSignal;
-}>;
-
-export async function linkTriageEntryToSession(
-    input: TriageLinkEntryToSessionInputV1,
-    deps: TriageSessionLinksDepsV1,
-): Promise<TriageLinkEntryToSessionActionResultV1> {
-    const result = await linkEntryToSession({
-        collections: deps.collections,
-        // Passed through exactly as the caller's projection produced it. The
-        // link's address is derived from this reference and the Session id
-        // alone, so a reference this Action rebuilt or normalized could address
-        // a second row for one relationship — the duplicate the cockpit would
-        // then show for a Session started twice from two devices.
-        entryRef: input.entryRef,
-        display: input.display,
-        sessionId: input.sessionId,
-        nowMs: deps.nowMs(),
-        ...(deps.signal ? { signal: deps.signal } : {}),
-    });
-    // The writer's own verdict, minus the storage tag: a row id is plaintext
-    // server metadata and nothing a surface renders needs one.
-    return { v: 1, status: result.status };
-}
 
 export function createTriageLinkEntryToSessionActionHandler(): ActionHandler<
     TriageLinkEntryToSessionInputV1,
     TriageLinkEntryToSessionActionResultV1
 > {
-    return async (input, context: PluginInvocationContext) => await linkTriageEntryToSession(input, {
-        collections: bindCorpusCollections(requireTriageAccountStorage(context)),
-        nowMs: () => Date.now(),
-        signal: context.signal,
-    });
+    return async (input, context: PluginInvocationContext) => {
+        const collections = bindCorpusCollections(requireTriageAccountStorage(context));
+        const result = await createTriageSourceSessionRelations(context, collections).write({ ...input, linked: true });
+        return { v: 1, status: result.status === 'linked' ? 'linked' : 'failed' };
+    };
+}
+
+export function createTriageReadSourceSessionLinksActionHandler(): ActionHandler<
+    TriageReadSourceSessionLinksInputV1, TriageReadSourceSessionLinksResultV1
+> {
+    return async (input, context) => {
+        if (!isTriageAccountCaller(context)) return { kind: 'failed', links: [] };
+        try {
+            const result = await createTriageSourceSessionRelations(context,
+                bindCorpusCollections(requireTriageAccountStorage(context))).read(input);
+            return { kind: result.kind, links: result.links, lanes: result.lanes };
+        } catch { return { kind: 'failed', links: [] }; }
+    };
 }

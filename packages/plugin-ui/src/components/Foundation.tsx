@@ -25,6 +25,7 @@ import { resolveAuthorText } from './resolveAuthorText.js';
 import { Icon, PluginUiIconGlyph, type IconName } from './Icon.js';
 import { useHappierTypeRoleStyle } from '../presentation/text/typeRole.js';
 import { resolveHappierIconSize } from '../presentation/content/Icon.js';
+import { HAPPIER_FRESHNESS_LINE_METRICS } from '../presentation/state/InfoState.js';
 
 type AuthorText = Readonly<{ value?: string; valueKey?: string; fallback?: string }>;
 
@@ -229,18 +230,26 @@ export type BannerProps = Readonly<{
    */
   points?: readonly HappierBannerPoint[];
   action?: ReactNode;
+  /**
+   * `card` (default) takes a section's place in a page. `strip` is the compact band across the top of a
+   * pane or reading surface: the title leads, the description finishes the sentence on the same line.
+   */
+  presentation?: 'card' | 'strip';
   testID?: string;
 }>;
 
 export function Banner({ tone = 'info', title, titleKey, description, descriptionKey, ...props }: BannerProps): ReactElement {
   const translate = usePluginTranslation();
+  const name = isHappierBannerUrgent(tone) ? 'warning' : 'info';
   return (
     <HappierBanner
       {...props}
       title={resolveAuthorText(translate, title, titleKey) ?? title}
       description={resolveAuthorText(translate, description, descriptionKey)}
       tone={tone}
-      icon={<Icon name={isHappierBannerUrgent(tone) ? 'warning' : 'info'} tone={tone} />}
+      icon={props.presentation === 'strip'
+        ? <PluginUiIconGlyph name={name} size={HAPPIER_FRESHNESS_LINE_METRICS.glyphPx} tone={tone} />
+        : <Icon name={name} tone={tone} />}
       theme={usePluginTheme()}
     />
   );

@@ -2,7 +2,7 @@ import * as React from 'react';
 import { StyleSheet, View } from 'react-native';
 import { BackdropCanvas } from './BackdropCanvas';
 import { pictureBackdropProps } from './pictureBackdrop';
-import { WALLPAPER_HAZE_LAYERS } from './wallpaperHaze';
+import type { WallpaperHaze as WallpaperHazeComposition } from './wallpaperHaze';
 
 /**
  * monocode's haze under the content (lab `paintHaze`): two soft copies of the scene, centred on the
@@ -15,6 +15,10 @@ export function WallpaperHaze(
     size: { width: number; height: number };
     job: ReturnType<typeof pictureBackdropProps>;
     focus: { x: number; y: number };
+    /** Its layers and veil (`resolveWallpaperHaze`). */
+    haze: WallpaperHazeComposition;
+    /** The haze's render: head lines stand on it, so the atmosphere measures its tone too. */
+    onRendered?: React.ComponentProps<typeof BackdropCanvas>['onRendered'];
   }>,
 ) {
   const quarter = {
@@ -22,8 +26,9 @@ export function WallpaperHaze(
     height: Math.max(2, Math.round(props.size.height / 4)),
   };
   const at = `${((props.focus.x / props.size.width) * 100).toFixed(1)}% ${((props.focus.y / props.size.height) * 100).toFixed(1)}%`;
+  const maskOf = (ellipse: string, solid: string, centre = at) => `radial-gradient(ellipse ${ellipse} at ${centre}, #000 ${solid}, transparent 100%)`;
   const layer = (blur: number, ellipse: string, solid: string) => {
-    const mask = `radial-gradient(ellipse ${ellipse} at ${at}, #000 ${solid}, transparent 100%)`;
+    const mask = maskOf(ellipse, solid);
     return (
       <View
         style={[
@@ -47,14 +52,20 @@ export function WallpaperHaze(
             size={quarter}
             dpr={1}
             {...props.job}
+            onRendered={props.onRendered}
           />
         </View>
       </View>
     );
   };
+  const { layers, veil } = props.haze;
+  const veilMask = veil ? maskOf(`${veil.rx * 100}% ${veil.ry * 100}%`, `${veil.solid * 100}%`, `${(veil.at.x * 100).toFixed(1)}% ${(veil.at.y * 100).toFixed(1)}%`) : null;
   return (
     <>
-      {WALLPAPER_HAZE_LAYERS.map(spec => <React.Fragment key={spec.blur}>{layer(spec.blur, `${spec.rx * 100}% ${spec.ry * 100}%`, `${spec.solid * 100}%`)}</React.Fragment>)}
+      {layers.map(spec => <React.Fragment key={spec.blur}>{layer(spec.blur, `${spec.rx * 100}% ${spec.ry * 100}%`, `${spec.solid * 100}%`)}</React.Fragment>)}
+      {veil && veilMask ? (
+        <View style={[StyleSheet.absoluteFill, { backgroundColor: veil.color, opacity: veil.alpha, maskImage: veilMask, WebkitMaskImage: veilMask } as object]} />
+      ) : null}
     </>
   );
 }

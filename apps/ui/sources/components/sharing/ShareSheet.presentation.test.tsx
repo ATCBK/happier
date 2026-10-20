@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { ReactTestRendererJSON } from 'react-test-renderer';
-import type { LayoutChangeEvent } from 'react-native';
+import type { LayoutChangeEvent, ViewStyle } from 'react-native';
 import type { CustomModalChromeConfig } from '@/modal/types';
 import { act } from 'react-test-renderer';
 import type { ShareSheetModel, ShareSheetActions } from './shareSheetTypes';
@@ -16,7 +16,7 @@ import { installMessageViewCommonModuleMocks } from '@/components/sessions/trans
 const capture = vi.hoisted(() => ({ dark: process.env.DV3_SHARE_CAPTURE_THEME === 'dark',
     width: Number(process.env.DV3_SHARE_CAPTURE_WIDTH ?? 390), pathname: '/settings/profiles/new',
     header: {} as Record<string, unknown>, chrome: null as CustomModalChromeConfig | null, nextLayout: 0,
-    layouts: new Map<number, (event: LayoutChangeEvent) => void>() }));
+    layouts: new Map<number, (event: Pick<LayoutChangeEvent, 'nativeEvent'>) => void>() }));
 // Hardware facts are fixed per process, just as the real browser pointer owner caches them.
 const installBrowserFacts = () => vi.stubGlobal('navigator', { maxTouchPoints: capture.width < 600 ? 1 : 0, userAgent: capture.width < 600 ? 'Mobile' : 'Desktop',
     // Web Locks is a browser SDK boundary; this isolated fixture has one serial Home writer.
@@ -34,7 +34,7 @@ installMessageViewCommonModuleMocks({
             const handler = props.onLayout;
             React.useEffect(() => {
                 if (typeof handler !== 'function') return;
-                capture.layouts.set(layoutId, handler as (event: LayoutChangeEvent) => void);
+                capture.layouts.set(layoutId, event => handler(event));
                 return () => { capture.layouts.delete(layoutId); };
             }, [handler, layoutId]);
             return React.createElement(WebView, { ...props, ref,
@@ -99,23 +99,25 @@ vi.mock('react-native-reanimated', async () => {
 // Render native image/gradient SDK inputs through real RN-web hosts, not inert test host strings.
 vi.mock('expo-image', async () => {
     const { Image } = await vi.importActual<typeof import('react-native-web')>('react-native-web');
-    return { Image: (props: Record<string, unknown>) => {
-        const source = typeof props.source === 'string' && props.source.startsWith('/')
-            ? { uri: `data:image/png;base64,${readFileSync(props.source).toString('base64')}` } : props.source;
+    return { Image: (props: Omit<React.ComponentProps<typeof Image>, 'source'> & { source?: string | React.ComponentProps<typeof Image>['source'] }) => {
+        const source = typeof props.source === 'string'
+            ? { uri: props.source.startsWith('/') ? `data:image/png;base64,${readFileSync(props.source).toString('base64')}` : props.source } : props.source;
         return React.createElement(Image, { ...props, source });
     } };
 });
 vi.mock('expo-linear-gradient', async () => {
     const { View } = await import('react-native');
-    return { LinearGradient: (props: Record<string, unknown>) => React.createElement(View,
-        { ...props, style: [props.style, { backgroundImage: `linear-gradient(180deg, ${(props.colors as string[]).join(', ')})` }] }) };
+    return { LinearGradient: (props: React.ComponentProps<typeof View> & { colors: string[] }) => {
+        const gradient: React.CSSProperties & ViewStyle = { backgroundImage: `linear-gradient(180deg, ${props.colors.join(', ')})` };
+        return React.createElement(View, { ...props, style: [props.style, gradient] });
+    } };
 });
 vi.mock('@expo/vector-icons', async importOriginal => {
     const actual = await importOriginal<Record<string, unknown>>();
     const { Text } = await import('react-native');
     const glyphs = JSON.parse(readFileSync(join(process.cwd(),
         'node_modules/@expo/vector-icons/build/vendor/react-native-vector-icons/glyphmaps/Ionicons.json'), 'utf8')) as Record<string, number>;
-    return { ...actual, Ionicons: (props: Record<string, unknown>) => React.createElement(Text,
+    return { ...actual, Ionicons: (props: React.ComponentProps<typeof Text> & { size?: number; color?: string; name: string }) => React.createElement(Text,
         { ...props, style: [props.style, { fontFamily: 'Ionicons', fontSize: props.size, color: props.color }] },
         String.fromCodePoint(glyphs[String(props.name)] ?? 0)) };
 });
@@ -179,7 +181,7 @@ const { getEnabledAgentIds } = await import('@/agents/catalog/enabled');
 const { getProfileSubtitle, getDefaultProfileListStrings } = await import('@/components/profiles/profileListModel');
 const { normalizeSessionListFilterV1 } = await import('@happier-dev/protocol');
 const { buildSessionListFilterQueryHomes } = await import('@/components/sessions/shell/search/sessionListViewFilters');
-const { fromBoardSessionFilter } = await import('@/components/boards/model/boardSessionFilter');
+const { fromStoredSessionListFilter } = await import('@/components/sessions/shell/search/storedSessionListFilter');
 const { useDocumentPublicLinkController } = await import('./documents/useDocumentPublicLinkController');
 const { DocumentPublicLinkSection } = await import('./documents/DocumentPublicLinkSection');
 const { SettingsSidebar } = await import('@/components/settings/shell/SettingsSidebar');
@@ -215,7 +217,7 @@ const actions: ShareSheetActions = { setQuery: noop, retryDirectory: noop, loadM
     retryMutation: noop, setAccessLevel: noop, requestRemove: noop, confirmRemove: noop, cancelRemove: noop, explain: noop };
 const model: ShareSheetModel = { revision: 1, editable: true, stale: false,
     owner: { principal: presentSharePrincipal({ ref: { kind: 'account', accountId: scope.accountId },
-        profile: { firstName: 'Leeroy', lastName: 'Brun', username: 'leeroy', avatarUrl: null }, viewerAccountId: scope.accountId }) },
+        profile: { name: 'Leeroy Brun', firstName: 'Leeroy', lastName: 'Brun', username: 'leeroy', avatarUrl: null }, viewerAccountId: scope.accountId }) },
     grants: [{ grant: { kind: 'team', teamId: 'happier-team' }, principal: { ref: { kind: 'team', teamId: 'happier-team' },
         key: 'team:happier-team', displayName: 'Happier Team', accessibilityLabel: 'Happier Team' },
         level: { kind: 'editable', value: 'edit', options: ['view', 'edit', 'admin'] }, removal: { kind: 'allowed' }, operation: { kind: 'idle' } }],
@@ -247,7 +249,7 @@ function seed() {
         tombstones: [], diagnostics: [] }, rawSettings: {}, sourceSettingsVersion: 0 }, true);
     applyProfileCatalogSnapshot(scope, { status: 'ready', source: 'destination', authority: 'active', control: null,
         controlRevision: 1, referenceGuardRevision: 1, diagnostics: [], records: [{ revision: 1,
-            record: { v: 1, id: 'review-profile', enabled: true, promptStack: [], secretBindings: {}, definition: { kind: 'inline',
+            record: { v: 1, id: 'review-profile', enabled: true, promptStack: [], skillSeeds: [], secretBindings: {}, definition: { kind: 'inline',
                 profile: reviewProfile } } }] }, true);
 }
 
@@ -272,7 +274,7 @@ it('keeps the launch profile Save action visible in phone navigation before open
     </NavigationTitleChromeProvider>);
     const headerRight = capture.header.headerRight;
     expect(typeof headerRight).toBe('function');
-    const header = await renderScreen((headerRight as () => React.ReactNode)());
+    const header = await renderScreen(<>{(headerRight as () => React.ReactNode)()}</>);
     expect(header.findByTestId('settings.profiles.detail.save')).not.toBeNull();
 });
 
@@ -315,7 +317,7 @@ it.each(variants)('captures SHARE source owners ($dark / $width)', async variant
                     x: rect.x - (parent?.x ?? 0), y: rect.y - (parent?.y ?? 0) };
             }));
             await act(async () => {
-                for (const box of boxes) capture.layouts.get(box.id)?.({ nativeEvent: { layout: box } } as LayoutChangeEvent);
+                for (const box of boxes) capture.layouts.get(box.id)?.({ nativeEvent: { layout: box } });
             });
         }
     };
@@ -368,7 +370,7 @@ it.each(variants)('captures SHARE source owners ($dark / $width)', async variant
         [{ kind: 'session' as const, qualifiedId: { serverId: scope.serverId, id: 'release' } }], filter: boardFilter } };
     // The filter's retained corpus is canonical store state, separate from the one hand-picked member.
     // This source renderer has no live Socket; retained membership remains truthful without claiming fresh coverage.
-    for (const queryHome of buildSessionListFilterQueryHomes(fromBoardSessionFilter(boardFilter, [scope.serverId]),
+    for (const queryHome of buildSessionListFilterQueryHomes(fromStoredSessionListFilter(boardFilter, [scope.serverId]),
         { storage: 'active', includeInactive: false, mountedHomeServerIds: [scope.serverId] })) {
         storage.getState().commitSessionListQueryMembership(queryHome.queryKey,
             { serverId: scope.serverId, accountId: scope.accountId, sessionIds: filteredSessionIds, lastKnown: true });
@@ -415,7 +417,7 @@ it.each(variants)('captures SHARE source owners ($dark / $width)', async variant
     for (const document of [{ kind: 'workflow-definition.v1', name: 'Release review', subtitle: '3 steps', id: 'workflow' },
         { kind: 'role.v1', name: 'Code reviewer', subtitle: 'Default agent · Session', id: 'role' },
         { kind: 'work-board.v1', name: 'Release workspace', subtitle: undefined, id: 'board' },
-        { kind: 'launch-profile.v1', name: reviewProfile.name, subtitle: getProfileSubtitle({ profile: { ...reviewProfile, compatibility: {} },
+        { kind: 'launch-profile.v1', name: reviewProfile.name, subtitle: getProfileSubtitle({ profile: { ...reviewProfile, compatibility: {}, isBuiltIn: false },
             enabledAgentIds: getEnabledAgentIds({ backendEnabledByTargetKey: storage.getState().settings.backendEnabledByTargetKey }),
             strings: getDefaultProfileListStrings(getEnabledAgentIds({ backendEnabledByTargetKey: storage.getState().settings.backendEnabledByTargetKey })) }), id: 'profile' }].filter(document => !onlySharing || document.id === 'role')) {
         showDocumentShareSheet({ artifactId: document.id, kind: document.kind, name: document.name, subtitle: document.subtitle });
@@ -527,7 +529,7 @@ it.each(variants)('captures SHARE source owners ($dark / $width)', async variant
     await settle(profile);
     const headerRight = capture.header.headerRight;
     const header = capture.width < 600 && typeof headerRight === 'function'
-        ? await renderScreen((headerRight as () => React.ReactNode)()) : null;
+        ? await renderScreen(<>{(headerRight as () => React.ReactNode)()}</>) : null;
     await emit({ id: 'profile-authoring', body: <>{header ? hostTree(header.tree.toJSON()) : null}{hostTree(profile.tree.toJSON())}</> });
     await profile.unmount();
     await header?.unmount();
@@ -556,7 +558,7 @@ it.each(variants)('captures SHARE source owners ($dark / $width)', async variant
     capture.pathname = '/settings/secrets';
     const secrets = await renderScreen(<SecretsSettingsPage personalSecrets={[]} sharedEntries={[{ ...secret, encryptionMode: 'e2ee' }]}
         corruptEntries={[]} resolveSharedReference={ref => ({ ref, kind: 'shared_resource', status: 'ready',
-            entry: secret, secret: null, revision: secret.revision, fingerprint: null })} sharedCatalogStale={false}
+            entry: secret, secret: null, revision: secret.revision, fingerprint: null })} sharedCatalogStale={false} sharedCatalogStatus="ready"
         onRenamePersonal={async () => true} onRotatePersonal={async () => true} onDeletePersonal={async () => true}
         onMakeSharedHomeManaged={noop} sharedMutationsDisabled={false} approvalId={null} onAdd={noop} onCancelAdd={noop}
         createEditor={null} accessEditor={{ key: secret.ref, element: null }} />);

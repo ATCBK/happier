@@ -15,6 +15,7 @@ describe('deriveReadOnlyTranscriptInteraction', () => {
             ...localInteraction,
             canSendMessages: false,
             canApprovePermissions: false,
+            canApproveActions: false,
             canFork: false,
             permissionDisabledReason: 'readOnly',
         });

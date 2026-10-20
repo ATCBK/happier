@@ -4,6 +4,7 @@ import process from 'node:process';
 import url from 'node:url';
 import { resolveUiPostinstallTasks } from './resolveUiPostinstallTasks.mjs';
 import { buildPasswordKdfWorker } from './password/buildPasswordKdfWorker.mjs';
+import { buildCryptoWorker } from './crypto/buildCryptoWorker.mjs';
 import { buildAtmosphereRenderers } from './atmosphere/buildAtmosphereRenderers.mjs';
 import { ensureNohoistPeerLinks } from './ensureNohoistPeerLinks.mjs';
 import { createFilteredPatchDir } from './postinstall/filteredPatchDirectory.mjs';
@@ -88,6 +89,7 @@ const wants = (id) => tasks.includes(id);
 if (wants('vendor-password-kdf-worker')) {
     await buildPasswordKdfWorker();
 }
+if (wants('vendor-crypto-worker')) await buildCryptoWorker();
 if (wants('prepare-atmosphere-renderers')) {
     await buildAtmosphereRenderers({ web: wants('vendor-password-kdf-worker') });
 }
@@ -316,7 +318,11 @@ if (wants('verify-expo-router-web-modal-patch')) {
         },
         {
             relativePath: ['build', 'modal', 'web', 'ModalStack.js'],
-            markers: ['preloadedRoutes: state.preloadedRoutes ?? []'],
+            markers: [
+                'preloadedRoutes: state.preloadedRoutes ?? []',
+                'function ModalStackNavigator({ initialRouteName, children, layout, screenOptions, UNSTABLE_router, })',
+                '        layout,\n        screenOptions,',
+            ],
         },
         {
             relativePath: ['build', 'modal', 'web', 'ModalStackRouteDrawer.js'],

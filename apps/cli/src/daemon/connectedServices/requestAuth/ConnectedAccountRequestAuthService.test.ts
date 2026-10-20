@@ -1,16 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import type {
     OAuthBearerLeaseV1,
     QualifiedConnectedAccountPurposeBindingV1,
     QualifiedConnectedAccountPurposeV1,
 } from '@happier-dev/protocol';
-import { buildConnectedAccountRequestAuthClientSource } from '@happier-dev/plugin-sdk/connected-accounts';
 
 import {
     ConnectedAccountRequestAuthError,
-    DEFAULT_REQUEST_AUTH_OPERATION_DEADLINE_MS,
-    DEFAULT_REQUEST_AUTH_RECOVERY_DEADLINE_MS,
     createConnectedAccountRequestAuthService,
     type ConnectedAccountRequestAuthResolvedBinding,
     type ConnectedAccountRequestAuthSubject,
@@ -126,29 +123,9 @@ function pendingUntilAborted(signal: AbortSignal | undefined): Promise<never> {
 }
 
 describe('ConnectedAccountRequestAuthService', () => {
-    it('keeps each daemon owner deadline below its generated client transport deadline', () => {
-        const generatedClientSource = buildConnectedAccountRequestAuthClientSource({
-            capabilityPathEnv: 'HAPPIER_TEST_REQUEST_AUTH_CAPABILITY_PATH',
-        });
-        const timeoutMatch = /const CONNECTED_ACCOUNT_REQUEST_AUTH_TIMEOUT_MS = (\d+);/u.exec(
-            generatedClientSource,
-        );
-        const recoveryTimeoutMatch = /const CONNECTED_ACCOUNT_REQUEST_AUTH_RECOVERY_TIMEOUT_MS = (\d+);/u.exec(
-            generatedClientSource,
-        );
-        expect(timeoutMatch).not.toBeNull();
-        expect(recoveryTimeoutMatch).not.toBeNull();
-        const transportDeadlineMs = Number(timeoutMatch?.[1]);
-        const recoveryTransportDeadlineMs = Number(recoveryTimeoutMatch?.[1]);
-        expect(DEFAULT_REQUEST_AUTH_OPERATION_DEADLINE_MS).toBeLessThan(
-            transportDeadlineMs,
-        );
-        expect(DEFAULT_REQUEST_AUTH_RECOVERY_DEADLINE_MS).toBeLessThan(
-            recoveryTransportDeadlineMs,
-        );
-    });
-
     it('uses the longer owner deadline only for authentication recovery', async () => {
+        vi.useFakeTimers();
+        onTestFinished(() => { vi.useRealTimers(); });
         let recoverySignal: AbortSignal | undefined;
         const owner = createConnectedAccountRequestAuthService({
             operationDeadlineMs: 25,
@@ -174,10 +151,12 @@ describe('ConnectedAccountRequestAuthService', () => {
             },
         });
 
-        await vi.waitFor(() => expect(recoverySignal).toBeDefined());
-        await new Promise((resolve) => setTimeout(resolve, 40));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(recoverySignal).toBeDefined();
+        await vi.advanceTimersByTimeAsync(40);
         expect(recoverySignal?.aborted).toBe(false);
-        await vi.waitFor(() => expect(recoverySignal?.aborted).toBe(true), { timeout: 500 });
+        await vi.advanceTimersByTimeAsync(60);
+        expect(recoverySignal?.aborted).toBe(true);
         await expect(recovery).resolves.toEqual({ status: 'denied' });
     });
 

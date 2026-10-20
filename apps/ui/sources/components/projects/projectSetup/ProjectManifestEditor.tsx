@@ -1,7 +1,6 @@
 import * as React from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { HappierPageHeader, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import type {
   ProjectManifestFileSnapshot,
@@ -22,12 +21,12 @@ import { ItemList } from '@/components/ui/lists/ItemList';
 import { renderPageHeaderText } from '@/components/ui/layout/PageHeader';
 import { useLayoutMaxWidth } from '@/components/ui/layout/layout';
 import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
-import { useSessionCockpitBottomChromeHeight } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
+import { PagePinnedBar } from '@/components/ui/layout/PagePinnedBar';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 import { useServerScopedMachine } from '@/sync/store/hooks';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { useDeviceType } from '@/utils/platform/responsive';
 import { t } from '@/text';
 
@@ -118,13 +117,10 @@ function ProjectManifestEditorLeaf(
 ) {
   const { model } = props;
   const phone = useDeviceType() === 'phone';
-  const insets = useSafeAreaInsets();
-  // The floating bottom bar overlays the screen; each surface clears it itself, so Discard and Save stay reachable.
-  const bottomChromeHeight = useSessionCockpitBottomChromeHeight();
   const snapshot = useProjectManifestEditorSnapshot(model);
   const columnMaxWidth = useLayoutMaxWidth();
   const machine = useServerScopedMachine(props.workspace.serverId, props.workspace.machineId);
-  const machineName = (machine ? getMachineDisplayName(machine) : null) ?? props.workspace.machineId;
+  const machineName = (machine ? getMachineSentenceName(machine) : null) ?? props.workspace.machineId;
   const { theme } = useUnistyles();
   const [rawResetKey, setRawResetKey] = React.useState(0);
   const tabs = React.useMemo(
@@ -315,9 +311,9 @@ function ProjectManifestEditorLeaf(
   return phone ? (
     <KeyboardAwareScreen style={styles.phone}>
       <ItemList keyboardAware keyboardShouldPersistTaps="handled" testID="project-manifest-editor.phoneScroll">{content}</ItemList>
-      <View testID="project-manifest-editor.phoneActions" style={[styles.phoneActions, { backgroundColor: theme.colors.surface.base, paddingBottom: Math.max(16, insets.bottom) + bottomChromeHeight }]}>
+      <PagePinnedBar testID="project-manifest-editor.phoneActions" style={styles.phoneActions}>
         {actions}
-      </View>
+      </PagePinnedBar>
     </KeyboardAwareScreen>
   ) : content;
 }
@@ -340,7 +336,7 @@ function describeDiagnostic(
 const styles = StyleSheet.create(() => ({
   editor: { gap: 16 },
   phone: { flex: 1, minHeight: 0 },
-  phoneActions: { padding: 16, alignItems: 'flex-end' },
+  phoneActions: { alignItems: 'flex-end' },
   headerNote: { ...Typography.default(), ...happierPageTextMetrics('pageDescription') },
   headerActions: {
     flexDirection: 'row',

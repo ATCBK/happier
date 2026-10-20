@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createProviderErrorV1 } from '@happier-dev/protocol';
+import { createProviderErrorV1, ProviderConnectionIdSchema } from '@happier-dev/protocol';
 import { getAgentStaticModels } from '@happier-dev/agents';
 import { ModelVisibilityRefV1Schema, serializeModelVisibilityRefV1 } from '@happier-dev/protocol/providers/model-selection';
 import type { PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
@@ -43,6 +43,24 @@ import {
   createCustomProviderDraft,
 } from '@/providers/authoring/state';
 import { PLUGIN_PROVIDER_DAEMON_PROJECTION_FIXTURE } from '@/dev/testkit/fixtures/pluginProviderDaemonProjection';
+import { resolveAgentNativeModels } from './agentModelVisibility';
+
+describe('resolveAgentNativeModels', () => {
+  it('uses the machine-observed Agent catalog instead of the static Default placeholder', () => {
+    expect(resolveAgentNativeModels({
+      runtimeAgentId: 'codex',
+      agentTargetKey: 'agent:happier.agent.codex/codex',
+      modelVisibilityByRef: {},
+      observedModels: [
+        { id: 'default', name: 'Default' },
+        { id: 'gpt-6-luna', name: 'GPT-6-Luna', description: 'Fast model' },
+      ],
+    })).toEqual([
+      { id: 'default', name: 'Default', hidden: false },
+      { id: 'gpt-6-luna', name: 'GPT-6-Luna', description: 'Fast model', hidden: false },
+    ]);
+  });
+});
 
 const mocks = vi.hoisted(() => ({
   mutate: vi.fn(),
@@ -147,7 +165,7 @@ describe('AgentModelsScreen provider settings safety', () => {
     const toggle = screen.findAllByTestId('agent-models-source-visibility:pc_a').find(node => typeof node.props.onValueChange === 'function');
     expect(toggle?.props.value).toBe(false);
     await act(async () => { toggle?.props.onValueChange(true); });
-    await waitForHomeGovernance(() => expect(stored.catalog.modelPickerVisibilityByConnectionId.pc_a).toBe(true));
+    await waitForHomeGovernance(() => expect(stored.catalog.modelPickerVisibilityByConnectionId?.[ProviderConnectionIdSchema.parse('pc_a')]).toBe(true));
     await waitForHomeGovernance(() => expect(screen.getTextContent()).toContain('Off source model'));
   });
   afterEach(async () => {
@@ -484,7 +502,10 @@ describe('AgentModelsScreen provider settings safety', () => {
     expect(
       screen.findByTestId('agent-models-source-visibility:pc_a'),
     ).not.toBeNull();
-    expect(providerHarness.state.requests.filter(request => request.method !== RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION)).toEqual([]);
+    expect(providerHarness.state.requests.filter(request => (
+      request.method !== RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION
+      && request.method !== RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE
+    ))).toEqual([]);
     // Setting the default is the row menu's rare operation for that exact model.
     const defaultControl = screen
       .findAllByType(PageHeaderMenu)
@@ -507,7 +528,10 @@ describe('AgentModelsScreen provider settings safety', () => {
         modelId: 'model-b',
       }),
     );
-    expect(providerHarness.state.requests.filter(request => request.method !== RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION)).toEqual([]);
+    expect(providerHarness.state.requests.filter(request => (
+      request.method !== RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION
+      && request.method !== RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE
+    ))).toEqual([]);
   });
   it('shows the exact Account default on the Agent Session-default Model row without a machine', async () => {
     const agentTargetKey = 'agent:happier.agent.codex/codex';
@@ -723,7 +747,10 @@ describe('AgentModelsScreen provider settings safety', () => {
       purpose: { consumer: { pluginId: 'happier.agent.codex', localId: 'codex' },
         purpose: chooser.props.declaration.purpose }, target,
     }));
-    expect(providerHarness.state.requests).toEqual([]);
+    // The page may read its machine inventory; saving an Account purpose must issue no other daemon operation.
+    expect(providerHarness.state.requests.filter(request =>
+      request.method !== RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
+    )).toEqual([]);
   });
   it.each(['plain', 'e2ee'] as const)(
     'persists the %s custom source widget through admitted Account CAS',
@@ -1273,7 +1300,7 @@ describe('AgentModelsScreen provider settings safety', () => {
       />,
     );
     expect(loading.findByTestId('agent-models')).not.toBeNull();
-    expect(loading.getTextContent()).toContain(getAgentStaticModels('codex')[0]!.name);
+    expect(loading.getTextContent()).not.toContain(getAgentStaticModels('codex')[0]!.name);
     await loading.unmount();
 
     mocks.projection = {

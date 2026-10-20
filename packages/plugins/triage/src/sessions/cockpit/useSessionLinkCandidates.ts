@@ -56,7 +56,8 @@ export function useTriageSessionLinkCandidates(
         if (readingLinks || (entries === undefined && window.snapshot.pending === 'initial')) {
             return Object.freeze({ candidates: NO_CANDIDATES, status: 'loading' });
         }
-        if (view.kind === 'unavailable'
+        if ((entries === undefined && window.snapshot.error !== undefined)
+            || view.kind === 'unavailable'
             || (view.kind === 'linked' && (view.notice !== null || view.rows.some((row) => row.presentation.kind === 'unreadable')))) {
             return Object.freeze({ candidates: NO_CANDIDATES, status: 'unavailable' });
         }

@@ -5,7 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-    buildLinkedExternalSessionMetadataV1,
     resolveExternalSessionsSourceKey,
     resolveExternalSessionsSourceKeysForPersistedTagLookup,
 } from '@happier-dev/protocol';
@@ -18,12 +17,13 @@ import type {
 import {
     resolveExternalSessionTagLookupCandidates,
 } from '@/api/session/external/linking/externalSessionTagLookupCandidates';
-import { getResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
-import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
+import { configuration } from '@/configuration';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
-import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
+import { buildExternalSessionMetadata, resolveExternalSessionIndexedTagLookup } from '@/api/session/external/linking/ensureExternalSessionLink';
+import { resolveExternalSessionSourceKeyOwner } from '@/session/actions/externalSessions/providerOpsResolution';
 
 const {
     fetchAccountEncryptionCurrentnessMock,
@@ -77,7 +77,7 @@ const qualifiedIdentity = {
 };
 
 describe('qualified External Session hook durable lookup composition', () => {
-    let runtimeRegistryLease: PluginRuntimeRegistryLease | null = null;
+    let runtimeFixture: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | null = null;
 
     beforeAll(async () => {
         codexHome = await mkdtemp(join(tmpdir(), 'hook-tag-lookup-codex-'));
@@ -96,24 +96,23 @@ describe('qualified External Session hook durable lookup composition', () => {
         );
         priorCodexHome = process.env.CODEX_HOME;
         process.env.CODEX_HOME = codexHome;
-        runtimeRegistryLease =
-            await pluginReloadController.acquireRuntimeRegistry({
-                resolveRuntimeRegistry: async () =>
-                    await resolveExecutablePluginRuntimeRegistry({
-                        contributes: getResolvedContributionRegistry(),
-                        pluginIds: [
-                            'happier.agent.claude',
-                            'happier.agent.codex',
-                            'happier.agent.ohmypi',
-                            'happier.agent.opencode',
-                        ],
-                    }),
-            });
+        runtimeFixture = await createAdmittedPluginRuntimeFixture({
+            happyHomeDir: configuration.happyHomeDir,
+            controller: pluginReloadController,
+            runtimeOptions: {
+                pluginIds: [
+                    'happier.agent.claude',
+                    'happier.agent.codex',
+                    'happier.agent.ohmypi',
+                    'happier.agent.opencode',
+                ],
+            },
+        });
     });
 
     afterAll(async () => {
-        runtimeRegistryLease?.release();
-        runtimeRegistryLease = null;
+        await runtimeFixture?.dispose();
+        runtimeFixture = null;
         await pluginReloadController.shutdown({ timeoutMs: 5_000 });
         if (priorCodexHome === undefined) {
             delete process.env.CODEX_HOME;
@@ -156,7 +155,7 @@ describe('qualified External Session hook durable lookup composition', () => {
         if (!linkedIdentity.ok) {
             throw new Error('Expected the real Codex linked identity');
         }
-        const tag = resolveExternalSessionTagLookupCandidates({
+        const tagCandidates = resolveExternalSessionTagLookupCandidates({
             machineId: 'machine-1',
             agentId: 'codex',
             remoteSessionId: 'thread-1',
@@ -169,23 +168,13 @@ describe('qualified External Session hook durable lookup composition', () => {
                 resolveExternalSessionsSourceKeysForPersistedTagLookup(
                     linkedIdentity.value.source,
                 ),
-        })[0].tag;
-        const metadata = buildLinkedExternalSessionMetadataV1(
-            {
-                tag,
-                path: '/tmp/project',
-            },
-            {
-                v: 1,
-                agentId: 'codex',
-                machineId: 'machine-1',
-                remoteSessionId: 'thread-1',
-                source: linkedIdentity.value.source,
-                linkedAtMs: 123,
-                qualifiedIdentity,
-                linkData: linkedIdentity.value.linkData,
-            },
-        );
+        });
+        const tag = tagCandidates[0].tag;
+        const metadata = buildExternalSessionMetadata({
+            tag, directoryHint: '/tmp/project', agentId: 'codex', machineId: 'machine-1',
+            remoteSessionId: 'thread-1', source: linkedIdentity.value.source, nowMs: 123, qualifiedIdentity,
+            externalSessionMetadata: { linkData: linkedIdentity.value.linkData },
+        });
         const rawSession = createSessionRecordFixture({
             id: 'session-1',
             encryptionMode: 'plain',
@@ -198,6 +187,8 @@ describe('qualified External Session hook durable lookup composition', () => {
             status: 200,
             data: { sessions: [rawSession] },
         } as any);
+        const startedAtMs = Date.now();
+        const deadlineAtMs = startedAtMs + 500;
         const resolved = await resolveDurableCurrentLink({
             machineId: 'machine-1',
             agentId: 'codex',
@@ -208,8 +199,9 @@ describe('qualified External Session hook durable lookup composition', () => {
                 linkData: linkedIdentity.value.linkData,
             },
             signal,
-            deadlineAtMs: Date.now() + 500,
+            deadlineAtMs,
         });
+        const finishedAtMs = Date.now();
         expect(axios.post).toHaveBeenCalledOnce();
         expect(fetchAccountEncryptionCurrentnessMock).toHaveBeenCalledOnce();
         expect(fetchAccountEncryptionCurrentnessMock).toHaveBeenCalledWith({
@@ -223,7 +215,15 @@ describe('qualified External Session hook durable lookup composition', () => {
             { tags: [tag] },
             expect.objectContaining({ signal }),
         );
-        expect(resolved).toMatchObject({
+        const sourceKeyOwner = await resolveExternalSessionSourceKeyOwner('codex', linkedIdentity.value.source);
+        if (!sourceKeyOwner) throw new Error('Expected a current source-key owner');
+        expect(await resolveExternalSessionIndexedTagLookup({
+            credentials: { token: 'token-1', encryption: null }, accountEncryptionMode: 'plain',
+            machineId: 'machine-1', agentId: 'codex', remoteSessionId: 'thread-1', source: linkedIdentity.value.source,
+            tagCandidates, resolveSourceKey: sourceKeyOwner.resolveSourceKey,
+            proof: { state: 'available', tags: [tag], sessions: [rawSession] },
+        })).toMatchObject({ state: 'available', existing: { kind: 'external_link' } });
+        expect(resolved, JSON.stringify({ elapsedMs: finishedAtMs - startedAtMs, deadlineExpired: finishedAtMs >= deadlineAtMs })).toMatchObject({
             link: {
                 sessionId: 'session-1',
                 linkGeneration: '123',

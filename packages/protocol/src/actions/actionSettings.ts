@@ -68,7 +68,7 @@ function normalizeActionToolExposureModes(raw: unknown): Partial<Record<ActionTo
   return next;
 }
 
-const ActionSettingsToolExposureModesSchema = lazyZodSchema(() => z.pipe(z.transform(normalizeActionToolExposureModes), z._default(z
+const ActionSettingsToolExposureModesSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeActionToolExposureModes), z._default(z
     .object({
       agent: z.optional(ActionToolExposureModeSchema),
       mcp: z.optional(ActionToolExposureModeSchema),
@@ -90,7 +90,7 @@ function normalizeLegacyActionSettingsOverride(raw: unknown): unknown {
   return next;
 }
 
-const ActionSettingsOverrideSchema = lazyZodSchema(() => z.pipe(z.transform(normalizeLegacyActionSettingsOverride), z.looseObject({
+const ActionSettingsOverrideSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeLegacyActionSettingsOverride), z.looseObject({
       enabled: z.optional(z.boolean()),
       enabledPlacements: z._default(z.array(ActionUiPlacementSchema), []),
       disabledSurfaces: z._default(z.array(ActionSurfaceKeySchema), []),
@@ -103,7 +103,7 @@ export type ActionSettingsOverride = z.infer<typeof ActionSettingsOverrideSchema
 /** A host Action id or the canonical qualified contributed-Action identity. */
 export type ActionSettingsActionId = ActionId | QualifiedPluginActionId;
 
-function normalizeActionSettingsActionId(rawId: string): ActionSettingsActionId | null {
+export function normalizeActionSettingsActionId(rawId: string): ActionSettingsActionId | null {
   const hostAction = ActionIdSchema.safeParse(normalizeLegacyActionId(rawId));
   if (hostAction.success) return hostAction.data;
   const contributedAction = parseQualifiedPluginActionId(rawId);

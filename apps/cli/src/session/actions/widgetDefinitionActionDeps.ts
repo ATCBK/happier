@@ -1,6 +1,6 @@
 import type { ActionExecutorDeps } from '@happier-dev/protocol';
 import { createWidgetDefinitionArtifactPortV1 } from '@happier-dev/protocol/widgets/widgetDefinitionArtifactV1';
-import { createWidgetLayoutFragmentArtifactPortV1 } from '@happier-dev/protocol/widgets';
+import { createWidgetLayoutFragmentArtifactPortV1 } from '@happier-dev/protocol/widgets/widgetLayoutFragmentArtifactV1';
 import { createSessionWidgetDefinitionSourceReaderV1 } from '@happier-dev/protocol/widgets/widgetDefinitionPromotionV1';
 import { isSameWidgetDefinitionV1, widgetCandidateDefinitionV1 } from '@happier-dev/protocol/widgets/builtinWidgetDescriptorV1';
 import type { WidgetDefinitionArtifactTransportV1, WidgetInputDescriptorV1, WidgetCandidateIdentityV1 } from '@happier-dev/protocol/widgets';

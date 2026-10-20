@@ -19,16 +19,13 @@ import type {
 import {
     publishMachineContributionRegistryProjectionInvalidation,
 } from '@/sync/ops/machineContributionRegistryProjection';
-import {
-    machinePluginInstallDecision,
-    reviewMachinePluginInstallationAsPresentUser,
-    type MachinePluginInstallDecisionOutcome,
-    type MachinePluginInstallDecisionResult,
-} from '@/sync/ops/machinePluginInstallDecision';
 import { resolveScopedPluginSettingsServerIdentity } from '@/sync/domains/plugins/settings/scopedPluginSettingsRuntime';
 import type { ScopedPluginSettingsTarget } from '@/sync/domains/plugins/settings/scopedPluginSettingsAdapter';
 import { captureActiveServerAccountScopeCurrentness } from '@/sync/domains/scope/activeServerAccountScope';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
+import type { ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';
+import type { CapabilitiesInvokeResponse } from '@happier-dev/protocol/capabilities';
 import type { PluginDevLoopActionIdV1 } from '@happier-dev/protocol';
 import { reviewManagedResourceRemoval } from '@/components/settings/machines/managed/reviewManagedResourceRemoval';
 import type { ManagedResourceDispositionV1 } from '@happier-dev/protocol/machines/managed/managedDependencyV1';
@@ -40,6 +37,7 @@ import {
     type PluginUpdatePolicyV1,
 } from '@happier-dev/protocol/marketplace';
 import { t } from '@/text';
+import { presentActionTurnedOffNoticeIfOff } from '@/sync/ops/actions/actionTurnedOffNotice';
 import { Modal } from '@/modal';
 
 import {
@@ -68,17 +66,13 @@ import {
     projectAccountInstalledPlugins,
     isPluginMutationVisibleAfterRefresh,
     readPluginChangeKind,
+    projectPluginInstallActionResult,
     readPluginManagedResourceRemovalReview,
     isPluginDisableNoopResult,
     readPluginCreateResult,
     readPluginEditTargetResult,
-    readPendingPluginChangeDecision,
-    readPendingPluginChangeDecisionId,
-    readPendingPluginChangeListingId,
     readPendingPluginChanges,
     resolvePluginDaemonOperationsAvailability,
-    readPendingPluginChangeReview,
-    readPendingPluginChangeStatus,
     readPluginInstallationReviewChange,
     readPluginRegistryProfileRequirement,
     resolvePluginReadOnlySnapshotNotice,
@@ -86,10 +80,7 @@ import {
     type DevelopmentPluginEntry,
     projectInstalledPluginLifecycleCapabilities,
     type InstalledPluginEntry,
-    type PendingPluginChangeDecision,
     type PendingPluginChangeListing,
-    type PendingPluginChangeReview,
-    type PendingPluginDevelopmentProjectTrustReview,
     type PluginMarketplaceActionRequest,
     type PluginReadOnlySnapshotNoticeState,
     type PluginSettingsViewId,
@@ -148,9 +139,10 @@ export type DevelopmentEditTargetSettlement =
         reason: 'operationUnavailable' | 'authorityChanged' | 'requestFailed' | 'invalidResult';
     }>;
 
-function resolvePluginChangeActionLabel(action: CommitIntendedPluginChangeAction): string {
+function resolvePluginChangeActionLabel(action: PluginMarketplaceActionRequest['method']): string {
     if (action === 'install') return t('common.install');
-    if (action === 'update') return t('common.update');
+    if (action === 'update' || action === 'setUpdatePolicy') return t('common.update');
+    if (action === 'enable') return t('common.enable');
     if (action === 'rollback') return t('settingsPlugins.rollback');
     if (action === 'uninstall') return t('settingsPlugins.uninstall');
     if (action === 'disable') return t('common.disable');
@@ -257,7 +249,7 @@ export type PluginSettingsScreenState = Readonly<{
     }>) => Promise<DevelopmentCreateSettlement>;
     resolveDevelopmentEditTarget: (pluginId: string) => Promise<DevelopmentEditTargetSettlement>;
     runDevelopmentSourceInstall: (sourceRootPath: string) => void;
-    runDevelopmentAction: (action: 'test' | 'pack' | 'unregister', pluginId: string) => void;
+    runDevelopmentAction: (action: 'test' | 'pack' | 'unregister', sourceRootPath: string) => void;
     runInstalledPluginAction: (action: InstalledPluginActionId, pluginId: string) => void;
     setInstalledPluginUpdatePolicy: (pluginId: string, policy: PluginUpdatePolicyV1) => void;
     setActiveView: (view: PluginSettingsViewId) => void;
@@ -274,7 +266,7 @@ export type PluginSettingsScreenState = Readonly<{
 
 export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolean }> = {}): PluginSettingsScreenState {
     const activeServer = useActiveServerSnapshot();
-    const discoverExecution = useMountedActionExecution(activeServer.serverId);
+    const discoverExecution = useMountedActionExecution(activeServer.serverId, { openOnRequest: true });
     const discoverAccountKey = discoverExecution.binding ? JSON.stringify([
         discoverExecution.binding.scope.serverId, discoverExecution.binding.scope.accountId,
     ]) : null;
@@ -298,6 +290,9 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
         [activeServer.serverId],
     );
     const executionTarget = administration.executionTarget;
+    // Installed controls belong to the selected Machine's Home, which may
+    // differ from the Account currently supplying Discover's registry reads.
+    const installedExecution = useMountedActionExecution(executionTarget?.serverId, { openOnRequest: true });
     const selectedServerIdentityId = administration.selectedServerIdentityId;
     const executionMachineId = executionTarget?.machine.id ?? null;
     const executionMachineHomeDir = executionTarget?.machine.metadata?.homeDir ?? null;
@@ -421,8 +416,6 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
             candidates: administrationTargetSelection.candidates,
         })
     ), [administrationTargetSelection.candidates, administrationTargetSelection.selectedTarget]);
-    const selectedAdministrationTargetLabelRef = React.useRef(selectedAdministrationTargetLabel);
-    selectedAdministrationTargetLabelRef.current = selectedAdministrationTargetLabel;
     // An asynchronous decision names the EXACT target it routes to, which is
     // the resolved execution target rather than whatever is selected when the
     // daemon finally asks. The inventory still owns the naming.
@@ -477,8 +470,13 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
     });
     const daemonAdministrationAvailable = daemonOperationAvailability.administration;
     const daemonOperationsAvailable = daemonOperationAvailability.projection;
-    const mutationAuthorityKey = daemonOperationsAvailable && selectedMachineScopeKey
-        ? `${selectedMachineScopeKey}:${daemonCacheFreshnessKey}`
+    const daemonOperationsAvailableRef = React.useRef(daemonOperationsAvailable);
+    daemonOperationsAvailableRef.current = daemonOperationsAvailable;
+    // Readiness admits a new operation; refreshing its projection does not
+    // retire an issued operation on the same selected daemon.
+    const mutationAuthorityKey = executionTarget && selectedMachineScopeKey
+        ? JSON.stringify([selectedMachineScopeKey, daemonCacheFreshnessKey,
+            executionTarget.machine.installationId, executionTarget.selectionRevision])
         : null;
     const mutationAuthorityKeyRef = React.useRef(mutationAuthorityKey);
     mutationAuthorityKeyRef.current = mutationAuthorityKey;
@@ -488,6 +486,13 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
         const controller = installLifetime.controller;
         return () => controller.abort();
     }, [installLifetime]);
+    const reconciliationLifetime = React.useMemo(() => ({ controller: new AbortController() }), [installLifetime, params.focused]);
+    React.useEffect(() => {
+        if (params.focused === false) { reconciliationLifetime.controller.abort(); return; }
+        if (reconciliationLifetime.controller.signal.aborted) reconciliationLifetime.controller = new AbortController();
+        const controller = reconciliationLifetime.controller;
+        return () => controller.abort();
+    }, [params.focused, reconciliationLifetime]);
     /**
      * The machine's configured marketplace sources, read through the one
      * registry owner this screen shares with the Sources & registries
@@ -621,19 +626,20 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
                 machineId: params.target.machine.id,
                 serverId: params.target.serverId,
                 cacheKeySalt: daemonCacheFreshnessKey,
+                signal: reconciliationLifetime.controller.signal,
                 request: {
                     ...capabilityRequest,
                     bypassCache: true,
                 },
             });
         } catch {
-            if (params.isAuthorityCurrent()) {
+            if (!reconciliationLifetime.controller.signal.aborted && params.isAuthorityCurrent()) {
                 refreshPluginTruth();
                 showUnresolvedOutcome();
             }
             return;
         }
-        if (!params.isAuthorityCurrent()) return;
+        if (reconciliationLifetime.controller.signal.aborted || !params.isAuthorityCurrent()) return;
 
         const refreshedState = getMachineCapabilitiesCacheState(
             params.target.machine.id,
@@ -662,7 +668,7 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
         } else {
             showUnresolvedOutcome();
         }
-    }, [capabilityRequest, daemonCacheFreshnessKey, refreshPluginTruth]);
+    }, [capabilityRequest, daemonCacheFreshnessKey, reconciliationLifetime, refreshPluginTruth]);
     /** Source chips are the enabled Account union, including built-ins. */
     const discoverSources = React.useMemo(() => marketplaceSourceRegistryAdministration.sources
         .filter(source => source.enabled)
@@ -733,181 +739,12 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
         return (pluginActionCountByAuthorityRef.current[mutationAuthorityKey]?.[pluginId] ?? 0) > 0;
     }, [mutationAuthorityKey, pluginActionCountByAuthority]);
 
-    /**
-     * Asks the present user the install-and-trust question and answers the
-     * daemon with their decision.
-     *
-     * Every caller that reaches an install review — a marketplace install, a
-     * local folder adopted from this screen, and a change some other client
-     * prepared — goes through this one step, so the dialog a user sees and the
-     * evidence the daemon receives cannot drift apart per entry point. Outcome
-     * policy stays with the caller: only the caller knows what it was trying
-     * to achieve.
-     */
-    const decidePluginInstallationReviewAsPresentUser = React.useCallback(async (params: Readonly<{
-        target: FreshMachineAdministrationExecutionTargetV1;
-        isAuthorityCurrent: () => boolean;
-        installationReview: PendingPluginChangeReview;
-    }>): Promise<MachinePluginInstallDecisionResult> => await reviewMachinePluginInstallationAsPresentUser(params.target.machine.id, {
-        serverId: params.target.serverId,
-        isAuthorityCurrent: params.isAuthorityCurrent,
-        installationReview: params.installationReview,
-        target: resolveMachineAdministrationTargetLabel({
-            target: params.target.target, candidates: administrationCandidatesRef.current,
-        }) ?? { machine: params.target.machine.id, server: params.target.serverId },
-    }), []);
-
-    /**
-     * Asks the present user to trust a development project source.
-     *
-     * The locator is the entire security payload of this decision — the daemon
-     * has not been allowed to read that folder yet, so there is no package
-     * identity to show — and it is therefore echoed verbatim. A locator is a
-     * location on ONE machine reached through ONE server, so it is named beside
-     * the target the same Administration owner supplies to every other
-     * machine-scoped confirmation on this screen.
-     */
-    const decidePluginProjectTrustAsPresentUser = React.useCallback(async (params: Readonly<{
-        target: FreshMachineAdministrationExecutionTargetV1;
-        isAuthorityCurrent: () => boolean;
-        projectTrustReview: PendingPluginDevelopmentProjectTrustReview;
-    }>): Promise<MachinePluginInstallDecisionResult> => await machinePluginInstallDecision(params.target.machine.id, {
-        serverId: params.target.serverId,
-        timeoutMs: null,
-        isAuthorityCurrent: params.isAuthorityCurrent,
-        decision: {
-            pendingChangeId: params.projectTrustReview.pendingChangeId,
-            decision: 'installAndTrust',
-            confirmPresentUser: async () => await Modal.confirm(
-                    t('settingsPlugins.developmentTrustProjectSourceTitle'),
-                    t('settingsPlugins.developmentTrustProjectSourceBody', {
-                        path: params.projectTrustReview.review.source.locator,
-                        ...(resolveMachineAdministrationTargetLabel({
-                            target: params.target.target,
-                            candidates: administrationCandidatesRef.current,
-                        }) ?? {
-                            machine: params.target.machine.id,
-                            server: params.target.serverId,
-                        }),
-                    }),
-                    {
-                        confirmText: t('settingsPlugins.developmentTrustProjectSourceConfirm'),
-                        cancelText: t('common.cancel'),
-                    },
-                ) ? [] : null,
-        },
-    }), []);
-
-    /** Answers one daemon review with one present-user decision. */
-    const decidePendingPluginChangeAsPresentUser = React.useCallback(async (params: Readonly<{
-        target: FreshMachineAdministrationExecutionTargetV1;
-        isAuthorityCurrent: () => boolean;
-        decision: PendingPluginChangeDecision;
-        settlementScope: PluginRoutineOperationSettlement['scope'];
-        successMessage: string;
-        formatFailure: (outcome: string) => string;
-    }>): Promise<void> => {
-        let current = params.decision;
-        while (true) {
-            const response: MachinePluginInstallDecisionResult = current.kind === 'projectTrust'
-                ? await decidePluginProjectTrustAsPresentUser({
-                    target: params.target,
-                    isAuthorityCurrent: params.isAuthorityCurrent,
-                    projectTrustReview: current.projectTrustReview,
-                })
-                : await decidePluginInstallationReviewAsPresentUser({
-                    target: params.target,
-                    isAuthorityCurrent: params.isAuthorityCurrent,
-                    installationReview: current.installationReview,
-                });
-            if (!params.isAuthorityCurrent()) return;
-            if (!response.supported) {
-                Modal.alert(
-                    t('common.error'),
-                    response.detail ?? (response.reason === 'not-supported' ? t('common.unavailable') : t('common.requestFailed')),
-                );
-                return;
-            }
-            const outcome: MachinePluginInstallDecisionOutcome = response.outcome;
-            if (outcome.kind === 'cancelled') return;
-            if (outcome.kind === 'committed' || outcome.kind === 'projectTrustAccepted') {
-                setRoutineOperationSettlement({
-                    scope: params.settlementScope,
-                    message: params.successMessage,
-                });
-                machineCapabilities.refresh({ bypassCache: true });
-                refreshPluginTruth();
-                return;
-            }
-            if (outcome.kind === 'reviewRequired') {
-                const continuation = readPendingPluginChangeDecision(outcome.change);
-                if (
-                    current.kind === 'projectTrust'
-                    && continuation?.kind === 'installation'
-                    && continuation.installationReview.reason === 'authorityExpansion'
-                    && continuation.installationReview.authorityExpansion.length > 0
-                ) {
-                    current = continuation;
-                    continue;
-                }
-            }
-            if (outcome.kind === 'outcomeUnknown') {
-                // Approving is commit-intended: the daemon may have applied the
-                // change after the decision left this device. Reconcile against
-                // the exact original target instead of presenting a false failure.
-                if (current.kind === 'installation') {
-                    const review = current.installationReview.review;
-                    const before = installedPluginByIdRef.current.get(review.pluginId) ?? null;
-                    await reconcileCommitIntendedMutation({
-                        target: params.target,
-                        isAuthorityCurrent: params.isAuthorityCurrent,
-                        settlementScope: params.settlementScope,
-                        successMessage: params.successMessage,
-                        actionLabel: t('settingsPlugins.installAndTrust'),
-                        name: review.displayName,
-                        probe: {
-                            method: before === null ? 'install' : 'update',
-                            pluginId: review.pluginId,
-                            before,
-                            targetVersion: review.version,
-                        },
-                    });
-                } else {
-                    // Project trust has no caller-known plugin identity yet, so
-                    // refresh is the only available reconciliation.
-                    await reconcileCommitIntendedMutation({
-                        target: params.target,
-                        isAuthorityCurrent: params.isAuthorityCurrent,
-                        settlementScope: params.settlementScope,
-                        successMessage: params.successMessage,
-                        actionLabel: t('settingsPlugins.developmentTrustProjectSourceConfirm'),
-                        name: current.projectTrustReview.review.source.locator,
-                        probe: null,
-                    });
-                }
-                return;
-            }
-            Modal.alert(
-                t('common.error'),
-                params.formatFailure(outcome.kind === 'reviewRequired' ? outcome.kind : outcome.detail ?? outcome.kind),
-            );
-            machineCapabilities.refresh({ bypassCache: true });
-            refreshPluginTruth();
-            return;
-        }
-    }, [
-        decidePluginInstallationReviewAsPresentUser,
-        decidePluginProjectTrustAsPresentUser,
-        machineCapabilities,
-        reconcileCommitIntendedMutation,
-        refreshPluginTruth,
-    ]);
-
     const runCatalogAction = React.useCallback((params: PluginMarketplaceActionRequest) => {
         const initialTarget = resolveCurrentExecutionTarget(executionTarget);
         const accountCurrentness = captureActiveServerAccountScopeCurrentness();
         if (
-            !mutationAuthorityKey
+            !daemonOperationsAvailableRef.current
+            || !mutationAuthorityKey
             || mutationAuthorityKeyRef.current !== mutationAuthorityKey
             || !initialTarget
             || isPluginActionInFlight(params.pluginId)
@@ -970,17 +807,17 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
                     ? params.method
                     : null;
                 const showMutationFailure = (outcome: string) => {
-                    if (!commitAction) return;
                     Modal.alert(
                         t('common.error'),
-                        commitAction === 'install'
+                        params.method === 'install'
                             ? t('settingsPlugins.marketplaceInstallDecisionFailed', { outcome })
                             : t('settingsPlugins.marketplaceChangeDecisionFailed', {
-                                action: resolvePluginChangeActionLabel(commitAction),
+                                action: resolvePluginChangeActionLabel(params.method),
                                 outcome,
                             }),
                     );
                 };
+                const isMutationOutcomeUnknown = (code: string | undefined) => code === 'outcomeUnknown' || code === 'outcome_uncertain';
                 /**
                  * Reconciliation could not establish whether the change landed.
                  * That is not the same fact as "it failed": the daemon may have
@@ -990,74 +827,83 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
                  * to retry a change that may have committed.
                  */
                 const reconcileAmbiguousMutation = async (targetVersion: string | null) => {
-                    if (!commitAction) return;
                     await reconcileCommitIntendedMutation({
                         target: initialTarget,
                         isAuthorityCurrent,
                         settlementScope: params.method === 'install' ? 'discover' : 'installed',
                         successMessage: t('common.done'),
-                        actionLabel: resolvePluginChangeActionLabel(commitAction),
+                        actionLabel: resolvePluginChangeActionLabel(params.method),
                         name: installedBefore?.title ?? exactInstallEntry?.title ?? params.pluginId,
-                        probe: {
+                        probe: commitAction ? {
                             method: commitAction,
                             pluginId: params.pluginId,
                             before: installedBefore,
                             targetVersion,
-                        },
+                        } : null,
                     });
                 };
-                const requestChange = async (managedResourceDispositions?: readonly ManagedResourceDispositionV1[]) => {
-                    if (params.method === 'install') {
-                        if (!exactInstallEntry?.version) return { supported: true as const, response: {
-                            ok: false as const, error: { code: 'install_unavailable', message: t('common.unavailable') },
-                        } };
-                        const execution = await discoverExecution.execute('plugins.install', {
+                const requestChange = async (managedResourceDispositions?: readonly ManagedResourceDispositionV1[]): Promise<
+                    | { supported: false; reason: 'cancelled' }
+                    | { supported: true; response: CapabilitiesInvokeResponse }
+                > => {
+                    const actionFailure = (execution: ActionExecuteFailure, actionId: PluginDevLoopActionIdV1) => {
+                        if (isActionApprovalDeclinedErrorCode(execution.errorCode) || !isAuthorityCurrent()) {
+                            return { supported: false as const, reason: 'cancelled' as const };
+                        }
+                        if (!presentActionTurnedOffNoticeIfOff(execution, actionId)
+                            && !isMutationOutcomeUnknown(execution.errorCode)) Modal.alert(t('common.error'), execution.error);
+                        return { supported: true as const, response: { ok: false as const,
+                            error: { code: execution.errorCode, message: execution.error } } };
+                    };
+                    try {
+                        if (params.method === 'install' || params.method === 'update') {
+                            const actionInput = params.method === 'install' && exactInstallEntry?.version
+                                ? {
+                                    machineId: initialTarget.machine.id,
+                                    source: { kind: 'marketplace' as const, sourceId: exactInstallEntry.sourceId,
+                                        pluginId: exactInstallEntry.id, version: exactInstallEntry.version,
+                                        packageName: exactInstallEntry.packageName },
+                                }
+                                : params.method === 'update'
+                                    ? { machineId: initialTarget.machine.id, source: { kind: 'installed' as const, pluginId: params.pluginId } }
+                                    : null;
+                            if (!actionInput) return { supported: true as const, response: {
+                                ok: false as const, error: { code: 'install_unavailable', message: t('common.unavailable') },
+                            } };
+                            const execute = params.method === 'install' ? discoverExecution.execute : installedExecution.execute;
+                            const execution = await execute('plugins.install', actionInput,
+                                { signal: installLifetime.controller.signal });
+                            if (!execution.ok) return actionFailure(execution, 'plugins.install');
+                            const result = execution.result;
+                            // `plugins.install` resumes only after its ordinary
+                            // approval Artifact settles. Project that terminal
+                            // Action outcome into the existing mutation reader;
+                            // daemon review ids never become a second UI decision.
+                            return { supported: true as const, response: { ok: true as const,
+                                result: projectPluginInstallActionResult(result, params.method, params.pluginId),
+                            } };
+                        }
+                        const actionId = {
+                            enable: 'plugins.enable', disable: 'plugins.disable', rollback: 'plugins.rollback',
+                            uninstall: 'plugins.uninstall', forgetTrust: 'plugins.trust.forget', setUpdatePolicy: 'plugins.update_policy.set',
+                        } as const;
+                        const execution = await installedExecution.execute(actionId[params.method], {
                             machineId: initialTarget.machine.id,
-                            source: { kind: 'marketplace', sourceId: exactInstallEntry.sourceId,
-                                pluginId: exactInstallEntry.id, version: exactInstallEntry.version,
-                                packageName: exactInstallEntry.packageName },
-                        }, { signal: installLifetime.controller.signal });
-                        if (!execution.ok) return { supported: true as const, response: {
-                            ok: false as const, error: { code: execution.errorCode, message: execution.error },
-                        } };
-                        const result = execution.result;
-                        const change = result && typeof result === 'object'
-                            ? 'pendingReview' in result ? result.pendingReview
-                                : 'change' in result ? result.change : null
-                            : null;
-                        return { supported: true as const, response: { ok: true as const,
-                            result: { action: 'install', pluginId: params.pluginId, change },
-                        } };
-                    }
-                    return await invokeWithAlerts({
-                    machineId: initialTarget.machine.id,
-                    serverId: initialTarget.serverId,
-                    request: {
-                        id: MARKETPLACE_CAPABILITY_ID,
-                        method: params.method,
-                        params: {
                             pluginId: params.pluginId,
-                            ...(params.sourceId ? { sourceId: params.sourceId } : {}),
                             ...(params.policy ? { policy: params.policy } : {}),
                             ...(managedResourceDispositions ? { managedResourceDispositions } : {}),
-                            // The npm package name of the exact listing this
-                            // action was raised from. It comes from the entry
-                            // this hook already resolved and validated, never
-                            // from the caller and never derived from the
-                            // plugin id, which an npm package need not match.
-                            ...(exactInstallEntry ? { packageName: exactInstallEntry.packageName } : {}),
-                        },
-                    },
-                    timeoutMs: null,
-                    isAuthorityCurrent,
-                    alerts: {
-                        errorTitle: t('common.error'),
-                        successTitle: t('common.success'),
-                        deferAmbiguousOutcomeToCaller: commitAction !== null,
-                        unsupportedMessage: (reason) => reason === 'not-supported' ? t('common.unavailable') : t('common.requestFailed'),
-                        successMessage: null,
-                    },
-                    });
+                        }, { signal: installLifetime.controller.signal });
+                        if (!execution.ok) return actionFailure(execution, actionId[params.method]);
+                        return { supported: true as const, response: { ok: true as const, result: execution.result } };
+                    } catch {
+                        if (installLifetime.controller.signal.aborted || !isAuthorityCurrent()) {
+                            return { supported: false, reason: 'cancelled' };
+                        }
+                        // A lost response may follow an issued mutation. Reuse
+                        // exact-target reconciliation; never replay the effect.
+                        return { supported: true as const, response: { ok: false as const,
+                            error: { code: 'outcomeUnknown', message: t('common.requestFailed') } } };
+                    }
                 };
                 let response = await requestChange();
                 if (!isAuthorityCurrent()) return;
@@ -1115,91 +961,42 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
                 }
 
                 if (!('response' in response)) {
-                    if (commitAction && response.reason === 'error') {
-                        await reconcileAmbiguousMutation(exactInstallEntry?.version ?? null);
-                    }
                     return;
                 }
                 if (!response.response.ok) {
-                    if (commitAction && response.response.error.code === 'outcomeUnknown') {
+                    if (isMutationOutcomeUnknown(response.response.error.code)) {
                         await reconcileAmbiguousMutation(exactInstallEntry?.version ?? null);
                     }
                     return;
                 }
 
-                const pendingReview = params.method === 'install' || params.method === 'update'
-                    ? readPendingPluginChangeReview(response.response.result, params.method, params.pluginId)
-                    : null;
-                if (pendingReview) {
-                    const decisionResponse = await decidePluginInstallationReviewAsPresentUser({
-                        target: initialTarget,
-                        isAuthorityCurrent,
-                        installationReview: pendingReview,
-                    });
-                    if (!isAuthorityCurrent()) return;
-                    if (!decisionResponse.supported) {
-                        if (decisionResponse.reason === 'error') {
-                            await reconcileAmbiguousMutation(pendingReview.review.version);
-                        } else {
-                            Modal.alert(t('common.error'), t('common.unavailable'));
-                        }
-                        return;
-                    }
-                    const outcome = decisionResponse.outcome;
-                    if (outcome.kind === 'committed') {
-                        setRoutineOperationSettlement({
-                            scope: params.method === 'install' ? 'discover' : 'installed',
-                            message: t('common.done'),
-                        });
-                        machineCapabilities.refresh({ bypassCache: true });
-                        refreshPluginTruth();
-                        return;
-                    }
-                    if (outcome.kind === 'cancelled') {
-                        return;
-                    }
-                    if (outcome.kind === 'outcomeUnknown') {
-                        await reconcileAmbiguousMutation(pendingReview.review.version);
+                const changeKind = readPluginChangeKind(response.response.result, params.method, params.pluginId);
+                if (changeKind === 'cancelled') return;
+                const disabledNoop = params.method === 'disable'
+                    && isPluginDisableNoopResult(response.response.result, params.pluginId);
+                if (changeKind !== 'committed' && !disabledNoop) {
+                    if (changeKind === 'outcomeUnknown') {
+                        await reconcileAmbiguousMutation(exactInstallEntry?.version ?? null);
                     } else {
-                        showMutationFailure(outcome.detail ?? outcome.kind);
+                        showMutationFailure(changeKind ?? 'invalid-response');
+                        if (changeKind === 'dataRemovalPartial') {
+                            machineCapabilities.refresh({ bypassCache: true });
+                            refreshPluginTruth();
+                        }
                     }
                     return;
                 }
-
-                if (commitAction) {
-                    const changeKind = readPluginChangeKind(response.response.result, params.method, params.pluginId);
-                    if (changeKind === 'cancelled') return;
-                    const disabledNoop = params.method === 'disable'
-                        && isPluginDisableNoopResult(response.response.result, params.pluginId);
-                    if (changeKind !== 'committed' && !disabledNoop) {
-                        if (changeKind === 'outcomeUnknown') {
-                            await reconcileAmbiguousMutation(exactInstallEntry?.version ?? null);
-                        } else {
-                            showMutationFailure(changeKind ?? 'invalid-response');
-                            if (changeKind === 'dataRemovalPartial') {
-                                machineCapabilities.refresh({ bypassCache: true });
-                                refreshPluginTruth();
-                            }
-                        }
-                        return;
-                    }
-                    setRoutineOperationSettlement({
-                        scope: params.method === 'install' ? 'discover' : 'installed',
-                        message: t('common.done'),
-                    });
-                } else {
-                    setRoutineOperationSettlement({
-                        scope: params.method === 'install' ? 'discover' : 'installed',
-                        message: t('common.done'),
-                    });
-                }
+                setRoutineOperationSettlement({
+                    scope: params.method === 'install' ? 'discover' : 'installed',
+                    message: t('common.done'),
+                });
                 machineCapabilities.refresh({ bypassCache: true });
                 refreshPluginTruth();
             } finally {
                 markPluginActionFinished(mutationAuthorityKey, params.pluginId);
             }
         })();
-    }, [administrationTargetSelection, capabilityRequest, daemonAdministrationAvailable, decidePluginInstallationReviewAsPresentUser, discoverDataKey, discoverAuthorityKey, discoverEntries, discoverExecution.execute, executionTarget, installLifetime, invokeWithAlerts, isPluginActionInFlight, machineCapabilities, markPluginActionFinished, markPluginActionStarted, marketplaceSourceRegistryAdministration.refresh, mutationAuthorityKey, reconcileCommitIntendedMutation, refreshPluginTruth, resolveCurrentExecutionTarget, selectedMachineScopeKey]);
+    }, [administrationTargetSelection, daemonAdministrationAvailable, discoverDataKey, discoverAuthorityKey, discoverEntries, discoverExecution.execute, executionTarget, installedExecution.execute, installLifetime, isPluginActionInFlight, machineCapabilities, markPluginActionFinished, markPluginActionStarted, marketplaceSourceRegistryAdministration.refresh, mutationAuthorityKey, reconcileCommitIntendedMutation, refreshPluginTruth, resolveCurrentExecutionTarget, selectedMachineScopeKey]);
 
     const runInstalledPluginAction = React.useCallback((
         action: InstalledPluginActionId,
@@ -1225,44 +1022,9 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
         ) {
             return;
         }
-        // Update is the same canonical daemon action wherever it is started
-        // from, so it goes straight to its owner: the daemon either commits it
-        // under the installed record's policy or hands back the install-and-trust
-        // review this screen already knows how to present. A second local
-        // confirmation before that review would ask the same question twice.
-        if (action === 'enable' || action === 'disable' || action === 'update') {
-            runCatalogAction({
-                method: action,
-                pluginId,
-            });
-            return;
-        }
-        const actionLabel = resolvePluginChangeActionLabel(action);
-        const target = selectedAdministrationTargetLabelRef.current;
-        if (!target) return;
-        void (async () => {
-            const confirmed = await Modal.confirm(
-                actionLabel,
-                t('settingsPlugins.pluginChangeConfirmBody', {
-                    action: actionLabel,
-                    name: installed.title,
-                    machine: target.machine,
-                    server: target.server,
-                }),
-                {
-                    confirmText: actionLabel,
-                    cancelText: t('common.cancel'),
-                    // Uninstall and forgetting trust discard state this screen
-                    // cannot restore; rollback moves between versions it can.
-                    destructive: action === 'uninstall' || action === 'forgetTrust',
-                },
-            );
-            if (!confirmed) return;
-            runCatalogAction({
-                method: action,
-                pluginId,
-            });
-        })();
+        // Action policy owns confirmation. Retained-resource responsibility is
+        // a distinct daemon-issued review handled by the mutation loop above.
+        runCatalogAction({ method: action, pluginId });
     }, [isPluginActionInFlight, mutationAuthorityKey, runCatalogAction]);
 
     const setInstalledPluginUpdatePolicy = React.useCallback((
@@ -1314,22 +1076,25 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
         }
     }, [executeDevelopmentAction]);
 
-    const runDevelopmentAction = React.useCallback((action: 'test' | 'pack' | 'unregister', pluginId: string) => {
-        const development = developmentPlugins.find((entry) => entry.installed.pluginId === pluginId) ?? null;
+    // Keyed by the source root: a source the daemon could not load has no installed plugin.
+    // The root also keys its in-flight marker.
+    const runDevelopmentAction = React.useCallback((action: 'test' | 'pack' | 'unregister', sourceRootPath: string) => {
+        const development = developmentPlugins.find((entry) => entry.sourceRootPath === sourceRootPath) ?? null;
         const initialTarget = resolveCurrentExecutionTarget(executionTarget);
         if (
-            !mutationAuthorityKey
+            !daemonOperationsAvailableRef.current
+            || !mutationAuthorityKey
             || mutationAuthorityKeyRef.current !== mutationAuthorityKey
             || !initialTarget
             || !development
             || development.actions[action] !== true
-            || isPluginActionInFlight(pluginId)
+            || isPluginActionInFlight(sourceRootPath)
         ) {
             return;
         }
 
         void (async () => {
-            markPluginActionStarted(mutationAuthorityKey, pluginId);
+            markPluginActionStarted(mutationAuthorityKey, sourceRootPath);
             try {
                 const succeeded = await invokeDevelopmentAction(
                     action === 'pack' ? 'plugins.pack' : action === 'test' ? 'plugins.dev.test' : 'plugins.dev.unregister',
@@ -1356,7 +1121,7 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
                     refreshPluginTruth();
                 }
             } finally {
-                markPluginActionFinished(mutationAuthorityKey, pluginId);
+                markPluginActionFinished(mutationAuthorityKey, sourceRootPath);
             }
         })();
     }, [developmentPlugins, executionTarget, invokeDevelopmentAction, isPluginActionInFlight, machineCapabilities, markPluginActionFinished, markPluginActionStarted, mutationAuthorityKey, refreshPluginTruth, resolveCurrentExecutionTarget]);
@@ -1366,10 +1131,11 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
     ): Promise<DevelopmentEditTargetSettlement> => {
         const initialTarget = resolveCurrentExecutionTarget(executionTarget);
         if (
-            !mutationAuthorityKey
+            !daemonOperationsAvailableRef.current
+            || !mutationAuthorityKey
             || mutationAuthorityKeyRef.current !== mutationAuthorityKey
             || !initialTarget
-            || !developmentPlugins.some((entry) => entry.installed.pluginId === pluginId)
+            || !developmentPlugins.some((entry) => entry.installed?.pluginId === pluginId)
         ) {
             return Promise.resolve({ status: 'unavailable', reason: 'operationUnavailable' });
         }
@@ -1420,7 +1186,8 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
     }>): Promise<DevelopmentCreateSettlement> => {
         const initialTarget = resolveCurrentExecutionTarget(executionTarget);
         if (
-            !mutationAuthorityKey
+            !daemonOperationsAvailableRef.current
+            || !mutationAuthorityKey
             || mutationAuthorityKeyRef.current !== mutationAuthorityKey
             || !developmentCreateAvailable
             || !initialTarget
@@ -1436,35 +1203,28 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
                     mutationAuthorityKeyRef.current === mutationAuthorityKey
                     && resolveCurrentExecutionTarget(initialTarget) !== null
                 );
-                const response = await invokeWithAlerts({
+                const execution = await installedExecution.execute('plugins.scaffold', {
                     machineId: initialTarget.machine.id,
-                    serverId: initialTarget.serverId,
-                    request: {
-                        id: MARKETPLACE_CAPABILITY_ID,
-                        method: 'create',
-                        params: {
-                            targetDir: params.targetDir,
-                            displayName: params.displayName,
-                            pluginId: params.pluginId,
-                            ...(params.ui ? { ui: params.ui } : {}),
-                        },
-                    },
-                    timeoutMs: null,
-                    isAuthorityCurrent,
-                    alerts: {
-                        errorTitle: t('common.error'),
-                        successTitle: t('common.success'),
-                        unsupportedMessage: (reason) => reason === 'not-supported' ? t('common.unavailable') : t('common.requestFailed'),
-                        successMessage: null,
-                    },
-                });
+                    targetDir: params.targetDir,
+                    name: params.displayName,
+                    id: params.pluginId,
+                    ...(params.ui ? { ui: params.ui } : {}),
+                }, { signal: installLifetime.controller.signal });
                 if (!isAuthorityCurrent()) {
                     return { status: 'unavailable', reason: 'authorityChanged' };
                 }
-                if (!('response' in response) || !response.response.ok) {
+                if (!execution.ok) {
+                    if (!isActionApprovalDeclinedErrorCode(execution.errorCode)
+                        && !presentActionTurnedOffNoticeIfOff(execution, 'plugins.scaffold')) Modal.alert(t('common.error'), execution.error);
                     return { status: 'unavailable', reason: 'requestFailed' };
                 }
-                const created = readPluginCreateResult(response.response.result);
+                const result = execution.result;
+                const created = result && typeof result === 'object' && 'kind' in result && result.kind === 'plugins_scaffold'
+                    && 'ok' in result && result.ok === true
+                    && 'plugin' in result && result.plugin && typeof result.plugin === 'object' && 'pluginId' in result.plugin
+                    && 'createdPaths' in result && result.createdPaths && typeof result.createdPaths === 'object' && 'targetDir' in result.createdPaths
+                    ? readPluginCreateResult({ action: 'create', pluginId: result.plugin.pluginId, sourceRootPath: result.createdPaths.targetDir })
+                    : null;
                 // Only the daemon's returned source root seeds a follow-on
                 // flow; an unparseable result never falls back to the folder
                 // the prompt collected.
@@ -1477,14 +1237,15 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
                 markPluginActionFinished(mutationAuthorityKey, params.pluginId);
             }
         })();
-    }, [developmentCreateAvailable, executionTarget, invokeWithAlerts, isPluginActionInFlight, markPluginActionFinished, markPluginActionStarted, mutationAuthorityKey, resolveCurrentExecutionTarget]);
+    }, [developmentCreateAvailable, executionTarget, installedExecution.execute, installLifetime, isPluginActionInFlight, markPluginActionFinished, markPluginActionStarted, mutationAuthorityKey, resolveCurrentExecutionTarget]);
 
     /** Adopts an explicit source through the same development Action used by the CLI and Agents. */
     const runDevelopmentSourceInstall = React.useCallback((sourceRootPath: string) => {
         const trimmedSourceRootPath = sourceRootPath.trim();
         const initialTarget = resolveCurrentExecutionTarget(executionTarget);
         if (
-            !mutationAuthorityKey
+            !daemonOperationsAvailableRef.current
+            || !mutationAuthorityKey
             || mutationAuthorityKeyRef.current !== mutationAuthorityKey
             || !initialTarget
             || !trimmedSourceRootPath
@@ -1515,197 +1276,10 @@ export function usePluginSettingsScreenState(params: Readonly<{ focused?: boolea
             }
         })();
     }, [developmentSourceInstallAvailable, executionTarget, invokeDevelopmentAction, isPluginActionInFlight, machineCapabilities, markPluginActionFinished, markPluginActionStarted, mutationAuthorityKey, refreshPluginTruth, resolveCurrentExecutionTarget]);
-    /**
-     * Answers a change the daemon is holding that this screen did not start.
-     *
-     * An Agent may prepare a plugin change, but approving one is not delegable:
-     * project-source trust and any authority expansion are the present user's decisions. The
-     * Agent's issued id therefore has to be findable and answerable here, or the
-     * change it prepared simply expires unseen.
-     *
-     * The listing snapshot is a projection, so the change is re-read at its
-     * owner first. That read — and not the stale row — decides what the user is
-     * asked, and it is the only place the honest "still applying", "already
-     * expired" and "the daemon that held it is gone" arms exist.
-     */
-    const decidePendingPluginChange = React.useCallback((
-        pendingChangeId: string,
-        decision: 'approve' | 'reject',
-    ) => {
-        const trimmedPendingChangeId = pendingChangeId.trim();
-        const initialTarget = resolveCurrentExecutionTarget(executionTarget);
-        if (
-            !mutationAuthorityKey
-            || mutationAuthorityKeyRef.current !== mutationAuthorityKey
-            || !initialTarget
-            || !trimmedPendingChangeId
-            || isPluginActionInFlight(trimmedPendingChangeId)
-        ) {
-            return;
-        }
-
-        void (async () => {
-            markPluginActionStarted(mutationAuthorityKey, trimmedPendingChangeId);
-            try {
-                const isAuthorityCurrent = () => (
-                    mutationAuthorityKeyRef.current === mutationAuthorityKey
-                    && resolveCurrentExecutionTarget(initialTarget) !== null
-                );
-                const reportOutcome = (message: string) => {
-                    Modal.alert(t('common.error'), message);
-                    machineCapabilities.refresh({ bypassCache: true });
-                    refreshPluginTruth();
-                };
-
-                const response = await invokeWithAlerts({
-                    machineId: initialTarget.machine.id,
-                    serverId: initialTarget.serverId,
-                    request: {
-                        id: MARKETPLACE_CAPABILITY_ID,
-                        method: 'changeStatus',
-                        params: { pendingChangeId: trimmedPendingChangeId },
-                    },
-                    timeoutMs: null,
-                    isAuthorityCurrent,
-                    alerts: {
-                        errorTitle: t('common.error'),
-                        successTitle: t('common.success'),
-                        unsupportedMessage: (reason) => reason === 'not-supported' ? t('common.unavailable') : t('common.requestFailed'),
-                        successMessage: null,
-                    },
-                });
-                if (!isAuthorityCurrent() || !('response' in response) || !response.response.ok) return;
-
-                const status = readPendingPluginChangeStatus(response.response.result);
-                if (!status) {
-                    reportOutcome(t('common.requestFailed'));
-                    return;
-                }
-                if (status.kind === 'applying') {
-                    setRoutineOperationSettlement({
-                        scope: 'pending',
-                        message: t('settingsPlugins.pendingChangeApplying'),
-                    });
-                    machineCapabilities.refresh({ bypassCache: true });
-                    refreshPluginTruth();
-                    return;
-                }
-                if (status.kind === 'expired') {
-                    reportOutcome(t('settingsPlugins.pendingChangeExpired'));
-                    return;
-                }
-                if (status.kind === 'daemonUnavailable') {
-                    reportOutcome(t('common.unavailable'));
-                    return;
-                }
-                if (status.kind === 'terminal') {
-                    if (status.outcome === 'committed') {
-                        // The change owner answered `committed` — possibly a
-                        // decision another client already made. The applied
-                        // state is the success answer; re-presenting it as a
-                        // failure would be untrue.
-                        setRoutineOperationSettlement({
-                            scope: 'pending',
-                            message: t('settingsPlugins.pendingChangeCommitted'),
-                        });
-                        machineCapabilities.refresh({ bypassCache: true });
-                        refreshPluginTruth();
-                        return;
-                    }
-                    if (status.outcome === 'outcomeUnknown') {
-                        // The change is terminal but its outcome could not be
-                        // confirmed. Reconcile the exact original target's own
-                        // installed truth before anything is shown; an
-                        // unproven landing stays the truthful unresolved copy,
-                        // never a false "was not applied".
-                        const probePluginId = status.pluginId;
-                        await reconcileCommitIntendedMutation({
-                            target: initialTarget,
-                            isAuthorityCurrent,
-                            settlementScope: 'pending',
-                            successMessage: t('settingsPlugins.pendingChangeCommitted'),
-                            actionLabel: t('settingsPlugins.installAndTrust'),
-                            name: probePluginId ?? trimmedPendingChangeId,
-                            probe: probePluginId === null ? null : {
-                                method: installedPluginByIdRef.current.has(probePluginId) ? 'update' : 'install',
-                                pluginId: probePluginId,
-                                before: installedPluginByIdRef.current.get(probePluginId) ?? null,
-                                targetVersion: null,
-                            },
-                        });
-                        return;
-                    }
-                    reportOutcome(t('settingsPlugins.pendingChangeFailed', { outcome: status.outcome }));
-                    return;
-                }
-
-                if (decision === 'reject') {
-                    // A rejection is a consequential machine-scoped operation,
-                    // so its confirmation names the exact server and machine
-                    // the prepared change would be discarded on — the same
-                    // Administration-owned facts every other confirmation on
-                    // this screen carries.
-                    const label = resolveMachineAdministrationTargetLabel({
-                        target: initialTarget.target,
-                        candidates: administrationCandidatesRef.current,
-                    }) ?? { machine: initialTarget.machine.id, server: initialTarget.serverId };
-                    const confirmed = await Modal.confirm(
-                        t('approvals.reject'),
-                        t('settingsPlugins.pendingChangeConfirmRejectBody', {
-                            machine: label.machine,
-                            server: label.server,
-                        }),
-                        { confirmText: t('approvals.reject'), cancelText: t('common.cancel'), destructive: true },
-                    );
-                    if (!confirmed || !isAuthorityCurrent()) return;
-                    const rejection = await machinePluginInstallDecision(initialTarget.machine.id, {
-                        serverId: initialTarget.serverId,
-                        timeoutMs: null,
-                        isAuthorityCurrent,
-                        decision: {
-                            pendingChangeId: readPendingPluginChangeDecisionId(status),
-                            decision: 'cancel',
-                        },
-                    });
-                    if (!isAuthorityCurrent()) return;
-                    if (!rejection.supported) {
-                        Modal.alert(
-                            t('common.error'),
-                            rejection.detail ?? (rejection.reason === 'not-supported' ? t('common.unavailable') : t('common.requestFailed')),
-                        );
-                        return;
-                    }
-                    if (rejection.outcome.kind === 'cancelled' || rejection.outcome.kind === 'expired') {
-                        setRoutineOperationSettlement({
-                            scope: 'pending',
-                            message: t('settingsPlugins.pendingChangeRejected'),
-                        });
-                    } else {
-                        Modal.alert(
-                            t('common.error'),
-                            t('settingsPlugins.pendingChangeFailed', {
-                                outcome: rejection.outcome.detail ?? rejection.outcome.kind,
-                            }),
-                        );
-                    }
-                    machineCapabilities.refresh({ bypassCache: true });
-                    refreshPluginTruth();
-                    return;
-                }
-
-                await decidePendingPluginChangeAsPresentUser({
-                    target: initialTarget,
-                    isAuthorityCurrent,
-                    decision: status,
-                    settlementScope: 'pending',
-                    successMessage: t('common.done'),
-                    formatFailure: (outcome) => t('settingsPlugins.pendingChangeFailed', { outcome }),
-                });
-            } finally {
-                markPluginActionFinished(mutationAuthorityKey, trimmedPendingChangeId);
-            }
-        })();
-    }, [decidePendingPluginChangeAsPresentUser, executionTarget, invokeWithAlerts, isPluginActionInFlight, machineCapabilities, markPluginActionFinished, markPluginActionStarted, mutationAuthorityKey, reconcileCommitIntendedMutation, refreshPluginTruth, resolveCurrentExecutionTarget]);
+    // Pending trust questions are approval Artifacts in Inbox. This screen only
+    // projects daemon-owned applying rows, so it intentionally has no decision
+    // transport of its own.
+    const decidePendingPluginChange = React.useCallback(() => {}, []);
 
     // Registry pages own source cursors and placement. This effect obtains the
     // published detail needed by the retained cards; install admission stays on

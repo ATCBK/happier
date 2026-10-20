@@ -1,6 +1,6 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import renderer, { act } from 'react-test-renderer';
+import { act } from 'react-test-renderer';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
 import {
@@ -10,15 +10,15 @@ import {
     installPickerCommonModuleMocks,
     PICKER_NAV_STATE,
     PICKER_THEME_COLORS,
-    type PickerStackOptionsInput,
+    type PickerStackScreenOptions,
 } from './testHarness';
 
 enableReactActEnvironment();
 
-const setOptionsSpy = vi.hoisted(() => vi.fn());
+const setOptionsSpy = vi.hoisted(() => vi.fn<(options: PickerStackScreenOptions) => void>());
 const navigationApi = createNavigationMock();
 const routerApi = createRouterMock();
-let localSearchParams = { selectedId: '' };
+let localSearchParams: Record<string, string> = { selectedId: '' };
 
 installPickerCommonModuleMocks({
     text: async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock(),
@@ -35,6 +35,7 @@ installPickerCommonModuleMocks({
         const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
         const baseModule = createExpoRouterMock({
             navigation: navigationApi,
+            params: () => localSearchParams,
             router: {
                 push: routerApi.push,
                 back: routerApi.back,
@@ -46,7 +47,7 @@ installPickerCommonModuleMocks({
         return {
             ...baseModule,
             Stack: {
-                Screen: ({ options }: { options: PickerStackOptionsInput }) => {
+                Screen: ({ options }: { options: PickerStackScreenOptions }) => {
                     React.useEffect(() => {
                         setOptionsSpy(options);
                     }, [options]);
@@ -54,7 +55,6 @@ installPickerCommonModuleMocks({
                 },
             },
             useNavigation: () => navigationApi,
-            useLocalSearchParams: () => localSearchParams,
         };
     },
 });
@@ -83,20 +83,28 @@ describe('SecretPickerScreen (Stack.Screen options stability)', () => {
     });
 
     it('keeps Stack.Screen options referentially stable across parent re-renders', async () => {
+        localSearchParams = { selectedId: '', dataId: 'first-draft' };
+        navigationApi.getState = () => ({ index: 0, routes: [{
+            key: 'secret-picker', name: '(app)/new/pick/secret', path: '/new/pick/secret',
+        }] });
         const SecretPickerScreen = (await import('@/app/(app)/new/pick/secret')).default;
-        let tree: renderer.ReactTestRenderer | undefined;
+        const screen = await renderScreen(React.createElement(runtime.Wrapper, null, React.createElement(SecretPickerScreen)));
+        const firstOptions = setOptionsSpy.mock.calls.at(-1)?.[0];
+        if (!firstOptions) throw new Error('Expected Secret picker screen options');
 
-        tree = (await renderScreen(React.createElement(runtime.Wrapper, null, React.createElement(SecretPickerScreen)))).tree;
-
-        localSearchParams = { selectedId: 'secret-1' };
+        const { router } = await import('expo-router');
         await act(async () => {
-            tree?.update(React.createElement(runtime.Wrapper, null, React.createElement(SecretPickerScreen)));
+            router.setParams({ selectedId: 'secret-1', dataId: 'next-draft' });
         });
+        await screen.update(React.createElement(runtime.Wrapper, null, React.createElement(SecretPickerScreen)));
 
         expect(setOptionsSpy).toHaveBeenCalledTimes(1);
+        expect(setOptionsSpy.mock.calls.at(-1)?.[0]).toBe(firstOptions);
+        const backButton = firstOptions.headerLeft?.();
+        if (!backButton?.props.onPress) throw new Error('Expected Secret picker header back action');
+        await act(async () => { backButton.props.onPress?.(); });
+        expect(routerApi.replace).toHaveBeenCalledWith({ pathname: '/new', params: { dataId: 'next-draft' } });
 
-        await act(async () => {
-            tree?.unmount();
-        });
+        await screen.unmount();
     });
 });

@@ -4,6 +4,16 @@ import * as mini from 'zod/mini';
 import { lazyZodSchema } from './lazyZodSchema.js';
 
 describe('lazyZodSchema', () => {
+  it('preserves the public identity when cloning an already parsed definition', () => {
+    const source = lazyZodSchema(() => z.string());
+    expect(source.parse('warm')).toBe('warm');
+    const derived = source.clone().check(z.minLength(2));
+    const concrete = z.string().check(z.minLength(2));
+    expect(z.toJSONSchema(derived, { io: 'input' })).toEqual(z.toJSONSchema(concrete, { io: 'input' }));
+    expect(derived.safeParse('x').success).toBe(false);
+    expect(derived.parse('kept')).toBe('kept');
+  });
+
   it('keeps a Mini definition cold through native default composition and independent defaults', () => {
     let constructed = 0;
     let defaults = 0;

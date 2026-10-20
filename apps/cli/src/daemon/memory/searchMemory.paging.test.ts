@@ -6,6 +6,28 @@ import { openSummaryShardIndexDb } from './summaryShardIndexDb';
 import { searchTier2Memory } from './searchMemory';
 
 describe('memory search paging and snippets', () => {
+  it('refuses Project search without fresh eligibility and never admits native transcripts by guess', async () => {
+    const dir = await createTempDir('happier-memory-project-scope-');
+    try {
+      const dbPath = join(dir, 'deep.sqlite');
+      const summaryDbPath = join(dir, 'summary.sqlite');
+      const db = openDeepIndexDb({ dbPath });
+      const summary = openSummaryShardIndexDb({ dbPath: summaryDbPath });
+      for (const id of ['other', 'selected-1', 'selected-2']) {
+        db.insertChunk({ sessionId: id, seqFrom: 1, seqTo: 1, createdAtFromMs: 1, createdAtToMs: 1, text: 'quartz project evidence' });
+        summary.insertSummaryShard({ sessionId: id, seqFrom: 1, seqTo: 1, createdAtFromMs: 1, createdAtToMs: 1,
+          summary: 'quartz project evidence', keywords: [], entities: [], decisions: [] });
+      }
+      db.insertChunk({ sessionId: 'native', seqFrom: 1, seqTo: 1, createdAtFromMs: 9, createdAtToMs: 9,
+        text: 'quartz project evidence', source: { type: 'external_transcript', agentId: 'pi', sourceKey: 'history', nativeSessionId: 'native' }, sourceItemId: 'native-message' });
+      db.close(); summary.close();
+      const query = { v: 1 as const, query: 'quartz', scope: { type: 'project' as const, projectRef: { serverId: 'home', projectKey: 'selected' } },
+        mode: 'deep' as const, maxResults: 1, corpora: ['sessions' as const, 'external_transcripts' as const] };
+      expect(await searchTier2Memory({ dbPath, previewChars: 64, query })).toMatchObject({ ok: true, hits: [], project: { state: 'unavailable' } });
+      expect(await searchTier2Memory({ dbPath, sessionSummaryDbPath: summaryDbPath, previewChars: 64, query }))
+        .toMatchObject({ ok: true, hits: [], project: { state: 'unavailable' } });
+    } finally { await removeTempDir(dir); }
+  });
   it('filters native Agent and source before paging and binds the continuation to that scope', async () => {
     const dir = await createTempDir('happier-memory-history-scope-');
     try {

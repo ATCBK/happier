@@ -139,7 +139,7 @@ describe('native FloatingFrame binding', () => {
             </RetainedPresentationSlotsProvider>;
         }
         const screen = await renderScreen(<Harness />);
-        const portal = screen.findByTestId('browser-presentation-portal-slot-resize-frame');
+        const portal = screen.findByTestId('browser-presentation-portal-slot-resize-frame')!;
         const grip = portal.findByProps({ testID: 'resize-frame-grip' });
         expect(grip).toBeDefined();
         const gesture = portal.findByType('GestureDetector').props.gesture as TestGestureChain;
@@ -159,7 +159,7 @@ describe('native FloatingFrame binding', () => {
             gesture.__handlers.onFinalize({}, true);
         });
         expect(onRectChange).toHaveBeenLastCalledWith({ x: 10, y: 50, width: 230, height: 183.75 }, { kind: 'settle' });
-        const nextGesture = screen.findByTestId('browser-presentation-portal-slot-resize-frame')
+        const nextGesture = screen.findByTestId('browser-presentation-portal-slot-resize-frame')!
             .findByType('GestureDetector').props.gesture as TestGestureChain;
         await act(async () => {
             nextGesture.__handlers.onBegin({ absoluteX: 20, absoluteY: 215 });

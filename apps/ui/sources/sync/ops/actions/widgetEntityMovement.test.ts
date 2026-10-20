@@ -163,7 +163,8 @@ describe('widget movement refusal words (lab widget-groups wgdnd: reason and the
     it('shows only the carried card over its own position: nothing would change, so nothing is refused', () => {
         expect(carrying(widgetMovementRefused('same-position'))).toBeNull();
     });
-    it('shows only the carried card while admission is still being read: pending is not a refusal', () => {
-        expect(describeEntityDropOutcome({ phase: 'carrying', admission: admitWidgetEntityMovement(effect, null) })).toBeNull();
+    it('says it is still checking while admission is being read: pending is neither a refusal nor an admitted place', () => {
+        const admission = admitWidgetEntityMovement(effect, null);
+        expect(describeEntityDropOutcome({ phase: 'carrying', admission })).toMatchObject({ tone: 'quiet', title: widgetMovementRefused('widget_admission_pending').reason.message });
     });
 });

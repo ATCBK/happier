@@ -47,6 +47,39 @@ it('composes a caller-owned memory fact with an independent source link and acti
   } finally { mounted.unmount(); }
 });
 
+it('keeps a decision reason on its own line so the metadata and source link stay readable', () => {
+  const mounted = mountThroughReactNativeWeb(surface(
+    <publicUi.HappierMemoryFactRow testID="fact" text="Retry cap: 5 attempts" metadata="Decision · approved by you"
+      detail="Deploys drain connections for up to 8 s before the relay restarts, so 400 ms backoff ran out too early."
+      source={{ label: 'Retry cap during deploys', accessibilityLabel: 'Open source session', onPress: () => {} }} />,
+  ));
+  try {
+    const detail = mounted.container.querySelector<HTMLElement>('[data-testid="fact.detail"]')!;
+    expect(detail.textContent).toBe('Deploys drain connections for up to 8 s before the relay restarts, so 400 ms backoff ran out too early.');
+    // The reason is not folded into the one-line metadata, which keeps the approval and the link.
+    const link = mounted.container.querySelector<HTMLElement>('[data-testid="fact.source"]')!;
+    expect(link.parentElement?.textContent).toBe('Decision · approved by you · Retry cap during deploys');
+  } finally { mounted.unmount(); }
+});
+
+it('opens a fact from its row while the source link keeps opening only the source', () => {
+  const openFact = vi.fn();
+  const openSource = vi.fn();
+  const mounted = mountThroughReactNativeWeb(surface(
+    <publicUi.HappierMemoryFactRow testID="fact" text="Retry cap: 5 attempts" metadata="Decision" selected
+      onPress={openFact}
+      source={{ label: 'Retry cap during deploys', accessibilityLabel: 'Open source session', onPress: openSource }} />,
+  ));
+  try {
+    act(() => mounted.container.querySelector<HTMLElement>('[data-testid="fact.source"]')!.click());
+    expect(openSource).toHaveBeenCalledOnce();
+    expect(openFact).not.toHaveBeenCalled();
+    act(() => mounted.container.querySelector<HTMLElement>('[data-testid="fact"]')!.click());
+    expect(openFact).toHaveBeenCalledOnce();
+    expect(openSource).toHaveBeenCalledOnce();
+  } finally { mounted.unmount(); }
+});
+
 it('preserves host row bindings and arrival content across active, expired and archived facts', async () => {
   const rows: publicUi.HappierMemoryFactItemProps[] = [];
   const host: publicUi.HappierMemoryFactRowHost = {

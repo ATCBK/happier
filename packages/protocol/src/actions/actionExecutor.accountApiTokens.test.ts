@@ -5,6 +5,10 @@ import { createActionExecutor } from './actionExecutor.js';
 import type { ActionExecutorDeps } from './executor/types.js';
 import type { AccountApiTokenSummaryV1 } from '../auth/accountApiTokens.js';
 import { API_TOKEN_FULL_GRANT_V1 } from '../auth/apiTokenGrant.js';
+import { createBlockingApprovalCoordinator } from './blockingApprovalCoordinator.js';
+import type { ApprovalRequest } from '../approvals/approvalRequestV1.js';
+import { requiresExactDaemonApprovalReplay } from '../approvals/approvalRequestV1.js';
+import { normalizeActionsSettingsV1 } from './actionSettings.js';
 
 function createDeps(overrides: Partial<ActionExecutorDeps> = {}): ActionExecutorDeps {
   return {
@@ -68,6 +72,83 @@ const token = {
 } satisfies AccountApiTokenSummaryV1;
 
 describe('createActionExecutor (account.apiTokens)', () => {
+  it.each(['agent', 'mcp'] as const)('returns a bearer only to the waiting %s caller after a human decision', async surface => {
+    const coordinator = createBlockingApprovalCoordinator();
+    const cancellation = new AbortController();
+    const bearer = `hap_v1_${token.tokenId}_${'A'.repeat(43)}`;
+    const history: ApprovalRequest[] = [];
+    const observations: unknown[] = [];
+    let stored: ApprovalRequest | null = null;
+    const effect = vi.fn(async () => ({ token: bearer, apiToken: token }));
+    const executor = createActionExecutor(createDeps({
+      accountApiTokensCreateAction: effect,
+      isApprovalExecutionOriginCurrent: async () => true,
+      approvalsCreate: async ({ request }) => { stored = request; history.push(request); return { artifactId: 'token-request' }; },
+      approvalsGet: async () => stored,
+      approvalsUpdate: async ({ request }) => { stored = request; history.push(request); return { ok: true }; },
+      approvalsWaitForDecision: async args => {
+        const decision = await coordinator.waitForDecision(args);
+        return { ...decision, request: stored! };
+      },
+      approvalsResolveBlockingDecision: args => coordinator.resolveBlockingDecision(args),
+      observeActionExecution: async value => { observations.push(value); },
+    }));
+    const requestContext = { surface, authority: 'account_automation' as const, actionCaller: { kind: 'host' as const },
+      serverId: 'home-1', runtimeAccountId: 'account-1', defaultSessionMachineId: 'token-machine', actionRequestId: 'token-request', signal: cancellation.signal };
+    const input = { tokenId: token.tokenId, label: token.label };
+    expect(await executor.execute('account.apiTokens.create', input, { ...requestContext,
+      actionsSettings: normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { 'account.apiTokens.create': [surface] } }),
+    })).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    expect(await executor.execute('account.apiTokens.create', input, { ...requestContext,
+      externalActionCredential: { accountId: 'account-1', principalId: 'account-1', credentialId: token.tokenId, grant: API_TOKEN_FULL_GRANT_V1 },
+    })).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    expect(stored).toBeNull();
+    let returned = false;
+    let detached: Promise<unknown> | undefined;
+    const invocation = executor.execute('account.apiTokens.create', { tokenId: token.tokenId, label: token.label }, {
+      surface, authority: 'account_automation', actionCaller: { kind: 'host' },
+      serverId: 'home-1', runtimeAccountId: 'account-1', defaultSessionMachineId: 'token-machine', actionRequestId: 'token-request', signal: cancellation.signal,
+    }).then(result => { returned = true; return result; });
+    try {
+      await vi.waitFor(() => expect(coordinator.getLiveWaiterCount('token-request')).toBe(1));
+      expect(returned).toBe(false);
+      expect(effect).not.toHaveBeenCalled();
+      expect(requiresExactDaemonApprovalReplay(stored!)).toBe(true);
+      const decided = await executor.execute('approval.request.decide', { artifactId: 'token-request', decision: 'approve' }, {
+        surface: 'ui', authority: 'present_user', serverId: 'home-1', actionCaller: { kind: 'host' },
+      });
+      expect(decided).toMatchObject({ ok: true, result: { status: 'approved' } });
+      expect(JSON.stringify(decided)).not.toContain(bearer);
+      await expect(invocation).resolves.toEqual({ ok: true, result: { token: bearer, apiToken: token } });
+      expect(effect).toHaveBeenCalledOnce();
+      expect(JSON.stringify(history)).not.toContain(bearer);
+      expect(JSON.stringify(observations)).not.toContain(bearer);
+      expect(await executor.execute('approval.request.decide', { artifactId: 'token-request', decision: 'approve' }, {
+        surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+      })).toMatchObject({ ok: true, result: { status: 'executed' } });
+      expect(effect).toHaveBeenCalledOnce();
+      detached = executor.execute('account.apiTokens.create', input, { ...requestContext, actionRequestId: 'detached-request' });
+      await vi.waitFor(() => expect(coordinator.getLiveWaiterCount('token-request')).toBe(1));
+      cancellation.abort();
+      await detached;
+      expect(await executor.execute('approval.request.decide', { artifactId: 'token-request', decision: 'approve' }, {
+        surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+      })).toMatchObject({ ok: true, result: { status: 'failed', execution: { ok: false, errorCode: 'approval_stale' } } });
+      expect(effect).toHaveBeenCalledOnce();
+    } finally { cancellation.abort(); coordinator.dispose(); await Promise.all([invocation, detached]); }
+  });
+
+  it('refuses agent-supplied encryption material before an approval or effect', async () => {
+    const effect = vi.fn();
+    const approvalsCreate = vi.fn();
+    const executor = createActionExecutor(createDeps({ accountApiTokensCreateAction: effect, approvalsCreate }));
+    expect(await executor.execute('account.apiTokens.create', {
+      tokenId: token.tokenId, label: token.label, encryption: { access: encryptionAccess },
+    }, { surface: 'agent', authority: 'account_automation', actionCaller: { kind: 'host' } }))
+      .toMatchObject({ ok: false, errorCode: 'api_token_encryption_not_ready' });
+    expect(effect).not.toHaveBeenCalled();
+    expect(approvalsCreate).not.toHaveBeenCalled();
+  });
   it('dispatches API-token lifecycle work with no caller-selected Account and reveals a newly minted secret exactly in create output', async () => {
     const accountApiTokensCreateAction = vi.fn(async () => ({
       token: `hap_v1_${token.tokenId}_${'A'.repeat(43)}`,
@@ -281,6 +362,7 @@ describe('createActionExecutor (account.apiTokens)', () => {
       // The plugin hook transport is the boundary; canonical Action execution stays real.
       interceptActionExecution: async ({ input }) => ({ status: 'continue', input }),
       observeActionExecution,
+      isActionApprovalRequired: () => false,
     }), { accountApiTokensCreateAction });
     const executor = createActionExecutor(deps);
     const context = {

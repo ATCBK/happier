@@ -13,6 +13,7 @@ import { t } from '@/text';
 
 import type { ReviewDraftSummaryProps } from './ReviewDraftSummary';
 import { sendReviewForChanges } from './sendReviewForChanges';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 /**
  * Review's Ask-for-changes composer (SG, Q3): the session's own draft, read and written through the
@@ -40,6 +41,15 @@ export function useReviewAskComposer(input: Readonly<{
     );
     const text = React.useSyncExternalStore(subscribe, readText, readText);
     const [sending, setSending] = React.useState(false);
+    const presented = useLayoutPresentationActive();
+    const requestRef = React.useRef<AbortController | null>(null);
+    React.useEffect(() => {
+        setSending(false);
+        return () => {
+            requestRef.current?.abort();
+            requestRef.current = null;
+        };
+    }, [binding, input.sessionId, presented]);
 
     const latestRef = React.useRef(input);
     latestRef.current = input;
@@ -48,8 +58,10 @@ export function useReviewAskComposer(input: Readonly<{
         writeExistingSessionDraft({ scope, sessionId: latestRef.current.sessionId, patch: { text: next } });
     }, [scope]);
     const onSend = React.useCallback(() => {
-        if (!binding || sending) return;
+        if (!binding || sending || !presented) return;
         const current = latestRef.current;
+        const request = new AbortController();
+        requestRef.current = request;
         setSending(true);
         void sendReviewForChanges({
             sessionId: current.sessionId,
@@ -57,12 +69,18 @@ export function useReviewAskComposer(input: Readonly<{
             accountLifetime: binding,
             drafts: current.drafts,
             reviewScope: current.reviewScope,
+            signal: request.signal,
             clearSentDrafts: (sent) => { for (const draft of sent) current.deleteDraft(draft.id); },
         }).then((outcome) => {
+            if (request.signal.aborted) return;
             if (outcome === 'handoff') current.handOffToComposer();
             if (outcome === 'failed') Modal.alert(t('common.error'), t('errors.failedToSendMessage'));
-        }).finally(() => setSending(false));
-    }, [binding, sending]);
+        }).finally(() => {
+            if (requestRef.current !== request) return;
+            requestRef.current = null;
+            setSending(false);
+        });
+    }, [binding, presented, sending]);
 
     return React.useMemo(
         () => (scope ? { text, onChangeText, onSend, sending } : null),

@@ -1,7 +1,8 @@
-import { withTeamSessionAccessEffectsInTx } from "../memberships/sessionAccessEffects";
+import { acquireTeamMutationAccountAdmissionInTx, withTeamSessionAccessEffectsInTx } from "../memberships/sessionAccessEffects";
 import { publishTeamChangedInTx } from "../teamChanges";
 import { inTx, type Tx } from "@/storage/inTx";
 import {
+    acquireExternalSourceAccountAdmissionInTx,
     applyExternalGroupContributionInTx,
     applyExternalManagedGroupInTx,
     applyExternalTeamMembershipInTx,
@@ -549,7 +550,7 @@ async function applyNativeDirectoryFactsInTx(
     // woken exactly once at the end instead of once per materialized row.
     const changedAccountIds = new Set<string>();
     let teamChanged = false;
-    await withTeamSessionAccessEffectsInTx(tx, { teamId: current.teamId, accountIds, origin: "retained_lifecycle" }, async (sessionAccessImpacts) => {
+    await withTeamSessionAccessEffectsInTx(tx, { teamId: current.teamId, accountIds }, async (sessionAccessImpacts) => {
         for (const identity of identities) {
             if (!identity.boundAccountId) continue;
             const applied = await applyExternalTeamMembershipInTx(tx, {
@@ -728,6 +729,7 @@ export async function applyReadyDirectorySourceFactsForAccountInTx(
     tx: Tx,
     params: Readonly<{ sourceId: string; teamId: string; accountId: string }>,
 ): Promise<boolean> {
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: params.teamId, accountIds: [params.accountId], affectedAccountIds: [params.accountId], membershipChange: { kind: "teamMembership", teamId: params.teamId } });
     const current = await tx.teamDirectorySource.findFirst({
         where: {
             id: params.sourceId,
@@ -759,6 +761,7 @@ export async function commitActiveWorkosProjectionEvent(
     if (eventId.length === 0) throw new TypeError("WorkOS event ID must be non-empty");
     const completedAt = params.completedAt ?? new Date();
     return await inTx(async (tx): Promise<DirectoryProjectionWriteResult> => {
+        await acquireExternalSourceAccountAdmissionInTx(tx, { owner: { kind: "directory_source", directorySourceId: params.sourceId } });
         if (!await isDirectorySourceAllowedInTx(tx, { id: params.sourceId, kind: "workos_directory" }, params.expectedCurrentness, params.env)) {
             return { applied: false, reason: "stale_run" };
         }
@@ -891,6 +894,7 @@ export async function completeDirectoryProjection(params: Readonly<{
 }>): Promise<DirectoryProjectionWriteResult> {
     const completedAt = params.completedAt ?? new Date();
     return await inTx(async (tx): Promise<DirectoryProjectionWriteResult> => {
+        await acquireExternalSourceAccountAdmissionInTx(tx, { owner: { kind: "directory_source", directorySourceId: params.sourceId } });
         const current = await tx.teamDirectorySource.findFirst({
             where: {
                 id: params.sourceId,

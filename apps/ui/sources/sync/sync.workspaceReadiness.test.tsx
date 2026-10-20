@@ -6,6 +6,7 @@ import { createDeferred, renderHook, renderScreen } from '@/dev/testkit';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
+import { createPlainSessionCurrentProjectionRecordFixture, createSessionFixture, createSessionOwnerViewerFixture, createSessionListRenderableSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import type { WorkspaceTab } from '@/components/appShell/workspace/workspaceState';
@@ -15,14 +16,86 @@ vi.mock('react-native', async () => {
     return createReactNativeWebMock();
 });
 
+const initialNetwork = await installSessionOpsNetworkBoundary();
+await loadSyncSingletonForTests();
+await initialNetwork.dispose();
+
 describe('Sync workspace readiness', () => {
     beforeEach(() => vi.resetModules());
+    it('recovers an offscreen Session draft without materializing the owning Session', async () => {
+        const network = await installSessionOpsNetworkBoundary();
+        const home = await network.addHome('https://draft-context.example.test', 'draft-context-account');
+        const scope = { serverId: home.id, accountId: home.accountId };
+        const address = { kind: 'session', sessionId: 'offscreen-draft' } as const;
+        const { createSessionDraftRepository } = await import('./ops/sessionDrafts/sessionDraftRepository');
+        const { createSessionDraftCipher } = await import('./encryption/sessionDraftEncryption');
+        const { requireComposerDraftDocument } = await import('@/dev/testkit');
+        const values = new Map<string, string>();
+        const cipher = createSessionDraftCipher({ accountMode: 'plain', accountCryptoMaterial: null,
+            getSessionContext: () => ({ mode: 'plain' }), randomBytes: length => new Uint8Array(length) });
+        const author = createSessionDraftRepository({ scope, cipher, syncEnabled: false, storage: {
+            getString: key => values.get(key), set: (key, value) => { values.set(key, value); }, delete: key => { values.delete(key); },
+        } });
+        author.writeExistingSessionDraft({ scope, sessionId: address.sessionId, patch: { text: 'Recovered draft' } });
+        const document = author.getSessionDraftSnapshot(scope, address)!.document;
+        const record = { address, revision: 1, createdAt: 1, updatedAt: 1, content: await cipher.seal(address, document) };
+        const { profileDefaults } = await import('./domains/profiles/profile');
+        let exactReads = 0;
+        network.setHttpResponder(async input => {
+            const path = new URL(String(input)).pathname;
+            if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse({ features: { sessions: { enabled: true, drafts: { enabled: true } } } }));
+            if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+            if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
+            if (path === '/v1/account/profile') return Response.json({ ...profileDefaults, id: home.accountId });
+            if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
+            if (path === '/v1/account/authoring-memory') return Response.json({ rows: [] });
+            if (path === '/v1/account/project-rows/list') return Response.json(createPlainProjectAccountRowListFixture());
+            if (path === '/v2/account/session-drafts/list') return Response.json({ items: [record] });
+            if (path === '/v2/account/session-drafts/read') return Response.json({ status: 'present', record });
+            if (path === '/v2/sessions/offscreen-draft') {
+                exactReads += 1;
+                return Response.json({ session: createPlainSessionCurrentProjectionRecordFixture({ id: address.sessionId }) });
+            }
+            if (path === '/v2/sessions' || path === '/v2/sessions/active') return Response.json({ sessions: [], nextCursor: null, hasNext: false });
+            if (path === '/v2/cursor') return Response.json({ cursor: 0 });
+            if (path === '/v2/changes') return Response.json({ changes: [], nextCursor: 0 });
+            if (path === '/v1/machines' || path === '/v1/artifacts') return Response.json([]);
+            if (path === '/v1/feed') return Response.json({ items: [], hasMore: false });
+            if (path === '/v1/kv') return Response.json({ items: [] });
+            return null;
+        });
+        await loadSyncSingletonForTests();
+        const { upsertAndActivateServer } = await import('./domains/server/serverRuntime');
+        const { restoreConnectionToActiveServer, disconnectActiveServerConnection } = await import('./runtime/orchestration/connectionManager');
+        const { storage } = await import('./domains/state/storage');
+        const { syncSwitchServer } = await import('./sync');
+        const { getSessionDraftSnapshot, materializeExactSessionDraft } = await import('./ops/sessionDrafts/sessionDraftRepository');
+        await syncSwitchServer(null);
+        try {
+            await upsertAndActivateServer({ serverUrl: home.serverUrl });
+            await restoreConnectionToActiveServer({ token: home.token });
+            await vi.waitFor(() => expect(storage.getState().isSessionDraftsReady).toBe(true), { timeout: 30_000 });
+            expect(requireComposerDraftDocument(getSessionDraftSnapshot(scope, address)?.document)?.composer.text.value).toBe('Recovered draft');
+            expect(exactReads).toBe(1);
+            expect(storage.getState().sessions[address.sessionId]).toBeUndefined();
+            storage.getState().applyServerScopedSessionListRows(home.id, [createSessionListRenderableSessionFixture({
+                id: address.sessionId, encryptionMode: 'plain',
+            })], { source: 'ordinary', mode: 'append' });
+            storage.setState(state => ({ settings: { ...state.settings, clientEncryptionRequirementV1: 'require_e2ee' } }));
+            await expect(materializeExactSessionDraft(scope, address)).rejects.toMatchObject({ code: 'CLIENT_E2EE_REQUIRED' });
+        } finally {
+            await disconnectActiveServerConnection();
+            await network.dispose();
+            vi.restoreAllMocks();
+        }
+    }, 120_000);
     it.each([
-        [false, false, false],
-        [true, false, false],
-        [false, true, false],
-        [false, false, true],
-    ])('publishes Account readiness before peripheral hydration (superseding Home=%s, transient failure=%s, settings failure=%s)', async (supersede, failSessions, failSettings) => {
+        [false, false, false, false],
+        [true, false, false, false],
+        [false, true, false, false],
+        [false, false, true, false],
+        [false, false, false, true],
+    ])('publishes Account readiness before peripheral hydration (superseding Home=%s, transient failure=%s, settings failure=%s, pending Sessions=%s)', async (supersede, failSessions, failSettings, holdSessions = false) => {
         const network = await installSessionOpsNetworkBoundary();
         const home = await network.addHome('https://bootstrap-ready.example.test', 'bootstrap-account');
         const nextHome = await network.addHome('https://bootstrap-next.example.test', 'next-account');
@@ -31,6 +104,7 @@ describe('Sync workspace readiness', () => {
         const peripheral = createDeferred<void>();
         const peripheralStarted = createDeferred<void>();
         const retry = createDeferred<void>();
+        const sessionSnapshot = createDeferred<void>();
         const { profileDefaults } = await import('./domains/profiles/profile');
         let peripheralSettled = false;
         let sessionsRead = false;
@@ -62,7 +136,7 @@ describe('Sync workspace readiness', () => {
                 if (supersede && url.origin === home.serverUrl) { profileStarted.resolve(); await oldProfile.promise; }
                 // A failed core attempt must expose the shell/error even if a
                 // sibling core read has not returned yet.
-                if (failSessions || failSettings) await retry.promise;
+                if (failSettings) await retry.promise;
                 if (url.origin === nextHome.serverUrl) nextProfileRead = true;
                 return Response.json({ ...profileDefaults, id: url.origin === home.serverUrl ? home.accountId : nextHome.accountId });
             }
@@ -71,6 +145,7 @@ describe('Sync workspace readiness', () => {
             if (path === '/v2/changes') return Response.json({ changes: [], nextCursor: 0 });
             if (path === '/v2/sessions' || path === '/v2/sessions/active') {
                 sessionsRead = true;
+                if (holdSessions) await sessionSnapshot.promise;
                 if (failSessions) {
                     if (!failedSessions) {
                         failedSessions = true;
@@ -80,6 +155,12 @@ describe('Sync workspace readiness', () => {
                     retrySettled = true;
                 }
                 return Response.json({ sessions: [], nextCursor: null, hasNext: false });
+            }
+            if (path === '/v2/sessions/opened') {
+                return Response.json({ session: {
+                    ...createPlainSessionCurrentProjectionRecordFixture({ id: 'opened' }),
+                    viewer: createSessionOwnerViewerFixture(createSessionFixture({ id: 'opened' })),
+                } });
             }
             if (['/v1/machines', '/v1/artifacts', '/v1/kv', '/v1/feed'].includes(path)) {
                 pendingSnapshotPaths.add(path);
@@ -104,8 +185,10 @@ describe('Sync workspace readiness', () => {
         let readyBeforePeripheral = false;
         let readyProfileId: string | null = null;
         let readyError: ReturnType<typeof storage.getState>['syncError'] = null;
+        let sawRetryableError = false;
         const start = performance.now();
         const unsubscribe = storage.subscribe(state => {
+            if (state.syncError?.retryable) sawRetryableError = true;
             if (!state.isDataReady || readyAt !== null) return;
             readyAt = performance.now() - start;
             readyBeforePeripheral = !peripheralSettled;
@@ -128,7 +211,24 @@ describe('Sync workspace readiness', () => {
                 oldProfile.resolve();
                 await secondRestore;
             } else await firstRestore;
-            await vi.waitFor(() => expect(storage.getState().isDataReady).toBe(true), { timeout: 30_000 });
+            await vi.waitFor(() => expect(storage.getState().isDataReady).toBe(true), { timeout: holdSessions ? 2000 : 30_000 });
+            if (holdSessions) {
+                // The retained workspace must admit its own routes while the
+                // unrelated Account inventory is still awaiting HTTP.
+                const { useWorkspaceState } = await import('@/components/appShell/workspace/useWorkspaceState');
+                const { useHydrateSessionForRoute } = await import('@/hooks/session/useHydrateSessionForRoute');
+                const workspace = await renderHook(() => ({
+                    workspace: useWorkspaceState({
+                        initialTab: { id: 'opened', target: { kind: 'session', params: { id: 'opened', serverId: home.id } }, pinned: false, preview: true },
+                        windowId: 'pending-inventory',
+                    }),
+                    route: useHydrateSessionForRoute('opened', 'FX88', { serverId: home.id, hydrateMessages: false }),
+                }));
+                expect(workspace.getCurrent().workspace.isReady).toBe(true);
+                await vi.waitFor(() => expect(workspace.getCurrent().route.kind).toBe('available'));
+                expect(storage.getState().sessions.opened).toMatchObject({ id: 'opened', serverId: home.id, encryptionMode: 'plain' });
+                await workspace.unmount();
+            }
             console.info(`bootstrap-readiness supersede=${supersede} readyMs=${Math.round(readyAt!)} beforePeripheral=${readyBeforePeripheral} snapshotBurst=${snapshotBurst}`);
             expect(sessionsRead).toBe(!failSettings);
             if (supersede) {
@@ -139,7 +239,8 @@ describe('Sync workspace readiness', () => {
             }
             expect(readyBeforePeripheral).toBe(true);
             if (failSessions || failSettings) {
-                expect(readyError).toMatchObject({ retryable: true });
+                if (failSettings) expect(readyError).toMatchObject({ retryable: true });
+                else await vi.waitFor(() => expect(sawRetryableError).toBe(true));
                 expect(retrySettled).toBe(false);
             }
             if (failSettings) {
@@ -152,6 +253,7 @@ describe('Sync workspace readiness', () => {
             }
         } finally {
             clearTimeout(release);
+            sessionSnapshot.resolve();
             peripheral.resolve();
             retry.resolve();
             oldProfile.resolve();
@@ -255,8 +357,10 @@ describe('Sync workspace readiness', () => {
             editor = await renderScreen(React.createElement(SessionDraftHydrationBoundary, {
                 addresses: [{ kind: 'newSession', draftId: '00000000-0000-4000-8000-000000000903' }],
                 children: React.createElement('EditableDraftProbe'),
-                ...{ fallback: React.createElement(GlassSurface, { testID: 'new-session-draft-loading', finishRole: 'composer' },
-                    React.createElement(ItemLoadStateRows, { state: { kind: 'loading' }, rows: 2, lines: 1 })) },
+                ...{ fallback: React.createElement(GlassSurface, {
+                    testID: 'new-session-draft-loading', finishRole: 'composer',
+                    children: React.createElement(ItemLoadStateRows, { state: { kind: 'loading' }, rows: 2, lines: 1 }),
+                }) },
             }));
             await vi.waitFor(() => expect(observedPaths.has('/v2/account/session-drafts/read')).toBe(true));
             await exactRead.promise;

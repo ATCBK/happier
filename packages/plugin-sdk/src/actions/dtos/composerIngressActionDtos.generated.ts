@@ -50,12 +50,12 @@ export type ComposerIngressActionInputById = {
                 kind: 'attachment.add';
                 attachmentLocalId: string;
                 value: {
-                    key: unknown;
+                    key: string;
                     value: unknown;
                     presentation: {
-                        label: unknown;
-                        description?: unknown;
-                        icon?: 'file' | 'error' | 'check' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'terminal' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                        label: string;
+                        description?: string | undefined;
+                        icon?: 'file' | 'error' | 'check' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'terminal' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                     };
                 };
@@ -85,9 +85,9 @@ export type ComposerIngressActionInputById = {
                 update: {
                     value: unknown;
                     presentation?: {
-                        label: unknown;
-                        description?: unknown;
-                        icon?: 'file' | 'error' | 'check' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'terminal' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | undefined;
+                        label: string;
+                        description?: string | undefined;
+                        icon?: 'file' | 'error' | 'check' | 'action' | 'browser' | 'copy' | 'globe' | 'info' | 'preview' | 'refresh' | 'settings' | 'terminal' | 'warning' | 'add' | 'back' | 'close' | 'external' | 'forward' | 'more' | 'search' | 'change-open' | 'change-complete' | 'issue' | 'bug' | 'pin' | 'conversations' | 'waveform' | 'desktop' | 'pause' | 'failure' | 'unavailable' | 'denied' | 'review' | 'attention' | 'escalating' | 'merge-ready' | 'mention' | 'assigned' | 'new' | 'waiting' | 'list' | 'board' | 'filter' | undefined;
                         tone?: 'success' | 'info' | 'warning' | 'neutral' | 'danger' | undefined;
                     } | undefined;
                 };
@@ -103,6 +103,9 @@ export type ComposerIngressActionInputById = {
         ref: {
             kind: 'session';
             sessionId: string;
+        } | {
+            kind: 'discussion';
+            discussionId: string;
         } | {
             kind: 'newSession';
             instanceId: string;
@@ -137,6 +140,9 @@ export type ComposerIngressActionInputById = {
         ref: {
             kind: 'session';
             sessionId: string;
+        } | {
+            kind: 'discussion';
+            discussionId: string;
         } | {
             kind: 'newSession';
             instanceId: string;

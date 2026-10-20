@@ -1,4 +1,6 @@
-import { canonicalAbsolutePathsEqual } from '@/utils/path/expandHomeDirPath';
+import { z } from 'zod/mini';
+import { dirname } from 'node:path';
+import { canonicalAbsolutePathsEqual, resolveCanonicalAbsolutePath } from '@/utils/path/expandHomeDirPath';
 import { getHappierTempRoot } from '@happier-dev/cli-common/tempDirs';
 import { MachineStoragePolicyV1Schema, StorageItemV1Schema, type StorageItemV1, type StorageReasonV1 } from '@happier-dev/protocol/storage/storageV1';
 import { contains } from './categories/filesystem';
@@ -16,7 +18,7 @@ import type { StorageCategoryAdapter, StorageCategoryCatalogDeps, StorageCategor
 import { bindFilesystemItem, filesystemAdapterForEntry } from './categories/filesystemAdapters';
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { HappierStorageCategoryIdV1 } from '@happier-dev/protocol/storage/storageV1';
-import { physicalStoragePathWithoutFollowingLeaf } from './storagePath';
+import { createStoragePathComparator, physicalStoragePathWithoutFollowingLeaf } from './storagePath';
 import { readStorageWorktrees } from '@/daemon/resources/readStorageWorktrees';
 export type { StorageCategoryAdapter, StorageCategoryCatalogDeps, StorageCategoryItem, StorageProjectFacts, StorageCategoryDiscoverySnapshot } from './categories/types';
 
@@ -29,7 +31,7 @@ const UNAVAILABLE_PROJECT_FACTS: StorageProjectFacts = { status: 'unavailable' }
 
 /** Private custody/fingerprint facts never become Machine RPC presentation fields. */
 export function publicStorageItem(item: StorageItemV1): StorageItemV1 {
-    return StorageItemV1Schema.strip().parse(item);
+    return z.object(StorageItemV1Schema.shape).parse(item);
 }
 
 /** Containers inherit their owned descendants' facts through the same catalog decision. */
@@ -62,9 +64,12 @@ export function createStorageCategoryCatalog(deps: StorageCategoryCatalogDeps) {
         const scannedWorktrees = missingPaths.length ? await readStorageWorktrees({ cwds: [], candidatePaths: missingPaths,
             knownRoots: worktrees.map(worktree => worktree.path),
             happyHomeDir: deps.happyHomeDir, registry: deps.scmRegistry, trashRoots: deps.trashRoots?.() }) : [];
-        return { deps, now, unusedBefore: now - (deps.readPolicy?.().suggestUnusedAfterDays ?? DEFAULT_UNUSED_AFTER_DAYS) * DAY_MS,
+        return { deps, now, pathComparator: createStoragePathComparator(),
+            unusedBefore: now - (deps.readPolicy?.().suggestUnusedAfterDays ?? DEFAULT_UNUSED_AFTER_DAYS) * DAY_MS,
             sessions: deps.readTrackedSessions?.() ?? [], allocations, modelPacks, recordings, temporaryFacts,
-            isolationFacts, inUse, projects: projectFacts.projects ?? [],
+            // Process descendants repeat cwd/executable facts. Keep one exact
+            // fact per read before every category performs its overlap checks.
+            isolationFacts, inUse: { ...inUse, paths: [...new Set(inUse.paths)] }, projects: projectFacts.projects ?? [],
             projectsAvailable: projectFacts.status === 'ready',
             worktrees: [...new Map([...worktrees, ...scannedWorktrees].map(worktree => [worktree.path, worktree])).values()], discoveryIssues: [] };
     };
@@ -76,8 +81,39 @@ export function createStorageCategoryCatalog(deps: StorageCategoryCatalogDeps) {
             if (!byPath.has(item.path) || item.categoryId === 'recordings') byPath.set(item.path, item);
         }
         const items = [...byPath.values()];
-        return { items: items.map(item => ({ ...item, ...foldStorageDescendantVerdicts(item,
-            items.filter(child => child.path !== item.path && contains(item.path, child.path))) })),
+        // Catalog paths come from this machine's filesystem. Normalize each once,
+        // then visit its ancestors instead of comparing every pair of inventory
+        // rows (hundreds of retained logs otherwise block the daemon for seconds).
+        const paths = new Map(items.map(item => [item, resolveCanonicalAbsolutePath(item.path)?.comparisonKey]));
+        const containers = new Map<string, StorageCategoryItem[]>();
+        for (const item of items) {
+            const path = paths.get(item);
+            if (path === undefined || item.verdict === 'forbidden') continue;
+            const aliases = containers.get(path) ?? [];
+            aliases.push(item);
+            containers.set(path, aliases);
+        }
+        const descendants = new Map<StorageCategoryItem, StorageCategoryItem[]>();
+        for (const child of items) {
+            if (child.verdict !== 'keep' && child.verdict !== 'check' && child.verdict !== 'forbidden') continue;
+            let path = paths.get(child);
+            if (path === undefined) continue;
+            while (true) {
+                for (const container of containers.get(path) ?? []) {
+                    if (container.path === child.path) continue;
+                    const children = descendants.get(container) ?? [];
+                    children.push(child);
+                    descendants.set(container, children);
+                }
+                const parent = dirname(path);
+                if (parent === path) break;
+                path = parent;
+            }
+        }
+        return { items: items.map(item => {
+            const children = descendants.get(item) ?? [];
+            return children.length ? { ...item, ownVerdict: item.ownVerdict ?? item, ...foldStorageDescendantVerdicts(item, children) } : item;
+        }),
             incompleteCategoryIds: facts.projectsAvailable ? [] : ['worktrees', 'sessionFolders'] };
     }
     const catalog = {

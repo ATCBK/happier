@@ -39,6 +39,7 @@ describe('approved directory consent replay authority', () => {
             accountId: 'account-a', machineId: 'machine-a', serverId: 'home-a',
             resolveCurrentMachineExecutionOriginContext: async () => ({ machineId: 'machine-a', serverIdentityId: 'srv_home_a' }),
             resolveTarget: async () => { throw new Error('account_request_has_no_runtime_target'); },
+            isAccountCurrent: async () => true,
             listAccountApiTokens: async () => ({ tokens: [] }),
         });
         if (request.v !== 2) throw new Error('approval_v2_fixture_required');
@@ -98,6 +99,7 @@ describe('approved directory consent replay authority', () => {
                 resolveTarget: async ({ target, currentMachineId }) => target?.kind === 'machine'
                     && target.machineId === currentMachineId ? target
                     : target?.kind === 'session' && target.sessionId === 'session-a' ? target : null,
+                isAccountCurrent: async () => true,
                 listAccountApiTokens: async () => ({ tokens: [] }),
             }),
         });

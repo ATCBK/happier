@@ -1,8 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { DaemonAgentInstallStartResponseSchema, DaemonAgentInstallReadResponseSchema } from '@happier-dev/protocol/daemon/agent-install-jobs';
-import type { AgentInstallJobOutcome } from '@happier-dev/protocol/daemon/agent-install-jobs';
+import type {
+  AgentInstallJobOutcome,
+  DaemonAgentInstallReadResponse,
+  DaemonAgentInstallStartResponse,
+} from '@happier-dev/protocol/daemon/agent-install-jobs';
 import { REGISTRY_ACTION_OUTPUT_SCHEMAS_V1, type RegistryItemV1 } from '@happier-dev/protocol/registries';
 import { resolveAcpPlatformFitV1 } from '@happier-dev/protocol/acp/catalog/registry/acpPlatformFitV1';
 import { isMachineReachableV1 } from '@happier-dev/protocol/machines/machineReachabilityV1';
@@ -15,7 +19,7 @@ import { configuration } from '@/configuration';
 import { readSettings, readStoredCredentials, readStoredCredentialsForServerId, sameStoredCredentials } from '@/persistence';
 import { getServerProfile } from '@/server/serverProfiles';
 import { resolveMachineIdForServerFromSettings } from '@/daemon/resolveMachineIdForServerFromSettings';
-import { normalizeServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { normalizeServerHttpBaseUrl, resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { findCatalogEntry } from '@/agent/catalog/registry';
 import { argvBeforeOptionTerminator } from '@/cli/commands/shared/argvFlags';
 import { printJsonEnvelope } from '@/cli/output/jsonEnvelope';
@@ -27,18 +31,36 @@ import { runCompiledActionCliCommand, stripTransportTokens, type ActionCliExecut
 export type AgentCliInstallOutcome = Readonly<{ agentId: string; jobId: string; outcome: AgentInstallJobOutcome }>;
 type AgentCliOptions = Readonly<{ argv: readonly string[]; signal?: AbortSignal; actionExecutionDeps?: Partial<ActionCliExecutionDeps>;
   consumeInstallOutcome?: (receipt: AgentCliInstallOutcome) => boolean | Promise<boolean> }>;
+type InstallStartPayload = Omit<Extract<DaemonAgentInstallStartResponse, { ok: true }>, 'ok'>;
+type InstallReadPayload = Omit<Extract<DaemonAgentInstallReadResponse, { ok: true }>, 'ok'>;
+
 // The compiled CLI success adapter removes the transport's ok:true envelope.
-const InstallStartPayloadSchema = DaemonAgentInstallStartResponseSchema.options[0].omit({ ok: true });
-const InstallReadPayloadSchema = DaemonAgentInstallReadResponseSchema.options[0].omit({ ok: true });
+// Restore it before parsing so the protocol schema remains the single owner of
+// the response contract; lazy Mini schemas do not expose union internals.
+function parseInstallStartPayload(value: unknown): InstallStartPayload {
+  const record = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const response = DaemonAgentInstallStartResponseSchema.parse({ ...record, ok: true });
+  if (!response.ok) throw new Error(response.error);
+  const { ok: _ok, ...payload } = response;
+  return payload;
+}
+
+function parseInstallReadPayload(value: unknown): InstallReadPayload {
+  const record = value !== null && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const response = DaemonAgentInstallReadResponseSchema.parse({ ...record, ok: true });
+  if (!response.ok) throw new Error(response.error);
+  const { ok: _ok, ...payload } = response;
+  return payload;
+}
 
 // This reads the existing Machine list projection; extra presentation fields
 // carry no targeting authority and never enter install inputs.
-const InstallMachineListSchema = z.object({ items: z.array(z.object({ id: z.string().min(1),
-  active: z.boolean(), activeAt: z.number().nullable().optional(), revokedAt: z.number().nullable(),
-  replacedByMachineId: z.string().nullable(), kind: z.enum(['persistent', 'ephemeral_session_runner']),
-  access: z.object({ accessState: z.string() }).passthrough().optional(),
-  platform: z.string().nullable().optional(), arch: z.string().nullable().optional(),
-}).passthrough()) }).passthrough();
+const InstallMachineListSchema = z.looseObject({ items: z.array(z.looseObject({ id: z.string().check(z.minLength(1)),
+  active: z.boolean(), activeAt: z.optional(z.nullable(z.number())), revokedAt: z.nullable(z.number()),
+  replacedByMachineId: z.nullable(z.string()), kind: z.enum(['persistent', 'ephemeral_session_runner']),
+  access: z.optional(z.looseObject({ accessState: z.string() })),
+  platform: z.optional(z.nullable(z.string())), arch: z.optional(z.nullable(z.string())),
+})) });
 
 /** Names, local-machine defaults and job observation are terminal adaptation only. */
 export async function tryHandleAgentCliCommand(params: AgentCliOptions): Promise<boolean> {
@@ -80,18 +102,19 @@ export async function tryHandleAgentCliCommand(params: AgentCliOptions): Promise
     readCredentialsForServerIdFn: deps?.readCredentialsForServerIdFn ?? readStoredCredentialsForServerId,
     getServerProfileFn: deps?.getServerProfileFn ?? getServerProfile,
   } });
-  if (!captured.credentials) {
+  const capturedCredentials = captured.credentials;
+  if (!capturedCredentials) {
     await runCompiledActionCliCommand({ command, argv, signal: params.signal, deps });
     return true;
   }
   const capturedHomeId = captured.fixedServer?.serverId ?? configuration.activeServerId;
-  const capturedHomeUrl = normalizeServerHttpBaseUrl(captured.fixedServer?.serverApiUrl ?? configuration.apiServerUrl);
+  const capturedHomeUrl = normalizeServerHttpBaseUrl(captured.fixedServer?.serverApiUrl ?? resolveServerHttpBaseUrl());
   const createExecutor = deps?.createExecutorFn ?? (async input => (
     await import('@/session/actions/createCliActionExecutorFromCredentials')).createCliActionExecutorFromCredentials(input));
   const scopedDeps: Partial<ActionCliExecutionDeps> = { ...deps, createExecutorFn: input => {
-    if (!sameStoredCredentials(captured.credentials, input.credentials)
+    if (!sameStoredCredentials(capturedCredentials, input.credentials)
       || (input.serverId ?? configuration.activeServerId) !== capturedHomeId
-      || normalizeServerHttpBaseUrl(input.serverApiUrl ?? configuration.apiServerUrl) !== capturedHomeUrl
+      || normalizeServerHttpBaseUrl(input.serverApiUrl ?? resolveServerHttpBaseUrl()) !== capturedHomeUrl
       || input.serverIdentityId !== captured.serverIdentityId) {
       throw Object.assign(new Error('Agent Account or Home is no longer current.'), { code: 'client_refused' });
     }
@@ -221,7 +244,7 @@ export async function tryHandleAgentCliCommand(params: AgentCliOptions): Promise
   await runCompiledActionCliCommand({ command: finalCommand, argv: [...finalCommand.path, '--input-json', JSON.stringify(input), ...transport, ...(json ? ['--json'] : [])],
     signal: params.signal, deps: scopedDeps,
     ...(isStart ? { consumeSuccess: async (payload: unknown) => {
-      const started = InstallStartPayloadSchema.parse(payload);
+      const started = parseInstallStartPayload(payload);
       const status = findCompiledActionCliCommand(['agents', 'install', 'status'], commands);
       const cancel = findCompiledActionCliCommand(['agents', 'install', 'cancel'], commands);
       if (!status || !cancel) throw new Error('Agent install observation Actions are unavailable.');
@@ -240,9 +263,9 @@ export async function tryHandleAgentCliCommand(params: AgentCliOptions): Promise
               deps: scopedDeps, consumeSuccess: () => { acknowledged = true; return true; } });
             if (!acknowledged) return true;
           }
-          let read: ReturnType<typeof InstallReadPayloadSchema.parse> | undefined;
+          let read: InstallReadPayload | undefined;
           await runCompiledActionCliCommand({ command: status, argv: [...status.path, '--input-json', JSON.stringify({ machineId: input.machineId, jobId: started.jobId, cursor }), ...transport, ...(json ? ['--json'] : [])],
-            deps: scopedDeps, consumeSuccess: value => { read = InstallReadPayloadSchema.parse(value); return true; } });
+            deps: scopedDeps, consumeSuccess: value => { read = parseInstallReadPayload(value); return true; } });
           if (!read) return true;
           cursor = read.nextCursor;
           if (!json) for (const event of read.events) process.stderr.write(event.t === 'step' ? `${event.label}: ${event.state}\n`

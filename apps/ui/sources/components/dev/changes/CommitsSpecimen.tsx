@@ -23,7 +23,7 @@ import { GitChangesTree } from '@/components/sessions/panes/git/display/GitChang
 import { resolveScmChangePathTag } from '@/scm/scmChangePathTag';
 import { t } from '@/text';
 
-import type { ScmDiffSummaryFailurePresentation } from '@/sync/domains/scm/diffSummary/state';
+import { SCM_DIFF_SUMMARY_GENERIC_FAILURE, type ScmDiffSummaryFailurePresentation } from '@/sync/domains/scm/diffSummary/state';
 import { ScmDiffSummaryStartOptions } from '@/components/sessions/files/comparison/ScmDiffSummaryStartOptions';
 import { ScmDiffSummaryFailureNotice } from '@/components/sessions/files/comparison/ScmDiffSummaryFailureNotice';
 import { SPECIMEN_COMPARISON, SPECIMEN_START_FAILURES } from './walkthroughSpecimenFixture';
@@ -131,7 +131,7 @@ function CommitsFrame(props: Readonly<{ proposal: CommitProposal; phone: boolean
                 onSelectView={noop} onBack={noop} onStartReview={noop} /> : <CommitsBar />}
             <CommitProposalView proposal={props.proposal} phase="ready" branch="v0.3" modelLabel="Opus 5.5"
                 layout={props.phone ? 'phone' : 'wide'} actions={props.actions} active={false}
-                failureNotice={props.failure ? <ScmDiffSummaryFailureNotice testID="commit-proposal" failure={props.failure} phone={props.phone}
+                failureNotice={props.failure ? <ScmDiffSummaryFailureNotice testID="commit-proposal" failure={props.failure}
                     onChooseModel={noop} onEnableExplain={noop} onRetry={noop} /> : undefined} />
         </View>
     );
@@ -287,6 +287,8 @@ export const COMMITS_SPECIMEN_FRAMES: readonly CommitsSpecimenFrame[] = [
     { id: 'C5r', title: 'Empty · refused: outdated machine', render: (phone) => <StartFrame phone={phone} failure={SPECIMEN_START_FAILURES.outdated} /> },
     { id: 'C5e', title: 'Empty · Explain changes is off', render: (phone) => <StartFrame phone={phone} failure={SPECIMEN_START_FAILURES.explainOff} disabled /> },
     { id: 'C6', title: 'Proposal kept · regeneration refused: model unavailable', render: (phone) => <CommitsFrame proposal={EDITING} phone={phone} actions={EDIT_ACTIONS} failure={SPECIMEN_START_FAILURES.model} /> },
+    { id: 'C5g', title: 'Empty · writing stopped', render: (phone) => <StartFrame phone={phone} failure={SCM_DIFF_SUMMARY_GENERIC_FAILURE} /> },
+    { id: 'C6g', title: 'Proposal kept · writing stopped', render: (phone) => <CommitsFrame proposal={EDITING} phone={phone} actions={EDIT_ACTIONS} failure={SCM_DIFF_SUMMARY_GENERIC_FAILURE} /> },
     { id: 'C4', title: 'WT4-C4 · every divergence', render: (phone) => (phone ? <CommitsFrame proposal={HOOK_CHANGED} phone actions={RUN_ACTIONS} /> : <Divergences />) },
 ];
 

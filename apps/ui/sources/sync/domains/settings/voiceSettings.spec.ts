@@ -12,6 +12,7 @@ import {
 import { DEFAULT_ELEVENLABS_VOICE_ID } from '../../../../../../packages/plugins/elevenlabs/src/protocol/voice/index';
 import { settingsParse } from './settings';
 import { resolveVoiceTurnStreamReadConfig } from '@/voice/agent/resolveVoiceTurnStreamReadConfig';
+import { getDefaultModelPackId } from '@happier-dev/protocol/voice/modelPacks/catalog';
 
 describe('voiceSettings', () => {
   it('preserves configured Voice retention, replay, segmentation and stream preferences without local ceilings', () => {
@@ -945,7 +946,7 @@ describe('voiceSettings', () => {
       voiceSettingsDefaults,
       'happier.voice.openai-compat/stt',
     )).toMatchObject({ model: 'whisper-1' });
-    expect(stt?.localNeural?.assetId).toBe('sherpa-onnx-streaming-zipformer-en-20M-2023-02-17');
+    expect(stt?.localNeural?.assetId).toBe(getDefaultModelPackId('stt_sherpa'));
     expect(stt?.localNeural?.execution).toBe('auto');
   });
 

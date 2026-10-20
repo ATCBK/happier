@@ -675,6 +675,11 @@ describe('browser context protocol contracts', () => {
     // Defaulted truncation flags.
     expect(parsed.visibleTextTruncated).toBe(false);
     expect(parsed.interactiveElementsTruncated).toBe(false);
+    const withFieldValue = { ...parsed, axNodes: [{ role: 'textbox', name: 'Notes', value: 'QA58' }] };
+    expect(mod.BrowserContextSnapshotV1Schema.safeParse(withFieldValue).success).toBe(true);
+    expect(mod.BrowserContextSnapshotV1Schema.safeParse({ ...withFieldValue,
+      axNodes: [{ role: 'textbox', value: 'x'.repeat(257) }],
+    }).success).toBe(false);
   });
 
   it('rejects a combined snapshot that smuggles a sensitive key (egress-safety net)', async () => {

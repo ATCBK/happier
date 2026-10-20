@@ -1,24 +1,31 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import type { Metadata } from '@happier-dev/session-core/state';
-
-vi.mock('@/text', async () => {
-    const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-    return createTextModuleMock({
-        translate: (key: string) => key,
-        translateLoose: (key: string) => key,
-    });
-});
 
 function createMetadata(overrides: Partial<Metadata> = {}): Metadata {
   return {
     path: '/tmp',
     host: 'h',
     ...overrides,
-  } as Metadata;
+  };
 }
 
 describe('sessionModeControl', () => {
+  it('does not reinterpret a different Agent mode catalog as an explicit override before catalog arrival', async () => {
+    const { computeSessionModePickerControl } = await import('./sessionModeControl');
+    const metadata = createMetadata({
+      sessionModesV1: {
+        v: 1, agentId: 'opencode', updatedAt: 2, currentModeId: 'build',
+        availableModes: [{ id: 'build', name: 'Build' }],
+      },
+      sessionModeOverrideV1: { v: 1, updatedAt: 1, modeId: 'build' },
+    });
+    expect(computeSessionModePickerControl({ agentId: 'codebuddy', metadata })).toBeNull();
+    const ownStaticModes = computeSessionModePickerControl({ agentId: 'claude', metadata });
+    expect(ownStaticModes).toMatchObject({ currentModeId: 'default', effectiveModeId: 'default',
+      requestedModeId: null, isExplicitOverride: false });
+    expect(ownStaticModes?.options.map(mode => mode.id)).toContain('plan');
+  });
   it.each(['antigravity', 'acp:fixture', 'opencode'])('infers legacy Plan only when %s advertises it, while preserving explicit intent', async (agentId) => {
     const { computeSessionModePickerControl } = await import('./sessionModeControl');
     const metadata = createMetadata({
@@ -158,7 +165,6 @@ describe('sessionModeControl', () => {
     expect(res).not.toBeNull();
     expect(res?.currentModeId).toBe('default');
     expect(res?.effectiveModeId).toBe('default');
-    // Names are translated via mocked t() above.
     expect(res?.options.map((o) => o.id)).toContain('plan');
   });
 

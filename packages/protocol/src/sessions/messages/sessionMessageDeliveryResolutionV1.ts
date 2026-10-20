@@ -3,13 +3,16 @@ import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../../json/storedReadSchema.js';
 
 /** Witnessed host admission; requested delivery intent is not accepted delivery evidence. */
+export const SessionMessageAcceptedTurnV1Schema = lazyZodSchema(() => z.strictObject({
+  kind: z.enum(['newTurn', 'followUp', 'steer']),
+  turnId: z.string().check(z.refine((value) => value.trim().length > 0)),
+}));
+export type SessionMessageAcceptedTurnV1 = z.infer<typeof SessionMessageAcceptedTurnV1Schema>;
+
 export const SessionMessageAcceptedDeliveryFactsV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   acceptedAtMs: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
-  delivery: z.strictObject({
-    kind: z.enum(['newTurn', 'followUp', 'steer']),
-    turnId: z.string().check(z.refine((value) => value.trim().length > 0)),
-  }),
+  delivery: SessionMessageAcceptedTurnV1Schema,
 }));
 export const SessionMessageAcceptedDeliveryFactsV1StoredSchema = createStoredReadSchema(SessionMessageAcceptedDeliveryFactsV1Schema);
 

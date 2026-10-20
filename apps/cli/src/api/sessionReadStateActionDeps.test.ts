@@ -100,4 +100,23 @@ describe('Session read-state HTTP Action adapter', () => {
       error: 'present_user_required',
     });
   });
+
+  it.each([
+    { error: 'credential_scope_denied', details: { sessionId: 'private' } },
+    { error: 'unknown_denial' },
+  ])('keeps malformed or unknown 403s closed', async (payload) => {
+    app.post('/v2/sessions/:sessionId/read-state', async (_request, reply) => reply.code(403).send(payload));
+    const deps = createSessionReadStateActionDeps({ token: 'token', serverId: 'home-a', serverHttpBaseUrl: 'http://read-state.test' });
+    await expect(deps.sessionReadStateAction!({ actionId: 'session.read_state.set',
+      input: { sessionId: 'session-1', state: 'read' }, context: {}, serverId: 'home-a',
+    })).rejects.toMatchObject({ response: { status: 403 } });
+  });
+
+  it('preserves a credential scope refusal instead of requesting authentication', async () => {
+    app.post('/v2/sessions/:sessionId/read-state', async (_request, reply) => reply.code(403).send({ error: 'credential_scope_denied' }));
+    const deps = createSessionReadStateActionDeps({ token: 'token', serverId: 'home-a', serverHttpBaseUrl: 'http://read-state.test' });
+    await expect(deps.sessionReadStateAction!({ actionId: 'session.read_state.set',
+      input: { sessionId: 'session-1', state: 'read' }, context: {}, serverId: 'home-a',
+    })).resolves.toEqual({ ok: false, errorCode: 'credential_scope_denied', error: 'credential_scope_denied' });
+  });
 });

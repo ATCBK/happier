@@ -28,6 +28,7 @@ import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 
 import { LocalServiceActionFailureNotice } from './LocalServiceActionFailureNotice';
 import { useLocalServiceActionRunner } from './localServiceActionOutcome';
+import type { LocalServiceActionInvocationOptions } from './localServiceActionAdmission';
 import {
     copyLocalServiceAddress,
     formatLocalServiceRowAddress,
@@ -44,13 +45,14 @@ import type { LocalServicePublicPreviewActions } from './publicPreviewActions';
 import { ServiceMark } from './ServiceMark';
 import { ServiceStatusDot } from './ServiceStatusDot';
 import type { LocalServiceCapabilityDisabledReasons } from './useLocalServicePublicPreviewFeature';
+import { useProjectServicePlacementObservation } from '@/components/projects/detail/services/projectServicePlacementObservation';
 
 export type ServiceRowOpenHandler = (target: LocalServiceLaunchTarget) => ServicesOpenInBrowserResult | void | Promise<unknown>;
 export type ServiceRowStartHandler = (target: LocalServiceLaunchTarget) => void | Promise<unknown>;
-export type ServiceRowTerminateHandler = (target: LocalServiceLaunchTarget) => void | Promise<unknown>;
+export type ServiceRowTerminateHandler = (target: LocalServiceLaunchTarget, options?: LocalServiceActionInvocationOptions) => void | Promise<unknown>;
 export type ServiceRowForgetHandler = (target: LocalServiceLaunchTarget) => void | Promise<unknown>;
 /** Stop or Restart a managed lifetime through its exact occurrence; the result, not the press, settles the row. */
-export type ServiceRowManagedControlHandler = (target: LocalServiceLaunchTarget) => void | Promise<unknown>;
+export type ServiceRowManagedControlHandler = (target: LocalServiceLaunchTarget, options?: LocalServiceActionInvocationOptions) => void | Promise<unknown>;
 export type ServiceRowCopyUrlHandler = (
     target: LocalServiceLaunchTarget,
     value: string,
@@ -168,6 +170,7 @@ function isInert(row: ServiceRow): boolean {
 /** The name, then the status in words beside its dot ("web ● Running"), as the lab draws it. */
 function ServiceRowTitle(props: Readonly<{
     row: ServiceRow;
+    operationText?: string | null;
     /** The machine stopped answering: the row shows what was last known, not a live status. */
     offline?: boolean;
     animationEnabled?: boolean;
@@ -175,20 +178,20 @@ function ServiceRowTitle(props: Readonly<{
 }>): React.ReactElement {
     const styles = stylesheet;
     const unsettled = !props.offline && hasUnsettledLocalServiceCustody(props.row);
-    const statusLabel = props.offline
+    const statusLabel = props.operationText ?? (props.offline
         ? t('localServices.rowStatus.lastKnown')
-        : unsettled ? t('localServices.rowStatus.unknown') : t(STATUS_LABEL_KEYS[props.row.status]);
-    const ready = (props.row.scope === 'suggestion' && props.row.status === 'stopped') || isNotStarted(props.row);
+        : unsettled ? t('localServices.rowStatus.unknown') : t(STATUS_LABEL_KEYS[props.row.status]));
+    const ready = !props.operationText && ((props.row.scope === 'suggestion' && props.row.status === 'stopped') || isNotStarted(props.row));
     return (
         <View style={styles.titleRow}>
             <Text style={[styles.title, isInert(props.row) ? styles.titleInert : null]} numberOfLines={1}>{props.row.title}</Text>
             {/* Unnamed: the status is the word beside it, so it is announced once. */}
             {!ready ? <ServiceStatusDot
-                status={props.offline ? 'stale' : props.row.status}
+                status={props.operationText || props.offline ? 'stale' : props.row.status}
                 animationEnabled={props.animationEnabled}
                 testID={`${props.testID}-dot`}
             /> : null}
-            {!ready ? <Text testID={`${props.testID}-status-${props.row.status}`} style={[styles.statusLabel, unsettled ? styles.statusLabelAttention : null]} numberOfLines={1}>
+            {!ready ? <Text testID={`${props.testID}-status-${props.operationText ? 'operation' : props.row.status}`} style={[styles.statusLabel, unsettled ? styles.statusLabelAttention : null]} numberOfLines={1}>
                 {statusLabel}
             </Text> : null}
         </View>
@@ -201,7 +204,7 @@ function ServiceRowTitle(props: Readonly<{
  * The address is text here; copying it is the expansion's job, so a collapsed row carries no
  * controls of its own. Lab `s-services`: `localhost:3005 · [project.json] on devbox`.
  */
-function resolveRowFacts(row: ServiceRow, machineName: string | null, startedByName: string | null): Readonly<{
+function resolveRowFacts(row: ServiceRow, machineName: string | null, startedByName: string | null, unavailableMachineName: string | null): Readonly<{
     lead: readonly string[];
     tail: readonly string[];
     /** The tail is the reason the row cannot act (lab `db`: "Docker isn't available on devbox"). */
@@ -211,7 +214,7 @@ function resolveRowFacts(row: ServiceRow, machineName: string | null, startedByN
     sourceInline?: boolean;
 }> {
     const reason = row.status !== 'loading' && row.reasonCode
-        ? resolveReasonCopy({ reasonCode: row.reasonCode, kind: 'localServiceLauncher' })
+        ? resolveReasonCopy({ reasonCode: row.reasonCode, kind: 'localServiceLauncher', machineName: unavailableMachineName ?? undefined })
         : null;
     // Someone else's service names who started it (lab STATES 12); the viewer's own needs no byline.
     const on = startedByName
@@ -259,11 +262,12 @@ function ServiceRowFacts(props: Readonly<{
     row: ServiceRow;
     machineName: string | null;
     startedByName: string | null;
+    unavailableMachineName: string | null;
     testID: string;
 }>): React.ReactElement {
     const styles = stylesheet;
     const { row } = props;
-    const facts = resolveRowFacts(row, props.machineName, props.startedByName);
+    const facts = resolveRowFacts(row, props.machineName, props.startedByName, props.unavailableMachineName);
     const badge = facts.sourceInline ? null : row.sourceBadge ?? null;
     const lead = facts.lead.join(' · ');
     const tail = facts.tail.join(' · ');
@@ -363,6 +367,7 @@ export function ServiceRowView(props: Readonly<{
     findRunningOpenTarget?: (port: number, failedTarget: LocalServiceLaunchTarget) => LocalServiceLaunchTarget | null;
     /** The occurrence's actual Machine, independent of the pane's Source. */
     machineName?: string | null;
+    unavailableMachineName?: string | null;
     /** The machine is unreachable: every fact on the row is last known. */
     offline?: boolean;
     /**
@@ -395,19 +400,25 @@ export function ServiceRowView(props: Readonly<{
 }>): React.ReactElement {
     const styles = stylesheet;
     const { row } = props;
+    const declaration = row.target.declaration;
+    const relocation = useProjectServicePlacementObservation(declaration?.selection.kind === 'manifest' ? declaration.selection.name : '',
+        undefined, { declarationWorkspaceRefId: declaration?.workspaceRefId, absent: row.status === 'stopped' });
+    const recoverable = relocation.stoppedBeforeStart;
+    const relocating = relocation.relocating;
+    const operationText = recoverable ? t('localServices.rowStatus.stopped') : relocating ? relocation.progressText : null;
     // A refused action reads in place under its own row, never in a dialog over the page.
     const runner = useLocalServiceActionRunner({ presentation: 'inline' });
     const primary = row.primaryAction;
     // The one decision of what this entry offers, shared with the Processes port menu (plan 30 RU-3).
     const offered = resolveLocalServiceEntryActions(row, props);
-    const canOpen = offered.open !== null;
-    const canStart = offered.start !== null;
+    const canOpen = !relocating && offered.open !== null;
+    const canStart = !relocating && offered.start !== null;
     const startLabel = t('localServices.actions.startA11y');
-    const canTerminate = offered.terminateDetected;
+    const canTerminate = !relocating && offered.terminateDetected;
     const canForget = offered.forget;
-    const canStop = offered.stopManaged;
-    const canRestart = offered.restartManaged;
-    const addressValue = offered.address;
+    const canStop = !relocating && offered.stopManaged;
+    const canRestart = !relocating && offered.restartManaged;
+    const addressValue = relocating ? null : offered.address;
 
     /**
      * Two pending ids for one row, because feedback belongs where the user acted.
@@ -431,12 +442,13 @@ export function ServiceRowView(props: Readonly<{
 
     const handleStart = React.useCallback(() => {
         if (primary?.kind !== 'start') return undefined;
+        if (recoverable) relocation.clear();
         return runner.run({
             id: inlinePendingId,
             failureTitle: t('localServices.actions.failureTitle.start', { service: row.title }),
             action: async () => props.onStartLauncherTarget?.(primary.target),
         });
-    }, [inlinePendingId, primary, props, row.title, runner]);
+    }, [inlinePendingId, primary, props, recoverable, relocation.clear, row.title, runner]);
 
     const handleTerminate = React.useCallback(() => {
         void (async () => {
@@ -554,7 +566,7 @@ export function ServiceRowView(props: Readonly<{
     const pending = runner.pendingId === menuPendingId;
     // A row that can only be started (a package script) or not acted on at all has nothing to
     // grow into: it stays a plain row, with ▶ as its one control.
-    const hasPublicLink = Boolean(props.publicPreviewState && props.publicPreviewActions)
+    const hasPublicLink = !relocating && Boolean(props.publicPreviewState && props.publicPreviewActions)
         && hasLocalServicePublicPreviewSurface(row.target);
     // A row grows only into what it has to show: its address, its link, where it runs (plan 32: Runs
     // on is reachable on every service, stopped or address-less). A live service with no address — a
@@ -568,8 +580,9 @@ export function ServiceRowView(props: Readonly<{
     const machineName = props.machineName ?? null;
     // While its own Start is in flight the row reads as Starting (lab STATES 1), then returns to what the feed says.
     const shown = runner.pendingId === inlinePendingId && primary?.kind === 'start' ? { ...row, status: 'starting' as const } : row;
-    const title = <ServiceRowTitle row={shown} offline={offline} animationEnabled={props.animationEnabled} testID={props.testID} />;
-    const subtitle = <ServiceRowFacts row={shown} machineName={machineName} startedByName={props.startedByName ?? null} testID={props.testID} />;
+    const title = <ServiceRowTitle row={shown} operationText={operationText} offline={offline} animationEnabled={props.animationEnabled} testID={props.testID} />;
+    const subtitle = relocating ? undefined : <ServiceRowFacts row={shown} machineName={machineName} startedByName={props.startedByName ?? null}
+        unavailableMachineName={props.unavailableMachineName ?? null} testID={props.testID} />;
     const identity = <ServiceMark row={row} testID={`${props.testID}-identity`} />;
     // One tap: a running row's signature action sits on the row itself, like ▶ on a row that can be
     // started (services lab O, H-UX F-8). Pressing the row still grows it into what you do less often.
@@ -616,7 +629,7 @@ export function ServiceRowView(props: Readonly<{
     const rowControl = openControl ?? startControl ?? (overflowOnRow ? overflowControl : null);
     // "Share a link" sits in the action line beside Copy address (services lab O); an issued link and
     // the reasons a link cannot be made are the public-preview block's below it.
-    const shareOffer = props.publicPreviewActions
+    const shareOffer = !relocating && props.publicPreviewActions
         ? resolveLocalServicePublicLinkOffer({
             state: props.publicPreviewState,
             launchTarget: row.target,
@@ -651,9 +664,9 @@ export function ServiceRowView(props: Readonly<{
             {actionBar}
             {props.placement}
             <LocalServicePublicPreviewControls
-                launchTargets={[row.target]}
-                state={props.publicPreviewState}
-                actions={props.publicPreviewActions}
+                launchTargets={relocating ? [] : [row.target]}
+                state={relocating ? null : props.publicPreviewState}
+                actions={relocating ? undefined : props.publicPreviewActions}
                 capabilityDisabledReasons={props.publicPreviewCapabilityDisabledReasons}
                 shareInActionLine
                 testID={`${props.testID}-public-preview`}

@@ -17,7 +17,7 @@ import { redactVoicePathLikeString } from '@/voice/shared/redactVoicePathLikeDat
 import {
     CURRENT_UI_CONTEXT_BOUNDED_INCOMPLETENESS_V1,
     CurrentUiContextSnapshotV1Schema,
-} from '@happier-dev/protocol/plugins/ui';
+} from '@happier-dev/protocol/plugins/ui/currentUiContext';
 import type {
     CurrentUiCommandDescriptorV1,
     CurrentUiContextSnapshotV1,
@@ -29,6 +29,14 @@ export type CurrentUiNavigation = CurrentUiContextSnapshotV1['navigation'];
 /** Trusted host-local state only; outward effects retain their ordinary Action owner. */
 export type CurrentUiContextHostCommand = Readonly<{
     kind: 'hostLocal';
+    /** Host-private Settings cancellation target; the public snapshot keeps only the opaque command id. */
+    voiceModelCancellation?: Readonly<{
+        packId: string;
+        execution: 'device' | 'daemon';
+        machineId: string | null;
+        account: ServerAccountScopeLifetime;
+        isCurrent(): boolean;
+    }>;
     invoke(input: Readonly<{ signal: AbortSignal }>): CurrentUiContextVoiceInvocationOutcome | Promise<CurrentUiContextVoiceInvocationOutcome>;
 }>;
 

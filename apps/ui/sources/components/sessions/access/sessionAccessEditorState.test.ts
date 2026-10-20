@@ -1,7 +1,7 @@
 import { describe,expect,it } from 'vitest';
 import type { SessionAccessGrantsListResponseV1 } from '@happier-dev/protocol';
 import {createSessionAccessEditorState,reduceSessionAccessEditorState} from './sessionAccessEditorState';
-const snapshot:SessionAccessGrantsListResponseV1={visibility:'self',owner:{kind:'account',accountId:'owner',firstName:'Owner',lastName:null,username:null,avatarUrl:null},primaryTeamId:null,grants:[],effectiveAccess:{v:1,level:'view',sources:[],capabilities:{readTranscript:true,submitAgentInput:false,editSessionRecords:false,approveRuntimePermissions:false,manageAccess:false,managePermissionDelegation:false,managePublicLink:false,archiveSession:false,renameSession:false,assignResponsibility:false,stopSession:false,deleteSession:false}}};
+const snapshot:SessionAccessGrantsListResponseV1={visibility:'self',owner:{kind:'account',accountId:'owner',name:'Owner',firstName:'Owner',lastName:null,username:null,avatarUrl:null},primaryTeamId:null,grants:[],effectiveAccess:{v:1,level:'view',sources:[],capabilities:{readTranscript:true,submitAgentInput:false,editSessionRecords:false,approveRuntimePermissions:false,manageAccess:false,managePermissionDelegation:false,managePublicLink:false,archiveSession:false,renameSession:false,assignResponsibility:false,stopSession:false,deleteSession:false}}};
 const managerSnapshot:SessionAccessGrantsListResponseV1={...snapshot,visibility:'complete',
  effectiveAccess:{...snapshot.effectiveAccess,level:'admin',
   capabilities:{...snapshot.effectiveAccess.capabilities,manageAccess:true}}};
@@ -30,14 +30,14 @@ describe('access acknowledged state',()=>{
   });
   state=reduceSessionAccessEditorState(state,{type:'snapshot',scopeKey:'a',snapshot:{...snapshot,visibility:'complete',grants:[{
    grant:{subject,accessLevel:'view',canApprovePermissions:false},
-   principal:{kind:'account',accountId:'recipient',firstName:null,lastName:null,username:'recipient',avatarUrl:null},
+   principal:{kind:'account',accountId:'recipient',name:null,firstName:null,lastName:null,username:'recipient',avatarUrl:null},
    allowedTransitions:{accessLevels:['view','edit','admin'],canChangePermissionDelegation:true,canRemove:true},
   }]}});
   expect(state.operations['account:recipient']?.kind).toBe('error');
 
   state=reduceSessionAccessEditorState(state,{type:'snapshot',scopeKey:'a',snapshot:{...snapshot,visibility:'complete',grants:[{
    grant:{subject,accessLevel:'edit',canApprovePermissions:false},
-   principal:{kind:'account',accountId:'recipient',firstName:null,lastName:null,username:'recipient',avatarUrl:null},
+   principal:{kind:'account',accountId:'recipient',name:null,firstName:null,lastName:null,username:'recipient',avatarUrl:null},
    allowedTransitions:{accessLevels:['view','edit','admin'],canChangePermissionDelegation:true,canRemove:true},
   }]}});
   expect(state.operations['account:recipient']).toBeUndefined();
@@ -46,7 +46,7 @@ describe('access acknowledged state',()=>{
   const subject={kind:'account' as const,accountId:'recipient'};
   const row={
    grant:{subject,accessLevel:'view' as const,canApprovePermissions:false},
-   principal:{kind:'account' as const,accountId:'recipient',firstName:null,lastName:null,username:'recipient',avatarUrl:null},
+   principal:{kind:'account' as const,accountId:'recipient',name:null,firstName:null,lastName:null,username:'recipient',avatarUrl:null},
    allowedTransitions:{accessLevels:['view' as const,'edit' as const,'admin' as const],canChangePermissionDelegation:true,canRemove:true},
   };
   let state=reduceSessionAccessEditorState(createSessionAccessEditorState('a'),{

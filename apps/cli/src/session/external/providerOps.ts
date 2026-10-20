@@ -13,6 +13,7 @@ import type {
   AgentExternalSessionCandidateIndexLookup,
   AgentExternalSessionTerminalObservation,
   AgentExternalSessionCandidateIndexState,
+  AgentExternalSessionsTranscriptPage,
 } from '@happier-dev/plugin-sdk/sessions/external';
 
 export type IndexedExternalSessionCandidate = ExternalSessionCandidateV1 & Readonly<{
@@ -32,7 +33,8 @@ export type ExternalSessionCandidatesPage = Readonly<{
   }>;
 }>;
 
-export type ExternalSessionTranscriptPage = TranscriptSourcePage<ExternalSessionTranscriptRawMessageV1 | AgentExternalSessionTerminalObservation>;
+export type ExternalSessionTranscriptPage = TranscriptSourcePage<ExternalSessionTranscriptRawMessageV1 | AgentExternalSessionTerminalObservation>
+  & Pick<AgentExternalSessionsTranscriptPage, 'diagnostics'>;
 
 export type ExternalSessionTranscriptReadAfter =
   | Readonly<{ outcome: 'already_current' }>

@@ -1,4 +1,3 @@
-import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { ConnectedServiceBindingsV2IngressSchema, readBuiltInLegacyConnectedAccountServiceKeyIngress, TeamResourceConnectedServiceSelectionV2Schema, type TeamResourceConnectedServiceSelectionV2 } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
@@ -26,25 +25,7 @@ export function hasConnectedServicesBindingsInAgentOptionState(
     ));
 }
 
-export function teamResourceConnectedServiceSelectionKey(
-    binding: Extract<ConnectedServicesServiceBinding, { source: 'team_resource' }>,
-): string {
-    return JSON.stringify([
-        binding.resourceId,
-        binding.deliveryMode,
-        binding.disclosedMember
-            ? buildQualifiedPluginContributionKey(binding.disclosedMember.service)
-            : null,
-        binding.disclosedMember?.accountId ?? null,
-    ]);
-}
-
-export function areTeamResourceConnectedServiceSelectionsEqual(
-    left: Extract<ConnectedServicesServiceBinding, { source: 'team_resource' }>,
-    right: Extract<ConnectedServicesServiceBinding, { source: 'team_resource' }>,
-): boolean {
-    return teamResourceConnectedServiceSelectionKey(left) === teamResourceConnectedServiceSelectionKey(right);
-}
+export { teamResourceConnectedServiceSelectionKey, areTeamResourceConnectedServiceSelectionsEqual } from '@happier-dev/protocol/connect/connected-service-bindings';
 
 /**
  * The one parser for one Connected Services binding record as authored by UI

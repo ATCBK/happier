@@ -1,21 +1,8 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it } from 'vitest';
-import {
-  AutomationStoredWorkflowDefinitionRecipeV2Schema,
-  AutomationTriggerIdSchema,
-  createActionExecutor,
-  createWorkflowTriggerActions,
-  type ActionExecutorDeps,
-  type AutomationDefinitionDetail,
-  type WorkflowTriggerActionsDependencies,
-} from '@happier-dev/protocol';
-
 import { renderScreen } from '@/dev/testkit';
-import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
-import type { SessionTriggersRead } from '@/components/workflows/triggers/useSessionTriggers';
-import { ExecutionRunGetResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
-import { ScmDiffSummaryGenerateOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
+import { createWorkNotificationOwnerFixture as ownerFixture } from '@/dev/testkit/harness/workNotificationOwner';
 import { getPreferredLanguage, preloadTranslations, setPreferredLanguageFromSettings, t } from '@/text';
 
 // Load the real Account/Action graph during collection, not inside the assertion
@@ -23,363 +10,55 @@ import { getPreferredLanguage, preloadTranslations, setPreferredLanguageFromSett
 const { SessionWorkNotifyOperation } =
   await import('./SessionWorkNotifications');
 const { RunWorkNotifyOperation } = await import('./RunWorkNotifications');
-function ownerFixture(
-  options: Readonly<{
-    disconnected?: boolean;
-    configured?: boolean;
-    channelDisconnected?: boolean;
-    runOutputState?: 'pending' | 'writing' | 'complete' | 'failed';
-  }> = {},
-) {
-  const rows = new Map<string, AutomationDefinitionDetail>();
-  let id = 0;
-  let acceptCreate: () => void = () => undefined;
-  let acceptRemove: () => void = () => undefined;
-  let source: unknown;
-  let removedId: string | undefined;
-  const createReady = new Promise<void>((resolve) => {
-    acceptCreate = resolve;
-  });
-  const removeReady = new Promise<void>((resolve) => {
-    acceptRemove = resolve;
-  });
-  const deps: WorkflowTriggerActionsDependencies = {
-    newId: (kind) => `${kind}-${++id}`,
-    resolveSession: async () => ({
-      project: { machineId: 'machine-one', directory: '/workspace' },
-      nativeGoalOwner: false,
-    }),
-    resolveWorkflow: async () => {
-      throw new Error('Unexpected workflow read');
-    },
-    resolveRunSource: async () => ({ terminal: false }),
-    // The authenticated Session, content codec and durable Automation operations are
-    // the external boundaries. Real Action validation/projection/admission stays below the view.
-    openContext: async (row) =>
-      row.executionRecipe?.v === 2 && row.executionRecipe.workflow.t === 'plain'
-        ? row.executionRecipe.workflow.v
-        : null,
-    sealContext: async ({ templateVersion, context }) =>
-      AutomationStoredWorkflowDefinitionRecipeV2Schema.parse({
-        v: 2,
-        templateVersion,
-        workflow: { t: 'plain', v: context },
-        triggerEvidence: null,
-      }),
-    automations: {
-      list: async () => ({
-        automations: [...rows.values()].map(
-          ({ executionRecipe: _private, ...row }) => row,
-        ),
-        nextCursor: null,
-      }),
-      get: async (automationId) => rows.get(automationId) ?? null,
-      create: async (input) => {
-        if (options.disconnected) throw new Error('disconnected');
-        source = input.triggers[0]?.trigger;
-        await createReady;
-        const row: AutomationDefinitionDetail = {
-          id: input.automationId,
-          name: input.name,
-          description: null,
-          enabled: input.enabled,
-          targetType: null,
-          existingSessionId: null,
-          templateVersion: 1,
-          lastRunAt: null,
-          createdAt: 1,
-          updatedAt: 1,
-          workflowDefinitionId: input.workflowDefinitionId,
-          scopeSessionId: input.scopeSessionId,
-          executionRecipe: input.executionRecipe,
-          assignments: [
-            {
-              machineId: 'machine-one',
-              enabled: true,
-              priority: 0,
-              updatedAt: 1,
-            },
-          ],
-          triggers: input.triggers.map((item) => {
-            if (
-              item.trigger.kind !== 'sessionLifecycle' &&
-              item.trigger.kind !== 'runLifecycle'
-            )
-              throw new Error('Unexpected trigger kind');
-            return {
-              ...item.trigger,
-              id: item.triggerId,
-              revision: 0,
-              createdAt: 1,
-              updatedAt: 1,
-              remainingOccurrences: 1,
-              status: { state: 'waiting', runId: null },
-              triggerDefinitionEnvelope: null,
-            };
-          }),
-        };
-        rows.set(row.id, row);
-        return row;
-      },
-      reconcile: async (automationId, input) => {
-        const row = rows.get(automationId)!;
-        removedId = row.triggers.find(
-          (trigger) =>
-            !input.triggers.some((item) => item.triggerId === trigger.id),
-        )?.id;
-        await removeReady;
-        const committed = {
-          ...row,
-          triggers: row.triggers.filter((trigger) =>
-            input.triggers.some((item) => item.triggerId === trigger.id),
-          ),
-        };
-        rows.set(row.id, committed);
-        return committed;
-      },
-      delete: async () => {
-        throw new Error('Unexpected deletion');
-      },
-    },
-  };
-  const actions = createWorkflowTriggerActions(deps);
-  const read: SessionTriggersRead = {
-    status: 'ready',
-    sets: [],
-    pullRequestLinks: [],
-    machineId: 'machine-one',
-    lastRunAtByAutomationId: {},
-    retry: () => undefined,
-    add: (request) =>
-      actions.sessionAdd({ ...request, sessionId: 'session-one' }),
-    remove: (triggerId) =>
-      actions.sessionRemove({
-        sessionId: 'session-one',
-        triggerId: AutomationTriggerIdSchema.parse(triggerId),
-      }),
-    update: (request) =>
-      actions.sessionUpdate({ ...request, sessionId: 'session-one' }),
-  };
-  const executor = createActionExecutor({
-    executionRunCheckProtocolV2: async () => ({ ok: true }),
-    // The exact Run snapshot comes from the Machine RPC boundary; the registration
-    // producer and Action's scope/request/output validation remain real.
-    executionRunGet: async (_sessionId, request) => {
-      if (!options.runOutputState) throw new Error('Unexpected Run read');
-      const output = ScmDiffSummaryGenerateOutputSchema.parse({ success: true, sourceKey: 'comparison-one',
-        resultId: 'saved-one', revision: 4, metadata: { source: { kind: 'workingTree' }, sourceKey: 'comparison-one' },
-        comparison: { id: 'comparison-one', source: { kind: 'workingTree' }, repository: { rootPath: '/workspace' },
-          endpoints: { before: 'a', after: 'b' }, inventory: { state: 'complete', reasons: [], files: [] } },
-        requestedOutputs: ['commitPlan'], outputs: { commitPlan: options.runOutputState === 'complete'
-          ? { state: 'complete', value: { groups: [], leftOutChangeRefs: [] } } : { state: options.runOutputState } },
-        analysis: { suppliedChangeRefs: [], analysedChangeRefs: [], remainingChangeRefs: [] },
-      });
-      return ExecutionRunGetResponseSchema.parse({ run: { runId: request.runId, callId: 'call', sidechainId: 'sidechain',
-        intent: 'scm_diff_summary', backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
-        permissionMode: 'read-only', retentionPolicy: 'resumable', runClass: 'long_lived', ioMode: 'streaming',
-        startedAtMs: 1, status: 'running' },
-        ...(request.includeStructured ? { structuredMeta: { kind: 'scm_diff_summary.v1', payload: output } } : {}),
-      });
-    },
-    // The Account daemon's channel catalog is a genuine remote boundary.
-    notificationChannelsList: async () => {
-      if (options.channelDisconnected)
-        return {
-          ok: false,
-          errorCode: 'target_unavailable',
-          error: 'target_unavailable',
-        };
-      return {
-        items: [
-          {
-            value: 'plugin/digest',
-            label: 'Digest',
-            disabled: options.configured === false,
-          },
-        ],
-      };
-    },
-  } as unknown as ActionExecutorDeps);
-  const runRead = {
-    status: 'ready' as const,
-    sets: [],
-    add: actions.add,
-    remove: async (automationId: string, triggerId: string) =>
-      actions.remove({
-        automationId,
-        triggerId: AutomationTriggerIdSchema.parse(triggerId),
-      }),
-  };
-  return {
-    read,
-    runRead,
-    execute: createFrontDoorActionExecute(executor),
-    acceptCreate,
-    acceptRemove,
-    rows,
-    actions,
-    source: () => source,
-    removedId: () => removedId,
-  };
-}
 
 describe('Session Work notification operation', () => {
-  it.each(['turn', 'attention'] as const)('retains and cancels the saved %s notification after a language change', async mode => {
-    const previousLanguage = getPreferredLanguage();
-    const owner = ownerFixture();
-    owner.acceptCreate();
-    owner.acceptRemove();
-    try {
-      setPreferredLanguageFromSettings('en');
-      await preloadTranslations();
-      const screen = await renderScreen(<SessionWorkNotifyOperation sessionId="session-one" sourceTurnId="turn-one"
-        read={owner.read} execute={owner.execute} />);
-      await screen.pressByTestIdAsync(`notify-${mode}:session-one`);
-      expect(screen.findByTestId(`notify-${mode}-armed:session-one`)).not.toBeNull();
-      const saved = await owner.actions.sessionList({ sessionId: 'session-one' });
-      await screen.unmount();
-      const english = t(mode === 'turn' ? 'sessionWork.notify.turnFinished' : 'sessionWork.notify.needsYou');
-      setPreferredLanguageFromSettings('fr');
-      await preloadTranslations();
-      expect(t(mode === 'turn' ? 'sessionWork.notify.turnFinished' : 'sessionWork.notify.needsYou')).not.toBe(english);
-      const restored = await renderScreen(<SessionWorkNotifyOperation sessionId="session-one" sourceTurnId="turn-one"
-        read={{ ...owner.read, sets: saved.sets }} execute={owner.execute} />);
-      expect(restored.findByTestId(`notify-${mode}-armed:session-one`)).not.toBeNull();
-      await restored.pressByTestIdAsync(`notify-${mode}-cancel:session-one`);
-      expect([...owner.rows.values()].flatMap(row => row.triggers)).toHaveLength(0);
-      expect(owner.rows.size).toBe(1);
-    } finally { setPreferredLanguageFromSettings(previousLanguage); await preloadTranslations(); }
+  it('arms and clears Follow one-shot intent while keeping authored notification Habits untouched', async () => {
+    const { createAccountSessionFollowController } = await import('../follow/accountSessionFollowController');
+    const writes: unknown[] = [];
+    const initial = { sessionId: 'session-one', following: false, notificationLevel: 'none' as const, includeInVoice: false };
+    const controller = createAccountSessionFollowController({ serverId: 'home-one', sessionId: 'session-one' }, {
+      get: async () => ({ kind: 'ok', value: { follow: initial, isSessionOwner: false, capabilities: { manageFollow: true }, voiceInitialSnapshotPending: false } }),
+      set: async (_address, preferences) => {
+        writes.push(preferences);
+        return { kind: 'ok', value: { changed: true, follow: { ...initial, once: preferences.once }, voiceInitialSnapshotPending: false } };
+      },
+      remove: async () => { throw new Error('One-shot cancellation must not Unfollow'); },
+    });
+    await controller.refresh();
+    const habit = ownerFixture();
+    habit.acceptCreate();
+    const { buildTriggerTarget } = await import('@/components/workflows/triggers/sessionTriggerForm');
+    const target = buildTriggerTarget({ kind: 'notifyMe', message: 'My authored notification', title: '', channels: [] });
+    if (!target) throw new Error('Expected notification target');
+    await habit.actions.sessionAdd({ sessionId: 'session-one', target, trigger: {
+      kind: 'sessionLifecycle', enabled: true, sourceSessionId: 'session-one',
+      events: ['parentTurnCompleted'], policy: { kind: 'currentTurn', sourceTurnId: 'turn-one' },
+    } });
+    const before = [...habit.rows.values()].flatMap(row => row.triggers);
+    function Harness() {
+      const state = React.useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+      return <SessionWorkNotifyOperation sessionId="session-one" sourceTurnId="turn-one" state={state} onOnce={controller.setOnce} />;
+    }
+    const screen = await renderScreen(<Harness />);
+    await screen.pressByTestIdAsync('notify-turn:session-one');
+    expect(screen.findByTestId('notify-turn-armed:session-one')).not.toBeNull();
+    await screen.pressByTestIdAsync('notify-turn-cancel:session-one');
+    expect(writes).toEqual([{ once: { kind: 'turn_finished', sourceTurnId: 'turn-one' } }, { once: null }]);
+    expect([...habit.rows.values()].flatMap(row => row.triggers)).toEqual(before);
+    expect(controller.getSnapshot().projection?.follow).toMatchObject(initial);
   });
 
-  it('acknowledges only the committed trigger and keeps cancellation pending until removal is acknowledged', async () => {
-    const owner = ownerFixture();
-    const screen = await renderScreen(
-      <SessionWorkNotifyOperation
-        sessionId="session-one"
-        sourceTurnId="turn-one"
-        read={owner.read}
-        execute={owner.execute}
-      />,
-    );
-    await act(async () => {
-      screen.pressByTestId('notify-turn:session-one');
+  it('keeps a loading one-shot row disabled and renders only acknowledged choices', async () => {
+    const { createAccountSessionFollowController } = await import('../follow/accountSessionFollowController');
+    const controller = createAccountSessionFollowController({ serverId: 'home-one', sessionId: 'session-one' }, {
+      get: async () => ({ kind: 'failed', error: 'unavailable' }),
+      set: async () => ({ kind: 'failed', error: 'unavailable' }),
+      remove: async () => ({ kind: 'failed', error: 'unavailable' }),
     });
-    expect(screen.findByTestId('notify-turn-armed:session-one')).toBeNull();
-    expect(owner.source()).toMatchObject({
-      kind: 'sessionLifecycle',
-      sourceSessionId: 'session-one',
-      policy: { kind: 'currentTurn', sourceTurnId: 'turn-one' },
-    });
-    await act(async () => {
-      owner.acceptCreate();
-    });
-    expect(screen.findByTestId('notify-turn-armed:session-one')).not.toBeNull();
-    expect(
-      [...owner.rows.values()].flatMap((row) => row.triggers),
-    ).toHaveLength(1);
-    await act(async () => {
-      screen.pressByTestId('notify-turn-cancel:session-one');
-    });
-    expect(screen.findByTestId('notify-turn-armed:session-one')).not.toBeNull();
-    expect(owner.removedId()).toBe(
-      [...owner.rows.values()][0]?.triggers[0]?.id,
-    );
-    await act(async () => {
-      owner.acceptRemove();
-    });
-    expect(screen.findByTestId('notify-turn-armed:session-one')).toBeNull();
-    expect(screen.findByTestId('notify-turn:session-one')).not.toBeNull();
-    expect(
-      [...owner.rows.values()].flatMap((row) => row.triggers),
-    ).toHaveLength(0);
-  });
-
-  it('keeps the row in place while the trigger owner loads, and offers nothing once it has failed', async () => {
-    const owner = ownerFixture();
-    const loading: SessionTriggersRead = { ...owner.read, status: 'loading' };
-    const screen = await renderScreen(
-      <SessionWorkNotifyOperation
-        sessionId="session-one"
-        sourceTurnId={null}
-        read={loading}
-        execute={owner.execute}
-      />,
-    );
-    // The row's existence is known while the owner answers: it holds its place (no shift when it
-    // arrives) with its switch disabled, and nothing is registered from the placeholder.
-    expect(screen.findByTestId('notify-attention:session-one')).not.toBeNull();
+    const screen = await renderScreen(<SessionWorkNotifyOperation sessionId="session-one" sourceTurnId={null}
+      state={controller.getSnapshot()} onOnce={controller.setOnce} />);
     expect(screen.findByTestId('notify-attention-switch:session-one')?.props.disabled).toBe(true);
-    const failed = await renderScreen(
-      <SessionWorkNotifyOperation
-        sessionId="session-one"
-        sourceTurnId={null}
-        read={{ ...owner.read, status: 'failed' }}
-        execute={owner.execute}
-      />,
-    );
-    expect(failed.findByTestId('notify-attention:session-one')).toBeNull();
-    const ready = await renderScreen(
-      <SessionWorkNotifyOperation
-        sessionId="session-one"
-        sourceTurnId={null}
-        read={owner.read}
-        execute={owner.execute}
-      />,
-    );
-    expect(ready.findByTestId('notify-attention:session-one')).not.toBeNull();
-  });
-
-  it('retains the operation on a refused registration without a success announcement', async () => {
-    const owner = ownerFixture({ disconnected: true });
-    const screen = await renderScreen(
-      <SessionWorkNotifyOperation
-        sessionId="session-one"
-        sourceTurnId="turn-one"
-        read={owner.read}
-        execute={owner.execute}
-      />,
-    );
-    await act(async () => {
-      screen.pressByTestId('notify-turn:session-one');
-    });
-    expect(screen.findByTestId('notify-turn-armed:session-one')).toBeNull();
-    expect(screen.findByTestId('notify-turn-error:session-one')).not.toBeNull();
-  });
-
-  it('offers setup without registering a trigger when the delivery owner has no configured channel', async () => {
-    const owner = ownerFixture({ configured: false });
-    const screen = await renderScreen(
-      <SessionWorkNotifyOperation
-        sessionId="session-one"
-        sourceTurnId="turn-one"
-        read={owner.read}
-        execute={owner.execute}
-      />,
-    );
-    await act(async () => {
-      screen.pressByTestId('notify-turn:session-one');
-    });
-    expect(owner.source()).toBeUndefined();
-    expect(screen.findByTestId('notify-turn-setup:session-one')).not.toBeNull();
-    expect(screen.findByTestId('notify-turn-armed:session-one')).toBeNull();
-  });
-
-  it('keeps unavailable delivery observations retryable and never mistakes disconnect for missing configuration', async () => {
-    const owner = ownerFixture({ channelDisconnected: true });
-    const screen = await renderScreen(
-      <SessionWorkNotifyOperation
-        sessionId="session-one"
-        sourceTurnId="turn-one"
-        read={owner.read}
-        execute={owner.execute}
-      />,
-    );
-    await act(async () => {
-      screen.pressByTestId('notify-turn:session-one');
-    });
-    expect(owner.source()).toBeUndefined();
-    expect(screen.findByTestId('notify-turn-error:session-one')).not.toBeNull();
-    expect(screen.findByTestId('notify-turn-setup:session-one')).toBeNull();
+    expect(screen.findByTestId('notify-attention-armed:session-one')).toBeNull();
   });
 });
 

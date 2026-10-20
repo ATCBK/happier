@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { EntityDropAdmissionV1, EntityDropPreviewV1 } from '@happier-dev/protocol/plugins/ui';
 
+import { t } from '@/text';
+import { admitWidgetEntityMovement } from '@/sync/ops/actions/widgetEntityMovement';
 import { describeEntityDropOutcome, describeEntityDropSettled } from '../../ui/entityDropOutcome';
 
 const allowed = (actionId: string, glyph?: EntityDropPreviewV1['glyph'], verb = 'Verb'): EntityDropAdmissionV1 => ({
@@ -10,7 +12,7 @@ const allowed = (actionId: string, glyph?: EntityDropPreviewV1['glyph'], verb = 
 describe('Happier core outcome vocabulary (lab SYS verbs)', () => {
     it('honors declared core and plugin marks without reinterpreting their Action input', () => {
         for (const glyph of ['copy', 'move', 'board', 'below', 'split'] as const) {
-            for (const actionId of ['session.reports_to.set', 'plugin.releases.link']) {
+            for (const actionId of ['session.manager.set', 'plugin.releases.link']) {
                 expect(describeEntityDropOutcome({ phase: 'carrying', admission: allowed(actionId, glyph) })?.glyph).toBe(glyph);
             }
         }
@@ -66,11 +68,28 @@ describe('Happier core outcome vocabulary (lab SYS verbs)', () => {
         expect(describeEntityDropOutcome({ phase: 'carrying', admission: unchanged })).toMatchObject({ tone: 'quiet', title: 'Move to Project' });
     });
 
+    it('presents a widget place whose admission is still being read as neither admitted nor silently refused', () => {
+        // The real movement owner's verdict before its read answers: refused, yet carrying the place's own "Move below X" verb.
+        const effect = { actionId: 'widgets.item.move', input: {}, preview: { glyph: 'below' as const, verb: 'Move below Checkouts', target: 'Checkouts' } };
+        const admission = admitWidgetEntityMovement(effect, null);
+        expect(admission).toMatchObject({ status: 'refused', reason: { code: 'widget_admission_pending' } });
+        if (admission.status !== 'refused') throw new Error('Expected the pending verdict to be a refusal');
+        const checking = admission.reason.message;
+        // While carried: a neutral card that says it is checking; the place's verb is never offered.
+        const carrying = describeEntityDropOutcome({ phase: 'carrying', admission });
+        expect(carrying).toMatchObject({ tone: 'quiet', title: checking });
+        expect(carrying?.title).not.toContain('Move below');
+        // Released before the answer: it springs back with the reason, and the source row keeps the same line.
+        const verdict = { phase: 'settled' as const, admission, outcome: { status: 'refused' as const, reason: admission.reason } };
+        expect(describeEntityDropOutcome(verdict)).toEqual({ tone: 'refused', title: t('entityDragDrop.preview.cantMoveHere'), detail: checking });
+        expect(describeEntityDropSettled(verdict)).toMatchObject({ kind: 'refused', title: t('entityDragDrop.preview.cantMoveHere'), detail: checking });
+    });
+
     it('names a late relation refusal by item and lead, and any other one by its verb', () => {
         const refused = { status: 'refused' as const, reason: { code: 'changed', message: 'This session was just moved. Try again' } };
-        expect(describeEntityDropSettled({ phase: 'settled', admission: allowed('session.reports_to.set', 'nest'), outcome: refused }, 'Review #2481'))
+        expect(describeEntityDropSettled({ phase: 'settled', admission: allowed('session.manager.set', 'nest'), outcome: refused }, 'Review #2481'))
             .toMatchObject({ kind: 'refused', title: 'Couldn’t put Review #2481 under Target', detail: 'This session was just moved. Try again' });
-        expect(describeEntityDropSettled({ phase: 'settled', admission: allowed('todos.reorder', 'above', 'Move above Buy milk'), outcome: refused }))
+        expect(describeEntityDropSettled({ phase: 'settled', admission: allowed('tasks.internal.reorder', 'above', 'Move above Buy milk'), outcome: refused }))
             .toMatchObject({ kind: 'refused', title: 'Move above Buy milk didn’t go through' });
     });
 });

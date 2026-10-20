@@ -1,4 +1,5 @@
 import { ACTION_TOOL_EXPOSURE_SURFACES } from '@happier-dev/protocol/actions/actionToolExposure';
+import { setActionAudienceEnabled } from '@happier-dev/protocol/actions';
 import { isActionSettingsOptInPlacement, type ActionSettingsActionId, type ActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import type { ActionSurfaces, ActionToolExposureMode, ActionToolExposureSurface } from '@happier-dev/protocol/actions/metadata';
 import type { ActionUiPlacement } from '@happier-dev/protocol/actions/actionUiPlacements';
@@ -102,9 +103,10 @@ export function getActionSettingsTargetPreferenceSelected(params: Readonly<{
     targetId: ActionSettingsTargetId;
     target?: ActionSettingsTargetDefinition;
 }>): boolean {
+    // Selection is a hot read path. Its typed callers already crossed the settings
+    // normalization boundary, so reparsing here multiplies full-document work by every target.
     const target = resolveActionSettingsTargetDefinition(params);
-    const entry = normalizeActionsSettings(params.settings);
-    const actionEntry = entry.actions[params.actionId];
+    const actionEntry = params.settings.actions[params.actionId];
 
     if (target.kind === 'placement') {
         if (isActionSettingsOptInPlacement(target.placement)) {
@@ -122,8 +124,7 @@ export function getActionSettingsTargetSelected(params: Readonly<{
     targetId: ActionSettingsTargetId;
     target?: ActionSettingsTargetDefinition;
 }>): boolean {
-    const entry = normalizeActionsSettings(params.settings);
-    if (entry.actions[params.actionId]?.enabled === false) {
+    if (params.settings.actions[params.actionId]?.enabled === false) {
         return false;
     }
 
@@ -167,9 +168,5 @@ export function setActionTargetSelected(params: Readonly<{
         return writeActionSettingsEntry(normalizedSettings, params.actionId, entry);
     }
 
-    entry.disabledSurfaces = params.selected
-        ? entry.disabledSurfaces.filter((surface) => surface !== target.surface)
-        : sortUniqueActionSettingsValues([...entry.disabledSurfaces, target.surface]);
-
-    return writeActionSettingsEntry(normalizedSettings, params.actionId, entry);
+    return setActionAudienceEnabled(normalizedSettings, params.actionId, target.surface, params.selected);
 }

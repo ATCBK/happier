@@ -7,8 +7,8 @@ import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRecordV1Schema, AcpCatalogRowReadR
   openAcpCatalogContentV1, sealAcpCatalogContentV1, listAcpCatalogSavedSecretRefsV1,
   type AcpCatalogRecordV1, type AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { prepareAcpCatalogTransferV2, readAcpCatalogTransferSourceV2 } from '@happier-dev/protocol/acp/catalog/transferAcpCatalogV2';
-import { KIRO_ACP_STDERR_RULES } from '@happier-dev/plugins-kiro/agent/acp/transport';
-import { classifyHomeDomainHttpMutationFailureV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
+import { readAgentCatalogSnapshot } from '@/agent/catalog/snapshot';
+import { classifyHomeDomainHttpMutationFailureV1, readHomeDomainConfirmedRollbackV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
 import { resolveCliAccountStorageContext } from '@/api/client/accountKvJsonTransport';
 import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
@@ -17,10 +17,12 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import { commitActiveAccountSettingsSnapshot, commitActiveAcpCatalog, getActiveAccountSettingsSnapshot,
   getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { readAccountSettingsV2Raw, sealAccountSettingsV2RawContent } from '@/settings/accountSettings/updateAccountSettingsV2WithRetry';
-import { captureSavedSecretReferencesForOperation, type SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { captureSavedSecretReferencesForOperation } from "@/settings/secrets/savedSecretCatalogRead";
+import { type SavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { normalizeCliAccountSettingsHistoryAfterTransfer } from '@/settings/accountSettings/accountSettingsHistoryNormalization';
 import type { AcpCatalogCleanupV1 } from '@happier-dev/protocol/acp/catalog/catalogMutationsV1';
 import { AcpCatalogUnavailableError, requireReadyAcpCatalog } from './configured/resolveBackend';
+import { runWithRequesterSessionCurrentnessCheckpoint, runWithoutRequesterSessionCurrentnessCheckpoint } from '@/daemon/sessionEncryption/requesterCurrentness';
 
 /** The existing Account custody supplies admission; the row is the sole ACP persistence owner. */
 export function createCliAcpCatalogStore(input: Readonly<{
@@ -58,8 +60,10 @@ export function createCliAcpCatalogStore(input: Readonly<{
     // A receipt remains truthful after retirement; reads never disclose a retired answer.
     if (body === undefined) await admitCurrent();
     if (response.status < 200 || response.status >= 300 && response.status !== 409) {
-      throw Object.assign(new Error('ACP Account transport unavailable'), { code: response.status === 401 ? 'unauthorized'
-        : response.status === 403 ? 'forbidden' : response.status === 404 ? 'unsupported' : 'unreachable' });
+      const rollback = readHomeDomainConfirmedRollbackV1(response.status, response.data);
+      throw Object.assign(new Error('ACP Account transport unavailable'), { code: rollback?.code
+        ?? (body !== undefined && response.status >= 500 ? 'outcome_unknown' : response.status === 401 ? 'unauthorized'
+        : response.status === 403 ? 'forbidden' : response.status === 404 ? 'unsupported' : 'unreachable') });
     }
     return response.data as unknown;
   };
@@ -83,14 +87,17 @@ export function createCliAcpCatalogStore(input: Readonly<{
     if (!incumbent) throw new AcpCatalogUnavailableError('scope-retired');
     const next = { ...incumbent, source: 'network' as const, rawSettings: source.raw,
       settings: accountSettingsParse(source.raw), settingsVersion: source.version, loadedAtMs: Date.now() };
-    if (operation) {
-      if (!await operation.replaceAccountSettings(next)) throw new AcpCatalogUnavailableError('scope-retired');
-    } else commitActiveAccountSettingsSnapshot(next);
+    await runWithoutRequesterSessionCurrentnessCheckpoint(async () => {
+      await admitCurrent();
+      if (operation) {
+        if (!await operation.replaceAccountSettings(next)) throw new AcpCatalogUnavailableError('scope-retired');
+      } else commitActiveAccountSettingsSnapshot(next);
+    });
     if (snapshot()?.settingsVersion !== source.version) throw new AcpCatalogUnavailableError('source-stale');
     capturedSource = { ...source, mode: storage.mode };
     return source;
   };
-  const readCatalog = async (): Promise<AcpCatalogSnapshotV1> => {
+  const prepareCatalog = async (): Promise<AcpCatalogSnapshotV1> => {
     const storage = await readStorageContext();
     const row = await readRow();
     let catalog: AcpCatalogSnapshotV1;
@@ -105,13 +112,25 @@ export function createCliAcpCatalogStore(input: Readonly<{
         sourceSettingsVersion: source.version };
       else {
         const transferred = prepareAcpCatalogTransferV2({ rawSettings: source.raw, sourceSettingsVersion: source.version,
-          kiroStderrRules: KIRO_ACP_STDERR_RULES });
+          agentDeclarations: [...readAgentCatalogSnapshot().agentDefinitionsById.values()].flatMap(agent => {
+            const definition = agent.richDefinition?.definition;
+            return agent.identity ? [{ identity: agent.identity,
+              acpStderrRules: definition && 'runtime' in definition && definition.runtime.kind === 'acp'
+                ? definition.runtime.definition?.stderrRules ?? null : null }] : [];
+          }) });
         catalog = transferred.status === 'ready' ? { status: 'ready', record: transferred.record, revision: 'absent', source: 'predecessor',
           sourceSettingsVersion: source.version } : transferred.status === 'not-required' ? fresh : transferred;
       }
     } else catalog = { status: 'unavailable', reason: row.status };
     const admitted = await readStorageContext();
     return admitted.mode === storage.mode ? catalog : { status: 'unavailable', reason: 'account-mode-mismatch' };
+  };
+  const readCatalog = async (): Promise<AcpCatalogSnapshotV1> => {
+    // Destination/source reads share one observation; private source publication
+    // above and the caller's catalog publication retain fresh admission.
+    const catalog = await runWithRequesterSessionCurrentnessCheckpoint(prepareCatalog, { readOnly: true });
+    await admitCurrent();
+    return catalog;
   };
   const writeRecord = async (value: Readonly<{
     record: AcpCatalogRecordV1; expectedRevision: number | 'absent'; sourceSettingsVersion?: number; source?: 'fresh' | 'predecessor';
@@ -154,10 +173,10 @@ export function createCliAcpCatalogStore(input: Readonly<{
     }
     return result.data;
   };
-  const publish = async (catalog: AcpCatalogSnapshotV1) => {
+  const publish = async (catalog: AcpCatalogSnapshotV1) => runWithoutRequesterSessionCurrentnessCheckpoint(async () => {
     if (operation) return await operation.commitAcpCatalog({ catalog });
     return commitActiveAcpCatalog({ scopeKey, lifetimeToken, catalog });
-  };
+  });
   return { assertCurrent, admitCurrent, readStorageContext, readRow, readSourceSnapshot, readCatalog, writeRecord, publish,
     updateCatalog: async (mutate: (current: unknown) => unknown, expectation?: Readonly<{
       expectedRevision?: number | 'absent'; sourceSettingsVersion?: number;

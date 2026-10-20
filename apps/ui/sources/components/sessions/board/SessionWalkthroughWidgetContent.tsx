@@ -66,7 +66,7 @@ export function WalkthroughWidgetContentView(props: Readonly<{
         </View>
     );
     const continuing = reviewed !== null && reviewed > 0 && reviewed < stops.length;
-    return <WidgetFrame presentation="body" testID={props.testID} frameStyle="card" body={{ kind: 'content', children: body }}
+    return <WidgetFrame presentation="body" testID={props.testID} frameStyle="card" placement="board" title={null} body={{ kind: 'content', children: body }}
         footer={props.onOpen ? { kind: 'open', label: continuing ? t('walkthrough.continueReading') : t('turnChanges.card.walkThrough'), onPress: props.onOpen } : null} />;
 }
 

@@ -1,4 +1,4 @@
-import { CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION } from '@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1';
+import { ACCOUNT_STORED_CONTENT_PROFILE_PRESERVING_SETTINGS_WRITER_PROTOCOL_VERSION } from '@happier-dev/protocol/clientCompatibility/accountStoredContentCompatibilityV1';
 import { FeatureGatesSchema } from '@happier-dev/protocol/features/payload/featureGatesSchema';
 import { DEFAULT_BROWSER_CAPABILITIES } from '@happier-dev/protocol/features/payload/capabilities/browserCapabilities';
 import { DEFAULT_DEVICE_CAPABILITIES } from '@happier-dev/protocol/features/payload/capabilities/deviceCapabilities';
@@ -224,7 +224,7 @@ const BASE_ROOT_LAYOUT_FEATURES: RootLayoutFeatures = {
         accountStoredContentCompatibility: {
             v: 1,
             minimumProtocolVersion: 2,
-            currentProtocolVersion: CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
+            currentProtocolVersion: ACCOUNT_STORED_CONTENT_PROFILE_PRESERVING_SETTINGS_WRITER_PROTOCOL_VERSION,
             declarationTransport: 'http-header-and-socket-auth-v1',
         },
         connectedServices: { credentialDelete: { revisionGuard: false } },
@@ -366,6 +366,7 @@ export function createRootLayoutFeaturesResponse(overrides?: RootLayoutFeaturesO
         nextCapabilitiesAuth.ui ?? {};
 
     return independentRootLayoutFeatures({
+        ...next,
         features: {
             ...BASE_ROOT_LAYOUT_FEATURES.features,
             ...nextFeatures,

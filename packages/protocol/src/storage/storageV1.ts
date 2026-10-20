@@ -53,9 +53,32 @@ export const StorageReasonV1Schema = lazyZodSchema(() => z.object({
   detail: z.optional(detailFacts()),
 }));
 export type StorageReasonV1 = z.infer<typeof StorageReasonV1Schema>;
+
+/** Presentation evidence only; these codes never establish cleanup authority. */
+export const StorageEvidenceCodeV1Schema = lazyZodSchema(() => z.enum([
+  'directory_permission_unavailable', 'managed_acp_install', 'runner_snapshot_root', 'managed_cache_root',
+  'connected_service_home', 'execution_run_isolation_owner', 'execution_run_isolation_facts_unavailable',
+  'happier_temporary_directory', 'temporary_lifecycle_owner', 'temporary_lifecycle_facts_unavailable',
+  'voice_model_pack_install_record', 'model_pack_facts_unavailable', 'browser_recording_owner', 'recording_expired',
+  'happier_trash_root', 'happier_data_remainder', 'managed_session_directory_record',
+  'managed_session_directory_record_unavailable', 'session_workspace_upload', 'worktree_parent',
+  'registration_unavailable', 'scm_orphan_back_reference', 'scm_registered_worktree',
+  'nested_worktree_kept', 'nested_worktrees_children_first', 'log_file_modified_time', 'trusted_disk_index',
+  'scm_ignored', 'browser_profile_cache', 'unused_after_policy', 'repository_not_in_use',
+  'verified_cache_location', 'empty_folder_relisted', 'trash_entry', 'unknown',
+]));
+export type StorageEvidenceCodeV1 = z.infer<typeof StorageEvidenceCodeV1Schema>;
+export const StorageEvidenceV1Schema = lazyZodSchema(() => z.union([
+  StorageEvidenceCodeV1Schema,
+  z.templateLiteral(['recognizer:', z.string().check(z.minLength(1))]),
+  z.templateLiteral(['manifest:', z.string().check(z.minLength(1))]),
+]));
+export type StorageEvidenceV1 = z.infer<typeof StorageEvidenceV1Schema>;
+// Future presentation codes remain readable, but acquire no display or authority meaning.
+const storageEvidenceRead = () => z.pipe(z.string(), z.catch(StorageEvidenceV1Schema, 'unknown'));
 export const StorageItemV1Schema = lazyZodSchema(() => z.strictObject({
   itemId: z.string().check(z.minLength(1)), kind: z.enum(['category-item', 'worktree', 'suggestion', 'disk-node']),
-  categoryId: z.optional(HappierStorageCategoryIdV1Schema), title: z.string(), evidence: z.array(z.string()),
+  categoryId: z.optional(HappierStorageCategoryIdV1Schema), title: z.string(), evidence: z.array(storageEvidenceRead()),
   path: z.string().check(z.minLength(1)), size: StorageSizeV1Schema, lastChangedAt: z.optional(time()), lastUsedAt: z.optional(time()),
   verdict: z.enum(['safe', 'caution', 'keep', 'forbidden', 'check']), reason: StorageReasonV1Schema,
   collectable: z.boolean(), loses: z.optional(z.array(StorageReasonV1Schema)),

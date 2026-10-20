@@ -43,6 +43,27 @@ function validContribution() {
 }
 
 describe('ProviderContributionV1Schema', () => {
+  it('retains a credential-free model catalog on its exact managed service purpose', () => {
+    const model = { id: 'sdk-model', name: 'SDK model', capabilities: { toolRoundTrips: 'unknown' as const } };
+    const value = {
+      ...validContribution(),
+      catalog: { ...validContribution().catalog, sourceRegistryVersion: 'sdk-v1' },
+      managedRuntime: { kind: 'managed' as const, endpointTemplateIds: ['responses'], connectedAccounts: [{
+        purpose: 'upstream', service: { pluginId: 'acme.service', localId: 'subscription' },
+        endpointTemplateIds: ['responses'], staticModels: [model],
+      }] },
+    };
+    const contribution = ProviderContributionV1Schema.parse(value);
+    const resolved = resolveProviderManagedRuntimeDeclarationV1({
+      implementationIdentity: { pluginId: 'acme.gateway', localId: 'gateway' },
+      managedRuntime: contribution.managedRuntime!,
+    });
+    expect(resolved.connectedAccounts[0]).toMatchObject({ staticModels: [model] });
+    expect(ProviderContributionV1Schema.safeParse({ ...value, managedRuntime: {
+      ...value.managedRuntime, connectedAccounts: [{ ...value.managedRuntime.connectedAccounts[0], staticModels: [model, model] }],
+    } }).success).toBe(false);
+  });
+
   it('G1 retains explicit connection-machine custody at the declaration normalizer', () => {
     const contribution = ProviderContributionV1Schema.parse({
       ...validContribution(),
@@ -60,7 +81,7 @@ describe('ProviderContributionV1Schema', () => {
       catalog: { ...validContribution().catalog, sourceRegistryVersion: 'gateway-sharing/v1' },
     })).toThrow();
   });
-  it('admits distinct purpose endpoints and rejects undeclared, duplicate, or ambiguous routes', () => {
+  it('admits service-qualified purpose endpoints and rejects undeclared or duplicate endpoint ids', () => {
     const runtime = {
       kind: 'managed' as const,
       endpointTemplateIds: ['responses'],
@@ -79,7 +100,7 @@ describe('ProviderContributionV1Schema', () => {
     expect(() => resolve({ ...runtime, connectedAccounts: [
       runtime.connectedAccounts[0]!,
       { purpose: 'other-upstream', service: 'other', endpointTemplateIds: ['responses'] },
-    ] })).toThrow();
+    ] })).not.toThrow();
     expect(() => resolve({ ...runtime, connectedAccounts: [{ ...runtime.connectedAccounts[0]!, endpointTemplateIds: ['responses', 'responses'] }] })).toThrow();
   });
 

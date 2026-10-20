@@ -5,6 +5,7 @@ import { Modal } from '@/modal';
 import { ArtifactActionOutputSchemasV1, type ArtifactRevisionV1 } from '@happier-dev/protocol/artifacts/artifactActionsV1';
 import { ArtifactOrganizationMutationFailureV1 } from '@happier-dev/protocol/prompts/library/promptFolderActionsV1';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
@@ -15,7 +16,7 @@ import { promptCollectionItemHref } from './promptCollectionModel';
 
 /**
  * The rare operations on a saved prompt, offered by its editor's `⋯` menu: duplicate it
- * (opening the copy), and delete it after confirmation.
+ * (opening the copy), and delete it through the Action's approval policy.
  * References stay authoritative: a required missing document must be explicitly repaired or detached.
  */
 export function usePromptLibraryEntryActions(requestedScope?: ServerAccountScope | null,
@@ -29,10 +30,6 @@ export function usePromptLibraryEntryActions(requestedScope?: ServerAccountScope
 
     /** Resolves `true` once the item is gone, so its editor can leave. */
     const remove = React.useCallback(async (artifactId: string): Promise<boolean> => {
-        const confirmed = await Modal.confirm(t('promptLibrary.deleteLibraryItemTitle'), t('promptLibrary.deleteLibraryItemBody'),
-            { confirmText: t('common.delete'), destructive: true });
-        if (!confirmed) return false;
-
         if (!serverId || !accountId) {
             Modal.alert(t('common.error'), t('errors.unknownError'));
             return false;
@@ -58,6 +55,7 @@ export function usePromptLibraryEntryActions(requestedScope?: ServerAccountScope
             context.assertCurrent();
             review?.assertCurrent?.();
             const deleted = await execute('artifact.delete', { artifactId, expectedRevision }, actionContext);
+            if (!deleted.ok && isActionApprovalDeclinedErrorCode(deleted.errorCode)) return false;
             if (!deleted.ok) throw new Error(deleted.errorCode);
             ArtifactActionOutputSchemasV1['artifact.delete'].parse(deleted.result);
             context.assertCurrent();

@@ -49,13 +49,26 @@ function createDeferred<T>(): {
 }
 
 describe('buildUpdatedSessionFromSocketUpdate (plaintext)', () => {
+  it('retains the same observed presence in detail and list projections across durable active updates', async () => {
+    for (const presence of ['online', 123, undefined] as const) {
+      const session = createSessionFixture({ encryptionMode: 'plain', active: true, presence });
+      const renderable = createSessionListRenderableSessionFixture({ encryptionMode: 'plain', active: true, presence });
+      const update = { updateBody: { active: true, activeAt: session.activeAt + 1 },
+        updateSeq: 2, updateCreatedAt: session.updatedAt + 1, sessionEncryption: null };
+      const detail = await buildUpdatedSessionFromSocketUpdate({ ...update, session });
+      const patch = await buildUpdatedSessionListRenderablePatchFromSocketUpdate({ ...update, renderable });
+      expect(detail.nextSession.presence).toBe(presence);
+      expect({ ...renderable, ...patch }.presence).toBe(presence);
+    }
+  });
+
   it.each([
-    { name: 'opened owner', layout: 1, access: createSessionAccessFixture(), ownerMetadataView: { path: '/private' }, availability: 'ready' as const, retained: true },
-    { name: 'recipient with a stale owner view', layout: 1, access: createSessionAccessFixture('view'), ownerMetadataView: { path: '/private' }, availability: 'ready' as const, retained: false },
-    { name: 'unavailable access with a stale owner view', layout: 1, access: null, ownerMetadataView: { path: '/private' }, availability: 'ready' as const, retained: false },
+    { name: 'opened owner', layout: 1, access: createSessionAccessFixture(), ownerMetadataView: { path: '/private', host: 'localhost' }, availability: 'ready' as const, retained: true },
+    { name: 'recipient with a stale owner view', layout: 1, access: createSessionAccessFixture('view'), ownerMetadataView: { path: '/private', host: 'localhost' }, availability: 'ready' as const, retained: false },
+    { name: 'unavailable access with a stale owner view', layout: 1, access: null, ownerMetadataView: { path: '/private', host: 'localhost' }, availability: 'ready' as const, retained: false },
     { name: 'unopened owner', layout: 1, access: createSessionAccessFixture(), ownerMetadataView: null, availability: 'ready' as const, retained: false },
-    { name: 'locked owner visibility', layout: 1, access: createSessionAccessFixture(), ownerMetadataView: {}, availability: 'encrypted_content_unavailable' as const, retained: false },
-    { name: 'unsupported layout', layout: 2, access: createSessionAccessFixture(), ownerMetadataView: { path: '/private' }, availability: 'ready' as const, retained: false },
+    { name: 'locked owner visibility', layout: 1, access: createSessionAccessFixture(), ownerMetadataView: { path: '/private', host: 'localhost' }, availability: 'encrypted_content_unavailable' as const, retained: false },
+    { name: 'unsupported layout', layout: 2, access: createSessionAccessFixture(), ownerMetadataView: { path: '/private', host: 'localhost' }, availability: 'ready' as const, retained: false },
     { name: 'legacy layout', layout: 0, access: createSessionAccessFixture('view'), ownerMetadataView: null, availability: 'ready' as const, retained: true },
   ])('uses $name authority for both new and retained AgentState', async ({ layout, access, ownerMetadataView, availability, retained }) => {
     const state = AgentStateSchema.parse({ controlledByUser: true, requests: { permission: { tool: 'Bash', arguments: {}, createdAt: 1 } } });
@@ -79,7 +92,7 @@ describe('buildUpdatedSessionFromSocketUpdate (plaintext)', () => {
   it('contracts owner AgentState when the same encrypted socket tuple fails shared-metadata authentication', async () => {
     const state = AgentStateSchema.parse({ requests: { permission: { tool: 'Bash', arguments: {}, createdAt: 1 } } });
     const session = createSessionFixture({ metadataLayoutVersion: 1, encryptionMode: 'e2ee',
-      ownerMetadataView: { path: '/private' }, agentState: state });
+      ownerMetadataView: { path: '/private', host: 'localhost' }, agentState: state });
     const reader = new SessionEncryption(session.id, new SecretBoxEncryption(new Uint8Array(32).fill(7)), new EncryptionCache());
     const updateBody = { metadata: { version: 2, value: 'invalid-ciphertext' },
       agentState: { version: 2, value: await reader.encryptRaw(state) } };
@@ -97,7 +110,7 @@ describe('buildUpdatedSessionFromSocketUpdate (plaintext)', () => {
   it('does not let combined encrypted metadata and AgentState bypass unsupported-layout visibility', async () => {
     const state = AgentStateSchema.parse({ requests: { permission: { tool: 'Bash', arguments: {}, createdAt: 1 } } });
     const session = createSessionFixture({ metadataLayoutVersion: 2, encryptionMode: 'e2ee',
-      ownerMetadataView: { path: '/private' }, agentState: state });
+      ownerMetadataView: { path: '/private', host: 'localhost' }, agentState: state });
     const reader = new SessionEncryption(session.id, new SecretBoxEncryption(new Uint8Array(32).fill(7)), new EncryptionCache());
     const updateBody = { metadata: { version: 2, value: await reader.encryptRaw({ path: '/private' }) },
       agentState: { version: 2, value: await reader.encryptRaw(state) } };
@@ -109,7 +122,7 @@ describe('buildUpdatedSessionFromSocketUpdate (plaintext)', () => {
   it('hydrates a recovered owner command from the same newly authenticated encrypted tuple', async () => {
     const state = AgentStateSchema.parse({ requests: { permission: { tool: 'Bash', arguments: {}, createdAt: 1 } } });
     const session = createSessionFixture({ metadataLayoutVersion: 1, encryptionMode: 'e2ee',
-      encryptedContentAvailability: 'encrypted_content_unavailable', ownerMetadataView: { path: '/private' } });
+      encryptedContentAvailability: 'encrypted_content_unavailable', ownerMetadataView: { path: '/private', host: 'localhost' } });
     const reader = new SessionEncryption(session.id, new SecretBoxEncryption(new Uint8Array(32).fill(7)), new EncryptionCache());
     const updateBody = { metadata: { version: 2, value: await reader.encryptRaw({ v: 1 }) },
       agentState: { version: 2, value: await reader.encryptRaw(state) } };

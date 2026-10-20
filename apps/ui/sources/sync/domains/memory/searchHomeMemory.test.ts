@@ -89,6 +89,14 @@ function createHomeSearchHit(sessionId: string, summary = 'Personal Home summary
     };
 }
 
+it('refuses Project scope before requesting an older Home that could ignore it', async () => {
+    const result = await searchHomeMemory({ serverId: 'home', accountId: 'account', query: 'needle', mode: 'auto',
+        scope: { type: 'project', projectRef: { serverId: 'home', projectKey: 'payments' } } });
+    expect(result).toMatchObject({ ok: false, errorCode: 'memory_project_scope_unsupported' });
+    expect(serverFetchMock).not.toHaveBeenCalled();
+    expect(runtimeFetchMock).not.toHaveBeenCalled();
+});
+
 async function activateHome(name: string, serverUrl: string): Promise<string> {
     const profile = await upsertServerProfile({ serverUrl, name });
     await setActiveServerId(profile.id, { scope: 'device' });

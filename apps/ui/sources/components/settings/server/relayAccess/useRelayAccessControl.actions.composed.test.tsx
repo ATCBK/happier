@@ -1,16 +1,25 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock({ confirmResult: true }).module;
+});
 import type { SystemTaskSpec } from '@happier-dev/protocol/system/tasks/spec';
 import type { SystemTaskBridgeListenerSet } from '@/components/systemTasks/types';
 import { ApprovalRequestSchema, RPC_METHODS, UiActionDispatchRequestV1Schema } from '@happier-dev/protocol';
 import { createClientActionReverseDispatcher } from '../../../../../../cli/src/session/actions/clientActionReverseDispatch';
 import { markRpcRequestDisposition } from '@happier-dev/sync-client';
-import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { pressTestInstanceAsync, renderScreen } from '@/dev/testkit/render/renderScreen';
-import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
 const bridge = vi.hoisted(() => ({ specs: [] as SystemTaskSpec[], taskIds: [] as string[], sequence: 0, cancelled: [] as string[], desktopCalls: [] as string[], startError: undefined as unknown, responses: [] as { taskId: string; answer: unknown }[], listeners: new Map<string, SystemTaskBridgeListenerSet>(), statusRunner: null as ReturnType<typeof import('@happier-dev/cli-common/systemTasks').createSystemTasksRunner> | null }));
 // Native task transport is the external boundary; admission, Action policy,
@@ -37,9 +46,11 @@ vi.mock('@/components/systemTasks/createNativeSshBridge', () => ({ createNativeS
     },
     cancel: async (id: string) => { bridge.cancelled.push(id); }, respond: async (taskId: string, answer: unknown) => { bridge.responses.push({ taskId, answer }); },
 }) }));
-const home = createHomeGovernanceHarness();
-installHomeGovernanceBoundaries(home);
-beforeEach(async () => { await home.reset(); });
+const account = createProviderSettingsAccountHarness();
+const home = account.home;
+installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+beforeEach(async () => { await account.reset(); });
 
 function installDesktopCommandBoundary(invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>) {
     const internals = { invoke };
@@ -78,7 +89,7 @@ afterEach(async () => {
     resetRemoteHostCatalogEngineForTests();
     resetRemoteHostCatalogSnapshotsForTests();
     publishAppliedActiveServerRuntimeAvailability(false);
-    await home.reset();
+    await account.reset();
     bridge.specs.length = 0;
     bridge.taskIds.length = 0;
     bridge.cancelled.length = 0;
@@ -92,15 +103,10 @@ afterEach(async () => {
 
 async function openRelay(actionsSettingsV1: unknown, identity?: Readonly<{ accountId: string; serverIdentityId: string }>, local = false) {
     const accountId = identity?.accountId ?? 'account';
-    const serverId = await home.addHome({ name: 'Issued Home', serverUrl: 'https://issued-relay-action.test', accountId,
+    const { serverId } = await account.restore({ accountId, machines: [], settings: settingsParse({ actionsSettingsV1 }),
         ...(identity ? { serverIdentityId: identity.serverIdentityId } : {}) });
     const scope = { serverId, accountId };
-    const settings = { actionsSettingsV1 };
-    storage.setState({ profileScope: scope, settingsScope: scope, settings: settingsParse(settings) });
     const issued = getActiveServerSnapshot();
-    publishAppliedActiveServerSnapshot(issued, true);
-    home.answer(serverId, '/v2/account/settings', { body: { version: 4, content: { t: 'plain', v: settings } } });
-    home.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture({ settingsVersion: 4 }) });
     home.answer(serverId, '/v2/account/settings/history', { body: { snapshots: [] } });
     home.answer(serverId, '/v1/account/entity-rows/profiles/transfer', { body: { status: 'absent' } });
     const host = { id: 'issued-host', name: 'Issued host', createdAt: 1, updatedAt: 2, lastUsedAt: null,
@@ -323,7 +329,8 @@ it('native task cancellation is scoped to the admitted Account and requests canc
     const { serverId } = await openRelay({ v: 1, actions: { 'remote_hosts.relay.access.status': { enabled: false } } });
     const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
     const execute = createDefaultActionExecutor({ homeRuntimeRunner: getSystemTasksRunner() }).execute;
-    const context = { surface: 'ui' as const, serverId, expectedAccountId: 'account' };
+    const context = { surface: 'ui' as const, authority: 'present_user' as const,
+        actionCaller: { kind: 'host' as const }, serverId, expectedAccountId: 'account' };
     const started = await execute('relay.runtime.start', {}, context);
     expect(started).toMatchObject({ ok: true, result: { status: 'task_started' } });
     const taskId = bridge.taskIds[bridge.specs.findIndex(spec => spec.kind === 'relay.runtime.start.v1')]!;
@@ -353,7 +360,8 @@ it('ending an Action observer leaves its admitted native task running until expl
     expect(await pending).toEqual({ ok: true, result: { status: 'outcome_unknown', taskId } });
     expect(bridge.cancelled).toEqual([]);
     expect(getSystemTasksRunner().getSnapshot(taskId)).toMatchObject({ status: 'running', result: null });
-    expect(await execute('relay.runtime.task.cancel', { taskId }, { surface: 'ui', serverId, expectedAccountId: 'account' }))
+    expect(await execute('relay.runtime.task.cancel', { taskId }, { surface: 'ui', authority: 'present_user',
+        actionCaller: { kind: 'host' }, serverId, expectedAccountId: 'account' }))
         .toEqual({ ok: true, result: { status: 'cancellation_requested', taskId } });
     expect(getSystemTasksRunner().getSnapshot(taskId)).toMatchObject({ status: 'canceling', result: null });
 });
@@ -869,8 +877,10 @@ it('waived Save and Disable share the Action task owner and captured host/Home, 
     expect(home.requestsFor('/v1/account/entity-rows/remote-hosts').length).toBeGreaterThan(0);
 });
 
-it.each(['configure', 'configureLan', 'configureLanCredentials', 'disable'] as const)('default Ask first renders the safe %s intent and holds it until the live user approval decision', async operation => {
-    const { relay, serverId, host, issued } = await openRelay({ v: 1 });
+it.each(['configure', 'configureLan', 'configureLanCredentials', 'disable'] as const)('Account Ask first renders the safe %s intent and holds it until the live Inbox approval decision', async operation => {
+    const { relay, serverId, host, issued } = await openRelay({ v: 1, actions: {
+        'remote_hosts.relay.configure': { approvalRequiredSurfaces: ['ui'] },
+    } });
     const operationKind = operation === 'disable' ? 'disable' : 'configure';
     const config = operation === 'configureLan' || operation === 'configureLanCredentials'
         ? { providerId: 'lan' as const, url: operation === 'configureLanCredentials'

@@ -11,7 +11,8 @@ import { t } from '@/text';
 import type { RoleRailItem } from './rolesRailTypes';
 import type { WorkflowRoleV1 } from '@happier-dev/protocol';
 import { readSessionRolesV1 } from '@happier-dev/protocol/prompts/roles/sessionRolesSnapshot';
-import { useSessionMetadata } from '@/sync/domains/state/storage';
+import { useSessionSelector } from '@/sync/domains/state/storage';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { useRoleRailCatalog } from './useRoleRailItems';
 
 export type RolesRailDetailProps = Readonly<{
@@ -37,7 +38,7 @@ export type RolesRailDetailProps = Readonly<{
  * The catalog is read here, in the open leaf, so a closed composer chip never subscribes to it.
  */
 export function RolesRailDetail(props: RolesRailDetailProps) {
-    const metadata = useSessionMetadata(props.sessionId ?? '', props.serverId);
+    const metadata = useSessionSelector(props.sessionId ?? '', props.serverId, session => session ? readSessionOwnerMetadataView(session) : null);
     const sessionRoles = React.useMemo(() => props.sessionId ? readSessionRolesV1(metadata) ?? undefined : undefined, [metadata, props.sessionId]);
     const catalog = useRoleRailCatalog(props.workflowRoles, props.serverId, sessionRoles, props.sessionId !== undefined);
     return <RolesRailDetailView {...props} roles={catalog.items} status={catalog.status} />;

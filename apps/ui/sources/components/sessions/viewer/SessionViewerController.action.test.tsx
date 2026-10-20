@@ -15,6 +15,7 @@ import {
   type CurrentSessionPresentationStateV1,
 } from '@happier-dev/protocol/sessions/presentation/currentSessionPresentationV1';
 import { AccountPetListResponseV1Schema, AccountProfileSchema, AutomationDefinitionListResponseSchema, createPlainSessionOwnerMetadataEnvelopeV1, CurrentCursorResponseSchema, projectSessionSharedMetadataV1, SessionOwnerMetadataV1Schema, V2SessionListResponseSchema } from '@happier-dev/protocol';
+import type { ActionExecuteResult } from '@happier-dev/protocol';
 import { PluginAvailabilityActionHttpPathsV1, PluginAvailabilityIntentsListActionOutputV1Schema } from '@happier-dev/protocol/plugins/availability';
 import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -180,7 +181,7 @@ describe('Session viewer semantic Action ingress', () => {
     });
     let unmounted = false;
     const pressHeader = async () => {
-      await act(async () => hook.tree.root.findByProps({ testID: 'session-header-computer-button' }).props.onPress());
+      await act(async () => { await hook.tree.root.findByProps({ testID: 'session-header-computer-button' }).props.onPress(); });
       await flushHookEffects();
     };
     const setPresentationPolicy = async (enabled: boolean) => {
@@ -205,14 +206,15 @@ describe('Session viewer semantic Action ingress', () => {
       await setPresentationPolicy(true);
       const execute = createDefaultActionExecutor();
       stage = 'literal Action command/ACK';
-      const admitted = await act(async () => execute.execute('session.presentation.apply', {
+      let admitted!: ActionExecuteResult;
+      await act(async () => { admitted = await execute.execute('session.presentation.apply', {
         intent: { kind: 'viewer.open', source: 'computer' },
-      }, { surface: 'ui', serverId, defaultSessionId: 'session-a' }));
+      }, { surface: 'ui', serverId, defaultSessionId: 'session-a' }); });
       const admittedStatus = admitted.ok
         ? admitted.result && typeof admitted.result === 'object' && 'status' in admitted.result ? admitted.result.status : null
         : admitted.errorCode;
       expect(admittedStatus, JSON.stringify(admitted)).toBe('applied');
-      await act(async () => hook.getCurrent().port.apply({ kind: 'viewer.close' }));
+      await act(async () => { await hook.getCurrent().port.apply({ kind: 'viewer.close' }); });
       for (const [intent, expected] of [
         [{ kind: 'viewer.open', source: 'computer' }, { mode: 'floating', source: 'computer' }],
         [{ kind: 'viewer.source.select', source: 'browser' }, { mode: 'floating', source: 'browser' }],
@@ -221,23 +223,24 @@ describe('Session viewer semantic Action ingress', () => {
         [{ kind: 'viewer.close' }, { mode: 'closed' }],
       ] as const) {
         stage = intent.kind;
-        const result = await act(async () => hook.getCurrent().requestSemantic(intent));
+        let result!: ActionExecuteResult;
+        await act(async () => { result = await hook.getCurrent().requestSemantic(intent); });
         expect(result.ok && CurrentSessionPresentationActionResultV1Schema.parse(result.result), JSON.stringify(result)).toMatchObject({ status: 'applied' });
         expect(hook.getCurrent().state).toMatchObject(expected);
       }
       const count = outgoing.filter((packet) => packet.method === 'session-a:session.presentation.apply').length;
       stage = 'repeated semantic open';
-      await act(async () => hook.getCurrent().requestSemantic({ kind: 'viewer.open', source: 'browser' }));
+      await act(async () => { await hook.getCurrent().requestSemantic({ kind: 'viewer.open', source: 'browser' }); });
       expect(hook.getCurrent().state).toMatchObject({ mode: 'floating', source: 'browser' });
       stage = 'reachable Machine header';
       const onlineMachine = createMachineFixture({ id: 'machine-1', active: true, activeAt: Date.now() });
-      await act(async () => storage.setState({
+      await act(async () => { storage.setState({
         machines: { 'machine-1': onlineMachine }, machineListByServerId: { [serverId]: [onlineMachine] },
-      }));
+      }); });
       await pressHeader();
       await waitForHomeGovernance(() => expect(hook.getCurrent().state).toMatchObject({ mode: 'floating', source: 'computer' }));
       const afterUiOpen = count;
-      await act(async () => hook.getCurrent().apply({ kind: 'viewer.dock' }));
+      await act(async () => { await hook.getCurrent().apply({ kind: 'viewer.dock' }); });
       expect(hook.getCurrent().state.mode).toBe('docked');
       expect(outgoing.filter((packet) => packet.method === 'session-a:session.presentation.apply')).toHaveLength(afterUiOpen);
       stage = 'Ask policy';
@@ -260,9 +263,11 @@ describe('Session viewer semantic Action ingress', () => {
         expect(outgoing.filter((packet) => packet.method === 'session-a:session.presentation.apply')).toHaveLength(afterUiOpen);
       }
       stage = 'trusted UI approval replay';
-      const approved = await act(async () => execute.execute('approval.request.decide', {
-        artifactId: deferred.result.artifactId, decision: 'approve',
-      }, { surface: 'ui', serverId, defaultSessionId: 'caller-claimed-other-session' }));
+      const artifactId = deferred.result.artifactId;
+      let approved!: ActionExecuteResult;
+      await act(async () => { approved = await execute.execute('approval.request.decide', {
+        artifactId, decision: 'approve',
+      }, { surface: 'ui', serverId, defaultSessionId: 'caller-claimed-other-session' }); });
       expect(approved).toMatchObject({ ok: true, result: { status: 'executed' } });
       expect(hook.getCurrent().state.mode).toBe('closed');
       const afterApproval = afterUiOpen + 1;
@@ -271,9 +276,9 @@ describe('Session viewer semantic Action ingress', () => {
       stage = 'offline header Ask policy';
       sessionRpcAvailable = false;
       const offlineMachine = createMachineFixture({ id: 'machine-1', active: false });
-      await act(async () => storage.setState({
+      await act(async () => { storage.setState({
         machines: { 'machine-1': offlineMachine }, machineListByServerId: { [serverId]: [offlineMachine] },
-      }));
+      }); });
       const artifactsBefore = home.requestsFor('/v1/artifacts').length;
       await pressHeader();
       expect(hook.getCurrent().state.mode).toBe('closed');
@@ -284,7 +289,8 @@ describe('Session viewer semantic Action ingress', () => {
       await setPresentationPolicy(true);
       await pressHeader();
       await waitForHomeGovernance(() => expect(hook.getCurrent().state).toMatchObject({ mode: 'floating', source: 'computer' }));
-      const closed = await act(async () => hook.getCurrent().requestSemantic({ kind: 'viewer.close' }));
+      let closed!: ActionExecuteResult;
+      await act(async () => { closed = await hook.getCurrent().requestSemantic({ kind: 'viewer.close' }); });
       expect(closed.ok && CurrentSessionPresentationActionResultV1Schema.parse(closed.result)).toMatchObject({ status: 'applied' });
       expect(hook.getCurrent().state.mode).toBe('closed');
       expect(outgoing.filter((packet) => packet.method === 'session-a:session.presentation.apply')).toHaveLength(afterApproval);

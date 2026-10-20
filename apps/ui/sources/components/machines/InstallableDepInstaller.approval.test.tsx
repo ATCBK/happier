@@ -10,7 +10,7 @@ import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { renderSettingsView } from '@/dev/testkit/harness/settingsViewHarness';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { decideApprovalAsInbox, replayApprovedAsDaemon } from '@/dev/testkit/harness/approvalInbox';
+import { decideApprovalAsInbox, installOwnMachineApprovalReplayBoundary } from '@/dev/testkit/harness/approvalInbox';
 
 const boundary = vi.hoisted(() => ({ rpc: vi.fn(), confirm: vi.fn(async () => false), alert: vi.fn() }));
 // Native rendering/dialogs and daemon RPC are system boundaries. The Action
@@ -30,29 +30,33 @@ const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains
 const { storage } = await import('@/sync/domains/state/storageStore');
 const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
 const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const { resolveServerProfileScopeIdForIdentifier } = await import('@/sync/domains/server/serverProfiles');
 
 async function addInstallerHome(policy: 'Allowed' | 'Ask-first') {
-    const serverId = await harness.addHome({ name: 'Installer Home', serverUrl: 'https://installer-policy.test', accountId: 'alice' });
+    const profileId = await harness.addHome({ name: 'Installer Home', serverUrl: 'https://installer-policy.test',
+        serverIdentityId: 'srv_installer_policy', accountId: 'alice', currentAccount: true });
+    await installOwnMachineApprovalReplayBoundary({ harness, serverId: profileId, accountId: 'alice', machineId: 'machine' });
+    const serverId = resolveServerProfileScopeIdForIdentifier(profileId);
     const scope = { serverId, accountId: 'alice' };
     const settings = { actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: {}, approvalWaivedSurfaces: { 'machines.capabilities.install': ['ui'] } }) };
     storage.setState({ settingsScope: scope, profileScope: scope, settings: { ...storage.getState().settings, ...settings } });
-    harness.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
-    if (policy === 'Ask-first') await harness.requireUiApproval(serverId, 'machines.capabilities.install');
+    harness.answer(profileId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
+    if (policy === 'Ask-first') await harness.requireUiApproval(profileId, 'machines.capabilities.install');
     publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
     const lifetime = captureActiveServerAccountScopeLifetime();
     if (!lifetime) throw new Error('Expected the admitted Account lifetime');
-    return { serverId, lifetime };
+    return { profileId, serverId, lifetime };
 }
 
 describe('install and Computer repair share configurable Action approval', () => {
-    beforeEach(() => { harness.reset(); boundary.rpc.mockReset(); boundary.confirm.mockClear(); boundary.alert.mockClear(); });
+    beforeEach(async () => { await harness.reset(); boundary.rpc.mockReset(); boundary.confirm.mockClear(); boundary.alert.mockClear(); });
     afterEach(() => standardCleanup());
 
     it.each([
         { caller: 'repair', policy: 'Allowed' }, { caller: 'repair', policy: 'Ask-first' },
         { caller: 'installer', policy: 'Allowed' }, { caller: 'installer', policy: 'Ask-first' },
     ] as const)('$caller honors $policy with no leaf-owned confirmation or approval bypass', async ({ caller, policy }) => {
-        const { serverId, lifetime } = await addInstallerHome(policy);
+        const { profileId, serverId, lifetime } = await addInstallerHome(policy);
         boundary.rpc.mockResolvedValue({ ok: true, result: { logPath: null } });
         const refresh = vi.fn();
         const hook = await renderHook(() => ({ binding: useServerCredentialAccountScopeBinding(serverId),
@@ -70,23 +74,25 @@ describe('install and Computer repair share configurable Action approval', () =>
         expect(boundary.alert.mock.calls.some(args => Array.isArray(args[2]))).toBe(false);
         if (policy === 'Ask-first') {
             const artifact = await waitForHomeGovernance(() => {
-                const artifact = harness.artifacts(serverId).list()[0];
+                const artifact = harness.artifacts(profileId).list()[0];
                 expect(artifact).toBeDefined();
                 return artifact!;
             });
-            const request = ApprovalRequestSchema.parse(JSON.parse(harness.artifacts(serverId).readPlainBody(artifact.id) ?? 'null'));
+            const request = ApprovalRequestSchema.parse(JSON.parse(harness.artifacts(profileId).readPlainBody(artifact.id) ?? 'null'));
             expect(request).toMatchObject({ actionId: 'machines.capabilities.install', status: 'open',
                 actionArgs: { machineId: 'machine', capabilityId: COMPUTER_CUA_DRIVER_DEP_ID, method: 'install' } });
             expect(boundary.rpc).not.toHaveBeenCalled();
             expect(refresh).not.toHaveBeenCalled();
-            expect(await decideApprovalAsInbox(serverId, artifact.id, 'approve')).toMatchObject({ ok: true });
-            expect(await replayApprovedAsDaemon({ serverId, machineId: 'machine', artifactId: artifact.id })).toMatchObject({ ok: true });
+            // Inbox decisions enter the Home's exact-Machine HTTP replay path;
+            // the boundary above invokes the real daemon-side approval executor.
+            expect(await decideApprovalAsInbox(serverId, artifact.id, 'approve')).toMatchObject({ ok: true,
+                result: { status: 'executed', execution: { ok: true } } });
         }
         await waitForHomeGovernance(() => expect(refresh).toHaveBeenCalled());
         expect(boundary.rpc.mock.calls).toHaveLength(1);
         expect(boundary.rpc.mock.calls[0]?.[0]).toMatchObject({ serverId, machineId: 'machine',
             method: RPC_METHODS.CAPABILITIES_INVOKE, payload: { id: COMPUTER_CUA_DRIVER_DEP_ID, method: 'install' } });
-        if (policy === 'Allowed') expect(harness.artifacts(serverId).list()).toEqual([]);
+        if (policy === 'Allowed') expect(harness.artifacts(profileId).list()).toEqual([]);
         await screen?.unmount();
         await hook.unmount();
     });

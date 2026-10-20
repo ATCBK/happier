@@ -5,12 +5,12 @@ import {
     type TriageEntrySessionDepsV1,
 } from './entrySessionOrchestrator.js';
 import type { TriageSessionActionInvokerV1 } from './entrySessionOpen.js';
+import { createTestkitCorpusCollections } from '../corpus/testkit/corpusCollections.test-support.js';
 
 /**
  * The Account Collection and generic Session Actions are the two real process
- * boundaries this owner crosses. This deliberately small host double provides
- * only the calls the exercised create → link → deliver → open path makes; all
- * Triage lifecycle logic underneath remains real.
+ * boundaries this owner crosses. The canonical Collection testkit keeps link
+ * identity, relation queries and persistence real beneath that boundary.
  */
 function ownerBoundary() {
     const calls: string[] = [];
@@ -32,17 +32,11 @@ function ownerBoundary() {
         if (actionId === 'session.open') return null;
         throw new Error(`unexpected generic action: ${actionId}`);
     }) as unknown as TriageSessionActionInvokerV1;
-    const sessionLinks = {
-        identityTag: async (request: Readonly<{ field: string; components: readonly string[] }>) => (
-            `${request.field}:${request.components.join(':')}`
-        ),
-        get: async () => null,
-        batch: async () => ({ status: 'updated' as const, results: [], changeCursor: 1 }),
-    } as unknown as TriageEntrySessionDepsV1['collections']['sessionLinks'];
+    const { collections } = createTestkitCorpusCollections();
     return {
         calls,
         deps: {
-            collections: { sessionLinks },
+            collections,
             execute,
             nowMs: 1_760_000_900_000,
         } satisfies TriageEntrySessionDepsV1,

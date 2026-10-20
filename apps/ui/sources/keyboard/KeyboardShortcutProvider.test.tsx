@@ -6,7 +6,9 @@ import { storage } from '@/sync/domains/state/storage';
 import { Modal } from '@/modal';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
-import { KeyboardShortcutProvider, useKeyboardShortcutHandlers, useFindSurfaceRegistration, useEmbeddedFindKeyboard, useNativeKeyboardInput } from './KeyboardShortcutProvider';
+import { KeyboardShortcutProvider, useKeyboardShortcutHandlers, useFindSurfaceRegistration, useEmbeddedFindKeyboard, useNativeKeyboardInput, useKeyboardCommand } from './KeyboardShortcutProvider';
+import { useInboxItemNavigation } from '@/hooks/inbox/useInboxItemNavigation';
+import type { InboxItem } from '@/components/inbox/inboxItems';
 import type { FindController } from '@happier-dev/plugin-ui/presentation';
 import { AppPaneProvider, useAppPaneContext } from '@/components/appShell/panes/AppPaneProvider';
 import { buildDetailsWorkspaceStateView } from '@/components/appShell/panes/details/workspace/detailsWorkspaceSelectors';
@@ -68,6 +70,25 @@ vi.mock('expo-modules-core', async (importOriginal) => ({
 }));
 
 describe('KeyboardShortcutProvider', () => {
+    it('opens the exact selected Inbox source anchor through its registered command without settling Needs you', async () => {
+        const focus = { kind: 'session', serverId: 'home-a', id: 'source', jumpSeq: 18 } as const;
+        const items: readonly InboxItem[] = [{ key: 'source', producer: 'live', type: 'decision', view: 'needs_you',
+            title: 'Source', context: null, createdAt: 1, read: false, focus: { kind: 'session', serverId: 'home-a', id: 'source' },
+            pageRoute: '/session/source?serverId=home-a', source: { kind: 'session', id: 'source', serverId: 'home-a' } }];
+        const open = vi.fn();
+        const markOpened = vi.fn(async () => {});
+        let execute: ReturnType<typeof useKeyboardCommand> | undefined;
+        function Inbox() {
+            useInboxItemNavigation({ items, focus, view: 'needs_you', enabled: true,
+                select: () => {}, close: () => {}, open, markOpened });
+            execute = useKeyboardCommand();
+            return <Child />;
+        }
+        await renderScreen(<KeyboardShortcutProvider handlers={{}}><Inbox /></KeyboardShortcutProvider>);
+        await act(async () => { expect(execute?.('inbox.item.open')).toBe(true); });
+        expect(open).toHaveBeenCalledWith('/session/source?serverId=home-a&jumpSeq=18');
+        expect(markOpened).not.toHaveBeenCalled();
+    });
     it('lets a modal own Escape before closing an open Find surface', async () => {
         let opened = true;
         const closeFind = vi.fn(() => { opened = false; });

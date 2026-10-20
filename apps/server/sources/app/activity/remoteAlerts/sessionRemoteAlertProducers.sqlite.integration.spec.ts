@@ -12,7 +12,10 @@ import { inTx } from "@/storage/inTx";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { createPresentUserSessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication.testkit";
 import { createFakeSocket, getSocketHandler } from "@/app/api/testkit/socketHarness";
-import { createSessionPublisherPresence, type CurrentSessionPublisherAuthority } from "@/app/presence/sessionPublisherPresence";
+import { createSessionPublisherPresence, expireSessionPublisherCandidates, type CurrentSessionPublisherAuthority } from "@/app/presence/sessionPublisherPresence";
+import { isProjectedSessionStalledV1 } from '@happier-dev/protocol/sessions/awareness/runtime';
+import { buildAgentEventLocalId } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
+import { setAccountSessionFollow } from '@/app/session/follow/accountFollowService';
 
 const sendPushNotificationsAsyncSpy = vi.hoisted(() => vi.fn(async (messages: unknown[]) => messages.map(() => ({ status: "ok" }))));
 
@@ -33,19 +36,10 @@ const {
     createSessionMessage,
     updateSessionAgentState,
 } = await import("@/app/session/sessionWriteService");
-const {
-    createSessionDiscussion,
-    postSessionDiscussionMessage,
-    postSessionDiscussionMessageInTx,
-} = await import("@/app/session/discussions/mutations");
 const { machineUpdateHandler } = await import("@/app/api/socket/machineUpdateHandler");
+const { sessionUpdateHandler } = await import("@/app/api/socket/sessionUpdateHandler");
 
-const discussionAuthentication = createPresentUserSessionAccessAuthentication();
-const plainDiscussionTitle = (title: string) => ({ t: "plain" as const, v: { v: 1 as const, title } });
-const plainDiscussionBody = (text: string) => ({
-    t: "plain" as const,
-    v: { v: 1 as const, parts: [{ t: "text" as const, text }] },
-});
+const presentUserAuthentication = createPresentUserSessionAccessAuthentication();
 
 async function setSessionResponsibility(
     input: Omit<Parameters<typeof setSessionResponsibilityWithAuthentication>[0], "authentication">,
@@ -105,9 +99,16 @@ async function registerRuntimePublisher(params: Readonly<{
     return { ...params, committedFence: registration.committedFence };
 }
 
+function readSubmittedAlerts(): ActivityRemoteAlertV2[] {
+    return sendPushNotificationsAsyncSpy.mock.calls
+        .flatMap(([chunk]) => chunk as Array<{ data: ActivityRemoteAlertV2 }>)
+        .map((message) => message.data)
+        .filter((data): data is ActivityRemoteAlertV2 => data?.type === "activity_alert" && data.v === 2);
+}
+
 async function submittedAlerts(): Promise<ActivityRemoteAlertV2[]> {
-    // Producers schedule the transport after commit and a single committed
-    // Discussion can schedule both its all-messages and mention legs. Wait for
+    // Producers schedule the transport after commit and may schedule multiple
+    // attention deliveries. Wait for
     // the call set to settle instead of returning after the first transport.
     let lastCount = -1;
     let stablePasses = 0;
@@ -118,10 +119,7 @@ async function submittedAlerts(): Promise<ActivityRemoteAlertV2[]> {
         lastCount = count;
         await new Promise((resolve) => setTimeout(resolve, 25));
     }
-    return sendPushNotificationsAsyncSpy.mock.calls
-        .flatMap(([chunk]) => chunk as Array<{ data: ActivityRemoteAlertV2 }>)
-        .map((message) => message.data)
-        .filter((data): data is ActivityRemoteAlertV2 => data?.type === "activity_alert" && data.v === 2);
+    return readSubmittedAlerts();
 }
 
 function submittedBodies(): string[] {
@@ -152,7 +150,184 @@ describe("committed session mutations produce Home remote alerts", () => {
     afterAll(async () => { await harness?.close(); });
     afterEach(() => { sendPushNotificationsAsyncSpy.mockClear(); });
 
-    it("alerts the assignment target from the committed responsibility transition", async () => {
+    it.each([undefined, 'rich_sender', 'home_required'] as const)('threads exact socket sender declaration %s through committed transcript messages', async declaration => {
+        const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
+        const follower = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
+        const machine = await db.machine.create({ data: { id: randomUUID(), accountId: owner.id, metadata: '{}', kind: 'persistent' } });
+        const session = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: '{}', encryptionMode: 'plain' } });
+        await db.accessKey.create({ data: { accountId: owner.id, machineId: machine.id, sessionId: session.id, data: 'encrypted' } });
+        await db.sessionShare.create({ data: { sessionId: session.id, sharedByUserId: owner.id,
+            sharedWithUserId: follower.id, accessLevel: 'view' } });
+        await db.accountSessionFollow.createMany({ data: [owner, follower].map(account => ({ accountId: account.id,
+            sessionId: session.id, following: true, notificationLevel: 'all_messages',
+            followPolicy: JSON.stringify({ preset: 'custom', events: { message: { delivery: 'interrupt' },
+                failed_or_stopped: { delivery: 'interrupt' } } }) })) });
+        await Promise.all([owner, follower].map(account => enrollRemoteAlerts(account.id)));
+        const socket = createFakeSocket({ data: { authAuthority: 'present_user', clientType: 'session-scoped', sessionId: session.id } });
+        const presence = createSessionPublisherPresence();
+        const binding = { accountId: owner.id, machineId: machine.id, sessionId: session.id };
+        const registration = await presence.registerPublisher({ socket, binding,
+            completeActivitySnapshot: { state: 'unknown', activeCount: 0 } });
+        expect(registration.status).toBe('registered');
+        const transportSocket = socket as unknown as Parameters<typeof sessionUpdateHandler>[1];
+        sessionUpdateHandler(owner.id, transportSocket, { connectionType: 'session-scoped', socket: transportSocket,
+            userId: owner.id, sessionId: session.id }, { presence, binding });
+        const stateAck = vi.fn();
+        await getSocketHandler(socket, 'update-state')({ sid: session.id, agentState: '{}', expectedVersion: 0,
+            activitySummaryV1: { ...(declaration ? { ownerActivityDelivery: declaration } : {}) } }, stateAck);
+        expect(stateAck).toHaveBeenCalledWith(expect.objectContaining({ result: 'success' }));
+        // Later ordinary snapshots need not repeat the host's sender declaration.
+        await getSocketHandler(socket, 'update-state')({ sid: session.id, agentState: '{}', expectedVersion: 1,
+            activitySummaryV1: {} }, stateAck);
+        expect(stateAck).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'success' }));
+        const acknowledgement = vi.fn();
+        await getSocketHandler(socket, 'transcript-observation-v1')({ v: 1, sessionId: session.id,
+            localId: `agent-${randomUUID()}`, messageRole: 'agent', sidechainId: null,
+            createdAt: Date.now(), updatedAt: Date.now(), provenance: { kind: 'non_dependent', source: 'external' },
+            content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'Committed answer' } } },
+        }, acknowledgement);
+        expect(acknowledgement).toHaveBeenCalledWith(expect.objectContaining({ ok: true, status: 'observed', didWrite: true }));
+        const alerts = (await submittedAlerts()).filter(alert => alert.sessionId === session.id && alert.event.type === 'message');
+        expect(alerts.map(alert => alert.accountId).sort()).toEqual((declaration === 'rich_sender' ? [follower.id] : [owner.id, follower.id]).sort());
+        sendPushNotificationsAsyncSpy.mockClear();
+        const legacyAck = vi.fn();
+        await getSocketHandler(socket, 'message')({ sid: session.id, localId: `legacy-agent-${randomUUID()}`, messageRole: 'agent',
+            message: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'Legacy ingress answer' } } } }, legacyAck);
+        expect(legacyAck).toHaveBeenCalledWith(expect.objectContaining({ ok: true, didWrite: true }));
+        const legacyAlerts = (await submittedAlerts()).filter(alert => alert.sessionId === session.id && alert.event.type === 'message');
+        expect(legacyAlerts.map(alert => alert.accountId).sort()).toEqual((declaration === 'rich_sender' ? [follower.id] : [owner.id, follower.id]).sort());
+        sendPushNotificationsAsyncSpy.mockClear();
+        const userAck = vi.fn();
+        await getSocketHandler(socket, 'transcript-observation-v1')({ v: 1, sessionId: session.id,
+            localId: `observed-user-${randomUUID()}`, messageRole: 'user', sidechainId: null,
+            createdAt: Date.now(), updatedAt: Date.now(), provenance: { kind: 'non_dependent', source: 'external' },
+            content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Native observed input without a human receipt' } } },
+        }, userAck);
+        expect(userAck).toHaveBeenCalledWith(expect.objectContaining({ ok: true, status: 'observed', didWrite: true }));
+        // Badge/wake transport can settle before this after-commit material
+        // alert; wait for the exact owned output, not another channel's count.
+        await vi.waitFor(() => expect(readSubmittedAlerts()
+            .filter(alert => alert.sessionId === session.id && alert.event.type === 'message')
+            .map(alert => alert.accountId).sort()).toEqual([owner.id, follower.id].sort()));
+        sendPushNotificationsAsyncSpy.mockClear();
+        const turnId = randomUUID();
+        const turnAck = vi.fn();
+        await getSocketHandler(socket, 'session-turn-mutation')({ v: 1, sessionId: session.id,
+            mutationId: randomUUID(), action: 'begin', turnId, observedAt: Date.now() }, turnAck);
+        expect(turnAck).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'success', applied: true }));
+        const observedAt = Date.now();
+        await getSocketHandler(socket, 'session-turn-mutation')({ v: 1, sessionId: session.id,
+            mutationId: randomUUID(), action: 'fail', turnId, observedAt, issue: {
+                v: 1, scope: 'primary_session', status: 'failed', code: 'opencode_prompt_submission_failed',
+                source: 'agent_session_error', occurredAt: observedAt, provider: 'opencode', sanitizedPreview: 'test',
+            } }, turnAck);
+        expect(turnAck).toHaveBeenLastCalledWith(expect.objectContaining({ result: 'success', applied: true }));
+        const terminalAlerts = (await submittedAlerts()).filter(alert => alert.sessionId === session.id && alert.event.type === 'failed');
+        expect(terminalAlerts.map(alert => alert.accountId).sort()).toEqual((declaration === 'rich_sender' ? [follower.id] : [owner.id, follower.id]).sort());
+    });
+
+    it.each(['important', 'quiet', 'off'] as const)('publishes one exact presence/Turn stalled original at %s treatment and settles on recovery', async preset => {
+        const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
+        const machine = await db.machine.create({ data: { id: randomUUID(), accountId: owner.id, metadata: '{}' } });
+        const session = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: '{}', encryptionMode: 'plain' } });
+        await db.accessKey.create({ data: { accountId: owner.id, machineId: machine.id, sessionId: session.id, data: 'encrypted' } });
+        const presence = createSessionPublisherPresence();
+        const socket = {};
+        const registered = await presence.registerPublisher({ socket, binding: { accountId: owner.id, machineId: machine.id, sessionId: session.id },
+            completeActivitySnapshot: { state: 'active', activeCount: 1 } });
+        if (registered.status !== 'registered') throw new Error('Expected real publisher');
+        const turnId = randomUUID();
+        expect(await applySessionTurnMutation({ actorUserId: owner.id, mutation: { v: 1, sessionId: session.id,
+            mutationId: randomUUID(), action: 'begin', turnId, observedAt: Date.now() } })).toMatchObject({ ok: true });
+        await setAccountSessionFollow({ accountId: owner.id, sessionId: session.id, authentication: presentUserAuthentication,
+            preferences: { policy: preset === 'off' ? { preset: 'custom', events: { stalled: { delivery: 'off' } } } : { preset } } });
+        await enrollRemoteAlerts(owner.id);
+        const messagesBefore = await db.sessionMessage.count({ where: { sessionId: session.id } });
+        const candidates = [{ sessionId: session.id, observedFence: registered.committedFence }];
+        expect(await expireSessionPublisherCandidates({ candidates })).toMatchObject([{ status: 'expired' }]);
+        const alerts = await submittedAlerts();
+        expect(alerts.filter(alert => alert.sessionId === session.id)).toEqual(preset === 'important' ? [expect.objectContaining({
+            event: { type: 'source_unavailable', stalledOccurrence: { turnId, publisherFence: registered.committedFence.getTime() } },
+        })] : []);
+        expect(await expireSessionPublisherCandidates({ candidates })).toEqual([{ status: 'stale', sessionId: session.id }]);
+        expect(await db.sessionMessage.count({ where: { sessionId: session.id } })).toBe(messagesBefore);
+        expect(isProjectedSessionStalledV1(await db.session.findUniqueOrThrow({ where: { id: session.id } }))).toBe(true);
+        expect(await presence.touchPublisher({ socket })).toMatchObject({ status: 'touched' });
+        // The Inbox/Work source is the existing projection, not a retained notice.
+        expect(isProjectedSessionStalledV1(await db.session.findUniqueOrThrow({ where: { id: session.id } }))).toBe(false);
+        expect((await submittedAlerts()).filter(alert => alert.sessionId === session.id)).toHaveLength(preset === 'important' ? 1 : 0);
+    });
+
+    it('withdraws a stalled original when recovery wins during dispatch preparation', async () => {
+        const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
+        const machine = await db.machine.create({ data: { id: randomUUID(), accountId: owner.id, metadata: '{}' } });
+        const session = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: '{}', encryptionMode: 'plain' } });
+        await db.accessKey.create({ data: { accountId: owner.id, machineId: machine.id, sessionId: session.id, data: 'encrypted' } });
+        const presence = createSessionPublisherPresence();
+        const socket = {};
+        const registered = await presence.registerPublisher({ socket, binding: { accountId: owner.id, machineId: machine.id, sessionId: session.id },
+            completeActivitySnapshot: { state: 'active', activeCount: 1 } });
+        if (registered.status !== 'registered') throw new Error('Expected real publisher');
+        expect(await applySessionTurnMutation({ actorUserId: owner.id, mutation: { v: 1, sessionId: session.id,
+            mutationId: randomUUID(), action: 'begin', turnId: randomUUID(), observedAt: Date.now() } })).toMatchObject({ ok: true });
+        await enrollRemoteAlerts(owner.id);
+        // A real DB boundary delays preparation; all policy/presence logic remains real.
+        const tokenDelegate = db.accountPushToken;
+        const originalFindTokens = tokenDelegate.findMany;
+        const findTokens = originalFindTokens.bind(tokenDelegate);
+        let recovered = false;
+        const gate = vi.spyOn(tokenDelegate, 'findMany').mockImplementation(args => Object.assign((async () => {
+            const tokens = await findTokens(args);
+            if (!recovered && args?.select?.remoteAlerts === true) {
+                expect(await presence.touchPublisher({ socket })).toMatchObject({ status: 'touched' });
+                recovered = true;
+            }
+            return tokens;
+        })(), { [Symbol.toStringTag]: 'PrismaPromise' as const })); // Preserve the DB adapter's public promise brand at this boundary.
+        try {
+            await expireSessionPublisherCandidates({ candidates: [{ sessionId: session.id, observedFence: registered.committedFence }] });
+            await vi.waitFor(() => expect(recovered).toBe(true));
+            expect((await submittedAlerts()).filter(alert => alert.sessionId === session.id)).toEqual([]);
+        } finally {
+            gate.mockRestore();
+            // Prisma exposes virtual methods without their value in the own
+            // descriptor; Vitest restoration alone shadows the real method.
+            Object.defineProperty(tokenDelegate, 'findMany', { configurable: true, writable: true, value: originalFindTokens });
+        }
+    });
+
+    it.each(['plain', 'e2ee'] as const)('routes committed %s Goal/update originals through the same personal policy and exact message reference', async encryptionMode => {
+        const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode } });
+        const viewer = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: 'plain' } });
+        const machine = await db.machine.create({ data: { id: randomUUID(), accountId: owner.id, metadata: '{}' } });
+        const session = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: '{}', encryptionMode } });
+        await db.sessionShare.create({ data: { sessionId: session.id, sharedByUserId: owner.id,
+            sharedWithUserId: viewer.id, accessLevel: 'view' } });
+        const publisherAuthority = await registerRuntimePublisher({ accountId: owner.id, machineId: machine.id, sessionId: session.id });
+        await enrollRemoteAlerts(viewer.id);
+        await setAccountSessionFollow({ accountId: viewer.id, sessionId: session.id, authentication: presentUserAuthentication,
+            preferences: { policy: { preset: 'custom', events: { update_posted: { delivery: 'interrupt' } } } } });
+        const publish = (type: 'goal-changed' | 'worker-report', localId = buildAgentEventLocalId(type, [randomUUID()])) =>
+            createSessionMessage({ inputAdmission: 'transcriptOnly', actorUserId: owner.id, sessionId: session.id,
+                publisherAuthority, localId, messageRole: 'event',
+                content: encryptionMode === 'plain' ? { t: 'plain', v: { role: 'agent', content: { type: 'event', id: localId,
+                    data: type === 'goal-changed' ? { type } : { type, summary: 'Private published result' } } } }
+                    : { t: 'encrypted', c: 'sealed-original' } });
+        expect(await publish('goal-changed')).toMatchObject({ ok: true, didWrite: true });
+        expect(await submittedAlerts()).toEqual([]);
+        const localId = buildAgentEventLocalId('worker-report', [randomUUID()]);
+        const published = await publish('worker-report', localId);
+        expect(published).toMatchObject({ ok: true, didWrite: true });
+        if (!published.ok) throw new Error('Expected committed original');
+        expect(await submittedAlerts()).toEqual([expect.objectContaining({ accountId: viewer.id, sessionId: session.id,
+            event: { type: 'message', sequenceDomain: 'session_transcript', messageSeq: published.message.seq } })]);
+        expect(submittedBodies().join(' ')).not.toContain('Private published result');
+        sendPushNotificationsAsyncSpy.mockClear();
+        expect(await publish('worker-report', localId)).toMatchObject({ ok: true, didWrite: false });
+        expect(await submittedAlerts()).toEqual([]);
+    });
+
+    it("alerts the assignment target through default rules without enrolling Follow or read state", async () => {
         const owner = await db.account.create({ data: { publicKey: randomUUID() } });
         const assignee = await db.account.create({ data: { publicKey: randomUUID() } });
         const session = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: "{}" } });
@@ -165,17 +340,31 @@ describe("committed session mutations produce Home remote alerts", () => {
         const result = await setSessionResponsibility({
             actorAccountId: owner.id, sessionId: session.id, responsibleAccountId: assignee.id,
         });
-        expect(result).toMatchObject({ ok: true, changed: true, autoFollowed: true });
+        expect(result).toMatchObject({ ok: true, changed: true, autoFollowed: false });
         expect(await submittedAlerts()).toEqual([expect.objectContaining({
             sessionId: session.id, accountId: assignee.id, event: { type: "assigned" },
         })]);
-        expect(submittedBodies()).toEqual(["Following because you were assigned."]);
+        expect(submittedBodies()).toEqual(["A session was assigned to you."]);
+        const where = { accountId_sessionId: { accountId: assignee.id, sessionId: session.id } };
+        expect(await db.accountSessionFollow.findUnique({ where })).toBeNull();
+        expect(await db.accountSessionReadState.findUnique({ where })).toBeNull();
 
         // Re-submitting the current desired state is a no-op and alerts nobody.
         sendPushNotificationsAsyncSpy.mockClear();
         await setSessionResponsibility({ actorAccountId: owner.id, sessionId: session.id, responsibleAccountId: assignee.id });
         await new Promise((resolve) => setTimeout(resolve, 100));
         expect(sendPushNotificationsAsyncSpy.mock.calls).toEqual([]);
+
+        // A different applicable operational default is the same canonical rule
+        // contract, rather than an assignment-Boolean fallback in this producer.
+        await setSessionResponsibility({ actorAccountId: owner.id, sessionId: session.id, responsibleAccountId: null });
+        await db.account.update({ where: { id: assignee.id }, data: {
+            sessionAutoFollowAssigned: false, sessionAutoFollowDirect: true,
+        } });
+        await setSessionResponsibility({ actorAccountId: owner.id, sessionId: session.id, responsibleAccountId: assignee.id });
+        expect(await submittedAlerts()).toEqual([expect.objectContaining({ accountId: assignee.id, event: { type: 'assigned' } })]);
+        expect(await db.accountSessionFollow.findUnique({ where })).toBeNull();
+        expect(await db.accountSessionReadState.findUnique({ where })).toBeNull();
     });
 
     it("does not claim assignment caused Follow when the assignee already followed", async () => {
@@ -237,7 +426,7 @@ describe("committed session mutations produce Home remote alerts", () => {
         })).toEqual({ responsibleAccountId: assignee.id });
     });
 
-    it("does not notify the actor about their own self-assignment, but still applies auto-Follow", async () => {
+    it("does not notify or enroll the actor about their own self-assignment", async () => {
         const owner = await db.account.create({ data: { publicKey: randomUUID() } });
         const session = await db.session.create({ data: { accountId: owner.id, tag: randomUUID(), metadata: "{}" } });
         await enrollRemoteAlerts(owner.id);
@@ -245,8 +434,8 @@ describe("committed session mutations produce Home remote alerts", () => {
         const result = await setSessionResponsibility({
             actorAccountId: owner.id, sessionId: session.id, responsibleAccountId: owner.id,
         });
-        expect(result).toMatchObject({ ok: true, changed: true, autoFollowed: true });
-        // Self-assignment is distinct from auto-Follow: no one-shot self notification.
+        expect(result).toMatchObject({ ok: true, changed: true, autoFollowed: false });
+        // Self-assignment has no one-shot self notification.
         // The canonical badge coalescer may still publish its content-free
         // projection wake for the responsibility change; that is not an
         // Activity alert and must not be suppressed by this producer contract.
@@ -254,7 +443,7 @@ describe("committed session mutations produce Home remote alerts", () => {
         const follow = await db.accountSessionFollow.findUnique({
             where: { accountId_sessionId: { accountId: owner.id, sessionId: session.id } },
         });
-        expect(follow).toMatchObject({ following: true });
+        expect(follow).toBeNull();
     });
 
     it("alerts a follower on ready and leaves the owner to a trusted persistent runtime's rich sender", async () => {
@@ -269,6 +458,11 @@ describe("committed session mutations produce Home remote alerts", () => {
         } });
         await db.accountSessionFollow.create({ data: {
             sessionId: session.id, accountId: follower.id, following: true, notificationLevel: "important",
+            followPolicy: JSON.stringify({ preset: 'everything' }),
+        } });
+        await db.accountSessionFollow.create({ data: {
+            sessionId: session.id, accountId: owner.id, following: true, notificationLevel: 'important',
+            followPolicy: JSON.stringify({ preset: 'everything' }),
         } });
         await enrollRemoteAlerts(owner.id);
         await enrollRemoteAlerts(follower.id);
@@ -305,7 +499,10 @@ describe("committed session mutations produce Home remote alerts", () => {
             } });
             await db.accountSessionFollow.create({ data: {
                 sessionId: session.id, accountId: follower.id, following: true, notificationLevel: "important",
+                followPolicy: JSON.stringify({ preset: 'everything' }),
             } });
+            await db.accountSessionFollow.create({ data: { sessionId: session.id, accountId: owner.id,
+                following: true, notificationLevel: 'important', followPolicy: JSON.stringify({ preset: 'everything' }) } });
             const [ownerToken, followerToken] = await Promise.all([
                 enrollRemoteAlerts(owner.id),
                 enrollRemoteAlerts(follower.id),
@@ -384,7 +581,7 @@ describe("committed session mutations produce Home remote alerts", () => {
 
         expect(await submittedAlerts()).toEqual([expect.objectContaining({
             sessionId: session.id, accountId: follower.id,
-            event: { type: requestKind === "permission" ? "permission_request" : "user_action_request" },
+            event: { type: requestKind === "permission" ? "permission_request" : "user_action_request", requestId: occurrence.requestId },
         })]);
 
         sendPushNotificationsAsyncSpy.mockClear();
@@ -464,6 +661,7 @@ describe("committed session mutations produce Home remote alerts", () => {
                 v: 1, sessionId: session.id, mutationId: randomUUID(), action: "begin", turnId, observedAt: Date.now(),
             } })).toMatchObject({ ok: true });
             const current = await db.session.findUniqueOrThrow({ where: { id: session.id } });
+            const requestId = randomUUID();
             expect(await updateSessionAgentState({
                 actorUserId: owner.id,
                 sessionId: session.id,
@@ -472,7 +670,7 @@ describe("committed session mutations produce Home remote alerts", () => {
                 pendingPermissionRequestCount: requestKind === "permission" ? 1 : 0,
                 pendingUserActionRequestCount: requestKind === "user_action" ? 1 : 0,
                 userActionRequiredOccurrences: [{
-                    requestId: randomUUID(), sourceTurnId: turnId, requestKind, occurredAt: Date.now(),
+                    requestId, sourceTurnId: turnId, requestKind, occurredAt: Date.now(),
                 }],
                 runtimeComposition: {
                     publisherAuthority: {
@@ -485,16 +683,15 @@ describe("committed session mutations produce Home remote alerts", () => {
 
             const eventType = requestKind === "permission" ? "permission_request" : "user_action_request";
             expect(await submittedAlerts()).toEqual(expect.arrayContaining([
-                expect.objectContaining({ accountId: owner.id, sessionId: session.id, event: { type: eventType } }),
-                expect.objectContaining({ accountId: follower.id, sessionId: session.id, event: { type: eventType } }),
+                expect.objectContaining({ accountId: owner.id, sessionId: session.id, event: { type: eventType, requestId } }),
+                expect.objectContaining({ accountId: follower.id, sessionId: session.id, event: { type: eventType, requestId } }),
             ]));
             expect(submittedTokens().sort()).toEqual([ownerToken, followerToken].sort());
         },
     );
 
-    // The rich owner sender publishes only `ready`, permission and user-action
-    // topics, so a terminal turn is always the Home's alert to deliver — on a
-    // persistent daemon exactly as on a Runner.
+    // Released publishers omitted the newer sender declaration, so their
+    // terminal alerts remain Home-owned on persistent Machines and Runners.
     it.each([
         { action: "fail", machineKind: "persistent", expectedOwnerAlert: true },
         { action: "cancel", machineKind: "persistent", expectedOwnerAlert: true },
@@ -560,29 +757,30 @@ describe("committed session mutations produce Home remote alerts", () => {
         },
     );
 
-    it("alerts all_messages followers after an authenticated human post but never alerts the author", async () => {
+    it("alerts Everything and Custom human-message followers after an authenticated human post but never alerts the author", async () => {
         const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
         const author = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
         const allMessages = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
-        const important = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
+        const customHuman = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
         const session = await db.session.create({ data: {
             accountId: owner.id, tag: randomUUID(), metadata: "{}", encryptionMode: "plain",
         } });
-        await db.sessionShare.createMany({ data: [author, allMessages, important].map((account) => ({
+        await db.sessionShare.createMany({ data: [author, allMessages, customHuman].map((account) => ({
             sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: account.id, accessLevel: "edit" as const,
         })) });
         await db.accountSessionFollow.createMany({ data: [
             { sessionId: session.id, accountId: author.id, following: true, notificationLevel: "all_messages" },
             { sessionId: session.id, accountId: allMessages.id, following: true, notificationLevel: "all_messages" },
-            { sessionId: session.id, accountId: important.id, following: true, notificationLevel: "important" },
+            { sessionId: session.id, accountId: customHuman.id, following: true, notificationLevel: "important",
+                followPolicy: JSON.stringify({ preset: 'custom', events: { person_wrote: { delivery: 'interrupt' } } }) },
         ] });
-        const [authorToken, allMessagesToken, importantToken] = await Promise.all(
-            [author, allMessages, important].map((account) => enrollRemoteAlerts(account.id)),
+        const [authorToken, allMessagesToken, customHumanToken] = await Promise.all(
+            [author, allMessages, customHuman].map((account) => enrollRemoteAlerts(account.id)),
         );
 
         const result = await createSessionMessage({
             inputAdmission: "authenticatedAccount",
-            authentication: discussionAuthentication,
+            authentication: presentUserAuthentication,
             actorUserId: author.id,
             sessionId: session.id,
             localId: `human-${randomUUID()}`,
@@ -599,15 +797,15 @@ describe("committed session mutations produce Home remote alerts", () => {
             }),
             expect.objectContaining({
                 sessionId: session.id,
-                accountId: important.id,
+                accountId: customHuman.id,
                 event: { type: "human_message", sequenceDomain: "session_transcript", messageSeq: 1 },
             }),
         ]));
-        expect(submittedTokens().sort()).toEqual([allMessagesToken, importantToken].sort());
+        expect(submittedTokens().sort()).toEqual([allMessagesToken, customHumanToken].sort());
         expect(submittedTokens()).not.toContain(authorToken);
     });
 
-    it("alerts all_messages followers for a newly committed attention-bearing Agent message", async () => {
+    it("alerts Custom interrupting Message followers for a newly committed attention-bearing Agent message", async () => {
         const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
         const allMessages = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
         const important = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
@@ -618,14 +816,15 @@ describe("committed session mutations produce Home remote alerts", () => {
             sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: account.id, accessLevel: "view" as const,
         })) });
         await db.accountSessionFollow.createMany({ data: [
-            { sessionId: session.id, accountId: allMessages.id, following: true, notificationLevel: "all_messages" },
+            { sessionId: session.id, accountId: allMessages.id, following: true, notificationLevel: "all_messages",
+                followPolicy: JSON.stringify({ preset: 'custom', events: { message: { delivery: 'interrupt' } } }) },
             { sessionId: session.id, accountId: important.id, following: true, notificationLevel: "important" },
         ] });
         await Promise.all([allMessages, important].map((account) => enrollRemoteAlerts(account.id)));
 
         const result = await createSessionMessage({
             inputAdmission: "authenticatedAccount",
-            authentication: discussionAuthentication,
+            authentication: presentUserAuthentication,
             actorUserId: owner.id,
             sessionId: session.id,
             localId: `agent-${randomUUID()}`,
@@ -656,7 +855,7 @@ describe("committed session mutations produce Home remote alerts", () => {
         await db.accountSessionFollow.create({ data: {
             sessionId: session.id, accountId: follower.id, following: true, notificationLevel: "important",
         } });
-        await enrollRemoteAlerts(follower.id);
+        const followerToken = await enrollRemoteAlerts(follower.id);
         const options = { operationSocketBatchLimits: { ok: true as const, limits: { maxItems: 200, maxSerializedBytes: 524_288 } } };
 
         const forgedSocket = createFakeSocket({ data: { clientType: "machine-scoped", machineId: unboundMachine.id } });
@@ -674,303 +873,13 @@ describe("committed session mutations produce Home remote alerts", () => {
             v: 1, type: "external-session-source-unavailable", sessionId: session.id,
             machineId: machine.id, observedAtMs: Date.now(),
         });
-        expect(await submittedAlerts()).toEqual([expect.objectContaining({
-            sessionId: session.id, accountId: follower.id, event: { type: "source_unavailable" },
-        })]);
+        // External-source repair has no exact in-flight Turn/fence witness.
+        // It remains a quiet update, not a fabricated interrupting stalled event.
+        expect(await submittedAlerts()).toEqual([]);
+        expect(sendPushNotificationsAsyncSpy.mock.calls.flatMap(([messages]) => messages)).toEqual([
+            expect.objectContaining({ to: followerToken, _contentAvailable: true,
+                data: { type: 'session_changed', serverId: 'srv_home_a', sessionId: session.id } }),
+        ]);
     });
 
-    it("alerts exactly the current mentioned Accounts after a human Discussion commit and not on replay", async () => {
-        const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
-        const mentionedA = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
-        const mentionedB = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
-        const revoked = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
-        const session = await db.session.create({ data: {
-            accountId: owner.id, tag: randomUUID(), metadata: "{}", encryptionMode: "plain",
-        } });
-        await db.sessionShare.createMany({ data: [mentionedA, mentionedB, revoked].map((account) => ({
-            sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: account.id, accessLevel: "view" as const,
-        })) });
-        await db.sessionShare.deleteMany({ where: { sessionId: session.id, sharedWithUserId: revoked.id } });
-        const tokenA = await enrollRemoteAlerts(mentionedA.id);
-        const tokenB = await enrollRemoteAlerts(mentionedB.id);
-        await enrollRemoteAlerts(revoked.id);
-
-        const request = {
-            creationLocalId: `discussion-${randomUUID()}`,
-            titleContent: plainDiscussionTitle("Release readiness"),
-            firstMessage: {
-                localId: `message-${randomUUID()}`,
-                content: plainDiscussionBody("Please review"),
-                mentionedAccountIds: [mentionedA.id, mentionedB.id, mentionedA.id],
-            },
-        };
-        const created = await createSessionDiscussion({
-            authentication: discussionAuthentication,
-            actorAccountId: owner.id,
-            sessionId: session.id,
-            request,
-        });
-        expect(created.ok).toBe(true);
-        if (!created.ok) return;
-        const alerts = await submittedAlerts();
-        expect(alerts).toHaveLength(2);
-        expect(alerts).toEqual(expect.arrayContaining([
-            expect.objectContaining({
-                sessionId: session.id, accountId: mentionedA.id,
-                event: {
-                    type: "discussion_mention", sequenceDomain: "discussion",
-                    discussionId: created.value.discussion.id, messageSeq: 1,
-                },
-            }),
-            expect.objectContaining({
-                sessionId: session.id, accountId: mentionedB.id,
-                event: {
-                    type: "discussion_mention", sequenceDomain: "discussion",
-                    discussionId: created.value.discussion.id, messageSeq: 1,
-                },
-            }),
-        ]));
-        expect(submittedTokens().sort()).toEqual([tokenA, tokenB].sort());
-
-        sendPushNotificationsAsyncSpy.mockClear();
-        expect((await createSessionDiscussion({
-            authentication: discussionAuthentication,
-            actorAccountId: owner.id,
-            sessionId: session.id,
-            request,
-        })).ok).toBe(true);
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        expect(sendPushNotificationsAsyncSpy.mock.calls).toEqual([]);
-
-        const denied = await postSessionDiscussionMessage({
-            authentication: discussionAuthentication,
-            actorAccountId: owner.id,
-            sessionId: session.id,
-            discussionId: created.value.discussion.id,
-            request: {
-                localId: `message-${randomUUID()}`,
-                content: plainDiscussionBody("No stale alert"),
-                mentionedAccountIds: [revoked.id],
-            },
-        });
-        expect(denied).toEqual({ ok: false, error: "session_discussion_invalid_mention" });
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        expect(sendPushNotificationsAsyncSpy.mock.calls).toEqual([]);
-    });
-
-    it("never alerts a human author about their own Discussion mention", async () => {
-        const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
-        const mentioned = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
-        const session = await db.session.create({ data: {
-            accountId: owner.id, tag: randomUUID(), metadata: "{}", encryptionMode: "plain",
-        } });
-        await db.sessionShare.create({ data: {
-            sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: mentioned.id, accessLevel: "view",
-        } });
-        await enrollRemoteAlerts(owner.id);
-        const mentionedToken = await enrollRemoteAlerts(mentioned.id);
-
-        const created = await createSessionDiscussion({
-            authentication: discussionAuthentication,
-            actorAccountId: owner.id,
-            sessionId: session.id,
-            request: {
-                creationLocalId: `discussion-${randomUUID()}`,
-                titleContent: plainDiscussionTitle("Self mention"),
-                firstMessage: {
-                    localId: `message-${randomUUID()}`,
-                    content: plainDiscussionBody("cc me"),
-                    mentionedAccountIds: [owner.id, mentioned.id],
-                },
-            },
-        });
-        expect(created.ok).toBe(true);
-        if (!created.ok) return;
-
-        const alerts = await submittedAlerts();
-        expect(alerts.map((alert) => alert.accountId)).toEqual([mentioned.id]);
-        expect(submittedTokens()).toEqual([mentionedToken]);
-    });
-
-    it("alerts important followers for a committed human Discussion post without duplicating mention recipients", async () => {
-        const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
-        const allMessages = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
-        const mentionedAllMessages = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
-        const important = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
-        const session = await db.session.create({ data: {
-            accountId: owner.id, tag: randomUUID(), metadata: "{}", encryptionMode: "plain",
-        } });
-        await db.sessionShare.createMany({ data: [allMessages, mentionedAllMessages, important].map((account) => ({
-            sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: account.id, accessLevel: "view" as const,
-        })) });
-        await db.accountSessionFollow.createMany({ data: [
-            { sessionId: session.id, accountId: allMessages.id, following: true, notificationLevel: "all_messages" },
-            { sessionId: session.id, accountId: mentionedAllMessages.id, following: true, notificationLevel: "all_messages" },
-            { sessionId: session.id, accountId: important.id, following: true, notificationLevel: "important" },
-        ] });
-        await Promise.all([allMessages, mentionedAllMessages, important].map((account) => enrollRemoteAlerts(account.id)));
-
-        const created = await createSessionDiscussion({
-            authentication: discussionAuthentication,
-            actorAccountId: owner.id,
-            sessionId: session.id,
-            request: {
-                creationLocalId: `discussion-${randomUUID()}`,
-                titleContent: plainDiscussionTitle("Every message"),
-                firstMessage: {
-                    localId: `message-${randomUUID()}`,
-                    content: plainDiscussionBody("A committed discussion message"),
-                    mentionedAccountIds: [mentionedAllMessages.id],
-                },
-            },
-        });
-        expect(created.ok).toBe(true);
-        if (!created.ok) return;
-
-        const alerts = await submittedAlerts();
-        expect(alerts).toEqual(expect.arrayContaining([
-            expect.objectContaining({ accountId: allMessages.id, event: {
-                type: "human_message", sequenceDomain: "discussion",
-                discussionId: created.value.discussion.id, messageSeq: 1,
-            } }),
-            expect.objectContaining({ accountId: mentionedAllMessages.id, event: {
-                type: "discussion_mention", sequenceDomain: "discussion",
-                discussionId: created.value.discussion.id, messageSeq: 1,
-            } }),
-            expect.objectContaining({ accountId: important.id, event: {
-                type: "human_message", sequenceDomain: "discussion",
-                discussionId: created.value.discussion.id, messageSeq: 1,
-            } }),
-        ]));
-        expect(alerts).toHaveLength(3);
-    });
-
-    it("keeps equal first-message sequences distinct across Discussions in one Session", async () => {
-        const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
-        const mentioned = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
-        const session = await db.session.create({ data: {
-            accountId: owner.id, tag: randomUUID(), metadata: "{}", encryptionMode: "plain",
-        } });
-        await db.sessionShare.create({ data: {
-            sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: mentioned.id, accessLevel: "view",
-        } });
-        await enrollRemoteAlerts(mentioned.id);
-
-        const created = await Promise.all(["first", "second"].map(async (label) => await createSessionDiscussion({
-            authentication: discussionAuthentication,
-            actorAccountId: owner.id,
-            sessionId: session.id,
-            request: {
-                creationLocalId: `discussion-${label}-${randomUUID()}`,
-                titleContent: plainDiscussionTitle(label),
-                firstMessage: {
-                    localId: `message-${label}-${randomUUID()}`,
-                    content: plainDiscussionBody(label),
-                    mentionedAccountIds: [mentioned.id],
-                },
-            },
-        })));
-        expect(created.every((result) => result.ok)).toBe(true);
-        if (!created[0]?.ok || !created[1]?.ok) return;
-
-        const discussionIds = [
-            created[0].value.discussion.id,
-            created[1].value.discussion.id,
-        ];
-        expect(discussionIds[0]).not.toBe(discussionIds[1]);
-        const alerts = await submittedAlerts();
-        expect(alerts).toHaveLength(2);
-        expect(alerts.map((alert) => alert.event)).toEqual(expect.arrayContaining(discussionIds.map((discussionId) => ({
-            type: "discussion_mention",
-            sequenceDomain: "discussion",
-            discussionId,
-            messageSeq: 1,
-        }))));
-    });
-
-    it("uses the same committed mention producer for trusted Agent posts and discards rollback callbacks", async () => {
-        const owner = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
-        const mentioned = await db.account.create({ data: { publicKey: randomUUID(), encryptionMode: "plain" } });
-        const session = await db.session.create({ data: {
-            accountId: owner.id, tag: randomUUID(), metadata: "{}", encryptionMode: "plain",
-        } });
-        await db.sessionShare.create({ data: {
-            sessionId: session.id, sharedByUserId: owner.id, sharedWithUserId: mentioned.id, accessLevel: "view",
-        } });
-        await enrollRemoteAlerts(mentioned.id);
-        const created = await createSessionDiscussion({
-            authentication: discussionAuthentication,
-            actorAccountId: owner.id,
-            sessionId: session.id,
-            request: {
-                creationLocalId: `discussion-${randomUUID()}`,
-                titleContent: plainDiscussionTitle("Agent follow-up"),
-                firstMessage: {
-                    localId: `message-${randomUUID()}`,
-                    content: plainDiscussionBody("Initial"),
-                    mentionedAccountIds: [],
-                },
-            },
-        });
-        expect(created.ok).toBe(true);
-        if (!created.ok) return;
-
-        const agentRequest = {
-            localId: `agent-message-${randomUUID()}`,
-            content: plainDiscussionBody("Agent asks for review"),
-            mentionedAccountIds: [mentioned.id],
-        };
-        const producer = { v: 1 as const, kind: "agent" as const, sessionId: session.id, runId: randomUUID() };
-        expect((await postSessionDiscussionMessage({
-            authentication: discussionAuthentication,
-            actorAccountId: owner.id,
-            sessionId: session.id,
-            discussionId: created.value.discussion.id,
-            request: agentRequest,
-            producer,
-        })).ok).toBe(true);
-        expect(await submittedAlerts()).toEqual([expect.objectContaining({
-            sessionId: session.id,
-            accountId: mentioned.id,
-            event: {
-                type: "discussion_mention", sequenceDomain: "discussion",
-                discussionId: created.value.discussion.id, messageSeq: 2,
-            },
-        })]);
-
-        sendPushNotificationsAsyncSpy.mockClear();
-        expect((await postSessionDiscussionMessage({
-            authentication: discussionAuthentication,
-            actorAccountId: owner.id,
-            sessionId: session.id,
-            discussionId: created.value.discussion.id,
-            request: agentRequest,
-            producer,
-        })).ok).toBe(true);
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        expect(sendPushNotificationsAsyncSpy.mock.calls).toEqual([]);
-
-        const rolledBackLocalId = `rolled-back-${randomUUID()}`;
-        await expect(inTx(async (tx) => {
-            const result = await postSessionDiscussionMessageInTx(tx, {
-                authentication: discussionAuthentication,
-                actorAccountId: owner.id,
-                sessionId: session.id,
-                discussionId: created.value.discussion.id,
-                request: {
-                    localId: rolledBackLocalId,
-                    content: plainDiscussionBody("This transaction rolls back"),
-                    mentionedAccountIds: [mentioned.id],
-                },
-            });
-            expect(result.ok).toBe(true);
-            throw new Error("force rollback");
-        })).rejects.toThrow("force rollback");
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        expect(sendPushNotificationsAsyncSpy.mock.calls).toEqual([]);
-        expect(await db.sessionDiscussionMessage.count({ where: {
-            discussionId: created.value.discussion.id,
-            localId: rolledBackLocalId,
-        } })).toBe(0);
-    });
 });

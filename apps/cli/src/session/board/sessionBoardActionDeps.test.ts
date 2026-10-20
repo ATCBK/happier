@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,7 +13,9 @@ import {
   verifyExternalActionMachineRequestV1,
   projectSessionAccessCapabilitiesV1,
   FeaturesResponseSchema,
+  ExternalActionExecutionAuthorizationV1Schema,
   type ExternalActionExecutionAuthorizationV1,
+  type PluginInputTypeContributionV1,
 } from '@happier-dev/protocol';
 import tweetnacl from 'tweetnacl';
 import { SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS } from '@happier-dev/protocol/rpc';
@@ -44,7 +47,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { CallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { ApprovalRequest } from '@happier-dev/protocol';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 import { registerHappierMcpBuiltInTools } from '@/mcp/server/registerHappierMcpBuiltInTools';
@@ -54,6 +57,14 @@ import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { createCliWidgetDefinitionActionDepsV1 } from '@/session/actions/widgetDefinitionActionDeps';
 import { SessionBoardMutationV1Schema } from '@happier-dev/protocol/sessions/board/mutations';
 import type { WidgetDefinitionArtifactV1 } from '@happier-dev/protocol/widgets';
+import { createSessionBoardWidgetActionPortV1 } from '@happier-dev/protocol/widgets';
+import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
+import { PluginProjectionV2Schema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { createCliActionExecutorHarness } from '@/session/actions/createCliActionExecutorHarness';
+import { createRegistryInputTypeDeps } from '@/plugins/runtime/invocation/actions/createCommittedContributedActionDeps';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { normalizePluginUiInlineSurfaceBindingV1 } from '@happier-dev/protocol/plugins/ui';
 
 const revision = 'ssr1.AAAACHN5c3JlY18xAAAAAQ';
 const item = { v: 1, destination: 'board', title: 'Note', frame: 'card', height: { mode: 'auto', fallback: 'regular' },
@@ -98,6 +109,211 @@ describe('CLI Board Action family', () => {
     });
   });
   afterEach(async () => { restore(); vi.restoreAllMocks(); await app.close(); });
+  it.each(['counter', 'snapshot-counter'].flatMap(localId => [false, true].map(native => ({ localId, native }))))('admits the recorded installed $localId Board inputs (native Account: $native) through real type and options owners', async ({ localId, native }) => {
+    const serverIdentityId = 'srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN';
+    const accountId = '5e3a0581-6f3d-4e73-bf40-383db0be6c3e';
+    const sessionId = 'cmvcclhrd007jmcc96w9yb0vx';
+    const pluginId = 'examples.widget-areas';
+    const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
+    const inputType = { pluginId, localId: 'count-kind' };
+    const type: PluginInputTypeContributionV1 = { id: inputType.localId, title: 'Count kind', semantic: 'directory-count-kind',
+      valueSchema: { type: 'string', enum: ['files', 'folders'] }, options: { resource: 'count-kinds' } };
+    const binding = normalizePluginUiInlineSurfaceBindingV1({ pluginId, surfaceId: localId,
+      rendererId: 'counter', role: 'widget', target: { kind: 'app' } });
+    if (!binding) throw new Error('Expected the canonical widget binding');
+    const occurrenceId = createPluginRuntimeOccurrenceId(pluginId);
+    const projection = PluginProjectionV2Schema.parse({ v: 2, generation: 1, familiesById: {
+      pluginUi: { family: 'pluginUi', entriesById: { counter: { id: 'counter', pluginId, contributionKind: 'surfacePlacement',
+        descriptorId: localId, occurrenceId, binding, target: binding.target, display: { title: 'Directory count' },
+        sizeDeclaration: { sizes: ['small', 'medium', 'wide', 'full'], defaultSize: 'medium' },
+        inputs: { fields: [{ path: 'directory', title: 'Directory on the serving machine', widget: 'text', required: true },
+          { path: 'filter', title: 'Count', widget: 'select', required: true, inputType }] },
+        inputSchema: { type: 'object', additionalProperties: false, required: ['directory', 'filter'],
+          properties: { directory: { type: 'string', minLength: 1 }, filter: type.valueSchema } },
+      } } },
+      inputTypes: { family: 'inputTypes', entriesById: { [`${pluginId}/count-kind`]: {
+        id: `${pluginId}/count-kind`, pluginId, pluginVersion: '1.0.0', occurrenceId, definition: type,
+      } } },
+    } });
+    const registry = createResolvedContributionRegistry({ occurrenceIdsByPluginId: { [pluginId]: occurrenceId },
+      inputTypes: [{ provenance: 'external', source: { kind: 'path' }, pluginId, identity: inputType,
+        manifestPath: '/plugins/widgets/plugin.json', definition: type }],
+      resources: [{ provenance: 'external', source: { kind: 'path' }, pluginId,
+        definition: { kindVersion: 1, id: 'count-kinds', source: 'dynamic', type: 'config', scope: 'global', contentType: 'application/json' } }],
+    });
+    let revoked: 'owner' | 'selected' | null = null;
+    const selectedSessionId = 'c000000000000000000000063';
+    const signedRequests: string[] = [];
+    app.addHook('preHandler', async (request, reply) => {
+      if (request.headers[EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]) {
+        signedRequests.push(request.url);
+        // Home admits an authenticated original root only for its own effect.
+        // A composite options read cannot borrow session.board.get authority.
+        if (request.headers[EXTERNAL_ACTION_EFFECT_ACTION_HEADER] !== 'action.options.resolve') {
+          return reply.code(401).send({ error: 'not_authenticated' });
+        }
+      }
+    });
+    app.get(`/v2/sessions/${sessionId}`, async () => ({ session: { ...rawSession, id: sessionId,
+      metadata: JSON.stringify({ machineId: 'machine-one' }),
+      ...(revoked === 'owner' ? { effectiveAccess: { ...rawSession.effectiveAccess!,
+        capabilities: { ...rawSession.effectiveAccess!.capabilities, readTranscript: false } } } : {}),
+    } }));
+    app.get(`/v2/sessions/${selectedSessionId}`, async (_request, reply) => revoked === 'selected'
+      ? reply.code(403).send({ error: 'forbidden' })
+      : { session: { ...rawSession, id: selectedSessionId, metadata: JSON.stringify({ machineId: 'machine-one' }) } });
+    app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+    app.get('/v1/artifacts', async () => []);
+    app.get(`/v2/sessions/${sessionId}/system-records/record`, async () => ({ record: null }));
+    app.get(`/v2/sessions/${sessionId}/system-records`, async () => ({ records: [], hasNext: false, nextCursor: null }));
+    const signingKey = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(31));
+    let resourceReads = 0;
+    const { executor, deps } = createCliActionExecutorHarness({ credentials: { token, encryption: null }, token,
+      sessionId: 'cli-global', mode: 'plain', ctx: null, serverId: 'local-profile', serverIdentityId, serverHttpBaseUrl: 'http://board.test',
+      externalActionMachineInstallationId: 'widget-installation', externalActionMachineRequestPrivateKey: signingKey.secretKey,
+      machineActionDirectTargetTransport: { machineId: 'machine-one', invoke: async () => ({ protocolVersion: 1, projection }) },
+    }, createRegistryInputTypeDeps({ contributes: registry, readUiResource: async () => { resourceReads++; return ({
+      resource: { pluginId, localId: 'count-kinds' }, kind: 'config', contentType: 'application/json',
+      digest: `sha256:${'a'.repeat(64)}`, bytes: new TextEncoder().encode(JSON.stringify([
+        { value: 'files', label: 'Files' }, { value: 'folders', label: 'Folders' },
+      ])),
+    }); } }));
+    const surface = { serverId: serverIdentityId, accountId, owner: { kind: 'sessionBoard' as const, sessionId } };
+    const instance = { v: 1 as const, id: 'c15c9e20-f054-4681-ae82-cb89c6cf5533',
+      definition: { kind: 'installed' as const, surface: { pluginId, localId } }, bindings: {
+        directory: { kind: 'value' as const, value: '/home/happier/happier-dev/packages/plugin-sdk/examples/widget-areas' },
+        filter: { kind: 'value' as const, value: 'files' },
+      } };
+    const context = { surface: 'cli' as const, serverId: 'local-profile', authority: 'present_user' as const };
+    const resolved = await runWithServerHttpBaseUrl('http://board.test', () => deps.widgetInputs!.resolve({
+      ref: { surface, instanceId: instance.id }, instance, admission: 'configuration', context,
+    }));
+    expect(resolved).toEqual({ status: 'ready', input: { directory: instance.bindings.directory.value, filter: 'files' } });
+    const optionsContext = native ? { ...context, surface: 'ui' as const, actionCaller: { kind: 'host' as const },
+      externalActionTarget: { kind: 'machine' as const, machineId: 'machine-one' },
+      externalActionExecutionAuthorization: ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'native-options-proof', binding: {
+        accountId, authentication: { kind: 'account', tokenEpoch: 1 }, accountEncryptionMode: 'plain',
+        serverIdentityId, machineId: 'machine-one', custodianAccountId: accountId, installationId: 'widget-installation',
+        actionId: 'action.options.resolve', requestId: 'native-options', requestEnvelopeDigest: 'a'.repeat(43),
+        target: { kind: 'machine', machineId: 'machine-one' },
+      } }),
+    } : context;
+    const optionsInput = {
+      consumer: { kind: 'widget', surface, definition: instance.definition }, fieldPath: 'filter',
+      draftInput: { directory: instance.bindings.directory.value },
+    };
+    const options = await runWithServerHttpBaseUrl('http://board.test', () => executor.execute('action.options.resolve', optionsInput, optionsContext));
+    expect(options, JSON.stringify({ options, signedRequests })).toMatchObject({ ok: true, result: { options: [{ value: 'files' }, { value: 'folders' }] } });
+    expect(signedRequests).toEqual([]);
+    for (const owner of ['sessionBoard', 'companion'] as const) {
+      const selectedInput = { ...optionsInput, consumer: { ...optionsInput.consumer,
+        surface: { ...surface, owner: { kind: owner, sessionId } }, selectedSession: { serverId: serverIdentityId, sessionId: selectedSessionId } } };
+      expect(await runWithServerHttpBaseUrl('http://board.test', () => executor.execute('action.options.resolve', selectedInput, optionsContext)))
+        .toMatchObject({ ok: true, result: { options: [{ value: 'files' }, { value: 'folders' }] } });
+      for (const deniedSession of ['owner', 'selected'] as const) {
+        revoked = deniedSession;
+        const beforeRead = resourceReads;
+        const denied = await runWithServerHttpBaseUrl('http://board.test', () => executor.execute('action.options.resolve', selectedInput, optionsContext));
+        expect(denied).toMatchObject({ ok: false });
+        expect(denied).not.toHaveProperty('result.options');
+        expect(resourceReads).toBe(beforeRead);
+      }
+      revoked = null;
+    }
+  });
+  it('discovers widgets on a Session Board addressed by its portable Home', async () => {
+    const serverIdentityId = 'srv_board_identity';
+    const sessionId = 'c000000000000000000000052';
+    app.get(`/v2/sessions/${sessionId}`, async () => ({ session: { ...rawSession, id: sessionId } }));
+    app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+    app.get(`/v2/sessions/${sessionId}/system-records/record`, async () => ({ record: null }));
+    app.get(`/v2/sessions/${sessionId}/system-records`, async () => ({ records: [], hasNext: false, nextCursor: null }));
+    const deps = createCliActionDeps({ credentials: { token: 'token', encryption: null }, token: 'token',
+      sessionId, mode: 'plain', ctx: null,
+      serverId: 'local-profile', serverIdentityId, serverHttpBaseUrl: 'http://board.test',
+      machineActionDirectTargetTransport: { machineId: 'machine-one', invoke: async () => ({ protocolVersion: 1,
+        projection: PluginProjectionV2Schema.parse({ v: 2, generation: 1 }) }) } });
+    const surface = { serverId: serverIdentityId, accountId: 'owner', owner: { kind: 'sessionBoard' as const, sessionId } };
+    const result = await runWithServerHttpBaseUrl('http://board.test', () => deps.widgetCatalog!.list(surface, { serverId: 'local-profile' }));
+    expect(result).toEqual(expect.arrayContaining([expect.objectContaining({ definition: { kind: 'builtin', id: 'session_summary' } })]));
+  });
+  it.each(['widgets.catalog.list', 'widgets.item.list'] as const)(
+    'retains the admitted agent %s root through composed Board reads', async actionId => {
+      const serverIdentityId = 'srv_board_identity';
+      const accountId = 'owner';
+      const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
+      const signingKey = tweetnacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(32));
+      const target = { kind: 'machine' as const, machineId: 'machine-one' };
+      const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'agent-read-proof', binding: {
+        accountId, authentication: { kind: 'account', tokenEpoch: 1 }, accountEncryptionMode: 'plain',
+        serverIdentityId, machineId: target.machineId, custodianAccountId: accountId, installationId: 'installation-one',
+        actionId, requestId: 'agent-read', requestEnvelopeDigest: 'a'.repeat(43), target,
+      } });
+      const signedPaths: string[] = [];
+      app.addHook('preHandler', async (request, reply) => {
+        if (!request.headers[EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER]) return;
+        signedPaths.push(request.url);
+        const valid = request.headers[EXTERNAL_ACTION_EFFECT_ACTION_HEADER] === actionId
+          && verifyExternalActionMachineRequestV1({ authorizationToken: authorization.token, effectActionId: actionId,
+            target, installationId: 'installation-one', requestId: 'agent-read', method: request.method,
+            path: request.url, publicKey: signingKey.publicKey,
+            signature: String(request.headers[EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER]) });
+        if (!valid) return reply.code(401).send({ error: 'not_authenticated' });
+      });
+      app.get('/v1/account/encryption/currentness', async () => ({ mode: 'plain', version: 1,
+        signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
+      app.get('/v1/artifacts', async () => []);
+      app.get('/v2/sessions', async () => ({ sessions: [rawSession], hasNext: false, nextCursor: null }));
+      app.get('/v2/sessions/archived', async () => ({ sessions: [], hasNext: false, nextCursor: null }));
+      app.get('/v2/sessions/session-one/system-records/record', async () => ({ record: null }));
+      app.get('/v2/sessions/session-one/system-records', async () => ({ records: [], hasNext: false, nextCursor: null }));
+      const { executor } = createCliActionExecutorHarness({ credentials: { token, encryption: null }, token,
+        sessionId: 'cli-global', mode: 'plain', ctx: null, serverId: 'local-profile', serverIdentityId,
+        serverHttpBaseUrl: 'http://board.test', externalActionMachineInstallationId: 'installation-one',
+        externalActionMachineRequestPrivateKey: signingKey.secretKey,
+        machineActionDirectTargetTransport: { machineId: target.machineId, invoke: async () => ({ protocolVersion: 1,
+          projection: PluginProjectionV2Schema.parse({ v: 2, generation: 1 }) }) },
+      });
+      const bridge = createActionToolExecutorBridge({ surface: 'agent', executor: {
+        execute: (id, input, context) => executor.execute(id, input, { ...context,
+          externalActionExecutionAuthorization: authorization, externalActionTarget: target }),
+      } });
+      const surface = { serverId: serverIdentityId, accountId, owner: { kind: 'sessionBoard' as const, sessionId: 'session-one' } };
+      const result = await bridge.executeActionByToolName('action_execute', {
+        actionId, input: { surface },
+      }, 'session-one');
+      expect(result, JSON.stringify({ result, signedPaths })).toMatchObject({ ok: true });
+      expect(signedPaths).toContain('/v2/sessions/session-one?accessProjectionVersion=1');
+      expect(signedPaths.some(path => path.startsWith('/v2/sessions/session-one/system-records'))).toBe(true);
+    });
+  it('admits the portable Home through the widget Board port while retaining exact HTTP routing', async () => {
+    const serverIdentityId = 'srv_board_identity';
+    const writes: unknown[] = [];
+    app.get('/v2/sessions/session-one/system-records/record', async () => ({ record: null }));
+    app.get('/v2/sessions/session-one/system-records', async () => ({ records: [], hasNext: false, nextCursor: null }));
+    app.put('/v2/sessions/session-one/board', async request => {
+      writes.push(request.body);
+      return { operation: 'upsert_item', itemId: 'capacity', outcome: 'created', itemRevision: revision, layoutRevision: revision };
+    });
+    const deps = createSessionBoardActionDeps({ credentials: { token: 'token', encryption: null },
+      serverId: 'local-profile', serverIdentityId, serverHttpBaseUrl: 'http://board.test' });
+    const port = createSessionBoardWidgetActionPortV1(deps.sessionBoardAction!);
+    const surface = { serverId: serverIdentityId, accountId: 'owner', owner: { kind: 'sessionBoard' as const, sessionId: 'session-one' } };
+    const instance = { v: 1 as const, id: 'capacity', definition: { kind: 'builtin' as const, id: 'usage_capacity' }, bindings: {} };
+    expect(await port.read(surface, { serverId: 'local-profile' })).toMatchObject({ surface, canEdit: true, instances: [] });
+    expect(await deps.sessionBoardPrepareItem!({ input: { sessionId: 'session-one', itemId: 'capacity', expectedItemRevision: null, item },
+      context: { serverId: serverIdentityId } })).toMatchObject({ item });
+    expect(await port.apply(surface, { kind: 'add', instance, presentation: { size: 'medium' },
+      placement: { tabId: 'overview', tabTitle: 'Overview', width: 'wide' } }, { serverId: 'local-profile' }))
+      .toMatchObject({ ok: true, result: { ref: { surface, instanceId: 'capacity' }, instance } });
+    expect(writes).toEqual([expect.objectContaining({ itemId: 'capacity', itemContent: { t: 'plain', v: expect.objectContaining({ source: { kind: 'widget', instance } }) } })]);
+    expect(await port.read({ ...surface, serverId: 'srv_foreign' }, {})).toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+    expect(await deps.sessionBoardPrepareItem!({ input: { sessionId: 'session-one', itemId: 'capacity', expectedItemRevision: null, item },
+      context: { serverId: 'srv_foreign' } })).toMatchObject({ ok: false, errorCode: 'server_target_mismatch' });
+    expect(writes).toHaveLength(1);
+  });
   it.each([200, 500] as const)('preserves the HTTP %s visual outcome through the real Account-backed Session MCP factory', async status => {
     app.get('/v2/sessions/runtime-session', async () => ({ session: { ...rawSession, id: 'runtime-session' } }));
     app.get('/v2/sessions/runtime-session/system-records/record', async () => ({ record: null }));
@@ -181,7 +397,7 @@ describe('CLI Board Action family', () => {
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     registerHappierMcpBuiltInTools({ registerTool: (name, meta, handler) => {
       // Preserve the SDK's real input/output validation at the transport boundary.
-      server.registerTool(name, meta as { inputSchema: z.ZodType }, async (args, extra) => CallToolResultSchema.parse(await handler(args, extra)));
+      server.registerTool(name, meta as { inputSchema: z.ZodMiniType }, async (args, extra) => CallToolResultSchema.parse(await handler(args, extra)));
     } }, { sessionId: 'session-one', surface: 'agent', actionsSettings,
       deps: { changeTitle: async () => ({ success: true }), executeActionByToolName: tools.executeActionByToolName } });
     await server.connect(serverTransport);
@@ -275,7 +491,7 @@ describe('CLI Board Action family', () => {
     expect(command).toMatchObject({ kind: 'call', tool: tool!.name, sessionId: 'session-one' });
     if (command?.kind !== 'call' || !command.argsJson) throw new Error('Missing Daily usage command');
     const input = JSON.parse(command.argsJson);
-    const projected = tool!.inputSchema as z.ZodType;
+    const projected = tool!.inputSchema as z.ZodMiniType;
     expect(projected.safeParse(input).success).toBe(true);
     let committed: unknown;
     app.get('/v2/sessions/session-one/system-records/record', async request => {
@@ -823,16 +1039,17 @@ describe('CLI Board Action family', () => {
   it('signs every external Board Home read without sending the daemon bearer', async () => {
     const keyPair = tweetnacl.sign.keyPair();
     const target = { kind: 'session' as const, sessionId: 'session-one' };
-    const authorization: ExternalActionExecutionAuthorizationV1 = {
+    const authorization = {
       v: 1,
       token: 'execution-proof',
       binding: {
         serverIdentityId: 'home-a', accountId: 'account-1', principalId: 'principal-1', credentialId: 'credential-1',
         grant: API_TOKEN_FULL_GRANT_V1,
         machineId: 'machine-1', actionId: 'session.board.get', requestId: 'request-1',
+        custodianAccountId: 'account-1', installationId: 'installation-1',
         requestEnvelopeDigest: 'd'.repeat(43), target,
       },
-    };
+    } satisfies ExternalActionExecutionAuthorizationV1;
     const verify = (request: Readonly<{ headers?: unknown }>, method: string, path: string) => {
       const readHeader = (name: string): string | null => {
         if (request.headers instanceof Headers) return request.headers.get(name);
@@ -905,16 +1122,17 @@ describe('CLI Board Action family', () => {
     rawSession.metadata = JSON.stringify({ machineId: 'machine-session' });
     const keyPair = tweetnacl.sign.keyPair();
     const target = { kind: 'session' as const, sessionId: 'session-one' };
-    const authorization: ExternalActionExecutionAuthorizationV1 = {
+    const authorization = {
       v: 1,
       token: 'board-create-proof',
       binding: {
         serverIdentityId: 'home-a', accountId: 'account-1', principalId: 'principal-1', credentialId: 'credential-1',
         grant: API_TOKEN_FULL_GRANT_V1,
         machineId: 'machine-caller', actionId: 'session.board.item.upsert', requestId: 'board-create-request',
+        custodianAccountId: 'account-1', installationId: 'installation-1',
         requestEnvelopeDigest: 'd'.repeat(43), target,
       },
-    };
+    } satisfies ExternalActionExecutionAuthorizationV1;
     const context = {
       externalActionCredential: { accountId: 'account-1', principalId: 'principal-1', credentialId: 'credential-1', grant: authorization.binding.grant },
       externalActionExecutionAuthorization: authorization,

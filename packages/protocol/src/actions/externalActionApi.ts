@@ -1,8 +1,10 @@
+import { maxCodeUnits } from '../strings/maxCodeUnits.js';
 import { lazyZodSchema } from '../lazyZodSchema.js';
 import { AccessibleMachineAccessV1Schema } from '../machines/machineAccessV1.js';
 import { z } from 'zod/mini';
 import { ApiTokenGrantV1Schema, ApiTokenSessionSpawnAdmissionV1Schema } from '../auth/apiTokenGrant.js';
-import { AuthTokenAuthoritySchema, AuthTokenAuthenticationEvidenceSnapshotV1Schema } from '../auth/authToken.js';
+import { AuthTokenAuthenticationEvidenceSnapshotV1Schema } from '../auth/authToken.js';
+import { ActionRequiredAuthoritySchema } from './metadata.js';
 import { ManagedAdmissionComputeInputV1Schema } from '../machines/managed/actionsV1.js';
 import { ManagedControllerV1Schema } from '../machines/managed/managedMachineV1.js';
 import { AccountEncryptionModeSchema, type AccountEncryptionMode } from '../features/payload/capabilities/encryptionCapabilities.js';
@@ -10,6 +12,7 @@ import { WorkflowProjectTargetV1Schema } from '../workflows/workflowWorkspaceV1.
 import type { ProjectAccountRowCipherV1 } from '../projects/projectAccountRowCipherV1.js';
 import type { PromptArtifactRefV1 } from '../prompts/library/promptArtifactRefsV1.js';
 import { SessionActionRpcOriginV1Schema } from '../rpc/socket.js';
+import { SessionGoalControlFailureV1Schema } from '../sessions/work/state/sessionWorkStateRpc.js';
 import { MachineInstallationProofV1Schema, MachineInstallationPublicKeySchema } from '../machines/identity/installationIdentity.js';
 import { ManagedWakeTargetV1Schema } from '../machines/managed/managedIntentV1.js';
 import { PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from './projectActionFamily.js';
@@ -26,9 +29,14 @@ import { RunnerClaimV1Schema } from '../ephemeralRunner/endpoint.js';
 import { MachineKindFromLegacyProjectionSchema } from '../machines/machineKind.js';
 import { PendingResetStartSetInputV1Schema } from '../sessions/pending/pendingRequestedActionV1.js';
 import { DaemonPluginMountedInvocationV1Schema } from '../plugins/actions/daemonInvocationV1.js';
+import { WorkflowAcceptedAuthorizationV1Schema } from '../workflows/workflowDefinitionV1.js';
+import { isRoleActionIdV1 } from '../prompts/roles/roleActionIdsV1.js';
+import { ManagedMachineActionIdV1Schema } from '../machines/managed/actionsV1.js';
+import { AutomationManualIdempotencyKeyV1Schema } from '../automations/automationOccurrenceV1.js';
 
 import {
   ActionExecuteFailureSchema,
+  UNEXPECTED_ACTION_FAILURE_CODES_V1,
   type ActionExecuteResult,
 } from './actionExecutionResult.js';
 import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
@@ -69,21 +77,36 @@ export const EXTERNAL_ACTION_RELAY_RESPONSE_SOCKET_MIN_BUFFER_BYTES = 25_000_000
 /** Relative path prefix; the Action id is the final path segment. */
 export const EXTERNAL_ACTION_HTTP_PATH_PREFIX_V1 = '/v1/actions/' as const;
 
+/** The existing relay's empty 502 means submission occurred without an execution receipt. */
+export function isExternalActionSubmittedUnknownHttpResponse(status: number, body: unknown): boolean {
+  return status === 502 && body === '';
+}
+
 /**
  * The public path segment is an opaque identifier to the server relay. Its
  * finite scalar bound matches the other external Action identity fields while
  * admission remains exclusively with the target daemon's Action registry.
  */
-export const ExternalActionActionIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(EXTERNAL_ACTION_ACTION_ID_MAX_LENGTH), z.refine((value) => value.trim() === value, 'actionId must not have outer whitespace')));
+export const ExternalActionActionIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), maxCodeUnits(EXTERNAL_ACTION_ACTION_ID_MAX_LENGTH), z.refine((value) => value.trim() === value, 'actionId must not have outer whitespace')));
 export type ExternalActionActionIdV1 = z.infer<typeof ExternalActionActionIdV1Schema>;
 
-export const ExternalActionRequestIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), z.maxLength(EXTERNAL_ACTION_REQUEST_ID_MAX_LENGTH_V1), z.refine((value) => value.trim() === value, 'requestId must not have outer whitespace')));
+export const ExternalActionRequestIdV1Schema = lazyZodSchema(() => z.string().check(z.minLength(1), maxCodeUnits(EXTERNAL_ACTION_REQUEST_ID_MAX_LENGTH_V1), z.refine((value) => value.trim() === value, 'requestId must not have outer whitespace')));
+
+/** Public retry identity, never private content or authorization. */
+export function projectExternalActionRunNowIdempotencyKeyV1(actionId: string, input: unknown): string | undefined {
+  if (actionId !== 'workflow.trigger.run_now') return undefined;
+  const record = readRecord(input);
+  return record?.idempotencyKey === undefined ? undefined : AutomationManualIdempotencyKeyV1Schema.parse(record.idempotencyKey);
+}
 
 const EXTERNAL_ACTION_HTTP_ERROR_CODES_V1 = [
   'invalid_action',
   'invalid_envelope',
   'request_too_large',
   'internal_error',
+  ...UNEXPECTED_ACTION_FAILURE_CODES_V1,
+  'database_transaction_conflict_exhausted',
+  'database_connection_unavailable',
   'invalid_encrypted_envelope',
   'encrypted_action_unsupported',
 ] as const;
@@ -151,6 +174,21 @@ const ExternalActionAuthenticationHttpErrorSchema = lazyZodSchema(() => z.strict
 }));
 const ExternalActionCredentialScopeHttpErrorSchema = lazyZodSchema(() => z.strictObject({ error: z.literal('credential_scope_denied') }));
 
+export type ActionCredentialScopeDeniedFailureV1 = Readonly<{
+  ok: false;
+  errorCode: 'credential_scope_denied';
+  error: 'credential_scope_denied';
+}>;
+
+/** Authentication can refuse a domain route before its closed result exists. */
+export function readActionCredentialScopeDeniedHttpFailureV1(
+  status: number,
+  payload: unknown,
+): ActionCredentialScopeDeniedFailureV1 | null {
+  if (status !== 403 || !ExternalActionCredentialScopeHttpErrorSchema.safeParse(payload).success) return null;
+  return { ok: false, errorCode: 'credential_scope_denied', error: 'credential_scope_denied' };
+}
+
 /** One strict redacted outer error union shared by both Action HTTP origins. */
 export const ExternalActionHttpErrorSchema = lazyZodSchema(() => z.union([
   ExternalActionInvalidRequestHttpErrorSchema,
@@ -186,6 +224,7 @@ export function projectExternalActionExecutionResultV1(value: unknown): ActionEx
   }
   if (result.ok !== false) return null;
 
+  const goalControlFailure = SessionGoalControlFailureV1Schema.safeParse(result.goalControlFailure);
   const failure = ActionExecuteFailureSchema.safeParse({
     ok: false,
     errorCode: result.errorCode,
@@ -193,6 +232,7 @@ export function projectExternalActionExecutionResultV1(value: unknown): ActionEx
     ...(Object.prototype.hasOwnProperty.call(result, 'details')
       ? { details: result.details }
       : {}),
+    ...(goalControlFailure.success ? { goalControlFailure: goalControlFailure.data } : {}),
   });
   return failure.success ? failure.data : null;
 }
@@ -201,9 +241,10 @@ export function projectExternalActionExecutionResultV1(value: unknown): ActionEx
 function externalActionHttpErrorStatus(code: ExternalActionHttpErrorCode): 400 | 401 | 403 | 409 | 413 | 500 | 503 {
   if (code === 'credential_scope_denied') return 403;
   if (code === 'invalid_token') return 401;
-  if (code === 'auth_unavailable' || code === 'server_unavailable') return 503;
+  if (code === 'auth_unavailable' || code === 'server_unavailable'
+    || code === 'database_transaction_conflict_exhausted' || code === 'database_connection_unavailable') return 503;
   if (code === 'request_too_large') return 413;
-  if (code === 'internal_error') return 500;
+  if (code === 'internal_error' || UNEXPECTED_ACTION_FAILURE_CODES_V1.some(value => value === code)) return 500;
   if (
     code === 'encrypted_action_unsupported'
     || code === 'target_not_local'
@@ -214,11 +255,11 @@ function externalActionHttpErrorStatus(code: ExternalActionHttpErrorCode): 400 |
 }
 
 export function projectExternalActionHttpErrorV1(code: ExternalActionHttpErrorCodeV1): Readonly<{
-  statusCode: 400 | 409 | 413 | 500;
+  statusCode: 400 | 409 | 413 | 500 | 503;
   payload: ExternalActionHttpErrorV1;
 }> {
   return {
-    statusCode: externalActionHttpErrorStatus(code) as 400 | 409 | 413 | 500,
+    statusCode: externalActionHttpErrorStatus(code) as 400 | 409 | 413 | 500 | 503,
     payload: { error: 'invalid_request', code },
   };
 }
@@ -820,6 +861,7 @@ export const ExternalActionHandoffContinuationV1Schema = lazyZodSchema(() => z.s
 export const ExternalActionRequestEnvelopeV1Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(1),
   requestId: z.optional(ExternalActionRequestIdV1Schema),
+  idempotencyKey: z.optional(AutomationManualIdempotencyKeyV1Schema),
   target: z.optional(ExternalActionTargetV1Schema),
   input: StrictJsonValueSchema,
   pluginInvocation: z.optional(DaemonPluginMountedInvocationV1Schema),
@@ -980,9 +1022,10 @@ export function projectExternalActionPendingResetStartAdmissionV1(input: unknown
 /** V2 is closed at every routing and encryption boundary; content is opaque. */
 export const ExternalActionRequestEnvelopeV2Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(2), requestId: ExternalActionRequestIdV1Schema,
+  idempotencyKey: z.optional(AutomationManualIdempotencyKeyV1Schema),
   target: z.optional(ExternalActionTargetV1Schema),
   pluginInvocation: z.optional(DaemonPluginMountedInvocationV1Schema),
-  payload: z.strictObject({ t: z.literal('encrypted'), c: z.string().check(z.minLength(1), z.maxLength(EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES_V2)) }),
+  payload: z.strictObject({ t: z.literal('encrypted'), c: z.string().check(z.minLength(1), maxCodeUnits(EXTERNAL_ACTION_HTTP_BODY_LIMIT_BYTES_V2)) }),
   managedAdmission: z.optional(ExternalActionManagedAdmissionV1Schema),
   sessionSpawnAdmission: z.optional(ApiTokenSessionSpawnAdmissionV1Schema),
   handoffAdmission: z.optional(ExternalActionHandoffAdmissionV1Schema),
@@ -1018,7 +1061,7 @@ export function isExternalActionRequestVersionAllowedForAccountModeV1(input: Rea
 }
 export const ExternalActionResponseEnvelopeV2Schema = lazyZodSchema(() => z.strictObject({
   v: z.literal(2), actionId: ExternalActionActionIdV1Schema, requestId: ExternalActionRequestIdV1Schema,
-  payload: z.strictObject({ t: z.literal('encrypted'), c: z.string().check(z.minLength(1), z.maxLength(EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES_V2)) }),
+  payload: z.strictObject({ t: z.literal('encrypted'), c: z.string().check(z.minLength(1), maxCodeUnits(EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES_V2)) }),
 }));
 export type ExternalActionResponseEnvelopeV2 = z.infer<typeof ExternalActionResponseEnvelopeV2Schema>;
 export type PreparedExternalActionResponseEnvelope = Readonly<{
@@ -1060,7 +1103,7 @@ export const ExternalActionSignedAuthenticationV1Schema = lazyZodSchema(() => z.
 export type ExternalActionSignedAuthenticationV1 = z.infer<typeof ExternalActionSignedAuthenticationV1Schema>;
 export const ExternalActionAccountServerPrincipalV1Schema = lazyZodSchema(() => z.strictObject({
   accountId: ExternalActionServerPrincipalIdV1Schema,
-  authority: AuthTokenAuthoritySchema,
+  authority: ActionRequiredAuthoritySchema,
   authentication: ExternalActionAccountAuthenticationV1Schema,
 }));
 export const ExternalActionTerminalServerPrincipalV1Schema = lazyZodSchema(() => z.strictObject({
@@ -1078,7 +1121,21 @@ export const ExternalActionSessionAccountServerPrincipalV1Schema = lazyZodSchema
 /** The installed FIN executor proves this retained Run at Home. */
 export const ExternalActionWorkflowOriginV1Schema = lazyZodSchema(() => z.strictObject({
   runId: ExternalActionTargetIdV1Schema, requestId: ExternalActionRequestIdV1Schema,
+  /** Accepted host facts only; Role content stays in the Session content envelope. */
+  sessionAuthority: z.optional(z.strictObject({
+    authorization: WorkflowAcceptedAuthorizationV1Schema,
+    runDepth: z.number().check(z.int(), z.nonnegative()),
+    runOriginSessionId: z.optional(ExternalActionTargetIdV1Schema),
+    directory: z.string().check(z.minLength(1)),
+    workspaceWrites: z.enum(['allow', 'deny']),
+  })),
 }));
+
+/** The incumbent Workflow signed-root admission, shared by issuance and rechecks. */
+export function isExternalActionWorkflowActionIdV1(actionId: string): boolean {
+  return ManagedMachineActionIdV1Schema.safeParse(actionId).success
+    || actionId.startsWith('session.') && isRoleActionIdV1(actionId);
+}
 export const ExternalActionWorkflowAccountServerPrincipalV1Schema = lazyZodSchema(() => z.strictObject({
   accountId: ExternalActionServerPrincipalIdV1Schema,
   authority: z.literal('account_automation'),
@@ -1118,6 +1175,7 @@ const externalActionExecutionAuthorizationRoutingShapeV1 = () => ({
     requestEnvelopeDigest: z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/u)),
     /** Exact run-now operand, stamped from the admitted plaintext request. */
     automationId: z.optional(ExternalActionTargetIdV1Schema),
+    idempotencyKey: z.optional(AutomationManualIdempotencyKeyV1Schema),
     target: ExternalActionTargetV1Schema,
     managedContinuation: z.optional(ExternalActionManagedContinuationV1Schema),
     handoffAdmission: z.optional(ExternalActionHandoffBindingV1Schema),
@@ -1140,12 +1198,17 @@ export const ExternalActionExecutionAuthorizationBindingV1Schema = lazyZodSchema
   if (value.automationId !== undefined && value.actionId !== 'workflow.trigger.run_now') {
     context.addIssue({ code: 'custom', path: ['automationId'], message: 'Automation admission binds only run-now' });
   }
+  if (value.idempotencyKey !== undefined && value.actionId !== 'workflow.trigger.run_now') {
+    context.addIssue({ code: 'custom', path: ['idempotencyKey'], message: 'Manual retry identity binds only run-now' });
+  }
   if (value.pendingResetStartAdmission && (value.actionId !== 'session.pending.resetStart.set'
     || value.target.kind === 'session' && projectExternalActionPendingResetStartSessionDigestV1(value.target.sessionId) !== value.pendingResetStartAdmission.sessionDigest)) {
     context.addIssue({ code: 'custom', path: ['pendingResetStartAdmission'], message: 'Reset admission binds only its exact Session set input' });
   }
   if (value.workflowActionOrigin && (value.sessionActionOrigin || value.managedContinuation || value.handoffAdmission
-    || value.workflowActionOrigin.requestId !== value.requestId)) {
+    || value.workflowActionOrigin.requestId !== value.requestId
+    || value.target.kind === 'session' && (!value.workflowActionOrigin.sessionAuthority
+      || !value.actionId.startsWith('session.') || !isRoleActionIdV1(value.actionId)))) {
     context.addIssue({ code: 'custom', path: ['workflowActionOrigin'], message: 'FIN origin binds only its original invocation' });
   }
   if ((value.sessionActionOrigin === undefined) !== (value.sessionActionSource === undefined)) {
@@ -1217,7 +1280,7 @@ export type ExternalActionRequesterAccountProjectionV1 = Readonly<{
   /** Private caller owner seals genuine custody for the exact installed destination. */
   sealRequesterAccountContext?(input: Readonly<{
     authorization: ExternalActionExecutionAuthorizationV1;
-    purpose: Exclude<ExternalActionRequesterAccountContextPurposeV1, { kind: 'external_action' }>;
+    purpose: ExternalActionRequesterAccountContextPurposeV1;
     installationPublicKey: Uint8Array;
   }>): Promise<ExternalActionExecutionAuthorizationV1 | null>;
   resolveMachineContentEncryptionContext?(row: MachinePublishedRowV1): Readonly<
@@ -1308,7 +1371,8 @@ function externalActionExecutionAuthorizationRequestSchemaV1(actionId?: 'session
   }
   if (value.workflowActionOrigin && (value.sessionActionOrigin || value.managedContinuation || value.handoffContinuation || value.handoffPreflight
     || value.workflowActionOrigin.requestId !== value.envelope.requestId
-    || value.envelope.target?.kind !== 'machine' || value.envelope.target.machineId !== value.machineId)) {
+    || !(value.envelope.target?.kind === 'machine' && value.envelope.target.machineId === value.machineId
+      || value.envelope.target?.kind === 'session' && value.workflowActionOrigin.sessionAuthority))) {
     context.addIssue({ code: 'custom', path: ['workflowActionOrigin'], message: 'FIN origin requires its exact installed executor invocation' });
   }
   const target = value.envelope.target;

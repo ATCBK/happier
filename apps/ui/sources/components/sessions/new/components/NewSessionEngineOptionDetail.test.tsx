@@ -103,6 +103,7 @@ type ProviderProjectionResult = ReturnType<typeof useProviderModelProjection>;
 const providerProjectionSpy = vi.hoisted(() => vi.fn<(input: unknown) => ProviderProjectionResult>((_input) => ({
     data: null,
     error: null,
+    pendingApproval: null,
     loading: false,
     status: 'pending',
     refreshFailures: [],
@@ -295,6 +296,7 @@ describe('NewSessionEngineOptionDetail', () => {
         providerProjectionSpy.mockReturnValue({
             data: null,
             error: null,
+            pendingApproval: null,
             loading: false,
             status: 'pending',
             refreshFailures: [],
@@ -346,6 +348,7 @@ describe('NewSessionEngineOptionDetail', () => {
                 groups: [],
             },
             error: null,
+            pendingApproval: null,
             loading: false,
             status: 'success',
             refreshFailures: [],
@@ -390,6 +393,7 @@ describe('NewSessionEngineOptionDetail', () => {
             projection: {
                 data: null,
                 error: null,
+                pendingApproval: null,
                 loading: true,
                 status: 'pending',
                 refreshFailures: [],
@@ -407,6 +411,7 @@ describe('NewSessionEngineOptionDetail', () => {
                     retryable: true,
                     action: 'retry',
                 },
+                pendingApproval: null,
                 loading: false,
                 status: 'error',
                 refreshFailures: [],

@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { afterAll, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+import { afterAll, beforeEach, vi } from 'vitest';
 import type { Machine, Session } from '@/sync/domains/state/storageTypes';
 import type { Settings } from '@/sync/domains/settings/settings';
 import type { FetchedMachineRow } from '@/sync/engine/machines/syncMachines';
@@ -13,6 +14,7 @@ type MachineDetailsHome = {
         machineListRequests: number;
         readMachines: (() => Promise<readonly Machine[]>) | null;
         beforeSessionRead: (() => Promise<void>) | null;
+        beforeRequest: ((url: URL) => Promise<void>) | null;
     };
     storage: typeof import('@/sync/domains/state/storage').storage;
     sync: typeof import('@/sync/sync').sync;
@@ -26,6 +28,9 @@ export async function initializeMachineDetailsRuntimeForTests(): Promise<Session
     // Reset once at collection, before installing the transport and loading app-entry.
     // Per-case resets would discard that registration and split the real stores.
     vi.resetModules();
+    const { installBrowserRuntimeForTests } = await import('@/dev/testkit/harness/browserRuntimeHarness');
+    const browser = await installBrowserRuntimeForTests({ url: 'https://machine-route.test' });
+    beforeEach(() => browser.activate());
     const network = await installSessionOpsNetworkBoundary();
     const { installWebLockManagerMock } = await import('@/auth/storage/tokenStorage.web.testHelpers');
     const locks = installWebLockManagerMock();
@@ -42,6 +47,7 @@ export async function initializeMachineDetailsRuntimeForTests(): Promise<Session
         resetScopedMachineTransportCacheForTests();
         await network.dispose();
         locks.restore();
+        browser.restore();
     });
     return network;
 }
@@ -53,12 +59,17 @@ export async function arrangeMachineDetailsHomeForTests(
     const { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } = await import('@happier-dev/protocol');
     const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
     const { createPlainAccountEncryptionCurrentnessFixture } = await import('@/dev/testkit/fixtures/accountEncryptionCurrentness');
+    const { createEmptyAccountBootstrapHttpResponse } = await import('@/dev/testkit/fixtures/accountBootstrapHttpBoundary');
+    const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
+    await prepareSessionDraftPersistenceStorage();
     const { storage } = await import('@/sync/domains/state/storage');
-    const { settingsDefaults, settingsParse } = await import('@/sync/domains/settings/settings');
     const { V2SessionByIdResponseSchema } = await import('@happier-dev/protocol/sessions/control/contract');
     const { SessionCurrentProjectionRecordV1Schema } = await import('@happier-dev/protocol/sessions/listing/response');
     const { projectLegacySessionAccessCapabilitiesV1 } = await import('@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1');
     const { setActiveServerId } = await import('@/sync/domains/server/serverProfiles');
+    const { resolveRoutineServerSelectionScope } = await import('@/sync/domains/server/selection/serverSelectionScope');
+    const { Platform } = await import('react-native');
+    const { isDesktopHost } = await import('@/utils/platform/desktopHost');
     const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
     const { RPC_METHODS } = await import('@happier-dev/protocol/rpc');
     const home = await network.addHome(options.serverUrl, 'machine-viewer');
@@ -67,6 +78,7 @@ export async function arrangeMachineDetailsHomeForTests(
         machineListRequests: 0,
         readMachines: null as (() => Promise<readonly Machine[]>) | null,
         beforeSessionRead: null as (() => Promise<void>) | null,
+        beforeRequest: null as ((url: URL) => Promise<void>) | null,
     };
     const toWire = (machine: Machine): FetchedMachineRow => ({
         id: machine.id, kind: machine.kind,
@@ -77,8 +89,9 @@ export async function arrangeMachineDetailsHomeForTests(
         daemonStateVersion: machine.daemonStateVersion,
         dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
     });
-    network.setHttpResponder(async input => {
+    network.setHttpResponder(async (input, init) => {
         const url = new URL(String(input));
+        await state.beforeRequest?.(url);
         if (url.pathname === '/v1/features') return Response.json(createRootLayoutFeaturesResponse({}));
         if (url.pathname === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
         if (url.pathname === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
@@ -102,18 +115,17 @@ export async function arrangeMachineDetailsHomeForTests(
             state.machineListRequests += 1;
             return Response.json((state.readMachines ? await state.readMachines() : state.machines).map(toWire));
         }
+        const bootstrap = createEmptyAccountBootstrapHttpResponse(url.pathname, init);
+        if (bootstrap) return bootstrap;
         // The shared HTTP boundary owns readiness (health/auth ping) and plain machine keys.
         // Refusing those here would keep the real reachability owner waiting before any screen mounts.
         return null;
     });
     network.respond(RPC_METHODS.DAEMON_EXECUTION_RUNS_LIST, { runs: [] });
-    await setActiveServerId(home.id, { scope: 'device' });
+    await setActiveServerId(home.id, { scope: resolveRoutineServerSelectionScope(Platform.OS, isDesktopHost()) });
     await restoreConnectionToActiveServer({ token: home.token });
-    storage.setState({ settings: settingsDefaults });
-    if (options.settings) storage.getState().applySettingsForScope(
-        { serverId: home.id, accountId: home.accountId }, settingsParse(options.settings), 1,
-    );
     const { sync } = await import('@/sync/sync');
+    await sync.awaitBootstrapForegroundAcquisition();
     await sync.refreshMachines();
     const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
     const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
@@ -127,6 +139,10 @@ export async function arrangeMachineDetailsHomeForTests(
         element,
         render: async (Screen: React.ComponentType) => renderScreen(element(Screen)),
         async dispose() {
+            // The cold runtime renderer owns this graph's cleanup registry; test files
+            // may have imported the lightweight testkit before the collection reset.
+            const { standardCleanup } = await import('@/dev/testkit');
+            standardCleanup();
             const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
             await disconnectActiveServerConnection();
         },

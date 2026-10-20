@@ -1,9 +1,9 @@
-import { projectPluginReactNativeArtifactEntryV1, projectPluginUiPresentationEntriesV1, projectPluginUiTranslationsV1 } from '@happier-dev/protocol/plugins/contributions/ui';
+import { projectPluginReactNativeArtifactEntryV1, projectPluginUiPresentationEntriesV1, projectPluginUiTranslationsV1 } from '@happier-dev/protocol/plugins/contributions/ui/declarationProjection';
 export {
     projectPluginUiRendererRef,
     projectPluginUiRendererAvailability,
     resolvePluginUiRendererProjectionEntry,
-} from '@happier-dev/protocol/plugins/contributions/ui';
+} from '@happier-dev/protocol/plugins/contributions/ui/declarationProjection';
 import { getPluginMachineExecutionOriginRef, PluginMachineExecutionOriginV1Schema } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import {
     PluginUiResourceBindingCapabilityV1Schema,

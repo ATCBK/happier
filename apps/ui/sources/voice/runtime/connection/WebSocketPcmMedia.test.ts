@@ -21,8 +21,9 @@ describe('WebSocketPcmMedia', () => {
     const browser = installVoiceWebRtcBrowserBoundary({
       createAudioContext: () => context as unknown as AudioContext,
     });
-    const { micSession: mic, micTrack: track, micStream: stream } = browser;
+    const { micSession: mic } = browser;
     await mic.ensureActive();
+    const { micTrack: track, micStream: stream } = browser;
     const onInputChunk = vi.fn();
     const onInputError = vi.fn();
     const onOutputLevel = vi.fn();
@@ -236,6 +237,37 @@ describe('WebSocketPcmMedia', () => {
     expect(media.enqueueOutput(encodePcm16LeBase64(new Int16Array(480)))).toBe(false);
     await media.pcm.stop();
     expect(harness.disconnectGain).toHaveBeenCalledOnce();
+  });
+
+  it.each(['stop', 'abort'])('fences pending browser capture after %s without retiring the retry', async (cancellation) => {
+    const harness = await createBrowserPlaybackHarness();
+    let finishResume!: () => void;
+    const pendingResume = new Promise<void>((resolve) => { finishResume = resolve; });
+    let suspended = true;
+    const resume = vi.fn(() => pendingResume);
+    Object.defineProperties(harness.context, {
+      state: { get: () => suspended ? 'suspended' : 'running' },
+      resume: { value: resume },
+    });
+    const abortController = new AbortController();
+    const starting = harness.media.pcm.start(abortController.signal).then(() => null, (error: unknown) => error);
+    try {
+      await vi.waitFor(() => expect(resume).toHaveBeenCalledOnce());
+      if (cancellation === 'stop') await harness.media.pcm.stop();
+      else abortController.abort();
+      suspended = false;
+      if (cancellation === 'stop') await harness.media.pcm.start(new AbortController().signal);
+      finishResume();
+      await expect(starting).resolves.toMatchObject({ name: 'AbortError' });
+      if (cancellation === 'abort') await harness.media.pcm.start(new AbortController().signal);
+      expect(harness.enqueueSeconds(1, 1_000)).toBe(true);
+      harness.emitInput(new Float32Array(2_400).fill(0.25));
+      await vi.waitFor(() => expect(harness.onInputChunk).toHaveBeenCalled());
+      expect(harness.onInputError).not.toHaveBeenCalled();
+    } finally {
+      finishResume();
+      await starting;
+    }
   });
 
   it('pauses PCM output on a candidate, retains only the bounded playable tail, and resumes it on a false alarm', async () => {

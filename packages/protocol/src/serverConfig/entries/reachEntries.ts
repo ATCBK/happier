@@ -170,6 +170,8 @@ export const REACH_SERVER_CONFIG = defineServerConfigRegistry({
     },
     HAPPIER_IROH_RELAY_URLS: {
         type: 'list',
+        // Each relay is an absolute address; a Home write must use HTTPS (deployment env may use HTTP).
+        bounds: { scheme: 'https' },
         sensitivity: 'plain',
         apply: 'restart',
         editable: 'home',

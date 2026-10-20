@@ -10,7 +10,7 @@ import {
 
 import type { CommandContext } from '@/cli/commandRegistry';
 import { findCompiledActionCliCommand, listCompiledActionCliCommands } from '@/cli/actions/compiledCommands';
-import { runCompiledActionCliCommand } from '@/cli/actions/executeCommand';
+import { runCompiledActionCliCommand, type ActionCliExecutionDeps } from '@/cli/actions/executeCommand';
 import {
   hasFlag,
   hasFlagValue,
@@ -75,13 +75,7 @@ import {
 } from '@/plugins/store/registry/installedGenerationDiagnosis';
 import type { PluginCompatibilityDiagnostic } from '@/plugins/validation/diagnostics/types';
 import {
-  decideUserPluginChange,
-  describeUserPluginChangeFailure as describePluginChangeFailure,
-  requestUserPluginChange,
   readUserPluginChangeStatus,
-  resolveUserPluginChangeApproval,
-  type UserPluginChangeDecisionResult,
-  type UserPluginChangeResult,
   type UserPluginChangeStatusResult,
 } from '@/plugins/daemon/changeClient';
 import type { PluginChangePendingReviewResult } from '@happier-dev/protocol/marketplace/internal';
@@ -89,6 +83,7 @@ import { PluginScaffoldTemplateSchema, PluginScaffoldUiModeSchema } from '@happi
 import type { PluginScaffoldUiMode } from '@happier-dev/protocol';
 
 type PluginsCommandDeps = Readonly<{
+  actionExecutionDeps?: Partial<ActionCliExecutionDeps>;
   ensureDaemon?: () => Promise<void>;
   isInteractiveTerminal?: () => boolean;
   registry?: Omit<PluginsRegistryCommandDeps, 'write'>;
@@ -152,7 +147,7 @@ function usage(): string {
       { label: `${pluginCommand} doctor [path] [--json]`, description: 'Evaluate and diagnose a code-defined plugin author module' },
       { label: `${pluginCommand} doctor --installed [<pluginId>] [--json]`, description: 'Inspect installed immutable plugin generations for missing, escaped, non-regular, drifted, or unloadable files' },
       { label: `${pluginCommand} reload [developmentPluginId] [--json]`, description: 'Reapply the development source registered for this directory, or one explicit plugin id' },
-      { label: `${pluginCommand} change status|approve|reject <pendingChangeId> [--json]`, description: 'Rejoin or explicitly decide a daemon-lifetime pending plugin change by its issued id' },
+      { label: `${pluginCommand} change status <pendingChangeId> [--json]`, description: 'Inspect a daemon-lifetime plugin change; install decisions are ordinary Inbox approvals' },
       { label: `${pluginCommand} logs <pluginId> [--machine <id>] [--occurrence <id>] [--correlation <id>] [--cursor <byteOffset>] [--limit <1-500>] [--follow] [--json]`, description: 'Read canonical structured logs from one exact current daemon' },
       ...pluginSettingsHelpRows(pluginCommand),
       { label: `${pluginCommand} registry add <origin> [--id <id>] [--name <name>] [--scope <@scope>] [--default] [--allow-private-network] [--json]`, description: 'Add a private npm registry profile' },
@@ -302,6 +297,10 @@ async function runPluginsListCommand(args: readonly string[]): Promise<void> {
     await printPluginCatalogUnavailable(args, 'plugins_list', catalog.code);
     return;
   }
+  if (pendingChanges.kind === 'unavailable') {
+    await printPluginCatalogUnavailable(args, 'plugins_list', pendingChanges.code);
+    return;
+  }
   const entries = catalog.plugins;
   const json = wantsJson(args);
   if (json) {
@@ -426,8 +425,7 @@ function pluginChangeReviewRejoinCommands(pendingChangeId: string): readonly str
   const pluginCommand = `${resolveInvokerName() ?? 'happier'} plugins`;
   return [
     `Review status: ${pluginCommand} change status ${pendingChangeId}`,
-    `Approve after review: ${pluginCommand} change approve ${pendingChangeId}`,
-    `Reject: ${pluginCommand} change reject ${pendingChangeId}`,
+    'Decide the associated approval request in the Happier Inbox.',
   ];
 }
 
@@ -440,36 +438,6 @@ function describePendingPluginReviewForTerminal(
       : `Install and trust review remains pending for ${pendingReview.review.displayName}.`,
     ...pluginChangeReviewRejoinCommands(pendingReview.pendingChangeId),
   ];
-}
-
-async function reportPluginChangeFailure(
-  args: readonly string[],
-  outputKind: string,
-  result: Exclude<UserPluginChangeResult, { kind: 'committed' }>,
-): Promise<void> {
-  const failure = describePluginChangeFailure(result);
-  if (wantsJson(args)) {
-    await printJsonEnvelope({
-      ok: false,
-      kind: outputKind,
-      error: {
-        code: failure.code,
-        message: failure.message,
-        ...(failure.details ?? {}),
-      },
-    }, { exitCode: 1 });
-    return;
-  }
-  const pendingChangeId = result.kind === 'reviewRequired'
-    ? result.pendingChangeId
-    : null;
-  console.error(errorFrame('Error:', [
-    failure.message,
-    ...(pendingChangeId === null
-      ? []
-      : pluginChangeReviewRejoinCommands(pendingChangeId)),
-  ]));
-  process.exitCode = 1;
 }
 
 async function printPluginChangeStatus(
@@ -517,100 +485,6 @@ async function printPluginChangeStatus(
   console.log(out.render());
 }
 
-async function printPluginChangeDecisionResult(
-  args: readonly string[],
-  pendingChangeId: string,
-  decision: 'approve' | 'reject',
-  result: UserPluginChangeDecisionResult,
-): Promise<void> {
-  if (result.kind === 'committed') {
-    if (wantsJson(args)) {
-      await printJsonEnvelope({
-        ok: true,
-        kind: 'plugins_change_decision',
-        data: { outcome: 'applied', pendingChangeId, decision, result },
-      });
-      return;
-    }
-    console.log(ok(`Plugin change ${pendingChangeId} completed.`));
-    return;
-  }
-
-  if (result.kind === 'cancelled') {
-    const outcome = decision === 'reject' ? 'rejected' : 'cancelled';
-    if (wantsJson(args)) {
-      await printJsonEnvelope({
-        ok: true,
-        kind: 'plugins_change_decision',
-        data: { outcome, pendingChangeId, decision, result },
-      });
-      return;
-    }
-    console.log(neutral(`Plugin change ${pendingChangeId} was ${outcome}.`));
-    return;
-  }
-
-  if (result.kind === 'terminal') {
-    await printPluginChangeDecisionResult(args, pendingChangeId, decision, result.result);
-    return;
-  }
-
-  if (result.kind === 'reviewRequired') {
-    const failure = describePluginChangeFailure(result);
-    if (wantsJson(args)) {
-      await printJsonEnvelope({
-        ok: false,
-        kind: 'plugins_change_decision',
-        error: {
-          code: failure.code,
-          message: failure.message,
-          outcome: 'reviewRequired',
-          ...(failure.details ?? {}),
-        },
-      }, { exitCode: 1 });
-      return;
-    }
-    console.error(errorFrame('Review required:', [
-      failure.message,
-      ...pluginChangeReviewRejoinCommands(result.pendingChangeId),
-    ]));
-    process.exitCode = 1;
-    return;
-  }
-
-  if (result.kind === 'applying') {
-    const message = `Plugin change ${pendingChangeId} is still applying.`;
-    if (wantsJson(args)) {
-      await printJsonEnvelope({
-        ok: false,
-        kind: 'plugins_change_decision',
-        error: { code: 'applying', message, outcome: 'applying', pendingChangeId },
-      }, { exitCode: 1 });
-      return;
-    }
-    console.error(errorFrame('Pending:', [message, `Review status: ${resolveInvokerName() ?? 'happier'} plugins change status ${pendingChangeId}`]));
-    process.exitCode = 1;
-    return;
-  }
-
-  if (result.kind === 'daemonUnavailable') {
-    const message = 'The daemon plugin-change service is unavailable; a restarted daemon may no longer retain this pending change.';
-    if (wantsJson(args)) {
-      await printJsonEnvelope({
-        ok: false,
-        kind: 'plugins_change_decision',
-        error: { code: 'daemon_unavailable', message, outcome: 'failed', pendingChangeId },
-      }, { exitCode: 1 });
-      return;
-    }
-    console.error(errorFrame('Error:', [message]));
-    process.exitCode = 1;
-    return;
-  }
-
-  await reportPluginChangeFailure(args, 'plugins_change_decision', result);
-}
-
 /**
  * One unknown-nested-operation owner for every `plugins` dispatch level. A
  * missing or help operation is a help request and stays successful; an operation
@@ -641,7 +515,7 @@ async function runPluginsChangeCommand(
     console.log(usage());
     return;
   }
-  if (changeSubcommand !== 'status' && changeSubcommand !== 'approve' && changeSubcommand !== 'reject') {
+  if (changeSubcommand !== 'status') {
     await reportUnknownPluginsSubcommand(
       args,
       `plugins_change_${changeSubcommand}`,
@@ -654,21 +528,11 @@ async function runPluginsChangeCommand(
     console.log(usage());
     return;
   }
-  if (changeSubcommand === 'status') {
-    const status = await (deps.readPluginChangeStatus ?? readUserPluginChangeStatus)({
-      pendingChangeId,
-      ...(runtime.signal ? { signal: runtime.signal } : {}),
-    });
-    await printPluginChangeStatus(args, pendingChangeId, status);
-    return;
-  }
-
-  const result = await decideUserPluginChange({
+  const status = await (deps.readPluginChangeStatus ?? readUserPluginChangeStatus)({
     pendingChangeId,
-    decision: changeSubcommand,
     ...(runtime.signal ? { signal: runtime.signal } : {}),
   });
-  await printPluginChangeDecisionResult(args, pendingChangeId, changeSubcommand, result);
+  await printPluginChangeStatus(args, pendingChangeId, status);
 }
 
 function readPluginLogsRequest(args: readonly string[]): Readonly<{
@@ -877,135 +741,6 @@ async function runPluginsLogsCommand(
     logId = result.logId;
     waitForChanges = !(result.hasMore && madeProgress);
   }
-}
-
-function summarizePluginForCommand(entry: PluginCatalogEntry) {
-  return projectPluginCatalogEntrySnapshot(entry);
-}
-
-/**
- * The one CLI surface for the daemon's explicit `{ kind: 'update' }` request.
- * The daemon owns channel reconstruction and update-policy enforcement; this
- * command carries the caller's approval mode and reports its typed outcome.
- */
-async function runPluginsUpdateCommand(args: readonly string[], deps: PluginsCommandDeps): Promise<void> {
-  const pluginId = String(args[1] ?? '').trim();
-  if (!pluginId || pluginId === 'help' || pluginId === '--help' || pluginId === '-h') {
-    console.log(usage());
-    return;
-  }
-
-  const previousEntry = await readInstalledPluginCatalogEntry({ pluginId });
-  const result = await requestUserPluginChange({
-    request: { kind: 'update', pluginId },
-    approval: resolveUserPluginChangeApproval({
-      interactive: (deps.isInteractiveTerminal ?? isInteractiveTerminal)(),
-      json: wantsJson(args),
-    }),
-  });
-  if (result.kind !== 'committed') {
-    await reportPluginChangeFailure(args, 'plugins_update', result);
-    return;
-  }
-
-  const postEntry = await readInstalledPluginCatalogEntry({ pluginId: result.pluginId });
-
-  if (wantsJson(args)) {
-    await printJsonEnvelope({
-      ok: true,
-      kind: 'plugins_update',
-      data: {
-        pluginId: result.pluginId,
-        ...(postEntry ? { plugin: summarizePluginForCommand(postEntry) } : {}),
-        desiredGeneration: result.desiredGeneration,
-        appliedGeneration: result.appliedGeneration,
-        pendingSurfaces: result.pendingSurfaces,
-      },
-    });
-    return;
-  }
-
-  const out = createOutputBuilder();
-  out.line(ok(`Updated ${postEntry?.title ?? previousEntry?.title ?? result.pluginId}.`));
-  if (result.pendingSurfaces.length > 0) out.line(neutral(`  Pending reconciliation: ${result.pendingSurfaces.join(', ')}`));
-  console.log(out.render());
-}
-
-async function runPluginsEnabledCommand(
-  args: readonly string[],
-  deps: PluginsCommandDeps,
-  enabled: boolean,
-): Promise<void> {
-  const pluginId = String(args[1] ?? '').trim();
-  const outputKind = enabled ? 'plugins_enable' : 'plugins_disable';
-  if (!pluginId || pluginId === 'help' || pluginId === '--help' || pluginId === '-h') {
-    console.log(usage());
-    return;
-  }
-  const result = await requestUserPluginChange({
-    request: { kind: enabled ? 'enable' : 'disable', pluginId },
-    approval: 'none',
-  });
-  if (result.kind !== 'committed') {
-    await reportPluginChangeFailure(args, outputKind, result);
-    return;
-  }
-  if (wantsJson(args)) {
-    await printJsonEnvelope({
-      ok: true,
-      kind: outputKind,
-      data: {
-        pluginId: result.pluginId,
-        enabled,
-        desiredGeneration: result.desiredGeneration,
-        appliedGeneration: result.appliedGeneration,
-        pendingSurfaces: result.pendingSurfaces,
-      },
-    });
-    return;
-  }
-  const out = createOutputBuilder();
-  out.line(ok(`${enabled ? 'Enabled' : 'Disabled'} plugin ${result.pluginId}.`));
-  if (result.pendingSurfaces.length > 0) out.line(neutral(`  Pending reconciliation: ${result.pendingSurfaces.join(', ')}`));
-  console.log(out.render());
-}
-
-async function runPluginsRollbackCommand(args: readonly string[], deps: PluginsCommandDeps): Promise<void> {
-  const pluginId = String(args[1] ?? '').trim();
-  if (!pluginId || pluginId === 'help' || pluginId === '--help' || pluginId === '-h') {
-    console.log(usage());
-    return;
-  }
-
-  const entry = await readInstalledPluginCatalogEntry({ pluginId });
-  const result = await requestUserPluginChange({
-    request: { kind: 'rollback', pluginId },
-    approval: 'none',
-  });
-  if (result.kind !== 'committed') {
-    await reportPluginChangeFailure(args, 'plugins_rollback', result);
-    return;
-  }
-
-  if (wantsJson(args)) {
-    await printJsonEnvelope({
-      ok: true,
-      kind: 'plugins_rollback',
-      data: {
-        pluginId: result.pluginId,
-        ...(entry ? { plugin: summarizePluginForCommand(entry) } : {}),
-        desiredGeneration: result.desiredGeneration,
-        appliedGeneration: result.appliedGeneration,
-        pendingSurfaces: result.pendingSurfaces,
-      },
-    });
-    return;
-  }
-
-  const out = createOutputBuilder();
-  out.line(ok(`Rolled back ${entry?.title ?? result.pluginId}.`));
-  if (result.pendingSurfaces.length > 0) out.line(neutral(`  Pending reconciliation: ${result.pendingSurfaces.join(', ')}`));
-  console.log(out.render());
 }
 
 function normalizePluginCreateName(rawName: string): Readonly<{
@@ -1252,6 +987,10 @@ async function runPluginsDevCommand(
   runtime: PluginsCommandRuntime,
 ): Promise<void> {
   const operation = String(args[1] ?? '').trim();
+  if (operation === 'help' || args.includes('--help') || args.includes('-h')) {
+    console.log(usage());
+    return;
+  }
   if (operation === 'unregister') {
     const requestedPath = readCommandPositionals(args, { startIndex: 2 })[0];
     if (!requestedPath) {
@@ -1337,6 +1076,16 @@ async function runPluginsDevCommand(
     ...(sdkRegistryOrigin ? { sdkRegistryOrigin } : {}),
   }, runtime.signal ? { signal: runtime.signal } : {});
   if (result.kind === 'failed') {
+    if (result.code === 'plugin_dev_reviewRequired') {
+      // Rejoin the daemon-retained candidate through the ordinary install
+      // Action, which owns the approval Artifact and its decision lifecycle.
+      await handlePluginsCommand([
+        'install', requestedPath, '--dev',
+        ...(sdkRegistryOrigin ? ['--sdk-registry', sdkRegistryOrigin] : []),
+        ...(wantsJson(args) ? ['--json'] : []),
+      ], deps, runtime);
+      return;
+    }
     if (wantsJson(args)) {
       await printJsonEnvelope({
         ok: false,
@@ -1918,13 +1667,15 @@ export async function handlePluginsCommand(
   deps: PluginsCommandDeps = defaultPluginsCommandDeps,
   runtime: PluginsCommandRuntime = {},
 ): Promise<void> {
-  const actionOwnedMutation = args[0] === 'install' || args[0] === 'uninstall'
+  const actionOwnedMutation = ['install', 'update', 'uninstall', 'enable', 'disable', 'rollback', 'trust', 'update-policy'].includes(args[0] ?? '')
     || (args[0] === 'marketplace' && args[1] === 'install');
   if (actionOwnedMutation) {
     const argv = ['plugins', ...args];
     const command = findCompiledActionCliCommand(argv, listCompiledActionCliCommands());
     if (!command) throw new Error('Plugin mutation Action command is unavailable.');
-    await runCompiledActionCliCommand({ command, argv, ...(runtime.signal ? { signal: runtime.signal } : {}) });
+    await runCompiledActionCliCommand({ command, argv,
+      ...(deps.actionExecutionDeps ? { deps: deps.actionExecutionDeps } : {}),
+      ...(runtime.signal ? { signal: runtime.signal } : {}) });
     return;
   }
   const subcommand = String(args[0] ?? '').trim();
@@ -1945,22 +1696,6 @@ export async function handlePluginsCommand(
 
   if (subcommand === 'actions') {
     await runPluginsActionsCommand(args);
-    return;
-  }
-
-
-  if (subcommand === 'update') {
-    await runPluginsUpdateCommand(args, deps);
-    return;
-  }
-
-  if (subcommand === 'rollback') {
-    await runPluginsRollbackCommand(args, deps);
-    return;
-  }
-
-  if (subcommand === 'enable' || subcommand === 'disable') {
-    await runPluginsEnabledCommand(args, deps, subcommand === 'enable');
     return;
   }
 

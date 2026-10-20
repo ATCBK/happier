@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useHappierMaterialColorResolver } from '@happier-dev/plugin-ui/presentation';
-import { Dimensions, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
+import { Dimensions, View, useWindowDimensions, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, { useAnimatedStyle } from 'react-native-reanimated';
 import { useUnistyles } from 'react-native-unistyles';
 
@@ -16,6 +16,23 @@ function normalizeScaffoldHeight(height: number): number | undefined {
     return Math.round(height);
 }
 
+// In a content-sized host, the scaffold's own height is only what the composer already occupies.
+// Include the room its nearest capped scrolling host can still grow into to avoid granting the
+// composer a few more pixels on every layout pass. The uncapped modal body is skipped.
+function readScrollingHostGrowthRoom(element: unknown): number {
+    if (typeof HTMLElement === 'undefined' || !(element instanceof HTMLElement)) return 0;
+    for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+        const style = getComputedStyle(ancestor);
+        if (style.overflowY !== 'auto' && style.overflowY !== 'scroll') continue;
+        if (!style.maxHeight.endsWith('px')) continue;
+        const maxHeight = Number.parseFloat(style.maxHeight);
+        if (!Number.isFinite(maxHeight)) continue;
+        // offsetHeight is the layout box, unaffected by the drawer's enter/exit transforms.
+        return Math.max(0, maxHeight - ancestor.offsetHeight);
+    }
+    return 0;
+}
+
 function flattenStyleItems(style: StyleProp<ViewStyle>): Array<StyleProp<ViewStyle>> {
     if (Array.isArray(style)) {
         return style.flatMap((item) => flattenStyleItems(item as StyleProp<ViewStyle>));
@@ -25,7 +42,7 @@ function flattenStyleItems(style: StyleProp<ViewStyle>): Array<StyleProp<ViewSty
 
 export function ComposerKeyboardScaffold(props: ComposerKeyboardScaffoldProps): React.ReactElement {
     const { theme } = useUnistyles();
-    const materialColor = useHappierMaterialColorResolver('content');
+    const materialColor = useHappierMaterialColorResolver();
     const [availablePanelMaxHeight, setAvailablePanelMaxHeight] = React.useState<number | undefined>(undefined);
     const modal = useOptionalModal();
     const isInsideModalBoundary = useIsInsideModalBoundary();
@@ -72,12 +89,28 @@ export function ComposerKeyboardScaffold(props: ComposerKeyboardScaffoldProps): 
             reportComposerChromeHeight(height, Number.isFinite(top) ? top : 0);
         });
     }, [layout, reportComposerChromeHeight, safeAreaBottom]);
-    const handleScaffoldLayout = React.useCallback((event: LayoutChangeEvent) => {
-        const nextHeight = normalizeScaffoldHeight(event.nativeEvent.layout.height);
+    const { height: windowHeight } = useWindowDimensions();
+    const scaffoldLayoutRef = React.useRef<Readonly<{ height: number; element: unknown }> | null>(null);
+    const publishAvailablePanelMaxHeight = React.useCallback(() => {
+        const scaffoldLayout = scaffoldLayoutRef.current;
+        if (!scaffoldLayout) return;
+        const nextHeight = normalizeScaffoldHeight(
+            scaffoldLayout.height + readScrollingHostGrowthRoom(scaffoldLayout.element),
+        );
         setAvailablePanelMaxHeight((current) => (current === nextHeight ? current : nextHeight));
+    }, []);
+    const handleScaffoldLayout = React.useCallback((event: LayoutChangeEvent) => {
+        // react-native-web exposes the measured DOM node as `nativeEvent.target`.
+        const { target } = event.nativeEvent as LayoutChangeEvent['nativeEvent'] & { target?: unknown };
+        scaffoldLayoutRef.current = { height: event.nativeEvent.layout.height, element: target };
+        publishAvailablePanelMaxHeight();
         // A window resize moves the band without resizing it.
         publishComposerBand();
-    }, [publishComposerBand]);
+    }, [publishAvailablePanelMaxHeight, publishComposerBand]);
+    // A viewport-derived host cap can move without resizing the scaffold itself.
+    React.useEffect(() => {
+        publishAvailablePanelMaxHeight();
+    }, [publishAvailablePanelMaxHeight, windowHeight]);
     const handleComposerLayout = React.useCallback((event: LayoutChangeEvent) => {
         layout.setComposerMeasuredHeight(event.nativeEvent.layout.height);
         composerHeightRef.current = event.nativeEvent.layout.height;

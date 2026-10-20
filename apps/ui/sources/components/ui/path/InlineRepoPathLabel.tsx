@@ -16,7 +16,12 @@ export type InlineRepoPathLabelProps = Readonly<{
     filePath?: string | null;
     fullPath?: string | null;
     nameSuffix?: string;
-    alignForRootFiles?: boolean;
+    /**
+     * `end` (default): the folder takes the free room and the name sits at the row's end, so names
+     * line up in a column. `start`: the label reads from the leading edge (folder, then name) and only
+     * shrinks, head-truncating the folder, when the row runs out (a file row's title).
+     */
+    align?: 'start' | 'end';
     style?: StyleProp<ViewStyle>;
     pathTextStyle?: StyleProp<TextStyle>;
     nameTextStyle?: StyleProp<TextStyle>;
@@ -85,6 +90,7 @@ export const InlineRepoPathLabel = React.memo(function InlineRepoPathLabel(props
 
     const isWeb = Platform.OS === 'web';
     const stacked = props.layout === 'stacked';
+    const alignStart = props.align === 'start';
     const dirLabel = dir ? `${dir}${PATH_SEPARATOR}` : null;
     const disambiguation = React.useMemo(() => {
         if (props.layout === 'inline' || props.layout === undefined || !props.siblingPaths || props.siblingPaths.length === 0) return '';
@@ -105,13 +111,13 @@ export const InlineRepoPathLabel = React.memo(function InlineRepoPathLabel(props
     }, [props.style, stacked]);
     const pathStyle = React.useMemo<StyleProp<TextStyle>>(() => {
         return [
-            stacked ? { minWidth: 0 } : { flex: 1, minWidth: 0 },
+            stacked ? { minWidth: 0 } : alignStart ? { flexGrow: 0, flexShrink: 1, flexBasis: 'auto', minWidth: 0 } : { flex: 1, minWidth: 0 },
             isWeb
                 ? [WEB_START_ELLIPSIS_CONTAINER_TEXT_STYLE, { textAlign: stacked ? 'left' : 'right' } satisfies TextStyle]
                 : { textAlign: stacked ? 'left' : 'right' } satisfies TextStyle,
             props.pathTextStyle,
         ];
-    }, [isWeb, props.pathTextStyle, stacked]);
+    }, [alignStart, isWeb, props.pathTextStyle, stacked]);
     const effectiveNameMaxWidth = props.preferNameOverPath ? '100%' : (props.nameMaxWidth ?? null);
     const nameStyle = React.useMemo<StyleProp<TextStyle>>(() => {
         return [
@@ -183,7 +189,7 @@ export const InlineRepoPathLabel = React.memo(function InlineRepoPathLabel(props
                         </Text>
                     ) : props.findRanges?.length ? <FindHighlightedText text={dirLabel} ranges={sliceFindRanges(props.findRanges, 0, dirLabel.length)} /> : dirLabel}
                 </Text>
-            ) : props.alignForRootFiles === false ? null : (
+            ) : alignStart ? null : (
                 <View style={{ flex: 1, minWidth: 0 }} />
             )}
             <Text numberOfLines={props.findRanges?.length ? undefined : 1} ellipsizeMode="middle" style={nameStyle}>

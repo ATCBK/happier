@@ -3,10 +3,13 @@ import type { SessionRunnerRespawnManager } from '../processSupervision/sessionR
 import type { TrackedSession } from '../types';
 import type { ExactTrackedRunnerStopWitness, StopSessionOptions } from './stopSession';
 import type { StopSessionResult } from './stopSessionContract';
+import type { ProcessActionExecution } from '../processes/actions/processActionExecutor';
 
 type ExactTarget = Readonly<{ pid: number; start: ProcessStartIdentity }>;
 type VerifyCurrent = () => boolean | Promise<boolean>;
-type Execution = Readonly<{ signal?: AbortSignal; verifyCurrent?: VerifyCurrent }>;
+type Execution = Readonly<{ signal?: AbortSignal; verifyCurrent?: VerifyCurrent;
+  actionContext?: ProcessActionExecution['actionContext']; rpcContext?: ProcessActionExecution['rpcContext'];
+  physicalStopEffect?: ProcessActionExecution['physicalStopEffect'] }>;
 type BoundRunner = ExactTrackedRunnerStopWitness & Readonly<{
   trackedPid: number;
   sessionId: string | undefined;
@@ -21,10 +24,24 @@ export type SessionProcessActionLifecycle = Readonly<{
 export function createSessionProcessActionLifecycle(params: Readonly<{
   pidToTrackedSession: Map<number, TrackedSession>;
   markStopRequested: SessionRunnerRespawnManager['markStopRequested'];
-  stopSession(sessionId: string, options?: StopSessionOptions): Promise<StopSessionResult>;
+  recordExplicitStopIntent(sessionId: string, execution: Execution): Promise<void>;
+  registerPhysicalStopEffect(sessionId: string, completion: Promise<void>): void;
+  stopSession(sessionId: string, options?: StopSessionOptions, physicalEffect?: Promise<void>): Promise<StopSessionResult>;
 }>): SessionProcessActionLifecycle {
   const executionCurrent = async (input: Execution) => !input.signal?.aborted
     && (!input.verifyCurrent || await input.verifyCurrent()) && !input.signal?.aborted;
+  const isAutomaticHostCleanup = (input: Execution) => input.actionContext?.authority === 'account_automation'
+    && input.actionContext.actionCaller?.kind !== 'session';
+  const isCleanup = (input: Execution, witness: BoundRunner) => {
+    if (isAutomaticHostCleanup(input)) return true;
+    const target = witness.tracked.requesterWorkAttributionV1;
+    const admission = input.rpcContext?.machineAdmission;
+    // The Machine custodian may retire a guest process. That physical right
+    // does not grant the guest Account's metadata mutation authority.
+    return !!target && !!admission && admission.actorAccountId === admission.custodianAccountId
+      && admission.machineId === target.machineId && admission.installationId === target.installationId
+      && admission.actorAccountId !== target.accountId;
+  };
   function bind(target: ExactTarget): BoundRunner | null | undefined {
     const tracked = [...params.pidToTrackedSession.values()].find(row => row.pid === target.pid || row.sessionRunnerPid === target.pid);
     if (!tracked) return undefined;
@@ -63,15 +80,31 @@ export function createSessionProcessActionLifecycle(params: Readonly<{
           return now === undefined || (now !== null && witnesses.some(row => row.tracked === now.tracked));
         });
       if (!await authorized()) return null;
+      if (input.physicalStopEffect) for (const witness of witnesses) {
+        if (witness.sessionId) params.registerPhysicalStopEffect(witness.sessionId, input.physicalStopEffect.completion);
+      }
+      const recorded = input.physicalStopEffect?.recordedSessionIds ?? new Set<string>();
       return async () => {
         if (!await authorized()) return false;
+        for (const witness of witnesses) {
+          if (!current(witness) || !witness.sessionId || isCleanup(input, witness)) continue;
+          try {
+            if (!recorded.has(witness.sessionId)) {
+              await params.recordExplicitStopIntent(witness.sessionId, input);
+              recorded.add(witness.sessionId);
+            }
+          } catch {
+            return false;
+          }
+          if (!await authorized()) return false;
+        }
         for (const witness of witnesses) {
           if (!current(witness)) continue;
           const { tracked, sessionId } = witness;
           tracked.stopRequestedAtMs ??= Date.now();
-          tracked.stopRequestedReason = 'user_process_kill';
+          if (!isCleanup(input, witness)) tracked.stopRequestedReason = 'user_process_kill';
           if (sessionId) params.markStopRequested(sessionId,
-            { reason: 'user_request', requestedAtMs: tracked.stopRequestedAtMs });
+            { reason: isCleanup(input, witness) ? 'daemon_stop_session' : 'user_request', requestedAtMs: tracked.stopRequestedAtMs });
         }
         stamped = true;
         return true;
@@ -83,16 +116,27 @@ export function createSessionProcessActionLifecycle(params: Readonly<{
         || !await executionCurrent(input) || !current(witness)) {
         return { status: 'incomplete', reason: 'runner_signal_incomplete' };
       }
+      if (input.physicalStopEffect) params.registerPhysicalStopEffect(input.sessionId, input.physicalStopEffect.completion);
+      const recorded = input.physicalStopEffect?.recordedSessionIds ?? new Set<string>();
       return await params.stopSession(input.sessionId, {
         expectedTrackedRunner: witness,
         beforeSignalExactTrackedRunner: async () => {
+          if (!await executionCurrent(input) || !current(witness)) return false;
+          try {
+            if (!isCleanup(input, witness) && !recorded.has(input.sessionId)) {
+              await params.recordExplicitStopIntent(input.sessionId, input);
+              recorded.add(input.sessionId);
+            }
+          } catch {
+            return false;
+          }
           if (!await executionCurrent(input) || !current(witness)) return false;
           witness.tracked.stopRequestedAtMs ??= Date.now();
           params.markStopRequested(input.sessionId,
             { reason: 'daemon_stop_session', requestedAtMs: witness.tracked.stopRequestedAtMs });
           return true;
         },
-      });
+      }, input.physicalStopEffect?.completion);
     },
   };
 }

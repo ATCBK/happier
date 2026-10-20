@@ -1,12 +1,26 @@
 import { parseSessionFollowActionResponse, resolveSessionFollowActionRequest } from '@happier-dev/protocol/sessions/follow/actionTransport';
-import { SessionFollowErrorCodeV1Schema, type SetSessionFollowRequest, ReplaceSessionVoiceInclusionsResponseSchema, SESSION_FOLLOW_HTTP_PATHS_V1 } from '@happier-dev/protocol/sessions/follow/api';
+import { readActionCredentialScopeDeniedHttpFailureV1 } from '@happier-dev/protocol/actions/externalActionApi';
+import { SessionFollowErrorCodeV1Schema, type SetSessionFollowRequest, GetSessionFollowResponseSchema, SetSessionFollowResponseSchema, RemoveSessionFollowResponseSchema, SessionAutoFollowPreferencesResponseSchema, ReplaceSessionVoiceInclusionsResponseSchema, SESSION_FOLLOW_HTTP_PATHS_V1 } from '@happier-dev/protocol/sessions/follow/api';
 import { SessionFollowSourcesErrorCodeV1Schema, type SessionFollowSourcesErrorCodeV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import type { SessionAutoFollowPreferencesV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import type { SessionFollowActionIdV1, SessionFollowActionOutputV1 } from '@happier-dev/protocol/sessions/follow/actions';
+import { FollowPreviewActionInputV1Schema, FollowRuleSetActionInputV1Schema, SessionFollowActionInputSchemasV1 } from '@happier-dev/protocol/sessions/follow/actions';
+import { equalFollowRuleReceiverV1, GetSessionFollowRuleResponseV1Schema, SetSessionFollowRuleResponseV1Schema,
+    SessionFollowRuleDefinitionV1Schema, SessionFollowRuleErrorResponseV1Schema,
+    type SessionFollowRuleFailureV1,
+} from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
+import { openSessionFollowRuleContentV1, sealSessionFollowRuleContentV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleContentCodecV1';
+import { ListAccountSessionFollowsResponseV1Schema } from '@happier-dev/protocol/sessions/follow/api';
+import { ListSessionFollowSourcesResponseSchema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourcesApi';
+import { classifyAccountStorageReadFailure, resolveAccountStorageContext } from '@/sync/encryption/accountStorageContext';
+import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
+import { readSessionFollowRuleCensus, type SessionFollowRulesSnapshot } from './sessionFollowRulesApi';
+import { FollowReceiverRefV1Schema, FollowSourceRefV1Schema, type FollowDeliveryMuteScopeV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
 
 import { subscribeHomeCredentialMutations } from '@/auth/storage/tokenStorage';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import type { SessionAddress } from '@/sync/domains/session/sessionAddress';
 import { createServerRequestForResolvedServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
@@ -14,7 +28,7 @@ import { resolveServerAccountRequestContext } from '@/sync/runtime/orchestration
 
 export type SessionFollowApiResult<T> =
     | Readonly<{ kind: 'ok'; value: T }>
-    | Readonly<{ kind: 'failed'; error: SessionFollowSourcesErrorCodeV1 | 'unavailable' }>;
+    | Readonly<{ kind: 'failed'; error: SessionFollowSourcesErrorCodeV1 | SessionFollowRuleFailureV1 | 'credential_scope_denied' | 'unavailable' }>;
 
 const UNAVAILABLE = Object.freeze({ kind: 'failed', error: 'unavailable' } as const);
 
@@ -28,6 +42,7 @@ type ScopedFollowRequestContext = Extract<ResolvedFollowRequestContext, { scope:
  */
 async function withCurrentFollowRequest<T>(params: Readonly<{
     serverId: string;
+    expectedAccountId?: string;
     signal?: AbortSignal;
     operation: (request: Readonly<{
         context: ScopedFollowRequestContext;
@@ -54,6 +69,7 @@ async function withCurrentFollowRequest<T>(params: Readonly<{
     try {
         context = await resolveServerAccountRequestContext({ serverId: params.serverId, preferScoped: true });
         if (!isCurrent() || context.scope !== 'scoped') return UNAVAILABLE;
+        if (params.expectedAccountId !== undefined && context.targetAccountId !== params.expectedAccountId) return UNAVAILABLE;
         if (areServerProfileIdentifiersEquivalent(context.targetServerId, lifetime.scope.serverId)
             && context.targetAccountId !== lifetime.scope.accountId) return UNAVAILABLE;
         return await params.operation({ context, signal: controller.signal, isCurrent });
@@ -73,17 +89,59 @@ export async function executeSessionFollowAction<TActionId extends SessionFollow
     input: unknown,
     serverId: string,
     signal?: AbortSignal,
+    expectedAccountId?: string,
 ): Promise<SessionFollowApiResult<SessionFollowActionOutputV1[TActionId]>> {
     return await withCurrentFollowRequest({
         serverId,
         signal,
+        ...(expectedAccountId !== undefined ? { expectedAccountId } : {}),
         operation: async ({ context, signal: requestSignal, isCurrent }) => {
-            const request = resolveSessionFollowActionRequest(actionId, input);
+            const actionInput = SessionFollowActionInputSchemasV1[actionId].parse(input);
             const send = createServerRequestForResolvedServerScope({
                 context,
                 // preferScoped must never fall back to the focused Home transport.
                 activeRequest: async () => { throw new Error('Follow requires an explicit Home'); },
             });
+            const parsedSource = FollowSourceRefV1Schema.safeParse('source' in actionInput ? actionInput.source : undefined);
+            const ruleTarget = parsedSource.success && parsedSource.data.kind === 'rule' && 'receiver' in actionInput
+                ? { ruleId: parsedSource.data.ruleId, receiver: FollowReceiverRefV1Schema.parse(actionInput.receiver) } : null;
+            const readStorage = async () => {
+                if (!context.credentials) throw new Error('encryption-material-unavailable');
+                const account = await resolveAccountStorageContext(context.credentials, { encryption: context.encryption, request: send });
+                if (!isCurrent()) throw new Error('scope-retired');
+                return { mode: account.mode, material: account.mode === 'plain' ? null
+                    : resolveAccountScopedCryptoMaterialFromCredentials(context.credentials) };
+            };
+            const readRules = async () => {
+                const admitted = await readStorage();
+                const rules = await readSessionFollowRuleCensus({ ...admitted, request: send, signal: requestSignal,
+                    assertCurrent: () => { if (!isCurrent()) throw new Error('scope-retired'); } });
+                const current = await readStorage();
+                if (current.mode !== admitted.mode) throw new Error('account-mode-mismatch');
+                return rules;
+            };
+            if (actionId === 'follow.preview') {
+                let rules: SessionFollowRulesSnapshot;
+                try {
+                    rules = { status: 'ready', accountId: context.targetAccountId, rules: await readRules() };
+                } catch (error) {
+                    if (!isCurrent()) return UNAVAILABLE;
+                    rules = { status: 'unavailable', reason: classifyAccountStorageReadFailure(error, requestSignal) };
+                }
+                const { previewSessionFollowRule } = await import('./sessionFollowRulePreview');
+                const payload = await previewSessionFollowRule({ serverId: context.targetServerId,
+                    accountId: context.targetAccountId, request: FollowPreviewActionInputV1Schema.parse(input), rules,
+                    signal: requestSignal,
+                    assertCurrent: () => { if (!isCurrent()) throw new Error('scope-retired'); },
+                });
+                return { kind: 'ok', value: parseSessionFollowActionResponse(actionId, input, payload) };
+            }
+            const account = ruleTarget && actionId !== 'follow.remove' ? await readStorage() : null;
+            const authored = ruleTarget && actionId === 'follow.set' ? FollowRuleSetActionInputV1Schema.parse(input) : null;
+            const ruleContent = authored && account && ruleTarget ? sealSessionFollowRuleContentV1({ ruleId: authored.source.ruleId,
+                receiver: ruleTarget.receiver, definition: SessionFollowRuleDefinitionV1Schema.parse({ ...authored.ruleDefinition, policy: authored.policy }),
+                mode: account.mode, material: account.material }) : undefined;
+            const request = resolveSessionFollowActionRequest(actionId, input, { ...(ruleContent ? { ruleContent } : {}) });
             const response = await send(request.path, {
                 method: request.method,
                 ...(request.body === undefined ? {} : {
@@ -96,13 +154,60 @@ export async function executeSessionFollowAction<TActionId extends SessionFollow
             const payload: unknown = await response.json();
             if (!isCurrent()) return UNAVAILABLE;
             if (!response.ok) {
+                const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(response.status, payload);
+                if (scopeDenial) return { kind: 'failed', error: scopeDenial.errorCode };
                 const record = typeof payload === 'object' && payload !== null ? payload as Record<string, unknown> : {};
+                if (ruleTarget) {
+                    const error = SessionFollowRuleErrorResponseV1Schema.safeParse(payload);
+                    return error.success ? { kind: 'failed', error: error.data.error } : UNAVAILABLE;
+                }
                 const error = SessionFollowSourcesErrorCodeV1Schema.safeParse(record.error);
                 return error.success ? { kind: 'failed', error: error.data } : UNAVAILABLE;
+            }
+            if (ruleTarget && account && (actionId === 'follow.get' || actionId === 'follow.set')) {
+                const rule = actionId === 'follow.get' ? GetSessionFollowRuleResponseV1Schema.parse(payload).rule
+                    : SetSessionFollowRuleResponseV1Schema.parse(payload).rule;
+                if (rule && (rule.ruleId !== ruleTarget.ruleId || !equalFollowRuleReceiverV1(rule.receiver, ruleTarget.receiver))) return UNAVAILABLE;
+                const current = await readStorage();
+                if (current.mode !== account.mode) return UNAVAILABLE;
+                const opened = rule ? openSessionFollowRuleContentV1({ ...rule, mode: current.mode, material: current.material }) : null;
+                if (opened && opened.status !== 'opened') return UNAVAILABLE;
+                return { kind: 'ok', value: parseSessionFollowActionResponse(actionId, input, {
+                    rule: rule && opened?.status === 'opened' ? { ruleId: rule.ruleId, receiver: rule.receiver,
+                        version: rule.version, definition: opened.definition } : null,
+                }) };
+            }
+            if (actionId === 'follow.list') {
+                const list = SessionFollowActionInputSchemasV1['follow.list'].parse(input);
+                if (list.direction === 'followers') return { kind: 'ok', value: parseSessionFollowActionResponse(actionId, input, payload) };
+                const receiver = FollowReceiverRefV1Schema.parse(list.receiver);
+                const census = list.cursor === undefined ? await readRules() : [];
+                const rows = receiver.kind === 'account'
+                    ? { ...ListAccountSessionFollowsResponseV1Schema.parse(payload), sources: [] }
+                    : { follows: [], ...ListSessionFollowSourcesResponseSchema.parse(payload) };
+                return { kind: 'ok', value: parseSessionFollowActionResponse(actionId, input, { ...rows,
+                    rules: census.filter(rule => equalFollowRuleReceiverV1(rule.receiver, receiver)),
+                    coverage: rows.continuation ? 'partial' : 'complete',
+                }) };
             }
             return { kind: 'ok', value: parseSessionFollowActionResponse(actionId, input, payload) };
         },
     });
+}
+
+/** Private receiver scopes for this exact Home/Account; null never means unmuted. */
+export async function readAccountSessionDeliveryMutedScopes(
+    scope: ServerAccountScope,
+    signal?: AbortSignal,
+): Promise<readonly FollowDeliveryMuteScopeV1[] | null> {
+    if (!scope.accountId.trim()) return null;
+    try {
+        const result = await executeSessionFollowAction('session.delivery.mute.list', { receiver: { kind: 'account' } },
+            scope.serverId, signal, scope.accountId);
+        return result.kind === 'ok' ? result.value.scopes : null;
+    } catch {
+        return null;
+    }
 }
 
 export const sessionFollowAction: NonNullable<ActionExecutorDeps['sessionFollowAction']> = async (args) => {
@@ -114,27 +219,29 @@ export const sessionFollowAction: NonNullable<ActionExecutorDeps['sessionFollowA
     };
 };
 
-async function executeAccountFollowAction<TActionId extends Exclude<SessionFollowActionIdV1, `session.follow.sources.${string}`>>(
+async function executeAccountFollowAction<TActionId extends SessionFollowActionIdV1, TValue>(
     actionId: TActionId,
     input: unknown,
     serverId: string,
+    parse: (value: unknown) => TValue,
 ) {
     const result = await executeSessionFollowAction(actionId, input, serverId);
-    if (result.kind === 'ok') return result;
+    if (result.kind === 'ok') return { kind: 'ok' as const, value: parse(result.value) };
+    if (result.error === 'credential_scope_denied') return { kind: 'failed' as const, error: result.error };
     const error = SessionFollowErrorCodeV1Schema.safeParse(result.error);
     return { kind: 'failed' as const, error: error.success ? error.data : 'unavailable' as const };
 }
 
 export function sessionFollowGet(address: SessionAddress) {
-    return executeAccountFollowAction('session.follow.get', { sessionId: address.sessionId }, address.serverId);
+    return executeAccountFollowAction('follow.get', { receiver: { kind: 'account' }, source: { kind: 'session', sessionId: address.sessionId } }, address.serverId, GetSessionFollowResponseSchema.parse);
 }
 
-export function sessionFollowSet(address: SessionAddress, preferences: SetSessionFollowRequest) {
-    return executeAccountFollowAction('session.follow.set', { sessionId: address.sessionId, ...preferences }, address.serverId);
+export function sessionFollowSet(address: SessionAddress, preferences: Pick<SetSessionFollowRequest, 'policy' | 'once'>) {
+    return executeAccountFollowAction('follow.set', { receiver: { kind: 'account' }, source: { kind: 'session', sessionId: address.sessionId }, ...preferences }, address.serverId, SetSessionFollowResponseSchema.parse);
 }
 
 export function sessionFollowRemove(address: SessionAddress) {
-    return executeAccountFollowAction('session.follow.remove', { sessionId: address.sessionId }, address.serverId);
+    return executeAccountFollowAction('follow.remove', { receiver: { kind: 'account' }, source: { kind: 'session', sessionId: address.sessionId } }, address.serverId, RemoveSessionFollowResponseSchema.parse);
 }
 
 export async function replaceSessionVoiceInclusions(
@@ -158,6 +265,8 @@ export async function replaceSessionVoiceInclusions(
             const payload: unknown = await response.json();
             if (!isCurrent()) return UNAVAILABLE;
             if (!response.ok) {
+                const scopeDenial = readActionCredentialScopeDeniedHttpFailureV1(response.status, payload);
+                if (scopeDenial) return { kind: 'failed', error: scopeDenial.errorCode };
                 const record = typeof payload === 'object' && payload !== null ? payload as Record<string, unknown> : {};
                 const error = SessionFollowErrorCodeV1Schema.safeParse(record.error);
                 return error.success ? { kind: 'failed', error: error.data } : UNAVAILABLE;
@@ -168,9 +277,9 @@ export async function replaceSessionVoiceInclusions(
 }
 
 export function sessionAutoFollowPreferencesGet(serverId: string) {
-    return executeAccountFollowAction('session.follow.preferences.get', {}, serverId);
+    return executeAccountFollowAction('follow.preferences.get', {}, serverId, SessionAutoFollowPreferencesResponseSchema.parse);
 }
 
 export function sessionAutoFollowPreferencesSet(serverId: string, preferences: SessionAutoFollowPreferencesV1) {
-    return executeAccountFollowAction('session.follow.preferences.set', preferences, serverId);
+    return executeAccountFollowAction('follow.preferences.set', preferences, serverId, SessionAutoFollowPreferencesResponseSchema.parse);
 }

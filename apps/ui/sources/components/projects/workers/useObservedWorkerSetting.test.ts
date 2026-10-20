@@ -4,11 +4,25 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { createPlainArtifactHomeFixture } from '@/dev/testkit/harness/artifactStoreBoundary';
 import { useObservedWorkerSetting } from './useObservedWorkerSetting';
+import { ProjectWorkerActionError } from '@/sync/ops/actions/projectWorkerActions';
 
 let fixture: Awaited<ReturnType<typeof createPlainArtifactHomeFixture>> | undefined;
 afterEach(async () => { await fixture?.dispose(); fixture = undefined; });
 
 describe('observed worker setting intent custody', () => {
+  it.each(['refused', 'rejected'] as const)('preserves the typed cause of a %s settings read', async mode => {
+    fixture = await createPlainArtifactHomeFixture('https://worker-read-cause.test');
+    const hook = await renderHook(() => useObservedWorkerSetting({
+      serverId: fixture!.home.id, scopeKey: 'checkout',
+      read: async () => {
+        if (mode === 'rejected') throw new ProjectWorkerActionError('action_disabled');
+        return { status: 'unavailable' as const, reasonCode: 'action_disabled' };
+      },
+      observedFromReceipt: () => null,
+    }));
+    expect(hook.getCurrent().state).toMatchObject({ kind: mode === 'refused' ? 'refused' : 'error', reasonCode: 'action_disabled' });
+    await hook.unmount();
+  });
   it.each(['conflict', 'outcomeUnknown', 'locked', 'unavailable', 'throw'] as const)(
     'keeps the intended edit separate from current authority after %s; renewed intent uses the current basis',
     async (status) => {

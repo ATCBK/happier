@@ -2,7 +2,7 @@ import axios from 'axios';
 import { createServer, type Server } from 'node:http';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { createActionExecutor } from '@happier-dev/protocol';
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol/auth/apiTokenGrant';
@@ -21,6 +21,7 @@ import { updateSettings } from '@/persistence';
 import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
 import { admitRequesterAccountActionContext } from '@/daemon/sessionEncryption/requesterAccountActionProjection';
 import { projectExternalActionRequesterHttpAuthorization } from '@/api/externalActionExecutionAuthorization';
+import { createRequesterCurrentnessSocketHarness } from '@/testkit/backends/requesterCurrentnessSocketHarness';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -36,6 +37,8 @@ function deps() {
 
 describe('Source Actions through the CLI Account front door', () => {
   it('admits portable Home private Artifact attachment through real requester custody without borrowing the owner', async () => {
+    const currentness = await createRequesterCurrentnessSocketHarness();
+    onTestFinished(() => currentness.close());
     await withTempDir('source-portable-home-', async home => {
       const scope = createEnvKeyScope(['HAPPIER_HOME_DIR', 'HAPPIER_ACTIVE_SERVER_ID']);
       const profileId = 'source-local-profile';
@@ -113,7 +116,7 @@ describe('Source Actions through the CLI Account front door', () => {
           attachment: { ...input.patch.attachment.attachment, ref: { ...input.patch.attachment.attachment.ref, serverId: 'srv_wrongSource' } } } } }, context))
           .toEqual({ ok: false, error: 'artifact_unavailable' });
         for (const scenario of ['ambiguous', 'retired'] as const) {
-          await updateSettings(settings => ({ ...settings, servers: scenario === 'retired' ? {}
+          await updateSettings((settings): typeof settings => ({ ...settings, servers: scenario === 'retired' ? {}
             : { [profileId]: profile, duplicate: { ...profile, id: 'duplicate' } } }));
           expect(await carrier.requesterAccountProjection!.readArtifact({ kind: 'doc', serverId: homeId, artifactId })).toBeNull();
           expect(await actions.projectSourcesUpdate!(input, context)).toMatchObject({ ok: false, errorCode: 'server_scope_mismatch' });

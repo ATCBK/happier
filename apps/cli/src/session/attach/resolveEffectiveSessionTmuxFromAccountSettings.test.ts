@@ -16,7 +16,7 @@ describe('resolveEffectiveSessionTmuxFromAccountSettings', () => {
       accountSettings: accountSettingsParse({
         sessionUseTmux: true,
         sessionTmuxByMachineId: {
-          'machine-a': { useTmux: false },
+          'machine-a': { useTmux: false, sessionName: 'happy', isolated: true, tmpDir: null },
         },
       }),
       currentMachineId: 'machine-a',

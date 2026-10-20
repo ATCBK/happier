@@ -4,6 +4,23 @@ import { MemoryDocBodyV1Schema, MemoryDocBodyV1StoredSchema, projectMemoryDocInd
 const fact = (id: string, text = id) => ({ id, text, createdAtMs: 1, sourceSessionRef: null });
 
 describe('memory document content', () => {
+  it('retains decision source and actual approval in stored reads while keeping decision detail out of prepared context', () => {
+    const decision = { reason: 'The team reviewed the migration', sourceMessageRef: { kind: 'session',
+      session: { serverId: 'home', sessionId: 'session' }, messageId: 'committed' },
+      approvedBy: { accountId: 'person', atMs: 10 } };
+    const body = { v: 1, index: [], topics: [{ title: 'Storage', summary: 'Database choice', facts: [{ ...fact('decision', 'Use PostgreSQL'), decision }] }] };
+    const stored = MemoryDocBodyV1StoredSchema.parse({ ...body, topics: [{ ...body.topics[0], facts: [{
+      ...body.topics[0]!.facts[0], decision: { ...decision, futureAnnotation: true },
+    }] }] });
+    expect(stored).toEqual(body);
+    const prepared = renderMemoryDocV1({ body: stored, nowMs: 20 });
+    expect(prepared.markdown).toContain('Database choice');
+    expect(prepared.markdown).not.toContain('Use PostgreSQL');
+    expect(prepared.markdown).not.toContain(decision.reason);
+    expect(MemoryDocBodyV1StoredSchema.safeParse({ ...body, topics: [{ ...body.topics[0], facts: [{
+      ...body.topics[0]!.facts[0], decision: { ...decision, approvedBy: 'person' },
+    }] }] }).success).toBe(false);
+  });
   it('renders each loaded fact as one id-keyed AMR line with host provenance', () => {
     const body = MemoryDocBodyV1Schema.parse({ v: 1, index: [{
       ...fact('current', 'Prefer tea\nwith milk'), createdAtMs: Date.UTC(2026, 9, 8),

@@ -60,13 +60,13 @@ describe('syncFriends', () => {
         const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
             const url = new URL(String(input));
             if (url.pathname === '/health' || url.pathname === '/v1/auth/ping') {
-                return { ok: true, status: 200, json: async () => ({}) } as unknown as Response;
+                return createFeatureHttpResponse({});
             }
             if (url.pathname === '/v1/features') {
                 return createFeatureHttpResponse({}, 404);
             }
             if (url.pathname === '/v1/friends') {
-                return { ok: true, status: 200, json: async () => ({ friends: [] }) } as unknown as Response;
+                return createFeatureHttpResponse({ friends: [] });
             }
             throw new Error(`unexpected request: ${url.pathname}`);
         });
@@ -86,13 +86,13 @@ describe('syncFriends', () => {
         const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
             const url = new URL(String(input));
             if (url.pathname === '/health' || url.pathname === '/v1/auth/ping') {
-                return { ok: true, status: 200, json: async () => ({}) } as unknown as Response;
+                return createFeatureHttpResponse({});
             }
             if (url.pathname === '/v1/features') {
                 return createFeatureHttpResponse(createFeaturesResponse(false));
             }
             if (url.pathname === '/v1/friends') {
-                return { ok: true, status: 200, json: async () => ({ friends: [] }) } as unknown as Response;
+                return createFeatureHttpResponse({ friends: [] });
             }
             throw new Error(`unexpected request: ${url.pathname}`);
         });
@@ -112,13 +112,13 @@ describe('syncFriends', () => {
         const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
             const url = new URL(String(input));
             if (url.pathname === '/health' || url.pathname === '/v1/auth/ping') {
-                return { ok: true, status: 200, json: async () => ({}) } as unknown as Response;
+                return createFeatureHttpResponse({});
             }
             if (url.pathname === '/v1/features') {
                 return createFeatureHttpResponse(createFeaturesResponse(true));
             }
             if (url.pathname === '/v1/friends') {
-                return { ok: true, status: 200, json: async () => ({ friends: [] }) } as unknown as Response;
+                return createFeatureHttpResponse({ friends: [] });
             }
             throw new Error(`unexpected request: ${url.pathname}`);
         });
@@ -153,31 +153,27 @@ describe('syncFriends', () => {
         const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
             const url = new URL(String(input));
             if (url.pathname === '/health' || url.pathname === '/v1/auth/ping') {
-                return { ok: true, status: 200, json: async () => ({}) } as unknown as Response;
+                return createFeatureHttpResponse({});
             }
             if (url.pathname === '/v1/features') {
                 return createFeatureHttpResponse(createFeaturesResponse(true));
             }
             if (url.pathname === '/v1/friends') {
-                return {
-                    ok: true,
-                    status: 200,
-                    json: async () => ({
-                        friends: [{
-                            id: 'friend-a',
-                            firstName: 'Friend',
-                            lastName: null,
-                            avatar: null,
-                            username: 'friend-a',
-                            bio: null,
-                            badges: [],
-                            status: 'friend',
-                            publicKey: null,
-                            contentPublicKey: null,
-                            contentPublicKeySig: null,
-                        }],
-                    }),
-                } as unknown as Response;
+                return createFeatureHttpResponse({
+                    friends: [{
+                        id: 'friend-a',
+                        firstName: 'Friend',
+                        lastName: null,
+                        avatar: null,
+                        username: 'friend-a',
+                        bio: null,
+                        badges: [],
+                        status: 'friend',
+                        publicKey: null,
+                        contentPublicKey: null,
+                        contentPublicKeySig: null,
+                    }],
+                });
             }
             throw new Error(`unexpected request: ${url.pathname}`);
         });

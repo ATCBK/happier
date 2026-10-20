@@ -76,5 +76,6 @@ export function createCapabilityEnableApprovalController(input: CapabilityEnable
         else publish({ errorCode: result.message });
         return result;
     };
-    return { choose, undoAlways, getSnapshot: () => snapshot, subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; } };
+    return { choose, undoAlways, getSnapshot: () => snapshot, listenerCount: () => listeners.size,
+        subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; } };
 }

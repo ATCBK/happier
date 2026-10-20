@@ -65,7 +65,9 @@ export function applyLocalServiceLauncherSnapshot(
     const targetIds: string[] = [];
 
     for (const target of snapshot.targets) {
-        targetIds.push(target.id);
+        // Project declaration enrichment can resolve to an occurrence already in the feed.
+        // The keyed target remains authoritative; its ordered identity appears only once.
+        if (!targetsById.has(target.id)) targetIds.push(target.id);
         const previous = state.targetsById.get(target.id);
         targetsById.set(target.id, areTargetsEquivalent(previous, target)
             ? previous as LocalServiceLaunchTarget

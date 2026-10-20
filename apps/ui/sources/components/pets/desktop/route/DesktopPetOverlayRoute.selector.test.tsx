@@ -1758,7 +1758,7 @@ describe('DesktopPetOverlayRoute selectors', () => {
                 stopPropagation: vi.fn(),
             });
         });
-        expect(setPointerCapture).toHaveBeenCalledWith(41);
+        expect(setPointerCapture).not.toHaveBeenCalled();
 
         await act(async () => {
             fakeWindow.dispatchEvent(new TestPointerEvent('pointermove', {
@@ -1769,6 +1769,7 @@ describe('DesktopPetOverlayRoute selectors', () => {
             }));
         });
 
+        expect(setPointerCapture).toHaveBeenCalledWith(41);
         expect(applyDesktopPetOverlayDragDeltaMock).toHaveBeenCalledWith({
             pointerId: 41,
             dx: 48,
@@ -2483,6 +2484,7 @@ describe('DesktopPetOverlayRoute selectors', () => {
             serverId: 'server-pets',
             method: PET_DAEMON_RPC_METHODS.READ_PREVIEW_ASSET,
             payload: { sourceKey: 'managed:blink' },
+            signal: expect.any(AbortSignal),
         });
         expect(screen.root.findAllByType('Image')[0]?.props.source).toBe('data:image/png;base64,AQID');
         expect(JSON.stringify(screen.root.findAllByType('Image')[0]?.props)).not.toContain('/Users/');

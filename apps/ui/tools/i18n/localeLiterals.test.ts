@@ -6,9 +6,11 @@ import { describe, expect, it } from 'vitest';
 import ts from 'typescript';
 
 import { SUPPORTED_LANGUAGE_CODES } from '../../sources/text/_all';
+import { actionPresentationTranslations } from '../../sources/text/translations/actionPresentationTranslations';
 
 import { applyTranslations, extractLiterals, findRoundTripMismatches, isDoNotTranslate } from './localeLiterals';
 import { addLocaleBlock, findSatelliteReferences, replaceLocaleBlock } from './satelliteModules';
+import { flattenTranslationLeaves } from './translationAudit';
 
 const TRANSLATIONS_DIR = join(__dirname, '../../sources/text/translations');
 
@@ -44,9 +46,7 @@ function firstInlinePayloadText(source: string, fileName: string): string | unde
 }
 
 function containsTranslatableCopy(value: unknown): boolean {
-    if (typeof value === 'string') return !isDoNotTranslate(value);
-    if (!value || typeof value !== 'object') return false;
-    return Object.values(value).some(containsTranslatableCopy);
+    return flattenTranslationLeaves(value).some((leaf) => leaf.kind === 'function' || !isDoNotTranslate(leaf.value));
 }
 
 describe('locale literal extraction', () => {
@@ -140,6 +140,20 @@ describe('locale literal extraction', () => {
 });
 
 describe('satellite translation modules', () => {
+    it('retains localized callable leaves in shared Action copy without falling back to English', () => {
+        const titleInput = { actionId: 'artifact.public_link.create', source: 'Fallback title', subject: 'Example document' };
+        const roleInput = { actionId: 'roles.override.set', source: 'Fallback summary', role: { name: 'Example role', kind: 'session' } };
+        const french = actionPresentationTranslations.fr;
+        expect(containsTranslatableCopy(french)).toBe(true);
+        expect(containsTranslatableCopy({ title: '', summary: ' · ' })).toBe(false);
+        expect(french.title(titleInput)).toContain(titleInput.subject);
+        expect(french.title(titleInput)).not.toBe(titleInput.source);
+        expect(french.title(titleInput)).not.toBe(actionPresentationTranslations.en.title(titleInput));
+        expect(french.summary(roleInput)).toContain(roleInput.role.name);
+        expect(french.summary(roleInput)).not.toBe(roleInput.source);
+        expect(french.summary(roleInput)).not.toBe(actionPresentationTranslations.en.summary(roleInput));
+    });
+
     // A locale that exists only in `<locale>.ts` renders English for every domain that was moved
     // into a shared module, because `en.ts` delegates to the same modules and the fallback finds
     // the `en` block. This asserts the delegation is real so the workflow cannot forget it.

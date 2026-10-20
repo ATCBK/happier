@@ -2,6 +2,7 @@ import {
   EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES,
   isExternalActionResultWithinResponseEnvelopeLimitV1,
   accountSettingsParse,
+  createRoleSourceReaderV1,
 } from '@happier-dev/protocol';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -15,6 +16,7 @@ const agentStartContext = resolveCliAgentStartContextV1({
   backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' },
   metadata: {}, starterDepth: 0, turnDepth: 0, callerPermissionMode: 'default', settings: accountSettingsParse({}),
   accountRoleOverrides: { status: 'ready', overrides: {} },
+  roleSourceInventory: await createRoleSourceReaderV1({})(),
 });
 if (!agentStartContext) throw new Error('expected current host authority fixture');
 // The machine catalog is a system boundary. Materialization and policy remain real.
@@ -333,7 +335,7 @@ describe('workflow definition Actions', () => {
         artifactStore: { read: vi.fn(async () => artifactWith(headerFor(definitionId, { headerVersion: 2, bodyVersion: 2 }))), delete: remove } as never,
       });
       await expect(actions.delete({ definitionId })).resolves.toEqual({ deleted: true, definitionId });
-      expect(remove).toHaveBeenCalledWith(definitionId);
+      expect(remove).toHaveBeenCalledWith(definitionId, {});
     });
   });
 });

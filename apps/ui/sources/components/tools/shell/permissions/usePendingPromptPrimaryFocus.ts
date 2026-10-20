@@ -39,6 +39,9 @@ export function usePendingPromptPrimaryFocus(requestId: string | null, enabled: 
         if (didRequestFocus) focusedToken.current = token;
     }, [token]);
     const ref = React.useCallback((node: unknown) => {
+        // Suspense/hydration can detach a retained answer and reattach it for
+        // the same landing. Its previous focus belongs to the detached host.
+        if (node !== nodeRef.current) focusedToken.current = null;
         nodeRef.current = node;
         focus();
     }, [focus]);

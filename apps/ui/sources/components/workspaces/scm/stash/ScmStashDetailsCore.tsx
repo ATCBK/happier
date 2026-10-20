@@ -15,6 +15,7 @@ import { useViewableItemIndices } from '@/components/ui/scroll/useViewableItemIn
 import { Typography } from '@/constants/Typography';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { Modal } from '@/modal';
+import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 import { useScmReviewViewabilityConfig } from '@/scm/review/useScmReviewViewabilityConfig';
 import { resolveScmStashEntries } from '@/scm/stash/useScmStashSummaryCount';
 import { resolveScmStashIdentity } from '@/scm/stash/stashIdentity';
@@ -371,16 +372,12 @@ export const ScmStashDetailsCore = React.memo((props: ScmStashDetailsCoreProps) 
 
     const restoreSelected = React.useCallback(async () => {
         if (!ensureCanMutate()) return;
-        const confirmed = await Modal.confirm(
-            t('files.stash.restoreConfirm.title'),
-            t('files.stash.restoreConfirm.body'),
-            { confirmText: t('files.stash.restoreConfirm.confirm'), cancelText: t('common.cancel') },
-        );
-        if (!confirmed || !selectedStashRef) return;
+        if (!selectedStashRef) return;
 
-        setOperationBusy('restore');
         try {
-            const response = await props.adapter.pop(selectedStashRef);
+            const response = await props.adapter.pop(selectedStashRef, { onDispatched: () => setOperationBusy('restore') });
+            // Declined, or waiting on an approval: nothing ran and nothing failed.
+            if (isScmActionNotRun(response)) return;
             if (!response.success) {
                 Modal.alert(t('common.error'), response.error || t('files.stash.restoreFailed'));
                 return;
@@ -398,16 +395,11 @@ export const ScmStashDetailsCore = React.memo((props: ScmStashDetailsCoreProps) 
 
     const discardSelected = React.useCallback(async () => {
         if (!ensureCanMutate()) return;
-        const confirmed = await Modal.confirm(
-            t('files.stash.discardConfirm.title'),
-            t('files.stash.discardConfirm.body'),
-            { confirmText: t('files.stash.discardConfirm.confirm'), cancelText: t('common.cancel') },
-        );
-        if (!confirmed || !selectedStashRef) return;
+        if (!selectedStashRef) return;
 
-        setOperationBusy('discard');
         try {
-            const response = await props.adapter.drop(selectedStashRef);
+            const response = await props.adapter.drop(selectedStashRef, { onDispatched: () => setOperationBusy('discard') });
+            if (isScmActionNotRun(response)) return;
             if (!response.success) {
                 Modal.alert(t('common.error'), response.error || t('files.stash.discardFailed'));
                 return;
@@ -425,9 +417,9 @@ export const ScmStashDetailsCore = React.memo((props: ScmStashDetailsCoreProps) 
 
     const applySelected = React.useCallback(async () => {
         if (!ensureCanMutate() || !selectedStashRef) return;
-        setOperationBusy('apply');
         try {
-            const response = await props.adapter.apply(selectedStashRef);
+            const response = await props.adapter.apply(selectedStashRef, { onDispatched: () => setOperationBusy('apply') });
+            if (isScmActionNotRun(response)) return;
             if (!response.success) {
                 Modal.alert(t('common.error'), response.error || t('files.stash.restoreFailed'));
                 return;

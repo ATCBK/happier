@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { LimaCommandResult, LimaExecutor } from '@happier-dev/cli-common/machineLima';
+import type { LimaCommandResult, LimaExecutor } from '@happier-dev/plugin-sdk/machine-provisioners';
 import { createLimaProvider } from './provider.js';
 import { LimaLaunchSchema } from './schemas.js';
+import { MachineProvisionerObservationV1Schema } from '@happier-dev/plugin-sdk/machine-provisioners';
 
 const launch = LimaLaunchSchema.parse({
   instance: 'happier-lima-test', store: '/private/lima-test', image: 'https://example.test/ubuntu.img',
@@ -28,6 +29,19 @@ function processBoundary(handler: (args: readonly string[], options?: Parameters
 }
 
 describe('public Lima native leaf', () => {
+  it.each(['Running', 'Stopped'])('reports retained storage for an exact listed %s guest through the shared observation contract', async status => {
+    const { executor, effects } = processBoundary(() => ({ exitCode: 0, out: JSON.stringify({ ...native, status }), err: '' }));
+    const observation = MachineProvisionerObservationV1Schema.parse(await createLimaProvider(executor, 123).inspect(resource));
+    expect(observation).toMatchObject({ observedAt: 123, availability: 'present', power: status.toLowerCase(), storage: 'retained' });
+    expect(effects).toEqual([]);
+  });
+
+  it('does not claim retained storage for an absent guest', async () => {
+    const { executor } = processBoundary(() => ({ exitCode: 0, out: '', err: '' }));
+    const observation = MachineProvisionerObservationV1Schema.parse(await createLimaProvider(executor, 123).inspect(resource));
+    expect(observation.availability).toBe('absent');
+    expect(observation.storage).toBeUndefined();
+  });
   it('does not advertise Linux availability from a registered driver without a qualified hypervisor tool', async () => {
     const { executor, effects } = processBoundary((args) => ({ exitCode: 0,
       out: args[0] === '--version' ? 'limactl version 2.1.0' : JSON.stringify({

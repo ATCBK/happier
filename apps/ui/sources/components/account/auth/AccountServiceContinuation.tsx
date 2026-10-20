@@ -72,7 +72,7 @@ export function AccountServiceContinuation(props: Readonly<{
     const admission = React.useContext(WelcomeActionAdmissionContext);
     const inFlight = React.useRef(false);
     const [busy, setBusy] = React.useState(false);
-    const run = async (actionId: string, action: () => Promise<void> | void) => {
+    const run = async (actionId: string, action: () => unknown) => {
         if (inFlight.current || props.input.signal?.aborted) return false;
         inFlight.current = true;
         setBusy(true);
@@ -215,13 +215,13 @@ export function AccountServiceContinuation(props: Readonly<{
                 invoke: async ({ signal, context }) => {
                     const cancellation = mergeAbortSignals([props.input.signal, signal]);
                     try {
-                        let outcome: OpenEnrolledHomeResult | void = undefined;
+                        const completion: { outcome: OpenEnrolledHomeResult | void } = { outcome: undefined };
                         const completed = await run('account.home_continuation.invoke', async () => {
-                            outcome = await performStep(step, cancellation.signal, context.surface !== 'ui');
+                            completion.outcome = await performStep(step, cancellation.signal, context.surface !== 'ui');
                         });
                         if (!completed) throw Object.assign(new Error('Continuation is already running or retired'), { code: 'continuation_busy' });
-                        if (step.operation === 'open' && outcome !== 'opened') {
-                            const code = outcome === 'cancelled' ? 'cancelled' : 'home_open_not_completed';
+                        if (step.operation === 'open' && completion.outcome !== 'opened') {
+                            const code = completion.outcome === 'cancelled' ? 'cancelled' : 'home_open_not_completed';
                             throw Object.assign(new Error(code), { code });
                         }
                         return { status: 'completed' };
@@ -315,7 +315,7 @@ export function AccountServiceContinuation(props: Readonly<{
                 disabled: busy || admission.pendingActionId !== null || (hasAuthenticatedHomeAccount && !mountedAction.ready),
                 onPress: () => requestStep({ operation: 'choose', homeServerIdentityId: home.homeServerIdentityId }),
             }))} />
-            <RoundButton title={t('common.back')} onPress={back} />
+            <RoundButton title={t('common.back')} display="secondary" onPress={back} />
         </View>;
     } else if (props.result.kind === 'approval_required' && approvalStopped) {
         // Stopping the wait is not the same as leaving: the Account sign-in survives

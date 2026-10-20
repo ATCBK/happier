@@ -12,6 +12,7 @@ import {
 } from '@/dev/testkit';
 
 import type { JourneyConfigControllerSurface } from '../config/JourneyConfigSlot';
+import type { RenderWithAppProvidersOptions } from '@/dev/testkit';
 import type { JourneyBeat, JourneyBeatId, JourneySurface } from '../state/journeyBeats';
 import { buildJourneyPresentationModel } from '../state/journeyPresentationModel';
 import type { JourneyProgressController } from '../state/useJourneyProgress';
@@ -37,8 +38,8 @@ afterEach(() => {
 });
 
 /** Captures the pager's imperative handle so tests can assert real scroll commands. */
-function createPagerNodeMock(pagerTestID: string, scrollTo: () => void) {
-    return (element: React.ReactElement): Record<string, unknown> => {
+function createPagerNodeMock(pagerTestID: string, scrollTo: () => void): NonNullable<RenderWithAppProvidersOptions['createNodeMock']> {
+    return (element): Record<string, unknown> => {
         const testID = (element.props as { testID?: string }).testID;
         return testID === pagerTestID ? { scrollTo } : {};
     };

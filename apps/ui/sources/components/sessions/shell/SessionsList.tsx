@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Platform, RefreshControl } from 'react-native';
+import { useUnistyles } from 'react-native-unistyles';
 import { useNavigation } from '@/components/appShell/workspace/destinationRoute';
 import { useChromeSafeAreaInsets } from '@/components/ui/layout/useChromeSafeAreaInsets';
 import { useLayoutMaxWidthStyle } from '@/components/ui/layout/layout';
@@ -9,7 +10,8 @@ import { SessionListDropOverlay } from './drag/SessionListDropOverlay';
 import { SessionListVirtualizedContent } from './sessionListVirtualizedContent';
 import { ScheduledWorkflowSection } from '@/components/workflows/triggers/ScheduledWorkflowSection';
 import { SessionListSearchChrome } from './search/SessionListSearchChrome';
-import { readSessionListWorkFilterSummary } from './search/SessionListFilterControl';
+import { buildSessionListActiveFilterChips, readSessionListWorkFilterSummary } from './search/SessionListFilterControl';
+import { Icon } from '@/components/ui/icons/Icon';
 import { HomeReachabilityGate } from '@/components/navigation/connectionStatus/HomeReachabilityGate';
 import {
     useSessionListViewFilterController,
@@ -316,7 +318,11 @@ function VisibleSessionsListViewContent(
     const surfaceOwnership = props.surfaceOwnership;
     const showSessionSections = props.corpusStorage === 'active' && props.filterController.filters.show !== 'runs';
     const surfaceDataActiveRef = React.useRef(surfaceOwnership.dataActive);
+    const pageScrollDemandRef = React.useRef(false);
     surfaceDataActiveRef.current = surfaceOwnership.dataActive;
+    React.useEffect(() => {
+        if (!surfaceOwnership.dataActive) pageScrollDemandRef.current = false;
+    }, [surfaceOwnership.dataActive]);
     React.useEffect(() => () => {
         surfaceDataActiveRef.current = false;
     }, []);
@@ -365,6 +371,14 @@ function VisibleSessionsListViewContent(
             { tag: query?.active === true ? 'SessionsList.query.loadNext' : 'SessionsList.fetchMoreSessions' },
         );
     }, [props.filterController.filters.show, props.paneState.query, props.paneState.workflowRunWindow]);
+    const handleLoadMoreSessionsForViewport = React.useCallback(() => {
+        // End callbacks also fire on mount, restoration and content changes.
+        // One real scroll interaction can demand one page; programmatic scroll
+        // events cannot drain unseen candidates. Explicit Load more stays direct.
+        if (!pageScrollDemandRef.current) return;
+        pageScrollDemandRef.current = false;
+        handleLoadMoreSessions();
+    }, [handleLoadMoreSessions]);
     const handleRefreshSessions = React.useCallback(async () => {
         if (!surfaceDataActiveRef.current) return;
         if (refreshingSessionsRef.current) return;
@@ -416,9 +430,9 @@ function VisibleSessionsListViewContent(
         scrollRetention.handleScroll(event);
         onTreeScroll(event);
         if (Platform.OS !== 'web' && isSessionListScrollNearEnd(event)) {
-            handleLoadMoreSessions();
+            handleLoadMoreSessionsForViewport();
         }
-    }, [handleLoadMoreSessions, onTreeScroll, scrollRetention]);
+    }, [handleLoadMoreSessionsForViewport, onTreeScroll, scrollRetention]);
     const handleViewableItemsChanged = React.useCallback((info: Parameters<typeof viewState.onViewableItemsChanged>[0]) => {
         scrollRetention.handleViewableItemsChanged(info);
         viewState.onViewableItemsChanged(info);
@@ -427,6 +441,10 @@ function VisibleSessionsListViewContent(
         scrollRetention.handleScrollInteractionStart();
         viewState.onNativeListScrollInteractionStart();
     }, [scrollRetention, viewState.onNativeListScrollInteractionStart]);
+    const handleNativeListUserScrollStart = React.useCallback(() => {
+        if (surfaceDataActiveRef.current) pageScrollDemandRef.current = true;
+        handleNativeListScrollInteractionStart();
+    }, [handleNativeListScrollInteractionStart]);
     const nativeRefreshControl = React.useMemo(() => {
         if (Platform.OS === 'web') return undefined;
         return (
@@ -478,6 +496,14 @@ function VisibleSessionsListViewContent(
         props.paneState.hasHiddenInactiveSessions,
         queryVisibleSessionCount,
     ]);
+    const { theme } = useUnistyles();
+    const filterChips = React.useMemo(
+        () => buildSessionListActiveFilterChips(
+            props.filterController,
+            <Icon name="tree-structure" size={14} color={theme.colors.text.secondary} />,
+        ),
+        [props.filterController, theme.colors.text.secondary],
+    );
     const filterSummaryLabel = readSessionListWorkFilterSummary(props.filterController);
     const filterSummary = React.useMemo(
         () => filterSummaryLabel
@@ -506,6 +532,7 @@ function VisibleSessionsListViewContent(
                 <SessionListTitleChrome
                     searchChrome={viewState.searchChrome}
                     filterSummary={filterSummary}
+                    filterChips={filterChips}
                     presentation={runsPresentation ? 'runs' : 'sessions'}
                 />
                 {queryVisibleSessionCount > 0 ? (
@@ -527,11 +554,11 @@ function VisibleSessionsListViewContent(
                         queryPresentationState={queryPresentationState}
                         viewContext={props.filterController.viewContext}
                         onScroll={handleTreeScroll}
-                        onScrollBeginDrag={handleNativeListScrollInteractionStart}
+                        onScrollBeginDrag={handleNativeListUserScrollStart}
                         onScrollEndDrag={viewState.onNativeListScrollInteractionEnd}
                         onMomentumScrollBegin={handleNativeListScrollInteractionStart}
                         onMomentumScrollEnd={viewState.onNativeListScrollInteractionEnd}
-                        onEndReached={surfaceOwnership.dataActive ? handleLoadMoreSessions : undefined}
+                        onEndReached={surfaceOwnership.dataActive ? handleLoadMoreSessionsForViewport : undefined}
                         nativeRefreshControl={nativeRefreshControl}
                         onViewableItemsChanged={handleViewableItemsChanged}
                         viewabilityConfig={viewState.viewabilityConfig}
@@ -542,6 +569,7 @@ function VisibleSessionsListViewContent(
                             // that `preventDefault()` wheel/touch scroll, which breaks scrolling inside nested scroll views.
                             // Stopping propagation here keeps the event within the sessions list subtree so native scrolling works.
                             if (Platform.OS !== 'web') return;
+                            if (surfaceDataActiveRef.current) pageScrollDemandRef.current = true;
                             if (typeof event?.stopPropagation === 'function') event.stopPropagation();
                         }}
                         folderFocus={viewState.folderFocus}
@@ -576,9 +604,10 @@ function VisibleSessionsListViewContent(
 const SessionListTitleChrome = React.memo(function SessionListTitleChrome(props: Readonly<{
     searchChrome: React.ComponentProps<typeof SessionListSearchChrome>;
     filterSummary: React.ComponentProps<typeof SessionListSearchChrome>['filterSummary'];
+    filterChips: React.ComponentProps<typeof SessionListSearchChrome>['filterChips'];
     presentation: React.ComponentProps<typeof SessionListSearchChrome>['presentation'];
 }>) {
     const organize = useSessionListOrganizeMode();
     if (organize.active) return <SessionListOrganizeBar onDone={organize.exit} />;
-    return <SessionListSearchChrome {...props.searchChrome} filterSummary={props.filterSummary} presentation={props.presentation} />;
+    return <SessionListSearchChrome {...props.searchChrome} filterSummary={props.filterSummary} filterChips={props.filterChips} presentation={props.presentation} />;
 });

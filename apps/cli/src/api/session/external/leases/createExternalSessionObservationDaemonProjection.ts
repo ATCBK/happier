@@ -3,6 +3,9 @@ import type {
 } from '@/plugins/runtime/lifecycle/contributions/targetAgents';
 import { ExternalAgentObservationResourceDescriptorV1Schema } from '@happier-dev/protocol/sessions/external/externalAgentObservationV1';
 import type { ExternalAgentObservationResourceDescriptorV1, ExternalAgentObservationSnapshotV1 } from '@happier-dev/protocol';
+import type { PluginSourceCustodyV1 } from '@happier-dev/protocol';
+import { pluginSourceCustodyV1Equal } from '@happier-dev/protocol/plugins/runtime/sourceCustody';
+import type { ConnectedServiceMaterializedStateObservationBinding } from '@/daemon/connectedServices/materialization/materializer';
 
 import { acquireAuthoritativePluginRuntimeRegistryLease } from '@/plugins/runtime/reload/runtimeLease';
 import { activateAgentRuntimeContributionOnDemand } from '@/agent/runtime/registry/activationDemand';
@@ -25,11 +28,14 @@ import {
 type ObservationContributionLease = Readonly<{
     contribution: OccurrenceBoundExternalSessionObservation;
     filesystemReadAllowedPaths?: ReadonlySet<string>;
+    agentId?: string;
+    sourceCustody?: PluginSourceCustodyV1;
     retirementSignal?: AbortSignal;
     release(): Promise<void>;
 }>;
 
 type CreateExternalSessionObservationDaemonProjectionParams = Readonly<{
+    readMaterializedStateObservationBinding?: (sessionId: string) => ConnectedServiceMaterializedStateObservationBinding | null;
     acquireObservationContribution?: (
         resource: ExternalSessionObservationResourceIdentity,
     ) => Promise<ObservationContributionLease | null>;
@@ -70,6 +76,7 @@ function admitExternalSessionObservationResourceDescriptor(params: Readonly<{
         'linkedSource' | 'watchFileChanges'
     >;
     filesystemReadAllowedPaths: ReadonlySet<string>;
+    materializedStateObservationBinding?: ConnectedServiceMaterializedStateObservationBinding;
 }>): ExternalAgentObservationResourceDescriptorV1 {
     const descriptor = ExternalAgentObservationResourceDescriptorV1Schema.parse(
         params.descriptorInput,
@@ -82,6 +89,7 @@ function admitExternalSessionObservationResourceDescriptor(params: Readonly<{
         requested: requestedWatchFileChanges,
         linkedSource: params.link.linkedSource,
         filesystemReadAllowedPaths: params.filesystemReadAllowedPaths,
+        materializedStateObservationBinding: params.materializedStateObservationBinding,
         previouslyAuthorizedFiles: new Set(
             params.link.watchFileChanges?.files ?? [],
         ),
@@ -145,6 +153,8 @@ async function acquireCurrentObservationContribution(
         }
         return {
             contribution: runtimeLease.externalSessionObservation,
+            agentId: runtimeLease.agentId,
+            sourceCustody: runtimeLease.sourceCustody,
             filesystemReadAllowedPaths: new Set(
                 registryLease.registry.filesystemReadAllowedPathsByPluginId?.get(
                     runtimeLease.pluginId,
@@ -179,7 +189,7 @@ export function createExternalSessionObservationDaemonProjection(
             contribution: OccurrenceBoundExternalSessionObservation,
             lease: Pick<
                 ObservationContributionLease,
-                'filesystemReadAllowedPaths' | 'retirementSignal'
+                'filesystemReadAllowedPaths' | 'retirementSignal' | 'agentId' | 'sourceCustody'
             >,
         ) => Promise<T>,
     ): Promise<T> => {
@@ -195,6 +205,8 @@ export function createExternalSessionObservationDaemonProjection(
         const leaseContext = {
             filesystemReadAllowedPaths: lease.filesystemReadAllowedPaths,
             retirementSignal: lease.retirementSignal,
+            agentId: lease.agentId,
+            sourceCustody: lease.sourceCustody,
         };
         await lease.release();
         return await operation(contribution, leaseContext);
@@ -233,8 +245,18 @@ export function createExternalSessionObservationDaemonProjection(
                 }
                 return {
                     purpose: result.purpose,
-                    outcomes: result.outcomes.map((outcome, index) => (
-                        outcome.kind === 'unavailable'
+                    outcomes: result.outcomes.map((outcome, index) => {
+                        const binding = params.readMaterializedStateObservationBinding?.(
+                            input.links[index]!.sessionId,
+                        );
+                        const materializedStateObservationBinding = binding
+                            && !lease.retirementSignal?.aborted
+                            && binding.agentId === lease.agentId
+                            && binding.pluginId === input.resource.pluginId
+                            && lease.sourceCustody
+                            && pluginSourceCustodyV1Equal(binding.sourceCustody, lease.sourceCustody)
+                            ? binding : undefined;
+                        return outcome.kind === 'unavailable'
                             ? outcome
                             : {
                                 kind: outcome.kind,
@@ -242,12 +264,13 @@ export function createExternalSessionObservationDaemonProjection(
                                     admitExternalSessionObservationResourceDescriptor({
                                         descriptorInput: outcome.descriptor,
                                         link: input.links[index]!,
+                                        materializedStateObservationBinding,
                                         filesystemReadAllowedPaths:
                                             lease.filesystemReadAllowedPaths
                                             ?? new Set(),
                                     }),
                             }
-                    )),
+                    }),
                 };
             },
         ),

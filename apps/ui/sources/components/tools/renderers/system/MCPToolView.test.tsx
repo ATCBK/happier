@@ -48,7 +48,7 @@ describe('MCPToolView', () => {
         ));
     }
 
-    it('renders a compact subtitle + output preview in summary mode', async () => {
+    it('renders only the call outcome in summary mode: the row header owns the title and line', async () => {
         const tool = makeMcpTool({
             input: {
                 title: 'Bug: MCP tool rendering summary',
@@ -58,24 +58,32 @@ describe('MCPToolView', () => {
         const screen = await renderView(tool, 'summary');
         const rendered = screen.getTextContent();
 
-        expect(rendered).toContain('Bug: MCP tool rendering summary');
+        expect(rendered).not.toContain('Bug: MCP tool rendering summary');
         expect(rendered).toContain('Created issue LIN-42');
     });
 
-    it('uses stable subtitle fallbacks and omits non-string output previews in summary mode', async () => {
+    it('omits non-string output previews in summary mode and renders nothing when there is no outcome', async () => {
         const tool = makeMcpTool({
-            input: {
-                _mcp: { display: { subtitle: 99 } },
-                path: '/repo/src/file.ts',
-                query: 'ignored because path exists',
-            },
+            input: { path: '/repo/src/file.ts' },
             result: { output: { status: 'ok' } },
         });
         const screen = await renderView(tool, 'summary');
-        const rendered = screen.getTextContent().replace(/\s+/g, ' ');
+        expect(screen.getTextContent().replace(/\s+/g, ' ')).not.toContain('ok');
+        expect(screen.findAllByType('Text' as any)).toHaveLength(0);
+    });
 
-        expect(rendered).toContain('/repo/src/file.ts');
-        expect(rendered).not.toContain('ok');
+    it('keeps a refused Action call\'s typed code in the summary body without repeating the row line', async () => {
+        const text = JSON.stringify({ errorCode: 'unsupported_action', error: 'unsupported_action:session.stop', details: { cause: 'target_outside_led_subtree' } });
+        const tool = makeToolCall({
+            name: 'mcp__happier__action_execute',
+            state: 'completed',
+            input: { actionId: 'session.stop', input: {} },
+            result: { content: [{ type: 'text', text }], structuredContent: null, text, _mcp: { serverId: 'happier', toolId: 'action_execute' } },
+        });
+        const rendered = (await renderView(tool, 'summary')).getTextContent();
+
+        expect(rendered).toContain('unsupported_action · target_outside_led_subtree');
+        expect(rendered).not.toContain('Stop a running session');
     });
 
     it('exports subtitle precedence for subtitle, title, path, and query', async () => {
@@ -95,6 +103,39 @@ describe('MCPToolView', () => {
         expect(rendered).toContain('Input');
         expect(rendered).toContain('Output');
         expect(rendered).toContain('Created issue LIN-42');
+    });
+
+    it('titles a Happier Action call by the Action it runs, through action_execute or its own binding', async () => {
+        const { formatMCPTitle } = await import('./MCPToolView');
+        const input = { actionId: 'workspace.sync.relationship.terminate', input: { relationshipId: 'relationship_1' } };
+        expect(formatMCPTitle('mcp__happier__action_execute', undefined, input)).toBe('Stop workspace sync');
+        expect(formatMCPTitle('mcp__happier__workspace_sync_relationship_terminate', undefined, { relationshipId: 'r' }))
+            .toBe('Stop workspace sync');
+        expect(formatMCPTitle('mcp__happier__action_execute', undefined, { actionId: 'not.an.action' }))
+            .toBe('MCP: Happier Action Execute');
+        expect(formatMCPTitle('mcp__linear__create_issue', undefined, input)).toBe('MCP: Linear Create Issue');
+    });
+
+    it('says what a Happier Action call does, never its raw actionId and input', async () => {
+        const { formatMCPToolSubtitle } = await import('./MCPToolView');
+        const unarchive = { actionId: 'session.unarchive', input: { sessionId: 'cmvfqvl9c00qomc8of6kuw4lz' } };
+        // The CLI's MCP normalizer stores its generic key=value line as every call's display subtitle.
+        const recorded = { ...unarchive, _mcp: { serverId: 'happier', toolId: 'action_execute', display: {
+            title: 'MCP: happier action execute', subtitle: 'actionId=session.unarchive input={"sessionId":"cmvfqvl9c00qomc8of6kuw4lz"}',
+        } } };
+        for (const subtitle of [
+            formatMCPToolSubtitle('mcp__happier__action_execute', unarchive),
+            formatMCPToolSubtitle('mcp__happier__action_execute', recorded),
+            formatMCPToolSubtitle('mcp__happier__session_unarchive', unarchive.input),
+            formatMCPToolSubtitle('mcp__happier__action_execute', {
+                actionId: 'workspace.sync.relationship.terminate', input: { relationshipId: 'relationship_1' },
+            }),
+        ]) {
+            expect(subtitle).not.toBe('');
+            expect(subtitle).not.toMatch(/actionId|input=|relationship_1|cmvfqvl9c00qomc8of6kuw4lz|[{}]/);
+        }
+        // Other MCP servers keep their key=value fallback.
+        expect(formatMCPToolSubtitle('mcp__linear__create_issue', unarchive)).toContain('actionId=session.unarchive');
     });
 
     it('renders nothing in title mode', async () => {

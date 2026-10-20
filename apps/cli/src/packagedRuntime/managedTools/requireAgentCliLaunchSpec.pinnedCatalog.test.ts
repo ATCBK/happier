@@ -1,5 +1,3 @@
-import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unexpectedProjectNativeAdapterResolution";
-import { unexpectedCaptureSourceResolution } from "@/plugins/testkit/unexpectedCaptureSourceResolution";
 import { PluginAgentContributionV2Schema } from '@happier-dev/protocol';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -8,7 +6,7 @@ import { projectManifestAgentContribution } from '@/plugins/projection/registry/
 import { createTempDirSync, removeTempDirSync } from '@/testkit/fs/tempDir';
 import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
-import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
 import { classifyPrimarySessionRuntimeIssue } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
 import { sanitizeNativeAgentSessionBoundaryError } from '@/agent/runtime/registry/engineRegistry/nativeAgentSessionBoundaryError';
 import { requireAgentCliCommand } from './requireAgentCliCommand';
@@ -34,17 +32,12 @@ describe('Agent CLI resolution from the admitted catalog', () => {
   beforeAll(async () => {
     // Publish an actual current registry without this retained external Agent.
     // No plugin is activated: unused plugin callbacks are outside this lookup contract.
-    const currentRegistry = {
-      claimReleaseLessDeclarations: async () => undefined,
+    const currentRegistry = await resolveExecutablePluginRuntimeRegistry({
+      pluginIds: [],
       contributes: createResolvedContributionRegistry({ agents: [], activationTargets: [] }),
-      hookHandlersByHookId: new Map(), agentRuntimesByAgentId: new Map(), scmHostingProvidersById: new Map(),
-      pluginDiagnosticsByPluginId: {}, activatedPluginIds: new Set<string>(),
-      resolveCaptureSource: unexpectedCaptureSourceResolution,
-      resolveProjectNativeAdapter: unexpectedProjectNativeAdapterResolution,
-      activateContributionsOnDemand: async () => [], resolvePromptAssetBlocks: async () => [],
-      createAgentInvocationServices: async () => { throw new Error('No plugin invocation in this catalog fixture'); },
-      retireConsumers: () => {}, dispose: async () => {},
-    } satisfies ResolvedExecutablePluginRuntimeRegistry;
+      currentGlobalExternalSessionsRouter: pluginReloadController.currentGlobalExternalSessions,
+      targetedContributions: pluginReloadController.getTargetedContributionsOwner(),
+    });
     await pluginReloadController.adoptPreparedRuntimeRegistry({
       registry: currentRegistry, changedPluginIds: [], isDevelopmentCandidateCurrent: () => true,
       runningSessionDisposition: 'retainRunningSessions',
@@ -62,7 +55,7 @@ describe('Agent CLI resolution from the admitted catalog', () => {
       });
       const options = { catalogSnapshot, processEnv: { PATH: home, HOME: home, USERPROFILE: home, HAPPIER_HOME_DIR: home } };
       expect(requireAgentCliLaunchSpec(agent.id, options)).toEqual({
-        source: 'system', resolvedPath: cli, command: cli, args: [],
+        source: 'system', resolvedPath: cli, command: cli, args: [], providerExitOwnership: 'direct',
       });
       expect(requireAgentCliCommand(agent.id, options)).toBe(cli);
     } finally {

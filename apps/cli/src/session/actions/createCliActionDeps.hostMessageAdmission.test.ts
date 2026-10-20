@@ -1,15 +1,361 @@
-import { describe, expect, it, vi } from 'vitest';
-import { SessionInputRequestV1Schema } from '@happier-dev/protocol';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApprovalRequestV2Schema, SessionInputRequestV1Schema, type ApprovalRequest } from '@happier-dev/protocol';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol/auth/apiTokenGrant';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
+import { createSocketTransportAdapter } from '@happier-dev/sync-client';
+import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
+import { createAccountEncryptionCurrentnessFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { createDaemonSessionAccountActionExecutor } from '@/daemon/agentRuntime/createDaemonSessionAccountActionExecutor';
+import { createDaemonApprovalExecutionOriginCurrentnessFromCredentials } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createCliActionDeps } from './createCliActionDeps';
 
 const http = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
+const sockets = vi.hoisted(() => ({ connect: vi.fn() }));
 // HTTP is the Home boundary; Action composition, input policy and serialization stay real.
 vi.mock('axios', async (importOriginal) => {
   const actual = await importOriginal<typeof import('axios')>();
   return { ...actual, default: { ...actual.default, ...http } };
 });
+vi.mock('@/api/session/sockets', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/api/session/sockets')>();
+  return { ...actual, createSessionScopedSocketConnection: sockets.connect };
+});
 
 describe('CLI host Message admission', () => {
+  beforeEach(() => vi.clearAllMocks());
+  it.each(['reject', 'cancel'] as const)('settles a private Discussion %s at its captured Home without a live publisher', async decision => {
+    const token = `header.${Buffer.from(JSON.stringify({ sub: 'draft-account' })).toString('base64url')}.signature`;
+    const sessionId = 'draft-session';
+    const requestLocalId = 'discussion:original';
+    const operation = { kind: 'discussion_review' as const, discussionId: 'discussion-1', messageId: 'question-1',
+      acceptedTurnId: 'draft-turn', decision };
+    const progress = { v: 1, mode: 'return', discussion: { discussionId: operation.discussionId,
+      messageId: operation.messageId, throughSeq: 1, participantSessionId: sessionId }, acceptedTurnId: operation.acceptedTurnId,
+      disposition: 'released', outcome: { kind: 'declined' } };
+    const writes: unknown[] = [];
+    http.post.mockImplementation(async (url: string, body: unknown) => {
+      writes.push({ url, body });
+      return { status: 200, data: { v: 1, ok: true, progress } };
+    });
+    const deps = createCliActionDeps({ token, credentials: { token, encryption: null }, sessionId: 'daemon-global',
+      mode: 'plain', ctx: null, serverId: 'draft-home', serverHttpBaseUrl: 'https://draft-home.example' });
+    const context = { surface: 'ui' as const, authority: 'present_user' as const, serverId: 'draft-home',
+      runtimeAccountId: 'draft-account' };
+    expect(await deps.sessionMessageReply!({ sessionId, requestLocalId, reviewDecision: operation, context,
+      serverId: 'draft-home' })).toMatchObject({ v: 1, ok: true, progress: { disposition: 'released', outcome: { kind: 'declined' } } });
+    expect(writes).toEqual([{ url: `https://draft-home.example/v2/sessions/${sessionId}/messages/by-local-id/${encodeURIComponent(requestLocalId)}/reply`,
+      body: operation }]);
+    expect(await deps.sessionMessageReply!({ sessionId, requestLocalId, reviewDecision: operation,
+      context: { ...context, authority: 'account_automation' }, serverId: 'draft-home' }))
+      .toMatchObject({ ok: false, error: 'forbidden' });
+    expect(await deps.sessionMessageReply!({ sessionId, requestLocalId, reviewDecision: operation,
+      context, serverId: 'foreign-home' })).toMatchObject({ ok: false, error: 'forbidden' });
+    expect(writes).toHaveLength(1);
+  });
+  it.each([false, true])('admits Voice later-return only through a current person approval (target changed:%s)', async targetChanged => {
+    const receiverId = 'cmv3voiceapprovalaaaaaaa';
+    const returnToSessionId = 'bound-voice-session';
+    const localId = 'voice-approved-ask';
+    const accountId = 'voice-account';
+    const serverId = 'voice-home';
+    const serverIdentityId = 'srv_voice_approval';
+    const machineId = 'voice-machine';
+    const token = `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`;
+    const credentials = { token, encryption: null };
+    let currentMachineId = machineId;
+    let stored: ApprovalRequest | null = null;
+    const writes: unknown[] = [];
+    http.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: accountId } };
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
+      if (url.endsWith('/messages/reply-capability')) return { status: 200, data: { v: 1, protocolVersions: [1] } };
+      if (url.endsWith(`/v2/sessions/${receiverId}`)) return { status: 200, data: { session: createSessionRecordFixture({
+        id: receiverId, active: true, encryptionMode: 'plain', machineId: currentMachineId,
+        metadata: JSON.stringify({ machineId: currentMachineId }),
+      }) } };
+      throw new Error(`Unexpected Voice approval HTTP read: ${url}`);
+    });
+    http.post.mockImplementation(async (url: string, body: unknown) => {
+      if (url.endsWith('/pending')) { writes.push(body); return { status: 200, data: { didWrite: true, terminal: false } }; }
+      expect(body).toEqual({ kind: 'release' });
+      return { status: 200, data: { v: 1, ok: true, progress: { v: 1, mode: 'return',
+        humanOrigin: { sessionId: returnToSessionId }, disposition: 'return_pending' } } };
+    });
+    const currentness = createDaemonApprovalExecutionOriginCurrentnessFromCredentials({ credentials,
+      machineId, serverId, serverApiUrl: resolveServerHttpBaseUrl(),
+      resolveCurrentMachineExecutionOriginContext: async () => ({ serverIdentityId, machineId }) });
+    const executor = createActionExecutor({
+      ...createCliActionDeps({ token, credentials, sessionId: 'daemon-global', mode: 'plain', ctx: null }),
+      // Artifact persistence is the boundary. Approval policy/claim/replay,
+      // Home/target currentness and the actual human-input writer stay real.
+      approvalsCreate: async ({ request }) => { stored = ApprovalRequestV2Schema.parse(request); return { artifactId: 'voice-approval' }; },
+      approvalsGet: async () => stored,
+      approvalsUpdate: async ({ request }) => { stored = ApprovalRequestV2Schema.parse(request); return { ok: true }; },
+      isApprovalExecutionOriginCurrent: currentness,
+    });
+    const input = { sessionId: receiverId, message: 'Return the answer here.', localId, reply: 'return', returnToSessionId };
+    expect(await executor.execute('session.message.send', input, { surface: 'voice', authority: 'account_automation',
+      actionCaller: { kind: 'host' }, runtimeAccountId: accountId, serverId, serverIdentityId,
+      defaultSessionId: returnToSessionId, defaultSessionMachineId: machineId, actionRequestId: 'voice-call' }))
+      .toMatchObject({ ok: true, result: { kind: 'approval_request_created', artifactId: 'voice-approval' } });
+    expect(writes).toEqual([]);
+    expect(stored).toMatchObject({ actionArgs: input, executionOriginV1: {
+      authority: 'account_automation', surface: 'voice', caller: { kind: 'host' },
+    } });
+    expect(await executor.execute('approval.request.decide', { artifactId: 'voice-approval', decision: 'approve' }, {
+      surface: 'api', authority: 'account_automation', runtimeAccountId: accountId, serverId, serverIdentityId,
+      externalActionCredential: { accountId, principalId: 'token', credentialId: 'token',
+        grant: { ...API_TOKEN_FULL_GRANT_V1, approve: true } },
+    })).toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    expect(stored).toMatchObject({ status: 'open' });
+    expect(writes).toEqual([]);
+    if (targetChanged) currentMachineId = 'replacement-machine';
+    const decision = await executor.execute('approval.request.decide', { artifactId: 'voice-approval', decision: 'approve' }, {
+      surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, runtimeAccountId: accountId,
+      serverId, serverIdentityId, defaultSessionId: 'a-different-visible-session',
+    });
+    expect(decision, JSON.stringify(decision)).toMatchObject({ ok: true, result: targetChanged
+      ? { status: 'failed', execution: { ok: false, errorCode: 'approval_stale' } }
+      : { status: 'executed', execution: { ok: true, result: { status: 'accepted', localId } } } });
+    expect(writes).toEqual(targetChanged ? [] : [expect.objectContaining({ reply: {
+      mode: 'return', humanOrigin: { sessionId: returnToSessionId },
+    }, content: { t: 'plain', v: expect.objectContaining({ meta: expect.objectContaining({
+      happierInputRequestV1: expect.objectContaining({ caller: { kind: 'host' }, replyIntent: {
+        mode: 'return', humanOrigin: { sessionId: returnToSessionId },
+      } }),
+    }) }) } })]);
+  });
+  it('does not turn a Voice approval waiver into human return authority', async () => {
+    const approvals: ApprovalRequest[] = [];
+    const executor = createActionExecutor({
+      ...createCliActionDeps({ token: 'test-account-token', sessionId: 'daemon-global', mode: 'plain', ctx: null,
+        credentials: { token: 'test-account-token', encryption: null } }),
+      approvalsCreate: async ({ request }) => { approvals.push(request); return { artifactId: 'must-not-be-created' }; },
+    });
+    expect(await executor.execute('session.message.send', { sessionId: 'worker', message: 'Return it.',
+      reply: 'return', returnToSessionId: 'bound-voice-session' }, { surface: 'voice', authority: 'account_automation',
+      actionCaller: { kind: 'host' }, actionsSettings: ActionsSettingsV1Schema.parse({ v: 1,
+        approvalWaivedSurfaces: { 'session.message.send': ['voice'] } }) }))
+      .toMatchObject({ ok: false, errorCode: 'present_user_required' });
+    expect(approvals).toEqual([]);
+    expect(http.post).not.toHaveBeenCalled();
+  });
+  it.each([false, true])('admits a human-origin Ask through the Action front door with its exact return destination (structured:%s)', async structured => {
+    const receiverId = 'cmv3humanadmissionaaaaaaa';
+    const localId = 'human-ask-input';
+    const humanOrigin = { sessionId: 'composer-session' };
+    let admitted: unknown;
+    http.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
+      if (url.endsWith('/messages/reply-capability')) return { status: 200, data: { v: 1, protocolVersions: [1] } };
+      if (url.endsWith(`/v2/sessions/${receiverId}`)) return { status: 200, data: { session: createSessionRecordFixture({
+        id: receiverId, active: true, encryptionMode: 'plain', machineId: 'machine-1', metadata: JSON.stringify({ machineId: 'machine-1' }),
+      }) } };
+      throw new Error(`Unexpected human Ask HTTP read: ${url}`);
+    });
+    http.post.mockImplementation(async (url: string, body: unknown) => {
+      if (url.endsWith('/pending')) { admitted = body; return { status: 200, data: { didWrite: true, terminal: false } }; }
+      expect(body).toEqual({ kind: 'release' });
+      return { status: 200, data: { v: 1, ok: true, progress: { v: 1, mode: 'return', humanOrigin, disposition: 'return_pending' } } };
+    });
+    const deps = createCliActionDeps({ token: 'test-account-token', sessionId: 'composer-session', mode: 'plain', ctx: null,
+      credentials: { token: 'test-account-token', encryption: null },
+      machineAdmissionTransport: async () => { throw new Error('Human Ask must retain its authenticated Account requester'); } });
+    const executor = createActionExecutor(deps);
+    const structuredInput = { v: 1, mentions: [{ kind: 'happier.session', ref: 'session:source-session', token: '@source' }] };
+    const input = { sessionId: receiverId, message: '@source Which revision?', localId, reply: 'return', returnToSessionId: humanOrigin.sessionId,
+      ...(structured ? { structuredInput } : {}),
+      requestedAction: { v: 1, kind: 'enqueue' } };
+    expect(await executor.execute('session.message.send', input, {
+      surface: 'ui', authority: 'present_user', serverId: 'home', defaultSessionId: humanOrigin.sessionId,
+    })).toMatchObject({ ok: true, result: { status: 'accepted', localId } });
+    expect(admitted).toMatchObject({ reply: { mode: 'return', humanOrigin }, content: { t: 'plain', v: {
+      meta: { happierInputRequestV1: { producer: 'happierApp', replyIntent: { mode: 'return', humanOrigin } } },
+    } } });
+    if (structured) expect(admitted).toMatchObject({ content: { t: 'plain', v: { meta: { happierStructuredInputV1: structuredInput } } } });
+    admitted = undefined;
+    expect(await executor.execute('session.message.send', input, {
+      surface: 'agent', serverId: 'home', defaultSessionId: humanOrigin.sessionId,
+    })).toMatchObject({ ok: false });
+    expect(admitted).toBeUndefined();
+  });
+  it('refuses return without an admitted source Session before publishing an input', async () => {
+    http.post.mockClear();
+    const deps = createCliActionDeps({ token: 'test-account-token', sessionId: 'receiver', mode: 'plain', ctx: null,
+      credentials: { token: 'test-account-token', encryption: null } });
+    expect(await deps.sessionSendMessage({ sessionId: 'receiver', message: 'Return the result', reply: 'return',
+      context: { surface: 'cli', authority: 'present_user' }, callerSurface: 'cli', actionCaller: { kind: 'host' },
+      requestedAction: { v: 1, kind: 'enqueue' } })).toEqual({ status: 'rejected', code: 'session_input_untrusted_assertion' });
+    expect(http.post).not.toHaveBeenCalled();
+  });
+
+  it.each(['wait', 'return'] as const)('refuses sourceful %s without its actual source publisher before publishing', async reply => {
+    const deps = createCliActionDeps({ token: 'test-account-token', sessionId: 'source-session', mode: 'plain', ctx: null,
+      credentials: { token: 'test-account-token', encryption: null },
+      getCurrentSessionWorkDepth: () => 0, getCurrentTurnWorkDepth: () => 0 });
+    expect(await deps.sessionSendMessage({ sessionId: 'receiver', message: 'Answer this input', reply,
+      sessionInputSource: { sourceSessionId: 'source-session', sourceTurnId: 'source-turn', via: 'action',
+        causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' } },
+      context: { surface: 'agent' }, callerSurface: 'agent', actionCaller: { kind: 'host' },
+      requestedAction: { v: 1, kind: 'enqueue' } })).toMatchObject({ ok: false, errorCode: 'session_reply_source_unavailable' });
+    expect(http.post).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unwitnessed source Turn while qualified Session input can reach the same target', async () => {
+    const receiverSessionId = 'cmv3hostadmissionaaaaaaaaa';
+    const sourceSessionId = 'source-session';
+    const sourceTurnId = 'session-turn';
+    const machineAdmissionTransport = vi.fn<NonNullable<Parameters<typeof createCliActionDeps>[0]['machineAdmissionTransport']>>(
+      async request => ({ status: 'accepted', localId: request.localId }),
+    );
+    http.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/encryption/currentness')) return {
+        status: 200, data: createAccountEncryptionCurrentnessFixture(),
+      };
+      if (url.endsWith(`/v2/sessions/${receiverSessionId}`)) return { status: 200, data: {
+        session: createSessionRecordFixture({ id: receiverSessionId, active: true,
+          encryptionMode: 'plain', machineId: 'machine-1', metadata: JSON.stringify({ machineId: 'machine-1' }) }),
+      } };
+      if (url.endsWith(`/v2/sessions/${sourceSessionId}`)) return { status: 200, data: {
+        session: createSessionRecordFixture({ id: sourceSessionId, share: null }),
+      } };
+      throw new Error('Unexpected host admission HTTP read');
+    });
+    let readWitnessedTurnDepth: Parameters<typeof createCliActionDeps>[0]['getCurrentTurnWorkDepth'];
+    const sourceAction = createDaemonSessionAccountActionExecutor({
+      serverId: 'test-home', serverHttpBaseUrl: resolveServerHttpBaseUrl(), token: 'test-account-token',
+      createExecutor: reader => {
+        readWitnessedTurnDepth = reader;
+        return createActionExecutor({
+          ...createCliActionDeps({ token: 'test-account-token', sessionId: sourceSessionId, mode: 'plain', ctx: null }),
+          // Notification delivery is a network boundary; the Session witness
+          // producer and its exact-turn reader execute unmocked.
+          notificationsNotifyMe: async () => ({ attemptedChannels: 1, deliveredChannels: 1 }),
+        });
+      },
+    });
+    await expect(sourceAction({ kind: 'action.execute', requestId: 'source-witness',
+      actionId: 'notifications.notify_me', input: { message: 'Observe the source witness' },
+      witness: { turnId: sourceTurnId, inputId: 'session-input', userMessageSeq: 1, userMessageSeqs: [1], workDepth: 0,
+        agentStartCaller: { kind: 'session', sessionId: sourceSessionId, starterDepth: 0, turnDepth: 0 } },
+    }, { sessionId: sourceSessionId, isCurrent: async () => true })).resolves.toMatchObject({ ok: true });
+    if (!readWitnessedTurnDepth) throw new Error('The Session witness must install its exact-turn reader');
+    const deps = createCliActionDeps({ token: 'test-account-token', sessionId: sourceSessionId, mode: 'plain', ctx: null,
+      credentials: { token: 'test-account-token', encryption: null },
+      getCurrentSessionWorkDepth: () => 0, getCurrentTurnWorkDepth: readWitnessedTurnDepth, machineAdmissionTransport });
+    const context = { surface: 'agent' as const, runtimeRunId: 'run-id' };
+    await expect(deps.sessionSendMessage({ sessionId: receiverSessionId, message: 'Qualified Session input',
+      localId: 'qualified-input', wait: false,
+      sessionInputSource: { sourceSessionId, sourceTurnId, sourceInputId: 'session-input', via: 'action',
+        causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default' } },
+      context, callerSurface: 'agent', actionCaller: { kind: 'host' }, requestedAction: { v: 1, kind: 'enqueue' },
+    })).resolves.toMatchObject({ status: 'accepted', localId: 'qualified-input' });
+    expect(machineAdmissionTransport).toHaveBeenCalledOnce();
+    machineAdmissionTransport.mockClear();
+    expect(await deps.sessionSendMessage({ sessionId: receiverSessionId, message: 'Continue this work',
+      sessionInputSource: { sourceSessionId, sourceTurnId: 'run-native-turn',
+        sourceInputId: 'run-input', via: 'action', causalPermissionAuthority: {
+          kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'default',
+        } },
+      context, callerSurface: 'agent',
+      actionCaller: { kind: 'host' }, requestedAction: { v: 1, kind: 'enqueue' },
+    })).toMatchObject({ status: 'rejected', code: 'session_input_untrusted_assertion' });
+    expect(http.post).not.toHaveBeenCalled();
+    expect(machineAdmissionTransport).not.toHaveBeenCalled();
+  });
+
+  it.each(['cli', 'voice'] as const)('returns an exact typed pass inline on %s only after the original observation wins custody', async surface => {
+    const sessionId = 'cmv3hostadmissionaaaaaaaaa';
+    const localId = 'original-wait';
+    let content: unknown;
+    const progress = { v: 1, mode: 'wait', acceptedTurnId: 'accepted-turn',
+      disposition: 'observing', outcome: { kind: 'pass' } } as const;
+    const socket = createApiSessionSocketStub({ connected: true });
+    sockets.connect.mockImplementation(() => ({ socket, transport: createSocketTransportAdapter(socket as never) }));
+    http.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: {
+        mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      if (url.endsWith('/messages/reply-capability')) return { status: 200, data: { v: 1, protocolVersions: [1] } };
+      if (url.endsWith(`/messages/by-local-id/${localId}/reply`)) return { status: 200,
+        data: { v: 1, status: 'available', progress } };
+      if (url.endsWith(`/messages/by-local-id/${localId}`)) return { status: 200, data: { message: {
+        id: 'committed-input', seq: 7, localId, sidechainId: null, content, createdAt: Date.now(), updatedAt: Date.now(),
+      } } };
+      if (url.endsWith(`/v2/sessions/${sessionId}`)) return { status: 200, data: { session: {
+        id: sessionId, seq: 1, createdAt: 1, updatedAt: 1, active: true, activeAt: 1,
+        metadata: JSON.stringify({ permissionMode: 'default', permissionModeUpdatedAt: 1 }), metadataVersion: 1,
+        agentState: null, agentStateVersion: 0, dataEncryptionKey: null, encryptionMode: 'plain',
+      } } };
+      throw new Error(`Unexpected HTTP read: ${url}`);
+    });
+    const observations: unknown[] = [];
+    http.post.mockImplementation(async (url: string, body: { content?: unknown }) => {
+      if (url.endsWith('/pending')) { content = body.content; return { status: 200, data: { didWrite: true, terminal: false } }; }
+      observations.push(body);
+      return { status: 200, data: { v: 1, ok: true, progress: { ...progress, disposition: 'inline' } } };
+    });
+    const deps = createCliActionDeps({ token: 'test-account-token', sessionId, mode: 'plain', ctx: null,
+      credentials: { token: 'test-account-token', encryption: null } });
+    expect(await deps.sessionSendMessage({ sessionId, localId, message: 'Can you answer?', reply: 'wait',
+      callerSurface: surface, actionCaller: { kind: 'host' }, context: { surface, authority: surface === 'cli' ? 'present_user' : 'account_automation' },
+      requestedAction: { v: 1, kind: 'enqueue' } })).toMatchObject({ status: 'replied', localId,
+        inputMessageRef: { messageId: 'committed-input' }, outcome: { kind: 'pass' } });
+    expect(observations).toEqual([{ kind: 'inline' }]);
+    expect(content).toMatchObject({ t: 'plain', v: { meta: { happierInputRequestV1: { replyIntent: { mode: 'wait' } } } } });
+  });
+
+  it.each(['wait', 'return'] as const)('settles sourceful %s through the existing authenticated SessionAction transport', async reply => {
+    const receiverId = 'cmv3hostadmissionaaaaaaaaa';
+    const sourceId = 'source-session';
+    const localId = 'original-remote-observation';
+    const source = { sourceSessionId: sourceId, sourceTurnId: 'source-turn', sourceInputId: 'source-input', via: 'action' as const,
+      causalPermissionAuthority: { kind: 'admittedSessionInputV1' as const, admittedPermissionCeiling: 'default' as const } };
+    const { causalPermissionAuthority: _authority, ...sourceSession } = source;
+    const progress = { v: 1, mode: reply, sourceSession, acceptedTurnId: 'receiver-turn', disposition: 'observing', outcome: { kind: 'pass' } } as const;
+    let content: unknown;
+    const socket = createApiSessionSocketStub({ connected: true });
+    sockets.connect.mockImplementation(() => ({ socket, transport: createSocketTransportAdapter(socket as never) }));
+    http.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/encryption/currentness')) return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
+      if (url.endsWith('/messages/reply-capability')) return { status: 200, data: { v: 1, protocolVersions: [1] } };
+      if (url.endsWith('/delivery-mutes')) return { status: 200, data: { scopes: [] } };
+      if (url.endsWith(`/messages/by-local-id/${localId}/reply`)) return { status: 200, data: { v: 1, status: 'available', progress } };
+      if (url.endsWith(`/messages/by-local-id/${localId}`)) return { status: 200, data: { message: {
+        id: 'committed-remote-input', seq: 7, localId, content, createdAt: Date.now(), updatedAt: Date.now(),
+      } } };
+      const id = url.endsWith(`/v2/sessions/${sourceId}`) ? sourceId : receiverId;
+      if (url.endsWith(`/v2/sessions/${id}`)) return { status: 200, data: { session: createSessionRecordFixture({
+        id, encryptionMode: 'plain', active: true, machineId: 'machine-1', metadata: JSON.stringify({ machineId: 'machine-1' }),
+      }) } };
+      throw new Error(`Unexpected remote observation read: ${url}`);
+    });
+    const observations: unknown[] = [];
+    const sessionActionRpcTransport: NonNullable<Parameters<typeof createCliActionDeps>[0]['sessionActionRpcTransport']> = async request => {
+      observations.push(request);
+      return { v: 1, ok: true, progress: { ...progress, disposition: reply === 'wait' ? 'inline' : 'return_pending' } };
+    };
+    const deps = createCliActionDeps({ token: 'test-account-token', sessionId: 'cli-global', mode: 'plain', ctx: null,
+      credentials: { token: 'test-account-token', encryption: null }, sessionActionRpcTransport,
+      getCurrentTurnWorkDepth: () => 0, getCurrentSessionWorkDepth: () => 0,
+      machineAdmissionTransport: async request => { content = request.content; return { status: 'accepted', localId: request.localId }; },
+    });
+    const context = { surface: 'agent' as const, authority: 'account_automation' as const, actionRequestId: 'source-action',
+      actionCaller: { kind: 'session' as const, sessionId: sourceId, starterDepth: 0, turnDepth: 0 },
+      callerPermissionMode: 'default' as const, sessionInputSource: source };
+    expect(await deps.sessionSendMessage({ sessionId: receiverId, localId, message: 'Answer this original request', reply,
+      sessionInputSource: source, context, callerSurface: 'agent', actionCaller: context.actionCaller,
+      requestedAction: { v: 1, kind: 'enqueue' } })).toMatchObject({
+      status: reply === 'wait' ? 'replied' : 'accepted', localId,
+    });
+    expect(observations).toEqual([expect.objectContaining({ sessionId: sourceId, method: 'session.message.reply.observe.v1',
+      input: { requestSessionId: receiverId, requestLocalId: localId, operation: reply === 'wait' ? 'inline' : 'release' },
+      origin: expect.objectContaining({ caller: context.actionCaller, sourceTurnId: source.sourceTurnId, sourceInputId: source.sourceInputId }),
+    })]);
+    expect(http.post).not.toHaveBeenCalled();
+  });
+
   it('admits ordinary CLI input without dropping its target permission defaults', async () => {
     const sessionId = 'cmv3hostadmissionaaaaaaaaa';
     const metadata = JSON.stringify({ permissionMode: 'safe-yolo', permissionModeUpdatedAt: 1 });
@@ -27,7 +373,7 @@ describe('CLI host Message admission', () => {
     });
     http.post.mockResolvedValue({ status: 200, data: { didWrite: true, terminal: false, suppressed: false } });
     const deps = createCliActionDeps({
-      token: 'test-account-token', sessionId,
+      token: 'test-account-token', sessionId, mode: 'plain', ctx: null,
       credentials: { token: 'test-account-token', encryption: null },
     });
     await expect(deps.sessionSendMessage!({

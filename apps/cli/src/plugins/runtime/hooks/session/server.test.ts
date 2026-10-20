@@ -170,11 +170,14 @@ async function runPermissionForwarder(params: {
   });
 }
 
+const sessionForwarderChildren = new Set<ReturnType<typeof spawn>>();
+
 async function runSessionForwarder(params: {
   port: number;
   hookEventName: string;
   secretFile: string;
   body: unknown;
+  onSpawn?: (child: ReturnType<typeof spawn>) => void;
 }): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const scriptPath = resolve(process.cwd(), 'scripts', 'session_hook_forwarder.cjs');
   return await new Promise((resolvePromise, reject) => {
@@ -188,6 +191,7 @@ async function runSessionForwarder(params: {
       cwd: join(process.cwd()),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    sessionForwarderChildren.add(child);
 
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
@@ -199,6 +203,7 @@ async function runSessionForwarder(params: {
     });
     child.on('error', reject);
     child.on('close', (code) => {
+      sessionForwarderChildren.delete(child);
       resolvePromise({
         code,
         stdout: Buffer.concat(stdout).toString('utf8'),
@@ -208,6 +213,7 @@ async function runSessionForwarder(params: {
     child.stdin.on('error', () => {
       // A bounded forwarder may close stdin before a deliberately oversized fixture finishes.
     });
+    params.onSpawn?.(child);
     child.stdin.end(JSON.stringify(params.body));
   });
 }
@@ -218,6 +224,7 @@ describe('startSessionHookServer', () => {
 
   afterEach(() => {
     loggerDebugMock.mockClear();
+    for (const child of sessionForwarderChildren) child.kill();
     for (const server of servers.splice(0, servers.length)) {
       server.stop();
     }
@@ -597,7 +604,7 @@ describe('startSessionHookServer', () => {
     }));
   });
 
-  it('keeps hook delivery non-controlling when the hook server rejects delivery', async () => {
+  it.each(['PostToolUse', 'SessionStart'])('keeps %s non-controlling when the hook server rejects delivery', async hookEventName => {
     const server = await startSessionHookServer({
       sessionHookSecret: 'expected-session-forwarder-secret',
     } as Parameters<typeof startSessionHookServer>[0] & { sessionHookSecret: string });
@@ -606,7 +613,7 @@ describe('startSessionHookServer', () => {
 
     const result = await runSessionForwarder({
       port: server.port,
-      hookEventName: 'PostToolUse',
+      hookEventName,
       secretFile,
       body: {
         session_id: 'sess_rejected_forwarder',
@@ -619,7 +626,7 @@ describe('startSessionHookServer', () => {
     expect(result.stderr).toBe('');
   });
 
-  it('keeps hook delivery non-controlling when the hook server connection is refused', async () => {
+  it.each(['SubagentStop', 'UserPromptSubmit'])('keeps %s non-controlling when the hook server connection is refused', async hookEventName => {
     const server = await startSessionHookServer({});
     servers.push(server);
     const refusedPort = server.port;
@@ -629,7 +636,7 @@ describe('startSessionHookServer', () => {
 
     const result = await runSessionForwarder({
       port: refusedPort,
-      hookEventName: 'SubagentStop',
+      hookEventName,
       secretFile,
       body: {
         session_id: 'sess_unreachable_forwarder',
@@ -666,6 +673,67 @@ describe('startSessionHookServer', () => {
     expect(Date.now() - startedAt).toBeLessThan(1_000);
     expect(deliveryAttempts).toBe(1);
     expect(result).toEqual({ code: 0, stdout: '', stderr: '' });
+  });
+
+  it.each(['SessionStart', 'UserPromptSubmit'])('lets native %s wait for a real acknowledgement beyond the observational deadline', async hookEventName => {
+    let release!: () => void;
+    let entered!: () => void;
+    const pending = new Promise<void>(done => { release = done; });
+    const received = new Promise<void>(done => { entered = done; });
+    const server = await startSessionHookServer({ onSessionHook: async () => { entered(); await pending; } });
+    servers.push(server);
+    const secretFile = await createSecretFile('proof-forwarder-secret');
+    let exited = false;
+    const outcome = runSessionForwarder({ port: server.port, hookEventName, secretFile,
+      body: { session_id: 'native-proof-session' } }).then(result => { exited = true; return result; });
+    try {
+      await received;
+      // Exercise the existing 500ms cutoff at the actual clock/socket/process boundary.
+      await new Promise(done => setTimeout(done, 650));
+      expect(exited).toBe(false);
+    } finally { release(); }
+    expect(await outcome).toEqual({ code: 0, stdout: '', stderr: '' });
+  });
+
+  it('keeps a proof hook fail-silent when the host aborts a response', async () => {
+    const server = createServer((request, response) => {
+      request.resume();
+      request.on('end', () => {
+        response.writeHead(200, { 'Content-Length': '1000' });
+        response.write('partial');
+        setImmediate(() => response.destroy());
+      });
+    });
+    await new Promise<void>(done => { server.listen(0, '127.0.0.1', done); });
+    try {
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Missing host response endpoint');
+      const secretFile = await createSecretFile('proof-forwarder-secret');
+      expect(await runSessionForwarder({ port: address.port, hookEventName: 'SessionStart', secretFile,
+        body: { session_id: 'native-proof-session' } })).toEqual({ code: 0, stdout: '', stderr: '' });
+    } finally { await new Promise<void>(done => { server.close(() => done()); }); }
+  });
+
+  it('leaves proof-hook cancellation with its native process owner', async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const pending = new Promise<void>(done => { release = done; });
+    const received = new Promise<void>(done => { entered = done; });
+    const server = await startSessionHookServer({ onSessionHook: async () => { entered(); await pending; } });
+    servers.push(server);
+    const secretFile = await createSecretFile('proof-forwarder-secret');
+    const nativeOwner: { child: ReturnType<typeof spawn> | null } = { child: null };
+    const outcome = runSessionForwarder({ port: server.port, hookEventName: 'SessionStart', secretFile,
+      body: { session_id: 'native-proof-session' }, onSpawn: spawned => { nativeOwner.child = spawned; } });
+    try {
+      await received;
+      if (!nativeOwner.child) throw new Error('Missing native-owned hook process');
+      expect(nativeOwner.child.kill('SIGTERM')).toBe(true);
+      const result = await outcome;
+      expect(result.code).not.toBe(0);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toBe('');
+    } finally { release(); }
   });
 
   it('drops oversized hook input before delivery without affecting the Agent', async () => {
@@ -1017,7 +1085,7 @@ describe('startSessionHookServer', () => {
       hook_event_name: 'PreToolUse',
       tool_name: 'AskUserQuestion',
       tool_use_id: 'toolu_ask_pre_forwarder_1',
-    }));
+    }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
     expect(JSON.parse(result.stdout)).toMatchObject({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',

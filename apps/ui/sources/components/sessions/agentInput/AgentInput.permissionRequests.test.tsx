@@ -1,6 +1,6 @@
 import React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
+import { renderWithSessionTranscriptSource as renderScreen } from '@/dev/testkit';
 import { installAgentInputCommonModuleMocks } from './agentInputTestHelpers';
 
 
@@ -98,41 +98,6 @@ vi.mock('@/sync/domains/state/storageStore', () => ({
         },
         sessionMessages: {},
     }),
-}));
-
-vi.mock('@/agents/catalog/catalog', () => ({
-    getAgentIconSvgXml: () => null,
-    getAgentIconSource: () => null,
-    getAgentIconTintColor: () => undefined,
-    AGENT_IDS: ['codex', 'claude', 'opencode', 'gemini'],
-    DEFAULT_AGENT_ID: 'codex',
-    resolveAgentIdFromFlavor: () => null,
-    resolveAgentIdFromSessionMetadata: () => null,
-    getAgentCore: () => ({ displayNameKey: 'agents.codex', toolRendering: { hideUnknownToolsByDefault: false } }),
-}));
-
-vi.mock('@/sync/domains/models/modelOptions', () => ({
-    findModelOptionForEffectiveModelId: (options: any, effectiveModelId: any) =>
-        options?.find?.((option: any) => option.value === effectiveModelId)
-            ?? options?.find?.((option: any) => option.value === String(effectiveModelId ?? '').replace(/\[[^\]]*\]$/u, ''))
-            ?? null,
-    getModelOptionsForSession: () => [{ value: 'default', label: 'Default' }],
-    supportsFreeformModelSelectionForSession: () => false,
-}));
-
-vi.mock('@/sync/domains/models/describeEffectiveModelMode', () => ({
-    describeEffectiveModelMode: () => ({ selectedModelId: 'default', appliedModelId: null, effectiveModelId: 'default' }),
-}));
-
-vi.mock('@/sync/domains/permissions/permissionModeOptions', () => ({
-    getPermissionModeBadgeLabelForAgentType: () => 'Default',
-    getPermissionModeLabelForAgentType: () => 'Default',
-    getPermissionModeOptionsForSession: () => [{ value: 'default', label: 'Default' }],
-    getPermissionModeTitleForAgentType: () => 'Permissions',
-}));
-
-vi.mock('@/sync/domains/permissions/describeEffectivePermissionMode', () => ({
-    describeEffectivePermissionMode: () => ({ effectiveMode: 'default' }),
 }));
 
 vi.mock('@/components/ui/forms/MultiTextInput', () => ({

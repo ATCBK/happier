@@ -260,7 +260,7 @@ describe('Codex app-server canonical interaction bridge', () => {
     expect(sendUserMessage).not.toHaveBeenCalled();
   });
 
-  it('registers all current app-server interaction methods and maps approvals without a provider-owned store', async () => {
+  it('maps current app-server approvals into canonical tool subjects', async () => {
     const fixture = createFixture();
     const requestApproval = vi.fn()
       .mockResolvedValueOnce(approvalResult('approved', 'session'))
@@ -291,6 +291,19 @@ describe('Codex app-server canonical interaction bridge', () => {
       cwd: '/workspace',
       availableDecisions: ['accept', 'acceptForSession', 'decline', 'cancel'],
     })).resolves.toEqual({ decision: 'acceptForSession' });
+    const patchChanges = [
+      {
+        path: 'src/example.ts',
+        kind: { type: 'update', move_path: null },
+        diff: '@@ -1 +1 @@\n-before\n+after\n',
+      },
+    ];
+    fixture.publish('item/fileChange/patchUpdated', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      itemId: 'file-1',
+      changes: patchChanges,
+    });
     await expect(fixture.invoke('item/fileChange/requestApproval', {
       threadId: 'thread-1',
       turnId: 'turn-1',
@@ -317,6 +330,30 @@ describe('Codex app-server canonical interaction bridge', () => {
       scope: 'turn',
     });
     expect(requestApproval).toHaveBeenCalledTimes(3);
+    expect(requestApproval.mock.calls[0]?.[0]).toMatchObject({
+      subject: {
+        kind: 'tool',
+        name: 'Bash',
+        input: {
+          command: 'git fetch origin',
+          cwd: '/workspace',
+          reason: 'Network access is required.',
+        },
+      },
+    });
+    expect(requestApproval.mock.calls[0]?.[0].subject.input).not.toHaveProperty('threadId');
+    expect(requestApproval.mock.calls[1]?.[0]).toMatchObject({
+      subject: {
+        kind: 'tool',
+        name: 'Patch',
+        input: {
+          changes: patchChanges,
+          grantRoot: '/tmp/export',
+          reason: 'Write outside the workspace.',
+        },
+      },
+    });
+    expect(requestApproval.mock.calls[1]?.[0].subject.input).not.toHaveProperty('turnId');
 
     await expect(fixture.invoke('item/commandExecution/requestApproval', {
       threadId: 'thread-1',
@@ -451,6 +488,26 @@ describe('Codex app-server canonical interaction bridge', () => {
         environment: { answers: ['staging'] },
         note: { answers: ['Deploy after tests'] },
       },
+    });
+    expect(askQuestions).toHaveBeenCalledTimes(1);
+    expect(askQuestions.mock.calls[0]?.[0]).toEqual({
+      kind: 'questions',
+      title: 'Codex question',
+      questions: [{
+        id: 'environment',
+        prompt: 'Where should this deploy?',
+        type: 'singleChoice',
+        required: true,
+        choices: [
+          { id: 'staging', label: 'staging', description: 'Shared staging' },
+          { id: 'production', label: 'production', description: 'Live users' },
+        ],
+      }, {
+        id: 'note',
+        prompt: 'Any release note?',
+        type: 'text',
+        required: true,
+      }],
     });
     expect(askQuestions.mock.calls[0]?.[1]).toEqual({ signal: expect.any(AbortSignal) });
     await expect(fixture.invoke('item/tool/requestUserInput', {

@@ -38,6 +38,8 @@ describe('Session surface items', () => {
     const instance = { v: 1, id: 'copy-a', definition: { kind: 'installed', surface: { pluginId: 'com.acme.test', localId: 'dashboard' } },
       bindings: { connection: { kind: 'viewer', purpose: 'metrics' } } };
     const canonical = { ...note, source: { kind: 'widget', instance } };
+    // Write admission may warm native lazy definitions before stored content is opened.
+    expect(SessionSurfaceItemV1Schema.parse(canonical)).toEqual(canonical);
     const stored = { ...canonical, source: { ...canonical.source, extra: true, instance: { ...instance, extra: true,
       definition: { ...instance.definition, extra: true, surface: { ...instance.definition.surface, extra: true } },
       bindings: { connection: { ...instance.bindings.connection, extra: true } },

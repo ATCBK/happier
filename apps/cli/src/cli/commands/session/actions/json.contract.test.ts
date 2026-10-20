@@ -1,5 +1,7 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import axios from 'axios';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { captureConsoleJsonOutput } from '@/testkit/logger/captureOutput';
+import { createAccountEncryptionCurrentnessFixture } from '@/testkit/backends/sessionFixtures';
 
 const resolveSessionTransportContext = vi.fn();
 const execute = vi.fn();
@@ -14,6 +16,7 @@ vi.mock('@/session/actions/createCliActionExecutor', () => ({
 }));
 
 describe('happier session actions --json contract', () => {
+  afterEach(() => vi.restoreAllMocks());
   let protocol: typeof import('@happier-dev/protocol');
   let handleSessionCommand: typeof import('../index').handleSessionCommand;
 
@@ -24,6 +27,16 @@ describe('happier session actions --json contract', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(axios, 'get').mockImplementation(async (url) => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/encryption/currentness') return {
+        status: 200, data: createAccountEncryptionCurrentnessFixture({ mode: 'plain' }),
+      };
+      if (path === '/v2/account/settings') return {
+        status: 200, data: { version: 1, content: { t: 'plain', v: {} } },
+      };
+      return { status: 404, data: {} };
+    });
     resolveSessionTransportContext.mockResolvedValue({
       ok: true,
       sessionId: 'sess_protocol_actions_execute_1',
@@ -65,7 +78,7 @@ describe('happier session actions --json contract', () => {
         {
           readCredentialsFn: async () => ({
             token: 'token_test',
-            encryption: { type: 'legacy', secret: new Uint8Array(32).fill(1) },
+            encryption: null,
           }),
         },
       );

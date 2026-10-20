@@ -165,9 +165,11 @@ describe('shared overlay menu Android touch targets', () => {
     });
 
     const scrollViewport = renderer!.root.findAll((node) => (
-      node.type === 'ScrollView' && flattenStyle(node.props.style).maxHeight === hostMaxHeight
+      node.type === 'ScrollView'
     ));
     expect(scrollViewport).toHaveLength(1);
+    // The floating Surface owns a 1dp rim on each side of the scroll viewport.
+    expect(flattenStyle(scrollViewport[0]?.props.style).maxHeight).toBe(hostMaxHeight - 2);
     expect(scrollViewport[0]?.props.keyboardShouldPersistTaps).toBe('handled');
 
     const rows = renderer!.root.findAll((node) => (

@@ -13,7 +13,7 @@ import { happierPageTextMetrics, joinHappierFacts } from '@happier-dev/plugin-ui
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
 
-import { WorkSection, WorkSectionEmptyLine } from '@/components/sessions/work/WorkSection';
+import { WorkSection, WorkSectionDescription, WorkSectionEmptyLine } from '@/components/sessions/work/WorkSection';
 import {
   DropdownMenu,
   type DropdownMenuItem,
@@ -40,7 +40,6 @@ import {
 } from '@/voice/settings/panels/realtime/realtimeVoiceCatalogMenu';
 import { useBundledConversationProviderSettings } from '@/voice/settings/panels/realtime/useBundledConversationProviderSettings';
 import { readDeclaredVoiceSettingsCatalog } from '@/voice/settings/panels/realtime/voiceCatalog';
-import type { VoiceCatalogPreviewSynthesizer } from '@/voice/settings/panels/realtime/catalogPreview';
 import { resolveSessionVoicePreference } from '@/voice/settings/resolveSessionVoicePreference';
 
 import { readSessionVoiceInUse, resolveSessionVoiceLine } from './sessionVoiceLine';
@@ -96,14 +95,15 @@ export const SessionVoiceSection = React.memo(function SessionVoiceSection(
     >
       {field && declaration ? (
         <SessionVoicePicker
+          key={JSON.stringify([props.serverId, props.session.id, choice.providerId])}
           session={props.session}
           serverId={props.serverId}
           providerId={choice.providerId}
           providerLabel={providerLabel}
           declaration={declaration}
-          client={choice.client}
+          catalogAvailable={choice.catalogAvailable}
           catalogTargetKey={choice.targetKey}
-          preview={choice.preview}
+          canPreview={choice.canPreview}
           config={choice.config}
           searchPlaceholderKey={
             settings.descriptor?.fields.find(
@@ -128,9 +128,9 @@ const SessionVoicePicker = React.memo(function SessionVoicePicker(
     providerId: string;
     providerLabel: string;
     declaration: Parameters<typeof readSessionVoiceSettingFieldV1>[0];
-    client: Parameters<typeof useRealtimeVoiceCatalog>[0]['client'];
+    catalogAvailable: boolean;
     catalogTargetKey: string;
-    preview?: VoiceCatalogPreviewSynthesizer;
+    canPreview?: boolean;
     config: VoiceProviderSettingsJsonValueV1;
     searchPlaceholderKey?: unknown;
   }>,
@@ -156,13 +156,14 @@ const SessionVoicePicker = React.memo(function SessionVoicePicker(
   const [refused, setRefused] = React.useState(false);
   const declaredRows = React.useMemo(() => readDeclaredVoiceSettingsCatalog(declaration), [declaration]);
   const { catalog, lastKnownRows, requestCatalog } = useRealtimeVoiceCatalog({
-    client: props.client,
+    providerId,
+    catalogAvailable: props.catalogAvailable,
     credentialUsable: true,
     targetKey: props.catalogTargetKey,
     declaredRows,
   });
-  const { previewingId, playPreview, stopPreview } =
-    useRealtimeCatalogPreview(providerId, { targetKey: props.catalogTargetKey, synthesize: props.preview });
+  const { previewingId, playPreview, retirePreview } =
+    useRealtimeCatalogPreview(providerId, { targetKey: props.catalogTargetKey });
   const catalogRows = catalog.phase === 'ready' ? catalog.rows : null;
   const resolution = React.useMemo(
     () =>
@@ -275,9 +276,10 @@ const SessionVoicePicker = React.memo(function SessionVoicePicker(
     credentialUnavailableDetail: t('sessionVoice.loading'),
     previewingId,
     onPreview: playPreview,
-    canPreview: Boolean(props.preview),
+    canPreview: props.canPreview,
     inUseId: inUse?.providerContributionId === providerId ? inUseId : null,
     category: t('sessionVoice.voicesHeading', { provider: providerLabel }),
+    onRetry: requestCatalog,
   });
   const accountVoiceName = nameOf(accountVoiceId);
   const items = React.useMemo(
@@ -324,17 +326,20 @@ const SessionVoicePicker = React.memo(function SessionVoicePicker(
   const searchPlaceholder =
     typeof props.searchPlaceholderKey === 'string'
       ? tLoose(props.searchPlaceholderKey)
-      : undefined;
+      : t('sessionVoice.searchVoices', { provider: providerLabel });
 
   return (
     <>
+      {/* The line says whose voice the conversation uses, right under the heading like every section's
+          description; the field beneath it shows the choice. */}
+      <WorkSectionDescription testID="session-work-voice.line">{line}</WorkSectionDescription>
       <DropdownMenu
         testID="session-work-voice.picker"
         open={open}
         onOpenChange={(next) => {
           setOpen(next);
           if (next) requestCatalog();
-          else stopPreview();
+          else retirePreview();
         }}
         variant="selectable"
         search
@@ -346,19 +351,22 @@ const SessionVoicePicker = React.memo(function SessionVoicePicker(
         // A phone gets the shared bottom sheet, named by the section (lab `b-work Vp`).
         popoverPhonePresentation="sheet"
         popoverAccessibilityLabel={t('sessionVoice.title')}
+        popoverSheetSubtitle={selectedName
+          ? t('sessionVoice.sheetSubtitle', { session: getSessionName(session, serverId), voice: selectedName })
+          : t('sessionVoice.pickerA11y', { name: getSessionName(session, serverId) })}
         rowKind="item"
         itemRowProps={{ rightElementOutsidePressable: true }}
         footer={
           <Text style={styles.footer}>{t('sessionVoice.preferenceHint')}</Text>
         }
         itemTrigger={{
-          title: line,
+          // The field alone: "Sage · OpenAI", "Follow account settings · Marin", or just "Follow account
+          // settings" while the account's own voice has no name to show.
+          title: '',
           showSelectedSubtitle: false,
-          // One value, as it is said: "Sage · OpenAI".
-          detailFormatter: () =>
-            selectedName
-              ? joinHappierFacts(selectedName, providerLabel)
-              : t('sessionVoice.chooseVoice'),
+          detailFormatter: () => !selectedName ? null
+            : chosenId ? joinHappierFacts(selectedName, providerLabel)
+              : joinHappierFacts(t('sessionVoice.followAccount'), selectedName),
           field: {
             leading: (
               <Icon

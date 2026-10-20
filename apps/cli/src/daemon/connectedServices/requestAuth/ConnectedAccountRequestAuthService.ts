@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { logger } from '@/ui/logger';
 
 import { ConnectedAccountAuthFailureRequestV1Schema, ConnectedAccountQuotaFailureRequestV1Schema, OAuthBearerLeaseV1Schema, RequestAuthFailureOutcomeV1Schema } from '@happier-dev/protocol/connect/connected-account-request-auth';
 import { QualifiedConnectedAccountPurposeV1Schema } from '@happier-dev/protocol/connect/connectedAccountPurposeIdentity';
@@ -13,21 +14,40 @@ export type ConnectedAccountRequestAuthErrorCode =
     | 'request_auth_credential_unavailable'
     | 'request_auth_currentness_unstable';
 
+/** Host-file diagnostics only; never include arbitrary exception text or transport data. */
+export type ConnectedAccountRequestAuthDiagnostic = Readonly<{
+    causeCode: 'requester_context_unavailable' | 'requester_session_not_current' | 'requester_http_refused'
+        | 'binding_resolver_unavailable' | 'binding_resolution_failed' | 'binding_http_refused'
+        | 'binding_not_resolved' | 'binding_mismatch';
+    httpStatus?: number;
+}>;
+
 export class ConnectedAccountRequestAuthError extends Error {
     readonly code: ConnectedAccountRequestAuthErrorCode;
+    readonly diagnostic?: ConnectedAccountRequestAuthDiagnostic;
 
-    constructor(code: ConnectedAccountRequestAuthErrorCode) {
+    constructor(code: ConnectedAccountRequestAuthErrorCode, diagnostic?: ConnectedAccountRequestAuthDiagnostic) {
         super(code);
         this.name = 'ConnectedAccountRequestAuthError';
         this.code = code;
+        this.diagnostic = diagnostic;
     }
 }
+
+/** Process-local ports captured from the exact purpose lease's owner at issuance. */
+export type ConnectedAccountRequestAuthBindingAuthority = Readonly<{
+    resolveCurrentBinding(input: Readonly<{ binding: QualifiedConnectedAccountPurposeBindingV1; signal: AbortSignal }>): Promise<ConnectedAccountRequestAuthResolvedBinding | null>;
+    materializeBearer(input: Readonly<{ binding: QualifiedConnectedAccountPurposeBindingV1; resolved: ConnectedAccountRequestAuthResolvedBinding;
+        materialization: QualifiedConnectedAccountRequestAuthUseV1['materialization']; signal: AbortSignal }>): Promise<BearerMaterial>;
+}>;
 
 export type ConnectedAccountRequestAuthSubject = Readonly<{
     /** Diagnostic identity only. Authorization is the subject's exact live capability object. */
     subjectId: string;
     /** Host-issued captured Session identity; never read from caller bodies or subjectId. */
     parentSessionId?: string;
+    /** Issued by the host, retained only in memory; never accepted from a capability document. */
+    bindingAuthority?: ConnectedAccountRequestAuthBindingAuthority;
     /**
      * Private issuance proof for the bounded service-keyed compatibility adapter. Only a
      * catalog-Agent foreground issuer may set this; absence fails closed to qualified ownership.
@@ -112,7 +132,7 @@ export type ConnectedAccountRequestAuthServiceDependencies = Readonly<{
         failure: ConnectedAccountQuotaFailureRequestV1['normalizedFailure'];
         signal: AbortSignal;
     }>) => Promise<RequestAuthFailureOutcomeV1>;
-    /** Ordinary internal owner deadline; it remains below the generated wrapper's 30 second transport wait. */
+    /** Explicit operation budget, when the containing operation supplies one. Otherwise cancellation owns the lifetime. */
     operationDeadlineMs?: number;
     /** OAuth rotation and provider evidence are bounded separately from ordinary lookup and quota operations. */
     authFailureOperationDeadlineMs?: number;
@@ -155,7 +175,6 @@ export type ConnectedAccountRequestAuthService = Readonly<{
 
 const MAX_CURRENTNESS_RETRIES = 8;
 const MAX_CACHED_CREDENTIAL_LEASES = 64;
-export const DEFAULT_REQUEST_AUTH_OPERATION_DEADLINE_MS = 20_000;
 // A legacy Claude recovery may perform two sequential provider calls, each with the
 // canonical 120-second ceiling, plus bounded account projection work. The generated
 // client owns a slightly larger 310-second transport ceiling.
@@ -184,7 +203,7 @@ type RequestAuthSharedOperation<T> = {
 
 function createRequestAuthOperationLifetime(input: Readonly<{
     signal?: AbortSignal;
-    deadlineMs: number;
+    deadlineMs?: number;
 }>): RequestAuthOperationLifetime {
     const controller = new AbortController();
     const abort = (): void => {
@@ -198,12 +217,12 @@ function createRequestAuthOperationLifetime(input: Readonly<{
     } else {
         parentSignal?.addEventListener('abort', abort, { once: true });
     }
-    const timeout = setTimeout(abort, input.deadlineMs);
+    const timeout = input.deadlineMs === undefined ? undefined : setTimeout(abort, input.deadlineMs);
     return Object.freeze({
         signal: controller.signal,
         abort,
         dispose: () => {
-            clearTimeout(timeout);
+            if (timeout !== undefined) clearTimeout(timeout);
             parentSignal?.removeEventListener('abort', abort);
         },
     });
@@ -376,7 +395,7 @@ export function createConnectedAccountRequestAuthService(
         && Number.isSafeInteger(configuredOperationDeadlineMs)
         && configuredOperationDeadlineMs > 0
         ? configuredOperationDeadlineMs
-        : DEFAULT_REQUEST_AUTH_OPERATION_DEADLINE_MS;
+        : undefined;
     const configuredAuthFailureOperationDeadlineMs =
         dependencies.authFailureOperationDeadlineMs;
     const authFailureOperationDeadlineMs =
@@ -488,7 +507,9 @@ export function createConnectedAccountRequestAuthService(
             throw new ConnectedAccountRequestAuthError('request_auth_not_active');
         }
         if (!resolved || !resolvedMatchesBinding(binding, resolved)) {
-            throw new ConnectedAccountRequestAuthError('request_auth_binding_unavailable');
+            throw new ConnectedAccountRequestAuthError('request_auth_binding_unavailable', {
+                causeCode: resolved ? 'binding_mismatch' : 'binding_not_resolved',
+            });
         }
         return { binding, use, resolved };
     };
@@ -580,18 +601,21 @@ export function createConnectedAccountRequestAuthService(
     };
 
     const lookupRequestAuth: ConnectedAccountRequestAuthService['lookupRequestAuth'] = async (input) => {
+        let phase: 'binding_before' | 'materialization' | 'binding_after' = 'binding_before';
         const lifetime = createRequestAuthOperationLifetime({
             signal: input.signal,
             deadlineMs: operationDeadlineMs,
         });
         try {
             for (let attempt = 0; attempt < MAX_CURRENTNESS_RETRIES; attempt += 1) {
+                phase = 'binding_before';
                 const before = await resolveAuthorizedBinding(
                     input.subject,
                     input.purpose,
                     lifetime.signal,
                 );
                 const beforeKey = leaseKey(before.resolved, before.use.materialization, input.subject);
+                phase = 'materialization';
                 const material = await getCachedOrFill(
                     input.subject,
                     before.binding,
@@ -599,6 +623,7 @@ export function createConnectedAccountRequestAuthService(
                     before.use.materialization,
                     lifetime.signal,
                 );
+                phase = 'binding_after';
                 const after = await resolveAuthorizedBinding(
                     input.subject,
                     input.purpose,
@@ -634,6 +659,13 @@ export function createConnectedAccountRequestAuthService(
             }
             throw new ConnectedAccountRequestAuthError('request_auth_currentness_unstable');
         } catch (error) {
+            logger.debug('[CONNECTED ACCOUNT] Request-auth lookup refused', {
+                phase,
+                errorCode: error instanceof ConnectedAccountRequestAuthError ? error.code
+                    : isRequestAuthOperationAborted(error) ? 'request_auth_operation_aborted' : 'unexpected_error',
+                ...(error instanceof ConnectedAccountRequestAuthError ? error.diagnostic : {}),
+                ...(input.subject.parentSessionId ? { sessionId: input.subject.parentSessionId } : {}),
+            });
             if (isRequestAuthOperationAborted(error)) {
                 throw new ConnectedAccountRequestAuthError(
                     'request_auth_credential_unavailable',

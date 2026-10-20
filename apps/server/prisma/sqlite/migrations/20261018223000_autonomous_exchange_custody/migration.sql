@@ -1,0 +1,16 @@
+ALTER TABLE "SessionPendingMessage" ADD COLUMN "autonomousExchangeRootSessionId" TEXT;
+ALTER TABLE "SessionPendingMessage" ADD COLUMN "autonomousExchangeRootLocalId" TEXT;
+ALTER TABLE "SessionPendingMessage" ADD COLUMN "autonomousExchangeState" JSONB;
+ALTER TABLE "SessionPendingMessage" ADD COLUMN "autonomousExchangeCause" TEXT;
+ALTER TABLE "SessionPendingMessage" ADD COLUMN "turnStartWitnessId" TEXT;
+ALTER TABLE "SessionMessage" ADD COLUMN "autonomousExchangeRootSessionId" TEXT;
+ALTER TABLE "SessionMessage" ADD COLUMN "autonomousExchangeRootLocalId" TEXT;
+ALTER TABLE "SessionMessage" ADD COLUMN "autonomousExchangeState" JSONB;
+ALTER TABLE "SessionMessage" ADD COLUMN "autonomousExchangeCause" TEXT;
+ALTER TABLE "SessionMessage" ADD COLUMN "acceptedTurnKind" TEXT;
+ALTER TABLE "SessionMessage" ADD COLUMN "acceptedTurnId" TEXT;
+ALTER TABLE "SessionMessage" ADD COLUMN "turnStartWitnessId" TEXT;
+ALTER TABLE "SessionMessage" ADD COLUMN "acceptedTurnCounted" BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE INDEX "SessionPendingMessage_exchange_root_idx" ON "SessionPendingMessage"("autonomousExchangeRootSessionId", "autonomousExchangeRootLocalId", "status");
+CREATE INDEX "SessionMessage_exchange_root_idx" ON "SessionMessage"("autonomousExchangeRootSessionId", "autonomousExchangeRootLocalId");
+CREATE INDEX "SessionMessage_accepted_turn_idx" ON "SessionMessage"("sessionId", "acceptedTurnId");

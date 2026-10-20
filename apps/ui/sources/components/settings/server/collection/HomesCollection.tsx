@@ -5,8 +5,7 @@ import { useUnistyles } from 'react-native-unistyles';
 import { HappierCollectionListMark } from '@happier-dev/plugin-ui/presentation';
 
 import { HomeMark } from '@/components/homes/HomeMark';
-import { homeAddDraftTitle } from '@/components/homes/add/homeAddDraftTitle';
-import { homeGroupDraftTitle } from './homeGroupDraftTitle';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 import { useServerSettingsScreenController } from '@/components/settings/server/hooks/useServerSettingsScreenController';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { DropdownMenu, type DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
@@ -246,6 +245,7 @@ export const HomesCollectionList = React.memo(function HomesCollectionList(props
 
 /** The Home being added, at the top of the rail while its form is open: titled by the address as it is typed. */
 const HomeDraftRow = React.memo(function HomeDraftRow() {
+    const homeAddDraftTitle = useCollectionDraftTitle();
     const { theme } = useUnistyles();
     return (
         <CollectionDraftRow
@@ -262,6 +262,7 @@ const HomeDraftRow = React.memo(function HomeDraftRow() {
 });
 
 const GroupDraftRow = React.memo(function GroupDraftRow() {
+    const homeGroupDraftTitle = useCollectionDraftTitle();
     const { theme } = useUnistyles();
     return (
         <CollectionDraftRow

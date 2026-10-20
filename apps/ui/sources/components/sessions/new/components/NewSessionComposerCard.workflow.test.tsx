@@ -12,7 +12,7 @@ import { flattenTestStyle } from '@/dev/testkit';
 import Color from 'color';
 import { activateStorageAccountScope } from '@/dev/testkit/mocks/storage';
 import { GlassRuntimeEnvironmentProvider } from '@/components/ui/glass/glassRuntimeEnvironment';
-import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
+import { reportPopoverContentLayout, withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { OverlayPortalHost, OverlayPortalProvider } from '@/components/ui/popover/OverlayPortal';
 
 const platformState = vi.hoisted(() => ({ os: 'web' as 'web' | 'android', width: 1440 }));
@@ -106,8 +106,8 @@ describe('New workflow entry', () => {
         await screen.update(<NewSessionComposerCard panelProps={{ ...props, modelPickerPresentation: {
             ...props.modelPickerPresentation, providerGroups: [], providerProjectionAuthoritative: false,
         } }} layout="screen" attachments={false} />);
-        expect(screen.getTextContent()).toContain('Loading model');
-        expect(screen.getTextContent()).not.toContain(ref.modelId);
+        expect(screen.getTextContent()).toContain(ref.modelId);
+        expect(screen.getTextContent()).not.toContain('Loading model');
         await screen.update(<NewSessionComposerCard panelProps={{ ...props, modelPickerPresentation: {
             ...props.modelPickerPresentation, providerGroups: [], providerProjectionAuthoritative: true,
         } }} layout="screen" attachments={false} />);
@@ -127,6 +127,7 @@ describe('New workflow entry', () => {
         const props = { ...panelProps(), selectedMachineId: 'machine-1', targetServerId: 'server-a' };
         platformState.width = 1440;
         const restorePopoverGlobals = withPopoverWebGlobals();
+        let cleanupScreen: Awaited<ReturnType<typeof renderScreen>> | undefined;
         try {
             await act(async () => {
                 getStorage().setState({ profileScope: { serverId: 'server-a', accountId: 'account-a' } });
@@ -142,9 +143,12 @@ describe('New workflow entry', () => {
                     blur: () => {},
                     addEventListener: () => {},
                     removeEventListener: () => {},
+                    ownerDocument: { addEventListener: () => {}, removeEventListener: () => {} },
                 }),
             });
+            cleanupScreen = screen;
             await screen.pressByTestIdAsync('new-session-workflow-chip');
+            await act(async () => { reportPopoverContentLayout(screen.tree, { width: 420, height: 400 }); });
             await screen.pressByTestIdAsync('workflow-choice:builtin:plan-with-a-panel');
             const input = screen.findByTestId('workflow-run-inputs');
             expect(input).not.toBeNull();
@@ -155,6 +159,7 @@ describe('New workflow entry', () => {
                 expect(screen.findByTestId('new-session-composer-input')?.props.value).toBe('Keep this brief');
             }
         } finally {
+            await cleanupScreen?.unmount();
             restorePopoverGlobals();
             platformState.width = 1440;
             await act(async () => { getStorage().setState({ profileScope: previous }); });

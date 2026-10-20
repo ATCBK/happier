@@ -54,7 +54,7 @@ export function sameTriageFilterSelectionV1(
   left: SurfaceFilterSelectionV1,
   right: SurfaceFilterSelectionV1,
 ): boolean {
-  return sameFacet('sources', left.sources, right.sources)
+  return left.tasks === right.tasks && sameFacet('sources', left.sources, right.sources)
     && sameFacet('types', left.types, right.types)
     && sameFacet('scopes', left.scopes, right.scopes)
     && sameFacet('states', left.states, right.states)

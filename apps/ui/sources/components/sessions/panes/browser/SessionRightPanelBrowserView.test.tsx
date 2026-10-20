@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
@@ -13,7 +14,7 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
 import { DetailsSplitWorkspace } from '@/components/appShell/panes/details/workspace/DetailsSplitWorkspace';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
-import { DestinationInstanceHost, useDestinationPaneScopeId } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { DestinationInstanceHost, useDestinationPaneScopeId, type DestinationNavigation } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
 import { BrowserPresentationRetentionProvider } from '@/components/browser/surfaces/browserPresentationRetention';
 import { createBrowserViewDetailsTab } from '@/components/browser/surfaces/browserSurfaceDetailsTabModel';
@@ -43,6 +44,12 @@ afterEach(async () => {
 
 describe('Session right-panel Browser source lifetime', () => {
     it('keeps the actual Browser control and page navigation while its pane is parked and rebound', async () => {
+        const router = createExpoRouterMock().module.router;
+        const navigation = {
+            push: router.push,
+            replace: router.replace,
+            back: router.back,
+        } satisfies DestinationNavigation;
         connection = await restoreServerAccountForTest({
             serverUrl: 'https://browser-viewer-home.example.test',
             request: async (input) => {
@@ -78,7 +85,7 @@ describe('Session right-panel Browser source lifetime', () => {
         function Harness(props: Readonly<{ presentation: 'pane' | 'parked' | 'phone' }>): React.ReactElement {
             const runtime = useSessionBrowserContextRuntime({ enabled: true, sessionId: session.id, scopeKey: session.id });
             return <AppPaneProvider><BrowserPresentationRetentionProvider><SessionViewerSourceAccountScopeProvider accountLifetime={accountLifetime}>
-                <DestinationInstanceHost tabId="viewer-destination" ref={{ kind: 'session', params: { id: session.id } }} pathname={`/session/${session.id}`} focused visible>
+                <DestinationInstanceHost tabId="viewer-destination" ref={{ kind: 'session', params: { id: session.id } }} pathname={`/session/${session.id}`} focused visible navigation={navigation}>
                     <SessionBrowserContextRuntimeProvider runtime={runtime}>
                     {React.createElement('ComposerBrowserContextProbe', {
                         attachments: runtime ? selectBrowserContextComposerAttachments(runtime.composerContext.state) : [],

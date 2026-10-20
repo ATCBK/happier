@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
+import { AccountSettingsSchema } from '@happier-dev/protocol';
 
 import { logger } from '@/ui/logger';
 import { SPAWN_SESSION_ERROR_CODES } from '@/session/shared/spawnSessionContract';
+import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import {
     mapExternalTakeoverLaunchPlanToSpawnOptions,
 } from '@/api/session/external/takeover/mapExternalTakeoverLaunchPlanToSpawnOptions';
@@ -16,6 +19,7 @@ vi.mock('@/ui/logger', () => ({
         debug: vi.fn(),
         debugLargeJson: vi.fn(),
         info: vi.fn(),
+        infoFile: vi.fn(),
         warn: vi.fn(),
     },
 }));
@@ -53,6 +57,8 @@ function serializedLoggerCalls(): string {
     return serializeDiagnostic({
         debug: vi.mocked(logger.debug).mock.calls,
         debugLargeJson: vi.mocked(logger.debugLargeJson).mock.calls,
+        info: vi.mocked(logger.info).mock.calls,
+        infoFile: vi.mocked(logger.infoFile).mock.calls,
         warn: vi.mocked(logger.warn).mock.calls,
     });
 }
@@ -113,7 +119,10 @@ describe('prepareExecuteSpawnSessionRequest logging privacy', () => {
     beforeEach(() => {
         vi.clearAllMocks();
     });
-    afterEach(() => vi.restoreAllMocks());
+    afterEach(() => {
+        resetActiveAccountSettingsSnapshotForTests();
+        vi.restoreAllMocks();
+    });
 
     it('keeps private External Sessions takeover launch facts out of persistent diagnostics', async () => {
         const validationError = `Invalid environment variable ${PRIVATE_ENVIRONMENT_KEY}=${PRIVATE_ENVIRONMENT_VALUE}`;
@@ -179,25 +188,34 @@ describe('prepareExecuteSpawnSessionRequest logging privacy', () => {
         expectNoPrivateSpawnFacts(serializedLoggerCalls());
     });
 
-    it('does not persist an unexpected private pre-spawn error and preserves the thrown error', async () => {
+    it('propagates an unexpected private profile transport failure without persisting its details', async () => {
         const privateError = new Error(
             `Unexpected failure for ${PRIVATE_DIRECTORY} and ${PRIVATE_ENVIRONMENT_VALUE}`,
         );
-        // The profile Artifact inventory is an external HTTP boundary before
-        // admission acquires launch resources. Keep the real profile reader and
-        // diagnostic catch path beneath that boundary.
-        vi.spyOn(axios, 'get').mockRejectedValueOnce(privateError);
+        const credentials = { token: 'token', encryption: null };
+        setActiveAccountSettingsSnapshot({
+            source: 'cache', settings: AccountSettingsSchema.parse({}), rawSettings: {},
+            settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [],
+            scopeKey: resolveAccountSettingsScopeKey(credentials),
+        });
+        // Profile rows are an external HTTP boundary. Keep the real catalog
+        // reader and unexpected-failure propagation beneath that boundary.
+        const profileFailure = vi.fn(async () => { throw privateError; });
+        vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
+            if (new URL(url).pathname === '/v1/account/encryption/currentness') return { status: 200, data: {
+                mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+                recipientEnvelopeReadiness: { status: 'unavailable', reason: 'plain_account' },
+            } };
+            return await profileFailure();
+        });
 
-        await expect(executeSpawnSessionRequest({
+        const attempted = executeSpawnSessionRequest({
             options: {
                 ...mapPrivateExternalTakeoverPlan(),
                 existingSessionId: undefined,
                 resume: undefined,
             },
-            credentials: {
-                token: 'token',
-                encryption: null,
-            },
+            credentials,
             api: {},
             connectedServicesMaterializationBaseDir: '/tmp/connected-services',
             connectedServiceRefreshCoordinator: null,
@@ -212,8 +230,10 @@ describe('prepareExecuteSpawnSessionRequest logging privacy', () => {
             spawnResourceCleanupByPid: new Map(),
             sessionAttachCleanupByPid: new Map(),
             processEnv: {},
-        } as never)).rejects.toBe(privateError);
+        } as never);
 
+        await expect(attempted).rejects.toBe(privateError);
+        expect(profileFailure).toHaveBeenCalled();
         expectNoPrivateSpawnFacts(serializedLoggerCalls());
     });
 });

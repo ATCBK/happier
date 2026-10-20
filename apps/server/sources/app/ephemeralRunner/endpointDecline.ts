@@ -10,6 +10,7 @@ import { publishRunnerActivationChangedInTx } from "./activationChanges";
 import { readRunnerCreatorCurrentnessInTx, reconcileRunnerActivationCurrentnessInTx } from "./activationCurrentness";
 import { closeEphemeralRunnerActivationInTx } from "./activationLifecycle";
 import { verifyRunnerEndpointProjectionProofAgainstRow } from "./endpointProjection";
+import { acquireRunnerActivationLockInTx } from './activationLock';
 
 export type DeclineEphemeralRunnerActivationResult = RunnerEndpointDeclineResponseV1;
 
@@ -27,7 +28,8 @@ export async function declineEphemeralRunnerActivationByEndpoint(params: Readonl
         return { status: "conflict", reason: "proof_mismatch" };
     }
     return inTx(async (tx): Promise<DeclineEphemeralRunnerActivationResult> => {
-        await acquireAccountSessionOwnerMetadataFenceInTx(tx, preflight.creatorAccountId);
+        await acquireAccountSessionOwnerMetadataFenceInTx(tx, preflight.creatorAccountId, "content");
+        await acquireRunnerActivationLockInTx(tx, params.activationId);
         const initial = await tx.ephemeralRunnerActivation.findUnique({ where: { id: params.activationId } });
         if (!initial || !verifyRunnerEndpointProjectionProofAgainstRow(initial, request.data)) {
             return { status: "conflict", reason: "proof_mismatch" };

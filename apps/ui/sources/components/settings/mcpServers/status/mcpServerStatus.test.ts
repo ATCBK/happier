@@ -9,7 +9,7 @@ import { applySavedSecretCatalogPage, invalidateSavedSecretCatalog, resetSavedSe
 
 import { pickMostBlockingCapabilityStatus, presentCapabilityStatus } from '@/components/capabilities/status/capabilityStatusPresentation';
 
-import { mcpServerMachineStatuses, mcpServerStatus, type McpServerStatusInput } from './mcpServerStatus';
+import { mcpServerAttentionStatus, mcpServerMachineStatuses, mcpServerStatus, type McpServerStatusInput } from './mcpServerStatus';
 
 const remote: McpServerCatalogEntryV1 = McpServerCatalogEntryV1Schema.parse({
     id: 'sentry', name: 'sentry', transport: 'http', env: {}, createdAt: 1, updatedAt: 1,
@@ -55,10 +55,27 @@ describe('mcpServerStatus', () => {
                 { kind: 'mcp_server', itemId: 'other', name: 'other', code: 'other_failed' }] }],
             tests: { mbp: { ok: true, toolCount: 1, checkedAt: 1 } } });
         const failure = pickMostBlockingCapabilityStatus(mcpServerStatus(current));
-        expect(failure).toMatchObject({ kind: 'error', machineName: 'MacBook Pro', detail: 'spawn_failed' });
+        expect(failure).toMatchObject({ kind: 'error', machineName: 'MacBook Pro' });
+        // A bare producer code is not words: the status says where it stopped, never "spawn_failed".
+        expect(failure?.detail).toBeUndefined();
         failure?.fix?.onPress();
         expect(current.fixes.tryAgain).toHaveBeenCalledWith('mbp');
         expect(mcpServerStatus({ ...current, entry: local }).some(status => status.kind === 'error')).toBe(false);
+    });
+    it('reads a runtime notice\'s reason as the status it is: sign-in, a missing key, or words', () => {
+        const notices = (detail: string) => [{ v: 1 as const, items: [{ kind: 'mcp_server' as const, itemId: remote.id, name: remote.name, code: 'mcp_unavailable', detail }] }];
+        const signIn = mcpServerStatus(input({ entry: remote, sessionNotices: notices('mcp_sign_in_required') }));
+        expect(pickMostBlockingCapabilityStatus(signIn)?.kind).toBe('signin');
+        expect(mcpServerStatus(input({ entry: remote, signIn: { state: 'connected' }, sessionNotices: notices('mcp_sign_in_required') }))
+            .some(status => status.kind === 'signin' || status.kind === 'error')).toBe(false);
+        const key = input({ entry: remote, sessionNotices: notices('env:LINEAR_API_KEY') });
+        const keyStatus = pickMostBlockingCapabilityStatus(mcpServerStatus(key));
+        expect(keyStatus).toMatchObject({ kind: 'key', detail: 'LINEAR_API_KEY' });
+        keyStatus?.fix?.onPress();
+        expect(key.fixes.addKey).toHaveBeenCalled();
+        const bridge = pickMostBlockingCapabilityStatus(mcpServerStatus(input({ entry: remote, sessionNotices: notices('remote bridge unavailable') })));
+        expect(bridge?.kind).toBe('error');
+        expect(bridge?.detail).not.toMatch(/_|:/);
     });
     it('uses Saved Secret catalog references and availability for direct and template bindings', async () => {
         const ref = formatSharedSavedSecretRefV1('bound-key');
@@ -136,5 +153,27 @@ describe('mcpServerStatus', () => {
         }));
         expect(byMachine.has('a')).toBe(false);
         expect(byMachine.get('b')?.kind).toBe('error');
+    });
+});
+
+describe('mcpServerAttentionStatus', () => {
+    const catalog = { resolveReference: (ref: string) => resolveSavedSecretReference(null, [], ref) };
+    const attention = (entry: McpServerCatalogEntryV1, signIn: McpServerStatusInput['signIn']) =>
+        mcpServerAttentionStatus({ entry, signIn, savedSecretCatalog: catalog });
+
+    it('names what blocks a sign-in server in the page\'s own vocabulary, with its time', () => {
+        expect(attention(remote, { state: 'not_connected' })?.kind).toBe('signin');
+        expect(attention(remote, { state: 'no_machine_online' })?.kind).toBe('signin');
+        expect(attention(remote, { state: 'revoked' })?.kind).toBe('revoked');
+        expect(attention(remote, { state: 'expired', reason: 'expired', at: 'Oct 10' })).toEqual({ kind: 'expired', detail: 'Oct 10' });
+    });
+    it('stays quiet while signing in or connected, and for a server that does not sign in', () => {
+        expect(attention(remote, { state: 'signing' })).toBeNull();
+        expect(attention(remote, { state: 'connected' })).toBeNull();
+        expect(attention({ ...local, env: {} }, null)).toBeNull();
+    });
+    it('a missing Saved Secret is a key status, drawn fix-less (the list action column owns the fix)', () => {
+        const status = attention(local, null);
+        expect(status).toEqual({ kind: 'key' });
     });
 });

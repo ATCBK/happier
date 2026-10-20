@@ -7,6 +7,8 @@ import { configuration } from '@/configuration';
 import { readProjectAccountRows } from './projectAccountRows';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
+import { resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
+import { classifyHomeReadPreparationError } from '@/agent/prompts/library/homeReadPreparationError';
 
 export type SessionProjectPromptStackInput = Readonly<{
   credentials: StoredCredentials; metadata: unknown; signal?: AbortSignal; machineId: string; directory?: string; serverId?: string;
@@ -24,10 +26,10 @@ export async function resolveSessionProjectKey(input: SessionProjectPromptStackI
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return { kind: 'none' };
   const workspaceId: unknown = Reflect.get(metadata, 'workspaceId');
   const projectId: unknown = Reflect.get(metadata, 'projectId');
-  if (workspaceId === undefined && projectId === undefined) return { kind: 'none' };
-  if (typeof workspaceId !== 'string' || !workspaceId.trim()) return pending;
+  const associated = workspaceId !== undefined || projectId !== undefined;
+  if (associated && (typeof workspaceId !== 'string' || !workspaceId.trim())) return pending;
   const path: unknown = input.directory ?? Reflect.get(metadata, 'path');
-  if (typeof path !== 'string' || !path.trim()) return pending;
+  if (typeof path !== 'string' || !path.trim()) return associated ? pending : { kind: 'none' };
   const serverId = input.serverId ?? input.credentials.requesterSessionCredentialScope?.serverId ?? configuration.activeServerId;
   const root = resolveSessionWorkspaceRootForMachine({ metadata, machineId: input.machineId, candidatePath: path });
   let snapshot: Awaited<ReturnType<typeof readProjectAccountRows>>;
@@ -38,15 +40,25 @@ export async function resolveSessionProjectKey(input: SessionProjectPromptStackI
       ...(input.operationContext && accountId ? { sessionCustody: { serverId, accountId,
         serverHttpBaseUrl: input.operationContext.serverHttpBaseUrl, isCurrent: input.operationContext.isCurrent } } : {}) });
   }
-  catch { input.signal?.throwIfAborted(); return pending; }
+  catch (error) {
+    input.signal?.throwIfAborted();
+    // A failed Home read says nothing about the association. Keep the shared
+    // preparation disposition so startup respawn and pre-turn custody can recover.
+    const preparationError = classifyHomeReadPreparationError(error);
+    if (preparationError !== error) throw preparationError;
+    return pending;
+  }
+  const homeId = await resolveServerProfileHomeIdentityId(serverId) ?? serverId;
+  input.signal?.throwIfAborted();
   const resolved = resolveWorkspaceRefV1(snapshot.workspaceRefs, {
-    serverId, workspaceId, machineId: input.machineId, rootPath: root.machinePath,
+    serverId: homeId, ...(typeof workspaceId === 'string' ? { workspaceId } : {}), machineId: input.machineId, rootPath: root.machinePath,
   });
+  if (resolved.kind === 'missing' && !associated) return { kind: 'none' };
   if (resolved.kind !== 'resolved') return pending;
   const project = projectWorkspaceRefV1(resolved.ref);
   if (projectId !== undefined && projectId !== project.projectKey) return pending;
   return { kind: 'resolved', projectKey: project.projectKey, workspaceRef: resolved.ref,
     // The prompt consumer uses the same captured read, never a second association census.
-    promptStack: snapshot.organizations.find(row => row.key.serverId === serverId
+    promptStack: snapshot.organizations.find(row => row.key.serverId === project.serverId
       && row.key.projectKey === project.projectKey)?.value.promptStack ?? [] };
 }

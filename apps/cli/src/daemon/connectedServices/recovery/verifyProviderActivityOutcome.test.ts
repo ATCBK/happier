@@ -1,10 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 
 import { verifyProviderActivityOutcome } from './verifyProviderActivityOutcome';
 
 const RAW_SELECTIONS = JSON.stringify([{
   kind: 'group',
-  serviceId: 'gemini',
+  serviceId: 'happier.agent.gemini/gemini-account',
   groupId: 'pool',
   activeProfileId: 'work',
   fallbackProfileId: 'backup',
@@ -26,12 +29,28 @@ function target(): VerificationTarget {
 }
 
 describe('verifyProviderActivityOutcome', () => {
+  let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
+
+  beforeAll(async () => {
+    runtime = await createAdmittedPluginRuntimeFixture({
+      controller: pluginReloadController,
+      runtimeOptions: {
+        pluginIds: ['happier.agent.gemini', 'happier.agent.antigravity'],
+      },
+    });
+  });
+
+  afterAll(async () => {
+    try { await runtime?.dispose(); }
+    finally { await pluginReloadController.shutdown(); }
+  });
+
   it('accepts exact child-envelope activity through the projected provider adapter', async () => {
     const verifyProviderOutcome = vi.fn(async () => ({
       status: 'verified' as const,
       source: 'gemini_provider_activity',
       targets: [{
-        serviceId: 'gemini',
+        serviceId: 'happier.agent.gemini/gemini-account',
         profileId: 'work',
         groupId: 'pool',
         groupGeneration: 7,
@@ -47,7 +66,7 @@ describe('verifyProviderActivityOutcome', () => {
     })).resolves.toEqual({
       status: 'verified',
       targets: [{
-        serviceId: 'gemini',
+        serviceId: 'happier.agent.gemini/gemini-account',
         profileId: 'work',
         groupId: 'pool',
         groupGeneration: 7,
@@ -60,35 +79,22 @@ describe('verifyProviderActivityOutcome', () => {
     }));
   });
 
-  it('invokes the real projected Gemini, Antigravity, and OhMyPi provider adapters', async () => {
+  it('invokes the real projected Gemini and Antigravity provider adapters', async () => {
     const cases = [
       {
         agentId: 'gemini',
         selections: JSON.parse(RAW_SELECTIONS),
-        expectedServiceIds: ['gemini'],
+        expectedServiceIds: ['happier.agent.gemini/gemini-account'],
       },
       {
         agentId: 'antigravity',
         selections: [{
           kind: 'profile',
-          serviceId: 'gemini',
+          serviceId: 'happier.agent.antigravity/antigravity-account',
           profileId: 'vertex-work',
           credentialRevision: 'csr_abcdefghijklmnopqrstuv',
         }],
-        expectedServiceIds: ['gemini'],
-      },
-      {
-        agentId: 'ohMyPi',
-        selections: [
-          ['openai-codex', 'codex-work', 'csr_abcdefghijklmnopqrstuv'],
-          ['openai', 'openai-work', 'csr_bcdefghijklmnopqrstuvw'],
-          ['claude-subscription', 'claude-work', 'csr_cdefghijklmnopqrstuvwx'],
-          ['anthropic', 'anthropic-work', 'csr_defghijklmnopqrstuvwxy'],
-          ['gemini', 'gemini-work', 'csr_efghijklmnopqrstuvwxyz'],
-        ].map(([serviceId, profileId, credentialRevision]) => ({
-          kind: 'profile', serviceId, profileId, credentialRevision,
-        })),
-        expectedServiceIds: ['openai-codex', 'openai', 'claude-subscription', 'anthropic', 'gemini'],
+        expectedServiceIds: ['happier.agent.antigravity/antigravity-account'],
       },
     ] as const;
 
@@ -123,36 +129,9 @@ describe('verifyProviderActivityOutcome', () => {
     expect(verifyProviderOutcome).not.toHaveBeenCalled();
   });
 
-  it('rejects a mixed-epoch OhMyPi envelope atomically', async () => {
-    const selections = [
-      ['openai-codex', 'codex-work', 'csr_abcdefghijklmnopqrstuv'],
-      ['openai', 'openai-work', 'csr_bcdefghijklmnopqrstuvw'],
-      ['claude-subscription', 'claude-work', 'csr_cdefghijklmnopqrstuvwx'],
-      ['anthropic', 'anthropic-work', 'csr_defghijklmnopqrstuvwxy'],
-      ['gemini', 'gemini-work', 'csr_efghijklmnopqrstuvwxyz'],
-    ].map(([serviceId, profileId, credentialRevision]) => ({
-      kind: 'profile', serviceId, profileId, credentialRevision,
-    }));
-    const registeredRaw = JSON.stringify(selections);
-    const reportedRaw = JSON.stringify(selections.map((selection) => selection.serviceId === 'gemini'
-      ? { ...selection, credentialRevision: 'csr_fghijklmnopqrstuvwxyz2' }
-      : selection));
-
-    await expect(verifyProviderActivityOutcome({
-      target: {
-        ...target(),
-        agentId: 'ohMyPi',
-        connectedServiceSelectionsEnv: { HAPPIER_CONNECTED_SERVICE_SELECTIONS_JSON: registeredRaw },
-        connectedServiceSelections: selections as VerificationTarget['connectedServiceSelections'],
-      },
-      reportedSelectionsEnvRaw: reportedRaw,
-      event: 'assistant_message_end',
-    })).resolves.toEqual({ status: 'unavailable', reason: 'runtime_selection_epoch_mismatch' });
-  });
-
   it('rejects missing revisions and plugin results that do not match the running selection', async () => {
     const withoutRevision = JSON.stringify([{
-      kind: 'profile', serviceId: 'gemini', profileId: 'work',
+      kind: 'profile', serviceId: 'happier.agent.gemini/gemini-account', profileId: 'work',
     }]);
     await expect(verifyProviderActivityOutcome({
       target: {
@@ -175,7 +154,7 @@ describe('verifyProviderActivityOutcome', () => {
         verifyProviderOutcome: async () => ({
           status: 'verified',
           targets: [{
-            serviceId: 'gemini',
+            serviceId: 'happier.agent.gemini/gemini-account',
             profileId: 'work',
             groupId: 'pool',
             groupGeneration: 7,

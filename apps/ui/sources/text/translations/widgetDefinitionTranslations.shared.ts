@@ -30,7 +30,6 @@ export type WidgetDefinitionTranslation = Readonly<{
     refreshed: string;
     refreshFailed: string;
     placedOnHome: string;
-    placedOnBoard: (params: Readonly<{ board: string }>) => string;
     placedOnABoard: string;
     placedInASession: string;
     placedInAProject: string;
@@ -48,9 +47,10 @@ export type WidgetDefinitionTranslation = Readonly<{
     saveMenu: string;
     visualSaveTitle: string;
     visualSaveHint: string;
+    visualShareTitle: string;
     visualSaveMenu: string;
     visualShareMenu: string;
-    visualSavedSnapshot: string;
+    visualSavedCopy: string;
     visualSaveFailed: string;
     saveMenuSubtitle: string;
     saveTitle: string;
@@ -65,7 +65,7 @@ export type WidgetDefinitionTranslation = Readonly<{
     becomesViewerInput: string;
     becomesContextInput: string;
     alsoAddTo: string;
-    alsoAddToNamed: (params: Readonly<{ place: string }>) => string;
+    anotherPlace: string;
     snapshotMenu: string;
     snapshotMenuSubtitle: string;
     snapshotTitle: string;
@@ -110,7 +110,6 @@ export const widgetDefinitionTranslationsEnglish = { en: {
         refreshed: "Refreshed",
         refreshFailed: "Couldn’t refresh it. The last numbers stay.",
         placedOnHome: "Home",
-        placedOnBoard: ({ board }) => `${board} board`,
         placedOnABoard: "A board",
         placedInASession: "A session",
         placedInAProject: "A project",
@@ -128,9 +127,10 @@ export const widgetDefinitionTranslationsEnglish = { en: {
         saveMenu: "Save as your widget…",
         visualSaveTitle: "Save as Artifact",
         visualSaveHint: "Save a copy before sharing. This session keeps its own visual.",
+        visualShareTitle: "Share",
         visualSaveMenu: "Save as Artifact…",
         visualShareMenu: "Share link…",
-        visualSavedSnapshot: "Saved to your account as a snapshot. Creating a public link is a separate choice.",
+        visualSavedCopy: "Saved to your account as an independent copy. Creating a public link is a separate choice.",
         visualSaveFailed: "The copy could not be saved. Your session visual is still here.",
         saveMenuSubtitle: "A copy for Home and your boards",
         saveTitle: "Save as your widget",
@@ -145,7 +145,7 @@ export const widgetDefinitionTranslationsEnglish = { en: {
         becomesViewerInput: "Becomes an input: each place uses your connection",
         becomesContextInput: "Becomes an input: each place chooses its own",
         alsoAddTo: "Also add to",
-        alsoAddToNamed: ({ place }) => `Also add to ${place}`,
+        anotherPlace: "Another place…",
         snapshotMenu: "Post a snapshot to this board…",
         snapshotMenuSubtitle: "Everyone here sees your numbers as of now",
         snapshotTitle: "Post a snapshot for everyone here?",

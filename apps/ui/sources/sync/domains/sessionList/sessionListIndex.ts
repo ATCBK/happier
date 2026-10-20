@@ -59,7 +59,7 @@ export type SessionListIndexItem =
         folderId?: string | null;
         folderDepth?: number;
         /**
-         * Level under a lead in the same list group (the `reportsTo` tree, ORC §3.8): 1 for a direct
+         * Level under a lead in the same list group (the `manager` tree, ORC §3.8): 1 for a direct
          * report drawn under its lead. Absent for a row drawn at its own level.
          */
         reportsDepth?: number;

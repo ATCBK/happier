@@ -4,10 +4,10 @@ import { accountSettingsParse } from '@happier-dev/protocol/account/settings/acc
 import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, ProviderConnectionsCatalogV1Schema,
   ProviderConnectionsRowMutationV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
-import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot, subscribeActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSettings/emptyAccountSettingsHistoryCapture.testkit';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { createCliProviderConnectionsStore, createCliProviderConnectionsStoreForOperation } from './catalogStore';
 import { refreshActiveProviderConnectionsCatalog } from './hydrate';
 import { createCliProviderActionExecuteV1 } from '@/session/actions/cliActionDeps/createCliProviderActionDeps';
@@ -15,8 +15,165 @@ import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecut
 import { CustomProviderTemplateV1Schema } from '@happier-dev/protocol/providers/connections/customTemplateV1';
 import { parseProviderActionRequestV1 } from '@happier-dev/protocol/providers/providerActionsV1';
 import { createCliAccountProviderActionExecuteV1 } from '@/providers/connections/accountActions';
+import * as persistence from '@/persistence';
+import { prepareProviderConnectionsCatalogForCli, refreshProviderConnectionsCatalogForCli } from './hydrate';
+import { logger } from '@/ui/logger';
+import { createProjectSessionRuntimeFixture } from '@/daemon/testkit/projectSessionRuntimeFixture';
+import { runWithRequesterSessionCurrentnessCheckpoint } from "@/daemon/sessionEncryption/requesterCurrentness";
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
 
-afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); resetActiveAccountSettingsSnapshotForTests(); });
+
+it.each(['readCatalogForMutation', 'readCatalog'] as const)('shares requester Home verification within %s and rechecks the next read', async method => {
+  const f = await createProjectSessionRuntimeFixture();
+  await f.bootstrap.ensureAccountSettingsCurrent();
+  const get = vi.mocked(axios.get).getMockImplementation()!;
+  let profileReads = 0;
+  vi.mocked(axios.get).mockImplementation(async (url, options) => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/v1/account/profile') profileReads++;
+    if (path === '/v1/account/entity-rows/provider-connections') return { status: 200, data: {
+      status: 'present', revision: 1, content: { t: 'plain', v: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } } };
+    if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
+    const history = emptyAccountSettingsHistoryCaptureResponse(path);
+    if (history) return history;
+    return get(url, options);
+  });
+  const store = createCliProviderConnectionsStoreForOperation({ operationContext: f.bootstrap.savedSecretOperationContext });
+  let admissionProfileReads = 0;
+  const read = () => method === 'readCatalogForMutation' ? store.readCatalogForMutation()
+    : store.readCatalog({ onReadyBeforeCleanup: async () => { admissionProfileReads = profileReads; } });
+  expect(await read()).toMatchObject({ status: 'ready' });
+  expect(method === 'readCatalog' ? admissionProfileReads : profileReads).toBe(1);
+  f.retire();
+  await expect(read()).rejects.toMatchObject({ code: 'scope-retired' });
+});
+
+it.each([false, true])('rechecks requester authority before Provider source activation inside a read checkpoint (revoked=%s)', async revoked => {
+  const raw = { providerSettingsV1: { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, defaultsByAgentTargetKey: {} } };
+  const f = await createProjectSessionRuntimeFixture({ accountSettings: raw });
+  const get = vi.mocked(axios.get).getMockImplementation()!;
+  let row: unknown = { status: 'absent' };
+  let rowRead = false;
+  let writes = 0;
+  vi.mocked(axios.get).mockImplementation(async (url, options) => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/v1/account/entity-rows/provider-connections') { rowRead = true; return { status: 200, data: row }; }
+    if (path === '/v2/account/settings' && rowRead && revoked) f.retire();
+    if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
+    const history = emptyAccountSettingsHistoryCaptureResponse(path);
+    if (history) return history;
+    return get(url, options);
+  });
+  vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+    if (new URL(String(url)).pathname === '/v1/account/entity-rows/provider-connections') {
+      const mutation = ProviderConnectionsRowMutationV1Schema.parse(body);
+      writes++;
+      row = { status: 'present', revision: 1, content: mutation.content };
+      return { status: 200, data: { status: 'updated', revision: 1, cursor: 1 } };
+    }
+    // Leave optional source cleanup pending after the admitted activation.
+    return { status: 409, data: { success: false, error: 'version-mismatch', currentVersion: 0,
+      currentContent: { t: 'plain', v: raw } } };
+  });
+  const result = await runWithRequesterSessionCurrentnessCheckpoint(async () => {
+    expect(await f.bootstrap.isCurrent()).toBe(true);
+    try { return await createCliProviderConnectionsStoreForOperation({ operationContext: f.bootstrap.savedSecretOperationContext }).readCatalog(); }
+    catch (error) { if (!revoked) throw error; return null; }
+  });
+  expect(rowRead).toBe(true);
+  if (revoked) {
+    expect(writes).toBe(0);
+    expect(result).not.toMatchObject({ status: 'ready' });
+  } else {
+    expect(writes).toBe(1);
+    expect(result).toMatchObject({ status: 'ready', catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 });
+  }
+});
+
+it.each([['cold', false], ['cold', true], ['reobserve', false], ['joined-equal', false], ['joined-reobserve', false], ['repeated-reobserve', false], ['late-reobserve', false]] as const)('admits a newly observed daemon catalog before history cleanup (mode=%s, cancel=%s)', async (mode, cancelCleanup) => {
+  const controller = new AbortController();
+  const revision = mode === 'joined-equal' ? 6 : 7;
+  let observedRevision = revision;
+  const credentials = { token: 'provider-cold-demand', encryption: null };
+  const scopeKey = resolveAccountSettingsScopeKey(credentials);
+  setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
+    settingsVersion: 4, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey,
+    ...(mode !== 'cold' ? { providerConnectionsCatalog: { status: 'ready' as const, revision: 6, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } } : {}),
+  });
+  vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
+  let releaseRow = () => {};
+  let enterRow = () => {};
+  let releaseHistory = () => {};
+  let enterHistory = () => {};
+  const rowReleased = new Promise<void>(resolve => { releaseRow = resolve; });
+  const rowEntered = new Promise<void>(resolve => { enterRow = resolve; });
+  const historyReleased = new Promise<void>(resolve => { releaseHistory = resolve; });
+  const historyEntered = new Promise<void>(resolve => { enterHistory = resolve; });
+  let rowReads = 0;
+  vi.spyOn(axios, 'get').mockImplementation(async url => {
+    const path = new URL(String(url)).pathname;
+    if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+      mode: 'plain', version: 1, settingsVersion: 4, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+    if (path === '/v1/account/entity-rows/provider-connections') {
+      rowReads++;
+      enterRow(); await rowReleased;
+      return { status: 200, data: { status: 'present', revision: observedRevision,
+        content: { t: 'plain', v: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } } };
+    }
+    if (path === '/v2/account/settings') return { status: 200, data: { version: 4, content: { t: 'plain', v: {} } } };
+    if (path === '/v2/account/settings/history') {
+      enterHistory(); await historyReleased;
+      return { status: 200, data: { snapshots: [] } };
+    }
+    const history = emptyAccountSettingsHistoryCaptureResponse(path);
+    if (history) return history;
+    throw new Error(`Unexpected cold Provider HTTP boundary: ${path}`);
+  });
+  let admitted: Awaited<ReturnType<typeof prepareProviderConnectionsCatalogForCli>> | undefined;
+  const firstRefresh = mode === 'joined-equal' || mode === 'joined-reobserve'
+    ? refreshActiveProviderConnectionsCatalog({ credentials }) : undefined;
+  if (firstRefresh) await rowEntered;
+  const read = mode === 'reobserve' || mode === 'joined-reobserve' || mode === 'repeated-reobserve' || mode === 'late-reobserve'
+    ? refreshProviderConnectionsCatalogForCli : prepareProviderConnectionsCatalogForCli;
+  const demand = read({ expectedScopeKey: scopeKey, signal: controller.signal })
+    .then(catalog => { admitted = catalog; return catalog; });
+  await rowEntered;
+  const publications: number[] = [];
+  const unsubscribe = subscribeActiveAccountSettingsSnapshot((_previous, next) => {
+    if (next?.providerConnectionsCatalog?.status === 'ready') publications.push(next.providerConnectionsCatalog.revision);
+  });
+  const readers = mode === 'repeated-reobserve' ? Array.from({ length: 12 }, () =>
+    refreshProviderConnectionsCatalogForCli({ expectedScopeKey: scopeKey })) : [];
+  let completed = false;
+  const maintenance = (firstRefresh ?? refreshActiveProviderConnectionsCatalog({ credentials })).then(() => { completed = true; });
+  try {
+    releaseRow();
+    await historyEntered;
+    await vi.waitFor(() => expect(admitted).toMatchObject({ status: 'ready', revision }));
+    expect(completed).toBe(false);
+    if (mode === 'late-reobserve') {
+      observedRevision = 8;
+      readers.push(...Array.from({ length: 12 }, () => refreshProviderConnectionsCatalogForCli({ expectedScopeKey: scopeKey })));
+    }
+    if (mode === 'repeated-reobserve' || mode === 'late-reobserve') {
+      let settled = false;
+      const resolved = Promise.all(readers).then(catalogs => { settled = true; return catalogs; });
+      await vi.waitFor(() => expect(settled).toBe(true));
+      for (const catalog of await resolved) expect(catalog).toMatchObject({ status: 'ready', revision: observedRevision });
+      expect(publications.filter(value => value === revision)).toEqual([revision]);
+    }
+    if (cancelCleanup) controller.abort();
+  } finally { releaseRow(); releaseHistory(); await demand; await maintenance; await Promise.all(readers); unsubscribe(); }
+  expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog).toMatchObject({ status: 'ready', revision: observedRevision });
+  if (mode === 'joined-equal') {
+    expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog).toMatchObject({ cleanup: { status: 'complete' } });
+  }
+  // One catalog read plus the history owner's two destination-authority checks.
+  // Cancelled history stops before the last authority check.
+  expect(rowReads).toBe(mode === 'late-reobserve' ? 6 : cancelCleanup ? 2 : 3);
+});
 
 it('refuses a model list from a credential retired after declaration admission without refreshing projections', async () => {
   const credentials = { token: 'provider-retiring-reader', encryption: null };
@@ -53,7 +210,7 @@ it('refuses a model list from a credential retired after declaration admission w
     { surface: 'cli' })).rejects.toMatchObject({ code: 'scope-retired' });
 });
 
-it.each(['updated', 'uninitialized', 'conflict', 'outcome_unknown'] as const)('authors a Provider through its captured Account without a machine: %s', async outcome => {
+it.each(['updated', 'uninitialized', 'conflict', 'rollback', 'outcome_unknown'] as const)('authors a Provider through its captured Account without a machine: %s', async outcome => {
   const credentials = { token: 'provider-account-authoring', encryption: null };
   const retained = ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
     connections: [{ v: 1, id: 'pc_retained', source: { kind: 'contribution', contributionKey: 'legacy.provider/source' },
@@ -97,6 +254,7 @@ it.each(['updated', 'uninitialized', 'conflict', 'outcome_unknown'] as const)('a
     submitted.push(mutation);
     expect(mutation.expectedRevision).toBe(present ? revision : 'absent');
     if (outcome === 'conflict') return { status: 409, data: { status: 'conflict', revision: revision + 1 } };
+    if (outcome === 'rollback') return { status: 503, data: { error: 'database_transaction_conflict_exhausted', statusCode: 503 } };
     if (mutation.content?.t !== 'plain') throw new Error('Plain Account must keep a Plain catalog');
     catalog = mutation.content.v;
     present = true;
@@ -104,7 +262,7 @@ it.each(['updated', 'uninitialized', 'conflict', 'outcome_unknown'] as const)('a
     if (outcome === 'outcome_unknown') throw new Error('Lost acknowledgement after durable commit');
     return { status: 200, data: { status: 'updated', revision, cursor: revision } };
   });
-  const executor = createActionExecutor({ providerActionExecute: createCliProviderActionExecuteV1({ credentials,
+  const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), providerActionExecute: createCliProviderActionExecuteV1({ credentials,
     operationContext, serverId: 'provider-home', serverHttpBaseUrl: 'https://provider-authoring-home.invalid',
     callMachineAction: async () => { throw new Error('Account Provider authoring must not call a machine'); } }) });
   const context = { surface: 'cli' as const, serverId: 'provider-home', authority: 'present_user' as const, actionCaller: { kind: 'host' as const } };
@@ -118,6 +276,12 @@ it.each(['updated', 'uninitialized', 'conflict', 'outcome_unknown'] as const)('a
     connectionId: 'pc_account', template, savedSecretId: null, enable: false });
   expect(submitted, JSON.stringify(result)).toHaveLength(outcome === 'uninitialized' ? 2 : 1);
   expect(getActiveAccountSettingsSnapshot()?.scopeKey).toBe('unrelated-ambient-account');
+  if (outcome === 'rollback') {
+    expect(result).toMatchObject({ ok: false, errorCode: 'provider_catalog_unavailable',
+      details: { code: 'provider_catalog_unavailable', retryable: true, action: 'retry' } });
+    expect(catalog.connections).toEqual([]);
+    return;
+  }
   if (outcome !== 'updated' && outcome !== 'uninitialized') {
     expect(result).toMatchObject({ ok: false, errorCode: `provider_catalog_${outcome}` });
     expect(catalog.connections).toHaveLength(outcome === 'conflict' ? 0 : 1);
@@ -128,7 +292,7 @@ it.each(['updated', 'uninitialized', 'conflict', 'outcome_unknown'] as const)('a
     expectedRevision: 0, displayName: 'Renamed Account Provider', displayNameMode: 'custom' })).toMatchObject({ ok: true });
   expect(await execute('providers.models.manual.add', { action: 'manualAdd', connectionId: 'pc_account',
     expectedConnectionRevision: 1, models: [{ id: 'manual-model' }] })).toMatchObject({ ok: true });
-  expect(catalog.manualModelsByConnectionId.pc_account).toMatchObject([{ id: 'manual-model' }]);
+  expect(catalog.manualModelsByConnectionId[ProviderConnectionIdSchema.parse('pc_account')]).toMatchObject([{ id: 'manual-model' }]);
   expect(await execute('providers.connections.describe', { connectionId: 'pc_account' })).toMatchObject({
     ok: true, result: { status: 'success', connections: [{ connectionId: 'pc_account', displayName: 'Renamed Account Provider' }] } });
   expect(await execute('providers.connections.delete', { action: 'delete', connectionId: 'pc_account' })).toMatchObject({ ok: true });
@@ -245,6 +409,7 @@ it('opens keyless Plain Provider rows and refuses a late row from a retired Acco
 });
 
 it('reads retained row authority in its issued invocation Home without activating an absent catalog', async () => {
+  const phases = vi.spyOn(logger, 'infoFile').mockImplementation(() => {});
   const credentials = { token: 'provider-invocation-owner', encryption: null };
   const snapshot = { source: 'network' as const, settings: accountSettingsParse({}), rawSettings: {},
     settingsVersion: 4, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) };
@@ -262,6 +427,11 @@ it('reads retained row authority in its issued invocation Home without activatin
   expect(await store.readRow()).toEqual({ status: 'absent' });
   row = { status: 'deleted', revision: 11 };
   expect(await store.readRow()).toEqual(row);
+  const records = phases.mock.calls.filter(([message]) => message === '[PROVIDER] Catalog phase');
+  expect(records).toContainEqual(['[PROVIDER] Catalog phase', expect.objectContaining({ phase: 'row', status: 'completed' })]);
+  expect(records).toContainEqual(['[PROVIDER] Catalog phase', expect.objectContaining({ phase: 'account_currentness', status: 'completed' })]);
+  expect(JSON.stringify(records)).not.toContain(credentials.token);
+  expect(JSON.stringify(records)).not.toContain(operationContext.serverHttpBaseUrl);
   expect(post).not.toHaveBeenCalled();
   expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog).toBeUndefined();
   current = false;
@@ -313,7 +483,7 @@ it('reopens an in-flight catalog read after a source visibility mutation before 
     serverHttpBaseUrl: 'https://pending-provider-home.invalid',
     callMachineAction: async () => { throw new Error('Visibility must not consult a daemon'); } });
   const action = execute({ actionId: 'providers.models.source_visibility.set', input: {
-    action: 'setConnectionVisibility', connectionId: 'pc_a', shown: false,
+    action: 'setConnectionVisibility', connectionId: ProviderConnectionIdSchema.parse('pc_a'), shown: false,
   } }, { surface: 'cli', serverId: 'provider-home' });
   await mutationCommitted;
   release?.();

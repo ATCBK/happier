@@ -23,6 +23,7 @@ import {
     type StructuredMessageActionSelection,
 } from './DeclarativeStructuredMessageRenderer';
 import { parseHappierMetaEnvelope } from './happierMetaEnvelope';
+import { projectReviewToolMessage } from '@/components/sessions/reviews/messages/projectReviewToolMessage';
 import type { StructuredMessageRendererParams } from './structuredMessageRegistry';
 import {
     findBuiltInStructuredMessageEntry,
@@ -34,6 +35,9 @@ import { projectDeclarativeStructuredFindText } from '@/components/plugins/share
 const NON_STRUCTURED_HAPPIER_META_KINDS = new Set([
     'attachments.v1',
     'session_media.v1',
+    // SCM result metadata belongs to the comparison surface; preserve its
+    // host-authored transcript notice through the ordinary prose path.
+    'scm_diff_summary.v1',
 ]);
 const FAIL_CLOSED_STRUCTURED_MESSAGE_INTERACTION = deriveTranscriptInteraction({ kind: 'public' });
 
@@ -62,6 +66,7 @@ function isUnavailableStructuredTranscriptRecord(
 
 /** One admission/selection owner for both the rendered card and pre-mount Find. */
 function resolveStructuredMessagePresentation(message: Message, debugInformationEnabled = false) {
+    if (message.kind === 'tool-call') message = projectReviewToolMessage(message);
     if (hasStructuredPresentation(message)) return { kind: 'persisted' as const, message };
     if (isUnavailableStructuredTranscriptRecord(message, debugInformationEnabled)) return { kind: 'unavailable' as const };
     const envelope = parseHappierMetaEnvelope(message.meta);

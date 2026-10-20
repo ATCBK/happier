@@ -65,7 +65,7 @@ describe("Session-filtered changes replay (SQLite)", () => {
         const [a, b] = sessions;
         const mark = (kind: "session" | "share" | "automation", entityId: string, hint: unknown = null) => inTx((tx) => markAccountChanged(tx, {
             accountId: account.id, kind, entityId, hint,
-        }));
+        })).then(publication => publication.resolveCursor());
         const revisionCursor = await mark("session", a!.id, { updatedMessageSeq: 7, updatedMessageId: "message-revised" });
         const otherCursor = await mark("session", b!.id, { updatedMessageSeq: 2, updatedMessageId: "other-message" });
         // Same entity id in another namespace must not enter the Session read.

@@ -5,7 +5,6 @@ import { Platform, View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 
 import {
-    HappierField,
     HappierFormActions,
     HappierPressable,
     HappierScreen,
@@ -44,6 +43,9 @@ import {
 import { PluginSurfaceInteractionBoundary } from '@/components/plugins/shared/PluginSurfaceInteractionBoundary';
 import { PluginSettingDaemonSecretField } from '@/components/settings/plugins/detail/PluginDetailGenericSettingsSection';
 import { Icon, ICON_SIZE } from '@/components/ui/icons/Icon';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
+import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
+import { SchemaFieldRow } from '@/components/settings/schemaFields/SchemaFieldRow';
 import {
     createDeclarativeTextResolver,
     readDeclarativeRecord as record,
@@ -54,6 +56,7 @@ import {
 } from '@/components/plugins/shared/declarativeNodes';
 import { resolveMinimumInteractiveTargetSize } from '@/components/ui/interactiveTargetSize';
 import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
+import { useMountedPluginSettingsActionAdapter } from '@/components/settings/plugins/model/useMountedPluginSettingsActionAdapter';
 import { useHostActivelyViewed } from '@/utils/runtime/useHostActivelyViewed';
 import {
     type ScopedPluginSettingsDaemonTarget,
@@ -90,7 +93,7 @@ import {
     resolvePluginSurfaceDestinationIcon,
     resolvePluginSurfaceDestinationLabel,
 } from './pluginSurfaceDestinations';
-import { projectPluginUiHostPalette, projectPluginUiTheme, readPluginUiHostTypography } from './pluginUiThemeProjection';
+import { projectPluginUiHostPalette, readPluginUiHostTypography, usePluginUiTheme } from './pluginUiThemeProjection';
 import { getPreferredLanguage, t } from '@/text';
 import { createPluginLocalizedTextResolver } from '@/sync/domains/plugins/ui/i18n';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -108,6 +111,7 @@ import {
     type AdmittedDeclarativeSetting,
 } from './declarativeStaticModel';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
+import { useDeclarativeWidgetSnapshotCapture, type WidgetSnapshotCapture } from '@/components/widgets/definitions/widgetSnapshotCapture';
 
 /** Private presentation projection; the public environment ABI stays author-safe. */
 const HappierUiEnvironmentProviderWithPresentationActivity: React.ComponentType<
@@ -602,7 +606,8 @@ export function DeclarativePluginSurface(props: Readonly<{
     openSurface: BoundPluginSurfaceController['openSurface'];
     /** Its factual installation result; local navigation may remain available offline. */
     openSurfaceAvailable: boolean;
-    authorityGeneration: number;
+    /** Exact numeric catalog or opaque mounted-source generation; used as identity only. */
+    authorityGeneration: number | string;
     /** Opaque shared lifetime fencing mounted Account and daemon Settings UI state. */
     accountLifetime?: ActiveServerAccountScopeLifetime | null;
     /** The host-created Data client for this same captured Account lifetime. */
@@ -615,6 +620,10 @@ export function DeclarativePluginSurface(props: Readonly<{
         presentation: PluginSurfaceStatePresentation;
         action?: SurfaceStateAction;
     }> | null;
+    /** The whole-document Resource's facts for the exact rendered model. */
+    documentSourceSnapshot?: Readonly<{ current: boolean; digest?: string; refresh: () => Promise<void> }>;
+    /** Recheck the mounted authority when capture is requested, before disclosure. */
+    captureIsCurrent?: () => boolean;
     /**
      * The one live target-local presentation bridge. A destination parent
      * supplies it; an embedded child intentionally does not, so initial
@@ -641,7 +650,7 @@ export function DeclarativePluginSurface(props: Readonly<{
     const hostActivelyViewed = useHostActivelyViewed();
     const widgetPresentation = useWidgetPresentation();
     const activeServer = useActiveServerSnapshot();
-    const projectedPresentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const projectedPresentationTheme = usePluginUiTheme(theme);
     const presentationTheme = React.useMemo(
         () => resolveHappierUiPresentationTheme(projectedPresentationTheme, props.contrast ?? 'normal'),
         [projectedPresentationTheme, props.contrast],
@@ -670,6 +679,16 @@ export function DeclarativePluginSurface(props: Readonly<{
     const occurrenceId = admittedModel?.occurrenceId ?? null;
     const qualifiedId = admittedModel?.qualifiedId ?? props.pluginId;
     const visible = admittedModel !== null;
+    const readSnapshot = React.useMemo(() => root ? (): WidgetSnapshotCapture => ({
+        document: { version: 1, root },
+        frozenByPath: new Map(),
+        digests: props.documentSourceSnapshot?.digest ? [props.documentSourceSnapshot.digest] : [],
+        current: props.interactionEnabled && props.accountLifetime?.isCurrent() === true
+            && props.captureIsCurrent?.() !== false
+            && (props.documentSourceSnapshot?.current ?? true),
+        refresh: async () => { await props.documentSourceSnapshot?.refresh(); },
+    }) : null, [root, props.interactionEnabled, props.accountLifetime, props.documentSourceSnapshot, props.captureIsCurrent]);
+    useDeclarativeWidgetSnapshotCapture(readSnapshot);
     const collectionCommandCatalog: DeclarativeCollectionCommandCatalog = admittedModel
         ? admittedModel
         : EMPTY_DECLARATIVE_COLLECTION_COMMAND_CATALOG;
@@ -726,6 +745,8 @@ export function DeclarativePluginSurface(props: Readonly<{
         enabled: visible && accountSettingsEnabled,
         adapter: scopedPluginSettingsAdapter,
     });
+    const mountedAccountSecretAdapter = useMountedPluginSettingsActionAdapter({ adapter: scopedPluginAccountSecretSettingsAdapter,
+        accountLifetime: props.accountLifetime ?? null, target: accountTarget });
     const accountSecretSettings = useScopedPluginSettingsProjection({
         pluginId: props.pluginId,
         scope: ACCOUNT_SETTINGS_SCOPE,
@@ -735,7 +756,7 @@ export function DeclarativePluginSurface(props: Readonly<{
         sourceLifetimeIdentity: settingsSourceLifetimeIdentity,
         perActiveServerIdentityId: null,
         enabled: visible && accountSettingsEnabled,
-        adapter: scopedPluginAccountSecretSettingsAdapter,
+        adapter: mountedAccountSecretAdapter,
     });
     const daemonSettings = useScopedPluginSettingsProjection({
         pluginId: props.pluginId,
@@ -1051,7 +1072,11 @@ export function DeclarativePluginSurface(props: Readonly<{
         };
         const settingsState = scopedSettings?.state ?? EMPTY_DECLARATIVE_SCOPED_SETTINGS_STATE;
         const label = localized(node.label);
-        const description = localized(node.description) || undefined;
+        // What the setting does is declared once, on the setting; the field may restate it.
+        const declaredDescription = record(setting?.descriptor)?.description;
+        const description = localized(node.description)
+            || (typeof declaredDescription === 'string' ? declaredDescription : '')
+            || undefined;
         const value = binding?.secret
             ? readFieldValue(settingsState.drafts, settingsState.values, fieldId)
             : fieldModel?.draft;
@@ -1065,13 +1090,14 @@ export function DeclarativePluginSurface(props: Readonly<{
             || !settingsState.ready
             || settingsState.writePending
             || (!binding.secret && fieldModel === null);
-        const fieldProps = {
-            label,
-            ...(description ? { description } : {}),
-            disabled,
-            theme: presentationTheme,
+        // Every declared setting is one Happier settings row: label and description at the start,
+        // the control at the end (a switch) or beneath (a field with its actions).
+        const settingRowProps = {
             testID: `${fieldTestID}:container`,
+            title: label,
+            hint: description,
         } as const;
+        const stackedControlStyle = { gap: presentationTheme.spacing.small } as const;
 
         if (binding?.scope === 'daemon' && binding.secret) {
             const declaredField = projectDeclarativeDeclaredField(node, binding, localized);
@@ -1099,7 +1125,8 @@ export function DeclarativePluginSurface(props: Readonly<{
                             opacity: state.disabled ? 0.5 : state.pressed ? motionTokens.press.opacitySubtle : 1,
                         });
                         return (
-                            <HappierField {...fieldProps} disabled={secretDisabled}>
+                            <SchemaFieldRow {...settingRowProps} layout="stacked" disabled={secretDisabled} control={(
+                            <View style={stackedControlStyle}>
                                 <HappierTextField
                                     testID={fieldTestID}
                                     label={label}
@@ -1148,7 +1175,8 @@ export function DeclarativePluginSurface(props: Readonly<{
                                         theme={presentationTheme}
                                     />
                                 ) : null}
-                            </HappierField>
+                            </View>
+                            )} />
                         );
                     }}
                 />
@@ -1157,7 +1185,18 @@ export function DeclarativePluginSurface(props: Readonly<{
 
         if (control?.kind === 'toggle') {
             return (
-                <HappierField key={nodePath} {...fieldProps}>
+                <SchemaFieldRow
+                    key={nodePath}
+                    {...settingRowProps}
+                    layout="inline"
+                    disabled={disabled}
+                    onPress={disabled ? undefined : () => {
+                        void fieldModel?.commit({
+                            draft: value !== true,
+                            ...(writeCurrentness ? { isCurrent: writeCurrentness } : {}),
+                        });
+                    }}
+                    control={(
                     <HappierToggle
                         testID={fieldTestID}
                         label={label}
@@ -1172,26 +1211,57 @@ export function DeclarativePluginSurface(props: Readonly<{
                             });
                         }}
                     />
-                </HappierField>
+                    )}
+                />
             );
         }
 
         if (control?.kind === 'select') {
             const options = (Array.isArray(control.options) ? control.options : [])
-                .flatMap((optionValue, index): HappierSelectOption<PluginJsonValueV2>[] => {
+                .flatMap((optionValue, index): (HappierSelectOption<PluginJsonValueV2> & Readonly<{ id: string }>)[] => {
                     const option = record(optionValue);
                     const parsedValue = PluginJsonValueV2Schema.safeParse(option?.value);
                     if (!option || !parsedValue.success) return [];
                     return [{
+                        id: String(index),
                         value: parsedValue.data,
                         label: localized(option.label),
                         testID: `${fieldTestID}:option:${index}`,
                     }];
                 });
             const parsedValue = PluginJsonValueV2Schema.safeParse(value);
+            const commitChoice = (nextValue: PluginJsonValueV2) => {
+                void fieldModel?.commit({
+                    draft: nextValue,
+                    ...(writeCurrentness ? { isCurrent: writeCurrentness } : {}),
+                });
+            };
+            // Two to four short options are one segmented choice beside the label, like every
+            // Happier setting; more stay a list of choices beneath it.
+            if (options.length >= 2 && options.length <= 4) {
+                const selected = parsedValue.success
+                    ? options.find((option) => sameStrictJsonValue(option.value, parsedValue.data))
+                    : undefined;
+                return (
+                    <SegmentedChoiceItem<string>
+                        key={nodePath}
+                        testID={settingRowProps.testID}
+                        title={label}
+                        subtitle={description}
+                        options={options.map((option) => ({ id: option.id, label: option.label }))}
+                        value={selected?.id ?? ''}
+                        disabled={disabled}
+                        testIDPrefix={`${fieldTestID}:option`}
+                        onChange={(id) => {
+                            const option = options.find((candidate) => candidate.id === id);
+                            if (option && !disabled) commitChoice(option.value);
+                        }}
+                    />
+                );
+            }
 
             return (
-                <HappierField key={nodePath} {...fieldProps}>
+                <SchemaFieldRow key={nodePath} {...settingRowProps} layout="stacked" disabled={disabled} control={(
                     <HappierSelect<PluginJsonValueV2>
                         testID={fieldTestID}
                         label={label}
@@ -1202,15 +1272,9 @@ export function DeclarativePluginSurface(props: Readonly<{
                         theme={presentationTheme}
                         isEqual={sameStrictJsonValue}
                         keyForOption={(_option, index) => `${nodePath}:${index}`}
-                        onChange={(next) => {
-                            const nextValue = next as PluginJsonValueV2;
-                            void fieldModel?.commit({
-                                draft: nextValue,
-                                ...(writeCurrentness ? { isCurrent: writeCurrentness } : {}),
-                            });
-                        }}
+                        onChange={(next) => { commitChoice(next as PluginJsonValueV2); }}
                     />
-                </HappierField>
+                )} />
             );
         }
 
@@ -1244,7 +1308,8 @@ export function DeclarativePluginSurface(props: Readonly<{
                     : readFieldValue(settingsState.drafts, settingsState.values, fieldId) ?? ''
                 : fieldModel?.draft ?? '';
         return (
-            <HappierField key={nodePath} {...fieldProps}>
+            <SchemaFieldRow key={nodePath} {...settingRowProps} layout="stacked" disabled={disabled} control={(
+            <View style={stackedControlStyle}>
                 <HappierTextField
                     testID={fieldTestID}
                     label={label}
@@ -1324,7 +1389,8 @@ export function DeclarativePluginSurface(props: Readonly<{
                         </HappierText>
                     </HappierPressable>
                 </HappierFormActions>
-            </HappierField>
+            </View>
+            )} />
         );
     };
 
@@ -1385,6 +1451,11 @@ export function DeclarativePluginSurface(props: Readonly<{
         useSharedSpinner: props.useSharedSpinner,
         resolveAction,
         renderField,
+        renderFieldGroup: ({ key, title, description, children }) => (
+            <ItemGroup key={key} testID={`plugin-declarative-settings-section:${key}`} title={title} description={description}>
+                {children}
+            </ItemGroup>
+        ),
         renderCollectionList,
         renderTargetedSurface,
         renderWidgetArea(node) {

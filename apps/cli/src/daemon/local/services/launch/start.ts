@@ -233,7 +233,10 @@ export function createLocalServiceLauncherStartTarget<TDeclaration = unknown>(
             : emptyRequestBoundSnapshot(request, now());
         return response({
             request,
-            status: outcome.status,
+            // A denial above precedes Service establishment. Once the native
+            // starter is invoked, failure may retain cleanup custody; preserve
+            // that distinction for Move and other callers observing Start.
+            status: outcome.status === 'denied' ? 'failed' : outcome.status,
             ...(outcome.status === 'succeeded' ? {} : { reasonCode: outcome.reasonCode }),
             ...(outcome.status !== 'succeeded' && outcome.prerequisite ? { prerequisite: outcome.prerequisite } : {}),
             ...(outcome.status !== 'succeeded' && outcome.establishmentFailure ? { establishmentFailure: outcome.establishmentFailure } : {}),

@@ -19,7 +19,7 @@ import {
 } from '@/daemon/connectedServices/connectedServiceChildEnvironment';
 import { HAPPIER_PROVIDER_BINDING_LAUNCH_MATERIALIZATION_V1_ENV_KEY } from '@/plugins/runtime/providerBindings/handoff';
 import { HAPPIER_SESSION_CREATE_ORIGIN_ENV_KEY } from '@/session/shared/sessionCreateOrigin';
-import { HAPPIER_SESSION_CREATE_REPORTS_TO_ENV_KEY } from '@/session/shared/sessionCreateReportsTo';
+import { HAPPIER_SESSION_CREATE_MANAGER_ENV_KEY } from '@/session/shared/sessionCreateManager';
 import { HAPPIER_SESSION_CREATE_ROLES_ENV_KEY } from '@/session/shared/sessionCreateRoles';
 
 /** Daemon-issued, one-shot correlation for a terminal startup result. */
@@ -63,7 +63,7 @@ export const SYSTEM_SESSION_CONTROL_ENV_KEYS = Object.freeze([
   HAPPIER_AGENT_RUNTIME_DAEMON_SERVICE_AUTHORITY_FILE_ENV_KEY,
   HAPPIER_SESSION_STARTUP_SPAWN_NONCE_ENV_KEY,
   HAPPIER_SESSION_CREATE_ORIGIN_ENV_KEY,
-  HAPPIER_SESSION_CREATE_REPORTS_TO_ENV_KEY,
+  HAPPIER_SESSION_CREATE_MANAGER_ENV_KEY,
   HAPPIER_SESSION_CREATE_ROLES_ENV_KEY,
   'TMUX_SESSION_NAME',
   'TMUX_TMPDIR',

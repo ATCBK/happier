@@ -1,279 +1,269 @@
-import * as React from 'react';
-import renderer, { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
-import { createStorageModuleStub } from '@/dev/testkit/mocks/storage';
+import 'fake-indexeddb/auto';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { ExecutionRunListResponseSchema } from '@happier-dev/protocol/execution/runs/responseSchemas';
+import { SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import {
+  act,
+  createDeferred,
+  createMachineFixture,
+  createPlainSessionByIdResponseFixture,
+  createSessionFixture,
+  createSessionMessagesFixture,
+  createToolCallMessageFixture,
+  renderHook,
+  standardCleanup,
+} from '@/dev/testkit';
+import { initializeRealAppRuntimeForTests } from '@/dev/testkit/harness/realAppRuntimeHarness';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { buildSessionListRenderableFromSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import type { Session } from '@/sync/domains/state/storageTypes';
 
-import { installServerHookCommonModuleMocks } from './serverHookModuleTestHelpers';
+// Install SDK ports before importing the real app-entry module graph. Collection
+// loads ordinary modules; the runtime bridge and Account lifetimes remain below.
+const network = await installSessionOpsNetworkBoundary();
+await import('@/sync/syncEngine');
+let storage: typeof import('@/sync/domains/state/storage')['storage'];
+let previous: ReturnType<typeof storage.getState>;
+let home: Awaited<ReturnType<typeof network.addHome>>;
+const sessionReads = new Map<string, Session>();
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+const historicalRuns = ExecutionRunListResponseSchema.parse({ runs: [{
+  runId: 'run-1', callId: 'call-1', sidechainId: 'call-1', intent: 'delegate',
+  backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
+  permissionMode: 'read_only', retentionPolicy: 'ephemeral', runClass: 'bounded',
+  ioMode: 'request_response', status: 'succeeded', startedAtMs: 1,
+}] });
 
-const featureState = vi.hoisted(() => ({ enabled: true }));
-const backendsState = vi.hoisted(() => ({
-  backendsByServerId: new Map<string, Record<string, unknown> | null>(),
-}));
-const messagesState = vi.hoisted(() => ({ messages: [] as any[] }));
-const sessionState = vi.hoisted(() => ({
-  preferredServerId: 'server-1' as string | null,
-  session: { active: true } as any,
-}));
-const activeServerState = vi.hoisted(() => {
-  const listeners = new Set<(snapshot: { serverId: string; serverUrl: string; generation: number }) => void>();
-
-  return {
-    snapshot: { serverId: 'server-a', serverUrl: 'https://a.example.test', generation: 1 },
-    listeners,
-    setSnapshot(next: { serverId: string; serverUrl: string; generation: number }) {
-      activeServerState.snapshot = next;
-      for (const listener of Array.from(listeners)) {
-        listener(next);
-      }
-    },
-    reset() {
-      activeServerState.snapshot = { serverId: 'server-a', serverUrl: 'https://a.example.test', generation: 1 };
-      listeners.clear();
-    },
-  };
-});
-const listRunsSpy = vi.hoisted(() => vi.fn());
-const featureScopeSpy = vi.hoisted(() => vi.fn());
-const usePreferredServerIdForSessionSpy = vi.hoisted(() =>
-  vi.fn((_sessionId: string, fallbackServerId?: string | null) => {
-    const normalizedFallback = typeof fallbackServerId === 'string' ? fallbackServerId.trim() : '';
-    return sessionState.preferredServerId ?? (normalizedFallback || activeServerState.snapshot.serverId);
-  }),
-);
-
-vi.mock('@/hooks/server/useFeatureEnabled', () => ({
-  useFeatureEnabled: (_featureId: string, scope?: unknown) => {
-    featureScopeSpy(scope);
-    return featureState.enabled;
-  },
-}));
-
-vi.mock('@/hooks/server/useExecutionRunsBackendsForSession', () => ({
-  useExecutionRunsBackendsForSession: (_sessionId: string, serverId?: string | null) =>
-    (serverId ? backendsState.backendsByServerId.get(serverId) ?? null : null),
-}));
-
-installServerHookCommonModuleMocks({
-  storage: async () => createStorageModuleStub({
-    useSession: () => sessionState.session,
-    useSessionMessages: () => ({ messages: messagesState.messages, isLoaded: true }),
-  }),
+beforeAll(async () => {
+  await initializeRealAppRuntimeForTests();
+  ({ storage } = await import('@/sync/domains/state/storage'));
 });
 
-vi.mock('@/sync/ops/sessionExecutionRuns', () => ({
-  sessionExecutionRunList: (...args: unknown[]) => listRunsSpy(...args),
-}));
+beforeEach(async () => {
+  network.resetRequests();
+  previous = storage.getState();
+  sessionReads.clear();
+  home = await network.addHome('https://execution-support.test', 'account-execution-support');
+  const { setActiveServer } = await import('@/sync/domains/server/serverRuntime');
+  await setActiveServer({ serverId: home.id });
+  storage.setState({
+    sessions: {}, sessionMessages: {}, machines: {}, machineListByServerId: {},
+    sessionListRowsByServerId: {}, sessionListIndexByServerId: {},
+    ordinarySessionListMembershipByServerId: {}, concurrentSessionListCacheByServerId: {},
+    settings: { ...previous.settings, experiments: true, featureToggles: { 'execution.runs': true } },
+  });
+  network.respond(SESSION_RPC_METHODS.EXECUTION_RUN_LIST, { runs: [] });
+  network.setHttpResponder(async input => {
+    const url = new URL(String(input));
+    const match = /^\/v2\/sessions\/([^/]+)$/.exec(url.pathname);
+    if (!match) return null;
+    const session = sessionReads.get(JSON.stringify([url.origin, decodeURIComponent(match[1]!)]));
+    return session ? Response.json(createPlainSessionByIdResponseFixture(session)) : null;
+  });
+});
 
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/usePreferredServerIdForSession', () => ({
-  usePreferredServerIdForSession: (sessionId: string, fallbackServerId?: string | null) =>
-    usePreferredServerIdForSessionSpy(sessionId, fallbackServerId),
-}));
+afterEach(async () => {
+  await standardCleanup();
+  const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
+  serverScopedRpcSocketPool.resetForTests();
+  storage.setState(previous, true);
+});
 
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-  getActiveServerSnapshot: () => activeServerState.snapshot,
-  subscribeActiveServer: (listener: (snapshot: { serverId: string; serverUrl: string; generation: number }) => void) => {
-    activeServerState.listeners.add(listener);
-    return () => {
-      activeServerState.listeners.delete(listener);
-    };
-  },
-}));
+afterAll(async () => { await network?.dispose(); });
 
-async function renderHarness(sessionId = 'session-1', sessionServerId?: string | null): Promise<{
-  getValue: () => boolean;
-  rerenderSync: (nextSessionId: string) => void;
-  unmount: () => void;
-}> {
-  let current = false;
+function seedSession(id: string, server = home, options: Readonly<{ direct?: boolean; machineId?: string }> = {}) {
+  const session = createSessionFixture({
+    id, serverId: server.id, active: true,
+    metadata: { path: '/repo', host: 'tester.local', ...(options.machineId ? { machineId: options.machineId } : {}) },
+  });
+  sessionReads.set(JSON.stringify([new URL(server.serverUrl).origin, id]), session);
+  const state = storage.getState();
+  storage.setState({
+    ...(options.direct === false ? {} : { sessions: { ...state.sessions, [id]: session } }),
+    sessionListRowsByServerId: {
+      ...state.sessionListRowsByServerId,
+      [server.id]: { ...state.sessionListRowsByServerId[server.id], [id]: buildSessionListRenderableFromSession(session) },
+    },
+    ordinarySessionListMembershipByServerId: {
+      ...state.ordinarySessionListMembershipByServerId,
+      [server.id]: [...new Set([...(state.ordinarySessionListMembershipByServerId[server.id] ?? []), id])],
+    },
+  });
+  return session;
+}
+
+function listRequests() {
+  return network.requests.filter(request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_LIST);
+}
+
+async function renderSupport(sessionId: string, serverId?: string) {
   const { useSessionExecutionRunsSupported } = await import('./useSessionExecutionRunsSupported');
+  const initialProps: { sessionId: string; serverId?: string } = { sessionId, serverId };
+  return renderHook(
+    (props: { sessionId: string; serverId?: string }) => useSessionExecutionRunsSupported(props.sessionId, props.serverId),
+    { initialProps },
+  );
+}
 
-  function Harness(props: Readonly<{ sessionId: string }>) {
-    current = (useSessionExecutionRunsSupported as unknown as (sessionId: string, serverId?: string | null) => boolean)(
-      props.sessionId,
-      sessionServerId,
-    );
-    return null;
-  }
+async function expectSupport(hook: Awaited<ReturnType<typeof renderSupport>>, value: boolean) {
+  await waitForHomeGovernance(() => { expect(hook.getCurrent()).toBe(value); });
+}
 
-  let root: renderer.ReactTestRenderer | null = null;
-  root = (await renderScreen(React.createElement(Harness, { sessionId }))).tree;
-
-  return {
-    getValue: () => current,
-    rerenderSync: (nextSessionId: string) => {
-      act(() => {
-        root!.update(React.createElement(Harness, { sessionId: nextSessionId }));
-      });
-    },
-    unmount: () => {
-      if (!root) return;
-      act(() => root!.unmount());
-    },
-  };
+async function warmLiveSupport(sessionId: string, server = home) {
+  const machineId = `machine-${sessionId}-${server.id}`;
+  seedSession(sessionId, server, { machineId });
+  const machine = createMachineFixture({ id: machineId });
+  storage.setState({ machineListByServerId: { ...storage.getState().machineListByServerId, [server.id]: [machine] } });
+  network.setRpcResponder(async request => request.method === SESSION_RPC_METHODS.EXECUTION_RUN_LIST
+    ? { runs: [] }
+    : { protocolVersion: 1, results: { 'tool.executionRuns': {
+      ok: true, checkedAt: 1, data: { backends: { codex: { available: true, intents: ['delegate'] } } },
+    } } });
+  const { prefetchMachineCapabilities } = await import('./useMachineCapabilitiesCache');
+  await prefetchMachineCapabilities({ machineId, serverId: server.id, request: { requests: [{ id: 'tool.executionRuns' }] } });
+  return machineId;
 }
 
 describe('useSessionExecutionRunsSupported', () => {
-  beforeEach(() => {
-    featureState.enabled = true;
-    backendsState.backendsByServerId.clear();
-    messagesState.messages = [];
-    sessionState.preferredServerId = 'server-1';
-    sessionState.session = { active: true } as any;
-    activeServerState.reset();
-    listRunsSpy.mockReset();
-    usePreferredServerIdForSessionSpy.mockClear();
-    featureScopeSpy.mockClear();
-  });
-
-  afterEach(() => {
-    vi.clearAllMocks();
-  });
-
   it('returns true immediately when the loaded transcript already contains execution-run signals', async () => {
-    messagesState.messages = [
-      { kind: 'tool-call', tool: { name: 'SubAgentRun', input: { runId: 'run_1' }, result: {} } },
-    ];
+    seedSession('session-transcript');
+    const message = createToolCallMessageFixture();
+    message.tool = { ...message.tool, name: 'SubAgentRun', input: { runId: 'run-1' }, result: {} };
+    storage.setState({ sessionMessages: { 'session-transcript': createSessionMessagesFixture({
+      isLoaded: true, messageIdsOldestFirst: [message.id], messagesById: { [message.id]: message },
+    }) } });
 
-    const harness = await renderHarness();
+    const hook = await renderSupport('session-transcript');
 
-    expect(harness.getValue()).toBe(true);
-    expect(listRunsSpy).not.toHaveBeenCalled();
-    harness.unmount();
+    expect(hook.getCurrent()).toBe(true);
+    expect(listRequests()).toEqual([]);
   });
 
-  it('probes the session runs list when transcript and backend signals are absent and enables support when historical runs exist', async () => {
-    listRunsSpy.mockResolvedValueOnce({
-      runs: [
-        {
-          runId: 'run_1',
-          callId: 'call_1',
-          sidechainId: 'call_1',
-          intent: 'delegate',
-          backendId: 'codex',
-          status: 'succeeded',
-          startedAtMs: 1,
-        },
-      ],
-    });
+  it('probes the session runs list and enables support when historical runs exist', async () => {
+    seedSession('session-historical');
+    network.respond(SESSION_RPC_METHODS.EXECUTION_RUN_LIST, historicalRuns);
 
-    const harness = await renderHarness('session-historical');
+    const hook = await renderSupport('session-historical');
 
-    expect(listRunsSpy).toHaveBeenCalledWith('session-historical', {}, { serverId: 'server-1' });
-    expect(harness.getValue()).toBe(true);
-    harness.unmount();
+    await expectSupport(hook, true);
+    expect(listRequests()).toMatchObject([{ serverUrl: home.serverUrl, targetId: 'session-historical', payload: {} }]);
   });
 
   it('keeps support disabled when the historical probe returns no runs', async () => {
-    listRunsSpy.mockResolvedValueOnce({ runs: [] });
+    seedSession('session-empty');
+    const probe = createDeferred<typeof historicalRuns>();
+    network.setRpcResponder(async () => probe.promise);
+    const hook = await renderSupport('session-empty');
 
-    const harness = await renderHarness('session-empty');
-
-    expect(listRunsSpy).toHaveBeenCalledWith('session-empty', {}, { serverId: 'server-1' });
-    expect(harness.getValue()).toBe(false);
-    harness.unmount();
+    await waitForHomeGovernance(() => { expect(listRequests()).toHaveLength(1); });
+    await act(async () => { probe.resolve({ runs: [] }); });
+    expect(hook.getCurrent()).toBe(false);
   });
 
-  it('clears historical runs state immediately when sessionId changes', async () => {
-    listRunsSpy
-      .mockResolvedValueOnce({
-        runs: [
-          {
-            runId: 'run_1',
-            callId: 'call_1',
-            sidechainId: 'call_1',
-            intent: 'delegate',
-            backendId: 'codex',
-            status: 'succeeded',
-            startedAtMs: 1,
-          },
-        ],
-      })
-      .mockImplementationOnce(
-        () =>
-          new Promise((resolve) => {
-            setTimeout(() => resolve({ runs: [] }), 100);
-          }),
-      );
+  it('clears historical support when the Session changes before its next probe resolves', async () => {
+    seedSession('session-with-runs');
+    seedSession('session-without-runs');
+    const nextProbe = createDeferred<typeof historicalRuns>();
+    network.setRpcResponder(async request => request.targetId === 'session-with-runs' ? historicalRuns : nextProbe.promise);
+    const hook = await renderSupport('session-with-runs');
+    await expectSupport(hook, true);
 
-    const harness = await renderHarness('session-with-runs');
+    await hook.rerender({ sessionId: 'session-without-runs' });
 
-    expect(listRunsSpy).toHaveBeenCalledWith('session-with-runs', {}, { serverId: 'server-1' });
-    expect(harness.getValue()).toBe(true);
-
-    harness.rerenderSync('session-without-runs');
-
-    // The old state should be cleared immediately (synchronously) before the async probe completes
-    expect(harness.getValue()).toBe(false);
-    harness.unmount();
+    expect(hook.getCurrent()).toBe(false);
+    await act(async () => { nextProbe.resolve({ runs: [] }); });
   });
 
-  it('passes the loaded direct session server id as the preferred-server fallback', async () => {
-    sessionState.preferredServerId = null;
-    sessionState.session = { active: true, serverId: 'server-explicit' } as any;
-    backendsState.backendsByServerId.set('server-explicit', { backend: true });
+  it('uses the loaded direct Session Home for live execution-run support', async () => {
+    const machineId = await warmLiveSupport('session-direct');
+    const hook = await renderSupport('session-direct');
 
-    const harness = await renderHarness('session-with-explicit-server');
-
-    expect(usePreferredServerIdForSessionSpy).toHaveBeenCalledWith('session-with-explicit-server', 'server-explicit');
-    expect(harness.getValue()).toBe(true);
-    harness.unmount();
+    expect(hook.getCurrent()).toBe(true);
+    expect(network.requests).toEqual(expect.arrayContaining([expect.objectContaining({ serverUrl: home.serverUrl, targetId: machineId })]));
+    expect(listRequests()).toEqual([]);
   });
 
-  it('falls back to the active server when neither the caller nor the loaded session provides a server id', async () => {
-    sessionState.preferredServerId = null;
-    sessionState.session = { active: true } as any;
-    backendsState.backendsByServerId.set('server-a', { backend: true });
+  it('resolves a bare Session through its unique membership on the active Home', async () => {
+    await warmLiveSupport('session-list-only');
+    storage.setState({ sessions: {} });
+    const hook = await renderSupport('session-list-only');
 
-    const harness = await renderHarness('session-without-server');
-
-    expect(usePreferredServerIdForSessionSpy).toHaveBeenCalledWith('session-without-server', undefined);
-    expect(harness.getValue()).toBe(true);
-    harness.unmount();
+    expect(hook.getCurrent()).toBe(true);
+    expect(listRequests()).toEqual([]);
   });
 
-  it('recomputes the active-server fallback on rerender when no explicit session server is available', async () => {
-    sessionState.preferredServerId = null;
-    sessionState.session = { active: true } as any;
-    backendsState.backendsByServerId.set('server-b', { backend: true });
-
-    const harness = await renderHarness('session-reactive');
-
-    expect(harness.getValue()).toBe(false);
-
-    act(() => {
-      activeServerState.setSnapshot({ serverId: 'server-b', serverUrl: 'https://b.example.test', generation: 2 });
-      harness.rerenderSync('session-reactive');
+  it('recomputes bare Session support when its unique Home membership changes', async () => {
+    seedSession('session-reactive', home, { direct: false });
+    const hook = await renderSupport('session-reactive');
+    await waitForHomeGovernance(() => { expect(listRequests()).toHaveLength(1); });
+    expect(hook.getCurrent()).toBe(false);
+    const other = await network.addHome('https://execution-support-other.test', 'account-execution-other');
+    await act(async () => {
+      await warmLiveSupport('session-reactive', other);
+      const { setActiveServer } = await import('@/sync/domains/server/serverRuntime');
+      await setActiveServer({ serverId: other.id });
+      storage.setState({ sessions: {}, sessionListRowsByServerId: {
+        [other.id]: storage.getState().sessionListRowsByServerId[other.id],
+      }, ordinarySessionListMembershipByServerId: { [other.id]: ['session-reactive'] } });
     });
 
-    expect(harness.getValue()).toBe(true);
-    harness.unmount();
+    await expectSupport(hook, true);
   });
 
-  it('prefers the explicit canonical server id when provided by the caller', async () => {
-    sessionState.preferredServerId = 'server-preferred';
-    sessionState.session = { active: true, serverId: 'server-explicit' } as any;
-    backendsState.backendsByServerId.set('server-explicit', { backend: true });
+  it('prefers the explicit canonical Home for live support when the Session id exists on another Home', async () => {
+    const other = await network.addHome('https://execution-support-explicit.test', 'account-execution-explicit');
+    await warmLiveSupport('same-session-live', other);
+    seedSession('same-session-live', home);
+    const hook = await renderSupport('same-session-live', other.id);
 
-    const { useSessionExecutionRunsSupported } = await import('./useSessionExecutionRunsSupported');
-    const harness = await renderHarness('session-explicit', 'server-explicit');
-
-    expect(harness.getValue()).toBe(true);
-    harness.unmount();
+    expect(hook.getCurrent()).toBe(true);
+    expect(listRequests()).toEqual([]);
   });
 
-  it('keeps historical support and feature admission on the explicit Home when the same Session id exists on the preferred Home', async () => {
-    sessionState.preferredServerId = 'home-a';
-    sessionState.session = { id: 'same-session', active: true, serverId: 'home-a' } as any;
-    listRunsSpy.mockResolvedValueOnce({ runs: [{ runId: 'run-home-b' }] });
+  it('keeps historical support on the explicit Home when the same Session id is loaded from another Home', async () => {
+    const other = await network.addHome('https://execution-support-history.test', 'account-execution-history');
+    seedSession('same-session-history', other, { direct: false });
+    seedSession('same-session-history', home);
+    network.respond(SESSION_RPC_METHODS.EXECUTION_RUN_LIST, historicalRuns);
+    network.respond(SESSION_RPC_METHODS.EXECUTION_RUN_GET, { run: historicalRuns.runs[0] });
+    const { sessionExecutionRunList, sessionExecutionRunGet, sessionExecutionRunStart } = await import('@/sync/ops/sessionExecutionRuns');
 
-    const harness = await renderHarness('same-session', 'home-b');
+    await expect(sessionExecutionRunList('same-session-history', {}, { serverId: other.id })).resolves.toEqual(historicalRuns);
+    await expect(sessionExecutionRunGet('same-session-history', { runId: 'run-1' }, { serverId: other.id }))
+      .resolves.toEqual({ run: historicalRuns.runs[0] });
+    await expect(sessionExecutionRunStart('same-session-history', {
+      intent: 'delegate', backendTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+      instructions: 'Inspect', permissionMode: 'read_only', retentionPolicy: 'ephemeral',
+      runClass: 'bounded', ioMode: 'request_response',
+    }, { serverId: other.id })).resolves.toMatchObject({ ok: false, errorCode: 'execution_run_home_unavailable' });
+    expect(network.requests).toMatchObject([
+      { serverUrl: other.serverUrl, targetId: 'same-session-history', method: SESSION_RPC_METHODS.EXECUTION_RUN_LIST, payload: {} },
+      { serverUrl: other.serverUrl, targetId: 'same-session-history', method: SESSION_RPC_METHODS.EXECUTION_RUN_GET, payload: { runId: 'run-1' } },
+    ]);
+    const hook = await renderSupport('same-session-history', other.id);
 
-    expect(featureScopeSpy).toHaveBeenCalledWith({ scopeKind: 'spawn', serverId: 'home-b' });
-    expect(listRunsSpy).toHaveBeenCalledWith('same-session', {}, { serverId: 'home-b' });
-    expect(harness.getValue()).toBe(true);
-    harness.unmount();
+    await expectSupport(hook, true);
+    expect(listRequests()).toMatchObject([
+      { serverUrl: other.serverUrl, targetId: 'same-session-history', payload: {} },
+      { serverUrl: other.serverUrl, targetId: 'same-session-history', payload: {} },
+    ]);
+  });
+
+  it.each(['missing_credentials', 'wrong_account'] as const)('refuses explicit Home reads with %s without using the ambient Home', async refusal => {
+    const other = await network.addHome('https://execution-support-refused.test', 'account-execution-refused');
+    seedSession('same-session-refused', other, { direct: false });
+    seedSession('same-session-refused', home);
+    if (refusal === 'missing_credentials') {
+      const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+      expect(await TokenStorage.removeCredentialsForServerUrl(other.serverUrl, { serverId: other.id })).toBe(true);
+    }
+    const options = refusal === 'wrong_account'
+      ? { scope: { serverId: other.id, accountId: 'retired-account' } }
+      : { serverId: other.id };
+    const { sessionExecutionRunList, sessionExecutionRunGet } = await import('@/sync/ops/sessionExecutionRuns');
+    await expect(sessionExecutionRunList('same-session-refused', {}, options)).resolves.toMatchObject({ ok: false });
+    await expect(sessionExecutionRunGet('same-session-refused', { runId: 'run-1' }, options)).resolves.toMatchObject({ ok: false });
+    expect(network.requests).toEqual([]);
   });
 });

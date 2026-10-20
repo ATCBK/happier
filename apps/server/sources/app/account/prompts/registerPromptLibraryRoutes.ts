@@ -5,9 +5,11 @@ import { PROMPT_LIBRARY_ROWS_ROUTE_V1, PromptLibraryCatalogKeyV1Schema, PromptLi
 import type { Fastify } from '@/app/api/types';
 import { asServerProtocolZod } from '@/app/api/utils/protocolComposableZodAdapter';
 import { resolveApiHotEndpointRateLimit } from '@/app/api/utils/apiRateLimitCatalog';
-import { inTx } from '@/storage/inTx';
+import { inReadSnapshot, inTx } from '@/storage/inTx';
 import { readTeamOperationAuthenticationFromRequest } from '@/app/teams/actorContext';
 import { listPromptLibraryRowsInTx, mutatePromptLibraryRowInTx, readPromptLibraryRowInTx } from './promptLibraryRows';
+import { readReservedAccountScopedKvRowMutationConflict } from '@/app/kv/reservedAccountScopedKvRow';
+import { AccountSettingsPublicationConflict } from '@/app/accountSettings/writeAccountSettingsInTx';
 
 const params = z.strictObject({ key: asServerProtocolZod(PromptLibraryCatalogKeyV1Schema) });
 const internal = z.strictObject({ error: z.literal('internal') });
@@ -18,7 +20,7 @@ export function registerPromptLibraryRoutes(app: Fastify): void {
   app.get(`${PROMPT_LIBRARY_ROWS_ROUTE_V1}/:key`, { preHandler: app.authenticate, config,
     schema: { params, response: { 200: asServerProtocolZod(PromptLibraryRowReadResponseV1Schema), 500: internal } },
   }, async (request, reply) => {
-    try { return reply.send(await inTx(tx => readPromptLibraryRowInTx(tx, { accountId: request.userId, key: request.params.key }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true })); }
+    try { return reply.send(await inReadSnapshot(tx => readPromptLibraryRowInTx(tx, { accountId: request.userId, key: request.params.key }), { transactionClass: 'prompt-library-read' })); }
     catch { return reply.code(500).send({ error: 'internal' }); }
   });
   app.post(`${PROMPT_LIBRARY_ROWS_ROUTE_V1}/:key`, { preHandler: app.authenticate, config,
@@ -28,12 +30,18 @@ export function registerPromptLibraryRoutes(app: Fastify): void {
     try { return reply.send(await inTx(tx => mutatePromptLibraryRowInTx(tx, {
       accountId: request.userId, authentication: readTeamOperationAuthenticationFromRequest(request), key: request.params.key, ...request.body,
     }))); }
-    catch { return reply.code(500).send({ error: 'internal' }); }
+    catch (error) {
+      const conflict = await readReservedAccountScopedKvRowMutationConflict(error);
+      if (conflict) return reply.send(conflict);
+      if (error instanceof AccountSettingsPublicationConflict) return reply.send(error.result.status === 'version_mismatch'
+        ? { status: 'settings-conflict', revision: error.result.currentVersion } : { status: 'invalid-stored-content' });
+      return reply.code(500).send({ error: 'internal' });
+    }
   });
   app.get(PROMPT_LIBRARY_ROWS_ROUTE_V1, { preHandler: app.authenticate, config,
     schema: { response: { 200: asServerProtocolZod(PromptLibraryRowsListResponseV1Schema), 500: internal } },
   }, async (request, reply) => {
-    try { return reply.send(await inTx(tx => listPromptLibraryRowsInTx(tx, { accountId: request.userId }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true })); }
+    try { return reply.send(await inReadSnapshot(tx => listPromptLibraryRowsInTx(tx, { accountId: request.userId }), { transactionClass: 'prompt-library-list' })); }
     catch { return reply.code(500).send({ error: 'internal' }); }
   });
 }

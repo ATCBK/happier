@@ -16,6 +16,99 @@ function createHarness(currentClaudeSessionId: string | null) {
 }
 
 describe('createClaudeGoalWorkStateSource', () => {
+  it.each([true, false])('joins an idle rekey sentinel against the current authenticated identity (matching: %s)', matching => {
+    let currentSessionId = 'completed-person-session';
+    const admitted: SessionWorkStateV1[] = [];
+    const source = createClaudeGoalWorkStateSource({ backendId: 'claude',
+      getCurrentClaudeSessionId: () => currentSessionId,
+      publishWorkStateSnapshot(snapshot, afterAdmission) { if (afterAdmission) admitted.push(snapshot); } });
+    source.observeTranscriptMessage({ type: 'user', uuid: 'old-input', sessionId: currentSessionId });
+    source.beginGoalCommandObservation('idle-command');
+    source.recordGoalSetIntent();
+    // R60: the next SDK query starts a fresh native Session. SessionStart
+    // changes the identity before the new file's sentinel then linked echo.
+    currentSessionId = 'idle-goal-session';
+    source.observeTranscriptMessage({ type: 'attachment', uuid: 'idle-sentinel', sessionId: currentSessionId,
+      attachment: { type: 'goal_status', sentinel: true, met: false, condition: 'Idle objective' } });
+    source.observeTranscriptMessage({ type: 'user', uuid: 'idle-command', sessionId: currentSessionId,
+      parentUuid: matching ? 'idle-sentinel' : 'foreign-sentinel' });
+    expect(admitted).toEqual(matching ? [expect.objectContaining({ items: [expect.objectContaining({
+      status: 'active', title: 'Idle objective', vendorRef: 'idle-sentinel',
+    })] })] : []);
+  });
+  it.each([true, false])('joins the R58 pre-echo sentinel only through its native parent identity (matching: %s)', matching => {
+    const admitted: SessionWorkStateV1[] = [];
+    const source = createClaudeGoalWorkStateSource({ backendId: 'claude', getCurrentClaudeSessionId: () => 's1',
+      publishWorkStateSnapshot(snapshot, afterAdmission) { if (afterAdmission) admitted.push(snapshot); } });
+    source.beginGoalCommandObservation('sdk-command');
+    source.recordGoalSetIntent();
+    source.observeTranscriptMessage({ type: 'attachment', uuid: 'native-sentinel', sessionId: 's1',
+      isSidechain: false, attachment: { type: 'goal_status', sentinel: true, met: false, condition: 'R58 objective' } });
+    source.observeTranscriptMessage({ type: 'user', uuid: 'sdk-command', sessionId: 's1', isSidechain: false,
+      parentUuid: matching ? 'native-sentinel' : 'other-sentinel',
+      message: { content: '<command-name>/goal</command-name>\n<command-args>R58 objective</command-args>' } });
+    expect(admitted).toEqual(matching ? [expect.objectContaining({ items: [expect.objectContaining({
+      status: 'active', title: 'R58 objective', vendorRef: 'native-sentinel',
+    })] })] : []);
+  });
+  it('publishes one fresh receipt after the exact command echo when its sentinel preceded that echo', () => {
+    const publications: Array<{ snapshot: SessionWorkStateV1; admitted: boolean }> = [];
+    const source = createClaudeGoalWorkStateSource({
+      backendId: 'claude', getCurrentClaudeSessionId: () => 's1', now: () => 1000,
+      publishWorkStateSnapshot: (snapshot, admitted = false) => { publications.push({ snapshot, admitted }); },
+    });
+    source.observeTranscriptMessage({ type: 'system', sessionId: 's1', slash_commands: ['goal'] });
+    source.recordGoalSetIntent();
+    source.beginGoalCommandObservation('this-command');
+    const goalRow = (uuid: string, sessionId = 's1', sentinel = false) => ({
+      type: 'attachment', uuid, sessionId,
+      attachment: { type: 'goal_status', met: false, condition: 'Reach it', ...(sentinel ? { sentinel: true } : {}) },
+    });
+    source.observeTranscriptMessage(goalRow('sentinel-before-echo', 's1', true));
+    source.observeTranscriptMessage({ type: 'assistant', sessionId: 's1', message: { stop_reason: 'end_turn', usage: { output_tokens: 7 } } });
+    source.observeTranscriptMessage({ type: 'user', sessionId: 's1', uuid: 'another-command' });
+    source.observeTranscriptMessage(goalRow('before-exact-echo'));
+    expect(publications.some(publication => publication.admitted)).toBe(false);
+    source.observeTranscriptMessage({ type: 'user', sessionId: 's1', uuid: 'this-command' });
+    source.observeTranscriptMessage(goalRow('foreign-after-echo', 'other-session'));
+    source.observeTranscriptMessage(goalRow('fresh-after-echo'));
+    source.observeTranscriptMessage(goalRow('later-unchanged-check'));
+    expect(publications.filter(publication => publication.admitted)).toEqual([
+      { admitted: true, snapshot: expect.objectContaining({ items: [expect.objectContaining({
+        vendorRef: 'fresh-after-echo', status: 'active', title: 'Reach it', tokensUsed: 7,
+      })] }) },
+    ]);
+  });
+
+  it('does not queue unchanged resumed Goal re-evaluations ahead of a new Goal publication', async () => {
+    const published: SessionWorkStateV1[] = [];
+    let pending = Promise.resolve();
+    const started = performance.now();
+    const source = createClaudeGoalWorkStateSource({
+      backendId: 'claude', agentId: 'claude', getCurrentClaudeSessionId: () => 's1',
+      // Serialized persistence is the host boundary. Ten milliseconds is fixture
+      // latency, not a product timeout or a production budget.
+      publishWorkStateSnapshot(snapshot) {
+        pending = pending.then(async () => {
+          await new Promise(resolve => setTimeout(resolve, 10));
+          published.push(snapshot);
+        });
+        return pending;
+      },
+    });
+    source.observeTranscriptMessage({ type: 'system', sessionId: 's1', slash_commands: ['goal'] });
+    for (let index = 0; index < 20; index += 1) {
+      source.observeTranscriptMessage({ type: 'attachment', uuid: `history-${index}`, sessionId: 's1',
+        attachment: { type: 'goal_status', met: false, condition: 'Old A', ...(index === 0 || index === 10 ? { sentinel: true } : {}) } });
+    }
+    source.recordGoalSetIntent();
+    source.observeTranscriptMessage({ type: 'attachment', uuid: 'new-B', sessionId: 's1',
+      attachment: { type: 'goal_status', met: false, condition: 'New B' } });
+    await pending;
+    console.info('Goal replay persistence fixture', JSON.stringify({ publications: published.length, elapsedMs: performance.now() - started }));
+    expect(published.map(snapshot => snapshot.items[0]?.title)).toEqual(['Old A', 'Old A', 'New B']);
+  });
+
   it('observes a goal_status attachment on the transcript stream and publishes an active goal', () => {
     const { published, source } = createHarness('s1');
     source.observeTranscriptMessage({

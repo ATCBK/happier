@@ -116,6 +116,7 @@ function readEncryptedQuery(input: {
     signal?: AbortSignal;
     sessionDataKeys?: Map<string, Uint8Array>;
     sessionDataKeyEnvelopes?: Map<string, string>;
+    priorityHydrationSessionIds?: string[];
 }) {
     return fetchAndApplySessions({
         serverId: 'home-a', source: { kind: 'query', body: QUERY, allowV1Fallback: false },
@@ -126,7 +127,8 @@ function readEncryptedQuery(input: {
         sessionDataKeyEnvelopes: input.sessionDataKeyEnvelopes,
         accountCurrentness: { ...PLAIN_ACCOUNT_CURRENTNESS, mode: 'e2ee' },
         request: input.request,
-        // Generic background rows remain undemanded; listed reports still need readable summaries.
+        // Report/detail consumers explicitly demand metadata; other rows stay projections.
+        priorityHydrationSessionIds: input.priorityHydrationSessionIds,
         sessionListBackgroundHydrationMaxRows: 0,
         applySessions: () => {},
         getCurrentSessionListRenderable: id => storage.getState().sessionListRowsByServerId['home-a']?.[id],
@@ -143,16 +145,16 @@ describe('fetchAndApplySessions exact-Home retirement fence', () => {
         storage.setState(initialState, true);
     });
 
-    it('opens unopened report summaries from one encrypted list page without visiting a child', async () => {
+    it('hydrates explicitly demanded report summaries from one encrypted list page without visiting a child', async () => {
         const encryption = await Encryption.create(new Uint8Array(32).fill(4));
         const nowMs = Date.now();
-        const child = { ...await encryptedRow(encryption, 'child'), reportsTo: { sessionId: 'lead' },
+        const child = { ...await encryptedRow(encryption, 'child'), manager: { sessionId: 'lead' },
             active: true, activeAt: nowMs, updatedAt: nowMs,
             pendingPermissionRequestCount: 1, pendingUserActionRequestCount: 0, pendingRequestObservedAt: nowMs };
-        const grandchild = { ...await encryptedRow(encryption, 'grandchild'), reportsTo: { sessionId: 'child' } };
+        const grandchild = { ...await encryptedRow(encryption, 'grandchild'), manager: { sessionId: 'child' } };
         const unrelated = await encryptedRow(encryption, 'unrelated');
         const request = vi.fn(async () => queryPage([unrelated, child, grandchild]));
-        await readEncryptedQuery({ encryption, request });
+        await readEncryptedQuery({ encryption, request, priorityHydrationSessionIds: ['child', 'grandchild'] });
         await vi.waitFor(() => {
             const rows = storage.getState().sessionListRowsByServerId['home-a']!;
             expect([getSessionName(rows.child!), getSessionName(rows.grandchild!)]).toEqual(['child', 'grandchild']);
@@ -252,8 +254,12 @@ describe('fetchAndApplySessions exact-Home retirement fence', () => {
                     await release.promise;
                     return { status: 'ok', source: 'native', items: request.items.map(() => encodeBase64(new Uint8Array(32).fill(7), 'base64')) };
                 },
-                async decryptSecretboxJson() { throw new Error('Unexpected content hydration'); },
-                async decryptAesGcmJson() { throw new Error('Unexpected content hydration'); },
+                async decryptSecretboxJson(request) {
+                    return { status: 'ok', source: 'native', items: request.items.map(() => ({ path: '/kept', host: 'test' })) };
+                },
+                async decryptAesGcmJson(request) {
+                    return { status: 'ok', source: 'native', items: request.items.map(() => ({ path: '/kept', host: 'test' })) };
+                },
             },
             routing: { mode: 'require', maxBatchSize: 50, minPayloadBytes: 0 },
             scope: { accountId: 'account-a', serverId: 'home-a', generation: 0 },
@@ -266,6 +272,7 @@ describe('fetchAndApplySessions exact-Home retirement fence', () => {
             serverId: 'home-a',
             fetchPage: async ({ signal }) => {
                 result = await readEncryptedQuery({ encryption, signal, sessionDataKeys, sessionDataKeyEnvelopes,
+                    priorityHydrationSessionIds: ['retired', 'kept'],
                     request: async () => queryPage(rows),
                 });
                 return result;
@@ -349,8 +356,8 @@ describe('fetchAndApplySessions exact-Home retirement fence', () => {
         encryption.configureNativeCryptoWorker({ routing: { mode: 'off' } });
         const rows = await Promise.all(['reference', 'awareness'].map((id) => encryptedRow(encryption, id)));
         const firstResponse = createDeferred<Response>();
-        const first = readEncryptedQuery({ encryption, request: () => firstResponse.promise });
-        const second = readEncryptedQuery({ encryption, request: async () => queryPage([rows[1]!]) });
+        const first = readEncryptedQuery({ encryption, priorityHydrationSessionIds: ['reference'], request: () => firstResponse.promise });
+        const second = readEncryptedQuery({ encryption, priorityHydrationSessionIds: ['awareness'], request: async () => queryPage([rows[1]!]) });
         try {
             await second;
             firstResponse.resolve(queryPage([rows[0]!]));
@@ -372,8 +379,8 @@ describe('fetchAndApplySessions exact-Home retirement fence', () => {
         const response = createDeferred<Response>();
         const firstAbort = new AbortController();
         const secondAbort = new AbortController();
-        const first = readEncryptedQuery({ encryption, signal: firstAbort.signal, request: async () => (await response.promise).clone() });
-        const second = readEncryptedQuery({ encryption, signal: secondAbort.signal, request: async () => (await response.promise).clone() });
+        const first = readEncryptedQuery({ encryption, priorityHydrationSessionIds: ['kept'], signal: firstAbort.signal, request: async () => (await response.promise).clone() });
+        const second = readEncryptedQuery({ encryption, priorityHydrationSessionIds: ['kept'], signal: secondAbort.signal, request: async () => (await response.promise).clone() });
         secondAbort.abort();
         response.resolve(queryPage([row]));
         expect((await first).current).toBe(true);

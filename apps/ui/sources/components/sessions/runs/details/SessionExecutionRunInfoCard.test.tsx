@@ -330,8 +330,8 @@ describe('SessionExecutionRunInfoCard', () => {
                     intent: 'delegate',
                     backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
                     launchOrigin: {
-                        kind: 'session_discussion',
-                        sessionId: 'session_1',
+                        kind: 'discussion',
+                        serverId: 'server-a',
                         discussionId: 'discussion_1',
                         messageIds: ['message_1'],
                     },

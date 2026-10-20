@@ -95,8 +95,8 @@ function normalizeFavoriteModelSelection(value: unknown, storedRead = false): un
 }
 
 export const FavoriteModelSelectionV1Schema = defineStoredReadProjection(
-    z.pipe(z.transform(value => normalizeFavoriteModelSelection(value)), CanonicalFavoriteModelSelectionV1Schema),
-    () => z.pipe(z.transform(value => normalizeFavoriteModelSelection(value, true)), createStoredReadSchema(CanonicalFavoriteModelSelectionV1Schema)),
+    (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(value => normalizeFavoriteModelSelection(value)), CanonicalFavoriteModelSelectionV1Schema),
+    () => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(value => normalizeFavoriteModelSelection(value, true)), createStoredReadSchema(CanonicalFavoriteModelSelectionV1Schema)),
 );
 export const StoredFavoriteModelSelectionV1Schema = createStoredReadSchema(FavoriteModelSelectionV1Schema);
 

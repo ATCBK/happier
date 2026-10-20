@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { vi } from 'vitest';
 
 import {
@@ -22,7 +22,7 @@ import { createSessionHandoffPrepareTargetJobStore } from '../../../session/hand
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { registerMachineSessionHandoffRpcHandlers } from './handlers';
 
-const PredecessorStatusSchema = z.object({
+const PredecessorStatusSchema = z.strictObject({
   handoffId: z.string(),
   status: z.enum([
     'pending',
@@ -34,43 +34,43 @@ const PredecessorStatusSchema = z.object({
     'failed',
   ]),
   phase: z.string(),
-  jobId: z.string().optional(),
+  jobId: z.optional(z.string()),
   recoveryActions: z.array(z.string()),
-}).strict();
+});
 
-const PredecessorStartResponseSchema = z.object({
+const PredecessorStartResponseSchema = z.strictObject({
   handoffId: z.string(),
   status: PredecessorStatusSchema,
   endpointCandidates: z.array(z.unknown()),
   targetPath: z.string(),
-  handoffMetadataV2: z.object({
-    providerBundleTransferPublication: z.object({
+  handoffMetadataV2: z.optional(z.strictObject({
+    providerBundleTransferPublication: z.optional(z.strictObject({
       transferId: z.string(),
       sizeBytes: z.number(),
       manifestHash: z.string(),
-      endpointCandidates: z.array(z.unknown()).optional(),
-    }).strict().optional(),
-  }).strict().optional(),
-}).strict();
+      endpointCandidates: z.optional(z.array(z.unknown())),
+    })),
+  })),
+});
 
-const PredecessorPrepareResponseSchema = z.object({
+const PredecessorPrepareResponseSchema = z.strictObject({
   handoffId: z.string(),
   status: PredecessorStatusSchema,
-  remoteSessionId: z.string().optional(),
-  directSource: z.unknown().optional(),
-  agentRuntimeDescriptorV1: z.object({
+  remoteSessionId: z.optional(z.string()),
+  directSource: z.optional(z.unknown()),
+  agentRuntimeDescriptorV1: z.optional(z.looseObject({
     v: z.literal(1),
     providerId: z.string(),
-    provider: z.object({
-      providerExtra: z.object({
+    provider: z.looseObject({
+      providerExtra: z.optional(z.looseObject({
         owner: z.string(),
         schemaId: z.string(),
         v: z.number(),
-      }).passthrough().optional(),
-    }).passthrough(),
-  }).passthrough().optional(),
-  resume: z.unknown().optional(),
-}).strict();
+      })),
+    }),
+  })),
+  resume: z.optional(z.unknown()),
+});
 
 describe('session handoff predecessor wire compatibility', () => {
   it('accepts the released predecessor workspace-replication metadata on prepare', () => {

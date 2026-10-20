@@ -11,6 +11,7 @@ import { buildNewSessionAgentPickerOptions } from './buildNewSessionAgentPickerO
 import { formatBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
 import type { ResolvedBackendCatalogEntry } from '@/agents/backendCatalog/getResolvedBackendCatalogEntries';
 import { createResolvedAgentCatalogEntryFixture } from '@/dev/testkit/fixtures/agentCatalogFixtures';
+import { settingsDefaults } from '@/sync/domains/settings/settings';
 
 function createEntry(params: Readonly<{
     backendId: string;
@@ -99,7 +100,7 @@ describe('buildNewSessionAgentPickerOptions', () => {
             selectedPath: '/repo',
             selectedBackendTargetKey: antigravity.backendTargetKey,
             selectedModelId: 'default',
-            settings: {} as any,
+            readSettings: () => settingsDefaults,
         });
 
         expect(result.selectableBackendEntries.map((entry) => entry.backendId)).toEqual(['claude', 'antigravity-localharness']);
@@ -130,7 +131,7 @@ describe('buildNewSessionAgentPickerOptions', () => {
             selectedPath: '/repo',
             selectedBackendTargetKey: claude.backendTargetKey,
             selectedModelId: 'default',
-            settings: {} as any,
+            readSettings: () => settingsDefaults,
         });
 
         const byLabel = new Map(result.agentPickerOptions?.map((option) => [option.label, option]));

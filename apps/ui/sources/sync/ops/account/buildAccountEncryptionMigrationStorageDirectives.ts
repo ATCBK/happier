@@ -1,7 +1,7 @@
 import { ARTIFACT_PLAIN_DATA_KEY_MARKER, decodePlainArtifactStoredContent, encodePlainArtifactStoredContent, isPlainArtifactDataKeyMarker } from '@happier-dev/protocol/storage/artifactStoredContent';
 import { MACHINE_PLAIN_DATA_KEY_MARKER, decodePlainMachineStoredContent, encodePlainMachineStoredContent, isPlainMachineDataKeyMarker } from '@happier-dev/protocol/machines/machineStoredContent';
 import { computeContentPublicKeyFingerprint } from '@happier-dev/protocol/machines/identity/contentPublicKeyFingerprint';
-import { StoredMachinePublishedDaemonStateV1Schema, parseMachinePublishedMetadataV1, parseMachinePublishedDaemonStateV1 } from '@happier-dev/protocol/machines/machinePublishedContentV1';
+import { StoredMachinePublishedDaemonStateV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 import { createPlainSessionOwnerMetadataEnvelopeV1, encodeSessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { prepareArtifactRecipientKeyEnvelopesV1 } from '@happier-dev/protocol/artifacts/artifactRecipientKeyPreparationV1';
 import { retargetWorkflowDefinitionArtifactHeaderV1 } from '@happier-dev/protocol/workflows/workflowDefinitionV1';
@@ -27,7 +27,6 @@ import type {
 } from '@/sync/domains/artifacts/artifactTypes';
 import {
     MachineMetadataSchema,
-    type MachineMetadata,
 } from '@/sync/domains/state/storageTypes';
 import { ArtifactEncryption } from '@/sync/encryption/artifactEncryption';
 import { openArtifactPrivateRevisionMetadata, sealArtifactPrivateRevisionMetadata } from '@/sync/domains/artifacts/accountArtifactEnvelope';
@@ -47,10 +46,12 @@ import { buildReviewCommentAccountEncryptionMigrationDirective } from '@/sync/do
 import { buildSessionOrganizationAccountEncryptionMigrationDirective } from '@/sync/ops/sessionOrganization/sessionOrganizationDisplayEnvelope';
 import { buildAccountEncryptionMigrationAutomations } from './buildAccountEncryptionMigrationAutomations';
 import { decodeAccountStoredJsonContent, encodeAccountStoredJsonContent } from '@/sync/encryption/accountStoredJsonContent';
+import type { DiscussionAccountEncryptionInventoryV1, AccountEncryptionMigrateDiscussionsDirectiveV1 } from '@happier-dev/protocol/discussions/accountEncryptionMigration';
+import { buildAccountEncryptionDiscussionsDirective } from './buildAccountEncryptionDiscussionsDirective';
 
 export type AccountEncryptionMigrationMachineRow = Readonly<{
     id: string;
-    metadata: string;
+    metadata: string | null;
     metadataVersion: number;
     daemonState?: string | null;
     daemonStateVersion?: number;
@@ -90,6 +91,7 @@ export type AccountEncryptionMigrationStorageDirectives = Readonly<{
     todos: AccountEncryptionMigrateTodosDirective;
     workspace?: AccountEncryptionMigrateWorkspaceDirective;
     artifacts: AccountEncryptionMigrateArtifactsDirective;
+    discussions?: AccountEncryptionMigrateDiscussionsDirectiveV1;
     sessions: AccountEncryptionMigrateSessionsDirective;
     reviewComments: AccountEncryptionMigrateReviewCommentsDirective;
     sessionOrganization:
@@ -130,12 +132,19 @@ function requireArtifactBody(
 function requireMachineMetadata(
     value: unknown,
     machineId: string,
-): MachineMetadata {
+): Record<string, unknown> {
     const parsed = MachineMetadataSchema.safeParse(value);
     if (!parsed.success) {
         throw new Error(`Invalid Machine metadata (${machineId})`);
     }
-    return parsed.data;
+    return requireObject(value, `Machine metadata (${machineId})`);
+}
+
+function requireMachineDaemonState(value: unknown, machineId: string): Record<string, unknown> {
+    if (!StoredMachinePublishedDaemonStateV1Schema.safeParse(value).success) {
+        throw new Error(`Invalid Machine daemon state (${machineId})`);
+    }
+    return requireObject(value, `Machine daemon state (${machineId})`);
 }
 
 async function openMachineRows(params: Readonly<{
@@ -143,7 +152,7 @@ async function openMachineRows(params: Readonly<{
     sourceEncryption: Encryption | null;
 }>): Promise<Array<Readonly<{
     row: AccountEncryptionMigrationMachineRow;
-    metadata: MachineMetadata;
+    metadata: Record<string, unknown>;
     daemonState: unknown | null;
 }>>> {
     const encryptedRows = params.rows.filter(
@@ -175,6 +184,7 @@ async function openMachineRows(params: Readonly<{
 
     const opened = [];
     for (const row of params.rows) {
+        if (row.metadata === null) throw new Error(`Invalid Machine metadata (${row.id})`);
         if (isPlainMachineDataKeyMarker(row.dataEncryptionKey)) {
             opened.push({
                 row,
@@ -183,7 +193,7 @@ async function openMachineRows(params: Readonly<{
                     row.id,
                 ),
                 daemonState: row.daemonState
-                    ? StoredMachinePublishedDaemonStateV1Schema.parse(decodePlainMachineStoredContent(row.daemonState))
+                    ? requireMachineDaemonState(decodePlainMachineStoredContent(row.daemonState), row.id)
                     : null,
             });
             continue;
@@ -195,22 +205,10 @@ async function openMachineRows(params: Readonly<{
         if (!machineEncryption) {
             throw new Error(`Machine encryption is unavailable (${row.id})`);
         }
-        const metadata = await machineEncryption.decryptMetadata(
-            row.metadataVersion,
-            row.metadata,
-        );
-        if (!metadata) {
-            throw new Error(`Failed to open Machine metadata (${row.id})`);
-        }
+        const metadata = requireMachineMetadata(await machineEncryption.decryptRaw(row.metadata), row.id);
         const daemonState = row.daemonState
-            ? await machineEncryption.decryptDaemonState(
-                row.daemonStateVersion ?? 0,
-                row.daemonState,
-            )
+            ? requireMachineDaemonState(await machineEncryption.decryptRaw(row.daemonState), row.id)
             : null;
-        if (row.daemonState && daemonState === null) {
-            throw new Error(`Failed to open Machine daemon state (${row.id})`);
-        }
         opened.push({ row, metadata, daemonState });
     }
     return opened;
@@ -232,12 +230,13 @@ async function buildMachineDirective(params: Readonly<{
             action: 'migrate',
             items: opened.map(({ row, metadata, daemonState }) => ({
                 machineId: row.id,
+                expectedDataEncryptionKey: row.dataEncryptionKey ?? null,
                 expectedMetadataVersion: row.metadataVersion,
                 expectedDaemonStateVersion: row.daemonStateVersion ?? 0,
-                metadata: encodePlainMachineStoredContent(parseMachinePublishedMetadataV1(metadata)),
+                metadata: encodePlainMachineStoredContent(metadata),
                 daemonState: daemonState === null
                     ? null
-                    : encodePlainMachineStoredContent(parseMachinePublishedDaemonStateV1(daemonState)),
+                    : encodePlainMachineStoredContent(daemonState),
                 dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
                 contentPublicKeyFingerprint: null,
             })),
@@ -267,13 +266,14 @@ async function buildMachineDirective(params: Readonly<{
         }
         items.push({
             machineId: row.id,
+            expectedDataEncryptionKey: row.dataEncryptionKey ?? null,
             expectedMetadataVersion: row.metadataVersion,
             expectedDaemonStateVersion: row.daemonStateVersion ?? 0,
             metadata:
-                await machineEncryption.encryptMetadata(metadata),
+                await machineEncryption.encryptRaw(metadata),
             daemonState: daemonState === null
                 ? null
-                : await machineEncryption.encryptDaemonState(daemonState),
+                : await machineEncryption.encryptRaw(daemonState),
             dataEncryptionKey: encodeBase64(
                 await targetEncryption.encryptEncryptionKey(dataKey),
                 'base64',
@@ -693,6 +693,7 @@ export async function buildAccountEncryptionMigrationStorageDirectives(
         todos: readonly AccountEncryptionMigrationKvRow[];
         workspace?: readonly AccountEncryptionMigrationKvRow[];
         artifacts: readonly AccountEncryptionMigrationArtifactRow[];
+        discussionsInventory?: DiscussionAccountEncryptionInventoryV1;
         sessions: readonly AccountEncryptionMigrationSessionRow[];
         reviewCommentsInventory:
             ReviewCommentAccountEncryptionMigrationInventoryResponseV1;
@@ -795,6 +796,10 @@ export async function buildAccountEncryptionMigrationStorageDirectives(
     assertAccountEncryptionMigrationScopeCurrent(params.scope);
     return {
         ...(automations ? { automations } : {}),
+        ...(params.discussionsInventory ? { discussions: await buildAccountEncryptionDiscussionsDirective({
+            inventory: params.discussionsInventory, fromMode: params.fromMode, toMode: params.toMode,
+            sourceEncryption: params.sourceEncryption, targetEncryption: params.targetEncryption, scope: params.scope,
+        }) } : {}),
         machines,
         todos,
         ...(workspace ? { workspace } : {}),

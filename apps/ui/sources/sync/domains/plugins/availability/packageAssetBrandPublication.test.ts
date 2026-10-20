@@ -32,9 +32,9 @@ import {
     PluginAvailabilityActionHttpPathsV1,
     PluginAvailabilityPackageAssetPublishActionInputV1Schema,
     PluginAvailabilityPackageAssetReadActionOutputV1Schema,
+    PluginMachineMaterializationV1Schema,
     PluginReleaseFactsV1Schema,
     type PluginAvailabilityPackageAssetReadActionOutputV1,
-    type PluginMachineMaterializationV1,
 } from '@happier-dev/protocol/plugins/availability';
 
 const { readInstalledPluginBrandPresentation } = await import('@/components/plugins/shared/installedPluginBrandPresentation');
@@ -51,11 +51,11 @@ describe('portable brand publication and daemon-offline consumption', () => {
         resourceRead.mockReset();
         await harness.reset();
         await loadSyncSingletonForTests();
-        homeId = await harness.addHome({ name: 'Brand publication', serverUrl: 'https://brand-publication.test', serverIdentityId: 'server-a', accountId: 'account-a' });
-        connection = await restoreServerAccountForTest({ serverUrl: 'https://brand-publication.test', accountId: 'account-a' });
+        homeId = await harness.addHome({ name: 'Brand publication', serverUrl: 'https://brand-publication.test', serverIdentityId: 'srv_brand_publication', accountId: 'account-a' });
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://brand-publication.test', serverIdentityId: 'srv_brand_publication', accountId: 'account-a', request: harness.request });
         const { storage } = await import('@/sync/domains/state/storage');
         const { profileDefaults } = await import('@/sync/domains/profiles/profile');
-        const scope = { serverId: 'server-a', accountId: 'account-a' };
+        const scope = { serverId: 'srv_brand_publication', accountId: 'account-a' };
         storage.setState({ profileScope: scope, settingsScope: scope, profile: { ...profileDefaults, id: 'account-a' }, isDataReady: true });
     });
 
@@ -68,7 +68,7 @@ describe('portable brand publication and daemon-offline consumption', () => {
     });
 
     it.each(['plain', 'e2ee'] as const)('publishes only after opt-in, then a fresh %s client opens the brand with no daemon', async (mode) => {
-        const scope = { serverId: 'server-a', accountId: 'account-a' } as const;
+        const scope = { serverId: 'srv_brand_publication', accountId: 'account-a' } as const;
         const pluginId = 'acme.portable-brand';
         const bytes = createValidPluginBrandPngFixture();
         const manifest = {
@@ -85,11 +85,11 @@ describe('portable brand publication and daemon-offline consumption', () => {
             ref: { pluginId, version: manifest.version }, archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
             normalizedManifest: manifest, collectionContracts: [], uiSlots: [], packageAssetArchive: archive.descriptor,
         });
-        const materialization: PluginMachineMaterializationV1 = {
-            serverIdentityId: 'identity-a', machineId: 'machine-a', materializationId: 'installation-a',
+        const materialization = PluginMachineMaterializationV1Schema.parse({
+            serverIdentityId: 'srv_brand_publication', machineId: 'machine-a', materializationId: 'installation-a',
             pluginId, version: manifest.version, sourceClass: 'versionedArchive', portableRelease: true,
             archiveDigestSha256: release.archiveDigestSha256, uiArtifacts: [], enabled: true, trustState: 'trusted', observedAt: 1,
-        };
+        });
         const projection = PluginProjectionV2Schema.parse({
             v: 2, generation: 7, familiesById: {}, installedPackagesById: { [pluginId]: {
                 id: pluginId, version: manifest.version, displayName: manifest.displayName, enabled: true,
@@ -106,7 +106,7 @@ describe('portable brand publication and daemon-offline consumption', () => {
         const store = createPluginAccountAvailabilityReaderStore();
         const snapshot = {
             availabilityCursor: 1, intentReads: [{ pluginId, response }], materializations: [materialization],
-            snapshots: [{ serverIdentityId: 'identity-a', machineId: 'machine-a', materializations: [materialization] }],
+            snapshots: [{ serverIdentityId: 'srv_brand_publication', machineId: 'machine-a', materializations: [materialization] }],
         };
         store.replace({ scope, snapshot });
         const stored: { current: PluginAvailabilityPackageAssetReadActionOutputV1 | null } = { current: null };
@@ -131,7 +131,7 @@ describe('portable brand publication and daemon-offline consumption', () => {
         harness.answer(homeId, '/v1/account/encryption', { body: { mode, updatedAt: 0 } });
         harness.answer(homeId, '/v1/account/encryption/currentness', { body: { mode, version: 1, signingKeyFingerprint: null, updatedAt: 0, contentKeyFingerprint } });
         await connection?.dispose();
-        connection = await restoreServerAccountForTest({ serverUrl: 'https://brand-publication.test', credentials });
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://brand-publication.test', serverIdentityId: 'srv_brand_publication', credentials, request: harness.request });
         const { storage } = await import('@/sync/domains/state/storage');
         const { profileDefaults } = await import('@/sync/domains/profiles/profile');
         storage.setState({ profileScope: scope, settingsScope: scope, profile: { ...profileDefaults, id: scope.accountId }, isDataReady: true });
@@ -143,9 +143,9 @@ describe('portable brand publication and daemon-offline consumption', () => {
         }));
         const acquisition = {
             pluginId, reader: store.bind(scope), accountLifetime: lifetime, projection,
-            daemon: { serverId: scope.serverId, serverIdentityId: 'identity-a', machineId: 'machine-a' }, isCurrent: () => true,
+            daemon: { serverId: scope.serverId, serverIdentityId: 'srv_brand_publication', machineId: 'machine-a' }, isCurrent: () => true,
         };
-        await acquireAndPublishPluginAccountPackageAssets(acquisition);
+        await expect(acquireAndPublishPluginAccountPackageAssets(acquisition)).resolves.toBeUndefined();
         expect(resourceRead).not.toHaveBeenCalled();
         expect(harness.requestsFor(publishPath)).toHaveLength(0);
 
@@ -154,7 +154,10 @@ describe('portable brand publication and daemon-offline consumption', () => {
             ...response, intent: { ...response.intent, offlineUiHosting: 'enabled', revision: 'intent-2' },
         });
         store.replace({ scope, snapshot: { ...snapshot, intentReads: [{ pluginId, response: optedIn }] } });
-        await acquireAndPublishPluginAccountPackageAssets(acquisition);
+        const publication = await acquireAndPublishPluginAccountPackageAssets(acquisition);
+        expect(publication).toEqual({
+            kind: 'published', value: expect.anything(),
+        });
         expect(resourceRead).toHaveBeenCalledTimes(1);
         expect(stored.current).not.toBeNull();
         if (!stored.current) throw new Error('Expected protected Account publication.');
@@ -162,7 +165,7 @@ describe('portable brand publication and daemon-offline consumption', () => {
 
         await connection?.dispose();
         resourceRead.mockRejectedValue(new Error('Every daemon is offline.'));
-        connection = await restoreServerAccountForTest({ serverUrl: 'https://brand-publication.test', credentials });
+        connection = await restoreServerAccountForTest({ serverUrl: 'https://brand-publication.test', serverIdentityId: 'srv_brand_publication', credentials, request: harness.request });
         storage.setState({ profileScope: scope, settingsScope: scope, profile: { ...profileDefaults, id: scope.accountId }, isDataReady: true });
         const freshLifetime = captureActiveServerAccountScopeLifetime();
         if (!freshLifetime) throw new Error('Fresh client requires a restored Account lifetime.');

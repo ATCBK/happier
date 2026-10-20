@@ -2,6 +2,7 @@ import * as React from 'react';
 import type { McpServerCatalogEntryV1 } from '@happier-dev/protocol/mcp/servers/settingsV1';
 
 import { CapabilityDetailHeader } from '@/components/capabilities/detail/CapabilityDetailHeader';
+import type { PageHeaderMenuAction } from '@/components/ui/layout/PageHeaderEntityParts';
 import { PageLeaveActions } from '@/components/ui/layout/PageLeaveActions';
 import { ItemList } from '@/components/ui/lists/ItemList';
 import type { SavedSecret } from '@/sync/domains/settings/savedSecretTypes';
@@ -9,14 +10,19 @@ import type { AccountSettingsScope } from '@/sync/domains/settings/scope/account
 import { t } from '@/text';
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { Modal } from '@/modal';
+import { publishPresentationNotice } from '@/components/sessions/presentation/presentationNotices';
+import { setClipboardStringSafe } from '@/utils/ui/clipboard';
 import { ValueRefEditorModal, getValueRefEditorModalTitle } from '@/components/ui/forms/valueRefs/ValueRefEditorModal';
 import { createMcpServerRecovery } from './mcpServerRecovery';
+import { useMcpServerInstallLink } from './useMcpServerInstallLink';
 
-import { McpServerConfigurationSection, type McpConfigurationSaveState } from '../McpServerConfigureForm';
+import { McpServerConfigurationSection, type McpConfigurationSaveState } from '../McpServerConfigurationSection';
 import { mcpServerMissingKeyNames, type McpSavedSecretAvailability } from '../status/mcpServerStatus';
 import { mcpServerDisplayName } from '../collection/mcpServerCollectionModel';
 import { McpServerMark } from '../identity/McpServerMark';
+import { McpServerConflictReview, type McpServerConflict } from './McpServerConflictReview';
 import { McpServerMachineDifferences } from './McpServerMachineDifferences';
+import { McpServerUpdateSection } from './McpServerUpdateSection';
 import { McpSignInSection } from '../signIn/McpSignInSection';
 import {
   McpServerBanner,
@@ -24,6 +30,8 @@ import {
   McpServerWhereAndTools,
   useMcpServerDetail,
 } from './McpServerDetailBody';
+
+const INSTALL_LINK_NOTICE_KEY = 'mcp.server.installLinkCopy';
 
 /**
  * A saved MCP server (md A order): who it is, the one thing blocking it, Where it's on, its Tools, its
@@ -33,6 +41,7 @@ export const McpServerDetailPage = React.memo(function McpServerDetailPage(
   props: Readonly<{
     server: McpServerCatalogEntryV1;
     draftServer: McpServerCatalogEntryV1;
+    configurationBaseServer?: McpServerCatalogEntryV1 | null;
     catalogRevision: number | 'absent' | null;
     secrets: SavedSecret[];
     secretAvailability: McpSavedSecretAvailability;
@@ -40,7 +49,10 @@ export const McpServerDetailPage = React.memo(function McpServerDetailPage(
     /** A Configuration value was committed (blur, a type or secret chosen): save it now. */
     onCommitConfiguration: () => void;
     configurationSaveState: McpConfigurationSaveState;
+    /** The open edit met another writer's change: this page presents Changed elsewhere · Review. */
+    configurationConflict?: McpServerConflict | null;
     onRemove: () => void;
+    onDuplicate: () => void | Promise<void>;
     approvalNotice: React.ReactNode;
     onChangeServer: (
       updater: (current: McpServerCatalogEntryV1) => McpServerCatalogEntryV1,
@@ -68,6 +80,34 @@ export const McpServerDetailPage = React.memo(function McpServerDetailPage(
     secretAvailability,
     recovery,
   );
+  const installLink = useMcpServerInstallLink(detail.execution, server.id, props.catalogRevision);
+  const { onDuplicate } = props;
+  // Rare operations behind the header's ⋯. The link is offered only when the Home produced one.
+  const menuItems = React.useMemo((): readonly PageHeaderMenuAction[] => [
+    {
+      id: 'duplicate',
+      testID: 'mcp.server.duplicate',
+      title: t('capabilities.mcp.detail.duplicate'),
+      onSelect: onDuplicate,
+    },
+    ...(installLink
+      ? [{
+          id: 'copyInstallLink',
+          testID: 'mcp.server.copyInstallLink',
+          title: t('capabilities.mcp.detail.copyInstallLink'),
+          onSelect: async () => {
+            const copied = await setClipboardStringSafe(installLink);
+            publishPresentationNotice({
+              key: INSTALL_LINK_NOTICE_KEY,
+              severity: copied ? 'info' : 'error',
+              message: copied
+                ? t('items.copiedToClipboard', { label: t('capabilities.mcp.detail.installLinkLabel') })
+                : t('items.failedToCopyToClipboard'),
+            });
+          },
+        }]
+      : []),
+  ], [installLink, onDuplicate]);
   const missingKeys = React.useMemo(
     () => mcpServerMissingKeyNames(server, secretAvailability),
     [secretAvailability, server],
@@ -120,8 +160,16 @@ export const McpServerDetailPage = React.memo(function McpServerDetailPage(
         purpose={server.description}
         facts={facts}
         mono={registryId}
+        menuItems={menuItems}
       />
       {props.approvalNotice}
+      {props.configurationConflict ? (
+        <McpServerConflictReview
+          conflict={props.configurationConflict}
+          draftServer={props.draftServer}
+          secrets={props.secrets}
+        />
+      ) : null}
       <McpServerBanner detail={detail} name={name} toolCount={toolCount} />
       {detail.signIn.view ? (
         <McpSignInSection name={name} signIn={{ ...detail.signIn, view: detail.signIn.view }} onUseApiKey={recovery.useApiKey} />
@@ -131,6 +179,7 @@ export const McpServerDetailPage = React.memo(function McpServerDetailPage(
         title={t('capabilities.mcp.detail.configurationTitle')}
         description={t('capabilities.mcp.detail.configurationDescription')}
         draftServer={props.draftServer}
+        committedServer={props.configurationBaseServer}
         secrets={props.secrets}
         scope={props.scope}
         mode="edit"
@@ -149,6 +198,14 @@ export const McpServerDetailPage = React.memo(function McpServerDetailPage(
         onCommit={props.onCommitConfiguration}
       />
       <McpServerMachinesAndDetails detail={detail} server={server} />
+      {server.origin?.kind === 'registry' ? (
+        <McpServerUpdateSection
+          testID="mcp.server.update"
+          update={detail.update}
+          secrets={props.secrets}
+          scope={props.scope ?? null}
+        />
+      ) : null}
       <PageLeaveActions
         testID="mcp.server.leave"
         footnote={t('capabilities.mcp.detail.removeFootnote')}

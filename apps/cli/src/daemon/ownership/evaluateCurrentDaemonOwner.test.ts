@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { once } from 'node:events';
+import { createServer } from 'node:http';
 
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { withTempDir } from '@/testkit/fs/tempDir';
@@ -124,6 +126,33 @@ describe('isDaemonProcessForCurrentRuntimeRoot', () => {
 });
 
 describe('evaluateCurrentDaemonOwner', () => {
+    // A persisted PID is not daemon identity. Keep the real ownership inspection
+    // and expose the authenticated control endpoint that proves this owner.
+    const server = createServer((request, response) => {
+        request.resume();
+        if (request.method !== 'POST' || request.url !== '/ping') {
+            response.writeHead(404).end();
+            return;
+        }
+        if (request.headers['x-happier-daemon-token'] !== 'test-control-token') {
+            response.writeHead(401).end();
+            return;
+        }
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ status: 'ok' }));
+    });
+    let httpPort: number;
+    beforeAll(async () => {
+        server.listen(0, '127.0.0.1');
+        await once(server, 'listening');
+        const address = server.address();
+        if (!address || typeof address === 'string') throw new Error('Missing server address');
+        httpPort = address.port;
+    });
+    afterAll(async () => {
+        server.closeAllConnections();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+    });
     const envScope = createEnvKeyScope([
         'HAPPIER_HOME_DIR',
         'HAPPIER_ACTIVE_SERVER_ID',
@@ -292,7 +321,8 @@ describe('evaluateCurrentDaemonOwner', () => {
 
             writeDaemonState({
                 pid: process.pid,
-                httpPort: 43110,
+                httpPort,
+                controlToken: 'test-control-token',
                 startedAt: Date.now(),
                 startedWithCliVersion: configuration.currentCliVersion,
                 startedWithPublicReleaseChannel: 'dev',
@@ -326,7 +356,8 @@ describe('evaluateCurrentDaemonOwner', () => {
 
             writeDaemonState({
                 pid: process.pid,
-                httpPort: 43111,
+                httpPort,
+                controlToken: 'test-control-token',
                 startedAt: Date.now(),
                 startedWithCliVersion: '0.0.0-other',
                 startedWithPublicReleaseChannel: 'preview',
@@ -363,7 +394,8 @@ describe('evaluateCurrentDaemonOwner', () => {
 
             writeDaemonState({
                 pid: process.pid,
-                httpPort: 43112,
+                httpPort,
+                controlToken: 'test-control-token',
                 startedAt: Date.now(),
                 startedWithCliVersion: '0.0.0-other',
                 startedWithPublicReleaseChannel: 'preview',
@@ -396,7 +428,8 @@ describe('evaluateCurrentDaemonOwner', () => {
 
             writeDaemonState({
                 pid: process.pid,
-                httpPort: 43114,
+                httpPort,
+                controlToken: 'test-control-token',
                 startedAt: Date.now(),
                 startedWithCliVersion: '0.0.0-other',
                 startedWithPublicReleaseChannel: 'preview',
@@ -431,7 +464,8 @@ describe('evaluateCurrentDaemonOwner', () => {
 
             writeDaemonState({
                 pid: process.pid,
-                httpPort: 43113,
+                httpPort,
+                controlToken: 'test-control-token',
                 startedAt: Date.now(),
                 startedWithCliVersion: configuration.currentCliVersion,
                 runtimeId: 'runtime-missing-ring',

@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { buildMachineAgentInventoryKey } from '@happier-dev/protocol/capabilities';
 
 import type { MachineAgent } from '@/agents/machineAgents/machineAgentTypes';
 import { useMachineAgents } from '@/agents/machineAgents/useMachineAgents';
@@ -18,6 +19,8 @@ export const MachineAgentsSection = React.memo(function MachineAgentsSection(pro
     serverId: string;
     machineId: string;
     machineName: string;
+    /** See `MachineAgentsSectionView.titled`. */
+    titled?: boolean;
     onStartSession?: (agent: MachineAgent) => void;
 }>) {
     const inventory = useMachineAgents({ serverId: props.serverId, machineId: props.machineId });
@@ -30,7 +33,7 @@ export const MachineAgentsSection = React.memo(function MachineAgentsSection(pro
             return next;
         });
     }, []);
-    const openForm = React.useCallback((agent: MachineAgent) => setAgentExpanded(agent.agentId, true), [setAgentExpanded]);
+    const openForm = React.useCallback((agent: MachineAgent) => setAgentExpanded(buildMachineAgentInventoryKey(agent), true), [setAgentExpanded]);
     const onAction = useMachineAgentRowActions({ serverId: props.serverId, machineId: props.machineId, machineName: props.machineName, onOpenForm: openForm });
     const refresh = inventory.refresh;
     return (
@@ -40,15 +43,17 @@ export const MachineAgentsSection = React.memo(function MachineAgentsSection(pro
             status={inventory.status}
             lastCheckedAt={inventory.lastCheckedAt}
             machineName={props.machineName}
+            {...(props.titled === undefined ? {} : { titled: props.titled })}
             renderMark={(agent) => <MachineAgentMark agentId={agent.agentId} machineId={props.machineId} serverId={props.serverId} />}
             sessionFor={() => null}
             renderForm={(agent) => (
                 <AgentSetupForm
-                    testID={`machine-agents.form.${agent.agentId}`}
+                    testID={`machine-agents.form.${buildMachineAgentInventoryKey(agent)}`}
                     serverId={props.serverId}
                     machineId={props.machineId}
                     machineName={props.machineName}
                     agentId={agent.agentId}
+                    definitionId={agent.definitionId}
                     layout="full"
                     {...(props.onStartSession ? { onStartSession: props.onStartSession } : {})}
                 />

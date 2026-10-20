@@ -72,3 +72,34 @@ describe('formatBrowserDisplayUrl', () => {
         expect(formatBrowserDisplayUrl('about:blank')).toBe('about:blank');
     });
 });
+
+describe('relay preview address display', () => {
+    const previewView = (overrides: Record<string, unknown> = {}) => ({
+        target: { kind: 'localServicePreview', targetId: 'preview:1', machineId: 'machine_1', display: { title: 'Lumen', addressLabel: 'localhost:42511' } },
+        currentUrl: 'https://preview-abc123.example.test/docs/start',
+        pendingUrl: null,
+        ...overrides,
+    }) as never;
+
+    it('shows the exposed service instead of the opaque isolated host, keeping the path', async () => {
+        const { formatBrowserDisplayUrl, selectBrowserViewDisplayHost } = await import('./address');
+        const view = previewView();
+        const displayHost = selectBrowserViewDisplayHost(view);
+
+        expect(displayHost).toBe('localhost:42511');
+        expect(formatBrowserDisplayUrl('https://preview-abc123.example.test/docs/start', { displayHost })).toBe('localhost:42511/docs/start');
+        expect(formatBrowserDisplayUrl('https://preview-abc123.example.test/', { displayHost, hostOnly: true })).toBe('localhost:42511');
+        // The preview's own query stays; its admission never reaches the address (the control reducer owns that).
+        expect(formatBrowserDisplayUrl('https://preview-abc123.example.test/docs?tab=1', { displayHost })).toBe('localhost:42511/docs?tab=1');
+    });
+
+    it('does not rename an address that is no longer the preview: a pending page on another origin, or another target kind', async () => {
+        const { selectBrowserViewDisplayHost } = await import('./address');
+
+        expect(selectBrowserViewDisplayHost(previewView({ pendingUrl: 'https://example.com/' }))).toBeUndefined();
+        expect(selectBrowserViewDisplayHost(previewView({ pendingUrl: 'https://preview-abc123.example.test/next' }))).toBe('localhost:42511');
+        expect(selectBrowserViewDisplayHost(previewView({ target: { kind: 'externalUrl', targetId: 'x', url: 'https://example.com/', display: { title: 'Example', addressLabel: 'example.com' } } }))).toBeUndefined();
+        expect(selectBrowserViewDisplayHost(previewView({ target: { kind: 'localServicePreview', targetId: 'p', machineId: 'm' } }))).toBeUndefined();
+        expect(selectBrowserViewDisplayHost(null)).toBeUndefined();
+    });
+});

@@ -100,6 +100,42 @@ export const MYSQL_TRIGGER_MIGRATIONS: ReadonlyArray<MysqlTriggerMigration> = [
             },
         ],
     },
+    {
+        migrationName: "20261002200000_stored_content_public_shares",
+        requiredPrivileges: [{ privilege: "TRIGGER", tableName: "PublicSessionShare" }],
+        triggers: [
+            {
+                name: "PublicSessionShare_subject_insert",
+                timing: "BEFORE",
+                event: "INSERT",
+                tableName: "PublicSessionShare",
+            },
+            {
+                name: "PublicSessionShare_subject_update",
+                timing: "BEFORE",
+                event: "UPDATE",
+                tableName: "PublicSessionShare",
+            },
+        ],
+    },
+    {
+        migrationName: "20261008143000_add_managed_machine_authority",
+        requiredPrivileges: [{ privilege: "TRIGGER", tableName: "ManagedMachinePreset" }],
+        triggers: [
+            {
+                name: "ManagedMachinePreset_owner_insert",
+                timing: "BEFORE",
+                event: "INSERT",
+                tableName: "ManagedMachinePreset",
+            },
+            {
+                name: "ManagedMachinePreset_owner_update",
+                timing: "BEFORE",
+                event: "UPDATE",
+                tableName: "ManagedMachinePreset",
+            },
+        ],
+    },
 ];
 
 type QueryRows = ReadonlyArray<Record<string, unknown>>;

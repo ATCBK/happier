@@ -4,6 +4,7 @@ import type { BackendTargetRefV1, SessionInputCausalPermissionAuthorityV1 } from
 import { ReviewFindingsV2Schema } from '@happier-dev/protocol/messages/structured/reviewFindingsV2';
 import { ReviewFollowUpInputSchema } from '@happier-dev/protocol/reviews/reviewFollowUp';
 import { ReviewTriageOverlaySchema } from '@happier-dev/protocol/messages/structured/reviewFindingsV1';
+import { isExecutionRunActive } from '@happier-dev/protocol/execution/runs/responseSchemas';
 
 import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTypes';
 import {
@@ -14,6 +15,7 @@ import {
 import { VoiceAgentError, type VoiceAgentManager } from '@/agent/voice/agent/VoiceAgentManager';
 import { buildExecutionRunProfileStartParams } from './profileStart';
 import { resolveExecutionRunLifecycle } from './resolveExecutionRunLifecycle';
+import { projectExecutionRunPublicState } from './publicState';
 import type {
   ExecutionRunActionParams,
   ExecutionRunActionResult,
@@ -28,6 +30,7 @@ import type {
 } from '@/agent/executionRuns/profiles/review/hostActionMaterializer';
 import type { ReviewRunCommentService } from '@/agent/executionRuns/profiles/review/reviewComments';
 import { readRetainedReviewFindings } from '@/agent/reviews/normalize/readRetainedReviewFindings';
+import { readExecutionRunErrorCode } from './errors';
 
 function readNonEmptyString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
@@ -90,17 +93,20 @@ export async function applyExecutionRunAction(args: Readonly<{
   if (run.intent === 'review' && String(args.params.actionId ?? '').trim() === 'review.follow_up') {
     // This stays runtime-owned because follow-up orchestration needs the live run and
     // startRun/retention plumbing, not just a pure profile transform.
-    const lifecycle = resolveExecutionRunLifecycle(run, args.controllers.get(args.runId) ?? null);
-    if (run.status === 'running' || lifecycle.projection.state === 'current' || lifecycle.projection.state === 'recovering') {
+    const current = projectExecutionRunPublicState(run, args.controllers.get(args.runId) ?? null);
+    if (isExecutionRunActive(current) || current.lifecycle?.state === 'recovering') {
       return { ok: false, errorCode: 'execution_run_busy', error: 'The review is still running or retiring' };
     }
     if (run.status === 'cancelled' || run.status === 'failed' || run.status === 'timeout') {
       return { ok: false, errorCode: 'review_follow_up_ended', error: 'The review ended without a resumable result' };
     }
-    if (lifecycle.unavailableReason === 'not_resumable') {
+    // A live controller owns its conversation directly. A provider resume handle
+    // is needed only when that controller has gone away.
+    const lifecycle = resolveExecutionRunLifecycle(run, args.controllers.get(args.runId) ?? null);
+    if (run.retentionPolicy !== 'resumable' || lifecycle.unavailableReason === 'not_resumable') {
       return { ok: false, errorCode: 'review_follow_up_not_resumable', error: 'The review was not retained for follow-up' };
     }
-    if (lifecycle.projection.state !== 'recoverable' && lifecycle.projection.state !== 'recoverable_with_input') {
+    if (lifecycle.projection.state !== 'current' && lifecycle.projection.state !== 'recoverable' && lifecycle.projection.state !== 'recoverable_with_input') {
       return { ok: false, errorCode: 'review_follow_up_resume_unavailable', error: 'The retained reviewer session is unavailable' };
     }
 
@@ -115,7 +121,8 @@ export async function applyExecutionRunAction(args: Readonly<{
     }
 
     const threadId = parsed.data.threadId ?? `review_thread_${randomUUID()}`;
-    const started = await args.startRun({
+    let started: ExecutionRunStartResult;
+    try { started = await args.startRun({
       sessionId: run.sessionId,
       intent: 'review',
       backendTarget: run.backendTarget,
@@ -145,7 +152,10 @@ export async function applyExecutionRunAction(args: Readonly<{
       resumeHandle: run.resumeHandle,
       ...(run.profileId ? { profileId: run.profileId } : {}),
       parentRunId: run.runId,
-    });
+    }); } catch (error) {
+      if (readExecutionRunErrorCode(error) !== 'execution_run_busy') throw error;
+      return { ok: false, errorCode: 'execution_run_busy', error: 'The reviewer is processing another input' };
+    }
 
     return { ok: true, result: { threadId, ...started } };
   }

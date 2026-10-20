@@ -65,6 +65,9 @@ import {
   AccountEncryptionCurrentnessReadinessError,
   fetchAccountEncryptionCurrentness,
 } from '@/sync/api/account/apiAccountEncryptionMode';
+import { SESSION_OWNER_METADATA_PROJECTION } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { buildRenderableFromRowAndCache } from './sessionSnapshot';
 
 type SessionEncryption = {
   encryptRaw?: (payload: unknown) => Promise<string>;
@@ -83,6 +86,8 @@ export type SessionByIdEncryption = {
   removeSessionEncryption?: (sessionId: string) => EncryptionGenerationScope | null | void;
 } & Partial<EncryptionGenerationScopeAuthority>;
 
+export type SessionByIdContentDemand = 'session' | 'encryption-context' | 'list-projection';
+
 type SessionDataKeyEnvelopeCache = Map<string, string>;
 type SessionByIdRequest = (path: string, init: RequestInit) => Promise<Response>;
 type SessionByIdHttpRead = Readonly<{
@@ -90,6 +95,42 @@ type SessionByIdHttpRead = Readonly<{
   status: number;
   body: unknown;
 }>;
+
+/** Transport inputs only; the ordinary Session reader still admits and opens each row. */
+export type SessionByIdPrefetchedRead = Readonly<{
+  accessProjectionVersion?: 1;
+  detail: Readonly<{ status: number; body: unknown }>;
+  turns?: Readonly<{ status: number; body: unknown }>;
+}>;
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * A retained layout-1 owner row can lack its owner envelope. The canonical wire schema rejects
+ * that tuple for readable projections; exact hydration still has to settle it as unavailable
+ * instead of retrying forever. Validate the complete current row with a schema-only placeholder,
+ * then restore the missing envelope so the owner reader contracts it to the existing safe shell.
+ */
+function parseCurrentSessionProjectionForHydration(value: unknown) {
+  const parsed = SessionCurrentProjectionRecordV1Schema.safeParse(value);
+  if (parsed.success || !isUnknownRecord(value)) return parsed;
+  const effectiveAccess = value.effectiveAccess;
+  const isMissingOwnerEnvelope = value.metadataLayoutVersion === 1
+    && (value.ownerMetadata === null || value.ownerMetadata === undefined)
+    && value.share === null
+    && isUnknownRecord(effectiveAccess)
+    && effectiveAccess.level === 'owner';
+  if (!isMissingOwnerEnvelope) return parsed;
+  const validated = SessionCurrentProjectionRecordV1Schema.safeParse({
+    ...value,
+    ownerMetadata: { t: 'plain', v: { v: 1 } },
+  });
+  return validated.success
+    ? { success: true as const, data: { ...validated.data, ownerMetadata: null } }
+    : parsed;
+}
 type HydratedSessionById = Omit<
   V2SessionByIdResponse['session'],
   'metadata' | 'ownerMetadata'
@@ -214,32 +255,39 @@ async function fetchSessionTurnsProjection(params: Readonly<{
   credentials: AuthCredentials;
   request: (path: string, init: RequestInit) => Promise<Response>;
   log: { log: (message: string) => void };
+  prefetched?: SessionByIdPrefetchedRead;
 }>): Promise<SessionTurnsProjectionV1 | null> {
-  let response: Response;
-  try {
-    response = await params.request(`/v1/sessions/${encodeURIComponent(params.sessionId)}/turns`, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${params.credentials.token}`,
-        'Content-Type': 'application/json',
-      },
-    });
-  } catch (err) {
-    if (isTerminalAuthError(err)) {
-      throw err;
+  let status: number;
+  let body: unknown;
+  if (params.prefetched) {
+    const read = params.prefetched.turns;
+    if (!read) return null;
+    status = read.status;
+    body = read.body;
+  } else {
+    let response: Response;
+    try {
+      response = await params.request(`/v1/sessions/${encodeURIComponent(params.sessionId)}/turns`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${params.credentials.token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+    } catch (err) {
+      if (isTerminalAuthError(err)) throw err;
+      params.log.log(`[sessionById] Failed to fetch session turns ${params.sessionId}: ${err instanceof Error ? err.message : 'unknown error'}`);
+      return null;
     }
-    params.log.log(`[sessionById] Failed to fetch session turns ${params.sessionId}: ${err instanceof Error ? err.message : 'unknown error'}`);
+    status = response.status;
+    body = response.ok ? await response.json().catch(() => null) : null;
+  }
+
+  if (status < 200 || status >= 300) {
+    if (isAuthenticationResponseStatus(status)) throw createNotAuthenticatedError(status);
     return null;
   }
 
-  if (!response.ok) {
-    if (isAuthenticationResponseStatus(response.status)) {
-      throw createNotAuthenticatedError(response.status);
-    }
-    return null;
-  }
-
-  const body = await response.json().catch(() => null);
   const parsed = SessionTurnsProjectionV1Schema.safeParse(body);
   if (!parsed.success || parsed.data.sessionId !== params.sessionId) {
     params.log.log(`[sessionById] Ignoring invalid session turns projection for ${params.sessionId}`);
@@ -320,6 +368,9 @@ function applyLockedSessionShell(params: Readonly<{
 
 export async function fetchAndApplySessionById(params: Readonly<{
   sessionId: string;
+  prefetched?: SessionByIdPrefetchedRead;
+  /** Exact access/list reconciliation and draft recovery can omit full Session hydration. */
+  contentDemand?: SessionByIdContentDemand;
   serverId?: string | null;
   credentials: AuthCredentials;
   /** Explicit bridge envelope: presence binds this read to a Session recipient. */
@@ -335,6 +386,7 @@ export async function fetchAndApplySessionById(params: Readonly<{
   requestAuthority?: object;
   applySessions: (sessions: Array<Omit<Session, 'presence'> & { presence?: 'online' | number }>) => void;
   getExistingSession?: (sessionId: string) => Session | null | undefined;
+  getCurrentSessionListRenderable?: (sessionId: string) => SessionListRenderableSession | null | undefined;
   log: { log: (message: string) => void };
   timeoutMs?: number;
   includeTurnsProjection?: boolean;
@@ -345,6 +397,8 @@ export async function fetchAndApplySessionById(params: Readonly<{
 }>): Promise<{
   ok: boolean;
   session: HydratedSessionById | Session | null;
+  sessionListRenderable?: SessionListRenderableSession;
+  encryptionMode?: 'e2ee' | 'plain';
   sessionDataKeyHydration?: SessionDataKeyHydrationResult;
   metadataTupleMutationSnapshot?:
     | HydratedSessionMetadataTupleMutationSnapshot
@@ -368,7 +422,11 @@ export async function fetchAndApplySessionById(params: Readonly<{
   let responseStatus = 0;
   let body: unknown = null;
   try {
-    const response = await readSessionByIdHttp({
+    const response = params.prefetched ? {
+      ok: params.prefetched.detail.status === 200,
+      status: params.prefetched.detail.status,
+      body: params.prefetched.detail.body,
+    } : await readSessionByIdHttp({
       sessionId,
       serverId: params.serverId,
       token: params.credentials.token,
@@ -435,7 +493,13 @@ export async function fetchAndApplySessionById(params: Readonly<{
     }
   }
 
-  const parsed = parseCompatSessionByIdResponse(body);
+  const negotiatedCurrentProjection = params.accessProjectionVersion === 1
+    && isUnknownRecord(body)
+    ? parseCurrentSessionProjectionForHydration(body.session)
+    : null;
+  const parsed = negotiatedCurrentProjection?.success
+    ? { session: negotiatedCurrentProjection.data }
+    : parseCompatSessionByIdResponse(body);
   if (!parsed?.session) {
     // A negotiated current projection cannot recover its authority from an
     // unqualified list. Failed detail bodies must not fan out into full scans.
@@ -456,14 +520,18 @@ export async function fetchAndApplySessionById(params: Readonly<{
     body = { session: fallbackRow };
   }
 
-  const reparsed = parseCompatSessionByIdResponse(body);
+  const reparsed = negotiatedCurrentProjection?.success
+    ? { session: negotiatedCurrentProjection.data }
+    : parseCompatSessionByIdResponse(body);
   if (!reparsed?.session) {
     const status = responseStatus;
     return { ok: false, session: null, errorCode: 'invalid_response', httpStatus: responseOk ? undefined : status };
   }
 
   const currentProjection = params.accessProjectionVersion === 1
-    ? SessionCurrentProjectionRecordV1Schema.safeParse(reparsed.session)
+    ? negotiatedCurrentProjection?.success
+      ? negotiatedCurrentProjection
+      : parseCurrentSessionProjectionForHydration(reparsed.session)
     : null;
   if (currentProjection && !currentProjection.success) {
     return { ok: false, session: null, errorCode: 'invalid_response' };
@@ -481,6 +549,27 @@ export async function fetchAndApplySessionById(params: Readonly<{
     encryptionMode,
   )) {
     return { ok: false, session: null, errorCode: 'client_e2ee_required' };
+  }
+
+  if (params.contentDemand === 'list-projection') {
+    let accountCurrentness = params.accountCurrentness;
+    if (!accountCurrentness && readSessionMetadataLayoutVersion(row.metadataLayoutVersion) === 1 && access?.role === 'owner') {
+      try {
+        accountCurrentness = params.fetchAccountCurrentness
+          ? await params.fetchAccountCurrentness()
+          : await fetchAccountEncryptionCurrentness(params.credentials, { request: params.request });
+      } catch (error) {
+        if (isTerminalAuthError(error)) throw error;
+        return { ok: false, session: null, errorCode: 'account_currentness_unavailable' };
+      }
+    }
+    if (!isCurrent()) return staleResult();
+    const sessionListRenderable = buildRenderableFromRowAndCache(
+      row, params.credentials, accountCurrentness, undefined,
+      params.getExistingSession?.(sessionId), params.getCurrentSessionListRenderable?.(sessionId),
+    );
+    if (!isCurrent()) return staleResult();
+    return { ok: true, session: null, encryptionMode, sessionListRenderable };
   }
 
   // ── Lane 06 canonical Session data-key hydration block ────────────────────────
@@ -603,6 +692,22 @@ export async function fetchAndApplySessionById(params: Readonly<{
     recipientReadiness,
   });
 
+  if (params.contentDemand === 'encryption-context') {
+    if (!isHydrationCurrent()) return staleResult();
+    if (!isSessionContentReadable(contentAvailability)) {
+      return {
+        ok: false,
+        session: null,
+        errorCode: hydrationState === 'missing_envelope' ? 'session_key_unavailable' : 'session_key_invalid',
+        sessionDataKeyHydration: hydration,
+      };
+    }
+    if (encryptionMode === 'e2ee' && !params.encryption.getSessionEncryption(sessionId)) {
+      return { ok: false, session: null, errorCode: 'session_encryption_not_found' };
+    }
+    return { ok: true, session: null, encryptionMode, sessionDataKeyHydration: hydration };
+  }
+
   const metadataLayoutVersion = readSessionMetadataLayoutVersion(row.metadataLayoutVersion);
   const recipientAuthority = metadataLayoutVersion === 1
     && !isSessionAccessOwner(access, undefined);
@@ -625,6 +730,7 @@ export async function fetchAndApplySessionById(params: Readonly<{
         ownerMetadataEnvelope: row.ownerMetadata,
         credentials: params.credentials,
         composerOptionsInput: params.composerOptionsInput,
+        previousProjection: params.getExistingSession?.(sessionId)?.[SESSION_OWNER_METADATA_PROJECTION],
       })
     : null;
   const lockedOwnerVisibility = projectSessionLayout1LockedOwnerVisibility(
@@ -786,6 +892,7 @@ export async function fetchAndApplySessionById(params: Readonly<{
       credentials: params.credentials,
       request: params.request,
       log: params.log,
+      prefetched: params.prefetched,
     });
   if (!isHydrationCurrent()) return staleResult();
   const rollbackEligibleTurnStarts = sessionTurns
@@ -908,6 +1015,7 @@ export async function fetchAndApplySessionById(params: Readonly<{
     thinkingAt: 0,
     metadata,
     ownerMetadataView,
+    [SESSION_OWNER_METADATA_PROJECTION]: ownerMetadataRead?.kind === 'owner' && ownerMetadataRead.canReuse ? ownerMetadataRead : null,
     composerOptionsInput,
     metadataProjection: params.composerOptionsInput !== undefined ? 'sessionOnly' as const : undefined,
     agentState,

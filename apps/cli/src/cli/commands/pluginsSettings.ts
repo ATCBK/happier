@@ -310,6 +310,7 @@ async function executeThroughCanonicalActionExecutor(params: Readonly<{
   const actionResult: ActionExecuteResult = await executor.execute(params.actionId, params.input, {
     surface: 'cli',
     defaultSessionId: null,
+    actionRequestId: randomUUID(),
     ...(params.signal ? { signal: params.signal } : {}),
   });
   params.signal?.throwIfAborted();

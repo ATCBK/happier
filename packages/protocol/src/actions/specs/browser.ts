@@ -22,6 +22,7 @@ import {
   BrowserGoForwardCommandV1Schema,
   BrowserNavigateCommandV1Schema,
   BrowserOpenViewCommandV1Schema,
+  BrowserOpenViewInProgressV1Schema,
   BrowserReloadCommandV1Schema,
   BrowserSetTargetCommandV1Schema,
   BrowserStopCommandV1Schema,
@@ -302,11 +303,11 @@ export const BROWSER_RUNTIME_ACTION_INPUT_SCHEMAS = Object.freeze({
   'browser.diagnostics.clear': RuntimeBrowserViewInputSchema,
   'browser.diagnostics.pause': RuntimeBrowserViewInputSchema,
   'browser.diagnostics.resume': RuntimeBrowserViewInputSchema,
-  'browser.diagnostics.eval': BrowserDiagnosticsEvalRequestV1Schema,
-  'browser.diagnostics.getProperties': BrowserDiagnosticsGetPropertiesRequestV1Schema,
-  'browser.diagnostics.releaseObjectGroup': BrowserDiagnosticsReleaseObjectGroupRequestV1Schema,
-  'browser.diagnostics.elementPicker.start': BrowserDiagnosticsElementPickerRequestV1Schema,
-  'browser.diagnostics.elementPicker.cancel': BrowserDiagnosticsElementPickerRequestV1Schema,
+  'browser.diagnostics.eval': lazyZodSchema(() => z.strictObject({ ...BrowserDiagnosticsEvalRequestV1Schema.shape, browserSessionId: RuntimeBrowserViewInputSchema.shape.browserSessionId })),
+  'browser.diagnostics.getProperties': lazyZodSchema(() => z.strictObject({ ...BrowserDiagnosticsGetPropertiesRequestV1Schema.shape, browserSessionId: RuntimeBrowserViewInputSchema.shape.browserSessionId })),
+  'browser.diagnostics.releaseObjectGroup': lazyZodSchema(() => z.strictObject({ ...BrowserDiagnosticsReleaseObjectGroupRequestV1Schema.shape, browserSessionId: RuntimeBrowserViewInputSchema.shape.browserSessionId })),
+  'browser.diagnostics.elementPicker.start': lazyZodSchema(() => z.strictObject({ ...BrowserDiagnosticsElementPickerRequestV1Schema.shape, browserSessionId: RuntimeBrowserViewInputSchema.shape.browserSessionId, action: z.literal('start') })),
+  'browser.diagnostics.elementPicker.cancel': lazyZodSchema(() => z.strictObject({ ...BrowserDiagnosticsElementPickerRequestV1Schema.shape, browserSessionId: RuntimeBrowserViewInputSchema.shape.browserSessionId, action: z.literal('cancel') })),
   'browser.context.capturePage': RuntimeBrowserContextActionInputSchema,
   'browser.context.captureScreenshot': RuntimeBrowserContextActionInputSchema,
   'browser.context.captureSelectedElement': RuntimeBrowserContextActionInputSchema,
@@ -355,12 +356,12 @@ export const BROWSER_RUNTIME_ACTION_INPUT_SCHEMAS = Object.freeze({
   'browser.recording.attachToComposer': RuntimeBrowserRecordingAttachInputSchema,
 } as const satisfies Readonly<Record<BrowserRuntimeActionId, z.ZodMiniType>>);
 
-export const BROWSER_RUNTIME_ACTION_OUTPUT_SCHEMAS = Object.freeze({
+const browserRuntimeOutputGeneralSchemas = {
   'browser.sandbox.install': BrowserSandboxInstallResultV1Schema,
   'browser.control.takeControl': z.union([BrowserCommandDispatchResultV1Schema, BrowserAutomationInterruptedResultV1Schema]),
   'browser.control.handBack': z.union([BrowserCommandDispatchResultV1Schema, BrowserAutomationInterruptedResultV1Schema]),
   'browser.workspace.open': BrowserWorkspaceOpenResultV1Schema,
-  'browser.view.open': BrowserCommandDispatchResultV1Schema,
+  'browser.view.open': z.union([BrowserCommandDispatchResultV1Schema, BrowserOpenViewInProgressV1Schema]),
   'browser.view.openExternal': BrowserCommandDispatchResultV1Schema,
   'browser.view.close': BrowserCommandDispatchResultV1Schema,
   'browser.view.focus': BrowserCommandDispatchResultV1Schema,
@@ -394,6 +395,9 @@ export const BROWSER_RUNTIME_ACTION_OUTPUT_SCHEMAS = Object.freeze({
   'browser.context.attachToComposer': BrowserContextAttachmentV1Schema,
   'browser.context.attachToAgentTurn': BrowserContextAttachmentV1Schema,
   'browser.context.clear': BrowserContextRouteResultV1Schema,
+} as const;
+
+const browserRuntimeOutputAutomationSchemas = {
   'browser.automation.status': BrowserAutomationActionResultV1Schema,
   'browser.automation.snapshot': BrowserAutomationActionResultV1Schema,
   'browser.automation.semanticSnapshot': BrowserAutomationActionResultV1Schema,
@@ -425,10 +429,47 @@ export const BROWSER_RUNTIME_ACTION_OUTPUT_SCHEMAS = Object.freeze({
   'browser.recording.discard': DaemonBrowserRecordingTerminalResultV1Schema,
   'browser.recording.cleanupExpired': DaemonBrowserRecordingCleanupResultV1Schema,
   'browser.recording.attachToComposer': BrowserRecordingAttachToComposerResultV1Schema,
+} as const;
+
+export const BROWSER_RUNTIME_ACTION_OUTPUT_SCHEMAS: Readonly<
+  typeof browserRuntimeOutputGeneralSchemas & typeof browserRuntimeOutputAutomationSchemas
+> = Object.freeze({
+  ...browserRuntimeOutputGeneralSchemas,
+  ...browserRuntimeOutputAutomationSchemas,
 } as const satisfies Readonly<Record<BrowserRuntimeActionId, z.ZodMiniType>>);
 
-export const BROWSER_RUNTIME_ACTION_SPEC_FAMILY = Object.freeze({
+/**
+ * A view command is read by what it opens or does, never by the ids that route it: correlation and
+ * discriminator operands, and the opening client's own plumbing, belong to Technical details.
+ */
+const BROWSER_VIEW_COMMAND_TECHNICAL_INPUT_PATHS = ['commandId', 'browserSessionId', 'viewId', 'kind'] as const;
+const BROWSER_TARGETED_COMMAND_TECHNICAL_INPUT_PATHS = [...BROWSER_VIEW_COMMAND_TECHNICAL_INPUT_PATHS, 'target.targetId'] as const;
+const BROWSER_APPROVAL_TECHNICAL_INPUT_PATHS = {
+  'browser.view.open': [...BROWSER_TARGETED_COMMAND_TECHNICAL_INPUT_PATHS, 'platform', 'focus', 'openerViewId', 'currentUrlExpiresAt'],
+  'browser.target.set': BROWSER_TARGETED_COMMAND_TECHNICAL_INPUT_PATHS,
+  'browser.workspace.open': ['commandId', 'target.targetId'],
+  'browser.view.close': BROWSER_VIEW_COMMAND_TECHNICAL_INPUT_PATHS,
+  'browser.view.focus': BROWSER_VIEW_COMMAND_TECHNICAL_INPUT_PATHS,
+  'browser.navigate': BROWSER_VIEW_COMMAND_TECHNICAL_INPUT_PATHS,
+  'browser.reload': BROWSER_VIEW_COMMAND_TECHNICAL_INPUT_PATHS,
+  'browser.goBack': BROWSER_VIEW_COMMAND_TECHNICAL_INPUT_PATHS,
+  'browser.goForward': BROWSER_VIEW_COMMAND_TECHNICAL_INPUT_PATHS,
+  'browser.stop': BROWSER_VIEW_COMMAND_TECHNICAL_INPUT_PATHS,
+  'browser.control.takeControl': BROWSER_VIEW_COMMAND_TECHNICAL_INPUT_PATHS,
+  'browser.control.handBack': BROWSER_VIEW_COMMAND_TECHNICAL_INPUT_PATHS,
+} as const satisfies Readonly<Partial<Record<BrowserRuntimeActionId, readonly string[]>>>;
+
+export const BROWSER_RUNTIME_ACTION_SPEC_FAMILY: Readonly<{
+  approvalPolicies: NonNullable<RuntimeActionSpecFamily['approvalPolicies']>;
+  approvalTechnicalInputPaths: typeof BROWSER_APPROVAL_TECHNICAL_INPUT_PATHS;
+  titles: typeof BROWSER_RUNTIME_ACTION_TITLES;
+  descriptions: typeof BROWSER_RUNTIME_ACTION_DESCRIPTIONS;
+  inputSchemas: typeof BROWSER_RUNTIME_ACTION_INPUT_SCHEMAS;
+  outputSchemas: typeof BROWSER_RUNTIME_ACTION_OUTPUT_SCHEMAS;
+}> = Object.freeze({
   approvalPolicies: {
+    'browser.workspace.open': { uiConfirmation: 'direct' },
+    'browser.view.open': { uiConfirmation: 'direct' },
     'browser.automation.cancelActive': { agentDefault: 'authority', requiredSurfaces: ['agent', 'mcp', 'plugin', 'api'] },
     'browser.control.takeControl': { agentDefault: 'authority' },
     'browser.control.handBack': { agentDefault: 'authority' },
@@ -443,6 +484,7 @@ export const BROWSER_RUNTIME_ACTION_SPEC_FAMILY = Object.freeze({
     'browser.context.attachToAgentTurn': { agentDefault: 'egress' },
     'browser.recording.attachToComposer': { agentDefault: 'egress' },
   },
+  approvalTechnicalInputPaths: BROWSER_APPROVAL_TECHNICAL_INPUT_PATHS,
   titles: BROWSER_RUNTIME_ACTION_TITLES,
   descriptions: BROWSER_RUNTIME_ACTION_DESCRIPTIONS,
   inputSchemas: BROWSER_RUNTIME_ACTION_INPUT_SCHEMAS,

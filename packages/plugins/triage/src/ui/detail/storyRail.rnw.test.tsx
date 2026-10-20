@@ -9,7 +9,7 @@ import { defineUiSurface, useSessionState } from '@happier-dev/plugin-ui';
 import { createPluginUiRnwSemanticSurfaceAdapter } from '@happier-dev/plugin-ui/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { TriageAgentStep, TriagePermissionCard, readTriageFindingSeverityToneV1 } from './storyRail.js';
+import { TriageAgentStep, TriagePermissionCard } from './storyRail.js';
 
 /**
  * The story rail's live agent half (r0.42): the permission card above the rail
@@ -21,6 +21,7 @@ import { TriageAgentStep, TriagePermissionCard, readTriageFindingSeverityToneV1 
 
 const SESSION: SessionStateV1 = {
   sessionId: 'session-a',
+  title: 'Codex',
   lifecycle: 'active',
   runtime: 'waiting',
   operational: 'permission_required',
@@ -112,6 +113,10 @@ async function mountRail(
 }
 
 describe('the story rail\'s live agent', () => {
+  it('names the work card after the current public Session title', async () => {
+    const rail = await mountRail([], { ...SESSION, title: 'Current investigation' });
+    await expect(rail.getByRole('heading', { name: 'Current investigation' })).resolves.toBeDefined();
+  });
   it('names the Agent that needs permission, independent of the linked Session title', async () => {
     const rail = await mountRail([], {
       ...SESSION,
@@ -143,13 +148,6 @@ describe('the story rail\'s live agent', () => {
     await expect(rail.getByText('Finding 1')).resolves.toBeDefined();
     await expect(rail.getByText('High')).resolves.toBeDefined();
     await expect(rail.getByText('src/cart/totals.ts:42')).resolves.toBeDefined();
-  });
-  it('colours a finding\'s severity only where it is trouble: blue is never a severity', () => {
-    expect(readTriageFindingSeverityToneV1('blocker')).toBe('danger');
-    expect(readTriageFindingSeverityToneV1('high')).toBe('danger');
-    expect(readTriageFindingSeverityToneV1('medium')).toBe('warning');
-    expect(readTriageFindingSeverityToneV1('low')).toBe('secondary');
-    expect(readTriageFindingSeverityToneV1('nit')).toBe('muted');
   });
   it('opens the Session that owns findings beyond the three-item preview', async () => {
     const rail = await mountRail([finding('1', 'session-a'), finding('2', 'session-a'),

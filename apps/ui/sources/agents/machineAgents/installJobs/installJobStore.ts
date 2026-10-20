@@ -14,7 +14,8 @@ export type AgentInstallJobStartOptions = Readonly<{ consent: AgentInstallJobCon
     expectedDefinitionVersion?: DaemonAgentInstallStartRequest['expectedDefinitionVersion'] }>;
 
 type JobRecord = { target: AgentInstallJobTarget; job: MachineAgentJob; cursor: number; hydrated: boolean; polling: boolean; timer?: ReturnType<typeof setTimeout> };
-type MachineJobs = { target: MachineAgentInstallJobTarget; controller: AbortController; jobs: ReadonlyMap<string, MachineAgentJob>; records: Map<string, JobRecord>; listeners: Set<() => void>; agentListeners: Map<string, Set<() => void>>; loading?: Promise<void>; starts: Map<string, Promise<MachineAgentJob>> };
+type JobDiscovery = { controller: AbortController; promise: Promise<void>; readers: number };
+type MachineJobs = { target: MachineAgentInstallJobTarget; controller: AbortController; jobs: ReadonlyMap<string, MachineAgentJob>; records: Map<string, JobRecord>; listeners: Set<() => void>; agentListeners: Map<string, Set<() => void>>; loading?: JobDiscovery; starts: Map<string, Promise<MachineAgentJob>> };
 const machines = new Map<string, MachineJobs>();
 const machineKey = (target: MachineAgentInstallJobTarget) => serverAccountScopedResourceKey(target, 'agent-install-jobs', target.machineId);
 const inventoryKey = (target: MachineAgentInstallJobTarget) => serverAccountScopedResourceKey(target, 'machine-agents', target.machineId);
@@ -156,7 +157,7 @@ async function poll(target: AgentInstallJobTarget, record: JobRecord): Promise<v
                 try {
                     // The initial discovery may have supplied the now-pruned job. Finish it
                     // before a fresh list so recovery cannot rejoin that stale snapshot.
-                    await state.loading;
+                    await state.loading?.promise;
                     await ensureMachineAgentInstallJobs(target);
                     requireCurrent(state);
                 } catch (error) {
@@ -188,39 +189,71 @@ async function poll(target: AgentInstallJobTarget, record: JobRecord): Promise<v
 }
 
 /** List is discovery/recovery; once hydrated, cursor reads own a job's changing projection. */
-export function ensureMachineAgentInstallJobs(target: MachineAgentInstallJobTarget): Promise<void> {
+export function ensureMachineAgentInstallJobs(target: MachineAgentInstallJobTarget, options: Readonly<{ signal?: AbortSignal }> = {}): Promise<void> {
+    const signal = options.signal;
+    if (signal?.aborted) return Promise.reject(new AgentInstallJobRpcError('request_cancelled'));
     const state = machine(target);
-    if (state.loading) return state.loading;
-    state.loading = (async () => {
-        const response = await listAgentInstallJobsRpc({ ...target, signal: state.controller.signal });
-        requireCurrent(state);
-        if (!response.ok) throw new AgentInstallJobRpcError(response.errorCode, response.error);
-        const latest = new Map<string, AgentInstallJob>();
-        for (const wire of response.jobs) {
-            const targetKey = buildMachineAgentInventoryKey(wire);
-            const candidate = latest.get(targetKey);
-            // Active work is selected per Agent/definition target. Historical timestamps can
-            // precede a clock correction, so active work takes priority over history.
-            if (!candidate || (candidate.done && !wire.done) || (candidate.done === wire.done && candidate.startedAt < wire.startedAt)) {
-                latest.set(targetKey, wire);
+    if (!state.loading) {
+        const controller = new AbortController();
+        const retire = () => controller.abort();
+        state.controller.signal.addEventListener('abort', retire, { once: true });
+        if (state.controller.signal.aborted) controller.abort();
+        const promise = (async () => {
+            const response = await listAgentInstallJobsRpc({ ...target, signal: controller.signal });
+            if (controller.signal.aborted) throw new AgentInstallJobRpcError('request_cancelled');
+            requireCurrent(state);
+            if (!response.ok) throw new AgentInstallJobRpcError(response.errorCode, response.error);
+            const latest = new Map<string, AgentInstallJob>();
+            for (const wire of response.jobs) {
+                const targetKey = buildMachineAgentInventoryKey(wire);
+                const candidate = latest.get(targetKey);
+                // Active work is selected per Agent/definition target. Historical timestamps can
+                // precede a clock correction, so active work takes priority over history.
+                if (!candidate || (candidate.done && !wire.done) || (candidate.done === wire.done && candidate.startedAt < wire.startedAt)) {
+                    latest.set(targetKey, wire);
+                }
             }
-        }
-        for (const wire of latest.values()) {
-            const targetKey = buildMachineAgentInventoryKey(wire);
-            const previous = state.records.get(targetKey);
-            // A start response names the admitted job even when an older list arrives later.
-            if (previous && !previous.hydrated && previous.job.jobId !== wire.jobId) continue;
-            if (previous?.job.jobId === wire.jobId && previous.hydrated) continue;
-            if (wire.done && previous && previous.job.jobId !== wire.jobId && previous.job.startedAtMs > wire.startedAt) continue;
-            if (previous?.timer) clearTimeout(previous.timer);
-            const agentTarget = { ...target, agentId: wire.agentId, definitionId: wire.definitionId };
-            const record: JobRecord = { target: agentTarget, job: fromWire(wire), cursor: 0, hydrated: true, polling: false };
-            state.records.set(targetKey, record);
-            publish(agentTarget, record.job);
-            if (!wire.done) void poll(agentTarget, record);
-        }
-    })().finally(() => { state.loading = undefined; });
-    return state.loading;
+            for (const wire of latest.values()) {
+                const targetKey = buildMachineAgentInventoryKey(wire);
+                const previous = state.records.get(targetKey);
+                // A start response names the admitted job even when an older list arrives later.
+                if (previous && !previous.hydrated && previous.job.jobId !== wire.jobId) continue;
+                if (previous?.job.jobId === wire.jobId && previous.hydrated) continue;
+                if (wire.done && previous && previous.job.jobId !== wire.jobId && previous.job.startedAtMs > wire.startedAt) continue;
+                if (previous?.timer) clearTimeout(previous.timer);
+                const agentTarget = { ...target, agentId: wire.agentId, definitionId: wire.definitionId };
+                const record: JobRecord = { target: agentTarget, job: fromWire(wire), cursor: 0, hydrated: true, polling: false };
+                state.records.set(targetKey, record);
+                publish(agentTarget, record.job);
+                if (!wire.done) void poll(agentTarget, record);
+            }
+        })().finally(() => {
+            state.controller.signal.removeEventListener('abort', retire);
+            if (state.loading?.controller === controller) state.loading = undefined;
+        });
+        state.loading = { controller, promise, readers: 0 };
+    }
+    const discovery = state.loading;
+    discovery.readers += 1;
+    return new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const release = () => {
+            if (settled) return false;
+            settled = true;
+            signal?.removeEventListener('abort', onAbort);
+            discovery.readers -= 1;
+            // Discovery observes jobs; retiring its last reader never cancels a daemon job.
+            if (discovery.readers === 0 && state.loading === discovery) {
+                state.loading = undefined;
+                discovery.controller.abort();
+            }
+            return true;
+        };
+        const onAbort = () => { if (release()) reject(new AgentInstallJobRpcError('request_cancelled')); };
+        signal?.addEventListener('abort', onAbort, { once: true });
+        discovery.promise.then(() => { if (release()) resolve(); }, error => { if (release()) reject(error); });
+        if (signal?.aborted) onAbort();
+    });
 }
 
 export function startAgentInstallJob(target: AgentInstallJobTarget, intent: AgentInstallJobIntent, options: AgentInstallJobStartOptions): Promise<MachineAgentJob> {

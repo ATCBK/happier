@@ -27,7 +27,7 @@ describe('CLI dynamic Action completion', () => {
     })).resolves.toEqual(definition);
     expect(execute).toHaveBeenCalledWith(
       'action.spec.get',
-      { id: 'example.plugin/actions/ping' },
+      { id: 'example.plugin/actions/ping', includeOutputSchema: true },
       expect.objectContaining({ surface: 'cli' }),
     );
   });

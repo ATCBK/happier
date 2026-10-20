@@ -3,7 +3,7 @@ import { MachineProcessesAnswerV1Schema } from '@happier-dev/protocol/machines/p
 import type { ProcessCensusSnapshot } from '@/processes/census/processCensus';
 import { resolveProcessOwnership } from '../ownership/resolveProcessOwnership';
 import { createLeftBehindTracker } from '../leftBehind/leftBehindTracker';
-import { projectMachineProcesses, type ProcessesProjectionOptions } from './projectMachineProcesses';
+import { projectMachineProcesses, type ProcessesProjectionOptions, type ProcessRequesterEvidenceFailure } from './projectMachineProcesses';
 import { processRef } from './processRef';
 import { processOwnerKey } from '../ownership/types';
 import { createProcessMetrics } from './processMetrics';
@@ -74,10 +74,10 @@ const options: ProcessesProjectionOptions = { platform: 'linux', selfPid: 10, al
     requesterForOwner: owner => ({ accountId: owner.kind === 'session' && owner.sessionId === 'guest-session' ? 'guest' : 'owner', displayName: 'Identity' }) };
 const request = { machineId: 'm', scope: 'happier' as const, view: 'tree' as const };
 function metricOwners(read: ReturnType<typeof setup>) {
-    const owners = new Map<string, number[]>();
+    const owners = new Map<string, Map<number, string>>();
     for (const row of read.rows) if (row.owner && row.level !== 'left_behind') {
-        const key = processOwnerKey(row.owner); const pids = owners.get(key) ?? [];
-        pids.push(row.pid); owners.set(key, pids);
+        const key = processOwnerKey(row.owner); const refs = owners.get(key) ?? new Map<number, string>();
+        refs.set(row.pid, processRef(row.pid, row.start)); owners.set(key, refs);
     }
     return owners;
 }
@@ -152,12 +152,29 @@ describe('process wire projection privacy', () => {
         expect(answer.owners.find(owner => owner.rowId === 'session:guest-session')?.state).toBe('running');
     });
     it('does not present known guest work as custodian work when profile display evidence is unavailable', () => {
+        const failures: ProcessRequesterEvidenceFailure[] = [];
         const withoutNames = { ...options, requesterForOwner: (owner: Parameters<ProcessesProjectionOptions['requesterForOwner']>[0]) =>
-            ({ accountId: owner.kind === 'session' && owner.sessionId === 'guest-session' ? 'guest' : 'owner' }), requesterIdentities: new Map() };
+            ({ accountId: owner.kind === 'session' && owner.sessionId === 'guest-session' ? 'guest' : 'owner' }), requesterIdentities: new Map(),
+            onRequesterEvidenceUnavailable: (failure: ProcessRequesterEvidenceFailure) => failures.push(failure) };
         expect(projectMachineProcesses(setup(), request, { accountId: 'owner', custodianAccountId: 'owner' }, withoutNames))
-            .toMatchObject({ state: 'unavailable', reason: 'read_failed', owners: [] });
+            .toMatchObject({ state: 'live', unverifiableCount: 2, owners: [
+                expect.objectContaining({ owner: { kind: 'happier' } }),
+                expect.objectContaining({ owner: { kind: 'session', sessionId: 'owner-session' } }),
+            ] });
         expect(projectMachineProcesses(setup(), request, { accountId: 'guest', custodianAccountId: 'owner' }, withoutNames).owners)
             .toHaveLength(1);
+        expect(failures).toEqual(expect.arrayContaining([
+            { owner: { kind: 'session', sessionId: 'guest-session' }, reason: 'display_identity_unavailable' },
+        ]));
+        const hidden = projectMachineProcesses(setup(), { ...request, detailToken: processRef(31, { startTimeMs: 31, native: 'linux-proc:31' }) },
+            { accountId: 'owner', custodianAccountId: 'owner' }, { ...withoutNames,
+                history: { [processRef(31, { startTimeMs: 31, native: 'linux-proc:31' })]: [{ capturedAtMs: 1000, memoryBytes: 31 }] } });
+        expect(JSON.stringify(hidden)).not.toMatch(/guest-secret|\/private\/guest|linux-proc:31/);
+        failures.length = 0;
+        expect(projectMachineProcesses(setup(), request, { accountId: 'owner', custodianAccountId: 'owner' },
+            { ...withoutNames, requesterForOwner: () => null })).toMatchObject({ state: 'live', unverifiableCount: 5, owners: [],
+                totals: { happier: { processCount: 0, memoryBytes: 0 } } });
+        expect(failures).toEqual(expect.arrayContaining([{ owner: { kind: 'happier' }, reason: 'requester_unavailable' }]));
     });
     it('projects visible owner sparklines from watched members, while only opened process details get history', () => {
         const read = setup();

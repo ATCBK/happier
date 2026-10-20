@@ -5,6 +5,7 @@ import type { WorkspaceSyncRuntimeReadinessV1 } from '@happier-dev/protocol';
 import type { MutagenControlCommandV1 } from './transport/workspaceSyncBrokerProtocol';
 import type { WorkspaceSyncBrokerOpenContext } from './transport/workspaceSyncBroker';
 import type { HappierProcessRootSource } from '@/daemon/processes/roots/listHappierProcessRoots';
+import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 
 export type WorkspaceSyncVerifiedRuntime = Readonly<{
   managerPath: string;
@@ -19,7 +20,7 @@ export type WorkspaceSyncSidecarBroker = Readonly<{
   bootstrapDescriptor: Uint8Array;
   setExpectedSidecarPid?(pid: number): void;
   waitForReady(pid: number): Promise<void>;
-  command(command: MutagenControlCommandV1, signal?: AbortSignal): Promise<unknown>;
+  command(command: MutagenControlCommandV1, signal?: AbortSignal, operationId?: string): Promise<unknown>;
   close(): Promise<void>;
 }>;
 
@@ -145,20 +146,22 @@ export class WorkspaceSyncSidecarLifecycle {
   }
 
   async start(): Promise<void> {
-    if (this.stopping) throw engineUnavailable(new Error('sidecar lifecycle is stopping'));
-    if (this.reconciliationContext.getStore() === true) {
-      if (this.authenticated && this.activeProcess) return;
-      if (!this.currentAuthenticatedReadiness) this.currentAuthenticatedReadiness = readiness();
-      const pending = this.currentAuthenticatedReadiness.promise;
+    return await timeWebLatencyPhase('workspaceSync.lifecycle.start', async () => {
+      if (this.stopping) throw engineUnavailable(new Error('sidecar lifecycle is stopping'));
+      if (this.reconciliationContext.getStore() === true) {
+        if (this.authenticated && this.activeProcess) return;
+        if (!this.currentAuthenticatedReadiness) this.currentAuthenticatedReadiness = readiness();
+        const pending = this.currentAuthenticatedReadiness.promise;
+        this.supervisor.start();
+        await pending;
+        return;
+      }
+      if (this.ready && this.activeProcess) return;
+      if (!this.currentReadiness) this.currentReadiness = readiness();
+      const pending = this.currentReadiness.promise;
       this.supervisor.start();
       await pending;
-      return;
-    }
-    if (this.ready && this.activeProcess) return;
-    if (!this.currentReadiness) this.currentReadiness = readiness();
-    const pending = this.currentReadiness.promise;
-    this.supervisor.start();
-    await pending;
+    });
   }
 
   async runReconciliation<T>(action: () => Promise<T>): Promise<T> {
@@ -286,11 +289,11 @@ export class WorkspaceSyncSidecarLifecycle {
     }).catch(() => undefined);
   }
 
-  async command(command: MutagenControlCommandV1, signal?: AbortSignal): Promise<unknown> {
+  async command(command: MutagenControlCommandV1, signal?: AbortSignal, operationId?: string): Promise<unknown> {
     await this.start();
     const broker = this.activeBroker;
     if (!broker) throw engineUnavailable(new Error('sidecar broker is unavailable'));
-    return await broker.command(command, signal);
+    return await broker.command(command, signal, operationId);
   }
 
   private publishReadiness(readiness: WorkspaceSyncRuntimeReadinessV1['engine']): void {

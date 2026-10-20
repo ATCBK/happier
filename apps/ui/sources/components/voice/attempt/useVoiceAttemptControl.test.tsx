@@ -808,6 +808,35 @@ describe('useVoiceAttemptControl recovery routing', () => {
         await hook.unmount();
     });
 
+    it('offers Agent settings from Local Voice authentication recovery when the adapter has no exact runtime identity', async () => {
+        const { registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
+        const { setVoiceSessionSnapshot } = await import('@/voice/session/voiceSessionStore');
+        registerVoiceAdapters([getActivatedAdapter('local_conversation')]);
+        seedVoiceSettings({ providerId: 'local_conversation', providers: {
+            local_conversation: { schemaVersion: 1, config: {
+                conversationMode: 'agent', agent: { agentSource: 'agent', agentId: 'codex' },
+            } },
+        } });
+        setVoiceSessionSnapshot({
+            adapterId: 'local_conversation', sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+            status: 'error', mode: 'idle', canStop: false,
+            errorCode: 'authentication_required', errorMessage: 'agent_signed_out',
+            errorRecoveryAction: 'connect_agent', errorPresentation: 'error',
+        });
+        const hook = await renderBothOwners();
+        try {
+            expect(hook.getCurrent().control).toMatchObject({
+                recoveryAvailable: true, surfaceState: 'error',
+                captionLabel: t('settingsVoice.local.machineErrors.authentication_required'),
+                recoveryLabel: t('voiceSurface.connectAgent'),
+            });
+            hook.getCurrent().control.onRecover();
+            expect(routerMock.instance?.spies.push.mock.calls.at(-1)?.[0]).toBe('/settings/agents');
+        } finally {
+            await hook.unmount();
+        }
+    });
+
     it('sends Agent runtime update recovery to the exact portable update target from every placement', async () => {
         const hook = await renderBothRecoveryOwners('update_agent_runtime');
         const expectedRoute = {
@@ -1106,6 +1135,22 @@ describe('useVoiceAttemptControl capture and caption projection', () => {
             recoveryLabel: t('voicePresence.recovery.setUp'),
             recoveryIcon: 'gear',
             canDismissFailedAttempt: true,
+        });
+        await hook.unmount();
+    });
+
+    it('says the previous session could not stop, with Retry, instead of the generic service message', async () => {
+        const hook = await renderControl({
+            adapterId: 'local_conversation', sessionId: 'control-1', status: 'error', mode: 'idle',
+            canStop: false,
+            errorCode: 'service_temporarily_unavailable', errorMessage: 'voice_previous_session_stop_failed',
+            errorPresentation: 'error', errorRecoveryAction: 'retry',
+        });
+        expect(hook.getCurrent()).toMatchObject({
+            surfaceState: 'error',
+            captionLabel: t('settingsVoice.local.machineErrors.previous_session_stop_failed'),
+            recoveryAvailable: true,
+            recoveryLabel: t('common.retry'),
         });
         await hook.unmount();
     });
@@ -1532,7 +1577,7 @@ describe('useVoiceAttemptControl terminal connection failures', () => {
         // A retained registry reference can outlive its public runtime lease.
         // The real adapter rejects before publishing any machine error.
         await providerAssembly?.dispose();
-        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const consoleInfo = vi.spyOn(console, 'info').mockImplementation(() => {});
         const { useVoiceAttemptControl } = await import('./useVoiceAttemptControl');
         const hook = await renderHook(() => useVoiceAttemptControl(GLOBAL_TARGET));
 
@@ -1542,7 +1587,7 @@ describe('useVoiceAttemptControl terminal connection failures', () => {
         });
 
         await vi.waitFor(() => {
-            expect(consoleError).toHaveBeenCalledWith(
+            expect(consoleInfo).toHaveBeenCalledWith(
                 '[fireAndForget] VoiceAttemptControl.toggle',
                 expect.objectContaining({ code: 'voice_runtime_generation_revoked' }),
             );
@@ -1554,7 +1599,7 @@ describe('useVoiceAttemptControl terminal connection failures', () => {
     it('still sends a mismatched rejection to diagnostics after the retry recovery is rendered', async () => {
         sdk.startSession.mockRejectedValue(Object.assign(new Error('voice_connection_failed'), { code: 'voice_connection_failed' }));
         await installElevenLabsLifecycle();
-        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const consoleInfo = vi.spyOn(console, 'info').mockImplementation(() => {});
         const { useVoiceAttemptControl } = await import('./useVoiceAttemptControl');
         const hook = await renderHook(() => useVoiceAttemptControl(GLOBAL_TARGET));
         await act(async () => { hook.getCurrent().onToggle(); });
@@ -1565,7 +1610,7 @@ describe('useVoiceAttemptControl terminal connection failures', () => {
         await providerAssembly?.dispose();
         await act(async () => { hook.getCurrent().onRecover(); });
         await vi.waitFor(() => {
-            expect(consoleError).toHaveBeenCalledWith(
+            expect(consoleInfo).toHaveBeenCalledWith(
                 '[fireAndForget] VoiceAttemptControl.recover',
                 expect.objectContaining({ code: 'voice_runtime_generation_revoked' }),
             );

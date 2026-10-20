@@ -29,6 +29,65 @@ export function readBundledPluginWorkspacePackageSpecs(repoRoot: string): readon
     }));
 }
 
+/** The host's declared workspace closure, using the same source roots as its bundled plugins. */
+export function readHostWorkspacePackageSpecs(
+    repoRoot: string,
+    hostRoot: string,
+    additionalPackages: readonly WorkspacePackageSpec[] = [],
+): readonly WorkspacePackageSpec[] {
+    const firstPartyPrefix = '@happier-dev/';
+    const pluginPrefix = `${firstPartyPrefix}plugins-`;
+    const hostManifest = JSON.parse(readFileSync(resolve(hostRoot, 'package.json'), 'utf8')) as Readonly<{
+        dependencies?: Readonly<Record<string, unknown>>;
+        devDependencies?: Readonly<Record<string, unknown>>;
+    }>;
+    const workspacePackages = new Map<string, WorkspacePackageSpec>();
+    const addWorkspacePackage = (workspacePackage: WorkspacePackageSpec): void => {
+        const existing = workspacePackages.get(workspacePackage.packageName);
+        if (existing && existing.packageSourceRoot !== workspacePackage.packageSourceRoot) {
+            throw new Error(`Conflicting source roots for ${workspacePackage.packageName}: `
+                + `${existing.packageSourceRoot} and ${workspacePackage.packageSourceRoot}`);
+        }
+        workspacePackages.set(workspacePackage.packageName, workspacePackage);
+    };
+    const packageSpec = (packageName: string, owner: string): WorkspacePackageSpec => {
+        const packageRoot = packageName.startsWith(pluginPrefix)
+            ? resolve(repoRoot, 'packages', 'plugins', packageName.slice(pluginPrefix.length))
+            : resolve(repoRoot, 'packages', packageName.slice(firstPartyPrefix.length));
+        const packageSourceRoot = resolve(packageRoot, 'src');
+        if (!existsSync(packageSourceRoot)) {
+            throw new Error(`Missing source root for ${owner} workspace dependency ${packageName}: ${packageSourceRoot}`);
+        }
+        return { packageName, packageSourceRoot };
+    };
+
+    for (const packageName of Object.keys(hostManifest.dependencies ?? {}).sort()) {
+        if (!packageName.startsWith(firstPartyPrefix) || packageName.startsWith(pluginPrefix)) continue;
+        addWorkspacePackage(packageSpec(packageName, hostRoot));
+    }
+    for (const workspacePackage of additionalPackages) addWorkspacePackage(workspacePackage);
+    for (const workspacePackage of readBundledPluginWorkspacePackageSpecs(repoRoot)) addWorkspacePackage(workspacePackage);
+    // Public plugin test dependencies need not join the shipped bundle.
+    for (const packageName of Object.keys(hostManifest.devDependencies ?? {}).sort()) {
+        if (packageName.startsWith(pluginPrefix)) addWorkspacePackage(packageSpec(packageName, hostRoot));
+    }
+
+    const pending = [...workspacePackages.values()];
+    for (let index = 0; index < pending.length; index += 1) {
+        const owner = pending[index]!;
+        const manifest = JSON.parse(readFileSync(resolve(owner.packageSourceRoot, '..', 'package.json'), 'utf8')) as Readonly<{
+            dependencies?: Readonly<Record<string, unknown>>;
+        }>;
+        for (const packageName of Object.keys(manifest.dependencies ?? {}).sort()) {
+            if (!packageName.startsWith(firstPartyPrefix) || workspacePackages.has(packageName)) continue;
+            const dependency = packageSpec(packageName, owner.packageName);
+            addWorkspacePackage(dependency);
+            pending.push(dependency);
+        }
+    }
+    return [...workspacePackages.values()].sort((left, right) => left.packageName.localeCompare(right.packageName));
+}
+
 function stripQueryAndHash(value: string): string {
     return value.replace(/[?#].*$/, '');
 }

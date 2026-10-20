@@ -272,6 +272,8 @@ describe('createBundledRealtimeProviderRuntime', () => {
       expect(staleStopSettled).toBe(false);
       const binding = voiceSessionBindingStore.getState().getByControlSessionId(controlSessionId);
       expect(binding?.conversationSessionId).toBe(controlSessionId);
+      const runtimeBinding = voiceSessionBindingStore.getState().runtimeBindingsByConversationSessionId[controlSessionId];
+      expect(runtimeBinding).toBeDefined();
 
       callbacks.get(2)!.onControl({ id: 'b-final', item: 'b-final', text: 'replacement B is still live' });
       const textTurn = adapter.sendTextTurn!({
@@ -283,7 +285,8 @@ describe('createBundledRealtimeProviderRuntime', () => {
       }));
       releaseFirstWrite.resolve();
       await Promise.all([staleStop, textTurn]);
-      expect(voiceSessionBindingStore.getState().getByControlSessionId(controlSessionId)).toBe(binding);
+      expect(voiceSessionBindingStore.getState().runtimeBindingsByConversationSessionId[controlSessionId]).toBe(runtimeBinding);
+      expect(voiceSessionBindingStore.getState().getByControlSessionId(controlSessionId)).toEqual(binding);
       expect(adapter.getSnapshot().status).toBe('connected');
       expect(replacementTrack.readyState).toBe('live');
       expect(activeProviderPreparation).toBe(2);

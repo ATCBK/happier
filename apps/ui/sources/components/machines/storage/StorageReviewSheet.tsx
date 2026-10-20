@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { View, type LayoutChangeEvent } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
   happierPageTextMetrics,
@@ -101,7 +101,7 @@ async function stopStorageHolders(
  * The review sheet (plan 40 STO-12, R24, lab `rs` R / Rp): the disk's result first, every item checked
  * again on the machine, what goes with what each frees (a Keep item says what is lost), what stays and
  * why, then the one choice of where it goes — Happier's Trash always chosen, Delete now beside it with a
- * button that says it can't be undone. No second dialog. Unticking an item narrows what the Action gets.
+ * button that says it can't be undone. Unticking narrows the Action's operands; its policy owns confirmation.
  */
 function StorageReviewSheet(props: ReviewProps) {
   // The body keeps the card's edge inset (the header's and footer's), and its sections add no second page inset.
@@ -127,6 +127,12 @@ function StorageReviewBody(props: ReviewProps) {
   const [mode, setMode] = React.useState<StorageReviewMode>('trash');
   const [applying, setApplying] = React.useState(false);
   const [applyFailed, setApplyFailed] = React.useState<null | 'failed' | 'approval' | 'stopFailed'>(null);
+  // The sheet hugs its content, then keeps the tallest height it reached while open (a re-check never shrinks it).
+  const [heldHeight, setHeldHeight] = React.useState(0);
+  const holdHeight = React.useCallback((event: LayoutChangeEvent) => {
+    const height = event.nativeEvent.layout.height;
+    setHeldHeight((held) => (height > held ? height : held));
+  }, []);
   const load = React.useCallback(() => {
     setFailed(false);
     onChecking({
@@ -180,11 +186,23 @@ function StorageReviewBody(props: ReviewProps) {
         setApplyFailed(stopped === 'approval' ? 'approval' : 'stopFailed');
         return;
       }
+      // Stopping changes the reviewed holder facts. Show the fresh review for
+      // confirmation: its opaque token may also cover changes beyond that stop.
+      const refreshed = await check([...refs]);
+      setApplying(false);
+      if (!refreshed.ok) {
+        setApplyFailed('failed');
+        return;
+      }
+      const nextReview = buildStorageReview(refreshed.value, props.summary.volumes);
+      setReview(nextReview);
+      setSelected((current) => new Set(nextReview.going.filter(row => current.has(row.itemId)).map(row => row.itemId)));
+      return;
     }
     const result = await props.apply(mode, plan.items);
     setApplying(false);
     if (result.ok) onClose();
-    else setApplyFailed(result.reason === 'approval_requested' ? 'approval' : 'failed');
+    else if (result.reason !== 'declined') setApplyFailed(result.reason === 'approval_requested' ? 'approval' : 'failed');
   };
   const amount = (bytes: number) => formatMachineBytes(bytes, 'storage');
   const days = props.trashEmptyAfterDays;
@@ -248,7 +266,7 @@ function StorageReviewBody(props: ReviewProps) {
 
   if (!review) {
     return (
-      <View testID="machine-storage-review" style={styles.body}>
+      <View testID="machine-storage-review" style={[styles.body, { minHeight: heldHeight }]} onLayout={holdHeight}>
         <Text style={styles.paragraph}>
           {t('machineStorage.review.subtitle', { machine: props.machineName })}
         </Text>
@@ -282,7 +300,7 @@ function StorageReviewBody(props: ReviewProps) {
     );
   }
   return (
-    <View testID="machine-storage-review" style={styles.body}>
+    <View testID="machine-storage-review" style={[styles.body, { minHeight: heldHeight }]} onLayout={holdHeight}>
       <Text style={styles.paragraph}>
         {t('machineStorage.review.subtitle', { machine: props.machineName })}
       </Text>
@@ -518,8 +536,8 @@ export function showStorageReviewSheet(input: StorageReviewSheetInput): void {
       title: t('machineStorage.review.title', { count: input.refs.length }),
       testID: 'machine-storage-review-modal',
       phonePresentation: 'sheet',
-      // One size from checking to loaded; the body scrolls between the header and the pinned footer.
-      scrollHost: 'body',
+      // As tall as its content up to the bound, then the body scrolls between the header and the pinned footer.
+      scrollHost: 'bounded',
       bodyScroll: 'auto',
       dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.9, size: 'md' },
     },

@@ -2,7 +2,7 @@ import type { AgentSessionRuntimeContext } from '@happier-dev/plugin-sdk/agents/
 import type { CodexAppServerEventInput } from './core.js';
 import { readExactCodexProviderSessionId } from '../../../protocol/runtimeDescriptorV1.js';
 import { createCodexAppServerAssistantReasoningProjector } from './projection/assistantReasoning.js';
-import { projectCodexAppServerToolEventsFromNotification } from './projection/toolEvents.js';
+import { createCodexAppServerToolEventProjector } from './projection/toolEvents.js';
 import { readRecord, readProviderEventItemRecord, readProviderEventTurnId, readThreadId, readTurnId, readCodexTerminalOutcome } from './wire/fields.js';
 
 export type NativeChildProjectionContext = Readonly<{
@@ -28,6 +28,7 @@ export function createCodexNativeChildObserver(params: Readonly<{
     parentThreadId: string;
     terminal: boolean;
     projector: ReturnType<typeof createCodexAppServerAssistantReasoningProjector>;
+    tools: ReturnType<typeof createCodexAppServerToolEventProjector>;
   };
   const nativeChildTurns = new Map<string, NativeChildTurn>();
   const childTurnKey = (childThreadId: string, childTurnId: string): string => JSON.stringify([childThreadId, childTurnId]);
@@ -98,6 +99,7 @@ export function createCodexNativeChildObserver(params: Readonly<{
     if (!childTurnId) return;
     const key = childTurnKey(childThreadId, childTurnId);
     let child = nativeChildTurns.get(key);
+    if (!child && method === 'error') return;
     if (!child) {
       const textByStream = new Map<string, { text: string; thinking: boolean }>();
       const messageIdForStream = (streamKey: string): string => `codex:${streamKey}`;
@@ -121,11 +123,21 @@ export function createCodexNativeChildObserver(params: Readonly<{
           textByStream.clear();
         },
       } });
-      child = { threadId: childThreadId, parentThreadId, turnId: childTurnId, terminal: false, projector };
+      child = { threadId: childThreadId, parentThreadId, turnId: childTurnId, terminal: false, projector, tools: createCodexAppServerToolEventProjector() };
       nativeChildTurns.set(key, child);
       await publishNativeChildStatus(child, 'running');
     }
     if (child.terminal) return;
+    if (method === 'error') {
+      if (readRecord(notificationParams)?.willRetry === true) {
+        child.projector.supersedeUnfinishedAssistantMessages({ sidechainId: childThreadId, streamScopeId: key });
+      }
+      return;
+    }
+    for (const event of child.tools.project({ method, notificationParams, scopeId: key })) {
+      if (event.type === 'tool-call') params.publish({ kind: 'tool-call', sidechainId: childThreadId, toolCallId: event.callId, toolName: event.name, toolInput: event.input });
+      else params.publish({ kind: 'tool-result', sidechainId: childThreadId, toolCallId: event.callId, output: event.output, ...(event.isError === undefined ? {} : { isError: event.isError }) });
+    }
     if (method === 'turn/completed' || method === 'turn/interrupted') {
       const outcome = readCodexTerminalOutcome(method, notificationParams);
       child.terminal = true;
@@ -135,11 +147,6 @@ export function createCodexNativeChildObserver(params: Readonly<{
       return;
     }
     params.observeReasoning(method, notificationParams, { sidechainId: childThreadId, streamScopeId: key, projector: child.projector });
-    if (method === 'rawResponseItem/completed') return;
-    for (const event of projectCodexAppServerToolEventsFromNotification({ method, notificationParams })) {
-      if (event.type === 'tool-call') params.publish({ kind: 'tool-call', sidechainId: childThreadId, toolCallId: event.callId, toolName: event.name, toolInput: event.input });
-      else params.publish({ kind: 'tool-result', sidechainId: childThreadId, toolCallId: event.callId, output: event.output, ...(event.isError === undefined ? {} : { isError: event.isError }) });
-    }
     return;
   };
 

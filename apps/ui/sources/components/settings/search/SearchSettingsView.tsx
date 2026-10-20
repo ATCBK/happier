@@ -36,7 +36,8 @@ import { getDaemonMemoryStatusStateTranslationKey } from '@/sync/domains/memory/
 import { presentDaemonMemoryStatus } from '@/sync/domains/memory/presentDaemonMemoryStatus';
 import { useSetting } from '@/sync/domains/state/storage';
 import { t } from '@/text';
-import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 type ConversationSearchSettings = MemorySettingsV1['conversationSearch'];
 
@@ -155,6 +156,12 @@ export const SearchSettingsView = React.memo(function SearchSettingsView() {
     projectionInputs,
   ]);
 
+  // Indexing is on but every Agent is off: nothing is indexed, so the section says what to do instead of
+  // restating that "only the Agents you turn on" are.
+  const noAgentOn = projection.phase === 'ready'
+    && agents.length > 0
+    && !agents.some((agent) => indexExternal.agents.includes(agent.id));
+
   const historyOptions = React.useMemo(() => {
     const windows = HISTORY_WINDOW_DAYS.includes(indexExternal.historyDays)
       ? HISTORY_WINDOW_DAYS
@@ -167,7 +174,7 @@ export const SearchSettingsView = React.memo(function SearchSettingsView() {
   }, [indexExternal.historyDays]);
 
   const [clearing, setClearing] = React.useState(false);
-  const machineName = getMachineDisplayName(executionTarget?.machine) ?? '';
+  const machineName = executionTarget?.machine ? getMachineSentenceName(executionTarget.machine) : '';
   const clearIndex = React.useCallback(async () => {
     const target = resolveWritableTarget();
     if (!target || !actionReady || clearing) return;
@@ -176,7 +183,7 @@ export const SearchSettingsView = React.memo(function SearchSettingsView() {
       const result = await executeAction('memory.clear_index', { machineId: target.machine.id });
       if (!isCurrent()) return;
       if (!result.ok) {
-        if (result.errorCode === 'approval_rejected' || result.errorCode === 'approval_canceled'
+        if (isActionApprovalDeclinedErrorCode(result.errorCode)
           || result.errorCode === 'action_account_scope_changed') return;
         throw new Error(result.error);
       }
@@ -265,6 +272,7 @@ export const SearchSettingsView = React.memo(function SearchSettingsView() {
             <SettingRow
               testID="search-settings-memory-item"
               setting={SEARCH_SETTINGS.settings.memorySearch}
+              icon={<Icon name="clock-counter-clockwise" />}
               subtitle={
                 settings.enabled
                   ? t('conversationSearch.memoryOn')
@@ -343,7 +351,9 @@ export const SearchSettingsView = React.memo(function SearchSettingsView() {
         <SettingAnchor setting={SEARCH_SETTINGS.settings.agents}>
         <ItemGroup
           title={t('conversationSearch.agentsTitle')}
-          description={t('conversationSearch.agentsDescription')}
+          description={noAgentOn
+            ? t('conversationSearch.agentsNoneOn')
+            : t('conversationSearch.agentsDescription')}
           // One mark, one name and one switch per row: an index-style list, so the section is compact.
           density="compact"
         >

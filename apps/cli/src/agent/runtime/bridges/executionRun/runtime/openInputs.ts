@@ -1,5 +1,6 @@
 import { AgentSessionConfigurationSnapshotV1Schema } from '@happier-dev/protocol/runtime/agentSessionV1';
 import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
+import { ProviderDefaultModelSelectionsByAgentTargetKeyV1StoredSchema } from '@happier-dev/protocol/providers/selection/v1';
 import { ConnectedServiceBindingsV2Schema } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { TeamCredentialProviderModelSelectionV1Schema } from '@happier-dev/protocol/teams/credentials/resourceV1';
 import { buildBackendTargetKeyV2, readBackendTargetRefV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
@@ -26,6 +27,10 @@ export type ExecutionRunAppliedParentSelection = Readonly<
     }
 >;
 
+export type ExecutionRunAppliedParentSelectionReader = (
+    options?: Readonly<{ waitForReady?: boolean }>,
+) => ExecutionRunAppliedParentSelection | Promise<ExecutionRunAppliedParentSelection>;
+
 export type ResolvedExecutionRunChildSelection = Readonly<{
     modelId?: string;
     modelSelection?: ProviderBoundModelRef;
@@ -34,6 +39,17 @@ export type ResolvedExecutionRunChildSelection = Readonly<{
     selectionSource: 'explicit' | 'inherited' | 'independent' | 'retained';
     inheritedFromDifferentAgent: boolean;
 }>;
+
+/** The Account's exact per-Agent launch choice; null leaves the Agent's own default in charge. */
+export function resolveExecutionRunAgentDefaultSelection(input: Readonly<{
+    backendTarget: BackendTargetRefV2Input;
+    accountSettings?: Readonly<{ providerDefaultModelSelectionsByAgentTargetKeyV1?: unknown }> | null;
+}>): ProviderBoundModelRef | null {
+    const defaults = ProviderDefaultModelSelectionsByAgentTargetKeyV1StoredSchema.parse(
+        input.accountSettings?.providerDefaultModelSelectionsByAgentTargetKeyV1 ?? {},
+    );
+    return defaults[buildBackendTargetKeyV2(readBackendTargetRefV2(input.backendTarget))]?.ref ?? null;
+}
 
 export function readExecutionRunAppliedParentModelId(parent: ExecutionRunAppliedParentSelection): string | null {
     return parent.status === 'applied'
@@ -89,6 +105,14 @@ export type ExecutionRunChildSelectionInput = Readonly<{
     fallbackSelection?: ProviderBoundModelRef;
 }>;
 
+/** Only omissions that inherit parent custody need to join its startup. */
+export function executionRunChildSelectionNeedsAppliedParent(input: ExecutionRunChildSelectionInput): boolean {
+    return input.lifecycle === 'attached' && input.childSelection !== 'agentDefault'
+        && input.modelSelection === undefined && input.teamCredentialModel === undefined
+        && !(input.modelId !== undefined && (input.connectedServices !== undefined
+            || (input.connectedServicesDefaultServiceIds?.length ?? 0) > 0));
+}
+
 export function resolveExecutionRunChildSelection(input: ExecutionRunChildSelectionInput): ResolvedExecutionRunChildSelection {
     try {
         if (input.childSelection === 'agentDefault') {
@@ -136,14 +160,13 @@ function resolveExecutionRunChildSelectionInput(input: ExecutionRunChildSelectio
         selectionSource: input.lifecycle === 'attached' ? 'explicit' : input.lifecycle,
         inheritedFromDifferentAgent: false,
     };
-    if (input.lifecycle !== 'attached' || input.modelSelection === null || selection || teamCredentialModel) return explicit;
+    if (!executionRunChildSelectionNeedsAppliedParent(input)) return explicit;
 
     const hasExplicitCredentialRoute = input.connectedServices !== undefined
         || (input.connectedServicesDefaultServiceIds?.length ?? 0) > 0;
 
     const parent = input.parent;
     if (!parent || parent.status !== 'applied') {
-        if (hasExplicitCredentialRoute && modelId !== undefined) return explicit;
         if (!hasExplicitCredentialRoute && input.fallbackSelection) {
             return resolveExecutionRunChildSelectionInput({ ...input, lifecycle: 'independent',
                 modelSelection: { ...input.fallbackSelection, modelId: modelId ?? input.fallbackSelection.modelId } });

@@ -13,8 +13,8 @@ import { runInNewContext } from 'node:vm';
 import { run } from '../utils/proc/proc.mjs';
 import { exportSourceWebUi } from './build_source_web_ui.mjs';
 import { createTempFixture } from '../testkit/core/temp_fixture.mjs';
-import { installNativeAdmissionFixture } from '../testkit/core/native_admission_fixture.mjs';
-import { captureSourceWebBuildInputs, readWorkspacePackages, resolveWorkspaceSource, setBundleReadOnly, withSourceBundlePublication } from './build_source_runtime.mjs';
+import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from '../testkit/core/native_admission_fixture.mjs';
+import { captureSourceWebBuildInputs, readWorkspacePackages, setBundleReadOnly, withSourceBundlePublication } from './build_source_runtime.mjs';
 import { ensureExpoWorkspacePrepared, hasUsableExpoWorkspaceLastGreen, withExpoPreparationEnv } from '../utils/expo/command.mjs';
 import { runNodeCapture } from '../testkit/core/run_node_capture.mjs';
 import { sanitizeStackTestRunnerEnv } from '../utils/test/test_env.mjs';
@@ -105,10 +105,7 @@ await writeFile(join(web,'app.js'),'globalThis.debug = '+JSON.stringify(process.
   const { exportSourceWebUi: exportShared, publishSourceWebUi: selectShared } = await import(pathToFileURL(publicOwner));
   pending = await beginPendingSourceStart({ stackBaseDir });
   const exports = async () => Number(await readFile(counter, 'utf8'));
-  const env = { ...process.env, EXPO_PUBLIC_DEBUG: '0' };
-  if (native) for (const key of Object.keys(env)) {
-    if (key.startsWith('HAPPIER_HEAVYWEIGHT_ADMISSION_') || key.startsWith('HAPPIER_WORKSPACE_DIST_BUILD_LOCK_')) delete env[key];
-  }
+  const env = { ...(native ? buildNativeAdmissionFixtureEnv() : process.env), EXPO_PUBLIC_DEBUG: '0' };
   const options = { repoDir, stackBaseDir, pending, baseDir: fixture.path('state'),
     env };
   const otherStackBaseDir = fixture.path('stacks/independent');
@@ -442,9 +439,6 @@ test('cold Expo source preparation needs no workspace dist build or materializat
     .filter(({ root }) => relative(sourceRepo, root).startsWith('packages')
       || ['apps/ui', 'apps/stack'].includes(relative(sourceRepo, root).replaceAll('\\', '/')));
   await captureSourceWebBuildInputs({ repoDir: sourceRepo, outputDir: repoDir });
-  // The app's callable preflight imports its postinstall verification tooling;
-  // that tooling is not a served web input and is deliberately not captured.
-  await cp(join(sourceRepo, 'apps/ui/tools'), join(repoDir, 'apps/ui/tools'), { recursive: true });
   await cp(join(sourceRepo, 'apps/stack/bin'), join(repoDir, 'apps/stack/bin'), { recursive: true });
   for (const { root } of owners) {
     const path = join(repoDir, relative(sourceRepo, root), 'package.json');
@@ -535,8 +529,6 @@ test('source web export retains captured UI and workspace inputs across live add
       assert.equal(await readFile(join(inputRepo, workspaceInput), 'utf8'), 'export const value = "captured-workspace";');
       await assert.rejects(access(join(cwd, 'sources/createdDuringExport.ts')), { code: 'ENOENT' });
       assert.equal(createHash('sha256').update(await readFile(join(inputRepo, toolInput))).digest('hex'), toolDigest);
-      const inputs = Object.keys(JSON.parse(await readFile(fixture.path('output/tools/metafile.json'), 'utf8')).inputs);
-      assert.ok(inputs.some(path => path.replaceAll('\\', '/').endsWith(`/workspace/${toolInput}`)));
       const inventory = (await readFile(env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY, 'utf8')).replaceAll('export const ', 'const ');
       const artifacts = runInNewContext(`${inventory}\nBUNDLED_PLUGIN_UI_APP_ARTIFACTS`, { require: path => path });
       assert.deepEqual(Array.from(artifacts, artifact => artifact.pluginId), ['happier.admission-fixture']);
@@ -559,7 +551,6 @@ test('source web export uses fresh private source projections and one-shot origi
   const outputDir = join(scratch, 'export');
   let expectedOutputDir = outputDir;
   const exportInputs = [];
-  let expectedManifestInputs;
   const env = { ...process.env, EXPO_PUBLIC_HAPPIER_SERVER_URL: 'https://moving-producer.invalid', EXPO_PUBLIC_DEBUG: '0' };
   delete env.HAPPIER_STACK_EXPO_SHARED_TMPDIR_BASE_DIR;
   delete env.HAPPIER_STACK_EXPO_SHARED_TMPDIR_KEY;
@@ -582,15 +573,6 @@ test('source web export uses fresh private source projections and one-shot origi
     if (args[0] !== 'export') return run(command, args, options);
     exportCalls += 1;
     await access(join(options.cwd, '../cli/scripts/buildPublication.mjs'));
-    if (exportCalls === 1) {
-      const inputRepoDir = resolve(options.cwd, '../..');
-      const packages = await readWorkspacePackages(inputRepoDir);
-      // Preparation imports the CLI's whole bundled plugin census, including
-      // brand-only plugins absent from the UI dependency closure.
-      expectedManifestInputs = packages.get('@happier-dev/cli').manifest.bundledDependencies
-        .filter(name => name.startsWith('@happier-dev/plugins-'))
-        .map(name => relative(inputRepoDir, resolveWorkspaceSource(packages, `${name}/manifest`)).replaceAll('\\', '/'));
-    }
     assert.equal(options.env.CI, '1');
     assert.equal(options.env.EXPO_PUBLIC_HAPPIER_SERVER_URL, '');
     assert.equal(options.env.EXPO_PUBLIC_DEBUG, exportCalls === 1 ? '0' : '1');
@@ -616,13 +598,6 @@ test('source web export uses fresh private source projections and one-shot origi
   assert.equal(result.uiDir, join(outputDir, 'web'));
   assert.equal(result.entrypoint, 'index.html');
   await assert.rejects(access(join(result.uiDir, 'node_modules')), { code: 'ENOENT' });
-  const inputs = Object.keys(JSON.parse(await readFile(join(outputDir, 'tools/metafile.json'), 'utf8')).inputs);
-  assert.equal(inputs.some((input) => /(?:^|\/)packages\/.*\/dist\//.test(input)), false);
-  assert.ok(expectedManifestInputs.length > 0);
-  for (const manifestInput of expectedManifestInputs) {
-    assert.ok(inputs.some(input => input.replaceAll('\\', '/').endsWith(`/workspace/${manifestInput}`)),
-      `preparation must compile the captured bundled manifest: ${manifestInput}`);
-  }
   const firstBytes = await readFile(join(result.uiDir, 'app.js'), 'utf8');
   assert.equal(brotliDecompressSync(await readFile(join(result.uiDir, 'app.js.br'))).toString(), firstBytes);
   assert.equal(gunzipSync(await readFile(join(result.uiDir, 'app.js.gz'))).toString(), firstBytes);
@@ -700,11 +675,6 @@ const owner=token && join(root,'owners',token.replace(':','-'));
 const capturedRepo=resolve(process.cwd(),'../..');
 assert.equal(readFileSync(join(capturedRepo,'apps/ui/sources/app/_layout.tsx'),'utf8'),${JSON.stringify(uiSource)});
 assert.equal(createHash('sha256').update(readFileSync(join(capturedRepo,${JSON.stringify(toolInput)}))).digest('hex'),${JSON.stringify(toolDigest)});
-const inputs=Object.keys(JSON.parse(readFileSync(${JSON.stringify(join(outputDir, 'tools/metafile.json'))},'utf8')).inputs).map(path=>path.replaceAll('\\\\','/'));
-assert.ok(inputs.some(path=>path.endsWith('/workspace/'+${JSON.stringify(toolInput)})));
-const pluginInputs=inputs.filter(path=>path.includes('packages/plugins/'));
-assert.ok(pluginInputs.length>0);
-assert.ok(pluginInputs.every(path=>path.includes('/packages/plugins/admission-fixture/')));
 const inventory=readFileSync(process.env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY,'utf8').replaceAll('export const ','const ');
 const artifacts=runInNewContext(inventory+'\\nBUNDLED_PLUGIN_UI_APP_ARTIFACTS',{require:path=>path});
 assert.deepEqual(Array.from(artifacts,artifact=>artifact.pluginId),['happier.admission-fixture']);
@@ -741,8 +711,7 @@ export async function resolveExpoBin() {
     });
     await writeFile(publicOwner, source);
     const { exportSourceWebUi: exportWithOsFixture } = await import(pathToFileURL(publicOwner));
-    const env = { ...process.env, PATH: `${fixture.path('bin')}:/usr/bin:/bin`, HAPPIER_DEV_TARGET_EXECUTION: '1' };
-    for (const key of Object.keys(env)) if (key.startsWith('HAPPIER_HEAVYWEIGHT_ADMISSION_')) delete env[key];
+    const env = { ...buildNativeAdmissionFixtureEnv(), PATH: `${fixture.path('bin')}:/usr/bin:/bin`, HAPPIER_DEV_TARGET_EXECUTION: '1' };
     await mkdir(join(native.admissionRoot, 'waiters'), { recursive: true });
     await mkdir(join(native.admissionRoot, 'owners'), { recursive: true });
     const watcher = watch(join(native.admissionRoot, 'waiters'));

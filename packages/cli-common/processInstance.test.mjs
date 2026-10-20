@@ -12,7 +12,29 @@ import {
   readProcessHostIdentitySync,
   readProcessInstanceFingerprintSync,
   readProcessStartTimeMsSync,
+  observeProcessLivenessSync,
 } from './processInstance.mjs';
+
+test('OS liveness distinguishes departed Linux tasks without treating stopped or unobservable tasks as dead', () => {
+  const boundary = { platform: 'linux', killImpl: () => {} };
+  assert.deepEqual(observeProcessLivenessSync(42, {
+    ...boundary, readFileSyncImpl: () => '42 (fixture (with spaces)) Z 1 0 0',
+  }), { status: 'dead', reason: 'zombie' });
+  for (const state of ['D', 'T']) {
+    assert.deepEqual(observeProcessLivenessSync(42, {
+      ...boundary, readFileSyncImpl: () => `42 (fixture) ${state} 1 0 0`,
+    }), { status: 'alive', reason: 'signal_probe' });
+  }
+  for (const code of [null, 'EPERM']) {
+    assert.deepEqual(observeProcessLivenessSync(42, {
+      ...boundary,
+      killImpl: () => { if (code) throw Object.assign(new Error('denied'), { code }); },
+      readFileSyncImpl: () => { throw Object.assign(new Error('unavailable'), { code: 'EACCES' }); },
+    }), { status: 'alive', reason: code ? 'permission_denied_but_present' : 'signal_probe' });
+  }
+  assert.deepEqual(observeProcessLivenessSync(1, { platform: 'darwin', killImpl: () => {} }),
+    { status: 'alive', reason: 'signal_probe' });
+});
 
 test('process identity uses the start witness across command drift and fences pid reuse', () => {
   const recorded = { pid: 42, processStartTimeMs: 190, processCommandHash: 'a'.repeat(64) };

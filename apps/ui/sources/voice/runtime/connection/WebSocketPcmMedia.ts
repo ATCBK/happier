@@ -333,7 +333,8 @@ export function createWebSocketPcmMedia(input: Readonly<{
           code: 'pcm_output_focus_unsupported',
         });
       }
-      capture = createCapture({
+      let captureFailure: Error | null = null;
+      const startingCapture = createCapture({
         mic: {
           ensureActive: input.mic.ensureActive ?? (async () => {}),
           isMuted: input.mic.isMuted ?? (() => false),
@@ -345,16 +346,19 @@ export function createWebSocketPcmMedia(input: Readonly<{
         fallback: 'allow_script_processor',
         signal,
         onError(error) {
+          if (capture !== startingCapture) return;
+          const failure = Object.assign(new Error(error), { code: error });
+          captureFailure = failure;
           try {
             input.onInputError?.(error);
           } catch {
             // Diagnostic observers must not retain capture or playback resources.
           } finally {
-            failTerminal(Object.assign(new Error(error), { code: error }));
+            failTerminal(failure);
           }
         },
         onChunk({ bytes, level }) {
-          if (stopped) return;
+          if (stopped || capture !== startingCapture) return;
           latestInputLevel = Math.max(0, Math.min(1, level));
           input.onInputChunk(encodePcm16LeBase64(new Int16Array(
             bytes.buffer,
@@ -363,13 +367,21 @@ export function createWebSocketPcmMedia(input: Readonly<{
           )));
         },
       });
+      capture = startingCapture;
       try {
-        await capture.start();
-        if (!capture.isActive()) {
+        await startingCapture.start();
+        // Capture reports startup faults through onError, whose terminal cleanup
+        // retires capture before start settles. Preserve that typed failure.
+        if (captureFailure) throw captureFailure;
+        if (signal.aborted || stopped || capture !== startingCapture) {
+          throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+        }
+        if (!startingCapture.isActive()) {
           throw Object.assign(new Error('pcm_media_unavailable'), { code: 'pcm_media_unavailable' });
         }
       } catch (error) {
-        await stopMedia();
+        if (capture === startingCapture) await stopMedia();
+        else if (stopPromise) await stopPromise;
         throw error;
       }
     },

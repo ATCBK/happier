@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { managedAcpAccountNamespace } from '@happier-dev/cli-common/agents';
 import type { JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { StorageReasonV1 } from '@happier-dev/protocol/storage/storageV1';
@@ -7,13 +7,13 @@ import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSch
 import { listManagedAcpInstalls, removeManagedAcpInstall, type ManagedAcpInstall } from '@/agent/acp/catalog/registry/managedAgentInstalls';
 import { resolvePluginStorePaths } from '@/plugins/store/paths';
 import { canonicalAbsolutePathsEqual } from '@/utils/path/expandHomeDirPath';
-import { check, entries, inUse, isInUse, item, safe, contains, unavailableDirectory } from './filesystem';
+import { check, entries, inUse, isInUse, item, safe, contains, unavailableDirectory, opaqueItemTitle } from './filesystem';
 import type { StorageCategoryDefinition, StorageCategoryContext, StorageCategoryVerdict, StorageCategoryCatalogDeps, StorageCategoryAdapter } from './types';
 import { StorageCategoryAdapterError } from './types';
 import { bindFilesystemItem, filesystemAdapterForEntry } from './filesystemAdapters';
 
-const AcpOwnerSchema = z.object({ kind: z.literal('managed_acp'), accountNamespace: z.string().regex(/^[a-f0-9]{64}$/),
-    definitionId: z.string().min(1), version: z.string().min(1), installKind: z.enum(['archive', 'npm', 'uv']) }).strict();
+const AcpOwnerSchema = z.strictObject({ kind: z.literal('managed_acp'), accountNamespace: z.string().check(z.regex(/^[a-f0-9]{64}$/)),
+    definitionId: z.string().check(z.minLength(1)), version: z.string().check(z.minLength(1)), installKind: z.enum(['archive', 'npm', 'uv']) });
 const StoredAcpOwnerSchema = createStoredReadSchema(AcpOwnerSchema);
 const environment = (deps: StorageCategoryCatalogDeps) => ({ ...process.env, HAPPIER_HOME_DIR: deps.happyHomeDir });
 function acpAdapter(ownerData: JsonValue, deps: StorageCategoryCatalogDeps): StorageCategoryAdapter {
@@ -45,12 +45,21 @@ async function cacheLeaves(path: string, installs: readonly ManagedAcpInstall[],
         .map(child => cacheLeaves(child, installs, context)))).flat();
 }
 
-function roots(context: StorageCategoryContext) {
+function cacheRoots(context: StorageCategoryContext) {
     const home = context.deps.happyHomeDir;
     const plugins = resolvePluginStorePaths({ happyHomeDir: home });
-    return [join(home, 'cache'), join(home, 'tools'), plugins.cacheDir, plugins.installedDir,
-        join(home, 'providers', 'materialized'), join(home, 'runtime'), join(home, '.runner-snapshots'), join(home, 'skills')];
+    return [
+        { path: join(home, 'cache'), title: 'Happier cache' },
+        { path: join(home, 'tools'), title: 'Managed tool cache' },
+        { path: plugins.cacheDir, title: 'Plugin cache' },
+        { path: plugins.installedDir, title: 'Plugin installation' },
+        { path: join(home, 'providers', 'materialized'), title: 'Provider configuration' },
+        { path: join(home, 'runtime'), title: 'Runtime cache' },
+        { path: join(home, '.runner-snapshots'), title: 'Session runner snapshot' },
+        { path: join(home, 'skills'), title: 'Skill cache' },
+    ];
 }
+const roots = (context: StorageCategoryContext) => cacheRoots(context).map(root => root.path);
 export function cacheCanGo(path: string, context: StorageCategoryContext, requiresLiveFacts = false): StorageCategoryVerdict {
     if (isInUse(path, context)) return inUse;
     if (requiresLiveFacts && !context.inUse.reliable) return check;
@@ -63,7 +72,7 @@ export const caches: StorageCategoryDefinition = {
             definitionId: install.definitionId, version: install.version, installKind: install.kind }, context.deps) : bindFilesystemItem(item);
     },
     async adapterForEntry(data, deps) {
-        return data && typeof data === 'object' && !Array.isArray(data) && data.kind === 'managed_acp'
+        return data && typeof data === 'object' && !Array.isArray(data) && 'kind' in data && data.kind === 'managed_acp'
             ? acpAdapter(data, deps) : filesystemAdapterForEntry(data);
     },
     id: 'caches', roots,
@@ -76,7 +85,7 @@ export const caches: StorageCategoryDefinition = {
         const liveSnapshots = context.deps.readLiveRunnerSnapshotPaths?.();
         const skillRoot = join(context.deps.happyHomeDir, 'skills');
         const liveSkills = await context.deps.readLiveSkillCachePaths?.();
-        for (const root of roots(context)) for (const entry of await entries(root, unavailableDirectory(context, 'caches'))) {
+        for (const { path: root, title } of cacheRoots(context)) for (const entry of await entries(root, unavailableDirectory(context, 'caches'))) {
           const leaves = root === skillRoot && entry === join(skillRoot, 'cache')
             ? await entries(entry, unavailableDirectory(context, 'caches')) : await cacheLeaves(entry, installs, context);
           for (const path of leaves) {
@@ -100,7 +109,8 @@ export const caches: StorageCategoryDefinition = {
                 const basicCache = root === join(context.deps.happyHomeDir, 'cache') || root === resolvePluginStorePaths({ happyHomeDir: context.deps.happyHomeDir }).cacheDir;
                 verdict = cacheCanGo(path, context, !basicCache);
             }
-            result.push(item('caches', path, verdict, { evidence: [root === snapshots ? 'runner_snapshot_root' : 'managed_cache_root'] }));
+            result.push(item('caches', path, verdict, { title: opaqueItemTitle(path, title),
+                evidence: [root === snapshots ? 'runner_snapshot_root' : 'managed_cache_root'] }));
           }
         }
         return result;

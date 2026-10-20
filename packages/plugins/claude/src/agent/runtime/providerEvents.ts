@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { hasClaudeProviderIdentityValue } from '../../protocol/providerIdentity.js';
 import { ClaudeSessionRuntimeIssueSchema } from './issues/runtimeIssues.js';
@@ -11,112 +11,113 @@ import { ClaudeSessionRuntimeIssueSchema } from './issues/runtimeIssues.js';
  * Happier-owned fields (`sessionId`, `turnId`, `localId`, labels) keep their
  * canonicalization.
  */
-const providerIdentity = (): z.ZodString => z.string().refine(hasClaudeProviderIdentityValue);
+const providerIdentity = (): z.ZodMiniString<string> => z.string().check(z.refine(hasClaudeProviderIdentityValue));
 
-const ProviderEventBaseSchema = z.object({
-  sessionId: z.string().trim().min(1),
-  emittedAtMs: z.number().int().nonnegative(),
-}).passthrough();
+const ProviderEventBaseSchema = z.looseObject({
+  sessionId: z.string().check(z.trim(), z.minLength(1)),
+  emittedAtMs: z.number().check(z.int(), z.nonnegative()),
+});
 
-const ProviderTurnEventBaseSchema = ProviderEventBaseSchema.extend({
-  turnId: z.string().trim().min(1),
-  agentTurnId: providerIdentity().optional(),
+const ProviderTurnEventBaseSchema = z.extend(ProviderEventBaseSchema, {
+  turnId: z.string().check(z.trim(), z.minLength(1)),
+  agentTurnId: z.optional(providerIdentity()),
 });
 
 export const ClaudeProviderEventSchema = z.discriminatedUnion('kind', [
-  ProviderTurnEventBaseSchema.extend({
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ProviderTurnEventBaseSchema, {
     kind: z.literal('skill-usage'),
-    skills: z.array(z.object({ name: z.string().min(1) }).strict()),
-  }).strict(),
-  ProviderTurnEventBaseSchema.extend({
+    skills: z.array(z.strictObject({ name: z.string().check(z.minLength(1)) })),
+  })),
+  (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ProviderTurnEventBaseSchema, {
     kind: z.literal('mcp-tool-usage'),
-    window: z.object({ startMs: z.number().int().nonnegative(), endMs: z.number().int().nonnegative() }).strict(),
+    queuedTurnCount: z.optional(z.nullable(z.number().check(z.int(), z.nonnegative()))),
+    window: z.strictObject({ startMs: z.number().check(z.int(), z.nonnegative()), endMs: z.number().check(z.int(), z.nonnegative()) }),
     coverage: z.enum(['complete', 'partial']),
-    servers: z.array(z.object({ serverName: z.string().min(1), toolCallCount: z.number().int().nonnegative(),
-      schemaBytes: z.number().int().nonnegative().nullable() }).strict()),
-  }).strict(),
-  ProviderEventBaseSchema.extend({
+    servers: z.array(z.strictObject({ serverName: z.string().check(z.minLength(1)), toolCallCount: z.number().check(z.int(), z.nonnegative()),
+      schemaBytes: z.nullable(z.number().check(z.int(), z.nonnegative())) })),
+  })),
+  z.extend(ProviderEventBaseSchema, {
     kind: z.literal('available-commands'),
-    commands: z.array(z.object({ name: z.string(), description: z.string().optional() })),
+    commands: z.array(z.object({ name: z.string(), description: z.optional(z.string()) })),
   }),
-  ProviderEventBaseSchema.extend({
+  z.extend(ProviderEventBaseSchema, {
     kind: z.literal('context-compaction'),
-    compactionId: z.string().trim().min(1),
+    compactionId: z.string().check(z.trim(), z.minLength(1)),
     phase: z.literal('completed'),
     trigger: z.enum(['manual', 'automatic', 'unknown']),
-    turnId: z.string().trim().min(1).optional(),
+    turnId: z.optional(z.string().check(z.trim(), z.minLength(1))),
   }),
-  ProviderTurnEventBaseSchema.extend({
+  z.extend(ProviderTurnEventBaseSchema, {
     kind: z.literal('turn-start'),
-    startedBy: z.string().optional(),
+    startedBy: z.optional(z.string()),
   }),
-  ProviderTurnEventBaseSchema.extend({
+  z.extend(ProviderTurnEventBaseSchema, {
     kind: z.literal('turn-progress'),
   }),
-  ProviderTurnEventBaseSchema.extend({
+  z.extend(ProviderTurnEventBaseSchema, {
     kind: z.literal('turn-agent-id-observed'),
     agentTurnId: providerIdentity(),
   }),
-  ProviderTurnEventBaseSchema.extend({
+  z.extend(ProviderTurnEventBaseSchema, {
     kind: z.literal('turn-complete'),
-    summary: z.unknown().optional(),
+    summary: z.optional(z.unknown()),
   }),
-  ProviderTurnEventBaseSchema.extend({
+  z.extend(ProviderTurnEventBaseSchema, {
     kind: z.literal('turn-failed'),
     issue: ClaudeSessionRuntimeIssueSchema,
   }),
-  ProviderTurnEventBaseSchema.extend({
+  z.extend(ProviderTurnEventBaseSchema, {
     kind: z.literal('turn-cancelled'),
-    reason: z.string().optional(),
+    reason: z.optional(z.string()),
   }),
-  ProviderEventBaseSchema.extend({
+  z.extend(ProviderEventBaseSchema, {
     kind: z.literal('message-delta'),
-    sidechainId: providerIdentity().optional(),
-    turnId: z.string().trim().min(1).optional(),
+    sidechainId: z.optional(providerIdentity()),
+    turnId: z.optional(z.string().check(z.trim(), z.minLength(1))),
     delta: z.unknown(),
   }),
-  ProviderEventBaseSchema.extend({
+  z.extend(ProviderEventBaseSchema, {
     kind: z.literal('tool-call'),
-    sidechainId: providerIdentity().optional(),
-    turnId: z.string().trim().min(1).optional(),
+    sidechainId: z.optional(providerIdentity()),
+    turnId: z.optional(z.string().check(z.trim(), z.minLength(1))),
     toolCallId: providerIdentity(),
-    toolName: z.string().trim().min(1),
+    toolName: z.string().check(z.trim(), z.minLength(1)),
     toolInput: z.unknown(),
   }),
-  ProviderEventBaseSchema.extend({
+  z.extend(ProviderEventBaseSchema, {
     kind: z.literal('tool-progress'),
-    sidechainId: providerIdentity().optional(),
-    turnId: z.string().trim().min(1),
+    sidechainId: z.optional(providerIdentity()),
+    turnId: z.string().check(z.trim(), z.minLength(1)),
     toolCallId: providerIdentity(),
     progress: z.unknown(),
   }),
-  ProviderEventBaseSchema.extend({
+  z.extend(ProviderEventBaseSchema, {
     kind: z.literal('tool-result'),
-    sidechainId: providerIdentity().optional(),
-    turnId: z.string().trim().min(1).optional(),
+    sidechainId: z.optional(providerIdentity()),
+    turnId: z.optional(z.string().check(z.trim(), z.minLength(1))),
     toolCallId: providerIdentity(),
     output: z.unknown(),
-    isError: z.boolean().optional(),
+    isError: z.optional(z.boolean()),
   }),
-  ProviderEventBaseSchema.extend({
+  z.extend(ProviderEventBaseSchema, {
     kind: z.literal('transcript-user-text'),
     text: z.string(),
-    localId: z.string().trim().min(1),
-    meta: z.record(z.string(), z.unknown()).optional(),
+    localId: z.string().check(z.trim(), z.minLength(1)),
+    meta: z.optional(z.record(z.string(), z.unknown())),
   }),
-  ProviderEventBaseSchema.extend({
+  z.extend(ProviderEventBaseSchema, {
     kind: z.literal('transcript-agent-message-committed'),
-    sidechainId: providerIdentity().optional(),
-    turnId: z.string().trim().min(1).optional(),
-    agentId: z.string().trim().min(1),
-    localId: z.string().trim().min(1),
+    sidechainId: z.optional(providerIdentity()),
+    turnId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    agentId: z.string().check(z.trim(), z.minLength(1)),
+    localId: z.string().check(z.trim(), z.minLength(1)),
     body: z.unknown(),
-    meta: z.record(z.string(), z.unknown()).optional(),
+    meta: z.optional(z.record(z.string(), z.unknown())),
   }),
-  ProviderEventBaseSchema.extend({
+  z.extend(ProviderEventBaseSchema, {
     kind: z.literal('session-id-publish'),
     publishedSessionId: providerIdentity(),
-    source: z.string().trim().min(1),
+    source: z.string().check(z.trim(), z.minLength(1)),
     /**
      * Where Claude materialized this resume id's transcript. The path rides
      * this event so it is published in the SAME generation as the id whose
@@ -127,20 +128,20 @@ export const ClaudeProviderEventSchema = z.discriminatedUnion('kind', [
      * resume gate (`AM-24`): the host offers it to a successor Agent on the same
      * machine and never writes it to a server record.
      */
-    nativeSessionLogPath: z.string().max(4_096).trim().min(1).optional(),
+    nativeSessionLogPath: z.optional(z.string().check(z.maxLength(4_096), z.trim(), z.minLength(1))),
   }),
-  ProviderEventBaseSchema.extend({
+  z.extend(ProviderEventBaseSchema, {
     kind: z.literal('session-ended'),
-    agentSessionId: providerIdentity().optional(),
-    reason: z.string().trim().min(1).optional(),
+    agentSessionId: z.optional(providerIdentity()),
+    reason: z.optional(z.string().check(z.trim(), z.minLength(1))),
   }),
-  ProviderEventBaseSchema.extend({
+  z.extend(ProviderEventBaseSchema, {
     kind: z.literal('backend-error'),
-    error: z.object({
+    error: z.looseObject({
       message: z.string(),
-      code: z.string().optional(),
-      cause: z.unknown().optional(),
-    }).passthrough(),
+      code: z.optional(z.string()),
+      cause: z.optional(z.unknown()),
+    }),
   }),
 ]);
 

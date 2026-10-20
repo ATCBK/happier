@@ -8,6 +8,12 @@ import { useNewSessionWizardProps } from './useNewSessionWizardProps';
 import { installNewSessionScreenModelCommonModuleMocks } from './newSessionScreenModelTestHelpers';
 import { renderScreen } from '@/dev/testkit';
 
+const capabilityBoundary = vi.hoisted(() => ({ rpc: vi.fn() }));
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', async () => {
+    const { createServerScopedMachineRpcBoundaryMock } = await import('@/dev/testkit/mocks/serverScopedRpc');
+    return createServerScopedMachineRpcBoundaryMock(capabilityBoundary.rpc);
+});
+
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -19,12 +25,13 @@ installNewSessionScreenModelCommonModuleMocks({
 });
 
 describe('useNewSessionWizardProps', () => {
-    it('preserves destination projections and installable presentation in the shared Wizard props', async () => {
+    it('preserves destination projections and cancels an installable refresh when the Wizard leaves', async () => {
         let observed: ReturnType<typeof useNewSessionWizardProps> | null = null;
         const registerTemporaryComputerReplacementLaunch = vi.fn();
 
-        function Probe() {
+        function Probe({ focused = true }: Readonly<{ focused?: boolean }>) {
             observed = useNewSessionWizardProps({
+                focused,
                 theme: {},
                 styles: {},
                 safeAreaBottom: 0,
@@ -73,6 +80,7 @@ describe('useNewSessionWizardProps', () => {
                     },
                     depStatus: null,
                 }],
+                capabilitiesCacheKeySalt: 17,
                 selectedMachineCapabilities: { status: 'loaded' },
                 cliAvailability: { timestamp: 1, available: {} },
                 tmuxRequested: false,
@@ -133,7 +141,7 @@ describe('useNewSessionWizardProps', () => {
             return null;
         }
 
-        await renderScreen(React.createElement(Probe));
+        const screen = await renderScreen(React.createElement(Probe));
 
         expect((observed as ReturnType<typeof useNewSessionWizardProps> | null)?.agent.installableDepInstallers).toEqual([
             expect.objectContaining({
@@ -150,6 +158,29 @@ describe('useNewSessionWizardProps', () => {
         }));
         expect((observed as ReturnType<typeof useNewSessionWizardProps> | null)?.footer.registerTemporaryComputerReplacementLaunch)
             .toBe(registerTemporaryComputerReplacementLaunch);
+        let signal: AbortSignal | undefined;
+        capabilityBoundary.rpc.mockImplementationOnce((args: { signal?: AbortSignal }) => {
+            signal = args.signal;
+            return new Promise(() => {});
+        });
+        const props = observed as ReturnType<typeof useNewSessionWizardProps> | null;
+        props?.agent.installableDepInstallers?.[0]?.refreshStatus();
+        await vi.waitFor(() => expect(capabilityBoundary.rpc).toHaveBeenCalled());
+        expect(capabilityBoundary.rpc.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
+            payload: { requests: [{ id: 'dep.acme.cli' }] },
+        }));
+        const { getMachineCapabilitiesCacheState } = await import('@/hooks/server/useMachineCapabilitiesCache');
+        expect(getMachineCapabilitiesCacheState('machine-1', null, 17)?.status).toBe('loading');
+        props?.agent.installableDepInstallers?.[0]?.refreshLatestVersion?.();
+        await act(async () => { await Promise.resolve(); });
+        expect(signal?.aborted).toBe(false);
+        await screen.update(React.createElement(Probe, { focused: false }));
+        expect(signal?.aborted).toBe(true);
+        await screen.unmount();
+        expect(signal?.aborted).toBe(true);
+        props?.agent.installableDepInstallers?.[0]?.refreshStatus();
+        await act(async () => { await Promise.resolve(); });
+        expect(getMachineCapabilitiesCacheState('machine-1', null, 17)?.status).toBe('idle');
     });
 
     it('updates memoized agent and typed Provider launch recovery fields', async () => {
@@ -158,6 +189,7 @@ describe('useNewSessionWizardProps', () => {
         function Probe(props: Readonly<{
             agentLabel: string;
             composerTopContent: React.ReactNode;
+            composerBottomContent: React.ReactNode;
             providerLaunchError: ProviderErrorV1;
             retryProviderLaunch: () => void;
             statusTrailingActions: React.ReactNode;
@@ -231,6 +263,7 @@ describe('useNewSessionWizardProps', () => {
                 canCreate: false,
                 isCreating: false,
                 composerTopContent: props.composerTopContent,
+                composerBottomContent: props.composerBottomContent,
                 providerLaunchError: props.providerLaunchError,
                 retryProviderLaunch: props.retryProviderLaunch,
                 emptyAutocompleteKinds: [],
@@ -250,11 +283,13 @@ describe('useNewSessionWizardProps', () => {
         const firstRetry = vi.fn();
         const secondRetry = vi.fn();
         const composerTopContent = React.createElement('ComposerNotice');
+        const composerBottomContent = React.createElement('CapabilityApplyNotice');
         const statusTrailingActions = React.createElement('StatusActions');
         let tree: renderer.ReactTestRenderer | null = null;
         tree = (await renderScreen(React.createElement(Probe, {
             agentLabel: 'Preset A',
             composerTopContent,
+            composerBottomContent,
             providerLaunchError,
             retryProviderLaunch: firstRetry,
             statusTrailingActions,
@@ -264,12 +299,14 @@ describe('useNewSessionWizardProps', () => {
         expect((observed as ReturnType<typeof useNewSessionWizardProps> | null)?.footer.providerLaunchError).toBe(providerLaunchError);
         expect((observed as ReturnType<typeof useNewSessionWizardProps> | null)?.footer.retryProviderLaunch).toBe(firstRetry);
         expect((observed as ReturnType<typeof useNewSessionWizardProps> | null)?.footer.composerTopContent).toBe(composerTopContent);
+        expect((observed as ReturnType<typeof useNewSessionWizardProps> | null)?.footer.composerBottomContent).toBe(composerBottomContent);
         expect((observed as ReturnType<typeof useNewSessionWizardProps> | null)?.footer.statusTrailingActions).toBe(statusTrailingActions);
 
         act(() => {
             tree?.update(React.createElement(Probe, {
                 agentLabel: 'Preset B',
                 composerTopContent,
+                composerBottomContent,
                 providerLaunchError,
                 retryProviderLaunch: secondRetry,
                 statusTrailingActions,
@@ -278,5 +315,17 @@ describe('useNewSessionWizardProps', () => {
 
         expect((observed as ReturnType<typeof useNewSessionWizardProps> | null)?.agent.agentLabel).toBe('Preset B');
         expect((observed as ReturnType<typeof useNewSessionWizardProps> | null)?.footer.retryProviderLaunch).toBe(secondRetry);
+
+        act(() => {
+            tree?.update(React.createElement(Probe, {
+                agentLabel: 'Preset B',
+                composerTopContent,
+                composerBottomContent: null,
+                providerLaunchError,
+                retryProviderLaunch: secondRetry,
+                statusTrailingActions,
+            }));
+        });
+        expect((observed as ReturnType<typeof useNewSessionWizardProps> | null)?.footer.composerBottomContent).toBeNull();
     });
 });

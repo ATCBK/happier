@@ -1,13 +1,15 @@
 import type { ProviderErrorV1, SessionProviderBindingMetadataV1 } from '@happier-dev/protocol';
 import type { DaemonProviderBindingStatusResponseV1 } from '@happier-dev/protocol/rpc';
 import { presentProviderConnectionIdentity } from '@/providers/connection/presentation';
+import { presentProviderError, type ProviderErrorPresentation } from '@/providers/connection/errorPresentation';
 
 export type SessionProviderBindingBanner = Readonly<{
-    kind: 'changed' | 'unavailable' | 'disabled' | 'incompatible' | 'status-error';
-    action: 'restart' | 'choose-model' | 'retry';
     providerName: string;
     connectionName: string;
-}>;
+} & (
+    | { kind: 'changed' | 'unavailable' | 'disabled' | 'incompatible'; action: 'restart' | 'choose-model' }
+    | { kind: 'status-error'; action: 'retry'; errorPresentation: Pick<ProviderErrorPresentation, 'titleKey' | 'descriptionKey'> }
+)>;
 
 export function presentSessionProviderBinding(input: Readonly<{
     binding: SessionProviderBindingMetadataV1;
@@ -24,7 +26,8 @@ export function presentSessionProviderBinding(input: Readonly<{
         displayNameMode: snapshot.connectionDisplayNameMode }).sourceLabel;
     const common = { providerName: snapshot.providerName, connectionName: snapshot.connectionName };
     if (input.error) {
-        return { launchLabel, banner: { kind: 'status-error', action: 'retry', ...common } };
+        return { launchLabel, banner: { kind: 'status-error', action: 'retry', ...common,
+            errorPresentation: presentProviderError(input.error) } };
     }
     switch (input.status?.status) {
         case undefined:

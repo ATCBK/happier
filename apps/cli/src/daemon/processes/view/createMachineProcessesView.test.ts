@@ -29,6 +29,57 @@ import { createProcessCustodySamplingInvoker } from '@/subprocess/supervision/pr
 const boundary = vi.hoisted(() => ({ read: vi.fn<(input: ProcessCensusInput) => Promise<ProcessCensusSnapshot>>() }));
 vi.mock('@/processes/census/processCensus', () => ({ readProcessCensus: boundary.read }));
 afterEach(() => { vi.useRealTimers(); boundary.read.mockReset(); });
+it('keeps a reused PID out of the previous owner history through the recipient watch projection', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(1000);
+    let reused = false;
+    boundary.read.mockImplementation(async () => ({ status: 'ok', capturedAtMs: Date.now(), logicalCpus: 2, rows: [
+        { pid: 100, ppid: 1, start: { startTimeMs: 100 }, principal: { kind: 'uid', value: '1000' }, name: 'daemon', memory: { bytes: 20, kind: 'rss' }, cpuTimeUs: null },
+        { pid: 20, ppid: 1, start: { startTimeMs: 200 }, principal: { kind: 'uid', value: '1000' }, name: 'agent', memory: { bytes: 10, kind: 'rss' }, cpuTimeUs: null },
+        { pid: 42, ppid: reused ? 1 : 20, start: { startTimeMs: reused ? 2000 : 400, native: reused ? 'gen2' : 'gen1' },
+            principal: { kind: 'uid', value: '1000' }, name: reused ? 'unrelated' : 'tool', memory: { bytes: reused ? 999 : 100, kind: 'rss' }, cpuTimeUs: null },
+    ] }));
+    const runtime = createProcessOwnershipRuntime({ selfPid: 100, platform: 'darwin', daemonScopeKey: '123456789abc', listRoots: () => [
+        { owner: { kind: 'happier' }, pid: 100, start: { startTimeMs: 100 }, ownerCreatedAtMs: 100, live: true },
+        { owner: { kind: 'session', sessionId: 'old-owner' }, pid: 20, start: { startTimeMs: 200 }, ownerCreatedAtMs: 200, live: true },
+    ] });
+    const pass = createLeftBehindPass({ processOwnershipRuntime: runtime });
+    const sampler = createMachineVitalsSampler({ readers: { read: async input => ({ state: 'reporting',
+        host: { logicalCores: 2, memoryTotalBytes: 2000, bootedAt: 0 },
+        sample: { v: 1, sampledAt: input.sampledAt, intervalMs: input.intervalMs, cpu: { reported: true, busyPct: null },
+            memory: { reported: true, totalBytes: 2000, availableBytes: 900, usedBytes: 1100, pressure: { level: 'calm', source: 'events' } },
+            disk: { reported: false, reason: 'unavailable' }, network: { reported: false, reason: 'unavailable' } },
+        minuteCounters: { monotonicMs: input.monotonicMs, cpu: null, network: null },
+    }) }, historyStore: { read: async () => [], append: async () => true, prune: async () => undefined,
+        appendAlert: async () => undefined, minutes: () => [], alerts: () => [] }, monotonicMs: () => Date.now() });
+    const view = createMachineProcessesView({ processOwnershipRuntime: runtime, leftBehind: pass, machineVitals: sampler,
+        platform: 'darwin', selfPid: 100, allProcessesVisible: () => false,
+        requesterForOwner: owner => ({ accountId: owner.kind === 'session' ? 'guest' : 'custodian' }) });
+    const requester = { accountId: 'guest', custodianAccountId: 'custodian' };
+    const request = { machineId: 'm', scope: 'happier' as const, view: 'tree' as const };
+    const cancellation = new AbortController();
+    try {
+        await sampler.start();
+        const initial = await view.watch(request, requester);
+        expect(initial.changed && initial.answer.totals.happier.memoryBytes).toBe(110);
+        const firstPending = view.watch({ ...request, since: Date.now() }, requester, cancellation.signal);
+        await vi.advanceTimersByTimeAsync(2000);
+        const first = await firstPending;
+        expect(first.changed && first.answer.history?.['session:old-owner']?.at(-1)?.memoryBytes).toBe(110);
+        reused = true;
+        const secondPending = view.watch({ ...request, since: Date.now() }, requester, cancellation.signal);
+        await vi.advanceTimersByTimeAsync(2000);
+        const second = await secondPending;
+        expect(second.changed).toBe(true);
+        if (!second.changed) throw new Error('Expected measured watch answer');
+        expect(second.answer.history?.['session:old-owner']?.at(-1)?.memoryBytes).toBeNull();
+        expect(second.answer.history?.['session:old-owner']?.[0].memoryBytes).toBe(110);
+        expect(Object.keys(second.answer.history ?? {})).toEqual(['session:old-owner']);
+        expect(second.answer.othersWork).toEqual({ count: 1 });
+        expect(MachineProcessesWatchResultV1Schema.safeParse(second).success).toBe(true);
+    } finally {
+        cancellation.abort(); view.dispose(); pass.dispose(); await sampler.stop();
+    }
+});
 it.each(['plugin supervisor', 'managed child'])('discovers a real %s launch before either sampling cadence and stops discovery when disposed', async launchOwner => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] }); vi.setSystemTime(1000);
     let childPid: number | undefined;
@@ -208,12 +259,13 @@ it('shares discovery across concurrent watch opens so a stale capture cannot ove
         pass.dispose(); vi.useRealTimers(); await sampler.stop();
     }
 });
-it('samples only while watched, retaining CPU/history across re-arm until the shared watch window expires', async () => {
+it.each([6000, MACHINE_WATCH_WINDOW_MS + 1000, 31_000])('samples only while watched, warming CPU after a %i ms re-arm gap', async rearmGapMs => {
     vi.useFakeTimers(); vi.setSystemTime(1000);
     let name = 'daemon';
+    let cpuReported = true;
     boundary.read.mockImplementation(async input => ({ status: 'ok', capturedAtMs: Date.now(), logicalCpus: 2, rows: [
         { pid: 100, ppid: 1, start: { startTimeMs: 100 }, principal: { kind: 'uid', value: '1000' }, name,
-            memory: { bytes: input.pids ? 30 : 20, kind: 'rss' }, cpuTimeUs: Date.now() * 100 },
+            memory: { bytes: input.pids ? 30 : 20, kind: 'rss' }, cpuTimeUs: cpuReported ? Date.now() * 100 : null },
     ] }));
     const runtime = createProcessOwnershipRuntime({ selfPid: 100, platform: 'darwin', daemonScopeKey: '123456789abc', listRoots: () => [
         { owner: { kind: 'happier' }, pid: 100, start: { startTimeMs: 100 }, ownerCreatedAtMs: 100, live: true },
@@ -252,9 +304,11 @@ it('samples only while watched, retaining CPU/history across re-arm until the sh
     const watched = view.watch({ machineId: 'm', scope: 'happier', view: 'tree',
         since: firstWatch.changed ? firstWatch.answer.capturedAtMs : initial.capturedAtMs }, requester, controller.signal);
     await vi.advanceTimersByTimeAsync(1);
-    await vi.advanceTimersByTimeAsync(2000);
+    await vi.advanceTimersByTimeAsync(4000);
     const answer = await watched;
     expect(answer.changed).toBe(true);
+    expect(answer.changed && answer.answer.owners[0].members[0].cpuPercent).toBe(5);
+    expect(answer.changed && answer.answer.owners[0].totals.cpuPercent).toBe(5);
     expect(localServiceRoutes.watcherCount()).toBe(0);
     const ref = initial.owners[0].members[0].ref;
     const rearmed = view.watch({ machineId: 'm', scope: 'happier', view: 'tree', since: Date.now(), detailToken: ref }, requester);
@@ -262,25 +316,55 @@ it('samples only while watched, retaining CPU/history across re-arm until the sh
     const second = await rearmed;
     expect(second.changed && second.answer.owners[0].members[0].cpuPercent).toBe(5);
     expect(second.changed && second.answer.owners[0].members[0].memoryBytes).toBe(30);
-    expect(second.changed && second.answer.history?.[ref]).toHaveLength(2);
+    expect(second.changed && second.answer.history?.[ref]).toHaveLength(3);
+    // TA-20-6 permits the retained observation to yield an honest average on
+    // the first returning tick. After the shared watch window expires, the
+    // view has discarded its observations and must collect a new pair.
+    const expired = rearmGapMs > MACHINE_WATCH_WINDOW_MS;
+    const readsBeforeGap = boundary.read.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(rearmGapMs);
+    expect(boundary.read.mock.calls.length).toBe(readsBeforeGap);
+    const rearmedAt = Date.now();
     const thirdWatch = view.watch({ machineId: 'm', scope: 'happier', view: 'tree', since: second.changed ? second.answer.capturedAtMs : 0 }, requester);
-    await vi.advanceTimersByTimeAsync(2000);
+    await vi.advanceTimersByTimeAsync(4000);
     const third = await thirdWatch;
     expect(third.changed).toBe(true);
-    expect(fullCensusCount()).toBe(fullCensusesBeforeIdleIntervals);
+    expect(third.changed && third.answer.owners[0].members[0].cpuPercent).toBe(5);
+    expect(third.changed && third.answer.owners[0].totals.cpuPercent).toBe(5);
+    expect(third.changed && third.answer.capturedAtMs).toBe(rearmedAt + (expired ? 2000 : 0));
+    expect(fullCensusCount()).toBe(fullCensusesBeforeIdleIntervals + (expired ? 1 : 0));
     expect(boundary.read.mock.calls.some(([input]) => input.pids !== undefined
         && input.fields?.includes('memory') && input.fields.includes('cpuTimeUs'))).toBe(true);
     const reads = boundary.read.mock.calls.length;
     await vi.advanceTimersByTimeAsync(4000);
     expect(boundary.read.mock.calls.length).toBe(reads);
-    expect((await view.get({ machineId: 'm', ref }, requester)).history).toHaveLength(3);
+    const history = (await view.get({ machineId: 'm', ref }, requester)).history;
+    expect(history).toEqual(expired ? [
+        { capturedAtMs: rearmedAt, memoryBytes: 30 },
+        { capturedAtMs: rearmedAt + 2000, memoryBytes: 30, cpuPercent: 5 },
+    ] : [
+        { capturedAtMs: 3000, memoryBytes: 30 },
+        { capturedAtMs: 5000, memoryBytes: 30, cpuPercent: 5 },
+        { capturedAtMs: 7000, memoryBytes: 30, cpuPercent: 5 },
+        { capturedAtMs: 9000, memoryBytes: null, cpuPercent: null },
+        { capturedAtMs: rearmedAt, memoryBytes: 30, cpuPercent: 5 },
+    ]);
+    expect(third.changed && third.answer.history?.[third.answer.owners[0].rowId]).toEqual(history);
     await vi.advanceTimersByTimeAsync(MACHINE_WATCH_WINDOW_MS);
     expect((await view.get({ machineId: 'm', ref }, requester)).history).toBeUndefined();
+    cpuReported = false;
     const refreshed = await view.watch({ machineId: 'm', scope: 'happier', view: 'tree' }, requester);
+    const memoryOnly = view.watch({ machineId: 'm', scope: 'happier', view: 'tree',
+        since: refreshed.changed ? refreshed.answer.capturedAtMs : Date.now() }, requester);
+    await vi.advanceTimersByTimeAsync(2000);
+    const memoryAnswer = await memoryOnly;
+    expect(memoryAnswer.changed && memoryAnswer.answer.owners[0].members[0]).toMatchObject({ memoryBytes: 30 });
+    expect(memoryAnswer.changed && memoryAnswer.answer.owners[0].members[0].cpuPercent).toBeUndefined();
     const cancellation = new AbortController();
+    // Cancel the pending operation before pumping an overdue sampling timer;
+    // an answer that completes first legitimately wins the cancellation race.
     const parked = view.watch({ machineId: 'm', scope: 'happier', view: 'tree',
-        since: refreshed.changed ? refreshed.answer.capturedAtMs : Date.now() }, requester, cancellation.signal);
-    await vi.advanceTimersByTimeAsync(0);
+        since: memoryAnswer.changed ? memoryAnswer.answer.capturedAtMs : Date.now() }, requester, cancellation.signal);
     cancellation.abort();
     expect(await parked).toEqual({ changed: false });
     await vi.advanceTimersByTimeAsync(0);

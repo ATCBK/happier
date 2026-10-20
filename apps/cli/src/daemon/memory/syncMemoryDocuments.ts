@@ -9,7 +9,7 @@ import type { PromptArtifactRefV1 } from '@happier-dev/protocol/prompts/library/
 import type { PromptLibraryStoredArtifact } from '@happier-dev/protocol/prompts/library/promptLibraryActionOperations';
 import { prepareSessionPromptStackInputs } from '@/agent/prompting/coding/sessionPromptStack';
 import { withCliPromptLibraryArtifactReader } from '@/agent/prompts/library/resolveCliPromptStackSystemAppendBlocks';
-import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
+import { readRequesterAccountEncryptionCurrentness } from '@/api/client/accountEncryptionCurrentnessObservation';
 import { fetchSessionById, type RawSessionRecord } from '@/session/transport/http/sessionsHttp';
 import { readSessionOwnerLocality, tryDecryptSessionOwnerMetadata, tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
 import { fetchSessionInventoryPage } from '@/daemon/sessions/sessionInventoryVisibility';
@@ -18,16 +18,26 @@ import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accou
 import { getActiveAccountSettingsSnapshotLifetimeToken, isActiveAccountSettingsSnapshotLifetimeCurrent } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { logger } from '@/ui/logger';
 import type { DeepIndexDbHandle, DeepIndexDocumentEntry, DeepIndexDocumentIdentity } from './deepIndex/deepIndexDb';
+import { matchSessionProjectFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import type { QualifiedProjectKeyV1, WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
+import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
+import { isServerProfileHomeIdentity, resolveServerProfileHomeIdentityId } from '@/server/serverProfiles';
 
 export type MemoryDocumentSearchScope = Readonly<{
-  state: 'ready';
+  state: 'ready' | 'partial';
+  /** Fresh authenticated membership; required for Project transcript searches. */
+  eligibleSessionIds?: readonly string[];
   eligibleDocuments: readonly DeepIndexDocumentIdentity[];
   /** Same admitted documents, restricted by their decoded memory header; instructions are excluded. */
   eligibleMemoryDocuments?: readonly DeepIndexDocumentIdentity[];
   /** Only a named Session has one preparation; global admission is a union of attachments. */
   preparation?: readonly (DeepIndexDocumentIdentity & Readonly<{ loadedFactIds: readonly string[] }>)[];
   assertCurrent: () => void;
-}> | Readonly<{ state: 'pending' | 'unavailable'; eligibleDocuments: readonly DeepIndexDocumentIdentity[] }>;
+}> | Readonly<{ state: 'pending' | 'unavailable'; eligibleDocuments: readonly DeepIndexDocumentIdentity[]; eligibleSessionIds?: never }>;
+
+export type ReadMemoryProjectContext = (projectRef: QualifiedProjectKeyV1, signal?: AbortSignal) => Promise<Readonly<{
+  entries: readonly PromptStackEntryV1[]; workspaceRefs: readonly WorkspaceRefV1[];
+}>>;
 
 /** A finite fresh admission, not an access cache or a second attachment selector. */
 export async function syncMemoryDocuments(params: Readonly<{
@@ -38,6 +48,7 @@ export async function syncMemoryDocuments(params: Readonly<{
   db: DeepIndexDbHandle;
   signal?: AbortSignal;
   assertCurrent: () => void;
+  readProjectContext?: ReadMemoryProjectContext;
 }>): Promise<MemoryDocumentSearchScope> {
   const startedAtMs = Date.now();
   let phaseStartedAtMs = startedAtMs;
@@ -68,7 +79,7 @@ export async function syncMemoryDocuments(params: Readonly<{
   try {
     params.signal?.throwIfAborted();
     assertAccount();
-    const accountMode = (await fetchAccountEncryptionCurrentness({ token: params.credentials.token, signal: params.signal })).mode;
+    const accountMode = (await readRequesterAccountEncryptionCurrentness({ token: params.credentials.token, signal: params.signal })).mode;
     nextPhase('session_inventory');
     const sessions = new Map<string, RawSessionRecord>();
     if (params.scope.type === 'session') {
@@ -98,6 +109,15 @@ export async function syncMemoryDocuments(params: Readonly<{
     return await withCliPromptLibraryArtifactReader(async reader => {
       const home = await reader.readScope();
       if (!home) throw new Error('context_source_unavailable');
+      const requestedProject = params.scope.type === 'project' ? params.scope.projectRef : undefined;
+      const project = requestedProject ? { ...requestedProject,
+        serverId: await resolveServerProfileHomeIdentityId(requestedProject.serverId) ?? requestedProject.serverId } : undefined;
+      if (project && (!await isServerProfileHomeIdentity(home.serverId, project.serverId) || !params.readProjectContext)) {
+        throw new Error('context_source_unavailable');
+      }
+      const projectContext = project ? await params.readProjectContext!(project, params.signal) : undefined;
+      const eligibleSessionIds: string[] = [];
+      let partial = false;
       const projections = new Map<string, DeepIndexDocumentIdentity & { entries: readonly DeepIndexDocumentEntry[]; memory: boolean }>();
       const preparation = new Map<string, DeepIndexDocumentIdentity & { loadedFactIds: readonly string[] }>();
       const assertions: (() => void)[] = [params.assertCurrent, assertAccount];
@@ -131,6 +151,13 @@ export async function syncMemoryDocuments(params: Readonly<{
             code: session.metadataLayoutVersion === SESSION_METADATA_LAYOUT_VERSION_V1
               ? 'session_owner_metadata_unavailable' : 'session_metadata_unavailable',
           });
+          if (project) {
+            const match = matchSessionProjectFilterV1(metadata, project.serverId, project, projectContext?.workspaceRefs);
+            if (match === 'unavailable') partial = true;
+            if (match !== 'match') return;
+            eligibleSessionIds.push(session.id);
+            return;
+          }
           const locality = readSessionOwnerLocality({ metadata, rawSession: session });
           if (locality?.machineId) machineId = locality.machineId;
           else if (metadata.workspaceId !== undefined || metadata.projectId !== undefined) {
@@ -138,24 +165,30 @@ export async function syncMemoryDocuments(params: Readonly<{
           }
         }
         nextPhase('prompt_inputs');
-        const prepared = await prepareSessionPromptStackInputs({ credentials: params.credentials, metadata, sessionId,
+        // Named Project admission uses only that Project's attachments. A matching
+        // Session does not relabel its Account/Profile/Bot context as Project docs.
+        const prepared = project ? null : await prepareSessionPromptStackInputs({ credentials: params.credentials, metadata, sessionId,
           machineId, directory: typeof metadata?.path === 'string' ? metadata.path : undefined,
           serverId: home.serverId, signal: params.signal, accountContext,
           refreshCatalogs: !accountCatalogRefreshed || (typeof metadata?.profileId === 'string' && !profileCatalogRefreshed) });
         // Currentness assertions and invalidation still run for every Session;
         // a finite admission shares the fresh Account/Profile catalog reads.
         accountCatalogRefreshed = true;
-        if (prepared.profileId) profileCatalogRefreshed = true;
-        if (prepared.scope?.accountId !== home.accountId) throw new Error('context_source_unavailable');
-        assertions.push(prepared.assertCurrentAccount);
+        if (prepared?.profileId) profileCatalogRefreshed = true;
+        if (prepared && prepared.scope?.accountId !== home.accountId) throw new Error('context_source_unavailable');
+        if (prepared) assertions.push(prepared.assertCurrentAccount);
         nextPhase('prompt_admission');
         const inventory = await resolvePromptStackSystemAppendBlocksV1({ ...prepared,
-          scope: { ...prepared.scope, ...home, ...(sessionId ? { sessionId } : {}) }, surface: 'coding',
-          memoryEnabled: sessionId ? prepared.memoryEnabled : true,
+          ...(project ? { projectEntries: projectContext?.entries ?? [] } : {}),
+          scope: { ...prepared?.scope, ...home, ...(project ? { projectKey: project.projectKey } : {}), ...(sessionId ? { sessionId } : {}) }, surface: 'coding',
+          memoryEnabled: sessionId ? prepared?.memoryEnabled ?? true : true,
           readArtifact, readArtifactHeader: reader.readArtifactHeader, signal: params.signal });
-        prepared.assertCurrentAccount();
-        const incomplete = inventory.admittedEntries.find(entry => entry.outcome === 'unavailable' && entry.reason === 'unavailable');
-        if (incomplete) throw new PromptStackPreparationError('unavailable', incomplete.ref);
+        prepared?.assertCurrentAccount();
+        // A missing named Project attachment is incomplete coverage, including
+        // after revocation. Optional preparation may skip it for other scopes.
+        const incomplete = inventory.admittedEntries.find(entry => entry.outcome === 'unavailable'
+          && (project || entry.reason === 'unavailable'));
+        if (incomplete?.outcome === 'unavailable') throw new PromptStackPreparationError(incomplete.reason, incomplete.ref);
         nextPhase('artifact_projection');
         for (const admitted of inventory.admittedEntries) {
           if (admitted.ref.kind !== 'doc' || admitted.outcome === 'unavailable') continue;
@@ -186,8 +219,14 @@ export async function syncMemoryDocuments(params: Readonly<{
             revision: admitted.revision, entries, memory: artifact.header?.kind === 'memory_doc.v1' });
         }
       };
-      if (params.scope.type === 'global') await admit();
-      for (const session of sessions.values()) await admit(session);
+      if (params.scope.type === 'global' || project) await admit();
+      for (const session of sessions.values()) {
+        if (!project) { await admit(session); continue; }
+        // Membership is independent of document availability. Unknown metadata
+        // excludes this Session while preserving other proven Project results.
+        try { await admit(session); }
+        catch { params.signal?.throwIfAborted(); partial = true; }
+      }
       const assertCurrent = () => {
         params.signal?.throwIfAborted();
         for (const assert of assertions) assert();
@@ -200,7 +239,8 @@ export async function syncMemoryDocuments(params: Readonly<{
       // A single Session cannot revoke another Session's attached document projection.
       if (params.scope.type === 'global') params.db.pruneDocumentIndexData({ eligibleDocuments });
       nextPhase('complete');
-      return { state: 'ready', eligibleDocuments, eligibleMemoryDocuments, assertCurrent,
+      return { state: partial ? 'partial' : 'ready', eligibleDocuments, eligibleMemoryDocuments, assertCurrent,
+        ...(project ? { eligibleSessionIds } : {}),
         ...(params.scope.type === 'session' ? { preparation: [...preparation.values()] } : {}) };
     }, { credentials: params.credentials, signal: params.signal });
   } catch (error) {

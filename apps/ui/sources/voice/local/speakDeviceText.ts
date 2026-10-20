@@ -12,9 +12,9 @@ import { acquireVoicePlaybackAudioMode } from '@/voice/runtime/voiceAudioMode';
 export async function speakDeviceText(
     text: string,
     onStart?: () => void,
-    opts?: Readonly<{ signal?: AbortSignal | null }>,
+    opts?: Readonly<{ signal?: AbortSignal | null; isCurrent?: () => boolean }>,
 ): Promise<void> {
-    if (opts?.signal?.aborted) {
+    if (opts?.signal?.aborted || opts?.isCurrent?.() === false) {
         // Pre-interrupt: a barge-in already advanced the playback epoch before
         // this chunk reached the device. Do not start audio.
         return;
@@ -22,7 +22,7 @@ export async function speakDeviceText(
 
     const playbackLease = await acquireVoicePlaybackAudioMode('device-speech');
     try {
-        if (opts?.signal?.aborted) {
+        if (opts?.signal?.aborted || opts?.isCurrent?.() === false) {
             return;
         }
         return await new Promise<void>((resolve, reject) => {
@@ -70,7 +70,7 @@ export async function speakDeviceText(
                         opts?.signal?.removeEventListener('abort', onAbort);
                         fail(err);
                     },
-                } as any);
+                });
             } catch (err) {
                 opts?.signal?.removeEventListener('abort', onAbort);
                 fail(err);

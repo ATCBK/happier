@@ -16,12 +16,9 @@ import {
   type ResourceProposalController,
 } from '@/components/approvals/resourceProposal/useResourceProposalCheck';
 import type { MachinePageTabParams } from '@/components/machines/page/machinePageTabQuery';
-import {
-  confirmStorageEmpty,
-  useStorageCollect,
-} from '@/components/machines/storage/StorageCollectToggle';
+import { useStorageCollect } from '@/components/machines/storage/StorageCollectToggle';
 import { StorageItemRow, StorageVerdictPill } from '@/components/machines/storage/StorageItemRow';
-import { describeStorageVerdict, storageReasonLabel } from '@/components/machines/storage/storageReasonPresentation';
+import { describeStorageVerdict, storageReasonLabel, storageEvidenceLabel } from '@/components/machines/storage/storageReasonPresentation';
 import { StorageVolumeRow } from '@/components/machines/storage/StorageVolumes';
 import { selectStorageHeadlineVolume } from '@/components/machines/storage/storageViewModel';
 import {
@@ -555,13 +552,7 @@ function ProposalReceipt(
               title={t('machineStorage.pile.emptyNow')}
               onPress={() => {
                 fireAndForget(
-                  confirmStorageEmpty({
-                    count: display.result.outcomes.length,
-                    amount: formatMachineBytes(
-                      display.result.inTrashBytes,
-                      'storage',
-                    ),
-                  }).then((ok) => (ok ? emptyNow() : false)),
+                  emptyNow(),
                   { tag: 'MachineSuggestionWidget.emptyNow' },
                 );
               }}
@@ -687,7 +678,7 @@ function MachineSuggestionFallback(
             key={item.itemId}
             testID={`${props.testID}.row.${item.itemId}`}
             title={item.title}
-            evidence={item.evidence.slice(0, 1).join(' · ')}
+            evidence={item.evidence.slice(0, 1).map(storageEvidenceLabel).join(' · ')}
             bytes={item.size.allocatedBytes}
             atLeast={item.size.atLeast}
             largest={shown[0]!.size.allocatedBytes}

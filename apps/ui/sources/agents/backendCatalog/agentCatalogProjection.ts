@@ -230,13 +230,16 @@ function resolveProviderSubtitle(
     return null;
 }
 
+/** The neutral Agent glyph, a name the icon registry ships, for an Agent with no mark or UI core of its own. */
+export const NEUTRAL_AGENT_ICON_NAME = 'stack-simple';
+
 function resolveProviderIconName(agentId: string): string {
     const providerCore = getAgentCore(agentId);
     if (providerCore) {
         return providerCore.ui.agentPickerIconName;
     }
 
-    return 'layers-outline';
+    return NEUTRAL_AGENT_ICON_NAME;
 }
 
 function resolveProviderIconAgentId(

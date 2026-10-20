@@ -1,4 +1,6 @@
 import React, { useCallback, useRef } from 'react';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+import { captureActiveServerAccountScopeCurrentness } from '@/sync/domains/scope/activeServerAccountScope';
 import type { SharingAuthoritySession } from '@/sync/domains/social/sessionSharingMutationAuthority';
 import { useMachineListByServerId, useMachineListStatusByServerId, useServerScopedMachine } from '@/sync/domains/state/storage';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
@@ -31,11 +33,21 @@ export function useExternalSessionSharingAvailability({ serverId, sessionId, ses
     session: SharingAuthoritySession | null;
     accountScopeKey: string | null;
 }>) {
+    const presentationActive = useLayoutPresentationActive();
+    const requestControllerRef = useRef<AbortController | null>(null);
     const ownerMetadata = session ? readSessionOwnerMetadataView(session) : null;
     const externalSessionLink = React.useMemo(
         () => readExternalSessionLink(ownerMetadata),
         [ownerMetadata],
     );
+    const sourceKey = externalSessionLink ? createExternalSessionTranscriptLiveSourceKeyFromLink(externalSessionLink) : null;
+    React.useEffect(() => {
+        const controller = new AbortController();
+        requestControllerRef.current = controller;
+        const retirement = captureActiveServerAccountScopeCurrentness().onRetire(() => controller.abort());
+        if (!presentationActive) controller.abort();
+        return () => { controller.abort(); retirement.dispose(); };
+    }, [accountScopeKey, presentationActive, serverId, sessionId, sourceKey]);
     const machineScopeServerId = serverId;
     const machineListByServerId = useMachineListByServerId();
     const machineListStatusByServerId = useMachineListStatusByServerId();
@@ -87,9 +99,7 @@ export function useExternalSessionSharingAvailability({ serverId, sessionId, ses
         agentReachable: externalSessionLink === null
             ? false
             : sourceMachineReachability,
-        liveSourceKey: externalSessionLink
-            ? createExternalSessionTranscriptLiveSourceKeyFromLink(externalSessionLink)
-            : null,
+        liveSourceKey: sourceKey,
         currentStorageState: session?.currentStorageState
             ?? (externalSessionLink ? 'legacy_external_unknown' : 'hosted'),
         acceptedThroughServerSeq: session?.acceptedThroughServerSeq ?? null,
@@ -119,6 +129,8 @@ export function useExternalSessionSharingAvailability({ serverId, sessionId, ses
     const materializeIdempotencyKeyRef = useRef<string | null>(null);
     const [materializeInFlight, startMaterialization] = useHappyAction(
         useCallback(async () => {
+            const signal = requestControllerRef.current?.signal;
+            if (!signal || signal.aborted) return;
             if (!externalSessionLink) {
                 throw new HappyError(t('externalSessions.sharingTranscriptUnavailable'), false);
             }
@@ -135,7 +147,11 @@ export function useExternalSessionSharingAvailability({ serverId, sessionId, ses
                     targetStorageMode: 'external-linked',
                     targetRuntimeMode: null,
                 },
-            }, { serverId });
+            }, { serverId, signal }).catch((error: unknown) => {
+                if (signal.aborted) return null;
+                throw error;
+            });
+            if (!result || signal.aborted) return;
             if (!result.ok) {
                 throw new HappyError(
                     t(presentExternalSessionOperationActionError(result.error.code)),
@@ -167,6 +183,8 @@ export function useExternalSessionSharingAvailability({ serverId, sessionId, ses
         && operationMachineId !== null;
     const [resumeInFlight, resumePartialImport] = useHappyAction(
         useCallback(async () => {
+            const signal = requestControllerRef.current?.signal;
+            if (!signal || signal.aborted) return;
             const progress = operationOwnerHydration.progress;
             if (!canResumePartialImport || !progress || !operationMachineId) {
                 throw new HappyError(
@@ -179,7 +197,11 @@ export function useExternalSessionSharingAvailability({ serverId, sessionId, ses
                 sessionId,
                 operationId: progress.operationId,
                 revision: progress.revision,
-            }, serverId ? { serverId } : undefined);
+            }, { serverId, signal }).catch((error: unknown) => {
+                if (signal.aborted) return null;
+                throw error;
+            });
+            if (!result || signal.aborted) return;
             if (!result.ok) {
                 throw new HappyError(
                     t(presentExternalSessionOperationActionError(result.error.code)),

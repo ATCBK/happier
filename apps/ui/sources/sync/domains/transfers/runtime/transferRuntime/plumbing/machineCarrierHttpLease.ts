@@ -23,7 +23,7 @@ export const MACHINE_CARRIER_INTERRUPTED_TRANSFER_ERROR = 'The direct machine co
 export const MACHINE_CARRIER_TRANSPORT_FAILED_ERROR_CODE = 'machine_carrier_transport_failed' as const;
 export const MACHINE_CARRIER_UNAVAILABLE_ERROR_CODE = 'machine_carrier_unavailable' as const;
 
-function createMachineCarrierTransportFailure(cause: unknown): Error & Readonly<{
+export function createMachineCarrierTransportFailure(cause: unknown): Error & Readonly<{
     errorCode: typeof MACHINE_CARRIER_TRANSPORT_FAILED_ERROR_CODE;
 }> {
     if (

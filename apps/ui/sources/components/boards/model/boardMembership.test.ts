@@ -20,6 +20,28 @@ function board(source: WorkBoardV1['source'], positions: WorkBoardV1['positionsB
 const mounted = (serverIds: readonly string[]) => (serverId: string) => serverIds.includes(serverId);
 
 describe('projectBoardMembership', () => {
+    it('represents sourced linked Sessions by an available task but keeps explicit picks and qualified neighbors', () => {
+        const task = { kind: 'task', qualifiedId: { serverId: 'home-a', id: 'task-1' }, pluginId: 'com.acme.tasks' } as const;
+        const sources = {
+            isHomeMounted: mounted(['home-a', 'home-b']), sections: { needs_you: [session('home-a', 'linked'), session('home-b', 'linked')] },
+            filtered: undefined, linkedSessionsForTask: () => [session('home-a', 'linked')],
+        };
+        const implicit = projectBoardMembership(board({ sections: ['needs_you'], picked: [task] }), sources);
+        expect(implicit.members.map(member => member.ref)).toEqual([session('home-b', 'linked'), task]);
+        const explicit = projectBoardMembership(board({ sections: ['needs_you'], picked: [task, session('home-a', 'linked')] }), sources);
+        expect(explicit.members.map(member => member.ref)).toEqual([session('home-a', 'linked'), session('home-b', 'linked'), task]);
+        const unavailable = projectBoardMembership(board({ sections: ['needs_you'], picked: [task] }), {
+            ...sources, isSourceAvailable: (ref: BoardItemRefV1) => ref.kind !== 'task',
+        });
+        expect(unavailable.members.map(member => member.ref)).toContainEqual(session('home-a', 'linked'));
+        const unresolved = projectBoardMembership(board({ sections: ['needs_you'], picked: [task] }), {
+            ...sources, linkedSessionsForTask: () => null,
+        });
+        expect(unresolved.members.map(member => member.ref)).toContainEqual(session('home-a', 'linked'));
+        expect(resolveBoardPruneMembership(board({ picked: [task] }), implicit, sources.isHomeMounted).liveItemKeys)
+            .toContain(buildWorkBoardItemKeyV1(session('home-a', 'linked')));
+    });
+
     it('reads sections from their owners, mixes kinds, and lists an item once whatever brought it in', () => {
         const membership = projectBoardMembership(board({
             sections: ['needs_you', 'running', 'my_machines'],

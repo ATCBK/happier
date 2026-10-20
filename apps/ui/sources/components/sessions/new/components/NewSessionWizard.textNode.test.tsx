@@ -1,3 +1,4 @@
+import { createThemeFixture } from '@/dev/testkit/fixtures/themeFixtures';
 import * as React from 'react';
 import { createNewSessionPromptStore } from '@/components/sessions/new/hooks/screenModel/newSessionPromptStore';
 import renderer from 'react-test-renderer';
@@ -43,12 +44,6 @@ vi.mock('expo-linear-gradient', () => ({
         React.createElement('LinearGradient', props, props.children),
 }));
 
-vi.mock('color', () => ({
-    default: () => ({
-        alpha: () => ({ rgb: () => ({ string: () => 'rgba(0,0,0,0.08)' }) }),
-    }),
-}));
-
 vi.mock('@/components/ui/lists/Item', () => ({
     Item: (props: any) => React.createElement(
         'Item',
@@ -62,8 +57,8 @@ vi.mock('@/components/ui/lists/Item', () => ({
 }));
 vi.mock('@/components/ui/lists/ItemGroup', () => ({
     ItemGroupSelectionContext: React.createContext<{ selectableItemCount: number } | null>(null),
-    ItemGroup: (props: Record<string, unknown> & { children?: React.ReactNode }) =>
-        React.createElement('ItemGroup', props, props.children),
+    ItemGroup: (props: Record<string, unknown> & { action?: React.ReactNode; children?: React.ReactNode }) =>
+        React.createElement('ItemGroup', props, props.action ?? null, props.children),
 }));
 vi.mock('@/components/sessions/agentInput', () => ({
     AgentInput: (props: Record<string, unknown>) => {
@@ -176,19 +171,7 @@ describe('NewSessionWizard', () => {
         return renderScreen(<NewSessionWizard
             popoverBoundaryRef={{ current: null } as any}
             layout={{
-                theme: {
-                    colors: {
-                        divider: '#ddd',
-                        shadow: { color: '#000' },
-                        groupped: { background: '#fff' },
-                        text: '#000',
-                        textSecondary: '#666',
-                        input: { background: '#fff' },
-                        button: { secondary: { tint: '#000' } },
-                        warning: '#d97706',
-                        box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
-                    },
-                } as any,
+                theme: createThemeFixture() as any,
                 styles: {} as any,
                 safeAreaBottom: 0,
                 headerHeight: 44,
@@ -498,19 +481,7 @@ describe('NewSessionWizard', () => {
             const screen = await renderScreen(<NewSessionWizard
                 popoverBoundaryRef={{ current: null } as any}
                 layout={{
-                    theme: {
-                        colors: {
-                            divider: '#ddd',
-                            shadow: { color: '#000' },
-                            groupped: { background: '#fff' },
-                            text: '#000',
-                            textSecondary: '#666',
-                            input: { background: '#fff' },
-                            button: { secondary: { tint: '#000' } },
-                            warning: '#d97706',
-                            box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
-                        },
-                    } as any,
+                    theme: createThemeFixture() as any,
                     styles: {
                         container: { flex: 0 },
                     } as any,
@@ -619,19 +590,7 @@ describe('NewSessionWizard', () => {
         const screen = await renderScreen(<NewSessionWizard
             popoverBoundaryRef={{ current: null } as any}
             layout={{
-                theme: {
-                    colors: {
-                        divider: '#ddd',
-                        shadow: { color: '#000' },
-                        groupped: { background: '#fff' },
-                        text: '#000',
-                        textSecondary: '#666',
-                        input: { background: '#fff' },
-                        button: { secondary: { tint: '#000' } },
-                        warning: '#d97706',
-                        box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
-                    },
-                } as any,
+                theme: createThemeFixture() as any,
                 styles: {} as any,
                 safeAreaTop: 18,
                 safeAreaBottom: 0,
@@ -723,10 +682,11 @@ describe('NewSessionWizard', () => {
             }}
         />);
 
-        const contentWrapper = screen.findAllByType('View' as any).find((node: any) => {
-            const style = flattenStyle(node.props?.style);
-            return style.width === '100%' && style.alignSelf === 'center' && style.paddingTop === 18;
-        });
+        // The wizard's page list carries the inset on its content (`ItemList` `containerStyle`).
+        const contentWrapper = screen.tree.root.findAll((node: any) => (
+            typeof node.type === 'string'
+            && flattenStyle(node.props?.contentContainerStyle).paddingTop === 18
+        ))[0];
 
         expect(contentWrapper).toBeDefined();
     });
@@ -739,19 +699,7 @@ describe('NewSessionWizard', () => {
             const screen = await renderScreen(<NewSessionWizard
                 popoverBoundaryRef={{ current: null } as any}
                 layout={{
-                    theme: {
-                        colors: {
-                            divider: '#ddd',
-                            shadow: { color: '#000' },
-                            groupped: { background: '#fff' },
-                            text: '#000',
-                            textSecondary: '#666',
-                            input: { background: '#fff' },
-                            button: { secondary: { tint: '#000' } },
-                            warning: '#d97706',
-                            box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
-                        },
-                    } as any,
+                    theme: createThemeFixture() as any,
                     styles: {} as any,
                     safeAreaBottom: 0,
                     headerHeight: 44,
@@ -865,19 +813,7 @@ describe('NewSessionWizard', () => {
             const screen = await renderScreen(<NewSessionWizard
                             popoverBoundaryRef={{ current: null } as any}
                             layout={{
-                                theme: {
-                                    colors: {
-                                        divider: '#ddd',
-                                        shadow: { color: '#000' },
-                                        groupped: { background: '#fff' },
-                                        text: '#000',
-                                        textSecondary: '#666',
-                                        input: { background: '#fff' },
-                                        button: { secondary: { tint: '#000' } },
-                                        warning: '#d97706',
-                                        box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
-                                    },
-                                } as any,
+                                theme: createThemeFixture() as any,
                                 styles: {} as any,
                                 safeAreaBottom: 0,
                                 headerHeight: 44,
@@ -994,19 +930,7 @@ describe('NewSessionWizard', () => {
         const screen = await renderScreen(<NewSessionWizard
                         popoverBoundaryRef={{ current: null } as any}
                         layout={{
-                            theme: {
-                                colors: {
-                                    divider: '#ddd',
-                                    shadow: { color: '#000' },
-                                    groupped: { background: '#fff' },
-                                    text: '#000',
-                                    textSecondary: '#666',
-                                    input: { background: '#fff' },
-                                    button: { secondary: { tint: '#000' } },
-                                    warning: '#d97706',
-                                    box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
-                                },
-                            } as any,
+                            theme: createThemeFixture() as any,
                             styles: {} as any,
                             safeAreaBottom: 0,
                             headerHeight: 44,
@@ -1138,19 +1062,7 @@ describe('NewSessionWizard', () => {
         await renderScreen(<NewSessionWizard
                         popoverBoundaryRef={{ current: null } as any}
                         layout={{
-                            theme: {
-                                colors: {
-                                    divider: '#ddd',
-                                shadow: { color: '#000' },
-                                groupped: { background: '#fff' },
-                                text: '#000',
-                                textSecondary: '#666',
-                                input: { background: '#fff' },
-                                button: { secondary: { tint: '#000' } },
-                                warning: '#d97706',
-                                box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
-                            },
-                        } as any,
+                            theme: createThemeFixture() as any,
                         styles: {} as any,
                         safeAreaBottom: 0,
                         headerHeight: 44,
@@ -1279,19 +1191,7 @@ describe('NewSessionWizard', () => {
         const screen = await renderScreen(<NewSessionWizard
                         popoverBoundaryRef={{ current: null } as any}
                         layout={{
-                            theme: {
-                                colors: {
-                                    divider: '#ddd',
-                                shadow: { color: '#000' },
-                                groupped: { background: '#fff' },
-                                text: '#000',
-                                textSecondary: '#666',
-                                input: { background: '#fff' },
-                                button: { secondary: { tint: '#000' } },
-                                warning: '#d97706',
-                                box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
-                            },
-                        } as any,
+                            theme: createThemeFixture() as any,
                         styles: {} as any,
                         safeAreaBottom: 0,
                         headerHeight: 44,
@@ -1438,9 +1338,9 @@ describe('NewSessionWizard', () => {
             modelOptionsProbe: { phase: 'loading', onRefresh },
         });
 
-        const refreshButton = screen.findByTestId('new-session-model-refresh');
-        expect(refreshButton?.props.disabled).toBe(true);
-        expect(refreshButton?.props.onPress).toBeUndefined();
+        expect(screen.findByTestId('new-session-model-refresh')).toBeTruthy();
+        await screen.pressByTestIdAsync('new-session-model-refresh').catch(() => {});
+        expect(onRefresh).not.toHaveBeenCalled();
         expect(modelSelectionPropsRef.current?.modelOptions).toEqual([]);
         expect(screen.tree.root.findAllByProps({ accessibilityRole: 'progressbar' }).length).toBeGreaterThan(0);
     });
@@ -1459,19 +1359,7 @@ describe('NewSessionWizard', () => {
                 permissions: 'dropdown',
             } as any}
             layout={{
-                theme: {
-                    colors: {
-                        divider: '#ddd',
-                        shadow: { color: '#000' },
-                        groupped: { background: '#fff' },
-                        text: '#000',
-                        textSecondary: '#666',
-                        input: { background: '#fff' },
-                        button: { secondary: { tint: '#000' } },
-                        warning: '#d97706',
-                        box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
-                    },
-                } as any,
+                theme: createThemeFixture() as any,
                 styles: {
                     wizardSelectionPair: {},
                     wizardSelectionPairColumn: {},
@@ -1629,19 +1517,7 @@ describe('NewSessionWizard', () => {
             popoverBoundaryRef={{ current: null } as any}
             useColumnLayout={useColumnLayout}
             layout={{
-                theme: {
-                    colors: {
-                        divider: '#ddd',
-                        shadow: { color: '#000' },
-                        groupped: { background: '#fff' },
-                        text: '#000',
-                        textSecondary: '#666',
-                        input: { background: '#fff' },
-                        button: { secondary: { tint: '#000' } },
-                        warning: '#d97706',
-                        box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
-                    },
-                } as any,
+                theme: createThemeFixture() as any,
                 styles: {
                     wizardSelectionPair: { testColumnPair: true },
                     wizardSelectionPairColumn: { testColumnPairColumn: true },
@@ -1739,19 +1615,7 @@ describe('NewSessionWizard', () => {
         tree = (await renderScreen(<NewSessionWizard
                         popoverBoundaryRef={{ current: null } as any}
                         layout={{
-                            theme: {
-                                colors: {
-                                    divider: '#ddd',
-                                shadow: { color: '#000' },
-                                groupped: { background: '#fff' },
-                                text: '#000',
-                                textSecondary: '#666',
-                                input: { background: '#fff' },
-                                button: { secondary: { tint: '#000' } },
-                                warning: '#d97706',
-                                box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
-                            },
-                        } as any,
+                            theme: createThemeFixture() as any,
                         styles: {} as any,
                         safeAreaBottom: 0,
                         headerHeight: 44,
@@ -1886,19 +1750,7 @@ describe('NewSessionWizard', () => {
         tree = (await renderScreen(<NewSessionWizard
                         popoverBoundaryRef={{ current: null } as any}
                         layout={{
-                            theme: {
-                                colors: {
-                                    divider: '#ddd',
-                                shadow: { color: '#000' },
-                                groupped: { background: '#fff' },
-                                text: '#000',
-                                textSecondary: '#666',
-                                input: { background: '#fff' },
-                                button: { secondary: { tint: '#000' } },
-                                warning: '#d97706',
-                                box: { warning: { background: '#fff8e1', border: '#f5d38f' } },
-                            },
-                        } as any,
+                            theme: createThemeFixture() as any,
                         styles: {} as any,
                         safeAreaBottom: 0,
                         headerHeight: 44,

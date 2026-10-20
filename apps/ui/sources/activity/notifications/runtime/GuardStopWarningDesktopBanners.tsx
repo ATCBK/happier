@@ -6,7 +6,7 @@ import { readSessionListGuardState } from '@/sync/domains/session/listing/sessio
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { isSessionSurfaceVisible } from '@/sync/domains/session/sessionSurfaceVisibility';
 import { t } from '@/text';
-import { readSessionDisplayTitleField } from '@/sync/state/selectors';
+import { readSessionNameIfNamed } from '@/utils/sessions/sessionUtils';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 
 import { sendTauriLocalNotification } from '../channels/sendTauriLocalNotification';
@@ -24,7 +24,7 @@ function selectWarnings(state: ReturnType<typeof storage.getState>): string {
         if (guard?.kind !== 'stopping') continue;
         const serverId = typeof session.serverId === 'string' ? session.serverId : '';
         warnings.push({ key: `${serverId}:${session.id}:${guard.stopAt}`, sessionId: session.id, serverId, stopAt: guard.stopAt,
-            title: readSessionDisplayTitleField(session).value ?? t('machineGuard.activity.kinds.something') });
+            title: readSessionNameIfNamed(session) ?? t('machineGuard.activity.kinds.something') });
     }
     return JSON.stringify(warnings);
 }

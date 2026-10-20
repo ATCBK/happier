@@ -19,7 +19,7 @@ export type ResolveSessionIdResult =
   | { ok: true; sessionId: string; rawSession?: RawSessionRecord }
   | { ok: false; code: 'session_not_found' | 'session_id_ambiguous' | 'session_lookup_timeout' | 'unsupported'; candidates?: string[] };
 
-const FULL_SESSION_ID_LOOKUP_TIMEOUT_MS = 25_000;
+type AccountEncryptionModeSource = 'plain' | 'e2ee' | (() => Promise<'plain' | 'e2ee'>);
 
 function normalizeIdOrPrefix(value: string): string {
   return value.trim();
@@ -100,16 +100,17 @@ export async function resolveSessionIdOrPrefixFromSessionList(params: Readonly<{
   };
 }
 
-async function resolveSessionIdOrPrefixWithSignal(params: Readonly<{
+export async function resolveSessionIdOrPrefix(params: Readonly<{
   credentials: StoredCredentials;
   idOrPrefix: string;
   resolveAuthorizationHeaders?: (request: Readonly<{
     method: 'GET' | 'POST'; path: string; body?: unknown;
   }>) => Readonly<Record<string, string>> | null;
   signal?: AbortSignal;
-  deadlineAtMs?: number;
+  /** Snapshot already bound to this exact Home; absence preserves released detail semantics. */
   serverFeaturesSnapshot?: CliServerFeaturesSnapshot;
-  accountEncryptionMode?: 'plain' | 'e2ee';
+  /** Persisted mode or its pending exact-Home read; only legacy metadata lookup consumes it. */
+  accountEncryptionMode?: AccountEncryptionModeSource;
 }>): Promise<ResolveSessionIdResult> {
   params.signal?.throwIfAborted();
   const input = normalizeIdOrPrefix(params.idOrPrefix);
@@ -124,7 +125,6 @@ async function resolveSessionIdOrPrefixWithSignal(params: Readonly<{
         ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders }
         : {}),
       ...(params.signal ? { signal: params.signal } : {}),
-      ...(params.deadlineAtMs !== undefined ? { deadlineAtMs: params.deadlineAtMs } : {}),
       ...(params.serverFeaturesSnapshot ? { serverFeaturesSnapshot: params.serverFeaturesSnapshot } : {}),
     });
     if (exact) {
@@ -140,7 +140,6 @@ async function resolveSessionIdOrPrefixWithSignal(params: Readonly<{
           ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders }
           : {}),
         ...(params.signal ? { signal: params.signal } : {}),
-        ...(params.deadlineAtMs !== undefined ? { deadlineAtMs: params.deadlineAtMs } : {}),
       })
     : null;
   if (indexedTagLookup?.state === 'available') {
@@ -170,6 +169,12 @@ async function resolveSessionIdOrPrefixWithSignal(params: Readonly<{
   const prefixMatches = new Set<string>();
   const fallbackTagMatches = new Set<string>();
   const useOldServerTagFallback = indexedTagLookup?.state === 'unavailable';
+  // Exact and indexed reads do not open Account-scoped owner metadata. Let
+  // their HTTP overlap the caller's fresh mode read, consuming it only when
+  // the released-server tag fallback actually needs to open that metadata.
+  const accountEncryptionMode = useOldServerTagFallback
+    ? typeof params.accountEncryptionMode === 'function' ? await params.accountEncryptionMode() : params.accountEncryptionMode
+    : undefined;
   const useCurrentAccessQuery = resolveSessionDetailAccessProjectionVersion({
     serverFeaturesSnapshot: params.serverFeaturesSnapshot,
   }) === 1;
@@ -230,10 +235,10 @@ async function resolveSessionIdOrPrefixWithSignal(params: Readonly<{
         }
 
         if (useOldServerTagFallback) {
-          const metadata = params.accountEncryptionMode
+          const metadata = accountEncryptionMode
             ? tryDecryptSessionOwnerMetadataView({
                 credentials: params.credentials,
-                accountEncryptionMode: params.accountEncryptionMode,
+                accountEncryptionMode,
                 rawSession: row,
               })
             : tryDecryptSessionMetadata({
@@ -276,57 +281,4 @@ async function resolveSessionIdOrPrefixWithSignal(params: Readonly<{
     code: 'session_id_ambiguous',
     candidates: Array.from(prefixMatches).slice(0, 10),
   };
-}
-
-export async function resolveSessionIdOrPrefix(params: Readonly<{
-  credentials: StoredCredentials;
-  idOrPrefix: string;
-  resolveAuthorizationHeaders?: (request: Readonly<{
-    method: 'GET' | 'POST'; path: string; body?: unknown;
-  }>) => Readonly<Record<string, string>> | null;
-  signal?: AbortSignal;
-  /** Snapshot already bound to this exact Home; absence preserves released detail semantics. */
-  serverFeaturesSnapshot?: CliServerFeaturesSnapshot;
-  /** Persisted Account mode from the exact Home; required to open layout-v1 owner metadata. */
-  accountEncryptionMode?: 'plain' | 'e2ee';
-}>): Promise<ResolveSessionIdResult> {
-  params.signal?.throwIfAborted();
-  const input = normalizeIdOrPrefix(params.idOrPrefix);
-
-  // Built-in tool calls supply server-issued full ids and have a 30s outer budget. Keep
-  // existing prefix/tag lookup behavior unchanged; those interactive searches have no
-  // equivalent owner deadline and may legitimately require the configured page scan.
-  if (!isFullSessionId(input)) return await resolveSessionIdOrPrefixWithSignal(params);
-
-  const controller = new AbortController();
-  const deadlineAtMs = Date.now() + FULL_SESSION_ID_LOOKUP_TIMEOUT_MS;
-  let didLookupTimeout = false;
-  const timeout = setTimeout(() => {
-    didLookupTimeout = true;
-    controller.abort();
-  }, FULL_SESSION_ID_LOOKUP_TIMEOUT_MS);
-  timeout.unref();
-
-  const abortFromCaller = () => {
-    clearTimeout(timeout);
-    controller.abort(params.signal?.reason);
-  };
-  params.signal?.addEventListener('abort', abortFromCaller, { once: true });
-
-  try {
-    return await resolveSessionIdOrPrefixWithSignal({
-      ...params,
-      idOrPrefix: input,
-      signal: controller.signal,
-      deadlineAtMs,
-    });
-  } catch (error) {
-    if (didLookupTimeout || Date.now() >= deadlineAtMs) {
-      return { ok: false, code: 'session_lookup_timeout' };
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-    params.signal?.removeEventListener('abort', abortFromCaller);
-  }
 }

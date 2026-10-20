@@ -22,7 +22,7 @@ import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { machineWorkspaceFileList } from '@/sync/ops/machineWorkspaceFileList';
 import { DaemonWorkspaceFileListRequestSchema, DaemonWorkspaceFileListResponseSchema } from '@happier-dev/protocol/machines/workspaceFiles';
 
-const credentials = vi.hoisted(() => ({ token: '' }));
+const credentials = vi.hoisted(() => ({ token: '', secret: undefined as string | undefined }));
 
 // Credential persistence is the only device boundary. HTTP and Socket.IO run in process.
 vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
@@ -31,17 +31,75 @@ vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
     return await createTokenStorageModuleMock({
         importOriginal,
         subscribeHomeCredentialMutations: actual.subscribeHomeCredentialMutations,
-        tokenStorage: { getCredentialsForServerUrl: async () => ({ token: credentials.token }) },
+        tokenStorage: { getCredentialsForServerUrl: async () => ({ token: credentials.token,
+            ...(credentials.secret ? { secret: credentials.secret } : {}) }) },
     });
 });
 
 afterEach(async () => {
+    credentials.secret = undefined;
     vi.unstubAllGlobals();
     await serverScopedRpcSocketPool.stopAll();
     serverScopedRpcSocketPool.resetForTests();
     resetScopedMachineTransportCacheForTests();
     clearMachineRequestReachabilityForTest();
     resetServerFeaturesClientForTests();
+});
+
+it('detects Agent readiness through real scoped E2EE HTTP, crypto and Socket.IO wiring', async () => {
+    const { Encryption } = await import('@/sync/encryption/encryption');
+    const { machineCapabilitiesDetect } = await import('@/sync/ops/capabilities');
+    const { MachineAgentInventoryItemSchema, projectMachineAgentsDetectResponse } = await import('@happier-dev/protocol/capabilities');
+    const secret = new Uint8Array(32).fill(17);
+    const crypto = await Encryption.create(secret);
+    const dataKey = new Uint8Array(32).fill(23);
+    const envelope = Buffer.from(await crypto.encryptEncryptionKey(dataKey)).toString('base64');
+    await crypto.initializeMachines(new Map([['machine-1', dataKey]]));
+    const cipher = crypto.getMachineEncryption('machine-1');
+    if (!cipher) throw new Error('Expected real Machine cipher');
+    const transport = { mode: 'e2ee' as const, cipher };
+    const { agentId, title, ...facts } = MachineAgentInventoryItemSchema.parse({
+        agentId: 'claude', title: 'Claude', installed: true, version: '1', latestVersion: null,
+        update: { supported: false, command: null },
+        signIn: { status: 'signedOut', loginSupport: 'login_terminal' }, platform: { supported: true },
+        install: { available: false, mode: 'manual', sizeBytes: null, guideUrl: null }, dependencies: [],
+    });
+    const detected = { protocolVersion: 1, results: { 'cli.claude': { ok: true, checkedAt: 1, data: facts } } };
+    const http = createServer((request, response) => {
+        response.setHeader('content-type', 'application/json');
+        if (request.url === '/health' || request.url === '/v1/auth/ping') response.end('{}');
+        else if (request.url === '/v1/machines/machine-1') response.end(JSON.stringify({ machine: { id: 'machine-1', dataEncryptionKey: envelope } }));
+        else if (request.url === '/v1/account/encryption') response.end(JSON.stringify({ mode: 'e2ee', updatedAt: 1 }));
+        else { response.statusCode = 404; response.end('{}'); }
+    });
+    const relay = new Server(http, { path: '/v1/updates/' });
+    const received: unknown[] = [];
+    relay.on('connection', socket => socket.on(SOCKET_RPC_EVENTS.CALL, async (packet: SocketRpcRequestPayload, ack: (value: unknown) => void) => {
+        expect(packet.method).toBe(`machine-1:${RPC_METHODS.CAPABILITIES_DETECT}`);
+        const decoded = await socketRpcCodec.decodeRequestParams(transport, packet.params, packet.method);
+        received.push(decoded.params);
+        ack({ ok: true, result: await socketRpcCodec.encodeResponse(transport, detected, decoded.callId) });
+    }));
+    try {
+        const port = await listen(http);
+        credentials.token = `header.${Buffer.from(JSON.stringify({ sub: 'readiness-account' })).toString('base64url')}.signature`;
+        credentials.secret = Buffer.from(secret).toString('base64url');
+        const home = await upsertServerProfile({ serverUrl: `http://127.0.0.1:${port}`, name: 'Agent readiness E2EE' });
+        const request = { requests: [{ id: 'cli.claude' as const }] };
+        const responses = await Promise.all([1, 2].map(() => machineCapabilitiesDetect('machine-1', request, {
+            serverId: home.id, accountId: 'readiness-account',
+        })));
+        for (const response of responses) {
+            expect(response.supported).toBe(true);
+            if (!response.supported) throw new Error('Expected decoded capability facts');
+            expect(projectMachineAgentsDetectResponse({ agents: [{ agentId, title }], response: response.response }).items)
+                .toMatchObject([{ agentId: 'claude', installed: true, signIn: { status: 'signedOut' } }]);
+        }
+        expect(received).toEqual([request, request]);
+    } finally {
+        await serverScopedRpcSocketPool.stopAll();
+        await new Promise<void>(resolve => relay.close(() => resolve()));
+    }
 });
 
 async function listen(http: HttpServer, port = 0) {
@@ -59,7 +117,83 @@ async function closeHttp(http: HttpServer) {
     await new Promise<void>((resolve, reject) => http.close(error => error ? reject(error) : resolve()));
 }
 
-async function createDirectRelayHome(endpointPort: number, relayReply?: Promise<void>, accountReadDelayMs = 0) {
+it('connects the scoped socket while the fresh Machine row is still being read', async () => {
+    const connected = createDeferred<void>();
+    const http = createServer(async (request, response) => {
+        response.setHeader('content-type', 'application/json');
+        if (request.url === '/health' || request.url === '/v1/auth/ping') response.end('{}');
+        else if (request.url === '/v1/machines/parallel-machine') {
+            // Both are independent network preparations. Holding this response
+            // until the real socket connects distinguishes overlap from serial setup.
+            await connected.promise;
+            if (!response.destroyed) response.end(JSON.stringify({ machine: {
+                id: 'parallel-machine', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+            } }));
+        } else if (request.url === '/v1/account/encryption') response.end(JSON.stringify({ mode: 'plain', updatedAt: 1 }));
+        else { response.statusCode = 404; response.end('{}'); }
+    });
+    const relay = new Server(http, { path: '/v1/updates/' });
+    relay.on('connection', socket => {
+        connected.resolve();
+        socket.on(SOCKET_RPC_EVENTS.CALL, async (packet: SocketRpcRequestPayload, ack: (value: unknown) => void) => {
+            const decoded = await socketRpcCodec.decodeRequestParams({ mode: 'plain' }, packet.params, packet.method);
+            ack({ ok: true, result: await socketRpcCodec.encodeResponse({ mode: 'plain' }, { ready: true }, decoded.callId) });
+        });
+    });
+    try {
+        const port = await listen(http);
+        credentials.token = `header.${Buffer.from(JSON.stringify({ sub: 'parallel-account' })).toString('base64url')}.signature`;
+        const home = await upsertServerProfile({ serverUrl: `http://127.0.0.1:${port}`, name: 'Parallel RPC setup' });
+        await expect(machineRpcWithServerScope({ serverId: home.id, accountId: 'parallel-account',
+            machineId: 'parallel-machine', method: 'parallel.read', payload: {}, preferScoped: true,
+            timeoutMs: 2_000 })).resolves.toEqual({ ready: true });
+    } finally {
+        connected.resolve();
+        await serverScopedRpcSocketPool.stopAll();
+        http.closeAllConnections();
+        await new Promise<void>(resolve => relay.close(() => resolve()));
+    }
+});
+
+it('releases a late socket after Machine admission fails without sending an RPC', async () => {
+    const allowConnection = createDeferred<void>();
+    const handshakeStarted = createDeferred<void>();
+    let disconnected = false;
+    let rpcReceived = false;
+    const http = createServer((request, response) => {
+        response.setHeader('content-type', 'application/json');
+        response.writeHead(request.url === '/health' || request.url === '/v1/auth/ping' ? 200 : 404).end('{}');
+    });
+    const relay = new Server(http, { path: '/v1/updates/' });
+    relay.use((_socket, next) => { handshakeStarted.resolve(); void allowConnection.promise.then(() => next()); });
+    relay.on('connection', socket => {
+        socket.on(SOCKET_RPC_EVENTS.CALL, () => { rpcReceived = true; });
+        socket.on('disconnect', () => { disconnected = true; });
+    });
+    vi.stubEnv('EXPO_PUBLIC_HAPPIER_SCOPED_RPC_SOCKET_IDLE_DISCONNECT_MS', '0');
+    try {
+        const port = await listen(http);
+        credentials.token = `header.${Buffer.from(JSON.stringify({ sub: 'late-account' })).toString('base64url')}.signature`;
+        const home = await upsertServerProfile({ serverUrl: `http://127.0.0.1:${port}`, name: 'Late RPC setup' });
+        const outcome = await machineRpcWithServerScope({ serverId: home.id, accountId: 'late-account',
+            machineId: 'missing-machine', method: 'late.read', payload: {}, preferScoped: true, timeoutMs: 2_000 })
+            .then(() => null, (error: unknown) => error);
+        expect(outcome).toBeInstanceOf(Error);
+        expect(readRpcRequestDisposition(outcome)).toBe('notSent');
+        await handshakeStarted.promise;
+        allowConnection.resolve();
+        await vi.waitFor(() => { expect(disconnected).toBe(true); });
+        expect(rpcReceived).toBe(false);
+    } finally {
+        allowConnection.resolve();
+        await serverScopedRpcSocketPool.stopAll();
+        http.closeAllConnections();
+        await new Promise<void>(resolve => relay.close(() => resolve()));
+        vi.unstubAllEnvs();
+    }
+});
+
+async function createDirectRelayHome(endpointPort: number, relayReply?: Promise<void>, accountReadDelayMs = 0, grantReply?: Promise<void>) {
     const features = FeaturesResponseSchema.parse({ features: { machines: {
         enabled: true, rpc: { enabled: true, directPeer: { enabled: true } },
     } }, capabilities: {} });
@@ -73,6 +207,7 @@ async function createDirectRelayHome(endpointPort: number, relayReply?: Promise<
         else if (request.url === '/v1/machines/machine-1') {
             response.end(JSON.stringify({ machine: { id: 'machine-1', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } }));
         } else if (request.url === '/v1/machines/peer/mediation/route-grants') {
+            await grantReply;
             const chunks: Buffer[] = [];
             for await (const chunk of request) chunks.push(Buffer.from(chunk));
             const grantRequest = DirectRouteGrantRequestV2Schema.parse(JSON.parse(Buffer.concat(chunks).toString()));
@@ -220,10 +355,11 @@ it('relays an unreachable direct endpoint, skips it after relay success, and ret
     }
 });
 
-it('relays the browser SOCKS preflight failure through real route selection and Home RPC', async () => {
+it('relays the browser SOCKS preflight failure without waiting for an unusable direct-route grant', async () => {
     const direct = createServer();
     const port = await listen(direct);
-    const home = await createDirectRelayHome(port);
+    const grantReply = createDeferred<void>();
+    const home = await createDirectRelayHome(port, undefined, 0, grantReply.promise);
     const realFetch = globalThis.fetch;
     const attempts: string[] = [];
     // Chromium exposes net::ERR_SOCKS_CONNECTION_FAILED to fetch as this
@@ -242,6 +378,7 @@ it('relays the browser SOCKS preflight failure through real route selection and 
         expect(readMachineRequestReachabilityObservation(home.scope, 'machine-1', 'loopback_direct')?.outcome).toBe('failed');
         expect(readMachineRequestReachabilityObservation(home.scope, 'machine-1')?.outcome).toBe('succeeded');
     } finally {
+        grantReply.resolve();
         await closeHttp(direct);
         await home.close();
     }

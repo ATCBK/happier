@@ -105,3 +105,41 @@ export function readHappierActionToolResultCandidates(result: unknown, input?: u
     }
     return candidates;
 }
+
+export type HappierActionToolFailure = Readonly<{
+    /** The typed failure code: the Action's `errorCode`, or a spawn error's launch code. */
+    code: string;
+    /** The typed cause or reason the failure's `details` name, when it names one. */
+    cause: string | null;
+}>;
+
+function readFailureCause(details: unknown): string | null {
+    if (!isRecord(details)) return null;
+    for (const key of ['cause', 'reason'] as const) {
+        const value = details[key];
+        if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return null;
+}
+
+/**
+ * The typed Action failure a first-party Happier tool call returned: the executor's
+ * `{ errorCode, error, details? }` outcome, or a Session spawn's `{ type: 'error', code }`.
+ * Other MCP servers' results are never read, whatever keys they carry.
+ */
+export function readHappierActionToolFailure(toolName: string, input: unknown, result: unknown): HappierActionToolFailure | null {
+    // Persisted tool calls are read at a boundary: a record without a name is not a first-party call.
+    if (typeof toolName !== 'string' || firstPartyName(readHappierActionToolName(toolName, input).trim()) === null) return null;
+    for (const candidate of readHappierActionToolResultCandidates(result, input)) {
+        if (!isRecord(candidate) || candidate.ok === true) continue;
+        if (typeof candidate.errorCode === 'string' && candidate.errorCode.trim() && typeof candidate.error === 'string') {
+            return { code: candidate.errorCode.trim(), cause: readFailureCause(candidate.details) };
+        }
+        if (candidate.type === 'error' && typeof candidate.code === 'string' && candidate.code.trim()) {
+            const launch = isRecord(candidate.launchError) && typeof candidate.launchError.code === 'string' && candidate.launchError.code.trim()
+                ? candidate.launchError.code.trim() : null;
+            return { code: launch ?? candidate.code.trim(), cause: null };
+        }
+    }
+    return null;
+}

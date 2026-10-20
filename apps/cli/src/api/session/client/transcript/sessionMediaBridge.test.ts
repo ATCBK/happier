@@ -95,6 +95,37 @@ describe('session media bridge', () => {
         expect(result.meta.happierMedia).toMatchObject({ kind: 'session_media.v1' });
     });
 
+    it('preserves strict authored review context while redacting untyped media-source siblings', async () => {
+        const review = { kind: 'review_comments.v1', payload: { sessionId: 'source-session', comments: [{
+            id: 'comment-1', filePath: 'src/example.ts', source: 'file',
+            anchor: { kind: 'line', filePath: 'src/example.ts', line: 2 },
+            body: '/home/person/authored/source.ts', createdAt: 1,
+            snapshot: { selectedLines: ['file:///authored/source.ts', `data:image/png;base64,${pngBytes.toString('base64')}`],
+                beforeContext: [], afterContext: [] },
+        }] } };
+        const result = await persistSessionMediaForTranscript({ sessionId: 'target-session', workingDirectory: null,
+            request: { localId: 'input-1', role: 'input', category: 'attachment', media: [], meta: {
+                happier: review,
+                diagnostics: { sourcePath: '/tmp/provider-private/image.png', prompt: 'private provider prompt',
+                    rawBytes: pngBytes.toString('base64'), keep: 'safe-diagnostic' },
+                nested: { happier: { ...review, providerId: 'private-source',
+                    payload: { sourcePath: '/tmp/provider-private/nested.png' } } },
+            } },
+        });
+        expect(result.meta.happier).toEqual(review);
+        expect(result.meta.diagnostics).toEqual({ keep: 'safe-diagnostic' });
+        expect(JSON.stringify(result.meta)).not.toContain('provider-private');
+        expect(JSON.stringify(result.meta)).not.toContain('private-source');
+        expect(JSON.stringify(result.meta)).not.toContain('private provider prompt');
+        const malformed = await persistSessionMediaForTranscript({ sessionId: 'target-session', workingDirectory: null,
+            request: { localId: 'input-2', role: 'input', category: 'attachment', media: [], meta: {
+                happier: { ...review, sourcePath: '/tmp/provider-private/injected.png' },
+            } },
+        });
+        expect(JSON.stringify(malformed.meta)).not.toContain('provider-private');
+        expect(JSON.stringify(malformed.meta)).not.toContain('/home/person/authored');
+    });
+
     it('rejects provider local-file and local-uri sources unless they carry a restricted-roots policy', async () => {
         const workingDirectory = await createWorkspace();
         const providerDirectory = await mkdtemp(join(tmpdir(), 'happier-provider-media-'));

@@ -177,17 +177,6 @@ function resolveSessionTargetDisplayFromState(params: Readonly<{
     };
 }
 
-/**
- * A session in the machine's home folder is a "no folder" session (`formatSessionPath` labels home
- * "No folder"), so the list shows it with that machine's Chats: one group for one concept (lab FL3),
- * never "No folder" beside "Chats". Only the list's grouping folds it; the session keeps its folder.
- */
-function foldHomeFolderIntoChats<T extends Readonly<{ bucket: 'path' | 'managed'; pathKey: string; homeDir: string | null }>>(parts: T): T {
-    if (parts.bucket !== 'path' || !parts.pathKey) return parts;
-    const home = parts.pathKey === '~' || (parts.homeDir !== null && parts.pathKey === parts.homeDir);
-    return home ? { ...parts, bucket: 'managed', pathKey: '' } : parts;
-}
-
 function groupSessionsByProject(params: Readonly<{
     sessions: ReadonlyArray<SessionListRenderableSession>;
     machines: Record<string, MachineDisplayRenderable>;
@@ -217,11 +206,11 @@ function groupSessionsByProject(params: Readonly<{
                 ...(displayPath ? { path: displayPath } : {}),
             }
             : session.metadata ?? null;
-        const groupingParts = foldHomeFolderIntoChats(resolveSessionProjectGroupingKeyPartsWithMachineMetadata(
+        const groupingParts = resolveSessionProjectGroupingKeyPartsWithMachineMetadata(
             groupingMetadata,
             machine?.metadata ?? null,
             displayPath,
-        ));
+        );
         const key = sessionProjectGroupingIdentityKey(buildSessionProjectGroupingIdentity(
             params.serverId,
             groupingParts,

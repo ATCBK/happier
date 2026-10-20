@@ -16,6 +16,7 @@ import {
     TriageTextV1ProtocolSchema,
 } from './identity.js';
 import { defineTriageSingleLineStringV1 } from './strings.js';
+import { TriageTaskCapabilitiesV1Schema } from './observations.js';
 
 /**
  * One tab a source's detail offers for an entry kind (r0.42).
@@ -67,6 +68,8 @@ export const TriageSourceKindDescriptorV1ProtocolSchema = defineProtocolObject({
     workflowSubject: TriageSourceWorkflowSubjectV1Schema,
     displayName: TriageTextV1ProtocolSchema,
     pluralDisplayName: TriageTextV1ProtocolSchema.optional(),
+    task: defineProtocolLiteral(true).optional(),
+    taskCapabilities: TriageTaskCapabilitiesV1Schema.optional(),
     /**
      * The detail tabs this kind supports (r0.42). Absent: the source keeps its
      * whole detail body, mounted without a `panel`, exactly as before.

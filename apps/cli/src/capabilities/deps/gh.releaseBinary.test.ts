@@ -55,6 +55,28 @@ afterEach(async () => {
 });
 
 describe('gh release-binary installer', () => {
+  it('reports an exhausted latest-release API as rate-limited with its reset time', async () => {
+    process.env.HAPPIER_HOME_DIR = await mkdtemp(join(tmpdir(), 'happier-gh-limit-'));
+    tempDirs.add(process.env.HAPPIER_HOME_DIR);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 429, headers: {
+      'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1792364400',
+    } }));
+    const { GH_INSTALLABLE_DESCRIPTOR } = await import('@happier-dev/protocol/installables');
+    const { getGitHubReleaseBinaryRuntimeInstallableAdapter } = await import(
+      '@/packagedRuntime/installables/sourceAdapters/githubReleaseBinary'
+    );
+    const adapter = await getGitHubReleaseBinaryRuntimeInstallableAdapter(GH_INSTALLABLE_DESCRIPTOR);
+    await expect(adapter?.installOrUpgrade()).resolves.toMatchObject({ ok: false, errorCode: 'rate-limited',
+      errorMessage: expect.stringContaining('2026-10-18T23:00:00.000Z'),
+    });
+    if (!adapter) throw new Error('Expected GitHub installable adapter');
+    const { createInstallableCapability } = await import('./installables');
+    const capability = createInstallableCapability(GH_INSTALLABLE_DESCRIPTOR, adapter);
+    await expect(capability.invoke?.({ method: 'install' })).resolves.toMatchObject({ ok: false,
+      error: { code: 'rate-limited', message: expect.stringContaining('2026-10-18T23:00:00.000Z') },
+    });
+  });
+
   it('installs the GitHub CLI release into the managed current/bin path', async () => {
     if (!ORIGINAL_PLATFORM_DESCRIPTOR || !ORIGINAL_ARCH_DESCRIPTOR) {
       throw new Error('Expected process.platform/process.arch to be configurable for this test');

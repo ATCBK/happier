@@ -9,6 +9,8 @@ import { decodeBase64, encodeBase64 } from '@/encryption/base64';
 import { deriveAccountSigningPublicKey } from '@/auth/flows/challenge';
 import { buildContentKeyBinding } from '@/auth/oauth/contentKeyBinding';
 import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
+import { DiscussionAccountEncryptionInventoryV1Schema } from '@happier-dev/protocol/discussions/accountEncryptionMigration';
+import { SESSION_FOLLOW_RULES_ROUTE_V1, ListSessionFollowRulesResponseV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleV1';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -42,13 +44,16 @@ import { formatSharedSavedSecretRefV1 } from '@happier-dev/protocol/account/sett
 import { openAccountScopedBlobCiphertext, sealAccountScopedBlobCiphertext } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import { PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
     openProviderConnectionsContentV1, sealProviderConnectionsContentV1,
-    ProviderConnectionsRowMutationV1Schema, ProviderConnectionsRowMutationResponseV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
+    ProviderConnectionsCatalogV1Schema, ProviderConnectionsRowMutationV1Schema, ProviderConnectionsRowMutationResponseV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { REMOTE_HOST_ROWS_ROUTE_V1 } from '@happier-dev/protocol/remoteHosts/remoteHostRecordV1';
 import { NOTIFICATION_CHANNELS_ROUTE_V1 } from '@happier-dev/protocol/account/settings/notificationChannelRecordV1';
 import { CONNECTED_PRESENTATION_ROWS_ROUTE_V1, CONNECTED_ACKNOWLEDGEMENTS_ROWS_ROUTE_V1 } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
+
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
 const D10_CATALOGS = [
     { field: 'remoteHosts', route: REMOTE_HOST_ROWS_ROUTE_V1, kind: 'account_remote_host_catalog', collection: 'hosts',
@@ -166,6 +171,10 @@ async function mount(params: Readonly<{
                 terminalPresentUserPolicy: 'allowed', nativeEmail: null, password: { status: 'not_enrolled', revision: null } });
             if (target.pathname === '/v1/kv') return json({ items: [] });
             if (target.pathname === '/v1/account/encryption/migrate/review-comments/inventory') return json({ v: 1, items: [] });
+            if (target.pathname === '/v1/account/encryption/migrate/discussions/inventory')
+                return json(DiscussionAccountEncryptionInventoryV1Schema.parse({ items: [] }));
+            if (target.pathname === SESSION_FOLLOW_RULES_ROUTE_V1)
+                return json(ListSessionFollowRulesResponseV1Schema.parse({ rules: [] }));
             if (target.pathname === '/v1/account/encryption/migrate/session-organization/inventory') return json({ version: 0, folders: [], tags: [], labels: [] });
             if (target.pathname === '/v1/account/encryption/migrate' && init?.method === 'POST') {
                 const migration = JSON.parse(String(init.body)) as AccountEncryptionMigrateRequest;
@@ -281,7 +290,7 @@ async function mount(params: Readonly<{
             return json({ error: 'not_found' }, 404);
         } });
     auth.credentials = initialCredentials;
-    vi.mocked(TokenStorage.getCredentialsForServerUrl).mockImplementation(async (url) => url === restored.home.serverUrl ? auth.credentials : null);
+    vi.spyOn(TokenStorage, 'getCredentialsForServerUrl').mockImplementation(async (url) => url === restored.home.serverUrl ? auth.credentials : null);
     auth.loginWithCredentials.mockReset();
     auth.loginWithCredentials.mockImplementation(async credentials => {
         await params.beforeCredentialAdoption?.();
@@ -393,13 +402,13 @@ describe('Account encryption historical material custody', () => {
     });
 
     it.each(['plain', 'e2ee'] as const)('includes the demanded Provider catalog in the actual Account mode switch (%s source)', async initialMode => {
-        const catalog = { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
+        const catalog = ProviderConnectionsCatalogV1Schema.parse({ ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1,
             connections: [{ v: 1 as const, id: 'pc_a', source: { kind: 'contribution' as const, contributionKey: 'plugin/provider' },
                 role: 'default' as const, displayName: 'Provider', displayNameMode: 'automatic' as const,
                 deployment: { kind: 'external' as const }, revision: 2, createdAt: 1, updatedAt: 2 }],
             secretBindingsByConnectionId: { pc_a: { account: { apiKey: formatSharedSavedSecretRefV1('secret-a') },
                 byMachineId: { machine_a: { apiKey: formatSharedSavedSecretRefV1('secret-b') } } } },
-        };
+        });
         const credentials: AuthCredentials = { token: 'e30.eyJzdWIiOiJhY2NvdW50LWEifQ.signature', secret: encodeBase64(new Uint8Array(32).fill(7), 'base64url') };
         const content = sealProviderConnectionsContentV1({ catalog, mode: initialMode,
             material: initialMode === 'plain' ? null : resolveAccountScopedCryptoMaterialFromCredentials(credentials) });
@@ -714,9 +723,9 @@ describe('Account encryption historical material custody', () => {
                 summaryCiphertext: AUTOMATION_TEMPLATE_V02_ENCRYPTED, triggerEvidenceEnvelope: null, occurrenceEvidenceEqualityTag: null,
                 executionInputEnvelope: null, resultEnvelope: null, replyContextEnvelope: null, failureDetailEnvelope: null }] });
         try {
-            vi.mocked(Modal.confirm).mockResolvedValueOnce(false);
+            vi.mocked(Modal.confirm).mockImplementation(async title => title !== 'settingsAccount.forgetEncryptionKeyConfirm');
             await h.screen.pressByTestIdAsync('settings-account-encryption-forget-key');
-            const message = vi.mocked(Modal.confirm).mock.calls.at(-1)?.[1];
+            const message = vi.mocked(Modal.confirm).mock.calls.find(([title]) => title === 'settingsAccount.forgetEncryptionKeyConfirm')?.[1];
             expect(message).toContain('session-old');
             expect(message).toContain('trigger-old');
             expect(message).toContain('run-old');
@@ -730,7 +739,7 @@ describe('Account encryption historical material custody', () => {
         try {
             vi.mocked(Modal.confirm).mockClear();
             await h.screen.pressByTestIdAsync('settings-account-encryption-forget-key');
-            expect(Modal.confirm).not.toHaveBeenCalled();
+            expect(vi.mocked(Modal.confirm).mock.calls.filter(([title]) => title === 'settingsAccount.forgetEncryptionKeyConfirm')).toEqual([]);
             expect(auth.loginWithCredentials).not.toHaveBeenCalled();
             expect(Modal.alertAsync).toHaveBeenCalled();
         } finally { await h.screen.unmount(); await h.restored.dispose(); }

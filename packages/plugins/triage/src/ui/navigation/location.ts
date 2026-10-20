@@ -1,6 +1,6 @@
 import { normalizePluginUiSubPathV1, type PluginUiHostApi } from '@happier-dev/plugin-sdk/ui';
 import { PluginContributionIdentityV1Schema } from '@happier-dev/plugin-sdk/manifest';
-import { TriageEntryRefV1Schema, type TriageEntryRefV1 } from '@happier-dev/triage-protocol/v1';
+import { buildTriageEntryRouteSegmentV1, readTriageEntryRouteSegmentV1, type TriageEntryRefV1 } from '@happier-dev/triage-protocol/v1';
 
 import {
   CORPUS_DEFAULT_SMART_POLICY_V1,
@@ -105,20 +105,6 @@ function decode(value: string): string | null {
   }
 }
 
-function readEntryRef(components: readonly string[]): TriageEntryRefV1 | null {
-  if (components.length !== 5) return null;
-  const decoded = components.map(decode);
-  if (decoded.some((component) => component === null)) return null;
-  const [pluginId, localId, kindId, collisionScope, entryId] = decoded as readonly string[];
-  const parsed = TriageEntryRefV1Schema.safeParse({
-    source: { pluginId, localId },
-    kindId,
-    collisionScope,
-    entryId,
-  });
-  return parsed.success ? parsed.data : null;
-}
-
 /**
  * The mutable facet accumulator one parse fills.
  *
@@ -187,11 +173,17 @@ export function parseTriageRouteSubPathV1(subPath: string | undefined): TriageRo
   let query = TRIAGE_ROUTE_DEFAULT_LENS_V1.query;
   let selectedViewId = TRIAGE_ROUTE_DEFAULT_LENS_V1.selectedViewId;
   let selection: TriageEntryRefV1 | null = null;
+  let tasks: SurfaceFilterSelectionV1['tasks'];
   const facets: FacetDraft = { sources: [], types: [], scopes: [], states: [], attention: [] };
 
   for (const segment of (subPath ?? '').split('/')) {
     if (segment.length === 0) continue;
     const [key, ...components] = segment.split(',');
+    if (key === 'tasks' && components.length === 1) {
+      const value = components[0];
+      if (value === 'mine' || value === 'agents' || value === 'everyone') tasks = value;
+      continue;
+    }
     if (key === 'sv' && components.length === 1) {
       // Opaque and never parsed for meaning: the id either names a stored view
       // or it does not, and only the Account KV owner can say which. An id no
@@ -253,13 +245,14 @@ export function parseTriageRouteSubPathV1(subPath: string | undefined): TriageRo
       if (value !== null) query = value;
       continue;
     }
-    if (key === 'e') selection = readEntryRef(components);
+    if (key === 'e') selection = readTriageEntryRouteSegmentV1(segment);
   }
 
   return Object.freeze({
     order,
     smartPolicy,
     filters: Object.freeze({
+      ...(tasks === undefined ? {} : { tasks }),
       sources: Object.freeze(facets.sources),
       types: Object.freeze(facets.types),
       scopes: Object.freeze(facets.scopes),
@@ -275,6 +268,7 @@ export function parseTriageRouteSubPathV1(subPath: string | undefined): TriageRo
 /** Build the canonical location for one lens. Absent fields stay absent. */
 export function buildTriageRouteSubPathV1(lens: TriageRouteLensV1): string {
   const segments: string[] = [];
+  if (lens.filters.tasks !== undefined) segments.push(`tasks,${lens.filters.tasks}`);
   if (lens.selectedViewId !== null) segments.push(`sv,${encode(lens.selectedViewId)}`);
   if (lens.order !== TRIAGE_ROUTE_DEFAULT_LENS_V1.order) {
     segments.push(`o,${encode(lens.order)}`);
@@ -301,15 +295,7 @@ export function buildTriageRouteSubPathV1(lens: TriageRouteLensV1): string {
   }
   if (lens.query.length > 0) segments.push(`q,${encode(lens.query)}`);
   if (lens.selection) {
-    const { source, kindId, collisionScope, entryId } = lens.selection;
-    segments.push([
-      'e',
-      encode(source.pluginId),
-      encode(source.localId),
-      encode(kindId),
-      encode(collisionScope),
-      encode(entryId),
-    ].join(','));
+    segments.push(buildTriageEntryRouteSegmentV1(lens.selection));
   }
   return segments.join('/');
 }

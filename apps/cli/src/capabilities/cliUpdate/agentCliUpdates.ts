@@ -10,6 +10,7 @@ import {
 } from '@happier-dev/cli-common/agents';
 import { compareVersions } from '@happier-dev/cli-common/update';
 import { AsyncTtlCache } from '@happier-dev/protocol/common/asyncTtlCache';
+import { GitHubReleaseRateLimitError } from '@happier-dev/release-runtime/github';
 
 import { configuration } from '@/configuration';
 import { buildDetectContext } from '@/capabilities/context/buildDetectContext';
@@ -74,7 +75,7 @@ export function withAgentCliUpdateFacts(cap: Capability, agentId: string, deps: 
  *
  * - detect: `installSource`, `updateSupported`, `updateCommand` for the executable the capability
  *   reports, plus `latestVersion` when `includeLatestVersion` is requested (cached per daemon for
- *   the installables update-check interval; failures are not cached).
+ *   the installables update-check interval; exhausted GitHub limits wait until their reset).
  * - invoke `install` with `intent: 'update'`: updates that exact executable through the agent
  *   install owner and succeeds only when a fresh detect reports a different version.
  *
@@ -109,6 +110,9 @@ export function withAgentCliUpdates(cap: Capability, agentId: string, deps: Agen
   ): Promise<AgentCliLatestVersionFacts | null> => {
     const key = installSource === 'managed' ? 'managed' : 'registry';
     const cached = latestVersionCache.get(key);
+    // A user refresh cannot replenish GitHub's per-IP REST budget. Reuse the
+    // existing cache only until the response's reset, not an invented retry TTL.
+    if (cached?.kind === 'error' && latestVersionCache.isFresh(cached)) return null;
     if (!bypassCache && cached?.kind === 'success' && latestVersionCache.isFresh(cached)) return cached.value;
     return await latestVersionCache.runDedupe(key, async () => {
       try {
@@ -117,6 +121,9 @@ export function withAgentCliUpdates(cap: Capability, agentId: string, deps: Agen
         return facts;
       } catch (error) {
         deps.signal?.throwIfAborted();
+        if (error instanceof GitHubReleaseRateLimitError && error.resetAtMs !== null) {
+          latestVersionCache.setError(key, { ttlMs: Math.max(0, error.resetAtMs - Date.now()) });
+        }
         logger.debug(`[capabilities] latest version lookup failed for ${agentId}: ${error instanceof Error ? error.message : String(error)}`);
         return null;
       }

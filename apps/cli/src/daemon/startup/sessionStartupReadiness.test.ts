@@ -59,7 +59,7 @@ describe('session startup acknowledgement', () => {
             runnerAgentInvocationContext: Object.freeze({ cwd: home, environment: Object.freeze({}), providerBindingActive: false }),
             agentRuntimeDaemonServiceAuthorityFilePath: authorityPath, acceptedSpawnMarkerGate: Promise.resolve(true),
             runnerAgentBootstrapIdentity: { agentId: 'fixture', backendId: 'fixture' },
-            spawnOptions: { directory: home, backendTarget: { kind: 'builtInAgent', agentId: 'fixture' }, spawnNonce: 'fresh-wrapper' } };
+            spawnOptions: { directory: home, backendTarget: { kind: 'backend', backendId: 'fixture' }, spawnNonce: 'fresh-wrapper' } };
         await writeSessionMarker({ pid: wrapperPid, happySessionId: `PID-${wrapperPid}`, startedBy: 'daemon', cwd: home,
             processStartTimeMs: 12_345,
             respawn: { version: 1, directory: home, backendTarget: { kind: 'builtInAgent', agentId: 'fixture' }, spawnNonce: 'fresh-wrapper' } });
@@ -96,7 +96,7 @@ describe('session startup acknowledgement', () => {
                 runnerAgentSourceCustodyV1: binding.sourceCustody });
             const authority = await readAgentRuntimeDaemonServiceAuthorityForVerifiedMarker({ happyHomeDir: home,
                 publicReleaseRing: configuration.publicReleaseRing, path: authorityPath, sessionId,
-                runner: { pid: runnerPid, processStartTimeMs: 23_456, processCommandHash: hashProcessCommand(command), snapshotIdentity: 'version:1.2.3' } });
+                runner: { pid: runnerPid, processStartTimeMs: 23_456, processCommandHash: hashProcessCommand(command) } });
             expect(authority).toMatchObject({ sessionId, runner: { pid: runnerPid, processStartTimeMs: 23_456 }, retainedAgent: binding });
             expect(sessions.get(wrapperPid)).toBe(tracked);
             expect(tracked.processStartTimeMs).toBe(12_345);

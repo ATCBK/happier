@@ -27,11 +27,13 @@ const LINKED: readonly TriageLinkedSessionProjectionV1[] = Object.freeze([
 const calls: Array<Readonly<{ action: string; input: unknown }>> = [];
 const mounted: PluginUiTestkit[] = [];
 let openFails = false;
+const ENTRY = { source: { pluginId: 'acme.tracker', localId: 'issues' }, kindId: 'issue', collisionScope: 'repo', entryId: '540' };
 
 /** The host's canonical Session projection; `agent` is present only when the host admits it. */
 function liveState(sessionId: string, agent?: SessionStateV1['agent']): SessionStateV1 {
   return {
     sessionId,
+    title: LINKED.find((session) => session.sessionId === sessionId)?.displayTitle,
     lifecycle: 'active',
     runtime: 'waiting',
     operational: 'ready',
@@ -43,13 +45,14 @@ function liveState(sessionId: string, agent?: SessionStateV1['agent']): SessionS
 
 async function mountBody(
   sessions: readonly TriageLinkedSessionProjectionV1[],
-  readSession?: (sessionId: string) => SessionStateV1,
+  readSession: (sessionId: string) => SessionStateV1 | null = (sessionId) => liveState(sessionId),
+  onUnlinked: () => Promise<void> = async () => {},
 ) {
   calls.length = 0;
   openFails = false;
   const surface = defineUiSurface(function EntryBody(_context: RenderContext): React.ReactElement {
     return (
-      <TriageDetailWholeBody sessions={sessions}>
+      <TriageDetailWholeBody sessions={sessions} entryRef={ENTRY} onUnlinked={onUnlinked}>
         <Text value="The source's own detail" />
       </TriageDetailWholeBody>
     );
@@ -64,9 +67,10 @@ async function mountBody(
       executeAction: async ({ action, input }) => {
         calls.push({ action: String(action), input });
         if (openFails) throw new Error('open failed');
+        if (action === 'sessions/unlink-entry-v1') return { v: 1, status: 'unlinked' };
         return {};
       },
-      ...(readSession === undefined ? {} : { readSession: ({ sessionId }: { sessionId: string }) => readSession(sessionId) }),
+      readSession: ({ sessionId }: { sessionId: string }) => readSession(sessionId),
     },
   });
   mounted.push(fixture);
@@ -78,6 +82,38 @@ afterEach(async () => {
 });
 
 describe('Triage entry Session tab', () => {
+  it('uses the host untitled fallback for unreadable links instead of persisted labels or raw ids', async () => {
+    const body = await mountBody([LINKED[0]!], () => null);
+    await act(async () => { await body.press(await body.getByRole('tab', { name: 'Session' })); });
+    await expect(body.getByText('Untitled session')).resolves.toBeDefined();
+    await expect(body.queryByText('Route repair')).resolves.toBeUndefined();
+    const picker = await mountBody(LINKED, (sessionId) => sessionId === 'session-linked'
+      ? { ...liveState(sessionId), title: 'Current investigation' } : null);
+    await act(async () => { await picker.press(await picker.getByRole('tab', { name: 'Session' })); });
+    await act(async () => { await picker.press(await picker.getByRole('button', { name: 'Linked session: Current investigation' })); });
+    await expect(picker.getByRole('menuitemradio', { name: 'Untitled session' })).resolves.toBeDefined();
+    await expect(picker.queryByRole('menuitemradio', { name: 'Parser cleanup' })).resolves.toBeUndefined();
+  });
+  it('distinguishes Account-only links with current host Session titles and unlinks the chosen pair', async () => {
+    const body = await mountBody(LINKED.map(({ sessionId }) => ({ sessionId })), (sessionId) => ({
+      ...liveState(sessionId),
+      title: sessionId === 'session-linked' ? 'Route repair' : 'Parser cleanup',
+    }));
+    await act(async () => { await body.press(await body.getByRole('tab', { name: 'Session' })); });
+    await act(async () => { await body.press(await body.getByRole('button', { name: 'Linked session: Route repair' })); });
+    await act(async () => { await body.press(await body.getByRole('menuitemradio', { name: 'Parser cleanup' })); });
+    await expect(body.getByRole('group', { name: 'Session session-other' })).resolves.toBeDefined();
+    await act(async () => { await body.press(await body.getByRole('button', { name: 'Unlink' })); });
+    expect(calls).toEqual([{ action: 'sessions/unlink-entry-v1', input: { v: 1, sessionId: 'session-other', entryRef: ENTRY } }]);
+  });
+  it('lets the entry unlink the selected relationship even without a readable Session', async () => {
+    let refreshes = 0;
+    const body = await mountBody([LINKED[0]!], () => null, async () => { refreshes += 1; });
+    await act(async () => { await body.press(await body.getByRole('tab', { name: 'Session' })); });
+    await act(async () => { await body.press(await body.getByRole('button', { name: 'Unlink' })); });
+    expect(calls).toEqual([{ action: 'sessions/unlink-entry-v1', input: { v: 1, sessionId: 'session-linked', entryRef: ENTRY } }]);
+    expect(refreshes).toBe(1);
+  });
   it('shows an inline Open failure and lets the user retry the same Session', async () => {
     const body = await mountBody(LINKED);
     await act(async () => { await body.press(await body.getByRole('tab', { name: 'Session' })); });
@@ -91,6 +127,19 @@ describe('Triage entry Session tab', () => {
       { action: 'session.open', input: { sessionId: 'session-linked' } },
       { action: 'session.open', input: { sessionId: 'session-linked' } },
     ]);
+  });
+  it('retains the relationship after a refused unlink and lets the reader retry', async () => {
+    let refreshes = 0;
+    const body = await mountBody([LINKED[0]!], () => null, async () => { refreshes += 1; });
+    await act(async () => { await body.press(await body.getByRole('tab', { name: 'Session' })); });
+    openFails = true;
+    await act(async () => { await body.press(await body.getByRole('button', { name: 'Unlink' })); });
+    await expect(body.getByText('This link could not be removed.')).resolves.toBeDefined();
+    expect(refreshes).toBe(0);
+    openFails = false;
+    await act(async () => { await body.press(await body.getByRole('button', { name: 'Unlink' })); });
+    await expect(body.queryByText('This link could not be removed.')).resolves.toBeUndefined();
+    expect(refreshes).toBe(1);
   });
   it('presents the first linked Session live, follows the selection and still opens it in full', async () => {
     const body = await mountBody(LINKED);

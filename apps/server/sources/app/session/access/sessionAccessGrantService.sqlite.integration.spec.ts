@@ -230,7 +230,7 @@ describe("Session access grant service (SQLite integration)", () => {
     });
 
     it.each(["account", "team", "group"] as const)(
-        "applies the opted-in %s Follow during initial Session access materialization",
+        "materializes initial %s access without enrolling private Follow or read state",
         async (kind) => {
             const fixture = await createFixture();
             const group = kind === "group"
@@ -292,12 +292,8 @@ describe("Session access grant service (SQLite integration)", () => {
                 })).toMatchObject({ ok: true });
             });
             const where = { accountId_sessionId: { accountId: fixture.collaborator.id, sessionId } };
-            expect(await db.accountSessionFollow.findUnique({ where })).toMatchObject({
-                following: true,
-                notificationLevel: "important",
-                includeInVoice: false,
-            });
-            expect(await db.accountSessionReadState.findUnique({ where })).not.toBeNull();
+            expect(await db.accountSessionFollow.findUnique({ where })).toBeNull();
+            expect(await db.accountSessionReadState.findUnique({ where })).toBeNull();
         },
     );
 
@@ -735,7 +731,7 @@ describe("Session access grant service (SQLite integration)", () => {
         } })).toBe(0);
     });
 
-    it("applies opted-in Team Follow only at new effective access and retains it across overlapping grants", async () => {
+    it("preserves a historical Follow across overlapping grants and removes it on final access loss", async () => {
         const fixture = await createFixture();
         await db.$executeRaw`UPDATE Account SET sessionAutoFollowTeam = true WHERE id = ${fixture.collaborator.id}`;
         const input = {
@@ -746,8 +742,11 @@ describe("Session access grant service (SQLite integration)", () => {
         };
         expect(await inTx((tx) => putSessionAccessGrantInTx(tx, input))).toMatchObject({ ok: true });
         const where = { accountId_sessionId: { accountId: fixture.collaborator.id, sessionId: fixture.session.id } };
-        expect(await db.$queryRaw`SELECT notificationLevel FROM AccountSessionFollow WHERE accountId = ${fixture.collaborator.id} AND sessionId = ${fixture.session.id}`)
-            .toEqual([{ notificationLevel: "important" }]);
+        expect(await db.accountSessionFollow.findUnique({ where })).toBeNull();
+        await db.accountSessionFollow.create({ data: {
+            accountId: fixture.collaborator.id, sessionId: fixture.session.id,
+            following: true, notificationLevel: "important",
+        } });
         expect(await db.accountSessionFollow.count({ where: { accountId: fixture.owner.id } })).toBe(0);
         const direct = { ...input, subject: { kind: "account" as const, accountId: fixture.collaborator.id } };
         expect(await inTx((tx) => putSessionAccessGrantInTx(tx, direct))).toMatchObject({ ok: true });
@@ -779,6 +778,7 @@ describe("Session access grant service (SQLite integration)", () => {
             expect(await setSessionFollowSource({
                 accountId: account.id, sourceSessionId: fixture.session.id,
                 destinationSessionId: destination.id,
+                policy: { preset: 'quiet' },
                 authentication: TEST_AUTHENTICATION,
             })).toMatchObject({ ok: true });
             destinations.push(destination);
@@ -830,6 +830,7 @@ describe("Session access grant service (SQLite integration)", () => {
             accountId: fixture.owner.id,
             sourceSessionId: fixture.session.id,
             destinationSessionId: destination.id,
+            policy: { preset: 'quiet' },
             authentication: TEST_AUTHENTICATION,
         })).toMatchObject({ ok: true });
 
@@ -840,9 +841,10 @@ describe("Session access grant service (SQLite integration)", () => {
             effects: { revokedAccountIds: [fixture.collaborator.id] },
         });
         expect(await db.sessionFollowEdge.findUnique({
-            where: { destinationSessionId_sourceSessionId: {
+            where: { destinationSessionId_sourceSessionId_relation: {
                 destinationSessionId: destination.id,
                 sourceSessionId: fixture.session.id,
+                relation: "follower",
             } },
         })).toBeNull();
         const destinationInvalidations = await db.accountChange.findMany({
@@ -856,7 +858,7 @@ describe("Session access grant service (SQLite integration)", () => {
         expect(destinationInvalidations).toHaveLength(2);
     });
 
-    it("uses the Group preference independently of Team preference", async () => {
+    it("keeps Group default-rule intent independent of access materialization", async () => {
         const fixture = await createFixture();
         const membership = await db.teamMembership.findUniqueOrThrow({ where: { teamId_accountId: { teamId: fixture.team.id, accountId: fixture.collaborator.id } } });
         const group = await db.teamGroup.create({ data: { teamId: fixture.team.id, name: "Group", nameKey: "group" } });
@@ -868,7 +870,7 @@ describe("Session access grant service (SQLite integration)", () => {
             subject: { kind: "group", teamId: fixture.team.id, groupId: group.id },
             grant: { accessLevel: "view", canApprovePermissions: false },
         }))).toMatchObject({ ok: true });
-        expect(await db.accountSessionFollow.findUnique({ where: { accountId_sessionId: { accountId: fixture.collaborator.id, sessionId: fixture.session.id } } })).toMatchObject({ following: true, notificationLevel: "important" });
+        expect(await db.accountSessionFollow.findUnique({ where: { accountId_sessionId: { accountId: fixture.collaborator.id, sessionId: fixture.session.id } } })).toBeNull();
     });
 
     it("does not follow historical grants on preference enable or erase explicit suppression on revocation", async () => {
@@ -886,18 +888,18 @@ describe("Session access grant service (SQLite integration)", () => {
         expect(await db.accountSessionFollow.findUnique({ where })).toBeNull();
         await inTx((tx) => deleteSessionAccessGrantInTx(tx, input));
         await inTx((tx) => putSessionAccessGrantInTx(tx, input));
-        expect(await db.accountSessionFollow.findUnique({ where })).toMatchObject({ following: true });
-        await db.accountSessionFollow.update({ where, data: { following: false, notificationLevel: "none" } });
+        expect(await db.accountSessionFollow.findUnique({ where })).toBeNull();
+        await db.accountSessionFollow.create({ data: {
+            accountId: fixture.collaborator.id, sessionId: fixture.session.id,
+            following: false, notificationLevel: "none",
+        } });
         await inTx((tx) => deleteSessionAccessGrantInTx(tx, input));
         expect(await db.accountSessionFollow.findUnique({ where })).toMatchObject({ following: false });
         await inTx((tx) => putSessionAccessGrantInTx(tx, input));
         expect(await db.accountSessionFollow.findUnique({ where })).toMatchObject({ following: false });
     });
 
-    // Lane 09C: a newly created direct relationship qualifies its own automatic
-    // Follow preference even when effective read access already existed through
-    // a Team. Team/Group transitions still qualify only newly effective readers.
-    it("auto-Follows a direct share even when the reader already reads through a Team, and follows a genuinely new reader", async () => {
+    it("grants direct access to overlapping and new readers without creating Follow choices", async () => {
         const fixture = await createFixture();
         // A friend outside the Team: the direct grant is their only read source.
         const newReader = await createAccount("grant-new-reader");
@@ -917,7 +919,7 @@ describe("Session access grant service (SQLite integration)", () => {
             subject: { kind: "account", accountId: fixture.collaborator.id },
             grant: { accessLevel: "edit", canApprovePermissions: false },
         }))).toMatchObject({ ok: true, changed: true });
-        expect(await db.accountSessionFollow.findUnique({ where: { accountId_sessionId: { accountId: fixture.collaborator.id, sessionId: fixture.session.id } } })).toMatchObject({ following: true });
+        expect(await db.accountSessionFollow.findUnique({ where: { accountId_sessionId: { accountId: fixture.collaborator.id, sessionId: fixture.session.id } } })).toBeNull();
 
         expect(await inTx((tx) => putSessionAccessGrantInTx(tx, {
             actorAccountId: fixture.owner.id,
@@ -925,7 +927,7 @@ describe("Session access grant service (SQLite integration)", () => {
             subject: { kind: "account", accountId: newReader.id },
             grant: { accessLevel: "view", canApprovePermissions: false },
         }))).toMatchObject({ ok: true, changed: true });
-        expect(await db.accountSessionFollow.findUnique({ where: { accountId_sessionId: { accountId: newReader.id, sessionId: fixture.session.id } } })).toMatchObject({ following: true });
+        expect(await db.accountSessionFollow.findUnique({ where: { accountId_sessionId: { accountId: newReader.id, sessionId: fixture.session.id } } })).toBeNull();
     });
 
     async function writeDraft(accountId: string, sessionId: string): Promise<string> {
@@ -1012,7 +1014,7 @@ describe("Session access grant service (SQLite integration)", () => {
         if (!removal.ok) return;
         expect(removal.effects.revokedAccountIds).toEqual([]);
         expect(removal.effects.changedAccountIds).toEqual([fixture.collaborator.id]);
-        expect(removal.effects.accountCursors.get(fixture.collaborator.id)).toBeGreaterThan(0);
+        expect(removal.effects.accountCursors.get(fixture.collaborator.id)?.resolveCursor()).toBeGreaterThan(0);
     });
 
     it("revokes and tombstones only when the final source is removed", async () => {

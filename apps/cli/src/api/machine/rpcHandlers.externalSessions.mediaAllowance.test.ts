@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import {
@@ -41,6 +41,10 @@ function createDirectSessionMediaItem(providerMediaPath: string) {
 }
 
 describe('external session transcript media read allowance', () => {
+  afterAll(async () => {
+    await pluginReloadController.shutdown();
+  });
+
   it('limits an owner-granted media read to its exact file and retires a replaced file before filesystem or transfer disclosure', async () => {
     const workingDirectory = await mkdtemp(join(tmpdir(), 'happier-media-grant-workspace-'));
     const providerDirectory = await mkdtemp(join(tmpdir(), 'happier-media-grant-provider-'));
@@ -141,6 +145,7 @@ describe('external session transcript media read allowance', () => {
     };
     const runtime = await createAuthoredAdmittedPluginRuntimeFixture({
       controller: pluginReloadController,
+      coldStart: true,
       plugins: [{
         manifest: createPluginManifestV2Fixture({
           id: 'acme.media',
@@ -189,6 +194,7 @@ describe('external session transcript media read allowance', () => {
     });
     const agentId = runtime.registry.contributes.agents.find((agent) => agent.pluginId === 'acme.media')?.id;
     if (!agentId) throw new Error('Expected admitted media fixture Agent');
+    expect(runtime.registry.contributes.agentDefinitionsById.get(agentId)?.catalogEntry ?? null).toBeNull();
 
     try {
       const { registerMachineExternalSessionsRpcHandlers } = await import('./rpcHandlers.externalSessions');
@@ -210,7 +216,7 @@ describe('external session transcript media read allowance', () => {
         source: { kind: 'opencodeServer', baseUrl: 'http://127.0.0.1:4096', directory: providerDirectory },
         direction: 'older',
       });
-      expect(declaredPage).toMatchObject({ ok: true });
+      expect(declaredPage, JSON.stringify(declaredPage)).toMatchObject({ ok: true });
       expect(transientMediaReadAllowance.readAllowedReadFiles()).toEqual([]);
 
       const pageResponse = await rpcHandlerManager.invokeLocal(RPC_METHODS.DAEMON_EXTERNAL_SESSION_TRANSCRIPT_PAGE, {

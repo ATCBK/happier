@@ -33,7 +33,7 @@ it('retains a typed terminal turn refusal, delivers unrelated queued work, and n
         const mutation = value as { mutationId: string };
         deliveredIds.push(mutation.mutationId);
         if (mutation.mutationId === 'refused') throw { response: { status: 400 } };
-        return { data: { success: true, receipt: { ...value, decision: 'applied', appliedAt: 300 } } };
+        return { data: { success: true, receipt: { ...mutation, decision: 'applied', appliedAt: 300 } } };
     });
     const params = { token: 'fixture', sessionId, initiallyActive: false,
         getSocket: () => null, requestReconnect: () => undefined };

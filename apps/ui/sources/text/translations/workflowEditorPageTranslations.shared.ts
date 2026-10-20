@@ -172,6 +172,8 @@ export const en = {
         resultFields: {
             description: 'What later steps can use.',
             named: 'Named fields',
+            returns: 'Returns',
+            describeWhole: 'One reply, read as a whole',
             add: 'Add field',
             name: 'Name',
             type: 'Type',
@@ -211,7 +213,8 @@ export const en = {
             listOf: ({ items }: { items: string }) => `List of ${items}`,
             usedBy: ({ names }: { names: string }) => `Used by ${names}`,
             removeTitle: ({ field }: { field: string }) => `Remove ${field}?`,
-            renameTitle: ({ from, to, count }: { from: string; to: string; count: number }) => `Rename ${from} to ${to} in ${count === 1 ? '1 place' : `${count} places`} that use it?`,
+            renameTitle: ({ from, to }: { from: string; to: string }) => `Rename ${from} to ${to}?`,
+            renameBody: ({ names, to }: { names: string; to: string }) => `${names} will read ${to} instead.`,
             removeBody: ({ count }: { count: number }) => count === 1 ? 'One place uses it. It will need another source.' : `${count} places use it. They will need another source.`,
             useTextBody: ({ count }: { count: number }) => `Later steps read these fields in ${count === 1 ? '1 place' : `${count} places`}. They will need another source.`,
         },

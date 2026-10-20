@@ -9,6 +9,37 @@ import {
 } from './v1.js';
 
 describe('Session permission mediation V1 schemas', () => {
+  it('admits a link-only full form while refusing inline questions beside it', () => {
+    const request = {
+      kind: 'user_action', requestId: 'request-five', turnId: 'turn-five', createdAtMs: 1,
+      agentRequestSummary: {
+        kind: 'user_action', questions: [],
+        fullForm: { questionCount: 5, url: 'https://app.example.test/session/session-five?serverId=home-one' },
+      },
+    };
+    const projection = { requests: [request], truncated: false, nextCursor: null };
+    expect(SessionPermissionRemotePendingListOutputV1Schema.safeParse(projection).success).toBe(true);
+    expect(SessionPermissionRemotePendingListOutputV1Schema.safeParse({
+      ...projection,
+      requests: [{ ...request, agentRequestSummary: {
+        ...request.agentRequestSummary,
+        questions: [{ question: 'Only one?', selection: 'text', required: true, allowCustom: true, choices: [] }],
+      } }],
+    }).success).toBe(false);
+    expect(SessionPermissionRemotePendingListOutputV1Schema.safeParse({
+      ...projection,
+      requests: [{ ...request, agentRequestSummary: { kind: 'user_action', questions: [] } }],
+    }).success).toBe(false);
+    for (const url of ['not a URL', 'javascript:alert(1)']) {
+      expect(SessionPermissionRemotePendingListOutputV1Schema.safeParse({
+        ...projection,
+        requests: [{ ...request, agentRequestSummary: {
+          ...request.agentRequestSummary, fullForm: { questionCount: 5, url },
+        } }],
+      }).success).toBe(false);
+    }
+  });
+
   it('keeps account-user and plugin-asserted external-human audit actors distinct', () => {
     expect(SessionPermissionDecisionActorV1Schema.safeParse({
       kind: 'accountUser',

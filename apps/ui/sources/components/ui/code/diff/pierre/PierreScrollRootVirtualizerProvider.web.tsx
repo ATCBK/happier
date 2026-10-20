@@ -86,9 +86,38 @@ function findOwnedScrollRoot(anchor: HTMLElement): HTMLElement | Document {
     return typeof document !== 'undefined' ? document : (anchor.ownerDocument ?? document);
 }
 
+const UNTRACKED_CONNECT = new WeakMap<PierreVirtualizer, PierreVirtualizer['connect']>();
+
+/** Records which diffs are connected (until they disconnect) so a rebind can re-connect them. */
+function trackConnections(
+    instance: PierreVirtualizer,
+    connected: Map<HTMLElement, Parameters<PierreVirtualizer['connect']>[1]>,
+): PierreVirtualizer {
+    const connect = instance.connect;
+    const disconnect = instance.disconnect;
+    UNTRACKED_CONNECT.set(instance, connect);
+    instance.connect = (container, subscriber) => {
+        connected.set(container, subscriber);
+        return connect.call(instance, container, subscriber);
+    };
+    instance.disconnect = (container) => {
+        connected.delete(container);
+        disconnect.call(instance, container);
+    };
+    return instance;
+}
+
+function untrackedConnect(instance: PierreVirtualizer): PierreVirtualizer['connect'] {
+    return UNTRACKED_CONNECT.get(instance) ?? instance.connect;
+}
+
 export function PierreScrollRootVirtualizerProvider(props: Readonly<{ children: React.ReactNode }>) {
     const anchorRef = React.useRef<HTMLDivElement | null>(null);
     const instanceRef = React.useRef<PierreVirtualizer | undefined>(undefined);
+    // Pierre forgets every connected (and queued) diff on `cleanUp`, and a diff connects only once, when it
+    // mounts. Each bind re-connects the live diffs, or the first diffs of a list (mounted before the
+    // provider first bound, or bound to an earlier root) stay blank until they remount.
+    const connectedRef = React.useRef(new Map<HTMLElement, Parameters<PierreVirtualizer['connect']>[1]>());
     const cleanupRef = React.useRef<(() => void) | undefined>(undefined);
 
     const activate = React.useCallback(() => {
@@ -97,6 +126,7 @@ export function PierreScrollRootVirtualizerProvider(props: Readonly<{ children: 
         if (!anchor) return;
         const instance = instanceRef.current;
         if (!instance) return;
+        const connect = untrackedConnect(instance);
 
         const raf: (cb: FrameRequestCallback) => number =
             typeof globalThis.requestAnimationFrame === 'function'
@@ -129,6 +159,8 @@ export function PierreScrollRootVirtualizerProvider(props: Readonly<{ children: 
                     } else {
                         instance.setup(root);
                     }
+                    // `cleanUp` above dropped Pierre's queue and observers; every live diff connects again.
+                    for (const [container, subscriber] of connectedRef.current) connect.call(instance, container, subscriber);
                     lastRoot = root;
                 } catch {
                     // Fail closed: virtualization is best-effort, never crash the UI.
@@ -162,7 +194,7 @@ export function PierreScrollRootVirtualizerProvider(props: Readonly<{ children: 
             if (typeof window === 'undefined' || typeof document === 'undefined') return undefined;
             if (typeof globalThis.IntersectionObserver === 'undefined') return undefined;
             if (typeof globalThis.ResizeObserver === 'undefined') return undefined;
-            return instanceRef.current ??= create();
+            return instanceRef.current ??= trackConnections(create(), connectedRef.current);
         },
         activate,
     }));

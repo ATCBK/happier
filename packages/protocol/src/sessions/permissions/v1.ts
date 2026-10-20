@@ -135,8 +135,15 @@ const SessionPermissionRemotePermissionSummaryV1Schema = lazyZodSchema(() => z.s
 
 const SessionPermissionRemoteUserActionSummaryV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('user_action'),
-  questions: z.array(SessionPermissionRemoteQuestionSummaryV1Schema).check(z.minLength(1), z.maxLength(SESSION_PERMISSION_REMOTE_SUMMARY_MAX_QUESTIONS)),
-}));
+  questions: z.array(SessionPermissionRemoteQuestionSummaryV1Schema).check(z.maxLength(SESSION_PERMISSION_REMOTE_SUMMARY_MAX_QUESTIONS)),
+  /** Above the existing remote caps, render only this link to the complete form. */
+  fullForm: z.optional(z.strictObject({
+    questionCount: z.number().check(z.int(), z.positive()),
+    url: z.url({ protocol: /^https?$/ }),
+  })),
+}).check(z.refine((summary) => summary.fullForm
+  ? summary.questions.length === 0
+  : summary.questions.length > 0, 'Full-form requests must not contain inline questions')));
 
 const SessionPermissionRemoteAgentRequestSummaryV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
   SessionPermissionRemotePermissionSummaryV1Schema,
@@ -377,3 +384,4 @@ export const SessionPermissionRemoteGrantRevokeOutputV1Schema = lazyZodSchema(()
   }),
 ]));
 export type SessionPermissionRemoteGrantRevokeOutputV1 = z.infer<typeof SessionPermissionRemoteGrantRevokeOutputV1Schema>;
+export * from './questionV1.js';

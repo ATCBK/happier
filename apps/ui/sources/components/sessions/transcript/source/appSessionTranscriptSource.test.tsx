@@ -2,13 +2,16 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import type { Message } from '@happier-dev/session-core/messages';
+import { resolveMessageRouteIdForDisplay, type Message } from '@happier-dev/session-core/messages';
+import type { NormalizedMessage } from '@happier-dev/session-core/raw';
 import {
     createSessionAccessFixture, createSessionFixture, createSessionListRenderableSessionFixture, createSessionMessagesFixture, createToolCallMessageFixture,
     renderHook, renderScreen, standardCleanup,
 } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storageStore';
-import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { getActiveServerSnapshot, setActiveServer } from '@/sync/domains/server/serverRuntime';
+import { upsertServerProfile } from '@/sync/domains/server/serverProfiles';
+import { selectHomeQualifiedSession } from '@/sync/domains/session/selectHomeQualifiedSession';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import { listPendingRequestListsFromSession } from '@/sync/domains/session/pending/listPendingSessionRequests';
 import type { TranscriptInteraction } from '@/utils/sessions/deriveTranscriptInteraction';
@@ -16,6 +19,7 @@ import { AppSessionTranscriptSourceProvider, TranscriptOriginSourceProvider, use
 import { useSessionTranscriptSource } from './SessionTranscriptSourceContext';
 import type { SessionTranscriptSource } from './types';
 import { useChatListRootState } from '../useChatListRootState';
+import { useTranscriptSessionCommon } from '../transcriptSessionCommon';
 import { projectUiSessionAwareness } from '@/sync/domains/session/awareness/sessionAwareness';
 import { nowServerMs } from '@/sync/runtime/time';
 import { serveSessionActionHome } from '@/dev/testkit/harness/sessionActionHome';
@@ -49,6 +53,44 @@ beforeEach(async () => {
 });
 
 describe('app transcript source', () => {
+    it.each([false, true])('withdraws legacy live fields and messages when another Home is staged (retained=%s)', async (retained) => {
+        const previous = storage.getState();
+        const serverId = getActiveServerSnapshot().serverId;
+        const session = createSessionFixture({ id: 'source-legacy-home', serverId: undefined, active: true,
+            agentState: { requests: { permission: { tool: 'Bash', arguments: { command: 'pwd' }, createdAt: 1 } } } });
+        const message = createToolCallMessageFixture({ id: 'legacy-message' });
+        const transcript = createSessionMessagesFixture({ messageIdsOldestFirst: [message.id], messagesById: { [message.id]: message }, isLoaded: true });
+        const ids = [message.id];
+        try {
+            storage.setState({ sessions: { [session.id]: session }, sessionLocalStateScope: { serverId, accountId: 'source-account' },
+                sessionMessages: { [session.id]: transcript } });
+            const hook = await renderHook(() => {
+                const source = useSessionTranscriptSource();
+                return { metadata: source.useMetadata(), agentState: source.useAgentState(),
+                    ids: source.useMessageIdsOldestFirst(), byId: source.useMessagesById(),
+                    message: source.useMessage(message.id), messages: source.useMessagesByIds(ids),
+                    pending: source.usePendingRequests() };
+            }, { wrapper: props => <AppSessionTranscriptSourceProvider sessionId={session.id} serverId={serverId}>{props.children}</AppSessionTranscriptSourceProvider> });
+            expect(hook.getCurrent()).toMatchObject({ metadata: session.metadata, agentState: session.agentState,
+                ids, byId: { [message.id]: message }, message, messages: [message] });
+            expect(hook.getCurrent().pending.permissionRequests).toHaveLength(1);
+            if (retained) {
+                await act(async () => { storage.setState({ sessionMessages: { [session.id]: {
+                    ...transcript, messageIdsOldestFirst: [], messagesById: {}, messagesVersion: 1, isLoaded: false,
+                } } }); });
+                expect(hook.getCurrent()).toMatchObject({ ids, byId: { [message.id]: message }, message, messages: [message] });
+            }
+            await act(async () => {
+                const nextHome = await upsertServerProfile({ serverUrl: 'https://source-staged-home.example.test' });
+                await setActiveServer({ serverId: nextHome.id, scope: 'device' });
+            });
+            expect(selectHomeQualifiedSession(storage.getState(), session.id, serverId, getActiveServerSnapshot().serverId)).toBeNull();
+            expect(hook.getCurrent()).toEqual({ metadata: null, agentState: null, ids: [], byId: {},
+                message: null, messages: [], pending: { permissionRequests: [], userActionRequests: [] } });
+            await hook.unmount();
+        } finally { storage.setState(previous); }
+    });
+
     it('projects both active target-window frontiers through source history and observes window-only changes', async () => {
         const { sync } = await import('@/sync/syncEngine');
         const { activateSessionMessagesWindow, createInactiveSessionMessagesWindowState } = await import('@/sync/runtime/sessionMessagesWindowState');
@@ -148,6 +190,141 @@ describe('app transcript source', () => {
             });
             expect(renders).toBe(before);
             expect(hook.getCurrent()).toBe(pending);
+            await hook.unmount();
+        } finally { storage.setState(previous); }
+    });
+
+    it.each([
+        { kind: 'permission' as const, tool: 'Bash', field: 'permissionRequests' as const },
+        { kind: 'user_action' as const, tool: 'AskUserQuestion', field: 'userActionRequests' as const },
+    ])('retains pending-reader locality without projected counts while updating $kind requests', async ({ kind, tool, field }) => {
+        const previous = storage.getState();
+        const session = createSessionFixture({ id: `source-pending-${kind}`, serverId: getActiveServerSnapshot().serverId,
+            active: true, agentState: {} });
+        const first: NormalizedMessage = { id: 'first-text', role: 'agent', localId: null, createdAt: 1,
+            seq: 1, isSidechain: false, content: [{ type: 'text', text: 'First text', uuid: 'first-text', parentUUID: null }] };
+        let renders = 0;
+        try {
+            storage.getState().applySessions([session]);
+            storage.getState().applyMessages(session.id, [first]);
+            storage.getState().applyMessagesLoaded(session.id);
+            const hook = await renderHook(() => { renders += 1; return useSessionTranscriptSource().usePendingRequests(); }, {
+                wrapper: props => <AppSessionTranscriptSourceProvider sessionId={session.id} serverId={session.serverId}>{props.children}</AppSessionTranscriptSourceProvider>,
+            });
+            const before = renders;
+            const empty = hook.getCurrent();
+            await act(async () => {
+                storage.getState().applyMessages(session.id, [{ ...first, id: 'second-text', seq: 2,
+                    content: [{ type: 'text', text: 'Second text', uuid: 'second-text', parentUUID: null }] }]);
+                storage.getState().applySessions([{ ...storage.getState().sessions[session.id]!, seq: 2 }]);
+            });
+            expect(renders).toBe(before);
+            expect(hook.getCurrent()).toBe(empty);
+
+            const publishRequest = async (argumentsValue: Readonly<Record<string, unknown>> | null) => {
+                await act(async () => {
+                    const current = storage.getState().sessions[session.id]!;
+                    storage.getState().applySessions([{ ...current, agentStateVersion: current.agentStateVersion + 1,
+                        agentState: argumentsValue
+                            ? { requests: { request: { tool, kind, arguments: argumentsValue, createdAt: 3 } } }
+                            : { requests: {}, completedRequests: { request: { tool, kind, arguments: { value: 'changed' },
+                                createdAt: 3, completedAt: 4, status: 'approved' } } } }]);
+                });
+            };
+            await publishRequest({ value: 'first' });
+            expect(hook.getCurrent()[field]).toEqual([expect.objectContaining({ id: 'request', kind, arguments: { value: 'first' } })]);
+            await publishRequest({ value: 'changed' });
+            expect(hook.getCurrent()[field]).toEqual([expect.objectContaining({ id: 'request', kind, arguments: { value: 'changed' } })]);
+            await publishRequest(null);
+            expect(hook.getCurrent()).toEqual({ permissionRequests: [], userActionRequests: [] });
+            await hook.unmount();
+        } finally { storage.setState(previous); }
+    });
+
+    it('reads transcript-only pending requests through the canonical normalized Session id', async () => {
+        const previous = storage.getState();
+        const session = createSessionFixture({ id: 'normalized-pending', serverId: getActiveServerSnapshot().serverId,
+            active: true, agentState: { requests: { 'normalized-permission': {
+                tool: 'Bash', arguments: { command: 'pwd' }, createdAt: 1,
+            } } } });
+        const toolCall: NormalizedMessage = { id: 'normalized-tool-call', role: 'agent', localId: null,
+            createdAt: 1, seq: 1, isSidechain: false, content: [{ type: 'tool-call', id: 'normalized-permission',
+                name: 'Bash', input: { command: 'pwd' }, description: null, uuid: 'normalized-tool-call', parentUUID: null }] };
+        try {
+            storage.getState().applySessions([session]);
+            storage.getState().applyMessages(session.id, [toolCall]);
+            storage.getState().applyMessagesLoaded(session.id);
+            const current = storage.getState().sessions[session.id]!;
+            storage.getState().applySessions([{ ...current, agentState: { requests: {} },
+                agentStateVersion: current.agentStateVersion + 1 }]);
+            expect(storage.getState().sessions[session.id]?.agentState?.requests).toEqual({});
+            const hook = await renderHook(() => useSessionTranscriptSource().usePendingRequests(), {
+                wrapper: props => <AppSessionTranscriptSourceProvider sessionId={`  ${session.id}  `} serverId={session.serverId}>{props.children}</AppSessionTranscriptSourceProvider>,
+            });
+            expect(hook.getCurrent().permissionRequests).toEqual([expect.objectContaining({ id: 'normalized-permission' })]);
+            await act(async () => {
+                storage.getState().applyMessages(session.id, [{ ...toolCall, id: 'normalized-tool-change', seq: 2,
+                    content: [{ type: 'tool-call', id: 'normalized-permission', name: 'Bash', input: { command: 'ls' },
+                        description: null, uuid: 'normalized-tool-change', parentUUID: null }] }]);
+            });
+            // Execution details do not rewrite the arguments the permission request captured.
+            expect(hook.getCurrent().permissionRequests).toEqual([expect.objectContaining({
+                id: 'normalized-permission', arguments: { command: 'pwd' },
+            })]);
+            await act(async () => {
+                storage.getState().applyMessages(session.id, [{ id: 'normalized-tool-result', role: 'agent', localId: null,
+                    createdAt: 4, seq: 3, isSidechain: false, content: [{ type: 'tool-result', tool_use_id: 'normalized-permission',
+                        content: 'done', is_error: false, uuid: 'normalized-tool-result', parentUUID: null,
+                        permissions: { date: 4, result: 'approved' } }] }]);
+            });
+            expect(hook.getCurrent()).toEqual({ permissionRequests: [], userActionRequests: [] });
+            await hook.unmount();
+        } finally { storage.setState(previous); }
+    });
+
+    it('keeps tool-route data local to tools while preserving nested result routing and completion', async () => {
+        const previous = storage.getState();
+        const session = createSessionFixture({ id: 'tool-route-locality', serverId: getActiveServerSnapshot().serverId,
+            active: true, agentState: {}, pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 0 });
+        const parentCall: NormalizedMessage = { id: 'parent-call', role: 'agent', localId: null, createdAt: 1,
+            seq: 1, isSidechain: false, content: [{ type: 'tool-call', id: 'parent-tool', name: 'Task',
+                input: { prompt: 'Check the project' }, description: null, uuid: 'parent-call', parentUUID: null }] };
+        const nestedCall: NormalizedMessage = { id: 'nested-call', role: 'agent', localId: null, createdAt: 2,
+            seq: 2, isSidechain: true, sidechainId: 'parent-tool', content: [{ type: 'tool-call', id: 'nested-tool', name: 'Bash',
+                input: { command: 'pwd' }, description: null, uuid: 'nested-call', parentUUID: null }] };
+        try {
+            storage.getState().applySessions([session]);
+            storage.getState().applyMessages(session.id, [parentCall, nestedCall]);
+            storage.getState().applyMessagesLoaded(session.id);
+            const hook = await renderHook(() => useTranscriptSessionCommon().toolRoute, {
+                wrapper: props => <AppSessionTranscriptSourceProvider sessionId={session.id} serverId={session.serverId}>{props.children}</AppSessionTranscriptSourceProvider>,
+            });
+            const readNested = () => {
+                const parent = Object.values(hook.getCurrent().messagesById).find(message => message.kind === 'tool-call'
+                    && message.tool.id === 'parent-tool');
+                if (parent?.kind !== 'tool-call') throw new Error('The real parent tool must be present');
+                const nested = parent.children.find(message => message.kind === 'tool-call' && message.tool.id === 'nested-tool');
+                if (nested?.kind !== 'tool-call') throw new Error('The real nested tool must be present');
+                return nested;
+            };
+            const routeBefore = resolveMessageRouteIdForDisplay({ message: readNested(), ...hook.getCurrent() });
+            expect(routeBefore).toBe('server:nested-call');
+            expect(readNested().tool.state).toBe('running');
+            const initial = hook.getCurrent();
+            await act(async () => {
+                storage.getState().applyMessages(session.id, [{ id: 'ordinary-text', role: 'agent', localId: null,
+                    createdAt: 3, seq: 3, isSidechain: false,
+                    content: [{ type: 'text', text: 'Progress update', uuid: 'ordinary-text', parentUUID: null }] }]);
+            });
+            expect(hook.getCurrent()).toBe(initial);
+            await act(async () => {
+                storage.getState().applyMessages(session.id, [{ id: 'nested-result', role: 'agent', localId: null,
+                    createdAt: 4, seq: 4, isSidechain: true, sidechainId: 'parent-tool', content: [{ type: 'tool-result',
+                        tool_use_id: 'nested-tool', content: 'done', is_error: false, uuid: 'nested-result', parentUUID: null }] }]);
+            });
+            expect(hook.getCurrent()).not.toBe(initial);
+            expect(readNested().tool.state).toBe('completed');
+            expect(resolveMessageRouteIdForDisplay({ message: readNested(), ...hook.getCurrent() })).toBe(routeBefore);
             await hook.unmount();
         } finally { storage.setState(previous); }
     });

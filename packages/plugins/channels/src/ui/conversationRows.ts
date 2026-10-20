@@ -841,9 +841,14 @@ export type ChannelsConversationIndexGroup = Readonly<{
   rows: readonly ChannelsConversationIndexRow[];
 }>;
 
+/**
+ * The one line a bot's group speaks when the bot needs you, in the column and on the page's own list
+ * alike. The cause itself is said where the bot is, in its row and settings (`connectionStatus`).
+ */
 function connectionNeedsAttention(connection: ChannelsConnection, t: Translate): Readonly<{ label: string }> | undefined {
-  const status = connectionStatus(connection, t);
-  return channelsStatusNeedsYou(status.tone) ? { label: status.label } : undefined;
+  return channelsStatusNeedsYou(connectionStatus(connection, t).tone)
+    ? { label: t('plugins.channels.column.botNeedsYou', 'Bot needs you') }
+    : undefined;
 }
 
 function conversationRowStatus(binding: ChannelsBinding): ChannelsConversationRowStatus | undefined {
@@ -960,6 +965,15 @@ export type ChannelsConversationSnapshot = Readonly<{
   refresh: () => void;
 }>;
 
+/** A conversation needs its binding and bot; all surfaces use the same verdict. */
+export function resolveChannelsConversationReadState(
+  bindings: ChannelsConversationSnapshot['state'],
+  connections: ChannelsConversationSnapshot['state'],
+): ChannelsConversationSnapshot['state'] {
+  if (bindings === 'error' || connections === 'error') return 'error';
+  return bindings === 'loading' || connections === 'loading' ? 'loading' : 'ready';
+}
+
 const NO_BINDINGS: readonly ChannelsBinding[] = Object.freeze([]);
 const NO_CONNECTIONS: readonly ChannelsConnection[] = Object.freeze([]);
 
@@ -992,14 +1006,15 @@ export function useDaemonConversationSnapshot(): Readonly<{
     refreshBindings();
     refreshConnections();
   }, [refreshBindings, refreshConnections]);
-  const state: ChannelsConversationSnapshot['state'] = parsedBindings?.kind === 'ready' && parsedConnections?.kind === 'ready'
-    ? 'ready'
-    : parsedBindings?.kind === 'invalid' || parsedConnections?.kind === 'invalid'
-      || (bindingsValue === undefined && bindingsRead.resource.pending !== 'initial')
-      || (connectionsValue === undefined && connectionsRead.resource.pending !== 'initial')
-      ? 'error'
-      : 'loading';
-  const bindings = parsedBindings?.kind === 'ready' ? parsedBindings.bindings : NO_BINDINGS;
+  const state = resolveChannelsConversationReadState(
+    parsedBindings?.kind === 'ready' ? 'ready'
+      : parsedBindings?.kind === 'invalid' || bindingsRead.resource.pending !== 'initial' ? 'error' : 'loading',
+    parsedConnections?.kind === 'ready' ? 'ready'
+      : parsedConnections?.kind === 'invalid' || connectionsRead.resource.pending !== 'initial' ? 'error' : 'loading',
+  );
+  // Conversations are grouped by their bot: none is drawn before its bot is known, or it would
+  // sit under a placeholder group and move when the bot arrives.
+  const bindings = state === 'ready' && parsedBindings?.kind === 'ready' ? parsedBindings.bindings : NO_BINDINGS;
   const connections = parsedConnections?.kind === 'ready' ? parsedConnections.connections : NO_CONNECTIONS;
   const snapshot = React.useMemo<ChannelsConversationSnapshot>(
     () => ({ state, bindings, connections, refresh }),
@@ -1029,12 +1044,13 @@ export function useAccountConversationSnapshot(signal: AbortSignal): ChannelsCon
     refreshBindings();
     refreshConnections();
   }, [refreshBindings, refreshConnections]);
-  const state: ChannelsConversationSnapshot['state'] = bindingsRead.bindings !== undefined && connectionsRead.connections !== undefined
-    ? 'ready'
-    : bindingsRead.resource.pending === 'initial' || connectionsRead.resource.pending === 'initial'
-      ? 'loading'
-      : 'error';
-  const bindings = bindingsRead.bindings ?? NO_BINDINGS;
+  const state = resolveChannelsConversationReadState(
+    bindingsRead.bindings !== undefined ? 'ready' : bindingsRead.resource.pending === 'initial' ? 'loading' : 'error',
+    connectionsRead.connections !== undefined ? 'ready' : connectionsRead.resource.pending === 'initial' ? 'loading' : 'error',
+  );
+  // Conversations are grouped by their bot: none is drawn before its bot is known, or it would
+  // sit under a placeholder group and move when the bot arrives.
+  const bindings = state === 'ready' ? bindingsRead.bindings ?? NO_BINDINGS : NO_BINDINGS;
   const connections = connectionsRead.connections ?? NO_CONNECTIONS;
   return React.useMemo(
     () => ({ state, bindings, connections, refresh }),

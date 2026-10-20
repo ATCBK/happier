@@ -7,6 +7,7 @@ import {
     type TranscriptExitEntrySnapshot,
     type TranscriptSameSessionHandoffRoute,
     useTranscriptSameSessionHandoffRoute,
+    useTranscriptSameSessionHandoff,
 } from './transcriptSameSessionHandoff';
 
 function anchored(itemOffsetPx: number, capturedAtMs: number): TranscriptExitEntrySnapshot {
@@ -26,6 +27,34 @@ function anchored(itemOffsetPx: number, capturedAtMs: number): TranscriptExitEnt
 }
 
 describe('transcriptSameSessionHandoff', () => {
+    it('discards the replacement snapshot when the same transcript survives the experience change', async () => {
+        const routeRef: { current: TranscriptSameSessionHandoffRoute | null } = { current: null };
+        const sessionKey = '["server-a","session-a"]';
+        function RetainedTranscript() {
+            const route = useTranscriptSameSessionHandoffRoute();
+            const captureForHandoff = React.useCallback(() => ({
+                source: 'physical-exit' as const, viewport: anchored(40, 10),
+            }), []);
+            useTranscriptSameSessionHandoff({ captureForHandoff, explicitJump: false, sessionKey });
+            React.useLayoutEffect(() => { routeRef.current = route; }, [route]);
+            return null;
+        }
+        const body = (experience: 'classic' | 'cockpit') => <TranscriptSameSessionHandoffProvider
+            desiredExperience={experience} sessionAddressKey={sessionKey}>
+            {() => <RetainedTranscript />}
+        </TranscriptSameSessionHandoffProvider>;
+        let tree!: renderer.ReactTestRenderer;
+        await act(async () => { tree = renderer.create(body('classic')); });
+        try {
+            await act(async () => { tree.update(body('cockpit')); });
+            expect(routeRef.current?.peekForRender({
+                incomingMountToken: {}, sessionKey, toExperience: 'cockpit',
+            })).toBeNull();
+        } finally {
+            await act(async () => { tree.unmount(); });
+        }
+    });
+
     it('preserves one exact Session surface but discards address-local state when the Home changes', async () => {
         const mountedTokens: object[] = [];
 

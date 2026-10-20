@@ -5,6 +5,7 @@ import type { IconName } from '@/components/ui/icons/Icon';
 import type { WidgetFrameStyle } from '@/components/widgets/frame/WidgetFrame';
 import type { WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { t } from '@/text';
+import { readWidgetInstanceName } from '@/components/widgets/frame/widgetFrameTitle';
 import { readWidgetGroupTitle } from '@/components/widgets/group/widgetGroupTitle';
 
 import { HubAttentionSection } from './HubAttentionSection';
@@ -24,7 +25,13 @@ export type HomeHubBuiltinSection = HomeHubBuiltinDefinition & Readonly<{
     /** Customize names each section with a glyph and where it comes from. */
     icon: IconName;
     description: () => string;
-    render: (input: Readonly<{ menu: React.ReactNode; placeholder: string; frameStyle: WidgetFrameStyle }>) => React.ReactNode;
+    render: (input: Readonly<{
+        menu: React.ReactNode;
+        placeholder: string;
+        frameStyle: WidgetFrameStyle;
+        /** How the composer's suggestions stand here: Home decides it once, for the hero and for a moved composer. */
+        composerSuggestions: 'tiles' | 'links' | 'pills';
+    }>) => React.ReactNode;
 }>;
 
 const builtin = (id: string): HomeHubBuiltinDefinition => {
@@ -39,7 +46,7 @@ export const HOME_HUB_BUILTIN_SECTIONS: readonly HomeHubBuiltinSection[] = Objec
         description: () => t('homeIndex.startDescription'),
         title: () => t('settingsOverview.homeStartSection'),
         // The real New Session composer; it keeps its own placeholder, as on `/new`.
-        render: () => <HubComposerSection />,
+        render: ({ composerSuggestions }) => <HubComposerSection suggestions={composerSuggestions} />,
     },
     {
         ...builtin('attention'),
@@ -74,7 +81,8 @@ export function findHomeHubBuiltinSection(id: string): HomeHubBuiltinSection | n
 
 /** What a section is called in its menu and in Customize. */
 export function homeHubSectionTitle(section: HomeHubSection<WidgetCandidate>): string {
-    if (section.kind === 'widget') return section.instance.displayName ?? section.widget?.title ?? section.instance.id;
+    // The card's own name owner; a widget whose definition is gone is the kind word, never its instance id.
+    if (section.kind === 'widget') return readWidgetInstanceName(section.instance, section.widget) ?? t('boards.widgets.kind');
     // A group is its title, or (untitled) the names of its widgets.
     if (section.kind === 'group') return readWidgetGroupTitle(section.group) ?? section.children.map(homeHubSectionTitle).join(' · ');
     return findHomeHubBuiltinSection(section.id)?.title() ?? section.id;

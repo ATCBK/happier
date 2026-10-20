@@ -65,6 +65,7 @@ const {
         requests: [] as Array<{ path: string; method: string; body: unknown }>,
         capabilityInvocations: [] as unknown[],
         daemonStops: [] as unknown[],
+        revokeFailure: null as { status: number; error: string } | null,
         serverId: '',
     },
     alertSpy: vi.fn(),
@@ -211,10 +212,11 @@ async function serveMachineHome(input: string | URL | Request, init?: RequestIni
         dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
         // These page fixtures vary presentation fields, but the Home emits complete published metadata.
         metadata: encodePlainMachineStoredContent(machine.metadata === null ? null : MachinePublishedMetadataV1Schema.parse({
-            ...createMachineFixture().metadata, host: '', ...machine.metadata,
+            ...Object.assign({}, createMachineFixture().metadata, { host: '' }, machine.metadata),
         })), daemonState: null }));
     if (path === '/v1/machines') return Response.json(publishedMachines);
     if (path === '/v1/machines/machine-1/revoke' && method === 'POST') {
+        if (machineState.revokeFailure) return Response.json({ error: machineState.revokeFailure.error }, { status: machineState.revokeFailure.status });
         if (machineState.currentMachine.revokedAt) return Response.json({ error: 'machine_revoked' }, { status: 410 });
         machineState.currentMachine = { ...machineState.currentMachine, revokedAt: Date.now() };
         machineState.machinesByServerId['server-a'] = machines.map(machine => machine.id === 'machine-1' ? machineState.currentMachine : machine);
@@ -248,7 +250,8 @@ async function publishMachineFixture() {
         const { fetchAndApplyMachines } = await import('@/sync/engine/machines/syncMachines');
         await fetchAndApplyMachines({ credentials: accountConnection!.credentials, expectedAccountMode: 'plain', encryption: null,
             machineDataKeys: new Map(), sourceServerId: machineState.serverId, throwOnError: true,
-            applyMachines: storage.getState().applyMachines, replace: true });
+            applyMachines: (machines, replace) => storage.getState().applyMachines(machines, replace,
+                { sourceServerId: machineState.serverId, sourceAccountId: 'account-a' }), replace: true });
     });
 }
 
@@ -295,7 +298,7 @@ function findRemoveMachineButton(screen: RenderedScreen) {
 /** A rare operation in the page header's `⋯` menu, by its test id. */
 function findHeaderMenuAction(screen: RenderedScreen, testID: string) {
     const menus = screen.findAll((node) => node.props?.testID === 'machine-detail-menu' && Array.isArray(node.props?.actions));
-    return menus.flatMap((menu) => menu.props.actions as Array<{ testID?: string; onSelect: () => void }>).find((action) => action.testID === testID);
+    return menus.flatMap((menu) => menu.props.actions as Array<{ testID?: string; loading?: boolean; onSelect: () => void }>).find((action) => action.testID === testID);
 }
 
 function readReplacementPickerProps() {
@@ -328,7 +331,8 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
             createdAt: Date.now(),
             updatedAt: Date.now(),
             seq: 0,
-            metadata: { displayName: 'My Machine', host: 'host', platform: 'darwin' },
+            metadata: MachinePublishedMetadataV1Schema.parse({ ...createMachineFixture().metadata,
+                displayName: 'My Machine', host: 'host', platform: 'darwin' }),
             metadataVersion: 1,
             daemonState: null,
             daemonStateVersion: 0,
@@ -345,7 +349,8 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
                     createdAt: Date.now(),
                     updatedAt: Date.now(),
                     seq: 0,
-                    metadata: { displayName: 'Replacement Machine', host: 'replacement', platform: 'darwin' },
+                    metadata: MachinePublishedMetadataV1Schema.parse({ ...createMachineFixture().metadata,
+                        displayName: 'Replacement Machine', host: 'replacement', platform: 'darwin' }),
                     metadataVersion: 1,
                     daemonState: null,
                     daemonStateVersion: 0,
@@ -364,6 +369,7 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
         artifactStore.clear();
         machineState.capabilityInvocations = [];
         machineState.daemonStops = [];
+        machineState.revokeFailure = null;
         const { createAccountTokenForTests } = await import('@/dev/testkit/harness/homeGovernanceHarness');
         accountConnection = await restoreServerAccountForTest({ serverUrl: 'https://machine-home.example.test', serverIdentityId: 'srv_machine_home',
             credentials: { token: createAccountTokenForTests('account-a', { currentAccount: true }) },
@@ -507,10 +513,10 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
     });
 
     it('clears the Windows launch preference through metadata without retaining the legacy override', async () => {
-        machineState.currentMachine = { ...machineState.currentMachine, metadata: {
-            ...machineState.currentMachine.metadata, platform: 'win32', windowsRemoteSessionLaunchMode: 'console',
+        machineState.currentMachine = { ...machineState.currentMachine, metadata: MachinePublishedMetadataV1Schema.parse({
+            ...createMachineFixture().metadata, ...machineState.currentMachine.metadata, platform: 'win32', windowsRemoteSessionLaunchMode: 'console',
             windowsRemoteSessionConsole: 'visible',
-        } };
+        }) };
         routeParams.page = 'terminal';
         const { MachineSubPageScreen } = await import('@/components/machines/page/MachineSubPageScreen');
         const screen = await renderScreen(React.createElement(MachineSubPageScreen));
@@ -717,7 +723,8 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
                     createdAt: Date.now(),
                     updatedAt: Date.now(),
                     seq: 0,
-                    metadata: { displayName: index % 2 === 0 ? 'leeroy-mbp' : 'L-C-005', host: 'replacement', platform: 'darwin' },
+                    metadata: MachinePublishedMetadataV1Schema.parse({ ...createMachineFixture().metadata,
+                        displayName: index % 2 === 0 ? 'leeroy-mbp' : 'L-C-005', host: 'replacement', platform: 'darwin' }),
                     metadataVersion: 1,
                     daemonState: null,
                     daemonStateVersion: 0,
@@ -746,7 +753,7 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
             }),
             chrome: expect.objectContaining({
                 testID: 'machine-replacement-picker-modal',
-                scrollHost: 'body',
+                scrollHost: 'bounded',
             }),
         });
         expect(showOptions?.chrome).not.toHaveProperty('layout');
@@ -852,7 +859,13 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
         expect(confirmSpy).not.toHaveBeenCalled();
         const rejectedId = artifactStore.list()[0]!.id;
         await expect(decideApprovalAsInbox(machineState.serverId, rejectedId, 'reject')).resolves.toMatchObject({ ok: true });
-        await vi.waitFor(() => expect(alertSpy).toHaveBeenCalled());
+        await vi.waitFor(() => {
+            if (actionId === 'machines.remove') expect(findRemoveMachineButton(screen).disabled).toBe(false);
+            else if (actionId === 'machines.daemon.stop') expect(screen.findAll(node => node.props?.testID === 'machine-detail-stop-daemon-button'
+                && typeof node.props?.onPress === 'function')[0]!.props.loading).toBe(false);
+            else expect(findHeaderMenuAction(screen, actionId.endsWith('set') ? 'machine-replacement-repair-open' : 'machine-replacement-repair-undo')!.loading).toBe(false);
+        });
+        expect(alertSpy).not.toHaveBeenCalled();
         expect(effects()).toEqual([]);
         await act(async () => invoke());
         await vi.waitFor(() => expect(artifactStore.list()).toHaveLength(2));
@@ -861,6 +874,9 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
         const approved = await decideApprovalAsInbox(machineState.serverId, approvedId, 'approve');
         expect(approved, JSON.stringify(approved)).toMatchObject({ ok: true });
         await vi.waitFor(() => expect(effects()).toHaveLength(1));
+        if (actionId === 'machines.remove') expect(effects()).toEqual([expect.objectContaining({ method: 'POST', path: '/v1/machines/machine-1/revoke' })]);
+        else if (actionId === 'machines.daemon.stop') expect(machineState.daemonStops).toEqual([expect.objectContaining({ method: `machine-1:${RPC_METHODS.STOP_DAEMON}` })]);
+        else expect(effects()).toEqual([expect.objectContaining({ method: actionId.endsWith('set') ? 'POST' : 'DELETE', path: '/v1/machines/machine-1/replacement' })]);
         if (actionId === 'machines.remove') await vi.waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith('/settings/machines'));
         else if (actionId !== 'machines.daemon.stop') await vi.waitFor(async () => expect((await readVisibleMachine())?.replacedByMachineId).toBe(actionId.endsWith('set') ? 'machine-2' : null));
     });
@@ -900,9 +916,11 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
         const effects = () => machineState.requests.filter(request => request.method === 'POST' && request.path.endsWith('/revoke'));
         confirmSpy.mockResolvedValueOnce(false);
         await act(async () => invoke());
-        await vi.waitFor(() => expect(alertSpy).toHaveBeenCalled());
+        await vi.waitFor(() => expect(confirmSpy).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() => expect(findRemoveMachineButton(screen).disabled).toBe(false));
         expect(confirmSpy).toHaveBeenCalledTimes(1);
         expect(effects()).toEqual([]);
+        expect(alertSpy).not.toHaveBeenCalled();
         machineState.settings.actionsSettingsV1 = { v: 1, approvalWaivedSurfaces: { [actionId]: ['ui'] } };
         await publishMachineFixture();
         machineState.settings.actionsSettingsV1 = { v: 1 };
@@ -914,9 +932,22 @@ describe('MachineDetailScreen (revoke/forget machine)', () => {
         expect(artifactStore.list()).toEqual([]);
     });
 
+    it('shows a typed Remove refusal through the existing Action outcome presenter', async () => {
+        routeParams.page = 'details';
+        confirmSpy.mockResolvedValueOnce(true);
+        machineState.revokeFailure = { status: 403, error: 'permission_denied' };
+        const { MachineSubPageScreen } = await import('@/components/machines/page/MachineSubPageScreen');
+        const screen = await renderMachineSection(React.createElement(MachineSubPageScreen));
+        await act(async () => findRemoveMachineButton(screen).onPress());
+        await vi.waitFor(() => expect(alertSpy.mock.calls.some(call => call[1] === 'permission_denied')).toBe(true));
+        expect((await readVisibleMachine())?.revokedAt).toBeNull();
+        expect(machineState.providerCatalogWrites).toEqual([]);
+    });
+
     it('names an unnamed replacement as unnamed, never by its id', async () => {
         machineState.machinesByServerId['server-a'] = machineState.machinesByServerId['server-a']!.map((machine) =>
-            machine.id === 'machine-2' ? { ...machine, metadata: { platform: 'darwin' } } : machine,
+            machine.id === 'machine-2' ? { ...machine, metadata: MachinePublishedMetadataV1Schema.parse({
+                ...createMachineFixture().metadata, host: '', platform: 'darwin' }) } : machine,
         );
         machineState.currentMachine = { ...machineState.currentMachine, replacedByMachineId: 'machine-2' };
         machineState.machinesByServerId['server-a'] = machineState.machinesByServerId['server-a']!.map((machine) =>

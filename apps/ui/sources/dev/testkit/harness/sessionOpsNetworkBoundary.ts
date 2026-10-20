@@ -1,6 +1,7 @@
 import { vi } from 'vitest';
 import type { RuntimeFetch } from '@/utils/system/runtimeFetch';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
+import { createPlainAccountEncryptionCurrentnessFixture } from '../fixtures/accountEncryptionCurrentness';
 
 export type SessionOpsRpcRequest = Readonly<{
     serverUrl: string;
@@ -24,10 +25,16 @@ export type SessionOpsSocketAckRequest = Readonly<{
 }>;
 
 type SessionOpsHttpResponder = (...args: Parameters<RuntimeFetch>) => Promise<Response | null>;
+type SessionOpsSocketOptions = Readonly<{ auth?: { token?: string }; transports?: unknown }>;
 type SessionOpsSocketBoundary = ReturnType<typeof import('../mocks/socketIo').createSocketIoBoundaryStub> & Readonly<{
     serverUrl: string;
     token: string | undefined;
+    options: SessionOpsSocketOptions;
 }>;
+type SessionOpsSocketFactory = (serverUrl: string, options: SessionOpsSocketOptions) => SessionOpsSocketBoundary['socket'];
+
+// Runtime consumers retain the SDK import between fixture installations.
+const installedSocketBoundary = vi.hoisted(() => ({ current: null as SessionOpsSocketFactory | null }));
 
 export type SessionOpsNetworkBoundary = Awaited<ReturnType<typeof installSessionOpsNetworkBoundary>>;
 
@@ -42,49 +49,56 @@ export async function installSessionOpsNetworkBoundary() {
     let socketConfigurator: ((boundary: SessionOpsSocketBoundary) => void) | null = null;
     const sockets: Array<{ disconnect(): unknown }> = [];
     const socketBoundaries: SessionOpsSocketBoundary[] = [];
+    const { createSocketIoBoundaryStub } = await import('../mocks/socketIo');
+    const { SOCKET_RPC_EVENTS } = await import('@happier-dev/protocol/socketRpc');
+    const { RPC_ERROR_CODES } = await import('@happier-dev/protocol/rpc');
+    const createSocket: SessionOpsSocketFactory = (serverUrl, options) => {
+        const boundary = createSocketIoBoundaryStub();
+        const { socket } = boundary;
+        sockets.push(socket);
+        const recordedBoundary = { ...boundary, serverUrl, token: options.auth?.token, options };
+        socketBoundaries.push(recordedBoundary);
+        let timeoutMs: number | null = null;
+        // Pooled sockets retain this transport across a test's spy restoration.
+        socket.timeout = vi.fn((value: number) => {
+            timeoutMs = value;
+            return { emitWithAck: socket.emitWithAck };
+        });
+        socket.emitWithAck = vi.fn(async (event: string, payload?: unknown): Promise<unknown> => {
+            if (event !== SOCKET_RPC_EVENTS.CALL) {
+                const response = socketAckResponder ? await socketAckResponder({
+                    serverUrl, token: options.auth?.token, event, payload, timeoutMs,
+                }) : null;
+                return response !== null ? response : { v: 1, ok: true, admittedSessionIds: [] };
+            }
+            if (!payload || typeof payload !== 'object' || !('method' in payload)
+                || typeof payload.method !== 'string' || !('params' in payload)) {
+                throw new Error('Malformed Socket RPC request');
+            }
+            const separator = payload.method.indexOf(':');
+            const method = payload.method.slice(separator + 1);
+            const request: SessionOpsRpcRequest = { serverUrl, token: options.auth?.token,
+                targetId: payload.method.slice(0, separator), method, payload: payload.params, timeoutMs };
+            requests.push(request);
+            if (rpcAckResponder) return await rpcAckResponder(request);
+            if (rpcResponder) return { ok: true, result: await rpcResponder(request) };
+            if (!responses.has(method)) {
+                return { ok: false, error: 'RPC method not found', errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
+            }
+            return { ok: true, result: responses.get(method) };
+        });
+        socketConfigurator?.(recordedBoundary);
+        return socket;
+    };
+    installedSocketBoundary.current = createSocket;
     vi.doMock('socket.io-client', async (importOriginal) => {
         const actual = await importOriginal<typeof import('socket.io-client')>();
-        const { createSocketIoBoundaryStub } = await import('../mocks/socketIo');
-        const { SOCKET_RPC_EVENTS } = await import('@happier-dev/protocol/socketRpc');
-        const { RPC_ERROR_CODES } = await import('@happier-dev/protocol/rpc');
         return {
             ...actual,
-            io: (serverUrl: string, options: { auth?: { token?: string } }) => {
-                const boundary = createSocketIoBoundaryStub();
-                const { socket } = boundary;
-                sockets.push(socket);
-                const recordedBoundary = { ...boundary, serverUrl, token: options.auth?.token };
-                socketBoundaries.push(recordedBoundary);
-                let timeoutMs: number | null = null;
-                socket.timeout.mockImplementation((value) => {
-                    timeoutMs = value;
-                    return { emitWithAck: socket.emitWithAck };
-                });
-                socket.emitWithAck.mockImplementation(async (event, payload) => {
-                    if (event !== SOCKET_RPC_EVENTS.CALL) {
-                        const response = socketAckResponder ? await socketAckResponder({
-                            serverUrl, token: options.auth?.token, event, payload, timeoutMs,
-                        }) : null;
-                        return response !== null ? response : { v: 1, ok: true, admittedSessionIds: [] };
-                    }
-                    if (!payload || typeof payload !== 'object' || !('method' in payload)
-                        || typeof payload.method !== 'string' || !('params' in payload)) {
-                        throw new Error('Malformed Socket RPC request');
-                    }
-                    const separator = payload.method.indexOf(':');
-                    const method = payload.method.slice(separator + 1);
-                    const request: SessionOpsRpcRequest = { serverUrl, token: options.auth?.token,
-                        targetId: payload.method.slice(0, separator), method, payload: payload.params, timeoutMs };
-                    requests.push(request);
-                    if (rpcAckResponder) return await rpcAckResponder(request);
-                    if (rpcResponder) return { ok: true, result: await rpcResponder(request) };
-                    if (!responses.has(method)) {
-                        return { ok: false, error: 'RPC method not found', errorCode: RPC_ERROR_CODES.METHOD_NOT_FOUND };
-                    }
-                    return { ok: true, result: responses.get(method) };
-                });
-                socketConfigurator?.(recordedBoundary);
-                return socket;
+            io: (serverUrl: string, options: SessionOpsSocketOptions) => {
+                const current = installedSocketBoundary.current;
+                if (!current) throw new Error('Session operations Socket boundary is not installed');
+                return current(serverUrl, options);
             },
         };
     });
@@ -95,10 +109,21 @@ export async function installSessionOpsNetworkBoundary() {
     const { setRuntimeFetch, resetRuntimeFetch } = await import('@/utils/system/runtimeFetch');
     const { createPlainMachineRowFixture } = await import('../fixtures/machineFixtures');
     const { createAccountTokenForTests } = await import('./homeGovernanceHarness');
+    const { createAccountSettingsHttpBoundary } = await import('./actionHomesHttpHarness');
     const { canonicalizeServerUrl } = await import('@/sync/domains/server/url/serverUrlCanonical');
-    const { installWebLockManagerMock } = await import('@/auth/storage/tokenStorage.web.testHelpers');
+    const { installWebLockManagerMock, installLocalStorageMock } = await import('@/auth/storage/tokenStorage.web.testHelpers');
+    const { Platform } = await import('react-native');
+    const browserStorage = (globalThis as { window?: { localStorage?: Storage } }).window?.localStorage
+        ?? globalThis.localStorage;
+    const localStorage = Platform.OS === 'web' && typeof browserStorage?.getItem !== 'function'
+        ? installLocalStorageMock() : null;
     const locks = typeof globalThis.navigator?.locks?.request === 'function' ? null : installWebLockManagerMock();
-    const homes = new Map<string, { serverId: string; accountId: string; encryptionMode: 'plain' | 'e2ee' }>();
+    const homes = new Map<string, {
+        serverId: string;
+        accountId: string;
+        encryptionMode: 'plain' | 'e2ee';
+        settings: ReturnType<typeof createAccountSettingsHttpBoundary>;
+    }>();
     const credentialWrites: Array<NonNullable<Awaited<ReturnType<typeof TokenStorage.setCredentialsForServerUrlWithRollback>>>> = [];
     const credentialRequests: Array<{ serverUrl: string; serverId: string | undefined }> = [];
     const readCredentials = TokenStorage.getCredentialsForServerUrl;
@@ -116,11 +141,16 @@ export async function installSessionOpsNetworkBoundary() {
         if (!homes.has(url.origin)) throw new Error(`Unexpected test Home: ${url.origin}`);
         const response = httpResponder ? await httpResponder(input, init) : null;
         if (response !== null) return response;
+        const settingsResponse = homes.get(url.origin)!.settings.handle(input, init);
+        if (settingsResponse) return settingsResponse;
         // Public saved-Home discovery uses a tokenless readiness probe whose
         // contract is the HTTP status, not a response body.
         if (url.pathname === '/health') return new Response(null, { status: 200 });
         if (url.pathname === '/v1/auth/ping') return Response.json({});
         if (url.pathname === '/v1/account/encryption') return Response.json({ mode: homes.get(url.origin)!.encryptionMode, updatedAt: 1 });
+        if (url.pathname === '/v1/account/encryption/currentness' && homes.get(url.origin)!.encryptionMode === 'plain') {
+            return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+        }
         if (url.pathname === '/v2/cursor') return Response.json({ cursor: 0, changesFloor: 0 });
         const accountId = homes.get(url.origin)?.accountId;
         if (!accountId) throw new Error(`Test Home Account is unavailable: ${url.origin}`);
@@ -195,22 +225,39 @@ export async function installSessionOpsNetworkBoundary() {
             const write = await TokenStorage.setCredentialsForServerUrlWithRollback(profile.serverUrl, { serverId: profile.id }, credentials);
             if (!write) throw new Error(`Test Home credential publication was refused: ${profile.serverUrl}`);
             credentialWrites.push(write);
-            homes.set(profile.serverUrl, { serverId: profile.id, accountId, encryptionMode: options.encryptionMode ?? 'plain' });
+            const encryptionMode = options.encryptionMode ?? 'plain';
+            const settings = homes.get(profile.serverUrl)?.settings ?? createAccountSettingsHttpBoundary({
+                serverUrl: profile.serverUrl, initialAccounts: [],
+            });
+            settings.replaceAccountSettings(accountId, encryptionMode === 'plain'
+                ? { content: { t: 'plain', v: {} }, version: 1 }
+                : { content: null, version: 0 });
+            homes.set(profile.serverUrl, { serverId: profile.id, accountId, encryptionMode, settings });
             const token = credentials.token;
             return { ...profile, accountId, token };
         },
         async dispose() {
-            rpcResponder = null;
-            rpcAckResponder = null;
-            httpResponder = null;
-            socketAckResponder = null;
-            socketConfigurator = null;
-            for (const socket of sockets) socket.disconnect();
-            resetRuntimeFetch();
-            credentialObserver.mockRestore();
-            vi.doUnmock('socket.io-client');
-            try { for (const write of credentialWrites.splice(0).reverse()) await write.rollback(); }
-            finally { locks?.restore(); }
+            const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
+            try {
+                // A lease disconnect returns custody to the pool. Retire that
+                // custody before clearing this fixture's transport responders.
+                await serverScopedRpcSocketPool.stopAll();
+            } finally {
+                rpcResponder = null;
+                rpcAckResponder = null;
+                httpResponder = null;
+                socketAckResponder = null;
+                socketConfigurator = null;
+                for (const socket of sockets) socket.disconnect();
+                resetRuntimeFetch();
+                credentialObserver.mockRestore();
+                if (installedSocketBoundary.current === createSocket) {
+                    installedSocketBoundary.current = null;
+                    vi.doUnmock('socket.io-client');
+                }
+                try { for (const write of credentialWrites.splice(0).reverse()) await write.rollback(); }
+                finally { locks?.restore(); localStorage?.restore(); }
+            }
         },
     };
 }

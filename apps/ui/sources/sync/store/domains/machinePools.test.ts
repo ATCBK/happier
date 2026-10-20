@@ -133,7 +133,7 @@ describe('machine pool store domain', () => {
         const { domain, get } = harness();
         domain.beginMachinePoolAccountScope('home-a', 'account-a');
         domain.replaceMachinePools([view('Before', 1)], scope('home-a'));
-        const baseline = get().machinePoolListByServerId['home-a'];
+        const baseline = get().machinePoolListByServerId['home-a'] ?? undefined;
         domain.patchMachinePool(view('After', 2), scope('home-a'));
 
         domain.replaceMachinePools([view('Before', 1)], { ...scope('home-a'), baseline });
@@ -145,7 +145,7 @@ describe('machine pool store domain', () => {
         const { domain, get } = harness();
         domain.beginMachinePoolAccountScope('home-a', 'account-a');
         domain.replaceMachinePools([view('Existing', 1)], scope('home-a'));
-        const baseline = get().machinePoolListByServerId['home-a'];
+        const baseline = get().machinePoolListByServerId['home-a'] ?? undefined;
         domain.removeMachinePool(POOL_ID, scope('home-a'));
         const created = {
             ...view('Created', 1),
@@ -173,7 +173,7 @@ describe('machine pool store domain', () => {
         expect(ids()).toEqual(['id-1', 'id-2']);
 
         // A background refresh returning the same server order must not reorder rows under the user.
-        const baseline = get().machinePoolListByServerId['home-a'];
+        const baseline = get().machinePoolListByServerId['home-a'] ?? undefined;
         domain.replaceMachinePools([zulu, alpha], { ...scope('home-a'), baseline });
         expect(ids()).toEqual(['id-1', 'id-2']);
 

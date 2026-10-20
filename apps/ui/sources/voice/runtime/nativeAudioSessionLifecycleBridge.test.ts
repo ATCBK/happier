@@ -5,39 +5,12 @@ import { answerVoiceRealtimePreparationHttpRequest } from '@/dev/testkit/harness
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createNativeVoicePcmCaptureHarness } from '@/dev/testkit/harness/nativeVoicePcmCapture';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { storage } from '@/sync/domains/state/storage';
-import { writeVoiceProviderSettingsConfig } from '@/sync/domains/settings/voiceSettings';
-import { normalizeVoiceSettingsLocalDelta } from '@/sync/domains/settings/voiceSettingsPersistence';
-import { settingsParse } from '@/sync/domains/settings/settings';
 import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
-import { normalizeAccountSettingsForLocalStorage } from '@/sync/domains/settings/accountSettingsNormalization';
-import { resolveSettingsSecretsKeySet } from '@/sync/encryption/resolveSettingsSecretsKeySet';
 import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
 import { createPlainSessionOwnerMetadataEnvelopeV1, createSessionOwnerMetadataV1, projectSessionSharedMetadataV1 } from '@happier-dev/protocol';
-import { sync } from '@/sync/sync';
-import { createBuiltinVoiceAdapterAssembly } from '@/voice/adapters/registerBuiltinVoiceAdapters';
-import { getVoiceAdapterRegistry, registerVoiceAdapters } from '@/voice/session/voiceAdapterRegistry';
-import { resetVoiceSessionRuntimeStateForTests } from '@/voice/session/voiceSessionStore';
-import { createVoiceSessionLifecycleController } from '@/voice/session/voiceSessionLifecycleController';
-import { getVoiceSessionLifecycleController, setVoiceSessionLifecycleController } from '@/voice/session/voiceSessionLifecycleControllerStore';
-import { buildVoiceTranscriptHistorySessionMetadata } from '@/voice/persistence/voiceTranscriptHistorySession';
-import { voiceSessionBindingStore } from '@/voice/binding/voiceConversationBindingStore';
-import { VOICE_AGENT_GLOBAL_SESSION_ID } from '@/voice/agent/voiceAgentGlobalSessionId';
-import { voiceConversationRuntimeMachine } from '@/voice/runtime/machine/VoiceConversationRuntimeMachine';
-import { BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES } from '@/voice/registry/generatedBundledVoiceRuntimeEntries';
 import { ELEVENLABS_VOICE_PROVIDER_DEFAULT_SETTINGS } from '../../../../../packages/plugins/elevenlabs/src/protocol/voice/index';
-import { getSharedVoiceAudioSessionCoordinator } from '@happier-dev/audio-stream-native';
 import { createConnectedPurposeCatalogHttpBoundary } from '@/dev/testkit/harness/connectedAccountCatalogBoundary';
 import { createRecipientContractDigestV1 } from '@happier-dev/protocol/plugins/recipientContractV1';
-import { createBundledVoiceRecipientContract } from '@/voice/credentials/voiceRecipientContract';
-import { applyAccountVoiceCredentialSourceSelection, saveAndUseAccountVoiceCredential } from '@/voice/credentials/accountVoiceCredential';
-import { createAccountVoiceOperationService } from '@/voice/credentials/accountVoiceOperationService';
-import { createBundledConversationRuntimeHostLease, getCurrentBundledConversationRuntimeHost } from '@/voice/registry/bundledConversationRuntimeHost';
-import { createExternalVoiceProviderActivationScope } from '@/voice/registry/externalVoiceProviderActivation.testkit';
-import { getExternalVoiceProviderRegistration } from '@/voice/registry/externalVoiceProviderRegistrations';
-import { createNativeMicSession } from '@/voice/runtime/mic/NativeMicSession';
-import { createWebSocketPcmMedia } from '@/voice/runtime/connection/WebSocketPcmMedia.native';
-import { requestMicrophonePermission, rejectRefusedMicrophone } from '@/utils/platform/microphonePermissions';
 import { XAI_REALTIME_DEFAULT_SETTINGS } from '../../../../../packages/plugins/xai/src/protocol/voice/settings';
 import {
   createVoiceAudioSessionCoordinator,
@@ -67,7 +40,37 @@ vi.mock('@elevenlabs/client', () => ({ Conversation: { startSession: vendor.star
 vi.mock('@elevenlabs/client/internal', () => ({ setSetupStrategy: vi.fn(), createConnection: vi.fn(), setupWebRTCSession: vi.fn() }));
 vi.mock('expo-audio', () => ({ AudioModule: { setAudioModeAsync: vendor.setAudioModeAsync, requestRecordingPermissionsAsync: vendor.requestRecordingPermissionsAsync } }));
 installDisconnectedServerSocketBoundary();
+
+// Native module discovery is process-scoped and caches an unavailable module.
+// Initialize the OS boundary before importing Sync and the real Voice consumers.
 await loadSyncSingletonForTests();
+const { storage } = await import('@/sync/domains/state/storage');
+const { sync } = await import('@/sync/sync');
+const { writeVoiceProviderSettingsConfig } = await import('@/sync/domains/settings/voiceSettings');
+const { normalizeVoiceSettingsLocalDelta } = await import('@/sync/domains/settings/voiceSettingsPersistence');
+const { settingsParse } = await import('@/sync/domains/settings/settings');
+const { normalizeAccountSettingsForLocalStorage } = await import('@/sync/domains/settings/accountSettingsNormalization');
+const { resolveSettingsSecretsKeySet } = await import('@/sync/encryption/resolveSettingsSecretsKeySet');
+const { createBuiltinVoiceAdapterAssembly } = await import('@/voice/adapters/registerBuiltinVoiceAdapters');
+const { getVoiceAdapterRegistry, registerVoiceAdapters } = await import('@/voice/session/voiceAdapterRegistry');
+const { resetVoiceSessionRuntimeStateForTests } = await import('@/voice/session/voiceSessionStore');
+const { createVoiceSessionLifecycleController } = await import('@/voice/session/voiceSessionLifecycleController');
+const { getVoiceSessionLifecycleController, setVoiceSessionLifecycleController } = await import('@/voice/session/voiceSessionLifecycleControllerStore');
+const { buildVoiceTranscriptHistorySessionMetadata } = await import('@/voice/persistence/voiceTranscriptHistorySession');
+const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
+const { VOICE_AGENT_GLOBAL_SESSION_ID } = await import('@/voice/agent/voiceAgentGlobalSessionId');
+const { voiceConversationRuntimeMachine } = await import('@/voice/runtime/machine/VoiceConversationRuntimeMachine');
+const { BUNDLED_FIRST_PARTY_VOICE_CONVERSATION_RUNTIME_ENTRIES } = await import('@/voice/registry/generatedBundledVoiceRuntimeEntries');
+const { getSharedVoiceAudioSessionCoordinator } = await import('@happier-dev/audio-stream-native');
+const { createBundledVoiceRecipientContract } = await import('@/voice/credentials/voiceRecipientContract');
+const { applyAccountVoiceCredentialSourceSelection, saveAndUseAccountVoiceCredential } = await import('@/voice/credentials/accountVoiceCredential');
+const { createAccountVoiceOperationService } = await import('@/voice/credentials/accountVoiceOperationService');
+const { createBundledConversationRuntimeHostLease, getCurrentBundledConversationRuntimeHost } = await import('@/voice/registry/bundledConversationRuntimeHost');
+const { createExternalVoiceProviderActivationScope } = await import('@/voice/registry/externalVoiceProviderActivation.testkit');
+const { getExternalVoiceProviderRegistration } = await import('@/voice/registry/externalVoiceProviderRegistrations');
+const { createNativeMicSession } = await import('@/voice/runtime/mic/NativeMicSession');
+const { createWebSocketPcmMedia } = await import('@/voice/runtime/connection/WebSocketPcmMedia.native');
+const { requestMicrophonePermission, rejectRefusedMicrophone } = await import('@/utils/platform/microphonePermissions');
 
 function createVendorConversation() {
   let muted = false;

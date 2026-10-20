@@ -30,6 +30,7 @@ export function createContinueWithReplayLifecycleActionHandler(params: Readonly<
 
         return await runRequesterSessionLifecycle<unknown>({ sessionId: parsed.data.replay.previousSessionId, context,
             spawnSession: params.spawnSession,
+            ...(params.deps?.awaitAgentSessionOpen ? { awaitAgentSessionOpen: params.deps.awaitAgentSessionOpen } : {}),
             refused: () => ({ type: 'error', errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE,
                 errorMessage: 'Requester Session authority is unavailable' }),
             run: async ({ requester, spawnSession, isCurrent }) => {

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { configuration } from '@/configuration';
 import { getActiveAccountSettingsSnapshot, resolveActiveAccountConfiguredExternalSessionSourceRevision } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 
 import type { PluginContributionIdentityV1 } from '@happier-dev/protocol';
@@ -18,7 +19,6 @@ import type {
 } from '@/plugins/runtime/runner/agentSessionRunnerFactoryBinding';
 import type {
   ExternalSessionHostOperationOwner,
-  ExternalSessionHostOperationPort,
 } from '@/session/external/hostOperationOwner';
 import type {
   HostExternalTranscriptFollowEvent,
@@ -86,7 +86,8 @@ type PendingProviderRequest = Readonly<{
 type FollowState = {
   readonly key: string;
   readonly followId: string;
-  readonly binding: BindingState;
+  binding: BindingState;
+  rebinding: boolean;
   closed: boolean;
   terminalAcknowledged: boolean;
   subscription: Readonly<{ dispose(): void | Promise<void> }> | null;
@@ -104,7 +105,8 @@ type BindingState = {
   readonly sessionId: string;
   readonly runner: AgentRuntimeDaemonServiceAuthorityRunnerIdentity;
   readonly retainedAgent: AgentSessionRunnerBindingV1;
-  readonly port: ExternalSessionHostOperationPort;
+  readonly port: ReturnType<ExternalSessionHostOperationOwner['bind']>;
+  readonly disposeRetainedAgent: (() => Promise<void>) | null;
   current: boolean;
   retirePromise: Promise<void> | null;
 };
@@ -165,7 +167,7 @@ export function createRunnerAgentDaemonFacetService(input: Readonly<{
       runner: AgentRuntimeDaemonServiceAuthorityRunnerIdentity;
       retainedAgent: AgentSessionRunnerBindingV1;
     }>,
-  ): Promise<ConfiguredExternalSessionSourceAgentContribution | null>;
+  ): Promise<(ConfiguredExternalSessionSourceAgentContribution & Readonly<{ dispose?(): Promise<void> }>) | null>;
   /**
    * This callback re-attests the runner-carried retained Agent, then observes
    * the current independent Voice-provider lifecycle from the registry.
@@ -354,14 +356,16 @@ export function createRunnerAgentDaemonFacetService(input: Readonly<{
     binding.retirePromise = (async () => {
       const closeResults = await Promise.allSettled(
         [...follows.values()]
-          .filter((state) => state.binding === binding)
+          .filter((state) => state.binding === binding && !state.rebinding)
           .map(closeFollowForRetirement),
       );
       try {
         await binding.port.retire();
       } finally {
-        if (bindings.get(binding.key) === binding) {
-          bindings.delete(binding.key);
+        try {
+          await binding.disposeRetainedAgent?.();
+        } finally {
+          if (bindings.get(binding.key) === binding) bindings.delete(binding.key);
         }
       }
       const closeFailure = closeResults.find(
@@ -384,24 +388,6 @@ export function createRunnerAgentDaemonFacetService(input: Readonly<{
     await retireBinding(binding);
   };
 
-  const authorizeBinding = async (
-    sessionId: string,
-    runner: AgentRuntimeDaemonServiceAuthorityRunnerIdentity,
-    retainedAgent: AgentSessionRunnerBindingV1,
-    witness?: AgentRuntimeDaemonServiceTurnWitnessV1,
-  ): Promise<boolean> => witness
-    ? await input.authorizeActiveTurn({
-        sessionId,
-        runner,
-        retainedAgent,
-        witness,
-      })
-    : await input.authorizeCurrent({
-        sessionId,
-        runner,
-        retainedAgent,
-      });
-
   const requireBinding = async (
     sessionId: string,
     runner: AgentRuntimeDaemonServiceAuthorityRunnerIdentity,
@@ -409,13 +395,14 @@ export function createRunnerAgentDaemonFacetService(input: Readonly<{
     witness?: AgentRuntimeDaemonServiceTurnWitnessV1,
     signal?: AbortSignal,
   ): Promise<BindingState> => {
+    const authorizeBinding = async (): Promise<boolean> => {
+      if (witness && await input.authorizeActiveTurn({ sessionId, runner, retainedAgent, witness })) return true;
+      // A poll can cross cancellation carrying the previous turn's witness.
+      // Its expiry does not revoke the exact retained Session's follow custody.
+      return await input.authorizeCurrent({ sessionId, runner, retainedAgent });
+    };
     for (;;) {
-      const authorized = await authorizeBinding(
-        sessionId,
-        runner,
-        retainedAgent,
-        witness,
-      );
+      const authorized = await authorizeBinding();
       if (disposed || !authorized) {
         const stale = bindings.get(sessionId);
         if (
@@ -460,7 +447,7 @@ export function createRunnerAgentDaemonFacetService(input: Readonly<{
           sessionId,
           runner,
           retainedAgent,
-        )) {
+        ) && existing.port.isCurrent()) {
           return existing;
         }
         await retireBinding(existing);
@@ -474,20 +461,16 @@ export function createRunnerAgentDaemonFacetService(input: Readonly<{
       );
       bindings.set(pending.key, pending);
       void (async () => {
+        let agentContribution: Awaited<ReturnType<NonNullable<typeof input.resolveRetainedExternalSessionAgentContribution>>> = null;
         try {
-          const agentContribution =
+          agentContribution =
             await input.resolveRetainedExternalSessionAgentContribution?.({
               sessionId,
               runner,
               retainedAgent,
             })
             ?? null;
-          const stillAuthorized = await authorizeBinding(
-            sessionId,
-            runner,
-            retainedAgent,
-            witness,
-          );
+          const stillAuthorized = await authorizeBinding();
           if (
             disposed
             || !stillAuthorized
@@ -502,7 +485,8 @@ export function createRunnerAgentDaemonFacetService(input: Readonly<{
             occurrenceId: randomUUID(),
             sessionId,
             machineId: input.machineId,
-            readAccountRevision: () => resolveActiveAccountConfiguredExternalSessionSourceRevision(getActiveAccountSettingsSnapshot()),
+            readAccountRevision: () => resolveActiveAccountConfiguredExternalSessionSourceRevision(getActiveAccountSettingsSnapshot(),
+              agentContribution?.richDefinition?.definition.surfaces?.externalSession.sources, configuration.activeServerId),
             isOccurrenceCurrent: () =>
               binding !== null && isCurrentBinding(binding),
             ...(agentContribution ? { agentContribution } : {}),
@@ -515,6 +499,7 @@ export function createRunnerAgentDaemonFacetService(input: Readonly<{
             current: true,
             retirePromise: null,
             port,
+            disposeRetainedAgent: agentContribution?.dispose ?? null,
           };
           bindings.set(binding.key, binding);
           pending.resolve(binding);
@@ -522,7 +507,10 @@ export function createRunnerAgentDaemonFacetService(input: Readonly<{
           if (bindings.get(pending.key) === pending) {
             bindings.delete(pending.key);
           }
-          pending.reject(error);
+          const cleanup = await Promise.allSettled([agentContribution?.dispose?.()]);
+          const cleanupFailure = cleanup.find(result => result.status === 'rejected');
+          pending.reject(cleanupFailure?.status === 'rejected'
+            ? new AggregateError([error, cleanupFailure.reason], 'Retained Agent binding cleanup failed') : error);
         }
       })();
       return await waitForPendingBinding(pending, signal);
@@ -642,6 +630,7 @@ export function createRunnerAgentDaemonFacetService(input: Readonly<{
       key,
       followId: operation.followId,
       binding,
+      rebinding: false,
       closed: false,
       terminalAcknowledged: false,
       subscription: null,
@@ -769,6 +758,7 @@ export function createRunnerAgentDaemonFacetService(input: Readonly<{
       },
     });
     follows.set(key, state);
+    let acquisitionDeliveredEvent = false;
     const listener = async (
       rawEvent: HostExternalTranscriptFollowEvent,
     ): Promise<void> => {
@@ -787,6 +777,7 @@ export function createRunnerAgentDaemonFacetService(input: Readonly<{
         AgentRuntimeDaemonExternalSessionFollowEventV1Schema.parse(
           rawEvent,
         );
+      acquisitionDeliveredEvent = true;
       const eventId = randomUUID();
       let acknowledge!: () => void;
       const acknowledged = new Promise<void>((resolve) => {
@@ -809,8 +800,8 @@ export function createRunnerAgentDaemonFacetService(input: Readonly<{
     };
     void (async () => {
       try {
-        const result = operation.target.kind === 'externalSession'
-          ? await binding.port.executeFollow({
+        const execute = async (currentBinding: BindingState) => operation.target.kind === 'externalSession'
+          ? await currentBinding.port.executeFollow({
               ref: operation.target.ref,
               source: operation.target.source,
               providerOps,
@@ -830,7 +821,7 @@ export function createRunnerAgentDaemonFacetService(input: Readonly<{
               },
               listener,
             })
-          : await binding.port.executeProviderSessionFollow({
+          : await currentBinding.port.executeProviderSessionFollow({
               agentId: operation.target.agentId,
               providerSessionId:
                 operation.target.providerSessionId,
@@ -851,6 +842,28 @@ export function createRunnerAgentDaemonFacetService(input: Readonly<{
               },
               listener,
             });
+        let result = await execute(binding);
+        if (
+          result.status === 'unavailable'
+          && result.code === 'plugin_generation_retired'
+          && !acquisitionDeliveredEvent
+          && await binding.port.waitForRebind(signal)
+        ) {
+          state.rebinding = true;
+          try {
+            const replacement = await requireBinding(
+              sessionId,
+              runner,
+              retainedAgent,
+              operation.witness,
+              signal,
+            );
+            state.binding = replacement;
+            result = await execute(replacement);
+          } finally {
+            state.rebinding = false;
+          }
+        }
         if (state.closed) {
           if (result.status === 'following') {
             await result.subscription.dispose();

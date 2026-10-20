@@ -1,5 +1,19 @@
 import type { ACPMessageData } from '../sessionMessageTypes';
+import { SessionMessageStreamSegmentV1Schema } from '@happier-dev/protocol/sessions/messages/sessionMessageMeta';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { StreamedTranscriptSegmentRuntime, StreamedTranscriptSegmentState } from './segmentRuntime';
+
+const StoredStreamSegmentV1Schema = createStoredReadSchema(SessionMessageStreamSegmentV1Schema);
+
+/** The native fact can arrive after this host-owned row has checkpointed. */
+export function readStreamedTranscriptSourceMessageId(localId: unknown, meta: unknown): string | null {
+  if (typeof localId !== 'string' || localId.trim().length === 0) return null;
+  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return null;
+  const parsed = StoredStreamSegmentV1Schema.safeParse(Reflect.get(meta, 'happierStreamSegmentV1'));
+  return parsed.success && parsed.data.segmentLocalId === localId && parsed.data.segmentState === 'complete'
+    ? parsed.data.sourceMessageId ?? null
+    : null;
+}
 
 export function buildStreamedTranscriptSegmentSnapshotBody(segment: StreamedTranscriptSegmentRuntime): ACPMessageData {
   return segment.kind === 'assistant'
@@ -52,6 +66,7 @@ export function buildStreamedTranscriptSegmentSnapshotMeta(params: {
       segmentState: state,
       startedAtMs: segment.startedAtMs,
       updatedAtMs: nowMs,
+      ...(segment.sourceMessageId ? { sourceMessageId: segment.sourceMessageId } : {}),
       ...(state === 'interrupted' && typeof interruptedReason === 'string' && interruptedReason
         ? { interruptedReason }
         : {}),

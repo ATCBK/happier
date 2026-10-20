@@ -195,10 +195,10 @@ async function signedReviewCommentPrincipalHeader(params: Readonly<{
     principal: ReviewCommentPrincipalHeaderV1;
     request: ReviewCommentHttpRequest;
     resolvePrincipalSigningContext?: () => Promise<ReviewCommentPrincipalSigningContext>;
-    assertPrincipalCurrent?: (principal: ReviewCommentPrincipalHeaderV1) => void;
+    assertPrincipalCurrent?: (principal: ReviewCommentPrincipalHeaderV1) => void | Promise<void>;
 }>): Promise<ReviewCommentPrincipalHeaderV1> {
     const signingContext = await (params.resolvePrincipalSigningContext ?? resolveDefaultPrincipalSigningContext)();
-    params.assertPrincipalCurrent?.(params.principal);
+    await params.assertPrincipalCurrent?.(params.principal);
     const proof = {
         v: 1 as const,
         alg: 'ed25519-machine-installation-v1' as const,
@@ -215,6 +215,7 @@ async function signedReviewCommentPrincipalHeader(params: Readonly<{
         createReviewCommentPrincipalSigningInputV1({
             actor: params.principal.actor,
             ...(params.principal.currentIntent ? { currentIntent: params.principal.currentIntent } : {}),
+            ...(params.principal.workflowScope ? { workflowScope: params.principal.workflowScope } : {}),
             proof,
         }),
         privateKey,
@@ -222,6 +223,7 @@ async function signedReviewCommentPrincipalHeader(params: Readonly<{
     return {
         actor: params.principal.actor,
         ...(params.principal.currentIntent ? { currentIntent: params.principal.currentIntent } : {}),
+        ...(params.principal.workflowScope ? { workflowScope: params.principal.workflowScope } : {}),
         proof: {
             ...proof,
             signatureBase64Url: Buffer.from(signature).toString('base64url'),
@@ -233,7 +235,7 @@ async function encodeReviewCommentPrincipalHeader(params: Readonly<{
     principal: ReviewCommentPrincipalHeaderV1;
     request: ReviewCommentHttpRequest;
     resolvePrincipalSigningContext?: () => Promise<ReviewCommentPrincipalSigningContext>;
-    assertPrincipalCurrent?: (principal: ReviewCommentPrincipalHeaderV1) => void;
+    assertPrincipalCurrent?: (principal: ReviewCommentPrincipalHeaderV1) => void | Promise<void>;
 }>): Promise<string> {
     return Buffer
         .from(JSON.stringify(ReviewCommentPrincipalHeaderV1Schema.parse(await signedReviewCommentPrincipalHeader(params))), 'utf8')
@@ -317,7 +319,7 @@ export function createCliReviewCommentActionExecutorFromCredentials(
     params: Readonly<{
         credentials: StoredCredentials;
         resolvePrincipalSigningContext?: () => Promise<ReviewCommentPrincipalSigningContext>;
-        assertPrincipalCurrent?: (principal: ReviewCommentPrincipalHeaderV1) => void;
+        assertPrincipalCurrent?: (principal: ReviewCommentPrincipalHeaderV1) => void | Promise<void>;
         resolveAccountId?: (token: string) => string;
         resolveAccountEncryptionMode?: () => Promise<ReviewCommentAccountEncryptionMode>;
         randomBytes?: (length: number) => Uint8Array;
@@ -354,9 +356,9 @@ export function createCliReviewCommentActionExecutorFromCredentials(
                         const principalHeader = principal ? await encodeReviewCommentPrincipalHeader({
                             principal, request,
                             ...(params.resolvePrincipalSigningContext ? { resolvePrincipalSigningContext: params.resolvePrincipalSigningContext } : {}),
-                            assertPrincipalCurrent: () => { if (originalPrincipal) params.assertPrincipalCurrent?.(originalPrincipal); },
+                            assertPrincipalCurrent: async () => { if (originalPrincipal) await params.assertPrincipalCurrent?.(originalPrincipal); },
                         }) : undefined;
-                        if (originalPrincipal) params.assertPrincipalCurrent?.(originalPrincipal);
+                        if (originalPrincipal) await params.assertPrincipalCurrent?.(originalPrincipal);
                         return executeReviewCommentHttpRequest({ credentials: params.credentials, request,
                             ...(principalHeader ? { principalHeader } : {}), ...(options?.signal ? { signal: options.signal } : {}) });
                     },
@@ -404,7 +406,7 @@ export function createCliReviewCommentActionExecutorFromCredentials(
             })
             : undefined;
         if (options?.principal) {
-            params.assertPrincipalCurrent?.(options.principal);
+            await params.assertPrincipalCurrent?.(options.principal);
         }
         const output = await executeReviewCommentHttpRequest({
             credentials: params.credentials,
@@ -423,7 +425,7 @@ export function createCliReviewCommentRpcActionExecutorFromCredentials(
     params: Readonly<{
         credentials: StoredCredentials;
         resolvePrincipalSigningContext?: () => Promise<ReviewCommentPrincipalSigningContext>;
-        assertPrincipalCurrent?: (principal: ReviewCommentPrincipalHeaderV1) => void;
+        assertPrincipalCurrent?: (principal: ReviewCommentPrincipalHeaderV1) => void | Promise<void>;
     }>,
 ): RpcActionExecutor {
     const executeReviewCommentAction = createCliReviewCommentActionExecutorFromCredentials(params);

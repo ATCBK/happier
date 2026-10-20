@@ -110,6 +110,14 @@ describe('settingsRouteRegistry', () => {
         expect(resolveSettingsRouteParentPathname('/session/s1')).toBeNull();
     });
 
+    it('returns from an open plugin source to the Sources list before leaving the page', () => {
+        expect(resolveSettingsRouteParentPathname('/settings/plugins/sources', { source: 'marketplace:abc' }))
+            .toBe('/settings/plugins/sources');
+        expect(resolveSettingsRouteParentPathname('/settings/plugins/sources')).toBe('/settings/plugins');
+        expect(resolveSettingsRouteParentPathname('/settings/plugins/diagnostics', { source: 'marketplace:abc' }))
+            .toBe('/settings/plugins');
+    });
+
     it('returns from a machine-default category to Defaults before leaving the page', () => {
         for (const category of ['local', 'running-only', 'stopped-billed', 'unknown']) {
             expect(resolveSettingsRouteParentPathname('/settings/machines/defaults', { category }))

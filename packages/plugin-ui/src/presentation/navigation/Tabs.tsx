@@ -199,6 +199,21 @@ function HappierTabPanel(props: Readonly<{
   );
 }
 
+/**
+ * Which labels a tab strip shows. `none` asks for each tab as its glyph alone (a row with little room, so a
+ * neighbour keeps its own text); it applies only when every tab has a glyph, because a half-iconic strip reads as
+ * broken. Each tab keeps its title as its accessible name either way. One rule for core's segmented bar and the
+ * public Tabs.
+ */
+export type HappierTabLabels = 'all' | 'none';
+
+export function resolveHappierTabGlyphOnly(input: Readonly<{
+  labels?: HappierTabLabels;
+  tabs: readonly Readonly<{ icon?: unknown }>[];
+}>): boolean {
+  return input.labels === 'none' && input.tabs.length > 0 && input.tabs.every((tab) => tab.icon != null);
+}
+
 /** One equality rule for controlled selection across core and plugin adapters. */
 export function isHappierTabSelected(value: string, candidate: string): boolean {
   return value === candidate;
@@ -254,6 +269,8 @@ export function HappierTabs(props: Readonly<{
   tabList?: 'shown' | 'host';
   layout?: HappierTabsLayout;
   sharedPanel?: ReactNode;
+  /** `none`: each tab as its glyph alone when every tab has one ({@link resolveHappierTabGlyphOnly}). */
+  labels?: HappierTabLabels;
   /**
    * Controls that act on the tab set itself (add a tab, the selected tab's menu), at the strip's
    * trailing edge above its hairline. The strip scrolls beside them; they never scroll away.
@@ -280,17 +297,30 @@ export function HappierTabs(props: Readonly<{
   const badgeStyle = resolveHappierTypeRoleStyle('micro', props.theme, typography);
   const rtl = localization ? localization.direction === 'rtl' : I18nManager.isRTL;
   const instanceId = useId().replace(/:/gu, '');
-  const tabs = Children.toArray(props.children)
+  const descriptors = Children.toArray(props.children)
     .filter((child): child is ReactElement<HappierTabDescriptor> => isValidElement(child))
     .map((child) => child.props);
   const admittedTabValues = new Set<string>();
-  for (const tab of tabs) {
+  const duplicateTabValues = new Set<string>();
+  const tabs = descriptors.filter(tab => {
     if (admittedTabValues.has(tab.value)) {
-      throw new Error(`Tabs contains duplicate tab value '${tab.value}'.`);
+      duplicateTabValues.add(tab.value);
+      return false;
     }
     admittedTabValues.add(tab.value);
-  }
+    return true;
+  });
+  const reportedDuplicates = useRef<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    // A duplicate is an upstream inventory defect. Report it without taking down
+    // the page, and keep one trigger/panel identity while that inventory recovers.
+    for (const value of duplicateTabValues) if (!reportedDuplicates.current.has(value)) {
+      console.error(`Tabs contains duplicate tab value '${value}'. Keeping the first tab.`);
+    }
+    reportedDuplicates.current = duplicateTabValues;
+  });
   const selected = tabs.find((tab) => tab.value === props.value) ?? tabs.find((tab) => !tab.disabled);
+  const glyphOnly = resolveHappierTabGlyphOnly({ labels: props.labels, tabs });
   const tabRefs = useRef(new Map<string, View>());
   // Which TAB currently holds focus — its trigger or anything inside its panel —
   // published by the part that holds it while that part still exists. A removed
@@ -468,7 +498,9 @@ export function HappierTabs(props: Readonly<{
               >
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: props.theme.spacing.xsmall }}>
                   {tab.icon}
-                  <HappierText style={{ ...labelStyle, color: isSelected ? props.theme.colors.accent : props.theme.colors.secondaryText }} tabularNumbers={readHappierTypeRoleTabular('label', typography)}>{tab.title}</HappierText>
+                  {glyphOnly ? null : (
+                    <HappierText style={{ ...labelStyle, color: isSelected ? props.theme.colors.accent : props.theme.colors.secondaryText }} tabularNumbers={readHappierTypeRoleTabular('label', typography)}>{tab.title}</HappierText>
+                  )}
                   {tab.badge ? <HappierText style={{ ...badgeStyle, color: props.theme.colors[HAPPIER_TONE_COLOR_TOKEN[tab.badgeTone ?? 'secondary']] }} tabularNumbers>{tab.badge}</HappierText> : null}
                   {tab.marker ? <HappierTabMarker color={props.theme.colors.mutedText}
                     testID={`${props.testID ?? 'tabs'}:${tab.value}:marker`} /> : null}

@@ -40,6 +40,76 @@ function fixtureWorkspaceRef(id: string) {
 }
 
 describe('WorkspaceSyncController', () => {
+  it.each([false, true])('flushes its exact admitted definition and endpoints (warm=%s)', async warm => {
+    const fixture = await mkdtemp(join(tmpdir(), 'workspace-sync-admitted-flush-'));
+    const sourceRoot = join(fixture, 'source');
+    await mkdir(sourceRoot);
+    const controller = new WorkspaceSyncController({ adapter: completeAdapter(), lifecycle: lifecycle(),
+      rootOwnershipManager: createWorkspaceRootOwnershipManager({ lockDirectory: join(fixture, 'locks') }), localMachineId: 'm1', localServerId: 'home',
+      resolveWorkspaceRef: id => ({ serverId: 'home', machineId: id === 'a' ? 'm1' : 'm2', rootPath: id === 'a' ? sourceRoot : '/b' }),
+      resolveRelationshipDefinition: () => definition });
+    try {
+      if (warm) await controller.ensure(definition);
+      await expect(controller.flush('r1', undefined, { relationship: definition, assertCurrent: async () => undefined, workspaceRefs: [
+        { id: 'a', serverId: 'home', machineId: 'm1', rootPath: sourceRoot, createdAtMs: 0 },
+        { id: 'b', serverId: 'home', machineId: 'm2', rootPath: '/b', createdAtMs: 0 },
+      ] })).resolves.toEqual(status);
+    } finally { await controller.shutdown(); await rm(fixture, { recursive: true, force: true }); }
+  });
+
+  it.each([
+    { warm: false, change: 'definition' }, { warm: false, change: 'endpoint' },
+    { warm: true, change: 'definition' }, { warm: true, change: 'endpoint' },
+    { warm: true, change: 'authority' },
+  ] as const)('refuses a queued admitted flush after its $change changes (warm=$warm)', async ({ warm, change }) => {
+    const fixture = await mkdtemp(join(tmpdir(), 'workspace-sync-queued-admitted-flush-'));
+    const sourceRoot = join(fixture, 'source');
+    await mkdir(sourceRoot);
+    let release!: () => void;
+    let entered!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const changedDefinition = { ...definition, mode: 'mirror_exactly' as const };
+    let selectedDefinition: WorkspaceSyncRelationshipV1 = definition;
+    let betaRoot = '/b';
+    let current = true;
+    const hold = async () => { entered(); await pending; return status; };
+    const adapter = completeAdapter({ pause: hold,
+      rehydrate: async () => { await hold(); return [status]; } });
+    const prepareTarget = vi.fn(async () => undefined);
+    const controller = new WorkspaceSyncController({ adapter, lifecycle: lifecycle(),
+      rootOwnershipManager: createWorkspaceRootOwnershipManager({ lockDirectory: join(fixture, 'locks') }),
+      localMachineId: 'm1', localServerId: 'home',
+      resolveWorkspaceRef: id => id === 'a' ? { serverId: 'home', machineId: 'm1', rootPath: sourceRoot }
+        : { serverId: 'home', machineId: 'm2', rootPath: betaRoot },
+      resolveRelationshipDefinition: () => selectedDefinition, prepareRelationshipTarget: prepareTarget });
+    const expected = { relationship: definition, assertCurrent: async () => {
+      if (!current) throw Object.assign(new Error('Requester retired'), { code: 'project_requester_authority_unavailable' });
+    }, workspaceRefs: [
+      { id: 'a', serverId: 'home', machineId: 'm1', rootPath: sourceRoot, createdAtMs: 0 },
+      { id: 'b', serverId: 'home', machineId: 'm2', rootPath: '/b', createdAtMs: 0 },
+    ] };
+    try {
+      if (warm) await controller.ensure(definition);
+      const preceding = warm && change === 'definition' ? controller.rehydrateFromSettings([changedDefinition]) : controller.pause('r1');
+      await started;
+      const flushing = controller.flush('r1', undefined, expected);
+      const refused = expect(flushing).rejects.toMatchObject({ code: change === 'authority'
+        ? 'project_requester_authority_unavailable' : 'relationship_changed' });
+      if (change === 'definition') selectedDefinition = changedDefinition;
+      else if (change === 'endpoint') betaRoot = '/substituted';
+      else current = false;
+      release();
+      await preceding;
+      await refused;
+      expect(adapter.flush).not.toHaveBeenCalled();
+      if (!warm) {
+        expect(prepareTarget).not.toHaveBeenCalled();
+        expect(adapter.ensure).not.toHaveBeenCalled();
+      }
+    } finally { release(); await controller.shutdown(); await rm(fixture, { recursive: true, force: true }); }
+  });
+
   it('projects accepted Sync preparation and queued flush, settling a clean watcher without material custody', async () => {
     let release!: () => void;
     const completion = new Promise<void>(resolve => { release = resolve; });

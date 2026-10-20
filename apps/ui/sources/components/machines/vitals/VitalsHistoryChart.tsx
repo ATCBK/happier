@@ -10,13 +10,15 @@ import {
   HAPPIER_DATA_METRICS,
   StackedSeriesChart,
   type HappierSeries,
+  type HappierSeriesBucket,
 } from '@happier-dev/plugin-ui/presentation';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { useUsageSeriesLens } from '@/components/settings/usage/usageSeriesPresentation';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 
 import type { MachineVitalsTimeline } from './machineVitalsPresentation';
+import { formatVitalsPointTime } from './vitalsFormat';
 
 /** Room at a chart's right for its scale labels ("100%", "60 GB"), shared by every vitals chart. */
 export const VITALS_SCALE_GUTTER_PX = 40;
@@ -51,7 +53,7 @@ export const VitalsHistoryChart = React.memo(function VitalsHistoryChart(
   }>,
 ) {
   const { theme } = useUnistyles();
-  const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+  const pluginTheme = usePluginUiTheme(theme);
   const reducedMotion = useReducedMotionPreference();
   const [width, setWidth] = React.useState(0);
   const onLayout = React.useCallback(
@@ -67,6 +69,7 @@ export const VitalsHistoryChart = React.memo(function VitalsHistoryChart(
     series,
     format: props.format,
     accentColor: theme.colors.text.secondary,
+    pointTitle: titleVitalsPoint,
     ...(props.testID ? { testID: `${props.testID}-lens` } : {}),
   });
   const points = props.timeline.points;
@@ -76,6 +79,7 @@ export const VitalsHistoryChart = React.memo(function VitalsHistoryChart(
   const stepPx =
     (plotWidth * Math.max(0, props.timeline.end - previous)) /
     Math.max(1, props.timeline.end - props.timeline.start);
+  const keyed = props.series.some((entry) => entry.overlay === true);
   const fresh = props.freshness === 'live';
   const opacity = useSharedValue(fresh ? 1 : STALE_INK_OPACITY);
   React.useEffect(() => {
@@ -102,11 +106,14 @@ export const VitalsHistoryChart = React.memo(function VitalsHistoryChart(
             scaleGutter={VITALS_SCALE_GUTTER_PX}
             scaleTicks={props.scaleTicks}
             axisTicks={props.axis}
-            showLegend={false}
+            // A history that carries the minute's maximum names its two lines; a single line needs no key.
+            showLegend={keyed}
             showReadout={false}
             mirrored={props.mirrored}
             {...(props.threshold ? { threshold: props.threshold } : {})}
             valueFormatter={props.format}
+            // A point's time is said only where it is read (the lens, an accessible name), never built for every point on every sample.
+            coordinateFormatter={formatVitalsPointTime}
             reducedMotion={reducedMotion}
             {...(props.live
               ? {
@@ -125,15 +132,22 @@ export const VitalsHistoryChart = React.memo(function VitalsHistoryChart(
       ) : (
         // Before the first measure the chart's box is already its final height, so nothing moves.
         <View
-          style={{ height: HAPPIER_DATA_METRICS.plotHeightPx + AXIS_ROW_PX }}
+          style={{ height: HAPPIER_DATA_METRICS.plotHeightPx + AXIS_ROW_PX + (keyed ? KEY_ROW_PX : 0) }}
         />
       )}
     </View>
   );
 });
 
+/** History points carry no label; the lens titles one by its time, read only when it is shown. */
+function titleVitalsPoint(bucket: HappierSeriesBucket): string {
+  return typeof bucket.x === 'number' ? formatVitalsPointTime(bucket.x) : bucket.label;
+}
+
 /** The axis row under a tile chart: one caption line and its gap. */
 const AXIS_ROW_PX = 20;
+/** The key row under the axis when the chart names its two lines: one caption line and its gap. */
+const KEY_ROW_PX = HAPPIER_DATA_METRICS.blockGapPx + 16;
 
 function withRangeStart(
   series: readonly HappierSeries[],
@@ -145,7 +159,7 @@ function withRangeStart(
     return {
       ...entry,
       points: [
-        { id: 'range-start', x: start, y: null, label: '' },
+        { id: 'range-start', x: start, y: null },
         ...entry.points,
       ],
     };

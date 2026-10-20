@@ -44,9 +44,9 @@ export const SessionScmStashDetailsView = React.memo((props: SessionScmStashDeta
     const adapter = React.useMemo<ScmStashDetailsAdapter>(() => ({
         list: () => sessionScmStashList(props.sessionId, {}, props.serverId),
         show: (stashRef) => sessionScmStashShow(props.sessionId, { stashRef }, props.serverId),
-        pop: (stashRef) => runStashMutation(() => sessionScmStashPop(props.sessionId, { stashRef }, props.serverId)),
-        drop: (stashRef) => runStashMutation(() => sessionScmStashDrop(props.sessionId, { stashRef }, props.serverId)),
-        apply: (stashRef) => runStashMutation(() => sessionScmStashApply(props.sessionId, { stashRef }, props.serverId)),
+        pop: (stashRef, call) => runStashMutation(() => sessionScmStashPop(props.sessionId, { stashRef }, props.serverId, call)),
+        drop: (stashRef, call) => runStashMutation(() => sessionScmStashDrop(props.sessionId, { stashRef }, props.serverId, call)),
+        apply: (stashRef, call) => runStashMutation(() => sessionScmStashApply(props.sessionId, { stashRef }, props.serverId, call)),
     }), [props.serverId, props.sessionId, runStashMutation]);
 
     const handleAfterMutation = React.useCallback(async () => {

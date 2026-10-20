@@ -9,8 +9,9 @@ import { isServerApiRequestPath } from "./serverApiPath";
 import { redactPublicShareCapabilityUrl } from '@happier-dev/protocol/crypto/publicShareCapabilityUrl';
 import { redactHttpRequestUrlForLog } from "@/utils/logging/redactHttpRequestUrlForLog";
 import { InactiveAccountError } from "@/app/auth/accountStatus";
-import { readSharedQaSchemaMismatchDiagnostic } from '@/storage/prismaErrors';
-import { isTransactionConflictExhaustedError } from '@/storage/inTx';
+import { isPrismaErrorCode, readSharedQaSchemaMismatchDiagnostic } from '@/storage/prismaErrors';
+import { isTransactionAcquisitionUnavailableError, isTransactionConflictExhaustedError } from '@/storage/inTx';
+import { logUnexpectedRequestError } from './logUnexpectedRequestError';
 
 function sendGlobalErrorResponse(
     reply: FastifyReply,
@@ -28,6 +29,17 @@ function isFastifyValidationError(error: FastifyError): boolean {
     return Array.isArray((error as FastifyError & { validation?: unknown }).validation);
 }
 
+/** Shared by global and route-local handlers; each transport retains its own envelope. */
+export function readDatabaseErrorCode(error: unknown): 'database_transaction_conflict_exhausted' | 'database_connection_unavailable' | null {
+    if (isTransactionConflictExhaustedError(error)) {
+        return error.code;
+    }
+    if (isPrismaErrorCode(error, 'P2024') || isTransactionAcquisitionUnavailableError(error)) {
+        return 'database_connection_unavailable';
+    }
+    return null;
+}
+
 export function enableErrorHandlers(app: Fastify) {
     // Global error handler
     app.setErrorHandler(async (error: FastifyError, request, reply) => {
@@ -36,12 +48,34 @@ export function enableErrorHandlers(app: Fastify) {
         if (error instanceof InactiveAccountError) {
             return sendGlobalErrorResponse(reply, 401, { error: "invalid_token" });
         }
-        if (isTransactionConflictExhaustedError(error)) {
-            return sendGlobalErrorResponse(reply, 503, { error: error.code, statusCode: 503 });
+        const databaseError = readDatabaseErrorCode(error);
+        const correlation = {
+            module: 'fastify-error' as const,
+            httpRequestId: request.id,
+            ...(request.externalActionExecutionRequestId ? { requestId: request.externalActionExecutionRequestId } : {}),
+            ...(request.externalActionEffectActionId ? { actionId: request.externalActionEffectActionId } : {}),
+        };
+        if (databaseError) {
+            // Expected storage refusals still need the same safe request
+            // correlation as other failures; never retain SQL or HTTP input.
+            logUnexpectedRequestError(error, correlation);
+            return sendGlobalErrorResponse(reply, 503, { error: databaseError, statusCode: 503 });
+        }
+        const statusCode = error.statusCode || 500;
+        const schemaMismatch = readSharedQaSchemaMismatchDiagnostic(error);
+        if (statusCode >= 500) {
+            logUnexpectedRequestError(error, correlation);
+            captureFastifyExceptionForSentry(error, request);
+            if (schemaMismatch) {
+                return sendGlobalErrorResponse(reply, statusCode, { ...schemaMismatch, statusCode });
+            }
+            return sendGlobalErrorResponse(reply, statusCode, {
+                error: 'Internal Server Error', code: 'internal_error',
+                message: 'An unexpected error occurred', statusCode,
+            });
         }
         const method = request.method;
         const url = redactHttpRequestUrlForLog(request.url);
-        const schemaMismatch = readSharedQaSchemaMismatchDiagnostic(error);
         const errorMessage = schemaMismatch?.message ?? redactPublicShareCapabilityUrl(error.message);
         const stack = typeof error.stack === "string"
             ? redactPublicShareCapabilityUrl(error.stack)
@@ -63,20 +97,7 @@ export function enableErrorHandlers(app: Fastify) {
         }, `Unhandled error: ${errorMessage}`);
 
         // Return appropriate error response
-        const statusCode = error.statusCode || 500;
-
-        if (statusCode >= 500) {
-            captureFastifyExceptionForSentry(error, request as any);
-            if (schemaMismatch) {
-                return sendGlobalErrorResponse(reply, statusCode, { ...schemaMismatch, statusCode });
-            }
-            // Internal server errors - don't expose details
-            return sendGlobalErrorResponse(reply, statusCode, {
-                error: 'Internal Server Error',
-                message: 'An unexpected error occurred',
-                statusCode
-            });
-        } else if (statusCode === 400 && isFastifyValidationError(error)) {
+        if (statusCode === 400 && isFastifyValidationError(error)) {
             return sendGlobalErrorResponse(reply, statusCode, {
                 error: 'invalid-params',
             });
@@ -166,6 +187,8 @@ export function enableErrorHandlers(app: Fastify) {
 
     // Error hook for additional logging
     app.addHook('onError', async (request, reply, error) => {
+        // The global owner emits one content-free diagnostic for unexpected failures.
+        if ((error.statusCode || 500) >= 500) return;
         const method = request.method;
         const url = redactHttpRequestUrlForLog(request.url);
         const errorMessage = readSharedQaSchemaMismatchDiagnostic(error)?.message
@@ -184,26 +207,5 @@ export function enableErrorHandlers(app: Fastify) {
         }, `Request error: ${errorMessage}`);
     });
 
-    // Handle uncaught exceptions in routes
-    app.addHook('preHandler', async (request, reply) => {
-        // Store original reply.send to catch errors in response serialization
-        const originalSend = reply.send.bind(reply);
-        reply.send = function (payload: any) {
-            try {
-                return originalSend(payload);
-            } catch (error: any) {
-                const errorMessage = redactPublicShareCapabilityUrl(String(error?.message ?? error));
-                log({
-                    module: 'fastify-serialization-error',
-                    level: 'error',
-                    method: request.method,
-                    url: redactHttpRequestUrlForLog(request.url),
-                    stack: typeof error?.stack === "string"
-                        ? redactPublicShareCapabilityUrl(error.stack)
-                        : error?.stack
-                }, `Response serialization error: ${errorMessage}`);
-                throw error;
-            }
-        };
-    });
+    // Fastify forwards response serialization failures to this same global handler.
 }

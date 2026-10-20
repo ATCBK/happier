@@ -54,11 +54,15 @@ const relayConfigurationFields: ActionInputHints['fields'] = [
     visibleWhen: { op: 'eq', path: 'operation.config.providerId', value: 'cloudflareNamed' } },
 ];
 
+type RemoteHostActionSpec<Id extends RemoteHostActionIdV1> = PreNormalizedActionSpec & Readonly<{
+  id: Id; inputSchema: (typeof inputs)[Id]; outputSchema: (typeof outputs)[Id];
+}>;
+
 function remoteHostSpec<Id extends RemoteHostActionIdV1>(id: Id, title: string, summary: string, options: Readonly<{
   client?: boolean; read?: boolean; danger?: boolean;
-}>): PreNormalizedActionSpec & Readonly<{ id: Id; inputSchema: (typeof inputs)[Id]; outputSchema: (typeof outputs)[Id] }> {
+}>): RemoteHostActionSpec<Id> {
   return {
-    id, approvalPolicy: { uiConfirmation: 'policy' }, approval: { result: 'required' }, title, safety: options.danger ? 'danger' : 'safe',
+    id, approvalPolicy: { uiConfirmation: id === 'remote_hosts.relay.restart' ? 'direct' : 'policy' }, approval: { result: 'required' }, title, safety: options.danger ? 'danger' : 'safe',
     sideEffectClass: options.read ? 'read' : options.danger ? 'danger' : 'write',
     requiredAuthority: 'account_automation', executionPlacement: options.client ? 'client' : 'account', placements: [],
     surfaces: { ui: true, cli: !options.client, agent: true, mcp: true, voice: false, rpc: !options.client },
@@ -81,6 +85,7 @@ export const REMOTE_HOST_ACTION_SPECS_V1 = [
   remoteHostSpec('remote_hosts.trusted_keys.remove', 'Remove trusted SSH host key', 'Remove the exact reviewed key from this device.', { client: true, danger: true }),
   remoteHostSpec('remote_hosts.trusted_keys.clear', 'Clear trusted SSH host keys', 'Remove only the reviewed set of trusted keys from this device.', { client: true, danger: true }),
   remoteHostSpec('remote_hosts.tunnel.stop', 'Stop SSH tunnel', 'Release the exact native lease or stop the exact desktop tunnel.', { client: true, danger: true }),
+  remoteHostSpec('remote_hosts.tunnel.list', 'List active SSH tunnels', 'Read the active SSH tunnels on this device.', { client: true, read: true }),
   remoteHostSpec('remote_hosts.list', 'List remote hosts',
     'See the remote hosts saved in your account.', { read: true,  }),
   remoteHostSpec('remote_hosts.read', 'Read remote host',

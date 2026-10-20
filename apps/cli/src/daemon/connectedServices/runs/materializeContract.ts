@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ConnectedServiceBindingsV2IngressSchema, ConnectedServiceBindingsV2Schema } from '@happier-dev/protocol/connect/connected-service-bindings';
 import { ExecutionRunConnectedServicesLaunchV1Schema } from '@happier-dev/protocol/daemon/executionRuns';
@@ -28,14 +28,14 @@ export const CONNECTED_SERVICE_RUN_REFRESH_RUNTIME_AUTH_PATH = '/connected-servi
 export const CONNECTED_SERVICE_RUN_RECOVER_RUNTIME_FAILURE_PATH = '/connected-service-run/recover-runtime-failure';
 export const CONNECTED_SERVICE_RUN_RUNTIME_TURN_COMPLETED_PATH = '/connected-service-run/runtime-turn-completed';
 export const CONNECTED_SERVICE_APPLIED_PARENT_SELECTION_PATH = '/connected-service-run/applied-parent-selection';
-export const ConnectedServiceAppliedParentSelectionRequestSchema = z.object({
-    sessionId: z.string().trim().min(1), runnerPid: z.number().int().positive(), agentId: z.string().trim().min(1),
+export const ConnectedServiceAppliedParentSelectionRequestSchema = z.strictObject({
+    sessionId: z.string().check(z.trim(), z.minLength(1)), runnerPid: z.number().check(z.int(), z.positive()), agentId: z.string().check(z.trim(), z.minLength(1)),
     /** Startup-only proof from the accepted native open, never a read-time fallback. */
-    initialEmpty: z.literal(true).optional(),
-}).strict();
+    initialEmpty: z.optional(z.literal(true)),
+});
 export const ConnectedServiceAppliedParentSelectionResultSchema = z.union([
-    z.object({ status: z.literal('unavailable') }).strict(),
-    z.object({ status: z.literal('applied'), connectedServices: ConnectedServiceBindingsV2Schema }).strict(),
+    z.strictObject({ status: z.literal('unavailable') }),
+    z.strictObject({ status: z.literal('applied'), connectedServices: ConnectedServiceBindingsV2Schema }),
 ]);
 export type ConnectedServiceAppliedParentSelectionReader = (
     input: z.infer<typeof ConnectedServiceAppliedParentSelectionRequestSchema>,
@@ -43,68 +43,87 @@ export type ConnectedServiceAppliedParentSelectionReader = (
 export type ConnectedServiceAppliedParentSelectionRequest = z.infer<typeof ConnectedServiceAppliedParentSelectionRequestSchema>;
 export type ConnectedServiceAppliedParentSelectionResult = z.infer<typeof ConnectedServiceAppliedParentSelectionResultSchema>;
 
-export const ConnectedServiceRunMaterializeRequestSchema = z.object({
-    runId: z.string().trim().min(1),
-    runnerPid: z.number().int().positive(),
-    agentId: z.string().trim().min(1),
+export const ConnectedServiceRunMaterializeRequestSchema = z.strictObject({
+    activationId: z.string().check(z.uuid()),
+    runId: z.string().check(z.trim(), z.minLength(1)),
+    runnerPid: z.number().check(z.int(), z.positive()),
+    agentId: z.string().check(z.trim(), z.minLength(1)),
     connectedServices: ConnectedServiceBindingsV2IngressSchema,
-    cwd: z.string().trim().min(1),
-    modelId: z.string().trim().min(1).optional(),
+    cwd: z.string().check(z.trim(), z.minLength(1)),
+    modelId: z.optional(z.string().check(z.trim(), z.minLength(1))),
     /** Exact retained activation replacement; never a fresh launch or parent Session resume. */
-    recovery: z.object({ activationId: z.string().uuid(), nativeResumeId: z.string().trim().min(1) }).strict().optional(),
+    recovery: z.optional(z.strictObject({ activationId: z.string().check(z.uuid()), nativeResumeId: z.string().check(z.trim(), z.minLength(1)) })),
 });
 export type ConnectedServiceRunMaterializeRequest = z.infer<typeof ConnectedServiceRunMaterializeRequestSchema>;
 
+export const ConnectedServiceRunMaterializeSuccessResponseSchema = z.strictObject({
+    ok: z.literal(true),
+    result: z.strictObject({
+        activationId: z.string().check(z.uuid()),
+        env: z.record(z.string(), z.string()),
+        unsetEnvKeys: z.optional(z.array(z.string())),
+        connectedServicesBindings: z.unknown(),
+        registration: ExecutionRunConnectedServicesRegistrationV1Schema,
+    }),
+});
+
+export const ConnectedServiceRunReleaseResultSchema = z.union([
+    z.strictObject({ ok: z.literal(true), released: z.boolean() }),
+    z.strictObject({ ok: z.literal(false), errorCode: z.enum([
+        'connected_service_run_cleanup_failed', 'connected_service_run_cleanup_unavailable',
+    ]) }),
+]);
+
 export const ConnectedServiceRunReleaseRequestSchema = z.object({
-    runId: z.string().trim().min(1),
-    runnerPid: z.number().int().positive(),
-    activationId: z.string().uuid(),
+    runId: z.string().check(z.trim(), z.minLength(1)),
+    runnerPid: z.number().check(z.int(), z.positive()),
+    activationId: z.string().check(z.uuid()),
 });
 export type ConnectedServiceRunReleaseRequest = z.infer<typeof ConnectedServiceRunReleaseRequestSchema>;
-export const ConnectedServiceRunRuntimeTurnCompletedRequestSchema = ConnectedServiceRunReleaseRequestSchema.strict();
-export const ConnectedServiceRunRuntimeTurnCompletedResultSchema = z.object({ ok: z.literal(true), accepted: z.boolean() }).strict();
+export const ConnectedServiceRunRuntimeTurnCompletedRequestSchema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(ConnectedServiceRunReleaseRequestSchema);
+export const ConnectedServiceRunRuntimeTurnCompletedResultSchema = z.strictObject({ ok: z.literal(true), accepted: z.boolean() });
 export type ConnectedServiceRunRuntimeTurnCompletedHandler = (input: ConnectedServiceRunReleaseRequest) => Promise<z.infer<typeof ConnectedServiceRunRuntimeTurnCompletedResultSchema>>;
 
-export const ConnectedServiceRunRuntimeAuthRefreshRequestSchema = ConnectedServiceRunReleaseRequestSchema.extend({
+export const ConnectedServiceRunRuntimeAuthRefreshRequestSchema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ConnectedServiceRunReleaseRequestSchema, {
     serviceId: ConnectedServiceRuntimeAuthRefreshServiceIdSchema,
-    refreshAttemptId: z.string().trim().min(1),
+    refreshAttemptId: z.string().check(z.trim(), z.minLength(1)),
     selection: ConnectedServiceRuntimeAuthRefreshSelectionSchema,
     expectedCredentialRevision: ConnectedServiceCredentialRevisionV1Schema,
-    planType: z.string().trim().min(1).nullable().optional(),
-    failingAccessTokenFingerprint: z.string().trim().min(1).nullable().optional(),
-    reason: z.string().trim().min(1).nullable().optional(),
-}).strict();
+    planType: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+    failingAccessTokenFingerprint: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+    reason: z.optional(z.nullable(z.string().check(z.trim(), z.minLength(1)))),
+}));
 export type ConnectedServiceRunRuntimeAuthRefreshRequest = z.infer<typeof ConnectedServiceRunRuntimeAuthRefreshRequestSchema>;
 export type ConnectedServiceRunRuntimeAuthRefreshHandler = (
     input: ConnectedServiceRunRuntimeAuthRefreshRequest,
 ) => Promise<ConnectedServiceDaemonAuthBridgeRefreshResult>;
 
-export const ConnectedServiceRunRuntimeFailureRecoveryRequestSchema = ConnectedServiceRunReleaseRequestSchema.extend({
-    nativeResumeId: z.string().trim().min(1),
-    interruptedOriginId: z.string().trim().min(1),
-    classification: z.unknown().transform((value, ctx) => {
+export const ConnectedServiceRunRuntimeFailureRecoveryRequestSchema = (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.extend(ConnectedServiceRunReleaseRequestSchema, {
+    nativeResumeId: z.string().check(z.trim(), z.minLength(1)),
+    interruptedOriginId: z.string().check(z.trim(), z.minLength(1)),
+    classification: z.optional(z.pipe(z.unknown(), z.transform((value, ctx) => {
         const classification = sanitizeConnectedServiceRuntimeFailureClassification(value);
         if (!classification) {
-            ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid connected service classification' });
+            ctx.issues.push({ code: "custom", message: 'Invalid connected service classification', input: ctx.value });
             return z.NEVER;
         }
         return classification;
-    }).optional(),
-    diagnostic: z.unknown().optional(),
-}).strict().refine((input) => input.classification !== undefined || input.diagnostic !== undefined);
+    }))),
+    diagnostic: z.optional(z.unknown()),
+})).check(z.refine((input) => input.classification !== undefined || input.diagnostic !== undefined));
 export type ConnectedServiceRunRuntimeFailureRecoveryRequest = z.infer<typeof ConnectedServiceRunRuntimeFailureRecoveryRequestSchema>;
 export const ConnectedServiceRunRuntimeFailureRecoveryResultSchema = z.union([
-    z.object({ status: z.literal('continue'), input: z.string().min(1), rematerialize: z.boolean() }).strict(),
-    z.object({ status: z.literal('failed'), reason: z.string().optional() }).strict(),
+    z.strictObject({ status: z.literal('continue'), input: z.string().check(z.minLength(1)), rematerialize: z.boolean() }),
+    z.strictObject({ status: z.literal('failed'), reason: z.optional(z.string()) }),
 ]);
 export type ConnectedServiceRunRuntimeFailureRecoveryResult = z.infer<typeof ConnectedServiceRunRuntimeFailureRecoveryResultSchema>;
 export type ConnectedServiceRunRuntimeFailureRecoveryHandler = (
     input: ConnectedServiceRunRuntimeFailureRecoveryRequest, signal: AbortSignal,
 ) => Promise<ConnectedServiceRunRuntimeFailureRecoveryResult>;
 export const ConnectedServiceRunGenerationCurrentRequestSchema = z.object({
-    runId: z.string().trim().min(1),
-    runnerPid: z.number().int().positive(),
-    registration: ExecutionRunConnectedServicesRegistrationV1Schema.optional(),
+    runId: z.string().check(z.trim(), z.minLength(1)),
+    runnerPid: z.number().check(z.int(), z.positive()),
+    registration: z.optional(ExecutionRunConnectedServicesRegistrationV1Schema),
 });
 export type ConnectedServiceRunGenerationCurrentRequest = z.infer<
     typeof ConnectedServiceRunGenerationCurrentRequestSchema
@@ -117,24 +136,24 @@ export const CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES = {
     modelUnavailable: 'connected_service_run_model_unavailable',
 } as const;
 
-export const ConnectedServiceRunRejectedStartRequestSchema = z.object({
-    runId: z.string().trim().min(1),
-    runnerPid: z.number().int().positive(),
-    activationId: z.string().uuid(),
-    modelId: z.string().trim().min(1),
-    classification: z.unknown().transform((value, ctx) => {
+export const ConnectedServiceRunRejectedStartRequestSchema = z.strictObject({
+    runId: z.string().check(z.trim(), z.minLength(1)),
+    runnerPid: z.number().check(z.int(), z.positive()),
+    activationId: z.string().check(z.uuid()),
+    modelId: z.string().check(z.trim(), z.minLength(1)),
+    classification: z.pipe(z.unknown(), z.transform((value, ctx) => {
         const classification = sanitizeConnectedServiceRuntimeFailureClassification(value);
         if (!classification) {
-            ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid connected service classification' });
+            ctx.issues.push({ code: "custom", message: 'Invalid connected service classification', input: ctx.value });
             return z.NEVER;
         }
         return classification;
-    }),
-}).strict();
+    })),
+});
 export type ConnectedServiceRunRejectedStartRequest = z.infer<typeof ConnectedServiceRunRejectedStartRequestSchema>;
 export const ConnectedServiceRunRejectedStartResultSchema = z.union([
-    z.object({ ok: z.literal(true), retry: z.literal(true) }).strict(),
-    z.object({
+    z.strictObject({ ok: z.literal(true), retry: z.literal(true) }),
+    z.strictObject({
         ok: z.literal(false),
         errorCode: z.enum([
             CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.unavailable,
@@ -142,9 +161,9 @@ export const ConnectedServiceRunRejectedStartResultSchema = z.union([
             CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.stale,
             CONNECTED_SERVICE_RUN_MATERIALIZATION_ERROR_CODES.modelUnavailable,
         ]),
-        modelId: z.string().optional(),
-        errorMessage: z.string().optional(),
-    }).strict(),
+        modelId: z.optional(z.string()),
+        errorMessage: z.optional(z.string()),
+    }),
 ]);
 export type ConnectedServiceRunRejectedStartResult = z.infer<typeof ConnectedServiceRunRejectedStartResultSchema>;
 export type ConnectedServiceRunRejectedStartHandler = (
@@ -169,11 +188,12 @@ export type ConnectedServiceRunMaterializationHandlerResult =
 
 export type ConnectedServiceRunMaterializationHandler = (
     input: ConnectedServiceRunMaterializeRequest,
+    signal?: AbortSignal,
 ) => Promise<ConnectedServiceRunMaterializationHandlerResult>;
 
 export type ConnectedServiceRunReleaseHandler = (
     input: ConnectedServiceRunReleaseRequest,
-) => Promise<Readonly<{ ok: true; released: boolean }>>;
+) => Promise<z.infer<typeof ConnectedServiceRunReleaseResultSchema>>;
 
 export type ConnectedServiceRunGenerationCurrentHandler = (
     input: ConnectedServiceRunGenerationCurrentRequest,

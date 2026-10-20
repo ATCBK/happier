@@ -50,14 +50,6 @@ function resolveOptionalMaxBytes(value: unknown): number | null {
     return Math.floor(value);
 }
 
-function resolveFileReadTimeoutMs(): number {
-    const configured = config.filesPreviewReadTimeoutMs;
-    if (typeof configured === 'number' && Number.isFinite(configured) && configured > 0) {
-        return Math.floor(configured);
-    }
-    return 15_000;
-}
-
 function bytesToHex(bytes: Uint8Array): string {
     return Array.from(bytes)
         .map((value) => value.toString(16).padStart(2, '0'))
@@ -70,33 +62,6 @@ async function computeTextContentHash(content: string): Promise<string | null> {
         return bytesToHex(await digest('SHA-256', bytes));
     } catch {
         return null;
-    }
-}
-
-async function withFileReadTimeout<T>(
-    promise: Promise<T>,
-    timeoutMs: number,
-    onTimeout: () => T,
-): Promise<T> {
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    const timeoutPromise = new Promise<T>((resolve) => {
-        timeoutId = setTimeout(() => {
-            timeoutId = null;
-            resolve(onTimeout());
-        }, timeoutMs);
-    });
-
-    try {
-        return await Promise.race([
-            promise.catch((error) => {
-                throw error;
-            }),
-            timeoutPromise,
-        ]);
-    } finally {
-        if (timeoutId != null) {
-            clearTimeout(timeoutId);
-        }
     }
 }
 
@@ -161,6 +126,7 @@ export async function refreshWorkspaceFileDetails(input: Readonly<{
                         serverId: input.scope.serverId,
                         rootPath: input.scope.rootPath,
                         request: { path: input.filePath },
+                        signal: input.signal,
                     });
                     if (input.signal?.aborted) throw new Error(t('files.fileReadFailed'));
                     // Retain the last good player and expose the ordinary retry error when its revision cannot be refreshed.
@@ -207,17 +173,11 @@ export async function refreshWorkspaceFileDetails(input: Readonly<{
                     };
                 }
 
-                const readResponse = await withFileReadTimeout(
-                    workspaceReadFile(input.scope, input.filePath, {
-                        maxBytes: maxPreviewBytes ?? 256 * 1024,
-                        signal: input.signal,
-                    }),
-                    resolveFileReadTimeoutMs(),
-                    () => ({
-                        success: false as const,
-                        error: t('files.fileReadFailed'),
-                    }),
-                );
+                const readResponse = await workspaceReadFile(input.scope, input.filePath, {
+                    maxBytes: maxPreviewBytes ?? 256 * 1024,
+                    knownSizeBytes: statSizeBytes,
+                    signal: input.signal,
+                });
                 if (!readResponse.success) {
                     failedReadError = readResponse.error || t('files.fileReadFailed');
                     error = failedReadError;

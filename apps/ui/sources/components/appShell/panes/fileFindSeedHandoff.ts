@@ -4,7 +4,8 @@ import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAcco
 import type { TranscriptJumpTarget } from '@/components/sessions/transcript/viewport/jump/transcriptJumpTargetTypes';
 import { makeExternalSessionHistoricalImportLocalId } from '@happier-dev/protocol/sessions/external/historicalImportIdentity';
 import type { WorkspaceChatFindSeedSchema } from '@happier-dev/protocol/actions/workspaceActionFamily';
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
+import { areServerProfileIdentifiersEquivalent, resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 
 /** A travelling query is launch input for one file, never a tab resource or URL parameter. */
 export type FileFindSeed = Readonly<{
@@ -33,8 +34,8 @@ export type ChatFindLaunchSeed = ChatFindSeed | z.infer<typeof WorkspaceChatFind
 export function resolveChatFindSeed(seed: ChatFindLaunchSeed): ChatFindSeed {
     return { query: seed.query, options: seed.options ?? { matchCase: false, regex: false },
         target: seed.target.kind === 'native-message' ? { kind: 'route-message-id',
-            routeMessageId: makeExternalSessionHistoricalImportLocalId({ agentId: seed.target.agentId,
-                remoteSessionId: seed.target.remoteSessionId, directItemId: seed.target.sourceItemId }) } : seed.target };
+            routeMessageId: `server:${makeExternalSessionHistoricalImportLocalId({ agentId: seed.target.agentId,
+                remoteSessionId: seed.target.remoteSessionId, directItemId: seed.target.sourceItemId })}` } : seed.target };
 }
 export type ChatFindSeedDestination = Readonly<{ sessionId: string; serverId: string; accountId: string }>;
 export type ChatFindSeedHostDestination = Omit<ChatFindSeedDestination, 'accountId'>;
@@ -63,7 +64,7 @@ export function createFileFindSeedHandoff() {
     });
     const findChatCurrent = (destination: ChatFindSeedHostDestination) => [...seeds.values()].find((record): record is SeedRecord & { kind: 'chat' } =>
         record.kind === 'chat' && record.destination.sessionId === destination.sessionId
-        && record.destination.serverId === destination.serverId && record.authority.isCurrent());
+        && areServerProfileIdentifiersEquivalent(record.destination.serverId, destination.serverId) && record.authority.isCurrent());
     const stage = (key: string, value: SeedPayload, authority: ServerAccountScopeLifetime): (() => void) => {
         const serverId = value.kind === 'file' ? value.destination.scope.serverId : value.destination.serverId;
         if (!authority || !authority.isCurrent() || authority.scope.accountId !== value.destination.accountId
@@ -105,8 +106,9 @@ export function createFileFindSeedHandoff() {
             return { seed: record.seed, authority: record.authority };
         },
         stageChat(destination: ChatFindSeedDestination, seed: ChatFindLaunchSeed, authority: ServerAccountScopeLifetime): () => void {
-            const key = JSON.stringify(['chat', destination.sessionId, destination.serverId, destination.accountId]);
-            return stage(key, { kind: 'chat', destination, seed: resolveChatFindSeed(seed) }, authority);
+            const addressed = { ...destination, serverId: resolveServerProfileScopeIdForIdentifier(destination.serverId) };
+            const key = JSON.stringify(['chat', addressed.sessionId, addressed.serverId, addressed.accountId]);
+            return stage(key, { kind: 'chat', destination: addressed, seed: resolveChatFindSeed(seed) }, authority);
         },
         peekChatCurrent(destination: ChatFindSeedHostDestination): ChatFindSeed | null {
             return findChatCurrent(destination)?.seed ?? null;

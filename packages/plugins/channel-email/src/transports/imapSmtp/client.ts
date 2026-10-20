@@ -1,7 +1,6 @@
 import type { ConnectionOptions } from 'node:tls';
-import { ImapFlow } from 'imapflow';
-import SMTPConnection from 'nodemailer/lib/smtp-connection/index.js';
-import XOAuth2 from 'nodemailer/lib/xoauth2/index.js';
+import type { ImapFlow } from 'imapflow';
+import type SMTPConnection from 'nodemailer/lib/smtp-connection/index.js';
 import type { ConversationDeliveryResultV1 } from '@happier-dev/channels-protocol/v1';
 import type { EmailTransportListSinceResultV1 } from '@happier-dev/email-transports-protocol/v1';
 
@@ -31,7 +30,9 @@ export function createImapSmtpTransport(account: ImapSmtpAccount, tls?: Connecti
   const tlsOptions = account.tlsCaPem ? { ...tls, ca: account.tlsCaPem } : tls;
   async function withImap<T>(work: (client: ImapFlow) => Promise<T>, signal?: AbortSignal): Promise<T> {
     signal?.throwIfAborted();
-    const client = new ImapFlow({ host: account.imapHost, port: account.imapPort,
+    const { ImapFlow: ImapClient } = await import('imapflow');
+    signal?.throwIfAborted();
+    const client = new ImapClient({ host: account.imapHost, port: account.imapPort,
       secure: true, auth: account.auth, tls: tlsOptions, logger: false, disableAutoIdle: true,
       socketTimeout: 0 }); // The containing poll's waitMs/signal owns IDLE lifetime.
     const abort = () => client.close();
@@ -44,8 +45,13 @@ export function createImapSmtpTransport(account: ImapSmtpAccount, tls?: Connecti
 
   async function withSmtp<T>(work: (client: SMTPConnection) => Promise<T>, signal?: AbortSignal): Promise<T> {
     signal?.throwIfAborted();
+    const [{ default: SmtpClient }, { default: XOAuth2 }] = await Promise.all([
+      import('nodemailer/lib/smtp-connection/index.js'),
+      import('nodemailer/lib/xoauth2/index.js'),
+    ]);
+    signal?.throwIfAborted();
     const secure = account.smtpSecurity ? account.smtpSecurity === 'tls' : account.smtpPort === 465;
-    const client = new SMTPConnection({ host: account.smtpHost, port: account.smtpPort, secure,
+    const client = new SmtpClient({ host: account.smtpHost, port: account.smtpPort, secure,
       requireTLS: !secure, tls: tlsOptions, logger: false, debug: false });
     let rejectOperation: (error: unknown) => void = () => {};
     const abort = () => { rejectOperation(signal?.reason ?? new Error('Email operation cancelled')); client.close(); };
@@ -135,6 +141,10 @@ export function createImapSmtpTransport(account: ImapSmtpAccount, tls?: Connecti
         const box = await client.mailboxOpen(account.inboxFolder, { readOnly: true });
         const uidValidity = box.uidValidity.toString();
         if (previous && uidValidity !== previous.uidValidity) return historyGap;
+        // UIDNEXT cannot move behind a saved UID within one UIDVALIDITY
+        // (RFC 3501 §2.3.1.1). A restored/replaced server may violate that
+        // contract; surface lost continuity rather than silently skipping mail.
+        if (previous && box.uidNext <= previous.lastUid) return historyGap;
         if (previous === null) return { kind: 'batch', refs: [],
           checkpointAfterBatch: { uidValidity, lastUid: box.uidNext - 1 } };
         const lastUid = previous.lastUid;

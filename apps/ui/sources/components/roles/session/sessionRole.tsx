@@ -32,7 +32,7 @@ import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/ser
 
 /** Inheritance alone does not make a same-owner worker's configuration read-only. */
 export function isSessionRoleSnapshotCopiedAcrossOwners(session: Session | null, lead: Session | null, accountId: string | null): boolean {
-    const inheritedFrom = readSessionRolesV1(session?.metadata)?.inheritedFrom;
+    const inheritedFrom = readSessionRolesV1(session ? readSessionOwnerMetadataView(session) : null)?.inheritedFrom;
     if (!session || !lead || inheritedFrom !== lead.id || !session.serverId || !lead.serverId
         || !areServerProfileIdentifiersEquivalent(session.serverId, lead.serverId)) return false;
     const owner = (row: Session) => row.owner ?? (isSessionAccessOwner(row.access, row.accessLevel) ? accountId : null);
@@ -218,7 +218,7 @@ export function SessionRolePopover(props: Readonly<{
             portal={{ web: true, native: true, matchAnchorWidth: false, anchorAlign: 'end' }}
         >
             {({ maxHeight, maxWidth }) => (
-                <FloatingOverlay maxHeight={maxHeight} scrollEnabled={false} surfaceChrome="theme">
+                <FloatingOverlay role="panel" maxHeight={maxHeight} scrollEnabled={false} surfaceChrome="theme">
                     {/* A fixed frame, so the rail's grid scrolls inside it and its footer stays at the foot.
                         The Popover's bounds include its own edge padding, so the frame is that much smaller;
                         at the full bounds the right column and "Manage roles" were clipped at the edge. */}

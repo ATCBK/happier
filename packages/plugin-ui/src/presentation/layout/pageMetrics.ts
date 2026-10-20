@@ -1,6 +1,25 @@
 import { HAPPIER_RADIUS_V1 } from '../../environment/radius.js';
 import type { HappierCollectionLayoutMode } from '../collection/collectionLayout.js';
 
+/** The gap between a row's title and its title-line meta (one owner with the gap the renderers draw). */
+export const HAPPIER_ROW_TITLE_META_GAP_PX = 12;
+
+/**
+ * The title gives way to its readable minimum before the whole meta moves beneath it.
+ * Shared by core Item and Collection; unmeasured input stays inline. Pure geometry
+ * lives here so host composition need not initialize native typography to use it.
+ */
+export function resolveHappierRowTitleMetaPlacement(input: Readonly<{
+  rowContentWidthPx: number;
+  titleNaturalWidthPx: number;
+  metaNaturalWidthPx: number;
+  titleMinWidthPx: number;
+}>): 'inline' | 'beneath' {
+  if (input.rowContentWidthPx <= 0) return 'inline';
+  const titleNeeds = Math.min(input.titleNaturalWidthPx, input.titleMinWidthPx);
+  return titleNeeds + HAPPIER_ROW_TITLE_META_GAP_PX + input.metaNaturalWidthPx <= input.rowContentWidthPx ? 'inline' : 'beneath';
+}
+
 /**
  * Geometry of the configuration-page anatomy, for Happier core and plugin pages.
  *
@@ -39,6 +58,11 @@ export const HAPPIER_PAGE_METRICS = Object.freeze({
   paneHeaderUnderNativeChromeHeightPx: 44,
   controlHeightPx: 32,
   /**
+   * A Collection toolbar's row: the inline find capsule (the search field that leads it) is its tallest control,
+   * and the host's loading identity for a toolbar page holds the same height so the title does not move.
+   */
+  collectionToolbarHeightPx: 36,
+  /**
    * From the column's edge to a sheet's edge. On every platform Happier's
    * grouped list container padding plus its card margin sum to this.
    */
@@ -58,6 +82,13 @@ export const HAPPIER_PAGE_METRICS = Object.freeze({
    * lines content up under the title (a document's chips and steps) reads the title's edge from it.
    */
   pageHeaderColumnGapPx: 14,
+  /**
+   * A page header's leading mark: a square slot with one stable footprint for the thing the page is
+   * about, and the glyph drawn inside it. Core's identity header and a plugin's own header both use it,
+   * so the title never moves when a loading page swaps one for the other.
+   */
+  pageHeaderMarkSlotPx: 44,
+  pageHeaderMarkGlyphPx: 28,
   sectionGapPx: 28,
   sectionHeaderGapPx: 10,
   /** Sheets are cards: the `xl` step of the one radius base. */
@@ -82,6 +113,12 @@ export const HAPPIER_PAGE_METRICS = Object.freeze({
   rowIconGlyphPx: 20,
   rowLeadingColumnPx: 20,
   rowLeadingGapPx: 12,
+  /**
+   * A row whose leading element is a picture of the thing itself (a window's or a screen's thumbnail,
+   * a file's preview) rather than a glyph: a landscape box, so the picture reads at a glance. Computer
+   * lab `.cu-prow .th` and the anchored switcher's rows.
+   */
+  rowLeadingMediaPx: Object.freeze({ width: 56, height: 36 }),
   /** A compact page row: one line in a long index-style list. */
   compactRowPaddingVerticalPx: 9,
   compactRowMinHeightPx: 40,
@@ -184,6 +221,11 @@ export function isHappierSectionActionStacked(input: Readonly<{
   actionLayout?: 'inline' | 'adaptive' | 'trailing';
   gapPx: number;
   hasDescription?: boolean;
+  /**
+   * A title-only heading's measured title width (capped at the room it was laid out in). A short title
+   * that fits beside the action keeps the action on its line even below the shared label column.
+   */
+  titleWidthPx?: number | null;
 }>): boolean {
   const { headerWidthPx, actionWidthPx } = input;
   // A trailing icon cluster needs no text column of its own: the title beside it shrinks instead.
@@ -193,7 +235,12 @@ export function isHappierSectionActionStacked(input: Readonly<{
   if (typeof actionWidthPx !== 'number' || !Number.isFinite(actionWidthPx) || actionWidthPx <= 0) {
     return isHappierPageRowNarrow(headerWidthPx);
   }
-  return headerWidthPx - actionWidthPx - input.gapPx < HAPPIER_PAGE_METRICS.sectionTextMinWidthPx;
+  const roomBesideActionPx = headerWidthPx - actionWidthPx - input.gapPx;
+  if (roomBesideActionPx >= HAPPIER_PAGE_METRICS.sectionTextMinWidthPx) return false;
+  // A title that already fills the room beside the action is wrapping there: it keeps the rule above.
+  const titleWidthPx = input.titleWidthPx;
+  return !(input.hasDescription !== true && typeof titleWidthPx === 'number' && titleWidthPx > 0
+    && titleWidthPx < roomBesideActionPx - 0.5);
 }
 
 /**

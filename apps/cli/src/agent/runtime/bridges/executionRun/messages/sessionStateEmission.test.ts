@@ -92,6 +92,41 @@ function createRunningRun(): ExecutionRunState {
 }
 
 describe('createExecutionRunControllerMessageHandler', () => {
+  it.each(['request_response', 'streaming'] as const)('commits an anonymous streamed message once while retaining repeated text in distinct messages (%s)', async ioMode => {
+    const ctrl = createController();
+    const rows = new Map<string, string>();
+    let rowOrdinal = 0;
+    if (ioMode === 'streaming') ctrl.streamWriter = createStreamedTranscriptWriter({
+      provider: 'claude', makeLocalId: () => `row-${++rowOrdinal}`,
+      session: { async enqueueAgentMessageCommitted(_provider, body, options) {
+        if (body.type === 'message') rows.set(options.localId, body.message);
+        return { persisted: true, delivered: false };
+      } },
+    });
+    const handler = createExecutionRunControllerMessageHandler({
+      ctrl, runId: 'run_1', sidechainId: 'sidechain_1', ioMode,
+      computeSidechainStreamText: text => text, sendAcp: async () => {}, parentProvider: 'claude',
+      runs: new Map([['run_1', createRunningRun()]]), backendSupportsResume: true,
+      writeActivityMarker: async () => {}, getNowMs: () => 123,
+    });
+    handler({ type: 'model-output', textDelta: 'First draft' });
+    handler({ type: 'model-output', messageId: 'first', fullText: 'Same answer.' });
+    expect(ctrl.buffer).toBe('Same answer.');
+    handler({ type: 'tool-call', toolName: 'Read', callId: 'read', args: {} });
+    handler({ type: 'model-output', textDelta: 'Same ' });
+    handler({ type: 'model-output', textDelta: 'answer.' });
+    handler({ type: 'model-output', messageId: 'second', fullText: 'Same answer.' });
+    expect(ctrl.buffer).toBe('Same answer.Same answer.');
+    await ctrl.streamWriter?.flushAll({ reason: 'turn-end' });
+    if (ioMode === 'streaming') expect([...rows.values()]).toEqual(['Same answer.', 'Same answer.']);
+    ctrl.turnEpoch += 1;
+    ctrl.buffer = '';
+    handler({ type: 'model-output', textDelta: 'Next draft' });
+    handler({ type: 'model-output', messageId: 'third', fullText: 'Next answer.' });
+    expect(ctrl.buffer).toBe('Next answer.');
+    ctrl.streamWriter?.discard();
+  });
+
   it('replaces a draft in its own streamed row and retains earlier message artifacts in the run buffer', async () => {
     const ctrl = createController();
     const rows = new Map<string, string>();
@@ -148,12 +183,19 @@ describe('createExecutionRunControllerMessageHandler', () => {
       session: {
         sessionId: 'parent-exact',
         async enqueueAgentMessageCommitted(provider, body, options) {
-          written.push({ provider, body, options });
+          written.push({ sessionId: this.sessionId, provider, body, options });
           return { persisted: true, delivered: false };
         },
       },
     });
     const options = { localId: 'native-fact', provenance: { kind: 'non_dependent' as const, source: 'external' as const } };
+    const reservation = projection.enqueueAgentMessageCommitted!('codex', {
+      type: 'output', data: { type: 'progress', marker: 'source_fact_consumed', reason: 'host_prompt_echo' },
+    }, { ...options, localId: 'native-echo-reservation' });
+    await Promise.resolve();
+    expect(written).toMatchObject([{ body: { type: 'output', sidechainId: 'sidechain-exact' } }]);
+    await expect(reservation).resolves.toEqual({ persisted: true, delivered: false });
+    written.length = 0;
     const publication = projection.enqueueAgentMessageCommitted!('codex', {
       type: 'message', message: 'Run fact', sidechainId: 'untrusted-sidechain',
     }, options);
@@ -161,10 +203,13 @@ describe('createExecutionRunControllerMessageHandler', () => {
     expect(written).toEqual([]);
     accept('accepted');
     await expect(publication).resolves.toEqual({ persisted: true, delivered: false });
-    expect(written).toMatchObject([{ body: { sidechainId: 'sidechain-exact' }, options: { localId: 'native-fact' } }]);
+    expect(written).toMatchObject([{ sessionId: 'parent-exact', body: { sidechainId: 'sidechain-exact' }, options: { localId: 'native-fact' } }]);
     current = false;
     await expect(projection.enqueueAgentMessageCommitted!('codex', { type: 'message', message: 'stale' }, options))
       .rejects.toMatchObject({ code: 'execution_run_transcript_custody_unavailable' });
+    await expect(projection.enqueueAgentMessageCommitted!('codex', {
+      type: 'output', data: { type: 'progress', marker: 'source_fact_consumed', reason: 'host_prompt_echo' },
+    }, options)).rejects.toMatchObject({ code: 'execution_run_transcript_custody_unavailable' });
     expect(written).toHaveLength(1);
   });
 

@@ -9,10 +9,11 @@ import { acquireAccountSessionOwnerMetadataFenceInTx } from "@/app/encryption/ac
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
 import { resolveEffectiveAccountEncryptionModeFromAccountRow } from "@/app/encryption/accountEncryptionMode";
 import { eventRouter } from "@/app/events/eventRouter";
-import { applyUserKvMutationsInTx } from "@/app/kv/kvMutate";
+import { acquireUserKvRowLockInTx, applyUserKvMutationsInTx, UserKvMutationConflictError } from "@/app/kv/kvMutate";
 import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
 import type { SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
 import { afterTx, inTx, type Tx } from "@/storage/inTx";
+import { db } from "@/storage/db";
 
 import {
     ACCOUNT_SESSION_DRAFT_KV_PREFIX,
@@ -271,17 +272,20 @@ export async function tombstoneSessionDraftForLifecycleInTx(
 
 /** Conversion and exact replay consume the same Account-owned draft census. */
 async function readAccountOwnedDraftRowsInTx(tx: Tx, accountId: string): Promise<SessionDraftKvRow[]> {
-    return await tx.userKVStore.findMany({
+    const rows = await tx.userKVStore.findMany({
         where: {
             accountId,
-            OR: [
-                { key: { startsWith: `${ACCOUNT_SESSION_DRAFT_KV_PREFIX}new-session/` } },
-                { key: { startsWith: `${ACCOUNT_SESSION_DRAFT_KV_PREFIX}project-open/` } },
-            ],
+            key: { startsWith: ACCOUNT_SESSION_DRAFT_KV_PREFIX },
             value: { not: null },
         },
         orderBy: { key: "asc" },
         select: SESSION_DRAFT_ROW_SELECT,
+    });
+    return rows.filter(row => {
+        const address = parseSessionDraftPhysicalKey(row.key);
+        // Unknown reserved rows are not evidence of Session ownership. Keep
+        // them in the census so conversion refuses rather than stranding data.
+        return address === null || isAccountOwnedDraftAddressV2(address);
     });
 }
 
@@ -294,7 +298,7 @@ function hasSuccessorDraftRows(rows: readonly SessionDraftKvRow[]): boolean {
 }
 
 /**
- * Rewrites Account-owned new-session and project-open drafts in the incumbent
+ * Rewrites every canonical Account-owned draft in the incumbent
  * atomic Account migration transaction. Session-bound drafts keep their owner.
  */
 export async function migrateNewSessionDraftsForAccountModeInTx(
@@ -436,6 +440,15 @@ export async function matchNewSessionDraftsAccountMigrationPostStateInTx(
     return { status: "matched", records };
 }
 
+/** Serializes consumers of an existing draft with its canonical KV mutations. */
+export async function acquireSessionDraftLockInTx(tx: Tx, params: Readonly<{
+    accountId: string;
+    address: SessionDraftAddressV2;
+}>): Promise<boolean> {
+    const key = sessionDraftPhysicalKey(params.address);
+    return key !== null && await acquireUserKvRowLockInTx(tx, { accountId: params.accountId, key });
+}
+
 export async function readSessionDraftInTx(tx: Tx, params: Readonly<{
     accountId: string;
     address: SessionDraftAddressV2;
@@ -462,7 +475,11 @@ export async function readSessionDraft(params: Readonly<{
     epoch?: SessionDraftAddressEpoch;
     authentication: SessionAccessAuthentication;
 }>): Promise<SessionDraftReadServiceResult> {
-    return await inTx((tx) => readSessionDraftInTx(tx, params), { isolationLevel: "Serializable" /* Draft access, storage mode and lifecycle tombstone admission must remain coherent. */, readOnly: true });
+    return await inTx((tx) => readSessionDraftInTx(tx, params), {
+        isolationLevel: "Serializable", // Session access and lifecycle admission must remain coherent.
+        readOnly: true,
+        transactionClass: "session-draft.read",
+    });
 }
 
 /**
@@ -551,7 +568,11 @@ export async function listSessionDrafts(params: Readonly<{
                 ? canonicalSessionDraftAddressV1(last)
                 : canonicalSessionDraftAddressV2(last);
         return { items, ...(nextAfter ? { nextAfter } : {}) };
-    }, { isolationLevel: "Serializable" /* Draft access, storage mode and lifecycle tombstone admission must remain coherent. */, readOnly: true });
+    }, {
+        isolationLevel: "Serializable", // Session access and lifecycle admission must remain coherent.
+        readOnly: true,
+        transactionClass: "session-draft.list",
+    });
 }
 
 export async function mutateSessionDraft(params: Readonly<{
@@ -562,14 +583,24 @@ export async function mutateSessionDraft(params: Readonly<{
     epoch?: SessionDraftAddressEpoch;
     authentication: SessionAccessAuthentication;
 }>): Promise<SessionDraftMutationServiceResult> {
-    return await inTx(async (tx) => {
+    const accountOwned = isAccountOwnedDraftAddressV2(params.address);
+    // This probe selects the transaction only. Ownership is admitted again
+    // behind the Account fence; shared access and runner authority retain SSI.
+    const sessionId = isAccountOwnedDraftAddressV2(params.address) ? null : params.address.sessionId;
+    const ownSession = sessionId !== null && !params.authentication.sessionRuntimePrincipal
+        && await db.session.findFirst({ where: { id: sessionId, accountId: params.accountId }, select: { id: true } }) !== null;
+    const accountLocal = accountOwned || ownSession;
+    return await inTx(async (tx): Promise<SessionDraftMutationServiceResult> => {
         if (params.epoch === "v1" && (!isSessionDraftAddressV1(params.address) || !isSessionDraftContentV1(params.content))) {
             return { status: "epochUnavailable" };
         }
-        if (isAccountOwnedDraftAddressV2(params.address)) {
+        if (accountLocal) {
             const account = await tx.account.findUnique({ where: { id: params.accountId }, select: { id: true } });
             if (!account) return { status: "sessionUnavailable" };
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId, "content");
+            if (ownSession && sessionId !== null && !await tx.session.findFirst({ where: { id: sessionId, accountId: params.accountId }, select: { id: true } })) {
+                return { status: "sessionUnavailable" };
+            }
         }
         const mode = await resolveAddressMode(tx, params.accountId, params.address, params.authentication);
         if (!mode) return { status: "sessionUnavailable" };
@@ -619,5 +650,17 @@ export async function mutateSessionDraft(params: Readonly<{
             record,
         });
         return { status: "updated", record };
-    }, { isolationLevel: "Serializable" /* Draft access, storage mode and lifecycle tombstone admission must remain coherent. */ });
+    }, {
+        // Own-Session admission uses the same Account-first lifecycle fence.
+        // Shared Session access and runner authority depend on other writers.
+        ...(accountLocal ? {} : { isolationLevel: "Serializable" as const }),
+        transactionClass: accountLocal ? "session-draft.account-mutate" : "session-draft.session-mutate",
+    }).catch(async (error: unknown): Promise<SessionDraftMutationServiceResult> => {
+        if (!(error instanceof UserKvMutationConflictError)) throw error;
+        // The failed batch must roll back before recovering its public conflict.
+        // Read through the draft owner so V1 cannot disclose a successor shape.
+        const current = await readSessionDraft(params);
+        if (current.status === "epochUnavailable") return current;
+        return { status: "conflict", current: current.status === "absent" ? { status: "absent" } : current.record };
+    });
 }

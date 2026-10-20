@@ -6,6 +6,11 @@ import { withToolTraceFile } from '@/testkit/logger/toolTraceFile';
 import { createSessionClientTranscriptApi } from './sessionClientTranscriptApi';
 import { API_TOKEN_FULL_GRANT_V1 } from '@happier-dev/protocol';
 import { createTurnAssistantTextSnapshotStore } from '../../turns/assistantTextSnapshotStore';
+import { AgentStateRequestStore } from '@/agent/permissions/agentStateRequestStore';
+import type { AgentState } from '@/api/types';
+import { captureSemanticSessionFollowRuleSourceEvidence } from '@/agent/runtime/session/follow/sessionFollowRuleSourceEvidence';
+import type { FollowEventV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+import type { SessionFollowRuleSourceEvidenceV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowRuleOccurrenceV1';
 
 function createTranscriptApi(params?: Readonly<{
     transformSessionInputBeforeCommit?: (payload: Record<string, unknown>) => Promise<Record<string, unknown>>;
@@ -21,6 +26,8 @@ function createTranscriptApi(params?: Readonly<{
     findPersistedSessionUserMessageAdmission?: Parameters<typeof createSessionClientTranscriptApi>[0]['findPersistedSessionUserMessageAdmission'];
     enqueueCommittedTranscriptMessage?: Parameters<typeof createSessionClientTranscriptApi>[0]['enqueueCommittedTranscriptMessage'];
     turnAssistantTextSnapshotStore?: Parameters<typeof createSessionClientTranscriptApi>[0]['turnAssistantTextSnapshotStore'];
+    updateAgentState?: Parameters<typeof createSessionClientTranscriptApi>[0]['updateAgentState'];
+    getAgentStateRequestStore?: () => AgentStateRequestStore | null;
 }>) {
     const enqueueCommittedTranscriptMessage = vi.fn(params?.enqueueCommittedTranscriptMessage
         ?? (async () => ({ persisted: true, delivered: false })));
@@ -49,7 +56,8 @@ function createTranscriptApi(params?: Readonly<{
         onPresence: params?.onPresence,
         getSessionConnectionSupervisor: () => null,
         getMetadataSnapshot: () => null,
-        updateAgentState: vi.fn(async () => undefined),
+        updateAgentState: params?.updateAgentState ?? vi.fn(async () => undefined),
+        getAgentStateRequestStore: params?.getAgentStateRequestStore,
         updateMetadata: vi.fn(async () => undefined),
         enqueueCommittedTranscriptMessage,
         turnAssistantTextSnapshotStore: params?.turnAssistantTextSnapshotStore,
@@ -82,6 +90,47 @@ function createTranscriptApi(params?: Readonly<{
 }
 
 describe('createSessionClientTranscriptApi hook dispatch', () => {
+    it.each(['absent', 'pending', 'completed', 'history', 'sidechain'] as const)('joins the canonical live permission publisher without replacing a %s original', async prior => {
+        let state: AgentState = { requests: {}, completedRequests: {} };
+        const notifications: Readonly<{ requestId: string; createdAt: number; turnId?: string; evidence: SessionFollowRuleSourceEvidenceV1 }>[] = [];
+        const session = {
+            sessionId: 'session-1',
+            getAgentStateSnapshot: () => state,
+            updateAgentState: async (updater: (current: AgentState) => AgentState) => { state = updater(state); },
+            updateAgentStateRequestSettlement: async (updater: (current: AgentState) => AgentState) => { state = updater(state); },
+            captureSessionFollowRuleEvidence: (event: FollowEventV1) => captureSemanticSessionFollowRuleSourceEvidence({
+                serverId: 'home', ownerAccountId: 'owner', origin: { kind: 'none' }, event,
+            }),
+            // The daemon notification is the transport boundary; publication/state logic stays real.
+            notifySessionFollowRuleRequestCommitted: async (original: (typeof notifications)[number]) => { notifications.push(original); },
+        };
+        const store = new AgentStateRequestStore({ session, logPrefix: '[ACP mirror]' });
+        if (prior === 'pending') await store.publishRequestAndWait({ requestId: 'permission', toolName: 'write',
+            toolInput: { original: true }, createdAt: 7, turnId: 'owning-turn', source: 'owner' });
+        if (prior === 'completed') state = { requests: {}, completedRequests: { permission: {
+            tool: 'write', arguments: {}, createdAt: 7, completedAt: 8, status: 'approved', turnId: 'owning-turn',
+        } } };
+        const before = JSON.parse(JSON.stringify(state)) as AgentState;
+        notifications.length = 0;
+        const { api } = createTranscriptApi({ updateAgentState: session.updateAgentState, getAgentStateRequestStore: () => store });
+        try {
+            await api.enqueueAgentMessageCommitted('codex', { type: 'permission-request', permissionId: 'permission',
+                toolName: 'write', description: 'Write permission', options: { mirror: true } }, {
+                localId: 'permission-frame', createdAt: 11, provenance: { kind: 'non_dependent', source: prior === 'history' || prior === 'sidechain' ? prior : 'external' },
+            });
+            if (prior === 'absent') {
+                await vi.waitFor(() => expect(notifications).toHaveLength(1));
+                expect(state.requests?.permission).toMatchObject({ createdAt: 11, tool: 'Write', arguments: { mirror: true },
+                    happierFollowRuleEvidenceV1: { event: { kind: 'needs_you', type: 'approval' } } });
+                expect(notifications[0]).toMatchObject({ requestId: 'permission', createdAt: 11,
+                    evidence: { event: { kind: 'needs_you', type: 'approval' } } });
+            } else {
+                expect(state).toEqual(before);
+                expect(notifications).toEqual([]);
+            }
+        } finally { store.dispose(); }
+    });
+
     it('retains the acknowledged assistant sequence for turn completion before a socket echo', async () => {
         const store = createTurnAssistantTextSnapshotStore();
         store.beginTurn({ turnToken: 'turn-1', startSeqExclusive: 3, startedAtMs: 100 });
@@ -103,7 +152,7 @@ describe('createSessionClientTranscriptApi hook dispatch', () => {
 
     it('keeps verified per-input authorization through pre-persistence admission', async () => {
         const authorization = { v: 1 as const, token: 'verified-home-proof', binding: {
-            serverIdentityId: 'home', accountId: 'account', principalId: 'account',
+            serverIdentityId: 'home', accountId: 'account', custodianAccountId: 'account', installationId: 'installation', principalId: 'account',
             credentialId: '11111111-1111-4111-8111-111111111111', machineId: 'machine',
             actionId: 'session.message.send', requestId: 'rpc-request', requestEnvelopeDigest: 'A'.repeat(43),
             target: { kind: 'session' as const, sessionId: 'session-1' }, grant: API_TOKEN_FULL_GRANT_V1,
@@ -190,22 +239,12 @@ describe('createSessionClientTranscriptApi hook dispatch', () => {
         });
     });
 
-    it('admits historical user rows through durable transcript custody with explicit provenance', async () => {
+    it.each([undefined, 'child-sidechain'])('admits historical user rows through durable transcript custody (sidechain %s)', async sidechainId => {
         const { api, enqueueCommittedTranscriptMessage } = createTranscriptApi();
 
-        const result = await (api as unknown as {
-            enqueueUserTextMessageCommitted: (
-                text: string,
-                opts: {
-                    localId: string;
-                    meta?: Record<string, unknown>;
-                    createdAt?: number;
-                    updatedAt?: number;
-                    provenance: { kind: 'non_dependent'; source: 'history' };
-                },
-            ) => Promise<{ persisted: boolean; delivered: boolean }>;
-        }).enqueueUserTextMessageCommitted('historical prompt', {
+        const result = await api.enqueueUserTextMessageCommitted('historical prompt', {
             localId: 'history-user-1',
+            ...(sidechainId ? { sidechainId } : {}),
             meta: { importedFrom: 'acp-history' },
             createdAt: 123,
             updatedAt: 123,
@@ -215,7 +254,7 @@ describe('createSessionClientTranscriptApi hook dispatch', () => {
         expect(result).toEqual({ persisted: true, delivered: false });
         expect(enqueueCommittedTranscriptMessage).toHaveBeenCalledWith(expect.objectContaining({
             localId: 'history-user-1',
-            sidechainId: null,
+            sidechainId: sidechainId ?? null,
             messageRole: 'user',
             createdAt: 123,
             updatedAt: 123,

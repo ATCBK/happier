@@ -19,10 +19,10 @@ installCodeViewCommonModuleMocks({
         return createReactNativeNativeMock({ platformOS: 'android' });
     },
 });
+const { FileContentPanel } = await import('./FileContentPanel');
 
 describe('native file panel reading continuity', () => {
     it.each([true, false])('retains nonvirtualized commented file reading with wrapLines=%s', async (wrapLines) => {
-        const { FileContentPanel } = await import('./FileContentPanel');
         let scrollY = 55;
         const props = {
             theme: { colors: { text: { secondary: '#999' } } },
@@ -51,13 +51,14 @@ describe('native file panel reading continuity', () => {
             },
         });
         expect(screen.findAllByType('FlatList')).toHaveLength(0);
-        const scroll = screen.findAllByType('ScrollView');
-        expect(scroll).toHaveLength(1);
+        const scroll = screen.findHostByTestId('code-scroll');
+        expect(scroll).not.toBeNull();
+        expect(scroll!.props.horizontal).not.toBe(true);
         await act(async () => {
-            scroll[0].props.onScroll({ nativeEvent: { contentOffset: { y: scrollY } } });
+            scroll!.props.onScroll({ nativeEvent: { contentOffset: { y: scrollY } } });
             for (const row of screen.tree.root.findAll((node) => typeof node.type === 'string' && String(node.type) === 'View' && typeof node.props.nativeID === 'string')) row.props.onLayout?.();
         });
-        await act(async () => screen.tree.update(<FileContentPanel {...props} fileContent={'inserted\na\nb\nreading\nd'} />));
+        await screen.update(<FileContentPanel {...props} fileContent={'inserted\na\nb\nreading\nd'} />);
         expect(scrollY).toBe(80);
     });
 });

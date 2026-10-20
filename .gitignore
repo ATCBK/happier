@@ -86,6 +86,7 @@ __pycache__/
 # Plugin UI operation and publication staging is target-local and removed on
 # completion; an interrupted build can leave the shared staging parent behind.
 **/.happier-plugin-ui-staging/
+**/.happier-plugin-ui-build-*/
 /.happier-first-party-runner-matrix-*/
 /apps/cli/dist.probe.manual/
 /apps/ui/dist-dperf/
@@ -208,7 +209,20 @@ _.env.pipeline.production.local
 # dependencies into whatever root it builds, and `examples/**` must stay free of
 # them so cross-package source tests resolve the workspace SDK.
 /packages/plugin-sdk/.example-builds/
+# Authoring CLI scaffold copies of the skill are local QA preparation output.
+/packages/plugin-sdk/fixtures/qa-plugin-authoring/created/*/.agents/skills/happier-plugin-authoring/
+/packages/plugin-sdk/fixtures/qa-plugin-authoring/qa-capabilities/.agents/skills/happier-plugin-authoring/
+# This fixture regenerates its cold manifest before development builds and packing.
+/packages/tests/fixtures/plugin-platform/composer-external-dogfood/.happier-plugin/plugin.json
 /packages/protocol/src/**/*.d.ts.map
+# Native source-entry packages consume their authored TypeScript directly.
+/packages/audio-stream-native/src/*.d.ts
+/packages/sherpa-native/src/*.d.ts
+/packages/ssh-native/src/*.d.ts
+# One-off protocol compiler probes are not project configuration.
+/packages/protocol/tsconfig.w23reminders.tmp.json
+/packages/protocol/tsconfig.wilAttest.tmp.json
+/scripts/invite-ui-discovery.tmp.sh
 /packages/protocol/.released-account-scoped-reader-*/
 /apps/ui/scripts/icons/codemod*.mjs
 /apps/ui/scripts/icons/fix*.mjs
@@ -219,6 +233,42 @@ _.env.pipeline.production.local
 
 # Local research/evidence dumps
 /triage-plan-research/
+/evidence/
+/scratch/
+/scratchpad/
+/.cache/
+/qa-shots/
+/logs/
+/isolate-*-v8.log
+/apps/stack/isolate-*-v8.log
+
+# Browser QA exports, finite compiler probes and hook-source backups
+/apps/ui/output/playwright/
+/apps/ui/tsconfig.*.tmp.json
+/apps/cli/tsconfig.*.tmp.json
+/apps/ui/sources/hooks/server/*.orig
+
+# Mis-rooted browser captures and one-off local probes
+/--full
+/n
+/.codex-vm-patch-probe
+/.lane02_landings.tmp.mjs
+/.tmp-cli-provider-typecheck.json
+/failure-prepare-*.json
+/failure-status-*.json
+/00-home.png
+/844-live-next-landing-never-opened-tool-route-.png
+/940-live-next-*.png
+/ctx1.png
+/inbox.png
+/ov-a.png
+/p1.png
+/p2.png
+/p2-00-now.png
+/page-1440-light.png
+/q1.png
+/ui2-s0.png
+/w-light-1440.png
 
 # Local QA screenshots
 /apps/ui/onboard1.png

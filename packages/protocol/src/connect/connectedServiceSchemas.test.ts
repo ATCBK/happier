@@ -32,6 +32,7 @@ import {
     ConnectedServiceCredentialRevisionV1Schema,
     readConnectedServiceCredentialRevisionBoundaryV1,
     readBuiltInLegacyConnectedServiceIdForQualifiedService,
+    isConnectedServiceQuotaRecoveryCreditAvailable,
     ConnectedServiceQuotaRecoveryCreditsV1Schema,
     ConnectedServiceQuotaSnapshotV1Schema,
     ConnectedServiceUsageSourceV1Schema,
@@ -40,6 +41,23 @@ import {
 import { SessionConnectedServiceAuthSwitchRpcParamsSchema } from './sessionConnectedServiceAuthSwitch.js';
 
 describe('connectedServiceSchemas', () => {
+    it('keeps available credits without expiry usable and excludes expired or unavailable credits', () => {
+        const nowMs = 1_000;
+        const inventory = ConnectedServiceQuotaRecoveryCreditsV1Schema.parse({
+            availableCount: 3,
+            credits: [
+                { kind: 'unknown', status: 'available' },
+                { kind: 'unknown', status: 'available', expiresAtMs: null },
+                { kind: 'unknown', status: 'available', expiresAtMs: nowMs + 1 },
+                { kind: 'unknown', status: 'available', expiresAtMs: nowMs },
+                { kind: 'unknown', status: 'available', expiresAtMs: nowMs - 1 },
+                { kind: 'unknown', status: 'unavailable', expiresAtMs: nowMs + 1 },
+            ],
+        });
+        expect(inventory.credits.map((credit) => isConnectedServiceQuotaRecoveryCreditAvailable(credit, nowMs)))
+            .toEqual([true, true, true, false, false, false]);
+    });
+
     it('preserves both JSON Schema dialects, defaults and fluent credential-health derivatives', () => {
         const reference = z.strictObject({
             v: z.literal(1),
@@ -207,6 +225,23 @@ describe('connectedServiceSchemas', () => {
         expect(rec.serviceId).toBe('bitbucket');
         expect(rec.token.providerEmail).toBe('dev@example.com');
         expect('oauth' in rec).toBe(false);
+    });
+
+    it.each(['oauth', 'token'] as const)('preserves omitted raw metadata in %s credential records', (kind) => {
+        const payload = kind === 'oauth'
+            ? { accessToken: 'at', refreshToken: 'rt', idToken: null, scope: null, tokenType: null, providerAccountId: null, providerEmail: null }
+            : { token: 'setup-token', providerAccountId: null, providerEmail: null };
+        const record = {
+            v: 1, serviceId: 'github', profileId: 'default', kind,
+            createdAt: 1, updatedAt: 1, expiresAt: null,
+            oauth: kind === 'oauth' ? payload : null,
+            token: kind === 'token' ? payload : null,
+        };
+        expect(ConnectedServiceCredentialRecordV1Schema.parse(record)).toEqual(record);
+        for (const raw of [null, { providerMetadata: 'retained' }]) {
+            const withRaw = { ...record, [kind]: { ...payload, raw } };
+            expect(ConnectedServiceCredentialRecordV1Schema.parse(withRaw)).toEqual(withRaw);
+        }
     });
 
     it('parses sealed credential payloads', () => {

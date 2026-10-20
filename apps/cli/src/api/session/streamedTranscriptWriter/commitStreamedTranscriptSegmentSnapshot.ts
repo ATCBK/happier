@@ -4,6 +4,7 @@ import { serializeAxiosErrorForLog } from '../../client/serializeAxiosErrorForLo
 import type { ACPProvider } from '../sessionMessageTypes';
 import type { StreamedTranscriptWriterSession } from './types';
 import type { StreamedTranscriptSegmentRuntime, StreamedTranscriptSegmentState } from './segmentRuntime';
+import type { CommittedTranscriptAdmission } from '../transcriptPort';
 import {
   buildStreamedTranscriptSegmentSnapshotBody,
   buildStreamedTranscriptSegmentSnapshotMeta,
@@ -17,6 +18,8 @@ export function commitStreamedTranscriptSegmentSnapshot(params: {
   interruptedReason?: string;
   failureRetryDelayMs?: number;
   onStreamingCommitFailure?: () => void;
+  admission?: CommittedTranscriptAdmission;
+  runtimeTurnId?: string;
 }) {
   const { provider, session, segment, state, interruptedReason } = params;
 
@@ -33,15 +36,19 @@ export function commitStreamedTranscriptSegmentSnapshot(params: {
   const commitTextLen = commitText.length;
   const durableLocalId = segment.segmentLocalId;
   const body = buildStreamedTranscriptSegmentSnapshotBody(segment);
-  const meta = buildStreamedTranscriptSegmentSnapshotMeta({ segment, state, interruptedReason, nowMs });
+  const meta = {
+    ...buildStreamedTranscriptSegmentSnapshotMeta({ segment, state, interruptedReason, nowMs }),
+    ...(params.runtimeTurnId ? { runtimeTurnId: params.runtimeTurnId } : {}),
+  };
 
-  const markDurablyPersisted = () => {
+  const markDurablyPersisted = (delivered: boolean) => {
     segment.didWriteDurable = true;
     segment.lastDurableText = commitText;
     segment.lastCheckpointAtMs = Date.now();
     segment.lastCheckpointTextLen = commitTextLen;
     segment.lastCommittedTextVersion = commitVersion;
     segment.lastCommittedState = state;
+    segment.lastCommittedDelivered = delivered;
     segment.appendOnlySinceLastDurableSnapshot = true;
     segment.durableRetryNotBeforeMs = 0;
     const recovered = segment.durableCommitFailure;
@@ -65,13 +72,14 @@ export function commitStreamedTranscriptSegmentSnapshot(params: {
         .enqueueAgentMessageCommitted(provider, body, {
           localId: durableLocalId,
           meta,
+          ...(params.admission ? { admission: params.admission } : {}),
           provenance: {
             kind: 'non_dependent',
             source: segment.sidechainId ? 'sidechain' : 'external',
           },
         })
         .then((result) => {
-          if (result.persisted) markDurablyPersisted();
+          if (result.persisted && (!params.admission?.requireDelivery || result.delivered)) markDurablyPersisted(result.delivered);
         });
     } else {
       throw new Error('enqueueAgentMessageCommitted unavailable');
@@ -126,6 +134,8 @@ export function commitStreamedTranscriptSegmentSnapshot(params: {
           interruptedReason: pendingCommit.interruptedReason,
           failureRetryDelayMs: params.failureRetryDelayMs,
           onStreamingCommitFailure: params.onStreamingCommitFailure,
+          admission: params.admission,
+          runtimeTurnId: params.runtimeTurnId,
         });
         return;
       }

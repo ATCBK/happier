@@ -1,12 +1,12 @@
 import { AgentModelOptionOverrideRuleReadSchema } from '@happier-dev/protocol/models/descriptor';
 import { readSessionModesMetadata, type SessionOwnerModeCatalogV2 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { optional } from 'zod/mini';
 
 const SessionModelOptionChoiceSchema = z.object({
     value: z.union([z.string(), z.number(), z.boolean(), z.null()]),
-    name: z.string().trim().min(1),
-    description: z.string().trim().min(1).optional(),
+    name: z.string().check(z.trim(), z.minLength(1)),
+    description: z.optional(z.string().check(z.trim(), z.minLength(1))),
 });
 
 /**
@@ -24,59 +24,59 @@ const SessionModelOptionChoiceSchema = z.object({
 export const SessionOptionOverrideRuleSchema = AgentModelOptionOverrideRuleReadSchema;
 
 const SessionModelOptionSchema = z.object({
-    id: z.string().trim().min(1),
-    name: z.string().trim().min(1),
-    description: z.string().trim().min(1).optional(),
-    type: z.string().trim().min(1),
+    id: z.string().check(z.trim(), z.minLength(1)),
+    name: z.string().check(z.trim(), z.minLength(1)),
+    description: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    type: z.string().check(z.trim(), z.minLength(1)),
     currentValue: z.union([z.string(), z.number(), z.boolean(), z.null()]),
-    options: z.array(SessionModelOptionChoiceSchema).default([]),
+    options: z._default(z.array(SessionModelOptionChoiceSchema), []),
     overridesWhenOn: optional(SessionOptionOverrideRuleSchema),
 });
 
 const SessionModelSchema = z.object({
-    id: z.string().trim().min(1),
-    name: z.string().trim().min(1),
-    description: z.string().trim().min(1).optional(),
-    extendedContextModelId: z.string().trim().min(1).optional(),
-    modelOptions: z.array(SessionModelOptionSchema).default([]),
+    id: z.string().check(z.trim(), z.minLength(1)),
+    name: z.string().check(z.trim(), z.minLength(1)),
+    description: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    extendedContextModelId: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    modelOptions: z._default(z.array(SessionModelOptionSchema), []),
 });
 
 const SessionModelsStateSchema = z.object({
     v: z.literal(1),
-    agentId: z.string().trim().min(1),
+    agentId: z.string().check(z.trim(), z.minLength(1)),
     updatedAt: z.number(),
-    currentModelId: z.string().trim().min(1),
-    availableModels: z.array(SessionModelSchema).default([]),
+    currentModelId: z.string().check(z.trim(), z.minLength(1)),
+    availableModels: z._default(z.array(SessionModelSchema), []),
 });
 
 const SessionConfigOptionSelectOptionSchema = z.object({
     value: z.union([z.string(), z.number(), z.boolean(), z.null()]),
-    name: z.string().trim().min(1),
-    description: z.string().trim().min(1).optional(),
+    name: z.string().check(z.trim(), z.minLength(1)),
+    description: z.optional(z.string().check(z.trim(), z.minLength(1))),
 });
 
 const SessionConfigOptionSelectGroupSchema = z.object({
-    id: z.string().min(1),
-    name: z.string().trim().min(1),
+    id: z.string().check(z.minLength(1)),
+    name: z.string().check(z.trim(), z.minLength(1)),
     options: z.array(SessionConfigOptionSelectOptionSchema),
 });
 
 const SessionConfigOptionSchema = z.object({
-    id: z.string().min(1),
-    name: z.string().trim().min(1),
-    description: z.string().trim().min(1).optional(),
-    type: z.string().trim().min(1),
+    id: z.string().check(z.minLength(1)),
+    name: z.string().check(z.trim(), z.minLength(1)),
+    description: z.optional(z.string().check(z.trim(), z.minLength(1))),
+    type: z.string().check(z.trim(), z.minLength(1)),
     currentValue: z.union([z.string(), z.number(), z.boolean(), z.null()]),
-    options: z.array(SessionConfigOptionSelectOptionSchema).optional(),
-    groups: z.array(SessionConfigOptionSelectGroupSchema).optional(),
+    options: z.optional(z.array(SessionConfigOptionSelectOptionSchema)),
+    groups: z.optional(z.array(SessionConfigOptionSelectGroupSchema)),
     overridesWhenOn: optional(SessionOptionOverrideRuleSchema),
 });
 
 const SessionConfigOptionsStateSchema = z.object({
     v: z.literal(1),
-    agentId: z.string().trim().min(1),
+    agentId: z.string().check(z.trim(), z.minLength(1)),
     updatedAt: z.number(),
-    configOptions: z.array(SessionConfigOptionSchema).default([]),
+    configOptions: z._default(z.array(SessionConfigOptionSchema), []),
 });
 
 const SessionConfigOptionOverridesSchema = z.object({
@@ -94,7 +94,7 @@ const SessionConfigOptionOverridesSchema = z.object({
 const SessionModeOverrideSchema = z.object({
     v: z.literal(1),
     updatedAt: z.number(),
-    modeId: z.string().trim().min(1),
+    modeId: z.string().check(z.trim(), z.minLength(1)),
 });
 
 export type SessionModesState = SessionOwnerModeCatalogV2;

@@ -1133,4 +1133,32 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
   );
 };
 
+// A source Expo owns its inventory for its entire serving lifetime. Reuse
+// Metro's change feed and the startup producer for managed and standalone dev.
+const enhanceMiddleware = config.server.enhanceMiddleware;
+config.server.enhanceMiddleware = (middleware, metroServer) => {
+  const enhanced = enhanceMiddleware ? enhanceMiddleware(middleware, metroServer) : middleware;
+  if (privatePluginUiInventory) {
+    const refresh = import(require('node:url').pathToFileURL(path.join(__dirname, 'scripts/ensureWorkspacePackagesBuilt.mjs')).href)
+      .then(({ watchUiSourcePluginInventory }) => watchUiSourcePluginInventory({ metroServer, metroConfig: config, uiPackageDir: __dirname }));
+    void refresh.catch(error => console.error('[plugin-ui] source inventory watcher failed:', error));
+    const end = metroServer.end.bind(metroServer);
+    metroServer.end = async () => {
+      try { await (await refresh).close(); } finally { await end(); }
+    };
+    return (req, res, next) => {
+      const url = new URL(req.url ?? '/', 'http://localhost');
+      const isArtifactPath = value => artifactOnlyAssetExts.some(ext => value.endsWith(`.${ext}`));
+      // Expo serves artifact assets through this query route. Ordinary images
+      // do not consume the plugin inventory and must not re-read its byte graph.
+      const assetPath = url.searchParams.get('unstable_path')?.split('?')[0] ?? '';
+      const inventoryRequest = isArtifactPath(url.pathname) || url.pathname.endsWith('.assets')
+        || (/^\/assets(?:\/|$)/.test(url.pathname) && isArtifactPath(assetPath));
+      if (!inventoryRequest) return enhanced(req, res, next);
+      void refresh.then(owner => owner.ready()).then(() => enhanced(req, res, next), next);
+    };
+  }
+  return enhanced;
+};
+
 module.exports = config;

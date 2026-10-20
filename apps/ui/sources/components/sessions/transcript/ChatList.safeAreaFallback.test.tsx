@@ -3,7 +3,6 @@ import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createSessionFixture, createTestSessionTranscriptSource, renderWithSessionTranscriptSource, standardCleanup } from '@/dev/testkit';
-import { installTranscriptCommonModuleMocks, resetTranscriptCommonModuleMockState } from './transcriptTestHelpers';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 
@@ -32,13 +31,7 @@ function unwrapStyle(style: unknown): Record<string, unknown> | null {
     return typeof style === 'object' ? (style as Record<string, unknown>) : null;
 }
 
-function renderReactElementCandidate(candidate: unknown): React.ReactNode {
-    if (typeof candidate === 'function') return React.createElement(candidate as React.ComponentType);
-    return React.isValidElement(candidate) ? candidate : null;
-}
-
-installTranscriptCommonModuleMocks({
-    reactNative: async () => {
+vi.mock('react-native', async () => {
         const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
         return createReactNativeWebMock({
             Platform: {
@@ -48,34 +41,19 @@ installTranscriptCommonModuleMocks({
             View: (props: any) => React.createElement('View', props, props.children),
             ActivityIndicator: () => React.createElement('ActivityIndicator'),
         });
-    },
 });
+vi.mock('react-native-unistyles', async () =>
+    (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@/text', async () =>
+    (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
+vi.mock('@/modal', async () =>
+    (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 
-vi.mock('@legendapp/list/react-native', () => ({
-    LegendList: React.forwardRef((props: any, ref: any) => {
-        const instance = {
-            getState: () => ({
-                contentLength: 0,
-                isAtEnd: true,
-                isNearEnd: true,
-                isWithinMaintainScrollAtEndThreshold: true,
-                positionAtIndex: () => 0,
-                scroll: 0,
-                scrollLength: 0,
-                sizeAtIndex: () => 120,
-            }),
-            scrollToEnd: () => Promise.resolve(),
-            scrollToIndex: () => Promise.resolve(),
-            scrollToOffset: () => Promise.resolve(),
-        };
-        if (typeof ref === 'function') ref(instance);
-        else if (ref && typeof ref === 'object') ref.current = instance;
-        // Render the native recycler's supplied slots normally: they may own hooks.
-        return React.createElement('LegendList', props,
-            renderReactElementCandidate(props.ListHeaderComponent),
-            renderReactElementCandidate(props.ListFooterComponent));
-    }),
-}));
+vi.mock('@legendapp/list/react-native', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@legendapp/list/react-native')>();
+    const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
+    return createCapturingLegendListMock({ original, renderItems: false }).module;
+});
 
 vi.mock('react-native-safe-area-context', () => ({
     useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
@@ -92,7 +70,6 @@ describe('ChatList safe area', () => {
 
     afterEach(() => {
         standardCleanup();
-        resetTranscriptCommonModuleMockState();
     });
 
     it('uses a compact transcript gutter instead of chrome-safe area inside the list header', async () => {
@@ -103,11 +80,11 @@ describe('ChatList safe area', () => {
             <ChatList session={session} sessionSurfaceKey={JSON.stringify(['test-server', 'session-1'])} />,
             createTestSessionTranscriptSource({ sessionId: session.id, serverId: 'test-server' }),
         );
-        const list = screen.findByType('LegendList');
-        const spacer = list.findAll(node => typeof node.type === 'string'
-            && typeof unwrapStyle(node.props.style)?.height === 'number')[0];
-        capturedHeaderSpacerHeight = typeof unwrapStyle(spacer?.props.style)?.height === 'number'
-            ? unwrapStyle(spacer?.props.style)!.height as number : null;
+        const spacer = screen.findHostByTestId('transcript-top-gutter');
+        const height = unwrapStyle(spacer?.props.style)?.height;
+        capturedHeaderSpacerHeight = typeof height === 'number' ? height
+            : height && typeof height === 'object' && '__getValue' in height && typeof height.__getValue === 'function'
+                ? height.__getValue() : null;
         expect(capturedHeaderSpacerHeight).toBe(12);
     });
 });

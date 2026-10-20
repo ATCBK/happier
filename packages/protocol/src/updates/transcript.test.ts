@@ -13,6 +13,19 @@ describe('machine presence reconnect evidence', () => {
 });
 
 describe('updates transcript vNext payloads', () => {
+  it('validates the derived Follow delivery projection on message revisions', () => {
+    const body = { t: 'message-updated', sid: 'destination', message: {
+      id: 'batch', seq: 2, localId: 'session-follow-wake:batch',
+      content: { t: 'encrypted', c: 'cipher' },
+      createdAt: 100, updatedAt: 101,
+      followDeliveryProjection: { status: 'woke', reason: null },
+    } };
+    expect(UpdateBodySchema.parse(body)).toMatchObject(body);
+    expect(UpdateBodySchema.safeParse({ ...body, message: {
+      ...body.message, followDeliveryProjection: { status: 'woke', reason: 'private_source_id' },
+    } }).success).toBe(false);
+  });
+
   it('parses message-updated payload', () => {
     const parsed = UpdateBodySchema.safeParse({
       t: 'message-updated',
@@ -509,7 +522,7 @@ describe('updates transcript authenticated Account actor projection', () => {
       expect(parsed.message.accountActor).toEqual({
         v: 1,
         accountId: 'acc_alice',
-        profile: { firstName: 'Alice', lastName: null, username: null, avatarUrl: null },
+        profile: { name: 'Alice', firstName: 'Alice', lastName: null, username: null, avatarUrl: null },
       });
     }
   });

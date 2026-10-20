@@ -27,6 +27,7 @@ import {
     resolveSourceControlPublishRepositoryRemediation,
     type SourceControlPublishRemediationAction,
 } from './resolveSourceControlPublishRepositoryRemediation';
+import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 
 type PublishTargetsSuccess = Extract<ScmHostingRepositoryDescribePublishTargetsResponse, { success: true }>;
 
@@ -199,6 +200,7 @@ export function SourceControlPublishRepositorySection(props: Readonly<{
                     remoteUrlKind,
                     pushCurrentBranch,
                 });
+                if (isScmActionNotRun(response)) return;
                 if (!response.success) {
                     setErrorCode(response.errorCode ?? null);
                     setPublishFailure(response);

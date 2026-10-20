@@ -21,6 +21,8 @@ import { resetAcpCatalogEngineForTests } from '@/sync/engine/settings/acpCatalog
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { BUNDLED_AGENT_CONTRIBUTION_IDENTITIES } from '@happier-dev/agents/agent-ids';
 import { resolveBackendTargetKeyV2 } from '@/agents/backendCatalog/backendTargetKeyV2';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { NewSessionEngineOptionDetail } from '@/components/sessions/new/components/NewSessionEngineOptionDetail';
 
 // Native portal/window measurement is the system boundary; the picker and catalog stay real.
 vi.mock('@/components/ui/popover', async (importOriginal) => {
@@ -205,19 +207,48 @@ describe('role engine exact Home qualification', () => {
                 onSelectionChange: (next: { modelId: string; sessionModeId: null; configOverrides: Readonly<Record<string, string>> }) => void;
             }>;
         }>;
-        const detail = options.find(option => option.label === 'Focused Review')!.renderDetailContent({ onRequestClose: () => {} });
+        const detailScreen = await renderScreen(options.find(option => option.label === 'Focused Review')!.renderDetailContent({ onRequestClose: () => {} }));
+        const detail = detailScreen.tree.root.findByType(NewSessionEngineOptionDetail);
 
         // The role's stored effort is the effort the picker shows as chosen.
         expect(detail.props.selectedConfigOverrides).toEqual({ reasoning_effort: 'high' });
+        const select = detail.props.onSelectionChange;
+        if (!select) throw new Error('Missing engine selection callback');
 
-        detail.props.onSelectionChange({ modelId: 'stored-model', sessionModeId: null, configOverrides: { reasoning_effort: 'low' } });
+        select({ modelId: 'stored-model', modelSelection: null, modelLabel: null, sessionModeId: 'default', configOverrides: { reasoning_effort: 'low' } });
         // Written in the catalog's canonical key, the same Agent the stored role named.
         const agentTargetKey = resolveRoleEngineTargetKey(engine.agentTargetKey);
         expect(onChange).toHaveBeenLastCalledWith({ agentTargetKey, modelId: 'stored-model', effort: 'low' });
 
         // A model the effort does not apply to clears it instead of keeping a stale one.
-        detail.props.onSelectionChange({ modelId: 'other-model', sessionModeId: null, configOverrides: {} });
+        select({ modelId: 'other-model', modelSelection: null, modelLabel: null, sessionModeId: 'default', configOverrides: {} });
         expect(onChange).toHaveBeenLastCalledWith({ agentTargetKey, modelId: 'other-model' });
+    });
+
+    it('keeps the invoking workflow machine and directory on the shared engine detail', async () => {
+        const screen = await renderScreen(<RoleEngineField engine={engine} label="engine" onChange={() => {}}
+            machineId="workflow-machine" directory="/workflow/repo" testID="engine-field" />);
+        await screen.pressByTestIdAsync('engine-field');
+        const options = screen.findAll(node => Array.isArray(node.props?.options)
+            && node.props.options.some((option: { label: string }) => option.label === 'Focused Review'))[0]!.props.options;
+        const detailScreen = await renderScreen(options.find((option: { label: string }) => option.label === 'Focused Review')
+            .renderDetailContent({ onRequestClose() {} }));
+        const detail = detailScreen.tree.root.findByType(NewSessionEngineOptionDetail);
+        expect(detail.props).toMatchObject({ selectedMachineId: 'workflow-machine', cwd: '/workflow/repo' });
+    });
+
+    it('uses the incumbent recent Machine and directory preferences for neutral Account role editing', async () => {
+        const machine = createMachineFixture({ id: 'recent-machine', activeAt: Date.now() });
+        storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { 'focused-home': [machine] } });
+        storage.getState().applyAuthoringMemory({ recentMachinePaths: [{ machineId: machine.id, path: '/recent/repo' }] });
+        const screen = await renderScreen(<RoleEngineField engine={engine} label="engine" onChange={() => {}} testID="engine-field" />);
+        await screen.pressByTestIdAsync('engine-field');
+        const options = screen.findAll(node => Array.isArray(node.props?.options)
+            && node.props.options.some((option: { label: string }) => option.label === 'Focused Review'))[0]!.props.options;
+        const detailScreen = await renderScreen(options.find((option: { label: string }) => option.label === 'Focused Review')
+            .renderDetailContent({ onRequestClose() {} }));
+        const detail = detailScreen.tree.root.findByType(NewSessionEngineOptionDetail);
+        expect(detail.props).toMatchObject({ selectedMachineId: machine.id, cwd: '/recent/repo' });
     });
 
     it('keeps a role no layer can resolve in the rail as unavailable instead of dropping it', async () => {
@@ -229,11 +260,12 @@ describe('role engine exact Home qualification', () => {
     it('does not offer a role that was turned off, and says when a role names an engine this Account has not enabled', async () => {
         const base = { instructions: 'Review this work', runsAs: { kind: 'session' }, workspaceWrites: 'allow', secondOpinion: 'off' } as const;
         const hook = await renderHook(() => useRoleRailItems([
-            { roleId: 'workflow:off', name: 'Turned off', ...base, enabled: false },
-            { roleId: 'workflow:elsewhere', name: 'Elsewhere', ...base, enabled: true,
+            { roleId: 'workflow:elsewhere', name: 'Elsewhere', ...base,
                 engine: { agentTargetKey: 'backend:not-enabled:configured:not-enabled' } },
-            { roleId: 'workflow:here', name: 'Here', ...base, enabled: true, engine },
-        ], 'focused-home'));
+            { roleId: 'workflow:here', name: 'Here', ...base, engine },
+        ], 'focused-home', { overrides: {}, notes: '', sessionRoles: {
+            'session:off': { roleId: 'session:off', name: 'Turned off', ...base, enabled: false },
+        } }));
         await act(async () => { publishAppliedActiveServerRuntimeAvailability(true); });
 
         const items = hook.getCurrent();

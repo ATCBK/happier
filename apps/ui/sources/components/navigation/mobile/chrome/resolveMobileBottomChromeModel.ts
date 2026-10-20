@@ -10,6 +10,9 @@ export function resolveMobileBottomChromeModel(input: Readonly<{
     projectLastMobileSurfaceByWorkspaceRefId: Record<string, string> | null | undefined;
     sessionTerminalTabAvailable: boolean;
     explicitMobileSurfaceHint?: string | null;
+    /** Kind of the session `details` target in the route (`details=` search param). */
+    sessionDetailsKind?: string | null;
+    registeredSessionCockpit?: Omit<Extract<MobileBottomChromeModel, { kind: 'sessionCockpit' }>, 'kind'> | null;
 }>): MobileBottomChromeModel {
     if (input.isAuthenticated !== true) {
         return { kind: 'hidden' };
@@ -21,6 +24,10 @@ export function resolveMobileBottomChromeModel(input: Readonly<{
     }
 
     if (input.mobileWorkspaceExperience === 'cockpit') {
+        if (isImmersiveSessionDetailsRoute(pathname, input.sessionDetailsKind)) {
+            // The pushed SCM reading (Walkthrough/Files) owns its own bottom bar and a Back to the chat.
+            return { kind: 'hidden' };
+        }
         if (!isSessionHistoryRoutePathname(pathname)) {
             const sessionRoute = resolveSessionCockpitRouteFromPathname(
                 pathname,
@@ -50,9 +57,18 @@ export function resolveMobileBottomChromeModel(input: Readonly<{
                 surface: projectRoute.surface,
             };
         }
+        if (input.registeredSessionCockpit) {
+            return { kind: 'sessionCockpit', ...input.registeredSessionCockpit };
+        }
     }
 
     return { kind: 'hidden' };
+}
+
+function isImmersiveSessionDetailsRoute(pathname: string, detailsKind: string | null | undefined): boolean {
+    if (detailsKind !== 'scmReview') return false;
+    const pathWithoutQuery = pathname.split(/[?#]/, 1)[0]?.replace(/\/+$/, '') ?? '';
+    return /^\/session\/[^/]+\/details$/.test(pathWithoutQuery);
 }
 
 function isSettingsRoutePathname(pathname: string): boolean {

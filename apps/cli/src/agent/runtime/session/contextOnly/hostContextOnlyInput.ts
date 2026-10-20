@@ -37,6 +37,8 @@ export type HostContextOnlyInputPort = Readonly<{
 
 export type HostPreparedContext = SessionFollowPreparedContext & Readonly<{
   workerUpdates?: readonly WorkerUpdateV1[];
+  /** Admit each represented worker card to durable transcript custody before provider effect. */
+  commitWorkerUpdateEvents?: () => Promise<void>;
   /** Final allowance fit for the optional wake already taken by this turn. */
   contextOnlyWorkerUpdate?: WorkerUpdateV1 | null;
   /** A retained wake that cannot fit keeps its custody until an input/context edge. */

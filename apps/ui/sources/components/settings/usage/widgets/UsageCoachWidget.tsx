@@ -38,14 +38,16 @@ import {
   UsageBodyInsufficient,
   UsageBodyReading,
   UsageCoverageLine,
+  UsageShowAllRows,
+  leadingUsageRows,
   SETTLED_COACH_STRIP_BODY_PX,
   usagePeriodPhrase,
   useSettledBodyHeightFloor,
-  useUsageAnalyticsView,
   useUsagePluginTheme,
   type UsageBodyProps,
 } from './usageBodyKit';
-import { formatUsageDuration } from './usageHowYouWorkPresentation';
+import { formatUsageObservedAt } from '@/sync/domains/usage/usageCalendarPresentation';
+import { formatUsageDuration, formatUsageLookbackPeriod } from './usageHowYouWorkPresentation';
 import {
   createUsageCoachController,
   type UsageCoachAppliedEntry,
@@ -94,6 +96,9 @@ const EMPTY_SNAPSHOT: UsageCoachSnapshot = {
   retired: true,
 };
 
+/** The finding's own line names its leading measurements; every measurement stays listed under Why. */
+const COACH_LINE_MEASUREMENTS = 3;
+
 function formatMeasurement(
   measurement: UsageCoachFinding['measurements'][number],
 ): string {
@@ -106,7 +111,10 @@ function formatMeasurement(
           ? formatTokenCount(measurement.value)
           : measurement.unit === 'milliseconds'
             ? formatUsageDuration(measurement.value)
-            : new Intl.NumberFormat().format(measurement.value);
+            : measurement.metric === 'cache_hit_ratio'
+              // A ratio reads as the share it is ("0% of input from cache"), never a bare "0".
+              ? `${Math.round(measurement.value * 100)}%`
+              : new Intl.NumberFormat().format(measurement.value);
   return `${value} ${t(`usage.board.coach.metric_${measurement.metric}`)}`;
 }
 
@@ -122,13 +130,16 @@ function UsageCoachFindingTrend(props: Readonly<{ finding: UsageCoachFinding; te
   if (!sample) return null;
   const last = sample.points[sample.points.length - 1]!;
   // The headline measurement is the finding's own figure; this line is the series' latest sample, which may differ.
-  const caption = t('usage.board.coach.latestSample', { value: formatMeasurement({ ...sample, value: last.value }) });
+  // Dated, so a latest reading of 0 beside a headline of 56.3k reads as a later moment, not a contradiction.
+  const caption = t('usage.board.coach.latestSample', {
+    value: `${formatMeasurement({ ...sample, value: last.value })} · ${formatUsageObservedAt(last.observedAtMs)}`,
+  });
   return (
     <View style={styles.trend} testID={props.testID}>
       <StackedSeriesChart theme={chartTheme} variant="line" size="inline" viewportHeight={24} label={caption}
         series={[{ id: sample.metric, label: caption, color: theme.colors.text.secondary,
           points: sample.points.map(point => ({ id: point.evidenceId, x: point.observedAtMs, y: point.value })) }]} />
-      <Text style={[styles.quiet, { fontSize: metrics.subtitle.fontSize, lineHeight: metrics.subtitle.lineHeight }]} numberOfLines={2}>{caption}</Text>
+      <Text style={[styles.quiet, { fontSize: metrics.subtitle.fontSize, lineHeight: metrics.subtitle.lineHeight }]}>{caption}</Text>
     </View>
   );
 }
@@ -198,6 +209,7 @@ function useUsageCoachController(
     scopeKey: JSON.stringify([viewer?.serverId ?? null, viewer?.accountId ?? null]),
     serverId: viewer?.serverId ?? '',
     onExecuted: () => settled.current(),
+    openOnRequest: true,
   });
   const requestApproval = React.useRef(approvals.requestApproval);
   requestApproval.current = approvals.requestApproval;
@@ -235,7 +247,6 @@ function useUsageCoachController(
 export function UsageCoachWidget(props: UsageBodyProps) {
   const { theme } = useUnistyles();
   const presentation = useWidgetPresentation();
-  const view = useUsageAnalyticsView(props.slice, props.query);
   const coach = props.slice.coach;
   const { refresh } = props.model;
   const { controller, snapshot } = useUsageCoachController(refresh);
@@ -248,9 +259,11 @@ export function UsageCoachWidget(props: UsageBodyProps) {
   // keeps the tallest height it has drawn, so a re-read never moves what sits below.
   const reading = readUsageCoachState(props.slice) === 'reading';
   const floor = useSettledBodyHeightFloor(!reading, `${glance}:${strip}`);
-  const bodyStyle = [styles.body, reading && glance
+  // The held room is a wrapper's min height and the body inside it is what gets measured, so the floor can follow
+  // the drawn height down once at the first settle instead of measuring itself.
+  const heldRoom = reading && glance
     ? { minHeight: strip ? SETTLED_COACH_STRIP_BODY_PX : SETTLED_COACH_LIST_BODY_PX }
-    : floor.minHeight !== undefined ? { minHeight: floor.minHeight } : null];
+    : floor.minHeight !== undefined ? { minHeight: floor.minHeight } : null;
   // Preferences are rare: a quiet disclosure after the findings, never a bar above them (lab d2coach).
   const configuration = <UsagePlanDisclosure title={t('usage.board.coach.configure')} testID={`${props.testID}.configure`}>
     <UsageCoachSettingsGroup serverId={props.serverId} testID={`${props.testID}.preferences`} />
@@ -266,18 +279,20 @@ export function UsageCoachWidget(props: UsageBodyProps) {
   );
   if (!coach)
     return (
-      <View style={bodyStyle} onLayout={floor.onLayout}>
-        <UsageBodyInsufficient
-          testID={`${props.testID}.unavailable`}
-          title={t('usage.board.coach.unavailableTitle')}
-        />
-        {configuration}
-        <UsageCoverageLine
-          slice={props.slice}
-          sources={['how_you_work', 'accounting']}
-          onRetry={refresh}
-          testID={`${props.testID}.coverage`}
-        />
+      <View style={heldRoom}>
+        <View style={styles.body} onLayout={floor.onLayout}>
+          <UsageBodyInsufficient
+            testID={`${props.testID}.unavailable`}
+            title={t('usage.board.coach.unavailableTitle')}
+          />
+          {configuration}
+          <UsageCoverageLine
+            slice={props.slice}
+            sources={['how_you_work', 'accounting']}
+            onRetry={refresh}
+            testID={`${props.testID}.coverage`}
+          />
+        </View>
       </View>
     );
   const { visible, suppressed, appliedOnly } = projectUsageCoachFindings(coach.findings, snapshot, nowMs);
@@ -297,7 +312,7 @@ export function UsageCoachWidget(props: UsageBodyProps) {
   const summary = [
     { key: 'findings', label: t('usage.board.coach.summaryFindings'), value: visible.length,
       caption: t('usage.board.coach.summaryOfChecks', { count: checked }) },
-    ...(view ? [{ key: 'sessions', label: t('usage.board.coach.summarySessions'), value: view.hero.sessions,
+    ...(props.slice.accounting ? [{ key: 'sessions', label: t('usage.board.coach.summarySessions'), value: coach.sessionCoverage?.admitted ?? '—',
       caption: usagePeriodPhrase(props.query) }] : []),
     { key: 'insufficient', label: t('usage.board.coach.summaryNeedEvidence'), value: insufficient.length,
       caption: clear.length ? t('usage.board.coach.summaryClearCaption', { count: clear.length }) : undefined },
@@ -322,81 +337,86 @@ export function UsageCoachWidget(props: UsageBodyProps) {
     />
   );
   return (
-    <View style={bodyStyle} onLayout={floor.onLayout} testID={`${props.testID}.coach`}>
-      {/* The facts band belongs to the Coach view; the Overview strip is the findings alone (lab wgusage-CD). */}
-      {glance ? null : <UsageCoachSummaryBand facts={summary} testID={`${props.testID}.summary`} />}
-      {visible.length === 0 && appliedOnly.length === 0 ? (
-        reading ? <UsageBodyReading testID={`${props.testID}.loading`} {...(strip ? { shape: { kind: 'strip' as const } } : {})} /> :
-        <SurfaceStateCard
-          testID={`${props.testID}.empty`}
-          kind="empty"
-          layout="inline"
-          size="line"
-          title={t('usage.board.coach.emptyTitle')}
-          // "Every check ran" is only true when none is waiting for evidence.
-          reason={insufficient.length ? t('usage.board.coach.insufficientCount', { count: insufficient.length }) : t('usage.board.coach.emptyReason')}
+    <View style={heldRoom}>
+      <View style={styles.body} onLayout={floor.onLayout} testID={`${props.testID}.coach`}>
+        {/* The facts band belongs to the Coach view; the Overview strip is the findings alone (lab wgusage-CD). */}
+        {glance ? null : <UsageCoachSummaryBand facts={summary} testID={`${props.testID}.summary`} />}
+        {visible.length === 0 && appliedOnly.length === 0 ? (
+          reading ? <UsageBodyReading testID={`${props.testID}.loading`} {...(strip ? { shape: { kind: 'strip' as const } } : {})} /> :
+          <SurfaceStateCard
+            testID={`${props.testID}.empty`}
+            kind="empty"
+            layout="inline"
+            size="line"
+            title={t('usage.board.coach.emptyTitle')}
+            // "Every check ran" is only true when none is waiting for evidence. The Coach view's facts band already
+            // counts the checks that need more evidence, so only the Overview strip (no band) says it here.
+            reason={insufficient.length
+              ? glance ? t('usage.board.coach.insufficientCount', { count: insufficient.length }) : undefined
+              : t('usage.board.coach.emptyReason')}
+          />
+        ) : null}
+        {/* No findings, no container: an empty one still takes the body's row gap, which grew the reading state past its settled height. */}
+        {shown.length > 0 || (!glance && appliedOnly.length > 0) ? <View style={strip ? styles.strip : styles.list}>
+          {strip ? shown.map((finding, index) => <React.Fragment key={finding.evidenceKey}>
+            {index > 0 ? <View style={styles.stripRule} /> : null}
+            {row(finding)}
+          </React.Fragment>) : shown.map(row)}
+          {glance ? null : appliedOnly.map((entry) => row(entry.finding))}
+        </View> : null}
+        {glance && visible.length > shown.length ? <Text style={styles.quiet}>
+          {t('usage.board.coach.moreFindings', { count: visible.length - shown.length })}</Text> : null}
+        {!glance && suppressed.length ? <UsagePlanDisclosure testID={`${props.testID}.hidden`}
+          title={t('usage.board.coach.hiddenFindings', { count: suppressed.length })}>
+          {suppressed.map(finding => <View key={finding.evidenceKey} style={styles.hiddenRow}>
+            <Icon name={DETECTOR_GLYPHS[finding.detectorId]} size={ICON_SIZE.sm} color={theme.colors.text.tertiary} />
+            <View style={styles.hiddenText}>
+              <Text style={styles.checkName} numberOfLines={2}>{t(`usage.board.coach.summary_${finding.summaryCode}`)}</Text>
+              <Text style={styles.quiet}>{finding.state.snoozedUntilMs !== null && finding.state.snoozedUntilMs > nowMs
+                ? t('usage.board.coach.hiddenSnoozed', { time: formatAsOfTime(finding.state.snoozedUntilMs) })
+                : t('usage.board.coach.hiddenDismissed')}</Text>
+            </View>
+            <RoundButton size="small" display="secondary" testID={`${props.testID}.hidden.${finding.detectorId}.restore`}
+              title={t('common.restore')} disabled={!controller || snapshot.retired || snapshot.pending.some(row => row.evidenceKey === finding.evidenceKey)}
+              action={async () => {
+                if (!controller) return;
+                if (finding.state.snoozedUntilMs !== null && finding.state.snoozedUntilMs > nowMs) {
+                  await controller.snooze(props.query, finding.evidenceKey, null);
+                } else {
+                  await controller.dismiss(props.query, finding.evidenceKey, false);
+                }
+              }} />
+            {snapshot.error?.evidenceKey === finding.evidenceKey ? <Text accessibilityRole="alert" style={styles.error}>
+              {t('usage.board.coach.actionFailed')}</Text> : null}
+            {snapshot.approval?.evidenceKey === finding.evidenceKey ? <Text style={styles.pendingNote}>
+              {t('usage.board.coach.approvalPending')}</Text> : null}
+          </View>)}
+        </UsagePlanDisclosure> : null}
+        {!glance && insufficient.length + clear.length > 0 ? (
+          <UsageCoachChecks
+            insufficient={insufficient}
+            clear={clear}
+            testID={`${props.testID}.checks`}
+          />
+        ) : null}
+        {!glance && coach.digestSuggestion ? (
+          <UsageCoachDigestSuggestionRow
+            key={coach.digestSuggestion.queryKey}
+            suggestion={coach.digestSuggestion}
+            controller={controller}
+            snapshot={snapshot}
+            serverId={props.serverId}
+            testID={`${props.testID}.digest`}
+          />
+        ) : null}
+        {glance ? null : configuration}
+        <UsageCoverageLine
+          slice={props.slice}
+          sources={['how_you_work', 'accounting']}
+          onRetry={refresh}
+          testID={`${props.testID}.coverage`}
         />
-      ) : null}
-      {/* No findings, no container: an empty one still takes the body's row gap, which grew the reading state past its settled height. */}
-      {shown.length > 0 || (!glance && appliedOnly.length > 0) ? <View style={strip ? styles.strip : styles.list}>
-        {strip ? shown.map((finding, index) => <React.Fragment key={finding.evidenceKey}>
-          {index > 0 ? <View style={styles.stripRule} /> : null}
-          {row(finding)}
-        </React.Fragment>) : shown.map(row)}
-        {glance ? null : appliedOnly.map((entry) => row(entry.finding))}
-      </View> : null}
-      {glance && visible.length > shown.length ? <Text style={styles.quiet}>
-        {t('usage.board.coach.moreFindings', { count: visible.length - shown.length })}</Text> : null}
-      {!glance && suppressed.length ? <UsagePlanDisclosure testID={`${props.testID}.hidden`}
-        title={t('usage.board.coach.hiddenFindings', { count: suppressed.length })}>
-        {suppressed.map(finding => <View key={finding.evidenceKey} style={styles.hiddenRow}>
-          <Icon name={DETECTOR_GLYPHS[finding.detectorId]} size={ICON_SIZE.sm} color={theme.colors.text.tertiary} />
-          <View style={styles.hiddenText}>
-            <Text style={styles.checkName} numberOfLines={2}>{t(`usage.board.coach.summary_${finding.summaryCode}`)}</Text>
-            <Text style={styles.quiet}>{finding.state.snoozedUntilMs !== null && finding.state.snoozedUntilMs > nowMs
-              ? t('usage.board.coach.hiddenSnoozed', { time: formatAsOfTime(finding.state.snoozedUntilMs) })
-              : t('usage.board.coach.hiddenDismissed')}</Text>
-          </View>
-          <RoundButton size="small" display="secondary" testID={`${props.testID}.hidden.${finding.detectorId}.restore`}
-            title={t('common.restore')} disabled={!controller || snapshot.retired || snapshot.pending.some(row => row.evidenceKey === finding.evidenceKey)}
-            action={async () => {
-              if (!controller) return;
-              if (finding.state.snoozedUntilMs !== null && finding.state.snoozedUntilMs > nowMs) {
-                await controller.snooze(props.query, finding.evidenceKey, null);
-              } else {
-                await controller.dismiss(props.query, finding.evidenceKey, false);
-              }
-            }} />
-          {snapshot.error?.evidenceKey === finding.evidenceKey ? <Text accessibilityRole="alert" style={styles.error}>
-            {t('usage.board.coach.actionFailed')}</Text> : null}
-          {snapshot.approval?.evidenceKey === finding.evidenceKey ? <Text style={styles.pendingNote}>
-            {t('usage.board.coach.approvalPending')}</Text> : null}
-        </View>)}
-      </UsagePlanDisclosure> : null}
-      {!glance && insufficient.length + clear.length > 0 ? (
-        <UsageCoachChecks
-          insufficient={insufficient}
-          clear={clear}
-          testID={`${props.testID}.checks`}
-        />
-      ) : null}
-      {!glance && coach.digestSuggestion ? (
-        <UsageCoachDigestSuggestionRow
-          key={coach.digestSuggestion.queryKey}
-          suggestion={coach.digestSuggestion}
-          controller={controller}
-          snapshot={snapshot}
-          serverId={props.serverId}
-          testID={`${props.testID}.digest`}
-        />
-      ) : null}
-      {glance ? null : configuration}
-      <UsageCoverageLine
-        slice={props.slice}
-        sources={['how_you_work', 'accounting']}
-        onRetry={refresh}
-        testID={`${props.testID}.coverage`}
-      />
+      </View>
     </View>
   );
 }
@@ -426,7 +446,7 @@ function UsageCoachDigestSuggestionRow(props: Readonly<{
       <View style={styles.digestText}>
         <Text style={[styles.checkName, subtitle]} accessibilityRole="header">{t('usage.board.coach.digestTitle')}</Text>
         <Text style={[styles.quiet, subtitle]}>{t('usage.board.coach.digestDescription', {
-          duration: formatUsageDuration(suggestion.lookbackMs),
+          duration: formatUsageLookbackPeriod(suggestion.lookbackMs),
         })}</Text>
       </View>
       {approval ? (
@@ -477,7 +497,7 @@ function UsageCoachDigestSuggestionRow(props: Readonly<{
   );
 }
 
-function UsageCoachSummaryBand(props: Readonly<{ facts: readonly Readonly<{ key: string; label: string; value: number; caption?: string }>[]; testID: string }>) {
+function UsageCoachSummaryBand(props: Readonly<{ facts: readonly Readonly<{ key: string; label: string; value: number | string; caption?: string }>[]; testID: string }>) {
   const chartTheme = useUsagePluginTheme();
   return (
     <View style={styles.band} testID={props.testID}>
@@ -508,6 +528,9 @@ const UsageCoachFindingRow = React.memo(function UsageCoachFindingRow(
   const presentation = useWidgetPresentation();
   const wide = props.layout === 'row' && (presentation?.geometry?.width ?? 0) >= 560;
   const { finding, applied, controller, snapshot } = props;
+  // A finding can rest on hundreds of observations: Why leads with a few and folds the rest behind Show all.
+  const [evidenceExpanded, setEvidenceExpanded] = React.useState(false);
+  const ledEvidence = leadingUsageRows(finding.evidence, evidenceExpanded);
   const pending = snapshot.pending.some(
     (row) => row.evidenceKey === finding.evidenceKey,
   );
@@ -522,16 +545,20 @@ const UsageCoachFindingRow = React.memo(function UsageCoachFindingRow(
     candidateCost: formatUsageCost(comparison.candidateCost, comparison.currency),
     provider: `${comparison.modelId}: ${formatModelResponseSource(comparison.modelResponseSource)}; ${comparison.candidateModelId}: ${formatModelResponseSource(comparison.candidateResponseSource)}`,
   }), t('usage.board.coach.modelN1Cache')].join(' ') : null;
+  // The finding's line is what was measured (lab d2coach-A: kind, headline, one line, value, action). How it
+  // was established (observation count, coverage, an older reading's time) is method, said under Why.
   const evidence = [
-    ...finding.measurements.map(formatMeasurement),
+    ...finding.measurements.slice(0, COACH_LINE_MEASUREMENTS).map(formatMeasurement),
+    ...(finding.currentness === 'stale' && finding.asOfMs !== null
+      ? [t('surfaceState.asOf', { time: formatAsOfTime(finding.asOfMs) })]
+      : []),
+  ].join(' · ');
+  const method = [
     t('usage.board.coach.evidenceLine', {
       count: finding.evidence.length,
       coverage: t(`usage.board.coach.coverage_${finding.coverage}`),
     }),
-    ...(finding.currentness === 'stale'
-      ? [t('usage.board.coach.staleEvidence')]
-      : []),
-    ...(finding.asOfMs !== null
+    ...(finding.currentness !== 'stale' && finding.asOfMs !== null
       ? [t('surfaceState.asOf', { time: formatAsOfTime(finding.asOfMs) })]
       : []),
   ].join(' · ');
@@ -620,11 +647,12 @@ const UsageCoachFindingRow = React.memo(function UsageCoachFindingRow(
           {title}
         </Text>
         {qualifiedModel ? <Text style={[styles.evidence, text('subtitle')]}>{qualifiedModel}</Text> : null}
-        <Text style={[styles.evidence, text('subtitle')]}>{evidence}</Text>
+        {evidence ? <Text style={[styles.evidence, text('subtitle')]} testID={`${props.testID}.meta`}>{evidence}</Text> : null}
         <UsagePlanDisclosure title={t('usage.board.coach.why')} testID={`${props.testID}.why`}>
         <View testID={`${props.testID}.evidence`} style={styles.why}>
           <Text style={[styles.whyHeading, text('subtitle')]}>{t('usage.board.coach.methodTitle')}</Text>
           <Text style={[styles.evidence, text('subtitle')]}>{t(`usage.board.coach.basis_${finding.basis.kind}`)}</Text>
+          <Text style={[styles.quiet, text('subtitle')]}>{method}</Text>
           {finding.basis.limitations.map((limitation, index) => <Text key={index} style={[styles.quiet, text('subtitle')]}>{limitation}</Text>)}
           {finding.basis.advice.map((advice, index) => <Text key={index} style={[styles.evidence, text('subtitle')]}>{advice}</Text>)}
           {estimate?.assumptions.map((assumption, index) => <Text key={index} style={[styles.quiet, text('subtitle')]}>{assumption}</Text>)}
@@ -634,12 +662,15 @@ const UsageCoachFindingRow = React.memo(function UsageCoachFindingRow(
               {formatMeasurement(measurement)}
             </Text>)}
           </View>
-          {finding.evidence.map(reference => <Text key={`${reference.kind}:${reference.id}`}
+          {ledEvidence.rows.map(reference => <Text key={`${reference.kind}:${reference.id}`}
             testID={`${props.testID}.evidence.${reference.id}`} selectable style={[styles.evidence, text('subtitle')]}>
             {`${t(`usage.board.coach.evidence_${reference.kind}`)} · ${formatWithCachedDateTimeFormatter(reference.observedAtMs, getPreferredLanguage(), {
               year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
             })}`}
           </Text>)}
+          <UsageShowAllRows label={t('usage.board.coach.observationsTitle')} testID={`${props.testID}.evidence.showAll`}
+            total={finding.evidence.length} hidden={ledEvidence.hidden} expanded={evidenceExpanded}
+            onToggle={() => setEvidenceExpanded((value) => !value)} />
           {finding.basis.citations.length ? <Text style={[styles.whyHeading, text('subtitle')]}>{t('usage.board.coach.citationsTitle')}</Text> : null}
           {finding.basis.citations.map(citation => <HappierPressable key={citation.url} accessibilityRole="link"
             accessibilityLabel={`${citation.url}, ${t(`usage.board.coach.citation_${citation.sourceKind}`)}, ${citation.asOf}`} onPress={() => { void openExternalUrl(citation.url); }}>

@@ -1,4 +1,5 @@
 import type { ACPProvider } from './sessionMessageTypes';
+import type { CommittedTranscriptAdmission } from './transcriptPort';
 import {
   createStreamedTranscriptWriter,
   type StreamedTranscriptFlushSummary,
@@ -38,6 +39,7 @@ export function createKeyedStreamedTranscriptBridge<TArgs extends KeyedStreamArg
     const writer = createStreamedTranscriptWriter({
       provider: params.provider,
       session: params.createSessionForStream(args),
+      ...(args.foregroundTurnId ? { runtimeTurnId: args.foregroundTurnId } : {}),
       ...(messageId ? { makeLocalId: () => messageId } : {}),
       initialCheckpointDelayMs: params.initialCheckpointDelayMs,
       checkpointIntervalMs: params.checkpointIntervalMs,
@@ -69,6 +71,27 @@ export function createKeyedStreamedTranscriptBridge<TArgs extends KeyedStreamArg
 
     enableDurableCommitsForStream(args: TArgs) {
       getOrCreateWriter(args).enableDurableCommits();
+    },
+
+    async finalizeUnnamedSegment(args: TArgs & Readonly<{
+      channel: 'assistant' | 'reasoning';
+      text: string;
+      sourceMessageId: string;
+      namedStreamKey: string;
+      admission?: CommittedTranscriptAdmission;
+    }>) {
+      if (writerByStreamKey.has(args.namedStreamKey)) return null;
+      const entry = writerByStreamKey.get(args.streamKey);
+      if (!entry || entry.args.messageId) return null;
+      const summary = await entry.writer.finalizeSegment({
+        kind: args.channel === 'assistant' ? 'assistant' : 'thinking',
+        sidechainId: args.sidechainId,
+        text: args.text,
+        sourceMessageId: args.sourceMessageId,
+        admission: args.admission,
+      });
+      if (!entry.writer.hasPendingSegments()) writerByStreamKey.delete(args.streamKey);
+      return summary;
     },
 
     discardStream(args: TArgs) {

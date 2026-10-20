@@ -10,7 +10,8 @@ import {
   deriveBoxPublicKeyFromSeed,
 } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { z } from 'zod';
+import { ExternalSessionLinkEnsureResponseSchema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
+import { z } from 'zod/mini';
 
 import { tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
 import { bindApiSessionSocketMock, createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
@@ -18,9 +19,9 @@ import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
 import type { Credentials } from '@/persistence';
 import { getResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
-import type { PluginRuntimeRegistryLease } from '@/plugins/runtime/reload/controller';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
-import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
 
 const { mockIo, readCredentialsMock } = vi.hoisted(() => ({
   mockIo: vi.fn(),
@@ -51,33 +52,35 @@ describe('daemon.externalSessions.link.ensure (integration)', () => {
   let server: Server | null = null;
   let happyHomeDir = '';
   let claudeConfigDir = '';
-  let runtimeRegistryLease: PluginRuntimeRegistryLease | null = null;
+  let runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | null = null;
+  let loseCreationReceipt = false;
 
   const sessionsByTag = new Map<string, any>();
   const sessionsById = new Map<string, any>();
 
   beforeAll(async () => {
-    runtimeRegistryLease = await pluginReloadController.acquireRuntimeRegistry({
-      resolveRuntimeRegistry: async () =>
-        await resolveExecutablePluginRuntimeRegistry({
+    runtime = await createAdmittedPluginRuntimeFixture({
+      controller: pluginReloadController,
+      runtimeOptions: {
           contributes: getResolvedContributionRegistry(),
           pluginIds: [
             'happier.agent.claude',
             'happier.agent.codex',
           ],
-        }),
+      },
     });
   });
 
   afterAll(async () => {
-    await runtimeRegistryLease?.release();
-    runtimeRegistryLease = null;
+    await runtime?.dispose();
+    runtime = null;
     await pluginReloadController.shutdown({ timeoutMs: 5_000 });
   });
 
   beforeEach(async () => {
     sessionsByTag.clear();
     sessionsById.clear();
+    loseCreationReceipt = false;
     envScope = createEnvKeyScope(envKeys);
     happyHomeDir = await createTempDir('happier-externalSessions-linkEnsure-');
     claudeConfigDir = join(happyHomeDir, 'claude');
@@ -285,6 +288,11 @@ describe('daemon.externalSessions.link.ensure (integration)', () => {
         sessionsByTag.set(tag, session);
         sessionsById.set(session.id, session);
 
+        if (loseCreationReceipt) {
+          res.destroy();
+          return;
+        }
+
         res.statusCode = 200;
         res.setHeader('content-type', 'application/json');
         res.end(JSON.stringify({ session }));
@@ -356,6 +364,29 @@ describe('daemon.externalSessions.link.ensure (integration)', () => {
     reloadConfiguration();
   });
 
+  it('preserves an unknown link outcome when the Home commits creation but loses its receipt', async () => {
+    const { registerMachineExternalSessionsRpcHandlers } = await import('./rpcHandlers.externalSessions');
+    const rpcHandlerManager = new RpcHandlerManager({ scopePrefix: 'machine_1', encryptionMode: 'plain' });
+    const registration = registerMachineExternalSessionsRpcHandlers({ rpcHandlerManager });
+    loseCreationReceipt = true;
+    try {
+      const result = ExternalSessionLinkEnsureResponseSchema.parse(await rpcHandlerManager.handleRequest({
+        method: `machine_1:${RPC_METHODS.DAEMON_EXTERNAL_SESSION_LINK_ENSURE}`,
+        timeoutMs: null,
+        params: {
+          machineId: 'machine_1', agentId: 'claude', remoteSessionId: 'remote_123',
+          source: { kind: 'claudeConfig', configDir: claudeConfigDir, projectId: 'proj-a' },
+        },
+      }));
+      // Losing the response proves neither rollback nor failure to create. Keep
+      // the released error class while exposing the precise safe outcome token.
+      expect(sessionsByTag.size).toBe(1);
+      expect(result).toEqual({ ok: false, errorCode: 'internal_error', error: 'external_session_outcome_unknown' });
+    } finally {
+      registration.dispose();
+    }
+  });
+
   it('creates a linked direct session row and returns created=true on first call', async () => {
     const { registerMachineExternalSessionsRpcHandlers } = await import('./rpcHandlers.externalSessions');
 
@@ -391,18 +422,18 @@ describe('daemon.externalSessions.link.ensure (integration)', () => {
       accountEncryptionMode: 'e2ee',
       rawSession: createdSession,
     });
-    const parsedMeta = z.object({
-      tag: z.string().min(1),
+    const parsedMeta = z.looseObject({
+      tag: z.string().check(z.minLength(1)),
       path: z.string(),
-      summary: z.object({
+      summary: z.looseObject({
         text: z.string(),
-      }).passthrough(),
-      externalSessionV1: z.object({
-        agentId: z.string().min(1),
-        remoteSessionId: z.string().min(1),
-        machineId: z.string().min(1),
-      }).passthrough(),
-    }).passthrough().safeParse(meta);
+      }),
+      externalSessionV1: z.looseObject({
+        agentId: z.string().check(z.minLength(1)),
+        remoteSessionId: z.string().check(z.minLength(1)),
+        machineId: z.string().check(z.minLength(1)),
+      }),
+    }).safeParse(meta);
     if (!parsedMeta.success) {
       throw new Error('Expected direct session metadata payload');
     }
@@ -449,18 +480,18 @@ describe('daemon.externalSessions.link.ensure (integration)', () => {
       accountEncryptionMode: 'e2ee',
       rawSession: createdSession,
     });
-    const parsedMeta = z.object({
-      runtimeDescriptorV1: z.object({
+    const parsedMeta = z.looseObject({
+      runtimeDescriptorV1: z.looseObject({
         v: z.literal(1),
         agentId: z.literal('codex'),
-      }).passthrough(),
-      externalSessionV1: z.object({
+      }),
+      externalSessionV1: z.looseObject({
         agentId: z.literal('codex'),
-        linkData: z.object({
+        linkData: z.looseObject({
           codexBackendMode: z.literal('appServer'),
-        }).passthrough(),
-      }).passthrough(),
-    }).passthrough().safeParse(meta);
+        }),
+      }),
+    }).safeParse(meta);
     if (!parsedMeta.success) {
       throw new Error('Expected codex direct session metadata payload');
     }
@@ -552,12 +583,12 @@ describe('daemon.externalSessions.link.ensure (integration)', () => {
       accountEncryptionMode: 'e2ee',
       rawSession: updatedSession,
     });
-    const parsedMeta = z.object({
+    const parsedMeta = z.looseObject({
       path: z.string(),
-      summary: z.object({
+      summary: z.looseObject({
         text: z.string(),
-      }).passthrough(),
-    }).passthrough().safeParse(meta);
+      }),
+    }).safeParse(meta);
     if (!parsedMeta.success) {
       throw new Error('Expected updated direct session metadata payload');
     }
@@ -609,12 +640,12 @@ describe('daemon.externalSessions.link.ensure (integration)', () => {
       accountEncryptionMode: 'e2ee',
       rawSession: updatedSession,
     });
-    const parsedMeta = z.object({
+    const parsedMeta = z.looseObject({
       path: z.string(),
-      summary: z.object({
+      summary: z.looseObject({
         text: z.string(),
-      }).passthrough(),
-    }).passthrough().safeParse(meta);
+      }),
+    }).safeParse(meta);
     if (!parsedMeta.success) {
       throw new Error('Expected preserved direct session metadata payload');
     }
@@ -656,11 +687,11 @@ describe('daemon.externalSessions.link.ensure (integration)', () => {
       accountEncryptionMode: 'e2ee',
       rawSession: firstSession,
     });
-    const firstParsedMeta = z.object({
-      summary: z.object({
+    const firstParsedMeta = z.looseObject({
+      summary: z.looseObject({
         text: z.string(),
-      }).passthrough(),
-    }).passthrough().safeParse(firstMeta);
+      }),
+    }).safeParse(firstMeta);
     if (!firstParsedMeta.success) {
       throw new Error('Expected initial direct session metadata payload');
     }
@@ -684,11 +715,11 @@ describe('daemon.externalSessions.link.ensure (integration)', () => {
       accountEncryptionMode: 'e2ee',
       rawSession: updatedSession,
     });
-    const updatedParsedMeta = z.object({
-      summary: z.object({
+    const updatedParsedMeta = z.looseObject({
+      summary: z.looseObject({
         text: z.string(),
-      }).passthrough(),
-    }).passthrough().safeParse(updatedMeta);
+      }),
+    }).safeParse(updatedMeta);
     if (!updatedParsedMeta.success) {
       throw new Error('Expected refreshed direct session metadata payload');
     }

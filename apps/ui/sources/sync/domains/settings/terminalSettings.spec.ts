@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { applySettings, settingsDefaults, settingsParse } from './settings';
 import { buildMachineTerminalSettingsPatch, resolveTerminalHost, resolveTerminalSpawnOptions } from './terminalSettings';
@@ -7,7 +7,7 @@ import { mergePendingSettingsIntoRawBaseline } from '@/sync/engine/settings/writ
 
 // Exact nested reader from ui-web-v0.2.12/a357c65536ba89669422977d6f7daf9aa0d17e73.
 const ReleasedSessionTmuxMachineOverrideSchema = z.object({
-    useTmux: z.boolean(), sessionName: z.string(), isolated: z.boolean(), tmpDir: z.string().nullable(),
+    useTmux: z.boolean(), sessionName: z.string(), isolated: z.boolean(), tmpDir: z.nullable(z.string()),
 });
 
 describe('resolveTerminalSpawnOptions', () => {

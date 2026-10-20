@@ -226,6 +226,20 @@ describe('an armed route or model change on the send control (D15)', () => {
         expect(armed?.presentation.markAgentId).toBeNull();
     });
 
+    it('names a model change within the running source by the model, since the route does not change', () => {
+        const armed = resolveArmedSubmitPresentation({
+            armedContinuationTarget: null,
+            armedRouteContinuation: { modelLabel: 'GPT-6-Sol' },
+            otherActionHoldsSubmit: false,
+            hasIdentityMark: false,
+        });
+        expect(armed?.kind).toBe('route');
+        expect(armed?.presentation.accessibilityLabel)
+            .toBe(t('session.agentContinuation.sendLabel', { agent: 'GPT-6-Sol' }));
+        expect(armed?.presentation.label).toBe(armed?.presentation.accessibilityLabel);
+        expect(armed?.presentation.markAgentId).toBeNull();
+    });
+
     it('lets an armed Agent switch win, because it carries its own model', () => {
         const armed = resolveArmedSubmitPresentation({
             armedContinuationTarget: { agentId: 'codex', label: 'Codex' },

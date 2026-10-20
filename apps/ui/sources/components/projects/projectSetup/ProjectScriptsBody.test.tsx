@@ -54,7 +54,20 @@ vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', () => ({
     if (actionId === 'projects.inspect')
       return { ok: true, result: shared.inspectionPending ? await shared.inspectionPending : shared.inspection };
     if (shared.failures[actionId]) return shared.failures[actionId];
-    if (actionId === 'projects.execution.output.open') await options?.actionOperationOpenOutput?.(input);
+    if (actionId === 'projects.execution.output.open') {
+      const { executeActionOperationActionV1 } = await import('@happier-dev/protocol/actions/executor/actionOperationActions');
+      const { actionOperationStore } = await import('@/sync/domains/actionOperations/actionOperationStore');
+      const result = await executeActionOperationActionV1({ actionId, input,
+        // The Machine transport mirrors the fixture's real retained operation.
+        // Keep lookup/validation and the presentation callback contract real.
+        transport: async () => {
+          const found = [...actionOperationStore.getSnapshot().operationsByKey.values()]
+            .find(value => value.snapshot.operationId === input.operationId && value.snapshot.scope.machineId === input.machineId);
+          return found ? { kind: 'found', operation: found.snapshot } : { kind: 'not_found' };
+        }, openOutput: async address => { await options?.actionOperationOpenOutput?.(address); },
+      });
+      return { ok: true, result };
+    }
     return { ok: true, result: await (shared.responses[actionId] ?? {}) };
   },
 }));
@@ -96,7 +109,8 @@ vi.mock('@/text', async () => {
   const parameterized = createTextModuleMock();
   return createTextModuleMock({ translate: (key, params) =>
     // Memory summaries disclose the stored amount through the translation parameter.
-    key === 'projects.scripts.editor.needsAbout' ? parameterized.t(key, params) : key,
+    key === 'projects.scripts.editor.needsAbout' || key === 'projects.scripts.setup.lead'
+      ? parameterized.t(key, params) : key,
   });
 });
 
@@ -387,6 +401,20 @@ describe('ProjectScriptsBody setup affordance', () => {
     expect(screen.findByTestId('scripts.setup')).toBeTruthy();
   });
 
+  it('says an empty checkout once: the Scripts page hero, not a second empty card under it', async () => {
+    shared.inspection = {
+      definition: { basis: { kind: 'absent' }, document: null },
+      detection: { ...detection, entries: [] },
+      importCandidates: [],
+    };
+    const page = await render('page', 'scripts.noProjectFile');
+    expect(page.findByTestId('scripts.setup')).toBeTruthy();
+    expect(page.getTextContent()).not.toContain('projects.widgets.scriptsEmpty');
+    // A widget has no hero above it: the empty card is its one line.
+    const widget = await render('widget', 'scripts.empty');
+    expect(widget.getTextContent()).toContain('projects.widgets.scriptsEmpty');
+  });
+
   it('keeps setup quiet once a project file declares the scripts', async () => {
     shared.inspection = {
       definition: presentDefinition(declared),
@@ -519,6 +547,7 @@ describe('ProjectScriptsBody runs', () => {
       },
     };
     const historical = operation('succeeded', 1);
+    if (historical.domainRef?.kind !== 'projectCommand') throw new Error('Expected the Script fixture to retain its Project command');
     actionOperationStore.mergeSnapshots({
       serverId: workspace.serverId,
       snapshots: [
@@ -601,7 +630,7 @@ describe('ProjectScriptsBody runs', () => {
     );
   });
 
-  it('remembers a late setup review on the retained Script without starting a different preparation', async () => {
+  it('names the worker in a late retained Script setup review without starting a different preparation', async () => {
     shared.inspection = {
       definition: presentDefinition({
         ...declared,
@@ -612,6 +641,12 @@ describe('ProjectScriptsBody runs', () => {
     };
     const held: ActionOperationSnapshotV1 = {
       ...operation('accepted', 2),
+      scope: { accountId: 'account-1', machineId: 'worker-machine' },
+      domainRef: {
+        kind: 'projectCommand', purpose: 'script', serverId: workspace.serverId,
+        machineId: 'worker-machine', workspaceRefId: 'worker-checkout', cwd: '/worker/repo',
+        sourceWorkspace: workspace, script: { name: 'test', source: nativeRef('test') },
+      },
       setupReview: {
         kind: 'pendingApproval' as const,
         code: 'project_setup_consent_required',
@@ -638,6 +673,7 @@ describe('ProjectScriptsBody runs', () => {
     expect(
       screen.findByTestId('scripts.setup.review.effect:step:0'),
     ).toBeTruthy();
+    expect(textOf(screen, 'scripts.setup.review')).toContain('worker-machine');
     shared.operationRead
       .mockResolvedValueOnce({ kind: 'found', operation: held })
       .mockResolvedValueOnce({

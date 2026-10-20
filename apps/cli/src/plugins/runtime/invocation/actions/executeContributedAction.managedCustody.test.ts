@@ -15,9 +15,9 @@ import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
 import { activateContributionModule } from '@/plugins/runtime/lifecycle/activation/activateContributionModule';
 import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
-import type { ResolvedActionContribution } from '@/plugins/projection/registry/types';
+import { projectLoadedPluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
-import { createTargetActionInvocationRegistry } from '../targetActionRegistry';
+import { createTargetActionInvocationRegistry, type TargetActionInvocationRegistration } from '../targetActionRegistry';
 import { createTargetActionHostBindingResolver } from '@/plugins/runtime/hostAccess/resolve';
 import { createUnavailablePluginServicesFactory } from '../services/factory';
 
@@ -27,6 +27,23 @@ function executeContributedAction(request: Parameters<typeof dispatchContributed
 }
 
 describe('managed native-role custody at contributed dispatch', () => {
+    it('keeps a host read-only ceiling independent from input-sensitive confirmation defaults', async () => {
+        const f = fixture({ dangerous: true });
+        const registry = createResolvedContributionRegistry({ actions: f.runtimeRegistry.contributes.actions.map(action => ({
+            ...action, definition: { ...action.definition,
+                confirmationWhen: { op: 'not' as const, predicate: { op: 'eq' as const, path: 'kind', value: 'list' } },
+            },
+        })) });
+        const result = await dispatchContributedAction({ registry, actionId: `${pluginId}/ordinary`,
+            input: { kind: 'list' }, requiredDangerLevel: 'safe', context: { surface: 'agent' },
+        });
+        expect(result).toMatchObject({ matched: true, result: {
+            ok: false, errorCode: 'plugin_action_read_only_required', actionHandlerInvocation: 'notStarted',
+        } });
+        expect(f.effects()).toBe(0);
+        expect(f.activations()).toBe(0);
+    });
+
     it.each(['acquire', 'rebuild', 'reconcile'] as const)('retains a known managed %s identity after cancellation without changing ordinary Action cancellation', async role => {
         const allocationAbort = new AbortController();
         const f = fixture({ ...(role === 'reconcile' ? { reconciliation: true } : {}),
@@ -85,16 +102,18 @@ describe('managed native-role custody at contributed dispatch', () => {
         const authorPluginId = manifest.id;
         const occurrenceId = createPluginRuntimeOccurrenceId(authorPluginId);
         const activated = await activateContributionModule({ pluginId: authorPluginId, occurrenceId,
-            isOccurrenceCurrent: () => true, manifest, moduleNamespace: machineProvisionerAuthorFixture,
+            isOccurrenceCurrent: () => true, manifest, moduleNamespace: { activate: machineProvisionerAuthorFixture.activate },
         });
         onTestFinished(() => activated.dispose());
         expect(activated.status).toBe('active');
-        const registrations = activated.registrations.flatMap((registration) => {
+        const registrations = activated.registrations.flatMap((registration): TargetActionInvocationRegistration[] => {
             if (registration.family !== 'actions') return [];
             const declaration = manifest.contributes.actions.find((action) => action.id === registration.localId)!;
             return [{ pluginId: authorPluginId, pluginVersion: manifest.version, occurrenceId,
                 sourceCustody: createManagedPluginSourceCustody('public-author-fixture'), localId: registration.localId,
-                definition: declaration, handler: registration.value,
+                definition: declaration,
+                // Invoke the genuinely activated author callback at the module ABI boundary.
+                handler: (input, context) => Reflect.apply(registration.value, undefined, [input, context]),
             }];
         });
         const targetActionInvocations = createTargetActionInvocationRegistry({ actions: registrations,
@@ -104,19 +123,18 @@ describe('managed native-role custody at contributed dispatch', () => {
             }), resolveHostBinding: createTargetActionHostBindingResolver(), createServices: createUnavailablePluginServicesFactory(),
         });
         onTestFinished(() => targetActionInvocations.dispose());
+        const pluginRootPath = join(tmpdir(), 'public-author-fixture');
+        const sourceSpec = { kind: 'path', locator: pluginRootPath, trustPolicy: 'local_trusted', installPolicy: 'link' } as const;
+        const manifestPath = join(pluginRootPath, 'plugin.json');
         const contributes = createResolvedContributionRegistry({
+            ...projectLoadedPluginContributes({ loadResult: { loadedPlugins: [{
+                pluginId: authorPluginId, pluginRootPath, manifestPath, sourceSpec, manifest,
+                daemonEntryPath: null, devDaemonEntryPath: null,
+            }], diagnosticsByPluginId: {} }, provenance: 'external' }),
             occurrenceIdsByPluginId: { [authorPluginId]: occurrenceId },
             activationTargets: [{ pluginId: authorPluginId, manifest, provenance: 'external', source: { kind: 'path' },
-                manifestPath: join(tmpdir(), 'public-author-fixture', 'plugin.json'), daemonEntryPath: null,
-                sourceSpec: { kind: 'path', path: join(tmpdir(), 'public-author-fixture') },
+                manifestPath, daemonEntryPath: null, sourceSpec,
             }],
-            machineProvisioners: manifest.contributes.machineProvisioners.map((definition) => ({ pluginId: authorPluginId, identity: { pluginId: authorPluginId, localId: definition.id }, definition })),
-            actions: manifest.contributes.actions.map((action): ResolvedActionContribution => ({ pluginId: authorPluginId, provenance: 'external', source: { kind: 'path' },
-                definition: { id: action.id, title: action.id, description: null, kindVersion: 1, placements: [], slash: null, bindings: null, examples: null,
-                    surfaces: { plugin: true, cli: false, ui: false, voice: false, agent: false, mcp: false, rpc: false, api: false },
-                    inputHints: null, inputSchema: action.inputSchema, execution: { target: 'daemon' }, safety: 'safe', dangerLevel: action.dangerLevel,
-                },
-            })),
         });
         // Only module loading is represented by the already genuinely activated fixture.
         const runtimeRegistry = { contributes, targetActionInvocations, readPluginOccurrenceId: () => occurrenceId } as unknown as ResolvedExecutablePluginRuntimeRegistry;
@@ -191,7 +209,8 @@ describe('managed native-role custody at contributed dispatch', () => {
         let stored: Awaited<ReturnType<ConnectedAccountPurposeBindingStore['read']>> = { v: 1, bindings: [{ purpose, target: selected }] };
         const disclosedAccounts: string[] = [];
         const owner = createConnectedAccountPurposeBindingOwner({
-            store: { read: async () => stored, update: async (mutate) => (stored = mutate(stored)) },
+            store: { read: async () => stored, update: async (mutate) => (stored = mutate(stored)),
+                subscribe: () => ({ dispose() {} }) },
             selectTarget: async () => selected,
             resolveTarget: async (target) => target.kind === 'account' ? { account: target.account, displayName: target.account.accountId } : null,
             materializeAccount: async ({ account }) => {
@@ -205,7 +224,16 @@ describe('managed native-role custody at contributed dispatch', () => {
             subject: { kind: 'managed_provider_operation', operationId: 'managed-1', pluginId, providerLocalId: 'acquire', isCurrent: () => true },
             purposes: [purpose], bindings: [{ purpose, target: { kind: 'account', account: { service, accountId: 'captured-account' } } }],
         });
-        const f = fixture({ credentialOwner: owner, reconciliation: true });
+        const referenceManifest = normalizePluginManifestV2({
+            schemaVersion: 2, id: service.pluginId, version: '1.0.0', displayName: 'Captured accounts',
+            runtime: { apiVersion: 1 }, contributes: { connectedAccountDescriptors: [{
+                id: service.localId, title: 'Cloud', authentication: { defaultModeId: 'token', modes: [{
+                    id: 'token', kind: 'manual', outcomeReconciliation: 'none',
+                    fields: [{ id: 'token', title: 'Token', schema: { type: 'string' }, secret: true }],
+                }] },
+            }] },
+        });
+        const f = fixture({ credentialOwner: owner, reconciliation: true, referenceManifests: [referenceManifest] });
         expect(await executeContributedAction({ runtimeRegistry: f.runtimeRegistry, actionId: `${pluginId}/inspect`,
             admittedManagedProviderOperation: { ...f.custody, role: 'inspect' }, context: { surface: 'plugin' },
         })).toMatchObject({ result: { ok: false, errorCode: 'plugin_managed_provider_operation_custody_invalid', actionHandlerInvocation: 'notStarted' } });

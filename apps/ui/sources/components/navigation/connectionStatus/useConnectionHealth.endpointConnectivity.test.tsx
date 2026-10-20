@@ -1,245 +1,116 @@
-import * as React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-test-renderer';
 
-import { flushHookEffects, renderHook } from '@/dev/testkit';
-import { installConnectionStatusCommonModuleMocks } from './connectionStatusTestHelpers';
+import { createMachineFixture, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { storage } from '@/sync/domains/state/storageStore';
+import { setActiveServerId } from '@/sync/domains/server/serverProfiles';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+vi.mock('react-native-unistyles', async () =>
+    (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 
-const connectionState = vi.hoisted(() => ({
-    endpointStatus: 'online' as import('@happier-dev/connection-supervisor').ManagedConnectionPhase,
-    endpointReason: null as import('@happier-dev/connection-supervisor').ManagedConnectionReason,
-    socketStatus: 'connected' as import('./connectionHealthTypes').ConnectionSocketStatus,
-    syncErrorKind: null as 'auth' | 'network' | null,
-    syncErrorServerId: null as string | null,
-    machines: [] as Array<Record<string, unknown>>,
-}));
-const activeServerState = vi.hoisted(() => ({
-    snapshot: { serverId: 'server-a', generation: 1 } as { serverId: string; generation: number },
-    listeners: new Set<() => void>(),
-}));
+const homes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(homes);
+await loadSyncSingletonForTests();
+const { useConnectionHealth } = await import('./useConnectionHealth');
+const initialStorageState = storage.getState();
+let homeId = '';
+let otherHomeId = '';
 
-vi.mock('@/hooks/server/useActiveServerSnapshot', () => ({
-    useActiveServerSnapshot: () => {
-        const [snapshot, setSnapshot] = React.useState(activeServerState.snapshot);
-
-        React.useEffect(() => {
-            const listener = () => setSnapshot({ ...activeServerState.snapshot });
-            activeServerState.listeners.add(listener);
-            return () => {
-                activeServerState.listeners.delete(listener);
-            };
-        }, []);
-
-        return snapshot;
-    },
-}));
-
-installConnectionStatusCommonModuleMocks({
-    activeSelectionMachineGroups: () => ({
-        useActiveSelectionMachineGroups: () => ({
-            visibleMachineGroups: [
-                {
-                    status: 'idle',
-                    machines: activeServerState.snapshot.serverId === 'server-b'
-                        ? [
-                            {
-                                id: 'm2',
-                                active: true,
-                                activeAt: Date.now(),
-                                revokedAt: null,
-                                metadata: { host: 'beta' },
-                                daemonState: { status: 'running' },
-                            },
-                        ]
-                        : connectionState.machines,
-                },
-            ],
-        }),
-    }),
-    serverProfiles: () => ({
-        getActiveServerSnapshot: () => activeServerState.snapshot,
-        listServerProfiles: () => [{ id: 'server-a', name: 'Server A', serverUrl: 'https://api.example.test' }],
-    }),
-    storage: async (importOriginal) => {
-        const { createPartialStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createPartialStorageModuleMock(importOriginal, {
-            useEndpointConnectivity: () => ({
-                status: connectionState.endpointStatus,
-                reason: connectionState.endpointReason,
-                attempt: 0,
-                nextRetryAt: null,
-                lastConnectedAt: null,
-                lastDisconnectedAt: null,
-                lastErrorMessage: null,
-            }),
-            useSocketStatus: () => ({ status: connectionState.socketStatus }),
-            useSyncError: () =>
-                connectionState.syncErrorKind
-                    ? {
-                        message: 'boom',
-                        retryable: connectionState.syncErrorKind !== 'auth',
-                        kind: connectionState.syncErrorKind,
-                        at: Date.now(),
-                        ...(connectionState.syncErrorServerId ? { serverId: connectionState.syncErrorServerId } : {}),
-                    }
-                    : null,
-            useAllMachines: () => [],
-            useMachineListByServerId: () => ({}),
-            useMachineListStatusByServerId: () => ({}),
-            useSetting: () => null,
-        });
-    },
+beforeEach(async () => {
+    await homes.reset();
+    homeId = await homes.addHome({ name: 'Endpoint Home', serverUrl: 'https://health-endpoint.test', accountId: 'endpoint-account' });
+    otherHomeId = await homes.addHome({ name: 'Other Home', serverUrl: 'https://health-endpoint-other.test', accountId: 'other-account', active: false });
+    await homes.selectHomes([homeId]);
+    storage.getState().activateProfileScope({ serverId: homeId, accountId: 'endpoint-account' });
+    storage.getState().applyMachines([], true, { sourceServerId: homeId, sourceAccountId: 'endpoint-account' });
+    storage.getState().markMachineListSettled(homeId);
+    storage.setState({ socketStatus: 'connected', endpointStatus: 'online', endpointReason: null, syncError: null });
 });
+afterEach(async () => {
+    standardCleanup();
+    await homes.reset();
+    storage.setState(initialStorageState, true);
+});
+
+function applyMachines(machines: Parameters<typeof createMachineFixture>[0][], serverId = homeId) {
+    storage.getState().applyMachines(machines.map(machine => createMachineFixture({ activeAt: Date.now(), ...machine })), true,
+        { sourceServerId: serverId, sourceAccountId: serverId === homeId ? 'endpoint-account' : 'other-account' });
+    storage.getState().markMachineListSettled(serverId);
+}
 
 describe('useConnectionHealth (endpoint connectivity integration)', () => {
     it('prioritizes endpoint offline over socket connected + sync errors', async () => {
-        connectionState.endpointStatus = 'offline';
-        connectionState.endpointReason = null;
-        connectionState.socketStatus = 'connected';
-        connectionState.syncErrorKind = 'network';
-        connectionState.machines = [];
-
-        const { useConnectionHealth } = await import('./useConnectionHealth');
-        const hook = await renderHook(() => useConnectionHealth());
-
+        storage.setState({ endpointStatus: 'offline', syncError: {
+            kind: 'network', message: 'Endpoint unavailable', retryable: true, at: Date.now(), serverId: homeId,
+        } });
+        const hook = await renderHook(useConnectionHealth);
         expect(hook.getCurrent().kind).toBe('server_unreachable');
     });
 
     it('renders planned server restarts as neutral reconnect with known machine state', async () => {
-        connectionState.endpointStatus = 'offline';
-        connectionState.endpointReason = 'server_restarting';
-        connectionState.socketStatus = 'disconnected';
-        connectionState.syncErrorKind = null;
-        connectionState.syncErrorServerId = null;
-        connectionState.machines = [
-            { id: 'm1', active: true, activeAt: Date.now(), revokedAt: null, daemonState: { status: 'running' } },
-        ];
-
-        const { useConnectionHealth } = await import('./useConnectionHealth');
-        const hook = await renderHook(() => useConnectionHealth());
-
-        expect(hook.getCurrent().kind).toBe('server_restarting');
-        expect(hook.getCurrent().tone).toBe('neutral');
-        expect(hook.getCurrent().statusLabelKey).toBe('status.connecting');
-        expect(hook.getCurrent().machineLabelKey).toBe('status.online');
+        storage.setState({ endpointStatus: 'offline', endpointReason: 'server_restarting', socketStatus: 'disconnected' });
+        applyMachines([{ id: 'm1', daemonState: { status: 'running' } }]);
+        const hook = await renderHook(useConnectionHealth);
+        expect(hook.getCurrent()).toMatchObject({ kind: 'server_restarting', tone: 'neutral',
+            statusLabelKey: 'status.connecting', machineLabelKey: 'status.online' });
     });
 
     it('surfaces auth_required when endpoint auth_failed', async () => {
-        connectionState.endpointStatus = 'auth_failed';
-        connectionState.endpointReason = null;
-        connectionState.socketStatus = 'connected';
-        connectionState.syncErrorKind = null;
-        connectionState.machines = [];
-
-        const { useConnectionHealth } = await import('./useConnectionHealth');
-        const hook = await renderHook(() => useConnectionHealth());
-
-        expect(hook.getCurrent().kind).toBe('auth_required');
-        expect(hook.getCurrent().statusLabelKey).toBe('status.actionRequired');
+        storage.setState({ endpointStatus: 'auth_failed' });
+        const hook = await renderHook(useConnectionHealth);
+        expect(hook.getCurrent()).toMatchObject({ kind: 'auth_required', statusLabelKey: 'status.actionRequired' });
     });
 
     it('surfaces auth_required when a terminal auth sync error is present', async () => {
-        connectionState.endpointStatus = 'online';
-        connectionState.endpointReason = null;
-        connectionState.socketStatus = 'error';
-        connectionState.syncErrorKind = 'auth';
-        connectionState.syncErrorServerId = null;
-        connectionState.machines = [];
-
-        const { useConnectionHealth } = await import('./useConnectionHealth');
-        const hook = await renderHook(() => useConnectionHealth());
-
-        expect(hook.getCurrent().kind).toBe('auth_required');
-        expect(hook.getCurrent().statusLabelKey).toBe('status.actionRequired');
+        storage.setState({ socketStatus: 'error', syncError: {
+            kind: 'auth', message: 'Sign in again', retryable: false, at: Date.now(), serverId: homeId,
+        } });
+        const hook = await renderHook(useConnectionHealth);
+        expect(hook.getCurrent()).toMatchObject({ kind: 'auth_required', statusLabelKey: 'status.actionRequired' });
     });
 
     it('ignores auth sync errors that belong to a different server profile', async () => {
-        connectionState.endpointStatus = 'online';
-        connectionState.endpointReason = null;
-        connectionState.socketStatus = 'connected';
-        connectionState.syncErrorKind = 'auth';
-        connectionState.syncErrorServerId = 'server-b';
-        connectionState.machines = [];
-
-        const { useConnectionHealth } = await import('./useConnectionHealth');
-        const hook = await renderHook(() => useConnectionHealth());
-
+        storage.setState({ syncError: {
+            kind: 'auth', message: 'Other Home needs sign-in', retryable: false, at: Date.now(), serverId: otherHomeId,
+        } });
+        const hook = await renderHook(useConnectionHealth);
         expect(hook.getCurrent().kind).toBe('no_machine');
     });
 
     it('surfaces machine_not_ready when machines are online but none are ready', async () => {
-        connectionState.endpointStatus = 'online';
-        connectionState.endpointReason = null;
-        connectionState.socketStatus = 'connected';
-        connectionState.syncErrorKind = null;
-        connectionState.machines = [
-            { id: 'm1', active: true, activeAt: Date.now(), revokedAt: null, daemonState: { status: 'offline' } },
-            { id: 'm2', active: true, activeAt: Date.now(), revokedAt: null, daemonState: { status: 'offline' } },
-        ];
-
-        const { useConnectionHealth } = await import('./useConnectionHealth');
-        const hook = await renderHook(() => useConnectionHealth());
-
-        expect(hook.getCurrent().kind).toBe('machine_not_ready');
-        expect(hook.getCurrent().statusLabelKey).toBe('status.actionRequired');
-        expect(hook.getCurrent().machineLabelKey).toBe('status.online');
+        applyMachines([
+            { id: 'm1', daemonState: { status: 'offline' } },
+            { id: 'm2', daemonState: { status: 'offline' } },
+        ]);
+        const hook = await renderHook(useConnectionHealth);
+        expect(hook.getCurrent()).toMatchObject({ kind: 'machine_not_ready',
+            statusLabelKey: 'status.actionRequired', machineLabelKey: 'status.online' });
     });
 
     it('exposes primaryMachineLabel when exactly one machine is visible', async () => {
-        connectionState.endpointStatus = 'online';
-        connectionState.endpointReason = null;
-        connectionState.socketStatus = 'connected';
-        connectionState.syncErrorKind = null;
-        connectionState.machines = [
-            {
-                id: 'm1',
-                active: true,
-                activeAt: Date.now(),
-                revokedAt: null,
-                metadata: { host: 'mbp' },
-                daemonState: { status: 'running' },
-            },
-        ];
-
-        const { useConnectionHealth } = await import('./useConnectionHealth');
-        const hook = await renderHook(() => useConnectionHealth());
-
+        applyMachines([{ id: 'm1', metadata: { ...createMachineFixture().metadata!, host: 'mbp' }, daemonState: { status: 'running' } }]);
+        const hook = await renderHook(useConnectionHealth);
         expect(hook.getCurrent().primaryMachineLabel).toBe('mbp');
     });
 
-    it('updates when the active server snapshot changes', async () => {
-        connectionState.endpointStatus = 'online';
-        connectionState.socketStatus = 'connected';
-        connectionState.syncErrorKind = null;
-        connectionState.machines = [
-            {
-                id: 'm1',
-                active: true,
-                activeAt: Date.now(),
-                revokedAt: null,
-                metadata: { host: 'alpha' },
-                daemonState: { status: 'running' },
-            },
-        ];
-        activeServerState.snapshot = { serverId: 'server-a', generation: 1 };
-
-        const { useConnectionHealth } = await import('./useConnectionHealth');
-        const hook = await renderHook(() => useConnectionHealth());
-        await flushHookEffects();
-
+    it('updates when the active Home and device Home-view selection change', async () => {
+        applyMachines([{ id: 'm1', metadata: { ...createMachineFixture().metadata!, host: 'alpha' }, daemonState: { status: 'running' } }]);
+        applyMachines([{ id: 'm2', metadata: { ...createMachineFixture().metadata!, host: 'beta' }, daemonState: { status: 'running' } }], otherHomeId);
+        const hook = await renderHook(useConnectionHealth);
         expect(hook.getCurrent().primaryMachineLabel).toBe('alpha');
 
         await act(async () => {
-            activeServerState.snapshot = { serverId: 'server-b', generation: 2 };
-            for (const listener of activeServerState.listeners) {
-                listener();
-            }
+            await setActiveServerId(otherHomeId);
+            await homes.selectHomes([otherHomeId]);
+            storage.getState().activateProfileScope({ serverId: otherHomeId, accountId: 'other-account' });
+            applyMachines([{ id: 'm2', metadata: { ...createMachineFixture().metadata!, host: 'beta' }, daemonState: { status: 'running' } }], otherHomeId);
         });
         await flushHookEffects();
 
         expect(hook.getCurrent().primaryMachineLabel).toBe('beta');
     });
-
 });

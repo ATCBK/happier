@@ -11,6 +11,41 @@ import {
 import { createClaudeAgentSdkResumeIdentityOwner } from './resumeIdentity.js';
 
 describe('createClaudeAgentSdkResumeIdentityOwner', () => {
+    it('does not promote an accepted hook that precedes its authenticated transcript candidate', async () => {
+        const follows: TranscriptFileFollowInputV1[] = [];
+        const promotions: string[] = [];
+        const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, {
+            transcripts: {
+                append: vi.fn(async () => undefined),
+                defineSource: vi.fn(async () => ({ id: 'unused', dispose: vi.fn(async () => undefined) })),
+                fileFollow: { follow: vi.fn(async (input: TranscriptFileFollowInputV1) => {
+                    follows.push(input);
+                    return { id: 'native-file', drainNow: async () => {}, close: async () => {} };
+                }) },
+            },
+        });
+        const owner = createClaudeAgentSdkResumeIdentityOwner({ ctx, nowMs: () => 10_000,
+            onProviderSessionId: () => {},
+            onTranscriptPromoted: async promotion => { promotions.push(promotion.providerSessionId); },
+        });
+        try {
+            owner.recordSubmittedPrompt('Host-owned context\nReply ready.');
+            // Native transport owns ordering; an unbound hook is not authority for a future candidate.
+            await owner.observeSessionHook('native-current', { hook_event_name: 'UserPromptSubmit',
+                session_id: 'native-current', prompt: 'Host-owned context\nReply ready.' });
+            expect(promotions).toEqual([]);
+            await owner.observeSessionHook('native-current', { hook_event_name: 'SessionStart',
+                session_id: 'native-current', transcript_path: '/tmp/native-current.jsonl' });
+            const follow = follows[0];
+            if (!follow) throw new Error('Missing authenticated transcript follow');
+            await follow.onLine({ line: JSON.stringify({ type: 'user', sessionId: 'native-current',
+                timestamp: new Date(10_000).toISOString(),
+                message: { role: 'user', content: 'Host-owned context\nReply ready.' } }),
+                sourcePath: follow.path, sequence: 1 });
+            expect(promotions).toEqual([]);
+        } finally { await owner.dispose(); }
+    });
+
     it('does not reuse accepted-prompt proof across transcript candidate generations', async () => {
         const terminalHost = createTerminalHostFixture();
         const events = createEventsFixture();

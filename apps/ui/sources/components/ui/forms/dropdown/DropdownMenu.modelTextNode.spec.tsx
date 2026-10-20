@@ -3,7 +3,6 @@ import renderer from 'react-test-renderer';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderDropdownItemIcon } from '@/components/settings/pickers/renderDropdownItemIcon';
 import { collectUnexpectedRawTextNodes, renderScreen, standardCleanup } from '@/dev/testkit';
 import { withPopoverWebGlobals } from '@/dev/testkit/harness/popoverHarness';
 import { installDropdownCommonModuleMocks } from './dropdownTestHelpers';
@@ -48,6 +47,9 @@ installDropdownCommonModuleMocks({
     reactNative: installDropdownReactNativeMock,
     modal: installDropdownModalMock,
 });
+
+// This runtime-bearing icon adapter must load after the native/web boundary is installed.
+const { renderDropdownItemIcon } = await import('@/components/settings/pickers/renderDropdownItemIcon');
 
 describe('DropdownMenu model-style text node guard', () => {
     let restoreWebGlobals: (() => void) | undefined;

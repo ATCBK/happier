@@ -5,8 +5,9 @@ import {
     encodePlainMachineStoredContent,
     type MachinePoolSelectionOriginV1,
 } from '@happier-dev/protocol';
-import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
+import { SOCKET_RPC_EVENTS, type SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createExistingSessionDirectoryPreflightResult } from '@/dev/testkit/fixtures/sessionFixtures';
 import { getServerFeaturesSnapshot, resetServerFeaturesClientForTests } from '@/sync/api/capabilities/serverFeaturesClient';
 import { getStorage } from '@/sync/domains/state/storage';
 import { fetchAndApplyMachines } from '@/sync/engine/machines/syncMachines';
@@ -43,7 +44,11 @@ vi.mock('socket.io-client', async (importOriginal) =>
 installDisconnectedServerSocketBoundary((socket) => {
     socket.connected = true;
     vi.spyOn(socket, 'timeout').mockReturnValue(socket);
-    vi.spyOn(socket, 'emitWithAck').mockImplementation(async (_event: string, payload: SocketRpcRequestPayload) => {
+    vi.spyOn(socket, 'emitWithAck').mockImplementation(async (event: string, payload: SocketRpcRequestPayload) => {
+        if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
+        if (payload.method === `machine-a:${RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT}`) {
+            return { ok: true, result: createExistingSessionDirectoryPreflightResult(payload.params) };
+        }
         outgoing.push(payload);
         return { ok: true, result: {
             type: 'success', disposition: 'created', sessionId: 'session-created',

@@ -5,7 +5,8 @@
   "type": "module",
   "main": "./src/index.mjs",
   "exports": {
-    ".": "./src/index.mjs"
+    ".": "./src/index.mjs",
+    "./happier-plugin-ui/ledger-sources-native": "./src/settings.mjs"
   },
   "private": true,
   "engines": {
@@ -13,14 +14,23 @@
   },
   "dependencies": {
     "@happier-dev/plugin-sdk": ">=0.0.0 <1.0.0",
-    "@happier-dev/triage-protocol": ">=0.0.0 <1.0.0"
+    "@happier-dev/triage-protocol": ">=0.0.0 <1.0.0",
+    "@happier-dev/triage-sources": ">=0.0.0 <1.0.0"
+  },
+  "peerDependencies": {
+    "react": "19.2.0"
+  },
+  "devDependencies": {
+    "react": "19.2.0"
   },
   "files": [
     ".happier-plugin/plugin.json",
+    "dist/happier-plugin-ui",
     "src"
   ],
   "scripts": {
     "manifest": "node scripts/write-manifest.mjs",
+    "build:ui": "happier-plugin-build-ui --project-root .",
     "test": "npm run test:public && npm run test:runtime && npm run test:accounts && npm run test:census",
     "test:public": "node --test test/publicSurface.test.mjs",
     "test:runtime": "node --test test/sourceAbiConformance.test.mjs",

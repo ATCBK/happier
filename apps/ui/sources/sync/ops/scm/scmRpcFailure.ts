@@ -17,6 +17,13 @@ export type ScmRpcFailure = Readonly<{
     outcome?: ScmOperationOutcome;
     /** UI Action admission is not a Git failure or an uncertain dispatched command. */
     actionErrorCode?: string;
+    /**
+     * The person declined the Action's in-place confirmation: nothing ran and nothing failed. Presenters
+     * stay quiet (see `isScmActionNotRun`); `errorCode` is only the closed-vocabulary placeholder.
+     */
+    declined?: true;
+    /** The Action created an approval request and waits for a decision: nothing ran, nothing failed. Quiet like `declined`. */
+    awaitingApproval?: true;
     approvalArtifactId?: string;
 }>;
 

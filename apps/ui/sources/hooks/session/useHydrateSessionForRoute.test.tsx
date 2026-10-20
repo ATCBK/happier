@@ -5,6 +5,7 @@ import { useHydrateSessionForRoute } from './useHydrateSessionForRoute';
 import { createDeferred, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { storage } from '@/sync/domains/state/storage';
+import { buildSessionTurnsProjectionV1 } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
 
 type ReactActGlobal = typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
 
@@ -16,7 +17,10 @@ async function storeSession(overrides: Parameters<typeof createSessionFixture>[0
             ...state,
             sessions: {
                 ...state.sessions,
-                [overrides.id ?? 'session-1']: createSessionFixture(overrides),
+                [overrides.id ?? 'session-1']: createSessionFixture({
+                    sessionTurns: buildSessionTurnsProjectionV1({ sessionId: overrides.id ?? 'session-1', updatedAt: 0, turns: [] }),
+                    ...overrides,
+                }),
             },
         }));
     });
@@ -337,7 +341,7 @@ describe('useHydrateSessionForRoute', () => {
             sessionId: 'session-1',
             serverId: 'server-b',
         });
-        expect(ensureSessionVisibleForMessageRouteSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b' });
+        expect(ensureSessionVisibleForMessageRouteSpy).toHaveBeenCalledWith('session-1', { serverId: 'server-b', includeTurnsProjection: true });
     });
 
     it('marks terminal missing results without retrying forever', async () => {

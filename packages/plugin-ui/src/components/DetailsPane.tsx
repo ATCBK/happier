@@ -1,19 +1,23 @@
-import type { ReactElement, ReactNode } from 'react';
+import { useContext, type ReactElement, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { resolveHappierUiPalette, useHappierUiInsets, useOptionalHappierUiPalette } from '../environment/context.js';
+import { HappierCollectionNavigationBackClosesDetailContext } from '../presentation/collection/collectionLayout.js';
 import { HAPPIER_PAGE_METRICS } from '../presentation/layout/pageMetrics.js';
 
 import {
   useOptionalPluginUiPresentationHost,
   type PluginUiDetailsPaneHost,
 } from '../presentationHost/context.js';
-import { HappierPageHeader } from '../presentation/layout/PageHeader.js';
+import { HappierPageHeader, HappierPageHeadingBindingContext } from '../presentation/layout/PageHeader.js';
+import type { HappierStyleProp } from '../presentation/portableTypes.js';
 import { IconButton } from './Button.js';
 import { Icon } from './Icon.js';
 import { usePluginTheme, usePluginTranslation } from './PluginUiProvider.js';
 import { usePluginUiSurfaceBridge } from './surfaceBridge.js';
 import { useCollectionDetailHeadingBindingInternal } from './Focus.js';
+import { HappierColumnEdgeContext, useHappierColumnEdgePx } from '../presentation/layout/columnEdge.js';
+import { useHappierPageChromeInternal } from '../presentation/layout/pageChrome.js';
 
 export type DetailsPaneProps = Readonly<{
   /** Whether the detail is open. The plugin keeps the open item in its own location (`replacePageLocation`). */
@@ -106,7 +110,8 @@ export function DetailsPane(props: DetailsPaneProps): ReactElement | null {
           ...(props.subtitleLeading === undefined ? {} : { subtitleLeading: bridge(props.subtitleLeading) }),
           ...(props.actions === undefined ? {} : { actions: bridge(props.actions) }),
           onClose: props.onClose,
-          children: bridge(props.children),
+          // One element whatever the title, so the detail never remounts when its band comes or goes.
+          children: bridge(<DetailsPaneBody inset={props.title !== undefined}>{props.children}</DetailsPaneBody>),
           ...(props.testID === undefined ? {} : { testID: props.testID }),
         })}
       </>
@@ -116,9 +121,10 @@ export function DetailsPane(props: DetailsPaneProps): ReactElement | null {
   return <PushedDetail {...props} />;
 }
 
-/** The detail as the page: over the page's content, a back control, the title and the actions. */
+/** The detail as the page: over the page's content, on the page's ground, a back control, the title and the actions. */
 function PushedDetail(props: DetailsPaneProps): ReactElement {
   const theme = usePluginTheme();
+  const palette = useOptionalHappierUiPalette(theme) ?? resolveHappierUiPalette(theme);
   const translate = usePluginTranslation();
   return (
     <View
@@ -133,29 +139,72 @@ function PushedDetail(props: DetailsPaneProps): ReactElement {
         right: 0,
         bottom: 0,
         left: 0,
-        backgroundColor: theme.colors.canvas,
+        backgroundColor: palette.page,
       }}
     >
+      <PushedDetailHeader {...props} />
+      <DetailsPaneBody inset={props.title !== undefined}>{props.children}</DetailsPaneBody>
+      {props.footer === undefined ? null : (
+        <DetailsPaneFooter testID={props.testID === undefined ? undefined : `${props.testID}:footer`}>{props.footer}</DetailsPaneFooter>
+      )}
+    </View>
+  );
+}
+
+/**
+ * @internal The body of a detail. Where the platform draws its title (`inset`: the details pane's band, the
+ * pushed detail's header) its content stands on the title's edge, the page's sheet inset, so a plain line of text lines up under
+ * the title instead of touching the pane's side. Sheets, page states and headings inside keep their own edges
+ * (`HappierColumnEdgeContext`); `DetailsPaneFooter` still spans the whole width.
+ */
+export function DetailsPaneBody(props: Readonly<{ inset: boolean; children?: ReactNode }>): ReactElement {
+  const edgePx = props.inset ? HAPPIER_PAGE_METRICS.sheetInsetPx : 0;
+  return (
+    <View style={{ flex: 1, minHeight: 0, paddingHorizontal: edgePx }}>
+      <HappierColumnEdgeContext.Provider value={edgePx}>{props.children}</HappierColumnEdgeContext.Provider>
+    </View>
+  );
+}
+
+/**
+ * @internal The band that leads a detail which is the page (pushed): the one way back, then the title, its facts
+ * line and actions. `DetailsPane` draws it where no pane sits beside the page; a `Collection` draws it above its
+ * pushed detail, so every pushed detail has the same way back whatever its author draws. Without a title (the
+ * author draws its own heading) the band is the back control alone, on the page's text edge.
+ */
+export function PushedDetailHeader(props: Readonly<Pick<DetailsPaneProps, 'title' | 'subtitle' | 'leading' | 'subtitleLeading' | 'actions' | 'onClose' | 'testID'>>): ReactElement {
+  const headingRef = useCollectionDetailHeadingBindingInternal();
+  const translate = usePluginTranslation();
+  // The navigation's own Back already returns to the list here: one way back, not two.
+  const chromeBack = useHappierPageChromeInternal()?.navigationBackSpendsStep === true;
+  const hostBack = useContext(HappierCollectionNavigationBackClosesDetailContext) || chromeBack;
+  const back = (style?: HappierStyleProp) => <View style={style}><IconButton
+    icon={<Icon name="back" tone="secondary" />}
+    accessibilityLabel={translate('happier.plugin-ui.detailsPane.back', 'Back')}
+    onPress={props.onClose}
+    {...(props.testID === undefined ? {} : { testID: `${props.testID}:back` })}
+  /></View>;
+  if (props.title === undefined) {
+    if (hostBack) return <View />;
+    return back({
+      flexDirection: 'row',
+      paddingHorizontal: HAPPIER_PAGE_METRICS.pageTextInsetPx - HAPPIER_PAGE_METRICS.headingOpticalInsetPx,
+      paddingTop: HAPPIER_PAGE_METRICS.pageHeaderUnderChromePaddingTopPx,
+    });
+  }
+  return (
+    <HappierPageHeadingBindingContext.Provider value={headingRef}>
       <HappierPageHeader
-        title={props.title ?? ''}
+        title={props.title}
         // A line led by a mark is the item's facts line (the header's meta), its mark before the words.
         {...(props.subtitleLeading === undefined || props.subtitle === undefined
           ? { description: props.subtitle }
           : { meta: [{ key: 'subtitle', text: props.subtitle, icon: props.subtitleLeading }] })}
         {...(props.leading === undefined ? {} : { leading: props.leading })}
         actions={props.actions}
-        renderBack={(style) => <View style={style}><IconButton
-          icon={<Icon name="back" tone="secondary" />}
-          accessibilityLabel={translate('happier.plugin-ui.detailsPane.back', 'Back')}
-          onPress={props.onClose}
-          {...(props.testID === undefined ? {} : { testID: `${props.testID}:back` })}
-        /></View>}
+        renderBack={hostBack ? null : back}
       />
-      <View style={{ flex: 1, minHeight: 0 }}>{props.children}</View>
-      {props.footer === undefined ? null : (
-        <DetailsPaneFooter testID={props.testID === undefined ? undefined : `${props.testID}:footer`}>{props.footer}</DetailsPaneFooter>
-      )}
-    </View>
+    </HappierPageHeadingBindingContext.Provider>
   );
 }
 
@@ -173,6 +222,8 @@ export function DetailsPaneFooter(props: Readonly<{ children: ReactNode; testID?
   const palette = useOptionalHappierUiPalette(theme) ?? resolveHappierUiPalette(theme);
   const { safeArea } = useHappierUiInsets();
   const host = useOptionalPluginUiPresentationHost();
+  // Inside a detail's body (which pads its content) the footer still spans the detail's whole width.
+  const edgePx = useHappierColumnEdgePx();
   // The pause a group edge makes: the page's existing measure for a seam inside its column.
   const gap = HAPPIER_PAGE_METRICS.groupSeparatorGapPx;
   const paddingBottom = Math.max(safeArea.bottom, gap);
@@ -180,15 +231,16 @@ export function DetailsPaneFooter(props: Readonly<{ children: ReactNode; testID?
     <View
       testID={props.testID}
       style={{
-        backgroundColor: theme.colors.canvas,
+        backgroundColor: palette.page,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: palette.rowDivider,
         paddingTop: gap,
         paddingBottom,
         paddingHorizontal: HAPPIER_PAGE_METRICS.sheetInsetPx,
+        marginHorizontal: -edgePx,
       }}
     >
-      {props.children}
+      <HappierColumnEdgeContext.Provider value={0}>{props.children}</HappierColumnEdgeContext.Provider>
     </View>
   );
   return host?.renderKeyboardStickyFooter === undefined

@@ -82,8 +82,8 @@ describe('computeVisibleSessionListIndex', () => {
         ];
         const visible = computeVisibleSessionListIndex({ source,
             resolveSessionRow: makeResolver({ 's1:lead': makeSessionRow('lead'),
-                's1:worker': makeSessionRow('worker', { reportsTo: { sessionId: 'lead' } }),
-                's1:grandchild': makeSessionRow('grandchild', { reportsTo: { sessionId: 'worker' } }) }),
+                's1:worker': makeSessionRow('worker', { manager: { sessionId: 'lead' } }),
+                's1:grandchild': makeSessionRow('grandchild', { manager: { sessionId: 'worker' } }) }),
             hideInactiveSessions: false, pinnedSessionKeysV1: [], sessionListGroupOrderV1: {},
             presentation: { enabled: false, presentation: 'grouped' },
             ...(workflowBranch ? { workflowRuns: [] } : {}),

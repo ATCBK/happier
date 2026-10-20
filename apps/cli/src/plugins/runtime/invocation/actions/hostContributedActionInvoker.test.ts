@@ -4,9 +4,14 @@ import {
     createActionExecutor,
     type ActionExecutorDeps,
 } from '@happier-dev/protocol/actions';
+import { ApiTokenGrantV1Schema } from '@happier-dev/protocol/auth/apiTokenGrant';
 
 import { createHostContributedActionInvoker } from './hostContributedActionInvoker';
 import type { InvokeContributedAction } from '../services/actions';
+import { createPluginInvocationActionsService } from '../services/actions';
+import { createTargetActionInvocationRegistry } from '../targetActionRegistry';
+import { createPluginRuntimeOccurrenceId } from '../../runtimeSlots';
+import { createProductionPluginInvocationServiceOwners } from '../services/production';
 
 function unexpectedDependency(): never {
     throw new Error('unexpected ActionExecutor dependency invocation');
@@ -73,6 +78,51 @@ function createInvokerForTest(
 }
 
 describe('createHostContributedActionInvoker', () => {
+    it.each(['execute', 'executeWithExecutionOrigin'] as const)('admits SDK %s contribution refs through the canonical Action grant before a target effect', async method => {
+        let effects = 0;
+        const occurrenceId = createPluginRuntimeOccurrenceId('acme.target');
+        let targets: ReturnType<typeof createTargetActionInvocationRegistry>;
+        const invokeContributedAction: InvokeContributedAction = async request => {
+            const result = await targets.invoke({ pluginId: request.action.pluginId, localId: request.action.localId,
+                input: request.input, surface: request.surface, invocationSurface: request.surface,
+                caller: request.caller, signal: request.signal });
+            if (result.status === 'deferred') throw new Error('Safe target unexpectedly deferred');
+            return result;
+        };
+        const executor = createExecutorForTest(createInvokerForTest(invokeContributedAction));
+        const owners = createProductionPluginInvocationServiceOwners({ actionExecutor: executor, invokeContributedAction });
+        targets = createTargetActionInvocationRegistry({
+            actions: [{ pluginId: 'acme.target', pluginVersion: '1.0.0', occurrenceId,
+                sourceCustody: { kind: 'development', registeredRootId: 'target-root' }, localId: 'write',
+                definition: { id: 'write', dangerLevel: 'safe', scopes: ['global'], surfaces: ['plugin'],
+                    inputSchema: { type: 'object' }, resultSchema: {} },
+                handler: async () => { effects += 1; return { written: true }; },
+            }],
+            resolveAuthorizationFacts: target => ({ generation: { targetGeneration: target.occurrenceId,
+                desiredGeneration: target.occurrenceId, appliedGeneration: target.occurrenceId },
+                resourceSelections: [], scopedGrants: [], operatingSystemAuthorization: [] }),
+            createServices: owners.createServices, resolveHostBinding: owners.resolveHostBinding,
+            readCurrentPluginOccurrenceId: pluginId => pluginId === 'acme.target' ? occurrenceId : null,
+        });
+        const service = createPluginInvocationActionsService({
+            seed: {
+                plugin: { id: 'acme.caller', version: '1.0.0' }, contribution: { id: 'caller', qualifiedId: 'acme.caller/caller' },
+                occurrenceId: 'caller-occurrence', sourceCustody: { kind: 'development', registeredRootId: 'caller-root' },
+                surface: 'plugin', signal: new AbortController().signal, isOccurrenceCurrent: () => true,
+                approvalContext: {
+                    authority: 'account_automation', runtimeAccountId: 'alice', serverId: 'home-profile', serverIdentityId: 'srv_home-1', actionRequestId: 'source-request',
+                    externalActionCredential: { accountId: 'alice', principalId: 'principal', credentialId: 'pat',
+                        grant: ApiTokenGrantV1Schema.parse({ v: 1, actions: { families: [], ids: ['teams.archive'] },
+                            targets: null, approve: false, origins: [], models: null, permissionModes: null, create: null }) },
+                },
+            }, actionExecutor: executor, invokeContributedAction,
+        });
+        try {
+            const failure = await service[method]({ pluginId: 'acme.target', localId: 'write' }, {}).then(() => null, error => error);
+            expect(effects).toBe(0);
+            expect(failure).toMatchObject({ code: 'credential_scope_denied' });
+        } finally { targets.dispose(); await owners.dispose(); }
+    });
     it('routes plugin action.invoke through the committed dispatcher with current caller provenance', async () => {
         const invokeContributedAction = vi.fn<InvokeContributedAction>(async () => Object.freeze({
             status: 'executed' as const,
@@ -101,7 +151,7 @@ materialization: {
             },
         })).resolves.toEqual({ ok: true, result: { accepted: true } });
 
-        expect(invokeContributedAction).toHaveBeenCalledWith({
+        expect(invokeContributedAction).toHaveBeenCalledWith(expect.objectContaining({
             action: { pluginId: 'acme.caller', localId: 'target' },
             input: { title: 'Ready' },
             surface: 'plugin',
@@ -126,7 +176,7 @@ materialization: {
                 },
             },
             signal: controller.signal,
-        });
+        }));
     });
 
     it('returns the target failure without claiming execution when host caller provenance is incomplete', async () => {
@@ -204,10 +254,9 @@ materialization: {
                     materializationId: 'materialization-1',
                 },
             },
-        })).resolves.toEqual({
-            ok: false,
-            errorCode: 'target_declined',
-            error: 'Target rejected this request',
+        })).resolves.toMatchObject({
+            ok: false, errorCode: 'target_declined', error: 'Target rejected this request',
+            details: { name: 'PluginError', code: 'target_declined', retryable: true },
         });
     });
 

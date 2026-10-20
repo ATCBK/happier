@@ -18,7 +18,7 @@ function clampString(value: string, maxLength: number): string {
   return value.slice(0, maxLength);
 }
 
-const BULLET_RE = /^(?:[-*•]|\(\d+\)|\d+(?:[.)]|:))\s*(?<content>.+)$/u;
+const BULLET_RE = /^(?:[-*\u2022]|\(\d+\)|\d+(?:[.)]|:))\s*(?<content>.+)$/u;
 const ID_TITLE_RE = /^(?<id>[A-Za-z0-9][A-Za-z0-9_-]{0,199})\s*:\s*(?<title>.+)$/u;
 
 export function deriveLooseDelegateDeliverables(text: string): LooseDelegateDerivation | null {

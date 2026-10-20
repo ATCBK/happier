@@ -58,6 +58,12 @@ describe('MachineSelector', () => {
         }
         expect(onSelect).not.toHaveBeenCalled();
     });
+    it('names machines, not commands, when the dropdown has none to offer', async () => {
+        const screen = await renderScreen(<MachineSelector machines={[]} selectedMachine={null}
+            presentation="dropdown" onSelect={vi.fn()} showCliGlyphs={false} noItemsMessage="No machines available" />);
+        const props = screen.tree.findByType(DropdownMenu).props as React.ComponentProps<typeof DropdownMenu>;
+        expect(props.emptyLabel).toBe('No machines available');
+    });
     it('preserves the selected-machine dropdown trigger and offline activation guard', async () => {
         const online = machine('online', true);
         const offline = machine('offline', false);

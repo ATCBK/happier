@@ -44,7 +44,8 @@ describe('in-flow Elements material', () => {
             && typeof flattenTestStyle(node.props.style)?.backdropFilter === 'string'
             && flattenTestStyle(node.props.style).backdropFilter !== 'none');
         expect(backdrop()).toHaveLength(1);
-        expect(flattenTestStyle(backdrop()[0]!.props.style).backgroundColor).toContain('--happier-glass-card-background-color');
+        // The card coat: the CSS material variable, or a concrete mix when the fixed point raised Subtle's hair.
+        expect(String(flattenTestStyle(backdrop()[0]!.props.style).backgroundColor)).toMatch(/--happier-glass-card-background-color|^color-mix\(/);
         await screen.update(scene(content, 'none'));
         expect(backdrop()).toHaveLength(0);
     });

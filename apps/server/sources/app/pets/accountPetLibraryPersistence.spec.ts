@@ -259,7 +259,7 @@ describe("accountPetLibraryPersistence", () => {
         const releaseTransition = deferred();
 
         const transition = inTx(async (tx) => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, "account-1");
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, "account-1", "exclusive");
             await expect(
                 assertAccountPetLibraryEmptyForEncryptionTransitionInTx(
                     tx,

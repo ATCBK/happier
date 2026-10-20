@@ -7,6 +7,7 @@ import { useActionOperationStopControl } from '@/components/inbox/actionOperatio
 import { useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
 import { ApprovalDecisionFooter } from '@/components/tools/shell/approvals/ApprovalDecisionFooter';
 import { ApprovalPromptChrome } from '@/components/tools/shell/approvals/ApprovalPromptChrome';
+import { alertApprovalFailure } from '@/components/tools/shell/approvals/useApprovalDecisionHandler';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -18,19 +19,20 @@ import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope
 import { useServerCredentialAccountScopeBindings, type ServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 import { t } from '@/text';
+import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 
-import { rememberProjectSetupConsent } from './projectSetupConsentDecision';
-import { ProjectSetupReviewFacts } from './ProjectSetupReview';
+import { decideProjectSetupConsent, type ProjectSetupDecision } from './projectSetupConsentDecision';
+import { DEFAULT_PROJECT_SETUP_SCOPE, ProjectSetupReviewFacts, ProjectSetupScopeChoice, projectSetupRunLabel } from './ProjectSetupReview';
 import { useProjectSetupMachine } from './useProjectSetupMachine';
 
-type Decision = 'untilChanged';
+type Decision = ProjectSetupDecision;
 
 /**
  * The session asks (lab `s-setup` ASK, plan 20s3 / D18): every live finite command this Session's
  * agent started that is held on a setup review shows the exact effect and asks the person here, like
  * any other approval in the transcript. The held operation is the source; nothing is inferred from tool
- * text. "Until it changes" writes the person's own Project Trust grant and the daemon resumes the same
- * original invocation; Deny stops that operation. An agent never reaches either decision.
+ * text. This time and Skip decide the original target-held invocation; Until it changes writes the
+ * person's Project Trust grant. Deny stops that operation. An agent cannot supply these decisions.
  */
 export const ProjectSetupSessionReviews = React.memo(
   function ProjectSetupSessionReviews(
@@ -152,29 +154,30 @@ export const ProjectSetupConsentReviewCard = React.memo(
       props.decided === null ? operation : null,
     );
     const [deciding, setDeciding] = React.useState(false);
+    const [decision, setDecision] = React.useState<Decision>(DEFAULT_PROJECT_SETUP_SCOPE);
     const testID = `project-setup-session-review:${operation.snapshot.operationId}`;
+    const lifetime = React.useMemo(() => new AbortController(), [scope.serverId, scope.accountId]);
+    React.useEffect(() => () => lifetime.abort(), [lifetime]);
+    const approval = useActionApprovalContinuation({ scopeKey: JSON.stringify([scope, testID]),
+      serverId: scope.serverId, onExecuted: () => {}, openOnRequest: true });
 
     const allow = React.useCallback(async () => {
       const workspace = attachment?.sourceWorkspace;
       if (!review || !workspace || deciding) return;
       setDeciding(true);
       try {
-        const result = await rememberProjectSetupConsent({
+        const result = await decideProjectSetupConsent({
           scope,
           workspace,
           operation,
           reviewedEffectDigest: review.reviewedEffectDigest,
+          decision, signal: lifetime.signal, onApprovalPending: approval.requestApproval,
         });
-        if (result.kind === 'remembered') onDecided(operation, 'untilChanged');
-        else
-          Modal.alert(
-            t('common.error'),
-            result.kind === 'changed'
-              ? t('projects.authoring.effectChanged')
-              : t('approvals.decisionError'),
-          );
-      } catch {
-        Modal.alert(t('common.error'), t('approvals.decisionError'));
+        if (result.kind === 'remembered' || result.kind === 'continued') onDecided(operation, decision);
+        else if (result.kind === 'changed') Modal.alert(t('common.error'), t('projects.authoring.effectChanged'));
+        else alertApprovalFailure({ errorCode: result.code });
+      } catch (error) {
+        alertApprovalFailure(error);
       } finally {
         setDeciding(false);
       }
@@ -185,6 +188,9 @@ export const ProjectSetupConsentReviewCard = React.memo(
       operation,
       review,
       scope,
+      decision,
+      lifetime,
+      approval.requestApproval,
     ]);
     const title = t('projects.authoring.sessionAsk', { machine: machineName });
     if (props.decided) {
@@ -206,7 +212,8 @@ export const ProjectSetupConsentReviewCard = React.memo(
                   { color: theme.colors.text.secondary },
                 ]}
               >
-                {t('projects.authoring.allowedUntilChanged')}
+                {props.decided === 'untilChanged' ? t('projects.authoring.allowedUntilChanged')
+                  : t(props.decided === 'skip' ? 'projects.scripts.setup.consequenceSkip' : 'projects.scripts.setup.consequenceThisTime')}
               </Text>
             </View>
           }
@@ -246,7 +253,7 @@ export const ProjectSetupConsentReviewCard = React.memo(
               disabled={!props.canApprovePermissions}
               approveDisabled={!attachment?.sourceWorkspace}
               isDeciding={deciding || stop.pending}
-              approveLabel={t('projects.authoring.allowUntilChanged')}
+              approveLabel={decision === 'skip' ? t('common.skip') : projectSetupRunLabel(machineName, sharedRunAs)}
               rejectLabel={t('projects.authoring.deny')}
               onApprove={() => {
                 void allow();
@@ -262,12 +269,7 @@ export const ProjectSetupConsentReviewCard = React.memo(
           machineName={machineName}
           sharedRunAs={sharedRunAs}
         />
-        <Text
-          style={[styles.body, { color: theme.colors.text.secondary }]}
-          testID={`${testID}.effect`}
-        >
-          {t('projects.authoring.sessionAskScope')}
-        </Text>
+        <ProjectSetupScopeChoice testID={testID} scope={decision} onChange={setDecision} />
       </ApprovalPromptChrome>
     );
   },
@@ -275,7 +277,6 @@ export const ProjectSetupConsentReviewCard = React.memo(
 
 const styles = StyleSheet.create(() => ({
   list: { gap: 12, paddingTop: 12 },
-  body: { ...Typography.default(), ...happierPageTextMetrics('rowDescription') },
   settled: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   settledText: { ...Typography.default(), ...happierPageTextMetrics('rowDescription') },
 }));

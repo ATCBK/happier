@@ -9,6 +9,7 @@ export const UiFindInputSchema = lazyZodSchema(() => z.discriminatedUnion('op', 
   z.strictObject({ op: z.literal('set'), query: z.string(), options: z.optional(FindOptionsSchema), ...target }),
   z.strictObject({ op: z.literal('step'), direction: z.union([z.literal(1), z.literal(-1)]), ...target }),
   z.strictObject({ op: z.literal('stop'), ...target }),
+  z.strictObject({ op: z.literal('refold'), ...target }),
   z.strictObject({ op: z.literal('close'), ...target }),
 ]));
 export const UiFindOutputSchema = lazyZodSchema(() => z.union([
@@ -18,7 +19,7 @@ export const UiFindOutputSchema = lazyZodSchema(() => z.union([
   z.strictObject({ status: z.literal('results'), current: z.nullable(z.number().check(z.int(), z.nonnegative())), total: z.number().check(z.int(), z.nonnegative()),
     files: z.optional(z.number().check(z.int(), z.nonnegative())), coverage: z.enum(['complete', 'loaded', 'olderRemaining', 'limited', 'partialErrors']) }),
   z.strictObject({ status: z.literal('searching'), total: z.number().check(z.int(), z.nonnegative()) }),
-  z.strictObject({ status: z.literal('unavailable'), reason: z.enum(['offline', 'unsupportedEngine', 'noClient']) }),
+  z.strictObject({ status: z.literal('unavailable'), reason: z.enum(['offline', 'unsupportedEngine', 'noClient', 'unsupportedOperation', 'noRevealedFold']) }),
   // Public engine actions expose controls, but not the widget's current counts.
   // Query/options here are the last explicit host seed, never private engine state.
   z.strictObject({ status: z.literal('unavailable'), unavailable: z.literal('engineOwned'),
@@ -36,7 +37,7 @@ export const FIND_ACTION_SPECS = [{
   inputHints: { fields: [
     { path: 'op', title: 'Operation', widget: 'select', required: true, options: [
       { value: 'read', label: 'Read' }, { value: 'set', label: 'Search' },
-      { value: 'step', label: 'Next or previous result' }, { value: 'stop', label: 'Stop' }, { value: 'close', label: 'Close' },
+      { value: 'step', label: 'Next or previous result' }, { value: 'stop', label: 'Stop' }, { value: 'refold', label: 'Fold again' }, { value: 'close', label: 'Close' },
     ] },
     { path: 'query', title: 'Search text', widget: 'text' },
     { path: 'options', title: 'Case and regular-expression options', widget: 'json' },

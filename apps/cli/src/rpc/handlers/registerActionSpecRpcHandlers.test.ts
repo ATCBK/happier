@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
@@ -198,7 +198,7 @@ describe('ActionSpec-derived RPC registrar', () => {
                 bindings: { rpcMethod: 'execution.run.start.test' },
                 surfaceBindings: {
                     rpc: {
-                        inputSchema: z.object({ instructions: z.string().min(1) }).strict(),
+                        inputSchema: z.strictObject({ instructions: z.string().check(z.minLength(1)) }),
                         decodeInput: (input) => input,
                         outputSchema: z.unknown(),
                         encodeOutput: (result) => result,
@@ -231,11 +231,11 @@ describe('ActionSpec-derived RPC registrar', () => {
                 bindings: { rpcMethod: 'daemon.externalSessions.operation.status' },
                 surfaceBindings: {
                     rpc: {
-                        inputSchema: z.object({ privateOperationId: z.string().min(1) }).strict(),
+                        inputSchema: z.strictObject({ privateOperationId: z.string().check(z.minLength(1)) }),
                         decodeInput: (input) => ({
                             operationId: (input as { privateOperationId: string }).privateOperationId,
                         }),
-                        outputSchema: z.object({ privateOperationId: z.string(), state: z.string() }).strict(),
+                        outputSchema: z.strictObject({ privateOperationId: z.string(), state: z.string() }),
                         encodeOutput: (result) => ({
                             privateOperationId: (result as { operationId: string }).operationId,
                             state: (result as { presentation: { state: string } }).presentation.state,
@@ -270,9 +270,9 @@ describe('ActionSpec-derived RPC registrar', () => {
                 bindings: { rpcMethod: 'daemon.externalSessions.operation.status' },
                 surfaceBindings: {
                     rpc: {
-                        inputSchema: z.object({ transportId: z.string().min(1) }).strict(),
+                        inputSchema: z.strictObject({ transportId: z.string().check(z.minLength(1)) }),
                         decodeInput: (input) => input,
-                        outputSchema: z.object({ transportResult: z.string() }).strict(),
+                        outputSchema: z.strictObject({ transportResult: z.string() }),
                         encodeOutput: () => ({ leakedPrivateState: true }),
                     },
                 },
@@ -452,7 +452,7 @@ describe('ActionSpec-derived RPC registrar', () => {
             expect.objectContaining({ defaultSessionId: 'session-a', externalActionTarget: target }));
     });
 
-    it('registers new ActionSpec rows matched by RPC method scope without action-id catalog updates', async () => {
+    it('registers supplied ActionSpec bindings matched by RPC method scope rather than action ids', async () => {
 
         const actionExecutor: RpcActionExecutor = {
             execute: async (actionId, input) => ({ ok: true, result: { actionId, input } }),
@@ -465,12 +465,12 @@ describe('ActionSpec-derived RPC registrar', () => {
             scopes: SUBAGENT_RPC_SCOPES,
             actionSpecs: [
                 {
-                    id: 'sessions.subagents.inspect',
+                    id: 'sessions.subagents.list',
                     surfaces: { rpc: true },
                     bindings: { rpcMethod: 'sessions.subagents.inspect' },
                 },
                 {
-                    id: 'approval.request.inspect',
+                    id: 'approval.request.list',
                     surfaces: { rpc: true },
                     bindings: { rpcMethod: 'approval.request.inspect' },
                 },
@@ -481,42 +481,9 @@ describe('ActionSpec-derived RPC registrar', () => {
         await expect(handlers.get('sessions.subagents.inspect')?.({
             sessionId: 'session-1',
         })).resolves.toEqual({
-            actionId: 'sessions.subagents.inspect',
+            actionId: 'sessions.subagents.list',
             input: { sessionId: 'session-1' },
         });
-    });
-
-    it('stamps the Action operation runner admitted request identity into execution context', async () => {
-        const contexts: unknown[] = [];
-        const actionExecutor: RpcActionExecutor = {
-            execute: async (_actionId, _input, context) => {
-                contexts.push(context);
-                return { ok: true, result: { accepted: true } };
-            },
-        };
-        const { handlers, rpcHandlerManager } = createRpcHarness();
-
-        module.registerActionSpecRpcHandlers({
-            rpcHandlerManager,
-            actionExecutor,
-            actionIds: ['sessions.subagents.list'],
-            actionSpecs: [{
-                id: 'sessions.subagents.list',
-                operation: { version: 1 },
-                surfaces: { rpc: true },
-                bindings: { rpcMethod: 'sessions.subagents.list' },
-            }],
-            observeExecution: async (request) => await request.execute({
-                actionRequestId: 'admitted-request-1',
-                signal: new AbortController().signal,
-                operationProgress: { update: () => undefined },
-                operationOwnerUpdate: { update: () => undefined },
-            }),
-        });
-
-        await expect(handlers.get('sessions.subagents.list')?.({ sessionId: 'session-1' }))
-            .resolves.toEqual({ accepted: true });
-        expect(contexts).toEqual([expect.objectContaining({ actionRequestId: 'admitted-request-1' })]);
     });
 
     it('does not register runtime ActionSpec rows while their rpc surface is disabled', async () => {

@@ -1,14 +1,19 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import tweetnacl from "tweetnacl";
+import { encodeHex } from "privacy-kit";
 import { openEncryptedDataKeyEnvelopeV1, sealEncryptedDataKeyEnvelopeV1 } from "@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1";
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from "@happier-dev/protocol";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { encryptWithDataKey, decryptWithDataKey } from "../../../../../../cli/src/api/encryption";
 import { db } from "@/storage/db";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 import { withAuthenticatedTestApp } from "../../testkit/sqliteFastify";
 import { machinesRoutes } from "./machinesRoutes";
+import { registerAccountEncryptionMigrateRoutes } from "../account/registerAccountEncryptionMigrateRoutes";
+import { attachAccountEncryptionMigrateProofSignatureV1, createAccountEncryptionMigrateProofSigningInputV1, type AccountEncryptionMigrateUnsignedRequest } from "@happier-dev/protocol/account/encryptionMigrate";
+import { computeAccountEncryptionMigrateKeyFingerprintV1 } from "@happier-dev/protocol/account/encryptionKeyFingerprintV1";
+import { signAccountContentKeyBindingV1 } from "@happier-dev/protocol/crypto/accountContentKeyBindingV1";
 
 describe("machinesRoutes canonical repeated registration (SQLite)", () => {
     let harness: LightSqliteHarness;
@@ -17,6 +22,7 @@ describe("machinesRoutes canonical repeated registration (SQLite)", () => {
     }, 120_000);
     afterEach(async () => {
         await db.machine.deleteMany();
+        await db.accountChange.deleteMany();
         await db.account.deleteMany();
     });
     afterAll(async () => { if (harness) await harness.close(); });
@@ -122,6 +128,75 @@ describe("machinesRoutes canonical repeated registration (SQLite)", () => {
             } });
             expect(registration.statusCode).toBe(400);
             expect(registration.json()).toMatchObject({ reason: "machine_storage_mode_mismatch" });
+        });
+    });
+
+    it("rejects a plaintext registration whose Account enabled E2EE after the registration mode read", async () => {
+        harness.resetEnv({ HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: "optional", HAPPIER_FEATURE_ENCRYPTION__ALLOW_ACCOUNT_OPTOUT: "1" });
+        const signing = tweetnacl.sign.keyPair();
+        const content = tweetnacl.box.keyPair();
+        const account = await db.account.create({ data: {
+            publicKey: encodeHex(signing.publicKey), encryptionMode: "plain",
+        } });
+        const request: AccountEncryptionMigrateUnsignedRequest = {
+            toMode: "e2ee", expectedAccountVersion: account.seq,
+            expectedSigningKeyFingerprint: computeAccountEncryptionMigrateKeyFingerprintV1(signing.publicKey),
+            expectedContentKeyFingerprint: null, expectedSettingsVersion: 0, settingsContent: null,
+            connectedServices: { action: "assert_empty" }, automations: { action: "assert_empty" },
+            machines: { action: "assert_empty" }, todos: { action: "assert_empty" },
+            artifacts: { action: "assert_empty" }, sessions: { action: "assert_empty" },
+            reviewComments: { action: "assert_empty" }, sessionOrganization: { action: "assert_empty" }, pets: { action: "assert_empty" },
+            keyProof: { v: 1, publicKey: Buffer.from(signing.publicKey).toString("base64"),
+                contentPublicKey: Buffer.from(content.publicKey).toString("base64"),
+                contentPublicKeySig: Buffer.from(signAccountContentKeyBindingV1({ accountSigningSecretKey: signing.secretKey, contentPublicKey: content.publicKey })).toString("base64"),
+            },
+        };
+        const signingInput = createAccountEncryptionMigrateProofSigningInputV1({ request, accountId: account.id, sourceMode: "plain" });
+        const migration = attachAccountEncryptionMigrateProofSignatureV1({ request,
+            signature: Buffer.from(tweetnacl.sign.detached(signingInput, signing.secretKey)).toString("base64"),
+        });
+        await withAuthenticatedTestApp((app) => {
+            machinesRoutes(app);
+            registerAccountEncryptionMigrateRoutes(app);
+        }, async (app) => {
+            let observed!: () => void;
+            let release!: () => void;
+            const accountObserved = new Promise<void>(resolve => { observed = resolve; });
+            const registrationMayContinue = new Promise<void>(resolve => { release = resolve; });
+            const originalRead = db.account.findUnique.bind(db.account);
+            let paused = false;
+            // The real database result is unchanged; the DB boundary only controls the interleaving.
+            const barrier = vi.spyOn(db.account, "findUnique").mockImplementation(async (args) => {
+                const result = await originalRead(args);
+                if (!paused && args.where.id === account.id && args.select?.encryptionMode && args.select.contentPublicKeySig) {
+                    paused = true;
+                    observed();
+                    await registrationMayContinue;
+                }
+                return result;
+            });
+            const machineId = randomUUID();
+            const headers = { "x-test-user-id": account.id, "x-happier-account-stored-content-protocol": "4" };
+            const registration = app.inject({ method: "POST", url: "/v1/machines", headers, payload: {
+                id: machineId, metadata: encodePlainMachineStoredContent({ host: "host" }),
+                dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+            } }).then(response => response);
+            try {
+                await Promise.race([accountObserved, registration.then(response => {
+                    throw new Error(`Registration finished before its Account read barrier: ${response.statusCode} ${response.body}`);
+                })]);
+                const transition = await app.inject({ method: "POST", url: "/v1/account/encryption/migrate", headers, payload: migration });
+                expect(transition.statusCode, transition.body).toBe(200);
+                expect((await db.account.findUniqueOrThrow({ where: { id: account.id } })).encryptionMode).toBe("e2ee");
+            } finally {
+                release();
+                barrier.mockRestore();
+                await registration;
+            }
+            const response = await registration;
+            expect(response.statusCode, response.body).toBe(400);
+            expect(response.json()).toMatchObject({ reason: "machine_storage_mode_mismatch" });
+            expect(await db.machine.count({ where: { id: machineId } })).toBe(0);
         });
     });
 });

@@ -1,6 +1,6 @@
 import { lazyZodSchema } from '../../../lazyZodSchema.js';
 import { z } from 'zod/mini';
-import { type PluginDeclarativeDataNodeV1 } from './declarativeDataV1.js';
+import type { PluginDeclarativeDataNodeV1 } from './declarativeDataV1.js';
 import { ActionIdSchema, type ActionId } from '../../../actions/actionIds.js';
 import { asProtocolZod } from "../../actions/internalProtocolZodAdapter.js";
 
@@ -54,19 +54,19 @@ import {
 import {
   preflightPluginDeclarativeDocumentV1,
 } from './declarativeDocumentPreflightV1.js';
-import {
-  type PluginDeclarativeActionVariantV2,
-  type PluginDeclarativeComposerApplyEffectV1,
-  type PluginDeclarativeCollectionListProjectionV1,
-  type PluginCollectionRowCommandV1,
-  type PluginDeclarativeControlV2,
-  type PluginDeclarativeMetadataEntryV2,
-  type PluginDeclarativeNodeV2,
-  type PluginDeclarativeStateV2,
-  type PluginDeclarativeStateNodeV2,
-  type PluginDeclarativeTargetedSurfaceNodeV2,
-  type PluginDeclarativeToneV2,
-  type PluginUiIconTokenV1,
+import type {
+  PluginDeclarativeActionVariantV2,
+  PluginDeclarativeComposerApplyEffectV1,
+  PluginDeclarativeCollectionListProjectionV1,
+  PluginCollectionRowCommandV1,
+  PluginDeclarativeControlV2,
+  PluginDeclarativeMetadataEntryV2,
+  PluginDeclarativeNodeV2,
+  PluginDeclarativeStateV2,
+  PluginDeclarativeStateNodeV2,
+  PluginDeclarativeTargetedSurfaceNodeV2,
+  PluginDeclarativeToneV2,
+  PluginUiIconTokenV1,
 } from './v2.js';
 
 /**

@@ -1,31 +1,44 @@
 import * as React from 'react';
 
-import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useNewSessionServerTargetState } from '@/components/sessions/new/hooks/serverTarget/useNewSessionServerTargetState';
-import { renderHook, renderScreen } from '@/dev/testkit';
+import { flushHookEffects, renderHook, renderScreen } from '@/dev/testkit';
 import { settingsDefaults, type Settings } from '@/sync/domains/settings/settings';
+import * as serverProfiles from '@/sync/domains/server/serverProfiles';
+import { seedPersistedHomeProfilesForTests } from '@/dev/testkit/fixtures/persistedHomeProfiles';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { readUsableHomeServerIds } from '@/sync/domains/scope/usableHomeServerIds';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
-const serverProfilesState = vi.hoisted(() => ({
-    calls: 0,
+const serverProfilesState = {
     value: [
         { id: 'server-a', name: 'Server A', serverUrl: 'https://a.example.test', lastUsedAt: 1000 },
         { id: 'server-c', name: 'Server C', serverUrl: 'https://c.example.test', lastUsedAt: 800 },
         { id: 'server-b', name: 'Server B', serverUrl: 'https://b.example.test', lastUsedAt: 900 },
-    ],
-}));
+    ] as Array<Pick<serverProfiles.ServerProfile, 'id' | 'name' | 'serverUrl' | 'lastUsedAt'>
+        & Partial<Pick<serverProfiles.ServerProfile, 'serverIdentityId'>>>,
+};
 
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-    listServerProfiles: () => {
-        serverProfilesState.calls += 1;
-        return serverProfilesState.value;
-    },
-    resolveServerProfileScopeId: (profile: { id: string; serverIdentityId?: string | null }) => profile.serverIdentityId ?? profile.id,
-}));
+let locks: ReturnType<typeof installWebLockManagerMock>;
+let profileReads: import('vitest').MockInstance<typeof serverProfiles.listServerProfiles>;
+const credentialWrites: Array<NonNullable<Awaited<ReturnType<typeof TokenStorage.setCredentialsForServerUrlWithRollback>>>> = [];
+
+async function publishServerProfiles() {
+    await seedPersistedHomeProfilesForTests({ activeServerId: serverProfilesState.value[0]!.id,
+        profiles: serverProfilesState.value.map(profile => ({ ...profile, createdAt: 1, updatedAt: 1, source: 'manual' })),
+    });
+    for (const profile of serverProfilesState.value) {
+        const token = `e30.${Buffer.from(JSON.stringify({ sub: `account:${profile.id}` })).toString('base64url')}.signature`;
+        const write = await TokenStorage.setCredentialsForServerUrlWithRollback(profile.serverUrl,
+            { serverId: profile.serverIdentityId ?? profile.id }, { token });
+        if (!write) throw new Error('The selected test Home must have usable Account credentials');
+        credentialWrites.push(write);
+    }
+}
 
 type ProbeProps = Readonly<{
     activeServerSnapshot?: Readonly<{
@@ -73,13 +86,22 @@ function Probe(props: ProbeProps) {
 }
 
 describe('useNewSessionServerTargetState', () => {
-    beforeEach(() => {
-        serverProfilesState.calls = 0;
+    beforeEach(async () => {
+        locks = installWebLockManagerMock();
         serverProfilesState.value = [
             { id: 'server-a', name: 'Server A', serverUrl: 'https://a.example.test', lastUsedAt: 1000 },
             { id: 'server-c', name: 'Server C', serverUrl: 'https://c.example.test', lastUsedAt: 800 },
             { id: 'server-b', name: 'Server B', serverUrl: 'https://b.example.test', lastUsedAt: 900 },
         ];
+        await publishServerProfiles();
+        // Call-through observation: profile and credential decisions remain real.
+        profileReads = vi.spyOn(serverProfiles, 'listServerProfiles');
+    });
+
+    afterEach(async () => {
+        profileReads.mockRestore();
+        for (const write of credentialWrites.splice(0).reverse()) await write.rollback();
+        locks.restore();
     });
 
     it('uses the admitted creation host Home without saved profiles or Account selection', async () => {
@@ -127,10 +149,14 @@ describe('useNewSessionServerTargetState', () => {
                     request={{}}
                     onState={(state) => captured.push(state)}
                 />);
-        expect(serverProfilesState.calls).toBe(1);
+        // Credential availability has its own asynchronous profile census.
+        // Settle that real owner before observing the generation-only update.
+        await vi.waitFor(() => expect(readUsableHomeServerIds()).toEqual(['server-a', 'server-b', 'server-c']));
+        await flushHookEffects();
+        profileReads.mockClear();
+        const initialServerProfiles = captured.at(-1)!.serverProfiles;
 
-        await act(async () => {
-            screen.tree.update(<Probe
+        await screen.update(<Probe
                         activeServerSnapshot={{
                             ...firstActiveServerSnapshot,
                             generation: 2,
@@ -138,10 +164,9 @@ describe('useNewSessionServerTargetState', () => {
                         request={{}}
                         onState={(state) => captured.push(state)}
                     />);
-        });
 
-        expect(serverProfilesState.calls).toBe(1);
-        expect(captured.at(-1)!.serverProfiles).toBe(captured.at(0)!.serverProfiles);
+        expect(profileReads).not.toHaveBeenCalled();
+        expect(captured.at(-1)!.serverProfiles).toBe(initialServerProfiles);
     });
 
     it('derives allowed server ids from the current active settings target and resolves requested server inside that scope', async () => {
@@ -244,6 +269,7 @@ describe('useNewSessionServerTargetState', () => {
             { id: 'server-a', name: 'Server A', serverUrl: 'https://a.example.test', lastUsedAt: 1000 },
             { id: 'server-b', name: 'Server B', serverUrl: 'https://b.example.test', lastUsedAt: 900 },
         ];
+        await publishServerProfiles();
         const captured: Array<ReturnType<typeof useNewSessionServerTargetState>> = [];
 
         await renderScreen(<Probe
@@ -267,7 +293,8 @@ describe('useNewSessionServerTargetState', () => {
         serverProfilesState.value = [
             { id: 'localhost-18829', serverIdentityId: 'srv_identity_a', name: 'Server A', serverUrl: 'https://a.example.test', lastUsedAt: 1000 },
             { id: 'server-c', name: 'Server C', serverUrl: 'https://c.example.test', lastUsedAt: 800 },
-        ] as any;
+        ];
+        await publishServerProfiles();
         const captured: Array<ReturnType<typeof useNewSessionServerTargetState>> = [];
 
         await renderScreen(<Probe

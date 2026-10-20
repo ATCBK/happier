@@ -108,16 +108,7 @@ export function resolveCanonicalAbsolutePathComparisonIdentity(
     platform?: NodeJS.Platform;
   }> = {},
 ): string | null {
-  const platform = resolveAbsolutePathPlatform(value, options.platform);
-  if (!platform) return null;
-
-  const canonical = resolveCanonicalAbsolutePath(value, {
-    env: options.env,
-    platform,
-  });
-  return canonical === null
-    ? null
-    : comparisonIdentity(canonical, platform);
+  return resolveComparisonPath(value, options)?.identity ?? null;
 }
 
 /**
@@ -168,6 +159,44 @@ export function canonicalAbsolutePathsEqual(left: string, right: string): boolea
     && leftIdentity === resolveCanonicalAbsolutePathComparisonIdentity(right);
 }
 
+type ResolvedComparisonPath = Readonly<{ platform: NodeJS.Platform; canonical: CanonicalAbsolutePath; identity: string }>;
+type PathComparisonOptions = Readonly<{ env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform }>;
+
+function resolveComparisonPath(value: string, options: PathComparisonOptions): ResolvedComparisonPath | null {
+  const platform = resolveAbsolutePathPlatform(value, options.platform);
+  if (!platform) return null;
+  const canonical = resolveCanonicalAbsolutePath(value, { ...options, platform });
+  return canonical ? { platform, canonical, identity: comparisonIdentity(canonical, platform) } : null;
+}
+
+function containsResolvedComparisonPath(root: ResolvedComparisonPath | null, candidate: ResolvedComparisonPath | null): boolean {
+  if (!root || !candidate || root.platform !== candidate.platform) return false;
+  const api = pathApi(root.platform);
+  const relativePath = api.relative(root.canonical.path, candidate.canonical.path);
+  return relativePath === ''
+    || (relativePath !== '..'
+      && !relativePath.startsWith(`..${api.sep}`)
+      && !api.isAbsolute(relativePath));
+}
+
+/** One read may reuse lexical observations; retain this comparator only for that read. */
+export function createCanonicalAbsolutePathComparator(options: PathComparisonOptions = {}) {
+  const paths = new Map<string, ResolvedComparisonPath | null>();
+  const read = (path: string) => {
+    if (!paths.has(path)) paths.set(path, resolveComparisonPath(path, options));
+    return paths.get(path) ?? null;
+  };
+  return {
+    equal(left: string, right: string): boolean {
+      const resolved = read(left);
+      return resolved !== null && resolved.identity === read(right)?.identity;
+    },
+    contains(root: string, candidate: string): boolean {
+      return containsResolvedComparisonPath(read(root), read(candidate));
+    },
+  };
+}
+
 /**
  * Checks lexical containment after normalizing absolute path syntax for its
  * native platform. Callers that require physical containment must resolve
@@ -181,24 +210,5 @@ export function isCanonicalAbsolutePathInsideRoot(
     platform?: NodeJS.Platform;
   }> = {},
 ): boolean {
-  const rootPlatform = resolveAbsolutePathPlatform(rootPath, options.platform);
-  const candidatePlatform = resolveAbsolutePathPlatform(candidatePath, options.platform);
-  if (!rootPlatform || rootPlatform !== candidatePlatform) return false;
-
-  const root = resolveCanonicalAbsolutePath(rootPath, {
-    env: options.env,
-    platform: rootPlatform,
-  });
-  const candidate = resolveCanonicalAbsolutePath(candidatePath, {
-    env: options.env,
-    platform: rootPlatform,
-  });
-  if (!root || !candidate) return false;
-
-  const api = pathApi(rootPlatform);
-  const relativePath = api.relative(root.path, candidate.path);
-  return relativePath === ''
-    || (relativePath !== '..'
-      && !relativePath.startsWith(`..${api.sep}`)
-      && !api.isAbsolute(relativePath));
+  return containsResolvedComparisonPath(resolveComparisonPath(rootPath, options), resolveComparisonPath(candidatePath, options));
 }

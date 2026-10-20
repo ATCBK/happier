@@ -232,7 +232,11 @@ describe('connectedServiceSwitchDeferralQueue', () => {
         // A hung runSwitch (stuck materialization / network hang) must not strand the deferred callers
         // forever: the deferral-window timer is cleared at execute-start, so without an execution bound
         // the pending leaks until session teardown.
-        const runSwitch = vi.fn(() => new Promise<void>(() => {}));
+        let executionSignal: AbortSignal | undefined;
+        const runSwitch = vi.fn((signal?: AbortSignal) => {
+            executionSignal = signal;
+            return new Promise<void>(() => {});
+        });
         const emitSessionEvent = vi.fn();
         const queue = createConnectedServiceSwitchDeferralQueue({
             timeoutMs: 60_000,
@@ -255,9 +259,11 @@ describe('connectedServiceSwitchDeferralQueue', () => {
 
         queue.recordTurnLifecycleEvent({ sessionId: 'sess_1', event: 'assistant_message_end' });
         expect(runSwitch).toHaveBeenCalledTimes(1);
+        expect(executionSignal?.aborted).toBe(false);
 
         vi.advanceTimersByTime(60_000);
         await outcome;
+        expect(executionSignal?.aborted).toBe(true);
         expect(emitSessionEvent).toHaveBeenCalledWith('sess_1', expect.objectContaining({
             type: 'connected_service_account_switch_deferral_completed',
             reason: 'aborted_after_timeout',

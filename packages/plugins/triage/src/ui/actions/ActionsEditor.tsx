@@ -157,8 +157,15 @@ export function TriageActionsEditor(props: TriageActionsEditorPropsV1): React.Re
   const translate = usePluginTranslation();
   const invocations = useTriagePromptInvocations();
   const profiles = useTriageLaunchProfiles();
-  const [target, setTarget] = React.useState<EditorTarget | null>(null);
-  const [draft, setDraft] = React.useState<TriageActionEditorDraftV1 | null>(null);
+  const [editor, setEditor] = React.useState<Readonly<{
+    target: EditorTarget;
+    draft: TriageActionEditorDraftV1;
+  }> | null>(null);
+  const target = editor?.target ?? null;
+  const draft = editor?.draft ?? null;
+  const setDraft = React.useCallback((next: TriageActionEditorDraftV1) => {
+    setEditor((current) => current === null ? null : { ...current, draft: next });
+  }, []);
 
   /**
    * The Library's invocations, plus the two entries a list of them cannot
@@ -229,12 +236,12 @@ export function TriageActionsEditor(props: TriageActionsEditorPropsV1): React.Re
   }, [heldProfileId, profiles, translate]);
 
   const close = React.useCallback(() => {
-    setTarget(null);
-    setDraft(null);
+    setEditor(null);
   }, []);
 
   const submit = React.useCallback(async () => {
-    if (target === null || draft === null) return;
+    if (editor === null) return;
+    const { target, draft } = editor;
     const applied = await actions.administer(
       target.kind === 'create'
         ? triageCreateActionInputV1(draft, target.baseRevision)
@@ -243,8 +250,17 @@ export function TriageActionsEditor(props: TriageActionsEditorPropsV1): React.Re
     // The draft survives a refusal: throwing away what somebody typed because
     // another device won the revision race is the one thing this editor must
     // never do.
-    if (applied !== null) close();
-  }, [actions, close, draft, target]);
+    if (applied === null) return;
+    setEditor((current) => {
+      // Retire only the submitted draft. A newer edit or Cancel is a newer
+      // intent, as in the Views naming owner.
+      if (current === editor) return null;
+      if (current === null || current.target !== target || applied.revision === null) return current;
+      // Keep newer input usable against the revision this write actually
+      // acknowledged, rather than its now-spent base revision.
+      return { ...current, target: { ...current.target, baseRevision: applied.revision } };
+    });
+  }, [actions, editor]);
 
   const move = React.useCallback(async (actionId: string, direction: 'up' | 'down') => {
     const order = triageMovedActionOrderV1(actions.actions, actionId, direction);
@@ -304,15 +320,17 @@ export function TriageActionsEditor(props: TriageActionsEditorPropsV1): React.Re
               disabled={busy}
               onPress={() => {
                 if (actions.revision === null) return;
-                setTarget({ kind: 'create', baseRevision: actions.revision });
-                setDraft(newTriageActionDraftV1());
+                setEditor({
+                  target: { kind: 'create', baseRevision: actions.revision },
+                  draft: newTriageActionDraftV1(),
+                });
               }}
             />
             {props.onClose === undefined ? null : (
               <Button
                 titleKey="plugins.triage.surface.actions.close"
                 title="Done"
-                variant="secondary"
+                variant="plain"
                 onPress={props.onClose}
               />
             )}
@@ -356,12 +374,14 @@ export function TriageActionsEditor(props: TriageActionsEditorPropsV1): React.Re
                 last={index === actions.actions.length - 1}
                 onEdit={() => {
                   if (actions.revision === null) return;
-                  setTarget({
-                    kind: 'update',
-                    actionId: action.actionId,
-                    baseRevision: actions.revision,
+                  setEditor({
+                    target: {
+                      kind: 'update',
+                      actionId: action.actionId,
+                      baseRevision: actions.revision,
+                    },
+                    draft: triageActionDraftV1(action),
                   });
-                  setDraft(triageActionDraftV1(action));
                 }}
                 onToggle={(enabled) => {
                   if (actions.revision === null) return;
@@ -605,7 +625,7 @@ export function TriageActionsEditor(props: TriageActionsEditorPropsV1): React.Re
                   const currentRevision = actions.revision;
                   if (currentRevision === null) return;
                   if (target.kind === 'create') {
-                    setTarget({ kind: 'create', baseRevision: currentRevision });
+                    setEditor({ target: { kind: 'create', baseRevision: currentRevision }, draft });
                     return;
                   }
                   const current = actions.actions.find(
@@ -615,11 +635,13 @@ export function TriageActionsEditor(props: TriageActionsEditorPropsV1): React.Re
                     close();
                     return;
                   }
-                  setDraft(triageActionDraftV1(current));
-                  setTarget({
-                    kind: 'update',
-                    actionId: target.actionId,
-                    baseRevision: currentRevision,
+                  setEditor({
+                    target: {
+                      kind: 'update',
+                      actionId: target.actionId,
+                      baseRevision: currentRevision,
+                    },
+                    draft: triageActionDraftV1(current),
                   });
                 }}
               />

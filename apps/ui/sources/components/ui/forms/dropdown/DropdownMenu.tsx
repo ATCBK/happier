@@ -54,6 +54,11 @@ export type DropdownMenuSubmenu = Readonly<{
     maxWidthCap?: number;
     /** Draw this submenu's category titles (a chooser titled by what it acts on), whatever its parent does. */
     showCategoryTitles?: boolean;
+    /**
+     * The submenu's own name when it differs from the row that opens it ("Move “Client work” to" under "Move to
+     * folder…"): its accessible name, and its title where a phone presents it as a sheet.
+     */
+    title?: string;
 }>;
 
 export type DropdownMenuCreateItemDisplay = Readonly<{
@@ -185,6 +190,8 @@ export type DropdownMenuProps = Readonly<{
     /** On a phone, present the menu as the shared bottom sheet (named by `popoverAccessibilityLabel`). */
     popoverPhonePresentation?: 'sheet';
     popoverAccessibilityLabel?: string;
+    /** The phone sheet's line under its title. */
+    popoverSheetSubtitle?: string;
     overlayStyle?: ViewStyle;
     /** When true, category titles like "General" are rendered (default false). */
     showCategoryTitles?: boolean;
@@ -243,6 +250,15 @@ type DropdownTriggerAccessibilityProps = Readonly<{
     'aria-expanded'?: boolean;
 }>;
 
+/** A sheet titled by `title` drops the category heading that only repeats it; the category's rows stay. */
+export function untitleSheetCategories<Category extends Readonly<{ title: string }>>(
+    categories: readonly Category[],
+    title: string | undefined,
+): readonly Category[] {
+    if (!title) return categories;
+    return categories.map((category) => (category.title === title ? { ...category, title: '' } : category));
+}
+
 function withExpandedTriggerState(trigger: React.ReactNode, open: boolean): React.ReactNode {
     if (!React.isValidElement<DropdownTriggerAccessibilityProps>(trigger)) return trigger;
 
@@ -280,7 +296,7 @@ export function DropdownMenu(props: DropdownMenuProps) {
     const { height: windowHeight } = useWindowDimensions();
     const maxHeightCap = props.maxHeightCap ?? windowHeight;
     const placementMinSpace = props.maxHeightCap ?? POPOVER_PREFERRED_ROOM_PX;
-    const emptyLabel = props.emptyLabel === undefined ? t('commandPalette.noCommandsFound') : props.emptyLabel;
+    const emptyLabel = props.emptyLabel === undefined ? t('common.noMatches') : props.emptyLabel;
     const contentPadding = rowVariant === 'slim' ? 12 : 16;
     const resultsPaddingBottom = typeof props.resultsPaddingBottom === 'number'
         ? props.resultsPaddingBottom
@@ -608,6 +624,35 @@ export function DropdownMenu(props: DropdownMenuProps) {
         return { size: typeof arrow.size === 'number' ? arrow.size : 12 } as const;
     }, [props.overlayArrow]);
 
+    const searchField = props.search ? (
+        <View style={{
+            paddingHorizontal: contentPadding,
+            paddingTop: contentPadding,
+            paddingBottom: rowVariant === 'slim' ? 4 : 8,
+        }}>
+            <TextInput
+                ref={inputRef as any}
+                value={searchQuery}
+                onChangeText={handleSearchChange}
+                placeholder={props.searchPlaceholder ?? t('commandPalette.placeholder')}
+                placeholderTextColor={theme.colors.input.placeholder}
+                autoFocus={false}
+                autoCorrect={false}
+                autoCapitalize="none"
+                onKeyPress={handleKeyDown}
+                style={{
+                    borderRadius: theme.borderRadius.md,
+                    borderWidth: 1,
+                    borderColor: theme.colors.border.default,
+                    paddingHorizontal: rowVariant === 'slim' ? 10 : 12,
+                    paddingVertical: rowVariant === 'slim' ? 8 : 10,
+                    fontSize: Typography.variant('label').fontSize,
+                    color: theme.colors.text.primary,
+                }}
+            />
+        </View>
+    ) : null;
+
     return (
         <View
             ref={anchorRef}
@@ -641,11 +686,14 @@ export function DropdownMenu(props: DropdownMenuProps) {
                     boundaryRef={props.popoverBoundaryRef}
                     phonePresentation={props.popoverPhonePresentation}
                     accessibilityLabel={props.popoverAccessibilityLabel}
+                    sheetSubtitle={props.popoverSheetSubtitle}
                     onRequestClose={onRequestClose}
                 >
-                    {({ maxHeight, maxWidth, placement }) => (<>
+                    {({ maxHeight, maxWidth, placement, presentation }) => (<>
                         <FloatingOverlay
-                            header={props.header}
+                            // The search field stays pinned above the scrolling results, so a long list scrolled to
+                            // its current choice never carries the field out of view.
+                            header={props.header || props.search ? <>{props.header}{searchField}</> : undefined}
                             footer={props.footer}
                             maxHeight={maxHeight}
                             edgeFades={{ top: true, bottom: true }}
@@ -675,40 +723,14 @@ export function DropdownMenu(props: DropdownMenuProps) {
                                 props.overlayStyle ?? null,
                             ]}
                         >
-                            {props.search ? (
-                                <View style={{
-                                    paddingHorizontal: contentPadding,
-                                    paddingTop: contentPadding,
-                                    paddingBottom: rowVariant === 'slim' ? 4 : 8,
-                                }}>
-                                    <TextInput
-                                        ref={inputRef as any}
-                                        value={searchQuery}
-                                        onChangeText={handleSearchChange}
-                                        placeholder={props.searchPlaceholder ?? t('commandPalette.placeholder')}
-                                        placeholderTextColor={theme.colors.input.placeholder}
-                                        autoFocus={false}
-                                        autoCorrect={false}
-                                        autoCapitalize="none"
-                                        onKeyPress={handleKeyDown}
-                                        style={{
-                                            borderRadius: theme.borderRadius.md,
-                                            borderWidth: 1,
-                                            borderColor: theme.colors.border.default,
-                                            paddingHorizontal: rowVariant === 'slim' ? 10 : 12,
-                                            paddingVertical: rowVariant === 'slim' ? 8 : 10,
-                                            fontSize: Typography.variant('label').fontSize,
-                                            color: theme.colors.text.primary,
-                                        }}
-                                    />
-                                </View>
-                            ) : null}
-
                             <View style={{ paddingBottom: resultsPaddingBottom }}>
                                 <SelectableMenuResults
                                     ref={resultsRef}
                                     wrapItem={props.wrapItem}
-                                    categories={filteredCategories}
+                                    // A sheet is titled already: a category that repeats its title is not drawn twice.
+                                    categories={presentation === 'sheet'
+                                        ? untitleSheetCategories(filteredCategories, props.popoverAccessibilityLabel)
+                                        : filteredCategories}
                                     selectedIndex={selectedIndex}
                                     onSelectionChange={setSelectedIndex}
                                     onPressItem={(item) => {
@@ -753,7 +775,7 @@ export function DropdownMenu(props: DropdownMenuProps) {
                                 allowEmptySelection={props.allowEmptySelection}
                                 // A menu that is a sheet on a phone opens its submenus as sheets too.
                                 popoverPhonePresentation={props.popoverPhonePresentation}
-                                popoverAccessibilityLabel={activeSubmenuItem.title}
+                                popoverAccessibilityLabel={activeSubmenuItem.submenu.title ?? activeSubmenuItem.title}
                             />
                         ) : null}
                     </>)}

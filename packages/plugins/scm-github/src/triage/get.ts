@@ -30,6 +30,7 @@ import {
   type GithubPullRequestOverviewV1,
 } from './detail/overview.js';
 import { createGithubRepositoryReader, type GithubRepositoryReaderV1 } from './repositories.js';
+import { readGithubIssueRelations } from './relations.js';
 import type {
   GithubTriageEntryLocalRefV1,
   GithubTriageFailureV1,
@@ -219,9 +220,19 @@ export async function runGithubTriageGet(
   const repositories = dependencies.repositories
     ?? createGithubRepositoryReader({ client: dependencies.client, now: dependencies.now });
 
-  return input.localRef.kindId === 'pull-request'
-    ? (await readGithubPullRequest(input.localRef, route, repositories, dependencies)).observation
-    : (await readGithubIssue(input.localRef, route, repositories, dependencies)).observation;
+  if (input.localRef.kindId === 'pull-request') {
+    return (await readGithubPullRequest(input.localRef, route, repositories, dependencies)).observation;
+  }
+  const observation = (await readGithubIssue(input.localRef, route, repositories, dependencies)).observation;
+  if (observation.kind !== 'present') return observation;
+  const currentRoute = parseGithubRoutingToken(observation.locator.routingToken);
+  if (currentRoute === null) return observation;
+  const relations = await readGithubIssueRelations(input.localRef, currentRoute, repositories, dependencies,
+    observation.snapshot.relations?.children);
+  return relations === undefined ? observation : Object.freeze({
+    ...observation,
+    snapshot: Object.freeze({ ...observation.snapshot, relations }),
+  });
 }
 
 /**
@@ -455,6 +466,8 @@ export async function readGithubPullRequest(
  * confirms the exact members it named against exactly what GitHub reported.
  */
 export type GithubIssueFactsV1 = Readonly<{
+  title: string | null;
+  body: string | null;
   /** GitHub's own `state`, trimmed: `open` or `closed`. */
   state: string | null;
   /** GitHub's own close classification; null while open or when omitted. */
@@ -478,6 +491,8 @@ function readNamedMembers(value: unknown, member: string): readonly string[] {
 
 function readGithubIssueFacts(raw: Readonly<Record<string, unknown>>): GithubIssueFactsV1 {
   return Object.freeze({
+    title: typeof raw.title === 'string' ? raw.title : null,
+    body: typeof raw.body === 'string' ? raw.body : raw.body === null ? '' : null,
     state: typeof raw.state === 'string' && raw.state.trim() ? raw.state.trim() : null,
     stateReason: typeof raw.state_reason === 'string' && raw.state_reason.trim()
       ? raw.state_reason.trim()
@@ -612,6 +627,9 @@ function projectIssuePresent(
     return observedIssue(unresolved(localRef, GITHUB_ROUTE_BODY_MISMATCH_FAILURE));
   }
   const record = isRecord(body) ? body : {};
+  const facts = readGithubIssueFacts(record);
+  const labels = readGithubNamedMembers(record.labels, 'name', 'exact');
+  const assignees = readGithubNamedMembers(record.assignees, 'login', 'exact');
   return Object.freeze({
     observation: Object.freeze({
       kind: 'present' as const,
@@ -619,8 +637,14 @@ function projectIssuePresent(
       locator: projection.locator,
       snapshot: projection.snapshot,
       viewer: Object.freeze({ involvement: Object.freeze([]) }),
+      taskFields: {
+        ...(facts.title === null ? {} : { title: facts.title }),
+        ...(facts.body === null ? {} : { body: facts.body }),
+        ...(labels === null ? {} : { labelIds: [...labels] }),
+        ...(assignees === null ? {} : { assigneeIds: [...assignees] }),
+      },
     }),
-    facts: readGithubIssueFacts(record),
+    facts,
     overview: projectGithubIssueOverview(record),
   });
 }

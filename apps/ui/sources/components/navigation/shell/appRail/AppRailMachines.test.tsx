@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storageStore';
@@ -27,6 +27,10 @@ vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createT
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
 
 let servedHome: Awaited<ReturnType<typeof serveActionHomes>> | undefined;
+beforeEach(async () => {
+    servedHome = await serveActionHomes({ homes: [{ key: 'rail', serverUrl: 'https://rail-warm.test', accountId: 'rail-account', currentAccount: true }],
+        route: request => request.path === '/v1/features' ? Response.json(createRootLayoutFeaturesResponse()) : undefined });
+});
 afterEach(async () => {
     standardCleanup();
     clearMachineRequestReachabilityForTest();
@@ -70,17 +74,74 @@ function setHomeMachines(machines: readonly Machine[]) {
     const activeServerId = String(getActiveServerSnapshot().serverId ?? '').trim() || 'server-active';
     storage.setState((state) => ({
         ...state,
-        profileScope: { serverId: activeServerId, accountId: 'rail-account' },
+        profileScope: state.profileScope?.serverId === activeServerId && state.profileScope.accountId === 'rail-account'
+            ? state.profileScope : { serverId: activeServerId, accountId: 'rail-account' },
         machines: {},
         machineListByServerId: { ...state.machineListByServerId, [activeServerId]: [...machines] },
     }));
 }
 
 describe('AppRailMachines', () => {
+    it('forgets a seen look reason on closed recovery so the same reason badges on recurrence', async () => {
+        const previousState = storage.getState();
+        const reason = { key: 'disk:data', kind: 'disk_nearly_full', level: 'look', metric: 'disk', since: 1,
+            volumeId: 'data', volumeLabel: 'Data', nextStep: 'free_up_space' };
+        const look = machine('edge-1', { daemonState: { resources: published('look', [reason]) } as never });
+        try {
+            storage.getState().applyLocalSettings({ machinesRailSeenV1: { look: { '["another-home","other"]': ['memory'] }, guardSeenAt: 0 } });
+            setHomeMachines([look]);
+            const { AppRailMachines } = await import('./AppRailMachines');
+            const { SidebarFooterPopoverButton } = await import('../sidebarFooter/SidebarFooterPopoverButton');
+            const screen = await renderScreen(<AppRailMachines />);
+            expect(screen.findByTestId('app-rail-machines-badge')).not.toBeNull();
+            await act(async () => screen.root.findByType(SidebarFooterPopoverButton).props.onOpenIntent?.());
+            expect(screen.findByTestId('app-rail-machines-badge')).toBeNull();
+            const acknowledgedAt = storage.getState().localSettings.machinesRailSeenV1.guardSeenAt;
+            await act(async () => storage.getState().applyLocalSettings({ machinesRailSeenV1: {
+                ...storage.getState().localSettings.machinesRailSeenV1,
+                look: { ...storage.getState().localSettings.machinesRailSeenV1.look, '["another-home","other"]': ['memory'] },
+            } }));
+            await act(async () => setHomeMachines([machine('edge-1', { daemonState: { resources: published('calm', []) } as never })]));
+            expect(storage.getState().localSettings.machinesRailSeenV1).toEqual({ look: { '["another-home","other"]': ['memory'] }, guardSeenAt: acknowledgedAt });
+            await act(async () => setHomeMachines([look]));
+            expect(screen.findByTestId('app-rail-machines-badge')).not.toBeNull();
+            expect(screen.findByTestId('sidebar-machines-popover-content')).toBeNull();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
+    it.each(['offline', 'missing_publication', 'reader_failed', 'account_switch'] as const)('does not mistake %s for a recovered look reason', async condition => {
+        const previousState = storage.getState();
+        const reason = { key: 'disk:data', kind: 'disk_nearly_full', level: 'look', metric: 'disk', since: 1,
+            volumeId: 'data', volumeLabel: 'Data' };
+        const look = machine('edge-1', { daemonState: { resources: published('look', [reason]) } as never });
+        try {
+            storage.getState().applyLocalSettings({ machinesRailSeenV1: { look: {}, guardSeenAt: 0 } });
+            setHomeMachines([look]);
+            const { AppRailMachines } = await import('./AppRailMachines');
+            const { SidebarFooterPopoverButton } = await import('../sidebarFooter/SidebarFooterPopoverButton');
+            const screen = await renderScreen(<AppRailMachines />);
+            await act(async () => screen.root.findByType(SidebarFooterPopoverButton).props.onOpenIntent?.());
+            const seen = storage.getState().localSettings.machinesRailSeenV1;
+            await act(async () => {
+                if (condition === 'account_switch') {
+                    setHomeMachines([machine('edge-1', { daemonState: { resources: published('calm', []) } as never })]);
+                    storage.setState(state => ({ profileScope: { ...state.profileScope!, accountId: 'another-account' } }));
+                } else setHomeMachines([condition === 'offline' ? { ...look, active: false, activeAt: 1 }
+                    : condition === 'missing_publication' ? { ...look, daemonState: null }
+                    : { ...look, daemonState: { resources: { ...published('calm', []), vitals: { state: 'unavailable', reason: 'reader_failed', since: 1 } } } as never }]);
+            });
+            expect(storage.getState().localSettings.machinesRailSeenV1).toBe(seen);
+            await act(async () => setHomeMachines([look]));
+            expect(screen.findByTestId('app-rail-machines-badge')).toBeNull();
+        } finally {
+            storage.setState(previousState);
+        }
+    });
+
     it('warms only executable fleet machines on pointer intent', async () => {
-        servedHome = await serveActionHomes({ homes: [{ key: 'rail', serverUrl: 'https://rail-warm.test', accountId: 'rail-account', currentAccount: true }],
-            route: request => request.path === '/v1/features' ? Response.json(createRootLayoutFeaturesResponse()) : undefined });
-        const serverId = servedHome.homes.rail!.id;
+        const serverId = servedHome!.homes.rail!.id;
         const failed = machine('warm-failed');
         const ready = machine('warm-ready');
         storage.setState({ profileScope: { serverId, accountId: 'rail-account' }, machines: { [failed.id]: failed, [ready.id]: ready },
@@ -89,9 +150,12 @@ describe('AppRailMachines', () => {
         const { AppRailMachines } = await import('./AppRailMachines');
         const { SidebarFooterPopoverButton } = await import('../sidebarFooter/SidebarFooterPopoverButton');
         const screen = await renderScreen(<AppRailMachines />);
-        await act(async () => screen.root.findByType(SidebarFooterPopoverButton).props.onWarmIntent());
+        await act(async () => screen.root.findByType(SidebarFooterPopoverButton).props.onWarmIntent?.());
         await flushHookEffects();
         await vi.waitFor(() => expect(vitalsRpc).toHaveBeenCalled());
+        expect(vitalsRpc.mock.calls.map(([call]) => call.machineId)).toEqual(['warm-ready']);
+        await act(async () => screen.root.findByType(SidebarFooterPopoverButton).props.onWarmIntent?.());
+        await flushHookEffects();
         expect(vitalsRpc.mock.calls.map(([call]) => call.machineId)).toEqual(['warm-ready']);
     });
     it('names the counts on the closed icon, draws no badge for machines that are merely offline, and stays still on heartbeats', async () => {
@@ -180,5 +244,12 @@ describe('AppRailMachines', () => {
         const open = await renderScreen(<AppRailMachines selected />);
         expect(selectedButtons(open).length).toBeGreaterThan(0);
         expect(open.findByTestId('sidebar-machines-popover-content')).toBeNull();
+    });
+
+    it('previews its popover on hover like the Usage icon', async () => {
+        const { AppRailMachines } = await import('./AppRailMachines');
+        const { SidebarFooterPopoverButton } = await import('../sidebarFooter/SidebarFooterPopoverButton');
+        const screen = await renderScreen(<AppRailMachines />);
+        expect(screen.root.findByType(SidebarFooterPopoverButton).props.hoverPreview).toBe(true);
     });
 });

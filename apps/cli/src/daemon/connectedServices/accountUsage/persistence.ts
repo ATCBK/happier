@@ -68,21 +68,35 @@ export type ProviderAccountUsagePersistenceScheduler = Readonly<{
 export async function flushProviderAccountUsagePersistenceForTrackedSessions(input: Readonly<{
   ownedScheduler: ProviderAccountUsagePersistenceScheduler;
   trackedSessions: Iterable<Readonly<{ happySessionId?: string | null }>>;
-  resolveSessionAccountContext: (sessionId: string) => Promise<Pick<RequesterSessionRuntimeContext, 'providerAccountUsagePersistence'> | null>;
+  withSessionAccountContext: <T>(sessionId: string | null, operation: (context: Pick<RequesterSessionRuntimeContext, 'providerAccountUsagePersistence'> | null) => Promise<T>) => Promise<T>;
   timeoutMs: number;
 }>): Promise<void> {
-  const schedulers = new Set([input.ownedScheduler]);
-  await Promise.all([...input.trackedSessions].map(async tracked => {
+  const flushes = new Map<ProviderAccountUsagePersistenceScheduler, Promise<void>>();
+  const flushScheduler = (scheduler: ProviderAccountUsagePersistenceScheduler) => {
+    let flush = flushes.get(scheduler);
+    if (!flush) {
+      flush = scheduler.flush(input.timeoutMs);
+      flushes.set(scheduler, flush);
+    }
+    return flush;
+  };
+  await Promise.all([flushScheduler(input.ownedScheduler), ...[...input.trackedSessions].map(async tracked => {
     if (!tracked.happySessionId) return;
+    let flush: Promise<void> | undefined;
     try {
-      const context = await input.resolveSessionAccountContext(tracked.happySessionId);
-      if (context) schedulers.add(context.providerAccountUsagePersistence);
+      await input.withSessionAccountContext(tracked.happySessionId, async context => {
+        if (!context) return;
+        flush = flushScheduler(context.providerAccountUsagePersistence);
+        // Retain requester ownership until the write settles. Propagate a flush
+        // failure below, outside the lost-custody acquisition catch.
+        await flush.catch(() => undefined);
+      });
     } catch {
       // Lost requester custody is not ordinary Account authority. Other retained
       // schedulers still reconnect, and each requester checks currentness at write.
     }
-  }));
-  await Promise.all([...schedulers].map(scheduler => scheduler.flush(input.timeoutMs)));
+    await flush;
+  })]);
 }
 
 function deriveProviderAccountUsageStatus(
@@ -200,6 +214,19 @@ export function createProviderAccountUsagePersistenceScheduler(params: Readonly<
     persistenceKey: string,
     payload: ProviderAccountUsagePersistencePayload,
   ): Promise<void> {
+    // An identical observation can enter the latest-work queue while the
+    // preceding HTTP write is still pending. Reconcile with its committed
+    // result before sealing or sending that queued payload.
+    const previous = stateByPersistenceKey.get(persistenceKey);
+    const subscription = mergeProviderAccountSubscription(previous?.subscription, payload.snapshot.subscription);
+    const snapshot = subscription === payload.snapshot.subscription ? payload.snapshot : { ...payload.snapshot, subscription };
+    const materialFingerprint = snapshot === payload.snapshot ? payload.materialFingerprint
+      : computeProviderAccountUsageSnapshotFingerprint(snapshot, fingerprintKey);
+    payload = { ...payload, snapshot, materialFingerprint, materialState: { ...payload.materialState, fingerprint: materialFingerprint } };
+    const decision = shouldPersistQuotaSnapshot({ previous: previous ?? null, next: payload.materialState,
+      nowMs: Math.max(0, Math.trunc(params.now())), minFreshnessMs });
+    if (!decision.persist && !(decision.reason === 'unchanged_fresh'
+      && JSON.stringify(subscription) !== JSON.stringify(previous?.subscription))) return;
     const accountMode = await params.api.getAccountEncryptionMode();
     if (accountMode !== 'plain' && accountMode !== 'e2ee') {
       throw new Error(
@@ -237,10 +264,8 @@ export function createProviderAccountUsagePersistenceScheduler(params: Readonly<
       staleAfterMs: payload.snapshot.staleAfterMs,
       metadata: { materialFingerprint: payload.materialFingerprint },
     };
-    await writeProviderAccountUsage({
-      token: params.credentials.token,
-      write,
-    });
+    await writeProviderAccountUsage({ token: params.credentials.token, write,
+      ...(accountMode === 'e2ee' ? { material: requireAccountEncryptionCredentials(params.credentials).encryption } : {}) });
     stateByPersistenceKey.set(persistenceKey, { ...payload.materialState, ...(payload.snapshot.subscription ? { subscription: payload.snapshot.subscription } : {}) });
   }
 

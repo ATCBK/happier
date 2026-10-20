@@ -6,7 +6,10 @@ import { mapCanonicalExternalSessionResponseToLegacyDirectSession } from '@/api/
 import { EXTERNAL_SESSION_REQUIRED_GENERIC_RPC_SCOPES } from '@/rpc/handlers/actionSpecRpcRegistration';
 import { registerActionSpecRpcHandlers } from '@/rpc/handlers/registerActionSpecRpcHandlers';
 
-import type { BoundedAgentExternalSessionsContribution } from '@/session/external/agentExternalSessionsInvocation';
+import type { AgentExternalSessionsContribution } from '@happier-dev/plugin-sdk/sessions/external';
+import { createBoundedAgentExternalSessionsContribution } from '@/session/external/agentExternalSessionsInvocation';
+import { createManagedPluginSourceCustody } from '@/plugins/runtime/lifecycle/contributions/runtimeIdentity.testkit';
+import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
 import { ExternalSessionProviderFailureError } from '@/session/external/providerOps';
 import { createAgentExternalSessionsExecutionSurface } from '@/agent/runtime/registry/agentExternalSessionsExecutionSurface';
 
@@ -297,12 +300,21 @@ describe('executeExternalSessionLinkEnsureAction', () => {
                 ok: true as const,
                 value: { outcome: 'already_current' as const },
             })),
-        }) satisfies BoundedAgentExternalSessionsContribution;
+        } satisfies AgentExternalSessionsContribution);
+        const boundedContribution = createBoundedAgentExternalSessionsContribution({
+            contribution,
+            identity: { pluginId: 'happier.agent.opencode', agentId: 'opencode',
+                occurrenceId: 'retryable-source-failure', contributionQualifiedId: 'happier.agent.opencode/agents/opencode',
+                sourceCustody: createManagedPluginSourceCustody('retryable-source-failure') },
+            isCurrent: () => true,
+            retirementSignal: new AbortController().signal,
+            createInvocationExec: async () => createUnavailablePluginServices().exec,
+        });
         resolveExternalSessionSourceSurfaceMock.mockImplementationOnce(async (_agentId, source) => ({
             ok: true,
             source,
             declaration: externalSessionSourceDeclarationDouble(source.kind),
-            providerOps: createAgentExternalSessionsExecutionSurface(contribution),
+            providerOps: createAgentExternalSessionsExecutionSurface(boundedContribution),
         }));
 
         const result = await executeExternalSessionLinkEnsureAction({

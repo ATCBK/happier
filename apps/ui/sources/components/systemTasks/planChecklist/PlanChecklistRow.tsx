@@ -18,7 +18,7 @@ import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Icon, type IconName, type IconWeight } from '@/components/ui/icons/Icon';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { HappierStepMarkerView } from '@happier-dev/plugin-ui/presentation';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 
 function getRowStatus(
     item: PlanChecklistItem,
@@ -269,7 +269,7 @@ export type PlanChecklistRowProps = Readonly<{
 
 export const PlanChecklistRow = React.memo(function PlanChecklistRow(props: PlanChecklistRowProps) {
     const { theme } = useUnistyles();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const styles = stylesheet;
     const [hovered, setHovered] = React.useState(false);
     const status = getRowStatus(props.item, props.phase, props.selected, props.execution);

@@ -41,6 +41,11 @@ export interface CreateAcpBackendOptions {
   /** Environment variable names removed from the inherited child environment. */
   unsetEnv?: readonly string[];
 
+  /** The host Exec owner supplied the complete process tuple. */
+  hostFinalizedLaunch?: true;
+
+  windowsVerbatimArguments?: boolean;
+
   transformAgentChildLaunchEnvironment?:
     AcpBackendOptions['transformAgentChildLaunchEnvironment'];
 
@@ -123,6 +128,8 @@ export function createAcpBackend(options: CreateAcpBackendOptions): AcpBackend {
     args: options.args,
     env: options.env,
     ...(options.unsetEnv ? { unsetEnv: options.unsetEnv } : {}),
+    ...(options.hostFinalizedLaunch ? { hostFinalizedLaunch: true } : {}),
+    ...(options.windowsVerbatimArguments === undefined ? {} : { windowsVerbatimArguments: options.windowsVerbatimArguments }),
     ...(options.transformAgentChildLaunchEnvironment
       ? {
           transformAgentChildLaunchEnvironment:

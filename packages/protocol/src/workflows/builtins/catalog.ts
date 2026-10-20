@@ -28,7 +28,7 @@ export const BUILTIN_WORKFLOW_CATALOG_V1 = Object.freeze([
     definition: KEEP_GOING_WORKFLOW_V1 },
   { id: 'builtin:review-and-converge', version: 1,
     titleKey: 'workflows.builtins.reviewAndConverge.title',
-    descriptionKey: 'workflows.builtins.reviewAndConverge.description', purpose: 'review', requiresOriginSession: true,
+    descriptionKey: 'workflows.builtins.reviewAndConverge.description', purpose: 'review', requiresOriginSession: false,
     definition: REVIEW_AND_CONVERGE_WORKFLOW_V1 },
   { id: 'builtin:plan-with-a-panel', version: 1,
     titleKey: 'workflows.builtins.planWithAPanel.title',

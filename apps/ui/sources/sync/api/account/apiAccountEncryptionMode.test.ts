@@ -3,13 +3,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { isServerFetchConnectivityProbeRequest } from '@/dev/testkit/mocks/serverFetch';
 
+// Prepare the real dependency graph during collection. Cache invalidation owns
+// per-case isolation; cold module transformation is not part of an HTTP test.
+const accountEncryptionMode = await import('./apiAccountEncryptionMode');
+
 afterEach(async () => {
+  accountEncryptionMode.invalidateAccountEncryptionModeCache();
   const { resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
   await resetServerReachabilitySupervisors();
   const { stopAllEndpointSupervisorsForTests } = await import('@/sync/runtime/connectivity/endpointSupervisorPool');
   await stopAllEndpointSupervisorsForTests();
   vi.unstubAllGlobals();
-  vi.resetModules();
 });
 
 const credentials: AuthCredentials = { token: 't', secret: 's' };
@@ -100,19 +104,7 @@ describe('apiAccountEncryptionMode', () => {
   });
 
   it('fails closed to e2ee when the server does not implement /v1/account/encryption', async () => {
-    vi.stubGlobal('fetch', (vi.fn(async (input: RequestInfo | URL) => {
-      const url = typeof input === 'string' ? input : input.toString();
-      if (url.endsWith('/health')) {
-        return { ok: true, status: 200, json: async () => ({ ok: true }) };
-      }
-      if (url.endsWith('/v1/auth/ping')) {
-        return { ok: true, status: 200, json: async () => ({ ok: true }) };
-      }
-      if (url.endsWith('/v1/account/encryption')) {
-        return { ok: false, status: 404, json: async () => ({ error: 'not_found' }) };
-      }
-      throw new Error(`Unexpected fetch to ${url}`);
-    })) as unknown as typeof fetch);
+    installNetworkBoundary(async () => new Response(JSON.stringify({ error: 'not_found' }), { status: 404 }));
 
     const { fetchAccountEncryptionMode } = await import('./apiAccountEncryptionMode');
     const res = await fetchAccountEncryptionMode(credentials);
@@ -236,7 +228,8 @@ describe('apiAccountEncryptionMode', () => {
     expect(getCalls).toHaveLength(2);
   });
 
-  it('publishes a new cache revision whenever the incumbent mode cache is invalidated', async () => {
+  it.each([undefined, { reason: 'scope-reset' }] as const)(
+    'publishes a new cache revision whenever the incumbent mode cache is invalidated (%j)', async (options) => {
 
     const {
       getAccountEncryptionModeCacheRevision,
@@ -249,7 +242,7 @@ describe('apiAccountEncryptionMode', () => {
     });
     const initialRevision = getAccountEncryptionModeCacheRevision();
 
-    invalidateAccountEncryptionModeCache();
+    invalidateAccountEncryptionModeCache(options);
 
     expect(revisions).toEqual([initialRevision + 1]);
     expect(getAccountEncryptionModeCacheRevision()).toBe(initialRevision + 1);

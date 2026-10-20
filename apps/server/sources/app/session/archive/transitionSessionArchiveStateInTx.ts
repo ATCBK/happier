@@ -1,5 +1,5 @@
 import { applySessionArchiveTransitionToFollowsInTx } from "@/app/session/follow/lifecycle";
-import { applySessionArchiveTransitionToReportsToInTx } from "@/app/session/relations/sessionReportsToService";
+import { applySessionArchiveTransitionToManagerInTx } from "@/app/session/follow/sessionManagerService";
 import type { Tx } from "@/storage/inTx";
 import { admitSessionLifecycleAutomationRunsTx } from "@/app/automations/automationSessionLifecycleAdmission";
 import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
@@ -14,14 +14,9 @@ export async function transitionSessionArchiveStateInTx(params: Readonly<{
     /** The HTTP owner has already verified this exact Run's Machine publisher. */
     originRunId?: string;
 }>) {
-    const relatedEdges = await params.tx.sessionReportsTo.findMany({
-        where: { OR: [{ sessionId: params.sessionId }, { leadSessionId: params.sessionId }] },
-        select: { sessionId: true, leadSessionId: true },
+    await acquireSessionAccountCursorLocksInTx(params.tx, [params.sessionId], [], {
+        includeLifecyclePublications: !params.wasArchived && params.archivedAt !== null,
     });
-    await acquireSessionAccountCursorLocksInTx(params.tx, [
-        params.sessionId,
-        ...relatedEdges.flatMap(edge => [edge.sessionId, edge.leadSessionId]),
-    ], [], { includeLifecyclePublications: !params.wasArchived && params.archivedAt !== null });
     const session = await params.tx.session.update({
         where: { id: params.sessionId },
         data: {
@@ -37,7 +32,7 @@ export async function transitionSessionArchiveStateInTx(params: Readonly<{
         wasArchived: params.wasArchived,
         isArchived: params.archivedAt !== null,
     });
-    await applySessionArchiveTransitionToReportsToInTx(params.tx, {
+    await applySessionArchiveTransitionToManagerInTx(params.tx, {
         sessionId: params.sessionId, wasArchived: params.wasArchived, isArchived: params.archivedAt !== null,
     });
     if (!params.wasArchived && params.archivedAt !== null) {

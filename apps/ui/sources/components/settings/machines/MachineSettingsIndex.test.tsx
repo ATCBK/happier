@@ -6,6 +6,8 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHo
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installMachinesSettingsCommonModuleMocks } from './machinesSettingsTestHelpers';
 import type { ManagedMachineV1 } from '@happier-dev/protocol/machines/managed/managedMachineV1';
+import { MachinePublishedResourceSummaryV1Schema } from '@happier-dev/protocol/machines/resources/machineResourceSummaryV1';
+import type { WidgetAreaPresetV1 } from '@happier-dev/protocol/widgets';
 import { recordMachineCollectionVisit } from './collection/machineCollectionVisit';
 
 (
@@ -18,12 +20,7 @@ type Group = {
   serverId: string;
   serverName: string;
   status: 'idle' | 'loading' | 'signedOut' | 'error';
-  machines: Array<{
-    id: string;
-    active: boolean;
-    activeAt: number;
-    metadata?: { displayName?: string; host?: string; platform?: string };
-  }>;
+  machines: Array<ReturnType<typeof createMachineFixture>>;
 };
 
 const routerPushSpy = vi.fn();
@@ -136,6 +133,9 @@ const { AllMachinesIndex: MachinesSettingsView } =
   await import('@/components/machines/index/AllMachinesIndex');
 const { MachinesRelayDriftBanner } = await import('./MachinesRelayDriftBanner');
 const { storage } = await import('@/sync/domains/state/storage');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } =
+  await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 const { updateEffectiveHomeViewState } = await import('@/sync/domains/server/selection/homeViewSelectionState');
 const { resetScopedHomeActionExecutorsForTests } = await import('@/sync/ops/actions/scopedHomeActionExecutor');
 const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixtures/featureFixtures');
@@ -149,7 +149,7 @@ function machine(id: string, displayName: string, host: string) {
     installationId: `${id}-installation`,
     active: true,
     activeAt: 0,
-    metadata: { displayName, host, platform: 'darwin' },
+    metadata: { ...createMachineFixture().metadata!, displayName, host, platform: 'darwin' },
   });
 }
 
@@ -259,6 +259,42 @@ describe('All machines (the Settings door index)', () => {
         (node) => node.props?.testID === 'settings.machines.thisComputer',
       ),
     ).toHaveLength(0);
+  });
+
+  it.each([true, false])('pins the dashboard from the page’s two-Home attention census (needs attention: %s)', async (needsAttention) => {
+    const calm = MachinePublishedResourceSummaryV1Schema.parse({ v: 1, vitals: { state: 'reporting' },
+      host: { logicalCores: 8, memoryTotalBytes: 2 ** 34, bootedAt: 1 },
+      attention: { level: 'calm', reasons: [] } });
+    const attention = MachinePublishedResourceSummaryV1Schema.parse({ ...calm, attention: {
+      level: 'needs_you', reasons: [{ key: 'disk', level: 'needs_you', since: 1, metric: 'disk', nextStep: 'free_up_space',
+        kind: 'disk_full', volumeId: 'data', volumeLabel: '/data' }],
+    } });
+    await setMachines([
+      { serverId: 'srv_a', serverName: 'Home A', status: 'idle', machines: [
+        { ...machine('machine-a1', 'Machine A1', 'a.local'), daemonState: { resources: calm } },
+      ] },
+      { serverId: 'srv_b', serverName: 'Home B', status: 'idle', machines: [
+        { ...machine('machine-b1', 'Machine B1', 'b.local'), daemonState: { resources: needsAttention ? attention : calm } },
+      ] },
+    ]);
+    const previousScope = storage.getState().profileScope;
+    const previousApplied = getAppliedActiveServerSnapshot();
+    const previousAvailable = isAppliedActiveServerRuntimeAvailable();
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+    storage.setState({ profileScope: { serverId: 'srv_a', accountId: 'account-a' } });
+    try {
+      const tree = await renderPage();
+      const document = tree.find(node => Array.isArray(node.props.binding?.presets));
+      const presets: readonly WidgetAreaPresetV1[] = document.props.binding.presets;
+      const group = presets[0]!.items.find(item => item.kind === 'group');
+      expect(group?.kind === 'group' ? group.context?.machine : undefined).toEqual({ kind: 'value', value: needsAttention
+        ? { serverId: 'srv_b', machineId: 'machine-b1' } : { serverId: 'srv_a', machineId: 'machine-a1' } });
+      expect(tree.findAll(node => node.props.testID === 'machines.needs-you.srv_b.machine-b1').length > 0).toBe(needsAttention);
+    } finally {
+      standardCleanup();
+      publishAppliedActiveServerSnapshot(previousApplied, previousAvailable);
+      storage.setState({ profileScope: previousScope });
+    }
   });
 
   it('says the fleet in one sentence and lists the machine that needs you, with its one action, above the table', async () => {
@@ -559,6 +595,35 @@ describe('All machines (the Settings door index)', () => {
       ).length,
     ).toBeGreaterThan(0);
     expect(tree.findAllByType('SelectionTiles' as never)).toHaveLength(0);
+  });
+
+  it('holds the whole first answer behind the collection loading, then publishes rows, headline and count together, and keeps them through a re-read', async () => {
+    const profileId = homeProfiles.get('srv_a')!;
+    const managedFirstReply = createDeferred<void>();
+    home.answer(profileId, '/v1/machines/managed/actions/list', { body: { machines: [] }, respondAfter: managedFirstReply.promise });
+    const rowId = 'machines.index.row.machine:srv_a:machine-a1';
+    const has = (tree: Awaited<ReturnType<typeof renderPage>>, testID: string) => tree.findAll(node => node.props?.testID === testID).length > 0;
+    const screen = await renderScreen(React.createElement(MachinesSettingsView));
+    await waitForHomeGovernance(() => expect(home.requests.some(request => request.path === '/v1/machines/managed/actions/list')).toBe(true));
+    await flushHookEffects();
+    // One machine is already known, but the created machines have not answered: no partial row, no count.
+    expect(screen.tree.findAll(node => node.props?.testID === 'machines.index.collection' && node.props?.loading === true).length).toBeGreaterThan(0);
+    expect(has(screen.tree, rowId)).toBe(false);
+    expect(has(screen.tree, 'machines.index.count')).toBe(false);
+    await act(async () => managedFirstReply.resolve());
+    await waitForHomeGovernance(() => expect(has(screen.tree, rowId)).toBe(true));
+    expect(has(screen.tree, 'machines.index.count')).toBe(true);
+    // A later read keeps the answer already shown.
+    const rereply = createDeferred<void>();
+    home.answer(profileId, '/v1/machines/managed/actions/list', { body: { machines: [] }, respondAfter: rereply.promise });
+    const requests = home.requests.filter(request => request.path === '/v1/machines/managed/actions/list').length;
+    const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+    await act(async () => publishHomeAccountChange('srv_a'));
+    await waitForHomeGovernance(() => expect(home.requests.filter(request => request.path === '/v1/machines/managed/actions/list').length).toBeGreaterThan(requests));
+    expect(has(screen.tree, rowId)).toBe(true);
+    expect(has(screen.tree, 'machines.index.count')).toBe(true);
+    await act(async () => rereply.resolve());
+    await screen.unmount();
   });
 
   it('ends in a named failure with Retry, not the add tiles, when the Home cannot list its machines', async () => {

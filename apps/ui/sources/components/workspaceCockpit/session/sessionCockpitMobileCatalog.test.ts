@@ -127,6 +127,7 @@ describe('sessionCockpitMobileCatalog', () => {
             'tabs',
             'companion',
             'agents',
+            'collaboration',
             'navigation',
             'board',
             'browser',

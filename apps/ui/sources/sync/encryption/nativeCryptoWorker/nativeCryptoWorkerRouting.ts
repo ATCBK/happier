@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import {
     syncPerformanceTelemetry,
     type SyncPerformanceTelemetry,
@@ -5,6 +6,7 @@ import {
 
 import {
     NATIVE_CRYPTO_WORKER_FALLBACK_REASON,
+    NATIVE_CRYPTO_WORKER_OPERATION,
     NATIVE_CRYPTO_WORKER_PROBE_FAILURE_REASON,
     NATIVE_CRYPTO_WORKER_ROUTING_DECLINE_REASON,
     NativeCryptoWorkerUnavailableError,
@@ -62,7 +64,7 @@ type RunNativeCryptoWorkerBatchOptions<T> = Readonly<{
     telemetry?: SyncPerformanceTelemetry;
     now?: () => number;
     probe: () => Promise<NativeCryptoWorkerCapability>;
-    nativeRun: () => Promise<readonly T[]>;
+    nativeRun: (signal?: AbortSignal) => Promise<readonly T[]>;
     referenceRun: () => Promise<readonly T[]>;
     isScopeCurrent?: () => boolean;
 }>;
@@ -150,17 +152,26 @@ function whenAborted(signal: AbortSignal | undefined): Promise<void> {
     });
 }
 
-async function runWithTimeout<T>(fn: () => Promise<T>, timeoutMs: number): Promise<T> {
+async function runWithDispatchLifetime<T>(fn: (signal?: AbortSignal) => Promise<T>, timeoutMs: number | null, signal?: AbortSignal): Promise<T> {
     let timeout: ReturnType<typeof setTimeout> | undefined;
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
     try {
+        const pending = fn(controller.signal);
+        if (timeoutMs === null) return await pending;
         return await Promise.race([
-            fn(),
+            pending,
             new Promise<never>((_, reject) => {
                 timeout = setTimeout(() => reject(new Error('native crypto worker timed out')), timeoutMs);
             }),
         ]);
     } finally {
         if (timeout) clearTimeout(timeout);
+        signal?.removeEventListener('abort', abort);
+        // Release this call's queued and in-flight work before fallback begins.
+        controller.abort();
     }
 }
 
@@ -178,7 +189,7 @@ async function runProbe<T>(
     const telemetry = options.telemetry ?? syncPerformanceTelemetry;
     const shouldRecordProbe = routing.telemetryEnabled && telemetry.isEnabled();
     if (!shouldRecordProbe) {
-        const capability = await runWithTimeout(options.probe, routing.timeoutMs);
+        const capability = await runWithDispatchLifetime(options.probe, routing.timeoutMs);
         rememberNativeCryptoWorkerCapability(options.capabilityCacheKey, capability);
         return capability;
     }
@@ -186,7 +197,7 @@ async function runProbe<T>(
     const now = options.now ?? defaultNow;
     const startedAtMs = now();
     try {
-        const capability = await runWithTimeout(options.probe, routing.timeoutMs);
+        const capability = await runWithDispatchLifetime(options.probe, routing.timeoutMs);
         rememberNativeCryptoWorkerCapability(options.capabilityCacheKey, capability);
         recordNativeCryptoWorkerProbe(telemetry, Math.max(0, now() - startedAtMs), {
             operation: options.operation,
@@ -243,14 +254,18 @@ export async function runNativeCryptoWorkerBatch<T>(
     options: RunNativeCryptoWorkerBatchOptions<T>,
 ): Promise<NativeCryptoWorkerBatchResult<T>> {
     const routing = normalizeNativeCryptoWorkerRouting(options.routing);
+    // Web envelope opening is a measured main-thread bottleneck, including one
+    // envelope. Native bridge amortization floors do not apply.
+    const webEnvelope = Platform.OS === 'web'
+        && options.operation === NATIVE_CRYPTO_WORKER_OPERATION.decryptDataKeyEnvelopeV1;
     if (isAbortSignalAborted(options.signal)) {
         return { status: 'cancelled', source: 'cancelled', items: [] };
     }
     const declineReason: NativeCryptoWorkerRoutingDeclineReason | null = routing.mode === 'off'
         ? NATIVE_CRYPTO_WORKER_ROUTING_DECLINE_REASON.routingDisabled
-        : options.itemCount < routing.minBatchSize
+        : !webEnvelope && options.itemCount < routing.minBatchSize
             ? NATIVE_CRYPTO_WORKER_ROUTING_DECLINE_REASON.belowMinBatchSize
-            : options.payloadBytes < routing.minPayloadBytes
+            : !webEnvelope && options.payloadBytes < routing.minPayloadBytes
                 ? NATIVE_CRYPTO_WORKER_ROUTING_DECLINE_REASON.belowMinPayloadBytes
                 : null;
     if (declineReason !== null) {
@@ -299,7 +314,7 @@ export async function runNativeCryptoWorkerBatch<T>(
         capability = await runProbe(options, routing);
     } catch (error) {
         invalidateNativeCryptoWorkerCapability(options.capabilityCacheKey);
-        degradeNativeCryptoWorkerCapability(options.capabilityCacheKey, getNativeWorkerFailureReason(error));
+        if (!webEnvelope) degradeNativeCryptoWorkerCapability(options.capabilityCacheKey, getNativeWorkerFailureReason(error));
         if (routing.mode === 'require') {
             throw error;
         }
@@ -311,6 +326,12 @@ export async function runNativeCryptoWorkerBatch<T>(
             throw new NativeCryptoWorkerUnavailableError(capability.failureReason);
         }
         reportFallback(NATIVE_CRYPTO_WORKER_FALLBACK_REASON.unavailable, capability.failureReason);
+        return runReference(options.referenceRun);
+    }
+    // The web adapter contributes envelope opening only. Other operations keep
+    // their canonical reference implementation rather than dispatching an absent op.
+    if (capability.supportedOperations && !capability.supportedOperations.includes(options.operation)) {
+        if (routing.mode === 'require') throw new NativeCryptoWorkerUnavailableError(NATIVE_CRYPTO_WORKER_PROBE_FAILURE_REASON.missing);
         return runReference(options.referenceRun);
     }
     if (isAbortSignalAborted(options.signal)) {
@@ -330,7 +351,11 @@ export async function runNativeCryptoWorkerBatch<T>(
     }
 
     try {
-        const items = await runWithTimeout(options.nativeRun, routing.timeoutMs);
+        // A web envelope run drains a shared queue through its reusable Worker.
+        // Its wall time includes queue wait, script loading and renderer scheduling;
+        // the native bridge deadline is not a budget for that entire inventory.
+        // Worker completion/error and caller cancellation own the web lifetime.
+        const items = await runWithDispatchLifetime(options.nativeRun, webEnvelope ? null : routing.timeoutMs, options.signal);
         if (isAbortSignalAborted(options.signal)) {
             return { status: 'cancelled', source: 'cancelled', items: [] };
         }
@@ -343,7 +368,7 @@ export async function runNativeCryptoWorkerBatch<T>(
         if (isAbortSignalAborted(options.signal)) {
             return { status: 'cancelled', source: 'cancelled', items: [] };
         }
-        if (isNativeWorkerUnavailableError(error)) {
+        if (webEnvelope || isNativeWorkerUnavailableError(error)) {
             invalidateNativeCryptoWorkerCapability(options.capabilityCacheKey);
         } else {
             degradeNativeCryptoWorkerCapability(options.capabilityCacheKey, getNativeWorkerFailureReason(error));

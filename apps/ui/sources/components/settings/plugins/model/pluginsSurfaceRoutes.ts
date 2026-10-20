@@ -1,5 +1,3 @@
-import { usePathname } from '@/components/appShell/workspace/destinationRoute';
-
 import { SETTINGS_ROUTES } from '@/components/settings/catalog/routes';
 import type { IconName } from '@/components/ui/icons/Icon';
 
@@ -147,9 +145,4 @@ export function readPluginListingRouteParams(params: Readonly<Record<string, unk
     const sourceId = readParam(params.sourceId);
     const pluginId = readParam(params.pluginId);
     return sourceId && pluginId ? { sourceId, pluginId } : null;
-}
-
-/** The host the current screen is rendered in. */
-export function usePluginsSurfaceHost(): PluginsSurfaceHost {
-    return resolvePluginsSurfaceHost(usePathname());
 }

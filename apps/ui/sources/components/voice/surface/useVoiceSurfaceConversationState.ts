@@ -65,10 +65,9 @@ function useVoiceSurfaceConversationBinding(params: VoiceSurfaceConversationPara
      *
      *  - `state.sessions` by identity — a new map on every append, presence flip
      *    or metadata patch anywhere in the app;
-     *  - the whole `voiceSessionBindingStore` state — which re-derives its
-     *    persisted layer from *every* registered storage change and always
-     *    allocates a new state object, even when the bindings are unchanged
-     *    (`voiceConversationBindingStore.ts:179-190,226-230`).
+     *  - the whole `voiceSessionBindingStore` state. The store now retains
+     *    equivalent bindings across registered storage refreshes; real binding
+     *    changes still need this reader's resolved-session selector.
      *
      * Both are replaced by the same derived selector, so `useStoreSnapshot`'s
      * `Object.is` bail-out ends the write: an unrelated session recomputes a

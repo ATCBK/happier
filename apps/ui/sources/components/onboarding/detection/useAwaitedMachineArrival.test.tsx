@@ -6,6 +6,8 @@ import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { storage } from '@/sync/domains/state/storageStore';
 import { removeServerProfile, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
+import { beginMachineAddWatch } from '@/components/machines/add/machineAddTaskLifetime';
+import { discardMachineAddFlowDraft, readMachineAddFlowDraft } from '@/components/machines/add/machineAddFlowStore';
 
 import { createAwaitedMachineArrivalBaseline, useAwaitedMachineArrival, type AwaitedMachineArrivalBaseline } from './useAwaitedMachineArrival';
 
@@ -107,9 +109,11 @@ describe('useAwaitedMachineArrival', () => {
             const hook = await renderHook(() => useAwaitedMachineArrival(), {
                 flushOptions: { cycles: 1, turns: 4 },
             });
+            const waiting = hook.getCurrent();
 
             await applyMachine({ id: 'm-existing', active: true, activeAt: now + 500, updatedAt: now + 500 });
 
+            expect(hook.getCurrent()).toBe(waiting);
             expect(hook.getCurrent()).toMatchObject({ status: 'waiting', machine: undefined, isOnline: false });
             await hook.unmount();
         } finally {
@@ -127,15 +131,93 @@ describe('useAwaitedMachineArrival', () => {
             const hook = await renderHook(() => useAwaitedMachineArrival(), {
                 flushOptions: { cycles: 1, turns: 4 },
             });
+            const machines = storage.getState().machines;
 
             await applyMachine({ id: 'm-returning', active: true, activeAt: freshAt, updatedAt: freshAt });
 
+            expect(storage.getState().machines).toBe(machines);
             expect(hook.getCurrent().status).toBe('arrived');
             expect(hook.getCurrent().machine?.id).toBe('m-returning');
             expect(hook.getCurrent().isOnline).toBe(true);
             await hook.unmount();
         } finally {
             storage.setState(previousState);
+        }
+    });
+
+    it('observes presence recovery only for the named Home while retaining its inventory', async () => {
+        const previousState = storage.getState();
+        const one = await upsertServerProfile({ serverUrl: 'https://arrival-one.example.test', name: 'Arrival one' });
+        const two = await upsertServerProfile({ serverUrl: 'https://arrival-two.example.test', name: 'Arrival two' });
+        const staleAt = Date.now() - 10 * 60_000;
+        try {
+            storage.getState().applyMachines([createMachineFixture({ id: 'shared-id', activeAt: staleAt, updatedAt: staleAt })], true, { sourceServerId: one.id });
+            storage.getState().applyMachines([createMachineFixture({ id: 'shared-id', activeAt: staleAt, updatedAt: staleAt })], true, { sourceServerId: two.id });
+            const hook = await renderHook(() => useAwaitedMachineArrival({ serverId: one.id, serverUrl: one.serverUrl }));
+            const waiting = hook.getCurrent();
+            const inventory = storage.getState().machineListByServerId[one.id];
+
+            await applyMachine({ id: 'shared-id', activeAt: Date.now(), updatedAt: Date.now() }, two.id);
+            expect(hook.getCurrent()).toBe(waiting);
+            await applyMachine({ id: 'shared-id', activeAt: Date.now(), updatedAt: Date.now() }, one.id);
+
+            expect(storage.getState().machineListByServerId[one.id]).toBe(inventory);
+            expect(hook.getCurrent()).toMatchObject({ status: 'arrived', machine: { id: 'shared-id' }, isOnline: true });
+            await hook.unmount();
+        } finally {
+            storage.setState(previousState);
+            await removeServerProfile(one.id);
+            await removeServerProfile(two.id);
+        }
+    });
+
+    it.each([
+        { capture: 'implicit', recovery: 'inventory-and-presence' },
+        { capture: 'implicit', recovery: 'presence-only' },
+        { capture: 'retained', recovery: 'presence-only' },
+    ] as const)('keeps a $capture wait pending when $recovery recovered before it began', async ({ capture, recovery }) => {
+        const previousState = storage.getState();
+        const home = await upsertServerProfile({ serverUrl: 'https://arrival-recovered.example', name: 'Recovered' });
+        const staleAt = Date.now() - 10 * 60_000;
+        try {
+            storage.getState().applyMachines([
+                createMachineFixture({ id: 'already-recovered', activeAt: staleAt, updatedAt: staleAt }),
+            ], true, { sourceServerId: home.id });
+            const inventory = storage.getState().machineListByServerId[home.id];
+
+            if (recovery === 'inventory-and-presence') {
+                await applyMachine({ id: 'already-recovered', activeAt: Date.now(), updatedAt: Date.now() }, home.id);
+            } else {
+                // The hook's scoped inputs may carry newer presence than retained inventory.
+                // Seed that input contract without replacing the real store or its readers.
+                await act(async () => storage.setState((state) => ({
+                    machinePresenceByServerId: {
+                        ...state.machinePresenceByServerId,
+                        [home.id]: { 'already-recovered': { active: true, activeAt: Date.now(), updatedAt: Date.now() } },
+                    },
+                })));
+            }
+            expect(storage.getState().machineListByServerId[home.id]).toBe(inventory);
+
+            if (capture === 'retained') beginMachineAddWatch(home.id, 'ssh');
+            let baseline: AwaitedMachineArrivalBaseline | null = capture === 'retained' ? readMachineAddFlowDraft().baseline : null;
+            const onBaselineCaptured = (next: AwaitedMachineArrivalBaseline) => { baseline = next; };
+            const first = await renderHook(() => useAwaitedMachineArrival({
+                serverId: home.id, serverUrl: home.serverUrl, baseline, onBaselineCaptured,
+            }));
+            expect(first.getCurrent()).toMatchObject({ status: 'waiting', machine: undefined, isOnline: false });
+            await first.unmount();
+
+            await applyMachine({ id: 'arrived-while-unmounted', activeAt: Date.now(), updatedAt: Date.now() }, home.id);
+            const remounted = await renderHook(() => useAwaitedMachineArrival({
+                serverId: home.id, serverUrl: home.serverUrl, baseline, onBaselineCaptured,
+            }));
+            expect(remounted.getCurrent()).toMatchObject({ status: 'arrived', machine: { id: 'arrived-while-unmounted' }, isOnline: true });
+            await remounted.unmount();
+        } finally {
+            discardMachineAddFlowDraft();
+            storage.setState(previousState);
+            await removeServerProfile(home.id);
         }
     });
 

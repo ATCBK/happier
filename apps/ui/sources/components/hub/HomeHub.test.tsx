@@ -61,6 +61,7 @@ const widgets = vi.hoisted(() => ({
     bodyMounts: {} as Record<string, number>,
     hubRenders: 0,
     setupRenders: 0,
+    composerSuggestions: [] as (string | undefined)[],
     focused: true,
     focusListeners: new Set<() => void>(),
 }));
@@ -148,7 +149,13 @@ vi.mock('expo-router', async () => {
 });
 
 // Each section is its own owner with its own tests; the home decides only which show, and where.
-vi.mock('./composer/HubComposerSection', () => ({ HubComposerSection: () => 'section:start' }));
+vi.mock('./composer/HubComposerSection', () => ({
+    // Records how its suggestions are presented; the composer itself is its own suite's.
+    HubComposerSection: (props: { suggestions?: string }) => {
+        widgets.composerSuggestions.push(props.suggestions);
+        return 'section:start';
+    },
+}));
 vi.mock('./HubAttentionSection', () => ({ HubAttentionSection: () => 'section:attention' }));
 vi.mock('./HubSetupSection', () => ({
     HubSetupSection: () => {
@@ -211,6 +218,7 @@ afterEach(async () => {
     widgets.bodyMounts = {};
     widgets.hubRenders = 0;
     widgets.setupRenders = 0;
+    widgets.composerSuggestions = [];
     widgets.focused = true;
     widgets.focusListeners.clear();
 });
@@ -303,6 +311,7 @@ function shownSections(text: string): string[] {
 describe('HomeHub', () => {
     it('reserves the phone sections while its acknowledged layout is unknown, then replaces the placeholder', async () => {
         settings.viewport = { width: 390, height: 900 };
+        settings.layout = { order: ['attention', 'automations', 'start'], hidden: ['setup'] };
         const read = createDeferred<void>();
         let pending = true;
         const screen = await renderHome(async (input, init) => {
@@ -310,14 +319,13 @@ describe('HomeHub', () => {
             return artifact.request(input, init);
         });
         try {
-            expect(screen.findByTestId('home-hub.layout.loading')).not.toBeNull();
-            // Only the composer holds its room in the hero (it always exists and leads by default), so
-            // nothing under it drops when the layout arrives; every other section waits for the layout.
-            expect(shownSections(screen.getTextContent()).filter(id => id !== 'start')).toEqual([]);
+            expect(screen.findByTestId('home-hero')).toBeNull();
+            expect(shownSections(screen.getTextContent())).toEqual([]);
             await act(async () => { pending = false; read.resolve(); });
             await flushHookEffects({ cycles: 20 });
             expect(screen.findByTestId('home-hub.layout.loading')).toBeNull();
-            expect(shownSections(screen.getTextContent()).length).toBeGreaterThan(0);
+            expect(shownSections(screen.getTextContent())).toEqual(['attention', 'automations', 'start']);
+            expect(holdsText(screen.findByTestId('home-hero')!, 'section:start')).toBe(false);
         } finally { read.resolve(); }
     });
     it('holds a quiet page while it is not known yet whether a machine can run a session', async () => {
@@ -332,6 +340,24 @@ describe('HomeHub', () => {
         settings.guidanceKind = 'connect_machine';
         const firstRun = await renderHome();
         expect(firstRun.getTextContent()).toContain('guidance');
+    });
+
+    it('keeps the default composer hidden after an initial layout read failure and retries the Account layout', async () => {
+        settings.layout = { order: ['attention', 'automations', 'start'], hidden: ['setup'] };
+        let failRead = true;
+        const screen = await renderHome(async (input, init) => {
+            if (failRead && new URL(String(input)).pathname === `/v1/artifacts/${artifact.artifactId}`) {
+                return Response.json({ invalid: 'artifact response' });
+            }
+            return artifact.request(input, init);
+        });
+        await vi.waitFor(() => expect(screen.findByTestId('home-hub.layout.error')).not.toBeNull());
+        expect(screen.findByTestId('home-hero')).toBeNull();
+        expect(shownSections(screen.getTextContent())).toEqual([]);
+        failRead = false;
+        await screen.pressByTestIdAsync('home-hub.layout.retry');
+        await vi.waitFor(() => expect(shownSections(screen.getTextContent())).toEqual(['attention', 'automations', 'start']));
+        expect(holdsText(screen.findByTestId('home-hero')!, 'section:start')).toBe(false);
     });
 
     it('asks an Account with no name on the no-computer Home, through the one Add your name block and its dismissal', async () => {
@@ -393,6 +419,18 @@ describe('HomeHub', () => {
         expect(moved.findByTestId('home-hero')).toBeTruthy();
         expect(shownSections(moved.getTextContent())).toEqual(['automations', 'start', 'attention', 'setup']);
         expect(holdsText(moved.findByTestId('home-hero')!, 'section:start')).toBe(false);
+        // Moved lower it still stands over the atmosphere: its suggestions keep the hero's presentation,
+        // never the plain page's tiles.
+        expect(widgets.composerSuggestions.at(-1)).toBe('links');
+    });
+
+    it('presents the composer\'s suggestions as tiles only on the plain page', async () => {
+        settings.layout = { order: ['automations', 'start'], hidden: [] };
+        const screen = await renderHome();
+        await screen.pressByTestIdAsync('look-chip');
+        await screen.pressByTestIdAsync('look-source:none');
+        expect(screen.findByTestId('home-hero')).toBeNull();
+        expect(widgets.composerSuggestions.at(-1)).toBe('tiles');
     });
 
     it('opens Customize over the live page: switches, keyboard moves and reset write the Account layout', async () => {
@@ -797,6 +835,33 @@ describe('HomeHub plugin widgets', () => {
         expect(screen.findByTestId('home-hub.customizing')).toBeNull();
         expect(screen.findByTestId('home-hub.section.g.bar')).toBeNull();
         expect(screen.getTextContent()).toContain('Release checks');
+    });
+
+    it.each(['installed', 'builtin'] as const)('lands a top-level %s widget carried to the new-row target at the end of Home', async kind => {
+        widgets.projection = widgetProjectionOf([
+            { pluginId: 'acme.ci', localId: 'checks', title: 'Checks', target: 'app' },
+        ], { 'acme.ci': widgetInstalledPackage('acme.ci', 'CI') });
+        const copy = (id: string): WidgetInstanceV1 => ({ v: 1, id, definition: { kind: 'installed', surface: { pluginId: 'acme.ci', localId: 'checks' } }, bindings: {} });
+        const first: WidgetInstanceV1 = kind === 'builtin' ? { v: 1, id: 'first', definition: { kind: 'builtin', id: 'your_home' }, bindings: {} } : copy('first');
+        const second = copy('second'); const third = copy('third');
+        settings.layout = { order: ['start', 'attention', 'setup', first.id, second.id, third.id], hidden: [], items: placed(first, second, third) };
+        const screen = await renderHome();
+        await lay(screen, { [first.id]: 300, [second.id]: 300, [third.id]: 300 });
+        await act(async () => { screen.pressByTestId('home-hub.customize'); });
+        await flushHookEffects({ cycles: 2 });
+        const drag = screen.root.findAllByType(SessionSurfaceEntityDragHandle).find(handle => handle.props.testID === `home-hub.section.${first.id}.move`)!.props.drag;
+        const newRow = screen.root.findAllByType(SessionSurfaceEntityTargetFeedback).find(node => node.props.testID === 'home-hub.new-row.drop')!.props.drag;
+        let carry: ReturnType<typeof drag.runtime.begin> = null;
+        await act(async () => { carry = drag.runtime.begin(drag.sourceId, 'keyboard'); });
+        let destination: ReturnType<typeof drag.runtime.getDestinations>[number] | undefined;
+        await vi.waitFor(async () => {
+            await flushHookEffects();
+            destination = drag.runtime.getDestinations(drag.sourceId).find(entry => entry.targetId === newRow.targetId);
+            expect(destination?.admission.status).toBe('allowed');
+        });
+        await act(async () => { carry!.choose(destination!.targetId, destination!.destination); expect((await carry!.release())?.status).toBe('applied'); });
+        await vi.waitFor(() => expect(artifact.layout().order.at(-1)).toBe(first.id));
+        expect(artifact.layout().order.filter(id => [first.id, second.id, third.id].includes(id))).toEqual([second.id, third.id, first.id]);
     });
 
     it('opens Add from a group\'s empty slot and puts the new widget into that group', async () => {

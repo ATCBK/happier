@@ -3,7 +3,7 @@ import { createOpenAiVoiceRuntimeEnvironment, type OpenAiMintTransport } from '@
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getEncoding } from 'js-tiktoken';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { type PluginMachineExecutionOriginV1 } from '@happier-dev/protocol';
 
 import { normalizePluginUiDestinationBindingV1 } from '@happier-dev/protocol/plugins/ui';
@@ -3459,9 +3459,9 @@ describe('realtime_openai source-composed WebRTC gate', () => {
       if (!update) throw new Error('Expected accepted OpenAI tool catalog');
       expect(new TextEncoder().encode(update).byteLength).toBeLessThanOrEqual(VOICE_WEBRTC_LIMITS.outboundControlBytes);
       const { parameters: { body: { session: { instructions } } } } = z.object({
-        parameters: z.object({ body: z.object({ session: z.object({ instructions: z.string().min(1) }) }) }),
+        parameters: z.object({ body: z.object({ session: z.object({ instructions: z.string().check(z.minLength(1)) }) }) }),
       }).parse(composed.requestAccountOperation.mock.calls[0]?.[0]);
-      const { session: { tools } } = z.object({ session: z.object({ tools: z.array(z.object({ name: z.string() }).passthrough()) }) }).parse(JSON.parse(update));
+      const { session: { tools } } = z.object({ session: z.object({ tools: z.array(z.looseObject({ name: z.string() })) }) }).parse(JSON.parse(update));
       // OpenAI's published instructions + tools ceiling is 16,384 tokens:
       // https://developers.openai.com/blog/realtime-api#long-conversations-and-context-handling
       // Reserve a quarter for provider framing, user instructions and context.

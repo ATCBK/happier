@@ -38,6 +38,7 @@ export async function fetchBrowserDiagnosticsSnapshotViaMachineRpc(
             serverId: input.serverId ?? undefined,
             method: RPC_METHODS.DAEMON_BROWSER_DIAGNOSTICS_SNAPSHOT,
             payload,
+            signal: input.signal,
         });
         if (isRpcMethodNotFoundResult(raw)) {
             return { ok: false, reason: 'unavailable' };

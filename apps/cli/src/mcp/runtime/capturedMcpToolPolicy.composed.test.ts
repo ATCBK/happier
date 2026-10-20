@@ -124,7 +124,7 @@ it('captured Account socket and reconnect row changes update Session and Run pol
         expect(accountId).toBe('foreign-owner'); return cursor;
       }, writeChangesCursor: async (accountId, next) => { expect(accountId).toBe('foreign-owner'); cursor = next; },
       catchUpSessionMessages: async () => { throw new Error('Unexpected transcript catch-up'); }, syncSessionSnapshotFromServer: async () => { throw new Error('Unexpected Session snapshot'); },
-      refreshDemandedMcpCatalog: resolver.refreshDemandedMcpCatalog, onDebug() {} }));
+      refreshDemandedAccountCatalogs: resolver.refreshDemandedMcpCatalog, onDebug() {} }));
     expect(handler.getImmediateDecision('ask', 'mcp__docs__write', {})).toBeNull();
     expect(run.getImmediateDecision('ask', 'mcp__docs__write', {})).toBeNull();
     expect(cursor).toBe(revision);
@@ -135,17 +135,19 @@ it('captured Account socket and reconnect row changes update Session and Run pol
     await runWithServerHttpBaseUrl(url, () => runSessionChangesSyncOnConnect({ reason: 'reconnect', token: credentials.token, sessionId: session.sessionId, lastObservedMessageSeq: 0,
       getAccountId: () => fetchChangesAccountId({ token: credentials.token }), readChangesCursor: async () => 1,
       writeChangesCursor: async () => { acknowledgedAfterMcpFailure = true; }, catchUpSessionMessages: async () => {}, syncSessionSnapshotFromServer: async () => true,
-      refreshDemandedMcpCatalog: resolver.refreshDemandedMcpCatalog, onDebug() {} }));
+      refreshDemandedAccountCatalogs: resolver.refreshDemandedMcpCatalog, onDebug() {} }));
     expect(acknowledgedAfterMcpFailure).toBe(true);
     expect(operation.readSnapshot()?.mcpServerCatalog).toMatchObject({ status: 'unavailable', reason: 'encryption-material-unavailable' });
-    expect(handler.getImmediateDecision('unavailable', 'mcp__docs__write', {})).toMatchObject({ decision: 'denied' });
-    expect(run.getImmediateDecision('unavailable', 'mcp__docs__write', {})).toMatchObject({ decision: 'denied' });
+    // Lost catalog authority cannot reuse a persistent Allow. Both real
+    // interactive handlers defer to a fresh prompt rather than auto-approving.
+    expect(handler.getImmediateDecision('unavailable', 'mcp__docs__write', {})).toBeNull();
+    expect(run.getImmediateDecision('unavailable', 'mcp__docs__write', {})).toBeNull();
     unavailableStorage = false;
     await resolver.refreshDemandedMcpCatalog();
     ownerCurrent = false;
     await expect(resolver.refreshDemandedMcpCatalog()).rejects.toMatchObject({ code: 'provider_authorization_changed' });
     expect(operation.readSnapshot()).toBeNull();
-    expect(handler.getImmediateDecision('retired', 'mcp__docs__write', {})).toMatchObject({ decision: 'denied' });
+    expect(handler.getImmediateDecision('retired', 'mcp__docs__write', {})).toBeNull();
   } finally {
     await nativeHost?.dispose(); await resolver.dispose(); resetActiveAccountSettingsSnapshotForTests(); socket.disconnect();
     await connection?.sessionConnectionSupervisor.stop(); await new Promise<void>(resolve => socketHome.close(() => resolve()));

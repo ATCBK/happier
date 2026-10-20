@@ -34,6 +34,7 @@ import { verifyRunnerReadinessForActivation } from "./runnerBrokerReadinessVerif
 import { StoredRunnerCredentialSelectionV1Schema } from "./credentialSelectionRecord";
 import { readRunnerConsentDisplayFactsInTx } from "./runnerConsentDisplayFacts";
 import { readCurrentMaterializedRunnerPrincipalForActivationInTx } from "./materializedRunnerPrincipalCurrentness";
+import { acquireRunnerActivationLockInTx } from './activationLock';
 
 export type StoreRunnerActivationProgressResult<T> =
     | Readonly<{ status: "stored"; value: T }>
@@ -64,25 +65,27 @@ async function withCurrentClaimedActivation<T>(
     activationId: string,
     action: (tx: Tx, row: ActivationRow) => Promise<T>,
 ): Promise<T | null> {
-    return inTx(async (tx) => {
+    const result = await inTx(async (tx) => {
         const initial = await tx.ephemeralRunnerActivation.findUnique({
             where: { id: activationId },
             select: { creatorAccountId: true },
         });
         if (!initial) return null;
         try {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, initial.creatorAccountId);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, initial.creatorAccountId, "content");
         } catch (error) {
             if (error instanceof AccountSessionOwnerMetadataFenceAccountNotFoundError) return null;
             throw error;
         }
+        await acquireRunnerActivationLockInTx(tx, activationId);
         const row = await tx.ephemeralRunnerActivation.findUnique({ where: { id: activationId } });
         if (!row) return null;
         const current = await readRunnerCreatorCurrentnessInTx(tx, row.creatorAccountId);
         const reconciled = await reconcileRunnerActivationCurrentnessInTx(tx, row, current);
         if (reconciled.state === "closed" || current.status !== "ready") return null;
-        return action(tx, reconciled);
+        return { value: await action(tx, reconciled) };
     });
+    return result === null ? null : result.value;
 }
 
 function verifyProgressUpdateForRow(row: ActivationRow, update: unknown): RunnerActivationProgressUpdateV1 | null {

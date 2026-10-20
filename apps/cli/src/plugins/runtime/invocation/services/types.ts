@@ -38,6 +38,8 @@ export type BeginPluginInvocationDiagnosticScope = (
 ) => void;
 
 export type AgentInvocationTurnAdmissionWitness = Readonly<{
+    discussionAddressing?: import('@happier-dev/protocol/discussions/participants').DiscussionAddressingV1;
+    actionRequestAttributionV1?: import('@happier-dev/protocol/actions/actionRequestAttributionV1').ActionRequestAttributionV1;
     inputId: string;
     turnId: string;
     userMessageSeq: number | null;
@@ -60,7 +62,7 @@ export type PluginExternalActionContext = Readonly<{
     serverId: string;
     serverIdentityId: string;
     actionRequestId: string;
-    externalActionCredential: NonNullable<ActionExecutorContext['externalActionCredential']>;
+    externalActionCredential?: NonNullable<ActionExecutorContext['externalActionCredential']>;
     externalActionExecutionAuthorization: NonNullable<ActionExecutorContext['externalActionExecutionAuthorization']>;
     externalActionTarget: NonNullable<ActionExecutorContext['externalActionTarget']>;
     signExternalActionApprovalInput?: NonNullable<ActionExecutorContext['signExternalActionApprovalInput']>;
@@ -91,12 +93,18 @@ export type PluginInvocationServicesSeed = Readonly<{
     startedBy?: import('@happier-dev/protocol').WorkflowRunStartedByV1;
     /** Host-private external PAT authority; never projected into plugin input/context. */
     externalActionContext?: PluginExternalActionContext;
+    /** Original host-admitted Action source; never part of the public plugin context. */
+    approvalContext?: ActionExecutorContext;
+    /** Accepted finite invocation cause; a live turn reader, when present, supersedes it. */
+    actionRequestAttributionV1?: import('@happier-dev/protocol/actions/actionRequestAttributionV1').ActionRequestAttributionV1;
     /**
      * Host-private dispatch-time lookup for this invocation's own current
      * materialization. It deliberately prevents a service from capturing
      * caller authority at invocation construction.
      */
     resolveCurrentPluginMaterializationRef?(): PluginMachineMaterializationRefV1 | null;
+    /** Current exact Machine/source authority, resolved by the runtime registry. */
+    resolveCurrentPluginExecutionOrigin?(signal?: AbortSignal): Promise<import('@happier-dev/protocol').PluginMachineExecutionOriginV1 | null>;
     /** Untrusted, transient settlement from one mounted UI caller. */
     selectedActionInputCarrier?: PluginUiSelectedActionInputCarrierV1;
     /** Re-read that mounted caller at the final provider-effect boundary. */
@@ -253,14 +261,20 @@ export type CreatePluginInvocationServices = (
 
 export type CreateAgentInvocationServices = (
     params: Readonly<{
+        actionRequestAttributionV1?: ActionExecutorContext['actionRequestAttributionV1'];
         processOwner?: ProcessOwnerRef;
         pluginId: string;
         pluginVersion: string;
         agentId: string;
         occurrenceId: string;
         correlationId: string;
+        /** Exact preflight operation's existing Connected Account custody. */
+        exactPurposeBindingSubjectId?: string;
         cwd: string;
         environment?: Readonly<Record<string, string>>;
+        /** Captured host preparation; generic Exec stays nonactivating. */
+        prepareAgentNativeLaunch?: import('./exec').HostAgentNativeLaunchPreparation;
+        projectSetupOperation?: import('@/workspaces/projectSetup/projectSetupExecution').ProjectSetupOperationContext;
         /** Host-private exact managed launch; plugin code never receives this binding. */
         agentCliLaunch?: import('@/packagedRuntime/managedTools/agentCliLaunchSpec').BoundAgentCliLaunchSpec;
         providerBindingActive?: boolean;

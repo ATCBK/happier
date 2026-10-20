@@ -11,6 +11,7 @@ const compact = (count: number): string =>
 
 export type McpAddTranslation = Readonly<{
   title: string;
+  subtitle: string;
   modes: Readonly<{ catalog: string; paste: string; custom: string }>;
   searchPlaceholder: (params: Readonly<{ count: number | null }>) => string;
   groupAll: string;
@@ -82,6 +83,7 @@ export type McpAddTranslation = Readonly<{
 
 const en: McpAddTranslation = {
   title: 'Add a server',
+  subtitle: 'From a registry, a config you already use, or your own command.',
   modes: { catalog: 'Catalog', paste: 'Paste a config', custom: 'Custom' },
   searchPlaceholder: ({ count }) =>
     count === null || count === 0

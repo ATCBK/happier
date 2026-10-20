@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { act } from 'react';
+import { describe, expect, it, vi } from 'vitest';
 
 import { mountThroughReactNativeWeb } from '../../rnwMount.testSupport.js';
 import { HappierSegmentedChoice } from './SegmentedChoice.js';
@@ -72,5 +73,50 @@ describe('segmented choice value source', () => {
     expect(set.container.innerHTML).toBe(plain.container.innerHTML);
     plain.unmount();
     set.unmount();
+  });
+});
+
+describe('a scrollable segmented choice', () => {
+  const COLUMNS = ['needs', 'agent', 'review', 'rest'].map((key, index) => ({
+    key,
+    label: key,
+    selected: key === 'rest',
+    disabled: false,
+    testID: `column:${index}`,
+  }));
+  type LayoutNode = HTMLElement & { __reactLayoutHandler?: (event: unknown) => void };
+  const layout = (node: Element | null, frame: { x: number; width: number }) => {
+    act(() => (node as LayoutNode).__reactLayoutHandler?.({ nativeEvent: { layout: { y: 0, height: 28, ...frame } } }));
+  };
+
+  it('brings the chosen segment into view when it sits past the visible edge', () => {
+    const scroll = vi.fn();
+    const original = HTMLElement.prototype.scroll;
+    // jsdom has no scroll geometry; the element's own scroll() is the platform boundary under test.
+    HTMLElement.prototype.scroll = scroll as unknown as typeof original;
+    const view = mountThroughReactNativeWeb(
+      <HappierSegmentedChoice
+        testID="columns"
+        accessibilityLabel="Columns"
+        scrollable
+        segments={COLUMNS}
+        onSelect={() => undefined}
+        colors={COLORS}
+      />,
+    );
+    const track = view.container.querySelector('[data-testid="columns"]')!;
+    const scroller = track.parentElement!.parentElement!;
+    layout(scroller, { x: 0, width: 300 });
+    COLUMNS.forEach((column, index) => layout(
+      view.container.querySelector(`[data-testid="column:${index}"]`)!.parentElement,
+      { x: 2 + index * 110, width: 110 },
+    ));
+    expect(scroll).toHaveBeenCalledTimes(1);
+    const left = (scroll.mock.calls[0]![0] as { left: number }).left;
+    // The chosen segment (332..442) ends inside the 300px window it was scrolled into.
+    expect(left).toBeGreaterThanOrEqual(442 - 300);
+    expect(left).toBeLessThanOrEqual(332);
+    view.unmount();
+    HTMLElement.prototype.scroll = original;
   });
 });

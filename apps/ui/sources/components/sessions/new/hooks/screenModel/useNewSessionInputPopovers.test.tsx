@@ -165,7 +165,6 @@ function createParams(overrides: Partial<HookParams> = {}): HookParams {
         agentType: 'codex',
         agentLabel: 'Codex',
         agentOptionState: null,
-        settings: {},
         pluginProjectionV2: null,
         ...overrides,
     } as HookParams;

@@ -46,7 +46,7 @@ describe("Key Challenge password mutation (real database)", () => {
             ))),
         };
         const consume = (candidate = mutation) => inTx(async (tx) => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, account.id, "exclusive");
             return consumePasswordMutationKeyChallengeInTx(tx, { mutation: candidate, proof, env: process.env });
         });
         return { account, mutation, challenge, proof, consume };
@@ -95,14 +95,14 @@ describe("Key Challenge password mutation (real database)", () => {
         const prepared = await prepare();
         const wrongHome = { ...process.env, HAPPIER_SERVER_IDENTITY_ID: "srv_different_home" };
         expect(await inTx(async (tx) => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, prepared.account.id);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, prepared.account.id, "exclusive");
             return consumePasswordMutationKeyChallengeInTx(tx, {
                 mutation: prepared.mutation, proof: prepared.proof, env: wrongHome,
             });
         })).toBe(false);
         const persistedHome = { ...process.env, HAPPIER_SERVER_IDENTITY_ID: undefined };
         expect(await inTx(async (tx) => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, prepared.account.id);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, prepared.account.id, "exclusive");
             return consumePasswordMutationKeyChallengeInTx(tx, {
                 mutation: prepared.mutation, proof: prepared.proof, env: persistedHome,
             });
@@ -120,7 +120,7 @@ describe("Key Challenge password mutation (real database)", () => {
             ))),
         };
         expect(await inTx(async (tx) => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, prepared.account.id);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, prepared.account.id, "exclusive");
             return consumePasswordMutationKeyChallengeInTx(tx, { mutation: prepared.mutation, proof, env: process.env });
         })).toBe(false);
         expect(await prepared.consume()).toBe(true);
@@ -129,7 +129,7 @@ describe("Key Challenge password mutation (real database)", () => {
     it("rolls challenge consumption back with a failing enclosing mutation", async () => {
         const prepared = await prepare();
         await expect(inTx(async (tx) => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, prepared.account.id);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, prepared.account.id, "exclusive");
             expect(await consumePasswordMutationKeyChallengeInTx(tx, {
                 mutation: prepared.mutation, proof: prepared.proof, env: process.env,
             })).toBe(true);

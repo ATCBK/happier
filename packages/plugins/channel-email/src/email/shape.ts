@@ -107,18 +107,28 @@ function imageContentId(source: string | undefined) {
   }
 }
 
+// Turndown's table rule supplies native or Domino DOM elements. Its ambient
+// HTMLElement type is empty in Node hosts; name only the DOM members we use.
+interface TurndownTableElement {
+  readonly nodeName: string;
+  readonly innerHTML: string;
+  readonly children: ArrayLike<TurndownTableElement>;
+  querySelectorAll(selector: string): ArrayLike<TurndownTableElement>;
+  querySelector(selector: string): TurndownTableElement | null;
+}
+
 function markdownFromHtml(html: string) {
   const converter = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', codeBlockStyle: 'fenced' });
   // Turndown's core handles links/lists; this consumed rule retains mail tables.
   converter.addRule('emailTables', {
     filter: 'table',
     replacement: (_content, node) => {
-      const rows = Array.from(node.querySelectorAll('tr')).map((row) => Array.from(row.children)
+      const rows = Array.from((node as TurndownTableElement).querySelectorAll('tr')).map((row) => Array.from(row.children)
         .filter((cell) => cell.nodeName === 'TD' || cell.nodeName === 'TH')
         .map((cell) => converter.turndown(cell.innerHTML).replace(/\|/g, '\\|').replace(/\n/g, ' ')));
       if (!rows.length) return '';
       const firstRow = rows[0] ?? [];
-      const hasHeading = node.querySelector('tr th') !== null;
+      const hasHeading = (node as TurndownTableElement).querySelector('tr th') !== null;
       const headings = hasHeading ? firstRow : firstRow.map(() => '');
       const body = hasHeading ? rows.slice(1) : rows;
       return `\n\n${[headings, headings.map(() => '---'), ...body].map((row) => `| ${row.join(' | ')} |`).join('\n')}\n\n`;

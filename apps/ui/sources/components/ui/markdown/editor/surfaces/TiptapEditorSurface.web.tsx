@@ -5,7 +5,7 @@ import { EditorContent, useEditor } from '@tiptap/react';
 import type { Editor } from '@tiptap/core';
 
 import { TextInput } from '@/components/ui/text/Text';
-import { useLocalSetting } from '@/sync/store/hooks';
+import { useLocalSetting } from '@/sync/store/settingsReadHooks';
 import { resolveCodeEditorFontMetrics } from '@/components/ui/code/editor/codeEditorFontMetrics';
 import { getDefaultFont, getMonoFont } from '@/constants/Typography';
 
@@ -241,7 +241,10 @@ export const TiptapEditorSurface = React.forwardRef<MarkdownEditorSurfaceRef, Ma
                 if (ignoreChangeRef.current) {
                     // Still showing the seed; only a divergent transaction counts as
                     // a real user edit (R-A7).
-                    if (next === seedRef.current) {
+                    // The serializer reads a document that ends in a list or block back with a blank
+                    // line after it; that is the seed echoed, not an edit, so a built-in or imported
+                    // document is never dirty before anyone touches it.
+                    if (next === seedRef.current || next.trimEnd() === seedRef.current.trimEnd()) {
                         return;
                     }
                     ignoreChangeRef.current = false;
@@ -443,7 +446,10 @@ export const TiptapEditorSurface = React.forwardRef<MarkdownEditorSurfaceRef, Ma
                 flushPendingChange: async () => {
                     flushPendingChange();
                 },
-                focus: () => editorRef.current?.commands.focus(),
+                focus: () => {
+                    const live = editorRef.current;
+                    if (live && !live.isDestroyed) live.commands.focus();
+                },
                 runCommand: (command) => controllerRef.current?.runCommand(command),
                 subscribeSelection: (callback) =>
                     controllerRef.current?.subscribeSelection(callback) ?? (() => {}),

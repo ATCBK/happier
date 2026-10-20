@@ -23,9 +23,11 @@ export function resolveVoiceIdleTarget(input: Readonly<{
   allowsGlobalStart: boolean;
   focusedSessionAddress: SessionAddress | null;
   lastFocusedSessionAddress: SessionAddress | null;
+  restartTarget?: VoiceIdleTarget | null;
 }>): VoiceIdleTarget {
   if (input.intent.kind === 'global') return input.intent;
   if (input.intent.kind === 'session') return { kind: 'session', sessionAddress: normalizeAddress(input.intent.sessionAddress) };
+  if (input.restartTarget) return input.restartTarget;
   if (input.scopeDefault === 'global' && input.allowsGlobalStart) return { kind: 'global' };
   return { kind: 'session', sessionAddress: normalizeAddress(input.focusedSessionAddress) ?? normalizeAddress(input.lastFocusedSessionAddress) };
 }

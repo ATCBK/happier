@@ -33,6 +33,7 @@ it('retains an exact attached source closer after a failed control response and 
       openSource: createRunnerManagedProviderRunSourceOpener({ services: transport.services, isOwnerCurrent: async () => true }),
     });
     const attempt = fixture.attempt;
+    if (!fixture.context.signal) throw new Error('Expected the admitted source lifetime');
     if (!('materializeManagedEndpoint' in attempt)) throw new Error('Expected real managed authorization');
     const endpoint = await prepare({ scope: { kind: 'execution_run', executionRunId: fixture.proof.executionRunId },
       registerCleanup: resources.register,

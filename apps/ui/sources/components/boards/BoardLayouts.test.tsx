@@ -52,7 +52,7 @@ afterEach(async () => {
     physicalFocus.keys.length = 0;
 });
 
-function card(kind: BoardItemRefV1['kind'], id: string, bucket: BoardCard['status']['bucket']): BoardCard {
+function card(kind: Exclude<BoardItemRefV1['kind'], 'task'>, id: string, bucket: BoardCard['status']['bucket']): BoardCard {
     const ref: BoardItemRefV1 = { kind, qualifiedId: { serverId: 'home-a', id } };
     return {
         key: JSON.stringify([kind, 'home-a', id]),
@@ -141,7 +141,7 @@ describe('Board layouts', () => {
         const filtered = Array.from({ length: 17 }, (_, index) => ({ ...card('session', `filtered-${index}`, 'needs_you'), picked: false }));
         const cards = [...picked, ...filtered];
         const positionsByItemRef = { [picked[0]!.key]: { x: 24, y: 0 }, [picked[1]!.key]: { x: 0, y: 112 },
-            [picked[2]!.key]: { x: 424, y: 0 }, [picked[3]!.key]: { x: 424, y: 256 } };
+            [picked[2]!.key]: { x: 456, y: 0 }, [picked[3]!.key]: { x: 456, y: 256 } };
         const commits: Record<string, { x: number; y: number }>[] = [];
         const props = { cards, positionsByItemRef, snap: true, binding: canvasBinding(picked[0]!, commits), onOpen: () => {} };
         const screen = await renderScreen(<BoardCanvas {...props} />);
@@ -170,10 +170,9 @@ describe('Board layouts', () => {
                 width: Number(style.width), height: (index < 2 ? 88 : 64) + Number(inset) };
         });
         const before = rectangles();
+        // No two cards share area: automatic cards avoid every hand-placed one, and stored positions that collide settle apart (FA19 W10).
         const overlaps = before.flatMap((a, index) => before.slice(index + 1).filter(b =>
-            // Retained manual rectangles can already overlap; automatic cards must avoid them all.
-            (!positionsByItemRef[a.key] || !positionsByItemRef[b.key])
-            && a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height)
+            a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height)
             .map(b => [a.key, b.key]));
         expect(overlaps).toEqual([]);
         for (const member of picked) {

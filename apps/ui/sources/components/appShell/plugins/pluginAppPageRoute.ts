@@ -1,3 +1,16 @@
+import { normalizePluginUiSubPathV1 } from '@happier-dev/protocol/plugins/ui';
+
+export const PLUGIN_APP_PAGE_ROUTE_PREFIX = '/plugins';
+
+/** The host owns the prefix and encodes each plugin-local identity/location segment. */
+export function buildPluginAppPageRoutePath(input: Readonly<{
+    pluginId: string; localId: string; subPath?: string;
+}>): string {
+    const root = `${PLUGIN_APP_PAGE_ROUTE_PREFIX}/${encodeURIComponent(input.pluginId)}/${encodeURIComponent(input.localId)}`;
+    const normalized = input.subPath === undefined ? '' : (normalizePluginUiSubPathV1(input.subPath) ?? '');
+    return normalized.length === 0 ? root : `${root}/${normalized.split('/').map(encodeURIComponent).join('/')}`;
+}
+
 /**
  * The two identity segments of a generated plugin-page route.
  *

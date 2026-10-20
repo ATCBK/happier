@@ -61,12 +61,12 @@ export async function waitForTrackedRunnerProcessesExit(params: PhysicalExitWait
 
 export async function observePlannedRunnerRetirement(
   params: Omit<PhysicalExitWaitParams, 'runners'> & Readonly<{ tracked: TrackedSession }>,
-): Promise<void> {
+): Promise<boolean | undefined> {
   const { tracked, ...waitOptions } = params;
   if (tracked.childProcess) return;
   // Adopted restart observation can span the full completion window. Avoid repeated process
   // listings more than twice a second while retaining an explicitly slower configured cadence.
-  await waitForTrackedRunnerProcessesExit({
+  return await waitForTrackedRunnerProcessesExit({
     ...waitOptions,
     runners: [{ pid: tracked.pid }],
     pollIntervalMs: Math.max(params.pollIntervalMs, 500),

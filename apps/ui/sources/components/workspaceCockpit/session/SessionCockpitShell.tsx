@@ -5,11 +5,15 @@ import { SessionSwitcherContent } from '@/components/navigation/mobile/chrome/la
 import type { SessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
 import { useSignalSessionCockpitDismiss } from '@/hooks/session/useSignalSessionCockpitDismiss';
 import type { SessionRouteHydrationState } from '@/sync/domains/session/sessionRouteHydrationState';
+import type { TranscriptExperience } from '@/components/sessions/transcript/viewport/lifecycle/transcriptSameSessionHandoff';
 
 import type { SessionMobileSurface } from './sessionCockpitState';
 import { SessionCockpitTabNavigator } from './SessionCockpitTabNavigator';
 
 type SessionCockpitShellProps = Readonly<{
+    experience?: TranscriptExperience;
+    surfaceFocusedOverride?: boolean;
+    surfaceVisibleOverride?: boolean;
     sessionId: string;
     scopeId: string;
     surface: SessionMobileSurface;
@@ -23,7 +27,7 @@ type SessionCockpitShellProps = Readonly<{
 }>;
 
 export const SessionCockpitShell = React.memo((props: SessionCockpitShellProps) => {
-    useSignalSessionCockpitDismiss(props.sessionId);
+    useSignalSessionCockpitDismiss(props.experience === 'classic' ? '' : props.sessionId);
 
     // The lateral-swipe motion wraps the shell rather than anything below it: this is
     // the narrowest owner that covers header, transcript and composer together while
@@ -31,6 +35,9 @@ export const SessionCockpitShell = React.memo((props: SessionCockpitShellProps) 
     return (
         <SessionSwitcherContent>
             <SessionCockpitTabNavigator
+                experience={props.experience}
+                surfaceFocusedOverride={props.surfaceFocusedOverride}
+                surfaceVisibleOverride={props.surfaceVisibleOverride}
                 sessionId={props.sessionId}
                 scopeId={props.scopeId}
                 initialSurface={props.surface}

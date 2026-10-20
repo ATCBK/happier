@@ -1,4 +1,5 @@
 import { applyFeatureDependencies, evaluateFeatureDecisionBase } from '@happier-dev/protocol/features/featureDecisionEngine';
+import type { ProcessEnvInput } from '@/utils/processEnv/buildScopedProcessEnv';
 import type { FeatureDecision, FeatureId } from '@happier-dev/protocol';
 
 import { getCliFeatureBuildPolicyDecision } from './featureBuildPolicy';
@@ -6,7 +7,7 @@ import { resolveCliLocalFeaturePolicyEnabled } from './featureLocalPolicy';
 
 export function resolveCliGlobalOnlyFeatureDecision(params: {
   featureId: FeatureId;
-  env: NodeJS.ProcessEnv;
+  env: ProcessEnvInput;
 }): FeatureDecision {
   const memo = new Map<FeatureId, FeatureDecision>();
 

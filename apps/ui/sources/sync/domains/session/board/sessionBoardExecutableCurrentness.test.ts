@@ -39,17 +39,17 @@ function snapshot(overrides: Partial<Pick<SessionBoardSnapshot, 'freshness' | 'r
     });
 }
 
-function installedSnapshot() {
+function installedSnapshot(overrides: Partial<Pick<SessionBoardSnapshot, 'freshness' | 'loading' | 'capabilities'>> = {}) {
     return projectSessionBoard({
         layout: undefined,
         items: new Map([['item-1', {
             revision: 'revision-g',
             outcome: { status: 'ready' as const, value: INSTALLED_ITEM },
         }]]),
-        capabilities: { readTranscript: true, editSessionRecords: true },
-        freshness: 'fresh',
+        capabilities: overrides.capabilities ?? { readTranscript: true, editSessionRecords: true },
+        freshness: overrides.freshness ?? 'fresh',
         reachability: 'reachable',
-        loading: 'idle',
+        loading: overrides.loading ?? 'idle',
         incomplete: false,
     });
 }
@@ -147,5 +147,17 @@ describe('resolveSessionBoardExecutableCurrentness', () => {
             phase: 'current',
             interactionEnabled: true,
         })).toBe('current');
+    });
+
+    it('does not withdraw an unchanged widget during an authorized reread or borrow stale plugin authority', () => {
+        const refreshing = installedSnapshot({ freshness: 'stale', loading: 'refreshing' });
+        const item = refreshing.itemsById.get('item-1')!;
+        const runtime = { pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION, phase: 'current' as const, interactionEnabled: true };
+        expect(resolveSessionBoardExecutableCurrentness(refreshing, item, runtime)).toBe('current');
+        expect(resolveSessionBoardExecutableCurrentness(refreshing, { ...item, revision: 'old-revision' }, runtime)).toBe('unverified');
+        expect(resolveSessionBoardExecutableCurrentness(refreshing, item, { ...runtime, phase: 'establishing', interactionEnabled: false })).toBe('stale');
+        expect(resolveSessionBoardExecutableCurrentness(installedSnapshot({ freshness: 'stale' }), item, runtime)).toBe('stale');
+        expect(resolveSessionBoardExecutableCurrentness(installedSnapshot({ freshness: 'stale', loading: 'refreshing',
+            capabilities: { readTranscript: false, editSessionRecords: false } }), item, runtime)).toBe('unverified');
     });
 });

@@ -34,16 +34,12 @@ describe('apiConnectedServicesV3 legacy read compatibility', () => {
     };
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       if (String(input) === 'https://api.example.test/health') {
-        return { ok: true, status: 200, json: async () => ({ ok: true }) };
+        return Response.json({ ok: true });
       }
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({
+      return Response.json({
           credentialRevision: 'csr_0123456789ABCDEFGHJKMNPQRS',
           content: { t: 'plain', v: record },
-        }),
-      };
+      });
     });
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch);
 

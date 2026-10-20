@@ -13,7 +13,7 @@ import {
 import { ReviewFindingsV2Schema } from '@happier-dev/protocol/messages/structured/reviewFindingsV2';
 import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { isActionEnabledByActionsSettings, type ActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
-import { createLocalScmRepositoryFixture } from '@/scm/contracts/scmBackendContractFixtures';
+import { createLocalScmRepositoryFixture } from '@/testkit/scm/scmBackendContractFixtures';
 import { removeTempDir } from '@/testkit/fs/tempDir';
 import type { ExecutionRunProfileStartParams } from '@/agent/executionRuns/profiles/ExecutionRunIntentProfile';
 import { resolveExecutionRunIntentProfile } from '@/agent/executionRuns/profiles/intentRegistry';

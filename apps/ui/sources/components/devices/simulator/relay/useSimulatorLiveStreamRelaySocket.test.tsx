@@ -24,6 +24,7 @@ function fakeSocket(disconnect: () => Promise<void>): ServerScopedMachineLiveStr
         machineId: 'daemon_1',
         viewerId: 'user_1',
         socketId: 'viewer-socket-1',
+        onSocketIdChange: () => () => {},
         sendEnvelope: vi.fn(),
         onEnvelope: vi.fn(() => () => {}),
         disconnect,

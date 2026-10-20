@@ -3,6 +3,8 @@ import { afterAll } from 'vitest';
 import { warmLocalVoiceEngineHarnessGraph } from './localVoiceEngine.testHarness';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readStoredSessionMessages } from '@happier-dev/session-core/messages';
+import { buildSessionTurnsProjectionV1 } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
+import { createSessionMessagesFixture } from '@/dev/testkit';
 
 import {
     audioStreamStart,
@@ -24,6 +26,7 @@ import {
     localVoiceHomeId,
     acknowledgeLocalVoicePendingEnqueue,
     publishLocalVoiceAssistantMessage,
+    publishLocalVoiceSubmittedUserMessage,
     localVoiceSpeechOutputBoundary,
     readLocalVoiceHttpRequests,
 } from './localVoiceEngine.testHarness';
@@ -75,6 +78,31 @@ describe('local voice engine device STT (experimental)', () => {
     const previousWindow = (globalThis as { window?: object }).window;
     const previousDocument = (globalThis as { document?: object }).document;
 
+    it('rearms hands-free capture when the submitted coding turn is cancelled remotely without a reply', async () => {
+        const storage = await configureDuplexDeviceSpeech(true);
+        speechRecStop.mockImplementation(() => emitSpeechRecEvent('end'));
+        const engine = await loadLocalVoiceEngineWithCompatState();
+        try {
+            await engine.toggleLocalVoiceTurn('s1');
+            emitSpeechRecEvent('result', { isFinal: true, results: [{ transcript: 'explain the forecast', confidence: 0.9 }] });
+            await vi.waitFor(() => expect(localVoicePendingEnqueue).toHaveBeenCalledTimes(1));
+            const request = localVoicePendingEnqueue.mock.calls[0]![0];
+            const user = { id: 'voice-user', kind: 'user-text' as const, text: 'explain the forecast',
+                localId: String(request.body.localId), seq: 17, createdAt: Date.now() };
+            storage.__setState({ sessions: { ...storage.getState().sessions, s1: { ...storage.getState().sessions.s1!,
+                sessionTurns: buildSessionTurnsProjectionV1({ sessionId: 's1', updatedAt: Date.now(), turns: [{
+                    turnId: 'coding-turn', startedAt: Date.now(), updatedAt: Date.now(), status: 'cancelled',
+                    transcriptAnchors: { startUserMessageSeq: user.seq, finalAssistantMessageSeq: null },
+                }] }),
+            } }, sessionMessages: { s1: createSessionMessagesFixture({ messageIdsOldestFirst: [user.id], messagesById: { [user.id]: user } }) } });
+            await vi.waitFor(() => expect(engine.getLocalVoiceState().status).toBe('recording'));
+            expect(speechRecStart).toHaveBeenCalledTimes(2);
+            expect(expoSpeechSpeak).not.toHaveBeenCalled();
+        } finally {
+            await engine.stopLocalVoiceSession();
+        }
+    }, 180_000);
+
     it.each(['direct interruption', 'after a backchannel', 'manual capture'])(
       'captures a second utterance through the real recognizer while an ordinary spoken reply is held (%s)', async (scenario) => {
         const storage = await configureDuplexDeviceSpeech(scenario !== 'manual capture');
@@ -93,6 +121,7 @@ describe('local voice engine device STT (experimental)', () => {
             emitSpeechRecEvent('end');
         });
         localVoicePendingEnqueue.mockImplementationOnce(async request => {
+            await publishLocalVoiceSubmittedUserMessage(request);
             await publishLocalVoiceAssistantMessage({ sessionId: 's1', id: 'reply-one', text: 'The weather will be sunny tomorrow.' });
             return acknowledgeLocalVoicePendingEnqueue(request);
         });
@@ -103,8 +132,8 @@ describe('local voice engine device STT (experimental)', () => {
             import('@/hooks/session/useSessionRealtimeTranscriptConsumer'),
         ]);
         const transcriptDetail = await renderHook(() => useSessionRealtimeTranscriptConsumer('s1', localVoiceHomeId));
+        const engine = await loadLocalVoiceEngineWithCompatState();
         try {
-            const engine = await loadLocalVoiceEngineWithCompatState();
             const { resolveSessionLiveConsumption } = await import('@/sync/runtime/sessionLiveConsumption');
             await engine.toggleLocalVoiceTurn('s1');
             emitSpeechRecEvent('result', { isFinal: true, results: [{ transcript: 'what is the forecast', confidence: 0.9 }] });
@@ -146,6 +175,17 @@ describe('local voice engine device STT (experimental)', () => {
             }
             emitSpeechRecEvent('result', { isFinal: true, results: [{ transcript: 'instead explain the wind speed', confidence: 0.9 }] });
             await vi.waitFor(() => expect(expoSpeechStop).toHaveBeenCalled());
+            let manualCommit: Promise<void> | undefined;
+            if (scenario === 'manual capture') {
+                await initialTurn;
+                expect(engine.getLocalVoiceState().status).toBe('recording');
+                expect(localVoicePendingEnqueue).toHaveBeenCalledTimes(1);
+                manualCommit = engine.commitLocalVoiceInput('s1');
+                void manualCommit.catch(error => {
+                    outputFailure = error instanceof Error
+                        ? { name: error.name, message: error.message } : { name: typeof error, message: String(error) };
+                });
+            }
             await vi.waitFor(() => expect(localVoicePendingEnqueue).toHaveBeenCalledWith(expect.objectContaining({
                 sessionId: 's1', body: expect.objectContaining({ content: { t: 'plain', v: expect.objectContaining({
                     role: 'user', content: { type: 'text', text: 'instead explain the wind speed' },
@@ -153,7 +193,9 @@ describe('local voice engine device STT (experimental)', () => {
             })));
             await initialTurn;
             await engine.stopLocalVoiceSession();
+            await manualCommit;
         } finally {
+            await engine.stopLocalVoiceSession();
             // The real hook retires its transcript-consumer registration before
             // the incumbent fixture ends this Account's connection lifetime.
             await transcriptDetail.unmount();
@@ -175,6 +217,28 @@ describe('local voice engine device STT (experimental)', () => {
         expect(speechRecStart).toHaveBeenCalledTimes(2);
         expect(speechRecStop).toHaveBeenCalledTimes(2);
         await engine.stopLocalVoiceSession();
+    }, 180_000);
+
+    it('surfaces an automatic endpoint send failure without an unhandled rejection and permits a fresh capture', async () => {
+        await configureDuplexDeviceSpeech(true);
+        speechRecStop.mockImplementation(() => emitSpeechRecEvent('end'));
+        localVoicePendingEnqueue.mockResolvedValueOnce(Response.json({ error: 'request timed out' }, { status: 400 }));
+        const unhandled: unknown[] = [];
+        const observeUnhandled = (error: unknown) => { unhandled.push(error); };
+        process.on('unhandledRejection', observeUnhandled);
+        const engine = await loadLocalVoiceEngineWithCompatState();
+        try {
+            await engine.toggleLocalVoiceTurn('s1');
+            emitSpeechRecEvent('result', { isFinal: true, results: [{ transcript: 'explain the forecast', confidence: 0.9 }] });
+            await vi.waitFor(() => expect(engine.getLocalVoiceState()).toMatchObject({ status: 'idle', error: 'send_failed' }));
+            await new Promise<void>(resolve => setTimeout(resolve, 0));
+            expect(unhandled).toEqual([]);
+            await engine.toggleLocalVoiceTurn('s1');
+            expect(engine.getLocalVoiceState()).toMatchObject({ status: 'recording', sessionId: 's1' });
+        } finally {
+            process.off('unhandledRejection', observeUnhandled);
+            await engine.stopLocalVoiceSession();
+        }
     }, 180_000);
 
     it('does not submit a late turn when End Voice cancels playback capture startup', async () => {
@@ -350,7 +414,9 @@ describe('local voice engine device STT (experimental)', () => {
             lifecycle.setConfiguredProviderId(providerId);
             await lifecycle.toggle(target);
             expect(lifecycle.getSnapshot()).toMatchObject({ status: 'connected', mode: 'listening' });
-            const end = lifecycle.stop('s1');
+            const end = lifecycle.stop('s1').catch((error: unknown) => {
+                if (!(error instanceof Error) || error.name !== 'AbortError') throw error;
+            });
             const snapshot = lifecycle.getSnapshot();
             expect(snapshot).toMatchObject({ status: 'disconnected', canStop: false });
             const control = resolveVoiceAttemptControl({
@@ -360,7 +426,8 @@ describe('local voice engine device STT (experimental)', () => {
             expect(control).toMatchObject({ surfaceState: 'idle', live: false, primaryAction: 'start' });
             expect(getVoiceSessionEndedAttempt()).toMatchObject({ sessionId: 's1', reason: { kind: 'stopped' } });
             expect(getVoiceConversationRuntimeSnapshot().state).toBe('ending');
-            const restart = lifecycle.toggle(target);
+            let restartSettled = false;
+            const restart = lifecycle.toggle(target).finally(() => { restartSettled = true; });
             const pending = lifecycle.getSnapshot();
             expect(pending).toMatchObject({ adapterId: providerId, sessionId: 's1', status: 'connecting', canStop: true });
             expect(lifecycle.getAttemptTargetSessionAddress()).toEqual(target);
@@ -374,9 +441,20 @@ describe('local voice engine device STT (experimental)', () => {
                 : outcome === 'dispose' ? lifecycle.dispose() : Promise.resolve();
             if (outcome === 'account') lifecycle.rearmAfterCredentialAuthorityChange({ exactSessionAccountScopeChanged: true });
             if (outcome === 'provider') lifecycle.setConfiguredProviderId('off');
-            if (outcome !== 'start') expect(lifecycle.getSnapshot().status).toBe('disconnected');
+            if (outcome !== 'start') {
+                expect(lifecycle.getSnapshot().status).toBe('disconnected');
+                expect(lifecycle.getSnapshot().errorCode).toBeUndefined();
+                expect(lifecycle.getSnapshot().errorMessage).toBeUndefined();
+                // Cancelling Start retires its observer while the OS still
+                // owns capture cleanup and has not acknowledged End.
+                await vi.waitFor(() => expect(restartSettled).toBe(true));
+            }
             emitSpeechRecEvent('end');
             await Promise.all([end, restart, cancellation]);
+            if (outcome !== 'start') {
+                expect(lifecycle.getSnapshot()).toMatchObject({ status: 'disconnected', mode: 'idle', canStop: false });
+                expect(lifecycle.getSnapshot().errorCode).toBeUndefined();
+            }
             expect(speechRecStart).toHaveBeenCalledTimes(outcome === 'start' ? 2 : 1);
             if (outcome === 'start') {
                 expect(lifecycle.getSnapshot()).toMatchObject({ sessionId: 's1', status: 'connected', mode: 'listening' });

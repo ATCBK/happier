@@ -1,9 +1,10 @@
 import axios, { AxiosHeaders } from 'axios';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { WORKSPACE_EXECUTION_CONFIG_ROUTE_V1 } from '@happier-dev/protocol/workspaces/workspaceExecutionConfigRowV1';
+import { WORKSPACE_EXECUTION_CONFIG_ROUTE_V1, WorkspaceExecutionConfigMutationRequestV1Schema,
+  WorkspaceExecutionConfigReadRequestV1Schema } from '@happier-dev/protocol/workspaces/workspaceExecutionConfigRowV1';
 import { createAccountServerWorkspaceWorkerPreferenceClient } from './workspaceWorkerPreferences';
 import { AccountSettingsSchema } from '@happier-dev/protocol';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { clearActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
@@ -12,7 +13,7 @@ import { assertActionOutputContract } from '@/testkit/actionOutputContract';
 const workspace = { serverId: 'home-a', refId: 'checkout-a' };
 const preference = { enabled: false as const, unavailable: 'ask' as const, allowAdHoc: false, scriptOverrides: {} };
 const input = {
-  token: 'account-token', credentials: { token: 'account-token' }, serverHttpBaseUrl: 'https://captured-home.test',
+  token: 'account-token', credentials: { token: 'account-token', encryption: null }, serverHttpBaseUrl: 'https://captured-home.test',
   context: { surface: 'cli' as const, serverId: 'home-a' }, actionId: 'projects.worker.preferences.set',
   resolveRequestHeaders: () => ({ Authorization: 'Bearer account-token' }),
 };
@@ -30,7 +31,7 @@ describe('captured Account workspace preference carrier', () => {
       if (config.url?.endsWith('/read')) return response(row === null ? { status: 'absent' }
         : { status: 'present', revision, content: row });
       if (!config.url?.endsWith('/mutate')) throw new Error(`Unexpected HTTP ${config.url}`);
-      row = config.data.content;
+      row = WorkspaceExecutionConfigMutationRequestV1Schema.parse(config.data).content;
       return response({ status: 'updated', revision: ++revision, cursor: revision });
     });
     // Actual placement has no accepted checkout rows; this is unavailable, not fabricated custody.
@@ -84,11 +85,12 @@ describe('captured Account workspace preference carrier', () => {
       expect(config.url?.startsWith(input.serverHttpBaseUrl)).toBe(true);
       if (config.url?.endsWith('/v1/account/encryption')) return response({ mode: 'plain', updatedAt: 1 });
       expect(config.url).toContain(WORKSPACE_EXECUTION_CONFIG_ROUTE_V1);
-      expect(config.data.address).toEqual(workspace);
+      expect(WorkspaceExecutionConfigReadRequestV1Schema.parse({ address: config.data && typeof config.data === 'object'
+        && 'address' in config.data ? config.data.address : undefined }).address).toEqual(workspace);
       if (config.url?.endsWith('/read')) return response(row === null ? { status: 'absent' }
         : { status: 'present', revision: 1, content: row });
       writes++;
-      row = config.data.content;
+      row = WorkspaceExecutionConfigMutationRequestV1Schema.parse(config.data).content;
       throw new Error('committed then disconnected');
     });
     const client = await createAccountServerWorkspaceWorkerPreferenceClient(input);

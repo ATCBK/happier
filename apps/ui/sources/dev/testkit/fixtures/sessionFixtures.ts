@@ -1,15 +1,29 @@
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { isSessionContentReadable, readSessionContentAvailability } from '@/sync/domains/session/encryptedContentAvailability';
 import { ENCRYPTED_DATA_KEY_V1_BYTES } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
 import { createPlainSessionOwnerMetadataEnvelopeV1, createSessionOwnerMetadataV1, projectSessionSharedMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { projectSessionAccessCapabilitiesV1 } from '@happier-dev/protocol/sessions/access/sessionEffectiveAccessV1';
 import { SessionCurrentProjectionRecordV1Schema, type SessionCurrentProjectionRecordV1 } from '@happier-dev/protocol/sessions/listing/response';
-import { V2SessionRecordSchema, type V2SessionRecord } from '@happier-dev/protocol/sessions/control/contract';
+import { V2SessionByIdResponseSchema, V2SessionRecordSchema, type V2SessionRecord } from '@happier-dev/protocol/sessions/control/contract';
+import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { ABSENT_SESSION_FOLLOW_FACTS_V1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
-import { NO_SESSION_PERSONAL_RELEVANCE_FACTS_V1, projectViewerReadStateV1, resolveSessionPersonalRelevanceV1 } from '@happier-dev/protocol';
+import { projectViewerReadStateV1 } from '@happier-dev/protocol/sessions/personal/readState';
+import { NO_SESSION_PERSONAL_RELEVANCE_FACTS_V1, resolveSessionPersonalRelevanceV1 } from '@happier-dev/protocol/sessions/personal/relevance';
 import { resolveSessionEffectiveNotificationV1 } from '@happier-dev/protocol/sessions/personal/eventEligibility';
 import { QUIET_SESSION_PERSONAL_ATTENTION_V1, resolveSessionPersonalAttentionV1 } from '@happier-dev/protocol/sessions/personal/attention';
 import { SessionViewerProjectionV1Schema, type SessionViewerProjectionV1 } from '@happier-dev/protocol/sessions/personal/viewer';
+import { SessionCreationTargetPreparationRequestV1Schema, SessionCreationTargetPreparationResultV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationTargetPreparationV1';
+
+/** Synthetic daemon filesystem reply; Session directory approval and admission stay real. */
+export function createExistingSessionDirectoryPreflightResult(raw: unknown) {
+    const request = SessionCreationTargetPreparationRequestV1Schema.parse(raw);
+    if (request.directory.kind !== 'path') throw new Error('Expected an existing Session directory path');
+    return SessionCreationTargetPreparationResultV1Schema.parse({
+        ok: true, directory: request.directory.path, directoryKind: 'path',
+        directoryCreationRequired: false, checkout: null,
+    });
+}
 
 export function createSessionViewerFixture(overrides: Partial<SessionViewerProjectionV1> = {}): SessionViewerProjectionV1 {
     const follow = overrides.follow ?? ABSENT_SESSION_FOLLOW_FACTS_V1;
@@ -89,7 +103,7 @@ export function createSessionFixture(
 
 /** A Home's current plaintext owner row, projected through the real metadata/access owners. */
 export function createPlainV2SessionRecordFixture(overrides: Partial<Pick<V2SessionRecord,
-    'id' | 'seq' | 'createdAt' | 'updatedAt' | 'active' | 'activeAt' | 'archivedAt' | 'metadataVersion' | 'agentStateVersion'
+    'id' | 'seq' | 'createdAt' | 'updatedAt' | 'active' | 'activeAt' | 'archivedAt' | 'metadataVersion' | 'agentStateVersion' | 'manager' | 'managedSessions'
 >> & { metadata?: Session['metadata'] } = {}): V2SessionRecord {
     const base = createSessionFixture({ id: overrides.id ?? 'session-1' });
     const { metadata = base.metadata, ...facts } = overrides;
@@ -136,6 +150,39 @@ export function createPlainSessionCurrentProjectionRecordFixture(
     });
 }
 
+/** A current plaintext Home response for a seeded Session, including recipient privacy. */
+export function createPlainSessionByIdResponseFixture(session: Session) {
+    if (session.encryptionMode !== 'plain') {
+        throw new Error('A plaintext Session HTTP fixture cannot serialize an encrypted Session');
+    }
+    const record = createPlainSessionCurrentProjectionRecordFixture({
+        id: session.id, seq: session.seq, createdAt: session.createdAt, updatedAt: session.updatedAt,
+        active: session.active, activeAt: session.activeAt, metadata: readSessionOwnerMetadataView(session),
+        metadataVersion: session.metadataVersion, agentStateVersion: session.agentStateVersion,
+        manager: session.manager ?? undefined, managedSessions: session.managedSessions ?? undefined,
+        responsibleAccountId: session.responsibleAccountId ?? null,
+        responsibleAccount: session.responsibleAccount ?? null,
+    });
+    const { ownerMetadata: _ownerMetadata, ...recipientRecord } = record;
+    const access = session.access;
+    return V2SessionByIdResponseSchema.parse({ session: {
+        ...(access && access.level !== 'owner' ? recipientRecord : record),
+        agentState: (access && access.level !== 'owner') || session.agentState === null
+            ? null : JSON.stringify(session.agentState),
+        latestTurnStatus: session.latestTurnStatus,
+        latestTurnStatusObservedAt: session.latestTurnStatusObservedAt,
+        lastRuntimeIssue: session.lastRuntimeIssue,
+        ...(access ? {
+            effectiveAccess: { v: 1, level: access.level,
+                capabilities: access.capabilities, sources: access.sources ?? [] },
+            ...(access.level !== 'owner' ? { share: { accessLevel: access.level,
+                canApprovePermissions: access.capabilities.approveRuntimePermissions } } : {}),
+        } : {}),
+        pendingVersion: session.pendingVersion, pendingCount: session.pendingCount,
+        pendingActivationAuthorization: session.pendingActivationAuthorization ?? undefined,
+    } });
+}
+
 /** Owner HTTP fixture with no Follow, discussion, pin or explicit attention rows. */
 export function createSessionOwnerViewerFixture(session: Session): SessionViewerProjectionV1 {
     if (session.viewer) return SessionViewerProjectionV1Schema.parse(session.viewer);
@@ -153,7 +200,7 @@ export function createSessionOwnerViewerFixture(session: Session): SessionViewer
         relevance: resolveSessionPersonalRelevanceV1({ ...NO_SESSION_PERSONAL_RELEVANCE_FACTS_V1, ownedByMe: true }),
         attention: resolveSessionPersonalAttentionV1({
             tracked: true, accessible: session.access.capabilities.readTranscript, accountSuspended: false,
-            contentAvailable: session.encryptedContentAvailability === 'ready',
+            contentAvailable: isSessionContentReadable(readSessionContentAvailability(session)),
             visibleSessionSeq: session.seq, readState, latestReadyEventSeq: session.latestReadyEventSeq ?? null,
             hasPrimarySessionFailure: session.latestTurnStatus === 'failed'
                 && session.lastRuntimeIssue?.scope === 'primary_session' && session.lastRuntimeIssue.status === 'failed',

@@ -1,6 +1,7 @@
 import type { BrowserContextCapabilities } from '@happier-dev/protocol';
 
 import type { BrowserControlViewState } from '@/sync/domains/browser/control';
+import { resolveBrowserAnnotationCaptureCapability } from './annotationCaptureCapability';
 
 import {
     cancelActiveBrowserAnnotationMode,
@@ -122,6 +123,14 @@ export function createBrowserContextAnnotationAdapter(input: Readonly<{
 
             switch (request.kind) {
                 case 'start': {
+                    const captureCapability = resolveBrowserAnnotationCaptureCapability({
+                        adapterKind: binding.view.adapterKind,
+                        primaryEngine: binding.view.engineKind,
+                        captureSourceAvailable: binding.captureProvider?.available === true || Boolean(binding.annotationDraft),
+                    });
+                    if (!captureCapability.available) {
+                        return { status: 'unavailable', reason: captureCapability.disabledReason };
+                    }
                     const result = startActiveBrowserAnnotationMode({
                         state: binding.state,
                         browserContextEnabled: binding.browserContextEnabled,

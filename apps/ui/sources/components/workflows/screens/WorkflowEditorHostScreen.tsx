@@ -1,11 +1,10 @@
-import { storage, useAuthoringMemoryField, useSession } from '@/sync/domains/state/storage';
-import { useApplyAuthoringMemoryDelta } from '@/sync/store/settingsWriters';
+import { useSession } from '@/sync/domains/state/storage';
 import { SessionDraftHydrationBoundary } from '@/components/sessions/drafts/SessionDraftHydrationBoundary';
 // Load the canonical read projection before a cold editor publishes a delete acknowledgement.
 import '../library/workflowLibraryReads';
 import * as React from 'react';
 import { showDocumentShareSheet } from '@/components/sharing/documents/showDocumentShareSheet';
-import { createWorkflowDefinitionRoute } from '@/sync/domains/workflows/workflowRunRoute';
+import { createWorkflowDefinitionRoute, createWorkflowRunRoute } from '@/sync/domains/workflows/workflowRunRoute';
 import { Platform, ScrollView, View } from 'react-native';
 import { useDestinationInstanceKey } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { useNavigation, useRouter } from '@/components/appShell/workspace/destinationRoute';
@@ -16,7 +15,7 @@ import { Modal } from '@/modal';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Item } from '@/components/ui/lists/Item';
 import { ItemGroup } from '@/components/ui/lists/ItemGroup';
-import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { useActiveServerAccountScope, useActiveServerAccountScopeLifetime, useAllMachines, useSetting } from '@/sync/domains/state/storage';
 import { serverAccountScopeKeySuffix } from '@/sync/domains/scope/serverAccountScope';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
@@ -75,9 +74,10 @@ import { useWorkflowDetachedRunSupport } from '../run/useWorkflowDetachedRunSupp
 import { resolveContextualWorkflowProjectTarget } from './resolveContextualWorkflowTarget';
 import { readWorkflowReviewedRunSeed } from '@/sync/domains/workflows/workflowReviewedRunSeed';
 import { deriveWorkflowPlanRunId, readWorkflowPlanResult, startWorkflowPlanReview } from '@/sync/domains/workflows/workflowPlanReview';
-import { workflowRunDetailActions } from '@/sync/domains/workflows/workflowRunDetailActions';
+import { createWorkflowRunDetailActions } from '@/sync/domains/workflows/workflowRunDetailActions';
 import { WorkflowActionError } from '@/sync/domains/workflows/workflowActionError';
 import { isSessionAccessOwner } from '@/sync/engine/sessions/normalizeSessionAccessProjection';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { Switch } from '@/components/ui/forms/Switch';
 import { readNewSessionAutomationHandoffSeed } from '@/sync/domains/workflows/newSessionAutomationHandoffSeed';
 import { readTriggerWorkflowSeed, retargetTriggerToWorkflow } from '../triggers/triggerWorkflowSeed';
@@ -116,6 +116,9 @@ import { useWorkflowTestRunPresentation } from '../editor/useWorkflowTestRunPres
 import { buildWorkflowAgentAuthoringSeed } from '@/sync/domains/workflows/workflowAgentAuthoringSeed';
 import { glassSurfaceBackgroundColor } from '@/components/ui/glass/glassSurfacePaint';
 import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation/pageMetrics';
+import { useMachineListForServer } from '@/sync/domains/state/storage';
+import { useWorkflowEditorAccountMemory } from './useWorkflowEditorAccountMemory';
+import { WorkflowAccountLifetimeProvider } from '../workflowAccountScope';
 
 const styles = StyleSheet.create((theme) => ({
     // The page's paper, as the editor body paints it (its loading and missing states included).
@@ -228,35 +231,42 @@ function workflowEditorSourceKey(source: WorkflowEditorSource): string {
     }
 }
 
-export function WorkflowEditorHostScreen(props: Readonly<{ source: WorkflowEditorSource }>): React.ReactElement {
+export function WorkflowEditorHostScreen(props: Readonly<{ source: WorkflowEditorSource; accountLifetime?: ServerAccountScopeLifetime | null }>): React.ReactElement {
     // Workflow definition drafts/seeds are local to this editor; its embedded
     // New Session composer admits its own repository address separately.
-    return <SessionDraftHydrationBoundary addresses={[]}><WorkflowEditorHostScreenReady {...props} /></SessionDraftHydrationBoundary>;
+    return <WorkflowAccountLifetimeProvider value={props.accountLifetime}><SessionDraftHydrationBoundary addresses={[]}>
+        <WorkflowEditorHostScreenReady {...props} /></SessionDraftHydrationBoundary></WorkflowAccountLifetimeProvider>;
 }
 
 function WorkflowEditorHostScreenReady(props: Readonly<{
     source: WorkflowEditorSource;
+    accountLifetime?: ServerAccountScopeLifetime | null;
 }>): React.ReactElement {
     const mountedRef = useMountedRef();
     const router = useRouter();
     const destinationInstanceKey = useDestinationInstanceKey();
     const nativeEditorRoute = Platform.OS !== 'web' && destinationInstanceKey === null;
     const navigation = useNavigation();
-    const machines = useAllMachines();
-    const activeAccountScope = useActiveServerAccountScope();
-    const accountLifetime = useActiveServerAccountScopeLifetime();
+    const focusedMachines = useAllMachines();
+    const focusedAccountScope = useActiveServerAccountScope();
+    const focusedAccountLifetime = useActiveServerAccountScopeLifetime();
+    const accountLifetime = props.accountLifetime === undefined ? focusedAccountLifetime : props.accountLifetime;
+    const workflowRunDetailActions = React.useMemo(() => createWorkflowRunDetailActions({ accountLifetime }), [accountLifetime]);
+    const activeAccountScope = accountLifetime?.scope ?? null;
+    const addressedMachines = useMachineListForServer(activeAccountScope?.serverId ?? '');
+    const machines = props.accountLifetime === undefined ? focusedMachines : addressedMachines ?? [];
     const accountScopeKey = activeAccountScope === null
         ? null
         : serverAccountScopeKeySuffix(activeAccountScope);
-    const runNow = useWorkflowRunNowController();
+    const runNow = useWorkflowRunNowController(accountLifetime);
     const agentSeedId = props.source.kind === 'saved' ? props.source.agentRevisionSeedId ?? null : null;
     const [agentSeedState, setAgentSeedState] = React.useState(() => ({
         id: agentSeedId, seed: agentSeedId === null ? null : readWorkflowAgentRevision(agentSeedId),
-        lifetime: captureActiveServerAccountScopeLifetime(),
+        lifetime: accountLifetime,
     }));
     if (agentSeedState.id !== agentSeedId) {
         setAgentSeedState({ id: agentSeedId, seed: agentSeedId === null ? null : readWorkflowAgentRevision(agentSeedId),
-            lifetime: captureActiveServerAccountScopeLifetime() });
+            lifetime: accountLifetime });
     }
     const agentSeed = agentSeedState.id === agentSeedId && agentSeedState.seed?.lifetime?.isCurrent()
         ? agentSeedState.seed : null;
@@ -275,7 +285,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
         : null;
     // Render can be replayed before commit. Read non-destructively and retain
     // only the seed for this logical source; the committed editor consumes it.
-    const reviewedRunSeedState = useWorkflowEditorDraftSeed(reviewedRunSeedId, readWorkflowReviewedRunSeed);
+    const reviewedRunSeedState = useWorkflowEditorDraftSeed(reviewedRunSeedId, readWorkflowReviewedRunSeed, props.accountLifetime);
     const reviewedRunSeed = reviewedRunSeedState.seed;
 
     /**
@@ -292,13 +302,13 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
     // All unsaved handoffs are render-safe and retained only for their original
     // Account lifetime; the committed editor consumes their route handles.
     const newSessionDraftSeedId = props.source.kind === 'new' ? props.source.newSessionDraftSeedId ?? null : null;
-    const newSessionSeedState = useWorkflowEditorDraftSeed(newSessionDraftSeedId, readNewSessionAutomationHandoffSeed);
+    const newSessionSeedState = useWorkflowEditorDraftSeed(newSessionDraftSeedId, readNewSessionAutomationHandoffSeed, props.accountLifetime);
     const newSessionSeed = newSessionSeedState.seed;
     const triggerWorkflowSeedId = props.source.kind === 'new' ? props.source.triggerWorkflowSeedId ?? null : null;
-    const triggerSeedState = useWorkflowEditorDraftSeed(triggerWorkflowSeedId, readTriggerWorkflowSeed);
+    const triggerSeedState = useWorkflowEditorDraftSeed(triggerWorkflowSeedId, readTriggerWorkflowSeed, props.accountLifetime);
     const triggerSeed = triggerSeedState.seed;
     const definitionDraftSeedId = props.source.kind === 'new' ? props.source.definitionDraftSeedId ?? null : null;
-    const definitionDraftSeedState = useWorkflowEditorDraftSeed(definitionDraftSeedId, readWorkflowDefinitionDraftSeed);
+    const definitionDraftSeedState = useWorkflowEditorDraftSeed(definitionDraftSeedId, readWorkflowDefinitionDraftSeed, props.accountLifetime);
     const definitionDraftSeed = definitionDraftSeedState.seed;
     const privateDraftSeedUnavailable = [reviewedRunSeedState, definitionDraftSeedState, newSessionSeedState, triggerSeedState]
         .some(({ id, seed }) => id !== null && seed === null);
@@ -378,8 +388,8 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
     const authoringSessionId = agentSession?.scopeKey === accountScopeKey && agentSession.sourceKey === authoringSourceKey && agentSession.definitionId === editableDefinitionId
         ? agentSession.sessionId : routeAgentSourceIsCurrent && props.source.kind === 'saved' ? agentSeed?.sessionId ?? props.source.authoringSessionId ?? null : null;
     const authoringServerId = agentSession?.sessionId === authoringSessionId ? agentSession.serverId : activeAccountScope?.serverId ?? null;
-    const authoringHomeIsActive = authoringServerId !== null && activeAccountScope !== null
-        && areServerProfileIdentifiersEquivalent(authoringServerId, activeAccountScope.serverId);
+    const authoringHomeIsActive = authoringServerId !== null && focusedAccountScope !== null
+        && areServerProfileIdentifiersEquivalent(authoringServerId, focusedAccountScope.serverId);
     const liveAgentRevision = useWorkflowAgentRevision(authoringHomeIsActive ? authoringSessionId : null, editableDefinitionId, `${authoringSourceKey}\u0000${accountScopeKey ?? ''}`);
     const initialAgentRevision = routeAgentSourceIsCurrent && props.source.kind === 'saved' ? props.source.agentRevision ?? agentSeed?.snapshot ?? null : null;
     const agentRevision = liveAgentRevision && (!initialAgentRevision
@@ -407,8 +417,8 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
         seedWorkflowAgentDraft(seed, (draft) => {
             if (authoringSourceKey !== String(sourceGenerationRef.current)) return;
             setAgentDraft({ ...draft, scopeKey: accountScopeKey, definitionId, sourceKey: authoringSourceKey });
-        });
-    }, [accountScopeKey, authoringSourceKey, detailsPaneAvailable, editableDefinitionId, openAgentAuthoring]);
+        }, props.accountLifetime);
+    }, [accountLifetime, accountScopeKey, authoringSourceKey, detailsPaneAvailable, editableDefinitionId, openAgentAuthoring]);
     const onAgentDraftSessionCreated = React.useCallback((_destination: string, target: Readonly<{ sessionId: string; serverId: string }>) => {
         if (agentDraft === null || !agentDraft.isCurrent() || agentDraft.sourceKey !== String(sourceGenerationRef.current)) return;
         setAgentDraft(null);
@@ -423,7 +433,8 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
     const [inputSheetOpen, setInputSheetOpen] = React.useState(reviewedRunSeed?.planReview !== undefined);
     const [planEditingAccepted, setPlanEditingAccepted] = React.useState(false);
     const planReview = planEditingAccepted ? undefined : reviewedRunSeed?.planReview;
-    const planOrigin = useSession(planReview?.originSessionId ?? '');
+    const planOriginReadable = props.accountLifetime === undefined || accountLifetime?.isCurrent() === true;
+    const planOrigin = useSession(planOriginReadable ? planReview?.originSessionId ?? '' : '', props.accountLifetime?.scope.serverId);
     const ownedPlanOriginId = planOrigin && isSessionAccessOwner(planOrigin.access, planOrigin.accessLevel) ? planOrigin.id : null;
     const planOriginName = planOrigin?.metadata?.summary?.text ?? t('agentStart.reportToSession');
     const [reportBack, setReportBack] = React.useState(true);
@@ -432,6 +443,8 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
     const [savePending, setSavePending] = React.useState(false);
     const [deletePending, setDeletePending] = React.useState(false);
     const deletePendingRef = React.useRef(false);
+    const deleteAbortRef = React.useRef<AbortController | null>(null);
+    React.useEffect(() => () => deleteAbortRef.current?.abort(), []);
     const [saveConflict, setSaveConflict] = React.useState<WorkflowSaveConflict | null>(null);
     /**
      * The description is Artifact metadata beside the name, outside the portable
@@ -453,14 +466,15 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
     // The contextual default comes from the canonical New Session resolver, and
     // only when it produces a genuinely valid choice (UX §2.3). A reviewed copy
     // keeps its predecessor's accepted target instead.
-    const recentMachinePaths = useAuthoringMemoryField('recentMachinePaths') as
+    const accountMemory = useWorkflowEditorAccountMemory(props.accountLifetime);
+    const recentMachinePaths = accountMemory.recentMachinePaths as
         | ReadonlyArray<Readonly<{ machineId?: string | null; path?: string | null }>>
         | undefined;
     const rememberedDefinitionId = initializedKey === initializationKey
         ? saved?.definitionId ?? sourceDefinitionId : sourceDefinitionId;
-    const rememberedProject = storage((state) => rememberedDefinitionId === null ? null
-        : state.authoringMemory.workflowProjectTargetsByDefinitionId[rememberedDefinitionId] ?? null);
-    const persistAuthoringMemory = useApplyAuthoringMemoryDelta();
+    const rememberedProject = rememberedDefinitionId === null ? null
+        : accountMemory.workflowProjectTargetsByDefinitionId[rememberedDefinitionId] ?? null;
+    const persistAuthoringMemory = accountMemory.apply;
     const newSessionProject = newSessionSeed?.project && isWorkflowProjectTarget(newSessionSeed.project) ? newSessionSeed.project : null;
     const resolveStarterProject = (target: WorkflowStarterSessionTarget): WorkflowProjectTargetV1 | null => {
         if (activeAccountScope === null) return null;
@@ -584,6 +598,8 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
         savedDescriptionRef.current = nextDescription;
         setSavePending(false);
         setDeletePending(false);
+        deleteAbortRef.current?.abort();
+        deleteAbortRef.current = null;
         deletePendingRef.current = false;
         setSavedRouteId(null);
         setHydrationFailure(null);
@@ -637,7 +653,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
         let cancelled = false;
         void (async () => {
             try {
-                const result = await getWorkflowDefinition({ definitionId: sourceDefinitionId });
+                const result = await getWorkflowDefinition({ definitionId: sourceDefinitionId, accountLifetime });
                 if (cancelled || !lifetime.isCurrent()) return;
                 setDefinitionAccess(result.access);
                 // Agent snapshots carry exact reviewed bytes, not authority for
@@ -677,7 +693,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
     // Folders read home-relative wherever this editor says where it runs (07 copy rules).
     const machineHomeDir = machines.find((candidate) => candidate.id === projectTarget?.machineId)?.metadata?.homeDir ?? null;
     // Trigger edits are part of the draft (04 §5.4): written after the definition on Save.
-    const triggers = useWorkflowTriggerEditing({ definitionId: saved?.definitionId ?? null, sourceKey: authoringSourceKey, projectTarget });
+    const triggers = useWorkflowTriggerEditing({ definitionId: saved?.definitionId ?? null, sourceKey: authoringSourceKey, projectTarget, accountLifetime });
     React.useEffect(() => {
         const trigger = definitionDraftSeed?.trigger;
         if (trigger === undefined || privateSeedWithdrawn || saved !== null) return;
@@ -794,7 +810,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
             ? planReview.runId ?? deriveWorkflowPlanRunId(reviewedRunSeed.sourceRunId, planReview.invocationId) : randomUUID());
         pendingRunIdRef.current = runId;
         const sourceGenerationIsCurrent = captureSourceGeneration();
-        const lifetime = captureActiveServerAccountScopeLifetime();
+        const lifetime = accountLifetime;
         if (lifetime === null) return;
         const sourceIsCurrent = () => lifetime.isCurrent() && sourceGenerationIsCurrent();
         // One prompt is a workflow and Run now needs no name (UX §2.2 J1). The
@@ -889,8 +905,8 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
             setTestRun({ runId: admitted.run.id, definition: testSource.definition });
             return;
         }
-        router.pushRetainingCurrent({ pathname: '/workflows/runs/[runId]', params: { runId: admitted.run.id } } as never);
-    }, [captureSourceGeneration, draft, executionTarget, projectTarget, router, runAsTargets, runNow, planReview, reviewedRunSeed, ownedPlanOriginId, reportBack, saved?.definitionId, testSource]);
+        router.pushRetainingCurrent(createWorkflowRunRoute(admitted.run.id, lifetime.scope.serverId) as never);
+    }, [accountLifetime, captureSourceGeneration, draft, executionTarget, projectTarget, router, runAsTargets, runNow, planReview, reviewedRunSeed, ownedPlanOriginId, reportBack, saved?.definitionId, testSource]);
 
     const handleRunNow = React.useCallback(() => {
         if (draft === null || testSourcePending || runNow.isPending(pendingRunIdRef.current ?? '')) return;
@@ -901,11 +917,11 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
 
     const handleTestRun = React.useCallback(() => {
         if (saved === null || testSourcePending || runNow.isPending(pendingRunIdRef.current ?? '')) return;
-        const lifetime = captureActiveServerAccountScopeLifetime();
+        const lifetime = accountLifetime;
         if (lifetime === null) return;
         const sourceIsCurrent = captureSourceGeneration();
         setTestSourcePending(true);
-        void getWorkflowDefinition({ definitionId: saved.definitionId }).then((result) => {
+        void getWorkflowDefinition({ definitionId: saved.definitionId, accountLifetime }).then((result) => {
             if (!lifetime.isCurrent() || !sourceIsCurrent()) return;
             setTestSource(result);
             setInputValues({});
@@ -916,7 +932,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
         }).finally(() => {
             if (lifetime.isCurrent() && sourceIsCurrent()) setTestSourcePending(false);
         });
-    }, [captureSourceGeneration, runNow, saved, testSourcePending]);
+    }, [accountLifetime, captureSourceGeneration, runNow, saved, testSourcePending]);
 
     const { clearRefusal } = runNow;
     const dismissInputSheet = React.useCallback(() => {
@@ -948,13 +964,17 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
         ...(testSource === null ? {} : { notice: t('workflows.testRun.savedNotice') }),
         includesUnsavedEdits: testSource === null && (definitionDraftDirty || descriptionDraftDirty),
         machineId: projectTarget?.machineId ?? null,
+        directory: projectTarget?.directory ?? null,
         serverId: activeAccountScope?.serverId ?? null,
+        ...(ownedPlanOriginId && activeAccountScope ? { originSession: {
+            serverId: activeAccountScope.serverId, sessionId: ownedPlanOriginId,
+        } } : {}),
         extraActionChips: [{
             ...createExecutionRunStartContentChip({
                 key: 'workflow-start-where', icon: 'folder', title: t('workflows.page.where.label'),
                 label: formatWorkflowWhereSummary({ target: projectTarget, machineName, machineHomeDir }) ?? t('workflows.page.where.choose'),
                 testID: 'workflow-start-where-chip',
-                renderContent: <WorkflowProjectTargetControl purpose="workflow" target={projectTarget} machineName={machineName}
+                renderContent: <WorkflowProjectTargetControl purpose="workflow" target={projectTarget} machineName={machineName} accountLifetime={props.accountLifetime}
                     machines={machines} onChange={(target) => { if (isWorkflowProjectTarget(target)) setProjectTarget(target); }}
                     testIDPrefix="workflow-start-where" />,
             }), controlId: 'machine',
@@ -988,8 +1008,8 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
             || definitionHasChanges(draft) || description !== savedDescriptionRef.current);
         const validation = validateWorkflowEditorDraft(draft);
         if (definitionChanged && (!validation.valid || validation.normalizedDefinition === undefined)) return { status: 'refused', reason: 'invalid_workflow' };
-        const lifetime = captureActiveServerAccountScopeLifetime();
-        if (lifetime === null) return { status: 'unavailable' };
+        const lifetime = accountLifetime;
+        if (!lifetime?.isCurrent()) return { status: 'unavailable' };
         // Same Account is not the same workflow: a save that resolves after this
         // editor moved to another source must not stamp that source's revision.
         let sourceIsCurrent = captureSourceGeneration();
@@ -1010,6 +1030,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
                             definitionId: randomUUID(),
                             definition: validation.normalizedDefinition,
                             metadata,
+                            accountLifetime,
                             ...(caller === undefined ? {} : { context: caller, signal: caller.signal }),
                         })
                         : await updateWorkflowDefinition({
@@ -1017,6 +1038,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
                             expectedRevision: saved.revision,
                             definition: validation.normalizedDefinition,
                             metadata,
+                            accountLifetime,
                             ...(caller === undefined ? {} : { context: caller, signal: caller.signal }),
                         });
                     if (!isCurrent()) return { status: 'refused', reason: 'draft_retired' };
@@ -1068,7 +1090,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
                 const retarget = pendingRetargetRef.current;
                 if (retarget !== null && isCurrent()) {
                     try {
-                        await retargetTriggerToWorkflow(retarget, persisted.definitionId, caller);
+                        await retargetTriggerToWorkflow(retarget, persisted.definitionId, caller, accountLifetime);
                         if (!isCurrent()) return { status: 'refused', reason: 'draft_retired' };
                         pendingRetargetRef.current = null;
                         setRetargetFailed(false);
@@ -1089,7 +1111,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
                 // never resolved by last-writer-wins or a silent merge.
                 if (!asCopy && isWorkflowDefinitionConflictError(error) && saved !== null) {
                     try {
-                        const current = await getWorkflowDefinition({ definitionId: saved.definitionId });
+                        const current = await getWorkflowDefinition({ definitionId: saved.definitionId, accountLifetime });
                         if (!isCurrent()) return { status: 'refused', reason: 'draft_retired' };
                         setDefinitionAccess(current.access);
                         setSaveConflict({
@@ -1117,7 +1139,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
                 if (isCurrent()) setSavePending(false);
             }
         })();
-    }, [canEditDefinition, canManagePersonalTriggers, captureSourceGeneration, definitionDraftDirty, descriptionDraftDirty, description, draft, saved, savePending, sourceKind, triggers, persistAuthoringMemory, rememberedProject]);
+    }, [accountLifetime, canEditDefinition, canManagePersonalTriggers, captureSourceGeneration, definitionDraftDirty, descriptionDraftDirty, description, draft, saved, savePending, sourceKind, triggers, persistAuthoringMemory, rememberedProject]);
 
     const saveFromUi = React.useCallback(() => { void handleSave(); }, [handleSave]);
 
@@ -1366,16 +1388,18 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
         setRetargetFailed(false);
     }, [captureTriggerSnapshot, resetHistory, setTriggerDraft]);
     const captureDraftDecisionCurrentness = React.useCallback(() => {
-        const lifetime = captureActiveServerAccountScopeLifetime();
+        const lifetime = accountLifetime;
         const sourceIsCurrent = captureSourceGeneration();
         const draftId = snapshotRef.current?.draft.draftId;
         return () => (lifetime?.isCurrent() ?? true) && sourceIsCurrent()
             && snapshotRef.current?.draft.draftId === draftId;
-    }, [captureSourceGeneration]);
+    }, [accountLifetime, captureSourceGeneration]);
+    // The Artifact can be acknowledged before placement/triggers finish. A
+    // pending Save still owns the draft even when its definition looks clean.
     // Discard and ordinary Back share the host's unsaved-draft decision.
     const draftNavigation = useUnsavedDraftNavigationGuard({
         navigation,
-        isDirty: routeDraftDirty,
+        isDirty: routeDraftDirty || savePending,
         onSave: requestPageSave,
         onDiscard: discardDepartingDraft,
         onLeave: leaveEditor,
@@ -1384,26 +1408,24 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
     });
     const handleDelete = React.useCallback(async () => {
         if (!canEditDefinition || saved === null || deletePendingRef.current) return;
-        const lifetime = captureActiveServerAccountScopeLifetime();
+        const lifetime = accountLifetime;
         if (lifetime === null) return;
         const sourceIsCurrent = captureSourceGeneration();
-        const confirmed = await Modal.confirm(
-            t('workflows.save.deleteTitle'),
-            t('workflows.page.deleteBody'),
-            { cancelText: t('common.cancel'), confirmText: t('common.delete'), destructive: true },
-        );
-        if (!confirmed || !lifetime.isCurrent() || !sourceIsCurrent()) return;
-        if (deletePendingRef.current) return;
         deletePendingRef.current = true;
-        setDeletePending(true);
+        const controller = new AbortController();
+        deleteAbortRef.current = controller;
         const retirement = lifetime.onRetire(() => {
+            controller.abort();
             if (!sourceIsCurrent()) return;
             deletePendingRef.current = false;
             setDeletePending(false);
         });
         try {
             // The delete Action owns the order (this workflow's triggers first, 03 §5.5).
-            await deleteWorkflowDefinition({ definitionId: saved.definitionId });
+            await deleteWorkflowDefinition({ definitionId: saved.definitionId, signal: controller.signal, accountLifetime,
+                onTransportIssued: () => {
+                    if (lifetime.isCurrent() && sourceIsCurrent()) setDeletePending(true);
+                } });
             if (!lifetime.isCurrent() || !sourceIsCurrent()) return;
             // Nothing is left to keep: leave without the unsaved-draft prompt.
             draftNavigation.allowSavedNavigation();
@@ -1413,16 +1435,18 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
             router.replace('/workflows' as never);
         } catch (error) {
             if (lifetime.isCurrent() && sourceIsCurrent()) {
+                if (error instanceof WorkflowActionError && isActionApprovalDeclinedErrorCode(error.rawCode)) return;
                 await Modal.alert(t('workflows.page.deleteFailedTitle'), formatWorkflowProblemMessage(error));
             }
         } finally {
             retirement.dispose();
+            if (deleteAbortRef.current === controller) deleteAbortRef.current = null;
             if (lifetime.isCurrent() && sourceIsCurrent()) {
                 deletePendingRef.current = false;
                 setDeletePending(false);
             }
         }
-    }, [canEditDefinition, captureSourceGeneration, draftNavigation.allowSavedNavigation, router, saved]);
+    }, [accountLifetime, canEditDefinition, captureSourceGeneration, draftNavigation.allowSavedNavigation, router, saved]);
 
     /**
      * Discard changes on a saved workflow (DESIGN-9 N44): the edits go, the saved version comes back
@@ -1433,7 +1457,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
         const savedDraft = savedDraftRef.current;
         if (!canEditDefinition) return { status: 'refused', reason: 'workflow_draft_read_only' };
         if (saved === null || savedDraft === null) return { status: 'unavailable' };
-        const lifetime = captureActiveServerAccountScopeLifetime();
+        const lifetime = accountLifetime;
         if (!lifetime) return { status: 'unavailable' };
         const draftDecisionIsCurrent = captureDraftDecisionCurrentness();
         const confirmed = await Modal.confirm(
@@ -1566,19 +1590,20 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
         // Create and saved URLs share one dynamic native screen. Change its
         // parameter, not its screen key, so the accepted editor stays mounted.
         if (nativeEditorRoute) router.setParams({ id: savedRouteId });
-        else router.replace(createWorkflowDefinitionRoute(savedRouteId) as never);
-    }, [nativeEditorRoute, routeDraftDirty, router, savePending, savedRouteId, sourceKind]);
+        else router.replace(createWorkflowDefinitionRoute(savedRouteId, props.accountLifetime?.scope.serverId) as never);
+    }, [nativeEditorRoute, routeDraftDirty, router, savePending, savedRouteId, sourceKind, accountLifetime]);
     const handleDuplicate = React.useCallback(() => {
         if (!accessResolved || draft === null || savePending) return;
         const definition = validateWorkflowEditorDraft(draft).normalizedDefinition;
         if (definition === undefined) return;
-        const lifetime = captureActiveServerAccountScopeLifetime();
+        const lifetime = accountLifetime;
         if (!lifetime?.isCurrent()) return;
         const definitionDraftSeedId = storeWorkflowDefinitionDraftSeed({
             name: t('workflows.copyName', { name: draft.name }), description, definition,
-        });
-        router.push({ pathname: '/workflows/new', params: { definitionDraftSeedId } } as never);
-    }, [accessResolved, description, draft, router, savePending]);
+        }, props.accountLifetime);
+        router.push({ pathname: '/workflows/new', params: { definitionDraftSeedId,
+            ...(props.accountLifetime ? { serverId: props.accountLifetime.scope.serverId } : {}) } } as never);
+    }, [accountLifetime, accessResolved, description, draft, router, savePending]);
     const menuActions = React.useMemo((): readonly PageHeaderMenuAction[] => {
         const actions: PageHeaderMenuAction[] = [];
         if (saved !== null && accessResolved) actions.push({ id: 'duplicate', title: t('common.duplicate'),
@@ -1595,11 +1620,12 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
                 testID: 'workflow-editor-menu-share',
                 onSelect: () => showDocumentShareSheet({
                     kind: 'workflow-definition.v1',
+                    ...(activeAccountScope ? { scope: activeAccountScope } : {}),
                     artifactId: saved.definitionId,
                     name: shareName || t('workflows.page.untitled'),
                     subtitle: savedDraftRef.current
                         ? t('workflows.examples.stepCount', { count: countWorkflowStepsV1(savedDraftRef.current.blocks) }) : undefined,
-                    linkPath: createWorkflowDefinitionRoute(saved.definitionId),
+                    linkPath: createWorkflowDefinitionRoute(saved.definitionId, props.accountLifetime?.scope.serverId),
                     // "Send a copy instead" is the existing JSON export (INT I2).
                     onSendCopy: () => editorCommandsRef.current?.exportJson(),
                 }),
@@ -1629,7 +1655,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
             });
         }
         return actions;
-    }, [accessResolved, canEditDefinition, detailsPaneAvailable, draft, draftNavigation.requestLeave, editWithAgent,
+    }, [accountLifetime, activeAccountScope, accessResolved, canEditDefinition, detailsPaneAvailable, draft, draftNavigation.requestLeave, editWithAgent,
         handleDelete, handleDiscardChanges, handleDuplicate, routeDraftDirty, savePending, deletePending, saved, shareName]);
 
     React.useEffect(() => {
@@ -1715,6 +1741,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
                 the pinned command surface that must stay on screen while the
                 authored document scrolls beneath it. */}
             <WorkflowEditorBody
+                accountLifetime={props.accountLifetime}
                 draft={draft}
                 onBack={draftNavigation.requestBack}
                 focusNameOnMount={catalogSeed !== undefined && props.source.kind === 'new'}
@@ -1742,7 +1769,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
                     ),
                     onBackToRun: () => {
                         if (!reviewedRunSeedState.lifetime?.isCurrent()) return;
-                        router.push({ pathname: '/workflows/runs/[runId]', params: { runId: reviewedRunSeed.sourceRunId } } as never);
+                        router.push(createWorkflowRunRoute(reviewedRunSeed.sourceRunId, reviewedRunSeedState.lifetime.scope.serverId) as never);
                     },
                 })}
                 authoringFacts={authoringHost.authoringFacts}
@@ -1814,6 +1841,7 @@ function WorkflowEditorHostScreenReady(props: Readonly<{
                 {...(canManagePersonalTriggers ? { onSave: saveFromUi, triggersSummary: triggers.summary,
                 triggersSection: (
                     <WorkflowTriggerSection
+                        accountLifetime={props.accountLifetime}
                         testIDPrefix="workflow-editor"
                         set={triggers.set}
                         draft={triggers.draft}

@@ -1,10 +1,13 @@
+import { createRpcCallError } from '@happier-dev/protocol/rpcErrors';
+
 export function createSocketRpcRequestId(): string {
   const crypto = globalThis.crypto as { randomUUID?: () => string } | undefined;
   const raw = typeof crypto?.randomUUID === 'function' ? crypto.randomUUID() : `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
   return `rpc_${raw}`;
 }
 export function createSocketRpcAbortError(): Error {
-  return Object.assign(new Error('Socket RPC was aborted by the caller'), { name: 'AbortError', code: 'SOCKET_RPC_ABORTED' });
+  return Object.assign(createRpcCallError({ error: 'Socket RPC was aborted by the caller', errorCode: 'SOCKET_RPC_ABORTED' }),
+    { name: 'AbortError', code: 'SOCKET_RPC_ABORTED' });
 }
 export function createSocketIoAckTimeoutError(): Error { return new Error('operation has timed out'); }
 const MAX_NATIVE_TIMER_DELAY_MS = 2_147_483_647;

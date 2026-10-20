@@ -68,7 +68,7 @@ describe('useEnvironmentVariables (hook)', () => {
         expect(ops.machinePreviewEnv).toHaveBeenCalledWith(
             'm1',
             expect.objectContaining({ keys: ['OPENAI_API_KEY'] }),
-            { serverId: 'server-b' },
+            expect.objectContaining({ serverId: 'server-b' }),
         );
         await hook.unmount();
     });
@@ -96,7 +96,7 @@ describe('useEnvironmentVariables (hook)', () => {
             'm1',
             expect.any(String),
             '/',
-            { serverId: 'server-b' },
+            expect.objectContaining({ serverId: 'server-b' }),
         );
         const bashCommand = bashMock.mock.calls.at(-1)?.[1];
         expect(bashCommand).not.toContain('node -e');

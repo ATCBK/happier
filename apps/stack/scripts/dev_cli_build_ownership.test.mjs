@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 import { ensureCliBuilt, syncSharedDepsForSourceDev } from './utils/proc/pm.mjs';
 import { writeCliDistBuildManifest } from './utils/cli/cliDistIntegrity.mjs';
+import { installWorkspaceAdmissionProcessFixture } from './testkit/core/native_admission_fixture.mjs';
 
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(scriptsDir, '..', '..', '..');
@@ -260,7 +261,8 @@ async function createCliBuildFixture(t, { existingCliDist = false } = {}) {
     HAPPIER_STACK_ENV_FILE: null,
     HAPPIER_STACK_SKIP_REFRESH_DEPS: '1',
   });
-  return { cliDir, eventsPath };
+  const { env } = await installWorkspaceAdmissionProcessFixture(t, root);
+  return { cliDir, eventsPath, env };
 }
 
 function countEvent(events, expected) {
@@ -454,9 +456,9 @@ test('one full CLI admission owns every shared workspace build exactly once', as
     cliPackageJson.scripts?.build,
     'Stack-owned preparation needs a lifecycle entrypoint that does not rerun Yarn prebuild',
   );
-  const { cliDir, eventsPath } = await createCliBuildFixture(t);
+  const { cliDir, eventsPath, env } = await createCliBuildFixture(t);
 
-  await ensureCliBuilt(cliDir, { buildCli: true, quiet: true, env: process.env, platform: 'darwin' });
+  await ensureCliBuilt(cliDir, { buildCli: true, quiet: true, env, platform: 'darwin' });
 
   const events = await readFile(eventsPath, 'utf8');
   for (const workspaceName of sharedWorkspaceNames) {
@@ -471,10 +473,10 @@ test('one full CLI admission owns every shared workspace build exactly once', as
 });
 
 test('one successful atomic CLI build is admitted as usable when later edits supersede it', async (t) => {
-  const { cliDir, eventsPath } = await createCliBuildFixture(t);
-  applyEnv(t, { MUTATE_CLI_SOURCE_DURING_BUILD: '1' });
+  const { cliDir, eventsPath, env } = await createCliBuildFixture(t);
+  env.MUTATE_CLI_SOURCE_DURING_BUILD = '1';
 
-  const result = await ensureCliBuilt(cliDir, { buildCli: true, quiet: true, env: process.env, platform: 'darwin' });
+  const result = await ensureCliBuilt(cliDir, { buildCli: true, quiet: true, env, platform: 'darwin' });
   const events = await readFile(eventsPath, 'utf8');
 
   assert.equal(countEvent(events, 'cli:build:prepared'), 1, `build events:\n${events}`);
@@ -486,9 +488,9 @@ test('one successful atomic CLI build is admitted as usable when later edits sup
 });
 
 test('adopting an existing CLI dist still repairs every missing shared workspace once', async (t) => {
-  const { cliDir, eventsPath } = await createCliBuildFixture(t, { existingCliDist: true });
+  const { cliDir, eventsPath, env } = await createCliBuildFixture(t, { existingCliDist: true });
 
-  const result = await ensureCliBuilt(cliDir, { buildCli: true, quiet: true, env: process.env, platform: 'darwin' });
+  const result = await ensureCliBuilt(cliDir, { buildCli: true, quiet: true, env, platform: 'darwin' });
 
   assert.deepEqual(result, { built: false, current: false, reason: 'mode_never' });
   const events = await readFile(eventsPath, 'utf8');
@@ -496,4 +498,16 @@ test('adopting an existing CLI dist still repairs every missing shared workspace
     assert.equal(countEvent(events, `shared:${workspaceName}`), 1, `adoption events:\n${events}`);
   }
   assert.equal(countEvent(events, 'cli:build:prepared'), 0, `adoption events:\n${events}`);
+});
+
+test('dev daemon start, recovery and reload all consume the one source-runtime selection', async () => {
+  const source = await readFile(join(scriptsDir, 'dev.mjs'), 'utf-8');
+  const startCalls = [...source.matchAll(/startDevDaemon\(\{[\s\S]*?\n\s*\}\);/gu)].map((match) => match[0]);
+  const executorCall = source.match(/createHappyCliReloadExecutor\(\{[\s\S]*?\n\s*\}\)/u)?.[0];
+
+  assert.equal(startCalls.length, 2, 'initial start and lifecycle recovery');
+  for (const call of [...startCalls, executorCall]) {
+    assert.match(call, /sourceRuntimeOptions,/u);
+    assert.doesNotMatch(call, /buildCli|startLastGreen|cliDir/u);
+  }
 });

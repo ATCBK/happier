@@ -7,6 +7,7 @@ import { resolveHappierIconSize } from '../presentation/content/Icon.js';
 import { usePluginTheme } from './PluginUiProvider.js';
 import { useOptionalPluginUiPresentationHost } from '../presentationHost/context.js';
 import { usePluginHostApi } from '../hostApi/context.js';
+import { usePageHeaderMarkGlyphPx } from './pageHeaderMark.js';
 
 function useImageDecodeDiagnostic(resource: PluginUiResourceReference): () => void {
   const hostApi = usePluginHostApi();
@@ -91,7 +92,8 @@ export function usePluginBrandDisplayName(pluginId?: string): string | undefined
 export function BrandMark({ pluginId, size, pixelSize: requestedPixelSize, showName = false, externallyLabelled = false, testID }: BrandMarkProps): ReactElement {
   // A small mark sits beside text (a byline, a cell): at a small glyph's step, not the 32 px image step,
   // where a filled brand reads as a heavy disk. Larger marks keep their image steps.
-  const pixelSize = requestedPixelSize ?? (size === 'small' ? resolveHappierIconSize('small') : undefined);
+  const pageHeaderGlyphPx = usePageHeaderMarkGlyphPx();
+  const pixelSize = requestedPixelSize ?? pageHeaderGlyphPx ?? (size === 'small' ? resolveHappierIconSize('small') : undefined);
   const presentationHost = useOptionalPluginUiPresentationHost();
   const displayName = usePluginBrandDisplayName(pluginId) ?? 'Plugin';
   const targetPluginId = pluginId === undefined ? undefined : pluginId.trim();

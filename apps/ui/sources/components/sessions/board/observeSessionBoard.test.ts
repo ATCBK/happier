@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { createSessionSystemRecordRepository } from '@/sync/domains/sessionSystemRecords/repository';
 import { observeSessionBoard, type SessionBoardBinding, type SessionBoardAuthority } from './observeSessionBoard';
+import { resolveSessionBoardExecutableCurrentness } from '@/sync/domains/session/board/sessionBoardExecutableCurrentness';
+import { resolveSessionBoardRetainedFreshness } from '@/sync/domains/session/board/sessionBoardProjection';
+import { EMPTY_PLUGIN_UI_PROJECTION } from '@/sync/domains/plugins/ui/projection';
 
 const scope = { serverId: 'home-a', accountId: 'alice' };
 const session = { serverId: scope.serverId, sessionId: 'session-one' };
@@ -161,6 +164,122 @@ describe('Board repository binding', () => {
 });
 
 describe('Board encryption and authority renewal', () => {
+    it('keeps a background renewal quiet until the record reread settles, and reports a failed reread', async () => {
+        const response = () => Response.json({ records: [layout, record('note', 'item.v1', item)], nextCursor: null, hasNext: false });
+        let settleRead: ((value: Response) => void) | undefined;
+        let refreshing = false;
+        const repository = createSessionSystemRecordRepository({ scope, request: async () => refreshing
+            ? await new Promise<Response>(resolve => { settleRead = resolve; }) : response() });
+        let settleAuthority: ((value: { status: 'ok'; value: SessionBoardAuthority }) => void) | undefined;
+        const seen: SessionBoardBinding[] = [];
+        const stop = observeSessionBoard({ session, repository, authority,
+            readCapabilities: () => authority.capabilities, readContentContext: () => authority.contentContext,
+            renewAuthority: async () => await new Promise(resolve => { settleAuthority = resolve; }),
+            isCurrent: () => true, onChange: value => { seen.push(value); } });
+        try {
+            await flushHookEffects({ cycles: 50 });
+            expect(seen.at(-1)).toMatchObject({ status: 'ready', snapshot: { freshness: 'fresh', loading: 'idle' } });
+            refreshing = true;
+            seen.length = 0;
+            repository.refreshObserved({ force: true });
+            await flushHookEffects({ cycles: 10 });
+            settleAuthority?.({ status: 'ok', value: authority });
+            await flushHookEffects({ cycles: 20 });
+            expect(seen.length).toBeGreaterThan(0);
+            expect(seen.every(binding => binding.status === 'ready'
+                && resolveSessionBoardRetainedFreshness(binding.snapshot) === null
+                && binding.snapshot.loading === 'refreshing')).toBe(true);
+            settleRead?.(new Response('{}', { status: 503 }));
+            await flushHookEffects({ cycles: 30 });
+            expect(seen.at(-1)).toMatchObject({ status: 'ready', snapshot: {
+                freshness: 'stale', loading: 'idle', itemsById: expect.any(Map),
+            } });
+            const failed = seen.at(-1);
+            if (failed?.status !== 'ready') throw new Error('Board lost its retained content');
+            expect(resolveSessionBoardRetainedFreshness(failed.snapshot)).toBe('stale');
+            expect(failed.snapshot.itemsById.get('note')?.state.kind).toBe('ready');
+        } finally { stop(); }
+    });
+
+    it('keeps an unchanged widget admitted through a Board reread, but withdraws it on access loss', async () => {
+        const widget = { ...item, source: { kind: 'widget', instance: {
+            v: 1, id: 'counter', bindings: {},
+            definition: { kind: 'installed', surface: { pluginId: 'acme.widgets', localId: 'counter' } },
+        } } } as const;
+        const response = () => Response.json({ records: [layout, record('counter', 'item.v1', widget)], nextCursor: null, hasNext: false });
+        let settleRead: ((value: Response) => void) | undefined;
+        let refreshing = false;
+        const repository = createSessionSystemRecordRepository({ scope, request: async () => refreshing
+            ? await new Promise<Response>(resolve => { settleRead = resolve; }) : response() });
+        let current = authority;
+        let settleAuthority: ((value: { status: 'ok'; value: SessionBoardAuthority }) => void) | undefined;
+        const seen: SessionBoardBinding[] = [];
+        const stop = observeSessionBoard({ session, repository, authority,
+            readCapabilities: () => current.capabilities, readContentContext: () => current.contentContext,
+            renewAuthority: async () => await new Promise(resolve => { settleAuthority = resolve; }),
+            isCurrent: () => true, onChange: value => { seen.push(value); } });
+        try {
+            await flushHookEffects({ cycles: 50 });
+            const initial = seen.at(-1);
+            if (initial?.status !== 'ready') throw new Error('Board not ready');
+            const counter = initial.snapshot.itemsById.get('counter')!;
+            const runtime = { phase: 'current' as const, interactionEnabled: true, pluginUiProjection: EMPTY_PLUGIN_UI_PROJECTION };
+            expect(resolveSessionBoardExecutableCurrentness(initial.snapshot, counter, runtime)).toBe('current');
+            refreshing = true;
+            seen.length = 0;
+            repository.invalidate(session);
+            await flushHookEffects({ cycles: 10 });
+            const pending = seen.at(-1);
+            expect(pending).toMatchObject({ status: 'ready', snapshot: { freshness: 'stale', loading: 'refreshing' } });
+            if (pending?.status !== 'ready') throw new Error('Board lost its retained content');
+            expect(resolveSessionBoardRetainedFreshness(pending.snapshot)).toBeNull();
+            expect(pending.snapshot.itemsById.get('counter')).toBe(counter);
+            expect(seen.every(binding => binding.status === 'ready'
+                && resolveSessionBoardExecutableCurrentness(binding.snapshot, counter, runtime) === 'current')).toBe(true);
+
+            // A fresh record response can arrive before access renewal. Neither
+            // event is permission to revive content after canonical access loss.
+            settleRead?.(response());
+            await flushHookEffects({ cycles: 10 });
+            current = { ...authority, capabilities: { readTranscript: false, editSessionRecords: false } };
+            repository.notifyContentContextChanged(session);
+            await flushHookEffects({ cycles: 10 });
+            expect(seen.at(-1)).toEqual({ status: 'unavailable', reason: 'forbidden' });
+            settleAuthority?.({ status: 'ok', value: authority });
+            await flushHookEffects({ cycles: 20 });
+            expect(seen.at(-1)).toEqual({ status: 'unavailable', reason: 'forbidden' });
+        } finally { stop(); }
+    });
+
+    it('does not republish retained Board content after a record denial while access renewal finishes', async () => {
+        let settleRead: ((value: Response) => void) | undefined;
+        let refreshing = false;
+        const repository = createSessionSystemRecordRepository({ scope, request: async () => refreshing
+            ? await new Promise<Response>(resolve => { settleRead = resolve; })
+            : Response.json({ records: [layout, record('note', 'item.v1', item)], nextCursor: null, hasNext: false }) });
+        let settleAuthority: ((value: { status: 'ok'; value: SessionBoardAuthority }) => void) | undefined;
+        const seen: SessionBoardBinding[] = [];
+        const stop = observeSessionBoard({ session, repository, authority,
+            readCapabilities: () => authority.capabilities, readContentContext: () => authority.contentContext,
+            renewAuthority: async () => await new Promise(resolve => { settleAuthority = resolve; }),
+            isCurrent: () => true, onChange: value => { seen.push(value); } });
+        try {
+            await flushHookEffects({ cycles: 50 });
+            expect(seen.at(-1)).toMatchObject({ status: 'ready', snapshot: { freshness: 'fresh' } });
+            refreshing = true;
+            repository.invalidate(session);
+            await flushHookEffects({ cycles: 10 });
+            settleRead?.(Response.json({ error: 'denied', code: 'plugin_session_record_forbidden' }, { status: 403 }));
+            await flushHookEffects({ cycles: 10 });
+            expect(seen.at(-1)).toEqual({ status: 'unavailable', reason: 'forbidden' });
+            seen.length = 0;
+            settleAuthority?.({ status: 'ok', value: authority });
+            await flushHookEffects({ cycles: 30 });
+            expect(seen.length).toBeGreaterThan(0);
+            expect(seen.every(binding => binding.status === 'unavailable')).toBe(true);
+        } finally { stop(); }
+    });
+
     it('makes retained content inert as soon as canonical access is revoked, before renewal settles', async () => {
         const repository = createSessionSystemRecordRepository({ scope, request: async () => new Response(JSON.stringify({
             records: [layout, record('note', 'item.v1', item)],

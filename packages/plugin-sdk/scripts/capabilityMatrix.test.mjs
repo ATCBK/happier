@@ -429,7 +429,7 @@ test('declares session info sections with the maintained Channels resource autho
 
 test('derives entity drag families through the client occurrence owner and maintained Triage consumer', () => {
   const entries = PLUGIN_CONTRIBUTION_CATALOG_V2.filter(entry => (
-    entry.manifestKey === 'dragSources' || entry.manifestKey === 'dropTargets'
+    entry.manifestKey === 'dragSources' || entry.manifestKey === 'dropTargets' || entry.manifestKey === 'workItems'
   ));
   assert.equal(entries.length, 2);
   const metadata = deriveCapabilityMatrixMetadata({
@@ -585,6 +585,7 @@ test('names the real realm binder for every catalogued manifest family', () => {
     // never binds them; the client executable registration index does.
     voiceProviders: 'apps/ui/sources/components/plugins/reactNative/clientExecutableContributions.ts',
     dragSources: 'apps/ui/sources/components/plugins/reactNative/clientExecutableContributions.ts',
+    workItems: 'apps/ui/sources/components/plugins/reactNative/clientExecutableContributions.ts',
     dropTargets: 'apps/ui/sources/components/plugins/reactNative/clientExecutableContributions.ts',
     transcriptActivities: 'apps/cli/src/plugins/projection/registry/ui/projection.ts',
     'ui.views': 'apps/cli/src/plugins/projection/registry/ui/projection.ts',

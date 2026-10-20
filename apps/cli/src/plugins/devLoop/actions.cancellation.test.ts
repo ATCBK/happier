@@ -8,7 +8,6 @@ vi.mock('@/plugins/projection/catalog/installed', () => ({
   installPluginFromLocator: vi.fn(),
   readInstalledPluginCatalog: vi.fn(),
   readInstalledPluginCatalogEntry: catalog.readEntry,
-  uninstallPluginFromCatalog: vi.fn(),
 }));
 
 import { executePluginDevLoopAction } from './actions';

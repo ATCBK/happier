@@ -75,6 +75,16 @@ export function installToolShellPresentationCommonModuleMocks(
         return createStorageModuleStub({});
     });
 
+    vi.mock('@/sync/store/settingsReadHooks', async (importOriginal) => {
+        const activeOptions = toolShellPresentationModuleState.options;
+        if (activeOptions.storage) {
+            return await activeOptions.storage(importOriginal);
+        }
+
+        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+        return createStorageModuleStub({});
+    });
+
     vi.mock('@expo/vector-icons', async () => {
         const activeOptions = toolShellPresentationModuleState.options;
         if (activeOptions.icons) {

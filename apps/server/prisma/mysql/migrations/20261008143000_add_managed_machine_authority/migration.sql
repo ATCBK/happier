@@ -26,7 +26,7 @@ CREATE TABLE `ManagedMachine` (
     `wakeOnAcceptedMessage` BOOLEAN NOT NULL,
     `observation` JSON,
     `cleanup` JSON,
-    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `updatedAt` DATETIME(3) NOT NULL,
     CONSTRAINT `ManagedMachine_custodianAccountId_fkey` FOREIGN KEY (`custodianAccountId`) REFERENCES `Account` (`id`) ON DELETE RESTRICT ON UPDATE CASCADE,
     CONSTRAINT `ManagedMachine_enrolledMachineId_fkey` FOREIGN KEY (`enrolledMachineId`) REFERENCES `Machine` (`id`) ON DELETE SET NULL ON UPDATE CASCADE
@@ -45,11 +45,10 @@ CREATE TABLE `ManagedMachinePreset` (
     `wakeOnAcceptedMessage` BOOLEAN,
     `simultaneousMaximum` INTEGER,
     `archivedAt` DATETIME(3),
-    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `updatedAt` DATETIME(3) NOT NULL,
     CONSTRAINT `ManagedMachinePreset_custodianAccountId_fkey` FOREIGN KEY (`custodianAccountId`) REFERENCES `Account` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
     CONSTRAINT `ManagedMachinePreset_teamId_fkey` FOREIGN KEY (`teamId`) REFERENCES `Team` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
-    CONSTRAINT `ManagedMachinePreset_owner_check` CHECK ((`custodianAccountId` IS NULL) <> (`teamId` IS NULL)),
     CONSTRAINT `ManagedMachinePreset_limit_check` CHECK (`simultaneousMaximum` IS NULL OR `simultaneousMaximum` > 0)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE UNIQUE INDEX `ManagedMachine_enrolledMachineId_key` ON `ManagedMachine`(`enrolledMachineId`);
@@ -58,3 +57,24 @@ CREATE INDEX `ManagedMachine_homeId_custodianAccountId_archivedAt_createdAt_idx`
 CREATE INDEX `ManagedMachine_controllerMachineId_controllerInstallationId_idx` ON `ManagedMachine`(`controllerMachineId`, `controllerInstallationId`);
 CREATE INDEX `ManagedMachinePreset_homeId_custodianAccountId_idx` ON `ManagedMachinePreset`(`homeId`, `custodianAccountId`);
 CREATE INDEX `ManagedMachinePreset_homeId_teamId_idx` ON `ManagedMachinePreset`(`homeId`, `teamId`);
+
+-- MySQL rejects a CHECK over custodianAccountId/teamId because both
+-- participate in cascading foreign keys (error 3823). Preserve the
+-- provider-independent exactly-one-owner invariant with an explicit error.
+CREATE TRIGGER `ManagedMachinePreset_owner_insert`
+BEFORE INSERT ON `ManagedMachinePreset`
+FOR EACH ROW
+BEGIN
+    IF (NEW.`custodianAccountId` IS NULL) = (NEW.`teamId` IS NULL) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'ManagedMachinePreset must have exactly one of custodianAccountId or teamId';
+    END IF;
+END;
+
+CREATE TRIGGER `ManagedMachinePreset_owner_update`
+BEFORE UPDATE ON `ManagedMachinePreset`
+FOR EACH ROW
+BEGIN
+    IF (NEW.`custodianAccountId` IS NULL) = (NEW.`teamId` IS NULL) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'ManagedMachinePreset must have exactly one of custodianAccountId or teamId';
+    END IF;
+END;

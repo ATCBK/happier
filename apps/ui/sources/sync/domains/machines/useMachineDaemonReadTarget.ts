@@ -26,10 +26,15 @@ type MachineDaemonReadIdentity = Readonly<{
     enabled: boolean;
 }>;
 
+/** Mounted and one-shot reads use the same explicit-or-active Home placement. */
+export function resolveMachineDaemonReadServerId(serverId: string | null | undefined): string {
+    return resolveServerProfileScopeIdForIdentifier(serverId?.trim() || getActiveServerSnapshot().serverId);
+}
+
 /** Resolve the same credential-owned identities for a fleet spanning several Homes. */
 export function useMachineDaemonReadIdentities(inputs: readonly MachineDaemonReadTargetInput[]): readonly MachineDaemonReadIdentity[] {
     const inputsKey = JSON.stringify(inputs.map(input => ({ machineId: input.machineId,
-        serverId: resolveServerProfileScopeIdForIdentifier(input.serverId?.trim() || getActiveServerSnapshot().serverId),
+        serverId: resolveMachineDaemonReadServerId(input.serverId),
         expectedAccountId: input.expectedAccountId ?? null, enabled: input.enabled !== false })));
     const targets = React.useMemo(() => JSON.parse(inputsKey) as Array<Readonly<{
         machineId: string; serverId: string; expectedAccountId: string | null; enabled: boolean;

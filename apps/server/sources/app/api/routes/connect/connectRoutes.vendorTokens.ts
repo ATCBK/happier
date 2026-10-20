@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { type Fastify } from "../../types";
 import { db } from "@/storage/db";
@@ -32,7 +32,7 @@ export function connectVendorTokenRoutes(app: Fastify) {
     app.post("/v1/connect/:vendor/register", {
         preHandler: app.authenticate,
         schema: {
-            body: z.object({ token: z.string().min(1).max(maxTokenLen) }),
+            body: z.object({ token: z.string().check(z.minLength(1), z.maxLength(maxTokenLen)) }),
             params: z.object({ vendor: ConnectedServiceCloudVendorKeySchema }),
             response: {
                 400: z.object({ error: z.literal("connect_credential_invalid") }),

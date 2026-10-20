@@ -10,7 +10,7 @@ import {
 } from '@happier-dev/protocol';
 import type { BundledVoiceRuntimeContribution } from '@/voice/session/types';
 import { installVoiceWebRtcBrowserBoundary } from '@/dev/testkit/harness/voiceWebRtcHarness';
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createExistingSessionDirectoryPreflightResult, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
@@ -968,6 +968,7 @@ describe('realtime_codex normal web composed gate', () => {
       });
     machineRpcBoundary.machineRpc.mockImplementation(async (input) => {
       if (input.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return { protocolVersion: 1, projection: daemonProjection };
+      if (input.method === RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT) return createExistingSessionDirectoryPreflightResult(input.payload);
       return {
         type: 'error' as const,
         code: 'spawn_failed' as const,
@@ -1014,7 +1015,7 @@ describe('realtime_codex normal web composed gate', () => {
       });
       expect(browser.micSession.ensureActive).not.toHaveBeenCalled();
       expect(browser.peers).toHaveLength(0);
-      expect(machineRpcBoundary.machineRpc.mock.calls.filter(([input]) => input.method !== RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)).toHaveLength(1);
+      expect(machineRpcBoundary.machineRpc.mock.calls.filter(([input]) => input.method === RPC_METHODS.SESSION_SPAWN_NEW)).toHaveLength(1);
       expect(createAgentSessionRealtimeService).not.toHaveBeenCalled();
       expect(rpcBoundary.sessionRpc).not.toHaveBeenCalled();
     } finally {
@@ -1324,6 +1325,7 @@ describe('realtime_codex normal web composed gate', () => {
     const spawnedSessionIds = ['hidden-global-failed', 'hidden-global-ready'];
     machineRpcBoundary.machineRpc.mockImplementation(async (input) => {
       if (input.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return { protocolVersion: 1, projection: daemonProjection };
+      if (input.method === RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT) return createExistingSessionDirectoryPreflightResult(input.payload);
       const sessionId = spawnedSessionIds[events.filter(event => event.startsWith('spawn:')).length];
       if (!sessionId) throw new Error('unexpected trusted Global spawn');
       events.push(`spawn:${sessionId}`);
@@ -1436,7 +1438,7 @@ describe('realtime_codex normal web composed gate', () => {
         transcriptMode: 'native_session',
         targetSessionAddress: null,
       });
-      expect(machineRpcBoundary.machineRpc.mock.calls.filter(([input]) => input.method !== RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)).toHaveLength(2);
+      expect(machineRpcBoundary.machineRpc.mock.calls.filter(([input]) => input.method === RPC_METHODS.SESSION_SPAWN_NEW)).toHaveLength(2);
       expect(machineRpcBoundary.machineRpc).toHaveBeenCalledWith(expect.objectContaining({
         method: RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE,
         machineId: globalMachine.id, serverId: activeServerId,
@@ -1465,7 +1467,7 @@ describe('realtime_codex normal web composed gate', () => {
         transcriptMode: 'native_session',
         targetSessionAddress: { serverId: activeServerId, sessionId: 'codex-direct-session' },
       });
-      expect(machineRpcBoundary.machineRpc.mock.calls.filter(([input]) => input.method !== RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE)).toHaveLength(2);
+      expect(machineRpcBoundary.machineRpc.mock.calls.filter(([input]) => input.method === RPC_METHODS.SESSION_SPAWN_NEW)).toHaveLength(2);
     } finally {
       await runtime.dispose();
       hostLease.revoke();

@@ -74,6 +74,7 @@ describe('useRegisterSessionPaneDriver (module prefetch)', () => {
                 machineId: 'machine-a',
                 serverId: 'home-b',
                 platform: 'web',
+                accountLifetime: null,
             });
             return React.createElement('Probe');
         };

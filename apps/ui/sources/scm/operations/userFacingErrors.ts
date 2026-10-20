@@ -1,5 +1,6 @@
 import type { ScmOperationErrorCode } from '@happier-dev/protocol/scm';
 import { classifyScmOperationErrorCode, mapGitScmErrorCode, SCM_OPERATION_ERROR_CODES } from '@happier-dev/protocol/scm';
+import { t } from '@/text';
 
 export function getScmUserFacingError(input: {
     errorCode?: ScmOperationErrorCode;
@@ -9,6 +10,8 @@ export function getScmUserFacingError(input: {
     const rawError = input.error?.toLowerCase() ?? '';
     const rawFallback = input.fallback.toLowerCase();
     switch (input.errorCode) {
+        case SCM_OPERATION_ERROR_CODES.ROOT_NOT_FOUND:
+            return t('errors.workspaceFolderMissing');
         case SCM_OPERATION_ERROR_CODES.NOT_REPOSITORY:
             return 'The selected path is not a source control repository.';
         case SCM_OPERATION_ERROR_CODES.INVALID_PATH:

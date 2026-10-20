@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { retryableLazy } from '@/components/ui/performance/retryableLazy';
 
-import { useSetting } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/store/settingsReadHooks';
 import { LazyMountOnScreen } from '@/components/ui/performance/LazyMountOnScreen';
 
 import type { DiffViewerProps } from './diffViewerTypes';

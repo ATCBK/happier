@@ -12,6 +12,7 @@ import { resolveBuiltInContributions } from './resolveBuiltInContributions';
 import type { ResolvedContributionRegistry } from './types';
 import { readCanonicalPluginManifest } from '@/plugins/manifest/normalize';
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { createPluginRuntimeOccurrenceId } from '@/plugins/runtime/runtimeSlots';
 
 const sourceSpec = {
     kind: 'path' as const,
@@ -22,19 +23,8 @@ const sourceSpec = {
 
 function createEmptyRegistry(overrides: Partial<ResolvedContributionRegistry> = {}): ResolvedContributionRegistry {
     return {
-        agents: [],
-                actions: [],
-        tools: [],
-        commands: [],
-        resources: [],
-        activationTargets: [],
-        actionsById: new Map(),
-        toolsById: new Map(),
-        commandsById: new Map(),
-        resourcesById: new Map(),
-                catalogEntriesById: {},
-        agentDefinitionsById: new Map(),
-                pluginDiagnosticsByPluginId: {},
+        ...createResolvedContributionRegistry({}),
+        occurrenceIdsByPluginId: { 'acme.dependencies': createPluginRuntimeOccurrenceId('acme.dependencies') },
         ...overrides,
     };
 }
@@ -268,6 +258,7 @@ describe('managed dependency plugin contributions', () => {
         expect(projection.familiesById.managedDependencies?.entriesById['acme-tool']).toEqual({
             id: 'acme-tool',
             pluginId: 'acme.dependencies',
+            occurrenceId: registry.occurrenceIdsByPluginId?.['acme.dependencies'],
             key: 'acme-tool',
             capabilityId: 'dep.acme-tool',
             sourceKind: 'manual_only',
@@ -300,6 +291,9 @@ describe('managed dependency plugin contributions', () => {
         const registry = createResolvedContributionRegistry({
             agents: [],
                         managedDependencies,
+            occurrenceIdsByPluginId: Object.fromEntries(['acme.one', 'acme.two'].map((pluginId) => [
+                pluginId, createPluginRuntimeOccurrenceId(pluginId),
+            ])),
         });
 
         expect(registry.managedDependenciesByKey?.get('acme.one/tool')?.pluginId).toBe('acme.one');
@@ -388,6 +382,7 @@ describe('managed dependency plugin contributions', () => {
         expect(projection.familiesById.managedDependencies?.entriesById['dep.acme.pinned-tool']).toEqual({
             id: 'dep.acme.pinned-tool',
             pluginId: 'acme.dependencies',
+            occurrenceId: registry.occurrenceIdsByPluginId?.['acme.dependencies'],
             key: 'dep.acme.pinned-tool',
             capabilityId: 'dep.acme.pinned-tool',
             sourceKind: 'pinned_archive',

@@ -20,7 +20,7 @@ const AcpCatalogDefinitionV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniOb
     capabilities: z._default((<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(AcpBackendCapabilitiesV1Schema), () => AcpBackendDefinitionV1Schema.shape.capabilities.parse(undefined)),
     env: z._default(z.record(AcpEnvKeyV1Schema, activeValueReference), () => AcpBackendDefinitionV1Schema.shape.env.parse(undefined)),
   })));
-defineStoredReadProjection(AcpCatalogDefinitionV1Schema, () => z.pipe(z.transform(foldStoredAcpBackendLaunchV1), createStoredReadSchema(lazyZodSchema(() => z.extend(AcpCatalogDefinitionV1Schema, {})))));
+defineStoredReadProjection(AcpCatalogDefinitionV1Schema, () => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(foldStoredAcpBackendLaunchV1), createStoredReadSchema(lazyZodSchema(() => z.extend(AcpCatalogDefinitionV1Schema, {})))));
 
 /** Current executable declarations are closed; predecessor launch fields are folded only at stored ingress. */
 export const AcpCatalogRecordV1Schema = lazyZodSchema(() => z.strictObject({

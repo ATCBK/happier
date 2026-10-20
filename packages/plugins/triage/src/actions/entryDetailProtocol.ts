@@ -6,7 +6,6 @@ import {
     defineProtocolUnion,
 } from '@happier-dev/plugin-sdk/protocol';
 import {
-    MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1,
     TriageConfiguredSourceInstanceV1Schema,
     TriageEntryRefV1Schema,
     TriageLinkedSessionProjectionV1Schema,
@@ -71,9 +70,7 @@ export const TriageReadEntryDetailResultV1Schema = defineProtocolUnion([
     defineProtocolObject({
         kind: defineProtocolLiteral('read'),
         instance: TriageConfiguredSourceInstanceV1Schema,
-        linkedSessions: defineProtocolArray(TriageLinkedSessionProjectionV1Schema, {
-            maxItems: MAX_TRIAGE_LINKED_SESSIONS_PAGE_SIZE_V1,
-        }),
+        linkedSessions: defineProtocolArray(TriageLinkedSessionProjectionV1Schema),
         /** The Collection owner's opaque continuation; absent means this page completed the relation. */
         linkedSessionsNextCursor: ProtocolCollectionOpaqueCursorV1Schema.optional(),
     }, { policy: 'closed' }),

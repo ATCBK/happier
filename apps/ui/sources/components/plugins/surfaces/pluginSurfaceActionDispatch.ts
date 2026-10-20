@@ -7,10 +7,13 @@ import { pluginSourceCustodyV1Equal, type PluginSourceCustodyV1 } from '@happier
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { ActionExecutorContext, ActionPrepareResult } from '@happier-dev/protocol/actions/executor/types';
 import type { ActionId } from '@happier-dev/protocol/actions/actionIds';
+import { resolveInvocationAuthority } from '@happier-dev/protocol/actions/invocationAuthority';
+import { isActionEnabledByActionsSettings } from '@happier-dev/protocol/actions/actionSettings';
+import type { ActionRequiredAuthority } from '@happier-dev/protocol/actions/metadata';
 import type { ActionOperationDeclarationV1 } from '@happier-dev/protocol/actions/operations/v1';
 import type { DaemonPluginStructuredMessageActionInvocationV1, DaemonPluginStructuredMessageActionMountedBinding } from '@happier-dev/protocol/plugins/actions/daemonInvocationV1';
 import type { InteractionTransientRequesterV1 } from '@happier-dev/protocol/plugins/interactions/transientV1';
-import type { MessageActionReferenceV1 } from '@happier-dev/protocol/sessions/messages/messageActionReferenceV1';
+import { MessageActionAvailableSnapshotV1Schema, type MessageActionAvailableSnapshotV1, type MessageActionReferenceV1 } from '@happier-dev/protocol/sessions/messages/messageActionReferenceV1';
 import { PluginMachineMaterializationRefV1Schema } from '@happier-dev/protocol/plugins/availability/materializationRefV1';
 import type { PluginJsonValueV2 } from '@happier-dev/protocol/plugins/contributions/jsonSchema';
 import type { PluginProjectedActionV2 } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
@@ -42,6 +45,7 @@ import {
 } from '@happier-dev/protocol/plugins/ui';
 import type {
     PluginUiHostApiErrorCodeV1,
+    PluginUiHostApiErrorPayloadV1,
     PluginUiHostApiRequestEnvelopeV1,
     PluginUiHostMethodV1,
     PluginUiJsonValueV1,
@@ -75,8 +79,10 @@ import { adaptDaemonContributionRegistryProjectionToMergedProjectionInputs } fro
 import { createSelectedActionInputCustody } from '../hostApi/selectedActionInputCustody';
 import { createPluginActionInputSelector } from './pluginActionInputSelectionHostApi';
 
-import { isActionApprovalRequiredInState } from '@/sync/domains/settings/actionsSettings';
+import { isActionApprovalRequiredInState, resolveActionsSettingsV1FromState } from '@/sync/domains/settings/actionsSettings';
 import { getStorage } from '@/sync/domains/state/storageStore';
+import { getCurrentAuth } from '@/auth/context/currentAuth';
+import { captureLazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 
 import {
     createPluginActionCurrentIntentHandler,
@@ -111,6 +117,12 @@ import { createPluginSurfaceLocalHostHandlers } from './pluginSurfaceLocalHostHa
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import { getPluginUiEphemeralSharedScope } from './pluginUiEphemeralSharedScope';
 import { createPluginOpenNewSessionHandler } from './pluginOpenNewSessionHostApi';
+import {
+    getMachineContributionRegistryProjectionRevision,
+    publishMachineContributionRegistryProjectionInvalidation,
+    type MachineContributionRegistryProjectionScope,
+} from '@/sync/ops/machineContributionRegistryProjectionRevision';
+import { resolveReasonCopy } from '@/sync/domains/surfaces/copy';
 
 /** Exact producer-owned mounted binding, preserved only until RPC projection. */
 export type PluginSurfaceActionMountedBinding = DaemonPluginStructuredMessageActionMountedBinding;
@@ -215,6 +227,8 @@ export type PluginSurfaceClientActionBinding = Readonly<{
     sessionId?: string;
     openSurface?: PluginSurfaceOpenHandler;
     currentUiContext?: () => CurrentUiContextSnapshotV1 | null | undefined;
+    /** Opaque committed identity; resolved after the client's Action admission. */
+    messageActionReference?: MessageActionReferenceV1;
 }>;
 
 /** The incumbent UI confirmation lifecycle, bound to one presenting owner. */
@@ -228,11 +242,14 @@ export type PluginSurfaceActionDispatchOutcome =
         ok: false;
         code: PluginUiHostApiErrorCodeV1;
         reason: string;
+        message?: string;
         retryable?: boolean;
         remediation?: PluginDiagnosticRemediationV1;
     }>;
 
 export type DispatchPluginSurfaceActionInput = Readonly<{
+    /** Host-only placement for an effect already owned by a mounted Account client. */
+    admissionOnly?: true;
     /** Exact host request identity for Action approval custody and daemon operation observation. */
     actionRequestId?: string;
     /**
@@ -312,6 +329,7 @@ function failure(
     code: PluginUiHostApiErrorCodeV1,
     reason: string,
     author?: Readonly<{
+        message?: string;
         retryable?: boolean;
         remediation?: PluginDiagnosticRemediationV1;
     }>,
@@ -320,9 +338,31 @@ function failure(
         ok: false,
         code,
         reason,
+        ...(author?.message === undefined ? {} : { message: author.message }),
         ...(author?.retryable === undefined ? {} : { retryable: author.retryable }),
         ...(author?.remediation === undefined ? {} : { remediation: author.remediation }),
     };
+}
+
+/** A daemon refusal withdraws the old projection, never replays its Action. */
+function staleDaemonProjectionFailure(
+    code: string,
+    scope: MachineContributionRegistryProjectionScope,
+    revision: number,
+    accountLifetime?: ServerAccountScopeLifetime | null,
+): PluginSurfaceActionDispatchFailure | null {
+    if (code !== 'plugin_generation_stale'
+        && code !== 'plugin_occurrence_stale'
+        && code !== 'plugin_action_generation_retired') return null;
+    // A concurrent refusal or reconnect may already have requested the new
+    // projection. Keep recovery with that existing currentness observation.
+    if ((accountLifetime === undefined || accountLifetime?.isCurrent() === true)
+        && getMachineContributionRegistryProjectionRevision(scope) === revision) {
+        publishMachineContributionRegistryProjectionInvalidation(scope);
+    }
+    return failure('stale_surface', code, {
+        message: resolveReasonCopy({ kind: 'pluginRuntime', reasonCode: code }).body,
+    });
 }
 
 function readString(value: unknown): string | null {
@@ -425,6 +465,7 @@ function resolveProjectedContributedAction(
 
 type ClientContributedActionSelection = Readonly<{
     action: PluginProjectedActionV2;
+    authorization: NonNullable<PluginProjectedActionV2['authorization']>;
     binding: PluginSurfaceClientActionBinding;
     registration: PluginUiClientExecutableRegistration;
     /** Opaque generic-registration value, narrowed at the public SDK boundary. */
@@ -432,6 +473,22 @@ type ClientContributedActionSelection = Readonly<{
     pluginVersion: string;
     isCurrent: () => boolean;
 }>;
+
+function clientActionInvocation(selection: ClientContributedActionSelection): Extract<
+    DaemonPluginStructuredMessageActionInvocationV1, { kind: 'clientPluginAction' }
+> {
+    return {
+        kind: 'clientPluginAction',
+        clientActionBinding: {
+            pluginId: selection.action.pluginId,
+            contributionLocalId: selection.action.id,
+            occurrenceId: selection.registration.occurrenceId,
+            // Source-backed development occurrences have no materialization.
+            ...(selection.registration.executionOrigin && 'materializationRef' in selection.registration.executionOrigin
+                ? { materializationRef: selection.registration.executionOrigin.materializationRef } : {}),
+        },
+    };
+}
 
 /**
  * Reads one Action from the producer-owned generic executable index. The raw
@@ -464,9 +521,10 @@ function resolveClientContributedActionSelection(
         platform,
     });
     if (!resolvedRegistration) return null;
-    const { registration, handler, pluginVersion } = resolvedRegistration;
+    const { registration, handler, pluginVersion, authorization } = resolvedRegistration;
     const isCurrent = (): boolean => {
         if (input.isCurrent?.() === false) return false;
+        if (!isContributedActionEnabled(identity, input.invocationSurface ?? 'ui')) return false;
         if (!registration.lifecycle.isCurrent() || registration.lifecycle.signal.aborted) return false;
         if (registration.accountLifetime?.isCurrent() === false) return false;
         if (resolveProjectedContributedAction(input, identity) !== expectedAction) return false;
@@ -476,7 +534,7 @@ function resolveClientContributedActionSelection(
         })?.registration === registration;
     };
     return isCurrent()
-        ? Object.freeze({ action, binding, registration, handler, pluginVersion, isCurrent })
+        ? Object.freeze({ action, authorization, binding, registration, handler, pluginVersion, isCurrent })
         : null;
 }
 
@@ -560,19 +618,7 @@ function clientActionExecuteAction(
                     ? {}
                     : { resolveContributedAction: input.resolveContributedAction }),
                 invocationSurface: input.invocationSurface ?? 'ui',
-                invocation: {
-                    kind: 'clientPluginAction',
-                    clientActionBinding: {
-                        pluginId: selection.action.pluginId,
-                        contributionLocalId: selection.action.id,
-                        occurrenceId: selection.registration.occurrenceId,
-                        // An originless (bundled/development) plugin has no
-                        // materialization; the daemon admits that exact case.
-                        ...(selection.registration.executionOrigin && 'materializationRef' in selection.registration.executionOrigin
-                            ? { materializationRef: selection.registration.executionOrigin.materializationRef }
-                            : {}),
-                    },
-                },
+                invocation: clientActionInvocation(selection),
                 signal: cancellation.signal,
                 isCurrent: selection.isCurrent,
             });
@@ -764,18 +810,54 @@ function actionOutcomeUnknownFailure(
 function isApprovalRequiredByActionSettings(
     identity: PluginContributionIdentityV1,
     invocationSurface: PluginSurfaceActionInvocationSurface,
-    action: Pick<PluginProjectedActionV2, 'dangerLevel' | 'confirmation'>,
+    action: Pick<PluginProjectedActionV2, 'dangerLevel' | 'confirmation' | 'confirmationWhen'>,
+    normalizedInput?: unknown,
+    invocationAuthority?: ActionRequiredAuthority,
 ): boolean {
     try {
         return isActionApprovalRequiredInState(
             getStorage().getState(),
             formatQualifiedPluginActionId({ pluginId: identity.pluginId, localId: identity.localId }),
             { surface: invocationSurface },
-            pluginActionRequiresPresentUserIntent(action, invocationSurface),
+            pluginActionRequiresPresentUserIntent(action, invocationSurface, normalizedInput, invocationAuthority),
         );
     } catch {
         // An unreadable settings snapshot cannot waive the person's decision.
         return true;
+    }
+}
+
+function isContributedActionEnabled(
+    identity: PluginContributionIdentityV1,
+    surface: PluginSurfaceActionInvocationSurface,
+): boolean {
+    return isActionEnabledByActionsSettings(
+        formatQualifiedPluginActionId(identity),
+        resolveActionsSettingsV1FromState(getStorage().getState()),
+        { surface },
+    );
+}
+
+async function contributedInvocationAuthority(
+    input: DispatchPluginSurfaceActionInput,
+    targetServerId?: string | null,
+): Promise<ActionRequiredAuthority> {
+    if (input.invocation?.kind === 'clientPluginAction') return 'account_automation';
+    if (input.hostAction?.context?.authority) return input.hostAction.context.authority;
+    const serverId = (targetServerId ?? input.contributedAction?.serverId ?? input.hostAction?.context?.serverId)?.trim();
+    const surface = input.invocationSurface ?? 'ui';
+    if (!serverId) return resolveInvocationAuthority({
+        credential: getCurrentAuth()?.credentialAuthorityKind ?? 'none', surface,
+    });
+    try {
+        const account = await captureLazyActionAccountContext(serverId, input.signal);
+        try {
+            account.assertCurrent();
+            return resolveInvocationAuthority({ credential: account.credentialAuthorityKind, surface });
+        } finally { account.dispose(); }
+    } catch {
+        // An unavailable target credential cannot inherit the focused Home's authority.
+        return 'account_automation';
     }
 }
 
@@ -812,16 +894,50 @@ async function settleDaemonActionPresentUserIntent(
     input: DispatchPluginSurfaceActionInput,
     identity: PluginContributionIdentityV1,
     projectedAction: PluginProjectedActionV2,
+    settledInput: PluginUiJsonValueV1 | undefined,
 ): Promise<Readonly<{ ok: true; presentUserIntent?: 'confirmed' }> | PluginSurfaceActionDispatchFailure> {
     const invocationSurface = input.invocationSurface ?? 'ui';
-    const approvalRequiredByActionSettings = isApprovalRequiredByActionSettings(identity, invocationSurface, projectedAction);
+    let normalizedInput: unknown;
+    if (projectedAction.confirmationWhen !== undefined && !input.admissionOnly) {
+        const binding = input.contributedAction;
+        if (!binding) return failure('unavailable', 'plugin_surface_contributed_action_unavailable');
+        const projectionScope = { machineId: binding.machineId, serverId: binding.accountLifetime?.scope.serverId ?? binding.serverId ?? null };
+        const projectionRevision = getMachineContributionRegistryProjectionRevision(projectionScope);
+        const schemas = await machinePluginActionSchemasRead(binding.machineId, {
+            serverId: binding.serverId ?? null,
+            expectedOccurrenceId: projectedAction.occurrenceId,
+            qualifiedActionId: buildQualifiedPluginContributionKey(identity),
+            ...(input.signal ? { signal: input.signal } : {}),
+        });
+        if (!schemas.supported) return failure('unavailable', 'plugin_surface_action_schemas_unavailable');
+        if (!schemas.result.ok) return staleDaemonProjectionFailure(schemas.result.code, projectionScope, projectionRevision, binding.accountLifetime)
+            ?? failure('unavailable', 'plugin_surface_action_schemas_unavailable');
+        const invocation = createPluginActionInvocation({
+            pluginId: identity.pluginId, localId: identity.localId,
+            inputSchema: schemas.result.inputSchema,
+            occurrenceSignal: input.signal ?? new AbortController().signal,
+            isCurrent: () => input.isCurrent?.() !== false,
+        });
+        const prepared = invocation.prepare(settledInput ?? null);
+        if (prepared.kind === 'settled') return clientActionFailure(
+            'code' in prepared.result ? prepared.result.code : 'plugin_action_input_schema_invalid',
+        );
+        normalizedInput = prepared.input;
+    }
+    // A caller-owned writer validates its own input. Until then, its admission
+    // uses the declaration's conservative no-input default rather than assuming
+    // a condition on unvalidated JSON or requiring a daemon to authorize Account state.
+    const invocationAuthority = await contributedInvocationAuthority(input);
+    if (!isContributedActionEnabled(identity, invocationSurface)) return failure('denied', 'plugin_action_disabled');
+    const approvalRequiredByActionSettings = isApprovalRequiredByActionSettings(identity, invocationSurface, projectedAction, normalizedInput, invocationAuthority);
     if (!pluginActionRequiresPresentUserIntent({
         dangerLevel: projectedAction.dangerLevel,
         ...(projectedAction.confirmation === undefined
             ? {}
             : { confirmation: projectedAction.confirmation }),
+        ...(projectedAction.confirmationWhen === undefined ? {} : { confirmationWhen: projectedAction.confirmationWhen }),
         approvalRequiredByActionSettings,
-    }, invocationSurface)) {
+    }, invocationSurface, normalizedInput, invocationAuthority)) {
         return { ok: true };
     }
     // The daemon binds this decision to the exact request it arrives on; this
@@ -842,6 +958,9 @@ async function settleDaemonActionPresentUserIntent(
     if (input.signal?.aborted) return failure('unavailable', 'plugin_ui_invocation_aborted');
     if (input.isCurrent && !input.isCurrent()) {
         return failure('stale_surface', 'plugin_ui_generation_retired');
+    }
+    if (!isContributedActionEnabled(identity, invocationSurface)) {
+        return failure('denied', 'plugin_action_disabled');
     }
     if (intent.status === 'approved') {
         return intent.fingerprint === fingerprint
@@ -878,6 +997,9 @@ async function executeClientContributedAction(
     // plugin is trusted code: its result is not re-validated here.
     const authority = initial.registration.authority;
     if (!authority) return failure('unavailable', 'plugin_surface_client_action_unavailable');
+    const invocationAuthority = await contributedInvocationAuthority(input, authority.serverId);
+    const projectionScope = { machineId: authority.machineId, serverId: authority.serverId };
+    const projectionRevision = getMachineContributionRegistryProjectionRevision(projectionScope);
     const schemas = await machinePluginActionSchemasRead(authority.machineId, {
         serverId: authority.serverId,
         expectedOccurrenceId: projectedAction.occurrenceId,
@@ -885,11 +1007,9 @@ async function executeClientContributedAction(
         ...(input.signal ? { signal: input.signal } : {}),
     });
     if (!schemas.supported || !schemas.result.ok) {
-        return clientActionFailure(
-            schemas.supported && !schemas.result.ok && schemas.result.code === 'plugin_occurrence_stale'
-                ? 'plugin_action_generation_retired'
-                : 'plugin_surface_client_action_unavailable',
-        );
+        return (schemas.supported && !schemas.result.ok
+            ? staleDaemonProjectionFailure(schemas.result.code, projectionScope, projectionRevision, initial.registration.accountLifetime)
+            : null) ?? clientActionFailure('plugin_surface_client_action_unavailable');
     }
     const invocation = createPluginActionInvocation({
         pluginId: identity.pluginId,
@@ -904,6 +1024,7 @@ async function executeClientContributedAction(
         occurrenceSignal: initial.registration.lifecycle.signal,
         isCurrent: initial.isCurrent,
     });
+    let normalizedInput: unknown;
     const presentUserGate = createPluginActionPresentUserGate<PluginProjectedActionV2>({
         resolve: () => {
             const current = resolveClientContributedActionSelection(input, identity, projectedAction);
@@ -925,8 +1046,9 @@ async function executeClientContributedAction(
                     ...(current.action.confirmation === undefined
                         ? {}
                         : { confirmation: current.action.confirmation }),
-                    approvalRequiredByActionSettings: isApprovalRequiredByActionSettings(identity, invocationSurface, current.action),
-                    authorization: current.action.authorization,
+                    ...(current.action.confirmationWhen === undefined ? {} : { confirmationWhen: current.action.confirmationWhen }),
+                    approvalRequiredByActionSettings: isApprovalRequiredByActionSettings(identity, invocationSurface, current.action, normalizedInput, invocationAuthority),
+                    authorization: current.authorization,
                     fingerprintContext: Object.freeze({
                         target: current.registration.target,
                         executionOrigin: current.registration.executionOrigin,
@@ -941,10 +1063,12 @@ async function executeClientContributedAction(
     const result = await invocation.invoke(settledInput ?? null, {
         ...(input.signal ? { signal: input.signal } : {}),
         preDispatch: async (handlerInput) => {
+            normalizedInput = handlerInput.input;
             const admission = await presentUserGate.admit({
                 input: handlerInput.input,
                 surface: invocationSurface,
                 invocationSurface,
+                invocationAuthority,
                 ...(initial.binding.sessionId === undefined
                     ? {}
                     : { sessionId: initial.binding.sessionId }),
@@ -987,45 +1111,79 @@ async function executeClientContributedAction(
                 throw new PluginError({ code: 'plugin_action_generation_retired' });
             }
             const currentUiContext = readClientActionCurrentUiContext(current);
-            const capability = createClientActionUi(input, current, signal);
-            try {
-                const value = current.handler(actionInput, {
-                    plugin: {
-                        id: current.action.pluginId,
-                        version: current.pluginVersion,
-                    },
-                    contribution: {
-                        id: current.action.id,
-                        qualifiedId: invocation.qualifiedId,
-                    },
-                    invocationSurface,
-                    signal,
-                    ui: capability.ui,
-                    ephemeralSharedScope: current.registration.occurrenceId
-                        ? getPluginUiEphemeralSharedScope({
-                            accountLifetime: current.registration.accountLifetime ?? null,
-                            pluginId: current.action.pluginId,
-                            occurrenceId: current.registration.occurrenceId,
-                            executionOrigin: current.registration.executionOrigin,
-                            isCurrent: () => current.isCurrent() && !signal.aborted,
-                        })
-                        : null,
-                    ...(currentUiContext === undefined ? {} : { currentUiContext }),
-                });
-                // Preserve a synchronous known settlement at the canonical
-                // cancellation race instead of introducing an async hop.
-                if (value !== null && typeof value === 'object' && 'then' in value && typeof value.then === 'function') {
-                    // Cleanup observes both branches without replacing the raw
-                    // Promise whose settlement the canonical owner races.
-                    void Promise.resolve(value).then(capability.dispose, capability.dispose);
+            const invokeHandler = (messageAction?: MessageActionAvailableSnapshotV1) => {
+                if (signal.aborted || !current.isCurrent()) throw new PluginError({ code: 'plugin_action_generation_retired' });
+                const capability = createClientActionUi(input, current, signal);
+                try {
+                    const value = current.handler(actionInput, {
+                        plugin: {
+                            id: current.action.pluginId,
+                            version: current.pluginVersion,
+                        },
+                        contribution: {
+                            id: current.action.id,
+                            qualifiedId: invocation.qualifiedId,
+                        },
+                        invocationSurface,
+                        signal,
+                        ui: capability.ui,
+                        ephemeralSharedScope: current.registration.occurrenceId
+                            ? getPluginUiEphemeralSharedScope({
+                                accountLifetime: current.registration.accountLifetime ?? null,
+                                pluginId: current.action.pluginId,
+                                occurrenceId: current.registration.occurrenceId,
+                                executionOrigin: current.registration.executionOrigin,
+                                isCurrent: () => current.isCurrent() && !signal.aborted,
+                            })
+                            : null,
+                        ...(currentUiContext === undefined ? {} : { currentUiContext }),
+                        ...(messageAction === undefined ? {} : { messageAction }),
+                    });
+                    // Preserve a synchronous known settlement at the canonical
+                    // cancellation race instead of introducing an async hop.
+                    if (value !== null && typeof value === 'object' && 'then' in value && typeof value.then === 'function') {
+                        // Cleanup observes both branches without replacing the raw
+                        // Promise whose settlement the canonical owner races.
+                        void Promise.resolve(value).then(capability.dispose, capability.dispose);
+                        return value;
+                    }
+                    capability.dispose();
                     return value;
+                } catch (error) {
+                    capability.dispose();
+                    throw error;
                 }
-                capability.dispose();
-                return value;
-            } catch (error) {
-                capability.dispose();
-                throw error;
-            }
+            };
+            const reference = current.binding.messageActionReference;
+            if (!reference) return invokeHandler();
+            const messageInvocation = input.invocation?.kind === 'hostPresentedMessage' ? input.invocation
+                : invocationSurface === 'cli' || invocationSurface === 'agent' || invocationSurface === 'mcp'
+                    ? clientActionInvocation(current) : null;
+            if (!messageInvocation) throw new PluginError({ code: 'plugin_message_action_unavailable' });
+            // Reuse daemon Actions' exact current-row resolver after client
+            // policy/confirmation, through the same strict Action RPC carrier.
+            const execute = current.binding.execute ?? machinePluginStructuredMessageActionExecute;
+            return execute(authority.machineId, {
+                serverId: authority.serverId,
+                expectedContributorOccurrenceId: current.action.occurrenceId,
+                qualifiedActionId: buildQualifiedPluginContributionKey(identity),
+                executionSurface: invocationSurface,
+                invocation: messageInvocation,
+                ...(current.binding.sessionId ? { sessionId: current.binding.sessionId } : {}),
+                messageActionReference: reference,
+                resolveClientMessageContext: true,
+                ...(current.registration.accountLifetime ? { accountLifetime: current.registration.accountLifetime } : {}),
+                signal, isCurrent: current.isCurrent,
+            }).then((reply) => {
+                const snapshot = reply.supported && reply.result.ok
+                    ? MessageActionAvailableSnapshotV1Schema.safeParse(reply.result.result) : null;
+                if (!snapshot?.success || snapshot.data.sessionId !== reference.sessionId
+                    || snapshot.data.messageId !== reference.messageId
+                    || snapshot.data.observedRevision !== reference.observedRevision) {
+                    throw new PluginError({ code: 'plugin_message_action_unavailable' });
+                }
+                return invokeHandler(snapshot.data);
+            });
         },
     });
     if (result.status === 'executed') {
@@ -1184,6 +1342,7 @@ export async function dispatchPluginSurfaceAction(
         ? PluginInvocableActionIdSchema.safeParse(input.action)
         : null;
     if (hostActionId?.success) {
+        if (input.admissionOnly) return failure('invalid_payload', 'plugin_surface_admission_contributed_action_required');
         if (input.targetedOperation || input.selectedActionInput) {
             return failure('invalid_payload', 'plugin_surface_targeted_operation_action_mismatch');
         }
@@ -1212,17 +1371,23 @@ async function executeHostAction(
 
     const clientCaller = input.invocation?.kind === 'clientPluginAction' ? input.invocation.clientActionBinding : null;
 
-    const result = await binding.execute(actionId, input.input, mountedHostActionContext(input, caller, clientCaller));
+    const result = await binding.execute(actionId, input.input, mountedHostActionContext(input, caller, clientCaller, actionId));
     if (result.ok) return { ok: true, result: result.result as PluginUiJsonValueV1 };
     return failure('unavailable', result.errorCode);
 }
 
 /** Execution and Resource admission stamp exactly the same mounted caller. */
 function mountedHostActionContext(input: DispatchPluginSurfaceActionInput, caller: MountedPluginActionCaller | null,
-    clientCaller: Extract<NonNullable<DispatchPluginSurfaceActionInput['invocation']>, { kind: 'clientPluginAction' }>['clientActionBinding'] | null): ActionExecutorContext {
+    clientCaller: Extract<NonNullable<DispatchPluginSurfaceActionInput['invocation']>, { kind: 'clientPluginAction' }>['clientActionBinding'] | null,
+    actionId: ActionId): ActionExecutorContext {
     const sourceCustody = input.callerSourceCustody ?? caller?.mountedBinding.sourceCustody;
+    const { sessionListAccess, ...hostContext } = input.hostAction?.context ?? {};
+    // A mounted read belongs to one invocation. Re-derive it at each entry;
+    // a nested autonomous Action cannot retain its parent's UI read scope.
+    const inheritedSessionListAccess = sessionListAccess === 'mounted_ui' ? undefined : sessionListAccess;
     return {
-        ...input.hostAction?.context,
+        ...hostContext,
+        ...(inheritedSessionListAccess === undefined ? {} : { sessionListAccess: inheritedSessionListAccess }),
         // Admission belongs to the continued parent, not an Action it invokes.
         ...(clientCaller ? { bypassApprovals: false } : {}),
         ...(input.actionRequestId ? { actionRequestId: input.actionRequestId } : {}),
@@ -1231,6 +1396,13 @@ function mountedHostActionContext(input: DispatchPluginSurfaceActionInput, calle
         // Borrowing the host's context never makes a Plugin the present user.
         // Keep its permission and input constraints while capping authority.
         authority: 'account_automation',
+        // Only the actual mounted UI may browse its Account's Sessions. This
+        // read scope does not grant human authority or flow into autonomous
+        // client Action continuations, Voice, or a stricter inherited corpus.
+        ...(actionId === 'session.list' && caller && !clientCaller && (input.invocationSurface ?? 'ui') === 'ui'
+            && inheritedSessionListAccess === undefined
+            ? { sessionListAccess: 'mounted_ui' as const }
+            : {}),
         ...(caller || clientCaller
             ? {
                 actionCaller: {
@@ -1258,7 +1430,7 @@ export async function preparePluginSurfaceHostRead(input: DispatchPluginSurfaceA
     const caller = resolveMountedPluginActionCaller(input);
     if (!caller) return failure('unavailable', 'plugin_mounted_caller_unavailable');
     const spec = getActionSpec(actionId);
-    const context = mountedHostActionContext(input, caller, null);
+    const context = mountedHostActionContext(input, caller, null, actionId);
     if (!spec.surfaces.plugin || !spec.pluginCallerPolicy
         || !isPluginActionCallerPolicySatisfied(spec.pluginCallerPolicy, input.input, context.actionCaller)) {
         return failure('unavailable', 'plugin_action_caller_forbidden');
@@ -1293,6 +1465,22 @@ async function executeContributedAction(
     if (!projectedAction) {
         return failure('unavailable', 'plugin_surface_action_projection_unavailable');
     }
+    if (!isContributedActionEnabled(identity, input.invocationSurface ?? 'ui')) {
+        return failure('denied', 'plugin_action_disabled');
+    }
+    if (input.admissionOnly) {
+        if (!projectedAction.surfaces.includes(input.invocationSurface ?? 'ui')) {
+            return failure('denied', 'plugin_action_surface_unavailable');
+        }
+        const admitted = await settleDaemonActionPresentUserIntent(input, identity, projectedAction, input.input);
+        if (!admitted.ok) return admitted;
+        const stopped = preflightFailure(input);
+        if (stopped) return stopped;
+        if (resolveProjectedContributedAction(input, identity) !== projectedAction) {
+            return failure('stale_surface', 'plugin_ui_generation_retired');
+        }
+        return { ok: true, result: { admitted: true } };
+    }
     // Execution placement is chosen after the selected-operation carrier is
     // settled, so a client Action cannot bypass ownership, comparison, or
     // Connected-Account reconstruction that a daemon Action must satisfy.
@@ -1317,7 +1505,7 @@ async function executeContributedAction(
         return failure('unavailable', 'plugin_mounted_caller_unavailable');
     }
 
-    const presentUserIntent = await settleDaemonActionPresentUserIntent(input, identity, projectedAction);
+    const presentUserIntent = await settleDaemonActionPresentUserIntent(input, identity, projectedAction, settlement.input);
     if (!presentUserIntent.ok) return presentUserIntent;
     const currentFailure = preflightFailure(input);
     if (currentFailure) return currentFailure;
@@ -1337,6 +1525,11 @@ async function executeContributedAction(
         input.onDaemonActionOperationAdmitted?.(admittedOperation);
     }
     const actionInput = settlement.input;
+    const projectionScope = {
+        machineId: binding.machineId,
+        serverId: binding.accountLifetime?.scope.serverId ?? binding.serverId ?? null,
+    };
+    const projectionRevision = getMachineContributionRegistryProjectionRevision(projectionScope);
     const result = await execute(binding.machineId, {
         serverId: binding.serverId ?? null,
         ...(binding.accountLifetime === undefined ? {} : { accountLifetime: binding.accountLifetime }),
@@ -1397,8 +1590,10 @@ async function executeContributedAction(
     }
     const outcomeUnknown = actionOutcomeUnknownFailure(result.result.code);
     if (outcomeUnknown) return outcomeUnknown;
-    return actionDeclinedFailure(result.result.code)
+    return staleDaemonProjectionFailure(result.result.code, projectionScope, projectionRevision, binding.accountLifetime)
+        ?? actionDeclinedFailure(result.result.code)
         ?? failure('unavailable', result.result.code, {
+            ...(result.result.message === undefined ? {} : { message: result.result.message }),
             ...(result.result.retryable === undefined
                 ? {}
                 : { retryable: result.result.retryable }),
@@ -1506,7 +1701,7 @@ export function createPluginSurfaceActionDispatchHandler(
             ...(selectedActionInput ? { selectedActionInput } : {}),
             ...(input.isCurrent ? { isCurrent: input.isCurrent } : {}),
         }).finally(cancellation.dispose);
-        if (!outcome.ok) return createPluginSurfaceHostApiError(outcome.code, [outcome.reason]);
+        if (!outcome.ok) return createPluginSurfaceHostApiError(outcome.code, [outcome.reason], outcome.message);
         return outcome.result;
     };
 }
@@ -1524,6 +1719,8 @@ export function createPluginSurfaceActionDispatchHandler(
  */
 export function createPluginSurfaceActionHostApi(input: Readonly<{
     surfaceContext: PluginUiSurfaceContextV1;
+    /** Structural support projected by the canonical bound controller. */
+    admissionMethods?: readonly PluginUiHostMethodV1[];
     /** Exact mounted-target custody supplied by the target-scoped projection owner. */
     callerSourceCustody?: PluginSourceCustodyV1;
     hostAction?: PluginSurfaceHostActionBinding;
@@ -1574,6 +1771,9 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
     pluginUiProjection?: PluginUiProjectionModel | null;
     /** Live controller capability for daemon-owned host methods. */
     isMethodAvailable?: (method: PluginUiHostMethodV1) => boolean;
+    /** Context stays with the bound controller; error provenance stays with the facade. */
+    resolveUnavailableError?: (error: PluginUiHostApiErrorPayloadV1, request: PluginUiHostApiRequestEnvelopeV1) => PluginUiHostApiErrorPayloadV1 | undefined;
+    isConnectionPending?: (error: PluginUiHostApiErrorPayloadV1, request: PluginUiHostApiRequestEnvelopeV1) => boolean;
     /** Live controller capability for the daemon branch of `executeAction`. */
     isContributedActionAvailable?: () => boolean;
     /**
@@ -1593,7 +1793,10 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
     if (input.openableContent) {
         return createPluginSurfaceHostApi({
             surfaceContext: input.surfaceContext,
+            ...(input.admissionMethods ? { admissionMethods: input.admissionMethods } : {}),
             ...(input.isMethodAvailable ? { isMethodAvailable: input.isMethodAvailable } : {}),
+            ...(input.resolveUnavailableError ? { resolveUnavailableError: input.resolveUnavailableError } : {}),
+            ...(input.isConnectionPending ? { isConnectionPending: input.isConnectionPending } : {}),
             ...(input.isCurrent ? { isCurrent: input.isCurrent } : {}),
             handlers: {
                 ...createPluginSurfaceOpenableContentHandlers({
@@ -1606,10 +1809,11 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
                 : {}),
         });
     }
+    let hostAdmissionCurrent = true;
     const feedback = createPluginSurfaceFeedbackHandlers({
         pluginUiProjection: input.pluginUiProjection,
         surfaceId: input.surfaceContext.surfaceId,
-        resolveActionApproval: (reference) => {
+        resolveActionPolicy: (reference) => {
             const identity = normalizePluginUiMountedContributedActionReferenceV1({
                 callerPluginId: input.surfaceContext.pluginId,
                 action: reference,
@@ -1618,7 +1822,11 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
             // Direct Account writes need declaration/policy, not a daemon handler.
             const action = input.resolveContributedAction?.(identity);
             if (!action || action.pluginId !== identity.pluginId || action.id !== identity.localId) return null;
-            return isApprovalRequiredByActionSettings(identity, input.invocationSurface ?? 'ui', action);
+            const surface = input.invocationSurface ?? 'ui';
+            return {
+                enabled: action.available === true && action.surfaces.includes(surface) && isContributedActionEnabled(identity, surface),
+                approvalRequired: isApprovalRequiredByActionSettings(identity, surface, action),
+            };
         },
         ...(input.interactionRequester ? { interactionRequester: input.interactionRequester } : {}),
         ...(input.isCurrent ? { isCurrent: input.isCurrent } : {}),
@@ -1678,12 +1886,45 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
     });
     return createPluginSurfaceHostApi({
         surfaceContext: input.surfaceContext,
+        ...(input.admissionMethods ? { admissionMethods: input.admissionMethods } : {}),
         ...(input.isMethodAvailable ? { isMethodAvailable: input.isMethodAvailable } : {}),
+        ...(input.resolveUnavailableError ? { resolveUnavailableError: input.resolveUnavailableError } : {}),
+        ...(input.isConnectionPending ? { isConnectionPending: input.isConnectionPending } : {}),
         ...(input.isCurrent ? { isCurrent: input.isCurrent } : {}),
         handlers: {
             ...input.mountedHostApiHandlers,
             ...localHostHandlers,
             executeAction,
+            admitAction: async (request, options) => {
+                const payload = PluginUiExecuteActionRequestV1Schema.safeParse(request.payload);
+                if (!payload.success) return createPluginSurfaceHostApiError('invalid_payload');
+                const cancellation = mergeAbortSignals([input.resourceLifetimeSignal, options?.signal]);
+                try {
+                    const outcome = await dispatchPluginSurfaceAction({
+                        admissionOnly: true,
+                        callerPluginId: input.surfaceContext.pluginId,
+                        ...(input.hostAction ? { hostAction: input.hostAction } : {}),
+                        ...(input.contributedAction ? { contributedAction: input.contributedAction } : {}),
+                        ...(input.callerSourceCustody ? { callerSourceCustody: input.callerSourceCustody } : {}),
+                        ...(input.callerBinding ? {
+                            callerContributionLocalId: input.surfaceContext.contributionId,
+                            callerBinding: input.callerBinding,
+                        } : {}),
+                        action: payload.data.action,
+                        ...(payload.data.input === undefined ? {} : { input: payload.data.input }),
+                        ...(input.resolveContributedAction ? { resolveContributedAction: input.resolveContributedAction } : {}),
+                        ...(feedback.requestCurrentIntent ? { requestCurrentIntent: feedback.requestCurrentIntent } : {}),
+                        ...(input.invocationSurface ? { invocationSurface: input.invocationSurface } : {}),
+                        ...(cancellation.signal ? { signal: cancellation.signal } : {}),
+                        isCurrent: () => input.isCurrent?.() !== false && hostAdmissionCurrent,
+                    });
+                    if (outcome.ok) return outcome.result;
+                    if (outcome.reason === PLUGIN_ACTION_CURRENT_INTENT_REJECTED_CODE) return { admitted: false };
+                    return createPluginSurfaceHostApiError(outcome.code, [outcome.reason]);
+                } finally {
+                    cancellation.dispose();
+                }
+            },
             notify: feedback.notify,
             confirm: feedback.confirm,
             ...(input.resource || input.hostResourceStore
@@ -1730,6 +1971,7 @@ export function createPluginSurfaceActionHostApi(input: Readonly<{
                 : {}),
         },
         onDispose: () => {
+            hostAdmissionCurrent = false;
             resourceWatch?.dispose();
             feedback.dispose();
             input.disposeMountedHostApiHandlers?.();

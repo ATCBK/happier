@@ -1,13 +1,16 @@
+import * as z from 'zod/mini';
 import { isAxiosError } from 'axios';
+import { openSessionStateValue } from '@happier-dev/sync-client';
+import { AgentStateSchema } from '@happier-dev/session-core/state';
 
 import type {
   SessionAwarenessProjectionV1,
-  SessionFollowPendingObservationV1,
   SessionFollowUpdateEnvelopeV1,
   WorkerUpdateV1,
   VoiceSessionUpdatePolicyV1,
   VoiceSourceDisclosureV1,
 } from '@happier-dev/protocol';
+import type { SessionFollowSessionPendingObservationV1, SessionFollowAdmittedInputObservationV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowTransportV1';
 import { composeWorkflowRunWorkerUpdateV1 } from '@happier-dev/protocol/workflows/composeWorkflowRunWorkerUpdateV1';
 import { openWorkflowAcceptedSnapshotStoredEnvelopeV1, openWorkflowFinalResultStoredEnvelopeV1, parseWorkflowStoredContentEnvelopeV1 } from '@happier-dev/protocol/workflows/workflowStoredContentV1';
 import { resolveWorkflowRunDataKeyV1 } from '@happier-dev/protocol/workflows/workflowRunDataKeyV1';
@@ -23,12 +26,19 @@ import { parseSessionMessageAccountActorV1 } from '@happier-dev/protocol/session
 import { readSessionMessageProvenanceV1, SessionInputAdmissionResultV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { SessionStoredMessageContentSchema } from '@happier-dev/protocol/sessions/messages/sessionStoredMessageContent';
 import { TranscriptRawAgentEventV1Schema } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
-import { WorkerUpdateV1Schema, workerDeliverablesBelongToSessionV1 } from '@happier-dev/protocol/sessions/relations/workerUpdateV1';
+import { classifyWorkerUpdateEventV1, resolveWorkerUpdateWakeV1, WorkerUpdateV1Schema, workerDeliverablesBelongToSessionV1 } from '@happier-dev/protocol/sessions/relations/workerUpdateV1';
+import { SessionRuntimeIssueV1Schema } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { resolveFollowDeliveryV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+import { readSessionFollowSemanticSourceEvent } from './sessionFollowRuleSourceEvidence';
+import { SessionFollowSourceRequestsV1Schema } from '@happier-dev/protocol/sessions/follow/sessionFollowSourceOccurrenceV1';
+import { TurnIdSchema } from '@happier-dev/protocol/sessions/idsV1';
 
 import type { ApiSessionClient } from '@/api/session/sessionClient';
 import type { StoredCredentials } from '@/persistence';
+import { classifyHomeReadPreparationError } from '@/agent/prompts/library/homeReadPreparationError';
+import { readActiveForegroundAgentRequests, readForegroundAgentRequestFollowEvent } from '@/agent/permissions/activeForegroundRequests';
 import {
   projectCliSessionAwarenessFromMaterialV1,
   projectCliSessionAwarenessUnavailableMaterialV1,
@@ -38,6 +48,8 @@ import { fetchEncryptedTranscriptMessagesPage } from '@/session/replay/fetchEncr
 import { decodeTranscriptBody } from '@/session/services/transcript/transcriptBodyDecoder';
 import {
   openSessionStoredContent,
+  encryptSessionPayload,
+  decryptSessionPayload,
   resolveSessionEncryptionContextFromCredentials,
   resolveSessionStoredContentEncryptionMode,
   resolveSessionTransportContextFromMaterial,
@@ -52,6 +64,11 @@ import {
   createAutomationAccountEncryptionMaterialSnapshotV1,
   resolveValidatedAutomationAccountEncryptionV1,
 } from '@/plugins/runtime/automations/automationAccountCurrentness';
+
+/** Public admitted originals have no native-readable route policy or private witness. */
+export type SessionFollowHydrationObservationV1 = SessionFollowSessionPendingObservationV1
+  | (SessionFollowAdmittedInputObservationV1 & Readonly<{ relation?: never; attachedAt?: never; policy?: never }>);
+type SessionFollowPendingObservationV1 = SessionFollowHydrationObservationV1;
 
 /**
  * Encryption-context seam for Lane 13 restricted-Runner prepared source keys.
@@ -104,9 +121,11 @@ export type SessionFollowHydratedUpdate = SessionFollowUpdateEnvelopeV1 & Readon
    * discovery was requested.
    */
   pendingHumanIngress?: boolean;
-  /** Reports-to uses the same authorized hydration, but renders the owning worker outcome. */
+  /** Manager delivery uses the same authorized hydration and source-owned worker outcome. */
   workerUpdate?: WorkerUpdateV1;
-  /** Run grants are independent of the source Session grant rechecked by Follow. */
+  /** Exact typed original correlation, opened under this source's own key. */
+  sourceTerminalTurn?: Readonly<{ id: string; status: 'completed' }>;
+  /** Recheck outcome-specific evidence after Follow rechecks its source grant. */
   recheckWorkerUpdateAdmission?: (signal: AbortSignal) => Promise<boolean>;
 }>;
 
@@ -148,6 +167,7 @@ type SessionFollowOpenedTranscriptRow = Readonly<{
   content: unknown;
   meta?: unknown;
   accountActor?: unknown;
+  sidechainId?: unknown;
 }>;
 
 type SessionFollowTranscriptRowOpenResult =
@@ -191,7 +211,7 @@ async function readCurrentReviewWorkerUpdate(input: Readonly<{
       throw error;
     }
     if (!page) throw new Error('workflow_delivery_response_invalid');
-    for (const run of WorkflowRunSummaryV1Schema.array().parse(page.runs)) {
+    for (const run of z.array(WorkflowRunSummaryV1Schema).parse(page.runs)) {
       const firingAt = reviewFiringAt(run);
       if (firingAt === null || (latestReview && firingAt < latestReview.occurredAt)) continue;
       let raw: Readonly<Record<string, unknown>> | null;
@@ -270,6 +290,7 @@ function openSessionFollowTranscriptRow(input: Readonly<{
     createdAt?: unknown;
     content?: unknown;
     accountActor?: unknown;
+    sidechainId?: unknown;
   }>;
 }>): SessionFollowTranscriptRowOpenResult {
   const seq = typeof input.row.seq === 'number' && Number.isSafeInteger(input.row.seq) && input.row.seq >= 0
@@ -312,6 +333,7 @@ function openSessionFollowTranscriptRow(input: Readonly<{
       seq,
       role: record.role,
       content: record.content,
+      sidechainId: input.row.sidechainId ?? record.sidechainId,
       ...(record.meta !== undefined ? { meta: record.meta } : {}),
       ...(input.row.accountActor !== undefined ? { accountActor: input.row.accountActor } : {}),
     },
@@ -337,21 +359,41 @@ type SessionFollowRowSummary = SessionFollowUpdateEnvelopeV1['recentMessages'][n
  * traversal, never invented into prose). Shared by delivery and wake discovery
  * so both classify rows identically.
  */
-function projectOpenedSessionFollowRow(row: SessionFollowOpenedTranscriptRow): Readonly<{
+function projectOpenedSessionFollowRow(row: SessionFollowOpenedTranscriptRow, noticeOnlyHuman: boolean, voiceSourceSessionId?: string): Readonly<{
   summary: SessionFollowRowSummary | null;
   userMessage: boolean;
 }> {
+  const content = recordValue(row.content);
+  if (row.role === 'agent' && content?.type === 'event') {
+    const event = createStoredReadSchema(TranscriptRawAgentEventV1Schema).safeParse(content.data);
+    if (event.success && event.data.type === 'goal-changed') {
+      return { summary: { messageId: `seq:${row.seq}`, seq: row.seq,
+        text: 'The goal changed in the source session. Open the source session to read it.',
+        event: { kind: 'goal_changed' }, provenance: null }, userMessage: false };
+    }
+    if (voiceSourceSessionId && recordValue(content.data)?.type === 'worker-report') {
+      if (!event.success || event.data.type !== 'worker-report'
+        || !workerDeliverablesBelongToSessionV1(event.data.deliverables, voiceSourceSessionId)) {
+        return { summary: null, userMessage: false };
+      }
+      return { summary: { messageId: `seq:${row.seq}`, seq: row.seq,
+        text: event.data.summary, provenance: null }, userMessage: false };
+    }
+  }
   const decoded = decodeTranscriptBody({ role: row.role, content: row.content, meta: row.meta });
   const semanticText = decoded?.text ?? decoded?.summary;
   if (!semanticText || semanticText.trim().length === 0) return { summary: null, userMessage: false };
   const authorLabel = readAuthorLabel(row.accountActor);
+  const provenance = readSessionMessageProvenanceV1(row.meta, 'stored');
   return {
     summary: {
       messageId: `seq:${row.seq}`,
       seq: row.seq,
-      text: semanticText,
+      text: noticeOnlyHuman && isAuthoritativeHumanSessionFollowMessageV1({ provenance })
+        ? 'A person wrote in the source session. Open the source message to read it.'
+        : semanticText,
       ...(authorLabel ? { authorLabel } : {}),
-      provenance: readSessionMessageProvenanceV1(row.meta, 'stored'),
+      provenance,
     },
     userMessage: decoded?.semanticRole === 'user',
   };
@@ -429,6 +471,8 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
   readMode?: SessionFollowHydrationReadModeV1;
   /** Also classify the pending range beyond the delivered page for protected human ingress. */
   discoverHumanIngress?: boolean;
+  /** Modern Account Voice only; legacy current-context ingress retains its own semantics. */
+  selectionChannel?: 'voice';
 }>) => Promise<SessionFollowHydratedUpdate | null> {
   const mayQuoteSourceMessages = input.disclosure?.shareRecentMessages !== false;
   const mayDescribeSourceWork = input.disclosure?.shareSessionSummary !== false;
@@ -442,8 +486,12 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
   const fetchPage = input.deps?.fetchTranscriptPage ?? fetchEncryptedTranscriptMessagesPage;
   const fetchRunnerProjection = input.deps?.fetchRunnerSourceProjection ?? fetchSessionFollowSourceProjection;
 
-  return async ({ observation, signal, readMode = 'incremental', discoverHumanIngress = false }) => {
+  return async ({ observation, signal, readMode = 'incremental', discoverHumanIngress = false, selectionChannel }) => {
     signal.throwIfAborted();
+    const isManager = observation.relation === 'manager';
+    // Manager lifecycle evidence traverses the source's original range. Only
+    // Account Voice's explicit current-context inclusion uses a snapshot baseline.
+    if (isManager) readMode = 'incremental';
     // The foreground Voice path returns before any source update at level `none`;
     // the daemon read discloses nothing either, not even source awareness.
     if (input.disclosure?.level === 'none') return null;
@@ -456,18 +504,19 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
     }
 
     const useRunnerProjection = input.sourceMaterialResolver && !input.deps?.resolveSourceTransport;
-    const fetchRunnerPage = async (afterTranscriptSeq: number) => await input.session.runSessionFollowSourceRequest({
+    const fetchRunnerPage = async (afterTranscriptSeq: number, requestSignal = signal) => await input.session.runSessionFollowSourceRequest({
       credentials: input.credentials,
       request: async () => await fetchRunnerProjection({
         token: input.credentials.token,
         destinationSessionId,
         sourceSessionId: observation.sourceSessionId,
-        ...(observation.edgeKind ? { edgeKind: observation.edgeKind, attachedAt: observation.attachedAt,
-          readMode } : {}),
+        ...('kind' in observation ? { localInputId: observation.localInputId } : {}),
+        ...(observation.relation ? { relation: observation.relation, attachedAt: observation.attachedAt } : {}),
+        readMode: 'incremental',
         afterTranscriptSeq,
         observedTranscriptSeq: observation.observed.transcriptSeq,
         limit: SESSION_FOLLOW_SOURCE_PROJECTION_MAX_PAGE_ROWS_V1,
-        signal,
+        signal: requestSignal,
       }),
     });
     const fetchAccountPageAfter = async (afterSeq: number) => await input.session.runSessionFollowSourceRequest({
@@ -482,11 +531,17 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
         ...(signal ? { signal } : {}),
       }),
     });
-    // Account Voice's independent initial snapshot is still unsupported here;
-    // reports-to reads select the same transport owner with exact attachment evidence.
-    if (readMode === 'initial_current_snapshot' && useRunnerProjection && observation.edgeKind !== 'reports_to') return null;
+    // Account Voice's independent initial snapshot is unsupported on the
+    // restricted Runner projection; manager reads always traverse originals.
+    if (readMode === 'initial_current_snapshot' && useRunnerProjection) return null;
     const runnerProjection = useRunnerProjection
-      ? await fetchRunnerPage(readMode === 'initial_current_snapshot' ? 0 : observation.delivered.transcriptSeq).catch(() => null)
+      ? await fetchRunnerPage(observation.delivered.transcriptSeq).catch(error => {
+          if ('kind' in observation) {
+            const preparationError = classifyHomeReadPreparationError(error);
+            if (preparationError !== error) throw preparationError;
+          }
+          return null;
+        })
       : null;
 
     let transport: Awaited<ReturnType<typeof resolveSessionTransportContext>> | null = null;
@@ -513,7 +568,11 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
           }),
         });
       }
-    } catch {
+    } catch (error) {
+      if ('kind' in observation) {
+        const preparationError = classifyHomeReadPreparationError(error);
+        if (preparationError !== error) throw preparationError;
+      }
       return null;
     }
     if (!transport || transport.ok !== true) {
@@ -558,22 +617,38 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
         return null;
       }
       const pendingReviewRuns = rawSession.pendingReviewRuns;
-      const workerState = observation.edgeKind === 'reports_to'
-        ? awareness.lifecycle === 'failed' ? 'failed'
-          : awareness.lifecycle === 'cancelled' ? 'cancelled'
-            : awareness.lifecycle === 'ready' && observation.observed.turn?.status === 'completed' && pendingReviewRuns === 0 ? 'settled'
-              : awareness.operational.primary === 'permission_required' || awareness.operational.primary === 'action_required' ? 'needs_input'
-                : observation.observed.turn?.status === 'stalled'
-                  && !isSessionFollowTurnEqualV1(observation.delivered.turn, observation.observed.turn) ? 'stalled' : null
+      // Follow's numeric frontier also advances for diagnostics and Agent-state
+      // writes. Only a new terminal turn is another worker outcome; the existing
+      // edge ACK already records the exact turn accepted by the lead.
+      const terminalTurnAlreadyDelivered = observation.observed.turn !== null
+        && isSessionFollowTurnEqualV1(observation.delivered.turn, observation.observed.turn);
+      const terminalWorkerState = awareness.lifecycle === 'failed' && observation.observed.turn?.status === 'failed' ? 'failed'
+        : awareness.lifecycle === 'cancelled' && observation.observed.turn?.status === 'cancelled' ? 'cancelled'
+          : awareness.lifecycle === 'ready' && observation.observed.turn?.status === 'completed' && pendingReviewRuns === 0 ? 'settled'
+            : null;
+      const workerState = observation.relation === 'manager'
+        ? observation.observed.turn?.status === 'waiting'
+          // A yielded question is an exact host lifecycle occurrence. Its
+          // accepted frontier, not AgentState/content/count changes, owns replay.
+          ? terminalTurnAlreadyDelivered
+            || rawSession.latestTurnId !== observation.observed.turn.id
+            || rawSession.latestTurnStatus !== 'waiting' ? null : 'needs_input'
+          : terminalWorkerState
+          ? terminalTurnAlreadyDelivered ? null : terminalWorkerState
+          : awareness.operational.primary === 'permission_required' || awareness.operational.primary === 'action_required' ? 'needs_input'
+            : observation.observed.turn?.status === 'stalled'
+              && !isSessionFollowTurnEqualV1(observation.delivered.turn, observation.observed.turn) ? 'stalled' : null
         : null;
       let workerText: Readonly<{ text: string; seq: number; agentId?: string }> | null = null;
       let publishedReport: Readonly<{ text: string; seq: number; deliverables?: WorkerUpdateV1['deliverables'] }> | null = null;
-      const reviewWorkerUpdate = observation.edgeKind === 'reports_to' && workerState === 'settled'
+      let sourceTerminalTurn: SessionFollowHydratedUpdate['sourceTerminalTurn'];
+      let reachedObservedTranscript = observation.observed.transcriptSeq <= observation.delivered.transcriptSeq;
+      const reviewWorkerUpdate = observation.relation === 'manager' && workerState === 'settled'
         && isSessionAwarenessContentReadableV1(awareness.encryption)
         ? await input.session.runSessionFollowSourceRequest({ credentials: input.credentials,
             request: () => readCurrentReviewWorkerUpdate({ credentials: input.credentials, observation, signal }) })
         : null;
-      const reviewAdmission = reviewWorkerUpdate ? {
+      let workerAdmission = reviewWorkerUpdate ? {
         recheckWorkerUpdateAdmission: async (recheckSignal: AbortSignal) => {
           try {
             const current = await input.session.runSessionFollowSourceRequest({ credentials: input.credentials,
@@ -584,22 +659,48 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
             return false;
           }
         },
+      } : workerState === 'needs_input' && observation.observed.turn?.status === 'waiting' ? {
+        recheckWorkerUpdateAdmission: async (recheckSignal: AbortSignal) => {
+          try {
+            // Answer admission can replace the ended waiting turn after its
+            // frontier was observed. Reuse the authorized source read before
+            // dispatch rather than waking the manager for that stale question.
+            const current = useRunnerProjection
+              ? (await fetchRunnerPage(observation.delivered.transcriptSeq, recheckSignal))?.source
+              : await input.session.runSessionFollowSourceRequest({ credentials: input.credentials,
+                  request: async () => {
+                    const result = await resolveTransport({ credentials: input.credentials,
+                      idOrPrefix: observation.sourceSessionId, signal: recheckSignal });
+                    return result.ok ? result.rawSession : null;
+                  } });
+            return !recheckSignal.aborted && current?.id === observation.sourceSessionId
+              && current.latestTurnId === observation.observed.turn?.id
+              && current.latestTurnStatus === 'waiting';
+          } catch {
+            return false;
+          }
+        },
       } : {};
       const outgoingCalls = new Map<string, Readonly<{ target: string; message: string; seq: number }>>();
       let lastOutgoingSend: Readonly<{ target: string; message: string; seq: number; accepted: boolean }> | null = null;
       const composeWorkerUpdate = (): WorkerUpdateV1 | undefined => {
-        if (observation.edgeKind !== 'reports_to') return undefined;
+        if (observation.relation !== 'manager' && !publishedReport) return undefined;
+        if (!reachedObservedTranscript) return undefined;
         if (reviewWorkerUpdate) return WorkerUpdateV1Schema.parse(reviewWorkerUpdate);
         const ownerState = publishedReport ? 'published' : workerState;
         if (!ownerState) return undefined;
-        const repeatedFinalText = !publishedReport && workerText && lastOutgoingSend?.accepted
+        const event = classifyWorkerUpdateEventV1({ workerKind: 'session', ownerState });
+        if (!event) return undefined;
+        const issue = ownerState === 'failed' && rawSession.latestTurnId === observation.observed.turn?.id
+          ? SessionRuntimeIssueV1Schema.safeParse(rawSession.lastRuntimeIssue) : null;
+        const repeatedFinalText = workerText && lastOutgoingSend?.accepted
           && lastOutgoingSend.target === observation.destinationSessionId && lastOutgoingSend.message.includes(workerText.text);
         const result = publishedReport ?? (repeatedFinalText ? null : workerText);
         const headline = `${awareness.title ?? observation.sourceSessionId} · ${ownerState}`;
         return WorkerUpdateV1Schema.parse({
           v: 1, workerKind: 'session', workerId: observation.sourceSessionId, ownerState,
-          wake: ownerState === 'published' ? 'published' : ownerState === 'stalled' ? 'stalled'
-            : ownerState === 'failed' || ownerState === 'needs_input' ? 'needs_you' : 'finished',
+          wake: resolveWorkerUpdateWakeV1(event),
+          ...(issue?.success ? { runtimeIssueV1: issue.data } : {}),
           headline, ...(result ? { result: result.text.slice(0, 8000) } : {}),
           ...(publishedReport?.deliverables ? { deliverables: publishedReport.deliverables } : {}),
           ...(result && result.text.length > 8000 ? { truncated: true } : {}),
@@ -651,9 +752,87 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
         ctx = ordinary;
       }
 
+      const selectsVoiceOriginals = selectionChannel === 'voice' && readMode === 'incremental' && !('kind' in observation);
+      const requestContext = ctx;
+      const readLiveRequests = async (source: Readonly<{
+          agentState?: string | null; agentStateVersion?: number; encryptionMode?: unknown;
+        }>, minimumVersion: number) => {
+          if (typeof source.agentStateVersion !== 'number' || !Number.isSafeInteger(source.agentStateVersion) || source.agentStateVersion < minimumVersion
+            || typeof source.agentState !== 'string' || resolveSessionStoredContentEncryptionMode(source) !== mode) return null;
+          const opened = await openSessionStateValue(mode === 'plain' ? { mode: 'plain' } : {
+            mode: 'e2ee', encryption: requestContext ? {
+              encryptRaw: async payload => encryptSessionPayload({ ctx: requestContext, payload }),
+              decryptRaw: async ciphertextBase64 => decryptSessionPayload({ ctx: requestContext, ciphertextBase64 }),
+            } : null,
+          }, source.agentState);
+          if (opened.status !== 'ready') return null;
+          const parsed = AgentStateSchema.safeParse(opened.value);
+          return parsed.success ? readActiveForegroundAgentRequests(parsed.data) : null;
+      };
+      if ('kind' in observation && 'sourceRequests' in observation.delivery.original) {
+        const original = observation.delivery.original.sourceRequests;
+        const currentRequestIsLive = async (source: Parameters<typeof readLiveRequests>[0]): Promise<boolean> => {
+          const active = await readLiveRequests(source, original.agentStateVersion);
+          return active !== null && original.requests.every(request => active.some(([requestId, current]) => requestId === request.requestId
+            && current.createdAt === request.createdAt && current.turnId === request.turnId));
+        };
+        if (!await currentRequestIsLive(transport.rawSession)) {
+          return { ...buildUnavailableEnvelope({ observation, awareness }), sourceRecencyMs };
+        }
+        workerAdmission = { recheckWorkerUpdateAdmission: async (requestSignal: AbortSignal) => {
+          try {
+            requestSignal.throwIfAborted();
+            if (useRunnerProjection) {
+              const current = await fetchRunnerPage(observation.delivered.transcriptSeq, requestSignal);
+              return !requestSignal.aborted && current?.source.id === observation.sourceSessionId
+                && await currentRequestIsLive(current.source);
+            }
+            const current = await input.session.runSessionFollowSourceRequest({ credentials: input.credentials,
+              request: () => resolveTransport({ credentials: input.credentials, idOrPrefix: observation.sourceSessionId,
+                signal: requestSignal }) });
+            return !requestSignal.aborted && current.ok && current.sessionId === observation.sourceSessionId
+              && await currentRequestIsLive(current.rawSession);
+          } catch (error) {
+            const preparationError = classifyHomeReadPreparationError(error);
+            if (preparationError !== error) throw preparationError;
+            return false;
+          }
+        } };
+      }
+
       const deliveredSeq = observation.delivered.transcriptSeq;
       const observedSeq = observation.observed.transcriptSeq;
-      if (observedSeq <= deliveredSeq && observation.edgeKind !== 'reports_to') {
+      const selectedVoiceRequests = selectsVoiceOriginals && observation.policy !== undefined
+        && observation.observed.agentStateVersion > observation.delivered.agentStateVersion
+        && transport.rawSession.agentStateVersion === observation.observed.agentStateVersion
+        ? (await readLiveRequests(transport.rawSession, observation.observed.agentStateVersion) ?? []).filter(([requestId, request]) => {
+            if (!SessionFollowSourceRequestsV1Schema.safeParse({ agentStateVersion: observation.observed.agentStateVersion,
+              requests: [{ requestId, createdAt: request.createdAt, ...(request.turnId ? { turnId: request.turnId } : {}) }] }).success) return false;
+            const event = readForegroundAgentRequestFollowEvent(request);
+            return event !== null && resolveFollowDeliveryV1({ policies: [observation.policy!], event }).person.voice;
+          }) : [];
+      if (selectedVoiceRequests.length > 0) {
+        workerAdmission = { recheckWorkerUpdateAdmission: async (requestSignal: AbortSignal) => {
+          try {
+            const current = await input.session.runSessionFollowSourceRequest({ credentials: input.credentials,
+              request: () => resolveTransport({ credentials: input.credentials, idOrPrefix: observation.sourceSessionId,
+                signal: requestSignal }) });
+            if (requestSignal.aborted || !current.ok || current.sessionId !== observation.sourceSessionId) return false;
+            const active = await readLiveRequests(current.rawSession, observation.observed.agentStateVersion);
+            return active !== null && selectedVoiceRequests.every(([id, original]) => active.some(([requestId, request]) =>
+              requestId === id && request.createdAt === original.createdAt && request.turnId === original.turnId
+              && JSON.stringify(readForegroundAgentRequestFollowEvent(request)) === JSON.stringify(readForegroundAgentRequestFollowEvent(original))));
+          } catch { return false; }
+        } };
+      }
+      const originalTurnEvent = observation.observed.turn?.status === 'completed' ? { kind: 'finished' as const }
+        : observation.observed.turn?.status === 'failed' || observation.observed.turn?.status === 'cancelled'
+          ? { kind: 'failed_or_stopped' as const }
+          : observation.observed.turn?.status === 'stalled' ? { kind: 'stalled' as const } : null;
+      const selectedVoiceTurn = selectsVoiceOriginals && observation.policy !== undefined && !terminalTurnAlreadyDelivered
+        && originalTurnEvent !== null && resolveFollowDeliveryV1({ policies: [observation.policy], event: originalTurnEvent }).person.voice;
+      if (observedSeq <= deliveredSeq && observation.relation !== 'manager') {
+        if (selectsVoiceOriginals && !selectedVoiceTurn && selectedVoiceRequests.length === 0) return null;
         return {
           v: 1,
           kind: 'session_follow_update',
@@ -670,7 +849,7 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
           sourceRecencyMs,
           transcriptConsumedThroughByRenderedMessageCount: [deliveredSeq],
           ...(composeWorkerUpdate() ? { workerUpdate: composeWorkerUpdate() } : {}),
-          ...reviewAdmission,
+          ...workerAdmission,
         };
       }
 
@@ -701,7 +880,11 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
           ? [...page.messages].reverse()
           : [...page.messages];
         pageHasMore = page.hasMore;
-      } catch {
+      } catch (error) {
+        if ('kind' in observation) {
+          const preparationError = classifyHomeReadPreparationError(error);
+          if (preparationError !== error) throw preparationError;
+        }
         return { ...buildUnavailableEnvelope({ observation, awareness }), sourceRecencyMs };
       }
 
@@ -719,7 +902,8 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
       const consumedThroughByRenderedMessageCount: number[] = [traversalBaseline];
       let omittedObservedMessage = false;
       let nextContiguousSeq = traversalBaseline + 1;
-      for (const storedRow of rows) {
+      for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+        const storedRow = rows[rowIndex]!;
         const storedSeq = typeof storedRow.seq === 'number' && Number.isSafeInteger(storedRow.seq)
           ? storedRow.seq
           : null;
@@ -738,7 +922,29 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
           break;
         }
         const row = opened.row;
-        if (observation.edgeKind === 'reports_to') {
+        if ('kind' in observation && 'sourceMessage' in observation.delivery.original
+          && row.seq === observation.delivery.original.sourceMessage.seq && row.role === 'agent' && !row.sidechainId
+          && recordValue(row.content)?.type === 'event' && !recordValue(recordValue(row.content)?.data)?.sidechainId
+          && 'event' in observation.delivery && observation.delivery.event.kind === 'finished') {
+          const event = createStoredReadSchema(TranscriptRawAgentEventV1Schema).safeParse(recordValue(row.content)?.data);
+          if (event.success && event.data.type === 'ready') {
+            const turnId = TurnIdSchema.safeParse(event.data.completedTurnId);
+            if (turnId.success) sourceTerminalTurn = { id: turnId.data, status: 'completed' };
+          }
+        }
+        if ('kind' in observation && 'sourceMessage' in observation.delivery.original
+          && row.seq === observation.delivery.original.sourceMessage.seq && row.role === 'agent'
+          && recordValue(row.content)?.type === 'event'
+          && recordValue(recordValue(row.content)?.data)?.type === 'worker-report') {
+          const event = createStoredReadSchema(TranscriptRawAgentEventV1Schema).safeParse(recordValue(row.content)?.data);
+          if (!event.success || event.data.type !== 'worker-report'
+            || !workerDeliverablesBelongToSessionV1(event.data.deliverables, observation.sourceSessionId)) {
+            return { ...buildUnavailableEnvelope({ observation, awareness }), sourceRecencyMs };
+          }
+          publishedReport = { text: event.data.summary, seq: row.seq,
+            ...(event.data.deliverables ? { deliverables: event.data.deliverables } : {}) };
+        }
+        if (observation.relation === 'manager') {
           const decoded = decodeTranscriptBody({ role: row.role, content: row.content, meta: row.meta });
           if (decoded && !decoded.sidechainId) {
             for (const call of decoded.toolCalls ?? []) {
@@ -764,32 +970,58 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
           if (decoded?.semanticRole === 'assistant' && decoded.text && !decoded.sidechainId) {
             workerText = { text: decoded.text, seq: row.seq, ...(decoded.provider ? { agentId: decoded.provider } : {}) };
           }
-          if (row.content && typeof row.content === 'object' && !Array.isArray(row.content)
-            && 'type' in row.content && row.content.type === 'event' && 'data' in row.content) {
-            const event = createStoredReadSchema(TranscriptRawAgentEventV1Schema).safeParse(row.content.data);
-            if (event.success && event.data.type === 'worker-report' && row.seq > deliveredSeq
-              && workerDeliverablesBelongToSessionV1(event.data.deliverables, observation.sourceSessionId)) {
-              publishedReport = { text: event.data.summary, seq: row.seq, ...(event.data.deliverables ? { deliverables: event.data.deliverables } : {}) };
-            }
-          }
         }
-        const projected = projectOpenedSessionFollowRow(row);
-        if (projected.summary) {
+        const voiceOriginal = selectsVoiceOriginals;
+        const projected = projectOpenedSessionFollowRow(row, !input.disclosure, voiceOriginal ? observation.sourceSessionId : undefined);
+        const content = recordValue(row.content);
+        const semanticBody = content?.type === 'acp' || content?.type === 'codex' ? recordValue(content.data) : content;
+        const decoded = voiceOriginal ? decodeTranscriptBody({ role: row.role, content: row.content, meta: row.meta }) : null;
+        const voiceSidechain = voiceOriginal && (row.sidechainId || decoded?.sidechainId);
+        if (voiceOriginal && !voiceSidechain && content?.type === 'event'
+          && recordValue(content.data)?.type === 'worker-report' && projected.summary === null) {
+          return { ...buildUnavailableEnvelope({ observation, awareness }), sourceRecencyMs };
+        }
+        const originalEvent = voiceSidechain ? null : projected.summary && isAuthoritativeHumanSessionFollowMessageV1(projected.summary)
+          ? { kind: 'person_wrote' as const }
+          : row.role === 'agent' && semanticBody && typeof semanticBody.type === 'string' && !decoded?.sidechainId
+            ? readSessionFollowSemanticSourceEvent({ ...semanticBody, type: semanticBody.type })
+              ?? (content?.type === 'text' ? { kind: 'message' as const } : null)
+            : null;
+        const selected = !voiceOriginal || originalEvent !== null
+          && observation.policy !== undefined
+          && resolveFollowDeliveryV1({ policies: [observation.policy], event: originalEvent }).person.voice;
+        if (selected && projected.summary && !isManager) {
           summaries.push(projected.summary);
           summaryIsUserMessage.push(projected.userMessage);
           consumedThroughByRenderedMessageCount.push(row.seq);
         } else {
-          // The Protocol semantic projector deliberately returns no text for
-          // valid events that have no useful model-visible representation.
-          // They are consumed by traversal, not invented into prompt prose.
+          // Non-renderable rows and manager-only progress between reports are
+          // consumed by original traversal without copying them into a card.
           consumedThroughByRenderedMessageCount[consumedThroughByRenderedMessageCount.length - 1] = row.seq;
         }
         nextContiguousSeq = row.seq + 1;
+        if (isManager && nextContiguousSeq <= observedSeq && rowIndex === rows.length - 1 && pageHasMore) {
+          signal.throwIfAborted();
+          try {
+            const next = useRunnerProjection ? await fetchRunnerPage(row.seq) : await fetchAccountPageAfter(row.seq);
+            if (!next || (useRunnerProjection && 'source' in next && next.source.id !== observation.sourceSessionId)) {
+              omittedObservedMessage = true;
+              break;
+            }
+            rows = [...next.messages];
+            pageHasMore = next.hasMore;
+            rowIndex = -1;
+          } catch {
+            omittedObservedMessage = true;
+            break;
+          }
+        }
       }
 
       const consumedTranscriptSeq = consumedThroughByRenderedMessageCount[
         consumedThroughByRenderedMessageCount.length - 1
       ] ?? deliveredSeq;
+      reachedObservedTranscript = consumedTranscriptSeq === observedSeq;
       if (readMode === 'initial_current_snapshot' && consumedTranscriptSeq !== observedSeq) {
         // A current snapshot is useful only when the bounded window reaches the
         // exact observed cap. Missing, malformed, or unavailable tail material
@@ -843,7 +1075,7 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
               stopped = true;
               break;
             }
-            const projected = projectOpenedSessionFollowRow(opened.row);
+            const projected = projectOpenedSessionFollowRow(opened.row, !input.disclosure);
             cursor = storedSeq;
             advanced = true;
             if (projected.summary && isAuthoritativeHumanSessionFollowMessageV1(projected.summary)) {
@@ -855,11 +1087,9 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
         }
       }
 
-      // Account Voice snippet controls, exactly as the foreground path applies them:
-      // the user's own messages only when explicitly shared, and only the Account's
-      // newest represented messages. Withheld rows are a deliberate disclosure
-      // decision, so they are consumed by traversal and settle with the represented
-      // frontier instead of replaying every Voice turn.
+      // Legacy/current snapshots keep the newest context. Modern incremental
+      // originals keep the oldest selected prefix; a snippet allowance must not
+      // acknowledge a later report over an earlier unrepresented original.
       let disclosedSummaries = summaries;
       let disclosedCheckpoints = consumedThroughByRenderedMessageCount;
       if (input.disclosure && mayQuoteSourceMessages) {
@@ -867,15 +1097,22 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
         const permitted = summaries.filter((_summary, index) => (
           disclosure.includeUserMessagesInSnippets || !summaryIsUserMessage[index]
         ));
-        disclosedSummaries = permitted.slice(-disclosure.snippetsMaxMessages);
+        disclosedSummaries = selectsVoiceOriginals ? permitted.slice(0, disclosure.snippetsMaxMessages)
+          : permitted.slice(-disclosure.snippetsMaxMessages);
+        const firstDeferred = selectsVoiceOriginals ? permitted[disclosure.snippetsMaxMessages] : undefined;
+        const representedThrough = firstDeferred
+          ? consumedThroughByRenderedMessageCount[summaries.indexOf(firstDeferred)]!
+          : consumedTranscriptSeq;
         disclosedCheckpoints = disclosedSummaries.length === 0
-          ? [consumedTranscriptSeq]
+          ? [representedThrough]
           : [
-              ...disclosedSummaries.map((summary) => summary.seq - 1),
-              consumedTranscriptSeq,
+              ...disclosedSummaries.map((summary) => selectsVoiceOriginals
+                ? consumedThroughByRenderedMessageCount[summaries.indexOf(summary)]! : summary.seq - 1),
+              representedThrough,
             ];
       }
 
+      if (selectsVoiceOriginals && summaries.length === 0 && !selectedVoiceTurn && selectedVoiceRequests.length === 0) return null;
       return {
         v: 1,
         kind: 'session_follow_update',
@@ -889,15 +1126,18 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
           ? observation.observed
           : {
               ...observation.observed,
-              transcriptSeq: consumedTranscriptSeq,
+              transcriptSeq: selectsVoiceOriginals && mayQuoteSourceMessages ? disclosedCheckpoints.at(-1)! : consumedTranscriptSeq,
+              ...(isManager && !reachedObservedTranscript ? { turn: observation.delivered.turn } : {}),
             },
         awareness: projectDisclosedAwareness(awareness),
         recentMessages: mayQuoteSourceMessages ? disclosedSummaries : [],
         truncated: pageHasMore
+          || selectsVoiceOriginals && disclosedCheckpoints.at(-1)! < consumedTranscriptSeq
           || traversalBaseline > deliveredSeq
           || consumedTranscriptSeq < observedSeq
           || omittedObservedMessage,
         sourceRecencyMs,
+        ...(sourceTerminalTurn ? { sourceTerminalTurn } : {}),
         transcriptConsumedThroughByRenderedMessageCount: Object.freeze(
           mayQuoteSourceMessages
             ? [...disclosedCheckpoints]
@@ -907,7 +1147,7 @@ export function createSessionFollowSourceHydrator(input: Readonly<{
         ),
         ...(pendingHumanIngress !== undefined ? { pendingHumanIngress } : {}),
         ...(composeWorkerUpdate() ? { workerUpdate: composeWorkerUpdate() } : {}),
-        ...reviewAdmission,
+        ...(reachedObservedTranscript ? workerAdmission : {}),
       };
     } finally {
       if (preparedMaterial?.mode === 'e2ee') preparedMaterial.dataKey.fill(0);

@@ -10,7 +10,7 @@ import { ScmComparisonBar, ScmComparisonStartReview, ScmComparisonViewSwitch } f
 import { ScmComparisonScopePicker } from '@/components/sessions/files/comparison/ScmComparisonScopePicker';
 import { ScmComparisonPhoneHeader } from '@/components/sessions/files/comparison/ScmComparisonPhoneHeader';
 import { listFilesComparisonScopeOptions } from '@/components/sessions/files/comparison/filesComparison';
-import { WalkthroughNotice, WalkthroughNoticeButton } from '@/components/sessions/files/walkthrough/WalkthroughLifecycle';
+import { AttentionBanner } from '@/components/ui/lists/AttentionBanner';
 import { WalkthroughView, type WalkthroughViewLayout } from '@/components/sessions/files/walkthrough/WalkthroughView';
 import { buildWalkthroughReading, type WalkthroughReadingInput } from '@/components/sessions/files/walkthrough/walkthroughReading';
 import { ReviewFindingDecisionControl } from '@/components/sessions/reviews/findings/ReviewFindingRow';
@@ -211,16 +211,13 @@ function steps(scenario: Scenario, narration: Parameters<typeof resolveReviewWal
 
 function PartialNotice() {
     return (
-        <WalkthroughNotice
+        <AttentionBanner
+            presentation="strip"
+            testID="specimen-partial-review"
             tone="danger"
-            icon="x-circle"
-            message={(
-                <Text style={styles.notice}>
-                    <Text style={styles.noticeStrong}>{t('reviewWalkthrough.partial.failed', { engines: 'Claude' })}</Text>
-                    {` ${t('reviewWalkthrough.partial.notClean')} ${t('reviewWalkthrough.partial.finishedWith', { engines: 'Codex', count: 3 })}`}
-                </Text>
-            )}
-            actions={<WalkthroughNoticeButton icon="arrows-clockwise" label={t('reviewWalkthrough.partial.retry', { engine: 'Claude' })} onPress={noop} />}
+            title={t('reviewWalkthrough.partial.failed', { engines: 'Claude' })}
+            description={`${t('reviewWalkthrough.partial.notClean')} ${t('reviewWalkthrough.partial.finishedWith', { engines: 'Codex', count: 3 })}`}
+            action={{ icon: 'arrows-clockwise', label: t('reviewWalkthrough.partial.retry', { engine: 'Claude' }), onPress: noop }}
         />
     );
 }
@@ -365,7 +362,7 @@ function FinishedCard(props: Readonly<{ resumable: boolean; phone: boolean; heav
         comparisonId: SPECIMEN_COMPARISON.id,
         summary: 'Claude and Codex reviewed the settings change: one real bug in the phone sheet, two things to tidy.',
         overviewMarkdown: 'Claude and Codex reviewed the settings change.',
-        findings: props.heavy ? HEAVY_FINDINGS : [HIGH, DOCS, MEMO, TESTS, NIT],
+        findings: props.heavy ? [...HEAVY_FINDINGS] : [HIGH, DOCS, MEMO, TESTS, NIT],
         questions: [],
         assumptions: [],
         generatedAtMs: new Date(2026, 9, 3, 11, 4).getTime(),
@@ -400,6 +397,7 @@ function OtherRunResults(props: Readonly<{ phone: boolean }>) {
             { id: 'callers', title: 'Callers of the size key', details: 'SettingsModal.tsx and SettingsSheet.tsx; both now use the route key.' },
             { id: 'tests', title: 'Tests still keyed by size', details: 'SettingsModal.test.tsx:65 and :88.' },
         ],
+        generatedAtMs: new Date(2026, 9, 3, 10, 12).getTime(),
     }), []);
     return (
         <SessionTranscriptSourceProvider source={source}>
@@ -488,8 +486,6 @@ const styles = StyleSheet.create((theme) => ({
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: theme.colors.border.default,
     },
-    notice: { fontSize: 13.5, lineHeight: 19, color: theme.colors.text.secondary, ...Typography.default() },
-    noticeStrong: { color: theme.colors.text.primary, ...Typography.default('semiBold') },
     transcript: { width: 640, alignSelf: 'center', paddingVertical: theme.space.s24, gap: 14 },
     transcriptPhone: { width: '100%', paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s20, gap: 14 },
     userBubble: { alignSelf: 'flex-end', maxWidth: '80%', paddingHorizontal: 14, paddingVertical: theme.space.s10, borderRadius: 16, backgroundColor: theme.colors.surface.inset },

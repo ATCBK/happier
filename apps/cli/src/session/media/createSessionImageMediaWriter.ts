@@ -1,3 +1,5 @@
+import { z } from 'zod/mini';
+
 import { SessionImageMediaReferenceV1Schema } from '@happier-dev/protocol/sessions/media/imageReferenceV1';
 import type { SessionImageMediaReferenceV1, SessionImageFileReferenceV1 } from '@happier-dev/protocol';
 
@@ -52,7 +54,7 @@ export function createSessionImageMediaWriter(options: SessionImageMediaWriterOp
                     || item.width === undefined || item.height === undefined) {
                     return { ok: false, reason: 'capture_failed', disabledReason: 'screenshot_dimensions_unavailable' };
                 }
-                const media = SessionImageMediaReferenceV1Schema.required({ file: true }).safeParse({
+                const media = z.required(SessionImageMediaReferenceV1Schema, { file: true }).safeParse({
                     mediaId: item.id, mediaKind: 'image', width: item.width, height: item.height, sizeBytes: item.sizeBytes,
                     file: { sessionId: input.sessionId, storage: options.storage, path: item.path,
                         sha256: item.sha256, mimeType: item.mimeType },

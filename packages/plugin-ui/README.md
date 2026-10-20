@@ -221,6 +221,53 @@ exact page colours (`HappierUiPalette`) and page chrome, and without them the
 colours resolve from the public theme snapshot. See the published guide
 "Settings and detail pages" (`apps/docs/content/docs/plugins/ui/configuration-pages.mdx`).
 
+### Dialog and sheet headers
+
+`ModalHeader` is the title band Happier's own dialogs and sheets draw: an
+optional leading mark, `title` and `subtitle`, context `actions`, and a close
+control when you pass `onClose`. Set `compact` when your dialog is on a phone:
+with actions present, the title keeps its row beside close and the subtitle and
+actions move beneath it at full width, exactly as the host's dialogs do. Without
+actions, or on a wide card, everything stays on one row. Happier core's
+`ModalCardHeader` binds the same `HappierModalHeader` presentation owner.
+
+```tsx
+<ModalHeader
+  title="Link a pull request"
+  subtitle="Pick the change this review covers."
+  actions={<RepositoryChip />}
+  onClose={close}
+  compact={onPhone}
+/>
+```
+
+### Technical details and balanced wrapping
+
+`TechnicalDetailsDisclosure` is the "Technical details" row Happier's own
+approvals and Run steps draw: the exact ids, codes and raw causes behind a
+readable page, folded one tap away. Pass a localized `title` and `lines`, each
+`{ key, label, value }`; an open row shows each label quietly above its
+selectable mono value, and with no lines it draws nothing. Lead the page with
+the readable outcome and keep the code here. It binds the shared
+`HappierTechnicalDetailsDisclosure` owner over `CountedDisclosureItem`, which
+Happier core binds with its own row and typography.
+
+```tsx
+<TechnicalDetailsDisclosure
+  title="Technical details"
+  lines={[{ key: 'code', label: 'Failure code', value: 'storage_unavailable' }]}
+/>
+```
+
+Short centred and capsule copy that needs two lines splits them evenly on the
+web instead of leaving one word alone. `EmptyState`, `LoadingState`,
+`ErrorState`, the shared `HappierInfoTile` and the capsules' titles apply it
+already; for your own centred text, add `HAPPIER_BALANCED_TEXT_WRAP` (from
+`./components`) to its style. It is `null` on native, which has no balanced
+wrapping. Hosted HTML pages, which do not run these components, use a native
+`<details>`/`<summary>` for technical details and CSS `text-wrap: balance` for
+the same effect.
+
 ### Advanced trusted-author tier
 
 Use the root tier for ordinary surfaces. When a curated component does not fit
@@ -318,7 +365,7 @@ copy. Graduated so far:
 | `Surface`, `Card` | Real native surface hosts over shared surface/press behavior; Happier's `SurfaceCard` consumes that behavior while applying its app-private RN styles locally |
 | `List`, `List.Section`, `List.Item`, `Item`, `ItemGroup` | Real list and row semantics over the shared collection owner. Virtualized `List` owns its bounded search/filter/selected-option state before rows reach the native virtualizer; authors retain match semantics and controlled values. Authors mark independently interactive accessories with `accessoryOutsidePressable`; theme injection, touch-target policy, overflow placement and group indexing remain adapter-owned |
 | `Form`, `Form.Field`, `Form.TextField`, `Form.Toggle`, `Form.Select`, `Form.ValidationMessage`, `Form.Actions` | Real form semantics over the canonical action-form owner. Authors provide static already-resolved options; host option sources and account inventory remain host-owned. `Form.Actions` is the section action cluster (`HappierFormActions`) Happier's `SectionButtonRow` binds, with a far-edge `trailing` slot and a consequence or refusal `footnote` |
-| `Popover`, `Menu`, `Dropdown`, `ContextMenu` | Controlled overlay semantics over the incumbent presentation host. It owns anchoring, focus return, Escape, outside dismissal and Android Back; authors supply only semantic state and items |
+| `Popover`, `Menu`, `SheetMenu`, `Dropdown`, `ContextMenu` | Controlled overlay semantics over the incumbent presentation host. It owns anchoring, focus return, Escape, outside dismissal and Android Back; authors supply only semantic state and items |
 | `SessionProvider`, `SessionTranscript`, `SessionComposer`, `SessionChat` | In progress. A host-mediated live Session (transcript, composer, approvals) rendered by Happier's own session view. One controller per provider and at most one of each part; parts fill a bounded region. RN/RNW only: isolated tests and hosted web render the author's `fallback` |
 
 `./components` is the author UI layer, also re-exported by the root. It contains
@@ -326,6 +373,39 @@ the ergonomic adapters and domain-neutral shared primitives over the same
 implementation Happier core consumes. `./environment` supplies their environment
 facts. A core adapter may render its own RN host only when the portable author
 contract intentionally excludes required private props/styles.
+
+### Collection filters and long titles (0.3 development source)
+
+`CollectionToolbar.refine` supplies both `render()` for wide layouts and `sheet`
+for the compact Filters control. Build both from the same controlled filter and
+order state. `sheet.groups` contains the shared checkbox/radio menu rows;
+`radioGroups` supplies each radio group's value, and `onSelect(id)` applies a
+choice immediately. Optional `clear` resets the narrowing. `showResultsLabel`
+labels the primary footer button, which closes the sheet after choices apply.
+`render` takes no placement argument.
+
+```tsx
+import { CollectionToolbar, Item, Menu } from '@happier-dev/plugin-ui/components';
+
+// groups, radioGroups and onSelect come from the page's one filter model.
+<CollectionToolbar refine={{
+  label: 'Filters', activeCount,
+  render: () => <Menu open={open} onOpenChange={setOpen}
+    trigger="Filters" triggerAccessibilityLabel="Filter entries"
+    groups={groups} radioGroups={radioGroups} onSelect={onSelect} />,
+  sheet: { groups, radioGroups, onSelect,
+    clear: { label: 'Clear', onPress: clearFilters },
+    showResultsLabel: `Show ${resultCount} results` },
+}} />;
+<Item title={filePath} titleEllipsizeMode="middle" />;
+```
+
+Use `SheetMenu` directly for a controlled menu that needs a phone sheet:
+it takes the same semantic menu props plus `sheet: { title, footer? }` and
+optional `triggerCount`. The shared host owns sheet presentation, focus and
+dismissal. `Item.titleEllipsizeMode="middle"` keeps a long title on one line
+with its suffix visible and its full accessible name intact.
+See the generated [API declarations](api-declarations.md) for exact types.
 
 Spinner presentation belongs to `presentation/feedback/Spinner.tsx`:
 `resolveHappierSpinnerPresentation` decides the mark and motion, and
@@ -347,6 +427,10 @@ The root component props are deliberately curated. In particular, `Form` and
 `Select` accept author-visible, already-resolved option values instead of Action
 schema source instructions or host account metadata; List and overlay adapters
 derive host-only injection props from their public semantic inputs.
+
+In 0.3 development source, a `Select` with `presentation="menu"` or `"field"`
+and no options keeps its trigger disabled. Options can arrive or be withdrawn
+while mounted; the caller explains loading, unavailable or empty source data.
 
 ## Published package contents
 

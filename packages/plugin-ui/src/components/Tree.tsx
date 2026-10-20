@@ -9,6 +9,8 @@ import { View } from 'react-native';
 
 import { useHappierUiAccessibility } from '../environment/context.js';
 import { useHappierNativeMinimumInteractiveTargetSize } from '../environment/interactiveTarget.js';
+import { useHappierPageChromeInternal } from '../presentation/layout/pageChrome.js';
+import { HAPPIER_PAGE_METRICS } from '../presentation/layout/pageMetrics.js';
 import { HappierTreeRow } from '../presentation/navigation/TreeRow.js';
 import {
   useHappierTreeInteraction,
@@ -87,8 +89,17 @@ export function Tree(props: TreeProps): ReactElement {
   });
   // A touch host (its native target floor) draws the touch row height.
   const touch = useHappierNativeMinimumInteractiveTargetSize() !== undefined;
+  // Phone-narrow by the tree's own measured width, the Collection's rule: before the first measurement the host's
+  // phone header (it shows the title) already says so, so the first frame composes right.
+  const pageChrome = useHappierPageChromeInternal();
+  const [width, setWidth] = useState<number | null>(null);
+  const compact = width === null ? pageChrome?.showsTitle === true : width < HAPPIER_PAGE_METRICS.rowStackBelowWidthPx;
   return (
     <View
+      onLayout={(event) => {
+        const next = event.nativeEvent.layout.width;
+        setWidth((current) => (current === next ? current : next));
+      }}
       role="tree"
       aria-label={props.accessibilityLabel}
       accessibilityLabel={props.accessibilityLabel}
@@ -108,6 +119,7 @@ export function Tree(props: TreeProps): ReactElement {
             tabStop={interaction.activeKey === item.key}
             presentation={props.presentation}
             touch={touch}
+            compact={compact}
             theme={theme}
             reducedMotion={reducedMotion}
             onActivate={() => props.onActivate(item.key)}

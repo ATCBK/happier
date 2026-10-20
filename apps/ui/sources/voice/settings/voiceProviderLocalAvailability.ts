@@ -87,6 +87,7 @@ export function resolveVoiceDaemonHeavyAudioReadiness(input: Readonly<{
             recoveryAction: 'switch_provider',
         });
     }
+    // The selected machine is offline or gone: its reason says it isn't reachable (the code name is historical).
     if (input.executionMachineSelectionKind === 'selected_unreachable') {
         return Object.freeze({
             role: input.role,
@@ -167,57 +168,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
     return value !== null && typeof value === 'object';
 }
 
-function readRecordValue(record: Record<string, unknown>, key: string): unknown {
-    return Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
-}
-
 function normalizeId(value: unknown): string | null {
     const normalized = typeof value === 'string' ? value.trim() : '';
     return normalized.length > 0 ? normalized : null;
-}
-
-function normalizeDaemonHttpPort(value: unknown): number | null {
-    const port = typeof value === 'number'
-        ? value
-        : typeof value === 'string' && value.trim().length > 0
-            ? Number(value)
-            : Number.NaN;
-    if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-        return null;
-    }
-    return port;
-}
-
-function readMachineRecordFromState(input: Readonly<{
-    state: unknown;
-    serverId: string;
-    machineId: string;
-}>): Record<string, unknown> | null {
-    const state = isRecord(input.state) ? input.state : null;
-    const machineListByServerId = isRecord(state?.machineListByServerId) ? state.machineListByServerId : null;
-    const scopedMachines = machineListByServerId?.[input.serverId];
-    if (Array.isArray(scopedMachines)) {
-        for (const candidate of scopedMachines) {
-            if (!isRecord(candidate)) continue;
-            if (String(readRecordValue(candidate, 'id') ?? '') === input.machineId) {
-                return candidate;
-            }
-        }
-    }
-
-    const machines = isRecord(state?.machines) ? state.machines : null;
-    const fallbackMachine = machines?.[input.machineId];
-    return isRecord(fallbackMachine) ? fallbackMachine : null;
-}
-
-export function readVoiceDaemonHttpPortFromState(input: Readonly<{
-    state: unknown;
-    serverId: string;
-    machineId: string;
-}>): number | null {
-    const machine = readMachineRecordFromState(input);
-    const daemonState = isRecord(machine?.daemonState) ? machine.daemonState : null;
-    return normalizeDaemonHttpPort(daemonState ? readRecordValue(daemonState, 'httpPort') : null);
 }
 
 export function readVoiceProviderRelayDisabledReason(

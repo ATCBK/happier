@@ -1,4 +1,4 @@
-import { HAPPIER_STATE_SIZE_METRICS, HappierInfoTile, type HappierStateSize } from '@happier-dev/plugin-ui/presentation';
+import { HAPPIER_BALANCED_TEXT_WRAP, HAPPIER_STATE_SIZE_METRICS, HappierInfoTile, type HappierStateSize } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
 import { View } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
@@ -52,6 +52,7 @@ export const CenteredInfoTile = React.memo((props: CenteredInfoTileProps) => {
                         color: theme.colors.text.primary,
                         textAlign: 'center',
                         marginBottom: metrics?.bodyGapPx ?? 6,
+                        ...HAPPIER_BALANCED_TEXT_WRAP,
                     }}
                 >
                     {props.titleContent ?? props.title}
@@ -66,6 +67,7 @@ export const CenteredInfoTile = React.memo((props: CenteredInfoTileProps) => {
                         color: theme.colors.text.secondary,
                         textAlign: 'center',
                         lineHeight: metrics?.body.lineHeight ?? 20,
+                        ...HAPPIER_BALANCED_TEXT_WRAP,
                     }}
                 >
                     {props.description}

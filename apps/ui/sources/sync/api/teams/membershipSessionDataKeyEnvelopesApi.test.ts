@@ -125,11 +125,11 @@ describe('membership history public Actions', () => {
         } } });
         expect(env.request.mock.calls.some(([url]) => new URL(url).pathname.includes('/groups/grp%2F7/members/recipient-1/'))).toBe(true);
     });
-    it('creates mandatory human approval for an Agent request even when ordinary approval is waived', async () => {
+    it.each([false, true])('requires human authority for an Agent request (approval waived=%s)', async waived => {
         const env = await setup();
         let stored: ApprovalRequest | null = null;
         const settings = ActionsSettingsV1Schema.parse({ v: 1,
-            approvalWaivedSurfaces: { 'teams.members.history.prepare': ['agent'] } });
+            approvalWaivedSurfaces: waived ? { 'teams.members.history.prepare': ['agent'] } : {} });
         const executor = createActionExecutor({
             isActionApprovalRequired: (actionId: ActionId, context: ActionExecutorContext) =>
                 isApprovalRequiredByActionsSettings(actionId, settings, context, getActionSpec(actionId).safety),
@@ -143,13 +143,19 @@ describe('membership history public Actions', () => {
                 }, availability: 'available', isCurrent: () => true }),
         } as unknown as ActionExecutorDeps);
         const input = { teamId: TEAM_ID, target: GROUP_TARGET, recipientAccountId: 'recipient-1' };
-        const result = await executor.execute('teams.members.history.prepare', input, {
+        const pending = executor.execute('teams.members.history.prepare', input, {
             surface: 'agent', authority: 'account_automation', serverId: env.target.id,
             runtimeAccountId: 'target-account', actionRequestId: 'history-request', actionCaller: { kind: 'host' },
         });
-        expect(result).toMatchObject({ ok: true, result: { kind: 'approval_request_created',
+        if (waived) {
+            await expect(pending).resolves.toMatchObject({ ok: false, errorCode: 'present_user_required' });
+            expect(stored).toBeNull();
+            expect(env.request).not.toHaveBeenCalled();
+            return;
+        }
+        await expect(pending).resolves.toMatchObject({ ok: true, result: { kind: 'approval_request_created',
             artifactId: 'membership-history-approval', actionId: 'teams.members.history.prepare' } });
-        expect(stored).toMatchObject({ actionArgs: input, approval: { result: 'required' },
+        expect(stored).toMatchObject({ actionArgs: input, approval: { flow: 'deferred', result: 'required' },
             createdBy: { surface: 'agent' }, executionOriginV1: { authority: 'account_automation' } });
         expect(env.request).not.toHaveBeenCalled();
     });
@@ -200,7 +206,8 @@ describe('membership history public Actions', () => {
         env.request.mockImplementation(async () => new Response(JSON.stringify({ mode: 'plain', updatedAt: 1 })));
         const input = { teamId: TEAM_ID, target: TEAM_TARGET, recipientAccountId: 'recipient-1' };
         await expect(actionExecutor(env.target.id).execute('teams.members.history.prepare', input,
-            { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } },
+            { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+                presentUserConfirmation: { actionId: 'teams.members.history.prepare' } },
         )).resolves.toMatchObject({ ok: false, errorCode: 'session_data_key_unavailable' });
         expect(env.request.mock.calls.every(([url]) => !new URL(url).pathname.endsWith('/data-key/envelopes'))).toBe(true);
         env.request.mockClear();
@@ -386,7 +393,8 @@ describe('membership history preparation host', () => {
 
         const result = await actionExecutor(env.target.id).execute('teams.members.history.prepare', {
             teamId: TEAM_ID, target: TEAM_TARGET, recipientAccountId: 'recipient-1',
-        }, { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } });
+        }, { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+            presentUserConfirmation: { actionId: 'teams.members.history.prepare' } });
         expect(result.ok).toBe(true);
         if (!result.ok) throw new Error(result.errorCode);
         const outcome = TeamMembershipHistoryPreparationResultV1Schema.parse(result.result);

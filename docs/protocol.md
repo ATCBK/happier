@@ -21,6 +21,18 @@ The protocol is designed to stay minimal, explicit, and resilient under intermit
 
 If a new protocol field or event is proposed, it should answer: does this create a durable sync primitive, or can it be encoded inside the existing domain-owned stored-content representation without expanding the API surface?
 
+## Plaintext message storage (development)
+
+Before comparing or storing plaintext message envelopes, the server removes actual
+NUL characters (U+0000) from string values, including nested tool output. PostgreSQL
+JSONB cannot represent NUL. Literal text such as `\u0000` and other control
+characters remain unchanged. Transcript, historical-import and pending-message writers
+share `normalizeSessionMessageContentForStorage`; retries compare the normalized
+content. A fixed `nul-removed` warning records normalization without message data.
+NUL-bearing object keys and ciphertext are rejected: rewriting
+keys could merge distinct fields, and encrypted content is opaque. This correction
+is development source behavior; release availability is tracked separately.
+
 ## Authentication
 Most endpoints require `Authorization: Bearer <token>`. The same token is also used in the Socket.IO handshake. Full auth flows and endpoints are documented in `api.md`.
 
@@ -33,16 +45,13 @@ authorized Session facts and content-opening results into its pure projector. Th
 projection is not persisted and does not own unread state, following, personal
 attention, or notification decisions.
 
-An applied terminal lifecycle mutation for the latest turn clears
-`pendingPermissionRequestCount`, `pendingUserActionRequestCount`, and
-`pendingRequestObservedAt` in the same transaction as the turn projection.
-Turn updates, publisher-close fanout, and released-UI Stop include those committed
-zero counts and null timestamp in their recipient updates. Transcript-anchor,
-Agent-turn-id, and rollback updates preserve request projections because they do
-not settle the current turn. The existing Agent-state and metadata-tuple writers
-also normalize positive pending summaries to zero while the parent turn remains
-terminal; a later turn can publish its own pending requests. These are current
-0.3 development source semantics, not a release availability claim.
+Pending permission and user-action counts are session-wide projections of the
+acknowledged Agent state. Its legacy and metadata-tuple writers normalize and
+publish those counts, including explicit clears when requests settle. Foreground
+turn completion, publisher close, and released-UI Stop preserve them: a background
+Agent or an occurrence-scoped question can still await an answer after the latest
+turn ends. Turn status and Runtime Activity keep their separate lifecycle owners.
+These are current 0.3 development source semantics, not a release availability claim.
 
 The `session.list` Action keeps its default summary response. An explicit
 `view: 'awareness'` request requires a response carrying both `view: 'awareness'`
@@ -520,6 +529,17 @@ server-readable but owner-only; non-owner roles receive the strict shared projec
 Current-format operations require a current caller declaration. Release readiness
 still depends on the remaining mixed-version, database, composed, and platform checks;
 it does not depend on an operator activation mode or legacy socket drainage.
+
+In 0.3 development, owner and shared-editor metadata tuple writes may publish
+the closed `sharedActionConfirmationSummaryV1` permission-count facet beside
+the shared ciphertext. It is committed atomically with that shared metadata
+version into the Session summary, independently of the owner's Agent-state
+counts. Omission preserves the contribution; explicit zero settles it. A
+rename-only shared write cannot publish this facet. The personal-attention
+owner combines both contributions and applies the viewer's approval grant;
+the facet grants neither approval rights nor owner-metadata access. Existing
+0.2-created Sessions start with a zero contribution. This is an unreleased
+layout-1 contract change, not a mixed-0.3-version or rollback representation.
 
 Current 0.3 development source treats a Bot as an ordinary Session with a reversible
 `work.bot: { kind: 'bot' }` owner marker. Its shared projection contains only `bot`;

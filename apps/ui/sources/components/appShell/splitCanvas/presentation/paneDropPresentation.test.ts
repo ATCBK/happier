@@ -33,7 +33,7 @@ describe('pane drop presentation (lab C2)', () => {
     });
 
     it('words an edge as a split in that direction, beside the pane’s open tab', () => {
-        const right = presentPaneDropAdmission(allowed('session.canvas.tabs.open', { sessionId: 'relay', leafId: 'right', placement: 'right' }), scene());
+        const right = presentPaneDropAdmission(allowed('workspace.tabs.open', { href: '/session/relay', groupId: 'right', mode: 'splitRight' }), scene());
         expect(describeEntityDropOutcome({ phase: 'carrying', admission: right })).toEqual({
             tone: 'allowed', glyph: 'split', title: 'Split right', detail: 'Opens beside Review #2481',
         });
@@ -60,10 +60,10 @@ describe('pane drop presentation (lab C2)', () => {
         expect(describeEntityDropOutcome({ phase: 'carrying', admission: same })).toEqual({
             tone: 'quiet', glyph: 'here', title: 'Already here', detail: 'Release to leave it where it is',
         });
-        const kind = presentPaneDropAdmission({ status: 'refused', reason: { code: 'canvas_kind_unsupported', message: 'x' } }, scene({ sessionsOnly: true }));
-        expect(kind).toMatchObject({ status: 'refused', reason: { message: 'This pane shows sessions only' }, preview: { verb: 'Can’t open it here' } });
+        const kind = presentPaneDropAdmission({ status: 'refused', reason: { code: 'workspace_kind_unsupported', message: 'x' } }, scene());
+        expect(kind).toMatchObject({ status: 'refused', reason: { message: 'This place can’t take it' }, preview: { verb: 'Can’t open it here' } });
         expect(describeEntityDropOutcome({ phase: 'carrying', admission: kind })).toEqual({
-            tone: 'refused', title: 'Can’t open it here', detail: 'This pane shows sessions only',
+            tone: 'refused', title: 'Can’t open it here', detail: 'This place can’t take it',
         });
     });
 
@@ -73,7 +73,7 @@ describe('pane drop presentation (lab C2)', () => {
         expect(EntityDropAdmissionV1Schema.safeParse(open).success).toBe(true);
         expect(open.status === 'allowed' && open.effect.input).toBe(effect.input);
         expect(describeEntityDropOutcome({ phase: 'carrying', admission: open })).toMatchObject({ tone: 'allowed', glyph: 'tab' });
-        for (const code of ['workspace_tab_cannot_split_own_pane', 'canvas_tab_cannot_split_own_pane']) {
+        for (const code of ['workspace_tab_cannot_split_own_pane']) {
             const refusal = presentPaneDropAdmission({ status: 'refused', reason: { code } }, scene());
             expect(EntityDropAdmissionV1Schema.safeParse(refusal).success).toBe(true);
             expect(describeEntityDropOutcome({ phase: 'carrying', admission: refusal })).toMatchObject({ tone: 'quiet', glyph: 'here' });
@@ -94,7 +94,7 @@ describe('pane drop presentation (lab C2)', () => {
 
     it('leaves effects it does not own to their owner', () => {
         const relation: EntityDropAdmissionV1 = { status: 'allowed', effect: {
-            actionId: 'session.reports_to.set', input: { sessionId: 'a', leadSessionId: 'b' },
+            actionId: 'session.manager.set', input: { sessionId: 'a', managerSessionId: 'b' },
             preview: { verb: 'Nest', target: 'Lead', glyph: 'nest' },
         } };
         expect(presentPaneDropAdmission(relation, scene())).toBe(relation);

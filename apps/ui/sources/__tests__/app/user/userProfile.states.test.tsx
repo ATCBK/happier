@@ -46,8 +46,6 @@ vi.mock('@/sync/api/social/apiFriends', () => ({
     getUserProfile: vi.fn(() => new Promise((resolve) => {
         profileState.resolveProfile = resolve;
     })),
-    sendFriendRequest: vi.fn(),
-    removeFriend: vi.fn(),
 }));
 
 afterEach(() => {

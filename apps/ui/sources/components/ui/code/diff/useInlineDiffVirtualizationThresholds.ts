@@ -1,4 +1,4 @@
-import { useSetting } from '@/sync/domains/state/storage';
+import { useSetting } from '@/sync/store/settingsReadHooks';
 import { settingsDefaults } from '@/sync/domains/settings/settings';
 
 export type InlineDiffVirtualizationThresholds = Readonly<{

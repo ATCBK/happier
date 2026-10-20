@@ -253,7 +253,7 @@ describe('Iroh Home tunnel lifecycle runtime', () => {
         }
     });
 
-    it('publishes the runtime origin only after native acquire, health, authenticated ping, and identity proof', async () => {
+    it('publishes the runtime origin only after native acquire, authenticated readiness, and identity proof', async () => {
         process.env.EXPO_PUBLIC_HAPPY_STORAGE_SCOPE = randomScope();
         const home = await profiles.upsertServerProfile({ serverUrl: 'https://order.example.test', source: 'manual' });
         await profiles.setActiveServerId(home.id, { scope: 'device' });
@@ -295,8 +295,8 @@ describe('Iroh Home tunnel lifecycle runtime', () => {
         });
 
         expect(events[0]).toBe('native:start');
-        expect(events.indexOf('probe:health')).toBeGreaterThan(-1);
-        expect(events.indexOf('probe:auth-ping')).toBeGreaterThan(events.indexOf('probe:health'));
+        expect(events).not.toContain('probe:health');
+        expect(events.indexOf('probe:auth-ping')).toBeGreaterThan(events.indexOf('native:start'));
         expect(events.indexOf('probe:features')).toBeGreaterThan(events.indexOf('probe:auth-ping'));
         expect(publishedAtFeatures).toBe(false);
 

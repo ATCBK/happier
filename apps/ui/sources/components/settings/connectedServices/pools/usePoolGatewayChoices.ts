@@ -4,6 +4,7 @@ import type { QualifiedConnectedAccountPurposeBindingTargetV1 } from '@happier-d
 import { useProviderCatalog } from '@/sync/store/useProviderCatalog';
 import { useAccountSettingsScope } from '@/sync/store/settingsWriters';
 import { refreshProviderCatalog } from '@/sync/engine/settings/providerCatalogEngine';
+import { getProviderCatalogSnapshot } from '@/sync/store/settings/providerCatalogSnapshot';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { useProviderConnectionMutation } from '@/providers/hooks/useProviderConnectionMutation';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
@@ -48,6 +49,14 @@ export function usePoolGatewayChoices(input: Readonly<{
     }, [scope]);
     const mutation = useProviderConnectionMutation({ resolveTarget: input.resolveTarget, serverId: input.accountServerId,
         initiatingLifetime: accountMatchesTarget ? undefined : null, refresh });
+    const { clearError } = mutation;
+    // An unknown outcome asks for a fresh read, never a second write; once the catalog is current again the question is answered.
+    const reviewCurrentState = React.useCallback(async (): Promise<void> => {
+        if (!scope) return;
+        try { await refreshProviderCatalog(scope); } catch { return; }
+        const snapshot = getProviderCatalogSnapshot(scope);
+        if (snapshot?.status === 'ready' && !snapshot.stale) clearError();
+    }, [clearError, scope]);
     const setEnabled = React.useCallback(async (connectionId: string, enabled: boolean): Promise<boolean> => {
         const choice = choices.find(candidate => candidate.connectionId === connectionId);
         if (!input.enabled || !accountMatchesTarget || catalog?.status !== 'ready' || catalog.stale || !choice) {
@@ -70,6 +79,6 @@ export function usePoolGatewayChoices(input: Readonly<{
     }, [accountMatchesTarget, allocatedConnectionId, catalog?.stale, catalog?.status, firstGateway, input.enabled, input.target, mutation.run]);
     return { choices, setEnabled, firstGateway, createFirstGateway, refresh, loading: catalog?.status === 'loading',
         ready: input.enabled && accountMatchesTarget && catalog?.status === 'ready' && !catalog.stale,
-        error: mutation.error, pendingApproval: mutation.pendingApproval,
+        error: mutation.error, retry: mutation.retry, reviewCurrentState, pendingApproval: mutation.pendingApproval,
         pending: mutation.isPending(FIRST_GATEWAY_KEY) || choices.some(choice => mutation.isPending(`gateway:pool:${choice.connectionId}`)) };
 }

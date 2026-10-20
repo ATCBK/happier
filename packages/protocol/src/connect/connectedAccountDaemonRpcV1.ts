@@ -57,8 +57,9 @@ const BuiltInLegacyConnectedAccountOperations = new Set<string>(
   ]),
 );
 const BuiltInLegacyConnectedAccountOperationSchema =
-  lazyZodSchema(() => BoundedIdentitySchema.check(z.refine((operation): operation is BuiltInLegacyConnectedAccountOperation =>
-      BuiltInLegacyConnectedAccountOperations.has(operation), 'Unknown built-in legacy Connected Account operation')));
+  lazyZodSchema(() => z.pipe(BoundedIdentitySchema, z.custom<BuiltInLegacyConnectedAccountOperation, string>((operation) =>
+      typeof operation === 'string' && BuiltInLegacyConnectedAccountOperations.has(operation),
+      'Unknown built-in legacy Connected Account operation')));
 const ManualFieldsSchema = lazyZodSchema(() => z.record(
   z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
   z.string().check(z.maxLength(64 * 1024)),

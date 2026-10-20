@@ -217,7 +217,7 @@ describe('browser recording daemon routes', () => {
     });
 
     await expect(Reflect.apply(routes.cleanupExpiredRecordings, undefined, [{ beforeEffect: async () => {} }]))
-      .rejects.toMatchObject({ name: 'ZodError' });
+      .rejects.toMatchObject({ issues: expect.arrayContaining([expect.objectContaining({ code: 'unrecognized_keys', path: [], keys: ['beforeEffect'] })]) });
 
     const cleanup = await routes.cleanupExpiredRecordings({});
 

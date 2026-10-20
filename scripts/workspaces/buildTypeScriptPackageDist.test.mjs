@@ -13,7 +13,7 @@ import { withWorkspaceBundleLock } from './workspaceBundleLock.mjs';
 import { resolveWorkspacePackageBuildLockPath } from './workspacePackageBuildLock.mjs';
 import { resolveTypeScriptCliInvocation } from './resolveTypeScriptCliInvocation.mjs';
 import { runCaptureResult } from '../../apps/stack/scripts/utils/proc/proc.mjs';
-import { installNativeAdmissionFixture } from '../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
+import { buildNativeAdmissionFixtureEnv, installNativeAdmissionFixture } from '../../apps/stack/scripts/testkit/core/native_admission_fixture.mjs';
 import { writeFakeBin } from '../../apps/stack/scripts/testkit/core/fake_bin_harness.mjs';
 import { spawnTestProcess } from '../../apps/stack/scripts/testkit/core/spawn_test_process.mjs';
 
@@ -61,7 +61,7 @@ try {
   process.exitCode = error.exitCode ?? 1;
 }
 `);
-  const env = { ...process.env,
+  const env = { ...buildNativeAdmissionFixtureEnv(),
     PATH: `${join(packageDir, 'bin')}:${dirname(process.execPath)}:/usr/bin:/bin`, FIXTURE_MEMORY: memoryPath,
     NODE_OPTIONS: `--experimental-loader=${loaderPath}`, CI: '', HAPPIER_DEV_TARGET_EXECUTION: '1',
     HAPPIER_STACK_PM_CACHE_BASE_DIR: '', HAPPIER_WORKSPACE_DIST_OUTPUT_DIR: '',
@@ -116,6 +116,9 @@ test('public hstack finite dist producer waits for its package lease without an 
   const entry = join(fixtureRepo, 'scripts/workspaces/buildTypeScriptPackageDist.mjs');
   await mkdir(dirname(entry), { recursive: true });
   await cp(source, entry);
+  // Replace only this fixture's disk-observation footprint with the real
+  // compiler dependency tree required by its physical producer entry.
+  await rm(join(fixtureRepo, 'node_modules'), { recursive: true });
   await symlink(fileURLToPath(new URL('../../node_modules', import.meta.url)), join(fixtureRepo, 'node_modules'), 'dir');
   // The physical entry is the actual finite producer. Remap its relative
   // imports back to source, retaining the existing real compiler endpoints.

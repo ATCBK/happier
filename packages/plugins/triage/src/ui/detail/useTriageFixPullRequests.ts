@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { JsonValue, PluginCancellationOptions } from '@happier-dev/plugin-sdk';
 import type { PluginUiHostApi } from '@happier-dev/plugin-sdk/ui';
-import { usePluginHostApi, usePluginTranslation } from '@happier-dev/plugin-ui';
+import { usePluginHostApi, usePluginHostReadiness, usePluginTranslation } from '@happier-dev/plugin-ui';
 import type {
   TriageEntryPresentationStateV1,
   TriageEntryRefV1,
@@ -77,8 +77,7 @@ export function createDirectTriageFixPullRequestsTransport(
   collections: Pick<CorpusCollectionsV1, 'userMarks' | 'sessionLinks'>,
   projection: TriageFixPullRequestProjectionV1,
   nowMs: () => number,
-  host: Pick<PluginUiHostApi, 'confirm'>,
-  confirmationMessage: (linked: boolean) => string,
+  host: Pick<PluginUiHostApi, 'admitAction'>,
 ): TriageFixPullRequestsTransportV1 {
   const deps = (options?: PluginCancellationOptions) => ({
     collections,
@@ -88,10 +87,7 @@ export function createDirectTriageFixPullRequestsTransport(
   return Object.freeze({
     read: async (entryRef, options) => await readTriageFixPullRequests({ v: 1, entryRef }, { ...deps(options), projection }),
     write: async (input, options) => {
-      if (!await host.confirm(confirmationMessage(input.linked), {
-        action: TRIAGE_SET_FIX_PULL_REQUEST_ACTION_LOCAL_ID_V1,
-        ...(options?.signal ? { signal: options.signal } : {}),
-      })) return null;
+      if (!await host.admitAction(TRIAGE_SET_FIX_PULL_REQUEST_ACTION_LOCAL_ID_V1, input as unknown as JsonValue, options)) return null;
       return await setTriageFixPullRequest(input, { ...deps(options), workflowSubjectOf: projection.workflowSubjectOf });
     },
   });
@@ -127,16 +123,15 @@ export function useTriageFixPullRequests(
   const hostApi = usePluginHostApi();
   const text = usePluginTranslation();
   const durable = useTriageDurableAccount();
+  const readiness = usePluginHostReadiness(durable.collections === null);
   const workflowSubjectOf = input?.workflowSubjectOf;
   const presentationOf = input?.presentationOf;
   const transport = useMemo<TriageFixPullRequestsTransportV1>(
     () => durable.collections === null || workflowSubjectOf === undefined || presentationOf === undefined
       ? createActionTriageFixPullRequestsTransport(hostApi)
       : createDirectTriageFixPullRequestsTransport(durable.collections, { workflowSubjectOf, presentationOf },
-          () => Date.now(), hostApi, (linked) => linked
-            ? text('plugins.triage.surface.detail.fixPr.link', 'Link fix PR')
-            : text('plugins.triage.surface.detail.fixPr.unlink', 'Unlink')),
-    [durable.collections, hostApi, presentationOf, text, workflowSubjectOf],
+          () => Date.now(), hostApi),
+    [durable.collections, hostApi, presentationOf, workflowSubjectOf],
   );
   const [settled, setSettled] = useState<Settled>({ kind: 'reading' });
   const [busy, setBusy] = useState(false);
@@ -167,6 +162,7 @@ export function useTriageFixPullRequests(
     setSettled((previous) => (
       previous.kind === 'read' && sameTriageEntryRefV1(previous.entryRef, entryRef) ? previous : { kind: 'reading' }
     ));
+    if (readiness.pending) return () => controller.abort();
     void (async () => {
       let next: Settled;
       try {
@@ -178,7 +174,7 @@ export function useTriageFixPullRequests(
       setSettled(next);
     })();
     return () => controller.abort();
-  }, [entryKey, readGeneration, transport]);
+  }, [entryKey, readGeneration, transport, readiness.pending, readiness.revision]);
 
   const write = useCallback((intent: TriageSetFixPullRequestInputV1): void => {
     setBusy(true);
@@ -201,7 +197,7 @@ export function useTriageFixPullRequests(
   return useMemo(() => {
     if (entryRef === undefined || display === undefined
       || workflowSubjectOf === undefined || presentationOf === undefined) return null;
-    if (settled.kind === 'unreachable') return { kind: 'unreachable', retry };
+    if (settled.kind === 'unreachable') return readiness.pending ? { kind: 'reading' } : { kind: 'unreachable', retry };
     if (settled.kind !== 'read' || !sameTriageEntryRefV1(settled.entryRef, entryRef)) return { kind: 'reading' };
     const resolved = settled.resolved;
     return {
@@ -221,5 +217,5 @@ export function useTriageFixPullRequests(
       }),
       unlink: (fixPullRequest) => write({ v: 1, linked: false, entryRef, displayAtMark: display, fixPullRequest }),
     };
-  }, [busy, display, entryRef, presentationOf, refusal, retry, settled, workflowSubjectOf, write]);
+  }, [busy, display, entryRef, presentationOf, refusal, retry, settled, workflowSubjectOf, write, readiness.pending]);
 }

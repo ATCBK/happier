@@ -1,11 +1,6 @@
-import { join, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 
-import {
-  readCliNodeWorkspaceRuntimeIdentityAsync,
-} from '@happier-dev/cli-common/componentArtifacts/copyCliNodeRuntimePayload';
-
-import { ensureCliBuilt, syncSharedDepsForSourceDev } from '../proc/pm.mjs';
+import { syncSharedDepsForSourceDev } from '../proc/pm.mjs';
 import { getAccountCountForServerComponent, prepareDaemonAuthSeedIfNeeded } from '../stack/startup.mjs';
 import { startLocalDaemonWithAuth } from '../../daemon.mjs';
 import {
@@ -15,64 +10,59 @@ import {
 import {
   isDaemonControlRestartUnavailableError,
   pingDaemon,
-  restartDaemonViaControlServer,
 } from '../stack/daemonControlClient.mjs';
 import {
   normalizeDaemonPid,
   normalizeDaemonPidList,
-  syncStackRuntimeDaemonPidFromDaemonState,
 } from '../stack/runtime_daemon_state.mjs';
 import { isPidAlive, readStackRuntimeStateFile } from '../stack/runtime_state.mjs';
-import {
-  readHappyCliRuntimeInputFreshness,
-  resolveHappyCliRuntimeInputGroups,
-} from '../proc/cli_runtime_inputs.mjs';
-import {
-  probeCliDistRuntimeImport,
-  readCliDistBuildManifest,
-} from '../cli/cliDistIntegrity.mjs';
-import { WORKSPACE_BUNDLE_LOCK_TIMEOUT_ERROR_CODE } from '../proc/cliDistBuildLock.mjs';
+import { resolveHappyCliRuntimeInputGroups } from '../proc/cli_runtime_inputs.mjs';
 
-const CLI_MIXED_INPUT_REJECTION_DIAGNOSTICS = [
-  '[cli-build-inputs] runtime inputs changed while package prebuild was preparing dependencies; ' +
-    'refusing to build a mixed CLI closure',
-  '[cli-build-inputs] runtime inputs changed while this build was running; ' +
-    'refusing to finalize a mixed CLI closure',
-];
-const CLI_MIXED_INPUT_RETRY_MS = 250;
-const CLI_WORKSPACE_RUNTIME_ADVANCED_ERROR_CODE = 'ECLIWORKSPACERUNTIMEADVANCED';
-const DAEMON_CONTROL_PUBLICATION_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000];
 const inFlightDevDaemonStarts = new Map();
 
-function sleepMs(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function annotateTransientCliBuildRejection(error) {
-  if (!(error instanceof Error) || error.code !== 'EEXIT') return;
-  const diagnosticLines = error.message.split(/\r?\n/).map((line) => line.trim());
-  if (!CLI_MIXED_INPUT_REJECTION_DIAGNOSTICS.some((diagnostic) => diagnosticLines.includes(diagnostic))) return;
-  error.reloadRetryAfterMs = CLI_MIXED_INPUT_RETRY_MS;
+/**
+ * The dev daemon runs the same moving-source bundle the Stack source runtime uses
+ * (`buildSourceRuntimeBundle`, esbuild, no whole-package typecheck, no CLI dist
+ * publication). It is selected and recorded through the existing
+ * `sourceRuntimeLaunchUpdate` seam of `startLocalDaemonWithAuth`.
+ *
+ * `reuseSelected: true` reads only the retained generation and never compiles or
+ * waits on a build, dependency or admission lock, so startup and recovery cannot be
+ * held up by other sessions; with no retained generation it throws and the reload
+ * coordinator's first build supplies one. The default builds current source.
+ */
+export async function prepareDevDaemonSourceRuntime({
+  sourceRuntimeOptions,
+  env = process.env,
+  reuseSelected = false,
+}, {
+  buildSourceRuntimeBundleImpl = async (options) => (
+    await import('../../build/build_source_runtime.mjs')
+  ).buildSourceRuntimeBundle(options),
+  logger = console,
+} = {}) {
+  logger.log(`[local] daemon: preparing ${reuseSelected ? 'retained' : 'current'} source generation`);
+  const built = await buildSourceRuntimeBundleImpl({
+    ...sourceRuntimeOptions,
+    component: 'daemon',
+    env,
+    devStartup: true,
+    reuseSelected,
+    waitForSourceChanges: false,
+  });
+  logger.log(`[local] daemon: ${built.lastGreen ? 'retained' : 'captured'} source generation ${built.identity} ready`);
+  return {
+    launch: { entrypoint: built.entrypoint, cliDir: built.cliDir, env: built.env ?? {} },
+    identity: built.identity,
+  };
 }
 
 export function createHappyCliReloadDescriptors({ cliDir, existsSyncImpl = existsSync } = {}) {
-  const sourceDescriptors = resolveHappyCliRuntimeInputGroups({ cliDir, existsSyncImpl }).map((group) => ({
+  return resolveHappyCliRuntimeInputGroups({ cliDir, existsSyncImpl }).map((group) => ({
     ...group,
     readSignature: () => readHappyCliWatchChangeSignature(group.paths),
     readSignatureAsync: (_descriptor, options) => readHappyCliWatchChangeSignatureAsync(group.paths, options),
   }));
-  const publicationPaths = [join(cliDir, 'dist', '.build-manifest.json')];
-  return [
-    ...sourceDescriptors,
-    {
-      id: 'daemon:cli-publication',
-      target: 'daemon',
-      invalidatesGeneration: false,
-      paths: publicationPaths,
-      readSignature: () => readHappyCliWatchChangeSignature(publicationPaths),
-      readSignatureAsync: (_descriptor, options) => readHappyCliWatchChangeSignatureAsync(publicationPaths, options),
-    },
-  ];
 }
 
 export function createHappyCliWorkspacePreparationExecutor({
@@ -144,66 +134,6 @@ async function hasLiveRuntimeDaemonPid({
   return collectRuntimeDaemonPids(runtimeState).some((pid) => isPidAliveImpl(pid));
 }
 
-function normalizeDistClosureFingerprint(value) {
-  const fingerprint = String(value ?? '').trim().toLowerCase();
-  return /^[a-f0-9]{16}$/.test(fingerprint) ? fingerprint : null;
-}
-
-function normalizeWorkspaceRuntimeIdentity(value) {
-  const identity = String(value ?? '').trim().toLowerCase();
-  return /^[a-f0-9]{64}$/.test(identity) ? identity : null;
-}
-
-async function isCandidateDistAlreadyActive({
-  ping,
-  successorDistClosureFingerprint,
-  successorWorkspaceRuntimeIdentity,
-  runtimeStatePath,
-}, {
-  readCliDistBuildManifestImpl = readCliDistBuildManifest,
-  readStackRuntimeStateFileImpl = readStackRuntimeStateFile,
-} = {}) {
-  const candidateFingerprint = normalizeDistClosureFingerprint(successorDistClosureFingerprint);
-  const candidateWorkspaceRuntimeIdentity = normalizeWorkspaceRuntimeIdentity(
-    successorWorkspaceRuntimeIdentity,
-  );
-  const activeFingerprint = normalizeDistClosureFingerprint(ping?.distClosureFingerprint);
-  const activePid = normalizeDaemonPid(ping?.pid);
-  const activeRuntimeEntrypoint = String(
-    ping?.state?.startedWithRuntimeEntrypoint ?? '',
-  ).trim();
-  // The ping fingerprint is launch admission metadata. Verify the immutable entrypoint's own
-  // manifest as well so a failed replacement cannot make its incumbent look current.
-  const activeRuntime = activeRuntimeEntrypoint
-    ? readCliDistBuildManifestImpl(activeRuntimeEntrypoint)
-    : null;
-  const statePath = String(runtimeStatePath ?? '').trim();
-  if (
-    ping?.ok !== true
-    || !candidateFingerprint
-    || !candidateWorkspaceRuntimeIdentity
-    || activeFingerprint !== candidateFingerprint
-    || !activePid
-    || activeRuntime?.ok !== true
-    || normalizeDistClosureFingerprint(activeRuntime.fingerprint) !== candidateFingerprint
-    || normalizeWorkspaceRuntimeIdentity(activeRuntime.manifest?.workspaceRuntimeIdentity)
-      !== candidateWorkspaceRuntimeIdentity
-    || !statePath
-  ) {
-    return false;
-  }
-
-  let runtimeState = null;
-  try {
-    runtimeState = await readStackRuntimeStateFileImpl(statePath);
-  } catch {
-    return false;
-  }
-  return normalizeDaemonPid(runtimeState?.processes?.daemonPid) === activePid
-    && normalizeDistClosureFingerprint(runtimeState?.daemon?.distClosureFingerprint)
-      === candidateFingerprint;
-}
-
 async function shouldColdStartAfterDaemonControlMiss({
   ping,
   runtimeStatePath,
@@ -259,6 +189,7 @@ export async function prepareDaemonAuthSeed({
   });
 }
 
+
 export async function startDevDaemon({
   startDaemon,
   cliBin,
@@ -267,14 +198,14 @@ export async function startDevDaemon({
   publicServerUrl,
   runtimeStatePath = null,
   restart,
-  startLastGreen = false,
-  keepServerRunningOnFailure = false,
   preserveExistingRunning = false,
   isShuttingDown,
   env = process.env,
   stackName = null,
   cliIdentity = 'default',
+  sourceRuntimeOptions,
 }, {
+  prepareDevDaemonSourceRuntimeImpl = prepareDevDaemonSourceRuntime,
   startLocalDaemonWithAuthImpl = startLocalDaemonWithAuth,
   logger = console,
 } = {}) {
@@ -285,20 +216,30 @@ export async function startDevDaemon({
     for (;;) {
       let active = inFlightDevDaemonStarts.get(scope);
       if (!active) {
-        const start = Promise.resolve().then(() => startLocalDaemonWithAuthImpl({
-          cliBin,
-          cliHomeDir,
-          internalServerUrl,
-          publicServerUrl,
-          runtimeStatePath,
-          isShuttingDown,
-          forceRestart: Boolean(restart),
-          admitPriorDistImmediately: Boolean(startLastGreen),
-          preserveExistingRunning: Boolean(preserveExistingRunning),
-          env,
-          stackName,
-          cliIdentity,
-        })).finally(() => {
+        const start = Promise.resolve().then(async () => {
+          // Startup, recovery and restart boot the retained source generation without
+          // building; the reload coordinator's initial refresh owns every build and
+          // moves the daemon to current source.
+          const sourceRuntimeLaunchUpdate = await prepareDevDaemonSourceRuntimeImpl({
+            sourceRuntimeOptions,
+            env,
+            reuseSelected: true,
+          });
+          return await startLocalDaemonWithAuthImpl({
+            cliBin,
+            cliHomeDir,
+            internalServerUrl,
+            publicServerUrl,
+            runtimeStatePath,
+            isShuttingDown,
+            forceRestart: Boolean(restart),
+            preserveExistingRunning: Boolean(preserveExistingRunning),
+            env,
+            stackName,
+            cliIdentity,
+            sourceRuntimeLaunchUpdate,
+          });
+        }).finally(() => {
           if (inFlightDevDaemonStarts.get(scope)?.start === start) inFlightDevDaemonStarts.delete(scope);
         });
         active = { start, forceRestart: Boolean(restart) };
@@ -313,33 +254,16 @@ export async function startDevDaemon({
     }
     return { started: true };
   } catch (error) {
-    if (!startLastGreen && !keepServerRunningOnFailure) throw error;
-    if (keepServerRunningOnFailure && !startLastGreen) {
-      logger.warn(
-        '[local] daemon startup failed; keeping the TUI server running so daemon recovery can be retried. ' +
-          `(${error instanceof Error ? error.message : String(error)})`,
-      );
-      return {
-        started: false,
-        reason: 'daemon-start-failed',
-      };
-    }
     logger.warn(
-      '[local] daemon: the last-green CLI publication could not start; ' +
-        'continuing startup so the watch coordinator can repair it with a background rebuild. ' +
+      '[local] daemon startup failed; keeping the stack running so daemon recovery or the next source reload can retry. ' +
         `(${error instanceof Error ? error.message : String(error)})`,
     );
-    return {
-      started: false,
-      reason: 'prior-dist-start-failed',
-    };
+    return { started: false, reason: 'daemon-start-failed' };
   }
 }
 
 export function createHappyCliReloadExecutor({
   startDaemon,
-  buildCli,
-  cliDir,
   cliBin,
   cliHomeDir,
   internalServerUrl,
@@ -349,330 +273,78 @@ export function createHappyCliReloadExecutor({
   env = process.env,
   stackName = null,
   cliIdentity = 'default',
+  sourceRuntimeOptions,
 }, {
-  ensureCliBuiltImpl = ensureCliBuilt,
+  prepareDevDaemonSourceRuntimeImpl = prepareDevDaemonSourceRuntime,
   startLocalDaemonWithAuthImpl = startLocalDaemonWithAuth,
   pingDaemonImpl = pingDaemon,
-  restartDaemonViaControlServerImpl = restartDaemonViaControlServer,
-  syncStackRuntimeDaemonPidFromDaemonStateImpl = syncStackRuntimeDaemonPidFromDaemonState,
   readStackRuntimeStateFileImpl = readStackRuntimeStateFile,
   isPidAliveImpl = isPidAlive,
-  existsSyncImpl = existsSync,
-  probeCliDistRuntimeImportImpl = probeCliDistRuntimeImport,
-  readCliRuntimeInputFreshnessImpl = readHappyCliRuntimeInputFreshness,
-  readCliWorkspaceRuntimeIdentityImpl = readCliNodeWorkspaceRuntimeIdentityAsync,
-  sleepImpl = sleepMs,
   logger = console,
 } = {}) {
-  let successorDistClosureFingerprint = null;
-  let successorPublicationSuperseded = false;
-  let successorActivationMayOutliveGeneration = false;
-  let successorWorkspaceRuntimeIdentity = null;
-  let activeDistClosureFingerprint = null;
-  const assertSuccessorWorkspaceRuntimeStillCurrent = async () => {
-    if (!successorWorkspaceRuntimeIdentity) return;
-    let currentWorkspaceRuntimeIdentity;
+  let successor = null;
+  const readLoadedIdentity = async () => {
+    if (!runtimeStatePath) return null;
     try {
-      currentWorkspaceRuntimeIdentity = await readCliWorkspaceRuntimeIdentityImpl({
-        repoRoot: resolve(cliDir, '..', '..'),
-      });
-    } catch (cause) {
-      const error = new Error(
-        '[local] watch: CLI workspace runtime could not be verified before daemon activation; retrying the shared build.',
-        { cause },
-      );
-      error.code = CLI_WORKSPACE_RUNTIME_ADVANCED_ERROR_CODE;
-      error.reloadRetryAfterMs = CLI_MIXED_INPUT_RETRY_MS;
-      throw error;
+      return (await readStackRuntimeStateFileImpl(runtimeStatePath))?.sourceRuntimeIdentities?.daemon?.loaded ?? null;
+    } catch {
+      return null;
     }
-    if (currentWorkspaceRuntimeIdentity.fingerprint === successorWorkspaceRuntimeIdentity) return;
-    const error = new Error(
-      '[local] watch: CLI workspace runtime publication changed before daemon activation; retrying the shared build.',
-    );
-    error.code = CLI_WORKSPACE_RUNTIME_ADVANCED_ERROR_CODE;
-    error.reloadRetryAfterMs = CLI_MIXED_INPUT_RETRY_MS;
-    throw error;
   };
+  const launchSuccessor = (overrides) => startLocalDaemonWithAuthImpl({
+    cliBin,
+    cliHomeDir,
+    internalServerUrl,
+    publicServerUrl,
+    runtimeStatePath,
+    isShuttingDown,
+    env,
+    stackName,
+    cliIdentity,
+    sourceRuntimeLaunchUpdate: successor,
+    ...overrides,
+  });
   return {
     target: 'daemon',
-    async build(context = {}) {
+    async build() {
       if (!startDaemon) return { skipped: true, reason: 'daemon-disabled' };
-      successorDistClosureFingerprint = null;
-      successorPublicationSuperseded = false;
-      successorActivationMayOutliveGeneration = false;
-      successorWorkspaceRuntimeIdentity = null;
-      const publicationChanged = context.changedDescriptors?.includes('daemon:cli-publication') === true;
-      if (
-        publicationChanged
-        && existsSyncImpl(join(cliDir, 'dist', 'index.mjs'))
-        && existsSyncImpl(join(cliDir, 'dist', '.build-manifest.json'))
-      ) {
-        const distEntrypoint = join(cliDir, 'dist', 'index.mjs');
-        const distClosure = readCliDistBuildManifest(distEntrypoint);
-        if (distClosure.ok && distClosure.fingerprint && distClosure.fingerprint !== activeDistClosureFingerprint) {
-          await probeCliDistRuntimeImportImpl(distEntrypoint, { cwd: cliDir, env });
-          const currentInputs = await readCliRuntimeInputFreshnessImpl(cliDir);
-          const publishedInputFingerprint = String(
-            distClosure.manifest?.inputFingerprint ?? '',
-          ).trim().toLowerCase();
-          const currentInputFingerprint = String(
-            currentInputs?.fingerprint ?? '',
-          ).trim().toLowerCase();
-          successorDistClosureFingerprint = distClosure.fingerprint;
-          successorWorkspaceRuntimeIdentity = String(
-            distClosure.manifest?.workspaceRuntimeIdentity ?? '',
-          ).trim().toLowerCase() || null;
-          successorActivationMayOutliveGeneration = true;
-          successorPublicationSuperseded = (
-            !publishedInputFingerprint
-            || !currentInputFingerprint
-            || publishedInputFingerprint !== currentInputFingerprint
-          );
-          try {
-            await assertSuccessorWorkspaceRuntimeStillCurrent();
-          } catch (error) {
-            if (error?.code !== CLI_WORKSPACE_RUNTIME_ADVANCED_ERROR_CODE) throw error;
-            successorDistClosureFingerprint = null;
-            successorWorkspaceRuntimeIdentity = null;
-            successorActivationMayOutliveGeneration = false;
-            successorPublicationSuperseded = false;
-            logger.warn(
-              '[local] watch: external happier-cli publication has no matching workspace runtime; ' +
-                'skipping activation and requesting the canonical shared build.',
-            );
-            return {
-              skipped: true,
-              reason: 'cli-publication-workspace-runtime-unavailable',
-              requestFollowup: true,
-            };
-          }
-          logger.log('[local] watch: adopting externally published happier-cli dist before any trailing rebuild.');
-          return {
-            ok: true,
-            allowSupersededActivation: true,
-            ...(successorPublicationSuperseded ? { requestFollowup: true } : {}),
-          };
-        }
-        if (distClosure.ok && distClosure.fingerprint && context.changedDescriptors.length === 1) {
-          return { skipped: true, reason: 'cli-publication-already-active' };
-        }
-      }
-      // A manifest notification can land between the two directory renames of
-      // another publisher. The canonical build lock waits for its publication,
-      // then validates or repairs the resulting dist before activation.
-      logger.log('[local] watch: happier-cli changed → rebuilding + restarting daemon...');
-      let buildResult;
-      for (;;) {
-        try {
-          buildResult = await ensureCliBuiltImpl(cliDir, { buildCli, env, quiet: true });
-          break;
-        } catch (error) {
-          annotateTransientCliBuildRejection(error);
-          if (
-            error?.code !== WORKSPACE_BUNDLE_LOCK_TIMEOUT_ERROR_CODE
-            || typeof context.revalidateGeneration !== 'function'
-          ) {
-            throw error;
-          }
-          if (!await context.revalidateGeneration()) {
-            return { skipped: true, reason: 'stale-generation' };
-          }
-          logger.warn(
-            '[local] watch: the shared happier-cli build is still active; ' +
-              'continuing to wait so this Stack can adopt its publication.',
-          );
-        }
-      }
-
-      const publishedSuccessfulBuild = buildResult?.built === true;
-      const adoptedConcurrentPublication = (
-        buildResult?.reason === 'concurrent_build_already_completed'
-        || buildResult?.reason === 'concurrent_build_superseded'
-      );
-      if (
-        buildResult?.current !== true
-        && !publishedSuccessfulBuild
-        && !adoptedConcurrentPublication
-      ) {
-        logger.warn(
-          `[local] watch: happier-cli rebuild is not current (${buildResult?.reason ?? 'unknown'}); ` +
-            'keeping the current daemon running.'
-        );
-        return { skipped: true, reason: `cli-build-${buildResult?.reason ?? 'unknown'}` };
-      }
-
-      const distEntrypoint = join(cliDir, 'dist', 'index.mjs');
-      if (!existsSyncImpl(distEntrypoint)) {
-        throw new Error(
-          `[local] watch: happier-cli build did not produce ${distEntrypoint}; refusing to restart daemon to avoid downtime.`
-        );
-      }
-      const manifestPath = join(cliDir, 'dist', '.build-manifest.json');
-      if (!existsSyncImpl(manifestPath)) {
-        throw new Error(
-          `[local] watch: happier-cli build manifest is missing (${manifestPath}); refusing to restart daemon to avoid downtime.`
-        );
-      }
-      const distClosure = readCliDistBuildManifest(distEntrypoint);
-      if (!distClosure.ok || !distClosure.fingerprint) {
-        throw new Error(
-          `[local] watch: happier-cli build manifest is invalid (${distClosure.reason}); ` +
-            'refusing to restart daemon to avoid runtime fingerprint drift.'
-        );
-      }
-      successorDistClosureFingerprint = distClosure.fingerprint;
-      successorWorkspaceRuntimeIdentity = String(
-        distClosure.manifest?.workspaceRuntimeIdentity ?? '',
-      ).trim().toLowerCase() || null;
-      successorActivationMayOutliveGeneration = (
-        publishedSuccessfulBuild
-        || adoptedConcurrentPublication
-      );
-      if (buildResult?.current !== true) {
-        successorPublicationSuperseded = true;
-        logger.warn(
-          '[local] watch: happier-cli published or adopted a runnable build that newer edits already superseded; ' +
-            'activating it now while the reload coordinator builds the trailing latest generation.'
-        );
-        return { ok: true, allowSupersededActivation: true };
-      }
-      return {
-        ok: true,
-        ...(successorActivationMayOutliveGeneration
-          ? { allowSupersededActivation: true }
-          : {}),
-      };
+      successor = null;
+      logger.log('[local] watch: happier-cli changed → preparing the daemon source generation...');
+      successor = await prepareDevDaemonSourceRuntimeImpl({ sourceRuntimeOptions, env });
+      // With no daemon generation loaded yet, a source generation newer edits already
+      // superseded is still the best runnable daemon while the trailing build proceeds.
+      return (await readLoadedIdentity())
+        ? { ok: true }
+        : { ok: true, allowSupersededActivation: true };
     },
-    async restart(context = {}) {
+    async restart() {
       if (!startDaemon || isShuttingDown?.()) return { skipped: true, reason: 'daemon-disabled' };
-      const generationIsCurrent = async () =>
-        typeof context.revalidateGeneration !== 'function'
-        || context.revalidateGeneration();
-      const coldStart = async () => {
-        if (!successorActivationMayOutliveGeneration && !await generationIsCurrent()) {
-          return { skipped: true, reason: 'stale-generation' };
-        }
-        if (successorPublicationSuperseded) {
-          logger.warn(
-            '[local] watch: daemon is absent; starting the runnable superseded happier-cli publication in degraded mode ' +
-              'while the existing reload coordinator builds the trailing latest generation.'
-          );
-        }
-        await assertSuccessorWorkspaceRuntimeStillCurrent();
-        await startLocalDaemonWithAuthImpl({
-          cliBin,
-          cliHomeDir,
-          internalServerUrl,
-          publicServerUrl,
-          runtimeStatePath,
-          isShuttingDown,
-          forceRestart: false,
-          preserveExistingRunning: true,
-          env,
-          stackName,
-          cliIdentity,
-          admittedDistClosureFingerprint: successorDistClosureFingerprint,
-        });
-        activeDistClosureFingerprint = successorDistClosureFingerprint;
-        return {
-          restarted: true,
-          mode: 'cold-start',
-          ...(successorPublicationSuperseded ? { degraded: true } : {}),
-        };
-      };
+      if (!successor) return { skipped: true, reason: 'no-prepared-source' };
 
-      let ping = await pingDaemonImpl({
+      const ping = await pingDaemonImpl({
         cliHomeDir,
         serverUrl: internalServerUrl,
         internalServerUrl,
         env,
         stackName,
       });
-      if (
-        ping?.ok !== true
-        && successorDistClosureFingerprint
-        && await hasLiveRuntimeDaemonPid(
-          { runtimeStatePath },
-          { readStackRuntimeStateFileImpl, isPidAliveImpl },
-        )
-      ) {
-        for (const delayMs of DAEMON_CONTROL_PUBLICATION_RETRY_DELAYS_MS) {
-          if (isShuttingDown?.()) return { skipped: true, reason: 'daemon-disabled' };
-          await sleepImpl(delayMs);
-          ping = await pingDaemonImpl({
-            cliHomeDir,
-            serverUrl: internalServerUrl,
-            internalServerUrl,
-            env,
-            stackName,
-          });
-          if (ping?.ok === true) break;
-        }
-      }
       if (ping?.ok === true) {
-        if (await isCandidateDistAlreadyActive(
-          {
-            ping,
-            successorDistClosureFingerprint,
-            successorWorkspaceRuntimeIdentity,
-            runtimeStatePath,
-          },
-          { readStackRuntimeStateFileImpl },
-        )) {
-          activeDistClosureFingerprint = successorDistClosureFingerprint;
-          logger.log(
-            '[local] watch: the healthy daemon already runs the current happier-cli dist; skipping restart.',
-          );
-          return { skipped: true, reason: 'daemon-dist-already-active' };
+        if (await readLoadedIdentity() === successor.identity) {
+          logger.log('[local] watch: the healthy daemon already runs the current source generation; skipping restart.');
+          return { skipped: true, reason: 'daemon-source-already-active' };
         }
-        if (!successorActivationMayOutliveGeneration && !await generationIsCurrent()) {
-          return { skipped: true, reason: 'stale-generation' };
-        }
-        await assertSuccessorWorkspaceRuntimeStillCurrent();
         try {
-          const replacement = await restartDaemonViaControlServerImpl({
-            cliHomeDir,
-            internalServerUrl,
-            env,
-            stackName,
-            successorDistClosureFingerprint,
+          await launchSuccessor({
+            forceRestart: true,
+            // Session runners survive a source reload. The control restart needs the
+            // Stack runtime state to select and attest the successor launch.
+            preserveSessionsOnRestart: Boolean(runtimeStatePath),
           });
-          if (replacement?.status !== 'restarting' && replacement?.status !== 'already_restarting') {
-            throw new Error('[local] watch: daemon control restart did not return an owned replacement');
-          }
-          const successorPid = normalizeDaemonPid(replacement.pid);
-          if (!successorPid) {
-            throw new Error('[local] watch: daemon control restart did not confirm a successor pid');
-          }
-          if (runtimeStatePath) {
-            const successorObservation = {
-              status: 'running',
-              pid: successorPid,
-              ...(replacement.processInstanceFingerprint
-                ? { processInstanceFingerprint: replacement.processInstanceFingerprint }
-                : {}),
-              distClosureFingerprint: successorDistClosureFingerprint,
-            };
-            await syncStackRuntimeDaemonPidFromDaemonStateImpl(
-              {
-                runtimeStatePath,
-                cliHomeDir,
-                internalServerUrl,
-                runtimeDaemonPid: successorPid,
-                authenticatedProcessInstanceFingerprint:
-                  replacement.processInstanceFingerprint ?? null,
-                env,
-                daemonDistFingerprint: successorDistClosureFingerprint,
-              },
-              { checkDaemonStateImpl: async () => successorObservation },
-            );
-          }
         } catch (error) {
           if (!isDaemonControlRestartUnavailableError(error)) throw error;
           logger.warn('[local] watch: daemon control /restart is unavailable; keeping the current daemon running.');
           return { skipped: true, reason: 'daemon-control-restart-unavailable' };
         }
-        activeDistClosureFingerprint = successorDistClosureFingerprint;
         return { restarted: true, mode: 'overlap' };
       }
 
@@ -686,7 +358,8 @@ export function createHappyCliReloadExecutor({
         );
         return { skipped: true, reason: `daemon-control-unavailable:${ping?.reason ?? 'unknown'}` };
       }
-      return await coldStart();
+      await launchSuccessor({ forceRestart: false, preserveExistingRunning: true });
+      return { restarted: true, mode: 'cold-start' };
     },
   };
 }

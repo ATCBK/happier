@@ -192,7 +192,7 @@ describe('sessionPaneUrlState', () => {
             applySessionPaneUrlState(pane as any, parsed);
             expect(pane.openDetailsTab).toHaveBeenCalledWith(
                 expect.objectContaining({ key: 'scmPullRequest', kind: 'scmPullRequest', resource: { kind: 'scmPullRequest' } }),
-                { intent: 'pinned' },
+                { intent: 'pinned', present: false },
             );
         });
 
@@ -253,7 +253,7 @@ describe('sessionPaneUrlState', () => {
                         focusTarget: { kind: 'item', itemId: 'item:with:colons' },
                     },
                 }),
-                { intent: 'pinned' },
+                { intent: 'pinned', present: false },
             );
         });
         it('opens right + details panes from url state', () => {
@@ -268,15 +268,16 @@ describe('sessionPaneUrlState', () => {
                 details: { kind: 'file', path: 'apps/ui/sources/index.ts' },
             });
 
-            expect(pane.openRight).toHaveBeenCalledWith({ tabId: 'files' });
-            expect(pane.setRightTab).toHaveBeenCalledWith('files');
+            expect(pane.openRight).toHaveBeenCalledWith({ tabId: 'files', present: false });
+
             expect(pane.openDetailsTab).toHaveBeenCalledWith(
                 expect.objectContaining({
                     key: 'file:apps/ui/sources/index.ts',
                     kind: 'file',
                     title: 'index.ts',
                     resource: { kind: 'file', path: 'apps/ui/sources/index.ts' },
-                })
+                }),
+                { present: false },
             );
         });
 
@@ -293,8 +294,8 @@ describe('sessionPaneUrlState', () => {
                 rightTabId: 'terminal',
             });
 
-            expect(pane.openRight).toHaveBeenCalledWith({ tabId: 'terminal' });
-            expect(pane.setRightTab).toHaveBeenCalledWith('terminal');
+            expect(pane.openRight).toHaveBeenCalledWith({ tabId: 'terminal', present: false });
+
             expect(pane.openBottom).toHaveBeenCalledTimes(0);
             expect(pane.setBottomTab).toHaveBeenCalledTimes(0);
             expect(pane.openDetailsTab).toHaveBeenCalledTimes(0);
@@ -344,7 +345,7 @@ describe('sessionPaneUrlState', () => {
                         terminalInstanceId: 'embedded',
                     }),
                 }),
-                { intent: 'pinned' },
+                { intent: 'pinned', present: false },
             );
         });
 
@@ -370,7 +371,7 @@ describe('sessionPaneUrlState', () => {
                         terminalInstanceId: 'term-7',
                     }),
                 }),
-                { intent: 'pinned' },
+                { intent: 'pinned', present: false },
             );
         });
 
@@ -393,7 +394,7 @@ describe('sessionPaneUrlState', () => {
                     kind: 'scmReview',
                     resource: { kind: 'scmReview', scope: 'working' },
                 }),
-                { intent: 'pinned' },
+                { intent: 'pinned', present: false },
             );
         });
 
@@ -416,7 +417,7 @@ describe('sessionPaneUrlState', () => {
                     kind: 'scmStash',
                     resource: { kind: 'scmStash' },
                 }),
-                { intent: 'pinned' },
+                { intent: 'pinned', present: false },
             );
         });
 
@@ -443,7 +444,7 @@ describe('sessionPaneUrlState', () => {
                         discussionId: 'discussion:1',
                     },
                 },
-            }));
+            }), { present: false });
         });
 
         it('ignores unsafe file paths in url state', () => {
@@ -458,8 +459,8 @@ describe('sessionPaneUrlState', () => {
                 details: { kind: 'file', path: '/etc/passwd' },
             });
 
-            expect(pane.openRight).toHaveBeenCalledWith({ tabId: 'files' });
-            expect(pane.setRightTab).toHaveBeenCalledWith('files');
+            expect(pane.openRight).toHaveBeenCalledWith({ tabId: 'files', present: false });
+
             expect(pane.openDetailsTab).toHaveBeenCalledTimes(0);
         });
     });
@@ -554,6 +555,17 @@ describe('sessionPaneUrlState', () => {
     });
 
     describe('deriveSessionPaneUrlStateFromScopeState', () => {
+        it('uses the Details route classification for a legacy commit resource', () => {
+            const tab = { key: 'commit:0338a0f', kind: 'commit', resource: { commitHash: '0338a0f subject' } };
+            const routeState = parseSessionPaneUrlState(buildActiveDetailsRouteParams([tab], tab.key));
+            expect(routeState).toEqual({ details: { kind: 'commit', sha: '0338a0f' } });
+            expect(deriveSessionPaneUrlStateFromScopeState({
+                right: { isOpen: false, activeTabId: null },
+                bottom: { isOpen: false, activeTabId: null },
+                details: { isOpen: true, tabs: [tab], activeTabKey: tab.key },
+            })).toEqual(routeState);
+        });
+
         it('derives an active file tab', () => {
             expect(
                 deriveSessionPaneUrlStateFromScopeState({
@@ -776,8 +788,8 @@ describe('sessionPaneUrlState', () => {
 
             reconcileSessionPaneScopeFromUrlState(pane as any, { rightTabId: 'files' });
 
-            expect(pane.openRight).toHaveBeenCalledWith({ tabId: 'files' });
-            expect(pane.setRightTab).toHaveBeenCalledWith('files');
+            expect(pane.openRight).toHaveBeenCalledWith({ tabId: 'files', present: false });
+
             expect(pane.closeBottom).toHaveBeenCalledTimes(1);
             expect(pane.closeDetails).toHaveBeenCalledTimes(1);
             expect(pane.openDetailsTab).toHaveBeenCalledTimes(0);
@@ -803,7 +815,8 @@ describe('sessionPaneUrlState', () => {
                 expect.objectContaining({
                     key: 'commit:0338a0f',
                     kind: 'commit',
-                })
+                }),
+                { present: false },
             );
         });
 

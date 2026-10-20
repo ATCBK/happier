@@ -1,5 +1,6 @@
 import { mkdtemp, rm, readFile, chmod, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import axios from 'axios';
 import { dirname, join } from 'node:path';
 import { resolveAgentCliManagedCommandPathForRuntime } from '@happier-dev/cli-common/agents';
 import { AcpCatalogRecordV1Schema, type AcpCatalogRecordV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
@@ -7,10 +8,9 @@ import { createAgentInstallJobOwner } from '@/capabilities/installJobs/agentInst
 import { registerMachineAgentInstallJobRpcHandlers } from '@/api/machine/rpcHandlers.agentInstallJobs';
 import { DaemonAgentInstallStartResponseSchema } from '@happier-dev/protocol/daemon/agent-install-jobs';
 import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1 } from '@happier-dev/protocol/agents/executionTargetV1';
-import type { RpcHandler } from '@/api/rpc/types';
 import { getAcpNpmRuntimeSpec } from '@/agent/acp/catalog/configured/resolveAcpLaunch';
 import { resolveAccountConfiguredAcpLaunch } from '@/agent/runtime/registry/engineRegistry/accountConfiguredAcp';
-import fastify, { type FastifyInstance } from 'fastify';
+import fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import tweetnacl from 'tweetnacl';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { verifyMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
@@ -22,32 +22,50 @@ import { createContinueWithReplayLifecycleActionHandler } from '@/session/action
 import { createMachineSessionStopLifecycleActionExecutor } from '@/session/actions/lifecycle/createStopSessionLifecycleActionExecutor';
 import { loadSessionHandoffRemoteMetadata, registerMachineSessionHandoffRpcHandlers } from '@/api/machine/sessionHandoff/handlers';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import type { RpcHandler } from '@/api/rpc/types';
 import { authorizeMachineRpcRequest } from '@/api/machine/machineRpcAuthorization';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { installAxiosFastifyAdapter } from '@/testkit/http/axiosAdapter';
 import { createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { getActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { createSavedSecretMaterializerFromSnapshotV1 } from '@/settings/secrets/savedSecretCatalog';
+import { formatSavedSecretCatalogReferenceV1 } from '@happier-dev/protocol/account/settings/savedSecretCatalogV1';
 import { configuration } from '@/configuration';
-import { normalizeServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
+import { normalizeServerHttpBaseUrl, publishServerHttpRuntimeOrigin, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { probeAlreadyRunningExistingSessionServiceability } from '@/daemon/startup/pendingQueueNudge';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import type { RpcActionExecutorContext } from '@/rpc/handlers/_actionDispatchAdapter';
-import { createActionExecutor, computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/protocol';
+import { createActionExecutor, computeExternalActionRequestEnvelopeDigestV1, SessionPendingEnqueueByMachineRequestV1Schema, type ExternalActionExecutionAuthorizationV1,
+  deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol';
+import { sealExternalActionRequestV2, openExternalActionResponseV2 } from '@happier-dev/protocol/actions';
+import { encryptSessionPayload, decryptSessionPayload } from '@/session/transport/encryption/sessionEncryptionContext';
 import { executeExternalAction } from '../externalActions/executeExternalAction';
 import { createDaemonExternalActionTargetResolver } from '../externalActions/daemonExternalActionTargetResolver';
 import { prepareRequesterAccountActionContext } from './requesterAccountActionProjection';
 import { createRequesterSessionRuntimeContext } from './createRequesterSessionRuntimeContext';
 import { ConnectedServiceRuntimeRegistry } from '../connectedServices/runtimeRegistry/registry';
-import { createDaemonQualifiedConnectedAccountAuthGroupSwitchCoordinator } from '../connectedServices/runtimeAuth/createDaemonQualifiedConnectedAccountAuthGroupSwitchCoordinator';
+import { createRequesterSessionControlRuntimeFixture } from '../testkit/requesterSessionControlRuntimeFixture';
+import type { TrackedSession } from '../types';
 import { createSessionLifecycleRpcActionExecutor } from '@/rpc/handlers/sessionLifecycle';
 import * as sessionLifecycleRpc from '@/rpc/handlers/sessionLifecycle';
 import { sealSessionRequesterHandoffPreflightBootstrapRpcRequestV1, sealExternalActionRequesterAccountContextV1 } from '@happier-dev/protocol/sessions/creation/sessionRequesterBootstrapV1';
 import { createForkSessionLifecycleActionHandler } from '@/session/actions/lifecycle/createForkSessionLifecycleActionHandler';
 import { getSessionHostBridge } from '@/agent/runtime/bridges/session/SessionHostBridge';
-import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createAdmittedPluginRuntimeFixture, createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { createMachineSessionSpawnRpcHandler } from '@/session/actions/sessionLifecycleActions';
+import { prepareDaemonConnectedServices } from '@/daemon/spawn/prepareDaemonConnectedServices';
+import { prepareDaemonSpawnChildEnvironment } from '@/daemon/spawn/prepareDaemonSpawnChildEnvironment';
+import { resolveSpawnBackendIdentity } from '@/daemon/spawn/resolveSpawnBackendIdentity';
+import { createProviderLaunchResourceScope } from '@/providers/lifecycle/resourceScope';
+import { createProviderRedactionLease } from '@/providers/spawn/redaction';
+import { ApiClient } from '@/api/api';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { buildScopedProcessEnv } from '@/utils/processEnv/buildScopedProcessEnv';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { SPAWN_SESSION_ERROR_CODES } from '@/session/shared/spawnSessionContract';
-import { decodeStoredCredentials, encodeStoredCredentials, type Credentials } from '@/persistence';
+import { bindRequesterSessionCredentialScope, decodeStoredCredentials, encodeStoredCredentials, sameStoredCredentials, type Credentials } from '@/persistence';
 import { createTrackedSessionHandoffCoordinator } from '@/daemon/actionOperations/createTrackedSessionHandoffCoordinator';
 import { createWorkspaceSyncHandoffAdapter } from '@/workspaces/sync/workspaceSyncHandoffAdapter';
 import { WorkspaceSyncController } from '@/workspaces/sync/workspaceSyncController';
@@ -64,26 +82,39 @@ import { resolveProcessOwnership } from '../processes/ownership/resolveProcessOw
 import { resolveProcessOwnerRequester } from '../processes/ownership/resolveProcessOwnerRequester';
 import { projectMachineProcesses } from '../processes/view/projectMachineProcesses';
 import * as requesterCredentialOwner from './requesterSessionCredentials';
-import {
-  admitRequesterSessionBootstrap, prepareRequesterSessionBootstrap, createRequesterSessionCredentialCustody,
-  resolveRequesterSessionBootstrap, verifyRequesterSessionMachineAdmissionCurrent,
-  resolveRequesterSessionCredentials, readRequesterSessionCredentialsForChild,
-  listRequesterSessionCredentialBindings, requesterSessionCredentialPath, REQUESTER_SESSION_ID_ENV,
-  type RequesterSessionMachineAdmissionBoundary,
-} from './requesterSessionCredentials';
+import { projectRunnerDaemonPluginServicesFailure } from '../agentRuntime/runnerDaemonPluginServicesHost';
+import { AgentRuntimeDaemonServiceResponseV1Schema } from '@/agent/runtime/session/process/agentRuntimeDaemonServiceProtocol';
+import { registerExternalActionRpcHandler } from '@/rpc/handlers/externalAction';
+import { EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1, ExternalActionExecutionAuthorizationV1Schema,
+  EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER, EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER,
+  EXTERNAL_ACTION_EFFECT_ACTION_HEADER, EXTERNAL_ACTION_RESOLVED_TARGET_HEADER,
+  ExternalActionDaemonDispatchRequestSchema, parseExternalActionDaemonDispatchResult } from '@happier-dev/protocol/actions/externalActionApi';
+import { ACTION_API_SERVER_ORIGIN } from '@happier-dev/protocol/socketRpc';
+import { prepareInstalledRequesterAccountActionContext } from './requesterAccountActionProjection';
+import * as installationStore from '@/daemon/identity/store';
+import { decodeExternalActionResolvedTargetV1, encodeExternalActionResolvedTargetV1, verifyExternalActionMachineRequestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
+import { resolveSessionRunnerFailureExitCode } from '@/cli/resolveSessionRunnerFailureExitCode';
+import { admitRequesterSessionBootstrap, prepareRequesterSessionBootstrap, createRequesterSessionCredentialCustody, resolveRequesterSessionBootstrap, verifyRequesterSessionMachineAdmissionCurrent, resolveRequesterSessionCredentials, readRequesterSessionCredentialsForChild, listRequesterSessionCredentialBindings, requesterSessionCredentialPath, REQUESTER_SESSION_ID_ENV, type RequesterSessionMachineAdmissionBoundary } from "./requesterSessionCredentials";
+import { runWithRequesterSessionCurrentnessCheckpoint } from "@/daemon/sessionEncryption/requesterCurrentness";
+import { prepareWorkflowSessionRequester } from '@/daemon/workflows/workflowSessionStartup';
 
 // Genuine socket boundary: these custody tests do not establish runner availability.
 vi.mock('socket.io-client', () => ({ io: () => { throw new Error('Runner socket unavailable'); } }));
 
 const attribution = { serverId: 'bob-home', accountId: 'bob', machineId: 'machine', installationId: 'installation' };
-const credentials = { token: 'bob-ordinary', encryption: null } as const;
+// Home HTTP is the authentication boundary; real requester owners inspect the subject.
+const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'bob', tokenEpoch: 1,
+  provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.fixture`, encryption: null } as const;
 const origin = 'http://requester-home.test';
 let app: FastifyInstance | undefined;
 let restore: (() => void) | undefined;
 let directory: string | undefined;
 let runtimeFixture: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | undefined;
+let sessionControlFixture: Awaited<ReturnType<typeof createRequesterSessionControlRuntimeFixture>> | undefined;
 afterAll(async () => { await runtimeFixture?.dispose(); runtimeFixture = undefined; });
 afterEach(async () => {
+  await sessionControlFixture?.dispose(); sessionControlFixture = undefined;
   restore?.(); restore = undefined;
   await app?.close(); app = undefined;
   if (directory) await rm(directory, { recursive: true, force: true });
@@ -91,7 +122,9 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-async function home(options: Readonly<{ sessionId?: string; creationMachineId?: string; bot?: boolean; custodianAccountId?: string; requesterReadsOnly?: boolean }> = {}) {
+async function home(options: Readonly<{ sessionId?: string; creationMachineId?: string; bot?: boolean; custodianAccountId?: string; requesterReadsOnly?: boolean;
+  sessionActive?: boolean; sessionSeq?: number; encryptionSecret?: Uint8Array; beforeProfileRead?: () => Promise<void>;
+  beforeMachineAccessRead?: () => Promise<void> }> = {}) {
   const sessionId = options.sessionId ?? 'session';
   const custodianAccountId = options.custodianAccountId ?? 'alice';
   directory = await mkdtemp(join(tmpdir(), 'requester-custody-'));
@@ -100,24 +133,69 @@ async function home(options: Readonly<{ sessionId?: string; creationMachineId?: 
   let installationId = 'installation';
   let accountId = 'bob';
   let access = true;
-  let accountMode: 'plain' | 'e2ee' = 'plain';
+  let accountMode: 'plain' | 'e2ee' = options.encryptionSecret ? 'e2ee' : 'plain';
   let sessionRole: 'owner' | 'view' = 'owner';
   let loseDuringVerification = false;
+  let unavailablePath: string | null = null;
   let acpCatalog: AcpCatalogRecordV1 = { v: 1, definitions: [] };
-  const requests: Array<{ path: string; bearer: string | undefined }> = [];
-  app.addHook('onRequest', async request => { requests.push({ path: request.url, bearer: request.headers.authorization }); });
-  app.get('/v1/account/profile', async () => ({ id: accountId }));
+  let settingsAvailable = true;
+  const requests: Array<{ path: string; bearer: string | undefined; sessionActionAuthorized?: true }> = [];
+  const pendingInputs: unknown[] = [];
+  let sessionActionAuthorization: ExternalActionExecutionAuthorizationV1 | undefined;
+  const hasSignedSessionActionAuthority = (request: FastifyRequest) => {
+    const root = sessionActionAuthorization;
+    const signature = request.headers[EXTERNAL_ACTION_MACHINE_SIGNATURE_HEADER.toLowerCase()];
+    const encodedTarget = request.headers[EXTERNAL_ACTION_RESOLVED_TARGET_HEADER.toLowerCase()];
+    const target = typeof encodedTarget === 'string' ? decodeExternalActionResolvedTargetV1(encodedTarget) : null;
+    // Root verification signs the original Machine target; Session HTTP reads
+    // use the separately projected Session target under that same signed root.
+    const targetMatches = target?.kind === 'session' && target.sessionId === sessionId
+      || request.method === 'POST' && request.url === '/v1/actions/session.open/execution-authorization/verify'
+        && root?.binding.target.kind === 'machine' && target?.kind === 'machine'
+        && target.machineId === root.binding.target.machineId;
+    return access && root?.binding.accountId === accountId
+      && (root.binding.target.kind === 'session' && root.binding.target.sessionId === sessionId
+        || root.binding.actionId === 'session.open' && root.binding.target.kind === 'machine' && root.binding.target.machineId === 'machine')
+      && root.binding.machineId === 'machine'
+      && root.binding.installationId === installationId
+      && request.headers[EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER.toLowerCase()] === root.token
+      && request.headers[EXTERNAL_ACTION_EFFECT_ACTION_HEADER.toLowerCase()] === root.binding.actionId
+      && targetMatches && target !== null
+      && typeof signature === 'string' && verifyExternalActionMachineRequestV1({ authorizationToken: root.token,
+        effectActionId: root.binding.actionId, target, installationId, requestId: root.binding.requestId,
+        method: request.method, path: request.url, publicKey: keyPair.publicKey, signature,
+        ...(request.body === undefined ? {} : { body: request.body }) });
+  };
+  app.addHook('preHandler', async (request, reply) => {
+    const signed = hasSignedSessionActionAuthority(request);
+    requests.push({ path: request.url, bearer: request.headers.authorization, ...(signed ? { sessionActionAuthorized: true as const } : {}) });
+    if (request.headers[EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER.toLowerCase()] && !signed)
+      return reply.code(403).send({ error: 'access_denied' });
+    if (request.url === unavailablePath) return reply.code(503).send({ error: 'home_unavailable' });
+  });
+  app.get('/v1/account/profile', async () => { await options.beforeProfileRead?.(); return { id: accountId }; });
   app.get('/v1/account/encryption', async () => ({ mode: accountMode, updatedAt: 1 }));
   app.get('/v1/account/encryption/currentness', async () => ({ mode: accountMode, version: 1,
     signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 }));
   app.post('/v1/actions/session.open/execution-authorization/verify', async () => ({ ok: access }));
-  app.get('/v2/account/settings', async () => ({ content: { t: 'plain', v: {} }, version: 1 }));
+  app.post('/v1/actions/session.message.send/execution-authorization/verify', async (_request, reply) =>
+    access ? { ok: true } : reply.code(403).send({ error: 'access_denied' }));
+  app.post(`/v2/sessions/${sessionId}/pending`, async request => {
+    pendingInputs.push(request.body);
+    return { didWrite: true, terminal: false };
+  });
+  app.get('/v2/account/settings', async (_request, reply) => settingsAvailable
+    ? accountMode === 'plain' ? { content: { t: 'plain', v: {} }, version: 1 } : { content: null, version: 0 }
+    : reply.code(500).send({ error: 'database_unavailable' }));
   app.get('/v1/account/entity-rows/acp', async () => ({ status: 'present', revision: 1, content: { t: 'plain', v: acpCatalog } }));
-  app.get('/v1/machines/machine/access', async (_request, reply) => access ? {
+  app.get('/v1/machines/machine/access', async (_request, reply) => {
+    await options.beforeMachineAccessRead?.();
+    return access ? {
     machineId: 'machine', custodian: { accountId: custodianAccountId, displayName: 'Custodian' },
     access: { custodian: { accountId: custodianAccountId, displayName: 'Custodian' }, role: 'use', resourceMode: 'plain', accessState: 'ready' },
     canManage: false, grants: [], ownDirectGrant: true, ownAccessSources: [],
-  } : reply.code(403).send({ kind: 'refused', code: 'access_denied' }));
+  } : reply.code(403).send({ kind: 'refused', code: 'access_denied' });
+  });
   app.post('/v1/machines/machine/admission/verify', async (request, reply) => {
     // The network adapter is the external Home boundary; the real signer and verifier remain in-process.
     const body = request.body as { context: SocketRpcMachineAdmissionContextV1; method?: string;
@@ -142,8 +220,12 @@ async function home(options: Readonly<{ sessionId?: string; creationMachineId?: 
       terminal: null, agentSessionStartupInstructionsMarkerV1: null, checkout: null } });
   app.get(`/v2/sessions/${sessionId}`, async (request, reply) => options.requesterReadsOnly
     && request.headers.authorization !== `Bearer ${credentials.token}`
-    ? reply.code(403).send({ error: 'access_denied' }) : ({ session: createSessionRecordFixture({ id: sessionId,
-    encryptionMode: 'plain', metadata: JSON.stringify({ machineId: 'machine', path: '/workspace', codexSessionId: 'same-native-session',
+    && !hasSignedSessionActionAuthority(request)
+    ? reply.code(403).send({ error: 'access_denied' }) : ({ session: createSessionRecordFixture({ id: sessionId, seq: options.sessionSeq ?? 0,
+    active: options.sessionActive === true, encryptionMode: accountMode, metadata: options.encryptionSecret
+      ? encryptSessionPayload({ ctx: { encryptionKey: options.encryptionSecret, encryptionVariant: 'legacy' },
+          payload: { machineId: 'machine', path: '/workspace', codexSessionId: 'same-native-session', sessionCreationCorrespondenceV1: correspondence } })
+      : JSON.stringify({ machineId: 'machine', path: '/workspace', codexSessionId: 'same-native-session',
       ...(options.bot ? { bot: { kind: 'bot' }, createdAsBot: true } : {}),
       sessionCreationCorrespondenceV1: correspondence }), dataEncryptionKey: null,
     share: sessionRole === 'owner' ? null : { accessLevel: 'view', canApprovePermissions: false },
@@ -153,7 +235,10 @@ async function home(options: Readonly<{ sessionId?: string; creationMachineId?: 
   restore = installAxiosFastifyAdapter({ app, origin });
   const boundary: RequesterSessionMachineAdmissionBoundary = { machineId: 'machine', daemonToken: 'alice-daemon',
     isHomeCurrent: () => true, readInstallation: () => ({ installationId, privateKey: keyPair.secretKey }) };
-  return { boundary, requests, correspondence, keyPair, setAccess: (value: boolean) => { access = value; },
+  return { boundary, requests, pendingInputs, correspondence, keyPair, setAccess: (value: boolean) => { access = value; },
+    setSessionActionAuthorization: (value: ExternalActionExecutionAuthorizationV1) => { sessionActionAuthorization = value; },
+    setUnavailablePath: (value: string | null) => { unavailablePath = value; },
+    setSettingsAvailable: (value: boolean) => { settingsAvailable = value; },
     setAcpCatalog: (record: AcpCatalogRecordV1) => { acpCatalog = record; },
     setAccountId: (value: string) => { accountId = value; }, setAccountMode: (value: 'plain' | 'e2ee') => { accountMode = value; },
     setSessionRole: (value: 'owner' | 'view') => { sessionRole = value; },
@@ -161,10 +246,355 @@ async function home(options: Readonly<{ sessionId?: string; creationMachineId?: 
 }
 
 describe('requester Session lifecycle custody', () => {
-  it('restores protected existing-Session custody through the real local resume registration and refuses revoked or substituted ownership', async () => {
+  it.each(['plain', 'e2ee'] as const)('admits early original requester input through exact retained Session custody without another credential box (%s)', async mode => {
+    const sessionId = 'c123456789012345678901234';
+    const secret = new Uint8Array(32).fill(31);
+    const requesterCredentials = { ...credentials, encryption: mode === 'e2ee' ? { type: 'legacy' as const, secret } : null };
+    const host = await home({ sessionId, sessionActive: true, requesterReadsOnly: true, ...(mode === 'e2ee' ? { encryptionSecret: secret } : {}) });
+    const current = () => verifyRequesterSessionMachineAdmissionCurrent({ credentials: requesterCredentials, attribution, sessionId,
+      serverHttpBaseUrl: origin, boundary: host.boundary });
+    const prepared = await prepareRequesterSessionBootstrap({ credentials: requesterCredentials, attribution,
+      boundary: { serverId: attribution.serverId, serverHttpBaseUrl: origin, happyHomeDir: directory! },
+      verifyMachineAdmissionCurrent: current, boundSessionId: sessionId, preparedSessionId: sessionId });
+    if (!prepared) throw new Error('Missing real retained requester bootstrap');
+    const identity = vi.spyOn(installationStore, 'readInstallationIdentityIfExistsSync').mockReturnValue({ version: 1,
+      installationId: attribution.installationId, createdAt: 1, publicKey: Buffer.from(host.keyPair.publicKey).toString('base64url'),
+      privateKey: Buffer.from(host.keyPair.secretKey).toString('base64url') });
+    const handlers = new Map<string, RpcHandler>();
+    const admittedInputs: unknown[] = [];
+    const input = { sessionId, message: 'Queue before the native child exists', localId: 'requester-early-input', wait: false };
+    const target = { kind: 'session' as const, sessionId };
+    const authentication = { kind: 'account' as const, tokenEpoch: 1 };
+    const material = { type: 'dataKey' as const, machineKey: deriveAccountMachineKeyFromRecoverySecret(secret) };
+    const binding = { serverIdentityId: 'srv_requester_home', accountId: 'bob', authentication,
+      actionId: 'session.message.send', requestId: 'early-input-root', target };
+    const envelope = mode === 'e2ee' ? sealExternalActionRequestV2({ binding, material, input, randomBytes: tweetnacl.randomBytes })
+      : { v: 1 as const, requestId: binding.requestId, target, input };
+    const authorization = ExternalActionExecutionAuthorizationV1Schema.parse({ v: 1, token: 'home-early-input', binding: {
+      accountId: 'bob', custodianAccountId: 'alice', authentication, accountEncryptionMode: mode,
+      serverIdentityId: 'srv_requester_home', machineId: 'machine', installationId: attribution.installationId,
+      actionId: 'session.message.send', requestId: envelope.requestId,
+      requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope), target,
+    } });
+    host.setSessionActionAuthorization(authorization);
+    registerExternalActionRpcHandler({ registerHandler: (method, handler) => { handlers.set(method, handler); } }, {
+      machineId: 'machine', currentServerId: attribution.serverId, currentServerHttpBaseUrl: origin,
+      resolveAccountId: async () => 'alice', resolveInstallationId: () => attribution.installationId,
+      externalActionMachineRequestPrivateKey: host.keyPair.secretKey, verifyExecutionAuthorization: current,
+      executor: createActionExecutor(createUnavailableActionTransportDeps()),
+      resolveTarget: createDaemonExternalActionTargetResolver({ credentials: { token: 'alice-daemon', encryption: null } }),
+      prepareRequesterAccountContext: async request => {
+        let requesterTargetResolver: ReturnType<typeof createDaemonExternalActionTargetResolver> | undefined;
+        const requester = await prepareInstalledRequesterAccountActionContext({ ...request,
+          purpose: { kind: 'external_action' }, machineId: 'machine', serverId: attribution.serverId, serverHttpBaseUrl: origin,
+          resolveCurrentMachineExecutionOriginContext: async () => ({ machineId: 'machine', serverIdentityId: 'srv_requester_home' }),
+          // The fixture retains this Session custody across ingress attempts.
+          resolveRequesterSessionBootstrap: async id => id === sessionId ? { ...prepared.admitted, release: async () => {} } : null,
+          createExecutor: admitted => {
+            requesterTargetResolver = createDaemonExternalActionTargetResolver({ credentials: admitted.credentials, serverApiUrl: origin });
+            return createActionExecutor(createCliActionDeps({ token: admitted.credentials.token,
+              credentials: admitted.credentials, sessionId: '', ...(mode === 'e2ee'
+                ? { mode: 'e2ee' as const, ctx: { encryptionKey: secret, encryptionVariant: 'legacy' as const } }
+                : { mode: 'plain' as const, ctx: null }), serverId: attribution.serverId,
+              serverIdentityId: 'srv_requester_home', serverHttpBaseUrl: origin,
+              externalActionMachineRequestPrivateKey: host.keyPair.secretKey,
+              externalActionMachineInstallationId: attribution.installationId,
+              machineAdmissionTransport: async (raw, options) => {
+                const request = SessionPendingEnqueueByMachineRequestV1Schema.parse(raw);
+                expect(options?.callerInputAuthorization?.token).toBe(authorization.token);
+                expect(request.targetMachineId).toBe(attribution.machineId);
+                const message = request.content.t === 'plain' ? request.content.v
+                  : decryptSessionPayload({ ctx: { encryptionKey: secret, encryptionVariant: 'legacy' }, ciphertextBase64: request.content.c });
+                expect(message).toMatchObject({ content: { text: input.message }, meta: { happierInputRequestV1: { producer: 'happierApp' } } });
+                if (mode === 'e2ee') expect(request.requestEqualityEvidenceV1).toMatchObject({ kind: 'e2eeTag' });
+                admittedInputs.push(request);
+                return { status: 'accepted', localId: request.localId };
+              } }));
+          },
+        });
+        return requester ? { ...requester, resolveTarget: requesterTargetResolver } : null;
+      },
+    });
+    const dispatch = ExternalActionDaemonDispatchRequestSchema.parse({
+      actionId: 'session.message.send', envelope, executionAuthorization: authorization,
+      principal: { accountId: 'bob', authentication, authority: 'present_user' },
+      placement: { machineId: 'machine', target: { kind: 'machine', machineId: 'machine' } },
+    });
+    let rawResponse: unknown;
+    const invoke = async (request = dispatch) => {
+      rawResponse = await handlers.get(EXTERNAL_ACTION_DAEMON_RPC_METHOD_V1)?.(request,
+        { authorization: ACTION_API_SERVER_ORIGIN, signal: new AbortController().signal });
+      return parseExternalActionDaemonDispatchResult(rawResponse);
+    };
+    const executionFor = (result: Awaited<ReturnType<typeof invoke>>, request = dispatch) => {
+      if (result?.kind !== 'response') return null;
+      if (result.prepared.response.v === 1) return result.prepared.response.execution;
+      const root = request.executionAuthorization?.binding;
+      return request.envelope.v === 2 && root && 'authentication' in root
+        ? openExternalActionResponseV2({ request: request.envelope, envelope: result.prepared.response,
+          binding: { serverIdentityId: root.serverIdentityId, accountId: root.accountId, authentication: root.authentication,
+            actionId: root.actionId, requestId: root.requestId, target: root.target }, material }) : null;
+    };
+    const changedRoot = (change: Readonly<{ accountId?: string; serverIdentityId?: string; installationId?: string; sessionId?: string }>) => {
+      const target = { kind: 'session' as const, sessionId: change.sessionId ?? sessionId };
+      const nextBinding = { ...binding, target, accountId: change.accountId ?? binding.accountId,
+        serverIdentityId: change.serverIdentityId ?? binding.serverIdentityId };
+      const nextInput = { ...input, sessionId: target.sessionId };
+      const envelope = mode === 'e2ee' ? sealExternalActionRequestV2({ binding: nextBinding, material, input: nextInput, randomBytes: tweetnacl.randomBytes })
+        : { v: 1 as const, requestId: binding.requestId, target, input: nextInput };
+      return ExternalActionDaemonDispatchRequestSchema.parse({ ...dispatch, envelope,
+        principal: { accountId: nextBinding.accountId, authentication, authority: 'present_user' },
+        executionAuthorization: { ...authorization, binding: { ...authorization.binding, ...nextBinding,
+          installationId: change.installationId ?? attribution.installationId,
+          requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope) } } });
+    };
+    const expectRefused = async (request = dispatch) => {
+      const result = await runWithServerHttpBaseUrl(origin, () => invoke(request));
+      expect(result).not.toBeNull();
+      expect(executionFor(result, request)?.ok).not.toBe(true);
+      expect(admittedInputs).toHaveLength(1);
+      expect(host.pendingInputs).toHaveLength(0);
+    };
+    try {
+      const result = await runWithServerHttpBaseUrl(origin, invoke);
+      const execution = executionFor(result);
+      expect(execution, JSON.stringify({ resultKind: result?.kind,
+        refusalCode: result?.kind === 'invalid_request' ? result.errorCode : undefined }))
+        .toEqual({ ok: true, result: { status: 'accepted', localId: input.localId } });
+      expect(admittedInputs).toHaveLength(1);
+      expect(host.pendingInputs).toHaveLength(0);
+      for (const change of [{ accountId: 'another-requester' }, { serverIdentityId: 'srv_another_home' },
+        { installationId: 'another-installation' }, { sessionId: 'c223456789012345678901234' }]) {
+        await expectRefused(changedRoot(change));
+      }
+      // A supplied but unopened box must not fall back to retained Session custody.
+      const wrongRecipient = sealExternalActionRequesterAccountContextV1({ authorization,
+        purpose: { kind: 'external_action' }, credentials: { ...encodeStoredCredentials(requesterCredentials), token: requesterCredentials.token },
+        installationPublicKey: tweetnacl.sign.keyPair().publicKey, randomBytes: tweetnacl.randomBytes });
+      await expectRefused({ ...dispatch, executionAuthorization: wrongRecipient });
+      host.setAccess(false);
+      await expectRefused();
+      host.setAccess(true);
+      await prepared.cleanupOnFailure();
+      await expectRefused();
+    } finally { identity.mockRestore(); await prepared.cleanupOnFailure(); }
+  });
+  it('observes replacement runtime admission without joining the previous pending verifier', async () => {
+    let release: (() => void) | undefined;
+    let entered: (() => void) | undefined;
+    let held: Promise<void> | undefined;
+    const host = await home({ beforeProfileRead: async () => { entered?.(); await held; } });
+    const current = () => verifyRequesterSessionMachineAdmissionCurrent({ credentials, attribution, sessionId: 'session',
+      serverHttpBaseUrl: origin, boundary: host.boundary });
+    const prepared = await prepareRequesterSessionBootstrap({ credentials: { ...credentials }, attribution,
+      boundary: { serverId: attribution.serverId, serverHttpBaseUrl: origin, happyHomeDir: directory! },
+      verifyMachineAdmissionCurrent: current, boundSessionId: 'session', preparedSessionId: 'session' });
+    if (!prepared) throw new Error('Missing requester bootstrap');
+    held = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const pending = prepared.admitted.isCurrent();
+    await started;
+    prepared.admitted.bindRuntimeMachineAdmissionCurrentness(() => verifyRequesterSessionMachineAdmissionCurrent({
+      credentials, attribution, sessionId: 'session', serverHttpBaseUrl: origin,
+      boundary: { ...host.boundary, readInstallation: () => null },
+    }));
+    let replacement: boolean | undefined;
+    const replaced = prepared.admitted.isCurrent().then(value => { replacement = value; });
+    try {
+      await expect.poll(() => replacement).toBe(false);
+    } finally {
+      release?.();
+      await replaced;
+      await expect(pending).resolves.toBe(true);
+      await prepared.cleanupOnFailure();
+    }
+  });
+
+  it('retires a pending requester authority observation without waiting for its Home response', async () => {
+    let release: (() => void) | undefined;
+    let entered: (() => void) | undefined;
+    let held: Promise<void> | undefined;
+    const host = await home({ beforeProfileRead: async () => { entered?.(); await held; } });
+    const current = () => verifyRequesterSessionMachineAdmissionCurrent({ credentials, attribution, sessionId: 'session',
+      serverHttpBaseUrl: origin, boundary: host.boundary });
+    const prepared = await prepareRequesterSessionBootstrap({ credentials: { ...credentials }, attribution,
+      boundary: { serverId: attribution.serverId, serverHttpBaseUrl: origin, happyHomeDir: directory! },
+      verifyMachineAdmissionCurrent: current, boundSessionId: 'session', preparedSessionId: 'session' });
+    if (!prepared) throw new Error('Missing requester bootstrap');
+    held = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const pending = prepared.admitted.isCurrent();
+    await started;
+    let disposed = false;
+    const disposal = prepared.admitted.dispose().then(() => { disposed = true; });
+    try {
+      await expect.poll(() => disposed).toBe(true);
+      await expect(prepared.admitted.isCurrent()).resolves.toBe(false);
+    } finally {
+      release?.();
+      await disposal;
+      await expect(pending).resolves.toBe(false);
+      await prepared.cleanupOnFailure();
+    }
+  });
+
+  it('shares concurrent requester authority observations without retaining a result across later revocation', async () => {
+    let release: (() => void) | undefined;
+    let entered: (() => void) | undefined;
+    let held: Promise<void> | undefined;
+    const host = await home({ beforeProfileRead: async () => { entered?.(); await held; } });
+    const current = () => verifyRequesterSessionMachineAdmissionCurrent({ credentials, attribution, sessionId: 'session',
+      serverHttpBaseUrl: origin, boundary: host.boundary });
+    const prepared = await prepareRequesterSessionBootstrap({ credentials: { ...credentials }, attribution,
+      boundary: { serverId: attribution.serverId, serverHttpBaseUrl: origin, happyHomeDir: directory! },
+      verifyMachineAdmissionCurrent: current, boundSessionId: 'session', preparedSessionId: 'session' });
+    if (!prepared) throw new Error('Missing requester bootstrap');
+    try {
+      const profileReads = () => host.requests.filter(request => request.path === '/v1/account/profile').length;
+      const baseline = profileReads();
+      await expect(prepared.admitted.isCurrent()).resolves.toBe(true);
+      const singleObservationReads = profileReads() - baseline;
+      expect(singleObservationReads).toBeGreaterThan(0);
+      const before = profileReads();
+      held = new Promise<void>(resolve => { release = resolve; });
+      const started = new Promise<void>(resolve => { entered = resolve; });
+      const observations = Promise.all([prepared.admitted.isCurrent(), prepared.admitted.isCurrent()]);
+      await started;
+      release?.();
+      await expect(observations).resolves.toEqual([true, true]);
+      // This is the Home request fan-out contract: one live observation serves
+      // concurrent consumers, while the next admission must observe revocation.
+      expect(profileReads() - before).toBe(singleObservationReads);
+      held = undefined;
+      host.setAccess(false);
+      await expect(prepared.admitted.isCurrent()).resolves.toBe(false);
+    } finally { release?.(); await prepared.cleanupOnFailure(); }
+  });
+
+  it('keeps retirement and nested checkpoint revocation binding while sharing native preparation reads', async () => {
+    const host = await home();
+    const prepared = await prepareRequesterSessionBootstrap({ credentials: { ...credentials }, attribution,
+      boundary: { serverId: attribution.serverId, serverHttpBaseUrl: origin, happyHomeDir: directory! },
+      verifyMachineAdmissionCurrent: () => verifyRequesterSessionMachineAdmissionCurrent({ credentials, attribution,
+        sessionId: 'session', serverHttpBaseUrl: origin, boundary: host.boundary }), boundSessionId: 'session' });
+    if (!prepared) throw new Error('Missing requester bootstrap');
+    try {
+      await runWithRequesterSessionCurrentnessCheckpoint(async () => {
+        await expect(prepared.admitted.isCurrent()).resolves.toBe(true);
+        host.setAccess(false);
+        await runWithRequesterSessionCurrentnessCheckpoint(async () => {
+          await expect(prepared.admitted.isCurrent()).resolves.toBe(false);
+        });
+        // Resuming a preparation after a fresh effect check cannot resurrect
+        // its earlier successful observation.
+        await expect(prepared.admitted.isCurrent()).resolves.toBe(false);
+      });
+      host.setAccess(true);
+      let release: (() => void) | undefined;
+      const held = new Promise<void>(resolve => { release = resolve; });
+      const escaped = await runWithRequesterSessionCurrentnessCheckpoint(async () => {
+        await expect(prepared.admitted.isCurrent()).resolves.toBe(true);
+        // Promise continuations retain their originating async context even
+        // after its callback returns. A closed checkpoint must not grant them
+        // its earlier authority observation.
+        return { observation: held.then(() => prepared.admitted.isCurrent()) };
+      });
+      host.setAccess(false);
+      release?.();
+      await expect(escaped.observation).resolves.toBe(false);
+      host.setAccess(true);
+      await runWithRequesterSessionCurrentnessCheckpoint(async () => {
+        await expect(prepared.admitted.isCurrent()).resolves.toBe(true);
+        await prepared.admitted.dispose();
+        await expect(prepared.admitted.isCurrent()).resolves.toBe(false);
+      });
+    } finally { await prepared.cleanupOnFailure(); }
+  });
+
+  it.each(['plain', 'e2ee'] as const)('borrows installed credentials without withdrawing their finite-runtime identity and retains private scope restrictions (%s)', async mode => {
+    const host = await home();
+    host.setAccountMode(mode);
+    const serialized = { token: credentials.token,
+      ...(mode === 'e2ee' ? { secret: Buffer.alloc(32, 8).toString('base64') } : {}) };
+    const installed = decodeStoredCredentials(serialized);
+    const stored = decodeStoredCredentials(serialized);
+    if (!installed || !stored) throw new Error('Missing canonical installed credentials');
+    const prepare = () => prepareRequesterSessionBootstrap({ credentials: installed, attribution,
+      boundary: { serverId: attribution.serverId, serverHttpBaseUrl: origin, happyHomeDir: directory! },
+      verifyMachineAdmissionCurrent: async () => sameStoredCredentials(installed, stored) });
+    const prepared = await prepare();
+    try {
+      expect(prepared, 'Requester scoping must not invalidate the supplying installed owner').not.toBeNull();
+      expect(sameStoredCredentials(installed, stored)).toBe(true);
+      expect(installed.requesterSessionCredentialScope).toBeUndefined();
+      expect(prepared?.admitted.credentials.requesterSessionCredentialScope).toEqual({
+        serverId: attribution.serverId, serverHttpBaseUrl: origin,
+      });
+      bindRequesterSessionCredentialScope(installed, { serverId: 'other-home', serverHttpBaseUrl: 'https://other-home.test' });
+      await expect(prepareRequesterSessionBootstrap({ credentials: installed, attribution,
+        boundary: { serverId: attribution.serverId, serverHttpBaseUrl: origin, happyHomeDir: directory! },
+        verifyMachineAdmissionCurrent: async () => true })).rejects.toThrow('requester_session_credential_scope_mismatch');
+      expect(installed.requesterSessionCredentialScope?.serverId).toBe('other-home');
+    } finally { await prepared?.cleanupOnFailure(); }
+  });
+
+  it.each(['/v1/account/profile', '/v2/sessions/session', '/v1/machines/machine/access', '/v1/machines/machine/admission/verify', 'admission-timeout', 'machine-access-timeout'])(
+    'preserves requester custody across an unavailable Home read at %s without treating it as revocation', async path => {
+      const host = await home();
+      const current = () => verifyRequesterSessionMachineAdmissionCurrent({ credentials, attribution, sessionId: 'session',
+        serverHttpBaseUrl: origin, boundary: host.boundary });
+      const prepared = await prepareRequesterSessionBootstrap({ credentials, attribution, boundSessionId: 'session',
+        boundary: { serverId: attribution.serverId, serverHttpBaseUrl: origin, happyHomeDir: directory! },
+        verifyMachineAdmissionCurrent: current });
+      if (!prepared) throw Error('Missing real requester bootstrap');
+      const context = prepared.admitted.savedSecretOperationContext;
+      const snapshot = context.readSnapshot();
+      try {
+        if (path === 'admission-timeout') {
+          // Axios is the Home transport boundary. Reproduce the exact loaded
+          // Machine-admission ECONNABORTED without a production timer.
+          vi.spyOn(axios, 'post').mockRejectedValueOnce(new axios.AxiosError('never-log-request', 'ECONNABORTED'));
+        } else if (path === 'machine-access-timeout') {
+          vi.spyOn(axios, 'request').mockRejectedValueOnce(new axios.AxiosError('never-log-request', 'ECONNABORTED'));
+        } else host.setUnavailablePath(path);
+        await expect(context.isCurrent()).rejects.toMatchObject({ code: 'project_requester_home_unavailable', retryable: true });
+        expect(context.readSnapshot()).toBe(snapshot);
+        host.setUnavailablePath(null);
+        expect(await context.isCurrent()).toBe(true);
+        host.setAccess(false);
+        expect(await context.isCurrent()).toBe(false);
+        expect(context.readSnapshot()).toBeNull();
+      } finally { host.setUnavailablePath(null); vi.restoreAllMocks(); await prepared.cleanupOnFailure(); }
+    },
+  );
+
+  it.each(['protected', 'legacy'] as const)('preserves a retryable Home read failure during %s requester recovery and admits only after recovery', async kind => {
+    const host = await home();
+    if (kind === 'protected') await createRequesterSessionCredentialCustody({ happyHomeDir: directory!, sessionId: 'session', attribution, credentials });
+    const recover = () => requesterCredentialOwner.resolveRequesterSessionBootstrapFromCustody({ happyHomeDir: directory!,
+      serverId: attribution.serverId, sessionId: 'session', serverHttpBaseUrl: origin,
+      machineAdmissionBoundary: host.boundary, expectedAttribution: attribution, legacyOwnerCredentials: credentials });
+    host.setSettingsAvailable(false);
+    const failure = await recover().then(() => { throw new Error('Home failure must refuse requester recovery'); }, error => error as unknown);
+    expect(failure).toMatchObject({ code: 'project_requester_home_unavailable' });
+    const response = AgentRuntimeDaemonServiceResponseV1Schema.parse({ ok: false,
+      error: projectRunnerDaemonPluginServicesFailure(failure) });
+    expect(response).toMatchObject({ ok: false, error: { code: 'project_requester_home_unavailable',
+      cause: { stage: 'dispatch', code: 'project_requester_home_unavailable' } } });
+    expect(resolveSessionRunnerFailureExitCode(failure)).toBe(1);
+    host.setSettingsAvailable(true);
+    const recovered = await recover();
+    expect(recovered?.getBoundSessionId()).toBe('session');
+    expect(await recovered?.isCurrent()).toBe(true);
+    await recovered?.dispose();
+    host.setAccess(false);
+    expect(await recover()).toBeNull();
+  });
+
+  it.each(['protected', 'legacy'] as const)('restores %s existing-Session custody through the real local resume registration and refuses revoked or substituted ownership', async custodyKind => {
     const sessionId = 'caaaaaaaaaaaaaaaaaaaaaaaa';
-    const host = await home({ sessionId, requesterReadsOnly: true });
-    await createRequesterSessionCredentialCustody({ happyHomeDir: directory!, sessionId, attribution, credentials });
+    const host = await home({ sessionId, sessionSeq: 17, requesterReadsOnly: true });
+    if (custodyKind === 'protected') await createRequesterSessionCredentialCustody({ happyHomeDir: directory!, sessionId, attribution, credentials });
     const current = () => verifyRequesterSessionMachineAdmissionCurrent({ credentials, attribution, sessionId,
       serverHttpBaseUrl: origin, boundary: host.boundary });
     const machineAdmission = { actorAccountId: 'bob', custodianAccountId: 'alice', machineId: 'machine',
@@ -172,23 +602,27 @@ describe('requester Session lifecycle custody', () => {
     const launched: SpawnSessionOptions[] = [];
     const rpc = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger: () => {} });
     const registry = new ConnectedServiceRuntimeRegistry();
+    const trackedSessions = new Map<number, TrackedSession>();
+    let requester: Awaited<ReturnType<typeof createRequesterSessionRuntimeContext>> = null;
+    const control = sessionControlFixture = await createRequesterSessionControlRuntimeFixture({ happyHomeDir: directory!, activeServerDir: directory!,
+      serverId: attribution.serverId, serverHttpBaseUrl: origin, machineId: 'machine', custodianAccountId: 'alice',
+      credentials, connectedServicesMaterializationBaseDir: join(directory!, 'materialized'), registry, trackedSessions,
+      getRequester: () => requester, resolveQualifiedConnectedAccountV4Support: () => 'indeterminate' });
     const resolve = async (sessionId: string, expected?: typeof attribution) => {
-      const bootstrap = await resolveRequesterSessionBootstrap({ happyHomeDir: directory!, sessionId,
-        attribution: expected ?? attribution, serverHttpBaseUrl: origin, machineAdmissionBoundary: host.boundary });
+      const bootstrap = await requesterCredentialOwner.resolveRequesterSessionBootstrapFromCustody({ happyHomeDir: directory!, sessionId,
+        serverId: attribution.serverId, expectedAttribution: expected ?? attribution, serverHttpBaseUrl: origin,
+        machineAdmissionBoundary: host.boundary, legacyOwnerCredentials: { ...credentials } });
       if (!bootstrap) return null;
-      const switcher = createDaemonQualifiedConnectedAccountAuthGroupSwitchCoordinator({ token: credentials.token,
-        quotaFreshnessMs: 60_000, nowMs: Date.now,
-        // No connected account is selected. Physical auth rematerialization must remain unused.
-        applyGeneration: async () => { throw new Error('Unexpected auth rematerialization'); } });
-      return await createRequesterSessionRuntimeContext({ bootstrap, activeServerDir: directory!,
+      requester = await createRequesterSessionRuntimeContext({ bootstrap, activeServerDir: directory!,
         connectedServicesMaterializationBaseDir: join(directory!, 'materialized'),
         resolveQualifiedConnectedAccountV4Support: () => 'indeterminate', coordinatorInput: {
           machineId: 'machine', machineIdProvider: () => 'machine', runtimeId: 'runtime', happyHomeDir: directory!,
           logger: { debug: () => {}, info: () => {}, warn: () => {} },
           processEnv: { HAPPIER_CONNECTED_SERVICES_REFRESH_ENABLED: '0', HAPPIER_CONNECTED_SERVICES_QUOTAS_ENABLED: '0' },
-          pidToTrackedSession: new Map(), connectedServiceRuntimeRegistry: registry,
-          connectedServiceAuthGroupPreTurnSwitchCoordinator: switcher,
+          pidToTrackedSession: trackedSessions, connectedServiceRuntimeRegistry: registry,
+          connectedServiceAuthGroupPreTurnSwitchCoordinator: control.runtime.connectedServiceAuthGroupPreTurnSwitchCoordinator,
         } });
+      return requester;
     };
     sessionLifecycleRpc.registerPrivateSpawnSessionRpcHandlers({ rpcHandlerManager: rpc,
       spawnLifecycleHandler: createSpawnNewSessionLifecycleActionHandler({ serverId: attribution.serverId,
@@ -199,11 +633,11 @@ describe('requester Session lifecycle custody', () => {
     const input = { type: 'resume-session' as const, sessionId, directory: '/workspace',
       backendTarget: { kind: 'backend' as const, backendId: 'codex', sourceKind: 'built_in' as const }, resume: 'same-native-session',
       permissionMode: 'read-only' as const,
-      initialTranscriptAfterSeq: 17, initialGoal: { objective: 'Finish the task' }, spawnNonce: 'resume-attempt' };
+      initialTranscriptAfterSeq: 99, initialGoal: { objective: 'Finish the task' }, spawnNonce: 'resume-attempt' };
     const constraints = { models: null, permissionModes: ['read-only' as const] };
     const options = { rpcContext: { machineAdmission, verifyMachineAdmissionCurrent: current,
       callerAuthority: 'account_automation' as const, callerInputConstraints: constraints } };
-    const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId: '',
+    const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId: '', mode: 'plain', ctx: null,
       serverId: attribution.serverId, serverIdentityId: 'portable-bob-home', serverHttpBaseUrl: origin,
       machineActionDirectTargetTransport: { machineId: 'machine', invoke: (method, request, localOptions) =>
         rpc.invokeLocal(method, request, { ...localOptions, ...options }) },
@@ -211,7 +645,7 @@ describe('requester Session lifecycle custody', () => {
     if (!deps.sessionOpen) throw new Error('Missing canonical Session open owner');
     const resume = () => runWithServerHttpBaseUrl(origin, () => deps.sessionOpen!({ sessionId,
       serverId: 'portable-bob-home', intent: 'resume', resumeRequest: input }));
-    await expect(resume()).resolves.toMatchObject({ type: 'success', sessionId });
+    await expect(resume()).resolves.toMatchObject({ ok: true, status: 'opened', sessionId });
     expect(launched).toHaveLength(1);
     expect(launched[0]).toMatchObject({ existingSessionId: sessionId, resume: 'same-native-session',
       requesterWorkAttributionV1: attribution, callerInputConstraints: constraints,
@@ -233,6 +667,7 @@ describe('requester Session lifecycle custody', () => {
         requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(envelope) } },
       credentials: encodeStoredCredentials(credentials), purpose: { kind: 'external_action' },
       installationPublicKey: host.keyPair.publicKey, randomBytes: tweetnacl.randomBytes });
+    host.setSessionActionAuthorization(authorization);
     const admitted = await executeExternalAction({ actionId: 'session.open', envelope, principal: accountPrincipal,
       currentMachineId: 'machine', currentServerId: attribution.serverId, currentInstallationId: 'installation',
       executionAuthorization: authorization, externalActionMachineRequestPrivateKey: host.keyPair.secretKey,
@@ -248,8 +683,9 @@ describe('requester Session lifecycle custody', () => {
             resolveTarget = createDaemonExternalActionTargetResolver({ credentials: requester.credentials,
               serverApiUrl: requester.serverHttpBaseUrl });
             const executor = createActionExecutor(createCliActionDeps({ token: requester.credentials.token,
-            credentials: requester.credentials, sessionId: '', serverId: attribution.serverId,
+            credentials: requester.credentials, sessionId: '', mode: 'plain', ctx: null, serverId: attribution.serverId,
             serverIdentityId: 'portable-bob-home', serverHttpBaseUrl: requester.serverHttpBaseUrl,
+            externalActionMachineRequestPrivateKey: host.keyPair.secretKey, externalActionMachineInstallationId: 'installation',
             machineActionDirectTargetTransport: { machineId: 'machine', invoke: (method, request, localOptions) =>
               rpc.invokeLocal(method, request, { ...localOptions, ...options }) },
             }));
@@ -260,19 +696,18 @@ describe('requester Session lifecycle custody', () => {
         return prepared && resolveTarget ? { ...prepared, resolveTarget } : null;
       },
     });
-    expect(host.requests.filter(request => request.path.startsWith('/v2/sessions/')).at(-1)?.bearer)
-      .toBe(`Bearer ${credentials.token}`);
     expect(admitted, JSON.stringify(admitted)).toMatchObject({ kind: 'response', response: {
-      execution: { ok: true, result: { type: 'success', sessionId } },
+      execution: { ok: true, result: { status: 'opened', sessionId } },
     } });
+    expect(host.requests.some(request => request.path.startsWith('/v2/sessions/') && request.sessionActionAuthorized)).toBe(true);
     expect(host.requests.filter(request => request.path.startsWith('/v2/sessions/'))
-      .every(request => request.bearer === `Bearer ${credentials.token}`)).toBe(true);
+      .every(request => request.bearer === `Bearer ${credentials.token}` || request.sessionActionAuthorized)).toBe(true);
     // The replay owner reconstructs this original private context after the
     // deciding caller has selected the executor. Resume must not use that
     // caller's broader closure in place of the original permission ceiling.
     const originalContext: RpcActionExecutorContext = { surface: 'ui', authority: 'account_automation',
       serverId: 'portable-bob-home', callerInputConstraints: constraints };
-    const contextualExecutor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials, sessionId: '',
+    const contextualExecutor = createActionExecutor(createCliActionDeps({ token: credentials.token, credentials, sessionId: '', mode: 'plain', ctx: null,
       serverId: attribution.serverId, serverIdentityId: 'portable-bob-home', serverHttpBaseUrl: origin,
       machineActionDirectTargetTransport: { machineId: 'machine', invoke: (method, request, localOptions) => {
         const delivered: RpcActionExecutorContext | undefined = localOptions?.localActionContext;
@@ -281,7 +716,7 @@ describe('requester Session lifecycle custody', () => {
       } },
     }));
     const resumedWithOrigin = await runWithServerHttpBaseUrl(origin, () => contextualExecutor.execute('session.open', envelope.input, originalContext));
-    expect(resumedWithOrigin, JSON.stringify(resumedWithOrigin)).toMatchObject({ ok: true, result: { type: 'success', sessionId } });
+    expect(resumedWithOrigin, JSON.stringify(resumedWithOrigin)).toMatchObject({ ok: true, result: { status: 'opened', sessionId } });
     expect(launched.at(-1)?.callerInputConstraints).toEqual(constraints);
     const resumedFromMetadata = await runWithServerHttpBaseUrl(origin, () => contextualExecutor.execute('session.open', {
       serverId: 'portable-bob-home', sessionId, intent: 'resume',
@@ -302,7 +737,7 @@ describe('requester Session lifecycle custody', () => {
     vi.stubEnv('HAPPIER_HOME_DIR', directory!);
     const current = () => verifyRequesterSessionMachineAdmissionCurrent({ credentials, attribution, sessionId: 'session', serverHttpBaseUrl: origin, boundary: host.boundary });
     const prepared = await admitRequesterSessionBootstrap({
-      bootstrap: { v: 1, disposition: 'ordinary_requester', credentials: encodeStoredCredentials({ ...credentials }) },
+      bootstrap: { v: 1, disposition: 'ordinary_requester', credentials: encodeStoredCredentials(credentials) },
       boundary: { serverId: attribution.serverId, serverHttpBaseUrl: origin, happyHomeDir: directory! },
       context: { signal: new AbortController().signal, machineAdmission: { actorAccountId: 'bob', custodianAccountId, machineId: 'machine', installationId: 'installation', role: 'use', encryptionMode: 'plain' }, verifyMachineAdmissionCurrent: current },
     });
@@ -322,24 +757,27 @@ describe('requester Session lifecycle custody', () => {
     await writeFile(join(workspace, 'node_modules', '.bin', 'actual'), '#!/bin/sh\nexit 0\n'); await chmod(join(workspace, 'node_modules', '.bin', 'actual'), 0o755);
     const launch = await resolveAccountConfiguredAcpLaunch('custodian-managed', context);
     await expect(launch.resolveHostLaunch({ cwd: directory! })).resolves.toMatchObject({ command, args: ['--acp'], env: { HAPPIER_HOME_DIR: join(directory!, 'authored-home') } });
-    const handlers = new Map<string, RpcHandler<unknown, unknown>>();
+    const handlers = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger: () => {} });
     const owner = createAgentInstallJobOwner({ accountId: custodianAccountId, readTrackedSessions: () => [], readAcpCatalog: () => undefined,
       readRegistry: () => ({ agents: [{ id: 'custom-acp', identity: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1,
         pluginId: CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1.pluginId }] }) });
     try {
-      registerMachineAgentInstallJobRpcHandlers({ owner, rpcHandlerManager: { registerHandler: (method, handler) => { handlers.set(method, handler); } } });
+      registerMachineAgentInstallJobRpcHandlers({ owner, rpcHandlerManager: handlers });
       if (custodianAccountId !== 'bob') {
         const ingress = { signal: new AbortController().signal, requesterSessionBootstrap: prepared.admitted,
           machineAdmission: { actorAccountId: 'bob', custodianAccountId, machineId: 'machine', installationId: 'installation', role: 'use' as const, encryptionMode: 'plain' as const },
           verifyMachineAdmissionCurrent: current };
-        const installed = DaemonAgentInstallStartResponseSchema.parse(await handlers.get(RPC_METHODS.DAEMON_AGENTS_INSTALL_START)!(
-          { agentId: 'custom-acp', definitionId: record.definitions[0]!.id, intent: 'install', consent: { vendorRecipe: false } }, ingress));
+        const installed = DaemonAgentInstallStartResponseSchema.parse(await handlers.invokeLocal(RPC_METHODS.DAEMON_AGENTS_INSTALL_START,
+          { agentId: 'custom-acp', definitionId: record.definitions[0]!.id, intent: 'install', consent: { vendorRecipe: false } }, { rpcContext: ingress }));
         expect(installed.ok).toBe(true); if (!installed.ok) throw new Error('Foreign install was not admitted');
         await vi.waitFor(() => expect(owner.read({ jobId: installed.jobId, cursor: 0 }, 'bob')).toMatchObject({ done: true, outcome: { kind: 'succeeded' } }));
-        expect(owner.list(custodianAccountId).jobs).toEqual([]);
+        const custodianJobs = owner.list(custodianAccountId);
+        expect(custodianJobs.ok).toBe(true);
+        if (!custodianJobs.ok) throw new Error('Custodian job list unavailable');
+        expect(custodianJobs.jobs).toEqual([]);
         expect(host.requests.filter(request => request.path === '/v1/account/entity-rows/acp').every(request => request.bearer === `Bearer ${credentials.token}`)).toBe(true);
-        expect(await handlers.get(RPC_METHODS.DAEMON_AGENTS_INSTALL_READ)!({ jobId: installed.jobId, cursor: 0 }, { ...ingress,
-          machineAdmission: { ...ingress.machineAdmission, actorAccountId: custodianAccountId } })).toMatchObject({ ok: false, errorCode: 'job_not_found' });
+        expect(await handlers.invokeLocal(RPC_METHODS.DAEMON_AGENTS_INSTALL_READ, { jobId: installed.jobId, cursor: 0 }, { rpcContext: { ...ingress,
+          machineAdmission: { ...ingress.machineAdmission, actorAccountId: custodianAccountId } } })).toMatchObject({ ok: false, errorCode: 'job_not_found' });
       }
     } finally { await owner.shutdown(); }
     await prepared.cleanupOnFailure();
@@ -353,7 +791,7 @@ describe('requester Session lifecycle custody', () => {
       input: { sessionId: 'session', sourceMachineId: 'source-machine', targetMachineId: 'machine',
         targetPath: '/destination', sourceSessionStorageMode: 'persisted' as const },
       requesterBootstrap: { v: 1 as const, disposition: 'ordinary_requester' as const,
-        credentials: encodeStoredCredentials({ ...credentials }) } };
+        credentials: encodeStoredCredentials(credentials) } };
     const sealed = sealSessionRequesterHandoffPreflightBootstrapRpcRequestV1({ request,
       installationId: 'installation', installationPublicKey: host.keyPair.publicKey,
       randomBytes: length => new Uint8Array(length).fill(7) });
@@ -373,7 +811,7 @@ describe('requester Session lifecycle custody', () => {
         return { ok: true, sessionId: bootstrap?.getBoundSessionId(), current: await bootstrap?.isCurrent() };
       } });
     expect(result).toEqual({ ok: true, sessionId: 'session', current: true });
-    expect(host.requests.every(request => request.path.endsWith('/admission/verify') || request.bearer === 'Bearer bob-ordinary')).toBe(true);
+    expect(host.requests.every(request => request.path.endsWith('/admission/verify') || request.bearer === `Bearer ${credentials.token}`)).toBe(true);
     expect(host.requests.some(request => request.path.includes('/access-keys/'))).toBe(false);
     expect(await listRequesterSessionCredentialBindings({ happyHomeDir: directory!, ...attribution })).toEqual({ status: 'ready', bindings: [] });
     expect(await bootstrap?.isCurrent()).toBe(false);
@@ -423,7 +861,7 @@ describe('requester Session lifecycle custody', () => {
     expect(result).toMatchObject({ ok: false, errorCode: 'direct_peer_transfer_unavailable' });
     const reads = host.requests.slice(before).filter(request => request.path !== '/v1/machines/machine/admission/verify');
     expect(reads.some(request => request.path.startsWith('/v2/sessions/session'))).toBe(true);
-    expect(reads.every(request => request.bearer === 'Bearer bob-ordinary')).toBe(true);
+    expect(reads.every(request => request.bearer === `Bearer ${credentials.token}`)).toBe(true);
   });
   it('uses admitted requester credentials at the source handoff coordinator instead of the daemon sign-in', async () => {
     const sessionId = `c${'b'.repeat(24)}`;
@@ -461,7 +899,7 @@ describe('requester Session lifecycle custody', () => {
     expect(result).toMatchObject({ ok: false, errorCode: 'source_export_refused' });
     const reads = host.requests.slice(before).filter(request => request.path !== '/v1/machines/machine/admission/verify');
     expect(reads.some(request => request.path.startsWith(`/v2/sessions/${sessionId}`)), JSON.stringify(reads.map(request => request.path))).toBe(true);
-    expect(reads.every(request => request.bearer === 'Bearer bob-ordinary')).toBe(true);
+    expect(reads.every(request => request.bearer === `Bearer ${credentials.token}`)).toBe(true);
   });
   it('adopts the exact existing requester Session on the destination without rewriting its source creation recipe', async () => {
     const host = await home({ creationMachineId: 'source-machine' });
@@ -479,6 +917,7 @@ describe('requester Session lifecycle custody', () => {
     expect(await bindExisting('different-session')).toBeNull();
     const bound = await bindExisting('session');
     expect(bound).not.toBeNull();
+    if (!bound) throw new Error('Missing bound requester custody');
     expect(JSON.parse(await readFile(bound.path, 'utf8'))).toMatchObject({ sessionId: 'session', attribution,
       credentials: { token: credentials.token } });
     expect(custody.admitted.getBoundSessionId()).toBe('session');
@@ -528,7 +967,7 @@ describe('requester Session lifecycle custody', () => {
     if (state === 'admitted') {
       expect(metadata).toMatchObject({ path: '/workspace', codexSessionId: 'same-native-session' });
       expect(reads.length).toBeGreaterThan(0);
-      expect(reads.every(request => request.bearer === 'Bearer bob-ordinary')).toBe(true);
+      expect(reads.every(request => request.bearer === `Bearer ${credentials.token}`)).toBe(true);
     } else { expect(metadata).toBeNull(); expect(reads).toEqual([]); }
   });
   it.each(['revoked', 'different-parent'] as const)('refuses %s continue before requester or custodian Account effects', async state => {
@@ -591,7 +1030,7 @@ describe('requester Session lifecycle custody', () => {
       // the real Account preflight, not native fork or physical launch evidence.
       const reads = host.requests.filter(request => request.path === '/v2/sessions/session').slice(before);
       expect(reads.length).toBeGreaterThan(0);
-      expect(reads.every(request => request.bearer === 'Bearer bob-ordinary')).toBe(true);
+      expect(reads.every(request => request.bearer === `Bearer ${credentials.token}`)).toBe(true);
     } else {
       expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { ok: false, errorCode: SPAWN_SESSION_ERROR_CODES.DAEMON_RPC_UNAVAILABLE } });
       expect(host.requests.filter(request => request.path === '/v2/sessions/session')).toHaveLength(before);
@@ -609,10 +1048,10 @@ describe('requester Session lifecycle custody', () => {
     const input = { executionTarget: { serverId: attribution.serverId, machineId: attribution.machineId },
       directory: { kind: 'path', path: '/workspace' },
       agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } };
-    const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId: '',
+    const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId: '', mode: 'plain', ctx: null,
       requesterSessionBootstrap: custody.admitted });
     const preview = await deps.buildApprovalPreview?.({ actionId: 'session.spawn_new', input,
-      context: { surface: 'mcp' }, defaultPreview: { actionId: 'session.spawn_new', actionArgs: input } });
+      context: { surface: 'mcp' }, defaultPreview: { actionId: 'session.spawn_new', actionArgs: input, summary: 'Start Session' } });
     expect(preview).toMatchObject({ requesterCredentialDisclosure: {
       disposition: 'ordinary_requester', accountId: attribution.accountId, machineId: attribution.machineId,
       fullSignIn: true, selectedPurposeRuntimeAuth: true, hostCanInspectLocalProcess: true,
@@ -637,7 +1076,7 @@ describe('requester Session lifecycle custody', () => {
     await runWithServerHttpBaseUrl(origin, () => probeAlreadyRunningExistingSessionServiceability(options));
     const reads = host.requests.filter(request => request.path === '/v2/sessions/session');
     expect(reads).not.toHaveLength(0);
-    expect(reads.every(request => request.bearer === 'Bearer bob-ordinary')).toBe(true);
+    expect(reads.every(request => request.bearer === `Bearer ${credentials.token}`)).toBe(true);
     host.setAccess(false);
     const before = reads.length;
     await runWithServerHttpBaseUrl(origin, () => probeAlreadyRunningExistingSessionServiceability(options));
@@ -675,6 +1114,137 @@ describe('requester Session lifecycle custody', () => {
     await custody.cleanupOnFailure();
   });
 
+  it.each([false, true])('keeps admitted Workflow startup custody after observation ends but refuses released custody (released=%s)', async released => {
+    const host = await home();
+    const observation = new AbortController();
+    const current = () => verifyRequesterSessionMachineAdmissionCurrent({ credentials, attribution, sessionId: 'session',
+      serverHttpBaseUrl: origin, boundary: host.boundary });
+    const prepared = await prepareWorkflowSessionRequester({ credentials, attribution,
+      boundary: { serverId: attribution.serverId, serverHttpBaseUrl: origin, happyHomeDir: directory! },
+      verifyMachineAdmissionCurrent: current, signal: observation.signal });
+    if (!prepared) throw new Error('Missing Workflow requester bootstrap');
+    prepared.admitted.bindRuntimeMachineAdmissionCurrentness(current);
+    try {
+      observation.abort();
+      if (released) await prepared.cleanupOnFailure();
+      const custody = await prepared.admitted.bindSession('session', host.correspondence.sessionCreationTag);
+      if (released) expect(custody).toBeNull();
+      else {
+        expect(custody).not.toBeNull();
+        expect(await prepared.admitted.isCurrent()).toBe(true);
+        host.setAccess(false);
+        expect(await prepared.admitted.isCurrent()).toBe(false);
+      }
+    } finally { await prepared.cleanupOnFailure(); }
+  });
+
+  it.each(['bob', 'alice'] as const)('binds native Account credential use to verified Workflow requester/custodian identity (%s)', async custodianAccountId => {
+    const host = await home({ custodianAccountId });
+    const current = () => verifyRequesterSessionMachineAdmissionCurrent({ credentials, attribution, sessionId: 'session',
+      serverHttpBaseUrl: origin, boundary: host.boundary });
+    const prepared = await prepareWorkflowSessionRequester({ credentials, attribution,
+      machineAdmission: { actorAccountId: 'bob', custodianAccountId },
+      boundary: { serverId: attribution.serverId, serverHttpBaseUrl: origin, happyHomeDir: directory! },
+      verifyMachineAdmissionCurrent: current });
+    if (!prepared) throw new Error('Missing Workflow requester bootstrap');
+    try {
+      expect(prepared.admitted.allowNativeAccountCredentials).toBe(custodianAccountId === 'bob');
+      prepared.admitted.bindRuntimeMachineAdmissionCurrentness(current);
+      expect(await prepared.admitted.bindSession('session', host.correspondence.sessionCreationTag)).not.toBeNull();
+      const recovered = await resolveRequesterSessionBootstrap({ happyHomeDir: directory!, sessionId: 'session', attribution,
+        serverHttpBaseUrl: origin, machineAdmissionBoundary: host.boundary });
+      expect(recovered?.allowNativeAccountCredentials).toBe(custodianAccountId === 'bob');
+      await recovered?.dispose();
+      host.setAccess(false);
+      expect(await prepared.admitted.isCurrent()).toBe(false);
+    } finally { await prepared.cleanupOnFailure(); }
+  });
+
+  it.each(['ui', 'cli', 'agent', 'misbound', 'foreign'] as const)('carries %s Workflow requester custody through spawn isolation into an external Agent child', async caller => {
+    const custodianAccountId = caller === 'foreign' ? 'alice' : 'bob';
+    const refusesNative = caller === 'misbound' || caller === 'foreign';
+    const host = await home({ custodianAccountId });
+    const current = () => verifyRequesterSessionMachineAdmissionCurrent({ credentials, attribution, sessionId: 'session',
+      serverHttpBaseUrl: origin, boundary: host.boundary });
+    // The omitted admission is the wiring negative: the same bearer and
+    // attribution cannot independently authorize using the Machine's native login.
+    const prepared = await prepareWorkflowSessionRequester({ credentials, attribution,
+      ...(caller !== 'misbound' ? { machineAdmission: { actorAccountId: 'bob', custodianAccountId } } : {}),
+      boundary: { serverId: attribution.serverId, serverHttpBaseUrl: origin, happyHomeDir: directory! },
+      verifyMachineAdmissionCurrent: current });
+    if (!prepared) throw new Error('Missing Workflow requester bootstrap');
+    prepared.admitted.bindRuntimeMachineAdmissionCurrentness(current);
+    const pluginId = `acme.fix96-${caller}`;
+    const plugin = await createAuthoredAdmittedPluginRuntimeFixture({ happyHomeDir: directory!, controller: pluginReloadController,
+      plugins: [{ manifest: createPluginManifestV2Fixture({ id: pluginId, contributes: { agents: [{ id: 'agent',
+        title: 'External native Agent', runtime: { kind: 'custom' }, primary: 'sessions',
+        capabilities: { sessions: { open: ['create'], delivery: ['newTurn'], cancel: true } } }] } }),
+        files: { 'daemon.mjs': `import { factory } from './agent.mjs';
+          export function activate(api) { api.agents.register('agent', factory, {
+            sessionRunnerFactory: { module: './agent.mjs', export: 'factory', runtimeApiVersion: 1 }
+          }); }`,
+          'agent.mjs': `export function factory() { return { sessions: {
+            async open() { throw new Error('The OS child boundary owns this launch proof'); }
+          } }; }` } }] });
+    const resources = createProviderLaunchResourceScope();
+    const redaction = createProviderRedactionLease({ values: [] });
+    let nativeChildren = 0;
+    const handler = createMachineSessionSpawnRpcHandler({ serverId: attribution.serverId, handlers: {
+      spawnSession: async options => {
+        expect(options.requesterSessionBootstrap).toBe(prepared.admitted);
+        const identity = await resolveSpawnBackendIdentity({ agentTarget: options.agentTarget, backendTarget: options.backendTarget,
+          existingSessionId: '', resume: '', credentials });
+        if (!identity.ok) throw new Error(`External Agent fixture identity refused: ${identity.error.type}`);
+        const launchOptions = { ...options, backendTarget: identity.effectiveBackendTargetV2 };
+        const custody = await options.requesterSessionBootstrap!.bindSession('session', host.correspondence.sessionCreationTag);
+        expect(custody).not.toBeNull();
+        const services = await prepareDaemonConnectedServices({ options: launchOptions, normalizedExistingSessionId: '', requestedSessionId: 'session',
+          effectiveResume: '', catalogAgentId: identity.catalogAgentId, credentials,
+          activeServerDir: join(directory!, 'servers', attribution.serverId),
+          api: await ApiClient.create(credentials), connectedServiceRefreshCoordinator: null, processEnv: {},
+          connectedServicesMaterializationBaseDir: join(directory!, 'materialized'), pluginRuntimeRegistry: plugin.registry,
+          isAccountRuntimeCurrent: prepared.admitted.isCurrent });
+        if (!services.ok) return services.result;
+        const child = await prepareDaemonSpawnChildEnvironment({ options: { ...launchOptions, existingSessionId: 'session',
+          requesterSessionCredentialFile: custody!.path }, resolvedAgentId: `${pluginId}/agent`,
+          effectiveModelSelection: undefined, terminal: undefined, profileEnvironmentVariables: {}, daemonSpawnHooks: null,
+          pluginRuntimeRegistry: plugin.registry, processEnv: {}, connectedServiceAuth: services.auth,
+          connectedServiceMaterializationIdentity: services.materializationIdentity,
+          providerBindingAttempt: null, providerAgentTargetKey: null, providerDiagnosticRedactionLease: redaction,
+          launchResourceScope: resources });
+        if (!child.ok) return child.result;
+        const receipt = join(directory!, 'native-child-receipt.json');
+        await promisify(execFile)(process.execPath, ['-e', `const fs = require('node:fs');
+          const custody = JSON.parse(fs.readFileSync(process.env.HAPPIER_SESSION_REQUESTER_CREDENTIAL_FILE, 'utf8'));
+          fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ sessionId: process.env.HAPPIER_SESSION_REQUESTER_SESSION_ID,
+            accountId: custody.attribution.accountId }));`], {
+          env: buildScopedProcessEnv({ baseEnv: {}, explicitEnv: child.extraEnvForChild, unsetEnvKeys: child.spawnEnvironment.unsetEnvKeys }),
+        });
+        nativeChildren++;
+        expect(JSON.parse(await readFile(receipt, 'utf8'))).toEqual({ sessionId: 'session', accountId: 'bob' });
+        return { type: 'success', sessionId: 'session' };
+      },
+    } });
+    const previousHome = configuration.happyHomeDir;
+    configuration.happyHomeDir = directory!;
+    try {
+      const result = await handler({ directory: directory!, agentTarget: { kind: 'agent', identity: { pluginId, localId: 'agent' } } }, {
+        signal: new AbortController().signal, requesterSessionBootstrap: prepared.admitted,
+        localActionContext: { surface: refusesNative ? 'cli' : caller === 'agent' ? 'agent' : caller === 'ui' ? 'ui' : 'cli',
+          authority: caller === 'agent' ? 'account_automation' : 'present_user' },
+      });
+      expect(result, JSON.stringify(result)).toMatchObject(refusesNative
+        ? { type: 'error', errorCode: 'SPAWN_VALIDATION_FAILED', errorMessage: 'Requester Agent credential isolation unavailable' }
+        : { type: 'success', sessionId: 'session' });
+      expect(nativeChildren).toBe(refusesNative ? 0 : 1);
+    } finally {
+      try {
+        await resources.release(); redaction.close();
+        await plugin.dispose(); await prepared.cleanupOnFailure();
+      } finally { configuration.happyHomeDir = previousHome; }
+    }
+  });
+
   it('retires only an unadopted bootstrap Saved Secret catalog on launch failure', async () => {
     const host = await home();
     const active = getActiveAccountSettingsSnapshot();
@@ -691,12 +1261,18 @@ describe('requester Session lifecycle custody', () => {
         resourceId: 'unadopted-secret', mode: 'plain',
         content: { v: 1, name: 'Bob token', kind: 'token', value: 'bob-private-material' },
       }) }] })).toBe(true);
-    expect(context.readSnapshot()?.savedSecretResources?.[0]?.storedContent).not.toBeNull();
+    const captured = context.readSnapshot();
+    if (!captured) throw new Error('Missing admitted catalog');
+    const materializer = createSavedSecretMaterializerFromSnapshotV1(captured, { isCurrent: () => context.readSnapshot() === captured });
+    const reference = formatSavedSecretCatalogReferenceV1({ kind: 'shared_resource', id: 'unadopted-secret' });
+    expect(materializer.resolve(reference)).toMatchObject({ status: 'ready', value: 'bob-private-material' });
 
     await result.cleanupOnFailure();
 
-    expect(context.readSnapshot()?.savedSecretCatalogState).toBe('temporarily_unavailable');
-    expect(context.readSnapshot()?.savedSecretResources?.[0]?.storedContent).toBeNull();
+    expect(context.readSnapshot()).toBeNull();
+    expect(materializer.resolve(reference)).toEqual({ status: 'temporarily_unavailable' });
+    expect(await context.isCurrent()).toBe(false);
+    expect(context.commitCatalog({ state: 'ready', resources: [] })).toBe(false);
     expect(getActiveAccountSettingsSnapshot()).toBe(active);
   });
 
@@ -714,7 +1290,7 @@ describe('requester Session lifecycle custody', () => {
     const bound = await result.admitted.bindSession('session', host.correspondence.sessionCreationTag);
     expect(bound).not.toBeNull();
     if (!bound) throw new Error('Missing bound requester custody');
-    expect(await readFile(bound.path, 'utf8')).toContain('bob-ordinary');
+    expect(await readFile(bound.path, 'utf8')).toContain(credentials.token);
     const context = result.admitted.savedSecretOperationContext;
     expect(context.commitCatalog({ state: 'ready', resources: [{ resourceId: 'failed-bound-secret',
       ownerAccountId: 'bob', displayName: 'Bob token', kind: 'token', encryptionMode: 'plain',
@@ -722,12 +1298,18 @@ describe('requester Session lifecycle custody', () => {
         resourceId: 'failed-bound-secret', mode: 'plain',
         content: { v: 1, name: 'Bob token', kind: 'token', value: 'bob-private-material' },
       }) }] })).toBe(true);
-    expect(context.readSnapshot()?.savedSecretResources?.[0]?.storedContent).not.toBeNull();
+    const captured = context.readSnapshot();
+    if (!captured) throw new Error('Missing admitted catalog');
+    const materializer = createSavedSecretMaterializerFromSnapshotV1(captured, { isCurrent: () => context.readSnapshot() === captured });
+    const reference = formatSavedSecretCatalogReferenceV1({ kind: 'shared_resource', id: 'failed-bound-secret' });
+    expect(materializer.resolve(reference)).toMatchObject({ status: 'ready', value: 'bob-private-material' });
 
     await result.cleanupOnFailure();
 
-    expect(context.readSnapshot()?.savedSecretCatalogState).toBe('temporarily_unavailable');
-    expect(context.readSnapshot()?.savedSecretResources?.[0]?.storedContent).toBeNull();
+    expect(context.readSnapshot()).toBeNull();
+    expect(materializer.resolve(reference)).toEqual({ status: 'temporarily_unavailable' });
+    expect(await context.isCurrent()).toBe(false);
+    expect(context.commitCatalog({ state: 'ready', resources: [] })).toBe(false);
     await expect(readFile(bound.path, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     expect(getActiveAccountSettingsSnapshot()).toBe(active);
     expect(result.admitted.getBoundSessionId()).toBe('session');
@@ -746,7 +1328,7 @@ describe('requester Session lifecycle custody', () => {
       serverHttpBaseUrl: origin, boundary: host.boundary });
     expect(await resolveRequesterSessionCredentials({ ...binding, serverHttpBaseUrl: origin,
       verifyMachineAdmissionCurrent: current })).toMatchObject({ ...credentials, credentialProvenance: 'stored_session' });
-    const e2ee: Credentials = { token: 'bob-ordinary', encryption: { type: 'dataKey',
+    const e2ee: Credentials = { token: credentials.token, encryption: { type: 'dataKey',
       publicKey: new Uint8Array(32).fill(8), machineKey: new Uint8Array(32).fill(7) } };
     const encoded = encodeStoredCredentials(e2ee);
     const encrypted = encryptSecretStringV1('bob-private-secret', deriveSettingsSecretsKeyForCredentials(e2ee),
@@ -756,13 +1338,14 @@ describe('requester Session lifecycle custody', () => {
     await replacePrivateBearerFile({ path: custody.path, contents: JSON.stringify(e2eeStored) });
     const previousSessionId = process.env[REQUESTER_SESSION_ID_ENV];
     process.env[REQUESTER_SESSION_ID_ENV] = 'session';
+    const release = publishServerHttpRuntimeOrigin('http://127.0.0.1:48186', 'iroh');
     try {
       const child = await readRequesterSessionCredentialsForChild(custody.path);
       expect(child).toMatchObject({ ...e2ee, credentialProvenance: 'stored_session' });
       if (!child) throw new Error('Missing protected child credentials');
       expect(child.encryption).toEqual(e2ee.encryption);
       expect(child.requesterSessionCredentialScope).toEqual({ serverId: childAttribution.serverId,
-        serverHttpBaseUrl: normalizeServerHttpBaseUrl(configuration.apiServerUrl),
+        serverHttpBaseUrl: 'http://127.0.0.1:48186',
         requesterSession: { sessionId: binding.sessionId, attribution: childAttribution } });
       expect(JSON.stringify(child)).not.toContain('requesterSessionCredentialScope');
       expect(decryptSecretStringWithKeysV1(encrypted, deriveSettingsSecretsReadKeysForCredentials(child))).toBe('bob-private-secret');
@@ -777,6 +1360,7 @@ describe('requester Session lifecycle custody', () => {
       expect(await resolveRequesterSessionCredentials({ ...binding, serverHttpBaseUrl: origin,
         verifyMachineAdmissionCurrent: current })).toBeNull();
     } finally {
+      release();
       if (previousSessionId === undefined) delete process.env[REQUESTER_SESSION_ID_ENV];
       else process.env[REQUESTER_SESSION_ID_ENV] = previousSessionId;
     }
@@ -799,11 +1383,12 @@ describe('requester Session lifecycle custody', () => {
     recovered?.savedSecretOperationContext.withdrawCatalog();
   });
 
-  it('recovers unstamped legacy Session ownership from authenticated owner evidence, without writing requester custody', async () => {
+  it.each([false, true])('recovers legacy Session ownership with retained attribution=%s from authenticated owner evidence, without writing requester custody', async stamped => {
     const host = await home();
     const recover = requesterCredentialOwner.resolveRequesterSessionBootstrapFromCustody;
     const recovered = await recover({ happyHomeDir: directory!, serverId: attribution.serverId, sessionId: 'session',
-      serverHttpBaseUrl: origin, machineAdmissionBoundary: host.boundary, legacyOwnerCredentials: { ...credentials } });
+      serverHttpBaseUrl: origin, machineAdmissionBoundary: host.boundary, legacyOwnerCredentials: { ...credentials },
+      ...(stamped ? { expectedAttribution: attribution } : {}) });
     expect(recovered?.getBoundSessionId()).toBe('session');
     expect(recovered?.attribution).toEqual(attribution);
     expect(await recovered?.isCurrent()).toBe(true);
@@ -822,7 +1407,7 @@ describe('requester Session lifecycle custody', () => {
           { target: attribution, custodianAccountId: 'bob' }) })).toMatchObject({ state: 'live', totals: { happier: { processCount: 2 } } });
     expect(await listRequesterSessionCredentialBindings({ happyHomeDir: directory!, serverId: attribution.serverId,
       machineId: attribution.machineId, installationId: attribution.installationId })).toEqual({ status: 'ready', bindings: [] });
-    recovered?.savedSecretOperationContext.withdrawCatalog();
+    await recovered?.dispose();
   });
 
   it.each(['shared Session', 'changed installation', 'lost access', 'foreign custody', 'malformed custody'] as const)(
@@ -837,8 +1422,29 @@ describe('requester Session lifecycle custody', () => {
         path: requesterSessionCredentialPath({ happyHomeDir: directory!, sessionId: 'session', attribution }), contents: '{}' });
       expect(await requesterCredentialOwner.resolveRequesterSessionBootstrapFromCustody({ happyHomeDir: directory!,
         serverId: attribution.serverId, sessionId: 'session', serverHttpBaseUrl: origin,
-        machineAdmissionBoundary: host.boundary, legacyOwnerCredentials: { ...credentials } })).toBeNull();
+        machineAdmissionBoundary: host.boundary, legacyOwnerCredentials: { ...credentials }, expectedAttribution: attribution })).toBeNull();
     });
+
+  it.each(['serverId', 'accountId', 'machineId', 'installationId'] as const)(
+    'does not replace a retained requester %s with the legacy owner identity', async field => {
+      const host = await home();
+      expect(await requesterCredentialOwner.resolveRequesterSessionBootstrapFromCustody({ happyHomeDir: directory!,
+        serverId: attribution.serverId, sessionId: 'session', serverHttpBaseUrl: origin,
+        machineAdmissionBoundary: host.boundary, legacyOwnerCredentials: { ...credentials },
+        expectedAttribution: { ...attribution, [field]: 'different-requester' } })).toBeNull();
+    });
+
+  it('recovers exact retained custody independently of an unreadable unrelated Session reference', async () => {
+    const host = await home();
+    await createRequesterSessionCredentialCustody({ happyHomeDir: directory!, sessionId: 'session', attribution, credentials });
+    await writePrivateOwnerFile({ path: requesterSessionCredentialPath({ happyHomeDir: directory!, sessionId: 'unrelated', attribution }), contents: '{}' });
+    const recovered = await requesterCredentialOwner.resolveRequesterSessionBootstrapFromCustody({ happyHomeDir: directory!,
+      serverId: attribution.serverId, sessionId: 'session', serverHttpBaseUrl: origin,
+      machineAdmissionBoundary: host.boundary, expectedAttribution: attribution, legacyOwnerCredentials: { ...credentials } });
+    expect(recovered?.getBoundSessionId()).toBe('session');
+    expect(await recovered?.isCurrent()).toBe(true);
+    await recovered?.dispose();
+  });
 
   it('discovers only this Home and installed Machine from existing protected custody, and reports malformed or unsafe state unavailable', async () => {
     await home();
@@ -886,7 +1492,7 @@ describe('requester Session lifecycle custody', () => {
     expect(getActiveAccountSettingsSnapshot()).toBe(alice);
     expect(await recovered?.isCurrent()).toBe(true);
     expect(host.requests.filter(request => !request.path.endsWith('/admission/verify'))
-      .every(request => request.bearer === 'Bearer bob-ordinary')).toBe(true);
+      .every(request => request.bearer === `Bearer ${credentials.token}`)).toBe(true);
     expect(host.requests.filter(request => request.path.endsWith('/admission/verify'))
       .every(request => request.bearer === 'Bearer alice-daemon')).toBe(true);
     expect(await resolveRequesterSessionBootstrap({ ...binding, attribution: { ...attribution, accountId: 'eve' },
@@ -898,7 +1504,7 @@ describe('requester Session lifecycle custody', () => {
     expect(await recovered?.isCurrent()).toBe(false);
     host.setAccountMode('plain'); host.setAccess(false);
     expect(await recovered?.savedSecretOperationContext.isCurrent()).toBe(false);
-    expect(await readFile(custody.path, 'utf8')).toContain('bob-ordinary');
+    expect(await readFile(custody.path, 'utf8')).toContain(credentials.token);
     host.setAccess(true);
     const reconnected = await resolveRequesterSessionBootstrap({ ...binding, serverHttpBaseUrl: origin,
       machineAdmissionBoundary: host.boundary });
@@ -912,11 +1518,48 @@ describe('requester Session lifecycle custody', () => {
       machineAdmissionBoundary: host.boundary })).toBeNull();
   });
 
+  it('retires an outstanding shared requester admission read when the bootstrap is disposed', async () => {
+    let stall = false;
+    let accepted!: () => void;
+    let release!: () => void;
+    const acceptedRead = new Promise<void>(resolve => { accepted = resolve; });
+    const heldRead = new Promise<void>(resolve => { release = resolve; });
+    const host = await home({ beforeMachineAccessRead: async () => {
+      if (stall) { accepted(); await heldRead; }
+    } });
+    // Use the existing real Home routes over TCP so abort must reach Axios.
+    restore?.(); restore = undefined;
+    const url = await app!.listen({ host: '127.0.0.1', port: 0 });
+    const custody = await prepareRequesterSessionBootstrap({ credentials, attribution,
+      boundary: { serverId: attribution.serverId, serverHttpBaseUrl: url, happyHomeDir: directory! },
+      boundSessionId: 'session', verifyMachineAdmissionCurrent: (signal?: AbortSignal) =>
+        verifyRequesterSessionMachineAdmissionCurrent({ credentials, attribution, sessionId: 'session',
+          serverHttpBaseUrl: url, boundary: host.boundary, signal }) });
+    if (!custody) throw new Error('Missing requester bootstrap');
+    stall = true;
+    const pending = Promise.all([custody.admitted.isCurrent(), custody.admitted.isCurrent()]);
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await acceptedRead;
+      const result = await Promise.race([Promise.all([custody.admitted.dispose(), pending]),
+        new Promise<never>((_, reject) => {
+          watchdog = setTimeout(() => reject(new Error('Bootstrap retirement did not settle admission')), 500);
+        })]);
+      expect(result[1]).toEqual([false, false]);
+    } finally {
+      clearTimeout(watchdog);
+      stall = false;
+      release();
+      await pending;
+      await custody.admitted.dispose();
+    }
+  });
+
   it('binds runtime currentness to the actual Session after custody binding', async () => {
     const host = await home();
     const rpc = new AbortController();
     const result = await admitRequesterSessionBootstrap({ bootstrap: { v: 1, disposition: 'ordinary_requester',
-      credentials: { token: 'bob-ordinary' }, sessionId: 'session', sessionCreationDisposition: 'rejoined' },
+      credentials: { token: credentials.token }, sessionId: 'session', sessionCreationDisposition: 'rejoined' },
       boundary: { serverId: attribution.serverId, serverHttpBaseUrl: origin, happyHomeDir: directory! },
       context: { signal: rpc.signal, machineAdmission: { actorAccountId: 'bob', custodianAccountId: 'alice',
         machineId: 'machine', installationId: 'installation', role: 'use', encryptionMode: 'plain' },
@@ -940,7 +1583,7 @@ describe('requester Session lifecycle custody', () => {
     host.setAccess(false);
     expect(await admitted.savedSecretOperationContext.isCurrent()).toBe(false);
     expect(admitted.savedSecretOperationContext.readSnapshot()).toBeNull();
-    expect(await readFile(bound!.path, 'utf8')).toContain('bob-ordinary');
+    expect(await readFile(bound!.path, 'utf8')).toContain(credentials.token);
   });
 
   it('refuses wrong authenticated requester and an installation replaced during fresh verification', async () => {

@@ -6,7 +6,7 @@ import {
 } from '../sessions/board/actions.js';
 import { SessionSurfaceItemV1Schema, isSessionSurfaceItemIdentityCorrespondingV1, type SessionSurfaceItemV1 } from '../sessions/board/item.js';
 import { SessionBoardItemWidthSchema } from '../sessions/board/layout.js';
-import { type SessionBoardLayoutOperationV1 } from '../sessions/board/layoutOperations.js';
+import type { SessionBoardLayoutOperationV1 } from '../sessions/board/layoutOperations.js';
 import { getWidgetSizeFootprintV1, normalizeWidgetSizeForSurfaceV1, resolveSessionBoardWidgetSizeV1, WidgetSizeV1Schema } from './widgetPresentationV1.js';
 import type { WidgetActionSurfacePortV1, WidgetMoveCaptureV1 } from './actionsV1.js';
 import { sameStrictJsonValue } from '../json/strictJsonValue.js';

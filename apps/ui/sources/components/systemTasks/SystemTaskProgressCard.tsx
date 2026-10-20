@@ -1,3 +1,4 @@
+import { buildApprovalHref } from '@/components/approvals/approvalNavigation';
 import * as React from 'react';
 import { readRpcRequestDisposition } from '@happier-dev/sync-client';
 import { Linking, View } from 'react-native';
@@ -203,7 +204,7 @@ function DesktopSystemTaskLogsControl() {
             disabled={!execution.ready || execution.approval.approvalPending} showChevron={false} />
         {execution.approval.approvalPending && execution.approval.approvalId && execution.binding ? <ActionApprovalPendingNotice
             testID="system-task-logs-approval" message={t('secrets.catalog.approvalPending')}
-            onOpenApproval={() => router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(execution.approval.approvalId!)}?serverId=${encodeURIComponent(execution.binding!.serverId)}`)}
+            onOpenApproval={() => router.pushRetainingCurrent(buildApprovalHref(execution.approval.approvalId!, execution.binding!.serverId))}
         /> : null}
     </>;
 }

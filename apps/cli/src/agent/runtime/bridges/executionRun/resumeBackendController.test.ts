@@ -37,8 +37,11 @@ describe('resumeBackendControllerForResumableRun', () => {
       retentionPolicy: 'resumable',
       runClass: 'long_lived',
       ioMode: 'request_response',
-      status: 'cancelled',
+      status: 'failed',
       startedAtMs: 1,
+      error: { code: 'provider_usage_exhausted', runtimeIssueV1: { v: 1, scope: 'primary_session', status: 'failed',
+        code: 'usage_limit', source: 'usage_limit', occurredAt: 1,
+        usageLimit: { v: 1, resetAtMs: 42_000, retryAfterMs: null, quotaScope: 'account', recoverability: 'wait' } } },
       resumeHandle: {
         kind: 'provider_session.v1',
         backendTarget: { kind: 'backend', backendId: 'codex', sourceKind: 'built_in' },
@@ -88,6 +91,7 @@ describe('resumeBackendControllerForResumableRun', () => {
     expect(runtimeCount).toBe(1);
     expect(provisionCount).toBe(1);
     expect(controllers.get(run.runId)?.kind).toBe('backend');
+    expect(runs.get(run.runId)?.error).toBeUndefined();
   });
 
   it('retires a provisioned runtime when the exact resume occurrence was stopped before provisioning settled', async () => {

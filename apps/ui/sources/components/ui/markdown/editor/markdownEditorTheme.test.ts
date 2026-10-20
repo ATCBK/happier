@@ -14,7 +14,7 @@ function makeThemeFixture(overrides?: { dark?: boolean }) {
     return {
         dark: overrides?.dark ?? true,
         colors: {
-            surface: { inset: '#111111', elevated: '#222222' },
+            surface: { inset: '#111111', elevated: '#222222', base: '#111111' },
             text: { primary: '#eeeeee', secondary: '#aaaaaa', link: '#58a6ff' },
             border: { default: '#303030' },
             state: { active: { background: '#0a84ff33', foreground: '#0a84ff' } },

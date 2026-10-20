@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { usePluginHostApi, usePluginTranslation } from '@happier-dev/plugin-ui';
+import { isPluginError } from '@happier-dev/plugin-sdk';
+import { usePluginHostApi, usePluginHostReadiness, usePluginTranslation } from '@happier-dev/plugin-ui';
 
 import type { TriageAdministerActionInputV1 } from '../../actions/actionsCatalogProtocol.js';
 import type { TriageActionV1, TriageActionsReadV1 } from '../../settings/actions.js';
@@ -79,11 +80,14 @@ export type TriageMountedActionsV1 = Readonly<{
   /**
    * Run one explicit create/update/delete/reorder.
    *
-   * It resolves to the authoritative catalog when the owner applied the write,
-   * and to `null` for every settled refusal — so a caller never has to guess at
-   * the set a refusal left behind.
+   * It resolves to the authoritative catalog and its acknowledged revision when
+   * the owner applied the write, and to `null` for every settled refusal — so a
+   * caller never has to guess at the set a refusal left behind.
    */
-  administer(input: TriageAdministerActionInputV1): Promise<readonly TriageActionV1[] | null>;
+  administer(input: TriageAdministerActionInputV1): Promise<Readonly<{
+    actions: readonly TriageActionV1[];
+    revision: string | null;
+  }> | null>;
 }>;
 
 const UNAVAILABLE_REASON =
@@ -92,13 +96,14 @@ const UNAVAILABLE_REASON =
 export function useTriageActions(): TriageMountedActionsV1 {
   const hostApi = usePluginHostApi();
   const durable = useTriageDurableAccount();
+  const readiness = usePluginHostReadiness(durable.actions === null);
   const text = usePluginTranslation();
   // One owner, two transports. Direct Account KV when this mount can
   // reach the Account — which is what keeps the configured actions readable and
   // editable while no daemon is — and the published Actions otherwise.
   const transport = useMemo<TriageActionsTransportV1>(
     () => durable.actions
-      ? createDirectTriageActionsTransport(durable.actions)
+      ? createDirectTriageActionsTransport(durable.actions, hostApi)
       : createActionTriageActionsTransport(hostApi),
     [durable.actions, hostApi],
   );
@@ -133,10 +138,11 @@ export function useTriageActions(): TriageMountedActionsV1 {
   }, [text, transport]);
 
   useEffect(() => {
+    if (readiness.pending) return;
     const controller = new AbortController();
     void load(controller.signal);
     return () => { controller.abort(); };
-  }, [load]);
+  }, [load, readiness.pending, readiness.revision]);
 
   const retry = useCallback(() => {
     const controller = new AbortController();
@@ -192,16 +198,18 @@ export function useTriageActions(): TriageMountedActionsV1 {
 
   const administer = useCallback(async (
     input: TriageAdministerActionInputV1,
-  ): Promise<readonly TriageActionV1[] | null> => {
+  ): ReturnType<TriageMountedActionsV1['administer']> => {
     if (busy || unavailableReason !== null) return null;
     const controller = new AbortController();
     setBusy(true);
     setNotice(null);
     try {
       const result = await transport.administer(input, { signal: controller.signal });
+      if (result === null) return null;
       if (result.status === 'applied') {
+        // Restoring removes the stored set, so what is on screen is the shipped catalog again, not a configured one.
         const projection = readTriageActionsProjectionV1({
-          availability: 'parsed',
+          availability: input.kind === 'reset' ? 'absent' : 'parsed',
           actions: result.actions ?? [],
         });
         setRead(projection);
@@ -213,7 +221,7 @@ export function useTriageActions(): TriageMountedActionsV1 {
           tone: 'secondary',
           message: text('plugins.triage.surface.actions.settled', 'Actions updated'),
         });
-        return projection.value.actions;
+        return { actions: projection.value.actions, revision: result.revision ?? null };
       }
       setNotice({ tone: 'warning', message: refusalMessage(result, text) });
       // A conflict and an unknown action are the two refusals that mean the set
@@ -224,7 +232,11 @@ export function useTriageActions(): TriageMountedActionsV1 {
         await load(controller.signal);
       }
       return null;
-    } catch {
+    } catch (error) {
+      if (isPluginError(error) && error.code === 'denied') {
+        setNotice({ tone: 'warning', message: text('happier.plugin-ui.action.error.denied', 'This isn’t allowed here.') });
+        return null;
+      }
       setUnavailableReason(text('plugins.triage.surface.actions.unavailable', UNAVAILABLE_REASON));
       setRead(TRIAGE_UNREAD_ACTIONS_V1);
       setRevision(null);
@@ -242,7 +254,7 @@ export function useTriageActions(): TriageMountedActionsV1 {
     loaded,
     busy,
     notice,
-    unavailableReason,
+    unavailableReason: readiness.pending ? null : unavailableReason,
     retry,
     resolveForExecution,
     administer,
@@ -256,6 +268,7 @@ export function useTriageActions(): TriageMountedActionsV1 {
     retry,
     revision,
     unavailableReason,
+    readiness.pending,
   ]);
 }
 

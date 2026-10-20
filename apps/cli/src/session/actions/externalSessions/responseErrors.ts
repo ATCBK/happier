@@ -17,6 +17,7 @@ import {
 import { isExternalSessionProviderFailureError } from '@/session/external/providerOps';
 import { isAgentExternalSessionsFailureCode } from '@happier-dev/plugin-sdk/sessions/external';
 import { ExternalSessionPersistedTakeoverPreflightError } from './persistedTakeoverPreflightError';
+import { classifyServerEndpointError, isNetworkConnectionErrorCode, readNormalizedConnectionErrorCode } from '@/api/client/classifyServerEndpointError';
 
 const TAKEOVER_ADMISSION_INVARIANT_CODES = [
     'persisted_takeover_admission_invalid_metadataVersion',
@@ -89,22 +90,90 @@ function mapProviderFailureCodeToExternalSessionsErrorCode(code: string): Extern
     return 'internal_error';
 }
 
+function readExternalSessionsSafeDiagnostic(message: string) {
+    // Only exact host-recognized reasons may cross this diagnostic boundary.
+    // Arbitrary Agent messages can contain transcript text or private paths.
+    const diagnostics: Readonly<Record<string, Readonly<{ failureClass: string; reason: string }>>> = {
+        external_sessions_native_cursor_too_large: { failureClass: 'result_admission', reason: 'native_cursor_too_large' },
+        external_sessions_failure_byte_budget: { failureClass: 'result_admission', reason: 'failure_byte_budget' },
+        external_sessions_result_envelope: { failureClass: 'result_admission', reason: 'result_envelope' },
+        external_sessions_result_value: { failureClass: 'result_admission', reason: 'result_value' },
+        external_sessions_result_byte_budget: { failureClass: 'result_admission', reason: 'result_byte_budget' },
+        external_sessions_transcript_page_envelope: { failureClass: 'result_admission', reason: 'transcript_page_envelope' },
+        external_sessions_transcript_page_item: { failureClass: 'result_admission', reason: 'transcript_page_item' },
+        external_sessions_transcript_page_continuation: { failureClass: 'result_admission', reason: 'transcript_page_continuation' },
+        external_sessions_transcript_page_diagnostics: { failureClass: 'result_admission', reason: 'transcript_page_diagnostics' },
+        external_sessions_transcript_item_count_budget: { failureClass: 'result_admission', reason: 'transcript_item_count_budget' },
+        external_sessions_transcript_item_byte_budget: { failureClass: 'result_admission', reason: 'transcript_item_byte_budget' },
+        external_sessions_transcript_page_byte_budget: { failureClass: 'result_admission', reason: 'transcript_page_byte_budget' },
+        external_sessions_transcript_item_json: { failureClass: 'result_admission', reason: 'transcript_item_json' },
+        external_sessions_transcript_cursor_invalid: { failureClass: 'source_validity', reason: 'transcript_cursor_invalid' },
+        external_sessions_transcript_read_failed: { failureClass: 'source_read', reason: 'transcript_read_failed' },
+        external_sessions_transcript_request_invalid: { failureClass: 'request_admission', reason: 'transcript_request_invalid' },
+        external_sessions_transcript_source_validation: { failureClass: 'source_validity', reason: 'transcript_source_validation' },
+        external_sessions_transcript_page_unsupported: { failureClass: 'availability', reason: 'transcript_page_unsupported' },
+        external_sessions_operation_type_error: { failureClass: 'TypeError', reason: 'operation_rejected' },
+        external_sessions_operation_range_error: { failureClass: 'RangeError', reason: 'operation_rejected' },
+        external_sessions_operation_syntax_error: { failureClass: 'SyntaxError', reason: 'operation_rejected' },
+        external_sessions_operation_rejected: { failureClass: 'unknown', reason: 'operation_rejected' },
+        external_sessions_source_identity_changed: { failureClass: 'source_validity', reason: 'source_identity_changed' },
+        external_sessions_source_identity_unavailable: { failureClass: 'source_validity', reason: 'source_identity_unavailable' },
+        external_sessions_unfinished_file_missing: { failureClass: 'source_validity', reason: 'unfinished_file_missing' },
+        external_sessions_path_authority: { failureClass: 'source_validity', reason: 'path_authority' },
+        external_sessions_frontier_anchor: { failureClass: 'source_validity', reason: 'frontier_anchor' },
+        external_sessions_content_cursor_invalid: { failureClass: 'source_validity', reason: 'content_cursor_invalid' },
+        external_sessions_exact_id_source_changed: { failureClass: 'source_validity', reason: 'exact_id_source_changed' },
+        external_sessions_source_kind_mismatch: { failureClass: 'source_validity', reason: 'source_kind_mismatch' },
+        external_sessions_source_validation: { failureClass: 'source_validity', reason: 'source_validation' },
+        external_sessions_transcript_unsupported_record: { failureClass: 'source_validity', reason: 'transcript_unsupported_record' },
+        external_sessions_transcript_record_limit: { failureClass: 'source_validity', reason: 'transcript_record_limit' },
+        unsupported_record_skipped: { failureClass: 'source_validity', reason: 'transcript_unsupported_record' },
+    };
+    return Object.hasOwn(diagnostics, message) ? diagnostics[message] : null;
+}
+
+export function logExternalSessionSourceDiscontinuity(diagnostics: readonly Readonly<{ code: string }>[] = []): void {
+    const diagnostic = diagnostics.map(value => readExternalSessionsSafeDiagnostic(value.code))
+        .find(value => value?.failureClass === 'source_validity');
+    logger.debug('[externalSessions][agent_failure]', {
+        code: 'source_discontinuity',
+        ...(diagnostic ?? { failureClass: 'source_validity', reason: 'transcript_truncated' }),
+    });
+}
+
+/** A represented codec mismatch is visible item loss, not a source discontinuity. */
+export function logExternalSessionUnsupportedTranscriptRecord(diagnostics: readonly Readonly<{ code: string }>[] = []): void {
+    const diagnostic = diagnostics.map(value => readExternalSessionsSafeDiagnostic(value.code))
+        .find(value => value?.reason === 'transcript_unsupported_record');
+    if (!diagnostic) return;
+    logger.debug('[externalSessions][agent_failure]', { code: 'unsupported_record', ...diagnostic });
+}
+
 export function mapExternalSessionProviderFailureToExternalSessionsError(
     error: unknown,
 ): { ok: false; errorCode: ExternalSessionsErrorCode; error: string; retryable: boolean } | null {
     if (!isExternalSessionProviderFailureError(error)) return null;
     const errorCode = mapProviderFailureCodeToExternalSessionsErrorCode(error.code);
-    // The Agent's message stays out of the log; its closed code is enough to
-    // tell a timeout from an Agent fault or an unavailable Agent.
+    const diagnostic = readExternalSessionsSafeDiagnostic(error.message)
+        ?? (error.code === 'source_invalid' ? { failureClass: 'source_validity', reason: 'source_validation' }
+            : error.operation === 'pageTranscript' ? { failureClass: 'agent_failure', reason: 'transcript_agent_failure' } : {});
     logger.debug('[externalSessions][agent_failure]', {
         code: isAgentExternalSessionsFailureCode(error.code) ? error.code : 'unrecognized',
         errorCode,
         retryable: error.retryable,
+        ...diagnostic,
     });
     return {
         ...externalSessionsError(errorCode),
         retryable: error.retryable,
     };
+}
+
+/** Host-owned page branches use the same closed safe-token diagnostic owner. */
+export function logExternalSessionTranscriptPageFailure(token: string): void {
+    const diagnostic = readExternalSessionsSafeDiagnostic(token)
+        ?? { failureClass: 'agent_failure', reason: 'transcript_agent_failure' };
+    logger.debug('[externalSessions][agent_failure]', { code: 'transcript_page_failure', ...diagnostic });
 }
 
 /**
@@ -147,6 +216,13 @@ const EXTERNAL_SESSION_FOLLOW_FAILURE_RESPONSES: Readonly<Record<
 export function mapExternalSessionCorridorFailureToExternalSessionsError(
     error: unknown,
 ): { ok: false; errorCode: ExternalSessionsErrorCode; error: string; retryable?: boolean } | null {
+    if (error instanceof Error && 'code' in error && error.code === 'outcome_unknown') {
+        logExternalSessionsInternalError('external_session.outcome_unknown', error);
+        // A lost create/rejoin receipt cannot establish rollback. Keep the
+        // released failure class, but do not flatten its outcome to a generic
+        // link failure or mislabel the Home transport as an Agent timeout.
+        return externalSessionsError('internal_error', 'external_session_outcome_unknown');
+    }
     const providerFailure = mapExternalSessionProviderFailureToExternalSessionsError(error);
     if (providerFailure) return providerFailure;
     if (error instanceof ExternalSessionViewerLeaseCapacityExceededError) {
@@ -299,11 +375,18 @@ export function logExternalSessionsInternalError(context: string, error: unknown
     }
 
     if (error instanceof Error) {
+        const cause = 'cause' in error ? error.cause : undefined;
+        const causeCode = readNormalizedConnectionErrorCode(cause);
+        const creationOutcomeUnknown = 'code' in error && error.code === 'outcome_unknown';
         logger.debug('[externalSessions][internal_error]', {
             context: safeContext,
             errorCode: 'internal_error',
             errorKind: 'error',
             ...describeErrorLocation(error),
+            ...(creationOutcomeUnknown ? {
+                transportKind: causeCode === 'ERR_CANCELED' ? 'cancelled' : classifyServerEndpointError(cause).kind,
+                ...(causeCode === 'ERR_CANCELED' || isNetworkConnectionErrorCode(causeCode) ? { causeCode } : {}),
+            } : {}),
         });
         return;
     }

@@ -17,10 +17,10 @@ import {
     txSessionMessageFindFirst,
     txSessionMessageFindMany,
     sessionShareFindMany,
-    sessionDiscussionFindMany,
+    discussionFindMany,
     txSessionFindMany,
     txSessionShareFindMany,
-    txSessionDiscussionFindMany,
+    txDiscussionFindMany,
     sessionPendingMessageCount,
     sessionUpdate,
 } from "./sessionRoutes.testkit";
@@ -359,9 +359,9 @@ describe("sessionRoutes v2 session by id", () => {
             }),
         });
         expect(txSessionShareFindMany).toHaveBeenCalledOnce();
-        expect(txSessionDiscussionFindMany).toHaveBeenCalled();
+        expect(txDiscussionFindMany).toHaveBeenCalled();
         expect(sessionShareFindMany).not.toHaveBeenCalled();
-        expect(sessionDiscussionFindMany).not.toHaveBeenCalled();
+        expect(discussionFindMany).not.toHaveBeenCalled();
     });
 
     it("does not read Account currentness for an owned layout-zero row", async () => {
@@ -601,7 +601,7 @@ describe("sessionRoutes v2 session by id", () => {
                     sessionId: "runner-session",
                 } },
             }));
-            expect(txSessionDiscussionFindMany).not.toHaveBeenCalled();
+            expect(txDiscussionFindMany).not.toHaveBeenCalled();
         },
     );
 

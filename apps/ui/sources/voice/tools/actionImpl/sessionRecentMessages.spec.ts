@@ -204,43 +204,14 @@ describe('getSessionRecentMessagesForVoiceTool', () => {
         });
     });
 
-    it('projects the local semantic transcript through the canonical Action result contract', async () => {
+    it('does not promote loaded snippets into an authoritative transcript without Account scope', async () => {
         const { getSessionTranscriptForVoiceTool } = await import('./sessionRecentMessages');
 
         const result = await getSessionTranscriptForVoiceTool({
             sessionId: 's1',            limit: 10,
         });
 
-        expect(result).toEqual({
-            ok: true,
-            sessionId: 's1',
-            items: [
-                {
-                    id: 'm1',
-                    createdAt: 1,
-                    semanticRole: 'user',
-                    role: 'user',
-                    kind: 'message',
-                    text: 'hello',
-                },
-                {
-                    id: 'm2',
-                    createdAt: 2,
-                    semanticRole: 'assistant',
-                    role: 'assistant',
-                    kind: 'message',
-                    text: 'assistant reply',
-                },
-            ],
-            nextCursor: '1:m1',
-            hasMore: true,
-            diagnostics: {
-                rawRowsScanned: 2,
-                pagesFetched: 0,
-                scanLimitReached: false,
-                payloadTruncations: 0,
-            },
-        });
+        expect(result).toEqual({ ok: false, errorCode: 'admission_unavailable', errorMessage: 'admission_unavailable' });
         expect(isCanonicalSessionTranscriptActionOutput(result)).toBe(true);
     });
 
@@ -347,20 +318,13 @@ describe('voice recent-message and transcript projection Home identity', () => {
         });
     });
 
-    it('keeps the canonical transcript projection bound to the requested Home', async () => {
+    it('cannot substitute the focused Home transcript when the requested Home has no captured Account authority', async () => {
         seedFocusedHomeTranscript('auto');
         const { getSessionTranscriptForVoiceTool } = await import('./sessionRecentMessages');
 
         const result = await getSessionTranscriptForVoiceTool({ sessionId: 's1', serverId: 'home-b', limit: 10 });
 
-        expect(result).toMatchObject({
-            ok: true,
-            sessionId: 's1',
-            items: [],
-            nextCursor: null,
-            hasMore: false,
-            diagnostics: { rawRowsScanned: 0 },
-        });
+        expect(result).toEqual({ ok: false, errorCode: 'admission_unavailable', errorMessage: 'admission_unavailable' });
         expect(JSON.stringify(result)).not.toContain('focused home secret');
         expect(isCanonicalSessionTranscriptActionOutput(result)).toBe(true);
     });

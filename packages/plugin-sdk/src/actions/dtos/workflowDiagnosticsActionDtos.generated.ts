@@ -64,8 +64,10 @@ export type WorkflowDiagnosticsActionResultById = {
                     name: string;
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
+                    multiple?: boolean | undefined;
                     enum?: string[] | undefined;
                     default?: JsonValue | undefined;
+                    defaultFrom?: 'origin_session' | undefined;
                     description?: string | undefined;
                     optionsSourceId?: string | undefined;
                     inputType?: {
@@ -75,7 +77,7 @@ export type WorkflowDiagnosticsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'session' | 'period' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                 }[];
                 defaults: {
@@ -207,6 +209,9 @@ export type WorkflowDiagnosticsActionResultById = {
                     } | {
                         kind: 'origin_session';
                     } | {
+                        kind: 'input';
+                        name: string;
+                    } | {
                         kind: 'from_step';
                         producer: {
                             blockId: string;
@@ -292,6 +297,23 @@ export type WorkflowDiagnosticsActionResultById = {
                             updatedAt: number;
                         } | null | undefined;
                         effort?: string | undefined;
+                    } | {
+                        kind: 'input';
+                        name: string;
+                        path?: (string | number)[] | undefined;
+                    } | {
+                        kind: 'item';
+                        field: 'value';
+                        path?: (string | number)[] | undefined;
+                    } | undefined;
+                    participant?: {
+                        kind: 'input';
+                        name: string;
+                        path?: (string | number)[] | undefined;
+                    } | {
+                        kind: 'item';
+                        field: 'value';
+                        path?: (string | number)[] | undefined;
                     } | undefined;
                     executionTarget?: {
                         kind: 'session';
@@ -315,6 +337,7 @@ export type WorkflowDiagnosticsActionResultById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'deny' | 'allow' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 } | {
                     roleId: string;
                     name: string;
@@ -333,6 +356,7 @@ export type WorkflowDiagnosticsActionResultById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'deny' | 'allow' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 })[] | undefined;
                 blocks: readonly PluginActionWorkflowBlockV1[];
                 finalOutput?: {
@@ -399,8 +423,10 @@ export type WorkflowDiagnosticsActionResultById = {
                     name: string;
                     valueType: 'string' | 'number' | 'boolean' | 'json';
                     required: boolean;
+                    multiple?: boolean | undefined;
                     enum?: string[] | undefined;
                     default?: JsonValue | undefined;
+                    defaultFrom?: 'origin_session' | undefined;
                     description?: string | undefined;
                     optionsSourceId?: string | undefined;
                     inputType?: {
@@ -410,7 +436,7 @@ export type WorkflowDiagnosticsActionResultById = {
                         hostType: 'usageQuery';
                         field?: 'session' | 'period' | undefined;
                     } | {
-                        hostType: 'session' | 'workspace' | 'machine';
+                        hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                     } | undefined;
                 }[];
                 defaults: {
@@ -542,6 +568,9 @@ export type WorkflowDiagnosticsActionResultById = {
                     } | {
                         kind: 'origin_session';
                     } | {
+                        kind: 'input';
+                        name: string;
+                    } | {
                         kind: 'from_step';
                         producer: {
                             blockId: string;
@@ -627,6 +656,23 @@ export type WorkflowDiagnosticsActionResultById = {
                             updatedAt: number;
                         } | null | undefined;
                         effort?: string | undefined;
+                    } | {
+                        kind: 'input';
+                        name: string;
+                        path?: (string | number)[] | undefined;
+                    } | {
+                        kind: 'item';
+                        field: 'value';
+                        path?: (string | number)[] | undefined;
+                    } | undefined;
+                    participant?: {
+                        kind: 'input';
+                        name: string;
+                        path?: (string | number)[] | undefined;
+                    } | {
+                        kind: 'item';
+                        field: 'value';
+                        path?: (string | number)[] | undefined;
                     } | undefined;
                     executionTarget?: {
                         kind: 'session';
@@ -650,6 +696,7 @@ export type WorkflowDiagnosticsActionResultById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'deny' | 'allow' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 } | {
                     roleId: string;
                     name: string;
@@ -668,6 +715,7 @@ export type WorkflowDiagnosticsActionResultById = {
                     profileId?: string | undefined;
                     workspaceWrites?: 'deny' | 'allow' | undefined;
                     secondOpinion?: 'off' | 'encouraged' | undefined;
+                    canDelegateToOtherRoles?: boolean | undefined;
                 })[] | undefined;
                 blocks: readonly PluginActionWorkflowBlockV1[];
                 finalOutput?: {

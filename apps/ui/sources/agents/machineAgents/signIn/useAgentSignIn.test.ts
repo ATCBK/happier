@@ -10,7 +10,7 @@ import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/
 const boundary = vi.hoisted(() => ({ rpc: vi.fn(), confirm: vi.fn(), signedIn: false, cursor: 0 }));
 vi.mock('@/modal', async () => {
   const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-  return createModalModuleMock({ spies: { confirm: boundary.confirm } });
+  return createModalModuleMock({ spies: { confirm: boundary.confirm } }).module;
 });
 // Unused HTTP boundary: fail loudly if sign-in ever invokes recipient-envelope work.
 vi.mock('@/sync/api/session/sessionDataKeyEnvelopesApi', () => {
@@ -24,7 +24,6 @@ vi.mock('react-native-unistyles', async () => {
 });
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () =>
   createServerScopedMachineRpcBoundaryMock(boundary.rpc));
-vi.mock('@/utils/platform/desktopHost', () => ({ isDesktopHost: () => false }));
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
 const { useAgentSignIn, executeAgentSignInLifecycle } = await import('./useAgentSignIn');

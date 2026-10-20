@@ -7,6 +7,7 @@ import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { setActionApprovalOverride } from '@happier-dev/protocol/actions/actionSettings';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -27,6 +28,21 @@ const machineRow = { machine: { id: 'machine-1', kind: 'persistent', dataEncrypt
 let serverId: string;
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
 let syncBridge: Awaited<ReturnType<typeof import('@/dev/testkit/harness/syncSingletonLoader')['loadSyncSingletonForTests']>>;
+let restoreCallbackApproval: (() => void) | undefined;
+
+async function waiveCallbackApproval() {
+    const { storage } = await import('@/sync/domains/state/storage');
+    const previous = storage.getState().settings.actionsSettingsV1;
+    const actionsSettingsV1 = setActionApprovalOverride({ settings: previous,
+        actionId: 'connectedServices.authentication.completeOAuth', surface: 'ui', approvalRequired: false });
+    // These cases exercise callback transport/return custody; approval has its own real-wiring cases below.
+    homes.answer(serverId, '/v2/account/settings', { body: {
+        content: { t: 'plain', v: { ...storage.getState().settings, actionsSettingsV1 } },
+        version: (storage.getState().settingsVersion ?? 0) + 1,
+    } });
+    storage.getState().applySettingsLocal({ actionsSettingsV1 });
+    restoreCallbackApproval = () => storage.getState().applySettingsLocal({ actionsSettingsV1: previous });
+}
 
 describe('connected-account daemon machine RPC', () => {
     beforeEach(async () => {
@@ -41,6 +57,8 @@ describe('connected-account daemon machine RPC', () => {
         answers.length = 0;
     });
     afterEach(async () => {
+        restoreCallbackApproval?.();
+        restoreCallbackApproval = undefined;
         const { serverScopedRpcSocketPool } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcSocketPool');
         const { resetScopedMachineTransportCacheForTests } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedRpcPool');
         serverScopedRpcSocketPool.resetForTests();
@@ -116,6 +134,7 @@ describe('connected-account daemon machine RPC', () => {
         expect(homes.requestsFor('/v1/machines/machine-1')[0]?.serverId).toBe(serverId);
     });
     it('completes the MCP callback on its exact pending machine through the real Action and socket owners', async () => {
+        await waiveCallbackApproval();
         const { completeMcpOAuthCallback } = await import('./mcpOAuthCallback');
         const { MCP_OAUTH_CALLBACK_URL_V1 } = await import('@happier-dev/protocol/mcp/oauth/mcpOAuthClientIdentityV1');
         homes.answer(serverId, '/v1/machines/machine-2', { body: { machine: {
@@ -156,6 +175,7 @@ describe('connected-account daemon machine RPC', () => {
         ]);
     });
     it('uses the original attempt machine without rediscovery and preserves its internal return destination', async () => {
+        await waiveCallbackApproval();
         const { completeMcpOAuthCallback } = await import('./mcpOAuthCallback');
         const { MCP_OAUTH_CALLBACK_URL_V1, MCP_SIGN_IN_CONNECTED_SERVICE_REF_V1 } = await import('@happier-dev/protocol/mcp/oauth/mcpOAuthClientIdentityV1');
         answers.push(
@@ -176,6 +196,7 @@ describe('connected-account daemon machine RPC', () => {
             attemptId: 'retained-attempt', completion: { code: 'code', state: 'retained-attempt.nonce', callbackUrl: MCP_OAUTH_CALLBACK_URL_V1 } } } });
     });
     it.each([true, false])('consumes the originating Session return only for its exact OAuth attempt (matches=%s)', async matches => {
+        await waiveCallbackApproval();
         const { completeMcpOAuthCallback } = await import('./mcpOAuthCallback');
         const { TokenStorage } = await import('@/auth/storage/tokenStorage');
         const { MCP_OAUTH_CALLBACK_URL_V1, MCP_SIGN_IN_CONNECTED_SERVICE_REF_V1 } = await import('@happier-dev/protocol/mcp/oauth/mcpOAuthClientIdentityV1');
@@ -256,8 +277,9 @@ describe('connected-account daemon machine RPC', () => {
         try {
             await vi.waitFor(() => expect(homes.requestsFor('/v1/machines/machine-1')).toHaveLength(1));
             await homes.addHome({ name: 'New focused Home', serverUrl: 'https://new-connected-account-home.test', accountId: 'account-b' });
-            const successor = await restoreServerAccountForTest({ serverUrl: 'https://new-connected-account-home.test', accountId: 'account-b', request: homes.request });
-            await successor.dispose();
+            // Change the captured selection while discovery is held; cold Account teardown
+            // would instead retire the socket before its issuance guard can run.
+            expect(getActiveServerSnapshot().generation).not.toBe(expectedActiveServer.generation);
         } finally { release(); }
         await rejected;
         expect(outgoing).toEqual([]);

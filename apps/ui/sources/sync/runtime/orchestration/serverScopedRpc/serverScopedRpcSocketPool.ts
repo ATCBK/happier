@@ -44,7 +44,7 @@ type SocketLike = Readonly<{
 }>;
 
 type ReachabilityDeps = Readonly<{
-    acquireReachability?: (params: Readonly<{ serverUrl: string; runtimeOrigin: string; token: string; homeCarrier?: HomeCarrier | null }>) => Promise<Readonly<{ release: () => Promise<void> }>>;
+    acquireReachability?: (params: Readonly<{ serverUrl: string; runtimeOrigin: string; token: string; homeCarrier?: HomeCarrier | null; signal?: AbortSignal }>) => Promise<Readonly<{ release: () => Promise<void> }>>;
     startReachability: (params: Readonly<{ serverUrl: string; token: string }>) => Promise<void>;
     waitForReachable: (params: Readonly<{ serverUrl: string; token: string; timeoutMs?: number; signal?: AbortSignal; homeIdentityId?: string; homeCarrier?: HomeCarrier | null }>) => Promise<void>;
     reportUnreachable: (serverUrl: string, error: unknown, token: string) => void;
@@ -73,7 +73,7 @@ type PoolEntry = {
     homeCarrier: HomeCarrier | null;
     socket: SocketLike;
     inUseCount: number;
-    connectInFlight: Readonly<{ result: Promise<void>; controller: AbortController }> | null;
+    connectInFlight: { result: Promise<void>; controller: AbortController; waiters: number } | null;
     intentionalDisconnect: boolean;
     idleDisconnectTimer: ReturnType<typeof setTimeout> | null;
     reachabilityRelease: (() => Promise<void>) | null;
@@ -174,6 +174,7 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
                 runtimeOrigin: params.runtimeOrigin,
                 token: params.token,
                 homeCarrier: params.homeCarrier ?? null,
+                signal: params.signal,
             }),
             startReachability: async (params) => {
                 await startServerReachabilitySupervisor({ serverUrl: params.serverUrl, token: params.token });
@@ -220,6 +221,19 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
         homeCarrier: HomeCarrier | null,
     ) => `${buildKey(reachabilityServerUrl, token)}::${homeIdentityId ?? ''}::${serverUrl}::${carrier}::${homeCarrier?.endpointId ?? ''}`;
 
+    const disconnectEntrySocket = (entry: PoolEntry): void => {
+        entry.intentionalDisconnect = true;
+        try {
+            entry.socket.disconnect();
+        } catch {
+            // Teardown still owns releasing reachability and carrier custody.
+        }
+        // Socket.IO adapters may publish the intentional disconnect asynchronously.
+        setTimeout(() => {
+            entry.intentionalDisconnect = false;
+        }, INTENTIONAL_DISCONNECT_FLAG_RESET_MS);
+    };
+
     const stopEntrySocket = (entry: PoolEntry, remove: boolean): Promise<void> => {
         entry.teardownRequested ||= remove;
         if (entry.teardownInFlight) return entry.teardownInFlight;
@@ -229,16 +243,11 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
                 clearTimeout(entry.idleDisconnectTimer);
                 entry.idleDisconnectTimer = null;
             }
-            entry.intentionalDisconnect = true;
             entry.connectInFlight?.controller.abort(createRpcCallError({
                 error: 'Scoped RPC socket stopped before connecting',
                 errorCode: 'MACHINE_RPC_UNREACHABLE',
             }));
-            try {
-                entry.socket.disconnect();
-            } catch {
-                // ignore
-            }
+            disconnectEntrySocket(entry);
             const releaseReachability = entry.reachabilityRelease;
             if (releaseReachability) {
                 await releaseReachability();
@@ -258,12 +267,6 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
             if (entry.teardownRequested && entriesByKey.get(entry.key) === entry) {
                 entriesByKey.delete(entry.key);
             }
-            // socket.io-client disconnect events are not guaranteed to be synchronous; keep the
-            // intentional disconnect flag set briefly so we don't report an expected disconnect
-            // as an unreachable server signal.
-            setTimeout(() => {
-                entry.intentionalDisconnect = false;
-            }, INTENTIONAL_DISCONNECT_FLAG_RESET_MS);
         })();
         let tracked!: Promise<void>;
         tracked = run.finally(() => {
@@ -354,6 +357,7 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
                         runtimeOrigin: entry.serverUrl,
                         token: entry.token,
                         homeCarrier: entry.homeCarrier,
+                        signal: controller.signal,
                     });
                     if (controller.signal.aborted) {
                         await lease.release();
@@ -377,29 +381,43 @@ export function createServerScopedRpcSocketPool(overrides?: Partial<Deps>): Read
                 if (entry.connectInFlight !== flight) return;
                 entry.connectInFlight = null;
             });
-            const flight = { result, controller };
+            const flight = { result, controller, waiters: 0 };
             entry.connectInFlight = flight;
         }
         // Dialing belongs to the retained entry. One logical waiter's expiry
         // cannot shorten another waiter's budget or disconnect their transport.
         const connection = entry.connectInFlight;
+        connection.waiters += 1;
         const signal = connection.controller.signal;
-        await new Promise<void>((resolve, reject) => {
-            let settled = false;
-            const settle = (error?: unknown) => {
-                if (settled) return;
-                settled = true;
-                cancelTimer();
-                signal.removeEventListener('abort', onAbort);
-                if (error !== undefined) reject(error);
-                else resolve();
-            };
-            const onAbort = () => settle(signal.reason);
-            const cancelTimer = armDeadlineTimer(Date.now() + Math.max(0, deadlineAt - deps.now()), () => settle(timeoutError()));
-            signal.addEventListener('abort', onAbort, { once: true });
-            if (signal.aborted) onAbort();
-            void connection.result.then(() => settle(), (error: unknown) => settle(error));
-        });
+        try {
+            await new Promise<void>((resolve, reject) => {
+                let settled = false;
+                const settle = (error?: unknown) => {
+                    if (settled) return;
+                    settled = true;
+                    cancelTimer();
+                    signal.removeEventListener('abort', onAbort);
+                    if (error !== undefined) reject(error);
+                    else resolve();
+                };
+                const onAbort = () => settle(signal.reason);
+                const cancelTimer = armDeadlineTimer(Date.now() + Math.max(0, deadlineAt - deps.now()), () => settle(timeoutError()));
+                signal.addEventListener('abort', onAbort, { once: true });
+                if (signal.aborted) onAbort();
+                void connection.result.then(() => settle(), (error: unknown) => settle(error));
+            });
+        } finally {
+            connection.waiters -= 1;
+            if (entry.connectInFlight === connection && connection.waiters === 0 && !entry.socket.connected) {
+                // No caller still owns a dial budget. A retained stream may keep
+                // the entry alive, but must not retain a stalled handshake for
+                // every later RPC. Reset through this same pool connection owner;
+                // keep the carrier and logical holders for the next acquisition.
+                entry.connectInFlight = null;
+                connection.controller.abort(timeoutError());
+                disconnectEntrySocket(entry);
+            }
+        }
     };
 
     const acquire = async (params: ScopedSocketConnectParams): Promise<ScopedSocketClient> => {

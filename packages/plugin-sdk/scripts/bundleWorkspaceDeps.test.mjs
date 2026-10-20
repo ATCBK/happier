@@ -28,6 +28,7 @@ import { installNativeAdmissionFixture } from '../../../apps/stack/scripts/testk
 import { writeFakeBin } from '../../../apps/stack/scripts/testkit/core/fake_bin_harness.mjs';
 import { ensureWorkspacePackagesBuiltByName, defaultWorkspaceBuildBoundary } from '../../../scripts/workspaces/ensureWorkspacePackagesBuilt.mjs';
 import { isPidAlive } from '../../../apps/stack/scripts/utils/proc/pids.mjs';
+import { withDependencyRefreshLock } from '../../../apps/stack/scripts/utils/proc/dependency_refresh.mjs';
 import {
   bundleWorkspaceDeps,
   preparePluginSdkWorkspaceDeclarations,
@@ -72,6 +73,7 @@ async function createPreparedScriptAdmissionFixture(t) {
   await writeFile(yarn, `import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { callerHoldsDependencyConsumption } from ${JSON.stringify(new URL('../../../apps/stack/scripts/utils/proc/dependency_refresh.mjs', import.meta.url).href)};
 const script = process.argv.at(-1);
 if (script === 'build') {
   if (process.cwd().endsWith('/prerequisite')) {
@@ -86,6 +88,7 @@ const token = process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_TOKEN;
 const admissionClass = token ? readFileSync(resolve(process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT,
   'owners', token.replace(':', '-'), 'class'), 'utf8').trim() : null;
 writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ token: token ?? null, admissionClass,
+  dependencyCustody: callerHoldsDependencyConsumption(process.env),
   leases: JSON.parse(process.env.HAPPIER_WORKSPACE_DIST_BUILD_LOCK_LEASES || '[]'),
   script, cwd: process.cwd(), pid: process.pid, staged: process.env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR }));
 if (script === 'failure:prepared') process.exit(7);
@@ -119,19 +122,25 @@ esac
   return { ...native, root, pluginSdkDir, env, marker, memory, locks, start };
 }
 
-test('SDK prepared public entrypoint acquires both publication leases before admission', { skip: process.platform !== 'linux' }, async t => {
-  for (const heldIndex of [0, 1]) await t.test(heldIndex === 0 ? 'bundle' : 'package', async t => {
+test('SDK prepared public entrypoint acquires dependency consumption and both publication leases before admission', { skip: process.platform !== 'linux' }, async t => {
+  for (const heldIndex of [0, 1, 'dependency']) await t.test(heldIndex === 0 ? 'bundle' : heldIndex === 1 ? 'package' : 'dependency', async t => {
     const fixture = await createPreparedScriptAdmissionFixture(t);
     let running;
-    await withWorkspaceBundleLock(async () => {
+    const whileHeld = async () => {
       running = fixture.start();
       await new Promise(resolveWait => setTimeout(resolveWait, 700));
       assert.equal(await readFile(fixture.marker, 'utf8').catch(() => null), null, 'a foreign publisher must prevent the prepared script from starting');
       assert.deepEqual(await readdir(resolve(fixture.admissionRoot, 'owners')).catch(() => []), [], 'foreign lease wait must remain unadmitted');
-    }, { lockPath: fixture.locks[heldIndex] });
+    };
+    if (heldIndex === 'dependency') {
+      await withDependencyRefreshLock({ installDir: fixture.root, env: fixture.env }, whileHeld);
+    } else {
+      await withWorkspaceBundleLock(whileHeld, { lockPath: fixture.locks[heldIndex] });
+    }
     assert.equal((await running.done).status, 0);
     const result = JSON.parse(await readFile(fixture.marker, 'utf8'));
     assert.ok(result.token, 'the selected script must run beneath genuine admission');
+    assert.equal(result.dependencyCustody, true, 'nested compilation must inherit installed-tree consumption before publication admission');
     assert.deepEqual(result.leases.map(value => JSON.parse(value).path).sort(), [...fixture.locks].sort());
     assert.equal(result.script, 'build:prepared');
     assert.equal(result.staged, fixture.env.HAPPIER_WORKSPACE_DIST_OUTPUT_DIR);
@@ -176,6 +185,7 @@ test('SDK prepared public entrypoint reuses producer leases inside captured work
   assert.deepEqual(result.built, ['@happier-dev/plugin-sdk']);
   const prepared = JSON.parse(await readFile(fixture.marker, 'utf8'));
   assert.notEqual(prepared.cwd, fixture.pluginSdkDir, 'the prepared script consumes captured source');
+  assert.equal(prepared.dependencyCustody, true, 'captured compilation retains the original installed-tree custody');
   assert.deepEqual([...new Set(prepared.leases.map(value => JSON.parse(value).path))].sort(), [...fixture.locks].sort(),
     'captured compilation must not create another publication owner');
   assert.match(await readFile(resolve(fixture.pluginSdkDir, 'dist/index.js'), 'utf8'), /ready/);

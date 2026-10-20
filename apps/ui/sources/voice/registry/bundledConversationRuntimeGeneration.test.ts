@@ -7,6 +7,14 @@ import {
 
 describe('bundled conversation runtime generation', () => {
   beforeEach(resetBundledConversationRuntimeGenerationForTests);
+  it('withdraws old generation authority before aborting its pending requests', () => {
+    const old = acquireBundledConversationRuntimeGeneration();
+    const authorityAtAbort: boolean[] = [];
+    old.signal.addEventListener('abort', () => authorityAtAbort.push(old.isCurrent(), old.canCleanup()));
+    const fresh = acquireBundledConversationRuntimeGeneration();
+    expect(authorityAtAbort).toEqual([false, false]);
+    fresh.revoke();
+  });
   it('revokes old callbacks synchronously before a fresh runtime starts while allowing safe cleanup', () => {
     const old = acquireBundledConversationRuntimeGeneration();
     const oldCallback = vi.fn();

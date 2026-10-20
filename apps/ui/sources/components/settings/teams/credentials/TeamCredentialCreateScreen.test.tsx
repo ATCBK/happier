@@ -7,6 +7,7 @@ import { ProviderConnectionIdSchema, ProviderConnectionSecurityFingerprintV1Sche
 import { collectRenderedTestIds, renderScreen, standardCleanup, teamCapabilitiesFixture, teamCredentialResourceFixture, teamCredentialSourceCandidateFixture, teamCredentialViewerFixture, teamSummaryFixture } from '@/dev/testkit';
 import { createProviderConnectionViewFixture, createProviderConnectionsDescribeFixture, createProviderSettingsHarness, installProviderSettingsRpcBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelpers';
 
@@ -54,6 +55,9 @@ installHomeGovernanceBoundaries(harness);
 const { createMachineAdministrationTargetSelectionMock, installMachineAdministrationTargetSelectionBoundary } = await import('@/dev/testkit/mocks/machineAdministrationTargetSelection');
 const administrationTarget = createMachineAdministrationTargetSelectionMock();
 installMachineAdministrationTargetSelectionBoundary(administrationTarget);
+const { resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
+const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
+const { resetTeamActionClientForTests } = await import('@/sync/ops/teams/teamActionClient');
 
 const TEAM_GET_PATH = '/v1/teams/get';
 const LIST_PATH = '/v1/teams/credential-resources/list';
@@ -74,6 +78,11 @@ async function addHome(options?: Readonly<{ machinePoolsEnabled?: boolean }>): P
         { machineId: 'machine-a', displayName: 'Provider host', serverId },
         { machineId: 'machine-broker', displayName: 'Office Mac', serverId },
     ]);
+    for (const machineId of ['machine-a', 'machine-b', 'machine-broker']) {
+        harness.answer(serverId, `/v1/machines/${machineId}`, {
+            body: { machine: createPlainMachineRowFixture({ id: machineId, accountId: 'account-ada' }) },
+        });
+    }
     await harness.selectHomes([serverId]);
     harness.answer(serverId, TEAM_GET_PATH, {
         body: teamSummaryFixture({ capabilities: teamCapabilitiesFixture({}) }),
@@ -161,7 +170,9 @@ async function waitForTestId(
     testID: string,
 ): Promise<void> {
     await vi.waitFor(() => {
-        expect(collectRenderedTestIds(screen.tree.toJSON())).toContain(testID);
+        expect(collectRenderedTestIds(screen.tree.toJSON()), JSON.stringify({
+            text: screen.getTextContent(), requests: harness.requests.map(request => ({ path: request.path, serverId: request.serverId })),
+        })).toContain(testID);
     });
 }
 
@@ -177,9 +188,6 @@ function selectBrokerMachine(screen: Awaited<ReturnType<typeof renderCreate>>, m
 }
 
 beforeEach(async () => {
-    const { resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
-    const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
-    const { resetTeamActionClientForTests } = await import('@/sync/ops/teams/teamActionClient');
     resetTeamsSnapshotsForTests();
     resetTeamsDirectoryEngineForTests();
     resetTeamActionClientForTests();

@@ -79,6 +79,14 @@ describe('daemon control server quiescing producer routes', () => {
       },
     }));
     const localServicesInventory = {
+      readCurrentSnapshot: vi.fn(() => ({
+        v: 1 as const,
+        machineId: 'machine_local',
+        generatedAt: 1_000,
+        refreshState: 'idle' as const,
+        entries: [],
+        diagnostics: [],
+      })),
       getSnapshot: vi.fn(),
       refreshSnapshot: vi.fn(async () => ({
         v: 1 as const,

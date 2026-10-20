@@ -143,6 +143,7 @@ export type TriageSurfaceStateV1 = Readonly<{
 }>;
 
 export type TriageSurfaceActionV1 =
+  | Readonly<{ kind: 'taskAudienceChanged'; audience: NonNullable<SurfaceFilterSelectionV1['tasks']> }>
   /**
    * The host has settled (or refused) the page location and the route owner is
    * applying that authoritative surface state. This is the only whole-state
@@ -304,10 +305,16 @@ function toggleFilterValue(
 export function reduceTriageSurfaceV1(
   state: TriageSurfaceStateV1,
   action: TriageSurfaceActionV1,
+  /** Tasks page identity supplies Mine only when a routed/saved lens omits an audience. */
+  defaultTaskAudience?: SurfaceFilterSelectionV1['tasks'],
 ): TriageSurfaceStateV1 {
+  const withPageAudience = (filters: SurfaceFilterSelectionV1): SurfaceFilterSelectionV1 =>
+    filters.tasks !== undefined || defaultTaskAudience === undefined ? filters : { ...filters, tasks: defaultTaskAudience };
   switch (action.kind) {
-    case 'settledRouteApplied':
-      return action.state;
+    case 'settledRouteApplied': {
+      const filters = withPageAudience(action.state.filters);
+      return filters === action.state.filters ? action.state : { ...action.state, filters };
+    }
 
     case 'rowFocused':
       return withFocus(state, { sectionId: action.sectionId, entryRef: action.entryRef });
@@ -366,6 +373,10 @@ export function reduceTriageSurfaceV1(
     case 'orderChanged':
       return action.order === state.order ? state : { ...state, order: action.order };
 
+    case 'taskAudienceChanged':
+      return state.filters.tasks === action.audience ? state
+        : { ...state, filters: { ...state.filters, tasks: action.audience } };
+
     case 'filterValueToggled': {
       const filters = toggleFilterValue(state.filters, action);
       return filters === state.filters ? state : { ...state, filters };
@@ -376,7 +387,8 @@ export function reduceTriageSurfaceV1(
       // filters** at all, so the control and the reducer cannot disagree about
       // whether there is anything to clear.
       return hasSelectedTriageFacetV1(state.filters)
-        ? { ...state, filters: TRIAGE_LIST_NO_FILTERS_V1 }
+        ? { ...state, filters: state.filters.tasks === undefined ? TRIAGE_LIST_NO_FILTERS_V1
+          : { ...TRIAGE_LIST_NO_FILTERS_V1, tasks: state.filters.tasks } }
         : state;
 
     case 'smartPolicyChanged':
@@ -389,7 +401,7 @@ export function reduceTriageSurfaceV1(
         ...state,
         selectedViewId: action.viewId,
         search: { query: action.query, composing: null },
-        filters: action.filters,
+        filters: withPageAudience(action.filters),
         order: action.order,
         smartPolicy: action.smartPolicy,
       };

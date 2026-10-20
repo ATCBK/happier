@@ -95,7 +95,7 @@ function defaultForgeHttpFetcher(url: string, init?: RequestInit): Promise<ScmFo
     return fetch(url, init);
 }
 
-function normalizeHeaders(headers: HeadersInit | undefined): Record<string, string> {
+function normalizeHeaders(headers: RequestInit['headers']): Record<string, string> {
     if (!headers) return {};
     if (typeof Headers !== 'undefined' && headers instanceof Headers) {
         const normalized: Record<string, string> = {};
@@ -114,7 +114,7 @@ function normalizeHeaders(headers: HeadersInit | undefined): Record<string, stri
     return Object.fromEntries(Object.entries(headers).map(([key, value]) => [key, String(value)]));
 }
 
-function redactHeaders(headers: HeadersInit | undefined): Record<string, string> {
+function redactHeaders(headers: RequestInit['headers']): Record<string, string> {
     const normalized = normalizeHeaders(headers);
     return Object.fromEntries(
         Object.entries(normalized).map(([key, value]) => [

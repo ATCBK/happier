@@ -1,11 +1,13 @@
-/** HTTPS preview admission stays host-only and scoped to its top-level viewer site. */
+import type { COOPERATIVE_COLLECTOR_BINDING_COOKIE } from '@happier-dev/peer-mediation/browser/collector/cooperative';
+
+/** HTTPS preview cookies stay host-only and scoped to their top-level viewer site. */
 export function scopedLocalServiceViewerTokenCookie(input: Readonly<{
-    name: 'happier_preview_token' | 'happier_public_token';
+    name: 'happier_preview_token' | 'happier_public_token' | typeof COOPERATIVE_COLLECTOR_BINDING_COOKIE;
     path: string;
-    rawToken: string;
+    value: string;
 }>): string {
     return [
-        `${input.name}=${encodeURIComponent(input.rawToken)}`,
+        `${input.name}=${encodeURIComponent(input.value)}`,
         `Path=${input.path}`,
         'HttpOnly',
         // Preview frames can be cross-site relative to the app. Lax rejects their

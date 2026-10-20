@@ -2,6 +2,15 @@ import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
+import { usePluginSurfaceFocusEligibility } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
+import {
+    createNewSessionContainedModalScreenOptions,
+    NewSessionScreenPortalScope,
+} from './newSessionContainedModalScreen';
+
+function PluginFocusProbe() {
+    return React.createElement('PluginFocusProbe', { testID: 'route-plugin-focus', eligible: usePluginSurfaceFocusEligibility() });
+}
 
 const modalMock = vi.hoisted(() => ({
     module: null as null | ReturnType<typeof import('@/dev/testkit/mocks/modal').createModalModuleMock>['module'],
@@ -50,8 +59,6 @@ describe('newSessionContainedModalScreen helpers', () => {
     });
 
     it('creates containedModal screen options on iOS', async () => {
-        const { createNewSessionContainedModalScreenOptions } = await import('./newSessionContainedModalScreen');
-
         const options = createNewSessionContainedModalScreenOptions({
             title: 'externalSessions.browseTitle',
             headerBackTitle: 'common.cancel',
@@ -64,36 +71,36 @@ describe('newSessionContainedModalScreen helpers', () => {
     });
 
     it('scopes children with the shared popover and modal providers', async () => {
-        const { NewSessionScreenPortalScope } = await import('./newSessionContainedModalScreen');
         const { NavigationContext } = await import('@react-navigation/native');
         // SDK boundary fixture: this owner reads only navigator presence, not its methods.
         const navigation = {} as React.ContextType<typeof NavigationContext>;
 
         const screen = await renderScreen(
             <NavigationContext.Provider value={navigation}><NewSessionScreenPortalScope>
-                {React.createElement('Child')}
+                <PluginFocusProbe />
             </NewSessionScreenPortalScope></NavigationContext.Provider>,
         );
 
         expect(screen.findAllByType('PopoverScope' as any)).toHaveLength(1);
         expect(screen.findAllByType('ModalProvider' as any)).toHaveLength(1);
         expect(screen.findByType('ModalProvider' as any).props.active).toBe(true);
+        expect(screen.findByTestId('route-plugin-focus')?.props.eligible).toBe(true);
     });
 
     it('deactivates the contained modal provider while the route is not focused', async () => {
         navigationMock.isFocused = false;
 
-        const { NewSessionScreenPortalScope } = await import('./newSessionContainedModalScreen');
         const { NavigationContext } = await import('@react-navigation/native');
         // SDK boundary fixture: this owner reads only navigator presence, not its methods.
         const navigation = {} as React.ContextType<typeof NavigationContext>;
 
         const screen = await renderScreen(
             <NavigationContext.Provider value={navigation}><NewSessionScreenPortalScope>
-                {React.createElement('Child')}
+                <PluginFocusProbe />
             </NewSessionScreenPortalScope></NavigationContext.Provider>,
         );
 
         expect(screen.findByType('ModalProvider' as any).props.active).toBe(false);
+        expect(screen.findByTestId('route-plugin-focus')?.props.eligible).toBe(false);
     });
 });

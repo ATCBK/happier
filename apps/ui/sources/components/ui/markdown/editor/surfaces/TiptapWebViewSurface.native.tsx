@@ -3,7 +3,7 @@ import { Linking, PixelRatio, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { useUnistyles } from 'react-native-unistyles';
 
-import { useLocalSetting } from '@/sync/store/hooks';
+import { useLocalSetting } from '@/sync/store/settingsReadHooks';
 import { useWebViewBridgeMessenger } from '@/components/ui/webview/bridge/useWebViewBridgeMessenger';
 import type { WebViewBridgeEnvelopeV1 } from '@/components/ui/webview/bridge/chunkedBridge';
 

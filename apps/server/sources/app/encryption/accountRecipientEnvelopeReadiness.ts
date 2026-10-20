@@ -25,6 +25,33 @@ export type AccountRecipientEnvelopeReadinessRow = Readonly<{
     contentPublicKeySig: Uint8Array | null;
 }>;
 
+export type AccountRecipientEnvelopeReadinessReadScope = (
+    account: AccountRecipientEnvelopeReadinessRow & Readonly<{ id: string }>,
+) => AccountRecipientEnvelopeReadiness;
+
+/**
+ * Reuse signature verification only inside one captured read's projection.
+ * Prisma repeats recipient Accounts as distinct objects in Session relations.
+ * The full binding and persisted mode participate in identity, so even differing
+ * rows for the same Account cannot borrow each other's verification. Nothing
+ * survives the caller's read and the ordinary derivation remains the authority.
+ */
+export function createAccountRecipientEnvelopeReadinessReadScope(): AccountRecipientEnvelopeReadinessReadScope {
+    const readinessByRow = new Map<string, AccountRecipientEnvelopeReadiness>();
+    return (account) => {
+        const key = JSON.stringify([
+            account.id, account.publicKey, account.encryptionMode,
+            account.contentPublicKey === null ? null : Buffer.from(account.contentPublicKey).toString("hex"),
+            account.contentPublicKeySig === null ? null : Buffer.from(account.contentPublicKeySig).toString("hex"),
+        ]);
+        const existing = readinessByRow.get(key);
+        if (existing !== undefined) return existing;
+        const readiness = deriveAccountRecipientEnvelopeReadinessFromRow(account);
+        readinessByRow.set(key, readiness);
+        return readiness;
+    };
+}
+
 /**
  * Projects one Account row onto the question Session key delivery actually
  * asks: can a Session data key be sealed to this Account right now, and if

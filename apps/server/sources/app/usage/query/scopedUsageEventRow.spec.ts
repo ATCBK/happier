@@ -87,7 +87,7 @@ describe("toScopedUsageEventRow", () => {
     it("preserves positive pre-provenance columns without interpreting default zero as free", () => {
         expect(toScopedUsageEventRow(row({ costSource: null })).cost.costSource).toBe("provider_reported");
         expect(toScopedUsageEventRow(row({ costSource: null, reportedCostUsd: 0, estimatedCostUsd: 0.1 })).cost.costSource).toBe("pricing_estimate");
-        expect(toScopedUsageEventRow(row({ costSource: null, invoiceCostUsd: 0.08 })).cost.costSource).toBe("invoice");
+        expect(toScopedUsageEventRow(row({ costSource: null, reportedCostUsd: 0, invoiceCostUsd: 0.08 })).cost.costSource).toBe("invoice");
         expect(toScopedUsageEventRow(row({ costSource: "made_up" })).cost.costSource).toBe("none");
     });
 

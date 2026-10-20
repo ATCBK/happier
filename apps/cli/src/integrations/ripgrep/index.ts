@@ -2,12 +2,13 @@
  * Low-level ripgrep wrapper - just arguments in, string out
  */
 
-import { spawn } from 'child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { StringDecoder } from 'node:string_decoder';
 import { requireJavaScriptRuntimeExecutable } from '@/packagedRuntime/js/requireJavaScriptRuntimeExecutable';
 import { isBun } from '@/utils/runtime';
 import { resolveCliRuntimeAssetPath } from '@/packagedRuntime/assets/resolveCliRuntimeAssetPath';
 import { terminateProcessTree } from '@/processes/terminate/terminateProcessTree';
+import { isSpawnWorkingDirectoryMissing } from '@/processes/spawnFailure/classifySpawnFailure';
 
 export interface RipgrepResult {
     exitCode: number
@@ -21,6 +22,8 @@ export interface RipgrepResult {
 }
 
 export interface RipgrepOptions {
+    /** Source-admitted operands, kept separate so the launcher can batch without dropping files. */
+    paths?: readonly string[]
     cwd?: string
     signal?: AbortSignal
     maxStdoutBytes?: number
@@ -76,6 +79,9 @@ export function run(args: string[], options?: RipgrepOptions): Promise<RipgrepRe
             cleanup();
             reject(error);
         };
+        const rejectSpawnError = (error: unknown) => rejectOnce(isSpawnWorkingDirectoryMissing(options?.cwd)
+            ? Object.assign(new Error('The workspace folder no longer exists on this machine', { cause: error }), { code: 'WORKSPACE_ROOT_NOT_FOUND' })
+            : error);
         const onAbort = () => {
             if (settled) return;
             if (child) {
@@ -113,11 +119,17 @@ export function run(args: string[], options?: RipgrepOptions): Promise<RipgrepRe
             if (settled || options?.signal?.aborted) {
                 return;
             }
-            const spawned = spawn(runtimeExecutable, [RUNNER_PATH, JSON.stringify(args)], {
-                stdio: ['pipe', 'pipe', 'pipe'],
-                cwd: options?.cwd,
-                windowsHide: true,
-            });
+            let spawned: ChildProcessWithoutNullStreams;
+            try {
+                spawned = spawn(runtimeExecutable, [RUNNER_PATH, '--stdin'], {
+                    stdio: ['pipe', 'pipe', 'pipe'],
+                    cwd: options?.cwd,
+                    windowsHide: true,
+                });
+            } catch (error) {
+                rejectSpawnError(error);
+                return;
+            }
             child = spawned;
 
             let stdoutTruncated = false;
@@ -207,8 +219,11 @@ export function run(args: string[], options?: RipgrepOptions): Promise<RipgrepRe
             });
 
             spawned.on('error', (err) => {
-                rejectOnce(err);
+                rejectSpawnError(err);
             });
+            // Payload size is governed by the caller, never an OS argv limit.
+            spawned.stdin.on('error', rejectOnce);
+            spawned.stdin.end(JSON.stringify({ args, ...(options?.paths ? { paths: options.paths } : {}) }));
             if (options?.signal?.aborted) {
                 onAbort();
             }

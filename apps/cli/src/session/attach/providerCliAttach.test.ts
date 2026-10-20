@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { createManagedServiceDurabilityOwner } from '@/plugins/runtime/invocation/services/managedServiceDurability';
 import { createDaemonManagedServiceEndpointReadOwner } from '@/plugins/runtime/invocation/services/daemonManagedServiceEndpointReadOwner';
@@ -20,7 +20,7 @@ const launchFileBoundary = vi.hoisted(() => ({ beforeWrite: null as (() => void)
 vi.mock('node:fs/promises', async (importOriginal) => {
     const original = await importOriginal<typeof import('node:fs/promises')>();
     return { ...original, writeFile: async (...args: Parameters<typeof original.writeFile>) => {
-        if (typeof args[0] === 'string' && args[0].includes('happier-terminal-launch-')) launchFileBoundary.beforeWrite?.();
+        if (typeof args[0] === 'string' && basename(args[0]) === 'launch.json') launchFileBoundary.beforeWrite?.();
         return await original.writeFile(...args);
     } };
 });

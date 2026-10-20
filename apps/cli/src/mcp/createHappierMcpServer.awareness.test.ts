@@ -2,6 +2,7 @@ import axios from 'axios';
 import {
   FeaturesResponseSchema,
   SessionAwarenessProjectionV1Schema,
+  accountSettingsParse,
 } from '@happier-dev/protocol';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -12,6 +13,10 @@ import {
 } from '@/testkit/backends/sessionFixtures';
 
 import { createHappierMcpServer } from './createHappierMcpServer';
+import { createCliActionExecutorFromCredentials } from '@/session/actions/createCliActionExecutorFromCredentials';
+import { createActionSettingsProvider } from '@/settings/actionsSettingsProvider';
+import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { createSessionDaemonAuthorityFixture } from './runtime/sessionDaemonAuthority.testkit';
 
 vi.mock('axios', () => ({ default: { get: vi.fn(), isAxiosError: () => false } }));
 
@@ -48,6 +53,17 @@ describe('built-in Agent/MCP awareness Action', () => {
       throw new Error(`Unexpected request: ${url}`);
     });
 
+    const credentials = { token, encryption: null } as const;
+    const executor = createCliActionExecutorFromCredentials({ credentials,
+      serverId: 'lane09-agent-home', serverApiUrl: homeUrl, pluginActionExecutionOwner: 'current_process',
+      actionsSettingsProvider: createActionSettingsProvider({ accountSettings: accountSettingsParse({}) }),
+      resolveServerFeaturesSnapshot: async () => ({ status: 'ready', provenance: 'authenticated',
+        features: FeaturesResponseSchema.parse({ features: {}, capabilities: {} }) }),
+    });
+    const daemon = await createSessionDaemonAuthorityFixture({ sessionId, execute: async operation =>
+      await executor.execute(operation.actionId, operation.input, { surface: 'agent', authority: 'account_automation',
+        defaultSessionId: sessionId, actionCaller: operation.witness.agentStartCaller }),
+    });
     const result = await runWithServerHttpBaseUrl(homeUrl, async () => {
       const agentMcp = createHappierMcpServer({
         sessionId,
@@ -55,8 +71,16 @@ describe('built-in Agent/MCP awareness Action', () => {
           serverId: 'lane09-agent-home',
           serverUrl: homeUrl,
         }),
-        rpcHandlerManager: { invokeLocal: async () => ({}) },
+        rpcHandlerManager: new RpcHandlerManager({ scopePrefix: sessionId, encryptionMode: 'plain' }),
         updateMetadata: () => {},
+        getWorkDepth: () => 0,
+        getHostTurnWorkDepth: () => 0,
+        getActiveTurnPermissionWitness: () => ({ turnId: 'awareness-turn',
+          causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'yolo' } }),
+        getActiveTurnAdmissionWitness: () => ({ turnId: 'awareness-turn', inputId: 'awareness-input',
+          userMessageSeq: 1, userMessageSeqs: [1],
+          agentStartCaller: { kind: 'session', sessionId, starterDepth: 0, turnDepth: 0 },
+          causalPermissionAuthority: { kind: 'admittedSessionInputV1', admittedPermissionCeiling: 'yolo' } }),
         getServerFeaturesSnapshot: () => ({
           status: 'ready' as const,
           provenance: 'authenticated' as const,
@@ -65,18 +89,20 @@ describe('built-in Agent/MCP awareness Action', () => {
             capabilities: { serverIdentity: { serverIdentityId: 'lane09-agent-home' } },
           }),
         }),
-      } as any, {
-        credentials: { token, encryption: null },
+      }, {
+        credentials,
         requiredDirectActionIds: ['session.activity.get'],
       });
 
       expect(agentMcp.toolNames).toContain('session_activity_get');
-      return await agentMcp.executeTool({
-        toolName: 'session_activity_get',
-        args: { sessionId, view: 'awareness' },
-        toolCallId: 'lane09-awareness-call',
-      });
-    });
+      try {
+        return await agentMcp.executeTool({
+          toolName: 'session_activity_get',
+          args: { sessionId, view: 'awareness' },
+          toolCallId: 'lane09-awareness-call',
+        });
+      } finally { await agentMcp.mcp.close(); }
+    }).finally(() => daemon.close());
 
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error(result.error);

@@ -44,7 +44,7 @@ export type WriteRuntimeDescriptorMetadataOptions = Readonly<{
 // The descriptor schema owns deployed provider-vocabulary read compatibility so
 // every wire carrier (metadata, handoff, runtime events, external links) shares
 // the same parser. This alias remains for the legacy metadata API surface.
-export const LegacyAgentRuntimeDescriptorV1Schema = RuntimeDescriptorV1Schema;
+export const LegacyAgentRuntimeDescriptorV1Schema: typeof RuntimeDescriptorV1Schema = RuntimeDescriptorV1Schema;
 
 export function readLegacyAgentRuntimeDescriptorV1(value: unknown): RuntimeDescriptorV1 | null {
   const parsed = LegacyAgentRuntimeDescriptorV1Schema.safeParse(value);

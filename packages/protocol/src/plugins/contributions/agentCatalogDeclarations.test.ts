@@ -32,6 +32,22 @@ const agent = {
 } as const;
 
 describe('Agent catalog declarations', () => {
+  it('carries sharing support and named privacy consent in the closed Agent capability contract', () => {
+    const providerStateSharing = {
+      config: { supported: true, modes: ['linked', 'copied', 'isolated'] },
+      state: { supported: true, modes: ['isolated', 'shared'], sharedStatePrivacyRiskAcknowledgementRequired: true },
+    };
+    const contribution = { ...agent, capabilities: { ...agent.capabilities, providerStateSharing } };
+    expect(PluginAgentContributionV2Schema.parse(contribution).capabilities).toMatchObject({ providerStateSharing });
+    for (const invalid of [
+      { ...providerStateSharing, state: { ...providerStateSharing.state, modes: ['shared', 'unrestricted'] } },
+      { ...providerStateSharing, state: { ...providerStateSharing.state, sharedStatePrivacyRiskAcknowledgementRequired: 'true' } },
+      { ...providerStateSharing, config: { ...providerStateSharing.config, entries: ['private-home-path'] } },
+      { ...providerStateSharing, unknown: true },
+    ]) expect(PluginAgentContributionV2Schema.safeParse({ ...contribution,
+      capabilities: { ...contribution.capabilities, providerStateSharing: invalid },
+    }).success).toBe(false);
+  });
   it('admits ACP registry identity declarations independently of other catalog facts', () => {
     const contribution = { ...agent, catalog: { acpRegistryIds: ['claude-acp', 'alternate-agent'] } };
     expect(PluginAgentContributionV2Schema.parse(contribution).catalog).toEqual(contribution.catalog);

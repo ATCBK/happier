@@ -118,21 +118,32 @@ type EnrichedMarkdownTextAdapterProps = Readonly<{
     fillContainer?: boolean;
     agentTexMath: boolean;
     inlineReferences?: MarkdownInlineReferences;
+    /** Older native binaries do not yet include the actual rendered text. */
+    contextMenuItems?: readonly Readonly<{ text: string; onPress: (event: {
+        text: string; renderedText?: string; selection: { start: number; end: number };
+    }) => void }>[];
 }>;
 
 /**
  * The colours of the inline references in one run. The package draws a link with its own inline style,
  * so on web one scoped rule per resolved reference paints it; native draws the label in the link colour.
+ * A reference that carries a severity reads as ink on its tint with the severity's dot leading the label
+ * (Walkthrough lab WT5-R6): colour marks the severity, the words stay text.
  */
-function useWebInlineReferenceStyle(scope: string, references: ReadonlyMap<string, MarkdownInlineReference>): void {
-    const css = React.useMemo(() => [...references.entries()].map(([href, reference]) => (
-        `[data-happier-md-refs="${scope}"] a[href="${href.replace(/["\\]/g, (char) => `\\${char}`)}"] {`
-        + ` color: ${reference.foreground} !important; background-color: ${reference.background} !important;`
-        + ' text-decoration: none !important; border-radius: 6px; padding: 1px 6px; font-size: 0.86em; font-weight: 600;'
-        // A long reference (a file path) wraps inside its message rather than running past the bubble; each
-        // line keeps the chip's fill and inset.
-        + ' overflow-wrap: anywhere; -webkit-box-decoration-break: clone; box-decoration-break: clone; }'
-    )).join('\n'), [references, scope]);
+function useWebInlineReferenceStyle(scope: string, references: ReadonlyMap<string, MarkdownInlineReference>, ink: string): void {
+    const css = React.useMemo(() => [...references.entries()].map(([href, reference]) => {
+        const selector = `[data-happier-md-refs="${scope}"] a[href="${href.replace(/["\\]/g, (char) => `\\${char}`)}"]`;
+        const rule = `${selector} {`
+            + ` color: ${reference.severity ? ink : reference.foreground} !important; background-color: ${reference.background} !important;`
+            + ' text-decoration: none !important; border-radius: 6px; padding: 1px 6px; font-size: 0.86em; font-weight: 600;'
+            // A long reference (a file path) wraps inside its message rather than running past the bubble; each
+            // line keeps the chip's fill and inset.
+            + ' overflow-wrap: anywhere; -webkit-box-decoration-break: clone; box-decoration-break: clone; }';
+        return reference.severity
+            ? `${rule}\n${selector}::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 4px;`
+                + ` margin-right: 5px; vertical-align: 1px; background-color: ${reference.foreground}; }`
+            : rule;
+    }).join('\n'), [ink, references, scope]);
     React.useLayoutEffect(() => {
         if (Platform.OS !== 'web' || typeof document === 'undefined' || !css) return undefined;
         const style = document.createElement('style');
@@ -174,7 +185,17 @@ export const EnrichedMarkdownTextAdapter = React.memo((props: EnrichedMarkdownTe
     );
     const sanitizedMarkdown = sanitized.markdown;
     const referenceScope = React.useId();
-    useWebInlineReferenceStyle(referenceScope, sanitized.references);
+    // The words take the ink of the prose they sit in.
+    useWebInlineReferenceStyle(referenceScope, sanitized.references, String(styleBundle.markdownStyle.paragraph?.color ?? 'inherit'));
+    // Native draws every link of a run in one colour, so a run that cites a severity reference writes its
+    // links in the prose ink: the severity is said by the label's words, never by link blue.
+    const markdownStyle = React.useMemo(() => {
+        const base = styleBundle.markdownStyle;
+        const citesSeverity = [...sanitized.references.values()].some((reference) => reference.severity);
+        return Platform.OS !== 'web' && citesSeverity && base.link && base.paragraph?.color
+            ? { ...base, link: { ...base.link, color: base.paragraph.color } }
+            : base;
+    }, [sanitized.references, styleBundle.markdownStyle]);
     const flavor = React.useMemo(
         () => resolveEnrichedMarkdownFlavor(sanitizedMarkdown),
         [sanitizedMarkdown],
@@ -252,11 +273,12 @@ export const EnrichedMarkdownTextAdapter = React.memo((props: EnrichedMarkdownTe
             key={runtimeStatus === 'ready' ? 'runtime-ready' : 'runtime-cold'}
             {...platformProps}
             markdown={sanitizedMarkdown}
-            markdownStyle={styleBundle.markdownStyle}
+            markdownStyle={markdownStyle}
             containerStyle={containerStyle}
             md4cFlags={md4cFlags}
             onLinkPress={handleLinkPress}
             selectable={selectable}
+            {...(props.contextMenuItems ? { contextMenuItems: props.contextMenuItems.map((item) => ({ text: item.text, onPress: item.onPress })) } : {})}
             allowTrailingMargin={false}
             flavor={flavor}
         />

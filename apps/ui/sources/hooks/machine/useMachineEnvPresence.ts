@@ -137,6 +137,7 @@ export function useMachineEnvPresence(
         }
 
         let cancelled = false;
+        const controller = new AbortController();
         const now = Date.now();
         const cached = cache.getSnapshot(cacheKey, now).data;
         const isFresh = cached ? now - cached.updatedAt <= ttlMs : false;
@@ -159,13 +160,14 @@ export function useMachineEnvPresence(
             refreshedAt: cached?.updatedAt ?? prev.refreshedAt,
         }));
 
-        const run = async (): Promise<CacheEntry> => {
+        const run = async (signal: AbortSignal): Promise<CacheEntry> => {
             const preview = await machinePreviewEnv(machineId, {
                 keys: normalizedKeys,
                 // Never fetch secret values for presence-only checks.
                 sensitiveKeys: normalizedKeys,
             }, {
                 serverId,
+                signal,
             });
 
             if (!preview.supported) {
@@ -192,7 +194,7 @@ export function useMachineEnvPresence(
             };
         };
 
-        const p = cache.ensure(cacheKey, run, { force: true });
+        const p = cache.ensure(cacheKey, run, { force: true, signal: controller.signal });
 
         fireAndForget(
             p.then((next) => {
@@ -219,8 +221,9 @@ export function useMachineEnvPresence(
 
         return () => {
             cancelled = true;
+            controller.abort();
         };
-    }, [cacheKey, machineId, normalizedKeys, refreshNonce, ttlMs]);
+    }, [cacheKey, machineId, normalizedKeys, refreshNonce, serverId, ttlMs]);
 
     return {
         ...state,

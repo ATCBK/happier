@@ -119,6 +119,31 @@ describe('useDaemonMergedProjectionInputs', () => {
         }
         daemonDescribe.mockClear();
     }
+
+    it('retries an unanswered read after effect supersession and after its final mounted reader leaves', async () => {
+        daemonDescribe.mockImplementationOnce(() => new Promise(() => {}));
+        daemonDescribe.mockResolvedValueOnce(readyResponse(2));
+        const hook = await renderHook(({ machineId, refreshKey }: { machineId: string; refreshKey: number }) => (
+            useDaemonMergedProjectionInputs({ machineId, serverId, refreshKey })
+        ), { initialProps: { machineId: 'machine-1', refreshKey: 0 } });
+        await vi.waitFor(() => expect(daemonDescribe).toHaveBeenCalledTimes(1));
+        expect(hook.getCurrent().phase).toBe('loading');
+        await hook.rerender({ machineId: 'machine-1', refreshKey: 1 });
+        await vi.waitFor(() => expect(hook.getCurrent().phase).toBe('ready'));
+        expect(daemonDescribe).toHaveBeenCalledTimes(2);
+
+        daemonDescribe.mockImplementationOnce(() => new Promise(() => {}));
+        await hook.rerender({ machineId: 'machine-2', refreshKey: 1 });
+        await vi.waitFor(() => expect(daemonDescribe).toHaveBeenCalledTimes(3));
+        await hook.unmount();
+        daemonDescribe.mockResolvedValueOnce(readyResponse(3));
+        const reopened = await renderHook(() => useDaemonMergedProjectionInputs({ machineId: 'machine-2', serverId }));
+        try {
+            await vi.waitFor(() => expect(reopened.getCurrent().phase).toBe('ready'));
+            expect(daemonDescribe).toHaveBeenCalledTimes(4);
+        } finally { await reopened.unmount(); }
+    });
+
     async function settledHook() {
         const hook = await renderHook(() => useDaemonMergedProjectionInputs({ machineId: 'machine-1', serverId }));
         await flushHookEffects({ cycles: 3, turns: 2 });
@@ -562,6 +587,31 @@ describe('useDaemonMergedProjectionInputs', () => {
         await flushHookEffects({ cycles: 3, turns: 2 });
         await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ phase: 'ready', inputs: { pluginProjectionV2: { generation: 4 } } }));
         expect(daemonDescribe).not.toHaveBeenCalled();
+    });
+    it('updates an already mounted cache reader when another consumer publishes the ready projection', async () => {
+        const hook = await renderHook(() => useDaemonMergedProjectionInputs({ machineId: 'machine-1', serverId, load: false }));
+        await flushHookEffects({ cycles: 3, turns: 2 });
+        expect(daemonDescribe).not.toHaveBeenCalled();
+        expect(hook.getCurrent().inputs).toBeNull();
+        await act(async () => {
+            await loadDaemonMergedProjectionCacheEntry({ machineId: 'machine-1', serverId,
+                accountLifetime: captureActiveServerAccountScopeLifetime() });
+        });
+        await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({
+            phase: 'ready', inputs: { pluginProjectionV2: { generation: 1 } },
+        }));
+        expect(daemonDescribe).toHaveBeenCalledTimes(1);
+        const active = await settledHook();
+        daemonDescribe.mockResolvedValueOnce(readyResponse(2));
+        await act(async () => {
+            await loadDaemonMergedProjectionCacheEntry({ machineId: 'machine-1', serverId,
+                accountLifetime: captureActiveServerAccountScopeLifetime() });
+        });
+        await vi.waitFor(() => {
+            expect(hook.getCurrent().inputs?.pluginProjectionV2?.generation).toBe(2);
+            expect(active.getCurrent().inputs?.pluginProjectionV2?.generation).toBe(2);
+        });
+        expect(daemonDescribe).toHaveBeenCalledTimes(2);
     });
     it('restores inert stale metadata from an error cache entry after remount', async () => {
         await primeCache(1, true);

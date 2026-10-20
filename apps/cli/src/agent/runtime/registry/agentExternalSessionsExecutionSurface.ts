@@ -149,6 +149,7 @@ export function createAgentExternalSessionsExecutionSurface(
         async validateSource(request) {
             const result = unwrap('resolveSource', await contribution.resolveSource({
                 source: toAgentSource(request.source, 'resolveSource'),
+                includeAccountingSource: false,
                 ...invocation(
                     undefined,
                     request.signal,
@@ -262,6 +263,7 @@ export function createAgentExternalSessionsExecutionSurface(
                 tailCursor: result.tailCursor ?? null,
                 hasMore: result.hasMore === true,
                 truncated: result.truncated === true,
+                ...(result.diagnostics === undefined ? {} : { diagnostics: result.diagnostics }),
             };
         },
         async readAfterTranscript(request) {

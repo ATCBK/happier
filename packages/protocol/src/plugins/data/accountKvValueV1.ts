@@ -23,8 +23,8 @@ export function pluginAccountStorageUtf8ByteLengthV1(value: string): number {
   return textEncoder.encode(value).byteLength;
 }
 
-export function addPluginAccountStorageCustomIssueV1(context: z.core.$RefinementCtx, message: string): void {
-  context.addIssue({ code: "custom", message });
+export function addPluginAccountStorageCustomIssueV1(context: z.core.ParsePayload | z.core.$RefinementCtx, message: string): void {
+  ('addIssue' in context ? context.addIssue({ code: "custom", message }) : context.issues.push({ code: "custom", message, input: context.value }));
 }
 
 /**

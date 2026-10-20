@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import type { FastifyReply } from "fastify";
 import * as privacyKit from "privacy-kit";
 import { db } from "@/storage/db";
@@ -81,12 +81,12 @@ function decodeCanonicalRequesterPublicKey(value: string): Uint8Array<ArrayBuffe
 }
 
 export function registerAccountAuthRoutes(app: Fastify): void {
-    const requestedSchema = z.object({ state: z.literal('requested') }).strict();
-    const rejectedSchema = z.object({ state: z.literal('rejected') }).strict();
-    const invalidKeySchema = z.object({ error: z.literal('Invalid public key') }).strict();
-    const requestNotFoundSchema = z.object({ error: z.literal('Request not found') }).strict();
-    const responseSuccessSchema = z.object({ success: z.literal(true) }).strict();
-    const provisioningErrorSchema = z.object({
+    const requestedSchema = z.strictObject({ state: z.literal('requested') });
+    const rejectedSchema = z.strictObject({ state: z.literal('rejected') });
+    const invalidKeySchema = z.strictObject({ error: z.literal('Invalid public key') });
+    const requestNotFoundSchema = z.strictObject({ error: z.literal('Request not found') });
+    const responseSuccessSchema = z.strictObject({ success: z.literal(true) });
+    const provisioningErrorSchema = z.strictObject({
         error: z.enum([
             "invalid_provisioning_response",
             "provisioning_kind_mismatch",
@@ -97,20 +97,20 @@ export function registerAccountAuthRoutes(app: Fastify): void {
             "wrong_home",
             "home_identity_unavailable",
         ]),
-    }).strict();
+    });
     const badRequestSchema = z.union([
         provisioningErrorSchema,
-        z.object({
+        z.looseObject({
             statusCode: z.literal(400),
-            error: z.string().min(1),
-            message: z.string().min(1),
-        }).passthrough(),
+            error: z.string().check(z.minLength(1)),
+            message: z.string().check(z.minLength(1)),
+        }),
     ]);
-    const authorizedV2Schema = z.object({
+    const authorizedV2Schema = z.strictObject({
         state: z.literal('authorized'),
         tokenEncrypted: z.string(),
         response: z.string(),
-    }).strict();
+    });
 
     const handleCommonRequest = async (
         version: 'v1' | 'v2',
@@ -224,9 +224,9 @@ export function registerAccountAuthRoutes(app: Fastify): void {
     app.post('/v1/auth/account/request', {
         config: { rateLimit: resolveApiHotEndpointRateLimit(process.env, "auth.accountRequest.poll") },
         schema: {
-            body: z.object({
+            body: z.strictObject({
                 publicKey: z.string(),
-            }).strict(),
+            }),
             response: {
                 200: requestedSchema,
                 401: invalidKeySchema,
@@ -241,12 +241,12 @@ export function registerAccountAuthRoutes(app: Fastify): void {
         config: { rateLimit: resolveApiHotEndpointRateLimit(process.env, "auth.accountRequest.poll") },
         schema: {
             body: z.union([
-                z.object({ publicKey: z.string() }).strict(),
-                z.object({
+                z.strictObject({ publicKey: z.string() }),
+                z.strictObject({
                     publicKey: z.string(),
-                    pairId: z.string().min(1).max(128),
-                    homeServerIdentityId: z.string().trim().min(1).max(128),
-                }).strict(),
+                    pairId: z.string().check(z.minLength(1), z.maxLength(128)),
+                    homeServerIdentityId: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
+                }),
             ]),
             response: {
                 200: z.union([requestedSchema, rejectedSchema, authorizedV2Schema]),
@@ -262,13 +262,13 @@ export function registerAccountAuthRoutes(app: Fastify): void {
         config: { rateLimit: resolveApiHotEndpointRateLimit(process.env, "auth.accountRequest.complete") },
         preHandler: [app.authenticate, requirePresentUser],
         schema: {
-            body: z.object({
+            body: z.strictObject({
                 response: z.string(),
                 publicKey: z.string(),
-                pairId: z.string().min(1).max(128).optional(),
-                homeServerIdentityId: z.string().trim().min(1).max(128).optional(),
-                responseKind: z.enum(["tokenOnly", "dataKey"]).optional(),
-            }).strict(),
+                pairId: z.optional(z.string().check(z.minLength(1), z.maxLength(128))),
+                homeServerIdentityId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(128))),
+                responseKind: z.optional(z.enum(["tokenOnly", "dataKey"])),
+            }),
             response: {
                 200: responseSuccessSchema,
                 400: badRequestSchema,

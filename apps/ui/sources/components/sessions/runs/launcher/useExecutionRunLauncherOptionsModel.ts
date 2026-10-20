@@ -10,6 +10,7 @@ import { resolveEffectiveInputFields as resolveEffectiveActionInputFields } from
 import * as React from 'react';
 
 import type { MergedBackendProjectionEntry, MergedProviderProjectionEntry } from '@/agents/backendCatalog/mergedProjectionTypes';
+import type { MachineAgent } from '@/agents/machineAgents/machineAgentTypes';
 import type { ActionFieldOption } from '@/components/sessions/actions/ActionInputFields';
 import type { ResolveSessionActionFieldOptions } from '@/components/sessions/actions/sessionActionFieldOptions';
 import { getValueAtPath, setValueAtTopLevelPatch } from '@/components/sessions/actions/ActionInputFields';
@@ -32,6 +33,8 @@ export function useExecutionRunLauncherOptionsModel(params: Readonly<{
     intent: ExecutionRunIntent;
     actionInput: Record<string, unknown>;
     setActionInput: React.Dispatch<React.SetStateAction<Record<string, unknown>>>;
+    /** Picker edits persist; catalog normalization stays read-only on mount. */
+    setUserActionInput?: React.Dispatch<React.SetStateAction<Record<string, unknown>>>;
     singleTarget?: boolean;
     enabledAgentIds: readonly string[];
     executionRunsBackends: Readonly<Record<string, ExecutionRunsBackendSnapshotEntry>> | null | undefined;
@@ -41,6 +44,8 @@ export function useExecutionRunLauncherOptionsModel(params: Readonly<{
     machineCapabilitiesState: MachineCapabilitiesCacheState;
     mergedBackendProjectionById?: Readonly<Record<string, MergedBackendProjectionEntry>> | null;
     mergedProviderProjectionById?: Readonly<Record<string, MergedProviderProjectionEntry>> | null;
+    /** The Machine's own Agent inventory, once it has answered. */
+    machineAgents?: readonly MachineAgent[] | null;
     /** Applied parent selection for draft presentation only; host admission still resolves omission. */
     inheritedModelSelection?: ProviderBoundModelRef | null;
     inheritedRoutePresentation?: ReturnType<typeof resolveSessionRoutePresentation>;
@@ -48,19 +53,22 @@ export function useExecutionRunLauncherOptionsModel(params: Readonly<{
 }>) {
     const actionId = resolveExecutionRunLauncherActionId(params.intent);
     const catalogReady = params.acpCatalogSnapshot?.status === 'ready';
-    const backendChoices = React.useMemo(() => !catalogReady ? [] : resolveExecutionRunLauncherBackendChoices({
+    // Only configured Agents depend on this catalog. Built-in and installed
+    // Agent choices retain their own machine projection while it refreshes.
+    const backendChoices = React.useMemo(() => resolveExecutionRunLauncherBackendChoices({
         enabledAgentIds: params.enabledAgentIds,
         executionRunsBackends: params.executionRunsBackends,
         acpCatalogSnapshot: params.acpCatalogSnapshot,
         intent: params.intent,
         mergedBackendProjectionById: params.mergedBackendProjectionById ?? null,
         mergedProviderProjectionById: params.mergedProviderProjectionById ?? null,
+        machineAgents: params.machineAgents ?? null,
     }), [
-        catalogReady,
         params.acpCatalogSnapshot,
         params.enabledAgentIds,
         params.executionRunsBackends,
         params.intent,
+        params.machineAgents,
         params.mergedBackendProjectionById,
         params.mergedProviderProjectionById,
     ]);
@@ -114,9 +122,19 @@ export function useExecutionRunLauncherOptionsModel(params: Readonly<{
         () => resolveInitialExecutionRunBackendTargetKey(params.initialBackendTarget, backendChoices),
         [backendChoices, params.initialBackendTarget],
     );
+    // The Session's own Agent, shown while the Machine has not yet said whether it can run here.
+    const initialBackendChoice = React.useMemo(
+        () => params.initialBackendTarget
+            ? backendChoices.find((choice) => backendTargetKeysMatch(choice.backendTarget, params.initialBackendTarget!)) ?? null
+            : null,
+        [backendChoices, params.initialBackendTarget],
+    );
+    // An unanswered Machine leaves every choice unavailable; that must not rewrite the person's
+    // selection, which settles against the answer when it arrives.
+    const machineAnswered = params.executionRunsBackends != null;
 
     React.useEffect(() => {
-        if (!catalogReady) return;
+        if (!catalogReady || !machineAnswered) return;
         const selectable = backendChoices.filter((choice) => !choice.disabled);
         const selectableValues = selectable.map((choice) => params.intent === 'review' ? choice.backendId : choice.targetKey);
         const preserved = selectedValues
@@ -138,10 +156,10 @@ export function useExecutionRunLauncherOptionsModel(params: Readonly<{
             ...previous,
             ...setValueAtTopLevelPatch(previous, targetFieldPath, next),
         }));
-    }, [catalogReady, backendChoices, initialBackendTargetKey, params.intent, params.setActionInput, params.singleTarget, selectedValues, targetField?.requireExplicitSelection, targetFieldPath]);
+    }, [catalogReady, machineAnswered, backendChoices, initialBackendTargetKey, params.intent, params.setActionInput, params.singleTarget, selectedValues, targetField?.requireExplicitSelection, targetFieldPath]);
 
     React.useEffect(() => {
-        if (!catalogReady || !requestedProfileId) return;
+        if (!catalogReady || !machineAnswered || !requestedProfileId) return;
         if (selectedProfileChoice && !selectedProfileChoice.disabled && selectedProfileMatchesSelectedBackend) return;
         params.setActionInput((previous) => {
             const next = { ...previous };
@@ -149,7 +167,7 @@ export function useExecutionRunLauncherOptionsModel(params: Readonly<{
             delete next.profileSourceCustody;
             return next;
         });
-    }, [catalogReady, params.setActionInput, requestedProfileId, selectedProfileChoice, selectedProfileMatchesSelectedBackend]);
+    }, [catalogReady, machineAnswered, params.setActionInput, requestedProfileId, selectedProfileChoice, selectedProfileMatchesSelectedBackend]);
 
     // A model belongs to the Agent it was chosen for; choosing another Agent drops it.
     const draftModelSelection = ProviderBoundModelRefSchema.safeParse(params.actionInput.modelSelection);
@@ -190,7 +208,7 @@ export function useExecutionRunLauncherOptionsModel(params: Readonly<{
         const choice = backendChoices.find((candidate) => candidate.targetKey === targetKey);
         if (!choice || choice.disabled) return;
         const value = params.intent === 'review' ? choice.backendId : choice.targetKey;
-        params.setActionInput((previous) => {
+        (params.setUserActionInput ?? params.setActionInput)((previous) => {
             const currentRaw = getValueAtPath(previous, targetFieldPath);
             const current = Array.isArray(currentRaw) ? currentRaw.map(String) : [];
             const next = params.singleTarget
@@ -202,23 +220,23 @@ export function useExecutionRunLauncherOptionsModel(params: Readonly<{
                         : [...current, value];
             return { ...previous, ...setValueAtTopLevelPatch(previous, targetFieldPath, next) };
         });
-    }, [backendChoices, params.intent, params.setActionInput, params.singleTarget, targetField?.maxSelections, targetFieldPath]);
+    }, [backendChoices, params.intent, params.setActionInput, params.setUserActionInput, params.singleTarget, targetField?.maxSelections, targetFieldPath]);
     const onSelectProfile = React.useCallback((choice: (typeof profileChoices)[number]) => {
         if (!choice.compatibleAgentId) return;
         const backend = backendChoices.find((candidate) => candidate.backendId === choice.compatibleAgentId);
         if (!backend || backend.disabled) return;
         const value = params.intent === 'review' ? backend.backendId : backend.targetKey;
-        params.setActionInput((previous) => ({
+        (params.setUserActionInput ?? params.setActionInput)((previous) => ({
             ...previous,
             profileId: choice.id,
             profileSourceCustody: choice.sourceCustody,
             ...setValueAtTopLevelPatch(previous, targetFieldPath, [value]),
         }));
-    }, [backendChoices, params.intent, params.setActionInput, profileChoices, targetFieldPath]);
+    }, [backendChoices, params.intent, params.setActionInput, params.setUserActionInput, profileChoices, targetFieldPath]);
     const onPatch = React.useCallback((patch: Record<string, unknown>) => {
         const normalized = normalizeActionInputPatch({ actionId, patch });
-        params.setActionInput((previous) => ({ ...previous, ...normalized }));
-    }, [actionId, params.setActionInput]);
+        (params.setUserActionInput ?? params.setActionInput)((previous) => ({ ...previous, ...normalized }));
+    }, [actionId, params.setActionInput, params.setUserActionInput]);
 
     const targetMatchesParent = selectedBackendChoice !== null && params.initialBackendTarget !== null
         && backendTargetKeysMatch(selectedBackendChoice.targetKey, params.initialBackendTarget);
@@ -233,6 +251,7 @@ export function useExecutionRunLauncherOptionsModel(params: Readonly<{
         actionSpec,
         fields,
         backendChoices,
+        initialBackendChoice,
         selectedBackendChoice,
         targetMatchesParent,
         inheritedDraftSelection: inheritsModel ? params.inheritedModelSelection ?? null : null,

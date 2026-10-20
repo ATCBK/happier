@@ -5,7 +5,7 @@ import { hashProcessCommand, processIdentityMatches } from '@happier-dev/cli-com
 import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import * as z from 'zod';
+import * as z from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { CATALOG_AGENT_IDS } from '@/agent/catalog/ids';
 import {
@@ -33,74 +33,91 @@ import {
 } from '@/plugins/runtime/runner/runnerManagedDependencyRetention';
 import { RequesterWorkAttributionStoredReadV1Schema, RequesterWorkAttributionV1Schema,
   type RequesterWorkAttributionV1 } from './lifecycle/requesterWorkAttribution';
+import type { ConnectedServiceMaterializedStateObservationBinding } from './connectedServices/materialization/materializer';
+
+const ConnectedServiceMaterializedStateObservationBindingSchema = z.strictObject({
+  agentId: z.string().check(z.minLength(1)),
+  pluginId: z.string().check(z.minLength(1)),
+  sourceCustody: PluginSourceCustodyV1Schema,
+  nativeHomeRoot: z.string().check(z.minLength(1)),
+  entries: z.array(z.strictObject({
+    entryPath: z.string().check(z.minLength(1)),
+    sourceEntryRoot: z.string().check(z.minLength(1)),
+    materializedEntryPath: z.string().check(z.minLength(1)),
+  })),
+});
 
 const DaemonSessionMarkerSchema = z.object({
-  pid: z.number().int().positive(),
+  pid: z.number().check(z.int(), z.positive()),
   happySessionId: z.string(),
   happyHomeDir: z.string(),
-  createdAt: z.number().int().positive(),
-  updatedAt: z.number().int().positive(),
-  flavor: z.enum(CATALOG_AGENT_IDS).optional(),
-  startedBy: z.enum(['daemon', 'terminal']).optional(),
-  cwd: z.string().optional(),
-  linuxLaunchUnit: z.string().refine(unit => unit.startsWith('happier-') && !unit.includes('/') && unit.endsWith('.scope')).optional(),
-  requesterWorkAttributionV1: RequesterWorkAttributionStoredReadV1Schema.optional(),
+  createdAt: z.number().check(z.int(), z.positive()),
+  updatedAt: z.number().check(z.int(), z.positive()),
+  flavor: z.optional(z.enum(CATALOG_AGENT_IDS)),
+  startedBy: z.optional(z.enum(['daemon', 'terminal'])),
+  cwd: z.optional(z.string()),
+  linuxLaunchUnit: z.optional(z.string().check(z.refine(unit => unit.startsWith('happier-') && !unit.includes('/') && unit.endsWith('.scope')))),
+  requesterWorkAttributionV1: z.optional(RequesterWorkAttributionStoredReadV1Schema),
   // Legacy positive-classification witness and diagnostic snapshot. Mutable command text is not process generation.
-  processCommandHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  processCommandHash: z.optional(z.string().check(z.regex(/^[a-f0-9]{64}$/))),
   // Canonical OS process-generation witness paired with the PID.
-  processStartTimeMs: z.number().int().nonnegative().optional(),
+  processStartTimeMs: z.optional(z.number().check(z.int(), z.nonnegative())),
   // 0.2 predecessor marker witness. Read for adoption safety; new writes use
   // processStartTimeMs from the current process-identity owner.
-  processInstanceFingerprint: z.string().trim().min(1).max(512).optional(),
+  processInstanceFingerprint: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(512))),
   // Optional debug-only sample of the observed command; not an identity witness.
-  processCommand: z.string().optional(),
-  metadata: z.any().optional(),
+  processCommand: z.optional(z.string()),
+  metadata: z.optional(z.any()),
   // Safe daemon respawn inputs (no secrets). Used to reconstruct SpawnSessionOptions after reattach.
-  respawn: SessionRunnerRespawnDescriptorV1Schema.optional(),
+  respawn: z.optional(SessionRunnerRespawnDescriptorV1Schema),
   // Durable marker that a connected-service auth switch has entered the gated restart primitive.
-  connectedServiceRestartIntent: z.object({
+  connectedServiceRestartIntent: z.optional(z.object({
     v: z.literal(1),
-    requestedAtMs: z.number().int().nonnegative(),
-  }).optional(),
+    requestedAtMs: z.number().check(z.int(), z.nonnegative()),
+  })),
   // Stable private authority-document path only. The scoped capability is
   // atomically rotated inside that document and must never enter the marker.
   agentRuntimeDaemonServiceAuthorityFilePath:
-    z.string().trim().min(1).max(32_768).optional(),
-  activeTurnId: z.string().trim().min(1).max(512).optional(),
-  agentRuntimeDaemonServiceActiveAdmission: z.object({
-    turnId: z.string().trim().min(1).max(512),
-    inputId: z.string().trim().min(1).max(512),
-    userMessageSeq: z.number().int().nonnegative().nullable(),
+    z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(32_768))),
+  activeTurnId: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(512))),
+  agentRuntimeDaemonServiceActiveAdmission: z.optional(z.strictObject({
+    turnId: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
+    inputId: z.string().check(z.trim(), z.minLength(1), z.maxLength(512)),
+    userMessageSeq: z.nullable(z.number().check(z.int(), z.nonnegative())),
     userMessageSeqs:
-      z.array(z.number().int().nonnegative()).max(4_096),
-  }).strict().optional(),
+      z.array(z.number().check(z.int(), z.nonnegative())).check(z.maxLength(4_096)),
+  })),
   agentRuntimeDaemonServiceSessionOpenAttestation:
-    AgentRuntimeDaemonServiceSessionOpenAttestationV1Schema.optional(),
+    z.optional(AgentRuntimeDaemonServiceSessionOpenAttestationV1Schema),
   // Non-secret byte-retention facts for the exact live runner. Destructive
   // managed-dependency owners revalidate the marker's process identity before
   // consulting these pins; effect authority remains in the private document.
   runnerAgentSourceCustodyV1: z.optional(PluginSourceCustodyV1Schema),
+  materializedStateObservationBinding:
+    z.optional(ConnectedServiceMaterializedStateObservationBindingSchema),
   runnerManagedDependencyRetentionV1:
-    RunnerManagedDependencyRetentionV1Schema.optional(),
+    z.optional(RunnerManagedDependencyRetentionV1Schema),
   // Required startup identity persisted before runtime open; not proof of application.
   agentSessionStartupInstructionsMarkerV1:
-    AgentSessionStartupInstructionsMarkerV1Schema.optional(),
-}).superRefine((marker, context) => {
+    z.optional(AgentSessionStartupInstructionsMarkerV1Schema),
+}).check(z.superRefine((marker, context) => {
   if (
     marker.agentRuntimeDaemonServiceActiveAdmission
     && marker.agentRuntimeDaemonServiceActiveAdmission.turnId
       !== marker.activeTurnId
   ) {
     context.addIssue({
-      code: z.ZodIssueCode.custom,
+      code: "custom",
       path: ['agentRuntimeDaemonServiceActiveAdmission', 'turnId'],
       message:
         'Runner Agent daemon-service admission must match the active turn',
     });
   }
-});
+}));
 
-export type DaemonSessionMarker = z.infer<typeof DaemonSessionMarkerSchema>;
+export type DaemonSessionMarker = Omit<z.infer<typeof DaemonSessionMarkerSchema>, 'materializedStateObservationBinding'> & {
+  materializedStateObservationBinding?: ConnectedServiceMaterializedStateObservationBinding;
+};
 const DaemonSessionMarkerStoredReadSchema = createStoredReadSchema(DaemonSessionMarkerSchema);
 type AgentRuntimeDaemonServiceActiveAdmission = Readonly<{
   turnId: string;
@@ -236,6 +253,7 @@ export type WriteSessionMarkerOptions = Readonly<{
   preserveActiveTurnId?: boolean;
   preserveRunnerAgentSourceCustody?: boolean;
   preserveRunnerManagedDependencyRetention?: boolean;
+  preserveMaterializedStateObservationBinding?: boolean;
   adoptCanonicalSessionIdFromPidPlaceholder?: boolean;
 }>;
 
@@ -490,6 +508,17 @@ async function writeSessionMarkerUnlocked(
     marker.runnerAgentSourceCustodyV1 === undefined
       ? existingRunnerAgentSourceCustody
       : undefined;
+  const preservedMaterializedStateObservationBinding =
+    options.preserveMaterializedStateObservationBinding !== false
+    && marker.materializedStateObservationBinding === undefined
+    && existingMarkerFromDisk?.materializedStateObservationBinding
+    && marker.processStartTimeMs !== undefined
+    && (canonicalAdoptionRequested || sessionMarkerProcessOwnershipMatches(existingMarkerFromDisk, {
+      happySessionId: marker.happySessionId,
+      processStartTimeMs: marker.processStartTimeMs,
+    }))
+      ? existingMarkerFromDisk.materializedStateObservationBinding
+      : undefined;
   const incomingRequesterAttribution = marker.requesterWorkAttributionV1
     ? RequesterWorkAttributionV1Schema.parse(marker.requesterWorkAttributionV1)
     : undefined;
@@ -540,6 +569,9 @@ async function writeSessionMarkerUnlocked(
       ? {
           runnerAgentSourceCustodyV1: preservedRunnerAgentSourceCustody,
         }
+      : {}),
+    ...(preservedMaterializedStateObservationBinding
+      ? { materializedStateObservationBinding: preservedMaterializedStateObservationBinding }
       : {}),
     ...(marker.metadata === undefined
       ? {}
@@ -696,11 +728,12 @@ export async function clearSessionMarkerAgentRuntimeDaemonServicePromotionIfOwne
       const {
         agentRuntimeDaemonServiceAuthorityFilePath: _authorityFilePath,
         agentRuntimeDaemonServiceSessionOpenAttestation: _sessionOpenAttestation,
+        materializedStateObservationBinding: _materializedStateObservationBinding,
         happyHomeDir: _happyHomeDir,
         updatedAt: _updatedAt,
         ...rest
       } = existing;
-      await writeSessionMarkerUnlocked(rest);
+      await writeSessionMarkerUnlocked(rest, { preserveMaterializedStateObservationBinding: false });
       return true;
     }
     const {
@@ -708,6 +741,7 @@ export async function clearSessionMarkerAgentRuntimeDaemonServicePromotionIfOwne
       agentRuntimeDaemonServiceSessionOpenAttestation: _sessionOpenAttestation,
       runnerAgentSourceCustodyV1: _sourceCustody,
       runnerManagedDependencyRetentionV1: _retention,
+      materializedStateObservationBinding: _materializedStateObservationBinding,
       happyHomeDir: _happyHomeDir,
       updatedAt: _updatedAt,
       ...rest
@@ -715,6 +749,7 @@ export async function clearSessionMarkerAgentRuntimeDaemonServicePromotionIfOwne
     await writeSessionMarkerUnlocked(rest, {
       preserveRunnerAgentSourceCustody: false,
       preserveRunnerManagedDependencyRetention: false,
+      preserveMaterializedStateObservationBinding: false,
     });
     return true;
   });
@@ -841,6 +876,7 @@ export async function updateSessionMarkerRunnerAgentSourceCustody(
     processCommandHash: string;
     processStartTimeMs: number;
     sourceCustody: PluginSourceCustodyV1;
+    materializedStateObservationBinding?: ConnectedServiceMaterializedStateObservationBinding;
     requesterWorkAttributionV1?: RequesterWorkAttributionV1;
   }>,
 ): Promise<boolean> {
@@ -870,6 +906,8 @@ export async function updateSessionMarkerRunnerAgentSourceCustody(
     await writeSessionMarkerUnlocked({
       ...rest,
       runnerAgentSourceCustodyV1: params.sourceCustody,
+      ...(params.materializedStateObservationBinding
+        ? { materializedStateObservationBinding: params.materializedStateObservationBinding } : {}),
       ...(params.requesterWorkAttributionV1
         ? { requesterWorkAttributionV1: params.requesterWorkAttributionV1 } : {}),
     });

@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { homeAdministrationGitHubAppPath, homeAdministrationGitHubAppEditPath, homeAdministrationPoliciesPath, homeAdministrationSignInProvidersPath } from '../governance/homeAdministrationRoutes';
+import { teamDirectoryPath } from '../../teams/teamsRoutes';
 import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { findTestInstanceByTypeContainingText } from '@/dev/testkit/render/renderScreen';
@@ -106,12 +108,12 @@ const surface = {
     owner: { kind: 'home' as const },
     mutationsAvailable: true,
     routes: {
-        detail: (id: string) => `/registrations/${id}`,
-        edit: (id: string) => `/registrations/${id}/edit`,
-        signIn: '/settings/home/home-1/policies',
-        directory: '/settings/teams/home-1/team-1/authentication/directory',
+        detail: (id: string) => homeAdministrationGitHubAppPath('home-1', id),
+        edit: (id: string) => homeAdministrationGitHubAppEditPath('home-1', id),
+        signIn: homeAdministrationPoliciesPath('home-1'),
+        directory: teamDirectoryPath({ serverId: 'home-1', teamId: 'team-1' }),
     },
-    githubEnterpriseOriginPolicyPath: '/settings/home/home-1/policies',
+    githubEnterpriseOriginPolicyPath: homeAdministrationSignInProvidersPath('home-1'),
     onApprovalPending: approvalPendingMock,
 } as const;
 
@@ -267,7 +269,7 @@ describe('managed GitHub App approval-pending consumers', () => {
         await act(async () => callbacks?.onApprovalSucceeded?.({ registration: { id: 'created-registration' } }));
 
         expect(executeMock).toHaveBeenCalledTimes(1);
-        expect(replaceMock).toHaveBeenCalledWith('/registrations/created-registration');
+        expect(replaceMock).toHaveBeenCalledWith(homeAdministrationGitHubAppPath('home-1', 'created-registration'));
     });
 
     it('continues an approved update through the same success callback without replaying the Action', async () => {
@@ -289,7 +291,7 @@ describe('managed GitHub App approval-pending consumers', () => {
         await act(async () => callbacks?.onApprovalSucceeded?.({ registration: { id: 'registration-1' } }));
 
         expect(executeMock).toHaveBeenCalledTimes(1);
-        expect(replaceMock).toHaveBeenCalledWith('/registrations/registration-1');
+        expect(replaceMock).toHaveBeenCalledWith(homeAdministrationGitHubAppPath('home-1', 'registration-1'));
         expect(approvalPendingMock).toHaveBeenCalledWith(pendingApproval);
     });
 
@@ -380,7 +382,7 @@ describe('managed GitHub App approval-pending consumers', () => {
         expect(openExternalUrlMock).toHaveBeenCalledWith('https://github.com/login/oauth/authorize');
         expect(consumePendingGitHubAppVerification('registration-1')).toEqual({
             registrationId: 'registration-1',
-            returnTo: '/registrations/registration-1',
+            returnTo: homeAdministrationGitHubAppPath('home-1', 'registration-1'),
         });
     });
 
@@ -450,7 +452,7 @@ describe('managed GitHub App approval-pending consumers', () => {
             === 'identityAdministration.githubEnterpriseOriginNotApproved')).not.toHaveLength(0);
 
         await screen.pressByTestIdAsync('github-enterprise-origin-policy');
-        expect(pushMock).toHaveBeenCalledWith('/settings/home/home-1/policies');
+        expect(pushMock).toHaveBeenCalledWith(homeAdministrationSignInProvidersPath('home-1'));
     });
 
     it('offers the same exact-Home recovery from installation verification without reporting success', async () => {
@@ -472,7 +474,7 @@ describe('managed GitHub App approval-pending consumers', () => {
         expect(Boolean(screen.findByTestId('github-installation-verify')!.props.disabled)).toBe(false);
         expect(findTestInstanceByTypeContainingText(screen.findByTestId('github-enterprise-origin-policy')!, 'Text', 'homeGovernance.githubEnterpriseOrigins')).toBeDefined();
         await screen.pressByTestIdAsync('github-enterprise-origin-policy');
-        expect(pushMock).toHaveBeenCalledWith('/settings/home/home-1/policies');
+        expect(pushMock).toHaveBeenCalledWith(homeAdministrationSignInProvidersPath('home-1'));
     });
 
     it('does not invent Home policy navigation for a Team-owned GitHub App', async () => {

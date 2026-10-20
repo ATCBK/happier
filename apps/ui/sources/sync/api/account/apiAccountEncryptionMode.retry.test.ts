@@ -11,6 +11,10 @@ import type { AuthCredentials } from '@/auth/storage/tokenStorage';
 import { encodeBase64 } from '@/encryption/base64';
 import { encodeUTF8 } from '@/encryption/text';
 
+// Load the real graph before fake clocks and test deadlines. The canonical
+// invalidation owner retires each case's cached/in-flight mode evidence.
+const accountEncryptionMode = await import('./apiAccountEncryptionMode');
+
 function buildTokenWithSub(sub: string): string {
     const payload = encodeBase64(encodeUTF8(JSON.stringify({ sub })), 'base64');
     return `hdr.${payload}.sig`;
@@ -18,12 +22,12 @@ function buildTokenWithSub(sub: string): string {
 
 describe('apiAccountEncryptionMode retry modes', () => {
     afterEach(async () => {
+        accountEncryptionMode.invalidateAccountEncryptionModeCache();
         const { resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
         await resetServerReachabilitySupervisors();
         const { stopAllEndpointSupervisorsForTests } = await import('@/sync/runtime/connectivity/endpointSupervisorPool');
         await stopAllEndpointSupervisorsForTests();
         runtimeFetchSpy.mockReset();
-        vi.resetModules();
         vi.useRealTimers();
         vi.restoreAllMocks();
     });

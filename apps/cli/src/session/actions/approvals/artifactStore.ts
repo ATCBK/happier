@@ -1,9 +1,13 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { timeWebLatencyPhase } from '@/daemon/externalActions/webLatencyTrace';
 
-import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
-import { APPROVAL_ARTIFACT_KINDS_V1, approvalArtifactBodyMatchesHeaderV1, buildApprovalRequestArtifactHeaderV1, buildExecutionRunHostActionApprovalArtifactHeaderV1, buildTargetActionApprovalArtifactHeaderV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
+import { approvalArtifactBodyMatchesHeaderV1, buildApprovalRequestArtifactHeaderV1, buildExecutionRunHostActionApprovalArtifactHeaderV1, buildTargetActionApprovalArtifactHeaderV1, listApprovalArtifactsV1 } from '@happier-dev/protocol/approvals/approvalArtifactHeaderV1';
 import { decideApprovalRequestTransition } from '@happier-dev/protocol/approvals/approvalRequestTransition';
-import type { ActionId, ApprovalQueueListItemV1, ApprovalRequest, ExecutionRunHostActionApprovalRequestV1, TargetActionApprovalRequestV1, PromptLibraryArtifactStore } from '@happier-dev/protocol';
+import { readPluginInstallApprovalPendingReview } from '@happier-dev/protocol/actions/actionApprovalPresentation';
+import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
+import { DiscussionReplyInputV1Schema } from '@happier-dev/protocol/discussions/actions';
+import { deriveSessionMessageReplyReturnLocalIdV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+import type { ApprovalRequest, ExecutionRunHostActionApprovalRequestV1, TargetActionApprovalRequestV1, PromptLibraryArtifactStore } from '@happier-dev/protocol';
 
 import type { StoredCredentials } from '@/persistence';
 import {
@@ -17,10 +21,12 @@ import { createCliPromptLibraryStore } from '@/settings/prompts/promptLibrarySto
 import { configuration } from '@/configuration';
 import { resolveServerHttpBaseUrl, runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
+import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { ArtifactFolderActionPortV1 } from '@happier-dev/protocol/prompts/library/promptFolderActionsV1';
 import type { SkillRulesActionPortV1 } from '@happier-dev/protocol/prompts/library/skillRulesActionsV1';
 import { readSkillLibraryCatalog } from '@happier-dev/protocol/prompts/library/skills/readSkillLibraryCatalog';
+import { readAccountPluginSkills } from '@/prompts/skills/library/readAccountPluginSkills';
+import type { SkillActionPortV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionOperations';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 
 import { targetActionApprovalRequestsEqual, targetActionApprovalSubjectsEqual } from './targetActionApprovalSubject';
@@ -34,25 +40,6 @@ export function projectAccountArtifactToPromptLibraryStoredArtifact(artifact: Ac
   if (!artifact || typeof artifact.body !== 'string') return null;
   return { id: artifact.artifactId, revision: artifact.revision, header: artifact.header, body: artifact.body,
     owned: artifact.access === 'owner', access: artifact.access };
-}
-
-function parseApprovalStatus(value: unknown): ApprovalRequest['status'] | null {
-  if (
-    value === 'open'
-    || value === 'approved'
-    || value === 'executing'
-    || value === 'rejected'
-    || value === 'executed'
-    || value === 'failed'
-    || value === 'canceled'
-  ) {
-    return value;
-  }
-  return null;
-}
-
-function parseApprovalActionId(value: unknown): ActionId | null {
-  return typeof value === 'string' && ActionIdSchema.safeParse(value).success ? value as ActionId : null;
 }
 
 function normalizeArtifactServerId(value: unknown): string | null {
@@ -85,9 +72,53 @@ function readExecutionRunHostActionApprovalArtifact(header: Record<string, unkno
   return parsed?.family === 'execution_run_host_action' ? parsed.request : null;
 }
 
+function deriveApprovalArtifactId(namespace: string, identity: string): string {
+  const bytes = createHash('sha256')
+    .update(namespace, 'utf8')
+    .update(identity, 'utf8')
+    .digest()
+    .subarray(0, 16);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function derivePluginInstallApprovalSuccessorArtifactId(artifactId: string): string {
+  return deriveApprovalArtifactId('happier-plugin-install-approval-successor-v1\0', artifactId);
+}
+
+function readDiscussionReplyApprovalSubject(request: ApprovalRequest) {
+  if (request.v !== 2 || request.actionId !== 'discussion.reply' || !request.executionOriginV1.discussionReplyReturn) return null;
+  const origin = request.executionOriginV1;
+  const returned = origin.discussionReplyReturn!;
+  const input = DiscussionReplyInputV1Schema.safeParse(request.actionArgs);
+  if (!origin.accountId || !origin.machineId || !origin.sessionId
+    || (origin.caller.kind !== 'host' && origin.caller.kind !== 'session') || !input.success) {
+    throw Object.assign(new Error('approval_request_subject_mismatch'), { code: 'subject_mismatch' });
+  }
+  const localId = deriveSessionMessageReplyReturnLocalIdV1({ sessionId: origin.sessionId,
+    localId: returned.requestLocalId, ...(returned.acceptedTurnId ? { acceptedTurnId: returned.acceptedTurnId } : {}) });
+  const addressing = origin.sessionInputSource?.discussionAddressing;
+  if (input.data.localId !== localId || origin.requestId !== localId || input.data.replyTarget.kind !== 'message'
+    || addressing && (addressing.discussionId !== input.data.discussionId
+      || addressing.messageId !== input.data.replyTarget.messageId || addressing.participantSessionId !== origin.sessionId)) {
+    throw Object.assign(new Error('approval_request_subject_mismatch'), { code: 'subject_mismatch' });
+  }
+  return {
+    identity: [origin.serverIdentityId ?? origin.serverId, origin.accountId, origin.machineId, origin.sessionId,
+      returned.requestLocalId, returned.acceptedTurnId ?? null],
+    discussionId: input.data.discussionId,
+    replyTarget: input.data.replyTarget,
+    sessionInputSource: origin.sessionInputSource,
+    requesterConfirmation: request.requesterConfirmation,
+  };
+}
+
 export function createCliApprovalsArtifactStore(params: Readonly<{
   credentials: StoredCredentials;
   serverId?: string;
+  serverHttpBaseUrl?: string;
   operationContext?: SavedSecretOperationContextV1;
   getAccountEncryptionMode?: () => Promise<ConnectedServiceAccountEncryptionMode>;
 }>): Readonly<{
@@ -103,35 +134,44 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
   executionRunHostActionApprovalsUpdate(args: Readonly<{ artifactId: string; request: ExecutionRunHostActionApprovalRequestV1 }>): Promise<Readonly<{ ok: true } | { ok: false; errorCode: string; error: string }>>;
   promptLibraryStore: PromptLibraryArtifactStore;
   skillRules: SkillRulesActionPortV1;
+  readPluginSkills: NonNullable<SkillActionPortV1['readPluginSkills']>;
 }> {
   const accountModeApi = params.getAccountEncryptionMode
     ? null
     : createConnectedServiceCredentialApi(params.credentials);
   const getAccountEncryptionMode = params.getAccountEncryptionMode
     ?? (() => accountModeApi!.getAccountEncryptionMode());
-  const accountArtifactStore = createAccountArtifactStore({
+  const rawAccountArtifactStore = createAccountArtifactStore({
     credentials: params.credentials,
-    getAccountEncryptionMode,
+    getAccountEncryptionMode: () => timeWebLatencyPhase('approval.account_mode', getAccountEncryptionMode),
   });
-  const folderBaseUrl = params.operationContext?.serverHttpBaseUrl ?? resolveServerHttpBaseUrl();
-  const folderStore = createCliPromptLibraryStore({ credentials: params.credentials, operationContext: params.operationContext });
+  const accountArtifactStore = { ...rawAccountArtifactStore,
+    read: (...args: Parameters<typeof rawAccountArtifactStore.read>) => timeWebLatencyPhase('approval.artifact.read', () => rawAccountArtifactStore.read(...args)),
+    update: (...args: Parameters<typeof rawAccountArtifactStore.update>) => timeWebLatencyPhase('approval.artifact.update', () => rawAccountArtifactStore.update(...args)),
+  };
+  const prepareRequesterRecipient = async (artifactId: string,
+    subject: import('@happier-dev/protocol/approvals/approvalRequestV1').ApprovalRequesterConfirmationV1 | undefined): Promise<void> => {
+    if (subject) await accountArtifactStore.prepareApprovalRequesterRecipient({ artifactId,
+      requesterAccountId: subject.requesterAccountId, sessionId: subject.personaSessionRef.sessionId });
+  };
+  const folderBaseUrl = params.operationContext?.serverHttpBaseUrl ?? params.serverHttpBaseUrl ?? resolveServerHttpBaseUrl();
+  const folderStore = runWithServerHttpBaseUrl(folderBaseUrl,
+    () => createCliPromptLibraryStore({ credentials: params.credentials, operationContext: params.operationContext }));
   const folderScopeKey = runWithServerHttpBaseUrl(folderBaseUrl,()=>resolveAccountSettingsScopeKey(params.credentials));
   const folderLifetimeToken = getActiveAccountSettingsSnapshotLifetimeToken();
+  const readPluginSkills: NonNullable<SkillActionPortV1['readPluginSkills']> = (signal, skillIds) => readAccountPluginSkills({
+    credentials: params.credentials, serverHttpBaseUrl: folderBaseUrl, signal, skillIds, availableOnly: true,
+    settings: (params.operationContext ? params.operationContext.readSnapshot() : getActiveAccountSettingsSnapshot())?.settings,
+    isCurrent: async () => { folderStore.assertCurrent(); return params.operationContext ? params.operationContext.isCurrent() : true; },
+  });
   const organization: ArtifactFolderActionPortV1 = {
     serverId: params.serverId ?? configuration.activeServerId,
     assertCurrent: folderStore.assertCurrent,
     readCatalog: async (signal, key = 'folders') => runWithServerHttpBaseUrl(folderBaseUrl, async () => {
       folderStore.assertCurrent(); signal?.throwIfAborted();
-      const transport = createCliPromptLibraryStore({ credentials: params.credentials, signal, operationContext: params.operationContext });
-      const catalog = await transport.readPromptLibraryCatalog();
+      const projection = await folderStore.readCatalog(signal, key);
       folderStore.assertCurrent(); signal?.throwIfAborted();
-      const occupied = (catalog.status === 'ready' || catalog.status === 'partial') &&
-        (catalog.rows.some(row => row.record.key === key) || catalog.tombstones.some(row => row.key === key) ||
-          catalog.diagnostics.some(row => row.key === key));
-      if (catalog.status !== 'ready' && catalog.status !== 'partial' || occupied) return { catalog };
-      const source = await transport.readSourceSnapshot();
-      folderStore.assertCurrent(); signal?.throwIfAborted();
-      return { catalog, rawSettings: source.raw, sourceSettingsVersion: source.version };
+      return projection;
     }),
     writeRecord: async (input, signal) => runWithServerHttpBaseUrl(folderBaseUrl, async () => {
       folderStore.assertCurrent(); signal?.throwIfAborted();
@@ -181,13 +221,13 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
         const artifact = await accountArtifactStore.read(artifactId, options);
         return projectAccountArtifactToPromptLibraryStoredArtifact(artifact);
       },
-      create: async ({ header, body, signal }) => {
-        const created = await accountArtifactStore.create({ header, body, signal });
+      create: async ({ header, body, memoryDecisionSource, signal }) => {
+        const created = await accountArtifactStore.create({ header, body, memoryDecisionSource, signal });
         return created.artifactId;
       },
-      update: async ({ artifactId, expectedRevision, header, body, signal }) => {
+      update: async ({ artifactId, expectedRevision, header, body, memoryDecisionSource, signal }) => {
         const updated = await accountArtifactStore.update({ artifactId,
-          expectedRevision, header, body, signal });
+          expectedRevision, header, body, memoryDecisionSource, signal });
         if (!updated.ok) throw Object.assign(new Error(updated.error), { code: updated.errorCode });
         return { revision: updated.revision };
       },
@@ -196,10 +236,11 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
         if (!deleted.ok) throw Object.assign(new Error(deleted.error), { code: deleted.errorCode });
       },
     },
+    readPluginSkills,
     skillRules: { ...organization,
       listSkills: (signal, skillIds) => runWithServerHttpBaseUrl(folderBaseUrl, async () => {
         folderStore.assertCurrent(); signal?.throwIfAborted();
-        const skills = await readSkillLibraryCatalog(accountArtifactStore, signal, skillIds);
+        const skills = await readSkillLibraryCatalog({ ...accountArtifactStore, readPluginSkills }, signal, skillIds);
         folderStore.assertCurrent(); signal?.throwIfAborted();
         return skills;
       }),
@@ -241,6 +282,7 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
       const artifactId = randomUUID();
       const res = await accountArtifactStore.create({ artifactId,
         header: buildTargetActionApprovalArtifactHeaderV1(request), body: JSON.stringify(request) });
+      await prepareRequesterRecipient(res.artifactId, request.requesterConfirmation);
       return { artifactId: res.artifactId };
     },
     targetActionApprovalsGet: async ({ artifactId }) => {
@@ -271,11 +313,17 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
         && request.status === 'executing'
         && request.decision?.kind === 'approve'
         && request.execution === undefined;
+      // The replay owner can refuse a stale origin before claiming execution.
+      const isApprovedStale = existingRequest.status === 'approved'
+        && request.status === 'failed'
+        && request.decision?.kind === 'approve'
+        && request.execution?.ok === false
+        && request.execution.errorCode === 'approval_stale';
       const isExecutingTerminal = existingRequest.status === 'executing'
         && (request.status === 'executed' || request.status === 'failed')
         && request.decision?.kind === 'approve'
         && request.execution !== undefined;
-      if ((!isOpenDecision && !isApprovedExecution && !isExecutingTerminal)
+      if ((!isOpenDecision && !isApprovedExecution && !isApprovedStale && !isExecutingTerminal)
         || request.updatedAtMs < existingRequest.updatedAtMs) {
         return { ok: false, errorCode: 'invalid_transition', error: 'target_action_approval_invalid_transition' };
       }
@@ -283,71 +331,96 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
         header: buildTargetActionApprovalArtifactHeaderV1(request), body: JSON.stringify(request) });
       return updated.ok ? { ok: true } : updated;
     },
-    approvalsList: async ({ status, limit, serverId }) => {
-      const items: ApprovalQueueListItemV1[] = [];
-      const normalizedServerId = typeof serverId === 'string' && serverId.trim().length > 0 ? serverId.trim() : null;
-      const maxItems = typeof limit === 'number' && Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.trunc(limit))) : 32;
-      let cursor: string | undefined;
-      do {
-        const page = await accountArtifactStore.list({ limit: maxItems, ...(cursor ? { cursor } : {}) });
-        for (const artifact of page.items) {
-          if (items.length >= maxItems) break;
-          const header = artifact.header;
-          if (!header || (header.kind !== APPROVAL_ARTIFACT_KINDS_V1.builtIn
-            && header.kind !== APPROVAL_ARTIFACT_KINDS_V1.targetAction)) continue;
-          const hydrated = await accountArtifactStore.read(artifact.artifactId);
-          if (!hydrated?.body) continue;
-          const parsed = approvalArtifactBodyMatchesHeaderV1(hydrated.header, hydrated.body);
-          if (!parsed || parsed.family === 'execution_run_host_action') continue;
-          const request = parsed.request;
-          if (typeof status === 'string' && request.status !== status) continue;
-          const headerServerId = normalizeArtifactServerId(hydrated.header.serverId);
-          // V1 has no body-authoritative stable Home identity. Preserve its
-          // released profile-scoped history behavior; V2 is Account-scoped and
-          // validates creator profile plus Home from its strict body.
-          if (parsed.family === 'built_in' && parsed.request.v === 1
-            && !approvalArtifactMatchesServerScope(hydrated.header, normalizedServerId)) continue;
-
-          const actionId = parsed.family === 'target_action' ? 'action.invoke' : parseApprovalActionId(parsed.request.actionId);
-          const summary = request.summary;
-          const approvalStatus = parseApprovalStatus(request.status);
-          if (!actionId || !summary || !approvalStatus) continue;
-
-          items.push({
-            artifactId: artifact.artifactId,
-            status: approvalStatus,
-            actionId,
-            summary,
-            ...(typeof hydrated.header.sessionId === 'string' && hydrated.header.sessionId.trim().length > 0 ? { sessionId: hydrated.header.sessionId.trim() } : {}),
-            ...(headerServerId ? { serverId: headerServerId } : {}),
-            updatedAtMs: Number.isFinite(hydrated.updatedAt) ? hydrated.updatedAt : 0,
-          });
-        }
-        cursor = items.length < maxItems ? page.nextCursor : undefined;
-      } while (cursor);
-
-      return {
-        items,
-        queryPlan: {
-          kind: 'approval_artifact_header_scan',
-          backingStore: 'ArtifactStore',
-          boundedBy: items.length >= maxItems ? 'requested matching approval count' : 'ArtifactStore source exhaustion',
-          serverLimit: maxItems,
-          hydratedTranscripts: false,
-        },
-      };
-    },
+    approvalsList: args => listApprovalArtifactsV1({ ...args,
+      readPage: options => accountArtifactStore.list(options),
+      read: artifactId => accountArtifactStore.read(artifactId),
+    }),
 
     approvalsCreate: async ({ request, serverId }) => {
-      const artifactId = randomUUID();
+      const pendingReview = request.v === 2 && request.actionId === 'plugins.install'
+        ? readPluginInstallApprovalPendingReview(request.preview) : null;
+      const discussionReply = readDiscussionReplyApprovalSubject(request);
+      let artifactId = discussionReply
+        ? deriveApprovalArtifactId('happier-discussion-reply-approval-v1\0', JSON.stringify(discussionReply.identity))
+        : pendingReview?.pendingChangeId ?? randomUUID();
 
       const header = buildApprovalRequestArtifactHeaderV1(request, { legacyServerId: serverId });
       if (request.v === 2 && typeof serverId === 'string' && serverId.trim() !== request.executionOriginV1.serverId) {
         throw new Error('approval_request_server_target_mismatch');
       }
 
-      const res = await accountArtifactStore.create({ artifactId, header, body: JSON.stringify(request) });
-      return { artifactId: res.artifactId };
+      if (discussionReply) {
+        const rejoin = async () => {
+          const artifact = await accountArtifactStore.read(artifactId);
+          if (!artifact) return false;
+          const existing = readBuiltInApprovalArtifact(artifact.header, artifact.body);
+          const subject = existing ? readDiscussionReplyApprovalSubject(existing) : null;
+          if (artifact.access !== 'owner' || !subject || !sameStrictJsonValue(subject, discussionReply)) {
+            throw Object.assign(new Error('approval_request_subject_mismatch'), { code: 'subject_mismatch' });
+          }
+          await prepareRequesterRecipient(artifactId, request.v === 2 ? request.requesterConfirmation : undefined);
+          return true;
+        };
+        // The original answer owns one private intent. A later final message
+        // rejoins its captured draft in every lifecycle state, never replacing
+        // text the person is reviewing or creating a successor after settlement.
+        if (await rejoin()) return { artifactId };
+        try {
+          const created = await accountArtifactStore.create({ artifactId, header, body: JSON.stringify(request) });
+          await prepareRequesterRecipient(created.artifactId, request.v === 2 ? request.requesterConfirmation : undefined);
+          return { artifactId: created.artifactId };
+        } catch (error) {
+          if (error && typeof error === 'object' && Reflect.get(error, 'code') === 'conflict' && await rejoin()) return { artifactId };
+          throw error;
+        }
+      }
+
+      const inspectPendingReviewArtifact = async (): Promise<'absent' | 'active' | 'terminal'> => {
+        const artifact = await accountArtifactStore.read(artifactId);
+        if (!artifact) return 'absent';
+        const existing = readBuiltInApprovalArtifact(artifact.header, artifact.body);
+        if (artifact.access !== 'owner' || existing?.v !== 2 || request.v !== 2
+          || existing.actionId !== 'plugins.install'
+          || !sameStrictJsonValue(readPluginInstallApprovalPendingReview(existing.preview), pendingReview)
+          || existing.executionOriginV1.accountId !== request.executionOriginV1.accountId
+          || !existing.executionOriginV1.machineId
+          || existing.executionOriginV1.machineId !== request.executionOriginV1.machineId
+          || existing.executionOriginV1.serverIdentityId !== request.executionOriginV1.serverIdentityId
+          || (!existing.executionOriginV1.serverIdentityId
+            && existing.executionOriginV1.serverId !== request.executionOriginV1.serverId)) {
+          throw Object.assign(new Error('approval_request_subject_mismatch'), { code: 'subject_mismatch' });
+        }
+        return existing.status === 'open' || existing.status === 'approved' || existing.status === 'executing'
+          ? 'active'
+          : 'terminal';
+      };
+      if (!pendingReview) {
+        const res = await accountArtifactStore.create({ artifactId, header, body: JSON.stringify(request) });
+        await prepareRequesterRecipient(res.artifactId, request.v === 2 ? request.requesterConfirmation : undefined);
+        return { artifactId: res.artifactId };
+      }
+      // Each retained daemon subject owns a deterministic Artifact chain. A
+      // terminal row remains immutable history; every observer follows the
+      // same successor id and therefore rejoins the one active lifecycle.
+      while (true) {
+        const existingState = await inspectPendingReviewArtifact();
+        if (existingState === 'active') {
+          await prepareRequesterRecipient(artifactId, request.v === 2 ? request.requesterConfirmation : undefined);
+          return { artifactId };
+        }
+        if (existingState === 'terminal') {
+          artifactId = derivePluginInstallApprovalSuccessorArtifactId(artifactId);
+          continue;
+        }
+        try {
+          const res = await accountArtifactStore.create({ artifactId, header, body: JSON.stringify(request) });
+          await prepareRequesterRecipient(res.artifactId, request.v === 2 ? request.requesterConfirmation : undefined);
+          return { artifactId: res.artifactId };
+        } catch (error) {
+          if (error && typeof error === 'object' && Reflect.get(error, 'code') === 'conflict') continue;
+          throw error;
+        }
+      }
     },
 
     approvalsGet: async ({ artifactId, serverId }) => {
@@ -356,7 +429,7 @@ export function createCliApprovalsArtifactStore(params: Readonly<{
       const header = artifact.header;
       if (!header) return null;
       const body = artifact.body;
-      if (!body) return null;
+      if (typeof body !== 'string') return null;
 
       const parsed = approvalArtifactBodyMatchesHeaderV1(header, body);
       if (parsed?.family === 'built_in' && parsed.request.v === 1

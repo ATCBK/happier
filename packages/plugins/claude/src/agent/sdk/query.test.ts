@@ -182,6 +182,19 @@ describe('Claude plugin SDK query', () => {
             await retry;
         } finally { await running.dispose(); }
     });
+    it.each([true, false])('retains permission callback ownership without replacing standalone custom prompt tools (host callback=%s)', async hostCallback => {
+        const { ctx, spawnClient } = createContextFixture();
+        const running = query(ctx, { prompt: prompt(), options: {
+            permissionPromptToolName: 'mcp__external__approve',
+            ...(hostCallback ? { canCallTool: async () => ({ behavior: 'deny' as const, message: 'Denied' }) } : {}),
+        } });
+        try {
+            const args = spawnClient.mock.calls[0]?.[0].launch.args ?? [];
+            expect(args.filter(arg => arg === '--permission-prompt-tool')).toHaveLength(1);
+            expect(args[args.indexOf('--permission-prompt-tool') + 1]).toBe(hostCallback ? 'stdio' : 'mcp__external__approve');
+        } finally { await running.dispose(); }
+    });
+
     it('removes every built-in tool for an empty confined list despite broader native options', async () => {
         const { ctx, spawnClient } = createContextFixture();
         const running = query(ctx, {
@@ -386,10 +399,12 @@ describe('Claude plugin SDK query', () => {
                 customSystemPrompt: 'canonical prompt replaced by the released advanced override',
                 settingsJson: '{"ultracode":true}',
                 plugins: [{ type: 'local', path: '/tmp/plugin' }],
-                betas: ['beta-a'],
+                betas: ['beta-a', 'beta-b', '--permission-mode', 'bypassPermissions'],
                 maxBudgetUsd: 3.5,
                 sandbox: { enabled: true },
-                additionalDirectories: ['/tmp/extra'],
+                additionalDirectories: ['/tmp/extra', 'C:\\projects\\two words', '--permission-prompt-tool', 'mcp__external__approve'],
+                permissionMode: 'plan',
+                canCallTool: async () => ({ behavior: 'deny', message: 'Denied' }),
                 permissionPromptToolName: 'stdio',
                 tools: ['Read', 'Edit'],
                 systemPrompt: 'Be concise',
@@ -401,15 +416,18 @@ describe('Claude plugin SDK query', () => {
         const args = spawnClient.mock.calls[0]?.[0].launch.args as string[];
         expect(args).toEqual(expect.arrayContaining([
             '--plugin-dir', '/tmp/plugin',
-            '--betas', 'beta-a',
+            '--betas=beta-a', '--betas=beta-b', '--betas=--permission-mode', '--betas=bypassPermissions',
             '--max-budget-usd', '3.5',
-            '--add-dir', '/tmp/extra',
+            '--add-dir=/tmp/extra', '--add-dir=C:\\projects\\two words', '--add-dir=--permission-prompt-tool', '--add-dir=mcp__external__approve',
             '--permission-prompt-tool', 'stdio',
             '--tools', 'Read,Edit',
             '--system-prompt', 'Be concise',
             '--debug',
             '--debug-file', '/tmp/claude-debug.log',
         ]));
+        expect(args.filter(arg => arg === '--permission-mode')).toHaveLength(1);
+        expect(args[args.indexOf('--permission-mode') + 1]).toBe('plan');
+        expect(args.filter(arg => arg === '--permission-prompt-tool')).toHaveLength(1);
         const settingsIndex = args.indexOf('--settings');
         expect(settingsIndex).toBeGreaterThanOrEqual(0);
         expect(JSON.parse(args[settingsIndex + 1] ?? '')).toEqual({

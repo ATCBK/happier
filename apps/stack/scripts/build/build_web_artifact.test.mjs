@@ -73,7 +73,7 @@ test('web publication compiles authored plugin inputs privately and records the 
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const repoDir = fileURLToPath(new URL('../../../../', import.meta.url));
   const priorRepoDir = process.env.HAPPIER_STACK_REPO_DIR;
-  process.env.HAPPIER_STACK_REPO_DIR = repoDir;
+  process.env.HAPPIER_STACK_REPO_DIR = join(root, 'ambient-checkout');
   t.after(() => {
     if (priorRepoDir === undefined) delete process.env.HAPPIER_STACK_REPO_DIR;
     else process.env.HAPPIER_STACK_REPO_DIR = priorRepoDir;
@@ -83,10 +83,13 @@ test('web publication compiles authored plugin inputs privately and records the 
   const result = await buildWebArtifact({
     rootDir: repoDir, artifactDir, artifactFingerprint: 'target-web', target,
     sourceMetadata: { repoDir, sourceFingerprint: 'source', builtAt: '2026-10-05T00:00:00Z' },
-    env: { ...process.env, HAPPIER_STACK_HOME_DIR: join(root, 'home') },
+    env: { ...process.env, HAPPIER_STACK_REPO_DIR: repoDir, HAPPIER_STACK_HOME_DIR: join(root, 'home') },
     // Package installation/postinstall and Expo are external tool boundaries;
     // export staging, payload validation, atomic publication and manifests stay real.
-    ensureDepsInstalledImpl: async (_dir, _label, { onDependenciesReady }) => await onDependenciesReady(),
+    ensureDepsInstalledImpl: async (dir, _label, { onDependenciesReady }) => {
+      assert.equal(dir, join(repoDir, 'apps/ui'), 'supplied environment selects the UI before dependency consumption');
+      await onDependenciesReady();
+    },
     runUiPostinstallImpl: () => {},
     expoExecImpl: async ({ dir, args, env }) => {
       assert.equal(typeof env.HAPPIER_UI_PLUGIN_ARTIFACT_INVENTORY, 'string', 'native export must consume its private authored-source inventory');
@@ -118,7 +121,7 @@ test('web publication compiles authored plugin inputs privately and records the 
   await assert.rejects(buildWebArtifact({
     rootDir: repoDir, artifactDir, artifactFingerprint: 'failed-web', target,
     sourceMetadata: { repoDir, sourceFingerprint: 'changed-source', builtAt: '2026-10-05T00:00:01Z' },
-    env: { ...process.env, HAPPIER_STACK_HOME_DIR: join(root, 'home') },
+    env: { ...process.env, HAPPIER_STACK_REPO_DIR: repoDir, HAPPIER_STACK_HOME_DIR: join(root, 'home') },
     ensureDepsInstalledImpl: async (_dir, _label, { onDependenciesReady }) => await onDependenciesReady(),
     runUiPostinstallImpl: () => {},
     expoExecImpl: async () => { throw exportFailure; },

@@ -71,6 +71,8 @@ export type DrainPendingOptions = Readonly<{
 export type DrainPendingResult = Readonly<{
   materialized: number;
   stoppedReason: DrainPendingStoppedReason;
+  /** The materialization owner's delay for rejoining its retained claim. */
+  retryAfterMs?: number;
 }>;
 
 export type ActiveTurnPendingPumpOptions = Omit<DrainPendingOptions, 'abortSignal'> & Readonly<{

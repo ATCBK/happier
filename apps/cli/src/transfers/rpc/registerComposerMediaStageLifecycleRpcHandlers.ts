@@ -1,6 +1,4 @@
-import { COMPOSER_MEDIA_CONTENT_CAPABILITY_V1, ComposerContentHandleV1Schema } from '@happier-dev/protocol/runtime/input/composerContentV1';
-import { ComposerInstanceIdSchema } from '@happier-dev/protocol/runtime/input/composerAttachmentV1';
-import { ComposerRefV1Schema } from '@happier-dev/protocol/plugins/ui/composerRef';
+import { COMPOSER_MEDIA_CONTENT_CAPABILITY_V1, ComposerContentHandleV1Schema, ComposerContentClaimantV1Schema, ComposerContentClaimRequestV1Schema, type ComposerContentClaimResponseV1 } from '@happier-dev/protocol/runtime/input/composerContentV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
@@ -12,10 +10,6 @@ import type {
 type ComposerMediaStageReleaseResponse =
   | Readonly<{ success: true }>
   | Readonly<{ success: false; error: string }>;
-
-type ComposerMediaStageClaimResponse =
-  | Readonly<{ success: true; newlyAcquired: boolean }>
-  | Readonly<{ success: false; error: string; claimedElsewhere?: boolean }>;
 
 type ComposerMediaStageCapabilityResponse = Readonly<{
   success: true;
@@ -34,38 +28,8 @@ function readReleaseRequest(value: unknown): Readonly<{
   const handle = ComposerContentHandleV1Schema.safeParse(record.handle);
   if (!handle.success) return null;
   if (record.claimant === undefined) return { handle: handle.data };
-  if (!record.claimant || typeof record.claimant !== 'object' || Array.isArray(record.claimant)) return null;
-  const claimantRecord = record.claimant as Readonly<Record<string, unknown>>;
-  if (Object.keys(claimantRecord).length !== 2) return null;
-  const composer = ComposerRefV1Schema.safeParse(claimantRecord.composer);
-  const attachmentInstanceId = ComposerInstanceIdSchema.safeParse(claimantRecord.attachmentInstanceId);
-  return composer.success && attachmentInstanceId.success
-    ? { handle: handle.data, claimant: { composer: composer.data, attachmentInstanceId: attachmentInstanceId.data } }
-    : null;
-}
-
-function readClaimRequest(value: unknown): Readonly<{
-  handle: ReturnType<typeof ComposerContentHandleV1Schema.parse>;
-  claimant: ComposerMediaStageClaimant;
-}> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const record = value as Readonly<Record<string, unknown>>;
-  const keys = Object.keys(record);
-  if (!keys.every((key) => key === 'handle' || key === 'claimant') || !Object.hasOwn(record, 'handle')) return null;
-  const handle = ComposerContentHandleV1Schema.safeParse(record.handle);
-  if (!handle.success) return null;
-  // A publication claim always names the host-created attachment identity and
-  // its current Composer location. The store keys custody by the stable
-  // attachment identity; the location remains bounded evidence as the host
-  // carries that identity through New/Pending/Session ownership.
-  if (!record.claimant || typeof record.claimant !== 'object' || Array.isArray(record.claimant)) return null;
-  const claimantRecord = record.claimant as Readonly<Record<string, unknown>>;
-  if (Object.keys(claimantRecord).length !== 2) return null;
-  const composer = ComposerRefV1Schema.safeParse(claimantRecord.composer);
-  const attachmentInstanceId = ComposerInstanceIdSchema.safeParse(claimantRecord.attachmentInstanceId);
-  return composer.success && attachmentInstanceId.success
-    ? { handle: handle.data, claimant: { composer: composer.data, attachmentInstanceId: attachmentInstanceId.data } }
-    : null;
+  const claimant = ComposerContentClaimantV1Schema.safeParse(record.claimant);
+  return claimant.success ? { handle: handle.data, claimant: claimant.data } : null;
 }
 
 /**
@@ -94,15 +58,35 @@ export function registerComposerMediaStageLifecycleRpcHandlers(
 
   rpcHandlerManager.registerHandler(
     RPC_METHODS.DAEMON_TRANSFER_COMPOSER_MEDIA_CLAIM,
-    async (raw: unknown): Promise<ComposerMediaStageClaimResponse> => {
-      const request = readClaimRequest(raw);
-      if (!request) return { success: false, error: 'Invalid Composer media claim request' };
+    async (raw: unknown): Promise<ComposerContentClaimResponseV1> => {
+      const parsed = ComposerContentClaimRequestV1Schema.safeParse(raw);
+      if (!parsed.success) return { success: false, error: 'Invalid Composer media claim request' };
+      const request = parsed.data;
 
       try {
-        const claimed = await deps.store.claim({
+        const claimInput = {
           handle: request.handle,
           executionTarget: request.handle.executionTarget,
           owner: request.handle.owner,
+        };
+        if (request.submission) {
+          const captured = await deps.store.forkClaimForSubmission({
+            ...claimInput,
+            sourceClaimant: request.claimant,
+            destinationClaimant: { composer: request.submission.destinationComposerRef,
+              attachmentInstanceId: request.claimant.attachmentInstanceId },
+            messageLocalId: request.submission.messageLocalId,
+          });
+          if (captured.status === 'claimed' && captured.handle) {
+            return { success: true, newlyAcquired: captured.newlyAcquired, handle: captured.handle };
+          }
+          if (captured.status === 'unavailable' && captured.reason === 'claimedElsewhere') {
+            return { success: false, error: 'Composer media stage is claimed elsewhere', claimedElsewhere: true };
+          }
+          return { success: false, error: 'Composer media stage is unavailable' };
+        }
+        const claimed = await deps.store.claim({
+          ...claimInput,
           claimant: request.claimant,
         });
         if (claimed.status === 'claimed') {

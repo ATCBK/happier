@@ -6,7 +6,7 @@ import {
     PluginUiInstanceKeyV1Schema,
     type PluginUiInstanceKeyV1,
 } from '@happier-dev/protocol/plugins/ui/semanticCommands';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 /**
  * The durable selection identity for an AppPane slot.
@@ -25,30 +25,30 @@ export type SelectedPaneDestinationV1 =
         instanceKey?: PluginUiInstanceKeyV1;
     }>;
 
-const PaneBuiltinDestinationIdSchema = z.string().trim().min(1).max(256);
+const PaneBuiltinDestinationIdSchema = z.string().check(z.trim(), z.minLength(1), z.maxLength(256));
 
 /**
  * Zod persistence adapter over the Protocol-owned composable schema. It
  * delegates parsing and normalization to Protocol; AppPane owns only the
  * containing local-storage shape.
  */
-export const PersistedPluginUiDestinationReferenceV1Schema = z.unknown().transform((value, context) => {
+export const PersistedPluginUiDestinationReferenceV1Schema = z.pipe(z.unknown(), z.transform((value, context) => {
     const parsed = PluginUiDestinationReferenceV1Schema.safeParse(value);
     if (parsed.success) return parsed.data;
-    context.addIssue({ code: 'custom', message: 'Invalid plugin UI destination reference' });
+    context.issues.push({ code: 'custom', message: 'Invalid plugin UI destination reference', input: context.value });
     return z.NEVER;
-});
+}));
 
 export const SelectedPaneDestinationV1Schema = z.discriminatedUnion('kind', [
-    z.object({
+    z.strictObject({
         kind: z.literal('builtin'),
         id: PaneBuiltinDestinationIdSchema,
-    }).strict(),
-    z.object({
+    }),
+    z.strictObject({
         kind: z.literal('plugin'),
         destination: PersistedPluginUiDestinationReferenceV1Schema,
         instanceKey: z.optional(PluginUiInstanceKeyV1Schema),
-    }).strict(),
+    }),
 ]);
 
 export function createBuiltinPaneDestination(id: string): SelectedPaneDestinationV1 {

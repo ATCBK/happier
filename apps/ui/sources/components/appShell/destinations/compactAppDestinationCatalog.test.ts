@@ -2,7 +2,7 @@ import * as React from 'react';
 import { BotsRosterRuntimeProvider, useOptionalBotsRosterRuntime } from '@/components/sessions/bots/BotsRosterRuntime';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { renderScreen } from '@/dev/testkit';
+import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { storage } from '@/sync/domains/state/storage';
 import { AppShellPluginUiProjectionValueProvider } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import type { PluginAppPage } from '@/components/appShell/plugins/pluginAppPages';
@@ -20,6 +20,8 @@ import { buildConnectedAccountSettingsRoute } from '@/sync/domains/connectedServ
 import { resolveHref } from 'expo-router/build/link/href';
 import { parseQueryParams } from 'expo-router/build/fork/getStateFromPath-forks';
 import { readPluginSettingsPageRouteParams } from '@/components/settings/catalog/runtime/pluginSettingsPageCatalog';
+import { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
+import { workspaceDestinationNavigationIdentity } from '@/components/appShell/workspace/workspaceDestinationPolicy';
 
 import {
     resolveCompactAppDestinations,
@@ -46,14 +48,55 @@ vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () =
 
 const initialStorageState = storage.getState();
 beforeEach(() => {
+    activationBoundary.pushed = [];
+    activationBoundary.searchOpens = 0;
     storage.setState(initialStorageState, true);
     storage.getState().applyLocalSettings({
         navigationSurfacePlacementsV1: { appRail: { orderedIds: ['settings', 'sessions'], placements: { sessions: 'hidden', personalize: 'pinned' } } },
     }, { persist: false });
 });
-afterEach(() => storage.setState(initialStorageState, true));
+afterEach(() => {
+    standardCleanup();
+    storage.setState(initialStorageState, true);
+});
 
 describe('workspace route identity round trips', () => {
+    it('opens the Home Discussion destination and keeps colliding raw IDs in different Homes distinct', () => {
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: { ...ALL_BUILTINS, discussions: true } });
+        expect(catalog.find(destination => destination.id === 'discussions')).toMatchObject({
+            placement: { kind: 'rail', region: 'app' }, routePath: '/discussions', activation: 'navigate',
+        });
+        for (const href of ['/discussions?serverId=home-a', '/discussions/new?serverId=home-a',
+            '/discussions/new?serverId=home-a&draftId=00000000-0000-5000-8000-000000000001',
+            '/discussions/same-id?serverId=home-a', '/discussions/same-id?serverId=home-b']) {
+            const target = resolveDestinationRefFromHref(catalog, href);
+            expect(target).toMatchObject({ kind: 'discussions' });
+            expect(target && hrefForDestinationRef(catalog, target)).toBe(href);
+        }
+        expect(resolveDestinationRefFromHref(catalog, '/discussions/same-id?serverId=home-a'))
+            .not.toEqual(resolveDestinationRefFromHref(catalog, '/discussions/same-id?serverId=home-b'));
+        const homeA = resolveDestinationRefFromHref(catalog, '/discussions/same-id?serverId=home-a')!;
+        const homeB = resolveDestinationRefFromHref(catalog, '/discussions/same-id?serverId=home-b')!;
+        expect(workspaceDestinationNavigationIdentity(homeA, catalog))
+            .not.toBe(workspaceDestinationNavigationIdentity(homeB, catalog));
+    });
+
+    it('omits Discussions when its canonical feature decision is unavailable', () => {
+        expect(resolveCompactAppDestinations({ pages: [], builtins: ALL_BUILTINS })
+            .some(destination => destination.id === 'discussions')).toBe(false);
+    });
+    it('gives an unnamed retained destination a truthful fallback before its page publishes a title', () => {
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: {
+            externalSessions: false, inbox: true, workflows: false, friends: false,
+        } });
+        const machine = resolveDestinationRefFromHref(catalog, '/machines/machine-a')!;
+        const session = resolveDestinationRefFromHref(catalog, '/session/session-a')!;
+        const prompt = resolveDestinationRefFromHref(catalog, '/settings/prompts/docs/prompt-a')!;
+        expect(readDestinationInstanceTitle(catalog, machine)).toBe('settings.machines');
+        expect(readDestinationInstanceTitle(catalog, session)).toBe('session.untitled');
+        expect(readDestinationInstanceTitle(catalog, prompt)).toBe('promptLibrary.editPrompt');
+        expect(readDestinationInstanceTitle(catalog, machine, { fallbackTitle: 'Build Mac' })).toBe('Build Mac');
+    });
     it.each([
         ['/settings/actions/happier.scm.forge.github%2Factions%2Fgithub%2Fpull-request%2Fmerge',
             'actionId', 'happier.scm.forge.github/actions/github/pull-request/merge'],
@@ -432,6 +475,7 @@ describe('catalog destination instances', () => {
             '/session/sess-a?serverId=home-a',
             '/projects/workspace-1',
             '/workflows/runs/run-1?invocationId=inv-1',
+            '/workflows/runs/run-1?target=occurrence&automationId=automation-1&serverId=home-b',
             '/settings/providers/connection-1/models',
             '/plugins/acme.notes/notes/folder/item',
         ];
@@ -440,6 +484,7 @@ describe('catalog destination instances', () => {
             { kind: 'session', params: { id: 'sess-a', serverId: 'home-a' } },
             { kind: 'project', params: { workspaceRefId: 'workspace-1' } },
             { kind: 'workflowRun', params: { runId: 'run-1', invocationId: 'inv-1' } },
+            { kind: 'workflowRun', params: { runId: 'run-1', target: 'occurrence', automationId: 'automation-1', serverId: 'home-b' } },
             { kind: 'settings', params: { pageId: 'providers/connection-1/models', connectionId: 'connection-1' } },
             { kind: page.id, params: { pluginId: 'acme.notes', localId: 'notes', subPath: 'folder/item' } },
         ]);
@@ -598,6 +643,25 @@ describe('resolveCurrentAppDestination', () => {
 });
 
 describe('useActivateAppDestination', () => {
+    it('captures the active Home when opening Discussions from the shared destination launcher', async () => {
+        const priorSnapshot = getAppliedActiveServerSnapshot();
+        const priorAvailability = isAppliedActiveServerRuntimeAvailable();
+        const catalog = resolveCompactAppDestinations({ pages: [], builtins: { ...ALL_BUILTINS, discussions: true } });
+        const discussions = catalog.find(destination => destination.id === 'discussions');
+        expect(discussions).toBeDefined();
+        let activate: ReturnType<typeof useActivateAppDestination> | null = null;
+        function Probe() { activate = useActivateAppDestination(); return null; }
+        await renderScreen(React.createElement(Probe));
+        try {
+            storage.setState({ profileScope: { serverId: 'home-b', accountId: 'account-b' } });
+            publishAppliedActiveServerSnapshot({ serverId: 'home-b', serverUrl: 'https://home-b.test', generation: 7 });
+            activate!(discussions!);
+            expect(activationBoundary.pushed.at(-1)).toBe('/discussions?serverId=home-b');
+        } finally {
+            publishAppliedActiveServerSnapshot(priorSnapshot, priorAvailability);
+        }
+    });
+
     it('keeps the Bots roster distinct from Search and does not navigate without its mounted roster owner', async () => {
         const catalog = resolveCompactAppDestinations({ builtins: ALL_BUILTINS, pages: [] });
         const bots = catalog.find(destination => destination.id === 'bots');

@@ -5,6 +5,7 @@ import type { Session } from '@/sync/domains/state/storageTypes';
 import { storage } from '@/sync/domains/state/storage';
 import {
     markSessionSurfaceVisible,
+    retainVisibleSessionListSurfaces,
     resetSessionSurfaceVisibilityForTests,
 } from '@/sync/domains/session/sessionSurfaceVisibility';
 import { handleUpdateContainer } from './socket';
@@ -663,7 +664,7 @@ describe('socket new-message + coalescer: materialized max seq', () => {
         );
     });
 
-    it('hydrates instead of projecting unread state for encrypted cache-only durable messages with unknown attention impact', async () => {
+    it('hydrates instead of projecting unread state for encrypted cache-only durable messages with unknown attention impact', async (context) => {
         storage.setState((prev) => ({
             ...prev,
             sessions: {},
@@ -698,6 +699,9 @@ describe('socket new-message + coalescer: materialized max seq', () => {
             },
         }));
 
+        context.onTestFinished(retainVisibleSessionListSurfaces([
+            { serverId: account.serverId, sessionId: 's-cache-encrypted' },
+        ]));
         const fetchSessions = vi.fn();
         const hydrateSessionById = vi.fn();
         const baseParams: Omit<Parameters<typeof handleUpdateContainer>[0], 'updateData'> = {
@@ -1173,7 +1177,7 @@ it('does not mark cache-only renderables unread or meaningful when a hidden dura
                 seq: 20,
                 createdAt: 2_000,
                 body: {
-                    latestTurnStatus: 'in_progress',
+                    // A status change is urgent; only its observation timestamp queues here.
                     latestTurnStatusObservedAt: 2_000,
                 },
             }),
@@ -1190,6 +1194,8 @@ it('does not mark cache-only renderables unread or meaningful when a hidden dura
                 seq: 21,
                 createdAt: 2_000,
                 body: {
+                    latestTurnStatus: 'in_progress',
+                    latestTurnStatusObservedAt: 2_000,
                     pendingPermissionRequestCount: 1,
                     pendingRequestObservedAt: 2_000,
                 },

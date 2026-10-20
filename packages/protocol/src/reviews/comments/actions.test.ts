@@ -44,13 +44,12 @@ describe('review comment operation contracts', () => {
     }
   });
   it('exposes scoped review reads and CAS moderation to agents and MCP', () => {
-    for (const actionId of ['reviews.comments.list', 'reviews.comments.transition', 'reviews.comments.setDisposition'] as const) {
+    for (const actionId of ['reviews.comments.create', 'reviews.comments.list', 'reviews.comments.transition', 'reviews.comments.setDisposition'] as const) {
       const spec = getActionSpec(actionId);
       expect(spec.surfaces.agent).toBe(true);
       expect(spec.surfaces.mcp).toBe(true);
       expect(spec.bindings?.mcpToolName).toBe(actionId.replaceAll('.', '_'));
     }
-    expect(getActionSpec('reviews.comments.create').surfaces.agent).toBe(false);
     const transition = {
       commentId: 'comment-1', projectId: 'project-1', toState: 'dismissed', reason: 'Evidence disproves this finding.',
       expectedState: 'open', expectedServerRevision: 3, clientMutationId: 'stable-mutation-1',
@@ -149,6 +148,22 @@ describe('review comment operation contracts', () => {
     })).toEqual({
       actor: { kind: 'plugin', pluginId: 'review-coderabbit' },
     });
+  });
+
+  it('binds the exact Workflow invocation Session scope into its signed principal', () => {
+    const principal = { actor: { kind: 'workflow' as const, runId: '11111111-1111-4111-8111-111111111111' },
+      workflowScope: { actionRequestId: '11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/0',
+        invocationId: '22222222-2222-4222-8222-222222222222', sessions: [{ serverId: 'home', sessionId: 'review-target' }] } };
+    expect(ReviewCommentPrincipalHeaderV1Schema.safeParse(principal).success).toBe(true);
+    const proof = { v: 1 as const, alg: 'ed25519-machine-installation-v1' as const, machineId: 'machine-1',
+      installationId: 'installation-1', issuedAt: 1, nonce: 'nonce', method: 'GET' as const,
+      path: '/v1/reviews/comments', bodySha256Base64Url: 'body-hash' };
+    const signed = createReviewCommentPrincipalSigningInputV1({ ...principal, proof });
+    const substituted = createReviewCommentPrincipalSigningInputV1({ ...principal, proof,
+      workflowScope: { ...principal.workflowScope, sessions: [{ serverId: 'home', sessionId: 'sibling-target' }] } });
+    expect(signed).not.toEqual(substituted);
+    expect(ReviewCommentPrincipalHeaderV1Schema.safeParse({ ...principal,
+      actor: { kind: 'agent', agentId: 'codex', sessionId: 'origin' } }).success).toBe(false);
   });
 
   it('rejects obsolete client-claimed grants from machine-signed principal headers', () => {

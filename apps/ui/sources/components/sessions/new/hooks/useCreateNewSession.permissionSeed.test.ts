@@ -1,7 +1,12 @@
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import 'fake-indexeddb/auto';
-import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { installLocalStorageMock } from '@/auth/storage/tokenStorage.web.testHelpers';
+import { MachineAccessGrantsListResponseV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
+import { createExistingSessionDirectoryPreflightResult, createPlainSessionCurrentProjectionRecordFixture, createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
 import React from 'react';
 import { createAuthoringMemoryHttpBoundary } from '@/dev/testkit/mocks/authoringMemoryHttp';
 import { createNewSessionPromptStore } from '@/components/sessions/new/hooks/screenModel/newSessionPromptStore';
@@ -36,6 +41,13 @@ import type {
     HandleCreateSessionOptions,
     NewSessionAfterCreatedSettlement,
 } from './useCreateNewSession';
+import {
+    PROFILE_ROWS_ROUTE_V1, PROFILE_RECORD_READ_ROUTE_V1, PROFILE_REFERENCE_GUARD_ROUTE_V1,
+    ProfileRecordV1Schema, ProfileRowsListResponseV1Schema, ProfileRowReadRequestV1Schema,
+    ProfileRowReadResponseV1Schema, type ProfileRecordV1,
+} from '@happier-dev/protocol/profiles/profileRecordV1';
+import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
+import { V2SessionListResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
 
 import { installNewSessionScreenModelCommonModuleMocks, selectNewSessionTestHome } from './newSessionScreenModelTestHelpers';
 
@@ -161,8 +173,11 @@ function buildAutomationAuthoringDraft(params: Readonly<{
 
 // These launch-envelope cases serve a plain Machine/socket boundary. Keep its
 // Account credential mode consistent; Account cipher behavior is covered by owner suites.
+const localStorageBoundary = installLocalStorageMock();
+
 async function createUseCreateNewSessionHarness(accountMode: 'plain' | 'e2ee' = 'plain') {
     const accountId = accountMode === 'plain' ? 'account-plain' : 'account-a';
+    const createdSessions = new Map<string, ReturnType<typeof createPlainSessionCurrentProjectionRecordFixture>>();
     const captured: { value: SpawnPayloadCapture } = { value: null };
     const sessionSpawnNewRpcRequest: { value: SessionSpawnNewRpcRequest | null } = { value: null };
     let scopeStorage: (typeof import('@/sync/domains/state/storageStore'))['storage'];
@@ -181,11 +196,10 @@ async function createUseCreateNewSessionHarness(accountMode: 'plain' | 'e2ee' = 
             request: SessionSpawnNewRpcRequest,
         ): Promise<SessionSpawnNewSuccessResult> => {
             captureSessionSpawnNewRequest(request);
-            scopeStorage.getState().applySessions([createSessionFixture({
+            createdSessions.set(sessionId, createPlainSessionCurrentProjectionRecordFixture({
                 id: sessionId,
-                encryptionMode: 'plain',
-                serverId: request.payload.executionTarget.serverId,
-            })]);
+                metadata: { path: '/tmp', host: 'test-machine', machineId: request.machineId },
+            }));
             return {
                 type: 'success',
                 disposition: 'created',
@@ -212,11 +226,47 @@ async function createUseCreateNewSessionHarness(accountMode: 'plain' | 'e2ee' = 
     let lastCreatedAutomation: Record<string, unknown> | null = null;
     const automationWriteRequests: string[] = [];
     const authoringMemoryHttp = createAuthoringMemoryHttpBoundary();
+    const artifacts = createArtifactStoreBoundary({ ownerAccountId: () => accountId, encryptionMode: accountMode });
+    const profileRows = new Map<string, ProfileRecordV1>();
     const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
         const authoringResponse = await authoringMemoryHttp.handle(input, init);
         if (authoringResponse) return authoringResponse;
         const url = String(input instanceof Request ? input.url : input);
         const method = input instanceof Request ? input.method : (init?.method ?? 'GET');
+        const path = new URL(url).pathname;
+        const artifactResponse = artifacts.handle(`${path}${new URL(url).search}`, init);
+        if (artifactResponse) return await artifactResponse;
+        if (path === '/v1/features' || path === '/v1/features/authenticated') {
+            const features = createRootLayoutFeaturesResponse();
+            return Response.json({ ...features, capabilities: { ...features.capabilities,
+                serverIdentity: { serverIdentityId: null } } });
+        }
+        if (path === '/v1/account/profile') return Response.json({ id: accountId });
+        if (path === PROFILE_ROWS_ROUTE_V1) return Response.json(ProfileRowsListResponseV1Schema.parse({
+            status: 'listed', rows: [...profileRows.values()].map(record => ({ id: record.id, revision: 1,
+                content: { t: 'plain', v: record } })), nextCursor: null, complete: true, diagnostics: [],
+            referenceGuardRevision: 1, transferControl: { status: 'absent' },
+        }));
+        if (path === PROFILE_RECORD_READ_ROUTE_V1 && method === 'POST') {
+            const body = input instanceof Request ? await input.clone().text() : String(init?.body);
+            const request = ProfileRowReadRequestV1Schema.parse(JSON.parse(body));
+            const record = profileRows.get(request.id);
+            return Response.json(ProfileRowReadResponseV1Schema.parse(record
+                ? { status: 'present', revision: 1, content: { t: 'plain', v: record } }
+                : { status: 'absent' }));
+        }
+        if (path === PROFILE_REFERENCE_GUARD_ROUTE_V1) return Response.json({ status: 'ready', revision: 1 });
+        if (path === PROFILE_TRANSFER_ROUTE_V1) return Response.json({ status: 'absent' });
+        if ((path === '/v2/sessions' || path === '/v2/sessions/active') && method === 'GET') {
+            return Response.json(V2SessionListResponseSchema.parse({
+                sessions: [...createdSessions.values()], nextCursor: null, hasNext: false,
+            }));
+        }
+        const sessionRead = /^\/v2\/sessions\/([^/]+)$/.exec(path);
+        if (sessionRead && method === 'GET') {
+            const session = createdSessions.get(decodeURIComponent(sessionRead[1]));
+            return session ? Response.json({ session }) : Response.json({ error: 'not_found' }, { status: 404 });
+        }
         if (url.endsWith('/health')) {
             return Response.json({ status: 'ok' });
         }
@@ -226,11 +276,22 @@ async function createUseCreateNewSessionHarness(accountMode: 'plain' | 'e2ee' = 
         if (url.endsWith('/v1/machines/m1')) {
             return Response.json({ machine: { id: 'm1', kind: 'persistent', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } });
         }
+        if (url.endsWith('/v1/machines/m1/access')) {
+            const custodian = { accountId, displayName: 'Test Account' };
+            return Response.json(MachineAccessGrantsListResponseV1Schema.parse({
+                machineId: 'm1', custodian,
+                access: { custodian, role: 'manage', resourceMode: accountMode, accessState: 'ready' },
+                canManage: true, grants: [], ownDirectGrant: false, ownAccessSources: [],
+            }));
+        }
         if (url.endsWith('/v1/account/encryption')) {
             return Response.json({ mode: accountMode, updatedAt: 1 });
         }
+        if (path === '/v1/account/encryption/currentness' && accountMode === 'plain') {
+            return Response.json(createPlainAccountEncryptionCurrentnessFixture());
+        }
         if (url.endsWith('/v2/account/settings') && method === 'GET') {
-            return Response.json({ content: null, version: 1 });
+            return Response.json({ content: accountMode === 'plain' ? { t: 'plain', v: {} } : null, version: 1 });
         }
         if (url.includes('/v3/automations?')) {
             const automation = lastCreatedAutomation
@@ -372,15 +433,6 @@ async function createUseCreateNewSessionHarness(accountMode: 'plain' | 'e2ee' = 
         token,
         timeoutMs: 1_000,
     });
-    // Session creation tests substitute daemon/network I/O. Once the mocked
-    // spawn has projected its Session into the canonical store, the route
-    // hydration boundary must report that same projection as available rather
-    // than starting a real reachability-supervised HTTP read.
-    vi.spyOn(sync, 'ensureSessionVisibleForMessageRoute').mockImplementation(async (sessionId) => (
-        scopeStorage.getState().sessions[sessionId]
-            ? { kind: 'available' as const, sessionId }
-            : { kind: 'missing' as const, sessionId, cause: 'not_found' as const }
-    ));
     const refreshAutomationsSpy = vi.spyOn(sync, 'refreshAutomations');
     const syncSendMessageSpy = vi.spyOn(sync, 'sendMessage');
     const automationCaptured = {
@@ -390,7 +442,9 @@ async function createUseCreateNewSessionHarness(accountMode: 'plain' | 'e2ee' = 
     };
     // The daemon transport is the boundary; Action dispatch and local launch custody stay real.
     const { apiSocket } = await import('@/sync/api/session/apiSocket');
-    vi.spyOn(apiSocket, 'machineRPC').mockImplementation(async (machineId, method, input) => {
+    vi.spyOn(apiSocket, 'machineRPC').mockImplementation(async (machineId, method, input, options) => {
+        options?.onIssued?.();
+        if (method === RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT) return createExistingSessionDirectoryPreflightResult(input);
         if (method === 'bash') {
             const request = input as Readonly<{ command?: string; argv?: readonly string[]; cwd: string }>;
             return await machineBashSpy(machineId, request, request.cwd, { serverId: 'server-a' });
@@ -412,6 +466,9 @@ async function createUseCreateNewSessionHarness(accountMode: 'plain' | 'e2ee' = 
             expect(event).toBe('rpc-call');
             // This remote-server fixture receives the canonical plain Socket RPC envelope.
             const request = input as Readonly<{ method: string; params: unknown }>;
+            if (request.method === `m1:${RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT}`) {
+                return { ok: true, result: createExistingSessionDirectoryPreflightResult(request.params) };
+            }
             expect(request.method).toBe(`m1:${RPC_METHODS.SESSION_SPAWN_NEW}`);
             const payload = SessionSpawnNewInputV2Schema.parse(request.params);
             const result = await sessionSpawnNewRpcSpy({
@@ -455,6 +512,9 @@ async function createUseCreateNewSessionHarness(accountMode: 'plain' | 'e2ee' = 
     return {
         async reset() {
             authoringMemoryHttp.reset();
+            artifacts.clear();
+            createdSessions.clear();
+            profileRows.clear();
             captured.value = null;
             spawnActions.length = 0;
             sessionSpawnNewRpcRequest.value = null;
@@ -463,7 +523,7 @@ async function createUseCreateNewSessionHarness(accountMode: 'plain' | 'e2ee' = 
             sessionSpawnNewRpcSpy.mockReset().mockImplementation(defaultSpawn);
             refreshAutomationsSpy.mockClear();
             syncSendMessageSpy.mockClear();
-            scopeStorage.setState({ ...initialStore, sessions: {}, sessionPending: {} });
+            scopeStorage.setState({ sessions: {}, sessionPending: {} });
             const { actionOperationStore } = await import('@/sync/domains/actionOperations/actionOperationStore');
             actionOperationStore.reset();
             vi.stubGlobal('fetch', fetchSpy);
@@ -472,7 +532,7 @@ async function createUseCreateNewSessionHarness(accountMode: 'plain' | 'e2ee' = 
             await saveHomeCredentials();
             await sync.switchServer(credentials);
             scopeStorage.getState().applySettings(
-                scopeStorage.getState().settings,
+                initialStore.settings,
                 Math.max(scopeStorage.getState().settingsVersion ?? 0, 1),
             );
             scopeStorage.getState().applyMachines([createMachineFixture({ id: 'm1' })], true, { sourceServerId: 'server-a' });
@@ -487,6 +547,25 @@ async function createUseCreateNewSessionHarness(accountMode: 'plain' | 'e2ee' = 
             expect(peekServerReachabilityState(activeHome.serverUrl, token)?.phase).toBe('online');
         },
         useCreateNewSession,
+        async seedProfile(profile: ReturnType<typeof createCompatibleTestProfile>, secretBindings: Readonly<Record<string, string>> = {}) {
+            // This fixture represents a retained Profile, read through the real
+            // Account catalog. Historical definitions are import-only writes.
+            profileRows.set(profile.id, ProfileRecordV1Schema.parse({ v: 1, id: profile.id,
+                definition: { kind: 'legacy', profile }, enabled: true, promptStack: [], secretBindings,
+            }));
+            const { refreshProfileCatalog } = await import('@/sync/engine/settings/profileCatalogEngine');
+            await refreshProfileCatalog({ serverId: 'server-a', accountId });
+            const { getProfileCatalogSnapshot } = await import('@/sync/store/settings/profileCatalogSnapshot');
+            const snapshot = getProfileCatalogSnapshot({ serverId: 'server-a', accountId });
+            const replies = await Promise.allSettled(fetchSpy.mock.results.map(result => result.value));
+            const failedReplies = replies.flatMap(reply => reply.status === 'rejected' ? [String(reply.reason)] : []);
+            const paths = fetchSpy.mock.calls.map(([input]) => new URL(String(input instanceof Request ? input.url : input)).pathname);
+            expect(snapshot?.catalog, `The real Account catalog must admit the seeded Profile: ${JSON.stringify({ catalog: snapshot?.catalog, failedReplies, paths })}`).toMatchObject({
+                status: 'ready', records: expect.arrayContaining([expect.objectContaining({
+                    record: expect.objectContaining({ id: profile.id }),
+                })]),
+            });
+        },
         renderWithAuth: async (children: React.ReactElement) => await renderTestScreen(
             React.createElement(InjectedAuthProvider, { credentials, children }),
         ),
@@ -545,9 +624,14 @@ async function setupUseCreateNewSessionHarness() {
     return harness;
 }
 
+// Compile the cold Sync/Action graph during collection; per-test setup owns
+// restoring the admitted Account and the observed launch journey.
+harness = await createUseCreateNewSessionHarness();
+const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
+await prepareSessionDraftPersistenceStorage();
+
 describe('useCreateNewSession permission seeding', () => {
     beforeAll(async () => {
-        harness = await createUseCreateNewSessionHarness();
         restoreExecutorModuleLoader = await installRealActionExecutorModuleLoader();
     });
     afterAll(async () => {
@@ -558,6 +642,7 @@ describe('useCreateNewSession permission seeding', () => {
         resetRuntimeFetch();
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
+        localStorageBoundary.restore();
     });
     beforeEach(() => {
         routerSearchParamsState.value = {};
@@ -580,7 +665,6 @@ describe('useCreateNewSession permission seeding', () => {
                 selectedMachineId: 'm1', selectedPath: '/tmp',
                 selectedMachine: createMachineFixture({ id: 'm1' }),
                 setIsCreating: vi.fn(), setIsResumeSupportChecking: vi.fn(),
-                settings: storage.getState().settings,
                 pluginSettings: { account: {
                     opencodeBackendMode: mode,
                     opencodeServerBaseUrlByServerIdV1: { 'server-a': 'https://opencode.example.test/path' },
@@ -634,7 +718,6 @@ describe('useCreateNewSession permission seeding', () => {
                 selectedMachine: createMachineFixture({ id: 'm1' }),
                 setIsCreating: vi.fn(),
                 setIsResumeSupportChecking: vi.fn(),
-                settings,
                 useProfiles: false,
                 selectedProfileId: null,
                 profileMap: new Map(),
@@ -701,7 +784,6 @@ describe('useCreateNewSession permission seeding', () => {
                 selectedMachine: createMachineFixture({ id: 'm1' }),
                 setIsCreating: vi.fn(),
                 setIsResumeSupportChecking: vi.fn(),
-                settings,
                 useProfiles: false,
                 selectedProfileId: null,
                 profileMap: new Map(),
@@ -759,7 +841,6 @@ describe('useCreateNewSession permission seeding', () => {
                 selectedMachine: createMachineFixture({ id: 'm1' }),
                 setIsCreating: vi.fn(),
                 setIsResumeSupportChecking: vi.fn(),
-                settings,
                 useProfiles: false,
                 selectedProfileId: null,
                 profileMap: new Map(),
@@ -824,7 +905,6 @@ describe('useCreateNewSession permission seeding', () => {
                 selectedMachine: createMachineFixture({ id: 'm1' }),
                 setIsCreating: vi.fn(),
                 setIsResumeSupportChecking: vi.fn(),
-                settings,
                 useProfiles: false,
                 selectedProfileId: null,
                 profileMap: new Map(),
@@ -925,7 +1005,6 @@ describe('useCreateNewSession permission seeding', () => {
                 selectedMachine: createMachineFixture({ id: 'm1' }),
                 setIsCreating: vi.fn(),
                 setIsResumeSupportChecking: vi.fn(),
-                settings,
                 useProfiles: false,
                 selectedProfileId: null,
                 profileMap: new Map(),
@@ -1016,7 +1095,6 @@ describe('useCreateNewSession permission seeding', () => {
                 selectedMachine,
                 setIsCreating: vi.fn(),
                 setIsResumeSupportChecking: vi.fn(),
-                settings: { experiments: false } as unknown as Settings,
                 useProfiles: false,
                 selectedProfileId: null,
                 profileMap: new Map(),
@@ -1071,6 +1149,7 @@ describe('useCreateNewSession permission seeding', () => {
 
         let handleCreateSession: null | (() => Promise<void>) = null;
         const settings = { experiments: false, featureToggles: { 'execution.runs': true } } as unknown as Settings;
+        (await import('@/sync/domains/state/storageStore')).storage.getState().applySettingsLocal(settings);
         const machineEnvPresence: UseMachineEnvPresenceResult = {
             isPreviewEnvSupported: false,
             isLoading: false,
@@ -1088,7 +1167,6 @@ describe('useCreateNewSession permission seeding', () => {
                 selectedMachine: createMachineFixture({ id: 'm1' }),
                 setIsCreating: vi.fn(),
                 setIsResumeSupportChecking: vi.fn(),
-                settings,
                 useProfiles: false,
                 selectedProfileId: null,
                 profileMap: new Map(),
@@ -1145,7 +1223,6 @@ describe('useCreateNewSession permission seeding', () => {
                 selectedMachine: createMachineFixture({ id: 'm1' }),
                 setIsCreating: vi.fn(),
                 setIsResumeSupportChecking: vi.fn(),
-                settings,
                 useProfiles: false,
                 selectedProfileId: null,
                 profileMap: new Map(),
@@ -1222,7 +1299,6 @@ describe('useCreateNewSession permission seeding', () => {
                 selectedMachine: createMachineFixture({ id: 'm1' }),
                 setIsCreating: vi.fn(),
                 setIsResumeSupportChecking: vi.fn(),
-                settings,
                 useProfiles: false,
                 selectedProfileId: null,
                 profileMap: new Map(),
@@ -1260,10 +1336,12 @@ describe('useCreateNewSession permission seeding', () => {
         });
 
         expect(captured.value?.capabilitySelection).toEqual({
-            v: 1,
-            managedServersEnabled: false,
-            forceIncludeServerIds: ['server-portable'],
-            forceExcludeServerIds: [],
+            mcp: {
+                v: 1,
+                managedServersEnabled: false,
+                forceIncludeServerIds: ['server-portable'],
+                forceExcludeServerIds: [],
+            },
         });
     });
 
@@ -1289,7 +1367,6 @@ describe('useCreateNewSession permission seeding', () => {
                 selectedMachine: createMachineFixture({ id: 'm1' }),
                 setIsCreating: vi.fn(),
                 setIsResumeSupportChecking: vi.fn(),
-                settings,
                 useProfiles: false,
                 selectedProfileId: null,
                 profileMap: new Map(),
@@ -1350,7 +1427,6 @@ describe('useCreateNewSession permission seeding', () => {
                 selectedMachine: createMachineFixture({ id: 'm1' }),
                 setIsCreating: vi.fn(),
                 setIsResumeSupportChecking: vi.fn(),
-                settings,
                 useProfiles: false,
                 selectedProfileId: null,
                 profileMap: new Map(),
@@ -1418,7 +1494,6 @@ describe('useCreateNewSession permission seeding', () => {
                 selectedMachine: createMachineFixture({ id: 'm1' }),
                 setIsCreating: vi.fn(),
                 setIsResumeSupportChecking: vi.fn(),
-                settings,
                 useProfiles: false,
                 selectedProfileId: null,
                 profileMap: new Map(),
@@ -1487,7 +1562,6 @@ describe('useCreateNewSession permission seeding', () => {
                 },
                 setIsCreating: vi.fn(),
                 setIsResumeSupportChecking: vi.fn(),
-                settings,
                 useProfiles: false,
                 selectedProfileId: null,
                 profileMap: new Map(),
@@ -1563,7 +1637,6 @@ describe('useCreateNewSession permission seeding', () => {
                 selectedMachine: createMachineFixture({ id: 'm1' }),
                 setIsCreating: vi.fn(),
                 setIsResumeSupportChecking: vi.fn(),
-                settings,
                 useProfiles: false,
                 selectedProfileId: null,
                 profileMap: new Map(),
@@ -1610,14 +1683,16 @@ describe('useCreateNewSession permission seeding', () => {
             captured,
             syncSendMessageSpy,
             mockSessionSpawnSuccess,
+            storage,
         } = await setupUseCreateNewSessionHarness();
 
         mockSessionSpawnSuccess('sess_new');
-        const { writeNewSessionDraft, getSessionDraftSnapshot } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+        const { writeNewSessionDraft, getSessionComposerDraftSnapshot } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
         const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
         await prepareSessionDraftPersistenceStorage();
         const draftId = 'permission-success-draft';
-        const draftScope = { serverId: 'server-a', accountId: 'account-a' };
+        const draftScope = storage.getState().profileScope;
+        if (!draftScope) throw new Error('Expected the restored authoring Account');
         const otherScope = { serverId: 'server-a', accountId: 'other-account' };
         writeNewSessionDraft({ scope: draftScope, draftId, patch: { text: 'PROMPT' }, materializationIntent: 'userEdit' });
         writeNewSessionDraft({ scope: otherScope, draftId, patch: { text: 'Keep this draft' }, materializationIntent: 'userEdit' });
@@ -1632,6 +1707,7 @@ describe('useCreateNewSession permission seeding', () => {
             sessionReplayStrategy: 'recent_messages',
             sessionReplayRecentMessagesCount: 100,
         } as unknown as Settings;
+        (await import('@/sync/domains/state/storageStore')).storage.getState().applySettingsLocal(settings);
         const machineEnvPresence: UseMachineEnvPresenceResult = {
             isPreviewEnvSupported: false,
             isLoading: false,
@@ -1651,7 +1727,6 @@ describe('useCreateNewSession permission seeding', () => {
                 selectedMachine: createMachineFixture({ id: 'm1' }),
                 setIsCreating: vi.fn(),
                 setIsResumeSupportChecking: vi.fn(),
-                settings,
                 useProfiles: false,
                 selectedProfileId: null,
                 profileMap: new Map(),
@@ -1684,8 +1759,8 @@ describe('useCreateNewSession permission seeding', () => {
         });
 
         expect(disableDraftPersistence).toHaveBeenCalledTimes(1);
-        expect(getSessionDraftSnapshot(draftScope, { kind: 'newSession', draftId })?.document.composer.text?.value ?? '').toBe('');
-        expect(getSessionDraftSnapshot(otherScope, { kind: 'newSession', draftId })?.document.composer.text?.value).toBe('Keep this draft');
+        expect(getSessionComposerDraftSnapshot(draftScope, { kind: 'newSession', draftId })?.composer.text?.value ?? '').toBe('');
+        expect(getSessionComposerDraftSnapshot(otherScope, { kind: 'newSession', draftId })?.composer.text?.value).toBe('Keep this draft');
         expect(captured.value).toEqual(expect.objectContaining({
             initialInput: { text: 'PROMPT' },
             configuration: expect.objectContaining({
@@ -1704,9 +1779,13 @@ describe('useCreateNewSession permission seeding', () => {
             captured,
             syncSendMessageSpy,
             mockSessionSpawnSuccess,
+            seedProfile,
+            modalAlertSpy,
         } = await setupUseCreateNewSessionHarness();
 
         mockSessionSpawnSuccess('sess_new');
+        const profile = createCompatibleTestProfile();
+        await seedProfile(profile);
 
         let handleCreateSession: null | (() => Promise<void>) = null;
         const routerReplace = vi.fn();
@@ -1714,6 +1793,7 @@ describe('useCreateNewSession permission seeding', () => {
             experiments: false,
             sessionReplayEnabled: false,
         } as unknown as Settings;
+        (await import('@/sync/domains/state/storageStore')).storage.getState().applySettingsLocal(settings);
         const machineEnvPresence: UseMachineEnvPresenceResult = {
             isPreviewEnvSupported: false,
             isLoading: false,
@@ -1731,31 +1811,9 @@ describe('useCreateNewSession permission seeding', () => {
                 selectedMachine: createMachineFixture({ id: 'm1' }),
                 setIsCreating: vi.fn(),
                 setIsResumeSupportChecking: vi.fn(),
-                settings,
                 useProfiles: true,
                 selectedProfileId: 'profile-test',
-                profileMap: new Map([[
-                    'profile-test',
-                    AIBackendProfileSchema.parse({
-                        id: 'profile-test',
-                        name: 'Profile Test',
-                        description: undefined,
-                        environmentVariables: [],
-                        envVarRequirements: [],
-                        compatibility: {},
-                        defaultPermissionModeByAgent: {},
-                        defaultPermissionModeByTargetKey: {},
-                        defaultPersistenceModeByAgent: {},
-                        defaultPersistenceModeByTargetKey: {},
-                        compatibilityByTargetKey: {
-                            [buildBackendTargetKey({ kind: 'builtInAgent', agentId: 'codex' })]: true,
-                        },
-                        isBuiltIn: false,
-                        createdAt: Date.now(),
-                        updatedAt: Date.now(),
-                        version: '1.0.0',
-                    }),
-                ]]),
+                profileMap: new Map([[profile.id, profile]]),
                 recentMachinePaths: [],
                 agentType: 'codex',
                 permissionMode: 'acceptEdits' as unknown as PermissionMode,
@@ -1783,7 +1841,7 @@ describe('useCreateNewSession permission seeding', () => {
             await handleCreateSession?.();
         });
 
-        expect(captured.value).toEqual(expect.objectContaining({
+        expect(captured.value, JSON.stringify(modalAlertSpy.mock.calls)).toEqual(expect.objectContaining({
             profileId: 'profile-test',
             initialInput: { text: 'PROMPT' },
         }));
@@ -1795,6 +1853,7 @@ describe('useCreateNewSession permission seeding', () => {
             useCreateNewSession,
             captured,
             sessionSpawnNewRpcSpy,
+            seedProfile,
         } = await setupUseCreateNewSessionHarness();
 
         let handleCreateSession: null | (() => Promise<void>) = null;
@@ -1803,6 +1862,7 @@ describe('useCreateNewSession permission seeding', () => {
             environmentVariables: [{ name: 'PROFILE_MODE', value: 'reviewed' }],
             envVarRequirements: [{ name: 'ANTHROPIC_API_KEY', required: true, kind: 'secret' }],
         });
+        await seedProfile(profile, { ANTHROPIC_API_KEY: 'personal-profile-secret' });
         const machineEnvPresence: UseMachineEnvPresenceResult = {
             isPreviewEnvSupported: true,
             isLoading: false,
@@ -1820,7 +1880,6 @@ describe('useCreateNewSession permission seeding', () => {
                 selectedMachine: createMachineFixture({ id: 'm1' }),
                 setIsCreating: vi.fn(),
                 setIsResumeSupportChecking: vi.fn(),
-                settings: { experiments: false } as unknown as Settings,
                 useProfiles: true,
                 selectedProfileId: profile.id,
                 profileMap: new Map([[profile.id, profile]]),
@@ -1873,7 +1932,10 @@ describe('useCreateNewSession permission seeding', () => {
             storage,
             mockSessionSpawnSuccess,
             sessionSpawnNewRpcSpy,
+            seedProfile,
         } = await setupUseCreateNewSessionHarness();
+        const profile = createCompatibleTestProfile();
+        await seedProfile(profile);
 
         let handleCreateSession: null | (() => Promise<void>) = null;
         const machineEnvPresence: UseMachineEnvPresenceResult = {
@@ -1893,10 +1955,9 @@ describe('useCreateNewSession permission seeding', () => {
                 selectedMachine: createMachineFixture({ id: 'm1' }),
                 setIsCreating: vi.fn(),
                 setIsResumeSupportChecking: vi.fn(),
-                settings: { experiments: false } as unknown as Settings,
                 useProfiles: true,
                 selectedProfileId: 'profile-test',
-                profileMap: new Map([['profile-test', createCompatibleTestProfile()]]),
+                profileMap: new Map([[profile.id, profile]]),
                 recentMachinePaths: [],
                 agentType: 'codex',
                 permissionMode: 'acceptEdits' as unknown as PermissionMode,
@@ -1965,7 +2026,6 @@ describe('useCreateNewSession permission seeding', () => {
                 selectedMachine: createMachineFixture({ id: 'm1' }),
                 setIsCreating: vi.fn(),
                 setIsResumeSupportChecking: vi.fn(),
-                settings: { experiments: false } as unknown as Settings,
                 useProfiles: true,
                 selectedProfileId: 'profile-test',
                 profileMap: new Map([['profile-test', incompatibleProfile]]),
@@ -2011,6 +2071,7 @@ describe('useCreateNewSession permission seeding', () => {
             experiments: false,
             sessionReplayEnabled: false,
         } as unknown as Settings;
+        (await import('@/sync/domains/state/storageStore')).storage.getState().applySettingsLocal(settings);
         const machineEnvPresence: UseMachineEnvPresenceResult = {
             isPreviewEnvSupported: false,
             isLoading: false,
@@ -2028,7 +2089,6 @@ describe('useCreateNewSession permission seeding', () => {
                 selectedMachine: createMachineFixture({ id: 'm1' }),
                 setIsCreating: vi.fn(),
                 setIsResumeSupportChecking: vi.fn(),
-                settings,
                 useProfiles: true,
                 selectedProfileId: 'profile-test',
                 profileMap: new Map([[
@@ -2102,6 +2162,7 @@ describe('useCreateNewSession permission seeding', () => {
             experiments: false,
             sessionReplayEnabled: false,
         } as unknown as Settings;
+        (await import('@/sync/domains/state/storageStore')).storage.getState().applySettingsLocal(settings);
         const machineEnvPresence: UseMachineEnvPresenceResult = {
             isPreviewEnvSupported: false,
             isLoading: false,
@@ -2119,7 +2180,6 @@ describe('useCreateNewSession permission seeding', () => {
                 selectedMachine: createMachineFixture({ id: 'm1' }),
                 setIsCreating: vi.fn(),
                 setIsResumeSupportChecking: vi.fn(),
-                settings,
                 useProfiles: false,
                 selectedProfileId: null,
                 profileMap: new Map(),
@@ -2155,7 +2215,7 @@ describe('useCreateNewSession permission seeding', () => {
         expect(routerReplace).toHaveBeenCalledWith('/session/sess_new?serverId=server-a', expect.anything());
     });
 
-    it('passes the per-session Windows launch-mode override into the strict Action request', async () => {
+    it('reads current Windows settings at creation intent while preserving the per-session launch-mode override', async () => {
         const {
             useCreateNewSession,
             captured,
@@ -2167,6 +2227,7 @@ describe('useCreateNewSession permission seeding', () => {
             sessionWindowsRemoteSessionLaunchMode: 'hidden',
             sessionWindowsTerminalWindowName: 'happier-qa',
         } as unknown as Settings;
+        (await import('@/sync/domains/state/storageStore')).storage.getState().applySettingsLocal(settings);
         const machineEnvPresence: UseMachineEnvPresenceResult = {
             isPreviewEnvSupported: false,
             isLoading: false,
@@ -2196,7 +2257,6 @@ describe('useCreateNewSession permission seeding', () => {
                 selectedMachine: windowsMachine,
                 setIsCreating: vi.fn(),
                 setIsResumeSupportChecking: vi.fn(),
-                settings,
                 useProfiles: false,
                 selectedProfileId: null,
                 profileMap: new Map(),
@@ -2225,10 +2285,13 @@ describe('useCreateNewSession permission seeding', () => {
         await renderScreen(React.createElement(Test));
 
         await act(async () => {
+            (await import('@/sync/domains/state/storageStore')).storage.getState().applySettingsLocal({
+                sessionWindowsTerminalWindowName: 'happier-current',
+            });
             await invokeHandleCreateSession(handleCreateSession, { initialMessage: 'skip' });
         });
 
         expect(captured.value?.terminal?.windows?.launchMode).toBe('windows_terminal');
-        expect(captured.value?.terminal?.windows?.windowName).toBe('happier-qa');
+        expect(captured.value?.terminal?.windows?.windowName).toBe('happier-current');
     });
 });

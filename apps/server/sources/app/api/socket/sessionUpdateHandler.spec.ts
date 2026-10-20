@@ -1,6 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createFakeSocket, getSocketHandler } from "../testkit/socketHarness";
-import { createDbTransactionMock } from '../testkit/dbMocks';
+import { createDbTransactionMock, inTxPostgresControlStatementMock } from '../testkit/dbMocks';
 
 const createSessionMessage = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({ ok: false, error: "invalid-params" }));
 const enqueuePendingMessage = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => ({ ok: false, error: "invalid-params" }));
@@ -104,6 +104,7 @@ vi.mock("@/app/session/pending/pendingMessageService", () => ({
 }));
 vi.mock("@/storage/db", () => {
     const tables = {
+        ...inTxPostgresControlStatementMock,
         homeSettings: { findUnique: vi.fn(async () => null) },
         homeGovernancePolicy: { findUnique: vi.fn(async () => null) },
         session: {
@@ -1341,6 +1342,7 @@ describe("sessionUpdateHandler", () => {
             ...(ownerActivityDelivery ? { runtimeComposition: {
                 publisherAuthority,
                 ownerActivityDelivery,
+                ownerActivityDeliveryWasReported: true,
             } } : {}),
         });
         expect(buildUpdateSessionUpdate).toHaveBeenCalledTimes(1);
@@ -1657,6 +1659,41 @@ describe("sessionUpdateHandler", () => {
         );
     });
 
+    it("retains the transaction class when Follow observation exhausts its request deadline", async () => {
+        const { TransactionDeadlineExceededError } = await import('@/storage/inTx');
+        const socket = createAuthenticatedSessionScopedSocket();
+        const transactionClass = "session-follow-observe-pending";
+        const runAsCurrentPublisherInTx = vi.fn(async () => {
+            throw new TransactionDeadlineExceededError(null, transactionClass);
+        });
+
+        registerSessionUpdateHandler(
+            "user-1",
+            socket as any,
+            { connectionType: "session-scoped", socket: socket as any, userId: "user-1", sessionId: "s-1" } as any,
+            {
+                presence: { runAsCurrentPublisherInTx },
+                binding: { accountId: "user-1", machineId: "machine-1", sessionId: "s-1" },
+            } as any,
+        );
+        const callback = vi.fn();
+
+        await getSocketHandler(socket, "session-follow-observe-pending-v1")({
+            v: 1,
+            sessionId: "s-1",
+        }, callback);
+
+        expect(logInfo).toHaveBeenCalledWith(
+            expect.objectContaining({
+                module: "websocket",
+                level: "warn",
+                transactionClass,
+            }),
+            expect.stringContaining("Session Follow observation failed"),
+        );
+        expect(callback).toHaveBeenCalledWith({ ok: false, v: 1, error: "internal" });
+    });
+
     it("does not hold the per-socket message lock on slow badge refresh work", async () => {
         let resolveFirstRefresh: (() => void) | undefined;
         const firstRefresh = new Promise<void>((resolve) => {
@@ -1909,6 +1946,7 @@ describe("sessionUpdateHandler", () => {
 
     it.each([
         [undefined, "rich_sender"],
+        ["rich_sender", "rich_sender"],
         ["home_required", "home_required"],
     ] as const)("carries publisher owner-delivery declaration %s into turn settlement as %s", async (
         reportedOwnerActivityDelivery,
@@ -1982,6 +2020,7 @@ describe("sessionUpdateHandler", () => {
             runtimeComposition: {
                 publisherAuthority,
                 ownerActivityDelivery: expectedOwnerActivityDelivery,
+                ...(reportedOwnerActivityDelivery ? { ownerActivityDeliveryWasReported: true } : {}),
             },
         }));
     });

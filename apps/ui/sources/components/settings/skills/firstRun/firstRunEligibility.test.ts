@@ -30,6 +30,11 @@ describe('first-run current default reach', () => {
     const migrated = { ...personal, id: 'migrated-stack:project:built-in' };
     expect(resolveSkillsFirstVisit([item, { ...bundled, rules: [seed, migrated] }], { rules: [seed, migrated], decidedAt: null })).toBeNull();
   });
+  it('never offers a plugin\'s skill to the person to choose: it is host-owned like the built-in one', () => {
+    const pluginOwned = { ...item, skillId: 'plugin:acme/check', name: 'check', provenance: { kind: 'plugin' as const, pluginId: 'acme', occurrenceId: 'o1' } };
+    expect(resolveSkillsFirstVisit([pluginOwned, bundled], { rules: [seed], decidedAt: null })).toBeNull();
+    expect(buildSkillsFirstRunSelection([pluginOwned, item]).items.map(row => row.skillId)).toEqual(['review']);
+  });
   it('ranks used Off skills most recent first, preselects them and preserves unused library order', () => {
     const older = { ...item, skillId: 'older', lastUsedAt: 1 };
     const recent = { ...item, skillId: 'recent', lastUsedAt: 2 };

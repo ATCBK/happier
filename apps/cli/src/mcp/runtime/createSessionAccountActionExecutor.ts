@@ -1,5 +1,6 @@
-import { randomUUID } from 'node:crypto';
-import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
+import { createHash, randomUUID } from 'node:crypto';
+import { SessionCreationKeyV1Schema } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
+import { ACTION_ID_FAMILIES_V1, ActionIdSchema, isPluginDevLoopActionIdV1 } from '@happier-dev/protocol/actions/actionIds';
 import { getActionSpec, resolveActionExecutionPlacementForInput } from '@happier-dev/protocol/actions/actionSpecs';
 import { RoleActionInputSchemasV1 } from '@happier-dev/protocol/prompts/roles/roleActionsV1';
 import { WaitActionInputV1Schema } from '@happier-dev/protocol/actions/specs/wait';
@@ -20,6 +21,13 @@ type ActionExecutor = Readonly<{
 const unavailable = (): ActionExecuteResult => ({ ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' });
 const uncertain = (): ActionExecuteResult => ({ ok: false, errorCode: 'outcome_uncertain', error: 'outcome_uncertain' });
 
+// These readers use the bound host's live Session RPC/catalog, including in a
+// daemonless host. Reading another Session still needs credentialed transport.
+const BOUND_SESSION_RPC_READS: ReadonlySet<ActionId> = new Set([
+  'review.engines.list', 'session.work_state.get', 'session.goal.get',
+  'session.vendor_plugin_catalog.list', 'session.skill_catalog.list',
+]);
+
 /** Account credentials stay in the daemon; identity comes from its existing Session capability. */
 export function createSessionAccountActionExecutor(params: Readonly<{
   base: ActionExecutor;
@@ -33,15 +41,47 @@ export function createSessionAccountActionExecutor(params: Readonly<{
       if (actionId === 'action.spec.search' || actionId === 'action.spec.get') {
         return await params.base.execute(actionId, input, context);
       }
+      // Restricted child reads use the bound Session's admitted corpus reader.
+      // Account forwarding would replace that authority with the daemon's scope.
+      if (actionId === 'session.list' && context?.sessionListAccess === 'current_session') {
+        return await params.base.execute(actionId, input, context);
+      }
       // Contributed ids remain with the existing plugin catalog/execution owner.
       const builtIn = ActionIdSchema.safeParse(actionId);
-      const executionPlacement = builtIn.success ? resolveActionExecutionPlacementForInput(getActionSpec(builtIn.data), input) : null;
+      const spec = builtIn.success ? getActionSpec(builtIn.data) : null;
+      const executionPlacement = spec ? resolveActionExecutionPlacementForInput(spec, input) : null;
+      const requestedSessionId = input && typeof input === 'object' && 'sessionId' in input
+        && typeof input.sessionId === 'string' ? input.sessionId.trim() : params.client.sessionId;
+      // The bound host holds its own Board stored-content key. Other
+      // Session readers use the credentialed owner, including reads of children.
+      const boundRead = requestedSessionId === params.client.sessionId
+        && (BOUND_SESSION_RPC_READS.has(actionId)
+          || ACTION_ID_FAMILIES_V1.session_board.some(id => id === actionId)
+          || ACTION_ID_FAMILIES_V1.subagent_registry.some(id => id === actionId)
+          || ACTION_ID_FAMILIES_V1.session_permissions.some(id => id === actionId));
+      const sessionRead = executionPlacement === 'session' && !boundRead && spec?.sideEffectClass === 'read';
+      // These lifecycle owners resolve credentialed Session/Machine transport.
+      // Forward through the same capability channel as reads; the credentialed
+      // executor still owns current-Session scope and approval policy. Explicit
+      // headless resume is Session-placed; navigation keeps client placement.
+      const sessionLifecycle = executionPlacement === 'session'
+        && (actionId === 'session.stop' || actionId === 'session.archive' || actionId === 'session.unarchive'
+          || actionId === 'session.fork' || actionId === 'session.open');
+      // Persisted readers are Machine-placed so an offline Session does not need
+      // its original runner. Keep their established credentialed implementation.
+      const persistedRead = executionPlacement === 'machine'
+        && (ACTION_ID_FAMILIES_V1.session_transcripts.some(id => id === actionId)
+          || actionId === 'session.history.get' || actionId === 'session.messages.recent.get');
       if (!builtIn.success || (executionPlacement !== 'account'
         && executionPlacement !== 'client'
+        && !sessionRead && !persistedRead && !sessionLifecycle
         && builtIn.data !== 'session.spawn_new'
         // Admission inspects the executing Machine's workspace and plugin
         // runtime before sealing Account storage; a Session runner has neither.
         && builtIn.data !== 'workflow.run.start'
+        // Machine plugin policy and lifecycle belong to the daemon's canonical
+        // plugin-change owner, never to the restricted Session runner.
+        && !(isPluginDevLoopActionIdV1(builtIn.data) && executionPlacement === 'machine')
         && !(Object.hasOwn(RoleActionInputSchemasV1, builtIn.data) && builtIn.data.startsWith('session.')))) {
         return await params.base.execute(actionId, input, context);
       }
@@ -61,6 +101,9 @@ export function createSessionAccountActionExecutor(params: Readonly<{
       if (!path) return unavailable();
       const hostWitness = params.client.getActiveTurnAdmissionWitness?.();
       if (!hostWitness) return unavailable();
+      const binding = params.client.getSessionActionConfirmationBinding?.();
+      const executionRun = binding?.run;
+      if (binding && executionRun && (binding.turnId !== hostWitness.turnId || !binding.isCurrent())) return unavailable();
       let witness;
       try { witness = projectAgentRuntimeDaemonServiceTurnWitnessV1(hostWitness); }
       catch { return unavailable(); }
@@ -69,7 +112,16 @@ export function createSessionAccountActionExecutor(params: Readonly<{
         path, expectedSessionId: params.client.sessionId,
       });
       if (!authority) return unavailable();
-      const requestId = context?.actionRequestId ?? randomUUID();
+      // A spawn retry belongs to the admitted parent and public creation key,
+      // independently of the MCP connection, tool call, turn or runner lifetime.
+      // Hash the tuple because creation keys have no private-envelope id bound.
+      const creationKey = actionId === 'session.spawn_new'
+        ? SessionCreationKeyV1Schema.safeParse(input && typeof input === 'object' && 'creationKey' in input
+          ? input.creationKey : undefined)
+        : null;
+      const requestId = creationKey?.success
+        ? createHash('sha256').update(JSON.stringify(['session.spawn_new', params.client.sessionId, creationKey.data])).digest('hex')
+        : context?.actionRequestId ?? randomUUID();
       const toolCallId = context?.approvalOrigin?.kind === 'transcript_tool_call'
         ? context.approvalOrigin.toolCallId : undefined;
       try {
@@ -82,6 +134,8 @@ export function createSessionAccountActionExecutor(params: Readonly<{
           createRequest: (capability) => ({ v: 1,
             context: { token: capability, sessionId: params.client.sessionId },
             operation: { kind: 'action.execute', requestId, actionId, input, witness,
+              ...(context?.reviewCommentPrincipal ? { reviewCommentPrincipal: context.reviewCommentPrincipal } : {}),
+              ...(executionRun ? { executionRun: { runId: executionRun.runId, occurrenceId: executionRun.occurrenceId } } : {}),
               surface: context?.surface === 'mcp' ? 'mcp' : 'agent',
               ...(toolCallId ? { toolCallId } : {}) },
           }),

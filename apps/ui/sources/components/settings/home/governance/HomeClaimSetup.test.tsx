@@ -22,7 +22,13 @@ import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelp
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-installSettingsViewCommonModuleMocks();
+installSettingsViewCommonModuleMocks({
+    storage: 'real',
+    modal: async () => {
+        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+        return createModalModuleMock({ confirmResult: true }).module;
+    },
+});
 vi.mock('@/sync/domains/plugins/availability/generatedBundledPluginUiArtifacts', () => ({
     BUNDLED_PLUGIN_UI_APP_ARTIFACTS: [],
 }));

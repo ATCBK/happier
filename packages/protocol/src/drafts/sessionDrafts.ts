@@ -8,6 +8,7 @@ import {
   type JsonValue as StrictJsonValue,
 } from '../json/strictJsonValue.js';
 import { ParticipantRecipientV1Schema } from '../messages/structured/participantMessageV1.js';
+import { SessionTargetV1Schema } from '../actions/sessionTargetV1.js';
 import { ScmDiffSummaryDiscussInputSchema } from '../scm/diffSummaryResult.js';
 import {
   SyncedSessionAuthoringValueV1Schema,
@@ -104,6 +105,19 @@ export const SessionDraftRecipientValueV1Schema = lazyZodSchema(() => z.union([
 ]));
 export type SessionDraftRecipientValueV1 = z.infer<typeof SessionDraftRecipientValueV1Schema>;
 
+/** Cross-Session composer intent, carried by extensions.happier.sessionMessagingV1. */
+export const SessionDraftSessionMessagingValueV1Schema = lazyZodSchema(() => z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('send'), target: SessionTargetV1Schema }),
+  z.strictObject({
+    kind: z.literal('ask'),
+    target: SessionTargetV1Schema,
+    reply: z.optional(z.enum(['wait', 'return'])),
+    timeoutSeconds: z.optional(z.number().check(z.int(), z.positive())),
+  }),
+  z.strictObject({ kind: z.literal('post_update') }),
+]));
+export type SessionDraftSessionMessagingValueV1 = z.infer<typeof SessionDraftSessionMessagingValueV1Schema>;
+
 export function isMeaningfulSessionDraftRecipientValueV1(
   value: unknown,
 ): value is Exclude<SessionDraftRecipientValueV1, null> {
@@ -111,7 +125,7 @@ export function isMeaningfulSessionDraftRecipientValueV1(
   return parsed.success && parsed.data !== null;
 }
 
-const semanticArraySchema = lazyZodSchema(() => z.pipe(z.transform((input) => Array.isArray(input)
+const semanticArraySchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform((input) => Array.isArray(input)
     ? input.filter((entry) => StrictJsonValueSchema.safeParse(entry).success)
     : input), z.array(StrictJsonValueSchema)));
 const ComposerSchema = lazyZodSchema(() => z.strictObject({
@@ -143,7 +157,7 @@ export function createSessionDraftAuthoringFieldsSchema<TShape extends Record<st
       }
     }
   }));
-  return defineStoredReadProjection(fieldsSchema, () => z.pipe(z.transform(raw => {
+  return defineStoredReadProjection(fieldsSchema, () => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(raw => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
     const projected: Record<string, unknown> = {};
     for (const [fieldId, value] of Object.entries(raw)) {
@@ -229,7 +243,7 @@ export const SessionDraftStoredContentEnvelopeV1StoredSchema = createStoredReadS
 export const SessionDraftRecordV1Schema = lazyZodSchema(() => z.strictObject({
   address: SessionDraftAddressV1Schema,
   revision: z.number().check(z.int(), z.nonnegative()),
-  content: z.nullable(SessionDraftStoredContentEnvelopeV1StoredSchema),
+  content: z.nullable(SessionDraftStoredContentEnvelopeV1Schema),
   createdAt: z.number().check(z.int(), z.nonnegative()),
   updatedAt: z.number().check(z.int(), z.nonnegative()),
 }));

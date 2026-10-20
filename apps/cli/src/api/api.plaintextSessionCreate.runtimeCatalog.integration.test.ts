@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   CURRENT_ACCOUNT_STORED_CONTENT_PROTOCOL_VERSION,
@@ -10,6 +10,8 @@ import { ApiClient } from './api';
 import type { Metadata } from './types';
 import { decodeBase64, decrypt } from './encryption';
 import { buildSessionMetadataEnvelopeFields } from '@/session/metadata/buildSessionMetadataEnvelopeCreateFields';
+import { resetServerFeaturesClientForTests } from '@/features/serverFeaturesClient';
+import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 
 const mockPost = vi.fn();
 const mockGet = vi.fn();
@@ -55,7 +57,9 @@ vi.mock('@/ui/logger', () => ({
 }));
 
 describe('ApiClient.getOrCreateSession (plaintext sessions)', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
   beforeEach(() => {
+    resetServerFeaturesClientForTests();
     mockPost.mockReset();
     mockGet.mockReset();
     mockGet.mockResolvedValue({
@@ -261,7 +265,7 @@ describe('ApiClient.getOrCreateSession (plaintext sessions)', () => {
     expect(session?.metadata.path).toBe('/tmp');
   });
 
-  it('rejects an old server before POST when current activation is missing', async () => {
+  it('creates a keyless plain Session when feature discovery omits stored-content requirements', async () => {
     const credential = {
       token: 'token-test',
       encryption: null,
@@ -281,8 +285,29 @@ describe('ApiClient.getOrCreateSession (plaintext sessions)', () => {
       }
       throw new Error(`Unexpected fetch: ${url}`);
     }));
+    // Stored-content requirements do not gate Session creation. Account
+    // currentness still owns its mode; HTTP carries the current declaration.
+    mockPost.mockImplementation(async (_url: string, body: Readonly<{
+      sharedMetadata: Readonly<{ ciphertext: string }>;
+      ownerMetadata: unknown;
+      agentState: string | null;
+    }>) => ({ status: 200, data: { session: {
+      id: 'session-no-stored-content-requirements',
+      seq: 1,
+      encryptionMode: 'plain',
+      metadata: body.sharedMetadata.ciphertext,
+      ownerMetadata: body.ownerMetadata,
+      metadataLayoutVersion: 1,
+      metadataVersion: 1,
+      agentState: body.agentState,
+      agentStateVersion: 0,
+      dataEncryptionKey: null,
+      share: null,
+      createdAt: 1,
+      updatedAt: 1,
+    } } }));
     const api = await ApiClient.create(credential);
-    await expect(api.getOrCreateSession({
+    const session = await api.getOrCreateSession({
       tag: 'tag-old-server',
       metadata: {
         path: '/private',
@@ -293,12 +318,28 @@ describe('ApiClient.getOrCreateSession (plaintext sessions)', () => {
         happyToolsDir: '/private/home/.happy/tools',
       },
       state: null,
-    })).rejects.toMatchObject({
-      code: 'client-upgrade-required',
-      retryable: false,
-      decision: 'missing',
     });
-    expect(mockPost).not.toHaveBeenCalled();
+    expect(session).toMatchObject({
+      id: 'session-no-stored-content-requirements',
+      encryptionMode: 'plain',
+      metadataLayoutVersion: 1,
+      metadata: { path: '/private', host: 'private-host' },
+    });
+    expect(mockGet).toHaveBeenCalledWith(
+      'https://api.example.com/v1/account/encryption/currentness',
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer token-test' }) }),
+    );
+    expect(mockPost).toHaveBeenCalledExactlyOnceWith('https://api.example.com/v1/sessions',
+      expect.objectContaining({ metadataLayoutVersion: 1, encryptionMode: 'plain', dataEncryptionKey: null,
+        ownerMetadata: expect.objectContaining({ t: 'plain', v: expect.objectContaining({
+          workspace: expect.objectContaining({ path: '/private', host: 'private-host' }),
+        }) }),
+      }),
+      expect.objectContaining({ headers: expect.objectContaining(buildCurrentAccountStoredContentCompatibilityHttpHeaders()) }),
+    );
+    expect(credential.encryption).toBeNull();
+    expect(session).not.toHaveProperty('encryptionKey');
+    expect(JSON.parse(mockPost.mock.calls[0]![1].sharedMetadata.ciphertext)).not.toHaveProperty('path');
   });
 
   it('does not relabel a current invalid-params 400 as an old-server upgrade', async () => {
@@ -460,7 +501,8 @@ describe('ApiClient.getOrCreateSession (plaintext sessions)', () => {
     expect(session.metadata).not.toHaveProperty('ownerMetadata');
   });
 
-  it('rejects a rejoined Session whose immutable creation correspondence differs from the admitted request', async () => {
+  it.each([false, true])('rejects a rejoined Session whose immutable creation correspondence differs from the admitted request (lostReceipt=%s)', async (lostReceipt) => {
+    vi.stubEnv('HAPPIER_API_CREATE_SESSION_RETRY_BASE_DELAY_MS', '0');
     const credential = {
       token: 'token-test',
       encryption: null,
@@ -474,11 +516,11 @@ describe('ApiClient.getOrCreateSession (plaintext sessions)', () => {
         v: 1,
         sessionCreationTag,
         recipe: {
-          execution: { machineId: 'machine-1', directory },
+          execution: { machineId: 'machine-1', directory: { kind: 'path', path: directory } },
           organization: { folderId: null, tagIds: [] },
           agentTarget: {
             kind: 'agent',
-            identity: { pluginId: 'happier.agent.codex', localId: 'codex' },
+            identity: { pluginId: 'example.external-agent', localId: 'external' },
           },
           modelSelection: null,
           profileId: null,
@@ -553,6 +595,7 @@ describe('ApiClient.getOrCreateSession (plaintext sessions)', () => {
         },
       },
     });
+    if (lostReceipt) mockPost.mockRejectedValueOnce({ isAxiosError: true, code: 'ECONNRESET' });
 
     const admittedMetadata: Metadata & Readonly<{
       sessionCreationCorrespondenceV1: typeof admittedCorrespondence;
@@ -569,6 +612,7 @@ describe('ApiClient.getOrCreateSession (plaintext sessions)', () => {
     })).rejects.toMatchObject({
       code: 'creation_conflict',
     });
+    expect(mockPost).toHaveBeenCalledTimes(lostReceipt ? 2 : 1);
   });
 
   it('creates encrypted fresh sessions on layout 1 without exposing owner metadata in the shared envelope', async () => {
@@ -643,6 +687,9 @@ describe('ApiClient.getOrCreateSession (plaintext sessions)', () => {
           session: {
             id: 'session-e2ee-layout-v1',
             seq: 1,
+            // Layout 1 must carry an authenticated owner/recipient projection.
+            // This owner response uses the canonical released owner marker.
+            share: null,
             encryptionMode: 'e2ee',
             metadata: body.sharedMetadata.ciphertext,
             ownerMetadata: body.ownerMetadata,

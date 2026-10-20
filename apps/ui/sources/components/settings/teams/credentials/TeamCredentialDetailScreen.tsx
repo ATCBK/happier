@@ -9,7 +9,6 @@ import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 import { RoundButton } from '@/components/ui/buttons/RoundButton';
-import { Modal } from '@/modal';
 import { isTeamActionApprovalPendingError } from '@/sync/ops/teams/teamActionClient';
 import {
     deleteTeamCredentialResource,
@@ -138,14 +137,18 @@ const CredentialDetail = React.memo(function CredentialDetail(props: Readonly<{
     const targetKey = `${context.scope.serverId}:${context.scope.accountId}:${context.address.teamId}:${resourceId}`;
     const currentTargetKey = React.useRef(targetKey);
     currentTargetKey.current = targetKey;
+    const actionLifetime = React.useRef<AbortController | null>(null);
 
     React.useEffect(() => {
+        const controller = new AbortController();
+        actionLifetime.current = controller;
         setMutating(false);
         setNotice(null);
         setPreparationPending(null);
         setPreparationBusy(false);
         setTestBusy(false);
         setTestResult(null);
+        return () => controller.abort();
     }, [targetKey]);
 
     // Identity first: the page opens with the credential itself — its name, and who shared it —
@@ -559,15 +562,8 @@ const CredentialDetail = React.memo(function CredentialDetail(props: Readonly<{
                             disabled={busy}
                                 onPress={async () => {
                                     const requestedTargetKey = targetKey;
-                                    // The consequence is named before the mutation, and
-                                    // the copy claims only what deletion can do: future
-                                    // use stops, already delivered material does not.
-                                    const confirmed = await Modal.confirm(
-                                        t('teams.credentials.delete.title', { name: resource.displayName }),
-                                        t('teams.credentials.delete.body'),
-                                        { confirmText: t('teams.credentials.delete.action'), destructive: true },
-                                    );
-                                    if (!confirmed) return;
+                                    const signal = actionLifetime.current?.signal;
+                                    if (!signal || signal.aborted) return;
                                     if (currentTargetKey.current !== requestedTargetKey) return;
                                     setMutating(true);
                                     setNotice(null);
@@ -577,7 +573,7 @@ const CredentialDetail = React.memo(function CredentialDetail(props: Readonly<{
                                             address: context.address,
                                             resourceId,
                                             expectedRevision: resource.revision,
-                                            confirmedByPresentUser: true,
+                                            signal,
                                             handlers: {
                                                 // The resource this screen is about no
                                                 // longer exists once the approval runs,
@@ -622,14 +618,8 @@ const CredentialDetail = React.memo(function CredentialDetail(props: Readonly<{
                                 disabled={busy}
                                 onPress={async () => {
                             const requestedTargetKey = targetKey;
-                            if (resource.enabled) {
-                                const confirmed = await Modal.confirm(
-                                    t('common.disable'),
-                                    t('teams.credentials.delete.body'),
-                                    { confirmText: t('common.disable'), destructive: true },
-                                );
-                                if (!confirmed) return;
-                            }
+                            const signal = actionLifetime.current?.signal;
+                            if (!signal || signal.aborted) return;
                             if (currentTargetKey.current !== requestedTargetKey) return;
                             setMutating(true);
                             setNotice(null);
@@ -640,7 +630,7 @@ const CredentialDetail = React.memo(function CredentialDetail(props: Readonly<{
                                     resourceId,
                                     expectedRevision: resource.revision,
                                     enabled: !resource.enabled,
-                                    ...(resource.enabled ? { confirmedByPresentUser: true } : {}),
+                                    signal,
                                     handlers: {
                                         // The projection was already invalidated
                                         // for this exact Team when the approval

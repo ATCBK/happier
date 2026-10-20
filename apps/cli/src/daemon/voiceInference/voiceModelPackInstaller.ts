@@ -21,6 +21,7 @@ import {
   type NodeModelPackDownloadNetwork,
 } from './nodeModelPackInstallerHost';
 import { assertVoiceInferencePackIdFilesystemSafe } from './voiceInferenceWorker.shared';
+import { logger } from '../../ui/logger';
 
 type InstallProgress = Readonly<{
   phase: 'queued' | 'downloading' | 'verifying' | 'installing' | 'complete' | 'error';
@@ -150,7 +151,11 @@ export async function readInstalledVoiceModelPackManifest(params: Readonly<{
   try {
     const manifestPath = join(params.packsRootDir, assertVoiceInferencePackIdFilesystemSafe(params.packId), 'pack.json');
     return createStoredReadSchema(ModelPackManifestSchema).parse(JSON.parse(await readFile(manifestPath, 'utf8')));
-  } catch {
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) {
+      // JSON/schema errors can include receipt contents, so keep only their type.
+      logger.warnLocalFile('model_pack_installed_manifest_read_failed', error instanceof Error ? error.name : 'unknown');
+    }
     return null;
   }
 }
@@ -177,6 +182,7 @@ export async function installVoiceModelPack(params: Readonly<{
     host,
     packId: safePackId,
     manifest,
+    priorManifest: await readInstalledVoiceModelPackManifest({ packsRootDir: params.packsRootDir, packId: safePackId }) ?? undefined,
     signal,
     urlPolicy: DAEMON_URL_POLICY,
     onProgress: (progress) => {

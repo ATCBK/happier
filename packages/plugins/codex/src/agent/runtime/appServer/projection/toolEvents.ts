@@ -1,3 +1,5 @@
+import { parseMcpToolWireNameV1 } from '@happier-dev/plugin-sdk/agents/runtime';
+
 import { mapCodexRolloutEventToActions } from '../../../rollout/projection/actions.js';
 import {
   formatCodexMcpToolSource,
@@ -55,7 +57,7 @@ function omitKeys(record: Readonly<Record<string, unknown>>, keys: ReadonlySet<s
 
 function projectResponseItemToolEvents(item: Readonly<Record<string, unknown>>): CodexAppServerProjectedToolEvent[] {
   const projected = projectCodexRolloutActions(
-    mapCodexRolloutEventToActions({ type: 'response_item', payload: item }, { debug: false }),
+    mapCodexRolloutEventToActions({ type: 'response_item', payload: item }, { debug: false, localControl: false }),
     { sidechainId: null },
   );
   return projected.filter((event): event is CodexAppServerProjectedToolEvent => (
@@ -292,12 +294,82 @@ export function projectCodexAppServerToolEventsFromNotification(params: Readonly
   /** Original SDK record key → native injected key, from the launch owner. */
   mcpServerKeys?: ReadonlyMap<string, string>;
 }>): CodexAppServerProjectedToolEvent[] {
-  return projectNativeCodexAppServerToolEvents(params).map(event => {
+  const events = projectNativeCodexAppServerToolEvents(params);
+  if (!params.mcpServerKeys?.size || !events.some(event => event.type === 'tool-call' && event.name.startsWith('mcp__'))) return events;
+  const wireKeysByNativeKey = new Map([...params.mcpServerKeys].map(([wireKey, nativeKey]) => [nativeKey, wireKey]));
+  const nativeKeys = new Set(wireKeysByNativeKey.keys());
+  return events.map(event => {
     if (event.type !== 'tool-call' || !event.name.startsWith('mcp__')) return event;
-    for (const [wireKey, nativeKey] of params.mcpServerKeys ?? []) {
-      const prefix = `mcp__${nativeKey}__`;
-      if (event.name.startsWith(prefix)) return { ...event, name: `mcp__${wireKey}__${event.name.slice(prefix.length)}` };
-    }
-    return event;
+    // The shared parser resolves the longest admitted key and excludes the
+    // built-in bridge, whose name is also every injected key's prefix.
+    const identity = parseMcpToolWireNameV1(event.name, nativeKeys);
+    return identity
+      ? { ...event, name: `mcp__${wireKeysByNativeKey.get(identity.server)!}__${identity.tool}` }
+      : event;
   });
+}
+
+/** One admitted turn's typed and raw views describe the same native tools. */
+export function createCodexAppServerToolEventProjector() {
+  const published = new Set<string>();
+  const scripts = new Map<string, {
+    scopeId: string;
+    call: CodexAppServerProjectedToolEvent;
+    result?: CodexAppServerProjectedToolEvent;
+    hasNativeTools: boolean;
+  }>();
+  const eventKey = (scopeId: string, type: string, callId: string) => JSON.stringify([scopeId, type, callId]);
+  const admit = (scopeId: string, events: CodexAppServerProjectedToolEvent[], raw = false) => events.filter(event => {
+    const key = eventKey(scopeId, event.type, event.callId);
+    if (published.has(key)) return false;
+    if (raw && event.type === 'tool-result' && !published.has(eventKey(scopeId, 'tool-call', event.callId))) return false;
+    published.add(key);
+    return true;
+  });
+  return {
+    clear: () => { published.clear(); scripts.clear(); },
+    project(params: Parameters<typeof projectCodexAppServerToolEventsFromNotification>[0] & Readonly<{
+      scopeId: string;
+      /** A settled turn can finish an already published tool, never introduce a new call. */
+      lateResultOnly?: boolean;
+    }>): CodexAppServerProjectedToolEvent[] {
+      if (params.method === 'turn/completed' || params.method === 'turn/interrupted') {
+        const fallback: CodexAppServerProjectedToolEvent[] = [];
+        for (const [key, script] of scripts) {
+          if (script.scopeId !== params.scopeId) continue;
+          scripts.delete(key);
+          // Code-mode exec is an envelope, not a second command. Retain it
+          // only when native tools were unavailable (e.g. sandbox startup
+          // failure). Never parse its JavaScript or match command text.
+          if (!script.hasNativeTools) fallback.push(script.call, ...(script.result ? [script.result] : []));
+        }
+        return admit(params.scopeId, fallback);
+      }
+      const events = projectCodexAppServerToolEventsFromNotification(params);
+      if (params.lateResultOnly) {
+        return admit(params.scopeId, events.filter(event => event.type === 'tool-result'), true);
+      }
+      const native: CodexAppServerProjectedToolEvent[] = [];
+      for (const event of events) {
+        const key = eventKey(params.scopeId, 'script', event.callId);
+        if (event.type === 'tool-call' && event.name === 'exec') {
+          if (!scripts.has(key) && !published.has(eventKey(params.scopeId, 'tool-call', event.callId))) {
+            scripts.set(key, { scopeId: params.scopeId, call: event, hasNativeTools: false });
+          }
+          continue;
+        }
+        const script = scripts.get(key);
+        if (script && event.type === 'tool-result') { script.result = event; continue; }
+        if (event.type === 'tool-call') {
+          for (const pending of scripts.values()) {
+            // A completed raw invocation cannot borrow a later script's tool
+            // evidence. Only an open envelope can contain this native call.
+            if (pending.scopeId === params.scopeId && !pending.result) pending.hasNativeTools = true;
+          }
+        }
+        native.push(event);
+      }
+      return admit(params.scopeId, native, params.method === 'rawResponseItem/completed');
+    },
+  };
 }

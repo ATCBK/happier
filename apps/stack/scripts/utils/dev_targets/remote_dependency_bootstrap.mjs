@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 
 import { execYarn } from '../../../../../scripts/workspaces/execYarnCommand.mjs';
 import { resolveRemoteValidationPreparationEnv } from './remote_validation_preparation.mjs';
-import { assertDependenciesReady, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyRefresh } from '../proc/dependency_refresh.mjs';
+import { assertDependenciesReady, SCRIPTLESS_DEPENDENCY_INSTALL_MODE, withDependencyConsumption, withDependencyRefresh } from '../proc/dependency_refresh.mjs';
 import { ensureUiPostinstallOutputs } from '../proc/ui_postinstall.mjs';
 import { resolvePackageManagerCachePaths } from '../proc/package_manager_cache.mjs';
 
@@ -101,6 +101,19 @@ export async function bootstrapRemoteDependencies({
   // A healthy warm tree is inspected without rewriting dependency bytes.
   const onDependenciesReady = async () => await prepareInitialUiOutputs({ repoDir, env, force: refreshed });
   if (sourceToolsOnly) {
+    // Warm validation is a reader. Queuing a writer for every readiness check
+    // withdraws admission repeatedly and starves finite consumers behind work
+    // that never installs anything. Recheck under the existing shared custody;
+    // release it before requesting an actual installation or output repair.
+    try {
+      await withDependencyConsumption({ installDir: repoDir, env }, async () => {
+        await assertDependenciesReady({ installDir: repoDir, componentDir, env,
+          installMode: SCRIPTLESS_DEPENDENCY_INSTALL_MODE });
+      });
+      return { refreshed: false, reason: 'up-to-date' };
+    } catch (error) {
+      if (error?.code !== 'HAPPIER_DEPENDENCIES_NEED_REFRESH') throw error;
+    }
     // Source validation does not consume the Stack owner's compiled closure.
     // Typecheck compilers read published declarations and prepare their own
     // project declarations without acquiring workspace publication leases.

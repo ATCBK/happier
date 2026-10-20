@@ -23,6 +23,8 @@ export type ReviewCommentLabels = Readonly<{
     reopen: string;
     redact: string;
     reply: string;
+    showMore: string;
+    showLess: string;
     replyUnavailable: string;
     bulkResolve: string;
     bulkDismiss: string;

@@ -15,6 +15,8 @@ import {
 import { signMachineInstallationProof } from '@happier-dev/protocol/machines/identity/installationIdentity';
 import { formatAccountApiTokenCredentialV1 } from '@happier-dev/protocol/auth/accountApiTokens';
 import { decodeBase64, encodeBase64 } from '@happier-dev/protocol/crypto/base64';
+import { actionSpecToActionDefinitionV1 } from '@happier-dev/protocol/actions/actionCatalog';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import {
   ExternalActionRequestEnvelopeV2Schema,
   openExternalActionRequestV2,
@@ -208,6 +210,15 @@ async function serve(params: Readonly<{
     const requestMaterial = params.requestMaterial ?? material;
     const opened = openExternalActionRequestV2({ envelope, binding, material: requestMaterial });
     if (!opened) throw new Error('Request did not authenticate');
+    if (binding.actionId === 'action.spec.get') {
+      send(response, prepareExternalActionResponseV2({ binding, request: envelope, material: requestMaterial,
+        executedMachineId: binding.target.kind === 'machine' ? binding.target.machineId : 'machine-1',
+        randomBytes: (length) => new Uint8Array(length).fill(4), execution: { ok: true, result: {
+          actionSpec: actionSpecToActionDefinitionV1(getActionSpec('session.message.send'), { surface: 'api', includeOutputSchema: false }),
+        } },
+      }).response);
+      return;
+    }
     if (params.invoke) await params.invoke({ request: envelope, binding, input: opened.input }, response);
     else send(response, prepareExternalActionResponseV2({ binding, request: envelope, material: requestMaterial,
       executedMachineId: binding.target.kind === 'machine' ? binding.target.machineId : 'machine-1',
@@ -520,6 +531,8 @@ describe('SDK protected invocation lifecycle through real HTTP', () => {
     const completed: string[] = [];
     const server = await serve({ invoke: ({ binding, request }, response) => {
       const result = binding.actionId === 'execution.run.stream.start' ? { streamId: 'stream-1' }
+        : binding.actionId === 'session.status.get'
+          ? { session: { id: 'session-1', active: true, createdAt: 0, updatedAt: 0, activeAt: 0, encryption: null } }
         : binding.actionId === 'transcript.follow'
           ? { items: [{ role: 'assistant', content: { t: 'encrypted', c: 'stored-row' } }], nextCursor: '1', truncated: false }
           : { ok: true };

@@ -10,6 +10,8 @@ import type {
   ClaudeSdkQueryContext,
 } from './query.js';
 
+type AgentNativeLaunchQualifier = NonNullable<NonNullable<Parameters<ExecService['spawn']>[1]>['nativeLaunch']>;
+
 const CLAUDE_SDK_MAX_FRAME_BYTES = 32 * 1024 * 1024;
 
 function readJsonStreamWriteOutcome(error: unknown): 'rejected_before_write' | 'write_may_have_occurred' | null {
@@ -45,7 +47,11 @@ function toClaudeSdkExecResult(result: PluginProcessResult, providerExitOwnershi
   };
 }
 
-export function createClaudeNativeSdkQueryContext(exec: ExecService, reportArtifactCleanupFailure?: (message: string) => void): ClaudeSdkQueryContext {
+export function createClaudeNativeSdkQueryContext(
+  exec: ExecService,
+  reportArtifactCleanupFailure?: (message: string) => void,
+  nativeLaunch?: AgentNativeLaunchQualifier,
+): ClaudeSdkQueryContext {
   return Object.freeze({
     reportArtifactCleanupFailure,
     async spawnClient(spec, options): Promise<ClaudeSdkExecClientHandle> {
@@ -67,7 +73,10 @@ export function createClaudeNativeSdkQueryContext(exec: ExecService, reportArtif
           ...(spec.launch.env ? { env: spec.launch.env } : {}),
         },
         maxFrameBytes: CLAUDE_SDK_MAX_FRAME_BYTES,
-      }, options?.signal ? { signal: options.signal } : undefined);
+      }, options?.signal || nativeLaunch ? {
+        ...(options?.signal ? { signal: options.signal } : {}),
+        ...(nativeLaunch ? { nativeLaunch } : {}),
+      } : undefined);
       let status: 'running' | 'exited' | 'disposed' = 'running';
       const exit = handle.wait().then((result) => {
         status = 'exited';

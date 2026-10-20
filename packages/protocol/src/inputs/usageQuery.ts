@@ -24,7 +24,9 @@ export const UsageQuerySchema = lazyZodSchema(() => {
     costBasis: z._default(clauses.costMode._zod.def.innerType, 'auto'),
     metric: z._default(z.enum(['tokens', 'cost']), 'tokens'),
     // Host projection demand; accounting transport never receives this clause.
+    includeAccounting: z._default(z.boolean(), true),
     includeSessionEvidence: z._default(z.boolean(), true),
+    includeTranscriptEvidence: z._default(z.boolean(), true),
     includeWorkEvidence: z._default(z.boolean(), true),
     breakdown: z._default(clauses.breakdowns._zod.def.innerType, []),
     modelIds: z._default(filters.modelIds._zod.def.innerType, []),
@@ -92,7 +94,8 @@ export function resolveUsageQueryPeriod(query: Pick<UsageQuery, 'period' | 'time
 export function usageQueryToAnalyticsRequest(value: UsageQuery, nowMs = Date.now()): UsageAnalyticsQueryRequest {
   const query = normalizeUsageQuery(value);
   const { period: _period, agents, machines, projects, sources, session, costBasis, metric: _metric,
-    includeSessionEvidence: _sessionEvidence, includeWorkEvidence: _workEvidence, breakdown,
+    includeAccounting: _accounting, includeSessionEvidence: _sessionEvidence, includeTranscriptEvidence: _transcriptEvidence,
+    includeWorkEvidence: _workEvidence, breakdown,
     modelIds, workspaceIds, backendModes, ...clauses } = query;
   const selected = (values: string[]) => values.length ? values : undefined;
   return UsageAnalyticsQueryRequestSchema.parse({ ...clauses, dateRange: resolveUsageQueryPeriod(query, nowMs), costMode: costBasis, breakdowns: breakdown,

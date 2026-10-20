@@ -74,7 +74,7 @@ export type ACPProvider = string;
 
 export type SessionEventMessage =
   | Extract<TranscriptRawAgentEventV1, { type: 'prompt-composition' }>
-  | Extract<TranscriptRawAgentEventV1, { type: 'worker-update' | 'worker-report' }>
+  | Extract<TranscriptRawAgentEventV1, { type: 'worker-update' | 'worker-report' | 'goal-changed' }>
   | (TranscriptEventLifecycle & { type: 'switch'; mode: 'local' | 'remote' })
   | (TranscriptEventLifecycle & Extract<TranscriptRawAgentEventV1, { type: 'message' }>)
   | (TranscriptEventLifecycle & { type: 'context-compaction' } & ContextCompactionEventFields)
@@ -82,6 +82,8 @@ export type SessionEventMessage =
   | { type: 'permission-mode-changed'; mode: import('../types').PermissionMode }
   | (TranscriptEventLifecycle & {
       type: 'ready';
+      /** Exact completed host turn; contextless readiness is not finished work. */
+      completedTurnId?: string;
       /** Host-composed owner delivery responsibility; projected beside ciphertext for the authenticated runtime. */
       ownerActivityDelivery?: 'rich_sender' | 'home_required';
     });

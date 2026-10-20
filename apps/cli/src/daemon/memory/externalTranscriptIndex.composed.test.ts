@@ -313,7 +313,7 @@ describe('external memory transcript ingestion', () => {
     retirement.abort();
     const result = await discoverMemoryExternalTranscriptSources({ agents, account: { connectedServicesV2: [] },
       activeServerId: 'home', activeServerDir: '/fixture/home', signal: new AbortController().signal,
-      resolveBoundary: async () => ({ externalSessions: bounded, occurrenceId: 'retired', retirementSignal: retirement.signal,
+      resolveBoundary: async () => ({ catalogEntry: null, externalSessions: bounded, occurrenceId: 'retired', retirementSignal: retirement.signal,
         isCurrent: () => !retirement.signal.aborted }) });
     expect(result.descriptors).toEqual([]);
     expect(result.configuredSourceKeys.size).toBe(1);
@@ -325,13 +325,52 @@ describe('external memory transcript ingestion', () => {
       createInvocationExec: async () => createUnavailablePluginServices().exec });
     const available = await discoverMemoryExternalTranscriptSources({ agents, account: { connectedServicesV2: [] },
       activeServerId: 'home', activeServerDir: '/fixture/home', signal: new AbortController().signal,
-      resolveBoundary: async () => ({ externalSessions: live, occurrenceId: 'live', retirementSignal: liveRetirement.signal,
+      resolveBoundary: async () => ({ catalogEntry: null, externalSessions: live, occurrenceId: 'live', retirementSignal: liveRetirement.signal,
         isCurrent: () => true }) });
     expect(available.descriptors).toHaveLength(1);
     expect(available.configuredSourceKeys.has(JSON.stringify(['claude', available.descriptors[0]?.configuredSourceKey]))).toBe(true);
     expect((await discoverMemoryExternalTranscriptSources({ agents: [], account: { connectedServicesV2: [] },
       activeServerId: 'home', activeServerDir: '/fixture/home', signal: new AbortController().signal,
       resolveBoundary: async () => null })).configuredSourceKeys.size).toBe(0);
+  });
+  it('round-trips a real Codex semantic continuation through the host response budget', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'happier-memory-codex-continuation-'));
+    try {
+      const project = join(dir, 'sessions', '2026', '10', '09');
+      await mkdir(project, { recursive: true });
+      const path = join(project, 'rollout-2026-10-09T12-00-00-native-session.jsonl');
+      const row = (value: unknown) => JSON.stringify(value) + '\n';
+      await writeFile(path, row({ type: 'session_meta', timestamp: '2026-10-09T12:00:00Z',
+        payload: { id: 'native-session', timestamp: '2026-10-09T12:00:00Z', cwd: '/workspace' } })
+        + row({ type: 'response_item', timestamp: '2026-10-09T12:00:00Z', payload: { type: 'message', role: 'assistant',
+          content: [{ type: 'output_text', text: 'before native collaboration' }] } }));
+      const reader = createBoundedAgentExternalSessionsContribution({
+        contribution: createCodexExternalSessionsContribution({ env: { CODEX_HOME: dir } }),
+        identity: { pluginId: 'fixture.codex', agentId: 'codex', occurrenceId: 'current',
+          contributionQualifiedId: 'fixture.codex/agents/codex', sourceCustody: { kind: 'development', registeredRootId: 'fixture-root' } },
+        retirementSignal: new AbortController().signal, isCurrent: () => true,
+        createInvocationExec: async () => createUnavailablePluginServices().exec });
+      const request = { source: { kind: 'codexHome', home: 'user' }, remoteSessionId: 'native-session',
+        maxItems: 100, maxSerializedBytes: 64 * 1024, signal: new AbortController().signal };
+      const tail = await reader.pageTranscript({ ...request, direction: 'older' });
+      expect(tail).toMatchObject({ ok: true });
+      if (!tail.ok || !tail.value.tailCursor) throw new Error('Expected initial native watermark');
+      await appendFile(path, Array.from({ length: 48 }, (_, index) => row({ type: 'event_msg',
+        timestamp: '2026-10-09T12:00:01Z', payload: { type: 'collab_agent_spawn_end',
+          new_thread_id: `22222222-2222-2222-2222-${index.toString().padStart(12, '0')}` } })).join(''));
+      const advanced = await reader.readAfterTranscript({ ...request, cursor: tail.value.tailCursor });
+      expect(advanced).toMatchObject({ ok: true, value: { outcome: 'advanced', hasMore: false } });
+      if (!advanced.ok || !advanced.value.nextCursor) throw new Error('Expected bounded semantic continuation');
+      expect(advanced.value.items).toHaveLength(48);
+      expect(Buffer.byteLength(JSON.stringify(advanced), 'utf8')).toBeLessThan(request.maxSerializedBytes);
+      await appendFile(path, row({ type: 'response_item', timestamp: '2026-10-09T12:00:02Z',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'garnet after native collaboration' }] } }));
+      const resumed = await reader.readAfterTranscript({ ...request, cursor: advanced.value.nextCursor });
+      expect(resumed).toMatchObject({ ok: true, value: { outcome: 'advanced', hasMore: false,
+        items: [{ raw: { role: 'user', content: { text: 'garnet after native collaboration' } } }] } });
+      await expect(reader.readAfterTranscript({ ...request, remoteSessionId: 'other-session',
+        cursor: advanced.value.nextCursor })).resolves.toMatchObject({ ok: false, code: 'invalid_request' });
+    } finally { await rm(dir, { recursive: true, force: true }); }
   });
   it.each(['claude', 'codex', 'pi'] as const)('indexes real %s pages incrementally and removes a disappeared transcript', async (agentId) => {
     const dir = await mkdtemp(join(tmpdir(), 'happier-memory-native-'));

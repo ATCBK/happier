@@ -1,4 +1,6 @@
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
+import { projectLoadedPluginContributes } from '@/plugins/projection/registry/resolvePluginContributions';
+import { loadCurrentBundledPluginLocatorResult } from '@/plugins/projection/registry/builtIn/locators';
 import type { JsonValue } from '@happier-dev/protocol';
 import { defineProtocolObject, defineProtocolString } from '@happier-dev/plugin-sdk/protocol';
 import {
@@ -14,7 +16,6 @@ import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixtu
 import { resolveManifestHostAccessRequests } from '@/plugins/runtime/hostAccess/manifestRequests';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { ResolvedActionContribution } from '@/plugins/projection/registry/types';
 import { createTargetActionHostBindingResolver } from '@/plugins/runtime/hostAccess/resolve';
 import { createManagedPluginSourceCustody } from '@/plugins/runtime/lifecycle/contributions/runtimeIdentity.testkit';
 import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
@@ -91,6 +92,7 @@ export function fixture(options: Readonly<{
         context: Parameters<TargetActionInvocationRegistration['handler']>[1]) => void | Promise<void>;
     onOrdinary?: (context: Parameters<TargetActionInvocationRegistration['handler']>[1]) => void | Promise<void>;
     fixtureManifest?: CanonicalPluginManifest;
+    referenceManifests?: readonly CanonicalPluginManifest[];
     credentialPurposes?: readonly Readonly<{ purpose: string; service: Readonly<{ pluginId: string; localId: string }> }>[];
     afterActivation?: () => void; credentialOwner?: StablePluginConnectedAccountsOwner;
 }> = {}) {
@@ -119,16 +121,6 @@ export function fixture(options: Readonly<{
     const localIds = options.fixtureManifest?.contributes.actions.map(action => action.id)
         ?? [...roles.map(roleActionId), 'check', 'options', 'inspect', 'ordinary', ...(options.reconciliation ? ['reconcile'] : []), ...(options.cleanupObservation ? ['cleanup'] : [])];
     const dangerLevel = (localId: string) => options.dangerous && !['check', 'options', 'inspect', 'reconcile', 'cleanup'].includes(localId) ? 'writesRemote' as const : 'safe' as const;
-    const actions = localIds.map((localId): ResolvedActionContribution => ({
-        pluginId, provenance: 'external', source: { kind: 'path' },
-        definition: {
-            id: localId, title: localId, description: null, kindVersion: 1,
-            placements: [], slash: null, bindings: null, examples: null,
-            surfaces: { cli: !options.privateNative, plugin: true, ui: false, voice: false, agent: false, mcp: false, rpc: false, api: false },
-            inputHints: null, inputSchema: fixtureSchemasFor(localId)?.input.jsonSchema ?? {}, execution: { target: 'daemon' },
-            safety: 'safe', dangerLevel: dangerLevel(localId),
-        },
-    }));
     const registrations = localIds.map((localId): TargetActionInvocationRegistration => ({
         pluginId, pluginVersion: '1.0.0', occurrenceId,
         sourceCustody: createManagedPluginSourceCustody('compute-generation-1'), localId,
@@ -141,7 +133,7 @@ export function fixture(options: Readonly<{
             ...(options.nativeCommandArgs ? [{ required: true, request: {
                 id: 'native-process', capability: 'process', reason: 'Run native bootstrap transport',
                 scope: { executables: [{ kind: 'systemTool', id: 'fixture-node' }] },
-            } }] as const : []),
+            } }] satisfies NonNullable<TargetActionInvocationRegistration['definition']['hostAccessRequests']> : []),
             ...(options.credentialOwner ? credentialPurposes.map(({ purpose, service }) => ({ required: true, request: {
                 id: purpose, capability: 'connectedAccounts' as const, reason: 'Use captured native account',
                 scope: { serviceRefs: [service], operations: ['use' as const], materializationKinds: ['environment' as const] },
@@ -252,28 +244,35 @@ export function fixture(options: Readonly<{
             return invocationServices(seed, binding);
         },
     });
+    const sourceSpec = { kind: 'path', locator: fixtureRoot, trustPolicy: 'local_trusted', installPolicy: 'link' } as const;
+    const manifestPath = join(fixtureRoot, 'happier-plugin.json');
+    const bundledPlugins = loadCurrentBundledPluginLocatorResult().loadedPlugins;
+    const bundledFixture = options.fixtureManifest !== undefined && bundledPlugins.some(plugin => plugin.pluginId === pluginId);
+    const explicitPluginIds = new Set([pluginId, ...(options.referenceManifests ?? []).map(reference => reference.id)]);
+    const provenance = bundledFixture ? 'first_party' : 'external';
     const contributes = createResolvedContributionRegistry({
-        actions: actions.map((action) => {
-            const declaration = manifest.contributes.actions.find((candidate) => candidate.id === action.definition.id)!;
-            return { ...action, definition: { ...action.definition,
-                inputSchema: declaration.inputSchema, dangerLevel: declaration.dangerLevel,
-                surfaces: {
-                    cli: declaration.surfaces.includes('cli'), plugin: declaration.surfaces.includes('plugin'),
-                    ui: declaration.surfaces.includes('ui'), voice: declaration.surfaces.includes('voice'),
-                    agent: declaration.surfaces.includes('agent'), mcp: declaration.surfaces.includes('mcp'),
-                    rpc: declaration.surfaces.includes('rpc'), api: declaration.surfaces.includes('api'),
-                },
-            } };
-        }), occurrenceIdsByPluginId: { [pluginId]: occurrenceId },
-        machineProvisioners: manifest.contributes.machineProvisioners.map((definition) => ({ pluginId, identity: { pluginId, localId: definition.id }, definition })),
-        activationTargets: [{ pluginId, manifest, provenance: 'external', source: { kind: 'path' },
-            manifestPath: join(fixtureRoot, 'happier-plugin.json'), daemonEntryPath: null, sourceSpec: { kind: 'path', path: fixtureRoot },
+        ...projectLoadedPluginContributes({ loadResult: { loadedPlugins: [{
+            pluginId, pluginRootPath: fixtureRoot, manifestPath, manifest, sourceSpec,
+            daemonEntryPath: null, devDaemonEntryPath: null,
+        }, ...(options.referenceManifests ?? []).map(reference => {
+            const pluginRootPath = join(fixtureRoot, reference.id);
+            return { pluginId: reference.id, pluginRootPath, manifest: reference,
+                manifestPath: join(pluginRootPath, 'plugin.json'),
+                sourceSpec: { ...sourceSpec, locator: pluginRootPath },
+                daemonEntryPath: null, devDaemonEntryPath: null };
+        }), ...(bundledFixture ? bundledPlugins.filter(plugin => !explicitPluginIds.has(plugin.pluginId)) : [])],
+            diagnosticsByPluginId: {} }, provenance }),
+        occurrenceIdsByPluginId: { [pluginId]: occurrenceId },
+        activationTargets: [{ pluginId, manifest, provenance, source: { kind: 'path' },
+            manifestPath, daemonEntryPath: null, sourceSpec,
         }],
     });
     // Only the native module-loading boundary is substituted. All final
     // invocation, policy admission and handler execution remain real.
     const runtimeRegistry = {
         contributes, targetActionInvocations,
+        // The daemon's placement resolver is a host/environment boundary.
+        resolveCurrentPluginApprovalReplayPlacement: async () => ({ serverId: 'home-1', machineId: 'controller-1' }),
         readPluginOccurrenceId: () => currentOccurrenceId,
         activateContributionsOnDemand: async () => {
             activations += 1;

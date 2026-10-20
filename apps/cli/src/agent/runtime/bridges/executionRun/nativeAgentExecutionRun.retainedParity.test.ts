@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AgentRuntime, AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { AgentRuntime, AgentSessionRuntime, AgentSessionRuntimeEvent } from '@happier-dev/plugin-sdk/agents/runtime';
 import { readRuntimeTurnFailureAlreadySurfacedEvent } from '@/agent/runtime/turns/runtimeTurnOperations';
 import {
     createNativeAgentSessionExecutionRunHostRuntime,
@@ -7,9 +7,134 @@ import {
 } from './nativeAgentExecutionRun';
 import { createVoiceSessionContextLease } from './testkit/nativeSessionContext';
 import type { AgentMessage } from '@/agent/core/AgentMessage';
+import { materializeActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
+import type { ExecutionRunBackendController } from '@/agent/executionRuns/controllers/types';
+import type { AgentInvocationTurnAdmissionWitness } from '@/plugins/runtime/invocation/services/types';
+import { createRetainedExecutionRunInputDelivery } from './pending/retainedExecutionRunInputDelivery';
+import { createNativeSessionBoundary } from './testkit/nativeSessionContext';
 
 describe('native Session Run parity', () => {
-    it.each(['finite', 'retained'] as const)('projects only proven foreground text into a %s Run', async adapter => {
+    it.each(['bob', 'carol', null])('binds requester %s to the finite Run invocation without publishing it to the Agent', async accountId => {
+        const attribution = materializeActionRequestAttributionV1({ requestRef: 'finite-request',
+            requester: accountId ? { serverId: 'home', accountId } : null,
+            persona: { serverId: 'home', sessionId: 'session-parent' }, origin: null });
+        const boundary = createNativeSessionBoundary();
+        const createSessionContext = vi.fn<Parameters<typeof createNativeAgentSessionExecutionRunHostRuntime>[0]['createSessionContext']>(
+            ({ services, signal }) => createVoiceSessionContextLease({ services, signal, async dispose() {} }));
+        const host = createNativeAgentSessionExecutionRunHostRuntime({ runtime: { sessions: { open: boundary.open } },
+            lease: { pluginId: 'acme.cause', pluginVersion: '1.0.0', agentId: 'acme.cause/default',
+                localAgentId: 'default', occurrenceId: 'finite-cause-fixture', isCurrent: () => true },
+            options: { cwd: '/repo', runId: 'finite-cause', scope: 'session_owned', backendId: 'acme.cause/default',
+                permissionMode: 'read_only', actionRequestAttributionV1: attribution, start: { intent: 'delegate' } },
+            supportsResume: true, createSessionContext });
+        try {
+            await host.provisionRuntime({ initialPrompt: 'Execute admitted work' });
+            expect(createSessionContext.mock.calls[0]?.[0].actionRequestAttributionV1).toEqual(attribution);
+            expect(boundary.opens[0]).not.toHaveProperty('actionRequestAttributionV1');
+            expect(boundary.inputs[0]).not.toHaveProperty('actionRequestAttributionV1');
+            boundary.complete();
+            await host.waitForTurnCompletion?.();
+        } finally { await host.dispose(); }
+    });
+    it('retains each admitted requester privately through the resumed retained Run owner', async () => {
+        const boundary = createNativeSessionBoundary();
+        let readWitness: (() => AgentInvocationTurnAdmissionWitness | null) | undefined;
+        const runtime: AgentRuntime = { sessions: { open: boundary.open } };
+        const host = createNativeAgentSessionInteractionHostRuntime({ runtime,
+            lease: { pluginId: 'acme.cause', pluginVersion: '1.0.0', agentId: 'acme.cause/default',
+                localAgentId: 'default', occurrenceId: 'cause-fixture', isCurrent: () => true },
+            options: { cwd: '/repo', runId: 'run-cause', scope: 'session_owned', backendId: 'acme.cause/default',
+                permissionMode: 'read_only', start: { intent: 'delegate', runClass: 'bounded', retentionPolicy: 'resumable' } },
+            sessionCapabilities: { open: ['create', 'resume'], delivery: ['newTurn'], cancel: false },
+            createSessionContext: ({ services, signal, readActiveTurnAdmissionWitness }) => {
+                readWitness = readActiveTurnAdmissionWitness;
+                return createVoiceSessionContextLease({ services, signal, async dispose() {} });
+            },
+        });
+        const controller: ExecutionRunBackendController = {
+            kind: 'backend', controllerOccurrenceId: 'cause-controller', backend: host, backendSupportsResume: true,
+            runtimeId: 'run-cause', buffer: '', sidechainStreamBuffer: '', sidechainStreamKey: '', streamWriter: null,
+            cancelled: false, turnCount: 0, turnEpoch: 0, turnInFlight: false, turnCancelReason: null, turnCancelEpoch: null,
+            admittedLiveInterventions: [], admittedLiveInterventionsSignal: null, lastMarkerWriteAtMs: 0,
+            terminalPromise: Promise.resolve(), resolveTerminal() {},
+        };
+        const delivery = createRetainedExecutionRunInputDelivery({ runId: 'run-cause', controller,
+            authorizeProviderEffect: async () => ({ ok: true }) });
+        try {
+            await host.provisionRuntime({ resumeRuntimeId: 'registry-native-session' });
+            const attribution = materializeActionRequestAttributionV1({ requestRef: 'bob-input',
+                requester: { serverId: 'home', accountId: 'bob' }, persona: { serverId: 'home', sessionId: 'session-parent' }, origin: null });
+            await expect(delivery.delivery.deliver({ role: 'user', content: { type: 'text', text: 'Bob request' },
+                localId: 'bob-input', authorAccountId: 'bob', inputAdmissionReceipt: null, pendingProviderAction: null,
+                actionRequestAttributionV1: attribution })).resolves.toEqual({ status: 'admitted' });
+            expect(readWitness?.()?.actionRequestAttributionV1).toEqual(attribution);
+            expect(host.readActiveTurnAdmissionWitness?.()?.actionRequestAttributionV1).toEqual(attribution);
+            expect(boundary.inputs[0]).not.toHaveProperty('actionRequestAttributionV1');
+            boundary.complete();
+            await host.waitForTurnCompletion?.();
+            expect(readWitness?.()).toBeNull();
+            const autonomous = materializeActionRequestAttributionV1({ ...attribution, requestRef: 'autonomous-input', requester: null });
+            await host.deliverInput('run-cause', { text: 'Autonomous continuation' }, {
+                localId: 'autonomous-input', actionRequestAttributionV1: autonomous });
+            expect(readWitness?.()?.actionRequestAttributionV1).toEqual(autonomous);
+            boundary.complete();
+            await host.waitForTurnCompletion?.();
+        } finally { delivery.dispose(); await host.dispose(); }
+    });
+    it('preserves a correlated asynchronous native refusal after dispatch admission', async () => {
+        let emit: ((event: AgentSessionRuntimeEvent) => void) | undefined;
+        let sessionId = '';
+        const sends: Parameters<AgentSessionRuntime['send']>[0][] = [];
+        const runtime: AgentRuntime = { sessions: { async open(openRequest) {
+            sessionId = openRequest.sessionId;
+            return {
+                async send(input) { sends.push(input); return { status: 'admitted' as const }; },
+                watch(listener) { emit = listener; return { dispose() {} }; }, async dispose() {},
+            };
+        } } };
+        const host = createNativeAgentSessionInteractionHostRuntime({ runtime,
+            lease: { pluginId: 'acme.retained', pluginVersion: '1.0.0', agentId: 'acme.retained/default',
+                localAgentId: 'default', occurrenceId: 'fixture-async-refusal', isCurrent: () => true },
+            options: { cwd: '/repo', runId: 'run-async-refusal', scope: 'session_owned', backendId: 'acme.retained/default',
+                permissionMode: 'read_only' },
+            sessionCapabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
+            createSessionContext: ({ services, signal }) => createVoiceSessionContextLease({ services, signal, async dispose() {} }),
+        });
+        try {
+            await host.provisionRuntime();
+            await expect(host.deliverInput('run-async-refusal', { text: 'generate' }, { localId: 'initial', turnId: 'turn-initial' }))
+                .resolves.toEqual({ status: 'admitted' });
+            const completion = expect(host.waitForTurnCompletion!()).rejects.toMatchObject({ code: 'native_async_refused' });
+            emit!({ kind: 'input-rejected', sessionId, sequence: 1, emittedAtMs: 1,
+                inputIds: sends[0]!.inputIds, diagnostic: { code: 'native_async_refused', severity: 'error' }, retryable: true });
+            await completion;
+            await expect(host.waitForTurnCompletion!()).rejects.toMatchObject({ code: 'native_async_refused' });
+        } finally { await host.dispose(); }
+    });
+
+    it.each([false, true])('preserves a definite unavailable send as a typed retained-turn failure (retryable=%s)', async retryable => {
+        const runtime: AgentRuntime = { sessions: { async open() { return {
+            async send() { return { status: 'unavailable' as const, retryable,
+                diagnostic: { code: 'native_terminal_host_unavailable', severity: 'error' as const } }; },
+            watch() { return { dispose() {} }; }, async dispose() {},
+        }; } } };
+        const host = createNativeAgentSessionInteractionHostRuntime({ runtime,
+            lease: { pluginId: 'acme.retained', pluginVersion: '1.0.0', agentId: 'acme.retained/default',
+                localAgentId: 'default', occurrenceId: 'fixture-unavailable', isCurrent: () => true },
+            options: { cwd: '/repo', runId: 'run-unavailable', scope: 'session_owned', backendId: 'acme.retained/default',
+                permissionMode: 'read_only' },
+            sessionCapabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
+            createSessionContext: ({ services, signal }) => createVoiceSessionContextLease({ services, signal, async dispose() {} }),
+        });
+        try {
+            await host.provisionRuntime();
+            await expect(host.deliverInput('run-unavailable', { text: 'generate' }, { localId: 'initial', turnId: 'turn-initial' }))
+                .rejects.toThrow();
+            await expect(host.waitForTurnCompletion!()).rejects.toMatchObject({ code: 'native_terminal_host_unavailable' });
+            await expect(host.waitForTurnCompletion!()).rejects.toMatchObject({ code: 'native_terminal_host_unavailable' });
+        } finally { await host.dispose(); }
+    });
+    it.each(['finite', 'retained'] as const)('projects only proven foreground text into a %s Run and preserves retained tool facts', async adapter => {
         let publishRuntimeEvent: ((event: AgentSessionRuntimeEvent) => void) | undefined;
         const turnId = 'run-scope-turn-1';
         // An arbitrary installed Agent is the external boundary; host admission and projection stay real.
@@ -55,12 +180,20 @@ describe('native Session Run parity', () => {
                 }
                 publishRuntimeEvent!({ sequence: ++sequence, sessionId: 'session-parent', emittedAtMs: sequence,
                     kind: 'transcript-message-committed', role: 'assistant', text: `${label} final answer`, messageId: `${label}-assistant`, ...scope });
+                publishRuntimeEvent!({ sequence: ++sequence, sessionId: 'session-parent', emittedAtMs: sequence,
+                    kind: 'tool-call', toolCallId: `${label}-tool`, toolName: 'read_file', input: ['README.md'], ...scope });
+                publishRuntimeEvent!({ sequence: ++sequence, sessionId: 'session-parent', emittedAtMs: sequence,
+                    kind: 'tool-result', toolCallId: `${label}-tool`, output: null, ...scope });
             }
             expect(messages.filter(message => message.type === 'model-output' || (message.type === 'event' && message.name === 'thinking'))).toEqual([
                 { type: 'model-output', textDelta: 'foreground assistant draft', messageId: 'foreground-assistant' },
                 { type: 'event', name: 'thinking', payload: { textDelta: 'foreground reasoning draft' } },
                 { type: 'model-output', fullText: 'foreground final answer', messageId: 'foreground-assistant' },
             ]);
+            expect(messages.filter(message => message.type === 'tool-call' || message.type === 'tool-result')).toEqual(adapter === 'retained' ? [
+                { type: 'tool-call', callId: 'foreground-tool', toolName: 'read_file', args: ['README.md'] },
+                { type: 'tool-result', callId: 'foreground-tool', result: null },
+            ] : []);
         } finally {
             unsubscribe();
             await host.dispose();

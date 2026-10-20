@@ -21,6 +21,27 @@ describe('UI retained command output Actions', () => {
     beforeEach(async () => { await harness.reset(); boundary.machine.mockReset(); boundary.session.mockReset(); boundary.clipboard.mockReset(); });
     afterEach(() => standardCleanup());
 
+    it.each(['ui', 'voice'] as const)('posts a source-bound update through %s and preserves its committed receipt after an Account switch', async surface => {
+        const home = await harness.addHome({ name: 'Home', serverUrl: 'https://update.test', accountId: 'alice' });
+        const input = { summary: 'Progress before completion' };
+        const publication = { sessionId: 'source-session', localId: 'update-1', persisted: true };
+        boundary.session.mockResolvedValueOnce(publication);
+        const execute = createDefaultActionExecutor();
+        const context = { surface, authority: 'account_automation' as const, serverId: home, defaultSessionId: 'source-session' };
+        expect(await execute.execute('session.update.post', input, context)).toEqual({ ok: true, result: publication });
+        expect(boundary.session).toHaveBeenCalledWith(expect.objectContaining({
+            serverId: home, sessionId: 'source-session', method: 'session.update.post', payload: input,
+        }));
+        boundary.session.mockImplementationOnce(async () => {
+            await harness.switchAccount(home, 'bob');
+            return publication;
+        });
+        // This result is the original invoker's persistence receipt, not source
+        // content. The shared Account context preserves completed effects.
+        expect(await execute.execute('session.update.post', input, context))
+            .toEqual({ ok: true, result: publication });
+    });
+
     it('lets the admitted open Action delegate presentation to its mounted client host', async () => {
         const home = await harness.addHome({ name: 'Home', serverUrl: 'https://home.test', accountId: 'alice' });
         const operation = { version: 1, operationId: 'command', revision: 1, actionId: 'projects.script.run', state: 'succeeded',

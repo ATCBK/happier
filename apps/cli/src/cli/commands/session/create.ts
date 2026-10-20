@@ -208,19 +208,17 @@ export async function cmdSessionCreate(
   }
   const created = parsedCreated.data;
   if (created.type === 'error') {
-    const code = created.code;
+    const { type: _type, code, retryable, ...cause } = created;
+    const error = { code, ...(retryable ? { retryable: true } : {}), ...cause };
     if (structuredCreationOutput) {
       await printJsonEnvelope({
         ok: false,
         kind: 'session_create',
-        error: {
-          code,
-          ...(created.retryable ? { retryable: true } : {}),
-        },
+        error,
       });
       return;
     }
-    throw Object.assign(new Error(code), { code });
+    throw Object.assign(new Error(code === 'agent_signed_out' ? created.launchError?.message ?? code : code), error);
   }
   if (created.type === 'pending') {
     if (structuredCreationOutput) {
@@ -249,6 +247,7 @@ export async function cmdSessionCreate(
   const output = {
     created: created.disposition === 'created',
     session: { id: created.sessionId },
+    initialInput: created.initialInput,
   };
 
   if (waitAfterCreation) {

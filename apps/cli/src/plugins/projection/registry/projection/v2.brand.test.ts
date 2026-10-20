@@ -1,3 +1,4 @@
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { describe, expect, it } from 'vitest';
 
 import type { ResolvedContributionRegistry } from '../types';
@@ -5,22 +6,7 @@ import type { ResolvedContributionRegistry } from '../types';
 import { buildPluginProjectionV2 } from './v2';
 
 function emptyRegistry(): ResolvedContributionRegistry {
-    return {
-        agents: [],
-        actions: [],
-        tools: [],
-        commands: [],
-        resources: [],
-        activationTargets: [],
-        actionsById: new Map(),
-        toolsById: new Map(),
-        commandsById: new Map(),
-        resourcesById: new Map(),
-        catalogEntriesById: {},
-        agentDefinitionsById: new Map(),
-        providersByContributionKey: new Map(),
-        pluginDiagnosticsByPluginId: {},
-    };
+    return createResolvedContributionRegistry({});
 }
 
 describe('portable plugin brand catalog projection', () => {

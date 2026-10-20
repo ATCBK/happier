@@ -13,7 +13,7 @@ import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerS
 
 import { describeSessionLineage, useSessionLineage, type SessionLineageAncestor } from './sessionLineage';
 
-type SessionLineagePresentation = 'breadcrumb' | 'reportsTo';
+type SessionLineagePresentation = 'breadcrumb' | 'manager';
 
 /**
  * The lineage breadcrumb of a Session that reports to a lead (ORC §3.8 header; lab `session-E`): the
@@ -49,7 +49,7 @@ export const SessionLineageNavigation = React.memo(
       sessionId,
       serverId: props.serverId,
     }) as never);
-    if (props.presentation === 'reportsTo') {
+    if (props.presentation === 'manager') {
       const lead = lineage[lineage.length - 1]!;
       return (
         <HappierPressable

@@ -1,47 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  buildCodexTerminalArgs,
   buildCodexTerminalChildEnv,
   normalizeCodexTerminalSessionId,
   resolveCodexTerminalRolloutDiscoveryConfig,
   resolveCodexTerminalSessionsRootDir,
 } from './invocation.js';
 
-const resolvePermissionPolicy = (permissionMode: string) => ({
-  approvalPolicy: permissionMode === 'read-only' ? 'never' : 'on-request',
-  sandbox: permissionMode === 'read-only' ? 'read-only' : 'workspace-write',
-});
-
 describe('Codex terminal invocation policy', () => {
-  it('omits approval and sandbox flags for default mode', () => {
-    expect(buildCodexTerminalArgs({
-      cwd: '/repo',
-      permissionMode: 'default',
-      resolvePermissionPolicy,
-    })).toEqual(['--cd', '/repo']);
-  });
-
-  it('adds resume id, permission flags, and native Codex args for non-default mode', () => {
-    expect(buildCodexTerminalArgs({
-      cwd: '/repo',
-      resumeId: 'resume-1',
-      permissionMode: 'read-only',
-      codexArgs: ['exec'],
-      resolvePermissionPolicy,
-    })).toEqual([
-      'resume',
-      'resume-1',
-      '--cd',
-      '/repo',
-      '--ask-for-approval',
-      'never',
-      '--sandbox',
-      'read-only',
-      'exec',
-    ]);
-  });
-
   it('removes Codex-internal thread env while preserving CODEX_HOME', () => {
     expect(buildCodexTerminalChildEnv({
       env: {

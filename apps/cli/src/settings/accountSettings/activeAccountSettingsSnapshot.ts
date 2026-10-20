@@ -10,6 +10,8 @@ import type { NotificationChannelCatalogSnapshotV1 } from '@happier-dev/protocol
 import type { AcpCatalogSnapshotV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import type { McpServerCatalogSnapshotV1 } from '@happier-dev/protocol/mcp/servers/serverCatalogV1';
 import { isDeepStrictEqual } from 'node:util';
+import { createHash } from 'node:crypto';
+import { materializeExternalSessionSourceInstances, type ExternalSessionSourceDeclarationInput } from '@happier-dev/protocol/plugins/backendExternalSessionSourceInstances';
 import type { ConnectedPresentationCatalogSnapshotV1, ConnectedAcknowledgementsCatalogSnapshotV1 } from '@happier-dev/protocol/connect/connectedAccountPresentationRowsV1';
 import type { AccountRoleOverridesReadV1 } from '@happier-dev/protocol/prompts/roles/roleOverrideRecordV1';
 import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
@@ -133,20 +135,37 @@ function emitActiveAccountSettingsSnapshot(
 export function preserveAccountCatalogsInSnapshot(
   previous: ActiveAccountSettingsSnapshot | null,
   next: ActiveAccountSettingsSnapshot,
+  previousSource?: ActiveAccountSettingsSnapshot | null,
 ): ActiveAccountSettingsSnapshot {
+  // A captured reader can hydrate domains privately. Refreshing its source's
+  // preferences or another domain must retain those reads when the source did
+  // not change that domain; an actual source change still wins.
+  const sourceUnchangedAccount = previousSource && belongsToSameAccount(previousSource, next);
   const inherited = previous && belongsToSameAccount(previous, next)
-    ? independentAccountFields.filter(field => next[field] === undefined && previous[field] !== undefined)
+    ? independentAccountFields.filter(field => (next[field] === undefined
+      || sourceUnchangedAccount && next[field] === previousSource[field]) && previous[field] !== undefined)
     : [];
   let accepted: ActiveAccountSettingsSnapshot = inherited.length > 0 && previous
     ? { ...next, ...Object.fromEntries(inherited.map(field => [field, previous[field]])) }
     : next;
   if (previous && belongsToSameAccount(previous, accepted)) {
+    // A private source read can be newer than the ambient Settings underneath
+    // an independent catalog publication. Keep that accepted Settings read,
+    // while catalogs and current key material still reconcile from the source.
+    if (accepted.settingsVersion < previous.settingsVersion) {
+      accepted = { ...accepted, source: previous.source, settings: previous.settings,
+        rawSettings: previous.rawSettings, settingsVersion: previous.settingsVersion, loadedAtMs: previous.loadedAtMs };
+    }
     // A newer observation can advance revision/timing without changing the
     // preferences or material consumed by an admitted operation.
     const unchanged = (['settings', 'rawSettings', 'settingsSecretsReadKeys'] as const)
       .filter(field => previous[field] !== accepted[field] && isDeepStrictEqual(previous[field], accepted[field]));
     if (unchanged.length > 0) accepted = { ...accepted,
       ...Object.fromEntries(unchanged.map(field => [field, previous[field]])) };
+    if (accepted.providerConnectionsCatalog && accepted.providerConnectionsCatalog !== previous.providerConnectionsCatalog) accepted = { ...accepted,
+      providerConnectionsCatalog: preserveProviderConnectionsCatalogAuthority(
+        previous.providerConnectionsCatalog, accepted.providerConnectionsCatalog),
+    };
   }
   if (previous && belongsToSameAccount(previous, accepted)
     && !isDeepStrictEqual(previous.settingsSecretsReadKeys, accepted.settingsSecretsReadKeys)) {
@@ -446,6 +465,18 @@ export function readConnectedAccountCatalogFromSnapshot(snapshot: ActiveAccountS
     ?? { status: 'loading' };
 }
 
+/** A row reobservation precedes cleanup; omitted phase metadata cannot erase the same row's observed outcome. */
+export function preserveConnectedAccountCatalogCleanup(
+  previous: ConnectedAccountCatalogSnapshotV1 | undefined,
+  next: ConnectedAccountCatalogSnapshotV1,
+): ConnectedAccountCatalogSnapshotV1 {
+  return previous?.status === 'ready' && next.status === 'ready'
+    && previous.cleanup !== undefined && next.cleanup === undefined
+    && previous.revision === next.revision && isDeepStrictEqual(previous.record, next.record)
+    ? { ...next, cleanup: previous.cleanup }
+    : next;
+}
+
 /** The row revision is independent of Account preferences; the existing Account lifetime owns publication. */
 export function commitActiveConnectedAccountCatalog(input: Readonly<{
   scopeKey: string; lifetimeToken: number; key: ConnectedAccountCatalogKeyV1; catalog: ConnectedAccountCatalogSnapshotV1;
@@ -454,8 +485,9 @@ export function commitActiveConnectedAccountCatalog(input: Readonly<{
     || input.catalog.status === 'ready' && input.catalog.record.key !== input.key) return false;
   const incumbent = published?.scopeKey === input.scopeKey
     ? readConnectedAccountCatalogFromSnapshot(published, input.key) : undefined;
-  const unchanged = incumbent !== undefined && JSON.stringify(incumbent) === JSON.stringify(input.catalog);
-  const catalog = unchanged ? incumbent : input.catalog;
+  const observed = preserveConnectedAccountCatalogCleanup(incumbent, input.catalog);
+  const unchanged = incumbent !== undefined && isDeepStrictEqual(incumbent, observed);
+  const catalog = unchanged ? incumbent : observed;
   const next = input.key === 'configurations' ? { ...active, connectedConfigurationCatalog: catalog }
     : { ...active, connectedPurposeCatalog: catalog };
   active = next;
@@ -474,16 +506,30 @@ export function beginActiveConnectedAccountCatalogRefresh(input: Readonly<{
   return true;
 }
 
+function preserveProviderConnectionsCatalogAuthority(
+  incumbent: ActiveAccountSettingsSnapshot['providerConnectionsCatalog'],
+  next: ProviderConnectionsCatalogSnapshotV1,
+): ProviderConnectionsCatalogSnapshotV1 {
+  // Cleanup is not a new row authority. Keep the admitted catalog identity
+  // when a reobserved equal row gains its independent maintenance outcome.
+  return incumbent?.status === 'ready' && next.status === 'ready'
+    && incumbent.revision === next.revision && isDeepStrictEqual(incumbent.catalog, next.catalog)
+    ? { ...next, catalog: incumbent.catalog }
+    : next;
+}
+
 /** Change the Provider facet without serializing a domain mirror in preferences. */
 export function replaceProviderConnectionsCatalogInSnapshot(snapshot: ActiveAccountSettingsSnapshot,
   catalog: ProviderConnectionsCatalogSnapshotV1): ActiveAccountSettingsSnapshot {
-  return { ...snapshot, providerConnectionsCatalog: catalog };
+  return { ...snapshot, providerConnectionsCatalog: preserveProviderConnectionsCatalogAuthority(snapshot.providerConnectionsCatalog, catalog) };
 }
 
 export function commitActiveProviderConnectionsCatalog(input: Readonly<{
   scopeKey: string; lifetimeToken: number; catalog: ProviderConnectionsCatalogSnapshotV1;
 }>): boolean {
-  return commitActiveAccountCatalog({ ...input, facet: 'providerConnectionsCatalog' });
+  const incumbent = published?.scopeKey === input.scopeKey ? published.providerConnectionsCatalog : undefined;
+  const catalog = preserveProviderConnectionsCatalogAuthority(incumbent, input.catalog);
+  return commitActiveAccountCatalog({ ...input, catalog, facet: 'providerConnectionsCatalog' });
 }
 
 export function beginActiveProviderConnectionsCatalogRefresh(input: Readonly<{ scopeKey: string; lifetimeToken: number }>): boolean {
@@ -731,16 +777,29 @@ export function resolveActiveAccountSettingsSnapshotRevision(
 }
 
 /**
- * The configured External Session source revision. It extends the Account
- * Settings revision with the active Account lifetime and Connected Services
- * projection so source materializers use their existing revision lifecycle
- * when either input changes.
+ * Configured sources consume declared source settings and Connected Services, not
+ * the independently hydrated Profile, Prompt, Provider or MCP catalogs. A
+ * catalog publication or a newer read timestamp must not retire a live native
+ * transcript follower. Keep actual source/availability changes and Account
+ * lifetime or Connected Services revocation in the existing source lifecycle.
  */
 export function resolveActiveAccountConfiguredExternalSessionSourceRevision(
   snapshot: ActiveAccountSettingsSnapshot | null,
+  sources: readonly ExternalSessionSourceDeclarationInput[] = [],
+  activeServerId: string | null = null,
 ): string {
+  const sourceSettings = sources.filter(source => source.instances?.some(instance =>
+    instance.kind === 'agentSetting' || instance.kind === 'agentSettingOverride')).map(declaration =>
+    materializeExternalSessionSourceInstances({ declaration, agentSettings: snapshot?.settings, activeServerId }));
+  // Key withdrawal must still fence retained source reads. Private source
+  // settings and key material must not appear in revision diagnostics.
+  const facts = createHash('sha256').update(JSON.stringify(sourceSettings));
+  for (const key of snapshot?.settingsSecretsReadKeys ?? []) facts.update(`${key.length}:`).update(key);
   return [
-    resolveActiveAccountSettingsSnapshotRevision(snapshot),
+    snapshot
+      ? `${snapshot.scopeKey ?? 'active'}:${snapshot.source === 'none' ? 'unavailable' : 'available'}`
+      : 'account-profile:bootstrap',
+    facts.digest('hex'),
     'connected-services',
     activeLifetimeToken,
     activeConnectedServicesProjectionRevision,

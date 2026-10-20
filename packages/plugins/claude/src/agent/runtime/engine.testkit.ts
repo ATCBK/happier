@@ -39,6 +39,16 @@ type ClaudeTestPluginContext = ClaudeAgentSdkContext & ClaudeUnifiedTerminalCont
     }>;
   }>;
 }>;
+type SessionDecisionRequester = NonNullable<ClaudeTestPluginContext['sessions']['current']>['permissions']['requestDecision'];
+
+/** Model the host's apply-before-settle acknowledgement at the plugin service boundary. */
+export function withPermissionDecisionApplication(requestDecision: SessionDecisionRequester): SessionDecisionRequester {
+  return async (request, options) => {
+    const result = await requestDecision(request, options);
+    await options?.acknowledgeDecisionApplication?.(result);
+    return result;
+  };
+}
 type ClaudeTestEventListener = (event: Readonly<{
   id: string;
   payload: unknown;

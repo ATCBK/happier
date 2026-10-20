@@ -43,6 +43,7 @@ import { useServicesOpenInBrowser } from '@/components/sessions/localServices/us
 import { ProjectRightPanelBrowserView } from './browser/ProjectRightPanelBrowserView';
 import { ProjectRightPanelServicesView } from './services/ProjectRightPanelServicesView';
 import { ProjectScriptsBody } from '@/components/projects/projectSetup/ProjectScriptsBody';
+import { ProjectWidgetsPane } from './ProjectOverviewWidgets';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { ProjectBrowseFilesSurface } from './surfaces/ProjectBrowseFilesSurface';
 import { ProjectGitSurface } from './surfaces/ProjectGitSurface';
@@ -282,7 +283,7 @@ const ProjectRightSidebarContext = React.createContext<ReturnType<typeof useProj
 
 export function ProjectRightSidebarProvider(props: React.PropsWithChildren<ProjectRightPanelProps>): React.ReactElement {
     const model = useProjectRightSidebarModel(props);
-    // The Project page announces its checkout's reachability once (ProjectCockpitShell); its panes inherit it.
+    // The Project page and this pane each head their column with the checkout's reachability line; surfaces beneath inherit it.
     return <ProjectRightSidebarContext.Provider value={model}>
         <CheckoutReachabilityScope scope={model.workspaceScope}>{props.children}</CheckoutReachabilityScope>
     </ProjectRightSidebarContext.Provider>;
@@ -383,9 +384,8 @@ function ProjectRightPanelContent(props: ProjectRightPanelProps & Readonly<{
                 onClose={deviceType === 'phone' ? props.onRequestClose ?? props.model.pane.closeRight : undefined}
                 testID="project-rightpanel-header"
             />
-            {/* A phone pane is its own page over the Project, whose line it covers: it says it here, once. */}
-            {deviceType === 'phone'
-                ? <CheckoutReachabilityLine scope={workspaceScope} testID="project-rightpanel-reachability" /> : null}
+            {/* The page's line spans only its own column, and a phone pane covers it: the pane says it under its header too. */}
+            <CheckoutReachabilityLine scope={workspaceScope} testID="project-rightpanel-reachability" />
             <View style={styles.body}>
                 <SurfaceStateSizeProvider size={deviceType === 'phone' ? 'phone' : 'pane'}>
                 {rightTabSelection.kind === 'unresolved' ? (
@@ -429,6 +429,14 @@ function ProjectRightPanelContent(props: ProjectRightPanelProps & Readonly<{
                             <React.Suspense fallback={<PaneLoadingFallback />}>
                                 {checkoutWorkspace ? <ProjectScriptsBody workspace={checkoutWorkspace} presentation="widget" testID="project-rightpanel-scripts" outputScopeId={props.scopeId} />
                                     : <SurfaceStateCard kind="unavailable" title={t('common.unavailable')} testID="project-rightpanel-scripts-unavailable" />}
+                            </React.Suspense>
+                        </RetainedPanelSurface>
+                    ) : null}
+                    {availableTabIds.has('widgets') ? (
+                        <RetainedPanelSurface isActive={activeTab === 'widgets'} testID="project-rightpanel-surface-widgets">
+                            <React.Suspense fallback={<PaneLoadingFallback />}>
+                                <ProjectWidgetsPane workspaceRef={props.workspaceRef} activeRootPath={props.activeRootPath}
+                                    testID="project-rightpanel-widgets" />
                             </React.Suspense>
                         </RetainedPanelSurface>
                     ) : null}

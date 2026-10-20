@@ -1,3 +1,4 @@
+import { EXECUTION_RUN_KIND_BY_INTENT } from '@happier-dev/protocol/execution/runs/startRequest';
 import type { ExecutionRunPublicState } from '@happier-dev/protocol';
 import { AppShellActionOutputSchemas } from '@happier-dev/protocol/actions/appShellActionFamily';
 import * as React from 'react';
@@ -8,6 +9,7 @@ import { useUnistyles } from 'react-native-unistyles';
 
 import {
     isExecutionRunNotRunningMutationError,
+    isExecutionRunMutationCancelled,
     sessionExecutionRunGet,
 } from '@/sync/ops/sessionExecutionRuns';
 import {
@@ -62,7 +64,7 @@ import { useAcpCatalog } from '@/sync/store/useAcpCatalog';
 import { useSessionViewShellSession } from '@/components/sessions/shell/sessionViewStableSession';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 import { PoliteAccessibilityStatus } from '@/components/ui/accessibility/PoliteAccessibilityStatus';
-import { useSessionDiscussionTitles } from '@/components/sessions/conversations/useSessionDiscussionTitles';
+import { useDiscussionTitles } from '@/components/discussions/useDiscussionTitles';
 import { readRunDiscussionOrigin } from '@/components/sessions/agents/presentation/useSessionAgentRowOriginLabels';
 import { ExecutionRunContextChip } from '@/components/sessions/runs/ExecutionRunContextChip';
 import { useSessionAgentActivityRoster } from '@/hooks/session/useSessionAgentActivity';
@@ -207,11 +209,15 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
     // request may write state. Without this an older response overwrites a newer
     // one and the surface silently shows a superseded Run.
     const loadGenerationRef = React.useRef(0);
+    const loadControllerRef = React.useRef<AbortController | null>(null);
 
     const load = React.useCallback(async () => {
+        loadControllerRef.current?.abort();
+        const controller = new AbortController();
+        loadControllerRef.current = controller;
         const generation = loadGenerationRef.current + 1;
         loadGenerationRef.current = generation;
-        const isCurrentRequest = () => loadGenerationRef.current === generation;
+        const isCurrentRequest = () => !controller.signal.aborted && loadGenerationRef.current === generation;
         if (!props.sessionId || !props.runId) {
             setState({ status: 'error', error: t('runs.runDetails.failedToLoad') });
             return;
@@ -223,11 +229,9 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
             setState({ status: 'error', error: t('common.unavailable') });
             return;
         }
-        const rpcOptions = explicitServerId ? { serverId: explicitServerId } : undefined;
+        const rpcOptions = { ...(explicitServerId ? { serverId: explicitServerId } : {}), signal: controller.signal };
         const getRun = (request: Readonly<{ runId: string; includeStructured: true }>) => (
-            rpcOptions
-                ? sessionExecutionRunGet(props.sessionId, request, rpcOptions)
-                : sessionExecutionRunGet(props.sessionId, request)
+            sessionExecutionRunGet(props.sessionId, request, rpcOptions)
         );
         if (loadedRunAddressRef.current !== runAddressKey) {
             setState({ status: 'loading' });
@@ -250,6 +254,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                 serverId: explicitServerId,
                 runId: props.runId,
                 transcriptFallback,
+                signal: controller.signal,
             }).catch(() => null);
             if (!isCurrentRequest()) return;
             const fallbackState = resolveExecutionRunGetFailureLoadedState({
@@ -299,6 +304,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
             sessionId: props.sessionId,
             serverId: explicitServerId,
             runId: props.runId,
+            signal: controller.signal,
             transcriptFallback: transcriptFallback ?? {
                 run,
                 latestToolResult: result.latestToolResult,
@@ -312,6 +318,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
 
     React.useEffect(() => {
         void load();
+        return () => loadControllerRef.current?.abort();
     }, [load]);
 
     React.useImperativeHandle(ref, () => ({
@@ -508,17 +515,17 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
         : null;
     const canShowSendComposer = props.showSendComposer !== false && interactionAffordances.canSend;
     // The conversation this Run was started from (Ask Agent), named in the header and shown as the
-    // body's context chip. Only a same-Session Discussion origin has one.
-    const discussionOrigin = state.status === 'loaded' ? readRunDiscussionOrigin(state.run.launchOrigin, props.sessionId) : null;
+    // body's context chip. Its source is qualified by the captured Home.
+    const discussionOrigin = state.status === 'loaded' ? readRunDiscussionOrigin(state.run.launchOrigin, explicitServerId ?? session?.serverId) : null;
     const discussionOriginAddress = React.useMemo(
-        () => normalizeSessionAddress(explicitServerId ?? session?.serverId ?? null, props.sessionId),
-        [explicitServerId, props.sessionId, session?.serverId],
+        () => discussionOrigin ? { serverId: discussionOrigin.serverId } : null,
+        [discussionOrigin?.serverId],
     );
     const discussionOriginIds = React.useMemo(
         () => discussionOrigin ? [discussionOrigin.discussionId] : NO_DISCUSSION_IDS,
         [discussionOrigin?.discussionId],
     );
-    const discussionTitles = useSessionDiscussionTitles({
+    const discussionTitles = useDiscussionTitles({
         address: discussionOrigin ? discussionOriginAddress : null,
         discussionIds: discussionOriginIds,
     });
@@ -563,7 +570,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                 const result = await executeAction('execution.run.stop', { sessionId: props.sessionId, runId: props.runId }, {
                     onTransportIssued: () => { transportIssued = true; },
                 });
-                if (!actionScopeIsCurrent()) return;
+                if (!actionScopeIsCurrent() || isExecutionRunMutationCancelled(result)) return;
                 if (result.ok === false) {
                     setStopError(String(result.error ?? t('runs.stop.failedToStopRun')));
                     if (!transportIssued) setInteractionError(String(result.error ?? t('runs.stop.failedToStopRun')));
@@ -577,7 +584,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                     await load();
                 }
             } catch (error) {
-                if (!actionScopeIsCurrent()) return;
+                if (!actionScopeIsCurrent() || isExecutionRunMutationCancelled(error)) return;
                 setStopError(error instanceof Error ? error.message : t('runs.stop.failedToStopRun'));
                 if (!transportIssued) setInteractionError(error instanceof Error ? error.message : t('runs.stop.failedToStopRun'));
                 setStopUnconfirmed(transportIssued);
@@ -759,7 +766,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
             <View style={{ flex: 1, minHeight: 0, paddingHorizontal: theme.space.s16, paddingVertical: theme.space.s12, gap: theme.space.s12 }}>
             <View style={{ gap: theme.space.s8 }}>
                 {/* A walkthrough or commit-proposal Run offers its own notification beside the output it writes. */}
-                {canMutateRunViaSessionRpc && state.run.status === 'running' && structuredMeta?.kind !== 'scm_diff_summary.v1' ? (
+                {canMutateRunViaSessionRpc && state.run.status === 'running' && structuredMeta?.kind !== EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary ? (
                     <SessionRunWorkNotifications sessionId={props.sessionId} runId={props.runId} serverId={explicitServerId} />
                 ) : null}
                 {discussionOrigin ? (
@@ -995,7 +1002,7 @@ const SessionExecutionRunDetailsContent = React.forwardRef<SessionExecutionRunDe
                         />
                     ) : null}
                     {canShowSendComposer && leadTitle ? (
-                        <Text testID="session-run-details-replies-foot" style={{ color: theme.colors.text.secondary, fontSize: 12 }}>
+                        <Text testID="session-run-details-replies-foot" numberOfLines={2} style={{ color: theme.colors.text.secondary, fontSize: 12 }}>
                             {t('agentStart.pane.repliesGoTo', { session: leadTitle })}
                         </Text>
                     ) : null}

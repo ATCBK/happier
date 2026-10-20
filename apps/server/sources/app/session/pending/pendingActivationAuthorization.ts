@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
+import { z } from 'zod/mini';
 import { PendingRequestedActionV1StoredSchema } from '@happier-dev/protocol/sessions/pending/pendingRequestedActionV1';
 import { SessionInputAdmissionReceiptV1Schema, type SessionInputAdmissionReceiptV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { ManagedWakeTargetV1Schema } from '@happier-dev/protocol/machines/managed/managedIntentV1';
@@ -8,17 +9,20 @@ import type { SessionInputMachineTargetV1 } from '@happier-dev/protocol/sessions
 import { TransactionReplayRequiredError, type Tx } from '@/storage/inTx';
 import { acquireSessionAccountCursorLocksInTx } from '@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx';
 import { getActivePrismaRuntime } from '@/storage/db';
-import { resolveManagedWakeTargetInTx } from '@/app/machines/managed/managedWake';
-import { markAccountChanged } from '@/app/changes/markAccountChanged';
+import { readManagedPendingActivationHoldReasonInTx, resolveManagedWakeTargetInTx } from '@/app/machines/managed/managedWake';
+import { projectManagedMachine } from '@/app/machines/managed/managedRows';
+import { markAccountChanged, type AccountChangePublication } from '@/app/changes/markAccountChanged';
 import { readStoredSessionInputAdmissionReceipt, isCurrentSessionInputMachineTargetInTx } from '@/app/session/messages/sessionInputAdmission';
 import type { EffectiveSessionAccess } from '@/app/session/access/sessionAccess';
 import { PendingActivationFailureCodeV1Schema, PendingActivationFailureDetailsV1Schema,
-    type PendingActivationFailureDetailsV1 } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
+    type PendingActivationFailureDetailsV1, type PendingActivationHoldReasonV1 } from '@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1';
+import type { PendingMessageRowRaw } from './mapPendingMessageRow';
 
-const StoredActivationFailureSchema = PendingActivationFailureDetailsV1Schema.extend({ failureCode: PendingActivationFailureCodeV1Schema }).strict();
+const StoredActivationFailureSchema = z.extend(PendingActivationFailureDetailsV1Schema, { failureCode: PendingActivationFailureCodeV1Schema });
 
 function readStoredActivationFailure(value: unknown) {
-    if (value === 'runtime_start_failed') return { failureCode: value } as const;
+    const code = PendingActivationFailureCodeV1Schema.safeParse(value);
+    if (code.success) return { failureCode: code.data };
     if (typeof value !== 'string') return undefined;
     try { return StoredActivationFailureSchema.safeParse(JSON.parse(value)).data; } catch { return undefined; }
 }
@@ -35,6 +39,9 @@ export function mapPendingActivationFailureDetails(row: object): PendingActivati
 export type PendingActivationTarget = Readonly<{ accountId: string; requestId: string;
     machinePublication?: Readonly<{ target: SessionInputMachineTargetV1; custodianAccountId: string; requestedAt: number }>;
     managedControllerPublication?: Readonly<{ accountId: string; cursor: number }> }>;
+
+export type PendingActivationPublicationTarget = Omit<PendingActivationTarget, 'managedControllerPublication'>
+    & Readonly<{ managedControllerPublication?: AccountChangePublication }>;
 
 /**
  * Cursor lock audience only. Include the target Machine's owner even before
@@ -88,6 +95,36 @@ export function shouldArmPendingActivationAuthorization(params: Readonly<{
         || (params.resumeWhenAvailable !== false && params.requestedAction.kind === 'send_now'));
 }
 
+/** Queue diagnostics use current admitted placement; they never create activation or block ordinary delivery. */
+export async function readPendingActivationHoldReasonsInTx(tx: Tx, input: Readonly<{
+    sessionId: string; actorAccountId: string; rows: readonly PendingMessageRowRaw[];
+}>): Promise<ReadonlyMap<string, PendingActivationHoldReasonV1>> {
+    const holds = new Map<string, PendingActivationHoldReasonV1>();
+    const session = await tx.session.findUnique({ where: { id: input.sessionId }, select: AUTHORIZATION_SELECT });
+    if (!session || session.accountId !== input.actorAccountId) return holds;
+    const candidates = input.rows.flatMap(row => {
+        const action = PendingRequestedActionV1StoredSchema.safeParse(row.requestedAction ?? { v: 1, kind: 'enqueue' });
+        if (row.status !== 'queued' || row.targetExecutionRunId != null || row.deliveryState != null
+            || row.providerAction != null || !action.success || !['enqueue', 'send_now'].includes(action.data.kind)) return [];
+        const receipt = readPendingOwnerInputAdmission({ sessionId: input.sessionId, accountId: session.accountId,
+            pending: { messageRole: typeof row.messageRole === 'string' ? row.messageRole : null,
+                authorAccountId: row.authorAccountId, inputAdmissionReceipt: row.inputAdmissionReceipt } });
+        return receipt?.admittedTarget ? [{ localId: row.localId, target: receipt.admittedTarget }] : [];
+    });
+    const activation = mapPendingActivationAuthorization(session);
+    const targets = new Map(candidates.map(candidate => [JSON.stringify(candidate.target), candidate.target]));
+    for (const target of targets.values()) {
+        if (!await isCurrentSessionInputMachineTargetInTx(tx, target)) continue;
+        const resumeRequested = Boolean(activation?.status === 'waiting' && activation.managedWakeTargetV1
+            && candidates.some(candidate => candidate.localId === activation.requestId
+            && isDeepStrictEqual(candidate.target, target)));
+        const reason = await readManagedPendingActivationHoldReasonInTx(tx, { actorAccountId: session.accountId,
+            machineId: target.machineId, homeId: target.homeId, resumeRequested });
+        if (reason) for (const candidate of candidates) if (isDeepStrictEqual(candidate.target, target)) holds.set(candidate.localId, reason);
+    }
+    return holds;
+}
+
 const AUTHORIZATION_SELECT = {
     accountId: true,
     lastActiveAt: true,
@@ -118,21 +155,14 @@ function nextRequestedAt(params: Readonly<{
     ));
 }
 
-export function clearPendingActivationAuthorizationForPublisherActivityData() {
-    return clearAuthorizationData();
-}
-
 export function mapPendingActivationAuthorization(row: object): PendingActivationAuthorizationV1 | undefined {
     const value = row as Record<string, unknown>;
     const requestId = value.pendingActivationRequestId;
     const requestedAt = value.pendingActivationRequestedAt;
-    const lastActiveAt = value.lastActiveAt;
     const status = value.pendingActivationStatus;
     if (
         typeof requestId !== 'string'
         || !(requestedAt instanceof Date)
-        || !(lastActiveAt instanceof Date)
-        || requestedAt.getTime() <= lastActiveAt.getTime()
     ) return undefined;
     const target = createStoredReadSchema(ManagedWakeTargetV1Schema).safeParse(value.pendingActivationManagedTarget);
     const managedWakeTargetV1 = target.success && target.data.origin.kind === 'session-input'
@@ -161,7 +191,7 @@ export async function armPendingActivationAuthorizationInTx(params: Readonly<{
     currentAccess: Pick<EffectiveSessionAccess, 'accountId' | 'sessionId' | 'level'>;
     now?: Date;
     resumeWhenAvailable?: true;
-}>): Promise<PendingActivationTarget | undefined> {
+}>): Promise<PendingActivationPublicationTarget | undefined> {
     // Immutable input provenance is not current mutation authority. An editor
     // may change an owner's queued input without borrowing its owner activation.
     if (params.currentAccess.level !== 'owner' || params.currentAccess.sessionId !== params.sessionId) return undefined;
@@ -242,11 +272,12 @@ export async function armPendingActivationAuthorizationInTx(params: Readonly<{
             pendingActivationManagedTarget: managedTarget ?? getActivePrismaRuntime().DbNull,
         },
     });
-    let managedControllerPublication: PendingActivationTarget['managedControllerPublication'];
+    let managedControllerPublication: PendingActivationPublicationTarget['managedControllerPublication'];
     if (managedTarget) {
         const controller = await params.tx.machine.findUniqueOrThrow({ where: { id: managedTarget.controller.machineId }, select: { accountId: true } });
-        managedControllerPublication = { accountId: controller.accountId,
-            cursor: await markAccountChanged(params.tx, { accountId: controller.accountId, kind: 'machine', entityId: managedTarget.controller.machineId }) };
+        managedControllerPublication = await markAccountChanged(params.tx, {
+            accountId: controller.accountId, kind: 'machine', entityId: managedTarget.controller.machineId,
+        });
     }
     const targetMachine = admittedTarget ? await params.tx.machine.findUniqueOrThrow({ where: { id: admittedTarget.machineId }, select: { accountId: true } }) : undefined;
     return { accountId: session.accountId, requestId: params.requestId,
@@ -259,8 +290,7 @@ export async function armPendingActivationAuthorizationInTx(params: Readonly<{
 export async function readPendingActivationTargetInTx(tx: Tx, sessionId: string): Promise<PendingActivationTarget | undefined> {
     const session = await tx.session.findUnique({ where: { id: sessionId }, select: { ...AUTHORIZATION_SELECT, archivedAt: true } });
     if (!session || session.archivedAt !== null || session.pendingActivationStatus !== 'waiting'
-        || !session.pendingActivationRequestId || !session.pendingActivationRequestedAt
-        || session.pendingActivationRequestedAt <= session.lastActiveAt) return undefined;
+        || !session.pendingActivationRequestId || !session.pendingActivationRequestedAt) return undefined;
     const row = await tx.sessionPendingMessage.findUnique({ where: { sessionId_localId: {
         sessionId, localId: session.pendingActivationRequestId }, targetExecutionRunId: null },
         select: { status: true, messageRole: true, deliveryState: true, providerAction: true,
@@ -306,13 +336,28 @@ export async function markPendingActivationAuthorizationFailedInTx(params: Reado
     failureDetails?: PendingActivationFailureDetailsV1;
 }>): Promise<boolean> {
     await acquireSessionAccountCursorLocksInTx(params.tx, [params.sessionId]);
+    if (params.failureCode === 'runtime_start_failed') {
+        const session = await params.tx.session.findUnique({ where: { id: params.sessionId }, select: AUTHORIZATION_SELECT });
+        const authorization = session ? mapPendingActivationAuthorization(session) : undefined;
+        const target = authorization?.managedWakeTargetV1;
+        if (authorization?.status === 'waiting' && target && authorization.requestId === params.requestId
+            && authorization.requestedAt === params.requestedAt.getTime()) {
+            // A runtime report cannot settle compute's still-pending wake.
+            // Its signed policy owner reports definite power/Ask failures;
+            // ordinary Agent-start failures apply only after compute runs.
+            const row = await params.tx.managedMachine.findUnique({ where: { id: target.managedId } });
+            if (!row || row.homeId !== target.homeId || row.enrolledMachineId !== target.enrolledMachineId) return false;
+            const machine = projectManagedMachine(row);
+            if (machine.observation?.availability !== 'present' || machine.observation.power !== 'running'
+                || machine.observation.storage === 'lost' || machine.submittedNativeEffect) return false;
+        }
+    }
     const updated = await params.tx.session.updateMany({
         where: {
             id: params.sessionId,
             pendingActivationRequestId: params.requestId,
             pendingActivationRequestedAt: params.requestedAt,
             pendingActivationStatus: 'waiting',
-            lastActiveAt: { lt: params.requestedAt },
         },
         data: {
             pendingActivationStatus: 'failed',

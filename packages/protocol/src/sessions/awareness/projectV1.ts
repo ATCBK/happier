@@ -76,6 +76,7 @@ export function projectSessionAwarenessV1(
   if (!contentReadable) operational.reasons.push('content_locked');
 
   const title = contentReadable ? normalizeAwarenessTextV1(input.title) : null;
+  const statusReason = contentReadable ? normalizeAwarenessTextV1(input.statusReason) : null;
   const currentWork = projectSessionAwarenessWorkHeadlineV1({
     work: input.work,
     workflowHeadline: input.workflowHeadline,
@@ -89,10 +90,11 @@ export function projectSessionAwarenessV1(
     v: SESSION_AWARENESS_PROJECTION_VERSION_V1,
     sessionId: input.sessionId,
     ...(input.origin ? { origin: input.origin } : {}),
-    ...(input.reportsTo ? { reportsTo: input.reportsTo } : {}),
-    ...(input.reports ? { reports: input.reports } : {}),
+    ...(input.manager ? { manager: input.manager } : {}),
+    ...(input.managedSessions ? { managedSessions: input.managedSessions } : {}),
     ...(input.pendingReviewRuns !== undefined && input.pendingReviewRuns !== null ? { pendingReviewRuns: normalizeAwarenessCountV1(input.pendingReviewRuns) } : {}),
     ...(title ? { title } : {}),
+    ...(statusReason ? { statusReason } : {}),
     lifecycle: resolveSessionAwarenessLifecycleV1(lifecycle, lifecycleUnavailable),
     runtime: runtimeFacts.runtime,
     freshness: runtimeFacts.freshness,

@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 
 import { AttentionDeliveryEventIdSchema } from '../account/settings/attentionDeliveryPolicy.js';
 import { resolveActivityRequestEventIdentityV1 } from '../activity/eventIdentity.js';
+import { SessionPersonalEventEphemeralV1Schema } from '../updates/index.js';
+import { isSessionFollowStalledOccurrenceCurrentV1 } from '../sessions/follow/sessionFollowSourceOccurrenceV1.js';
 
 import {
   ACTIVITY_REMOTE_ALERT_EVENT_TYPES_V1,
@@ -17,6 +19,27 @@ import {
 } from './activityRemoteAlert.js';
 
 describe('ActivityRemoteAlertV1', () => {
+  it('preserves the exact committed stalled witness on existing personal and remote source-state carriers', () => {
+    const stalledOccurrence = { turnId: 'in-flight-turn', publisherFence: 123 };
+    const source = { active: false, latestTurnId: 'in-flight-turn', latestTurnStatus: 'in_progress', activeAt: 123 };
+    expect(isSessionFollowStalledOccurrenceCurrentV1(stalledOccurrence, source)).toBe(true);
+    for (const change of [{ active: true }, { activeAt: 124 }, { latestTurnId: 'replacement' },
+      { latestTurnStatus: 'completed' }, { archivedAt: 124 }]) {
+      expect(isSessionFollowStalledOccurrenceCurrentV1(stalledOccurrence, { ...source, ...change })).toBe(false);
+    }
+    const event = { type: 'source_unavailable', stalledOccurrence };
+    expect(ActivityRemoteAlertEventV2Schema.safeParse(event).success).toBe(true);
+    expect(SessionPersonalEventEphemeralV1Schema.safeParse({ type: 'session-personal-event',
+      sessionId: 'source', eventId: 'committed-stall', event: 'source_unavailable', stalledOccurrence }).success).toBe(true);
+    expect(ActivityRemoteAlertEventV2Schema.safeParse({ ...event,
+      stalledOccurrence: { ...stalledOccurrence, publisherFence: -1 } }).success).toBe(false);
+    expect(ActivityRemoteAlertEventV2Schema.safeParse({ ...event,
+      stalledOccurrence: { ...stalledOccurrence, text: 'private' } }).success).toBe(false);
+    expect(resolveActivityRemoteAlertEventIdentity({ type: 'activity_alert', v: 2, serverId: 'home',
+      sessionId: 'source', accountId: 'viewer', previewBehavior: 'status_only',
+      event: ActivityRemoteAlertEventV2Schema.parse(event) })).toBe('stalled:in-flight-turn:123');
+  });
+
   const alert = {
     type: 'activity_alert', v: 1,
     serverId: 'home-a', sessionId: 'session-a', accountId: 'account-b',
@@ -26,7 +49,7 @@ describe('ActivityRemoteAlertV1', () => {
 
   it('publishes the complete strict event vocabulary for native capability consumers', () => {
     const schemaEventTypes = ActivityRemoteAlertEventV1Schema._zod.def.options.map(
-      (option) => option.shape.type.value,
+      (option) => option.shape.type._zod.def.values[0],
     );
     expect([...ACTIVITY_REMOTE_ALERT_EVENT_TYPES_V1].sort()).toEqual(schemaEventTypes.sort());
   });

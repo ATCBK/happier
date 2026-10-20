@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { HAPPIER_FOCUS_RING_V1, happierFocusRingStyle, isHappierFocusVisible } from './focusVisible.js';
 
@@ -16,6 +16,16 @@ function press(kind: 'pointer' | 'keyboard', key = 'Tab') {
   if (kind === 'pointer') document.dispatchEvent(new Event('pointerdown', { bubbles: true }));
   else document.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
 }
+
+describe('isHappierFocusVisible before any input', () => {
+  it('shows no ring for the focus a page load or deep link moves with no key pressed', async () => {
+    vi.resetModules();
+    const fresh = await import('./focusVisible.js');
+    expect(document.documentElement.getAttribute('data-happier-input-modality')).toBeNull();
+    // The engine calls script focus with no predecessor `:focus-visible`; no key was pressed, so no ring.
+    expect(fresh.isHappierFocusVisible(focusedElement(true))).toBe(false);
+  });
+});
 
 describe('isHappierFocusVisible', () => {
   it('shows no ring for focus that follows a pointer press, whatever the engine reports', () => {

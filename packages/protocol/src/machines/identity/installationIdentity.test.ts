@@ -20,6 +20,17 @@ import {
 } from './installationIdentity.js';
 
 describe('machine installation identity protocol', () => {
+    it('binds the selected native receiver to one exact Session creation body and retained source child', () => {
+        const keys = tweetnacl.sign.keyPair();
+        const payload = { version: 1 as const, machineId: 'selected-model', installationId: 'model-installation', accountId: 'custodian',
+            sessionCreation: { sourceExecutionDigest: 'a'.repeat(43), requestBodyDigest: 'b'.repeat(43) } };
+        const proof = signMachineInstallationProof({ payload, privateKey: keys.secretKey });
+        expect(verifyMachineInstallationProof({ payload, proof, publicKey: keys.publicKey })).toBe(true);
+        expect(verifyMachineInstallationProof({ payload: { ...payload, sessionCreation: { ...payload.sessionCreation,
+            requestBodyDigest: 'c'.repeat(43) } }, proof, publicKey: keys.publicKey })).toBe(false);
+        expect(verifyMachineInstallationProof({ payload: { ...payload, machineId: 'another-model' }, proof, publicKey: keys.publicKey })).toBe(false);
+        expect(MachineInstallationProofPayloadV1Schema.safeParse({ ...payload, sessionCreation: { ...payload.sessionCreation, unexpected: true } }).success).toBe(false);
+    });
     it.each([1, 2] as const)('retains the complete original Project envelope v%s in the existing physical SOURCE proof without inventing a Session', version => {
         const keys = tweetnacl.sign.keyPair();
         const homeId = `srv_${'a'.repeat(32)}`;

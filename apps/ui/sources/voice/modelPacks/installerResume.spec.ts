@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { getModelPackInstallSummary, removeModelPack } from '@/voice/modelPacks/installer.native';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -56,6 +57,40 @@ function streamResponse(bytes: Uint8Array, status: number): any {
 }
 
 describe('Expo native host — real Range resume (FIND-010)', () => {
+  it('reports failed partial reads and rejects required reset failure while absent files stay quiet', async () => {
+    const { fs, files } = createMemFs();
+    const bytes = new Uint8Array([1]);
+    const manifest = makeManifest(bytes);
+    seedResumePlan(files, manifest);
+    files.set('file:///docs/happier/voice/modelPacks/.resume.scratch/model.bin', bytes);
+    files.set(`${PACK_DIR}/model.bin`, bytes);
+    files.set(`${PACK_DIR}/pack.json`, new TextEncoder().encode(JSON.stringify({ manifest })));
+    const readError = new Error('EIO_partial_read');
+    const cleanupError = new Error('EACCES_partial_delete');
+    const BaseFile = fs.File;
+    class FaultyFile extends BaseFile {
+      constructor(...args: unknown[]) {
+        super(...args);
+        Object.defineProperty(this, 'size', { get: () => Number.NaN });
+      }
+      override open(): ReturnType<InstanceType<typeof BaseFile>['open']> { throw readError; }
+      override delete() { throw cleanupError; }
+    }
+    const host = createExpoModelPackInstallerHost({ fs: { ...fs, File: FaultyFile } });
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const staging = await host.beginStaging('resume', deriveModelPackStagingPlan(manifest));
+    try {
+      expect(await staging.partialByteLength('absent.bin')).toBe(0);
+      await staging.resetPartial('absent.bin');
+      expect(warning).not.toHaveBeenCalled();
+      expect(await staging.partialByteLength('model.bin')).toBe(0);
+      await expect(staging.resetPartial('model.bin')).rejects.toBe(cleanupError);
+      expect(files.get('file:///docs/happier/voice/modelPacks/.resume.scratch/model.bin')).toEqual(bytes);
+      expect(files.get(`${PACK_DIR}/model.bin`)).toEqual(bytes);
+      expect(warning.mock.calls.flat()).toContain(readError);
+    } finally { await staging.cleanup(); warning.mockRestore(); }
+  });
+
   it('retains its existing prefix and retries only the interrupted native tail', async () => {
     const { fs, files } = createMemFs();
     const full = new Uint8Array([1, 2, 3, 4, 5, 6]);
@@ -74,7 +109,7 @@ describe('Expo native host — real Range resume (FIND-010)', () => {
     } });
     await expect(installModelPackWithHost({ host, packId: 'resume', manifest, signal: controller.signal })).rejects.toThrow('aborted');
     expect(files.get(scratchFile)).toEqual(prefix);
-    expect(files.has('file:///docs/happier/voice/modelPacks/.resume.download')).toBe(false);
+    expect([...files.keys()].some(path => path.includes('/.resume.downloads/'))).toBe(false);
     const retryHost = createExpoModelPackInstallerHost({ fs, download: createMemNativeDownload(fs, async (_url, init) => {
       expect((init?.headers as Record<string, string>).Range).toBe('bytes=3-');
       return new Response(full.slice(prefix.length), { status: 206 });
@@ -92,7 +127,7 @@ describe('Expo native host — real Range resume (FIND-010)', () => {
     let activeHandles = 0;
     class DiskFile extends BaseFile {
       open() {
-        if (outcome === 'open failure' && this.uri.endsWith('/.resume.download')) throw new Error('disk_open_failed');
+        if (outcome === 'open failure' && this.uri.includes('/.resume.downloads/')) throw new Error('disk_open_failed');
         const handle = super.open();
         activeHandles += 1;
         return { readBytes: handle.readBytes, close: () => { activeHandles -= 1; handle.close(); } };
@@ -110,7 +145,7 @@ describe('Expo native host — real Range resume (FIND-010)', () => {
     await expect(installModelPackWithHost({ host, packId: 'resume', manifest: makeManifest(bytes),
       signal: new AbortController().signal })).rejects.toThrow(outcome === 'open failure' ? 'disk_open_failed' : 'disk_write_failed');
     expect(activeHandles).toBe(0);
-    expect(files.has('file:///docs/happier/voice/modelPacks/.resume.download')).toBe(false);
+    expect([...files.keys()].some(path => path.includes('/.resume.downloads/'))).toBe(false);
     expect(files.get(`${PACK_DIR}/model.bin`)).toEqual(prior);
   });
 
@@ -728,5 +763,76 @@ describe('Expo native host promote rollback intent safety', () => {
     expect(files.get(`file:///docs/happier/voice/modelPacks/${packId}/model.bin`)).toEqual(oldBytes);
     const intent = files.get(`file:///docs/happier/voice/modelPacks/.${packId}.promote-intent`);
     expect(new TextDecoder().decode(intent)).toContain('rollback_pending');
+  });
+});
+
+describe('native concurrent model-pack transfers', () => {
+  it('reports only resumable payload bytes and clears them through explicit removal', async () => {
+    const { fs, files, root } = createMemFs();
+    files.set(`${root}/.summary.scratch/model.bin`, new Uint8Array([1, 2]));
+    files.set(`${root}/.summary.scratch/lang/en`, new Uint8Array([3, 4, 5]));
+    files.set(`${root}/.summary.scratch/.resume-plan.json`, new TextEncoder().encode('{}'));
+    files.set(`${root}/.summary.scratch/pack.json`, new TextEncoder().encode('{}'));
+    const overrides = { fs, invalidatePackRuntime: async () => {} };
+    expect(await getModelPackInstallSummary({ packId: 'summary' }, overrides)).toMatchObject({ installed: false, partialBytes: 5 });
+    await removeModelPack({ packId: 'summary' }, overrides);
+    expect(await getModelPackInstallSummary({ packId: 'summary' }, overrides)).toMatchObject({ installed: false, partialBytes: 0 });
+  });
+
+  it('uses an independent native destination for every overlapping transfer and cleans all temporary files', async () => {
+    const { fs, files } = createMemFs();
+    const entries = Array.from({ length: 12 }, (_, index) => {
+      const bytes = new Uint8Array([index + 1]);
+      return { bytes, path: `lang/f${index}`, url: `https://example.com/f${index}`, sizeBytes: 1, sha256: createHash('sha256').update(bytes).digest('hex') };
+    });
+    const destinations = new Set<string>();
+    let active = 0;
+    let peak = 0;
+    const host = createExpoModelPackInstallerHost({ fs, download: async request => {
+      expect(destinations.has(request.fileUri)).toBe(false);
+      destinations.add(request.fileUri);
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      active -= 1;
+      const entry = entries.find(entry => entry.url === request.url)!;
+      files.set(request.fileUri, entry.bytes);
+      return { status: 200, headers: {} };
+    } });
+    await installModelPackWithHost({ host, packId: 'example', manifest: { packId: 'example', kind: 'tts_sherpa', model: 'kokoro', version: 'v1', files: entries }, signal: new AbortController().signal });
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(6);
+    expect(destinations.size).toBe(12);
+    for (const entry of entries) expect(files.get(`file:///docs/happier/voice/modelPacks/example/${entry.path}`)).toEqual(entry.bytes);
+    expect([...files.keys()].some(path => path.includes('.downloads'))).toBe(false);
+  });
+});
+
+describe('Expo installed-file reuse after storage failure', () => {
+  it('replaces an empty scratch file when copying verified installed bytes', async () => {
+    const memory = createMemFs();
+    const BaseFile = memory.fs.File;
+    let failWrite = true;
+    class StorageFailureFile extends BaseFile {
+      write(...args: Parameters<InstanceType<typeof BaseFile>['write']>) {
+        if (failWrite && this.uri.endsWith('/model.bin')) throw new Error('ENOSPC');
+        super.write(...args);
+      }
+    }
+    const bytes = new Uint8Array([1, 2, 3]);
+    const manifest = { ...makeManifest(bytes), version: 'v2' };
+    const host = createExpoModelPackInstallerHost({
+      fs: { ...memory.fs, File: StorageFailureFile },
+      download: async () => { throw new Error('unchanged file should be reused'); },
+    });
+    memory.files.set(`${PACK_DIR}/model.bin`, bytes);
+    const staging = await host.beginStaging('resume', deriveModelPackStagingPlan(manifest));
+    await expect(staging.appendDownloadedChunk('model.bin', bytes)).rejects.toThrow('ENOSPC');
+    await staging.cleanup();
+    expect(memory.files.get(`${memory.root}/.resume.scratch/model.bin`)?.byteLength).toBe(0);
+    failWrite = false;
+    await installModelPackWithHost({ host, packId: 'resume', manifest,
+      priorManifest: { ...manifest, version: 'v1' }, signal: new AbortController().signal });
+    expect(memory.files.get(`${PACK_DIR}/model.bin`)).toEqual(bytes);
   });
 });

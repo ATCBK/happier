@@ -22,6 +22,7 @@ import { TranscriptCollapsible } from '@/components/sessions/transcript/motion/T
 import { buildToolHeaderModel } from '@/components/tools/shell/presentation/buildToolHeaderModel';
 import { resolveToolStatusIndicatorKind } from '@/components/tools/shell/presentation/resolveToolStatusIndicatorKind';
 import { resolveToolErrorSummary } from '@/components/tools/shell/presentation/resolveToolErrorSummary';
+import { resolveToolActionFailure } from '@/components/tools/shell/presentation/resolveToolActionFailure';
 import { doesToolInlineBodyStateError, resolveToolInlineErrorDisplay } from '@/components/tools/shell/presentation/resolveToolInlineErrorDisplay';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import {
@@ -330,6 +331,8 @@ const ToolViewContent = React.memo<ToolViewProps & { displaySettings: ToolCardDi
     }
 
     const statusKind = resolveToolStatusIndicatorKind(toolForRendering);
+    // A typed refusal is the product working as designed: quiet ink, not the failure rose.
+    const isRefusal = statusKind === 'error' && resolveToolActionFailure(toolForRendering)?.outcome === 'refused';
     if (statusKind === 'permission_blocked') {
         statusIcon = <Icon name="minus-circle" size={20} color={theme.colors.text.secondary} />;
     } else if (statusKind === 'permission_pending') {
@@ -346,7 +349,9 @@ const ToolViewContent = React.memo<ToolViewProps & { displaySettings: ToolCardDi
                 }
                 break;
             case 'error':
-                statusIcon = <Icon name="warning-circle" size={20} color={theme.colors.state.danger.foreground} />;
+                statusIcon = isRefusal
+                    ? <Icon name="minus-circle" size={20} color={theme.colors.text.secondary} />
+                    : <Icon name="warning-circle" size={20} color={theme.colors.state.danger.foreground} />;
                 break;
             case 'completed':
             case 'none':
@@ -472,7 +477,7 @@ const ToolViewContent = React.memo<ToolViewProps & { displaySettings: ToolCardDi
                     {errorSummary ? (
                         <View style={styles.headerError}>
                             {/* The status glyph beside the title already marks the failure; the summary adds its words only. */}
-                            <Text style={styles.headerErrorText} numberOfLines={1}>
+                            <Text style={[styles.headerErrorText, isRefusal ? styles.headerErrorTextQuiet : null]} numberOfLines={1}>
                                 {errorSummary}
                             </Text>
                         </View>
@@ -549,20 +554,6 @@ const ToolViewContent = React.memo<ToolViewProps & { displaySettings: ToolCardDi
             </TranscriptCollapsible>
 
             {/*
-              * The Board item this call created, if it created one. It sits at row
-              * level beside the permission footer and approval cards rather than
-              * inside the collapsible, because it is the call's OUTCOME, not its
-              * diagnostic body: an MCP-named tool collapses to `title` by default,
-              * which would otherwise hide the widget the agent just made.
-              */}
-            <SessionBoardActionResultReference
-                tool={toolForRendering}
-                sessionId={sessionId}
-                serverId={props.serverId}
-                contentDemand={contentDemand}
-                visualContext={visualContext}
-            />
-            {/*
               * The managed workflow Run this call admitted, if it admitted one:
               * the same row-level OUTCOME placement, linking the exact Run.
               */}
@@ -612,7 +603,25 @@ const ToolViewContent = React.memo<ToolViewProps & { displaySettings: ToolCardDi
                     disabledReason={interaction.permissionDisabledReason}
                 />
             ))}
+            {statusKind === 'permission_pending' ? (
+                // Waiting for the person: the one attention edge every tool card shares (lab P6), drawn over
+                // the card so it never shifts layout when the wait starts or ends.
+                <View testID="tool-view-waiting-edge" pointerEvents="none" style={styles.waitingEdge} />
+            ) : null}
         </TranscriptJumpAttention>
+        {/*
+          * The Board item this call created, if it created one, is the call's OUTCOME: the agent's visual
+          * reply. It stands in the reply column below the card rather than inside its inset well, so it
+          * reads as the reply and the call above it stays a quiet line (an MCP-named tool collapses to its
+          * title by default). Inside the card it read as tool output.
+          */}
+        <SessionBoardActionResultReference
+            tool={toolForRendering}
+            sessionId={sessionId}
+            serverId={props.serverId}
+            contentDemand={contentDemand}
+            visualContext={visualContext}
+        />
         </TranscriptRowSeqProvider>
     );
 });
@@ -629,6 +638,12 @@ const styles = StyleSheet.create((theme) => ({
         borderRadius: theme.parts.toolCard.radius,
         marginVertical: theme.space.s4,
         overflow: 'hidden'
+    },
+    waitingEdge: {
+        ...StyleSheet.absoluteFillObject,
+        borderRadius: theme.parts.toolCard.radius,
+        borderWidth: 1,
+        borderColor: theme.colors.state.attention.foreground,
     },
     containerEmbedded: {
         // Inside a tool-calls group card the unit card already paints a continuous
@@ -668,6 +683,9 @@ const styles = StyleSheet.create((theme) => ({
     headerErrorText: {
         ...Typography.variant('body', 'semiBold'),
         color: theme.colors.state.danger.foreground,
+    },
+    headerErrorTextQuiet: {
+        color: theme.colors.text.secondary,
     },
     headerActionsContainer: {
         flexDirection: 'row',

@@ -1,6 +1,6 @@
 import * as React from 'react';
 
-import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
+import type { HomeDomainFailure } from '@/sync/ops/teams/teamActionClient';
 import { isAuthoritativeScopedSnapshotRefusalKind } from '@/sync/domains/scope/scopedSnapshotFacts';
 import { loadTeamPageRange, type TeamPageOutcome } from '@/sync/engine/teams/loadTeamPageRange';
 import { subscribeHomeAccountChange } from '@/sync/runtime/orchestration/homeAccountChange';

@@ -1,15 +1,19 @@
 import type { StoredCredentials } from '@/persistence';
+import type { ActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
+import type { SessionRuntimeIssueV1 } from '@happier-dev/protocol/sessions/control/runtimeIssueV1';
 export { readProjectSetupConsentHoldV1 as readWorkflowProjectSetupConsentHold } from '@happier-dev/protocol/actions/projectActionFamily';
 import { parsePermissionIntentAlias } from '@happier-dev/agents';
 import {
   sendSessionMessage,
   waitForSessionInputResult,
   type SessionInputResultObservationV1,
-  type SessionInputResultV1,
   type SessionInputUsageV1,
-  type WaitForSessionInputResult,
+  type WaitForSessionInputReplyResult,
 } from '@/session/services/sendSessionMessage';
 import type { SessionMessageModelSelectionInput } from '@/session/services/resolveSessionMessageModel';
+import type { SessionMessageReplyOutcomeV1 } from '@happier-dev/protocol/sessions/messages/sessionMessageReplyV1';
+import type { DiscussionAddressingV1 } from '@happier-dev/protocol/discussions/references';
+import { resolveSessionMessageAdmissionTimeoutMs } from '@/session/transport/shared/sessionTimeouts';
 import {
   buildWorkflowSessionInputAdmissionV2,
 } from '@/session/services/sessionInputAdmissionIdentity';
@@ -18,32 +22,52 @@ import { ExecutionRunGetResponseSchema } from '@happier-dev/protocol/execution/r
 import { HAPPIER_STRUCTURED_INPUT_METADATA_KEY_V1 } from '@happier-dev/protocol/runtime/input/structuredInputV1';
 import type { MentionRefV1, PortableComposerAttachmentV1, ExecutionRunResultContractV1, SessionInputAdmissionResultV1, SessionInputSourceAuthorityV1, SessionInputWorkflowV2 } from '@happier-dev/protocol';
 
-export type WorkflowSessionInputObservation =
+export type WorkflowSessionInputObservation = (
   | Readonly<{ kind: 'pending' }>
   | Readonly<{ kind: 'completed'; result: string; usage?: SessionInputUsageV1 }>
-  | Readonly<{ kind: 'failed'; code: string; message: string; usage?: SessionInputUsageV1 }>
-  | Readonly<{ kind: 'cancelled'; usage?: SessionInputUsageV1 }>;
+  | Readonly<{ kind: 'failed'; code: string; message: string; runtimeIssueV1?: SessionRuntimeIssueV1; usage?: SessionInputUsageV1 }>
+  | Readonly<{ kind: 'cancelled'; usage?: SessionInputUsageV1 }>
+  | Readonly<{ kind: 'needs_attention'; code: 'session_input_result_unavailable' }>
+) & Readonly<{ replyOutcome?: SessionMessageReplyOutcomeV1 }>;
 
 /** Classifies the exact Session outcome; cancellation custody stays with its caller. */
 export function classifyWorkflowSessionInputResult(
-  result: SessionInputResultV1,
+  result: Extract<WaitForSessionInputReplyResult, { ok: true }>['result'],
+  replyOutcome = result.kind === 'fulfilled' ? result.outcome : undefined,
 ): WorkflowSessionInputObservation {
+  const reply = replyOutcome ? { replyOutcome } : {};
   switch (result.kind) {
+    case 'fulfilled': {
+      const outcome = result.outcome;
+      switch (outcome.kind) {
+        case 'pass':
+        case 'terminal_no_result': return { kind: 'completed', result: '', ...reply };
+        case 'cancelled': return { kind: 'cancelled', ...reply };
+        case 'failed': return { kind: 'failed', code: 'session_input_failed', message: 'The requested session failed.', ...reply };
+        case 'declined': return { kind: 'failed', code: 'session_input_declined', message: 'The requested session declined.', ...reply };
+        case 'answer': return { kind: 'needs_attention', code: 'session_input_result_unavailable', ...reply };
+      }
+    }
     case 'pending': return { kind: 'pending' };
     case 'final_text': return {
       kind: 'completed', result: result.text,
+      ...reply,
       ...(result.usage ? { usage: result.usage } : {}),
     };
     case 'terminal_no_result': return {
       kind: 'completed', result: '',
+      ...reply,
       ...(result.usage ? { usage: result.usage } : {}),
     };
     case 'failed': return {
       kind: 'failed', code: 'session_input_failed', message: result.message,
+      ...reply,
+      ...(result.runtimeIssueV1 ? { runtimeIssueV1: result.runtimeIssueV1 } : {}),
       ...(result.usage ? { usage: result.usage } : {}),
     };
     case 'cancelled': return {
       kind: 'cancelled',
+      ...reply,
       ...(result.usage ? { usage: result.usage } : {}),
     };
   }
@@ -52,7 +76,7 @@ export function classifyWorkflowSessionInputResult(
 export type WorkflowDetachedExecutionRunObservation =
   | Readonly<{ kind: 'pending' }>
   | Readonly<{ kind: 'completed'; result: string | import('@happier-dev/protocol').JsonValue }>
-  | Readonly<{ kind: 'failed'; code: string }>
+  | Readonly<{ kind: 'failed'; code: string; message?: string; runtimeIssueV1?: SessionRuntimeIssueV1 }>
   | Readonly<{ kind: 'cancelled'; code?: string }>
   | Readonly<{ kind: 'outcome_uncertain'; code: string }>;
 
@@ -168,6 +192,11 @@ export async function observeWorkflowDetachedExecutionRunInput(params: Readonly<
   }
   const turn = resolveWorkflowDetachedExecutionRunInputTurn(response.run, params.runId, params.localInputId);
   if (!turn) {
+    // A different retained turn says nothing about this input's outcome.
+    // Pre-native refusal is correlated by startExecutionRun at the initial-input producer.
+    if (response.run.inputTurns?.current || response.run.inputTurns?.last) {
+      return { kind: 'outcome_uncertain', code: 'execution_run_input_not_observed' };
+    }
     // An attached Workflow input is first durably admitted by Session Pending.
     // Until that owner delivers it into the retained Run, absence from the
     // Run's current/last projection is not proof of lost custody.
@@ -181,9 +210,9 @@ export async function observeWorkflowDetachedExecutionRunInput(params: Readonly<
   if (turn.state === 'failed') {
     return {
       kind: 'failed',
-      code: response.run.error?.code === 'workflow_interaction_capacity_exceeded'
-        ? response.run.error.code
-        : 'execution_run_input_failed',
+      code: response.run.error?.code ?? 'execution_run_input_failed',
+      ...(response.run.error?.message ? { message: response.run.error.message } : {}),
+      ...(response.run.error?.runtimeIssueV1 ? { runtimeIssueV1: response.run.error.runtimeIssueV1 } : {}),
     };
   }
   if (!turn.result) {
@@ -216,10 +245,15 @@ export async function enqueueWorkflowSessionInput(params: Readonly<{
   permissionMode?: string | null;
   /** Immutable mediated source retained by the accepted Workflow Run. */
   sourceAuthority?: SessionInputSourceAuthorityV1;
+  /** Original accepted request cause, independent of the executing Session's owner. */
+  actionRequestAttributionV1?: ActionRequestAttributionV1;
+  discussionAddressing?: DiscussionAddressingV1;
   /** Coordinator-resolved authoring selection; Session owns model normalization. */
   modelSelectionInput?: SessionMessageModelSelectionInput;
   modelSelectionUpdatedAt?: number;
   incomingResumeOptions?: Parameters<typeof sendSessionMessage>[0]['incomingResumeOptions'];
+  /** Frozen Session placement; input admission rechecks it against current owner metadata. */
+  targetMachineId?: string;
   /** Frozen identity from the accepted Run. When supplied it must equal the canonical derivation. */
   localInputId?: string;
   signal?: AbortSignal;
@@ -242,8 +276,11 @@ export async function enqueueWorkflowSessionInput(params: Readonly<{
       ? { ...params.workflow, workDepth: params.workDepth }
       : params.workflow,
     {
+      replyIntent: { mode: 'wait' },
+      ...(params.discussionAddressing ? { discussionAddressing: params.discussionAddressing } : {}),
       ...(requestedPermissionCeiling ? { requestedPermissionCeiling } : {}),
       ...(params.sourceAuthority ? { sourceAuthority: params.sourceAuthority } : {}),
+      ...(params.actionRequestAttributionV1 ? { actionRequestAttributionV1: params.actionRequestAttributionV1 } : {}),
     },
   );
   const displayText = typeof params.displayText === 'string' && params.displayText.trim().length > 0
@@ -268,7 +305,7 @@ export async function enqueueWorkflowSessionInput(params: Readonly<{
     idOrPrefix: params.sessionId,
     message: params.text,
     wait: false,
-    timeoutMs: 30_000,
+    timeoutMs: resolveSessionMessageAdmissionTimeoutMs(),
     localId,
     requestedAction: { v: 1, kind: 'enqueue' },
     ...(params.executionRunTarget
@@ -282,6 +319,7 @@ export async function enqueueWorkflowSessionInput(params: Readonly<{
     ...(params.modelSelectionUpdatedAt === undefined ? {} : { modelSelectionUpdatedAt: params.modelSelectionUpdatedAt }),
     ...(params.incomingResumeOptions ? { incomingResumeOptions: params.incomingResumeOptions } : {}),
     inputAdmission,
+    ...(params.targetMachineId ? { targetMachineId: params.targetMachineId } : {}),
     machineAdmissionTransport: params.machineAdmissionTransport,
     ...(params.signal ? { signal: params.signal } : {}),
   });
@@ -299,7 +337,7 @@ export async function observeWorkflowSessionInputResult(params: Readonly<{
   beforeInputObservation?: () => Promise<void>;
   onInputMaterialized?: (acceptedAtMs: number) => Promise<void>;
   signal?: AbortSignal;
-}>): Promise<WaitForSessionInputResult> {
+}>): Promise<WaitForSessionInputReplyResult> {
   const observation: SessionInputResultObservationV1 = params.deadlineMs === undefined
     ? params.timeoutAfterInputMs === undefined ? { kind: 'no_deadline' }
       : { kind: 'after_input', timeoutMs: params.timeoutAfterInputMs }
@@ -308,6 +346,7 @@ export async function observeWorkflowSessionInputResult(params: Readonly<{
     credentials: params.credentials,
     idOrPrefix: params.sessionId,
     localId: params.localId,
+    observeReply: true,
     observation,
     ...(params.beforeInputObservation ? { beforeInputObservation: params.beforeInputObservation } : {}),
     ...(params.onInputMaterialized ? { onInputMaterialized: params.onInputMaterialized } : {}),

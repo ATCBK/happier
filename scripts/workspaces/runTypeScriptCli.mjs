@@ -1,12 +1,13 @@
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { constants, tmpdir } from 'node:os';
-import { basename, dirname, relative, resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { exitWithCommandResult, runCommand, spawnForegroundCommand } from '../../apps/stack/scripts/utils/proc/proc.mjs';
 
 import { prepareTypeScriptProjectBuildFromArgs, verifyTypeScriptProjectCoverage } from './prepareTypeScriptProjectBuild.mjs';
 import { writeJsonAtomic } from '../../apps/stack/scripts/utils/fs/json.mjs';
+import { prepareReferencedTypecheckDeclarations } from './prepareReferencedTypecheckDeclarations.mjs';
 import {
   resolveTypeScriptCliInvocation,
   shouldRouteTypeScriptCliThroughHstack,
@@ -15,6 +16,13 @@ import {
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(scriptDir, '..', '..');
 const args = process.argv.slice(2);
+// Executor options belong to its existing placement/admission policy, never
+// to TypeScript. Keep the controller's explicit local-compilation guard there.
+const executorArgs = [];
+if (args[0] === '--local') {
+  executorArgs.push(args.shift());
+  if (args[0] === '--allow-local-compilation') executorArgs.push(args.shift());
+}
 let coverageBaseline;
 for (let index = 0; index < args.length; index += 1) {
   if (args[index] !== '--verifyProjectCoverage') continue;
@@ -55,42 +63,6 @@ function compilerProjects(args) {
   }
   if (projects.length <= 1) return [{ args, project: projects[0] ?? null }];
   return projects.map((project) => ({ args: [...sharedArgs, '--project', project], project }));
-}
-
-async function prepareReferencedUiDeclarations(projects, cwd) {
-  const consumer = projects.find(({ project, authoredProject }) => {
-    const authored = authoredProject ?? project;
-    return authored && basename(authored) === 'tsconfig.test.json' && basename(dirname(resolve(cwd, authored))) === 'cli';
-  });
-  if (!consumer) return [];
-  const authored = resolve(cwd, consumer.authoredProject ?? consumer.project);
-  const configPath = resolve(cwd, consumer.project);
-  const config = JSON.parse(await readFile(configPath, 'utf8'));
-  const authoredConfig = JSON.parse(await readFile(authored, 'utf8'));
-  const references = config.references ?? authoredConfig.references ?? [];
-  const reference = references.find(({ path }) => basename(path) === 'tsconfig.source.json'
-    && basename(dirname(resolve(dirname(configPath), path))) === 'ui');
-  if (!reference) return [];
-  const uiDir = dirname(resolve(dirname(configPath), reference.path));
-  const producers = ['foundation', 'core', 'source'].map(name => {
-    const args = ['--singleThreaded', '--project', resolve(uiDir, `tsconfig.${name}.json`)];
-    return { project: resolve(uiDir, `tsconfig.${name}.json`), authoredProject: resolve(uiDir, `tsconfig.${name}.json`), args, authoredArgs: args };
-  });
-  const { prepareUiTypecheckProjects } = await import('../../apps/ui/scripts/deriveTypecheckProjects.mjs');
-  await prepareUiTypecheckProjects(producers, cwd);
-  const target = resolve(dirname(authored), 'node_modules/.cache/tsc/tsconfig.test.json');
-  await mkdir(dirname(target), { recursive: true });
-  await writeJsonAtomic(target, {
-    ...config,
-    extends: config.extends ?? authored,
-    references: references.map(value => ({ ...value,
-      path: value === reference ? producers[2].project : resolve(dirname(configPath), value.path),
-    })),
-  });
-  consumer.args = consumer.args.map((arg, index) => ['--project', '-p'].includes(consumer.args[index - 1])
-    ? target : arg.startsWith('--project=') ? `--project=${target}` : arg);
-  consumer.project = target;
-  return producers.slice(0, 3);
 }
 
 async function runCompiler(invocation, project, isCancelled) {
@@ -146,11 +118,11 @@ async function runCompiler(invocation, project, isCancelled) {
 }
 
 // Automatic command placement is POSIX-only; Windows compilation stays local.
-if (process.platform !== 'win32' && shouldRouteTypeScriptCliThroughHstack({ args, env: process.env })) {
+if (process.platform !== 'win32' && (executorArgs.length > 0 || shouldRouteTypeScriptCliThroughHstack({ args, env: process.env }))) {
   const launcher = resolve(repoRoot, 'apps', 'stack', 'bin', 'hstack-exec');
   const scriptFromWorkspace = relative(process.cwd(), fileURLToPath(import.meta.url));
   const routedArgs = coverageBaseline ? ['--verifyProjectCoverage', coverageBaseline, ...args] : args;
-  const routedResult = await runCommand(launcher, ['--', 'node', scriptFromWorkspace, ...routedArgs], {
+  const routedResult = await runCommand(launcher, [...executorArgs, '--', 'node', scriptFromWorkspace, ...routedArgs], {
     ownedProcessGroup: true,
     cwd: process.cwd(),
     stdio: 'inherit',
@@ -167,17 +139,13 @@ if (process.platform !== 'win32' && shouldRouteTypeScriptCliThroughHstack({ args
   for (const signal of cancellationSignals) process.on(signal, observeCancellation);
   try {
     const projects = compilerProjects(args).map(project => ({ ...project, authoredProject: project.project, authoredArgs: project.args }));
-    if ([3, 4, 5].includes(projects.length)) {
-      const { prepareUiTypecheckProjects } = await import('../../apps/ui/scripts/deriveTypecheckProjects.mjs');
-      if (!cancelled) await prepareUiTypecheckProjects(projects, process.cwd());
-    }
-    if (projects.length === 5) {
-      const { prepareCliTypecheckProjects } = await import('../../apps/cli/scripts/deriveTypecheckProjects.mjs');
-      if (!cancelled) await prepareCliTypecheckProjects(projects, process.cwd());
-    }
+    const { prepareUiTypecheckProjects } = await import('../../apps/ui/scripts/deriveTypecheckProjects.mjs');
+    if (!cancelled) await prepareUiTypecheckProjects(projects, process.cwd());
+    const { prepareCliTypecheckProjects } = await import('../../apps/cli/scripts/deriveTypecheckProjects.mjs');
+    const inventory = cancelled ? undefined : await prepareCliTypecheckProjects(projects, process.cwd());
     if (coverageBaseline && !cancelled) await verifyTypeScriptProjectCoverage({ baselinePath: coverageBaseline,
       projectPaths: projects.map(({ project }) => project).filter(Boolean), cwd: process.cwd() });
-    const producers = cancelled ? [] : await prepareReferencedUiDeclarations(projects, process.cwd());
+    const producers = cancelled ? [] : await prepareReferencedTypecheckDeclarations(projects, process.cwd(), inventory);
     for (const project of [...producers, ...projects]) {
       if (cancelled) break;
       // Output paths belong to the authored config; finite projections inherit

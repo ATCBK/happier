@@ -153,68 +153,77 @@ export async function resolveSessionAccessGrantSubjectInTx(
         removingExistingGrant?: boolean;
     }>,
 ): Promise<SessionAccessGrantSubjectResolution> {
-    const { subject } = params;
+    const [resolved] = await resolveSessionAccessGrantSubjectsInTx(tx, {
+        ...params,
+        subjects: [params.subject],
+    });
+    return resolved?.eligibility ?? { ok: false, error: "session_access_subject_not_found" };
+}
 
-    if (subject.kind === "account") {
-        const [resolved] = await resolveSessionAccessGrantAccountSubjectsInTx(tx, {
-            actorAccountId: params.actorAccountId,
-            sessionOwnerAccountId: params.sessionOwnerAccountId,
-            subjectAccountIds: [subject.accountId],
-            hasExistingGrant: params.hasExistingGrant,
-            removingExistingGrant: params.removingExistingGrant,
-        });
-        return resolved ?? { ok: false, error: "session_access_subject_not_found" };
-    }
-
-    if (subject.kind === "team") {
-        const team = await tx.team.findUnique({
-            where: { id: subject.teamId },
-            select: {
-                id: true,
-                archivedAt: true,
-            },
-        });
-        if (!team) return { ok: false, error: "session_access_subject_not_found" };
-        if (params.removingExistingGrant) return { ok: true, subject };
-        if (team.archivedAt !== null) return { ok: false, error: "session_access_subject_ineligible" };
-        if (!params.hasExistingGrant && !await resolveGrantableTeamForActorInTx(tx, {
-            actorAccountId: params.actorAccountId,
-            teamId: subject.teamId,
-        })) {
-            return { ok: false, error: "session_access_subject_ineligible" };
-        }
-        return { ok: true, subject };
-    }
-
-    // The Group's own row is the authority for its parent Team; a caller-supplied
-    // `teamId` is only a claim and is verified rather than trusted.
-    const group = await tx.teamGroup.findUnique({
-        where: { id: subject.groupId },
+/** Resolve roster subjects together, retaining the writer's distinct removal verdict. */
+export async function resolveSessionAccessGrantSubjectsInTx(
+    tx: Tx,
+    params: Readonly<{
+        actorAccountId: string;
+        sessionOwnerAccountId: string;
+        subjects: readonly SessionAccessGrantSubject[];
+        hasExistingGrant: boolean;
+        removingExistingGrant?: boolean;
+    }>,
+): Promise<readonly Readonly<{
+    eligibility: SessionAccessGrantSubjectResolution;
+    removalEligibility: SessionAccessGrantSubjectResolution;
+}>[]> {
+    const accountIds = params.subjects.flatMap((subject) => subject.kind === "account" ? [subject.accountId] : []);
+    const accountResolutions = await resolveSessionAccessGrantAccountSubjectsInTx(tx, {
+        ...params,
+        subjectAccountIds: accountIds,
+    });
+    const accountsById = new Map(accountIds.map((id, index) => [id, accountResolutions[index]!]));
+    const teamIds = [...new Set(params.subjects.flatMap((subject) => subject.kind === "team" ? [subject.teamId] : []))];
+    const teams = teamIds.length === 0 ? [] : await tx.team.findMany({
+        where: { id: { in: teamIds } },
+        select: { id: true, archivedAt: true },
+    });
+    const teamsById = new Map(teams.map((team) => [team.id, team]));
+    const groupIds = [...new Set(params.subjects.flatMap((subject) => subject.kind === "group" ? [subject.groupId] : []))];
+    const groups = groupIds.length === 0 ? [] : await tx.teamGroup.findMany({
+        where: { id: { in: groupIds } },
         select: {
-            id: true,
-            teamId: true,
-            archivedAt: true,
-            team: {
-                select: {
-                    archivedAt: true,
-                },
-            },
+            id: true, teamId: true, archivedAt: true,
+            team: { select: { archivedAt: true } },
         },
     });
-    if (!group) return { ok: false, error: "session_access_subject_not_found" };
-    if (group.teamId !== subject.teamId) return { ok: false, error: "session_access_subject_not_found" };
-    if (params.removingExistingGrant) {
-        return { ok: true, subject: { kind: "group", teamId: group.teamId, groupId: group.id } };
+    const groupsById = new Map(groups.map((group) => [group.id, group]));
+    const results: { eligibility: SessionAccessGrantSubjectResolution; removalEligibility: SessionAccessGrantSubjectResolution }[] = [];
+    for (const subject of params.subjects) {
+        let eligibility: SessionAccessGrantSubjectResolution;
+        if (subject.kind === "account") {
+            eligibility = accountsById.get(subject.accountId) ?? { ok: false, error: "session_access_subject_not_found" };
+        } else if (subject.kind === "team") {
+            const team = teamsById.get(subject.teamId);
+            if (!team) eligibility = { ok: false, error: "session_access_subject_not_found" };
+            else if (params.removingExistingGrant) eligibility = { ok: true, subject };
+            else if (team.archivedAt !== null || (!params.hasExistingGrant && !await resolveGrantableTeamForActorInTx(tx, {
+                actorAccountId: params.actorAccountId, teamId: subject.teamId,
+            }))) eligibility = { ok: false, error: "session_access_subject_ineligible" };
+            else eligibility = { ok: true, subject };
+        } else {
+            // The Group row owns its parent Team; never trust the caller's claim.
+            const group = groupsById.get(subject.groupId);
+            if (!group || group.teamId !== subject.teamId) eligibility = { ok: false, error: "session_access_subject_not_found" };
+            else if (params.removingExistingGrant) eligibility = { ok: true, subject };
+            else if (group.archivedAt !== null || group.team.archivedAt !== null
+                || (!params.hasExistingGrant && !await resolveGrantableTeamGroupForActorInTx(tx, {
+                    actorAccountId: params.actorAccountId, teamId: subject.teamId, groupId: subject.groupId,
+                }))) eligibility = { ok: false, error: "session_access_subject_ineligible" };
+            else eligibility = { ok: true, subject };
+        }
+        // Ineligibility follows existence and identity validation. Removal skips
+        // activity/discovery checks, but never missing or invalid identities.
+        const removalEligibility: SessionAccessGrantSubjectResolution = eligibility.ok || eligibility.error === "session_access_subject_ineligible"
+            ? { ok: true, subject } : eligibility;
+        results.push({ eligibility, removalEligibility });
     }
-    if (group.archivedAt !== null || group.team.archivedAt !== null) {
-        return { ok: false, error: "session_access_subject_ineligible" };
-    }
-    if (!params.hasExistingGrant && !await resolveGrantableTeamGroupForActorInTx(tx, {
-        actorAccountId: params.actorAccountId,
-        teamId: subject.teamId,
-        groupId: subject.groupId,
-    })) {
-        return { ok: false, error: "session_access_subject_ineligible" };
-    }
-    return { ok: true, subject: { kind: "group", teamId: group.teamId, groupId: group.id } };
+    return results;
 }

@@ -8,6 +8,7 @@ import { resolvePendingRequestAttentionReasonV1 } from '@happier-dev/protocol/se
 import { resolveAgentRequestKind } from '@happier-dev/protocol/activity/agentRequestSummary';
 import type { AgentRequestKind, SessionActionConfirmationsV1 } from '@happier-dev/protocol';
 import { ResolvedMcpToolIdentityV1Schema, type ResolvedMcpToolIdentityV1 } from '@happier-dev/protocol/mcp/servers/tools/mcpToolIdentityV1';
+import { SessionQuestionContextV1Schema, SessionQuestionHandlerV1Schema, type SessionQuestionContextV1, type SessionQuestionHandlerV1 } from '@happier-dev/protocol/sessions/permissions/v1';
 
 export type PendingRequestFacts = Readonly<{
     sessionId: string;
@@ -28,6 +29,8 @@ export type SessionPendingRequest = Readonly<{
     id: string;
     turnId?: string;
     source?: string;
+    questionV1?: SessionQuestionContextV1;
+    currentHandler?: SessionQuestionHandlerV1;
     responseTarget?: SessionActionConfirmationsV1['requests'][string]['responseTarget'];
     tool: string;
     kind: AgentRequestKind;
@@ -136,6 +139,9 @@ function mergePendingRequestMetadata(
 ): SessionPendingRequest {
     return {
         ...preferred,
+        ...(preferred.questionV1 ?? secondary.questionV1 ? { questionV1: preferred.questionV1 ?? secondary.questionV1 } : {}),
+        // AgentState is the current-handler authority, even beside a retained transcript row.
+        ...(secondary.currentHandler ?? preferred.currentHandler ? { currentHandler: secondary.currentHandler ?? preferred.currentHandler } : {}),
         ...(preferred.mcpTool ?? secondary.mcpTool ? { mcpTool: preferred.mcpTool ?? secondary.mcpTool } : {}),
         ...(preferred.responseTarget ?? secondary.responseTarget
             ? { responseTarget: preferred.responseTarget ?? secondary.responseTarget }
@@ -333,7 +339,14 @@ export function listPendingTranscriptRequests(
         .flatMap((state) => (state.status === 'pending' ? [state.request] : []));
 }
 
-function listPendingAgentStateRequests(agentState: AgentState | SessionActionConfirmationsV1 | null | undefined): SessionPendingRequest[] {
+type PendingAgentStateRequestFacts = Readonly<{
+    requests?: Readonly<Record<string, Pick<NonNullable<AgentState['requests']>[string],
+        'tool' | 'kind' | 'source' | 'arguments' | 'createdAt' | 'turnId' | 'sidechainId'
+        | 'questionV1' | 'currentHandler' | 'permissionSuggestions' | 'mcpTool'>>> | null;
+    completedRequests?: AgentState['completedRequests'];
+}>;
+
+function listPendingAgentStateRequests(agentState: PendingAgentStateRequestFacts | SessionActionConfirmationsV1 | null | undefined): SessionPendingRequest[] {
     const requests = agentState?.requests;
     if (!requests) return [];
     const completed = agentState?.completedRequests ?? null;
@@ -345,6 +358,8 @@ function listPendingAgentStateRequests(agentState: AgentState | SessionActionCon
         const createdAt = typeof request.createdAt === 'number' ? request.createdAt : null;
         if (isPendingRequestCoveredByCompleted(completed as Record<string, unknown> | null | undefined, id, createdAt, request)) return [];
         const mcpTool = ResolvedMcpToolIdentityV1Schema.safeParse('mcpTool' in request ? request.mcpTool : undefined);
+        const question = SessionQuestionContextV1Schema.safeParse('questionV1' in request ? request.questionV1 : undefined);
+        const handler = SessionQuestionHandlerV1Schema.safeParse('currentHandler' in request ? request.currentHandler : undefined);
         return [{
             id,
             ...(typeof request.turnId === 'string' && request.turnId.trim().length > 0
@@ -363,13 +378,15 @@ function listPendingAgentStateRequests(agentState: AgentState | SessionActionCon
             }),
             arguments: request.arguments,
             ...(mcpTool.success ? { mcpTool: mcpTool.data } : {}),
+            ...(question.success ? { questionV1: question.data } : {}),
+            ...(handler.success ? { currentHandler: handler.data } : {}),
             createdAt,
             ...(getRequestPermissionSuggestions(request) ? { permissionSuggestions: getRequestPermissionSuggestions(request) } : {}),
         }];
     });
 }
 
-export function derivePendingRequestFlagsFromAgentState(agentState: AgentState | SessionActionConfirmationsV1 | null | undefined): PendingRequestFlags {
+export function derivePendingRequestFlagsFromAgentState(agentState: PendingAgentStateRequestFacts | SessionActionConfirmationsV1 | null | undefined): PendingRequestFlags {
     const requests = listPendingAgentStateRequests(agentState);
     if (requests.length === 0) {
         return EMPTY_PENDING_REQUEST_FLAGS;

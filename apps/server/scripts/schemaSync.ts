@@ -116,6 +116,15 @@ function generateProviderSchemaFromPostgres(
         // Prisma's default Bytes mapping is BLOB and would disagree with that storage contract.
         body = body.replace(/^model\s+(?:Artifact|ArtifactRevision|ArtifactKeyEnvelope)\s+\{[\s\S]*?^\}/gm,
             (model) => model.replace(/^([ \t]*\w+\s+Bytes\??)(?!\?)(?![^\n]*@db\.)/gm, "$1 @db.LongBlob"));
+        // Personal Follow policy and accepted one-shot source references are
+        // serialized documents, not VARCHAR(191) identifiers.
+        body = body.replace(/^model\s+AccountSessionFollow\s+\{[\s\S]*?^\}/gm,
+            (model) => model
+                .replace(/^([ \t]*(?:followPolicy|notifyOnce)\s+String\?)(?![^\n]*@db\.)/gm, "$1 @db.LongText")
+                .replace(/^([ \t]*sourceKey\s+String\?)(?![^\n]*@db\.)/m, "$1 @db.VarChar(202)"));
+        // Preserve the full VARCHAR(191) resource id plus the longest domain prefix, discussion:.
+        body = body.replace(/^model\s+SessionFollowEdge\s+\{[\s\S]*?^\}/gm,
+            (model) => model.replace(/^([ \t]*sourceKey\s+String)(?![^\n]*@db\.)/gm, "$1 @db.VarChar(202)"));
 
         // MySQL cannot create UNIQUE/INDEX keys on BLOB/TEXT columns without a key length.
         // `PublicSessionShare.tokenHash` stores a sha256 digest (32 bytes) and must be indexed.
@@ -142,6 +151,7 @@ function generateProviderSchemaFromPostgres(
 	        body = body.replace(/^(\s*daemonState\s+String\?)(?![^\n]*@db\.)/gm, "$1 @db.LongText");
 	        body = body.replace(/^(\s*settings\s+String\?)(?![^\n]*@db\.)/gm, "$1 @db.LongText");
 	        body = body.replace(/^(\s*settingsDbValue\s+String\?)(?![^\n]*@db\.)/gm, "$1 @db.LongText");
+	        body = body.replace(/^(\s*deliveryMutes\s+String\?)(?![^\n]*@db\.)/gm, "$1 @db.LongText");
 	        body = body.replace(/^(\s*policyJson\s+String\b)(?![^\n]*@db\.)/gm, "$1 @db.LongText");
 	        body = body.replace(/^(\s*stateJson\s+String\?)(?![^\n]*@db\.)/gm, "$1 @db.LongText");
             body = body.replace(/^(\s*workspaceJson\s+String\?)(?![^\n]*@db\.)/gm, "$1 @db.LongText");

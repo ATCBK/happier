@@ -1,4 +1,4 @@
-import * as z from 'zod/mini';
+import { z } from 'zod/mini';
 
 import { createTranscriptRawRecordV1Schema } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
 import type { TranscriptRawAgentContentV1, TranscriptRawAgentEventV1, TranscriptRawRecordV1, TranscriptRawUsageDataV1 } from '@happier-dev/protocol';

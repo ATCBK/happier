@@ -1,7 +1,35 @@
 import { storage } from '@/sync/domains/state/storage';
 import { seedAutocompleteSessions } from './autocompleteTestFixtures';
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FileItem } from '@/sync/domains/input/suggestionFile';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+
+vi.mock('socket.io-client', async importOriginal =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
+const promptHomes = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(promptHomes);
+let promptConnection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+let promptArtifactId = '';
+
+async function seedPromptInvocationDocument() {
+    await promptHomes.reset();
+    await promptHomes.addHome({ name: 'Prompts', serverUrl: 'https://prompt-characterization.test', accountId: 'prompt-owner' });
+    await loadSyncSingletonForTests();
+    promptConnection = await restoreServerAccountForTest({ serverUrl: 'https://prompt-characterization.test',
+        accountId: 'prompt-owner', request: promptHomes.request });
+    const { sync } = await import('@/sync/sync');
+    promptArtifactId = await sync.createArtifactWithHeader({ v: 1, kind: 'prompt_doc.v2', title: 'QA' },
+        JSON.stringify({ v: 1, markdown: 'Run QA now', createdAtMs: 1, updatedAtMs: 1 }));
+}
+
+async function disposePromptInvocationDocument() {
+    await promptConnection?.dispose();
+    promptConnection = undefined;
+    await promptHomes.reset();
+}
 
 /**
  * EU-2 characterization suite.
@@ -406,16 +434,8 @@ describe('getSuggestions characterization (EU-2)', () => {
 });
 
 describe('registry-owned selection application (D-20)', () => {
-    beforeEach(() => {
-        storage.setState({ artifacts: {
-            artifact_prompt_1: {
-                id: 'artifact_prompt_1', title: 'QA', isDecrypted: true, seq: 1,
-                createdAt: 1, updatedAt: 1, headerVersion: 1, bodyVersion: 1,
-                header: { v: 1, kind: 'prompt_doc.v2', title: 'QA' },
-                body: JSON.stringify({ v: 1, markdown: 'Run QA now', createdAtMs: 1, updatedAtMs: 1 }),
-            },
-        } });
-    });
+    beforeEach(seedPromptInvocationDocument);
+    afterEach(disposePromptInvocationDocument);
 
     it('rewrites the whole input through the kind that produced the candidate', async () => {
         // The host asks the registry, not a per-host prop: this rewrite used to be
@@ -432,7 +452,7 @@ describe('registry-owned selection application (D-20)', () => {
                 promptInvocation: {
                     invocationId: 'tmpl_1',
                     token: '/qa',
-                    targetArtifactId: 'artifact_prompt_1',
+                    targetArtifactId: promptArtifactId,
                     behavior: 'insert',
                     allowArgs: false,
                 },
@@ -456,9 +476,17 @@ describe('registry-owned selection application (D-20)', () => {
         })).resolves.toEqual({ handled: false });
     });
 
-    it.each(['file', 'vendorPlugin', 'skill'] as const)('leaves %s selection to the token insert', async (kind) => {
+    it.each(['file', 'vendorPlugin'] as const)('leaves %s selection to the token insert', async (kind) => {
         const { resolveComposerSuggestionKind } = await import('./composerSuggestionKinds');
         expect(resolveComposerSuggestionKind(kind).applySelection).toBeUndefined();
+    });
+
+    it('leaves a skill without a selection write to the token insert', async () => {
+        const { resolveComposerSuggestionKind } = await import('./composerSuggestionKinds');
+        await expect(resolveComposerSuggestionKind('skill').applySelection!({
+            suggestion: { kind: 'skill', key: 'skill-review', text: '$review' },
+            inputText: '$rev', selection: { start: 4, end: 4 }, activeWord: { offset: 0, endOffset: 4 },
+        })).resolves.toEqual({ handled: false });
     });
 });
 
@@ -488,23 +516,15 @@ describe('prompt invocation selection characterization (D-20)', () => {
         });
     }
 
-    beforeEach(() => {
-        storage.setState({ artifacts: {
-            artifact_prompt_1: {
-                id: 'artifact_prompt_1', title: 'QA', isDecrypted: true, seq: 1,
-                createdAt: 1, updatedAt: 1, headerVersion: 1, bodyVersion: 1,
-                header: { v: 1, kind: 'prompt_doc.v2', title: 'QA' },
-                body: JSON.stringify({ v: 1, markdown: 'Run QA now', createdAtMs: 1, updatedAtMs: 1 }),
-            },
-        } });
-    });
+    beforeEach(seedPromptInvocationDocument);
+    afterEach(disposePromptInvocationDocument);
 
     it('rewrites the whole input, not just the token, for an insert-behavior invocation', async () => {
         const result = await applySlashCommandSelection({
             promptInvocation: {
                 invocationId: 'tmpl_1',
                 token: '/qa',
-                targetArtifactId: 'artifact_prompt_1',
+                targetArtifactId: promptArtifactId,
                 behavior: 'insert',
                 allowArgs: false,
             },

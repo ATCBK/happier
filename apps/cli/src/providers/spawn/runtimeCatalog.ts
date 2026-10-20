@@ -1,4 +1,5 @@
 import { ProviderModelDescriptorV1Schema } from '@happier-dev/protocol/models/descriptor';
+import { projectProviderCatalogProbeModelDescriptorV1 } from '@happier-dev/protocol/providers/catalog/merge';
 import { DaemonProviderModelProjectionResponseV1Schema, type DaemonProviderModelProjectionRequestV1, type DaemonProviderModelProjectionResponseV1 } from '@happier-dev/protocol/rpc/providers';
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
@@ -79,19 +80,13 @@ export function selectProviderRuntimeCatalogSelectionObservation(
     : 'unknown';
   return {
     model: model
-      ? ProviderModelDescriptorV1Schema.parse({
-          ...model,
-          name: model.name ?? model.id,
-        })
+      ? projectProviderCatalogProbeModelDescriptorV1(model)
       : null,
     loadState: modelLoadState,
     ...(additionalModelIds ? {
       additionalModels: state.snapshot.models
         .filter((candidate) => additionalModelIds.includes(candidate.id))
-        .map((candidate) => ProviderModelDescriptorV1Schema.parse({
-          ...candidate,
-          name: candidate.name ?? candidate.id,
-        })),
+        .map(projectProviderCatalogProbeModelDescriptorV1),
     } : {}),
   };
 }

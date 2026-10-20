@@ -1,5 +1,3 @@
-import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unexpectedProjectNativeAdapterResolution";
-import { unexpectedCaptureSourceResolution } from "@/plugins/testkit/unexpectedCaptureSourceResolution";
 import { describe, expect, it, vi } from 'vitest';
 
 import { ingestCanonicalPluginManifest } from '@/plugins/manifest/ingest';
@@ -9,8 +7,8 @@ import type {
   ResolvedAgentContribution,
   ResolvedContributionRegistry,
 } from '@/plugins/projection/registry/types';
-import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
-import type { ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { resolveExecutablePluginRuntimeRegistry, type ResolvedExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 
 import { dispatchDaemonSpawnHookEvent } from './dispatchDaemonSpawnHookEvent';
 
@@ -107,13 +105,11 @@ function createSpawnHookContributes(params: Readonly<{
   activationTargets?: readonly ResolvedActivationTarget[];
 }> = {}): ResolvedContributionRegistry {
   const agents = params.agents ?? [];
-  return Object.freeze({
+  return createResolvedContributionRegistry({
     agents: Object.freeze([...agents]),
     actions: Object.freeze([]),
     resources: Object.freeze([]),
     activationTargets: Object.freeze([...(params.activationTargets ?? [])]),
-    catalogEntriesById: Object.freeze({}),
-    agentDefinitionsById: new Map(agents.map((agent) => [agent.id, agent])),
     pluginDiagnosticsByPluginId: Object.freeze({}),
   });
 }
@@ -123,26 +119,24 @@ function createSpawnHookContributes(params: Readonly<{
  * lease owner, so a fixture must be a complete runtime registry rather than
  * the two members this suite observes.
  */
-function createSpawnHookRuntimeRegistry(params: Readonly<{
+async function createSpawnHookRuntimeRegistry(params: Readonly<{
   contributes: ResolvedContributionRegistry;
   hookHandlersByHookId?: ResolvedExecutablePluginRuntimeRegistry['hookHandlersByHookId'];
   dispose?: ResolvedExecutablePluginRuntimeRegistry['dispose'];
-}>): ResolvedExecutablePluginRuntimeRegistry {
+}>): Promise<ResolvedExecutablePluginRuntimeRegistry> {
+  const registry = await resolveExecutablePluginRuntimeRegistry({
+    pluginIds: [],
+    contributes: createResolvedContributionRegistry({}),
+  });
   return {
-    claimReleaseLessDeclarations: async () => undefined,
+    ...registry,
     contributes: params.contributes,
+    declarationContributes: params.contributes,
     hookHandlersByHookId: params.hookHandlersByHookId ?? new Map(),
-    agentRuntimesByAgentId: new Map(),
-    scmHostingProvidersById: new Map(),
-    pluginDiagnosticsByPluginId: Object.freeze({}),
-    activatedPluginIds: new Set(),
-    activateContributionsOnDemand: async () => [],
-    createAgentInvocationServices: async () => createUnavailablePluginServices(),
-    resolveCaptureSource: unexpectedCaptureSourceResolution,
-    resolveProjectNativeAdapter: unexpectedProjectNativeAdapterResolution,
-    resolvePromptAssetBlocks: async () => Object.freeze([]),
-    retireConsumers: () => {},
-    dispose: params.dispose ?? (async () => {}),
+    dispose: async () => {
+      await registry.dispose();
+      await params.dispose?.();
+    },
   };
 }
 
@@ -359,19 +353,20 @@ describe('dispatchDaemonSpawnHookEvent', () => {
   });
 
   it('releases an ephemeral runtime registry that finishes acquiring after the dispatch deadline', async () => {
+    const dispose = vi.fn().mockResolvedValue(undefined);
+    const contributes = createSpawnHookContributes({
+      agents: [createSpawnHookAgentContribution({
+        id: 'codex',
+        pluginId: 'happier.agent.codex',
+      })],
+    });
+    const registry = await createSpawnHookRuntimeRegistry({ contributes, dispose });
     vi.useFakeTimers();
     try {
-      const dispose = vi.fn().mockResolvedValue(undefined);
-      const contributes = createSpawnHookContributes({
-        agents: [createSpawnHookAgentContribution({
-          id: 'codex',
-          pluginId: 'happier.agent.codex',
-        })],
-      });
       const resolveContributes = vi.fn().mockResolvedValue(contributes);
       const resolveRuntimeRegistry = vi.fn(async () => {
         await new Promise<void>((resolve) => setTimeout(resolve, 10));
-        return createSpawnHookRuntimeRegistry({ contributes, dispose });
+        return registry;
       });
       const dispatchEvent = vi.fn();
 
@@ -407,21 +402,19 @@ describe('dispatchDaemonSpawnHookEvent', () => {
   });
 
   it('uses one cancellation-owning deadline across registry acquisition and hook execution', async () => {
+    const contributes = createSpawnHookContributes({
+      agents: [createSpawnHookAgentContribution({
+        id: 'codex',
+        pluginId: 'happier.agent.codex',
+      })],
+    });
+    const registry = await createSpawnHookRuntimeRegistry({ contributes });
     vi.useFakeTimers();
     try {
-      const contributes = createSpawnHookContributes({
-        agents: [createSpawnHookAgentContribution({
-          id: 'codex',
-          pluginId: 'happier.agent.codex',
-        })],
-      });
       const resolveContributes = vi.fn().mockResolvedValue(contributes);
       const resolveRuntimeRegistry = vi.fn(async () => {
         await new Promise<void>((resolve) => setTimeout(resolve, 600));
-        return createSpawnHookRuntimeRegistry({
-          contributes,
-          dispose: vi.fn().mockResolvedValue(undefined),
-        });
+        return registry;
       });
       let handlerSignal: AbortSignal | null = null;
       let toolSignal: AbortSignal | null = null;

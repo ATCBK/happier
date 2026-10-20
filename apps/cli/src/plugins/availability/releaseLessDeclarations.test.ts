@@ -75,6 +75,27 @@ describe('release-less plugin declarations', () => {
             registry: null, registryRevision: null, runtimeMaterializations: [],
         })).toThrow();
     });
+    it('declares the recorded local-folder installation with its serving manifest so other devices can name it', () => {
+        // Live 2026-10-16 (PLUGVIS 2h): local-folder plugins recorded by the install registry reached other
+        // machines' Plugins pages as raw ids with no description: their materialization carried no declaration.
+        const sourceSpec = { kind: 'path', locator: '/plugins/acme.local', trustPolicy: 'local_trusted', installPolicy: 'link' } as const;
+        const local = { ...manifest('acme.local', {}), displayName: 'Acme notes', description: 'Notes for Acme.' };
+        const plugin: LoadedPlugin = { pluginId: 'acme.local', pluginRootPath: '/plugins/acme.local',
+            manifestPath: '/plugins/acme.local/.happier-plugin/plugin.json', daemonEntryPath: null, devDaemonEntryPath: null,
+            sourceSpec, manifest: local };
+        const registry = createResolvedContributionRegistry({ pluginDeclarations: [plugin] });
+        const recorded = { materializationId: 'mat-local', pluginId: 'acme.local', version: '3.1.0', sourceClass: 'localPath',
+            portableRelease: false, uiArtifacts: [], enabled: true, trustState: 'trusted', observedAt: 1 } as const;
+        const otherVersion = { ...recorded, materializationId: 'mat-old', version: '2.0.0' } as const;
+        const complete = projectPluginInstalledAvailabilityInventory({
+            inventory: { revision: 1, releasePublications: [], materializations: [recorded, otherVersion] },
+            registry, registryRevision: 1, runtimeMaterializations: [],
+        });
+        expect(complete.materializations.find(entry => entry.materializationId === 'mat-local'))
+            .toMatchObject({ declaredManifest: { displayName: 'Acme notes', description: 'Notes for Acme.' } });
+        // A manifest of another version never describes this installation.
+        expect(complete.materializations.find(entry => entry.materializationId === 'mat-old')).not.toHaveProperty('declaredManifest');
+    });
     it('refuses to combine installation facts with declarations from a different committed revision', () => {
         expect(() => projectPluginInstalledAvailabilityInventory({
             inventory: { revision: 2, releasePublications: [], materializations: [] },
@@ -157,15 +178,16 @@ describe('release-less plugin declarations', () => {
     it.each([
         { label: 'bundled', custody: BUNDLED, sourceClass: 'bundledFirstParty' },
         { label: 'drop-in', custody: DEVELOPMENT, sourceClass: 'localPath' },
-    ])('observes a selected $label UI-only source without claiming an enabled Account intent', ({ custody, sourceClass }) => {
+    ])('observes a selected $label UI-only source with a missing artifact without claiming an enabled Account intent', ({ custody, sourceClass }) => {
         const uiOnlyManifest = manifest('acme.ui-only', {
             ui: {
                 views: [{ id: 'page', container: 'appPage', target: { kind: 'app' }, renderer: 'page-renderer', title: 'Page' }],
-                renderers: [{ id: 'page-renderer', kind: 'declarative', root: { kind: 'text', text: 'Page' } }],
+                renderers: [{ id: 'page-renderer', kind: 'reactNative', artifact: 'missing-page' }],
             },
         });
         const declarations = projectReleaseLessPluginDeclarations({
-            activationTargets: [{ pluginId: uiOnlyManifest.id, manifest: uiOnlyManifest }],
+            activationTargets: [{ pluginId: uiOnlyManifest.id, manifest: uiOnlyManifest,
+                generatedUiArtifactsManifest: { version: 2, entries: [] } }],
             sourceCustodiesByPluginId: new Map([[uiOnlyManifest.id, custody]]),
             registryMaterializationIdsByPluginId: {},
             observedAt: 12,
@@ -178,6 +200,7 @@ describe('release-less plugin declarations', () => {
                 declaredManifest: uiOnlyManifest,
                 portableRelease: false,
                 sourceClass,
+                uiArtifacts: [],
             },
         });
     });

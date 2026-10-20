@@ -67,6 +67,13 @@ const triageIdentifier = defineProtocolUtf8String({
 });
 export const TriageListKindIdV1Schema = triageIdentifier;
 
+/** Invocation diagnostics only; arbitrary exception messages/data never cross this wire. */
+export const TriageListInvocationErrorV1Schema = defineProtocolObject({
+    code: triageIdentifier,
+    retryable: defineProtocolUnion([defineProtocolLiteral(true), defineProtocolLiteral(false)]).optional(),
+}, { policy: 'closed' });
+export type TriageListInvocationErrorV1 = ReturnType<typeof TriageListInvocationErrorV1Schema.parse>;
+
 const triageCollisionScope = defineProtocolUtf8String({
     maxUtf8Bytes: MAX_TRIAGE_COLLISION_SCOPE_UTF8_BYTES_V1,
     minLength: 1,
@@ -105,7 +112,7 @@ const facetArray = <TSchema extends Parameters<typeof defineProtocolArray>[0]>(s
  * Action queries with: a second spelling of a facet is how a saved lens and a
  * live lens start to disagree.
  */
-export const TriageListFilterSelectionV1Schema = defineProtocolObject({
+const listFilterFields = {
     sources: facetArray(defineProtocolObject({
         source: PluginContributionIdentityV1Schema,
     }, { policy: 'closed' })),
@@ -128,6 +135,15 @@ export const TriageListFilterSelectionV1Schema = defineProtocolObject({
         defineProtocolLiteral('suggested'),
         defineProtocolLiteral('none'),
     ])),
+} as const;
+export const TriageListFilterSelectionV1Schema = defineProtocolObject(listFilterFields, { policy: 'closed' });
+/** The mounted audience joins Session relationships after the shared source window.
+ * It is saved/routed and Action-addressable, but never sent as an ignored scan filter. */
+export const TriageSurfaceFilterSelectionV1Schema = defineProtocolObject({
+    ...listFilterFields,
+    tasks: defineProtocolUnion([
+        defineProtocolLiteral('mine'), defineProtocolLiteral('agents'), defineProtocolLiteral('everyone'),
+    ]).optional(),
 }, { policy: 'closed' });
 
 /**
@@ -181,13 +197,14 @@ const TriageListSourceSelectionV1Schema = defineProtocolUnion([
  */
 const TriageLaneContinuationV1Schema = defineProtocolObject({
     sourceInstanceId: TriageSourceInstanceIdV1Schema,
-    /** The per-page geometry that minted this source continuation. */
+    /** The per-page geometry retained for this lane's next request. */
     pageLimit: defineProtocolNumber({
         integer: true,
         minimum: 1,
         maximum: MAX_TRIAGE_LIST_WINDOW_ROWS_V1,
     }),
-    continuation: TriageScanContinuationV1Schema,
+    /** Absent when the previous window had no capacity to start this lane. */
+    continuation: TriageScanContinuationV1Schema.optional(),
 }, { policy: 'closed' });
 
 /**
@@ -225,8 +242,9 @@ export const TriageListEntriesInputV1Schema = defineProtocolObject({
      * Resume each named connection's walk where a previous bounded invocation
      * stopped.
      *
-     * Every member is the source's own `TriageScanContinuationV1` and nothing
-     * else: no second cursor type is minted here, no epoch or delivered-id set
+     * A native continuation is the source's own `TriageScanContinuationV1`.
+     * An unvisited lane omits it and starts its initial page next time. No
+     * second cursor type is minted here, no epoch or delivered-id set
      * rides along, and nothing durable is created. `INV-03` is about
      * *persistence and custody* — a continuation may not outlive the process or
      * be checkpointed — and this member creates neither: the caller that sends
@@ -251,6 +269,8 @@ export const TriageListEntriesInputV1Schema = defineProtocolObject({
      * The row bound is unchanged and deliberately not the paging mechanism: a
      * deeper window is successive bounded invocations appended by the caller,
      * never a larger `limit`.
+     * With allConfigured, a supplied resume walks only its unfinished lanes.
+     * Explicitly selected lanes not in resume still start at their initial page.
     */
     resume: defineProtocolArray(TriageLaneContinuationV1Schema, {
         maxItems: MAX_TRIAGE_LIST_SOURCE_BATCH_V1,
@@ -396,6 +416,7 @@ const TriageListLaneV1Schema = defineProtocolObject({
         }, { policy: 'closed' }),
         defineProtocolObject({
             kind: defineProtocolLiteral('unavailable'),
+            error: TriageListInvocationErrorV1Schema.optional(),
         }, { policy: 'closed' }),
     ]),
     exhausted: defineProtocolUnion([

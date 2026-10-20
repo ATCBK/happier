@@ -1,12 +1,15 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
     ARTIFACT_PLAIN_DATA_KEY_MARKER,
     encodePlainArtifactStoredContent,
 } from "@happier-dev/protocol";
 import * as privacyKit from "privacy-kit";
 
-import type { Tx } from "@/storage/inTx";
-import { createInTxHarness } from "@/app/api/testkit/txHarness";
+import { inTx, type Tx } from "@/storage/inTx";
+import { markAccountChanged } from "@/app/changes/markAccountChanged";
+import { createPrismaTransactionBoundary } from "@/app/api/testkit/txHarness";
+import { logger } from "@/utils/logging/log";
+import { updateArtifactHttpMutation } from "./artifactMutationHttpResponse";
 
 type ArtifactTxFixture = {
     account: {
@@ -14,6 +17,7 @@ type ArtifactTxFixture = {
         update: ReturnType<typeof vi.fn>;
     };
     accountChange: { upsert: ReturnType<typeof vi.fn> };
+    publicSessionShare: { findUnique: ReturnType<typeof vi.fn> };
     artifactRevision: {
         create: ReturnType<typeof vi.fn>;
         findMany: ReturnType<typeof vi.fn>;
@@ -45,6 +49,7 @@ function createArtifactTxFixture(): ArtifactTxFixture {
             update: vi.fn().mockResolvedValue({ seq: 1 }),
         },
         accountChange: { upsert: vi.fn().mockResolvedValue({}) },
+        publicSessionShare: { findUnique: vi.fn().mockResolvedValue(null) },
         artifactRevision: { create: vi.fn().mockResolvedValue({}), findMany: vi.fn().mockResolvedValue([]), deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
         artifactBlob: { findMany: vi.fn().mockResolvedValue([]), findUnique: vi.fn().mockResolvedValue(null),
             findFirst: vi.fn().mockResolvedValue(null), deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
@@ -59,7 +64,21 @@ function createArtifactTxFixture(): ArtifactTxFixture {
     };
 }
 
-vi.mock("@/storage/inTx", () => createInTxHarness(() => currentTx));
+vi.mock("@/storage/db", () => ({
+    // Only the database transport is replaced; publication and inTx remain real.
+    db: new Proxy({}, {
+        get(_target, property) {
+            if (property === "$transaction") return createPrismaTransactionBoundary(() => currentTx);
+            return Reflect.get(currentTx, property);
+        },
+    }),
+}));
+
+vi.mock("@/storage/prisma", async importOriginal => ({
+    ...await importOriginal<typeof import("@/storage/prisma")>(),
+    // The separate SQLite snapshot connection is another database transport.
+    withSqliteReadSnapshot: <T>(read: (tx: Tx) => Promise<T>) => read(currentTx),
+}));
 
 import {
     createArtifact,
@@ -69,7 +88,10 @@ import {
 } from "./artifactWriteService";
 
 describe("artifactWriteService", () => {
+    afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
     beforeEach(() => {
+        // This boundary fixture models the single-writer SQLite adapter.
+        vi.stubEnv("HAPPIER_DB_PROVIDER", "sqlite");
         process.env.HAPPIER_FEATURE_ENCRYPTION__PLAIN_ACCOUNT_ARTIFACTS_AT_REST = "none";
         txFixture = createArtifactTxFixture();
         txFixture.account.findUnique.mockResolvedValue({
@@ -83,6 +105,12 @@ describe("artifactWriteService", () => {
         currentTx = {
             ...txFixture,
             __afterTxCallbacks: [],
+            // SQLite's writer admission is one no-op Account row update.
+            $executeRawUnsafe: async (query: string, accountId: unknown) => {
+                if (query !== 'UPDATE "Account" SET "settingsVersion" = "settingsVersion" WHERE "id" = ?'
+                    || typeof accountId !== "string") throw new Error("Unexpected SQLite admission query");
+                return 1;
+            },
             artifact: { ...txFixture.artifact, findFirst: async (...args: unknown[]) => {
                 const row = await txFixture.artifact.findFirst(...args);
                 if (!row) return row;
@@ -90,12 +118,13 @@ describe("artifactWriteService", () => {
                 return { ...row, accountId,
                     account: row.account ?? await txFixture.account.findUnique({ where: { id: accountId } }),
                     accountGrants: row.accountGrants ?? [], teamGrants: row.teamGrants ?? [], groupGrants: row.groupGrants ?? [],
+                    keyEnvelopes: row.keyEnvelopes ?? [],
                 };
             } },
         } as unknown as Tx;
     });
 
-    const artifactBytes = (value: string): Uint8Array => privacyKit.decodeBase64(value);
+    const artifactBytes = (value: string) => privacyKit.decodeBase64(value);
 
     describe("createArtifact", () => {
         it("lets a qualified transaction owner publish its one domain change instead of a generic Artifact change", async () => {
@@ -126,26 +155,25 @@ describe("artifactWriteService", () => {
                 createdAt: new Date(),
                 updatedAt: new Date(),
             });
-            const markQualifiedChange = vi.fn(async () => 77);
-
-            const result = await createArtifactTx(currentTx, {
+            const result = await inTx(tx => createArtifactTx(tx, {
                 actorUserId: "u1",
                 artifactId: "plugin-ui-archive",
                 header,
                 body,
                 dataEncryptionKey,
-                markChanged: markQualifiedChange,
-            });
+                markChanged: () => markAccountChanged(tx, { accountId: "u1", kind: "account", entityId: "qualified-fixture" }),
+            }));
 
             expect(result).toMatchObject({
                 ok: true,
                 didWrite: true,
-                cursor: 77,
             });
-            expect(markQualifiedChange).toHaveBeenCalledWith(
-                "plugin-ui-archive",
-            );
-            expect(txFixture.accountChange.upsert).not.toHaveBeenCalled();
+            expect(txFixture.accountChange.upsert).toHaveBeenCalledWith(expect.objectContaining({
+                create: expect.objectContaining({ kind: "account", entityId: "qualified-fixture" }),
+            }));
+            expect(txFixture.accountChange.upsert).not.toHaveBeenCalledWith(expect.objectContaining({
+                create: expect.objectContaining({ kind: "artifact" }),
+            }));
         });
 
         it("is idempotent for same account (no write, no cursor)", async () => {
@@ -336,6 +364,46 @@ describe("artifactWriteService", () => {
     });
 
     describe("updateArtifact", () => {
+        it.each(["before", "after"] as const)("preserves the committed receipt when orphan census fails %s the write", async (phase) => {
+            let persisted = {
+                id: "a1", accountId: "u1", seq: 5,
+                header: artifactBytes(encodePlainArtifactStoredContent({ title: "current" })), headerVersion: 10,
+                body: artifactBytes(encodePlainArtifactStoredContent({ body: "current" })), bodyVersion: 20,
+                dataEncryptionKey: artifactBytes(ARTIFACT_PLAIN_DATA_KEY_MARKER),
+            };
+            let committed = false;
+            txFixture.artifact.findFirst.mockImplementation(async () => persisted);
+            txFixture.artifact.findUnique.mockImplementation(async () => persisted);
+            txFixture.artifact.updateMany.mockImplementation(async ({ data }: { data: Partial<typeof persisted> }) => {
+                persisted = { ...persisted, ...data };
+                committed = true;
+                return { count: 1 };
+            });
+            // Only the database boundary fails; admission, CAS, audience,
+            // content encoding and both cleanup calls use their real owners.
+            txFixture.artifactBlob.findMany.mockImplementation(async () => {
+                if (committed === (phase === "after")) throw new Error("orphan census unavailable");
+                return [];
+            });
+            const warning = vi.spyOn(logger, "warn").mockImplementation(() => {});
+            const header = artifactBytes(encodePlainArtifactStoredContent({ title: "updated" }));
+            const result = await updateArtifactHttpMutation("u1", "a1", {
+                header: privacyKit.encodeBase64(header), expectedHeaderVersion: 10,
+            });
+
+            expect(committed).toBe(phase === "after");
+            expect(persisted.headerVersion).toBe(phase === "after" ? 11 : 10);
+            if (phase === "before") {
+                expect(result.statusCode).toBe(500);
+                expect(warning).not.toHaveBeenCalled();
+            } else {
+                expect(result).toEqual({ statusCode: 200, body: { success: true, headerVersion: 11 } });
+                expect(Array.from(persisted.header)).toEqual(Array.from(header));
+                expect(warning).toHaveBeenCalledWith(expect.objectContaining({ module: "api", artifactId: "a1" }),
+                    "Artifact update committed but orphan blob cleanup failed");
+            }
+        });
+
         it("does not make a classified plugin UI archive mutable through the generic writer", async () => {
             txFixture.artifact.findFirst.mockImplementation(async (input: Readonly<{
                 where: Readonly<{
@@ -399,7 +467,7 @@ describe("artifactWriteService", () => {
 
             expect(res.ok).toBe(true);
             if (!res.ok) throw new Error("expected ok");
-            expect(res.cursor).toBe(123);
+            expect(res.cursor?.resolveCursor()).toBe(123);
             expect(res.header?.version).toBe(11);
             expect(res.body?.version).toBe(21);
         });
@@ -613,7 +681,9 @@ describe("artifactWriteService", () => {
                 actorUserId: "u1",
                 artifactId: "a1",
             });
-            expect(res).toEqual({ ok: true, cursor: 77 });
+            expect(res.ok).toBe(true);
+            if (!res.ok) throw new Error("expected ok");
+            expect(res.cursor.resolveCursor()).toBe(77);
             expect(deleted).toBe(true);
             expect(deletedAt).toBeInstanceOf(Date);
         });

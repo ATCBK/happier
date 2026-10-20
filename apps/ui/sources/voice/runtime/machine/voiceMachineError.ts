@@ -63,6 +63,18 @@ export function isVoiceMachineErrorKind(value: unknown): value is VoiceMachineEr
     return typeof value === 'string' && (VOICE_MACHINE_ERROR_KINDS as ReadonlyArray<string>).includes(value);
 }
 
+/** Shared typed-refusal and retained reason classification for Local Voice and unknown-error ingress. */
+export function resolveVoiceMachineErrorKind(reason: string, preferredKind?: VoiceMachineErrorKind): VoiceMachineErrorKind {
+    if (reason === 'agent_signed_out') return 'authentication_required';
+    if (reason === 'provider_setup_required') return 'provider_setup_required';
+    if (preferredKind) return preferredKind;
+    if (reason === 'turn_aborted') return 'turn_aborted';
+    if (reason === 'tts_failed') return 'tts_failed';
+    if (reason.includes('permission_denied')) return 'mic_permission_denied';
+    if (reason === 'mic_unavailable') return 'mic_unavailable';
+    return 'provider_error';
+}
+
 /**
  * Canonical factory for {@link VoiceMachineError} values.
  *
@@ -160,10 +172,10 @@ export function classifyVoiceMachineError(
             reason: readErrorReason(error, 'mic_permission_denied'),
         });
     }
-    // Preserve an explicit installed-client setup refusal as a visible
-    // preflight error rather than offering a retry that cannot add capability.
+    // Typed authentication/setup refusals need their existing preflight remedy;
+    // retrying cannot supply a sign-in or a missing client capability.
     const code = error && typeof error === 'object' && 'code' in error ? error.code : null;
-    const kind = code === 'provider_setup_required' ? 'provider_setup_required' : fallback.kind ?? 'provider_error';
+    const kind = resolveVoiceMachineErrorKind(typeof code === 'string' ? code : '', fallback.kind);
     return createVoiceMachineError({
         kind,
         reason: readErrorReason(error, fallback.reason ?? kind),

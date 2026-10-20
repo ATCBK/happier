@@ -11,6 +11,8 @@ import {
     projectSessionTranscriptPublicationRealtimeProjection,
 } from "@/app/session/sessionTranscriptPublicationPolicy";
 import { inTx } from "@/storage/inTx";
+import { resolveSessionAccountChangePublications } from "@/app/session/changeTracking/markAccountChangesForSessionAccounts";
+import { acquireSessionAccountCursorLocksInTx } from "@/app/session/changeTracking/acquireSessionAccountCursorLocksInTx";
 import { randomKeyNaked } from "@/utils/keys/randomKeyNaked";
 import type { CurrentSessionPublisherAuthority } from "@/app/presence/sessionPublisherPresence";
 
@@ -27,14 +29,18 @@ export async function publishSessionReadyProjectionUpdate(params: Readonly<{
     const readyProjection = params.readyProjection;
     if (!readyProjection) return [];
 
-    const recipientCursors = await inTx(async (tx) => await markSessionProjectionRecipientsChanged({
-        tx,
-        sessionId: params.sessionId,
-        hint: {
-            latestReadyEventSeq: readyProjection.latestReadyEventSeq,
-            latestReadyEventAt: readyProjection.latestReadyEventAt,
-        },
-    }));
+    const publications = await inTx(async (tx) => {
+        await acquireSessionAccountCursorLocksInTx(tx, [params.sessionId]);
+        return markSessionProjectionRecipientsChanged({
+            tx,
+            sessionId: params.sessionId,
+            hint: {
+                latestReadyEventSeq: readyProjection.latestReadyEventSeq,
+                latestReadyEventAt: readyProjection.latestReadyEventAt,
+            },
+        });
+    });
+    const recipientCursors = resolveSessionAccountChangePublications(publications);
 
     const session = await loadSessionTranscriptPublicationRecipientProjection(params.sessionId);
     if (session) {

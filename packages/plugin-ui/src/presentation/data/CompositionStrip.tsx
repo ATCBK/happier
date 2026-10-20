@@ -10,7 +10,9 @@ import { HappierDataHatch } from '../content/Hatch.js';
 import type { HappierPortableStyle } from '../portableTypes.js';
 
 /** `pattern: 'hatched'` marks a part that is set aside (e.g. collected to clear) in its own colour's hatch. */
-export type CompositionSegment = Readonly<{ id: string; label: string; value: number | null; color?: string; pattern?: 'solid' | 'hatched' }>;
+export type CompositionSegment = Readonly<{ id: string; label: string; value: number | null; color?: string; pattern?: 'solid' | 'hatched';
+  /** The part's identity mark (an agent's glyph), drawn before its name in the legend. */
+  mark?: ReactNode }>;
 export type CompositionStripProps = Readonly<{
   theme: HappierUiTheme; label: string; total: number | null; segments: readonly CompositionSegment[];
   basis?: string; unknownLabel?: string; size?: 'inline' | 'tile' | 'full'; testID?: string;
@@ -20,6 +22,8 @@ export type CompositionStripProps = Readonly<{
   /** Visible ink only; accessibility retains the unabridged source amount. */
   valueFormatter?: (value: number) => string;
   shareFormatter?: (share: number) => string;
+  /** `share`: each value is already its share of `total`, so the legend reads it once as a share, never a raw fraction. */
+  valueKind?: 'amount' | 'share';
   renderSegment?: (segment: CompositionSegment, visual: ReactNode, share: number | null) => ReactNode;
   renderBarSegment?: (segment: CompositionSegment, visual: ReactNode, share: number | null) => ReactNode;
   /** Compact static/export legend; amounts remain exact in accessibility even when hidden in ink. */
@@ -69,11 +73,14 @@ export function CompositionStrip(props: CompositionStripProps) {
       {props.segments.map((segment, index) => {
         const share = shares[index] ?? null;
         const exact = segment.value === null || !Number.isFinite(segment.value) ? props.unknownLabel ?? 'Unknown' : formatHappierDataValue(segment.value, text.locale);
-        const visual = <View role="listitem" accessible accessibilityLabel={[segment.label, exact, props.basis, share === null ? undefined : formatHappierDataShare(share, text.locale)].filter(Boolean).join(', ')}
+        const spokenShare = share === null ? undefined : formatHappierDataShare(share, text.locale);
+        const spoken = props.valueKind === 'share' ? [segment.label, spokenShare ?? exact] : [segment.label, exact, props.basis, spokenShare];
+        const visual = <View role="listitem" accessible accessibilityLabel={spoken.filter(Boolean).join(', ')}
           style={{ flexDirection: 'row', alignItems: 'center', gap: props.theme.spacing.xsmall }}>
           {segment.pattern === 'hatched' ? <View style={{ width: 8, height: 8, borderRadius: props.theme.radii.small, overflow: 'hidden', borderWidth: 1,
             borderColor: segment.color ?? props.theme.colors.accent }}><HappierDataHatch theme={props.theme} color={segment.color ?? props.theme.colors.accent} /></View>
             : <View style={{ width: 8, height: 8, borderRadius: props.theme.radii.small, backgroundColor: segment.color ?? props.theme.colors.accent }} />}
+          {segment.mark ? <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">{segment.mark}</View> : null}
           {segment.label ? <HappierText allowFontScaling={props.appearance?.allowFontScaling} style={{ ...text.caption, ...props.appearance?.textStyle, flexShrink: 1 }}>{segment.label}</HappierText> : null}
           {props.appearance?.figure === 'value' ? segment.value === null || !Number.isFinite(segment.value) ? null
             : <HappierText allowFontScaling={props.appearance.allowFontScaling} style={{ ...text.captionStrong, ...props.appearance.textStyle }} tabularNumbers>

@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useId, useMemo, useState, type ReactElement, type ReactNode } from 'react';
 import { hasHappierPrecisePointer } from '../interaction/precisePointer.js';
-import { Dimensions, Platform, View, type TextStyle, type ViewStyle } from 'react-native';
+import { Platform, View, type TextStyle, type ViewStyle } from 'react-native';
 
 import {
   resolveHappierUiPalette,
@@ -29,12 +29,12 @@ import { HAPPIER_PAGE_METRICS, isHappierPageRowAccessoryStacked, isHappierPageRo
 import type { HappierPageRowMetrics } from '../layout/pageRowMetrics.js';
 import { HappierPageRowFieldLayoutContext } from '../layout/pageRowField.js';
 import { resolveHappierPageRowDetailLayout } from '../layout/pageRowDetail.js';
-import { resolveHappierViewportClass } from '../layout/viewportClass.js';
 import { HAPPIER_FIELD_BOX_METRICS } from '../form/FieldBox.js';
 import { happierPageRowDividerWidth, useHappierPageSection } from '../layout/PageSection.js';
-import { resolveHappierPageTextStyle } from '../layout/pageText.js';
+import { HAPPIER_PAGE_TEXT, resolveHappierPageTextStyle } from '../layout/pageText.js';
 import { HAPPIER_TONE_COLOR_TOKEN, type HappierTone } from '../semantics.js';
 import { HappierText } from '../text/Text.js';
+import { HAPPIER_MIDDLE_ELLIPSIS_STYLE, splitForWebMiddleEllipsis } from '../text/middleEllipsis.js';
 import { HAPPIER_META_COLUMN_STYLE } from '../text/metaColumn.js';
 import { resolveHappierTypeRoleStyle } from '../text/typeRole.js';
 import {
@@ -92,7 +92,7 @@ export type HappierListSectionProps = Readonly<{
    * The type role of the heading's words; a dense table's groups take `micro`, and a group drawn as a page
    * section (a page-scrolling list's groups) takes the page's section title.
    */
-  titleRole?: 'label' | 'micro' | 'section';
+  titleRole?: 'label' | 'micro' | 'group' | 'section';
   /** One control at the header's end ("See all"), beside — never inside — the heading's name. */
   action?: ReactNode;
   /**
@@ -120,6 +120,17 @@ export type HappierListSectionProps = Readonly<{
   testID?: string;
   style?: HappierStyleProp;
 }>;
+
+/**
+ * A layered row's content (`contentBesidePressable`) lets presses through to the press target beneath it. The web
+ * inherits `none` down the tree, so a control opts back in with `auto`; native skips a `none` subtree entirely, so
+ * there the content is `box-none` and its leaves that are not controls are `none` (the Collection's cells).
+ */
+export const HAPPIER_ROW_CONTENT_POINTER_EVENTS = Platform.OS === 'web' ? 'none' : 'box-none';
+/** A layered row's control: its own press target over the row's. */
+export const HAPPIER_ROW_CONTROL_POINTER_EVENTS = 'auto';
+const ROW_LAYER_STYLE: ViewStyle = { width: '100%', minWidth: 0 };
+const ROW_LAYER_TARGET_STYLE: HappierPortableStyle = { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0, minHeight: 0 };
 
 export type HappierListItemProps = Readonly<{
   /**
@@ -157,6 +168,11 @@ export type HappierListItemProps = Readonly<{
   titleNumberOfLines?: number;
   subtitleNumberOfLines?: number;
   detailNumberOfLines?: number;
+  /**
+   * `middle` keeps the title on one line and gives up its middle, never its end: a path keeps its file
+   * name, a name keeps its disambiguating suffix. Omitted, the title wraps or ends in a tail ellipsis.
+   */
+  titleEllipsizeMode?: 'middle';
   /** Decorative leading content; the row's label remains its text. */
   icon?: ReactNode;
   /** Trailing content such as the shared item overflow adapter. */
@@ -181,8 +197,19 @@ export type HappierListItemProps = Readonly<{
   accessoryBelow?: boolean;
   /** A page select may keep its content width beside the label in a narrow desktop column. Phones stack it. */
   fieldAccessory?: boolean;
+  /** With `fieldAccessory`: width of sibling controls sharing the accessory slot (a glyph and its gap), kept out of the field's room. */
+  fieldAccessorySiblingPx?: number;
   /** Keep an interactive accessory outside the row's primary Pressable. */
   accessoryOutsidePressable?: boolean;
+  /**
+   * The row's content carries its own controls (a port chip with its menu) in the middle of the row, where
+   * `accessory` cannot reach. The press target then fills the row beneath its content instead of wrapping it, so
+   * no control nests inside it: presses on the content fall through to the row (the content passes pointer
+   * events through), and the parts that are controls opt back in with {@link HAPPIER_ROW_CONTROL_POINTER_EVENTS}.
+   * The row keeps its one name, focus ring, hover, selection and keyboard behaviour; each control is its own
+   * press and focus target after it.
+   */
+  contentBesidePressable?: boolean;
   /** @internal The accessory's menu is open: hover-revealed row actions stay shown while it is. */
   accessoryHeld?: boolean;
   /** @internal The accessory is only the row's actions trigger (no other control beside it). */
@@ -323,7 +350,7 @@ export function HappierRowActionsReveal(props: Readonly<{ children: ReactNode }>
   return <HappierRowActionRevealSlot revealed={revealed}>{props.children}</HappierRowActionRevealSlot>;
 }
 
-/** A positioned overlay's fade (a card corner's actions, a touch row's held actions). */
+/** A card corner's actions fade (a positioned overlay). */
 const CARD_ACTIONS_REVEAL_TRANSITION = {
   transitionProperty: 'opacity',
   transitionDuration: `${HAPPIER_MOTION_V1.fastMs}ms`,
@@ -361,14 +388,17 @@ export function HappierListSection({
     ? titleRole === 'micro'
       // A dense collection's group band: the shared group-label step (lab `.grp`), one step under the rows.
       ? { ...resolveHappierTextStepStyle(HAPPIER_COLLECTION_LIST_TEXT.groupTitle, hostTypography), color: theme.colors.secondaryText }
-      : titleRole === 'section'
-        ? { ...resolveHappierPageTextStyle('sectionTitle', hostTypography), color: theme.colors.text }
-        : textStyle(theme, hostTypography, 'label', theme.colors.text)
+      : titleRole === 'group'
+        // A resting list's group heading on the page canvas (lab phone `.grp`): the group heading step, in text.
+        ? { ...resolveHappierTextStepStyle(HAPPIER_COLLECTION_LIST_TEXT.groupHeading, hostTypography), color: theme.colors.text }
+        : titleRole === 'section'
+          ? { ...resolveHappierPageTextStyle('sectionTitle', hostTypography), color: theme.colors.text }
+          : textStyle(theme, hostTypography, 'label', theme.colors.text)
     : undefined;
   const quietStyle = theme
     ? titleRole === 'section'
       ? { ...resolveHappierPageTextStyle('sectionTitle', hostTypography), fontWeight: '400' as const, color: theme.colors.mutedText }
-      : titleRole === 'micro'
+      : titleRole === 'micro' || titleRole === 'group'
         ? { ...resolveHappierTextStepStyle(HAPPIER_COLLECTION_LIST_TEXT.groupCount, hostTypography), color: theme.colors.mutedText }
         : textStyle(theme, hostTypography, titleRole, theme.colors.mutedText)
     : undefined;
@@ -376,7 +406,7 @@ export function HappierListSection({
   const hasAction = action !== undefined && action !== null && action !== false;
   // A dense band's end holds its one trailing fact: its action when it has one ("Left behind 3 · …" then "Clean
   // up"), otherwise what its rows share ("Needs you 5 … You act next", lab `.grp`).
-  const trailingDescription = titleRole === 'micro' && !hasAction;
+  const trailingDescription = (titleRole === 'micro' || titleRole === 'group') && !hasAction;
   const heading = count === undefined && description === undefined && !hasAction
     ? <HappierText accessible={false} style={titleStyle}>{titleContent ?? title}</HappierText>
     : (
@@ -457,17 +487,47 @@ export function HappierListSection({
   );
 }
 
-/** A narrow desktop field takes the space its row leaves beside the label. Phones keep stacked fields. */
+/**
+ * A field in a narrow row takes the space its row leaves beside the label, on a phone as on a pane;
+ * it stacks beneath only when that space is below the field's narrowest trigger. The label keeps the
+ * smaller of the shared column and what it really needs: the measured natural width of a short name,
+ * plus its title accessory (a marker) and that accessory's gap. A short-named row is not held to 200px.
+ *
+ * Every row adapter (core `Item`, the public plugin `Item`) supplies the same measured facts; the label
+ * column is decided only here.
+ */
 export function resolveHappierPageRowFieldMaxWidth(input: Readonly<{
   rowWidthPx: number | null;
   rowInsetPx?: number;
+  /** The name's measured natural width; null while unmeasured or when the title is not plain text. */
+  titleNaturalWidthPx?: number | null;
+  /** A title accessory beside the name: its measured width, null while unmeasured. Omit when there is none. */
+  titleAccessoryWidthPx?: number | null;
+  /** The gap between the name and its title accessory. */
+  titleAccessoryGapPx?: number;
+  /** Width of sibling controls sharing the accessory slot with the field (a role's runs-as glyph and its gap). */
+  siblingPx?: number;
+  /**
+   * The widest room beside the label in which the field's value filled its box (it was being cut).
+   * Room that is no wider moves the field beneath its label, where the value reads in full.
+   */
+  fieldSaturatedAtPx?: number | null;
 }>): number | null {
   const width = input.rowWidthPx;
-  if (!isHappierPageRowNarrow(width) || width === null
-    || resolveHappierViewportClass(Dimensions.get('window')) === 'compact') return null;
+  if (!isHappierPageRowNarrow(width) || width === null) return null;
+  const naturalLabelPx = input.titleNaturalWidthPx == null || input.titleAccessoryWidthPx === null
+    ? null
+    : input.titleNaturalWidthPx + (input.titleAccessoryWidthPx === undefined
+      ? 0
+      : (input.titleAccessoryGapPx ?? 0) + input.titleAccessoryWidthPx);
+  const labelColumnPx = naturalLabelPx === null
+    ? HAPPIER_PAGE_METRICS.sectionTextMinWidthPx
+    : Math.min(HAPPIER_PAGE_METRICS.sectionTextMinWidthPx, naturalLabelPx);
   const available = width - 2 * (input.rowInsetPx ?? HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx)
-    - HAPPIER_PAGE_METRICS.rowLeadingGapPx - HAPPIER_PAGE_METRICS.sectionTextMinWidthPx;
-  return available >= HAPPIER_FIELD_BOX_METRICS.triggerMinWidthPx ? available : null;
+    - HAPPIER_PAGE_METRICS.rowLeadingGapPx - labelColumnPx - (input.siblingPx ?? 0);
+  if (available < HAPPIER_FIELD_BOX_METRICS.triggerMinWidthPx) return null;
+  if (input.fieldSaturatedAtPx != null && available <= input.fieldSaturatedAtPx + 0.5) return null;
+  return available;
 }
 
 /**
@@ -488,12 +548,15 @@ export function HappierListItem({
   titleNumberOfLines,
   subtitleNumberOfLines,
   detailNumberOfLines,
+  titleEllipsizeMode,
   icon,
   accessory,
   accessoryWraps,
   accessoryBelow,
   fieldAccessory,
+  fieldAccessorySiblingPx,
   accessoryOutsidePressable,
+  contentBesidePressable,
   accessoryHeld,
   accessoryIsRowActions,
   tone = 'neutral',
@@ -524,6 +587,10 @@ export function HappierListItem({
   accessibilityRowIndex,
   accessibilityRowCount,
 }: HappierListItemProps) {
+  // A middle ellipsis on the web is two runs (the web draws only a tail one); native uses the platform's mode.
+  const titleMiddleRequested = titleEllipsizeMode === 'middle' && typeof title === 'string' && titleContent === undefined;
+  const titleMiddle = titleMiddleRequested && Platform.OS === 'web' ? splitForWebMiddleEllipsis(title) : null;
+  const titleMiddleNative = titleMiddleRequested && titleMiddle === null;
   const paintColor = useHappierMaterialColorResolver();
   const environmentTheme = useOptionalHappierUiTheme();
   const hostTypography = useOptionalHappierUiTypography();
@@ -548,7 +615,7 @@ export function HappierListItem({
   // whole-row hover and open fills, the open row's leading edge); see `HappierCollectionTableRowContext`.
   const collectionItem = useHappierCollectionTableRow();
   const treeRow = useContext(HappierCollectionTreeRowContext);
-  const collectionRow = collectionItem && pageSection === null && !navigationRow;
+  const collectionRow = collectionItem !== null && pageSection === null && !navigationRow;
   // The open row (its detail is showing) carries the edge; a row in the bulk set is filled without one.
   const openRow = useContext(HappierListRowOpenContext);
   const cardRing = useContext(HappierCardSelectionRingContext);
@@ -558,15 +625,31 @@ export function HappierListItem({
   const reducedMotion = useOptionalHappierUiAccessibility()?.reducedMotion === true;
   // Page and Collection rows with wrapping controls share the existing narrow
   // row measurement: controls move below rather than squeezing the label.
-  const measuresPageRow = (pageSection !== null || collectionItem) && accessoryWraps === true
+  const measuresPageRow = (pageSection !== null || collectionItem !== null) && accessoryWraps === true
     && accessory !== undefined && accessory !== null;
   const [pageRowWidthPx, setPageRowWidthPx] = useState<number | null>(null);
-  const [fieldMaxWidthPx, setFieldMaxWidthPx] = useState<number | null>(null);
   const pageRowInsetPx = pageSection?.rowInsetPx;
   const [detailWidthPx, setDetailWidthPx] = useState<number | null>(null);
   const [titleNaturalWidthPx, setTitleNaturalWidthPx] = useState<number | null>(null);
   const [leadingWidthPx, setLeadingWidthPx] = useState<number | null>(null);
   const measuresDetail = pageSection !== null && Boolean(detail) && isHappierPageRowNarrow(pageRowWidthPx);
+  // A field beside a short name needs only that name's room (see `resolveHappierPageRowFieldMaxWidth`).
+  const measuresFieldLabel = pageSection !== null && fieldAccessory === true && isHappierPageRowNarrow(pageRowWidthPx);
+  const measuresTitle = (measuresDetail || measuresFieldLabel) && Boolean(title);
+  // The room at which the field's value last filled its box (see `resolveHappierPageRowFieldMaxWidth`).
+  const [fieldSaturatedAtPx, setFieldSaturatedAtPx] = useState<number | null>(null);
+  const handleFieldSaturated = useCallback((maxWidthPx: number) => {
+    setFieldSaturatedAtPx((current) => (current !== null && current >= maxWidthPx ? current : maxWidthPx));
+  }, []);
+  const fieldMaxWidthPx = useMemo(() => (pageRowInsetPx !== undefined && fieldAccessory === true
+    ? resolveHappierPageRowFieldMaxWidth({
+      rowWidthPx: pageRowWidthPx,
+      rowInsetPx: pageRowInsetPx,
+      titleNaturalWidthPx: measuresFieldLabel ? titleNaturalWidthPx : null,
+      ...(fieldAccessorySiblingPx === undefined ? {} : { siblingPx: fieldAccessorySiblingPx }),
+      fieldSaturatedAtPx,
+    })
+    : null), [fieldAccessory, fieldAccessorySiblingPx, fieldSaturatedAtPx, measuresFieldLabel, pageRowInsetPx, pageRowWidthPx, titleNaturalWidthPx]);
   const handleDetailLayout = useCallback((event: Readonly<{ nativeEvent: Readonly<{ layout: Readonly<{ width: number }> }> }>) => {
     const width = event.nativeEvent.layout.width;
     if (Number.isFinite(width) && width > 0) setDetailWidthPx(current => current === width ? current : width);
@@ -583,11 +666,7 @@ export function HappierListItem({
     const next = event.nativeEvent.layout.width;
     if (!Number.isFinite(next) || next <= 0) return;
     setPageRowWidthPx((current) => (current === next ? current : next));
-    const nextFieldMaxWidthPx = pageRowInsetPx !== undefined && fieldAccessory === true
-      ? resolveHappierPageRowFieldMaxWidth({ rowWidthPx: next, rowInsetPx: pageRowInsetPx })
-      : null;
-    setFieldMaxWidthPx((current) => (current === nextFieldMaxWidthPx ? current : nextFieldMaxWidthPx));
-  }, [fieldAccessory, pageRowInsetPx]);
+  }, []);
   // A page row's control follows the one row-accessory rule core's `Item` uses: a wrapping control is
   // adaptive, any other control is an operation that stays beside its label while the label keeps its column.
   const [pageAccessoryWidthPx, setPageAccessoryWidthPx] = useState<number | null>(null);
@@ -621,7 +700,11 @@ export function HappierListItem({
       nativeEvent: { layout: { width: event.nativeEvent.layout.width - pageSection.rowInsetPx } },
     })
     : undefined;
-  const fieldLayout = useMemo(() => ({ maxWidthPx: fieldMaxWidthPx, stacked: stackPageAccessory }), [fieldMaxWidthPx, stackPageAccessory]);
+  const fieldLayout = useMemo(() => ({
+    maxWidthPx: fieldMaxWidthPx,
+    stacked: stackPageAccessory,
+    onFieldSaturated: handleFieldSaturated,
+  }), [fieldMaxWidthPx, handleFieldSaturated, stackPageAccessory]);
   const pageAccessory = pageSection !== null
     ? <HappierPageRowFieldLayoutContext.Provider value={fieldLayout}>{accessory}</HappierPageRowFieldLayoutContext.Provider>
     : accessory;
@@ -721,9 +804,11 @@ export function HappierListItem({
           paddingRight: resolveHappierCollectionListRowPadding(0).paddingRight - NAVIGATION_ROW_FOCUS_RING_WIDTH,
           paddingVertical: NAVIGATION_ROW_TEXT_FLOOR_PX,
         } : pageSection ? {
-          flexDirection: stackPageAccessory && includeAccessory ? 'column' : 'row',
-          alignItems: stackPageAccessory && includeAccessory ? 'stretch' : 'center',
-          flexWrap: 'nowrap',
+          // A stacked control moves beneath the row's text. With a leading glyph the glyph and the text stay
+          // together on the first line and the control wraps to its own, so the glyph is never alone above them.
+          flexDirection: stackPageAccessory && includeAccessory && !icon ? 'column' : 'row',
+          alignItems: stackPageAccessory && includeAccessory ? (icon ? 'flex-start' : 'stretch') : 'center',
+          flexWrap: stackPageAccessory && includeAccessory && icon ? 'wrap' : 'nowrap',
           columnGap: HAPPIER_PAGE_METRICS.rowLeadingGapPx,
           rowGap: 10,
           minHeight: Math.max(
@@ -762,7 +847,7 @@ export function HappierListItem({
         <View
           style={pageSection ? {
             // A page row decides placement by measurement, not by wrapping.
-            ...(stackPageAccessory && includeAccessory ? { flexGrow: 0, flexShrink: 0 } : { flex: 1 }),
+            ...(stackPageAccessory && includeAccessory && !icon ? { flexGrow: 0, flexShrink: 0 } : { flex: 1 }),
             minWidth: 0,
             gap: 0,
           } : {
@@ -777,7 +862,8 @@ export function HappierListItem({
         >
           {title ? (
             <HappierText
-              numberOfLines={titleNumberOfLines}
+              numberOfLines={titleMiddle === null ? titleMiddleNative ? 1 : titleNumberOfLines : undefined}
+              {...(titleMiddleNative ? { ellipsizeMode: 'middle' as const } : {})}
               textScale={textScale}
               style={navigationRow
                 ? {
@@ -790,8 +876,14 @@ export function HappierListItem({
                 : pageSection
                 ? { ...resolveHappierPageTextStyle('rowTitle', hostTypography), ...pageRowMetrics?.title, color: titleColor }
                 : textStyle(resolvedTheme, hostTypography, 'label', titleColor)}
+              {...(titleMiddle === null ? {} : { baseStyle: HAPPIER_MIDDLE_ELLIPSIS_STYLE.row })}
             >
-              {titleContent ?? title}
+              {titleMiddle === null ? titleContent ?? title : (
+                <>
+                  <HappierText style={HAPPIER_MIDDLE_ELLIPSIS_STYLE.head} numberOfLines={1}>{titleMiddle.head}</HappierText>
+                  <HappierText style={HAPPIER_MIDDLE_ELLIPSIS_STYLE.tail} numberOfLines={1}>{titleMiddle.tail}</HappierText>
+                </>
+              )}
             </HappierText>
           ) : null}
           {detailBeneath && detail ? <HappierText
@@ -818,7 +910,12 @@ export function HappierListItem({
             textScale={textScale}
             tabularNumbers
             style={[
-              textStyle(
+              // On a page a trailing value summary reads at the row title's size in the regular face, as
+              // core page rows draw it; elsewhere it is the collection's quiet meta.
+              pageSection
+                ? { ...resolveHappierTextStepStyle({ ...HAPPIER_PAGE_TEXT.rowTitle, weight: 'regular' }, hostTypography), ...pageRowMetrics?.title,
+                    color: detailTone === undefined ? resolvedTheme.colors.secondaryText : resolvedTheme.colors[HAPPIER_TONE_COLOR_TOKEN[detailTone]] }
+                : textStyle(
                 resolvedTheme,
                 hostTypography,
                 'micro',
@@ -837,16 +934,26 @@ export function HappierListItem({
         ) : null}
         {includeAccessory
           ? (pageSection && accessory !== undefined && accessory !== null
-            ? <View onLayout={onPageAccessoryLayout} style={stackPageAccessory ? { alignSelf: 'stretch', alignItems: 'stretch' } : null}>{pageAccessory}</View>
+            ? <View
+              onLayout={onPageAccessoryLayout}
+              style={stackPageAccessory
+                ? {
+                  alignSelf: 'stretch',
+                  alignItems: 'stretch',
+                  // Beneath the text, on its edge: past the glyph column and the gap after it.
+                  ...(icon ? { flexBasis: '100%', paddingLeft: HAPPIER_PAGE_METRICS.rowLeadingColumnPx + HAPPIER_PAGE_METRICS.rowLeadingGapPx } : {}),
+                }
+                : null}
+            >{pageAccessory}</View>
             : accessory)
           : null}
         {busyIndicator}
-        {measuresDetail ? <>
-          <View aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants" onLayout={handleDetailLayout}
+        {measuresDetail || measuresTitle ? <>
+          {measuresDetail ? <View aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants" onLayout={handleDetailLayout}
             style={{ position: 'absolute', left: 0, top: 0, opacity: 0, pointerEvents: 'none' }}>
             <HappierText numberOfLines={1} textScale={textScale} style={textStyle(resolvedTheme, hostTypography, 'micro', resolvedTheme.colors.secondaryText)}>{detailContent ?? detail}</HappierText>
-          </View>
-          {title ? <View aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants" onLayout={handleTitleLayout}
+          </View> : null}
+          {measuresTitle ? <View aria-hidden accessibilityElementsHidden importantForAccessibility="no-hide-descendants" onLayout={handleTitleLayout}
             style={{ position: 'absolute', left: 0, top: 0, opacity: 0, pointerEvents: 'none' }}>
             <HappierText numberOfLines={1} textScale={textScale} style={{ ...resolveHappierPageTextStyle('rowTitle', hostTypography), ...pageRowMetrics?.title }}>{titleContent ?? title}</HappierText>
           </View> : null}
@@ -862,20 +969,26 @@ export function HappierListItem({
     ? cardCorner : null;
   const cardActionsVisible = cardCornerAccessory === null || !hasHappierPrecisePointer()
     || cardActionsShown.hovered || cardActionsShown.focused || accessoryHeld === true;
-  // A phone's collection row keeps its actions behind a long press (the platform's context menu): a
-  // `•••` on every row of a long list is noise. The trigger stays laid out and announced, so the menu
-  // still anchors to the row's end and assistive technology still reaches it; it shows while open.
-  const touchRowActions = collectionRow && hasSecondaryActions && accessoryIsRowActions === true && cardCornerAccessory === null
+  // A touch row, and every row of a resting list (a phone, a narrow page), keeps its actions out of the
+  // row's flow: rows run to the page's margin and the age keeps the trailing edge (lab phone list). A `•••`
+  // on every row of a long list is noise, so touch reaches them by long press (the platform's context
+  // menu) and a precise pointer sees them over the row's end while the row is the pointer's. The trigger
+  // stays mounted and announced, so the menu anchors to the row's end, focus reveals it and assistive
+  // technology reaches it; it shows while its menu is open.
+  const precisePointer = hasHappierPrecisePointer();
+  const overlayRowActions = collectionRow && hasSecondaryActions && accessoryIsRowActions === true && cardCornerAccessory === null
     && behavior.accessoryPlacement === 'outside'
-    && !hasHappierPrecisePointer();
+    && (!precisePointer || collectionItem?.hairline === false);
   // A mouse or trackpad shows a collection row's actions when the row is the pointer's, has focus inside, is
   // selected or is open: a `•••` on every row is noise (the lab's rows carry only the chevron). The cell stays
   // laid out and announced, so the age keeps its place and assistive technology and Tab still reach it. The
   // overflow itself reads this through `HappierRowActionsReveal`, whatever else shares the row's accessory.
   const hoverRevealRowActions = collectionRow && hasSecondaryActions && cardCornerAccessory === null
-    && behavior.accessoryPlacement === 'outside' && !touchRowActions && hasHappierPrecisePointer();
+    && behavior.accessoryPlacement === 'outside' && !overlayRowActions && precisePointer;
   const rowActionsRevealed = collectionRowHovered || cardActionsShown.focused || selected === true || openRow || accessoryHeld === true;
-  const row = isInteractive && resolvedTheme ? (
+  const layered = contentBesidePressable === true && isInteractive && resolvedTheme !== undefined && resolvedTheme !== null;
+  const withRowLayer = (style: HappierPortableStyle): HappierPortableStyle => layered ? { ...style, ...ROW_LAYER_TARGET_STYLE } : style;
+  const pressTarget = isInteractive && resolvedTheme ? (
     <HappierPressable
       testID={testID}
       accessibilityRole={accessibilityRole ?? 'button'}
@@ -900,7 +1013,7 @@ export function HappierListItem({
       onContextMenu={onContextMenu}
       onLongPress={Platform.OS === 'web' ? undefined : onContextMenu}
       onPress={(event) => onPress?.(event)}
-      style={(state) => navigationRow ? ({
+      style={(state) => withRowLayer(navigationRow ? ({
         minWidth: 0,
         minHeight: targetSize,
         marginHorizontal: HAPPIER_COLLECTION_LIST_METRICS.rowInset,
@@ -950,19 +1063,36 @@ export function HappierListItem({
           ? 0.5
           : state.pressed ? HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle : 1,
         ...happierPressTransitionStyle(state.pressed, ['opacity']),
-      })}
+      }))}
     >
-      {(state) => renderSemanticContent(state.busy, includeAccessory)}
+      {(state) => layered ? null : renderSemanticContent(state.busy, includeAccessory)}
     </HappierPressable>
   ) : renderSemanticContent(busy === true, includeAccessory);
+  // The press target fills the row under its content; the content lies over it and lets presses through.
+  const row = layered ? (
+    <View style={ROW_LAYER_STYLE}>
+      {pressTarget}
+      <View pointerEvents={HAPPIER_ROW_CONTENT_POINTER_EVENTS} style={{ minHeight: targetSize, borderWidth: 1, borderColor: 'transparent' }}>
+        {renderSemanticContent(busy === true, includeAccessory)}
+      </View>
+    </View>
+  ) : pressTarget;
 
-  const rowAccessory = touchRowActions && accessory ? (
-
-    // Out of the row's flow, so the age keeps the row's trailing edge (lab A1p); it overlays that edge while open.
-    <View pointerEvents={accessoryHeld === true ? 'auto' : 'none'}
-      style={[{ position: 'absolute', end: 0, top: 0, bottom: 0, justifyContent: 'center', opacity: accessoryHeld === true ? 1 : 0 },
-        reducedMotion ? null : CARD_ACTIONS_REVEAL_TRANSITION]}>{accessory}</View>
-  ) : accessory;
+  // Out of the row's flow, so the age keeps the row's trailing edge (lab A1p); it overlays that edge while shown.
+  const overlaidRowActions = overlayRowActions && accessory ? (
+    <View
+      // @ts-expect-error React Native's role union omits RNW's standard gridcell role (a grid row's cell).
+      role={isGridRow ? 'gridcell' : undefined}
+      pointerEvents="box-none"
+      // On the row's trailing inset, where an accessory cell would hold the trigger; a resting list's rows end on
+      // the page's edge, and so does the trigger.
+      style={{ position: 'absolute', end: collectionItem?.hairline === false ? 0 : resolvedTheme?.spacing.medium ?? 0, top: 0, bottom: 0, justifyContent: 'center' }}>
+      <HappierRowActionRevealSlot revealed={accessoryHeld === true || (precisePointer && collectionRowHovered)}>
+        {accessory}
+      </HappierRowActionRevealSlot>
+    </View>
+  ) : null;
+  const rowAccessory = overlaidRowActions ?? accessory;
   const rowContent = isGridRow && cardCornerAccessory !== null ? (
     <>
       {/* @ts-expect-error React Native's role union omits RNW's standard gridcell role. */}
@@ -978,8 +1108,9 @@ export function HappierListItem({
       <>
         {/* @ts-expect-error React Native's role union omits RNW's standard gridcell role. */}
         <View role="gridcell" style={stackPageAccessory ? { width: '100%', minWidth: 0 } : { flex: 1, minWidth: accessoryWraps ? '50%' : 0 }}>{row}</View>
+        {/* The control keeps the row's trailing inset, as its text keeps the leading one (and a selected row's fill shows it). */}
         {/* @ts-expect-error React Native's role union omits RNW's standard gridcell role. */}
-        {accessory ? <View role="gridcell">{rowAccessory}</View> : null}
+        {overlaidRowActions ?? (accessory ? <View role="gridcell" style={stackPageAccessory ? null : { paddingEnd: resolvedTheme?.spacing.medium ?? 0 }}>{accessory}</View> : null)}
       </>
     ) : (
       // @ts-expect-error React Native's role union omits RNW's standard gridcell role.
@@ -1012,15 +1143,19 @@ export function HappierListItem({
         {pageAccessory}
       </View>
     </View>
-  ) : behavior.accessoryPlacement === 'outside' ? (
-    <View style={{
+  ) : behavior.accessoryPlacement === 'outside' || collectionRow ? (
+    // Keep the collection's press target at the same depth when responsive
+    // composition adds or removes its trailing controls, preserving focus.
+    <View style={includeAccessory ? undefined : {
       flexDirection: stackPageAccessory ? 'column' : 'row',
       alignItems: stackPageAccessory ? 'stretch' : 'center',
       flexWrap: accessoryWraps ? 'wrap' : 'nowrap',
       minWidth: 0,
+      // The control keeps the row's trailing inset, as its text keeps the leading one.
+      ...(accessory && !overlayRowActions && !stackPageAccessory ? { paddingEnd: resolvedTheme?.spacing.medium ?? 0 } : {}),
     }}>
-      <View style={stackPageAccessory ? null : { flex: 1, minWidth: accessoryWraps ? '50%' : 0 }}>{row}</View>
-      {rowAccessory}
+      <View style={includeAccessory || stackPageAccessory ? null : { flex: 1, minWidth: accessoryWraps ? '50%' : 0 }}>{row}</View>
+      {includeAccessory ? null : rowAccessory}
     </View>
   ) : row;
 
@@ -1063,7 +1198,7 @@ export function HappierListItem({
         : {})}
       testID={isInteractive ? undefined : testID}
       // RNW observes only at mount, so retain the measurement when a compound accessory arrives later.
-      onLayout={pageSection !== null || collectionItem ? handlePageRowLayout : undefined}
+      onLayout={pageSection !== null || collectionItem !== null ? handlePageRowLayout : undefined}
       {...(collectionRow && isInteractive ? {
         onMouseEnter: () => { setCollectionRowHovered(true); },
         onMouseLeave: () => { setCollectionRowHovered(false); },
@@ -1093,14 +1228,16 @@ export function HappierListItem({
       {collectionRow && resolvedTheme ? (
         <>
           {/* Overlays, never layout: the row keeps the exact height its Collection planned. */}
-          <View
-            pointerEvents="none"
-            style={{
-              position: 'absolute', left: 0, right: 0, bottom: 0,
-              height: happierPageRowDividerWidth(),
-              backgroundColor: collectionPalette(resolvedTheme, navigationPalette).rowDivider,
-            }}
-          />
+          {collectionItem?.hairline === false ? null : (
+            <View
+              pointerEvents="none"
+              style={{
+                position: 'absolute', left: 0, right: 0, bottom: 0,
+                height: happierPageRowDividerWidth(),
+                backgroundColor: collectionPalette(resolvedTheme, navigationPalette).rowDivider,
+              }}
+            />
+          )}
           {openRow ? (
             <View
               pointerEvents="none"

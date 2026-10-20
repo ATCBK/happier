@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { formatSharedSavedSecretRefV1 } from '../../account/settings/savedSecretReferenceV1.js';
-import { prepareAcpCatalogTransferV2, readAcpCatalogTransferSourceV2 } from './transferAcpCatalogV2.js';
+import { prepareAcpCatalogTransferV2, readAcpCatalogTransferSourceV2, type AcpCatalogTransferAgentDeclarationV2 } from './transferAcpCatalogV2.js';
+
+function transportDeclarations(acpStderrRules: AcpCatalogTransferAgentDeclarationV2['acpStderrRules']): readonly AcpCatalogTransferAgentDeclarationV2[] {
+  return [{ identity: { pluginId: 'happier.agent.kiro', localId: 'kiro' }, acpStderrRules }];
+}
 
 // Observed 0.2 schema/producer basis: 37a6541578749067b49d4579be8c752c9591b8c8,
 // packages/protocol/src/acpCatalog/settingsV1.ts:37–80.
@@ -48,7 +52,7 @@ describe('prepareAcpCatalogTransferV2', () => {
     const before = structuredClone(rawSettings);
     const rules = { suppress: [{ includes: ['optional vendor notice'] }] };
     const prepared = prepareAcpCatalogTransferV2({ rawSettings, sourceSettingsVersion: 17,
-      savedSecretRefs: new Map([['old-token', formatSharedSavedSecretRefV1('resource-token')]]), kiroStderrRules: rules });
+      savedSecretRefs: new Map([['old-token', formatSharedSavedSecretRefV1('resource-token')]]), agentDeclarations: transportDeclarations(rules) });
 
     expect(prepared.status).toBe('ready');
     if (prepared.status !== 'ready') return;
@@ -70,16 +74,34 @@ describe('prepareAcpCatalogTransferV2', () => {
     expect(rawSettings).toEqual(before);
   });
 
+  it('retains authored native permission mappings when materializing contributed transport rules', () => {
+    const source = predecessorSource();
+    const permissionModeMapping = { 'read-only': 'ask', plan: 'plan' };
+    const rawSettings = { ...source, acpCatalogSettingsV1: { ...source.acpCatalogSettingsV1,
+      backends: [{ ...source.acpCatalogSettingsV1.backends[0], runtime: { permissionModeMapping } }],
+    } };
+    const rules = { suppress: [{ includes: ['optional vendor notice'] }] };
+    expect(prepareAcpCatalogTransferV2({ rawSettings, sourceSettingsVersion: 17,
+      savedSecretRefs: new Map([['old-token', formatSharedSavedSecretRefV1('resource-token')]]),
+      agentDeclarations: transportDeclarations(rules),
+    })).toMatchObject({ status: 'ready', record: { definitions: [{ runtime: { stderrRules: rules, permissionModeMapping } }] } });
+  });
+
   it('refuses an incomplete secret inventory or unavailable transport contribution', () => {
     expect(prepareAcpCatalogTransferV2({ rawSettings: predecessorSource(), sourceSettingsVersion: 17 }))
       .toMatchObject({ status: 'unavailable', reason: 'saved-secret-unavailable' });
     expect(prepareAcpCatalogTransferV2({ rawSettings: predecessorSource(), sourceSettingsVersion: 17,
       savedSecretRefs: new Map([['old-token', formatSharedSavedSecretRefV1('resource-token')]]) }))
       .toMatchObject({ status: 'unavailable', reason: 'transport-contribution-unavailable' });
+    expect(prepareAcpCatalogTransferV2({ rawSettings: predecessorSource(), sourceSettingsVersion: 17,
+      savedSecretRefs: new Map([['old-token', formatSharedSavedSecretRefV1('resource-token')]]),
+      agentDeclarations: [{ identity: { pluginId: 'external.agent', localId: 'kiro' },
+        acpStderrRules: { suppress: [{ includes: ['optional vendor notice'] }] } }] }))
+      .toMatchObject({ status: 'unavailable', reason: 'transport-contribution-unavailable' });
     const sharedSource = predecessorSource();
     sharedSource.acpCatalogSettingsV1.backends[0]!.env!.TOKEN!.secretId = formatSharedSavedSecretRefV1('resource-token');
     expect(prepareAcpCatalogTransferV2({ rawSettings: sharedSource, sourceSettingsVersion: 17,
-      kiroStderrRules: { suppress: [{ includes: ['optional vendor notice'] }] } }))
+      agentDeclarations: transportDeclarations({ suppress: [{ includes: ['optional vendor notice'] }] }) }))
       .toMatchObject({ status: 'ready', record: { definitions: [expect.objectContaining({ env: {
         REGION: { t: 'literal', v: 'eu' }, TOKEN: { t: 'savedSecret', secretId: formatSharedSavedSecretRefV1('resource-token') },
       } }), expect.objectContaining({ id: 'generic' })] } });
@@ -88,7 +110,7 @@ describe('prepareAcpCatalogTransferV2', () => {
   it('preserves unsupported sources and projects only safe independent definitions from incomplete inventory', () => {
     const valid = predecessorSource();
     const options = { sourceSettingsVersion: 17, savedSecretRefs: new Map([['old-token', formatSharedSavedSecretRefV1('resource-token')]]),
-      kiroStderrRules: { suppress: [{ includes: ['optional vendor notice'] }] } };
+      agentDeclarations: transportDeclarations({ suppress: [{ includes: ['optional vendor notice'] }] }) };
     for (const v of [1, 3]) {
       expect(prepareAcpCatalogTransferV2({ ...options, rawSettings: { acpCatalogSettingsV1: { ...valid.acpCatalogSettingsV1, v } } }))
         .toMatchObject({ status: 'unavailable', reason: 'unsupported-source-version' });

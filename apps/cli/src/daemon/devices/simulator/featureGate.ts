@@ -1,4 +1,5 @@
 import { resolveCliFeatureDecision, type CliServerFeaturesSnapshot } from '@/features/featureDecisionService';
+import type { ProcessEnvInput } from '@/utils/processEnv/buildScopedProcessEnv';
 
 /**
  * The simulator execution gate enforced at the daemon execution boundary. Mirrors the browser /
@@ -18,7 +19,7 @@ export type SimulatorDaemonFeatureGate = Readonly<{
 }>;
 
 export function createSimulatorDaemonFeatureGate(params: {
-  env: NodeJS.ProcessEnv;
+  env: ProcessEnvInput;
   // The SAME async provider shape already used by the browser / local-services daemon gates.
   // The gate (not the call site) owns caching the snapshot.
   resolveServerFeaturesSnapshot: () => Promise<CliServerFeaturesSnapshot | undefined> | CliServerFeaturesSnapshot | undefined;

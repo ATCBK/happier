@@ -54,6 +54,7 @@ import {
     type AccountPluginSecretSettingsWriteResult,
 } from './scopedPluginAccountSecretSettingsAdapter';
 import { watchActiveScopedPluginSettingsChanges } from './scopedPluginSettingsChangeWatch';
+import { createScopedPluginSettingsActionAdapter } from './scopedPluginSettingsActionAdapter';
 import type { LazyActionAccountContext } from '@/sync/ops/actions/actionAccountContext';
 
 type ActiveAccountRequestContext = Readonly<{
@@ -548,8 +549,16 @@ const rawScopedPluginSettingsAdapter: ScopedPluginSettingsAdapter = Object.freez
     },
 });
 
-export const scopedPluginSettingsAdapter = rawScopedPluginSettingsAdapter;
-export const scopedPluginAccountSecretSettingsAdapter = rawScopedPluginAccountSecretSettingsAdapter;
+/** Raw transport seam for the owner-level runtime tests; product consumers use the Action-routed adapter below. */
+export const scopedPluginSettingsStorageAdapterForTests = rawScopedPluginSettingsAdapter;
+export const scopedPluginSettingsAdapter = createScopedPluginSettingsActionAdapter({
+    adapter: rawScopedPluginSettingsAdapter,
+    accountLifetime: captureActiveServerAccountScopeLifetime,
+});
+export const scopedPluginAccountSecretSettingsAdapter = createScopedPluginSettingsActionAdapter({
+    adapter: rawScopedPluginAccountSecretSettingsAdapter,
+    accountLifetime: captureActiveServerAccountScopeLifetime,
+});
 
 /** Only the admitted Action port reaches the incumbent storage writers directly. */
 export async function executePluginSettingsAdministrationStorageAction(

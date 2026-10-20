@@ -17,6 +17,19 @@ describe('presentCapabilityStatus', () => {
         expect(presentCapabilityStatus(status('error', { machineName: 'nl2' })).pill?.label).toBe('Stopped on nl2');
     });
 
+    it('keeps the pill short and hands a stop or a blocked run its reason to say on its own line', () => {
+        const reason = "its sign-in couldn't be passed to this session";
+        const stopped = presentCapabilityStatus(status('error', { machineName: 'nl2', detail: reason }));
+        expect(stopped.pill).toMatchObject({ label: 'Stopped on nl2' });
+        expect(stopped.pill?.detail).toBeUndefined();
+        expect(stopped.reason).toBe(reason);
+        expect(presentCapabilityStatus(status('cantrun', { machineName: 'nl2', detail: 'node is missing' })).reason).toBe('node is missing');
+        // A quiet suffix (a time, a key name) stays on the pill's line.
+        const expired = presentCapabilityStatus(status('expired', { detail: 'Oct 10' }));
+        expect(expired.pill?.detail).toBe('Oct 10');
+        expect(expired.reason).toBeUndefined();
+    });
+
     it('is silent for Off in rows and plain in headers', () => {
         expect(presentCapabilityStatus(status('off')).pill).toBeNull();
         expect(presentCapabilityStatus(status('off'), 'header').pill).toMatchObject({ chrome: 'plain', label: 'Off' });

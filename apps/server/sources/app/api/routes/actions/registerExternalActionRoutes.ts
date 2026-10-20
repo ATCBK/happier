@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
+import { timeWebLatencyPhase, withWebLatencyTrace } from '@/utils/webLatencyTrace';
 
 import type { FastifyReply, FastifyRequest } from "fastify";
 
@@ -10,6 +11,7 @@ import { projectExternalActionPendingResetStartEnvelopeAdmissionV1 } from '@happ
 import {
     type ExternalActionDaemonDispatcher,
 } from "@/app/api/socket/externalActionDispatcher";
+import { ExternalActionAdmissionUnexpectedError } from '@/app/machines/managed/managedAcquire';
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
 import { auth, ApiTokenOperationError } from "@/app/auth/auth";
 import { resolveMachineAdmission } from "@/app/machines/machineAccess";
@@ -17,9 +19,9 @@ import { classifyMachineAvailabilityState } from "@/app/machines/machineStateGua
 import { getOrCreateServerIdentityId } from "@/app/serverIdentity/serverIdentity";
 import { db } from "@/storage/db";
 import { resolveEffectiveAccountEncryptionModeFromAccountRow } from '@/app/encryption/accountEncryptionMode';
-import { ManagedMachineActionIdV1Schema, MachineEnvironmentApplyInputV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
+import { MachineEnvironmentApplyInputV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { projectApiTokenSessionSpawnAdmissionV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
-import { resolveCredentialActionAdmissionV1 } from '@happier-dev/protocol/actions/decisionAuthority';
+import { DECISION_ACTION_IDS, resolveCredentialActionAdmissionV1 } from '@happier-dev/protocol/actions/decisionAuthority';
 import { SERVER_HTTP_REQUEST_MAX_BODY_UTF8_BYTES_V1 } from '@happier-dev/protocol/server/http/requestBodyBoundsV1';
 import { ActionIdSchema } from '@happier-dev/protocol/actions/actionIds';
 import { getActionSpec, isPluginProvenanceOnlyActionId, PublicActionIdSchema, SignedRootActionIdSchema } from '@happier-dev/protocol/actions/actionSpecs';
@@ -33,16 +35,24 @@ import { verifyCurrentExternalActionPrincipal, verifyCurrentExternalActionPrinci
     isOriginalAccountExecutionAction, isOriginalTerminalExecutionAction, isOriginalAccountHandoffAction, resolveExternalActionExecutionMachineAdmissionInTx,
     readCurrentExternalActionHandoffBindingInTx, hasCurrentExternalActionSessionSource,
     isExternalActionAuthorizationBoundToEnvelope, projectExternalActionBoundPrincipal,
-    readExternalActionSessionProposalSurface } from '@/app/auth/externalActionExecutionAuthorization';
+    readExternalActionSessionProposalSurface, hasCurrentExternalActionWorkflowOriginInTx } from '@/app/auth/externalActionExecutionAuthorization';
 import { ManagedMachineError, readManagedAdmissionState, projectManagedMachine, requireCurrentManagedMachineInTx, sameManagedInput } from '@/app/machines/managed/managedRows';
-import { isAutomationOriginRunPublisherTx } from '@/app/automations/automationTriggerCauseChain';
 import { PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
+import { logUnexpectedRequestError } from '@/app/api/utils/logUnexpectedRequestError';
+import { readDatabaseErrorCode } from '@/app/api/utils/enableErrorHandlers';
+import { projectUnexpectedActionFailureV1 } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import type { Fastify } from "../../types";
 
 type ExternalActionRouteParams = Readonly<{
     actionId: string;
 }>;
+
+function readExternalActionRouteRequestId(body: unknown): string | undefined {
+    const envelope = ExternalActionRequestEnvelopeSchema.safeParse(body && typeof body === 'object'
+        && 'envelope' in body ? body.envelope : body);
+    return envelope.success ? envelope.data.requestId : undefined;
+}
 
 /** Both public dispatch and proof issuance consume the same installed Session provenance. */
 async function readInstalledSessionRequestPrincipal(
@@ -78,8 +88,7 @@ async function readInstalledWorkflowRequestPrincipal(actionId: string,
     body: ReturnType<typeof ExternalActionExecutionAuthorizationRequestV1Schema.parse>,
     principal: ExternalActionServerPrincipalV1): Promise<ExternalActionServerPrincipalV1 | null> {
     const origin = body.workflowActionOrigin;
-    if (!origin || !body.installationProof || !('authentication' in principal)
-        || !ManagedMachineActionIdV1Schema.safeParse(actionId).success) return null;
+    if (!origin || !body.installationProof || !('authentication' in principal)) return null;
     const source = await db.machine.findFirst({ where: { id: body.machineId, accountId: principal.accountId,
         revokedAt: null, replacedByMachineId: null }, select: { installationId: true, installationPublicKey: true } });
     if (!source?.installationId || !source.installationPublicKey
@@ -87,8 +96,9 @@ async function readInstalledWorkflowRequestPrincipal(actionId: string,
             payload: { version: 1, accountId: principal.accountId, machineId: body.machineId, installationId: source.installationId,
                 externalActionOrigin: { homeId: await getOrCreateServerIdentityId(), actionId, requestId: body.envelope.requestId!,
                     requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(body.envelope), origin } } })
-        || !await isAutomationOriginRunPublisherTx(db, { accountId: principal.accountId, machineId: body.machineId,
-            runId: origin.runId, requireCurrentScopeEnd: true })) return null;
+        || !await hasCurrentExternalActionWorkflowOriginInTx(db, { accountId: principal.accountId, machineId: body.machineId,
+            actionId, requestId: body.envelope.requestId!, workflowActionOrigin: origin,
+            target: body.envelope.target ?? { kind: 'machine', machineId: body.machineId } })) return null;
     return { accountId: principal.accountId, authority: 'account_automation', authentication: principal.authentication,
         workflowActionOrigin: origin };
 }
@@ -206,7 +216,7 @@ function readExternalActionRequestPrincipal(
     actionId: string,
     origin?: Pick<ExternalActionExecutionAuthorizationBindingV1, 'sessionActionOrigin' | 'sessionActionSource' | 'workflowActionOrigin'>
         & Readonly<{ envelope?: ExternalActionRequestEnvelope }>,
-): ExternalActionServerPrincipalV1 | null {
+): ExternalActionServerPrincipalV1 | 'credential_scope_denied' | null {
     const pluginInvocation = origin?.envelope?.pluginInvocation;
     // This claim only narrows an original Account root. The signed envelope
     // digest retains it; the exact receiving daemon derives plugin authority.
@@ -221,6 +231,18 @@ function readExternalActionRequestPrincipal(
     // proof below; they never acquire original headless execution authority.
     const credentialProvenanceAvailable = request.authTokenLegacy === false
         || request.authTokenLegacy === true && readExternalActionSessionProposalSurface(origin) !== undefined;
+    const signedRootAction = SignedRootActionIdSchema.safeParse(actionId);
+    if (request.authTokenKind === 'terminal' && credentialProvenanceAvailable
+        && request.authTokenEpoch !== undefined && signedRootAction.success
+        && DECISION_ACTION_IDS.some(id => id === actionId)
+        && !origin?.sessionActionOrigin && !origin?.sessionActionSource && !origin?.workflowActionOrigin
+        && (request.authAuthority === 'account_automation' || request.authAuthority === 'present_user')
+        && !resolveCredentialActionAdmissionV1({ spec: getActionSpec(signedRootAction.data),
+            authority: 'account_automation', grant: null, surface: readExternalActionSessionProposalSurface(origin) }).ok) {
+        // Authentication succeeded. Original remote terminal work retains its
+        // automation ceiling; a decision-authority refusal is not token revocation.
+        return 'credential_scope_denied';
+    }
     if (request.authTokenKind === 'terminal' && (request.authAuthority === 'account_automation' || request.authAuthority === 'present_user')
         && credentialProvenanceAvailable && request.authTokenEpoch !== undefined && publicAction.success
         && isOriginalTerminalExecutionAction(actionId, origin)
@@ -235,7 +257,6 @@ function readExternalActionRequestPrincipal(
             ...(request.authTokenAuthenticationEvidence ? { evidence: [...request.authTokenAuthenticationEvidence] } : {}),
         } };
     }
-    const signedRootAction = SignedRootActionIdSchema.safeParse(actionId);
     if (request.authTokenKind === 'account'
         && (request.authAuthority === 'present_user' || request.authAuthority === 'account_automation')
         && credentialProvenanceAvailable && request.authTokenEpoch !== undefined
@@ -459,6 +480,7 @@ export function registerExternalActionRoutes(
     dependencies: RegisterExternalActionRoutesDependencies = {},
 ): void {
     const dispatch = dependencies.dispatch ?? app.forwardExternalActionToMachine;
+    const dispatchedRequests = new WeakSet<FastifyRequest>();
 
     app.post<{ Params: ExternalActionRouteParams; Body: unknown }>(
         EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HTTP_PATH_TEMPLATE_V1,
@@ -479,6 +501,7 @@ export function registerExternalActionRoutes(
             const actionId = ExternalActionActionIdV1Schema.safeParse(request.params.actionId);
             const body = externalActionExecutionAuthorizationRequestSchemaForActionV1(request.params.actionId).safeParse(request.body);
             let principal = readExternalActionRequestPrincipal(request, request.params.actionId, body.success ? body.data : undefined);
+            if (principal === 'credential_scope_denied') return sendExternalActionHttpError(reply, principal);
             let continuation: Awaited<ReturnType<typeof readManagedGuestContinuation>> = null;
             let handoffContinuation: Awaited<ReturnType<typeof readHandoffContinuation>> = null;
             let handoffPreflight: Awaited<ReturnType<typeof readHandoffPreflight>> = null;
@@ -596,6 +619,7 @@ export function registerExternalActionRoutes(
                     actionId: actionId.data,
                     requestId: body.data.envelope.requestId ?? randomUUID(),
                     requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(body.data.envelope),
+                    ...(body.data.envelope.idempotencyKey === undefined ? {} : { idempotencyKey: body.data.envelope.idempotencyKey }),
                     target,
                     ...(pendingResetStartAdmission ? { pendingResetStartAdmission } : {}),
                     ...(handoffAdmission ? { handoffAdmission } : {}),
@@ -654,7 +678,7 @@ export function registerExternalActionRoutes(
             connectionAuthFailureError: "invalid_token",
             rateLimit: resolveApiHotEndpointRateLimit(process.env, "actions"),
         },
-        errorHandler: (error, _request, reply) => {
+        errorHandler: (error, request, reply) => {
             if (isFastifyBodyLimitError(error)) {
                 sendExternalActionHttpError(reply, "request_too_large");
                 return;
@@ -663,24 +687,39 @@ export function registerExternalActionRoutes(
                 sendExternalActionHttpError(reply, "invalid_envelope");
                 return;
             }
-            sendExternalActionHttpError(reply, "internal_error");
+            const admission = error instanceof ExternalActionAdmissionUnexpectedError ? error : null;
+            const originalError = admission ? admission.cause : error;
+            const databaseError = readDatabaseErrorCode(originalError);
+            if (databaseError) {
+                sendExternalActionHttpError(reply, databaseError, readExternalActionRouteRequestId(request.body));
+                return;
+            }
+            const requestId = readExternalActionRouteRequestId(request.body) ?? request.id;
+            const actionId = ExternalActionActionIdV1Schema.safeParse(request.params.actionId);
+            logUnexpectedRequestError(originalError, { module: 'external-action-error', httpRequestId: request.id,
+                requestId, ...(actionId.success ? { actionId: actionId.data } : {}),
+                phase: admission ? 'managed_admission' : 'action_request' });
+            const committed = admission ? admission.admissionCommitted : dispatchedRequests.has(request) ? null : false;
+            sendExternalActionHttpError(reply, projectUnexpectedActionFailureV1(committed, requestId).errorCode, requestId);
         },
         onRequest: async (request, reply) => {
             reply.header("cache-control", "no-store");
             // Machine proofs bind the parsed body; ordinary bearers retain early admission.
             if (request.headers[EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER] !== undefined) return;
-            await app.authenticate(request, reply);
+            await timeWebLatencyPhase('action.http.authenticate', () => app.authenticate(request, reply));
             if (reply.sent) return;
             // These Account roots need their strict body claim. Authenticate
             // before parsing, then finish admission in the existing handler.
             if (request.authTokenKind === 'account' && isPluginProvenanceOnlyActionId(request.params.actionId)) return;
-            if (!readExternalActionRequestPrincipal(request, request.params.actionId)) {
+            const principal = readExternalActionRequestPrincipal(request, request.params.actionId);
+            if (principal === 'credential_scope_denied') return sendExternalActionHttpError(reply, principal);
+            if (!principal) {
                 return sendExternalActionHttpError(reply, "invalid_token");
             }
         },
         preHandler: async (request, reply) => {
             if (request.headers[EXTERNAL_ACTION_EXECUTION_AUTHORIZATION_HEADER] !== undefined) {
-                await app.authenticate(request, reply);
+                await timeWebLatencyPhase('action.http.proof_authenticate', () => app.authenticate(request, reply));
             }
         },
     }, async (request, reply) => {
@@ -702,6 +741,8 @@ export function registerExternalActionRoutes(
             const rawEnvelope = wrapped.success ? null : ExternalActionRequestEnvelopeSchema.safeParse(request.body);
             let principal = readExternalActionRequestPrincipal(request, request.params.actionId,
                 wrapped.success ? wrapped.data : rawEnvelope?.success ? { envelope: rawEnvelope.data } : undefined);
+            if (principal === 'credential_scope_denied') return sendExternalActionHttpError(reply, principal,
+                wrapped.success ? wrapped.data.envelope.requestId : rawEnvelope?.success ? rawEnvelope.data.requestId : undefined);
             let continuation: Awaited<ReturnType<typeof readManagedGuestContinuation>> = null;
             let admittedRoot: Awaited<ReturnType<typeof readAdmittedRootRelay>> = null;
             if (wrapped.success && wrapped.data.executionAuthorization) {
@@ -731,6 +772,10 @@ export function registerExternalActionRoutes(
                     readExternalActionProtectedRequestId(request.body),
                 );
             }
+            if (actionId.data === 'workflow.trigger.run_now' && request.headers['idempotency-key'] !== undefined
+                && request.headers['idempotency-key'] !== envelope.data.idempotencyKey) {
+                return sendExternalActionHttpError(reply, 'invalid_envelope', envelope.data.requestId);
+            }
             if (!isExternalActionRequestWithinLimit(envelope.data)) {
                 return sendExternalActionHttpError(reply, "request_too_large");
             }
@@ -739,7 +784,8 @@ export function registerExternalActionRoutes(
                 return sendExternalActionHttpError(reply, 'invalid_envelope', envelope.data.requestId);
             }
 
-            const result = await dispatch({
+            dispatchedRequests.add(request);
+            const result = await withWebLatencyTrace(envelope.data.requestId, () => timeWebLatencyPhase('action.http.dispatch', () => dispatch({
                 actionId: actionId.data,
                 envelope: envelope.data,
                 principal,
@@ -750,7 +796,7 @@ export function registerExternalActionRoutes(
                     ...(continuation.sessionActionSource ? { sessionActionSource: continuation.sessionActionSource } : {}) } : {}),
                 ...(wrapped.success && wrapped.data.sessionActionOrigin && !continuation
                     ? { sessionActionSource: wrapped.data.sessionActionSource } : {}),
-            }, { signal: lifetime.signal });
+            }, { signal: lifetime.signal })));
             if (result.kind === "submitted_unknown") {
                 return sendExternalActionSubmittedUnknown(reply);
             }

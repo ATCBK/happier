@@ -243,7 +243,7 @@ function canonicalApprovalInputIdentity(value: unknown): string | null {
 
 /**
  * The observed identity of one approval's input: exactly what the host wrote
- * into the durable record, which is the Action's own observation projection.
+ * into the durable record: its declared private review, or observation projection.
  *
  * This is an operand check inside one already-selected Artifact, not the
  * identity binding: `inspectActionApprovalRequest` first requires the exact
@@ -255,16 +255,18 @@ function canonicalApprovalInputIdentity(value: unknown): string | null {
  * durably carries only the projection.
  */
 function canonicalObservedApprovalInput(actionId: ActionId, input: unknown): string | null {
-    const parsed = getActionSpec(actionId).inputSchema.safeParse(input);
+    const spec = getActionSpec(actionId);
+    const parsed = spec.inputSchema.safeParse(input);
     if (!parsed.success) return null;
-    // No `preview`: the same owner then answers with what the host would have
-    // recorded for this input, which is what the durable record carries.
     try {
+        const review = spec.approvalPresentation;
+        // Use the producer's same declared, validated private review when present.
+        const projected = review?.inputSchema && review.projectInput
+            ? review.inputSchema.parse(review.projectInput(parsed.data))
+            : resolveApprovalPresentationInput({ actionId, actionArgs: parsed.data });
         // Compare the schema-admitted native operand as the Artifact transport records it.
         // Unsupported carriers still refuse; only optional undefined object members disappear.
-        return canonicalApprovalInputIdentity(projectNativeJsonValueForTransport(
-            resolveApprovalPresentationInput({ actionId, actionArgs: parsed.data }),
-        ));
+        return canonicalApprovalInputIdentity(projectNativeJsonValueForTransport(projected));
     } catch {
         return null;
     }
@@ -321,11 +323,15 @@ function inspectActionApprovalRequest<TActionId extends ActionId>(input: Readonl
         )
     ) return { kind: 'binding_mismatch' };
     if (input.expectedInputCanonical !== undefined) {
-        const recordedInput = canonicalApprovalInputIdentity(resolveApprovalPresentationInput({
+        const projected = resolveApprovalPresentationInput({
             actionId: input.actionId,
             actionArgs: request.actionArgs,
             ...(request.preview !== undefined ? { preview: request.preview } : {}),
-        }));
+        });
+        const review = getActionSpec(input.actionId).approvalPresentation;
+        const validatedReview = review?.projectInput && review.inputSchema ? review.inputSchema.safeParse(projected) : null;
+        if (validatedReview && !validatedReview.success) return { kind: 'binding_mismatch' };
+        const recordedInput = canonicalApprovalInputIdentity(validatedReview?.success ? validatedReview.data : projected);
         if (input.expectedInputCanonical === null || recordedInput === null) return { kind: 'binding_mismatch' };
         if (recordedInput !== input.expectedInputCanonical) {
             const boardAction = SessionBoardActionIdV1Schema.safeParse(input.actionId);

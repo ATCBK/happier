@@ -12,8 +12,10 @@ const NATIVE_LOGIN = { login_terminal: 'terminal', status_only: 'statusOnly', ma
 export function resolveMachineAgentSignIn(input: Readonly<{
     native: MachineAgentInventoryItem['signIn'];
     connectedServices: readonly MachineAgentConnectedService[];
-    /** Omitted for aggregate inventory; null means launch uses native authentication. */
+    /** Omitted only for raw availability; inventory/Session readers pass their selection (null for native). */
     credentialBindings?: ConnectedServiceBindingsV2 | null;
+    /** An unread Account default must not be represented as native or as any available account. */
+    credentialBindingsReady?: boolean;
     groupOptionsByServiceId?: ConnectedServicesAccountGroupOptionsByServiceId;
     teamCredentialResources?: readonly TeamCredentialResourceCatalogEntryV1[];
     /** Services replaced by the admitted selected Provider's Agent adapter. */
@@ -45,11 +47,21 @@ export function resolveMachineAgentSignIn(input: Readonly<{
         const service = input.connectedServices.find((service) => service.serviceId === serviceId);
         return !service || (binding.source === 'connected' && service.profiles === undefined);
     });
-    const status = connected ? 'signedIn' : usesConnected ? unknown ? 'unknown' : 'signedOut' : input.native.status;
+    const status = input.credentialBindingsReady === false ? 'unknown'
+        : connected ? 'signedIn' : usesConnected ? unknown ? 'unknown' : 'signedOut' : input.native.status;
+    const rejected = status === 'signedOut' ? selectedBindings.flatMap(([serviceId, binding]) => {
+        if (binding.source !== 'connected') return [];
+        const profileId = binding.selection === 'profile' ? binding.profileId
+            : input.groupOptionsByServiceId?.[serviceId]?.find(group => group.groupId === binding.groupId)?.activeProfileId;
+        const profile = input.connectedServices.find(service => service.serviceId === serviceId)?.profiles
+            ?.find(profile => profile.profileId === profileId);
+        return profile?.reconnectRequired ? [{ serviceId, profileId: profile.profileId }] : [];
+    })[0] : undefined;
     return {
+        ...(rejected ? { connectedAccountFailure: { code: 'connected_service_credential_reconnect_required' as const, ...rejected } } : {}),
         native: input.native,
         status,
-        via: connected
+        via: status === 'signedIn' && connected
             ? { kind: 'connected', serviceId: connected.serviceId, title: connected.title, profileLabel: connected.profileLabel }
             : status === 'signedIn' ? { kind: 'native', accountLabel: input.native.accountLabel ?? null } : null,
         nativeLogin: NATIVE_LOGIN[input.native.loginSupport],
@@ -57,11 +69,13 @@ export function resolveMachineAgentSignIn(input: Readonly<{
     };
 }
 
-/** Launch projection reuses inventory sign-in and state decisions without changing aggregate rows. */
-export function projectMachineAgentForCredential(agent: MachineAgent | null | undefined, selection: Readonly<{
+export type MachineAgentCredentialSelection = Readonly<{
     credentialBindings: ConnectedServiceBindingsV2 | null;
     providerRoute?: Readonly<{ ready: boolean; suppressedConnectedServiceIds: readonly string[] }> | null;
-}> & Pick<Parameters<typeof resolveMachineAgentSignIn>[0], 'groupOptionsByServiceId' | 'teamCredentialResources'>): MachineAgent | null {
+}> & Pick<Parameters<typeof resolveMachineAgentSignIn>[0], 'credentialBindingsReady' | 'groupOptionsByServiceId' | 'teamCredentialResources'>;
+
+/** Account-default inventory and explicit Session selection share the same credential decision. */
+export function projectMachineAgentForCredential(agent: MachineAgent | null | undefined, selection: MachineAgentCredentialSelection): MachineAgent | null {
     if (!agent) return null;
     const suppressedServiceIds = new Set((selection.providerRoute?.ready ? selection.providerRoute.suppressedConnectedServiceIds : [])
         .map(resolveQualifiedConnectedAccountServiceKey).filter((key): key is string => key !== null));
@@ -77,7 +91,9 @@ export function projectMachineAgentForCredential(agent: MachineAgent | null | un
         suppressedServiceIds,
     });
     return { ...agent, signIn, state: resolveMachineAgentState({ ...agent, signIn,
-        known: agent.state !== 'unknown' && agent.state !== 'checking', checking: agent.state === 'checking', requireSignedIn: true,
+        // An unread default can make authentication unknown without withdrawing known installation facts.
+        known: !agent.unavailableReason && (agent.installed || (agent.state !== 'unknown' && agent.state !== 'checking')),
+        checking: agent.state === 'checking',
         credentialRouteReady: selection.providerRoute?.ready, authenticationRequired }) };
 }
 
@@ -91,6 +107,7 @@ export function projectMachineAgent(input: Readonly<{
     staleReason?: MachineAgent['staleReason'];
     unavailableReason?: MachineAgent['unavailableReason'];
     connectedServices: readonly MachineAgentConnectedService[];
+    credentialSelection?: MachineAgentCredentialSelection;
     job: MachineAgent['job'];
     dependencyTitlesByKey?: Readonly<Record<string, string>>;
 }>): MachineAgent {
@@ -113,7 +130,9 @@ export function projectMachineAgent(input: Readonly<{
             : {}),
         ...(input.unavailableReason ? { unavailableReason: input.unavailableReason } : {}),
     };
-    return { ...agent, state: resolveMachineAgentState({ ...agent, known: facts !== null && !input.unavailableReason, checking: input.checking }) };
+    const projected = { ...agent, state: resolveMachineAgentState({ ...agent, known: facts !== null && !input.unavailableReason, checking: input.checking }) };
+    // The credential projection receives a concrete Agent, so its null-input branch is unreachable.
+    return input.credentialSelection ? projectMachineAgentForCredential(projected, input.credentialSelection)! : projected;
 }
 
 /** Keep unchanged agent rows and nested facts stable across refresh and unrelated agent updates. */
@@ -121,7 +140,7 @@ export function reconcileMachineAgents(previous: readonly MachineAgent[], incomi
     const previousById = new Map(previous.map((agent) => [buildMachineAgentInventoryKey(agent), agent]));
     const reconciled = incoming.map((agent) => {
         const prior = previousById.get(buildMachineAgentInventoryKey(agent));
-        return prior && JSON.stringify(prior) === JSON.stringify(agent) ? prior : agent;
+        return prior && JSON.stringify(prior) === JSON.stringify(agent) ? prior : Object.freeze(agent);
     });
-    return previous.length === reconciled.length && reconciled.every((agent, index) => agent === previous[index]) ? previous : reconciled;
+    return previous.length === reconciled.length && reconciled.every((agent, index) => agent === previous[index]) ? previous : Object.freeze(reconciled);
 }

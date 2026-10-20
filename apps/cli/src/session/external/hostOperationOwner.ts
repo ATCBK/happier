@@ -113,7 +113,10 @@ export type ExternalSessionHostOperationInstallation = Readonly<{
 export type ExternalSessionHostOperationOwner = Readonly<{
     bind(
         binding: ExternalSessionHostOperationBinding,
-    ): ExternalSessionHostOperationPort;
+    ): ExternalSessionHostOperationPort & Readonly<{
+        isCurrent(): boolean;
+        waitForRebind(signal?: AbortSignal): Promise<boolean>;
+    }>;
     install(
         operations: ExternalSessionHostOperationSet,
     ): Promise<ExternalSessionHostOperationInstallation>;
@@ -137,6 +140,7 @@ type OwnerGeneration = {
     readonly operations: ExternalSessionHostOperationSet;
     readonly retirement: AbortController;
     readonly activeFollows: Set<ActiveFollow>;
+    admitted: boolean;
     retirementPromise: Promise<void> | null;
 };
 
@@ -266,6 +270,7 @@ function createOwnerGeneration(
         }),
         retirement: new AbortController(),
         activeFollows: new Set(),
+        admitted: false,
         retirementPromise: null,
     };
 }
@@ -297,6 +302,11 @@ async function retireOwnerGeneration(generation: OwnerGeneration): Promise<void>
 export function createExternalSessionHostOperationOwner(): ExternalSessionHostOperationOwner {
     let retired = false;
     let currentGeneration: OwnerGeneration | null = null;
+    const generationWaiters = new Set<() => void>();
+
+    const notifyGenerationWaiters = (): void => {
+        for (const notify of [...generationWaiters]) notify();
+    };
 
     const owner: ExternalSessionHostOperationOwner = Object.freeze({
         bind(identityInput) {
@@ -350,6 +360,7 @@ export function createExternalSessionHostOperationOwner(): ExternalSessionHostOp
                 if (
                     retired
                     || boundGeneration === null
+                    || !boundGeneration.admitted
                     || currentGeneration !== boundGeneration
                     || lifecycleSignal.aborted
                 ) {
@@ -376,7 +387,54 @@ export function createExternalSessionHostOperationOwner(): ExternalSessionHostOp
                 );
             };
 
-            const port: ExternalSessionHostOperationPort = Object.freeze({
+            const port: ReturnType<ExternalSessionHostOperationOwner['bind']> = Object.freeze({
+                isCurrent: isBindingCurrent,
+                async waitForRebind(signal) {
+                    const rebindIsReady = (): boolean => (
+                        !retired
+                        && currentGeneration !== null
+                        && currentGeneration.admitted
+                        && !currentGeneration.retirement.signal.aborted
+                        && (
+                            currentGeneration !== boundGeneration
+                            || !isBindingCurrent()
+                        )
+                    );
+                    if (
+                        retired
+                        || bindingRetirement.signal.aborted
+                        || identity.sessionSignal?.aborted
+                        || identity.occurrenceRetirementSignal?.aborted
+                        || signal?.aborted
+                    ) {
+                        return false;
+                    }
+                    if (rebindIsReady()) return true;
+                    return await new Promise<boolean>((resolve) => {
+                        let settled = false;
+                        const finish = (value: boolean): void => {
+                            if (settled) return;
+                            settled = true;
+                            generationWaiters.delete(onGenerationChanged);
+                            bindingRetirement.signal.removeEventListener('abort', onAbort);
+                            identity.sessionSignal?.removeEventListener('abort', onAbort);
+                            identity.occurrenceRetirementSignal?.removeEventListener('abort', onAbort);
+                            signal?.removeEventListener('abort', onAbort);
+                            resolve(value);
+                        };
+                        const onGenerationChanged = (): void => {
+                            if (rebindIsReady()) finish(true);
+                            else if (retired) finish(false);
+                        };
+                        const onAbort = (): void => finish(false);
+                        generationWaiters.add(onGenerationChanged);
+                        bindingRetirement.signal.addEventListener('abort', onAbort, { once: true });
+                        identity.sessionSignal?.addEventListener('abort', onAbort, { once: true });
+                        identity.occurrenceRetirementSignal?.addEventListener('abort', onAbort, { once: true });
+                        signal?.addEventListener('abort', onAbort, { once: true });
+                        onGenerationChanged();
+                    });
+                },
                 async executeFollow(request) {
                     if (request.ref.agentId !== identity.agentId) {
                         return unavailableFollow(
@@ -580,7 +638,8 @@ export function createExternalSessionHostOperationOwner(): ExternalSessionHostOp
                                 await settleFollowListenerBounded(
                                     Promise.resolve().then(async () =>
                                         await request.listener(event)),
-                                    EXTERNAL_SESSION_FOLLOW_LISTENER_TIMEOUT_MS,
+                                    request.options.projection === 'terminal'
+                                        ? undefined : EXTERNAL_SESSION_FOLLOW_LISTENER_TIMEOUT_MS,
                                     activeSignal,
                                 );
                             } catch (error) {
@@ -751,6 +810,7 @@ export function createExternalSessionHostOperationOwner(): ExternalSessionHostOp
         canFollowNow() {
             return !retired
                 && currentGeneration !== null
+                && currentGeneration.admitted
                 && !currentGeneration.retirement.signal.aborted
                 && currentGeneration.operations.followOperation != null;
         },
@@ -785,6 +845,8 @@ export function createExternalSessionHostOperationOwner(): ExternalSessionHostOp
                     throw error;
                 }
             }
+            installedGeneration.admitted = true;
+            notifyGenerationWaiters();
             let disposed = false;
             return Object.freeze({
                 async dispose() {
@@ -802,8 +864,12 @@ export function createExternalSessionHostOperationOwner(): ExternalSessionHostOp
             retired = true;
             const priorGeneration = currentGeneration;
             currentGeneration = null;
-            if (priorGeneration) {
-                await retireOwnerGeneration(priorGeneration);
+            try {
+                if (priorGeneration) {
+                    await retireOwnerGeneration(priorGeneration);
+                }
+            } finally {
+                notifyGenerationWaiters();
             }
         },
     });

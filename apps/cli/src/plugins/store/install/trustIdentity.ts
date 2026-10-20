@@ -1,7 +1,7 @@
 import { realpath } from 'node:fs/promises';
 import { posix, resolve, win32 } from 'node:path';
 
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
 import { NpmRegistryProfileIdV1Schema } from '@happier-dev/protocol/rpc/npmRegistryProfiles';
 
@@ -20,7 +20,7 @@ function isCanonicalBase64(value: string): boolean {
   }
 }
 
-export const AlgorithmQualifiedIntegritySchema = z.string().min(3).max(1024).superRefine((value, context) => {
+export const AlgorithmQualifiedIntegritySchema = z.string().check(z.minLength(3), z.maxLength(1024), z.superRefine((value, context) => {
   const match = /^(sha256|sha384|sha512)-([A-Za-z0-9+/]+={0,2})$/u.exec(value);
   const expectedBytes = match?.[1] === 'sha256' ? 32 : match?.[1] === 'sha384' ? 48 : match?.[1] === 'sha512' ? 64 : 0;
   if (
@@ -31,37 +31,37 @@ export const AlgorithmQualifiedIntegritySchema = z.string().min(3).max(1024).sup
   ) {
     context.addIssue({ code: 'custom', message: 'Expected canonical algorithm-qualified plugin archive integrity' });
   }
-});
+}));
 
-const CanonicalRemoteArchiveUrlSchema = z.string().max(2048).url().superRefine((value, context) => {
+const CanonicalRemoteArchiveUrlSchema = z.string().check(z.maxLength(2048), z.url(), z.superRefine((value, context) => {
   const url = new URL(value);
   if (value !== value.trim() || !['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.hash || url.toString() !== value) {
     context.addIssue({ code: 'custom', message: 'Expected a canonical HTTP(S) archive URL without credentials or fragment' });
   }
-});
+}));
 
-const CanonicalNpmRegistryOriginSchema = z.string().superRefine((value, context) => {
+const CanonicalNpmRegistryOriginSchema = z.string().check(z.superRefine((value, context) => {
   try {
     if (normalizeNpmRegistryOrigin(value) !== value) throw new Error();
   } catch {
     context.addIssue({ code: 'custom', message: 'Expected a canonical npm registry origin' });
   }
-});
+}));
 
-const CanonicalNpmPackageNameSchema = z.string().superRefine((value, context) => {
+const CanonicalNpmPackageNameSchema = z.string().check(z.superRefine((value, context) => {
   try {
     if (normalizeNpmPackageName(value) !== value) throw new Error();
   } catch {
     context.addIssue({ code: 'custom', message: 'Expected a canonical npm package name' });
   }
-});
+}));
 
-const CanonicalNpmRegistryProfileIdSchema = z.string().superRefine((value, context) => {
+const CanonicalNpmRegistryProfileIdSchema = z.string().check(z.superRefine((value, context) => {
   const parsed = NpmRegistryProfileIdV1Schema.safeParse(value);
   if (!parsed.success || parsed.data !== value) {
     context.addIssue({ code: 'custom', message: 'Expected a canonical npm registry profile id' });
   }
-});
+}));
 
 function isCanonicalAbsolutePath(value: string): boolean {
   if (!value || Buffer.byteLength(value, 'utf8') > 32_768 || /[\0\r\n]/u.test(value)) return false;
@@ -76,14 +76,14 @@ function isCanonicalAbsolutePath(value: string): boolean {
   return false;
 }
 
-const CanonicalAbsolutePathSchema = z.string().refine(isCanonicalAbsolutePath, 'Expected a canonical absolute path');
+const CanonicalAbsolutePathSchema = z.string().check(z.refine(isCanonicalAbsolutePath, 'Expected a canonical absolute path'));
 
-const CanonicalPluginIdSchema = z.string().superRefine((value, context) => {
+const CanonicalPluginIdSchema = z.string().check(z.superRefine((value, context) => {
   const parsed = PluginIdSchema.safeParse(value);
   if (!parsed.success || parsed.data !== value) {
     context.addIssue({ code: 'custom', message: 'Expected a canonical plugin id' });
   }
-});
+}));
 
 export type PluginDistributionIdentity =
   | Readonly<{ kind: 'npm'; registryOrigin: string; registryProfileId?: string; packageName: string }>
@@ -94,25 +94,25 @@ export type PluginDistributionIdentity =
     integrity: string;
   }>;
 
-export const PluginDistributionIdentitySchema: z.ZodType<PluginDistributionIdentity> = z.discriminatedUnion('kind', [
-  z.object({
+export const PluginDistributionIdentitySchema: z.ZodMiniType<PluginDistributionIdentity> = z.discriminatedUnion('kind', [
+  z.strictObject({
     kind: z.literal('npm'),
     registryOrigin: CanonicalNpmRegistryOriginSchema,
-    registryProfileId: CanonicalNpmRegistryProfileIdSchema.optional(),
+    registryProfileId: z.optional(CanonicalNpmRegistryProfileIdSchema),
     packageName: CanonicalNpmPackageNameSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('localPath'),
     canonicalPath: CanonicalAbsolutePathSchema,
-  }).strict(),
-  z.object({
+  }),
+  z.strictObject({
     kind: z.literal('archive'),
     source: z.discriminatedUnion('kind', [
-      z.object({ kind: z.literal('localFile'), canonicalPath: CanonicalAbsolutePathSchema }).strict(),
-      z.object({ kind: z.literal('remoteUrl'), canonicalUrl: CanonicalRemoteArchiveUrlSchema }).strict(),
+      z.strictObject({ kind: z.literal('localFile'), canonicalPath: CanonicalAbsolutePathSchema }),
+      z.strictObject({ kind: z.literal('remoteUrl'), canonicalUrl: CanonicalRemoteArchiveUrlSchema }),
     ]),
     integrity: AlgorithmQualifiedIntegritySchema,
-  }).strict(),
+  }),
 ]);
 
 export type PluginTrustRecord = Readonly<{
@@ -122,12 +122,12 @@ export type PluginTrustRecord = Readonly<{
   approvedAtMs: number;
 }>;
 
-export const PluginTrustRecordSchema: z.ZodType<PluginTrustRecord> = z.object({
+export const PluginTrustRecordSchema: z.ZodMiniType<PluginTrustRecord> = z.strictObject({
   pluginId: CanonicalPluginIdSchema,
   distribution: PluginDistributionIdentitySchema,
   state: z.literal('trusted'),
-  approvedAtMs: z.number().int().nonnegative().refine(Number.isSafeInteger, 'Expected a safe trust approval timestamp'),
-}).strict();
+  approvedAtMs: z.number().check(z.int(), z.nonnegative(), z.refine(Number.isSafeInteger, 'Expected a safe trust approval timestamp')),
+});
 
 /**
  * What an installed plugin's record permits when an update is **requested**.

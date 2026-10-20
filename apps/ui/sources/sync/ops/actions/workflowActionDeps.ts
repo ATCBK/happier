@@ -7,7 +7,7 @@ import { ExecutionRunGetResponseSchema } from '@happier-dev/protocol/execution/r
 import { isExecutionRunTerminalStatus } from '@happier-dev/protocol/execution/runs/waitForTerminal';
 import { isTerminalAutomationRunStateV3 } from '@happier-dev/protocol/automations/automationRunStateV3';
 import { WorkflowRunSummaryV1Schema } from '@happier-dev/protocol/workflows/workflowProgressV1';
-import { WorkflowActionOutputSchemasV1 } from '@happier-dev/protocol/workflows/actionsV1';
+import { WorkflowActionOutputSchemasV1, WorkflowInvocationGetResultV1Schema } from '@happier-dev/protocol/workflows/actionsV1';
 import type { WorkflowActionExecute } from '@happier-dev/protocol/actions/executor/types';
 import { isWorkflowTriggerAgentCallerV1, type WorkflowTriggerActionsDependencies } from '@happier-dev/protocol/actions/executor/workflowTriggerActions';
 import type { AutomationTemplateRetainedSessionV1 } from '@happier-dev/protocol/automations/automationTemplateStoredV1';
@@ -54,18 +54,22 @@ import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domain
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { storage } from '@/sync/domains/state/storage';
+import { resolveVisibleMachinesForActiveServerFromState } from '@/sync/store/domains/machines/resolveMachinesForActiveServerFromState';
+import { isMachineReachable } from '@/sync/domains/machines/reachability/machineReachability';
 import { getActiveServerAccountScope } from '@/sync/domains/scope/activeServerAccountScope';
 import { loadDaemonMergedProjectionCacheEntry } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { resolveSessionActionDefaultBackend } from '@/sync/domains/session/resolveSessionActionDefaultBackend';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import { sessionRpcWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
+import { runWithServerRequestAuthorityForServerAccountScope } from '@/sync/runtime/orchestration/serverScopedRpc/createServerRequestWithServerScope';
+import { readSessionSnapshotForAuthority } from '@/sync/runtime/orchestration/serverScopedRpc/readSessionSnapshotForAuthority';
 import { randomUUID } from '@/platform/randomUUID';
 import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
 import { parseCompatSessionByIdResponse } from '@/sync/engine/sessions/sessionHttpCompat';
 import { createSessionDataKeyHydrationPlan, hydrateSessionDataKeys, readSessionDataKeyCredentialKind } from '@/sync/encryption/sessionDataKeyHydration';
 import { resolveAbsolutePath } from '@/utils/path/pathUtils';
 import { listSessionsForVoiceTool } from '@/voice/tools/actionImpl/sessionList';
-import type { LazyActionAccountContext } from './actionAccountContext';
+import { withActionAccountRequestSignal, type LazyActionAccountContext } from './actionAccountContext';
 import { createUiAccountAction, resolveUiAccountActionFallbackMachineId } from './accountActionDeps';
 import type { WorkflowActionTransport } from './workflowActionTransport';
 
@@ -74,15 +78,28 @@ function targetUnavailable(): never {
 }
 
 /**
- * Opens a Session for its trigger set from the captured Home's synced Session. Only an opened
+ * Resolves a Session for its trigger set under the captured Home. A missing owner projection
+ * is hydrated through the canonical exact-Home reader without publishing into UI state. Only an opened
  * runtime's native-goal ownership is host-dependent, so only that check reaches the Session's
  * Machine (the same `session.goal.get` live path the CLI host reads); a closed Session needs none.
  */
 function createUiTriggerSessionResolver(account: LazyActionAccountContext): NonNullable<WorkflowTriggerActionsDependencies['resolveSession']> {
-    return async (sessionId, _caller, options) => {
+    return async (sessionId, caller, options) => {
         account.assertCurrent();
         if (!areServerProfileIdentifiersEquivalent(getActiveServerSnapshot().serverId, account.serverId)) targetUnavailable();
-        const session = storage.getState().sessions[sessionId];
+        const cachedSession = storage.getState().sessions[sessionId];
+        const cachedOwner = cachedSession ? readSessionOwnerMetadataView(cachedSession) : null;
+        const signal = caller?.signal ?? account.invocationSignal;
+        const session = cachedOwner?.machineId?.trim() && cachedOwner.path?.trim() ? cachedSession
+            : await runWithServerRequestAuthorityForServerAccountScope({
+                scope: account.accountLifetime.scope, activeRequest: account.request,
+            }, async (authority) => (await readSessionSnapshotForAuthority({
+                authority: { ...authority, request: (path, init, options) => authority.request(path,
+                    { ...init, ...(signal ? { signal } : {}) }, options) },
+                sessionId, isCurrent: account.accountLifetime.isCurrent,
+            })).session);
+        account.assertCurrent();
+        signal?.throwIfAborted();
         const ownerMetadata = session ? readSessionOwnerMetadataView(session) : null;
         const machineId = ownerMetadata?.machineId?.trim();
         const directory = ownerMetadata?.path?.trim();
@@ -94,9 +111,10 @@ function createUiTriggerSessionResolver(account: LazyActionAccountContext): NonN
         const facts = { project: { machineId, directory }, ...(selection?.success ? { executionSelection: selection.data } : {}) };
         if (session.active !== true) return { ...facts, nativeGoalOwner: false };
         if (options?.checkNativeGoalOwner !== true) return { ...facts, nativeGoalOwner: null };
-        const observed = await sessionRpcWithServerScope<unknown, { capabilitiesOnly: true }>({
+        const observed = await withActionAccountRequestSignal(account, caller?.signal, signal => sessionRpcWithServerScope<unknown, { capabilitiesOnly: true }>({
             sessionId, serverId: account.serverId, method: SESSION_RPC_METHODS.SESSION_GOAL_GET, payload: { capabilitiesOnly: true },
-        }).catch(() => null);
+            timeoutMs: null, signal,
+        })).catch(() => null);
         account.assertCurrent();
         const nativeGoalOwner = observed !== null && typeof observed === 'object' && 'nativeGoalOwner' in observed
             && typeof observed.nativeGoalOwner === 'boolean' ? observed.nativeGoalOwner : null;
@@ -219,6 +237,12 @@ export function createUiWorkflowAction(params: Readonly<{
         resolveAccountId: async () => { account.assertCurrent(); return account.accountId; },
         resolveEncryption,
         normalizeAbsolutePath: resolveAbsolutePath,
+        sessionList: async (input) => {
+            account.assertCurrent();
+            const result = await listSessionsForVoiceTool({ ...input, serverId: input.serverId ?? account.serverId });
+            account.assertCurrent();
+            return result;
+        },
         randomBytes: getRandomBytes,
     });
     const triggers = createAccountWorkflowTriggerActions({
@@ -370,6 +394,41 @@ export function createUiWorkflowAction(params: Readonly<{
         try {
             result = await (ordinaryAccountCredential && !restrictedResource && !machineOrHostOperation
                 ? executeAccount(args) : executeRelay(args));
+            if (ordinaryAccountCredential && !restrictedResource && args.actionId === 'workflow.run.invocations.get') {
+                const opened = WorkflowInvocationGetResultV1Schema.safeParse(result);
+                const retry = opened.success ? opened.data.invocation.recoveryAvailability?.retry : undefined;
+                if (opened.success && opened.data.invocation.progress.execution !== undefined
+                    && retry && !(retry.kind === 'unavailable' && retry.reason === 'run_not_interrupted')) {
+                    const stored = await runStorage.execute({ operation: 'get', runId: args.input.runId },
+                        args.signal ? { signal: args.signal } : undefined).catch(error => {
+                        account.assertCurrent();
+                        if ((args.signal ?? args.context.signal)?.aborted
+                            || (error instanceof AutomationApiError && (error.status === 401 || error.status === 403))) throw error;
+                        // This supplemental read supplies native observation placement only.
+                        // Keep the opened Account history when that optional read is unavailable.
+                        return undefined;
+                    });
+                    const run = WorkflowRunSummaryV1Schema.safeParse(stored && typeof stored === 'object' && 'run' in stored ? stored.run : undefined);
+                    const machine = run.success && run.data.id === args.input.runId && run.data.state === 'interrupted'
+                        && areServerProfileIdentifiersEquivalent(getActiveServerSnapshot().serverId, account.serverId)
+                        ? resolveVisibleMachinesForActiveServerFromState(storage.getState()).find(machine => machine.id === run.data.machineId) : undefined;
+                    const target = args.context.externalActionTarget;
+                    if (machine && (!target || (target.kind === 'machine' && target.machineId === machine.id))
+                        && isMachineReachable(account, machine)) {
+                        // The Machine's existing Run owner observes exact native input/conversation
+                        // facts. A native refusal cannot withdraw already-authorized Account
+                        // history; only a successful read can enrich conservative availability.
+                        try {
+                            const observed = await executeRelay({ ...args, context: { ...args.context,
+                                externalActionTarget: { kind: 'machine', machineId: machine.id } } });
+                            if (!ActionExecuteFailureSchema.safeParse(observed).success) result = observed;
+                        } catch (error) {
+                            account.assertCurrent();
+                            if ((args.signal ?? args.context.signal)?.aborted) throw error;
+                        }
+                    }
+                }
+            }
         } catch (error) {
             try { account.assertCurrent(); } catch { return unavailable; }
             if (args.actionId !== 'workflow.run.start') throw error;

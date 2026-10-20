@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { usePathname } from 'expo-router';
-import { normalizeSessionListFilterV1, type SessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import { canSessionListFilterIncludeRunsV1, normalizeSessionListFilterV1, type SessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
 import { sameStrictJsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import { useWorkflowRunWindow, type WorkflowRunWindow } from '@/components/workflows/library/workflowLibraryReads';
 import { useWorkflowsAvailability } from '@/components/workflows/gating/workflowsAvailability';
@@ -72,6 +72,8 @@ import { useSessionListFeatureHomeSupportByServerId } from '@/sync/domains/sessi
 import { areSessionListGroupOrderMapsEqual } from '@/sync/domains/session/listing/sessionListOrderingStateV1';
 import { areSessionWorkspaceOrderMapsEqual } from '@/sync/domains/session/listing/sessionWorkspaceOrderStateV1';
 import { syncPerformanceTelemetry } from '@/sync/runtime/syncPerformanceTelemetry';
+import { useProjectAccountWorkspaceRefs } from '@/sync/domains/workspaces/projectAccountRows';
+import { useServerCredentialAccountScopeBindings } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 import type { resolveSessionListQueryPresentation } from '@/sync/domains/session/listing/sessionListIndexPresentation';
 
 type SessionListGroupOrderV1 = Readonly<Record<string, ReadonlyArray<string> | undefined>>;
@@ -357,9 +359,15 @@ function areVisibleSessionListProjectionInputsEqual(
         : right.sessionWorkspaceOrderV1;
     return areSessionListIndexesEqual(left.source, right.source)
         && sameStrictJsonValue(left.workFilter, right.workFilter)
+        && left.workspaceRefs === right.workspaceRefs
+        && (left.viewerAccountIdByServerId === right.viewerAccountIdByServerId
+            || (left.viewerAccountIdByServerId !== undefined && right.viewerAccountIdByServerId !== undefined
+                && left.viewerAccountIdByServerId.size === right.viewerAccountIdByServerId.size
+                && [...left.viewerAccountIdByServerId].every(([serverId, accountId]) => right.viewerAccountIdByServerId?.get(serverId) === accountId)))
         && left.workflowRuns.length === right.workflowRuns.length
         && left.workflowRuns.every((run, index) => run.serverId === right.workflowRuns[index]?.serverId
             && run.summary === right.workflowRuns[index]?.summary)
+        && left.workflowRunUnderSessionId === right.workflowRunUnderSessionId
         && areSessionListRowSourcesEqual(left.sessionRowStateByServerId, right.sessionRowStateByServerId, right.source)
         && left.hideInactiveSessions === right.hideInactiveSessions
         && areSetsEqual(left.serverFilteredInactiveServerIds, right.serverFilteredInactiveServerIds)
@@ -412,7 +420,10 @@ function resolveRetainedWorkingSessionKeys(
 function buildVisibleSessionListIndex(params: Readonly<{
     source: ReadonlyArray<SessionListIndexItem>;
     workFilter: SessionListFilterV1;
+    workspaceRefs?: Parameters<typeof computeVisibleSessionListIndex>[0]['workspaceRefs'];
+    viewerAccountIdByServerId?: ReadonlyMap<string, string>;
     workflowRuns: NonNullable<Parameters<typeof computeVisibleSessionListIndex>[0]['workflowRuns']>;
+    workflowRunUnderSessionId?: string;
     sessionRowStateByServerId: ReturnType<typeof useSessionListRowsByServerId>;
     hideInactiveSessions: boolean;
     serverFilteredInactiveServerIds: ReadonlySet<string> | null;
@@ -455,7 +466,10 @@ function buildVisibleSessionListIndex(params: Readonly<{
         source: folderAwareSource.items,
         folderFocus: folderAwareSource.folderFocus,
         workFilter: params.workFilter,
+        workspaceRefs: params.workspaceRefs,
+        viewerAccountIdByServerId: params.viewerAccountIdByServerId,
         workflowRuns: params.workflowRuns,
+        workflowRunUnderSessionId: params.workflowRunUnderSessionId,
         resolveSessionRow,
         hideInactiveSessions: params.hideInactiveSessions,
         serverFilteredInactiveServerIds: params.serverFilteredInactiveServerIds,
@@ -518,29 +532,38 @@ export function useVisibleSessionListViewState(
         ...options.workFilter,
         ...(options.botsRoster === true ? { show: 'sessions', bot: 'bot' } : {}),
     }), [options.botsRoster, options.workFilter, selection.activeServerId, selection.allowedServerIds]);
+    const workspaceRefs = useProjectAccountWorkspaceRefs((workFilter.projects?.include.length ?? 0) + (workFilter.projects?.exclude.length ?? 0) > 0);
+    const viewerBindings = useServerCredentialAccountScopeBindings(surfaceDataActive ? workFilter.homeServerIds : []);
+    const viewerAccountIdByServerId = React.useMemo(() => new Map([...viewerBindings]
+        .filter(([, binding]) => binding.isCurrent()).map(([serverId, binding]) => [serverId, binding.accountId] as const)), [viewerBindings]);
     const runServerId = activeAccountScope
         ? resolveServerProfileScopeIdForIdentifier(activeAccountScope.serverId)
         : null;
+    const includesWorkflowRuns = canSessionListFilterIncludeRunsV1(workFilter);
     const workflowRunsEnabled = surfaceDataActive
         && options.corpusStorage !== 'archived'
-        && workFilter.show !== 'sessions'
+        && includesWorkflowRuns
         && workflowsAvailability.available
         && runServerId !== null
         && areServerProfileIdentifiersEquivalent(runServerId, selection.activeServerId)
         && workFilter.homeServerIds.some((serverId) => areServerProfileIdentifiersEquivalent(serverId, runServerId));
-    const workflowWindow = useWorkflowRunWindow('all', { enabled: workflowRunsEnabled });
+    const workflowWindow = useWorkflowRunWindow(workFilter.underSessionId ? `under:${workFilter.underSessionId}` : 'all', { enabled: workflowRunsEnabled });
     const workflowRunWindow = workflowRunsEnabled ? workflowWindow : undefined;
     const workflowRunUnavailableHomes = React.useMemo(() => {
-        if (!surfaceDataActive || options.corpusStorage === 'archived' || workFilter.show === 'sessions') return undefined;
+        if (!surfaceDataActive || options.corpusStorage === 'archived' || !includesWorkflowRuns) return undefined;
         const mountedHomes = selection.allowedServerIds.length > 0 ? selection.allowedServerIds
             : selection.activeServerId ? [selection.activeServerId] : [];
         return resolveWorkflowRunUnavailableHomes({
             selectedHomeServerIds: workFilter.homeServerIds,
             mountedHomeServerIds: mountedHomes,
             servedHomeServerId: workflowRunsEnabled ? runServerId : null,
+            filter: workFilter,
+            runs: workflowWindow.rows.map(row => row.summary),
+            runUnderSessionId: workflowRunsEnabled ? workFilter.underSessionId : undefined,
+            viewerAccountId: runServerId ? viewerAccountIdByServerId.get(runServerId) : undefined,
         });
     }, [options.corpusStorage, runServerId, selection.activeServerId, selection.allowedServerIds,
-        surfaceDataActive, workFilter.homeServerIds, workFilter.show, workflowRunsEnabled]);
+        surfaceDataActive, viewerAccountIdByServerId, workFilter, workflowWindow.rows, includesWorkflowRuns, workflowRunsEnabled]);
     const workflowRuns = React.useMemo<VisibleSessionListProjectionInputs['workflowRuns']>(() => {
         if (!workflowRunsEnabled || !runServerId) return [];
         return workflowWindow.rows.flatMap((row) => row.summary ? [{ serverId: runServerId, summary: row.summary }] : []);
@@ -686,7 +709,10 @@ export function useVisibleSessionListViewState(
     const projectionInputs = React.useMemo<VisibleSessionListProjectionInputs>(() => ({
         source: source ?? [],
         workFilter,
+        workspaceRefs,
+        viewerAccountIdByServerId,
         workflowRuns,
+        workflowRunUnderSessionId: workflowRunsEnabled ? workFilter.underSessionId : undefined,
         activeSessionId,
         sessionRowStateByServerId,
         hideInactiveSessions: hideInactiveSessions === true,
@@ -748,6 +774,8 @@ export function useVisibleSessionListViewState(
         source,
         storageFilter,
         workFilter,
+        workspaceRefs,
+        viewerAccountIdByServerId,
         workflowRuns,
     ]);
 

@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ProviderConnectionsCatalogV1Schema, ProviderConnectionsRowMutationV1Schema,
     DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1,
     sealProviderConnectionsContentV1, openProviderConnectionsContentV1,
@@ -9,6 +9,10 @@ import { createProviderSettingsAccountHarness, createProviderSettingsHarness, in
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { renderHook } from '@/dev/testkit/hooks/renderHook';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
+import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers/safety/limits';
+import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
 
 // Only Socket transport is substituted; Action admission and scoped Machine routing stay real.
 const providerHarness = createProviderSettingsHarness({ machines: [] });
@@ -44,6 +48,60 @@ async function executeSourceVisibility(serverId: string, accountId: string, show
 }
 
 describe('Provider Account source visibility Action', () => {
+    it('projects a Machine transport timeout as a retryable Machine check, without claiming a Provider outage', async () => {
+        const machine = createMachineFixture({ id: 'machine-a', activeAt: Date.now() });
+        const { serverId, accountId } = await account.restore({ catalog: catalogFixture(), machines: [machine] });
+        providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, async () => {
+            throw Object.assign(new Error('Machine row request timed out'), { code: 'MACHINE_RPC_TIMEOUT' });
+        });
+        const { describeProviderModels } = await import('@/providers/actions/client');
+        const { presentProviderError } = await import('@/providers/connection/errorPresentation');
+        let failure: unknown;
+        try {
+            await describeProviderModels({ machineId: machine.id, agentTargetKey: 'agent:happier.agent.claude/claude', serverId });
+        } catch (caught) { failure = caught; }
+        expect(failure).toEqual(createProviderErrorV1('agent_timeout', { machineId: machine.id }));
+        expect(presentProviderError(failure)).toMatchObject({
+            titleKey: 'settingsProviders.errors.machineTimeoutTitle', action: 'retry',
+        });
+        const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+        expect(await createDefaultActionExecutor().execute('providers.models.projection', {
+            machineId: machine.id, agentTargetKey: 'agent:happier.agent.claude/claude',
+        }, { surface: 'ui', serverId, expectedAccountId: accountId })).toMatchObject({
+            ok: false, errorCode: 'agent_timeout', details: { code: 'agent_timeout', retryable: true },
+        });
+    });
+    it('keeps the real projection RPC open for its owner budget and consumes the source-scoped result', async () => {
+        const machine = createMachineFixture({ id: 'machine-a', activeAt: Date.now() });
+        const { serverId, accountId } = await account.restore({ catalog: catalogFixture(), machines: [machine] });
+        let entered = () => {};
+        let release = () => {};
+        const started = new Promise<void>(resolve => { entered = resolve; });
+        const released = new Promise<void>(resolve => { release = resolve; });
+        const failure = createProviderErrorV1('provider_endpoint_unavailable', { machineId: machine.id, connectionId: 'pc_a' });
+        providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_MODEL_PROJECTION, async () => {
+            entered();
+            await released;
+            return { status: 'success', agentTargetKey: 'agent:happier.agent.claude/claude', groups: [],
+                refreshFailures: [{ connectionId: 'pc_a', error: failure }] };
+        });
+        const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+        vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+        const pending = createDefaultActionExecutor().execute('providers.models.projection', {
+            machineId: machine.id, agentTargetKey: 'agent:happier.agent.claude/claude',
+        }, { surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' }, serverId, expectedAccountId: accountId });
+        try {
+            await started;
+            await vi.advanceTimersByTimeAsync(PROVIDER_ENDPOINT_SAFETY_LIMITS.maxWallTimeMs + 1);
+            release();
+            await expect(pending).resolves.toMatchObject({ ok: true, result: { status: 'success',
+                refreshFailures: [{ connectionId: 'pc_a', error: failure }] } });
+        } finally {
+            vi.useRealTimers();
+            release();
+            await pending;
+        }
+    });
     it('describes the retained Account source admitted by its catalog observer without a machine or Action reseed', async () => {
         const retained = catalogFixture();
         const { serverId, accountId } = await account.restore({ catalog: retained, settings: {

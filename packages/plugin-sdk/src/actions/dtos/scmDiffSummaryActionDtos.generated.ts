@@ -2,7 +2,7 @@
 // Type-only projection of Protocol-owned Action DTO declarations.
 
 import type { JsonValue } from '../../identity.js';
-import type { ScmComparisonSource } from '../../scm/projections.js';
+import type { ScmComparisonSource } from '../../scm/comparisonSource.js';
 
 export type ScmDiffSummaryActionInputById = {
     readonly "scm.commit.resolveOutcome": {
@@ -51,6 +51,12 @@ export type ScmDiffSummaryActionInputById = {
                         localId: string;
                     };
                     input?: JsonValue;
+                    messageActionReference?: {
+                        v: 1;
+                        sessionId: string;
+                        messageId: string;
+                        observedRevision: string;
+                    };
                 };
             };
         };
@@ -99,6 +105,12 @@ export type ScmDiffSummaryActionInputById = {
                         localId: string;
                     };
                     input?: JsonValue;
+                    messageActionReference?: {
+                        v: 1;
+                        sessionId: string;
+                        messageId: string;
+                        observedRevision: string;
+                    };
                 };
             };
         };
@@ -216,6 +228,12 @@ export type ScmDiffSummaryActionInputById = {
                         localId: string;
                     };
                     input?: JsonValue;
+                    messageActionReference?: {
+                        v: 1;
+                        sessionId: string;
+                        messageId: string;
+                        observedRevision: string;
+                    };
                 };
             };
         };
@@ -263,6 +281,12 @@ export type ScmDiffSummaryActionInputById = {
                         localId: string;
                     };
                     input?: JsonValue;
+                    messageActionReference?: {
+                        v: 1;
+                        sessionId: string;
+                        messageId: string;
+                        observedRevision: string;
+                    };
                 };
             };
         };
@@ -446,7 +470,7 @@ export type ScmDiffSummaryActionResultById = {
         };
         candidateTreeOid?: string | undefined;
         error?: string | undefined;
-        errorCode?: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED' | undefined;
+        errorCode?: 'NOT_REPOSITORY' | 'INVALID_PATH' | 'ROOT_NOT_FOUND' | 'INVALID_REQUEST' | 'SCM_SOURCE_CHANGED' | 'COMMAND_FAILED' | 'COMMIT_HOOK_FAILED' | 'COMMIT_HOOK_CONTENT_CHANGED' | 'COMMIT_HEAD_CHANGED' | 'COMMIT_STAGING_CONFLICT' | 'COMMIT_SIGNING_FAILED' | 'COMMIT_IDENTITY_REQUIRED' | 'COMMIT_EMPTY' | 'COMMIT_AMEND_PUBLISHED' | 'COMMIT_UNDO_PUBLISHED' | 'COMMIT_UNDO_MERGE' | 'COMMIT_UNDO_NO_PARENT' | 'COMMIT_UNDO_HEAD_CHANGED' | 'INDEX_LOCKED' | 'INDEX_RECONCILIATION_FAILED' | 'REMOTE_NETWORK_FAILED' | 'COMMAND_CANCELLED' | 'COMMAND_TIMEOUT' | 'COMMAND_OUTPUT_LIMIT_EXCEEDED' | 'COMMAND_OUTCOME_UNKNOWN' | 'REPOSITORY_REFRESH_FAILED' | 'STASH_CREATE_FAILED' | 'STASH_APPLY_FAILED' | 'STASH_DROP_FAILED' | 'CHANGE_APPLY_FAILED' | 'COMMIT_REQUIRED' | 'CONFLICTING_WORKTREE' | 'REMOTE_AUTH_REQUIRED' | 'REMOTE_UPSTREAM_REQUIRED' | 'REMOTE_NON_FAST_FORWARD' | 'REMOTE_FF_ONLY_REQUIRED' | 'REMOTE_REJECTED' | 'REMOTE_RATE_LIMITED' | 'REMOTE_NOT_FOUND' | 'REMOTE_ALREADY_EXISTS' | 'BRANCH_OPERATION_IN_PROGRESS' | 'BRANCH_OPERATION_NOT_IN_PROGRESS' | 'FEATURE_UNSUPPORTED' | 'BACKEND_UNAVAILABLE' | 'BACKEND_NOT_INSTALLED' | undefined;
     };
     readonly "scm.diffSummary.capture": {
         success: true;
@@ -528,7 +552,7 @@ export type ScmDiffSummaryActionResultById = {
     } | {
         success: false;
         error: string;
-        errorCode: 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+        errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
     };
     readonly "scm.diffSummary.generate": {
         success: true;
@@ -619,6 +643,7 @@ export type ScmDiffSummaryActionResultById = {
                     suggestedPrBody?: string | undefined;
                 } | undefined;
                 reason?: string | undefined;
+                reasonCode?: 'generation_cancelled' | undefined;
             } | undefined;
             walkthrough?: {
                 state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -654,6 +679,7 @@ export type ScmDiffSummaryActionResultById = {
                     readingHint?: string | undefined;
                 } | undefined;
                 reason?: string | undefined;
+                reasonCode?: 'generation_cancelled' | undefined;
             } | undefined;
             commitPlan?: {
                 state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -667,6 +693,7 @@ export type ScmDiffSummaryActionResultById = {
                     leftOutChangeRefs: string[];
                 } | undefined;
                 reason?: string | undefined;
+                reasonCode?: 'generation_cancelled' | undefined;
             } | undefined;
         } | undefined;
         analysis?: {
@@ -739,7 +766,7 @@ export type ScmDiffSummaryActionResultById = {
     } | {
         success: false;
         error: string;
-        errorCode: 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+        errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
         comparison?: {
             id: string;
             source: ScmComparisonSource;
@@ -817,6 +844,7 @@ export type ScmDiffSummaryActionResultById = {
                     suggestedPrBody?: string | undefined;
                 } | undefined;
                 reason?: string | undefined;
+                reasonCode?: 'generation_cancelled' | undefined;
             } | undefined;
             walkthrough?: {
                 state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -852,6 +880,7 @@ export type ScmDiffSummaryActionResultById = {
                     readingHint?: string | undefined;
                 } | undefined;
                 reason?: string | undefined;
+                reasonCode?: 'generation_cancelled' | undefined;
             } | undefined;
             commitPlan?: {
                 state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -865,6 +894,7 @@ export type ScmDiffSummaryActionResultById = {
                     leftOutChangeRefs: string[];
                 } | undefined;
                 reason?: string | undefined;
+                reasonCode?: 'generation_cancelled' | undefined;
             } | undefined;
         } | undefined;
         analysis?: {
@@ -916,6 +946,7 @@ export type ScmDiffSummaryActionResultById = {
                 error: string;
             }[] | undefined;
         } | undefined;
+        nextAction?: 'chooseModel' | undefined;
         sourceKey?: string | undefined;
         checkpointReceiptId?: string | undefined;
         metadata?: {
@@ -959,13 +990,13 @@ export type ScmDiffSummaryActionResultById = {
         };
     } | {
         success: false;
-        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict';
+        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict' | 'invalid_parameters' | 'session_input_invalid' | 'model_not_granted' | 'permission_mode_not_granted' | 'session_input_archived' | 'session_input_unauthorized' | 'session_input_target_unavailable' | 'session_input_muted' | 'session_input_storage_unavailable' | 'session_input_target_update_required' | 'session_input_cancelled' | 'session_input_untrusted_assertion' | 'session_input_idempotency_conflict' | 'session_input_source_authority_mismatch' | 'session_input_permission_ceiling_rejected' | 'session_input_encryption_mode_mismatch';
         error: string;
         latestRevision?: number | undefined;
     };
     readonly "scm.diffSummary.result.clear": {
         success: false;
-        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict';
+        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict' | 'invalid_parameters' | 'session_input_invalid' | 'model_not_granted' | 'permission_mode_not_granted' | 'session_input_archived' | 'session_input_unauthorized' | 'session_input_target_unavailable' | 'session_input_muted' | 'session_input_storage_unavailable' | 'session_input_target_update_required' | 'session_input_cancelled' | 'session_input_untrusted_assertion' | 'session_input_idempotency_conflict' | 'session_input_source_authority_mismatch' | 'session_input_permission_ceiling_rejected' | 'session_input_encryption_mode_mismatch';
         error: string;
         latestRevision?: number | undefined;
     } | {
@@ -982,7 +1013,7 @@ export type ScmDiffSummaryActionResultById = {
         }[];
         failures: {
             success: false;
-            errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict';
+            errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict' | 'invalid_parameters' | 'session_input_invalid' | 'model_not_granted' | 'permission_mode_not_granted' | 'session_input_archived' | 'session_input_unauthorized' | 'session_input_target_unavailable' | 'session_input_muted' | 'session_input_storage_unavailable' | 'session_input_target_update_required' | 'session_input_cancelled' | 'session_input_untrusted_assertion' | 'session_input_idempotency_conflict' | 'session_input_source_authority_mismatch' | 'session_input_permission_ceiling_rejected' | 'session_input_encryption_mode_mismatch';
             error: string;
             resultId: string;
             latestRevision?: number | undefined;
@@ -990,7 +1021,7 @@ export type ScmDiffSummaryActionResultById = {
     };
     readonly "scm.diffSummary.commitPlan.accept": {
         success: false;
-        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict';
+        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict' | 'invalid_parameters' | 'session_input_invalid' | 'model_not_granted' | 'permission_mode_not_granted' | 'session_input_archived' | 'session_input_unauthorized' | 'session_input_target_unavailable' | 'session_input_muted' | 'session_input_storage_unavailable' | 'session_input_target_update_required' | 'session_input_cancelled' | 'session_input_untrusted_assertion' | 'session_input_idempotency_conflict' | 'session_input_source_authority_mismatch' | 'session_input_permission_ceiling_rejected' | 'session_input_encryption_mode_mismatch';
         error: string;
         latestRevision?: number | undefined;
     } | {
@@ -1087,6 +1118,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -1122,6 +1154,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -1135,6 +1168,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -1207,7 +1241,7 @@ export type ScmDiffSummaryActionResultById = {
             } | {
                 success: false;
                 error: string;
-                errorCode: 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+                errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -1285,6 +1319,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -1320,6 +1355,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -1333,6 +1369,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -1384,6 +1421,7 @@ export type ScmDiffSummaryActionResultById = {
                         error: string;
                     }[] | undefined;
                 } | undefined;
+                nextAction?: 'chooseModel' | undefined;
                 sourceKey?: string | undefined;
                 checkpointReceiptId?: string | undefined;
                 metadata?: {
@@ -1423,6 +1461,37 @@ export type ScmDiffSummaryActionResultById = {
                     providerConnectionId: string;
                     modelId: string;
                 } | undefined;
+                connectedServices?: {
+                    v: 2;
+                    bindingsByServiceId: Record<string, {
+                        source: 'native';
+                    } | {
+                        source: 'connected';
+                        selection: 'group';
+                        groupId: string;
+                        profileId?: string | undefined;
+                    } | {
+                        source: 'connected';
+                        selection: 'profile';
+                        profileId: string;
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'direct';
+                        disclosedMember: {
+                            service: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            accountId: string;
+                        };
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'brokered';
+                        disclosedMember?: undefined;
+                    }>;
+                } | null | undefined;
             } | undefined;
             application?: {
                 acceptedRevision: number;
@@ -1498,7 +1567,7 @@ export type ScmDiffSummaryActionResultById = {
     };
     readonly "scm.diffSummary.commitPlan.stop": {
         success: false;
-        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict';
+        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict' | 'invalid_parameters' | 'session_input_invalid' | 'model_not_granted' | 'permission_mode_not_granted' | 'session_input_archived' | 'session_input_unauthorized' | 'session_input_target_unavailable' | 'session_input_muted' | 'session_input_storage_unavailable' | 'session_input_target_update_required' | 'session_input_cancelled' | 'session_input_untrusted_assertion' | 'session_input_idempotency_conflict' | 'session_input_source_authority_mismatch' | 'session_input_permission_ceiling_rejected' | 'session_input_encryption_mode_mismatch';
         error: string;
         latestRevision?: number | undefined;
     } | {
@@ -1595,6 +1664,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -1630,6 +1700,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -1643,6 +1714,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -1715,7 +1787,7 @@ export type ScmDiffSummaryActionResultById = {
             } | {
                 success: false;
                 error: string;
-                errorCode: 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+                errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -1793,6 +1865,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -1828,6 +1901,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -1841,6 +1915,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -1892,6 +1967,7 @@ export type ScmDiffSummaryActionResultById = {
                         error: string;
                     }[] | undefined;
                 } | undefined;
+                nextAction?: 'chooseModel' | undefined;
                 sourceKey?: string | undefined;
                 checkpointReceiptId?: string | undefined;
                 metadata?: {
@@ -1931,6 +2007,37 @@ export type ScmDiffSummaryActionResultById = {
                     providerConnectionId: string;
                     modelId: string;
                 } | undefined;
+                connectedServices?: {
+                    v: 2;
+                    bindingsByServiceId: Record<string, {
+                        source: 'native';
+                    } | {
+                        source: 'connected';
+                        selection: 'group';
+                        groupId: string;
+                        profileId?: string | undefined;
+                    } | {
+                        source: 'connected';
+                        selection: 'profile';
+                        profileId: string;
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'direct';
+                        disclosedMember: {
+                            service: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            accountId: string;
+                        };
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'brokered';
+                        disclosedMember?: undefined;
+                    }>;
+                } | null | undefined;
             } | undefined;
             application?: {
                 acceptedRevision: number;
@@ -2006,7 +2113,7 @@ export type ScmDiffSummaryActionResultById = {
     };
     readonly "scm.diffSummary.commitPlan.includeHookChanges": {
         success: false;
-        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict';
+        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict' | 'invalid_parameters' | 'session_input_invalid' | 'model_not_granted' | 'permission_mode_not_granted' | 'session_input_archived' | 'session_input_unauthorized' | 'session_input_target_unavailable' | 'session_input_muted' | 'session_input_storage_unavailable' | 'session_input_target_update_required' | 'session_input_cancelled' | 'session_input_untrusted_assertion' | 'session_input_idempotency_conflict' | 'session_input_source_authority_mismatch' | 'session_input_permission_ceiling_rejected' | 'session_input_encryption_mode_mismatch';
         error: string;
         latestRevision?: number | undefined;
     } | {
@@ -2103,6 +2210,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -2138,6 +2246,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -2151,6 +2260,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -2223,7 +2333,7 @@ export type ScmDiffSummaryActionResultById = {
             } | {
                 success: false;
                 error: string;
-                errorCode: 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+                errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -2301,6 +2411,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -2336,6 +2447,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -2349,6 +2461,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -2400,6 +2513,7 @@ export type ScmDiffSummaryActionResultById = {
                         error: string;
                     }[] | undefined;
                 } | undefined;
+                nextAction?: 'chooseModel' | undefined;
                 sourceKey?: string | undefined;
                 checkpointReceiptId?: string | undefined;
                 metadata?: {
@@ -2439,6 +2553,37 @@ export type ScmDiffSummaryActionResultById = {
                     providerConnectionId: string;
                     modelId: string;
                 } | undefined;
+                connectedServices?: {
+                    v: 2;
+                    bindingsByServiceId: Record<string, {
+                        source: 'native';
+                    } | {
+                        source: 'connected';
+                        selection: 'group';
+                        groupId: string;
+                        profileId?: string | undefined;
+                    } | {
+                        source: 'connected';
+                        selection: 'profile';
+                        profileId: string;
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'direct';
+                        disclosedMember: {
+                            service: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            accountId: string;
+                        };
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'brokered';
+                        disclosedMember?: undefined;
+                    }>;
+                } | null | undefined;
             } | undefined;
             application?: {
                 acceptedRevision: number;
@@ -2514,7 +2659,7 @@ export type ScmDiffSummaryActionResultById = {
     };
     readonly "scm.diffSummary.commitPlan.cancel": {
         success: false;
-        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict';
+        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict' | 'invalid_parameters' | 'session_input_invalid' | 'model_not_granted' | 'permission_mode_not_granted' | 'session_input_archived' | 'session_input_unauthorized' | 'session_input_target_unavailable' | 'session_input_muted' | 'session_input_storage_unavailable' | 'session_input_target_update_required' | 'session_input_cancelled' | 'session_input_untrusted_assertion' | 'session_input_idempotency_conflict' | 'session_input_source_authority_mismatch' | 'session_input_permission_ceiling_rejected' | 'session_input_encryption_mode_mismatch';
         error: string;
         latestRevision?: number | undefined;
     } | {
@@ -2611,6 +2756,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -2646,6 +2792,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -2659,6 +2806,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -2731,7 +2879,7 @@ export type ScmDiffSummaryActionResultById = {
             } | {
                 success: false;
                 error: string;
-                errorCode: 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+                errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -2809,6 +2957,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -2844,6 +2993,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -2857,6 +3007,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -2908,6 +3059,7 @@ export type ScmDiffSummaryActionResultById = {
                         error: string;
                     }[] | undefined;
                 } | undefined;
+                nextAction?: 'chooseModel' | undefined;
                 sourceKey?: string | undefined;
                 checkpointReceiptId?: string | undefined;
                 metadata?: {
@@ -2947,6 +3099,37 @@ export type ScmDiffSummaryActionResultById = {
                     providerConnectionId: string;
                     modelId: string;
                 } | undefined;
+                connectedServices?: {
+                    v: 2;
+                    bindingsByServiceId: Record<string, {
+                        source: 'native';
+                    } | {
+                        source: 'connected';
+                        selection: 'group';
+                        groupId: string;
+                        profileId?: string | undefined;
+                    } | {
+                        source: 'connected';
+                        selection: 'profile';
+                        profileId: string;
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'direct';
+                        disclosedMember: {
+                            service: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            accountId: string;
+                        };
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'brokered';
+                        disclosedMember?: undefined;
+                    }>;
+                } | null | undefined;
             } | undefined;
             application?: {
                 acceptedRevision: number;
@@ -3022,7 +3205,7 @@ export type ScmDiffSummaryActionResultById = {
     };
     readonly "scm.diffSummary.commitPlan.recover": {
         success: false;
-        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict';
+        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict' | 'invalid_parameters' | 'session_input_invalid' | 'model_not_granted' | 'permission_mode_not_granted' | 'session_input_archived' | 'session_input_unauthorized' | 'session_input_target_unavailable' | 'session_input_muted' | 'session_input_storage_unavailable' | 'session_input_target_update_required' | 'session_input_cancelled' | 'session_input_untrusted_assertion' | 'session_input_idempotency_conflict' | 'session_input_source_authority_mismatch' | 'session_input_permission_ceiling_rejected' | 'session_input_encryption_mode_mismatch';
         error: string;
         latestRevision?: number | undefined;
     } | {
@@ -3119,6 +3302,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -3154,6 +3338,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -3167,6 +3352,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -3239,7 +3425,7 @@ export type ScmDiffSummaryActionResultById = {
             } | {
                 success: false;
                 error: string;
-                errorCode: 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+                errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -3317,6 +3503,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -3352,6 +3539,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -3365,6 +3553,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -3416,6 +3605,7 @@ export type ScmDiffSummaryActionResultById = {
                         error: string;
                     }[] | undefined;
                 } | undefined;
+                nextAction?: 'chooseModel' | undefined;
                 sourceKey?: string | undefined;
                 checkpointReceiptId?: string | undefined;
                 metadata?: {
@@ -3455,6 +3645,37 @@ export type ScmDiffSummaryActionResultById = {
                     providerConnectionId: string;
                     modelId: string;
                 } | undefined;
+                connectedServices?: {
+                    v: 2;
+                    bindingsByServiceId: Record<string, {
+                        source: 'native';
+                    } | {
+                        source: 'connected';
+                        selection: 'group';
+                        groupId: string;
+                        profileId?: string | undefined;
+                    } | {
+                        source: 'connected';
+                        selection: 'profile';
+                        profileId: string;
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'direct';
+                        disclosedMember: {
+                            service: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            accountId: string;
+                        };
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'brokered';
+                        disclosedMember?: undefined;
+                    }>;
+                } | null | undefined;
             } | undefined;
             application?: {
                 acceptedRevision: number;
@@ -3568,7 +3789,7 @@ export type ScmDiffSummaryActionResultById = {
     };
     readonly "scm.diffSummary.result.read": {
         success: false;
-        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict';
+        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict' | 'invalid_parameters' | 'session_input_invalid' | 'model_not_granted' | 'permission_mode_not_granted' | 'session_input_archived' | 'session_input_unauthorized' | 'session_input_target_unavailable' | 'session_input_muted' | 'session_input_storage_unavailable' | 'session_input_target_update_required' | 'session_input_cancelled' | 'session_input_untrusted_assertion' | 'session_input_idempotency_conflict' | 'session_input_source_authority_mismatch' | 'session_input_permission_ceiling_rejected' | 'session_input_encryption_mode_mismatch';
         error: string;
         latestRevision?: number | undefined;
     } | {
@@ -3665,6 +3886,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -3700,6 +3922,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -3713,6 +3936,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -3785,7 +4009,7 @@ export type ScmDiffSummaryActionResultById = {
             } | {
                 success: false;
                 error: string;
-                errorCode: 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+                errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -3863,6 +4087,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -3898,6 +4123,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -3911,6 +4137,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -3962,6 +4189,7 @@ export type ScmDiffSummaryActionResultById = {
                         error: string;
                     }[] | undefined;
                 } | undefined;
+                nextAction?: 'chooseModel' | undefined;
                 sourceKey?: string | undefined;
                 checkpointReceiptId?: string | undefined;
                 metadata?: {
@@ -4001,6 +4229,37 @@ export type ScmDiffSummaryActionResultById = {
                     providerConnectionId: string;
                     modelId: string;
                 } | undefined;
+                connectedServices?: {
+                    v: 2;
+                    bindingsByServiceId: Record<string, {
+                        source: 'native';
+                    } | {
+                        source: 'connected';
+                        selection: 'group';
+                        groupId: string;
+                        profileId?: string | undefined;
+                    } | {
+                        source: 'connected';
+                        selection: 'profile';
+                        profileId: string;
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'direct';
+                        disclosedMember: {
+                            service: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            accountId: string;
+                        };
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'brokered';
+                        disclosedMember?: undefined;
+                    }>;
+                } | null | undefined;
             } | undefined;
             application?: {
                 acceptedRevision: number;
@@ -4076,7 +4335,7 @@ export type ScmDiffSummaryActionResultById = {
     };
     readonly "scm.diffSummary.result.edit": {
         success: false;
-        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict';
+        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict' | 'invalid_parameters' | 'session_input_invalid' | 'model_not_granted' | 'permission_mode_not_granted' | 'session_input_archived' | 'session_input_unauthorized' | 'session_input_target_unavailable' | 'session_input_muted' | 'session_input_storage_unavailable' | 'session_input_target_update_required' | 'session_input_cancelled' | 'session_input_untrusted_assertion' | 'session_input_idempotency_conflict' | 'session_input_source_authority_mismatch' | 'session_input_permission_ceiling_rejected' | 'session_input_encryption_mode_mismatch';
         error: string;
         latestRevision?: number | undefined;
     } | {
@@ -4173,6 +4432,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -4208,6 +4468,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -4221,6 +4482,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -4293,7 +4555,7 @@ export type ScmDiffSummaryActionResultById = {
             } | {
                 success: false;
                 error: string;
-                errorCode: 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+                errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -4371,6 +4633,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -4406,6 +4669,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -4419,6 +4683,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -4470,6 +4735,7 @@ export type ScmDiffSummaryActionResultById = {
                         error: string;
                     }[] | undefined;
                 } | undefined;
+                nextAction?: 'chooseModel' | undefined;
                 sourceKey?: string | undefined;
                 checkpointReceiptId?: string | undefined;
                 metadata?: {
@@ -4509,6 +4775,37 @@ export type ScmDiffSummaryActionResultById = {
                     providerConnectionId: string;
                     modelId: string;
                 } | undefined;
+                connectedServices?: {
+                    v: 2;
+                    bindingsByServiceId: Record<string, {
+                        source: 'native';
+                    } | {
+                        source: 'connected';
+                        selection: 'group';
+                        groupId: string;
+                        profileId?: string | undefined;
+                    } | {
+                        source: 'connected';
+                        selection: 'profile';
+                        profileId: string;
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'direct';
+                        disclosedMember: {
+                            service: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            accountId: string;
+                        };
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'brokered';
+                        disclosedMember?: undefined;
+                    }>;
+                } | null | undefined;
             } | undefined;
             application?: {
                 acceptedRevision: number;
@@ -4584,7 +4881,7 @@ export type ScmDiffSummaryActionResultById = {
     };
     readonly "scm.diffSummary.result.undo": {
         success: false;
-        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict';
+        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict' | 'invalid_parameters' | 'session_input_invalid' | 'model_not_granted' | 'permission_mode_not_granted' | 'session_input_archived' | 'session_input_unauthorized' | 'session_input_target_unavailable' | 'session_input_muted' | 'session_input_storage_unavailable' | 'session_input_target_update_required' | 'session_input_cancelled' | 'session_input_untrusted_assertion' | 'session_input_idempotency_conflict' | 'session_input_source_authority_mismatch' | 'session_input_permission_ceiling_rejected' | 'session_input_encryption_mode_mismatch';
         error: string;
         latestRevision?: number | undefined;
     } | {
@@ -4681,6 +4978,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -4716,6 +5014,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -4729,6 +5028,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -4801,7 +5101,7 @@ export type ScmDiffSummaryActionResultById = {
             } | {
                 success: false;
                 error: string;
-                errorCode: 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+                errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -4879,6 +5179,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -4914,6 +5215,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -4927,6 +5229,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -4978,6 +5281,7 @@ export type ScmDiffSummaryActionResultById = {
                         error: string;
                     }[] | undefined;
                 } | undefined;
+                nextAction?: 'chooseModel' | undefined;
                 sourceKey?: string | undefined;
                 checkpointReceiptId?: string | undefined;
                 metadata?: {
@@ -5017,6 +5321,37 @@ export type ScmDiffSummaryActionResultById = {
                     providerConnectionId: string;
                     modelId: string;
                 } | undefined;
+                connectedServices?: {
+                    v: 2;
+                    bindingsByServiceId: Record<string, {
+                        source: 'native';
+                    } | {
+                        source: 'connected';
+                        selection: 'group';
+                        groupId: string;
+                        profileId?: string | undefined;
+                    } | {
+                        source: 'connected';
+                        selection: 'profile';
+                        profileId: string;
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'direct';
+                        disclosedMember: {
+                            service: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            accountId: string;
+                        };
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'brokered';
+                        disclosedMember?: undefined;
+                    }>;
+                } | null | undefined;
             } | undefined;
             application?: {
                 acceptedRevision: number;
@@ -5092,7 +5427,7 @@ export type ScmDiffSummaryActionResultById = {
     };
     readonly "scm.diffSummary.result.delete": {
         success: false;
-        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict';
+        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict' | 'invalid_parameters' | 'session_input_invalid' | 'model_not_granted' | 'permission_mode_not_granted' | 'session_input_archived' | 'session_input_unauthorized' | 'session_input_target_unavailable' | 'session_input_muted' | 'session_input_storage_unavailable' | 'session_input_target_update_required' | 'session_input_cancelled' | 'session_input_untrusted_assertion' | 'session_input_idempotency_conflict' | 'session_input_source_authority_mismatch' | 'session_input_permission_ceiling_rejected' | 'session_input_encryption_mode_mismatch';
         error: string;
         latestRevision?: number | undefined;
     } | {
@@ -5107,7 +5442,7 @@ export type ScmDiffSummaryActionResultById = {
     };
     readonly "scm.diffSummary.refine": {
         success: false;
-        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict';
+        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict' | 'invalid_parameters' | 'session_input_invalid' | 'model_not_granted' | 'permission_mode_not_granted' | 'session_input_archived' | 'session_input_unauthorized' | 'session_input_target_unavailable' | 'session_input_muted' | 'session_input_storage_unavailable' | 'session_input_target_update_required' | 'session_input_cancelled' | 'session_input_untrusted_assertion' | 'session_input_idempotency_conflict' | 'session_input_source_authority_mismatch' | 'session_input_permission_ceiling_rejected' | 'session_input_encryption_mode_mismatch';
         error: string;
         latestRevision?: number | undefined;
     } | {
@@ -5204,6 +5539,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -5239,6 +5575,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -5252,6 +5589,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -5324,7 +5662,7 @@ export type ScmDiffSummaryActionResultById = {
             } | {
                 success: false;
                 error: string;
-                errorCode: 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+                errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -5402,6 +5740,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -5437,6 +5776,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -5450,6 +5790,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -5501,6 +5842,7 @@ export type ScmDiffSummaryActionResultById = {
                         error: string;
                     }[] | undefined;
                 } | undefined;
+                nextAction?: 'chooseModel' | undefined;
                 sourceKey?: string | undefined;
                 checkpointReceiptId?: string | undefined;
                 metadata?: {
@@ -5540,6 +5882,37 @@ export type ScmDiffSummaryActionResultById = {
                     providerConnectionId: string;
                     modelId: string;
                 } | undefined;
+                connectedServices?: {
+                    v: 2;
+                    bindingsByServiceId: Record<string, {
+                        source: 'native';
+                    } | {
+                        source: 'connected';
+                        selection: 'group';
+                        groupId: string;
+                        profileId?: string | undefined;
+                    } | {
+                        source: 'connected';
+                        selection: 'profile';
+                        profileId: string;
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'direct';
+                        disclosedMember: {
+                            service: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            accountId: string;
+                        };
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'brokered';
+                        disclosedMember?: undefined;
+                    }>;
+                } | null | undefined;
             } | undefined;
             application?: {
                 acceptedRevision: number;
@@ -5615,7 +5988,7 @@ export type ScmDiffSummaryActionResultById = {
     };
     readonly "scm.diffSummary.addOutputs": {
         success: false;
-        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict';
+        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict' | 'invalid_parameters' | 'session_input_invalid' | 'model_not_granted' | 'permission_mode_not_granted' | 'session_input_archived' | 'session_input_unauthorized' | 'session_input_target_unavailable' | 'session_input_muted' | 'session_input_storage_unavailable' | 'session_input_target_update_required' | 'session_input_cancelled' | 'session_input_untrusted_assertion' | 'session_input_idempotency_conflict' | 'session_input_source_authority_mismatch' | 'session_input_permission_ceiling_rejected' | 'session_input_encryption_mode_mismatch';
         error: string;
         latestRevision?: number | undefined;
     } | {
@@ -5712,6 +6085,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -5747,6 +6121,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -5760,6 +6135,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -5832,7 +6208,7 @@ export type ScmDiffSummaryActionResultById = {
             } | {
                 success: false;
                 error: string;
-                errorCode: 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+                errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -5910,6 +6286,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -5945,6 +6322,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -5958,6 +6336,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -6009,6 +6388,7 @@ export type ScmDiffSummaryActionResultById = {
                         error: string;
                     }[] | undefined;
                 } | undefined;
+                nextAction?: 'chooseModel' | undefined;
                 sourceKey?: string | undefined;
                 checkpointReceiptId?: string | undefined;
                 metadata?: {
@@ -6048,6 +6428,37 @@ export type ScmDiffSummaryActionResultById = {
                     providerConnectionId: string;
                     modelId: string;
                 } | undefined;
+                connectedServices?: {
+                    v: 2;
+                    bindingsByServiceId: Record<string, {
+                        source: 'native';
+                    } | {
+                        source: 'connected';
+                        selection: 'group';
+                        groupId: string;
+                        profileId?: string | undefined;
+                    } | {
+                        source: 'connected';
+                        selection: 'profile';
+                        profileId: string;
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'direct';
+                        disclosedMember: {
+                            service: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            accountId: string;
+                        };
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'brokered';
+                        disclosedMember?: undefined;
+                    }>;
+                } | null | undefined;
             } | undefined;
             application?: {
                 acceptedRevision: number;
@@ -6123,7 +6534,7 @@ export type ScmDiffSummaryActionResultById = {
     };
     readonly "scm.diffSummary.discuss": {
         success: false;
-        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict';
+        errorCode: 'result_not_found' | 'revision_conflict' | 'invalid_edit' | 'invalid_output' | 'nothing_to_undo' | 'discussion_unavailable' | 'admission_failed' | 'admission_unknown' | 'result_unavailable' | 'application_locked' | 'application_unavailable' | 'source_not_pending' | 'plan_unavailable' | 'acceptance_mismatch' | 'backend_unsupported' | 'source_changed' | 'head_moved' | 'selection_conflict' | 'invalid_parameters' | 'session_input_invalid' | 'model_not_granted' | 'permission_mode_not_granted' | 'session_input_archived' | 'session_input_unauthorized' | 'session_input_target_unavailable' | 'session_input_muted' | 'session_input_storage_unavailable' | 'session_input_target_update_required' | 'session_input_cancelled' | 'session_input_untrusted_assertion' | 'session_input_idempotency_conflict' | 'session_input_source_authority_mismatch' | 'session_input_permission_ceiling_rejected' | 'session_input_encryption_mode_mismatch';
         error: string;
         latestRevision?: number | undefined;
     } | {
@@ -6220,6 +6631,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -6255,6 +6667,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -6268,6 +6681,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -6340,7 +6754,7 @@ export type ScmDiffSummaryActionResultById = {
             } | {
                 success: false;
                 error: string;
-                errorCode: 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
+                errorCode: 'SCM_DIFF_SUMMARY_DISABLED' | 'TURN_CHANGE_SET_REQUIRED' | 'CHECKPOINT_NOT_FOUND' | 'CHECKPOINT_UNAVAILABLE' | 'DIFF_UNAVAILABLE' | 'MODEL_UNAVAILABLE' | 'SUMMARY_FAILED';
                 comparison?: {
                     id: string;
                     source: ScmComparisonSource;
@@ -6418,6 +6832,7 @@ export type ScmDiffSummaryActionResultById = {
                             suggestedPrBody?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     walkthrough?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -6453,6 +6868,7 @@ export type ScmDiffSummaryActionResultById = {
                             readingHint?: string | undefined;
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                     commitPlan?: {
                         state: 'pending' | 'failed' | 'complete' | 'partial' | 'writing' | 'cancelled';
@@ -6466,6 +6882,7 @@ export type ScmDiffSummaryActionResultById = {
                             leftOutChangeRefs: string[];
                         } | undefined;
                         reason?: string | undefined;
+                        reasonCode?: 'generation_cancelled' | undefined;
                     } | undefined;
                 } | undefined;
                 analysis?: {
@@ -6517,6 +6934,7 @@ export type ScmDiffSummaryActionResultById = {
                         error: string;
                     }[] | undefined;
                 } | undefined;
+                nextAction?: 'chooseModel' | undefined;
                 sourceKey?: string | undefined;
                 checkpointReceiptId?: string | undefined;
                 metadata?: {
@@ -6556,6 +6974,37 @@ export type ScmDiffSummaryActionResultById = {
                     providerConnectionId: string;
                     modelId: string;
                 } | undefined;
+                connectedServices?: {
+                    v: 2;
+                    bindingsByServiceId: Record<string, {
+                        source: 'native';
+                    } | {
+                        source: 'connected';
+                        selection: 'group';
+                        groupId: string;
+                        profileId?: string | undefined;
+                    } | {
+                        source: 'connected';
+                        selection: 'profile';
+                        profileId: string;
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'direct';
+                        disclosedMember: {
+                            service: {
+                                pluginId: string;
+                                localId: string;
+                            };
+                            accountId: string;
+                        };
+                    } | {
+                        source: 'team_resource';
+                        resourceId: string;
+                        deliveryMode: 'brokered';
+                        disclosedMember?: undefined;
+                    }>;
+                } | null | undefined;
             } | undefined;
             application?: {
                 acceptedRevision: number;

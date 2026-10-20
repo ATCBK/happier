@@ -24,7 +24,6 @@ import {
 import { useProfile } from '@/sync/store/hooks';
 
 import type {
-    BuiltInLegacyConnectedAccountOperation,
     ConnectedServiceQuotaSnapshotV1,
     ProviderAccountUsageRecordId,
     QualifiedConnectedAccountQuotaSnapshotV4,
@@ -257,20 +256,11 @@ export function useConnectedServiceQuotaSnapshots(
                     serviceId: quotaProfile.serviceId,
                     profileId: quotaProfile.profileId,
                     resolveAccountMode,
-                    assertOperationAllowed: (
-                        operation:
-                            BuiltInLegacyConnectedAccountOperation,
-                    ) =>
-                        assertLegacyOperationAllowed(
-                            quotaProfile.serviceId,
-                            operation,
-                        ),
                 },
             }];
             },
         );
     }, [
-        assertLegacyOperationAllowed,
         activeServer.generation,
         activeServer.serverId,
         credentialScope,
@@ -335,9 +325,14 @@ export function useConnectedServiceQuotaSnapshots(
                 if (getQualifiedQuotaSnapshotEntry(registration.key).supported === false) return;
                 return refreshQualifiedQuotaSnapshot(registration.key, registration.loadContext);
             }
-            return refreshQuotaSnapshot(registration.key, registration.loadContext);
+            return refreshQuotaSnapshot(registration.key, {
+                ...registration.loadContext,
+                assertOperationAllowed: (operation, signal) => assertLegacyOperationAllowed(
+                    registration.loadContext.serviceId, operation, signal,
+                ),
+            });
         }));
-    }, [loadContexts]);
+    }, [assertLegacyOperationAllowed, loadContexts]);
 
     return React.useMemo(() => {
         const snapshotsByKey: Record<string, ConnectedServiceQuotaSnapshotForUi | null> = {};

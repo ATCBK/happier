@@ -15,6 +15,7 @@ import { createMutableApiSessionClientFixture } from '@/testkit/backends/session
 import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { MessageBuffer } from '@/ui/ink/messageBuffer';
 import { createProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/createHandler';
+import { createCurrentSessionPresentationHost } from '@/session/presentation/currentSessionPresentationService';
 import { createBundledFirstPartyPluginSourceCustody } from '@/plugins/runtime/lifecycle/contributions/runtimeIdentity.testkit';
 
 describe('createNativeAgentSessionHostServiceOwners', () => {
@@ -406,6 +407,9 @@ describe('createNativeAgentSessionHostServiceOwners', () => {
                 machineId: 'machine-1',
                 agentTargetKey: 'agent:happier.agent.claude/claude',
                 session,
+                currentSessionPresentation: createCurrentSessionPresentationHost({
+                    session, signal: new AbortController().signal,
+                }).bindCurrentSession,
                 transcriptSession: session,
                 messageBuffer: new MessageBuffer(),
                 mcpServers: {},

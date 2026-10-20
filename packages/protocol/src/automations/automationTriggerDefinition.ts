@@ -22,7 +22,9 @@ import {
   ENCRYPTED_STORED_CONTENT_SCHEMA,
   addAutomationStoredEnvelopeUtf8LimitIssue,
 } from './automationStoredContentEnvelopeV1.js';
-import { AutomationSessionLifecycleConfigurationSchema } from './automationSessionLifecycle.js';
+import { AUTOMATION_SESSION_LIFECYCLE_EVENT_GROUPS_V1, AutomationSessionLifecycleConfigurationSchema, AutomationSessionLifecycleEventSchema, type AutomationSessionLifecycleEvent } from './automationSessionLifecycle.js';
+import { FOLLOW_EVENT_KINDS_V1, type FollowEventKindV1 } from '../sessions/follow/sessionFollowPolicyV1.js';
+import { SessionPersonalEventKindV1Schema, resolveSessionPersonalFollowEventV1, type SessionPersonalEventKindV1 } from '../sessions/personal/eventEligibility.js';
 import { AutomationRunLifecycleTriggerSchema, AutomationRunLifecycleTriggerInputSchema } from './automationRunLifecycle.js';
 export * from './automationRunLifecycle.js';
 
@@ -198,3 +200,44 @@ export const AutomationTriggerDefinitionInputSchema = lazyZodSchema(() => z.unio
 export type AutomationTriggerDefinitionInput = z.infer<
   typeof AutomationTriggerDefinitionInputSchema
 >;
+
+/** Picker vocabulary only. Execution remains with each existing source schema. */
+export type FollowEventConditionV1 = Readonly<{
+  kind: FollowEventKindV1 | Extract<AutomationSessionLifecycleEvent, 'sessionStarted' | 'sessionArchived'>
+    | Exclude<AutomationTriggerDefinition['kind'], 'sessionLifecycle'>;
+}>;
+export type FollowEventConditionChoiceV1 = Readonly<{
+  condition: FollowEventConditionV1;
+  followEligible: boolean;
+  lifecycleEvents?: readonly AutomationSessionLifecycleEvent[];
+  personalEvents?: readonly SessionPersonalEventKindV1[];
+}>;
+
+/** Shared Follow/Custom/rule/Habit choices, filtered by the actual caller/source. */
+export function projectFollowEventConditionPickerV1(input: Readonly<{
+  usage: 'follow' | 'habit';
+  supportedFollowEvents?: readonly FollowEventKindV1[];
+  supportedTriggerKinds?: readonly AutomationTriggerDefinition['kind'][];
+}>): readonly FollowEventConditionChoiceV1[] {
+  const lifecycle: Partial<Record<FollowEventKindV1, readonly AutomationSessionLifecycleEvent[]>> = {
+    needs_you: AUTOMATION_SESSION_LIFECYCLE_EVENT_GROUPS_V1.needsYou,
+    finished: [AUTOMATION_SESSION_LIFECYCLE_EVENT_GROUPS_V1.turnEnds[0]],
+    failed_or_stopped: AUTOMATION_SESSION_LIFECYCLE_EVENT_GROUPS_V1.turnEnds.slice(1),
+  };
+  const follows = FOLLOW_EVENT_KINDS_V1.filter(kind => !input.supportedFollowEvents || input.supportedFollowEvents.includes(kind))
+    .flatMap((kind): FollowEventConditionChoiceV1[] => {
+      const events = lifecycle[kind];
+      if (input.usage === 'habit' && (!events || input.supportedTriggerKinds && !input.supportedTriggerKinds.includes('sessionLifecycle'))) return [];
+      const personalEvents = SessionPersonalEventKindV1Schema.options.filter(event => resolveSessionPersonalFollowEventV1(event)?.kind === kind);
+      return [{ condition: { kind }, followEligible: true, ...(events ? { lifecycleEvents: events } : {}),
+        ...(personalEvents.length ? { personalEvents } : {}) }];
+    });
+  if (input.usage === 'follow') return follows;
+  const lifecycleOnly = AutomationSessionLifecycleEventSchema.options
+    .filter(event => event === 'sessionStarted' || event === 'sessionArchived')
+    .flatMap((event): FollowEventConditionChoiceV1[] => input.supportedTriggerKinds && !input.supportedTriggerKinds.includes('sessionLifecycle')
+      ? [] : [{ condition: { kind: event }, followEligible: false, lifecycleEvents: [event] }]);
+  const otherKinds = ['schedule', 'pluginEvent', 'prComment', 'ciFailed', 'runLifecycle'] as const satisfies readonly AutomationTriggerDefinition['kind'][];
+  return [...follows, ...lifecycleOnly, ...otherKinds.filter(kind => !input.supportedTriggerKinds || input.supportedTriggerKinds.includes(kind))
+    .map(kind => ({ condition: { kind }, followEligible: false }))];
+}

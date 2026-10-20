@@ -26,6 +26,7 @@ import {
 import { resolveGrantableTeamForActorInTx } from "../queries";
 
 import type { Tx } from "@/storage/inTx";
+import { acquireTeamMutationAccountAdmissionInTx } from "../memberships/sessionAccessEffects";
 import type { SessionHistoryAccess } from "@/storage/enums.generated";
 import { readTransactionDatabaseTime } from "@/storage/transactionDatabaseTime";
 import { defaultRepeatKeyExpiresAt, fetchRepeatKey, saveRepeatKey } from "@/storage/queue/repeatKey";
@@ -389,6 +390,7 @@ export async function createTeamGroupForActorInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ): Promise<TeamGroupServiceResult<TeamGroupV1>> {
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId] });
     const authorized = await resolveTeamViewerContextInTx(tx, input);
     if (!authorized.ok) return authorized;
     const context = authorized.value;
@@ -486,6 +488,7 @@ export async function updateTeamGroupForActorInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ): Promise<TeamGroupServiceResult<TeamGroupV1>> {
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId] });
     const authorized = await resolveTeamViewerContextInTx(tx, input);
     if (!authorized.ok) return authorized;
     const context = authorized.value;
@@ -540,6 +543,7 @@ async function setTeamGroupArchivedInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ): Promise<TeamGroupServiceResult<TeamGroupV1>> {
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId], membershipChange: { kind: "teamGroupMembership", teamId: input.teamId, teamGroupIds: [input.groupId] } });
     const authorized = await resolveTeamViewerContextInTx(tx, input);
     if (!authorized.ok) return authorized;
     const context = authorized.value;
@@ -562,7 +566,7 @@ async function setTeamGroupArchivedInTx(
     // Archive retains every membership row and horizon. Restoration re-enables
     // exactly the retained grants that are still valid — nothing is rebuilt.
     const archivedAt = input.operation === "archive" ? await readTransactionDatabaseTime(tx) : null;
-    return withTeamSessionAccessEffectsInTx(tx, { teamId: input.teamId, teamGroupId: row.id, origin: "retained_lifecycle" }, async () => {
+    return withTeamSessionAccessEffectsInTx(tx, { teamId: input.teamId, teamGroupId: row.id }, async () => {
         const updated = await tx.teamGroup.update({
             where: { id: row.id },
             data: { archivedAt },
@@ -714,6 +718,7 @@ export async function addTeamGroupMemberForActorInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ): Promise<TeamGroupServiceResult<TeamGroupMemberMutationResultV1>> {
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId, input.accountId], affectedAccountIds: [input.accountId], membershipChange: { kind: "teamGroupMembership", teamId: input.teamId, teamGroupIds: [input.groupId] } });
     const authorized = await resolveTeamViewerContextInTx(tx, input);
     if (!authorized.ok) return authorized;
     const context = authorized.value;
@@ -777,6 +782,7 @@ export async function removeTeamGroupMemberForActorInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ): Promise<TeamGroupServiceResult<TeamGroupMemberMutationResultV1>> {
+    await acquireTeamMutationAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId, input.accountId], affectedAccountIds: [input.accountId], membershipChange: { kind: "teamGroupMembership", teamId: input.teamId, teamGroupIds: [input.groupId] } });
     const authorized = await resolveTeamViewerContextInTx(tx, input);
     if (!authorized.ok) return authorized;
     const context = authorized.value;

@@ -12,6 +12,8 @@ import type {
   AgentAcpRuntimeDefinition,
   AgentAcpRuntimeOptions,
   AgentExecutionRunEvent,
+  AgentExecutionRunOpenRequest,
+  AgentExecutionRunConversationEventV1,
   AgentSessionOpenRequest,
   AgentSessionRuntimeEvent,
   AgentSessionRuntimeContext,
@@ -21,13 +23,19 @@ import { AgentSessionRuntimeEventSchema } from '@happier-dev/plugin-sdk/agents/r
 import { createAgentLaunchObserver, type AgentLaunchObserverBoundaries } from '@happier-dev/plugin-sdk/testing';
 import { createCodexAgentRuntime } from '../../../../../../../packages/plugins/codex/src/agent/runtime/engine';
 import { createGeminiAgentRuntime } from '../../../../../../../packages/plugins/gemini/src/agent/runtime/factory';
+import { createCustomAcpAgentRuntime } from '../../../../../../../packages/plugins/custom-acp/src/agent/runtime/factory';
+import { createKiloAgentRuntime } from '../../../../../../../packages/plugins/kilo/src/agent/runtime/factory';
+import { PLUGIN_MANIFEST as GEMINI_PLUGIN_MANIFEST } from '../../../../../../../packages/plugins/gemini/src/manifest';
 import { createGeminiConnectedServiceRuntimeAuthAdapter } from '../../../../../../../packages/plugins/gemini/src/agent/connectedServices/runtimeAuthAdapter';
 import { buildGrokAcpRuntimeDefinition } from '../../../../../../../packages/plugins/grok/src/agent/acp/definition';
 import type { JsonValue } from '@happier-dev/plugin-sdk';
 import { parsePluginManifest } from '@happier-dev/plugin-sdk/manifest';
 import { PluginAgentContributionV2Schema } from '@happier-dev/protocol';
+import { applyAcpBackendUpsertV1 } from '@happier-dev/protocol/acp/catalog/catalogMutationsV1';
+import { openAcpCatalogContentV1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import {
   AgentRuntimeJsonValueV1Schema,
+  AgentSessionConfigurationSnapshotV1Schema,
   AgentSessionProviderCheckpointMaxJsonBytesV1,
   readAttachmentEnvelopeLocalImagePaths,
   readHappierStructuredInputV1FromMeta,
@@ -45,6 +53,8 @@ import type {
 } from '@/agent/runtime/state/currentSessionUiTypes';
 
 import { writeAcpTestAgentScript } from '@/agent/acp/testkit/subprocessHarness';
+import { createAcpExecutionRunRuntimeContextFixture, createAcpSessionRuntimeContextFixture } from '@/agent/acp/testkit/runtimeContextFixture';
+import { createUnavailablePluginServices } from '@/plugins/runtime/invocation/services/unavailable';
 import { createAcpRequestFailureLogRecord } from '@/agent/acp/withRetry';
 import { requestAcpHistoryExtension } from '@/agent/acp/history/acpHistoryExtensionMethods';
 import { createAcpToolIdentity } from '@/agent/acp/toolCalls';
@@ -58,11 +68,15 @@ import { waitForCondition } from '@/testkit/async/waitFor';
 import { withCursorEmptyResponseFailure } from '../../../../../../../packages/plugins/cursor/src/agent/runtime/emptyResponse';
 import { buildAcpModelSuffixOptionControls } from '../definition/modelSuffixOption';
 import { normalizePluginDeclarativeAcpRuntime } from '@/agent/acp/runtime/definition/plugin';
+import { configuredAcpRuntimeConfiguration } from '@/agent/acp/runtime/definition/configured';
+import { resolveConfiguredAcpBackendFromAccountSettings } from '@/agent/acp/catalog/configured/resolveBackend';
+import { createHostDeclarativeAcpAgentRuntimeFactory } from '@/plugins/runtime/runner/createHostDeclarativeAcpAgentRuntimeFactory';
 import { PLUGIN_MANIFEST as ANTIGRAVITY_PLUGIN_MANIFEST } from '../../../../../../../packages/plugins/antigravity/src/manifest';
 import { QWEN_ACP_RUNTIME_DEFINITION } from '../../../../../../../packages/plugins/qwen/src/agent/acp/definition';
 
 import {
   createPublicAcpExecutionRun,
+  createPublicAcpExecutionRunConversation,
   createPublicAcpSession,
   createPublicAcpSessionFromAwaitableAdapter,
   type PublicAcpComposerDependencies,
@@ -162,6 +176,8 @@ function writePublicComposerAgent(dir: string): string {
       let selectedModelRequest = null;
       let initialModelSelected = false;
       let historyPromptCount = 0;
+      let retainedPromptCount = 0;
+      let retainedPreviousInput = null;
       let recoveryPromptCount = 0;
       let permissionAfterSteerPromptCount = 0;
       let grokInterjectPromptCount = 0;
@@ -666,6 +682,12 @@ function writePublicComposerAgent(dir: string): string {
                 } else update(sessionId, quota);
                 ok(request.id, { stopReason: 'end_turn' });
               }
+            } else if (scenario === 'retained-conversation') {
+              retainedPromptCount += 1;
+              update(sessionId, JSON.stringify({ turn: retainedPromptCount, previousInput: retainedPreviousInput,
+                nativePolicy: process.env.KILO_PERMISSION ? JSON.parse(process.env.KILO_PERMISSION) : undefined }));
+              retainedPreviousInput = request.params.prompt?.find(block => block?.type === 'text')?.text;
+              ok(request.id, { stopReason: 'end_turn' });
             } else if (scenario === 'completed') {
               update(sessionId, 'hello from ACP');
               setTimeout(() => ok(request.id, { stopReason: 'end_turn' }), 100);
@@ -1217,6 +1239,7 @@ describe('createPublicAcpSession', () => {
       const session = await createPublicAcpSession({ kind: 'create', sessionId: 'mcp-update', cwd: dir },
         fixture.options, fixture.dependencies);
       try {
+        if (!session.updateConfiguration) throw new Error('Expected the ACP configuration update boundary');
         await expect(session.updateConfiguration({
           mode: { value: null, updatedAtMs: 0 }, model: { value: null, updatedAtMs: 0 },
           permissionIntent: { value: 'default', updatedAtMs: 0 }, options: {},
@@ -1236,7 +1259,7 @@ describe('createPublicAcpSession', () => {
   it.each(['agy-auth-setup', 'agy-auth-required', 'agy-auth-wrong-code'])('retains the declared authentication setup category through the real composer (%s)', async scenario => {
     await withTempDir('public-acp-auth-diagnostic-', async dir => {
       const fixture = createFixture(dir, scenario);
-      const declaration = PluginAgentContributionV2Schema.parse(ANTIGRAVITY_PLUGIN_MANIFEST.contributes.agents[0]);
+      const declaration = PluginAgentContributionV2Schema.parse(ANTIGRAVITY_PLUGIN_MANIFEST.contributes.agents?.[0]);
       if (!('runtime' in declaration) || declaration.runtime.kind !== 'acp') throw new Error('Expected declared ACP runtime');
       const { definition } = normalizePluginDeclarativeAcpRuntime(declaration.runtime);
       const failure = await createPublicAcpSession({ kind: 'create', sessionId: 'auth-diagnostic', cwd: dir },
@@ -1261,7 +1284,7 @@ describe('createPublicAcpSession', () => {
       const fixture = createFixture(dir, scenario);
       const diagnostic = 'Usage Limit Reached\n\nYou have reached your current quota for this period.';
       const serviceId = 'happier.agent.antigravity/antigravity-account';
-      const declaration = PluginAgentContributionV2Schema.parse(ANTIGRAVITY_PLUGIN_MANIFEST.contributes.agents[0]);
+      const declaration = PluginAgentContributionV2Schema.parse(ANTIGRAVITY_PLUGIN_MANIFEST.contributes.agents?.[0]);
       if (!('runtime' in declaration) || declaration.runtime.kind !== 'acp') throw new Error('Expected declared ACP runtime');
       const { definition } = normalizePluginDeclarativeAcpRuntime(declaration.runtime);
       if (!definition?.usageLimitDiagnostic) throw new Error('Expected the provider quota diagnostic declaration');
@@ -1320,6 +1343,7 @@ describe('createPublicAcpSession', () => {
         if (scenario === 'completed') {
           expect(events).toContainEqual(expect.objectContaining({ kind: 'output-delta', text: 'hello from ACP' }));
           expect(events.some(event => event.kind === 'run-failed')).toBe(false);
+          await expect(run.send({ text: 'A finite Run cannot accept another turn' })).resolves.toMatchObject({ status: 'unavailable' });
         } else {
           expect(events).toContainEqual(expect.objectContaining({
             kind: 'run-failed', diagnostic: expect.objectContaining({ code: 'acp_input_custody_unknown' }),
@@ -1331,6 +1355,146 @@ describe('createPublicAcpSession', () => {
         subscription.dispose();
         await run.dispose();
       }
+    });
+  });
+
+  it.each(['configured', 'codex', 'declarative', 'kilo'] as const)('keeps a %s detached ACP conversation usable across completed turns', async (agent) => {
+    await withTempDir('happier-public-acp-retained-run-', async (dir) => {
+      const fixture = createFixture(dir, 'retained-conversation');
+      const agentId = agent === 'configured' ? 'custom-acp' : agent === 'declarative' ? 'acme-agent' : agent;
+      const pluginId = agent === 'declarative' ? 'acme.plugin' : `happier.agent.${agentId}`;
+      const runtime = agent === 'configured' ? createCustomAcpAgentRuntime()
+        : agent === 'codex' ? await createCodexAgentRuntime({} as Parameters<typeof createCodexAgentRuntime>[0])
+        : agent === 'kilo' ? await createKiloAgentRuntime({} as Parameters<typeof createKiloAgentRuntime>[0])
+        : await createHostDeclarativeAcpAgentRuntimeFactory({ ...fixture.options, definition: { mcp: { policy: 'pass_through' } } },
+          { executionRunContextV1: true })({} as Parameters<typeof createCodexAgentRuntime>[0]);
+      const factory = runtime.sessions!.executionRunContextV1!;
+      const runFixture = createAcpExecutionRunRuntimeContextFixture({
+        pluginId, agentId, executionRunId: 'retained-acp',
+        directory: dir, signal: fixture.dependencies.signal,
+        protocols: { acp: {
+          open: async () => { throw new Error('Detached Run cannot open a Happier Session'); },
+          openExecutionRunV1: (request, options) => createPublicAcpExecutionRun(request, options, fixture.dependencies),
+          openExecutionRunConversationV1: (request, options) => createPublicAcpExecutionRunConversation(request, {
+            ...options, transport: { ...fixture.options.transport,
+              ...(options.transport.kind === 'stdio' && options.transport.env ? { env: options.transport.env } : {}),
+            },
+          }, fixture.dependencies),
+        } },
+      });
+      const { context } = runFixture;
+      const request = { kind: 'create' as const, runId: context.executionRun.id,
+        cwd: dir, profile: { pluginId, localId: 'default' },
+        launchEnvironment: { values: { HAPPIER_CODEX_BACKEND_MODE: 'acp' }, unset: [] },
+        configuration: AgentSessionConfigurationSnapshotV1Schema.parse({
+          mode: { value: null, updatedAtMs: 0 }, model: { value: null, updatedAtMs: 0 },
+          permissionIntent: { value: 'default', updatedAtMs: 0 }, options: {},
+        }),
+        input: { text: 'initial input belongs to the host' },
+      };
+      const conversation = await factory.openConversation!(request, context);
+      const events: AgentExecutionRunConversationEventV1[] = [];
+      const subscription = conversation.watch(event => events.push(event));
+      try {
+        expect(events.some(event => event.kind === 'turn-start' || event.kind === 'turn-complete')).toBe(false);
+        for (const [index, turnId] of ['turn-1', 'turn-2', 'turn-3'].entries()) {
+          await expect(conversation.send({ inputIds: [turnId], input: { text: turnId },
+            delivery: { kind: 'newTurn', turnId },
+          }, agent === 'kilo' ? { permissionIntent: 'default' } : undefined)).resolves.toMatchObject({ status: 'admitted' });
+          await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ kind: 'turn-complete', turnId })));
+          const output = events.filter(event => event.kind === 'message-delta' && event.turnId === turnId)
+            .map(event => event.kind === 'message-delta' ? event.text : '').join('');
+          expect(JSON.parse(output)).toMatchObject({ turn: index + 1, previousInput: index === 0 ? null : `turn-${index}`,
+            ...(agent === 'kilo' ? { nativePolicy: { '*': 'ask', read: 'allow', write: 'ask', bash: 'ask' } } : {}),
+          });
+        }
+        expect(events.filter(event => event.kind === 'turn-complete')).toHaveLength(3);
+        expect(events.every(event => !('sessionId' in event))).toBe(true);
+        if (agent === 'kilo') {
+          await expect(conversation.send({ inputIds: ['narrowed-input'], input: { text: 'cannot change launch-only policy' },
+            delivery: { kind: 'newTurn', turnId: 'narrowed-turn' },
+          }, { permissionIntent: 'read-only' })).resolves.toMatchObject({ status: 'unsupported' });
+          expect(events.some(event => 'turnId' in event && event.turnId === 'narrowed-turn')).toBe(false);
+        }
+        const laterEvents: AgentExecutionRunConversationEventV1[] = [];
+        const laterSubscription = conversation.watch(event => laterEvents.push(event));
+        laterSubscription.dispose();
+        expect(laterEvents.some(event => event.kind === 'turn-complete')).toBe(false);
+        const olderHostContext = { ...context, protocols: { acp: {
+          ...context.protocols.acp, openExecutionRunConversationV1: undefined,
+        } } };
+        await expect(Promise.resolve().then(() => factory.openConversation!(request, olderHostContext)))
+          .rejects.toMatchObject({ code: 'execution_run_protocol_unsupported' });
+        if (agent === 'kilo') {
+          await conversation.dispose();
+          const unsafeLaunches: readonly Pick<AgentExecutionRunOpenRequest, 'launchEnvironment' | 'configuration'>[] = [
+            { launchEnvironment: { values: { KILO_PERMISSION: '{"*":"allow"}' }, unset: [] } },
+            { launchEnvironment: { values: {}, unset: ['KILO_PERMISSION'] } },
+            { configuration: { ...request.configuration, mode: { value: 'yolo', updatedAtMs: 1 } } },
+          ];
+          for (const unsafeLaunch of unsafeLaunches) {
+            const overridden = await factory.openConversation!({ ...request, ...unsafeLaunch }, context);
+            const overriddenEvents: AgentExecutionRunConversationEventV1[] = [];
+            const overriddenWatch = overridden.watch(event => overriddenEvents.push(event));
+            try {
+              await expect(overridden.send({ inputIds: ['overridden-input'], input: { text: 'must not prompt' },
+                delivery: { kind: 'newTurn', turnId: 'overridden-turn' },
+              }, { permissionIntent: 'default' })).resolves.toMatchObject({ status: 'unsupported' });
+              expect(overriddenEvents.some(event => 'turnId' in event && event.turnId === 'overridden-turn')).toBe(false);
+            } finally { overriddenWatch.dispose(); await overridden.dispose(); }
+          }
+        }
+      } finally { subscription.dispose(); await conversation.dispose(); await runFixture.dispose(); }
+    });
+  });
+
+  it.each(['mapped', 'unmapped'] as const)('enforces raw ACP input policy before native prompts despite an explicit wider mode (%s)', async (mapping) => {
+    await withTempDir('happier-public-acp-input-policy-', async dir => {
+      const fixture = createFixture(dir, 'configuration-update');
+      const authored = applyAcpBackendUpsertV1({ settings: undefined, nowMs: 1, backend: {
+        id: 'raw-policy', name: 'raw-policy', title: 'Raw policy',
+        launch: { kind: 'command', command: 'fixture-agent', args: [] },
+        runtime: { permissionModeMapping: {
+          default: null, yolo: 'bypass', plan: 'plan', 'safe-yolo': 'smart', 'read-only': mapping === 'mapped' ? 'ask' : null,
+        } },
+      } });
+      expect(authored).toMatchObject({ ok: true });
+      if (!authored.ok) throw new Error('Configured runtime declaration must be authorable');
+      const opened = openAcpCatalogContentV1({ mode: 'plain', material: null,
+        // Persisted Account content is JSON, not the author's optional undefined fields.
+        content: { t: 'plain', v: JSON.parse(JSON.stringify({ v: 1, definitions: [authored.backend] })) },
+      });
+      expect(opened).toMatchObject({ status: 'opened' });
+      if (opened.status !== 'opened') throw new Error('Configured runtime declaration must survive stored ingress');
+      const backend = resolveConfiguredAcpBackendFromAccountSettings({}, 'raw-policy', {
+        status: 'ready', revision: 1, record: opened.record,
+      });
+      if (!backend) throw new Error('Configured ACP definition must resolve');
+      const conversation = await createPublicAcpExecutionRunConversation({ kind: 'create', runId: 'raw-policy', cwd: dir,
+        profile: { pluginId: 'acme.plugin', localId: 'default' }, input: { text: 'host owns this input' },
+        configuration: { mode: { value: 'bypass', updatedAtMs: 1 }, model: { value: null, updatedAtMs: 1 },
+          permissionIntent: { value: 'yolo', updatedAtMs: 1 }, options: {} },
+      }, { ...fixture.options, definition: configuredAcpRuntimeConfiguration(backend) }, fixture.dependencies);
+      const events: AgentExecutionRunConversationEventV1[] = [];
+      conversation.watch(event => events.push(event));
+      try {
+        for (const [index, permissionIntent] of (['plan', 'read-only'] as const).entries()) {
+          const turnId = `policy-${index}`;
+          const result = await conversation.send({ inputIds: [turnId], input: { text: 'report configuration' },
+            delivery: { kind: 'newTurn', turnId },
+          }, { permissionIntent });
+          if (mapping === 'unmapped' && permissionIntent === 'read-only') {
+            expect(result).toMatchObject({ status: 'unsupported' });
+            expect(events.some(event => 'turnId' in event && event.turnId === turnId)).toBe(false);
+          } else {
+            expect(result).toMatchObject({ status: 'admitted' });
+            await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ kind: 'turn-complete', turnId })));
+            expect(events).toContainEqual(expect.objectContaining({ kind: 'message-delta', turnId,
+              text: JSON.stringify({ selectedMode: permissionIntent === 'plan' ? 'plan' : 'ask', selectedModel: null, selectedOptions: {} }),
+            }));
+          }
+        }
+      } finally { await conversation.dispose(); }
     });
   });
 
@@ -2716,34 +2880,50 @@ describe('createPublicAcpSession', () => {
         plugin: { id: 'happier.agent.gemini', version: '0.0.0' }, agent: { id: 'gemini' }, signal,
       });
       // Only OS help and the ACP subprocess are external fakes; the native factory and composer are real.
-      const context = {
-        signal, services: { exec: { run: runHelp } },
-        protocols: { acp: {
+      const protocols = { acp: {
           open: (request: AgentSessionOpenRequest, options: AgentAcpRuntimeOptions) => createPublicAcpSession(request, options, fixture.dependencies),
           openExecutionRunV1: (request: Parameters<typeof createPublicAcpExecutionRun>[0], options: AgentAcpRuntimeOptions) => createPublicAcpExecutionRun(request, options, fixture.dependencies),
-        } },
-      } as unknown as AgentSessionRuntimeContext;
+      } };
+      const unavailableServices = createUnavailablePluginServices();
+      const services = { ...unavailableServices, exec: { ...unavailableServices.exec, run: runHelp } };
       if (!factory.sessions?.executionRunContextV1) throw new Error('Expected Gemini native Session and Run');
-      const native = scope === 'session'
-        ? await factory.sessions.open({ kind: 'create', sessionId: 'gemini-failure', cwd: dir,
-            launchEnvironment: { values: { HOME: dir, GEMINI_CLI_HOME: dir, GEMINI_API_KEY: 'fixture-gemini-key', PUBLIC_ACP_PROMPT_COUNT_PATH: promptCountPath }, unset: [] } }, context)
-        : await factory.sessions.executionRunContextV1.open({ kind: 'create', runId: 'gemini-failure', cwd: dir,
+      const sessions = factory.sessions;
+      const runs = factory.sessions.executionRunContextV1;
+      const opened = await (async () => {
+        if (scope === 'session') {
+          const agent = PluginAgentContributionV2Schema.parse(GEMINI_PLUGIN_MANIFEST.contributes.agents?.find(agent => agent.id === 'gemini'));
+          const contextFixture = createAcpSessionRuntimeContextFixture({ agent, pluginId: 'happier.agent.gemini',
+            sessionId: 'gemini-failure', directory: dir, signal, services, protocols });
+          try {
+            const session = await sessions.open({ kind: 'create', sessionId: 'gemini-failure', cwd: dir,
+              launchEnvironment: { values: { HOME: dir, GEMINI_CLI_HOME: dir, GEMINI_API_KEY: 'fixture-gemini-key', PUBLIC_ACP_PROMPT_COUNT_PATH: promptCountPath }, unset: [] } }, contextFixture.context);
+            return { native: session, session, disposeContext: () => contextFixture.dispose() };
+          } catch (error) { await contextFixture.dispose(); throw error; }
+        }
+        const contextFixture = createAcpExecutionRunRuntimeContextFixture({ pluginId: 'happier.agent.gemini', agentId: 'gemini',
+          executionRunId: 'gemini-failure', directory: dir, signal, services, protocols });
+        try {
+          const native = await runs.open({ kind: 'create', runId: 'gemini-failure', cwd: dir,
             profile: { pluginId: 'happier.agent.gemini', localId: 'gemini' },
             input: { text: 'hello' }, localInputId: 'gemini-input',
-            launchEnvironment: { values: { HOME: dir, GEMINI_CLI_HOME: dir, GEMINI_API_KEY: 'fixture-gemini-key', PUBLIC_ACP_PROMPT_COUNT_PATH: promptCountPath }, unset: [] } }, context);
+            launchEnvironment: { values: { HOME: dir, GEMINI_CLI_HOME: dir, GEMINI_API_KEY: 'fixture-gemini-key', PUBLIC_ACP_PROMPT_COUNT_PATH: promptCountPath }, unset: [] } }, contextFixture.context);
+          return { native, session: null, disposeContext: () => contextFixture.dispose() };
+        } catch (error) { await contextFixture.dispose(); throw error; }
+      })();
+      const native = opened.native;
       const events: Array<AgentSessionRuntimeEvent | AgentExecutionRunEvent> = [];
       const subscription = native.watch(event => { events.push(event); });
       try {
-        if (scope === 'session' && 'send' in native) {
-          await native.send({ inputIds: ['gemini-input'], input: { text: 'hello' }, delivery: { kind: 'newTurn', turnId: 'gemini-turn' } });
+        if (opened.session) {
+          await opened.session.send({ inputIds: ['gemini-input'], input: { text: 'hello' }, delivery: { kind: 'newTurn', turnId: 'gemini-turn' } });
         }
         await waitForCondition(() => events.some(event => event.kind === 'input-rejected' || event.kind === 'run-failed'),
           { timeoutMs: 5000, intervalMs: 10, label: 'Gemini native numeric failure' });
         const failure = events.find(event => event.kind === 'input-rejected' || event.kind === 'run-failed');
-        if (!failure || !('diagnostic' in failure)) throw new Error('Expected native failed diagnostic');
+        if (!failure || !('diagnostic' in failure) || !failure.diagnostic) throw new Error('Expected native failed diagnostic');
         expect(failure.diagnostic).toMatchObject({ code: 'acp_input_rejected_before_effect', details: { requestErrorCode } });
         expect(readFileSync(promptCountPath, 'utf8')).toBe('1');
-        expect(events.some(event => event.kind === 'input-accepted' || event.kind === 'run-completed')).toBe(false);
+        expect(events.some(event => event.kind === 'input-accepted' || event.kind === 'run-complete')).toBe(false);
         expect(JSON.stringify(failure)).not.toContain('private-provider-token');
         const adapter = createGeminiConnectedServiceRuntimeAuthAdapter();
         const classification = adapter.classifyRuntimeAuthFailure({ target: { agentId: 'gemini' }, error: failure.diagnostic,
@@ -2760,7 +2940,10 @@ describe('createPublicAcpSession', () => {
           expect(failure.diagnostic.details).not.toHaveProperty('runtimeAuthClassification');
           expect(classification).toBeNull();
         }
-      } finally { subscription.dispose(); await native.dispose(); }
+      } finally {
+        subscription.dispose();
+        try { await native.dispose(); } finally { await opened.disposeContext(); }
+      }
     });
   });
 

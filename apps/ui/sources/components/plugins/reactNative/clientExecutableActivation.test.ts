@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
     PluginContributesV2Schema,
+    PluginProjectionV2Schema,
     type PluginMachineExecutionOriginV1,
 } from '@happier-dev/protocol';
 import {
@@ -20,6 +21,7 @@ import { createPluginUiExecutableModuleHost } from './executableModuleHost';
 import type { PluginReactNativeLoaderBackend } from './loader';
 import {
     EMPTY_PLUGIN_UI_PROJECTION,
+    normalizePluginUiProjection,
     type PluginUiProjectionModel,
 } from '@/sync/domains/plugins/ui/projection';
 import { PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY } from '@/sync/domains/plugins/ui/projectionUnion';
@@ -170,18 +172,24 @@ function projection(input: Readonly<{
         });
     const voiceProvidersById = input.voice === false
         ? Object.freeze({})
-        : Object.freeze({
-            [`${pluginId}/${voice.id}`]: Object.freeze({
+        : Object.freeze(Object.fromEntries(Object.entries(normalizePluginUiProjection(PluginProjectionV2Schema.parse({
+            v: 2, generation: input.generation,
+            installedPackagesById: {}, agentsById: {}, actionsById: {}, toolsById: {},
+            commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [],
+            familiesById: { voiceProviders: { family: 'voiceProviders', entriesById: {
+              [`${pluginId}/${voice.id}`]: {
                 id: `${pluginId}/${voice.id}`,
                 pluginId,
                 occurrenceId: occurrenceIdForGeneration(input.generation),
-                generation: input.generation,
                 contributionKey: `${pluginId}/${voice.id}`,
                 definition: voice,
-                ...origin,
-                [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: hostOrigin,
-            }),
-        });
+              },
+            } } },
+        }), 'web').voiceProvidersById).map(([key, entry]) => [key, Object.freeze({
+            ...entry,
+            executionOrigin: origin,
+            [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: hostOrigin,
+        })])));
     const reactNativeBundlesById = Object.freeze({
         ...(input.action === false ? {} : {
             [`reactNativeBundle:${pluginId}:${action.id}`]: Object.freeze({
@@ -190,7 +198,7 @@ function projection(input: Readonly<{
                 contributionKind: 'reactNativeBundle' as const,
                 contributionId: action.id,
                 generatedOwnerKind: 'clientContribution',
-                ...origin,
+                executionOrigin: origin,
                 artifactGraph: graph,
                 runtime: Object.freeze({
                     decision: Object.freeze({ state: 'load' }),
@@ -207,7 +215,7 @@ function projection(input: Readonly<{
                 contributionKind: 'reactNativeBundle' as const,
                 contributionId: voice.id,
                 generatedOwnerKind: 'voiceProvider',
-                ...origin,
+                executionOrigin: origin,
                 artifactGraph: graph,
                 runtime: Object.freeze({
                     decision: Object.freeze({ state: 'load' }),

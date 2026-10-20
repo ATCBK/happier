@@ -146,9 +146,10 @@ import { AgentInputOverlayLayer } from './components/AgentInputOverlayLayer';
 import { AgentInputExpansionToggle } from './components/AgentInputExpansionToggle';
 import { AgentInputPermissionRequests } from './components/AgentInputPermissionRequests';
 import { useOptionalSessionTranscriptSource, useSessionTranscriptSource } from '@/components/sessions/transcript/source/SessionTranscriptSourceContext';
-import { resolveArmedComposerContinuation } from './components/agentContinuationSubmitPresentation';
+import { resolveArmedComposerContinuation, type ArmedRouteContinuation } from './components/agentContinuationSubmitPresentation';
 import { AgentInputSubmitButton } from './components/AgentInputSubmitButton';
 import { useAgentInputActionMenuControls } from './controls/useAgentInputActionMenuControls';
+import { AGENT_INPUT_COMPACT_CONTROL_IDS } from './controls/agentInputControlRegistry';
 import { useAgentInputCoreControlHandlers } from './controls/useAgentInputCoreControlHandlers';
 import { useRenderedAgentInputControlRows } from './controls/useRenderedAgentInputControlRows';
 import type { AgentInputControlId } from './controls/agentInputControlTypes';
@@ -166,6 +167,10 @@ import type {
 } from '@/sync/domains/sessionControl/configOptionsControl';
 import type { PendingPermissionRequest } from '@/utils/sessions/sessionUtils';
 import type { OpenApprovalArtifactForSession } from '@/sync/domains/artifacts/approvalArtifacts';
+import {
+    selectComposerApprovalRequestsForSurface,
+    useComposerApprovalRequests,
+} from '@/components/tools/shell/approvals/failedApprovalDismissal';
 import { Text, TextSelectabilityScope } from '@/components/ui/text/Text';
 import { buildGlassCastShadowStyle } from '@/shadowElevation';
 import { GlassSurface } from '@/components/ui/glass/GlassSurface';
@@ -242,6 +247,7 @@ import {
     createStructuredInputMentionFromSuggestion,
     reconcileStructuredInputMentionsWithText,
     reconcileStructuredInputMentionsWithTextChange,
+    structuredInputMentionSurvivesText,
     type ComposerStructuredInputMention,
 } from './structuredInputMentions';
 import {
@@ -251,6 +257,7 @@ import {
     shouldReserveAgentInputExpansionToggleSpace,
 } from './inputExpansionToggleVisibility';
 import { AgentInputCommandMenu } from './commandMenu/AgentInputCommandMenu';
+import { AgentInputDocumentPanelContext, AgentInputPopoverClearanceContext, AgentInputPopoverColumnContext } from './selection/useAgentInputPopoverLayout';
 import { AgentInputFieldAccessories, resolveAgentInputFieldAccessoryGeometry } from './components/AgentInputFieldAccessories';
 import { AgentInputPromptPicker } from './commandMenu/AgentInputPromptPicker';
 import { usePromptPickerController } from './commandMenu/usePromptPickerController';
@@ -497,6 +504,12 @@ interface AgentInputProps {
      */
     barControlIds?: readonly AgentInputControlId[];
     /**
+     * `compact`: an ask box on a page about one thing (the machine page's "Ask an agent", lab `ra`
+     * A1). The composer contains only where it runs and which model answers, on one rail; every
+     * other choice keeps the new session's default. Default `full`.
+     */
+    controlPreset?: 'full' | 'compact';
+    /**
      * `document`: the composer is one card in a document (a workflow step), not the floating
      * composer of a conversation. It draws the plain hairline card the read-only presentation
      * draws — no glass rim or cast shadow, whatever the composer style setting — with no outer
@@ -599,7 +612,7 @@ interface AgentInputProps {
      * A route or model change for the running Agent, armed for the next message
      * (D15). The send control names it; the session's send owner applies it.
      */
-    armedRouteContinuation?: Readonly<{ sourceLabel: string }> | null;
+    armedRouteContinuation?: ArmedRouteContinuation | null;
     /** Cancels the armed route change (D15); see `AgentInputSubmitButton`. */
     onUnarmRoute?: (() => void) | null;
     unarmRoutePending?: boolean;
@@ -694,6 +707,7 @@ interface AgentInputProps {
 type AgentInputPermissionRequestsProps = React.ComponentProps<typeof AgentInputPermissionRequests>;
 
 const EMPTY_PERMISSION_LOCATIONS_BY_ID: ReadonlyMap<string, PermissionToolCallMessageLocation | null> = new Map();
+const NO_APPROVAL_REQUESTS: ReadonlyArray<OpenApprovalArtifactForSession> = [];
 const EMPTY_APPROVAL_LOCATIONS_BY_ARTIFACT_ID: ReadonlyMap<string, PermissionToolCallMessageLocation | null> = new Map();
 
 const AgentInputAttentionRequestsWithLocations = React.memo(function AgentInputAttentionRequestsWithLocations(
@@ -781,16 +795,10 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
     // Default (non-glass) composer surface — the original styling: standard input
     // background + hairline surface border, no drop shadow.
     unifiedPanel: resolveAgentInputPanelLayoutStyle(theme),
-    // The composer style changes its rim/shadow; the Elements material owns its fill.
-    // Fully redefines the border so the
-    // standard hairline + highlight don't leak through. The cast shadow lives on the
-    // `panelShadow` wrapper (glass mode only).
+    // The composer style changes its shadow; the Elements material owns its fill. The edge stays
+    // the standard single even hairline: the composer has no lip (DESIGN.md, owner 2026-10-15).
+    // The cast shadow lives on the `panelShadow` wrapper (glass mode only).
     unifiedPanelGlass: {
-        // Light: a touch thicker rim so the edge reads against the white surface.
-        borderWidth: theme.dark ? 1.5 : 2,
-        borderColor: theme.colors.glass.border,
-        borderTopWidth: theme.dark ? 1.5 : 2,
-        borderTopColor: theme.colors.glass.border,
         // Composer-only fainter inner shadow (the other glass surfaces keep `glass.innerShadow`).
         boxShadow: theme.colors.glass.composerInnerShadow,
     },
@@ -1052,14 +1060,17 @@ const stylesheet = StyleSheet.create((theme, runtime) => ({
      */
     trailingAccessoryInline: {
         flexDirection: 'row',
-        // An armed continuation names its destination in words and can be wider than
-        // the card. The cluster gives way beyond a share of the row, and the label
-        // inside ellipsizes, so the chip rail keeps its share and its scroll rather
-        // than being covered. Every other occupant of the cluster is fixed-width and
-        // never reaches the cap.
+        // An armed continuation names its destination in words ("Continue with
+        // GPT-6-Sol") and is wider than any other occupant of the cluster, which are
+        // all fixed-width and never reach the cap. On a phone that sentence, the
+        // cancel beside it and the Voice accessory need most of the card: the rail
+        // yields to them, because the sentence is what the reader is about to press
+        // and must read whole. The cap still leaves the rail a share of the row and
+        // its scroll, and an unusually long name ellipsizes inside the label rather
+        // than covering the rail.
         flexShrink: 1,
         minWidth: 0,
-        maxWidth: '60%',
+        maxWidth: '85%',
         alignItems: 'center',
         gap: theme.space.s8,
     },
@@ -1226,6 +1237,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     // Interactive local samples have conversation presentation without live Session runtime authority.
     const localSampleSource = transcriptSource?.kind === 'readOnly' && transcriptSource.actions !== null ? transcriptSource : null;
     const isConversation = Boolean(props.sessionId || localSampleSource);
+    const compactControls = props.controlPreset === 'compact';
     const attentionRequestSessionId = props.sessionId ?? localSampleSource?.sessionId;
     const submitAccessibilityLabel = props.submitAccessibilityLabel ?? (isConversation ? t('common.send') : undefined);
     const readOnly = props.onChangeText === undefined;
@@ -1413,18 +1425,22 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     });
 
     const pendingPermissionRequests = props.permissionRequests ?? [];
-    const pendingApprovalRequests = props.approvalRequests ?? [];
+    const pendingApprovalRequests = useComposerApprovalRequests(props.approvalRequests ?? NO_APPROVAL_REQUESTS);
     const canApprovePermissions = props.canApprovePermissions === true;
     const permissionPromptSurface = useSetting('permissionPromptSurface');
     const resolvedPermissionPromptSurface = resolvePermissionPromptSurface(permissionPromptSurface);
     const showComposerPermissionCards = resolvedPermissionPromptSurface === 'composer';
+    const composerApprovalRequests = React.useMemo(
+        () => selectComposerApprovalRequestsForSurface(pendingApprovalRequests, resolvedPermissionPromptSurface),
+        [pendingApprovalRequests, resolvedPermissionPromptSurface],
+    );
     const composerPermissionRequests = React.useMemo(
         () => pendingPermissionRequests.filter((req) => shouldShowGenericPermissionPromptForRequest({ toolName: req.tool, requestKind: req.kind })),
         [pendingPermissionRequests],
     );
     const hasComposerAttentionRequests =
-        showComposerPermissionCards &&
-        (composerPermissionRequests.length > 0 || pendingApprovalRequests.length > 0);
+        (showComposerPermissionCards && composerPermissionRequests.length > 0)
+        || composerApprovalRequests.length > 0;
     React.useEffect(() => {
         if (!hasComposerAttentionRequests) {
             updateLayoutHeight(setComposerAttentionHeightPx, 0);
@@ -1535,8 +1551,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     });
 
     const inputRef = React.useRef<MultiTextInputHandle>(null);
+    // A host's explicit focus request puts the caret where the composer's document has it: after a host
+    // writes the text (the Discussion composer's `@`), the field opens at the end, not where it last was.
     const requestComposerFocus = React.useCallback(() => {
         inputRef.current?.focus();
+        inputRef.current?.setSelection(inputStateRef.current.selection);
     }, []);
     const flushComposerInput = React.useCallback(() => {
         inputRef.current?.flushPendingTextChange?.();
@@ -1792,6 +1811,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         entityDropDomRef(node);
     }, [entityDropDomRef]);
     const composerDropBounds = React.useCallback(() => readWindowBounds(composerDropMeasurable()) ?? composerDropNativeBounds.current, [composerDropMeasurable]);
+    // The composer's whole block (status row, attachments and panel): a carried card keeps clear of it.
+    const composerBlockBounds = React.useCallback((): WindowBounds | null => {
+        const element = stageSpotlightRef.current as unknown as { getBoundingClientRect?: () => DOMRect } | null;
+        return element?.getBoundingClientRect ? readWindowBounds({ getBoundingClientRectFn: () => element.getBoundingClientRect!() }) : null;
+    }, []);
     const measureComposerDrop = React.useCallback(() => {
         const node = composerDropHost.current;
         void measureWindowBounds(composerDropMeasurable()).then(bounds => {
@@ -1902,12 +1926,15 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         accessory: fieldAccessory != null && !accessoriesInActionRow,
         belowToggle: shouldShowInputExpansionToggle,
     });
-    const trailingAccessory = props.trailingAccessory
-        ?? (mountsVoiceComposerPlanet ? voiceComposerPlanet
-            : accessoriesInActionRow ? (
-                <AgentInputFieldAccessories showLibrary={showPromptLibraryButton} onOpenLibrary={openPromptPicker} libraryOpen={promptPicker.isOpen}
-                    accessory={fieldAccessory} belowToggle={false} placement="actionRow" />
-            ) : null);
+    const actionRowAccessories = accessoriesInActionRow ? (
+        <AgentInputFieldAccessories showLibrary={showPromptLibraryButton} onOpenLibrary={openPromptPicker} libraryOpen={promptPicker.isOpen}
+            accessory={fieldAccessory} belowToggle={false} placement="actionRow" />
+    ) : null;
+    // A host's accessory replaces the Voice planet, but a document's own tools (library, mic) stay in the row
+    // after it: the Discussion composer's addressing line sits before its dictation mic.
+    const trailingAccessory = props.trailingAccessory != null && actionRowAccessories
+        ? <>{props.trailingAccessory}{actionRowAccessories}</>
+        : props.trailingAccessory ?? (mountsVoiceComposerPlanet ? voiceComposerPlanet : actionRowAccessories);
     const fieldInputPaddingRight = Math.max(
         fieldAccessoryGeometry.paddingRight ?? 0,
         shouldReserveInputExpansionToggleSpace ? INPUT_EXPANSION_TOGGLE_INPUT_PADDING_RIGHT : 0,
@@ -1939,11 +1966,17 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             text: props.value,
             selection: nextSelection,
         };
-        updateStructuredInputMentions((currentMentions) => reconcileStructuredInputMentionsWithText({
-            previousText: current.text,
-            nextText: props.value,
-            mentions: currentMentions,
-        }));
+        // An authored controlled snapshot already has ranges for the new text.
+        // Otherwise retain the existing reconciliation for stale controlled
+        // ranges, including external text-only changes.
+        if (props.structuredInputMentions === undefined
+            || !props.structuredInputMentions.every((mention) => structuredInputMentionSurvivesText(props.value, mention))) {
+            updateStructuredInputMentions((currentMentions) => reconcileStructuredInputMentionsWithText({
+                previousText: current.text,
+                nextText: props.value,
+                mentions: currentMentions,
+            }));
+        }
         setHasAutocompleteTextInteraction(false);
         inputStateRef.current = nextState;
         updateActiveWordState(nextState);
@@ -1953,7 +1986,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             setLiveTextStatus(nextStatus);
         }
         updateInputSelectionState(nextSelection);
-    }, [props.value, updateActiveWordState, updateInputSelectionState, updateStructuredInputMentions]);
+    }, [props.value, props.structuredInputMentions, updateActiveWordState, updateInputSelectionState, updateStructuredInputMentions]);
 
     React.useEffect(() => {
         updateActiveWordState(inputStateRef.current);
@@ -1970,11 +2003,14 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         const nextSelection = { start: props.value.length, end: props.value.length };
         const nextState = { text: props.value, selection: nextSelection };
         historyAppliedInputStateRef.current = { state: nextState };
-        updateStructuredInputMentions((currentMentions) => reconcileStructuredInputMentionsWithText({
-            previousText: liveInputText,
-            nextText: props.value,
-            mentions: currentMentions,
-        }));
+        if (props.structuredInputMentions === undefined
+            || !props.structuredInputMentions.every((mention) => structuredInputMentionSurvivesText(props.value, mention))) {
+            updateStructuredInputMentions((currentMentions) => reconcileStructuredInputMentionsWithText({
+                previousText: liveInputText,
+                nextText: props.value,
+                mentions: currentMentions,
+            }));
+        }
         inputStateRef.current = nextState;
         updateActiveWordState(nextState);
         const nextStatus = resolveLiveInputTextStatus(props.value);
@@ -1985,7 +2021,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         updateInputSelectionState(nextSelection);
         inputRef.current?.setTextAndSelection(props.value, nextSelection);
         historyAppliedInputStateRef.current = null;
-    }, [props.sessionId, props.value, updateActiveWordState, updateInputSelectionState, updateStructuredInputMentions]);
+    }, [props.sessionId, props.value, props.structuredInputMentions, updateActiveWordState, updateInputSelectionState, updateStructuredInputMentions]);
 
     React.useEffect(() => {
         setHasAutocompleteTextInteraction(false);
@@ -2187,6 +2223,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
     // Action menu popover state
     const composerAnchorRef = React.useRef<View>(null);
+    const composerCardRef = React.useRef<View>(null);
     const stageSpotlightRef = React.useRef<View>(null);
     const stageSpotlightProps = useSpotlightTarget(
         stageSpotlightRef,
@@ -2253,9 +2290,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         selection: inputSelection,
         enabled: isInputFocused && !props.disabled && activeWord !== null,
     });
+    // On a compact layout the menu takes the composer card's width and left edge instead of the caret's.
+    const compactCommandMenu = isMobileLayoutWidth(screenWidth);
     const commandMenuAnchor: CommandMenuAnchor = React.useMemo(
-        () => resolveAgentInputCommandMenuAnchor(caretRect, composerAnchorRef),
-        [caretRect, composerAnchorRef],
+        () => resolveAgentInputCommandMenuAnchor(caretRect, composerAnchorRef, compactCommandMenu ? composerCardRef : null),
+        [caretRect, composerAnchorRef, compactCommandMenu],
     );
 
     const permissionRequestsFades = useScrollEdgeFades({
@@ -2273,7 +2312,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         const sharedProps: Omit<AgentInputPermissionRequestsProps, 'permissionLocationsById'> = {
             sessionId: attentionRequestSessionId,
             permissionRequests: composerPermissionRequests,
-            approvalRequests: pendingApprovalRequests,
+            approvalRequests: composerApprovalRequests,
             metadata: props.metadata || null,
             canApprovePermissions,
             disabledReason: props.permissionDisabledReason,
@@ -2289,7 +2328,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             },
             fadeVisibility: permissionRequestsFades.visibility,
         };
-        if (composerPermissionRequests.length > 0 || pendingApprovalRequests.length > 0) {
+        if (composerPermissionRequests.length > 0 || composerApprovalRequests.length > 0) {
             return <AgentInputAttentionRequestsWithLocations {...sharedProps} />;
         }
         return (
@@ -2301,9 +2340,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         );
     }, [
         canApprovePermissions,
+        composerApprovalRequests,
         composerPermissionRequests,
         hasComposerAttentionRequests,
-        pendingApprovalRequests,
         permissionRequestsFades,
         permissionRequestsMaxHeightPx,
         props.metadata,
@@ -2529,8 +2568,14 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
         if (typeof props.agentPickerSelectedOptionId === 'string' && props.agentPickerSelectedOptionId.length > 0) {
             return props.agentPickerSelectedOptionId;
         }
+        // With nothing chosen, the chip names the running Agent's model, so the popover opens on that
+        // Agent — not on whatever row a caller leads the rail with (the Roles rail).
+        const runningAgentOptionId = currentAgentPickerRow?.id ?? null;
+        if (runningAgentOptionId && agentPickerOptions.some((option) => option.id === runningAgentOptionId)) {
+            return runningAgentOptionId;
+        }
         return agentPickerOptions[0]?.id ?? null;
-    }, [agentPickerOptions, props.agentPickerSelectedOptionId]);
+    }, [agentPickerOptions, currentAgentPickerRow?.id, props.agentPickerSelectedOptionId]);
 
     const hasAgentPickerOptions = agentPickerOptions.length > 0;
 
@@ -3096,8 +3141,9 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
     } = useRenderedAgentInputControlRows({
         readOnly,
         layout: effectiveActionBarLayout,
-        singleRow: isConversation,
+        singleRow: isConversation || compactControls,
         ...(props.barControlIds ? { barControlIds: props.barControlIds } : {}),
+        ...(compactControls ? { containedControlIds: AGENT_INPUT_COMPACT_CONTROL_IDS } : {}),
         chips: extraActionChips,
         overlayAnchorRef,
         onToggleExtraChipCollapsedPopover: (chipKey) => {
@@ -3166,7 +3212,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
     // One rail in an existing session; a new session adds the machine · folder · resume rail
     // beneath its setup rail at every width (0.2's rails).
-    const showSecondaryControlsRow = !isConversation && shouldShowSecondaryControlRow(
+    const showSecondaryControlsRow = !isConversation && !compactControls && shouldShowSecondaryControlRow(
         effectiveActionBarLayout,
         secondaryLeadingControlsForWrap.length > 0 || secondaryTrailingControlsForWrap.length > 0 || hasPath || hasResume,
     );
@@ -3378,11 +3424,15 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
 
     return (
         <SessionModelSourceBrowseHandoffContext.Provider value={modelSourceBrowseHandoff}>
+        <AgentInputPopoverClearanceContext.Provider value={documentPanel ? undefined : stageSpotlightRef}>
+        <AgentInputPopoverColumnContext.Provider value={overlayAnchorRef}>
+        <AgentInputDocumentPanelContext.Provider value={documentPanel}>
         <SyncPerformanceReactProfiler id="sessions.agentInput">
             <View
                 testID="agent-input-composer"
                 ref={stageSpotlightRef}
-                collapsable={stageSpotlightProps.active ? false : undefined}
+                // Measured by the composer's pickers (their clearance) and by the stage spotlight.
+                collapsable={false}
                 onLayout={stageSpotlightProps.onLayout}
                 pointerEvents={Platform.OS === 'web' ? 'auto' : undefined}
                 style={[
@@ -3394,9 +3444,11 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
             >
             <View style={[
                 styles.innerContainer,
+                // A compact composer is contained by its host's section: it takes the section's width, never the
+                // centred conversation column.
                 ...(typeof props.maxWidthCap === 'number'
                     ? [{ maxWidth: props.maxWidthCap }]
-                    : props.maxWidthCap === null
+                    : props.maxWidthCap === null || compactControls
                         ? []
                         : [{ maxWidth: layout.maxWidth }])
             ]} ref={overlayAnchorRef}>
@@ -3481,6 +3533,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     onSelect={(_item, index) => commandMenuOnSelectIndex(index)}
                     onRequestClose={commandMenuOnClose}
                     maxHeight={240}
+                    {...(compactCommandMenu ? { matchAnchorWidth: true, maxWidth: screenWidth } : {})}
                     testID={AGENT_INPUT_COMMAND_MENU_TEST_ID}
                 />
                 {promptPicker.isOpen ? (
@@ -3513,7 +3566,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     activeStatusBadgeKey={props.activeStatusBadgeKey}
                     onActiveStatusBadgeKeyChange={props.onActiveStatusBadgeKeyChange}
                     onGitPress={props.onFileViewerPress}
-                    collapseWhenEmpty={documentPanel}
+                    // A compact composer has no Session to report on: an empty strip reserves no row above it.
+                    collapseWhenEmpty={documentPanel || compactControls}
                 />
 
                 {/* Box 2: Action Area (Input + Send) */}
@@ -3529,13 +3583,8 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                     onDragOver={composerDropZoneHandlers.onDragOver}
                     onDrop={composerDropZoneHandlers.onDrop}
                 >
-                {composerRef && composerDropScope ? <ComposerEntityDropTarget
-                    id={composerDropTargetId} scope={composerDropScope} refValue={composerRef}
-                    bounds={composerDropBounds} presented={props.surfacePresented !== false}
-                    editable={dictationEditable && !controlsOnly} kinds={props.autocompleteKinds}
-                    referenceHost={props.composerReferenceHost} fileScope={props.composerFileScope}
-                    /> : null}
                 <GlassSurface
+                    ref={composerCardRef}
                     testID="agent-input-material-surface"
                     {...panelMaterialProps}
                     style={[
@@ -3590,6 +3639,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                         paddingRight={fieldInputPaddingRight}
                                         onChangeText={handleComposerTextChange}
                                         placeholder={props.placeholder}
+                                        placeholderTextColor={theme.colors.composer.chipTint}
                                         accessibilityLabel={props.inputAccessibilityLabel}
                                         accessibilityHint={props.inputAccessibilityHint}
                                         onKeyPress={handleKeyPress}
@@ -3797,6 +3847,7 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                                         paddingRight={fieldInputPaddingRight}
                                         onChangeText={handleComposerTextChange}
                                         placeholder={props.placeholder}
+                                        placeholderTextColor={theme.colors.composer.chipTint}
                                         accessibilityLabel={props.inputAccessibilityLabel}
                                         accessibilityHint={props.inputAccessibilityHint}
                                         onKeyPress={handleKeyPress}
@@ -3972,10 +4023,20 @@ export const AgentInput = React.memo(React.forwardRef<MultiTextInputHandle, Agen
                         </View>
                     )}
                 </GlassSurface>
+                {/* After the panel, so its drop outline paints over the panel's own fill (it is the target's one visible mark). */}
+                {composerRef && composerDropScope ? <ComposerEntityDropTarget
+                    id={composerDropTargetId} scope={composerDropScope} refValue={composerRef}
+                    bounds={composerDropBounds} clearBounds={composerBlockBounds} presented={props.surfacePresented !== false}
+                    editable={dictationEditable && !controlsOnly} kinds={props.autocompleteKinds}
+                    referenceHost={props.composerReferenceHost} fileScope={props.composerFileScope}
+                    /> : null}
                 </WebDropTargetView>
             </View>
             </View>
         </SyncPerformanceReactProfiler>
+        </AgentInputDocumentPanelContext.Provider>
+        </AgentInputPopoverColumnContext.Provider>
+        </AgentInputPopoverClearanceContext.Provider>
         </SessionModelSourceBrowseHandoffContext.Provider>
     );
 }));

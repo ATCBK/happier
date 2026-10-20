@@ -32,6 +32,7 @@ test('Composer dogfood package boundary has no workspace or private-package depe
     '.': './src/index.mjs',
     './composer': './src/issueComposer.mjs',
     './ui': './src/issueSurface.mjs',
+    './happier-plugin-ui/issue-surface-native': './src/issueSurface.mjs',
   });
   assert.equal(packageJson.dependencies['@happier-dev/protocol'], undefined);
   assert.equal(packageJson.dependencies['@happier-dev/plugin-sdk'].startsWith('workspace:'), false);
@@ -45,6 +46,8 @@ test('Composer dogfood public source and typecheck config contain no workspace a
 
   for (const sourceFile of [
     'src/index.mjs',
+    'src/index.ts',
+    'src/discussionComposer.mjs',
     'src/issueComposer.mjs',
     'src/issueSurface.mjs',
     'src/uiBuildIdentity.mjs',

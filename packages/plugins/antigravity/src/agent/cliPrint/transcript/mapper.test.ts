@@ -32,6 +32,8 @@ describe('Antigravity cliPrint transcript mapper', () => {
         { record: { step_index: 4, type: 'checkpoint', checkpointId: 'cp-1' }, startOffsetBytes: 30, endOffsetBytes: 40 },
         { record: { step_index: 5, type: 'system_message', text: 'compacted' }, startOffsetBytes: 40, endOffsetBytes: 50 },
         { record: { step_index: 6, type: 'error', message: 'boom' }, startOffsetBytes: 50, endOffsetBytes: 60 },
+        { record: { step_index: 7, type: 'PLANNER_RESPONSE', text: '', tool_calls: [] }, startOffsetBytes: 60, endOffsetBytes: 70 },
+        { record: { step_index: 8, type: 'PLANNER_RESPONSE' }, startOffsetBytes: 70, endOffsetBytes: 80 },
       ],
     });
 

@@ -4,6 +4,8 @@ import { act } from 'react-test-renderer';
 
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createExpoRouterMock } from '@/dev/testkit/mocks/router';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { setAccountServiceEndpoint } from '@/sync/domains/server/serverProfiles';
 import type { AuthEntryOptions } from '@/components/account/auth/useAuthEntryOptions';
 
@@ -48,9 +50,10 @@ const getActiveServerSnapshotMock = vi.hoisted(() => vi.fn(() => ({
     serverUrl: 'https://home-a.example.test',
     generation: 1,
 })));
-const setPendingExternalAuthMock = vi.hoisted(() => vi.fn(async () => true));
-const clearPendingExternalAuthMock = vi.hoisted(() => vi.fn(async () => true));
-const clearPendingAccountDirectoryAuthMock = vi.hoisted(() => vi.fn(async () => true));
+// Observe custody without replacing its storage or compare-and-remove decisions.
+const setPendingExternalAuthMock = vi.spyOn(TokenStorage, 'setPendingExternalAuth');
+const clearPendingExternalAuthMock = vi.spyOn(TokenStorage, 'clearPendingExternalAuth');
+const clearPendingAccountDirectoryAuthMock = vi.spyOn(TokenStorage, 'clearPendingAccountDirectoryAuth');
 const locationAssignMock = vi.hoisted(() => vi.fn());
 const runtimeFetchMock = vi.hoisted(() => vi.fn());
 const homeCarrier = vi.hoisted(() => ({
@@ -143,7 +146,6 @@ vi.mock('@/hooks/server/useFeatureDecision', () => ({
     }),
 }));
 
-vi.mock('@/utils/platform/responsive', () => ({ useIsLandscape: () => false }));
 vi.mock('@/sync/store/hooks', () => ({ useLocalSetting: () => false }));
 vi.mock('@/components/onboarding/tour/state/journeySession', () => ({
     useOnboardingJourneySessionActive: () => false,
@@ -151,7 +153,6 @@ vi.mock('@/components/onboarding/tour/state/journeySession', () => ({
 vi.mock('@/components/onboarding/state/usePendingSetupIntent', () => ({
     usePendingSetupIntent: () => null,
 }));
-vi.mock('@/utils/platform/desktopHost', () => ({ isDesktopHost: () => false }));
 vi.mock('@/sync/domains/pending/pendingSetupIntent', () => ({
     getPendingSetupIntent: () => null,
     clearPendingSetupIntent: () => {},
@@ -172,20 +173,6 @@ vi.mock('@/auth/accountDirectory/accountDirectoryAuthClient', () => ({
         startOAuth: (input: unknown) => startOAuthMock(input),
     },
 }));
-
-vi.mock('@/auth/storage/tokenStorage', async (importOriginal) => {
-    const actual = await importOriginal<typeof import('@/auth/storage/tokenStorage')>();
-    return {
-        ...actual,
-        TokenStorage: {
-            ...actual.TokenStorage,
-            setPendingExternalAuth: setPendingExternalAuthMock,
-            clearPendingExternalAuth: clearPendingExternalAuthMock,
-            clearPendingAccountDirectoryAuth: clearPendingAccountDirectoryAuthMock,
-            getAuthAutoRedirectSuppressedUntil: async () => 0,
-        },
-    };
-});
 
 vi.mock('@/components/onboarding/surfaces/OnboardingWizardSurface', () => ({
     OnboardingWizardSurface: (props: Record<string, unknown>) =>
@@ -289,7 +276,9 @@ function capturedAccountServiceEntry() {
 }
 
 describe('PreAuthOnboardingWizardEntry — Account Service welcome sign-in', () => {
+    let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>>;
     beforeEach(async () => {
+        browser = await installBrowserRuntimeForTests({ url: 'http://localhost:8081/', onNavigate: locationAssignMock });
         delete process.env.EXPO_PUBLIC_DEBUG;
         await setAccountServiceEndpoint({
             url: SELECTED_SERVICE_URL,
@@ -315,18 +304,12 @@ describe('PreAuthOnboardingWizardEntry — Account Service welcome sign-in', () 
             homeTransport: { homeCarrier },
         };
         wizardControllerMock.lastProps = null;
-        vi.stubGlobal('window', {
-            location: {
-                href: 'http://localhost:8081/',
-                search: '',
-                assign: locationAssignMock,
-            },
-        });
     });
 
     afterEach(() => {
-        vi.unstubAllGlobals();
         standardCleanup();
+        browser?.restore();
+        vi.unstubAllGlobals();
     });
 
     it('discovers the selected sign-in service on its exact endpoint while another Home is focused', async () => {

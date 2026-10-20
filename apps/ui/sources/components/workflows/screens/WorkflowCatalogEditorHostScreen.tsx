@@ -9,7 +9,7 @@ import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useMountedRef } from '@/hooks/ui/useMountedRef';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import { useActiveServerAccountScope, useAllMachines, useAuthoringMemoryField } from '@/sync/domains/state/storage';
+import { useActiveServerAccountScope, useAllMachines, useMachineListForServer } from '@/sync/domains/state/storage';
 import { exportWorkflowDefinition } from '@/sync/domains/workflows/workflowInterchange';
 import { isWorkflowProjectTarget, type WorkflowAuthoringTarget } from '@/sync/domains/workflows/workflowProjectTarget';
 import { createWorkflowRunRoute } from '@/sync/domains/workflows/workflowRunRoute';
@@ -30,11 +30,15 @@ import { WorkflowMissingDefinitionState } from './WorkflowMissingDefinitionState
 import { WorkflowBuiltinSessionButton } from '../library/WorkflowBuiltinsSection';
 import { WorkflowEditorBody, type WorkflowEditorView } from './WorkflowEditorBody';
 import { useWorkflowAuthoringHost } from './useWorkflowAuthoringHost';
+import { useWorkflowAccountLifetime } from '../workflowAccountScope';
+import { useWorkflowEditorAccountMemory } from './useWorkflowEditorAccountMemory';
 
 /** A read-only catalog source, read through the same paged library owner as every picker. */
 export function WorkflowPluginEditorHostScreen(props: Readonly<{ workflow: string; intent?: 'run' }>): React.ReactElement {
     const catalog = useWorkflowPluginSource(props.workflow);
-    const scope = useActiveServerAccountScope();
+    const focusedScope = useActiveServerAccountScope();
+    const accountLifetime = useWorkflowAccountLifetime();
+    const scope = accountLifetime === undefined ? focusedScope : accountLifetime?.scope;
     const router = useRouter();
     const plugin = catalog.source;
     if (plugin === null) {
@@ -50,7 +54,9 @@ export function WorkflowPluginEditorHostScreen(props: Readonly<{ workflow: strin
 
 /** Local built-ins do not depend on the Account library being available. */
 export function WorkflowBuiltinEditorHostScreen(props: Readonly<{ workflow: string; intent?: 'run' }>): React.ReactElement {
-    const scope = useActiveServerAccountScope();
+    const focusedScope = useActiveServerAccountScope();
+    const accountLifetime = useWorkflowAccountLifetime();
+    const scope = accountLifetime === undefined ? focusedScope : accountLifetime?.scope;
     const router = useRouter();
     const entry = getBuiltinWorkflowCatalogV1().find((item) => item.id === props.workflow);
     if (entry === undefined) return <WorkflowMissingDefinitionState onOpenCollection={() => router.replace('/workflows' as never)} />;
@@ -71,9 +77,13 @@ function CatalogDefinition(props: Readonly<{ plugin: WorkflowPluginSourceV1 | Bu
         ? { kind: 'catalog' as const, workflow: props.plugin.workflow, pluginVersion: props.plugin.version }
         : { kind: 'catalog' as const, workflow: props.plugin.id };
     const router = useRouter();
-    const machines = useAllMachines();
-    const recentMachinePaths = useAuthoringMemoryField('recentMachinePaths');
-    const [lifetime] = React.useState(captureActiveServerAccountScopeLifetime);
+    const focusedMachines = useAllMachines();
+    const accountLifetime = useWorkflowAccountLifetime();
+    const addressedMachines = useMachineListForServer(accountLifetime?.scope.serverId ?? '');
+    const machines = accountLifetime === undefined ? focusedMachines : addressedMachines ?? [];
+    const { recentMachinePaths } = useWorkflowEditorAccountMemory(accountLifetime);
+    const [focusedLifetime] = React.useState(captureActiveServerAccountScopeLifetime);
+    const lifetime = accountLifetime === undefined ? focusedLifetime : accountLifetime;
     const [target, setTarget] = React.useState<WorkflowAuthoringTarget | null>(() => resolveContextualWorkflowProjectTarget({ machines, recentMachinePaths,
         scope: lifetime?.isCurrent() ? lifetime.scope : null }));
     const mounted = useMountedRef();
@@ -83,7 +93,7 @@ function CatalogDefinition(props: Readonly<{ plugin: WorkflowPluginSourceV1 | Bu
     const [rawTextValues, setRawTextValues] = React.useState<Readonly<Record<string, string>>>({});
     // Run now anchors its composer under itself, as in the editor (convo-N7).
     const runAnchorRef = React.useRef<View | null>(null);
-    const runNow = useWorkflowRunNowController();
+    const runNow = useWorkflowRunNowController(accountLifetime);
     const machine = machines.find((entry) => entry.id === target?.machineId);
     const draft = React.useMemo(() => buildWorkflowEditorDraftFromDefinition({
         draftId: `catalog:${plugin.workflow}:${plugin.version}`, name: plugin.title, definition: plugin.definition,
@@ -96,8 +106,9 @@ function CatalogDefinition(props: Readonly<{ plugin: WorkflowPluginSourceV1 | Bu
         if (!isCurrent()) return;
         const definitionDraftSeedId = storeWorkflowDefinitionDraftSeed({ definition: plugin.definition,
             name: t('workflows.copyName', { name: plugin.title }),
-            ...(plugin.description === undefined ? {} : { description: plugin.description }) });
-        router.push({ pathname: '/workflows/new', params: { definitionDraftSeedId } } as never);
+            ...(plugin.description === undefined ? {} : { description: plugin.description }) }, accountLifetime);
+        router.push({ pathname: '/workflows/new', params: { definitionDraftSeedId,
+            ...(accountLifetime ? { serverId: accountLifetime.scope.serverId } : {}) } } as never);
     };
     const admit = async (inputs: Readonly<Record<string, JsonValue>> | undefined, roleOverrides?: readonly RoleOverrideV1[]) => {
         if (!isCurrent() || sessionBound || target === null || !isWorkflowProjectTarget(target) || target.directory.trim().length === 0) return;
@@ -108,7 +119,7 @@ function CatalogDefinition(props: Readonly<{ plugin: WorkflowPluginSourceV1 | Bu
             refusal: 'inline' });
         if (accepted !== null && isCurrent()) {
             setOpen(false);
-            router.push(createWorkflowRunRoute(accepted.run.id) as never);
+            router.push(createWorkflowRunRoute(accepted.run.id, lifetime?.scope.serverId) as never);
         }
     };
     const inputPresentation = resolveWorkflowBuiltinInputPresentation(builtin?.id);
@@ -116,7 +127,7 @@ function CatalogDefinition(props: Readonly<{ plugin: WorkflowPluginSourceV1 | Bu
         inputs: plugin.definition.inputs, definition: plugin.definition, workflowName: plugin.title,
         ...(inputPresentation === undefined ? {} : { inputPresentation }),
         preview: plugin.description ?? '', values, onChangeValues: setValues, rawTextValues, onChangeRawTextValues: setRawTextValues,
-        machineId: target?.machineId ?? null, serverId: props.serverId,
+        machineId: target?.machineId ?? null, directory: target && isWorkflowProjectTarget(target) ? target.directory : null, serverId: props.serverId,
         extraActionChips: [{ ...createExecutionRunStartContentChip({
             key: 'workflow-start-where', icon: 'folder', title: t('workflows.page.where.label'),
             label: formatWorkflowWhereSummary({ target, machineName: machine ? getMachineDisplayName(machine) : null }) ?? t('workflows.page.where.choose'),

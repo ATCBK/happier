@@ -1,14 +1,18 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { installEmptyProjectAccountRowsHttpBoundary } from '@/testkit/http/projectAccountRows';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AccountArtifact } from '@/api/artifacts/accountArtifactStore';
+import type { AccountArtifact, AccountArtifactHeader } from '@/api/artifacts/accountArtifactStore';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { createSkillStore } from '../store/skillStore';
 import { resolveRunnerSkills, type ResolveRunnerSkillsInput } from './resolveRunnerSkills';
 import { readAppliedSessionSkillDelivery, reapplySessionSkills } from './reapplySessionSkills';
 
 const cleanups: Array<() => Promise<void>> = [];
+let restoreProjectHttp: () => void;
+beforeEach(() => { restoreProjectHttp = installEmptyProjectAccountRowsHttpBoundary(); });
+afterEach(() => { restoreProjectHttp(); });
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
 
 async function fixture() {
@@ -20,9 +24,10 @@ async function fixture() {
     await store.collectSkillCache({ libraryDigests: [] });
     await rm(home, { recursive: true, force: true });
   });
-  const artifact: AccountArtifact = {
+  const artifact: AccountArtifact & AccountArtifactHeader = {
     artifactId: 'library', ownerAccountId: 'account', access: 'owner',
     revision: { headerVersion: 1, bodyVersion: 1 }, seq: 1, createdAt: 1, updatedAt: 1,
+    headerVersion: 1, bodyVersion: 1,
     header: { v: 1, kind: 'prompt_bundle.v2', title: 'sample', bundleSchemaId: 'skills.skill_md_v1' },
     body: JSON.stringify({ v: 1, createdAtMs: 1, updatedAtMs: 1, entries: [
       { path: 'SKILL.md', contentKind: 'utf8', contentBase64: Buffer.from('---\nname: sample\ndescription: Useful\n---\nBody').toString('base64') },
@@ -98,19 +103,22 @@ describe('reapplySessionSkills', () => {
     expect(await readFile(join(initial.delivery!.pluginRoot, 'session.json'), 'utf8')).toBe(before);
   });
 
-  it('does not reinterpret failed library reads as an empty selection', async () => {
+  it('reapplies readable selected content while unrelated library inventory is unavailable', async () => {
     const { input, transports } = await fixture();
     const initial = await resolveRunnerSkills(input, transports);
-    const before = await readFile(join(initial.delivery!.pluginRoot, 'session.json'), 'utf8');
+    let applied = initial;
     const result = await reapplySessionSkills({ readInput: () => input,
-      runtime: { refreshSkills: async () => { throw new Error('must_not_reload'); } },
-      onApplied: () => { throw new Error('must_not_publish'); } }, { ...transports,
+      runtime: { refreshSkills: async ({ skills }) => {
+        expect(skills.items).toEqual(initial.delivery!.items);
+        return { kind: 'applied' };
+      } }, onApplied: value => { applied = value; } }, { ...transports,
       artifacts: { ...transports.artifacts, list: async () => { throw new Error('unavailable'); } } });
-    expect(result).toEqual({ applied: 'failed', reason: 'skills_unavailable' });
-    expect(await readFile(join(initial.delivery!.pluginRoot, 'session.json'), 'utf8')).toBe(before);
+    expect(result).toEqual({ applied: 'live' });
+    expect(applied.delivery!.items).toEqual(initial.delivery!.items);
+    expect(await readFile(join(applied.delivery!.skillsRoot, 'sample', 'references', 'note.md'), 'utf8')).toBe('Supporting file');
   });
 
-  it('preserves the live folder and applied plan when a selected Artifact body becomes unreadable', async () => {
+  it.each(['missing', 'unreadable'] as const)('preserves the live folder and applied plan when a selected Artifact becomes %s', async failure => {
     const { input, transports } = await fixture();
     const initial = await resolveRunnerSkills(input, transports);
     const before = await readFile(join(initial.delivery!.pluginRoot, 'session.json'), 'utf8');
@@ -118,7 +126,10 @@ describe('reapplySessionSkills', () => {
     const result = await reapplySessionSkills({ readInput: () => input,
       runtime: { refreshSkills: async () => { throw new Error('must_not_reload'); } },
       onApplied: value => { applied = value; } }, { ...transports,
-      artifacts: { ...transports.artifacts, read: async () => { throw new Error('body_unavailable'); } } });
+      artifacts: { list: async () => ({ items: [], coverage: 'complete' }), read: async () => {
+        if (failure === 'missing') return null;
+        throw new Error('body_unavailable');
+      } } });
     expect(await readFile(join(initial.delivery!.pluginRoot, 'session.json'), 'utf8')).toBe(before);
     expect(await readFile(join(initial.delivery!.skillsRoot, 'sample', 'references', 'note.md'), 'utf8')).toBe('Supporting file');
     expect(applied).toBe(initial);

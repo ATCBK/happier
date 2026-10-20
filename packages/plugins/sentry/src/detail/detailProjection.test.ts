@@ -187,6 +187,8 @@ describe('Sentry tag projections', () => {
         ],
       },
       { key: 'not a routable key', topValues: [] },
+      { key: '.', topValues: [] },
+      { key: '..', topValues: [] },
     ], SENTRY_DETAIL_BOUNDS_V1);
 
     expect(tags.tags).toEqual([{
@@ -202,7 +204,7 @@ describe('Sentry tag projections', () => {
     }]);
     // A key this source cannot address as one path segment is not offered as a
     // drill-down it could never perform.
-    expect(tags.omittedTagCount).toBe(1);
+    expect(tags.omittedTagCount).toBe(3);
     const serialized = JSON.stringify(tags);
     for (const withheld of ['buyer@example.com', '"buyer"', '203.0.113.9', '"identifier"']) {
       expect(serialized).not.toContain(withheld);

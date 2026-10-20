@@ -18,6 +18,7 @@ import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createActionApprovalContinuation, type ActionApprovalContinuation } from './actionApprovalContinuation';
+import type { SplitCanvasState } from '@/components/appShell/splitCanvas/model/splitCanvasTypes';
 
 // Keep real Sync/Account custody; only the external Socket transport stays disconnected.
 vi.mock('socket.io-client', async (importOriginal) => (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
@@ -43,6 +44,7 @@ vi.mock('react-native-gesture-handler', async () => (await import('@/dev/testkit
 vi.mock('react-native-reanimated', async () => (await import('@/dev/testkit/mocks/reanimated')).createReanimatedModuleMock());
 installHomeGovernanceBoundaries(harness);
 const { useActionApprovalContinuation } = await import('./useActionApprovalContinuation');
+const { SplitCanvasHost } = await import('@/components/appShell/splitCanvas/components/SplitCanvasHost');
 const { createIdentityAdministrationClient } = await import('@/components/settings/teams/identity/identityAdministrationClient');
 const { createServerAccountScope } = await import('@/sync/domains/scope/serverAccountScope');
 const { createUsageCoachController } = await import('@/components/settings/usage/widgets/usageCoachController');
@@ -105,12 +107,12 @@ function answerRename(serverId: string): void {
     });
 }
 
-async function renderContinuation(serverId: string, onExecuted: () => void = vi.fn()) {
+async function renderContinuation(serverId: string, onExecuted: () => void = vi.fn(), wrapper?: React.ComponentType<React.PropsWithChildren>) {
     return await renderHook(({ scopeKey }: { scopeKey: string }) => useActionApprovalContinuation({
         scopeKey,
         serverId,
         onExecuted,
-    }), { initialProps: { scopeKey: `${serverId}:${ACCOUNT_ID}` } });
+    }), { initialProps: { scopeKey: `${serverId}:${ACCOUNT_ID}` }, wrapper });
 }
 
 describe('useActionApprovalContinuation', () => {
@@ -684,6 +686,48 @@ describe('useActionApprovalContinuation', () => {
         expect(onExecuted).not.toHaveBeenCalled();
         expect(hook.getCurrent().approvalId).toBeNull();
         expect(hook.getCurrent().approvalPending).toBe(false);
+    });
+
+    it('consumes an Inbox rejection while its retained split-canvas origin is hidden on another Home', async () => {
+        const serverId = await addApprovalHome();
+        const artifactId = await openRenameApproval(serverId, 'unfocused-origin');
+        const navigation = await import('@react-navigation/native');
+        const focus = vi.spyOn(navigation, 'useIsFocused').mockReturnValue(true);
+        let originShown = true;
+        const root: SplitCanvasState<null>['root'] = {
+            kind: 'split', id: 'approval-origin-split', axis: 'row', ratio: 0.5,
+            first: { kind: 'leaf', id: 'origin', leafKind: 'test', payload: null },
+            second: { kind: 'leaf', id: 'approval', leafKind: 'test', payload: null },
+        };
+        function RetainedOrigin(props: React.PropsWithChildren) {
+            return <SplitCanvasHost state={{ root, focusedLeafId: originShown ? 'origin' : 'approval', maximizedLeafId: originShown ? null : 'approval' }}
+                dispatch={() => {}} renderLeaf={({ leaf }) => leaf.id === 'origin' ? props.children : null} />;
+        }
+        const hook = await renderContinuation(serverId, vi.fn(), RetainedOrigin);
+        const onTerminal = vi.fn();
+        try {
+            act(() => hook.getCurrent().requestApproval({ artifactId, onExecuted: vi.fn(), onTerminal }));
+            await waitForHomeGovernance(() => expect(hook.getCurrent().approvalStatus).toBe('open'));
+            // Another Home is active during review: its store cannot carry this
+            // origin's terminal body. Only the exact-Home reader can settle it.
+            const otherHomeId = await harness.addHome({ name: 'Other Home', serverUrl: 'https://other-continuation.example', accountId: 'account-b' });
+            await act(async () => {
+                await storage.getState().activateSettingsScope({ serverId: otherHomeId, accountId: 'account-b' }, []);
+                storage.getState().activateProfileScope({ serverId: otherHomeId, accountId: 'account-b' }, []);
+            });
+            focus.mockReturnValue(false);
+            originShown = false;
+            await hook.rerender({ scopeKey: `${serverId}:${ACCOUNT_ID}` });
+            await decideApprovalAsInbox(serverId, artifactId, 'reject');
+            const { publishHomeAccountChange } = await import('@/sync/runtime/orchestration/homeAccountChange');
+            await act(async () => { publishHomeAccountChange(serverId, [artifactId], { changeKinds: ['artifact'] }); });
+            await waitForHomeGovernance(() => expect(onTerminal).toHaveBeenCalledOnce());
+            expect(onTerminal.mock.calls[0]?.[0]).toBe('rejected');
+            expect(hook.getCurrent().approvalPending).toBe(false);
+        } finally {
+            focus.mockRestore();
+            await hook.unmount();
+        }
     });
 
     it('keeps custody through a transport failure so the same approval can still settle', async () => {

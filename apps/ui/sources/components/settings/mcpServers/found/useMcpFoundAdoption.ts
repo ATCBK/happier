@@ -99,7 +99,7 @@ export function useMcpFoundAdoption(options: Readonly<{
     const answers = draft?.answers ?? EMPTY_MCP_PASTE_ANSWERS;
     const openValues = draft ? countOpenMcpPasteValues(draft.model, answers) : 0;
     return { state: draft?.state ?? { status: 'idle' } as McpFoundAdoptionState,
-        begin, setValue, setField, submit, cancel, openValues, model: draft?.model ?? null, answers,
+        begin, setValue, setField, submit, cancel, openValues, item: draft?.item ?? null, model: draft?.model ?? null, answers,
         canSubmit: Boolean(draft && openValues === 0 && !draft.model.errors.length && options.catalogRevision !== null
             && draft.state.status !== 'submitting' && draft.state.status !== 'adopted'),
     };

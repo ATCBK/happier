@@ -14,6 +14,9 @@ import {
 import { resolveNotificationQuietHoursTimezone } from './notificationPreferences';
 
 type QuietHoursOverride = AttentionDeviceOverridesV1['quietHoursOverride'];
+/** The preset control emits only its authored choice, not retained extension fields from storage. */
+type QuietHoursOverrideChoice = Readonly<{ mode: 'account' | 'disabled' }>
+    | Readonly<{ mode: 'custom'; timezone: string; windows: readonly (typeof NIGHTLY_QUIET_HOURS_WINDOW)[] }>;
 /** `custom` is a schedule the presets do not describe; it is shown, never offered. */
 type AccountQuietHoursChoice = 'off' | 'nightly' | 'custom';
 type DeviceQuietHoursChoice = 'account' | 'disabled' | 'nightly' | 'custom';
@@ -22,7 +25,7 @@ type NotificationQuietHoursSectionProps = Readonly<{
     policy: AttentionDeliveryPolicyV1;
     deviceOverride: QuietHoursOverride;
     setAccountQuietHours: (preset: 'off' | 'nightly') => void;
-    setDeviceQuietHoursOverride: (override: QuietHoursOverride) => void;
+    setDeviceQuietHoursOverride: (override: QuietHoursOverrideChoice) => void;
 }>;
 
 function readDeviceTimezone(): string {

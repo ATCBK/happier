@@ -6,7 +6,6 @@ import { isConnectedServiceProfileStatusSelectable, type ConnectedServicesProfil
 import type { ConnectedServiceRegistryEntry } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import type { ConnectedAccountUiNegotiation } from '@/sync/domains/connectedServices/resolveConnectedAccountUiNegotiation';
 import type { Profile } from '@/sync/domains/profiles/profile';
-import { deriveAccountHealth } from '@/sync/domains/connectedServices/deriveAccountHealth';
 import {
     applyProjectedCredentialKindRestrictions,
     buildQualifiedConnectedAccountProfileOptionsByServiceId,
@@ -64,8 +63,8 @@ export function projectMachineAgentConnectedServices(params: Readonly<{
                 ));
                 return { profileId: option.profileId, profileLabel: option.label ?? option.providerEmail ?? null,
                     healthy: Boolean(isConnectedServiceProfileStatusSelectable(option.status) && profile
-                        && isQualifiedConnectedAccountProfileUsableV4({ profile, authentication, now: params.now })
-                        && deriveAccountHealth({ status: profile.status, capacityPct: null }) === 'healthy') };
+                        && isQualifiedConnectedAccountProfileUsableV4({ profile, authentication, now: params.now })),
+                    ...(profile?.status === 'needs_reauth' ? { reconnectRequired: true } : {}) };
             });
             const usable = profiles.find((profile) => profile.healthy);
             const selected = usable ?? profiles[0];
@@ -86,8 +85,8 @@ export function projectMachineAgentConnectedServices(params: Readonly<{
             optionsByServiceId: { [serviceId]: options }, connectedAccounts: [declaration],
         })[serviceId] ?? [];
         const profiles = restricted.map((option) => ({ profileId: option.profileId, profileLabel: option.label ?? option.providerEmail ?? null,
-            healthy: option.status !== 'unsupported_kind' && isConnectedServiceProfileStatusSelectable(option.status)
-                && deriveAccountHealth({ status: option.status, capacityPct: null }) === 'healthy' }));
+            healthy: option.status !== 'unsupported_kind' && isConnectedServiceProfileStatusSelectable(option.status),
+            ...(option.status === 'needs_reauth' ? { reconnectRequired: true } : {}) }));
         const usable = profiles.find((profile) => profile.healthy);
         const selected = usable ?? profiles[0];
         return {

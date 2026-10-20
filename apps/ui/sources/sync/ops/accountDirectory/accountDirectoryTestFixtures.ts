@@ -1,11 +1,18 @@
+import tweetnacl from 'tweetnacl';
+import { deriveAccountMachineKeyFromRecoverySecret } from '@happier-dev/protocol/crypto/accountScopedCipher';
+import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
 import type { AccountDirectoryMeResponseV1 } from '@happier-dev/protocol';
 import { createHomeCredentialDestinationDigestV1, type AccountDirectoryHomeEntryV1 } from '@happier-dev/protocol/auth/accountDirectory';
 import type { AuthEntryProjectionV1 } from '@happier-dev/protocol/auth/entry';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { decodeBase64, encodeBase64 } from '@/encryption/base64';
 import { encryptBox } from '@/encryption/libsodium';
+import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
+import { AccountEncryptionCurrentnessResponseSchema } from '@happier-dev/protocol/account/encryptionMode';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 
 export function createDirectoryHttpFixture(options: Readonly<{ sameServiceHome?: boolean }> = {}) {
+    const homeRecoverySecret = new Uint8Array(32).fill(7);
     const endpoint = 'https://directory.test';
     const identity = 'srv_directory';
     const home: AccountDirectoryHomeEntryV1 = {
@@ -86,9 +93,17 @@ export function createDirectoryHttpFixture(options: Readonly<{ sameServiceHome?:
             homeConnectionDescriptor: currentHome.connectionDescriptor,
         });
         if (path === '/v1/account/encryption') return json({ mode: state.mode, updatedAt: 0 });
+        if (path === '/v1/account/profile') return json(AccountProfileSchema.parse({
+            id: requestEndpoint === endpoint ? 'account-directory' : 'account-home',
+        }));
+        if (path === '/v1/account/encryption/currentness') return json(state.mode === 'plain'
+            ? createPlainAccountEncryptionCurrentnessFixture()
+            : AccountEncryptionCurrentnessResponseSchema.parse({ mode: state.mode, version: 1, signingKeyFingerprint: null,
+                contentKeyFingerprint: computeAccountEncryptionMigrateKeyFingerprintV1(tweetnacl.box.keyPair.fromSecretKey(deriveAccountMachineKeyFromRecoverySecret(homeRecoverySecret)).publicKey),
+                updatedAt: 0, recipientEnvelopeReadiness: { status: 'available' } }));
         if (path.includes('/finalize')) return state.exchangeStatus === 200
             ? json({ token: 'directory-token' }) : json({ error: state.exchangeError }, state.exchangeStatus);
         throw new Error(`Unexpected HTTP fixture request: ${requestEndpoint}${path}`);
     };
-    return { service, home, state, token, request };
+    return { service, home, state, token, request, homeRecoverySecret };
 }

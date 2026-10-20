@@ -3,9 +3,44 @@ import { PluginContributionLocalIdSchema } from '@happier-dev/protocol/plugins/c
 import { PluginIdSchema } from '@happier-dev/protocol/plugins/plugin-id';
 import { SessionMessageProvenanceV1Schema } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { readPendingLocalId } from '@happier-dev/protocol/sessions/pending/pendingLocalId';
+import { materializeActionRequestAttributionV1, type ActionRequestAttributionV1 } from '@happier-dev/protocol/actions/actionRequestAttributionV1';
+import { SessionCreationCorrespondenceV1ReadSchema } from '@happier-dev/protocol/sessions/creation/sessionCreationCorrespondenceV1';
 import type { ActionPluginCaller, ActionCaller, ActionSurfaces, ExternalActionExecutionAuthorizationV1, PluginInvocationSurfaceV1, PluginSessionInputSourceV1, SessionInputCausalPermissionAuthorityV1, SessionInputRequestV1, SessionInputRequestV2, SessionInputRequest, SessionInputSourceAuthorityV1, SessionInputWorkflowV2, SessionMessageProvenanceV1, SessionMessageProvenanceV2 } from '@happier-dev/protocol';
 
 export { deriveWorkflowSessionInputLocalIdV2 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+
+/** Protected input keeps live Session custody; an inactive Session resumes through its Machine. */
+export function resolveProtectedSessionInputActionTarget(input: Readonly<{
+  sessionId: string;
+  machineId: string;
+  active: boolean;
+}>): import('@happier-dev/protocol').ExternalActionTargetV1 {
+  return input.active
+    ? { kind: 'session', sessionId: input.sessionId }
+    : { kind: 'machine', machineId: input.machineId };
+}
+
+/** One exact target for input authoring and the CLI's authenticated Machine route. */
+export function resolveSessionInputTargetMachineId(params: Readonly<{
+  decryptedMetadata: Record<string, unknown> | null;
+  rawSession: Readonly<Record<string, unknown>>;
+  targetMachineId?: string;
+}>): string | null {
+  const correspondence = SessionCreationCorrespondenceV1ReadSchema.safeParse(
+    params.decryptedMetadata?.sessionCreationCorrespondenceV1,
+  );
+  const observedMachineId = correspondence.success
+    ? correspondence.data.recipe.execution.machineId
+    : typeof params.rawSession.machineId === 'string'
+      ? params.rawSession.machineId.trim()
+      : typeof params.decryptedMetadata?.machineId === 'string'
+        ? params.decryptedMetadata.machineId.trim()
+        : '';
+  const suppliedMachineId = params.targetMachineId?.trim() ?? '';
+  if (observedMachineId && suppliedMachineId && observedMachineId !== suppliedMachineId) return null;
+  if (observedMachineId) return observedMachineId;
+  return suppliedMachineId || null;
+}
 
 /** Protected E2EE equality and authenticated caller facts require the Machine seam. */
 export function requiresMachineAdmissionForSessionInput(params: Readonly<{
@@ -13,6 +48,17 @@ export function requiresMachineAdmissionForSessionInput(params: Readonly<{
   mode: 'plain' | 'e2ee';
   callerInputAuthorization?: ExternalActionExecutionAuthorizationV1;
 }>): boolean {
+  // A person's Ask needs the authenticated Account actor on its original
+  // input, including when content is encrypted. A Machine receipt attests the
+  // target's installation, not the person who chose a return destination.
+  if (params.request?.v === 1 && params.request.replyIntent?.humanOrigin
+    && !requiresAuthenticatedMachineAdmissionForSessionInput(params.request)) return false;
+  // Follow-only input is authored by its captured Account, even when that
+  // Account's Session runs on a foreign Machine. Other protected sources keep
+  // the Machine admission requirement below.
+  if (params.request?.v === 1 && params.request.followDeliveryV1
+    && !requiresAuthenticatedMachineAdmissionForSessionInput(params.request)
+    && params.callerInputAuthorization === undefined) return false;
   return params.request !== null && (
     requiresAuthenticatedMachineAdmissionForSessionInput(params.request)
     || params.mode === 'e2ee'
@@ -36,6 +82,7 @@ export function buildPluginSessionInputAdmissionV1(params: Readonly<{
   caller: ActionPluginCaller;
   surface?: keyof ActionSurfaces | null;
   source?: PluginSessionInputSourceV1;
+  actionRequestAttributionV1?: ActionRequestAttributionV1;
 }>): Readonly<{
   provenance: SessionMessageProvenanceV1;
   request: SessionInputRequestV1;
@@ -76,6 +123,9 @@ export function buildPluginSessionInputAdmissionV1(params: Readonly<{
       v: 1 as const,
       producer: 'pluginSession' as const,
       caller,
+      ...(params.actionRequestAttributionV1
+        ? { actionRequestAttributionV1: materializeActionRequestAttributionV1(params.actionRequestAttributionV1) }
+        : {}),
       ...(source
         ? {
             sourceAuthority: {
@@ -150,7 +200,10 @@ export function buildWorkflowSessionInputAdmissionV2(
   params: SessionInputWorkflowV2,
   options: Readonly<{
     requestedPermissionCeiling?: SessionInputRequestV2['permission']['requestedPermissionCeiling'];
+    replyIntent?: SessionInputRequestV2['replyIntent'];
+    discussionAddressing?: SessionInputRequestV2['discussionAddressing'];
     sourceAuthority?: SessionInputSourceAuthorityV1;
+    actionRequestAttributionV1?: ActionRequestAttributionV1;
   }> = {},
 ): Readonly<{
   provenance: SessionMessageProvenanceV2;
@@ -170,7 +223,10 @@ export function buildWorkflowSessionInputAdmissionV2(
       v: 2,
       producer: 'workflow',
       caller: { kind: 'host' },
+      ...(options.replyIntent ? { replyIntent: options.replyIntent } : {}),
+      ...(options.discussionAddressing ? { discussionAddressing: options.discussionAddressing } : {}),
       ...(options.sourceAuthority ? { sourceAuthority: options.sourceAuthority } : {}),
+      ...(options.actionRequestAttributionV1 ? { actionRequestAttributionV1: options.actionRequestAttributionV1 } : {}),
       workflow,
       permission: options.requestedPermissionCeiling
         ? { requestedPermissionCeiling: options.requestedPermissionCeiling }
@@ -183,9 +239,11 @@ export function buildWorkflowSessionInputAdmissionV2(
 export function buildCausalSessionInputAdmissionV1(params: Readonly<{
   sourceSessionId: string;
   sourceTurnId: string;
+  sourceInputId?: string;
   callerDepth: number;
   via: 'action' | 'mcp';
   causalPermissionAuthority: SessionInputCausalPermissionAuthorityV1;
+  actionRequestAttributionV1?: ActionRequestAttributionV1;
 }>): Readonly<{
   provenance: SessionMessageProvenanceV1;
   request: SessionInputRequestV1;
@@ -193,6 +251,7 @@ export function buildCausalSessionInputAdmissionV1(params: Readonly<{
   const sourceSession = SessionInputSourceSessionV1Schema.parse({
     sourceSessionId: params.sourceSessionId,
     sourceTurnId: params.sourceTurnId,
+    ...(params.sourceInputId ? { sourceInputId: params.sourceInputId } : {}),
     via: params.via,
   });
   const causalPermissionAuthority = SessionInputCausalPermissionAuthorityV1Schema.parse(
@@ -212,6 +271,9 @@ export function buildCausalSessionInputAdmissionV1(params: Readonly<{
       producer: sourceSession.via === 'mcp' ? 'happierMcp' : 'sessionAction',
       caller: { kind: 'host' },
       sourceSession,
+      ...(params.actionRequestAttributionV1
+        ? { actionRequestAttributionV1: materializeActionRequestAttributionV1(params.actionRequestAttributionV1) }
+        : {}),
       ...(sourceAuthority
         ? {
             sourceAuthority: {

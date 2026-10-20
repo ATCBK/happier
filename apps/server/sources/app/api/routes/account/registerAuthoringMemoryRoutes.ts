@@ -1,5 +1,5 @@
 import { AUTHORING_MEMORY_ROUTE_V1, AuthoringMemoryKeyV1Schema, AuthoringMemoryListResponseV1Schema, AuthoringMemoryMutationRequestV1Schema, AuthoringMemoryMutationResponseV1Schema, AuthoringMemoryReadResponseV1Schema, AuthoringMemoryStorageUnavailableV1Schema } from '@happier-dev/protocol/account/authoringMemory';
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import type { Fastify } from "@/app/api/types";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
@@ -7,9 +7,9 @@ import { asServerProtocolZod } from "@/app/api/utils/protocolComposableZodAdapte
 import { listAuthoringMemoryInTx, mutateAuthoringMemoryInTx, readAuthoringMemoryInTx } from "@/app/kv/authoringMemoryStorage";
 import { inTx } from "@/storage/inTx";
 
-const AuthoringMemoryRouteParamsSchema = z.object({ key: asServerProtocolZod(AuthoringMemoryKeyV1Schema) }).strict();
-const InvalidParamsSchema = z.object({ error: z.literal("invalid-params") }).strict();
-const InternalErrorSchema = z.object({ error: z.literal("internal") }).strict();
+const AuthoringMemoryRouteParamsSchema = z.strictObject({ key: asServerProtocolZod(AuthoringMemoryKeyV1Schema) });
+const InvalidParamsSchema = z.strictObject({ error: z.literal("invalid-params") });
+const InternalErrorSchema = z.strictObject({ error: z.literal("internal") });
 
 function unavailable() {
     return { error: "authoring_memory_storage_unavailable" as const };
@@ -76,7 +76,7 @@ export function registerAuthoringMemoryRoutes(app: Fastify): void {
         schema: { response: {
             200: asServerProtocolZod(AuthoringMemoryListResponseV1Schema),
             503: asServerProtocolZod(AuthoringMemoryStorageUnavailableV1Schema),
-            500: z.object({ error: z.literal("internal") }).strict(),
+            500: z.strictObject({ error: z.literal("internal") }),
         } },
     }, async (request, reply) => {
         try {

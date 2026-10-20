@@ -90,7 +90,7 @@ export function parseSessionPermissionModeAlias(raw: string): SessionPermissionM
 
 /** Strict, alias-aware schema for user and Action input boundaries. */
 export function createSessionPermissionModeInputSchema(zod: typeof z) {
-  return zod.pipe(zod.transform((value) => typeof value === 'string'
+  return (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new zod.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(zod.transform((value) => typeof value === 'string'
       ? parseSessionPermissionModeAlias(value) ?? value
       : value), zod.enum(SESSION_PERMISSION_MODES));
 }

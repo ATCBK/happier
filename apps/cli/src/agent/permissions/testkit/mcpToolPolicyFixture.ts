@@ -12,7 +12,8 @@ import {
 import { McpServerCatalogV1Schema } from '@happier-dev/protocol/mcp/servers/serverRowsV1';
 import { resolveSessionCapabilitiesV1, projectMcpServerMaterializationV1, sealSavedSecretResourceStoredContentV1 } from '@happier-dev/protocol';
 import type { AgentMcpToolPolicyContractInput, AgentMcpToolPolicyPermissionObservation } from '../../../../../../packages/plugin-sdk/src/testing/mcpToolPolicyContract';
-import type { AgentSessionMcpLaunchConfig } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { AgentExecutionRunHostServicesV1, AgentSessionMcpLaunchConfig } from '@happier-dev/plugin-sdk/agents/runtime';
+import type { PluginServices } from '@happier-dev/plugin-sdk';
 import { resolveNodeBackedMcpServerCommand } from '@/mcp/runtime/resolveNodeBackedMcpServerCommand';
 import type { AgentState } from '@/api/types';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
@@ -26,7 +27,16 @@ import { ServerBoundPermissionRpcHandlerManager } from './serverBoundPermissionR
 /** Real host policy and real stdio→HTTP MCP, shared by native protocol fixtures.
  * Session state/RPC and Saved Secret storage are external boundary fixtures;
  * the catalog mutation, materializer, bridge and permission owners stay real. */
-export function createMcpToolPolicyFixture(pluginId: string, contributionId: string) {
+export type McpToolPolicyFixture = Readonly<{
+  fixtureServer: AgentMcpToolPolicyContractInput['fixtureServer'];
+  services: PluginServices;
+  toolExecution: AgentExecutionRunHostServicesV1['toolExecution'];
+  beginInvocation(scope: 'once' | 'session'): string;
+  permissions(): AgentMcpToolPolicyPermissionObservation[];
+  callServer(key: string, tool: string, args: Readonly<Record<string, unknown>>, nativeConfig?: AgentSessionMcpLaunchConfig): ReturnType<Client['callTool']>;
+}>;
+
+export function createMcpToolPolicyFixture(pluginId: string, contributionId: string): McpToolPolicyFixture {
   const promptedIds = new Set<string>();
   let rpcFailure: unknown;
   let rejectRpc!: (error: unknown) => void;
@@ -60,6 +70,7 @@ export function createMcpToolPolicyFixture(pluginId: string, contributionId: str
   };
   let catalog: McpServerCatalogSnapshotV1 = { status: 'ready', authority: 'active', revision: 1,
     diagnostics: [], catalog: { v: 1, servers: [], bindings: [] } };
+  let catalogRevision = 1;
   let sequence = 0;
   let callId = 0;
   let observation: AgentMcpToolPolicyPermissionObservation[] = [];
@@ -141,7 +152,8 @@ export function createMcpToolPolicyFixture(pluginId: string, contributionId: str
           id: `rule-${key}`, serverId: identity.serverId, enabled: true, target: { t: 'allMachines' }, createdAt: 1, updatedAt: 1,
         })),
       });
-      catalog = { status: 'ready', authority: 'active', revision: 1, diagnostics: [], catalog: definition };
+      catalogRevision = 1;
+      catalog = { status: 'ready', authority: 'active', revision: catalogRevision, diagnostics: [], catalog: definition };
       const selected = resolveSessionCapabilitiesV1({
         context: { machineId: 'fixture-machine', machinePlatform: null, projectKey: null, directory: cwd, agentId: null },
         mcp: { ...definition, strictMode: true }, skills: null, selection: {}, agentAcceptsUserMcp: true,
@@ -184,7 +196,7 @@ export function createMcpToolPolicyFixture(pluginId: string, contributionId: str
       let current = catalog.catalog;
       for (const [key, setting] of Object.entries(settings)) current = applyMcpServerCatalogMutationV1(current,
         { kind: 'tools-change', serverId: identities[key].serverId, settings: { tools: { mutate: setting } } });
-      catalog = { ...catalog, revision: catalog.revision + 1, catalog: current };
+      catalog = { ...catalog, revision: ++catalogRevision, catalog: current };
       handler.setPermissionMode(permissionMode);
     },
     async dispose() {

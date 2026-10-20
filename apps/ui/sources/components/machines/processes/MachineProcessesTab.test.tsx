@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MachineProcessesAnswerV1 } from '@happier-dev/protocol/machines/processes/machineProcessesV1';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { RPC_ERROR_CODES, RpcError } from '@happier-dev/protocol/rpcErrors';
+import { DaemonLocalServiceActionExecuteResponseV1Schema, LocalServiceActionRequestV1Schema } from '@happier-dev/protocol/local/services/actions/v1';
 
 import { renderScreen } from '@/dev/testkit';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
@@ -24,6 +25,9 @@ import {
   PROCESSES_FIXTURE_BYTES,
 } from './testkit/processesAnswerFixture';
 
+// Instrument the React boundary while running the real hooks and subscription owners.
+vi.mock('react', { spy: true });
+
 installDisconnectedServerSocketBoundary();
 const transport = vi.hoisted(() => ({ rpc: vi.fn() }));
 // Only the machine network is replaced; credential binding, the process store, Actions, approval policy and the tab run for real.
@@ -35,6 +39,12 @@ vi.mock(
     return createServerScopedMachineRpcBoundaryMock(transport.rpc);
   },
 );
+// The device class is a platform boundary; a test that asks for the phone composition sets it.
+const device = vi.hoisted(() => ({ type: null as 'phone' | null }));
+vi.mock('@/utils/platform/responsive', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/utils/platform/responsive')>();
+  return { ...actual, useDeviceType: () => device.type ?? actual.useDeviceType() };
+});
 vi.mock('@/modal', async () => {
   const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
   return createModalModuleMock({ renderCustomModals: true }).module;
@@ -49,8 +59,10 @@ const { machineProcessesStore } =
 const { MachinePageStateContext } =
   await import('@/components/machines/page/machinePageContext');
 const { MachineProcessesTab } = await import('./MachineProcessesTab');
+const { machineResourceStore } = await import('@/sync/domains/machines/resources/machineResourceStore');
 const { measureMountedCollections } = await import('@/dev/testkit/render/renderInCollectionLayout');
 const { PROCESS_ROW_EXIT_MS } = await import('./processesMotion');
+const { readPresentationNotice, retirePresentationNotice } = await import('@/components/sessions/presentation/presentationNotices');
 
 const { GB, MB } = PROCESSES_FIXTURE_BYTES;
 
@@ -95,6 +107,9 @@ async function mount(
     params?: Extract<MachinePageTabParams, { id: 'processes' }>;
     online?: boolean;
     waitForRows?: boolean;
+    askBeforeKill?: boolean;
+    askBeforeStop?: boolean;
+    askBeforePortStop?: boolean;
   }> = {},
 ) {
   const serverId = await home.addHome({
@@ -112,10 +127,10 @@ async function mount(
             v: 1,
             actions: {},
             approvalWaivedSurfaces: {
-              'machines.processes.stop': ['ui'],
-              'machines.processes.kill': ['ui'],
+              ...(options.askBeforeStop ? {} : { 'machines.processes.stop': ['ui'] }),
+              ...(options.askBeforeKill ? {} : { 'machines.processes.kill': ['ui'] }),
               'machines.processes.leftBehind.cleanUp': ['ui'],
-              'localServices.actions.terminateDetected': ['ui'],
+              ...(options.askBeforePortStop ? {} : { 'localServices.actions.terminateDetected': ['ui'] }),
               'localServices.actions.copyUrl': ['ui'],
             },
           },
@@ -180,6 +195,8 @@ async function mount(
   });
   // A test renderer never lays out: measure the table the way the platform does on its first layout.
   await measureMountedCollections(screen, { width: 1200 });
+  // FX77 makes the default direct; this scenario needs the person's explicit Account-owned Ask setting.
+  if (options.askBeforeStop) await act(async () => { await home.requireUiApproval(serverId, 'machines.processes.stop'); });
   return { screen, serverId, setParams };
 }
 
@@ -228,6 +245,72 @@ afterEach(async () => {
 });
 
 describe('MachineProcessesTab', () => {
+  it('keeps mounted Processes snapshots stable and updates CPU and memory from its Account-qualified demand', async () => {
+    const snapshots = new Set<() => unknown>();
+    const useSyncExternalStore = React.useSyncExternalStore;
+    const observe = vi.spyOn(React, 'useSyncExternalStore').mockImplementation((subscribe, getSnapshot, getServerSnapshot) => {
+      snapshots.add(getSnapshot);
+      return useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+    });
+    const errors = vi.spyOn(console, 'error');
+    let sampledAt = Date.now();
+    let cpu: number | null = 39;
+    let availableBytes = 71 * GB;
+    const expectStableSnapshots = () => {
+      const now = Date.now();
+      const clock = vi.spyOn(Date, 'now');
+      try {
+        for (const getSnapshot of snapshots) {
+          clock.mockReturnValue(now);
+          const before = getSnapshot();
+          // Wall time alone cannot change a snapshot between React consistency reads;
+          // the shared presence deadline must publish its clock transition first.
+          clock.mockReturnValue(now + 3_600_000);
+          expect(getSnapshot()).toBe(before);
+        }
+      } finally {
+        clock.mockRestore();
+      }
+    };
+    try {
+      const { screen, serverId } = await mount({ reply: ({ method }) => method === RPC_METHODS.MACHINES_VITALS_GET ? {
+        state: 'reporting', sample: { v: 1, sampledAt, intervalMs: 15_000,
+          cpu: { reported: true, busyPct: cpu },
+          memory: { reported: true, totalBytes: 128 * GB, availableBytes, usedBytes: 128 * GB - availableBytes, pressure: { level: 'calm', source: 'psi' } },
+          disk: { reported: true, volumes: [] }, network: { reported: true, rxBps: 0, txBps: 0 } },
+        series5m: { cpu: [], memory: [], networkRx: [], networkTx: [] }, attention: { level: 'calm', reasons: [] },
+      } : undefined });
+      const key = { serverId, expectedAccountId: 'owner', machineId: 'machine', view: 'summary' as const };
+      await vi.waitFor(() => expect(machineResourceStore.getState(key).status).toBe('ready'));
+      await vi.waitFor(() => expect(textOf(screen.findByTestId('machine-processes-tile-cpu'))).toContain('39'));
+      expect(textOf(screen.findByTestId('machine-processes-tile-memory'))).toContain('71');
+      expect(snapshots.size).toBeGreaterThan(0);
+      expect([...snapshots].some(getSnapshot => getSnapshot() === machineResourceStore.getState(key))).toBe(true);
+      expectStableSnapshots();
+
+      sampledAt += 15_000;
+      cpu = 51;
+      availableBytes = 69 * GB;
+      await act(async () => {
+        await machineResourceStore.retry(key);
+      });
+      expect(textOf(screen.findByTestId('machine-processes-tile-cpu'))).toContain('51');
+      expect(textOf(screen.findByTestId('machine-processes-tile-memory'))).toContain('69');
+      // A sample without a CPU figure (a gap between measurements) keeps the retained one, never "— %".
+      sampledAt += 15_000;
+      cpu = null;
+      await act(async () => {
+        await machineResourceStore.retry(key);
+      });
+      expect(textOf(screen.findByTestId('machine-processes-tile-cpu'))).toContain('51');
+      expect(textOf(screen.findByTestId('machine-processes-tile-cpu'))).not.toContain('—');
+      expectStableSnapshots();
+      expect(errors.mock.calls.filter(args => args.some(value => String(value).includes('getSnapshot should be cached')))).toEqual([]);
+    } finally {
+      observe.mockRestore();
+      errors.mockRestore();
+    }
+  });
   it('renders the browser engine and redacted driver in its existing row', async () => {
     const answer = createProcessesAnswer();
     const owner = answer.owners[0];
@@ -237,8 +320,10 @@ describe('MachineProcessesTab', () => {
     const { screen } = await mount({ answer });
     await act(async () => { screen.pressByTestId(`machine-processes-row-o:${owner.rowId}`); });
     await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-processes-row-p:browser-main')).not.toBeNull()); });
-    expect(textOf(screen.findByTestId('machine-processes-row-p:browser-main'))).toContain('Chromium');
-    expect(textOf(screen.findByTestId('machine-processes-row-p:browser-main'))).toContain('node playwright test');
+    // Collection paints controls and text beside its press target; the cell owns the visible row.
+    const row = textOf(screen.findHostByTestId('machine-processes-row-p:browser-main:cell'));
+    expect(row).toContain('Chromium');
+    expect(row).toContain('node playwright test');
   });
   it.each([
     { id: 'processes' as const },
@@ -287,6 +372,17 @@ describe('MachineProcessesTab', () => {
     expect(
       textOf(screen.findByTestId('machine-processes-total-happier-memory')),
     ).toBe('5.13 GB');
+  });
+
+  it('keeps the totals figures on a phone, where the rows say memory beside their name', async () => {
+    device.type = 'phone';
+    try {
+      const { screen } = await mount();
+      expect(textOf(screen.findByTestId('machine-processes-memory-o:session:refactor'))).toBe('3.75 GB');
+      expect(textOf(screen.findByTestId('machine-processes-total-happier-memory'))).toBe('5.13 GB');
+    } finally {
+      device.type = null;
+    }
   });
 
   it('says once, in its freshness chip, that the machine stopped answering, and keeps the rows', async () => {
@@ -386,6 +482,7 @@ describe('MachineProcessesTab', () => {
   it('checks a process it cannot prove again before it can be killed, and says what it found', async () => {
     const kills: unknown[] = [];
     const { screen } = await mount({
+      askBeforeKill: true,
       reply: (rpc) => {
         if (rpc.method === RPC_METHODS.MACHINES_PROCESSES_GET) {
                 return { row: { ...createProcessesAnswer().owners[0]!.members.find(row => row.ref === 'vite')!, evidence: [
@@ -456,6 +553,33 @@ describe('MachineProcessesTab', () => {
     });
   });
 
+  it.each([true, false])('rechecks unproven identity even when Kill approval is waived (same=%s)', async (same) => {
+    retirePresentationNotice();
+    const kills: unknown[] = [];
+    const { screen } = await mount({
+      reply: (rpc) => {
+        if (rpc.method === RPC_METHODS.MACHINES_PROCESSES_GET)
+          return { row: createProcessesAnswer().owners[0]!.members.find(row => row.ref === 'vite')!, owner: { kind: 'session', sessionId: 'refactor' } };
+        if (rpc.method === RPC_METHODS.MACHINES_PROCESSES_CHECK)
+          return { checks: [{ ref: 'vite', present: true, identityEqual: same, level: 'likely' }] };
+        if (rpc.method === RPC_METHODS.MACHINES_PROCESSES_KILL) {
+          kills.push(rpc.payload);
+          return { status: 'ended', outcomes: [{ ref: 'vite', outcome: 'ended' }] };
+        }
+        return undefined;
+      },
+    });
+    await act(async () => { screen.pressByTestId('machine-processes-row-o:session:refactor'); });
+    await act(async () => { chooseMenuItem(screen, 'p:vite', 'kill'); });
+    await act(async () => {
+      await vi.waitFor(() => expect(transport.rpc.mock.calls.some(([rpc]) => rpc.method === RPC_METHODS.MACHINES_PROCESSES_CHECK)).toBe(true));
+      if (same) await vi.waitFor(() => expect(kills).toHaveLength(1));
+      else await vi.waitFor(() => expect(readPresentationNotice()).toMatchObject({ key: 'machine-processes:kill:p:vite', severity: 'warning' }));
+    });
+    expect(kills).toHaveLength(same ? 1 : 0);
+    expect(screen.findByTestId('machine-processes-kill-ask-first-confirm')).toBeNull();
+  });
+
   it('opens filtered to Left behind from a link (filter=leftBehind), and Show all returns the whole list', async () => {
     const { parseMachineProcessesParams } = await import('./MachineProcessesTab');
     expect(parseMachineProcessesParams({ filter: 'leftBehind', sort: 'cpu' })).toEqual({ id: 'processes', sort: 'cpu', filter: 'leftBehind' });
@@ -470,7 +594,7 @@ describe('MachineProcessesTab', () => {
     expect(setParams).toHaveBeenCalledWith({ id: 'processes' });
   });
 
-  it('asks before stopping a guest’s session and names them, and stops your own work without asking (R42.4)', async () => {
+  it('honors the shared Stop waiver for guest and own work without a caller confirmation', async () => {
     const base = createProcessesAnswer();
     const answer = { ...base, owners: base.owners.map((owner) => owner.rowId === 'session:refactor'
       ? { ...owner, requester: { accountId: 'guest', displayName: 'Ben' } } : owner) };
@@ -486,21 +610,59 @@ describe('MachineProcessesTab', () => {
     await act(async () => {
       chooseMenuItem(screen, 'o:session:refactor', 'stop');
     });
-    await act(async () => {
-      await vi.waitFor(() => expect(screen.findByTestId('machine-processes-stop-guest-confirm')).not.toBeNull());
-    });
-    expect(screen.getTextContent()).toContain('This is Ben’s work on this machine.');
-    expect(stops).toHaveLength(0);
-    await act(async () => {
-      screen.pressByTestId('machine-processes-stop-guest-confirm');
-    });
     await act(async () => { await vi.waitFor(() => expect(stops).toHaveLength(1)); });
+    expect(screen.findByTestId('machine-processes-stop-guest-confirm')).toBeNull();
 
     await act(async () => {
       chooseMenuItem(screen, 'o:service:website', 'stop');
     });
     await act(async () => { await vi.waitFor(() => expect(stops).toHaveLength(2)); });
     expect(screen.findByTestId('machine-processes-stop-guest-confirm')).toBeNull();
+  });
+
+  it('keeps guest work available when the person cancels an explicit Ask-first Stop', async () => {
+    const base = createProcessesAnswer();
+    const answer = { ...base, owners: base.owners.map(owner => owner.rowId === 'session:refactor'
+      ? { ...owner, requester: { accountId: 'guest', displayName: 'Ben' } } : owner) };
+    const stops: unknown[] = [];
+    const { screen, serverId } = await mount({ answer, askBeforeStop: true, reply: rpc => {
+      if (rpc.method !== RPC_METHODS.MACHINES_PROCESSES_STOP) return undefined;
+      stops.push(rpc.payload);
+      return { status: 'ended', outcomes: [{ ref: 'runner', outcome: 'ended' }] };
+    } });
+    const { decideApprovalAsInbox } = await import('@/dev/testkit/harness/approvalInbox');
+    const { ApprovalRequestV2Schema } = await import('@happier-dev/protocol/approvals/approvalRequestV1');
+    const approvals = home.artifacts(serverId);
+    await act(async () => { chooseMenuItem(screen, 'o:session:refactor', 'stop'); });
+    await vi.waitFor(() => expect(approvals.list()).toHaveLength(1));
+    const first = approvals.list()[0]!;
+    const request = () => ApprovalRequestV2Schema.parse(JSON.parse(approvals.readPlainBody(first.id)!));
+    expect(request()).toMatchObject({ status: 'open', actionId: 'machines.processes.stop',
+      actionArgs: { targets: [{ ref: 'runner', expect: { owner: { kind: 'session', sessionId: 'refactor' } } }] } });
+    expect(stops).toHaveLength(0);
+    // Explicit Ask retains durable approval custody, rather than a default-only inline confirmation.
+    expect(screen.findByTestId('machine-processes-stop-guest-confirm')).toBeNull();
+    expect((await decideApprovalAsInbox(serverId, first.id, 'cancel')).ok).toBe(true);
+    expect(request().status).toBe('canceled');
+    expect(screen.findByTestId('machine-processes-row-o:session:refactor')).not.toBeNull();
+    expect(stops).toHaveLength(0);
+    await act(async () => { chooseMenuItem(screen, 'o:session:refactor', 'stop'); });
+    await vi.waitFor(() => expect(approvals.list()).toHaveLength(2));
+    expect(stops).toHaveLength(0);
+  });
+
+  it('keeps Stop session as the alternative inside shared Kill-tree policy without issuing Kill', async () => {
+    const effects: string[] = [];
+    const { screen } = await mount({ askBeforeKill: true, reply: rpc => {
+      if (rpc.method !== RPC_METHODS.MACHINES_PROCESSES_STOP && rpc.method !== RPC_METHODS.MACHINES_PROCESSES_KILL) return undefined;
+      effects.push(rpc.method);
+      return { status: 'ended', outcomes: [{ ref: 'runner', outcome: 'ended' }] };
+    } });
+    await act(async () => { chooseMenuItem(screen, 'o:session:refactor', 'kill-tree'); });
+    await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-processes-kill-tree-alternative')).not.toBeNull()); });
+    expect(effects).toEqual([]);
+    await act(async () => { screen.pressByTestId('machine-processes-kill-tree-alternative'); });
+    await act(async () => { await vi.waitFor(() => expect(effects).toEqual([RPC_METHODS.MACHINES_PROCESSES_STOP])); });
   });
 
   it('stopping a service lets its row go and says what was freed, with the way back', async () => {
@@ -598,7 +760,7 @@ describe('MachineProcessesTab', () => {
       );
     });
     const row = textOf(
-      screen.findByTestId('machine-processes-row-m:docker-backend'),
+      screen.findHostByTestId('machine-processes-row-m:docker-backend:cell'),
     );
     expect(row).toContain('com.docker.backend');
     // Its menu offers the name only: the command never left the machine.
@@ -737,12 +899,15 @@ function localServicesReply(executed: Record<string, unknown>[]) {
       };
     }
     if (rpc.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_ACTIONS_EXECUTE) {
-      const request = rpc.payload as Record<string, unknown>;
+      const request = LocalServiceActionRequestV1Schema.parse(rpc.payload);
       executed.push(request);
-      return {
+      return DaemonLocalServiceActionExecuteResponseV1Schema.parse({
         protocolVersion: 1,
-        result: { v: 1, requestId: request.requestId, action: request.action, status: 'succeeded', auditEvents: [] },
-      };
+        result: { v: 1, requestId: request.requestId, action: request.action, status: 'succeeded', auditEvents: [{
+          v: 1, eventId: `event:${request.requestId}`, requestId: request.requestId,
+          machineId: request.target.machineId, action: request.action, result: 'succeeded', recordedAt: 3_000,
+        }] },
+      });
     }
     return undefined;
   };
@@ -785,6 +950,34 @@ async function openTerminal(screen: Screen) {
 }
 
 describe('MachineProcessesTab port chips', () => {
+  it('keeps a row to its first listener and a count; the rest are in its detail', async () => {
+    const answer = terminalPortsAnswer();
+    const terminal = answer.owners.find((owner) => owner.rowId === 'terminal:dev')!;
+    const server = terminal.members.find((member) => member.ref === 'term-server')!;
+    (server as { ports: unknown }).ports = [
+      { port: 4000, inventoryEntryId: 'entry-4000' },
+      { port: 4001, inventoryEntryId: 'entry-4001' },
+    ];
+    const { screen } = await mount({ answer, reply: localServicesReply([]) });
+    const chips = (key: string) => screen.root.findAll((node) => typeof node.props.testID === 'string'
+      && node.props.testID.startsWith(`machine-processes-port-${key}-`) && typeof node.props.onPress === 'function')
+      .map((node) => node.props.testID as string);
+    await act(async () => {
+      await vi.waitFor(() => expect(screen.findByTestId('machine-processes-row-o:terminal:dev')).not.toBeNull());
+    });
+    await openTerminal(screen);
+    expect([...new Set(chips('p:term-server'))]).toEqual(['machine-processes-port-p:term-server-4000']);
+    expect(screen.findByTestId('machine-processes-ports-more-p:term-server')).not.toBeNull();
+    expect(textOf(screen.findByTestId('machine-processes-ports-more-p:term-server'))).toBe('+1');
+    // The count is its own button: it shows the rest in place, each listener its own chip and menu.
+    const more = screen.root.findAll((node) => node.props.testID === 'machine-processes-ports-more-p:term-server'
+      && typeof node.props.onPress === 'function')[0]!;
+    expect(more.props.accessibilityRole).toBe('button');
+    await act(async () => { more.props.onPress(); });
+    expect([...new Set(chips('p:term-server'))]).toHaveLength(2);
+    expect(screen.findByTestId('machine-processes-ports-more-p:term-server')).toBeNull();
+  });
+
   it('opens what Local services offers for the listener and copies its address through that Action', async () => {
     const executed: Record<string, unknown>[] = [];
     const { screen } = await mount({ answer: terminalPortsAnswer(), reply: localServicesReply(executed) });
@@ -836,9 +1029,29 @@ describe('MachineProcessesTab port chips', () => {
     expect(menu).toBeDefined();
   });
 
-  it('says freeing the shell’s own port closes the terminal, and frees a child’s port without it', async () => {
+  it('lets Allowed stop the shell’s listener through mounted Services admission without a second confirmation', async () => {
     const executed: Record<string, unknown>[] = [];
     const { screen } = await mount({ answer: terminalPortsAnswer(), reply: localServicesReply(executed) });
+    await openTerminal(screen);
+    const menu = await openPortMenu(screen, 'o:terminal:dev', 8080);
+    await act(async () => { menu.props.onSelect('stop'); });
+    await act(async () => { await vi.waitFor(() => expect(executed).toHaveLength(1)); });
+    expect(screen.findByTestId('machine-processes-port-close-terminal')).toBeNull();
+    expect(executed[0]).toMatchObject({ action: 'terminate_detected',
+      target: { kind: 'inventory_entry', inventoryEntryId: 'entry-8080' } });
+    const childMenu = await openPortMenu(screen, 'p:term-server', 4000);
+    await act(async () => { childMenu.props.onSelect('stop'); });
+    await act(async () => { await vi.waitFor(() => expect(executed).toHaveLength(2)); });
+    expect(screen.findByTestId('machine-processes-port-close-terminal')).toBeNull();
+    expect(executed[1]).toMatchObject({ action: 'terminate_detected',
+      target: { kind: 'inventory_entry', inventoryEntryId: 'entry-4000' } });
+  });
+
+  it('uses the terminal-loss disclosure when shared Stop policy asks and keeps a decline quiet', async () => {
+    const executed: Record<string, unknown>[] = [];
+    const { screen } = await mount({ answer: terminalPortsAnswer(), reply: localServicesReply(executed), askBeforePortStop: true });
+    const { Modal } = await import('@/modal');
+    vi.mocked(Modal.alert).mockClear();
     await openTerminal(screen);
     // The terminal's own shell is its owner row; its port is the shell's listener.
     const shellMenu = await openPortMenu(screen, 'o:terminal:dev', 8080);
@@ -865,18 +1078,13 @@ describe('MachineProcessesTab port chips', () => {
       target: { kind: 'inventory_entry', inventoryEntryId: 'entry-8080' },
     });
 
-    // A dev server the shell started is a child: stopping it leaves the terminal open, so no warning.
-    const childMenu = await openPortMenu(screen, 'p:term-server', 4000);
-    await act(async () => {
-      childMenu.props.onSelect('stop');
-    });
-    await act(async () => {
-      await vi.waitFor(() => expect(executed).toHaveLength(2));
-    });
+    // A second press is a fresh invocation, so declining it leaves the prior result intact.
+    const again = await openPortMenu(screen, 'o:terminal:dev', 8080);
+    await act(async () => { again.props.onSelect('stop'); });
+    await act(async () => { await vi.waitFor(() => expect(screen.findByTestId('machine-processes-port-close-terminal-cancel')).not.toBeNull()); });
+    await act(async () => { screen.pressByTestId('machine-processes-port-close-terminal-cancel'); });
+    expect(executed).toHaveLength(1);
     expect(screen.findByTestId('machine-processes-port-close-terminal')).toBeNull();
-    expect(executed[1]).toMatchObject({
-      action: 'terminate_detected',
-      target: { kind: 'inventory_entry', inventoryEntryId: 'entry-4000' },
-    });
+    expect(Modal.alert).not.toHaveBeenCalled();
   });
 });

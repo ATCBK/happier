@@ -37,6 +37,7 @@ import {
 import type { TeamOperationAuthenticationContext } from "../actorContext";
 import { authorizeTeamIdentityAdministrationInTx } from "../identity/teamIdentityAdministrationAuthority";
 import { publishTeamChangedInTx } from "../teamChanges";
+import { acquireExternalSourceAccountAdmissionInTx } from "../memberships/externalFacts";
 import { projectTeamDirectorySourceSummary } from "./directorySourceProjection";
 import {
     createDirectorySourceInTx,
@@ -168,7 +169,7 @@ export async function listDirectorySourceSetupOptionsForActor(
     const query = input.query?.trim().toLowerCase() ?? "";
     const queryKey = `directory-source-setup:${input.teamId}:${query}`;
     const preflight = await inTx(async (tx) => {
-        const authorized = await authorizeDirectoryAdministrationInTx(tx, input);
+        const authorized = await authorizeDirectoryAdministrationInTx(tx, input, "view");
         if (!authorized.ok) return authorized;
         const [workosAllowed, githubAllowed] = await Promise.all([
             isDirectorySourceKindAllowedInTx(tx, "workos_directory"),
@@ -421,8 +422,9 @@ const sourceProjectionSelect = {
 async function authorizeDirectoryAdministrationInTx(
     tx: Tx,
     input: Partial<TeamOperationAuthenticationContext> & Readonly<{ teamId: string; actorAccountId: string }>,
+    operation: "view" | "mutate" = "mutate",
 ): Promise<DirectoryAdministrationResult<null>> {
-    const authority = await authorizeTeamIdentityAdministrationInTx(tx, input);
+    const authority = await authorizeTeamIdentityAdministrationInTx(tx, input, operation);
     return authority.ok ? { ok: true, value: null } : authority;
 }
 
@@ -531,7 +533,7 @@ export async function listDirectorySourcesForActor(
     input: TeamDirectorySourcesListInputV1 & Partial<TeamOperationAuthenticationContext> & Readonly<{ actorAccountId: string; now?: Date }>,
 ): Promise<DirectoryAdministrationResult<TeamDirectorySourcePageV1>> {
     return await inTx(async (tx) => {
-        const authorized = await authorizeDirectoryAdministrationInTx(tx, input);
+        const authorized = await authorizeDirectoryAdministrationInTx(tx, input, "view");
         if (!authorized.ok) return authorized;
         const limit = input.limit ?? DEFAULT_PAGE_LIMIT;
         const queryKey = `directory-sources:${input.teamId}`;
@@ -578,7 +580,7 @@ export async function getDirectorySourceForActor(input: Partial<TeamOperationAut
     now?: Date;
 }>): Promise<DirectoryAdministrationResult<TeamDirectorySourceSummaryV1>> {
     return await inTx(async (tx) => {
-        const authorized = await authorizeDirectoryAdministrationInTx(tx, input);
+        const authorized = await authorizeDirectoryAdministrationInTx(tx, input, "view");
         if (!authorized.ok) return authorized;
         const source = await tx.teamDirectorySource.findFirst({
             where: { id: input.sourceId, teamId: input.teamId },
@@ -594,7 +596,7 @@ export async function listDirectoryPeopleForActor(
     input: TeamDirectoryPeopleListInputV1 & Partial<TeamOperationAuthenticationContext> & Readonly<{ actorAccountId: string }>,
 ): Promise<DirectoryAdministrationResult<TeamDirectoryPeoplePageV1>> {
     return await inTx(async (tx) => {
-        const authorized = await authorizeDirectoryAdministrationInTx(tx, input);
+        const authorized = await authorizeDirectoryAdministrationInTx(tx, input, "view");
         if (!authorized.ok) return authorized;
         const source = await tx.teamDirectorySource.findFirst({
             where: { id: input.sourceId, teamId: input.teamId },
@@ -675,7 +677,7 @@ export async function listDirectoryGroupsForActor(
     input: TeamDirectoryGroupsListInputV1 & Partial<TeamOperationAuthenticationContext> & Readonly<{ actorAccountId: string }>,
 ): Promise<DirectoryAdministrationResult<TeamDirectoryGroupPageV1>> {
     return await inTx(async (tx) => {
-        const authorized = await authorizeDirectoryAdministrationInTx(tx, input);
+        const authorized = await authorizeDirectoryAdministrationInTx(tx, input, "view");
         if (!authorized.ok) return authorized;
         const source = await tx.teamDirectorySource.findFirst({
             where: { id: input.sourceId, teamId: input.teamId },
@@ -938,7 +940,7 @@ export async function preflightDirectorySourceRemovalForActor(input: Partial<Tea
     actorAccountId: string;
 }>): Promise<DirectoryAdministrationResult<TeamDirectorySourceRemovalPreflightV1>> {
     return await inTx(async (tx) => {
-        const authorized = await authorizeDirectoryAdministrationInTx(tx, input);
+        const authorized = await authorizeDirectoryAdministrationInTx(tx, input, "view");
         if (!authorized.ok) return authorized;
         const source = await tx.teamDirectorySource.findFirst({
             where: { id: input.sourceId, teamId: input.teamId },
@@ -967,6 +969,9 @@ export async function removeDirectorySourceForActor(input: Partial<TeamOperation
     actorAccountId: string;
 }>): Promise<DirectoryAdministrationResult<TeamDirectorySourceRemoveResultV1>> {
     return await inTx(async (tx) => {
+        await acquireExternalSourceAccountAdmissionInTx(tx, {
+            owner: { kind: "directory_source", directorySourceId: input.sourceId }, actorAccountIds: [input.actorAccountId],
+        });
         const authorized = await authorizeDirectoryAdministrationInTx(tx, input);
         if (!authorized.ok) return authorized;
         const source = await tx.teamDirectorySource.findFirst({

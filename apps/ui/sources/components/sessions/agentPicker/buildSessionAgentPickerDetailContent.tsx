@@ -19,6 +19,8 @@ import type { FavoriteModelSelectionV1 } from '@/sync/domains/models/favoriteMod
 import type { Settings } from '@/sync/domains/settings/settings';
 import type { SessionModelPickerExperimentalConfirmationController } from '@/components/sessions/modelPicker/SessionModelPicker';
 import type { FavoriteModelTogglePayload } from '@/components/sessions/new/hooks/screenModel/newSessionFavoriteModelsPickerOption';
+import { useActiveServerAccountScope } from '@/sync/store/hooks';
+import { useConnectedAccountCatalog } from '@/sync/store/settings/useConnectedAccountCatalog';
 
 /**
  * The model/mode/config choice a single Agent picker row currently carries.
@@ -39,7 +41,7 @@ export type SessionAgentPickerSelection = Readonly<{
     configOverrides: Readonly<Record<string, string>>;
 }>;
 
-export function buildSessionAgentPickerDetailContent(params: Readonly<{
+type SessionAgentPickerDetailContentParams = Readonly<{
     backendTarget: PersistedBackendTargetRefV2;
     agentCatalogEntry: ResolvedAgentCatalogEntry;
     runtimeCarrierAgentId?: string | null;
@@ -63,14 +65,28 @@ export function buildSessionAgentPickerDetailContent(params: Readonly<{
         onToggle: () => void;
     }>;
     providerProjection?: NewSessionEngineOptionDetailProps['providerProjection'];
+    nativeSourceLabel?: NewSessionEngineOptionDetailProps['nativeSourceLabel'];
     experimentalConfirmation?: SessionModelPickerExperimentalConfirmationController;
     onSelectionChange: (selection: SessionAgentPickerSelection) => void;
-}>): React.ReactElement {
+}>;
+
+export function buildSessionAgentPickerDetailContent(params: SessionAgentPickerDetailContentParams): React.ReactElement {
+    return <SessionAgentPickerDetailContent {...params} />;
+}
+
+/** Only an opened detail reads default-account authority; explicit draft bindings bypass default resolution. */
+function SessionAgentPickerDetailContent(params: SessionAgentPickerDetailContentParams): React.ReactElement {
+    const scope = useActiveServerAccountScope(params.capabilityServerId || undefined);
+    const needsDefaults = !('connectedServices' in params) && params.agentCatalogEntry.connectedAccounts.length > 0;
+    const purposes = useConnectedAccountCatalog('purposes', needsDefaults ? scope : null,
+        { sourceMachineId: params.selectedMachineId });
+    const connectedAccountPurposeBindings = purposes.status === 'ready' && !purposes.stale ? purposes.value : null;
     const consumer = params.agentCatalogEntry.identity
         ?? parseQualifiedPluginContributionKey(params.agentCatalogEntry.qualifiedId);
-    const connectedServices = consumer
+    const connectedServices = consumer && connectedAccountPurposeBindings
         ? projectAgentConnectedAccountPurposeDefaultsToSessionBindings(resolveAgentConnectedAccountPurposeDefaults({
             settings: params.settings,
+            purposeBindings: connectedAccountPurposeBindings,
             agentId: params.agentCatalogEntry.agentId,
             consumer,
             declarations: params.agentCatalogEntry.connectedAccounts,
@@ -87,7 +103,7 @@ export function buildSessionAgentPickerDetailContent(params: Readonly<{
         <NewSessionEngineOptionDetail
             backendTarget={params.backendTarget}
             runtimeCarrierAgentId={params.runtimeCarrierAgentId ?? null}
-            selectedMachineId={params.selectedMachineId}
+            selectedMachineId={!needsDefaults || connectedAccountPurposeBindings ? params.selectedMachineId : null}
             capabilityServerId={params.capabilityServerId}
             cwd={params.cwd}
             capabilityProbeContext={capabilityProbeContext}
@@ -101,6 +117,7 @@ export function buildSessionAgentPickerDetailContent(params: Readonly<{
             onToggleFavoriteModel={params.onToggleFavoriteModel}
             favoriteEngine={params.favoriteEngine}
             {...(params.providerProjection ? { providerProjection: params.providerProjection } : {})}
+            nativeSourceLabel={params.nativeSourceLabel}
             experimentalConfirmation={params.experimentalConfirmation}
             onSelectionChange={(next) => params.onSelectionChange(next)}
         />

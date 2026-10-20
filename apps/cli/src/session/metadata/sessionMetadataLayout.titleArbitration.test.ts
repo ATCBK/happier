@@ -15,7 +15,7 @@ describe('layout-0 title arbitration', () => {
       staleBehavior: 'drop',
     });
 
-    expect(next.summary?.text).toBe('Retained title');
+    expect(next.summary).toMatchObject({ text: 'Retained title' });
     expect(next).toBe(metadata);
   });
 });

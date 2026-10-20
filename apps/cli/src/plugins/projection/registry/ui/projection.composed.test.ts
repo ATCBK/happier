@@ -1,4 +1,5 @@
 import { artifactHtmlBundleFromBodyV1 } from '@happier-dev/protocol/artifacts/artifactHtmlV1';
+import { readFileSync } from 'node:fs';
 
 import {
     PluginOpenableContentViewerContributionV1Schema,
@@ -69,7 +70,10 @@ it('mounts an installed manifest-root page through the physical static decoder w
             schemaVersion: 2, id: 'acme.cold-page', version: '1.0.0', displayName: 'Cold page',
             runtime: { apiVersion: 1 }, contributes: { ui: {
                 renderers: [{ id: 'page', kind: 'declarative', root: { kind: 'text', text: 'Installed page' } }],
-                views: [{ id: 'page', container: 'appPage', target: { kind: 'app' }, renderer: 'page', title: 'Page' }],
+                views: [{ id: 'page', container: 'appPage', target: { kind: 'app' }, renderer: 'page', title: 'Page',
+                    description: { key: 'page.purpose', fallback: 'Review incoming work.' },
+                    widgetAreas: [{ name: 'pinned', contextSchema: { type: 'object', additionalProperties: false } }],
+                }],
             } },
         }),
     };
@@ -80,6 +84,12 @@ it('mounts an installed manifest-root page through the physical static decoder w
     const placement = selectPluginAppPagePlacements(model)[0];
     expect(placement).toBeDefined();
     if (!placement) throw new Error('Expected installed page placement');
+    expect(placement).toHaveProperty('display.description', { key: 'page.purpose', fallback: 'Review incoming work.' });
+    expect(placement).toHaveProperty('widgetAreas', [{ name: 'pinned', contextSchema: { type: 'object', additionalProperties: false } }]);
+    const liveRegistry = { ...registry, occurrenceIdsByPluginId: { [plugin.pluginId]: admittedOccurrenceForPlugin(plugin.pluginId) } };
+    const liveModel = normalizePluginUiProjection(buildPluginProjectionV2({ registry: liveRegistry, generation: 1 }), 'web');
+    expect(selectPluginAppPagePlacements(liveModel)[0]).toHaveProperty('display.description', { key: 'page.purpose', fallback: 'Review incoming work.' });
+    expect(selectPluginAppPagePlacements(liveModel)[0]).toHaveProperty('widgetAreas', [{ name: 'pinned', contextSchema: { type: 'object', additionalProperties: false } }]);
     expect(readPluginSurfaceMountBinding({ descriptor: placement, renderer: placement.renderer })).toMatchObject({ kind: 'destination' });
     const admitted = admitDeclarativeStaticModel({ model: placement.renderer.model, expectedPluginId: plugin.pluginId });
     expect(admitted?.root).toMatchObject({ kind: 'text', text: 'Installed page' });
@@ -220,6 +230,50 @@ const emptyDeclarativeInventory = Object.freeze({
 }) satisfies StablePluginDeclarativeModel['declarativeInventory'];
 
 describe('plugin UI projection family', () => {
+    it.each(['happier.channels', 'acme.channels'])('preserves the real Channels settings Resource capability through manifest projection and UI admission (%s)', async (pluginId) => {
+        // LIVE-1c/FIX-LIVE3: the actual settings-page producer omitted runtime,
+        // while the old host fixture supplied that missing fact itself.
+        const manifest = PluginManifestV2Schema.parse(JSON.parse(readFileSync(
+            new URL('../../../../../assets/bundled-plugin-manifests/channels.json', import.meta.url), 'utf8',
+        ).replaceAll('happier.channels', pluginId)));
+        const plugin: LoadedPlugin = {
+            pluginId: manifest.id, pluginRootPath: '/installed/channels',
+            manifestPath: '/installed/channels/plugin.json', daemonEntryPath: null, devDaemonEntryPath: null,
+            sourceSpec: { kind: 'path', locator: '/installed/channels', trustPolicy: 'local_trusted', installPolicy: 'link' },
+            manifest,
+        };
+        const resolved = createResolvedContributionRegistry(projectLoadedPluginContributes({
+            loadResult: { loadedPlugins: [plugin], diagnosticsByPluginId: {} }, provenance: pluginId === 'happier.channels' ? 'first_party' : 'external',
+        }));
+        const registry = { ...resolved, occurrenceIdsByPluginId: {
+            [manifest.id]: admittedOccurrenceForPlugin(manifest.id),
+        } };
+        const origin = { serverIdentityId: 'srv_niq7wbpMyJviL4EtO5YlTEd0Us0Ou0nN', sourceRef: {
+            machineId: '4af70cb8-88bb-4f41-86d7-94455e4f7e29', pluginId,
+            sourceCustody: { kind: 'development' as const, registeredRootId: '/installed/channels' },
+        } };
+        const projection = buildPluginProjectionV2({ registry, generation: 1,
+            pluginExecutionOriginsByPluginId: { [pluginId]: origin }, pluginUiHostRuntime: {
+            resourceCapabilityForPlugin: () => ({ readable: true, dynamic: true }),
+        } });
+        const model = normalizePluginUiProjection(projection, 'web');
+        const { unionPluginUiProjections }: Readonly<{
+            unionPluginUiProjections(members: readonly unknown[], selected: ReadonlyMap<string, unknown>): Readonly<{
+                pluginUiProjection: Readonly<{ settingsPagesById: Readonly<Record<string, unknown>> }>;
+            }>;
+        }> = await import(new URL('../../../../../../ui/sources/sync/domains/plugins/ui/projectionUnion.ts', import.meta.url).href);
+        const union = unionPluginUiProjections([{
+            machineId: origin.sourceRef.machineId, serverId: origin.serverIdentityId,
+            serverIdentityId: origin.serverIdentityId, projection: model, phase: 'current', interactionEnabled: true,
+            selectableExecutionOrigins: [origin],
+        }], new Map([[pluginId, origin]]));
+        const { readSelectedPluginUiResourceCapability: readCapability }: Readonly<{
+            readSelectedPluginUiResourceCapability(member: unknown): Readonly<{ readable: boolean; dynamic: boolean }>;
+        }> = await import(new URL('../../../../../../ui/sources/sync/domains/plugins/ui/resourceCapability.ts', import.meta.url).href);
+        expect(readCapability(union.pluginUiProjection.settingsPagesById[`settingsPage:${pluginId}:connections`]))
+            .toEqual({ readable: true, dynamic: true });
+    });
+
     it('isolates one malformed projected entry while preserving healthy sibling and app-page contributions', () => {
         const channelsPluginId = 'happier.channels';
         const triagePluginId = 'happier.triage';

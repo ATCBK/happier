@@ -3,8 +3,8 @@ import { matchesDbMockWhere as matches } from "@/app/api/testkit/dbMocks";
 
 const boundary = vi.hoisted(() => ({ tx: {} }));
 const transactions = await vi.hoisted(async () => {
-    const { createDbTransactionMock } = await import("@/app/api/testkit/dbMocks");
-    return createDbTransactionMock(() => boundary.tx);
+    const { createDbTransactionMock, inTxPostgresControlStatementMock } = await import("@/app/api/testkit/dbMocks");
+    return createDbTransactionMock(() => ({ ...inTxPostgresControlStatementMock, ...boundary.tx }));
 });
 
 // Only database transports are replaced. inTx, cancellation, claim, access,
@@ -80,6 +80,7 @@ beforeEach(() => {
             findMany: async () => [{ id: "old-machine", accountId: "account" }] },
         simpleCache: { findUnique: async () => null },
         automationTrigger: { findMany: async () => [] },
+        sessionFollowEdge: { findMany: async () => [] },
         automationRun: {
             findUnique: async () => runSnapshot(),
             findUniqueOrThrow: async () => runSnapshot(),

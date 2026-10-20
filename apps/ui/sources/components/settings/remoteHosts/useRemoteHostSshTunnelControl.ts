@@ -5,9 +5,6 @@ import type { SystemTaskResult } from '@happier-dev/protocol/system/tasks/spec';
 import { getDefaultSystemTaskRunner, useSystemTaskSnapshot } from '@/components/systemTasks';
 import type { SystemTaskRunState, SystemTaskRunner } from '@/components/systemTasks/types';
 import { isSystemTaskBridgeUnavailableError, readSystemTaskStartErrorMessage } from '@/components/systemTasks/systemTaskStartError';
-import {
-    buildSshTunnelListSystemTaskSpec,
-} from '@/components/systemTasks/specs/localControl/buildSshTunnelSystemTaskSpec';
 import { t } from '@/text';
 import { useActiveServerAccountScope } from '@/sync/domains/state/storage';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
@@ -40,7 +37,7 @@ export function useRemoteHostSshTunnelControl(options: Readonly<{
 }> = {}) {
     const router = useRouter();
     const runner = options.runner ?? getDefaultSystemTaskRunner();
-    const execution = useMountedActionExecution(useActiveServerAccountScope(), { onApprovalPending: registration => {
+    const execution = useMountedActionExecution(useActiveServerAccountScope(), { retainInvocation: true, onApprovalPending: registration => {
         if (registration.scope) router.pushRetainingCurrent(`/inbox/approvals/${encodeURIComponent(registration.artifactId)}?serverId=${encodeURIComponent(registration.scope.serverId)}`);
     } });
     const [bridgeUnavailable, setBridgeUnavailable] = React.useState(false);
@@ -60,12 +57,18 @@ export function useRemoteHostSshTunnelControl(options: Readonly<{
             return null;
         }
         try {
-            const taskId = await runner.start(buildSshTunnelListSystemTaskSpec());
+            const response = await execution.execute('remote_hosts.tunnel.list', {});
+            if (!response.ok) throw new Error(response.error);
+            const result = REMOTE_HOST_ACTION_OUTPUT_SCHEMAS_V1['remote_hosts.tunnel.list'].parse(response.result);
+            if (result.status !== 'task_started') throw new Error(result.status === 'unavailable' ? result.reason : result.status);
+            if (!execution.isCurrent()) return null;
+            const taskId = result.taskId;
             setBridgeUnavailable(false);
             setLastErrorMessage(null);
             setListTaskId(taskId);
             return taskId;
         } catch (error) {
+            if (!execution.isCurrent()) return null;
             const message = readSystemTaskStartErrorMessage(error);
             const unavailable = isSystemTaskBridgeUnavailableError(error);
             setBridgeUnavailable(unavailable);
@@ -74,7 +77,7 @@ export function useRemoteHostSshTunnelControl(options: Readonly<{
                 : (message ?? t('settings.systemTaskStartFailed')));
             return null;
         }
-    }, [isUnavailable, runner]);
+    }, [isUnavailable, execution.execute, execution.isCurrent]);
 
     const stopTunnel = React.useCallback(async (tunnelKey: string) => {
         if (isUnavailable) {
@@ -104,7 +107,7 @@ export function useRemoteHostSshTunnelControl(options: Readonly<{
     }, [isUnavailable, execution.execute, execution.isCurrent]);
 
     React.useEffect(() => {
-        if (isUnavailable) {
+        if (isUnavailable || !execution.ready) {
             return;
         }
         if (autoRefreshRequestedRef.current) {
@@ -112,7 +115,7 @@ export function useRemoteHostSshTunnelControl(options: Readonly<{
         }
         autoRefreshRequestedRef.current = true;
         void refreshTunnels().catch(() => {});
-    }, [isUnavailable, refreshTunnels]);
+    }, [isUnavailable, execution.ready, refreshTunnels]);
 
     React.useEffect(() => {
         const nextTunnels = readSshTunnelList(listSnapshot?.result ?? null);

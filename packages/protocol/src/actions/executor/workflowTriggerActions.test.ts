@@ -4,7 +4,7 @@ import type { AutomationDefinitionDetail, AutomationTriggerDetail, AutomationV3R
 import { WorkflowDefinitionV1Schema } from '../../workflows/workflowV1.js';
 import { resolveWorkflowDefinitionRefV1 } from '../../workflows/workflowDefinitionResolverV1.js';
 import { createWorkflowTriggerActions, type WorkflowTriggerActionsDependencies } from './workflowTriggerActions.js';
-import { SessionTriggerAddRequestV1Schema, WorkflowTriggerWriteResultV1Schema } from '../../workflows/triggers/workflowTriggerActionsV1.js';
+import { SessionTriggerAddRequestV1Schema, WorkflowTriggerWriteResultV1Schema, WorkflowTriggerRemoveResultV1Schema } from '../../workflows/triggers/workflowTriggerActionsV1.js';
 import { normalizeUsageQuery } from '../../inputs/usageQuery.js';
 import { resolveUsagePageAggregation } from '../../usage/resolveUsagePageAggregation.js';
 import { ActionsSettingsV1Schema } from '../actionSettings.js';
@@ -151,7 +151,7 @@ function fixture() {
       delete: async (id) => { rows.delete(id); return { ok: true }; },
     },
   };
-  return { rows, deps, actions: createWorkflowTriggerActions(deps), loseSource: () => { artifacts.delete(workflow); },
+  return { rows, deps, definitions, actions: createWorkflowTriggerActions(deps), loseSource: () => { artifacts.delete(workflow); },
     setManagedController: (machineId: string) => { managedControllerMachineId = machineId; },
     executor: (triggers: ReturnType<typeof createWorkflowTriggerActions>, ports: Partial<ActionExecutorDeps> = {}) => createActionExecutor({
       ...ports,
@@ -162,6 +162,8 @@ function fixture() {
 }
 
 describe('workflow trigger Automation composition', () => {
+  const manualPolicy = ActionsSettingsV1Schema.parse({ v: 1, actions: {},
+    approvalWaivedSurfaces: { 'workflow.trigger.run_now': ['ui'] } });
   it('admits a retained manual occurrence through the Automation transport without converting or rewriting its trigger set', async () => {
     const f = fixture();
     const receipt = manualReceipt('retained-manual');
@@ -170,7 +172,7 @@ describe('workflow trigger Automation composition', () => {
       automations: { ...f.deps.automations, get: unexpected, create: unexpected, reconcile: unexpected,
         runNow: async (id, options) => { expect(id).toBe('retained-manual'); expect(options).toEqual({ idempotencyKey: 'manual-retry' }); return receipt; } } });
     await expect(f.executor(actions).execute('workflow.trigger.run_now', { automationId: 'retained-manual', idempotencyKey: 'manual-retry' },
-      { surface: 'ui', authority: 'present_user' })).resolves.toEqual({ ok: true, result: receipt });
+      { surface: 'ui', authority: 'present_user', actionsSettings: manualPolicy })).resolves.toEqual({ ok: true, result: receipt });
     expect(f.rows.size).toBe(0);
   });
   it('keeps a lost manual admission reply uncertain without issuing another occurrence', async () => {
@@ -180,8 +182,35 @@ describe('workflow trigger Automation composition', () => {
       runNow: async () => { submitted += 1; throw Object.assign(new Error('Reply lost'), { code: 'workflow_outcome_unresolved' }); },
     } });
     expect(await f.executor(actions).execute('workflow.trigger.run_now', { automationId: 'retained-manual' },
-      { surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: false, errorCode: 'workflow_outcome_unresolved' });
+      { surface: 'ui', authority: 'present_user', actionsSettings: manualPolicy })).toMatchObject({ ok: false, errorCode: 'workflow_outcome_unresolved' });
     expect(submitted).toBe(1);
+  });
+  it('keeps a committed trigger write uncertain when its private receipt projection fails through the Action front door', async () => {
+    const f = fixture();
+    const triggers = createWorkflowTriggerActions({ ...f.deps,
+      resolveSession: async () => ({ project, nativeGoalOwner: false }),
+      openContext: async () => { throw Object.assign(new Error('Receipt read timed out'), { code: 'ECONNABORTED' }); },
+    });
+    const result = await f.executor(triggers).execute('session.trigger.add', {
+      sessionId: 'session-one', target: { kind: 'inline', definition }, trigger,
+    }, { surface: 'ui', authority: 'present_user' });
+    expect(result).toMatchObject({ ok: false, errorCode: 'workflow_outcome_unresolved' });
+    expect(f.rows.size).toBe(1);
+    expect([...f.rows.values()][0]?.triggers).toHaveLength(1);
+  });
+  it('keeps a committed Session trigger uncertain when Channel attachment fails', async () => {
+    const f = fixture();
+    const triggers = createWorkflowTriggerActions({ ...f.deps,
+      resolveSession: async () => ({ project, nativeGoalOwner: false }),
+      pullRequests: { listLinks: async () => [], removeTrigger: async () => {},
+        attach: async () => { throw Object.assign(new Error('Channel unavailable'), { code: 'target_unavailable' }); } },
+    });
+    const result = await f.executor(triggers).execute('session.trigger.add', {
+      sessionId: 'session-one', target: { kind: 'inline', definition },
+      trigger: { kind: 'prComment', enabled: true, pullRequest: { repository: 'org/repo', number: 42 } },
+    }, { surface: 'ui', authority: 'present_user' });
+    expect(result).toMatchObject({ ok: false, errorCode: 'workflow_outcome_unresolved' });
+    expect(f.rows.size).toBe(1);
   });
   it('preserves the manual occurrence owner authentication refusal through the Action front door', async () => {
     const f = fixture();
@@ -189,7 +218,7 @@ describe('workflow trigger Automation composition', () => {
       runNow: async () => { throw Object.assign(new Error('Not authenticated'), { code: 'not_authenticated' }); },
     } });
     expect(await f.executor(actions).execute('workflow.trigger.run_now', { automationId: 'retained-manual' },
-      { surface: 'ui', authority: 'present_user' })).toMatchObject({ ok: false, errorCode: 'not_authenticated' });
+      { surface: 'ui', authority: 'present_user', actionsSettings: manualPolicy })).toMatchObject({ ok: false, errorCode: 'not_authenticated' });
   });
   it('creates a Coach digest only through opted-in Automation Actions, retains approval rejection and removes through the same owner', async () => {
     const f = fixture();
@@ -241,7 +270,7 @@ describe('workflow trigger Automation composition', () => {
     });
     expect(await optedIn.execute('workflow.trigger.remove', {
       automationId: receipt.set.automationId, triggerId: receipt.triggerId,
-    }, context)).toMatchObject({ ok: true });
+    }, { ...context, presentUserConfirmation: { actionId: 'workflow.trigger.remove' } })).toMatchObject({ ok: true });
     expect(f.rows.get(receipt.set.automationId)?.triggers).toEqual([]);
   });
   it('moves only the exact managed inline scope binding after the resource controller changes', async () => {
@@ -584,7 +613,7 @@ describe('workflow trigger Automation composition', () => {
     expect(moved.set.project?.machineId).toBe('machine-two');
   });
 
-  it('keeps a Session caller under agent policy through Account trigger approval and replay', async () => {
+  it('retains Session proposal provenance when a person authorizes Account trigger replay', async () => {
     const { deps, rows } = fixture();
     const observations: ActionExecutorContext[] = [];
     const triggers = createWorkflowTriggerActions({ ...deps,
@@ -618,8 +647,6 @@ describe('workflow trigger Automation composition', () => {
       },
       isApprovalExecutionOriginCurrent: async ({ origin }) => origin.caller.kind === 'session'
         && origin.caller.sessionId === 'session-one' && origin.machineId === project.machineId,
-      // Account trigger approval is mandatory even when configurable policy waives it.
-      isActionApprovalRequired: () => false,
       resolveAgentStartContext: async () => policyFactsAvailable ? { ...ownCaller.agentStartContext,
         caller: { ...ownCaller.agentStartContext.caller, turnDepth: currentTurnDepth } } : null,
       observeActionExecution: async ({ context }) => { observations.push(context); },
@@ -662,15 +689,18 @@ describe('workflow trigger Automation composition', () => {
       caller: { kind: 'session', sessionId: 'session-one' } } }).success).toBe(false);
     expect(rows.size).toBe(1);
     currentTurnDepth = 50;
-    // A fresh daemon executor has no originating invocation/turn closure.
-    // It opens the persisted caller depth and resolves current baseline facts.
+    // A fresh executor retains the Session proposal's provenance. The person's
+    // Account-owned replay is a new human invocation despite the exhausted Session.
     expect(await createExecutor().execute('approval.request.decide', {
       artifactId: 'session-agent-approval', decision: 'approve',
     }, { surface: 'ui', authority: 'present_user', serverId: 'home-one' })).toMatchObject({ ok: true });
     expect(rows.size).toBe(2);
-    expect(storedRequest).toMatchObject({ status: 'executed', execution: { ok: true } });
-    expect(observations.filter((entry) => entry.bypassApprovals).at(-1)).toMatchObject({ surface: 'agent',
-      defaultSessionId: 'session-one', actionCaller: { kind: 'session', sessionId: 'session-one', starterDepth: 0, turnDepth: 0 } });
+    expect(storedRequest).toMatchObject({ status: 'executed', execution: { ok: true }, executionOriginV1: {
+      surface: 'agent', caller: { kind: 'session', sessionId: 'session-one', starterDepth: 0, turnDepth: 0 },
+    } });
+    const replayContext = observations.filter((entry) => entry.bypassApprovals).at(-1);
+    expect(replayContext).toMatchObject({ surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' } });
+    expect(replayContext?.defaultSessionId).toBeUndefined();
     policyFactsAvailable = false;
     expect(await executor.execute('session.trigger.list', { sessionId: 'session-one' }, withoutDepth))
       .toMatchObject({ ok: true, result: { sets: [expect.objectContaining({ health: 'available' })] } });
@@ -790,6 +820,81 @@ describe('workflow trigger Automation composition', () => {
     expect(admitted).toEqual([added.set.automationId]);
   });
 
+  it.each(['agent', 'host', 'birth'] as const)('checks typed Action-only trigger Session authority for its %s authorizer', async authorizer => {
+    const { deps, rows } = fixture();
+    const address = { serverId: 'home', sessionId: 'unrelated-session' };
+    const authored = WorkflowDefinitionV1Schema.parse({ version: 1, defaults: {}, inputs: [{ name: 'reviewSession',
+      valueType: 'json', required: true, inputType: { hostType: 'session' } }], blocks: [{ kind: 'action', id: 'comments',
+      actionId: 'reviews.comments.list', input: { sessionId: { kind: 'input', name: 'reviewSession', path: ['sessionId'] } } }] });
+    const actions = createWorkflowTriggerActions({ ...deps, resolveMaterializer: async () => ({ effects: {
+      resolveTargetAvailability: async () => true, resolveSessionTarget: async () => ({ address, machineId: project.machineId }),
+      readActionContract: async () => ({ inputSchema: { type: 'object' }, outputSchema: {} }),
+    } }) });
+    const caller = authorizer === 'host' ? { surface: 'ui' as const, authority: 'present_user' as const } : { ...ownCaller,
+      defaultSessionId: 'session-one', actionCaller: { ...ownCaller.agentStartContext.caller } };
+    const request = { target: { kind: 'inline' as const, definition: authored }, trigger, inputs: { reviewSession: address } };
+    const pending = authorizer === 'birth'
+      ? actions.prepareSessionInitialTriggers({ project, initialTriggers: [request], caller })
+      : actions.add({ ...request, project }, caller);
+    if (authorizer !== 'host') {
+      await expect(pending).rejects.toMatchObject({ code: 'subtree_denied' });
+      expect(rows.size).toBe(0);
+    } else {
+      await expect(pending).resolves.toMatchObject({ set: { health: 'available' } });
+      expect(rows.size).toBe(1);
+    }
+  });
+
+  it('admits the exact human-approved review target without widening the proposing Session authority', async () => {
+    const f = fixture();
+    const address = { serverId: 'home', sessionId: 'unrelated-session' };
+    const authored = WorkflowDefinitionV1Schema.parse({ version: 1, defaults: {}, inputs: [{ name: 'reviewSession',
+      valueType: 'json', required: true, inputType: { hostType: 'session' } }], blocks: [{ kind: 'action', id: 'comments',
+      actionId: 'reviews.comments.list', input: { sessionId: { kind: 'input', name: 'reviewSession', path: ['sessionId'] } } }] });
+    const actions = createWorkflowTriggerActions({ ...f.deps, resolveMaterializer: async () => ({ effects: {
+      resolveTargetAvailability: async () => true, resolveSessionTarget: async () => ({ address, machineId: project.machineId }),
+      readActionContract: async () => ({ inputSchema: { type: 'object' }, outputSchema: {} }),
+    } }) });
+    let storedRequest: ApprovalRequest | null = null;
+    const executor = f.executor(actions, {
+      approvalsCreate: async ({ request }) => {
+        storedRequest = ApprovalRequestV2Schema.parse(JSON.parse(JSON.stringify(request)));
+        return { artifactId: 'review-target-approval' };
+      },
+      approvalsGet: async () => storedRequest,
+      approvalsUpdate: async ({ request }) => {
+        storedRequest = ApprovalRequestV2Schema.parse(JSON.parse(JSON.stringify(request)));
+        return { ok: true };
+      },
+      isApprovalExecutionOriginCurrent: async ({ origin }) => origin.serverId === 'home'
+        && origin.caller.kind === 'session' && origin.caller.sessionId === 'session-one',
+    });
+    const caller: ActionExecutorContext = { ...ownCaller, serverId: 'home', defaultSessionId: 'session-one',
+      defaultSessionMachineId: project.machineId, authority: 'account_automation', callerPermissionMode: 'default',
+      actionRequestId: 'review-target-request', actionCaller: { ...ownCaller.agentStartContext.caller } };
+    const request = { target: { kind: 'inline' as const, definition: authored }, project, trigger, inputs: { reviewSession: address } };
+    await expect(actions.add(request, caller)).rejects.toMatchObject({ code: 'subtree_denied' });
+    expect(await executor.execute('workflow.trigger.add', request, caller))
+      .toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    expect(f.rows.size).toBe(0);
+    expect(storedRequest).toMatchObject({ actionArgs: { inputs: { reviewSession: address } }, executionOriginV1: {
+      caller: { kind: 'session', sessionId: 'session-one' },
+    } });
+    expect(await executor.execute('approval.request.decide', { artifactId: 'review-target-approval', decision: 'approve' }, caller))
+      .toMatchObject({ ok: false });
+    expect(f.rows.size).toBe(0);
+    expect(await executor.execute('approval.request.decide', { artifactId: 'review-target-approval', decision: 'approve' }, {
+      surface: 'ui', authority: 'present_user', serverId: 'home', actionCaller: { kind: 'host' },
+    })).toMatchObject({ ok: true });
+    expect([...f.rows.values()]).toMatchObject([{ executionRecipe: { v: 2,
+      workflow: { t: 'plain', v: { inputs: { reviewSession: address } } },
+    } }]);
+    expect(storedRequest).toMatchObject({ status: 'executed', execution: { ok: true }, executionOriginV1: {
+      caller: { kind: 'session', sessionId: 'session-one' },
+    } });
+    await expect(actions.add(request, caller)).rejects.toMatchObject({ code: 'subtree_denied' });
+  });
+
   it('admits Account agent add/update through the same materialized ORC trigger policy', async () => {
     const { deps, rows } = fixture();
     const admitted: string[] = [];
@@ -860,6 +965,64 @@ describe('workflow trigger Automation composition', () => {
     expect(updated.set.triggers[0]?.enabled).toBe(false);
     await actions.sessionRemove({ sessionId: 'session-one', triggerId: added.triggerId! });
     expect((await actions.sessionList({ sessionId: 'session-one' })).sets[0]?.triggers).toEqual([]);
+  });
+  it('deletes an empty Session trigger set through the Account Action and strict receipt reader', async () => {
+    const f = fixture();
+    const actions = createWorkflowTriggerActions({ ...f.deps, resolveSession: async () => ({ project, nativeGoalOwner: false }) });
+    const added = await actions.sessionAdd({ sessionId: 'session-one', target: { kind: 'inline', definition }, trigger });
+    await actions.sessionRemove({ sessionId: 'session-one', triggerId: added.triggerId! });
+    const result = await f.executor(actions).execute('workflow.trigger.remove', { automationId: added.set.automationId }, {
+      surface: 'ui', authority: 'present_user', actionsSettings: ActionsSettingsV1Schema.parse({ v: 1, actions: {},
+        approvalWaivedSurfaces: { 'workflow.trigger.remove': ['ui'] } }),
+    });
+    expect(result).toMatchObject({ ok: true, result: { automationId: added.set.automationId, deleted: true } });
+    if (!result.ok) throw new Error(result.errorCode);
+    expect(WorkflowTriggerRemoveResultV1Schema.parse(result.result)).toEqual({ automationId: added.set.automationId, deleted: true });
+    expect(f.rows.has(added.set.automationId)).toBe(false);
+  });
+  it('executes approved CLI deletion of an empty Session trigger set through the same owner', async () => {
+    const f = fixture();
+    const actions = createWorkflowTriggerActions({ ...f.deps, resolveSession: async () => ({ project, nativeGoalOwner: false }) });
+    const added = await actions.sessionAdd({ sessionId: 'session-one', target: { kind: 'inline', definition }, trigger });
+    await actions.sessionRemove({ sessionId: 'session-one', triggerId: added.triggerId! });
+    let approval: ApprovalRequest | null = null;
+    const settings = ActionsSettingsV1Schema.parse({ v: 1,
+      actions: { 'workflow.trigger.remove': { approvalRequiredSurfaces: ['cli'] } } });
+    const executor = f.executor(actions, {
+      isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, settings, context),
+      approvalsCreate: async ({ request }) => { approval = request; return { artifactId: 'remove-approval' }; },
+      approvalsGet: async () => approval,
+      approvalsUpdate: async ({ request }) => { approval = request; return { ok: true }; },
+      isApprovalExecutionOriginCurrent: async ({ origin }) => origin.serverId === 'home'
+        && origin.accountId === 'owner' && origin.caller.kind === 'host',
+    });
+    const context = { surface: 'cli' as const, authority: 'present_user' as const, serverId: 'home',
+      runtimeAccountId: 'owner', actionRequestId: 'remove-request', actionCaller: { kind: 'host' as const } };
+    expect(await executor.execute('workflow.trigger.remove', { automationId: added.set.automationId }, context))
+      .toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+    expect(f.rows.has(added.set.automationId)).toBe(true);
+    expect(await executor.execute('approval.request.decide', { artifactId: 'remove-approval', decision: 'approve' }, context))
+      .toMatchObject({ ok: true });
+    const terminal = ApprovalRequestV2Schema.parse(approval);
+    expect(terminal).toMatchObject({ status: 'executed', execution: { ok: true,
+      result: { automationId: added.set.automationId, deleted: true } } });
+    expect(f.rows.has(added.set.automationId)).toBe(false);
+  });
+  it('keeps Session scope authority when whole-set removal crosses the workflow Action adapter', async () => {
+    const f = fixture();
+    const triggers = createWorkflowTriggerActions({ ...f.deps, resolveSession: async () => ({ project, nativeGoalOwner: false }) });
+    const added = await triggers.sessionAdd({ sessionId: 'session-one', target: { kind: 'inline', definition }, trigger });
+    const action = createWorkflowActionExecutor({ isWorkflowFeatureEnabled: () => true, triggers, definitions: f.definitions,
+      runs: { execute: async () => { throw new Error('Unexpected Run write'); } } });
+    const input = { automationId: added.set.automationId };
+    expect(await action({ actionId: 'workflow.trigger.remove', input, context: {
+      surface: 'agent', actionCaller: { kind: 'session', sessionId: 'unrelated-session' },
+    } })).toMatchObject({ ok: false, errorCode: 'target_unavailable' });
+    expect(f.rows.has(added.set.automationId)).toBe(true);
+    expect(await action({ actionId: 'workflow.trigger.remove', input, context: {
+      surface: 'agent', actionCaller: { kind: 'session', sessionId: 'session-one' },
+    } })).toMatchObject({ automationId: added.set.automationId, deleted: true });
+    expect(f.rows.has(added.set.automationId)).toBe(false);
   });
   it('refuses native Keep going for humans and agents and never accepts caller placement', async () => {
     const { deps, rows } = fixture();
@@ -1030,7 +1193,7 @@ describe('workflow trigger Automation composition', () => {
   });
   it('permits an originless run to remove exactly its own firing trigger without opening a missing source', async () => {
     const { deps, rows, loseSource, executor } = fixture();
-    let firing: { sessionId: string; triggerId: string } | null = null;
+    let firing: { sessionId: string; triggerId: string; automationId: string } | null = null;
     let revokeDuringRead = false;
     const actions = createWorkflowTriggerActions({ ...deps, resolveSession: async () => ({ project, nativeGoalOwner: false }),
       resolveRunTrigger: async () => firing,
@@ -1041,7 +1204,7 @@ describe('workflow trigger Automation composition', () => {
       } },
     });
     const added = await actions.sessionAdd({ sessionId: 'session-one', target: { kind: 'workflow', ref: workflow }, trigger });
-    firing = { sessionId: 'session-one', triggerId: added.triggerId! };
+    firing = { sessionId: 'session-one', triggerId: added.triggerId!, automationId: added.set.automationId };
     const caller = { surface: 'agent' as const, actionCaller: { kind: 'workflowRun' as const, runId: 'run-one',
       authorization: { principal: { kind: 'host' as const }, admittedPermissionCeiling: 'read-only' as const } } };
     const boundary = executor(actions);
@@ -1055,9 +1218,21 @@ describe('workflow trigger Automation composition', () => {
       .toMatchObject({ ok: false, errorCode: 'run_access_denied' });
     expect(rows.get(added.set.automationId)?.triggers).toHaveLength(1);
     revokeDuringRead = false;
-    firing = { sessionId: 'session-one', triggerId: added.triggerId! };
+    firing = { sessionId: 'session-one', triggerId: added.triggerId!, automationId: added.set.automationId };
     expect(await boundary.execute('session.trigger.remove', { sessionId: 'session-one', triggerId: added.triggerId! }, caller))
       .toMatchObject({ ok: true, result: { set: { triggers: [] } } });
+    // The permitted coalesced occurrence still carries this exact claim after
+    // the first occurrence removed the trigger. An unrelated id never does.
+    expect(await boundary.execute('session.trigger.remove', { sessionId: 'session-one', triggerId: added.triggerId! }, caller))
+      .toMatchObject({ ok: true, result: { set: { automationId: added.set.automationId, triggers: [] } } });
+    expect(await boundary.execute('session.trigger.remove', { sessionId: 'session-one', triggerId: 'unrelated-trigger' }, caller))
+      .toMatchObject({ ok: false, errorCode: 'run_access_denied' });
+    expect(await boundary.execute('session.trigger.remove', { sessionId: 'session-one', triggerId: added.triggerId! },
+      { surface: 'cli', authority: 'present_user' }))
+      .toMatchObject({ ok: false, errorCode: 'content_unavailable' });
+    rows.set(added.set.automationId, { ...rows.get(added.set.automationId)!, scopeSessionId: 'foreign-session' });
+    expect(await boundary.execute('session.trigger.remove', { sessionId: 'session-one', triggerId: added.triggerId! }, caller))
+      .toMatchObject({ ok: false, errorCode: 'content_unavailable' });
   });
   it('consumes session trigger writes directly through the real Action executor without an approval', async () => {
     const { deps, rows } = fixture();

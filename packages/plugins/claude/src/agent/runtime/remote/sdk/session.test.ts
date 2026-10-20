@@ -7,6 +7,7 @@ import {
 } from '@happier-dev/protocol';
 import type { AgentSessionRuntimeEvent } from '@happier-dev/protocol/runtime';
 import { AgentSessionRuntimeEventSchema } from '@happier-dev/protocol/runtime/agentSessionV1';
+import { isRuntimeConfigUpdateOutcomeApplied } from '@happier-dev/plugin-sdk/agents/runtime';
 import type {
   AgentSessionModelsSource,
   AgentSessionHostServices,
@@ -35,6 +36,7 @@ import {
   computeClaudeSubscriptionAccessTokenFingerprint,
 } from '../../../auth/services/cloud/refreshBridge.js';
 import { createSessionProviderInputOutcomeNormalizer } from '../../../../../../../../apps/cli/src/agent/runtime/session/input/providerInputOutcome.js';
+import { projectClaudeJsonlLineToDirectMessages } from '../../../transcripts/projection.js';
 
 type SessionParamsWithCredentials =
   Parameters<typeof bindClaudeAgentSdkFallbackSession>[0]['sessionParams'] & Readonly<{
@@ -45,6 +47,57 @@ type SessionParamsWithCredentials =
   }>;
 
 describe('bindClaudeAgentSdkFallbackSession', () => {
+  it('reserves SDK host prompts before native transcript replay can publish them as user facts', async () => {
+    const exec = createSdkExecFixture();
+    let releaseReservation!: () => void;
+    const reserved = new Promise<void>(resolve => { releaseReservation = resolve; });
+    const markSourceFactConsumed = vi.fn(async () => { await reserved; return { status: 'custodied' as const }; });
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, {
+      exec: exec.service, markSourceFactConsumed,
+    });
+    const operations = createClaudeAgentSdkProviderOperations({ ctx, directory: '/tmp/claude-project', launchEnv: {},
+      happierSessionId: 'sdk-echo-reservation', permissionMode: 'default' });
+    try {
+      const submission = operations.sendProviderTurnPrompt('# Session title\nHost instructions\n\nActual user prompt');
+      await vi.waitFor(() => expect(markSourceFactConsumed).toHaveBeenCalledOnce());
+      expect(exec.written).toEqual([]);
+      releaseReservation();
+      await expect(submission).resolves.toEqual({ kind: 'accepted' });
+      await operations.steerProviderTurn('<worker_update>Background run succeeded</worker_update>');
+      const userRecords = exec.written.filter((record): record is { type: 'user'; uuid: string; message: { content: string } } =>
+        typeof record === 'object' && record !== null && Reflect.get(record, 'type') === 'user');
+      expect(userRecords).toHaveLength(2);
+      for (const record of userRecords) {
+        expect(record.uuid).toEqual(expect.any(String));
+        const [sourceFact] = projectClaudeJsonlLineToDirectMessages({ fileRelPath: 'session.jsonl', lineStartOffsetBytes: 0,
+          lineValue: { ...record, sessionId: 'native-sdk', timestamp: new Date().toISOString() } });
+        expect(sourceFact?.userProjection).toBe('source_fact');
+        expect(markSourceFactConsumed).toHaveBeenCalledWith({ localId: sourceFact?.localId, reason: 'host_prompt_echo' });
+      }
+      expect(new Set(userRecords.map(record => record.uuid)).size).toBe(2);
+    } finally { releaseReservation(); await operations.disposeProviderSession(); }
+  });
+
+  it('keeps cancelled SDK input out of the native process while its echo reservation is pending', async () => {
+    const exec = createSdkExecFixture();
+    let releaseReservation!: () => void;
+    const reserved = new Promise<void>(resolve => { releaseReservation = resolve; });
+    const markSourceFactConsumed = vi.fn(async () => { await reserved; return { status: 'custodied' as const }; });
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, {
+      exec: exec.service, markSourceFactConsumed,
+    });
+    const operations = createClaudeAgentSdkProviderOperations({ ctx, directory: '/tmp/claude-project', launchEnv: {},
+      happierSessionId: 'sdk-echo-cancel', permissionMode: 'default' });
+    try {
+      const submission = operations.sendProviderTurnPrompt('Cancelled input');
+      await vi.waitFor(() => expect(markSourceFactConsumed).toHaveBeenCalledOnce());
+      await expect(operations.cancelProviderTurn()).resolves.toBe(true);
+      releaseReservation();
+      await expect(submission).resolves.toMatchObject({ kind: 'rejected_before_effect' });
+      expect(exec.written).toEqual([]);
+    } finally { releaseReservation(); await operations.disposeProviderSession(); }
+  });
+
   it('confines native SDK tools and all-call permission hooks despite ambient bypass options', async () => {
     const exec = createSdkExecFixture();
     const hooks = createSessionHooksFixture();
@@ -603,6 +656,24 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       await vi.waitFor(() => expect(observed).toContainEqual(expect.objectContaining({ kind: 'context-compaction', compactionId: 'sdk-compact-1', phase: 'completed', trigger: 'automatic' })));
     } finally { await operations.disposeProviderSession(); }
   });
+  it('keeps an active SDK query when preparation makes the default workspace-write policy explicit', async () => {
+    const exec = createSdkExecFixture();
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, {
+      exec: exec.service, sessionHooks: createSessionHooksFixture().service,
+    });
+    const operations = createClaudeAgentSdkProviderOperations({
+      ctx, directory: '/tmp/claude-project', launchEnv: {}, happierSessionId: 'sdk-default-workspace-writes',
+    });
+    try {
+      operations.beginProviderTurn();
+      await operations.sendProviderTurnPrompt('continue the owned work');
+      expect(isRuntimeConfigUpdateOutcomeApplied(await operations.updateProviderConfiguration({ workspaceWrites: 'allow' }))).toBe(true);
+      await expect(operations.updateProviderConfiguration({ workspaceWrites: 'deny' })).resolves.toMatchObject({
+        status: 'requires_restart', reason: 'role_policy_restart_required',
+      });
+    } finally { await operations.disposeProviderSession(); }
+  });
+
   it('passes the hands-off deny policy to the real SDK launch under bypass', async () => {
     const terminalHost = createTerminalHostFixture();
     const events = createEventsFixture();
@@ -752,8 +823,10 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     const terminalHost = createTerminalHostFixture();
     const events = createEventsFixture();
     const exec = createSdkExecFixture();
+    const markSourceFactConsumed = vi.fn(async () => ({ status: 'custodied' as const }));
     const ctx = createPluginContextFixture(terminalHost.service, events.service, {
       exec: exec.service,
+      markSourceFactConsumed,
       sessionHooks: createSessionHooksFixture().service,
     });
     const operations = createClaudeAgentSdkProviderOperations({
@@ -791,9 +864,15 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
         kind: 'accepted',
       });
       expect(exec.spawnClient).toHaveBeenCalledOnce();
-      expect(exec.written).toContainEqual({
+      expect(exec.written).toContainEqual(expect.objectContaining({
         type: 'user',
         message: { role: 'user', content: 'continue after interruption' },
+      }));
+      const resumed = exec.written.find(record => typeof record === 'object' && record !== null
+        && Reflect.get(record, 'type') === 'user' && Reflect.get(record, 'message')?.content === 'continue after interruption');
+      expect(resumed).toMatchObject({ uuid: expect.any(String) });
+      expect(markSourceFactConsumed).toHaveBeenLastCalledWith({
+        localId: `claude-jsonl:main:user:${Reflect.get(resumed as object, 'uuid')}`, reason: 'host_prompt_echo',
       });
     } finally {
       await operations.disposeProviderSession();
@@ -1724,7 +1803,7 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     }
   });
 
-  it('installs authenticated Activity hooks without resumability and observes exact Agent lifecycle', async () => {
+  it('installs authenticated Activity hooks and keeps SDK permissions on the native callback host', async () => {
     const terminalHost = createTerminalHostFixture();
     const events = createEventsFixture();
     const exec = createSdkExecFixture();
@@ -1753,25 +1832,26 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
         '/tmp/happier-claude-hook-plugin',
         '--include-hook-events',
       ]));
-      expect(exec.spawnClient.mock.calls[0]?.[0].launch.args).not.toContain('--permission-prompt-tool');
+      expect(exec.spawnClient.mock.calls[0]?.[0].launch.args).toEqual(expect.arrayContaining([
+        '--permission-prompt-tool',
+        'stdio',
+      ]));
 
       const pluginRequest = sessionHooks.service.createPluginDir.mock.calls[0]?.[0] as Readonly<{
         files?: ReadonlyArray<Readonly<{ path: string; json?: unknown }>>;
       }> | undefined;
       const hookFile = pluginRequest?.files?.find((file) => file.path === 'hooks/hooks.json');
-      expect(hookFile?.json).toMatchObject({
-        hooks: {
-          PermissionRequest: [expect.objectContaining({ matcher: '*' })],
-          PreToolUse: [expect.objectContaining({ matcher: 'AskUserQuestion' })],
-        },
-      });
+      expect(hookFile?.json).toMatchObject({ hooks: expect.not.objectContaining({
+        PermissionRequest: expect.anything(),
+        PreToolUse: expect.anything(),
+      }) });
 
       const hookRequest = sessionHooks.service.startServer.mock.calls[0]?.[0] as Readonly<{
         onSessionHook?: (providerSessionId: string, payload: Readonly<Record<string, unknown>>) => void | Promise<void>;
         onPermissionHook?: (payload: Readonly<Record<string, unknown>>) => unknown | Promise<unknown>;
       }> | undefined;
       if (!hookRequest?.onSessionHook) throw new Error('Claude Agent SDK session hook server was not started');
-      expect(hookRequest.onPermissionHook).toEqual(expect.any(Function));
+      expect(hookRequest.onPermissionHook).toBeUndefined();
       await hookRequest.onSessionHook('claude-provider-session-1', {
         hook_event_name: 'PostToolUse',
         session_id: 'claude-provider-session-1',
@@ -1806,7 +1886,7 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     }
   });
 
-  it('uses the SDK permission callback only when a session hook plugin cannot be created', async () => {
+  it('uses the SDK permission callback when a session hook plugin cannot be created', async () => {
     const terminalHost = createTerminalHostFixture();
     const events = createEventsFixture();
     const exec = createSdkExecFixture();
@@ -2040,7 +2120,7 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
         input: { text: 'fresh prompt' },
         delivery: { kind: 'newTurn', turnId: 'next-turn' },
       })).resolves.toEqual({ status: 'admitted' });
-      expect(exec.written).toContainEqual({ type: 'user', message: { role: 'user', content: 'fresh prompt' } });
+      expect(exec.written).toContainEqual(expect.objectContaining({ type: 'user', message: { role: 'user', content: 'fresh prompt' } }));
       await expect(session.cancel({ turnId: 'cancelled-turn' })).resolves.toEqual({ status: 'notRunning' });
       await expect(session.cancel({ turnId: 'next-turn' })).resolves.toEqual({ status: 'requested', turnId: 'next-turn' });
       // The interrupted query is still draining when the following submission enters setup.
@@ -2056,7 +2136,7 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       expect(exec.spawnClient).toHaveBeenCalledOnce();
       expect(exec.written.filter((record) => (
         typeof record === 'object' && record !== null && 'type' in record && record.type === 'user'
-      ))).toEqual([{ type: 'user', message: { role: 'user', content: 'fresh prompt' } }]);
+      ))).toEqual([expect.objectContaining({ type: 'user', message: { role: 'user', content: 'fresh prompt' } })]);
     } finally {
       releaseAssets();
       subscription.dispose();
@@ -2198,7 +2278,7 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
               id: `follow-${index}`,
               drainNow: vi.fn(async () => undefined),
               close: vi.fn(async () => {
-                if (index !== 1) return;
+                if (input.startAt !== 'beginning' || input.path !== '/tmp/claude-project/old-session.jsonl') return;
                 goalTailCloseDidStart = true;
                 markGoalTailCloseStarted?.();
                 await goalTailClosePending;
@@ -2233,7 +2313,8 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
         session_id: 'old-session',
         prompt: 'prompt before compact',
       });
-      const identityFollow = follows[0];
+      const identityFollow = follows.find((input) => input.startAt === 'end'
+        && input.path === '/tmp/claude-project/old-session.jsonl');
       if (!identityFollow) throw new Error('missing identity transcript follow');
       await identityFollow.onLine({
         line: JSON.stringify({
@@ -2350,7 +2431,10 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
 
       await runtime.sendTurnPrompt('second prompt');
 
-      expect(follows[0]?.startAt).toBe('end');
+      expect(follows).toContainEqual(expect.objectContaining({
+        path: '/tmp/claude-project/first.jsonl',
+        startAt: 'end',
+      }));
       expect(exec.spawnClient.mock.calls[1]?.[0].launch.args).toEqual(expect.arrayContaining([
         '--resume',
         'first-session',
@@ -3649,8 +3733,9 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
         await processA.emit({ type: 'system', subtype: 'task_notification', session_id: 'native-retirement',
           task_id: 'retirement-task', status: 'completed' });
         await vi.waitFor(() => expect(ctx.logger.warn).toHaveBeenCalledWith(expect.any(String), {
-          code: 'CLAUDE_SDK_PROCESS_CLEANUP_FAILED', state: 'unknown', activeCount: 0,
+          code: 'CLAUDE_SDK_PROCESS_CLEANUP_FAILED', state: 'idle', activeCount: 0,
         }));
+        expect(activityEvents.at(-1)).toMatchObject({ state: 'idle', activeCount: 0 });
       }
       operations.beginProviderTurn('turn-b');
       await operations.sendProviderTurnPrompt('other owned foreground process');
@@ -3661,9 +3746,9 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
       await expect(operations.disposeProviderSession()).rejects.toBe(failure);
       await vi.waitFor(() => expect(secondQueryStopped).toBe(true));
       expect(activityEvents.at(-1)).toMatchObject({ state: 'unknown', activeCount: 0 });
-      expect(ctx.logger.warn).toHaveBeenCalledWith(expect.any(String), {
-        code: 'CLAUDE_SDK_PROCESS_CLEANUP_FAILED', state: 'unknown', activeCount: 0,
-      });
+      expect(ctx.logger.warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+        code: 'CLAUDE_SDK_PROCESS_CLEANUP_FAILED', activeCount: 0,
+      }));
     } finally {
       restoreDispose?.();
       await exec.resolveExit();
@@ -4816,6 +4901,61 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
     }
   });
 
+  it.each(['complete', 'cancel'] as const)('streams native SDK assistant text before the %s boundary without replaying complete messages', async settlement => {
+    const exec = createSdkExecFixture();
+    const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service });
+    const operations = createClaudeAgentSdkProviderOperations({ ctx, directory: '/tmp/claude-project', launchEnv: {},
+      happierSessionId: 'sdk-incremental-voice', permissionMode: 'default', publishTranscriptMessages: true });
+    // The host service port is the system boundary; SDK query parsing, provider
+    // projection and native Session delivery remain real below it.
+    const context = { session: { services: {
+      activeInput: { bind: () => ({ dispose() {} }) }, models: { bind: () => ({ dispose() {} }) },
+    } } } as unknown as AgentSessionRuntimeContext;
+    const session = createClaudeNativeSessionRuntimeFromOperations(operations,
+      { kind: 'create', sessionId: 'sdk-incremental-voice', cwd: '/tmp/claude-project' }, context);
+    const events: AgentSessionRuntimeEvent[] = [];
+    const subscription = session.watch(event => events.push(AgentSessionRuntimeEventSchema.parse(event)));
+    const foregroundDeltas = () => events.flatMap(event => event.kind === 'message-delta'
+      && event.channel === 'assistant' && event.turnId === 'voice-stream-turn' ? [event.text] : []);
+    const first = 'Tidepool ready. ';
+    const second = 'This reply begins before its final.';
+    const fullText = first + second;
+    try {
+      await session.send({ inputIds: ['voice-stream-input'], input: { text: 'Describe what you heard.' },
+        delivery: { kind: 'newTurn', turnId: 'voice-stream-turn' } });
+      expect.soft(exec.spawnClient.mock.calls[0]?.[0].launch.args).toContain('--include-partial-messages');
+      for (const outsideForeground of [{ isReplay: true }, { parent_tool_use_id: 'native-sidechain' }]) {
+        await exec.emit({ type: 'stream_event', ...outsideForeground, event: { type: 'content_block_delta', index: 0,
+          delta: { type: 'text_delta', text: 'Outside the foreground response.' } } });
+      }
+      await exec.emit({ type: 'stream_event', event: { type: 'content_block_start', index: 0,
+        content_block: { type: 'text', text: first } } });
+      await exec.emit({ type: 'stream_event', event: { type: 'content_block_delta', index: 0,
+        delta: { type: 'text_delta', text: second } } });
+      await vi.waitFor(() => expect(foregroundDeltas()).toEqual([first, second]));
+      expect(events.filter(event => event.kind === 'transcript-message-committed' || event.kind === 'turn-complete')).toEqual([]);
+
+      if (settlement === 'cancel') {
+        await operations.cancelProviderTurn('voice-stream-turn');
+        await exec.emit({ type: 'stream_event', event: { type: 'content_block_delta', index: 0,
+          delta: { type: 'text_delta', text: 'Late cancelled text.' } } });
+      }
+      await exec.emit({ type: 'assistant', uuid: 'voice-stream-assistant', message: {
+        role: 'assistant', content: [{ type: 'text', text: fullText }],
+      } });
+      await exec.emit({ type: 'result', subtype: 'success', is_error: false, result: fullText,
+        uuid: 'voice-stream-result', session_id: 'native-stream-session', queued_turn_count: 0, usage: {}, modelUsage: {} });
+      await operations.waitForProviderTurnCompletion();
+      expect(foregroundDeltas()).toEqual([first, second]);
+      const committed = events.filter(event => event.kind === 'transcript-message-committed' && event.turnId === 'voice-stream-turn');
+      expect(committed).toHaveLength(settlement === 'complete' ? 1 : 0);
+      expect(events.filter(event => event.kind === 'turn-complete' && event.turnId === 'voice-stream-turn'))
+        .toHaveLength(settlement === 'complete' ? 1 : 0);
+      expect(events.filter(event => event.kind === 'turn-cancelled' && event.turnId === 'voice-stream-turn'))
+        .toHaveLength(settlement === 'cancel' ? 1 : 0);
+    } finally { subscription.dispose(); await session.dispose(); }
+  });
+
   it.each(['assistant', 'result'] as const)('correlates committed SDK %s text with the admitted foreground turn', async source => {
     const exec = createSdkExecFixture();
     const ctx = createPluginContextFixture(createTerminalHostFixture().service, createEventsFixture().service, { exec: exec.service });
@@ -5007,7 +5147,12 @@ describe('bindClaudeAgentSdkFallbackSession', () => {
           kind: 'transcript-agent-message-committed',
           sessionId: 'happy-session-1',
           agentId: 'claude',
-          localId: 'claude-sdk-assistant-message-1',
+          localId: projectClaudeJsonlLineToDirectMessages({
+            fileRelPath: 'session.jsonl', lineStartOffsetBytes: 42,
+            lineValue: { type: 'assistant', uuid: 'assistant-message-1', message: {
+              role: 'assistant', content: [{ type: 'text', text: 'READY-FROM-CLAUDE' }],
+            } },
+          })[0]?.localId,
           body: { type: 'message', message: 'READY-FROM-CLAUDE' },
         }),
         expect.objectContaining({

@@ -316,10 +316,12 @@ export type MachineRpcHandlerDeps = Readonly<{
     getV2: (request: SessionRunnerStatusGetRequestV1) => Promise<SessionRunnerRuntimeStatusV2>;
   }>;
   actionOperations?: Readonly<{
+    store?: Pick<HostActionOperationRuntime['store'], 'get'>;
     runner?: ProjectTerminalRuntime['operationRuntime']['runner'];
     attachOwner?: import('@/daemon/actionOperations/createHostActionOperationRuntime').HostActionOperationRuntime['attachOwner'];
     handlers: ActionOperationRpcHandlers;
     observeExecution: HostActionOperationRuntime['observeExecution'];
+    decideSetupReview: HostActionOperationRuntime['decideSetupReview'];
     waitForProjectTerminalAttachment?: HostActionOperationRuntime['waitForProjectTerminalAttachment'];
     retireProjectFiniteOperations?: HostActionOperationRuntime['retireProjectFiniteOperations'];
   }>;
@@ -613,14 +615,32 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
   registerMachineAgentInstallJobRpcHandlers({ rpcHandlerManager });
   let detachedExecutionRunManager: ExecutionRunHostBridge | null = null;
   const executionBudgetRegistry = params.deps?.executionBudgetRegistry ?? createExecutionBudgetRegistry();
-  registerExecutionRunHandlers(rpcHandlerManager, {
+  const executionRunRegistration = registerExecutionRunHandlers(rpcHandlerManager, {
     sessionId: null,
+    ...(params.deps?.actionOperations?.attachOwner ? { attachActionOperationOwner: params.deps.actionOperations.attachOwner } : {}),
     budgetRegistry: executionBudgetRegistry,
     serverId: params.deps?.currentServerId ?? configuration.activeServerId,
     ...(params.deps?.executionRunRuntimeAccountId
       ? { runtimeAccountId: params.deps.executionRunRuntimeAccountId }
       : {}),
     cwd: params.deps?.workingDirectory ?? process.cwd(),
+    resolveProjectLaunchContext: async context => {
+      if (!context.signal || !resolveProjectFiniteRuntime || !context.requesterSessionBootstrap && !context.callerInputAuthorization) return null;
+      const ingress: RpcHandlerContext = { ...context, signal: context.signal, callerAuthority: context.authority,
+        localActionContext: { ...context } };
+      const operation = context.operationProgress && context.operationOwnerUpdate ? {
+        signal: context.signal, actionRequestId: context.actionRequestId ?? undefined,
+        operationProgress: context.operationProgress, operationOwnerUpdate: context.operationOwnerUpdate,
+        ...(context.operationAcceptance ? { operationAcceptance: context.operationAcceptance } : {}),
+        ...(context.operationCancellation ? { operationCancellation: context.operationCancellation } : {}),
+        ...(context.operationReview ? { operationReview: context.operationReview } : {}),
+      } : undefined;
+      return { ingress, ...(operation ? { operation } : {}),
+        ...(context.requesterSessionBootstrap ? { requester: { bootstrap: context.requesterSessionBootstrap,
+          isCurrent: context.requesterSessionBootstrap.isCurrent } } : {}),
+        isCurrent: async () => !context.signal!.aborted && (!context.verifyMachineAdmissionCurrent || await context.verifyMachineAdmissionCurrent()),
+        resolveRuntime: resolveProjectFiniteRuntime };
+    },
     ...(params.deps?.currentMachineId ? { machineId: params.deps.currentMachineId } : {}),
     ...(params.deps?.getServerFeaturesSnapshot
       ? { getServerFeaturesSnapshot: params.deps.getServerFeaturesSnapshot }
@@ -710,20 +730,35 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
 
   registerMachineAgentSignInRpcHandlers({ rpcHandlerManager });
   const operationRuntime = params.deps?.actionOperations;
+  const operationStore = operationRuntime?.store;
   const operationRunner = operationRuntime?.runner;
   const createProjectFiniteRuntime = params.deps?.createProjectFiniteRuntime;
   let projectFiniteIngressClosed = false;
-  const resolveProjectFiniteRuntime = createProjectFiniteRuntime
+  const resolveProjectFiniteRuntime = createProjectFiniteRuntime && operationStore
     && operationRuntime?.waitForProjectTerminalAttachment && operationRuntime.retireProjectFiniteOperations && operationRunner
     ? async (ingress: RpcHandlerContext) => {
-      if (projectFiniteIngressClosed) return null;
+      if (projectFiniteIngressClosed) {
+        logger.debug('[ProjectFinite] Runtime resolution refused', { reason: 'finite_ingress_retired',
+          ...(ingress.requesterSessionBootstrap?.getBoundSessionId()
+            ? { sessionId: ingress.requesterSessionBootstrap.getBoundSessionId() } : {}) });
+        return null;
+      }
       const runtime = await createProjectFiniteRuntime({
         operationRuntime: { observeExecution: operationRuntime.observeExecution,
+          decideSetupReview: operationRuntime.decideSetupReview,
+          store: operationStore,
+          ...(operationRuntime.attachOwner ? { attachOwner: operationRuntime.attachOwner } : {}),
           runner: operationRunner,
           waitForProjectTerminalAttachment: operationRuntime.waitForProjectTerminalAttachment! },
         terminalSessions: terminalRegistration.getSessionManager(),
       }, ingress);
-      if (projectFiniteIngressClosed || !runtime) return null;
+      if (projectFiniteIngressClosed) {
+        logger.debug('[ProjectFinite] Runtime resolution refused', { reason: 'finite_ingress_retired',
+          ...(ingress.requesterSessionBootstrap?.getBoundSessionId()
+            ? { sessionId: ingress.requesterSessionBootstrap.getBoundSessionId() } : {}) });
+        return null;
+      }
+      if (!runtime) return null;
       return { ...runtime, isCurrent: async () => !projectFiniteIngressClosed
         && (!runtime.isCurrent || await runtime.isCurrent()) };
     }
@@ -902,7 +937,7 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
     return await requestDaemonSessionConnectedServiceAuthSwitch(parsed);
   });
 
-  rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART, async (raw: unknown) => {
+  rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART, async (raw: unknown, context) => {
     const request = RestartSessionRunnerRequestV1Schema.parse(raw);
     if (isUnattestedPublicV1RunnerRolloutMutation(request)) {
       return {
@@ -912,13 +947,13 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
         reasonCode: 'runner_generation_unattested' as const,
       };
     }
-    return await requestDaemonSessionRunnerRestart(request);
+    return await requestDaemonSessionRunnerRestart(request, { signal: context?.signal });
   });
-  rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_V2, async (raw: unknown) => {
+  rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_V2, async (raw: unknown, context) => {
     const request = RestartSessionRunnerRequestV2Schema.parse(raw);
-    return await requestDaemonSessionRunnerRestartV2(request);
+    return await requestDaemonSessionRunnerRestartV2(request, { signal: context?.signal });
   });
-  rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_ALL, async (raw: unknown) => {
+  rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_RUNNER_RESTART_ALL, async (raw: unknown, context) => {
     const request = RestartAllSessionRunnersRequestV1Schema.parse(raw);
     if (isUnattestedPublicV1RunnerRolloutMutation(request)) {
       return {
@@ -931,7 +966,7 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
         results: [],
       };
     }
-    return await restartAllDaemonSessionRunners(request);
+    return await restartAllDaemonSessionRunners(request, { signal: context?.signal });
   });
   rpcHandlerManager.registerHandler(RPC_METHODS.DAEMON_SESSION_RUNNER_STATUS_GET, async (raw: unknown) => {
     const request = SessionRunnerStatusGetRequestV1Schema.parse(raw);
@@ -1168,26 +1203,30 @@ function registerMachineRpcHandlersOnce(params: Readonly<{
     voiceClientMediatedCredentials: voiceClientMediatedCredentialRegistration,
     ...(voiceInferenceRegistration ? { voiceInference: voiceInferenceRegistration } : {}),
     dispose: async () => {
-      await retireFiniteExecution();
-      const cleanup = transferRelayV2ResponderCleanup;
-      transferRelayV2ResponderCleanup = null;
-      const executionRunManager = detachedExecutionRunManager;
-      detachedExecutionRunManager = null;
-      cleanup?.();
-      if (cleanup && transferRelayV2DownloadResponderCleanupByManager.get(rpcHandlerManager) === cleanup) {
-        transferRelayV2DownloadResponderCleanupByManager.delete(rpcHandlerManager);
+      try {
+        await retireFiniteExecution();
+        const cleanup = transferRelayV2ResponderCleanup;
+        transferRelayV2ResponderCleanup = null;
+        const executionRunManager = detachedExecutionRunManager;
+        detachedExecutionRunManager = null;
+        cleanup?.();
+        if (cleanup && transferRelayV2DownloadResponderCleanupByManager.get(rpcHandlerManager) === cleanup) {
+          transferRelayV2DownloadResponderCleanupByManager.delete(rpcHandlerManager);
+        }
+        await Promise.all([
+          ...(executionRunManager ? [executionRunManager.dispose()] : []),
+          Promise.resolve(terminalRegistration.dispose()),
+          Promise.resolve(externalSessionsRegistration.dispose()),
+          promptAssetTransfers.dispose(),
+          registryTransfers.dispose(),
+          voiceSpeechRegistration.dispose(),
+          voiceClientCredentialRegistration.dispose(),
+          voiceClientMediatedCredentialRegistration.dispose(),
+          ...(voiceInferenceRegistration ? [voiceInferenceRegistration.dispose()] : []),
+        ]);
+      } finally {
+        executionRunRegistration.dispose();
       }
-      await Promise.all([
-        ...(executionRunManager ? [executionRunManager.dispose()] : []),
-        Promise.resolve(terminalRegistration.dispose()),
-        Promise.resolve(externalSessionsRegistration.dispose()),
-        promptAssetTransfers.dispose(),
-        registryTransfers.dispose(),
-        voiceSpeechRegistration.dispose(),
-        voiceClientCredentialRegistration.dispose(),
-        voiceClientMediatedCredentialRegistration.dispose(),
-        ...(voiceInferenceRegistration ? [voiceInferenceRegistration.dispose()] : []),
-      ]);
     },
   };
 }

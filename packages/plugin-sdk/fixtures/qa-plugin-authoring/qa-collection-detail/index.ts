@@ -1,4 +1,5 @@
-import { definePlugin, PluginError } from '@happier-dev/plugin-sdk';
+import { definePlugin, PluginError, type JsonValue } from '@happier-dev/plugin-sdk';
+import { defineProtocolLiteral, defineProtocolObject, defineProtocolString, defineProtocolUnion } from '@happier-dev/plugin-sdk/protocol';
 import { PUBLIC_TOOLCHAIN_SCAFFOLD_BINDINGS_V1 } from '@happier-dev/plugin-sdk/ui/build';
 import { initialRows } from './rows.js';
 
@@ -36,10 +37,13 @@ export function createCollectionDetailPlugin() {
             'set-complete': {
                 title: 'Set review completion', execution: { target: 'daemon' }, surfaces: ['ui', 'agent', 'mcp', 'cli', 'plugin'],
                 dangerLevel: 'writesLocal', placementBindings: ['rowAction'],
+                confirmationWhen: { presentUserUi: false },
                 confirmation: { title: 'Change QA review completion', body: 'Updates only this plugin’s transient sample reviews.', confirmLabel: 'Update review' },
-                inputSchema: { type: 'object', additionalProperties: false, required: ['rowId', 'completed'],
-                    properties: { rowId: { type: 'string', minLength: 1 }, completed: { type: 'boolean' } } },
-                run: (input) => {
+                inputSchema: defineProtocolObject({
+                    rowId: defineProtocolString({ minLength: 1 }),
+                    completed: defineProtocolUnion([defineProtocolLiteral(true), defineProtocolLiteral(false)]),
+                }, { policy: 'closed' }),
+                run: (input): JsonValue => {
                     const row = rows.find(row => row.id === input.rowId);
                     if (!row) return { ok: false, code: 'row_not_found' };
                     if (row.completed !== input.completed) {
@@ -51,11 +55,11 @@ export function createCollectionDetailPlugin() {
             },
             clear: { title: 'Clear QA rows', execution: { target: 'daemon' }, dangerLevel: 'writesLocal',
                 confirmation: { title: 'Clear sample reviews', body: 'Removes the transient sample rows; Restore reviews brings them back.', confirmLabel: 'Clear reviews' },
-                surfaces: ['ui', 'agent', 'mcp', 'cli', 'plugin'], inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+                surfaces: ['ui', 'agent', 'mcp', 'cli', 'plugin'], inputSchema: defineProtocolObject({}, { policy: 'closed' }),
                 run: () => { if (rows.length) { rows = []; invalidate(); } return { rows }; } },
             restore: { title: 'Restore QA rows', execution: { target: 'daemon' }, dangerLevel: 'writesLocal',
                 confirmation: { title: 'Restore sample reviews', body: 'Replaces the transient reviews with their starting values.', confirmLabel: 'Restore reviews' },
-                surfaces: ['ui', 'agent', 'mcp', 'cli', 'plugin'], inputSchema: { type: 'object', additionalProperties: false, properties: {} },
+                surfaces: ['ui', 'agent', 'mcp', 'cli', 'plugin'], inputSchema: defineProtocolObject({}, { policy: 'closed' }),
                 run: () => { rows = [...initialRows]; invalidate(); return { rows }; } },
         },
         ui: {

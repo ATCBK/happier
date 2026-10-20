@@ -3,16 +3,23 @@ import { useNewSessionCapabilities } from '@/sync/domains/capabilities/session/u
 import { useSessionCapabilities } from '@/sync/domains/capabilities/session/useSessionCapabilities';
 import { buildSessionCapabilitiesModel, type SessionCapabilitiesModelInput } from './sessionCapabilitiesModel';
 import { readSessionCapabilityApplyChange, type SessionCapabilityChange } from './sessionCapabilityApplyNotice';
+import { readCapabilitySelectionApplyV1 } from '@happier-dev/protocol/reach/sessionCapabilityMetadataV1';
+import { readSessionCapabilityOverrideV1, setSessionCapabilitySelectionItemV1 } from '@happier-dev/protocol/reach/sessionCapabilitySelectionV1';
 
 export type NewSessionCapabilitiesDraft = Parameters<typeof useNewSessionCapabilities>[0];
 export type SessionCapabilitiesTarget = Readonly<{ kind: 'draft'; draft: NewSessionCapabilitiesDraft }>
     | Readonly<{ kind: 'session'; sessionId: string; serverId: string | null; readOnly: boolean }>;
+/** The person's last own change, in the words of the sheet's in-place Undo line ("pdf added · Undo"). */
+export type SessionCapabilityUndoReceipt = Readonly<{ kind: SessionCapabilityChange['kind']; title: string; change: 'added' | 'removed' }>;
 export type SessionCapabilitiesPresentation = Omit<SessionCapabilitiesModelInput, 'view' | 'selection' | 'state' | 'readOnly' | 'change'>;
 
 /** Detail hooks belong inside the open popover/sheet leaf; P2 remains the only selection store. */
 export function useExistingSessionCapabilitiesPopover(target: Extract<SessionCapabilitiesTarget, { kind: 'session' }>, presentation: SessionCapabilitiesPresentation) {
     const state = useSessionCapabilities(target.sessionId, undefined, { serverId: target.serverId });
     const [change, setChange] = React.useState<SessionCapabilityChange | null>(null);
+    // Undo resends the `previous` override the Action returned (IR-77), so the receipt keeps it beside the words.
+    const [undoOffer, setUndoOffer] = React.useState<Readonly<{ id: string; written: SessionCapabilityChange['state']; receipt: SessionCapabilityUndoReceipt;
+        previous: SessionCapabilityChange['state'] }> | null>(null);
     const key = state.scopeKey;
     const receiptKey = React.useRef(key);
     const metadataChange = React.useMemo(() => readSessionCapabilityApplyChange(state.metadata, (kind, id) => {
@@ -20,8 +27,12 @@ export function useExistingSessionCapabilitiesPopover(target: Extract<SessionCap
         const item = (kind === 'mcp_server' ? state.preview?.mcp.items : state.preview?.skills.items)?.find(item => item.id === id);
         return item ? item.title ?? item.name : null;
     }), [state.metadata, state.preview]);
-    const changeForTarget = metadataChange ?? (receiptKey.current === key ? change : null);
-    React.useEffect(() => { receiptKey.current = key; setChange(null); }, [key]);
+    const changeForTarget = React.useMemo(() => {
+        const localChange = receiptKey.current === key ? change : null;
+        const applyRecord = localChange ? readCapabilitySelectionApplyV1(state.metadata)[localChange.kind === 'mcp_server' ? 'mcp' : 'skills'] : null;
+        return metadataChange ?? (localChange ? { ...localChange, ...applyRecord } : null);
+    }, [metadataChange, key, change, state.metadata]);
+    React.useEffect(() => { receiptKey.current = key; setChange(null); setUndoOffer(null); }, [key]);
     React.useEffect(() => {
         if (metadataChange && 'source' in metadataChange) setChange(null);
     }, [metadataChange]);
@@ -30,7 +41,12 @@ export function useExistingSessionCapabilitiesPopover(target: Extract<SessionCap
         const item = (kind === 'mcp_server' ? state.preview?.mcp.items : state.preview?.skills.items)?.find(item => item.id === id);
         const title = suppliedTitle ?? (kind === 'native_skill' ? id : item ? item.title ?? item.name : null);
         const result = await state.setItem(kind, id, value);
-        if (result.ok && title && receiptKey.current === key) setChange({ kind, title, state: value });
+        if (result.ok && title && receiptKey.current === key) {
+            setChange({ kind, title, state: value });
+            // A return to the rules ("inherit") adds back what was off and removes what was added.
+            const added = value === 'on' || value === 'inherit' && result.previous === 'off';
+            setUndoOffer({ id, written: value, receipt: { kind, title, change: added ? 'added' : 'removed' }, previous: result.previous ?? 'inherit' });
+        } else if (!result.ok) setUndoOffer(null);
         return result;
     }, [target.readOnly, state.setItem, state.preview, key]);
     const modelInput = React.useMemo(() => ({
@@ -43,11 +59,20 @@ export function useExistingSessionCapabilitiesPopover(target: Extract<SessionCap
         presentation.machineOnline, target.readOnly, changeForTarget]);
     const model = React.useMemo(() => buildSessionCapabilitiesModel({ ...presentation, ...modelInput }), [presentation, modelInput]);
     const dismissNotice = React.useCallback(() => setChange(null), []);
-    const undoLast = React.useCallback(() => target.readOnly
-        ? Promise.resolve({ ok: false as const, message: 'read_only' })
-        : state.undoLast(), [target.readOnly, state.undoLast]);
+    // Undo stays offered while the item still holds what this change wrote (native skills hold only off/inherit); a newer write by any device retires it.
+    const undoCurrent = undoOffer && readSessionCapabilityOverrideV1(state.selection, undoOffer.receipt.kind, undoOffer.id)
+        === readSessionCapabilityOverrideV1(setSessionCapabilitySelectionItemV1({}, undoOffer.receipt.kind, undoOffer.id, undoOffer.written), undoOffer.receipt.kind, undoOffer.id) ? undoOffer : null;
+    const undoLast = React.useCallback(async () => {
+        if (target.readOnly) return { ok: false as const, message: 'read_only' };
+        const offered = undoCurrent;
+        setUndoOffer(null);
+        const result = await state.undoLast();
+        // The undone change is itself the latest one the composer's apply line should describe.
+        if (result.ok && offered && receiptKey.current === key) setChange({ kind: offered.receipt.kind, title: offered.receipt.title, state: offered.previous });
+        return result;
+    }, [target.readOnly, state.undoLast, undoCurrent, key]);
     return { model, modelInput, setItem, metadata: state.metadata, selection: state.selection, pendingApply: state.pendingApply, applyTiming: state.applyTiming,
-        undoLast, demandPreview: state.demandPreview, refresh: state.refresh, error: state.error, dismissNotice };
+        undoReceipt: undoCurrent?.receipt ?? null, undoLast, demandPreview: state.demandPreview, refresh: state.refresh, error: state.error, dismissNotice };
 }
 
 /** Draft/Workflow/Trigger edits reuse the same P2 draft owner and never write an existing Session. */

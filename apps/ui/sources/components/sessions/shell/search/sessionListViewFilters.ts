@@ -14,10 +14,10 @@ import {
 export { buildQualifiedAudienceSelectionKey, buildQualifiedTagAddressKey };
 export type { QualifiedAudienceSelection, QualifiedTagAddress };
 import type {
-    SessionAudienceSelectionV1,
     SessionListQueryV1,
 } from '@happier-dev/protocol';
 import { buildSessionListQueryKey } from '@/sync/domains/session/listing/sessionListQueryKey';
+import { projectSessionListFilterHomeQueriesV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterQueryV1';
 import {
     canSessionListOrdinaryPageAnswerQuery,
     type SessionListOrdinaryPageAdapter,
@@ -260,12 +260,6 @@ export function removeUnavailableSessionListFilterSelections(
     return normalizeSessionListViewFilters({ ...filters, homeServerIds, audiences, tagIds }, viewContext);
 }
 
-function toHomeAudience(audience: QualifiedAudienceSelection): SessionAudienceSelectionV1 {
-    if (audience.kind === 'outside_teams') return { kind: 'outside_teams' };
-    if (audience.kind === 'team') return { kind: 'team', teamId: audience.teamId };
-    return { kind: 'group', teamId: audience.teamId, groupId: audience.groupId };
-}
-
 export function buildSessionListFilterQueryHomes(
     filters: SessionListViewFilters,
     options: Readonly<{
@@ -284,51 +278,9 @@ export function buildSessionListFilterQueryHomes(
         tagFacet?: 'query' | 'local';
     }>,
 ): SessionListFilterQueryHome[] {
-    const normalized = normalizeSessionListViewFilters(filters);
-    const mountedHomeServerIds = new Set(dedupeIds(options.mountedHomeServerIds));
-    const tagFacetLocal = options.tagFacet === 'local';
-    // An active corpus always asks for the attention supplement, exactly like the
-    // incumbent active list. It is a property of the corpus, not of the layout or
-    // attention-placement preference, so arranging the same corpus issues no request.
-    // An archived corpus relies on its explicit storage + attention predicate and
-    // has no active supplemental band to request.
-    const includeAttention = options.storage === 'active';
-    const audienceFacetActive = normalized.audiences.length > 0;
-    const tagFacetActive = !tagFacetLocal && normalized.tagIds.length > 0;
-    return normalized.homeServerIds
-        .filter((serverId) => mountedHomeServerIds.has(serverId))
-        // Qualified facet values are Home-local. When a facet is active globally,
-        // a Home with no value in that facet cannot match; an empty per-Home array
-        // would instead broaden that Home to an unrestricted query.
-        .filter((serverId) => (
-            (!audienceFacetActive || normalized.audiences.some((audience) => audience.serverId === serverId))
-            && (!tagFacetActive || normalized.tagIds.some((tag) => tag.serverId === serverId))
-        ))
-        .map((serverId) => {
-            const query: SessionListQueryV1 = {
-                v: 1,
-                storage: options.storage,
-                includeInactive: options.includeInactive,
-                scope: normalized.scope,
-                attention: normalized.attention,
-                ...(normalized.bot === undefined ? {} : { bot: normalized.bot }),
-                audiences: normalized.audiences
-                    .filter((audience) => audience.serverId === serverId)
-                    .map(toHomeAudience),
-                tagIds: tagFacetLocal
-                    ? []
-                    : normalized.tagIds
-                        .filter((tag) => tag.serverId === serverId)
-                        .map((tag) => tag.tagId),
-                ...(includeAttention ? { includeAttention: true } : {}),
-                ...(typeof options.limit === 'number' ? { limit: options.limit } : {}),
-            };
-            return {
-                serverId,
-                queryKey: buildSessionListQueryKey(serverId, query),
-                query,
-            };
-        });
+    return projectSessionListFilterHomeQueriesV1(filters, options).map(({ serverId, query }) => ({
+        serverId, queryKey: buildSessionListQueryKey(serverId, query), query,
+    }));
 }
 
 /**
@@ -351,6 +303,8 @@ export function resolveSessionListFilterOrdinaryPageAdapter(
         (
             filters.source !== 'all'
             || filters.bot !== undefined
+            || filters.projects !== undefined
+            || (filters.statuses?.length ?? 0) > 0
             || filters.searchQuery.trim().length > 0
             // A tag selection the request does not carry is a local projection over
             // this corpus, exactly like Source and text search.
@@ -381,6 +335,10 @@ export function shouldUseSessionListFilterQuerySource(
         || normalized.audiences.length > 0
         || normalized.tagIds.length > 0
         || normalized.bot !== undefined
+        || normalized.coordinator !== undefined
+        || normalized.underSessionId !== undefined
+        || normalized.projects !== undefined
+        || (normalized.statuses?.length ?? 0) > 0
         || normalized.attention !== 'any'
         || normalized.scope !== 'my_work';
 }
@@ -435,6 +393,13 @@ export function buildSessionListSelectionScopeSignature(
         scope: filters.scope,
         attention: filters.attention,
         ...(filters.bot === undefined ? {} : { bot: filters.bot }),
+        ...(filters.coordinator === undefined ? {} : { coordinator: filters.coordinator }),
+        ...(filters.projects === undefined ? {} : { projects: {
+            include: filters.projects.include.map(project => JSON.stringify([project.serverId, project.projectKey])).sort(),
+            exclude: filters.projects.exclude.map(project => JSON.stringify([project.serverId, project.projectKey])).sort(),
+        } }),
+        ...(filters.statuses === undefined ? {} : { statuses: [...filters.statuses].sort() }),
+        ...(filters.underSessionId === undefined ? {} : { underSessionId: filters.underSessionId }),
         source: filters.source,
         searchQuery: normalizeSearchQueryIdentity(filters.searchQuery),
         homeServerIds: [...selectedHomes].sort(),

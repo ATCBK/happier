@@ -1,6 +1,6 @@
 import type { ActiveSelectionMachineGroup } from '../hooks/useActiveSelectionMachineGroups';
 import { describeMachinePresenceLine } from '@/utils/sessions/machinePresenceLine';
-import { describeMachineLockedReason, getMachineDisplayName, resolveMachineDisplayNameParts } from '@/utils/sessions/machineDisplayNames';
+import { describeMachineLockedReason, getMachineDisplayName, isMachineDisplayHydrating, resolveMachineDisplayNameParts } from '@/utils/sessions/machineDisplayNames';
 import { formatOSPlatform } from '@/utils/sessions/sessionUtils';
 import { buildMachineOwnershipGroups, describeMachineSharedOwnership, describeMachineSharedGroupTitle } from '@/sync/domains/machines/machineOwnershipGroups';
 import { t } from '@/text';
@@ -23,7 +23,7 @@ export type MachineAddRoutePath = 'thisComputer' | 'ssh' | 'anotherComputer';
  * Add a machine: the Machines collection's draft (lab `add-flows` M4). `path` opens that way first when
  * this device offers it — "set up this computer" entry points ask for `thisComputer`.
  */
-export function buildMachineAddHref(options: Readonly<{ path?: MachineAddRoutePath }> = {}): string {
+export function buildMachineAddHref(options: Readonly<{ path?: MachineAddRoutePath }> = {}): typeof MACHINES_ADD_ROUTE | `${typeof MACHINES_ADD_ROUTE}?${string}` {
     return options.path ? `${MACHINES_ADD_ROUTE}?path=${encodeURIComponent(options.path)}` : MACHINES_ADD_ROUTE;
 }
 
@@ -51,7 +51,9 @@ type MachineCollectionRowPresentation = Readonly<{
 
 export type MachineCollectionRow = MachineCollectionRowPresentation & (
     | Readonly<{ kind: 'machine'; machineId: string; managedId?: never }>
-    | Readonly<{ kind: 'managed'; managedId: string; machineId?: never; enrolledMachineId?: string }>
+    | Readonly<{ kind: 'managed'; managedId: string; machineId?: never; enrolledMachineId?: string;
+        /** The rail's one word for its state ("Ended"), where `presence` would truncate beside the name. */
+        presenceWord?: string }>
 );
 
 export type MachineCollectionTarget = Readonly<{ serverId: string }> & (
@@ -85,7 +87,12 @@ export type MachineCollectionSection = Readonly<{
 }>;
 
 export type MachineCollection = Readonly<{
+    /** Every row the search can match: machines, retired created machines and recipes. */
     count: number;
+    /** The machines the header counts: yours, shared and created ones; never recipes or retired creations. */
+    machineCount: number;
+    /** A listed machine has not read its name yet: the list is still arriving, not a row named "Loading…". */
+    namesPending: boolean;
     sections: readonly MachineCollectionSection[];
     presetSections: readonly MachinePresetCollectionSection[];
 }>;
@@ -98,6 +105,10 @@ export function partitionMachineCollectionRailRows(rows: readonly MachineCollect
     const offline = foldOffline ? rows.filter(row => !row.online) : [];
     if (offline.length === 0) return { inline: rows, offline: [] };
     return { inline: rows.filter(row => row.online), offline };
+}
+
+export function managedMachineConsentKey(serverId: string, managedId: string): string {
+    return JSON.stringify([serverId, managedId]);
 }
 
 /**
@@ -113,10 +124,14 @@ export function buildMachineCollection(input: Readonly<{
     managedByServerId?: Readonly<Record<string, readonly ManagedMachineV1[]>>;
     presetsByServerId?: Readonly<Record<string, readonly ManagedMachinePresetV1[]>>;
     teamNamesByServerId?: Readonly<Record<string, Readonly<Record<string, string>>>>;
+    /** Managed creations whose installer is waiting on the user's consent, as `managedMachineConsentKey`. */
+    awaitingConsent?: ReadonlySet<string>;
 }>): MachineCollection {
     const query = input.query?.trim().toLocaleLowerCase() ?? '';
     const nowMs = input.nowMs ?? Date.now();
     let count = 0;
+    let machineCount = 0;
+    const namesPending = input.groups.some(group => group.machines.some(isMachineDisplayHydrating));
     const sections = input.groups.flatMap((group): MachineCollectionSection[] => {
         const names = resolveMachineDisplayNameParts(group.machines);
         const enrolledIds = new Set(group.machines.map(machine => machine.id));
@@ -164,15 +179,21 @@ export function buildMachineCollection(input: Readonly<{
             if (ownershipGroup.key === 'managed' || ownershipGroup.key === 'managedArchived') {
                 const managedRows = managedMachines
                     .filter(machine => (machine.archivedAt !== undefined) === (ownershipGroup.key === 'managedArchived'))
-                    .map((machine): MachineCollectionRow => ({ kind: 'managed', managedId: machine.id,
+                    .map((machine): MachineCollectionRow => {
+                        const awaitingConsent = input.awaitingConsent?.has(managedMachineConsentKey(group.serverId, machine.id)) === true;
+                        const creation = describeManagedCreation(machine);
+                        return { kind: 'managed', managedId: machine.id,
                         serverId: group.serverId, title: machine.launch.name, titleParts: { name: machine.launch.name, hint: null }, host: null, platformLabel: '', online: false,
-                        presence: describeManagedCreation(machine).line, reason: null, ownership: null, ownerName: null,
-                        ...(machine.enrolledMachineId && machine.archivedAt === undefined ? { enrolledMachineId: machine.enrolledMachineId } : {}) }))
+                        presence: awaitingConsent ? t('approvals.waitingForYou') : creation.line,
+                        ...(!awaitingConsent && creation.word ? { presenceWord: creation.word } : {}), reason: null, ownership: null, ownerName: null,
+                        ...(machine.enrolledMachineId && machine.archivedAt === undefined ? { enrolledMachineId: machine.enrolledMachineId } : {}) };
+                    })
                     .filter(row => !query || row.title.toLocaleLowerCase().includes(query));
                 rows.push(...managedRows);
                 rows.sort(compareMachineCollectionRows);
             }
             count += rows.length;
+            if (ownershipGroup.key !== 'managedArchived') machineCount += rows.length;
             const ownershipTitle = ownershipGroup.key.startsWith('shared:')
                 ? describeMachineSharedGroupTitle(ownershipGroup.custodian)
                 : ownershipGroup.key === 'managed' ? t('machines.destinations.created')
@@ -207,7 +228,7 @@ export function buildMachineCollection(input: Readonly<{
         return { key: JSON.stringify([group.serverId, 'presets']), serverId: group.serverId,
             title: input.groupedByHome ? group.serverName : null, status: group.status, rows };
     });
-    return { count, sections, presetSections };
+    return { count, machineCount, namesPending, sections, presetSections };
 }
 
 /**
@@ -224,7 +245,7 @@ function compareMachineCollectionRows(a: MachineCollectionRow, b: MachineCollect
  * A collection row's page, scoped to the Home it belongs to, in `door`. Rows outside Settings pass
  * `'rail'`; recipes are configuration and always open in Settings.
  */
-export function machineCollectionHref(row: MachineCollectionTarget, door: MachinesDoor = 'settings'): string {
+export function machineCollectionHref(row: MachineCollectionTarget, door: MachinesDoor = 'settings'): `/settings/machines/${string}` | `/machines/${string}` {
     if (row.kind === 'preset') return machinePresetCollectionHref(row);
     if (row.kind === 'managed') {
         return row.enrolledMachineId
@@ -234,7 +255,7 @@ export function machineCollectionHref(row: MachineCollectionTarget, door: Machin
     return machinePageHref({ door, target: { machineId: row.machineId, serverId: row.serverId } });
 }
 
-export function machinePresetCollectionHref(row: Readonly<{ serverId: string; presetId: string }>): string {
+export function machinePresetCollectionHref(row: Readonly<{ serverId: string; presetId: string }>): `/settings/machines/presets/${string}` {
     return `${MACHINE_PRESETS_ROUTE}/${encodeURIComponent(row.presetId)}?serverId=${encodeURIComponent(row.serverId)}`;
 }
 

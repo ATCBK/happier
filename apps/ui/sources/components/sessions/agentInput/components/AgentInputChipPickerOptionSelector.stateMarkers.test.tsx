@@ -1,6 +1,7 @@
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
 import { renderScreen } from "@/dev/testkit";
+import { HAPPIER_PAGE_METRICS } from '@happier-dev/plugin-ui/presentation';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -30,7 +31,7 @@ const SECTIONS = [{ id: "agents", options: [RUNNING, ARMED] }];
  * rail and the compact selector that has no checkmark at all.
  */
 describe("AgentInputChipPickerOptionSelector state semantics", () => {
-    it('uses the shared platform touch-target size for a rail option', async () => {
+    it('keeps a rail option at the control height, grown to the shared touch floor when that is larger', async () => {
         const { AgentInputChipPickerOptionSelector } = await import('./AgentInputChipPickerOptionSelector');
         const { resolveMinimumInteractiveTargetSize } = await import('@/components/ui/interactiveTargetSize');
 
@@ -48,7 +49,7 @@ describe("AgentInputChipPickerOptionSelector state semantics", () => {
         const style = row?.props.style({ pressed: false }) ?? [];
         const flattened = Object.assign({}, ...(Array.isArray(style) ? style : [style]).filter(Boolean));
 
-        expect(flattened.minHeight).toBe(resolveMinimumInteractiveTargetSize('web'));
+        expect(flattened.minHeight).toBe(Math.max(HAPPIER_PAGE_METRICS.controlHeightPx, resolveMinimumInteractiveTargetSize('web')));
     });
 
     it("publishes selection as state, and each row's own accessible name, in the rail", async () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { createTriageSourceV1Fixture } from '../testing/v1/fixtures.js';
-import { TriageSourceConnectedAccountInputsV1, TriageSourcesContributionProtocolV1 } from './index.js';
+import { TriageSourceConnectedAccountInputsV1, TriageSourceCredentialInputsV1, TriageSourcesContributionProtocolV1, triageSourceBindingComponentsV1 } from './index.js';
 import {
     TriageConfiguredSourceInstanceV1Schema,
     TriageListInstancesInputV1Schema,
@@ -20,7 +20,51 @@ const fixture = createTriageSourceV1Fixture();
 const instance = fixture.configuredInstance;
 const present = fixture.getResult;
 
+it('keeps complete editable values on the exact read, separate from bounded scan snapshots', () => {
+    const fields = { title: '界'.repeat(1000), body: 'Full Markdown\n\nwith trailing whitespace  \n', labelIds: [] };
+    expect(TriageGetResultV1Schema.safeParse({ ...present, taskFields: fields }).success).toBe(true);
+    expect(TriageGetResultV1Schema.safeParse({ ...present, taskFields: { unknown: 'value' } }).success).toBe(false);
+    expect(TriageScanResultV1Schema.safeParse({ kind: 'complete', observations: [{ ...present, taskFields: fields }], evidence: { kind: 'walkFinished' } }).success).toBe(false);
+});
+
 describe('Triage connected-Account source inputs', () => {
+    it('admits a credentialless current Account-data instance without accepting invented credentials', () => {
+        const binding = { purpose: 'example.api', source: 'accountData' };
+        const configured = TriageConfiguredSourceInstanceV1Schema.parse({ ...instance, binding });
+        expect(configured.binding).toEqual(binding);
+        expect(triageSourceBindingComponentsV1(configured.binding)).toEqual(['example.api', 'source', 'accountData']);
+        expect(triageSourceBindingComponentsV1(instance.binding)).toEqual([
+            instance.binding.purpose, instance.binding.account.service.pluginId,
+            instance.binding.account.service.localId, instance.binding.account.accountId,
+        ]);
+        const native = TriageConfiguredSourceInstanceV1Schema.parse({ ...instance, binding: {
+            purpose: 'example.api', source: 'native', service: { pluginId: 'example.source', localId: 'account-data' },
+        } });
+        expect(triageSourceBindingComponentsV1(native.binding)).toEqual([
+            'example.api', 'source', 'native', 'example.source', 'account-data',
+        ]);
+        for (const credentials of [
+            { account: instance.binding.account },
+            { service: instance.binding.account.service },
+            { accountId: 'invented-account' },
+        ]) {
+            expect(TriageConfiguredSourceInstanceV1Schema.safeParse({
+                ...instance, binding: { ...binding, ...credentials },
+            }).success).toBe(false);
+        }
+        const inputs = { scan: fixture.scanInput, get: fixture.getInput };
+        for (const role of ['scan', 'get'] as const) {
+            const input = inputs[role];
+            const operation = TriageSourcesContributionProtocolV1.operations[role].declaration.input;
+            const accountDataInput = { ...input, instance: configured };
+            expect(operation.kind === 'protocolDefined' && operation.schema.safeParse(accountDataInput).success).toBe(true);
+            expect(TriageSourceConnectedAccountInputsV1[role].safeParse(accountDataInput).success).toBe(false);
+            expect(TriageSourceCredentialInputsV1[role].safeParse(accountDataInput).success).toBe(false);
+            expect(TriageSourceCredentialInputsV1[role].safeParse(input).success).toBe(true);
+            expect(TriageSourceCredentialInputsV1[role].safeParse({ ...input, instance: native }).success).toBe(true);
+        }
+    });
+
     it('accepts Account bindings and rejects native bindings in every instance-bearing role', () => {
         const inputs = {
             scan: fixture.scanInput,

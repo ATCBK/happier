@@ -46,10 +46,10 @@ describe('Session Details destination Board composition', () => {
         const { SessionDetailsDestinationBody } = await import('./SessionDetailsDestinationBody');
         const { SessionBoardSurface } = await import('@/components/sessions/board/SessionBoardSurface');
         const { BoardWidgetAddPopover } = await import('@/components/widgets/add/BoardWidgetAddPopover');
-        const destination = (focused: boolean) => <runtime.Wrapper>
+        const destination = (focused: boolean, visible = true) => <runtime.Wrapper>
             <DestinationInstanceHost tabId="details-phone" ref={{ kind: 'sessionDetails',
                 params: { id: 's1', serverId: runtime.serverId, details: 'board' } }}
-                pathname="/session/s1/details" focused={focused} visible phone
+                pathname="/session/s1/details" focused={focused} visible={visible} phone
                 navigation={{ push: () => {}, replace: () => {}, back: () => {} }}>
                 <SessionDetailsDestinationBody />
             </DestinationInstanceHost>
@@ -64,6 +64,8 @@ describe('Session Details destination Board composition', () => {
         expect(surface!.props.resolvePrimaryHost('note-1'), 'The visible Details destination must own its executable Board bodies')
             .toBe('details');
         await screen.update(destination(false));
+        expect(screen.tree.findByType(SessionBoardSurface).props.resolvePrimaryHost('note-1')).toBe('details');
+        await screen.update(destination(false, false));
         expect(screen.tree.findByType(SessionBoardSurface).props.resolvePrimaryHost('note-1')).toBeNull();
         await screen.update(destination(true));
         expect(screen.findHostByTestId('session-board-pane-surface-placement-note-1')).not.toBeNull();

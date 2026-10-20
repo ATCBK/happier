@@ -54,7 +54,7 @@ export function describeProjectAgentGuidance(
   };
   const targetLines: string[] = [];
   const destination = guidance.destination;
-  if (destination && 'configured' in destination) {
+  if (destination && 'configured' in destination && destination.configured && destination.observation) {
     targetLines.push(`${t('projectWorkers.destination')}: ${destinationLabel(destination.configured)}`);
     const observation = destination.observation;
     if ('eligible' in observation) {

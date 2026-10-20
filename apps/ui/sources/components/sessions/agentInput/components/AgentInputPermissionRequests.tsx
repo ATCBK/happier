@@ -78,7 +78,7 @@ export const AgentInputPermissionRequests = React.memo(function AgentInputPermis
     const { theme } = useUnistyles();
 
     const permissionRequests = props.disabledReason === 'inactive' ? [] : props.permissionRequests;
-    const approvalRequests = props.disabledReason === 'inactive' ? [] : props.approvalRequests ?? [];
+    const approvalRequests = props.approvalRequests ?? [];
     const attentionRequests = React.useMemo<AttentionRequest[]>(() => [
         ...permissionRequests.map((request) => ({ kind: 'permission' as const, request })),
         ...approvalRequests.map((request) => ({ kind: 'approval' as const, request })),

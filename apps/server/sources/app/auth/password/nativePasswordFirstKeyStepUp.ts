@@ -20,7 +20,7 @@ export async function createNativePasswordFirstKeyStepUp(params: Readonly<{
     }
     if (!await verifyPlainAccountPasswordCredentialV1(candidate.parsed.credential, params.password)) return null;
     return await inTx(async tx => {
-        await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId);
+        await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId, "content");
         const current = await findNativePasswordAccount(candidate.normalizedEmail, tx);
         if (!current || current.account.id !== params.accountId || current.account.status !== "active"
             || current.parsed.mode !== "plain" || current.nativeIdentityId !== candidate.nativeIdentityId

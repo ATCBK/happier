@@ -197,7 +197,7 @@ export function createWorkflowRunStorageTestkit(params: Readonly<{
       case 'admit': {
         if (acceptedEnvelope === null) {
           acceptedEnvelope = String(operation.acceptedEnvelope);
-          if (operation.resultDelivery !== undefined) originDeliveryAckRevision = 0;
+          if (operation.resultDelivery?.kind === 'originating_session') originDeliveryAckRevision = 0;
           return { kind: 'created', run: summary() };
         }
         return { kind: 'existing', run: summary() };
@@ -278,6 +278,56 @@ export function createWorkflowRunStorageTestkit(params: Readonly<{
         });
         return { disposition: 'created', parentRevision: revision, invocations };
       }
+      case 'invocations.recover': {
+        // Mirror recoverWorkflowInvocations' atomic storage contract. The
+        // Action owner has already opened and authorized these opaque bytes.
+        const recoveries = operation.recoveries as readonly Readonly<{
+          invocationId: string; newInvocationId: string; contentEnvelope: string;
+        }>[];
+        if (recoveries.length === 0) throw storageError('invalid_input');
+        const replacementByPriorId = new Map<string, string>();
+        const prepared = recoveries.map(recovery => {
+          const previous = rows.get(recovery.invocationId);
+          if (!previous) throw storageError('currentness_conflict');
+          const parentRecordId = previous.index.parentRecordId === null ? null
+            : replacementByPriorId.get(previous.index.parentRecordId) ?? previous.index.parentRecordId;
+          replacementByPriorId.set(previous.index.id, recovery.newInvocationId);
+          return { ...recovery, previous, parentRecordId };
+        });
+        if (prepared.some(item => rows.has(item.newInvocationId))) {
+          const exact = revision === Number(operation.expectedRevision) + 1
+            && checkpointEnvelope === operation.checkpointEnvelope && prepared.every(item => {
+              const next = rows.get(item.newInvocationId);
+              return item.previous.index.lifecycle === 'superseded' && next?.contentEnvelope === item.contentEnvelope
+                && next.index.parentRecordId === item.parentRecordId && next.index.memberOrdinal === item.previous.index.memberOrdinal
+                && BigInt(next.index.attempt) === BigInt(item.previous.index.attempt) + 1n;
+            });
+          if (!exact) throw storageError('currentness_conflict');
+          return { disposition: 'existing', run: summary(), invocations: prepared.map(item => rows.get(item.newInvocationId)!.index) };
+        }
+        expectRevision();
+        if (state !== 'interrupted') throw storageError('currentness_conflict');
+        for (const item of prepared) {
+          if (!['failed', 'cancelled', 'needs_attention'].includes(item.previous.index.lifecycle)
+            || [...rows.values()].some(row => row.index.parentRecordId === item.previous.index.parentRecordId
+              && row.index.memberOrdinal === item.previous.index.memberOrdinal
+              && BigInt(row.index.attempt) > BigInt(item.previous.index.attempt))) throw storageError('ineligible_state');
+        }
+        const last = ordered().at(-1);
+        const firstSequence = last ? BigInt(last.index.sequence) + 1n : 0n;
+        revision += 1;
+        state = 'queued';
+        custodyState = 'pending';
+        checkpointEnvelope = String(operation.checkpointEnvelope);
+        const invocations = prepared.map((item, index) => {
+          rows.set(item.previous.index.id, { ...item.previous, index: { ...item.previous.index, lifecycle: 'superseded',
+            contentRevision: (BigInt(item.previous.index.contentRevision) + 1n).toString() } });
+          return admitRow({ id: item.newInvocationId, sequence: (firstSequence + BigInt(index)).toString(),
+            parentRecordId: item.parentRecordId, memberOrdinal: item.previous.index.memberOrdinal,
+            attempt: (BigInt(item.previous.index.attempt) + 1n).toString(), lifecycle: 'pending', contentEnvelope: item.contentEnvelope });
+        });
+        return { disposition: 'accepted', run: summary(), invocations };
+      }
       case 'invocations.get': {
         const row = rows.get(String(operation.invocationId));
         if (!row) throw notFound();
@@ -338,8 +388,15 @@ export function createWorkflowRunStorageTestkit(params: Readonly<{
         if (operation.lifecycle === 'admitting') expectInputAdmissionOpen();
         const contentEnvelope = String(operation.contentEnvelope);
         if (row.index.lifecycle === operation.lifecycle && row.contentEnvelope === contentEnvelope) return { ...row.index, parentRevision: revision };
+        const resolvesObservedTerminal = operation.resolution === 'observed_terminal_execution'
+          && (operation.expectedRevision !== undefined
+            ? ['completed', 'failed', 'cancelled', 'needs_attention'].includes(String(operation.lifecycle))
+            : operation.lifecycle === 'completed' || operation.lifecycle === 'needs_attention'
+              || ((operation.lifecycle === 'failed' || operation.lifecycle === 'cancelled')
+                && TERMINAL_RUN_STATES.some(candidate => candidate === state)));
         if (TERMINAL_INVOCATION_LIFECYCLES.some((candidate) => candidate === row.index.lifecycle)
-          && operation.lifecycle !== row.index.lifecycle) {
+          && operation.lifecycle !== row.index.lifecycle
+          && !(row.index.lifecycle === 'outcome_uncertain' && resolvesObservedTerminal)) {
           throw storageError('currentness_conflict');
         }
         const index = WorkflowRunInvocationIndexV1Schema.parse({

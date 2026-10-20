@@ -128,6 +128,7 @@ function readRenderablePatchReadableActivity(sessionId: string) {
     return summarizeSessionListReadableActivityFromMessageRecords(
         sessionMessages.messageIdsOldestFirst,
         sessionMessages.messagesById,
+        sessionMessages.renderableAggregate,
     );
 }
 
@@ -982,9 +983,9 @@ export async function buildUpdatedSessionListRenderablePatchFromSocketUpdate(par
         activeAt: nextActiveAt,
         thinking: nextThinking,
         thinkingAt: nextThinkingAt,
-        // A durable update can invalidate a previous ephemeral observation, but `active` itself
-        // is not evidence that this device can currently reach the runtime.
-        ...(typeof updateBody.active === 'boolean' ? { presence: undefined } : {}),
+        // Durable lifecycle facts do not replace the device's ephemeral
+        // reachability observation. Retain it just as the detail projector does;
+        // an unobserved runtime stays unknown until its activity arrives.
         meaningfulActivityAt:
             typeof updateBody.meaningfulActivityAt === 'number'
                 ? updateBody.meaningfulActivityAt

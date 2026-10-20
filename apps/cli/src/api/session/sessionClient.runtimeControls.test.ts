@@ -17,11 +17,13 @@ type CapturedRuntimeHandlerRegistration = {
   rpcHandlerManager: Parameters<typeof registerSessionControlHandlers>[0];
   getSessionMetadata: NonNullable<Parameters<typeof registerSessionControlHandlers>[1]['getSessionMetadata']>;
   sessionRuntimeControls: Parameters<typeof registerSessionControlHandlers>[1]['sessionRuntimeControls'];
+  waitForAppliedChildSelectionReader?: (signal: AbortSignal) => Promise<boolean>;
 };
 const runtimeHandlerRegistrations = vi.hoisted(() => [] as Array<{
   rpcHandlerManager: Parameters<typeof registerSessionControlHandlers>[0];
   getSessionMetadata: NonNullable<Parameters<typeof registerSessionControlHandlers>[1]['getSessionMetadata']>;
   sessionRuntimeControls: Parameters<typeof registerSessionControlHandlers>[1]['sessionRuntimeControls'];
+  waitForAppliedChildSelectionReader?: (signal: AbortSignal) => Promise<boolean>;
 }>);
 
 vi.mock('@/features/usageLimitRecoveryFeatureGate', () => ({
@@ -75,6 +77,7 @@ vi.mock('./client/executionRuns/registerSessionClientRuntimeHandlers', () => ({
       rpcHandlerManager: params.rpcHandlerManager,
       getSessionMetadata: params.getSessionMetadata,
       sessionRuntimeControls: params.sessionRuntimeControls,
+      waitForAppliedChildSelectionReader: params.waitForAppliedChildSelectionReader,
     });
   }),
 }));
@@ -94,6 +97,38 @@ describe('ApiSessionClient runtime controls', () => {
     sessionSocketStub = null;
     userSocketStub = null;
     runtimeHandlerRegistrations.length = 0;
+  });
+
+  it('joins applied-child reader installation and refuses cancelled or withdrawn waits', async () => {
+    sessionSocketStub = createApiSessionSocketStub({ connected: true });
+    userSocketStub = createApiSessionSocketStub({ connected: true });
+    const client = createTestApiSessionClient(ApiSessionClient, 'tok', createPlainSessionFixture({ id: 's1' }));
+    const wait = runtimeHandlerRegistrations.at(-1)?.waitForAppliedChildSelectionReader;
+    expect(wait).toBeTypeOf('function');
+    if (!wait) throw new Error('Applied-child reader readiness was not bound');
+    const cancelled = new AbortController();
+    let cancellationSettled = false;
+    const cancellation = wait(cancelled.signal).then(result => { cancellationSettled = true; return result; });
+    await Promise.resolve();
+    expect(cancellationSettled).toBe(false);
+    cancelled.abort();
+    await expect(cancellation).resolves.toBe(false);
+    const lifetime = new AbortController();
+    let settled = false;
+    const pending = wait(lifetime.signal).then(result => { settled = true; return result; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    client.setSessionRuntimeControls({ readAppliedChildSelection: async () => ({ status: 'unavailable' }) });
+    await expect(pending).resolves.toBe(true);
+    await expect(wait(lifetime.signal)).resolves.toBe(true);
+    client.setSessionRuntimeControls(null);
+    await expect(wait(lifetime.signal)).resolves.toBe(false);
+    const retiring = createTestApiSessionClient(ApiSessionClient, 'tok', createPlainSessionFixture({ id: 's2' }));
+    const waitForRetiring = runtimeHandlerRegistrations.at(-1)?.waitForAppliedChildSelectionReader;
+    if (!waitForRetiring) throw new Error('Retiring Session reader readiness was not bound');
+    const withdrawal = waitForRetiring(lifetime.signal);
+    retiring.setSessionRuntimeControls(null);
+    await expect(withdrawal).resolves.toBe(false);
   });
 
   it('publishes the V1 pending wake through the session client', async () => {

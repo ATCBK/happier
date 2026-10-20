@@ -138,7 +138,7 @@ async function resolveTwoAssistantPluginRegistry() {
 describe('two plugins declaring the same local Agent id', () => {
     it('preserves the bundled Oh My Pi operational identity without lending it to external plugins', () => {
         const identity = { pluginId: 'happier.agent.ohmypi', localId: 'ohmypi' };
-        expect(resolveContributedAgentRoutingId({ ...identity, provenance: 'first_party' })).toBe('ohMyPi');
+        expect(resolveContributedAgentRoutingId({ ...identity, provenance: 'first_party' })).toBe('ohmypi');
         expect(resolveContributedAgentRoutingId({ ...identity, provenance: 'external' })).toBe('happier.agent.ohmypi/ohmypi');
         expect(resolveContributedAgentRoutingId({ pluginId: 'acme.other', localId: 'ohmypi', provenance: 'first_party' })).toBe('ohmypi');
     });

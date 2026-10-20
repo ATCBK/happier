@@ -40,13 +40,16 @@ vi.mock('@/components/sessions/transcript/MessageView', () => ({
     MessageViewWithSessionCommon: (props: Record<string, unknown>) => React.createElement('MessageViewWithSessionCommon', props),
 }));
 
-vi.mock('@legendapp/list/react-native', async () => {
+vi.mock('@legendapp/list/react-native', async (importOriginal) => {
+    const original = await importOriginal<typeof import('@legendapp/list/react-native')>();
     const { createCapturingLegendListMock } = await import('@/dev/testkit/mocks/legendList');
-    const mock = createCapturingLegendListMock();
+    const mock = createCapturingLegendListMock({ original });
     legendListCapture.state = mock.state;
     return mock.module;
 });
 
+// Compile the real transcript graph during collection, after installing its boundaries.
+const { ChainTranscriptList: ChainContent } = await import('./ChainTranscriptList');
 
 function createChainTestRoot(Content: typeof import('./ChainTranscriptList')['ChainTranscriptList']) {
     return function ChainTestRoot(props: React.ComponentProps<typeof Content>) {
@@ -65,7 +68,6 @@ describe('ChainTranscriptList explicit jump takeover', () => {
 
     it('acquires renderer takeover before older loading and aborts the request on unmount', async () => {
         const { Platform } = await import('react-native');
-        const { ChainTranscriptList: ChainContent } = await import('./ChainTranscriptList');
         const ChainTranscriptList = createChainTestRoot(ChainContent);
         const originalPlatform = Platform.OS;
         Object.defineProperty(Platform, 'OS', { configurable: true, value: 'web' });

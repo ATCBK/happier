@@ -214,7 +214,7 @@ export function projectWorkflowTriggerRows(set: WorkflowTriggerSetV1 | null, dra
 export type WorkflowTriggerWriter = Readonly<{
     add: (request: WorkflowTriggerAddRequestV1) => Promise<WorkflowTriggerWriteResult>;
     update: (request: WorkflowTriggerUpdateRequestV1) => Promise<WorkflowTriggerWriteResult>;
-    remove: (request: WorkflowTriggerRemoveRequestV1) => Promise<WorkflowTriggerWriteResult>;
+    remove: (request: WorkflowTriggerRemoveRequestV1 & Readonly<{ triggerId: AutomationTriggerId }>) => Promise<WorkflowTriggerWriteResult>;
 }>;
 
 export type WorkflowTriggerSaveResult =

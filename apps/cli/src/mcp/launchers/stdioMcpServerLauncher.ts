@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { observeProcessLaunch } from '@/processes/launchNotification';
 import { readFile } from 'node:fs/promises';
 
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ReadBuffer, serializeMessage } from '@modelcontextprotocol/sdk/shared/stdio.js';
 import { ErrorCode, type RequestId } from '@modelcontextprotocol/sdk/types.js';
 import { withHostProcessOwnerEnvironment } from '@/processes/ownerTag';
@@ -12,10 +12,10 @@ import { buildScopedProcessEnv } from '@/utils/processEnv/buildScopedProcessEnv'
 
 
 const StdioMcpServerLauncherConfigSchema = z.object({
-  command: z.string().min(1),
-  args: z.array(z.string()).optional().default([]),
-  env: z.record(z.string(), z.string()).optional().default({}),
-  cwd: z.string().min(1).optional(),
+  command: z.string().check(z.minLength(1)),
+  args: z._default(z.optional(z.array(z.string())), []),
+  env: z._default(z.optional(z.record(z.string(), z.string())), {}),
+  cwd: z.optional(z.string().check(z.minLength(1))),
 });
 
 type StdioMcpServerLauncherConfig = z.infer<typeof StdioMcpServerLauncherConfigSchema>;

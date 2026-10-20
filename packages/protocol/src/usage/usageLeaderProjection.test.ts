@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { repriceUsageAnalyticsResponse } from './usageCost.js';
+import { repriceUsageAnalyticsResponse, projectUsagePageCost, resolveUsageCostForSelection } from './usageCost.js';
 import { buildUsageBreakdownList } from './usageLeaderProjection.js';
 import { UsageAnalyticsContributionSchema, UsageAnalyticsQueryResponseSchema } from './usageAnalyticsContracts.js';
 
@@ -7,6 +7,55 @@ const contribution = { id: 'row', observedAtMs: 1, sessionId: 'session', turnId:
     machineId: null, projectKey: null, workspaceId: null, source: 'runtime',
     tokens: { input: 1, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: 1 },
     cost: { reportedUsd: 0, estimatedUsd: 0, costSource: 'none', currency: 'USD' } };
+
+it('ranks counted contributions without copying their unrelated evidence fields', () => {
+    const rows = Array.from({ length: 100 }, (_, index) => ({ ...contribution, id: String(index), eventCount: 1,
+        cost: { ...contribution.cost, reportedUsd: 1, costSource: 'provider_reported' as const } }));
+    let unrelatedReads = 0;
+    for (const row of rows) Object.defineProperty(row, 'context', { enumerable: true, get() { unrelatedReads++; return undefined; } });
+    const result = projectUsagePageCost({ v: 1, totals: { eventCount: rows.length, tokens: contribution.tokens, cost: rows[0]!.cost },
+        contributions: rows, leaders: { models: [{ key: 'model', eventCount: rows.length, tokens: contribution.tokens, cost: rows[0]!.cost }] } }, 'auto');
+    expect(result.accounting.leaders?.models?.[0]).toMatchObject({ key: 'model', eventCount: 100, cost: { effectiveUsd: 100 } });
+    expect(unrelatedReads).toBe(0);
+});
+
+it('buckets the same selected Claude money as the breakdown across a midnight-spanning reported total', () => {
+    // QA-LIVE-17's null Oct 11 day; the full QA-LIVE-11 capture exposes the
+    // cross-midnight report witness. IDs are anonymized; clocks/money are real.
+    const start = 1791669600000;
+    const midnight = 1791756000000;
+    const tokens = { ...contribution.tokens, input: 24315, total: 24315 };
+    const estimated = { reportedUsd: 0, estimatedUsd: 0.0300936, currency: 'USD', costSource: 'pricing_estimate' as const };
+    const rows = [
+        { ...contribution, id: 'covered', agentId: 'claude', modelId: 'not-in-catalog', eventCount: 1,
+            observedAtMs: 1791742621323, tokens, cost: { ...estimated, reportedTotalId: 'final' } },
+        { ...contribution, id: 'estimated', agentId: 'claude', modelId: 'not-in-catalog', eventCount: 1,
+            observedAtMs: 1791742623410, tokens, cost: estimated },
+        { ...contribution, id: 'final', agentId: 'claude', modelId: null, eventCount: 1,
+            observedAtMs: 1791764104404, tokens: { ...tokens, input: 0, total: 0 },
+            cost: { reportedUsd: 0.138759, estimatedUsd: 0, currency: 'USD', costSource: 'provider_reported' as const,
+                reportedTotalContributionIds: ['covered'] } },
+    ];
+    const raw = { eventCount: 3, tokens, cost: { ...estimated, reportedUsd: 0.138759 } };
+    const response = UsageAnalyticsQueryResponseSchema.parse({ v: 1, totals: raw, contributions: rows,
+        breakdowns: { agent: [{ key: 'claude', ...raw }] },
+        series: [start, midnight].map(bucketStartMs => ({ ...raw, bucketStartMs, bucketEndMs: bucketStartMs + 86400000 })),
+        engineTimeline: [start, midnight].map(bucketStartMs => ({ bucketStartMs, bucketEndMs: bucketStartMs + 86400000,
+            leaders: [{ key: 'claude', ...raw }] })),
+    });
+    const repriced = repriceUsageAnalyticsResponse(response);
+    const page = projectUsagePageCost(UsageAnalyticsQueryResponseSchema.parse(JSON.parse(JSON.stringify(repriced))), 'auto');
+    const days = page.accounting.engineTimeline!.map(bucket => resolveUsageCostForSelection(bucket.leaders[0]!.cost!, page.selection));
+    expect(days).toEqual([0.0300936, 0.138759]);
+    expect(page.accounting.series!.map(bucket => resolveUsageCostForSelection(bucket.cost, page.selection))).toEqual(days);
+    expect(days.reduce<number>((sum, value) => sum + value!, 0)).toBeCloseTo(page.amountUsd!);
+    expect(resolveUsageCostForSelection(page.accounting.breakdowns!.agent![0]!.cost, page.selection)).toBeCloseTo(page.amountUsd!);
+    // Bucketing does not relabel the covered inference as a second charge.
+    expect(page.accounting.contributions).toEqual(repriced.contributions);
+    const dayQuery = projectUsagePageCost({ ...repriced,
+        contributions: repriced.contributions!.filter(row => row.observedAtMs < midnight) }, 'auto');
+    expect(dayQuery.amountUsd, 'a new day-scoped query cannot attribute the absent report').toBeNull();
+});
 
 it('uses one model identity for the real QA snapshot, alias and newer Haiku generation before ranking', () => {
     // Token amounts and model ids from the QA usage.query model ranking, 2026-10-11.
@@ -110,4 +159,30 @@ it('re-prices a retained snapshot-key ranking without inventing missing legacy e
     }, {}, 'api_equivalent');
     expect(result.breakdowns?.model?.[0]).toMatchObject({ key: modelId, eventCount: 3, cost: { apiEquivalentUsd: 2 } });
     expect(result.leaders?.models?.[0]).toMatchObject({ key: modelId, eventCount: 3, cost: { apiEquivalentUsd: 2 } });
+});
+
+it('partitions legacy contributions once per ranked surface instead of rescanning for every candidate', () => {
+    const count = 600;
+    const cost = { ...contribution.cost, reportedUsd: 1, costSource: 'provider_reported' as const };
+    const entries = Array.from({ length: count }, (_, index) => ({ key: `model-${index}`, eventCount: 1,
+        tokens: contribution.tokens, cost }));
+    const response = UsageAnalyticsQueryResponseSchema.parse({ v: 1,
+        totals: { eventCount: count, tokens: { ...contribution.tokens, input: count, total: count }, cost },
+        contributions: entries.map(entry => ({ ...contribution, id: entry.key, modelId: entry.key, cost })),
+        leaders: { models: entries }, breakdowns: { model: entries },
+    });
+    let dimensionReads = 0;
+    for (const row of response.contributions!) {
+        const modelId = row.modelId;
+        Object.defineProperty(row, 'modelId', { enumerable: true, get() { dimensionReads++; return modelId; } });
+    }
+    const page = projectUsagePageCost(response, 'auto');
+    expect(page.amountUsd).toBe(count);
+    expect(page.accounting.leaders?.models?.map(entry => [entry.key, entry.eventCount, entry.cost?.effectiveUsd]))
+        .toEqual(entries.map(entry => [entry.key, 1, 1]));
+    expect(page.accounting.breakdowns?.model?.map(entry => [entry.key, entry.eventCount, entry.cost.effectiveUsd]))
+        .toEqual(entries.map(entry => [entry.key, 1, 1]));
+    // Two separately projected surfaces each need one pass over the population.
+    // Count real row reads rather than imposing a machine-dependent wall-clock budget.
+    expect(dimensionReads).toBeLessThanOrEqual(count * 2);
 });

@@ -2,7 +2,7 @@ import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApprovalRequestSchema } from '@happier-dev/protocol/approvals/approvalRequestV1';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { renderScreen, standardCleanup } from '@/dev/testkit';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
@@ -35,7 +35,7 @@ describe('flat-list production Action completion', () => {
         await homes.reset();
         const serverId = await homes.addHome({ name: 'Reorder', serverUrl: 'https://reorder.test', accountId: 'alice' });
         connection = await restoreServerAccountForTest({ serverUrl: 'https://reorder.test', accountId: 'alice', request: homes.request });
-        await homes.requireUiApproval(serverId, 'todos.reorder');
+        await homes.requireUiApproval(serverId, 'tasks.internal.reorder');
         homes.answer(serverId, '/v1/account/encryption/currentness', { body: createPlainAccountEncryptionCurrentnessFixture() });
         const todos = ['one', 'two'].map(id => ({ id, title: id, done: false, createdAt: 1, updatedAt: 1 }));
         storage.getState().applyTodos({ todos: Object.fromEntries(todos.map(todo => [todo.id, todo])), undoneOrder: ['one', 'two'], doneOrder: [], versions: {} });
@@ -63,7 +63,7 @@ describe('flat-list production Action completion', () => {
                 return artifact!;
             });
             const request = ApprovalRequestSchema.parse(JSON.parse(homes.artifacts(serverId).readPlainBody(artifact.id) ?? 'null'));
-            expect(request).toMatchObject({ status: 'open', actionId: 'todos.reorder', actionArgs: admission.effect.input });
+            expect(request).toMatchObject({ status: 'open', actionId: 'tasks.internal.reorder', actionArgs: admission.effect.input });
             expect(settled).toBe(false);
             expect(writes).toBe(0);
             await act(async () => {

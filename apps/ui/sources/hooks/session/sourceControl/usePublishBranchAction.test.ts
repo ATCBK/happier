@@ -17,8 +17,8 @@ const publishResponses = vi.fn();
 const publishRequests = () => harness.network.requests.filter(request => request.method === RPC_METHODS.SCM_REMOTE_PUBLISH);
 
 describe('usePublishBranchAction', () => {
-    beforeEach(() => {
-        harness.reset();
+    beforeEach(async () => {
+        await harness.reset();
         publishResponses.mockReset();
         harness.network.setRpcResponder(async request => {
             if (request.method === RPC_METHODS.SCM_REPOSITORY_REMOVE_INDEX_LOCK) return { success: true, removed: true, lockPath: '/repo/.git/index.lock' };

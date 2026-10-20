@@ -10,9 +10,18 @@ This page describes **0.3 development / Developer Preview source**. Exact field 
 
 Schemas use the public SDK `/protocol` composition algebra and `/contributions` authoring seam. The [SDK feature-protocol dependency policy](../packages/plugin-sdk/src/featureProtocolPackagePolicy.test.ts) owns admissible public imports; do not import private `@happier-dev/protocol`, Zod, host internals or a source plugin, and do not handwrite a second JSON Schema/parser. Schema evolution follows [compatibility](compatibility.md#sdk-protocol-evolution).
 
+In 0.3 development source, the minimal `TriageEntryRefV1Schema` and
+`TriageEntryRefV1` live at Protocol's
+[`tasks/entryRefV1`](../packages/protocol/src/tasks/entryRefV1.ts) subpath so core
+consumers such as Discussion anchors need no dependency on the feature package.
+The public SDK `/protocol` facade and Triage's existing V1 exports project the
+same executable parser, JSON Schema and UTF-8/delimiter rules. This ownership
+move preserves the closed source-qualified wire identity; configured execution
+targets, mutable locators and source access remain feature-owned.
+
 ## Contributions and caller-bound administration
 
-[`contribution.ts`](../packages/triage-protocol/src/v1/contribution.ts) declares `happier.triage/sources` V1 and the target-owned point, with at most one contribution per source plugin. It defines the required list/scan/get operations and detail surface plus optional PR-status/workspace roles. Operation roles reference ordinary source Actions; they are not implementation imports, convention-derived Action ids or a source-specific host registry.
+[`contribution.ts`](../packages/triage-protocol/src/v1/contribution.ts) declares `happier.triage/sources` V1 and the target-owned point, with at most one contribution per source plugin. It defines the required list/scan/get operations and detail surface plus optional PR-status/workspace and task roles. Operation roles reference ordinary source Actions; they are not implementation imports, convention-derived Action ids or a source-specific host registry.
 
 The public [source conformance check](../packages/triage-protocol/src/testing/v1/conformance.ts) reads requiredness from those canonical declarations. An optional role may be omitted; when supplied, its binding must still satisfy the declared Action or surface contract. Conformance maintains no separate list of optional role names.
 
@@ -24,27 +33,196 @@ menu placement, not Action invocation. Discovery never creates a source and neve
 returns credential material; source administration retains its shared approval
 default for Account writes.
 
+Source settings supplies its discovery Action's `connectedAccountPurpose` to
+the shared settings factory. Connect/Manage opens the host's existing purpose
+setup for that qualified Action. Selecting an existing account or pool writes
+the canonical purpose default; return and Refresh to discover candidates.
+Creating a connection alone does not bind this purpose. Agents use the same
+approval-controlled `connectedServices.purposes.default.set` Action with the
+declaration machine, qualified discovery consumer/purpose, and exact target.
+Discovery retains `use` authority and performs no selection write.
+
 Account-only sources declare their Action inputs with the shared
 `TriageSourceConnectedAccountInputsV1` schemas from the same protocol owner.
 These preserve each role's fields while requiring a configured-account instance.
-Conformance accepts exactly that specialization or the generic role schema,
-not an independently authored variant. Account-purpose declarations still have
-to address an exact credential selection in every input arm; native-capable
-sources use the generic schema and declare the native-service selection path.
+Conformance accepts the generic role schema or the canonical account-only and
+credential-bearing specializations, not an independently authored variant.
+Account-purpose declarations still have to address an exact credential selection
+in every input arm. Native-capable sources use `TriageSourceCredentialInputsV1`
+and declare the native-service selection path; this specialization excludes
+Account-data authority while retaining both real credential arms.
+Sources backed by the current authenticated Account's data also use the generic
+schema, with its explicit Account-data binding. This binding carries no
+Connected Account or native-service selector; its source reauthorizes the current
+Account service on each invocation. The canonical binding-component owner keeps
+all three authority arms distinct.
 
 [`sources/administer-v1`](../packages/triage-protocol/src/v1/sourceAdministration.ts) is the one caller-bound lifecycle mutation ABI: create, reconfigure, remove and reactivate. [`sources/read-configured-v1`](../packages/triage-protocol/src/v1/configuredInstances.ts) is its read half. An optional `source` names an admitted contribution address, never caller provenance. The host stamps provenance, and the target's [`callerSource.ts`](../packages/plugins/triage/src/actions/callerSource.ts) resolves the admitted source before either Action exposes or changes rows. Plugin callers stay within their own source. Host agent/MCP/CLI callers can read all admitted configured sources or filter by that address; create requires an exact admitted source address, while lifecycle operations resolve the source from their stored instance and reject an inconsistent supplied address.
 
 Triage's [`administerConfiguredSourceInstance.ts`](../packages/plugins/triage/src/corpus/configuration/administerConfiguredSourceInstance.ts) owns configured-instance writes and the exact source-ownership comparison. [`readConfiguredSourceRows.ts`](../packages/plugins/triage/src/corpus/configuration/readConfiguredSourceRows.ts) supplies the shared active-row read and cursor handling. Discovery produces candidates, not automatic durable creation; mounted source Settings uses the administration Action rather than a direct Collection writer. The read ABI distinguishes complete from truncated results and refuses invalid or changed caller authority.
 
-In 0.3 development source, the durable `source-instances` Collection is v3 because
-its embedded Connected Account service schema also admits the reserved
-`happier/mcp-sign-in` identity. Its existing migration artifact carries v1/v2 rows
-forward unchanged; the widening changes neither configured-source identity nor
-private configuration. `session-links` and `user-marks` remain v2 because their
+Uninstalling or disabling a source does not retire its configured instances. The
+mounted list and Manage sources retain those active Account records, with the
+list reporting that source as unavailable. The caller-scoped configured read
+filters by currently admitted contributions, so its complete result may contain
+fewer records than those Account-backed surfaces; that difference alone does
+not establish stale mounted configuration.
+
+In 0.3 development source, the durable `source-instances` Collection is v4. Its
+binding admits credentialless current Account data; the preceding v3 also admitted
+the reserved `happier/mcp-sign-in` Connected Account identity. The same migration
+artifact carries v1/v2/v3 rows forward unchanged; the widening changes neither
+existing configured-source identity nor private configuration. `session-links` and `user-marks` remain v2 because their
 entry references do not embed that service schema. The canonical Availability
 guard still refuses equal-version declarations with different contract digests.
 
 The source plugin retains its private configuration-token encoding and provider-specific behavior. Triage business behavior stays in `packages/plugins/triage`; shared host code stays source-neutral. Do not use this schema package as a new source service, credential store or corpus persistence owner.
+
+The mounted detail receives a launch projection admitted by the host's exact
+`PluginUiLaunchInputV1Schema`, exposed through the public SDK `/ui` entry. When
+necessary, Triage's existing detail-input owner keeps relationship counts and
+editable-field summaries while omitting full relationship/workflow lists with
+`projectionTruncated`. The source's live detail read retains the full content.
+Linked Sessions use a prefix with `linkedSessionsHasMore` when the launch cannot
+carry the whole Collection page; the common header retains the complete read
+page. Identity, selected instance, locator and observation stamps stay exact.
+
+### Task sources (0.3 development source)
+
+The same contribution protocol declares optional `create`, `edit` and
+`transition` roles for task kinds. They bind ordinary source Actions with closed
+inputs and outcomes and a remote-write approval default. A source declares its
+editable fields and native transitions through the existing kind descriptor;
+live entry facts may refine a dynamic workflow. Read-only sources omit these
+roles and remain admissible. The executable layouts and public exports live in
+[`tasks.ts`](../packages/triage-protocol/src/v1/tasks.ts), rather than a second
+SDK or host Tasks API.
+
+The source owns authorization, provider validation and confirming reads. Its
+native Action and contribution role share the same implementation. Triage's
+`tasks/list-v1`, `tasks/create-v1`, `tasks/edit-v1`, `tasks/transition-v1` and
+`tasks/link-v1` Actions consume the existing configured-source, list and link
+owners. They dispatch through the exact admitted role; they do not retry an
+uncertain write. Sources reuse
+[`writeSettlement.ts`](../packages/triage-sources/src/invocation/writeSettlement.ts)
+when their provider contract requires at-most-once confirmation. Task body
+inputs preserve multiline document text; row-display strings retain their
+existing single-line projection rules.
+
+For task editing, the existing exact `get` result can return optional
+`taskFields`, using the same closed field vocabulary as edit inputs. Each
+included value is complete; an omitted value means unavailable. These values
+stay local to the edit read and never enter scan results, snapshots or the
+retained list projection. The generic detail form loads them before editing,
+offers only fields declared in `taskCapabilities.editFields` whose current
+values were returned, and submits only changes through `tasks/edit-v1`.
+Snapshot `projectionTruncated` describes display completeness and does not
+disable an unrelated complete field. Sources without full values remain
+readable and show the edit-read failure rather than seeding an empty field.
+
+Task create, edit and transition controls follow the selected source's declared
+roles, configured instance and host execution readiness. An age-stale list or an
+unrelated unavailable source does not disable a ready task's controls. Pending
+or unavailable Machine execution still disables writes, and the source Action
+retains authorization and confirming-read authority.
+
+Task category is derived by the single public `triageTaskStatusCategoryV1`
+mapper from the existing entry state, including its optional active stage and
+terminal completion reason. Unknown or unclassified suppressed states remain
+unclassified. Agent activity and waiting are still derived from linked Sessions.
+Optional parent, children summary and blocked-by facts use the existing complete
+entry reference. External sources materialize these relationships live; the
+contract adds no provider mirror, task store or relationship writer.
+
+Sources whose own domain record owns task-to-Session relationships may bind the
+optional `linkSession` and `readSessionLinks` roles. Both use the exact admitted
+configured instance and source-local entry reference. The write role retains
+remote-write approval; the read role returns complete current-Account,
+current-Home relationships or an explicit source failure. An omitted role leaves
+external-entry links with Triage's existing relationship owner. These roles add
+no second link store or credential authority. Their closed executable inputs and
+results live in
+[`sessionLinks.ts`](../packages/triage-protocol/src/v1/sessionLinks.ts).
+
+### Error-source writes (0.3 development source)
+
+Sentry's [native write Actions](../packages/plugins/sentry/src/source/writeOperations.ts)
+resolve, archive forever, or assign one issue. They use the existing exact-account
+HTTP client, refuse a merge observed during preflight, and confirm the requested
+status/substatus or assignee identity through a fresh issue read. PostHog's
+[source operations](../packages/plugins/posthog/src/source/operations.ts) resolve,
+assign, suppress, or unsuppress one issue through its configured Team route; assignment uses the
+provider's separate assignment endpoint. Its confirming read uses authoritative
+CRUD metadata rather than query-window enrichment.
+
+These Actions declare remote writes and confirmation metadata, retaining the
+shared Action policy's approval default on UI, agent, MCP and CLI surfaces.
+Read-only credentials remain usable for reads; writes need Sentry `event:write`
+or PostHog `error_tracking:write`. Both sources use the shared settlement owner
+above, dispatch once, and report uncertainty when a fresh read cannot establish
+the desired result. A lost response never causes automatic replay. PostHog has
+no generic Ignore Action: its published writer rejects `archived`, and
+`suppressed` is not substituted. The separate Suppress issue Action warns that
+PostHog will drop future events for this issue; Unsuppress returns it to `active`
+for future events, without recovering events already dropped. Both use the same
+approval-by-default policy, configurable in Settings → Actions. Real-tenant write validation remains a release
+check; these development-source handlers do not establish released availability.
+
+### Personal Happier tasks (0.3 development source)
+
+The built-in `internal` source in `happier.triage` reads the current Account's
+existing unqualified `todo.<id>` records and `todo.index`. Its configured
+binding uses `source: 'accountData'`; it has no Connected Account or machine
+login. Explicit source setup still uses the same source-administration writer.
+The plugin invokes the public `tasks.internal.*` host Actions rather than
+reading plugin-namespaced KV or copying tasks into a Collection. The Protocol
+[todo owner](../packages/protocol/src/todos/todoSessionLinkV1.ts) owns additive
+fields, completion projection, and Session-link CAS; its
+[Action operations](../packages/protocol/src/todos/todoActionOperationsV1.ts)
+preserve the existing index ordering. Both authenticated transports enforce the
+Account encryption mode. Earlier records without task refinements, including
+bare Session-key links, remain readable.
+
+Internal task links live only in `todo.<id>.linkedSessions`. The optional
+`linkSession` and `readSessionLinks` source roles let the existing entry Session
+orchestrator and linked-work readers reach that owner through admitted handles.
+External entries retain the existing `session-links` v2 owner. The
+[source-neutral relation dispatcher](../packages/plugins/triage/src/sessions/sourceSessionRelations.ts)
+selects the declared source role, refuses a failed source write without falling
+through, and explicitly removes an existing v2 duplicate only after the source
+commit. Detail/header and Session cockpit consume the same source relationship
+projection; unavailable source reads retain known work with a stale notice.
+The Session-source read reports coverage per configured instance. A missing
+contribution or failed source role leaves healthy sources readable and returns
+`partial` coverage with the unavailable source named; typed source failures and
+safe invocation codes remain in that lane's diagnostic. A source that declares
+neither relationship role uses the external Collection reader. Incomplete reads
+never become a complete empty cockpit. Refresh replaces healthy-source links
+while retaining last-known links only for sources whose read remains incomplete.
+Legacy `/zen` links redirect to Tasks and keep the selected task identity. The
+Zen-specific draft/start/link route is retired; Start/Send uses the ordinary
+entry attachment and Session orchestrator.
+
+The Jira source in 0.3 development uses the public Connected Accounts manual
+authentication lifecycle for one Jira Cloud site, account email and an unscoped
+personal API token. The host stores credentials; the source materializes them
+only for that exact site. Project discovery and the source-native draft editor
+use the shared settings owner. The editor chooses involvement and discovers the
+native issue type used for creation; it does not guess a type or persist issues.
+See Jira's [API-token authentication contract](https://developer.atlassian.com/cloud/jira/platform/basic-auth-for-rest-apis/).
+
+Jira issue identity uses the numeric issue id, not the mutable issue key. Enhanced
+JQL search supplies continuation tokens, status categories refine task state,
+and schema-identified Sprint fields, parent/subtasks and inward blocking links
+remain live read facts. Exact reads expose offered edit fields and executable
+native transitions; writes reauthorize against fresh provider metadata and
+confirm their outcome through reads. Create, edit and transition bind the task
+roles; comment is an ordinary named Action. An ambiguous write is never blindly
+replayed. Provider rate-limit evidence uses the shared pacing contract, and a
+permission-masked 404 never establishes absence. Real-site authentication and
+write/recovery certification remain release checks, not a claim of loaded Jira
+validation. The implementing owners are [Jira's source package](../packages/plugins/jira/src/manifest.ts)
+and the shared [write settlement](../packages/triage-sources/src/invocation/writeSettlement.ts).
 
 In 0.3 development, GitHub Settings supplies a source-native draft editor through
 the shared page's public `DraftEditor` seam. Add, Update and Restore let the user
@@ -110,6 +288,43 @@ with `kind: 'create'` and source
 uses the same draft and its existing `sourceInstanceId`. The Settings editor and
 agent inputs share GitHub's [configuration encoder/decoder](../packages/plugins/scm-github/src/triage/configuration.ts);
 this is a development source shape, not a generic host repository-scope schema.
+
+## Linear source (0.3 development)
+
+[`packages/plugins/linear`](../packages/plugins/linear/src/manifest.ts) contributes
+team issues through this same public source contract. Its Connected Account uses
+the host's manual personal-API-key mode and credential store. The key is sent only
+to Linear's fixed GraphQL origin, inside the executing source invocation;
+configuration contains an immutable team id and involvement selection.
+
+Team discovery is read-only. The shared source Settings page configures a team
+for My issues, Assigned to me, Created by me, Subscribed, or All team issues.
+The source maps those relationships onto the existing author/assignee/subscribed
+facts. Entry identity uses Linear's immutable issue id in its deployment scope;
+the mutable identifier, team name and account are not identity components.
+
+The native detail read pages labels, sub-issues, outgoing blocking relations,
+incoming blockers, comments and workflow states independently. Row facts retain
+the existing snapshot bounds; the full metadata and description are live detail
+content. GraphQL errors never become an empty successful page or inferred absence.
+The source forwards provider request, endpoint and complexity exhaustion through
+the existing `retryNotBeforeMs` failure field and performs no timer-driven retry.
+Linear's [API guide](https://linear.app/developers/graphql),
+[pagination](https://linear.app/developers/pagination), and
+[rate-limit contract](https://linear.app/developers/rate-limiting) define these
+provider boundaries. Real-tenant authentication, writes and recovery remain
+release validation; source/HTTP fixtures do not claim tenant verification.
+
+The source declares the public task `create`, `edit` and `transition` roles,
+and `linear/comment` as a named Action, all outward writes with the shared
+approval default. Supported fields are title, description/body, one assignee,
+labels, project, priority, due date, estimate and parent; create targets the
+configured team. Unsupported fields are refused. Team workflow ids, not mixed
+task categories, authorize transitions. Edits use native label additions/removals
+so concurrent unrelated additions survive. Each write dispatches once and uses
+the shared settlement lifecycle to confirm authoritative provider state. A lost
+create/comment response without an entity id stays uncertain and is not replayed;
+an accepted response alone never proves that the requested fields were applied.
 
 ## Mounted page actions (0.3 development)
 
@@ -226,6 +441,16 @@ that parser; Triage imposes no competing generic-id or UTF-8-byte restriction.
 Manual Refresh respects provider retry deadlines and the mounted store's active
 single flight, not local aggregate failure backoff. Automatic view demand retains
 its existing pacing in the same refresh eligibility owner.
+
+When the mounted host withdraws and then re-admits its Machine binding, the
+aggregate, detail, fix-PR, expanded PR-status and daemon-backed catalog/pins readers consume Plugin UI's shared
+`usePluginHostReadiness` projection. Its revision resumes existing read demand;
+the aggregate still uses its own single-flight/pacing owner, without interpreting
+host refusal diagnostics or maintaining a second readiness state. Direct Account
+reads retain their independent availability. This also covers a withdrawn read
+that refuses after re-admission. The shared lifecycle does not
+start a cold Composer-only window or repeatedly retry a settled outage; a failed
+reacquisition stays a failure until another host transition or explicit Refresh.
 
 GitHub REST Checks and commit statuses follow validated provider continuation
 links under caller cancellation, without the Search endpoint's local page/result

@@ -16,6 +16,7 @@ import { fetchAccountEncryptionCurrentness, AccountEncryptionCurrentnessReadines
 import { prepareApiTokenEncryptionAccess } from '@/sync/ops/account/prepareApiTokenEncryptionAccess';
 import { HappyError } from '@/utils/errors/errors';
 import { createFrontDoorActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
+import type { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 
 export type ApiTokenExpiryPreset = '30d' | '90d' | '1y' | 'none';
 
@@ -45,7 +46,7 @@ export type ApiTokenSettingsErrorCode =
     | 'grant_incomplete'
     | 'unavailable';
 
-export type ApiTokenSettingsExecute = ReturnType<typeof createFrontDoorActionExecute>;
+export type ApiTokenSettingsExecute = ReturnType<typeof createDefaultActionExecutor>['execute'];
 
 export type ApiTokenSettingsDestructiveTarget = ActiveServerAccountScopeLifetime;
 

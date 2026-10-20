@@ -6,20 +6,36 @@ import { ENTITY_DRAG_DELIVERY_MIME_V1, entityDragKindV1, type EntityDragKindV1 }
 import { isSecondaryEntityRowControl } from '@happier-dev/plugin-sdk/ui/client';
 export { isSecondaryEntityRowControl };
 
-/** Browser gesture boundary only: the carry handle is the sole lifecycle authority. */
-export function useEntityDragDomBinding(input: Readonly<{
+let blankImage: HTMLImageElement | null = null;
+/** A transparent 1×1 image, made once when the first source attaches, so it is decoded by the first drag. */
+function blankDragImage(): HTMLImageElement {
+    if (!blankImage) {
+        blankImage = new Image(1, 1);
+        blankImage.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+    }
+    return blankImage;
+}
+
+export type EntityDragDomCarry = Pick<EntityDragCarry, 'move' | 'cancel'> & Partial<Pick<EntityDragCarry, 'release'>>;
+
+type EntityDragDomBindingInput = Readonly<{
     runtime: EntityDragDropRuntime;
-    sourceId: string;
     enabled: boolean;
     canStart?: (event: DragEvent, host: HTMLElement) => boolean;
     describe?: () => string;
-}>): (node: unknown) => void {
+}> & Readonly<
+    | { sourceId: string; begin?: never }
+    | { sourceId?: never; begin: () => EntityDragDomCarry | null }
+>;
+
+/** Browser gesture boundary only: the carry handle is the sole lifecycle authority. */
+export function useEntityDragDomBinding(input: EntityDragDomBindingInput): (node: unknown) => void {
     const latest = React.useRef(input);
     latest.current = input;
     const host = React.useRef<HTMLElement | null>(null);
     const requestedHost = React.useRef<HTMLElement | null>(null);
     const detach = React.useRef<(() => void) | null>(null);
-    const carry = React.useRef<EntityDragCarry | null>(null);
+    const carry = React.useRef<EntityDragDomCarry | null>(null);
     const stopMove = React.useRef<(() => void) | null>(null);
     const retireHost = React.useCallback(() => {
         detach.current?.();
@@ -49,6 +65,7 @@ export function useEntityDragDomBinding(input: Readonly<{
         }
         retireHost();
         host.current = element;
+        blankDragImage(); // Decoded before the first drag starts.
         element.setAttribute('draggable', latest.current.enabled ? 'true' : 'false');
         const move = (event: DragEvent) => {
             if (Number.isFinite(event.clientX) && Number.isFinite(event.clientY)) carry.current?.move({ x: event.clientX, y: event.clientY });
@@ -56,7 +73,7 @@ export function useEntityDragDomBinding(input: Readonly<{
         const start = (event: DragEvent) => {
             const current = latest.current;
             if (!current.enabled || current.canStart?.(event, element) === false) { event.preventDefault(); return; }
-            const handle = current.runtime.begin(current.sourceId, 'pointer');
+            const handle = current.begin ? current.begin() : current.runtime.begin(current.sourceId, 'pointer');
             if (!handle) { event.preventDefault(); return; }
             carry.current = handle;
             window.addEventListener('dragover', move, true);
@@ -66,6 +83,8 @@ export function useEntityDragDomBinding(input: Readonly<{
             };
             // Human-readable identity enables native browser drag delivery; it is never decoded.
             if (event.dataTransfer) {
+                // The realm's carried card is the only thing that rides the pointer: no browser ghost of the row.
+                event.dataTransfer.setDragImage?.(blankDragImage(), 0, 0);
                 event.dataTransfer.effectAllowed = 'copyMove';
                 event.dataTransfer.setData(ENTITY_DRAG_DELIVERY_MIME_V1, '');
                 const description = current.describe?.();
@@ -75,10 +94,17 @@ export function useEntityDragDomBinding(input: Readonly<{
             event.stopPropagation();
         };
         const end = () => {
-            // A successful drop target releases. An unsuccessful dragend only cancels.
-            carry.current?.cancel('gesture-cancelled');
+            const active = carry.current;
             carry.current = null;
             stopMove.current?.();
+            if (!active) return;
+            // The browser delivers a drop only to a place that accepts the carry, so ending over a place the owner
+            // refuses (or is still checking) never arrives as `drop`. That is still a release: it settles with the
+            // owner's reason for the source to keep. Anywhere else, an unsuccessful dragend only cancels.
+            const snapshot = latest.current.runtime.getSnapshot();
+            if (active.release && snapshot.phase === 'carrying' && snapshot.targetId !== null && snapshot.admission?.status === 'refused') {
+                void active.release();
+            } else active.cancel('gesture-cancelled');
         };
         element.addEventListener('dragstart', start);
         element.addEventListener('dragend', end);

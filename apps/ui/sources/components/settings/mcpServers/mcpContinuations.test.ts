@@ -77,6 +77,7 @@ function harness(initial: McpServerCatalogV1 = { v: 1, servers: [], bindings: []
         sessionPermissionRespond: unexpectedBoundary, sessionUserActionAnswer: unexpectedBoundary, sessionModeSet: unexpectedBoundary,
         sessionModesList: unexpectedBoundary, sessionTargetPrimarySet: unexpectedBoundary, sessionTargetTrackedSet: unexpectedBoundary,
         sessionList: unexpectedBoundary, sessionActivityGet: unexpectedBoundary, sessionRecentMessagesGet: unexpectedBoundary,
+        daemonMemorySearch: unexpectedBoundary, daemonMemoryGetWindow: unexpectedBoundary, daemonMemoryEnsureUpToDate: unexpectedBoundary,
         resetGlobalVoiceAgent: () => { throw new Error('Unexpected host effect'); },
         isActionEnabled: () => !disabled,
         mcpServerAction: request => wired ? family(request) : Promise.resolve({ ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' }),
@@ -170,7 +171,9 @@ describe('Found adoption continuation', () => {
 describe('saved MCP upstream continuation', () => {
     it('reviews the pinned version, asks new inputs, and preserves user refs, name, tools and rules when Update is admitted', async () => {
         const owner = harness(saved); owner.requireTenant();
-        const hook = await renderHook(() => useMcpServerUpdate({ server: owner.catalog.servers[0]!, catalogRevision: owner.revision, execution: owner.execution, reload: () => {} }));
+        // The page holds the saved row it reviewed until the catalog refresh lands, so the ACK is observable as applied.
+        const reviewed = owner.catalog.servers[0]!;
+        const hook = await renderHook(() => useMcpServerUpdate({ server: reviewed, catalogRevision: owner.revision, execution: owner.execution, reload: () => {} }));
         await act(async () => { await hook.getCurrent().checkNow(); });
         await act(async () => { await hook.getCurrent().loadReview(); });
         expect(hook.getCurrent().review).toMatchObject({ status: 'ready', pointer: { version: '2.0.0' }, missingValues: [{ key: 'X-Tenant' }] });

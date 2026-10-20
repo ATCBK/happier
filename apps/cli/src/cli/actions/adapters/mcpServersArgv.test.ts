@@ -1,3 +1,5 @@
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
 import { createMcpServerActionExecuteV1 } from '@happier-dev/protocol/mcp/servers/serverActionsV1';
@@ -19,7 +21,7 @@ import { renderActionCliRootHelp } from '../rootCommand';
 describe('MCP compiled CLI predecessor spellings', () => {
   function fixture(requireApproval = false, failedRead = false) {
     let catalog: McpServerCatalogV1 = { v: 1, bindings: [], servers: [] };
-    let revision = 4;
+    let revision = 4; let ids = 0;
     const requests: { actionId: string; input: unknown }[] = [];
     const mcpServerAction = createMcpServerActionExecuteV1({
       readCatalog: () => loadMcpServerCatalogV1({ mode: 'plain', material: null,
@@ -33,7 +35,7 @@ describe('MCP compiled CLI predecessor spellings', () => {
           catalog = candidate.catalog;
           return { status: 'updated', revision: ++revision, cursor: revision };
         } }),
-      ruleWriteContext: () => ({ nowMs: 1, newId: () => 'rule-id' }),
+      ruleWriteContext: () => ({ nowMs: 1, newId: () => `rule-${++ids}` }),
       async machine(request) {
         requests.push({ actionId: request.actionId, input: request.input });
         return { ok: true, servers: [], warnings: [{ provider: 'claude', code: 'read_failed', path: '/repo/.claude.json' }] };
@@ -48,10 +50,10 @@ describe('MCP compiled CLI predecessor spellings', () => {
       async update() { throw new Error('MCP add must not update a Saved Secret'); },
       async delete() { throw new Error('MCP add must not delete a Saved Secret'); },
     });
-    const executor = createActionExecutor({ mcpServerAction,
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), mcpServerAction,
       personalSavedSecretActionExecute: ({ actionId, input }) => personalSecret(actionId, input),
-      isActionApprovalRequired: (actionId, context) => isApprovalRequiredByActionsSettings(actionId, { v: 1,
-        approvalWaivedSurfaces: requireApproval ? {} : { 'mcp.servers.create': ['cli'] } }, context) });
+      isActionApprovalRequired: (actionId, context) => isApprovalRequiredByActionsSettings(actionId, normalizeActionsSettingsV1({ v: 1,
+        approvalWaivedSurfaces: requireApproval ? {} : { 'mcp.servers.create': ['cli'], 'mcp.servers.duplicate': ['cli'] } }), context) });
     const output = captureConsoleJsonOutput<unknown>();
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const deps = { readCredentialsFn: async () => ({ token: 'test-token', encryption: null }),
@@ -91,6 +93,18 @@ describe('MCP compiled CLI predecessor spellings', () => {
       env: { TOKEN: { t: 'savedSecret', secretId: formatSharedSavedSecretRefV1('secret-id') }, LITERAL: { t: 'literal', v: 'secret:not-a-reference' } },
     })]);
     expect(owner.revision()).toBe(5);
+  });
+
+  it('duplicates a named server through the compiled semantic leaf and prints only its new identity', async () => {
+    const owner = fixture();
+    await owner.run(['mcp', 'servers', 'add', 'issues', '--command', 'fixture-command', '--json']);
+    expect(await owner.run(['mcp', 'servers', 'duplicate', 'issues', '--json'])).toBe(true);
+    const copy = owner.current().servers[1];
+    expect(copy).toMatchObject({ name: 'issues_copy', stdio: { command: 'fixture-command', args: [] } });
+    expect(copy?.id).not.toBe(owner.current().servers[0]?.id);
+    expect(owner.current().bindings.filter(rule => rule.serverId === copy?.id))
+      .toMatchObject([{ enabled: true, target: { t: 'allMachines' } }]);
+    expect(owner.output.json()).toMatchObject({ ok: true, data: { serverId: copy?.id } });
   });
 
   it.each(['--server-id=not-a-selected-home', '--'])('keeps the program argument %s out of Home routing and JSON mode', async argument => {
@@ -203,9 +217,9 @@ describe('MCP compiled CLI tools', () => {
         } }),
       async machine() { throw new Error('Tools are Account-owned'); },
     });
-    const executor = createActionExecutor({ mcpServerAction,
-      isActionApprovalRequired: (actionId, context) => isApprovalRequiredByActionsSettings(actionId, { v: 1,
-        approvalWaivedSurfaces: requireApproval ? {} : { 'mcp.servers.tools.set': ['cli'] } }, context) });
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), mcpServerAction,
+      isActionApprovalRequired: (actionId, context) => isApprovalRequiredByActionsSettings(actionId, normalizeActionsSettingsV1({ v: 1,
+        approvalWaivedSurfaces: requireApproval ? {} : { 'mcp.servers.tools.set': ['cli'] } }), context) });
     const output = captureConsoleJsonOutput<unknown>();
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const deps = { readCredentialsFn: async () => ({ token: changed === 'account' && reads++ > 0 ? 'changed-token' : 'test-token', encryption: null }),
@@ -288,9 +302,9 @@ describe('MCP compiled CLI Test', () => {
       async mutate() { throw new Error('Unexpected catalog write'); },
       async machine(request) { requests.push(request); return { ok: true, toolCount: 1, toolNamesSample: ['echo'], durationMs: 1 }; },
     });
-    const executor = createActionExecutor({ mcpServerAction,
-      isActionApprovalRequired: (actionId, context) => isApprovalRequiredByActionsSettings(actionId, { v: 1,
-        approvalWaivedSurfaces: { 'mcp.servers.test': ['cli'] } }, context) });
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), mcpServerAction,
+      isActionApprovalRequired: (actionId, context) => isApprovalRequiredByActionsSettings(actionId, normalizeActionsSettingsV1({ v: 1,
+        approvalWaivedSurfaces: { 'mcp.servers.test': ['cli'] } }), context) });
     vi.spyOn(console, 'log').mockImplementation(() => {});
     expect(await tryHandleMcpServerCliCommand({ argv, actionExecutionDeps: {
       readCredentialsFn: async () => ({ token: 'test-token', encryption: null }),
@@ -313,11 +327,13 @@ describe('MCP compiled CLI sign-in journey', () => {
     { name: 'flags before the positional name', argv: ['mcp', 'servers', 'sign-in', '--step-up', 'linear', '--no-open'], switched: false },
     { name: 'Account changes after catalog read', argv: ['mcp', 'servers', 'sign-in', 'linear', '--no-open'], switched: true },
     { name: 'sign-out through existing revoke', argv: ['mcp', 'servers', 'sign-out', 'linear'], switched: false },
+    { name: 'sign-out on an explicitly selected Machine with stale presence', argv: ['mcp', 'servers', 'sign-out', 'linear', '--machine-id', 'selected-machine'], switched: false },
     { name: 'an exact id cannot be shadowed by another display name', argv: ['mcp', 'servers', 'sign-in', 'server-id', '--no-open'], switched: false },
   ])('resolves through the catalog Action and preserves the captured Account: $name', async ({ argv, switched }) => {
     const commands: unknown[] = [];
     const signOut = argv[2] === 'sign-out';
-    terminal.inventory.mockResolvedValue({ data: [{ id: 'machine', active: true, revokedAt: null, replacedByMachineId: null }] });
+    terminal.inventory.mockResolvedValue({ data: [{ id: 'machine', active: true, revokedAt: null, replacedByMachineId: null },
+      { id: 'selected-machine', active: false, activeAt: 1, revokedAt: null, replacedByMachineId: null }] });
     const descriptor = MCP_SIGN_IN_CONNECTED_ACCOUNT_DESCRIPTOR;
     const mode = descriptor.authentication.modes.find(mode => mode.id === 'oauth');
     if (!mode || mode.kind !== 'oauthAuthorizationCode') throw new Error('Expected host MCP OAuth mode');
@@ -370,11 +386,11 @@ describe('MCP compiled CLI sign-in journey', () => {
       async mutate() { throw new Error('Unexpected catalog write'); }, async machine() { throw new Error('Unexpected MCP test'); },
       resolveAdministrationMachine: async () => 'machine', describeConnectedService: async () => described, connectedServiceAction,
     });
-    const executor = createActionExecutor({ mcpServerAction, connectedServiceAction,
-      isActionApprovalRequired: (actionId, context) => isApprovalRequiredByActionsSettings(actionId, { v: 1,
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), mcpServerAction, connectedServiceAction,
+      isActionApprovalRequired: (actionId, context) => isApprovalRequiredByActionsSettings(actionId, normalizeActionsSettingsV1({ v: 1,
         approvalWaivedSurfaces: { 'mcp.servers.signIn.start': ['cli'],
           'connectedServices.authentication.completeOAuth': ['cli'], 'connectedServices.authentication.cancel': ['cli'],
-          'connectedServices.accounts.revoke': ['cli'] } }, context) });
+          'connectedServices.accounts.revoke': ['cli'] } }), context) });
     terminal.prompt.mockResolvedValue('https://app.happier.dev/oauth/mcp/callback?code=returned-code&state=attempt.nonce&iss=https%3A%2F%2Fissuer.example.test');
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     let credentialReads = 0;
@@ -388,7 +404,7 @@ describe('MCP compiled CLI sign-in journey', () => {
       return;
     }
     if (signOut) {
-      expect(commands).toEqual([{ machineId: 'machine', command: { operation: 'revokeAccount', account: { service, accountId: 'server-id' },
+      expect(commands).toEqual([{ machineId: argv.includes('--machine-id') ? 'selected-machine' : 'machine', command: { operation: 'revokeAccount', account: { service, accountId: 'server-id' },
         cleanupGroupReferences: true, expectedCredentialRevision: 'csr_1234567890123456789012' } }]);
       expect(terminal.prompt).not.toHaveBeenCalled();
       return;

@@ -1,7 +1,9 @@
-import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFailed, onTestFinished, vi } from 'vitest';
 
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { createRpcCallError } from '@happier-dev/protocol/rpcErrors';
 import axios from 'axios';
+import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 import { ManagedMachineV1Schema } from '@happier-dev/protocol/machines/managed/managedMachineV1';
@@ -9,7 +11,11 @@ import { deriveManagedDevcontainerChildProjectionV1 } from '@happier-dev/protoco
 import { V2SessionByIdResponseSchema } from '@happier-dev/protocol/sessions/control/contract';
 import { createPlainSessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
-import { getActiveProjectAccountRowsSnapshot, withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
+import { getActiveProjectAccountRowsSnapshot, readProjectAccountRows, subscribeActiveProjectAccountRowsSnapshot,
+  withdrawActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
+import { createPlainProjectAccountRefRow } from '@/workspaces/projectAccountRows.testkit';
+import { ProjectAccountRowV1Schema } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { createDaemonWorkspaceSyncRuntime } from '@/daemon/startup/createDaemonWorkspaceSyncRuntime';
 import { withTempDir } from '@/testkit/fs/tempDir';
 import { WorkspaceSyncController } from '@/workspaces/sync/workspaceSyncController';
 import { createWorkspaceSyncMutagenAdapter } from '@/workspaces/sync/workspaceSyncMutagenAdapter';
@@ -42,6 +48,8 @@ import {
   type WorkspaceSyncStatusV1,
 } from '@/workspaces/sync/workspaceSyncTypes';
 import { createWorkspaceSyncHandoffAdapter } from '@/workspaces/sync/workspaceSyncHandoffAdapter';
+
+type MachineCallInput = Parameters<NonNullable<Parameters<typeof createTrackedSessionHandoffCoordinator>[0]['callMachine']>>[0];
 
 afterEach(() => { vi.restoreAllMocks(); socketIo.mockReset(); withdrawActiveProjectAccountRowsSnapshot(); });
 
@@ -78,11 +86,11 @@ describe('createTrackedSessionHandoffCoordinator', () => {
     handoffSourceHttpBoundary(sessionId);
     const callMachine = vi.fn(async (input: { method: string }) => {
       if (input.method === RPC_METHODS.DAEMON_SESSION_HANDOFF_CAPABILITY_V3_GET) return { protocolVersion: 3, atomicTargetResume: false, targetCleanup: false, existingState: true };
-      if (errorCode === 'handoff_existing_state_update_required') throw Object.assign(new Error('RPC method not available'), { rpcErrorCode: 'RPC_METHOD_NOT_AVAILABLE' });
+      if (errorCode === 'handoff_existing_state_update_required') throw createRpcCallError({ error: 'Method not found', errorCode: 'RPC_METHOD_NOT_FOUND' });
       return { ok: false, errorCode };
     });
     const coordinate = createTrackedSessionHandoffCoordinator({
-      expectedAccountServerId: 'server-1', readCredentials: async () => ({ token: 'token' }), callMachine,
+      expectedAccountServerId: 'server-1', readCredentials: async () => ({ token: 'token', encryption: null }), callMachine,
       workspaceSyncAdapter: createWorkspaceSyncHandoffAdapter({ sync: {} as never, bootstrap: async () => { throw new Error('Unexpected workspace bootstrap'); } }),
     });
     const start = vi.fn(async () => ({ ok: false as const, errorCode: 'source_stopped', error: 'source_stopped' }));
@@ -107,7 +115,7 @@ describe('createTrackedSessionHandoffCoordinator', () => {
       ? { protocolVersion: input.machineId === unsupportedMachineId ? 2 : 3, atomicTargetResume: false, targetCleanup: false, existingState: true }
       : { ok: true });
     const coordinate = createTrackedSessionHandoffCoordinator({ expectedAccountServerId: 'server-1',
-      readCredentials: async () => ({ token: 'token' }), callMachine,
+      readCredentials: async () => ({ token: 'token', encryption: null }), callMachine,
       workspaceSyncAdapter: createWorkspaceSyncHandoffAdapter({ sync: {} as never, bootstrap: async () => { throw new Error('Unexpected workspace bootstrap'); } }),
     });
     const start = vi.fn(async () => ({ ok: false as const, errorCode: 'source_stopped', error: 'source_stopped' }));
@@ -142,7 +150,7 @@ describe('createTrackedSessionHandoffCoordinator', () => {
           handoffPreflight: { rootRequestId: root.binding.requestId, rootRequestEnvelopeDigest: root.binding.requestEnvelopeDigest },
         } } };
       });
-      const callMachine = vi.fn(async (input: Parameters<NonNullable<Parameters<typeof createTrackedSessionHandoffCoordinator>[0]['callMachine']>>[0]) => {
+      const callMachine = vi.fn(async (input: MachineCallInput) => {
         expect(input.externalAction?.effectActionId).toBe('session.handoff');
         expect(input.externalAction?.context.externalActionExecutionAuthorization?.binding.handoffPreflight).toEqual({
           rootRequestId: root.binding.requestId, rootRequestEnvelopeDigest: root.binding.requestEnvelopeDigest,
@@ -157,7 +165,7 @@ describe('createTrackedSessionHandoffCoordinator', () => {
         return { ok: false, errorCode: 'existing_session_state_unavailable' };
       });
       const coordinate = createTrackedSessionHandoffCoordinator({ expectedAccountServerId: 'server-1',
-        readCredentials: async () => ({ token: 'requester-token' }), callMachine,
+        readCredentials: async () => ({ token: 'requester-token', encryption: null }), callMachine,
         handoffAuthorization: { sourceExportStore: createSessionHandoffSourceExportStore({ activeServerDir }),
           serverHttpBaseUrl: 'http://requester-home.invalid', readSourceInstallation: () => ({
             machineId: 'source', installationId: 'source-installation', privateKey: keys.secretKey,
@@ -175,7 +183,10 @@ describe('createTrackedSessionHandoffCoordinator', () => {
     });
   });
 
-  it('continues the same requester handoff from cold protected root custody after its source stops', async () => {
+  it.each(['continuation', 'linked_workspace', 'relationship', 'retired_linked_workspace'] as const)(
+    'preserves installed Project rows during a cold requester handoff: %s', async scenario => {
+    let phase = 'prepare requester custody and Home boundaries';
+    onTestFailed(() => console.error('Cold requester Project handoff fixture failed', { scenario, phase }));
     await withTempDir('handoff-requester-continuation-', async activeServerDir => {
       const sessionId = `c${'b'.repeat(24)}`;
       const keys = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(32));
@@ -195,9 +206,17 @@ describe('createTrackedSessionHandoffCoordinator', () => {
       // Only Home HTTP and the target Machine transport are substituted.
       vi.spyOn(axios, 'get').mockImplementation(async url => {
         const path = new URL(String(url)).pathname;
+        if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 0 } };
         if (path === '/v1/account/profile') return { status: 200, data: { id: 'bob' } };
         if (path === '/v1/account/encryption/currentness') return { status: 200, data: createAccountEncryptionCurrentnessFixture() };
         if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: {} }, version: 1 } };
+        if (path === '/v1/machines/source' || path === '/v1/machines/target') {
+          const id = path.split('/').at(-1)!;
+          return { status: 200, data: { machine: { id, active: true, installationId: `${id}-installation`,
+            metadataVersion: 1, daemonStateVersion: 0, daemonState: null, dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+            devcontainerChild: null, metadata: encodePlainMachineStoredContent({ host: id, platform: 'linux', homeDir: '/home/user',
+              happyHomeDir: '/home/user/.happier', happyCliVersion: 'source-fixture' }) } } };
+        }
         if (path === '/v1/machines/source/access') return { status: 200, data: { machineId: 'source',
           custodian: { accountId: 'alice', displayName: 'Alice' }, access: { custodian: { accountId: 'alice', displayName: 'Alice' },
             role: 'use', resourceMode: 'plain', accessState: 'ready' }, canManage: false, grants: [], ownDirectGrant: true, ownAccessSources: [] } };
@@ -211,7 +230,27 @@ describe('createTrackedSessionHandoffCoordinator', () => {
         if (!config.url) throw new Error('Missing requester Home URL');
         return await axios.get(config.url, config);
       });
-      vi.spyOn(axios, 'post').mockImplementation(async (url, body) => {
+      const installedRefs = [
+        { id: 'installed-source', serverId: 'bob-home', machineId: 'source', rootPath: join(activeServerDir, 'installed-source'), createdAtMs: 1 },
+        { id: 'installed-target', serverId: 'bob-home', machineId: 'target', rootPath: join(activeServerDir, 'installed-target'), createdAtMs: 1 },
+      ];
+      await Promise.all(installedRefs.map(ref => mkdir(ref.rootPath)));
+      const policy = { v: 1 as const, selection: 'all_files' as const, extraIgnorePatterns: [], extraIncludePatterns: [] };
+      const relationship = { v: 1 as const, relationshipId: 'installed-relationship', controllerMachineId: 'source',
+        alphaWorkspaceRefId: installedRefs[0]!.id, betaWorkspaceRefId: installedRefs[1]!.id, mode: 'keep_synced' as const,
+        enabled: false, createdAtMs: 1, updatedAtMs: 1,
+        contentPolicy: { ...policy, policyDigest: computeWorkspaceSyncPolicyDigest(policy) } };
+      const graphKey = { kind: 'relationship-graph' as const };
+      const installedRows = [...installedRefs.map(ref => createPlainProjectAccountRefRow(ref)),
+        ProjectAccountRowV1Schema.parse({ key: graphKey, revision: 1,
+          content: { t: 'plain', v: { key: graphKey, value: { relationships: [relationship] } } } })];
+      let retireDuringRead: (() => Promise<void>) | undefined;
+      vi.spyOn(axios, 'post').mockImplementation(async (url, body, config) => {
+        if (new URL(String(url)).pathname.endsWith('/account/project-rows/list')) {
+          const installed = config?.headers?.Authorization === 'Bearer installed-daemon';
+          if (!installed) await retireDuringRead?.();
+          return { status: 200, data: { status: 'listed', coverage: 'complete', rows: installed ? installedRows : [] } };
+        }
         if (new URL(String(url)).pathname === '/v1/machines/source/admission/verify') {
           if (!body || typeof body !== 'object') throw new Error('Missing installed currentness proof');
           expect(Reflect.get(body, 'purpose')).toEqual({ kind: 'requester_session_currentness', sessionId });
@@ -236,10 +275,46 @@ describe('createTrackedSessionHandoffCoordinator', () => {
       const credentialBinding = { happyHomeDir: activeServerDir, sessionId,
         attribution: { serverId: 'bob-home', accountId: 'bob', machineId: 'source', installationId: 'source-installation' } };
       await createRequesterSessionCredentialCustody({ ...credentialBinding, credentials: { token: 'bob-ordinary', encryption: null } });
+      phase = 'admit requester Session bootstrap';
       const requester = await resolveRequesterSessionBootstrap({ ...credentialBinding, serverHttpBaseUrl: 'https://bob-home.test',
         machineAdmissionBoundary: { machineId: 'source', daemonToken: 'alice-daemon', isHomeCurrent: () => true,
           readInstallation: () => ({ installationId: 'source-installation', privateKey: keys.secretKey }) } });
       expect(requester).not.toBeNull();
+      onTestFinished(() => requester?.dispose());
+      phase = 'read installed Project rows';
+      const installedSnapshot = await runWithServerHttpBaseUrl('https://bob-home.test', () => readProjectAccountRows({
+        credentials: { token: 'installed-daemon', encryption: null }, serverId: 'bob-home', publication: 'installed' }));
+      // The production subscriber and controller consume the real row producer. Only the native sidecar boundary is replaced.
+      let finishSidecar!: (result: { type: 'exited'; code: number }) => void;
+      const installedRuntime = createDaemonWorkspaceSyncRuntime({ daemonDataRoot: activeServerDir,
+        localServerId: 'bob-home', localMachineId: 'source', releaseChannel: 'publicdev',
+        resolveWorkspaceRef: id => installedRefs.find(ref => ref.id === id) ?? null,
+        rootOwnershipManager: createWorkspaceRootOwnershipManager({ lockDirectory: join(activeServerDir, 'installed-locks') }),
+        prepareRelationshipTarget: async () => { throw new Error('No local relationship should be prepared'); },
+        bootstrap: async () => { throw new Error('No installed workspace should be materialized'); },
+        resolveInstalledComponentPaths: () => ({ currentPath: '/fixture', resolvedCurrentPath: '/fixture' }),
+        resolveArtifactPaths: () => ({ managerPath: '/fixture/manager', agentPath: '/fixture/agent' }),
+        assertArtifactPayload: () => ({ engineVersion: '0.18.1', protocolEpoch: 'external-stream-v1' }),
+        createBroker: async () => ({ bootstrapDescriptor: new Uint8Array([1]), waitForReady: async () => undefined,
+          command: async command => {
+            if (command.t === 'shutdown') finishSidecar({ type: 'exited', code: 0 });
+            return command.t === 'list' ? { sessions: [], nextCursor: null } : [];
+          }, close: async () => undefined }),
+        spawnSidecar: async () => {
+          const termination = new Promise<{ type: 'exited'; code: number }>(resolve => { finishSidecar = resolve; });
+          return { pid: 42, waitForTermination: () => termination, stop: async () => finishSidecar({ type: 'exited', code: 0 }) };
+        },
+        launchLocalAgent: async () => { throw new Error('No native agent should launch'); },
+      });
+      onTestFinished(() => installedRuntime.stop());
+      phase = 'start installed WorkspaceSync runtime';
+      await installedRuntime.start();
+      const beforeRelationships = await installedRuntime.managedWorkspaceSync.listRelationships({ workspaceRefId: installedRefs[0]!.id });
+      expect(beforeRelationships.relationships).toMatchObject([{ definition: { relationshipId: relationship.relationshipId } }]);
+      if (scenario === 'retired_linked_workspace') retireDuringRead = () => requester!.dispose();
+      let publications = 0;
+      const release = subscribeActiveProjectAccountRowsSnapshot(() => publications++);
+      onTestFinished(release);
       const sync = new WorkspaceSyncController({ adapter: createWorkspaceSyncMutagenAdapter({ resolveWorkspaceRef: () => null,
         send: async () => { throw new Error('Unexpected native sync'); } }),
         lifecycle: { start: async () => { throw new Error('Unexpected native start'); }, stop: async () => undefined },
@@ -264,15 +339,35 @@ describe('createTrackedSessionHandoffCoordinator', () => {
         workspaceSyncAdapter: createWorkspaceSyncHandoffAdapter({ sync,
           bootstrap: async () => { throw new Error('Unexpected workspace materialization'); } }),
       });
+      phase = 'coordinate requester handoff and workspace membership';
       expect(await runWithServerHttpBaseUrl('https://bob-home.test', () => coordinate({ operationId: root.binding.requestId,
-        actionInput: { sessionId, targetMachineId: 'target', targetPath: '/target' },
+        actionInput: { sessionId, targetMachineId: 'target', targetPath: '/target',
+          ...(scenario === 'continuation' ? {} : { workspaceAction: scenario === 'relationship'
+            ? { kind: 'relationship', relationshipId: 'requester-relationship', flushBeforeCommit: true } : { kind: 'linked_workspace' } }) },
         context: { surface: 'rpc', externalActionExecutionAuthorization: root, requesterSessionBootstrap: requester! }, signal: new AbortController().signal,
         start: async () => ({ ok: true, result: { handoffId: 'handoff-cold', targetPath: '/target', endpointCandidates: [],
           status: { handoffId: 'handoff-cold', sessionId, sourceMachineId: 'source', targetMachineId: 'target',
             status: 'in_progress', phase: 'preparing', transportStrategy: 'direct_peer', recoveryActions: [] } } }),
         publishOwnerUpdate: () => undefined,
-      }))).toMatchObject({ ok: false, errorCode: 'target_transport_reached' });
-      expect(callMachine).toHaveBeenCalledTimes(1);
+      }))).toMatchObject({ ok: false, errorCode: scenario === 'continuation' ? 'target_transport_reached'
+        : scenario === 'retired_linked_workspace' ? 'project_requester_authority_unavailable' : 'relationship_source_mismatch' });
+      phase = 'settle installed Project subscription after requester handoff';
+      await installedRuntime.whenProjectsSettled();
+      expect(publications).toBe(0);
+      expect(getActiveProjectAccountRowsSnapshot()).toBe(installedSnapshot);
+      expect(getActiveProjectAccountRowsSnapshot()?.scopeKey).toBe(installedSnapshot.scopeKey);
+      expect(await installedRuntime.managedWorkspaceSync.listRelationships({ workspaceRefId: installedRefs[0]!.id })).toEqual(beforeRelationships);
+      expect(callMachine).toHaveBeenCalledTimes(scenario === 'continuation' ? 1 : 0);
+      // Prove subscription wiring as well as initial loading: a real installed refresh must change discovery.
+      installedRows[installedRows.length - 1] = ProjectAccountRowV1Schema.parse({ key: graphKey, revision: 2,
+        content: { t: 'plain', v: { key: graphKey, value: { relationships: [] } } } });
+      phase = 'refresh installed Project subscription';
+      await runWithServerHttpBaseUrl('https://bob-home.test', () => readProjectAccountRows({
+        credentials: { token: 'installed-daemon', encryption: null }, serverId: 'bob-home' }));
+      await installedRuntime.whenProjectsSettled();
+      expect(await installedRuntime.managedWorkspaceSync.listRelationships({ workspaceRefId: installedRefs[0]!.id }))
+        .toMatchObject({ relationships: [], remoteRelationships: [], membership: { found: false } });
+      phase = 'retire fixture requester and installed WorkspaceSync runtime';
     });
   });
   it.each(['relationship', 'linked_workspace'] as const)('uses immutable Home refs independently of the guest profile before %s child membership without moving the Session', async kind => {
@@ -288,7 +383,7 @@ describe('createTrackedSessionHandoffCoordinator', () => {
         resolveCurrentMachineId: () => 'child' });
       vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => Response.json({ features: {},
         capabilities: { serverIdentity: { serverIdentityId: home } } })));
-      onTestFinished(() => vi.unstubAllGlobals());
+      onTestFinished(() => { vi.unstubAllGlobals(); });
       const token = `header.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`;
       const credentials = { token, encryption: null };
       const fields = { v: 1 as const, selection: 'all_files' as const, extraIgnorePatterns: [], extraIncludePatterns: [] };
@@ -438,7 +533,7 @@ describe('createTrackedSessionHandoffCoordinator', () => {
     ));
     const coordinate = createTrackedSessionHandoffCoordinator({
       expectedAccountServerId: 'server-1',
-      readCredentials: async () => ({ token: 'token' } as never),
+      readCredentials: async () => ({ token: 'token', encryption: null }),
       resolveSource: async () => ({
         ok: true, sourceMachineId: 'machine-source',
         sourceRootPath: '/source/packages/app', sessionStorageMode: 'persisted',
@@ -489,10 +584,11 @@ describe('createTrackedSessionHandoffCoordinator', () => {
     const targetBasePolicy = { ...basePolicy, selection: 'all_files' as const };
     const targetPolicy = { ...targetBasePolicy, policyDigest: computeWorkspaceSyncPolicyDigest(targetBasePolicy) };
     const workspaceSyncAdapter = {
+      prepareBetween: vi.fn(async () => { throw new Error('Unexpected workspace route preparation'); }),
       prepare: vi.fn(async (input: { operationId: string }) => ({ kind: 'linked_workspace' as const, operationId: input.operationId, action: { kind: 'linked_workspace' as const } })),
       finalize: vi.fn(), commit: vi.fn(), abort: vi.fn(async () => undefined),
     };
-    const callMachine = vi.fn(async (input: { method: string; request: unknown }) => {
+    const callMachine = vi.fn(async (input: MachineCallInput) => {
       if (input.method === RPC_METHODS.DAEMON_SESSION_HANDOFF_PREPARE_TARGET_V3) {
         return { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
       }
@@ -500,7 +596,7 @@ describe('createTrackedSessionHandoffCoordinator', () => {
     });
     const coordinate = createTrackedSessionHandoffCoordinator({
       expectedAccountServerId: 'server-1',
-      readCredentials: async () => ({ token: 'token' } as never),
+      readCredentials: async () => ({ token: 'token', encryption: null }),
       resolveSource: async () => ({ ok: true, sourceMachineId: 'machine-c', sourceRootPath: '/source/packages/app', sessionStorageMode: 'persisted' }),
       refreshProjectSnapshot: async () => ({
         source: 'network', loadedAtMs: 1, scopeKey: 'account-1', rows: [], organizations: [], graphRevision: 1,
@@ -615,6 +711,7 @@ describe('createTrackedSessionHandoffCoordinator', () => {
     };
     const prepared = { kind: 'copy_once' as const, operationId: 'operation-1', action };
     const workspaceSyncAdapter = {
+      prepareBetween: vi.fn(async () => { throw new Error('Unexpected workspace route preparation'); }),
       prepare: vi.fn(async () => prepared),
       finalize: vi.fn(async () => prepared),
       commit: vi.fn(async () => prepared),
@@ -627,7 +724,7 @@ describe('createTrackedSessionHandoffCoordinator', () => {
     });
     const coordinate = createTrackedSessionHandoffCoordinator({
       expectedAccountServerId: 'server-1',
-      readCredentials: async () => ({ token: 'token' } as never),
+      readCredentials: async () => ({ token: 'token', encryption: null }),
       resolveSource: async () => ({
         ok: true,
         sourceMachineId: 'source-1',
@@ -679,9 +776,9 @@ describe('createTrackedSessionHandoffCoordinator', () => {
   });
 
   it('routes the accepted handoff through the existing source and target daemon primitives', async () => {
-    const calls: Array<{ machineId: string; method: string; request: unknown; timeoutMs?: number | null }> = [];
+    const calls: Array<Pick<MachineCallInput, 'machineId' | 'method' | 'request' | 'timeoutMs'>> = [];
     let resultGets = 0;
-    const callMachine = vi.fn(async (input: { machineId: string; method: string; request: unknown; timeoutMs?: number | null }) => {
+    const callMachine = vi.fn(async (input: MachineCallInput) => {
       calls.push(input);
       if (input.method === RPC_METHODS.DAEMON_SESSION_HANDOFF_PREPARE_TARGET_V3) {
         return { ok: false, errorCode: 'not_found', error: 'pending' };
@@ -834,7 +931,7 @@ describe('createTrackedSessionHandoffCoordinator', () => {
     }));
     const coordinate = createTrackedSessionHandoffCoordinator({
       expectedAccountServerId: 'server-1',
-      readCredentials: async () => ({ token: 'token' } as never),
+      readCredentials: async () => ({ token: 'token', encryption: null }),
       resolveSource: async () => ({
         ok: true,
         sourceMachineId: 'source-1',

@@ -18,6 +18,12 @@ export const CORPUS_COLLECTION_MIGRATIONS = {
         // The Connected Account service union now admits happier/mcp-sign-in;
         // existing source bindings and private configuration stay unchanged.
         migrate: (value) => value,
+    }, {
+        id: 'source-instances-v3-to-v4',
+        fromSchemaVersion: 3,
+        toSchemaVersion: 4,
+        // Account-data sources add an authority arm without changing existing bindings.
+        migrate: (value) => value,
     }],
     [CORPUS_SESSION_LINKS_COLLECTION_ID]: [{
         id: 'session-links-v1-to-v2',

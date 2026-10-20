@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ChangeEntrySchema, ChangesResponseSchema } from '@happier-dev/protocol/changes';
 import { EphemeralUpdateSchema, type EphemeralUpdate, UpdateBodySchema, UpdateContainerSchema } from '@happier-dev/protocol/updates';
 

@@ -24,7 +24,7 @@ import { installSettingsViewCommonModuleMocks } from '../../settingsViewTestHelp
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const clipboardSet = vi.hoisted(() => vi.fn(async () => true));
-const modalConfirm = vi.hoisted(() => vi.fn(async () => true));
+const modalConfirm = vi.hoisted(() => vi.fn<typeof import('@/modal')['Modal']['confirm']>(async () => true));
 const routerReplace = vi.hoisted(() => vi.fn());
 const shownModals = vi.hoisted(() => [] as { chrome?: { testID?: string }; props?: Record<string, unknown> }[]);
 const navigationState = vi.hoisted(() => ({
@@ -471,14 +471,14 @@ describe('TeamCredentialExternalApiScreen', () => {
         expect(harness.requestsFor(EXTERNAL_KEY_CREATE_PATH)).toHaveLength(2);
         expect(screen.getTextContent()).not.toContain(CREATED_TOKEN);
 
-        // A bearer that was copied is not lost, so the next creation proceeds
-        // without asking.
+        // A copied bearer needs no local reveal-loss decision. The create
+        // Action still owns its independently configured confirmation.
         await screen.pressByTestIdAsync('team-credential-external-value:token');
         modalConfirm.mockClear();
         act(() => screen.changeTextByTestId('team-credential-external-label', 'Third runner'));
         await screen.pressByTestIdAsync('team-credential-external-create');
         await vi.waitFor(() => expect(harness.requestsFor(EXTERNAL_KEY_CREATE_PATH)).toHaveLength(3));
-        expect(modalConfirm).not.toHaveBeenCalled();
+        expect(modalConfirm.mock.calls.filter(([title]) => title === 'teams.credentials.externalApi.revealDismiss.title')).toHaveLength(0);
     });
 
     it('uses one reveal-loss confirmation for native/browser navigation removal and keeps the bearer when canceled', async () => {
@@ -754,11 +754,13 @@ describe('TeamCredentialExternalApiScreen', () => {
             <TeamCredentialExternalApiScreen serverId={serverId} teamId="team-1" resourceId="resource-1" />,
         );
         await vi.waitFor(() => expect(screen.findByTestId(`team-credential-external-key:${CREATED_KEY_ID}`)).not.toBeNull());
+        modalConfirm.mockClear();
         await screen.pressByTestIdAsync(scenario.pressId);
         await vi.waitFor(() => expect(harness.requestsFor(ARTIFACT_CREATE_PATH)).toHaveLength(1));
         await vi.waitFor(() => expect(screen.findByTestId('team-approval')).not.toBeNull());
         expect(screen.findHostByTestId(`team-credential-external-revoke:${CREATED_KEY_ID}`)?.props.disabled).toBe(true);
         expect(harness.requestsFor(scenario.mutationPath)).toHaveLength(0);
+        expect(modalConfirm).not.toHaveBeenCalled();
         const pending = readStoredApproval(serverId);
         expect(pending.request).toMatchObject({ status: 'open', actionArgs: scenario.expectedInput });
 

@@ -258,6 +258,14 @@ describe('VoiceProviderSection raw credential review reachability', () => {
     await vi.waitFor(() => expect(nativeAlert.mock.calls.at(-1)?.[0])
       .toBe(t('settingsVoice.externalCredentials.recipientApprovalTitle')));
     await act(async () => nativeAlert.mock.calls.at(-1)?.[2]?.find(button => button.style !== 'cancel')?.onPress?.());
+    // Plain-storage and recipient consent precede the shared resource Action's
+    // own present-user confirmation. It must still have no effect before that tap.
+    const { getActionSpec } = await import('@happier-dev/protocol/actions/actionSpecs');
+    await vi.waitFor(() => expect(nativeAlert.mock.calls.at(-1)?.[0])
+      .toBe(getActionSpec('secrets.shared.promote').title));
+    expect(account.resources).toHaveLength(0);
+    expect(account.promotions).toHaveLength(0);
+    await act(async () => nativeAlert.mock.calls.at(-1)?.[2]?.find(button => button.style !== 'cancel')?.onPress?.());
     await vi.waitFor(() => expect(account.resources, JSON.stringify({
       alerts: nativeAlert.mock.calls.map(([title, message]) => ({ title, message })),
       routes: account.request.mock.calls.map(([input]) => new URL(input instanceof Request ? input.url : String(input)).pathname),

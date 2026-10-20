@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, readFile, rename, rm, unlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { ScmComparisonSchema, ScmComparisonSourceSchema, buildScmComparisonIdentity, classifyScmChangePath } from '@happier-dev/protocol/scm/comparison';
 import { ScmDiffSummaryMetadataSchema } from '@happier-dev/protocol/scm/diffSummary';
@@ -35,15 +35,27 @@ export type CapturedScmComparison = Readonly<{
 export type CaptureScmComparisonInput = Readonly<{
   cwd: string; source: ScmComparisonSource; sessionId?: string; turnId?: string;
   registry?: ScmBackendRegistry;
+  captureCommitTarget?: (cwd: string) => Promise<ScmCommitTargetCaptureResponse>;
   checkpointReceiptId?: string; turnEvidenceMode?: ScmDiffSummaryTurnEvidenceMode;
   readTranscriptPage?: ReadRepositoryCheckpointTranscriptPage;
   readPullRequestComparisonPage?: ReadPullRequestComparisonPage;
 }>;
 
-const StoredComparisonSchema = z.object({
-  sessionId: z.string().optional(), metadata: ScmDiffSummaryMetadataSchema, comparison: ScmComparisonSchema,
-  retainedRefs: z.array(z.object({ ref: z.string(), oid: z.string() }).strict()),
-}).strict();
+/** Capture publication authority through the SCM backend that owns the repository. */
+export function captureScmComparisonCommitTarget(input: Readonly<{ cwd: string; registry?: ScmBackendRegistry }>): Promise<ScmCommitTargetCaptureResponse> {
+  return runScmRoute<{ cwd: string }, ScmCommitTargetCaptureResponse>({
+    request: { cwd: input.cwd }, workingDirectory: input.cwd, registry: input.registry,
+    onNonRepository: () => ({ success: false, errorCode: 'NOT_REPOSITORY' }),
+    runWithBackend: async ({ context, selection }) => selection.backend.commitCaptureTarget
+      ? selection.backend.commitCaptureTarget({ context })
+      : { success: false, errorCode: 'FEATURE_UNSUPPORTED' },
+  });
+}
+
+const StoredComparisonSchema = z.strictObject({
+  sessionId: z.optional(z.string()), metadata: ScmDiffSummaryMetadataSchema, comparison: ScmComparisonSchema,
+  retainedRefs: z.array(z.strictObject({ ref: z.string(), oid: z.string() })),
+});
 const StoredComparisonReadSchema = createStoredReadSchema(StoredComparisonSchema);
 
 function comparisonNamespace(sessionId?: string): string {
@@ -376,13 +388,9 @@ export async function captureScmComparison(input: CaptureScmComparisonInput): Pr
         before = parentOids[0] ?? await emptyTree(rootPath);
       }
     } else {
-      const capturedTarget = await runScmRoute<{ cwd: string }, ScmCommitTargetCaptureResponse>({ request: { cwd: rootPath }, workingDirectory: rootPath,
-        ...(input.registry ? { registry: input.registry } : {}),
-        onNonRepository: () => ({ success: false, errorCode: 'NOT_REPOSITORY' }),
-        runWithBackend: async ({ context: targetContext, selection }) => selection.backend.commitCaptureTarget
-          ? selection.backend.commitCaptureTarget({ context: targetContext })
-          : { success: false, errorCode: 'FEATURE_UNSUPPORTED' },
-      });
+      const capturedTarget = input.captureCommitTarget
+        ? await input.captureCommitTarget(rootPath)
+        : await captureScmComparisonCommitTarget({ cwd: rootPath, registry: input.registry });
       if (capturedTarget.success) commitTarget = { headOid: capturedTarget.target.headOid, ref: capturedTarget.target.ref };
       if (capturedTarget.success) before = capturedTarget.target.headOid ?? capturedTarget.target.baseTreeOid;
       else {

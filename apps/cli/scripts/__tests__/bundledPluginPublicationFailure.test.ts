@@ -10,6 +10,7 @@ import { BUNDLED_PLUGIN_PUBLICATION_DIAGNOSTIC_CODES, REQUIRED_BUNDLED_PLUGIN_PA
 
 test.each([
   ['cliproxyapi', 'happier.provider.cliproxyapi'],
+  ['claude', 'happier.agent.claude'],
 ])('isolates %s publication failures after migrating its host imports', (packageId, pluginId) => {
   const packageName = `@happier-dev/plugins-${packageId}`;
   const failure = createBundledPluginPublicationFailure({
@@ -22,7 +23,7 @@ test.each([
   });
 });
 
-test.each(['claude', 'codex', 'elevenlabs', 'openai', 'xai'])(
+test.each(['codex', 'elevenlabs', 'openai', 'xai'])(
   'keeps %s publication fatal while consumed generated imports remain', (packageId) => {
     assert.throws(() => createBundledPluginPublicationFailure({
       repoRoot: '', packageName: `@happier-dev/plugins-${packageId}`, pluginId: `happier.${packageId}`,

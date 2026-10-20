@@ -1,4 +1,4 @@
-import { lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inspect } from 'node:util';
@@ -8,7 +8,10 @@ import { describe, expect, it } from 'vitest';
 import { parse, stringify } from 'smol-toml';
 
 import { codexStateSharingDescriptor } from '../../../../../../packages/plugins/codex/src/agent/auth/services/state/sharing/descriptor';
+import { reconcileCodexSharedJsonlState } from '../../../../../../packages/plugins/codex/src/agent/auth/services/home/sync/fixedJsonlState';
+import { verifyResumeReachableCodex } from '../../../../../../packages/plugins/codex/src/agent/auth/services/runtime/control/verifyResumeReachable';
 import { claudeAuthStateSharingDescriptor } from '../../../../../../packages/plugins/claude/src/agent/auth/services/stateSharing';
+import { verifyDeclaredResumeFileReachability } from './verifyDeclaredResumeFileReachability';
 
 import {
   applyConnectedServiceStateSharingDescriptor,
@@ -41,6 +44,114 @@ function createDescriptor(params: Readonly<{
 }
 
 describe('applyConnectedServiceStateSharingDescriptor', () => {
+  it.each(['shared', 'isolated'] as const)('recovers late native writes from displaced sessions before %s replacement', async (replacementMode) => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-displaced-rollout-'));
+    const sourceRoot = join(root, 'native');
+    const targetRoot = join(root, 'account');
+    const vendorResumeId = '01a1546e-701a-7b41-8277-bdf4e72f2b28';
+    const relativeRollout = join('2026', '10', '19', `rollout-2026-10-19T15-51-26-${vendorResumeId}.jsonl`);
+    const metadata = JSON.stringify({ type: 'session_meta', payload: { id: vendorResumeId } }) + '\n';
+    const completedTurn = JSON.stringify({ type: 'response_item', payload: { role: 'assistant', content: 'retained answer' } }) + '\n';
+    let writer: Awaited<ReturnType<typeof open>> | undefined;
+    try {
+      await mkdir(join(sourceRoot, 'sessions'), { recursive: true });
+      await mkdir(join(targetRoot, 'sessions', '2026', '10', '19'), { recursive: true });
+      await writeFile(join(targetRoot, 'sessions', relativeRollout), metadata);
+      writer = await open(join(targetRoot, 'sessions', relativeRollout), 'a');
+      const input = {
+        descriptor: codexStateSharingDescriptor,
+        nativeSourceContext: { sourceRoot, sourceEnv: {} },
+        target: { targetMaterializedRoot: targetRoot, targetMaterializedEnv: {} },
+        configMode: 'isolated', requestedStateMode: 'shared', effectiveStateMode: 'shared', cwd: root,
+        sessionImportRoots: [{ sourceRoot: targetRoot, destinationRoot: sourceRoot,
+          includeFile: (path: string) => path.startsWith('sessions/') }],
+        mergeSharedStateFile: reconcileCodexSharedJsonlState,
+      } as const;
+      const first = await applyConnectedServiceStateSharingDescriptor(input);
+      // A native writer retains its inode after home preparation moves the directory aside.
+      await writer.write(completedTurn);
+      await writer.close();
+      writer = undefined;
+      await expect(readFile(join(sourceRoot, 'sessions', relativeRollout), 'utf8')).resolves.toBe(metadata);
+      const replacement = { ...input, requestedStateMode: replacementMode, effectiveStateMode: replacementMode,
+        existingManifest: first.manifest };
+      const prepared = await applyConnectedServiceStateSharingDescriptor(replacement);
+      const resolved = await verifyDeclaredResumeFileReachability({
+        targetMaterializedRoot: targetRoot, stateSharingDescriptor: codexStateSharingDescriptor,
+        vendorResumeId, verifyResumeReachable: verifyResumeReachableCodex,
+      });
+      expect(resolved).toMatchObject({ ok: true });
+      if (!resolved.ok) throw new Error(resolved.reason);
+      expect(await readFile(resolved.resolvedPath, 'utf8')).toBe(metadata + completedTurn);
+      await applyConnectedServiceStateSharingDescriptor({ ...replacement, existingManifest: prepared.manifest });
+      expect(await readFile(resolved.resolvedPath, 'utf8')).toBe(metadata + completedTurn);
+      const displaced = (await readdir(targetRoot)).find(name => name.startsWith('sessions.local-'));
+      expect(displaced).toBeDefined();
+      expect(await readFile(join(targetRoot, displaced!, relativeRollout), 'utf8')).toBe(metadata + completedTurn);
+    } finally {
+      await writer?.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('recovers only declared displaced directories without following backup symlinks', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-displaced-state-boundary-'));
+    const targetRoot = join(root, 'account');
+    try {
+      await mkdir(join(targetRoot, 'sessions.local-123-1'), { recursive: true });
+      await mkdir(join(targetRoot, 'sessions.local-unmanaged'), { recursive: true });
+      await mkdir(join(root, 'foreign'), { recursive: true });
+      await writeFile(join(targetRoot, 'sessions.local-123-1', 'known.jsonl'), 'known');
+      await writeFile(join(targetRoot, 'sessions.local-unmanaged', 'unmanaged.jsonl'), 'unmanaged');
+      await writeFile(join(root, 'foreign', 'foreign.jsonl'), 'foreign');
+      await symlink(join(root, 'foreign'), join(targetRoot, 'sessions.local-456'), process.platform === 'win32' ? 'junction' : 'dir');
+      await applyConnectedServiceStateSharingDescriptor({
+        descriptor: createDescriptor({ stateEntries: [{ path: 'sessions', mode: 'linked' }] }),
+        nativeSourceContext: { sourceRoot: targetRoot, sourceEnv: {} },
+        target: { targetMaterializedRoot: targetRoot, targetMaterializedEnv: {} },
+        configMode: 'isolated', requestedStateMode: 'isolated', effectiveStateMode: 'isolated', cwd: root,
+      });
+      expect(await readdir(join(targetRoot, 'sessions'))).toEqual(['known.jsonl']);
+      expect(await readFile(join(targetRoot, 'sessions', 'known.jsonl'), 'utf8')).toBe('known');
+      expect(await readFile(join(root, 'foreign', 'foreign.jsonl'), 'utf8')).toBe('foreign');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('captures only verified shared links, resolving the native target at materialization', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-state-observation-binding-'));
+    const sourceRoot = join(root, 'source');
+    const targetRoot = join(root, 'target');
+    const sharedProjects = join(root, 'shared-projects');
+    const preservedState = join(root, 'preserved-state');
+    try {
+      await mkdir(sourceRoot);
+      await mkdir(sharedProjects);
+      await mkdir(join(sourceRoot, 'copied'));
+      await mkdir(targetRoot);
+      await mkdir(preservedState);
+      await writeFile(join(preservedState, 'private.jsonl'), 'private');
+      await symlink(preservedState, join(targetRoot, 'missing'), process.platform === 'win32' ? 'junction' : 'dir');
+      await symlink(sharedProjects, join(sourceRoot, 'projects'), process.platform === 'win32' ? 'junction' : 'dir');
+      const input = {
+        descriptor: createDescriptor({ stateEntries: [
+          { path: 'projects', mode: 'linked' }, { path: 'copied', mode: 'copied' },
+          { path: 'missing', mode: 'linked' }, { path: 'redirect', mode: 'env_redirect', envVar: 'STATE_DIR' },
+        ] }),
+        nativeSourceContext: { sourceRoot, sourceEnv: {} },
+        target: { targetMaterializedRoot: targetRoot, targetMaterializedEnv: {} },
+        configMode: 'isolated', requestedStateMode: 'shared', effectiveStateMode: 'shared', cwd: root,
+        preserveDestinationWhenStateSourceMissing: () => true,
+      } as const;
+      const first = await applyConnectedServiceStateSharingDescriptor(input);
+      const expected = [{ entryPath: 'projects', sourceEntryRoot: await realpath(sharedProjects),
+        materializedEntryPath: join(targetRoot, 'projects') }];
+      expect(first.linkedStateEntries).toEqual(expected);
+      const repeated = await applyConnectedServiceStateSharingDescriptor({ ...input, existingManifest: first.manifest });
+      expect(repeated.linkedStateEntries).toEqual(expected);
+      expect(await readFile(join(targetRoot, 'missing', 'private.jsonl'), 'utf8')).toBe('private');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('keeps unchanged copied config and shared links in place across repeated preparation', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-state-sharing-repeat-'));
     const sourceRoot = join(root, 'source');
@@ -180,7 +291,7 @@ describe('applyConnectedServiceStateSharingDescriptor', () => {
         configMode: 'isolated', requestedStateMode: stateMode, effectiveStateMode: stateMode, cwd: root,
       });
       if (stateMode === 'shared') {
-        expect(await realpath(join(targetRoot, entries[0].path))).toBe(join(sourceRoot, entries[0].path));
+        expect(await realpath(join(targetRoot, entries[0].path))).toBe(await realpath(join(sourceRoot, entries[0].path)));
         expect((await lstat(join(targetRoot, 'antigravity-acp'))).isSymbolicLink()).toBe(false);
       } else {
         await expect(lstat(sourceRoot)).rejects.toMatchObject({ code: 'ENOENT' });

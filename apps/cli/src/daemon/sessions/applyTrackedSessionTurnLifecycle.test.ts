@@ -14,7 +14,7 @@ function tracked(overrides: Partial<TrackedSession> = {}): TrackedSession {
 }
 
 describe('applyTrackedSessionTurnLifecycle', () => {
-  it('reconciles a completed exact reattached turn so retained marker custody does not keep the runner busy', async () => {
+  it.each(['completed', 'waiting'] as const)('reconciles an exact reattached %s turn so retained marker custody does not keep the runner busy', async latestTurnStatus => {
     const current = tracked({
       reattachedInterruptedTurnId: 'settled-turn',
       agentRuntimeDaemonServiceAdmittedTurnId: 'settled-turn',
@@ -23,7 +23,7 @@ describe('applyTrackedSessionTurnLifecycle', () => {
     const updateSessionMarkerActiveTurn = vi.fn(async () => true);
     await expect(applyTrackedSessionTurnLifecycle({
       trackedSessions: [current], sessionId: 'session-1', event: 'reconcile_reattached',
-      readReattachedTurnSnapshot: async () => ({ id: 'session-1', latestTurnId: 'settled-turn', latestTurnStatus: 'completed' }),
+      readReattachedTurnSnapshot: async () => ({ id: 'session-1', latestTurnId: 'settled-turn', latestTurnStatus }),
       updateSessionMarkerActiveTurn,
     })).resolves.toEqual({ status: 'recorded', activeTurnId: null });
     expect(current.reattachedInterruptedTurnId).toBeUndefined();

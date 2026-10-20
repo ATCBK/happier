@@ -7,9 +7,13 @@ import { StrictSessionStoredMessageContentEnvelopeSchema } from '@happier-dev/pr
 import { RawRecordSchema } from '@happier-dev/session-core/raw';
 import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { readMachineOnlineGraceMsFromEnv } from '@/utils/sessions/machineUtils';
+import { VoiceLocalSttSchema } from '@/sync/domains/settings/voiceLocalSttSettings';
+import { parseModelPackManifest } from '@happier-dev/protocol/voice/modelPacks/manifest';
+import { installVoiceWebRtcBrowserBoundary } from '@/dev/testkit/harness/voiceWebRtcHarness';
 
 import {
   audioStreamStart,
+  audioStreamStop,
   emitAudioStreamEvent,
   LOCAL_VOICE_STT_PACK_ID,
   localVoiceModelPackFilesystem,
@@ -320,7 +324,88 @@ describe('local voice engine local neural STT (streaming)', () => {
     expect(getLocalVoiceState().status, JSON.stringify(getLocalVoiceState())).toBe('recording');
   });
 
+  it.each([false, true])('retires the retained mic before a refused endpoint turn becomes disconnected (spoken replies: %s)', async (autoSpeakReplies) => {
+    const storage = await getStorage();
+    const config = readLocalDirectVoiceSettings(storage.getState().settings.voice);
+    storage.__setState({ settings: {
+      ...storage.getState().settings,
+      voice: {
+        ...storage.getState().settings.voice,
+        providerId: 'local_direct',
+        providers: {
+          ...storage.getState().settings.voice.providers,
+          local_direct: { schemaVersion: 1, config: {
+            ...config,
+            stt: { ...config.stt, provider: 'local_neural',
+              localNeural: { assetId: LOCAL_VOICE_STT_PACK_ID, language: 'en' } },
+            tts: { ...config.tts, autoSpeakReplies, bargeInEnabled: true },
+            handsFree: { ...config.handsFree, enabled: true },
+          } },
+        },
+      },
+    } });
+    localVoicePendingEnqueue.mockResolvedValueOnce(Response.json({ error: 'turn_refused' }, { status: 400 }));
+    const engine = await loadLocalVoiceEngineWithCompatState();
+    const { getVoiceConversationRuntimeSnapshot, useVoiceConversationRuntimeStore } = await import('@/voice/runtime/machine/voiceConversationRuntimeStore');
+    const { voiceCaptureAdmissionController } = await import('@/voice/runtime/input/VoiceCaptureAdmissionController');
+    // The opt-in lane selects the same web mic source as Metro, while this
+    // fixture still supplies only the physical browser/native SDK boundaries.
+    const browser = process.env.HAPPIER_UI_TEST_VOICE_MIC_PLATFORM === 'web'
+      ? installVoiceWebRtcBrowserBoundary() : null;
+    if (browser) vi.stubGlobal('document', Object.assign(new EventTarget(), { visibilityState: 'visible' }));
+    const failedTrackStates: MediaStreamTrackState[][] = [];
+    const unsubscribe = useVoiceConversationRuntimeStore.subscribe(({ snapshot }) => {
+      if (browser && snapshot.state === 'disconnected' && snapshot.error) {
+        failedTrackStates.push(browser.micTracks.map(track => track.readyState));
+      }
+    });
+    try {
+      await engine.toggleLocalVoiceTurn('s1');
+      expect(engine.getLocalVoiceState().status).toBe('recording');
+      if (browser) expect(browser.micTrack.readyState).toBe('live');
+      sherpaStreamingPushFrame.mockResolvedValueOnce({ text: 'explain the forecast', isEndpoint: true });
+      emitAudioStreamEvent('audioFrame', {
+        streamId: 'audio-stream-1', pcm16leBase64: 'AA==', sampleRate: 16000, channels: 1,
+      });
+      await vi.waitFor(() => expect(getVoiceConversationRuntimeSnapshot()).toMatchObject({
+        state: 'disconnected', error: { reason: 'send_failed' },
+      }));
+      const captureStarts = audioStreamStart.mock.calls.length;
+      expect(audioStreamStop).toHaveBeenCalledTimes(captureStarts);
+      if (browser) expect(browser.micTracks.every(track => track.readyState === 'ended')).toBe(true);
+      if (browser) {
+        expect(failedTrackStates.length).toBeGreaterThan(0);
+        expect(failedTrackStates.every(states => states.every(state => state === 'ended'))).toBe(true);
+      }
+      const dictation = voiceCaptureAdmissionController.acquire('dictation');
+      if (dictation.status === 'acquired') dictation.lease.release();
+      expect(dictation.status).toBe('acquired');
+      expect(readPendingTranscripts('s1')).toEqual(['explain the forecast']);
+      await engine.toggleLocalVoiceTurn('s1');
+      expect(engine.getLocalVoiceState()).toMatchObject({ sessionId: 's1', status: 'recording', error: null });
+      expect(audioStreamStart).toHaveBeenCalledTimes(captureStarts + 1);
+    } finally {
+      await engine.stopLocalVoiceSession();
+      unsubscribe();
+      browser?.restore();
+    }
+  }, 180_000);
+
   it('falls back to the default local_neural pack when assetId is missing', async () => {
+    const defaultPackId = VoiceLocalSttSchema.parse({}).localNeural.assetId;
+    if (!defaultPackId) throw new Error('Local neural STT requires its declared fallback pack');
+    const fixtureManifest = localVoiceModelPackFilesystem.files.get(
+      `${localVoiceModelPackFilesystem.root}/${LOCAL_VOICE_STT_PACK_ID}/pack.json`,
+    );
+    if (!fixtureManifest) throw new Error('Expected the installed STT boundary manifest');
+    const defaultManifest = parseModelPackManifest({
+      ...parseModelPackManifest(JSON.parse(new TextDecoder().decode(fixtureManifest))),
+      packId: defaultPackId,
+    });
+    localVoiceModelPackFilesystem.files.set(
+      `${localVoiceModelPackFilesystem.root}/${defaultPackId}/pack.json`,
+      new TextEncoder().encode(JSON.stringify(defaultManifest)),
+    );
     const storage = await getStorage();
     storage.__setState({
       settings: {
@@ -359,7 +444,7 @@ describe('local voice engine local neural STT (streaming)', () => {
     await toggleLocalVoiceTurn('s1');
     expect(getLocalVoiceState().status, JSON.stringify(getLocalVoiceState())).toBe('recording');
     expect(sherpaStreamingCreate).toHaveBeenCalledWith(expect.objectContaining({
-      assetsDir: uriToFilePath(`${localVoiceModelPackFilesystem.root}/${LOCAL_VOICE_STT_PACK_ID}`),
+      assetsDir: uriToFilePath(`${localVoiceModelPackFilesystem.root}/${defaultPackId}`),
     }));
   });
 

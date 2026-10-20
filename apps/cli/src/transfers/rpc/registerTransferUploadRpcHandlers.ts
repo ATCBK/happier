@@ -115,6 +115,9 @@ export function registerTransferUploadRpcHandlers(
                     sessionId: deps.sessionAttachment!.sessionId,
                     filePath: resolved.target.destPath,
                     name: sanitizeAttachmentFileName(String(uploadRequest.fileName)),
+                    displayPath: finalized.path,
+                    sizeBytes: finalized.sizeBytes,
+                    sha256: input.sha256,
                   });
                 }
                 return finalized;

@@ -1,12 +1,18 @@
 import { randomUUID } from 'node:crypto';
+import { registerDiscussionAgentPublisher } from '@/discussions/discussionAgentPublisher';
+import { registerSessionMessageReplyObservation } from '@/rpc/handlers/sessionMessageReply';
+import { readSessionManagerSessionIdV1 } from '@happier-dev/protocol/sessions/follow/sessionManagerV1';
 import { createRunnerExecutionRunSnapshotResolver } from '@/agent/runtime/session/process/runnerExecutionRunSnapshot';
+import { createRunnerReviewHostPluginAuthorityReader } from '@/agent/executionRuns/profiles/review/pluginAuthority';
 
 import { resolveAgentIdFromSessionMetadata, resolvePermissionIntentFromSessionMetadata } from '@happier-dev/agents';
 import { parseSessionPermissionModeAlias } from '@happier-dev/protocol/sessions/metadata/permission-modes';
 import { readSessionWorkspaceWritesV1 } from '@happier-dev/protocol/prompts/roles/resolveRoleSelectionV1';
 import { SessionAccessGrantSetActionInputV1Schema } from '@happier-dev/protocol/sessions/access/sessionAccessActionsV1';
+import type { SessionUpdatePostInputV1 } from '@happier-dev/protocol/sessions/relations/workerUpdateV1';
 import type { AccountSettings, ActionExecutorDeps, TeamCredentialProviderModelSelectionV1 } from '@happier-dev/protocol';
 import { configuration } from '@/configuration';
+import { logger } from '@/ui/logger';
 import { notifyDaemonConnectedServiceUsageLimitWaitResumeCancel } from '@/daemon/controlClient';
 import { callMachineRpc } from '@/session/transport/rpc/machineRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
@@ -20,6 +26,8 @@ import { createExecutionRunAccountSettingsSnapshotResolver } from '@/api/machine
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifetimeToken, readAccountRoleOverridesFromSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { prepareActiveAccountRoleOverrides } from '@/settings/prompts/hydratePromptLibraryCatalog';
+import { readSessionPreparationFailureDiagnostic } from '@/agent/runtime/session/errors/classifyPrimarySessionRuntimeIssue';
+import { readPreparedAccountRoleOverrides } from '@/session/roles/sessionRoleContext';
 import { createCredentialedAccountArtifactStore } from '@/api/artifacts/accountArtifactStore';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
 import { resolveRunnerMcpServers } from '@/mcp/runtime/resolveRunnerMcpServers';
@@ -41,6 +49,7 @@ import { registerActionSpecRpcHandlers } from '@/rpc/handlers/registerActionSpec
 import { ROLE_ACTION_IDS_V1 } from '@happier-dev/protocol/prompts/roles/roleActionIdsV1';
 import { createRoleSourceReader, type RoleSourceReader } from '@/session/roles/roleSources';
 import type { RoleWorkspaceWritesPolicyPreparer } from '@/session/actions/roleActions';
+import { hasReceivedWorkflowSessionRoleAuthority } from '@/session/actions/sessionRoleRpcOrigin';
 import type { registerCapabilitiesHandlers } from '@/rpc/handlers/capabilities';
 import type { SessionRuntimeControls } from '@/rpc/handlers/sessionControls';
 import { registerExecutionRunHandlers } from '@/rpc/handlers/executionRuns';
@@ -54,7 +63,7 @@ import { createCliActionExecutor } from '@/session/actions/createCliActionExecut
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import {
     createRestrictedCurrentSessionListActionDependency,
-    createSessionListActionDependency,
+    createSessionListActionDeps,
 } from '@/session/actions/sessionListActionDependency';
 import { createAccountServerActionDeps } from '@/api/accountServerActionDeps';
 import type { BrowserDaemonControlRoutes } from '@/daemon/browser/control/routes';
@@ -71,6 +80,7 @@ import type { LocalServicesRuntimeActionRoutes } from '@/daemon/local/services/a
 import type { DaemonPeerMediationObservabilityRuntimeActionContext } from '@/daemon/peer/mediation/observability/runtimeActionExecutor';
 import type { SimulatorPreviewRoutes } from '@/daemon/devices/simulator/previewRoutes.types';
 import type { CliServerFeaturesSnapshot } from '@/features/serverFeaturesClient';
+import { resolveUsageLimitRecoveryEnabled } from '@/features/usageLimitRecoveryFeatureGate';
 import { fetchSessionById, importHistoricalSessionTranscript } from '@/session/transport/http/sessionsHttp';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { projectRuntimeTranscriptEvent } from '@/agent/runtime/session/transcripts/projectRuntimeTranscriptEvent';
@@ -96,7 +106,6 @@ import type { SessionStoredContentCryptoContext } from '@/session/transport/encr
 import { createExecutionRunTranscriptCustodyError } from '@/agent/runtime/bridges/executionRun/executionRunTranscriptPublisher';
 import { resolveExecutionRunPublicBackendId } from '@/agent/runtime/bridges/executionRun/backendTargets';
 import type { ApiSessionClient } from '@/api/session/sessionClient';
-import { createProviderEnforcedPermissionHandler } from '@/agent/permissions/providerEnforced/createHandler';
 import type { ExecutionRunHostBridgeContract } from '@/agent/runtime/bridges/executionRun/executionRunBridgeContract';
 import { createDaemonApprovalExecutionOriginCurrentnessFromCredentials } from '@/daemon/externalActions/daemonExternalActionTargetResolver';
 import { readAccountIdFromToken } from '@/cloud/decodeJwtPayload';
@@ -107,6 +116,7 @@ import { normalizeServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { createSessionFollowContextReconciler } from '@/agent/runtime/session/follow/sessionFollowContextReconciler';
 import { createSessionFollowSourceHydrator, resolveAccountVoiceFollowDisclosure } from '@/agent/runtime/session/follow/sessionFollowSourceHydrator';
 import { resolveSessionFollowContextUtf8AllowanceV1 } from '@/agent/runtime/session/follow/sessionFollowContextBudget';
+import { createSessionRunReportPolicyReader } from '@/api/sessionFollowCreationPreferences';
 
 export function resolveSessionClientParentProvider(metadata: unknown): ACPProvider {
     const configuredAcpBackendId = typeof readAcpConfiguredBackendV1FromMetadata(metadata)?.backendId === 'string'
@@ -154,6 +164,9 @@ export function registerSessionClientRuntimeHandlers(
         getCurrentWorkspaceWrites?: () => 'allow' | 'deny' | undefined;
         prepareWorkspaceWritesPolicy?: RoleWorkspaceWritesPolicyPreparer;
         sessionRuntimeControls?: SessionRuntimeControls | null;
+        waitForSessionRuntimeControls?: (signal?: AbortSignal) => Promise<boolean>;
+        /** Join the owning Session's initial control installation, without a separate startup deadline. */
+        waitForAppliedChildSelectionReader?: (signal: AbortSignal) => Promise<boolean>;
         enqueueSessionUserMessage: (request: Readonly<{
             callerInputAuthorization?: import('@happier-dev/protocol').ExternalActionExecutionAuthorizationV1;
             text: string;
@@ -210,7 +223,22 @@ export function registerSessionClientRuntimeHandlers(
     }>,
 ): ReturnType<typeof registerSessionHandlers> & Readonly<{
     refreshDemandedMcpCatalog(signal?: AbortSignal): Promise<void>;
+    disposeExecutionRuns(): Promise<void>;
 }> {
+    if (params.session) {
+        registerDiscussionAgentPublisher({ rpcHandlerManager: params.rpcHandlerManager, serverId: params.serverId,
+            serverUrl: params.serverUrl, session: params.session, readOwnerAccountCredentials: params.readOwnerAccountCredentials,
+            isApprovalExecutionOriginCurrent: args => isApprovalExecutionOriginCurrent(args),
+            executeSourceAction: async (actionId, input, context) => {
+                if (actionId !== 'session.transcript.get' && actionId !== 'doc.read' && actionId !== 'workflow.run.invocations.get') {
+                    return { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' };
+                }
+                const credentialed = await resolveCredentialedRoleParams(context.signal);
+                if (!credentialed) return { ok: false, errorCode: 'approval_context_unavailable', error: 'approval_context_unavailable' };
+                return await createCliActionExecutor(credentialed).execute(actionId, input, context);
+            } });
+        registerSessionMessageReplyObservation({ rpcHandlerManager: params.rpcHandlerManager, session: params.session });
+    }
     const readOwnerAccountCredentials = params.readOwnerAccountCredentials;
     const roleAccountScopeKey = runWithServerHttpBaseUrl(params.serverUrl,
         () => resolveAccountSettingsScopeKeyForToken(params.token));
@@ -314,6 +342,7 @@ export function registerSessionClientRuntimeHandlers(
     let ownerAccountSettingsForRuntime: AccountSettings | null = null;
     let ownerAccountOperationContext: SavedSecretOperationContextV1 | undefined;
     let disposed = false;
+    const runtimeControlsLifetime = new AbortController();
     const ownerAccountIsCurrent = async () => {
         if (disposed) return false;
         const credentials = await readOwnerAccountCredentials();
@@ -357,28 +386,38 @@ export function registerSessionClientRuntimeHandlers(
         })
         : undefined;
     const readCodingPromptBehavior = () => params.sessionRuntimeControls?.readCodingPromptBehavior?.() ?? null;
-    const readAppliedChildSelection = async () => await params.sessionRuntimeControls?.readAppliedChildSelection?.()
-        ?? { status: 'unavailable' as const };
+    const readAppliedChildSelection = async (options?: Readonly<{ waitForReady?: boolean }>) => {
+        if (options?.waitForReady && !params.sessionRuntimeControls?.readAppliedChildSelection && !disposed) {
+            await params.waitForAppliedChildSelectionReader?.(runtimeControlsLifetime.signal);
+        }
+        const controls = params.sessionRuntimeControls;
+        const reader = controls?.readAppliedChildSelection;
+        if (disposed || !reader) {
+            const reason = controls ? 'applied_child_selection_reader_unavailable' : 'session_runtime_controls_unavailable';
+            logger.infoFile('[Session] Applied parent selection unavailable', {
+                sessionId: params.sessionId, runnerPid: process.pid, reason,
+            });
+            return { status: 'unavailable' as const };
+        }
+        const selection = await reader();
+        return disposed || params.sessionRuntimeControls?.readAppliedChildSelection !== reader
+            ? { status: 'unavailable' as const } : selection ?? { status: 'unavailable' as const };
+    };
+    const permissionOwnerUnavailable = () => Object.assign(new Error('Session permission owner is unavailable'), {
+        code: 'execution_run_interaction_unavailable',
+    });
     const sessionInteractionHost = parentSessionForTools
         ? {
             session: parentSessionForTools,
             machineId: sessionMachineId,
+            readOwnerAccountCredentials,
             readCodingPromptBehavior,
             readAppliedChildSelection,
-            permissionHandler: createProviderEnforcedPermissionHandler({
-                session: parentSessionForTools,
-                logPrefix: '[Voice Agent Session]',
-                getAccountSettings: () => ownerAccountSettingsForRuntime,
-                getWorkspaceWrites: () => {
-                    if (params.getCurrentWorkspaceWrites) return params.getCurrentWorkspaceWrites();
-                    if (parentSessionForTools.getCurrentWorkspaceWrites) return parentSessionForTools.getCurrentWorkspaceWrites();
-                    const read = actionsSettingsProvider.getAccountRoleOverrides?.();
-                    return read?.status === 'ready'
-                        ? readSessionWorkspaceWritesV1(parentSessionForTools.getMetadataSnapshot(), { settingsOverrides: read.overrides })
-                        : 'deny';
-                },
-                getCodingPromptBehavior: readCodingPromptBehavior,
-            }),
+            get permissionHandler() {
+                const handler = disposed ? null : params.sessionRuntimeControls?.readPermissionHandler?.();
+                if (!handler) throw permissionOwnerUnavailable();
+                return handler;
+            },
             ...(typeof params.sessionRuntimeControls?.listSkills === 'function'
                 ? { listSkills: () => params.sessionRuntimeControls!.listSkills!() }
                 : {}),
@@ -438,7 +477,7 @@ export function registerSessionClientRuntimeHandlers(
                 const credentials = ownerCredentials ?? restrictedRuntimeAdmission?.credentials ?? null;
                 if (!credentials) return {
                     supportedSessionReadActions: [],
-                    dispose: () => undefined,
+                    dispose: (): void => undefined,
                 };
                 const { toAgentSessionMcpLaunchConfigs } = await import('@/agent/runtime/registry/engineRegistry/nativeAgentSession');
                 const accountSettingsSnapshot = ownerCredentials
@@ -462,6 +501,7 @@ export function registerSessionClientRuntimeHandlers(
                         serverId: approvalServerId,
                         serverUrl: approvalServerApiUrl,
                     }),
+                    getServerFeaturesSnapshot: () => params.getServerFeaturesSnapshot?.(),
                     confirmSessionAction: (confirmation, binding) =>
                         parentSessionForTools.confirmSessionAction(confirmation, binding),
                     // The Run's Board and Discussions are its parent Session's,
@@ -596,11 +636,11 @@ export function registerSessionClientRuntimeHandlers(
         // This ad-hoc Run read has no client list-membership owner: it returns the
         // canonical Action result only and cannot replace ordinary/query membership.
         return await (ownerCredentials
-            ? createSessionListActionDependency({
+            ? createSessionListActionDeps({
                 credentials,
                 serverId: approvalServerId,
                 serverHttpBaseUrl: approvalServerApiUrl,
-            })
+            }).sessionList
             : createRestrictedCurrentSessionListActionDependency({
                 credentials,
                 sessionId: params.sessionId,
@@ -619,6 +659,11 @@ export function registerSessionClientRuntimeHandlers(
             machineId: sessionMachineId,
             serverId: approvalServerId,
             serverApiUrl: approvalServerApiUrl,
+            isSessionCallerCurrent: async ({ caller, signal }) => {
+                const lifetime = params.session?.getRuntimeLifetimeSignal?.();
+                return caller.sessionId === params.sessionId && Boolean(lifetime && !lifetime.aborted)
+                    && !signal?.aborted && await ownerAccountIsCurrent();
+            },
             resolveCurrentPermissionMode: async (origin) => {
                 if (origin.runId) {
                     const run = executionRunManager?.get(origin.runId);
@@ -635,10 +680,23 @@ export function registerSessionClientRuntimeHandlers(
         });
         return checker ? await checker(args) : false;
     };
+    // Session RPCs register before the host installs native policy controls.
+    // Resolve the current control at invocation, including after runtime retirement.
+    const prepareWorkspaceWritesPolicy: RoleWorkspaceWritesPolicyPreparer = async (workspaceWrites, context) => {
+        const prepare = params.prepareWorkspaceWritesPolicy ?? parentSessionForTools?.prepareWorkspaceWritesPolicy;
+        return prepare ? await prepare(workspaceWrites, context)
+            : { ok: false, errorCode: 'role_policy_unenforceable' };
+    };
     const sessionActionParams = {
         token: params.token,
+        serverId: approvalServerId,
+        serverHttpBaseUrl: approvalServerApiUrl,
         sessionId: params.sessionId,
         getCurrentSessionMetadata: params.getSessionMetadata,
+        ...(parentSessionForTools ? {
+            postSessionUpdate: async (report: SessionUpdatePostInputV1) => await parentSessionForTools.enqueueSessionEventCommitted({ type: 'worker-report', ...report }),
+            sessionMessageReplyPublisher: parentSessionForTools,
+        } : {}),
         getCurrentSessionSkillItems: () => params.getCurrentSessionSkillItems
             ? params.getCurrentSessionSkillItems()
             : parentSessionForTools?.getCurrentSessionSkillItems?.() ?? null,
@@ -648,7 +706,7 @@ export function registerSessionClientRuntimeHandlers(
             ? () => parentSessionForTools.getCurrentResolvedRoles!() : undefined),
         getCurrentWorkspaceWrites: params.getCurrentWorkspaceWrites ?? (parentSessionForTools?.getCurrentWorkspaceWrites
             ? () => parentSessionForTools.getCurrentWorkspaceWrites!() : undefined),
-        prepareWorkspaceWritesPolicy: params.prepareWorkspaceWritesPolicy ?? parentSessionForTools?.prepareWorkspaceWritesPolicy,
+        prepareWorkspaceWritesPolicy,
         ...(params.enqueueRegisteredSessionStateFieldMutation ? {
             stageSessionStateMutation: async (mutation) => { await params.enqueueRegisteredSessionStateFieldMutation!(mutation); },
         } : {}),
@@ -678,21 +736,55 @@ export function registerSessionClientRuntimeHandlers(
         },
     } satisfies Parameters<typeof createCliActionExecutor>[0];
     const transcriptActionExecutor = createCliActionExecutor(sessionActionParams);
+    const roleOverridesUnavailable = (reason: string) => {
+        const error = Object.assign(new Error('account_role_overrides_unavailable'), {
+            code: 'account_role_overrides_unavailable', reason, contextSource: 'account_lifetime',
+        });
+        logger.infoFile('[Session] Role Action refused', readSessionPreparationFailureDiagnostic(error));
+        return null;
+    };
     const resolveCredentialedRoleParams = async (signal?: AbortSignal) => runWithServerHttpBaseUrl(approvalServerApiUrl, async () => {
         const credentials = await readOwnerAccountCredentials();
         if (!credentials || readAccountIdFromToken(credentials.token) !== runtimeAccountId) {
             await ownerAccountOperationContext?.isCurrent();
-            return null;
+            return roleOverridesUnavailable(credentials ? 'account-mismatch' : 'credentials-unavailable');
         }
-        if (!await resolveOwnerAccountSettings() || !ownerAccountOperationContext) return null;
-        const operationContext = ownerAccountOperationContext;
-        const overrides = await prepareActiveAccountRoleOverrides({ credentials, scopeKey: roleAccountScopeKey,
-            lifetimeToken: roleAccountLifetimeToken, signal, operationContext });
-        if (overrides.status !== 'ready') return null;
-        const sourceReader = sessionActionParams.readRoleSources ?? createRoleSourceReader({
+        const sessionRoles = parentSessionForTools?.getSessionRoleContext?.();
+        // The Session's prepared Account holder is authoritative once installed.
+        // Finite/standalone receivers retain their existing credentialed holder.
+        if (!sessionRoles && !await resolveOwnerAccountSettings()) return roleOverridesUnavailable('source-unavailable');
+        const operationContext = sessionRoles ? sessionRoles.readOperationContext?.() : ownerAccountOperationContext;
+        if (!operationContext) return roleOverridesUnavailable('source-unavailable');
+        if (operationContext.credentials.token !== credentials.token
+            || operationContext.readSnapshot()?.scopeKey !== roleAccountScopeKey
+            || normalizeServerHttpBaseUrl(operationContext.serverHttpBaseUrl) !== normalizeServerHttpBaseUrl(approvalServerApiUrl)
+            || !await operationContext.isCurrent()) {
+            return roleOverridesUnavailable('not-current');
+        }
+        const prepareOverrides = async (readSignal?: AbortSignal) => {
+            if (sessionRoles) await sessionRoles.prepare(readSignal, true);
+            else await prepareActiveAccountRoleOverrides({ credentials, scopeKey: roleAccountScopeKey,
+                lifetimeToken: roleAccountLifetimeToken, signal: readSignal, operationContext });
+        };
+        // Each explicit Action attempt may recover a prior failed demand. A
+        // still-running Session demand is joined by its existing Role owner.
+        await prepareOverrides(signal);
+        const readReadyAccountRoleOverrides = (readSignal?: AbortSignal) => sessionRoles
+            ? sessionRoles.readAccountOverrides(readSignal)
+            : readPreparedAccountRoleOverrides({
+                read: () => {
+                    const snapshot = operationContext.readSnapshot();
+                    return snapshot ? readAccountRoleOverridesFromSnapshot(snapshot)
+                        : { status: 'unavailable', reason: 'scope-retired' };
+                },
+                prepare: prepareOverrides,
+            }, readSignal);
+        const overrides = await readReadyAccountRoleOverrides(signal);
+        if (overrides.status !== 'ready') return roleOverridesUnavailable(overrides.reason);
+        const sourceReader = sessionRoles?.readRoleSources ?? sessionActionParams.readRoleSources ?? createRoleSourceReader({
             artifactStore: createCredentialedAccountArtifactStore(credentials), accountId: runtimeAccountId,
             readRawAccountSettings: async () => {
-                const current = await resolveOwnerAccountSettingsSnapshot({ signal });
+                const current = operationContext.readSnapshot();
                 if (!current || current.source === 'none' || !current.rawSettings) {
                     throw Object.assign(new Error('account_settings_content_unavailable'), { code: 'account_settings_content_unavailable' });
                 }
@@ -700,23 +792,35 @@ export function registerSessionClientRuntimeHandlers(
             },
         });
         const readRoleSources: RoleSourceReader = async (readSignal) => {
-            const prepared = await prepareActiveAccountRoleOverrides({ credentials, scopeKey: roleAccountScopeKey,
-                lifetimeToken: roleAccountLifetimeToken, signal: readSignal, operationContext });
-            if (prepared.status !== 'ready') throw Object.assign(new Error('account_role_overrides_unavailable'), { code: 'account_role_overrides_unavailable' });
+            const prepared = await readReadyAccountRoleOverrides(readSignal);
+            if (prepared.status !== 'ready') {
+                roleOverridesUnavailable(prepared.reason);
+                throw Object.assign(new Error('account_role_overrides_unavailable'), { code: 'account_role_overrides_unavailable', reason: prepared.reason });
+            }
             const inventory = await sourceReader(readSignal);
             if (!await operationContext.isCurrent() || !operationContext.readSnapshot()) {
-                throw Object.assign(new Error('account_role_overrides_unavailable'), { code: 'account_role_overrides_unavailable' });
+                roleOverridesUnavailable('not-current');
+                throw Object.assign(new Error('account_role_overrides_unavailable'), { code: 'account_role_overrides_unavailable', reason: 'not-current' });
             }
             return inventory;
         };
         return { ...sessionActionParams, token: credentials.token, credentials,
             serverId: approvalServerId, serverHttpBaseUrl: approvalServerApiUrl, readRoleSources,
+            ...(sessionRoles ? { getSessionRoleContext: () => sessionRoles } : {}),
+            readReadyAccountRoleOverrides,
             savedSecretOperationContext: operationContext };
+    }).catch((error: unknown) => {
+        const diagnostic = readSessionPreparationFailureDiagnostic(error);
+        if (diagnostic.originalCode === 'context_source_unavailable' || diagnostic.originalCode === 'role_overrides_unavailable') {
+            return roleOverridesUnavailable(diagnostic.reason);
+        }
+        throw error;
     });
 
     registerActionSpecRpcHandlers({
         rpcHandlerManager: params.rpcHandlerManager,
-        resolveActionExecutor: async ({ actionId }) => {
+        resolveActionExecutor: async ({ actionId, ingress }) => {
+            if (actionId === 'session.update.post' || actionId === 'session.message.reply') return transcriptActionExecutor;
             if (actionId === 'skills.read') {
                 const credentials = await readOwnerAccountCredentials();
                 if (!credentials) return {
@@ -729,7 +833,7 @@ export function registerSessionClientRuntimeHandlers(
                     execute: async () => ({ ok: false as const, errorCode: 'catalog_unavailable', error: 'catalog_unavailable' }),
                 };
             }
-            const roleParams = await resolveCredentialedRoleParams();
+            const roleParams = await resolveCredentialedRoleParams(ingress?.signal);
             return roleParams ? createCliActionExecutor(roleParams) : {
                 execute: async () => ({
                     ok: false as const,
@@ -738,7 +842,7 @@ export function registerSessionClientRuntimeHandlers(
                 }),
             };
         },
-        actionIds: [...ROLE_ACTION_IDS_V1.filter((actionId) => actionId.startsWith('session.')), 'skills.read'],
+        actionIds: [...ROLE_ACTION_IDS_V1.filter((actionId) => actionId.startsWith('session.')), 'skills.read', 'session.update.post', 'session.message.reply'],
     });
     registerSessionRoleConfigurationHandler({
         rpcHandlerManager: params.rpcHandlerManager,
@@ -749,9 +853,19 @@ export function registerSessionClientRuntimeHandlers(
             if (!roleParams) throw Object.assign(new Error('account_role_overrides_unavailable'), { code: 'account_role_overrides_unavailable' });
             return await runWithServerHttpBaseUrl(approvalServerApiUrl, () => roleParams.readRoleSources(signal));
         },
-        prepareWorkspaceWritesPolicy: params.prepareWorkspaceWritesPolicy ?? parentSessionForTools?.prepareWorkspaceWritesPolicy,
-        readSettingsOverrides: () => actionsSettingsProvider.getAccountRoleOverrides?.()
-            ?? { status: 'unavailable', reason: 'source-unavailable' },
+        prepareWorkspaceWritesPolicy,
+        readSettingsOverrides: async signal => {
+            const roleParams = await resolveCredentialedRoleParams(signal);
+            return roleParams ? await roleParams.readReadyAccountRoleOverrides(signal)
+                : { status: 'unavailable', reason: 'source-unavailable' };
+        },
+        isWorkflowAuthorizationCurrent: async context => {
+            if (context.actionCaller?.kind !== 'workflowRun') return false;
+            const credentials = await readOwnerAccountCredentials();
+            const accountId = credentials && readAccountIdFromToken(credentials.token);
+            if (!credentials || !accountId) return false;
+            return hasReceivedWorkflowSessionRoleAuthority({ context, accountId, sessionId: params.sessionId });
+        },
         resolveAgentStartContext: async (context) => {
             const roleParams = await resolveCredentialedRoleParams(context.signal);
             if (!roleParams) return null;
@@ -762,8 +876,8 @@ export function registerSessionClientRuntimeHandlers(
         sessionList: async (input) => {
             const roleParams = await resolveCredentialedRoleParams();
             if (!roleParams) return { ok: false, errorCode: 'target_unavailable', error: 'target_unavailable' };
-            return await createSessionListActionDependency({ credentials: roleParams.credentials,
-                serverId: approvalServerId, serverHttpBaseUrl: approvalServerApiUrl })(input);
+            return await createSessionListActionDeps({ credentials: roleParams.credentials,
+                serverId: approvalServerId, serverHttpBaseUrl: approvalServerApiUrl }).sessionList(input);
         },
         readCurrentReportLead: async (signal) => {
             const roleParams = await resolveCredentialedRoleParams(signal);
@@ -771,7 +885,7 @@ export function registerSessionClientRuntimeHandlers(
             const session = await runWithServerHttpBaseUrl(approvalServerApiUrl, () => fetchSessionById({
                 token: roleParams.token, sessionId: params.sessionId, signal, accessProjectionVersion: 1,
             }));
-            return session?.effectiveAccess?.level === 'owner' ? session.reportsTo?.sessionId ?? null : null;
+            return session?.effectiveAccess?.level === 'owner' ? readSessionManagerSessionIdV1(session) : null;
         },
         readCallerWorkspaceWrites: async (context) => {
             if (context.actionCaller?.kind !== 'session') return null;
@@ -804,7 +918,9 @@ export function registerSessionClientRuntimeHandlers(
             ? { createCapabilitiesApiClient: params.createCapabilitiesApiClient }
             : {}),
         getSessionMetadata: () => params.getSessionMetadata(),
+        isUsageLimitRecoveryEnabled: () => resolveUsageLimitRecoveryEnabled({ serverUrl: params.serverUrl }),
         sessionRuntimeControls: params.sessionRuntimeControls ?? null,
+        waitForSessionRuntimeControls: params.waitForSessionRuntimeControls,
         enqueueSessionUserMessage: (request: Readonly<{
             callerInputAuthorization?: import('@happier-dev/protocol').ExternalActionExecutionAuthorizationV1;
             text: string;
@@ -820,8 +936,10 @@ export function registerSessionClientRuntimeHandlers(
             const machineId = params.getSessionMetadata()?.machineId;
             if (!machineId) return { ok: false, errorCode: 'session_usage_limit_recovery_control_target_machine_unavailable' };
             try {
+                const credentials = await readOwnerAccountCredentials();
+                if (!credentials) return { ok: false, errorCode: 'session_usage_limit_recovery_control_target_machine_unavailable' };
                 return await callMachineRpc({
-                    credentials: params.credentials, machineId,
+                    credentials, machineId, serverUrl: params.serverUrl,
                     method: RPC_METHODS.DAEMON_SESSION_USAGE_LIMIT_CHECK_NOW,
                     request: { sessionId: request.sessionId,
                         ...(request.resumePromptMode !== undefined ? { resumePromptMode: request.resumePromptMode } : {}),
@@ -899,11 +1017,28 @@ export function registerSessionClientRuntimeHandlers(
         },
     };
 
-    registerExecutionRunHandlers(params.rpcHandlerManager, {
+    const resolveExecutionRunProfileCatalog = createRunnerExecutionRunSnapshotResolver({ sessionId: params.sessionId,
+        ...(sessionMachineId ? { machineId: sessionMachineId } : {}) });
+    const executionRunHandlersRegistration = registerExecutionRunHandlers(params.rpcHandlerManager, {
         sessionId: params.sessionId,
-        resolveExecutionRunProfileCatalog: createRunnerExecutionRunSnapshotResolver({ sessionId: params.sessionId,
-          ...(sessionMachineId ? { machineId: sessionMachineId } : {}) }),
+        resolveExecutionRunProfileCatalog: async (...input) => {
+            // Explicit child selection skips applied-parent model readiness, but
+            // native children still consume the owning Session's permission handler.
+            if (sessionInteractionHost && !params.sessionRuntimeControls?.readPermissionHandler
+                && params.waitForSessionRuntimeControls) {
+                if (!await params.waitForSessionRuntimeControls(runtimeControlsLifetime.signal)) {
+                    throw permissionOwnerUnavailable();
+                }
+                void sessionInteractionHost.permissionHandler;
+            }
+            if (disposed) throw permissionOwnerUnavailable();
+            return await resolveExecutionRunProfileCatalog(...input);
+        },
         readPromptCredentials: readOwnerAccountCredentials,
+        ...(runtimeAccountId ? { resolveRunReportPolicy: createSessionRunReportPolicyReader({
+            serverId: params.serverId, serverHttpBaseUrl: params.serverUrl, accountId: runtimeAccountId,
+            readCredentials: readOwnerAccountCredentials, isCurrent: ownerAccountIsCurrent,
+        }) } : {}),
         readModelProjection: createAccountScopedProviderModelProjectionReader({ serverUrl: params.serverUrl,
             readCredentials: readOwnerAccountCredentials, readAccountSettingsSnapshot: resolveOwnerAccountSettingsSnapshot,
             isCurrent: ownerAccountIsCurrent }),
@@ -940,7 +1075,9 @@ export function registerSessionClientRuntimeHandlers(
             ? { machineId: sessionMachineId }
             : {}),
         ...(sessionInteractionHost ? { sessionInteractionHost } : {}),
-        grantAttachedRunTeamVisibility: async ({ sessionId, teamId, requiredTeamCredential }) => {
+        grantAttachedRunTeamVisibility: async ({ sessionId, teamId, requiredTeamCredential, signal: callerSignal }) => {
+            const signal = callerSignal
+                ? AbortSignal.any([callerSignal, runtimeControlsLifetime.signal]) : runtimeControlsLifetime.signal;
             if (sessionId !== params.sessionId) {
                 return {
                     ok: false,
@@ -987,6 +1124,7 @@ export function registerSessionClientRuntimeHandlers(
                         requiredTeamCredential,
                     }),
                     context: {},
+                    signal,
                 });
                 const failure = result && typeof result === 'object' && 'ok' in result && result.ok === false
                     ? result as Readonly<{ errorCode?: unknown }>
@@ -995,7 +1133,10 @@ export function registerSessionClientRuntimeHandlers(
                 return {
                     ok: false,
                     error: 'The Session could not be made visible to the selected Team',
-                    errorCode: 'execution_run_team_session_binding_rejected',
+                    // Run-start's strict detail projection cannot retain a nested
+                    // Action failure. Keep issued-mutation uncertainty in its code.
+                    errorCode: failure.errorCode === 'outcome_unknown'
+                        ? 'outcome_unknown' : 'execution_run_team_session_binding_rejected',
                     details: failure,
                 };
             } catch (error) {
@@ -1092,7 +1233,13 @@ export function registerSessionClientRuntimeHandlers(
             reviewBoundedTimeoutMs: configuration.executionRunsReviewBoundedTimeoutMs,
             maxTurns: configuration.executionRunsMaxTurns,
         },
-        resolveAccountSettings: async () => {
+        resolveAccountSettings: async (actionId) => {
+            // Restricted Session readers carry host-reviewed policy, not owner
+            // Account credentials. Their Action owner still admits the exact
+            // principal/corpus; resolving policy must not demand owner material.
+            if (actionId === 'session.list' && !await ownerAccountIsCurrent() && !disposed) {
+                return actionsSettingsProvider.getAccountSettings?.() ?? null;
+            }
             return await resolveOwnerAccountSettings();
         },
         resolveAccountSettingsSnapshot: resolveOwnerAccountSettingsSnapshot,
@@ -1101,8 +1248,33 @@ export function registerSessionClientRuntimeHandlers(
         actionApprovalDeps: createExecutionRunRpcApprovalDeps({
             readCredentials: readOwnerAccountCredentials,
             isApprovalExecutionOriginCurrent,
+            resolveReviewHostPluginAuthority: createRunnerReviewHostPluginAuthorityReader(params.sessionId),
         }),
     });
+    let executionRunsDisposal: Promise<void> | null = null;
+    const disposeExecutionRuns = (): Promise<void> => {
+        disposed = true;
+        runtimeControlsLifetime.abort();
+        executionRunsDisposal ??= Promise.resolve().then(() => executionRunManager?.dispose?.());
+        return executionRunsDisposal;
+    };
+    let disposePromise: Promise<void> | null = null;
     return { refreshDemandedMcpCatalog: ownerAccountSnapshots.refreshDemandedMcpCatalog,
-        dispose: async () => { disposed = true; await ownerAccountSnapshots.dispose(); await sessionHandlersRegistration.dispose(); } };
+        resolveSessionAttachment: sessionHandlersRegistration.resolveSessionAttachment,
+        disposeExecutionRuns,
+        dispose: () => {
+            disposePromise ??= (async () => {
+                try {
+                    // Child native runtimes belong to this Session, including
+                    // idle retained Runs. Retire them before their Account and
+                    // transport resources are withdrawn by Session close.
+                    await disposeExecutionRuns();
+                } finally {
+                    executionRunHandlersRegistration.dispose();
+                    try { await ownerAccountSnapshots.dispose(); }
+                    finally { await sessionHandlersRegistration.dispose(); }
+                }
+            })();
+            return disposePromise;
+        } };
 }

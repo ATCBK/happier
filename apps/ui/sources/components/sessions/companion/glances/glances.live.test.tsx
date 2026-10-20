@@ -7,36 +7,34 @@ import type { SessionContextUsageSnapshotV1 } from '@happier-dev/protocol';
 import { HappierWidgetFrame } from '@happier-dev/plugin-ui/presentation';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { ScmWorkingSnapshotSchema } from '@happier-dev/protocol/scm';
+import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { createPlainSessionCurrentProjectionRecordFixture, createSessionOwnerViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 
-import { createSessionFixture, flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createSessionFixture, flushHookEffects, renderScreen } from '@/dev/testkit';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { widgetProjectionEntry } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
-import { AppPaneProvider } from '@/components/appShell/panes/AppPaneProvider';
+import { installSessionPaneRuntimeTestHarness } from '@/components/sessions/panes/sessionPaneRuntimeTestHarness';
+import { storage } from '@/sync/domains/state/storage';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
 import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { parseSessionPaneUrlState } from '@/components/sessions/panes/url/sessionPaneUrlState';
-import { AppShellPluginUiProjectionValueProvider } from '@/components/appShell/plugins/AppShellPluginUiProjection';
+import { AppShellPluginUiProjectionProvider, AppShellPluginUiProjectionValueProvider } from '@/components/appShell/plugins/AppShellPluginUiProjection';
 import { normalizePluginUiProjection } from '@/sync/domains/plugins/ui/projection';
 import { clearDaemonMergedProjectionCacheForTests } from '@/agents/backendCatalog/loadDaemonMergedProjectionInputs';
 import { forgetPluginUiProjectionAdmissionSnapshots } from '@/sync/domains/plugins/ui/projectionWarmCache';
 import { prepareWarmCacheEncryptionKey } from '@/sync/domains/state/warmCacheEncryptionKey';
-import { retireActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { resetLocalServiceInventoryStoreForTests } from '@/sync/domains/local/services/inventory/sharedStore';
 import { resetLocalServiceLauncherStoreForTests } from '@/sync/domains/local/services/launch/sharedStore';
 import { SessionCompanionGlance } from './SessionCompanionGlance';
 import { LocalServicesGlance } from './LocalServicesGlance';
 import { resolveMachineTargetForSessionFromState } from '@/sync/domains/session/resolveMachineTargetForSessionFromState';
-import type { StorageState } from '@/sync/store/types';
-import type { ScmWorkingSnapshot } from '@/sync/domains/state/storageTypes';
 
 const boundary = vi.hoisted(() => ({
-    state: {} as Partial<StorageState> & { session?: ReturnType<typeof createSessionFixture> },
     projection: vi.fn(),
     rpc: vi.fn(),
     navigate: vi.fn(),
-    usage: null as SessionContextUsageSnapshotV1 | null,
-    scm: null as ScmWorkingSnapshot | null,
 }));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
@@ -45,53 +43,56 @@ vi.mock('@/components/appShell/workspace/destinationRoute', async (importOrigina
     ...(await importOriginal<typeof import('@/components/appShell/workspace/destinationRoute')>()),
     useRouter: () => ({ push: boundary.navigate }),
 }));
-vi.mock('@/sync/domains/state/storage', async () => {
-    const { createStorageModuleStub, createLiveStorageStoreMock } = await import('@/dev/testkit/mocks/storage');
-    return createStorageModuleStub({
-        storage: createLiveStorageStoreMock(() => boundary.state),
-        useEndpointStatus: () => 'online',
-        useMachineCliDetectionTarget: () => ({ daemonStateVersion: 1, isOnline: true }),
-        useSession: (sessionId: string, serverId?: string | null) => {
-            const value = boundary.state.sessions?.[sessionId];
-            return value?.serverId === serverId ? value : null;
-        },
-        useActiveServerAccountScope: () => boundary.state.profileScope ?? null,
-        useSessionServerId: () => 'home-a',
-        useSessionUsage: (sessionId: string, options: { serverId?: string | null }) => sessionId === 'session-b' && options.serverId === 'home-a'
-            ? { contextSnapshot: boundary.usage, contextSnapshotStale: false } : null,
-        useSessionProjectScmSnapshot: (sessionId: string, serverId?: string | null) => sessionId === 'session-b' && serverId === 'home-a' ? boundary.scm : null,
-    });
-});
-vi.mock('@/sync/store/hooks', async () => {
-    return await import('@/sync/domains/state/storage');
-});
-vi.mock('@/sync/domains/state/storageStateReaderBridge', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/sync/domains/state/storageStateReaderBridge')>()),
-    readRegisteredStorageState: () => boundary.state,
-}));
-vi.mock('@/sync/runtime/orchestration/connectionManager', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/sync/runtime/orchestration/connectionManager')>()),
-    getAppliedActiveServerSnapshot: () => ({ serverId: 'home-a', serverUrl: 'https://home-a.test', generation: 1 }),
-    isAppliedActiveServerRuntimeAvailable: () => true,
-}));
-// The daemon transport is the boundary; projection admission, Session targeting,
-// widget resolution and local-service subscriptions remain real beneath it.
-vi.mock('@/sync/ops/machineContributionRegistryProjection', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/sync/ops/machineContributionRegistryProjection')>()),
-    machineContributionRegistryProjectionDescribe: (...args: unknown[]) => boundary.projection(...args),
-    getMachineContributionRegistryProjectionRevision: () => 0,
-    subscribeMachineContributionRegistryProjectionInvalidation: () => () => {},
-}));
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({
-    machineRpcWithServerScope: (input: unknown) => boundary.rpc(input),
-}));
-// The sync singleton is the app transport boundary; native activity/model logic stays real.
-vi.mock('@/sync/sync', async () => ({
-    sync: (await import('@/dev/testkit/mocks/sync')).createAcceptedExternalSessionTailCursorSyncBoundary(),
-}));
-vi.mock('@/sync/ops/sessionSynopsis', () => ({ observeSessionSynopses: () => () => {} }));
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 
-const session = createSessionFixture({ id: 'session-a', serverId: 'home-a' });
+const runtime = installSessionPaneRuntimeTestHarness({
+    sessionId: 'session-a',
+    request: async (input, init) => {
+        const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
+        if ((init?.method ?? 'GET').toUpperCase() !== 'POST' || path !== '/v2/sessions/query') return null;
+        const sessions = Object.values(storage.getState().sessions)
+            .filter((candidate) => areServerProfileIdentifiersEquivalent(candidate.serverId, runtime.serverId))
+            .map((candidate) => ({
+                ...createPlainSessionCurrentProjectionRecordFixture({
+                    id: candidate.id, seq: candidate.seq, createdAt: candidate.createdAt, updatedAt: candidate.updatedAt,
+                    active: candidate.active, activeAt: candidate.activeAt, archivedAt: candidate.archivedAt,
+                    metadataVersion: candidate.metadataVersion, agentStateVersion: candidate.agentStateVersion,
+                }),
+                viewer: createSessionOwnerViewerFixture(candidate),
+            }));
+        return Response.json(SessionListQueryResponseV1Schema.parse({
+            sessions, nextCursor: null, hasNext: false, attentionNextCursor: null, attentionHasNext: false,
+        }));
+    },
+    rpc: async (method, payload, machineId) => {
+        if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
+            const response = await boundary.projection();
+            return { protocolVersion: 1, projection: response.projection };
+        }
+        return await boundary.rpc({ method, payload, machineId, serverId: runtime.serverId });
+    },
+});
+
+let session: ReturnType<typeof createSessionFixture>;
+
+async function hydrateSelectedSession() {
+    const selected = createSessionFixture({ id: 'session-b', serverId: runtime.serverId });
+    const currentScope = captureActiveServerAccountScopeLifetime()?.scope;
+    expect(currentScope && areServerProfileIdentifiersEquivalent(currentScope.serverId, selected.serverId)).toBe(true);
+    storage.getState().applySessions([selected]);
+    const { sync } = await import('@/sync/sync');
+    const result = await sync.ensureSessionVisibleForMessageRoute(selected.id, {
+        serverId: runtime.serverId,
+        hydrateMessages: false,
+    });
+    expect(result.kind).toBe('available');
+    return selected;
+}
+
+function GlanceFixture(props: Readonly<{ children: React.ReactNode }>) {
+    return <runtime.Wrapper><AppShellPluginUiProjectionProvider>{props.children}</AppShellPluginUiProjectionProvider></runtime.Wrapper>;
+}
 const serviceTarget = {
     id: 'inventory:web', source: 'inventory_entry', machineId: 'machine-1', sessionId: 'session-a',
     title: 'web', confidence: 'high', state: 'available', actions: ['open'],
@@ -104,62 +105,60 @@ function successfulRead(method: string, targets: readonly unknown[] = [], sessio
         : { v: 1, machineId: 'machine-1', generatedAt: 1234, refreshState: 'idle', entries: [], diagnostics: [] } };
 }
 async function renderServices() {
-    expect(resolveMachineTargetForSessionFromState(boundary.state, { sessionId: session.id, serverId: 'home-a' })).toMatchObject({ machineId: 'machine-1' });
-    const screen = await renderScreen(<AppPaneProvider><LocalServicesGlance sessionId="session-a" serverId="home-a" frameStyle="plain" measurementOnly={false} testID="services" /></AppPaneProvider>);
+    expect(resolveMachineTargetForSessionFromState(storage.getState(), { sessionId: session.id, serverId: runtime.serverId })).toMatchObject({ machineId: 'machine-1' });
+    const screen = await renderScreen(<runtime.Wrapper><LocalServicesGlance sessionId="session-a" serverId={runtime.serverId} frameStyle="plain" measurementOnly={false} testID="services" /></runtime.Wrapper>);
     await flushHookEffects({ cycles: 6 });
     return screen;
 }
 beforeEach(async () => {
     await prepareWarmCacheEncryptionKey();
-    retireActiveServerAccountScopeLifetime();
     clearDaemonMergedProjectionCacheForTests();
-    forgetPluginUiProjectionAdmissionSnapshots({ serverId: 'home-a', accountId: 'account-a' });
+    forgetPluginUiProjectionAdmissionSnapshots({ serverId: runtime.serverId, accountId: 'account-a' });
     resetLocalServiceInventoryStoreForTests();
     resetLocalServiceLauncherStoreForTests();
     const machine = createMachineFixture({ activeAt: Date.now() });
-    boundary.state = { profileScope: { serverId: 'home-a', accountId: 'account-a' }, session, sessions: { [session.id]: session }, machines: { [machine.id]: machine }, machineListByServerId: { 'home-a': [machine] } };
+    session = createSessionFixture({ id: 'session-a', serverId: runtime.serverId });
+    storage.getState().applySessions([session]);
+    storage.getState().applyMachines([machine], true, { sourceServerId: runtime.serverId, sourceAccountId: 'account-a' });
+    storage.getState().markMachineListSettled(runtime.serverId);
     boundary.rpc.mockReset();
     boundary.projection.mockReset();
     boundary.navigate.mockReset();
-    boundary.usage = null;
-    boundary.scm = null;
     boundary.rpc.mockImplementation(({ method }: { method: string }) => method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH ? new Promise(() => {}) : Promise.resolve(successfulRead(method)));
 });
-afterEach(() => { standardCleanup(); resetLocalServiceInventoryStoreForTests(); resetLocalServiceLauncherStoreForTests(); });
+afterEach(() => { resetLocalServiceInventoryStoreForTests(); resetLocalServiceLauncherStoreForTests(); });
 
 function BrowserPaneProbe() {
-    const a = useAppPaneScope(createSessionPaneScopeId('session-a', 'home-a', 'physical-a'));
-    const b = useAppPaneScope(createSessionPaneScopeId('session-b', 'home-a', 'physical-a'));
+    const a = useAppPaneScope(createSessionPaneScopeId('session-a', runtime.serverId, 'physical-a'));
+    const b = useAppPaneScope(createSessionPaneScopeId('session-b', runtime.serverId, 'physical-a'));
     return React.createElement('BrowserPaneProbe', { a: a.scopeState?.details.tabs ?? [], b: b.scopeState?.details.tabs ?? [] });
 }
 
 describe('Companion glance consumed owners', () => {
     it('opens the configured services Browser destination only after the exact B tab is committed', async () => {
-        const selected = createSessionFixture({ id: 'session-b', serverId: 'home-a' });
-        boundary.state = { ...boundary.state, sessions: { ...boundary.state.sessions, [selected.id]: selected } };
+        const selected = await hydrateSelectedSession();
         boundary.rpc.mockImplementation(({ method, payload }: { method: string; payload?: { sessionId?: string } }) =>
             method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH ? new Promise(() => {})
                 : Promise.resolve(successfulRead(method, [{ ...serviceTarget, sessionId: selected.id }], payload?.sessionId)));
-        const screen = await renderScreen(<AppPaneProvider><DestinationInstanceHost tabId="physical-a"
-            ref={{ kind: 'session', params: { id: session.id, serverId: 'home-a' } }} pathname="/session/session-a" focused visible>
+        const screen = await renderScreen(<GlanceFixture><DestinationInstanceHost tabId="physical-a"
+            ref={{ kind: 'session', params: { id: session.id, serverId: runtime.serverId } }} pathname="/session/session-a" focused visible>
             <BrowserPaneProbe />
             <SessionCompanionGlance entry={{ kind: 'instance', ref: { kind: 'instance', instance: { v: 1, id: 'browser-b',
-                definition: { kind: 'builtin', id: 'local_services' }, bindings: { session: { kind: 'value', value: { serverId: 'home-a', sessionId: selected.id } } } } } }}
-                sessionId={session.id} session={session} serverId="home-a" frameStyle="plain" headerAccessory={null}
+                definition: { kind: 'builtin', id: 'local_services' }, bindings: { session: { kind: 'value', value: { serverId: runtime.serverId, sessionId: selected.id } } } } } }}
+                sessionId={session.id} session={session} serverId={runtime.serverId} frameStyle="plain" headerAccessory={null}
                 measurementOnly={false} testID="browser-b" />
-        </DestinationInstanceHost></AppPaneProvider>);
+        </DestinationInstanceHost></GlanceFixture>);
         await flushHookEffects({ cycles: 8 });
         await act(async () => { screen.pressByTestId('browser-b.surface.row.inventory:web.open'); });
         await flushHookEffects({ cycles: 3 });
         const probe = screen.tree.root.findByType('BrowserPaneProbe');
         expect(probe.props.a).toEqual([]);
         expect(probe.props.b).toMatchObject([{ kind: 'browser-view', resource: { target: { kind: 'externalUrl', url: 'http://127.0.0.1:8081/' } } }]);
-        expect(boundary.navigate).toHaveBeenCalledWith('/session/session-b/details?serverId=home-a');
+        expect(boundary.navigate).toHaveBeenCalledWith(`/session/session-b/details?serverId=${runtime.serverId}`);
     });
     it('routes configured Summary Git and Changes review into B destinations from the physical A destination', async () => {
-        const selected = createSessionFixture({ id: 'session-b', serverId: 'home-a' });
-        boundary.state = { ...boundary.state, sessions: { ...boundary.state.sessions, [selected.id]: selected } };
-        boundary.scm = ScmWorkingSnapshotSchema.parse({ projectKey: 'machine-1:/repo', fetchedAt: 1,
+        const selected = await hydrateSelectedSession();
+        const scm = ScmWorkingSnapshotSchema.parse({ projectKey: 'machine-1:/repo', fetchedAt: 1,
             repo: { isRepo: true, rootPath: '/repo', backendId: 'git', mode: '.git' },
             capabilities: { readStatus: true, readDiffFile: true, readDiffCommit: true, readLog: true,
                 writeInclude: false, writeExclude: false, writeCommit: false, writeCommitPathSelection: false,
@@ -171,44 +170,48 @@ describe('Companion glance consumed owners', () => {
                 hasIncludedDelta: false, hasPendingDelta: true }],
             totals: { includedFiles: 0, pendingFiles: 1, untrackedFiles: 0, includedAdded: 0, includedRemoved: 0, pendingAdded: 1, pendingRemoved: 0 },
         });
-        const screen = await renderScreen(<AppPaneProvider><DestinationInstanceHost tabId="physical-a"
-            ref={{ kind: 'session', params: { id: session.id, serverId: 'home-a' } }} pathname="/session/session-a" focused visible>
+        storage.getState().updateSessionProjectScmSnapshot(selected.id, scm, runtime.serverId);
+        const screen = await renderScreen(<GlanceFixture><DestinationInstanceHost tabId="physical-a"
+            ref={{ kind: 'session', params: { id: session.id, serverId: runtime.serverId } }} pathname="/session/session-a" focused visible>
             {(['session_summary', 'changes'] as const).map(id => <SessionCompanionGlance key={id}
                 entry={{ kind: 'instance', ref: { kind: 'instance', instance: { v: 1, id,
-                    definition: { kind: 'builtin', id }, bindings: { session: { kind: 'value', value: { serverId: 'home-a', sessionId: selected.id } } } } } }}
-                sessionId={session.id} session={session} serverId="home-a" frameStyle="plain" headerAccessory={null}
+                    definition: { kind: 'builtin', id }, bindings: { session: { kind: 'value', value: { serverId: runtime.serverId, sessionId: selected.id } } } } } }}
+                sessionId={session.id} session={session} serverId={runtime.serverId} frameStyle="plain" headerAccessory={null}
                 measurementOnly={false} testID={id} />)}
-        </DestinationInstanceHost></AppPaneProvider>);
+        </DestinationInstanceHost></GlanceFixture>);
         await flushHookEffects({ cycles: 5 });
         await act(async () => { screen.pressByTestId('session_summary.surface-fact-changes'); screen.pressByTestId('changes.surface.open'); });
         expect(boundary.navigate.mock.calls.map(([href]) => href)).toEqual([
-            '/session/session-b?serverId=home-a&right=git',
-            '/session/session-b/details?serverId=home-a&details=scmReview',
+            `/session/session-b?serverId=${runtime.serverId}&right=git`,
+            `/session/session-b/details?serverId=${runtime.serverId}&details=scmReview`,
         ]);
         expect(parseSessionPaneUrlState({ right: 'git' })).toEqual({ rightTabId: 'git' });
     });
     it('opens the configured Summary usage fact at B through the existing qualified route owner', async () => {
-        const selected = createSessionFixture({ id: 'session-b', serverId: 'home-a' });
-        boundary.state = { ...boundary.state, sessions: { ...boundary.state.sessions, [selected.id]: selected } };
-        boundary.usage = { v: 1, modelId: null, usedTokens: 40, windowTokens: 100, totalProcessedTokens: null,
+        const selected = await hydrateSelectedSession();
+        const contextSnapshot: SessionContextUsageSnapshotV1 = { v: 1, modelId: null, usedTokens: 40, windowTokens: 100, totalProcessedTokens: null,
             baselineTokens: null, isAutoCompactEnabled: null, categories: null, observedAtMs: 1, source: 'provider_turn' };
-        const screen = await renderScreen(<AppPaneProvider><SessionCompanionGlance
+        storage.getState().applyMessages(selected.id, [{
+            id: 'usage-b', localId: null, createdAt: 1, role: 'agent', isSidechain: false,
+            content: [], usage: { input_tokens: 1, output_tokens: 1, contextSnapshot },
+        }]);
+        const screen = await renderScreen(<GlanceFixture><SessionCompanionGlance
             entry={{ kind: 'instance', ref: { kind: 'instance', instance: { v: 1, id: 'summary-b',
-                definition: { kind: 'builtin', id: 'session_summary' }, bindings: { session: { kind: 'value', value: { serverId: 'home-a', sessionId: selected.id } } } } } }}
-            sessionId={session.id} session={session} serverId="home-a" frameStyle="plain" headerAccessory={null} measurementOnly={false} testID="summary-b" />
-        </AppPaneProvider>);
+                definition: { kind: 'builtin', id: 'session_summary' }, bindings: { session: { kind: 'value', value: { serverId: runtime.serverId, sessionId: selected.id } } } } } }}
+            sessionId={session.id} session={session} serverId={runtime.serverId} frameStyle="plain" headerAccessory={null} measurementOnly={false} testID="summary-b" />
+        </GlanceFixture>);
         await flushHookEffects({ cycles: 5 });
         expect(screen.findByTestId('summary-b.surface-fact-context')).not.toBeNull();
         expect(screen.findByTestId('summary-b.surface-fact-context')?.props.onPress).toEqual(expect.any(Function));
         await act(async () => { screen.findByTestId('summary-b.surface-fact-context')?.props.onPress(); });
-        expect(boundary.navigate).toHaveBeenCalledWith('/session/session-b/usage?serverId=home-a');
+        expect(boundary.navigate).toHaveBeenCalledWith(`/session/session-b/usage?serverId=${runtime.serverId}`);
     });
     it('mounts a configured native services copy through the shared surface and its incumbent feeds, without plugin execution', async () => {
-        const screen = await renderScreen(<AppPaneProvider><SessionCompanionGlance
+        const screen = await renderScreen(<runtime.Wrapper><SessionCompanionGlance
             entry={{ kind: 'instance', ref: { kind: 'instance', instance: { v: 1, id: 'native-services',
                 definition: { kind: 'builtin', id: 'local_services' }, bindings: { session: { kind: 'context', slot: 'session' } } } } }}
-            sessionId={session.id} session={session} serverId="home-a" frameStyle="plain" headerAccessory={null} measurementOnly={false} testID="native" />
-        </AppPaneProvider>);
+            sessionId={session.id} session={session} serverId={runtime.serverId} frameStyle="plain" headerAccessory={null} measurementOnly={false} testID="native" />
+        </runtime.Wrapper>);
         await flushHookEffects({ cycles: 8 });
         expect(screen.getTextContent()).toContain('widgetGlances.nothingRunning');
         expect(screen.tree.root.findAllByType('PluginInlineSurfaceHost')).toHaveLength(0);
@@ -216,24 +219,23 @@ describe('Companion glance consumed owners', () => {
         expect(screen.tree.root.findAllByType(HappierWidgetFrame)).toHaveLength(1);
     });
     it('reads a pinned native copy from B beside A and refuses a lost B read without starting another feed', async () => {
-        const selected = createSessionFixture({ id: 'session-b', serverId: 'home-a' });
-        boundary.state = { ...boundary.state, sessions: { ...boundary.state.sessions, [selected.id]: selected } };
+        const selected = await hydrateSelectedSession();
         boundary.rpc.mockImplementation(({ method, payload }: { method: string; payload?: { sessionId?: string } }) =>
             method === RPC_METHODS.DAEMON_LOCAL_SERVICES_INVENTORY_WATCH ? new Promise(() => {})
                 : Promise.resolve(successfulRead(method, [], payload?.sessionId)));
-        const renderCopy = () => <AppPaneProvider><SessionCompanionGlance
+        const renderCopy = () => <GlanceFixture><SessionCompanionGlance
             entry={{ kind: 'instance', ref: { kind: 'instance', instance: { v: 1, id: 'pinned-services',
-                definition: { kind: 'builtin', id: 'local_services' }, bindings: { session: { kind: 'value', value: { serverId: 'home-a', sessionId: selected.id } } } } } }}
-            sessionId={session.id} session={session} serverId="home-a" frameStyle="plain" headerAccessory={null} measurementOnly={false} testID="pinned" />
-        </AppPaneProvider>;
+                definition: { kind: 'builtin', id: 'local_services' }, bindings: { session: { kind: 'value', value: { serverId: runtime.serverId, sessionId: selected.id } } } } } }}
+            sessionId={session.id} session={session} serverId={runtime.serverId} frameStyle="plain" headerAccessory={null} measurementOnly={false} testID="pinned" />
+        </GlanceFixture>;
         const screen = await renderScreen(renderCopy());
         await flushHookEffects({ cycles: 8 });
         expect(screen.getTextContent()).toContain('widgetGlances.nothingRunning');
         expect(boundary.rpc.mock.calls.map(([input]) => input).filter(input => input.method === RPC_METHODS.DAEMON_LOCAL_SERVICES_LAUNCHER_SNAPSHOT))
             .toMatchObject([{ payload: { sessionId: selected.id } }]);
         const reads = boundary.rpc.mock.calls.length;
-        boundary.state = { ...boundary.state, sessions: { ...boundary.state.sessions, [selected.id]: { ...selected,
-            access: { ...selected.access!, capabilities: { ...selected.access!.capabilities, readTranscript: false } } } } };
+        await act(async () => { storage.getState().applySessions([{ ...selected,
+            access: { ...selected.access!, capabilities: { ...selected.access!.capabilities, readTranscript: false } } }]); });
         await screen.update(renderCopy());
         await flushHookEffects({ cycles: 4 });
         expect(screen.getTextContent()).not.toContain('widgetGlances.nothingRunning');
@@ -246,11 +248,11 @@ describe('Companion glance consumed owners', () => {
         const projection = normalizePluginUiProjection(PluginProjectionV2Schema.parse({ v: 2, generation: 1,
             installedPackagesById: { 'acme.review': { id: 'acme.review', displayName: 'Review', enabled: true, source: { kind: 'local', locator: '/plugins/acme.review' } } },
             familiesById: { pluginUi: { family: 'pluginUi', entriesById: { [entry.id]: entry } } } }));
-        const screen = await renderScreen(<AppShellPluginUiProjectionValueProvider value={{
+        const screen = await renderScreen(<runtime.Wrapper><AppShellPluginUiProjectionValueProvider value={{
             pluginUiProjection: projection, pluginBrowserProjection: null, phase: 'current', interactionEnabled: true,
-            machineId: 'machine-1', serverId: 'home-a', platform: 'web', accountLifetime: captureActiveServerAccountScopeLifetime(), clientExecutableActivation: { status: 'ready' },
+            machineId: 'machine-1', serverId: runtime.serverId, platform: 'web', accountLifetime: captureActiveServerAccountScopeLifetime(), clientExecutableActivation: { status: 'ready' },
             reloadConnectedAccountProjection() {}, reloadClientExecutables() {},
-        }}><SessionCompanionGlance entry={{ kind: 'instance', ref: { kind: 'instance', instance: { v: 1, id: 'personal-status', definition: { kind: 'installed', surface: { pluginId: 'acme.review', localId: 'status' } }, bindings: { session: { kind: 'context', slot: 'session' } } } } }} sessionId={session.id} session={session} serverId="home-a" frameStyle="plain" headerAccessory={null} measurementOnly={false} testID="plugin" /></AppShellPluginUiProjectionValueProvider>);
+        }}><SessionCompanionGlance entry={{ kind: 'instance', ref: { kind: 'instance', instance: { v: 1, id: 'personal-status', definition: { kind: 'installed', surface: { pluginId: 'acme.review', localId: 'status' } }, bindings: { session: { kind: 'context', slot: 'session' } } } } }} sessionId={session.id} session={session} serverId={runtime.serverId} frameStyle="plain" headerAccessory={null} measurementOnly={false} testID="plugin" /></AppShellPluginUiProjectionValueProvider></runtime.Wrapper>);
         await flushHookEffects({ cycles: 8 });
         // The real configured arm got past typed input and hydration admission.
         expect(screen.tree.root.findAllByType('PluginInlineSurfaceHost')).toHaveLength(1);
@@ -292,7 +294,7 @@ describe('Companion glance consumed owners', () => {
         expect(screen.findByTestId('services.asOf')).toBeNull();
         const { invalidateLocalServiceLauncherStore } = await import('@/sync/domains/local/services/launch/sharedStore');
         boundary.rpc.mockRejectedValue(new Error('offline'));
-        await act(async () => { invalidateLocalServiceLauncherStore({ machineId: 'machine-1', serverId: 'home-a', sessionId: 'session-a', scope: 'workspace', workspaceRoot: null }); });
+        await act(async () => { invalidateLocalServiceLauncherStore({ machineId: 'machine-1', serverId: runtime.serverId, sessionId: 'session-a', scope: 'workspace', workspaceRoot: null }); });
         await flushHookEffects({ cycles: 6 });
         expect(screen.findByTestId('services.row.inventory:web')).toBeTruthy();
         expect(screen.findByTestId('services.stale-action')).toBeTruthy();

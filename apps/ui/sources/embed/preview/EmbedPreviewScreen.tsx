@@ -224,7 +224,6 @@ function EmbedPreviewComposer(props: EmbedPreviewComposerProps & Readonly<{
             onSend={noop}
             metadata={props.metadata ?? undefined}
             permissionRequests={props.attention?.pending.permissionRequests}
-            approvalRequests={props.attention?.pending.approvalRequests}
             canApprovePermissions={props.access.approve && props.attention?.interaction.canApprovePermissions}
             permissionDisabledReason={props.access.approve ? props.attention?.interaction.permissionDisabledReason : 'readOnly'}
             contentPaddingHorizontal={COMPOSER_CONTENT_HORIZONTAL_INSET}

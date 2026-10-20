@@ -21,6 +21,8 @@ import {
     type PluginAccountCollectionContributionV1,
 } from '@happier-dev/protocol';
 import { PluginError } from '@happier-dev/plugin-sdk';
+import { logger } from '@/ui/logger';
+import { runTracedExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
 
 import type { PluginAccountCollectionDefinition } from '@happier-dev/plugin-sdk/collections';
 import type { AccountKvTransaction } from '@happier-dev/plugin-sdk/storage';
@@ -29,6 +31,7 @@ import type { StoredCredentials } from '@/persistence';
 
 import {
     createAccountPluginDataStorageHost,
+    type AccountPluginDataHttpClient,
     type PluginAccountCollectionWatchInvalidation,
 } from './accountPluginDataStorage';
 import { publishPluginAccountAvailabilityChanges, publishPluginAccountCollectionWatchInvalidation, retirePluginAccountCollectionWatchScope } from './pluginAccountSettingsChangeBroker';
@@ -333,7 +336,7 @@ describe('Account plugin Data storage host', () => {
         // calls: repeating it for each Action was the profiled daemon hotspot.
         const preparedReads = { declarationReads, compilerSchemaReads };
         expect(declarationReads).toBeGreaterThan(0);
-        expect(compilerSchemaReads).toBeGreaterThan(0);
+        expect(compilerSchemaReads).toBe(1);
         firstController.abort();
         if (process.env.HAPPIER_RUN_DAEMON_STALL_BENCH === '1') {
             const started = performance.now();
@@ -869,7 +872,7 @@ describe('Account plugin Data storage host', () => {
             resolveReleaseLessDeclaration?: (pluginId: string) => ParsedPluginManifestV2 | null;
             resolveReleaseLessCollectionMigrations?: () => Promise<import('@happier-dev/plugin-sdk').PluginAccountCollectionMigrationRuntimeProjection>;
             scopeKey: () => string;
-            post: (url: string, body: string) => Promise<Readonly<{ status: number; data: unknown }>>;
+            post: AccountPluginDataHttpClient['post'];
         }>) {
             const host = createAccountPluginDataStorageHost({
                 contracts: params.contracts ?? [admitted],
@@ -918,6 +921,53 @@ describe('Account plugin Data storage host', () => {
                 return readResponse;
             };
         }
+
+        it('measures a shared background claim wait and its HTTP result without publishing request content', async () => {
+            vi.stubEnv('HAPPIER_WEB_LATENCY_TRACE', '1');
+            const sink = vi.spyOn(logger, 'warnLocalFile').mockImplementation(() => undefined);
+            let release!: () => void;
+            let started!: () => void;
+            const claimStarted = new Promise<void>(resolve => { started = resolve; });
+            const claimBoundary = new Promise<void>(resolve => { release = resolve; });
+            const bind = claimingHost({
+                resolveReleaseLessDeclaration: () => declaredManifest,
+                scopeKey: () => 'private-account-scope-marker',
+                post: async (url) => {
+                    if (url === CLAIM_URL) { started(); await claimBoundary; return { status: 200, data: {} }; }
+                    return { status: 200, data: { row: null, absenceEpoch: 0 } };
+                },
+            });
+            try {
+                const collection = bind().collection(collectionDefinition);
+                await claimStarted;
+                const requestId = '70cc64d3-0386-4914-b7d8-713b7879e99f';
+                const pending = runTracedExternalActionStage('action.invoke', `rpc_${requestId}`, 'contributed.target_invoke', () =>
+                    collection.get('private-row-marker'));
+                release();
+                await expect(pending).resolves.toBeNull();
+                const records = sink.mock.calls.filter(([message]) => message === '[external-action-stage]');
+                const claimHttp = records.find(([, record]) => record && typeof record === 'object'
+                    && 'stage' in record && record.stage === 'collection.http.claim.end');
+                expect(claimHttp).toEqual(['[external-action-stage]', expect.objectContaining({
+                    claimAttemptId: expect.any(String), httpStatus: 200, elapsedMs: expect.any(Number),
+                })]);
+                const claimRecord = claimHttp?.[1];
+                const claimId = claimRecord && typeof claimRecord === 'object' && 'claimAttemptId' in claimRecord
+                    ? claimRecord.claimAttemptId : undefined;
+                expect(claimId).toEqual(expect.any(String));
+                expect(records).toContainEqual(['[external-action-stage]', expect.objectContaining({
+                    rootRequestId: requestId, stage: 'collection.writer_claim.wait.end', claimAttemptId: claimId,
+                    elapsedMs: expect.any(Number),
+                })]);
+                expect(records).toContainEqual(['[external-action-stage]', expect.objectContaining({
+                    stage: 'collection.writer_claim.start', claimAttemptId: claimId, claimAbsent: true,
+                })]);
+                expect(records).toContainEqual(['[external-action-stage]', expect.objectContaining({
+                    rootRequestId: requestId, stage: 'collection.http.get.end', httpStatus: 200,
+                })]);
+                expect(JSON.stringify(records)).not.toContain('private-');
+            } finally { release(); sink.mockRestore(); vi.unstubAllEnvs(); }
+        });
 
         it('claims a daemon-selected plugin declaration once per Account before its first Collection operation', async () => {
             const calls: string[] = [];
@@ -988,6 +1038,44 @@ describe('Account plugin Data storage host', () => {
             await collection.get('task-2');
             await collection.get('task-3');
             expect(calls.filter((url) => url === CLAIM_URL)).toHaveLength(2);
+        });
+
+        it('encodes an immutable declaration once across retryable claims without transport reparsing', async () => {
+            const encodedClaim = JSON.stringify({ manifest: declaredManifest });
+            const claimBodies: unknown[] = [];
+            // Axios's adapter is the actual HTTP boundary. Keep its real request
+            // transforms and the host's serializers, validators and retry owner.
+            const transport = axios.create({
+                adapter: async config => {
+                    const claim = config.url === CLAIM_URL;
+                    if (claim) claimBodies.push(config.data);
+                    return { config, headers: {}, statusText: '',
+                        status: claim ? 503 : 200,
+                        data: claim ? {} : { row: null, absenceEpoch: 0 } };
+                },
+            });
+            // Passive native-engine observations measure the expensive work
+            // itself; neither JSON operation has a substituted implementation.
+            const stringify = vi.spyOn(JSON, 'stringify');
+            const parse = vi.spyOn(JSON, 'parse');
+            try {
+                const bind = claimingHost({
+                    resolveReleaseLessDeclaration: () => declaredManifest,
+                    scopeKey: () => 'encoded-declaration-retry',
+                    post: async (url, body, config) => await transport.post(url, body, config),
+                });
+                const collection = bind().collection(collectionDefinition);
+                await expect(collection.get('task-1')).resolves.toBeNull();
+                await expect(collection.get('task-2')).resolves.toBeNull();
+                expect(claimBodies).toEqual([encodedClaim, encodedClaim]);
+                const encodings = stringify.mock.calls.filter(([value]) => value
+                    && typeof value === 'object' && 'manifest' in value && value.manifest === declaredManifest);
+                expect(encodings).toHaveLength(1);
+                expect(parse.mock.calls.filter(([value]) => value === encodedClaim)).toHaveLength(0);
+            } finally {
+                stringify.mockRestore();
+                parse.mockRestore();
+            }
         });
 
         it('retains a deterministic refusal for repeated and concurrent operations, with a typed remedy', async () => {
@@ -2299,6 +2387,43 @@ describe('Account plugin Data storage host', () => {
             pluginId: PLUGIN_ID,
             collectionId: COLLECTION_ID,
         });
+    });
+
+    it('sends preencoded Account KV bytes without transport reparsing and rejects a retired Account', async () => {
+        let current = true;
+        const encodedBodies: string[] = [];
+        const adapterBodies: unknown[] = [];
+        const transport = axios.create({
+            adapter: async config => {
+                adapterBodies.push(config.data);
+                return { config, headers: {}, statusText: '', status: 200,
+                    data: { status: 'updated', revision: 0 } };
+            },
+        });
+        const parse = vi.spyOn(JSON, 'parse');
+        try {
+            const account = bindHost({
+                isCurrentAccount: () => current,
+                get: async () => ({ status: 200, data: { status: 'absent' } }),
+                post: async (url, body, config) => {
+                    encodedBodies.push(body);
+                    return await transport.post(url, body, config);
+                },
+            });
+
+            await expect(account.kv.set('checkpoint', { attempt: 1 }, { expectedVersion: 'absent' }))
+                .resolves.toEqual({ version: 0 });
+            expect(encodedBodies).toHaveLength(1);
+            expect(adapterBodies).toEqual(encodedBodies);
+            expect(parse.mock.calls.filter(([value]) => encodedBodies.includes(value))).toHaveLength(0);
+
+            current = false;
+            await expect(account.kv.set('checkpoint', { attempt: 2 }, { expectedVersion: 'absent' }))
+                .rejects.toMatchObject({ code: 'plugin_account_storage_unavailable' } satisfies Partial<PluginError>);
+            expect(adapterBodies).toHaveLength(1);
+        } finally {
+            parse.mockRestore();
+        }
     });
 
     it('classifies a transport RangeError after an issued Account KV write as an unknown outcome', async () => {

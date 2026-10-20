@@ -6,10 +6,22 @@ import type {
 import type { AgentTerminalHostResolutionReason } from '@happier-dev/plugin-sdk/agents/runtime';
 import type { TerminalLaunchSpec } from '@/terminal/host/launchSpec';
 
+export type TerminalHostNativeLaunch = Readonly<{
+  workingDirectory: string;
+  spawnArgv: readonly string[];
+  spawnEnv: Readonly<Record<string, string>>;
+  unsetEnvKeys?: readonly string[];
+  isolatedEnv: boolean;
+  windowsVerbatimArguments?: boolean;
+}>;
+
 /** Host-private prepared native invocation; never exposed through the plugin SDK. */
 export type TerminalHostAdapter = Omit<AgentTerminalHostAdapter, 'createOrAttachHost'> & Readonly<{
   createOrAttachHost(opts: Parameters<AgentTerminalHostAdapter['createOrAttachHost']>[0] & Readonly<{
     preparedLaunch?: TerminalLaunchSpec;
+    /** Host-only final authorization, invoked only when a new process is required. */
+    prepareLaunch?(): Promise<TerminalHostNativeLaunch>;
+    windowsVerbatimArguments?: boolean;
   }>): ReturnType<AgentTerminalHostAdapter['createOrAttachHost']>;
 }>;
 

@@ -1,11 +1,12 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { createSecretSettingsTestHarness } from '@/components/settings/secrets/secretSettingsTestHarness';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { storage } from '@/sync/domains/state/storage';
@@ -14,36 +15,457 @@ import { useSettingActionWriter } from './useSettingActionWriter';
 import { useMachineSummarySetting } from '@/components/machines/summary/useMachineSummarySetting';
 import { useMachinesIndexView } from '@/components/settings/machines/machinesIndexSettings';
 import { useMachineStorageViewSetting } from '@/components/machines/storage/useMachineStorageViewSetting';
-import { createMachineFixture, pressTestInstanceAsync } from '@/dev/testkit';
+import { createMachineFixture, pressTestInstanceAsync, renderHook } from '@/dev/testkit';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
 import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
-import { useApplySettings } from '@/sync/store/settingsWriters';
-import { useSettingMutable } from '@/sync/store/hooks';
+import { SettingsDeclarationValueV1Schema } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
+import { useApplyLocalSettings, useApplySettings } from '@/sync/store/settingsWriters';
+import { useLocalSettingMutable, useSettingMutable } from '@/sync/store/hooks';
+import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
+import { useApplyThemeSelection } from '@/components/settings/appearance/useApplyThemeSelection';
+import { DEFAULT_THEME_PROFILES_LOCAL_STATE } from '@/theme/profiles/themeProfilePersistence';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { getCurrentAuth, setCurrentAuth } from '@/auth/context/currentAuth';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
+import { useDeclaredSettingsWrite } from '@/components/settings/shell/useDeclaredSettingsWrite';
+import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { Modal } from '@/modal';
 
 const routerPush = vi.hoisted(() => vi.fn());
+const routeParams = vi.hoisted(() => ({ current: {} as Record<string, string> }));
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock());
 vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
+// Status-bar application is a native platform effect; theme selection and persistence stay real.
+vi.mock('expo-status-bar', () => ({ setStatusBarStyle: vi.fn() }));
+vi.mock('reanimated-color-picker', async () =>
+    (await import('@/dev/testkit/mocks/reanimatedColorPicker')).createReanimatedColorPickerMock());
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
-    pathname: '/settings/machines', router: { push: routerPush },
+    pathname: '/settings/machines', params: () => routeParams.current, router: { push: routerPush },
 }).module);
 vi.mock('socket.io-client', async importOriginal =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => {
-    const original = await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>();
-    const { createFrontDoorActionExecuteForVitest } = await import('@/dev/testkit/harness/frontDoorActionExecutorBoundary');
-    return { ...original, createFrontDoorActionExecute: createFrontDoorActionExecuteForVitest(original) };
-});
 installDisconnectedServerSocketBoundary();
+await loadSyncSingletonForTests();
+// Load the real screen after transport installation, before a control interaction's deadline.
+const { AllMachinesIndex } = await import('@/components/machines/index/AllMachinesIndex');
 (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
 
 const originalState = storage.getState();
-afterEach(() => { standardCleanup(); storage.setState(originalState, true); });
+let previousAuth: ReturnType<typeof getCurrentAuth>;
+beforeEach(() => { previousAuth = getCurrentAuth(); });
+afterEach(() => { standardCleanup(); setCurrentAuth(previousAuth); storage.setState(originalState, true); routeParams.current = {}; });
 
 describe('declared setting Action writer', () => {
+    it('admits the mounted compound terminal host choice under Off, Ask and Allowed', async () => {
+        const account = await createSecretSettingsTestHarness({ settings: settingsParse({
+            sessionTerminalHost: 'none', sessionUseTmux: false,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } },
+        }) });
+        const { SessionRuntimeSettingsView } = await import('@/components/settings/session/SessionRuntimeSettingsView');
+        try {
+            const screen = await renderScreen(<SessionRuntimeSettingsView />);
+            const choose = () => screen.tree.findAll(node => node.props?.testID === 'settings-session-terminal-host-item'
+                && typeof node.props?.onChange === 'function')[0]!.props.onChange('tmux');
+            await act(async () => { choose(); });
+            expect(storage.getState().settings).toMatchObject({ sessionTerminalHost: 'none', sessionUseTmux: false });
+            expect(account.persistedSettings).toMatchObject({ sessionTerminalHost: 'none', sessionUseTmux: false });
+            expect(account.settingsWrites).toEqual([]);
+            await act(async () => { account.replaceSettings(settingsParse({ ...account.persistedSettings,
+                actionsSettingsV1: { v: 1, actions: { 'settings.set': { approvalRequiredSurfaces: ['ui'] } } },
+            })); });
+            await act(async () => { choose(); });
+            await vi.waitFor(() => expect(account.artifacts.list()).toHaveLength(1));
+            expect(account.persistedSettings).toMatchObject({ sessionTerminalHost: 'none', sessionUseTmux: false });
+            await decideApprovalAsInbox(account.scope.serverId, account.artifacts.list()[0]!.id, 'approve');
+            await vi.waitFor(() => expect(account.persistedSettings).toMatchObject({ sessionTerminalHost: 'tmux', sessionUseTmux: true }));
+            await act(async () => { account.replaceSettings(settingsParse({ ...account.persistedSettings,
+                actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.set': ['ui'] } },
+            })); });
+            await act(async () => {
+                screen.tree.findAll(node => node.props?.testID === 'settings-session-tmux-name'
+                    && typeof node.props?.onChangeText === 'function')[0]!.props.onChangeText('work');
+                screen.tree.findAll(node => node.props?.testID === 'settings-session-terminal-host-item'
+                    && typeof node.props?.onChange === 'function')[0]!.props.onChange('herdr');
+            });
+            await vi.waitFor(() => expect(account.persistedSettings).toMatchObject({ sessionTerminalHost: 'herdr', sessionUseTmux: false, sessionTmuxSessionName: 'work' }));
+            expect(account.artifacts.list()).toHaveLength(1);
+            expect(storage.getState().settings.sessionTerminalHost).toBe('herdr');
+        } finally { standardCleanup(); await account.dispose(); }
+    });
+    it('refuses undeclared raw Account and local user deltas instead of bypassing Settings admission', async () => {
+        const account = await createSecretSettingsTestHarness({ settings: settingsParse({ sessionTerminalHost: 'none', sessionUseTmux: false,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } },
+        }) });
+        const before = storage.getState().localSettings.themeProfiles;
+        const probe = await renderHook(() => ({ account: useApplySettings(), local: useApplyLocalSettings() }));
+        try {
+            await act(async () => {
+                await probe.getCurrent().account({ sessionTerminalHost: 'tmux', sessionUseTmux: true });
+                await probe.getCurrent().local({ themeProfiles: DEFAULT_THEME_PROFILES_LOCAL_STATE });
+            });
+            expect(storage.getState().settings).toMatchObject({ sessionTerminalHost: 'none', sessionUseTmux: false });
+            expect(account.persistedSettings).toMatchObject({ sessionTerminalHost: 'none', sessionUseTmux: false });
+            expect(account.settingsWrites).toEqual([]);
+            expect(storage.getState().localSettings.themeProfiles).toBe(before);
+        } finally { standardCleanup(); await account.dispose(); }
+    });
+    it('keeps exported Account-secret deletion admitted while raw acquisition stays outside Action operands', async () => {
+        const account = await createSecretSettingsTestHarness({ serverIdentityId: 'srv_quiet_secret', settings: settingsParse({ actionsSettingsV1: { v: 1,
+            actions: { 'plugins.settings.secret.delete': { approvalRequiredSurfaces: ['ui'] } },
+        } }) });
+        const { PluginAccountAvailabilityIntentReadResponseV1Schema } = await import('@happier-dev/protocol/plugins/availability');
+        const { replacePluginAccountAvailabilityProjection, clearPluginAccountAvailabilityProjection } = await import('@/sync/domains/plugins/availability/projection');
+        const { scopedPluginAccountSecretSettingsAdapter: adapter, resolveScopedPluginSettingsServerIdentity } = await import('@/sync/domains/plugins/settings/scopedPluginSettingsRuntime');
+        const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const { useMountedPluginSettingsActionAdapter } = await import('@/components/settings/plugins/model/useMountedPluginSettingsActionAdapter');
+        const response = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({ availabilityCursor: 1, hostingCapability: { enabled: false },
+            intent: { pluginId: 'acme.settings', desiredVersion: '1.0.0', enabled: true, offlineUiHosting: 'disabled', writableCollections: [], revision: 'intent-1' },
+            release: { ref: { pluginId: 'acme.settings', version: '1.0.0' }, archiveDigestSha256: `sha256:${'a'.repeat(64)}`,
+                normalizedManifest: { schemaVersion: 2, id: 'acme.settings', version: '1.0.0', displayName: 'Settings', runtime: { apiVersion: 1 },
+                    contributes: { settings: [{ id: 'preferences', title: 'Preferences', scope: 'account', target: { kind: 'plugin' },
+                        fields: [{ id: 'token', title: 'Token', schema: { type: 'string' }, secret: { custody: 'account' } }] }] } },
+                collectionContracts: [], uiSlots: [], packageAssetArchive: { archiveDigestSha256: `sha256:${'b'.repeat(64)}`, resources: [] } },
+            packageAssets: [], uiArtifacts: [] });
+        const target = { kind: 'account' as const, serverIdentityId: resolveScopedPluginSettingsServerIdentity(account.scope.serverId)! };
+        const input = { pluginId: 'acme.settings', scope: { kind: 'account' as const }, target, fields: [{ key: 'token', redacted: true }], fieldId: 'token' };
+        try {
+            replacePluginAccountAvailabilityProjection({ scope: account.scope, snapshot: { availabilityCursor: 1,
+                intentReads: [{ pluginId: 'acme.settings', response }], materializations: [], snapshots: [] } });
+            const initial = await adapter.read(input);
+            if (initial.status !== 'ready') throw new Error('Account secret record is unavailable');
+            const acquired = await adapter.write({ ...input, expectedRevision: initial.snapshot.revision,
+                mutation: { kind: 'set', value: 'synthetic-private-token' } });
+            expect(acquired.status).toBe('ready');
+            expect(account.artifacts.list()).toEqual([]);
+            const writes = account.settingsWrites.length;
+            account.replaceSettings(settingsParse({ ...account.persistedSettings, actionsSettingsV1: { v: 1,
+                actions: { 'plugins.settings.secret.delete': { disabledSurfaces: ['ui'] } },
+            } }));
+            const disabled = await adapter.read(input);
+            if (disabled.status !== 'ready') throw new Error('Acquired secret record is unavailable');
+            expect(await adapter.write({ ...input, expectedRevision: disabled.snapshot.revision, mutation: { kind: 'delete' } }))
+                .toMatchObject({ status: 'unavailable' });
+            expect(account.settingsWrites).toHaveLength(writes);
+            expect(account.artifacts.list()).toEqual([]);
+            account.replaceSettings(settingsParse({ ...account.persistedSettings, actionsSettingsV1: { v: 1,
+                actions: { 'plugins.settings.secret.delete': { approvalRequiredSurfaces: ['ui'] } },
+            } }));
+            const accountLifetime = captureActiveServerAccountScopeLifetime();
+            expect(accountLifetime?.isCurrent()).toBe(true);
+            const mounted = await renderHook(() => useMountedPluginSettingsActionAdapter({ adapter, accountLifetime, target }));
+            const before = await mounted.getCurrent().read(input);
+            if (before.status !== 'ready') throw new Error('Acquired secret record is unavailable');
+            let pending!: ReturnType<typeof adapter.write>;
+            await act(async () => { pending = mounted.getCurrent().write({ ...input, expectedRevision: before.snapshot.revision, mutation: { kind: 'delete' } }); });
+            await vi.waitFor(() => expect(account.artifacts.list()).toHaveLength(1));
+            expect(account.settingsWrites).toHaveLength(writes);
+            expect(account.artifacts.readPlainBody(account.artifacts.list()[0]!.id)).not.toContain('synthetic-private-token');
+            await decideApprovalAsInbox(account.scope.serverId, account.artifacts.list()[0]!.id, 'reject');
+            await act(async () => { expect(await pending).toEqual({ status: 'declined' }); });
+            expect(await adapter.read(input)).toMatchObject({ status: 'ready', snapshot: { secretStates: { token: 'configured' } } });
+            expect(account.settingsWrites).toHaveLength(writes);
+            let current = true;
+            await act(async () => { pending = mounted.getCurrent().write({ ...input, expectedRevision: before.snapshot.revision,
+                mutation: { kind: 'delete' }, isCurrent: () => current }); });
+            await vi.waitFor(() => expect(account.artifacts.list()).toHaveLength(2));
+            current = false;
+            await decideApprovalAsInbox(account.scope.serverId, account.artifacts.list()[1]!.id, 'approve');
+            await act(async () => { expect(await pending).toMatchObject({ status: 'unavailable' }); });
+            expect(await adapter.read(input)).toMatchObject({ status: 'ready', snapshot: { secretStates: { token: 'configured' } } });
+            expect(account.settingsWrites).toHaveLength(writes);
+        } finally { clearPluginAccountAvailabilityProjection(); standardCleanup(); await account.dispose(); }
+    });
+    it.each(['reject', 'cancel'] as const)('keeps %s quiet through both mounted feedback owners and still reports real failures', async decision => {
+        const account = await createSecretSettingsTestHarness({ settings: settingsParse({ memoryUseInNewSessions: false,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { approvalRequiredSurfaces: ['ui'] } } },
+        }) });
+        let feedback: ReturnType<typeof useSettingActionFeedback> | undefined;
+        let declared: ReturnType<typeof useDeclaredSettingsWrite> | undefined;
+        function Probe() {
+            feedback = useSettingActionFeedback();
+            declared = useDeclaredSettingsWrite(useMountedActionExecution(account.scope));
+            return null;
+        }
+        const setting = PROMPTS_CONTEXT_SETTINGS.settings.memoryUseInNewSessions;
+        try {
+            await renderScreen(<Probe />);
+            vi.mocked(Modal.alert).mockClear();
+            for (const index of [0, 1]) {
+                let pending!: Promise<boolean>;
+                await act(async () => { pending = index === 0 ? feedback!.setSetting(setting, true) : declared!(setting, true); });
+                await vi.waitFor(() => expect(account.artifacts.list()).toHaveLength(index + 1));
+                expect(account.settingsWrites).toEqual([]);
+                await decideApprovalAsInbox(account.scope.serverId, account.artifacts.list()[index]!.id, decision);
+                await act(async () => { expect(await pending).toBe(false); });
+                expect(Modal.alert).not.toHaveBeenCalled();
+                expect(account.persistedSettings.memoryUseInNewSessions).toBe(false);
+            }
+            await act(async () => { account.replaceSettings(settingsParse({ ...account.persistedSettings,
+                actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'settings.set': ['ui'] } },
+            })); });
+            account.setRejectSettingsWrites(true);
+            for (const write of [feedback!.setSetting, declared!]) {
+                vi.mocked(Modal.alert).mockClear();
+                await act(async () => { expect(await write(setting, true)).toBe(false); });
+                expect(Modal.alert).toHaveBeenCalled();
+                expect(account.persistedSettings.memoryUseInNewSessions).toBe(false);
+            }
+        } finally { standardCleanup(); await account.dispose(); }
+    });
+    it('presents an Action turned off in Settings as a calm notice that leads there, never as an error', async () => {
+        const account = await createSecretSettingsTestHarness({ settings: settingsParse({ memoryUseInNewSessions: false,
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } },
+        }) });
+        let feedback: ReturnType<typeof useSettingActionFeedback> | undefined;
+        let declared: ReturnType<typeof useDeclaredSettingsWrite> | undefined;
+        function Probe() {
+            feedback = useSettingActionFeedback();
+            declared = useDeclaredSettingsWrite(useMountedActionExecution(account.scope));
+            return null;
+        }
+        const setting = PROMPTS_CONTEXT_SETTINGS.settings.memoryUseInNewSessions;
+        try {
+            await renderScreen(<Probe />);
+            for (const write of [feedback!.setSetting, declared!]) {
+                vi.mocked(Modal.alert).mockClear();
+                routerPush.mockClear();
+                await act(async () => { expect(await write(setting, true)).toBe(false); });
+                expect(Modal.alert).toHaveBeenCalledTimes(1);
+                const [title, , buttons] = vi.mocked(Modal.alert).mock.calls[0]!;
+                expect(title).toBe('actionConfirmations.turnedOffTitle');
+                await act(async () => { buttons!.find(button => button.style !== 'cancel')!.onPress!(); });
+                expect(routerPush).toHaveBeenCalledWith('/settings/actions/settings.set');
+                expect(account.persistedSettings.memoryUseInNewSessions).toBe(false);
+            }
+        } finally { standardCleanup(); await account.dispose(); }
+    });
+    it('admits device-local hook edits and bulk Reset values through settings.set policy', async () => {
+        const account = await createSecretSettingsTestHarness({ settings: settingsParse({
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } },
+        }) });
+        let density: ReturnType<typeof useLocalSettingMutable<'uiItemDensity'>> | undefined;
+        let apply: ReturnType<typeof useApplyLocalSettings> | undefined;
+        function Probe() { density = useLocalSettingMutable('uiItemDensity'); apply = useApplyLocalSettings(); return null; }
+        try {
+            storage.getState().applyLocalSettings({ uiItemDensity: 'comfortable', uiFontScale: 1.2 });
+            await renderScreen(<Probe />);
+            await act(async () => { density![1]('compact'); await apply!({ uiFontScale: 1.3 }); });
+            expect(storage.getState().localSettings).toMatchObject({ uiItemDensity: 'comfortable', uiFontScale: 1.2 });
+            // Reset uses the same bulk writer, so defaults must be admitted too.
+            await act(async () => { await apply!({ uiItemDensity: localSettingsDefaults.uiItemDensity, uiFontScale: localSettingsDefaults.uiFontScale }); });
+            expect(storage.getState().localSettings).toMatchObject({ uiItemDensity: 'comfortable', uiFontScale: 1.2 });
+            await act(async () => { account.replaceSettings(settingsParse({ actionsSettingsV1: { v: 1,
+                approvalWaivedSurfaces: { 'settings.set': ['ui'] },
+            } })); });
+            await act(async () => { await apply!({ uiItemDensity: 'compact', uiFontScale: 1.3 }); });
+            expect(storage.getState().localSettings).toMatchObject({ uiItemDensity: 'compact', uiFontScale: 1.3 });
+            expect(account.settingsWrites).toEqual([]);
+        } finally { standardCleanup(); await account.dispose(); }
+    });
+    it('keeps local edits unchanged while Ask-first holds their Action on the originating device', async () => {
+        const account = await createSecretSettingsTestHarness({ settings: settingsParse({
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { approvalRequiredSurfaces: ['ui'] } } },
+        }) });
+        let apply: ReturnType<typeof useApplyLocalSettings> | undefined;
+        function Probe() { apply = useApplyLocalSettings(); return null; }
+        try {
+            storage.getState().applyLocalSettings({ uiFontScale: 1 });
+            await renderScreen(<Probe />);
+            let pending: void | Promise<void> = undefined;
+            await act(async () => { pending = apply!({ uiFontScale: 1.3 }); });
+            await vi.waitFor(() => expect(account.artifacts.list()).toHaveLength(1));
+            const request = JSON.parse(account.artifacts.readPlainBody(account.artifacts.list()[0]!.id)!);
+            expect(request).toMatchObject({ actionId: 'settings.set', actionArgs: { anchor: 'appearance.textSize', value: 1.3 },
+                approval: { flow: 'blocking' } });
+            expect(storage.getState().localSettings.uiFontScale).toBe(1);
+            // A direct control has no inline decision surface, so the wait opens the existing Inbox review.
+            expect(routerPush).toHaveBeenCalledWith(
+                expect.stringContaining(`/inbox/approvals/${encodeURIComponent(account.artifacts.list()[0]!.id)}`));
+            await act(async () => { await decideApprovalAsInbox(account.scope.serverId, account.artifacts.list()[0]!.id, 'approve'); });
+            await pending!;
+            expect(storage.getState().localSettings.uiFontScale).toBe(1.3);
+            expect(account.settingsWrites).toEqual([]);
+        } finally { standardCleanup(); await account.dispose(); }
+    });
+    it('keeps signed-out local preferences usable through the same declaration admission', async () => {
+        const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+        const { AuthProvider, getCurrentAuth } = await import('@/auth/context/AuthContext');
+        await disconnectActiveServerConnection();
+        storage.setState({ settingsScope: null, settings: settingsParse({}) });
+        storage.getState().applyLocalSettings({ uiFontScale: 1 });
+        let apply: ReturnType<typeof useApplyLocalSettings> | undefined;
+        function Probe() { apply = useApplyLocalSettings(); return null; }
+        const screen = await renderScreen(<AuthProvider initialCredentials={null}><Probe /></AuthProvider>);
+        expect(getCurrentAuth()).toMatchObject({ credentialAuthorityKind: 'none', isAuthenticated: false });
+        await act(async () => { await apply!({ uiFontScale: 1.3 }); });
+        expect(storage.getState().localSettings.uiFontScale).toBe(1.3);
+        // A local write never falls back to raw persistence if policy refuses it.
+        await act(async () => { storage.setState({ settings: settingsParse({ actionsSettingsV1: { v: 1,
+            actions: { 'settings.set': { disabledSurfaces: ['ui'] } },
+        } }) }); });
+        await act(async () => { await apply!({ uiFontScale: 1.1 }); });
+        expect(storage.getState().localSettings.uiFontScale).toBe(1.3);
+        await screen.unmount();
+    });
+    it.each(['narrowed', 'ask', 'account-setting'] as const)('keeps the signed-out local interaction bound (%s)', async scenario => {
+        const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+        const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+        const { AuthProvider, getCurrentAuth } = await import('@/auth/context/AuthContext');
+        await disconnectActiveServerConnection();
+        storage.setState({ settingsScope: null, settings: settingsParse(scenario === 'ask' ? {
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { approvalRequiredSurfaces: ['ui'] } } },
+        } : {}) });
+        const screen = await renderScreen(<AuthProvider initialCredentials={null}><React.Fragment /></AuthProvider>);
+        expect(getCurrentAuth()).toMatchObject({ credentialAuthorityKind: 'none', isAuthenticated: false });
+        storage.getState().applyLocalSettings({ uiFontScale: 1 });
+        const before = storage.getState().settings;
+        const result = await createDefaultActionExecutor().execute('settings.set', scenario === 'account-setting'
+            ? { anchor: 'transcript.showToolCalls', value: false }
+            : { anchor: 'appearance.textSize', value: 1.3 }, {
+            surface: 'ui', actionCaller: { kind: 'host' },
+            authority: scenario === 'narrowed' ? 'account_automation' : 'present_user',
+        });
+        expect(result).toMatchObject({ ok: false });
+        expect(storage.getState().localSettings.uiFontScale).toBe(1);
+        expect(storage.getState().settings).toBe(before);
+        await screen.unmount();
+    });
+    it('does not promote a terminal local-setting caller past Ask-first', async () => {
+        const terminalToken = `test.${Buffer.from(JSON.stringify({ sub: 'account-a',
+            provenance: { v: 1, kind: 'terminal', authority: 'account_automation' },
+        })).toString('base64url')}.test`;
+        const account = await createSecretSettingsTestHarness({ token: terminalToken });
+        const { AuthProvider, getCurrentAuth } = await import('@/auth/context/AuthContext');
+        const screen = await renderScreen(<AuthProvider initialCredentials={account.credentials}><React.Fragment /></AuthProvider>);
+        try {
+            expect(getCurrentAuth()?.credentialAuthorityKind).toBe('terminal');
+            const { captureLazyActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
+            const captured = await captureLazyActionAccountContext(account.scope.serverId);
+            try { expect(captured.credentialAuthorityKind).toBe('terminal'); }
+            finally { captured.dispose(); }
+            const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
+            storage.getState().applyLocalSettings({ uiFontScale: 1 });
+            const result = await createDefaultActionExecutor().execute('settings.set', {
+                anchor: 'appearance.textSize', value: 1.3,
+            }, { surface: 'ui', serverId: account.scope.serverId, authority: 'present_user', actionCaller: { kind: 'host' } });
+            expect(result).toMatchObject({ ok: true, result: { kind: 'approval_request_created' } });
+            expect(storage.getState().localSettings.uiFontScale).toBe(1);
+            expect(account.artifacts.list()).toHaveLength(1);
+            expect(account.settingsWrites).toEqual([]);
+        } finally { await screen.unmount(); await account.dispose(); }
+    });
+    it('admits device-local compound theme selection without losing Reset profile semantics', async () => {
+        const account = await createSecretSettingsTestHarness({ settings: settingsParse({
+            actionsSettingsV1: { v: 1, actions: { 'settings.set': { disabledSurfaces: ['ui'] } } },
+        }) });
+        let apply: ReturnType<typeof useApplyThemeSelection> | undefined;
+        let write: ReturnType<typeof useSettingActionWriter> | undefined;
+        function Probe() { apply = useApplyThemeSelection(); write = useSettingActionWriter(); return null; }
+        try {
+            const initialProfiles = { profiles: [], activeProfileIds: { light: null, dark: 'nightDark' } };
+            storage.getState().applyLocalSettings({ themePreference: 'light', themeProfiles: initialProfiles });
+            await renderScreen(<Probe />);
+            await act(async () => { await apply!('dark', DEFAULT_THEME_PROFILES_LOCAL_STATE); });
+            expect(storage.getState().localSettings.themePreference).toBe('light');
+            expect(storage.getState().localSettings.themeProfiles).toEqual(initialProfiles);
+            await act(async () => { account.replaceSettings(settingsParse({})); });
+            await act(async () => { await apply!('dark', DEFAULT_THEME_PROFILES_LOCAL_STATE); });
+            expect(storage.getState().localSettings).toMatchObject({ themePreference: 'dark', themeProfiles: DEFAULT_THEME_PROFILES_LOCAL_STATE });
+            await act(async () => {
+                // Scalar consumers remain supported; structured input is strict and does not weaken neighbors.
+                expect(await write!({ anchor: 'appearance.themeMode' }, 'light')).toMatchObject({ ok: true });
+                for (const value of ['invalid', { themePreference: 'dark', themeProfiles: DEFAULT_THEME_PROFILES_LOCAL_STATE, extra: true },
+                    { themePreference: 'dark', themeProfiles: { ...DEFAULT_THEME_PROFILES_LOCAL_STATE, extra: true } }]) {
+                    expect(await write!({ anchor: 'appearance.themeMode' }, SettingsDeclarationValueV1Schema.parse(value)))
+                        .toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
+                }
+                expect(await write!({ anchor: 'appearance.textSize' }, { scale: 1.3 })).toMatchObject({ ok: false, errorCode: 'invalid_setting_value' });
+            });
+            expect(storage.getState().localSettings.themePreference).toBe('light');
+            expect(account.settingsWrites).toEqual([]);
+        } finally { standardCleanup(); await account.dispose(); }
+    });
+    it('preserves signed-out theme selection and retires its mounted writer', async () => {
+        const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+        const { AuthProvider, getCurrentAuth } = await import('@/auth/context/AuthContext');
+        await disconnectActiveServerConnection();
+        storage.setState({ settingsScope: null, settings: settingsParse({}) });
+        storage.getState().applyLocalSettings({ themePreference: 'light', themeProfiles: DEFAULT_THEME_PROFILES_LOCAL_STATE });
+        let apply: ReturnType<typeof useApplyThemeSelection> | undefined;
+        function Probe() { apply = useApplyThemeSelection(); return null; }
+        const screen = await renderScreen(<AuthProvider initialCredentials={null}><Probe /></AuthProvider>);
+        expect(getCurrentAuth()).toMatchObject({ credentialAuthorityKind: 'none', isAuthenticated: false });
+        const retained = apply!;
+        await act(async () => { await retained('dark', DEFAULT_THEME_PROFILES_LOCAL_STATE); });
+        expect(storage.getState().localSettings.themePreference).toBe('dark');
+        await screen.unmount();
+        await retained('light', DEFAULT_THEME_PROFILES_LOCAL_STATE);
+        expect(storage.getState().localSettings.themePreference).toBe('dark');
+    });
+    it('rechecks the theme caller guard at persistence after approval', async () => {
+        const account = await createSecretSettingsTestHarness({ settings: settingsParse({ actionsSettingsV1: { v: 1,
+            actions: { 'settings.set': { approvalRequiredSurfaces: ['ui'] } },
+        } }) });
+        let current = true;
+        const assertCurrent = () => { if (!current) throw new Error('retired theme editor'); };
+        let apply: ReturnType<typeof useApplyThemeSelection> | undefined;
+        function Probe() { apply = useApplyThemeSelection(assertCurrent); return null; }
+        try {
+            storage.getState().applyLocalSettings({ themePreference: 'light', themeProfiles: DEFAULT_THEME_PROFILES_LOCAL_STATE });
+            await renderScreen(<Probe />);
+            let pending!: Promise<boolean>;
+            await act(async () => { pending = apply!('dark', DEFAULT_THEME_PROFILES_LOCAL_STATE); });
+            await vi.waitFor(() => expect(account.artifacts.list()).toHaveLength(1));
+            current = false;
+            await decideApprovalAsInbox(account.scope.serverId, account.artifacts.list()[0]!.id, 'approve');
+            await pending;
+            expect(storage.getState().localSettings.themePreference).toBe('light');
+        } finally { standardCleanup(); await account.dispose(); }
+    });
+    it('retains an uncommitted theme editor draft when activation is Off', async () => {
+        const account = await createSecretSettingsTestHarness({ settings: settingsParse({ actionsSettingsV1: { v: 1,
+            actions: { 'settings.set': { disabledSurfaces: ['ui'] } },
+        } }) });
+        try {
+            storage.getState().applyLocalSettings({ themePreference: 'light', themeProfiles: DEFAULT_THEME_PROFILES_LOCAL_STATE });
+            routeParams.current = { profileId: 'new' };
+            const { ThemeProfileEditorScreen } = await import('@/components/settings/appearance/themeProfiles/ThemeProfileEditorScreen');
+            const screen = await renderScreen(<ThemeProfileEditorScreen />);
+            await act(async () => { screen.tree.changeTextByTestId('settings-theme-profile-name', 'Unsaved theme'); });
+            await act(async () => { await pressTestInstanceAsync(screen.findByTestId('settings-theme-profile-save')!); });
+            expect(storage.getState().localSettings.themeProfiles.profiles).toEqual([]);
+            expect(screen.findByTestId('settings-theme-profile-name')?.props.value).toBe('Unsaved theme');
+        } finally { standardCleanup(); await account.dispose(); }
+    });
+    it('keeps theme activation in originating custody and retains a declined draft', async () => {
+        const account = await createSecretSettingsTestHarness({ settings: settingsParse({ actionsSettingsV1: { v: 1,
+            actions: { 'settings.set': { approvalRequiredSurfaces: ['ui'] } },
+        } }) });
+        try {
+            storage.getState().applyLocalSettings({ themePreference: 'light', themeProfiles: DEFAULT_THEME_PROFILES_LOCAL_STATE });
+            routeParams.current = { profileId: 'new' };
+            const { ThemeProfileEditorScreen } = await import('@/components/settings/appearance/themeProfiles/ThemeProfileEditorScreen');
+            const screen = await renderScreen(<ThemeProfileEditorScreen />);
+            await act(async () => { screen.tree.changeTextByTestId('settings-theme-profile-name', 'Pending theme'); });
+            let saving!: Promise<void>;
+            await act(async () => { saving = pressTestInstanceAsync(screen.findByTestId('settings-theme-profile-save')!); });
+            await vi.waitFor(() => expect(account.artifacts.list()).toHaveLength(1));
+            const request = JSON.parse(account.artifacts.readPlainBody(account.artifacts.list()[0]!.id)!);
+            expect(request).toMatchObject({ approval: { flow: 'blocking' }, actionId: 'settings.set',
+                actionArgs: { anchor: 'appearance.themeMode', value: { activation: { profile: { name: 'Pending theme' } } } } });
+            expect(storage.getState().localSettings.themeProfiles.profiles).toEqual([]);
+            vi.mocked(Modal.alert).mockClear();
+            await decideApprovalAsInbox(account.scope.serverId, account.artifacts.list()[0]!.id, 'reject');
+            await saving;
+            expect(storage.getState().localSettings.themeProfiles.profiles).toEqual([]);
+            expect(screen.findByTestId('settings-theme-profile-name')?.props.value).toBe('Pending theme');
+            expect(Modal.alert).not.toHaveBeenCalled();
+        } finally { standardCleanup(); await account.dispose(); }
+    });
     it('admits Profiles and other direct Account preferences at the shared settings ingress', async () => {
         const account = await createSecretSettingsTestHarness({ settings: settingsParse({
             useProfiles: false, useMachinePickerSearch: false, analyticsOptOut: false, sessionTmuxTmpDir: '/custom/tmp',
@@ -188,7 +610,6 @@ describe('declared setting Action writer', () => {
             storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [serverId]: [machine] },
                 machineListStatusByServerId: { [serverId]: 'idle' } });
             storage.getState().applyLocalSettings({ machinesIndexViewV1: 'list' });
-            const { AllMachinesIndex } = await import('@/components/machines/index/AllMachinesIndex');
             const screen = await renderScreen(<AllMachinesIndex />);
             const tree = screen.tree;
             const viewSwitch = () => tree.findAll(node => node.props?.testIDPrefix === 'machines.index.view'
@@ -292,7 +713,9 @@ describe('declared setting Action writer', () => {
         } finally { standardCleanup(); await account.dispose(); }
     });
     it('propagates an admitted Account setting result from the real Action owner', async () => {
-        const account = await createSecretSettingsTestHarness({ settings: settingsParse({}) });
+        const account = await createSecretSettingsTestHarness({ settings: settingsParse({ actionsSettingsV1: {
+            v: 1, approvalWaivedSurfaces: { 'settings.set': ['ui'] },
+        } }) });
         let write: ReturnType<typeof useSettingActionWriter> | undefined;
         function Probe() { write = useSettingActionWriter(); return null; }
         try {
@@ -300,7 +723,7 @@ describe('declared setting Action writer', () => {
             if (!write) throw new Error('Writer missing');
             let result: Awaited<ReturnType<typeof write>> | undefined;
             await act(async () => { result = await write!(PROMPTS_CONTEXT_SETTINGS.settings.memoryUseInNewSessions, true); });
-            expect(result).toMatchObject({ ok: true });
+            expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
             expect(account.persistedSettings.memoryUseInNewSessions).toBe(true);
         } finally { standardCleanup(); await account.dispose(); }
     });

@@ -17,6 +17,28 @@ function answer(at = 1000): MachineProcessesAnswerV1 {
 }
 async function settle() { for (let i = 0; i < 10; i++) await Promise.resolve(); }
 describe('machine process subscription and cleanup selection', () => {
+    it('retains failed-watch freshness after the initial snapshot instead of overwriting it with a redundant read', async () => {
+        const pending: Array<ReturnType<typeof createDeferred<MachineProcessesRpcResult<MachineProcessesAnswerV1>>>> = [];
+        const store = createMachineProcessesStore({
+            snapshotClient: () => {
+                const response = createDeferred<MachineProcessesRpcResult<MachineProcessesAnswerV1>>();
+                pending.push(response);
+                return response.promise;
+            },
+            watchClient: async () => ({ ok: false, reason: 'request_failed' }),
+        });
+        const release = store.demand(key);
+        try {
+            pending[0].resolve({ ok: true, value: answer() });
+            await settle();
+            expect(store.getState(key).status).toBe('error');
+            // Finish any initial demand read still in flight after the watch failed.
+            pending[1]?.resolve({ ok: true, value: answer() });
+            await settle();
+            expect(store.getState(key)).toMatchObject({ status: 'error', reason: 'request_failed', answer: answer() });
+        } finally { release(); store.reset(); }
+    });
+
     it('settles an initial transport failure out of loading and recovers through the existing retry owner', async () => {
         const pending = createDeferred<MachineProcessesRpcResult<MachineProcessesAnswerV1>>();
         let retry = false;

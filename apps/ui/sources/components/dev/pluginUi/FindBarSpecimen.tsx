@@ -11,6 +11,9 @@ import { t } from '@/text';
 import type { Message } from '@happier-dev/session-core/messages';
 import { createTranscriptFindModel } from '@/components/sessions/transcript/find/useTranscriptFind';
 import { TranscriptFindRuler } from '@/components/sessions/transcript/find/TranscriptFindRuler';
+import { TranscriptFindSurface } from '@/components/sessions/transcript/find/TranscriptFindSurface';
+import { OlderLoadRetryOverlay } from '@/components/sessions/transcript/OlderLoadRetryOverlay';
+import { createReadOnlySessionTranscriptSource } from '@/components/sessions/transcript/source/readOnlySessionTranscriptSource';
 
 /**
  * Dev specimen of the shared Find bar in every state of the Find lab (`.happier/design-lab/find/`,
@@ -163,6 +166,40 @@ function RulerChatFind() {
     );
 }
 
+const FAILED_HISTORY = { isLoaded: true, hasOlder: true, isLoadingOlder: false } as const;
+const FAILED_MESSAGES: readonly Message[] = [{ kind: 'user-text', id: 'failed-1', localId: null, createdAt: 1, seq: 1, text: 'remount' }];
+
+/**
+ * The real transcript Find surface and the list's real older-load failure banner over a fixture whose
+ * older page failed: Find open says it once in its note; Find closed keeps the banner.
+ */
+function OlderLoadFailedFind(props: Readonly<{ findOpen: boolean }>) {
+    const [source] = React.useState(() => createReadOnlySessionTranscriptSource({
+        sessionId: 'specimen', serverId: null, messages: FAILED_MESSAGES, reducerState: null, metadata: null,
+        agentState: null, historyState: FAILED_HISTORY,
+    }));
+    const [model] = React.useState(() => createTranscriptFindModel({
+        readCorpus: () => ({ messages: FAILED_MESSAGES, history: FAILED_HISTORY }),
+        loadPage: null, jumpToTarget: async () => ({ status: 'not-found', reason: 'unsupported' }), reveal: async () => {},
+    }));
+    const viewportRef = React.useRef<React.ElementRef<typeof View>>(null);
+    React.useEffect(() => {
+        if (!props.findOpen) return;
+        model.open(); model.setQuery('remount');
+        return () => model.close();
+    }, [model, props.findOpen]);
+    return (
+        <View ref={viewportRef} style={styles.fill}>
+            <TranscriptFindSurface model={model} source={source} sessionId="specimen" serverId={null} focused={false}
+                viewportRef={viewportRef} items={[]} loadedMessages={FAILED_MESSAGES} publishCorpus={noop}
+                measureMessage={() => null} contentHeight={0} olderLoadFailed onRetryOlderLoad={noop}>
+                <ChatSample />
+                <OlderLoadRetryOverlay onRetry={noop} />
+            </TranscriptFindSurface>
+        </View>
+    );
+}
+
 export function FindBarSpecimen() {
     const terminal = t('find.surface.terminal', { name: 'zsh' });
     return (
@@ -184,6 +221,12 @@ export function FindBarSpecimen() {
             <Cell testID="dev-find-searching" title="Searching older messages" description="Loaded rows match at once; older pages load with progress and Stop." height={170}>
                 <ChatSample />
                 <StaticFindBar query="remount" surfaceLabel={t('find.surface.chat')} status={{ kind: 'searching', current: 2, total: 4 }} note={{ icon: 'history', text: t('find.note.searchingOlder') }} style={styles.floating} />
+            </Cell>
+            <Cell testID="dev-find-older-failed" title="Older messages could not load, Find open" description="One line under the bar with Retry; the transcript's own banner stands down." height={200}>
+                <OlderLoadFailedFind findOpen />
+            </Cell>
+            <Cell testID="dev-find-older-failed-closed" title="Older messages could not load, Find closed" description="The transcript's banner, as before." height={200}>
+                <OlderLoadFailedFind findOpen={false} />
             </Cell>
             <Cell testID="dev-find-none" title="No matches" description="Red count, arrows off, the query stays." height={120}>
                 <ChatSample plain />
@@ -287,6 +330,9 @@ const styles = StyleSheet.create((theme) => ({
         left: 0,
         right: 0,
         bottom: 0,
+    },
+    fill: {
+        flex: 1,
     },
     narrow: {
         width: 296,

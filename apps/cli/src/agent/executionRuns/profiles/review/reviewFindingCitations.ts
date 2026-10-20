@@ -1,10 +1,10 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { ScmDiffSummaryModelOutput } from '@happier-dev/protocol';
 
 /** Private admission evidence, never accepted from an execution.run.start caller. */
-export const reviewFindingCitationsSchema = z.array(z.object({
-  alias: z.string().regex(/^F[1-9]\d*$/), runId: z.string().min(1), findingId: z.string().min(1),
-}).strict());
+export const reviewFindingCitationsSchema = z.array(z.strictObject({
+  alias: z.string().check(z.regex(/^F[1-9]\d*$/)), runId: z.string().check(z.minLength(1)), findingId: z.string().check(z.minLength(1)),
+}));
 export type ReviewFindingCitations = z.infer<typeof reviewFindingCitationsSchema>;
 const record = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value)
   ? value as Record<string, unknown> : {};

@@ -101,7 +101,49 @@ export type CapabilityRulesActionInputById = {
 export type CapabilityRulesActionResultById = {
     readonly "mcp.rules.set": {
         ok: true;
-        items: any[];
+        items: {
+            serverId: string;
+            rules: {
+                id: string;
+                target: {
+                    t: 'allMachines';
+                } | {
+                    t: 'machine';
+                    machineId: string;
+                } | {
+                    t: 'project';
+                    projectKey: string;
+                } | {
+                    t: 'workspace';
+                    machineId: string;
+                    workspaceRoot: string;
+                };
+                enabled: boolean;
+                createdAt: number;
+                updatedAt: number;
+                agentId?: string | undefined;
+            }[];
+            previous: {
+                id: string;
+                target: {
+                    t: 'allMachines';
+                } | {
+                    t: 'machine';
+                    machineId: string;
+                } | {
+                    t: 'project';
+                    projectKey: string;
+                } | {
+                    t: 'workspace';
+                    machineId: string;
+                    workspaceRoot: string;
+                };
+                enabled: boolean;
+                createdAt: number;
+                updatedAt: number;
+                agentId?: string | undefined;
+            }[];
+        }[];
         revision: number;
     } | {
         ok: false;

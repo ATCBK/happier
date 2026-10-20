@@ -304,6 +304,7 @@ async function resourceMutation<TValue>(params: Readonly<{
     input: unknown;
     parse: (value: unknown) => TValue;
     approval?: 'surface_confirmed';
+    signal?: AbortSignal;
     handlers?: TeamCredentialApprovalHandlers<TValue>;
 }>): Promise<TeamCredentialOutcome<TValue>> {
     const outcome = await runTeamAction({
@@ -312,6 +313,7 @@ async function resourceMutation<TValue>(params: Readonly<{
         input: params.input,
         parse: params.parse,
         ...(params.approval ? { approval: params.approval } : {}),
+        ...(params.signal ? { signal: params.signal } : {}),
         ...approvalOptions({
             scope: params.scope,
             ...(params.address ? { address: params.address } : {}),
@@ -371,6 +373,7 @@ export function updateTeamCredentialResource(params: Readonly<{
     requestPolicy?: TeamCredentialRequestPolicyV1 | null;
     replacement?: TeamCredentialResourceReplacementV1;
     confirmedByPresentUser?: true;
+    signal?: AbortSignal;
     handlers?: TeamCredentialApprovalHandlers<TeamCredentialResourceMutationResultV1>;
 }>): Promise<TeamCredentialOutcome<TeamCredentialResourceMutationResultV1>> {
     return resourceMutation({
@@ -392,6 +395,7 @@ export function updateTeamCredentialResource(params: Readonly<{
             ...(params.replacement === undefined ? {} : { replacement: params.replacement }),
         },
         ...(params.confirmedByPresentUser ? { approval: 'surface_confirmed' } : {}),
+        ...(params.signal ? { signal: params.signal } : {}),
     });
 }
 
@@ -434,6 +438,7 @@ export async function deleteTeamCredentialResource(params: Readonly<{
     resourceId: string;
     expectedRevision: number;
     confirmedByPresentUser?: true;
+    signal?: AbortSignal;
     handlers?: TeamCredentialApprovalHandlers<TeamCredentialResourceMutationResultV1>;
 }>): Promise<TeamCredentialOutcome<TeamCredentialResourceMutationResultV1>> {
     const outcome = await runTeamAction({
@@ -442,6 +447,7 @@ export async function deleteTeamCredentialResource(params: Readonly<{
         input: { resourceId: params.resourceId, expectedRevision: params.expectedRevision },
         parse: (value) => TeamCredentialResourceMutationResultV1Schema.parse(value),
         ...(params.confirmedByPresentUser ? { approval: 'surface_confirmed' } : {}),
+        ...(params.signal ? { signal: params.signal } : {}),
         ...approvalOptions({
             scope: params.scope,
             ...(params.address ? { address: params.address } : {}),
@@ -598,6 +604,7 @@ export function revokeTeamCredentialExternalApiKey(params: Readonly<{
     resourceId: string;
     keyId: string;
     confirmedByPresentUser?: true;
+    signal?: AbortSignal;
     handlers?: TeamCredentialApprovalHandlers<TeamCredentialExternalApiKeyRevokeOutputV1>;
 }>): Promise<TeamCredentialOutcome<TeamCredentialExternalApiKeyRevokeOutputV1>> {
     return runTeamAction({
@@ -606,6 +613,7 @@ export function revokeTeamCredentialExternalApiKey(params: Readonly<{
         input: { resourceId: params.resourceId, keyId: params.keyId },
         parse: (value) => TeamCredentialExternalApiKeyRevokeOutputV1Schema.parse(value),
         ...(params.confirmedByPresentUser ? { approval: 'surface_confirmed' } : {}),
+        ...(params.signal ? { signal: params.signal } : {}),
         ...approvalOptions({
             scope: params.scope,
             ...(params.handlers ? { handlers: params.handlers } : {}),
@@ -617,6 +625,7 @@ export function revokeAllTeamCredentialExternalApiKeys(params: Readonly<{
     scope: ServerAccountScope;
     resourceId: string;
     confirmedByPresentUser?: true;
+    signal?: AbortSignal;
     handlers?: TeamCredentialApprovalHandlers<TeamCredentialExternalApiKeyRevokeAllOutputV1>;
 }>): Promise<TeamCredentialOutcome<TeamCredentialExternalApiKeyRevokeAllOutputV1>> {
     return runTeamAction({
@@ -625,6 +634,7 @@ export function revokeAllTeamCredentialExternalApiKeys(params: Readonly<{
         input: { resourceId: params.resourceId },
         parse: (value) => TeamCredentialExternalApiKeyRevokeAllOutputV1Schema.parse(value),
         ...(params.confirmedByPresentUser ? { approval: 'surface_confirmed' } : {}),
+        ...(params.signal ? { signal: params.signal } : {}),
         ...approvalOptions({
             scope: params.scope,
             ...(params.handlers ? { handlers: params.handlers } : {}),

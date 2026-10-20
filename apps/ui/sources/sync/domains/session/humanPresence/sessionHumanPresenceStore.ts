@@ -1,9 +1,21 @@
-import { SessionHumanPresenceSnapshotV1Schema, type SessionHumanPresenceViewerV1 } from '@happier-dev/protocol/sessions';
+import { SessionHumanPresenceSnapshotV1Schema, type SessionHumanPresenceViewerV1, type SessionHumanPresenceLocationV1 } from '@happier-dev/protocol/sessions';
+import type { DiscussionAddressV1 } from '@happier-dev/protocol/discussions/content';
 import { formatAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
-import { sessionAddressKey, type SessionAddress } from '../sessionAddress';
+import type { SessionAddress } from '../sessionAddress';
 
 export type SessionHumanPresenceViewer = SessionHumanPresenceViewerV1;
-export type SessionHumanPresenceTarget = SessionAddress & Readonly<{ discussionId?: string }>;
+export type DiscussionHumanPresenceTarget = DiscussionAddressV1 & Readonly<{ sessionId?: never }>;
+export type SessionHumanPresenceTarget =
+    | (SessionAddress & Readonly<{ discussionId?: never }>)
+    | DiscussionHumanPresenceTarget;
+type PresenceLocation =
+    | Readonly<{ sessionId: string; discussionId?: never }>
+    | (SessionHumanPresenceLocationV1 & Readonly<{ sessionId?: never }>);
+
+export function humanPresenceLocationKey(location: PresenceLocation): string {
+    return JSON.stringify(location.discussionId === undefined
+        ? ['session', location.sessionId] : ['discussion', location.discussionId]);
+}
 export type SessionHumanPresenceView = Readonly<{
     status: 'unsupported' | 'connecting' | 'live' | 'stale' | 'unavailable';
     viewers: readonly SessionHumanPresenceViewer[];
@@ -27,16 +39,15 @@ type Home = {
     observations: Map<string, SessionHumanPresenceView>;
 };
 
-/** Ephemeral Session observations only. Visibility, access and read state have independent owners. */
+/** Ephemeral human observations only. Visibility, access and read state have independent owners. */
 export function createSessionHumanPresenceStore() {
     const homes = new Map<string, Home>();
     const listeners = new Map<string, Set<() => void>>();
-    const subscriptions = new Map<string, SessionAddress>();
-    const targetKey = (address: SessionHumanPresenceTarget) => `${address.sessionId}\u0000${address.discussionId ?? ''}`;
-    const read = (address: SessionHumanPresenceTarget): SessionHumanPresenceView => {
+    const subscriptions = new Map<string, SessionHumanPresenceTarget>();
+    const read = (address: SessionHumanPresenceTarget, accountId?: string): SessionHumanPresenceView => {
         const home = homes.get(address.serverId);
-        if (!home) return emptyViews.unavailable;
-        const key = targetKey(address);
+        if (!home || accountId !== undefined && home.accountId !== accountId) return emptyViews.unavailable;
+        const key = humanPresenceLocationKey(address);
         const observation = home.observations.get(key);
         if (observation) return observation;
         // An acknowledged declaration is the Home's complete answer: a Session it
@@ -64,7 +75,7 @@ export function createSessionHumanPresenceStore() {
     return {
         read,
         subscribe(address: SessionHumanPresenceTarget, listener: () => void) {
-            const key = `${sessionAddressKey(address)}\u0000${address.discussionId ?? ''}`;
+            const key = JSON.stringify([address.serverId, humanPresenceLocationKey(address)]);
             const set = listeners.get(key) ?? new Set<() => void>();
             set.add(listener);
             listeners.set(key, set);
@@ -83,12 +94,12 @@ export function createSessionHumanPresenceStore() {
             notifyChanged(serverId, () => { markStale(home); homes.set(serverId, home); });
             const current = () => homes.get(serverId) === home;
             return {
-                beginDeclaration(sessionIds: readonly string[], locations: readonly Readonly<{ sessionId: string; discussionId: string }>[] = []) {
+                beginDeclaration(sessionIds: readonly string[], locations: readonly SessionHumanPresenceLocationV1[] = []) {
                     if (!current()) return;
                     notifyChanged(serverId, () => {
                         home.declared = new Set([
-                            ...sessionIds.map((sessionId) => `${sessionId}\u0000`),
-                            ...locations.map((location) => `${location.sessionId}\u0000${location.discussionId}`),
+                            ...sessionIds.map((sessionId) => humanPresenceLocationKey({ sessionId })),
+                            ...locations.map(humanPresenceLocationKey),
                         ]);
                         home.admitted = null;
                         home.status = 'connecting';
@@ -96,12 +107,12 @@ export function createSessionHumanPresenceStore() {
                     });
                 },
                 /** The acknowledged admitted set is the server's access answer, not a second authorization. */
-                confirmDeclaration(sessionIds: readonly string[], locations: readonly Readonly<{ sessionId: string; discussionId: string }>[] = []) {
+                confirmDeclaration(sessionIds: readonly string[], locations: readonly SessionHumanPresenceLocationV1[] = []) {
                     if (!current()) return;
                     notifyChanged(serverId, () => {
                         const admitted = new Set([
-                            ...sessionIds.map((sessionId) => `${sessionId}\u0000`),
-                            ...locations.map((location) => `${location.sessionId}\u0000${location.discussionId}`),
+                            ...sessionIds.map((sessionId) => humanPresenceLocationKey({ sessionId })),
+                            ...locations.map(humanPresenceLocationKey),
                         ].filter((key) => home.declared.has(key)));
                         home.admitted = admitted;
                         for (const key of [...home.observations.keys()]) {
@@ -121,7 +132,7 @@ export function createSessionHumanPresenceStore() {
                     if (!current() || home.status === 'unsupported' || home.status === 'unavailable') return;
                     const parsed = SessionHumanPresenceSnapshotV1Schema.safeParse(raw);
                     if (!parsed.success) return;
-                    const key = `${parsed.data.sessionId}\u0000${parsed.data.discussionId ?? ''}`;
+                    const key = humanPresenceLocationKey(parsed.data);
                     if (!(home.admitted ?? home.declared).has(key)) return;
                     const snapshot = parsed.data;
                     const unique = new Map<string, SessionHumanPresenceViewer>();

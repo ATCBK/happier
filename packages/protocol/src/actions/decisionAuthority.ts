@@ -47,11 +47,25 @@ function isLegacyWorkflowConversionInputV1(spec: Pick<ActionSpec, 'id'> | undefi
   return spec?.id === 'workflow.trigger.update' && readRecord(input).confirmLegacyConversion === true;
 }
 
+function isSessionMessageHumanReturnInputV1(spec: Pick<ActionSpec, 'id'> | undefined, input: unknown): boolean {
+  const data = readRecord(input);
+  return spec?.id === 'session.message.send' && data.reply === 'return' && typeof data.returnToSessionId === 'string';
+}
+
 export function isAutomationApprovalRequestSurface(
   surface: string | null | undefined,
   spec?: Pick<ActionSpec, 'id'>,
   input?: unknown,
 ): boolean {
+  // Voice may propose a person-bound return, never supply that authority.
+  // Agent/Plugin input retains its separate causal Session origin instead.
+  if (isSessionMessageHumanReturnInputV1(spec, input)) return surface === 'voice';
+  // Voice can propose the person's source disclosure through the ordinary
+  // approval owner. It never supplies present-person execution authority.
+  if (surface === 'voice' && spec?.id === 'discussion.second_opinion.start') return true;
+  // Spoken answers are proposals for the person's existing approval flow.
+  // Pass-up still requires the authenticated manager at the question owner.
+  if (surface === 'voice' && spec?.id === 'session.user_action.answer') return readRecord(input).disposition !== 'pass_up';
   return surface === 'agent' || surface === 'mcp' || surface === 'plugin'
     || (surface === 'cli' && isLegacyWorkflowConversionInputV1(spec, input));
 }
@@ -88,6 +102,7 @@ export function requiresPresentUserExecutionAuthorityForActionInputV1(
     || isPublicLinkCreationActionV1(spec.id)
     || isPresentUserSettingWriteV1(spec.id, input)
     || isLegacyWorkflowConversionInputV1(spec, input)
+    || isSessionMessageHumanReturnInputV1(spec, input)
     || (spec.id === 'session.open' && typeof input === 'object' && input !== null
       && 'approvedNewDirectoryCreation' in input && input.approvedNewDirectoryCreation === true);
 }
@@ -117,7 +132,11 @@ export function resolveCredentialActionAdmissionV1(input: Readonly<{
   surface?: string | null;
   hasExternalCredential?: boolean;
   actionInput?: unknown;
+  /** Host-validated current Session question origin; eligibility remains with the receiving question owner. */
+  hasSessionQuestionAnswerOrigin?: boolean;
 }>): { ok: true } | { ok: false; errorCode: 'present_user_required' } {
+  if (input.spec.id === 'session.user_action.answer' && input.hasSessionQuestionAnswerOrigin
+    && !input.hasExternalCredential && !input.grant) return { ok: true };
   // Host Agent/MCP decisions reach the shared, user-waivable approval
   // policy. External credentials retain the opt-in approve authority; changing
   // this Action's minimum authority must not widen token or terminal access.

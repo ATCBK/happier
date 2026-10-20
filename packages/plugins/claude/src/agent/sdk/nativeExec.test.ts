@@ -6,6 +6,8 @@ import type {
 
 import { createClaudeNativeSdkQueryContext } from './nativeExec.js';
 
+type AgentNativeLaunchQualifier = NonNullable<NonNullable<Parameters<ExecService['spawn']>[1]>['nativeLaunch']>;
+
 describe('createClaudeNativeSdkQueryContext', () => {
   it('projects the canonical Claude query environment into the declared system CLI launch', async () => {
     const spawnFailure = new Error('stop after observing the launch');
@@ -32,7 +34,9 @@ describe('createClaudeNativeSdkQueryContext', () => {
       systemTools: { resolve: resolveSystemTool },
       clients: { spawn },
     } as unknown as ExecService;
-    const context = createClaudeNativeSdkQueryContext(exec);
+    // The host issues this opaque value; this fixture observes only the Exec boundary.
+    const nativeLaunch = Object.freeze({}) as AgentNativeLaunchQualifier;
+    const context = createClaudeNativeSdkQueryContext(exec, undefined, nativeLaunch);
 
     await expect(context.spawnClient({
       launch: {
@@ -71,7 +75,7 @@ describe('createClaudeNativeSdkQueryContext', () => {
         },
       },
       maxFrameBytes: 32 * 1024 * 1024,
-    }, undefined);
+    }, { nativeLaunch });
     expect(callOrder).toEqual(['resolve', 'spawn']);
   });
 

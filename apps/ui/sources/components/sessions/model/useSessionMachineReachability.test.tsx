@@ -31,20 +31,22 @@ describe('useSessionMachineReachability', () => {
     it('normalizes session ids and observes offline status even when no RPC target is available', async () => {
         vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
         const hook = await renderHook(() => useSessionMachineReachability('  s1  ', serverId));
+        const lastHeartbeat = getStorage().getState().machines.m1!.activeAt;
         expect(hook.getCurrent()).toEqual({ machineReachable: true, machineOnline: true,
-            machineRpcTargetAvailable: true, machineReachability: 'reachable' });
+            machineRpcTargetAvailable: true, machineReachability: 'reachable', machineLastSeenAt: null });
         await act(async () => { vi.advanceTimersByTime(60_001); });
+        // The honest time of the last known state: the machine's last heartbeat, said only while it is unreachable.
         expect(hook.getCurrent()).toEqual({ machineReachable: false, machineOnline: false,
-            machineRpcTargetAvailable: false, machineReachability: 'unreachable' });
+            machineRpcTargetAvailable: false, machineReachability: 'unreachable', machineLastSeenAt: lastHeartbeat });
         const refreshed = { ...getStorage().getState().machines.m1!, activeAt: Date.now() };
         await act(async () => getStorage().setState({ machines: { m1: refreshed }, machineListByServerId: { [serverId]: [refreshed] } }));
         expect(hook.getCurrent()).toEqual({ machineReachable: true, machineOnline: true,
-            machineRpcTargetAvailable: true, machineReachability: 'reachable' });
+            machineRpcTargetAvailable: true, machineReachability: 'reachable', machineLastSeenAt: null });
         const machine = getStorage().getState().machines.m1!;
         const offline = { ...machine, active: false, activeAt: 1 };
         await act(async () => getStorage().setState({ machines: { m1: offline }, machineListByServerId: { [serverId]: [offline] } }));
         expect(hook.getCurrent()).toEqual({ machineReachable: false, machineOnline: false,
-            machineRpcTargetAvailable: false, machineReachability: 'unreachable' });
+            machineRpcTargetAvailable: false, machineReachability: 'unreachable', machineLastSeenAt: 1 });
     });
 
     it('does not update visible reachability when an unrelated background session changes', async () => {

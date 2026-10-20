@@ -3,20 +3,22 @@ import { z } from "zod/mini";
 import { SESSION_HUMAN_PRESENCE_SNAPSHOT_EVENT, type SessionHumanPresenceLocationV1, type SessionHumanPresenceSnapshotV1, type SessionHumanPresenceTypingSetV1 } from '@happier-dev/protocol/sessions';
 import { type SessionAccessAccountSummaryV1 } from '@happier-dev/protocol/sessions/access/sessionAccessPrincipalV1';
 import { SessionIdSchema } from '@happier-dev/protocol/sessions/idsV1';
+import { DiscussionIdSchema } from '@happier-dev/protocol/discussions/content';
 import { db } from "@/storage/db";
 import { inTx } from "@/storage/inTx";
 import { log } from "@/utils/logging/log";
 import { ACCOUNT_DISPLAY_PROFILE_SELECT, projectAccountDisplayProfileV1, resolveAccountDisplayLabelV1 } from "@/app/account/profile/accountDisplayProfile";
-import { resolveSessionAccessForOperation, type EffectiveSessionAccess } from "@/app/session/access/sessionAccess";
+import { resolveSessionAccessForOperation } from "@/app/session/access/sessionAccess";
 import { buildSessionAccessWhere } from "@/app/session/access/sessionAccessWhere";
 import { readSessionAccessAuthenticationFromSocket } from "@/app/session/access/sessionAccessAuthentication";
-import { resolveSessionDiscussionContextInTx } from "@/app/session/discussions/access";
-import { projectSessionDiscussionCapabilitiesV1 } from "@/app/session/discussions/projection";
-import { readSessionDiscussionRowInTx } from "@/app/session/discussions/queries";
+import { resolveDiscussionContextInTx, filterDiscussionsWithCurrentReadAccessInTx } from "@/app/discussions/access";
+import { projectDiscussionCapabilitiesV1 } from "@/app/discussions/projection";
+import { readDiscussionRowInTx } from "@/app/discussions/queries";
 import {
     sessionHumanPresenceLocationFromRoom,
     sessionHumanPresenceLocationRoom,
     sessionHumanPresenceLocationsFromRooms,
+    type HumanPresenceLocation,
 } from "./sessionHumanPresenceRooms";
 
 export const SESSION_HUMAN_PRESENCE_TYPING_LEASE_MS = 6_000;
@@ -24,7 +26,7 @@ const PROJECTION_RETRY_MS = 5_000;
 // Each query stays below the conservative SQLite 999-bind boundary, including
 // the canonical access owner's repeated Account filters. This never truncates a set.
 const QUERY_BATCH_SIZE = 100;
-type PresenceLocation = Readonly<{ sessionId: string; discussionId?: string }>;
+type PresenceLocation = HumanPresenceLocation;
 
 function sameLocation(left: PresenceLocation, right: PresenceLocation): boolean {
     return left.sessionId === right.sessionId && left.discussionId === right.discussionId;
@@ -37,33 +39,32 @@ type PresenceTypingSocketData = Pick<
 
 function readTypingLocation(socket: Readonly<{ data: PresenceTypingSocketData }>): PresenceLocation | null {
     const sessionId = socket.data.humanPresenceTypingSessionId;
-    if (!sessionId) return null;
-    return {
-        sessionId,
-        ...(socket.data.humanPresenceTypingDiscussionId
-            ? { discussionId: socket.data.humanPresenceTypingDiscussionId }
-            : {}),
-    };
+    const discussionId = socket.data.humanPresenceTypingDiscussionId;
+    return discussionId ? { discussionId } : sessionId ? { sessionId } : null;
 }
 
 export const SESSION_HUMAN_PRESENCE_ACCESS_CHANGED_SERVER_EVENT =
     "session-human-presence:access-changed:v1";
 
-const SessionHumanPresenceAccessChangedServerEnvelopeSchema = z.strictObject({
-    v: z.literal(1),
-    sessionId: z.unknown(),
-});
+const SessionHumanPresenceAccessChangedServerEnvelopeSchema = z.union([
+    z.strictObject({ v: z.literal(1), sessionId: z.unknown() }),
+    z.strictObject({ v: z.literal(1), discussionId: z.unknown() }),
+]);
 
-function parseSessionHumanPresenceAccessChangedServerPayload(raw: unknown): string | null {
+function parseSessionHumanPresenceAccessChangedServerPayload(raw: unknown): PresenceLocation | null {
     const envelope = SessionHumanPresenceAccessChangedServerEnvelopeSchema.safeParse(raw);
     if (!envelope.success) return null;
+    if ("discussionId" in envelope.data) {
+        const discussionId = DiscussionIdSchema.safeParse(envelope.data.discussionId);
+        return discussionId.success ? { discussionId: discussionId.data } : null;
+    }
     const sessionId = SessionIdSchema.safeParse(envelope.data.sessionId);
-    return sessionId.success ? sessionId.data : null;
+    return sessionId.success ? { sessionId: sessionId.data } : null;
 }
 
 interface AccessChangeListener {
-    sessionChanged(sessionId: string): void;
-    publishSessionChanged?(sessionId: string): void;
+    locationChanged(location: PresenceLocation): void;
+    publishLocationChanged?(location: PresenceLocation): void;
 }
 const accessChangeListeners = new Set<AccessChangeListener>();
 
@@ -74,15 +75,15 @@ export interface SessionHumanPresenceClusterPublisher {
 
 function publishSessionHumanPresenceAccessChanged(
     publisher: SessionHumanPresenceClusterPublisher,
-    sessionId: string,
+    location: PresenceLocation,
 ): void {
-    publisher.serverSideEmit(SESSION_HUMAN_PRESENCE_ACCESS_CHANGED_SERVER_EVENT, { v: 1, sessionId });
+    publisher.serverSideEmit(SESSION_HUMAN_PRESENCE_ACCESS_CHANGED_SERVER_EVENT, { v: 1, ...location });
 }
 
 /**
  * Publication-only registration for a process that owns no Socket.IO server —
  * the worker role, whose directory reconciliation commits real access
- * transitions. It publishes the same Session-only transition an API node's
+ * transitions. It publishes the same location transition an API node's
  * presence service publishes, and the API nodes' presence owners recheck their
  * rooms on receipt. The `all` and `api` roles publish through their presence
  * service instead, so a process never registers both.
@@ -91,8 +92,8 @@ export function registerSessionHumanPresenceAccessChangePublisher(
     publisher: SessionHumanPresenceClusterPublisher,
 ): () => void {
     const listener: AccessChangeListener = {
-        sessionChanged: () => {},
-        publishSessionChanged: (sessionId) => publishSessionHumanPresenceAccessChanged(publisher, sessionId),
+        locationChanged: () => {},
+        publishLocationChanged: (location) => publishSessionHumanPresenceAccessChanged(publisher, location),
     };
     accessChangeListeners.add(listener);
     return () => { accessChangeListeners.delete(listener); };
@@ -100,12 +101,12 @@ export function registerSessionHumanPresenceAccessChangePublisher(
 
 /**
  * Synchronous afterTx seam. Each live local Socket.IO owner queues its own
- * projection, and one cluster-enabled owner publishes the Session-only
+ * projection, and one cluster-enabled owner publishes the resource-location
  * transition to peer API nodes.
  *
  * Grant, Team, Group and Account-lifecycle transitions all reach this one entry
- * point through the shared Session access transition owner. The receiving service
- * re-resolves the capability of every live socket in that Session's room itself,
+ * point through the shared resource access transition owners. The receiving service
+ * re-resolves the capability of every live socket in that location's room itself,
  * so no affected Account list is trusted across the seam. Account lifecycle also
  * disconnects a restricted Account's sockets after commit; that is credential
  * revocation, while this transition is the canonical room-wide access recheck.
@@ -113,15 +114,24 @@ export function registerSessionHumanPresenceAccessChangePublisher(
 export function notifySessionHumanPresenceAccessChanged(input: Readonly<{
     sessionId: string;
 }>): void {
+    notifyHumanPresenceAccessChanged(input);
+}
+
+/** Discussion grants schedule the same credential-qualified projection owner. */
+export function notifyDiscussionHumanPresenceAccessChanged(input: Readonly<{ discussionId: string }>): void {
+    notifyHumanPresenceAccessChanged(input);
+}
+
+function notifyHumanPresenceAccessChanged(input: PresenceLocation): void {
     let publishedAcrossCluster = false;
     for (const listener of accessChangeListeners) {
         try {
-            listener.sessionChanged(input.sessionId);
+            listener.locationChanged(input);
             // A production process has one Socket.IO owner, while integration
             // tests can host several. Schedule every local owner, but publish
             // the process transition only once to avoid duplicate cluster work.
-            if (!publishedAcrossCluster && listener.publishSessionChanged) {
-                listener.publishSessionChanged(input.sessionId);
+            if (!publishedAcrossCluster && listener.publishLocationChanged) {
+                listener.publishLocationChanged(input);
                 publishedAcrossCluster = true;
             }
         }
@@ -135,9 +145,9 @@ export function createSessionHumanPresenceService(input: Readonly<{
 }>) {
     const { io } = input;
     let closed = false;
-    // Each Session owns one coalescing projection drain. A slow adapter/database
+    // Each location owns one coalescing projection drain. A slow adapter/database
     // read for one room must not stall unrelated rooms, while repeated transitions
-    // for the same Session still collapse into a present-tense replacement.
+    // for the same location still collapse into a present-tense replacement.
     const pendingRooms = new Set<string>();
     const activeRooms = new Set<string>();
     const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -170,29 +180,28 @@ export function createSessionHumanPresenceService(input: Readonly<{
         // shutdown) even though the Sessions have independent projection drains.
         // A committed access transition still schedules another replacement, so
         // this does not introduce a competing access or currentness decision.
-        const accessBySocketId = new Map<string, EffectiveSessionAccess | null>();
+        const canReadBySocketId = new Map<string, boolean>();
         const canTypeBySocketId = new Map<string, boolean>();
         const discussion = discussionId === undefined
             ? null
-            : await readSessionDiscussionRowInTx(db, { sessionId, discussionId });
+            : await readDiscussionRowInTx(db, { discussionId });
         for (const socket of sockets) {
             const authentication = readSessionAccessAuthenticationFromSocket(socket);
             if (discussionId !== undefined) {
-                const context = discussion ? await resolveSessionDiscussionContextInTx(db, {
-                    accountId: socket.data.userId!, sessionId, authentication,
+                const context = discussion ? await resolveDiscussionContextInTx(db, {
+                    accountId: socket.data.userId!, discussionId, authentication,
                 }) : null;
-                accessBySocketId.set(socket.id, context?.access ?? null);
-                canTypeBySocketId.set(socket.id, !!context && !!discussion && projectSessionDiscussionCapabilitiesV1({
+                canReadBySocketId.set(socket.id, context !== null);
+                canTypeBySocketId.set(socket.id, !!context && !!discussion && projectDiscussionCapabilitiesV1({
                     access: context.access,
-                    sessionArchived: context.sessionArchived,
+                    keyReadiness: context.keyReadiness,
                     discussionArchived: discussion.archivedAt !== null,
-                    isCreator: discussion.createdByAccountId === socket.data.userId!,
                 }).postMessages);
             } else {
                 const decision = await resolveSessionAccessForOperation(db, {
-                    accountId: socket.data.userId!, sessionId, authentication,
+                    accountId: socket.data.userId!, sessionId: sessionId!, authentication,
                 });
-                accessBySocketId.set(socket.id, decision.status === "allowed" ? decision.access : null);
+                canReadBySocketId.set(socket.id, decision.status === "allowed" && decision.access.capabilities.readTranscript);
                 canTypeBySocketId.set(socket.id, decision.status === "allowed"
                     && decision.access.capabilities.submitAgentInput);
             }
@@ -213,9 +222,8 @@ export function createSessionHumanPresenceService(input: Readonly<{
         const recipients: string[] = [];
         for (const socket of sockets) {
             const accountId = socket.data.userId!;
-            const access = accessBySocketId.get(socket.id);
             const account = profiles.get(accountId);
-            if (!access?.capabilities.readTranscript || !account) {
+            if (!canReadBySocketId.get(socket.id) || !account) {
                 await socket.leave(room);
                 const localSocket = io.sockets.sockets.get(socket.id);
                 if (localSocket) clearTyping(localSocket, location);
@@ -239,16 +247,16 @@ export function createSessionHumanPresenceService(input: Readonly<{
         const name = (account: SessionAccessAccountSummaryV1) =>
             resolveAccountDisplayLabelV1(account)?.toLowerCase() ?? "";
         const snapshot: SessionHumanPresenceSnapshotV1 = {
-            v: 1, sessionId, ...(discussionId === undefined ? {} : { discussionId }), observedAt: now,
+            v: 1, ...(discussionId === undefined ? { sessionId: sessionId! } : { discussionId }), observedAt: now,
             viewers: [...viewers.values()].sort((a, b) => name(a.account).localeCompare(name(b.account))
                 || a.account.accountId.localeCompare(b.account.accountId)),
         };
         // Discussion deletion can commit while access/profile projection is in
-        // flight. Reuse the canonical exact-pair reader at the last asynchronous
+        // flight. Reuse the canonical resource reader at the last asynchronous
         // boundary so an earlier live row cannot authorize a post-delete snapshot.
         // The deletion transition's queued projection performs ordinary room and
         // typing cleanup; this check owns only the outbound currentness decision.
-        if (discussionId !== undefined && !await readSessionDiscussionRowInTx(db, { sessionId, discussionId })) return;
+        if (discussionId !== undefined && !await readDiscussionRowInTx(db, { discussionId })) return;
         if (closed) return;
         // The complete current authorized observation always leaves the process as
         // one replacement. Socket.IO's inbound maxHttpBufferSize is not an outbound
@@ -338,30 +346,16 @@ export function createSessionHumanPresenceService(input: Readonly<{
                 ids.push(...rows.map(row => row.id));
             }
             const admittedSessionIds = ids.sort();
-            const readableSessionIds = new Set(admittedSessionIds);
-            const locationSessionIds = [...new Set(requestedLocations.map(location => location.sessionId)
-                .filter(sessionId => !readableSessionIds.has(sessionId)))];
-            for (let offset = 0; offset < locationSessionIds.length; offset += QUERY_BATCH_SIZE) {
-                const rows = await tx.session.findMany({
-                    where: { AND: [{ id: { in: locationSessionIds.slice(offset, offset + QUERY_BATCH_SIZE) } }, where] },
-                    select: { id: true },
-                });
-                for (const row of rows) readableSessionIds.add(row.id);
+            const discussionIds = [...new Set(requestedLocations.map(location => location.discussionId))];
+            const admittedLocations: SessionHumanPresenceLocationV1[] = [];
+            for (let offset = 0; offset < discussionIds.length; offset += QUERY_BATCH_SIZE) {
+                const readable = (await filterDiscussionsWithCurrentReadAccessInTx(tx, {
+                    discussionIds: discussionIds.slice(offset, offset + QUERY_BATCH_SIZE),
+                    accountIds: [accountId], authentication: readSessionAccessAuthenticationFromSocket(socket),
+                })).get(accountId);
+                for (const discussionId of readable ?? []) admittedLocations.push({ discussionId });
             }
-            const requestedLocationKeys = new Set(requestedLocations.map(location =>
-                `${location.sessionId}\u0000${location.discussionId}`));
-            const discussionRows = requestedLocations.length === 0 ? [] : await tx.sessionDiscussion.findMany({
-                where: {
-                    id: { in: requestedLocations.map(location => location.discussionId) },
-                    sessionId: { in: [...readableSessionIds] },
-                },
-                select: { id: true, sessionId: true },
-            });
-            const admittedLocations = discussionRows
-                .filter(row => requestedLocationKeys.has(`${row.sessionId}\u0000${row.id}`))
-                .map(row => ({ sessionId: row.sessionId, discussionId: row.id }))
-                .sort((left, right) => left.sessionId.localeCompare(right.sessionId)
-                    || left.discussionId.localeCompare(right.discussionId));
+            admittedLocations.sort((left, right) => left.discussionId.localeCompare(right.discussionId));
             return { admittedSessionIds, admittedLocations };
         }, { isolationLevel: "Serializable" /* Presence replacement must admit its Session and discussion locations from one access snapshot. */ });
         if (closed || !socket.connected) throw new Error("Human presence socket unavailable");
@@ -387,8 +381,8 @@ export function createSessionHumanPresenceService(input: Readonly<{
             return;
         }
         const location: PresenceLocation = value.discussionId === undefined
-            ? { sessionId: value.sessionId }
-            : { sessionId: value.sessionId, discussionId: value.discussionId };
+            ? { sessionId: value.sessionId! }
+            : { discussionId: value.discussionId };
         const room = sessionHumanPresenceLocationRoom(location);
         if (closed || !socket.connected || !socket.rooms.has(room)) return;
         const authentication = readSessionAccessAuthenticationFromSocket(socket);
@@ -396,21 +390,20 @@ export function createSessionHumanPresenceService(input: Readonly<{
         if (value.discussionId === undefined) {
             const decision = await resolveSessionAccessForOperation(db, {
                 accountId,
-                sessionId: value.sessionId,
+                sessionId: value.sessionId!,
                 authentication,
                 capability: "submitAgentInput",
             });
             allowed = decision.status === "allowed" && decision.access.capabilities.submitAgentInput;
         } else {
             const [context, discussion] = await Promise.all([
-                resolveSessionDiscussionContextInTx(db, { accountId, sessionId: value.sessionId, authentication }),
-                readSessionDiscussionRowInTx(db, { sessionId: value.sessionId, discussionId: value.discussionId }),
+                resolveDiscussionContextInTx(db, { accountId, discussionId: value.discussionId, authentication }),
+                readDiscussionRowInTx(db, { discussionId: value.discussionId }),
             ]);
-            allowed = !!context && !!discussion && projectSessionDiscussionCapabilitiesV1({
+            allowed = !!context && !!discussion && projectDiscussionCapabilitiesV1({
                 access: context.access,
-                sessionArchived: context.sessionArchived,
+                keyReadiness: context.keyReadiness,
                 discussionArchived: discussion.archivedAt !== null,
-                isCreator: discussion.createdByAccountId === accountId,
             }).postMessages;
         }
         if (closed || !socket.connected || !socket.rooms.has(room)) return;
@@ -448,8 +441,8 @@ export function createSessionHumanPresenceService(input: Readonly<{
     }
 
     const onClusterAccessChanged = (raw: unknown): void => {
-        const sessionId = parseSessionHumanPresenceAccessChangedServerPayload(raw);
-        if (sessionId === null) {
+        const location = parseSessionHumanPresenceAccessChangedServerPayload(raw);
+        if (location === null) {
             log(
                 { module: "session-human-presence" },
                 "Ignored invalid clustered human presence access transition",
@@ -459,20 +452,24 @@ export function createSessionHumanPresenceService(input: Readonly<{
         // Receiving nodes reuse the ordinary projection owner. It fetches the
         // current room and rechecks every socket's exact credential before any
         // Account-level dedupe; the cluster message carries no trusted actors.
-        scheduleSessionAccessChanged(sessionId);
+        if (location.discussionId !== undefined) schedule([location]);
+        else scheduleSessionAccessChanged(location.sessionId);
     };
     if (input.clusterAccessChangePublicationEnabled === true) {
         io.on(SESSION_HUMAN_PRESENCE_ACCESS_CHANGED_SERVER_EVENT, onClusterAccessChanged);
     }
 
     const listener: AccessChangeListener = {
-        sessionChanged: scheduleSessionAccessChanged,
+        locationChanged: location => {
+            if (location.discussionId !== undefined) schedule([location]);
+            else scheduleSessionAccessChanged(location.sessionId);
+        },
         ...(input.clusterAccessChangePublicationEnabled === true ? {
-            publishSessionChanged: (sessionId: string) => {
+            publishLocationChanged: (location: PresenceLocation) => {
                 // Socket.IO server-side emission targets the other API nodes.
                 // Local owners were scheduled above, and receivers schedule
                 // directly rather than calling this listener, preventing echoes.
-                publishSessionHumanPresenceAccessChanged(io, sessionId);
+                publishSessionHumanPresenceAccessChanged(io, location);
             },
         } : {}),
     };

@@ -1,7 +1,8 @@
 import { lazyZodSchema } from '../../lazyZodSchema.js';
 import { z } from 'zod/mini';
-import { SessionReportsToV1Schema, SessionReportsV1Schema } from '../relations/sessionReportsToV1.js';
+import { SessionManagerV1Schema, SessionManagedSessionsV1Schema } from '../follow/sessionManagerV1.js';
 import { SessionOriginKindV1Schema } from '../creation/sessionCreateOriginV1.js';
+import { SessionDiscussionParticipantV1Schema } from '../creation/sessionDiscussionParticipantV1.js';
 import { ExecutionRunIdSchema } from '../idsV1.js';
 
 import {
@@ -150,7 +151,11 @@ export type SessionAwarenessLineageV1 = z.infer<typeof SessionAwarenessLineageV1
 export const SessionAwarenessOriginV1Schema = lazyZodSchema(() => z.strictObject({
   kind: SessionOriginKindV1Schema,
   runId: z.optional(ExecutionRunIdSchema),
+  discussionParticipant: z.optional(SessionDiscussionParticipantV1Schema),
 }).check(z.superRefine((origin, context) => {
+  if ((origin.kind === 'discussion') !== (origin.discussionParticipant !== undefined)) {
+    context.addIssue({ code: 'custom', path: ['discussionParticipant'], message: 'Discussion origin requires its exact participant slot' });
+  }
   if (origin.runId !== undefined && origin.kind !== 'run_step') {
     context.addIssue({ code: 'custom', path: ['runId'], message: 'Only workflow steps name a server Run' });
   }
@@ -176,6 +181,7 @@ export const SessionAwarenessProjectionV1Schema = lazyZodSchema(() => z.strictOb
     sessionId: z.string().check(z.minLength(1)),
     origin: z.optional(SessionAwarenessOriginV1Schema),
     title: z.optional(z.string().check(z.minLength(1))),
+    statusReason: z.optional(z.string()),
     lifecycle: SessionAwarenessLifecycleV1Schema,
     runtime: SessionAwarenessRuntimeV1Schema,
     freshness: SessionAwarenessFreshnessV1Schema,
@@ -185,8 +191,8 @@ export const SessionAwarenessProjectionV1Schema = lazyZodSchema(() => z.strictOb
     workspace: z.optional(SessionAwarenessWorkspaceV1Schema),
     encryption: SessionAwarenessEncryptionV1Schema,
     availability: SessionAwarenessAvailabilityV1Schema,
-    reportsTo: z.optional(SessionReportsToV1Schema),
-    reports: z.optional(SessionReportsV1Schema),
+    manager: z.optional(SessionManagerV1Schema),
+    managedSessions: z.optional(SessionManagedSessionsV1Schema),
     pendingReviewRuns: z.optional(z.number().check(z.int(), z.nonnegative())),
   }));
 export type SessionAwarenessProjectionV1 = z.infer<typeof SessionAwarenessProjectionV1Schema>;

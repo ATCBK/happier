@@ -29,7 +29,6 @@ import { VirtualizedList } from '@/components/ui/lists/virtualized';
 import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { useTeamGroup, useTeamGroupMembers } from '@/hooks/teams/useTeamGroups';
 import { useTeamMembersRoster } from '@/hooks/teams/useTeamMembersRoster';
-import { Modal } from '@/modal';
 import { resolveAccountDisplayName } from '@/sync/domains/account/formatAccountDisplayName';
 import {
     addTeamGroupMember,
@@ -607,25 +606,6 @@ const GroupDetail = React.memo(function GroupDetail(props: Readonly<{
                                             await addNative(member);
                                             return;
                                         }
-                                        // What is being confirmed is this
-                                        // person's removal from this Group —
-                                        // not the Group's archive, whose copy
-                                        // promises a retention and a restoration
-                                        // this operation does not have.
-                                        const confirmed = await Modal.confirm(
-                                            t('teams.groups.removeMemberTitle', {
-                                                name: displayName,
-                                                group: group.name,
-                                            }),
-                                            external
-                                                ? t('teams.groups.externalOnlyBody', { source: external })
-                                                : t('teams.groups.removeMemberBody', {
-                                                    name: displayName,
-                                                    group: group.name,
-                                                }),
-                                            { confirmText: t('teams.groups.removeNative'), destructive: true },
-                                        );
-                                        if (!confirmed) return;
                                         await runRosterChange(
                                             () => removeTeamGroupMember({
                                                 scope: context.scope,
@@ -850,15 +830,6 @@ const GroupDetail = React.memo(function GroupDetail(props: Readonly<{
                         onPress={async () => {
                             if (mutationInFlightRef.current) return;
                             mutationInFlightRef.current = true;
-                            const confirmed = await Modal.confirm(
-                                t('teams.groups.archiveTitle', { name: group.name }),
-                                t('teams.groups.archiveBody'),
-                                { confirmText: t('teams.archive.confirmShort'), destructive: true },
-                            );
-                            if (!confirmed) {
-                                mutationInFlightRef.current = false;
-                                return;
-                            }
                             setBusy(true);
                             try {
                                 const outcome = await archiveTeamGroup({
@@ -1033,7 +1004,6 @@ const GroupDetail = React.memo(function GroupDetail(props: Readonly<{
                 ...(Platform.OS === 'web' ? { minHeight: 0 } : {}),
             }}
             contentContainerStyle={{ paddingBottom: Platform.OS === 'ios' ? 34 : 16 }}
-            backendPreference="auto"
             initialNumToRender={6}
             maxToRenderPerBatch={4}
             windowSize={7}

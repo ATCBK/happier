@@ -1,7 +1,10 @@
+import { once } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { DaemonLocallyPersistedState } from '@/persistence';
+import { spawnInlineNodeTestProcess } from '@/testkit/process/spawn';
 import { requestDaemonSelfRestart, waitForReplacementDaemon } from './requestDaemonSelfRestart';
+import { requestDaemonSelfRestartWithLockHandoff } from './requestDaemonSelfRestartWithLockHandoff';
 
 function makeState(overrides: Partial<DaemonLocallyPersistedState> = {}): DaemonLocallyPersistedState {
   return {
@@ -15,6 +18,60 @@ function makeState(overrides: Partial<DaemonLocallyPersistedState> = {}): Daemon
 }
 
 describe('requestDaemonSelfRestart', () => {
+  it.each(['version', 'runtime'] as const)('resumes the incumbent after a live successor publishes an incompatible %s', async (mismatch) => {
+    const child = spawnInlineNodeTestProcess('setInterval(() => {}, 1000)');
+    await once(child, 'spawn');
+    if (!child.pid) throw new Error('Missing successor PID');
+    const successorPid = child.pid;
+    const events: string[] = [];
+    let currentLock: string | null = 'incumbent-lock';
+    let result: Awaited<ReturnType<typeof requestDaemonSelfRestartWithLockHandoff>> | undefined;
+    const exitProcess = vi.fn();
+    vi.useFakeTimers();
+    const restarting = requestDaemonSelfRestartWithLockHandoff({
+      getCurrentDaemonLockHandle: () => currentLock,
+      setCurrentDaemonLockHandle: (lock) => { currentLock = lock; },
+      quiesceBeforeLockRelease: async () => {
+        events.push('quiesce');
+        return { resume: () => { events.push(`resume:${currentLock}`); } };
+      },
+      releaseDaemonLock: async () => { events.push('release'); },
+      acquireDaemonLock: async () => {
+        events.push('reacquire');
+        return 'reacquired-lock';
+      },
+      requestShutdown: () => { throw new Error('Incumbent must remain available'); },
+      selfRestartParams: {
+        ownPid: process.pid, expectedCliVersion: '2.0.0', runtimeId: 'runtime-1',
+        timeoutMs: 5, pollMs: 1,
+        spawnDetachedDaemonStartSyncImpl: async () => Object.assign(child, { detachedDaemonPid: successorPid }),
+        readDaemonStateImpl: async () => makeState({
+          pid: successorPid,
+          startedWithCliVersion: mismatch === 'version' ? '1.0.0' : '2.0.0',
+          runtimeId: mismatch === 'runtime' ? 'runtime-other' : 'runtime-1',
+        }),
+        exitProcess,
+        env: {},
+      },
+    }).then((settled) => { result = settled; });
+    try {
+      await vi.advanceTimersByTimeAsync(25);
+      expect(result).toEqual({ status: 'replacement_not_confirmed' });
+      expect(currentLock).toBe('reacquired-lock');
+      expect(events).toEqual(['quiesce', 'release', 'reacquire', 'resume:reacquired-lock']);
+      expect(exitProcess).not.toHaveBeenCalled();
+      expect(child.exitCode).toBeNull();
+      expect(child.signalCode).toBeNull();
+    } finally {
+      const exited = once(child, 'exit');
+      child.kill();
+      await exited;
+      await vi.advanceTimersByTimeAsync(25);
+      await restarting;
+      vi.useRealTimers();
+    }
+  });
+
   it('confirms replacement daemon pings with close-socket control headers', async () => {
     const observedHeaders: unknown[] = [];
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url: string | URL | Request, init?: RequestInit) => {

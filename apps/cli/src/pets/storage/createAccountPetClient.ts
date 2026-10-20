@@ -1,7 +1,7 @@
 import { AccountPetCreateResponseV1Schema } from '@happier-dev/protocol/pets/accountLibrary';
 import type { AccountPetCreateRequestV1, AccountPetCreateResponseV1 } from '@happier-dev/protocol';
 
-import { configuration } from '@/configuration';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { readStoredCredentials, type StoredCredentials } from '@/persistence';
 import { buildCurrentAccountStoredContentCompatibilityHttpHeaders } from '@/api/clientCompatibility/cliClientCompatibility';
 
@@ -26,7 +26,7 @@ export async function createAccountPetViaActiveServer(
     return { ok: false, errorCode: 'internal_error', error: 'Account credentials are unavailable.' };
   }
 
-  const response = await (deps.fetcher ?? fetch)(buildAccountPetsUrl(deps.serverUrl ?? configuration.serverUrl), {
+  const response = await (deps.fetcher ?? fetch)(buildAccountPetsUrl(deps.serverUrl ?? resolveServerHttpBaseUrl()), {
     method: 'POST',
     headers: {
       ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(),

@@ -2,6 +2,7 @@ import * as React from 'react';
 import { View } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
+import { buildMachineAgentInventoryKey } from '@happier-dev/protocol/capabilities';
 
 import type { MachineAgent } from '@/agents/machineAgents/machineAgentTypes';
 import { Text } from '@/components/ui/text/Text';
@@ -37,7 +38,7 @@ export const MachineAgentSetupPaneView = React.memo(function MachineAgentSetupPa
 }>) {
     const head = resolveMachineAgentSetupPaneHead(props.agent, props.machineName);
     return (
-        <View style={styles.pane} testID={`engine-setup-pane.${props.agent.agentId}`}>
+        <View style={styles.pane} testID={`engine-setup-pane.${buildMachineAgentInventoryKey(props.agent)}`}>
             <View style={styles.head}>
                 <Text style={styles.title}>{head.title}</Text>
                 <Text style={styles.subtitle}>{head.subtitle}</Text>
@@ -64,11 +65,12 @@ export const MachineAgentSetupPane = React.memo(function MachineAgentSetupPane(p
             machineName={props.machineName}
             form={(
                 <AgentSetupForm
-                    testID={`engine-setup.${props.agent.agentId}`}
+                    testID={`engine-setup.${buildMachineAgentInventoryKey(props.agent)}`}
                     serverId={props.serverId}
                     machineId={props.machineId}
                     machineName={props.machineName}
                     agentId={props.agent.agentId}
+                    definitionId={props.agent.definitionId}
                     layout="compact"
                 />
             )}

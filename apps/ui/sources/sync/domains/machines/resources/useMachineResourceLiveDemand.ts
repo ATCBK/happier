@@ -6,14 +6,14 @@ import type { MachineResourceKey, MachineVitalsView } from './machineRpc';
 /** Mounted visible surfaces own demand; passive row readers never start an RPC. */
 export function useMachineResourceLiveDemand(machineKeys: readonly MachineResourceKey[], options: Readonly<{ detail: MachineVitalsView; enabled?: boolean }>): void {
     const identities = useMachineDaemonReadIdentities(machineKeys.map(input => ({ ...input, enabled: options.enabled })));
-    const versionsKey = JSON.stringify(machineKeys.map(input => input.daemonStateVersion ?? null));
+    const versionsKey = JSON.stringify(identities.map((target, index) => ({ ...target.key,
+        daemonStateVersion: machineKeys[index]?.daemonStateVersion })));
 
     React.useEffect(() => {
-        const versions = JSON.parse(versionsKey) as Array<number | null>;
-        identities.forEach((target, index) => {
-            if (target.key.expectedAccountId) machineResourceStore.daemonStateChanged(target.key, versions[index]);
-        });
-    }, [identities, versionsKey]);
+        for (const input of JSON.parse(versionsKey) as MachineResourceKey[]) {
+            if (input.expectedAccountId) machineResourceStore.daemonStateChanged(input, input.daemonStateVersion);
+        }
+    }, [versionsKey]);
 
     React.useEffect(() => {
         const releases = identities.filter(target => target.enabled).map(target => {

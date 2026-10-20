@@ -1,23 +1,34 @@
-import { AUTOMATIC_SESSION_FOLLOW_STATE_V1, AccountSessionFollowV1Schema, EXPLICIT_SESSION_UNFOLLOW_STATE_V1, SessionAutoFollowPreferencesV1Schema, type AccountSessionFollowV1, type SessionAutoFollowPreferencesV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
+import { AccountSessionFollowV1Schema, OtherAccountFollowV1Schema, EXPLICIT_SESSION_UNFOLLOW_STATE_V1, projectSessionFollowFactsV1, SessionAutoFollowPreferencesV1Schema, type AccountFollowRelationV1, type AccountSessionFollowV1, type OtherAccountFollowV1, type SessionAutoFollowPreferencesV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
 import { SetSessionFollowRequestSchema, ReplaceSessionVoiceInclusionsRequestSchema, type SetSessionFollowRequest, type GetSessionFollowResponse } from '@happier-dev/protocol/sessions/follow/api';
 import { compareSessionFollowFrontierProgressV1, encodePersistedSessionFollowFrontierV1, isSessionFollowConsumptionWithinCurrentV1, isSessionFollowFrontierEqualV1, isSessionFollowTurnEqualV1, parsePersistedSessionFollowFrontierV1, projectSessionFollowFrontierFromSourceV1, type SessionFollowFrontierV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowFrontierV1';
 import { isActiveHomeAccountStatus } from '@happier-dev/protocol/home/governance';
+import { pageFollowListV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowListV1';
 import { VOICE_TRANSCRIPT_HISTORY_SYSTEM_SESSION_TAG } from '@happier-dev/protocol/sessions/control/contract';
 
-import { resolveEffectiveSessionAccess, resolveSessionAccessForAccountsInTx, resolveStructuralSessionAccessForAccountsInTx } from "@/app/session/access/sessionAccess";
+import { resolveEffectiveSessionAccess, resolveStructuralSessionAccessForAccountsInTx } from "@/app/session/access/sessionAccess";
 import { backgroundDeliveryAuthentication, type SessionAccessAuthentication } from "@/app/session/access/sessionAccessAuthentication";
-import { isServerFeatureEnabledForHome } from "@/app/features/catalog/serverFeatureGate";
 import {
-    beginViewerReadTrackingOnFollowEntriesInTx,
     beginViewerReadTrackingOnFollowEntryInTx,
-    filterPersonallyTrackedSessionsForAccountsInTx,
     isSessionPersonallyTrackedInTx,
 } from "@/app/session/personal/readState";
-import { inTx, type Tx } from "@/storage/inTx";
+import { inReadSnapshot, inTx, type Tx } from "@/storage/inTx";
 import { readSnapshotWithCurrentAdmission } from "@/storage/readSnapshotWithCurrentAdmission";
-import { AccountStatus, getDbProviderFromEnv, prismaRuntime as Prisma } from "@/storage/prisma";
 import { markSessionFollowsChangedForAccountsInTx, markSessionFollowsChangedInTx } from "./changes";
 import { hasCanonicalFollowProviderInputAcceptanceInTx } from "./providerInputAcceptance";
+import { acquireAccountChangePublicationLocksInTx } from "@/app/changes/markAccountChanged";
+import { matchesPersonalFollowOnceOccurrenceV1, parsePersistedPersonalFollowOnceV1, projectPersonalFollowCustodyV1, resolveAccountFollowVoiceSelectionV1, type PersonalFollowOnceOccurrenceV1, type PersistedPersonalFollowOnceV1 } from '@happier-dev/protocol/sessions/follow/accountFollow';
+import { FollowPolicyV1Schema, isFollowPolicyEqualV1, serializeFollowPolicyV1, resolveFollowDeliveryV1, type FollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowPolicyV1';
+import type { RunFollowOriginalV1, SessionFollowInputV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowInputV1';
+import type { FollowSourceRefV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
+import { sourceForSessionFollowEdgeV1, sourceKeyForSessionFollowSourceV1 } from './sessionFollowSourceIdentity';
+import { canReadFollowSourceInTx } from './followSourceAdmission';
+import { resolveDiscussionAudienceInTx } from '@/app/discussions/access';
+import { resolveWorkflowRunRecipientAccountIdsInTx } from '@/app/workflows/workflowRunAccess';
+import { isExecutionRunFollowFrontierWitnessCurrentInTx, type ExecutionRunFollowFrontierWitness } from './executionRunFollowSource';
+import { editFollowPolicyV1 } from '@happier-dev/protocol/sessions/follow/followPolicyEditorV1';
+import { isDeliveryMutedInTx, readDeliveryMuteScopesInTx } from './sessionDeliveryMuteService';
+import { isFollowDeliveryMutedV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
+import { readAccountFollowCreationPreferencesInTx, updateAccountFollowCreationPreferencesInTx } from './accountFollowCreationPreferences';
 
 export type CurrentAccountVoiceExecutionRunAuthority = Readonly<{
     executionRunId: string;
@@ -59,14 +70,23 @@ async function hasCurrentPrivateAccountVoicePublisherInTx(tx: Tx, input: Readonl
         && voiceSession.publicShare === null;
 }
 
-export type AccountFollowFailure = "invalid_parameters" | "account_inactive" | "session_not_found" | "session_archived";
+export type AccountFollowFailure = "invalid_parameters" | "account_inactive" | "session_not_found" | "session_archived"
+    | "source_not_found" | "source_unavailable";
 export type AccountFollowResult<T> = Readonly<{ ok: true; value: T }> | Readonly<{ ok: false; error: AccountFollowFailure }>;
 const FOLLOW_SELECT = {
     sessionId: true,
+    sourceKey: true,
+    sourceDiscussionId: true,
+    sourceExecutionRunSessionId: true,
+    sourceExecutionRunId: true,
+    sourceWorkflowRunId: true,
     following: true,
     notificationLevel: true,
     includeInVoice: true,
     voiceDeliveredFrontier: true,
+    followPolicy: true,
+    notifyOnce: true,
+    hasPersistentFollow: true,
 } as const;
 const ACCOUNT_SELECT = {
     status: true,
@@ -87,27 +107,100 @@ function projectPreferences(row: AccountPreferencesRow): SessionAutoFollowPrefer
         team: row.sessionAutoFollowTeam, group: row.sessionAutoFollowGroup,
     };
 }
+export function resolveAccountVoiceSelection(row: Readonly<{ includeInVoice: boolean; followPolicy?: string | null }>): Readonly<{ policy?: FollowPolicyV1 }> | null {
+    return resolveAccountFollowVoiceSelectionV1({ includeInVoice: row.includeInVoice, ...projectPersonalFollowCustodyV1(row) });
+}
+
 function isVoiceInitialSnapshotPending(row: Readonly<{
     following: boolean;
     includeInVoice: boolean;
+    followPolicy?: string | null;
+    notifyOnce?: string | null;
+    hasPersistentFollow?: boolean;
     voiceDeliveredFrontier: string | null;
 }> | null): boolean {
-    return row?.following === true && row.includeInVoice && row.voiceDeliveredFrontier === null;
+    return row?.following === true && resolveAccountVoiceSelection(row) !== null && row.voiceDeliveredFrontier === null;
 }
 
 /** Private Voice custody is selected for pending-state calculation, never exposed as an editable preference. */
 function projectAccountSessionFollow(row: Readonly<{
-    sessionId: string;
+    sessionId: string | null;
     following: boolean;
     notificationLevel: string;
     includeInVoice: boolean;
+    followPolicy?: string | null;
+    notifyOnce?: string | null;
+    hasPersistentFollow?: boolean;
 }>): AccountSessionFollowV1 {
+    if (!row.sessionId) throw new Error('Session Follow projection lost its Session source');
+    const custody = projectPersonalFollowCustodyV1(row);
     return AccountSessionFollowV1Schema.parse({
         sessionId: row.sessionId,
         following: row.following,
         notificationLevel: row.notificationLevel,
-        includeInVoice: row.includeInVoice,
+        includeInVoice: row.following && resolveAccountFollowVoiceSelectionV1({ includeInVoice: row.includeInVoice, ...custody }) !== null,
+        ...(row.hasPersistentFollow === false ? { persistent: false } : {}),
+        ...custody,
     });
+}
+
+type OtherAccountSource = Extract<FollowSourceRefV1, { kind: 'discussion' | 'execution_run' | 'workflow_run' }>;
+function sourceFromAccountFollow(row: Readonly<{
+    sourceKey: string | null; sessionId: string | null;
+    sourceDiscussionId: string | null;
+    sourceExecutionRunSessionId: string | null; sourceExecutionRunId: string | null; sourceWorkflowRunId: string | null;
+}>): OtherAccountSource | null {
+    if (!row.sourceKey || row.sessionId !== null) return null;
+    const source = sourceForSessionFollowEdgeV1({ ...row, sourceKey: row.sourceKey, sourceSessionId: row.sessionId });
+    if (!source || source.kind === 'session') return null;
+    if (source.kind === 'discussion' && source.discussionId !== row.sourceDiscussionId) return null;
+    if (source.kind !== 'discussion' && row.sourceDiscussionId !== null) return null;
+    return source;
+}
+function projectOtherAccountFollow(row: Readonly<{
+    sourceKey: string | null; sessionId: string | null; sourceDiscussionId: string | null;
+    sourceExecutionRunSessionId: string | null; sourceExecutionRunId: string | null; sourceWorkflowRunId: string | null;
+    following: boolean; hasPersistentFollow: boolean; followPolicy: string | null;
+}>): OtherAccountFollowV1 | null {
+    const source = sourceFromAccountFollow(row);
+    if (!source || !row.followPolicy) return null;
+    let value: unknown;
+    try { value = JSON.parse(row.followPolicy); } catch { return null; }
+    const policy = FollowPolicyV1Schema.safeParse(value);
+    return policy.success ? OtherAccountFollowV1Schema.parse({ source, following: row.following,
+        persistent: row.hasPersistentFollow, policy: policy.data }) : null;
+}
+
+/** One private explicit-Follow read for non-Session source adapters. */
+export async function readAccountOtherFollowInTx(tx: Tx, input: Readonly<{
+    accountId: string; authentication: SessionAccessAuthentication; source: OtherAccountSource;
+}>) {
+    const source = input.source;
+    if (!await activeAccount(tx, input.accountId) || !await canReadFollowSourceInTx(tx, { ...input, source })) return null;
+    const sourceKey = sourceKeyForSessionFollowSourceV1(source);
+    const row = await tx.accountSessionFollow.findUnique({ where: { accountId_sourceKey: { accountId: input.accountId, sourceKey } },
+        select: { ...FOLLOW_SELECT, deliveredDiscussionSeq: true, deliveredExecutionRunTerminalEventId: true, deliveredWorkflowRunRevision: true } });
+    if (!row || !row.following || JSON.stringify(sourceFromAccountFollow(row)) !== JSON.stringify(source)) return null;
+    const follow = projectOtherAccountFollow(row);
+    return follow ? { ...row, sourceKey, policy: follow.policy } : null;
+}
+
+/** Own-Account Run delivery uses the same explicit Follow, source admission and mute owners. */
+export async function readAccountRunFollowDeliveryInTx(tx: Tx, input: Readonly<{
+    accountId: string; authentication: SessionAccessAuthentication; original: RunFollowOriginalV1;
+    event: Extract<SessionFollowInputV1, { original: RunFollowOriginalV1 }>['event'];
+}>) {
+    const source = input.original.source;
+    const row = await readAccountOtherFollowInTx(tx, { ...input, source });
+    if (!row || !resolveFollowDeliveryV1({ policies: [row.policy], event: input.event }).selected
+        || await isDeliveryMutedInTx(tx, { accountId: input.accountId, receiver: { kind: 'account' },
+            candidate: { source, ...(source.kind === 'execution_run' ? { senderSessionId: source.sessionId } : {}) } }) !== false) return null;
+    const represented = 'terminalEventId' in input.original
+        ? row.deliveredExecutionRunTerminalEventId === input.original.terminalEventId
+        : (row.deliveredWorkflowRunRevision ?? 0) >= input.original.revision;
+    return { sourceKey: row.sourceKey, policy: row.policy, represented,
+        deliveredExecutionRunTerminalEventId: row.deliveredExecutionRunTerminalEventId,
+        deliveredWorkflowRunRevision: row.deliveredWorkflowRunRevision };
 }
 async function activeAccount(tx: Tx, accountId: string) {
     const account = await tx.account.findUnique({ where: { id: accountId }, select: ACCOUNT_SELECT });
@@ -116,6 +209,208 @@ async function activeAccount(tx: Tx, accountId: string) {
 async function readableSession(tx: Tx, input: Readonly<{ accountId: string; sessionId: string; authentication: SessionAccessAuthentication }>) {
     if ((await resolveEffectiveSessionAccess(tx, input))?.capabilities.readTranscript !== true) return null;
     return await tx.session.findUnique({ where: { id: input.sessionId }, select: { accountId: true, archivedAt: true } });
+}
+
+/** Source inspection discloses current members anonymously, plus the caller's own membership only. */
+export async function readSessionPersonalFollowerCensusInTx(tx: Tx, input: Readonly<{ accountId: string; sessionId: string }>): Promise<{
+    peopleCount: number; follows: AccountSessionFollowV1[];
+}> {
+    const rows = await tx.accountSessionFollow.findMany({ where: { sessionId: input.sessionId }, select: { ...FOLLOW_SELECT, accountId: true } });
+    const candidates = rows.filter(row => {
+        const facts = projectSessionFollowFactsV1(row);
+        return facts.follows || Boolean(facts.once);
+    });
+    const access = await resolveStructuralSessionAccessForAccountsInTx(tx, { sessionId: input.sessionId,
+        accountIds: candidates.map(row => row.accountId) });
+    const members = candidates.filter(row => access.get(row.accountId)?.capabilities.readTranscript === true);
+    const own = members.find(row => row.accountId === input.accountId);
+    return { peopleCount: members.length, follows: own ? [projectAccountSessionFollow(own)] : [] };
+}
+
+/** Reverse generic inspection counts only current source recipients, never reveals their identities. */
+export async function readOtherPersonalFollowerCensusInTx(tx: Tx, input: Readonly<{
+    accountId: string; source: OtherAccountSource;
+}>): Promise<Readonly<{ peopleCount: number; follows: OtherAccountFollowV1[] }>> {
+    const rows = await tx.accountSessionFollow.findMany({ where: {
+        sourceKey: sourceKeyForSessionFollowSourceV1(input.source), following: true,
+    }, select: { ...FOLLOW_SELECT, accountId: true } });
+    const candidates = rows.flatMap(row => {
+        if (JSON.stringify(sourceFromAccountFollow(row)) !== JSON.stringify(input.source))
+            throw new Error('Account Follow Run source digest collision');
+        const follow = projectOtherAccountFollow(row);
+        return follow ? [{ accountId: row.accountId, follow }] : [];
+    });
+    let audience: ReadonlySet<string>;
+    if (input.source.kind === 'discussion') {
+        audience = new Set(await resolveDiscussionAudienceInTx(tx, input.source.discussionId));
+    } else if (input.source.kind === 'workflow_run') {
+        audience = new Set(await resolveWorkflowRunRecipientAccountIdsInTx(tx, input.source.runId));
+    } else {
+        const access = await resolveStructuralSessionAccessForAccountsInTx(tx, {
+            sessionId: input.source.sessionId, accountIds: candidates.map(row => row.accountId),
+        });
+        audience = new Set(candidates.filter(row => access.get(row.accountId)?.capabilities.readTranscript === true)
+            .map(row => row.accountId));
+    }
+    const members = candidates.filter(row => audience.has(row.accountId));
+    return { peopleCount: members.length,
+        follows: members.filter(row => row.accountId === input.accountId).map(row => row.follow) };
+}
+
+/** Lists the caller's explicit active choices, filtering sources through current read admission. */
+export async function listAccountSessionFollows(input: Readonly<{ accountId: string; authentication: SessionAccessAuthentication; cursor?: string; limit?: number }>): Promise<AccountFollowResult<{ follows: AccountFollowRelationV1[]; continuation?: string }>> {
+    return readSnapshotWithCurrentAdmission<AccountFollowResult<{ follows: AccountFollowRelationV1[]; continuation?: string }>>(async tx => {
+        if (!await activeAccount(tx, input.accountId)) return { ok: false as const, error: 'account_inactive' as const };
+        const rows = await tx.accountSessionFollow.findMany({ where: { accountId: input.accountId, following: true }, select: FOLLOW_SELECT,
+            orderBy: [{ sourceKey: 'asc' }, { sessionId: 'asc' }] });
+        const follows: AccountFollowRelationV1[] = [];
+        for (const row of rows) {
+            if (row.sessionId) {
+                if (await readableSession(tx, { ...input, sessionId: row.sessionId })) follows.push(projectAccountSessionFollow(row));
+            } else {
+                const source = sourceFromAccountFollow(row);
+                if (!source || !await canReadFollowSourceInTx(tx, { ...input, source })) continue;
+                const projected = projectOtherAccountFollow(row);
+                if (projected) follows.push(projected);
+            }
+        }
+        return { ok: true as const, value: { follows } };
+    }, async (tx, captured) => {
+        if (!captured.ok) return captured;
+        if (!await activeAccount(tx, input.accountId)) return { ok: false as const, error: 'account_inactive' as const };
+        const follows: AccountFollowRelationV1[] = [];
+        for (const row of captured.value.follows) {
+            if ('sessionId' in row) {
+                if (await readableSession(tx, { ...input, sessionId: row.sessionId })) follows.push(row);
+            } else if (row.source.kind !== 'rule' && await canReadFollowSourceInTx(tx, { ...input, source: row.source })) follows.push(row);
+        }
+        try {
+            const page = pageFollowListV1({ scope: JSON.stringify([input.accountId, 'following']), rows: follows,
+                key: row => 'sessionId' in row
+                    ? sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: row.sessionId })
+                    : sourceKeyForSessionFollowSourceV1(row.source as OtherAccountSource),
+                cursor: input.cursor, limit: input.limit });
+            return { ok: true as const, value: { follows: page.rows, ...(page.continuation ? { continuation: page.continuation } : {}) } };
+        } catch {
+            return { ok: false as const, error: 'invalid_parameters' as const };
+        }
+    });
+}
+
+/** Exact non-Session personal choice; source grant is read from its current owner. */
+export async function getOtherAccountFollow(input: Readonly<{
+    accountId: string; source: OtherAccountSource; authentication: SessionAccessAuthentication;
+}>): Promise<AccountFollowResult<Readonly<{ follow: OtherAccountFollowV1 | null }>>> {
+    return readSnapshotWithCurrentAdmission(async tx => {
+        if (!await activeAccount(tx, input.accountId)) return { ok: false as const, error: 'account_inactive' as const };
+        if (!await canReadFollowSourceInTx(tx, input)) return { ok: false as const, error: 'source_not_found' as const };
+        const row = await tx.accountSessionFollow.findUnique({ where: { accountId_sourceKey: {
+            accountId: input.accountId, sourceKey: sourceKeyForSessionFollowSourceV1(input.source),
+        } }, select: FOLLOW_SELECT });
+        if (row && JSON.stringify(sourceFromAccountFollow(row)) !== JSON.stringify(input.source))
+            throw new Error('Account Follow Run source digest collision');
+        return { ok: true as const, value: { follow: row ? projectOtherAccountFollow(row) : null } };
+    }, async (tx, captured) => {
+        if (!captured.ok) return captured;
+        if (!await activeAccount(tx, input.accountId)) return { ok: false as const, error: 'account_inactive' as const };
+        return await canReadFollowSourceInTx(tx, input) ? captured : { ok: false as const, error: 'source_not_found' as const };
+    });
+}
+
+/** Personal policy uses this AccountSessionFollow row, including suppression and source baselines. */
+export async function setOtherAccountFollow(input: Readonly<{
+    accountId: string; source: OtherAccountSource; policy: FollowPolicyV1;
+    authentication: SessionAccessAuthentication;
+    executionRunFrontier?: ExecutionRunFollowFrontierWitness;
+}>): Promise<AccountFollowResult<Readonly<{ changed: boolean; follow: OtherAccountFollowV1 }>>> {
+    const parsed = FollowPolicyV1Schema.safeParse(input.policy);
+    if (!parsed.success) return { ok: false, error: 'invalid_parameters' };
+    return inTx(async tx => {
+        await acquireAccountChangePublicationLocksInTx(tx, [input.accountId], { includeSingleAccount: true });
+        if (!await activeAccount(tx, input.accountId)) return { ok: false, error: 'account_inactive' };
+        if (!await canReadFollowSourceInTx(tx, input)) return { ok: false, error: 'source_not_found' };
+        if (input.source.kind === 'discussion') {
+            const discussion = await tx.discussion.findUnique({ where: { id: input.source.discussionId }, select: { archivedAt: true } });
+            if (!discussion) return { ok: false, error: 'source_not_found' };
+            if (discussion.archivedAt !== null) return { ok: false, error: 'session_archived' };
+        }
+        if (input.source.kind === 'execution_run') {
+            const session = await tx.session.findUnique({ where: { id: input.source.sessionId }, select: { archivedAt: true } });
+            if (!session) return { ok: false, error: 'source_not_found' };
+            if (session.archivedAt !== null) return { ok: false, error: 'session_archived' };
+        }
+        const sourceKey = sourceKeyForSessionFollowSourceV1(input.source);
+        const key = { accountId: input.accountId, sourceKey };
+        const existing = await tx.accountSessionFollow.findUnique({ where: { accountId_sourceKey: key }, select: FOLLOW_SELECT });
+        if (existing && JSON.stringify(sourceFromAccountFollow(existing)) !== JSON.stringify(input.source))
+            throw new Error('Account Follow Run source digest collision');
+        const reseed = !existing || !existing.following;
+        if (reseed && input.source.kind === 'execution_run') {
+            const frontier = input.executionRunFrontier;
+            if (!frontier || JSON.stringify(frontier.source) !== JSON.stringify(input.source)
+                || !await isExecutionRunFollowFrontierWitnessCurrentInTx(tx, frontier))
+                return { ok: false, error: 'source_unavailable' };
+        }
+        const policy = parsed.data;
+        const followPolicy = serializeFollowPolicyV1(policy);
+        if (existing && existing.following && existing.hasPersistentFollow && existing.followPolicy !== null
+            && isFollowPolicyEqualV1(projectOtherAccountFollow(existing)?.policy ?? { preset: 'quiet' }, policy)) {
+            const follow = projectOtherAccountFollow(existing);
+            if (!follow) return { ok: false, error: 'source_unavailable' };
+            return { ok: true, value: { changed: false, follow } };
+        }
+        const notificationLevel = policy.preset === 'everything' ? 'all_messages'
+            : policy.preset === 'quiet' ? 'none' : 'important';
+        const raw = input.source.kind === 'discussion' ? { sourceDiscussionId: input.source.discussionId }
+            : input.source.kind === 'workflow_run' ? { sourceWorkflowRunId: input.source.runId }
+            : { sourceExecutionRunSessionId: input.source.sessionId, sourceExecutionRunId: input.source.runId };
+        const baseline = input.source.kind === 'discussion'
+            ? { deliveredDiscussionSeq: (await tx.discussion.findUniqueOrThrow({ where: { id: input.source.discussionId },
+                select: { messageSeq: true } })).messageSeq }
+            : input.source.kind === 'workflow_run'
+                ? { deliveredWorkflowRunRevision: (await tx.automationRun.findUniqueOrThrow({ where: { id: input.source.runId },
+                    select: { revision: true } })).revision }
+                : { deliveredExecutionRunTerminalEventId: input.executionRunFrontier?.terminalEventId ?? null };
+        const row = await tx.accountSessionFollow.upsert({ where: { accountId_sourceKey: key },
+            create: { accountId: input.accountId, sourceKey, ...raw, ...baseline,
+                following: true, hasPersistentFollow: true, notificationLevel,
+                includeInVoice: false, followPolicy },
+            update: { following: true, hasPersistentFollow: true, notificationLevel,
+                includeInVoice: false, followPolicy, ...(reseed ? baseline : {}) },
+            select: FOLLOW_SELECT });
+        if (JSON.stringify(sourceFromAccountFollow(row)) !== JSON.stringify(input.source))
+            throw new Error('Account Follow Run source digest collision');
+        const follow = projectOtherAccountFollow(row);
+        if (!follow) throw new Error('Account Follow source update lost exact identity');
+        await markSessionFollowsChangedInTx(tx, { accountId: input.accountId });
+        return { ok: true, value: { changed: true, follow } };
+    });
+}
+
+/** Explicit generic Unfollow suppresses future effects without requiring a now-lost source grant. */
+export async function removeOtherAccountFollow(input: Readonly<{
+    accountId: string; source: OtherAccountSource; authentication: SessionAccessAuthentication;
+}>): Promise<AccountFollowResult<Readonly<{ changed: boolean }>>> {
+    return inTx(async tx => {
+        await acquireAccountChangePublicationLocksInTx(tx, [input.accountId], { includeSingleAccount: true });
+        if (!await activeAccount(tx, input.accountId)) return { ok: false, error: 'account_inactive' };
+        const key = { accountId: input.accountId, sourceKey: sourceKeyForSessionFollowSourceV1(input.source) };
+        const existing = await tx.accountSessionFollow.findUnique({ where: { accountId_sourceKey: key }, select: FOLLOW_SELECT });
+        if (existing && JSON.stringify(sourceFromAccountFollow(existing)) !== JSON.stringify(input.source))
+            throw new Error('Account Follow Run source digest collision');
+        if (!existing && !await canReadFollowSourceInTx(tx, input)) return { ok: false, error: 'source_not_found' };
+        if (existing?.following === false && existing.hasPersistentFollow) return { ok: true, value: { changed: false } };
+        const raw = input.source.kind === 'discussion' ? { sourceDiscussionId: input.source.discussionId }
+            : input.source.kind === 'workflow_run' ? { sourceWorkflowRunId: input.source.runId }
+            : { sourceExecutionRunSessionId: input.source.sessionId, sourceExecutionRunId: input.source.runId };
+        await tx.accountSessionFollow.upsert({ where: { accountId_sourceKey: key },
+            create: { ...key, ...raw, following: false, hasPersistentFollow: true, notificationLevel: 'none',
+                includeInVoice: false, followPolicy: serializeFollowPolicyV1({ preset: 'quiet' }) },
+            update: { following: false, hasPersistentFollow: true, notificationLevel: 'none',
+                includeInVoice: false, followPolicy: serializeFollowPolicyV1({ preset: 'quiet' }) } });
+        await markSessionFollowsChangedInTx(tx, { accountId: input.accountId });
+        return { ok: true, value: { changed: true } };
+    });
 }
 
 /** Reads only the authenticated Account's personal choice after current Session read admission. */
@@ -152,13 +447,48 @@ export async function setAccountSessionFollow(input: Readonly<{
     if (!parsed.success) return { ok: false, error: "invalid_parameters" };
     const preferences = parsed.data;
     return await inTx(async tx => {
+        await acquireAccountChangePublicationLocksInTx(tx, [input.accountId], { includeSingleAccount: true });
         if (!await activeAccount(tx, input.accountId)) return { ok: false, error: "account_inactive" };
         const session = await readableSession(tx, input);
         if (!session) return { ok: false, error: "session_not_found" };
         if (session.archivedAt !== null) return { ok: false, error: "session_archived" };
         const key = { accountId: input.accountId, sessionId: input.sessionId };
         const existing = await tx.accountSessionFollow.findUnique({ where: { accountId_sessionId: key }, select: FOLLOW_SELECT });
-        if (existing?.following && existing.notificationLevel === preferences.notificationLevel && existing.includeInVoice === preferences.includeInVoice) {
+        const persistentMutation = preferences.policy !== undefined || preferences.notificationLevel !== undefined;
+        // Legacy ingress retains its independent notification/Voice choices.
+        // Do not manufacture a second explicit policy beside those fields.
+        const policyWrite = preferences.policy !== undefined ? { followPolicy: JSON.stringify(preferences.policy) }
+            : preferences.notificationLevel !== undefined ? { followPolicy: null } : {};
+        let notifyOnce = existing?.notifyOnce ?? null;
+        if (preferences.once !== undefined) {
+            if (preferences.once === null) notifyOnce = null;
+            else {
+                const source = await tx.session.findUniqueOrThrow({ where: { id: input.sessionId }, select: {
+                    seq: true, latestReadyEventSeq: true, agentStateVersion: true, latestTurnId: true, latestTurnStatus: true,
+                } });
+                if (preferences.once.kind === 'turn_finished'
+                    && (source.latestTurnId !== preferences.once.sourceTurnId || source.latestTurnStatus !== 'in_progress')) {
+                    return { ok: false, error: 'invalid_parameters' };
+                }
+                const armed: PersistedPersonalFollowOnceV1 = { v: 1, state: 'armed', once: preferences.once,
+                    baseline: projectSessionFollowFrontierFromSourceV1(source) };
+                // Retrying an unchanged intent does not move its needs-you baseline.
+                const previous = parsePersistedPersonalFollowOnceV1(existing?.notifyOnce);
+                notifyOnce = previous?.state === 'armed' && JSON.stringify(previous.once) === JSON.stringify(preferences.once)
+                    ? existing!.notifyOnce : JSON.stringify(armed);
+            }
+        }
+        const notificationLevel = persistentMutation
+            ? preferences.notificationLevel ?? (preferences.policy?.preset === 'everything' ? 'all_messages' : preferences.policy?.preset === 'quiet' ? 'none' : 'important')
+            : existing?.notificationLevel ?? 'none';
+        const includeInVoice = preferences.policy !== undefined ? false
+            : preferences.includeInVoice ?? existing?.includeInVoice ?? false;
+        const following = persistentMutation ? true : existing?.following ?? false;
+        const hasPersistentFollow = persistentMutation || existing?.hasPersistentFollow === true;
+        const followPolicy = 'followPolicy' in policyWrite ? policyWrite.followPolicy : existing?.followPolicy ?? null;
+        if (existing && existing.following === following && existing.notificationLevel === notificationLevel
+            && existing.includeInVoice === includeInVoice && existing.followPolicy === followPolicy && existing.notifyOnce === notifyOnce
+            && existing.hasPersistentFollow === hasPersistentFollow) {
             return { ok: true, value: {
                 changed: false,
                 follow: projectAccountSessionFollow(existing),
@@ -168,34 +498,110 @@ export async function setAccountSessionFollow(input: Readonly<{
         const wasTracked = await isSessionPersonallyTrackedInTx(tx, { ...key, ownerAccountId: session.accountId });
         const row = await tx.accountSessionFollow.upsert({
             where: { accountId_sessionId: key },
-            create: { ...key, following: true, ...preferences, voiceDeliveredFrontier: null },
-            update: { following: true, ...preferences,
-                ...(!preferences.includeInVoice || !existing?.includeInVoice ? { voiceDeliveredFrontier: null } : {}) },
+            create: { ...key, following, hasPersistentFollow, notificationLevel, includeInVoice, followPolicy, notifyOnce, voiceDeliveredFrontier: null },
+            update: { following, hasPersistentFollow, notificationLevel, includeInVoice, followPolicy, notifyOnce,
+                ...(preferences.includeInVoice !== undefined && (!includeInVoice || !existing?.includeInVoice)
+                    || resolveAccountVoiceSelection({ includeInVoice, followPolicy }) !== null
+                        && (!existing || resolveAccountVoiceSelection(existing) === null)
+                    ? { voiceDeliveredFrontier: null } : {}) },
             select: FOLLOW_SELECT,
         });
-        await beginViewerReadTrackingOnFollowEntryInTx({ tx, ...key, wasTracked, authentication: input.authentication });
+        if (persistentMutation) await beginViewerReadTrackingOnFollowEntryInTx({ tx, ...key, wasTracked, authentication: input.authentication });
         await markSessionFollowsChangedInTx(tx, { accountId: input.accountId });
         return { ok: true, value: {
             changed: true,
             follow: projectAccountSessionFollow(row),
             voiceInitialSnapshotPending: isVoiceInitialSnapshotPending(row),
         } };
-    }, { isolationLevel: "Serializable" /* Follow tracking entry and whole Voice membership replacement depend on prior membership reads. */ });
+    });
 }
 
 /** Explicit Unfollow persists suppression, including after visibility loss, without disclosing a Session. */
 export async function removeAccountSessionFollow(input: Readonly<{ accountId: string; sessionId: string; authentication: SessionAccessAuthentication }>): Promise<AccountFollowResult<Readonly<{ changed: boolean }>>> {
     return await inTx(async tx => {
+        await acquireAccountChangePublicationLocksInTx(tx, [input.accountId], { includeSingleAccount: true });
         if (!await activeAccount(tx, input.accountId)) return { ok: false, error: "account_inactive" };
         const key = { accountId: input.accountId, sessionId: input.sessionId };
         const existing = await tx.accountSessionFollow.findUnique({ where: { accountId_sessionId: key }, select: FOLLOW_SELECT });
         if (!existing && !await readableSession(tx, input)) return { ok: false, error: "session_not_found" };
-        if (existing && !existing.following) return { ok: true, value: { changed: false } };
-        const suppressed = { ...EXPLICIT_SESSION_UNFOLLOW_STATE_V1, voiceDeliveredFrontier: null };
+        if (existing && existing.hasPersistentFollow && !existing.following && existing.notifyOnce === null) return { ok: true, value: { changed: false } };
+        const suppressed = { ...EXPLICIT_SESSION_UNFOLLOW_STATE_V1, hasPersistentFollow: true, followPolicy: null, notifyOnce: null, voiceDeliveredFrontier: null };
         await tx.accountSessionFollow.upsert({ where: { accountId_sessionId: key }, create: { ...key, ...suppressed }, update: suppressed });
         await markSessionFollowsChangedInTx(tx, { accountId: input.accountId });
         return { ok: true, value: { changed: true } };
-    }, { isolationLevel: "Serializable" /* Follow tracking entry and whole Voice membership replacement depend on prior membership reads. */ });
+    });
+}
+
+/**
+ * Settles an accepted personal effect against the exact armed intent. The
+ * fulfilled source reference keeps that one Inbox item available without
+ * changing persistent interest, suppression, Voice or private read state.
+ */
+export async function consumeAccountSessionFollowOnceInTx(tx: Tx, input: Readonly<{
+    accountId: string;
+    sessionId: string;
+    expectedOnce: string;
+    accepted: boolean;
+    occurrence: PersonalFollowOnceOccurrenceV1;
+}>): Promise<boolean> {
+    if (!input.accepted) return false;
+    const armed = parsePersistedPersonalFollowOnceV1(input.expectedOnce);
+    if (armed?.state !== 'armed' || !matchesPersonalFollowOnceOccurrenceV1({ ...armed, occurrence: input.occurrence })) return false;
+    const changed = await tx.accountSessionFollow.updateMany({
+        where: { accountId: input.accountId, sessionId: input.sessionId, notifyOnce: input.expectedOnce },
+        data: { notifyOnce: JSON.stringify({ ...armed, state: 'fulfilled', occurrence: input.occurrence } satisfies PersistedPersonalFollowOnceV1) },
+    });
+    if (changed.count !== 1) return false;
+    await markSessionFollowsChangedInTx(tx, { accountId: input.accountId });
+    return true;
+}
+
+/** Accepts one source-backed Inbox reference after fresh background admission. */
+export async function acceptAccountSessionFollowOnceDelivery(input: Readonly<{
+    accountId: string; sessionId: string; expectedOnce: string; occurrence: PersonalFollowOnceOccurrenceV1;
+}>): Promise<boolean> {
+    return inTx(async tx => {
+        await acquireAccountChangePublicationLocksInTx(tx, [input.accountId], { includeSingleAccount: true });
+        if (!await activeAccount(tx, input.accountId)) return false;
+        const session = await readableSession(tx, { ...input, authentication: backgroundDeliveryAuthentication() });
+        if (!session || session.archivedAt !== null) return false;
+        if (await isDeliveryMutedInTx(tx, {
+            receiver: { kind: 'account' }, accountId: input.accountId,
+            candidate: { senderSessionId: input.sessionId, source: { kind: 'session', sessionId: input.sessionId } },
+        }) !== false) return false;
+        return acceptAccountSessionFollowOnceDeliveryInTx(tx, input);
+    });
+}
+
+/** Caller owns recipient admission and Account publication locks in this transaction. */
+export async function acceptAccountSessionFollowOnceDeliveryInTx(tx: Tx, input: Readonly<{
+    accountId: string; sessionId: string; expectedOnce: string; occurrence: PersonalFollowOnceOccurrenceV1;
+}>): Promise<boolean> {
+    const event = input.occurrence.event;
+    if (event === 'permission_required' || event === 'user_action_required') {
+        // A later encrypted state cannot prove the original request is live.
+        const source = await tx.session.findUnique({ where: { id: input.sessionId }, select: { agentStateVersion: true } });
+        if (source?.agentStateVersion !== input.occurrence.agentStateVersion) return false;
+    } else {
+        if (!input.occurrence.turnId || event !== 'ready' && event !== 'failed' && event !== 'cancelled') return false;
+        const turn = await tx.sessionTurn.findUnique({ where: { sessionId_turnId: {
+            sessionId: input.sessionId, turnId: input.occurrence.turnId,
+        } }, select: { status: true } });
+        if (turn?.status !== (event === 'ready' ? 'completed' : event)) return false;
+    }
+    return consumeAccountSessionFollowOnceInTx(tx, { ...input, accepted: true });
+}
+
+/** Existing explicit mark-read/settle clears accepted convenience attention only. */
+export async function clearFulfilledAccountSessionFollowOnceInTx(tx: Tx, input: Readonly<{
+    accountId: string; sessionId: string;
+}>): Promise<boolean> {
+    const row = await tx.accountSessionFollow.findUnique({ where: { accountId_sessionId: input }, select: { notifyOnce: true } });
+    if (parsePersistedPersonalFollowOnceV1(row?.notifyOnce)?.state !== 'fulfilled') return false;
+    const result = await tx.accountSessionFollow.updateMany({ where: { ...input, notifyOnce: row!.notifyOnce }, data: { notifyOnce: null } });
+    if (result.count !== 1) return false;
+    await markSessionFollowsChangedInTx(tx, input);
+    return true;
 }
 
 /** Atomically replaces one Home's durable Include in Voice membership. */
@@ -208,6 +614,7 @@ export async function replaceAccountSessionVoiceInclusions(input: Readonly<{
     if (!parsed.success) return { ok: false, error: "invalid_parameters" };
     const sessionIds = [...new Set(parsed.data.sessionIds)].sort();
     return await inTx(async tx => {
+        await acquireAccountChangePublicationLocksInTx(tx, [input.accountId], { includeSingleAccount: true });
         if (!await activeAccount(tx, input.accountId)) return { ok: false, error: "account_inactive" };
         const sessions = new Map<string, Readonly<{ accountId: string; archivedAt: Date | null }>>();
         for (const sessionId of sessionIds) {
@@ -217,24 +624,30 @@ export async function replaceAccountSessionVoiceInclusions(input: Readonly<{
             sessions.set(sessionId, session);
         }
         const desired = new Set(sessionIds);
-        const existing = await tx.accountSessionFollow.findMany({
-            where: { accountId: input.accountId },
+        const existing = (await tx.accountSessionFollow.findMany({
+            where: { accountId: input.accountId, sessionId: { not: null } },
             select: FOLLOW_SELECT,
-        });
+        })).filter((row): row is typeof row & { sessionId: string } => row.sessionId !== null);
         const existingBySessionId = new Map(existing.map(row => [row.sessionId, row] as const));
         let changed = false;
         for (const row of existing) {
-            if (!row.following || !row.includeInVoice || desired.has(row.sessionId)) continue;
+            if (!row.following || desired.has(row.sessionId)) continue;
+            if (resolveAccountVoiceSelection(row) === null && !row.includeInVoice) continue;
+            const policy = projectPersonalFollowCustodyV1(row).policy;
             await tx.accountSessionFollow.update({
                 where: { accountId_sessionId: { accountId: input.accountId, sessionId: row.sessionId } },
-                data: { includeInVoice: false, voiceDeliveredFrontier: null },
+                data: { includeInVoice: false, voiceDeliveredFrontier: null,
+                    ...(policy ? { followPolicy: JSON.stringify(editFollowPolicyV1(policy, { kind: 'voice', enabled: false })) } : {}) },
             });
             changed = true;
         }
         for (const sessionId of sessionIds) {
             const key = { accountId: input.accountId, sessionId };
             const row = existingBySessionId.get(sessionId);
-            if (row?.following && row.includeInVoice) continue;
+            if (row?.following && resolveAccountVoiceSelection(row) !== null) continue;
+            const policy = row ? projectPersonalFollowCustodyV1(row).policy : undefined;
+            const voicePolicy = policy ? editFollowPolicyV1(policy, { kind: 'voice', enabled: true }) : undefined;
+            if (row?.following && !row.includeInVoice && policy && voicePolicy && isFollowPolicyEqualV1(policy, voicePolicy)) continue;
             const session = sessions.get(sessionId)!;
             const wasTracked = await isSessionPersonallyTrackedInTx(tx, { ...key, ownerAccountId: session.accountId });
             await tx.accountSessionFollow.upsert({
@@ -242,7 +655,9 @@ export async function replaceAccountSessionVoiceInclusions(input: Readonly<{
                 create: { ...key, following: true, notificationLevel: 'none', includeInVoice: true, voiceDeliveredFrontier: null },
                 update: {
                     following: true,
-                    includeInVoice: true,
+                    hasPersistentFollow: true,
+                    includeInVoice: !policy,
+                    ...(voicePolicy ? { followPolicy: JSON.stringify(voicePolicy) } : {}),
                     voiceDeliveredFrontier: null,
                     ...(row?.following ? {} : { notificationLevel: 'none' }),
                 },
@@ -251,19 +666,22 @@ export async function replaceAccountSessionVoiceInclusions(input: Readonly<{
             changed = true;
         }
         if (changed) await markSessionFollowsChangedInTx(tx, { accountId: input.accountId });
-        return { ok: true, value: { changed, sessionIds } };
-    }, { isolationLevel: "Serializable" /* Follow tracking entry and whole Voice membership replacement depend on prior membership reads. */ });
+        const effective = await tx.accountSessionFollow.findMany({ where: { accountId: input.accountId, following: true, sessionId: { not: null } },
+            select: { sessionId: true, includeInVoice: true, followPolicy: true }, orderBy: { sessionId: 'asc' } });
+        return { ok: true, value: { changed, sessionIds: effective.flatMap(row => row.sessionId !== null && resolveAccountVoiceSelection(row) !== null ? [row.sessionId] : []) } };
+    });
 }
 
-/** Gets the four prospective operational defaults; no encrypted settings mirror exists. */
+/** Reads relationship default rules and creation policies through their private Account owner. */
 export async function getSessionAutoFollowPreferences(input: Readonly<{ accountId: string }>): Promise<AccountFollowResult<SessionAutoFollowPreferencesV1>> {
-    return await inTx(async tx => {
+    return await inReadSnapshot(async tx => {
         const account = await activeAccount(tx, input.accountId);
-        return account ? { ok: true, value: projectPreferences(account) } : { ok: false, error: "account_inactive" };
-    }, { readOnly: true });
+        return account ? { ok: true, value: { ...projectPreferences(account),
+            ...await readAccountFollowCreationPreferencesInTx(tx, input.accountId) } } : { ok: false, error: "account_inactive" };
+    });
 }
 
-/** Replaces future relationship defaults without scanning or mutating historical relationships. */
+/** Updates default rules and creation policies without scanning or mutating existing Sessions. */
 export async function setSessionAutoFollowPreferences(input: Readonly<{
     accountId: string; preferences: SessionAutoFollowPreferencesV1;
 }>): Promise<AccountFollowResult<SessionAutoFollowPreferencesV1>> {
@@ -271,150 +689,27 @@ export async function setSessionAutoFollowPreferences(input: Readonly<{
     if (!parsed.success) return { ok: false, error: "invalid_parameters" };
     const preferences = parsed.data;
     return await inTx(async tx => {
+        await acquireAccountChangePublicationLocksInTx(tx, [input.accountId], { includeSingleAccount: true });
         const account = await activeAccount(tx, input.accountId);
         if (!account) return { ok: false, error: "account_inactive" };
         const current = projectPreferences(account);
-        if (Object.keys(preferences).some(key => current[key as keyof typeof current] !== preferences[key as keyof typeof preferences])) {
+        const creation = await updateAccountFollowCreationPreferencesInTx(tx, { accountId: input.accountId, patch: {
+            ...(preferences.managerPolicy ? { managerPolicy: preferences.managerPolicy } : {}),
+            ...(preferences.runReportPolicy ? { runReportPolicy: preferences.runReportPolicy } : {}),
+            ...(preferences.discussionReceivePolicy ? { discussionReceivePolicy: preferences.discussionReceivePolicy } : {}),
+        } });
+        const relationshipsChanged = (['assigned', 'direct', 'team', 'group'] as const).some(key => current[key] !== preferences[key]);
+        if (relationshipsChanged) {
             await tx.account.update({ where: { id: input.accountId }, data: {
                 sessionAutoFollowAssigned: preferences.assigned, sessionAutoFollowDirect: preferences.direct,
                 sessionAutoFollowTeam: preferences.team, sessionAutoFollowGroup: preferences.group,
             } });
-            await markSessionFollowsChangedInTx(tx, { accountId: input.accountId });
         }
-        return { ok: true, value: preferences };
-    }, { isolationLevel: "Serializable" /* The active Account admission and prospective preference write must serialize with Account status changes. */ });
-}
-
-/**
- * Set-oriented automatic-entry authority.
- *
- * The composite Follow key remains the authority: only rows with no prior
- * per-Session choice are inserted (ignore-on-conflict), so an explicit Follow,
- * Unfollow suppression, or concurrent winner is never overwritten. Non-MySQL
- * uses one bulk INSERT...RETURNING to learn the exact inserted set atomically;
- * MySQL uses one bulk createMany plus one post-read filtered to the automatic
- * state (same-values concurrent explicit same-state overcount is fresh-baseline
- * safe and noted as a provider gate). A zero/empty set means another choice
- * won and no tracking baseline may be touched. Chunked to respect provider
- * variable limits; test fixtures settle in one chunk.
- */
-async function insertAutomaticSessionFollowsIfAbsentInTx(
-    tx: Tx,
-    params: Readonly<{ sessionId: string; accountIds: readonly string[] }>,
-): Promise<readonly string[]> {
-    const unique = [...new Set(params.accountIds)].filter(accountId => typeof accountId === 'string' && accountId.length > 0);
-    if (unique.length === 0) return [];
-    const provider = getDbProviderFromEnv(process.env, 'postgres');
-    const CHUNK = 200;
-    const inserted: string[] = [];
-    for (let offset = 0; offset < unique.length; offset += CHUNK) {
-        const chunk = unique.slice(offset, offset + CHUNK);
-        if (provider === 'mysql') {
-            await tx.accountSessionFollow.createMany({
-                data: chunk.map(accountId => ({
-                    accountId,
-                    sessionId: params.sessionId,
-                    ...AUTOMATIC_SESSION_FOLLOW_STATE_V1,
-                    voiceDeliveredFrontier: null,
-                })),
-                skipDuplicates: true,
-            });
-            // Post-read filtered to the automatic state learns the inserted set
-            // except for the rare same-state concurrent explicit winner, which
-            // is fresh-baseline safe (both seed to the current ceiling).
-            const rows = await tx.accountSessionFollow.findMany({
-                where: {
-                    sessionId: params.sessionId,
-                    accountId: { in: chunk },
-                    following: true,
-                    notificationLevel: 'important',
-                    includeInVoice: false,
-                },
-                select: { accountId: true },
-            });
-            for (const row of rows) inserted.push(row.accountId);
-        } else {
-            const rows = Prisma.join(chunk.map(accountId => Prisma.sql`(${accountId}, ${params.sessionId}, ${AUTOMATIC_SESSION_FOLLOW_STATE_V1.following}, ${AUTOMATIC_SESSION_FOLLOW_STATE_V1.notificationLevel}, ${AUTOMATIC_SESSION_FOLLOW_STATE_V1.includeInVoice}, NULL)`));
-            const returned = await tx.$queryRaw<Array<{ accountId: string }>>(Prisma.sql`
-                INSERT INTO "AccountSessionFollow" ("accountId", "sessionId", "following", "notificationLevel", "includeInVoice", "voiceDeliveredFrontier")
-                VALUES ${rows}
-                ON CONFLICT("accountId", "sessionId") DO NOTHING
-                RETURNING "accountId"
-            `);
-            for (const row of returned) inserted.push(row.accountId);
-        }
-    }
-    return [...new Set(inserted)];
-}
-
-/**
- * Called only with new relationship evidence from the canonical assignment/access
- * transaction. Eligibility, current access, the existing-row check and the
- * tracking predicate are resolved for the whole Account set through their
- * set-oriented owners, so a bulk Team or directory change never degrades into a
- * per-Account authorization loop inside the mutation transaction.
- */
-export async function applySessionAutoFollowForRelationshipChangeInTx(tx: Tx, input: Readonly<{
-    sessionId: string; accountIds: readonly string[]; relationship: keyof SessionAutoFollowPreferencesV1;
-}>): Promise<number> {
-    if (!await isServerFeatureEnabledForHome("sessions.following", { tx })) return 0;
-    const requested = [...new Set(input.accountIds)];
-    if (requested.length === 0) return 0;
-    const session = await tx.session.findUnique({ where: { id: input.sessionId }, select: { accountId: true, archivedAt: true } });
-    if (!session || session.archivedAt !== null) return 0;
-    const preferenceColumn = {
-        assigned: "sessionAutoFollowAssigned", direct: "sessionAutoFollowDirect",
-        team: "sessionAutoFollowTeam", group: "sessionAutoFollowGroup",
-    } as const;
-    const [accounts, existing] = await Promise.all([
-        tx.account.findMany({
-            where: { id: { in: requested }, status: AccountStatus.active, [preferenceColumn[input.relationship]]: true },
-            select: { id: true },
-        }),
-        tx.accountSessionFollow.findMany({
-            where: { sessionId: input.sessionId, accountId: { in: requested } },
-            select: { accountId: true },
-        }),
-    ]);
-    const alreadyChosen = new Set(existing.map(row => row.accountId));
-    const eligible = accounts.map(account => account.id).filter(accountId => !alreadyChosen.has(accountId));
-    if (eligible.length === 0) return 0;
-
-    const [access, tracked] = await Promise.all([
-        resolveSessionAccessForAccountsInTx(tx, {
-            sessionId: input.sessionId,
-            accountIds: eligible,
-            authentication: backgroundDeliveryAuthentication(),
-        }),
-        filterPersonallyTrackedSessionsForAccountsInTx(tx, { accountIds: eligible, sessionIds: [input.sessionId] }),
-    ]);
-    const readableEligible = eligible.filter(accountId => access.get(accountId)?.capabilities.readTranscript === true);
-    if (readableEligible.length === 0) return 0;
-    // Bulk conditional inserts learn the exact newly inserted set; another
-    // explicit choice winning the key means no baseline may be touched.
-    const insertedAccountIds = await insertAutomaticSessionFollowsIfAbsentInTx(tx, {
-        sessionId: input.sessionId,
-        accountIds: readableEligible,
+        if (relationshipsChanged || creation.changed) await markSessionFollowsChangedInTx(tx, { accountId: input.accountId });
+        return { ok: true, value: { ...preferences, ...creation.policies } };
     });
-    if (insertedAccountIds.length === 0) return 0;
-    const wasTrackedByAccountId = new Map(insertedAccountIds.map(accountId => [
-        accountId,
-        tracked.get(accountId)?.has(input.sessionId) === true,
-    ] as const));
-    // Newly inserted eligible followers initialize as a set: one session
-    // ceiling read plus one bulk session upsert plus one bulk Discussion matrix
-    // upsert, preserving fresh-baseline (wasTracked false) versus preserve
-    // (wasTracked true, e.g. owner) semantics without per-Account loops.
-    await beginViewerReadTrackingOnFollowEntriesInTx({
-        tx,
-        sessionId: input.sessionId,
-        accountIds: insertedAccountIds,
-        wasTrackedByAccountId,
-        authentication: backgroundDeliveryAuthentication(),
-    });
-    await markSessionFollowsChangedForAccountsInTx(tx, insertedAccountIds);
-    return insertedAccountIds.length;
 }
+
 
 /** Final effective read loss contracts active interest; explicit user suppression remains intact. */
 export async function removeAccountSessionFollowsOnAccessLossInTx(tx: Tx, input: Readonly<{
@@ -444,6 +739,7 @@ const VOICE_SOURCE_SELECT = {
     agentStateVersion: true,
     latestTurnId: true,
     latestTurnStatus: true,
+    active: true,
 } as const;
 
 export type PendingAccountVoiceFollowObservationV1 = Readonly<{
@@ -451,6 +747,7 @@ export type PendingAccountVoiceFollowObservationV1 = Readonly<{
     voiceSessionId: string;
     expected: SessionFollowFrontierV1 | null;
     observed: SessionFollowFrontierV1;
+    policy?: FollowPolicyV1;
 }>;
 
 /** Content-free Account Voice observer; null means one current snapshot is pending. */
@@ -462,13 +759,19 @@ export async function observePendingAccountVoiceFollowInTx(tx: Tx, input: Readon
 }>): Promise<readonly PendingAccountVoiceFollowObservationV1[] | null> {
     if (!await activeAccount(tx, input.accountId)) return null;
     if (!await hasCurrentPrivateAccountVoicePublisherInTx(tx, input)) return null;
+    const muteScopes = await readDeliveryMuteScopesInTx(tx, { receiver: { kind: 'account' }, accountId: input.accountId });
+    if (muteScopes === null) return null;
     const follows = await tx.accountSessionFollow.findMany({
-        where: { accountId: input.accountId, following: true, includeInVoice: true },
-        select: { sessionId: true, voiceDeliveredFrontier: true },
+        where: { accountId: input.accountId, following: true, sessionId: { not: null },
+            OR: [{ includeInVoice: true }, { followPolicy: { not: null } }] },
+        select: { sessionId: true, voiceDeliveredFrontier: true, includeInVoice: true, followPolicy: true },
         orderBy: { sessionId: 'asc' },
     });
     const pending: PendingAccountVoiceFollowObservationV1[] = [];
     for (const follow of follows) {
+        if (follow.sessionId === null) continue;
+        const selection = resolveAccountVoiceSelection(follow);
+        if (selection === null) continue;
         if (follow.sessionId === input.voiceSessionId) continue;
         const source = await tx.session.findUnique({ where: { id: follow.sessionId }, select: VOICE_SOURCE_SELECT });
         if (!source || source.archivedAt !== null) continue;
@@ -477,6 +780,7 @@ export async function observePendingAccountVoiceFollowInTx(tx: Tx, input: Readon
             sessionId: source.id,
             authentication: input.authentication,
         }))?.capabilities.readTranscript !== true) continue;
+        if (isFollowDeliveryMutedV1(muteScopes, { senderSessionId: source.id, source: { kind: 'session', sessionId: source.id } })) continue;
         const expected = follow.voiceDeliveredFrontier === null
             ? null
             : parsePersistedSessionFollowFrontierV1(follow.voiceDeliveredFrontier);
@@ -484,7 +788,7 @@ export async function observePendingAccountVoiceFollowInTx(tx: Tx, input: Readon
         if (follow.voiceDeliveredFrontier !== null && expected === null) continue;
         const observed = projectSessionFollowFrontierFromSourceV1(source);
         if (expected !== null && compareSessionFollowFrontierProgressV1(expected, observed) !== 'ahead') continue;
-        pending.push({ sourceSessionId: source.id, voiceSessionId: input.voiceSessionId, expected, observed });
+        pending.push({ sourceSessionId: source.id, voiceSessionId: input.voiceSessionId, expected, observed, ...selection });
     }
     return pending;
 }
@@ -506,6 +810,7 @@ export async function acknowledgeAccountVoiceFollowInTx(tx: Tx, input: Readonly<
     expected: SessionFollowFrontierV1 | null;
     observed: SessionFollowFrontierV1;
     consumed: SessionFollowFrontierV1;
+    policy?: FollowPolicyV1;
     acceptance: Readonly<{ localInputId: string; userMessageSeq: number | null }>;
     authentication: SessionAccessAuthentication;
     runtimeAuthority?: CurrentAccountVoiceExecutionRunAuthority;
@@ -538,9 +843,17 @@ export async function acknowledgeAccountVoiceFollowInTx(tx: Tx, input: Readonly<
     const key = { accountId: input.accountId, sessionId: input.sourceSessionId };
     const follow = await tx.accountSessionFollow.findUnique({
         where: { accountId_sessionId: key },
-        select: { following: true, includeInVoice: true, voiceDeliveredFrontier: true },
+        select: { following: true, includeInVoice: true, voiceDeliveredFrontier: true, followPolicy: true },
     });
-    if (!follow?.following || !follow.includeInVoice) return { ok: false, rejection: 'not_followed' };
+    const selection = follow?.following ? resolveAccountVoiceSelection(follow) : null;
+    if (!follow || selection === null) return { ok: false, rejection: 'not_followed' };
+    if (selection.policy ? !input.policy || !isFollowPolicyEqualV1(selection.policy, input.policy) : input.policy !== undefined) {
+        return { ok: false, rejection: 'stale_expected_frontier' };
+    }
+    if (await isDeliveryMutedInTx(tx, { receiver: { kind: 'account' }, accountId: input.accountId,
+        candidate: { senderSessionId: source.id, source: { kind: 'session', sessionId: source.id } } }) !== false) {
+        return { ok: false, rejection: 'not_followed' };
+    }
     const stored = follow.voiceDeliveredFrontier === null
         ? null
         : parsePersistedSessionFollowFrontierV1(follow.voiceDeliveredFrontier);
@@ -565,7 +878,8 @@ export async function acknowledgeAccountVoiceFollowInTx(tx: Tx, input: Readonly<
         where: {
             ...key,
             following: true,
-            includeInVoice: true,
+            includeInVoice: follow.includeInVoice,
+            followPolicy: follow.followPolicy,
             voiceDeliveredFrontier: follow.voiceDeliveredFrontier,
         },
         data: { voiceDeliveredFrontier: encodePersistedSessionFollowFrontierV1(input.consumed) },

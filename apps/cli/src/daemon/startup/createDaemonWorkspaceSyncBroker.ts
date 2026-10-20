@@ -21,7 +21,7 @@ type BrokerHandle = Readonly<{
   whenReady: Promise<void>;
   command(
     command: MutagenControlCommandV1,
-    options?: Readonly<{ signal?: AbortSignal }>,
+    options?: Readonly<{ signal?: AbortSignal; operationId?: string }>,
   ): Promise<unknown>;
   close(): Promise<void>;
 }>;
@@ -109,9 +109,9 @@ export async function createDaemonWorkspaceSyncBroker(
         throw new BrokerProtocolError('unauthorized', 'workspace sync sidecar pid did not match the spawned process');
       }
     },
-    command: async (command, signal) => await broker.command(
+    command: async (command, signal, operationId) => await broker.command(
       command,
-      signal ? { signal } : undefined,
+      signal || operationId ? { ...(signal ? { signal } : {}), ...(operationId ? { operationId } : {}) } : undefined,
     ),
     close,
   };

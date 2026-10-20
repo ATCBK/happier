@@ -1,7 +1,7 @@
 import { PROVIDER_ENDPOINT_SAFETY_LIMITS } from '@happier-dev/protocol/providers/safety/limits';
 import { ProviderSettingsLimitError } from '@happier-dev/protocol/providers/settings/v1';
 import { createProviderErrorV1 } from '@happier-dev/protocol/providers/errors';
-import { ZodError } from 'zod';
+import { z as zodMiniCore0 } from 'zod/mini';
 
 import type {
   ProviderConnectionResolution,
@@ -193,7 +193,7 @@ export function createProviderAccessOperations(context: ProviderConnectionServic
       if (error instanceof ProviderSettingsLimitError) {
         return { status: 'error', error: createProviderErrorV1('provider_settings_limit_exceeded', { connectionId: input.connectionId, machineId: input.machineId }) };
       }
-      if (error instanceof ProviderConnectionValidationError || error instanceof ZodError) {
+      if (error instanceof ProviderConnectionValidationError || error instanceof zodMiniCore0.core.$ZodError) {
         return { status: 'error', error: createProviderErrorV1('provider_connection_invalid', {
           connectionId: input.connectionId, machineId: deps.machineId,
         }) };

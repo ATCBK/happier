@@ -17,6 +17,15 @@ import { createTestkitAccountKv } from './testkit/accountKv.test-support.js';
 
 const SOURCE = Object.freeze({ pluginId: 'happier.example.source', localId: 'example-forge' });
 
+it('persists and restores Tasks audiences through the same saved-view value', async () => {
+    const fixture = createTestkitAccountKv();
+    const deps = createDeps(fixture);
+    const result = await create(fixture, deps, 'Agent work', { filters: filters({ tasks: 'agents' }) });
+    expect(result.status).toBe('applied');
+    const read = await readTriageSavedViews(deps);
+    expect(read.value.views[0]?.filters.tasks).toBe('agents');
+});
+
 function filters(overrides: Partial<SurfaceFilterSelectionV1> = {}): SurfaceFilterSelectionV1 {
     return { ...TRIAGE_LIST_NO_FILTERS_V1, ...overrides };
 }

@@ -600,6 +600,7 @@ function mapReadError(value: unknown): ActivePluginCollectionUnavailableV1 | Act
             return unavailable('collection-unavailable');
         case 'collection_query_invalid':
         case 'collection_cursor_invalid':
+        case 'collection_update_required':
             return rejected(parsed.data.error);
     }
     return unavailable('response-invalid');

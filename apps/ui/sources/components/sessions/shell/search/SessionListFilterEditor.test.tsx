@@ -1,6 +1,10 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+
+// This suite's footer keeper exercises a finger's target floor, not a fine pointer's dense controls.
+vi.hoisted(() => vi.stubGlobal('navigator', { maxTouchPoints: 1 }));
+afterAll(() => vi.unstubAllGlobals());
 
 // Third-party Markdown rendering is outside this filter editor contract.
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({ splitStreamingRevealTextParts: () => [] }));
@@ -40,6 +44,7 @@ const labels = {
     scope: 'Scope', sessions: 'Sessions', runs: 'Runs', both: 'Both', startedBy: 'Started by',
     startedByYou: 'You', startedByTriggers: 'Triggers', startedByAgents: 'Agents',
     runsNeedingYouAlwaysShow: 'Runs that need you always show',
+    onlyCoordinators: 'Only coordinators', onlyCoordinatorsDescription: 'Sessions coordinating other work',
 } as const;
 
 type HarnessOverrides = Partial<SessionListFilterEditorProps>;

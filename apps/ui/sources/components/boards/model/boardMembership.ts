@@ -7,6 +7,7 @@ import {
     type WorkBoardSectionV1,
     type WorkBoardV1,
 } from '@happier-dev/protocol/boards/workBoardV1';
+import type { PluginWorkItemV1 } from '@happier-dev/protocol/plugins/contributions/workItems';
 
 /** One item on a board, once, whatever brought it in. */
 export type BoardMember = Readonly<{
@@ -24,6 +25,10 @@ export type BoardMembership = Readonly<{
     members: readonly BoardMember[];
     /** Every chosen section and the filter have answered; until then nothing may be pruned. */
     complete: boolean;
+    /** Hidden sourced Sessions remain live for layout pruning and return to their place when unlinked. */
+    representedSessionKeys?: readonly string[];
+    /** Visit-local source projection shared by membership and cards, never persisted in the Board. */
+    taskItems?: ReadonlyMap<string, PluginWorkItemV1 | null>;
 }>;
 
 /**
@@ -42,6 +47,8 @@ export type BoardMembershipSources = Readonly<{
     filtered: readonly BoardItemRefV1[] | null | undefined;
     /** False while some Home has not answered the filter yet; the answered Homes' Sessions still show. */
     filterComplete?: boolean;
+    /** Live links from the admitted plugin projection; unresolved tasks represent no Sessions. */
+    linkedSessionsForTask?: (ref: Extract<BoardItemRefV1, { kind: 'task' }>) => readonly BoardItemRefV1[] | null;
 }>;
 
 /** What is on a board now: sections in their fixed order, then the filter, then what was added by hand. */
@@ -84,7 +91,15 @@ export function projectBoardMembership(board: WorkBoardV1, sources: BoardMembers
         const ref = readWorkBoardItemKeyV1(key);
         if (ref && !available(ref)) add(ref, true);
     }
-    return { members: [...byKey.values()], complete };
+    const represented = new Set<string>();
+    for (const member of byKey.values()) {
+        if (member.ref.kind !== 'task' || !member.available) continue;
+        for (const linked of sources.linkedSessionsForTask?.(member.ref) ?? []) {
+            if (linked.kind === 'session') represented.add(buildWorkBoardItemKeyV1(linked));
+        }
+    }
+    const members = [...byKey.values()].filter(member => member.ref.kind !== 'session' || member.picked || !represented.has(member.key));
+    return { members, complete, ...(represented.size > 0 ? { representedSessionKeys: [...represented] } : {}) };
 }
 
 /**
@@ -98,7 +113,7 @@ export function resolveBoardPruneMembership(
 ): WorkBoardMembershipV1 {
     const positionKeys = Object.keys(board.positionsByItemRef);
     const liveItemKeys = membership.complete
-        ? membership.members.filter((member) => member.sourced).map((member) => member.key)
+        ? [...membership.members.filter((member) => member.sourced).map((member) => member.key), ...(membership.representedSessionKeys ?? [])]
         : [...new Set([...membership.members.map((member) => member.key), ...positionKeys])];
     const unavailableServerIds = new Set<string>();
     for (const key of [...positionKeys, ...board.source.picked.map(buildWorkBoardItemKeyV1)]) {

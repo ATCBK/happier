@@ -3,6 +3,8 @@ import axios from 'axios';
 import nacl from 'tweetnacl';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
+import Fastify from 'fastify';
+import { QualifiedConnectedAccountGroupV4Schema } from '@happier-dev/protocol/connect/qualifiedConnectedAccountsV4';
 import { API_TOKEN_FULL_GRANT_V1, AccountSettingsV2UpdateRequestSchema, ConnectedServiceCredentialRevisionV1Schema, accountSettingsParse, buildRecoveryCreditConsumeIdempotencyKey, createActionExecutor, type ActionExecutorContext, type ActionExecutorDeps, type ApprovalRequest } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { DaemonContributionRegistryProjectionDescribeRequestSchema, DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
@@ -18,7 +20,7 @@ import type { StoredCredentials } from '@/persistence';
 import { createCliConnectedServiceAction } from './connectedServiceActionDeps';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { resolveExternalActionServerRequestHeaders } from '@/api/externalActionExecutionAuthorization';
 import { createCliConnectedMetadataStore } from '@/settings/connected/connectedMetadataStore';
 import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
@@ -38,10 +40,33 @@ function unrelatedHistoryAuthorityResponse(path: string) {
     `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/configurations`].includes(path)) {
     return { status: 404, data: { error: 'unsupported' } };
   }
+  return undefined;
 }
 
 describe('native connected-service Action adapter', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); resetActiveAccountSettingsSnapshotForTests(); });
+
+  it.each(['member', 'pool'] as const)('sends a bodyless %s DELETE through the real JSON HTTP parser', async kind => {
+    const group = { service: { pluginId: 'happier.agent.codex', localId: 'openai-codex' }, groupId: 'bodyless-pool' };
+    const row = QualifiedConnectedAccountGroupV4Schema.parse({ v: 1, ref: group, incarnation: 'bodyless-row',
+      displayName: null, policy: {}, activeConnectedAccountId: null, generation: 4, runtimeStateRevision: 1,
+      state: {}, createdAt: 1, updatedAt: 1, members: [] });
+    const server = Fastify();
+    server.delete('/v4/connect/qualified/group/member', async () => ({ group: row }));
+    server.delete('/v4/connect/qualified/group', async () => ({ success: true }));
+    server.get('/v4/connect/qualified/group', async () => ({ group: row }));
+    const home = await server.listen({ host: '127.0.0.1', port: 0 });
+    const action = createCliConnectedServiceAction({ credentials: { token: 'bodyless-requester', encryption: null },
+      serverHttpBaseUrl: home, resolveHeaders: () => ({ Authorization: 'Bearer bodyless-requester' }),
+      callMachineAction: async () => { throw new Error('Pool mutations use HTTP'); } });
+    try {
+      const result = await action({ actionId: kind === 'member' ? 'connectedServices.pools.members.remove' : 'connectedServices.pools.delete',
+        input: { group, expectedIncarnation: row.incarnation, expectedGeneration: row.generation,
+          ...(kind === 'member' ? { connectedAccountId: 'member' } : {}) },
+        context: { surface: 'cli', authority: 'present_user', actionCaller: { kind: 'host' } } });
+      expect(result).toMatchObject(kind === 'member' ? { group: row } : { applied: true });
+    } finally { await server.close(); }
+  });
 
   it('uses exact captured Home, machine and attempt operands for authentication and refuses retired credentials before RPC', async () => {
     const credentials: StoredCredentials = { token: 'authentication-boundary', encryption: null };
@@ -60,7 +85,7 @@ describe('native connected-service Action adapter', () => {
         return { status: 'pending', attemptId: 'attempt-work', retryAfterMs: 500 };
       },
     });
-    const execute = () => action({ actionId: ActionIdSchema.parse('connectedServices.authentication.resumeDevice'),
+    const execute = () => action({ actionId: 'connectedServices.authentication.resumeDevice',
       input: { machineId: 'controller', attemptId: 'attempt-work' }, context: { surface: 'cli', authority: 'present_user' } });
     expect(await execute()).toEqual({ status: 'pending', attemptId: 'attempt-work', retryAfterMs: 500 });
     expect(issued).not.toBeNull();
@@ -536,7 +561,7 @@ describe('native connected-service Action adapter', () => {
       connectedServicesAdditionalDefaultAuthByAgentIdV1: { v: 1, bindingsByAgentId: {} } });
   });
 
-  it('admits Resource purpose preferences only from the exact target daemon and active captured Account profile', async () => {
+  it.each(['resource', 'action'] as const)('admits %s purpose preferences only from the exact target daemon and active captured Account profile', async consumerKind => {
     const credentials: StoredCredentials = { token: 'resource-purpose', encryption: null };
     const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
     const purpose = { consumer: { pluginId: 'example.resource', localId: 'models' }, purpose: 'model' };
@@ -557,8 +582,12 @@ describe('native connected-service Action adapter', () => {
       projection: { v: 2, generation: 1, familiesById: {},
         installedPackagesById: { 'example.resource': { id: 'example.resource', displayName: 'Resource', enabled: true,
           source: { kind: 'builtin', locator: 'example.resource' } } },
-        resourcesById: { models: { id: 'models', pluginId: 'example.resource', resourceKind: 'config', path: 'models.json',
-          connectedAccountPurposes: [{ purpose: 'model', serviceRefs: [service] }] } },
+        ...(consumerKind === 'resource' ? {
+          resourcesById: { models: { id: 'models', pluginId: 'example.resource', resourceKind: 'config', path: 'models.json',
+            connectedAccountPurposes: [{ purpose: 'model', serviceRefs: [service] }] } },
+        } : { actionsById: { models: { id: 'models', pluginId: 'example.resource', occurrenceId: 'source-occurrence', title: 'Discover',
+          scopes: ['global'], surfaces: ['ui', 'agent', 'cli', 'mcp'], execution: { target: 'daemon' }, dangerLevel: 'safe',
+          connectedAccountPurposes: [{ purpose: 'model', serviceRefs: [service] }] } } }),
       } });
     // HTTP and machine RPC are the only substituted boundaries; declaration, profile and catalog admission are real.
     vi.spyOn(axios, 'request').mockImplementation(async request => {
@@ -601,7 +630,7 @@ describe('native connected-service Action adapter', () => {
         return readProjection();
       },
     });
-    const execute = () => action({ actionId: ActionIdSchema.parse('connectedServices.purposes.default.set'),
+    const execute = () => action({ actionId: 'connectedServices.purposes.default.set',
       input: { machineId: 'resource-machine', purpose, target }, context: { surface: 'cli', authority: 'present_user' } });
     expect(await execute()).toEqual({ applied: true });
     expect(writes).toBe(1);

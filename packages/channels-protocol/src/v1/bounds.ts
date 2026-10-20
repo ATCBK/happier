@@ -6,6 +6,27 @@ export const CONVERSATION_PROVIDERS_CONTRIBUTION_PROTOCOL_VERSION_V1 = 1;
 /** Canonical Channels plugin identity for its own qualified contribution refs. */
 export const CONVERSATION_CORE_PLUGIN_ID_V1 = 'happier.channels';
 
+/** Content-free reasons retained by ingress and exposed by terminal attention reads. */
+export const CONVERSATION_NON_ADMISSION_REASONS_V1 = [
+    'connectionUnavailable',
+    'staleAuthority',
+    'endpointMismatch',
+    'actorUnattributable',
+    'actorNotAllowed',
+    'integrationSelf',
+    'botSenderDisabled',
+    'messageTooOld',
+    'messageTooLarge',
+    'unsupportedContent',
+    'unsupportedEdit',
+    'notAddressed',
+    'malformedCommand',
+    'commandNotAuthorized',
+    'targetUnavailable',
+    'permissionCeilingUnavailable',
+    'routeNotMatched',
+] as const;
+
 /** Stable Channels core Action ids for provider callers. */
 export const CONVERSATION_CORE_PROVIDER_ACTION_IDS_V1 = Object.freeze({
     observationIngest: 'provider/observation-ingest-v1',
@@ -41,6 +62,7 @@ export const CONVERSATION_MANAGEMENT_ACTION_IDS_V1 = Object.freeze({
     connectionDelete: 'connection/delete-v1',
     connectionAbandon: 'connection/abandon-v1',
     connectionPrepare: 'connection/prepare-v1',
+    connectionSetupRemediate: 'connection/setup-remediate-v1',
     connectionRetest: 'connection/retest-v1',
     connectionPairingCreate: 'connection/pairing-create-v1',
     connectionPairingFinalize: 'connection/pairing-finalize-v1',

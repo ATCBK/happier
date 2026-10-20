@@ -1,6 +1,9 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
@@ -13,8 +16,6 @@ vi.mock('react-native', async () => {
 vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: (key: string) => key }));
 vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
-// The scoped machine RPC transport is the external boundary; the fleet model and the store stay real.
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: vi.fn(async () => ({})) }));
 
 const account = createProviderSettingsAccountHarness();
 const { storage } = await import('@/sync/domains/state/storageStore');
@@ -67,7 +68,10 @@ describe('Settings › Overview Machines', () => {
         const screen = await renderScreen(<OverviewMachinesSection testID="overview" />);
         expect(screen.getTextContent()).not.toContain('machines.widgets.body.fleet.noMachines');
         expect(screen.findByTestId('overview.loading')).not.toBeNull();
-        await act(async () => { storage.getState().applyMachines([], true, { sourceServerId: home }); });
+        await act(async () => {
+            storage.getState().applyMachines([], true, { sourceServerId: home });
+            storage.getState().markMachineListSettled(home);
+        });
         expect(screen.findByTestId('overview.loading')).toBeNull();
         expect(screen.getTextContent()).toContain('machines.widgets.body.fleet.noMachines');
     });
@@ -110,7 +114,10 @@ describe('Settings › Overview Machines', () => {
         expect(screen.findByTestId('overview.error')).not.toBeNull();
         expect(screen.findByTestId('overview.loading')).toBeNull();
         expect(screen.getTextContent()).not.toContain('machines.widgets.body.fleet.noMachines');
-        await act(async () => { storage.getState().applyMachines([], true, { sourceServerId: home }); });
+        await act(async () => {
+            storage.getState().applyMachines([], true, { sourceServerId: home });
+            storage.getState().markMachineListSettled(home);
+        });
         expect(model.getCurrent()).toMatchObject({ status: 'idle', settled: true, fleet: [] });
         expect(screen.findByTestId('overview.error')).toBeNull();
         expect(screen.getTextContent()).toContain('machines.widgets.body.fleet.noMachines');

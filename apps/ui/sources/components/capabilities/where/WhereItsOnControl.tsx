@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { Platform, View, type TextStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import {
   HappierFieldBoxTrigger,
@@ -193,6 +193,8 @@ function ConsequenceLine(
     machines: WhereItsOnControlProps['places']['machines'];
     names: WhereItsOnNames;
     agentTakes: NonNullable<WhereItsOnControlProps['agentTakes']>;
+    /** Whether any rule turns the item on. With none, it is known to be available nowhere, whatever machines report. */
+    anyRuleOn: boolean;
     testID: string;
   }>,
 ) {
@@ -206,7 +208,7 @@ function ConsequenceLine(
     props.agentTakes,
     props.kind,
   );
-  if (consequence === null || consequence.availabilityUnknown) {
+  if (consequence === null || (consequence.availabilityUnknown && props.anyRuleOn)) {
     return (
       <Text
         variant="body"
@@ -224,7 +226,7 @@ function ConsequenceLine(
   const marker = '\u0002';
   const [before, after] = t('capabilities.where.available', {
     agents: marker,
-    machines: joinList(consequence.onlineMachineNames),
+    machines: joinList(consequence.onlineMachineNames.map((name) => `${NAME_OPEN}${name}${NAME_CLOSE}`)),
     projects: consequence.onlyProjectNames.length ? joinList(consequence.onlyProjectNames) : undefined,
   }).split(marker);
   return (
@@ -235,13 +237,13 @@ function ConsequenceLine(
         </Text>
       ) : (
         <Text variant="body" style={{ color: theme.colors.text.secondary }}>
-          {before}
+          {withWholeNames(before ?? '')}
           <AgentNameRun
             agentIds={consequence.availableAgentIds}
             machines={machines}
             testID={`${props.testID}:agents`}
           />
-          {after}
+          {withWholeNames(after ?? '')}
         </Text>
       )}
       {consequence.notes.map((note) => (
@@ -254,6 +256,18 @@ function ConsequenceLine(
         </Text>
       ))}
     </View>
+  );
+}
+
+const NAME_OPEN = '\u0003';
+const NAME_CLOSE = '\u0004';
+// Web only (the text is CSS): a name stays whole, so the sentence wraps before it, never inside it.
+const wholeName = Platform.select<TextStyle>({ web: { whiteSpace: 'nowrap' } as TextStyle });
+
+/** The sentence's text with each marked machine name drawn unbreakable. */
+function withWholeNames(text: string): React.ReactNode {
+  return text.split(new RegExp(`${NAME_OPEN}(.*?)${NAME_CLOSE}`)).map((part, index) =>
+    index % 2 === 1 ? <Text key={index} style={wholeName}>{part}</Text> : part,
   );
 }
 
@@ -754,6 +768,7 @@ export const WhereItsOnControl = React.memo(function WhereItsOnControl(
           machines={props.places.machines}
           names={names}
           agentTakes={props.agentTakes ?? takesEverything}
+          anyRuleOn={rules.some((rule) => rule.enabled)}
           testID={`${props.testID}:consequence`}
         />
       </SectionContentRow>
@@ -773,16 +788,14 @@ export const WhereItsOnControl = React.memo(function WhereItsOnControl(
     </>
   );
 
-  return props.presentation === 'section' ? (
+  // A section of its page in both forms: the compact add-flow form carries the same title, on the same edge as the
+  // sections around it, and leaves the description to the detail's own copy.
+  return (
     <ItemGroup
       testID={props.testID}
       title={t('capabilities.control.title')}
-      description={t('capabilities.control.description')}
+      {...(props.presentation === 'section' ? { description: t('capabilities.control.description') } : {})}
     >
-      {sheet}
-    </ItemGroup>
-  ) : (
-    <ItemGroup testID={props.testID} header="none">
       {sheet}
     </ItemGroup>
   );

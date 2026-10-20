@@ -30,6 +30,11 @@ describe('qualified Context document choices', () => {
         ]);
         expect(promptStackDocumentChoices({ ...input, purpose: 'instructions' }).map(choice => choice.id)).toEqual(['doc']);
         expect(promptStackDocumentChoices({ ...input, attachedRefs: [{ kind: 'doc', artifactId: 'doc' }] }).map(choice => choice.id)).toEqual(['memory']);
-        expect(promptStackDocumentChoices({ ...input, artifacts: artifacts.map(artifact => ({ ...artifact, isDecrypted: false })) })).toEqual([]);
+        const lockedArtifacts: DecryptedArtifact[] = artifacts.map(artifact => ({
+            id: artifact.id, title: null, isDecrypted: false, storageMode: 'e2ee',
+            availability: { kind: 'locked', reason: 'encryption_material_unavailable' },
+            headerVersion: artifact.headerVersion, seq: artifact.seq, createdAt: artifact.createdAt, updatedAt: artifact.updatedAt,
+        }));
+        expect(promptStackDocumentChoices({ ...input, artifacts: lockedArtifacts })).toEqual([]);
     });
 });

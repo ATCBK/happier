@@ -12,7 +12,7 @@ import type {
   VoiceTranscriptLadderObservation,
   VoiceTurnControlAction,
 } from '@happier-dev/plugin-sdk/voice/client';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { XaiRealtimeSettingsV1 } from '../../protocol/voice/settings.js';
 import { normalizeXaiRealtimeEventType } from './wire.js';

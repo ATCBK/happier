@@ -112,6 +112,23 @@ describe('Triage source observation union', () => {
 });
 
 describe('Triage snapshot and row facts', () => {
+    it('retains task stage, cancellation reason and live relation facts without changing entry identity', () => {
+        const parent = { source: fixture.configuredInstance.instance.source, ...localRef };
+        const snapshot = {
+            ...present.snapshot,
+            state: { presentation: 'active', stage: 'started' },
+            relations: { parent, blockedBy: [parent], children: { total: 3, completed: 1 } },
+        };
+        expect(TriageSourceEntrySnapshotV1Schema.parse(snapshot)).toMatchObject({
+            state: snapshot.state, relations: snapshot.relations,
+        });
+        expect(TriageSourceEntrySnapshotV1Schema.parse({
+            ...present.snapshot, state: { presentation: 'closed', completionReason: 'canceled' },
+        }).state).toEqual({ presentation: 'closed', completionReason: 'canceled' });
+        expect(TriageSourceEntrySnapshotV1Schema.safeParse({
+            ...snapshot, relations: { parent, authority: true },
+        }).success).toBe(false);
+    });
     it('keeps a source-authored compact scope name independent of the full nested path', () => {
         const snapshot = {
             ...present.snapshot,

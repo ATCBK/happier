@@ -56,6 +56,9 @@ export function createUiSessionAwarenessInput(
 ): ProjectSessionAwarenessV1Input {
     const hydrated = 'agentState' in session;
     const ownerMetadata = hydrated ? readSessionOwnerMetadataView(session) : null;
+    const ownerWork = ownerMetadata?.work;
+    const statusReason = ownerWork && typeof ownerWork === 'object' && 'statusReason' in ownerWork
+        && typeof ownerWork.statusReason === 'string' ? ownerWork.statusReason : undefined;
     const presentationMetadata = hydrated ? readSessionListRenderableSourceMetadata(session) : null;
     const hasReadableMetadata = !('metadataUnavailable' in session && session.metadataUnavailable === true);
     const metadata = hasReadableMetadata
@@ -76,7 +79,8 @@ export function createUiSessionAwarenessInput(
     const controlState = readSessionTerminalControlServiceabilityStateV1(
         hydrated ? ownerMetadata?.terminal?.controlServiceabilityV1 : metadata?.terminalControlServiceabilityV1,
     );
-    const workflow = hydrated ? SessionWorkflowActivityHeadlineV1Schema.safeParse(ownerMetadata?.sessionWorkflowActivityHeadlineV1) : null;
+    const workflowHeadline = hydrated ? ownerMetadata?.sessionWorkflowActivityHeadlineV1 : null;
+    const workflow = workflowHeadline == null ? null : SessionWorkflowActivityHeadlineV1Schema.safeParse(workflowHeadline);
     const fork = hasReadableMetadata
         ? hydrated ? presentationMetadata?.forkV1 : session.forkV1
         : undefined;
@@ -96,6 +100,7 @@ export function createUiSessionAwarenessInput(
         title: options.includeTitle === false ? undefined : readSessionDisplayTitleField({ metadata }).value ?? metadata?.name,
         ...components,
         content: readUiSessionContentAvailability(session),
+        statusReason,
         work: hydrated ? metadata ? readSessionWorkStateV1FromMetadata(metadata) : null : session.workState,
         workflowHeadline: hydrated ? workflow?.success ? workflow.data : null : session.workflowHeadline,
         // A no-folder session's private folder is not a workspace to show or reuse.

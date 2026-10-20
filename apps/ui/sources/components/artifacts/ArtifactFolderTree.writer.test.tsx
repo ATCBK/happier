@@ -119,6 +119,14 @@ it('uses current catalog authority and settles its durable receipt before a held
     await vi.waitFor(() => expect(state.screen.findByTestId('folders:unavailable')).toBeNull());
 });
 
+it('removes an empty folder directly through its safe Action', async () => {
+    const state = await setup('all', [{ id: 'original', name: 'Original', parentId: null }]);
+    await state.select('delete');
+    await vi.waitFor(() => expect(state.read().folders).toEqual([]));
+    expect(state.boundary.requests).toHaveLength(1);
+    expect(state.screen.findAll(node => node.props.accessibilityRole === 'dialog')).toEqual([]);
+});
+
 it.each(['all', 'prompt'] as const)('inserts New folder into the shared tree (%s)', async kind => {
     const state = await setup(kind);
     await state.screen.pressByTestIdAsync('folders:invite:new');
@@ -143,6 +151,9 @@ it('keeps a draft while stale and refuses submission until the canonical refresh
         await act(async () => { refresh = refreshPromptLibraryCatalog(scope); });
         expect(state.screen.findByTestId('folders:edit:save')!.props.disabled).toBe(true);
         expect(state.screen.findByTestId('folders:unavailable-action')).toBeTruthy();
+        // The folders on screen are the last-known ones: said as one quiet line, not as an unavailable failure.
+        expect(state.screen.getTextContent()).toContain('artifacts.browser.folders.lastKnown');
+        expect(state.screen.getTextContent()).not.toContain('artifacts.browser.folders.refusedUnavailable');
         await act(async () => { state.screen.findByTestId('folders:edit:name')!.props.onSubmitEditing(); });
         expect(state.boundary.requests).toEqual([]);
         expect(state.screen.findByTestId('folders:edit:name')!.props.value).toBe('Reviewed after refresh');
@@ -328,4 +339,13 @@ it('starts the same inline editor from the Artifacts browser toolbar', async () 
         expect.objectContaining({ name: 'Browser folder', parentId: null }),
     ]));
     await vi.waitFor(() => expect(state.screen.findByTestId('artifacts:folders:edit:name')).toBeNull());
+});
+
+it('says an open folder is empty instead of opening onto nothing, and drops the line once it is closed', async () => {
+    const state = await setup('all', [{ id: 'postmortems', name: 'Postmortems', parentId: null }]);
+    const empty = state.screen.findByTestId('folders:row:empty:folder:postmortems');
+    expect(empty).toBeTruthy();
+    expect(empty!.props.accessibilityLabel).toBe('artifacts.browser.folders.emptyFolder');
+    await state.screen.pressByTestIdAsync('folders:disclosure:folder:postmortems');
+    await vi.waitFor(() => expect(state.screen.findByTestId('folders:row:empty:folder:postmortems')).toBeNull());
 });

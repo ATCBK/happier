@@ -8,7 +8,7 @@ import {
   type LiveActivityRemoteUpdateRequestV1,
   decodePlainArtifactStoredContent,
 } from '@happier-dev/protocol';
-import { readUsageNoticeArtifactV1 } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
+import { readAccountNoticeArtifactV1 } from '@happier-dev/protocol/activity/usageNoticeArtifactV1';
 
 import { logger } from '@/ui/logger';
 import type {
@@ -35,13 +35,18 @@ import { readCarrierMutation } from '@/api/artifacts/accountArtifactStore.testki
 import { notificationSettingsFixture as accountSettingsParse, notificationCatalogFixture } from './activityNotification.testkit';
 import { clearActiveAccountSettingsSnapshot, setActiveAccountSettingsSnapshot,
   resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSettings/emptyAccountSettingsHistoryCapture.testkit';
+import { readAccountSessionDeliveryMutedScopes } from '@/api/sessionDeliveryMuteTransport';
+import { sendAgentRequestPushNotificationAsync } from '@/settings/notifications/permissionRequestPush';
 
 function dispatchActivityNotificationAsync(params: Parameters<typeof dispatchActivityNotification>[0]) {
-  return dispatchActivityNotification({ ...(!params.notificationChannelCatalog && params.settings
+  // The channel tests supply an unmuted HTTP-boundary result; the captured-read
+  // regression below uses S2's actual transport and substitutes axios only.
+  return dispatchActivityNotification({ readAccountSessionDeliveryMutedScopes: async () => [],
+    ...(!params.notificationChannelCatalog && params.settings
     ? notificationCatalogFixture(params.settings, params.settingsSecretsReadKeys) : {}), ...params });
 }
 
@@ -50,15 +55,163 @@ function listActivityNotificationChannels(params: Parameters<typeof listNotifica
     ? notificationCatalogFixture(params.settings) : {}), ...params });
 }
 
-const fetchSessionNotificationContext = async (sessionId: string) => createSessionNotificationContextFixture(sessionId);
+// Channel/privacy tests explicitly select interrupt delivery; Important completion
+// is tested separately below through the real Follow-policy adapter.
+const fetchSessionNotificationContext = async (sessionId: string) => {
+  const context = createSessionNotificationContextFixture(sessionId);
+  return { ...context, viewer: { ...context.viewer!, follow: { ...context.viewer!.follow,
+    policy: { preset: 'everything' as const },
+  } } };
+};
 
 vi.mock('@/ui/logger', () => ({
   logger: {
     debug: vi.fn(),
+    infoFile: vi.fn(),
   },
 }));
 
 describe('dispatchActivityNotificationAsync', () => {
+  it('uses captured Account mute scopes before outward delivery, retaining unrelated sources and refusing unavailable reads', async () => {
+    const source = 'muted-source';
+    const home = 'https://mute-delivery.example';
+    const token = `e30.${Buffer.from(JSON.stringify({ sub: 'account' })).toString('base64url')}.signature`;
+    let scopes: unknown = [{ kind: 'source', source: { kind: 'session', sessionId: source } }];
+    const read = vi.spyOn(axios, 'get').mockImplementation(async (url, config) => {
+      expect(String(url)).toBe(`${home}/v2/account/session-delivery-mutes`);
+      expect(config?.headers).toMatchObject({ Authorization: `Bearer ${token}` });
+      return { status: 200, data: { scopes } };
+    });
+    const sent: unknown[] = [];
+    const input = { settings: accountSettingsParse({}), pluginNotifications: null,
+      fetchSessionNotificationContext,
+      readAccountSessionDeliveryMutedScopes: () => readAccountSessionDeliveryMutedScopes({ serverHttpBaseUrl: home, accountId: 'account', token }),
+      event: { topic: 'ready' as const, sessionId: source, waitingForCommandLabel: 'Agent' },
+      expoPushSender: { sendToAllDevicesAsync: async () => { sent.push(source); return true; } },
+    };
+    try {
+      expect(await dispatchActivityNotificationAsync(input)).toEqual({ attemptedChannels: 0, deliveredChannels: 0 });
+      scopes = [{ kind: 'sender_session', sessionId: 'unrelated-source' }];
+      expect(await dispatchActivityNotificationAsync(input)).toMatchObject({ deliveredChannels: 1 });
+      scopes = null;
+      expect(await dispatchActivityNotificationAsync(input)).toEqual({ attemptedChannels: 0, deliveredChannels: 0 });
+      expect(sent).toHaveLength(1);
+    } finally { read.mockRestore(); }
+  });
+
+  it('delivers an admitted personal rule occurrence through existing push and strict webhook boundaries', async () => {
+    const context = createSessionNotificationContextFixture('shared-rule-source');
+    const shared = { ...context, effectiveAccess: { ...context.effectiveAccess!, level: 'view' as const },
+      viewer: { ...context.viewer!, follow: { follows: false, notificationLevel: null } } };
+    const sends: unknown[][] = [];
+    const settings = accountSettingsParse({ notificationChannelsV1: [{
+      v: 1, id: 'rule-webhook', kind: 'webhook', enabled: true,
+      url: 'https://hooks.example.test/happier', topics: { ready: true },
+    }] });
+    const input = { settings, pluginNotifications: null,
+      fetchSessionNotificationContext: async () => shared,
+      expoPushSender: { sendToAllDevicesAsync: async (...args: unknown[]) => { sends.push(args); return true; } },
+      webhookNetwork,
+      admittedRulePolicies: [{ preset: 'important' as const }],
+      event: { topic: 'follow_update' as const, sessionId: shared.id, follow: { event: { kind: 'failed_or_stopped' as const },
+        sourceMessage: { localId: 'failed-original', seq: 4 } } },
+    };
+    expect(await dispatchActivityNotificationAsync(input)).toEqual({ attemptedChannels: 2, deliveredChannels: 2 });
+    expect(sends[0]?.[2]).toMatchObject({ sessionId: shared.id, activityEventLocalId: 'failed-original' });
+    const payload = JSON.parse(Buffer.from(webhookRequests[0]!.body ?? new Uint8Array()).toString('utf8'));
+    expect(payload).toMatchObject({ topic: 'follow_update', follow: { event: { kind: 'failed_or_stopped' },
+      sourceMessage: { localId: 'failed-original', seq: 4 } }, navigation: { sessionId: shared.id } });
+    expect(await dispatchActivityNotificationAsync({ ...input,
+      event: { ...input.event, follow: { ...input.event.follow, event: { kind: 'finished' } } },
+    })).toEqual({ attemptedChannels: 0, deliveredChannels: 0 });
+    expect(await dispatchActivityNotificationAsync({ ...input, admittedRulePolicies: [{ preset: 'quiet' }],
+      follow: { policies: [{ preset: 'everything' }], event: input.event.follow.event },
+    })).toEqual({ attemptedChannels: 0, deliveredChannels: 0 });
+    expect(await dispatchActivityNotificationAsync({ ...input, nowMs: () => Date.parse('2026-10-19T12:00:00Z'),
+      settings: accountSettingsParse({ attentionDeliveryPolicyV1: { v: 1,
+        quietHours: { enabled: true, timezone: 'UTC', windows: [{ startLocalTime: '00:00', endLocalTime: '23:59' }] },
+      } }),
+    })).toEqual({ attemptedChannels: 0, deliveredChannels: 0 });
+    expect(await dispatchActivityNotificationAsync({ ...input, fetchSessionNotificationContext: async () => ({ ...shared,
+      viewer: { ...shared.viewer, follow: { follows: false, notificationLevel: 'none' as const } },
+    }) })).toEqual({ attemptedChannels: 0, deliveredChannels: 0 });
+    expect(sends).toHaveLength(1);
+  });
+
+  it('joins an incumbent request alert and its admitted rule original into one personal delivery', async () => {
+    const settings = accountSettingsParse({});
+    const catalog = notificationCatalogFixture(settings);
+    setActiveAccountSettingsSnapshot({ settings, source: 'network', rawSettings: {}, settingsVersion: 1,
+      loadedAtMs: 1, settingsSecretsReadKeys: [], notificationChannelCatalog: catalog.notificationChannelCatalog });
+    const sent: unknown[][] = [];
+    const sourceSessionId = 'overlapping-request-source';
+    const requestId = 'same-original-request';
+    const followEvent = { kind: 'needs_you', type: 'approval' } as const;
+    const pushSender = {
+      fetchSessionNotificationContext,
+      readAccountSessionDeliveryMutedScopes: async () => [],
+      sendToAllDevicesAsync: async (...args: unknown[]) => { sent.push(args); return true; },
+    };
+    try {
+      // The admitted contribution rejoins the incumbent owner before its one
+      // send. Store/IPC integration covers the real handback before this port.
+      await expect(sendAgentRequestPushNotificationAsync({ pushSender, settings, sessionId: sourceSessionId,
+        requestId, kind: 'permission', toolName: 'Bash', followEvent,
+        admittedRulePolicies: [{ preset: 'important' }] })).resolves.toEqual({ status: 'delivered' });
+      expect(sent).toHaveLength(1);
+    } finally { resetActiveAccountSettingsSnapshotForTests(); }
+  });
+
+  it('leaves an accepted one-shot push with Home while preserving other channels and later requests', async () => {
+    const context = await fetchSessionNotificationContext('one-shot-rule-source');
+    const source = { ...context, viewer: { ...context.viewer!, follow: { ...context.viewer!.follow,
+      onceDelivery: { event: 'permission_required' as const, requestId: 'accepted-question', agentStateVersion: 4 },
+    } } };
+    const pushes: unknown[] = [];
+    const settings = accountSettingsParse({ notificationChannelsV1: [{ v: 1, id: 'once-webhook', kind: 'webhook',
+      enabled: true, url: 'https://hooks.example.test/once', topics: { permissionRequest: true, ready: true } }] });
+    const input = { settings, pluginNotifications: null, webhookNetwork,
+      fetchSessionNotificationContext: async () => source,
+      expoPushSender: { sendToAllDevicesAsync: async (...args: unknown[]) => { pushes.push(args); return true; } },
+      admittedRulePolicies: [{ preset: 'everything' as const }],
+      event: { topic: 'permission_request' as const, sessionId: source.id, requestId: 'accepted-question', toolName: 'Bash' },
+    };
+    expect(await dispatchActivityNotificationAsync(input)).toEqual({ attemptedChannels: 1, deliveredChannels: 1 });
+    expect(pushes).toEqual([]);
+    expect(webhookRequests).toHaveLength(1);
+    expect(await dispatchActivityNotificationAsync({ ...input,
+      event: { ...input.event, requestId: 'later-question' },
+    })).toEqual({ attemptedChannels: 2, deliveredChannels: 2 });
+    expect(pushes).toHaveLength(1);
+    const terminalSource = { ...source, viewer: { ...source.viewer, follow: { ...source.viewer.follow,
+      onceDelivery: { event: 'cancelled' as const, turnId: 'completed-turn', transcriptSeq: 7, agentStateVersion: 5 },
+    } } };
+    expect(await dispatchActivityNotificationAsync({ ...input,
+      fetchSessionNotificationContext: async () => terminalSource,
+      event: { topic: 'follow_update', sessionId: source.id, follow: { event: { kind: 'failed_or_stopped' },
+        sourceMessage: { localId: 'cancelled-original', seq: 7 } } },
+    })).toEqual({ attemptedChannels: 1, deliveredChannels: 1 });
+  });
+
+  it('keeps an Important completion in Inbox and sends it only for an explicit interrupt policy', async () => {
+    const sent: unknown[][] = [];
+    const context = createSessionNotificationContextFixture('important-completion');
+    const input = {
+      settings: accountSettingsParse({}), pluginNotifications: null,
+      expoPushSender: { sendToAllDevicesAsync: async (...args: unknown[]) => { sent.push(args); return true; } },
+      event: { topic: 'ready' as const, sessionId: context.id, waitingForCommandLabel: 'Agent' },
+    };
+    expect(await dispatchActivityNotificationAsync({ ...input, fetchSessionNotificationContext: async () => context }))
+      .toEqual({ attemptedChannels: 0, deliveredChannels: 0 });
+    expect(sent).toEqual([]);
+    const custom = { ...context, viewer: { ...context.viewer!, follow: { ...context.viewer!.follow,
+      policy: { preset: 'custom' as const, events: { finished: { delivery: 'interrupt' as const } } },
+    } } };
+    expect(await dispatchActivityNotificationAsync({ ...input, fetchSessionNotificationContext: async () => custom }))
+      .toMatchObject({ deliveredChannels: 1 });
+    expect(sent).toHaveLength(1);
+  });
+
   it.each(['current', 'retired'] as const)('prepares the captured runner Account catalog before acknowledging an idle-stop warning (%s)', async lifetime => {
     const home = 'https://runner-guard-notification.example';
     const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'runner-guard-account' })).toString('base64url')}.signature`, encryption: null };
@@ -138,6 +291,8 @@ describe('dispatchActivityNotificationAsync', () => {
     const accountId = 'machine-vitals-notice-account';
     const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: accountId })).toString('base64url')}.signature`, encryption: null };
     const writes: Array<{ id: string; header: unknown; body: unknown }> = [];
+    const get = vi.spyOn(axios, 'get').mockImplementation(async url => new URL(String(url)).pathname === '/v1/artifacts'
+      ? { status: 200, data: [] } : { status: 404, data: { error: 'not_found' } });
     const post = vi.spyOn(axios, 'post').mockImplementation(async (_url, wire) => {
       const mutation = readCarrierMutation(wire);
       if (typeof mutation.id !== 'string') throw new Error('Expected Artifact identity at HTTP boundary');
@@ -167,14 +322,14 @@ describe('dispatchActivityNotificationAsync', () => {
         if (typeof wire.header !== 'string' || typeof wire.body !== 'string') throw new Error('Expected stored content envelopes');
         const body = decodePlainArtifactStoredContent(wire.body);
         if (!body || typeof body !== 'object' || !('body' in body)) throw new Error('Expected Artifact body');
-        return readUsageNoticeArtifactV1({ header: decodePlainArtifactStoredContent(wire.header), body: body.body })?.notice;
+        return readAccountNoticeArtifactV1({ header: decodePlainArtifactStoredContent(wire.header), body: body.body })?.notice;
       })).toEqual([event('started'), event('recovered')]);
       expect(delivered[0]![2]).toMatchObject({ topic: 'resource_limit', machineId: notice.machineId,
         nextSteps: ['review_processes', 'turn_on_guard'], machineVitals: { phase: 'started' } });
       expect(delivered[1]![2]).toMatchObject({ notificationId: (delivered[0]![2] as { notificationId: string }).notificationId,
         machineVitals: { phase: 'recovered' } });
       expect(delivered[1]![3]).toMatchObject({ sound: null, priority: 'normal', androidSoundId: 'none' });
-    } finally { post.mockRestore(); }
+    } finally { post.mockRestore(); get.mockRestore(); }
   });
   it('keeps machine evidence private under status-only policy and cannot revive a disabled Machines push topic', async () => {
     const delivered: unknown[][] = [];
@@ -334,7 +489,7 @@ describe('dispatchActivityNotificationAsync', () => {
     await emit('usage-account-bob');
     expect(delivered).toEqual(['usage-account-alice', 'usage-account-bob']);
   });
-  it('refuses an unsigned plugin effect when its Account retires during platform discovery', async () => {
+  it('refuses an unsigned plugin effect when its Account retires even while its request remains current', async () => {
     const settings = accountSettingsParse({});
     const send = vi.fn(async (request: Parameters<PluginNotificationSenderBinding['send']>[0]) => ({ deliveryId: request.deliveryId, channelId: request.channelId,
       status: 'accepted' as const, evidence: 'provider' as const }));
@@ -348,7 +503,7 @@ describe('dispatchActivityNotificationAsync', () => {
         isCurrent: async () => { clearActiveAccountSettingsSnapshot(); return true; }, send }),
     });
     try {
-      await expect(dispatchActivityNotification({ settings, pluginNotifications,
+      await expect(dispatchActivityNotification({ settings, pluginNotifications, isCurrent: () => true,
         event: { topic: 'notify_me', message: 'Private Account content' } }))
         .rejects.toMatchObject({ code: 'notification_channel_catalog_unavailable', reason: 'scope-retired' });
       expect(send).not.toHaveBeenCalled();
@@ -464,7 +619,8 @@ describe('dispatchActivityNotificationAsync', () => {
         channels: { expo_push: { enabled: policy.enabled ?? true } },
         privacy: { defaultPreviewBehavior: policy.statusOnly ? 'status_only' : 'include_preview' },
       } }), notificationChannelCatalog: { status: 'ready', revision: 4, diagnostics: [], channels: [channel] },
-      event, expoPushSender: { sendToAllDevicesAsync }, pluginNotifications: null, fetchSessionNotificationContext });
+      event, expoPushSender: { sendToAllDevicesAsync }, pluginNotifications: null, fetchSessionNotificationContext,
+      readAccountSessionDeliveryMutedScopes: async () => [] });
     await expect(dispatch(initial, {})).resolves.toEqual({ attemptedChannels: 0, deliveredChannels: 0 });
     await expect(dispatch(destination, {})).resolves.toEqual({ attemptedChannels: 1, deliveredChannels: 1 });
     // The endpoint's retained preview restriction survives an enabled-only patch.
@@ -693,7 +849,7 @@ describe('dispatchActivityNotificationAsync', () => {
   it('applies current Session candidacy before Expo, Live Activity and webhook delivery', async () => {
     const sendToAllDevicesAsync = vi.fn(async () => { return true; });
     const sendLiveActivityRemoteUpdateAsync = vi.fn(async (_request: LiveActivityRemoteUpdateRequestV1) => {});
-    const allowed = createSessionNotificationContextFixture('session-candidacy');
+    const allowed = await fetchSessionNotificationContext('session-candidacy');
     const settings = accountSettingsParse({
       attentionDeliveryPolicyV1: { v: 1, liveActivityRemoteUpdates: { enabled: true, preferredMode: 'direct_apns' } },
       notificationChannelsV1: [{
@@ -745,7 +901,7 @@ describe('dispatchActivityNotificationAsync', () => {
       url: 'https://hooks.example.test/happier', requestIncludeMessageText: include,
       topics: { permissionRequest: true },
     })) });
-    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, settings, webhookNetwork, expoPushSender: { sendToAllDevicesAsync }, event: {
+    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [], settings, webhookNetwork, expoPushSender: { sendToAllDevicesAsync }, event: {
       topic: 'permission_request', sessionId: 's1', requestId: 'p1', toolName: 'Bash',
       toolInput: { command: 'git diff -- apps/cli/src/main.ts', justification: 'Review the complete patch' },
     } });
@@ -773,7 +929,7 @@ describe('dispatchActivityNotificationAsync', () => {
       },
     });
 
-    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings,
       webhookNetwork,
       expoPushSender: { sendToAllDevicesAsync },
@@ -822,7 +978,7 @@ describe('dispatchActivityNotificationAsync', () => {
         readyIncludeMessageText: false,
       }],
     });
-    const dispatch = () => dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    const dispatch = () => dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings, event, webhookNetwork, expoPushSender: { sendToAllDevicesAsync }, nowMs: () => 100_000,
       liveActivityRemoteSender: { serverId: 'server-reset', sendLiveActivityRemoteUpdateAsync },
     });
@@ -851,7 +1007,7 @@ describe('dispatchActivityNotificationAsync', () => {
   it('dispatches connected-service account switch notifications with structured quota context', async () => {
     const sendToAllDevicesAsync = vi.fn(async () => { return true; });
 
-    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings: accountSettingsParse({}),
       expoPushSender: { sendToAllDevicesAsync },
       event: {
@@ -915,7 +1071,7 @@ describe('dispatchActivityNotificationAsync', () => {
       _options?: unknown,
     ) => { return true; });
 
-    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings: accountSettingsParse({}),
       expoPushSender: { sendToAllDevicesAsync },
       event: {
@@ -990,14 +1146,14 @@ describe('dispatchActivityNotificationAsync', () => {
       reason: 'usage_limit',
     };
 
-    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings: accountSettingsParse({}),
       expoPushSender: { sendToAllDevicesAsync },
       nowMs: () => 1_000,
       dedupeWindowMs: 60_000,
       event,
     });
-    const duplicate = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    const duplicate = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings: accountSettingsParse({}),
       expoPushSender: { sendToAllDevicesAsync },
       nowMs: () => 2_000,
@@ -1022,14 +1178,14 @@ describe('dispatchActivityNotificationAsync', () => {
       reason: 'usage_limit',
     };
 
-    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings: accountSettingsParse({}),
       expoPushSender: { sendToAllDevicesAsync },
       nowMs: () => 1_000,
       dedupeWindowMs: 60_000,
       event,
     });
-    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings: accountSettingsParse({}),
       expoPushSender: { sendToAllDevicesAsync },
       nowMs: () => 2_000,
@@ -1066,7 +1222,7 @@ describe('dispatchActivityNotificationAsync', () => {
       ],
     });
 
-    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings,
       webhookNetwork,
       expoPushSender: { sendToAllDevicesAsync },
@@ -1089,7 +1245,7 @@ describe('dispatchActivityNotificationAsync', () => {
   it('dispatches connected-service quota blocked and recovered notifications', async () => {
     const sendToAllDevicesAsync = vi.fn(async () => { return true; });
 
-    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings: accountSettingsParse({}),
       expoPushSender: { sendToAllDevicesAsync },
       event: {
@@ -1103,7 +1259,7 @@ describe('dispatchActivityNotificationAsync', () => {
         limitCategory: 'usage_limit',
       },
     });
-    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings: accountSettingsParse({}),
       expoPushSender: { sendToAllDevicesAsync },
       event: {
@@ -1147,7 +1303,7 @@ describe('dispatchActivityNotificationAsync', () => {
       },
     });
 
-    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings,
       webhookNetwork,
       expoPushSender: { sendToAllDevicesAsync },
@@ -1199,7 +1355,7 @@ describe('dispatchActivityNotificationAsync', () => {
       ],
     });
 
-    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings,
       webhookNetwork,
       expoPushSender: { sendToAllDevicesAsync },
@@ -1252,7 +1408,7 @@ describe('dispatchActivityNotificationAsync', () => {
       ],
     });
 
-    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings,
       webhookNetwork,
       expoPushSender: { sendToAllDevicesAsync },
@@ -1297,7 +1453,7 @@ describe('dispatchActivityNotificationAsync', () => {
       ],
     });
 
-    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings,
       webhookNetwork,
       expoPushSender: { sendToAllDevicesAsync },
@@ -1344,7 +1500,7 @@ describe('dispatchActivityNotificationAsync', () => {
       ],
     });
 
-    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings,
       webhookNetwork,
       expoPushSender: { sendToAllDevicesAsync },
@@ -1378,7 +1534,7 @@ describe('dispatchActivityNotificationAsync', () => {
       notificationChannelsV1: [],
     });
 
-    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings,
       webhookNetwork,
       expoPushSender: { sendToAllDevicesAsync },
@@ -1427,7 +1583,7 @@ describe('dispatchActivityNotificationAsync', () => {
         })),
       ];
       for (const event of events) {
-        await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, settings, event, webhookNetwork, expoPushSender: { sendToAllDevicesAsync } });
+        await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [], settings, event, webhookNetwork, expoPushSender: { sendToAllDevicesAsync } });
       }
       expect(sendToAllDevicesAsync.mock.calls).toHaveLength(events.length);
       expect(sendToAllDevicesAsync.mock.calls[0]?.[2]).toMatchObject({
@@ -1448,7 +1604,7 @@ describe('dispatchActivityNotificationAsync', () => {
 
   it('retains a surface status-only override for connected-service Session titles', async () => {
     const sendToAllDevicesAsync = vi.fn(async (_title: string, _body: string, _data: Record<string, unknown>) => { return true; });
-    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings: accountSettingsParse({ attentionDeliveryPolicyV1: {
         v: 1, privacy: { surfaces: { expo_push: 'status_only' } },
       } }),
@@ -1518,7 +1674,7 @@ describe('dispatchActivityNotificationAsync', () => {
       },
     });
 
-    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings,
       webhookNetwork,
       expoPushSender: { sendToAllDevicesAsync },
@@ -1553,7 +1709,7 @@ describe('dispatchActivityNotificationAsync', () => {
       },
     });
 
-    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings,
       webhookNetwork,
       expoPushSender: { sendToAllDevicesAsync },
@@ -1586,7 +1742,7 @@ describe('dispatchActivityNotificationAsync', () => {
       },
     });
 
-    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings,
       webhookNetwork,
       expoPushSender: { sendToAllDevicesAsync },
@@ -1622,7 +1778,7 @@ describe('dispatchActivityNotificationAsync', () => {
       },
     });
 
-    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings,
       webhookNetwork,
       expoPushSender: { sendToAllDevicesAsync },
@@ -1694,7 +1850,7 @@ describe('dispatchActivityNotificationAsync', () => {
       },
     });
 
-    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings,
       webhookNetwork,
       liveActivityRemoteSender: {
@@ -1740,7 +1896,7 @@ describe('dispatchActivityNotificationAsync', () => {
       },
     });
 
-    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings,
       webhookNetwork,
       liveActivityRemoteSender: {
@@ -1788,7 +1944,7 @@ describe('dispatchActivityNotificationAsync', () => {
       },
     });
 
-    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    const result = await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings,
       webhookNetwork,
       expoPushSender: { sendToAllDevicesAsync },
@@ -1856,7 +2012,7 @@ describe('dispatchActivityNotificationAsync', () => {
       ],
     });
 
-    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings,
       webhookNetwork,
       expoPushSender: { sendToAllDevicesAsync },
@@ -1891,7 +2047,7 @@ describe('dispatchActivityNotificationAsync', () => {
     // Allowing previews globally cannot reopen this endpoint's retained
     // assistant-text restriction, while the finite policy admits its title.
     await dispatchActivityNotification({
-      fetchSessionNotificationContext,
+      fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       ...notificationCatalogFixture(settings),
       settings: accountSettingsParse({ attentionDeliveryPolicyV1: {
         v: 1,
@@ -1950,7 +2106,7 @@ describe('dispatchActivityNotificationAsync', () => {
       ],
     });
 
-    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings,
       webhookNetwork,
       expoPushSender: { sendToAllDevicesAsync },
@@ -2013,7 +2169,7 @@ describe('dispatchActivityNotificationAsync', () => {
       ],
     });
 
-    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings,
       webhookNetwork,
       settingsSecretsReadKeys: [settingsSecretsKey],
@@ -2059,7 +2215,7 @@ describe('dispatchActivityNotificationAsync', () => {
       },
     });
 
-    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext,
+    await dispatchActivityNotificationAsync({ fetchSessionNotificationContext, readAccountSessionDeliveryMutedScopes: async () => [],
       settings,
       webhookNetwork,
       expoPushSender: { sendToAllDevicesAsync },

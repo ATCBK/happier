@@ -12,7 +12,7 @@ import {
 import type { ApiClient } from '@/api/api';
 import type { Credentials } from '@/persistence';
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
-import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolveExecutablePluginRuntimeRegistry';
+import { createAdmittedPluginRuntimeFixture, retireAdmittedPluginRuntimeRegistry } from '@/plugins/testkit/admittedRuntime';
 
 import { createQualifiedConnectedAccountEstablishedRuntimeOwner } from '../qualifiedConnectedAccountEstablishedRuntimeOwner';
 import { ConnectedServiceRefreshCoordinator } from './ConnectedServiceRefreshCoordinator';
@@ -41,8 +41,9 @@ afterEach(async () => {
 
 async function createHarness(input: Readonly<{
   clock?: () => number;
+  onCredentialRead?: () => void;
   noScheduledAccounts?: boolean;
-  generationCurrent?: boolean;
+  retireRegistry?: boolean;
   pluginEnabled?: boolean;
   credentialAvailable?: boolean;
   v4Support?: 'advertised' | 'absent' | 'indeterminate';
@@ -50,34 +51,15 @@ async function createHarness(input: Readonly<{
 }>) {
   const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-qualified-status-'));
   createdDirectories.push(happyHomeDir);
-  const registry = await resolveExecutablePluginRuntimeRegistry({
+  const admitted = await createAdmittedPluginRuntimeFixture({
     happyHomeDir,
-    resolveDevelopmentSourceAuthority: ({ pluginId, rootPath }) => ({
-      kind: 'development', registeredRootId: `qualified-status:${pluginId}`,
-      canonicalRoot: rootPath, observedRevision: 1,
-    }),
-    pluginIds: input.pluginEnabled === false
-      ? []
-      : [openAiService.pluginId],
-    ...(input.pluginEnabled === false
-      ? { contributes: createResolvedContributionRegistry({}) }
-      : {}),
+    runtimeOptions: {
+      pluginIds: input.pluginEnabled === false ? [] : [openAiService.pluginId],
+      ...(input.pluginEnabled === false ? { contributes: createResolvedContributionRegistry({}) } : {}),
+    },
   });
-  createdRegistries.push(registry);
-  let generationCurrent = input.generationCurrent ?? true;
-  const reloadController = {
-    async acquireRuntimeRegistry() {
-      return {
-        registry,
-        source: 'active' as const,
-        durableRevision: registry.durableRevision ?? -1,
-        release: vi.fn(async () => undefined),
-      };
-    },
-    isRuntimeRegistryCurrent(candidate: typeof registry) {
-      return generationCurrent && candidate === registry;
-    },
-  };
+  createdRegistries.push(admitted);
+  const reloadController = admitted.controller;
   const credentials: Credentials = {
     token: 'happier-token',
     encryption: {
@@ -94,8 +76,9 @@ async function createHarness(input: Readonly<{
     },
     randomBytes: (length) => new Uint8Array(length),
   });
-  const readQualifiedCredential = vi.fn(async () => (
-    input.credentialAvailable === false
+  const readQualifiedCredential = vi.fn(async () => {
+    input.onCredentialRead?.();
+    return input.credentialAvailable === false
       ? null
       : {
           ref: {
@@ -108,8 +91,8 @@ async function createHarness(input: Readonly<{
           configurationRevision: null,
           content: credentialContent,
           metadata: { scopes: [] },
-        }
-  ));
+        };
+  });
   const establishedRuntimeOwner =
     createQualifiedConnectedAccountEstablishedRuntimeOwner({
       reloadController,
@@ -194,18 +177,40 @@ async function createHarness(input: Readonly<{
         }),
   });
 
+  if (input.retireRegistry) {
+    await retireAdmittedPluginRuntimeRegistry({ controller: reloadController, registry: admitted.registry, happyHomeDir });
+  }
   return {
     api,
     coordinator,
     mutateCredentialHealth,
     readQualifiedCredential,
-    setGenerationCurrent(value: boolean) {
-      generationCurrent = value;
-    },
   };
 }
 
 describe('ConnectedServiceRefreshCoordinator qualified status integration', () => {
+  it('starts the existing health interval after a slow credential observation settles, including inventory wakes', async () => {
+    let clock = now;
+    const harness = await createHarness({ clock: () => clock,
+      // Advance the real clock boundary while the credential HTTP response is in flight.
+      onCredentialRead: () => { clock = Math.max(clock, now + 40_000); } });
+    expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 30_000 });
+    const reads = harness.readQualifiedCredential.mock.calls.length;
+    expect(reads).toBeGreaterThan(0);
+    for (let wake = 0; wake < 3; wake++) {
+      harness.coordinator.registerSpawnTarget({ pid: 120 + wake, agentId: 'codex',
+        materializationKey: `inventory-wake-${wake}`, connectedServicesBindingsRaw: { v: 1, bindingsByServiceId: {} } });
+      expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 30_000 });
+    }
+    clock += 29_999;
+    expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 1 });
+    expect(harness.readQualifiedCredential).toHaveBeenCalledTimes(reads);
+    clock += 1;
+    expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 30_000 });
+    expect(harness.readQualifiedCredential.mock.calls.length).toBeGreaterThan(reads);
+    expect(harness.mutateCredentialHealth).toHaveBeenCalledTimes(2);
+  });
+
   it('parks with no scheduled work and preserves actual health-probe deadlines for null-expiry accounts', async () => {
     const empty = await createHarness({ noScheduledAccounts: true });
     expect(await empty.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: null });
@@ -224,6 +229,17 @@ describe('ConnectedServiceRefreshCoordinator qualified status integration', () =
     const harness = await createHarness({ credentialAvailable: false });
     await expect(harness.coordinator.tickOnce()).rejects.toBeInstanceOf(AggregateError);
     expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 60_000 });
+  });
+
+  it('retains the existing recovery interval after a slow failed credential observation', async () => {
+    let clock = now;
+    const harness = await createHarness({ clock: () => clock, credentialAvailable: false,
+      onCredentialRead: () => { clock = Math.max(clock, now + 90_000); } });
+    await expect(harness.coordinator.tickOnce()).rejects.toBeInstanceOf(AggregateError);
+    const reads = harness.readQualifiedCredential.mock.calls.length;
+    expect(await harness.coordinator.tickOnce()).toEqual({ nextAutomaticRunAfterMs: 60_000 });
+    expect(harness.readQualifiedCredential).toHaveBeenCalledTimes(reads);
+    expect(harness.mutateCredentialHealth).not.toHaveBeenCalled();
   });
   it('runs a real current plugin status leaf from the existing scheduled trigger and settles exact-revision health', async () => {
     const harness = await createHarness({});
@@ -259,8 +275,8 @@ describe('ConnectedServiceRefreshCoordinator qualified status integration', () =
     expect(harness.api.acquireConnectedServiceRefreshLease).not.toHaveBeenCalled();
   });
 
-  it('does not publish health or report a refreshed credential when the forced trigger sees a stale plugin generation', async () => {
-    const harness = await createHarness({ generationCurrent: false });
+  it('does not publish health or report a refreshed credential after the owning plugin registry is retired', async () => {
+    const harness = await createHarness({ retireRegistry: true });
 
     await expect(harness.coordinator.refreshConnectedServiceCredentialForQuota({
       serviceId: 'openai',

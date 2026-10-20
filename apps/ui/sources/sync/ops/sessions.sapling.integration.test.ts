@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -86,7 +87,7 @@ describe('session scm ops integration (sapling)', () => {
         mockSessionRPC.mockImplementation(createSaplingSessionRpcHarness(workspace));
 
         const status = await sessionScmStatusSnapshot('session-1', { cwd: '.' });
-        expect(status.success).toBe(true);
+        assert(status.success === true);
         expect(status.snapshot?.repo.backendId).toBe('sapling');
         expect(status.snapshot?.repo.mode).toBe('.sl');
         expect(status.snapshot?.totals.pendingFiles).toBe(1);
@@ -96,14 +97,14 @@ describe('session scm ops integration (sapling)', () => {
             path: 'a.txt',
             area: 'pending',
         });
-        expect(fileDiff.success).toBe(true);
+        assert(fileDiff.success === true);
         expect(fileDiff.diff).toContain('diff --git a/a.txt b/a.txt');
 
         const commitDiff = await sessionScmDiffCommit('session-1', {
             cwd: '.',
             commit: base,
         });
-        expect(commitDiff.success).toBe(true);
+        assert(commitDiff.success === true);
         expect(commitDiff.diff).toContain('diff --git a/a.txt b/a.txt');
     });
 
@@ -140,11 +141,11 @@ describe('session scm ops integration (sapling)', () => {
             cwd: '.',
             message: 'init',
         });
-        expect(commit.success).toBe(true);
+        assert(commit.success === true);
         expect(typeof commit.commitSha).toBe('string');
 
         const status = await sessionScmStatusSnapshot('session-1', { cwd: '.' });
-        expect(status.success).toBe(true);
+        assert(status.success === true);
         expect(status.snapshot?.totals.pendingFiles).toBe(0);
 
         const log = await sessionScmLogList('session-1', {
@@ -152,7 +153,7 @@ describe('session scm ops integration (sapling)', () => {
             limit: 10,
             skip: 0,
         });
-        expect(log.success).toBe(true);
+        assert(log.success === true);
         expect(log.entries?.[0]?.subject).toBe('init');
     });
 
@@ -179,8 +180,8 @@ describe('session scm ops integration (sapling)', () => {
             skip: 1,
         });
 
-        expect(firstPage.success).toBe(true);
-        expect(secondPage.success).toBe(true);
+        assert(firstPage.success === true);
+        assert(secondPage.success === true);
         expect(firstPage.entries?.[0]?.subject).toBe('three');
         expect(secondPage.entries?.[0]?.subject).toBe('two');
     });
@@ -202,10 +203,10 @@ describe('session scm ops integration (sapling)', () => {
             cwd: '.',
             commit: commitToBackout,
         });
-        expect(backout.success).toBe(true);
+        assert(backout.success === true);
 
         const status = await sessionScmStatusSnapshot('session-1', { cwd: '.' });
-        expect(status.success).toBe(true);
+        assert(status.success === true);
         expect(status.snapshot?.totals.pendingFiles).toBe(0);
     });
 
@@ -252,14 +253,14 @@ describe('session scm ops integration (sapling)', () => {
             cwd: '.',
             remote: 'origin',
         });
-        expect(fetch.success).toBe(true);
+        assert(fetch.success === true);
 
         const pull = await sessionScmRemotePull('session-1', {
             cwd: '.',
             remote: 'origin',
             branch: 'main',
         });
-        expect(pull.success).toBe(true);
+        assert(pull.success === true);
         expect(readFileSync(join(workspace, 'remote.txt'), 'utf8')).toBe('remote\n');
 
         writeFileSync(join(workspace, 'local.txt'), 'local\n');
@@ -270,7 +271,7 @@ describe('session scm ops integration (sapling)', () => {
             remote: 'origin',
             branch: 'main',
         });
-        expect(push.success).toBe(true);
+        assert(push.success === true);
 
         const remoteHead = git(remote, ['rev-parse', 'refs/heads/main']);
         const localHead = runSapling(workspace, ['whereami']);

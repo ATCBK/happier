@@ -20,6 +20,7 @@ export function resolveBoardCardOpenTarget(
     context: Readonly<{ inboxAvailable: boolean; action?: BoardCardAction }>,
 ): BoardCardOpenTarget | null {
     if (card.availability === 'home_unavailable') return null;
+    if (card.ref.kind === 'task' && (card.availability !== 'ready' || card.body.kind !== 'task' || !card.body.item.page)) return null;
     // Secondary actions open native owners; neither dispatches a Run nor answers a hold here.
     if (context.action === 'run') return card.ref.kind === 'workflow' && card.availability === 'ready'
         ? { kind: 'item', ref: card.ref, intent: 'run' } : null;

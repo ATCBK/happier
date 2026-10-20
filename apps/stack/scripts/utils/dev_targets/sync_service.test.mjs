@@ -127,8 +127,8 @@ test('detached sync start recreates requested sessions missing from its canonica
     startTargetRuntime: async () => {},
     ensureReplicaRoots: async () => {},
     ensureProject: async (options) => ensureDevTargetSyncProject(options, {
-      runProcess: async ({ args }) => {
-        mutagenCalls.push(args.slice(0, 2));
+      runProcess: async ({ command, args }) => {
+        if (command === 'mutagen') mutagenCalls.push(args.slice(0, 2));
         if (args[0] === 'sync' && args[1] === 'list') {
           syncListCalls.push(args);
           return args[2] === 'happier-mac'

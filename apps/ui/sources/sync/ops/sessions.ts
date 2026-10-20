@@ -34,6 +34,7 @@ import {
 } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionRpc';
 import { prepareAccountSettingsForDaemonSpawnIfNeeded } from './accountSettingsDaemonSpawnPreparation';
 import type {
+    ActionExecutorContext,
     BackendTargetRefV1,
     CheckpointCodeRollbackRequest,
     CheckpointCodeRollbackResult,
@@ -43,6 +44,7 @@ import type {
     SessionInitialGoalRequestV1,
     SessionModelSelectionV1,
     SessionPermissionRespondRpcParamsV1,
+    SessionUserActionAnswerRpcParamsV1,
     SessionForkPoint,
     SessionForkRpcResult,
     SessionForkStrategy,
@@ -53,14 +55,17 @@ import type {
 } from '@happier-dev/protocol';
 import { CheckpointCodeRollbackResultSchema } from '@happier-dev/protocol/sessions/control/rollback/checkpointCodeRollback';
 import { SessionForkRpcResultSchema } from '@happier-dev/protocol/sessions/fork';
+import type { SessionStopResult } from '@happier-dev/protocol/sessions/control/contract';
 import { SessionRollbackRpcResultSchema } from '@happier-dev/protocol/sessions/rollback';
 import { SessionAuthoringValueV1Schema } from '@happier-dev/protocol/sessions/authoring/index';
+import { readHomeDomainActionErrorV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import { SPAWN_SESSION_ERROR_CODES } from '@happier-dev/protocol/spawnSession';
 import type { StructuredQuestionAnswersV1 } from '@happier-dev/protocol';
 import { RPC_ERROR_CODES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { normalizeSpawnSessionResult } from './_shared';
 import { isAccountSettingsScopeChangedDuringSpawnPreparationError } from '@/sync/engine/settings/accountSettingsSpawnPreparationError';
 import { isSocketIoAckTimeoutError } from '@happier-dev/sync-client';
+import { isMachineRpcTimeoutError } from '@/sync/runtime/orchestration/serverScopedRpc/machineRpcTimeoutError';
 import { readMachineControlTargetForSession } from './sessionMachineTarget';
 import { stopSessionUsingCanonicalStrategy } from './sessionStopStrategy';
 import {
@@ -81,6 +86,7 @@ import { captureLazyActionAccountContext } from './actions/actionAccountContext'
 import { executeOriginalAccountMachineAction } from '@/sync/api/externalActionAccountTransport';
 import { randomUUID } from '@/platform/randomUUID';
 import { createManagedMachineActionClient } from '@/sync/api/machines/managedMachineActions';
+import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 export {
     sessionScmBranchCheckout,
     sessionScmBranchCreate,
@@ -226,6 +232,8 @@ export interface ResumeSessionOptions {
     serverId?: string;
     /** Exact route credential lifetime; fences daemon admission and forbids ambient Account fallback. */
     accountLifetime?: ServerAccountScopeLifetime;
+    /** The originating surface may stop waiting without undoing an admitted resume. */
+    signal?: AbortSignal;
     /** Host-private accepted-input authority; never serialized into the spawn RPC. */
     pendingActivationAuthorization?: import('@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1').PendingActivationAuthorizationV1;
     /**
@@ -244,6 +252,8 @@ export interface ResumeSessionOptions {
      */
     initialTranscriptAfterSeq?: number;
     executionAuthorization?: SpawnSessionExecutionAuthorization;
+    /** Action callers retain their admitted authority when requesting explicit Resume. */
+    executionAuthority?: ActionExecutorContext['authority'];
     /** Explicit consent from private-folder recovery; never inferred by automatic wake. */
     approvedNewDirectoryCreation?: boolean;
     initialGoal?: SessionInitialGoalRequestV1;
@@ -274,6 +284,7 @@ async function runResumeSession(
     options: ResumeSessionOptions,
     presentation: 'explicit_resume' | 'ensure_pending_consumer',
 ): Promise<ResumeSessionResult> {
+    options.signal?.throwIfAborted();
     const exactAccountLifetime = options.accountLifetime;
     const exactAccountScopeRetiredError = () => Object.assign(
         new Error('Session Account authority retired before runtime admission'),
@@ -290,6 +301,16 @@ async function runResumeSession(
         }
     };
     assertExactAccountCurrent();
+    // Pending input does not authorize restoring an archived Session. Exact Account
+    // requests already avoid ambient Session state and its unarchive path below.
+    if (!exactAccountLifetime && presentation === 'ensure_pending_consumer'
+        && storage.getState().sessions[options.sessionId]?.archivedAt != null) {
+        return {
+            type: 'error',
+            errorCode: SPAWN_SESSION_ERROR_CODES.INVALID_REQUEST,
+            errorMessage: 'session_archived',
+        };
+    }
     let providerSafeRpcRequired = false;
     const canProjectResumePresentation = (): boolean => {
         if (!exactAccountLifetime) return true;
@@ -425,10 +446,11 @@ async function runResumeSession(
 
         const retirementAbort = exactAccountLifetime ? new AbortController() : null;
         const retirementSubscription = exactAccountLifetime?.onRetire(() => retirementAbort?.abort());
+        const cancellation = mergeAbortSignals([retirementAbort?.signal, options.signal]);
         let result: unknown;
         try {
             const execution = await (async () => {
-                const account = await captureLazyActionAccountContext(serverId ?? getActiveServerSnapshot().serverId, retirementAbort?.signal);
+                const account = await captureLazyActionAccountContext(serverId ?? getActiveServerSnapshot().serverId, cancellation.signal);
                 try {
                     if (exactAccountLifetime && account.accountId !== exactAccountLifetime.scope.accountId) {
                         throw new Error(`Session resume requires Account ${exactAccountLifetime.scope.accountId}`);
@@ -437,7 +459,7 @@ async function runResumeSession(
                     requestId: params.executionAuthorization?.requestId ?? params.spawnNonce ?? randomUUID(),
                     machineId, foreignTargetOnly: true,
                     input: { serverId: account.serverId, sessionId, intent: 'resume', resumeRequest: params },
-                    ...(retirementAbort ? { signal: retirementAbort.signal } : {}),
+                    ...(cancellation.signal ? { signal: cancellation.signal } : {}),
                     });
                 } finally { account.dispose(); }
             })();
@@ -454,11 +476,12 @@ async function runResumeSession(
                 ...(exactAccountLifetime ? {
                     accountId: exactAccountLifetime.scope.accountId,
                     preferScoped: true,
-                    signal: retirementAbort!.signal,
                     onIssued: assertExactAccountCurrent,
                 } : preferScopedMachineRpc ? { preferScoped: true } : {}),
+                ...(cancellation.signal ? { signal: cancellation.signal } : {}),
             });
         } finally {
+            cancellation.dispose();
             retirementSubscription?.dispose();
         }
         assertExactAccountCurrent();
@@ -480,6 +503,7 @@ async function runResumeSession(
                     machineId,
                     spawnNonce: readinessNonce,
                     serverId,
+                    signal: options.signal,
                 });
                 normalizedResult = readiness.status === 'success' && readiness.sessionId === sessionId
                     ? { type: 'success', sessionId }
@@ -529,7 +553,7 @@ async function runResumeSession(
                     `The daemon may be stopped, still starting, or not connected to the server.`,
             };
         }
-        if (isSocketIoAckTimeoutError(error)) {
+        if (isSocketIoAckTimeoutError(error) || isMachineRpcTimeoutError(error)) {
             return {
                 type: 'error',
                 errorCode: SPAWN_SESSION_ERROR_CODES.SESSION_WEBHOOK_TIMEOUT,
@@ -549,7 +573,15 @@ async function runResumeSession(
  * to the existing Happy session and resumes the agent.
  */
 export async function resumeSession(options: ResumeSessionOptions): Promise<ResumeSessionResult> {
-    return await runResumeSession(options, 'explicit_resume');
+    return await runResumeSession({
+        ...options,
+        executionAuthorization: options.executionAuthority === 'present_user'
+            ? options.executionAuthorization ?? {
+                provenance: 'user_request',
+                requestId: options.spawnNonce ?? randomUUID(),
+            }
+            : undefined,
+    }, 'explicit_resume');
 }
 
 /**
@@ -699,6 +731,7 @@ export async function forkSession(options: ForkSessionOptions): Promise<SessionF
 
 export async function rollbackSessionConversation(options: Readonly<{
     sessionId: string;
+    signal?: AbortSignal;
     serverId?: string | null;
     target?: SessionRollbackTarget;
     currentAgentCapabilities?: CurrentProjectedAgentCapabilities | null;
@@ -717,6 +750,7 @@ export async function rollbackSessionConversation(options: Readonly<{
             serverId,
             accountLifetime,
             accountSettings: state.settings,
+            ...(options.signal ? { signal: options.signal } : {}),
         });
         if (accountLifetime && !accountLifetime.isCurrent()) {
             return {
@@ -748,6 +782,7 @@ export async function rollbackSessionConversation(options: Readonly<{
         const resumeResult = await resumeSession({
             ...resumeOptions,
             ...(serverId ? { serverId } : {}),
+            ...(options.signal ? { signal: options.signal } : {}),
         });
         if (resumeResult.type === 'error') {
             return {
@@ -767,6 +802,7 @@ export async function rollbackSessionConversation(options: Readonly<{
                     serverId,
                     method: SESSION_RPC_METHODS.SESSION_ROLLBACK,
                     payload: { v: 1, target },
+                    ...(options.signal ? { signal: options.signal } : {}),
                 });
                 const parsed = SessionRollbackRpcResultSchema.safeParse(raw);
                 if (!parsed.success) {
@@ -817,6 +853,7 @@ export async function rollbackSessionConversation(options: Readonly<{
             sessionId: options.sessionId,
             serverId: options.serverId,
             method: SESSION_RPC_METHODS.SESSION_ROLLBACK,
+            ...(options.signal ? { signal: options.signal } : {}),
             payload: {
                 v: 1,
                 target,
@@ -880,6 +917,7 @@ function coerceCheckpointCodeRollbackResult(raw: unknown): CheckpointCodeRollbac
 
 export async function rollbackSessionCheckpointCode(options: Readonly<{
     request: CheckpointCodeRollbackRequest;
+    signal?: AbortSignal;
     serverId?: string | null;
 }>): Promise<CheckpointCodeRollbackResult> {
     try {
@@ -888,6 +926,7 @@ export async function rollbackSessionCheckpointCode(options: Readonly<{
             serverId: options.serverId,
             method: SESSION_RPC_METHODS.SESSION_CHECKPOINT_CODE_ROLLBACK,
             payload: options.request,
+            ...(options.signal ? { signal: options.signal } : {}),
         });
         const parsed = coerceCheckpointCodeRollbackResult(raw);
         if (!parsed) {
@@ -920,12 +959,13 @@ export async function rollbackSessionCheckpointCode(options: Readonly<{
     }
 }
 
-export async function sessionAbort(sessionId: string, options?: Readonly<{ serverId?: string }>): Promise<void> {
+export async function sessionAbort(sessionId: string, options?: Readonly<{ serverId?: string; signal?: AbortSignal }>): Promise<void> {
     try {
         await sessionRpcWithPreferredSessionScope<void, { reason: string }>({
             sessionId,
             ...(options?.serverId !== undefined ? { serverId: options.serverId } : {}),
             method: 'abort',
+            ...(options?.signal ? { signal: options.signal } : {}),
             payload: {
             reason: `The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.`
             },
@@ -981,7 +1021,7 @@ export async function sessionAbort(sessionId: string, options?: Readonly<{ serve
 export async function sessionRespondToPermission(
     sessionId: string,
     params: Omit<SessionPermissionRespondRpcParamsV1, 'answers'>,
-    options?: Readonly<{ serverId?: string }>,
+    options?: Readonly<{ serverId?: string; signal?: AbortSignal }>,
 ): Promise<void> {
     await sendSessionPermissionResponse(sessionId, params, options);
     // Stop is a composed Session action; callers deliver one decision rather
@@ -999,7 +1039,7 @@ function assertSessionInteractionResponseApplied(result: unknown): void {
 async function sendSessionPermissionResponse(
     sessionId: string,
     params: Omit<SessionPermissionRespondRpcParamsV1, 'answers'>,
-    options?: Readonly<{ serverId?: string }>,
+    options?: Readonly<{ serverId?: string; signal?: AbortSignal }>,
 ): Promise<void> {
     const request: SessionPermissionRespondRpcParamsV1 = {
         ...params,
@@ -1011,6 +1051,10 @@ async function sendSessionPermissionResponse(
         ...(options?.serverId !== undefined ? { serverId: options.serverId } : {}),
         method: RPC_METHODS.SESSION_PERMISSION_RESPOND,
         payload: request,
+        ...(options?.signal ? { signal: options.signal } : {}),
+        // The permission owner settles the admitted answer. Connection setup
+        // stays bounded; the generic RPC cutoff cannot declare its effect failed.
+        timeoutMs: null,
     });
     assertSessionInteractionResponseApplied(result);
     if (params.approved) return;
@@ -1023,7 +1067,8 @@ async function sendSessionPermissionResponse(
     storage.getState().applySessions([{ ...session, thinking: false, updatedAt: nowServerMs() }]);
 }
 
-function readAnsweringClientCategory(): SessionPermissionRespondRpcParamsV1['answeringClientCategory'] {
+/** The executing client's category, as stamped on an answer; the question card compares it to say where one was given. */
+export function readAnsweringClientCategory(): SessionPermissionRespondRpcParamsV1['answeringClientCategory'] {
     // Platform evidence describes this executing client, never the Account or
     // the Session's machine. A desktop browser is still a web client.
     if (Platform.OS === 'web' && isDesktopHost()) return 'desktop';
@@ -1039,7 +1084,7 @@ export async function sessionAllow(
     decision?: 'approved' | 'approved_for_session' | 'approved_execpolicy_amendment',
     execPolicyAmendment?: { command: string[] },
     turnId?: string,
-    options?: Readonly<{ serverId?: string }>,
+    options?: Readonly<{ serverId?: string; signal?: AbortSignal }>,
 ): Promise<void> {
     const request: SessionPermissionRespondRpcParamsV1 = {
         id,
@@ -1069,6 +1114,7 @@ export async function sessionAllowWithPermissionUpdates(
         updatedPermissions: unknown;
         turnId?: string;
         serverId?: string;
+        signal?: AbortSignal;
     }>,
 ): Promise<void> {
     const request: SessionPermissionRespondRpcParamsV1 = {
@@ -1080,7 +1126,7 @@ export async function sessionAllowWithPermissionUpdates(
         decision: params.decision,
         updatedPermissions: params.updatedPermissions,
     };
-    await sessionRespondToPermission(sessionId, request, params.serverId === undefined ? undefined : { serverId: params.serverId });
+    await sessionRespondToPermission(sessionId, request, { serverId: params.serverId, signal: params.signal });
 }
 
 /**
@@ -1092,7 +1138,7 @@ export async function sessionAllowWithAnswers(
     sessionId: string,
     id: string,
     answers: StructuredQuestionAnswersV1,
-    options?: Readonly<{ serverId?: string }>,
+    options?: Readonly<{ serverId?: string; signal?: AbortSignal }>,
 ): Promise<void> {
     const request: SessionPermissionRespondRpcParamsV1 = {
         id,
@@ -1105,14 +1151,15 @@ export async function sessionAllowWithAnswers(
 /** Shared user-action response effect below canonical Action admission. */
 export async function sessionRespondToUserAction(
     sessionId: string,
-    params: SessionPermissionRespondRpcParamsV1,
-    options?: Readonly<{ serverId?: string }>,
+    params: SessionUserActionAnswerRpcParamsV1,
+    options?: Readonly<{ serverId?: string; signal?: AbortSignal }>,
 ): Promise<unknown> {
-    const result = await sessionRpcWithPreferredSessionScope<unknown, SessionPermissionRespondRpcParamsV1>({
+    const result = await sessionRpcWithPreferredSessionScope<unknown, SessionUserActionAnswerRpcParamsV1>({
         sessionId,
         ...(options?.serverId !== undefined ? { serverId: options.serverId } : {}),
         method: RPC_METHODS.SESSION_USER_ACTION_ANSWER,
-        payload: { ...params, answeringClientCategory: readAnsweringClientCategory() },
+        ...(options?.signal ? { signal: options.signal } : {}),
+        payload: 'disposition' in params ? params : { ...params, answeringClientCategory: readAnsweringClientCategory() },
     });
     assertSessionInteractionResponseApplied(result);
     return result;
@@ -1129,7 +1176,7 @@ export async function sessionDeny(
     decision?: 'denied' | 'abort',
     reason?: string,
     turnId?: string,
-    options?: Readonly<{ serverId?: string }>,
+    options?: Readonly<{ serverId?: string; signal?: AbortSignal }>,
 ): Promise<void> {
     const request: SessionPermissionRespondRpcParamsV1 = {
         id,
@@ -1154,6 +1201,7 @@ export async function sessionSwitch(
     options?: Readonly<{
         serverId?: string | null;
         accountLifetime?: ServerAccountScopeLifetime;
+        signal?: AbortSignal;
     }>,
 ): Promise<boolean> {
     const request: SessionModeChangeRequest = { to };
@@ -1173,21 +1221,31 @@ export async function sessionSwitch(
             }
         };
         assertCurrent();
-        const response = await sessionRpcWithServerAccountScope<boolean, SessionModeChangeRequest>({
-            sessionId,
-            scope: lifetime.scope,
-            method: 'switch',
-            payload: request,
-            onIssued: assertCurrent,
-        });
-        assertCurrent();
-        return response;
+        const retired = new AbortController();
+        const retirement = lifetime.onRetire(() => retired.abort());
+        const cancellation = mergeAbortSignals([options.signal, retired.signal]);
+        try {
+            const response = await sessionRpcWithServerAccountScope<boolean, SessionModeChangeRequest>({
+                sessionId,
+                scope: lifetime.scope,
+                method: 'switch',
+                payload: request,
+                onIssued: assertCurrent,
+                signal: cancellation.signal,
+            });
+            assertCurrent();
+            return response;
+        } finally {
+            cancellation.dispose();
+            retirement.dispose();
+        }
     }
     const response = await sessionRpcWithPreferredSessionScope<boolean, SessionModeChangeRequest>({
         sessionId,
         ...(options?.serverId ? { serverId: options.serverId } : {}),
         method: 'switch',
         payload: request,
+        ...(options?.signal ? { signal: options.signal } : {}),
     });
     return response;
 }
@@ -1201,12 +1259,13 @@ export async function sessionSwitch(
 /**
  * Execute a bash command in the session
  */
-export async function sessionBash(sessionId: string, request: SessionBashRequest): Promise<SessionBashResponse> {
+export async function sessionBash(sessionId: string, request: SessionBashRequest, options?: Readonly<{ signal?: AbortSignal }>): Promise<SessionBashResponse> {
     try {
         const response = await sessionRpcWithPreferredSessionScope<SessionBashResponse, SessionBashRequest>({
             sessionId,
             method: 'bash',
             payload: request,
+            ...(options?.signal ? { signal: options.signal } : {}),
         });
         return response;
     } catch (error) {
@@ -1225,7 +1284,7 @@ export async function sessionBash(sessionId: string, request: SessionBashRequest
  */
 export async function sessionReadLogTail(
     sessionId: string,
-    options?: SessionReadLogTailRequest,
+    options?: SessionReadLogTailRequest & Readonly<{ signal?: AbortSignal }>,
 ): Promise<SessionReadLogTailResponse> {
     try {
         const request: SessionReadLogTailRequest = {};
@@ -1236,6 +1295,7 @@ export async function sessionReadLogTail(
             sessionId,
             method: RPC_METHODS.SESSION_LOG_TAIL,
             payload: request,
+            ...(options?.signal ? { signal: options.signal } : {}),
         });
         return assertRpcResponseWithSuccess<SessionReadLogTailResponse>(response);
     } catch (error) {
@@ -1246,12 +1306,12 @@ export async function sessionReadLogTail(
     }
 }
 
-export interface SessionStopResponse {
+export type SessionStopResponse = SessionStopResult & Readonly<{
     success: boolean;
     message?: string;
     code?: import('./sessionStopContract').SessionStopResponseCode;
     recovery?: import('./sessionStopContract').SessionStopRecovery;
-}
+}>;
 
 /**
  * Stop a session.
@@ -1275,12 +1335,18 @@ export async function sessionStopWithServerScope(
         sessionId,
         serverId: opts?.serverId ?? null,
     });
+    const confirmation: SessionStopResult = stopResult.success
+        ? stopResult.stopOutcome
+            ? { sessionId, stopped: false, stopOutcome: stopResult.stopOutcome }
+            : { sessionId, stopped: true }
+        : { sessionId, stopped: false };
     if (stopResult.success) {
-        return { success: true };
+        return { ...confirmation, success: true };
     }
 
     if (stopResult.reason === 'requested') {
         return {
+            ...confirmation,
             success: false,
             message: stopResult.message,
             code: 'session_stop_requested',
@@ -1289,11 +1355,12 @@ export async function sessionStopWithServerScope(
     }
 
     if (stopResult.reason === 'not_found') {
-        return { success: false, message: stopResult.message, code: 'session_stop_not_found' };
+        return { ...confirmation, success: false, message: stopResult.message, code: 'session_stop_not_found' };
     }
 
     if (stopResult.reason === 'control_unavailable') {
         return {
+            ...confirmation,
             success: false,
             message: stopResult.message,
             code: 'session_stop_control_unavailable',
@@ -1301,7 +1368,7 @@ export async function sessionStopWithServerScope(
         };
     }
 
-    return { success: false, message: stopResult.message, code: 'session_stop_failed' };
+    return { ...confirmation, success: false, message: stopResult.message, code: 'session_stop_failed' };
 }
 
 export interface SessionArchiveResponse {
@@ -1406,6 +1473,8 @@ export async function sessionUnarchiveWithServerScope(
  * - `session_absent`: the server answered 404 — the session is gone, or was never
  *   owned by this Account. Nothing further will ever delete it, so a caller holding
  *   local state for that exact id may safely retire it.
+ * - `session_active`: the Session must be stopped before deletion. The Session and
+ *   its local state remain live.
  * - `session_delete_conflict`: the server answered 409 — it found the session but
  *   lost the delete condition to a concurrent write. The session still exists and
  *   the same delete can be retried; local state must be kept.
@@ -1414,7 +1483,7 @@ export async function sessionUnarchiveWithServerScope(
  * either strands decrypted local rows for a session the server no longer has, or
  * discards live rows on a transient conflict.
  */
-export type SessionDeleteFailureCode = 'session_absent' | 'session_delete_conflict';
+export type SessionDeleteFailureCode = 'session_absent' | 'session_active' | 'session_delete_conflict';
 
 export type SessionDeleteResult = Readonly<{
     success: boolean;
@@ -1422,10 +1491,9 @@ export type SessionDeleteResult = Readonly<{
     code?: SessionDeleteFailureCode;
 }>;
 
-const SESSION_DELETE_FAILURE_CODE_BY_STATUS: Readonly<Record<number, SessionDeleteFailureCode>> = {
-    404: 'session_absent',
-    409: 'session_delete_conflict',
-};
+function isSessionDeleteFailureCode(value: string): value is SessionDeleteFailureCode {
+    return value === 'session_absent' || value === 'session_active' || value === 'session_delete_conflict';
+}
 
 /**
  * Internal Voice-history cleanup uses its already-bound Account authority.
@@ -1433,7 +1501,14 @@ const SESSION_DELETE_FAILURE_CODE_BY_STATUS: Readonly<Record<number, SessionDele
  */
 async function readSessionDeleteFailure(response: Response): Promise<SessionDeleteResult> {
     const error = await response.text().catch(() => '');
-    const code = SESSION_DELETE_FAILURE_CODE_BY_STATUS[response.status];
+    let payload: unknown = null;
+    try {
+        payload = JSON.parse(error);
+    } catch {
+        // The message remains useful, but an unstructured body cannot prove a typed refusal.
+    }
+    const refusal = readHomeDomainActionErrorV1(payload);
+    const code = refusal && isSessionDeleteFailureCode(refusal.code) ? refusal.code : undefined;
     return {
         success: false,
         message: error || 'Failed to delete session',

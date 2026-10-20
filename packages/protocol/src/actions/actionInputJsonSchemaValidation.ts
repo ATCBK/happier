@@ -1,7 +1,10 @@
+import { forEachJsonSchemaChild } from './actionInputJsonSchema.js';
 import { compileProtocolJsonSchema } from '../plugins/actions/jsonSchemaCompiler.js';
 import { compilePluginJsonSchema } from '../plugins/actions/jsonSchemaValidation.js';
-import { type PluginJsonSchemaValidator } from '../plugins/actions/protocolComposableSchema.js';
+import type { PluginJsonSchemaValidator } from '../plugins/actions/protocolComposableSchema.js';
 import { cloneStrictPluginJsonValue } from '../plugins/contributions/strictJsonValue.js';
+
+export { readCompleteActionSpecV1 } from './actionSpecSections.js';
 
 const ACTION_JSON_SCHEMA_DIALECT = 'https://json-schema.org/draft/2020-12/schema';
 
@@ -22,19 +25,7 @@ function assertDocumentLocalActionSchema(schema: unknown): void {
   }
   // Visit schema positions only: a literal/default JSON value can itself contain
   // keys such as "$ref" without acquiring schema or reference authority.
-  for (const keyword of ['properties', 'patternProperties', 'dependentSchemas', '$defs', 'definitions']) {
-    const children = node[keyword];
-    if (children !== null && typeof children === 'object' && !Array.isArray(children)) {
-      for (const child of Object.values(children)) assertDocumentLocalActionSchema(child);
-    }
-  }
-  for (const keyword of ['anyOf', 'oneOf', 'allOf', 'prefixItems']) {
-    const children = node[keyword];
-    if (Array.isArray(children)) for (const child of children) assertDocumentLocalActionSchema(child);
-  }
-  for (const keyword of ['not', 'if', 'then', 'else', 'items', 'contains', 'additionalProperties', 'unevaluatedProperties', 'unevaluatedItems', 'propertyNames']) {
-    if (node[keyword] !== undefined) assertDocumentLocalActionSchema(node[keyword]);
-  }
+  forEachJsonSchemaChild(node, assertDocumentLocalActionSchema);
 }
 
 /** Compiles the published native Action dialect without broadening Plugin admission. */
@@ -46,4 +37,36 @@ export function compileActionInputJsonSchema(schema: object): PluginJsonSchemaVa
   if (!('$schema' in normalized) || normalized.$schema !== ACTION_JSON_SCHEMA_DIALECT) return compilePluginJsonSchema(schema);
   assertDocumentLocalActionSchema(normalized);
   return compileProtocolJsonSchema(normalized, 'draft-2020-12');
+}
+
+/**
+ * Non-ignorable Message fields need evidence from the selected host's schema.
+ * A passthrough predecessor accepting the actual input is not sufficient: the
+ * same parser must also reject an invalid value for every requested semantic.
+ */
+export function supportsSessionMessageInputJsonSchema(
+  schema: object,
+  input: Readonly<Record<string, unknown>>,
+): boolean {
+  try {
+    const validate = compileActionInputJsonSchema(schema);
+    const structuredInput = input.structuredInput;
+    return validate(input)
+      && (input.reply === undefined || input.reply === 'none'
+        || !validate({ ...input, reply: '__unsupported_reply__' }))
+      && (input.returnToSessionId === undefined || !validate({ ...input, returnToSessionId: '' }))
+      && (input.structuredInput === undefined || !validate({ ...input, structuredInput: null }))
+      && (structuredInput === null || typeof structuredInput !== 'object' || Array.isArray(structuredInput)
+        || Object.entries(structuredInput).every(([field, value]) => value === undefined
+          || !['reviewComments', 'sessionAttachments', 'composerAttachments', 'browserContext', 'imageInputs', 'mentions',
+            'vendorPluginMentions', 'skillMentions', 'discussionSelectionSourceV1'].includes(field)
+          || !validate({ ...input, structuredInput: { ...structuredInput, [field]: null } })))
+      && (input.modelOverride === undefined || !validate({ ...input, modelOverride: 42 }))
+      && (input.providerConnectionId === undefined || !validate({ ...input, providerConnectionId: 42 }))
+      && (input.attachments === undefined || !validate({ ...input, attachments: null }))
+      && (input.source === undefined || !validate({ ...input, source: null }))
+      && (input.idempotencyKey === undefined || !validate({ ...input, idempotencyKey: null }));
+  } catch {
+    return false;
+  }
 }

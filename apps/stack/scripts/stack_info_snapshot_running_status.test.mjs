@@ -63,14 +63,26 @@ test('stack info shares daemon transport observation within a snapshot and refre
   // Genuine daemon HTTP boundary: use real state selection, PID ownership,
   // reconciliation and presentation rather than replacing their domain owner.
   const server = http.createServer((req, res) => {
-    assert.equal(req.url, '/ping');
-    assert.equal(req.headers['x-happier-daemon-token'], 'fixture-token');
+    if (req.method !== 'POST' || req.url !== '/ping') {
+      res.writeHead(404).end();
+      return;
+    }
+    if (req.headers['x-happier-daemon-token'] !== 'fixture-token') {
+      res.writeHead(401).end();
+      return;
+    }
     requests++;
     res.writeHead(reachable ? 200 : 503, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ ok: reachable }));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => server.close(resolve)));
+  // Other local port observers may probe this real listener. They must not
+  // crash the fixture or count as authenticated daemon observations.
+  const unrelated = await fetch(`http://127.0.0.1:${server.address().port}/`);
+  assert.equal(unrelated.status, 404);
+  await unrelated.arrayBuffer();
+  assert.equal(requests, 0);
   const env = applyStackDaemonLifecycleScopeEnv({ env: process.env, stackName, cliIdentity: 'default' });
   const { statePath } = resolvePreferredStackDaemonStatePaths({ cliHomeDir, env });
   await mkdir(join(statePath, '..'), { recursive: true });

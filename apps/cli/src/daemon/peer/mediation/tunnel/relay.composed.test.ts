@@ -12,10 +12,12 @@ import {
     type ProviderBrokerRelayApplicationBindingV1,
 } from '@happier-dev/protocol';
 import tweetnacl from 'tweetnacl';
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import { createServer, type Socket } from 'node:net';
 import { connectPeerTcpTunnelTcp } from './open';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, onTestFailed, onTestFinished, vi } from 'vitest';
+import type { Server } from 'socket.io';
+import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
 
 type RelayModule = typeof import('./relay');
 
@@ -55,61 +57,6 @@ type ServerRelayHandler = (
         allowedPorts?: readonly number[];
     }>,
 ) => void;
-
-type RelayTestIo = Readonly<{
-    to: (room: string) => Readonly<{
-        emit: (event: string, payload: unknown) => unknown;
-    }>;
-}>;
-
-type RelayTestCoordinatorAdmission = Readonly<{
-    tunnelKey: string;
-    grantId: string;
-    machineId: string;
-}>;
-
-/**
- * CLI-side Socket.IO harness for the server relay boundary. It models only the
- * coordinator contract exercised by this CLI/server test: one consumed
- * grant and one exact-machine attachment per tunnel.
- */
-function createRelayTestCoordinator(io: RelayTestIo, accountId: string) {
-    const attachmentsByTunnelKey = new Map<string, Readonly<{
-        machineId: string;
-    }>>();
-    const consumedGrantIds = new Set<string>();
-
-    return {
-        admit: async (input: RelayTestCoordinatorAdmission) => {
-            if (consumedGrantIds.has(input.grantId)) {
-                return { status: 'rejected' as const, reason: 'grant_already_consumed' as const };
-            }
-            consumedGrantIds.add(input.grantId);
-            attachmentsByTunnelKey.set(input.tunnelKey, {
-                machineId: input.machineId,
-            });
-            return { status: 'attached' as const };
-        },
-        routeMachineEnvelope: (input: Readonly<{ tunnelKey: string }>) => (
-            attachmentsByTunnelKey.has(input.tunnelKey) ? 'local_exact' as const : 'rejected' as const
-        ),
-        routeOwnerEnvelope: (input: Readonly<{ tunnelKey: string; envelope: unknown }>) => {
-            const attachment = attachmentsByTunnelKey.get(input.tunnelKey);
-            if (!attachment) return false;
-            io.to(`machine:${attachment.machineId}:${accountId}`).emit(
-                PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT,
-                input.envelope,
-            );
-            return true;
-        },
-        release: (tunnelKey: string) => {
-            attachmentsByTunnelKey.delete(tunnelKey);
-        },
-        close: async () => {
-            attachmentsByTunnelKey.clear();
-        },
-    };
-}
 
 async function loadServerRegisterRelayHandler(): Promise<ServerRelayHandler | null> {
     const modulePath =
@@ -490,195 +437,247 @@ describe('registerPeerTcpTunnelRelayTerminator', () => {
         expect(connectTcp).toHaveBeenCalledTimes(2);
         await runtime.dispose();
     });
-    it('settles the surviving daemon application exactly once when the user relay socket disconnects', async () => {
-        const mod = await loadRelayModule();
-        const registerServerRelay = await loadServerRegisterRelayHandler();
-        expect(mod?.registerPeerTcpTunnelRelayTerminator).toBeTypeOf('function');
-        expect(registerServerRelay).toBeTypeOf('function');
-        if (!mod?.registerPeerTcpTunnelRelayTerminator || !registerServerRelay) return;
 
-        const pendingDeliveries: Promise<void>[] = [];
-        const scheduleDelivery = (result: unknown): void => {
-            if (result instanceof Promise) {
-                pendingDeliveries.push(result.then(() => undefined));
-            }
-        };
-        const flushDeliveries = async (): Promise<void> => {
-            while (pendingDeliveries.length > 0) {
-                await Promise.all(pendingDeliveries.splice(0));
-            }
-        };
-
-        const machineServerHandlers = new Map<string, (payload?: unknown) => void | Promise<void>>();
-        const daemonHandlers = new Map<string, (payload?: unknown) => void | Promise<void>>();
-        const machineServerSocket: ServerRelaySocket = {
-            id: 'machine_socket_1',
-            data: { clientType: 'machine-scoped', machineId: 'machine_1' },
-            on: (event, handler) => machineServerHandlers.set(event, handler),
-            emit: vi.fn(),
-        };
-        const daemonSocket = {
-            on: (event: string, handler: (payload?: unknown) => void | Promise<void>) => {
-                daemonHandlers.set(event, handler);
-            },
-            emit: (event: string, payload: unknown) => {
-                scheduleDelivery(machineServerHandlers.get(event)?.(payload));
-            },
-        };
-        const userDeliveries: unknown[] = [];
-        const emitToRoom = (room: string) => ({
-            emit: (event: string, payload: unknown) => {
-                if (room === 'machine:machine_1:user_1') {
-                    scheduleDelivery(daemonHandlers.get(event)?.(payload));
-                } else {
-                    userDeliveries.push(payload);
-                }
-            },
+    describe('Home-backed relay disconnect fixture', () => {
+        let database: Awaited<ReturnType<typeof import('../../../../../../server/sources/testkit/lightSqliteHarness').createLightSqliteHarness>> | undefined;
+        let databaseSetup: Promise<void> | undefined;
+        beforeAll(() => {
+            databaseSetup = (async () => {
+                const { createLightSqliteHarness } = await import('../../../../../../server/sources/testkit/lightSqliteHarness');
+                const { db } = await import('../../../../../../server/sources/storage/db');
+                database = await createLightSqliteHarness({ tempDirPrefix: 'happier-relay-disconnect-' });
+                await db.account.create({ data: { id: 'user_1', encryptionMode: 'plain' } });
+                await db.machine.create({ data: {
+                    id: 'machine_1',
+                    accountId: 'user_1',
+                    installationId: 'relay-installation',
+                    metadata: encodePlainMachineStoredContent({
+                        host: 'fixture', platform: 'linux', homeDir: '/fixture',
+                        happyHomeDir: '/fixture/.happier', happyCliVersion: 'source',
+                    }),
+                    dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER,
+                } });
+            })();
+            return databaseSetup;
         });
-        const io = { to: emitToRoom, local: { to: emitToRoom } };
-        // The server relay handler requires its cluster coordinator: it owns grant
-        // consumption, exact-machine attachment and owner->machine delivery.
-        const coordinator = createRelayTestCoordinator(io, 'user_1');
-        const registerServerSocket = (socket: ServerRelaySocket): void => {
-            registerServerRelay('user_1', socket, {
-                io,
-                coordinator,
-                nowMs: () => 2_000,
-                serverRoutedEnabled: true,
-                allowedPorts: [3000],
-                relayAuthorizationTrustRoots,
+        afterAll(async () => {
+            // Join acquisition even if the setup hook failed before releasing its owned database.
+            try { await databaseSetup; }
+            finally { await database?.close(); }
+        });
+
+        it('settles the surviving daemon application exactly once when the user relay socket disconnects', async () => {
+            let phase = 'import_relay_owners';
+            onTestFailed(() => console.error(`Relay disconnect regression failed during: ${phase}`));
+            const mod = await loadRelayModule();
+            const registerServerRelay = await loadServerRegisterRelayHandler();
+            expect(mod?.registerPeerTcpTunnelRelayTerminator).toBeTypeOf('function');
+            expect(registerServerRelay).toBeTypeOf('function');
+            if (!mod?.registerPeerTcpTunnelRelayTerminator || !registerServerRelay) return;
+            const { createPeerTcpTunnelRelayCoordinator } = await import('../../../../../../server/sources/app/api/socket/peer/mediation/tunnel/relayCoordinator');
+            let disposeTerminator = async () => {};
+            let closeCoordinator = async () => {};
+            onTestFinished(async () => {
+                phase = 'retire_fixture';
+                try { await disposeTerminator(); }
+                finally { await closeCoordinator(); }
             });
-        };
-        registerServerSocket(machineServerSocket);
 
-        const speechTerminal = vi.fn(async (_input: unknown) => ({ ok: true as const }));
-        mod.registerPeerTcpTunnelRelayTerminator({
-            accountId: 'user_1',
-            machineId: 'machine_1',
-            socket: daemonSocket,
-            nowMs: () => 2_000,
-            relayAuthorizationTrustRoots,
-            connectTcp: vi.fn(),
-            voiceBinaryAppendConsumer: vi.fn(async (input) => ({
-                ok: true as const,
-                streamId: input.streamId,
-                generation: input.generation,
-                ackSeq: input.seq,
-                events: [],
-            })),
-            voiceBinaryTerminalConsumer: speechTerminal,
-        });
+            const pendingDeliveries: Promise<void>[] = [];
+            const scheduleDelivery = (result: unknown): void => {
+                if (result instanceof Promise) {
+                    pendingDeliveries.push(result.then(() => undefined));
+                }
+            };
+            const flushDeliveries = async (): Promise<void> => {
+                while (pendingDeliveries.length > 0) {
+                    await Promise.all(pendingDeliveries.splice(0));
+                }
+            };
 
-        const createUserServerSocket = (socketId: string) => {
-            const handlers = new Map<string, (payload?: unknown) => void | Promise<void>>();
-            const socket: ServerRelaySocket = {
-                id: socketId,
-                data: { clientType: 'user-scoped' },
-                on: (event, handler) => handlers.set(event, handler),
+            const machineServerEvents = new EventEmitter();
+            const dispatchMachine = async (event: string, payload?: unknown) => {
+                for (const handler of machineServerEvents.rawListeners(event)) await handler.call(machineServerEvents, payload);
+            };
+            const daemonHandlers = new Map<string, (payload?: unknown) => void | Promise<void>>();
+            const machineServerSocket = Object.assign(machineServerEvents, {
+                id: 'machine_socket_1',
+                connected: true,
+                data: { userId: 'user_1', clientType: 'machine-scoped', machineId: 'machine_1',
+                    verifiedMachineInstallationId: 'relay-installation' },
+                rooms: new Set(['machine:machine_1:user_1']),
                 emit: vi.fn(),
-            };
-            registerServerSocket(socket);
-            return {
-                trigger: async (event: string, payload?: unknown) => {
-                    await handlers.get(event)?.(payload);
-                    await flushDeliveries();
+            });
+            const daemonSocket = {
+                on: (event: string, handler: (payload?: unknown) => void | Promise<void>) => {
+                    daemonHandlers.set(event, handler);
+                },
+                emit: (event: string, payload: unknown) => {
+                    scheduleDelivery(dispatchMachine(event, payload));
                 },
             };
-        };
-
-        const beforeFrameSocket = createUserServerSocket('relay_socket_before_frame');
-        const beforeFrameTunnelId = 'voice-media:machine_1:relay-socket-loss-before-frame';
-        const beforeFrameAuthorization = createRelayAuthorization(beforeFrameTunnelId, {
-            flowKind: 'voice_media',
-            relaySocketId: 'relay_socket_before_frame',
-            applicationAttemptId: 'request-before-frame',
-            applicationAuthorityDigest:
-                createSpeechTranscriptionApplicationAuthorityDigestV1('request-before-frame'),
-        });
-        const beforeFrameOpen = createOpenEnvelope(beforeFrameTunnelId, {
-            relaySocketId: 'relay_socket_before_frame',
-            relayAuthorization: beforeFrameAuthorization,
-        });
-        if (beforeFrameOpen.frame.kind !== 'open') throw new Error('expected open frame fixture');
-        await beforeFrameSocket.trigger(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, {
-            ...beforeFrameOpen,
-            frame: {
-                v: 1,
-                kind: 'open',
-                open: {
-                    ...beforeFrameOpen.frame.open,
-                    selectedEncoding: PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2,
+            const userDeliveries: unknown[] = [];
+            const emitToRoom = (room: string) => ({
+                emit: (event: string, payload: unknown) => {
+                    if (room === 'machine:machine_1:user_1' || room === machineServerSocket.id) {
+                        scheduleDelivery(daemonHandlers.get(event)?.(payload));
+                    } else {
+                        userDeliveries.push(payload);
+                    }
                 },
-            },
-        });
-        await beforeFrameSocket.trigger('disconnect');
-        await beforeFrameSocket.trigger('disconnect');
+            });
+            const io = { to: emitToRoom, local: { to: emitToRoom }, on: () => {}, off: () => {},
+                sockets: { sockets: new Map([[machineServerSocket.id, machineServerSocket]]) } };
+            // Only the Socket.IO transport is replaced. Database admission, grant
+            // consumption, exact-machine attachment and relay settlement stay real.
+            const coordinator = createPeerTcpTunnelRelayCoordinator({ io: io as unknown as Server, config: { mode: 'memory' } });
+            closeCoordinator = async () => { await coordinator.close(); };
+            const registerServerSocket = (socket: ServerRelaySocket): void => {
+                registerServerRelay('user_1', socket, {
+                    io,
+                    coordinator,
+                    nowMs: () => 2_000,
+                    serverRoutedEnabled: true,
+                    allowedPorts: [3000],
+                    relayAuthorizationTrustRoots,
+                });
+            };
+            registerServerSocket(machineServerSocket);
 
-        expect(speechTerminal).toHaveBeenCalledOnce();
-        expect(speechTerminal).toHaveBeenCalledWith(expect.objectContaining({
-            reasonCode: 'tunnel_closed',
-            voiceMediaApplicationAuthority: expect.objectContaining({
-                applicationKind: 'speech_transcription',
+            const speechTerminal = vi.fn(async (_input: unknown) => ({ ok: true as const }));
+            const terminator = mod.registerPeerTcpTunnelRelayTerminator({
+                accountId: 'user_1',
+                machineId: 'machine_1',
+                socket: daemonSocket,
+                nowMs: () => 2_000,
+                relayAuthorizationTrustRoots,
+                connectTcp: vi.fn(),
+                voiceBinaryAppendConsumer: vi.fn(async (input) => ({
+                    ok: true as const,
+                    streamId: input.streamId,
+                    generation: input.generation,
+                    ackSeq: input.seq,
+                    events: [],
+                })),
+                voiceBinaryTerminalConsumer: speechTerminal,
+            });
+            disposeTerminator = async () => { await terminator.dispose(); };
+
+            const createUserServerSocket = (socketId: string) => {
+                const handlers = new Map<string, (payload?: unknown) => void | Promise<void>>();
+                const socket: ServerRelaySocket = {
+                    id: socketId,
+                    data: { clientType: 'user-scoped' },
+                    on: (event, handler) => handlers.set(event, handler),
+                    emit: vi.fn(),
+                };
+                registerServerSocket(socket);
+                return {
+                    trigger: async (event: string, payload?: unknown) => {
+                        await handlers.get(event)?.(payload);
+                        await flushDeliveries();
+                    },
+                };
+            };
+
+            const beforeFrameSocket = createUserServerSocket('relay_socket_before_frame');
+            const beforeFrameTunnelId = 'voice-media:machine_1:relay-socket-loss-before-frame';
+            const beforeFrameAuthorization = createRelayAuthorization(beforeFrameTunnelId, {
+                flowKind: 'voice_media',
+                relaySocketId: 'relay_socket_before_frame',
                 applicationAttemptId: 'request-before-frame',
-                tunnelId: beforeFrameTunnelId,
-            }),
-        }));
-        expect(speechTerminal.mock.calls[0]?.[0]).not.toHaveProperty('streamId');
-
-        const speechSocket = createUserServerSocket('relay_socket_speech');
-        const speechTunnelId = 'voice-media:machine_1:relay-socket-loss-speech';
-        const speechAuthorization = createRelayAuthorization(speechTunnelId, {
-            flowKind: 'voice_media',
-            relaySocketId: 'relay_socket_speech',
-            applicationAttemptId: 'request-socket-loss',
-            applicationAuthorityDigest:
-                createSpeechTranscriptionApplicationAuthorityDigestV1('request-socket-loss'),
-        });
-        const speechOpen = createOpenEnvelope(speechTunnelId, {
-            relaySocketId: 'relay_socket_speech',
-            relayAuthorization: speechAuthorization,
-        });
-        if (speechOpen.frame.kind !== 'open') throw new Error('expected open frame fixture');
-        await speechSocket.trigger(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, {
-            ...speechOpen,
-            frame: {
-                v: 1,
-                kind: 'open',
-                open: {
-                    ...speechOpen.frame.open,
-                    selectedEncoding: PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2,
+                applicationAuthorityDigest:
+                    createSpeechTranscriptionApplicationAuthorityDigestV1('request-before-frame'),
+            });
+            const beforeFrameOpen = createOpenEnvelope(beforeFrameTunnelId, {
+                relaySocketId: 'relay_socket_before_frame',
+                relayAuthorization: beforeFrameAuthorization,
+            });
+            if (beforeFrameOpen.frame.kind !== 'open') throw new Error('expected open frame fixture');
+            phase = 'open_before_first_frame';
+            await beforeFrameSocket.trigger(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, {
+                ...beforeFrameOpen,
+                frame: {
+                    v: 1,
+                    kind: 'open',
+                    open: {
+                        ...beforeFrameOpen.frame.open,
+                        selectedEncoding: PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2,
+                    },
                 },
-            },
-        });
-        await speechSocket.trigger(
-            PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT,
-            createBinarySubstreamEnvelope({
-                tunnelId: speechTunnelId,
-                substreamId: 'daemon.voiceInference.stt.stream-socket-loss.7',
-                kind: 'data',
-                sequence: 0,
-                payload: '\0\0\u0001\0',
-            }),
-        );
+            });
+            phase = 'disconnect_before_first_frame';
+            await beforeFrameSocket.trigger('disconnect');
+            await beforeFrameSocket.trigger('disconnect');
 
-        await speechSocket.trigger('disconnect');
-        await speechSocket.trigger('disconnect');
-        await machineServerHandlers.get('disconnect')?.();
-        await flushDeliveries();
+            expect(speechTerminal).toHaveBeenCalledOnce();
+            expect(speechTerminal).toHaveBeenCalledWith(expect.objectContaining({
+                reasonCode: 'tunnel_closed',
+                voiceMediaApplicationAuthority: expect.objectContaining({
+                    applicationKind: 'speech_transcription',
+                    applicationAttemptId: 'request-before-frame',
+                    tunnelId: beforeFrameTunnelId,
+                }),
+            }));
+            expect(speechTerminal.mock.calls[0]?.[0]).not.toHaveProperty('streamId');
 
-        expect(speechTerminal).toHaveBeenCalledTimes(2);
-        expect(speechTerminal).toHaveBeenCalledWith(expect.objectContaining({
-            streamId: 'stream-socket-loss',
-            generation: 7,
-            substreamId: 'daemon.voiceInference.stt.stream-socket-loss.7',
-            reasonCode: 'tunnel_closed',
-            voiceMediaApplicationAuthority: expect.objectContaining({
-                applicationKind: 'speech_transcription',
+            const speechSocket = createUserServerSocket('relay_socket_speech');
+            const speechTunnelId = 'voice-media:machine_1:relay-socket-loss-speech';
+            const speechAuthorization = createRelayAuthorization(speechTunnelId, {
+                flowKind: 'voice_media',
+                relaySocketId: 'relay_socket_speech',
                 applicationAttemptId: 'request-socket-loss',
-                tunnelId: speechTunnelId,
-            }),
-        }));
-        expect(userDeliveries.length).toBeGreaterThan(0);
+                applicationAuthorityDigest:
+                    createSpeechTranscriptionApplicationAuthorityDigestV1('request-socket-loss'),
+            });
+            const speechOpen = createOpenEnvelope(speechTunnelId, {
+                relaySocketId: 'relay_socket_speech',
+                relayAuthorization: speechAuthorization,
+            });
+            if (speechOpen.frame.kind !== 'open') throw new Error('expected open frame fixture');
+            phase = 'open_speech_stream';
+            await speechSocket.trigger(PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT, {
+                ...speechOpen,
+                frame: {
+                    v: 1,
+                    kind: 'open',
+                    open: {
+                        ...speechOpen.frame.open,
+                        selectedEncoding: PEER_TCP_TUNNEL_BINARY_FRAME_ENCODING_V2,
+                    },
+                },
+            });
+            await speechSocket.trigger(
+                PEER_TCP_TUNNEL_RELAY_SOCKET_EVENT,
+                createBinarySubstreamEnvelope({
+                    tunnelId: speechTunnelId,
+                    substreamId: 'daemon.voiceInference.stt.stream-socket-loss.7',
+                    kind: 'data',
+                    sequence: 0,
+                    payload: '\0\0\u0001\0',
+                }),
+            );
+
+            phase = 'disconnect_speech_stream';
+            await speechSocket.trigger('disconnect');
+            await speechSocket.trigger('disconnect');
+            await dispatchMachine('disconnect');
+            await flushDeliveries();
+
+            expect(speechTerminal).toHaveBeenCalledTimes(2);
+            expect(speechTerminal).toHaveBeenCalledWith(expect.objectContaining({
+                streamId: 'stream-socket-loss',
+                generation: 7,
+                substreamId: 'daemon.voiceInference.stt.stream-socket-loss.7',
+                reasonCode: 'tunnel_closed',
+                voiceMediaApplicationAuthority: expect.objectContaining({
+                    applicationKind: 'speech_transcription',
+                    applicationAttemptId: 'request-socket-loss',
+                    tunnelId: speechTunnelId,
+                }),
+            }));
+            expect(userDeliveries.length).toBeGreaterThan(0);
+        });
     });
 
     it('opens authorized relay tunnels and bridges client frames to loopback TCP', async () => {

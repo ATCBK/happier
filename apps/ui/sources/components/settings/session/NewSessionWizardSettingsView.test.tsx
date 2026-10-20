@@ -43,13 +43,13 @@ describe('NewSessionWizardSettingsView', () => {
         await act(async () => {
             steps.find(step => step.props.testID === 'settings-new-session-wizard-machines')!.props.onChange('dropdown');
         });
-        expect(storage.getState().settings.newSessionWizardSectionPresentationV1).toEqual({
+        await vi.waitFor(() => expect(storage.getState().settings.newSessionWizardSectionPresentationV1).toEqual({
             models: 'dropdown',
             machines: 'dropdown',
-        });
+        }));
 
         expect(screen.findRowByTitle('Two-column layout')).toBeTruthy();
         await act(async () => { screen.pressRowByTitle('Two-column layout'); });
-        expect(storage.getState().settings.newSessionWizardColumnsEnabled).toBe(true);
+        await vi.waitFor(() => expect(storage.getState().settings.newSessionWizardColumnsEnabled).toBe(true));
     });
 });

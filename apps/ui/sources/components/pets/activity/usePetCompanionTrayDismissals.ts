@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import { useLocalSetting } from '@/sync/domains/state/storage';
-import { useApplyLocalSettings } from '@/sync/store/settingsWriters';
+import { getStorage } from '@/sync/domains/state/storageStore';
 
 import type { PetCompanionTrayItem } from './petCompanionActivityTypes';
 import {
@@ -14,7 +14,6 @@ export function usePetCompanionTrayDismissals(): Readonly<{
     dismissTrayItem: (item: PetCompanionTrayItem) => void;
 }> {
     const persistedDismissedTrayItemKeys = useLocalSetting('petsDismissedCompanionTrayItemKeys');
-    const applyLocalSettings = useApplyLocalSettings();
     const [optimisticDismissedKeys, setOptimisticDismissedKeys] = React.useState<ReadonlySet<string>>(() => new Set());
     const persistedDismissedKeys = React.useMemo(
         () => normalizeDismissedPetCompanionTrayItemKeys(persistedDismissedTrayItemKeys),
@@ -31,13 +30,13 @@ export function usePetCompanionTrayDismissals(): Readonly<{
             next.add(item.dismissKey);
             return next;
         });
-        applyLocalSettings({
+        getStorage().getState().applyLocalSettings({
             petsDismissedCompanionTrayItemKeys: appendDismissedPetCompanionTrayItemKey(
                 [...dismissedTrayItemKeys],
                 item.dismissKey,
             ),
-        });
-    }, [applyLocalSettings, dismissedTrayItemKeys]);
+        }, { source: 'ui' });
+    }, [dismissedTrayItemKeys]);
 
     return { dismissedTrayItemKeys, dismissTrayItem };
 }

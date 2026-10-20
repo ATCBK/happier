@@ -13,11 +13,12 @@ import { resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSna
 import { resolveAccountSettingsScopeKey } from '@/settings/accountSettings/accountSettingsScopeKey';
 import { createCliPromptLibraryStore } from '@/settings/prompts/promptLibraryStore';
 
-it('migrates captured predecessor skills through real CLI HTTP, strict CAS and SQLite without changing coding custody', async () => {
+it.each([undefined, 'srv_migration_home', 'srv_foreign_home'])('admits only own-Home predecessor skill migration for %s through real CLI HTTP and SQLite', async homeId => {
   const database = new DatabaseSync(':memory:');
   database.exec('CREATE TABLE rows (key TEXT PRIMARY KEY, revision INTEGER NOT NULL, record TEXT NOT NULL)');
   const insert = database.prepare('INSERT INTO rows VALUES (?, 1, ?)');
-  const legacy = captured.stacks.surfaces.coding;
+  const legacy = captured.stacks.surfaces.coding.map(entry => ({ ...entry,
+    ref: { ...entry.ref, ...(homeId ? { serverId: homeId } : {}) } }));
   for (const key of PromptLibraryCatalogKeyV1Schema.options) {
     const record = key === 'coding' || key === 'voice'
       ? StoredPromptLibraryRecordV1Schema.parse({ key, value: { v: 1, scope: { kind: key }, entries: legacy } })
@@ -25,9 +26,11 @@ it('migrates captured predecessor skills through real CLI HTTP, strict CAS and S
     insert.run(key, JSON.stringify(record));
   }
   let mutations = 0;
+  const requests: string[] = [];
   const server = createServer(async (request, response) => {
     try {
       const path = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+      requests.push(path);
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       let result: unknown;
@@ -38,8 +41,8 @@ it('migrates captured predecessor skills through real CLI HTTP, strict CAS and S
       } else if (path.startsWith('/v1/account/entity-rows/prompt-library/')) {
         const key = decodeURIComponent(path.split('/').at(-1)!);
         const mutation = PromptLibraryRowMutationV1Schema.parse(JSON.parse(Buffer.concat(chunks).toString()));
-        assert.equal(mutation.content.t, 'plain');
-        if (mutation.content.t !== 'plain') throw new Error('Expected plain Account row');
+        assert.equal(mutation.content?.t, 'plain');
+        if (mutation.content?.t !== 'plain') throw new Error('Expected plain Account row');
         const record = PromptLibraryRecordV1Schema.parse(mutation.content.v);
         assert.equal(record.key, key);
         const updated = database.prepare('UPDATE rows SET record = ?, revision = revision + 1 WHERE key = ? AND revision = ?')
@@ -69,13 +72,28 @@ it('migrates captured predecessor skills through real CLI HTTP, strict CAS and S
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('Missing HTTP fixture address');
   const base = `http://127.0.0.1:${address.port}`;
-  const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'migration-account' })).toString('base64url')}.signature`, encryption: null };
+  const credentials = { token: `e30.${Buffer.from(JSON.stringify({ sub: 'migration-account' })).toString('base64url')}.signature`, encryption: null,
+    requesterSessionCredentialScope: { serverId: 'migration-profile', serverHttpBaseUrl: base } };
+  if (homeId) {
+    const { setServerProfileEndpointsById, adoptServerProfileHomeConnectionDescriptor } = await import('@/server/serverProfiles');
+    await setServerProfileEndpointsById({ id: 'migration-profile', serverUrl: 'https://migration-home.invalid', webappUrl: 'https://migration-home.invalid' });
+    await adoptServerProfileHomeConnectionDescriptor({ expectedProfileId: 'migration-profile', observation: 'exact', descriptor: {
+      v: 1, homeServerIdentityId: 'srv_migration_home', canonicalServerUrl: 'https://migration-home.invalid', revision: 1,
+      endpoints: [{ kind: 'https', url: 'https://migration-home.invalid' }],
+    } });
+  }
   try {
     await runWithServerHttpBaseUrl(base, async () => {
       setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {},
         settingsVersion: 7, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) });
       const store = createCliPromptLibraryStore({ credentials });
-      const first = await store.readPromptLibraryCatalog();
+      const first = (await store.readCatalog(undefined, 'coding')).catalog;
+      if (homeId === 'srv_foreign_home') {
+        assert.equal(first.status, 'partial');
+        assert.equal(mutations, 0);
+        assert.equal(requests.some(path => path.startsWith('/v1/artifacts/')), false);
+        return;
+      }
       assert.equal(first.status, 'ready');
       const coding = readPromptLibraryCatalogRecordV1({ catalog: first, key: 'coding' });
       const voice = readPromptLibraryCatalogRecordV1({ catalog: first, key: 'voice' });
@@ -86,6 +104,7 @@ it('migrates captured predecessor skills through real CLI HTTP, strict CAS and S
       assert.deepEqual(voice.record.value.entries.map(item => item.id), ['before-entry', 'after-entry']);
       assert.equal(rules.record.value.rules.find(rule => rule.skillId === 'session-control-skill')?.id, 'migrated-stack:account:skill-entry');
       assert.equal(mutations, 2);
+      assert.equal(requests.some(path => path.startsWith('/v2/account/settings')), false);
       assert.equal((await store.readPromptLibraryCatalog()).status, 'ready');
       assert.equal(mutations, 2);
       const output = await resolvePromptStackSystemAppendBlocksV1({ surface: 'coding', accountEntries: coding.record.value.entries,

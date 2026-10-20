@@ -125,7 +125,7 @@ export const HomeApplicationOriginV1Schema = lazyZodSchema(() => z.string().chec
   })));
 export type HomeApplicationOriginV1 = z.infer<typeof HomeApplicationOriginV1Schema>;
 
-const ServerIdentityIdSchema = lazyZodSchema(() => z.pipe(z.transform(normalizeServerIdentityIdCapability), z.string().check(z.trim(), z.minLength(1), z.maxLength(64), z.regex(SERVER_IDENTITY_ID_PATTERN))));
+const ServerIdentityIdSchema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeServerIdentityIdCapability), z.string().check(z.trim(), z.minLength(1), z.maxLength(64), z.regex(SERVER_IDENTITY_ID_PATTERN))));
 
 const BoundedIdentifierSchema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.maxLength(ACCOUNT_DIRECTORY_MAX_ID_UTF8_BYTES), z.superRefine((value, context) => {
     if (UTF8_ENCODER.encode(value).byteLength > ACCOUNT_DIRECTORY_MAX_ID_UTF8_BYTES) {

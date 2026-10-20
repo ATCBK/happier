@@ -83,6 +83,63 @@ async function press(element: HTMLElement): Promise<void> {
 }
 
 describe('plugin-ui Action family dispatches through the canonical host API', () => {
+  it('exposes the host mount approval fact while an Action is pending and clears it at settlement', async () => {
+    let settle: ((value: JsonValue) => void) | undefined;
+    let publish: ((context: SurfaceContext) => void) | undefined;
+    const context = createSurfaceContext();
+    const hostApi = createHostApiStub(context, {
+      executeAction: vi.fn(() => new Promise<JsonValue>(resolve => { settle = resolve; })) as PluginUiHostApi['executeAction'],
+      watchContext: async listener => { publish = listener; return { dispose: () => { publish = undefined; } }; },
+    });
+    function ApprovalHarness() {
+      const controller = useExecutePluginAction('review.refresh');
+      return <>
+        <button onClick={() => { void controller.execute(); }}>Run</button>
+        <output>{JSON.stringify(Reflect.get(controller, 'pendingApproval') ?? null)}</output>
+      </>;
+    }
+    const mount = mountSurface(<ApprovalHarness />, hostApi, context);
+    const approval = { artifactId: 'approval-a', href: '/inbox/approvals/approval-a?serverId=home-a' };
+    try {
+      await act(async () => { mount.container.querySelector<HTMLButtonElement>('button')!.click(); });
+      await act(async () => { publish?.({ ...context, pendingApproval: approval }); });
+      expect(JSON.parse(mount.container.querySelector('output')!.textContent!)).toEqual(approval);
+      await act(async () => { publish?.({ ...context, pendingApproval: null }); });
+      expect(mount.container.querySelector('output')!.textContent).toBe('null');
+      await act(async () => { publish?.({ ...context, pendingApproval: approval }); settle?.({ updated: true }); });
+      expect(mount.container.querySelector('output')!.textContent).toBe('null');
+    } finally { mount.unmount(); }
+  });
+  it('disables the button as "Waiting for approval" while the mount holds an approval, and draws no notice or link of its own', async () => {
+    let settle: ((value: JsonValue) => void) | undefined;
+    let publish: ((context: SurfaceContext) => void) | undefined;
+    const context = createSurfaceContext();
+    const hostApi = createHostApiStub(context, {
+      executeAction: vi.fn(() => new Promise<JsonValue>(resolve => { settle = resolve; })) as PluginUiHostApi['executeAction'],
+      watchContext: async listener => { publish = listener; return { dispose: () => { publish = undefined; } }; },
+    });
+    const mount = mountSurface(<Action.Execute action="review.refresh" title="Add DeepSeek" testID="add" />, hostApi, context);
+    const approval = { artifactId: 'approval-a', href: '/inbox/approvals/approval-a?serverId=home-a' };
+    try {
+      await press(pressableByLabel(mount.container, 'Add DeepSeek'));
+      // In flight without an approval: the ordinary busy button.
+      expect(pressableByLabel(mount.container, 'Add DeepSeek').getAttribute('aria-busy')).toBe('true');
+
+      await act(async () => { publish?.({ ...context, pendingApproval: approval }); });
+      // The host's mount notice is the one notice and link; the Action only says why it is not pressable.
+      const waiting = pressableByLabel(mount.container, 'Waiting for approval');
+      expect(waiting.getAttribute('aria-disabled')).toBe('true');
+      expect(waiting.getAttribute('aria-busy')).toBeNull();
+      expect(mount.container.querySelector('[aria-live="polite"]')).toBeNull();
+      expect(mount.container.querySelector('[data-testid$=".open"]')).toBeNull();
+      expect(mount.container.textContent?.match(/Waiting for approval/gu)).toHaveLength(1);
+
+      await act(async () => { settle?.({ updated: true }); });
+      const settled = pressableByLabel(mount.container, 'Add DeepSeek');
+      expect(settled.getAttribute('aria-disabled')).not.toBe('true');
+      expect(settled.getAttribute('aria-busy')).toBeNull();
+    } finally { mount.unmount(); }
+  });
   it('keeps contributed Action refs on the structural JSON transport contract', () => {
     if (false) {
       const update = useExecutePluginAction(updateReview, { title: 'Rename review' });
@@ -319,12 +376,58 @@ describe('plugin-ui Action family dispatches through the canonical host API', ()
     mount.unmount();
   });
 
+  it('settles an exact host confirmation decline quietly and preserves a real permission denial', async () => {
+    // The mounted host's Action transport reports a declined prompt as denied
+    // with this exact diagnostic; ordinary permission denial has another cause.
+    const refusals = [
+      Object.assign(new Error('denied'), { code: 'denied', diagnostics: ['plugin_action_current_intent_rejected'] }),
+      Object.assign(new Error('denied'), { code: 'denied', diagnostics: ['plugin_action_scope_denied'] }),
+    ];
+    const executeAction = vi.fn(async () => { throw refusals.shift(); });
+    const onSettled = vi.fn();
+    const mount = mountSurface(
+      <Action.Execute action="review.refresh" title="Run review" onSettled={onSettled} />,
+      createHostApiStub(createSurfaceContext(), { executeAction } as unknown as Partial<PluginUiHostApi>),
+    );
+    try {
+      await press(pressableByLabel(mount.container, 'Run review'));
+      expect(onSettled.mock.calls[0]?.[0]).toEqual({ status: 'idle' });
+      expect(pressableByLabel(mount.container, 'Run review').getAttribute('aria-busy')).toBeNull();
+      await press(pressableByLabel(mount.container, 'Run review'));
+      expect(onSettled.mock.calls[1]?.[0]).toMatchObject({ status: 'error', code: 'denied' });
+    } finally { mount.unmount(); }
+  });
+
+  it('keeps a superseded mount pending until the current projection rebinds its host, without replaying the Action', async () => {
+    const context = createSurfaceContext({ machineExecutionReady: true });
+    const executeAction = vi.fn(async () => { throw Object.assign(new Error('Plugin occurrenceId is stale'), { code: 'stale_surface' }); });
+    const hostApi = createHostApiStub(context, { executeAction } as unknown as Partial<PluginUiHostApi>);
+    function ExecutionHarness() {
+      const { execution, execute } = useExecutePluginAction('review.refresh');
+      return <><button onClick={() => { void execute(); }}>Run</button><output>{JSON.stringify(execution)}</output></>;
+    }
+    const mount = mountSurface(<ExecutionHarness />, hostApi, context);
+    const execution = () => JSON.parse(mount.container.querySelector('output')!.textContent!);
+    try {
+      await act(async () => { mount.container.querySelector('button')!.click(); });
+      expect(execution()).toEqual({ status: 'pending' });
+      const executeCurrent = vi.fn(async () => ({ read: true }));
+      const currentHost = createHostApiStub(context, { executeAction: executeCurrent } as unknown as Partial<PluginUiHostApi>);
+      await mount.render(<PluginUiProvider hostApi={currentHost} context={context}><ExecutionHarness /></PluginUiProvider>);
+      expect(execution()).toEqual({ status: 'idle' });
+      expect(executeAction).toHaveBeenCalledOnce();
+      expect(executeCurrent).not.toHaveBeenCalled();
+      await act(async () => { mount.container.querySelector('button')!.click(); });
+      expect(execution()).toEqual({ status: 'success', result: { read: true } });
+    } finally { mount.unmount(); }
+  });
+
   it('says what a host refusal means in words and keeps an author sentence as written', async () => {
     // Host API refusals cross the mount as `{ code }` alone, so the client error's
-    // message IS the code (`stale_surface`). A page that prints `execution.message`
+    // message IS the code (`unavailable`). A page that prints `execution.message`
     // must still read as a sentence; an author's own sentence is never replaced.
     const refusals: unknown[] = [
-      Object.assign(new Error('stale_surface'), { code: 'stale_surface' }),
+      Object.assign(new Error('unavailable'), { code: 'unavailable' }),
       Object.assign(new Error('The review service refused.'), { code: 'denied' }),
     ];
     const executeAction = vi.fn(async () => { throw refusals.shift(); });
@@ -338,11 +441,27 @@ describe('plugin-ui Action family dispatches through the canonical host API', ()
     await press(pressableByLabel(mount.container, 'Run review'));
 
     const [hostRefusal, authorRefusal] = onSettled.mock.calls.map((call) => call[0] as { code: string; message: string });
-    expect(hostRefusal).toMatchObject({ status: 'error', code: 'stale_surface' });
-    expect(hostRefusal?.message).not.toContain('stale_surface');
+    expect(hostRefusal).toMatchObject({ status: 'error', code: 'unavailable' });
+    expect(hostRefusal?.message).not.toContain('unavailable');
     expect(hostRefusal?.message).toMatch(/\s/u);
     expect(authorRefusal).toMatchObject({ status: 'error', code: 'denied', message: 'The review service refused.' });
 
+    mount.unmount();
+  });
+
+  it.each(['invalid_response_method', 'transport_unavailable'])('keeps a code-only %s rejection outcome-neutral without replay', async (code) => {
+    const executeAction = vi.fn(async () => { throw { code }; });
+    const onSettled = vi.fn();
+    const context = createSurfaceContext({ translations: { 'happier.plugin-ui.state.error': 'Une erreur est survenue' } });
+    const mount = mountSurface(
+      <Action.Execute action="review.complete" title="Complete review" onSettled={onSettled} />,
+      createHostApiStub(context, { executeAction } as unknown as Partial<PluginUiHostApi>), context,
+    );
+    await press(pressableByLabel(mount.container, 'Complete review'));
+    expect(executeAction).toHaveBeenCalledOnce();
+    expect(onSettled.mock.calls[0]?.[0]).toMatchObject({ status: 'error', code, retryable: false });
+    expect(onSettled.mock.calls[0]?.[0].message).not.toMatch(/nothing changed|didn.t go through/iu);
+    expect(onSettled.mock.calls[0]?.[0].message).toBe(context.translations['happier.plugin-ui.state.error']);
     mount.unmount();
   });
 

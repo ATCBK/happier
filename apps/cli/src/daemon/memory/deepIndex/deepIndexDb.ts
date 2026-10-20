@@ -29,9 +29,7 @@ export type DeepIndexDocumentSearchHit = DeepIndexDocumentIdentity & DeepIndexDo
   score: number;
 }>;
 
-export type DeepIndexSearchScope =
-  | Readonly<{ type: 'global' }>
-  | Readonly<{ type: 'session'; sessionId: string }>;
+export type DeepIndexSearchScope = import('@happier-dev/protocol/memory/memorySearch').MemorySearchScope;
 
 export type DeepIndexSearchHit = Readonly<{
   matchedQuery?: string;
@@ -868,6 +866,12 @@ export function openDeepIndexDb(args: Readonly<{ dbPath: string }>): DeepIndexDb
       return out;
     },
     search: ({ query, scope, eligibleSessionIds, maxResults, offset = 0, createdAfterMs, createdBeforeMs, includeExternal = false, includeSessions = true, externalAgentIds, externalSource }) => {
+      // A native transcript has no canonical Project witness. Project membership
+      // must come from the fresh authenticated inventory, never cached text/path.
+      if (scope.type === 'project') {
+        if (eligibleSessionIds === undefined) return [];
+        includeExternal = false;
+      }
       if (!includeExternal && !includeSessions) return [];
       const limit = Math.max(1, Math.floor(maxResults));
       const skip = Math.max(0, Math.trunc(offset));

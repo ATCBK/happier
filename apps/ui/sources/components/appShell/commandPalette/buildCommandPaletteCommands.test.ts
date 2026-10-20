@@ -341,6 +341,21 @@ describe('buildCommandPaletteCommands', () => {
       .toEqual(['new-session', 'app-destination:sessions', 'app-destination:settings']);
   });
 
+  it('names a recent Session the way the list does: its folder when nothing else names it', () => {
+    mockedState = { createSessionActionDraft: createSessionActionDraftSpy, settings: {} };
+    const commands = buildCommandPaletteCommands({
+      sessionsById: { 'session-1': { id: 'session-1', serverId: 'server-a', metadata: { path: '/work/mqa2-c14-clone', host: 'box' } } },
+      isDev: false,
+      activeSessionId: null,
+      features: { executionRunsEnabled: false, voiceEnabled: false },
+      nav: { push: () => {}, openNewSession: () => {}, navigateToSession: () => {} },
+      actions: { execute: async () => ({ ok: true, result: {} }) },
+      alert: async () => {},
+    });
+
+    expect(commands.find((command) => command.id === 'session-session-1')?.title).toBe('mqa2-c14-clone');
+  });
+
   it('routes sign-out through the confirmed account-settings flow', async () => {
     const push = vi.fn();
     mockedState = { createSessionActionDraft: createSessionActionDraftSpy, settings: {} };

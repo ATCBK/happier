@@ -29,6 +29,9 @@ export const StringListField = React.memo(function StringListField(props: Readon
     monospace?: boolean;
     /** A value was committed: a field lost focus or an entry was removed (lists that save in place). */
     onCommit?: () => void;
+    /** Why one entry is refused, said under its own field (`<testID>.item.<i>.error`). */
+    itemError?: (index: number) => string | null;
+    disabled?: boolean;
     /** Test id prefix: `<testID>.item.<i>`, `<testID>.remove.<i>`, `<testID>.add`. */
     testID: string;
 }>) {
@@ -69,6 +72,8 @@ export const StringListField = React.memo(function StringListField(props: Readon
                             value={value}
                             onChangeText={(text) => update(index, text)}
                             onBlur={props.onCommit}
+                            error={props.itemError?.(index) ?? null}
+                            editable={props.disabled !== true}
                             accessibilityLabel={props.itemLabel(index + 1)}
                             placeholder={props.itemPlaceholder}
                             monospace={props.monospace}
@@ -83,6 +88,7 @@ export const StringListField = React.memo(function StringListField(props: Readon
                             variant="plain"
                             accessibilityLabel={props.removeLabel(index + 1)}
                             tooltip={props.removeLabel(index + 1)}
+                            disabled={props.disabled}
                             onPress={() => remove(index)}
                         />
                     </View>
@@ -95,6 +101,7 @@ export const StringListField = React.memo(function StringListField(props: Readon
                     display="inverted"
                     title={props.addLabel}
                     leading={<Icon name="plus" size={14} color={theme.colors.text.secondary} />}
+                    disabled={props.disabled}
                     onPress={add}
                 />
             </View>

@@ -2,6 +2,8 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 import { describe, expect, it } from 'vitest';
+import { configuration } from '@/configuration';
+import { publishServerHttpRuntimeOrigin } from '@/api/client/serverHttpBaseUrl';
 
 type FeatureServer = Readonly<{
   url: string;
@@ -50,6 +52,23 @@ async function startFeatureServer(companionEnabled: boolean): Promise<FeatureSer
 }
 
 describe('petCompanionFeatureGate', () => {
+  it('reads the published runtime endpoint when the configured API endpoint is unavailable', async () => {
+    const unreachable = await startFeatureServer(false);
+    const server = await startFeatureServer(true);
+    const previous = configuration.apiServerUrl;
+    await unreachable.close();
+    Object.assign(configuration, { apiServerUrl: unreachable.url });
+    const release = publishServerHttpRuntimeOrigin(server.url, 'iroh');
+    try {
+      const { resolvePetCompanionFeatureEnabled } = await import('./petCompanionFeatureGate');
+      await expect(resolvePetCompanionFeatureEnabled({ env: {} })).resolves.toBe(true);
+    } finally {
+      release();
+      Object.assign(configuration, { apiServerUrl: previous });
+      await server.close();
+    }
+  });
+
   it('resolves pets.companion as disabled from the server feature snapshot', async () => {
     const server = await startFeatureServer(false);
     try {

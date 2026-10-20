@@ -1,10 +1,11 @@
 import type { PluginInvocationContext } from '@happier-dev/plugin-sdk';
 import type { ActionHandler } from '@happier-dev/plugin-sdk/actions';
 import { throwIfAborted } from '@happier-dev/plugin-sdk/async';
+import { fitActionResultSequenceV1 } from '@happier-dev/triage-sources/projection/actionResultSequence';
 
 import { bindCorpusCollections } from '../corpus/collections/bindCorpusCollections.js';
 import type { CorpusCollectionsV1 } from '../corpus/collections/bindCorpusCollections.js';
-import { readResolvedFixPullRequests, type TriageFixPullRequestProjectionV1 } from '../corpus/marks/fixPullRequests.js';
+import { readResolvedFixPullRequests, selectPrimaryFixPullRequest, type TriageFixPullRequestProjectionV1 } from '../corpus/marks/fixPullRequests.js';
 import { readActiveConfiguredSourceRows } from '../corpus/configuration/readConfiguredSourceRows.js';
 import { findConfiguredSourceInstanceRow } from '../corpus/configuration/administerConfiguredSourceInstance.js';
 import { CORPUS_SOURCE_INSTANCE_LIFECYCLE } from '../corpus/collections/ids.js';
@@ -88,6 +89,22 @@ async function readFixLinkSourceFacts(
     }
 }
 
+/** Fit only the outward Action; local Collection reads retain the complete derived set. */
+function fitFixPullRequestsActionResult(result: TriageReadFixPullRequestsResultV1): TriageReadFixPullRequestsResultV1 {
+    const explicit = new Set(result.candidates.filter((candidate) => candidate.origins.includes('user')));
+    const derived = result.candidates.filter((candidate) => !explicit.has(candidate));
+    return fitActionResultSequenceV1(derived, (included, omittedCount) => {
+        const retained = new Set(included);
+        const candidates = Object.freeze(result.candidates.filter((candidate) => explicit.has(candidate) || retained.has(candidate)));
+        return Object.freeze({
+            ...result,
+            candidates,
+            primary: selectPrimaryFixPullRequest(candidates),
+            incomplete: result.incomplete || omittedCount > 0,
+        });
+    }).result;
+}
+
 export function createTriageReadFixPullRequestsActionHandler(): ActionHandler<
     TriageReadFixPullRequestsInputV1,
     TriageReadFixPullRequestsResultV1
@@ -106,7 +123,7 @@ export function createTriageReadFixPullRequestsActionHandler(): ActionHandler<
             ]);
             throwIfAborted(context.signal);
             const sources = indexTriageAdmittedSourcesV1(admitted);
-            return await readTriageFixPullRequests(input, {
+            const result = await readTriageFixPullRequests(input, {
                 collections,
                 nowMs: () => Date.now(),
                 ...(context.signal ? { signal: context.signal } : {}),
@@ -137,6 +154,7 @@ export function createTriageReadFixPullRequestsActionHandler(): ActionHandler<
                     },
                 },
             });
+            return fitFixPullRequestsActionResult(result);
         } finally {
             observation.dispose();
         }

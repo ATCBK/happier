@@ -54,18 +54,33 @@ describe('setSessionArchivedState', () => {
     expect(boundary.callMachineRpc).not.toHaveBeenCalled();
   });
 
-  it('stops an active session and retries the archive request', async () => {
+  it('retains original authorization while stopping an active session and retrying archive', async () => {
     active = true;
     const post = vi.spyOn(axios, 'post')
       .mockResolvedValueOnce({ status: 409, data: { error: 'session_active' } })
       .mockResolvedValueOnce({ status: 200, data: { success: true, archivedAt: 456 } });
     boundary.callMachineRpc.mockImplementation(async () => { active = false; return { status: 'stopped' }; });
-    await expect(setSessionArchivedState({ credentials, idOrPrefix: sessionId, archived: true }))
+    const externalAction = { context: { surface: 'agent' as const }, effectActionId: 'session.archive',
+      installationId: 'installation', privateKey: new Uint8Array(64) };
+    // Signing is supplied by the Action owner; this HTTP boundary verifies that
+    // lookup, Stop observations and the archive retry cannot borrow the bearer.
+    const resolveAuthorizationHeaders = () => ({ 'X-Test-Original-Archive': 'signed' });
+    await expect(setSessionArchivedState({ credentials, idOrPrefix: sessionId, archived: true,
+      externalAction, resolveAuthorizationHeaders }))
       .resolves.toEqual({ ok: true, sessionId, archivedAt: 456 });
     expect(boundary.callMachineRpc).toHaveBeenCalledWith(expect.objectContaining({
       machineId: 'machine-1', method: RPC_METHODS.STOP_SESSION, request: { sessionId },
+      externalAction: { ...externalAction, effectActionId: 'session.stop' },
     }));
     expect(post).toHaveBeenCalledTimes(2);
+    for (const [, config] of vi.mocked(axios.get).mock.calls) {
+      expect(config?.headers).toMatchObject({ 'X-Test-Original-Archive': 'signed' });
+      expect(config?.headers).not.toHaveProperty('Authorization');
+    }
+    for (const [, , config] of post.mock.calls) {
+      expect(config?.headers).toMatchObject({ 'X-Test-Original-Archive': 'signed' });
+      expect(config?.headers).not.toHaveProperty('Authorization');
+    }
   });
 
   it('retries archive after an unconfirmed stop when the session becomes archivable immediately after', async () => {
@@ -78,6 +93,18 @@ describe('setSessionArchivedState', () => {
       .resolves.toEqual({ ok: true, sessionId, archivedAt: 789 });
     expect(boundary.callMachineRpc).toHaveBeenCalledTimes(1);
     expect(post).toHaveBeenCalledTimes(2);
+  });
+
+  it('preserves a definitive Stop refusal without retrying the archive mutation', async () => {
+    active = true;
+    const post = vi.spyOn(axios, 'post').mockResolvedValue({ status: 409, data: { error: 'session_active' } });
+    const refusal = { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action:session.stop',
+      details: { cause: 'target_outside_led_subtree' } };
+    boundary.callMachineRpc.mockResolvedValue(refusal);
+    await expect(setSessionArchivedState({ credentials, idOrPrefix: sessionId, archived: true }))
+      .resolves.toMatchObject(refusal);
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(active).toBe(true);
   });
 
   it('parks without polling after stop until an inactive event allows archive', async () => {

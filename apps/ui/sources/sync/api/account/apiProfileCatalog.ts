@@ -5,6 +5,7 @@ import {
     type ProfileRecordV1, type ProfileRowMutationV1, type ProfileRowsListResponseV1,
 } from '@happier-dev/protocol/profiles/profileRecordV1';
 import { loadProfileCatalogV1, type ProfileCatalogSnapshotV1 } from '@happier-dev/protocol/profiles/profileCatalogV1';
+import { core } from 'zod/mini';
 import type { AccountScopedCryptoMaterial } from '@happier-dev/protocol/crypto/accountScopedCipher';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { resolveAccountScopedCryptoMaterialFromCredentials } from '@/sync/domains/connectedServices/resolveAccountScopedCryptoMaterialFromCredentials';
@@ -129,7 +130,7 @@ function catalogFailure(error: unknown, signal?: AbortSignal): ProfileCatalogSna
         if (code === 'action_home_signed_out') return { status: 'unavailable', reason: 'unauthorized' };
         if (code === 'account_storage_currentness_unavailable') return { status: 'unavailable', reason: 'encryption-material-unavailable' };
     }
-    if (error instanceof Error && error.name === 'ZodError') return { status: 'unavailable', reason: 'invalid-stored-content' };
+    if (error instanceof core.$ZodError) return { status: 'unavailable', reason: 'invalid-stored-content' };
     return { status: 'unavailable', reason: 'unreachable' };
 }
 export async function readProfileCatalog(scope: ServerAccountScope, signal?: AbortSignal): Promise<ProfileCatalogSnapshotV1> {
@@ -262,7 +263,13 @@ async function readCapturedProfileCatalogProjection(context: ProfileAccountConte
             },
         });
     }
-    return project();
+    const projection = await project();
+    // Native/inactive and retained predecessor reads have no cleanup phase,
+    // but still carry the same captured Account guard as early active reads.
+    if ((catalog.status === 'ready' || catalog.status === 'partial') && catalog.control?.record.phase !== 'active') {
+        publication?.onReady?.(projection, context.accountLifetime.isCurrent);
+    }
+    return projection;
 }
 
 async function mutateWithContext(context: ProfileAccountContext, mutation: ProfileRowMutationV1, signal?: AbortSignal,

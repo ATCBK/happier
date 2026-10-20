@@ -157,6 +157,8 @@ export function useMountedTargetedContributions(params: Readonly<{
     React.useEffect(() => {
         if (!active || !accountLifetime) return;
         let alive = true;
+        const abort = new AbortController();
+        const retirement = accountLifetime.onRetire(() => abort.abort());
         setLoaded((previous) => {
             const sameTarget = previous.requestKey === targetKey
                 && previous.accountLifetime === accountLifetime;
@@ -178,6 +180,7 @@ export function useMountedTargetedContributions(params: Readonly<{
             serverId: serverId || null,
             pluginId,
             accountLifetime,
+            signal: abort.signal,
         }).then((result) => {
             if (!isCurrent()) return;
             if (!result.supported) {
@@ -232,6 +235,8 @@ export function useMountedTargetedContributions(params: Readonly<{
         });
         return () => {
             alive = false;
+            abort.abort();
+            retirement.dispose();
         };
     }, [
         accountLifetime,

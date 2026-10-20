@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import ts from 'typescript';
+import * as z from 'zod/mini';
 
 import {
     VoiceCredentialSlotIdSchema as ProtocolVoiceCredentialSlotIdSchema,
@@ -432,7 +433,7 @@ describe('Voice package-local publication projection', () => {
         ));
     }, 120_000);
 
-    it('contains the approved root /voice projection plus neutral composition', () => {
+    it('contains the approved root /voice projection plus native Mini composition', () => {
         const program = createSdkProgram();
         const approved = [
             ...APPROVED_ROOT_VOICE_PROJECTION_EXPORTS,
@@ -440,24 +441,28 @@ describe('Voice package-local publication projection', () => {
         ].sort();
 
         expect(moduleExportNames(program, 'src/voice/projections.ts')).toEqual(approved);
+        const publicApproved = [...approved, 'PluginVoiceProviderDefinition'].sort();
+        expect(moduleExportNames(program, 'src/voice/index.ts')).toEqual(publicApproved);
+        expect(moduleExportNames(program, 'src/voice/index.public.ts')).toEqual(publicApproved);
     }, 120_000);
 
-    it('directly projects Protocol DTOs and publishes neutral Voice composition', async () => {
-        const [source, publicIndexSource] = await Promise.all([
+    it('directly projects Protocol DTOs and publishes native Mini Voice composition', async () => {
+        const [source, publicIndexSource, contracts] = await Promise.all([
             readFile(new URL('./projections.ts', import.meta.url), 'utf8'),
             readFile(new URL('./index.public.ts', import.meta.url), 'utf8'),
+            readFile(new URL('./contracts.ts', import.meta.url), 'utf8'),
         ]);
         expect(source).toContain("} from '@happier-dev/protocol/plugins/contributions/voice';");
         expect(source).toContain("} from '@happier-dev/protocol/voice/modelPacks/contributionV1';");
-        expect(source).toContain("} from '@happier-dev/protocol/voice/realtime';");
-        expect(source).toMatch(
-            /import\s+type\s*\{[^}]*ConnectedAccountMaterializationRequest[^}]*\}\s*from\s*['"]\.\.\/connectedAccounts\.js['"]/u,
+        expect(contracts).toContain("from '@happier-dev/protocol/voice/realtime';");
+        expect(contracts).toMatch(
+            /import\s+type\s*\{[^}]*ConnectedAccountMaterializationRequest[^}]*\}\s*from\s*['"]@happier-dev\/protocol\/connect\/connected-account-purposes['"]/u,
         );
         expect(source).toMatch(
             /export\s+type\s*\{[^}]*ConnectedAccountHttpHeadersRequest[^}]*\}\s*from\s*['"]\.\.\/connectedAccounts\.js['"]/u,
         );
-        expect(source).toContain('export type VoiceSchema<TOutput> = Readonly<{');
-        expect(source).toContain('array(): VoiceSchema<TOutput[]>;');
+        expect(source).toContain("import * as z from 'zod/mini';");
+        expect(contracts).toContain('export type VoiceSchema<TOutput> = z.ZodMiniType<TOutput>;');
         expect(source).toContain('export function createVoiceRecordSchema');
         expect(source).toContain('export function withVoiceSchemaField');
         expect(publicIndexSource).toContain(
@@ -472,22 +477,27 @@ describe('Voice package-local publication projection', () => {
         );
     });
 
-    it('keeps Voice source companion declarations neutral and typed', async () => {
-        const [projectionsDeclaration, clientDeclaration] = await Promise.all([
+    it('keeps Voice source companion declarations typed through native Mini', async () => {
+        const [projectionsDeclaration, clientDeclaration, contractsDeclaration] = await Promise.all([
             readFile(new URL('../../dist/voice/projections.d.ts', import.meta.url), 'utf8'),
             readFile(new URL('../../dist/voice/client.d.ts', import.meta.url), 'utf8'),
+            readFile(new URL('../../dist/voice/contracts.d.ts', import.meta.url), 'utf8'),
         ]);
 
-        for (const declaration of [projectionsDeclaration, clientDeclaration]) {
-            expect(declaration).not.toMatch(/\bzod\b|\b_zod\b/u);
+        expect(contractsDeclaration).toContain("from 'zod/mini';");
+        for (const declaration of [projectionsDeclaration, clientDeclaration, contractsDeclaration]) {
+            expect(declaration).not.toContain("from 'zod';");
         }
+        expect(projectionsDeclaration).toContain("from './contracts.js';");
+        expect(clientDeclaration).toContain("from './contracts.js';");
+        expect(clientDeclaration).not.toMatch(/\b_zod\b/u);
         expect(projectionsDeclaration).toContain(
             "from '@happier-dev/protocol/plugins/contributions/voice';",
         );
-        expect(projectionsDeclaration).toContain(
+        expect(contractsDeclaration).toContain(
             "from '@happier-dev/protocol/voice/realtime';",
         );
-        expect(projectionsDeclaration).toContain('array(): VoiceSchema<TOutput[]>;');
+        expect(contractsDeclaration).toContain('VoiceSchema<TOutput> = z.ZodMiniType<TOutput>');
         expect(clientDeclaration).toContain(
             'VoiceRealtimeJsonValueSchema: VoiceSchema<VoiceRealtimeJsonValue>',
         );
@@ -566,6 +576,34 @@ describe('Voice package-local publication projection', () => {
             .toBe(ProtocolVoiceModelPackTransducerArtifactsV1Schema);
         expect(VoiceProviderContributionSchema).toBe(ProtocolVoiceProviderContributionSchema);
 
+        const schemaPairs = [
+            [VoiceCredentialSlotIdSchema, ProtocolVoiceCredentialSlotIdSchema],
+            [VoiceModelPackContributionV1Schema, ProtocolVoiceModelPackContributionV1Schema],
+            [VoiceModelPackDirectoryArtifactV1Schema, ProtocolVoiceModelPackDirectoryArtifactV1Schema],
+            [VoiceModelPackExecutionHostV1Schema, ProtocolVoiceModelPackExecutionHostV1Schema],
+            [VoiceModelPackFileArtifactV1Schema, ProtocolVoiceModelPackFileArtifactV1Schema],
+            [VoiceModelPackKokoroArtifactsV1Schema, ProtocolVoiceModelPackKokoroArtifactsV1Schema],
+            [VoiceModelPackLicenseV1Schema, ProtocolVoiceModelPackLicenseV1Schema],
+            [VoiceModelPackLocalIdV1Schema, ProtocolVoiceModelPackLocalIdV1Schema],
+            [VoiceModelPackManifestV1Schema, ProtocolVoiceModelPackManifestV1Schema],
+            [VoiceModelPackRuntimeV1Schema, ProtocolVoiceModelPackRuntimeV1Schema],
+            [VoiceModelPackSupportArtifactKindV1Schema, ProtocolVoiceModelPackSupportArtifactKindV1Schema],
+            [VoiceModelPackSupportArtifactV1Schema, ProtocolVoiceModelPackSupportArtifactV1Schema],
+            [VoiceModelPackTransducerArtifactsV1Schema, ProtocolVoiceModelPackTransducerArtifactsV1Schema],
+            [VoiceProviderContributionSchema, ProtocolVoiceProviderContributionSchema],
+        ] as const;
+        for (const [schema, canonical] of schemaPairs) {
+            expect(z.optional(schema).parse(undefined)).toBeUndefined();
+            expect(z.array(z.optional(schema)).parse([undefined])).toEqual([undefined]);
+            expect(z.array(schema).safeParse([undefined]).success).toBe(false);
+            for (const value of ['api_key', null, 17, { type: 'file', path: 'model.bin' }]) {
+                const expected = canonical.safeParse(value);
+                const actual = schema.safeParse(value);
+                expect(actual.success).toBe(expected.success);
+                if (actual.success && expected.success) expect(actual.data).toEqual(expected.data);
+            }
+        }
+
         expectTypeOf<VoiceAvailabilityPlatform>().toEqualTypeOf<'web' | 'ios' | 'android'>();
         expectTypeOf<VoiceConversationProviderRole>().toEqualTypeOf<
             'conversation_stt' | 'conversation_tts' | 'realtime_conversation' | 'turn_control'
@@ -593,10 +631,8 @@ describe('Voice package-local publication projection', () => {
         expectTypeOf<VoiceTranscriptCanonicalEvent>().toMatchTypeOf<
             ProtocolVoiceTranscriptCanonicalEventV1
         >();
-        expectTypeOf<ReturnType<VoiceSchema<VoiceRealtimeJsonValue>['optional']>>()
-            .toEqualTypeOf<VoiceSchema<VoiceRealtimeJsonValue | undefined>>();
-        expectTypeOf<ReturnType<VoiceSchema<VoiceRealtimeJsonValue>['array']>>()
-            .toEqualTypeOf<VoiceSchema<VoiceRealtimeJsonValue[]>>();
+        expectTypeOf<VoiceSchema<VoiceRealtimeJsonValue>>()
+            .toEqualTypeOf<z.ZodMiniType<VoiceRealtimeJsonValue>>();
 
         expectTypeOf<VoiceAccountOperationService>()
             .toEqualTypeOf<CurrentVoiceAccountOperationService>();

@@ -4,7 +4,7 @@ import { mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promis
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { configuration } from '@/configuration';
-import { createLocalScmRepositoryFixture } from '@/scm/contracts/scmBackendContractFixtures';
+import { createLocalScmRepositoryFixture } from '@/testkit/scm/scmBackendContractFixtures';
 import { encodeRepositoryCheckpointScope } from '../checkpoints/refs';
 import { captureScmComparison, deleteCapturedScmComparison, prepareCapturedScmComparisonInvestigation, readCapturedScmComparison } from './captureScmComparison';
 

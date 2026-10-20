@@ -81,6 +81,15 @@ export function ConnectedServicesConnectMore(props: ConnectedServicesConnectMore
     const { offered, browse: hasBrowse } = selectConnectMoreOffer({ layout: props.layout, catalog, connectableKeys, hidden });
 
     const [openId, setOpenId] = React.useState<string | null>(null);
+    const liveOpenOffer = offered.find(entry => entry.serviceKey === openId) ?? null;
+    const [openOffer, setOpenOffer] = React.useState<ConnectedServiceSetupCatalogEntry | null>(null);
+    React.useLayoutEffect(() => {
+        setOpenOffer(current => !openId || openId === CONNECT_MORE_BROWSE_ID ? null
+            : liveOpenOffer ?? (current?.serviceKey === openId ? current : null));
+    }, [liveOpenOffer, openId]);
+    // An open invitation is the flow's mounting slot until the person closes it;
+    // catalog refresh must not remove that ancestor while setup is in progress.
+    const visibleOffers = !liveOpenOffer && openOffer !== null && openOffer.serviceKey === openId ? [...offered, openOffer] : offered;
     const [target, setTarget] = React.useState<ConnectedServiceSetupTarget>({ kind: 'catalog' });
     const rootRef = React.useRef<View>(null);
     const { onOpenChange, onRequestHandled, onConnected, request } = props;
@@ -132,7 +141,7 @@ export function ConnectedServicesConnectMore(props: ConnectedServicesConnectMore
         />
     );
 
-    const items: SetupBlockItem[] = offered.map((entry) => ({
+    const items: SetupBlockItem[] = visibleOffers.map((entry) => ({
         id: entry.serviceKey,
         renderTile: ({ open }) => {
             const start = () => {
@@ -171,7 +180,7 @@ export function ConnectedServicesConnectMore(props: ConnectedServicesConnectMore
         },
         renderPanel,
     }));
-    if (hasBrowse) {
+    if (hasBrowse || openId === CONNECT_MORE_BROWSE_ID) {
         const rest = addable.filter((entry) => !offered.includes(entry));
         const marked = (props.layout === 'firstRun' ? rest : tools.length > 0 ? tools : rest).slice(0, 3);
         const browse = (open: () => void) => () => {

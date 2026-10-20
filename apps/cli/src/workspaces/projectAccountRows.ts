@@ -37,6 +37,9 @@ import { createCliPromptLibraryStore } from '@/settings/prompts/promptLibrarySto
 import { refreshActivePromptLibraryCatalogAfterChange } from '@/settings/prompts/hydratePromptLibraryCatalog';
 import { getActiveAccountSettingsSnapshotLifetimeToken } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import type { SavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { runTracedExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
+import { classifyServerEndpointError } from '@/api/client/classifyServerEndpointError';
+import { createHttpStatusError } from '@/api/client/httpStatusError';
 
 export type OpenedProjectAccountRow = Readonly<{ key: ProjectAccountRowKeyV1; revision: number; payload: ProjectAccountRowPayloadV1 | null }>;
 export type ActiveProjectAccountRowsSnapshot = ProjectAccountSnapshotV1 & Readonly<{
@@ -88,16 +91,18 @@ export type ProjectAccountSessionCustody = Readonly<{ serverId: string; accountI
 export type ProjectAccountRowsInput = Readonly<({ credentials: StoredCredentials; sessionCustody?: ProjectAccountSessionCustody; authorization?: never; effectActionId?: never }
   | { credentials?: never; sessionCustody?: never; authorization: ExternalActionExecutionAuthorizationV1; effectActionId: string })
   & { serverId?: string; signal?: AbortSignal;
+    /** Installed Account owners may establish or recover the global projection. Other raw reads must match its scope. */
+    publication?: 'installed';
     /** A host-owned effect also retains its captured Machine/lifecycle authority at each HTTP admission. */
     assertCurrentAuthority?: () => Promise<void> }>;
-export type ProjectRuntimeAccountAccess = Readonly<{ credentials: StoredCredentials; accountAuthorization?: never }>
+export type ProjectRuntimeAccountAccess = Readonly<{ credentials: StoredCredentials; sessionCustody?: ProjectAccountSessionCustody; accountAuthorization?: never }>
   | Readonly<{ credentials?: never; accountAuthorization: ExternalActionExecutionAuthorizationV1 }>;
 
 /** Preparation reads spend the captured root, which may enclose an approved unsigned effect. */
 export function projectRuntimeAccountRowsInput(runtime: ProjectRuntimeAccountAccess): ProjectAccountRowsInput {
   return runtime.accountAuthorization ? { authorization: runtime.accountAuthorization,
     effectActionId: runtime.accountAuthorization.binding.actionId }
-    : { credentials: runtime.credentials };
+    : { credentials: runtime.credentials, ...(runtime.sessionCustody ? { sessionCustody: runtime.sessionCustody } : {}) };
 }
 type ReadInput = ProjectAccountRowsInput;
 async function assertRequesterCurrent(input: ReadInput): Promise<void> {
@@ -132,9 +137,13 @@ function scopeKey(input: ReadInput) {
   return `${input.serverId ?? configuration.activeServerId}:${input.authorization?.requesterAccountProjection?.accountId ?? input.sessionCustody?.accountId
     ?? resolveAccountSettingsScopeKey(input.credentials!)}`;
 }
+function canPublish(input: ReadInput): boolean {
+  // Credentials alone establish read authority, never a new daemon Account scope.
+  return !input.authorization && !input.sessionCustody
+    && (input.publication === 'installed' || active?.scopeKey === scopeKey(input));
+}
 function acceptSnapshot(input: ReadInput, snapshot: ActiveProjectAccountRowsSnapshot) {
-  // A private invocation must not replace the daemon Account's live Sync projection.
-  return input.authorization || input.sessionCustody ? snapshot : publish(snapshot);
+  return canPublish(input) ? publish(snapshot) : snapshot;
 }
 function headers(credentials: StoredCredentials) {
   return { ...buildCurrentAccountStoredContentCompatibilityHttpHeaders(), Authorization: `Bearer ${credentials.token}`, 'Content-Type': 'application/json' };
@@ -150,9 +159,13 @@ async function readMode(input: ReadInput): Promise<'plain' | 'e2ee'> {
   if (input.authorization) {
     return input.authorization.requesterAccountProjection!.accountEncryptionMode;
   }
-  const result = await readAccountEncryptionModeOnce({ request: () => axios.get(`${baseUrl(input)}/v1/account/encryption`, {
+  const result = await readAccountEncryptionModeOnce({
+    ...(input.credentials ? { scope: { token: input.credentials.token, serverBaseUrl: baseUrl(input), signal: input.signal } } : {}),
+    request: () => axios.get(`${baseUrl(input)}/v1/account/encryption`, {
     headers: headers(input.credentials), validateStatus: () => true, ...(input.signal ? { signal: input.signal } : {}),
   }) });
+  if (result.kind === 'http_error') throw createHttpStatusError(result.status, 'Project Account mode is unavailable',
+    result.status >= 500 ? 'project_account_rows_unavailable' : 'project_account_mode_unavailable');
   if (result.kind !== 'resolved') throw rowError('project_account_mode_unavailable');
   if (result.mode === 'e2ee' && !hasUsableAccountSettingsEncryptionMaterial(input.credentials)) throw new AccountSettingsEncryptionMaterialUnavailableError();
   return result.mode;
@@ -234,6 +247,10 @@ async function fetchSnapshot(input: ReadInput, mode: 'plain' | 'e2ee'): Promise<
   const response = await axios.post(`${baseUrl(input)}${path}`, {}, {
     headers: await requestHeaders(input, path, {}), validateStatus: () => true, ...(input.signal ? { signal: input.signal } : {}),
   });
+  // The predecessor Home has no Project-row route. Keep unsupported distinct
+  // from an empty census; explicit accepted Project addresses must still refuse.
+  if (response.status === 404) throw rowError('project_account_rows_unsupported');
+  if (response.status !== 200) throw createHttpStatusError(response.status, 'Project rows are unavailable', 'project_account_rows_unavailable');
   const result = ProjectAccountRowListResponseV1Schema.parse(response.data);
   if (result.status !== 'listed') throw rowError(`project_account_rows_${result.status}`);
   await assertRequesterCurrent(input);
@@ -273,15 +290,23 @@ function applyAcknowledgedRows(snapshot: ActiveProjectAccountRowsSnapshot, rows:
   for (const row of rows) accepted.set(buildProjectAccountRowPhysicalKeyV1(row.key), row);
   return projectSnapshotFromRows([...accepted.values()], snapshot.scopeKey);
 }
-export async function readProjectAccountRows(input: ReadInput): Promise<ActiveProjectAccountRowsSnapshot> {
+export type ProjectAccountRowsObservation = Readonly<{
+  snapshot: ActiveProjectAccountRowsSnapshot;
+  isCurrent(): Promise<boolean>;
+}>;
+
+export async function readProjectAccountRowsObservation(input: ReadInput): Promise<ProjectAccountRowsObservation> {
   const bound = { ...input, serverId: input.serverId ?? input.authorization?.requesterAccountProjection?.serverId ?? configuration.activeServerId };
+  const trace = <T>(stage: string, operation: () => T | Promise<T>) => runTracedExternalActionStage(
+    bound.authorization?.binding.actionId ?? '', bound.authorization?.binding.requestId, stage, operation);
   return await runWithServerHttpBaseUrl(baseUrl(bound), async () => {
     try {
       input.signal?.throwIfAborted();
-      const snapshot = await fetchSnapshot(bound, await readMode(bound));
+      const mode = await trace('project_rows.mode', () => readMode(bound));
+      const snapshot = await trace('project_rows.fetch', () => fetchSnapshot(bound, mode));
       // Source-backed Projects take their current context from shared attachments;
       // the personal organization remains stored but is not their context layer.
-      if (bound.credentials && !bound.sessionCustody) {
+      if (bound.credentials && canPublish(bound)) {
         for (const organization of snapshot.organizations) {
           if (snapshot.workspaceRefs.some(ref => ref.serverId === organization.key.serverId
             && ref.projectKey === organization.key.projectKey && ref.source)) continue;
@@ -291,12 +316,29 @@ export async function readProjectAccountRows(input: ReadInput): Promise<ActivePr
         }
       }
       input.signal?.throwIfAborted();
-      return acceptSnapshot(input, snapshot);
+      const published = canPublish(bound);
+      const accepted = acceptSnapshot(bound, snapshot);
+      return { snapshot: accepted, isCurrent: async () => {
+        try { await assertRequesterCurrent(bound); }
+        catch { return false; }
+        // Private reads belong to the captured invocation, not the installed
+        // Account projection. Only published reads follow its topology changes.
+        return !published || active !== null && active.scopeKey === accepted.scopeKey
+          && isDeepStrictEqual(active.workspaceRefs, accepted.workspaceRefs)
+          && isDeepStrictEqual(active.relationships, accepted.relationships);
+      } };
     } catch (error) {
-      if (!input.authorization && !input.sessionCustody && (!active || active.scopeKey === scopeKey(bound))) withdrawActiveProjectAccountRowsSnapshot();
+      // A failed refresh is not evidence that accepted stored rows disappeared.
+      // Auth, envelope, mode and schema failures still withdraw the projection.
+      if (!classifyServerEndpointError(error).retryable
+        && canPublish(bound) && (!active || active.scopeKey === scopeKey(bound))) withdrawActiveProjectAccountRowsSnapshot();
       throw error;
     }
   });
+}
+
+export async function readProjectAccountRows(input: ReadInput): Promise<ActiveProjectAccountRowsSnapshot> {
+  return (await readProjectAccountRowsObservation(input)).snapshot;
 }
 
 export type ProjectStackSkillMigrationResult = Readonly<{ status: 'ready' | 'unavailable' }>;

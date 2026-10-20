@@ -2,6 +2,7 @@ import type { StoredCredentials } from '@/persistence';
 import { updateSessionMetadataWithRetry, verifySessionMetadataMutationCurrentness,
     type SessionMetadataMutationCurrentness } from '@/session/metadata/updateSessionMetadataWithRetry';
 import { fetchSessionByIdCompat } from '@/session/transport/http/sessionsHttp';
+import { fetchAccountEncryptionCurrentness } from '@/api/client/connectedServiceCredentialApi';
 import type { TerminalMode } from '@/terminal/runtime/terminalConfig';
 import { configuration } from '@/configuration';
 import { isPidPresent } from '@happier-dev/cli-common/process';
@@ -22,10 +23,10 @@ export type TerminalControlServiceabilityRetirementTarget = Readonly<{ attachmen
 export async function readRetainedPlainRunnerExitMarker(tracked: TrackedSession): Promise<DaemonSessionMarker | null> {
     const pid = tracked.sessionRunnerPid ?? tracked.pid;
     const startTimeMs = tracked.runnerProcessIdentity?.processStartTimeMs ?? tracked.processStartTimeMs;
-    if (tracked.startedBy !== 'daemon' || !tracked.happySessionId || startTimeMs === undefined
+    if (!tracked.happySessionId || startTimeMs === undefined
         || isPidPresent(pid) || (pid !== tracked.pid && isPidPresent(tracked.pid))) return null;
     const marker = await readSessionMarkerForPid(pid);
-    if (!marker || marker.startedBy !== 'daemon' || marker.happySessionId !== tracked.happySessionId
+    if (!marker || marker.startedBy !== tracked.startedBy || marker.happySessionId !== tracked.happySessionId
         || marker.processStartTimeMs !== startTimeMs) return null;
     const attachment = await readTerminalHostAttachmentState({ happyHomeDir: configuration.happyHomeDir, sessionId: marker.happySessionId });
     return attachment.status === 'absent' ? marker : null;
@@ -52,41 +53,101 @@ export async function retireExactTerminalControlServiceability(params: Readonly<
     credentials: StoredCredentials;
     sessionId: string;
     currentness?: SessionMetadataMutationCurrentness;
+    resolveAuthorizationHeaders?: Parameters<typeof updateSessionMetadataWithRetry>[0]['resolveAuthorizationHeaders'];
+    /** Supplied only by the physical Stop owner after positive process/host retirement. */
+    stoppedAt?: number;
 }> & TerminalControlServiceabilityRetirementTarget): Promise<ExactTerminalControlServiceabilityRetirement> {
     const matchesExpectedRunner = (metadata: Readonly<{ hostPid?: number; hostProcessStartTimeMs?: number }>) =>
         !params.expectedRunner || (metadata.hostPid === params.expectedRunner.pid
             && (params.expectedRunner.startTimeMs === undefined || metadata.hostProcessStartTimeMs === params.expectedRunner.startTimeMs));
     await verifySessionMetadataMutationCurrentness(params.currentness);
-    const rawSession = await fetchSessionByIdCompat({
-        token: params.credentials.token,
-        sessionId: params.sessionId,
-    });
+    const currentnessHeaders = params.resolveAuthorizationHeaders?.({ method: 'GET', path: '/v1/account/encryption/currentness' });
+    if (params.resolveAuthorizationHeaders && !currentnessHeaders) throw new Error('Terminal retirement Account authorization unavailable');
+    // These independent Home reads share the same admitted Account. The tuple
+    // writer still checks requester currentness immediately before its CAS.
+    const [rawSession, accountEncryptionCurrentness] = await Promise.all([
+        fetchSessionByIdCompat({
+            token: params.credentials.token,
+            sessionId: params.sessionId,
+            ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
+        }),
+        fetchAccountEncryptionCurrentness({ token: params.credentials.token,
+            ...(currentnessHeaders ? { authorizationHeaders: currentnessHeaders } : {}) }),
+    ]);
     if (!rawSession) {
-        throw new Error('terminal_control_serviceability_retirement_session_not_found');
+        // Callers prove physical retirement before reaching this publication step.
+        // A deleted Session has no remaining control projection to clear.
+        await verifySessionMetadataMutationCurrentness(params.currentness);
+        return 'retired';
     }
+    let retiredAttachmentId = params.attachmentId;
+    let projectionAlreadyAbsent = false;
+    const withStoppedLifecycle = (metadata: Record<string, unknown>) => params.stoppedAt === undefined
+        || metadata.lifecycleState === 'stopped' && typeof metadata.lifecycleStateSince === 'number'
+        ? metadata
+        : { ...metadata, lifecycleState: 'stopped', lifecycleStateSince: params.stoppedAt };
     const updated = await updateSessionMetadataWithRetry({
         token: params.credentials.token,
         credentials: params.credentials,
         sessionId: params.sessionId,
         rawSession,
+        accountEncryptionCurrentness,
         currentness: params.currentness,
-        updater: (metadata) => {
+        ...(params.resolveAuthorizationHeaders ? { resolveAuthorizationHeaders: params.resolveAuthorizationHeaders } : {}),
+        updater: async (metadata) => {
+            retiredAttachmentId = params.attachmentId;
+            projectionAlreadyAbsent = false;
             if (!matchesExpectedRunner(metadata)) return metadata;
-            return clearTerminalControlServiceabilityProjection({
+            if (params.expectedRunner) {
+                const attachment = await readTerminalHostAttachmentState({
+                    happyHomeDir: configuration.happyHomeDir, sessionId: params.sessionId,
+                });
+                if (attachment.status !== 'absent' || isPidPresent(params.expectedRunner.pid)) {
+                    throw new Error('terminal_control_serviceability_retirement_runner_or_host_unresolved');
+                }
+                // Runner-bound retirement also clears that departed runner's
+                // historical host projection. A current descriptor or a newer
+                // metadata runner cannot lend authority to this mutation.
+                const terminal = metadata.terminal;
+                // A mode-only terminal descriptor already has no control projection.
+                // Retain the incumbent legacy path when terminal metadata is absent.
+                if (terminal && typeof terminal === 'object' && !Array.isArray(terminal)
+                    && !('controlServiceabilityV1' in terminal)) {
+                    projectionAlreadyAbsent = true;
+                    return withStoppedLifecycle(metadata);
+                }
+                if (terminal && typeof terminal === 'object' && !Array.isArray(terminal)) {
+                    const serviceability = (terminal as Record<string, unknown>).controlServiceabilityV1;
+                    if (serviceability && typeof serviceability === 'object' && !Array.isArray(serviceability)) {
+                        const attachmentId = (serviceability as Record<string, unknown>).attachmentId;
+                        if (typeof attachmentId === 'string' && attachmentId.trim()) retiredAttachmentId = attachmentId;
+                    }
+                }
+            }
+            const retired = clearTerminalControlServiceabilityProjection({
                 metadata,
-                retiredAttachmentId: params.attachmentId,
+                retiredAttachmentId,
                 retiredAt: Date.now(),
                 terminalMode: params.terminalMode,
             });
+            const serviceability = retired.terminal && typeof retired.terminal === 'object' && !Array.isArray(retired.terminal)
+                ? (retired.terminal as Record<string, unknown>).controlServiceabilityV1 : null;
+            // Clearing a stale attachment is a no-op. It cannot authorize a
+            // terminal fact about the replacement that now owns the Session.
+            return serviceability && typeof serviceability === 'object' && !Array.isArray(serviceability)
+                && (serviceability as Record<string, unknown>).attachmentId === retiredAttachmentId
+                && (serviceability as Record<string, unknown>).retired === true
+                ? withStoppedLifecycle(retired) : retired;
         },
     });
     if (!matchesExpectedRunner(updated.metadata)) return 'superseded';
+    if (projectionAlreadyAbsent) return 'retired';
     const terminal = updated.metadata.terminal;
     if (!terminal || typeof terminal !== 'object' || Array.isArray(terminal)) return 'superseded';
     const serviceability = (terminal as Record<string, unknown>).controlServiceabilityV1;
     if (!serviceability || typeof serviceability !== 'object' || Array.isArray(serviceability)) return 'superseded';
     const projection = serviceability as Record<string, unknown>;
-    return projection.attachmentId === params.attachmentId && projection.retired === true
+    return projection.attachmentId === retiredAttachmentId && projection.retired === true
         ? 'retired'
         : 'superseded';
 }

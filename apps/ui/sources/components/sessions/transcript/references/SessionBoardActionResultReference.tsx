@@ -175,6 +175,7 @@ function MountedSessionBoardReference(props: Readonly<{
     const currentness = resolveSessionBoardExecutableCurrentness({
         capabilities: { readTranscript: true, editSessionRecords: false },
         reachability: binding.reachability, freshness: binding.freshness,
+        loading: binding.loading,
         itemsById: new Map([[itemId, item]]),
     }, item, pluginRuntime);
 
@@ -187,9 +188,18 @@ function MountedSessionBoardReference(props: Readonly<{
             variant="plain"
             accessibilityLabel={t('sessionBoard.inline.openPanelA11y', { title })}
             tooltip={t('sessionBoard.inline.openPanel')}
-            onPress={() => companionReveal.revealBoardItem(itemId)}
+            onPress={() => {
+                // Opening it in the panel is the latest choice, so the panel runs it again.
+                mounted?.releaseInlineTranscriptItem(itemId);
+                companionReveal.revealBoardItem(itemId);
+            }}
         />
     ) : null;
+    // This reply previews an item that runs elsewhere (a Board host, or another reply). "Show here"
+    // makes this reply the one live body; the other copies then say where it runs.
+    const showHere = mounted && primaryHost !== 'inlineTranscript'
+        ? () => mounted.showInlineTranscriptItem(itemId, occurrence)
+        : undefined;
     // Pin is the Board layout owner's existing `item.pin` command on this same item. It is offered
     // only while no Board view places the item; Unpin stays on the Board card that shows it.
     const boardController = mounted?.controller;
@@ -212,6 +222,7 @@ function MountedSessionBoardReference(props: Readonly<{
         reportedHeight: intrinsicHeight,
         resolveSourceAvailability,
         ...(openInPanel ? { headerAccessory: openInPanel } : {}),
+        ...(showHere ? { onOpenHere: showHere, openActionLabel: t('sessionBoard.inline.showHere') } : {}),
         ...(pinToBoard ? { onPinToBoard: pinToBoard } : {}),
         ...(pluginRuntime ? { pluginRuntime } : {}),
         ...(callerHostedHtmlRuntime ? { callerHostedHtmlRuntime } : {}),

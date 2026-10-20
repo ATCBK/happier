@@ -27,7 +27,7 @@ import {
 } from '@/daemon/spawn/pendingFirstInput'
 import { bindHerdrAgentIfNeeded } from '@/integrations/herdr/bindManagedSession'
 import { readSessionCreateOriginFromEnv } from '@/session/shared/sessionCreateOrigin'
-import { readSessionCreateReportsToFromEnv } from '@/session/shared/sessionCreateReportsTo'
+import { readSessionCreateManagerFromEnv } from '@/session/shared/sessionCreateManager'
 import { readSessionCreateRolesFromEnv } from '@/session/shared/sessionCreateRoles'
 import { claimSessionRunnerOwnership, readSessionRunnerLockStatus } from '@/daemon/sessionRunnerLock'
 import { configuration } from '@/configuration'
@@ -42,7 +42,7 @@ export interface InitializeBackendRunSessionOptions {
   sessionTag: string
   organizationPlacement?: import('@happier-dev/protocol').SessionOrganizationPlacementV1
   initialAccess?: import('@happier-dev/protocol').SessionInitialAccessDraftV1
-  reportsTo?: import('@happier-dev/protocol').SessionReportsToV1
+  manager?: import('@happier-dev/protocol').SessionManagerV1
   primaryTeamId?: string | null
   teamCredentialBindings?: import('@happier-dev/protocol/teams').SessionTeamCredentialBindingIntentListV1
   metadata: Metadata
@@ -511,11 +511,11 @@ export async function initializeBackendRunSession(
   }) : opts.metadata
   let response: Awaited<ReturnType<ApiClient['getOrCreateSession']>>
   try {
-    const reportsTo = opts.reportsTo ?? readSessionCreateReportsToFromEnv();
+    const manager = opts.manager ?? readSessionCreateManagerFromEnv();
     const initialSessionRolesV1 = readSessionCreateRolesFromEnv();
     response = await opts.api.getOrCreateSession({
       ...readSessionCreateOriginFromEnv(),
-      ...(reportsTo !== undefined ? { reportsTo } : {}),
+      ...(manager !== undefined ? { manager } : {}),
       tag: opts.sessionTag,
       metadata: initialSessionRolesV1
         ? { ...birthMetadata, work: { ...birthMetadata.work, sessionRolesV1: initialSessionRolesV1 } }

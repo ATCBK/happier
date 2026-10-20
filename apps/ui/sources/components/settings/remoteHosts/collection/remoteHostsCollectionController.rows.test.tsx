@@ -2,17 +2,19 @@ import * as React from 'react';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { act } from 'react-test-renderer';
-import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { loadVitestModuleForNodeRequire } from '@/dev/vitestRnShim';
 import { createDeferred, createExpoRouterMock, createModalModuleMock, createPlainAccountEncryptionCurrentnessFixture, renderHook, renderScreen, renderInCollectionLayout, standardCleanup } from '@/dev/testkit';
 import type { IModal } from '@/modal';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { RemoteHostCatalogRowMutationV1Schema, type RemoteHostCatalogRowReadResponseV1 } from '@happier-dev/protocol/remoteHosts/remoteHostRecordV1';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
+beforeEach(() => installHomeGovernanceBoundaries(home));
 let currentPathname = '/';
 const navigationBoundary = createExpoRouterMock({ pathname: () => currentPathname });
 vi.doMock('expo-router', () => navigationBoundary.module);
@@ -32,6 +34,7 @@ afterAll(() => { disposeNativeStorage?.(); });
 // Install boundaries before importing real owners. The temporary source diagnostic
 // established this collection order; concurrent root imports did not settle.
 // Cold module evaluation is not a user's catalog operation.
+await loadSyncSingletonForTests();
 await import('@/sync/domains/state/storageStore');
 await import('@/sync/store/hooks');
 const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
@@ -53,6 +56,7 @@ const { t } = await import('@/text');
 
 afterEach(async () => {
   await standardCleanup();
+  resetRemoteHostCatalogEngineForTests();
   publishAppliedActiveServerRuntimeAvailability(false);
   currentPathname = '/';
   await home.reset();

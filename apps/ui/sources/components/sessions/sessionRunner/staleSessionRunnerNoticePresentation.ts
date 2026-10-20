@@ -14,6 +14,7 @@ export type StaleSessionRunnerTranslationKey =
     | 'session.staleRunner.banner.busyBody'
     | 'session.staleRunner.banner.failedBody'
     | 'session.staleRunner.banner.unavailableBody'
+    | 'session.staleRunner.banner.stopAndResumeBody'
     | 'session.staleRunner.actions.restart'
     | 'session.staleRunner.actions.restarting'
     | 'session.staleRunner.actions.hideBanner'
@@ -72,11 +73,18 @@ function isRestartBusy(state: SessionRunnerRuntimeStateV1): boolean {
         || state.plannedRestart.disabledReason === 'restart_already_running';
 }
 
+function requiresStopAndResume(state: SessionRunnerRuntimeStateV1, status: StaleSessionRunnerOperationStatus | null): boolean {
+    return state.plannedRestart.disabledReason === 'restart_admission_unsupported'
+        || (status?.kind === 'result' && (status.result.status === 'restart_admission_unsupported'
+            || status.result.reasonCode === 'restart_admission_unsupported'));
+}
+
 function resolveBodyKey(
     state: SessionRunnerRuntimeStateV1,
     status: StaleSessionRunnerOperationStatus | null,
 ): StaleSessionRunnerTranslationKey {
     if (status?.kind === 'pending') return 'session.staleRunner.banner.pendingBody';
+    if (requiresStopAndResume(state, status)) return 'session.staleRunner.banner.stopAndResumeBody';
     if (status?.kind === 'result') {
         if (status.result.status === 'busy') return 'session.staleRunner.banner.busyBody';
         if (status.result.ok === false) return 'session.staleRunner.banner.failedBody';
@@ -107,7 +115,8 @@ export function buildStaleSessionRunnerNoticePresentation(input: Readonly<{
     if (input.runtimeState.versionState !== 'stale') return null;
 
     const pending = input.operationStatus?.kind === 'pending';
-    const restartAvailable = isRestartAvailable(input.runtimeState);
+    const restartAvailable = isRestartAvailable(input.runtimeState)
+        && !requiresStopAndResume(input.runtimeState, input.operationStatus);
     const restartBusy = isRestartBusy(input.runtimeState);
     const labelKey = resolveBadgeLabelKey(input.runtimeState, input.operationStatus);
     const actionLabelKey = pending

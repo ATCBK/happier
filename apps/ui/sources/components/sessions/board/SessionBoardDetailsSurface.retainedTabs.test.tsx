@@ -292,7 +292,6 @@ function BoardOwner(props: Readonly<{
                 serverId: ADDRESS.serverId,
                 binding: props.binding,
                 actions: props.actions,
-                confirmDestructive: async () => true,
                 callerHostedHtmlAvailable: true,
                 onManagePlugin: retainedPaneHarness.managePlugin,
                 onPrepareEncryption: retainedPaneHarness.prepareEncryption,
@@ -641,7 +640,6 @@ function DestinationOwner(props: Readonly<{
                 serverId: ADDRESS.serverId,
                 binding: props.binding,
                 actions: props.actions,
-                confirmDestructive: async () => true,
                 callerHostedHtmlAvailable: true,
             }}
             binding={props.binding}

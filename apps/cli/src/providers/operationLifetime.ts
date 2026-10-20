@@ -7,14 +7,15 @@
  * promise with no signal, so an unresponsive resolver would otherwise hold a
  * probe RPC — or an admitted scheduler slot — open forever.
  *
- * The lifetime is a deadline plus the caller's existing cancellation signal, not
- * a second timeout: the owner starts it once, before registry/DNS work, and
- * every later stage spends the remaining time rather than restarting the budget.
+ * The lifetime carries the caller's existing cancellation signal and any
+ * owner-defined deadline. Bounded endpoint operations start that deadline once
+ * before registry/DNS work. Launch admission without an owning wall cap keeps
+ * cancellation without borrowing an endpoint probe's budget.
  */
 export type ProviderOperationLifetime = Readonly<{
   /** The caller's existing cancellation interest, when it has one. */
   signal?: AbortSignal;
-  /** Absolute time at which the whole operation's wall budget is spent. */
+  /** Absolute deadline, or Infinity when the containing operation has no wall cap. */
   wallDeadlineAtMs: number;
 }>;
 
@@ -22,16 +23,17 @@ export type ProviderOperationLifetime = Readonly<{
  * Starts the one wall budget shared by a Provider operation. Call this at the
  * public owner before contribution resolution or DNS; downstream work must
  * carry the returned deadline instead of starting a replacement timeout.
+ * Omit wallTimeMs when the containing operation defines no wall cap.
  */
 export function createProviderOperationLifetime(input: Readonly<{
   signal?: AbortSignal;
-  wallTimeMs: number;
+  wallTimeMs?: number;
   now?: () => number;
 }>): ProviderOperationLifetime {
   const now = input.now ?? Date.now;
   return {
     ...(input.signal ? { signal: input.signal } : {}),
-    wallDeadlineAtMs: now() + input.wallTimeMs,
+    wallDeadlineAtMs: input.wallTimeMs === undefined ? Infinity : now() + input.wallTimeMs,
   };
 }
 
@@ -64,18 +66,19 @@ export async function awaitWithinProviderOperation<T>(
   lifetime: ProviderOperationLifetime,
   now: () => number = Date.now,
 ): Promise<T> {
-  if (lifetime.signal?.aborted) throw new ProviderOperationAbandonedError('cancelled');
-  const remainingMs = providerOperationRemainingMs(lifetime, now);
-  if (remainingMs <= 0) throw new ProviderOperationAbandonedError('deadline');
-
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
   const signal = lifetime.signal;
   try {
+    if (signal?.aborted) throw new ProviderOperationAbandonedError('cancelled');
+    const remainingMs = providerOperationRemainingMs(lifetime, now);
+    if (remainingMs <= 0) throw new ProviderOperationAbandonedError('deadline');
     return await Promise.race([
       work,
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new ProviderOperationAbandonedError('deadline')), remainingMs);
+        if (Number.isFinite(remainingMs)) {
+          timer = setTimeout(() => reject(new ProviderOperationAbandonedError('deadline')), remainingMs);
+        }
         if (!signal) return;
         onAbort = () => reject(new ProviderOperationAbandonedError('cancelled'));
         signal.addEventListener('abort', onAbort, { once: true });

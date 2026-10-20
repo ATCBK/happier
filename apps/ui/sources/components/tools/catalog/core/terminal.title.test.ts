@@ -138,4 +138,26 @@ describe('coreTerminalTools.Bash.title', () => {
         expect(coreTerminalTools.Bash.extractDescription?.({ metadata: null, tool })).toBe('happier.tools');
         expect(coreTerminalTools.Bash.extractSubtitle?.({ metadata: null, tool })).toBe('happier.tools.list');
     });
+
+    it('keeps the full command as the subtitle only when the title does not already say it', async () => {
+        const { coreTerminalTools } = await import('./terminal');
+        const toolFor = (command: string) => ({
+            name: 'Bash',
+            state: 'completed',
+            input: { cmd: `/bin/bash -lc ${command}`, command: `/bin/bash -lc ${command}` },
+            result: { stdout: '' },
+            createdAt: Date.now(),
+            startedAt: Date.now(),
+            completedAt: Date.now(),
+            description: 'execute',
+        } as any);
+
+        // "Run pwd" already names the whole command; a second "pwd" beneath it says nothing new.
+        expect(coreTerminalTools.Bash.title({ metadata: null, tool: toolFor('pwd') })).toBe('Run pwd');
+        expect(coreTerminalTools.Bash.extractSubtitle?.({ metadata: null, tool: toolFor('pwd') })).toBeNull();
+        // With arguments the title names only the program, so the subtitle carries the rest.
+        expect(coreTerminalTools.Bash.title({ metadata: null, tool: toolFor("'git status --short'") })).toBe('Run git');
+        expect(coreTerminalTools.Bash.extractSubtitle?.({ metadata: null, tool: toolFor("'git status --short'") }))
+            .toBe('git status --short');
+    });
 });

@@ -1,18 +1,18 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { computeCanonicalDomainSeparatedDigest } from "@happier-dev/protocol/crypto/canonicalDigest";
 
-const ExactExternalIdSchema = z.string().min(1).max(512);
+const ExactExternalIdSchema = z.string().check(z.minLength(1), z.maxLength(512));
 const TeamDirectoryBindingConfigV1Schema = z.discriminatedUnion("kind", [
-    z.object({
+    z.strictObject({
         v: z.literal(1),
         kind: z.literal("workos_directory"),
-        workosDirectoryId: z.string().min(1).max(256),
-    }).strict(),
-    z.object({
+        workosDirectoryId: z.string().check(z.minLength(1), z.maxLength(256)),
+    }),
+    z.strictObject({
         v: z.literal(1),
         kind: z.literal("github_organization"),
-        githubOrganizationLogin: z.string().trim().min(1).max(256),
-    }).strict(),
+        githubOrganizationLogin: z.string().check(z.trim(), z.minLength(1), z.maxLength(256)),
+    }),
 ]);
 
 export type TeamDirectoryBindingConfigV1 = z.infer<typeof TeamDirectoryBindingConfigV1Schema>;

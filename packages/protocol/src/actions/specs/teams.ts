@@ -88,12 +88,6 @@ import {
 } from './homeDomainRow.js';
 import { redactObservationInputPaths } from './observationRedaction.js';
 import { readRecord } from '../../inputs/inputRecords.js';
-import {
-  TeamCredentialResourceCreateInputV1Schema,
-  TeamCredentialResourceUpdateInputV1Schema,
-  TeamCredentialResourceAudienceInputV1Schema,
-  type TeamCredentialResourceAudienceInputV1,
-} from '../../teams/credentials/resourceV1.js';
 import { TeamMembershipHistoryInputV1Schema, TeamMembershipHistoryReadinessV1Schema,
   TeamMembershipHistoryPreparationResultV1Schema } from '../../teams/membershipHistoryPreparationV1.js';
 
@@ -133,6 +127,7 @@ type TeamProvisioningActionRowInput = Readonly<{
   cliPath: readonly string[];
   presentUser?: boolean;
   agent?: boolean;
+  mcp?: boolean;
   sdkMethod?: string;
   inputSchema: z.ZodMiniType;
   outputSchema: z.ZodMiniType;
@@ -209,34 +204,14 @@ function teamCredentialActionRow<TActionId extends TeamCredentialHomeActionIdV1>
 }>) {
   const row = homeDomainActionRow({
     ...input,
-    ...(['teams.credentials.delete', 'teams.credentials.externalKeys.revoke', 'teams.credentials.externalKeys.revokeAll',
-      'teams.credentials.limits.upsert', 'teams.credentials.limits.delete', 'teams.credentials.test',
+    ...(['teams.credentials.limits.upsert', 'teams.credentials.limits.delete', 'teams.credentials.test',
       'teams.credentials.externalKeys.authorize'].includes(input.id)
       ? { approvalPolicy: { uiConfirmation: 'direct' as const } } : {}),
-    ...(input.id === 'teams.credentials.create' ? { approvalPolicy: {
+    ...(['teams.credentials.create', 'teams.credentials.update', 'teams.credentials.audience.set'].includes(input.id) ? { approvalPolicy: {
       uiConfirmation: 'direct' as const,
-      uiConfirmationForInput: (value: unknown) => {
-        const parsed = TeamCredentialResourceCreateInputV1Schema.safeParse(value);
-        return !parsed.success || credentialAudienceCanDisclose(parsed.data);
-      },
-    } } : {}),
-    ...(input.id === 'teams.credentials.update' ? { approvalPolicy: {
-      uiConfirmation: 'direct' as const,
-      uiConfirmationForInput: (value: unknown) => {
-        const parsed = TeamCredentialResourceUpdateInputV1Schema.safeParse(value);
-        if (!parsed.success) return true;
-        // A nonempty replacement audience can grant access to new people.
-        // This input carries no previous audience with which to prove narrowing.
-        return parsed.data.disclosureCeiling === 'direct_allowed'
-          || (parsed.data.replacement !== undefined && credentialAudienceCanDisclose(parsed.data.replacement));
-      },
-    } } : {}),
-    ...(input.id === 'teams.credentials.audience.set' ? { approvalPolicy: {
-      uiConfirmation: 'direct' as const,
-      uiConfirmationForInput: (value: unknown) => {
-        const parsed = TeamCredentialResourceAudienceInputV1Schema.safeParse(value);
-        return !parsed.success || credentialAudienceCanDisclose(parsed.data);
-      },
+      // Audience and broker policy remain reversible. The credential editor
+      // owns the designed review before drafting actual material disclosure.
+      uiConfirmationForInput: (value: unknown) => !TEAM_CREDENTIAL_ACTION_INPUT_SCHEMAS_V1[input.id].safeParse(value).success,
     } } : {}),
     inputSchema: TEAM_CREDENTIAL_ACTION_INPUT_SCHEMAS_V1[input.id],
     outputSchema: TEAM_CREDENTIAL_ACTION_OUTPUT_SCHEMAS_V1[input.id],
@@ -253,11 +228,6 @@ function teamCredentialActionRow<TActionId extends TeamCredentialHomeActionIdV1>
   return input.id === 'teams.credentials.preparation.get'
     ? { ...row, surfaces: { ...row.surfaces, mcp: true } as const }
     : row;
-}
-
-function credentialAudienceCanDisclose(audience: Pick<TeamCredentialResourceAudienceInputV1,
-  'allMembersDeliveryMode' | 'groupGrants' | 'memberGrants'>): boolean {
-  return audience.allMembersDeliveryMode !== null || audience.groupGrants.length > 0 || audience.memberGrants.length > 0;
 }
 
 /**
@@ -494,16 +464,15 @@ export const TEAM_ACTION_SPECS = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'teams.archive', approval: {result: 'required',flow: 'deferred'},
-    approvalPolicy: { uiConfirmation: 'direct' },
     title: 'Archive Team',
-    description: 'Archive a Team, ending ordinary member access to its work until it is restored.',
+    description: 'Archive a Team, ending ordinary member access until it is restored. Waiting invitations are permanently revoked.',
     safety: 'danger',
     sideEffectClass: 'danger',
     cliPath: ['teams', 'archive'],
     path: '/v1/teams/archive',
     inputSchema: TeamRefInputV1Schema,
     outputSchema: TeamSummaryV1Schema,
-    inputHints: { fields: [TEAM_ID_FIELD] },
+    inputHints: { description: 'Waiting invitations are permanently revoked. Restoring the Team does not restore them.', fields: [TEAM_ID_FIELD] },
   }),
   homeDomainActionRow({
     id: 'teams.restore', approval: {result: 'required',flow: 'deferred'},
@@ -608,7 +577,6 @@ export const TEAM_ACTION_SPECS = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'teams.members.remove', approval: {result: 'required',flow: 'deferred'},
-    approvalPolicy: { uiConfirmation: 'direct' },
     title: 'Remove Team member',
     description: 'End one membership lifetime. Repeating the request answers unchanged rather than failing.',
     safety: 'danger',
@@ -621,7 +589,6 @@ export const TEAM_ACTION_SPECS = Object.freeze([
   }),
   homeDomainActionRow({
     id: 'teams.members.leave', approval: {result: 'required',flow: 'deferred'},
-    approvalPolicy: { uiConfirmation: 'direct' },
     title: 'Leave Team',
     description: 'End your own membership lifetime. Directory-managed members and the final active owner of a live Team cannot leave.',
     safety: 'danger',
@@ -830,7 +797,6 @@ export const TEAM_ACTION_SPECS = Object.freeze([
   }), requiredAuthority: 'present_user' as const },
   homeDomainActionRow({
     id: 'teams.invitations.revoke', approval: {result: 'required',flow: 'deferred'},
-    approvalPolicy: { uiConfirmation: 'direct' },
     title: 'Revoke Team invitation',
     description: 'Stop an outstanding invitation from admitting anyone. A repeated revocation reports the current row.',
     safety: 'danger',
@@ -981,7 +947,6 @@ export const TEAM_ACTION_SPECS = Object.freeze([
   }),
   teamProvisioningActionRow({
     id: 'teams.identity.connections.remove', approval: {result: 'required',flow: 'deferred'},
-    approvalPolicy: { uiConfirmation: 'direct' },
     path: TEAM_IDENTITY_ACTION_PATHS_V1['teams.identity.connections.remove'],
     inputSchema: TEAM_IDENTITY_ACTION_INPUT_SCHEMAS_V1['teams.identity.connections.remove'],
     outputSchema: TEAM_IDENTITY_ACTION_OUTPUT_SCHEMAS_V1['teams.identity.connections.remove'],
@@ -1232,7 +1197,8 @@ export const TEAM_ACTION_SPECS = Object.freeze([
   }),
   teamProvisioningActionRow({
     id: 'teams.directory.sources.remove.preview', approval: {result: 'required'},
-    presentUser: true,
+    approvalPolicy: { requiredSurfaces: ['agent', 'mcp', 'plugin'] },
+    mcp: true,
     method: 'GET',
     path: TEAM_DIRECTORY_ACTION_PATHS_V1['teams.directory.sources.remove.preview'],
     inputSchema: TEAM_DIRECTORY_ACTION_INPUT_SCHEMAS_V1['teams.directory.sources.remove.preview'],
@@ -1245,7 +1211,6 @@ export const TEAM_ACTION_SPECS = Object.freeze([
   }),
   teamProvisioningActionRow({
     id: 'teams.directory.sources.remove', approval: {result: 'required',flow: 'deferred'},
-    approvalPolicy: { uiConfirmation: 'direct' },
     method: 'DELETE',
     path: TEAM_DIRECTORY_ACTION_PATHS_V1['teams.directory.sources.remove'],
     inputSchema: TEAM_DIRECTORY_ACTION_INPUT_SCHEMAS_V1['teams.directory.sources.remove'],
@@ -1255,8 +1220,10 @@ export const TEAM_ACTION_SPECS = Object.freeze([
     safety: 'danger',
     sideEffectClass: 'danger',
     cliPath: ['teams', 'directory', 'sources', 'remove'],
-    // Removal and its preview share present-user requestability and approval.
-    presentUser: true,
+    // Exact API automation exception; the shared danger/approval policy and
+    // current Team-domain authorization still govern the effect.
+    presentUser: false,
+    mcp: true,
     // `remove.preview` occupies the `remove` SDK namespace, so the mutation takes the
     // sibling `remove.execute` path exactly like the identity-connection removal above.
     sdkMethod: 'teams.directory.sources.remove.execute',

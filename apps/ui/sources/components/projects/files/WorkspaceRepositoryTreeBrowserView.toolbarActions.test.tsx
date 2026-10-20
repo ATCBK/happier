@@ -405,8 +405,46 @@ describe('WorkspaceRepositoryTreeBrowserView (toolbar actions)', () => {
             'src/new-file.ts',
             '',
             null,
+            { signal: expect.any(AbortSignal) },
         );
         expect(onOpenFilePinnedSpy).toHaveBeenCalledWith('src/new-file.ts');
+    });
+
+    it('keeps the + control busy while the new file is being written, and releases it when the write settles', async () => {
+        promptSpy.mockResolvedValueOnce('src/slow-file.ts');
+        let finishWrite: (value: { success: true }) => void = () => {};
+        workspaceWriteFileSpy.mockImplementationOnce(() => new Promise((resolve) => { finishWrite = resolve; }));
+
+        const screen = await renderView();
+        expect(screen.findByTestId('repository-tree-create-button-spinner')).toBeNull();
+
+        await act(async () => {
+            menu(screen, 'repository-tree-create-menu')?.props.onSelect('repository-tree-create-file');
+            await settle();
+        });
+        expect(workspaceWriteFileSpy).toHaveBeenCalledTimes(1);
+        expect(screen.findByTestId('repository-tree-create-button-spinner')).toBeTruthy();
+
+        await act(async () => {
+            finishWrite({ success: true });
+            await settle();
+        });
+        expect(screen.findByTestId('repository-tree-create-button-spinner')).toBeNull();
+        expect(onOpenFilePinnedSpy).toHaveBeenCalledWith('src/slow-file.ts');
+    });
+
+    it('releases the + control and keeps the error alert when the write fails', async () => {
+        promptSpy.mockResolvedValueOnce('src/failing-file.ts');
+        workspaceWriteFileSpy.mockResolvedValueOnce({ success: false, error: 'Machine row request timed out' } as any);
+
+        const screen = await renderView();
+        await act(async () => {
+            menu(screen, 'repository-tree-create-menu')?.props.onSelect('repository-tree-create-file');
+            await settle();
+        });
+
+        expect(alertSpy).toHaveBeenCalledWith('common.error', 'Machine row request timed out');
+        expect(screen.findByTestId('repository-tree-create-button-spinner')).toBeNull();
     });
 
     it('creates a directory under the workspace root via workspaceCreateDirectory', async () => {

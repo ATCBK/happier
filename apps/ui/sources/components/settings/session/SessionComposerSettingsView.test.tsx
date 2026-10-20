@@ -34,7 +34,7 @@ describe('SessionComposerSettingsView', () => {
         ]);
 
         await screen.pressByTestIdAsync('settings-new-session-draft-entry:alwaysFresh');
-        expect(storage.getState().settings.newSessionDraftEntryMode).toBe('alwaysFresh');
+        await vi.waitFor(() => expect(storage.getState().settings.newSessionDraftEntryMode).toBe('alwaysFresh'));
     });
 
     it('offers the inactive-session resume policies and persists changes', async () => {
@@ -49,7 +49,7 @@ describe('SessionComposerSettingsView', () => {
         expect(policy?.props.options.map((option: { id: string }) => option.id)).toEqual(['when_available', 'online_only', 'manual']);
 
         await screen.pressByTestIdAsync('settings-composer-inactive-resume:when_available');
-        expect(storage.getState().settings.sessionInactiveResumePolicy).toBe('when_available');
+        await vi.waitFor(() => expect(storage.getState().settings.sessionInactiveResumePolicy).toBe('when_available'));
     });
 
     it('keeps steering and pending-queue choices visible but locked, with the reason, while nothing can use them', async () => {

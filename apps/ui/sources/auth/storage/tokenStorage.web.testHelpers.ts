@@ -1,4 +1,5 @@
 import { vi } from 'vitest';
+import { setImmediate as hostTask } from 'node:timers/promises';
 
 export type LocalStorageMockHandle = {
     store: Map<string, string>;
@@ -49,6 +50,9 @@ export function installWebLockManagerMock(): WebLockManagerMockHandle {
         pendingByName.set(name, tail);
 
         await predecessor;
+        // Web Locks §4.4 queues admission onto the event loop, not a Promise
+        // microtask. Keep that native task independent of fake JavaScript clocks.
+        await hostTask();
         heldNames.add(name);
         try {
             return await callback({ name, mode: 'exclusive' });

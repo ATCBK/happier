@@ -115,10 +115,7 @@ function createLogicalSessionHarness() {
   // Session registration and presentation lifecycle remain real.
   const session: Pick<SessionClientPort, 'sessionId' | 'rpcHandlerManager' | 'updateAgentState'> = {
     get sessionId() { return sessionId; },
-    rpcHandlerManager: {
-      ...registrar.registrar,
-      invokeLocal: (method, input) => manager.invokeLocal(method, input),
-    },
+    rpcHandlerManager: registrar.registrar,
     updateAgentState: async updater => {
       const heldWrite = nextWrite;
       nextWrite = null;
@@ -370,14 +367,18 @@ describe('current-session presentation service', () => {
       vi.useRealTimers();
     }
   });
-  it('keeps the same binding and metadata revision when its identical bind repeats', async () => {
+  it('keeps the same binding and metadata revision when its identical bind repeats concurrently', async () => {
     const harness = createHarness();
     const bind = { clientId: 'client-a', focused: true, draftRevision: 3 } as const;
-    const first = await harness.handlers.get(CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD)?.(
-      bind, presentationContext('connection-a'),
-    );
+    const initial = await Promise.all(Array.from({ length: 3 }, () =>
+      harness.handlers.get(CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD)?.(
+        bind, presentationContext('connection-a'),
+      )));
+    const first = initial[0];
+    expect(initial).toEqual([first, first, first]);
     const state = harness.readState();
     const attempts = harness.readStateWriteAttemptCount();
+    expect(attempts).toBe(1);
 
     const repeated = await harness.handlers.get(CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD)?.(
       bind, presentationContext('connection-a'),
@@ -767,6 +768,17 @@ describe('current-session presentation service', () => {
       operationId: 'notify-1', message: 'Done', severity: 'info',
     })).resolves.toMatchObject({ status: 'applied' });
     expect(published).toBe(1);
+    expect(harness.readState().command).toBeUndefined();
+  });
+
+  it('classifies an overbound notification as a local contract failure before publication', async () => {
+    const harness = createHarness();
+    await harness.handlers.get(CURRENT_SESSION_PRESENTATION_BIND_RPC_METHOD)?.({
+      clientId: 'client-1', focused: true, draftRevision: 0,
+    });
+    await expect(harness.presentation.notify({
+      operationId: 'overbound-notification', message: 'x'.repeat(16_385), severity: 'info',
+    })).resolves.toMatchObject({ status: 'unavailable' });
     expect(harness.readState().command).toBeUndefined();
   });
 

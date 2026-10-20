@@ -1,149 +1,201 @@
+import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { getActionSpec, resolveEffectiveActionInputFields } from '@happier-dev/protocol';
-import { changeTextTestInstance, findTestInstanceByTypeContainingText, pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
-import {
-    installSessionActionsCommonModuleMocks,
-    resetSessionActionsCommonModuleMockState,
-} from './sessionActionsTestHelpers';
+import { afterAll, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { getActionSpec, resolveEffectiveActionInputFields, tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol';
+import { RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { RpcError, RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
+import { ExecutionRunStartRequestSchema, ExecutionRunStartResponseSchema } from '@happier-dev/protocol/execution/runs/index';
+import { DaemonContributionRegistryProjectionDescribeResponseSchema } from '@happier-dev/protocol/daemon/contributionRegistryProjection';
+import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
+import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRowReadResponseV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { ReviewEngineListItemSchema } from '@happier-dev/protocol/reviews/reviewEngines';
+import { changeTextTestInstance, createDeferred, findTestInstanceByTypeContainingText, pressTestInstance, pressTestInstanceAsync, renderScreen } from '@/dev/testkit';
+import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { createMachineFixture, createReadyMachineAgentInventoryFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { createAccountTokenForTests, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createExternalActionAccountHttpBoundary } from '@/dev/testkit/harness/externalActionAccountHttpBoundary';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
+import type { SessionActionDraft } from '@/sync/domains/sessionActions/sessionActionDraftTypes';
+import type { ResolveSessionActionFieldOptions } from './sessionActionFieldOptions';
 
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+vi.mock('react-native', async () =>
+    (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
+        View: 'View', Text: 'Text', Pressable: 'Pressable', TextInput: 'TextInput',
+        Platform: { OS: 'web', select: (options: Record<string, unknown>) => options.web ?? options.default ?? null },
+        useWindowDimensions: () => ({ width: 1200, height: 800 }),
+    }));
+vi.mock('react-native-unistyles', async () =>
+    (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@/text', async () =>
+    (await import('@/dev/testkit/mocks/text')).createTextModuleMock({
+        translate: (key, params?: Record<string, unknown>) => key === 'session.actionsDraft.validation.requiredField'
+            ? String(params?.field ?? 'Field') + ' is required.' : key,
+    }));
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock().module);
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock().module);
+vi.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons', Octicons: 'Octicons' }));
+vi.mock('@/utils/web/reactDomCjs', async () =>
+    (await import('@/dev/testkit/mocks/reactDomCjs')).createReactDomCjsRendererMock());
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-
-type ExecuteResult = { ok: true; result: unknown } | { ok: false; error: string };
-const executeSpy = vi.fn<() => Promise<ExecuteResult>>(async () => ({ ok: true, result: {} }));
-const createDefaultActionExecutorMock = vi.hoisted(() => vi.fn((..._args: unknown[]) => ({ execute: executeSpy })));
-const useExecutionRunsBackendsForSessionMock = vi.hoisted(() => vi.fn<(sessionId: string, serverId: string | null | undefined) => unknown>(() => null));
-const useSessionServerIdMock = vi.hoisted(() => vi.fn<(sessionId: string) => string | null>(() => 'server-explicit'));
-const useEnabledAgentIdsMock = vi.hoisted(() => vi.fn<() => readonly string[]>(() => ['claude']));
-const updateSessionActionDraftInput = vi.fn();
-const setSessionActionDraftStatus = vi.fn();
-const deleteSessionActionDraft = vi.fn();
-const draftScope = { serverId: 'server-explicit', accountId: 'account-a' } as const;
-const draftAddress = { serverId: 'server-explicit', sessionId: 's1' } as const;
-
-installSessionActionsCommonModuleMocks({
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({
-            View: 'View',
-            Text: 'Text',
-            Pressable: 'Pressable',
-            TextInput: 'TextInput',
-            Platform: {
-                OS: 'web',
-                select: (options: any) => options?.web ?? options?.default ?? options?.ios ?? null,
-            },
-            AppState: {
-                addEventListener: () => ({ remove: () => {} }),
-            },
-            Dimensions: {
-                get: () => ({ width: 1200, height: 800 }),
-            },
-        });
+let browser = await installBrowserRuntimeForTests({ url: 'https://action-card.test/' });
+afterAll(() => browser.restore());
+beforeEach(async () => {
+    // Package cleanup restores Node globals before each case. The physical
+    // browser port must exist before the real Home captures its lifetime.
+    browser.restore();
+    browser = await installBrowserRuntimeForTests({ url: 'https://action-card.test/' });
+});
+const { installSessionPaneRuntimeTestHarness } = await import('../panes/sessionPaneRuntimeTestHarness');
+const launches: Array<Readonly<{ targetId: string; serverUrl: string | undefined; request: ReturnType<typeof ExecutionRunStartRequestSchema.parse> }>> = [];
+const launchReply = vi.fn(async () => ExecutionRunStartResponseSchema.parse({
+    runId: 'run-1', callId: 'call-1', sidechainId: 'sidechain-1',
+}));
+const reviewEngines = [
+    { engineId: 'coderabbit', value: 'coderabbit', label: 'CodeRabbit', enabled: true, capabilities: { structuredNarration: false } },
+    { engineId: 'claude', value: 'claude', label: 'Claude', backendId: 'claude', enabled: true, capabilities: { structuredNarration: true } },
+    { engineId: 'codex', value: 'codex', label: 'Codex', backendId: 'codex', enabled: true, capabilities: { structuredNarration: true } },
+].map(engine => ReviewEngineListItemSchema.parse(engine));
+let reviewInventoryBoundary: Awaited<ReturnType<typeof createExternalActionAccountHttpBoundary>> | undefined;
+const runtime = installSessionPaneRuntimeTestHarness({
+    credentials: { token: createAccountTokenForTests('account-a', { currentAccount: true }) },
+    features: () => {
+        const response = createRootLayoutFeaturesResponse();
+        tryWriteServerEnabledBitInPlace(response, 'execution.runs', true);
+        return response;
     },
-    text: async () => {
-        const { createTextModuleMock } = await import('@/dev/testkit/mocks/text');
-        return createTextModuleMock({
-            translate: (key: string, params?: any) => {
-                if (key === 'session.actionsDraft.validation.requiredField') {
-                    return `${String(params?.field ?? 'Field')} is required.`;
-                }
-                return key;
-            },
-        });
+    request: async (url, init) => {
+        if (new URL(String(url)).pathname === ACP_CATALOG_ROWS_ROUTE_V1) return Response.json(AcpCatalogRowReadResponseV1Schema.parse({
+            status: 'present', revision: 1, content: { t: 'plain', v: { v: 1, definitions: [] } },
+        }));
+        return await reviewInventoryBoundary?.handle(new URL(String(url)), init) ?? null;
     },
-    unistyles: async () => {
-        const { createUnistylesMock } = await import('@/dev/testkit/mocks/unistyles');
-        return createUnistylesMock({
-            theme: {
-                colors: {
-                    surface: '#111',
-                    text: '#eee',
-                    textSecondary: '#aaa',
-                    divider: '#333',
-                    status: { error: '#f00' },
-                    button: { primary: { background: '#0a0', tint: '#000' } },
-                },
-            },
-        });
-    },
-    storage: async () => {
-        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleStub({
-            useSession: () => ({ id: 's1', serverId: 'server-explicit', metadata: {} }),
-            storage: {
-                getState: () => ({
-                    updateSessionActionDraftInput,
-                    setSessionActionDraftStatus,
-                    deleteSessionActionDraft,
-                }),
-            },
-        });
+    rpc: async (method, input, targetId, context) => {
+        const inventory = createReadyMachineAgentInventoryFixture([{ agentId: 'claude', title: 'Claude' }, { agentId: 'opencode', title: 'OpenCode' }]);
+        if (method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) {
+            return DaemonContributionRegistryProjectionDescribeResponseSchema.parse({ protocolVersion: 1, projection: inventory.projection });
+        }
+        if (method === RPC_METHODS.CAPABILITIES_DETECT) return inventory.capabilities;
+        if (method === SESSION_RPC_METHODS.EXECUTION_RUN_START
+            || method === SESSION_RPC_METHODS.EXECUTION_RUN_ENSURE_OR_START_PROVIDER_SAFE_V1) {
+            const request = ExecutionRunStartRequestSchema.parse(method === SESSION_RPC_METHODS.EXECUTION_RUN_START ? input
+                : input && typeof input === 'object' && 'start' in input ? input.start : null);
+            launches.push({ targetId, serverUrl: context.serverUrl, request });
+            return await launchReply();
+        }
+        throw new RpcError('Daemon method unavailable', RPC_ERROR_CODES.METHOD_NOT_AVAILABLE);
     },
 });
+const { storage } = await import('@/sync/domains/state/storage');
+const executorModule = await import('@/sync/ops/actions/defaultActionExecutor');
+const createDefaultActionExecutorSpy = vi.spyOn(executorModule, 'createDefaultActionExecutor');
+const backendsModule = await import('@/hooks/server/useExecutionRunsBackendsForSession');
+const useExecutionRunsBackendsForSessionSpy = vi.spyOn(backendsModule, 'useExecutionRunsBackendsForSession');
+const { useSessionActionFieldOptions } = await import('./useSessionActionFieldOptions');
+const { sessionAddressKey } = await import('@/sync/domains/session/sessionAddress');
+const { SessionActionDraftCard } = await import('./SessionActionDraftCard');
+let executeSpy: MockInstance<ReturnType<typeof executorModule.createDefaultActionExecutor>['execute']>;
+let updateSessionActionDraftInput = vi.spyOn(storage.getState(), 'updateSessionActionDraftInput');
+let setSessionActionDraftStatus = vi.spyOn(storage.getState(), 'setSessionActionDraftStatus');
+let deleteSessionActionDraft = vi.spyOn(storage.getState(), 'deleteSessionActionDraft');
+let draftScope: Readonly<{ serverId: string; accountId: string }>;
+let draftAddress: Readonly<{ serverId: string; sessionId: string }>;
+let fieldOptions: ResolveSessionActionFieldOptions | undefined;
 
-vi.mock('@/agents/hooks/useEnabledAgentIds', () => ({
-  useEnabledAgentIds: () => useEnabledAgentIdsMock(),
-}));
-
-vi.mock('@/agents/catalog/catalog', () => ({
-  AGENT_IDS: ['claude'],
-  // Mirrors the real accessor: an Agent with no bundled core answers null.
-  getAgentCore: (id: string) => (id === 'customAcp' ? null : { displayNameKey: `agent.${id}` }),
-}));
-
-vi.mock('@/sync/store/hooks', () => ({
-  useLocalSetting: () => 1,
-  useSessionServerId: (sessionId: string) => useSessionServerIdMock(sessionId),
-  // Only the transcript's row-height resolver reads this; the card's own resolver never calls it.
-  useSessionHasActionDrafts: () => false,
-}));
-
-vi.mock('@/hooks/server/useMachineCapabilitiesCache', () => ({
-  useMachineCapabilitiesCache: () => ({ state: { status: 'idle' }, refresh: vi.fn() }),
-}));
-
-vi.mock('@/hooks/server/useExecutionRunsBackendsForSession', () => ({
-  useExecutionRunsBackendsForSession: (sessionId: string, serverId: string | null | undefined) => useExecutionRunsBackendsForSessionMock(sessionId, serverId),
-}));
-
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId', () => ({
-  resolvePreferredServerIdForSessionId: () => null,
-}));
-
-vi.mock('@/sync/ops/actions/defaultActionExecutor', () => ({
-  createDefaultActionExecutor: (...args: unknown[]) => createDefaultActionExecutorMock(...args),
-}));
-
-/**
- * Card-only tests consume a resolved reply through the shared paint projection.
- * Source decisions are tested at the real Action and Workflow boundaries.
- */
-async function buildMockedFieldOptionsResolver() {
-  const { buildSessionActionFieldOptionsResolver } = await import('./sessionActionFieldOptions');
-  return buildSessionActionFieldOptionsResolver({});
+function cardExecutorCalls() {
+    return createDefaultActionExecutorSpy.mock.calls.filter(([options]) => options?.resolveServerIdForSessionId);
+}
+function readFieldOptionsResolver() {
+    if (!fieldOptions) throw new Error('Expected mounted Action field options');
+    return fieldOptions;
+}
+function readDraft() {
+    return storage.getState().sessionActionDraftsByAddressKey[sessionAddressKey(draftAddress)]?.find(draft => draft.id === 'd1');
+}
+function DraftFixture() {
+    const drafts = storage(state => state.sessionActionDraftsByAddressKey[sessionAddressKey(draftAddress)]);
+    fieldOptions = useSessionActionFieldOptions('s1', runtime.serverId);
+    return drafts?.[0] ? <SessionActionDraftCard draft={drafts[0]} /> : null;
+}
+async function renderDraft(draft: Omit<SessionActionDraft, 'address' | 'accountId'> & { sessionId?: string }) {
+    const produced = storage.getState().createSessionActionDraft(draftScope, draftAddress, draft);
+    const { sessionId: _sessionId, ...facts } = draft;
+    const scopedDraft: SessionActionDraft = { ...produced, ...facts };
+    storage.setState({ sessionActionDraftsByAddressKey: { [sessionAddressKey(draftAddress)]: [scopedDraft] } });
+    const screen = await renderScreen(<DraftFixture />, { wrapper: runtime.Wrapper });
+    await waitForHomeGovernance(() => {
+        const context = { actionId: scopedDraft.actionId, draftInput: scopedDraft.input };
+        const targets = scopedDraft.input?.backendTargetKeys;
+        const hasOneBackendTarget = typeof scopedDraft.input?.backendTargetKey === 'string'
+            || (Array.isArray(targets) && targets.length === 1);
+        for (const field of resolveEffectiveActionInputFields(getActionSpec(scopedDraft.actionId as Parameters<typeof getActionSpec>[0]), scopedDraft.input)) {
+            if (field.optionsSourceId || field.inputType) {
+                const state = readFieldOptionsResolver().state?.(field, context);
+                if (field.optionsSourceId === 'teams.credential_models.available') {
+                    // The current catalog declares this optional JSON field, but the source
+                    // owner explicitly refuses it. Do not replace that refusal with choices.
+                    expect(state).toMatchObject({ status: 'failed', errorCode: 'options_source_not_supported', options: [] });
+                } else if (!hasOneBackendTarget && (scopedDraft.actionId === 'subagents.plan.start' || scopedDraft.actionId === 'subagents.delegate.start')
+                    && ['agents.models.available', 'agents.config_options.available', 'sessions.spawn.connected_services.available'].includes(field.optionsSourceId ?? '')) {
+                    // Invalid legacy multi-target drafts remain editable before normalization;
+                    // dependent choices cannot be admitted until one target is selected.
+                    expect(state).toMatchObject({ status: 'failed', errorCode: 'missing_option_dependency', options: [] });
+                } else if (field.optionsSourceId === 'agents.config_options.available' && !scopedDraft.input?.machineId) {
+                    // These Session-owned drafts do not carry a Machine selection into
+                    // built-in option reads. Config is a Machine probe, unlike the static
+                    // model catalog, so its owner refuses the missing target explicitly.
+                    expect(state).toMatchObject({ status: 'failed', errorCode: 'invalid_parameters', options: [] });
+                } else {
+                    expect(state?.status).toBe('ready');
+                }
+            }
+        }
+    });
+    const executorIndex = createDefaultActionExecutorSpy.mock.calls.reduce((lastIndex, [options], index) =>
+        options?.resolveServerIdForSessionId ? index : lastIndex, -1);
+    const result = createDefaultActionExecutorSpy.mock.results[executorIndex];
+    if (result?.type !== 'return') throw new Error('Expected the actual card Action executor');
+    executeSpy = vi.spyOn(result.value, 'execute');
+    return screen;
 }
 
-describe('SessionActionDraftCard', () => {
-  beforeEach(() => {
-    resetSessionActionsCommonModuleMockState();
-    vi.resetModules();
-    executeSpy.mockClear();
-    createDefaultActionExecutorMock.mockClear();
-    useExecutionRunsBackendsForSessionMock.mockClear();
-    useSessionServerIdMock.mockReset();
-    useSessionServerIdMock.mockImplementation(() => 'server-explicit');
-    useEnabledAgentIdsMock.mockReset();
-    useEnabledAgentIdsMock.mockImplementation(() => ['claude']);
+beforeEach(async () => {
+    launches.length = 0;
+    launchReply.mockReset().mockResolvedValue(ExecutionRunStartResponseSchema.parse({ runId: 'run-1', callId: 'call-1', sidechainId: 'sidechain-1' }));
+    createDefaultActionExecutorSpy.mockClear();
+    useExecutionRunsBackendsForSessionSpy.mockClear();
+    updateSessionActionDraftInput = vi.spyOn(storage.getState(), 'updateSessionActionDraftInput');
+    setSessionActionDraftStatus = vi.spyOn(storage.getState(), 'setSessionActionDraftStatus');
+    deleteSessionActionDraft = vi.spyOn(storage.getState(), 'deleteSessionActionDraft');
     updateSessionActionDraftInput.mockClear();
     setSessionActionDraftStatus.mockClear();
     deleteSessionActionDraft.mockClear();
-  });
-
+    draftScope = { serverId: runtime.serverId, accountId: 'account-a' };
+    draftAddress = { serverId: runtime.serverId, sessionId: 's1' };
+    reviewInventoryBoundary = await createExternalActionAccountHttpBoundary({
+        serverUrl: 'https://session-pane.test', serverIdentityId: runtime.serverIdentityId,
+        accountId: 'account-a', machineId: 'm1', actionId: 'review.engines.list', tokenEpoch: 0, requesterInvocation: 'none',
+        execute: input => {
+            getActionSpec('review.engines.list').inputSchema.parse(input);
+            return { items: reviewEngines };
+        },
+    });
+    storage.getState().applySessions([createSessionFixture({
+        id: 's1', serverId: runtime.serverId, active: true,
+        metadata: { path: '/repo', host: 'card-test', machineId: 'm1', flavor: 'claude' },
+        agentState: { controlledByUser: true },
+    })]);
+    storage.getState().applyMachines([createMachineFixture({ id: 'm1', activeAt: Date.now() })], true, {
+        sourceServerId: runtime.serverId, sourceAccountId: 'account-a',
+    });
+    storage.getState().applySettingsLocal({ experiments: true, featureToggles: { 'execution.runs': true } });
+});
+describe('SessionActionDraftCard', () => {
   it('threads the session server id into review backend lookup and default execution routing', async () => {
-    const { SessionActionDraftCard } = await import('./SessionActionDraftCard');
 
     const draft = {
       id: 'd1',
@@ -154,18 +206,17 @@ describe('SessionActionDraftCard', () => {
       input: { engineIds: ['coderabbit'], instructions: 'Review this repository.', changeType: 'all', base: { kind: 'none' } },
     } as const;
 
-    await renderScreen(React.createElement(SessionActionDraftCard, { draft: { ...draft, address: { serverId: 'server-explicit', sessionId: 's1' }, accountId: 'account-a' } as any }));
+    await renderDraft(draft);
 
-    expect(useExecutionRunsBackendsForSessionMock).toHaveBeenCalledWith('s1', 'server-explicit');
-    expect(createDefaultActionExecutorMock).toHaveBeenCalledTimes(1);
-    const executorConfig = createDefaultActionExecutorMock.mock.calls[0]?.[0] as {
+    expect(useExecutionRunsBackendsForSessionSpy).toHaveBeenCalledWith('s1', runtime.serverId, true);
+    expect(cardExecutorCalls()).toHaveLength(1);
+    const executorConfig = cardExecutorCalls()[0]?.[0] as {
       resolveServerIdForSessionId: (sessionId: string) => string | null;
     };
-    expect(executorConfig.resolveServerIdForSessionId('s1')).toBe('server-explicit');
+    expect(executorConfig.resolveServerIdForSessionId('s1')).toBe(runtime.serverId);
   });
 
   it('keeps a captured draft on its exact Home when ambient preferred-server focus changes', async () => {
-    const { SessionActionDraftCard } = await import('./SessionActionDraftCard');
 
     const draft = {
       id: 'd1',
@@ -176,25 +227,24 @@ describe('SessionActionDraftCard', () => {
       input: { engineIds: ['coderabbit'], instructions: 'Review this repository.', changeType: 'all', base: { kind: 'none' } },
     } as const;
 
-    const screen = await renderScreen(React.createElement(SessionActionDraftCard, { draft: { ...draft, address: { serverId: 'server-explicit', sessionId: 's1' }, accountId: 'account-a' } as any }));
+    await renderDraft(draft);
 
-    expect(useExecutionRunsBackendsForSessionMock).toHaveBeenCalledWith('s1', 'server-explicit');
-    expect(createDefaultActionExecutorMock).toHaveBeenCalledTimes(1);
+    expect(useExecutionRunsBackendsForSessionSpy).toHaveBeenCalledWith('s1', runtime.serverId, true);
+    expect(cardExecutorCalls()).toHaveLength(1);
 
     await act(async () => {
-      useSessionServerIdMock.mockImplementation(() => 'server-reactive');
-      screen.tree.update(React.createElement(SessionActionDraftCard, { draft: { ...draft, address: { serverId: 'server-explicit', sessionId: 's1' }, accountId: 'account-a' } as any }));
+      // The legacy bare-ID inference changes; the captured draft keeps its exact address.
+      storage.setState({ sessions: { s1: createSessionFixture({ id: 's1', serverId: 'server-reactive' }) } });
     });
 
-    expect(useExecutionRunsBackendsForSessionMock).toHaveBeenLastCalledWith('s1', 'server-explicit');
-    const executorConfig = createDefaultActionExecutorMock.mock.calls.at(-1)?.[0] as {
+    expect(useExecutionRunsBackendsForSessionSpy).toHaveBeenLastCalledWith('s1', runtime.serverId, true);
+    const executorConfig = cardExecutorCalls().at(-1)?.[0] as {
       resolveServerIdForSessionId: (sessionId: string) => string | null;
     };
-    expect(executorConfig.resolveServerIdForSessionId('s1')).toBe('server-explicit');
+    expect(executorConfig.resolveServerIdForSessionId('s1')).toBe(runtime.serverId);
   });
 
   it('submits a valid subagents.plan.start draft via the default action executor', async () => {
-    const { SessionActionDraftCard } = await import('./SessionActionDraftCard');
 
     const draft = {
       id: 'd1',
@@ -205,11 +255,17 @@ describe('SessionActionDraftCard', () => {
       input: { backendTargetKeys: ['agent:claude'], instructions: 'Plan this.' },
     } as const;
 
-    const screen = await renderScreen(React.createElement(SessionActionDraftCard, { draft: { ...draft, address: { serverId: 'server-explicit', sessionId: 's1' }, accountId: 'account-a' } as any }));
+    const screen = await renderDraft(draft);
     const start = findTestInstanceByTypeContainingText(screen.tree, 'Pressable', 'common.start');
     expect(start).toBeTruthy();
 
     await pressTestInstanceAsync(start, 'common.start');
+
+    await waitForHomeGovernance(() => expect(readDraft()).toBeUndefined());
+    expect(launches).toEqual([expect.objectContaining({ targetId: 's1', serverUrl: 'https://session-pane.test',
+      request: expect.objectContaining({ intent: 'plan', instructions: 'Plan this.' }),
+    })]);
+    expect(buildBackendTargetKeyV2(launches[0]!.request.backendTarget)).toBe(buildBackendTargetKeyV2({ kind: 'backend', backendId: 'claude' }));
 
     expect(executeSpy).toHaveBeenCalledWith(
       'subagents.plan.start',
@@ -224,7 +280,6 @@ describe('SessionActionDraftCard', () => {
   });
 
   it('normalizes stale multi-target single-select draft input before submitting', async () => {
-    const { SessionActionDraftCard } = await import('./SessionActionDraftCard');
 
     const draft = {
       id: 'd1',
@@ -238,7 +293,7 @@ describe('SessionActionDraftCard', () => {
       },
     } as const;
 
-    const screen = await renderScreen(React.createElement(SessionActionDraftCard, { draft: { ...draft, address: { serverId: 'server-explicit', sessionId: 's1' }, accountId: 'account-a' } as any }));
+    const screen = await renderDraft(draft);
     const start = findTestInstanceByTypeContainingText(screen.tree, 'Pressable', 'common.start');
     expect(start).toBeTruthy();
 
@@ -249,12 +304,13 @@ describe('SessionActionDraftCard', () => {
       { sessionId: 's1', backendTargetKeys: ['agent:opencode'], instructions: 'Plan this.' },
       { defaultSessionId: 's1', surface: 'ui', placement: 'session_action_menu' },
     );
+    await waitForHomeGovernance(() => expect(readDraft()).toBeUndefined());
+    expect(buildBackendTargetKeyV2(launches[0]!.request.backendTarget)).toBe(buildBackendTargetKeyV2({ kind: 'backend', backendId: 'opencode' }));
   });
 
   it('keeps the draft editable when the action execution fails', async () => {
-    executeSpy.mockResolvedValueOnce({ ok: false as const, error: 'RPC method not available' });
+    launchReply.mockRejectedValueOnce(new RpcError('RPC method not available', RPC_ERROR_CODES.METHOD_NOT_AVAILABLE));
 
-    const { SessionActionDraftCard } = await import('./SessionActionDraftCard');
 
     const draft = {
       id: 'd1',
@@ -265,27 +321,22 @@ describe('SessionActionDraftCard', () => {
       input: { backendTargetKeys: ['agent:claude'], instructions: 'Delegate this.' },
     } as const;
 
-    const screen = await renderScreen(React.createElement(SessionActionDraftCard, { draft: { ...draft, address: { serverId: 'server-explicit', sessionId: 's1' }, accountId: 'account-a' } as any }));
+    const screen = await renderDraft(draft);
     const start = findTestInstanceByTypeContainingText(screen.tree, 'Pressable', 'common.start');
     expect(start).toBeTruthy();
 
     await pressTestInstanceAsync(start, 'common.start');
 
+    await waitForHomeGovernance(() => expect(readDraft()).toMatchObject({ status: 'editing', error: 'RPC method not available' }));
     expect(setSessionActionDraftStatus).toHaveBeenCalledWith(draftScope, draftAddress, 'd1', 'running', null);
     expect(setSessionActionDraftStatus).toHaveBeenCalledWith(draftScope, draftAddress, 'd1', 'editing', 'RPC method not available');
     expect(deleteSessionActionDraft).not.toHaveBeenCalled();
   });
 
   it('ignores duplicate start presses while an action launch is already in flight', async () => {
-    let resolveExecute: ((value: ExecuteResult) => void) | null = null;
-    executeSpy.mockImplementationOnce(
-      () =>
-        new Promise<ExecuteResult>((resolve) => {
-          resolveExecute = resolve;
-        }),
-    );
-
-    const { SessionActionDraftCard } = await import('./SessionActionDraftCard');
+    const launch = createDeferred<ReturnType<typeof ExecutionRunStartResponseSchema.parse>>();
+    launchReply.mockReturnValueOnce(launch.promise);
+    const accepted = ExecutionRunStartResponseSchema.parse({ runId: 'run-1', callId: 'call-1', sidechainId: 'sidechain-1' });
 
     const draft = {
       id: 'd1',
@@ -301,27 +352,26 @@ describe('SessionActionDraftCard', () => {
       },
     } as const;
 
-    const screen = await renderScreen(React.createElement(SessionActionDraftCard, { draft: { ...draft, address: { serverId: 'server-explicit', sessionId: 's1' }, accountId: 'account-a' } as any }));
+    const screen = await renderDraft(draft);
     const start = findTestInstanceByTypeContainingText(screen.tree, 'Pressable', 'common.start');
     expect(start).toBeTruthy();
 
-    await act(async () => {
-      start!.props.onPress?.();
-      await pressTestInstanceAsync(start!);
-    });
-
-    expect(executeSpy).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      resolveExecute?.({ ok: true, result: {} });
-    });
-
-    expect(setSessionActionDraftStatus).toHaveBeenCalledWith(draftScope, draftAddress, 'd1', 'running', null);
-    expect(setSessionActionDraftStatus).toHaveBeenCalledWith(draftScope, draftAddress, 'd1', 'succeeded', null);
+    try {
+      act(() => pressTestInstance(start, 'first start'));
+      await waitForHomeGovernance(() => expect(launches).toHaveLength(1));
+      act(() => pressTestInstance(start, 'duplicate start'));
+      expect(executeSpy).toHaveBeenCalledTimes(1);
+      expect(launches).toHaveLength(1);
+      act(() => launch.resolve(accepted));
+      await waitForHomeGovernance(() => expect(readDraft()).toBeUndefined());
+      expect(setSessionActionDraftStatus).toHaveBeenCalledWith(draftScope, draftAddress, 'd1', 'running', null);
+      expect(setSessionActionDraftStatus).toHaveBeenCalledWith(draftScope, draftAddress, 'd1', 'succeeded', null);
+    } finally {
+      launch.resolve(accepted);
+    }
   });
 
   it('allows retrying a failed draft without recreating it', async () => {
-    const { SessionActionDraftCard } = await import('./SessionActionDraftCard');
 
     const draft = {
       id: 'd1',
@@ -333,17 +383,26 @@ describe('SessionActionDraftCard', () => {
       input: { backendTargetKeys: ['agent:claude'], instructions: 'Delegate this.' },
     } as const;
 
-    const screen = await renderScreen(React.createElement(SessionActionDraftCard, { draft: { ...draft, address: { serverId: 'server-explicit', sessionId: 's1' }, accountId: 'account-a' } as any }));
+    const screen = await renderDraft(draft);
     const start = findTestInstanceByTypeContainingText(screen.tree, 'Pressable', 'common.start');
     expect(start).toBeTruthy();
     expect(start!.props.disabled).toBe(false);
   });
 
+  it('cancels the exact scoped draft without launching an action', async () => {
+    const screen = await renderDraft({ id: 'd1', actionId: 'subagents.plan.start', createdAt: 1,
+      status: 'editing', input: { backendTargetKeys: ['agent:claude'], instructions: 'Plan this.' } });
+    const cancel = findTestInstanceByTypeContainingText(screen.tree, 'Pressable', 'common.cancel');
+    await pressTestInstanceAsync(cancel, 'common.cancel');
+    expect(readDraft()).toBeUndefined();
+    expect(deleteSessionActionDraft).toHaveBeenCalledWith(draftScope, draftAddress, 'd1');
+    expect(executeSpy).not.toHaveBeenCalled();
+    expect(launches).toEqual([]);
+  });
+
   it('disables start and shows a field-aware validation error when required inputs are missing', async () => {
-    executeSpy.mockClear();
     setSessionActionDraftStatus.mockClear();
 
-    const { SessionActionDraftCard } = await import('./SessionActionDraftCard');
 
     const draft = {
       id: 'd1',
@@ -354,7 +413,7 @@ describe('SessionActionDraftCard', () => {
       input: { backendTargetKeys: ['agent:claude'], instructions: '   ' },
     } as const;
 
-    const screen = await renderScreen(React.createElement(SessionActionDraftCard, { draft: { ...draft, address: { serverId: 'server-explicit', sessionId: 's1' }, accountId: 'account-a' } as any }));
+    const screen = await renderDraft(draft);
     const start = findTestInstanceByTypeContainingText(screen.tree, 'Pressable', 'common.start');
     expect(start).toBeTruthy();
     expect(start!.props.disabled).toBe(true);
@@ -366,10 +425,8 @@ describe('SessionActionDraftCard', () => {
   });
 
   it('maps missing review engine selection to a required-field validation message', async () => {
-    executeSpy.mockClear();
     setSessionActionDraftStatus.mockClear();
 
-    const { SessionActionDraftCard } = await import('./SessionActionDraftCard');
 
     const draft = {
       id: 'd1',
@@ -380,7 +437,7 @@ describe('SessionActionDraftCard', () => {
       input: { instructions: '', changeType: 'committed', base: { kind: 'none' } },
     } as const;
 
-    const screen = await renderScreen(React.createElement(SessionActionDraftCard, { draft: { ...draft, address: { serverId: 'server-explicit', sessionId: 's1' }, accountId: 'account-a' } as any }));
+    const screen = await renderDraft(draft);
     const start = findTestInstanceByTypeContainingText(screen.tree, 'Pressable', 'common.start');
     expect(start).toBeTruthy();
     expect(start!.props.disabled).toBe(true);
@@ -396,7 +453,6 @@ describe('SessionActionDraftCard', () => {
     updateSessionActionDraftInput.mockClear();
     setSessionActionDraftStatus.mockClear();
 
-    const { SessionActionDraftCard } = await import('./SessionActionDraftCard');
 
     const draft = {
       id: 'd1',
@@ -408,7 +464,7 @@ describe('SessionActionDraftCard', () => {
       input: { engineIds: ['claude'], instructions: '', changeType: 'committed', base: { kind: 'none' } },
     } as const;
 
-    const screen = await renderScreen(React.createElement(SessionActionDraftCard, { draft: { ...draft, address: { serverId: 'server-explicit', sessionId: 's1' }, accountId: 'account-a' } as any }));
+    const screen = await renderDraft(draft);
     const input = screen.tree.findAllByType('TextInput').find(node => node.props.multiline === true)!;
     await act(async () => {
       changeTextTestInstance(input, 'Review this.');
@@ -416,6 +472,7 @@ describe('SessionActionDraftCard', () => {
 
     expect(updateSessionActionDraftInput).toHaveBeenCalledWith(draftScope, draftAddress, 'd1', { instructions: 'Review this.' });
     expect(setSessionActionDraftStatus).toHaveBeenCalledWith(draftScope, draftAddress, 'd1', 'editing', null);
+    expect(readDraft()).toMatchObject({ input: { instructions: 'Review this.' }, status: 'editing', error: null });
   });
 
   it('hides conditional review base fields when base.kind is none', async () => {
@@ -429,7 +486,6 @@ describe('SessionActionDraftCard', () => {
     });
     expect(effective.map((f: any) => f.path)).not.toContain('base.baseBranch');
 
-    const { SessionActionDraftCard } = await import('./SessionActionDraftCard');
 
     const draft = {
       id: 'd1',
@@ -440,7 +496,7 @@ describe('SessionActionDraftCard', () => {
       input: { engineIds: ['claude'], instructions: 'Review', changeType: 'committed', base: { kind: 'none' } },
     } as const;
 
-    const screen = await renderScreen(React.createElement(SessionActionDraftCard, { draft: { ...draft, address: { serverId: 'server-explicit', sessionId: 's1' }, accountId: 'account-a' } as any }));
+    const screen = await renderDraft(draft);
 
     const { HappierInputField } = await import('@happier-dev/plugin-ui/presentation');
     const paintedPaths = screen.tree.findAllByType(HappierInputField).map(node => node.props.field.path);
@@ -452,7 +508,6 @@ describe('SessionActionDraftCard', () => {
   it('parses text_list input into a string array patch', async () => {
     updateSessionActionDraftInput.mockClear();
 
-    const { SessionActionDraftCard } = await import('./SessionActionDraftCard');
 
     const draft = {
       id: 'd1',
@@ -465,7 +520,7 @@ describe('SessionActionDraftCard', () => {
       },
     } as const;
 
-    const screen = await renderScreen(React.createElement(SessionActionDraftCard, { draft: { ...draft, address: { serverId: 'server-explicit', sessionId: 's1' }, accountId: 'account-a' } as any }));
+    const screen = await renderDraft(draft);
 
     const inputs = screen.tree.findAllByType('TextInput');
     expect(inputs.length).toBe(1);
@@ -489,7 +544,6 @@ describe('SessionActionDraftCard', () => {
    * paints a one-line field is exactly how the row's size version came to move on every keystroke.
    */
   it('paints exactly the text and the box shape the height-bearing descriptor reports', async () => {
-    const { SessionActionDraftCard } = await import('./SessionActionDraftCard');
     const { resolveSessionActionDraftHeightBearingPaint } = await import('./sessionActionDraftPresentation');
 
     const input = {
@@ -500,12 +554,12 @@ describe('SessionActionDraftCard', () => {
     };
     const draft = { id: 'd1', sessionId: 's1', actionId: 'review.start', createdAt: 1, status: 'editing', input } as const;
 
-    const screen = await renderScreen(React.createElement(SessionActionDraftCard, { draft: { ...draft, address: { serverId: 'server-explicit', sessionId: 's1' }, accountId: 'account-a' } as any }));
+    const screen = await renderDraft(draft);
 
     const paint = resolveSessionActionDraftHeightBearingPaint({
       draft,
       sessionId: 's1',
-      resolveFieldOptions: await buildMockedFieldOptionsResolver(),
+      resolveFieldOptions: readFieldOptionsResolver(),
     });
     const textBoxes = paint.fields
       .map((entry) => entry.textBox)
@@ -531,7 +585,6 @@ describe('SessionActionDraftCard', () => {
    * here.
    */
   it('reports exactly the option rows it paints as the descriptor option list', async () => {
-    const { SessionActionDraftCard } = await import('./SessionActionDraftCard');
     const { resolveSessionActionDraftHeightBearingPaint } = await import('./sessionActionDraftPresentation');
 
     const draft = {
@@ -543,12 +596,12 @@ describe('SessionActionDraftCard', () => {
       input: { engineIds: ['claude'], instructions: 'Review', changeType: 'all', base: { kind: 'none' } },
     } as const;
 
-    const screen = await renderScreen(React.createElement(SessionActionDraftCard, { draft: { ...draft, address: { serverId: 'server-explicit', sessionId: 's1' }, accountId: 'account-a' } as any }));
+    const screen = await renderDraft(draft);
 
     const paint = resolveSessionActionDraftHeightBearingPaint({
       draft,
       sessionId: 's1',
-      resolveFieldOptions: await buildMockedFieldOptionsResolver(),
+      resolveFieldOptions: readFieldOptionsResolver(),
     });
     const describedOptionLabels = paint.fields.flatMap((entry) => (entry.options ?? []).map((option) => option.label));
 
@@ -580,7 +633,6 @@ describe('SessionActionDraftCard', () => {
    * can move the card: node structure, text content, and every layout style field.
    */
   it('paints byte-identical in-flow chrome for every draft status', async () => {
-    const { SessionActionDraftCard } = await import('./SessionActionDraftCard');
 
     const heightBearingShape = (node: any): any => {
       if (node === null || node === undefined || typeof node === 'boolean') return null;
@@ -609,7 +661,7 @@ describe('SessionActionDraftCard', () => {
       };
     };
 
-    const shapeForStatus = async (status: string) => {
+    const shapeForStatus = async (status: SessionActionDraft['status']) => {
       const draft = {
         id: 'd1',
         sessionId: 's1',
@@ -618,7 +670,7 @@ describe('SessionActionDraftCard', () => {
         status,
         input: { backendTargetKeys: ['agent:claude'], instructions: 'Delegate this.' },
       };
-    const screen = await renderScreen(React.createElement(SessionActionDraftCard, { draft: { ...draft, address: { serverId: 'server-explicit', sessionId: 's1' }, accountId: 'account-a' } as any }));
+    const screen = await renderDraft(draft);
       return JSON.stringify(heightBearingShape(screen.tree.toJSON()));
     };
 

@@ -17,7 +17,7 @@ import { createWebDownloadFileSink, type WebDownloadFileSink } from './webDownlo
 import { resolveWebDownloadMaxBytes } from '@/sync/runtime/files/webFileBufferBudget';
 import { runTransferFinalizeRecovery } from '@/components/transfers/recovery/runTransferFinalizeRecovery';
 import { t } from '@/text';
-import { isTransferFinalizeRecoveryFailure } from '@/sync/domains/transfers/runtime/transferRuntime/plumbing/directTransferFinalizeRecovery';
+import { isTransferFinalizeRecoveryFailure } from '@/sync/domains/transfers/runtime/transferRuntime';
 import type { WorkspaceFileUploadFinalizeResponse } from '@/sync/domains/transfers/runtime/transferRuntime/families/workspaceFileTransfers';
 
 export type WorkspaceUploadEntry =
@@ -336,7 +336,7 @@ export function useWorkspaceFileTransfers(params: Readonly<{
             uploadAbortRef.current?.abort();
             downloadOperationRef.current?.controller.abort();
         };
-    }, []);
+    }, [stableWorkspaceScope]);
 
     const cancelUploads = React.useCallback(() => {
         uploadAbortReasonRef.current = 'user';
@@ -466,6 +466,7 @@ export function useWorkspaceFileTransfers(params: Readonly<{
                             setCurrentUploadState({ status: 'error', error: result.error });
                             const recoveryResult = await runTransferFinalizeRecovery({
                                 recovery: result.recovery,
+                                signal: controller.signal,
                                 title: t('transferRecovery.title'),
                                 message: t('transferRecovery.message'),
                             });

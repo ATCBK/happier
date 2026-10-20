@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { standardCleanup } from '@/dev/testkit';
+import { createDeferred, standardCleanup } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
@@ -9,6 +9,7 @@ import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/ac
 import { createFileViewerFindModel } from '@/components/workspaces/files/details/useFileViewerFind';
 import { openChatWithFindSeed } from './fileFindSeedHandoff';
 import type { FileFindSeedHostInput } from './fileFindSeedHost';
+import type { TranscriptFindCorpus } from '@/components/sessions/transcript/find/useTranscriptFind';
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -33,6 +34,11 @@ const { DestinationInstanceHost } = await import('@/components/appShell/workspac
 const findSeedHosts = await import('./fileFindSeedHost');
 const { FileFindSeedHost } = findSeedHosts;
 const { AppPaneProvider, useAppPaneContext } = await import('./AppPaneProvider');
+const { TranscriptFindSurface } = await import('@/components/sessions/transcript/find/TranscriptFindSurface');
+const { createTranscriptFindModel } = await import('@/components/sessions/transcript/find/useTranscriptFind');
+const { createReadOnlySessionTranscriptSource } = await import('@/components/sessions/transcript/source/readOnlySessionTranscriptSource');
+const { buildChatListItems } = await import('@/components/sessions/chatListItems');
+const { makeExternalSessionHistoricalImportLocalId } = await import('@happier-dev/protocol/sessions/external/historicalImportIdentity');
 const initialState = getStorage().getState();
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
 let serverId = '';
@@ -75,6 +81,84 @@ function Host(props: Readonly<{ tabId: string; focused: boolean }>) {
 }
 
 describe('file Find destination memory', () => {
+    it('retains an addressed chat launch while its destination suspends before content is ready', async () => {
+        const waiting = createDeferred<void>();
+        let suspended = false;
+        function Content(input: import('./fileFindSeedHost').ChatFindSeedHostInput) {
+            if (suspended) throw waiting.promise;
+            return React.createElement('ChatSeedProbe', input);
+        }
+        function StageChat() {
+            const pane = useAppPaneContext();
+            React.useEffect(() => {
+                const authority = captureActiveServerAccountScopeLifetime();
+                if (!authority) throw new Error('Expected real Account lifetime');
+                pane.fileFindSeedHandoff.stageChat({ sessionId: 'chat-a', serverId, accountId: 'account-a' },
+                    { query: 'hydrating needle', options: seed.options, target: { kind: 'route-message-id', routeMessageId: 'loaded-row' } }, authority);
+            }, [pane.fileFindSeedHandoff]);
+            return null;
+        }
+        function Journey({ tick, sessionId = 'chat-a' }: { tick: number; sessionId?: string }) {
+            return <AppPaneProvider><StageChat /><React.Suspense fallback={<></>}>
+                <DestinationInstanceHost tabId="selected" ref={{ kind: 'session', params: { id: sessionId, serverId } }}
+                    pathname={`/session/${sessionId}`} focused visible navigation={{ push() {}, replace() {}, back() {} }}>
+                    <findSeedHosts.ChatFindSeedHost sessionId={sessionId} serverId={serverId} active>{input => <Content {...input} key={tick} />}</findSeedHosts.ChatFindSeedHost>
+                </DestinationInstanceHost>
+            </React.Suspense></AppPaneProvider>;
+        }
+        const screen = await renderScreen(<Journey tick={0} />);
+        expect(screen.root.findByType('ChatSeedProbe').props.findSeed?.query).toBe('hydrating needle');
+        suspended = true;
+        await screen.update(<Journey tick={1} />);
+        suspended = false;
+        await act(async () => { waiting.resolve(); });
+        expect(screen.root.findByType('ChatSeedProbe').props.findSeed?.query).toBe('hydrating needle');
+        await screen.update(<Journey tick={1} sessionId="different-chat" />);
+        expect(screen.root.findByType('ChatSeedProbe').props.findSeed).toBeNull();
+        await screen.update(<Journey tick={1} />);
+        expect(screen.root.findByType('ChatSeedProbe').props.findSeed).toBeNull();
+    });
+    it('opens native chat Find through the mounted consumer with shortcuts disabled after route hydration', async () => {
+        getStorage().setState(state => ({ settings: { ...state.settings, keyboardShortcutsV2Enabled: false } }));
+        const realID = makeExternalSessionHistoricalImportLocalId({ agentId: 'claude', remoteSessionId: 'native-chat', directItemId: 'matched-item' });
+        const message = { kind: 'user-text' as const, id: 'loaded-row', realID, localId: null, createdAt: 1, seq: 1, text: 'violet harbor lantern' };
+        const history = { isLoaded: true, hasOlder: false, isLoadingOlder: false };
+        let corpus: TranscriptFindCorpus = { messages: [message], history };
+        const source = createReadOnlySessionTranscriptSource({ sessionId: 'linked-chat', serverId, ...corpus,
+            reducerState: null, metadata: null, agentState: null });
+        const model = createTranscriptFindModel({ readCorpus: () => corpus, loadPage: null,
+            jumpToTarget: async target => ({ status: 'scrolled', target }), reveal: async () => {} });
+        let launch!: () => Promise<void>;
+        function Launch() {
+            const pane = useAppPaneContext();
+            launch = () => openChatWithFindSeed({ handoff: pane.fileFindSeedHandoff,
+                authority: pane.fileFindSeedAccountBindings.get(serverId),
+                destination: { sessionId: 'linked-chat', serverId: connection!.home.id },
+                seed: { query: 'violet harbor lantern', target: { kind: 'native-message', agentId: 'claude', remoteSessionId: 'native-chat', sourceItemId: 'matched-item' } },
+                open() {} });
+            return null;
+        }
+        function Journey({ mounted }: { mounted: boolean }) {
+            return <AppPaneProvider><Launch />{mounted ? <DestinationInstanceHost tabId="linked-tab"
+                ref={{ kind: 'session', params: { id: 'linked-chat', serverId } }} pathname="/session/linked-chat"
+                focused visible navigation={{ push() {}, replace() {}, back() {} }}>
+                <TranscriptFindSurface model={model} source={source} sessionId="linked-chat" serverId={serverId}
+                    focused viewportRef={{ current: null }} items={buildChatListItems({ messageIdsOldestFirst: [message.id], messagesById: { [message.id]: message }, pendingMessages: [] })} loadedMessages={[message]}
+                    publishCorpus={next => { corpus = next; }} measureMessage={() => null} contentHeight={0}>
+                    <></>
+                </TranscriptFindSurface>
+            </DestinationInstanceHost> : null}</AppPaneProvider>;
+        }
+        const screen = await renderScreen(<Journey mounted={false} />);
+        try {
+            await act(async () => { await launch(); });
+            await screen.update(<Journey mounted />);
+            await act(async () => { await model.settled(); });
+            expect(model.getSnapshot()).toMatchObject({ open: true, query: message.text, status: { kind: 'results', current: 1, total: 1 } });
+            expect(screen.findByTestId('transcript-find')).not.toBeNull();
+            expect(model.rowStore.getSnapshot(message.id)?.blocks[0]?.sourceRanges).toEqual([{ start: 0, end: message.text.length, current: true }]);
+        } finally { await screen.unmount(); model.dispose(); }
+    });
     it.each(['synchronous push', 'asynchronous navigation'])('discards a chat launch when %s fails before the host mounts', async (navigation) => {
         let open!: () => Promise<void>;
         const chatSeed = { query: 'failed needle', options: seed.options,

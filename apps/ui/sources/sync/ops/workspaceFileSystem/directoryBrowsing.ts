@@ -2,7 +2,7 @@ import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 
 import { resolveMachineAbsolutePath } from '@/sync/domains/fileSystem/resolveMachineAbsolutePath';
 import { readRpcErrorCode } from '@/sync/runtime/rpcErrors';
-import { FilesystemGetDirectoryTreeOutputSchema, FilesystemListDirectoryOutputSchema } from '@happier-dev/protocol/actions/filesystemActionFamily';
+import { FilesystemGetDirectoryTreeOutputSchema, FilesystemListDirectoryOutputSchema, type FilesystemTreeNode } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { invokeWorkspaceFileSystemAction, invokeWorkspaceFileSystemMutation, type WorkspaceFileSystemMutationResponse } from './actionInvocation';
 
 export type WorkspaceFileSystemTarget = Readonly<{
@@ -30,12 +30,13 @@ export type WorkspaceCreateDirectoryResponse = WorkspaceFileSystemMutationRespon
 export async function workspaceCreateDirectory(
     target: WorkspaceFileSystemTarget,
     path: string,
+    options?: Readonly<{ signal?: AbortSignal }>,
 ): Promise<WorkspaceCreateDirectoryResponse> {
     try {
         return await invokeWorkspaceFileSystemMutation(target, 'daemon.filesystem.createDirectory', {
             rootPath: target.rootPath,
             path: resolveAbsoluteWorkspacePath({ rootPath: target.rootPath, agentRootPath: target.agentRootPath, requestPath: path }),
-        });
+        }, options);
     } catch (error) {
         return {
             success: false,
@@ -77,14 +78,7 @@ export async function workspaceListDirectory(
     }
 }
 
-export type WorkspaceTreeNode = Readonly<{
-    name: string;
-    path: string;
-    type: 'file' | 'directory';
-    size?: number;
-    modified?: number;
-    children?: WorkspaceTreeNode[];
-}>;
+export type WorkspaceTreeNode = FilesystemTreeNode;
 
 export type WorkspaceGetDirectoryTreeResponse =
     | Readonly<{ success: true; tree: WorkspaceTreeNode }>

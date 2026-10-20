@@ -8,6 +8,7 @@ import {
     createPluginTranscriptActivityTranscriptItemsCache,
     type PluginTranscriptActivityLiveRow,
 } from './pluginTranscriptActivityTranscriptItem';
+import type { TranscriptRowShellItem } from '../measurement/transcriptRowShellSignature';
 
 function activity(params: Readonly<{
     pluginId: string;
@@ -36,6 +37,21 @@ function activity(params: Readonly<{
 }
 
 describe('appendPluginTranscriptActivityTranscriptItems', () => {
+    it('retains the base with no visible tail while reconciling removed Activity rows', () => {
+        const base = [{ kind: 'message' as const, id: 'base', messageId: 'base', createdAt: 1, seq: null }];
+        const cache = createPluginTranscriptActivityTranscriptItemsCache();
+        const input = { sessionId: 'session-1', dismissedActivityIds: new Set<string>(),
+            isActionAvailable: () => true, cache };
+        const row = activity({ pluginId: 'plugin-a', contributionId: 'progress', localActivityId: 'progress' });
+        expect(appendPluginTranscriptActivityTranscriptItems(base, { ...input, activities: [row] })).toHaveLength(2);
+        expect(cache.itemsByIdentity.size).toBe(1);
+        expect(appendPluginTranscriptActivityTranscriptItems(base, { ...input, activities: [] })).toBe(base);
+        expect(cache.itemsByIdentity.size).toBe(0);
+        expect(cache.currentItemsByIdentity.size).toBe(0);
+        expect(appendPluginTranscriptActivityTranscriptItems(base, { ...input, activities: [row],
+            dismissedActivityIds: new Set([buildPluginTranscriptActivityIdentityKey(row)]) })).toBe(base);
+    });
+
     it('keeps colliding local activity ids qualified, ordered, and outside the sequence axis with a truthful overflow row', () => {
         const rows = appendPluginTranscriptActivityTranscriptItems([], {
             sessionId: 'session-1',
@@ -141,14 +157,14 @@ describe('appendPluginTranscriptActivityTranscriptItems', () => {
             return null;
         });
         const List = (props: Readonly<{ activities: readonly PluginTranscriptActivityLiveRow[] }>) => {
-            const rows = appendPluginTranscriptActivityTranscriptItems([], {
+            const rows: readonly TranscriptRowShellItem[] = appendPluginTranscriptActivityTranscriptItems([], {
                 sessionId: 'session-1',
                 activities: props.activities,
                 dismissedActivityIds: new Set(),
                 isActionAvailable: () => true,
                 cache,
             });
-            const pluginRows = rows.filter((row) => row.kind === 'plugin-transcript-activity');
+            const pluginRows = rows.filter((row): row is Extract<TranscriptRowShellItem, { kind: 'plugin-transcript-activity' }> => row.kind === 'plugin-transcript-activity');
             return React.createElement(React.Fragment, null, ...pluginRows.map((row) => (
                 React.createElement(Row, { key: row.id, row })
             )));

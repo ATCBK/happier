@@ -27,30 +27,6 @@ export function teamMemberRowSubtitle(
     .join(' · ');
 }
 
-/**
- * What removing a member does, as lines for the confirmation (lab `tsMembers-X`): what ends, the
- * Groups they leave by name, and what stays. A Group list that was only partly read is never
- * presented as the whole of it.
- */
-export function teamMemberRemovalLines(
-  input: Readonly<{
-    groupNames: readonly string[];
-    /** More Groups exist than were read, or the list has not answered. */
-    moreGroups: boolean;
-  }>,
-): readonly string[] {
-  const lines = [t('teams.members.removal.ends')];
-  if (input.groupNames.length > 0) {
-    const groups = input.groupNames.join(', ');
-    lines.push(
-      input.moreGroups
-        ? t('teams.members.removal.leavesGroupsAndMore', { groups })
-        : t('teams.members.removal.leavesGroups', { groups }),
-    );
-  }
-  lines.push(t('teams.members.removal.kept'));
-  return lines;
-}
 
 /** `native`, or the id of a directory source that manages (or could manage) the membership. */
 export type TeamMemberManagementChoiceId = string;

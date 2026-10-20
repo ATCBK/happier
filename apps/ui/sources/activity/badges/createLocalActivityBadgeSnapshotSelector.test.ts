@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { accountSettingsParse } from '@happier-dev/protocol';
 
 import { createStorageStoreMock } from '@/dev/testkit/mocks/storage';
+import { createSessionAccessFixture, createSessionFixture, createSessionViewerFixture } from '@/dev/testkit/fixtures/sessionFixtures';
+import { normalizeSessionListFilterV1 } from '@happier-dev/protocol/sessions/listFilter/sessionListFilterV1';
+import { buildActivityOverviewSummaryFromSource } from '@/activity/source/buildActivityOverviewFromSource';
+import type { ActivityAttentionSource } from '@/activity/source/activityAttentionSourceTypes';
 import type { Message } from "@happier-dev/session-core/messages";
 import { localSettingsDefaults } from '@/sync/domains/settings/localSettings';
 import { registerStorageStateReader } from '@/sync/domains/state/storageStateReaderBridge';
@@ -161,6 +165,96 @@ describe('createLocalActivityBadgeSnapshotSelector', () => {
         vi.useRealTimers();
         currentState = createStorageState({});
         registerStorageStateReader(() => currentState);
+    });
+
+    it('counts loaded rule-only requests and invalidates after a Project-only edit', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(1_000);
+        const session = createSessionFixture({ id: 'rule-only', serverId: 'server1', active: true, activeAt: 950,
+            updatedAt: 950, presence: 'online', access: createSessionAccessFixture('edit'),
+            viewer: createSessionViewerFixture(), metadata: { ...createSessionFixture().metadata, path: '/Users/tester/project', host: 'tester.local', projectId: 'payments' },
+            pendingUserActionRequestCount: 1, pendingRequestObservedAt: 950 });
+        const state = createStorageState({ sessions: { [session.id]: session } });
+        const personalFollowRulesByServerId: NonNullable<ActivityAttentionSource['personalFollowRulesByServerId']> = {
+            server1: { status: 'ready', accountId: 'account1', rules: [{
+                ruleId: 'payments', receiver: { kind: 'account' }, version: 0,
+                definition: { v: 1, enabled: true, policy: { preset: 'important' },
+                    filter: normalizeSessionListFilterV1({ scope: 'all_accessible', homeServerIds: ['server1'],
+                        startedBy: ['you', 'triggers', 'agents'], projects: { include: [{ serverId: 'server1', projectKey: 'payments' }], exclude: [] } }) },
+            }] },
+        };
+        expect(buildActivityOverviewSummaryFromSource({ source: { isDataReady: true, sessionsById: state.sessions,
+            sessionListRowsByServerId: state.sessionListRowsByServerId,
+            ordinarySessionListMembershipByServerId: state.ordinarySessionListMembershipByServerId,
+            sessionListIndexByServerId: state.sessionListIndexByServerId,
+            concurrentSessionListCacheByServerId: state.concurrentSessionListCacheByServerId,
+            personalFollowRulesByServerId }, nowMs: 1_000 }).totalAttentionCount).toBe(1);
+        const selector = createLocalActivityBadgeSnapshotSelector({
+            accountSettingsByServerId: { server1: accountSettingsParse({}) }, friendRequestCount: 0,
+            hasNonNumericInboxAttention: false, localSettings: localSettingsDefaults,
+            personalSessionListCoverageComplete: true, personalSessionListMembershipByServerId: { server1: [] },
+            personalFollowRulesByServerId,
+        });
+        expect(selector(state).localBadgeState.count).toBe(1);
+        const moved = { ...session, metadata: { ...session.metadata, path: '/Users/tester/project', host: 'tester.local', projectId: 'design' } };
+        expect(selector({ ...state, sessions: { [session.id]: moved } }).localBadgeState.count).toBe(0);
+    });
+
+    it('crosses quiet hours in both directions without any source identity changing', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-10-19T08:00:00Z'));
+        const state = createStorageState({
+            sessionListRowsByServerId: { server1: { session1: createRenderable({ id: 'session1', hasUnreadMessages: true }) } },
+            ordinarySessionListMembershipByServerId: { server1: ['session1'] },
+        });
+        const selector = createLocalActivityBadgeSnapshotSelector({
+            accountSettingsByServerId: { server1: accountSettingsParse({ attentionDeliveryPolicyV1: {
+                quietHours: { enabled: true, timezone: 'UTC', windows: [{ startLocalTime: '09:00', endLocalTime: '17:00' }] },
+                channels: { badge: { quietHoursBehavior: 'suppress' } },
+            } }) },
+            friendRequestCount: 0,
+            hasNonNumericInboxAttention: false,
+            localSettings: localSettingsDefaults,
+        });
+        expect(selector(state).localBadgeState.count).toBe(1);
+        vi.setSystemTime(new Date('2026-10-19T09:00:00Z'));
+        expect(selector({ ...state }).localBadgeState.count).toBe(0);
+        vi.setSystemTime(new Date('2026-10-19T17:00:00Z'));
+        expect(selector({ ...state }).localBadgeState.count).toBe(1);
+    });
+
+    it('retires a stale pending request without a source update', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date(1_000));
+        const selector = createSelector();
+        const state = createStorageState({ sessions: { session1: createSession({
+            id: 'session1', active: true, presence: 'online',
+            pendingUserActionRequestCount: 1, pendingRequestObservedAt: 1_000,
+        }) } });
+        expect(selector(state).localBadgeState.count).toBe(1);
+        vi.setSystemTime(new Date(1_000_000));
+        expect(selector({ ...state }).localBadgeState.count).toBe(0);
+    });
+
+    it('does not readmit fixed device settings when badge source records change', () => {
+        let overrideReads = 0;
+        const selector = createLocalActivityBadgeSnapshotSelector({
+            accountSettingsByServerId: { server1: accountSettingsParse({}) },
+            friendRequestCount: 0,
+            hasNonNumericInboxAttention: false,
+            localSettings: {
+                get attentionDeviceOverridesV1() {
+                    overrideReads += 1;
+                    return localSettingsDefaults.attentionDeviceOverridesV1;
+                },
+            },
+        });
+        const state = createStorageState({});
+        const first = selector(state);
+        const readsAfterFirst = overrideReads;
+        expect(readsAfterFirst).toBeGreaterThan(0);
+        expect(selector({ ...state, sessions: { ...state.sessions } })).toBe(first);
+        expect(overrideReads).toBe(readsAfterFirst);
     });
 
     it('builds large membership signatures with linear address-key allocation', () => {

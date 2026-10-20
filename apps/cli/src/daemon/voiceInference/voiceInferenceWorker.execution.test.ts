@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -74,6 +74,90 @@ afterEach(async () => {
 });
 
 describe('createVoiceInferenceWorkerExecution request lifecycle', () => {
+  it('warms a receiver model while the sender keeps its streaming lease and PCM progress', async () => {
+    const runtime: VoiceInferenceRuntime = {
+      synthesizeTts: async () => { throw new Error('unused'); },
+      transcribeAudio: async () => { throw new Error('unused'); },
+      createStreamingTranscriptionSession: async ({ requestId }) => ({
+        appendPcm16: async ({ seq }) => ({ events: [{ type: 'partial', seq, text: requestId, isEndpoint: false, confidence: null }] }),
+        finish: async () => ({ text: requestId, language: 'en', events: [] }),
+        cancel: async () => {}, close: async () => {},
+      }),
+    };
+    const worker = await createExecution(runtime);
+    const input = { packId: sttPackId, language: null, format: {
+      sampleRateHz: 16_000, channelCount: 1, bitsPerSample: 16, ffmpegCodec: 'pcm_s16le',
+    } } as const;
+    const first = await worker.createStreamingTranscriptionSession({ ...input, requestId: 'sender' });
+    const warming = worker.warmModelPack(sttPackId);
+    let warmed = false;
+    void warming.then(() => { warmed = true; });
+    let receiver: Awaited<ReturnType<typeof worker.createStreamingTranscriptionSession>> | undefined;
+    try {
+      await expect(first.appendPcm16({ seq: 0, pcm16Bytes: new Uint8Array([1, 2]) })).resolves.toMatchObject({
+        events: [{ text: 'sender' }],
+      });
+      await vi.waitFor(() => expect(warmed).toBe(true));
+      receiver = await worker.createStreamingTranscriptionSession({ ...input, requestId: 'receiver' });
+      const results = await Promise.all([first, receiver].map(session => session.appendPcm16({ seq: 1, pcm16Bytes: new Uint8Array([3, 4]) })));
+      expect(results.map(result => result.events[0])).toMatchObject([{ text: 'sender' }, { text: 'receiver' }]);
+    } finally {
+      await first.cancel();
+      await receiver?.cancel();
+      await warming;
+    }
+  });
+
+  it('admits a second live STT client while serializing native work and retaining model custody', async () => {
+    const appendGate = deferred<void>();
+    const entered: string[] = [];
+    const runtime: VoiceInferenceRuntime = {
+      synthesizeTts: async () => { throw new Error('unused'); },
+      transcribeAudio: async () => { throw new Error('unused'); },
+      createStreamingTranscriptionSession: async ({ requestId }) => ({
+        appendPcm16: async () => {
+          entered.push(requestId);
+          if (requestId === 'first-client') await appendGate.promise;
+          return { events: [] };
+        },
+        finish: async () => ({ text: requestId, language: 'en', events: [] }),
+        cancel: async () => {}, close: async () => {},
+      }),
+    };
+    const worker = await createExecution(runtime);
+    const input = { packId: sttPackId, language: null, format: {
+      sampleRateHz: 16_000, channelCount: 1, bitsPerSample: 16, ffmpegCodec: 'pcm_s16le',
+    } } as const;
+    const first = await worker.createStreamingTranscriptionSession({ ...input, requestId: 'first-client' });
+    let second: Awaited<ReturnType<typeof worker.createStreamingTranscriptionSession>> | undefined;
+    const secondReady = worker.createStreamingTranscriptionSession({ ...input, requestId: 'receiver-client' })
+      .then(session => { second = session; return session; });
+    try {
+      await vi.waitFor(() => expect(second).toBeDefined());
+      const firstAppend = first.appendPcm16({ seq: 0, pcm16Bytes: new Uint8Array([0, 0]) });
+      await vi.waitFor(() => expect(entered).toEqual(['first-client']));
+      const secondAppend = second!.appendPcm16({ seq: 0, pcm16Bytes: new Uint8Array([0, 0]) });
+      let removed = false;
+      const removal = worker.removeModel(sttPackId).then(() => { removed = true; });
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(entered).toEqual(['first-client']);
+      expect(removed).toBe(false);
+      appendGate.resolve();
+      await Promise.all([firstAppend, secondAppend]);
+      expect(entered).toEqual(['first-client', 'receiver-client']);
+      await expect(first.finish({ finalSeq: 0 })).resolves.toMatchObject({ text: 'first-client' });
+      expect(removed).toBe(false);
+      // A queued remove must not block the existing receiver's final native operation.
+      await expect(second!.finish({ finalSeq: 0 })).resolves.toMatchObject({ text: 'receiver-client' });
+      await removal;
+      expect(removed).toBe(true);
+    } finally {
+      appendGate.resolve();
+      await first.cancel();
+      await (await secondReady).cancel();
+    }
+  });
+
   it('keeps a healthy runtime ready when a direct TTS result exceeds the IPC output ceiling', async () => {
     const runtime: VoiceInferenceRuntime = {
       synthesizeTts: vi.fn(async () => {
@@ -253,6 +337,7 @@ describe('createVoiceInferenceWorkerExecution request lifecycle', () => {
     const filePath = join(tempDir, fileName);
     await writeFile(filePath, createWavHeader());
     const lifetime = new AbortController();
+    let captured = false;
     const pending = execution.transcribeAudio({
       requestId: 'late-stt-result',
       uploadId: 'upload-late-stt-result',
@@ -266,6 +351,7 @@ describe('createVoiceInferenceWorkerExecution request lifecycle', () => {
         systemFfmpegAllowed: false,
       },
       signal: lifetime.signal,
+      onTranscribed: async () => { captured = true; },
     });
     await vi.waitFor(() => expect(runtime.transcribeAudio).toHaveBeenCalledOnce());
 
@@ -274,10 +360,53 @@ describe('createVoiceInferenceWorkerExecution request lifecycle', () => {
 
     try {
       await expect(pending).rejects.toMatchObject({ code: 'cancelled' });
+      expect(captured).toBe(false);
       expect(await readdir(tempDir)).not.toContain(fileName);
     } finally {
       await rm(filePath, { force: true });
     }
+  });
+
+  it('keeps completed STT input available for capture without holding the inference lease', async () => {
+    const runtime: VoiceInferenceRuntime = {
+      synthesizeTts: async () => { throw new Error('unused'); },
+      transcribeAudio: async ({ requestId }) => ({ text: requestId, language: 'en' }),
+    };
+    const execution = await createExecution(runtime);
+    const { tempDir } = resolveVoiceInferencePaths();
+    const filePath = join(tempDir, 'completed-input.wav');
+    const nextFilePath = join(tempDir, 'next-input.wav');
+    const audio = createWavHeader();
+    await writeFile(filePath, audio);
+    await writeFile(nextFilePath, audio);
+    const captureRelease = deferred<void>();
+    let capturedAudio: Buffer | undefined;
+    const input = {
+      uploadId: 'completed-input', filePath, inputMimeType: 'audio/wav',
+      packId: sttPackId, language: null,
+      normalization: {
+        inputTransport: 'upload_transfer', strategy: 'daemon_decode', systemFfmpegAllowed: false,
+      },
+    } as const;
+    const pending = execution.transcribeAudio({
+      ...input, requestId: 'completed-input',
+      onTranscribed: async () => {
+        capturedAudio = await readFile(filePath);
+        await captureRelease.promise;
+        throw new Error('diagnostic_storage_unavailable');
+      },
+    });
+    try {
+      await vi.waitFor(() => expect(capturedAudio).toEqual(audio));
+      await expect(execution.transcribeAudio({
+        ...input, requestId: 'next-input', uploadId: 'next-input', filePath: nextFilePath,
+      })).resolves.toMatchObject({ text: 'next-input' });
+    } finally {
+      captureRelease.resolve();
+    }
+    await expect(pending).resolves.toMatchObject({ text: 'completed-input' });
+    expect(await readdir(tempDir)).not.toContain('completed-input.wav');
+    expect(await readdir(tempDir)).not.toContain('next-input.wav');
   });
 
   it('lets cancellation win over a late streaming append result', async () => {

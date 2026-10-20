@@ -22,7 +22,7 @@ import { createStableSpawnNonce } from '@/session/shared/spawnNonce';
 import { callMachineRpc } from '@/session/transport/rpc/machineRpc';
 import { runWithServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import type { RpcActionExecutorContext } from '@/rpc/handlers/_actionDispatchAdapter';
-import { readProjectAccountRows, type ActiveProjectAccountRowsSnapshot } from '@/workspaces/projectAccountRows';
+import { readProjectAccountRows } from '@/workspaces/projectAccountRows';
 import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import { readWorkspaceSyncChildMachineFacts } from '@/workspaces/sync/workspaceSyncTargetAuthority';
 import { resolveWorkspaceTransferRootWithScmWorkspace } from '@/scm/workspace';
@@ -79,11 +79,7 @@ type CoordinatorDeps = Readonly<{
   callWorkspaceSourcePhase?: (input: Parameters<NonNullable<PrepareWorkspaceSyncHandoffInput['callWorkspaceSourcePhase']>>[0],
     context: RpcActionExecutorContext) => Promise<unknown>;
   resolveWorkspaceTransferRoot?: typeof resolveWorkspaceTransferRootWithScmWorkspace;
-  refreshProjectSnapshot?: (input: Readonly<{
-    credentials: StoredCredentials;
-    serverId: string;
-    signal?: AbortSignal;
-  }>) => Promise<ActiveProjectAccountRowsSnapshot>;
+  refreshProjectSnapshot?: typeof readProjectAccountRows;
 }>;
 
 type HostCoordinatorInput = Readonly<{
@@ -320,8 +316,13 @@ export function createTrackedSessionHandoffCoordinator(deps: CoordinatorDeps) {
     if (workspaceAction?.kind === 'relationship' || workspaceAction?.kind === 'linked_workspace') {
       try {
         // Endpoint identity is read from the authenticated Home's Project rows.
+        const authorization = hostInput.context?.externalActionExecutionAuthorization;
         const projectSnapshot = await refreshProjectSnapshot({
-          credentials, serverId: workspaceAccountServerId, signal: hostInput.signal,
+          ...(requester ? { credentials, sessionCustody: { serverId: requester.attribution.serverId,
+            accountId: requester.attribution.accountId, serverHttpBaseUrl: requester.serverHttpBaseUrl, isCurrent: requester.isCurrent } }
+            : authorization ? { authorization, effectActionId: authorization.binding.actionId }
+              : { credentials, publication: 'installed' as const }),
+          serverId: workspaceAccountServerId, signal: hostInput.signal,
         });
         const sessionCwd = source.sourceRootPath;
         if (!sessionCwd) throw Object.assign(new Error('Source workspace path is unavailable'), { code: 'workspace_ref_not_ready' });

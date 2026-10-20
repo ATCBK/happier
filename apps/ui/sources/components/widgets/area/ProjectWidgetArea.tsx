@@ -1,8 +1,9 @@
 import * as React from 'react';
 import type { WidgetSurfaceContext } from '@/components/widgets/surface/widgetSurfaceSetup';
 import { t } from '@/text';
+import { projectOverviewAreaDashboard, useProjectOverviewAreaLayouts } from '@/components/projects/detail/useProjectOverviewAreaLayouts';
 import { WidgetArea } from './WidgetArea';
-import type { WidgetAreaPort } from './useWidgetAreaLayout';
+import { useWidgetAreaLayout, type WidgetAreaPort } from './useWidgetAreaLayout';
 import { useProjectWidgetAreaBinding, type ProjectWidgetAreaBindingInput } from './useProjectWidgetAreaBinding';
 export { projectWidgetAreaContext, useProjectWidgetAreaBinding } from './useProjectWidgetAreaBinding';
 export type { ProjectWidgetAreaValue, ProjectWidgetAreaBindingInput, ProjectWidgetAreaBinding } from './useProjectWidgetAreaBinding';
@@ -50,19 +51,30 @@ export function ProjectWidgetArea(props: ProjectWidgetAreaProps): React.ReactEle
 }
 
 /**
- * The Code aside consumes the same binding as Overview. Source-free Projects still have their
- * personal layout; an unavailable portable Source remains an empty follow-input slot.
+ * The Code aside's Widgets block (WGT-14) consumes the same binding and document projection as Overview:
+ * it is that layout's side area, so both show the same widgets and the same render-only defaults.
+ * Source-free Projects still have their personal layout; an unavailable portable Source remains an
+ * empty follow-input slot. The pane above names the block, so the area draws as a dashboard area.
  */
 export function ProjectAsideWidgets(props: ProjectWidgetAreaBindingInput & Readonly<{
     testID: string;
 }>): React.ReactElement {
     const binding = useProjectWidgetAreaBinding(props);
+    if (!binding.port) return (
+        <WidgetArea port={null} context={binding.context} geometry="column" area="aside" title={t('widgetAdd.areaProjectTitle')}
+            surfaceName={props.projectName} unavailable={{ title: t('widgetAdd.areaUnavailableTitle'),
+                reasonCode: binding.unavailableReasonCode ?? 'widget_project_identity_unavailable' }}
+            dashboard={{ addLabel: t('projects.widgets.add'), emptyTitle: t('projects.widgets.emptyArea') }} testID={props.testID} />
+    );
+    return <ProjectAsideDocument port={binding.port} context={binding.context} projectName={props.projectName} testID={props.testID} />;
+}
+
+function ProjectAsideDocument(props: Readonly<{ port: WidgetAreaPort; context: WidgetSurfaceContext; projectName: string; testID: string }>): React.ReactElement {
+    const layout = useWidgetAreaLayout(props.port, props.context);
+    const areas = useProjectOverviewAreaLayouts(layout);
     return (
-        <ProjectWidgetArea
-            projectName={props.projectName}
-            area="aside"
-            {...binding}
-            testID={props.testID}
-        />
+        <WidgetArea port={props.port} context={props.context} geometry="column" area="aside" layout={areas.aside}
+            title={t('widgetAdd.areaProjectTitle')} surfaceName={props.projectName}
+            dashboard={{ ...projectOverviewAreaDashboard(layout, 'aside'), holdsEmptyLineWhileLoading: true }} testID={props.testID} />
     );
 }

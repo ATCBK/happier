@@ -1,14 +1,163 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, utimes, writeFile } from 'node:fs/promises';
 import { unlinkSync, writeFileSync } from 'node:fs';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+import { once } from 'node:events';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 
-import { describeJsonOwnerLockOwner, withJsonOwnerFileLock } from './jsonOwnerFileLock.mjs';
+import { describeJsonOwnerLockOwner, readJsonOwnerLockSnapshot, withJsonOwnerFileLock } from './jsonOwnerFileLock.mjs';
 import { createTempFixture } from '../../testkit/core/temp_fixture.mjs';
 import { spawnTestProcess } from '../../testkit/core/spawn_test_process.mjs';
+import { createWorkspaceBuildWaitNotifier } from './workspaceBuildWaitNotifier.mjs';
+
+test('owner creation and heartbeat never expose an incomplete owner record', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-json-owner-publication-' });
+  const lockPath = fixture.path('owner.lock');
+  const open = fs.openSync;
+  const write = fs.writeFileSync;
+  const observations = [];
+  const observe = () => {
+    const snapshot = readJsonOwnerLockSnapshot(lockPath);
+    if (snapshot.exists) observations.push(snapshot.owner);
+  };
+  // Observe the real filesystem between creation/truncation and the first
+  // write, the same point another process can read after an interrupted write.
+  t.mock.method(fs, 'openSync', (...args) => {
+    const fd = open(...args);
+    if (args[0] === lockPath) observe();
+    return fd;
+  });
+  t.mock.method(fs, 'writeFileSync', (path, data, options) => {
+    if (path === lockPath) {
+      const flag = typeof options === 'object' ? options.flag ?? 'w' : 'w';
+      const fd = open(path, flag);
+      try { observe(); write(fd, data, options); } finally { fs.closeSync(fd); }
+    } else write(path, data, options);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  await withJsonOwnerFileLock(async ({ owner }) => {
+    observe();
+    t.mock.timers.tick(5_000);
+    observe();
+    assert.ok(observations.length > 0);
+    assert.ok(observations.every(entry => entry?.pid === process.pid && entry.createdAtMs === owner.createdAtMs),
+      'every published record must identify the actual holder, including during heartbeat replacement');
+  }, { lockPath });
+  await assert.rejects(readFile(lockPath), { code: 'ENOENT' });
+});
+
+test('stale reclaim preserves a fresh replacement even when restoration is interrupted', async t => {
+  for (const interrupted of [false, true]) await t.test(interrupted ? 'interrupted restoration' : 'complete restoration', async t => {
+    const fixture = await createTempFixture(t, { prefix: 'hstack-json-owner-reclaim-' });
+    const lockPath = fixture.path('owner.lock');
+    const staleRaw = JSON.stringify({ pid: 99999999, createdAtMs: 1, updatedAtMs: 1 });
+    const freshRaw = JSON.stringify({ pid: process.pid, createdAtMs: Date.now(), updatedAtMs: Date.now() });
+    const rename = fs.renameSync;
+    const write = fs.writeFileSync;
+    const open = fs.openSync;
+    let reclaimPath;
+    await writeFile(lockPath, staleRaw);
+    // Replace the stale snapshot at the real rename boundary, as a competing
+    // reclaimer followed by a fresh holder can do between read and quarantine.
+    t.mock.method(fs, 'renameSync', (from, to) => {
+      if (from === lockPath && String(to).includes('.reclaim-') && !reclaimPath) {
+        reclaimPath = to;
+        rename(lockPath, fixture.path('previous-owner'));
+        write(fixture.path('fresh-owner'), freshRaw);
+        fs.linkSync(fixture.path('fresh-owner'), lockPath);
+      }
+      return rename(from, to);
+    });
+    t.mock.method(fs, 'writeFileSync', (path, raw, options) => {
+      // An interruption after opening the public path must never be possible:
+      // the complete-record publisher writes privately before exclusive link.
+      if (interrupted && path === lockPath && raw === freshRaw) {
+        const fd = open(path, 'wx');
+        fs.closeSync(fd);
+        throw Object.assign(new Error('interrupted owner restoration'), { code: 'EIO' });
+      }
+      return write(path, raw, options);
+    });
+    syncBuiltinESMExports();
+    t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+    await assert.rejects(withJsonOwnerFileLock(() => assert.fail('fresh owner excludes contender'), {
+      lockPath, wait: false,
+    }), { code: 'EJSONOWNERFILELOCKBUSY' });
+    assert.ok(reclaimPath, 'the stale-read/fresh-replacement race was reached');
+    const snapshot = readJsonOwnerLockSnapshot(lockPath);
+    assert.equal(snapshot.raw, freshRaw, 'restoration never publishes an ownerless record');
+    await assert.rejects(readFile(reclaimPath), { code: 'ENOENT' });
+  });
+});
+
+test('queued-owner heartbeats and unrelated files do not rescan the waiter population', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-json-owner-queue-noise-' });
+  const lockPath = fixture.path('owner.lock');
+  const waitersDir = `${lockPath}.waiters`;
+  await mkdir(waitersDir);
+  const owner = { pid: process.pid, createdAtMs: Date.now(), updatedAtMs: Date.now() };
+  await writeFile(lockPath, JSON.stringify(owner));
+  const tickets = ['1.json', '2.json', '3.json'].map(name => join(waitersDir, name));
+  for (const path of tickets) await writeFile(path, JSON.stringify({ ...owner, priority: 'writer' }));
+  let reads = 0;
+  const read = fs.readFileSync;
+  t.mock.method(fs, 'readFileSync', (path, ...args) => {
+    if (typeof path === 'string' && dirname(path) === waitersDir) reads += 1;
+    return read(path, ...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  const cancellation = new AbortController();
+  let notify;
+  const waiting = new Promise(resolve => { notify = resolve; });
+  const contender = withJsonOwnerFileLock(() => assert.fail('live owner excludes contender'), {
+    lockPath, sharedReaders: true, priority: 'writer', signal: cancellation.signal,
+    watchFallbackMs: 10_000, onWait: notify,
+  }).catch(error => error.name);
+  try {
+    await waiting;
+    await delay(20);
+    const before = reads;
+    for (const path of tickets) {
+      const pending = `${path}.pending-fixture`;
+      await writeFile(pending, JSON.stringify({ ...owner, priority: 'writer', updatedAtMs: Date.now() + 1 }));
+      await rename(pending, path);
+      await writeFile(fixture.path('unrelated.log'), 'another lane wrote output');
+      await delay(20);
+    }
+    assert.equal(reads, before, 'heartbeat replacement and unrelated logs do not change queue eligibility');
+  } finally {
+    cancellation.abort();
+    assert.equal(await contender, 'AbortError');
+  }
+});
+
+test('a free lock blocked by a queued writer reports that writer instead of an unknown holder', async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-json-owner-queued-diagnostic-' });
+  const lockPath = fixture.path('owner.lock');
+  await mkdir(`${lockPath}.waiters`);
+  await writeFile(join(`${lockPath}.waiters`, '1.json'), JSON.stringify({
+    pid: process.pid, priority: 'writer', createdAtMs: Date.now(), updatedAtMs: Date.now(),
+  }));
+  let notices = '';
+  t.mock.method(process.stderr, 'write', chunk => { notices += String(chunk); return true; });
+  const notice = createWorkspaceBuildWaitNotifier({
+    label: 'dependency refresh', kind: 'lock', env: { HAPPIER_WORKSPACE_BUILD_NOTICE_AFTER_MS: '0' },
+  });
+  const cancellation = new AbortController();
+  await assert.rejects(withJsonOwnerFileLock(() => assert.fail('reader overtook the queued writer'), {
+    lockPath, sharedReaders: true, priority: 'reader', signal: cancellation.signal,
+    onWait(event) { notice(event); cancellation.abort(); },
+  }), { name: 'AbortError' });
+  assert.match(notices, new RegExp(`queued.*pid=${process.pid}.*heldMs=.*heartbeatAgeMs=`));
+  assert.doesNotMatch(notices, /owner=unknown/);
+});
 
 test('writer re-entry reuses its live process ticket without losing queue position', async t => {
   const fixture = await createTempFixture(t, { prefix: 'hstack-json-writer-reentry-' });
@@ -176,6 +325,48 @@ test('shared reader death without a file event is recovered through catch-up', a
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
     await exited;
     await contender;
+  }
+});
+
+for (const priority of ['reader', 'writer']) test(`an unreaped ${priority} process cannot retain JSON lock ownership`, {
+  skip: process.platform !== 'linux', timeout: 10000,
+}, async t => {
+  const fixture = await createTempFixture(t, { prefix: 'hstack-json-owner-zombie-' });
+  const lockPath = fixture.path('owner.lock');
+  const releasePath = fixture.path('release-parent');
+  const ownerScript = `import {withJsonOwnerFileLock} from ${JSON.stringify(new URL('./jsonOwnerFileLock.mjs', import.meta.url).href)};
+    process.stdin.once('data',()=>process.exit(0));
+    await withJsonOwnerFileLock(async()=>{process.stdout.write('held');await new Promise(()=>{});},
+      {lockPath:process.argv[1],sharedReaders:true,priority:process.argv[2]});`;
+  // Block only this fixture parent's event loop until released. Its child can
+  // exit, but libuv cannot reap it yet: signal 0 still succeeds for the zombie.
+  const parentScript = `import {spawn} from 'node:child_process'; import {existsSync} from 'node:fs';
+    const child=spawn(process.execPath,['--input-type=module','-e',${JSON.stringify(ownerScript)},process.argv[1],process.argv[3]],
+      {stdio:['pipe','pipe','inherit']});
+    child.stdout.once('data',()=>{process.stdout.write(String(child.pid)+'\\n');child.stdin.end('exit');
+      const state=new Int32Array(new SharedArrayBuffer(4));
+      while(!existsSync(process.argv[2]))Atomics.wait(state,0,0,10);
+    });`;
+  const parent = spawnTestProcess(process.execPath, ['--input-type=module', '-e', parentScript,
+    lockPath, releasePath, priority], { stdio: ['ignore', 'pipe', 'inherit'] });
+  const exited = new Promise(resolve => parent.once('close', resolve));
+  try {
+    const [chunk] = await once(parent.stdout, 'data', { signal: t.signal });
+    const pid = Number(String(chunk).trim());
+    while (true) {
+      t.signal.throwIfAborted();
+      const stat = await readFile(`/proc/${pid}/stat`, 'utf8');
+      if (stat.slice(stat.lastIndexOf(') ') + 2).startsWith('Z ')) break;
+      await delay(5, undefined, { signal: t.signal });
+    }
+    assert.doesNotThrow(() => process.kill(pid, 0), 'the real OS signal probe still sees this departed PID');
+    assert.equal(await withJsonOwnerFileLock(async () => 'recovered', {
+      lockPath, sharedReaders: true, priority: 'writer', wait: false,
+    }), 'recovered');
+    await assert.rejects(readFile(lockPath), { code: 'ENOENT' });
+  } finally {
+    await writeFile(releasePath, 'release');
+    assert.equal(await exited, 0, 'the fixture parent must resume and reap its departed child');
   }
 });
 

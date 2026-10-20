@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { isRegistryCustodiedPluginSourceKind } from '@happier-dev/protocol/plugins/source-spec';
 import type { PluginSourceKindV1 } from '@happier-dev/protocol';

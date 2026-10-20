@@ -81,6 +81,7 @@ export function resolveToolRowPinAction(params: Readonly<{
     routeMessageId: string | null | undefined;
     role?: SessionMessagePinRole;
     pins?: readonly PersistedSessionMessagePinV1[];
+    pinActionEnabled?: boolean;
     readOnlyContext?: boolean;
     onTogglePin?: (pin: PersistedSessionMessagePinV1) => void;
     testID: string;
@@ -93,6 +94,7 @@ export function resolveToolRowPinAction(params: Readonly<{
         routeMessageId: params.routeMessageId,
         role: params.role ?? 'tool',
         pins: params.pins ?? [],
+        pinActionEnabled: params.pinActionEnabled,
         readOnlyContext: params.readOnlyContext === true,
     });
     if (availability.status !== 'available') return null;

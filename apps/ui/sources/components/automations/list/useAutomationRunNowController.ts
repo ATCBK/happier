@@ -2,6 +2,7 @@ import React from 'react';
 
 import { WorkflowActionOutputSchemasV1 } from '@happier-dev/protocol/workflows/actionsV1';
 import { callWorkflowAction } from '@/sync/domains/workflows/callWorkflowAction';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 import {
@@ -46,14 +47,15 @@ export type AutomationRunNowController = Readonly<{
     ) => Promise<AutomationRunNowAdmission | null>;
 }>;
 
-export function useAutomationRunNowController(): AutomationRunNowController {
-    const command = useTransientCommandAcknowledgement<AutomationRunNowAdmission>('automation.runNow');
+export function useAutomationRunNowController(accountLifetime?: ServerAccountScopeLifetime | null): AutomationRunNowController {
+    const command = useTransientCommandAcknowledgement<AutomationRunNowAdmission>('automation.runNow', accountLifetime);
 
     return React.useMemo(() => ({
         stateFor: command.stateFor,
         runNow: async (automationId, _targetType, options) => await command.run({
             commandId: automationId,
             submit: () => callWorkflowAction({ actionId: 'workflow.trigger.run_now', input: { automationId },
+                ...(accountLifetime === undefined ? {} : { accountLifetime }),
                 parseResult: (value) => WorkflowActionOutputSchemasV1['workflow.trigger.run_now'].parse(value) }),
             ...(options?.isInvocationCurrent
                 ? { isInvocationCurrent: options.isInvocationCurrent }
@@ -65,5 +67,5 @@ export function useAutomationRunNowController(): AutomationRunNowController {
                 );
             },
         }),
-    }), [command]);
+    }), [command, accountLifetime]);
 }

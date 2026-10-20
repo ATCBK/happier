@@ -1,7 +1,15 @@
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createSessionFixture, renderHook, standardCleanup } from '@/dev/testkit';
-import { enterDemoMode, resetDemoModeDepthForTests } from '@/demoMode/runtime/enterExitDemoMode';
+import { createSessionFixture, flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { ExternalSessionStatusGetResponseSchema } from '@happier-dev/protocol/sessions/external/daemonRpcV1';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { installSessionActionRpcBoundary } from '@/dev/testkit/harness/sessionActionRpcBoundary';
+import { serveExternalSessionBrowseHome } from '@/dev/testkit/harness/externalSessionBrowseHome';
+import { initializeRealAppRuntimeForTests } from '@/dev/testkit/harness/realAppRuntimeHarness';
+import { enterDemoMode, isDemoModeActive, resetDemoModeDepthForTests } from '@/demoMode/runtime/enterExitDemoMode';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -24,47 +32,21 @@ const documentStub = vi.hoisted(() => ({
 const machineExternalSessionStatusGetSpy = vi.hoisted(() => vi.fn());
 const machineExternalSessionAttachSpy = vi.hoisted(() => vi.fn());
 const machineExternalSessionDetachSpy = vi.hoisted(() => vi.fn());
-const replaceExternalSessionStatusDemandViewportSpy = vi.hoisted(() => vi.fn());
-const subscribeActiveServerSpy = vi.hoisted(() =>
-  vi.fn<(listener: (snapshot: { serverId: string }) => void) => () => void>(() => () => {}),
-);
 const preferredServerListeners = vi.hoisted(() => new Set<unknown>());
 const subscribePreferredServerSpy = vi.hoisted(() => vi.fn());
 const appState = vi.hoisted(() => ({ currentState: 'active' as string }));
+// This is the daemon's next cursor reply, never the Sync-owned accepted cursor.
 const acceptedTailCursorState = vi.hoisted(() => ({
   current: null as string | null,
   listeners: new Set<() => void>(),
 }));
-let activeServerSnapshot = { serverId: 'server-1' };
-let activeAccountIsCurrent = true;
 
-vi.mock('@/sync/ops/machineExternalSessions', () => ({
-  machineExternalSessionStatusGet: machineExternalSessionStatusGetSpy,
-  machineExternalSessionAttach: machineExternalSessionAttachSpy,
-  machineExternalSessionDetach: machineExternalSessionDetachSpy,
-}));
-vi.mock('@/sync/runtime/orchestration/externalSessions/externalSessionStatusDemandCoordinator', () => ({
-  replaceExternalSessionStatusDemandViewport: replaceExternalSessionStatusDemandViewportSpy,
-}));
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-  getActiveServerSnapshot: () => activeServerSnapshot,
-  subscribeActiveServer: subscribeActiveServerSpy,
-}));
-vi.mock('@/sync/domains/scope/activeServerAccountScope', () => ({
-  captureActiveServerAccountScopeCurrentness: () => ({
-    isCurrent: () => activeAccountIsCurrent,
-    onRetire: () => ({ dispose() {} }),
-  }),
-}));
-vi.mock('@/sync/sync', () => ({
-  sync: {
-    getAcceptedExternalSessionTailCursor: () => acceptedTailCursorState.current,
-    subscribeAcceptedExternalSessionTailCursor: (_sessionId: string, listener: () => void) => {
-      acceptedTailCursorState.listeners.add(listener);
-      return () => acceptedTailCursorState.listeners.delete(listener);
-    },
-  },
-}));
+vi.mock('socket.io-client', async (importOriginal) =>
+  (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+vi.mock('@/modal', async () => {
+  const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+  return createModalModuleMock().module;
+});
 vi.mock('react-native', async () => {
   const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
   return createReactNativeWebMock({
@@ -89,8 +71,71 @@ type HookValue = Readonly<{
   refreshNow: () => Promise<unknown>;
 }>;
 
+let servedHome: Awaited<ReturnType<typeof serveExternalSessionBrowseHome>> | null = null;
+let signedOut = false;
+let firstAttachRequest = createDeferred<void>();
+let statusRequestIssued = createDeferred<void>();
+let statusRequestSignals: AbortSignal[] = [];
+let attachRequestSignals: AbortSignal[] = [];
+let materializeRequestIssued = createDeferred<void>();
+let materializeRequestSignals: AbortSignal[] = [];
+let materializeReply: Promise<unknown> = Promise.resolve(null);
+let linkRequestIssued = createDeferred<void>();
+let linkRequestSignals: AbortSignal[] = [];
+let linkReply: Promise<unknown> = Promise.resolve(null);
+let appStateBaseline = new Set<(state: string) => void>();
+let documentBaseline = new Set<() => void>();
+const rpcRequests = installSessionActionRpcBoundary(async (request, { serverUrl, signal }) => {
+  const method = request.method.slice(request.method.indexOf(':') + 1);
+  const home = Object.values(servedHome?.homes ?? {}).find(home => home.serverUrl === serverUrl);
+  if (!home) throw new Error('External-session RPC reached an undeclared Home');
+  const options = { serverId: home.id };
+  if (method === RPC_METHODS.DAEMON_EXTERNAL_SESSION_STATUS_GET) {
+    statusRequestSignals.push(signal);
+    const response = machineExternalSessionStatusGetSpy(request.params, options);
+    statusRequestIssued.resolve();
+    const value: unknown = await response;
+    // These daemon fixtures advertise no takeover/force-stop controls. Keep the
+    // complete wire schema beneath the real client parser, unlike an ops stub.
+    return ExternalSessionStatusGetResponseSchema.parse(value && typeof value === 'object' && Reflect.get(value, 'ok') === true
+      ? { canTakeOverDirect: false, canTakeOverPersist: false, canForceStop: false, ...value }
+      : value);
+  }
+  if (method === RPC_METHODS.DAEMON_EXTERNAL_SESSION_ATTACH) {
+    attachRequestSignals.push(signal);
+    firstAttachRequest.resolve();
+    return machineExternalSessionAttachSpy(request.params, options);
+  }
+  if (method === RPC_METHODS.DAEMON_EXTERNAL_SESSION_DETACH)
+    return machineExternalSessionDetachSpy(request.params, options);
+  if (method === RPC_METHODS.DAEMON_EXTERNAL_SESSION_MATERIALIZE_START) {
+    materializeRequestSignals.push(signal);
+    materializeRequestIssued.resolve();
+    return materializeReply;
+  }
+  if (method === RPC_METHODS.DAEMON_EXTERNAL_SESSION_LINK_ENSURE) {
+    linkRequestSignals.push(signal);
+    linkRequestIssued.resolve();
+    return linkReply;
+  }
+  if (method === RPC_METHODS.DAEMON_EXTERNAL_SESSION_TRANSCRIPT_PAGE)
+    return { ok: true, items: [], hasMore: false, tailCursor: acceptedTailCursorState.current };
+  if (method === RPC_METHODS.DAEMON_EXTERNAL_SESSION_TRANSCRIPT_READ_AFTER)
+    return { ok: true, items: [], truncated: false, hasMore: false, nextCursor: acceptedTailCursorState.current };
+  throw new Error('Unexpected daemon RPC: ' + method);
+});
+await initializeRealAppRuntimeForTests();
 const { storage } = await import('@/sync/domains/state/storage');
-const initialSessions = storage.getState().sessions;
+const { sync } = await import('@/sync/sync');
+const serverRuntime = await import('@/sync/domains/server/serverRuntime');
+const storageReaderBridge = await import('@/sync/domains/state/storageStateReaderBridge');
+const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+const { markSessionSurfaceVisible, markSessionSurfaceHidden } = await import('@/sync/domains/session/sessionSurfaceVisibility');
+const demandCoordinator = await import('@/sync/runtime/orchestration/externalSessions/externalSessionStatusDemandCoordinator');
+let replaceExternalSessionStatusDemandViewportSpy = vi.spyOn(demandCoordinator, 'replaceExternalSessionStatusDemandViewport');
+
+let previousState = storage.getState();
 const subscribeStorage = storage.subscribe;
 
 function setPreferredSessionHome(serverId: string) {
@@ -107,8 +152,31 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+async function publishAcceptedCursor() {
+  const row = storage.getState().sessions['session-1'];
+  if (!row) throw new Error('Expected the real Session carrier');
+  storage.setState({ sessions: { ...storage.getState().sessions, 'session-1': {
+    ...row, currentStorageState: 'machine_only', metadata: { ...row.metadata!,
+      externalSessionV1: { v: 1, agentId: 'opencode', machineId: 'machine-1', remoteSessionId: 'remote-1',
+        linkedAtMs: 1,
+        source: { kind: 'opencodeServer', directory: '/tmp/workspace' } },
+    },
+  } } });
+  markSessionSurfaceVisible('session-1');
+  await sync.refreshSessionMessages('session-1');
+  expect(sync.getAcceptedExternalSessionTailCursor('session-1')).toBe(acceptedTailCursorState.current);
+}
+
+async function settleMountedRuntime(enabled: boolean) {
+  if (!enabled || signedOut || isDemoModeActive()) return;
+  // The outer test deadline owns this genuine transport observation; add no shorter polling deadline.
+  await firstAttachRequest.promise;
+  await flushHookEffects();
+}
+
 async function renderHarness(): Promise<{ getCurrent: () => HookValue; rerender: () => Promise<HookValue>; unmount: () => Promise<void> }> {
   const { useExternalSessionRuntime } = await import('./useExternalSessionRuntime');
+  if (acceptedTailCursorState.current) await publishAcceptedCursor();
   const hook = await renderHook(() => useExternalSessionRuntime({
     sessionId: 'session-1',
     metadata: {
@@ -117,10 +185,13 @@ async function renderHarness(): Promise<{ getCurrent: () => HookValue; rerender:
         agentId: 'opencode',
         machineId: 'machine-1',
         remoteSessionId: 'remote-1',
+        ...(acceptedTailCursorState.current ? { linkedAtMs: 1 } : {}),
         source: { kind: 'opencodeServer', directory: '/tmp/workspace' },
       },
     } as any,
   }));
+
+  await settleMountedRuntime(true);
 
   return {
     getCurrent: hook.getCurrent,
@@ -154,10 +225,13 @@ async function renderHarnessWithEnabled(initialEnabled: boolean): Promise<{
     },
   );
 
+  await settleMountedRuntime(initialEnabled);
+
   return {
     getCurrent: hook.getCurrent,
     rerender: async (enabled: boolean) => {
       await hook.rerender(enabled);
+      await settleMountedRuntime(enabled);
       return hook.getCurrent();
     },
     unmount: hook.unmount,
@@ -180,10 +254,13 @@ async function renderHarnessWithMetadata(initialMetadata: Record<string, unknown
     },
   );
 
+  await settleMountedRuntime(true);
+
   return {
     getCurrent: hook.getCurrent,
     rerender: async (metadata: Record<string, unknown>) => {
       await hook.rerender(metadata);
+      await flushHookEffects();
       return hook.getCurrent();
     },
     unmount: hook.unmount,
@@ -191,34 +268,78 @@ async function renderHarnessWithMetadata(initialMetadata: Record<string, unknown
 }
 
 describe('useExternalSessionRuntime', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     appState.currentState = 'active';
     documentStub.visibilityState = 'visible';
     (globalThis as any).document = documentStub;
     appStateListeners.clear();
     documentListeners.clear();
-    activeServerSnapshot = { serverId: 'server-1' };
-    activeAccountIsCurrent = true;
+    previousState = storage.getState();
+    signedOut = false;
+    firstAttachRequest = createDeferred<void>();
+    statusRequestIssued = createDeferred<void>();
+    statusRequestSignals = [];
+    attachRequestSignals = [];
+    materializeRequestIssued = createDeferred<void>();
+    materializeRequestSignals = [];
+    materializeReply = Promise.resolve(null);
+    linkRequestIssued = createDeferred<void>();
+    linkRequestSignals = [];
+    linkReply = Promise.resolve(null);
+    const http = createHomeHubArtifactHttpBoundary('account-a');
+    const sessions = createSessionMetadataHttpBoundary(() => ({}));
+    const machine = createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' });
+    servedHome = await serveExternalSessionBrowseHome({ homes: [
+      ...['srv_server-1', 'srv_server-2', 'srv_server-owned-a', 'srv_server-owned-b', 'srv_server-owned'].map(key => ({
+        key, serverUrl: 'https://external-' + key + '.test', serverIdentityId: key, accountId: 'account-a',
+      })),
+    ], route: ({ path, url }) => {
+      if (path === '/v1/machines/machine-1') return Response.json({ machine });
+      if (path === '/v1/machines') return Response.json([machine]);
+      return sessions.handle(url) ?? http.request(url);
+    } });
+    appStateBaseline = new Set(appStateListeners);
+    documentBaseline = new Set(documentListeners);
+    replaceExternalSessionStatusDemandViewportSpy = vi.spyOn(demandCoordinator, 'replaceExternalSessionStatusDemandViewport');
     machineExternalSessionStatusGetSpy.mockReset();
     machineExternalSessionAttachSpy.mockReset();
     machineExternalSessionDetachSpy.mockReset();
-    replaceExternalSessionStatusDemandViewportSpy.mockReset();
-    subscribeActiveServerSpy.mockClear();
-    setPreferredSessionHome('server-owned');
+    replaceExternalSessionStatusDemandViewportSpy.mockClear();
+    rpcRequests.length = 0;
+    setPreferredSessionHome('srv_server-owned');
     preferredServerListeners.clear();
     subscribePreferredServerSpy.mockClear();
+    let registeredSubscriptionDepth = 0;
+    const subscribeRegisteredState = storageReaderBridge.subscribeRegisteredStorageState;
+    vi.spyOn(storageReaderBridge, 'subscribeRegisteredStorageState').mockImplementation(listener => {
+      registeredSubscriptionDepth += 1;
+      try { return subscribeRegisteredState(listener); }
+      finally { registeredSubscriptionDepth -= 1; }
+    });
     // Measure the real preferred-Home selector subscription without replacing its logic.
     vi.spyOn(storage, 'subscribe').mockImplementation((listener) => {
-      subscribePreferredServerSpy();
-      preferredServerListeners.add(listener);
+      // The exact-Home HTTP authority briefly observes endpoint availability
+      // through this bridge. It is not the React preferred-Home subscription.
+      const requestAuthoritySubscription = registeredSubscriptionDepth > 0;
+      if (!requestAuthoritySubscription) {
+        subscribePreferredServerSpy();
+        preferredServerListeners.add(listener);
+      }
       const unsubscribe = subscribeStorage(listener);
       return () => {
-        preferredServerListeners.delete(listener);
+        if (!requestAuthoritySubscription) preferredServerListeners.delete(listener);
         unsubscribe();
       };
     });
     acceptedTailCursorState.current = null;
     acceptedTailCursorState.listeners.clear();
+    // Observe subscription ownership while retaining the real Sync subscription and notification.
+    const subscribeTail = sync.subscribeAcceptedExternalSessionTailCursor.bind(sync);
+    vi.spyOn(sync, 'subscribeAcceptedExternalSessionTailCursor').mockImplementation((sessionId, listener) => {
+      acceptedTailCursorState.listeners.add(listener);
+      const unsubscribe = subscribeTail(sessionId, listener);
+      return () => { acceptedTailCursorState.listeners.delete(listener); unsubscribe(); };
+    });
     machineExternalSessionAttachSpy.mockResolvedValue({ ok: true, leaseId: 'lease-1', expiresAtMs: Date.now() + 60_000 });
     machineExternalSessionDetachSpy.mockResolvedValue({ ok: true, detached: true });
   });
@@ -226,9 +347,88 @@ describe('useExternalSessionRuntime', () => {
   afterEach(async () => {
     await standardCleanup();
     vi.restoreAllMocks();
-    storage.setState({ sessions: initialSessions });
+    markSessionSurfaceHidden('session-1');
+    vi.useRealTimers();
+    await servedHome?.dispose();
+    servedHome = null;
+    storage.setState(previousState, true);
     resetDemoModeDepthForTests();
     vi.clearAllMocks();
+  });
+
+  it('cancels a stalled status read when its view retires and can read again after reopening', async () => {
+    machineExternalSessionStatusGetSpy.mockImplementationOnce(() => new Promise(() => {}));
+    const hook = await renderHarnessWithEnabled(true);
+    let read!: Promise<unknown>;
+    act(() => { read = hook.getCurrent().refreshNow(); });
+    await statusRequestIssued.promise;
+    await hook.rerender(false);
+    expect(statusRequestSignals[0]?.aborted).toBe(true);
+    await expect(read).resolves.toBeNull();
+
+    machineExternalSessionStatusGetSpy.mockResolvedValue({
+      ok: true, machineOnline: true, runnerActive: false, activity: 'idle',
+    });
+    await hook.rerender(true);
+    await act(async () => { await expect(hook.getCurrent().refreshNow()).resolves.toMatchObject({ ok: true }); });
+    expect(statusRequestSignals[1]?.aborted).toBe(false);
+    await hook.unmount();
+  });
+
+  it('retires only the materialize observer when its view unmounts and a fresh observer can retry', async () => {
+    const { useExternalSessionRuntime } = await import('./useExternalSessionRuntime');
+    const { useExternalSessionMaterialize } = await import('./useExternalSessionMaterialize');
+    machineExternalSessionStatusGetSpy.mockResolvedValue({
+      ok: true, machineOnline: true, runnerActive: false, activity: 'idle',
+    });
+    materializeReply = new Promise(() => {});
+    const render = () => renderHook(() => {
+      const runtime = useExternalSessionRuntime({ sessionId: 'session-1', metadata: {
+        path: '/tmp/workspace', host: 'tester.local',
+        externalSessionV1: { v: 1, agentId: 'opencode', machineId: 'machine-1', remoteSessionId: 'remote-1',
+          linkedAtMs: 1, source: { kind: 'opencodeServer', directory: '/tmp/workspace' } },
+      } });
+      return useExternalSessionMaterialize({ sessionId: 'session-1', hasWriteAccess: true, externalSessionRuntime: runtime });
+    });
+    const first = await render();
+    let pending!: Promise<boolean>;
+    await act(async () => {
+      pending = first.getCurrent().requestMaterialize();
+      await materializeRequestIssued.promise;
+    });
+    await first.unmount();
+    expect(materializeRequestSignals[0]?.aborted).toBe(true);
+    await expect(pending).resolves.toBe(false);
+    // Acknowledgement cancellation is not an operation Cancel/Discard request.
+    expect(rpcRequests.filter(request => /operation\.(cancel|discard)/.test(request.method))).toHaveLength(0);
+    materializeReply = Promise.resolve({ ok: false, error: { code: 'operation_conflict', message: 'Already admitted' } });
+    const second = await render();
+    await act(async () => { await expect(second.getCurrent().requestMaterialize()).resolves.toBe(false); });
+    expect(materializeRequestSignals).toHaveLength(2);
+    expect(second.getCurrent().materializeInFlight).toBe(false);
+    await second.unmount();
+  });
+
+  it('releases a stalled candidate link on selection retirement and reuses the browser for another attempt', async () => {
+    const { openExternalSessionCandidate, cancelExternalSessionCandidateOpen } = await import('../external/browse/openExternalSessionCandidate');
+    const state = { requestToken: 0, linkingCandidateKey: null as string | null };
+    linkReply = new Promise(() => {});
+    const open = () => openExternalSessionCandidate({
+      candidate: { remoteSessionId: 'remote-1', updatedAtMs: 1 },
+      agentId: 'opencode', source: { kind: 'opencodeServer', directory: '/tmp/workspace' },
+      actionsAllowed: true, offline: false, isSelectionCurrent: () => true,
+      resolveCurrentTarget: () => ({ machineId: 'machine-1', serverId: 'srv_server-owned' }),
+      state, onLinkingChange: () => {}, openSession: () => {},
+    });
+    const pending = open();
+    await linkRequestIssued.promise;
+    cancelExternalSessionCandidateOpen(state);
+    expect(linkRequestSignals[0]?.aborted).toBe(true);
+    await expect(pending).resolves.toBe('ignored');
+    linkReply = Promise.resolve({ ok: true, sessionId: 'linked-session-1', created: false });
+    await expect(open()).resolves.toBe('opened');
+    expect(state.linkingCandidateKey).toBeNull();
+    expect(linkRequestSignals).toHaveLength(2);
   });
 
   it('preserves the public runtime result identity until a returned field changes', async () => {
@@ -269,8 +469,8 @@ describe('useExternalSessionRuntime', () => {
     }));
     expect(machineExternalSessionStatusGetSpy).not.toHaveBeenCalled();
     expect(machineExternalSessionAttachSpy).not.toHaveBeenCalled();
-    expect(appStateListeners).toHaveLength(0);
-    expect(documentListeners).toHaveLength(0);
+    expect(appStateListeners).toEqual(appStateBaseline);
+    expect(documentListeners).toEqual(documentBaseline);
     expect(preferredServerListeners).toHaveLength(0);
     expect(acceptedTailCursorState.listeners).toHaveLength(0);
     expect(replaceExternalSessionStatusDemandViewportSpy).not.toHaveBeenCalled();
@@ -287,37 +487,45 @@ describe('useExternalSessionRuntime', () => {
     try {
       const harness = await renderHarnessWithEnabled(false);
 
-      expect(appStateListeners).toHaveLength(0);
-      expect(documentListeners).toHaveLength(0);
+      expect(appStateListeners).toEqual(appStateBaseline);
+      expect(documentListeners).toEqual(documentBaseline);
       expect(preferredServerListeners).toHaveLength(0);
       expect(acceptedTailCursorState.listeners).toHaveLength(0);
       expect(replaceExternalSessionStatusDemandViewportSpy).not.toHaveBeenCalled();
       expect(machineExternalSessionStatusGetSpy).not.toHaveBeenCalled();
       expect(machineExternalSessionAttachSpy).not.toHaveBeenCalled();
       expect(machineExternalSessionDetachSpy).not.toHaveBeenCalled();
-      expect(vi.getTimerCount()).toBe(0);
 
       await harness.rerender(true);
       await act(async () => {
         await new Promise<void>((resolve) => queueMicrotask(resolve));
       });
 
-      expect(appStateListeners).toHaveLength(1);
-      expect(documentListeners).toHaveLength(1);
+      expect(appStateListeners).toHaveLength(appStateBaseline.size + 1);
+      expect(documentListeners).toHaveLength(documentBaseline.size + 1);
+      for (const listener of appStateBaseline) expect(appStateListeners.has(listener)).toBe(true);
+      for (const listener of documentBaseline) expect(documentListeners.has(listener)).toBe(true);
       expect(preferredServerListeners).toHaveLength(1);
       expect(acceptedTailCursorState.listeners).toHaveLength(1);
       expect(subscribePreferredServerSpy).toHaveBeenCalledTimes(1);
       expect(machineExternalSessionAttachSpy).toHaveBeenCalledTimes(1);
-      expect(vi.getTimerCount()).toBe(1);
+      const settledSubscriptions = subscribePreferredServerSpy.mock.calls.length;
+      await harness.rerender(true);
+      expect(subscribePreferredServerSpy).toHaveBeenCalledTimes(settledSubscriptions);
+      expect(preferredServerListeners).toHaveLength(1);
 
       await harness.rerender(false);
 
-      expect(appStateListeners).toHaveLength(0);
-      expect(documentListeners).toHaveLength(0);
+      expect(appStateListeners).toEqual(appStateBaseline);
+      expect(documentListeners).toEqual(documentBaseline);
       expect(preferredServerListeners).toHaveLength(0);
       expect(acceptedTailCursorState.listeners).toHaveLength(0);
       expect(machineExternalSessionDetachSpy).toHaveBeenCalledTimes(1);
-      expect(vi.getTimerCount()).toBe(0);
+      // Socket pool cleanup has its own timer. Prove the disabled hook emits
+      // no renewal over the original lease lifetime instead of counting it.
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(machineExternalSessionAttachSpy).toHaveBeenCalledTimes(1);
+      expect(machineExternalSessionStatusGetSpy).not.toHaveBeenCalled();
 
       await harness.unmount();
       expect(machineExternalSessionDetachSpy).toHaveBeenCalledTimes(1);
@@ -442,7 +650,7 @@ describe('useExternalSessionRuntime', () => {
     expect(replaceExternalSessionStatusDemandViewportSpy).toHaveBeenCalledWith(
       expect.any(String),
       [{
-        serverId: 'server-owned',
+        serverId: 'srv_server-owned',
         sessionId: 'session-1',
         machineId: 'machine-1',
         linkGeneration: '1234',
@@ -600,14 +808,15 @@ describe('useExternalSessionRuntime', () => {
 
     const harness = await renderHarness();
     const refreshPromise = harness.getCurrent().refreshNow();
+    await statusRequestIssued.promise;
 
     expect(machineExternalSessionStatusGetSpy).toHaveBeenCalledTimes(1);
-    expect(machineExternalSessionStatusGetSpy.mock.calls[0]?.[1]).toEqual({ serverId: 'server-owned' });
+    expect(machineExternalSessionStatusGetSpy.mock.calls[0]?.[1]).toEqual({ serverId: 'srv_server-owned' });
 
     await act(async () => {
-      activeServerSnapshot = { serverId: 'server-2' };
-      const subscriber = subscribeActiveServerSpy.mock.calls[0]?.[0];
-      if (subscriber) subscriber(activeServerSnapshot);
+      const target = servedHome?.homes['srv_server-2'];
+      if (!target) throw new Error('Expected the second declared Home');
+      await serverRuntime.setActiveServer({ serverId: target.profileId });
       await new Promise<void>((resolve) => queueMicrotask(resolve));
     });
 
@@ -627,18 +836,18 @@ describe('useExternalSessionRuntime', () => {
       .mockResolvedValueOnce({ ok: true, machineOnline: true, activity: 'idle', runnerActive: false })
       .mockResolvedValueOnce({ ok: true, machineOnline: true, activity: 'running', runnerActive: true })
       .mockResolvedValue({ ok: true, machineOnline: true, activity: 'running', runnerActive: true });
-    setPreferredSessionHome('server-owned-a');
+    setPreferredSessionHome('srv_server-owned-a');
 
     const harness = await renderHarness();
     await act(async () => {
       await harness.getCurrent().refreshNow();
     });
 
-    expect(machineExternalSessionStatusGetSpy.mock.calls[0]?.[1]).toEqual({ serverId: 'server-owned-a' });
+    expect(machineExternalSessionStatusGetSpy.mock.calls[0]?.[1]).toEqual({ serverId: 'srv_server-owned-a' });
     machineExternalSessionStatusGetSpy.mockClear();
 
     await act(async () => {
-      setPreferredSessionHome('server-owned-b');
+      setPreferredSessionHome('srv_server-owned-b');
     });
 
     await harness.rerender();
@@ -646,14 +855,14 @@ describe('useExternalSessionRuntime', () => {
       await harness.getCurrent().refreshNow();
     });
 
-    expect(machineExternalSessionStatusGetSpy.mock.calls[0]?.[1]).toEqual({ serverId: 'server-owned-b' });
+    expect(machineExternalSessionStatusGetSpy.mock.calls[0]?.[1]).toEqual({ serverId: 'srv_server-owned-b' });
     await harness.unmount();
   });
 
   it('exposes the canonical session server id from the runtime hook', async () => {
     const harness = await renderHarness();
 
-    expect(harness.getCurrent().sessionServerId).toBe('server-owned');
+    expect(harness.getCurrent().sessionServerId).toBe('srv_server-owned');
 
     await harness.unmount();
   });
@@ -673,7 +882,7 @@ describe('useExternalSessionRuntime', () => {
     expect(machineExternalSessionStatusGetSpy).toHaveBeenCalledTimes(1);
     expect(machineExternalSessionStatusGetSpy).toHaveBeenCalledWith(
       expect.not.objectContaining({ takeoverReadiness: expect.anything() }),
-      { serverId: 'server-owned' },
+      { serverId: 'srv_server-owned' },
     );
     await harness.unmount();
   });
@@ -686,7 +895,7 @@ describe('useExternalSessionRuntime', () => {
       sessionId: 'session-1',
       agentId: 'opencode',
       remoteSessionId: 'remote-1',
-    }), { serverId: 'server-owned' });
+    }), { serverId: 'srv_server-owned' });
 
     await harness.unmount();
 
@@ -694,7 +903,7 @@ describe('useExternalSessionRuntime', () => {
       machineId: 'machine-1',
       sessionId: 'session-1',
       leaseId: 'lease-1',
-    }, { serverId: 'server-owned' });
+    }, { serverId: 'srv_server-owned' });
   });
 
   it('attaches and renews viewer demand with the Sync-owned accepted tail cursor', async () => {
@@ -703,11 +912,11 @@ describe('useExternalSessionRuntime', () => {
 
     expect(machineExternalSessionAttachSpy).toHaveBeenCalledWith(expect.objectContaining({
       acceptedTailCursor: 'happier_external_cursor_v1:YzA',
-    }), { serverId: 'server-owned' });
+    }), { serverId: 'srv_server-owned' });
 
     acceptedTailCursorState.current = 'happier_external_cursor_v1:YzE';
     await act(async () => {
-      for (const listener of acceptedTailCursorState.listeners) listener();
+      await publishAcceptedCursor();
       await new Promise<void>((resolve) => queueMicrotask(resolve));
     });
 
@@ -757,7 +966,7 @@ describe('useExternalSessionRuntime', () => {
       sessionId: 'session-1',
       agentId: 'opencode',
       remoteSessionId: 'remote-1',
-    }), { serverId: 'server-owned' });
+    }), { serverId: 'srv_server-owned' });
 
     await harness.rerender(false);
 
@@ -765,7 +974,7 @@ describe('useExternalSessionRuntime', () => {
       machineId: 'machine-1',
       sessionId: 'session-1',
       leaseId: 'lease-1',
-    }, { serverId: 'server-owned' });
+    }, { serverId: 'srv_server-owned' });
 
     await harness.unmount();
   });
@@ -824,6 +1033,7 @@ describe('useExternalSessionRuntime', () => {
 
     const harness = await renderHarnessWithEnabled(true);
     const refreshPromise = harness.getCurrent().refreshNow();
+    await statusRequestIssued.promise;
 
     expect(machineExternalSessionStatusGetSpy).toHaveBeenCalledTimes(1);
 
@@ -859,6 +1069,7 @@ describe('useExternalSessionRuntime', () => {
 
     const harness = await renderHarnessWithMetadata(initialMetadata as any);
     const firstRefreshPromise = harness.getCurrent().refreshNow();
+    await statusRequestIssued.promise;
 
     expect(machineExternalSessionStatusGetSpy).toHaveBeenCalledTimes(1);
     expect(machineExternalSessionStatusGetSpy.mock.calls[0]?.[0]).toEqual(expect.objectContaining({
@@ -877,7 +1088,9 @@ describe('useExternalSessionRuntime', () => {
       await new Promise<void>((resolve) => queueMicrotask(resolve));
     });
 
+    statusRequestIssued = createDeferred<void>();
     const secondRefreshPromise = harness.getCurrent().refreshNow();
+    await statusRequestIssued.promise;
     expect(machineExternalSessionStatusGetSpy).toHaveBeenCalledTimes(2);
     expect(machineExternalSessionStatusGetSpy.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
       remoteSessionId: 'remote-2',
@@ -980,7 +1193,7 @@ describe('useExternalSessionRuntime', () => {
         machineId: 'machine-1',
         sessionId: 'session-1',
         leaseId: 'lease-recovered',
-      }, { serverId: 'server-owned' });
+      }, { serverId: 'srv_server-owned' });
     } finally {
       vi.useRealTimers();
     }
@@ -1013,7 +1226,7 @@ describe('useExternalSessionRuntime', () => {
         machineId: 'machine-1',
         sessionId: 'session-1',
         leaseId: 'lease-recovered',
-      }, { serverId: 'server-owned' });
+      }, { serverId: 'srv_server-owned' });
     } finally {
       vi.useRealTimers();
     }
@@ -1035,7 +1248,6 @@ describe('useExternalSessionRuntime', () => {
       });
 
       expect(machineExternalSessionAttachSpy).toHaveBeenCalledTimes(1);
-      expect(vi.getTimerCount()).toBe(0);
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(60_000);
@@ -1067,7 +1279,6 @@ describe('useExternalSessionRuntime', () => {
       });
 
       expect(machineExternalSessionAttachSpy).toHaveBeenCalledTimes(1);
-      expect(vi.getTimerCount()).toBe(0);
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(60_000);
@@ -1111,7 +1322,7 @@ describe('useExternalSessionRuntime', () => {
     }
   });
 
-  it('detaches a viewer lease whose attach resolves after the view is gone', async () => {
+  it('cancels an unacknowledged viewer attach and never renews its unknown lease after unmount', async () => {
     const deferredAttach = createDeferred<{ ok: true; leaseId: string; expiresAtMs: number }>();
     machineExternalSessionAttachSpy.mockImplementationOnce(() => deferredAttach.promise);
 
@@ -1121,7 +1332,13 @@ describe('useExternalSessionRuntime', () => {
 
     await harness.unmount();
 
+    expect(attachRequestSignals[0]?.aborted).toBe(true);
     expect(machineExternalSessionDetachSpy).not.toHaveBeenCalled();
+
+    firstAttachRequest = createDeferred<void>();
+    const reopened = await renderHarness();
+    expect(machineExternalSessionAttachSpy).toHaveBeenCalledTimes(2);
+    expect(attachRequestSignals[1]?.aborted).toBe(false);
 
     await act(async () => {
       deferredAttach.resolve({ ok: true, leaseId: 'late-lease', expiresAtMs: Date.now() + 60_000 });
@@ -1129,11 +1346,14 @@ describe('useExternalSessionRuntime', () => {
       await new Promise<void>((resolve) => queueMicrotask(resolve));
     });
 
+    // A cancelled acknowledgement cannot reveal a new lease id. The daemon's
+    // existing lease expiry owns reclamation; the withdrawn viewer cannot renew it.
+    expect(machineExternalSessionDetachSpy).not.toHaveBeenCalled();
+    expect(machineExternalSessionAttachSpy).toHaveBeenCalledTimes(2);
+    await reopened.unmount();
     expect(machineExternalSessionDetachSpy).toHaveBeenCalledWith({
-      machineId: 'machine-1',
-      sessionId: 'session-1',
-      leaseId: 'late-lease',
-    }, { serverId: 'server-owned' });
+      machineId: 'machine-1', sessionId: 'session-1', leaseId: 'lease-1',
+    }, { serverId: 'srv_server-owned' });
   });
 
   it('does not detach and reattach when metadata changes only direct-session follow policy fields', async () => {
@@ -1174,16 +1394,17 @@ describe('useExternalSessionRuntime', () => {
   });
 
   it('never publishes a status read that resolves after the Account retires', async () => {
-    const statusRead = createDeferred<{ ok: true; machineOnline: boolean }>();
+    const statusRead = createDeferred<{ ok: true; machineOnline: boolean; activity: 'running'; runnerActive: boolean }>();
     machineExternalSessionStatusGetSpy.mockReturnValueOnce(statusRead.promise);
     const harness = await renderHarness();
 
     let resolved: unknown = 'unset';
     await act(async () => {
       const pending = harness.getCurrent().refreshNow();
-      await Promise.resolve();
-      activeAccountIsCurrent = false;
-      statusRead.resolve({ ok: true, machineOnline: true });
+      await statusRequestIssued.promise;
+      expect(machineExternalSessionStatusGetSpy).toHaveBeenCalledTimes(1);
+      await disconnectActiveServerConnection();
+      statusRead.resolve({ ok: true, machineOnline: true, activity: 'running', runnerActive: true });
       resolved = await pending;
     });
 
@@ -1192,8 +1413,19 @@ describe('useExternalSessionRuntime', () => {
     await harness.unmount();
   });
 
-  it('never attaches or detaches a viewer lease once the Account has retired', async () => {
-    activeAccountIsCurrent = false;
+  it('never dispatches a viewer lease or status request while signed out at mount', async () => {
+    signedOut = true;
+    const homes = Object.values(servedHome?.homes ?? {});
+    // Retire the fixture's credential writes through their own exact rollback.
+    // Removing them independently would supersede its still-outstanding receipts.
+    await servedHome?.dispose();
+    servedHome = null;
+    for (const home of homes) {
+      expect(await TokenStorage.getCredentialsForServerUrl(home.serverUrl, { serverId: home.id })).toBeNull();
+    }
+    machineExternalSessionAttachSpy.mockClear();
+    machineExternalSessionStatusGetSpy.mockClear();
+    machineExternalSessionDetachSpy.mockClear();
     const harness = await renderHarness();
 
     await act(async () => {

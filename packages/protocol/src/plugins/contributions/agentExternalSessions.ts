@@ -32,7 +32,7 @@ function isPlainObject(value: unknown): value is PluginAgentExternalSessionLinkD
 
 function validateLinkDataBounds(
   value: PluginAgentExternalSessionLinkDataValue,
-  ctx: z.core.$RefinementCtx,
+  ctx: z.core.ParsePayload,
 ): boolean {
   const pending: Array<Readonly<{
     value: PluginAgentExternalSessionLinkDataValue;
@@ -45,7 +45,7 @@ function validateLinkDataBounds(
     const current = pending.pop();
     if (!current) continue;
     if (current.depth > MAX_PLUGIN_AGENT_EXTERNAL_SESSION_LINK_DATA_DEPTH) {
-      ctx.addIssue({ code: 'custom', path: current.path, message: 'External-session linkData is too deeply nested.' });
+      ctx.issues.push({ code: 'custom', path: current.path, message: 'External-session linkData is too deeply nested.', input: ctx.value });
       return false;
     }
     if (current.value === null || typeof current.value !== 'object') continue;
@@ -53,7 +53,7 @@ function validateLinkDataBounds(
     if (Array.isArray(current.value)) {
       entries += current.value.length;
       if (entries > MAX_PLUGIN_AGENT_EXTERNAL_SESSION_LINK_DATA_ENTRIES) {
-        ctx.addIssue({ code: 'custom', message: 'External-session linkData has too many entries.' });
+        ctx.issues.push({ code: 'custom', message: 'External-session linkData has too many entries.', input: ctx.value });
         return false;
       }
       for (let index = current.value.length - 1; index >= 0; index -= 1) {
@@ -70,7 +70,7 @@ function validateLinkDataBounds(
     const keys = Object.keys(object);
     entries += keys.length;
     if (entries > MAX_PLUGIN_AGENT_EXTERNAL_SESSION_LINK_DATA_ENTRIES) {
-      ctx.addIssue({ code: 'custom', message: 'External-session linkData has too many entries.' });
+      ctx.issues.push({ code: 'custom', message: 'External-session linkData has too many entries.', input: ctx.value });
       return false;
     }
     for (let index = keys.length - 1; index >= 0; index -= 1) {

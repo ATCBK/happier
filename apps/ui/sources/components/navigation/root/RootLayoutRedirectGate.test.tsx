@@ -3,6 +3,9 @@ import * as React from 'react';
 import { useSyncExternalStore } from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { renderScreen } from '@/dev/testkit';
 import { createSignInServiceFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';

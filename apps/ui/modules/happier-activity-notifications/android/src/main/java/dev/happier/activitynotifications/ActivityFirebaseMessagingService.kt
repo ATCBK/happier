@@ -57,7 +57,9 @@ class ActivityFirebaseMessagingService : ExpoFirebaseMessagingService() {
     }
     val machineAlert = MachineRemoteAlert.parse(remoteMessage)
     if (machineAlert != null) {
-      if (machineAlert.phase == "recovered") {
+      if (machineAlert.phase == "recovered" && remoteMessage.data["message"].isNullOrBlank()) {
+        // Content-free recovery only dismisses the offline notice. Visible
+        // returns reach the loaded app's foreground policy like offline alerts.
         ActivityNotificationPresenter.present(applicationContext, remoteMessage, machineAlert)
       } else {
         ActivityNotificationMainProcessHandoff.offer(applicationContext, remoteMessage, machineAlert)

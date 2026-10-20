@@ -2,7 +2,6 @@ import * as React from 'react';
 
 import { deriveTriageDetailMountInstanceKey } from './mountKey.js';
 import {
-  Badge,
   Banner,
   BrandMark,
   Button,
@@ -13,7 +12,6 @@ import {
   Heading,
   Icon,
   IconButton,
-  isHappierIconName,
   LoadingState,
   Row,
   ScrollArea,
@@ -21,9 +19,8 @@ import {
   Status,
   TargetedSurface,
   Text,
-  useSessionState,
+  useSessionStates,
   usePluginHostApi,
-  usePluginTheme,
   usePluginUiFocusTarget,
   usePluginTranslation,
   useSurfaceContext,
@@ -56,7 +53,7 @@ import { projectTriageDispatchContext } from '../../composer/resolveForDispatch.
 import { useTriageTierBEvidenceInsertion } from '../../composer/tierBEvidenceInsertion.js';
 import type { TriageMountedActionsV1 } from '../actions/useTriageActions.js';
 import {
-  readTriageAttentionBadgeToneV1,
+  TriageAttentionReasonChip,
   readTriagePinActionLabelV1,
   readTriageRowMarkV1,
   type TriageRowPinHandlersV1,
@@ -65,6 +62,7 @@ import type { TriageListDisplayRowV1 } from '../marks/pinnedRows.js';
 import {
   TriageEntryActionControls,
   type TriageEntryActionRequestV1,
+  type TriageReviewPreparationV1,
 } from '../header/entryActionControls.js';
 import { describeTriageEntrySessionPhaseV1 } from '../header/sessionStartOutcome.js';
 import {
@@ -86,10 +84,12 @@ import { TriageLinkedSessions } from './linkedSessions.js';
 import { TriageDetailWholeBody, TriageSessionPanel } from './sessionPanel.js';
 import { TriageDetailPanelMount, TriageDetailTabbedBody, type TriageDetailSourceMountV1, type TriageDetailTabSelectionV1 } from './body.js';
 import { TriageAgentStep, TriagePermissionCard } from './storyRail.js';
+import { readTriageSessionTitle } from './sessionTitle.js';
 import { TriageFixPullRequests } from './fixPullRequests.js';
 import { useTriageDetailFixPullRequest } from './useTriageDetailFixPullRequest.js';
 import { planTriageDetailTabsV1 } from './tabs.js';
 import { TRIAGE_DETAIL_ACTIONS_PANEL_V1 } from '@happier-dev/triage-protocol/v1';
+import { TriageEditTaskScope } from './taskFields.js';
 
 /**
  * The mounted detail region: the aggregate's common header, and beneath it the
@@ -129,6 +129,8 @@ export type TriageDetailRegionProps = Readonly<{
    */
   pushed?: boolean;
   row: TriageListRowV1;
+  /** The selection remains, but its row is no longer in the current window. */
+  lastKnown?: boolean;
   /** Reobserves the shell-owned selected snapshot used by both identity and body. */
   completePostMutation(): Promise<void>;
   lanes: readonly TriageListLaneV1[];
@@ -186,6 +188,8 @@ export { readTriageDetailContextLineV1 } from './header.js';
 const DETAIL_HEADER_SCROLL_STYLE_V1 = Object.freeze({ flexGrow: 0, flexShrink: 1, maxHeight: '45%' as const });
 /** The pinned footer a pushed detail ends its column with: the entry's action controls. */
 export const TRIAGE_DETAIL_FOOTER_TEST_ID_V1 = 'triage-detail-footer';
+/** The open task editor, shown in place of the entry's story. */
+export const TRIAGE_DETAIL_TASK_EDITOR_TEST_ID_V1 = 'triage-detail-task-editor';
 /** The entry's attention reason chip, wherever the detail places it. */
 export const TRIAGE_DETAIL_ATTENTION_TEST_ID_V1 = 'triage-detail-attention';
 const DETAIL_FILL_STYLE_V1 = Object.freeze({ flex: 1, minWidth: 0, minHeight: 0 });
@@ -253,13 +257,14 @@ export type TriageDetailPinActionV1 = Readonly<{
 function TriageEntryScopedActionRegion(props: Readonly<{
   target: TriageActionTargetV1;
   actions: TriageMountedActionsV1;
-  workflowSubject: TriageSourceWorkflowSubjectV1;
+  workflowSubject: TriageSourceWorkflowSubjectV1 | null;
   snapshot?: TriageSourceEntrySnapshotV1;
   display: TriageEntrySessionStartRequestV1['display'];
   presentation: TriageEntrySessionStartRequestV1['presentation'];
   lastKnownLocator?: NonNullable<TriageEntrySessionStartRequestV1['lastKnownLocator']>;
   repository?: NonNullable<TriageEntrySessionStartRequestV1['repository']>;
   reviewWorkspace?: NonNullable<TriageEntrySessionStartRequestV1['reviewWorkspace']>;
+  reviewPreparation: TriageReviewPreparationV1;
   comparisonRead?: Readonly<{
     operation: PluginUiTargetedContributionOperationV1;
     instance: TriageDetailSurfaceInputV1['instance'];
@@ -271,6 +276,8 @@ function TriageEntryScopedActionRegion(props: Readonly<{
   sourceActions?: React.ReactNode;
   /** The entry's attention reason, at the far end of the action row. */
   attention?: React.ReactNode;
+  /** Place the controls without moving the selected entry's pending action owner. */
+  children(controls: React.ReactElement): React.ReactElement;
 }>): React.ReactElement {
   const host = usePluginHostApi();
   const text = usePluginTranslation();
@@ -331,9 +338,11 @@ function TriageEntryScopedActionRegion(props: Readonly<{
     // the last place a press could have re-decided any of them, and it does
     // not — it only adds the facts this screen holds and the record cannot.
     return (async () => {
+      const workflowSubject = props.workflowSubject;
+      if (workflowSubject === null) return { kind: 'unavailable' as const };
       const executable = await props.actions.resolveForExecution(
         request.action.actionId,
-        [props.workflowSubject],
+        [workflowSubject],
       );
       // Said beside the control that was pressed, never swallowed.
       if (executable.status !== 'resolved') return { kind: executable.status };
@@ -403,14 +412,14 @@ function TriageEntryScopedActionRegion(props: Readonly<{
   }, [controller]);
   const notice = describeTriageEntrySessionPhaseV1(controller.phase);
 
-  return (
+  return props.children(
     <Stack gap="small">
-      {orchestrationPrompt === null ? <TriageEntryActionControls
+      {props.workflowSubject === null ? null : orchestrationPrompt === null ? <TriageEntryActionControls
         target={props.target}
         actions={props.actions.actions}
         workflowSubject={props.workflowSubject}
         viewerIsAuthor={props.viewerIsAuthor}
-        preparesReviewWorkspace={props.reviewWorkspace !== undefined}
+        reviewPreparation={props.reviewPreparation}
         onAction={onAction}
         trailing={props.attention}
         overflow={props.workflowSubject === 'issue' && props.snapshot !== undefined
@@ -580,27 +589,10 @@ function TriageDetailHeaderActions(props: Readonly<{ header: TriageDetailHeaderV
   );
 }
 
-/**
- * The detail column's edge inset: the page's edge measure, the same as the band above it and the pinned footer
- * below, so whatever an open entry shows (its header, actions, tabs and story, or the "no longer in the list"
- * state) shares one left edge instead of sitting on the column's divider.
- */
-export function useTriageDetailInsetStyleV1(): Readonly<{ paddingHorizontal: number }> {
-  const { spacing } = usePluginTheme();
-  return React.useMemo(() => ({ paddingHorizontal: spacing.large }), [spacing.large]);
-}
-
-/** A detail state that is not the region (the entry left the list, or the filter hides it), on the same edge. */
-export function TriageDetailInsetColumn(props: Readonly<{ children: React.ReactNode }>): React.ReactElement {
-  return <Stack gap="small" style={useTriageDetailInsetStyleV1()}>{props.children}</Stack>;
-}
-
 export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactElement {
   const context = useSurfaceContext();
   const hostApi = usePluginHostApi();
   const text = usePluginTranslation();
-  const inset = useTriageDetailInsetStyleV1();
-  const contentStyle = React.useMemo(() => ({ ...DETAIL_FILL_STYLE_V1, ...inset }), [inset]);
   // The ONE Triage consumer of a source disclosure, mounted for exactly as long
   // as this detail is: it binds the retained origin address and owns the single
   // revision-checked transaction the disclosed candidate becomes.
@@ -630,14 +622,15 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
   ), [row.entryRef, selected]);
   const observation = selected?.observation ?? null;
 
-  const detail = useTriageEntryDetail(
-    selection === null || observation === null ? null : { selection, observation },
+  const observedDetail = useTriageEntryDetail(
+    props.lastKnown === true || selection === null || observation === null ? null : { selection, observation },
   );
+  const detail = props.lastKnown === true ? null : observedDetail;
   const linkedSessions = detail?.kind === 'ready' ? detail.linkedSessions : EMPTY_SESSIONS;
   const linkedSessionsHasMore = detail?.kind === 'ready'
     ? detail.linkedSessionsNextCursor !== undefined
     : false;
-  const sourceDescriptor = readTriageSourceDescriptorV1(context, row.entryRef.source);
+  const sourceDescriptor = props.lastKnown === true ? null : readTriageSourceDescriptorV1(context, row.entryRef.source);
   const header = React.useMemo(() => projectTriageDetailHeaderV1({
     row,
     lanes: props.lanes,
@@ -649,6 +642,8 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
   }), [linkedSessions, linkedSessionsHasMore, props.connectionLabel, props.lanes, row, sourceDescriptor, text]);
 
   const completePostMutation = props.completePostMutation;
+  const refreshLinkedSessions = detail?.kind === 'ready' ? detail.refreshLinkedSessions : undefined;
+  const completeUnlink = React.useCallback(() => { refreshLinkedSessions?.(); }, [refreshLinkedSessions]);
 
   /**
    * The header's action controls, and the one press path they lead to.
@@ -660,8 +655,8 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
    * supplies the selection-derived target, and only this component has read the
    * source's declared descriptor and its admitted operation roles.
    *
-   * The section is deliberately absent until the entry's workflow subject and a
-   * present observation are both known. Offering actions before the descriptor
+   * The controls are absent until the entry's workflow subject and a present
+   * observation are both known. Offering actions before the descriptor
    * answers would flash a control set chosen for the wrong subject, and a start
    * needs the display facts the link freezes from that observation.
    */
@@ -704,12 +699,17 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
   React.useLayoutEffect(() => {
     if (composition.kind === 'whole' && header.linkedSessions.length === 0) reportAvailableTabs?.([]);
   }, [composition.kind, header.linkedSessions.length, reportAvailableTabs]);
-  // The most recent linked Session, read live through the host's canonical
-  // Session projection (r0.42): one watch feeds both the permission card and
-  // the agent step.
+  // One public Session read feeds the permission card, agent step and mounted
+  // command titles. Only changed titles propagate back into the shell's commands.
   const liveSessionId = header.linkedSessions[0]?.sessionId ?? null;
-  const liveSession = useSessionState(composition.kind === 'tabs' ? liveSessionId : null);
+  const linkedSessionIds = React.useMemo(() => header.linkedSessions.map((session) => session.sessionId), [header.linkedSessions]);
+  const linkedSessionStates = useSessionStates(linkedSessionIds).sessions;
+  const liveSession = linkedSessionStates.get(liveSessionId ?? '') ?? { status: 'unavailable' as const, state: null };
   const liveState = liveSession.state;
+  const titledLinkedSessions = React.useMemo(() => header.linkedSessions.map((session) => ({
+    ...session,
+    displayTitle: readTriageSessionTitle(linkedSessionStates.get(session.sessionId)?.state, text),
+  })), [header.linkedSessions, linkedSessionStates, text]);
   const reviewEntry = React.useMemo(() => (
     workflowSubject === 'pullRequest'
       ? { kind: 'pullRequest' as const, ...(locator?.webUrl === undefined ? {} : { url: locator.webUrl }) }
@@ -755,16 +755,20 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
       },
     };
   }, [detail, locator, observation, prepareReviewWorkspaceOperation, row.entryRef, snapshot]);
+  // The source's capability and this entry's read are separate facts: a read still missing leaves Review in its
+  // place, disabled, rather than handing the entry the issue verb.
+  const reviewPreparation: TriageReviewPreparationV1 = reviewWorkspace !== undefined
+    ? 'ready'
+    : prepareReviewWorkspaceOperation !== undefined && detail?.kind !== 'ready' ? 'pending' : 'unsupported';
   const getOperation = readTriageSourceGetOperationV1(context, row.entryRef.source);
   const comparisonRead = React.useMemo(() => getOperation !== undefined && detail?.kind === 'ready'
     ? { operation: getOperation, instance: detail.input.instance } : undefined, [detail, getOperation]);
-  const linkedSessionIds = React.useMemo(() => header.linkedSessions.map((session) => session.sessionId), [header.linkedSessions]);
   const reportLinkedSessions = sessionSelection.onAvailableSessionsChange;
   const loadMoreLinkedSessions = detail?.kind === 'ready' && header.linkedSessionsHasMore && detail.linkedSessionsPageState !== 'loading'
     ? detail.loadMoreLinkedSessions : null;
   // Publish only the current controller callback. Its cursor, rows and failure/retry
   // state stay with useTriageEntryDetail, including when this mount retires.
-  React.useLayoutEffect(() => { reportLinkedSessions(header.linkedSessions, loadMoreLinkedSessions); }, [header.linkedSessions, loadMoreLinkedSessions, reportLinkedSessions]);
+  React.useLayoutEffect(() => { reportLinkedSessions(titledLinkedSessions, loadMoreLinkedSessions); }, [titledLinkedSessions, loadMoreLinkedSessions, reportLinkedSessions]);
   React.useLayoutEffect(() => () => { reportLinkedSessions([], null); }, [reportLinkedSessions]);
   // The source's own write controls (merge, close, reviewers…): its `actions` panel, held in the header's More
   // beside Triage's entry actions (r0.42) rather than as a form above the tabs.
@@ -784,65 +788,19 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
       />
     </TriagePostMutationCompletionProvider>
   ) : undefined;
-  const actionRegionShown = workflowSubject !== null && display !== null && actionPresentation !== null && selected !== null;
+  // Source re-admission can withdraw its descriptor while a comparison read is pending.
+  // Keep the selected entry's controller in place; only its controls wait for the descriptor.
+  const actionRegionAvailable = display !== null && actionPresentation !== null && selected !== null;
+  const actionRegionShown = workflowSubject !== null && actionRegionAvailable;
   const viewerIsAuthor = row.content?.outcome.viewer.involvement.includes('author') === true;
   // Pushed (the detail is the page), the actions pin to the foot; why the entry is here is a fact, so it stays with
   // the title and facts above the story rather than riding in the thumb bar.
-  const pinned = props.pushed === true && actionRegionShown;
+  const pinned = props.pushed === true && actionRegionAvailable;
   const attention = header.attention === null || pinned ? undefined : (
     <TriageAttentionBadge attention={header.attention} />
   );
-  // The entry's actions: in the header beside the list, and pinned at the foot of the page when the detail is the
-  // page. One keyed region either way, so its action state is the same one; only where it is placed differs.
-  const actionRegion = !actionRegionShown || workflowSubject === null || display === null || actionPresentation === null
-    || selected === null ? null : (
-      <TriageEntryScopedActionRegion
-        key={deriveTriageDetailMountInstanceKey(row.entryRef, selected.sourceInstanceId)}
-        target={props.target}
-        actions={props.actions}
-        workflowSubject={workflowSubject}
-        {...(snapshot === undefined ? {} : { snapshot })}
-        display={display}
-        presentation={actionPresentation}
-        linkedSessionIds={linkedSessionIds}
-        {...(comparisonRead === undefined ? {} : { comparisonRead })}
-        {...(locator === undefined ? {} : { lastKnownLocator: locator })}
-        {...(repository === undefined ? {} : { repository })}
-        {...(reviewWorkspace === undefined ? {} : { reviewWorkspace })}
-        viewerIsAuthor={viewerIsAuthor}
-        {...(sourceActions === undefined ? {} : { sourceActions })}
-        {...(attention === undefined ? {} : { attention })}
-      />
-    );
-  const pinActions = props.pushed === true && actionRegion !== null;
-  return (
-    <Stack style={DETAIL_FILL_STYLE_V1}>
-    <Stack gap="medium" style={contentStyle}>
-      <ScrollArea style={DETAIL_HEADER_SCROLL_STYLE_V1}>
-      <Stack gap="small">
-      <TriageDetailHeaderView
-        headerHosted={props.headerHosted}
-        header={header}
-        {...(selected === null ? {} : {
-          instanceKey: deriveTriageDetailMountInstanceKey(row.entryRef, selected.sourceInstanceId),
-        })}
-        pin={props.pin}
-        onClose={props.onClose}
-        showLinkedSessions={composition.kind === 'whole'}
-        attentionInActions={actionRegionShown && !pinned}
-        onSelectLinkedSession={selectInlineSession}
-        {...(detail?.kind === 'ready' ? {
-          linkedSessionsPageState: detail.linkedSessionsPageState,
-          onLoadMoreLinkedSessions: sessionSelection.onLoadMore,
-        } : {})}
-      />
-
-      {pinActions ? null : actionRegion}
-      {actionRegionShown ? null : sourceActions}
-      </Stack>
-      </ScrollArea>
-
-      <Stack style={DETAIL_FILL_STYLE_V1}>
+  // Action-local state (including prompt typing) must not rerender the source's detail body.
+  const detailBody = <Stack style={DETAIL_FILL_STYLE_V1}>
       {observation === null ? (
         <EmptyState
           titleKey="plugins.triage.surface.detail.noConnection.title"
@@ -862,9 +820,9 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
       ) : detail.kind === 'unreachable' ? (
         <ErrorState
           titleKey="plugins.triage.surface.detail.accountError.title"
-          title="Your account could not be read"
+          title="These details could not be read"
           descriptionKey="plugins.triage.surface.detail.accountError.description"
-          description="Happier could not reach your account, so this entry's details are unavailable right now."
+          description="This entry's details are unavailable right now. Try again when the connection is available."
           action={(
             <Button
               titleKey="plugins.triage.surface.actions.retry"
@@ -935,14 +893,15 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
                 />
               )}
               {...(header.linkedSessions.length === 0 ? {} : {
-                session: <TriageSessionPanel sessions={header.linkedSessions} selectedSessionId={selectedSessionId} onSelectSession={selectPanelSession} />,
+                session: <TriageSessionPanel sessions={header.linkedSessions} entryRef={row.entryRef} onUnlinked={completeUnlink}
+                  selectedSessionId={selectedSessionId} onSelectSession={selectPanelSession} />,
               })}
               fallback={(
                 <EmptyState
                   titleKey="plugins.triage.surface.detail.mountError.title"
                   title="This source's detail view is unavailable"
                   descriptionKey="plugins.triage.surface.detail.mountError.description"
-                  description="Happier could not mount the source's own view of this entry. The facts above are what the aggregate already knows."
+                  description="Happier couldn't open the source's own view of this entry. The summary above is what this list already knows about it."
                 />
               )}
             />
@@ -952,6 +911,8 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
         <TriageDetailWholeBody
           key={deriveTriageDetailMountInstanceKey(row.entryRef, detail.input.instance.instance.sourceInstanceId)}
           sessions={header.linkedSessions}
+          entryRef={row.entryRef}
+          onUnlinked={completeUnlink}
           tabSelection={tabSelection}
           selectedSessionId={selectedSessionId}
           onSelectSession={selectPanelSession}
@@ -979,7 +940,7 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
                 titleKey="plugins.triage.surface.detail.mountError.title"
                 title="This source's detail view is unavailable"
                 descriptionKey="plugins.triage.surface.detail.mountError.description"
-                description="Happier could not mount the source's own view of this entry. The facts above are what the aggregate already knows."
+                description="Happier couldn't open the source's own view of this entry. The summary above is what this list already knows about it."
                 />
               )}
             />
@@ -987,24 +948,96 @@ export function TriageDetailRegion(props: TriageDetailRegionProps): React.ReactE
         </TriagePostMutationCompletionProvider>
         </TriageDetailWholeBody>
       )}
+      </Stack>;
+  const renderDetail = (actionRegion: React.ReactElement | null) => props.lastKnown === true ? (
+    <Stack gap="small">
+      <TriageDetailHeaderView headerHosted={props.headerHosted} header={header} pin={props.pin}
+        onClose={props.onClose} lastKnown />
+      {actionRegion}
+      <EmptyState
+        titleKey="plugins.triage.surface.entryGone.heading"
+        title="This entry is no longer in the list"
+        descriptionKey="plugins.triage.surface.entryGone.description"
+        description="The current window no longer holds this entry, so there is nothing to open it with. It may return on the next refresh."
+      />
+    </Stack>
+  ) : (
+    // The task editor keeps one owner for its state (keyed per entry instance, apart from the action region's key:
+    // one key for two siblings made React drop or duplicate one of them); the detail places its two parts.
+    <TriageEditTaskScope key={`task-fields:${selected === null ? 'unavailable' : deriveTriageDetailMountInstanceKey(row.entryRef, selected.sourceInstanceId)}`}
+      row={row} {...(detail?.kind === 'ready' ? { instance: detail.input.instance } : {})}
+      disabled={detail?.kind !== 'ready'} onApplied={completePostMutation}>{(task) => (
+    <Stack style={DETAIL_FILL_STYLE_V1}>
+    {/* The Collection's detail body owns the edge (given `detailHeader`); the footer below spans the detail. */}
+    <Stack gap="medium" style={DETAIL_FILL_STYLE_V1}>
+      <ScrollArea style={DETAIL_HEADER_SCROLL_STYLE_V1}>
+      <Stack gap="small">
+      <TriageDetailHeaderView
+        headerHosted={props.headerHosted}
+        header={header}
+        {...(selected === null ? {} : {
+          instanceKey: deriveTriageDetailMountInstanceKey(row.entryRef, selected.sourceInstanceId),
+        })}
+        pin={props.pin}
+        onClose={props.onClose}
+        showLinkedSessions={composition.kind === 'whole'}
+        attentionInActions={actionRegionShown && !pinned}
+        onSelectLinkedSession={selectInlineSession}
+        {...(detail?.kind === 'ready' ? {
+          linkedSessionsPageState: detail.linkedSessionsPageState,
+          onLoadMoreLinkedSessions: sessionSelection.onLoadMore,
+        } : {})}
+      />
+
+      {pinned ? null : actionRegion}
+      {task.controls}
+      {actionRegionShown ? null : sourceActions}
       </Stack>
+      </ScrollArea>
+      {/* An open task editor takes the story's place (the header keeps at most part of the pane), and Cancel or
+          Save gives it back: the form is never squeezed into the header's share. */}
+      {task.form === null ? detailBody : (
+        <ScrollArea style={DETAIL_FILL_STYLE_V1} testID={TRIAGE_DETAIL_TASK_EDITOR_TEST_ID_V1}>{task.form}</ScrollArea>
+      )}
     </Stack>
-    {pinActions ? <DetailsPaneFooter testID={TRIAGE_DETAIL_FOOTER_TEST_ID_V1}>{actionRegion}</DetailsPaneFooter> : null}
+    {pinned ? <DetailsPaneFooter testID={TRIAGE_DETAIL_FOOTER_TEST_ID_V1}>{actionRegion}</DetailsPaneFooter> : null}
     </Stack>
+    )}</TriageEditTaskScope>
+  );
+  if (display === null || actionPresentation === null || selected === null) return renderDetail(null);
+  // Custody belongs to the selected entry, not the header/footer where its controls happen to be placed.
+  // A key cannot retain a component moved between those parents during a resize.
+  return (
+    <TriageEntryScopedActionRegion
+      key={deriveTriageDetailMountInstanceKey(row.entryRef, selected.sourceInstanceId)}
+      target={props.target}
+      actions={props.actions}
+      workflowSubject={workflowSubject}
+      {...(snapshot === undefined ? {} : { snapshot })}
+      display={display}
+      presentation={actionPresentation}
+      linkedSessionIds={linkedSessionIds}
+      {...(comparisonRead === undefined ? {} : { comparisonRead })}
+      {...(locator === undefined ? {} : { lastKnownLocator: locator })}
+      {...(repository === undefined ? {} : { repository })}
+      {...(reviewWorkspace === undefined ? {} : { reviewWorkspace })}
+      reviewPreparation={reviewPreparation}
+      viewerIsAuthor={viewerIsAuthor}
+      {...(sourceActions === undefined ? {} : { sourceActions })}
+      {...(attention === undefined ? {} : { attention })}
+    >{renderDetail}</TriageEntryScopedActionRegion>
   );
 }
 
-/** The entry's attention reason as the detail's chip: the row chip's tone and mark (one owner for both). */
+/** The entry's attention reason as the detail's chip: the row's own reason chip (one owner for both). */
 function TriageAttentionBadge(props: Readonly<{ attention: NonNullable<TriageDetailHeaderV1['attention']> }>): React.ReactElement {
   const { attention } = props;
-  const icon = attention.icon !== null && isHappierIconName(attention.icon) ? attention.icon : undefined;
   return (
-    <Badge
-      variant="tinted"
-      tone={readTriageAttentionBadgeToneV1(attention.level)}
-      value={attention.reasonLabel}
+    <TriageAttentionReasonChip
+      level={attention.level}
+      label={attention.reasonLabel}
+      icon={attention.icon}
       testID={TRIAGE_DETAIL_ATTENTION_TEST_ID_V1}
-      {...(icon === undefined ? {} : { icon })}
     />
   );
 }

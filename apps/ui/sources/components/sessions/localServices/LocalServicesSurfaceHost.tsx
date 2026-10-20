@@ -3,7 +3,7 @@ import * as React from 'react';
 import { useScopedPluginUiProjection } from '@/components/plugins/projection/useScopedPluginUiProjection';
 import { useMachinePresenceSummary } from '@/components/sessions/model/useMachinePresenceSummary';
 import { PluginSurfacePlacementStack } from '@/components/plugins/surfaces';
-import type { RuntimeActionExecute } from '@happier-dev/protocol';
+import type { FrontDoorRuntimeActionExecute } from '@/sync/ops/actions/frontDoorRuntimeActionExecutor';
 import type {
     LocalServiceLauncherSnapshotClient,
     LocalServiceLauncherState,
@@ -40,7 +40,7 @@ export type LocalServicesSurfaceHostProps = Readonly<{
     launcherSnapshotClient?: LocalServiceLauncherSnapshotClient;
     publicPreviewState?: LocalServicePublicPreviewState | null;
     publicPreviewStatusClient?: LocalServicePublicPreviewStatusClient;
-    runtimeActionExecute?: RuntimeActionExecute;
+    runtimeActionExecute?: FrontDoorRuntimeActionExecute;
     onOpenServiceInBrowser?: ServiceRowOpenHandler;
     /** Exact AppPane-admitted projection when a driver-owned surface supplies it. */
     pluginUiProjection?: PluginUiProjectionModel | null;

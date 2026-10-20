@@ -128,9 +128,11 @@ function createLazyDefinition<TSchema extends object>(
   };
   const definition = new Proxy(target, {
     get(_target, key) {
-      if (schema) return Reflect.get(target, key);
+      // Native parse getters now memoize on first access. Retain the existing
+      // cached invocation for frozen facades without prewarming every member.
       if (canonicalZodIdentity && typeof key === 'string'
-        && (key === 'check' || key === 'with' || PARSE_METHODS.has(key))) {
+        && ((!schema && (key === 'check' || key === 'with'))
+          || (PARSE_METHODS.has(key) && (!schema || !Object.hasOwn(target, key))))) {
         let method = methods.get(key);
         if (!method) {
           method = key === 'check' || key === 'with'
@@ -141,7 +143,9 @@ function createLazyDefinition<TSchema extends object>(
         return method;
       }
       resolve();
-      return Reflect.get(target, key);
+      // Native Zod getters bind and memoize methods on their receiver. Keep
+      // fluent parents attached to the public facade, never its hidden target.
+      return Reflect.get(target, key, definition);
     },
     getPrototypeOf() { resolve(); return Reflect.getPrototypeOf(target); },
     ownKeys() { resolve(); return Reflect.ownKeys(target); },

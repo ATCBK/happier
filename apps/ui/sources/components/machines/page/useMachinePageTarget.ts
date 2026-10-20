@@ -10,7 +10,7 @@ import { resolveRoutineServerSelectionScope } from '@/sync/domains/server/select
 import { sync } from '@/sync/sync';
 import { isDesktopHost } from '@/utils/platform/desktopHost';
 import { useMachinePresenceSummary } from '@/components/sessions/model/useMachinePresenceSummary';
-import { resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
+import { getMachineSentenceName, resolveMachineDisplayNames } from '@/utils/sessions/machineDisplayNames';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { t } from '@/text';
 import { usePreferredLanguage } from '@/text/usePreferredLanguage';
@@ -42,6 +42,8 @@ export type MachinePageTarget = Readonly<{
     activeServerId: string;
     machine: Machine | null;
     machineName: string;
+    /** The name inside page sentences: "this machine" while the machine's details are locked or loading. */
+    machineSentenceName: string;
     online: boolean;
     /** The page is focusing the Home its link names. */
     isServerSwitching: boolean;
@@ -124,6 +126,7 @@ export function useMachinePageTarget(): MachinePageTarget {
         const siblings = homeMachines.some((candidate) => candidate.id === machine.id) ? homeMachines : [...homeMachines, machine];
         return resolveMachineDisplayNames(siblings).get(machine.id) ?? t('machine.unknownMachine');
     }, [language, machine, machineListByServerId, serverId]);
+    const machineSentenceName = React.useMemo(() => getMachineSentenceName(machine, machineName), [language, machine, machineName]);
 
     return {
         machineId,
@@ -132,6 +135,7 @@ export function useMachinePageTarget(): MachinePageTarget {
         activeServerId,
         machine,
         machineName,
+        machineSentenceName,
         online: machine ? presence.reachability === 'reachable' : false,
         isServerSwitching,
         isHydratingMachine,

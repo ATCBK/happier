@@ -9,6 +9,7 @@ import {
   MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1,
   SESSION_SERVER_START_DAEMON_RPC_METHOD_V1,
 } from '@happier-dev/protocol';
+import { MachinePublishedDaemonStateV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
@@ -74,6 +75,7 @@ vi.mock('@/api/connection/createLoopbackReadinessProbe', () => ({
 vi.mock('@/ui/logger', () => ({
   logger: {
     debug: loggerDebugMock,
+    info: () => undefined,
     warn: loggerWarnMock,
     debugLargeJson: () => undefined,
   },
@@ -120,6 +122,12 @@ describe('ApiMachineClient connect ordering', () => {
       nowMs: () => now,
     });
     if (!listener) throw new Error('expected listener');
+    const { decodeBase64, decryptResult } = await import('@/api/encryption');
+    const readPublishedState = () => {
+      const writes = socket.emitWithAck.mock.calls.filter(([event]) => event === 'machine-update-state');
+      const content = (writes.at(-1)![1] as { daemonState: string }).daemonState;
+      return decryptResult(key, 'legacy', decodeBase64(content));
+    };
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
     const publishEndpoint = async () => {
       const endpoint = listener.readEndpoint();
@@ -140,6 +148,11 @@ describe('ApiMachineClient connect ordering', () => {
         }
       }
       await vi.waitFor(() => expect(connected).toBe(true));
+      // Connect's callback and registration readiness publish independently.
+      // Heartbeat assertions start after the real readiness state is acknowledged.
+      await vi.waitFor(() => expect(readPublishedState()).toMatchObject({
+        status: 'authenticated', value: { pid: process.pid, contributionRegistryProjectionRevision: 0 },
+      }));
       const writesBeforeHeartbeat = socket.emitWithAck.mock.calls.filter(([event]) => event === 'machine-update-state').length;
       now += 20_000;
       await vi.advanceTimersByTimeAsync(20_000);
@@ -147,12 +160,6 @@ describe('ApiMachineClient connect ordering', () => {
       expect(socket.emitWithAck.mock.calls.filter(([event]) => event === 'machine-update-state')).toHaveLength(writesBeforeHeartbeat);
       now = listener.endpoint.expiresAt - 150_000;
       await vi.advanceTimersByTimeAsync(130_000);
-      const { decodeBase64, decryptResult } = await import('@/api/encryption');
-      const readPublishedState = () => {
-        const writes = socket.emitWithAck.mock.calls.filter(([event]) => event === 'machine-update-state');
-        const content = (writes.at(-1)![1] as { daemonState: string }).daemonState;
-        return decryptResult(key, 'legacy', decodeBase64(content));
-      };
       await vi.waitFor(() => expect(readPublishedState()).toMatchObject({
         status: 'authenticated', value: { peerMediation: { loopback: { endpoint: {
           ...listener.endpoint, expiresAt: now + 300_000,
@@ -240,9 +247,12 @@ describe('ApiMachineClient connect ordering', () => {
       metadataVersion: 0,
       daemonState: projectionRevision === 0
         ? null
-        : { status: 'running', contributionRegistryProjectionRevision: projectionRevision },
+        : {
+          status: 'running', contributionRegistryProjectionRevision: projectionRevision,
+          peerMediation: { loopback: { flows: { machine_rpc: { active: true } } } },
+        },
       daemonStateVersion: 0,
-    });
+    }, undefined, { controlPort: 41233 });
 
     const rpcHandlerManager = Reflect.get(client, 'rpcHandlerManager') as RpcHandlerManager;
     rpcHandlerManager.registerHandler('neutral.reconnect', async () => ({ ok: true }));
@@ -273,6 +283,14 @@ describe('ApiMachineClient connect ordering', () => {
       const { decodeBase64, decryptResult } = await import('@/api/encryption');
       const runningState = decryptResult(new Uint8Array(32).fill(1), 'legacy', decodeBase64((runningPublication![1] as { daemonState: string }).daemonState));
       expect(runningState).toMatchObject({ status: 'authenticated', value: { contributionRegistryProjectionRevision: projectionRevision } });
+      if (projectionRevision !== 0) {
+        if (runningState.status !== 'authenticated') throw new Error('Expected authenticated machine state');
+        const readyState = MachinePublishedDaemonStateV1Schema.parse(runningState.value);
+        expect(readyState).toMatchObject({
+          status: 'running', pid: process.pid, startedAt: expect.any(Number), httpPort: 41233,
+          peerMediation: { loopback: { flows: { machine_rpc: { active: true } } } },
+        });
+      }
       firstSocket.disconnect();
       await vi.waitFor(() => expect(secondSocket.emit).toHaveBeenCalledWith(SOCKET_RPC_EVENTS.REGISTER,
         { method: 'machine-1:neutral.reconnect' }));
@@ -819,14 +837,87 @@ describe('ApiMachineClient connect ordering', () => {
     }
   }, 5_000);
 
-  it('reconnects through the existing supervisor when capability publication cannot establish readiness', async () => {
+  function createReadinessClient() {
+    const client = new ApiMachineClient('token', {
+      id: 'machine-1',
+      encryptionKey: new Uint8Array(32).fill(1),
+      encryptionVariant: 'legacy',
+      metadata: null,
+      metadataVersion: 0,
+      daemonState: null,
+      daemonStateVersion: 0,
+    });
+    client.setRPCHandlers({
+      spawnSession: async () => ({ type: 'success', sessionId: 'session-1' }),
+      sessionSpawnV1OutcomeRequired: true,
+      resolveSpawnSessionByNonce: async () => ({ status: 'success', sessionId: 'session-1' }),
+      stopSession: async () => true,
+      requestShutdown: () => {},
+    });
+    const rpcHandlerManager = Reflect.get(client, 'rpcHandlerManager') as RpcHandlerManager;
+    registerRequiredMachineControlHandlers(rpcHandlerManager);
+    vi.spyOn(rpcHandlerManager, 'waitForRegisteredHandlers').mockResolvedValue({ status: 'ready' });
+    return client;
+  }
+
+  it('retries a timed-out capability publication on the live socket without tearing the transport down', async () => {
     vi.stubEnv('HAPPY_ENABLE_V2_CHANGES', 'false');
+    const capabilityAttempts: unknown[] = [];
+    const statePayloads: unknown[] = [];
+    // A slow Home (lock convoy) answers the first publication after the ack deadline.
+    const socket = createApiSessionSocketStub({
+      id: 'machine-socket-1',
+      disconnectReason: 'transport close',
+      emitWithAck: (event, payload) => {
+        if (event === MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1) {
+          capabilityAttempts.push(payload);
+          if (capabilityAttempts.length === 1) {
+            throw new Error('Socket ACK timed out for machine-update-operation-protocol-capabilities');
+          }
+          return { v: 1, result: 'success', revision: capabilityAttempts.length };
+        }
+        if (event === 'machine-update-state') {
+          statePayloads.push(payload);
+          return {
+            result: 'success',
+            version: 1,
+            daemonState: (payload as { daemonState: string }).daemonState,
+          };
+        }
+        return { result: 'success', version: 1 };
+      },
+    });
+    const unusedSocket = createApiSessionSocketStub({ id: 'machine-socket-unused' });
+    bindApiSessionSocketSequenceMock(ioMock, [socket, unusedSocket]);
+    const client = createReadinessClient();
+
+    try {
+      client.connect();
+      await vi.waitFor(() => expect(capabilityAttempts).toHaveLength(1));
+      // Readiness is not advertised until a publication lands.
+      expect(statePayloads).toEqual([]);
+
+      await vi.waitFor(() => expect(statePayloads).toHaveLength(1), { timeout: 10_000 });
+      expect(capabilityAttempts).toHaveLength(2);
+      expect(capabilityAttempts[1]).toEqual(capabilityAttempts[0]);
+      expect(ioMock).toHaveBeenCalledTimes(1);
+      expect(socket.disconnect).not.toHaveBeenCalled();
+      expect(socket.connected).toBe(true);
+    } finally {
+      await client.shutdown();
+    }
+  }, 20_000);
+
+  it('reconnects as before when the socket really disconnects while a publication is being retried', async () => {
+    vi.stubEnv('HAPPY_ENABLE_V2_CHANGES', 'false');
+    const firstCapabilityAttempts: unknown[] = [];
     const firstSocket = createApiSessionSocketStub({
       id: 'machine-socket-1',
       disconnectReason: 'transport close',
       emitWithAck: (event) => {
         if (event === MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1) {
-          return { v: 1, result: 'error', code: 'internal_error' };
+          firstCapabilityAttempts.push(event);
+          throw new Error('Socket ACK timed out for machine-update-operation-protocol-capabilities');
         }
         return { result: 'success', version: 1 };
       },
@@ -853,31 +944,22 @@ describe('ApiMachineClient connect ordering', () => {
       },
     });
     bindApiSessionSocketSequenceMock(ioMock, [firstSocket, secondSocket]);
-    const client = new ApiMachineClient('token', {
-      id: 'machine-1',
-      encryptionKey: new Uint8Array(32).fill(1),
-      encryptionVariant: 'legacy',
-      metadata: null,
-      metadataVersion: 0,
-      daemonState: null,
-      daemonStateVersion: 0,
-    });
-    client.setRPCHandlers({
-      spawnSession: async () => ({ type: 'success', sessionId: 'session-1' }),
-      sessionSpawnV1OutcomeRequired: true,
-      resolveSpawnSessionByNonce: async () => ({ status: 'success', sessionId: 'session-1' }),
-      stopSession: async () => true,
-      requestShutdown: () => {},
-    });
-    const rpcHandlerManager = Reflect.get(client, 'rpcHandlerManager') as RpcHandlerManager;
-    registerRequiredMachineControlHandlers(rpcHandlerManager);
-    vi.spyOn(rpcHandlerManager, 'waitForRegisteredHandlers').mockResolvedValue({ status: 'ready' });
+    const client = createReadinessClient();
 
     try {
       client.connect();
+      await vi.waitFor(() => expect(firstCapabilityAttempts).toHaveLength(1));
+      expect(ioMock).toHaveBeenCalledTimes(1);
+
+      // The transport liveness owner (the socket's own disconnect) is what ends a connection.
+      firstSocket.connected = false;
+      firstSocket.trigger('disconnect', 'transport close');
+
       await vi.waitFor(() => expect(ioMock).toHaveBeenCalledTimes(2), { timeout: 10_000 });
       await vi.waitFor(() => expect(secondCapabilityPayloads).toHaveLength(1), { timeout: 10_000 });
       await vi.waitFor(() => expect(secondStatePayloads).toHaveLength(1), { timeout: 10_000 });
+      // The retry that belonged to the dead socket never publishes again.
+      expect(firstCapabilityAttempts).toHaveLength(1);
     } finally {
       await client.shutdown();
     }

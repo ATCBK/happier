@@ -22,6 +22,63 @@ function canonicalRuntimeEvent(input: Readonly<Record<string, unknown>>): AgentS
 }
 
 describe('createSessionTurnLifecycle', () => {
+    it.each(['turn-cancelled', 'turn-complete'] as const)(
+        'settles the exact yielded question turn as waiting after %s', async kind => {
+            const mutations: SessionTurnMutationV1[] = [];
+            const markers: unknown[] = [];
+            const factsChanged = vi.fn();
+            const session = {
+                sessionId: 'question-session',
+                async enqueueSessionTurnMutation(mutation: SessionTurnMutationV1) { mutations.push(mutation); },
+                readQuestionWaitTurnId() { return this.sessionId === 'question-session' ? 'question-turn' : null; },
+            };
+            const lifecycle = createSessionTurnLifecycle({ session,
+                onTurnFactsChanged: factsChanged,
+                readTurnFacts: () => ({ initiator: 'user', workDepth: 0 }),
+                onAcceptedTurnLifecycle: async marker => { markers.push(marker); },
+            });
+            lifecycle.observeRuntimeEvent(canonicalRuntimeEvent({ kind: 'turn-start', sessionId: session.sessionId,
+                emittedAtMs: 100, turnId: 'question-turn' }));
+            lifecycle.observeRuntimeEvent(canonicalRuntimeEvent({ kind, sessionId: session.sessionId,
+                emittedAtMs: 200, turnId: 'question-turn', ...(kind === 'turn-cancelled' ? { cause: 'user' } : {}) }));
+            // A later duplicate terminal must not publish a conflicting outcome.
+            lifecycle.observeRuntimeEvent(canonicalRuntimeEvent({ kind: 'turn-complete', sessionId: session.sessionId,
+                emittedAtMs: 210, turnId: 'question-turn' }));
+            await lifecycle.drainAcceptedLifecycle();
+            expect(mutations.map(mutation => mutation.action)).toEqual(['begin', 'wait']);
+            expect(markers).toEqual([
+                { event: 'task_started', turnId: 'question-turn' },
+                { event: 'assistant_message_end', turnId: 'question-turn' },
+            ]);
+            expect(lifecycle.hasActiveTurn()).toBe(false);
+            expect(factsChanged).toHaveBeenLastCalledWith({ turnId: 'question-turn', facts: null });
+        },
+    );
+
+    it('keeps later completion, explicit Stop and failures distinct from a question wait', async () => {
+        const mutations: SessionTurnMutationV1[] = [];
+        let questionWaitTurnId: string | null = 'question-turn';
+        const session = Object.assign({ sessionId: 'question-session',
+            async enqueueSessionTurnMutation(mutation: SessionTurnMutationV1) { mutations.push(mutation); },
+        }, { readQuestionWaitTurnId: () => questionWaitTurnId });
+        const lifecycle = createSessionTurnLifecycle({ session });
+        for (const [turnId, terminal] of [
+            ['answer-turn', 'turn-complete'], ['stopped-turn', 'turn-cancelled'], ['failed-turn', 'turn-failed'],
+        ] as const) {
+            lifecycle.observeRuntimeEvent(canonicalRuntimeEvent({ kind: 'turn-start', sessionId: session.sessionId,
+                emittedAtMs: 100, turnId }));
+            if (terminal === 'turn-cancelled') questionWaitTurnId = null; // Explicit Stop withdraws the owner's intent.
+            if (terminal === 'turn-failed') questionWaitTurnId = turnId;
+            lifecycle.observeRuntimeEvent(canonicalRuntimeEvent({ kind: terminal, sessionId: session.sessionId,
+                emittedAtMs: 200, turnId,
+                ...(terminal === 'turn-cancelled' ? { cause: 'user' } : {}),
+                ...(terminal === 'turn-failed' ? { diagnostic: { code: 'session_error', severity: 'error' } } : {}),
+            }));
+        }
+        await lifecycle.drainAcceptedLifecycle();
+        expect(mutations.map(mutation => mutation.action)).toEqual(['begin', 'complete', 'begin', 'cancel', 'begin', 'fail']);
+    });
+
     it.each([false, true])('retains the receiver-bound persistence port with marker publication=%s', async markers => {
         // Home mutation persistence is the system boundary; its connection
         // method uses its receiver, as the real ApiSessionClient does.
@@ -108,6 +165,30 @@ describe('createSessionTurnLifecycle', () => {
         facts = { initiator: 'agent_session', workDepth: 9 };
         await lifecycle.drainAcceptedLifecycle();
         expect(mutations[0]).toMatchObject({ action: 'begin', initiator: 'agent_session', workDepth: 5 });
+    });
+
+    it('binds only the exact native input that caused a canonical turn start', async () => {
+        const mutations: SessionTurnMutationV1[] = [];
+        let activeInput: { inputId: string; turnId: string } | null = {
+            inputId: 'accepted-follow-up', turnId: 'turn-2',
+        };
+        const lifecycle = createSessionTurnLifecycle({
+            session: { sessionId: 'session-1', enqueueSessionTurnMutation: async mutation => { mutations.push(mutation); } },
+            readStartingInput: () => activeInput,
+            readTurnFacts: () => ({ initiator: 'agent_session', workDepth: 1 }),
+        });
+        lifecycle.observeRuntimeEvent(canonicalRuntimeEvent({ kind: 'turn-start', sessionId: 'session-1',
+            emittedAtMs: 100, turnId: 'human-turn' }));
+        lifecycle.observeRuntimeEvent(canonicalRuntimeEvent({ kind: 'turn-complete', sessionId: 'session-1',
+            emittedAtMs: 110, turnId: 'human-turn' }));
+        lifecycle.observeRuntimeEvent(canonicalRuntimeEvent({ kind: 'turn-start', sessionId: 'session-1',
+            emittedAtMs: 120, turnId: 'turn-2' }));
+        activeInput = null;
+        await lifecycle.drainAcceptedLifecycle();
+        expect(mutations.filter(mutation => mutation.action === 'begin')).toEqual([
+            expect.not.objectContaining({ startingInputId: 'accepted-follow-up' }),
+            expect.objectContaining({ action: 'begin', turnId: 'turn-2', startingInputId: 'accepted-follow-up' }),
+        ]);
     });
 
     it('persists the workflow invocation identity with the host frozen depth', async () => {

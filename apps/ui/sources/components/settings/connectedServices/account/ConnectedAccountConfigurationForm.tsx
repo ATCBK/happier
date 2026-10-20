@@ -133,11 +133,14 @@ type ConnectedAccountConfigurationFormProps = Readonly<{
     }>): Promise<boolean | void> | boolean | void;
 }>;
 
-function ConnectedAccountConfigurationFormBody(props: ConnectedAccountConfigurationFormProps) {
+/** The controller's target/revision key owns retirement; refreshes keep this draft. */
+export const ConnectedAccountConfigurationForm = React.memo(function ConnectedAccountConfigurationForm(
+    props: ConnectedAccountConfigurationFormProps,
+) {
     const styles = stylesheet;
-    const initialDraft = React.useMemo(() => (
+    const [initialDraft] = React.useState<ConnectedAccountConfigurationDraft>(() => (
         createConnectedAccountConfigurationDraft({ fields: props.fields, values: props.values })
-    ), [props.fields, props.values]);
+    ));
     const [draft, setDraft] = React.useState<ConnectedAccountConfigurationDraft>(() => (
         initialDraft
     ));
@@ -376,20 +379,4 @@ function ConnectedAccountConfigurationFormBody(props: ConnectedAccountConfigurat
             </View>
         </ConnectedAccountFormSection>
     );
-}
-
-/**
- * Descriptor fields, read values, and configured-secret facts form one draft
- * contract. Any change starts a fresh form lifetime even while this route and
- * Account controller remain mounted.
- */
-export const ConnectedAccountConfigurationForm = React.memo(function ConnectedAccountConfigurationForm(
-    props: ConnectedAccountConfigurationFormProps,
-) {
-    const draftKey = React.useMemo(() => JSON.stringify([
-        props.fields,
-        props.values,
-        props.configuredSecretFieldIds,
-    ]), [props.configuredSecretFieldIds, props.fields, props.values]);
-    return <ConnectedAccountConfigurationFormBody key={draftKey} {...props} />;
 });

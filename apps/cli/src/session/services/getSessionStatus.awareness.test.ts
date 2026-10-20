@@ -9,6 +9,7 @@ import { encryptSessionPayload } from '@/session/transport/encryption/sessionEnc
 import { createAccountEncryptionCurrentnessFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
 import { bindApiSessionSocketMock, createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 import { getSessionStatus } from './getSessionStatus';
+import { SessionStatusActionResultV1Schema } from '@happier-dev/protocol/sessions/control/contract';
 
 const { mockIo } = vi.hoisted(() => ({ mockIo: vi.fn() }));
 vi.mock('axios', () => ({ default: { get: vi.fn(), isAxiosError: () => false } }));
@@ -58,7 +59,7 @@ describe('getSessionStatus awareness acquisition', () => {
     expect(await getSessionStatus({ credentials, idOrPrefix: sessionId, live: false })).toMatchObject({
       ok: true,
       session: { id: sessionId },
-      awareness: { v: 1, sessionId, runtime: 'unknown', freshness: 'unknown', operational: { primary: 'working' } },
+      awareness: { v: 1, sessionId, runtime: 'working', freshness: 'live', operational: { primary: 'working' } },
     });
   });
 
@@ -112,7 +113,7 @@ describe('getSessionStatus awareness acquisition', () => {
             t: 'update-session', id: sessionId,
             agentState: {
               version: 1,
-              value: JSON.stringify({ requests: { ask: { tool: 'AskUserQuestion', kind: 'user_action', createdAt: now } } }),
+              value: JSON.stringify({ requests: { ask: { tool: 'AskUserQuestion', kind: 'user_action', arguments: { questions: [] }, createdAt: now } } }),
             },
           },
         }));
@@ -121,7 +122,33 @@ describe('getSessionStatus awareness acquisition', () => {
     expect(await getSessionStatus({ credentials, idOrPrefix: sessionId, live: true })).toMatchObject({
       ok: true,
       agentState: { pendingRequestsCount: 1 },
+      pendingRequests: [{ requestId: 'ask', kind: 'user_action', tool: 'AskUserQuestion' }],
       awareness: { operational: { primary: 'action_required' } },
     });
+  });
+
+  it('exposes exact pending permission and question identities through the status Action contract', async () => {
+    serveE2ee({
+      dataEncryptionKey,
+      agentState: encryptSessionPayload({
+        ctx: { encryptionKey: new Uint8Array(32).fill(19), encryptionVariant: 'dataKey' },
+        payload: { requests: {
+          'exec-native-pwd': { tool: 'Bash', kind: 'permission', arguments: { command: 'pwd' }, createdAt: 1, turnId: 'native-turn-1' },
+          'ask-choice': { tool: 'AskUserQuestion', kind: 'user_action', arguments: { questions: [{ id: 'choice', question: 'Continue?' }] }, createdAt: 2 },
+          settled: { tool: 'Bash', kind: 'permission', arguments: { command: 'pwd' }, createdAt: 1 },
+        }, completedRequests: {
+          settled: { tool: 'Bash', kind: 'permission', arguments: { command: 'pwd' }, createdAt: 1, completedAt: 3, status: 'approved' },
+        } },
+      }),
+    });
+    const result = await getSessionStatus({ credentials: e2eeCredentials, idOrPrefix: sessionId, live: false });
+    expect(SessionStatusActionResultV1Schema.parse(result)).toMatchObject({
+      ok: true,
+      pendingRequests: [
+        { requestId: 'exec-native-pwd', turnId: 'native-turn-1', kind: 'permission', tool: 'Bash' },
+        { requestId: 'ask-choice', kind: 'user_action', tool: 'AskUserQuestion' },
+      ],
+    });
+    expect(result).not.toHaveProperty('pendingRequests.0.arguments');
   });
 });

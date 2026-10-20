@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 import {
+    findSessionServerStartCandidateForDirectory,
     presentSessionServerStartCandidate,
     resolveSessionServerStartCandidateSelection,
 } from './serverStartDraftCandidateSelection';
@@ -98,5 +99,28 @@ describe('Session server-start candidate selection', () => {
             candidate: { ...candidate, machineId: 'unknown-machine' },
             ...context,
         })).toEqual({ title: '/Users/ada/code/app', subtitle: undefined });
+    });
+
+    it('marks as selected only the candidate on the chosen machine whose folder is the edited directory', () => {
+        const primary = { projectKey: { id: 'project-primary' }, serverId: 'server-a', machineId: 'machine-1',
+            rootPath: '/work/app', reachable: true, worktrees: [] };
+        const worktree = { projectKey: { id: 'project-worktree' }, serverId: 'server-a', machineId: 'machine-1',
+            rootPath: '/work/app-review', reachable: true, worktrees: [] };
+        const elsewhere = { projectKey: { id: 'project-elsewhere' }, serverId: 'server-b', machineId: 'machine-1',
+            rootPath: '/work/app', reachable: true, worktrees: [] };
+        const candidates = [primary, worktree, elsewhere];
+        const target = { serverId: 'server-a', machineId: 'machine-1' };
+
+        expect(findSessionServerStartCandidateForDirectory({ candidates, target, directory: '/work/app' })).toBe(0);
+        expect(findSessionServerStartCandidateForDirectory({ candidates, target, directory: ' /work/app-review/ ' })).toBe(1);
+        // A typed folder no candidate stands for selects none, and the sibling-prefix path is not the candidate.
+        expect(findSessionServerStartCandidateForDirectory({ candidates, target, directory: '/work/app-other' })).toBe(-1);
+        expect(findSessionServerStartCandidateForDirectory({ candidates, target, directory: '/work/app/sub' })).toBe(-1);
+        expect(findSessionServerStartCandidateForDirectory({ candidates, target, directory: '' })).toBe(-1);
+        // The same folder on another Home is another candidate, not this one.
+        expect(findSessionServerStartCandidateForDirectory({
+            candidates, target: { serverId: 'server-b', machineId: 'machine-1' }, directory: '/work/app',
+        })).toBe(2);
+        expect(findSessionServerStartCandidateForDirectory({ candidates: undefined, target, directory: '/work/app' })).toBe(-1);
     });
 });

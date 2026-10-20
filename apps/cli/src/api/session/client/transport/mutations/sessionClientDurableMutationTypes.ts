@@ -11,6 +11,7 @@ import { SessionTranscriptObservationProvenanceV1Schema, SessionTranscriptSurfac
 import type { SessionTranscriptSurfaceItemReferenceInputV1, SessionTranscriptSurfaceItemReferencesV1 } from '@happier-dev/protocol/sessions/messages/transcriptObservationV1';
 import type { PromptStackEntryV1 } from '@happier-dev/protocol/prompts/library/promptStacksV1';
 import type { SessionTranscriptObservationProvenanceV1 } from '@happier-dev/protocol';
+import type { SessionRoleEdit } from '@/session/roles/sessionRoleEdit';
 
 export type SessionClientDurableMutationDependency = Readonly<{
     mutationId: string;
@@ -58,6 +59,17 @@ export type SessionClientDurableMutationSocket = Readonly<{
     emit(event: string, payload: unknown, callback?: (answer: unknown) => void): void;
     emitWithAck?(event: string, ...args: unknown[]): Promise<unknown>;
     timeout?(ms: number): SessionClientDurableMutationSocket;
+}>;
+
+/** Private device-local request retirement; never sent as a new wire operation. */
+export type AgentStateRequestSettlementMutationV1 = Readonly<{
+    v: 1;
+    source: 'agent_state_request_settlement';
+    sessionId: string;
+    mutationId: string;
+    content: Readonly<{ t: 'device_local_v1'; c: string }>
+        | Readonly<{ t: 'encrypted'; c: string }>
+        | Readonly<{ t: 'installation_encrypted_v1'; c: string }>;
 }>;
 
 export type SessionEndMutationV1 = Readonly<{
@@ -134,6 +146,8 @@ export type RegisteredSessionStateFieldMutationV1 = Readonly<{
     observedAt: number;
     dependsOn?: readonly SessionClientDurableMutationDependency[];
     expectedMetadataRevision?: number;
+    /** A Role Action edits one member of the configuration at replay, not a stale snapshot. */
+    sessionRoleEdit?: SessionRoleEdit;
     /** Stored 68edc1dab944 Role queues only; ordinary Role writers cannot author this carrier. */
     retainedSessionContextEntry?: PromptStackEntryV1;
 }>;
@@ -156,7 +170,8 @@ export type SessionClientDurableMutationAttemptReason =
     | 'session_turn_mutation_rejected'
     | 'metadata_tuple_conflict'
     | 'transcript_message_provenance_missing_or_invalid'
-    | 'transcript_message_invalid_observation';
+    | 'transcript_message_invalid_observation'
+    | 'invalid_agent_state_request_settlement';
 
 export type SessionClientDurableMutationAttemptV1 = Readonly<{
     v: 1;
@@ -177,6 +192,16 @@ type SessionClientDurableMutationAttemptAccounting =
     }>;
 
 export type QueuedSessionClientDurableMutation = SessionClientDurableMutationAttemptAccounting & (
+    | Readonly<{
+        kind: 'agent_state_request_settlement';
+        mutationId: string;
+        payload: AgentStateRequestSettlementMutationV1;
+        createdAt: number;
+        attempts: number;
+        nextAttemptAt: number;
+        dependsOn?: readonly SessionClientDurableMutationDependency[];
+        paused?: SessionClientDurableMutationPause;
+    }>
     | Readonly<{
         kind: 'session_turn_mutation';
         mutationId: string;

@@ -1,6 +1,7 @@
-import { archiveSessionReports, confirmSessionArchive } from '@/components/sessions/actions/confirmSessionArchive';
+import { confirmSessionArchive } from '@/components/sessions/actions/confirmSessionArchive';
 import { resolveAgentIdFromSessionMetadata } from '@happier-dev/agents';
 import * as React from 'react';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 import { Platform, Pressable, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { listActionSpecs } from '@happier-dev/protocol/actions/actionSpecs';
@@ -24,15 +25,15 @@ import { Modal } from '@/modal';
 import { createDefaultActionExecutor } from '@/sync/ops/actions/defaultActionExecutor';
 import { canForkConversation } from '@/sync/domains/sessionFork/forkUiSupport';
 import { openSessionForkStrategyFlow } from '@/components/sessions/fork/openSessionForkStrategyFlow';
-import { runSessionHandoffPickerFlow } from '@/sync/domains/sessionHandoff/runSessionHandoffPickerFlow';
-import { resolveSessionHandoffSourceMachineId } from '@/sync/domains/sessionHandoff/resolveSessionHandoffSourceMachineId';
+import { useSessionHandoffAction } from '@/sync/domains/sessionHandoff/useSessionHandoffAction';
 import {
   resolveSessionHandoffUiAvailability,
 } from '@/sync/domains/sessionHandoff/resolveSessionHandoffUiAvailability';
 import type { PluginSurfaceOpenHandler } from '@/components/plugins/surfaces/openPluginSurface';
 import { useAccountSessionFollowEditorHost } from '@/components/sessions/follow/useAccountSessionFollowEditorHost';
+import { SessionFollowHeaderChip } from '@/components/sessions/follow/SessionFollowHeaderChip';
+import { useIsTablet } from '@/utils/platform/responsive';
 import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
-import { useServerFeaturesSnapshotForServerId } from '@/sync/domains/features/featureDecisionRuntime';
 import {
   resolveSessionActionDefaultBackend,
   resolveSessionActionDefaultTarget,
@@ -43,7 +44,6 @@ import { getVoiceAgentSessionTeleportAvailability } from '@/voice/agent/getVoice
 import { teleportVoiceAgentToSessionRoot } from '@/voice/agent/teleportVoiceAgentToSessionRoot';
 import { useHasGlobalVoiceAgentConversation } from '@/voice/agent/useHasGlobalVoiceAgentConversation';
 import { navigateWithBlurOnWeb } from '@/utils/platform/navigateWithBlurOnWeb';
-import { useSessionHandoffSourceReachability } from '@/sync/domains/sessionHandoff/useSessionHandoffSourceReachability';
 import { readExternalSessionLink } from '@/sync/domains/session/external/readExternalSessionLink';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
 import { readExternalSessionFollowPolicy } from '@/sync/domains/session/external/externalSessionFollowMetadata';
@@ -67,7 +67,6 @@ import {
   SESSION_ACTION_ARCHIVE_ID,
   SESSION_ACTION_RENAME_ID,
   SESSION_ACTION_RESUME_ID,
-  SESSION_ACTION_STOP_ID,
   resolveManualReadStateFromSessionActionId,
 } from '@/components/sessions/actions/sessionActionIds';
 import { buildSessionMetadataStabilitySignature } from '@/sync/domains/session/metadata/sessionMetadataStability';
@@ -123,8 +122,9 @@ import {
   type SessionHeaderMenuGroup,
 } from './sessionHeaderMenuGroups';
 import { getSessionActionMetadata } from './sessionActionMetadata';
+import { useSessionComputerMenuEntry } from './SessionHeaderComputerButton';
 
-const SESSION_FOLLOW_IN_ANOTHER_SESSION_ACTION_ID = 'session.follow.sources.add';
+const SESSION_FOLLOW_IN_ANOTHER_SESSION_ACTION_ID = 'follow.set';
 
 function resolveSessionHandoffMenuSubtitle(handoffAvailability: ReturnType<typeof resolveSessionHandoffUiAvailability>, fallbackSubtitle: string | undefined): string | undefined {
   if (handoffAvailability.available) {
@@ -325,6 +325,15 @@ function didSessionHeaderActionMenuPropsChange(
 }
 
 function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
+  const presentationActive = useLayoutPresentationActive();
+  const followControllerRef = React.useRef<AbortController | null>(null);
+  React.useEffect(() => {
+    const controller = new AbortController();
+    followControllerRef.current = controller;
+    const retirement = props.actionAccountLifetime?.onRetire(() => controller.abort());
+    if (!presentationActive) controller.abort();
+    return () => { controller.abort(); retirement?.dispose(); };
+  }, [presentationActive, props.actionAccountLifetime, props.sessionId]);
   const { theme } = useUnistyles();
   const currentUiContextReader = useOptionalCurrentUiContextReader();
   const findSurfaceRuntime = useFindSurfaceRuntime();
@@ -369,6 +378,7 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
     serverId: sessionServerId,
     openFullSurface: openCompanionFullSurface,
   });
+  const openComputer = useSessionComputerMenuEntry({ sessionId: props.sessionId, serverId: sessionServerId ?? null });
   const showCompanionInOverflow = props.companionHeaderActionPlacement === 'overflow'
     && companionRevealPort !== null
     && companion.availability === 'ready'
@@ -445,7 +455,14 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
     scopeKind: 'spawn',
     serverId: sessionServerId,
   });
-  const followEditor = useAccountSessionFollowEditorHost({ serverId: sessionServerId ?? null, sessionId: props.sessionId });
+  // The Follow editor opens under the header chip (lab P2-A), or under ⋯ where no chip is drawn.
+  const menuAnchorRef = React.useRef<View>(null);
+  const followChipAnchorRef = React.useRef<View>(null);
+  const followAnchorRef = React.useMemo(() => ({
+    get current() { return followChipAnchorRef.current ?? menuAnchorRef.current; },
+  }) as React.RefObject<View | null>, []);
+  const followEditor = useAccountSessionFollowEditorHost({ serverId: sessionServerId ?? null, sessionId: props.sessionId, anchorRef: followAnchorRef });
+  const followChipCompact = !useIsTablet();
   const readStateSignature = storage((state) =>
     buildSessionHeaderReadStateSignature(state, props.sessionId, sessionServerId ?? null),
   );
@@ -507,27 +524,6 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
     sessionActionSnapshot,
     sessionServerId,
   ]);
-  const sourceMachineId = React.useMemo(
-    () => resolveSessionHandoffSourceMachineId({
-      reachableMachineId,
-      sessionMetadata: ownerMetadata,
-    }),
-    [ownerMetadata, reachableMachineId],
-  );
-  const serverSnapshot = useServerFeaturesSnapshotForServerId(sessionServerId, { enabled: Boolean(sessionServerId) });
-  const runtimeAvailability = useSessionHandoffSourceReachability({
-    serverId: sessionServerId,
-    sourceMachineId,
-  });
-  const handoffAvailability = resolveSessionHandoffUiAvailability({
-    sessionId: props.sessionId,
-    serverId: sessionServerId,
-    reachableMachineId,
-    session,
-    sessionHandoffFeatureEnabled: sessionHandoffEnabled,
-    serverSnapshot,
-    runtimeAvailability,
-  });
   const executor = React.useMemo(
     () => createDefaultActionExecutor({
       resolveServerIdForSessionId: () => sessionServerId,
@@ -541,6 +537,10 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
     }),
     [router, sessionServerId],
   );
+  const { availability: handoffAvailability, run: runHandoff } = useSessionHandoffAction({
+    sessionId: props.sessionId, session, serverId: sessionServerId, reachableMachineId,
+    sessionHandoffFeatureEnabled: sessionHandoffEnabled, execute: executor.execute, placement: 'session_action_menu',
+  });
   const teleportAvailability = React.useMemo(
     () => getVoiceAgentSessionTeleportAvailability({ voice, sessionId: props.sessionId }),
     [props.sessionId, voice],
@@ -626,6 +626,9 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
     const out: Array<Readonly<{ group: SessionHeaderMenuGroup; item: DropdownMenuItem }>> = [];
     const push = (group: SessionHeaderMenuGroup, item: DropdownMenuItem) => { out.push({ group, item }); };
     push('open', { id: 'header.findChat', title: t('find.surface.chat'), icon: <Icon name="magnifying-glass" size={16} color={iconColor} /> });
+    if (openComputer) {
+      push('open', { id: 'header.openComputer', title: t('computerUse.presentation.sourceComputer'), icon: <Icon name="desktop" size={16} color={iconColor} /> });
+    }
 
     if (props.collaborationHeader && collaborationHeaderState.overflow) {
       push('open', createSessionCollaborationHeaderMenuItem({
@@ -712,6 +715,7 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
     collaborationHeaderState.overflow,
     props.collaborationHeader,
     props.extraItems,
+    openComputer,
     showCompanionInOverflow,
     companion.preference.items.length,
     companion.preference.visible,
@@ -784,9 +788,19 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
           />
         </Pressable>
       ))}
+      {followEditor.enabled && sessionServerId ? (
+        <SessionFollowHeaderChip
+          sessionId={props.sessionId}
+          serverId={sessionServerId}
+          compact={followChipCompact}
+          anchorRef={followChipAnchorRef}
+          open={followEditor.open}
+          onPress={() => followEditor.openEditor({ address: { serverId: sessionServerId, sessionId: props.sessionId }, archived: session.archivedAt != null })}
+        />
+      ) : null}
       {followEditor.editor}
       {actions.length > 0 ? (
-    <View ref={followEditor.anchorRef} collapsable={false}>
+    <View ref={menuAnchorRef} collapsable={false}>
     <DropdownMenu
       open={open}
       onOpenChange={setOpen}
@@ -801,6 +815,10 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
           findSurfaceRuntime.open(`transcript:${sessionServerId ?? ''}:${props.sessionId}`);
           return;
         }
+        if (actionId === 'header.openComputer') {
+          openComputer?.();
+          return;
+        }
         if (actionId === 'header.openCompanion' && showCompanionInOverflow) {
           applyCompanionHeaderIntent();
           return;
@@ -813,7 +831,8 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
         if (actionId === 'session.externalSession.backgroundFollow') {
           const nextPolicy = externalSessionFollowPolicy === 'background_follow' ? 'attached_only' : 'background_follow';
           fireAndForget((async () => {
-            if (!externalSessionLink) return;
+            const signal = followControllerRef.current?.signal;
+            if (!externalSessionLink || !signal || signal.aborted) return;
             // One shared operation owner with the External Sessions settings
             // surface: it fences the settlement on the exact link identity and
             // the active Account lifetime, and applies the canonical local
@@ -823,6 +842,7 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
               serverId: sessionServerId ?? null,
               link: externalSessionLink,
               policy: nextPolicy,
+              signal,
             });
             if (outcome.kind === 'stale') return;
             if (outcome.kind !== 'applied') {
@@ -889,26 +909,15 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
                 return;
               }
               let alsoArchiveReports = false;
-              if (actionId === SESSION_ACTION_STOP_ID) {
-                const confirmed = await Modal.confirm(
-                  t('sessionInfo.stopSession'),
-                  t('sessionInfo.stopSessionConfirm'),
-                  {
-                    cancelText: t('common.cancel'),
-                    confirmText: t('sessionInfo.stopSession'),
-                    destructive: true,
-                  },
-                );
-                if (!confirmed) return;
-              }
               if (actionId === SESSION_ACTION_ARCHIVE_ID) {
-                const confirmation = await confirmSessionArchive({ reportCount: session?.reports?.total ?? 0 });
+                const confirmation = await confirmSessionArchive({ leadSessionId: props.sessionId, serverId: sessionServerId ?? null });
                 if (!confirmation.confirmed) return;
                 alsoArchiveReports = confirmation.alsoArchiveReports;
               }
               await executeSessionAction({
                 actionId: actionId as any,
                 target: sessionActionTarget,
+                ...(actionId === SESSION_ACTION_ARCHIVE_ID ? { input: { alsoArchiveReports } } : {}),
                 ...(actionId === 'ui.session.follow'
                   ? { context: { operations: { openFollowEditor: followEditor.openEditor } } }
                   : {}),
@@ -924,9 +933,6 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
                     }
                   : {}),
               });
-              if (alsoArchiveReports) {
-                await archiveSessionReports({ leadSessionId: props.sessionId, serverId: sessionServerId ?? null });
-              }
             } catch (error) {
               showSessionHeaderActionError(error);
             }
@@ -966,14 +972,7 @@ function SessionHeaderActionMenuInner(props: SessionHeaderActionMenuProps) {
             return;
           }
           fireAndForget((async () => {
-            const serverId = sessionServerId;
-            const res = await runSessionHandoffPickerFlow({
-              execute: executor.execute as any,
-              sessionId: props.sessionId,
-              sourceMachineId: sourceMachineId ?? null,
-              serverId,
-              placement: 'session_action_menu',
-            });
+            const res = await runHandoff();
             if (!res?.ok) return;
           })(), { tag: 'SessionHeaderActionMenu.execute.sessionHandoff' });
           return;

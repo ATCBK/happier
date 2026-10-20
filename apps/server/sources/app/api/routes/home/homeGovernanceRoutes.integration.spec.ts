@@ -1051,10 +1051,10 @@ describe("Home governance routes", () => {
         const unnamedAdmin = await createAccount("admin");
         const disabledAdmin = await createAccount("admin", "disabled");
         const member = await createAccount("member");
-        await db.account.update({ where: { id: owner.accountId }, data: { firstName: "Ada", lastName: "Lovelace" } });
+        await db.account.update({ where: { id: owner.accountId }, data: { name: "Ada Lovelace" } });
         await db.account.update({ where: { id: admin.accountId }, data: { username: "grace" } });
-        await db.account.update({ where: { id: disabledAdmin.accountId }, data: { firstName: "Former" } });
-        await db.account.update({ where: { id: member.accountId }, data: { firstName: "Mia" } });
+        await db.account.update({ where: { id: disabledAdmin.accountId }, data: { name: "Former" } });
+        await db.account.update({ where: { id: member.accountId }, data: { name: "Mia" } });
 
         const response = await post(app, "/v1/home/governance/eligibility/get", member.token, {});
 
@@ -1204,7 +1204,7 @@ describe("Home governance routes", () => {
         expect(exact.json()).toEqual({
             accounts: [{
                 accountId: member.accountId,
-                profile: { firstName: null, lastName: null, username: null, avatarUrl: null },
+                profile: { name: null, firstName: null, lastName: null, username: null, avatarUrl: null },
                 eligible: true,
             }],
         });
@@ -1345,7 +1345,7 @@ describe("Home governance routes", () => {
         expect(found.json()).toEqual({
             accounts: [{
                 accountId: disabled.accountId,
-                profile: { firstName: null, lastName: null, username: "dormant", avatarUrl: null },
+                profile: { name: null, firstName: null, lastName: null, username: "dormant", avatarUrl: null },
                 eligible: false,
             }],
         });

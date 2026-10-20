@@ -59,6 +59,7 @@ export function clearCachedRepositoryDirectoryEntries(input: {
 export async function warmRepositoryDirectoryCache(input: {
     sessionId: string;
     directoryPath: string;
+    signal?: AbortSignal;
 }): Promise<ListRepositoryDirectoryEntriesResult> {
     const target = resolveWorkspaceTargetForSession(input.sessionId);
     if (!target) {
@@ -67,12 +68,14 @@ export async function warmRepositoryDirectoryCache(input: {
     return await warmWorkspaceRepositoryDirectoryCache({
         scope: { serverId: target.serverId, machineId: target.machineId, rootPath: target.rootPath },
         directoryPath: input.directoryPath,
+        signal: input.signal,
     });
 }
 
 export async function listRepositoryDirectoryEntries(input: {
     sessionId: string;
     directoryPath: string;
+    signal?: AbortSignal;
 }): Promise<ListRepositoryDirectoryEntriesResult> {
     const target = resolveWorkspaceTargetForSession(input.sessionId);
     if (!target) {
@@ -81,6 +84,7 @@ export async function listRepositoryDirectoryEntries(input: {
     return await listWorkspaceRepositoryDirectoryEntries({
         scope: { serverId: target.serverId, machineId: target.machineId, rootPath: target.rootPath },
         directoryPath: input.directoryPath,
+        signal: input.signal,
     });
 }
 

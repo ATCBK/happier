@@ -21,6 +21,7 @@ import {
     VOICE_TRANSCRIPT_UNRECONCILED_EVENT_RING_MAX,
 } from './voiceTranscriptBounds';
 import type { VoiceTranscriptTurn } from './voiceTranscriptEvents';
+import { readVoiceTranscriptMessageText } from './voiceTranscriptMessageText';
 import { buildVoiceTranscriptNoteMeta, readVoiceContinuationProvenance, type VoiceContinuationProvenance } from './voiceTranscriptNoteMeta';
 import { randomUUID } from '@/platform/randomUUID';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
@@ -64,32 +65,8 @@ function readRecord(value: unknown): Readonly<Record<string, unknown>> | null {
     return value as Readonly<Record<string, unknown>>;
 }
 
-function extractAssistantText(content: unknown): string | null {
-    if (!Array.isArray(content)) return null;
-    for (const entry of content) {
-        const record = readRecord(entry);
-        if (!record || record.type !== 'text' || typeof record.text !== 'string') continue;
-        return normalizeNonEmptyString(record.text);
-    }
-    return null;
-}
-
 function normalizeText(value: unknown): string | null {
     return normalizeNonEmptyString(typeof value === 'string' ? value : String(value ?? ''));
-}
-
-function readProjectedMessageText(record: Readonly<Record<string, unknown>>): string {
-    if (record.role === 'user') {
-        const content = readRecord(record.content);
-        if (content?.type === 'text' && typeof content.text === 'string') {
-            return String(content.text).trim();
-        }
-        return '';
-    }
-    if (record.role === 'agent') {
-        return extractAssistantText(record.content) ?? '';
-    }
-    return '';
 }
 
 function buildVoiceTurnMeta(turn: VoiceTranscriptTurn | null): NormalizedMessage['meta'] | undefined {
@@ -202,7 +179,7 @@ function messageMatchesTurn(message: unknown, nextText: string, nextTurn: VoiceT
     if (nextTurn.runId && payload.runId !== nextTurn.runId) return false;
     if (nextTurn.streamId && payload.streamId !== nextTurn.streamId) return false;
     if (nextTurn.requestId && payload.requestId !== nextTurn.requestId) return false;
-    return readProjectedMessageText(record) === nextText;
+    return readVoiceTranscriptMessageText(record) === nextText;
 }
 
 function messageMatchesProvisionalTurn(
@@ -226,7 +203,7 @@ function messageMatchesProvisionalTurn(
     if (!provisionalId) return false;
     if (provisionalId.transcriptSessionId !== conversationSessionId) return false;
     if (provisionalId.role !== nextTurn.role) return false;
-    return readProjectedMessageText(record) === nextText;
+    return readVoiceTranscriptMessageText(record) === nextText;
 }
 
 function promoteProvisionalMessage(existing: unknown, message: NormalizedMessage): void {
@@ -281,7 +258,7 @@ function upsertProjectedMessage(
                 reconciledProvisionalId: readProvisionalRecordId(readRecord(existing)),
             };
         }
-        if (replaceExisting && readProjectedMessageText(existingRecord ?? {}) !== text) {
+        if (replaceExisting && readVoiceTranscriptMessageText(existingRecord) !== text) {
             const replacement = typeof existingRecord?.createdAt === 'number' && Number.isFinite(existingRecord.createdAt)
                 ? { ...message, createdAt: existingRecord.createdAt } as NormalizedMessage
                 : message;

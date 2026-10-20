@@ -177,7 +177,7 @@ async function openNewSessionDraft(params: Readonly<{
 
 async function waitForDraftMutation(page: Page, action: () => Promise<void>): Promise<void> {
     const mutation = page.waitForResponse(
-        (response) => response.url().endsWith('/v1/account/session-drafts/mutate')
+        (response) => new URL(response.url()).pathname === '/v1/account/session-drafts/mutate'
             && response.request().method() === 'POST'
             && response.status() === 200,
         { timeout: 60_000 },

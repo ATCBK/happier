@@ -25,6 +25,7 @@ import {
 } from '@/components/sessions/new/serverStartDraftComposer';
 import { stableJsonStringify } from '@/utils/json/stableJsonStringify';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
+import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
 
 import {
     createPluginSurfaceHostApiError,
@@ -83,22 +84,24 @@ export function projectPluginActionInputSelectionFacts(input: Readonly<{
 }
 
 /** A bounded semantic dependency for the controller that owns this selector. */
-export function serializePluginActionInputSelectionFacts(input: Parameters<
+export function serializePluginActionInputSelectionFacts(input: Omit<Parameters<
     typeof projectPluginActionInputSelectionFacts
->[0]): string {
+>[0], 'pluginUiProjection'> & Readonly<{
+    translationsByPluginId?: PluginUiProjectionModel['translationsByPluginId'] | null;
+}>): string {
     const facts = projectPluginActionInputSelectionFacts(input);
-    const projection = facts.pluginUiProjection;
     return stableJsonStringify({
         ...facts,
         // This carrier is used only for Action presentation text. Producer
         // presence, unrelated surfaces and aggregate delivery metadata are not
         // an Action-selection lifetime. Exact Action and target facts above
-        // still retire a changed selection.
-        pluginUiProjection: projection === null
-            ? null
-            : Object.fromEntries(Object.entries(projection.translationsByPluginId).map(([pluginId, translations]) => (
-                [pluginId, translations.bundles]
-            ))),
+        // still retire a changed selection. Only admitted Action contributors
+        // can supply that text; walking every plugin's bundles makes unrelated
+        // catalog delivery proportional to the entire catalog on every mount.
+        pluginUiProjection: Object.fromEntries(Object.keys(facts.pluginProjectionById).flatMap(pluginId => {
+            const translations = input.translationsByPluginId?.[pluginId];
+            return translations ? [[pluginId, translations.bundles]] : [];
+        })),
     });
 }
 
@@ -158,10 +161,8 @@ function readSessionServerStartDraftTarget(
     host: PluginContributedActionHostFacts,
 ): SessionServerStartDraftTarget | null {
     const machineId = typeof host.machineId === 'string' ? host.machineId.trim() : '';
-    const serverId = typeof host.serverId === 'string' ? host.serverId.trim() : '';
-    const accountServerId = typeof host.accountLifetime?.scope.serverId === 'string'
-        ? host.accountLifetime.scope.serverId.trim()
-        : '';
+    const serverId = resolveServerProfileScopeIdForIdentifier(host.serverId);
+    const accountServerId = resolveServerProfileScopeIdForIdentifier(host.accountLifetime?.scope.serverId);
     return machineId && serverId && serverId === accountServerId
         ? { machineId, serverId }
         : null;

@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { readHomeDomainConfirmedRollbackV1 } from '@happier-dev/protocol/actions/homeDomainHttpBinding';
 import { randomBytes } from 'node:crypto';
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
 import { AccountSettingsV2GetResponseSchema, AccountSettingsV2UpdateResponseSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
@@ -44,7 +45,7 @@ export function createCliConnectedAccountCatalogStore(input: Readonly<{
   };
   const verifyCurrent = async () => {
     assertCurrent();
-    if (context && !await context.isCurrent()) throw Object.assign(new Error('Captured Connected Account retired'), { code: 'scope-retired' });
+    if (context && !await context.isCurrent(input.signal)) throw Object.assign(new Error('Captured Connected Account retired'), { code: 'scope-retired' });
     assertCurrent();
   };
   const compatibilityHeaders = buildCurrentAccountStoredContentCompatibilityHttpHeaders();
@@ -66,9 +67,11 @@ export function createCliConnectedAccountCatalogStore(input: Readonly<{
     // A durable effect-only receipt survives retirement; private reads do not.
     if (body === undefined) { await verifyCurrent(); assertCurrent(); }
     if (response.status < 200 || response.status >= 300 && response.status !== 409) {
+      const rollback = readHomeDomainConfirmedRollbackV1(response.status, response.data);
       throw Object.assign(new Error('Connected Account transport unavailable'), { code:
-        response.status === 401 ? 'unauthorized' : response.status === 403 ? 'forbidden'
-          : response.status === 404 ? 'unsupported' : 'unreachable' });
+        rollback?.code ?? (body !== undefined && response.status >= 500 ? 'outcome_unknown'
+          : response.status === 401 ? 'unauthorized' : response.status === 403 ? 'forbidden'
+          : response.status === 404 ? 'unsupported' : 'unreachable') });
     }
     return response.data;
   };

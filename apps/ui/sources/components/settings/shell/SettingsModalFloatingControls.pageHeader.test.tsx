@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { PageHeader } from '@/components/ui/layout/PageHeader';
 import { DestinationInstanceHost } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { MachineTabSubHead } from '@/components/machines/page/MachineTabSubHead';
 
 const routeState = vi.hoisted(() => ({ pathname: '/settings/appearance/themes' }));
 
@@ -60,6 +61,19 @@ it('only lets the focused hosted page claim inline Back chrome', async () => {
     </>);
     expect(headerHoldsBack('header-0')).toBe(true);
     expect(headerHoldsBack('header-1')).toBe(false);
+});
+
+it('lets a page head that draws its own named way back be the only Back (no floating control beside it)', async () => {
+    routeState.pathname = '/settings/machines/machine-1/agents';
+    screen = await renderScreen(
+        <SettingsFloatingControlsHost enabled>
+            <MachineTabSubHead title="Agents" placement="page"
+                back={{ label: 'nl2', onPress: () => {}, testID: 'machine-sub-page-back-agents' }} />
+        </SettingsFloatingControlsHost>,
+    );
+
+    expect(backControls()).toHaveLength(0);
+    expect(screen.findAllHostsByTestId('machine-sub-page-back-agents')).toHaveLength(1);
 });
 
 it('keeps a back control on a sub-page that has no page header yet', async () => {

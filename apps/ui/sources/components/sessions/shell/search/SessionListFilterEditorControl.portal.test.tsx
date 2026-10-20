@@ -16,11 +16,16 @@ installPopoverCommonModuleMocks({
     reactNative: async () => await import('react-native-web'),
 });
 
+// Resolve the real web graph before the timed DOM/portal interaction begins.
+const { PopoverScope } = await import('@/components/ui/popover');
+const { SessionListFilterEditorControl } = await import('./SessionListFilterEditorControl');
+
 const labels = {
     search: 'Search filters', show: 'Show', myWork: 'My work', assignedToMe: 'Assigned to me',
     scope: 'Scope', sessions: 'Sessions', runs: 'Runs', both: 'Both', startedBy: 'Started by',
     startedByYou: 'You', startedByTriggers: 'Triggers', startedByAgents: 'Agents',
     runsNeedingYouAlwaysShow: 'Runs that need you always show',
+    onlyCoordinators: 'Only coordinators', onlyCoordinatorsDescription: 'Sessions coordinating other work',
     following: 'Following', involvingMe: 'Involving me', allAccessible: 'All accessible',
     attention: 'Attention', anyAttention: 'Any', needsMyAttention: 'Only sessions that need me',
     inactiveSessions: 'Inactive sessions', showInactive: 'Show', hideInactive: 'Hide', homes: 'Homes',
@@ -49,8 +54,6 @@ function rect(x: number, y: number, width: number, height: number): DOMRect {
 describe('SessionListFilterEditorControl portal ownership', () => {
     it('mounts the opened web editor in the modal-aware portal host and closes it before opening Archived', async () => {
         const openArchived = vi.fn();
-        const { PopoverScope } = await import('@/components/ui/popover');
-        const { SessionListFilterEditorControl } = await import('./SessionListFilterEditorControl');
         const container = document.createElement('div');
         container.setAttribute('data-testid', 'sidebar-source');
         document.body.appendChild(container);

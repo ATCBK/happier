@@ -1,8 +1,9 @@
 import React from 'react';
 import { act } from 'react-test-renderer';
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { installSessionHooksCommonModuleMocks } from './sessionHooksTestHelpers';
+import { initializeRealAppRuntimeForTests } from '@/dev/testkit/harness/realAppRuntimeHarness';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
@@ -76,42 +77,8 @@ vi.mock('@/utils/platform/platform', () => ({
 
 const routerPushSpy = vi.fn();
 
-vi.mock('@/auth/context/AuthContext', () => ({
-  useAuth: () => ({ credentials: { token: 't', encryption: { type: 'dataKey' } }, refreshFromActiveServer: vi.fn(async () => {}) }),
-}));
-
-vi.mock('@/sync/domains/server/serverProfiles', () => ({
-  getActiveServerUrl: () => 'https://api.happier.dev',
-  listServerProfiles: () => [],
-  loadHomeViewState: () => null,
-}));
-
-vi.mock('@/sync/domains/server/activeServerSwitch', () => ({
-  normalizeServerUrl: (value: string) => String(value ?? '').trim().replace(/\/+$/, ''),
-  upsertActivateAndSwitchServer: vi.fn(async () => true),
-}));
-
-vi.mock('@/sync/domains/pending/pendingTerminalConnect', () => ({
-  setPendingTerminalConnect: vi.fn(),
-  clearPendingTerminalConnect: vi.fn(),
-}));
-
-vi.mock('@/utils/path/terminalConnectUrl', () => ({
-  parseTerminalConnectUrl: () => ({ publicKeyB64Url: 'abc123', serverUrl: null }),
-}));
-
-vi.mock('@/encryption/base64', () => ({
-  decodeBase64: vi.fn(() => new Uint8Array(32).fill(5)),
-}));
-
-vi.mock('@/sync/sync', () => ({
-  sync: { encryption: { getContentPrivateKey: () => new Uint8Array(32).fill(7) } },
-}));
-
-vi.mock('@/auth/terminal/terminalProvisioning', () => ({
-  buildTerminalResponseV3: vi.fn(() => new Uint8Array([3, 2, 1])),
-}));
-
+await initializeRealAppRuntimeForTests();
+const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 const { useConnectTerminal } = await import('./useConnectTerminal');
 
 describe('useConnectTerminal (scanner lifecycle)', () => {
@@ -125,10 +92,6 @@ describe('useConnectTerminal (scanner lifecycle)', () => {
         vi.unstubAllGlobals();
     });
 
-    afterAll(() => {
-        vi.unmock('@/utils/path/terminalConnectUrl');
-    });
-
   it('navigates to the in-app QR scanner when starting terminal connect', async () => {
     let hookApi: ReturnType<typeof useConnectTerminal> | null = null;
     function Probe() {
@@ -136,7 +99,7 @@ describe('useConnectTerminal (scanner lifecycle)', () => {
       return null;
     }
 
-    await renderScreen(<Probe />);
+    await renderScreen(<InjectedAuthProvider credentials={null}><Probe /></InjectedAuthProvider>);
 
     await act(async () => {
       await hookApi!.connectTerminal();
@@ -160,7 +123,7 @@ describe('useConnectTerminal (scanner lifecycle)', () => {
       return null;
     }
 
-    await renderScreen(<Probe />);
+    await renderScreen(<InjectedAuthProvider credentials={null}><Probe /></InjectedAuthProvider>);
 
     await act(async () => {
       await hookApi!.connectTerminal();
@@ -184,7 +147,7 @@ describe('useConnectTerminal (scanner lifecycle)', () => {
       return null;
     }
 
-    await renderScreen(<Probe />);
+    await renderScreen(<InjectedAuthProvider credentials={null}><Probe /></InjectedAuthProvider>);
 
     modalAlertSpy.mockClear();
 
@@ -207,7 +170,7 @@ describe('useConnectTerminal (scanner lifecycle)', () => {
       return null;
     }
 
-    await renderScreen(<Probe />);
+    await renderScreen(<InjectedAuthProvider credentials={null}><Probe /></InjectedAuthProvider>);
 
     modalAlertSpy.mockClear();
     routerPushSpy.mockClear();

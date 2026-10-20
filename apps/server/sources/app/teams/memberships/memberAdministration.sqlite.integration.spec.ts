@@ -9,6 +9,7 @@ import { applyExternalGroupContributionInTx, applyExternalTeamMembershipInTx } f
 import { addTeamGroupMemberForActorInTx, createTeamGroupForActorInTx } from "../groups/groupService";
 import { resolveEffectiveTeamGroupIdsForAccountInTx } from "../groups/effectiveGroupMembership";
 import { readTeamSummaryForActorInTx } from "../lifecycle";
+import { listTeamsForActorInTx } from "../queries";
 import { resolveTeamActorContextInTx } from "../actorContext";
 import { listHomeAdministrationEventsInTx } from "@/app/home/audit/homeAdministrationEvents";
 import {
@@ -482,20 +483,41 @@ describe("Team member administration (SQLite integration)", () => {
         }))).toEqual({ ok: true, value: { status: "removed", membershipId: membership.teamMembershipId } });
     });
 
-    it("refuses directory-managed self-removal and withholds leave", async () => {
+    it.each(["active", "suspended"] as const)("refuses %s directory-managed self-removal and withholds leave", async (status) => {
         const owner = await account();
         const person = await account();
         const acme = await team("Directory owns leave");
         await member(acme.id, owner.id, "owner");
         const membership = await member(acme.id, person.id, "member");
+        await db.teamMembership.update({ where: { id: membership.teamMembershipId }, data: { status } });
         const source = await workosSource(acme.id, "Leave directory");
         await db.teamProvisionedIdentity.create({ data: {
             teamId: acme.id, directorySourceId: source.id, externalUserId: crypto.randomUUID(),
-            state: "active", boundAccountId: person.id,
+            state: status, boundAccountId: person.id,
             teamMembershipId: membership.teamMembershipId, teamMembershipTeamId: acme.id,
         } });
         const context = await inTx((tx) => resolveTeamActorContextInTx(tx, { teamId: acme.id, actorAccountId: person.id }));
         expect(context?.capabilities).toMatchObject({ leave: false });
+        if (status === "suspended") {
+            expect(await inTx((tx) => readTeamSummaryForActorInTx(tx, { teamId: acme.id, actorAccountId: person.id })))
+                .toEqual({ ok: false, error: "team_not_found" });
+            const native = await team("Native suspended membership");
+            const nativeMembership = await member(native.id, person.id, "member");
+            await db.teamMembership.update({ where: { id: nativeMembership.teamMembershipId }, data: { status: "suspended" } });
+            const page = await inTx((tx) => listTeamsForActorInTx(tx, {
+                v: 1, actorAccountId: person.id, scope: "member", archived: "active", limit: 1,
+            }));
+            expect(page).toMatchObject({ ok: true, page: { items: [] } });
+            if (!page.ok) throw new Error("directory admission failed");
+            expect(page.page.nextCursor).not.toBeNull();
+            const next = await inTx((tx) => listTeamsForActorInTx(tx, {
+                v: 1, actorAccountId: person.id, scope: "member", archived: "active", limit: 1, cursor: page.page.nextCursor,
+            }));
+            expect(next).toMatchObject({ ok: true, page: {
+                items: [{ id: native.id, capabilities: { viewTeam: false, viewRoster: false, leave: true } }],
+                nextCursor: null,
+            } });
+        }
         expect(await inTx((tx) => removeTeamMemberForActorInTx(tx, {
             teamId: acme.id, actorAccountId: person.id, membershipId: membership.teamMembershipId,
         }))).toEqual({ ok: false, error: "managed_by_directory" });

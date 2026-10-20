@@ -9,7 +9,7 @@ import {
     type ServerProfile,
 } from '@/sync/domains/server/serverProfiles';
 import { useMachineListByServerId, useMachineListStatusByServerId } from '@/sync/domains/state/storage';
-import { resolveServerScopedMachineInventory, resolveServerScopedMachineInventoryKeys } from '@/sync/domains/machines/resolveServerScopedMachines';
+import { resolveServerScopedMachineInventory } from '@/sync/domains/machines/resolveServerScopedMachines';
 import { isMachineVisibleForLaunchSelection } from '@/sync/domains/machines/identity/filterVisibleMachines';
 
 export type ServerScopedMachinePresentation = MachineDisplayRenderable & Readonly<{
@@ -35,6 +35,9 @@ type UseServerScopedMachineOptionsParams = Readonly<{
     activeServerId: string;
     activeMachines: ReadonlyArray<Machine>;
     refreshToken?: string | number;
+    /** Hidden retained composers keep their last inventory until presented again. */
+    presented?: boolean;
+    inventoryPurpose?: 'full' | 'launch';
 }>;
 
 function normalizeServerIds(ids: ReadonlyArray<string>): string[] {
@@ -55,48 +58,6 @@ function buildServerScopedMachine(machine: Machine, params: Readonly<{ serverId:
         serverId: params.serverId,
         serverName: params.serverName,
     };
-}
-
-function buildMachineOptionSignature(machine: Machine): string {
-    const metadata = machine.metadata;
-    return [
-        machine.id,
-        String(machine.active === true),
-        String(machine.activeAt ?? ''),
-        String(machine.updatedAt ?? ''),
-        String(machine.revokedAt ?? ''),
-        String(machine.replacedByMachineId ?? ''),
-        String(machine.daemonStateVersion ?? ''),
-        String(metadata?.displayName ?? ''),
-        String(metadata?.host ?? ''),
-        String(metadata?.homeDir ?? ''),
-        String(metadata?.platform ?? ''),
-    ].join('|');
-}
-
-function buildMachineListSignature(machines: ReadonlyArray<Machine>): string {
-    return machines.map(buildMachineOptionSignature).join('\n');
-}
-
-function buildScopedMachineListsSignature(
-    serverIds: ReadonlyArray<string>,
-    machineListByServerId: Readonly<Record<string, ReadonlyArray<Machine> | null | undefined>>,
-    machineListStatusByServerId: Readonly<Record<string, string | undefined>>,
-): string {
-    const inventoryKeys = [...new Set(serverIds.flatMap((serverId) => (
-        resolveServerScopedMachineInventoryKeys({ serverId, machineListByServerId })
-    )))];
-    return inventoryKeys.map((serverId) => {
-        const hasCached = Object.prototype.hasOwnProperty.call(machineListByServerId, serverId);
-        const machines = machineListByServerId[serverId];
-        const machineSignature = Array.isArray(machines) ? buildMachineListSignature(machines) : '';
-        return [
-            serverId,
-            String(hasCached),
-            String(machineListStatusByServerId[serverId] ?? ''),
-            machineSignature,
-        ].join('|');
-    }).join('\n');
 }
 
 function buildServerProfilesSignature(profilesById: ReadonlyMap<string, ServerProfile>): string {
@@ -140,18 +101,8 @@ export function useServerScopedMachineOptions(params: UseServerScopedMachineOpti
         [rawServerProfiles],
     );
     const serverProfiles = useStableValueBySignature(rawServerProfiles, serverProfilesSignature);
-    const rawMachineListByServerId = useMachineListByServerId();
-    const rawMachineListStatusByServerId = useMachineListStatusByServerId();
-    const scopedMachineListsSignature = React.useMemo(
-        () => buildScopedMachineListsSignature(allowedServerIds, rawMachineListByServerId, rawMachineListStatusByServerId),
-        [allowedServerIds, rawMachineListByServerId, rawMachineListStatusByServerId, serverProfiles],
-    );
-    const machineListByServerId = useStableValueBySignature(rawMachineListByServerId, scopedMachineListsSignature);
-    const machineListStatusByServerId = useStableValueBySignature(rawMachineListStatusByServerId, scopedMachineListsSignature);
-    const activeMachinesSignature = React.useMemo(
-        () => buildMachineListSignature(params.activeMachines),
-        [params.activeMachines],
-    );
+    const machineListByServerId = useMachineListByServerId(params.presented, params.inventoryPurpose);
+    const machineListStatusByServerId = useMachineListStatusByServerId();
 
     return React.useMemo(() => {
         const activeServerId = String(params.activeServerId ?? '').trim();
@@ -183,7 +134,7 @@ export function useServerScopedMachineOptions(params: UseServerScopedMachineOpti
         });
     }, [
         allowedServerIds,
-        activeMachinesSignature,
+        params.activeMachines,
         machineListByServerId,
         machineListStatusByServerId,
         params.activeServerId,

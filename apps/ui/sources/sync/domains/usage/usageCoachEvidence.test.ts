@@ -35,6 +35,14 @@ describe('opened Session Coach detail', () => {
             acceptedDelivery: { v: 1 as const, acceptedAtMs: 170, delivery: { kind: 'steer', turnId: 'turn' } } }])).toHaveProperty('coach.detail.modelRequests', []);
         expect(projectSessionUsageWorkEvidence(session, [message(record(selected)), input]))
             .toHaveProperty('coach.detail.modelRequests', []);
+        const opened = read();
+        const messageEvidence = { acceptedInputs: opened.acceptedInputs, phaseEvents: opened.phaseEvents, coach: opened.coach };
+        expect(projectSessionUsageWorkEvidence(session, undefined, { messagesComplete: true, messageEvidence })).toEqual(opened);
+        // A fresh Session/turn admission recomputes completion and permission
+        // facts from current state without needing the original message body.
+        expect(projectSessionUsageWorkEvidence({ ...session, sessionTurns: { ...session.sessionTurns,
+            turns: [{ ...session.sessionTurns.turns[0]!, status: 'failed' }] } }, undefined,
+        { messagesComplete: true, messageEvidence })).toHaveProperty('coach.detail.modelRequests', []);
     });
     it('projects completed witnessed compactions without counting phases or copying private fields', () => {
         const compaction = (lifecycleId: string, phase: 'started' | 'completed', source = 'runtime') =>

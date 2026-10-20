@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
+import { normalizeSessionListFilterV1 } from '@happier-dev/protocol';
 
 // Third-party rendering is outside this listing contract; its streaming renderer is unused here.
 vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({ splitStreamingRevealTextParts: () => [] }));
@@ -6,6 +8,8 @@ vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () =
 import { flushHookEffects, renderHook, standardCleanup } from '@/dev/testkit';
 import type { SessionListIndexItem } from '@/sync/domains/sessionList/sessionListIndex';
 import type { SessionListRenderableSession } from '@/sync/domains/session/listing/sessionListRenderable';
+import { buildSessionOrganizationProjection } from '@/sync/domains/session/organization/projection';
+import { buildSessionOrganizationServerKey, buildSessionOrganizationSessionKey } from '@/sync/domains/session/organization/keys';
 
 type SessionListOrderingModeV1 = 'custom' | 'created' | 'updated';
 type SessionListAttentionPromotionModeV1 = 'off' | 'global' | 'withinGroups';
@@ -91,7 +95,8 @@ function makeSourceIndex(): SessionListIndexItem[] {
     ];
 }
 
-function setSessionOrganizationProjection(params: Readonly<{
+function organizationProjection(serverId: string, params: Readonly<{
+    version?: number;
     pinnedSessionIds?: readonly string[];
     folders?: ReadonlyArray<Readonly<{
         id: string;
@@ -106,17 +111,16 @@ function setSessionOrganizationProjection(params: Readonly<{
         sortKey?: string | null;
     }>>;
     folderAssignmentsBySessionId?: Readonly<Record<string, string | null>>;
-}>): void {
-    viewState.sessionOrganizationProjection = {
-        schemaVersion: 1,
-        version: 1,
-        pinnedSessionIds: params.pinnedSessionIds ?? [],
-        pinsBySessionId: Object.fromEntries((params.pinnedSessionIds ?? []).map((sessionId, index) => [
-            sessionId,
-            { sessionId, sortKey: String(index + 1).padStart(4, '0'), pinnedAt: index + 1 },
+}>) {
+    return buildSessionOrganizationProjection({
+        schemaVersionByServerId: { [serverId]: 1 },
+        snapshotVersionByServerId: { [serverId]: params.version ?? 1 },
+        pinsBySessionKey: Object.fromEntries((params.pinnedSessionIds ?? []).map((sessionId, index) => [
+            buildSessionOrganizationSessionKey(serverId, sessionId),
+            { sessionId, sortKey: String(index + 1).padStart(4, '0'), pinnedAt: index + 1, listPinned: true, railPinned: false },
         ])),
-        foldersById: Object.fromEntries((params.folders ?? []).map((folder, index) => [
-            folder.id,
+        foldersByFolderKey: Object.fromEntries((params.folders ?? []).map((folder, index) => [
+            buildSessionOrganizationServerKey(serverId, folder.id),
             {
                 folderId: folder.id,
                 folderKey: folder.id,
@@ -124,25 +128,31 @@ function setSessionOrganizationProjection(params: Readonly<{
                 parentFolderKey: folder.parentId ?? null,
                 sortKey: folder.sortKey ?? String(index + 1).padStart(4, '0'),
                 display: {
-                    t: 'plain',
+                    t: 'plain' as const,
                     v: {
                         name: folder.name,
                         workspace: folder.workspace,
                     },
                 },
-                displayState: { status: 'available', value: null },
+                displayState: { status: 'available' as const, value: null },
                 archivedAt: null,
                 createdAt: 1,
                 updatedAt: 1,
             },
         ])),
-        folderAssignmentsBySessionId: params.folderAssignmentsBySessionId ?? {},
-        tagsById: {},
-        tagAssignmentsBySessionId: {},
-        attentionStandingsBySessionId: {},
+        folderAssignmentsBySessionKey: Object.fromEntries(Object.entries(params.folderAssignmentsBySessionId ?? {}).map(([sessionId, folderId]) => [
+            buildSessionOrganizationSessionKey(serverId, sessionId), { sessionId, folderId },
+        ])),
+        tagsByTagKey: {},
+        tagAssignmentsBySessionKey: {},
+        attentionStandingsBySessionKey: {},
         orderEntriesByScopeKey: {},
         labelsByLabelKey: {},
-    };
+    }, serverId);
+}
+
+function setSessionOrganizationProjection(params: Parameters<typeof organizationProjection>[1]): void {
+    viewState.sessionOrganizationProjection = organizationProjection('s1', params);
 }
 
 vi.mock('@/sync/domains/state/storage', async () => {
@@ -392,47 +402,11 @@ describe('useVisibleSessionListViewState (index pipeline)', () => {
         };
         viewState.sessionFolders = { v: 1, folders: [] };
         viewState.sessionFolderAssignmentsBySessionKey = {};
-        viewState.sessionOrganizationProjection = {
-            schemaVersion: 1,
-            version: 7,
-            pinnedSessionIds: ['pinned'],
-            pinsBySessionId: {
-                pinned: { sessionId: 'pinned', sortKey: '0001', pinnedAt: 1 },
-            },
-            foldersById: {
-                'folder-a': {
-                    folderId: 'folder-a',
-                    folderKey: 'folder-a',
-                    parentFolderId: null,
-                    parentFolderKey: null,
-                    sortKey: '0001',
-                    display: {
-                        t: 'plain',
-                        v: {
-                            name: 'Planning',
-                            workspace: {
-                                t: 'workspaceScope',
-                                serverId: 's1',
-                                machineId: 'm1',
-                                rootPath: '/repo',
-                            },
-                        },
-                    },
-                    displayState: { status: 'available', value: null },
-                    archivedAt: null,
-                    createdAt: 1,
-                    updatedAt: 1,
-                },
-            },
-            folderAssignmentsBySessionId: {
-                'in-folder': 'folder-a',
-            },
-            tagsById: {},
-            tagAssignmentsBySessionId: {},
-            attentionStandingsBySessionId: {},
-            orderEntriesByScopeKey: {},
-            labelsByLabelKey: {},
-        };
+        setSessionOrganizationProjection({ version: 7, pinnedSessionIds: ['pinned'],
+            folders: [{ id: 'folder-a', name: 'Planning', workspace: {
+                t: 'workspaceScope', serverId: 's1', machineId: 'm1', rootPath: '/repo',
+            } }], folderAssignmentsBySessionId: { 'in-folder': 'folder-a' },
+        });
 
         const hook = await renderHook(() => useVisibleSessionListViewState('all'));
         await flushHookEffects();
@@ -487,33 +461,10 @@ describe('useVisibleSessionListViewState (index pipeline)', () => {
             'home-a': { 'same-session': makeSessionRow('same-session', { active: true }) },
             'home-b': { 'same-session': makeSessionRow('same-session', { active: true }) },
         };
-        const projection = (serverId: string, pinned: boolean) => ({
-            schemaVersion: 1,
-            version: 1,
+        const projection = (serverId: string, pinned: boolean) => organizationProjection(serverId, {
             pinnedSessionIds: pinned ? ['same-session'] : [],
-            pinsBySessionId: pinned
-                ? { 'same-session': { sessionId: 'same-session', sortKey: '0001', pinnedAt: 1 } }
-                : {},
-            foldersById: {
-                [`folder-${serverId}`]: {
-                    folderId: `folder-${serverId}`,
-                    folderKey: `folder-${serverId}`,
-                    parentFolderId: null,
-                    parentFolderKey: null,
-                    sortKey: '0001',
-                    display: { t: 'plain', v: { name: `Folder ${serverId}`, workspace: workspace(serverId) } },
-                    displayState: { status: 'available', value: null },
-                    archivedAt: null,
-                    createdAt: 1,
-                    updatedAt: 1,
-                },
-            },
+            folders: [{ id: `folder-${serverId}`, name: `Folder ${serverId}`, workspace: workspace(serverId) }],
             folderAssignmentsBySessionId: { 'same-session': `folder-${serverId}` },
-            tagsById: {},
-            tagAssignmentsBySessionId: {},
-            attentionStandingsBySessionId: {},
-            orderEntriesByScopeKey: {},
-            labelsByLabelKey: {},
         });
         viewState.sessionOrganizationProjectionsByServerId = {
             'home-a': projection('home-a', false),
@@ -1019,6 +970,35 @@ describe('useVisibleSessionListViewState (index pipeline)', () => {
 
         expect(remountedHook.getCurrent()?.visibleSessionListIndex).toBe(retainedVisibleSessionListIndex);
         expect(viewState.visibleIndexComputeCount).toBe(computeCountBeforeRemount);
+    });
+
+    it('recomputes the personal starter filter when the credentialed Account changes on the same Home', async () => {
+        const { createHomeGovernanceHarness, waitForHomeGovernance } = await import('@/dev/testkit/harness/homeGovernanceHarness');
+        const homes = createHomeGovernanceHarness();
+        const serverId = await homes.addHome({ name: 'Viewer scope', serverUrl: 'https://list-viewer-scope.test', accountId: 'alice', active: false });
+        viewState.selection = { ...viewState.selection, activeServerId: serverId, allowedServerIds: [serverId] };
+        viewState.source = [
+            { type: 'header', headerKind: 'date', title: 'Today', serverId, groupKey: 'viewer-scope' },
+            ...['alice-session', 'bob-session'].map(sessionId => ({
+                type: 'session' as const, sessionId, serverId, section: 'inactive' as const, groupKey: 'viewer-scope', groupKind: 'date' as const,
+            })),
+        ];
+        viewState.rowsByServerId = { [serverId]: {
+            'alice-session': makeSessionRow('alice-session', { origin: { kind: 'none' }, ownerAccountId: 'alice' }),
+            'bob-session': makeSessionRow('bob-session', { origin: { kind: 'none' }, ownerAccountId: 'bob' }),
+        } };
+        const hook = await renderHook(() => useVisibleSessionListViewState('all', {
+            workFilter: normalizeSessionListFilterV1({ show: 'sessions', startedBy: ['you'], homeServerIds: [serverId] }),
+        }));
+        const visibleIds = () => hook.getCurrent().visibleSessionListIndex?.flatMap(item => item.type === 'session' ? [item.sessionId] : []);
+        try {
+            await waitForHomeGovernance(() => expect(visibleIds()).toEqual(['alice-session']));
+            await act(async () => { await homes.switchAccount(serverId, 'bob'); });
+            await waitForHomeGovernance(() => expect(visibleIds()).toEqual(['bob-session']));
+        } finally {
+            await hook.unmount();
+            await homes.reset();
+        }
     });
 
     it('demotes pending-permission attention rows after the permission closes', async () => {

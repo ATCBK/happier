@@ -7,6 +7,7 @@ import { storage } from '@/sync/domains/state/storageStore';
 import { getSessionName, getSessionStatus, shouldShowAbortButtonForSessionState } from '@/utils/sessions/sessionUtils';
 import { removeServerProfile, setServerProfileIdentityForUrl, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
 import { readSessionContentAvailability } from '@/sync/domains/session/encryptedContentAvailability';
+import { buildSessionTurnsProjectionV1, SessionTurnsProjectionV1Schema } from '@happier-dev/protocol/sessions/turns/sessionTurnV1';
 
 import {
     buildSessionViewShellSessionSignature,
@@ -489,6 +490,87 @@ describe('buildSessionViewShellSessionSignature', () => {
 });
 
 describe('useSessionViewShellSession', () => {
+    it('publishes later turn facts through the real store to a mounted Session consumer', async () => {
+        const previousState = storage.getState();
+        const base = createSessionFixture({ id: 'live-turn-session', serverId: 'live-turn-home', seq: 33, meaningfulActivityAt: 1 });
+        const initialTurns = SessionTurnsProjectionV1Schema.parse(buildSessionTurnsProjectionV1({
+            sessionId: base.id, latestTurnId: 'turn-1', updatedAt: 10,
+            turns: [{ turnId: 'turn-1', status: 'completed', startedAt: 1, updatedAt: 10 }],
+        }));
+        let unmount: (() => Promise<void>) | null = null;
+        try {
+            storage.getState().applySessions([{ ...base, sessionTurns: initialTurns }]);
+            const render = vi.fn(() => useSessionViewShellSession(base.id, base.serverId));
+            const hook = await renderHook(render);
+            unmount = hook.unmount;
+            expect(hook.getCurrent()?.sessionTurns?.turns).toHaveLength(1);
+            const laterTurns = SessionTurnsProjectionV1Schema.parse(buildSessionTurnsProjectionV1({
+                sessionId: base.id, latestTurnId: 'turn-2', updatedAt: 20,
+                turns: [...initialTurns.turns, {
+                    turnId: 'turn-2', agentId: 'external-agent', initiator: 'workflow',
+                    status: 'completed', startedAt: 11, updatedAt: 20,
+                    workflowInvocation: { runId: 'run-later', invocationRecordId: 'invocation-later' },
+                    transcriptAnchors: { startSeqInclusive: 30, endSeqInclusive: 32 },
+                }],
+            }));
+            render.mockClear();
+            await act(async () => storage.getState().applySessions([{
+                ...storage.getState().sessions[base.id], sessionTurns: laterTurns,
+            }]));
+            expect(storage.getState().sessions[base.id].sessionTurns).toEqual(laterTurns);
+            expect(render).toHaveBeenCalled();
+            expect(hook.getCurrent()?.sessionTurns).toEqual(laterTurns);
+            expect(hook.getCurrent()?.sessionTurns?.turns[1].workflowInvocation?.runId).toBe('run-later');
+
+            // Facts may hydrate without advancing the timestamp or changing the turn count.
+            const hydratedTurns = SessionTurnsProjectionV1Schema.parse({ ...laterTurns,
+                turns: laterTurns.turns.map((turn) => turn.turnId === 'turn-2'
+                    ? { ...turn, transcriptAnchors: { ...turn.transcriptAnchors, endSeqInclusive: 33 } }
+                    : turn),
+            });
+            await act(async () => storage.getState().applySessions([{
+                ...storage.getState().sessions[base.id], sessionTurns: hydratedTurns,
+            }]));
+            expect(hook.getCurrent()?.sessionTurns?.turns[1].transcriptAnchors?.endSeqInclusive).toBe(33);
+        } finally {
+            await unmount?.();
+            storage.setState(previousState);
+        }
+    });
+
+    it('retains unchanged turn references and ignores unrelated Session and transcript updates', async () => {
+        const previousState = storage.getState();
+        const base = createSessionFixture({ id: 'stable-turn-session', serverId: 'stable-turn-home', seq: 33, meaningfulActivityAt: 1 });
+        const sessionTurns = buildSessionTurnsProjectionV1({ sessionId: base.id, updatedAt: 10,
+            turns: [{ turnId: 'turn-1', status: 'completed', startedAt: 1, updatedAt: 10 }],
+        });
+        let unmount: (() => Promise<void>) | null = null;
+        try {
+            storage.getState().applySessions([{ ...base, sessionTurns }]);
+            const render = vi.fn(() => useSessionViewShellSession(base.id, base.serverId));
+            const hook = await renderHook(render);
+            unmount = hook.unmount;
+            const first = hook.getCurrent();
+            const firstTurns = first?.sessionTurns;
+            render.mockClear();
+            await act(async () => storage.getState().applySessions([
+                { ...storage.getState().sessions[base.id], seq: 34, sessionTurns: structuredClone(sessionTurns) },
+                createSessionFixture({ id: 'unrelated-turn-session', serverId: base.serverId }),
+            ]));
+            expect(render).not.toHaveBeenCalled();
+            expect(hook.getCurrent()).toBe(first);
+            await act(async () => storage.getState().applySessions([{
+                ...storage.getState().sessions[base.id], active: true, sessionTurns: structuredClone(sessionTurns),
+            }]));
+            expect(hook.getCurrent()?.active).toBe(true);
+            expect(hook.getCurrent()?.sessionTurns).toBe(firstTurns);
+            expect(hook.getCurrent()?.sessionTurns?.turns).toBe(firstTurns?.turns);
+        } finally {
+            await unmount?.();
+            storage.setState(previousState);
+        }
+    });
+
     it('publishes a hydrated title while ignoring other-Home titles and later transcript-only changes', async () => {
         const previousState = storage.getState();
         const home = 'title-home';
@@ -614,6 +696,7 @@ describe('useSessionViewShellSession', () => {
                 responsibleAccount: {
                     kind: 'account',
                     accountId: 'account-a',
+                    name: 'Alice Private',
                     firstName: 'Alice',
                     lastName: 'Private',
                     username: 'alice-private',
@@ -629,6 +712,7 @@ describe('useSessionViewShellSession', () => {
                 responsibleAccount: {
                     kind: 'account',
                     accountId: 'account-b',
+                    name: 'Bob Current',
                     firstName: 'Bob',
                     lastName: 'Current',
                     username: 'bob-current',

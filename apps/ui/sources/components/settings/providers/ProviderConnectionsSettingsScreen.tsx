@@ -44,7 +44,7 @@ import {
 import { AddProviderMenu, newProviderRoute } from './collection/AddProviderMenu';
 import { ProviderCollectionInvitation } from './collection/ProviderCollectionInvitation';
 import { PROVIDERS_SETTINGS } from './providersSettings';
-import { providerDraftTitle } from './collection/providerDraftTitle';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 import {
     buildProviderCollection,
     providerConnectionDetailRoute,
@@ -540,6 +540,7 @@ const ProviderRailLocalScope = React.memo(function ProviderRailLocalScope(props:
 
 /** The provider being added in the detail pane, at the top of the rail, titled as it is typed. */
 const ProviderDraftRow = React.memo(function ProviderDraftRow() {
+    const providerDraftTitle = useCollectionDraftTitle();
     const { theme } = useUnistyles();
     return (
         <CollectionDraftRow

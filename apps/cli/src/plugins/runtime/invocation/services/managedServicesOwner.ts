@@ -95,6 +95,8 @@ type ManagedServicesScope = Readonly<{
     contributionQualifiedId: string;
     sessionId?: string;
     operationId?: string;
+    /** Captured by the admitted host producer, never a public service spec. */
+    requesterWorkAttributionV1?: RequesterWorkAttributionV1;
     independentInvocation?: true;
     signal?: AbortSignal;
     declaredSecretReadPort?: DeclaredPluginSecretReadPort;
@@ -216,7 +218,7 @@ const MAX_MANAGED_SERVICE_REQUEST_HEADER_BYTES = 64 * 1024;
 const MAX_MANAGED_SERVICE_RESPONSE_HEADERS = 128;
 const MAX_MANAGED_SERVICE_RESPONSE_HEADER_BYTES = 64 * 1024;
 const MAX_MANAGED_SERVICE_RESPONSE_CHUNK_BYTES = 64 * 1024;
-const DEFAULT_MANAGED_SERVICE_REQUEST_TIMEOUT_MS = 300_000;
+const MAX_MANAGED_SERVICE_REQUEST_TIMEOUT_MS = 300_000;
 
 export function projectManagedServiceSpawnEnvironmentKeys(
     spec: ManagedServiceSpec,
@@ -297,7 +299,8 @@ function translateError(error: unknown): never {
     })();
     if (code === 'plugin_managed_service_establishment_failed') {
         const failure = LocalServiceEstablishmentFailureV1Schema.safeParse(error.details && typeof error.details === 'object'
-            && !Array.isArray(error.details) ? error.details.establishmentFailure : undefined);
+            && !Array.isArray(error.details) && 'establishmentFailure' in error.details
+            ? error.details.establishmentFailure : undefined);
         throw new PluginError({ code, message: 'Managed service establishment failed',
             ...(failure.success ? { details: { establishmentFailure: failure.data } } : {}) });
     }
@@ -1879,7 +1882,7 @@ type ManagedServiceRequestInput = Readonly<{
     method: string;
     headers: Headers;
     body: Uint8Array | undefined;
-    timeoutMs: number;
+    timeoutMs: number | undefined;
     signal: AbortSignal | undefined;
 }>;
 
@@ -2031,12 +2034,13 @@ function normalizeManagedServiceRequest(
             'Managed-service GET and HEAD requests cannot include a body',
         );
     }
-    const timeoutMs = request.timeoutMs
-        ?? DEFAULT_MANAGED_SERVICE_REQUEST_TIMEOUT_MS;
+    const timeoutMs = request.timeoutMs;
     if (
-        !Number.isSafeInteger(timeoutMs)
-        || timeoutMs < 1
-        || timeoutMs > DEFAULT_MANAGED_SERVICE_REQUEST_TIMEOUT_MS
+        timeoutMs !== undefined && (
+            !Number.isSafeInteger(timeoutMs)
+            || timeoutMs < 1
+            || timeoutMs > MAX_MANAGED_SERVICE_REQUEST_TIMEOUT_MS
+        )
     ) {
         return requestUnavailable('Managed-service request timeout is invalid');
     }
@@ -2280,7 +2284,7 @@ async function executeManagedServiceFetch(input: Readonly<{
     signals: readonly (AbortSignal | null | undefined)[];
     /** The request's own `signal`, kept apart from the composed lifetime so cancellation stays attributable. */
     callerSignal?: AbortSignal | null;
-    timeoutMs: number;
+    timeoutMs: number | undefined;
     isCurrent(): boolean;
     isDispatchCurrent?(signal: AbortSignal): Promise<boolean>;
 }>): Promise<ManagedServiceResponse> {
@@ -2289,7 +2293,7 @@ async function executeManagedServiceFetch(input: Readonly<{
     }
     const lifetime = composeAbortSignals(input.signals);
     const timeout = new AbortController();
-    const timeoutHandle = setTimeout(
+    const timeoutHandle = input.timeoutMs === undefined ? undefined : setTimeout(
         () => timeout.abort('Managed-service request timed out'),
         input.timeoutMs,
     );
@@ -2630,7 +2634,7 @@ function projectManagedProviderExplicitStartJoin(
                     : null;
             },
             async request(
-                request: ManagedServiceRequest & Readonly<{ timeoutMs: number }>,
+                request: ManagedServiceRequest,
             ): Promise<ManagedServiceResponse> {
                 if (!readsJoinCurrent()) return unavailable();
                 const signals = [
@@ -2926,7 +2930,8 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
                 const snapshot = entry.readProcessSnapshot?.();
                 return {
                     category: 'service', ownerRef: snapshot?.instanceId ?? entry.effectiveOwnerKey,
-                    attribution: isProjectManagedServiceSemanticEntry(entry) ? entry.project.requester : { kind: 'unknown' },
+                    attribution: entry.authority === 'project' ? entry.project.requester
+                        : entry.scope.requesterWorkAttributionV1 ?? { kind: 'unknown' },
                     // Health/access retirement is not process exit. Only the supervisor's stopped fact settles custody.
                     state: snapshot?.state === 'stopped' ? 'settled' : snapshot ? 'active'
                         : !entry.establishmentSettled ? 'active' : 'unknown',
@@ -3358,12 +3363,16 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
         return consumer;
     };
     const bindScope = (
-        suppliedScope: ManagedServicesScope,
+        rawScope: ManagedServicesScope,
         exec: ExecService,
         suppliedContext: Partial<
             ManagedServicesInvocationBindingContext
         > = {},
     ): ManagedServices => {
+        const suppliedScope: ManagedServicesScope = rawScope.requesterWorkAttributionV1
+            ? Object.freeze({ ...rawScope, requesterWorkAttributionV1: Object.freeze(
+                RequesterWorkAttributionV1Schema.parse(rawScope.requesterWorkAttributionV1),
+            ) }) : rawScope;
         const dependencies = typeof input.dependencies === 'function'
             ? input.dependencies(suppliedScope)
             : input.dependencies;
@@ -3410,6 +3419,7 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
                         occurrenceId: scope.occurrenceId,
                         ...(scope.sourceCustody ? { sourceCustody: scope.sourceCustody } : {}),
                         pluginId: scope.pluginId, contributionQualifiedId: scope.contributionQualifiedId,
+                        ...(scope.requesterWorkAttributionV1 ? { requesterWorkAttributionV1: scope.requesterWorkAttributionV1 } : {}),
                         operationId: physicalOperationId,
                         independentInvocation: true,
                         // Generation retirement still belongs to semanticEntries;
@@ -3528,26 +3538,10 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
                     }
                     if (existing.terminal) {
                         await retireEntry(existing);
-                        removeSemanticEntry(existing);
-                        existing = semanticEntries.get(entryKey);
-                        if (
-                            existing
-                            && !isManagedServiceSemanticEntry(existing)
-                        ) {
-                            return fail(
-                                'plugin_managed_service_unavailable',
-                                'Managed-service semantic entry is unavailable',
-                            );
-                        }
-                        if (
-                            existing
-                            && existing.specIdentity !== specIdentity
-                        ) {
-                            return fail(
-                                'plugin_managed_service_spec_conflict',
-                                'A different managed-service specification already owns this exact lifecycle scope',
-                            );
-                        }
+                        // Stop yielded to other admissions. Re-resolve the
+                        // current shared census and its injected path before
+                        // comparing specifications or joining the new owner.
+                        return await services.supervise(spec, options);
                     }
                 }
                 if (existing) {
@@ -4329,9 +4323,10 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
                     });
                 }
             } : undefined;
+            const requesterWorkAttributionV1 = entry.authority === 'project' ? entry.project.requester : entry.scope.requesterWorkAttributionV1;
             const root: HappierProcessRootSource = { owner, pid: snapshot.pid, ownerCreatedAtMs: snapshot.startedAtMs ?? undefined,
                 live: snapshot.state !== 'stopped',
-                ...(entry.authority === 'project' ? { requesterWorkAttributionV1: entry.project.requester } : {}),
+                ...(requesterWorkAttributionV1 ? { requesterWorkAttributionV1 } : {}),
                 ...(entry.authority === 'project' ? { workspacePath: entry.project.cwd } : {}),
                 ...(stop ? { stop } : {}) };
             return [{ root, ...(entry.authority === 'project' ? {
@@ -4585,6 +4580,16 @@ export function createManagedServicesOwner(input: ManagedServicesOwnerInput): Ma
             ) {
                 await retireExplicitStartOperation(existing);
                 return Object.freeze({ status: 'not_current' as const });
+            }
+            // Shared physical custody has its own operation identity. Its
+            // observed death cannot mark each consumer's explicit-Start entry
+            // terminal through the ordinary same-scope lookup. Re-enter the
+            // existing retirement/start lifecycle instead of rejoining that
+            // consumer's dead endpoint. Authority is still checked above and
+            // by establishment; no Agent request is retried here.
+            if (existing?.sharedProvider && !existing.terminal) {
+                const retained = await existing.establishment;
+                if (!readsCurrent(retained.projection.isCurrent)) existing.terminal = true;
             }
             if (existing?.terminal) {
                 await retireExplicitStartOperation(existing);

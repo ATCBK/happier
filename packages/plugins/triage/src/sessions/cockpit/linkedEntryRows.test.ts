@@ -62,6 +62,19 @@ function hydration(
 }
 
 describe('the Session cockpit linked-entry projection', () => {
+    it('renders source-owned links in the same cockpit projection and keeps their stale notice', () => {
+        const result = projectTriageSessionLinkedEntries({ query: state(), hydration: new Map(),
+            sourceLinks: [{ entryRef: ENTRY_REF, sessionId: 'session-1', linkedAtMs: 42, displayPath: 'Personal task' }],
+            sourceLinksStatus: 'failed',
+        });
+        expect(result.kind).toBe('linked');
+        if (result.kind !== 'linked') return;
+        expect(result.rows).toEqual([expect.objectContaining({ linkedAtMs: 42,
+            presentation: { kind: 'linked', displayPath: 'Personal task', entryRef: ENTRY_REF, entry: null },
+        })]);
+        expect(result.notice).not.toBeNull();
+    });
+
     it('joins by the complete canonical reference to the existing window content winner', () => {
         const window = foldTriageListWindow({
             observations: [{ entryRef: ENTRY_REF, sourceInstanceId: TESTKIT_SOURCE_INSTANCE_ID, observedAtMs: 10,

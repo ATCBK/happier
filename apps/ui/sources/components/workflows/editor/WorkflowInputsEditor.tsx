@@ -45,6 +45,8 @@ const styles = StyleSheet.create((theme) => ({
 }));
 
 const VALUE_TYPES = ['string', 'number', 'boolean', 'json'] as const;
+const PARTICIPANT_TYPE = 'agentParticipant';
+const PARTICIPANT_LIST_TYPE = 'agentParticipantList';
 
 function nextInputName(inputs: readonly WorkflowInputDefinition[]): string {
     const taken = new Set(inputs.map((input) => input.name));
@@ -133,16 +135,32 @@ function WorkflowInputRow(props: Readonly<{
                 <WorkflowFieldSelect
                     testID={`${rowId}-type`}
                     label={t('workflows.inputs.typeLabel')}
-                    items={VALUE_TYPES.map((valueType) => ({
-                        id: valueType, testID: `${rowId}-type-${valueType}`, title: describeWorkflowInputValueType(valueType),
-                    }))}
-                    selectedId={input.valueType}
+                    items={[
+                        ...VALUE_TYPES.map((valueType) => ({
+                            id: valueType, testID: `${rowId}-type-${valueType}`, title: describeWorkflowInputValueType(valueType),
+                        })),
+                        { id: PARTICIPANT_TYPE, testID: `${rowId}-type-${PARTICIPANT_TYPE}`,
+                            title: t('workflows.inputs.typeParticipant') },
+                        { id: PARTICIPANT_LIST_TYPE, testID: `${rowId}-type-${PARTICIPANT_LIST_TYPE}`,
+                            title: t('workflows.inputs.typeParticipants') },
+                    ]}
+                    selectedId={input.inputType && 'hostType' in input.inputType && input.inputType.hostType === 'agentParticipant'
+                        ? input.multiple ? PARTICIPANT_LIST_TYPE : PARTICIPANT_TYPE : input.valueType}
                     onSelect={(id) => {
+                        if (id === PARTICIPANT_TYPE || id === PARTICIPANT_LIST_TYPE) {
+                            const { inputType: _inputType, multiple: _multiple, enum: _enum,
+                                optionsSourceId: _optionsSourceId, default: _default, defaultFrom: _defaultFrom, ...base } = input;
+                            setDefaultText('');
+                            props.onChange({ ...base, valueType: 'json', inputType: { hostType: 'agentParticipant' },
+                                ...(id === PARTICIPANT_LIST_TYPE ? { multiple: true } : {}) });
+                            return;
+                        }
                         const valueType = VALUE_TYPES.find((candidate) => candidate === id);
                         if (valueType === undefined) return;
                         const nextDefault = parseDefault(valueType, defaultText);
+                        const { inputType: _inputType, multiple: _multiple, defaultFrom: _defaultFrom, ...base } = input;
                         props.onChange({
-                            ...input,
+                            ...base,
                             valueType,
                             ...(nextDefault === undefined ? { default: undefined } : { default: nextDefault }),
                         });

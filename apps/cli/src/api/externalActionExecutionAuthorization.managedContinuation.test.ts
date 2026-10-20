@@ -8,6 +8,7 @@ import { computeExternalActionRequestEnvelopeDigestV1 } from '@happier-dev/proto
 import { projectApiTokenSessionSpawnAdmissionV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
 import { updateSettings } from '@/persistence';
 import { AUTHORITY_CEILING_HEADER_V1 } from '@happier-dev/protocol/actions/invocationAuthority';
+import { projectExternalActionHttpError } from '@happier-dev/protocol/actions/externalActionApi';
 
 const keyPair = nacl.sign.keyPair.fromSeed(new Uint8Array(32).fill(8));
 const material = { type: 'dataKey' as const, machineKey: new Uint8Array(32).fill(9) };
@@ -33,6 +34,19 @@ describe('managed continuation through the ordinary public Action transport', ()
     });
     afterEach(() => vi.restoreAllMocks());
 
+    it.each(['action_not_admitted', 'action_outcome_unknown'] as const)('preserves managed child correlation for %s and refuses a mismatched reply', async code => {
+        const response = (id: string) => {
+            const refusal = projectExternalActionHttpError(code, id);
+            return { status: refusal.statusCode, data: refusal.payload };
+        };
+        vi.spyOn(axios, 'post').mockResolvedValueOnce(response(root.binding.requestId)).mockResolvedValueOnce(response('other-request'));
+        const request = { input, continuation, authorization: root, material, installationId: 'installation',
+            privateKey: keyPair.secretKey, serverHttpBaseUrl: 'https://home.example', targetMachineId: 'guest' };
+        expect(await dispatchManagedSessionStart(request))
+            .toMatchObject({ ok: false, errorCode: code, details: { requestId: root.binding.requestId } });
+        expect(await dispatchManagedSessionStart(request)).toMatchObject({ ok: false, errorCode: 'invalid_action_output' });
+    });
+
     it('originates setup for a genuine local host creation through the existing exact Account signer and refuses borrowed origins', async () => {
         const token = `header.${Buffer.from(JSON.stringify({ sub: 'account', tokenEpoch: 2,
             provenance: { v: 1, kind: 'account', authority: 'present_user' } })).toString('base64url')}.signature`;
@@ -54,6 +68,7 @@ describe('managed continuation through the ordinary public Action transport', ()
                 requestId: 'creation', requestEnvelopeDigest: computeExternalActionRequestEnvelopeDigestV1(carrier.envelope), target: carrier.envelope.target,
             } } };
             expect(url).toBe('https://home.example/v1/actions/machines.environment.apply');
+            if (!carrier.executionAuthorization) throw new Error('Missing exact local setup authorization');
             expect(carrier.executionAuthorization.token).toBe('exact-local-setup-root');
             delivered++;
             return { status: 200, data: { v: 1, actionId: 'machines.environment.apply', requestId: 'creation', execution: { ok: true, result: { operationId: 'actual-setup' } } } };

@@ -1,9 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { resolveFleetMachineAvailability } from '@/sync/domains/machines/administration/fleetUnion';
 
 import { isWorkspaceScopeReachableFromState } from './workspaceReachability';
 
 describe('workspaceReachability', () => {
+    it('keeps the same live machine online in Browse and workspace Search during an inventory refresh', () => {
+        const machine = createMachineFixture({ id: 'refreshing-machine', active: true, activeAt: Date.now() });
+        const accountScope = { serverId: 'server-a', accountId: 'workspace-account' };
+        const state = {
+            machines: { [machine.id]: machine },
+            machineListByServerId: { 'server-a': [machine] },
+            machineListStatusByServerId: { 'server-a': 'loading' as const },
+        };
+        expect(resolveFleetMachineAvailability(accountScope, machine)).toBe('online');
+        expect(isWorkspaceScopeReachableFromState(state,
+            { serverId: 'server-a', machineId: machine.id, rootPath: '/repo' }, 'server-a', accountScope)).toBe(true);
+        expect(isWorkspaceScopeReachableFromState(state,
+            { serverId: 'server-a', machineId: 'missing-machine', rootPath: '/repo' }, 'server-a', accountScope)).toBe(false);
+        expect(isWorkspaceScopeReachableFromState(state,
+            { serverId: 'server-b', machineId: machine.id, rootPath: '/repo' }, 'server-a', accountScope)).toBe(false);
+        expect(isWorkspaceScopeReachableFromState(state,
+            { serverId: 'server-a', machineId: machine.id, rootPath: '/repo' }, 'server-a', null)).toBe(false);
+    });
+
     it('uses settled Machine inventory independently of Account readiness', () => {
         const machine = createMachineFixture({ id: 'independent-machine', active: true, activeAt: Date.now() });
         const state = {
@@ -14,7 +34,7 @@ describe('workspaceReachability', () => {
         };
         const scope = { serverId: 'server-a', machineId: machine.id, rootPath: '/repo' };
         expect(isWorkspaceScopeReachableFromState(state, scope, 'server-a', { serverId: 'server-a', accountId: 'workspace-account' })).toBe(true);
-        for (const status of ['loading', 'error', 'signedOut'] as const) {
+        for (const status of ['error', 'signedOut'] as const) {
             expect(isWorkspaceScopeReachableFromState({ ...state,
                 machineListStatusByServerId: { 'server-a': status } }, scope, 'server-a', { serverId: 'server-a', accountId: 'workspace-account' })).toBe(false);
         }

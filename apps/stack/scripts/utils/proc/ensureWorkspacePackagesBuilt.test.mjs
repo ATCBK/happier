@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { chmod, cp, mkdtemp, mkdir, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { ensureWorkspacePackagesBuiltForComponent } from './pm.mjs';
 import {
@@ -11,6 +13,68 @@ import {
 } from '../../../../../scripts/workspaces/ensureWorkspacePackagesBuilt.mjs';
 import { buildBundledWorkspaceDependenciesForCli } from '../../../../cli/scripts/buildSharedDeps.mjs';
 import { installWorkspaceAdmissionProcessFixture } from '../../testkit/core/native_admission_fixture.mjs';
+import { runWorkspaceBuildAdmission } from './workspace_build_admission.mjs';
+import { withPatchedProcessEnv } from '../../testkit/core/env_scope.mjs';
+
+test('native workspace fixture routes serialized foreground custody to its isolated admission owner',
+  { skip: process.platform !== 'linux' }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'hs-native-custody-routing-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const childProcess = createRequire(import.meta.url)('node:child_process');
+  const originalFork = childProcess.fork;
+  const procPath = fileURLToPath(new URL('./proc.mjs', import.meta.url));
+  const canonicalLauncher = fileURLToPath(new URL('../../../bin/hstack-exec', import.meta.url));
+  let fixtureLauncher;
+  // This is the real OS launch boundary. Refuse a wrong-host request before
+  // it can enter the containing suite's admission domain.
+  childProcess.fork = (modulePath, args, options) => {
+    if (modulePath === procPath && args[0] === '--happier-foreground-custody') {
+      const invocation = JSON.parse(args[1]);
+      if (invocation.args.includes(canonicalLauncher) || invocation.args.includes(fixtureLauncher)) {
+        assert.ok(invocation.args.includes(fixtureLauncher), 'foreground custody escaped the fixture admission owner');
+      }
+    }
+    return originalFork(modulePath, args, options);
+  };
+  syncBuiltinESMExports();
+  const guardPath = join(root, 'guard-native-domain.mjs');
+  await writeFile(guardPath, `
+    import {createRequire,syncBuiltinESMExports} from 'node:module';
+    const cp=createRequire(import.meta.url)('node:child_process'), fork=cp.fork;
+    cp.fork=(modulePath,args,options)=>{
+      if(modulePath===${JSON.stringify(procPath)} && args[0]==='--happier-foreground-custody') {
+        const invocation=JSON.parse(args[1]);
+        if(invocation.args.includes(${JSON.stringify(canonicalLauncher)}))
+          throw new Error('child foreground custody escaped fixture admission');
+      }
+      return fork(modulePath,args,options);
+    };
+    syncBuiltinESMExports();
+    globalThis.fixtureGuardLoaded = true;
+  `);
+  withPatchedProcessEnv(t, { NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${pathToFileURL(guardPath).href}`.trim() });
+  const native = await installWorkspaceAdmissionProcessFixture(t, root);
+  fixtureLauncher = native.launcher;
+  t.after(() => { childProcess.fork = originalFork; syncBuiltinESMExports(); });
+  const result = await runWorkspaceBuildAdmission({ command: process.execPath,
+    args: ['-e', 'process.stdout.write(process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT)'],
+    env: native.env, stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, join(root, 'host-admission'));
+  const nested = await runWorkspaceBuildAdmission({ command: process.execPath,
+    args: ['--input-type=module', '-e', `
+      import {runWorkspaceBuildAdmission} from ${JSON.stringify(new URL('./workspace_build_admission.mjs', import.meta.url).href)};
+      if(!globalThis.fixtureGuardLoaded) throw new Error('existing NODE_OPTIONS preload was lost');
+      const result=await runWorkspaceBuildAdmission({command:process.execPath,
+        args:['-e','process.stdout.write(process.env.HAPPIER_HEAVYWEIGHT_ADMISSION_ROOT)'],
+        env:process.env,stdio:['ignore','pipe','pipe']});
+      if(result.status!==0) throw new Error(result.stderr || result.error?.message || 'nested admission failed');
+      process.stdout.write(result.stdout);
+    `], env: native.env,
+    stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.equal(nested.status, 0, nested.stderr);
+  assert.equal(nested.stdout, join(root, 'host-admission'));
+});
 
 async function waitForFile(path, { timeoutMs = 5_000 } = {}) {
   const startedAt = Date.now();
@@ -126,7 +190,11 @@ async function writeYarnWorkspaceBuildViaTscStub({ binDir, outputPath }) {
   await writeFile(outputPath, '', 'utf-8');
 }
 
-function applyEnvOverrides(t, vars) {
+async function applyEnvOverrides(t, root, vars) {
+  const native = await installWorkspaceAdmissionProcessFixture(t, root);
+  const removed = Object.fromEntries(Object.keys(process.env).filter(key => !(key in native.env)).map(key => [key, null]));
+  vars = { ...removed, ...native.env, npm_execpath: '', npm_node_execpath: '', ...vars,
+    PATH: native.launcher ? `${native.binDir}${delimiter}${vars.PATH}` : vars.PATH };
   const previous = {};
   for (const key of Object.keys(vars)) {
     previous[key] = process.env[key];
@@ -170,6 +238,19 @@ async function writeQuietWorkspaceBuildFailurePackageManager({ binDir, name, bui
   await chmod(commandPath, 0o755);
 }
 
+async function linkNativeWorkspaceTools(binDir) {
+  if (process.platform === 'win32') return;
+  const tools = process.platform === 'linux'
+    ? ['uname', 'mkdir', 'stat', 'id', 'sed', 'awk', 'mktemp', 'mkfifo', 'rm', 'rmdir', 'flock', 'date', 'sleep', 'df', 'ps', 'tr', 'cat', 'du', 'node']
+    : ['uname', 'node'];
+  for (const tool of tools) {
+    const resolved = tool === 'node' ? { status: 0, stdout: process.execPath }
+      : spawnSync('/bin/sh', ['-c', 'command -v "$1"', 'fixture-tool', tool], { encoding: 'utf8', env: process.env });
+    assert.equal(resolved.status, 0, `native fixture tool is unavailable: ${tool}`);
+    await symlink(resolved.stdout.trim(), join(binDir, tool));
+  }
+}
+
 async function createQuietWorkspaceBuildFailureFixture(t, { packageManager }) {
   const root = await mkdtemp(join(tmpdir(), `hs-quiet-${packageManager}-workspace-build-failure-`));
   t.after(async () => {
@@ -209,9 +290,11 @@ async function createQuietWorkspaceBuildFailureFixture(t, { packageManager }) {
     buildArgs: packageManager === 'yarn' ? ['-s', 'build'] : ['run', '-s', 'build'],
   });
 
+  const native = await installWorkspaceAdmissionProcessFixture(t, root);
+  await linkNativeWorkspaceTools(binDir);
   const env = {
-    ...process.env,
-    PATH: binDir,
+    ...native.env,
+    PATH: native.launcher ? `${native.binDir}${delimiter}${binDir}` : binDir,
     HAPPIER_STACK_BINARY_MODE: packageManager === 'npm' ? '1' : '0',
     HAPPIER_STACK_ENV_FILE: '',
     HAPPIER_STACK_WORKSPACE_TEST_SECRET: 'must-not-escape',
@@ -227,18 +310,6 @@ async function createQuietWorkspaceBuildFailureFixture(t, { packageManager }) {
     if (process.platform === 'win32') await cp(originalExecPath, fixtureExecPath);
     else {
       await symlink(originalExecPath, fixtureExecPath);
-      // Preserve native admission's real OS tools, including disk observation,
-      // without exposing sibling package-manager shims that replace npm.
-      const nativeTools = process.platform === 'linux'
-        ? ['uname', 'mkdir', 'stat', 'id', 'sed', 'awk', 'mktemp', 'mkfifo', 'rm', 'rmdir', 'flock', 'date', 'sleep', 'df']
-        : ['uname'];
-      for (const tool of nativeTools) {
-        const resolved = spawnSync('/bin/sh', ['-c', 'command -v "$1"', 'fixture-tool', tool], {
-          encoding: 'utf8', env: process.env,
-        });
-        assert.equal(resolved.status, 0, `native fixture tool is unavailable: ${tool}`);
-        await symlink(resolved.stdout.trim(), join(binDir, tool));
-      }
     }
     process.execPath = fixtureExecPath;
     t.after(() => { process.execPath = originalExecPath; });
@@ -320,7 +391,7 @@ test('ensureWorkspacePackagesBuiltForComponent builds internal dist-based worksp
   const outputPath = join(root, 'argv.txt');
   await writeYarnWorkspaceBuildStub({ binDir, outputPath });
 
-  applyEnvOverrides(t, {
+  await applyEnvOverrides(t, root, {
     PATH: `${binDir}:/usr/bin:/bin`,
     OUTPUT_PATH: outputPath,
     HAPPIER_STACK_ENV_FILE: null,
@@ -514,9 +585,11 @@ test('ensureWorkspacePackagesBuiltForComponent uses inherited Yarn JS entrypoint
     'utf-8',
   );
 
+  const native = await installWorkspaceAdmissionProcessFixture(t, root);
+  await linkNativeWorkspaceTools(binDir);
   const env = {
-    ...process.env,
-    PATH: binDir,
+    ...native.env,
+    PATH: native.launcher ? `${native.binDir}${delimiter}${binDir}` : binDir,
     npm_execpath: yarnEntrypointPath,
     YARN_INVOCATION_LOG: invocationLogPath,
   };
@@ -603,7 +676,7 @@ test('ensureWorkspacePackagesBuiltForComponent treats source-exporting workspace
   const binDir = join(root, 'bin');
   const outputPath = join(root, 'argv.txt');
   await writeYarnWorkspaceBuildStub({ binDir, outputPath });
-  applyEnvOverrides(t, {
+  await applyEnvOverrides(t, root, {
     PATH: `${binDir}:/usr/bin:/bin`,
     OUTPUT_PATH: outputPath,
     HAPPIER_STACK_ENV_FILE: null,
@@ -679,7 +752,7 @@ test('ensureWorkspacePackagesBuiltForComponent walks the full internal workspace
   const outputPath = join(root, 'argv.txt');
   await writeYarnWorkspaceBuildStub({ binDir, outputPath });
 
-  applyEnvOverrides(t, {
+  await applyEnvOverrides(t, root, {
     PATH: `${binDir}:/usr/bin:/bin`,
     OUTPUT_PATH: outputPath,
     HAPPIER_STACK_ENV_FILE: null,
@@ -767,7 +840,7 @@ test('ensureWorkspacePackagesBuiltForComponent resolves plugin workspaces from t
   const outputPath = join(root, 'argv.txt');
   await writeYarnWorkspaceBuildStub({ binDir, outputPath });
 
-  applyEnvOverrides(t, {
+  await applyEnvOverrides(t, root, {
     PATH: `${binDir}:/usr/bin:/bin`,
     OUTPUT_PATH: outputPath,
     HAPPIER_STACK_ENV_FILE: null,
@@ -852,7 +925,7 @@ test('ensureWorkspacePackagesBuiltForComponent resolves TypeScript bin shims whe
   const outputPath = join(root, 'argv.txt');
   await writeYarnWorkspaceBuildViaTscStub({ binDir, outputPath });
 
-  applyEnvOverrides(t, {
+  await applyEnvOverrides(t, root, {
     PATH: `${binDir}:/usr/bin:/bin`,
     OUTPUT_PATH: outputPath,
     HAPPIER_STACK_ENV_FILE: null,
@@ -911,7 +984,7 @@ test('ensureWorkspacePackagesBuiltForComponent does not run concurrent builds fo
     delaySecondsByPackage: { cliCommon: 1 },
   });
 
-  applyEnvOverrides(t, {
+  await applyEnvOverrides(t, root, {
     PATH: `${binDir}:/usr/bin:/bin`,
     OUTPUT_PATH: outputPath,
     HAPPIER_STACK_ENV_FILE: null,
@@ -919,7 +992,7 @@ test('ensureWorkspacePackagesBuiltForComponent does not run concurrent builds fo
     HAPPIER_WORKSPACE_BUILD_NOTICE_EVERY_MS: '999999',
   });
 
-  const { env } = await installWorkspaceAdmissionProcessFixture(t, root);
+  const env = process.env;
   const publicationResults = [];
   const options = { quiet: true, env, onPackageBuildResult: result => { publicationResults.push(result); } };
   const builds = [
@@ -1006,7 +1079,7 @@ test('CLI shared dependency preparation waits for the canonical workspace packag
   await chmod(join(binDir, 'yarn'), 0o755);
   await writeFile(outputPath, '', 'utf-8');
 
-  applyEnvOverrides(t, {
+  await applyEnvOverrides(t, root, {
     PATH: `${binDir}:/usr/bin:/bin`,
     OUTPUT_PATH: outputPath,
     BUILD_STARTED_PATH: buildStartedPath,
@@ -1014,7 +1087,7 @@ test('CLI shared dependency preparation waits for the canonical workspace packag
     HAPPIER_STACK_ENV_FILE: null,
   });
 
-  const { env } = await installWorkspaceAdmissionProcessFixture(t, root);
+  const env = process.env;
   const canonicalBuild = ensureWorkspacePackagesBuiltForComponent(join(root, 'apps', 'cli'), {
     quiet: true,
     env,
@@ -1112,7 +1185,7 @@ test('ensureWorkspacePackagesBuiltForComponent rebuilds internal workspaces when
   const outputPath = join(root, 'argv.txt');
   await writeYarnWorkspaceBuildStub({ binDir, outputPath });
 
-  applyEnvOverrides(t, {
+  await applyEnvOverrides(t, root, {
     PATH: `${binDir}:/usr/bin:/bin`,
     OUTPUT_PATH: outputPath,
     HAPPIER_STACK_ENV_FILE: null,
@@ -1248,7 +1321,7 @@ test('ensureWorkspacePackagesBuiltForComponent keeps previous dist readable whil
   await chmod(join(binDir, 'yarn'), 0o755);
   await writeFile(outputPath, '', 'utf-8');
 
-  applyEnvOverrides(t, {
+  await applyEnvOverrides(t, root, {
     PATH: `${binDir}:/usr/bin:/bin`,
     OUTPUT_PATH: outputPath,
     HAPPIER_STACK_ENV_FILE: null,

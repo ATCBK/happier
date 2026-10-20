@@ -8,6 +8,7 @@ import {
   SessionInputRequestV1Schema, SessionMessageProvenanceV1Schema, settleSessionInputRequestV1, settleSessionMessageProvenanceV1, withSessionInputAuthorityV1,
   type SessionPendingEnqueueByMachineRequestV1, type SessionPendingExecutionRunEnqueueByMachineRequestV2,
   SessionTurnV1Schema, type SessionTurnV1, materializeWorkflowAcceptedSnapshotV1, type WorkflowDefinitionV1,
+  SessionSharedMetadataV1Schema,
 } from '@happier-dev/protocol';
 import {
   ConversationObservationV1Schema, ConversationPollResultV1Schema, ConversationDeliveryInputV1Schema,
@@ -19,6 +20,8 @@ import {
 import { createConversationProviderSetupResultV1Fixture } from '@happier-dev/channels-protocol/testing/v1';
 import { compilePluginJsonSchema, isValidPluginJsonSchemaValue, parsePluginManifest } from '@happier-dev/plugin-sdk/manifest';
 import { createActionExecutor } from '@happier-dev/protocol/actions';
+import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
+import { createPluginJsonSchemaZodValueAdapter } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
 
 import { createCliActionExecutorHarness } from '../actions/createCliActionExecutorHarness';
 import { executePluginSessionMessageAction } from './executePluginSessionMessageAction';
@@ -44,6 +47,21 @@ import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportD
 import { buildWorkflowActionContext } from '@/daemon/workflows/daemonRuntime';
 import { createWorkflowCoordinator } from '@/daemon/workflows/coordinator';
 import { createInMemoryWorkflowCoordinatorStore } from '@/daemon/workflows/workflowCoordinator.testkit';
+import { buildPluginContributionRegistry } from '@/plugins/projection/registry/normalize/package';
+import { normalizePluginManifestV2 } from '@/plugins/manifest/normalize';
+import { createCommittedContributedActionSchemaReader } from '@/plugins/runtime/invocation/actions/createCommittedContributedActionDeps';
+import { ActionDefinitionV1Schema } from '@happier-dev/protocol/actions/actionDefinitionV1';
+import { requestInactiveSessionResume } from './requestInactiveSessionResume';
+import { tryDecryptSessionOwnerMetadata, tryDecryptSessionOwnerMetadataView } from '@/session/transport/encryption/sessionEncryptionContext';
+import { createBaseSessionForAttach } from '@/agent/runtime/createBaseSessionForAttach';
+import { ApiClient } from '@/api/api';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
+import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
+import type { Metadata } from '@/api/types';
+
+// Only the child process's Socket.IO transport is replaced. Its attach owner,
+// Session client constructor and runtime-handler registration remain real.
+vi.mock('socket.io-client', () => ({ io: () => createApiSessionSocketStub() }));
 
 // External authentication and RPC transport are system boundaries. The real
 // Session Action executor beneath them owns spawn, archive and turn control.
@@ -66,7 +84,7 @@ const currentness = AccountEncryptionCurrentnessResponseSchema.parse({ mode: 'pl
 function observation(id: string, text: string, thread = false): ConversationObservationV1 {
   const now = Date.now();
   return ConversationObservationV1Schema.parse({ v: 1, occurrenceId: `occurrence:${id}`, occurredAt: now,
-    transport: { kind: 'poll' }, endpoint: thread ? { kind: 'thread', audience: 'direct', id: 'thread-1', parentId: endpoint.id } : endpoint,
+    transport: { kind: 'poll' }, endpoint: thread ? { kind: 'thread', audience: 'direct', id: 'thread-1', parentId: endpoint.id, label: 'Furniture lead' } : endpoint,
     actor: { principalId: 'sender-1', label: 'Ada', kind: 'human', isIntegrationSelf: false },
     message: { id, text, providerTimestamp: now, addressingEvidence: 'none', contentProvenance: 'original' } });
 }
@@ -76,7 +94,7 @@ function record(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-async function journey(input: { router?: boolean; socket?: boolean; wrongDelivery?: boolean; wrongSessionCaller?: boolean; ambiguousStart?: boolean } = {}) {
+async function journey(input: { router?: boolean; socket?: boolean; wrongDelivery?: boolean; wrongSessionCaller?: boolean; ambiguousStart?: boolean; failedBirth?: boolean } = {}) {
   const pending: ConversationObservationV1[] = [];
   const delivered: ConversationDeliveryInputV1[] = [];
   const roles = ConversationProvidersContributionProtocolV1.operations;
@@ -192,6 +210,9 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
         const request = SpawnDaemonSessionRequestSchema.parse(raw);
         spawnRequests.push(request);
         if (!request.existingSessionId || !sessions.has(request.existingSessionId)) throw new Error('Spawn must reach the real committed Session');
+        // Process launch is acknowledged before native initialization. A later
+        // failure leaves the birth committed without a published Agent view.
+        if (input.failedBirth) return { type: 'success', sessionId: request.existingSessionId };
         const session = sessions.get(request.existingSessionId)!;
         sessions.set(session.id, { ...session, active: true, activeAt: Date.now() });
         return { type: 'success', sessionId: request.existingSessionId };
@@ -264,10 +285,14 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
       target: ConversationBindingTargetV1Schema.parse(input.router ? { kind: 'threadRouter', principalGroups: [{ id: 'brief', principalIds: ['sender-1'] }], routes: [{ id: 'intake',
         when: { group: 'brief', forwarded: 'any' }, policy, recipe: { executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
           directory: { kind: 'path', path: '/repo/channels' }, agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
-          connectedServices: { v: 2, bindingsByServiceId: {} }, memoryEnabled: false } }] }
+          connectedServices: { v: 2, bindingsByServiceId: {} }, memoryEnabled: false,
+          ...(input.failedBirth ? { permissionMode: 'read-only', allowedTools: [], unlistedTools: 'deny',
+            configuration: { mode: { value: null, updatedAtMs: 1 }, model: { value: 'recipe-model', updatedAtMs: 1 },
+              permissionIntent: { value: 'read-only', updatedAtMs: 1 }, options: {} } } : {}) } }] }
         : { kind: 'session', sessionId: 'session-journey-1', policy }), allowedPrincipalIds: ['sender-1'], allowBotSenders: false,
       inputMode: 'allAllowedMessages', inboundDebounceMs: 0, linkPreviewPolicy: 'suppress', senderFeedback: 'off' } };
   const core = await createChannelsJourneyFixture({ provider, connection, binding, sessions: inventory, actions,
+    resolveCurrentProviderExecutionOrigin: () => ({ serverIdentityId: 'srv_plugin_testkit', materializationRef: providerMaterialization }),
     resolveCurrentPluginMaterializationRef: () => channelMaterialization }).catch(async error => {
       await provider.dispose(); http.mockRestore(); writes.mockRestore();
       vi.unstubAllGlobals(); resetServerFeaturesClientForTests();
@@ -291,19 +316,156 @@ async function journey(input: { router?: boolean; socket?: boolean; wrongDeliver
       for (const row of collection.rows.values()) expect(isValidPluginJsonSchemaValue(compiled, row.value), row.rowId).toBe(true);
     }
   }
-  return { ...core, pending, delivered, admissions, sessions, creations, spawnRequests, transcriptPages, answer, validateWrites, rpcRequests,
+  return { ...core, pending, delivered, admissions, sessions, inventory, creations, spawnRequests, transcriptPages, answer, validateWrites, rpcRequests,
     async dispose() { await core.dispose(); await provider.dispose(); http.mockRestore(); writes.mockRestore();
       activeCore = undefined;
       vi.unstubAllGlobals(); resetServerFeaturesClientForTests(); } };
 }
 
 describe('registered Channels composed journeys through real CLI Session admission', { timeout: 60_000 }, () => {
+  it('retries transient Account currentness through the registered outward cycle and delivers once', async () => {
+    const fixture = await journey({ router: true });
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const get = fixture.state.get.bind(fixture.state);
+    let unavailable = true;
+    const read = vi.spyOn(fixture.state, 'get').mockImplementation(async rowId => {
+      const attempting = [...fixture.deliveries.rows.values()].some(row => record(row.value.payload).state === 'attempting');
+      if (unavailable && attempting && rowId === 'connection-1') {
+        unavailable = false;
+        throw new Error('Account read transport disconnected');
+      }
+      return await get(rowId);
+    });
+    try {
+      const admitted = record(await fixture.invoke('conversation/start-v1', {
+        routerBindingId: 'binding-1', audienceGroupId: 'brief', subject: 'Recoverable brief',
+        content: { text: 'A transient read must retain this body.' }, sessionId: 'session-journey-1',
+      }));
+      const request = { custodyId: String(admitted.custodyId) };
+      await fixture.outward();
+      expect(await fixture.invoke('delivery/read-v1', request)).toMatchObject({ kind: 'ready', delivery: {
+        state: 'retryDue', lastOutcome: 'pending',
+      } });
+      expect(fixture.delivered).toEqual([]);
+      unavailable = false;
+      await fixture.outward();
+      expect(fixture.delivered).toEqual([]);
+      now += 1_000;
+      await fixture.outward();
+      await fixture.outward();
+      expect(fixture.delivered).toHaveLength(1);
+      expect(await fixture.invoke('delivery/read-v1', request)).toMatchObject({ kind: 'ready', delivery: {
+        state: 'delivered', lastOutcome: 'delivered',
+      } });
+      fixture.validateWrites();
+    } finally { read.mockRestore(); clock.mockRestore(); await fixture.dispose(); }
+  });
+
+  it.each(['mismatch', 'attempted', 'misbound'] as const)('preserves %s settlement through the registered outward cycle', async scenario => {
+    const fixture = await journey({ router: true, ambiguousStart: scenario === 'attempted', wrongDelivery: scenario === 'misbound' });
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const admitted = record(await fixture.invoke('conversation/start-v1', {
+        routerBindingId: 'binding-1', audienceGroupId: 'brief', subject: 'Settlement control',
+        content: { text: 'Preserve the currentness boundary.' }, sessionId: 'session-journey-1',
+      }));
+      const request = { custodyId: String(admitted.custodyId) };
+      if (scenario === 'mismatch') {
+        const binding = await fixture.state.get('binding-1');
+        if (!binding) throw new Error('Expected router binding');
+        await fixture.state.put({ ...binding.value, payload: { ...record(binding.value.payload), authorityEpoch: 2 } },
+          { expectedRevision: binding.revision });
+      }
+      await fixture.outward();
+      const expected = scenario === 'mismatch' ? 'suppressed' : 'outcomeUnknown';
+      expect(await fixture.invoke('delivery/read-v1', request)).toMatchObject({ kind: 'ready', delivery: { state: expected } });
+      if (scenario === 'mismatch') {
+        // Restoring valid authority never reactivates historical suppression.
+        const binding = await fixture.state.get('binding-1');
+        if (!binding) throw new Error('Expected router binding');
+        await fixture.state.put({ ...binding.value, payload: { ...record(binding.value.payload), authorityEpoch: 1 } },
+          { expectedRevision: binding.revision });
+      }
+      now += 60_000;
+      await fixture.outward();
+      expect(fixture.delivered).toHaveLength(scenario === 'attempted' ? 1 : 0);
+      expect(await fixture.invoke('delivery/read-v1', request)).toMatchObject({ kind: 'ready', delivery: { state: expected } });
+      fixture.validateWrites();
+    } finally { clock.mockRestore(); await fixture.dispose(); }
+  });
+
+  it('retries a failed first runtime start in the same committed Session with its recipe and pending inputs intact', async () => {
+    const fixture = await journey({ router: true, socket: true, failedBirth: true });
+    try {
+      const observed = ConversationObservationV1Schema.parse({ ...observation('failed-birth', 'Original input', true), transport: { kind: 'socket' } });
+      const entry = { observation: { kind: 'fullText' as const, observation: observed }, eventCandidate: null };
+      await fixture.ingest({ connectionId: 'connection-1', entry });
+      const sessionId = fixture.admissions[0]?.sessionId;
+      const session = sessionId ? fixture.sessions.get(sessionId) : undefined;
+      if (!session) throw new Error('The failed native start must retain its committed Session and input');
+      expect(session.active).toBe(false);
+      expect(session.agentState).toBeNull();
+      const credentials = { token: 'journey-token', encryption: null };
+      const metadata = tryDecryptSessionOwnerMetadataView({ credentials, rawSession: session, accountEncryptionMode: 'plain' });
+      if (!metadata) throw new Error('The real committed birth metadata must be readable');
+      const requests: unknown[] = [];
+      const machineRpcTransport = async (_method: string, request: unknown) => {
+        requests.push(request);
+        const ownerMetadata = tryDecryptSessionOwnerMetadata({ credentials, rawSession: session, accountEncryptionMode: 'plain' });
+        if (!ownerMetadata || !session.ownerMetadata) throw new Error('The child requires the committed owner envelope');
+        const attached = await createBaseSessionForAttach({ existingSessionId: session.id,
+          metadata: createTestMetadata({ flavor: 'claude', path: '/repo/channels', machineId: 'machine-1' }),
+          state: { controlledByUser: false }, sessionAttachSecret: { encryptionMode: 'plain', snapshot: {
+            metadata: SessionSharedMetadataV1Schema.parse(JSON.parse(session.metadata)) as Metadata,
+            metadataVersion: session.metadataVersion, metadataLayoutVersion: 1,
+            ownerMetadata, ownerMetadataEnvelope: session.ownerMetadata,
+            agentState: null, agentStateVersion: session.agentStateVersion,
+          } },
+        });
+        const api = await ApiClient.create(credentials);
+        const child = api.sessionSyncClient(attached, { durableMutationDeliveryInitiallyActive: false });
+        try {
+          expect(child.getMetadataSnapshot()).toMatchObject({ flavor: 'claude',
+            sessionCreationCorrespondenceV1: metadata.sessionCreationCorrespondenceV1 });
+        } finally { await child.close(); }
+        return { type: 'success', sessionId: session.id };
+      };
+      const resume = (savedMetadata: Record<string, unknown>) => requestInactiveSessionResume({ credentials,
+        sessionId: session.id, rawSession: session, metadata: savedMetadata, requestId: 'person-retry', machineRpcTransport });
+      // Removing the actual creator's correspondence must refuse before launch.
+      const { sessionCreationCorrespondenceV1: _correspondence, ...unbound } = metadata;
+      expect(await resume(unbound)).toMatchObject({ ok: false, code: 'unsupported' });
+      expect(requests).toEqual([]);
+      expect(await resume(metadata)).toEqual({ ok: true });
+      expect(requests).toMatchObject([{ type: 'resume-session', sessionId: session.id,
+        agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+        permissionMode: 'read-only', modelSelection: { ref: { modelId: 'recipe-model' } },
+        sessionCreationCorrespondence: expect.objectContaining({ recipe: expect.objectContaining({ allowedTools: [], unlistedTools: 'deny' }) }),
+      }]);
+      await fixture.ingest({ connectionId: 'connection-1', entry });
+      expect(fixture.creations.size).toBe(1);
+      expect(fixture.admissions.map(request => request.sessionId)).toEqual([session.id]);
+      fixture.validateWrites();
+    } finally { await fixture.dispose(); }
+  });
   it('reads accepted custody through the registered safe delivery Action before and after provider delivery', async () => {
     const fixture = await journey({ router: true });
+    // The host materializes put results through this exact stored-value
+    // decoder. A mutable Collection alone misses union-field demotion.
+    const storedDeliverySchema = createStoredReadSchema(createPluginJsonSchemaZodValueAdapter(CHANNEL_DELIVERIES_COLLECTION.schema));
+    const putDelivery = fixture.deliveries.put.bind(fixture.deliveries);
+    fixture.deliveries.put = async (...args: Parameters<typeof fixture.deliveries.put>) => {
+      const row = await putDelivery(...args);
+      const decoded = { ...row, value: record(storedDeliverySchema.parse(row.value)) };
+      fixture.deliveries.rows.set(row.rowId, decoded);
+      return decoded;
+    };
     try {
       const admitted = record(await fixture.invoke('conversation/start-v1', {
         routerBindingId: 'binding-1', audienceGroupId: 'brief', subject: 'Private read subject',
-        content: { text: 'Private read body' }, sessionId: 'session-journey-1',
+        content: { text: 'Private read body', html: '<p>' + 'a'.repeat(120 * 1024) + '</p>' }, sessionId: 'session-journey-1',
       }));
       const request = { custodyId: String(admitted.custodyId) };
       const queued = await fixture.invoke('delivery/read-v1', request);
@@ -315,12 +477,14 @@ describe('registered Channels composed journeys through real CLI Session admissi
       expect(await fixture.invoke('delivery/read-v1', request)).toMatchObject({ kind: 'ready', delivery: {
         custodyId: request.custodyId, state: 'delivered', lastOutcome: 'delivered',
       } });
+      fixture.validateWrites();
     } finally { await fixture.dispose(); }
   });
 
   it('projects the missing started-thread endpoint and accepts its current custody without resending', async () => {
     const fixture = await journey({ router: true, ambiguousStart: true });
     try {
+      await fixture.poll();
       await fixture.invoke('conversation/start-v1', {
         routerBindingId: 'binding-1', audienceGroupId: 'brief', subject: 'Private brief subject',
         content: { text: 'Private brief body' }, sessionId: 'session-journey-1',
@@ -424,9 +588,12 @@ describe('registered Channels composed journeys through real CLI Session admissi
       const routedSessionId = fixture.admissions[0]?.sessionId;
       const session = routedSessionId ? fixture.sessions.get(routedSessionId) : undefined;
       if (!session) throw new Error('Missing routed Session');
-      expect(session.ownerMetadata).toMatchObject({ t: 'plain', v: { system: { attestedContext: {
+      expect(session.ownerMetadata).toMatchObject({ t: 'plain', v: { workspace: { machineId: 'machine-1' }, system: { attestedContext: {
         externalPrincipalId: 'sender-1', sourceMessageId: expect.stringMatching(/^thread-(first|concurrent)$/u),
       } } } });
+      expect(JSON.parse(session.metadata!)).toMatchObject({ summary: { text: 'Furniture lead' } });
+      const handle = await fixture.inventory.get(session.id);
+      expect(await handle?.summary()).toMatchObject({ machineId: 'machine-1', title: 'Furniture lead' });
       const child = [...fixture.state.rows.values()].find(row => row.deleted !== true
         && record(row.value.payload).parentBindingId === 'binding-1');
       expect(child?.value.payload).toMatchObject({ allowedPrincipalIds: ['sender-1'], target: { sessionId: routedSessionId } });
@@ -509,6 +676,15 @@ describe('registered Channels composed journeys through real CLI Session admissi
     if (!manifest.ok) throw new Error('The actual Channels manifest is invalid');
     const declaration = manifest.manifest.contributes.actions.find(action => action.id === localId);
     if (!declaration?.inputSchema || !declaration.resultSchema) throw new Error('The activated start Action contract is missing');
+    const projected = buildPluginContributionRegistry({ loadedPlugins: [{
+      pluginId: 'happier.channels', pluginRootPath: '/fixture/channels', manifestPath: '/fixture/channels/.happier-plugin/plugin.json',
+      daemonEntryPath: null, devDaemonEntryPath: null,
+      sourceSpec: { kind: 'bundled', locator: '@happier-dev/plugins-channels' },
+      manifest: normalizePluginManifestV2(CHANNELS_PLUGIN.manifest),
+    }] });
+    const definitions = projected.actions.filter(action => action.definition.id === localId).map(action =>
+      ActionDefinitionV1Schema.parse({ ...action.definition, id: actionId, inputSchema: action.definition.inputSchema ?? {} }));
+    const listDefinitions = () => definitions;
     const content = { text: 'Votre brief', html: `<main>${'x'.repeat(120 * 1024)}</main>` };
     const authorization = { principal: { kind: 'host' as const }, admittedPermissionCeiling: 'default' as const };
     const occurrenceId = createPluginRuntimeOccurrenceId('happier.channels');
@@ -524,7 +700,10 @@ describe('registered Channels composed journeys through real CLI Session admissi
       desiredGeneration: action.occurrenceId, appliedGeneration: action.occurrenceId },
       resourceSelections: [], scopedGrants: [], operatingSystemAuthorization: [] }),
     createServices: createUnavailablePluginServicesFactory(), resolveHostBinding: createTargetActionHostBindingResolver() });
-    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(), invokeContributedAction: async request => {
+    const executor = createActionExecutor({ ...createUnavailableActionTransportDeps(),
+      listContributedActionDefinitions: listDefinitions,
+      readContributedActionSchemas: createCommittedContributedActionSchemaReader(listDefinitions),
+      invokeContributedAction: async request => {
       const result = await registry.invoke({ ...request.action, input: request.input, surface: 'agent',
         initiatingActionCaller: request.context.actionCaller, signal: request.signal,
         requestCurrentIntent: async confirmation => {
@@ -566,7 +745,8 @@ describe('registered Channels composed journeys through real CLI Session admissi
         action: { executor, buildContext: async params => buildWorkflowActionContext(params),
           observeRun: async () => { throw new Error('The immediate start Action does not observe a Run'); } } });
       const run = { ...accepted.snapshot, runId: 'channels-brief-journey' };
-      expect(await coordinator.run(run)).toMatchObject({ state: 'succeeded' });
+      const result = await coordinator.run(run);
+      expect(result, JSON.stringify(result)).toMatchObject({ state: 'succeeded' });
       expect(confirmations).toEqual([{ routerBindingId: 'binding-1', audienceGroupId: 'brief', sessionId: 'session-journey-1', subject: 'Morning brief', content }]);
       await coordinator.run(run);
       expect(confirmations).toHaveLength(1);

@@ -245,6 +245,12 @@ command union. The host qualifies local references and exposes only an opaque,
 snapshot-scoped command id to context readers. It retains the command payload
 on the invoking client and resolves the id again against the current snapshot
 before any effect. Plugins do not generate or persist those ids.
+In 0.3 development source, an unchanged command keeps its address when the same
+mount republishes context with an unchanged entity descriptor. Its title, description and
+declared Action or surface payload must remain equal; changes to other context
+details do not retire it. Removing the command or changing its meaning retires
+the old address, as do mount, target and Account retirement. Always discover the
+current address rather than saving it for a later mount.
 
 This publication does not itself send data to a Voice provider. The active
 Voice client's privacy mode decides whether current-UI data leaves that client,
@@ -259,6 +265,20 @@ remains trusted executable code.
 Declare the view's `container`, `target`, and `renderer` in
 `definePlugin(...)`; the host registry decides whether that exact pair can be
 mounted. The generated `appPage` + `app` view is the portable starting point.
+In 0.3 development source, an `appPage` may also declare an optional `description`,
+either a literal or `{ key, fallback }`, just like its title. The host resolves it
+from the declaration for the identity header while the executable surface loads.
+Use the same purpose in the loaded page's `PageHeader` so the content stays stable.
+Omitting it remains valid; it is presentation metadata and grants no authority.
+Published plugins use the existing toolchain-stamped `engines.happier` compatibility
+contract when targeting hosts whose strict declaration parser predates a field;
+the host does not strip unknown declaration fields or execute a bundle to infer them.
+
+An `appPage` whose loaded page draws a Collection toolbar that leads with the page's name (instead of a page
+header) declares `headerStyle: 'toolbar'`. The host then says the page's identity as that same toolbar row while
+the surface loads, in the page's full content area with the table's rows, so nothing changes width or shape when the
+surface arrives. Omit it for a page header (the default).
+
 From an admitted surface, request another declared view through the one host
 dispatcher rather than a local router:
 
@@ -290,6 +310,26 @@ In the current development build, an app page can read
 navigation column is on screen. A page with its own list can show a selection
 prompt beside a visible column and keep the list when the column is hidden,
 including on a phone. The `page` fact is absent on other placements.
+
+In the current development build, `useSurfaceContext().machineConnectionPending`
+is true while the host establishes Machine-backed execution or loads the
+mounted target, including a retained selection whose live Machine census is
+still loading. Account/local work and surface activity remain independent. A Machine-bound host refusal
+retains its original diagnostics and adds `plugin_surface_connection_pending`
+while those prerequisites are pending. The same refusal after loading settles
+is a failure, so do not classify it as pending from its error code alone.
+
+Loading can finish before fresh execution admission returns. In the current
+development build, `useSurfaceContext().machineExecutionReady` separately reports
+that the exact mounted target is executable. Resource hooks handle these
+transitions automatically. For a custom mounted read, consume the shared
+`usePluginHostReadiness()` projection: defer the read and show loading while
+`pending` is true, and include `revision` in its acquisition dependencies so
+re-admission re-reads without a manual Retry. Retain the read's existing
+cancellation, data and pacing owners. Account-local reads can pass `false` to
+keep their independent availability. An undemanded reader stays cold; a genuine
+outage after readiness stays an error with Retry. These observations grant no
+permission: every invocation still revalidates authority.
 
 ### Changing your own page's location
 
@@ -374,7 +414,9 @@ or phone's filesystem. The example counts immediate regular files or folders,
 without traversing subdirectories or following symbolic links.
 
 The `counter` widget declares those two inputs, its `inputSchema`, and the
-qualified `count` Resource dependency. The native body uses
+qualified `count` Resource dependency. Its `filter` field uses the plugin's
+`count-kind` input type; the global `count-kinds` Resource supplies Files and
+Folders through the shared options resolver. The native body uses
 `useLivePluginResource('count')`, renders the returned number through `Metric`,
 and offers `Action.Refresh` through that hook's `refresh`. Happier supplies the
 widget frame and retains the Resource's ordinary loading, refresh and failure
@@ -487,7 +529,17 @@ and one `trailing` element. Give it `onPress` when the row leads somewhere; leav
 it out when the row carries its own control. `variant="fact"` draws a quiet
 one-line statement instead of a named thing. `DiffStat` draws lines added and
 removed (`+53 −5`) in the host's version-control inks and leaves out a side that
-is zero.
+is zero; pass `locale` to format the counts in the language your surface renders.
+Where only text fits (a `List.Item` `detail` or a metadata value),
+`formatHappierDiffStat(added, removed, { locale })` returns the same two counts.
+
+`ReviewSeverity` draws a review finding's severity the way Happier's own review
+surfaces do: one colour role per severity (Blocker and High in the failure ink,
+Medium in the caution ink, Low and Nit in two steps of quiet ink), with your
+translated `label`. `presentation="badge"` draws it as a tinted chip among other
+facts and `presentation="dot"` as the mark alone. A `Banner` with
+`presentation="strip"` is the compact band across the top of a pane: its title
+leads when a description finishes the sentence.
 
 ```tsx
 import { DiffStat, WidgetGlanceRow } from '@happier-dev/plugin-ui';

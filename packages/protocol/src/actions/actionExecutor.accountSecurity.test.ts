@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ApprovalRequestV2Schema, type ApprovalRequest } from '../approvals/approvalRequestV1.js';
 import { createActionExecutor } from './actionExecutor.js';
 import type { ActionExecutorDeps } from './executor/types.js';
+import { normalizeActionsSettingsV1 } from './actionSettings.js';
 
 function createDeps(overrides: Partial<ActionExecutorDeps> = {}): ActionExecutorDeps {
   return {
@@ -39,6 +40,55 @@ function createDeps(overrides: Partial<ActionExecutorDeps> = {}): ActionExecutor
 }
 
 describe('createActionExecutor (Account Security)', () => {
+  it.each(['ui-default', 'ui-ask', 'agent', 'mcp'] as const)(
+    'routes a connected-account rename through the declared policy (%s)', async scenario => {
+      const persisted: ApprovalRequest[] = [];
+      let label = 'Before';
+      let confirmations = 0;
+      const actionId = 'connectedServices.accounts.rename';
+      const input = { account: { service: { pluginId: 'happier.agent.codex', localId: 'openai' }, accountId: 'work' }, label: 'After' };
+      const executor = createActionExecutor(createDeps({
+        // Account persistence and the Artifact store are system boundaries;
+        // declaration lookup, input admission and approval routing stay real.
+        connectedServiceAction: async ({ input: admitted }) => {
+          if (admitted !== null && typeof admitted === 'object' && 'label' in admitted && typeof admitted.label === 'string') {
+            label = admitted.label;
+          }
+          return { applied: true };
+        },
+        presentUserActionConfirmation: async () => { confirmations += 1; return true; },
+        approvalsCreate: async ({ request }) => {
+          persisted.push(ApprovalRequestV2Schema.parse(request));
+          return { artifactId: 'rename-approval' };
+        },
+        approvalsUpdate: async () => ({ ok: true }),
+        approvalsWaitForDecision: async ({ request }) => ({ decision: 'reject', request }),
+      }));
+      const settings = normalizeActionsSettingsV1({ v: 1, actions: scenario === 'ui-ask'
+        ? { [actionId]: { approvalRequiredSurfaces: ['ui'] } } : {} });
+      const result = await executor.execute(actionId, input, {
+        surface: scenario === 'agent' || scenario === 'mcp' ? scenario : 'ui',
+        authority: scenario === 'agent' || scenario === 'mcp' ? 'account_automation' : 'present_user',
+        actionCaller: { kind: 'host' }, serverId: 'home', runtimeAccountId: 'account',
+        actionRequestId: `rename-${scenario}`, defaultSessionId: 'requesting-session', actionsSettings: settings,
+      });
+      expect(confirmations).toBe(0);
+      if (scenario === 'ui-default') {
+        expect(result).toEqual({ ok: true, result: { applied: true } });
+        expect(label).toBe('After');
+        expect(persisted).toEqual([]);
+      } else {
+        expect(result).toMatchObject(scenario === 'ui-ask'
+          ? { ok: true, result: { kind: 'approval_request_created', artifactId: 'rename-approval', actionId } }
+          : { ok: false, errorCode: 'approval_rejected' });
+        expect(label).toBe('Before');
+        expect(persisted).toHaveLength(1);
+        expect(persisted[0]).toMatchObject({ actionId, actionArgs: input, status: 'open',
+          executionOriginV1: { authority: scenario === 'ui-ask' ? 'present_user' : 'account_automation' } });
+      }
+    },
+  );
+
   it('dispatches only present-user input and removes password material from execution history', async () => {
     const accountPasswordChangeAction = vi.fn(async () => ({ v: 1 as const, status: 'updated' as const }));
     const observeActionExecution = vi.fn();

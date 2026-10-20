@@ -2,6 +2,7 @@ import * as React from 'react';
 import { Platform, Pressable, View, type ViewStyle } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
+import { getBlurViewComponent } from '@/components/ui/glass/blurMaterial';
 import { createBackdropNativeStyle, createBackdropWebStyle } from '@/components/ui/overlays/createBackdropLayerStyle';
 import { resolveOverlayPointerEvents } from '@/components/ui/overlays/resolveOverlayPointerEvents';
 import type { PopoverBackdropEffect, PopoverOutsidePointerEventsMode, PopoverPortalOptions, PopoverWindowRect } from './_types';
@@ -268,30 +269,23 @@ function PopoverBackdropEffectLayer(props: Readonly<{
     if (props.backdropEffect === 'blur') {
         const webBlurPx = typeof props.backdropBlurOnWeb?.px === 'number' ? props.backdropBlurOnWeb.px : 2;
         const webBlurTint = props.backdropBlurOnWeb?.tintColor ?? 'rgba(0,0,0,0.10)';
-        if (Platform.OS !== 'web') {
-            try {
-                // eslint-disable-next-line @typescript-eslint/no-var-requires
-                const { BlurView } = require('expo-blur');
-                if (BlurView) {
-                    return (
-                        <>
-                            {effectStyles.map((style, index) => (
-                                // eslint-disable-next-line react/no-array-index-key
-                                <BlurView
-                                    key={index}
-                                    testID="popover-backdrop-effect"
-                                    intensity={Platform.OS === 'ios' ? 12 : 3}
-                                    tint="default"
-                                    pointerEvents={effectLayerPointerEvents.nativePointerEvents}
-                                    style={[style, effectLayerPointerEvents.webStyle]}
-                                />
-                            ))}
-                        </>
-                    );
-                }
-            } catch {
-                // fall through to dim fallback
-            }
+        const BlurView = getBlurViewComponent();
+        if (BlurView) {
+            return (
+                <>
+                    {effectStyles.map((style, index) => (
+                        // eslint-disable-next-line react/no-array-index-key
+                        <BlurView
+                            key={index}
+                            testID="popover-backdrop-effect"
+                            intensity={12}
+                            tint="default"
+                            pointerEvents={effectLayerPointerEvents.nativePointerEvents}
+                            style={[style, effectLayerPointerEvents.webStyle]}
+                        />
+                    ))}
+                </>
+            );
         }
 
         return (

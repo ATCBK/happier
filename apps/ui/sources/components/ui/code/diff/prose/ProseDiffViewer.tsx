@@ -41,14 +41,16 @@ export const ProseDiffViewer = React.memo(function ProseDiffViewer(
   // A file only one side has (new in theirs, gone from theirs) reads as that one side, not beside a blank.
   const showOld = sides.old.length > 0 || sides.new.length === 0;
   const showNew = sides.new.length > 0;
+  // A passage of one line per side has nothing to number.
+  const numbered = sides.old.length > 1 || sides.new.length > 1;
   return (
     <View testID={props.testID} style={[styles.frame, split ? styles.row : null]}>
       {showOld ? (
-        <ProseSide label={props.prose?.oldLabel} lines={sides.old} setAside={kept === 'new'} animate={!reducedMotion} />
+        <ProseSide label={props.prose?.oldLabel} lines={sides.old} numbered={numbered} setAside={kept === 'new'} animate={!reducedMotion} />
       ) : null}
       {showOld && showNew ? <View style={split ? styles.ruleVertical : styles.ruleHorizontal} /> : null}
       {showNew ? (
-        <ProseSide label={props.prose?.newLabel} lines={sides.new} setAside={kept === 'old'} animate={!reducedMotion} />
+        <ProseSide label={props.prose?.newLabel} lines={sides.new} numbered={numbered} setAside={kept === 'old'} animate={!reducedMotion} />
       ) : null}
     </View>
   );
@@ -58,6 +60,7 @@ const ProseSide = React.memo(function ProseSide(
   props: Readonly<{
     label: React.ReactNode | undefined;
     lines: readonly ProseDiffLine[];
+    numbered: boolean;
     setAside: boolean;
     animate: boolean;
   }>,
@@ -73,7 +76,9 @@ const ProseSide = React.memo(function ProseSide(
       : null;
   return (
     <View style={styles.side}>
-      {props.label ? <View style={styles.head}>{props.label}</View> : null}
+      {props.label ? <View style={styles.head}>
+        {typeof props.label === 'string' ? <Text variant="meta" emphasis="medium" style={styles.label}>{props.label}</Text> : props.label}
+      </View> : null}
       <View style={styles.body}>
         {props.lines.map((line) =>
           line.kind === 'gap' ? (
@@ -90,6 +95,7 @@ const ProseSide = React.memo(function ProseSide(
               key={line.id}
               style={[
                 styles.line,
+                props.numbered ? null : styles.unnumbered,
                 line.kind === 'changed'
                   ? props.setAside
                     ? styles.changedAside
@@ -98,9 +104,11 @@ const ProseSide = React.memo(function ProseSide(
                 transition,
               ]}
             >
-              <Text variant="micro" style={styles.number}>
-                {line.number === null ? '' : String(line.number)}
-              </Text>
+              {props.numbered ? (
+                <Text variant="micro" style={styles.number}>
+                  {line.number === null ? '' : String(line.number)}
+                </Text>
+              ) : null}
               <Text
                 variant="body"
                 style={[
@@ -167,6 +175,8 @@ const styles = StyleSheet.create((theme) => ({
     fontVariant: ['tabular-nums'],
   },
   text: { flex: 1, minWidth: 0, color: theme.colors.text.secondary },
+  label: { color: theme.colors.text.secondary },
+  unnumbered: { paddingLeft: theme.space.s12 },
   textChanged: { color: theme.colors.text.primary },
   textAside: { opacity: SET_ASIDE_OPACITY },
   gap: { paddingLeft: theme.space.s32 + theme.space.s8, color: theme.colors.text.tertiary },

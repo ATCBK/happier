@@ -1,5 +1,6 @@
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import * as React from 'react';
+import { View } from 'react-native';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -10,14 +11,22 @@ import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
 import { widgetInstalledPackage, widgetProjectionOf } from '@/dev/testkit/fixtures/pluginWidgetProjectionFixtures';
+import { MACHINE_BUILTIN_WIDGET_IDS_V1, PROJECT_BUILTIN_WIDGET_IDS_V1, SESSION_COMPANION_BUILTIN_ITEM_IDS, USAGE_BUILTIN_WIDGET_IDS_V1 } from '@happier-dev/protocol/widgets';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { ARTIFACT_LIST_PATH, RUN_STORAGE_PATH, boardDefinitionArtifact, boardRunStoragePage, installBoardLibraryTestHarness } from '../boardLibraryTestHarness';
 
 const harness = installBoardLibraryTestHarness();
+// Portal/window measurement is the boundary. Each rendered node is not the opener's rectangle;
+// a fixed measured desktop frame keeps these Add-flow tests independent of asynchronous layout.
+vi.mock('@/components/ui/popover', async importOriginal =>
+    (await import('@/dev/testkit/mocks/popover')).createInlinePopoverModuleMock(importOriginal, {
+        maxHeight: 624, maxWidth: 960, placement: 'bottom',
+    }));
 const { AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
 const { SelectionList } = await import('@/components/ui/selectionList');
+const { SurfaceStateCard } = await import('@/components/ui/surfaces/SurfaceStateCard');
 const { storage } = await import('@/sync/domains/state/storageStore');
-const { AddToBoardButton } = await import('./AddToBoardPopover');
+const { AddToBoardButton, AddToBoardPopover } = await import('./AddToBoardPopover');
 const { t } = await import('@/text');
 
 // The native Markdown package is a rendering boundary this picker never renders.
@@ -28,10 +37,14 @@ let previousStorage = storage.getState();
 const run = createWorkflowRunSummaryFixture({ id: 'run-picker' });
 const runPage = await boardRunStoragePage([run]);
 
+function Picker(props: Omit<React.ComponentProps<typeof AddToBoardPopover>, 'anchorRef'>) {
+    const anchorRef = React.useRef<View>(null);
+    return <><AddToBoardButton anchorRef={anchorRef} open={props.open} onOpenChange={props.onOpenChange} />
+        <AddToBoardPopover {...props} anchorRef={anchorRef} /></>;
+}
+
 function picker(open = true) {
-    return <AddToBoardButton
-        board={{ id: 'board-picker', name: 'Picker', source: { picked: [] }, mode: 'canvas', snap: true,
-            positionsByItemRef: {}, pinnedInSessions: false }}
+    return <Picker
         homes={{ activeServerId: serverId, mountedServerIds: [serverId], isHomeMounted: (id) => id === serverId }}
         onBoardKeys={new Set()}
         onAdd={() => {}}
@@ -41,15 +54,9 @@ function picker(open = true) {
     />;
 }
 
-// The renderer has no browser/native layout engine. Supply the physical anchor measurement only.
-const layout = { createNodeMock: () => ({
-    getBoundingClientRect: () => ({ x: 100, y: 50, left: 100, top: 50, right: 180, bottom: 82, width: 80, height: 32 }),
-    measureInWindow: (done: (x: number, y: number, width: number, height: number) => void) => done(100, 50, 80, 32),
-}) };
-
 function options(screen: Awaited<ReturnType<typeof renderScreen>>): readonly SelectionListOption[] {
     return screen.findByType(SelectionList).props.rootStep.sections.flatMap(
-        (section: Readonly<{ options: readonly SelectionListOption[] }>) => section.options,
+        (section: Readonly<{ options?: readonly SelectionListOption[] }>) => section.options ?? [],
     );
 }
 
@@ -67,7 +74,37 @@ afterEach(async () => {
     storage.setState(previousStorage);
 });
 
-describe('AddToBoardButton library recovery', () => {
+describe('AddToBoardPopover library recovery', () => {
+    it('says which groups are loading and settles each independently', async () => {
+        const definitions = createDeferred<void>();
+        const runs = createDeferred<void>();
+        const sessions = createDeferred<void>();
+        // Keep bootstrap's real Session reads in flight instead of letting an
+        // unanswered HTTP fixture replace this case's loading observation with error.
+        for (const path of ['/v2/sessions', '/v2/sessions/active']) harness.home.answer(serverId, path, {
+            body: { sessions: [], nextCursor: null, hasNext: false }, respondAfter: sessions.promise,
+        });
+        harness.home.answer(serverId, ARTIFACT_LIST_PATH, { body: [], respondAfter: definitions.promise });
+        harness.home.answer(serverId, RUN_STORAGE_PATH, { body: await boardRunStoragePage([]), respondAfter: runs.promise });
+        storage.setState({ concurrentSessionListCacheByServerId: { [serverId]: {
+            serverName: null, listObservation: { phase: 'loading', lastSuccessAt: null },
+        } } });
+        try {
+            const screen = await renderScreen(picker());
+            // One loading line names every group still opening; it narrows as each settles.
+            const loading = () => screen.findAllByType(SurfaceStateCard).filter(node => node.props.kind === 'loading')
+                .map(node => `${node.props.testID}: ${node.props.title}`);
+            expect(loading()).toEqual(['board-add.loading: Opening Sessions, Workflows, and Workflow runs']);
+            definitions.resolve();
+            await waitForHomeGovernance(() => expect(loading()).toEqual(['board-add.loading: Opening Sessions and Workflow runs']));
+            await act(async () => storage.setState({ concurrentSessionListCacheByServerId: { [serverId]: {
+                serverName: null, listObservation: { phase: 'ready', lastSuccessAt: 1 },
+            } } }));
+            expect(loading()).toEqual(['board-add.loading: Opening Workflow runs']);
+            runs.resolve();
+            await waitForHomeGovernance(() => expect(loading()).toEqual([]));
+        } finally { definitions.resolve(); runs.resolve(); sessions.resolve(); }
+    });
     it('updates a Machine option from the exact Home request reachability without changing its presence row', async () => {
         const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
         const { recordMachineRequestFailed, clearMachineRequestReachabilityForTest } = await import('@/sync/domains/machines/reachability/machineReachability');
@@ -76,7 +113,7 @@ describe('AddToBoardButton library recovery', () => {
         storage.setState({ machineListByServerId: { [serverId]: [machine] } });
         harness.home.answer(serverId, ARTIFACT_LIST_PATH, { body: [] });
         harness.home.answer(serverId, RUN_STORAGE_PATH, { body: await boardRunStoragePage([]) });
-        const screen = await renderScreen(picker(), layout);
+        const screen = await renderScreen(picker());
         const id = JSON.stringify(['machine', serverId, machine.id]);
         await waitForHomeGovernance(() => expect(options(screen).find(option => option.id === id)?.subtitle)
             .toBe(describeMachinePresenceLine(machine, undefined, undefined, { serverId, accountId: 'account-a' }).label));
@@ -85,6 +122,43 @@ describe('AddToBoardButton library recovery', () => {
             expect(options(screen).find(option => option.id === id)?.subtitle)
                 .toBe(describeMachinePresenceLine(machine, undefined, undefined, { serverId, accountId: 'account-a' }).label);
         } finally { clearMachineRequestReachabilityForTest(); }
+    });
+    it('leads with a short Widgets group and reaches the built-in families through Gallery and search (lab dashboards L1)', async () => {
+        harness.home.answer(serverId, ARTIFACT_LIST_PATH, { body: [] });
+        harness.home.answer(serverId, RUN_STORAGE_PATH, { body: await boardRunStoragePage([]) });
+        const projection = widgetProjectionOf([{ pluginId: 'acme.widgets', localId: 'counter', target: 'app', title: 'Counter' }],
+            { 'acme.widgets': widgetInstalledPackage('acme.widgets', 'Widgets') });
+        const screen = await renderScreen(
+            <AppShellPluginUiProjectionValueProvider value={{ pluginUiProjection: projection, pluginBrowserProjection: null, phase: 'current',
+                interactionEnabled: true, machineId: 'machine', serverId, platform: 'web',
+                accountLifetime: captureActiveServerAccountScopeLifetime(), clientExecutableActivation: { status: 'ready' }, reloadClientExecutables: () => {}, reloadConnectedAccountProjection: () => {} }}>
+                {picker()}
+            </AppShellPluginUiProjectionValueProvider>,
+        );
+        await flushHookEffects({ cycles: 4 });
+        const sections = screen.findByType(SelectionList).props.rootStep.sections as readonly Readonly<{
+            id: string; kind: string; options?: readonly SelectionListOption[];
+            visibleWhen?: (input: string) => boolean;
+            resolve?: (seed: string, signal: AbortSignal) => Promise<Readonly<{ options: readonly SelectionListOption[] }>>;
+        }>[];
+        // Widgets lead, then the work the empty board promises.
+        expect(sections.map(section => section.id).slice(0, 3)).toEqual(['widgets', 'widgets-more', 'sessions']);
+        const lead = sections[0]!.options!.map(option => option.id);
+        expect(lead).toContain('widget:plugin-acme.widgets/counter');
+        expect(lead.at(-1)).toBe('widgets:gallery');
+        // Machines, Usage, Project and Session-companion widgets are families: one row away through Gallery, never the lead.
+        const families = [...MACHINE_BUILTIN_WIDGET_IDS_V1, ...USAGE_BUILTIN_WIDGET_IDS_V1, ...PROJECT_BUILTIN_WIDGET_IDS_V1,
+            ...SESSION_COMPANION_BUILTIN_ITEM_IDS];
+        expect(lead.filter(id => families.some(family => id.endsWith(family)))).toEqual([]);
+        // Typing still finds every widget in this one search.
+        const more = sections[1]!;
+        expect(more.visibleWhen?.('')).toBe(false);
+        expect(more.visibleWhen?.('vit')).toBe(true);
+        const found = (await more.resolve!('vit', new AbortController().signal)).options.map(option => option.id);
+        expect(found.some(id => id.endsWith('machine_vitals'))).toBe(true);
+        const companion = (await more.resolve!('session summary', new AbortController().signal)).options.map(option => option.id);
+        expect(companion.some(id => id.endsWith('session_summary'))).toBe(true);
+        expect(found).not.toContain('widget:plugin-acme.widgets/counter');
     });
     it.each(['refused', 'pending'] as const)('opens a picked widget in the shared Add surface and shows a %s Add there without adding twice', async kind => {
         harness.home.answer(serverId, ARTIFACT_LIST_PATH, { body: [] });
@@ -104,7 +178,7 @@ describe('AddToBoardButton library recovery', () => {
                 interactionEnabled: true, machineId: 'machine', serverId, platform: 'web',
                 accountLifetime: captureActiveServerAccountScopeLifetime(), clientExecutableActivation: { status: 'ready' }, reloadClientExecutables: () => {}, reloadConnectedAccountProjection: () => {} }}>
                 <QuickWidgetPicker />
-            </AppShellPluginUiProjectionValueProvider>, layout,
+            </AppShellPluginUiProjectionValueProvider>,
         );
         await flushHookEffects({ cycles: 4 });
         expect(options(screen)).toContainEqual(expect.objectContaining({ id: 'widget:plugin-acme.widgets/counter' }));
@@ -142,7 +216,7 @@ describe('AddToBoardButton library recovery', () => {
                 interactionEnabled: true, machineId: 'machine', serverId, platform: 'web',
                 accountLifetime: captureActiveServerAccountScopeLifetime(), clientExecutableActivation: { status: 'ready' }, reloadClientExecutables: () => {}, reloadConnectedAccountProjection: () => {} }}>
                 <QuickWidgetPicker />
-            </AppShellPluginUiProjectionValueProvider>, layout,
+            </AppShellPluginUiProjectionValueProvider>,
         );
         await act(async () => { screen.findByType(SelectionList).props[place ? 'onCommandSelect' : 'onSelect']('widget:plugin-acme.widgets/filtered'); });
         await flushHookEffects({ cycles: 4 });
@@ -162,7 +236,7 @@ describe('AddToBoardButton library recovery', () => {
         harness.home.answer(serverId, ARTIFACT_LIST_PATH, { dispatchThenFail: true });
         harness.home.answer(serverId, RUN_STORAGE_PATH, { dispatchThenFail: true });
         const before = harness.home.requests.length;
-        const screen = await renderScreen(picker(false), layout);
+        const screen = await renderScreen(picker(false));
         expect(harness.home.requests.slice(before).filter(request => request.path === ARTIFACT_LIST_PATH || request.path === RUN_STORAGE_PATH)).toEqual([]);
         await screen.update(picker());
         await waitForHomeGovernance(() => {
@@ -185,13 +259,13 @@ describe('AddToBoardButton library recovery', () => {
     it('keeps hydrated definition and run choices selectable when refresh and Retry are unavailable', async () => {
         harness.home.answer(serverId, ARTIFACT_LIST_PATH, { body: [boardDefinitionArtifact('known', 'Workflow known')] });
         harness.home.answer(serverId, RUN_STORAGE_PATH, { body: runPage });
-        const initial = await renderScreen(picker(), layout);
+        const initial = await renderScreen(picker());
         await waitForHomeGovernance(() => expect(options(initial).filter(option => option.label === 'Workflow known' || option.id.includes('run-picker'))).toHaveLength(2));
         await initial.unmount();
 
         harness.home.answer(serverId, ARTIFACT_LIST_PATH, { dispatchThenFail: true });
         harness.home.answer(serverId, RUN_STORAGE_PATH, { dispatchThenFail: true });
-        const screen = await renderScreen(picker(), layout);
+        const screen = await renderScreen(picker());
         await waitForHomeGovernance(() => {
             expect(screen.findHostByTestId('board-add.workflows-failure')).not.toBeNull();
             expect(screen.findHostByTestId('board-add.runs-failure')).not.toBeNull();

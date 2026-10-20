@@ -259,6 +259,7 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
                 <Item title={t('projects.detail.fields.path')} detail={displayPath} mode="info" copy={displayPath} />
             </ItemGroup>
             <WorkspaceSyncRelationshipList
+                title={t('workspaceSync.availableOn')}
                 serverId={props.workspaceRef.serverId}
                 workspaceRefId={selectedWorkspaceRef?.id ?? null}
                 onAddMachine={openWorkspaceSyncAddMachineForProject}
@@ -295,6 +296,7 @@ export const WorkspaceDetailsPanel = React.memo((props: WorkspaceDetailsPanelPro
                 <Item title={t('projects.detail.fields.path')} detail={displayPath} mode="info" copy={displayPath} />
             </ItemGroup>
             <WorkspaceSyncRelationshipList
+                title={t('workspaceSync.availableOn')}
                 serverId={props.workspaceRef.serverId}
                 workspaceRefId={selectedWorkspaceRef?.id ?? null}
                 onAddMachine={openWorkspaceSyncAddMachineForProject}

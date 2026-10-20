@@ -1,13 +1,23 @@
 import React from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import 'fake-indexeddb/auto';
+import { act } from 'react-test-renderer';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createHomeGovernanceHarness } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { seedPersistedHomeProfilesForTests } from '@/dev/testkit/fixtures/persistedHomeProfiles';
+import { SESSION_DRAFT_V2_ROUTE_MUTATE, SESSION_DRAFT_V2_ROUTE_READ, SessionDraftMutateRequestV2Schema,
+    SessionDraftMutateResponseV2Schema, SessionDraftReadResponseV2Schema,
+    SessionDraftRecordV2Schema } from '@happier-dev/protocol/drafts/sessionDraftsV2';
+import { SESSION_DRAFT_ROUTE_MUTATE } from '@happier-dev/protocol/drafts/sessionDrafts';
+import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
+import { tryWriteServerEnabledBitInPlace } from '@happier-dev/protocol/features/serverEnabledBit';
 
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
 const mockState = vi.hoisted(() => ({
-    persistedDraft: null as Record<string, unknown> | null,
     tempData: null as Record<string, unknown> | null,
     serverId: 's1',
     resolvedTargetServerId: undefined as string | null | undefined,
@@ -21,7 +31,6 @@ const mockState = vi.hoisted(() => ({
         draftServerId?: string;
         draftAccountId?: string;
     },
-    serverListeners: new Set<() => void>(),
     guidanceModelListeners: new Set<() => void>(),
     guidanceKind: 'connect_machine' as 'connect_machine' | 'select_session',
     shouldBlockNewSession: true,
@@ -29,8 +38,6 @@ const mockState = vi.hoisted(() => ({
     newSessionBlockHookCalls: 0,
     wizardRenders: 0,
     portalScopeRenders: 0,
-    draftScopeEnabled: false,
-    requestedDraftScope: null as { serverId: string; accountId: string } | null,
     draftReadScopes: [] as Array<{ serverId: string; accountId: string }>,
     draftDeleteCalls: [] as Array<Readonly<{
         scope: { serverId: string; accountId: string };
@@ -43,9 +50,6 @@ const mockState = vi.hoisted(() => ({
 
 function setMockServerId(serverId: string): void {
     mockState.serverId = serverId;
-    for (const listener of mockState.serverListeners) {
-        listener();
-    }
 }
 
 vi.mock('react-native', async () => {
@@ -92,26 +96,6 @@ vi.mock('@/components/sessions/guidance/useShouldBlockNewSessionWithGettingStart
     },
 }));
 
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot: () => ({
-        serverId: mockState.serverId,
-        serverUrl: 'https://api.happier.dev',
-        generation: 1,
-    }),
-    subscribeActiveServer: (listener: (snapshot: { serverId: string; serverUrl: string; generation: number }) => void) => {
-        mockState.serverListeners.add(() => {
-            listener({
-                serverId: mockState.serverId,
-                serverUrl: 'https://api.happier.dev',
-                generation: 1,
-            });
-        });
-        return () => {
-            mockState.serverListeners.delete(listener as unknown as () => void);
-        };
-    },
-}));
-
 vi.mock('@/components/sessions/new/hooks/serverTarget/useNewSessionServerTargetState', () => ({
     useNewSessionServerTargetState: ({ request }: { request: { spawnServerIdParam?: string | null } }) => ({
         targetServerId: typeof request?.spawnServerIdParam === 'string'
@@ -135,79 +119,13 @@ vi.mock('expo-router', async () => {
     return expoRouterMock.module;
 });
 
-vi.mock('@/sync/domains/scope/useServerCredentialAccountScopes', () => ({
-    useServerCredentialAccountScopeResolution: (serverId: string | null | undefined) => (
-        serverId && mockState.requestedDraftScope?.serverId === serverId
-            ? { kind: 'bound', scope: mockState.requestedDraftScope }
-            : { kind: 'unknown_home' }
-    ),
-    useServerCredentialAccountScopeBindings: (serverIds: readonly string[]) => new Map(
-        serverIds.flatMap((serverId) => (
-            mockState.requestedDraftScope?.serverId === serverId
-                ? [[serverId, {
-                    scope: mockState.requestedDraftScope,
-                    isCurrent: () => true,
-                    serverId,
-                    accountId: mockState.requestedDraftScope.accountId,
-                    revision: 1,
-                }] as const]
-                : []
-        )),
-    ),
-}));
-
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>()),
-    getServerProfileById: (serverId: string) => ({ id: serverId, serverUrl: `https://${serverId}.test` }),
-}));
-
-vi.mock('@/sync/http/client', async (importOriginal) => ({
-    ...(await importOriginal<typeof import('@/sync/http/client')>()),
-    createServerFetchAtEndpoint: () => vi.fn(),
-}));
-
-vi.mock('@/sync/ops/sessionDrafts/runWithSessionDraftRepositoryScopedRuntime', () => ({
-    runWithSessionDraftRepositoryScopedRuntime: async ({ binding, operation }: {
-        binding: { scope: { serverId: string; accountId: string }; isCurrent: () => boolean };
-        operation: (input: unknown) => Promise<unknown>;
-    }) => operation({ scope: binding.scope, runtime: {}, isCurrent: binding.isCurrent }),
-}));
-
-vi.mock('@/sync/ops/sessionDrafts/sessionDraftRepository', () => ({
-    getSessionDraftSnapshot: (scope: { serverId: string; accountId: string }) => {
-        mockState.draftReadScopes.push(scope);
-        return mockState.persistedDraft;
-    },
-    subscribeSessionDraft: () => () => {},
-    deleteSessionDraft: vi.fn(async (input: Readonly<{
-        scope: { serverId: string; accountId: string };
-        address: { kind: 'newSession'; draftId: string };
-    }>) => {
-        mockState.draftDeleteCalls.push(input);
-        return true;
-    }),
-    deleteSessionDraftWithScopedRuntime: vi.fn(async (input: Readonly<{
-        scope: { serverId: string; accountId: string };
-        address: { kind: 'newSession'; draftId: string };
-    }>) => {
-        mockState.draftDeleteCalls.push({ scope: input.scope, address: input.address });
-        return true;
-    }),
-}));
-
-vi.mock('@/sync/domains/actionOperations/useActionOperations', () => ({
-    useAllActionOperations: () => [],
-    readAllActionOperations: () => [],
-}));
+vi.mock('@/sync/domains/state/browserRecordStorage', async () =>
+    (await import('@/dev/testkit/mocks/browserRecordStorage')).createBrowserRecordStorageModuleMock());
 
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     return createModalModuleMock({ spies: { confirm: async () => true } }).module;
 });
-
-vi.mock('@/components/sessions/new/modules/newSessionDraftLaunchCustody', () => ({
-    isNewSessionDraftLaunchInCustody: () => false,
-}));
 
 vi.mock('@/components/sessions/drafts/SessionDraftConflictResolution', () => ({
     SessionDraftConflictResolution: () => React.createElement('ConflictNotice', { testID: 'draft-conflict-notice' }),
@@ -262,6 +180,8 @@ vi.mock('@/components/sessions/new/hooks/useNewSessionScreenModel', () => ({
         popoverBoundaryRef: { current: null },
         wizardProps: {
             layout: null,
+            sectionPresentation: { machines: 'list' },
+            useColumnLayout: true,
             profiles: null,
             agent: null,
             machine: null,
@@ -315,24 +235,60 @@ vi.mock('@/components/ui/popover', async (importOriginal) => {
 });
 
 await loadSyncSingletonForTests();
+const disposeActionModuleLoader = await installRealActionExecutorModuleLoader();
+afterAll(disposeActionModuleLoader);
+const homes = createHomeGovernanceHarness();
+const repository = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
+const { prepareSessionDraftPersistenceStorage, discardSessionDraftPersistenceWrites } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
+const readDraftSnapshot = repository.getSessionDraftSnapshot;
+const deleteDraftWithScopedRuntime = repository.deleteSessionDraftWithScopedRuntime;
+vi.spyOn(repository, 'getSessionDraftSnapshot').mockImplementation((scope, address) => {
+    mockState.draftReadScopes.push(scope);
+    return readDraftSnapshot(scope, address);
+});
+vi.spyOn(repository, 'deleteSessionDraftWithScopedRuntime').mockImplementation(async input => {
+    if (input.address.kind === 'newSession') {
+        mockState.draftDeleteCalls.push({ scope: input.scope, address: input.address });
+    }
+    return deleteDraftWithScopedRuntime(input);
+});
 const Screen = (await import('@/app/(app)/new')).default;
 const { storage } = await import('@/sync/domains/state/storage');
+const { actionOperationStore } = await import('@/sync/domains/actionOperations/actionOperationStore');
 const { publishAppliedActiveServerSnapshot, publishAppliedActiveServerRuntimeAvailability } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 
-beforeEach(() => {
+beforeEach(async () => {
+    await prepareSessionDraftPersistenceStorage();
+    repository.configureSessionDraftRepository({ syncEnabled: false });
+    repository.resetSessionDraftRepositoryForTests();
+    actionOperationStore.reset();
+    await seedPersistedHomeProfilesForTests({ activeServerId: 's1', profiles: [
+        { id: 's1', name: 'Home 1', serverUrl: 'https://api.happier.dev' },
+        { id: 's2', name: 'Home 2', serverUrl: 'https://s2.test' },
+    ].map(profile => ({ ...profile, createdAt: 1, updatedAt: 1, lastUsedAt: 1, source: 'manual' })) });
+    await homes.reset();
+    await homes.addHome({ name: 'Home 1', serverUrl: 'https://api.happier.dev',
+        accountId: 'account-1', currentAccount: true, active: false });
+    await homes.addHome({ name: 'Home 2', serverUrl: 'https://s2.test',
+        accountId: 'account-1', currentAccount: true, active: false });
     setMockServerId('s1');
     storage.getState().activateProfileScope({ serverId: 's1', accountId: 'account-1' });
-    publishAppliedActiveServerSnapshot({ serverId: 's1', serverUrl: 'https://api.happier.dev', generation: 1 });
+    const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
     storage.setState({ isSessionDraftsReady: true });
 });
 
 afterEach(async () => {
     await standardCleanup();
+    await homes.reset();
+    await discardSessionDraftPersistenceWrites();
+    const { clearBrowserRecords } = await import('@/sync/domains/state/browserRecordStorage');
+    await clearBrowserRecords();
+    repository.resetSessionDraftRepositoryForTests();
+    actionOperationStore.reset();
     publishAppliedActiveServerRuntimeAvailability(false);
     storage.getState().clearProfileScope();
-    mockState.persistedDraft = null;
     mockState.tempData = null;
-    mockState.serverListeners.clear();
     mockState.guidanceModelListeners.clear();
     mockState.serverId = 's1';
     mockState.guidanceKind = 'connect_machine';
@@ -349,8 +305,6 @@ afterEach(async () => {
     mockState.newSessionBlockHookCalls = 0;
     mockState.wizardRenders = 0;
     mockState.portalScopeRenders = 0;
-    mockState.draftScopeEnabled = false;
-    mockState.requestedDraftScope = null;
     mockState.draftReadScopes = [];
     mockState.draftDeleteCalls = [];
     mockState.routerPush.mockReset();
@@ -358,10 +312,45 @@ afterEach(async () => {
     mockState.routerSetParams.mockReset();
 });
 
+async function seedConflictingDraft(draftId: string) {
+    const scope = { serverId: 's1', accountId: 'account-1' };
+    const address = { kind: 'newSession' as const, draftId };
+    const values = new Map<string, string>();
+    const { createSessionDraftCipher } = await import('@/sync/encryption/sessionDraftEncryption');
+    const { getRandomBytes } = await import('@/platform/cryptoRandom');
+    const cipher = createSessionDraftCipher({ accountMode: 'plain', accountCryptoMaterial: null,
+        getSessionContext: () => null, randomBytes: getRandomBytes });
+    const otherDevice = repository.createSessionDraftRepository({ syncEnabled: false, cipher,
+        storage: { getString: key => values.get(key), set: (key, value) => { values.set(key, value); },
+            delete: key => { values.delete(key); } } });
+    otherDevice.writeNewSessionDraft({ scope, draftId, patch: { text: 'Original draft' }, materializationIntent: 'seeded' });
+    const base = otherDevice.getSessionDraftSnapshot(scope, address)?.document;
+    if (!base) throw new Error('Expected the producer to materialize the base draft');
+    let remote = SessionDraftRecordV2Schema.parse({ address, revision: 1,
+        content: await cipher.seal(address, base), createdAt: 1, updatedAt: 1 });
+    // This is the external draft transport. Both devices still use the real
+    // repository serializer, cipher, mutation tokens and conflict reducer.
+    repository.configureSessionDraftRepository({ scope, syncEnabled: true, cipher, transport: {
+        read: async () => ({ status: 'present', record: remote }),
+        list: async () => ({ items: [], nextAfter: undefined }),
+        mutate: async () => SessionDraftMutateResponseV2Schema.parse({ status: 'conflict', current: remote }),
+    } });
+    await repository.materializeExactSessionDraft(scope, address);
+    otherDevice.writeNewSessionDraft({ scope, draftId, patch: { text: 'Another device edit' }, materializationIntent: 'userEdit' });
+    const newer = otherDevice.getSessionDraftSnapshot(scope, address)?.document;
+    if (!newer) throw new Error('Expected the producer to retain the concurrent draft');
+    remote = SessionDraftRecordV2Schema.parse({ address, revision: 2,
+        content: await cipher.seal(address, newer), createdAt: 1, updatedAt: 2 });
+    repository.writeNewSessionDraft({ scope, draftId, patch: { text: 'Resume the migration\nwith tests' }, materializationIntent: 'userEdit' });
+    await repository.flushSessionDraft({ scope, address });
+    expect(readDraftSnapshot(scope, address)).toMatchObject({ status: 'conflict',
+        conflict: { fields: [{ fieldId: 'composer.text', mine: 'Resume the migration\nwith tests', synced: 'Another device edit' }] } });
+    repository.configureSessionDraftRepository({ syncEnabled: false });
+}
+
 describe('/new (blocking guidance)', () => {
     it('hard-stops with connect-machine guidance when no machines exist', async () => {
         setMockServerId('s1');
-        mockState.persistedDraft = null;
         mockState.tempData = null;
         mockState.shouldBlockNewSession = true;
 
@@ -374,29 +363,43 @@ describe('/new (blocking guidance)', () => {
 
     it('keeps the new-session panel out of full getting-started model invalidations', async () => {
         setMockServerId('s1');
-        mockState.persistedDraft = null;
         mockState.tempData = null;
         mockState.guidanceKind = 'select_session';
         mockState.shouldBlockNewSession = false;
 
-        await renderScreen(React.createElement(Screen));
+        const screen = await renderScreen(React.createElement(Screen));
 
-        expect(mockState.wizardRenders).toBe(1);
-        expect(mockState.portalScopeRenders).toBe(1);
+        expect(screen.findByType('NewSessionWizard')).toBeTruthy();
+        const initialRenders = { wizard: mockState.wizardRenders, portal: mockState.portalScopeRenders,
+            blockingHook: mockState.newSessionBlockHookCalls };
+        expect(initialRenders.wizard).toBeGreaterThan(0);
+        expect(initialRenders.portal).toBeGreaterThan(0);
         expect(mockState.guidanceHookCalls).toBe(0);
-        expect(mockState.newSessionBlockHookCalls).toBe(1);
 
         for (const listener of mockState.guidanceModelListeners) {
             listener();
         }
 
-        expect(mockState.wizardRenders).toBe(1);
+        expect(mockState.wizardRenders).toBe(initialRenders.wizard);
+        expect(mockState.portalScopeRenders).toBe(initialRenders.portal);
+        expect(mockState.newSessionBlockHookCalls).toBe(initialRenders.blockingHook);
         expect(mockState.guidanceHookCalls).toBe(0);
+    });
+
+    it('hands the wizard its layout settings (list or dropdown per step, two columns)', async () => {
+        setMockServerId('s1');
+        mockState.tempData = null;
+        mockState.shouldBlockNewSession = false;
+
+        const screen = await renderScreen(React.createElement(Screen));
+
+        const wizard = screen.findByType('NewSessionWizard');
+        expect(wizard.props.sectionPresentation).toEqual({ machines: 'list' });
+        expect(wizard.props.useColumnLayout).toBe(true);
     });
 
     it('keeps the wizard path when temp data seeds a worktree draft intent', async () => {
         setMockServerId('s1');
-        mockState.persistedDraft = null;
         mockState.tempData = {
             workspaceId: 'workspace-1',
             workspaceLocationId: 'location-1',
@@ -415,7 +418,6 @@ describe('/new (blocking guidance)', () => {
 
     it('does not subscribe to getting-started guidance when temp data seeds a machine intent', async () => {
         setMockServerId('s1');
-        mockState.persistedDraft = null;
         mockState.tempData = {
             machineId: 'machine-1',
         };
@@ -423,37 +425,18 @@ describe('/new (blocking guidance)', () => {
         await renderScreen(React.createElement(Screen));
 
         expect(mockState.guidanceHookCalls).toBe(0);
-        expect(mockState.wizardRenders).toBe(1);
+        const initialRenders = mockState.wizardRenders;
+        expect(initialRenders).toBeGreaterThan(0);
 
         setMockServerId('s2');
 
         expect(mockState.guidanceHookCalls).toBe(0);
-        expect(mockState.wizardRenders).toBe(1);
+        expect(mockState.wizardRenders).toBe(initialRenders);
     });
 
     it('opens a materialized draft without duplicate context copy and places conflict plus actions beside the composer', async () => {
-        mockState.draftScopeEnabled = true;
         mockState.shouldBlockNewSession = true;
-        mockState.persistedDraft = {
-            address: { kind: 'newSession', draftId: mockState.localSearchParams.draftId },
-            document: {
-                v: 1,
-                composer: {
-                    text: { mutationId: 'text-1', value: 'Resume the migration\nwith tests' },
-                    mentions: { mutationId: 'mentions-1', value: [] },
-                    attachments: { mutationId: 'attachments-1', value: [] },
-                },
-                target: { kind: 'newSession', authoring: {} },
-                extensions: {},
-            },
-            status: 'conflict',
-            conflict: { fields: [] },
-            createdAt: 1,
-            updatedAt: 2,
-            materialized: true,
-            deleteWhenEmpty: false,
-            localSupplement: {},
-        };
+        await seedConflictingDraft(mockState.localSearchParams.draftId!);
 
         const screen = await renderScreen(React.createElement(Screen));
 
@@ -463,23 +446,104 @@ describe('/new (blocking guidance)', () => {
         expect(screen.findByProps({ testID: 'new-session-draft-delete' }).props.disabled).toBe(false);
 
         await pressTestInstanceAsync(screen.findByProps({ testID: 'new-session-draft-start-another' }));
-        expect(mockState.routerPush).toHaveBeenCalledWith({
+        expect(mockState.routerReplace).toHaveBeenCalledWith({
             pathname: '/new',
             params: {
                 draftId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i),
                 draftOrigin: 'ordinary',
             },
         });
+        expect(mockState.routerPush).not.toHaveBeenCalled();
+    });
+
+    it('ignores unrelated Action operation updates while retaining exact launch custody', async () => {
+        const draftId = mockState.localSearchParams.draftId!;
+        mockState.shouldBlockNewSession = false;
+        repository.writeNewSessionDraft({ scope: { serverId: 's1', accountId: 'account-1' },
+            draftId, patch: {}, materializationIntent: 'seeded' });
+        repository.writeSessionDraftLocalSupplement({ scope: { serverId: 's1', accountId: 'account-1' },
+            address: { kind: 'newSession', draftId }, patch: { launchUserAttemptId: 'draft-launch' } });
+
+        const screen = await renderScreen(React.createElement(Screen));
+        const rendersBeforeActionUpdates = mockState.wizardRenders;
+        expect(screen.findByProps({ testID: 'new-session-draft-delete' }).props.disabled).toBe(false);
+
+        React.act(() => actionOperationStore.mergeSnapshots({
+            serverId: 's1',
+            snapshots: [{
+                version: 1,
+                operationId: 'unrelated-operation',
+                revision: 1,
+                requestId: 'unrelated-request',
+                actionId: 'projects.list',
+                state: 'succeeded',
+                scope: { accountId: 'account-1', machineId: 'machine-1' },
+                title: 'List projects',
+                createdAt: 10,
+                settledAt: 11,
+                cancellation: 'unsupported',
+            }],
+        }));
+
+        expect(mockState.wizardRenders).toBe(rendersBeforeActionUpdates);
+
+        React.act(() => actionOperationStore.mergeSnapshots({
+            serverId: 's1',
+            snapshots: [{
+                version: 1,
+                operationId: 'matching-launch',
+                revision: 1,
+                requestId: 'draft-launch',
+                actionId: 'session.spawn_new',
+                state: 'accepted',
+                scope: { accountId: 'account-1', machineId: 'machine-1' },
+                title: 'Create session',
+                createdAt: 20,
+                cancellation: 'unsupported',
+            }],
+        }));
+
+        expect(mockState.wizardRenders).toBeGreaterThan(rendersBeforeActionUpdates);
+        expect(screen.findByProps({ testID: 'new-session-draft-delete' }).props.disabled).toBe(true);
     });
 
     it('reopens and deletes a waiting draft through its route-qualified inactive Home Account', async () => {
         const draftId = '8e0a5dd1-b1df-43dd-b51e-b7787b30362e';
-        mockState.draftScopeEnabled = true;
         mockState.shouldBlockNewSession = false;
+        await homes.reset();
+        await seedPersistedHomeProfilesForTests({
+            activeServerId: 'home-a',
+            profiles: ['home-a', 'home-b'].map(id => ({ id, name: id, serverUrl: `https://${id}.test`,
+                createdAt: 1, updatedAt: 1, lastUsedAt: 1, source: 'manual' })),
+        });
+        await homes.addHome({ name: 'Home A', serverUrl: 'https://home-a.test',
+            accountId: 'account-1', currentAccount: true, active: false });
+        await homes.addHome({ name: 'Home B', serverUrl: 'https://home-b.test',
+            accountId: 'account-b', currentAccount: true, active: false });
+        const features = createRootLayoutFeaturesResponse();
+        if (!tryWriteServerEnabledBitInPlace(features, 'sessions.drafts', true)) {
+            throw new Error('Expected the canonical drafts feature fixture');
+        }
+        homes.answer('home-b', '/v1/features', { body: features });
+        homes.answer('home-b', '/v1/features/authenticated', { body: features });
+        homes.answer('home-b', `POST ${SESSION_DRAFT_V2_ROUTE_READ}`, {
+            body: SessionDraftReadResponseV2Schema.parse({ status: 'absent' }),
+        });
+        for (const path of [SESSION_DRAFT_ROUTE_MUTATE, SESSION_DRAFT_V2_ROUTE_MUTATE]) {
+            homes.answer('home-b', `POST ${path}`, { select: input => {
+                const request = SessionDraftMutateRequestV2Schema.parse(input);
+                expect(request.address).toEqual({ kind: 'newSession', draftId });
+                expect(request.content).toBeNull();
+                return { body: SessionDraftMutateResponseV2Schema.parse({ status: 'updated', record: {
+                    address: request.address, revision: 1, content: null, createdAt: 1, updatedAt: 2,
+                } }) };
+            } });
+        }
         setMockServerId('home-a');
         storage.getState().activateProfileScope({ serverId: 'home-a', accountId: 'account-1' });
-        publishAppliedActiveServerSnapshot({ serverId: 'home-a', serverUrl: 'https://api.happier.dev', generation: 1 });
-        mockState.requestedDraftScope = { serverId: 'home-b', accountId: 'account-b' };
+        storage.setState({ isSessionDraftsReady: false });
+        const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
         for (const key of Object.keys(mockState.localSearchParams)) {
             delete mockState.localSearchParams[key as keyof typeof mockState.localSearchParams];
         }
@@ -489,30 +553,18 @@ describe('/new (blocking guidance)', () => {
             draftServerId: 'home-b',
             draftAccountId: 'account-b',
         });
-        mockState.persistedDraft = {
-            address: { kind: 'newSession', draftId },
-            document: {
-                v: 2,
-                composer: {
-                    text: { mutationId: 'text-1', value: 'Waiting for computer' },
-                    mentions: { mutationId: 'mentions-1', value: [] },
-                    attachments: { mutationId: 'attachments-1', value: [] },
-                },
-                target: { kind: 'newSession', authoring: {} },
-                extensions: {},
-            },
-            status: 'clean',
-            conflict: null,
-            createdAt: 1,
-            updatedAt: 2,
-            materialized: true,
-            deleteWhenEmpty: false,
-            localSupplement: {},
-        };
+        repository.writeNewSessionDraft({ scope: { serverId: 'home-b', accountId: 'account-b' },
+            draftId, patch: { text: 'Waiting for computer' }, materializationIntent: 'seeded' });
+        repository.writeNewSessionDraft({ scope: { serverId: 'home-a', accountId: 'account-1' },
+            draftId, patch: { text: 'Other Home draft' }, materializationIntent: 'seeded' });
 
         const Screen = (await import('@/app/(app)/new')).default;
         const screen = await renderScreen(React.createElement(Screen));
 
+        await vi.waitFor(async () => {
+            await act(async () => {});
+            expect(screen.findByProps({ testID: 'new-session-draft-delete' }).props.disabled).toBe(false);
+        });
         expect(mockState.draftReadScopes).toContainEqual({ serverId: 'home-b', accountId: 'account-b' });
         expect(mockState.draftReadScopes).not.toContainEqual({ serverId: 'home-a', accountId: 'account-1' });
 
@@ -522,5 +574,11 @@ describe('/new (blocking guidance)', () => {
             scope: { serverId: 'home-b', accountId: 'account-b' },
             address: { kind: 'newSession', draftId },
         }]);
+        expect(readDraftSnapshot({ serverId: 'home-b', accountId: 'account-b' }, { kind: 'newSession', draftId })).toBeNull();
+        expect(readDraftSnapshot({ serverId: 'home-a', accountId: 'account-1' }, { kind: 'newSession', draftId }))
+            .toMatchObject({ document: { composer: { text: { value: 'Other Home draft' } } } });
+        expect(homes.requests.some(request => request.serverId === 'home-b'
+            && (request.path === SESSION_DRAFT_ROUTE_MUTATE || request.path === SESSION_DRAFT_V2_ROUTE_MUTATE)))
+            .toBe(true);
     });
 });

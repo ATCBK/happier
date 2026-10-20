@@ -509,7 +509,7 @@ describe('createVoiceSessionLifecycleController', () => {
         const applyOutputFocusState = controller.setOutputFocusState;
         if (!applyOutputFocusState) throw new Error('voice_output_focus_owner_missing');
         await expect(applyOutputFocusState('fallback', 'active')).resolves.toBe('unsupported');
-        expect(active.stop).toHaveBeenCalledWith({ sessionId: 'session-1' });
+        expect(active.stop).toHaveBeenCalledWith({ sessionId: 'session-1', signal: expect.any(AbortSignal) });
     });
 
     it('does not stop a same-session replacement after delayed unsupported output focus', async () => {
@@ -645,7 +645,7 @@ describe('createVoiceSessionLifecycleController', () => {
             canStop: true,
         });
         await expect(apply).resolves.toBe('unsupported');
-        expect(active.stop).toHaveBeenCalledWith({ sessionId: 'session-1' });
+        expect(active.stop).toHaveBeenCalledWith({ sessionId: 'session-1', signal: expect.any(AbortSignal) });
     });
     it('does not republish a pending switch after dispose', async () => {
         const fixture = await createActualLifecycle();
@@ -1688,7 +1688,7 @@ describe('createVoiceSessionLifecycleController', () => {
             });
 
             await controller.stop('stale-session');
-            expect(replacement.stop).toHaveBeenCalledWith({ sessionId });
+            expect(replacement.stop).toHaveBeenCalledWith({ sessionId, signal: expect.any(AbortSignal) });
             expect(controller.getSnapshot().status).toBe('disconnected');
         } finally {
             releaseRetiredStop.resolve();

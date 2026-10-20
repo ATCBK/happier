@@ -28,6 +28,10 @@ export const installReviewSections = {
     compatibility: 'Compatibility and updates',
     none: 'None declared',
     scope: ({ scope }: { scope: string }) => `Scope: ${scope}`,
+    networkAccess: ({ methods, targets }: { methods: string; targets: string }) => `Can send ${methods} requests to ${targets}`,
+    networkAccessAnyMethod: ({ targets }: { targets: string }) => `Can send requests to ${targets}`,
+    networkTargetHostSuffix: ({ suffix }: { suffix: string }) => `any host under ${suffix}`,
+    networkPrivate: ({ line }: { line: string }) => `${line} (private networks included)`,
     developmentPath: ({ locator }: { locator: string }) => `${locator} · development`,
     publisherUnverified: ({ displayName, id }: { displayName: string; id: string }) => `${displayName} · ${id} · unverified`,
     integrityBasis: {
@@ -58,6 +62,7 @@ export const installReviewSections = {
     credentialRequestFiles: ({ files }: { files: string }) => `Files: ${files}`,
     realm: { web: 'web', ios: 'iOS', android: 'Android', daemon: 'daemon' },
     phase: { settings: 'settings', prepare: 'preparation', connection: 'connection', speech: 'speech' },
+    evidenceLabel: { integrity: 'Integrity', signature: 'Signature', provenance: 'Provenance', curation: 'Catalog review', happier: 'Happier version', publisher: 'Publisher' },
     runtimeApi: ({ version }: { version: number }) => `Runtime API ${version}`,
     source: ({ kind, locator }: { kind: string; locator: string }) => `${kind}: ${locator}`,
     sourceKind: { path: 'Local path', archive: 'Archive', npm: 'npm package' },

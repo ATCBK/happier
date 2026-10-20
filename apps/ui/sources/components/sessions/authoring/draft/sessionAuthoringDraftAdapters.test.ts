@@ -22,12 +22,14 @@ import {
     applySessionServerStartSpawnDraftEdits,
     buildPersistedNewSessionDraftFromAuthoringDraft,
     buildSessionSpawnNewInputV2FromAuthoringDraft,
+    buildExecutableModelParticipantSelectionFromAuthoringDraft,
     buildManagedAcquireAgentStartV1FromAuthoringDraft,
     buildNewSessionTempDataFromAuthoringDraft,
     hydrateSessionAuthoringDraftFromAutomationTemplate,
 } from '@/components/sessions/authoring/draft/sessionAuthoringDraftAdapters';
 import { decodeAutomationTemplate } from '@/sync/domains/automations/automationTemplateCodec';
 import type { NewSessionAutomationDraft } from '@/sync/domains/automations/automationDraft';
+import { PluginUiJsonObjectV1Schema } from '@happier-dev/protocol/plugins/ui';
 
 function modelSelection(
     agentTargetKey: string,
@@ -88,6 +90,82 @@ function intervalAutomationDraft(params: Readonly<{
 }
 
 describe('sessionAuthoringDraftAdapters', () => {
+    it('previews an executable model choice through ordinary authoring without prompt or creation identity', () => {
+        const teamCredentialBindings = [{ v: 1, slot: { kind: 'provider_model' },
+            resourceId: 'review-team-credential', expectedResourceRevision: 7, deliveryMode: 'brokered', teamId: 'team-a',
+        }] satisfies NonNullable<SessionAuthoringDraft['teamCredentialBindings']>;
+        const draft = { ...buildNewSessionAuthoringDraftFromTempData({
+            prompt: 'This stays an unsent authoring draft', directory: '/workspace',
+            executionTarget: { kind: 'machine', target: { serverId: 'home-a', machineId: 'machine-a' } },
+            agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+            permissionMode: 'read-only',
+            primaryTeamId: 'team-a',
+        }), teamCredentialBindings, modelSelection: modelSelection('agent:happier.agent.codex/codex', 'review-model', 456) };
+        const params = { draft, permissionMode: 'read-only', configurationUpdatedAtMs: 123 } as const;
+        const choice = buildExecutableModelParticipantSelectionFromAuthoringDraft(params);
+        expect(choice).toMatchObject({ kind: 'model', launch: {
+            executionTarget: { serverId: 'home-a', machineId: 'machine-a' },
+            directory: { kind: 'path', path: '/workspace' }, agentTarget: draft.agentTarget,
+            permissionMode: 'read-only', configuration: { permissionIntent: { value: 'read-only', updatedAtMs: 123 } },
+            modelSelection: draft.modelSelection,
+            primaryTeamId: 'team-a', teamCredentialBindings,
+        } });
+        expect(choice).not.toHaveProperty('launch.initialInput');
+        expect(choice).not.toHaveProperty('launch.creationKey');
+        expect(choice).not.toHaveProperty('launch.discussionParticipant');
+        expect(draft.prompt).toBe('This stays an unsent authoring draft');
+    });
+
+    it('round-trips the selected Team context and its explicit clear through persisted drafts', () => {
+        for (const primaryTeamId of ['team-review', null, undefined]) {
+            const draft = buildNewSessionAuthoringDraftFromTempData({
+                prompt: 'Review this project',
+                directory: '/workspace',
+                executionTarget: { kind: 'machine', target: { serverId: 'server-1', machineId: 'machine-1' } },
+                agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } },
+                primaryTeamId,
+            });
+            expect(draft.primaryTeamId).toBe(primaryTeamId);
+
+            const persisted = buildPersistedNewSessionDraftFromAuthoringDraft({
+                draft, machineId: 'machine-1', selectedSecretId: null,
+                selectedSecretIdByProfileIdByEnvVarName: null,
+                sessionOnlySecretValueEncByProfileIdByEnvVarName: null,
+                backendNewSessionOptionStateByTargetKey: null,
+                updatedAt: 1,
+            });
+
+            if (primaryTeamId === undefined) expect(persisted).not.toHaveProperty('primaryTeamId');
+            else expect(persisted).toHaveProperty('primaryTeamId', primaryTeamId);
+            expect(buildNewSessionAuthoringDraftFromPersistedDraft(persisted).primaryTeamId).toBe(primaryTeamId);
+        }
+    });
+
+    it('creates configuration only for deliberate option edits and preserves native resume custody', () => {
+        const seed = SessionServerStartSpawnDraftV1Schema.parse({
+            executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
+            directory: { kind: 'path', path: '/repo' },
+            agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } },
+            permissionMode: 'read-only', agentModeId: 'plan',
+            modelSelection: modelSelection('agent:happier.agent.claude/claude', 'sonnet'),
+        });
+        expect(applySessionServerStartSpawnDraftEdits({ draft: seed, edits: {}, configurationUpdatedAtMs: 99 }))
+            .toEqual(seed);
+        const overrides = buildAcpConfigOptionOverridesV1({ updatedAt: 12, overrides: { reasoning: { value: 'high', updatedAt: 12 } } });
+        const edited = applySessionServerStartSpawnDraftEdits({ draft: seed,
+            edits: { sessionConfigOptionOverrides: overrides }, configurationUpdatedAtMs: 99 });
+        expect(edited.configuration).toEqual({
+            mode: { value: 'plan', updatedAtMs: 99 },
+            model: { value: 'sonnet', updatedAtMs: 456 },
+            permissionIntent: { value: 'read-only', updatedAtMs: 99 },
+            options: { reasoning: { value: 'high', updatedAtMs: 12 } },
+        });
+        const resumed = { ...edited, configuration: { ...edited.configuration!,
+            providerSessionResume: { kind: 'provider_session.v1' as const, providerSessionId: 'native' } } };
+        expect(applySessionServerStartSpawnDraftEdits({ draft: resumed,
+            edits: { sessionConfigOptionOverrides: null }, configurationUpdatedAtMs: 100 }).configuration)
+            .toEqual({ ...resumed.configuration, options: {} });
+    });
     it('preserves every unedited strict recipe field while authoring Agent, directory and tool or folder edits', () => {
         const seed = SessionServerStartSpawnDraftV1Schema.parse({
             executionTarget: { serverId: 'server-1', machineId: 'machine-1' },
@@ -125,6 +203,17 @@ describe('sessionAuthoringDraftAdapters', () => {
         expect(restricted).toEqual({ ...edited, allowedTools: [], unlistedTools: 'ask',
             organizationPlacement: { folderId: null, tagIds: ['mail'] }, permissionMode: 'default',
             configuration: { ...edited.configuration, permissionIntent: { value: 'default', updatedAtMs: 100 } } });
+        const cleared = applySessionServerStartSpawnDraftEdits({
+            draft: restricted,
+            edits: { profileId: undefined, modelSelection: undefined, agentModeId: undefined,
+                capabilitySelection: undefined, connectedServices: undefined, allowedTools: undefined, unlistedTools: undefined },
+            configurationUpdatedAtMs: 101,
+        });
+        expect(PluginUiJsonObjectV1Schema.safeParse(cleared).success).toBe(true);
+        for (const field of ['profileId', 'modelSelection', 'agentModeId', 'capabilitySelection', 'connectedServices', 'allowedTools', 'unlistedTools']) {
+            expect(cleared).not.toHaveProperty(field);
+        }
+        expect(cleared.configuration).toMatchObject({ mode: { value: null }, model: { value: null } });
     });
 
     it('preserves MCP and skill session overrides through persisted drafts and temporary handoffs', () => {
@@ -203,6 +292,11 @@ describe('sessionAuthoringDraftAdapters', () => {
             draft, creationKey: 'initial-trigger-creation', permissionMode: 'default', configurationUpdatedAtMs: 1,
             initialMessage: 'Start here',
         })).toMatchObject({ initialInput: { text: 'Start here' }, initialTriggers });
+        const preview = buildExecutableModelParticipantSelectionFromAuthoringDraft({
+            draft, permissionMode: 'default', configurationUpdatedAtMs: 1,
+        });
+        expect(preview.launch).not.toHaveProperty('initialTriggers');
+        expect(preview.launch).not.toHaveProperty('initialInput');
     });
     it('keeps execution, organization, and Agent selection in the canonical authoring draft', () => {
         const draft = buildNewSessionAuthoringDraft({
@@ -653,6 +747,20 @@ describe('sessionAuthoringDraftAdapters', () => {
             v: 1, slot: { kind: 'provider_model' }, resourceId: 'resource-1', expectedResourceRevision: 7,
             deliveryMode: 'brokered',
         }]);
+
+        for (const teamCredentialBindings of [draft.teamCredentialBindings, [], undefined]) {
+            const persisted = buildPersistedNewSessionDraftFromAuthoringDraft({
+                draft: { ...draft, teamCredentialBindings },
+                machineId: 'machine-1', selectedSecretId: null,
+                selectedSecretIdByProfileIdByEnvVarName: null,
+                sessionOnlySecretValueEncByProfileIdByEnvVarName: null,
+                backendNewSessionOptionStateByTargetKey: null,
+                updatedAt: 1,
+            });
+            if (teamCredentialBindings === undefined) expect(persisted).not.toHaveProperty('teamCredentialBindings');
+            else expect(persisted).toHaveProperty('teamCredentialBindings', teamCredentialBindings);
+            expect(buildNewSessionAuthoringDraftFromPersistedDraft(persisted).teamCredentialBindings).toEqual(teamCredentialBindings);
+        }
     });
 
     it('maps authored resume and Windows launch intent through the strict V2 nested owners', () => {

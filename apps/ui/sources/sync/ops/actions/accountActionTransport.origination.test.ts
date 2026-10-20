@@ -61,6 +61,7 @@ describe('private Account Action origination', () => {
                 access: { custodian: { accountId: custodianAccountId, displayName: custodianAccountId }, role: 'use', resourceMode: 'plain', accessState: 'ready' } }]);
             expect(new Headers(init?.headers).get('Authorization')).toBe(`Bearer ${token}`);
             const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(JSON.parse(String(init?.body)));
+            if (request.envelope.v !== 1) throw new Error('Expected the keyless Plain Account envelope');
             expect(request.envelope.input).toEqual(input);
             expect(request.envelope.target).toEqual({ kind: 'machine', machineId: 'machine', project: { machineId: 'machine', directory: '/repo' } });
             if (path.endsWith('/execution-authorization')) return Response.json(ExternalActionExecutionAuthorizationV1Schema.parse({
@@ -81,7 +82,7 @@ describe('private Account Action origination', () => {
         onTestFinished(resetRuntimeFetch);
         const account = await captureLazyActionAccountContext(serverId);
         onTestFinished(() => account.dispose());
-        const result = await createUiAccountAction({ account })({ actionId: 'session.agent.transition', input, context: {
+        const result = await createUiAccountAction({ account })({ actionId: 'session.agent.transition', input: { ...input, optional: undefined }, context: {
             serverId, runtimeAccountId: account.accountId, externalActionTarget: { kind: 'machine', machineId: 'machine', project: { machineId: 'machine', directory: '/repo' } },
             actionRequestId: 'request', actionCaller: invocation.caller, surface: invocation.surface, authority: invocation.authority,
             callerPermissionMode: invocation.callerPermissionMode, callerInputConstraints: invocation.callerInputConstraints,

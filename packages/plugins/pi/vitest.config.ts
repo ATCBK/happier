@@ -1,6 +1,6 @@
 import { resolve } from 'node:path';
 import { configDefaults, defineConfig } from 'vitest/config';
-import { createWorkspacePackageSourcesPlugin } from '../../../scripts/testing/vitestWorkspacePackageResolution';
+import { createWorkspaceHostSourceAlias, createWorkspacePackageSourcesPlugin } from '../../../scripts/testing/vitestWorkspacePackageResolution';
 import { resolveVitestWorkers } from '../../../scripts/testing/vitestWorkers';
 
 export default defineConfig({
@@ -9,6 +9,9 @@ export default defineConfig({
     { packageName: '@happier-dev/agents', packageSourceRoot: resolve(__dirname, '../../agents/src') },
     { packageName: '@happier-dev/protocol', packageSourceRoot: resolve(__dirname, '../../protocol/src') },
   ])],
+  resolve: { alias: [createWorkspaceHostSourceAlias(
+    resolve(__dirname, '../../..'), resolve(__dirname, '../../../apps/cli/src'),
+  )] },
   test: { ...resolveVitestWorkers(), environment: 'node',
     exclude: [...configDefaults.exclude, 'src/agent/tools/mcpToolPolicy.contract.test.ts'],
   },

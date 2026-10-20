@@ -218,31 +218,46 @@ browse a Session does not create an unread row, Follow, Inbox item, Activity
 entry, badge, local notification, or push event. Follow and assignment are
 personal choices with their own settings.
 
-### Session discussions (0.3 development)
+### Home Discussions (0.3 development)
 
-When both session sharing and `sessions.conversations` are enabled, a
-current Session reader can read its human discussions. People with edit access
-can start discussions and post messages; discussion creators can rename or
-archive their own active discussions while Session managers can also restore
-them. Archived discussions remain readable. In current 0.3 development source
+The in-progress 0.3 refactor makes Discussions independent Home resources,
+with their own owner and grants. A Session can be an optional source anchor;
+its readers do not automatically become Discussion readers. Invited people
+receive direct resource grants, and Team/Group grants expand the audience
+explicitly. View reads, edit posts, and owner/admin manages the Discussion.
+Archived Discussions remain readable. In current 0.3 development source
 the Conversations feature is on by default, with
 `HAPPIER_FEATURE_SESSIONS_CONVERSATIONS__ENABLED=0` as the operator opt-out
 ([feature flags](/extras/feature-flags)). It still resolves false whenever
 Session collaboration is absent, disabled or malformed, and a declared client
 capability alone does not enable it. The feature has not shipped in a public
-release.
+release, and package/live validation of the refactor is still pending.
 
-Discussion access always follows the Session's current direct, Team, or Group
-access. A mention does not grant access, and removing someone's final Session
-grant removes their discussion access as well. Unread position is private to
-each personally tracked Account; fetching a page does not mark it read.
+A mention grants no access. Removing the final applicable Discussion grant
+removes reachability; removing a Session grant does not remove an independent
+Discussion grant. Leave removes only your direct invitation, so inherited
+Team/Group access can remain. The owner must transfer ownership or archive.
+Deleting or archiving an anchored Session preserves the Discussion.
+Unread position is private to each admitted reader with an established cursor;
+fetching a page does not mark it read.
+
+Development Doc comments and edit proposals use this same Discussion. Its
+plaintext passage target carries only the Doc reference and revision; the quote
+and proposal text stay inside the message content, encrypted in E2EE mode.
+Discussion access alone does not grant access to the source Doc. See
+[passage comments and proposed edits](/organize/artifacts#passage-comments-and-proposed-edits-in-development)
+for the Actions and person-only acceptance contract. The Doc selection flow is
+still being built.
 
 In E2EE mode, titles and message bodies are encrypted on the client. The sync
 service still sees the identifiers, ordering, authorship, mentioned Account
 IDs, timestamps, archive state, read cursor, and ciphertext size needed to
-synchronize and present the feature. The feature fails closed if the Session
-key is not ready or stored content does not match the Session's encryption
-mode.
+synchronize and present the feature. New Discussions use their own resource
+key and mode; a missing key or mismatched envelope fails closed. Earlier
+Session-owned Discussion data is an undeployed 0.3 intermediate. Its bytes are
+preserved without a rekey or draft migration: plain rows convert, while encrypted
+rows without recipient keys remain unavailable. Old Session-addressed drafts
+remain stored and are not read by the new client.
 
 Human posts retain the authenticated Account that submitted them. Posts made
 through an Agent retain the actual admitted runtime Account plus explicit Agent
@@ -294,10 +309,12 @@ capability, and losing the final applicable access clears the assignment. A
 read-only collaborator can see the assignee but cannot change it unless their
 current Session capabilities allow assignment.
 
-Assignment can opt the assignee into Follow with important notifications through
-their own settings. An explicit per-Session Follow choice still wins, assigning
-yourself does not send a redundant self-notification, and choosing **No one**
-clears the assignment.
+The assignee's default Follow rule can select future activity at Important,
+configured in **Settings → Coordination**. Assignment does not create an
+individual Follow subscription or read-state baseline. An explicit per-session
+Follow choice still wins, assigning yourself does not send a redundant
+self-notification, and choosing **No one** clears the assignment. See
+[Following a session](/organize/following-sessions) for the levels and defaults.
 
 ### See who is viewing (0.3 development)
 
@@ -358,6 +375,8 @@ When you create or regenerate a public link, Happier can configure:
 - **expiration**: 7 days, 30 days, or never
 - **max uses**: unlimited, 10, or 50
 - **consent requirement**: whether the viewer must explicitly consent before opening
+
+For Session public links, consent-required opens record the viewer's IP address and user agent after acceptance. With consent disabled, access records omit both fields. Recorded IPs follow the Home's [trusted proxy configuration](/self-hosting/env#networking--reverse-proxy), shared with API rate limits.
 
 In current 0.3 development source, Session public links can also use a
 **no-network visual view** (`networkOff`). The choice narrows that public
@@ -450,7 +469,9 @@ The important difference is where each kind of attention appears:
 ### Session-to-Session Follow context (0.3 development)
 
 An Agent Session can follow another authorized Session and receive bounded
-optional context from it during a normal turn. The source and destination keep
+context from it on its next turn or request a wake, according to its Follow
+policy. See [Following a session](/organize/following-sessions) for the shared
+levels and delivery limits. The source and destination keep
 their ordinary Session identities and access rules; Follow does not create a
 second Session type or grant access. Before each injection, Happier rechecks the
 current Follow edge and the source/destination audience relationship. It

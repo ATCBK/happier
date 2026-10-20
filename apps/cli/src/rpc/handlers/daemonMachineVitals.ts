@@ -19,19 +19,15 @@ export type DaemonMachineVitalsRoutes = Readonly<{
     readAttention?: () => MachineResourceAttentionV1 | undefined;
 }>;
 
-/** Overview-only facts never hitch a ride on a concurrent summary watch. */
+/** Independent Overview extras are filtered; a memory observation stays whole. */
 function sampleForView(sample: MachineVitalsSampleV1, view: 'summary' | 'overview'): MachineVitalsSampleV1 {
     if (view === 'overview') return sample;
     const { gpu: _gpu, battery: _battery, thermal: _thermal, sharedMemory: _sharedMemory, ...base } = sample;
-    const memory = base.memory.reported ? (() => {
-        const { composition: _composition, ...memory } = base.memory;
-        return memory;
-    })() : base.memory;
     const limits = base.limits ? (() => {
         const { inotify: _inotify, ...limits } = base.limits;
         return limits;
     })() : undefined;
-    return { ...base, memory, ...(limits ? { limits } : {}) };
+    return { ...base, ...(limits ? { limits } : {}) };
 }
 
 function fiveMinuteSeries(sampler: MachineVitalsSampler): MachineVitalsSnapshotV1['series5m'] {
@@ -57,7 +53,8 @@ function fiveMinuteSeries(sampler: MachineVitalsSampler): MachineVitalsSnapshotV
     }
     let previous: MachineVitalsSampleV1 | undefined;
     for (const sample of live) {
-        if (previous && sample.sampledAt - previous.sampledAt > 2 * sample.intervalMs) {
+        // Opening/closing a watched surface changes cadence; only missed samples at the slower cadence are a gap.
+        if (previous && sample.sampledAt - previous.sampledAt > 2 * Math.max(previous.intervalMs, sample.intervalMs)) {
             add(previous.sampledAt + previous.intervalMs, null, null, null, null);
         }
         add(sample.sampledAt, sample.cpu.reported ? sample.cpu.busyPct : null,

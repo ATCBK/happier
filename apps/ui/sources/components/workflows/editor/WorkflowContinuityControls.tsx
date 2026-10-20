@@ -75,6 +75,7 @@ export function formatWorkflowConversationLabel(params: Readonly<{
         case 'shared_run': return t('workflows.conversation.sharedRun');
         case 'fresh': return t('workflows.conversation.fresh');
         case 'origin_session': return t('workflows.page.inspector.originSession');
+        case 'input': return t('workflows.input.workflowInput', { name: conversation.name });
         case 'from_step': return t('workflows.conversation.fromStep', { block: blockLabelOf(params.draft, conversation.producer.blockId) });
         case 'existing_session':
             return t('workflows.page.inspector.continues', {

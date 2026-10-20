@@ -86,7 +86,7 @@ export type TriageEntrySessionDeliveryOutcomeV1 =
     | 'notRequested'
     /** A delivery was requested and had neither text nor a placeable attachment. */
     | 'none'
-    | PluginActionResultById['session.message.send']['status'];
+    | Extract<PluginActionResultById['session.message.send'], Readonly<{ status: string }>>['status'];
 
 /** Builds the one structured input shared by creation and existing-Session delivery. */
 export function planEntrySessionInput(
@@ -141,7 +141,9 @@ export async function deliverEntrySessionInput(input: Readonly<{
         // The Message-send owner's own verdict, carried out unchanged. Collapsing
         // `rejected` into success is the defect this whole phase exists to fix,
         // so there is deliberately no default arm to collapse it into.
-        return result.status;
+        // This invocation addresses one exact Session. A fanout answer cannot
+        // establish what happened to that input, so retain its retry identity.
+        return 'status' in result ? result.status : 'outcomeUnknown';
     } catch {
         // The call crossed the host boundary and never answered, so whether the
         // input was admitted is genuinely unknown. Saying so is the honest

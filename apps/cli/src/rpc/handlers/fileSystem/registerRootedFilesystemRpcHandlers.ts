@@ -1,6 +1,6 @@
 import { dirname } from 'node:path';
 
-import type { ActionId } from '@happier-dev/protocol/actions';
+import type { FilesystemActionId } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import type { RpcHandlerRegistrar } from '@/api/rpc/types';
 import type { RpcActionExecutor } from '../_actionDispatchAdapter';
@@ -12,7 +12,7 @@ import { resolveFilesystemMutationActionExecutor, type FilesystemMutationActionI
 export function registerRootedFilesystemRpcHandlers(params: Readonly<{
   rpcHandlerManager: RpcHandlerRegistrar;
   workingDirectory: string;
-  actionIds: readonly ActionId[];
+  actionIds: readonly FilesystemActionId[];
   actionExecutor?: RpcActionExecutor;
   incumbentExecutor: RpcActionExecutor;
   mutationIngress?: FilesystemMutationActionIngress;
@@ -20,7 +20,7 @@ export function registerRootedFilesystemRpcHandlers(params: Readonly<{
   const isRootless = (input: unknown): input is Record<string, unknown> =>
     input !== null && typeof input === 'object' && !Array.isArray(input) && !Object.hasOwn(input, 'rootPath');
 
-  registerActionSpecRpcHandlers({
+  registerActionSpecRpcHandlers<FilesystemActionId>({
     rpcHandlerManager: params.rpcHandlerManager,
     actionIds: params.actionIds,
     actionExecutor: params.actionExecutor,

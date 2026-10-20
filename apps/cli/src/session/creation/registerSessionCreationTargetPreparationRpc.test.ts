@@ -5,10 +5,30 @@ import { describe, expect, it } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SessionCreationTargetPreparationRequestV1Schema, SessionCreationTargetPreparationResultV1Schema } from '@happier-dev/protocol';
 import { RpcHandlerManager } from '@/api/rpc/RpcHandlerManager';
+import { deriveSessionCreationTagV1 } from '@happier-dev/protocol/sessions/creation/sessionCreationIdentityV1';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpcErrors';
 
 import { registerSessionCreationTargetPreparationRpc } from './registerSessionCreationTargetPreparationRpc';
 
 describe('registerSessionCreationTargetPreparationRpc', () => {
+  it('keeps materializing preparation private while permitting a shared directory read', async () => {
+    const rpc = new RpcHandlerManager({ scopePrefix: 'guest', encryptionMode: 'plain', logger() {} });
+    registerSessionCreationTargetPreparationRpc({ rpcHandlerManager: rpc });
+    const controller = new AbortController();
+    const machineAdmission = { actorAccountId: 'requester', custodianAccountId: 'owner', machineId: 'guest',
+      installationId: 'install', role: 'use', encryptionMode: 'plain' } as const;
+    const invoke = (input: unknown) => rpc.invokeLocal(RPC_METHODS.DAEMON_SESSION_CREATION_DIRECTORY_PREFLIGHT, input,
+      { signal: controller.signal, rpcContext: { machineAdmission } });
+    const sessionCreationTag = deriveSessionCreationTagV1({ callerCreationNamespace: 'owner', creationKey: 'managed' });
+    for (const input of [{ directory: { kind: 'managed' }, sessionCreationTag },
+      { directory: { kind: 'path', path: tmpdir() }, checkoutCreationDraft: { kind: 'git_worktree', displayName: 'private', baseRef: null } }]) {
+      await expect(invoke(input)).rejects.toMatchObject({ rpcErrorCode: RPC_ERROR_CODES.FORBIDDEN });
+    }
+    expect(await invoke({ directory: { kind: 'path', path: tmpdir() } })).toMatchObject({ ok: true, directoryCreationRequired: false });
+    expect(await rpc.invokeLocal(RPC_METHODS.DAEMON_SESSION_CREATION_PREPARE, { directory: { kind: 'managed' }, sessionCreationTag },
+      { rpcContext: { machineAdmission: { ...machineAdmission, actorAccountId: 'owner', role: 'manage' } } }))
+      .toMatchObject({ ok: true, directoryKind: 'managed' });
+  });
   it('binds the narrow preparation contract to the target daemon and forwards cancellation', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'happier-test-clean-preparation-'));
     const rpcHandlerManager = new RpcHandlerManager({ scopePrefix: 'target-machine', encryptionMode: 'plain', logger() {} });

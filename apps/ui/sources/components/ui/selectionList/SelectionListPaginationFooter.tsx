@@ -5,6 +5,7 @@ import { StyleSheet } from 'react-native-unistyles';
 import { ActivitySpinner } from '@/components/ui/feedback/ActivitySpinner';
 import { Item } from '@/components/ui/lists/Item';
 import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
 
 import { selectionListTestId } from './_shared';
 import type { SelectionListPagination } from './_types';
@@ -24,6 +25,16 @@ const styles = StyleSheet.create((theme) => ({
         gap: theme.space.s8,
     },
     statusText: {
+        color: theme.colors.text.secondary,
+    },
+    // A coverage or status sentence closing the rows: the rows' edge, meta type, like the in-list status lines.
+    edgeStatus: {
+        paddingHorizontal: theme.space.s16,
+        paddingVertical: theme.space.s8,
+        alignItems: 'flex-start',
+    },
+    edgeStatusText: {
+        ...Typography.variant('meta'),
         color: theme.colors.text.secondary,
     },
     error: {
@@ -103,26 +114,44 @@ export function SelectionListPaginationFooter(props: Readonly<{
 
     if (props.pagination.hasMore) {
         return wrapListboxSupplement(
-            <Item
-                testID={measureMode ? undefined : selectionListTestId(props.rootTestID, 'pagination', 'more')}
-                title={props.pagination.moreLabel}
-                onPress={props.pagination.onEndReached}
-                accessibilityLabel={props.pagination.moreLabel}
-                {...(identityProps ?? {})}
-            />,
+            <>
+                {props.pagination.moreNotice ? (
+                    <View
+                        testID={measureMode ? undefined : selectionListTestId(props.rootTestID, 'pagination', 'more-notice')}
+                        style={styles.edgeStatus}
+                        accessibilityRole={measureMode ? undefined : 'text'}
+                        accessibilityLiveRegion={measureMode ? undefined : 'polite'}
+                        {...(measureMode ? {} : ({ role: 'status', 'aria-live': 'polite' } as Record<string, unknown>))}
+                        {...(identityProps ?? {})}
+                    >
+                        <Text style={styles.edgeStatusText}>{props.pagination.moreNotice}</Text>
+                    </View>
+                ) : null}
+                <Item
+                    testID={measureMode ? undefined : selectionListTestId(props.rootTestID, 'pagination', 'more')}
+                    title={props.pagination.moreLabel}
+                    onPress={props.pagination.onEndReached}
+                    accessibilityLabel={props.pagination.moreLabel}
+                    {...(identityProps ?? {})}
+                />
+            </>,
         );
     }
+
+    // A list whose finish has nothing to say (an empty label) simply ends.
+    if (props.pagination.endReachedLabel === '') return null;
+    const edge = props.pagination.endReachedPlacement === 'edge';
 
     return wrapListboxSupplement(
         <View
             testID={measureMode ? undefined : selectionListTestId(props.rootTestID, 'pagination', 'end')}
-            style={styles.status}
+            style={edge ? styles.edgeStatus : styles.status}
             accessibilityRole={measureMode ? undefined : 'text'}
             accessibilityLiveRegion={measureMode ? undefined : 'polite'}
             {...(measureMode ? {} : ({ role: 'status', 'aria-live': 'polite' } as Record<string, unknown>))}
             {...(identityProps ?? {})}
         >
-            <Text style={styles.statusText}>{props.pagination.endReachedLabel}</Text>
+            <Text style={edge ? styles.edgeStatusText : styles.statusText}>{props.pagination.endReachedLabel}</Text>
         </View>
     );
 }

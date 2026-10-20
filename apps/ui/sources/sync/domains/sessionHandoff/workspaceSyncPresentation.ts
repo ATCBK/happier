@@ -54,6 +54,15 @@ export function readWorkspaceSyncErrorCode(error: unknown): string | null {
     return typeof code === 'string' && code.length > 0 ? code : null;
 }
 
+/**
+ * The refusal copy for a failed Workspace Sync Action: the daemon's typed code mapped through
+ * the one error presentation, or null when the code has none (the caller keeps its own fallback).
+ */
+export function presentWorkspaceSyncFailure(error: unknown): string | null {
+    const key = resolveWorkspaceSyncErrorTranslationKey(readWorkspaceSyncErrorCode(error));
+    return key ? t(key) : null;
+}
+
 export function resolveWorkspaceSyncModeTranslationKey(value: unknown): WorkspaceSyncModeTranslationKey | null {
     switch (value) {
         case 'copy_once': return 'workspaceSync.mode.copyOnce';
@@ -117,6 +126,8 @@ export function resolveWorkspaceSyncErrorTranslationKey(value: unknown): Workspa
         case 'workspace_sync_partial_route_blocked':
             return 'sessionHandoff.failure.partialLinked';
         case 'engine_problems':
+        case 'relationship_not_ready':
+        case 'workspace_root_in_use':
             return 'workspaceSync.error.needsAttention';
         default:
             return null;

@@ -188,7 +188,10 @@ describe('Protocol-owned Account Settings catalog', () => {
             scmCommitStrategy: protocol.scmCommitStrategy,
             transcriptGroupingMode: protocol.transcriptGroupingMode,
             futureWriterKey: protocol.futureWriterKey,
-            providerSettingsV1: protocol.providerSettingsV1,
         });
+        // The destination-first Provider importer retains the raw source;
+        // neither effective Settings reader may expose that retired carrier.
+        expect(protocol).not.toHaveProperty('providerSettingsV1');
+        expect(ui).not.toHaveProperty('providerSettingsV1');
     });
 });

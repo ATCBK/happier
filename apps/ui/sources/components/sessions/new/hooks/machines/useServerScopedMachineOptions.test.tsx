@@ -65,6 +65,19 @@ function createMachine(id: string): Machine {
 }
 
 describe('useServerScopedMachineOptions', () => {
+    it('publishes changed launch metadata without a consumer-owned field signature', async () => {
+        const captured: Array<ReturnType<typeof useServerScopedMachineOptions>> = [];
+        const row = createMachine('inventory-change');
+        const screen = await renderScreen(<Probe allowedServerIds={['server-a']} activeServerId="server-a"
+            activeMachines={[row]} onGroups={groups => captured.push(groups)} />);
+        for (const arch of ['arm64', 'x64', 'arm64']) {
+            const changed = { ...row, metadataVersion: row.metadataVersion + 1, metadata: { ...row.metadata!, arch } };
+            await screen.update(<Probe allowedServerIds={['server-a']} activeServerId="server-a"
+                activeMachines={[changed]} onGroups={groups => captured.push(groups)} />);
+            expect(captured.at(-1)?.[0]?.machines[0]?.metadata?.arch).toBe(arch);
+        }
+        await screen.unmount();
+    });
     it.each(['populated', 'empty'] as const)('keeps a hydrated %s Home inventory ready through a profile-alias refresh', async (inventoryKind) => {
         const identity = `srv_launch_refresh_${inventoryKind}`;
         const profile = await adoptHomeProfile({ descriptor: {

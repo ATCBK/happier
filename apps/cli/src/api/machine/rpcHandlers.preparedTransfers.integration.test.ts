@@ -16,7 +16,7 @@ it('serves an approved workspace export through registered prepared RPC phases a
   const lifecycle = createDirectTransferServerLifecycle({ bindPort: 0, listenerClasses: ['loopback_http'] });
   const manager = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger() {} });
   const registration = registerMachineRpcHandlers({ rpcHandlerManager: manager, handlers: {
-    spawnSession: async () => ({ type: 'error', errorCode: 'unknown', errorMessage: 'Unavailable in transfer test' }),
+    spawnSession: async () => ({ type: 'error', errorCode: 'UNEXPECTED', errorMessage: 'Unavailable in transfer test' }),
     stopSession: async () => true, requestShutdown() {},
     preparedMachineTransfer: { request: input => lifecycle.requestPreparedTransfer(input) },
   } });
@@ -77,7 +77,7 @@ it('writes and aborts the original prepared import through registered RPC phases
   const lifecycle = createDirectTransferServerLifecycle({ bindPort: 0, listenerClasses: ['loopback_http'] });
   const manager = new RpcHandlerManager({ scopePrefix: 'machine', encryptionMode: 'plain', logger() {} });
   const registration = registerMachineRpcHandlers({ rpcHandlerManager: manager, handlers: {
-    spawnSession: async () => ({ type: 'error', errorCode: 'unknown', errorMessage: 'Unavailable in transfer test' }),
+    spawnSession: async () => ({ type: 'error', errorCode: 'UNEXPECTED', errorMessage: 'Unavailable in transfer test' }),
     stopSession: async () => true, requestShutdown() {},
     preparedMachineTransfer: { request: lifecycle.requestPreparedTransfer },
   } });

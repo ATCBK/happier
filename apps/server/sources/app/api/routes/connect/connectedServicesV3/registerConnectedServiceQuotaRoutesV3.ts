@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import type { Fastify } from "../../../types";
 import { resolveApiHotEndpointRateLimit } from "@/app/api/utils/apiRateLimitCatalog";
@@ -51,14 +51,14 @@ export function registerConnectedServiceQuotaRoutesV3(app: Fastify): void {
                 serviceId: ConnectedServiceIdSchema,
                 profileId: ConnectedServiceProfileIdSchema,
             }),
-            body: z.object({
+            body: z.strictObject({
                 content: StoredJsonContentEnvelopeSchema,
                 metadata: z.object({
-                    fetchedAt: z.number().int().nonnegative(),
-                    staleAfterMs: z.number().int().min(1),
+                    fetchedAt: z.number().check(z.int(), z.nonnegative()),
+                    staleAfterMs: z.number().check(z.int(), z.minimum(1)),
                     status: z.enum(["ok", "unavailable", "estimated", "error"]),
                 }),
-            }).strict(),
+            }),
             response: {
                 200: z.object({ success: z.literal(true) }),
                 400: z.object({ error: z.literal("invalid-params") }),
@@ -125,10 +125,10 @@ export function registerConnectedServiceQuotaRoutesV3(app: Fastify): void {
                 200: z.object({
                     content: StoredJsonContentEnvelopeSchema,
                     metadata: z.object({
-                        fetchedAt: z.number().int().nonnegative(),
-                        staleAfterMs: z.number().int().nonnegative(),
+                        fetchedAt: z.number().check(z.int(), z.nonnegative()),
+                        staleAfterMs: z.number().check(z.int(), z.nonnegative()),
                         status: z.enum(["ok", "unavailable", "estimated", "error"]),
-                        refreshRequestedAt: z.number().int().nonnegative().optional(),
+                        refreshRequestedAt: z.optional(z.number().check(z.int(), z.nonnegative())),
                     }),
                 }),
                 404: z.union([NotFoundSchema, z.object({ error: z.literal("connect_quotas_not_found") })]),

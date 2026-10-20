@@ -20,6 +20,8 @@ import type {
  */
 export type SessionViewerSourceFacts = Readonly<{
   machineName: string | null;
+  /** Selected source identity, independent of whether its picture is currently available. */
+  targetTitle?: string | null;
   /** The person, not the Agent, holds input (the picture's ring says who drives). */
   personInControl: boolean;
   /**
@@ -100,24 +102,41 @@ export type SessionViewerController = Readonly<{
     facts: SessionViewerSourceFacts | null,
   ) => void;
   presence: SessionViewerPresenceStore;
-  /** How far the reading column yields to a settled floating viewer, per side. */
-  setReadingInset: (inset: Readonly<{ left: number; right: number }>) => void;
+  /**
+   * The docked desktop viewer would fit as a floating frame where it last rested (the host's own
+   * placement check). `viewer.float` is offered and admitted only while it does.
+   */
+  floatFits: boolean;
+  setFloatFits: (fits: boolean) => void;
+  /** How far the reading column and centred content yield to a settled floating viewer, per side. */
+  setReadingInset: (inset: SessionViewerReadingInset) => void;
 }>;
 
-export const NO_SESSION_VIEWER_INSET = Object.freeze({ left: 0, right: 0 });
+/**
+ * A settled floating viewer's yield: `left`/`right` for the reading column (bounded by the main
+ * minimum), `centred` for centred content such as the empty Session state (beside the frame, else above it).
+ */
+export type SessionViewerReadingInset = Readonly<{
+  left: number;
+  right: number;
+  centred: Readonly<{ left: number; right: number; bottom: number }>;
+}>;
+
+export const NO_SESSION_VIEWER_INSET: SessionViewerReadingInset = Object.freeze({
+  left: 0,
+  right: 0,
+  centred: Object.freeze({ left: 0, right: 0, bottom: 0 }),
+});
 /** The mounted owner lives in `SessionViewerControllerProvider`; consumers read it through these hooks. */
 export const SessionViewerControllerContext =
   React.createContext<SessionViewerController | null>(null);
 /** Separate, so the transcript layer re-renders only when its yield changes, never on viewer facts. */
 export const SessionViewerReadingInsetContext =
-  React.createContext<Readonly<{ left: number; right: number }>>(NO_SESSION_VIEWER_INSET);
+  React.createContext<SessionViewerReadingInset>(NO_SESSION_VIEWER_INSET);
 
 
-/** The reading column's yield to a settled floating viewer (zero when none). */
-export function useSessionViewerReadingInset(): Readonly<{
-  left: number;
-  right: number;
-}> {
+/** The reading column's and centred content's yield to a settled floating viewer (zero when none). */
+export function useSessionViewerReadingInset(): SessionViewerReadingInset {
   return React.useContext(SessionViewerReadingInsetContext);
 }
 
@@ -138,17 +157,20 @@ export function useOptionalSessionViewerController(): SessionViewerController | 
   return React.useContext(SessionViewerControllerContext);
 }
 
-/** Whether the viewer currently presents `source` itself (so a pane must not bind the same body). */
+/** Whether the viewer excludes a pane from binding this source's retained body. */
 export function isSessionViewerPresenting(
   controller: SessionViewerController | null,
   source: SessionViewerSource,
+  panePresented = false,
 ): boolean {
   if (!controller || controller.state.source !== source) return false;
   const mode = controller.state.mode;
   return (
     mode === 'floating' ||
     mode === 'expanded' ||
-    (controller.phone && mode === 'docked')
+    // Phone docking lives in Chat. An active Details/Browser pane presents
+    // that same source when Chat is hidden; a retained hidden pane must not bind.
+    (controller.phone && mode === 'docked' && !panePresented)
   );
 }
 
@@ -160,6 +182,7 @@ export function usePublishSessionViewerSourceFacts(
   const controller = useOptionalSessionViewerController();
   const publish = controller?.publishFacts;
   const machineName = facts?.machineName ?? null;
+  const targetTitle = facts?.targetTitle ?? null;
   const personInControl = facts?.personInControl ?? false;
   const watching = facts?.watching ?? false;
   const aspectRatio = facts?.aspectRatio ?? null;
@@ -171,13 +194,14 @@ export function usePublishSessionViewerSourceFacts(
   // A body that is not a viewer source (`null`) publishes nothing and never clears another's facts.
   React.useEffect(() => {
     if (!publish || !present) return undefined;
-    publish(source, { machineName, personInControl, watching, aspectRatio, chooseTarget, resolveTargetPicker, stopSharing, navigation });
+    publish(source, { machineName, targetTitle, personInControl, watching, aspectRatio, chooseTarget, resolveTargetPicker, stopSharing, navigation });
     return undefined;
   }, [
     aspectRatio,
     chooseTarget,
     resolveTargetPicker,
     machineName,
+    targetTitle,
     navigation,
     personInControl,
     present,

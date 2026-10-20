@@ -33,8 +33,21 @@ import {
 } from '@/sync/domains/plugins/settings/askUserQuestionSettings';
 import { resolvePermissionDisabledMessage } from '@/components/tools/shell/permissions/permissionDisabledMessage';
 import { usePendingPromptPrimaryFocus, markTranscriptPromptAnswered } from '@/components/tools/shell/permissions/usePendingPromptPrimaryFocus';
+import { PermissionAnswerUnconfirmedNotice } from '@/components/tools/shell/permissions/PermissionAnswerUnconfirmedNotice';
+import {
+    clearPermissionAnswerUnconfirmed,
+    markPermissionAnswerUnconfirmed,
+    permissionAnswerRequestKey,
+    readPermissionActionDisposition,
+    usePermissionAnswerUnconfirmed,
+} from '@/components/tools/shell/permissions/permissionActionFailure';
 import { toolTextBlock, type ToolDisplayTextProjector } from '../core/toolDisplayTextTypes';
 import { ToolFindText } from '../core/ToolFindText';
+import { RoundButton } from '@/components/ui/buttons/RoundButton';
+import { SaveMemoryDecisionSheet, type SaveMemoryDecisionSeed } from '@/components/memory/SaveMemoryDecisionSheet';
+import { readAnsweringClientCategory } from '@/sync/ops/sessions';
+import { resolveAskUserQuestionFooterHint, resolveAskUserQuestionLead, type AskUserQuestionFooterHint, type AskUserQuestionLead } from './askUserQuestionCardState';
+import { useAskUserQuestionAnsweredByLabel, useAskUserQuestionHandler } from './useAskUserQuestionHandler';
 
 
 interface QuestionOption {
@@ -421,6 +434,28 @@ export const projectAskUserQuestionDisplayText: ToolDisplayTextProjector = (tool
     ];
 };
 
+function formatFooterHint(hint: AskUserQuestionFooterHint): string {
+    if (hint.kind === 'progress') return t('tools.askUserQuestion.progress', { answered: hint.answered, total: hint.total });
+    return hint.kind === 'next_step' ? t('tools.askUserQuestion.hintNextStep') : t('tools.askUserQuestion.hintNextTurn');
+}
+
+/** The one line above the questions: who is handling it, or the assumption a non-blocking ask acts on. */
+function AskUserQuestionLeadLine(props: Readonly<{ lead: AskUserQuestionLead }>) {
+    const { lead } = props;
+    if (lead.kind === 'not_blocking') {
+        return (
+            <Text testID="ask-user-question.lead" style={styles.leadText}>
+                <Text style={styles.leadEmphasis}>{t('tools.askUserQuestion.notBlocking')}</Text>
+                {` · ${lead.assumption}`}
+            </Text>
+        );
+    }
+    const text = lead.away === 'offline' ? t('tools.askUserQuestion.handlerOffline', { name: lead.name })
+        : lead.away === 'stopped' ? t('tools.askUserQuestion.handlerStopped', { name: lead.name })
+        : t('tools.askUserQuestion.handledBy', { name: lead.name });
+    return <Text testID="ask-user-question.lead" style={[styles.leadText, lead.away ? styles.leadAttention : null]}>{text}</Text>;
+}
+
 // Styles MUST be defined outside the component to prevent infinite re-renders
 // with react-native-unistyles. The theme is passed as a function parameter.
 const styles = StyleSheet.create((theme) => ({
@@ -432,16 +467,10 @@ const styles = StyleSheet.create((theme) => ({
     },
     headerChip: {
         alignSelf: 'flex-start',
-        backgroundColor: theme.colors.surface.elevated,
-        paddingHorizontal: theme.space.s8,
-        paddingVertical: theme.space.s4,
-        borderRadius: 4,
-        marginBottom: theme.space.s4,
     },
     headerText: {
         ...Typography.variant('meta', 'semiBold'),
         color: theme.colors.text.secondary,
-        textTransform: 'uppercase',
     },
     questionText: {
         fontSize: 15,
@@ -533,11 +562,53 @@ const styles = StyleSheet.create((theme) => ({
         marginTop: theme.space.s6,
         marginLeft: theme.space.s2,
     },
-    actionsContainer: {
+    footer: {
         flexDirection: 'row',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        justifyContent: 'space-between',
         gap: theme.space.s12,
-        marginTop: theme.space.s8,
-        justifyContent: 'flex-end',
+        marginTop: theme.space.s4,
+        paddingTop: theme.space.s12,
+        borderTopWidth: 1,
+        borderTopColor: theme.colors.border.default,
+    },
+    footerHint: {
+        ...Typography.variant('body'),
+        color: theme.colors.text.secondary,
+        flexShrink: 1,
+    },
+    leadText: {
+        ...Typography.variant('body'),
+        color: theme.colors.text.secondary,
+    },
+    leadEmphasis: {
+        ...Typography.variant('body', 'semiBold'),
+        color: theme.colors.text.primary,
+    },
+    leadAttention: {
+        color: theme.colors.state.attention.textForeground,
+    },
+    stateHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.space.s6,
+    },
+    stateTitle: {
+        ...Typography.variant('body', 'semiBold'),
+        color: theme.colors.text.primary,
+    },
+    stateByline: {
+        ...Typography.variant('body'),
+        color: theme.colors.text.secondary,
+        flexShrink: 1,
+    },
+    withdrawnQuestion: {
+        ...Typography.variant('body'),
+        color: theme.colors.text.secondary,
+    },
+    answerGrid: {
+        gap: theme.space.s6,
     },
     submitButton: {
         backgroundColor: theme.colors.button.primary.background,
@@ -550,6 +621,11 @@ const styles = StyleSheet.create((theme) => ({
         gap: theme.space.s6,
         minHeight: 44, // Minimum touch target for mobile
     },
+    submitButtonQuiet: {
+        backgroundColor: 'transparent',
+        borderWidth: 1,
+        borderColor: theme.colors.border.default,
+    },
     submitButtonDisabled: {
         opacity: 0.5,
     },
@@ -557,19 +633,24 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.button.primary.tint,
         ...Typography.variant('label', 'semiBold'),
     },
+    submitButtonTextQuiet: {
+        color: theme.colors.text.primary,
+    },
     submittedContainer: {
         gap: theme.space.s8,
     },
     submittedItem: {
         flexDirection: 'row',
-        gap: theme.space.s8,
+        gap: theme.space.s16,
     },
     submittedHeader: {
-        ...Typography.variant('body', 'semiBold'),
+        ...Typography.variant('body'),
         color: theme.colors.text.secondary,
+        flexBasis: '32%',
+        flexShrink: 0,
     },
     submittedValue: {
-        fontSize: 13,
+        ...Typography.variant('body'),
         color: theme.colors.text.primary,
         flex: 1,
     },
@@ -649,6 +730,16 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, messageId,
             && sourceInteraction.permissionDisabledReason !== 'inactive'
             && interaction?.permissionDisabledReason !== 'inactive';
     const toolCallId = resolvePermissionRequestId(tool);
+    // An answer whose result was lost may already be applied: the form is withheld until a re-read says otherwise.
+    const answerRequestKey = permissionAnswerRequestKey({
+        originId: executionRun === undefined ? `session:${sessionId ?? ''}` : `executionRun:${executionRun.executionRunId}`,
+        serverId: source.serverId,
+        permissionId: toolCallId ?? '',
+    });
+    const answerUnconfirmed = usePermissionAnswerUnconfirmed(answerRequestKey) && isRunning;
+    React.useEffect(() => {
+        if (!isRunning) clearPermissionAnswerUnconfirmed(answerRequestKey);
+    }, [isRunning, answerRequestKey]);
     const activeMatchingRequest = toolCallId ? agentState?.requests?.[toolCallId] : null;
     // An Execution Run's caller vouches for the request by supplying a
     // responder; an answer it still holds keeps the form withdrawn.
@@ -660,9 +751,17 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, messageId,
         isRunning &&
         !isSubmitted &&
         !isSubmitting &&
+        !answerUnconfirmed &&
         canApprovePermissions &&
         hasActiveAskUserQuestionRequest;
     const primaryAnswerRef = usePendingPromptPrimaryFocus(toolCallId, executionRun === undefined && canInteract, messageId);
+    const completedRequest = toolCallId ? agentState?.completedRequests?.[toolCallId] : null;
+    const questionV1 = activeMatchingRequest?.questionV1 ?? completedRequest?.questionV1;
+    const handler = useAskUserQuestionHandler(isRunning ? activeMatchingRequest?.currentHandler : undefined, source.serverId ?? null);
+    const answeredByLabel = useAskUserQuestionAnsweredByLabel(tool.permission?.status === 'approved' ? tool.permission.answeredBy : undefined, source.serverId ?? null);
+    const rememberAnchorRef = React.useRef<View>(null);
+    const [rememberOpen, setRememberOpen] = React.useState(false);
+    const [remembered, setRemembered] = React.useState(false);
 
     if (!input || !questions || !Array.isArray(questions) || questions.length === 0) {
         return null;
@@ -907,7 +1006,11 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, messageId,
             }
         } catch (error) {
             setIsSubmitted(false);
-            Modal.alert(t('common.error'), error instanceof Error ? error.message : t('errors.failedToSendMessage'));
+            if (readPermissionActionDisposition(error) === 'outcomeUnknown') {
+                markPermissionAnswerUnconfirmed(answerRequestKey);
+            } else {
+                Modal.alert(t('common.error'), error instanceof Error ? error.message : t('errors.failedToSendMessage'));
+            }
         } finally {
             setIsSubmitting(false);
         }
@@ -926,52 +1029,119 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, messageId,
         input.happierDialog,
         isSubmitting,
         toolCallId,
+        answerRequestKey,
     ]);
+
+    // The asker withdrew it: the reason replaces the form; nothing is left to answer.
+    if (!isSubmitted && tool.permission?.status === 'canceled') {
+        return (
+            <ToolSectionView>
+                <View testID="ask-user-question.withdrawn" style={styles.submittedContainer}>
+                    <View style={styles.stateHeader}>
+                        <Text style={styles.stateTitle}>{t('tools.askUserQuestion.withdrawn')}</Text>
+                        {tool.permission.reason ? <Text style={styles.stateByline} numberOfLines={1}>{` · ${tool.permission.reason}`}</Text> : null}
+                    </View>
+                    {questions.map((q, qIndex) => (
+                        <ToolFindText key={`${q.answerKey}:${qIndex}`} messageId={messageId} blockId={`tool-question-${qIndex}-prompt`} text={q.question} style={styles.withdrawnQuestion} />
+                    ))}
+                </View>
+            </ToolSectionView>
+        );
+    }
 
     // Show submitted state
     if (isSubmitted || tool.state === 'completed') {
         const answersFromResult = parseAskUserQuestionAnswersFromToolResult(tool.result);
+        const answerRows = questions.map((q, qIndex) => {
+            const selected = selections.get(qIndex);
+            const options = Array.isArray(q.options) ? q.options : [];
+            const freeform = resolveFreeformAnswer(q, qIndex, freeformAnswers);
+            const selectedLabels =
+                options.length === 0
+                    ? (freeform.value.length > 0 || freeform.present
+                        ? freeform.value
+                        : (answersFromResult?.[q.answerKey] ?? '-'))
+                    : (q.selection === 'multiple' && (selected?.size || freeform.value.length > 0)
+                        ? [
+                            ...Array.from(selected ?? [])
+                                .map(optIndex => options[optIndex]?.label)
+                                .filter((label): label is string => Boolean(label)),
+                            ...(freeform.value.length > 0 ? [freeform.value] : []),
+                        ].join(', ')
+                        : freeform.value.length > 0
+                        ? freeform.value
+                        : (selected && selected.size > 0
+                            ? Array.from(selected)
+                                .map(optIndex => options[optIndex]?.label)
+                                .filter(Boolean)
+                                .join(', ')
+                            : (answersFromResult?.[q.answerKey] ?? '-')));
+            const firstSelectedDescription = selected && selected.size > 0
+                ? options[Array.from(selected)[0]!]?.description : undefined;
+            return { key: `${q.answerKey}:${qIndex}`, qIndex, label: q.header ?? q.question, value: selectedLabels, reason: firstSelectedDescription };
+        });
+        const thisClient = readAnsweringClientCategory();
+        const answeredElsewhere = !isSubmitted && completedRequest?.answeringClientCategory !== undefined
+            && thisClient !== undefined && completedRequest.answeringClientCategory !== thisClient;
+        const canRemember = questionV1?.lasting === true && Boolean(messageId && sessionId && source.serverId);
+        const rememberSeed: SaveMemoryDecisionSeed | null = canRemember && messageId && sessionId && source.serverId ? {
+            sourceMessageRef: { kind: 'session', session: { serverId: source.serverId, sessionId }, messageId },
+            text: answerRows.map((row) => answerRows.length > 1 ? `${row.label}: ${row.value}` : row.value).join('; '),
+            reason: answerRows.find((row) => row.reason)?.reason ?? '',
+        } : null;
         return (
             <ToolSectionView>
                 <View
                     style={styles.submittedContainer}
                     accessibilityLiveRegion="polite"
                 >
-                    {questions.map((q, qIndex) => {
-                        const selected = selections.get(qIndex);
-                        const options = Array.isArray(q.options) ? q.options : [];
-                        const freeform = resolveFreeformAnswer(q, qIndex, freeformAnswers);
-                        const selectedLabels =
-                            options.length === 0
-                                ? (freeform.value.length > 0 || freeform.present
-                                    ? freeform.value
-                                    : (answersFromResult?.[q.answerKey] ?? '-'))
-                                : (q.selection === 'multiple' && (selected?.size || freeform.value.length > 0)
-                                    ? [
-                                        ...Array.from(selected ?? [])
-                                            .map(optIndex => options[optIndex]?.label)
-                                            .filter((label): label is string => Boolean(label)),
-                                        ...(freeform.value.length > 0 ? [freeform.value] : []),
-                                    ].join(', ')
-                                    : freeform.value.length > 0
-                                    ? freeform.value
-                                    : (selected && selected.size > 0
-                                        ? Array.from(selected)
-                                            .map(optIndex => options[optIndex]?.label)
-                                            .filter(Boolean)
-                                            .join(', ')
-                                        : (answersFromResult?.[q.answerKey] ?? '-')));
-                        return (
-                            <View key={`${q.answerKey}:${qIndex}`} style={styles.submittedItem}>
-                                <ToolFindText messageId={messageId} blockId={`tool-question-${qIndex}-answer-label`} text={`${q.header ?? q.question}:`} style={styles.submittedHeader} />
-                                <ToolFindText messageId={messageId} blockId={`tool-question-${qIndex}-answer`} text={selectedLabels} style={styles.submittedValue} />
+                    <View style={styles.stateHeader}>
+                        <Icon name="check" size={16} color={theme.colors.text.secondary} />
+                        <Text style={styles.stateTitle}>{answeredByLabel ?? t('tools.askUserQuestion.answered')}</Text>
+                        {answeredElsewhere ? <Text style={styles.stateByline}>{` · ${t('tools.askUserQuestion.answeredElsewhere')}`}</Text> : null}
+                    </View>
+                    <View style={styles.answerGrid}>
+                        {answerRows.map((row) => (
+                            <View key={row.key} style={styles.submittedItem}>
+                                <ToolFindText messageId={messageId} blockId={`tool-question-${row.qIndex}-answer-label`} text={row.label} style={styles.submittedHeader} />
+                                <ToolFindText messageId={messageId} blockId={`tool-question-${row.qIndex}-answer`} text={row.value} style={styles.submittedValue} />
                             </View>
-                        );
-                    })}
+                        ))}
+                    </View>
+                    {rememberSeed ? (
+                        <View style={styles.footer}>
+                            <Text style={styles.footerHint}>{t('tools.askUserQuestion.lasting')}</Text>
+                            <View ref={rememberAnchorRef} collapsable={false}>
+                                <RoundButton
+                                    testID="ask-user-question.remember"
+                                    size="small"
+                                    display="secondary"
+                                    title={remembered ? t('tools.askUserQuestion.remembered') : t('tools.askUserQuestion.rememberThis')}
+                                    disabled={remembered}
+                                    onPress={() => setRememberOpen(true)}
+                                />
+                            </View>
+                        </View>
+                    ) : null}
+                    {rememberOpen && rememberSeed ? (
+                        <SaveMemoryDecisionSheet
+                            seed={rememberSeed}
+                            anchorRef={rememberAnchorRef}
+                            onClose={() => setRememberOpen(false)}
+                            onSaved={() => { setRememberOpen(false); setRemembered(true); }}
+                        />
+                    ) : null}
                 </View>
             </ToolSectionView>
         );
     }
+
+    const lead = resolveAskUserQuestionLead({ questionV1, handler });
+    const answeredCount = questions.filter((q, qIndex) => {
+        const freeform = resolveFreeformAnswer(q, qIndex, freeformAnswers);
+        return freeform.value.length > 0 || Boolean(selections.get(qIndex)?.size);
+    }).length;
+    const footerHint = resolveAskUserQuestionFooterHint({ mode: questionV1?.mode, total: questions.length, answered: answeredCount });
 
     return (
         <ToolSectionView>
@@ -1009,6 +1179,7 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, messageId,
                         {attachedTerminalUnavailableMessage}
                     </Text>
                 ) : null}
+                {lead ? <AskUserQuestionLeadLine lead={lead} /> : null}
                 {questions.map((question, qIndex) => {
                     const selectedOptions = selections.get(qIndex) || new Set();
                     const options = Array.isArray(question.options) ? question.options : [];
@@ -1126,28 +1297,38 @@ export const AskUserQuestionView = React.memo<ToolViewProps>(({ tool, messageId,
                     );
                 })}
 
-                {(canInteract || isSubmitting) && (
-                    <View style={styles.actionsContainer}>
+                {answerUnconfirmed ? (
+                    <PermissionAnswerUnconfirmedNotice
+                        requestKey={answerRequestKey}
+                        requestId={toolCallId ?? ''}
+                        actions={executionRun === undefined ? actions : null}
+                        testIDPrefix="ask-user-question"
+                    />
+                ) : null}
+                {(canInteract || isSubmitting || answerUnconfirmed) && (
+                    <View style={styles.footer}>
+                        <Text testID="ask-user-question.hint" style={styles.footerHint}>{formatFooterHint(footerHint)}</Text>
                         <TouchableOpacity
                             testID="ask-user-question.submit"
                             accessibilityRole="button"
                             accessibilityLabel={t('tools.askUserQuestion.submit')}
                             accessibilityState={{
-                                disabled: !allQuestionsAnswered || isSubmitting,
+                                disabled: !allQuestionsAnswered || isSubmitting || answerUnconfirmed,
                                 busy: isSubmitting,
                             }}
                             style={[
                                 styles.submitButton,
-                                (!allQuestionsAnswered || isSubmitting) && styles.submitButtonDisabled,
+                                questionV1?.mode === 'continue' && styles.submitButtonQuiet,
+                                (!allQuestionsAnswered || isSubmitting || answerUnconfirmed) && styles.submitButtonDisabled,
                             ]}
                             onPress={handleSubmit}
-                            disabled={!allQuestionsAnswered || isSubmitting}
+                            disabled={!allQuestionsAnswered || isSubmitting || answerUnconfirmed}
                             activeOpacity={0.7}
                         >
                             {isSubmitting ? (
-                                <ActivitySpinner size="small" color={theme.colors.button.primary.tint} />
+                                <ActivitySpinner size="small" color={questionV1?.mode === 'continue' ? theme.colors.text.primary : theme.colors.button.primary.tint} />
                             ) : (
-                                <Text style={styles.submitButtonText}>{t('tools.askUserQuestion.submit')}</Text>
+                                <Text style={[styles.submitButtonText, questionV1?.mode === 'continue' && styles.submitButtonTextQuiet]}>{t('tools.askUserQuestion.submit')}</Text>
                             )}
                         </TouchableOpacity>
                     </View>

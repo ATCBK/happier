@@ -51,6 +51,7 @@ import { collectReservedStackPorts, getDefaultPortStart } from './port_reservati
 import { withStackEnv } from './stack_environment.mjs';
 import { resolveStackRuntimeLaunchContext } from '../runtime/launch/resolveStackRuntimeLaunchContext.mjs';
 import { prepareSourceRuntimeReload } from '../runtime/launch/prepareSourceRuntimeReload.mjs';
+import { projectBorrowedExpoWebappEnv, resolveSourceQaUiMode } from '../runtime/shared/borrowed_expo.mjs';
 
 const DEFAULT_BACKGROUND_READY_TIMEOUT_MS = 600_000;
 
@@ -619,6 +620,7 @@ export async function stopObservedStackForRestart({
   env,
   incumbentRuntimeState = null,
   json = false,
+  preserveDaemon = true,
 } = {}) {
   const expectedOwnerPid = Number(incumbentRuntimeState?.ownerPid);
   const expectedOwnerStartedAt = normalizeStackRuntimeOwnerStartedAt(incumbentRuntimeState?.startedAt);
@@ -640,10 +642,22 @@ export async function stopObservedStackForRestart({
     noDocker: false,
     aggressive: false,
     sweepOwned: true,
-    preserveDaemon: true,
+    preserveDaemon,
     expectedOwnerPid,
     expectedOwnerStartedAt,
   });
+}
+
+export function shouldPreserveDaemonForRestart({
+  args = [],
+  env = {},
+  preparedSourceRuntimeReload = null,
+  incumbentRuntimeState = null,
+} = {}) {
+  if (!resolveStackDaemonStartRequested({ env, noDaemon: args.includes('--no-daemon') })) return true;
+  const incumbentHasRemoteDaemon = Object.values(incumbentRuntimeState?.remoteTargets ?? {}).some(state =>
+    state?.services?.daemon === true && (state.serviceStatus?.daemon ?? state.status) !== 'stopped');
+  return preparedSourceRuntimeReload?.remoteDaemon !== true && !incumbentHasRemoteDaemon;
 }
 
 async function assertOccupiedRecoveryAuxiliaryPortOwnedByStack({
@@ -705,11 +719,33 @@ export async function runStackScriptWithStackEnv({ rootDir, stackName, scriptPat
       let restartCleanupExpectedRuntimeState = runtimeState ?? null;
 
       let runtimeLaunchContext = { snapshot: null };
+      let preparedBorrowedWebappOrigin = '';
       if (scriptPath === 'run.mjs') {
         // No replacement has been dispatched yet. An admission error cannot
         // authorize cleanup of the incumbent lifecycle.
         runtimeLaunchContext = await resolveStackRuntimeLaunchContext({ argv: args, env, purpose: 'deployment' });
+        if (runtimeLaunchContext.runtimeMode?.mode === 'source-snapshot') {
+          const { flags, kv } = parseArgs(args);
+          const sourceUi = resolveSourceQaUiMode({
+            uiMode: kv.get('--ui') ?? (flags.has('--ui') ? '' : undefined),
+            noUi: flags.has('--no-ui'),
+            consumerStackName: stackName,
+            producerStackName: env.HAPPIER_STACK_EXPO_SOURCE_STACK,
+          });
+          if (sourceUi === 'borrowed') {
+            env = await projectBorrowedExpoWebappEnv({
+              rootDir,
+              consumerStackName: stackName,
+              producerStackName: env.HAPPIER_STACK_EXPO_SOURCE_STACK,
+              env,
+            });
+            preparedBorrowedWebappOrigin = String(env.HAPPIER_WEBAPP_URL ?? '').trim();
+          }
+        }
       }
+      const resolveChildArgs = () => preparedBorrowedWebappOrigin
+        ? [...args, `--prepared-borrowed-webapp-origin=${preparedBorrowedWebappOrigin}`]
+        : args;
       const runtimeSnapshotId = runtimeLaunchContext.snapshot?.snapshotId ?? null;
       if (!isStartLike) {
         await run(process.execPath, [join(rootDir, 'scripts', scriptPath), ...args], { cwd: rootDir, env });
@@ -723,6 +759,7 @@ export async function runStackScriptWithStackEnv({ rootDir, stackName, scriptPat
           ? (stackEnv.HAPPIER_STACK_MANAGED_INFRA ?? '1').toString().trim() !== '0'
           : false;
       let preservedDaemonForRestart = false;
+      let preserveDaemonForRestart = true;
 
       try {
         // If this is an ephemeral-port stack and it's already running, avoid spawning a second copy.
@@ -755,6 +792,12 @@ export async function runStackScriptWithStackEnv({ rootDir, stackName, scriptPat
               && env.HAPPIER_STACK_PREPARED_SOURCE_RELOAD !== '1') {
             const prepared = await prepareSourceRuntimeReload({ stackName, stackBaseDir: baseDir,
               repoDir: env.HAPPIER_STACK_REPO_DIR, args, env });
+            preserveDaemonForRestart = shouldPreserveDaemonForRestart({
+              args,
+              env,
+              preparedSourceRuntimeReload: prepared,
+              incumbentRuntimeState: runtimeState,
+            });
             args = [...args, ...(!prepared.remote ? ['--reuse-source-runtime', '--no-dev-targets'] : []),
               ...(prepared.ui ? [`--source-ui-dir=${prepared.ui.uiDir}`] : [])];
             env.HAPPIER_STACK_PREPARED_SOURCE_RELOAD = '1';
@@ -767,8 +810,10 @@ export async function runStackScriptWithStackEnv({ rootDir, stackName, scriptPat
                 baseDir,
                 env,
                 incumbentRuntimeState: runtimeState,
+                preserveDaemon: preserveDaemonForRestart,
               });
-              preservedDaemonForRestart = stopResult?.stopAuthorization?.authorized === true;
+              preservedDaemonForRestart = preserveDaemonForRestart
+                && stopResult?.stopAuthorization?.authorized === true;
             } catch {
               // ignore (fail-closed below on port checks)
             }
@@ -922,8 +967,10 @@ export async function runStackScriptWithStackEnv({ rootDir, stackName, scriptPat
                     baseDir,
                     env,
                     incumbentRuntimeState: runtimeState,
+                    preserveDaemon: preserveDaemonForRestart,
                   });
-                  preservedDaemonForRestart = preservedDaemonForRestart || stopResult?.stopAuthorization?.authorized === true;
+                  preservedDaemonForRestart = preservedDaemonForRestart || (preserveDaemonForRestart
+                    && stopResult?.stopAuthorization?.authorized === true);
                 } catch {
                   // ignore
                 }
@@ -1034,7 +1081,7 @@ export async function runStackScriptWithStackEnv({ rootDir, stackName, scriptPat
             }
             const logHandle = background ? await open(logPath, 'a') : null;
             const outFd = logHandle?.fd ?? null;
-            const child = spawn(process.execPath, [join(rootDir, 'scripts', scriptPath), ...args], {
+            const child = spawn(process.execPath, [join(rootDir, 'scripts', scriptPath), ...resolveChildArgs()], {
               cwd: rootDir,
               env: childEnv,
               stdio: background ? ['ignore', outFd ?? 'ignore', outFd ?? 'ignore'] : 'inherit',
@@ -1216,7 +1263,7 @@ export async function runStackScriptWithStackEnv({ rootDir, stackName, scriptPat
         if (background && wantsJson) {
         // Background mode is meaningless for a dry-run. Run the script normally so callers
         // can still use `--background --json` as a config probe.
-        await run(process.execPath, [join(rootDir, 'scripts', scriptPath), ...args], { cwd: rootDir, env });
+        await run(process.execPath, [join(rootDir, 'scripts', scriptPath), ...resolveChildArgs()], { cwd: rootDir, env });
         return;
         }
         if (background) {
@@ -1238,7 +1285,7 @@ export async function runStackScriptWithStackEnv({ rootDir, stackName, scriptPat
               preservePaths: [runtimeState?.logs?.runner],
             }).catch(() => null);
             const logHandle = await open(logPath, 'a');
-            const child = spawn(process.execPath, [join(rootDir, 'scripts', scriptPath), ...args], {
+            const child = spawn(process.execPath, [join(rootDir, 'scripts', scriptPath), ...resolveChildArgs()], {
               cwd: rootDir,
               env,
               stdio: ['ignore', logHandle.fd, logHandle.fd],
@@ -1375,7 +1422,7 @@ export async function runStackScriptWithStackEnv({ rootDir, stackName, scriptPat
           );
         }
         }
-        await run(process.execPath, [join(rootDir, 'scripts', scriptPath), ...args], { cwd: rootDir, env });
+        await run(process.execPath, [join(rootDir, 'scripts', scriptPath), ...resolveChildArgs()], { cwd: rootDir, env });
       } catch (error) {
         if (preservedDaemonForRestart) {
           await cleanupFailedRestartAttempt({

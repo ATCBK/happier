@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { ConnectedServiceIdSchema } from '@happier-dev/protocol/connect/connected-service-bindings';
 
 import {
   getGeneratedLegacyConnectedServiceRegistryFallback,
@@ -8,6 +9,8 @@ import {
   getAccountConnectedServiceConfigurationMode,
   installConnectedAccountDescriptorProjection,
   canExecuteConnectedServiceAction,
+  getConnectedServiceSetupPresentation,
+  isConnectedServiceUsageCapable,
 } from './connectedServiceRegistry';
 import { advanceConnectedAccountDescriptorProjectionState, createConnectedAccountDescriptorProjectionLoadingState,
   mergeConnectedAccountDescriptorProjections, type ConnectedAccountDescriptorProjectionState } from './connectedAccountDescriptorProjection';
@@ -32,6 +35,35 @@ function manualAuthentication(fields: Array<Readonly<{
 }
 
 describe('connectedServiceRegistry', () => {
+  it('does not extend the released scalar service contract from a generated-only compatibility key', () => {
+    expect(getGeneratedLegacyConnectedServiceRegistryFallback({
+      pluginId: 'happier.agent.antigravity', localId: 'antigravity-account',
+    })).toBeNull();
+  });
+  it('reads generated compatibility without revalidating its static keys on presentation reads', () => {
+    // Count real schema work without replacing the parser or registry logic.
+    const parses = vi.spyOn(ConnectedServiceIdSchema, 'safeParse');
+    try {
+      for (let index = 0; index < 3; index++) {
+        expect(getConnectedServiceSetupPresentation({ pluginId: 'happier.agent.claude', localId: 'claude-subscription' }))
+          .toMatchObject({ firstRun: true });
+        expect(getConnectedServiceSetupPresentation({ pluginId: 'acme.external', localId: 'claude-subscription' })).toBeNull();
+      }
+      expect(parses).not.toHaveBeenCalled();
+    } finally { parses.mockRestore(); }
+  });
+  it('selects usage services by their exact capability owner, including installed services', () => {
+    const descriptor = (pluginId: string, capabilities: string[]) => ({
+      id: 'account', serviceId: 'account', pluginId, title: 'Account', provenance: 'external' as const,
+      sourceKind: 'installed', authentication: manualAuthentication([]), capabilities,
+      availability: { state: 'available' as const, reason: 'resolved' }, diagnostics: [],
+    });
+    install([descriptor('acme.metered', ['usage']), descriptor('acme.email', [])]);
+    expect(isConnectedServiceUsageCapable({ pluginId: 'acme.metered', localId: 'account' })).toBe(true);
+    expect(isConnectedServiceUsageCapable({ pluginId: 'acme.email', localId: 'account' })).toBe(false);
+    expect(isConnectedServiceUsageCapable({ pluginId: 'unknown', localId: 'openai-codex' })).toBe(false);
+    expect(isConnectedServiceUsageCapable({ pluginId: 'happier.agent.codex', localId: 'openai-codex' })).toBe(true);
+  });
   const install = (
     descriptors: ConnectedAccountDescriptorProjectionState['descriptors'],
     status: ConnectedAccountDescriptorProjectionState['status'] = 'ready',

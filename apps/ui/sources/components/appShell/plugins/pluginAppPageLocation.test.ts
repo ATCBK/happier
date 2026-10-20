@@ -121,6 +121,35 @@ describe('plugin app page location owner', () => {
         expect(replaced.at(-1)).toBe(`${PAGE_ROUTE}/entries`);
     });
 
+    it('keeps the step armed when the router reports the settled location percent-decoded', () => {
+        // The route writes a segment's escapes and the router later hands the
+        // same segment back decoded (`%3A` arrives as `:`). That is the same
+        // location, not a foreign one: retiring it left the system Back leaving
+        // the page while the detail it should have closed stayed open.
+        owner.handleReplaceRequest(request({ subPath: 'entries/gh%3A7,7', backLocation: 'entries' }));
+        settle('entries/gh%3A7,7');
+        settle('entries/gh:7,7');
+        expect(owner.consumeBack()).toBe(true);
+        expect(replaced.at(-1)).toBe(`${PAGE_ROUTE}/entries`);
+    });
+
+    it('says whether a Back would spend a step, and tells the chrome when that changes', () => {
+        const seen: boolean[] = [];
+        const unsubscribe = owner.subscribeBackStep(() => { seen.push(owner.hasBackStep()); });
+        expect(owner.hasBackStep()).toBe(false);
+
+        owner.handleReplaceRequest(request({ subPath: 'entries/7', backLocation: 'entries' }));
+        expect(owner.hasBackStep()).toBe(true);
+        expect(owner.consumeBack()).toBe(true);
+        // The step is spent: the chrome's Back leaves the page again.
+        expect(owner.hasBackStep()).toBe(false);
+        expect(seen).toEqual([true, false]);
+
+        unsubscribe();
+        owner.handleReplaceRequest(request({ subPath: 'entries/9', backLocation: 'entries' }));
+        expect(seen).toEqual([true, false]);
+    });
+
     it('refuses to write the route once the mount is no longer current', () => {
         owner.handleReplaceRequest(request({ subPath: 'entries/7', backLocation: 'entries' }));
         replaced = [];

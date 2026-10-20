@@ -1,359 +1,219 @@
 import React from 'react';
-// Web drafts persist to IndexedDB, the browser storage boundary; the fake keeps the real repository path.
 import 'fake-indexeddb/auto';
 import { act } from 'react-test-renderer';
-import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { flushHookEffects, renderScreen } from '@/dev/testkit';
-import { installMachineDetailsCommonModuleMocks } from './machineDetailsTestHelpers';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
+import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { installRealActionExecutorModuleLoader } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
+import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
+import { DEFAULT_MACHINE_ONLINE_GRACE_MS } from '@happier-dev/protocol/machines/machineReachabilityV1';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-(globalThis as any).expo = { EventEmitter: class { } };
+const boundary = vi.hoisted(() => ({
+    params: { id: 'machine-1' } as Record<string, string>,
+    push: vi.fn(),
+    rpc: vi.fn(),
+}));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () => (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit/mocks/icons')).createExpoVectorIconsMock());
+vi.mock('expo-router', async () => (await import('@/dev/testkit/mocks/router')).createExpoRouterMock({
+    params: () => boundary.params, router: { push: boundary.push },
+}).module);
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
+// Presentation and human confirmation are boundaries; render the real modal body.
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({
+    renderCustomModals: true, confirmResult: true,
+}).module);
+// The daemon is outside this UI process. Schemas, policy, dispatch and store reads stay real.
+vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => ({ machineRpcWithServerScope: boundary.rpc }));
 
-function createMachineRecord() {
-    return {
-    id: 'machine-1',
-    active: true,
-    activeAt: Date.now(),
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    seq: 0,
-    metadata: { displayName: 'My Machine', host: 'host', platform: 'darwin', homeDir: '/Users/test', happyCliVersion: '0.0.0-test', happyHomeDir: '/Users/test/.happy-dev' },
-    metadataVersion: 1,
-    daemonState: null,
-    daemonStateVersion: 0,
-    revokedAt: null,
-    };
-}
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+const { storage } = await import('@/sync/domains/state/storage');
+const { settingsDefaults, settingsParse } = await import('@/sync/domains/settings/settings');
+const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { MachineSubPageScreen } = await import('@/components/machines/page/MachineSubPageScreen');
+const { MachinePageScreen } = await import('@/components/machines/page/MachinePageScreen');
+const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
+const { Modal, ModalProvider } = await import('@/modal');
+const { EmbeddedTerminalPaneFrame } = await import('@/components/terminal/embedded/EmbeddedTerminalPaneFrame');
+const { showMachineTerminalSheet } = await import('@/components/machines/terminal/MachineTerminalSheet');
 
-const mockState = vi.hoisted(() => ({
-    activeServerIdRef: { current: 'server-a' },
-    itemSpy: vi.fn(),
-    machinesState: { 'machine-1': createMachineRecord() } as Record<string, unknown>,
-    machineTargetSessionsState: {} as Record<string, unknown>,
-    machineControlTargetBySession: {} as Record<string, { machineId: string; basePath: string }>,
-    modalAlertSpy: vi.fn(),
-    navigateToSessionSpy: vi.fn(),
-    routerBackSpy: vi.fn(),
-    routerPushSpy: vi.fn(),
-    shouldContinueRef: { current: true },
-    multiTextInputSpy: vi.fn(),
-    machineSpawnNewSessionMock: vi.fn(async (_params: unknown) => ({ type: 'error', errorCode: 'unexpected', errorMessage: 'noop' })),
-    sessionSpawnNewActionMock: vi.fn<(input: unknown, context: unknown) => Promise<unknown>>(async (_input, _context) => ({
-        ok: true as const,
-        result: {
-            type: 'success' as const,
-            disposition: 'created' as const,
-            sessionId: 'session-new',
-            executionTarget: { serverId: 'server-a', machineId: 'machine-1' },
-            organizationPlacement: { folderId: null, tagIds: [] },
-            initialInput: { status: 'notRequested' as const },
-        },
-    })),
-    openMachinePathBrowserModalMock: vi.fn<(params: unknown) => Promise<string | null>>(async () => '/Users/test/project'),
-    projectForSession: {} as Record<string, { key?: { machineId?: string; rootPath?: string } } | null>,
-    routeParamsRef: { current: { id: 'machine-1' } as Record<string, string> },
-    settingsState: {} as Record<string, unknown>,
-    sessionsState: [] as Array<unknown>,
-}));
-type MachineContributionRegistryProjectionDescribeFn =
-    typeof import('@/sync/ops/machineContributionRegistryProjection').machineContributionRegistryProjectionDescribe;
-const {
-    machineContributionRegistryProjectionDescribe,
-} = vi.hoisted(() => ({
-    machineContributionRegistryProjectionDescribe: vi.fn<MachineContributionRegistryProjectionDescribeFn>(
-        async () => ({ supported: false, reason: 'not-supported' }),
-    ),
-}));
-
-installMachineDetailsCommonModuleMocks({
-    modal: async () => {
-        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-        return createModalModuleMock({
-            spies: { alert: mockState.modalAlertSpy },
-        }).module;
-    },
-    router: async () => {
-        const { createExpoRouterMock } = await import('@/dev/testkit/mocks/router');
-        return createExpoRouterMock({
-            router: { back: mockState.routerBackSpy, push: mockState.routerPushSpy, replace: vi.fn() },
-            params: () => mockState.routeParamsRef.current,
-        }).module;
-    },
-    storage: async (importOriginal) => importOriginal(),
-});
-
-// Configure platform boundaries before loading the real store/hooks graph.
-vi.doUnmock('@/sync/domains/state/storage');
-const { storage } = await import('@/sync/domains/state/storageStore');
-const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-const { createMachineFixture } = await import('@/dev/testkit/fixtures/machineFixtures');
-const { upsertAndActivateServer } = await import('@/sync/domains/server/serverRuntime');
-
-vi.mock('@/components/ui/lists/Item', () => ({
-    Item: (props: any) => {
-        mockState.itemSpy(props);
-        return React.createElement('Item', props);
-    },
-}));
-vi.mock('@/components/ui/lists/ItemGroup', () => ({ ItemGroup: ({ children }: any) => React.createElement(React.Fragment, null, children) }));
-vi.mock('@/components/ui/lists/ItemGroupTitleWithAction', () => ({ ItemGroupTitleWithAction: () => null }));
-vi.mock('@/components/ui/lists/ItemList', () => ({ ItemList: ({ children }: any) => React.createElement(React.Fragment, null, children) }));
-vi.mock('@/components/ui/forms/MultiTextInput', () => ({
-    MultiTextInput: React.forwardRef((props: any, _ref) => {
-        mockState.multiTextInputSpy(props);
-        return React.createElement('MultiTextInput', props);
-    }),
-}));
-vi.mock('@/components/ui/forms/Switch', () => ({ Switch: () => null }));
-vi.mock('@/components/ui/text/Text', () => ({
-    Text: 'Text',
-    TextInput: 'TextInput',
-}));
-vi.mock('@/components/machines/InstallableDepInstaller', () => ({ InstallableDepInstaller: () => null }));
-vi.mock('@/components/sessions/runs/ExecutionRunRow', () => ({ ExecutionRunRow: () => null }));
-vi.mock('@/components/ui/pathBrowser/PathInputBrowseButton', () => ({
-    PathInputBrowseButton: (props: any) => React.createElement('PathInputBrowseButton', {
-        testID: props.testID ?? 'path-browser-trigger',
-        onPress: props.onPress,
-        disabled: props.disabled,
-    }),
-}));
-vi.mock('@/components/ui/pathBrowser/openMachinePathBrowserModal', () => ({
-    openMachinePathBrowserModal: (params: unknown) => mockState.openMachinePathBrowserModalMock(params),
-}));
-
-vi.mock('@/sync/ops', () => ({
-    machineSpawnNewSession: (...args: Parameters<typeof mockState.machineSpawnNewSessionMock>) => mockState.machineSpawnNewSessionMock(...args),
-    machineStopDaemon: vi.fn(async () => ({ message: 'noop' })),
-    machineStopSession: vi.fn(async () => ({ ok: true })),
-    machineUpdateMetadata: vi.fn(async () => ({})),
-    machineExecutionRunsList: vi.fn(async () => ({ ok: true, runs: [] })),
-    machineRevokeFromAccount: vi.fn(async () => ({ ok: true })),
-}));
-
-vi.mock('@/sync/ops/actions/frontDoorRuntimeActionExecutor', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/ops/actions/frontDoorRuntimeActionExecutor')>(),
-    createFrontDoorActionExecute: () => async (_actionId: unknown, input: unknown, context: unknown) =>
-        mockState.sessionSpawnNewActionMock(input, context),
-}));
-
-vi.mock('@/sync/ops/machineContributionRegistryProjection', () => ({
-    getMachineContributionRegistryProjectionRevision: () => 0,
-    subscribeMachineContributionRegistryProjectionInvalidation: () => () => {},
-    machineContributionRegistryProjectionDescribe: (...args: Parameters<MachineContributionRegistryProjectionDescribeFn>) =>
-        machineContributionRegistryProjectionDescribe(...args),
-    machinePluginSecretStatus: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-    machinePluginSecretSet: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-    machinePluginSecretDelete: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-    machinePluginSettingsGet: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-    machinePluginSettingsSet: vi.fn(async () => ({ supported: false, reason: 'not-supported' })),
-    resetMachineProjectionReadsForTests: () => {},
-}));
-
-vi.mock('@/sync/ops/sessionExecutionRuns', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/ops/sessionExecutionRuns')>(),
-    sessionExecutionRunStop: vi.fn(async () => ({ ok: true })),
-}));
-
-vi.mock('@/hooks/session/useNavigateToSession', () => ({ useNavigateToSession: () => mockState.navigateToSessionSpy }));
-vi.mock('@/hooks/ui/useMountedShouldContinue', () => ({
-    useMountedShouldContinue: () => () => mockState.shouldContinueRef.current,
-}));
-vi.mock('@/hooks/server/useMachineCapabilitiesCache', () => ({ useMachineCapabilitiesCache: () => ({ state: { status: 'idle' }, refresh: vi.fn() }) }));
-vi.mock('@/sync/domains/server/serverProfiles', async (importOriginal) => ({
-    ...await importOriginal<typeof import('@/sync/domains/server/serverProfiles')>(),
-    areServerProfileIdentifiersEquivalent: (left: unknown, right: unknown) => String(left ?? '').trim() === String(right ?? '').trim(),
-    getActiveServerId: () => mockState.activeServerIdRef.current,
-}));
-vi.mock('@/sync/domains/server/activeServerSwitch', () => ({ setActiveServerAndSwitch: vi.fn(async () => true) }));
-vi.mock('@/sync/sync', () => ({
-    sync: {
-        refreshMachinesThrottled: vi.fn(),
-        refreshMachines: vi.fn(),
-        retryNow: vi.fn(),
-        acquireUserRequestLease: vi.fn(() => vi.fn()),
-    },
-}));
-vi.mock('@/utils/system/fireAndForget', () => ({
-    fireAndForget: (promise: Promise<unknown>, options?: { onError?: (error: unknown) => void }) => {
-        void promise.catch((error) => {
-            options?.onError?.(error);
-        });
-    },
-}));
-vi.mock('@/utils/errors/daemonUnavailableAlert', () => ({
-    tryShowDaemonUnavailableAlertForRpcError: () => false,
-    tryShowDaemonUnavailableAlertForRpcFailure: () => false,
-}));
-vi.mock('@/utils/sessions/machineUtils', () => ({ isMachineOnline: () => true }));
-vi.mock('@/utils/sessions/sessionUtils', async () => {
-    const actual = await vi.importActual<any>('@/utils/sessions/sessionUtils');
-    return {
-        ...actual,
-        getSessionName: () => '',
-        getSessionSubtitle: () => '',
-    };
-});
-vi.mock('@/utils/path/pathUtils', () => ({
-    resolveAbsolutePath: (value: string, homeDir: string) => {
-        const trimmed = value.trim();
-        if (!trimmed) return '';
-        if (trimmed === '~') return homeDir;
-        if (trimmed.startsWith('~/')) return `${homeDir}/${trimmed.slice(2)}`;
-        if (trimmed.startsWith('/')) return trimmed;
-        return `${homeDir}/${trimmed}`;
-    },
-}));
-vi.mock('@/sync/domains/session/spawn/windowsRemoteSessionConsole', () => ({ resolveWindowsRemoteSessionConsoleFromMachineMetadata: () => 'visible' }));
-vi.mock('@/sync/domains/session/spawn/windowsRemoteSessionLaunchMode', () => ({
-    readMachineWindowsRemoteSessionLaunchMode: () => undefined,
-    resolveEffectiveWindowsRemoteSessionLaunchMode: () => ({ mode: 'visible' }),
-}));
-vi.mock('@/capabilities/installablesRegistry', () => ({ getInstallablesRegistryEntries: () => [] }));
-vi.mock('@/components/ui/forms/dropdown/DropdownMenu', () => ({
-    DropdownMenu: () => null,
-}));
-vi.mock('@/sync/domains/session/spawn/windowsRemoteSessionLaunchModeOptions', () => ({
-    WINDOWS_REMOTE_SESSION_LAUNCH_MODE_OPTIONS: [],
-}));
-vi.mock('@/sync/ops/sessionMachineTarget', () => ({
-    readMachineTargetForSession: (sessionId: string) => {
-        const controlTarget = mockState.machineControlTargetBySession[sessionId];
-        if (controlTarget) return controlTarget;
-        const project = mockState.projectForSession[sessionId];
-        return project?.key == null
-            ? null
-            : {
-                machineId: project.key.machineId ?? null,
-                basePath: project.key.rootPath ?? null,
-            };
-    },
-    readMachineControlTargetForSession: (sessionId: string) => {
-        const controlTarget = mockState.machineControlTargetBySession[sessionId];
-        if (controlTarget) return { ...controlTarget, confidence: 'reachable' };
-        const project = mockState.projectForSession[sessionId];
-        return project?.key == null
-            ? null
-            : {
-                machineId: project.key.machineId ?? null,
-                basePath: project.key.rootPath ?? null,
-                confidence: 'reachable',
-            };
-    },
-    readDisplayMachineIdForSession: ({ sessionId, metadata }: { sessionId: string; metadata?: any }) => {
-        const project = mockState.projectForSession[sessionId];
-        return project?.key?.machineId ?? metadata?.machineId ?? null;
-    },
-    readDisplayPathForSession: ({ sessionId, metadata }: { sessionId: string; metadata?: any }) => {
-        const project = mockState.projectForSession[sessionId];
-        return project?.key?.rootPath ?? metadata?.path ?? '';
-    },
-}));
-
-describe('MachineDetailScreen start a session', () => {
+describe('Machine detail navigation and terminal entry', () => {
+    let serverId: string;
+    let disposeLoader: (() => void) | undefined;
     beforeEach(async () => {
-        mockState.activeServerIdRef.current = 'server-a';
-        mockState.routerBackSpy.mockReset();
-        mockState.routerPushSpy.mockReset();
-        mockState.multiTextInputSpy.mockClear();
-        mockState.openMachinePathBrowserModalMock.mockClear();
-        mockState.sessionSpawnNewActionMock.mockClear();
-        mockState.routeParamsRef.current = { id: 'machine-1' };
-        mockState.sessionsState = [];
-        mockState.machinesState = { 'machine-1': createMachineRecord() };
-        mockState.projectForSession = {};
-        mockState.settingsState = {};
-        storage.setState(storage.getInitialState(), true);
-        await upsertAndActivateServer({ serverUrl: 'https://server-a', scope: 'tab' });
-        await storage.getState().activateSettingsScope({ serverId: 'server-a', accountId: 'account-a' });
+        await standardCleanup();
+        await loadSyncSingletonForTests();
+        await home.reset();
+        boundary.params = { id: 'machine-1' };
+        boundary.push.mockReset();
+        boundary.rpc.mockReset();
+        boundary.rpc.mockImplementation(async ({ method }: { method: string }) => {
+            if (method === RPC_METHODS.DAEMON_TERMINAL_ENSURE) return { ok: true, terminalId: 'machine-shell-pty', reused: false };
+            if (method === RPC_METHODS.DAEMON_TERMINAL_LIST) return { ok: true, terminals: [] };
+            if (method === RPC_METHODS.DAEMON_TERMINAL_CLOSE) return { ok: true };
+            if (method === RPC_METHODS.DAEMON_TERMINAL_STREAM_READ_BYTES) return { ok: true, terminalId: 'machine-shell-pty',
+                frames: [], nextByteOffset: 0, availableByteOffset: 0, droppedBeforeByteOffset: 0, done: true };
+            return { supported: false, reason: 'not-supported' };
+        });
+        serverId = await home.addHome({ name: 'Machine Home', serverUrl: 'https://machine-detail.test', accountId: 'account-a', currentAccount: true });
+        home.answer(serverId, '/v1/machines', { body: [createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' })] });
+        await storage.getState().activateProfileScope({ serverId, accountId: 'account-a' });
+        await storage.getState().activateSettingsScope({ serverId, accountId: 'account-a' });
         storage.getState().applySettings(settingsDefaults, (storage.getState().settingsVersion ?? 0) + 1);
-        storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', metadata: createMachineRecord().metadata })], true);
-        expect(storage.getState().machines['machine-1']).toBeTruthy();
-        machineContributionRegistryProjectionDescribe.mockReset();
-        machineContributionRegistryProjectionDescribe.mockResolvedValue({ supported: false, reason: 'not-supported' });
+        storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', activeAt: Date.now(), isShared: false })], true);
+        publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+        disposeLoader = await installRealActionExecutorModuleLoader();
+        vi.mocked(Modal.show).mockClear();
     });
+    afterEach(async () => { await act(async () => Modal.hideAll()); await standardCleanup(); disposeLoader?.(); disposeLoader = undefined; });
+
+    const render = (body: React.ReactNode) => renderScreen(<AppPaneProvider><ModalProvider>{body}</ModalProvider></AppPaneProvider>);
 
     it('shows the inherited effective host without implying that override-off disables hosting', async () => {
-        const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-        mockState.settingsState = { ...settingsDefaults, sessionTerminalHost: 'herdr' };
-        const { storage } = await import('@/sync/domains/state/storageStore');
         storage.getState().applySettings({ ...settingsDefaults, sessionTerminalHost: 'herdr' }, (storage.getState().settingsVersion ?? 0) + 1);
-        mockState.routeParamsRef.current = { id: 'machine-1', page: 'terminal' };
-        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
-        const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
-        const screen = await renderScreen(<AppPaneProvider><MachineDetailScreen /></AppPaneProvider>);
-        expect(screen.findByTestId('machine-terminal-effective-host')?.props.subtitle).toBe('Herdr');
+        boundary.params = { id: 'machine-1', page: 'terminal' };
+        const screen = await render(<MachineSubPageScreen />);
+        expect(screen.findAllByTestId('machine-terminal-effective-host').some(row => row.props.subtitle === 'Herdr')).toBe(true);
     });
 
     it('keeps the Windows launch override on the Terminal page of a Windows machine, and only there', async () => {
-        const record = createMachineRecord();
-        const windowsMetadata = { ...record.metadata, platform: 'win32' };
-        mockState.machinesState = { 'machine-1': { ...record, metadata: windowsMetadata } };
-        storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', metadata: windowsMetadata })], true);
-        mockState.routeParamsRef.current = { id: 'machine-1', page: 'terminal' };
-        const { MachineSubPageScreen } = await import('@/components/machines/page/MachineSubPageScreen');
-        const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
-        const screen = await renderScreen(<AppPaneProvider><MachineSubPageScreen /></AppPaneProvider>);
-        expect(screen.findAll((node) => node.props?.title === 'machine.windows.remoteSessionModeOverrideTitle').length).toBeGreaterThan(0);
-
-        mockState.routeParamsRef.current = { id: 'machine-1' };
-        const { MachinePageScreen } = await import('@/components/machines/page/MachinePageScreen');
-        const overview = await renderScreen(<AppPaneProvider><MachinePageScreen /></AppPaneProvider>);
-        expect(overview.findAll((node) => node.props?.title === 'machine.windows.remoteSessionModeOverrideTitle')).toHaveLength(0);
+        const machine = createMachineFixture({ id: 'machine-1', activeAt: Date.now() });
+        storage.getState().applyMachines([{ ...machine, metadata: { ...machine.metadata!, platform: 'win32' } }], true);
+        boundary.params = { id: 'machine-1', page: 'terminal' };
+        const screen = await render(<MachineSubPageScreen />);
+        expect(screen.findAll(node => node.props?.title === 'machine.windows.remoteSessionModeOverrideTitle').length).toBeGreaterThan(0);
+        await screen.unmount();
+        boundary.params = { id: 'machine-1' };
+        const overview = await render(<MachinePageScreen />);
+        expect(overview.findAll(node => node.props?.title === 'machine.windows.remoteSessionModeOverrideTitle')).toHaveLength(0);
         expect(overview.findByTestId('machine-page-row-terminal')).toBeTruthy();
     });
 
     it('shows the retained host choice even after an older UI removes its legacy tmux record', async () => {
-        const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-        mockState.settingsState = { ...settingsDefaults, sessionTerminalHostByMachineId: { 'machine-1': 'herdr' }, sessionTmuxByMachineId: {} };
-        const { storage } = await import('@/sync/domains/state/storageStore');
         storage.getState().applySettings({ ...settingsDefaults, sessionTerminalHostByMachineId: { 'machine-1': 'herdr' }, sessionTmuxByMachineId: {} }, (storage.getState().settingsVersion ?? 0) + 1);
-        expect(storage.getState().settings.sessionTerminalHostByMachineId['machine-1']).toBe('herdr');
-        mockState.routeParamsRef.current = { id: 'machine-1', page: 'terminal' };
-        const { MachineSubPageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachineSubPageScreen');
+        boundary.params = { id: 'machine-1', page: 'terminal' };
         const { SegmentedChoiceItem } = await import('@/components/ui/lists/SegmentedChoiceItem');
-        const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
-        const screen = await renderScreen(<AppPaneProvider><MachineDetailScreen /></AppPaneProvider>);
-        expect(screen.findAllByType(SegmentedChoiceItem).some((row) => row.props.value === 'herdr')).toBe(true);
+        const screen = await render(<MachineSubPageScreen />);
+        expect(screen.findAllByType(SegmentedChoiceItem).some(row => row.props.value === 'herdr')).toBe(true);
     });
 
-    it('opens the composer with this machine chosen on its Home, instead of a page-local path field', async () => {
-        // The composer's path chip already lists this machine's recent paths once it is chosen
-        // (`useNewSessionMachineRefreshState` → `getRecentPathsForMachine`), so the page only hands off.
-        mockState.routeParamsRef.current = { id: 'machine-1', serverId: 'server-b' };
-        const { MachinePageScreen: MachineDetailScreen } = await import('@/components/machines/page/MachinePageScreen');
-        const { getStorage } = await import('@/sync/domains/state/storageStore');
+    it('opens the composer with this machine chosen on its Home', async () => {
+        boundary.params = { id: 'machine-1', serverId };
         const { readNewSessionDraftFromRepository } = await import('@/components/sessions/composer/newSessionDraftRepositoryAdapter');
         const { prepareSessionDraftPersistenceStorage } = await import('@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage');
-        // App boot prepares draft storage before any screen can seed a draft.
         await prepareSessionDraftPersistenceStorage();
-        const accountScope = { serverId: 'server-a', accountId: 'account-a' };
-        await getStorage().getState().activateProfileScope(accountScope);
-        // The connection owner publishes the applied Home (and its runtime) once connected; the Account
-        // lifetime the composer hand-off captures exists only for that applied Home.
-        const { publishAppliedActiveServerSnapshot } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
-        const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverProfiles');
-        publishAppliedActiveServerSnapshot({ ...getActiveServerSnapshot(), serverId: 'server-a' }, true);
-
-        const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
-        const screen = await renderScreen(<AppPaneProvider><MachineDetailScreen /></AppPaneProvider>);
-        await flushHookEffects({ cycles: 1, turns: 2 });
-
-        expect(mockState.multiTextInputSpy).not.toHaveBeenCalled();
-        const start = screen.findAll((node) => node.props?.testID === 'machine-detail-start-session' && typeof node.props?.onPress === 'function')[0];
-        expect(start).toBeTruthy();
-        await act(async () => {
-            await start!.props.onPress();
-        });
-        expect(getStorage().getState().profileScope).toEqual(accountScope);
-
-        expect(mockState.sessionSpawnNewActionMock).not.toHaveBeenCalled();
-        const route = mockState.routerPushSpy.mock.calls.at(-1)?.[0] as Readonly<{ pathname: string; params: Readonly<{ draftId: string }> }>;
+        const scope = storage.getState().profileScope!;
+        const screen = await render(<MachinePageScreen />);
+        await screen.pressByTestIdAsync('machine-detail-start-session');
+        const route = boundary.push.mock.calls.at(-1)?.[0] as { pathname: string; params: { draftId: string } };
         expect(route).toEqual({ pathname: '/new', params: { draftId: expect.any(String) } });
-        expect(readNewSessionDraftFromRepository({ scope: accountScope, draftId: route.params.draftId })).toMatchObject({
-            selectedMachineId: 'machine-1',
-            targetServerId: 'server-b',
-            executionTarget: { kind: 'machine', target: { serverId: 'server-b', machineId: 'machine-1' } },
+        expect(readNewSessionDraftFromRepository({ scope, draftId: route.params.draftId })).toMatchObject({
+            selectedMachineId: 'machine-1', targetServerId: serverId,
+            executionTarget: { kind: 'machine', target: { serverId, machineId: 'machine-1' } },
         });
+    });
+
+    it.each([
+        { isShared: false, active: true, visible: true },
+        { isShared: true, active: true, visible: false },
+        { isShared: false, active: false, visible: false },
+    ])('offers a header terminal only for an online machine the person manages ($isShared, $active)', async ({ isShared, active, visible }) => {
+        const row = createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' });
+        const access = { ...row.access!, role: isShared ? 'use' as const : 'manage' as const };
+        const activeAt = active ? row.activeAt : Date.now() - DEFAULT_MACHINE_ONLINE_GRACE_MS - 1;
+        home.answer(serverId, '/v1/machines', { body: [{ ...row, active, activeAt, access }] });
+        // Replace fixture membership before publishing an offline observation; the store correctly retains newer heartbeats.
+        storage.getState().applyMachines([], true);
+        storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', activeAt, isShared, active, access })], true);
+        const screen = await render(<MachinePageScreen />);
+        expect(screen.findAll(node => node.props?.testID === 'machine-detail-open-terminal' && typeof node.props.onPress === 'function').length > 0).toBe(visible);
+    });
+
+    it('offers no header terminal while the machine\'s home folder is unknown on this device', async () => {
+        const row = createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' });
+        const metadata = { ...createMachineFixture().metadata!, homeDir: '' };
+        home.answer(serverId, '/v1/machines', { body: [{ ...row, metadata: encodePlainMachineStoredContent(metadata) }] });
+        storage.getState().applyMachines([], true);
+        storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', activeAt: Date.now(), isShared: false, metadata })], true);
+        const screen = await render(<MachinePageScreen />);
+        expect(screen.findAll(node => node.props?.testID === 'machine-detail-open-terminal')).toHaveLength(0);
+    });
+
+    it('waits in the sheet without asking the daemon until the home folder is known, then opens there', async () => {
+        const metadata = { ...createMachineFixture().metadata!, homeDir: '' };
+        const row = createPlainMachineRowFixture({ id: 'machine-1', accountId: 'account-a' });
+        home.answer(serverId, '/v1/machines', { body: [{ ...row, metadata: encodePlainMachineStoredContent(metadata) }] });
+        storage.getState().applyMachines([], true);
+        storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', activeAt: Date.now(), isShared: false, metadata })], true);
+        const screen = await render(<MachinePageScreen />);
+        await act(async () => showMachineTerminalSheet({ serverId, machineId: 'machine-1', machineName: 'tester' }));
+        await flushHookEffects({ cycles: 3, turns: 2 });
+        expect(screen.findAll(node => node.props?.testID === 'machine-terminal-waiting').length).toBeGreaterThan(0);
+        expect(screen.findAllByType(EmbeddedTerminalPaneFrame)).toHaveLength(0);
+        expect(boundary.rpc.mock.calls.filter(([request]) => request.method === RPC_METHODS.DAEMON_TERMINAL_ENSURE)).toHaveLength(0);
+        await act(async () => {
+            storage.getState().applyMachines([createMachineFixture({ id: 'machine-1', activeAt: Date.now(), isShared: false, seq: 2, metadataVersion: 2 })], true);
+        });
+        await flushHookEffects({ cycles: 3, turns: 2 });
+        expect(screen.findAll(node => node.props?.testID === 'machine-terminal-waiting')).toHaveLength(0);
+        expect(screen.findAllByType(EmbeddedTerminalPaneFrame).length).toBeGreaterThan(0);
+    });
+
+    it('says the terminal waits on the person and offers the Approvals shortcut when Ask first holds the open', async () => {
+        await home.requireUiApproval(serverId, 'machines.terminal.open');
+        const screen = await render(<MachinePageScreen />);
+        await screen.pressByTestIdAsync('machine-detail-open-terminal');
+        await act(async () => {
+            for (const frame of screen.findAllByType(EmbeddedTerminalPaneFrame)) frame.props.controller.onReady(80, 24);
+        });
+        await flushHookEffects({ cycles: 3, turns: 2 });
+        await waitForHomeGovernance(() => expect(screen.findAllByType(EmbeddedTerminalPaneFrame)[0]?.props.controller)
+            .toMatchObject({ approvalPending: true, approvalId: expect.any(String) }));
+        expect(screen.findByTestId('machine-terminal-state-line')).toBeTruthy();
+        const action = screen.findByTestId('machine-terminal-state-line-action');
+        expect(action).toBeTruthy();
+        await act(async () => action?.props.onPress());
+        expect(boundary.push).toHaveBeenCalledWith(expect.stringContaining('/inbox/approvals/'));
+    });
+
+    it.each([false, true])('opens the header shell through real Machine Action admission (Action disabled: %s)', async disabled => {
+        if (disabled) {
+            const settings = settingsParse({ ...storage.getState().settings,
+                actionsSettingsV1: { v: 1, actions: { 'machines.terminal.open': { enabled: false } } },
+            });
+            // This Account is already restored: Action admission reads its live scoped policy before HTTP.
+            storage.getState().applySettingsLocal({ actionsSettingsV1: settings.actionsSettingsV1 });
+            home.answer(serverId, '/v2/account/settings', { body: {
+                version: (storage.getState().settingsVersion ?? 0) + 1, content: { t: 'plain', v: settings },
+            } });
+        }
+        const screen = await render(<MachinePageScreen />);
+        await screen.pressByTestIdAsync('machine-detail-open-terminal');
+        expect(Modal.show).toHaveBeenCalledWith(expect.objectContaining({
+            props: expect.objectContaining({ serverId, machineId: 'machine-1' }),
+            chrome: expect.objectContaining({ testID: 'machine-terminal-modal' }),
+        }));
+        // react-test-renderer cannot deliver DOM geometry; deliver the actual renderer readiness event.
+        await act(async () => {
+            for (const frame of screen.findAllByType(EmbeddedTerminalPaneFrame)) frame.props.controller.onReady(80, 24);
+        });
+        await flushHookEffects({ cycles: 3, turns: 2 });
+        if (disabled) {
+            await waitForHomeGovernance(() => expect(screen.findAllByType(EmbeddedTerminalPaneFrame)[0]?.props.controller)
+                .toMatchObject({ status: 'error', error: 'action_disabled' }));
+            expect(boundary.rpc.mock.calls.filter(([request]) => request.method === RPC_METHODS.DAEMON_TERMINAL_ENSURE)).toHaveLength(0);
+            return;
+        }
+        await waitForHomeGovernance(() => expect(boundary.rpc.mock.calls.filter(([request]) => request.method === RPC_METHODS.DAEMON_TERMINAL_ENSURE)).toHaveLength(1));
+        const request = boundary.rpc.mock.calls.find(([request]) => request.method === RPC_METHODS.DAEMON_TERMINAL_ENSURE)?.[0];
+        expect(request).toMatchObject({ serverId, machineId: 'machine-1', payload: {
+            cwd: '/Users/tester', terminalKey: expect.stringMatching(/^machine-shell:machine-1:/),
+        } });
     });
 });

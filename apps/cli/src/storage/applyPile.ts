@@ -39,10 +39,11 @@ export async function applyPile(input: PileApplyInput, deps: PileApplyDeps): Pro
                 // Only our successful owned-child effects are an expected change.
                 // A new/recreated child remains in current facts and fails comparison.
                 if (facts.classification.verdict === 'forbidden') throw new PileFactError('storage_forbidden', facts.classification.reason);
-                if (facts.expect !== pileFactsExpect(reviewedFacts, completedChildren)) throw new PileFactError('changed_since_review');
+                if (facts.children.some(child => completedChildren.has(child.ref.itemId))) throw new PileFactError('changed_since_review');
+                if (pileFactsExpect(facts, completedChildren, reviewedFacts) !== pileFactsExpect(reviewedFacts, completedChildren))
+                    throw new PileFactError('changed_since_review');
                 return facts;
             };
-            await recheck();
             // SCM renames main/common authorities whole; contained facts are still in expect,
             // but their bytes and original back-references must remain inside that one payload.
             const separateChildren = reviewedFacts.item.retirementKind === 'main' || reviewedFacts.item.retirementKind === 'common'
@@ -54,7 +55,10 @@ export async function applyPile(input: PileApplyInput, deps: PileApplyDeps): Pro
                 const completed = await execute({ ref: child.ref, expect: childFacts.expect }, async () => { await recheck(); });
                 if (!completed) throw new PileFactError('facts_unavailable', { code: 'facts_unavailable', detail: { itemId: child.ref.itemId } });
             }
-            const facts = await recheck();
+            // With no child effects there has been no wait since the admission
+            // inspection. Owner binding/measurement may wait; beforeEffect below
+            // still takes fresh facts at each destructive owner boundary.
+            const facts = separateChildren.length ? await recheck() : reviewedFacts;
             const adapter = await deps.resolveAdapter(facts.item);
             const measured = await deps.measure({ paths: [facts.ref.path], measureSharedExtents: true });
             const measurement = measured.perPath.find(value => canonicalAbsolutePathsEqual(value.path, facts.ref.path));

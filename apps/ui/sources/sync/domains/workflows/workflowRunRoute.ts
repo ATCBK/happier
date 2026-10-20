@@ -3,24 +3,74 @@ import { WorkflowInvocationRecordIdSchema, WorkflowRunIdV1Schema } from '@happie
 /** The Workflows collection, whose Saved/Runs views are route-selected. */
 export const WORKFLOWS_ROUTE = '/workflows';
 
+export type WorkflowRunRouteTarget = Readonly<
+    | { kind: 'managed'; runId: string }
+    | { kind: 'occurrence'; automationId: string; runId: string }
+>;
+
+function routeParam(value: unknown): string | null {
+    const first = Array.isArray(value) ? value[0] : value;
+    return typeof first === 'string' && first.length > 0 ? first : null;
+}
+
+/** Select the reader from the declared route identity, never from a failed read. */
+export function readWorkflowRunTarget(params: Readonly<Record<string, unknown>>): WorkflowRunRouteTarget | null {
+    const runId = readWorkflowRunId(routeParam(params.runId));
+    if (!runId) return null;
+    const target = routeParam(params.target);
+    if (target === 'occurrence') {
+        const automationId = routeParam(params.automationId);
+        return automationId && automationId === automationId.trim() ? { kind: 'occurrence', automationId, runId } : null;
+    }
+    return (params.target === undefined || target === 'managed') && params.automationId === undefined
+        ? { kind: 'managed', runId } : null;
+}
+
 /**
  * The exact Run route. One owner so a notification tap, an agent result link
  * and a list row all address the same Run the same way, and so no caller has to
  * remember to encode the id.
  */
-export function createWorkflowRunRoute(runId: string, serverId?: string | null): string {
-    return appendWorkflowRunHome(`${WORKFLOWS_ROUTE}/runs/${encodeURIComponent(runId)}`, serverId);
+export function createWorkflowRunRoute(target: string | WorkflowRunRouteTarget, serverId?: string | null): `/workflows/runs/${string}` {
+    const runId = typeof target === 'string' ? target : target.runId;
+    const route: `/workflows/runs/${string}` = `${WORKFLOWS_ROUTE}/runs/${encodeURIComponent(runId)}`;
+    return appendWorkflowRunHome(typeof target !== 'string' && target.kind === 'occurrence'
+        ? `${route}?target=occurrence&automationId=${encodeURIComponent(target.automationId)}` : route, serverId);
+}
+
+/**
+ * The Run (and invocation) one of this owner's own route strings addresses, or `null` for anything
+ * else. A host that shows a Run inside a pane reads its navigation back through this, so opening a
+ * step stays in the pane while every other destination leaves it.
+ */
+export function readWorkflowRunRouteTarget(href: unknown): Readonly<{ runId: string; invocationId: string | null }> | null {
+    if (typeof href !== 'string') return null;
+    const [path, query = ''] = href.split('?', 2);
+    const prefix = `${WORKFLOWS_ROUTE}/runs/`;
+    if (!path?.startsWith(prefix)) return null;
+    const segment = path.slice(prefix.length);
+    if (segment.length === 0 || segment.includes('/')) return null;
+    let runId: string;
+    try { runId = decodeURIComponent(segment); } catch { return null; }
+    const search = new URLSearchParams(query);
+    const target = readWorkflowRunTarget({ runId, ...(search.has('target') ? { target: search.get('target') } : {}),
+        ...(search.has('automationId') ? { automationId: search.get('automationId') } : {}) });
+    // An invocation link in the managed Run peek must not replace its body with a different reader.
+    if (target?.kind !== 'managed') return null;
+    const invocationId = search.get('invocationId');
+    return { runId, invocationId: invocationId && invocationId.length > 0 ? invocationId : null };
 }
 
 /** An optional exact Home belongs to the route owner, after any invocation query. */
-function appendWorkflowRunHome(route: string, serverId?: string | null): string {
+function appendWorkflowRunHome(route: `/workflows/runs/${string}`, serverId?: string | null): `/workflows/runs/${string}` {
     if (!serverId) return route;
     return `${route}${route.includes('?') ? '&' : '?'}serverId=${encodeURIComponent(serverId)}`;
 }
 
 /** The exact saved workflow's editor route (also the link a document share sheet copies). */
-export function createWorkflowDefinitionRoute(definitionId: string): string {
-    return `${WORKFLOWS_ROUTE}/${encodeURIComponent(definitionId)}`;
+export function createWorkflowDefinitionRoute(definitionId: string, serverId?: string | null): `/workflows/${string}` {
+    const route: `/workflows/${string}` = `${WORKFLOWS_ROUTE}/${encodeURIComponent(definitionId)}`;
+    return serverId ? `${route}?serverId=${encodeURIComponent(serverId)}` : route;
 }
 
 /**
@@ -34,44 +84,15 @@ export function createWorkflowDefinitionRoute(definitionId: string): string {
  */
 export function createAdmittedWorkflowRunRoute(
     workflowRun: Readonly<{ recipeKind: 'workflow-v2'; workflowRunId: string }> | undefined,
-): string | null {
+    serverId?: string | null,
+): ReturnType<typeof createWorkflowRunRoute> | null {
     if (workflowRun === undefined) return null;
     const runId = readWorkflowRunId(workflowRun.workflowRunId);
-    return runId === null ? null : createWorkflowRunRoute(runId);
-}
-
-/**
- * Where one Automation history row opens.
- *
- * A definition whose `targetType` is `null` is, by the definition owner's own
- * contract, a strict managed-workflow recipe; and the admission receipt schema
- * binds `workflowRunId` to the returned Run id, so that Automation's Run ids
- * *are* Workflow Run ids. Such a row therefore composes the one shared managed
- * Run body rather than a second, materially different detail experience.
- *
- * This is a declared server-authored fact, not a recipe-shape inference. Every
- * other target keeps the incumbent Automation Run detail unchanged, and a
- * malformed id falls back to it rather than becoming Workflow navigation.
- */
-export function createAutomationRunDetailRoute(params: Readonly<{
-    automationId: string;
-    runId: string;
-    /** `AutomationDefinitionListItem['targetType']`, verbatim. */
-    targetType: string | null;
-}>): Readonly<{ pathname: string; params: Record<string, string> }> {
-    const legacy = {
-        pathname: '/automations/[id]/runs/[runId]',
-        params: { id: params.automationId, runId: params.runId },
-    } as const;
-    if (params.targetType !== null) return legacy;
-    const runId = readWorkflowRunId(params.runId);
-    return runId === null
-        ? legacy
-        : { pathname: '/workflows/runs/[runId]', params: { runId } };
+    return runId === null ? null : createWorkflowRunRoute(runId, serverId);
 }
 
 /** Address one exact invocation while retaining the Run as the route owner. */
-export function createWorkflowInvocationRoute(runId: string, invocationId: string, serverId?: string | null): string {
+export function createWorkflowInvocationRoute(runId: string, invocationId: string, serverId?: string | null): ReturnType<typeof createWorkflowRunRoute> {
     return appendWorkflowRunHome(`${createWorkflowRunRoute(runId)}?invocationId=${encodeURIComponent(invocationId)}`, serverId);
 }
 
@@ -82,7 +103,7 @@ export function createWorkflowInvocationRoute(runId: string, invocationId: strin
  * Machine + Run tuple. Callers omit the link when any opaque identity is not
  * exact instead of opening a broader collection that looks like the target.
  */
-export function createMachineExecutionRunRoute(serverId: string, machineId: string, runId: string): string | null {
+export function createMachineExecutionRunRoute(serverId: string, machineId: string, runId: string): `/runs?${string}` | null {
     if (!serverId || serverId !== serverId.trim()) return null;
     if (!machineId || machineId !== machineId.trim()) return null;
     if (!runId || runId !== runId.trim()) return null;

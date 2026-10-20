@@ -103,6 +103,7 @@ async function requestApproval(
     title: string;
     description?: string;
     toolName: string;
+    toolCallId?: string | null;
     params: unknown;
     allowSessionPersistence?: boolean;
   }>,
@@ -122,6 +123,7 @@ async function requestApproval(
       ...(input.description ? { description: input.description } : {}),
       subject: {
         kind: 'tool',
+        ...(input.toolCallId ? { toolCallId: input.toolCallId } : {}),
         name: input.toolName,
         input: toJsonValue(input.params),
       },
@@ -311,32 +313,66 @@ export function registerCodexAppServerInteractionHandlers(params: Readonly<{
   ) => Promise<unknown>;
   const pendingRequests = new Map<string, AbortController>();
   const handledAsyncQuestionItemIds = new Set<string>();
-  const mcpApprovalSubjectsByItem = new Map<string, string>();
+  const approvalSubjectsByItem = new Map<string, Readonly<{ name: string; input: unknown }>>();
   const toolItemKey = (raw: RecordLike, itemId: string | null): string | null => {
     const threadId = readString(raw.threadId);
     const turnId = readString(raw.turnId);
     return threadId && turnId && itemId ? JSON.stringify([threadId, turnId, itemId]) : null;
   };
-  // requestUserInput carries only itemId; the preceding tool lifecycle event
-  // supplies the canonical MCP subject through the existing tool projection.
-  for (const method of ['item/started', 'item/completed']) {
+  const rememberApprovalSubject = (
+    method: 'item/started' | 'item/completed',
+    raw: RecordLike,
+    notificationParams: unknown = raw,
+  ): void => {
+    for (const event of projectCodexAppServerToolEventsFromNotification({
+      method,
+      notificationParams,
+      mcpServerKeys: params.mcpServerKeys,
+    })) {
+      const key = toolItemKey(raw, event.callId);
+      if (!key) continue;
+      if (method === 'item/completed') {
+        approvalSubjectsByItem.delete(key);
+        continue;
+      }
+      if (event.type !== 'tool-call') continue;
+      const isMcpTool = event.name.startsWith('mcp__');
+      if (!isMcpTool && event.name !== 'Patch') continue;
+      if (
+        isMcpTool
+        && params.mcpServerKeys
+        && ![...params.mcpServerKeys.keys()].some(server => event.name.startsWith(`mcp__${server}__`))
+      ) continue;
+      approvalSubjectsByItem.set(key, { name: event.name, input: event.input });
+    }
+  };
+  // Approval requests carry only the item identity for MCP and file-change
+  // tools. Their preceding lifecycle notification supplies the canonical tool
+  // subject through the existing app-server projection.
+  for (const method of ['item/started', 'item/completed'] as const) {
     params.client.registerNotificationHandler(method, (raw) => {
       if (!matchesCurrentThread(raw, params.getThreadId)) return;
-      for (const event of projectCodexAppServerToolEventsFromNotification({ method, notificationParams: raw, mcpServerKeys: params.mcpServerKeys })) {
-        const key = toolItemKey(raw, event.callId);
-        if (!key) continue;
-        if (method === 'item/completed') mcpApprovalSubjectsByItem.delete(key);
-        else if (event.type === 'tool-call' && event.name.startsWith('mcp__')) {
-          if (params.mcpServerKeys && ![...params.mcpServerKeys.keys()].some(server => event.name.startsWith(`mcp__${server}__`))) continue;
-          mcpApprovalSubjectsByItem.set(key, event.name);
-        }
-      }
+      rememberApprovalSubject(method, readRecord(raw) ?? {}, raw);
     });
   }
-  params.client.registerNotificationHandler('turn/completed', (raw) => {
-    if (matchesCurrentThread(raw, params.getThreadId)) mcpApprovalSubjectsByItem.clear();
+  params.client.registerNotificationHandler('item/fileChange/patchUpdated', (raw) => {
+    if (!matchesCurrentThread(raw, params.getThreadId)) return;
+    const record = readRecord(raw);
+    const itemId = readString(record?.itemId);
+    if (!record || !itemId) return;
+    rememberApprovalSubject('item/started', record, {
+      ...record,
+      item: {
+        id: itemId,
+        type: 'fileChange',
+        changes: record.changes,
+      },
+    });
   });
-  params.client.onExit(() => mcpApprovalSubjectsByItem.clear());
+  params.client.registerNotificationHandler('turn/completed', (raw) => {
+    if (matchesCurrentThread(raw, params.getThreadId)) approvalSubjectsByItem.clear();
+  });
+  params.client.onExit(() => approvalSubjectsByItem.clear());
   const requestKey = (value: unknown): string | null => (
     typeof value === 'string' || typeof value === 'number'
       ? `${typeof value}:${String(value)}`
@@ -406,11 +442,19 @@ export function registerCodexAppServerInteractionHandlers(params: Readonly<{
       if (!availability.accept && !availability.acceptForSession) {
         return { decision: 'decline' };
       }
+      const reason = readString(raw.reason);
+      const command = readString(raw.command);
+      const cwd = readString(raw.cwd);
       const result = await requestApproval(params.ui, {
         title: 'Allow Codex command execution?',
-        ...(readString(raw.reason) ? { description: readString(raw.reason)! } : {}),
-        toolName: 'codex_command_execution',
-        params: raw,
+        ...(reason ? { description: reason } : {}),
+        toolName: 'Bash',
+        toolCallId: readString(raw.itemId),
+        params: {
+          ...(command ? { command } : {}),
+          ...(cwd ? { cwd } : {}),
+          ...(reason ? { reason } : {}),
+        },
         allowSessionPersistence: availability.acceptForSession,
       }, signal);
       return {
@@ -426,11 +470,20 @@ export function registerCodexAppServerInteractionHandlers(params: Readonly<{
     'item/fileChange/requestApproval',
     async (raw, signal) => {
       if (!matchesCurrentThread(raw, params.getThreadId)) return { decision: 'decline' };
+      const reason = readString(raw.reason);
+      const grantRoot = readString(raw.grantRoot);
+      const itemKey = toolItemKey(raw, readString(raw.itemId));
+      const subjectInput = readRecord(itemKey ? approvalSubjectsByItem.get(itemKey)?.input : null) ?? {};
       const result = await requestApproval(params.ui, {
         title: 'Allow Codex file changes?',
-        ...(readString(raw.reason) ? { description: readString(raw.reason)! } : {}),
-        toolName: 'codex_file_change',
-        params: raw,
+        ...(reason ? { description: reason } : {}),
+        toolName: 'Patch',
+        toolCallId: readString(raw.itemId),
+        params: {
+          ...subjectInput,
+          ...(grantRoot ? { grantRoot } : {}),
+          ...(reason ? { reason } : {}),
+        },
         allowSessionPersistence: true,
       }, signal);
       return { decision: mapApprovalDecision(result) };
@@ -480,11 +533,12 @@ export function registerCodexAppServerInteractionHandlers(params: Readonly<{
         questions: raw.questions,
       })) {
         const itemKey = toolItemKey(raw, readString(raw.itemId));
+        const subject = itemKey ? approvalSubjectsByItem.get(itemKey) : undefined;
         const result = await requestApproval(params.ui, {
           title: 'Codex needs your approval',
-          toolName: (itemKey ? mcpApprovalSubjectsByItem.get(itemKey) : undefined)
-            ?? `codex_request_user_input_approval:${randomUUID()}`,
-          params: raw,
+          toolName: subject?.name ?? `codex_request_user_input_approval:${randomUUID()}`,
+          ...(subject ? { toolCallId: readString(raw.itemId) } : {}),
+          params: subject ? subject.input : raw,
           allowSessionPersistence: true,
         }, signal);
         const choice = resolveCodexApprovalQuestionChoice({

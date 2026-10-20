@@ -1,20 +1,20 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { SessionMessageRoleSchema } from '@happier-dev/protocol/sessions/messages/sessionMessageRole';
 import type { SessionMessageRole } from '@happier-dev/protocol';
 
 import { normalizeRawMessage, RawRecordSchema, type NormalizedMessage, type RawRecord } from "../raw/index.js";
 
-const PersistSessionTranscriptMessageResponseSchema = z.object({
+const PersistSessionTranscriptMessageResponseSchema = z.looseObject({
     didWrite: z.boolean(),
-    didUpdate: z.boolean().optional(),
+    didUpdate: z.optional(z.boolean()),
     message: z.object({
         id: z.string(),
-        seq: z.number().int().min(0),
-        localId: z.string().nullable(),
-        createdAt: z.number().int().min(0),
+        seq: z.number().check(z.int(), z.minimum(0)),
+        localId: z.nullable(z.string()),
+        createdAt: z.number().check(z.int(), z.minimum(0)),
     }),
-}).passthrough();
+});
 
 export type PersistSessionTranscriptMessageInput = Readonly<{
     sessionId: string;

@@ -1,14 +1,24 @@
 import {
+    HAPPIER_PAGE_METRICS,
+    HAPPIER_WORK_PANE_METRICS,
     HappierWorkFlatSheet,
     HappierWorkSection,
     HappierWorkSectionEmptyLine,
+    happierPageTextMetrics,
+    useHappierPageSection,
 } from '@happier-dev/plugin-ui/presentation';
 import * as React from 'react';
+import { View, type StyleProp, type ViewStyle } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
 
 import { IconButton } from '@/components/ui/buttons/IconButton';
+import { ItemGroup } from '@/components/ui/lists/ItemGroup';
 import { ListPresentationProvider } from '@/components/ui/lists/listPresentation';
+import { SkeletonRows } from '@/components/ui/lists/SkeletonRows';
 import { useWorkTheme, WORK_HOST } from '@/components/work/map/WorkMapView';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
+import { Text } from '@/components/ui/text/Text';
+import { Typography } from '@/constants/Typography';
 import { Modal } from '@/modal';
 import { t } from '@/text';
 
@@ -42,7 +52,49 @@ export type WorkSectionProps = Readonly<{
     children?: React.ReactNode;
 }>;
 
+/**
+ * Where a Session's configuration sections are drawn. `pane` (default): laid flat on the Work pane
+ * (lab `convo-W8/W9`). `page`: the Session's Info page (coordination lab P1i), where the same section
+ * components take the configuration-page section anatomy — title, its explanation above the rows, one
+ * sheet — so a section moves between hosts without a second component.
+ */
+export type WorkSectionPlacement = 'pane' | 'page';
+
+const WorkSectionPlacementContext = React.createContext<WorkSectionPlacement>('pane');
+
+export function WorkSectionPlacementProvider(props: Readonly<{ value: WorkSectionPlacement; children?: React.ReactNode }>) {
+    return <WorkSectionPlacementContext.Provider value={props.value}>{props.children}</WorkSectionPlacementContext.Provider>;
+}
+
 export const WorkSection = React.memo((props: WorkSectionProps) => {
+    const placement = React.useContext(WorkSectionPlacementContext);
+    return placement === 'page' && props.anatomy === 'page'
+        ? <WorkSectionOnPage {...props} />
+        : <WorkSectionOnPane {...props} />;
+});
+
+/** A configuration section on a page: the page's own section (`ItemGroup`), its ⓘ text read as the description. */
+function WorkSectionOnPage(props: WorkSectionProps) {
+    const count = readCountText(props);
+    return (
+        // The anchor a route scrolls to stays on the section (`/session/[id]/info` → Triggers).
+        <View nativeID={props.nativeID} collapsable={false}>
+            <ItemGroup
+                testID={props.testID}
+                title={props.title}
+                description={props.info}
+                titleAccessory={count && !props.loading ? (
+                    <Text testID={`session-agents-section-count:${props.testID}`} style={stylesheet.pageCount}>{count}</Text>
+                ) : undefined}
+                action={props.action ?? undefined}
+            >
+                {props.loading ? <SkeletonRows testID={`${props.testID}-loading`} rows={2} accessibilityLabel={props.title} /> : props.children}
+            </ItemGroup>
+        </View>
+    );
+}
+
+const WorkSectionOnPane = React.memo((props: WorkSectionProps) => {
     const theme = useWorkTheme();
     const reducedMotion = useReducedMotionPreference();
     const { title, info } = props;
@@ -114,6 +166,48 @@ export function WorkSectionEmptyLine(props: Readonly<{
     const theme = useWorkTheme();
     return <HappierWorkSectionEmptyLine {...props} theme={theme} host={WORK_HOST} />;
 }
+
+/**
+ * What a configuration section is for or applies to, right under its heading and on the rows' text
+ * edge (Context, Voice): one quiet line of text, not a row, so every section's first line sits at the
+ * same distance from its heading.
+ */
+export function WorkSectionDescription(props: Readonly<{ testID?: string; children: React.ReactNode }>) {
+    const block = useWorkSectionBlockInset();
+    // Rows follow the line, so it keeps its own short gap below.
+    return <Text testID={props.testID} style={[stylesheet.description, { paddingHorizontal: block.paddingHorizontal, paddingTop: block.paddingTop }]}>{props.children}</Text>;
+}
+
+/**
+ * A quiet block a section draws in place of rows (an invitation, a line with its buttons): on the
+ * rows' own text edge, which the pane's flat sheet or a page section's sheet supplies; in a drawn
+ * sheet it also takes a row's vertical room so it doesn't touch the edge.
+ */
+export function WorkSectionBlock(props: Readonly<{ testID?: string; style?: StyleProp<ViewStyle>; children?: React.ReactNode }>) {
+    const inset = useWorkSectionBlockInset();
+    return <View testID={props.testID} style={[props.style, inset]}>{props.children}</View>;
+}
+
+function useWorkSectionBlockInset(): Readonly<{ paddingHorizontal: number; paddingTop?: number; paddingBottom?: number }> {
+    const section = useHappierPageSection();
+    return React.useMemo(() => ({
+        paddingHorizontal: section?.rowInsetPx ?? HAPPIER_WORK_PANE_METRICS.rowInsetPx,
+        ...(section?.framed ? { paddingTop: HAPPIER_PAGE_METRICS.rowPaddingVerticalPx, paddingBottom: HAPPIER_PAGE_METRICS.rowPaddingVerticalPx } : null),
+    }), [section?.framed, section?.rowInsetPx]);
+}
+
+const stylesheet = StyleSheet.create((theme) => ({
+    description: {
+        ...Typography.default(),
+        ...happierPageTextMetrics('sectionDescription'),
+        color: theme.colors.text.secondary,
+        paddingBottom: theme.space.s6,
+    },
+    pageCount: {
+        ...Typography.variant('body'),
+        color: theme.colors.text.secondary,
+    },
+}));
 
 function readCountText(props: WorkSectionProps): string | null {
     if (props.countMode === 'none') return null;

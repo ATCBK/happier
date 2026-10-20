@@ -76,6 +76,7 @@ describe('Codex External Sessions package-local models', () => {
     })).toEqual({
       remoteSessionId: 'thread-1',
       title: 'Candidate',
+      cwd: '/private/worktree',
       updatedAtMs: 123,
       createdAtMs: 100,
       archived: false,

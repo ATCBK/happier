@@ -4,6 +4,7 @@ import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
 import { mkdirSync } from 'fs';
 import { join } from 'path';
 import { redactHttpRequestUrlForLog } from './redactHttpRequestUrlForLog';
+import { isBunRuntime } from '../runtime/isBunRuntime';
 
 // Single log file name created once at startup
 let consolidatedLogFile: string | undefined;
@@ -24,7 +25,7 @@ function prepareConsolidatedLogFile(env: NodeJS.ProcessEnv): void {
       logsDir,
       `${month}-${day}-${hour}-${min}-${sec}.log`,
     );
-    console.log(
+    console.error(
       `[PINO] Remote debugging logs enabled - writing to ${consolidatedLogFile}`,
     );
   } catch (error) {
@@ -40,11 +41,6 @@ function formatLocalTime(timestamp?: number) {
   const secs = String(date.getSeconds()).padStart(2, '0');
   const ms = String(date.getMilliseconds()).padStart(3, '0');
   return `${hours}:${mins}:${secs}.${ms}`;
-}
-
-function isBunRuntime() {
-  const g = globalThis as any;
-  return Boolean(g?.Bun) || Boolean((process as any)?.versions?.bun);
 }
 
 export function resolveServerLogLevelFromEnv(
@@ -76,7 +72,7 @@ export function createLoggingTransportTargets(env: NodeJS.ProcessEnv = process.e
   const transports: pino.TransportTargetOptions[] = [];
 
   // Bun-compiled binaries can't reliably resolve pino transport targets.
-  if (!isBunRuntime()) {
+  if (!isBunRuntime() && readServerConfig(env, SERVER_CONFIG.HAPPIER_SERVER_LOG_FORMAT) === 'pretty') {
     transports.push({
       target: 'pino-pretty',
       options: {
@@ -93,8 +89,15 @@ export function createLoggingTransportTargets(env: NodeJS.ProcessEnv = process.e
     readServerConfig(env, SERVER_CONFIG.DANGEROUSLY_LOG_TO_SERVER_FOR_AI_AUTO_DEBUGGING) &&
     consolidatedLogFile
   ) {
+    // Preserve the single JSON destination's level when adding a second output.
+    const fileLevel = transports.length === 0 ? 'trace' : undefined;
+    // A file transport replaces Pino's default stdout destination. Keep both outputs.
+    if (transports.length === 0) {
+      transports.push({ target: 'pino/file', level: 'trace', options: { destination: 1 } });
+    }
     transports.push({
       target: 'pino/file',
+      level: fileLevel,
       options: {
         destination: consolidatedLogFile,
         mkdir: true,
@@ -147,7 +150,7 @@ function createServerLogger(
         localTime: formatLocalTime(typeof object.time === 'number' ? object.time : undefined),
       }),
     },
-    serializers: { req: serializeHttpRequestForLog },
+    serializers: { req: serializeHttpRequestForLog, error: pino.stdSerializers.err },
     timestamp: () => `,"time":${Date.now()},"localTime":"${formatLocalTime()}"`,
   });
 }

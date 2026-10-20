@@ -2,7 +2,7 @@ import {
     IdentityManagementDeniedError,
     setIdentityVisibilityInTx,
 } from "@/app/auth/providers/accountIdentityLifecycle";
-import { z } from "zod";
+import { z } from "zod/mini";
 import { inTx } from "@/storage/inTx";
 import { type Fastify } from "../../types";
 import { isAccountIdentityEligibleForGenericPresentation } from "@/app/auth/methods/registry";

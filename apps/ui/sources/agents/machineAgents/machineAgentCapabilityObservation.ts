@@ -34,8 +34,9 @@ export function projectMachineAgentCapabilityObservation(
             if (definitionInventory.definitions && typeof definitionsCheckedAt === 'number') lastCheckedAt = Math.max(lastCheckedAt ?? 0, definitionsCheckedAt);
         } catch { invalidResponse = true; }
     }
-    const status = !cache || cache.status === 'idle' || cache.status === 'loading'
-        ? 'loading'
+    const status = !cache || cache.status === 'idle'
+        ? 'idle'
+        : cache.status === 'loading' ? 'loading'
         : cache.status === 'loaded' && !invalidResponse ? 'ready' : 'error';
     return { status, ...inventory, descriptors: agents, lastCheckedAt };
 }

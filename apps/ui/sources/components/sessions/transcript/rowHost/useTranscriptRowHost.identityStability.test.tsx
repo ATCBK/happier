@@ -7,6 +7,7 @@
  * the renderer must derive its identity from the fields it actually uses, not from
  * the containing object.
  */
+import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -56,6 +57,7 @@ import { buildTranscriptRowShellSignature } from '@/components/sessions/transcri
 import { createReducer } from '@happier-dev/session-core/reducer';
 
 import { TranscriptRowShell } from '@/components/sessions/transcript/ChatListRows';
+import { PendingMessagesTranscriptBlock } from '@/components/sessions/pending/PendingMessagesTranscriptBlock';
 import { TranscriptWindowGapRow } from '@/components/sessions/transcript/viewport/window/TranscriptWindowGapRow';
 import { ExternalSessionOperationSharedCard } from '@/components/sessions/external/progress/ExternalSessionOperationSharedCard';
 import { TranscriptLiveMessagesRowShell } from './TranscriptLiveMessagesRowShell';
@@ -237,11 +239,40 @@ describe('useTranscriptItemRenderer identity stability', () => {
 
         const first = hook.getCurrent().renderItem;
         await hook.rerender({
-            props: { ...initial, onEditPendingMessage: vi.fn() } as TranscriptItemRendererDeps['props'],
+            props: { ...initial, interaction: { ...initial.interaction, canSendMessages: false } },
         });
         const second = hook.getCurrent().renderItem;
 
         expect(second).not.toBe(first);
+    });
+
+    it('keeps a retained pending-row edit handler current without invalidating unchanged rows', async () => {
+        const initial = createRendererProps();
+        const baseDeps = createRendererDeps(initial);
+        const hook = await renderHook(
+            ({ props }: { props: TranscriptItemRendererDeps['props'] }) => useTranscriptItemRenderer({ ...baseDeps, props }),
+            { initialProps: { props: initial } },
+        );
+        const first = hook.getCurrent().renderItem;
+        const shell = first({ item: { kind: 'pending-queue', id: 'pending', pendingMessages: [], discardedMessages: [] }, index: 0 });
+        if (!React.isValidElement<{ children: React.ReactNode }>(shell)) throw new Error('Missing pending shell');
+        const enter = shell.props.children;
+        if (!React.isValidElement<{ children: React.ReactNode }>(enter)) throw new Error('Missing pending enter wrapper');
+        const block = enter.props.children;
+        if (!React.isValidElement<React.ComponentProps<typeof PendingMessagesTranscriptBlock>>(block)
+            || block.type !== PendingMessagesTranscriptBlock) throw new Error('Missing pending block');
+        const latestEdit = vi.fn<NonNullable<TranscriptItemRendererDeps['props']['onEditPendingMessage']>>();
+        await hook.rerender({ props: { ...initial, onEditPendingMessage: latestEdit } });
+        expect(hook.getCurrent().renderItem).toBe(first);
+        const { createPendingMessageFixture } = await import('@/dev/testkit');
+        const message = createPendingMessageFixture();
+        const request = { id: message.id, text: message.text, message, mode: 'edit' as const };
+        await block.props.onEditPendingMessage?.(request);
+        expect(latestEdit).toHaveBeenCalledWith(request);
+        expect(initial.onEditPendingMessage).not.toHaveBeenCalled();
+        await hook.rerender({ props: { ...initial, onEditPendingMessage: undefined } });
+        expect(hook.getCurrent().renderItem).not.toBe(first);
+        await hook.unmount();
     });
 
     it('keeps a synthetic gap in recycler geometry without publishing a viewport-anchor shell', async () => {

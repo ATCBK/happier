@@ -5,8 +5,9 @@ import type { WorkItem, WorkProjection, WorkStatus } from './workProjection';
 /**
  * The Session and run producer for the neutral Work map (ORC §3.8 "Map", O11; lab `session-A2`,
  * `map-M1`): the lead at the root, each Session under the Session it reports to, and the workflows and
- * background runs the lead started under the lead. Every edge is one the Work projection already holds
- * (`reportsTo`, or "this Session started it"); nothing is inferred from order, time or workspace.
+ * background runs the lead started under the lead. Every edge comes from the Work projection's manager
+ * ancestry (with archived intermediates folded out), or "this Session started it"; nothing is inferred
+ * from order, time or workspace.
  * The lead's node carries no state of its own, so it stays neutral whatever its reports need (S-6).
  */
 export type SessionWorkMapNodeDeclaration = HappierWorkMapNodeDeclaration & Readonly<{
@@ -41,19 +42,19 @@ export function readWorkFoldedFromMap(projection: WorkProjection): readonly Work
 }
 
 export function projectSessionWorkMap(input: Readonly<{
-    leadSessionId: string;
+    managerSessionId: string;
     leadTitle: string;
     leadAgentId?: string | null;
     leadFacts?: readonly string[];
     projection: WorkProjection;
 }>): SessionWorkMap {
-    const leadNodeId = `session:${input.leadSessionId}`;
+    const leadNodeId = `session:${input.managerSessionId}`;
     const folded = new Set(readWorkFoldedFromMap(input.projection).map((item) => item.key));
     const nodes: SessionWorkMapNodeDeclaration[] = [{
         nodeId: leadNodeId,
         label: input.leadTitle,
         parentNodeId: null,
-        open: { kind: 'session', sessionId: input.leadSessionId },
+        open: { kind: 'session', sessionId: input.managerSessionId },
         kind: 'lead',
         status: null,
         agentId: input.leadAgentId ?? null,

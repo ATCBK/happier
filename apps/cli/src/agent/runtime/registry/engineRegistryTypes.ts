@@ -88,6 +88,7 @@ export type NativeAgentSessionRunTranscriptTarget = Pick<ApiSessionClient,
 > & Readonly<{
     sessionId: string;
     requiresDurableTurnCompletionMarker: true;
+    enqueueUserTextMessageCommitted?: ApiSessionClient['enqueueUserTextMessageCommitted'];
 }>;
 
 /**
@@ -113,8 +114,7 @@ export type ExecutionRunHostRunScopeBinding = Readonly<{
 }>;
 
 export type NativeAgentSessionInteractionHostBinding = Readonly<{
-    readAppliedChildSelection?: () => import('@/agent/runtime/bridges/executionRun/runtime/openInputs').ExecutionRunAppliedParentSelection
-        | Promise<import('@/agent/runtime/bridges/executionRun/runtime/openInputs').ExecutionRunAppliedParentSelection>;
+    readAppliedChildSelection?: import('@/agent/runtime/bridges/executionRun/runtime/openInputs').ExecutionRunAppliedParentSelectionReader;
     /** Parent Session custody used by the hidden retained Voice interaction. */
     session: Pick<ApiSessionClient,
         | 'sessionId'
@@ -124,6 +124,8 @@ export type NativeAgentSessionInteractionHostBinding = Readonly<{
         | 'enqueueAgentMessageCommitted'
     > & Partial<Pick<ApiSessionClient,
         | 'publishUsageObservation'
+        | 'fetchCommittedTranscriptLocalIdBaseline'
+        | 'enqueueUserTextMessageCommitted'
         | 'enqueueSessionEventCommitted'
         | 'enqueueSessionUserMessage'
         | 'enqueueSessionUserMessageWithDisposition'
@@ -132,9 +134,14 @@ export type NativeAgentSessionInteractionHostBinding = Readonly<{
         | 'listExecutionRunPendingDeliveryStatuses'
         | 'blockExecutionRunPendingDelivery'
         | 'getCommittedUserMessageSeq'
+        | 'mutateSessionMessageReply'
+        | 'readCommittedTranscriptMessageByLocalId'
+        | 'releaseSessionMessageReplySourceTurn'
     >>;
     machineId: string;
     permissionHandler: Pick<ProviderEnforcedPermissionHandler, 'handleToolCall'>;
+    /** Exact owning Session Account; never borrow the machine's signed-in Account. */
+    readOwnerAccountCredentials?: () => Promise<import('@/persistence').StoredCredentials | null>;
     /** The parent's prepared title policy, shared by tool advertisement and admission. */
     readCodingPromptBehavior?: () => CodingPromptBehaviorV1 | null;
     /** Exact owning Session's current structured-input catalogs. */
@@ -183,7 +190,15 @@ export type BackendExecutionSurfaces = Readonly<{
     checkpoint: CheckpointSurfaceV1 | null;
 }>;
 
+/** Captured admitted requester and original operation; never authored Run input. */
+export type ExecutionRunProjectLaunchContext = Omit<Parameters<typeof import('@/daemon/agentRuntime/runnerAgentProjectLaunch').createRunnerAgentProjectLaunchInvocation>[0], 'cwd' | 'signal' | 'sessionId'>;
+
 export type CreateCliExecutionRunBackendParams = Readonly<{
+    projectLaunchContext?: ExecutionRunProjectLaunchContext;
+    /** Original retained Run operation when Project IO belongs to its daemon host. */
+    projectSetupOperation?: import('@/workspaces/projectSetup/projectSetupExecution').ProjectSetupOperationContext;
+    /** Read after the existing controller is registered, before native cold open. */
+    resolveProjectSetupOperation?: () => import('@/workspaces/projectSetup/projectSetupExecution').ProjectSetupOperationContext | undefined;
   cwd: string;
   machineId?: string;
     runId?: string;
@@ -209,6 +224,7 @@ export type CreateCliExecutionRunBackendParams = Readonly<{
     workspaceWrites?: 'allow' | 'deny';
     /** Host-only active-turn authority; never a public backend request field. */
     causalPermissionAuthority?: SessionInputCausalPermissionAuthorityV1;
+    actionRequestAttributionV1?: import('@happier-dev/protocol/actions/actionRequestAttributionV1').ActionRequestAttributionV1;
     accountSettings?: AccountSettings | null;
     resolveAccountSettingsSnapshot?: import('@/settings/accountSettings/activeAccountSettingsSnapshot').AccountSettingsSnapshotResolver;
     start?: ExecutionRunBackendStartContext | null;

@@ -144,7 +144,7 @@ function automationRequest(actionKind: string, payload: Record<string, unknown> 
   };
 }
 
-async function createRealAutomationPath(name: string) {
+async function createRealAutomationPath(name: string, featureGate: BrowserDaemonFeatureGate = allowAllBrowserGate()) {
   const calls: Array<{ method: string; params?: Record<string, unknown> }> = [];
   const element = { id: 'submit', nodeType: 1, tagName: 'BUTTON', textContent: name, children: [], parentElement: null,
     getAttribute: () => null, getBoundingClientRect: () => ({ left: 20, top: 14, width: 40, height: 20 }), scrollIntoView: () => {}, focus: () => {} };
@@ -170,8 +170,8 @@ async function createRealAutomationPath(name: string) {
   const service = createBrowserAutomationDaemonService({ adapter: createBrowserAutomationCdpAdapter({ transport: createControlAdapterAutomationTransport({ adapter: control, browserContext: context,
     contextCapture: { transport: boundary, resolvePageHandle: control.resolvePageHandle, getNavigationState: control.getNavigationState } }) }) });
   const { createBrowserDaemonRuntimeActionExecutor } = await import('./runtimeActionExecutor');
-  return { control, calls, navigationGeneration: control.getNavigationState(browserAutomationView)?.navigationGeneration ?? 0,
-    execute: createBrowserDaemonRuntimeActionExecutor({ automation: createBrowserAutomationRoutes({ service }), featureGate: allowAllBrowserGate() }) };
+  return { control, calls, service, navigationGeneration: control.getNavigationState(browserAutomationView)?.navigationGeneration ?? 0,
+    execute: createBrowserDaemonRuntimeActionExecutor({ automation: createBrowserAutomationRoutes({ service }), featureGate }) };
 }
 
 describe('daemon browser runtime action executor', () => {
@@ -252,47 +252,17 @@ describe('daemon browser runtime action executor', () => {
     expect(dispatch).toHaveBeenCalledWith('browser.context.capturePage', input);
   });
 
-  it('routes browser.automation.snapshot to the automation route when available', async () => {
-    const mod = await loadRuntimeActionExecutor();
-    expect(mod?.createBrowserDaemonRuntimeActionExecutor).toBeTypeOf('function');
-    if (!mod?.createBrowserDaemonRuntimeActionExecutor) return;
-
-    const dispatch = vi.fn(async () => ({ v: 1, status: 'succeeded' }));
-    const execute = mod.createBrowserDaemonRuntimeActionExecutor({
-      automation: { dispatch },
-      featureGate: allowAllBrowserGate(),
-    });
-
-    const input = {
-      v: 1,
-      automationRequestId: 'req_1',
-      browserSessionId: 'browser_session_1',
-      viewId: 'view_1',
-      navigationGeneration: 1,
-      requestedBy: 'agent',
-      requesterRef: { kind: 'agent', id: 'agent_1' },
-      actionKind: 'snapshot',
-      payload: {},
-      timeoutMs: 5000,
-    };
-    const context = { authority: 'present_user' as const, actionCaller: { kind: 'host' as const } };
-    await expect(execute(runtimeArgs({
-      actionId: 'browser.automation.snapshot',
-      input,
-      context,
-    }))).resolves.toEqual({ v: 1, status: 'succeeded' });
-    expect(dispatch).toHaveBeenCalledWith('browser.automation.snapshot', input, context);
-  });
-
   it('returns rich snapshot selectors through the real browser automation action path', async () => {
     const path = await createRealAutomationPath('Submit');
 
     const result = await path.execute(runtimeArgs({
       actionId: 'browser.automation.snapshot',
       input: { ...automationRequest('snapshot'), navigationGeneration: path.navigationGeneration },
+      context: { authority: 'present_user', actionCaller: { kind: 'host' } },
     }));
 
     expect(result).toMatchObject({
+      v: 1,
       status: 'succeeded',
       resultSummary: {
         visibleText: 'Welcome back',
@@ -303,6 +273,9 @@ describe('daemon browser runtime action executor', () => {
         media: { mediaId: 'media_snapshot' },
       },
     });
+    expect(path.service.getTimeline(browserAutomationView).entries)
+      .toMatchObject([{ actionKind: 'snapshot', requesterKind: 'user', status: 'succeeded' }]);
+    path.service.dispose();
     path.control.dispose();
   });
 
@@ -368,7 +341,7 @@ describe('daemon browser runtime action executor', () => {
    */
   it('provisions the managed browser runtime on the first browser.automation dispatch', async () => {
     const realMod = await import('./runtimeActionExecutor');
-    const provisionAutomationRuntime = vi.fn(async () => 'provisioning' as const);
+    const provisionAutomationRuntime = vi.fn(async () => 'unavailable' as const);
 
     const execute = realMod.createBrowserDaemonRuntimeActionExecutor({
       featureGate: allowAllBrowserGate(),
@@ -383,7 +356,7 @@ describe('daemon browser runtime action executor', () => {
     }))).resolves.toEqual({
       ok: false,
       errorCode: 'runtime_action_disabled',
-      error: 'runtime_action_disabled:browser:browser_automation_runtime_provisioning',
+      error: 'runtime_action_disabled:browser:browser_automation_route_unavailable',
     });
 
     expect(provisionAutomationRuntime).toHaveBeenCalledOnce();
@@ -401,8 +374,8 @@ describe('daemon browser runtime action executor', () => {
       input: automationRequest('snapshot'),
     }))).resolves.toEqual({
       ok: false,
-      errorCode: 'runtime_action_disabled',
-      error: 'runtime_action_disabled:browser:browser_automation_runtime_provisioning_failed',
+      errorCode: 'browser_runtime_provisioning_failed',
+      error: expect.stringMatching(/connection|disk/i),
     });
 
     // `unavailable` means nothing CAN be provisioned here (unsupported platform, unpinned asset).
@@ -423,7 +396,7 @@ describe('daemon browser runtime action executor', () => {
 
   it('never provisions when an automation route already exists', async () => {
     const realMod = await import('./runtimeActionExecutor');
-    const provisionAutomationRuntime = vi.fn(async () => 'provisioning' as const);
+    const provisionAutomationRuntime = vi.fn(async () => 'unavailable' as const);
     const dispatch = vi.fn(async () => ({ v: 1, status: 'succeeded' }));
 
     const execute = realMod.createBrowserDaemonRuntimeActionExecutor({
@@ -445,7 +418,7 @@ describe('daemon browser runtime action executor', () => {
     const { createBrowserDaemonRuntimeActionExecutor } = await import('./runtimeActionExecutor');
     const execute = createBrowserDaemonRuntimeActionExecutor({
       featureGate: allowAllBrowserGate(),
-      provisionAutomationRuntime: async () => 'provisioning',
+      provisionAutomationRuntime: async () => 'unavailable',
     });
     const input = {
       commandId: 'open-session-view',
@@ -457,7 +430,7 @@ describe('daemon browser runtime action executor', () => {
     };
     await expect(execute(runtimeArgs({ actionId: 'browser.view.open', input }))).resolves.toMatchObject({
       ok: false,
-      error: 'runtime_action_disabled:browser:browser_automation_runtime_provisioning',
+      error: 'runtime_action_disabled:browser:browser_control_route_unavailable',
     });
     await expect(execute(runtimeArgs({ actionId: 'browser.view.open', input: { ...input, target: null } })))
       .resolves.toMatchObject({ ok: false, errorCode: 'invalid_parameters' });
@@ -465,7 +438,7 @@ describe('daemon browser runtime action executor', () => {
 
   it('never provisions from a browser context capture', async () => {
     const realMod = await import('./runtimeActionExecutor');
-    const provisionAutomationRuntime = vi.fn(async () => 'provisioning' as const);
+    const provisionAutomationRuntime = vi.fn(async () => 'unavailable' as const);
 
     const execute = realMod.createBrowserDaemonRuntimeActionExecutor({
       featureGate: allowAllBrowserGate(),
@@ -533,22 +506,23 @@ describe('daemon browser runtime action executor', () => {
   // OWNER-GATE action-execution chokepoint. The gate refuses each dispatchable family on
   // server-disable even when the route owner is present.
   it('refuses browser automation actions when browser.automation is server-disabled', async () => {
-    const realMod = await import('./runtimeActionExecutor');
-    const dispatch = vi.fn<BrowserAutomationRoutes['dispatch']>();
-    const execute = realMod.createBrowserDaemonRuntimeActionExecutor({
-      automation: { dispatch },
-      featureGate: gateWith({ 'browser.automation': false }),
-    });
-
-    await expect(execute(runtimeArgs({
-      actionId: 'browser.automation.snapshot',
-      input: { browserSessionId: 'browser_session_1', viewId: 'view_1' },
-    }))).resolves.toEqual({
-      ok: false,
-      errorCode: 'runtime_action_disabled',
-      error: 'runtime_action_disabled:browser:browser_automation_route_unavailable',
-    });
-    expect(dispatch).not.toHaveBeenCalled();
+    const path = await createRealAutomationPath('Submit', gateWith({ 'browser.automation': false }));
+    const callsBefore = [...path.calls];
+    try {
+      await expect(path.execute(runtimeArgs({
+        actionId: 'browser.automation.snapshot',
+        input: { ...automationRequest('snapshot'), navigationGeneration: path.navigationGeneration },
+      }))).resolves.toEqual({
+        ok: false,
+        errorCode: 'runtime_action_disabled',
+        error: 'runtime_action_disabled:browser:browser_automation_route_unavailable',
+      });
+      expect(path.calls).toEqual(callsBefore);
+      expect(path.service.getTimeline(browserAutomationView).entries).toEqual([]);
+    } finally {
+      path.service.dispose();
+      path.control.dispose();
+    }
   });
 
   it('refuses browser context actions when browser.context is server-disabled', async () => {
@@ -647,7 +621,7 @@ describe('daemon browser runtime action executor', () => {
     const execute = realMod.createBrowserDaemonRuntimeActionExecutor({
       control: { dispatchCommand, listViews: () => [] },
       context: { dispatch: contextDispatch },
-      automation: { dispatch: automationDispatch },
+      automation: { dispatch: automationDispatch, prepareConfidentialFill: async () => { throw new Error('Unexpected confidential fill'); } },
       recordingAttach,
       featureGate: gateWith({
         'browser.sidecar': true,
@@ -762,6 +736,7 @@ describe('daemon browser runtime action executor', () => {
       input: {
         v: 1,
         evalRequestId: 'eval_1',
+        browserSessionId: 'browser_session_1',
         viewId: 'view_1',
         navigationGeneration: 0,
         tier: 'injectedPage',
@@ -838,6 +813,7 @@ describe('daemon browser runtime action executor', () => {
         viewId: 'view_1',
         navigationGeneration: 0,
         tier: 'cdp',
+        browserSessionId: 'browser_session_1',
         expression: 'location.href',
         objectGroupId: 'group_1',
         diagnosticsInteractionEnabled: true,
@@ -850,6 +826,7 @@ describe('daemon browser runtime action executor', () => {
       input: {
         v: 1,
         propertyRequestId: 'prop_1',
+        browserSessionId: 'browser_session_1',
         viewId: 'view_1',
         navigationGeneration: 0,
         tier: 'cdp',
@@ -865,6 +842,7 @@ describe('daemon browser runtime action executor', () => {
       input: {
         v: 1,
         pickerRequestId: 'picker_1',
+        browserSessionId: 'browser_session_1',
         viewId: 'view_1',
         navigationGeneration: 0,
         tier: 'cdp',
@@ -892,21 +870,21 @@ describe('daemon browser runtime action executor', () => {
     await expect(execute(runtimeArgs({
       actionId: 'browser.diagnostics.eval',
       input: {
-        v: 1, evalRequestId: 'eval_1', viewId: 'view_1', navigationGeneration: 0, tier: 'cdp',
+        v: 1, evalRequestId: 'eval_1', browserSessionId: 'browser_session_1', viewId: 'view_1', navigationGeneration: 0, tier: 'cdp',
         expression: 'location.href', objectGroupId: 'group_1', diagnosticsInteractionEnabled: true,
       },
     }))).resolves.toEqual(unavailable);
     await expect(execute(runtimeArgs({
       actionId: 'browser.diagnostics.getProperties',
       input: {
-        v: 1, propertyRequestId: 'prop_1', viewId: 'view_1', navigationGeneration: 0, tier: 'cdp',
+        v: 1, propertyRequestId: 'prop_1', browserSessionId: 'browser_session_1', viewId: 'view_1', navigationGeneration: 0, tier: 'cdp',
         objectId: 'object_1', objectGroupId: 'group_1', diagnosticsInteractionEnabled: true,
       },
     }))).resolves.toEqual(unavailable);
     await expect(execute(runtimeArgs({
       actionId: 'browser.diagnostics.elementPicker.start',
       input: {
-        v: 1, pickerRequestId: 'picker_1', viewId: 'view_1', navigationGeneration: 0, tier: 'cdp',
+        v: 1, pickerRequestId: 'picker_1', browserSessionId: 'browser_session_1', viewId: 'view_1', navigationGeneration: 0, tier: 'cdp',
         action: 'start', diagnosticsInteractionEnabled: true,
       },
     }))).resolves.toEqual(unavailable);

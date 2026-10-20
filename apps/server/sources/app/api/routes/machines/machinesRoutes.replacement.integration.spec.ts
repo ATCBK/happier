@@ -1,479 +1,155 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { inTx } from "@/storage/inTx";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import tweetnacl from "tweetnacl";
-import { MACHINE_PLAIN_DATA_KEY_MARKER } from "@happier-dev/protocol";
-
-import { createDbMocks, installDbModuleMock } from "../../testkit/dbMocks";
-import { createRouteTestBuilder } from "../../testkit/routeTestBuilder";
-import { createInTxHarness } from "../../testkit/txHarness";
+import { MACHINE_PLAIN_DATA_KEY_MARKER, encodePlainMachineStoredContent, signMachineInstallationProof,
+    computeContentPublicKeyFingerprint, serializeAutomationStoredWorkflowDefinitionRecipeV2,
+    buildAccountStoredContentCompatibilityHttpHeadersV1, CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION } from "@happier-dev/protocol";
+import { db } from "@/storage/db";
+import { eventRouter } from "@/app/events/eventRouter";
+import { activityCache } from "@/app/presence/sessionCache";
+import { createSessionMachineAccessKeyInTx } from "@/app/accessKeys/sessionMachineAccessKeyMutations";
+import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
-
-vi.mock("@/utils/logging/log", () => ({ log: vi.fn() }));
-
-const markAccountChanged = vi.fn(async (_tx: unknown, params: { entityId: string }) => params.entityId === "m1" ? 122 : 123);
-vi.mock("@/app/changes/markAccountChanged", () => ({ markAccountChanged }));
-
-const emitUpdate = vi.fn();
-const getConnections = vi.fn(() => new Set());
-const disconnectMachineAndSessionSockets = vi.fn();
-const buildNewMachineUpdate = vi.fn((_machine: unknown, seq: number, id: string) => ({
-    id,
-    seq,
-    body: { t: "new-machine" },
-}));
-const buildUpdateMachineUpdate = vi.fn((machineId: string, seq: number, id: string, _metadata?: unknown, _daemonState?: unknown, extra?: unknown) => ({
-    id,
-    seq,
-    body: { t: "update-machine", machineId, ...(extra && typeof extra === "object" ? extra : {}) },
-}));
-vi.mock("@/app/events/eventRouter", () => ({
-    eventRouter: { emitUpdate, getConnections, disconnectMachineAndSessionSockets },
-    buildNewMachineUpdate,
-    buildUpdateMachineUpdate,
-}));
-
-const invalidateMachine = vi.fn();
-vi.mock("@/app/presence/sessionCache", () => ({ activityCache: { invalidateMachine } }));
-vi.mock("@/utils/keys/randomKeyNaked", () => ({ randomKeyNaked: vi.fn(() => "upd") }));
-
-const removeAutomationMachineAssignmentsTx = vi.fn(async (params: Readonly<{
-    tx: unknown;
-    markMachineUnavailableTx: (tx: unknown) => Promise<void>;
-}>) => {
-    await params.markMachineUnavailableTx(params.tx);
-    return {
-        affectedAutomationIds: [],
-        disabledAutomationIds: [],
-    };
-});
-vi.mock("@/app/automations/automationMachineAssignmentRemoval", () => ({
-    removeAutomationMachineAssignmentsTx,
-}));
-
-const dbMocks = createDbMocks({
-    account: ["findUnique", "updateMany"],
-    homeSettings: ["findUnique"],
-    homeGovernancePolicy: ["findUnique"],
-    machine: ["findFirst", "findMany", "findUnique"],
-} as const);
-const txDbMocks = createDbMocks({
-    accessKey: ["deleteMany", "findMany"],
-    automationTrigger: ["findMany"],
-    machine: ["create", "findFirst", "update", "updateMany"],
-} as const);
-
-installDbModuleMock(() => ({
-    db: dbMocks.db,
-    isPrismaErrorCode: (error: unknown, code: string) =>
-        typeof error === "object" && error !== null && "code" in error && error.code === code,
-}));
-
-const harness = createInTxHarness(() => ({
-    accessKey: txDbMocks.db.accessKey,
-    automationTrigger: txDbMocks.db.automationTrigger,
-    machine: txDbMocks.db.machine,
-}));
-
-vi.mock("@/storage/inTx", () => ({
-    afterTx: harness.afterTx,
-    inTx: harness.inTx,
-}));
-
-const contentPublicKeyFingerprint = `content-public-key-sha256:${"a".repeat(64)}`;
-
-const baseMachine = {
-    id: "m1",
-    accountId: "u1",
-    metadata: "old-meta",
-    metadataVersion: 1,
-    daemonState: null,
-    daemonStateVersion: 0,
-    dataEncryptionKey: null,
-    seq: 1,
-    active: false,
-    lastActiveAt: new Date(1),
-    revokedAt: null,
-    createdAt: new Date(1),
-    updatedAt: new Date(1),
-    installationId: "install-1",
-    installationPublicKey: null,
-    contentPublicKeyFingerprint,
-    replacedByMachineId: null,
-    replacedAt: null,
-    replacementReason: null,
-    replacementSource: null,
-    replacementActorUserId: null,
-};
-
-function encodeBase64Url(bytes: Uint8Array): string {
-    return Buffer.from(bytes).toString("base64url");
-}
-
-function createProof(params: Readonly<{
-    installationId: string;
-    machineId: string;
-    replacesMachineId?: string;
-    replacementReason?: string;
-    contentPublicKeyFingerprint?: string;
-    accountId?: string;
-}>) {
-    const keyPair = tweetnacl.sign.keyPair();
-    const payload = {
-        version: 1,
-        installationId: params.installationId,
-        machineId: params.machineId,
-        ...(params.replacesMachineId ? { replacesMachineId: params.replacesMachineId } : {}),
-        ...(params.replacementReason ? { replacementReason: params.replacementReason } : {}),
-        ...(params.contentPublicKeyFingerprint ? { contentPublicKeyFingerprint: params.contentPublicKeyFingerprint } : {}),
-        ...(params.accountId ? { accountId: params.accountId } : {}),
-    };
-    const bytes = Buffer.from(JSON.stringify(payload), "utf8");
-    const signature = tweetnacl.sign.detached(bytes, keyPair.secretKey);
-    return {
-        publicKey: encodeBase64Url(keyPair.publicKey),
-        proof: {
-            version: 1,
-            algorithm: "ed25519",
-            payload,
-            signature: encodeBase64Url(signature),
-        },
-    };
-}
-
-async function createRoute(method: "POST" | "DELETE", path: string) {
-    const { machinesRoutes } = await import("./machinesRoutes");
-    return createRouteTestBuilder({
-        method,
-        path,
-        registerRoutes(app) {
-            machinesRoutes(app as unknown as Parameters<typeof machinesRoutes>[0]);
-        },
-    });
-}
-
-type MachineCreateMockArgs = Readonly<{
-    data: Record<string, unknown> & {
-        id?: string;
-    };
-}>;
-
-type MachineUpdateMockArgs = Readonly<{
-    where?: {
-        accountId_id?: {
-            id?: string;
-            accountId?: string;
-        };
-    };
-    data: Record<string, unknown>;
-}>;
+import { withAuthenticatedTestApp } from "../../testkit/sqliteFastify";
+import { machinesRoutes } from "./machinesRoutes";
 
 describe("machinesRoutes machine replacement", () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-        dbMocks.reset();
-        txDbMocks.reset();
-        getConnections.mockReturnValue(new Set());
-        dbMocks.db.homeSettings.findUnique.mockResolvedValue(null);
-        dbMocks.db.homeGovernancePolicy.findUnique.mockResolvedValue(null);
-        const accountContentBinding = createSignedAccountContentBinding();
-        dbMocks.db.account.findUnique.mockResolvedValue({
-            ...accountContentBinding,
-            encryptionMode: "e2ee",
-        });
-        dbMocks.db.account.updateMany.mockResolvedValue({ count: 0 });
-        dbMocks.db.machine.findFirst.mockResolvedValue(null);
-        dbMocks.db.machine.findUnique.mockResolvedValue(null);
-        txDbMocks.db.accessKey.deleteMany.mockResolvedValue({ count: 0 });
-        txDbMocks.db.automationTrigger.findMany.mockResolvedValue([]);
-        txDbMocks.db.accessKey.findMany.mockResolvedValue([
-            { accountId: "u1", sessionId: "session-on-replaced-machine" },
-        ]);
-        txDbMocks.db.machine.create.mockImplementation(async (args: MachineCreateMockArgs) => ({
-            ...baseMachine,
-            ...args.data,
-            dataEncryptionKey: args.data.dataEncryptionKey ?? baseMachine.dataEncryptionKey,
-            id: args.data.id,
-            seq: 0,
-            lastActiveAt: new Date(10),
-            createdAt: new Date(10),
-            updatedAt: new Date(10),
-        }));
-        txDbMocks.db.machine.findFirst.mockResolvedValue(baseMachine);
-        txDbMocks.db.machine.update.mockImplementation(async (args: MachineUpdateMockArgs) => ({
-            ...baseMachine,
-            id: args.where?.accountId_id?.id ?? baseMachine.id,
-            accountId: args.where?.accountId_id?.accountId ?? baseMachine.accountId,
-            ...args.data,
-            updatedAt: new Date(20),
-        }));
-        txDbMocks.db.machine.updateMany.mockResolvedValue({ count: 1 });
+    let harness: LightSqliteHarness;
+    let accountId: string;
+    let installation: ReturnType<typeof tweetnacl.sign.keyPair>;
+    let fingerprint: string;
+    beforeAll(async () => { harness = await createLightSqliteHarness({ tempDirPrefix: "happier-machine-route-replacement-", initAuth: false }); }, 120_000);
+    beforeEach(async () => {
+        harness.resetEnv();
+        const binding = createSignedAccountContentBinding();
+        accountId = (await db.account.create({ data: { ...binding, encryptionMode: "e2ee" } })).id;
+        installation = tweetnacl.sign.keyPair();
+        fingerprint = computeContentPublicKeyFingerprint(binding.contentPublicKey);
+        await db.machine.create({ data: { id: "m1", accountId, metadata: "old-meta", installationId: "install-1",
+            installationPublicKey: new Uint8Array(installation.publicKey), contentPublicKeyFingerprint: fingerprint } });
     });
+    afterEach(async () => {
+        eventRouter.clearIo();
+        activityCache.invalidateMachine("m1"); activityCache.invalidateMachine("m2");
+        await db.accessKey.deleteMany(); await db.automationAssignment.deleteMany(); await db.automation.deleteMany();
+        await db.session.deleteMany(); await db.machine.deleteMany(); await db.accountChange.deleteMany(); await db.account.deleteMany();
+    });
+    afterAll(async () => { if (harness) await harness.close(); });
+
+    function proposal(replacesMachineId?: string, key = installation) {
+        const payload = { version: 1 as const, installationId: "install-1", machineId: "m2", accountId,
+            contentPublicKeyFingerprint: fingerprint, ...(replacesMachineId ? { replacesMachineId, replacementReason: "reauth" as const } : {}) };
+        return { id: "m2", metadata: "new-meta", dataEncryptionKey: null, installationId: payload.installationId,
+            installationPublicKey: Buffer.from(key.publicKey).toString("base64url"), contentPublicKeyFingerprint: fingerprint,
+            installationProof: signMachineInstallationProof({ payload, privateKey: key.secretKey }),
+            ...(replacesMachineId ? { replacesMachineId, replacementReason: "reauth" } : {}) };
+    }
+    async function invoke(payload: unknown, options: { method?: "POST" | "DELETE"; path?: string; legacy?: boolean } = {}) {
+        let result!: { statusCode: number; body: string; json: () => unknown };
+        await withAuthenticatedTestApp(machinesRoutes, async app => {
+            const response = await app.inject({ method: options.method ?? "POST", url: options.path ?? "/v1/machines", headers: {
+                "x-test-user-id": accountId,
+                ...(options.legacy ? {} : buildAccountStoredContentCompatibilityHttpHeadersV1(CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION)),
+            }, ...(payload === undefined ? {} : { payload }) });
+            result = { statusCode: response.statusCode, body: response.body, json: () => response.json() };
+        });
+        return result;
+    }
+    async function readyReplacement(plain = false) {
+        if (plain) {
+            await db.account.update({ where: { id: accountId }, data: { encryptionMode: "plain" } });
+            await db.machine.update({ where: { id: "m1" }, data: { metadata: encodePlainMachineStoredContent({ host: "old" }),
+                dataEncryptionKey: Buffer.from(MACHINE_PLAIN_DATA_KEY_MARKER, "base64"), contentPublicKeyFingerprint: null } });
+        }
+        await db.machine.create({ data: { id: "m2", accountId, metadata: plain ? encodePlainMachineStoredContent({ host: "new" }) : "new-meta",
+            dataEncryptionKey: plain ? Buffer.from(MACHINE_PLAIN_DATA_KEY_MARKER, "base64") : null,
+            contentPublicKeyFingerprint: plain ? null : fingerprint, active: true, lastActiveAt: new Date() } });
+    }
 
     it("creates machines with installation identity and replacement fields serialized", async () => {
-        const { publicKey, proof } = createProof({
-            installationId: "install-1",
-            machineId: "m2",
-            contentPublicKeyFingerprint,
-            accountId: "u1",
-        });
-
-        const route = await createRoute("POST", "/v1/machines");
-        const { response } = await route.invoke({
-            userId: "u1",
-            body: {
-                id: "m2",
-                metadata: "meta",
-                dataEncryptionKey: null,
-                installationId: "install-1",
-                installationPublicKey: publicKey,
-                installationProof: proof,
-                contentPublicKeyFingerprint,
-            },
-        });
-
-        expect(txDbMocks.db.machine.create).toHaveBeenCalledWith(expect.objectContaining({
-            data: expect.objectContaining({
-                installationId: "install-1",
-                installationPublicKey: expect.any(Uint8Array),
-                contentPublicKeyFingerprint,
-            }),
-        }));
-        expect(response).toEqual(expect.objectContaining({
-            machine: expect.objectContaining({
-                id: "m2",
-                installationId: "install-1",
-                contentPublicKeyFingerprint,
-                replacedByMachineId: null,
-            }),
-        }));
+        const response = await invoke(proposal());
+        expect(response.statusCode, response.body).toBe(200);
+        expect(response.json()).toMatchObject({ machine: { id: "m2", installationId: "install-1",
+            installationPublicKey: Buffer.from(installation.publicKey).toString("base64"), contentPublicKeyFingerprint: fingerprint, replacedByMachineId: null } });
+        expect(await db.machine.findUniqueOrThrow({ where: { id: "m2" } })).toMatchObject({ installationId: "install-1",
+            installationPublicKey: installation.publicKey, contentPublicKeyFingerprint: fingerprint });
     });
 
     it("rejects malformed content public key fingerprints before machine writes", async () => {
-        const route = await createRoute("POST", "/v1/machines");
-        const { response, reply } = await route.invoke({
-            userId: "u1",
-            body: {
-                id: "m2",
-                metadata: "meta",
-                dataEncryptionKey: null,
-                contentPublicKeyFingerprint: "content-public-key-sha256:not-valid",
-            },
-        });
-
-        expect(reply.code).toHaveBeenCalledWith(400);
-        expect(response).toEqual({ error: "invalid-params", reason: "content_public_key_fingerprint_invalid" });
-        expect(txDbMocks.db.machine.create).not.toHaveBeenCalled();
+        const response = await invoke({ id: "m2", metadata: "meta", dataEncryptionKey: null,
+            contentPublicKeyFingerprint: "content-public-key-sha256:not-valid" });
+        expect(response.statusCode).toBe(400);
+        expect(response.json()).toEqual({ error: "invalid-params", reason: "content_public_key_fingerprint_invalid" });
+        expect(await db.machine.count({ where: { id: "m2" } })).toBe(0);
+        expect(await db.accountChange.count({ where: { accountId } })).toBe(0);
     });
 
     it("applies explicit automatic replacement when creating a new machine", async () => {
-        const { publicKey, proof } = createProof({
-            installationId: "install-1",
-            machineId: "m2",
-            replacesMachineId: "m1",
-            replacementReason: "reauth",
-            contentPublicKeyFingerprint,
-            accountId: "u1",
-        });
-
-        const route = await createRoute("POST", "/v1/machines");
-        const { response } = await route.invoke({
-            userId: "u1",
-            body: {
-                id: "m2",
-                metadata: "new-meta",
-                dataEncryptionKey: null,
-                installationId: "install-1",
-                installationPublicKey: publicKey,
-                installationProof: proof,
-                replacesMachineId: "m1",
-                replacementReason: "reauth",
-                contentPublicKeyFingerprint,
-            },
-        });
-
-        expect(txDbMocks.db.machine.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-            where: {
-                accountId: "u1",
-                id: "m1",
-                OR: [{ replacedByMachineId: null }, { replacedByMachineId: "m2" }],
-            },
-            data: expect.objectContaining({
-                active: false,
-                replacedByMachineId: "m2",
-                replacementReason: "reauth",
-                replacementSource: "automatic",
-                replacementActorUserId: null,
-            }),
-        }));
-        expect(invalidateMachine).toHaveBeenCalledWith("m1");
-        expect(disconnectMachineAndSessionSockets).toHaveBeenCalledWith({
-            accountId: "u1",
-            machineId: "m1",
-            sessionBindings: [{ accountId: "u1", sessionId: "session-on-replaced-machine" }],
-        });
-        // Replacement is reversible. It marks the old machine unavailable but
-        // preserves Automation definitions and admitted Runs so undo can make
-        // the old machine usable again without a restoration journal.
-        expect(removeAutomationMachineAssignmentsTx).not.toHaveBeenCalled();
-        expect(response).toEqual(expect.objectContaining({
-            machineReplacement: {
-                status: "applied",
-                replacesMachineId: "m1",
-            },
-        }));
+        const session = await db.session.create({ data: { accountId, tag: "retained-session", metadata: "encrypted-session", encryptionMode: "e2ee" } });
+        expect(await inTx(tx => createSessionMachineAccessKeyInTx(tx, { accountId, machineId: "m1", sessionId: session.id, data: "sealed-access-key" }))).toMatchObject({ ok: true });
+        const recipe = serializeAutomationStoredWorkflowDefinitionRecipeV2({ v: 2, templateVersion: 1, triggerEvidence: null,
+            workflow: { t: "encrypted", c: "encrypted-workflow" } });
+        if (recipe.kind !== "available") throw new Error("Canonical encrypted Automation fixture was rejected");
+        const automation = await db.automation.create({ data: { accountId, name: "Retained workflow", enabled: true,
+            templateCiphertext: recipe.serialized, templateVersion: 1 } });
+        const assignment = await db.automationAssignment.create({ data: { automationId: automation.id, machineId: "m1", enabled: true } });
+        const disconnected: string[] = [];
+        // Socket.IO is the external transport boundary; actual replacement, cache and Automation owners run.
+        eventRouter.setIo({ to: rooms => ({ emit: () => undefined,
+            disconnectSockets: () => disconnected.push(...(Array.isArray(rooms) ? rooms : [rooms])) }) });
+        activityCache.seedMachineValidity({ machineId: "m1", userId: accountId, active: true, lastActiveAt: new Date() });
+        expect(await activityCache.isMachineValid("m1", accountId)).toBe(true);
+        const response = await invoke(proposal("m1"));
+        expect(response.statusCode, response.body).toBe(200);
+        expect(response.json()).toMatchObject({ machineReplacement: { status: "applied", replacesMachineId: "m1" } });
+        expect(await db.machine.findUniqueOrThrow({ where: { id: "m1" } })).toMatchObject({ active: false, replacedByMachineId: "m2",
+            replacementReason: "reauth", replacementSource: "automatic", replacementActorUserId: null });
+        expect(await activityCache.isMachineValid("m1", accountId)).toBe(false);
+        expect(disconnected).toEqual(expect.arrayContaining([`machine:m1:${accountId}`, `session:${session.id}:machine:m1:${accountId}`]));
+        expect(await db.automation.findUniqueOrThrow({ where: { id: automation.id } })).toEqual(automation);
+        expect(await db.automationAssignment.findUniqueOrThrow({ where: { id: assignment.id } })).toEqual(assignment);
+        expect(await db.accessKey.count({ where: { accountId, machineId: "m1", sessionId: session.id } })).toBe(1);
     });
 
     it("rejects existing machine registration when the installation id matches but the installation public key differs", async () => {
-        const existingProof = createProof({
-            installationId: "install-1",
-            machineId: "m2",
-            contentPublicKeyFingerprint,
-            accountId: "u1",
-        });
-        const incomingProof = createProof({
-            installationId: "install-1",
-            machineId: "m2",
-            replacesMachineId: "m1",
-            replacementReason: "reauth",
-            contentPublicKeyFingerprint,
-            accountId: "u1",
-        });
-        dbMocks.db.machine.findFirst.mockResolvedValueOnce({
-            ...baseMachine,
-            id: "m2",
-            installationId: "install-1",
-            installationPublicKey: Buffer.from(existingProof.publicKey, "base64url"),
-        });
-        txDbMocks.db.machine.findFirst.mockResolvedValueOnce({
-            ...baseMachine,
-            id: "m2",
-            installationId: "install-1",
-            installationPublicKey: Buffer.from(existingProof.publicKey, "base64url"),
-        });
-
-        const route = await createRoute("POST", "/v1/machines");
-        const { reply } = await route.invoke({
-            userId: "u1",
-            body: {
-                id: "m2",
-                metadata: baseMachine.metadata,
-                dataEncryptionKey: null,
-                installationId: "install-1",
-                installationPublicKey: incomingProof.publicKey,
-                installationProof: incomingProof.proof,
-                replacesMachineId: "m1",
-                replacementReason: "reauth",
-                contentPublicKeyFingerprint,
-            },
-        });
-
-        expect(reply.code).toHaveBeenCalledWith(400);
-        expect(reply.send).toHaveBeenCalledWith({ error: "invalid-params", reason: "installation_public_key_mismatch" });
-        expect(txDbMocks.db.machine.update).not.toHaveBeenCalled();
-        expect(txDbMocks.db.machine.updateMany).not.toHaveBeenCalled();
+        const machine = await db.machine.create({ data: { id: "m2", accountId, metadata: "incumbent", installationId: "install-1",
+            installationPublicKey: new Uint8Array(installation.publicKey), contentPublicKeyFingerprint: fingerprint } });
+        const response = await invoke(proposal("m1", tweetnacl.sign.keyPair()));
+        expect(response.statusCode).toBe(400);
+        expect(response.json()).toEqual({ error: "invalid-params", reason: "installation_public_key_mismatch" });
+        expect(await db.machine.findUniqueOrThrow({ where: { id: "m2" } })).toEqual(machine);
+        expect((await db.machine.findUniqueOrThrow({ where: { id: "m1" } })).replacedByMachineId).toBeNull();
+        expect(await db.accountChange.count({ where: { accountId } })).toBe(0);
     });
 
     it("exposes manual replacement and undo routes", async () => {
-        dbMocks.db.machine.findFirst.mockResolvedValueOnce({ id: "m2" });
-        txDbMocks.db.machine.findFirst
-            .mockResolvedValueOnce(baseMachine)
-            .mockResolvedValueOnce({ ...baseMachine, id: "m2", active: true, replacedByMachineId: null })
-            .mockResolvedValueOnce({ ...baseMachine, replacedByMachineId: "m2", replacementSource: "manual" });
-
-        const route = await createRoute("POST", "/v1/machines/:oldMachineId/replacement");
-        const { response } = await route.invoke({
-            userId: "u1",
-            params: { oldMachineId: "m1" },
-            body: { replacementMachineId: "m2", confirmActiveOldMachine: true },
-        });
-
-        expect(txDbMocks.db.machine.update).toHaveBeenCalledWith(expect.objectContaining({
-            where: { accountId_id: { accountId: "u1", id: "m1" } },
-            data: expect.objectContaining({
-                active: false,
-                replacedByMachineId: "m2",
-                replacementSource: "manual",
-                replacementActorUserId: "u1",
-            }),
-        }));
-        expect(response).toEqual(expect.objectContaining({
-            machine: expect.objectContaining({ replacedByMachineId: "m2" }),
-        }));
-        expect(removeAutomationMachineAssignmentsTx).not.toHaveBeenCalled();
-
-        const undoRoute = await createRoute("DELETE", "/v1/machines/:oldMachineId/replacement");
-        await undoRoute.invoke({
-            userId: "u1",
-            params: { oldMachineId: "m1" },
-        });
-
-        expect(txDbMocks.db.machine.update).toHaveBeenCalledWith(expect.objectContaining({
-            where: { accountId_id: { accountId: "u1", id: "m1" } },
-            data: expect.objectContaining({
-                replacedByMachineId: null,
-                replacedAt: null,
-                replacementReason: null,
-                replacementSource: null,
-                replacementActorUserId: null,
-            }),
-        }));
+        await readyReplacement();
+        const response = await invoke({ replacementMachineId: "m2", confirmActiveOldMachine: true }, { path: "/v1/machines/m1/replacement" });
+        expect(response.statusCode, response.body).toBe(200);
+        expect(response.json()).toMatchObject({ machine: { active: false, replacedByMachineId: "m2", replacementSource: "manual", replacementActorUserId: accountId } });
+        const undo = await invoke(undefined, { method: "DELETE", path: "/v1/machines/m1/replacement" });
+        expect(undo.statusCode, undo.body).toBe(200);
+        expect(await db.machine.findUniqueOrThrow({ where: { id: "m1" } })).toMatchObject({ replacedByMachineId: null,
+            replacedAt: null, replacementReason: null, replacementSource: null, replacementActorUserId: null });
     });
 
     it("does not apply manual replacement for a marked Machine when the caller is legacy", async () => {
-        dbMocks.db.machine.findFirst.mockResolvedValueOnce({ id: "m2" });
-        txDbMocks.db.machine.findFirst
-            .mockResolvedValueOnce({
-                ...baseMachine,
-                dataEncryptionKey: new Uint8Array(
-                    Buffer.from(MACHINE_PLAIN_DATA_KEY_MARKER, "base64"),
-                ),
-            })
-            .mockResolvedValueOnce({
-                ...baseMachine,
-                id: "m2",
-                active: true,
-            });
-
-        const route = await createRoute("POST", "/v1/machines/:oldMachineId/replacement");
-        const { reply } = await route.invoke({
-            userId: "u1",
-            accountStoredContentCompatibility: {
-                supportsCurrentProtocol: false,
-                outcome: "legacy-missing",
-            },
-            params: { oldMachineId: "m1" },
-            body: { replacementMachineId: "m2", confirmActiveOldMachine: true },
-        });
-
-        expect(reply.code).toHaveBeenCalledWith(426);
-        expect(txDbMocks.db.machine.update).not.toHaveBeenCalled();
-        expect(markAccountChanged).not.toHaveBeenCalled();
+        await readyReplacement(true);
+        const before = await db.machine.findUniqueOrThrow({ where: { id: "m1" } });
+        const response = await invoke({ replacementMachineId: "m2", confirmActiveOldMachine: true }, { path: "/v1/machines/m1/replacement", legacy: true });
+        expect(response.statusCode, response.body).toBe(426);
+        expect(response.json()).toMatchObject({ error: "client-upgrade-required" });
+        expect(await db.machine.findUniqueOrThrow({ where: { id: "m1" } })).toEqual(before);
+        expect(await db.accountChange.count({ where: { accountId } })).toBe(0);
     });
 
     it("does not undo replacement for a marked Machine when the caller is legacy", async () => {
-        const markedMachine = {
-            ...baseMachine,
-            replacedByMachineId: "m2",
-            replacementSource: "manual",
-            dataEncryptionKey: new Uint8Array(
-                Buffer.from(MACHINE_PLAIN_DATA_KEY_MARKER, "base64"),
-            ),
-        };
-        txDbMocks.db.machine.findFirst
-            .mockResolvedValueOnce(markedMachine)
-            .mockResolvedValueOnce(markedMachine);
-
-        const route = await createRoute("DELETE", "/v1/machines/:oldMachineId/replacement");
-        const { reply } = await route.invoke({
-            userId: "u1",
-            accountStoredContentCompatibility: {
-                supportsCurrentProtocol: false,
-                outcome: "legacy-missing",
-            },
-            params: { oldMachineId: "m1" },
-        });
-
-        expect(reply.code).toHaveBeenCalledWith(426);
-        expect(txDbMocks.db.machine.update).not.toHaveBeenCalled();
-        expect(markAccountChanged).not.toHaveBeenCalled();
+        await readyReplacement(true);
+        const before = await db.machine.update({ where: { id: "m1" }, data: { replacedByMachineId: "m2", replacementSource: "manual" } });
+        const response = await invoke(undefined, { method: "DELETE", path: "/v1/machines/m1/replacement", legacy: true });
+        expect(response.statusCode, response.body).toBe(426);
+        expect(response.json()).toMatchObject({ error: "client-upgrade-required" });
+        expect(await db.machine.findUniqueOrThrow({ where: { id: "m1" } })).toEqual(before);
+        expect(await db.accountChange.count({ where: { accountId } })).toBe(0);
     });
 });

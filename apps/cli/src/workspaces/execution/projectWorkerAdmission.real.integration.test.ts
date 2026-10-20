@@ -126,18 +126,21 @@ describe.skipIf(process.platform === 'win32')('finite FIFO with real Project pro
         handlers: { spawnSession: async () => ({ type: 'success', sessionId: 'unused' }), stopSession: async () => true, requestShutdown() {} },
         deps: { currentMachineId: workspace.machineId, currentServerId: workspace.serverId,
           actionOperations: operationOwner,
-          createProjectFiniteRuntime: async ports => ({ ...ports, serverId: workspace.serverId, machineId: workspace.machineId,
+          createProjectFiniteRuntime: async ports => {
+            if (!preparation.requester.credentials) throw new Error('Expected fixture requester credentials');
+            return { ...ports, serverId: workspace.serverId, machineId: workspace.machineId,
             accountId: 'requester', credentials: preparation.requester.credentials,
             serverHttpBaseUrl: preparation.requester.serverHttpBaseUrl, workerAdmission: admission,
             nativeIo: preparation.nativeIo, resolveWorkspaceExecutionConfig: async () => null,
             environmentIo: createProjectNativeEnvironmentIoForHost({ resolveTool: async () => null }),
-          }),
+          }; },
         },
       });
       const ingress = { signal: new AbortController().signal };
       const installedRuntime = await registration.resolveProjectFiniteRuntime?.(ingress);
       if (!installedRuntime) throw new Error('Missing installed finite runtime');
-      sessions = installedRuntime.terminalSessions;
+      sessions = registration.getFiniteTerminalSessions();
+      if (!sessions) throw new Error('Missing installed terminal sessions');
       const installedSessions = sessions;
       const scope = { machineId: workspace.machineId, accountId: 'requester' };
       const invoke = (name: string) => operationOwner.observeExecution({ actionId: 'projects.prepare', actionRequestId: name,

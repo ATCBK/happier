@@ -110,6 +110,11 @@ type HappierDataTableInput = Readonly<{
   /** The cell text's average advance, from the text role's font size. */
   characterWidth: number;
   locale?: string;
+  /**
+   * Each header label's drawn width once the host has measured it. A character count cannot know
+   * wide glyphs ("Copper"), so a measured label widens its column; it never narrows below the estimate.
+   */
+  measuredLabelWidths?: readonly (number | undefined)[];
 }>;
 
 /**
@@ -123,7 +128,9 @@ export function estimateHappierDataColumnWidths(input: HappierDataTableInput): r
       const cell = row[index];
       if (cell !== undefined) longest = Math.max(longest, formatHappierDataValue(cell, input.locale).length);
     }
-    return Math.ceil(Math.min(longest, READABLE_COLUMN_CHARACTERS) * input.characterWidth);
+    const estimated = Math.ceil(Math.min(longest, READABLE_COLUMN_CHARACTERS) * input.characterWidth);
+    const measured = input.measuredLabelWidths?.[index];
+    return measured === undefined ? estimated : Math.max(estimated, Math.ceil(measured));
   });
 }
 
@@ -283,16 +290,36 @@ export function describeHappierSeriesBucket(bucket: HappierSeriesBucket, unknown
   return `${describeHappierSeriesCoordinate(bucket, options)}${bucket.annotation ? ` · ${bucket.annotation}` : ''}: ${bucket.values.map((entry) => `${entry.label} ${entry.value === null ? unknownLabel : formatHappierDataValue(entry.value, options.locale)}`).join(', ')}`;
 }
 
+/**
+ * The series' path through its samples. `smoothing` > 0 draws a monotone cubic (Steffen): it passes through
+ * every sample, never overshoots the range between two neighbours (so a peak or a dip is never invented),
+ * and keeps one tangent where segments join. `smoothing` scales the tangents; 0 draws straight segments.
+ * Samples run in x order either way, so a ribbon's lower edge can be drawn backwards.
+ */
 export function buildHappierSeriesPath(points: readonly Readonly<{ x: number; y: number }>[], smoothing = 0): string {
   const round = (value: number) => Math.round(value * 100) / 100;
   if (!points.length) return '';
   const segments = [`M${round(points[0]!.x)} ${round(points[0]!.y)}`];
+  if (smoothing <= 0 || points.length < 3) {
+    for (let index = 1; index < points.length; index += 1) segments.push(`L${round(points[index]!.x)} ${round(points[index]!.y)}`);
+    return segments.join(' ');
+  }
+  const slopes = points.slice(1).map((to, index) => {
+    const from = points[index]!; const run = to.x - from.x;
+    return run === 0 ? 0 : (to.y - from.y) / run;
+  });
+  const tangents = points.map((point, index) => {
+    if (index === 0) return slopes[0]!;
+    if (index === points.length - 1) return slopes[index - 1]!;
+    const before = slopes[index - 1]!; const after = slopes[index]!;
+    if (before * after <= 0) return 0;
+    const left = point.x - points[index - 1]!.x; const right = points[index + 1]!.x - point.x;
+    const blended = (before * right + after * left) / (left + right);
+    return Math.sign(before) * Math.min(2 * Math.abs(before), 2 * Math.abs(after), Math.abs(blended));
+  });
   for (let index = 1; index < points.length; index += 1) {
-    const from = points[index - 1]!; const to = points[index]!;
-    if (smoothing <= 0 || points.length < 3) { segments.push(`L${round(to.x)} ${round(to.y)}`); continue; }
-    const before = points[index - 2] ?? from; const after = points[index + 1] ?? to;
-    const clamp = (value: number) => Math.max(Math.min(from.y, to.y), Math.min(Math.max(from.y, to.y), value));
-    segments.push(`C${round(from.x + (to.x - before.x) * smoothing / 6)} ${round(clamp(from.y + (to.y - before.y) * smoothing / 6))} ${round(to.x - (after.x - from.x) * smoothing / 6)} ${round(clamp(to.y - (after.y - from.y) * smoothing / 6))} ${round(to.x)} ${round(to.y)}`);
+    const from = points[index - 1]!; const to = points[index]!; const third = (to.x - from.x) / 3;
+    segments.push(`C${round(from.x + third)} ${round(from.y + tangents[index - 1]! * third * smoothing)} ${round(to.x - third)} ${round(to.y - tangents[index]! * third * smoothing)} ${round(to.x)} ${round(to.y)}`);
   }
   return segments.join(' ');
 }

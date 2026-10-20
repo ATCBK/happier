@@ -8,7 +8,7 @@ import {
     HAPPIER_SPINNER_SPEED_IDS,
     HAPPIER_SPINNER_STYLE_IDS,
 } from '@happier-dev/plugin-ui/presentation';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { ACTIVITY_SURFACE_LOCAL_SETTING_DEFINITIONS } from './localSettingDefinitions.activitySurfaces';
 import { LAYOUT_LOCAL_SETTING_DEFINITIONS } from './localSettingDefinitions.layout';
 import { serializeNormalizedPaneSizeWithBasisKey } from './localSettingDefinitions.shared';
@@ -19,21 +19,19 @@ import {
 import { SessionListFocusedFolderV1Schema } from '@/sync/domains/session/folders/types';
 import { MachineStorageViewMapSchema } from './machineStorageViewSetting';
 
-const SessionMruOrderSchema = z.array(z.unknown())
-    .transform((values) => values
+const SessionMruOrderSchema = z.catch(z.pipe(z.array(z.unknown()), z.transform((values) => values
         .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-        .map((value) => value.trim()))
-    .catch([]);
+        .map((value) => value.trim()))), []);
 
 const localSettingInputs = {
     hideConnectedAccountIdentities: {
-        schema: z.boolean().catch(false),
+        schema: z.catch(z.boolean(), false),
         default: false,
         description: 'Hide connected account identities on this device',
         storageScope: 'local',
     },
     homeApplicationCarrierEligibility: {
-        schema: z.enum(['automatic', 'standard_only']).catch('standard_only'),
+        schema: z.catch(z.enum(['automatic', 'standard_only']), 'standard_only'),
         default: 'automatic',
         description: 'Application carrier selection for Homes on this device',
         storageScope: 'local',
@@ -64,7 +62,7 @@ const localSettingInputs = {
     },
     connectedServicesIndexViewV1: {
         // List (default, lines limits up across accounts) or Grid, for Connected services on this device.
-        schema: z.enum(['list', 'grid']).catch('list'),
+        schema: z.catch(z.enum(['list', 'grid']), 'list'),
         default: 'list',
         description: 'Whether Connected services lists its accounts or shows them as cards on this device',
         storageScope: 'local',
@@ -72,38 +70,38 @@ const localSettingInputs = {
     machinesRailSeenV1: {
         // What this device has already seen of the machines' "worth a look" reasons and guard actions (R4):
         // written when the Machines popover opens, so the rail dot returns only for a new or worse reason.
-        schema: z.object({
-            look: z.record(z.string(), z.array(z.string())).catch({}),
-            guardSeenAt: z.number().catch(0),
-        }).catch({ look: {}, guardSeenAt: 0 }),
+        schema: z.catch(z.object({
+            look: z.catch(z.record(z.string(), z.array(z.string())), {}),
+            guardSeenAt: z.catch(z.number(), 0),
+        }), { look: {}, guardSeenAt: 0 }),
         default: { look: {}, guardSeenAt: 0 },
         description: 'Machine attention reasons and guard actions this device has already seen in the Machines popover',
         storageScope: 'local',
     },
     machinesIndexViewV1: {
         // List (default, a table of machines) or Grid (one card per machine) for All machines on this device.
-        schema: z.enum(['list', 'grid']).catch('list'),
+        schema: z.catch(z.enum(['list', 'grid']), 'list'),
         default: 'list',
         description: 'Whether All machines shows a table of machines or one card per machine on this device',
         storageScope: 'local',
     },
     uiMachineSummaryStyle: {
         // How the Machine summary draws each machine's instruments (popover, machine list, All machines → List).
-        schema: z.enum(['sparklines', 'bars', 'numbers', 'rings']).catch('sparklines'),
+        schema: z.catch(z.enum(['sparklines', 'bars', 'numbers', 'rings']), 'sparklines'),
         default: 'sparklines',
         description: 'The Machine summary style on this device: sparklines, bars, numbers or rings',
         storageScope: 'local',
     },
     uiMachineSummaryMetrics: {
         // The shown metrics, in canonical order (`normalizeMachineSummaryMetrics`); none shown is a valid choice.
-        schema: z.array(z.enum(['cpu', 'memory', 'disk', 'network'])).catch(['cpu', 'memory', 'disk']),
+        schema: z.catch(z.array(z.enum(['cpu', 'memory', 'disk', 'network'])), ['cpu', 'memory', 'disk']),
         default: ['cpu', 'memory', 'disk'],
         description: 'Which metrics the Machine summary shows on this device (none: machine names only)',
         storageScope: 'local',
     },
     machineVitalsRangeV1: {
         // The history a machine's Overview charts on this device: the last hour (default), day or week.
-        schema: z.enum(['1h', '24h', '7d']).catch('1h'),
+        schema: z.catch(z.enum(['1h', '24h', '7d']), '1h'),
         default: '1h',
         description: 'How much history a machine Overview charts on this device: 1 hour, 24 hours or 7 days',
         storageScope: 'local',
@@ -117,29 +115,29 @@ const localSettingInputs = {
     },
     artifactsBrowserViewV1: {
         // Grid, List or Folders for the Artifacts browser on this device; unset follows the device (phones list, else grid).
-        schema: z.object({ presentation: z.enum(['grid', 'list', 'folders']).optional() }).catch({}),
+        schema: z.catch(z.object({ presentation: z.optional(z.enum(['grid', 'list', 'folders'])) }), {}),
         default: {},
         description: 'Whether the Artifacts browser shows cards, a list or the folder tree on this device',
         storageScope: 'local',
     },
     pluginsCollectionViewV1: {
         // Grid (default) or List, remembered per Plugins view on this device.
-        schema: z.object({
-            installed: z.enum(['grid', 'list']).optional(),
-            discover: z.enum(['grid', 'list']).optional(),
-        }).catch({}),
+        schema: z.catch(z.object({
+            installed: z.optional(z.enum(['grid', 'list'])),
+            discover: z.optional(z.enum(['grid', 'list'])),
+        }), {}),
         default: {},
         description: 'Whether the Plugins Installed and Browse views show a grid or a list on this device',
         storageScope: 'local',
     },
     collapsedGroupKeysV1: {
-        schema: z.record(z.string(), z.boolean()).default({}),
+        schema: z._default(z.record(z.string(), z.boolean()), {}),
         default: {},
         description: 'Collapsed state for session list groups on this device',
         storageScope: 'local',
     },
     homesReconcileAcknowledgedHomeIds: {
-        schema: z.array(z.string().min(1)).catch([]),
+        schema: z.catch(z.array(z.string().check(z.minLength(1))), []),
         default: [],
         description: 'Homes whose "Your Homes are connected" choice this device has settled (Keep both / Use …)',
         storageScope: 'local',
@@ -148,16 +146,16 @@ const localSettingInputs = {
         // Visit memory for Home's "Personalize Happier" card: the steps saved on this device and where
         // to pick up. Ids are normalized by the Personalize owner; the choices themselves live in
         // their own settings. Never Account-synced.
-        schema: z.object({
-            savedSteps: z.array(z.string()).catch([]),
-            resumeAt: z.string().nullable().catch(null),
-        }).catch({ savedSteps: [], resumeAt: null }),
+        schema: z.catch(z.object({
+            savedSteps: z.catch(z.array(z.string()), []),
+            resumeAt: z.catch(z.nullable(z.string()), null),
+        }), { savedSteps: [], resumeAt: null }),
         default: { savedSteps: [], resumeAt: null },
         description: 'Where this device left off in Personalize Happier (steps saved, page to resume at)',
         storageScope: 'local',
     },
     brandHeroSeenAt: {
-        schema: z.number().nullable().catch(null),
+        schema: z.catch(z.nullable(z.number()), null),
         default: null,
         description: 'Timestamp in ms since epoch when the user first dismissed the mobile brand hero',
         storageScope: 'local',
@@ -165,25 +163,38 @@ const localSettingInputs = {
     homeWelcomeSeenAt: {
         // Welcome (Home atmosphere R-11): the planet assembles once, on the first arrival at Home after
         // sign-in on this device. Never Account-synced and never cleared on logout.
-        schema: z.number().nullable().catch(null),
+        schema: z.catch(z.nullable(z.number()), null),
         default: null,
         description: 'Timestamp in ms since epoch when Home first played its Welcome planet on this device',
         storageScope: 'local',
     },
     skillsFirstRunDecidedAt: {
-        schema: z.number().nullable().catch(null),
+        schema: z.catch(z.nullable(z.number()), null),
         default: null,
         description: 'When this device chose or dismissed the initial Skills checklist',
         storageScope: 'local',
     },
     mcpFirstVisitDismissedAt: {
-        schema: z.number().nullable().catch(null),
+        schema: z.catch(z.nullable(z.number()), null),
         default: null,
         description: 'When this device dismissed the MCP servers first-visit line ("Your servers now follow you")',
         storageScope: 'local',
     },
+    projectSkillsMigrationNoteSeenAt: {
+        schema: z.catch(z.nullable(z.number()), null),
+        default: null,
+        description: 'When this device dismissed the Project → Context note about skills and MCP servers moved from older project settings',
+        storageScope: 'local',
+    },
+    dismissedFailedApprovalsV1: {
+        // Approval artifact id -> when this device dismissed its failed-effect card from the composer. Presentation only.
+        schema: z.catch(z.record(z.string(), z.number()), {}),
+        default: {},
+        description: 'Failed approvals this device dismissed from the composer attention tray, by approval artifact id',
+        storageScope: 'local',
+    },
     hasCompletedAuthOnce: {
-        schema: z.boolean().catch(false),
+        schema: z.catch(z.boolean(), false),
         default: false,
         description: 'Flips true the first time the user reaches an authenticated state on this device. Never cleared on logout, so the welcome screen can greet returning users with a warmer copy variant ("Good to have you back").',
         storageScope: 'local',
@@ -199,7 +210,7 @@ const localSettingInputs = {
         // `.catch` matters: `localSettingsParse` resets EVERY local setting when one field fails to
         // parse, so a style id written by a newer build (or removed later) must degrade to the
         // default rather than wipe the user's other preferences.
-        schema: z.enum(HAPPIER_SPINNER_STYLE_IDS).catch(DEFAULT_HAPPIER_SPINNER_STYLE_ID),
+        schema: z.catch(z.enum(HAPPIER_SPINNER_STYLE_IDS), DEFAULT_HAPPIER_SPINNER_STYLE_ID),
         default: DEFAULT_HAPPIER_SPINNER_STYLE_ID,
         description: 'Which loading indicator spinners draw: a dotted Happier mark or H, or the classic ring',
         storageScope: 'local',
@@ -207,14 +218,14 @@ const localSettingInputs = {
     },
     loadingIndicatorSpeed: {
         // `.catch` for the same reason as the style: an unknown value must not reset other settings.
-        schema: z.enum(HAPPIER_SPINNER_SPEED_IDS).catch(DEFAULT_HAPPIER_SPINNER_SPEED_ID),
+        schema: z.catch(z.enum(HAPPIER_SPINNER_SPEED_IDS), DEFAULT_HAPPIER_SPINNER_SPEED_ID),
         default: DEFAULT_HAPPIER_SPINNER_SPEED_ID,
         description: 'How fast dot loading indicators play: slow, normal or fast',
         storageScope: 'local',
         analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'device_user' },
     },
     loadingIndicatorPause: {
-        schema: z.enum(HAPPIER_SPINNER_PAUSE_IDS).catch(DEFAULT_HAPPIER_SPINNER_PAUSE_ID),
+        schema: z.catch(z.enum(HAPPIER_SPINNER_PAUSE_IDS), DEFAULT_HAPPIER_SPINNER_PAUSE_ID),
         default: DEFAULT_HAPPIER_SPINNER_PAUSE_ID,
         description: 'How long dot loading indicators rest between loops: none, short or long',
         storageScope: 'local',
@@ -263,7 +274,7 @@ const localSettingInputs = {
         analytics: { trackCurrentState: true, trackChanges: true, valueKind: 'enum', privacy: 'safe', identityScope: 'device_user' },
     },
     uiFontSize: {
-        schema: z.enum(['xxsmall', 'xsmall', 'small', 'default', 'large', 'xlarge', 'xxlarge']).optional(),
+        schema: z.optional(z.enum(['xxsmall', 'xsmall', 'small', 'default', 'large', 'xlarge', 'xxlarge'])),
         default: 'default',
         description: 'Deprecated: legacy in-app UI font size',
         storageScope: 'local',

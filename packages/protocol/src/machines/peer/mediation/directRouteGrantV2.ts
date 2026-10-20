@@ -174,7 +174,7 @@ function addIrohPeerRouteGrantBindingIssuesV2(
   }
 }
 
-function fixedBase64UrlSchema(decodedLength: number): z.ZodMiniString {
+function fixedBase64UrlSchema(decodedLength: number): z.ZodMiniString<string> {
   return z.string().check(z.refine((value) => decodeCanonicalBase64UrlFixedLength(value, decodedLength) !== null, `Expected canonical unpadded base64url encoding of ${decodedLength} bytes`));
 }
 

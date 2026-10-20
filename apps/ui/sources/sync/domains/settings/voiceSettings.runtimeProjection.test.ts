@@ -31,9 +31,6 @@ import {
     projectVoiceSettingsIntoRuntimeSettings,
     type VoiceSettingsPersistenceV1,
 } from './voiceSettingsPersistence';
-import {
-    type CurrentSecretBindingsByProfileId,
-} from './secretBindings';
 import type { FavoriteModelSelectionV1 } from '@/sync/domains/models/favoriteModelSelections';
 
 function projectProtocolSettingsForTypeContract(parsed: AccountSettings) {
@@ -98,9 +95,8 @@ describe('Voice Account Settings runtime projection', () => {
         expectTypeOf(settingsDefaults.secrets).toEqualTypeOf<SavedSecret[]>();
         expectTypeOf(settingsDefaults.connectedServicesDefaultProfileByServiceId).not.toBeAny();
         expectTypeOf(settingsDefaults.connectedServicesDefaultProfileByServiceId).toEqualTypeOf<Record<string, string>>();
-        expectTypeOf(settingsDefaults.currentSecretBindingsByProfileId).not.toBeAny();
-        expectTypeOf(settingsDefaults.currentSecretBindingsByProfileId)
-            .toEqualTypeOf<CurrentSecretBindingsByProfileId>();
+        expectTypeOf<Extract<'currentSecretBindingsByProfileId', keyof typeof settingsDefaults>>()
+            .toEqualTypeOf<never>();
         expectTypeOf(settingsDefaults.currentFavoriteModelSelectionsV1).not.toBeAny();
         expectTypeOf(settingsDefaults.currentFavoriteModelSelectionsV1)
             .toEqualTypeOf<readonly FavoriteModelSelectionV1[]>();
@@ -142,8 +138,8 @@ describe('Voice Account Settings runtime projection', () => {
         expectTypeOf<DirectProtocolProjection['voiceDiagnosticsV1']>().toEqualTypeOf<VoiceSpeechDiagnosticsSettingsV1>();
         expectTypeOf<DirectProtocolProjection['secrets']>().toEqualTypeOf<SavedSecret[]>();
         expectTypeOf<DirectProtocolProjection['connectedServicesDefaultProfileByServiceId']>().toEqualTypeOf<Record<string, string>>();
-        expectTypeOf<DirectProtocolProjection['currentSecretBindingsByProfileId']>()
-            .toEqualTypeOf<CurrentSecretBindingsByProfileId>();
+        expectTypeOf<Extract<'currentSecretBindingsByProfileId', keyof DirectProtocolProjection>>()
+            .toEqualTypeOf<never>();
         expectTypeOf<DirectProtocolProjection['currentFavoriteModelSelectionsV1']>()
             .toEqualTypeOf<readonly FavoriteModelSelectionV1[]>();
         expectTypeOf<Extract<'currentRememberedEngineSelectionsByScopeV1', keyof DirectProtocolProjection>>()

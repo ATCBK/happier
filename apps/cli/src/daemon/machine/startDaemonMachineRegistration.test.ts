@@ -9,6 +9,7 @@ import type { DaemonSessionMutationCustody } from '../connectedServices/usageLim
 import type { MemoryWorkerHandle } from '../memory/memoryWorker';
 import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
 import { DEFAULT_MEMORY_SETTINGS } from '@/settings/memorySettings';
+import { createApiMachineTransportFixture } from '@/testkit/apiMachineTransport';
 
 import { ensureMachineRegistered } from '@/api/machine/ensureMachineRegistered';
 import { MachineContentPublicKeyMismatchError } from '@/api/machine/machineRegistrationErrors';
@@ -76,30 +77,18 @@ describe('startDaemonMachineRegistration', () => {
     const createConnectedApiMachine = vi.fn(() => {
       const attempt = apiMachines.length + 1;
       const apiMachine = {
+        ...createApiMachineTransportFixture(),
         setRPCHandlers: vi.fn(() => ({ externalSessionPluginAdmissionOwner: undefined })),
         registerLiveStreamRelayRoutes: vi.fn(),
-        onUpdate: vi.fn(() => () => {}),
-        onAccountSettingsVersionHint: vi.fn(() => () => {}),
-        onAccountProjectRowsChanged: vi.fn(() => () => {}),
-        onPendingSessionActivationHint: vi.fn(() => () => {}),
-        onSessionDeletedChange: vi.fn(() => () => {}),
-        onSessionAccessRevoked: vi.fn(() => () => {}),
-        onSessionAccessReset: vi.fn(() => () => {}),
-        onSessionArchivedStateChange: vi.fn(() => () => {}),
-        onConnectionStateChange: vi.fn(() => () => {}),
         connect: vi.fn(),
         updateDaemonState: vi.fn(async () => 'updated'),
         updateMachineMetadata: vi.fn(async () => 'updated'),
         awaitPendingRpcRequests: vi.fn(async () => {}),
         emitExternalSessionTranscriptUpdate: vi.fn(),
         executeExternalSessionHistoricalImportCommand: vi.fn(async () => ({ ok: true })),
-        onMachineTransferEnvelope: vi.fn(() => () => {}),
         sendMachineTransferEnvelope: vi.fn(),
-        onTransferRelayV2Envelope: vi.fn(() => () => {}),
         sendTransferRelayV2Envelope: vi.fn(),
-        onPeerTcpTunnelRelayEnvelope: vi.fn(() => () => {}),
         sendPeerTcpTunnelRelayEnvelope: vi.fn(),
-        onMachineLiveStreamRelayEnvelope: vi.fn(() => () => {}),
         sendMachineLiveStreamRelayEnvelope: vi.fn(),
         getPeerMediationMachineRpcHandlerManager: vi.fn(() => ({
           invokeLocal: async () => ({ ok: true }),
@@ -122,6 +111,7 @@ describe('startDaemonMachineRegistration', () => {
         pause: vi.fn(),
         resume: vi.fn(),
         handleServerUpdate: vi.fn(),
+        liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
       };
       workers.push(worker);
       events.push(`worker-published:${attempt}`);
@@ -138,6 +128,7 @@ describe('startDaemonMachineRegistration', () => {
           events.push(`memory-stopped:${attempt}`);
         }),
         reloadSettings: vi.fn(async () => {}),
+        clearIndex: vi.fn(async () => {}),
         ensureUpToDate: vi.fn(async () => {}),
         removeSessions: vi.fn(async () => {}),
         reconcileRetainedSessionAccess: vi.fn(async () => {}),
@@ -285,29 +276,18 @@ describe('startDaemonMachineRegistration', () => {
     const createConnectedApiMachine = vi.fn(() => {
       const attempt = apiMachines.length + 1;
       const apiMachine = {
+        ...createApiMachineTransportFixture(),
         setRPCHandlers: vi.fn(() => ({ externalSessionPluginAdmissionOwner: undefined })),
         registerLiveStreamRelayRoutes: vi.fn(),
-        onUpdate: vi.fn(() => () => {}),
-        onAccountSettingsVersionHint: vi.fn(() => () => {}),
-        onPendingSessionActivationHint: vi.fn(() => () => {}),
-        onSessionDeletedChange: vi.fn(() => () => {}),
-        onSessionAccessRevoked: vi.fn(() => () => {}),
-        onSessionAccessReset: vi.fn(() => () => {}),
-        onSessionArchivedStateChange: vi.fn(() => () => {}),
-        onConnectionStateChange: vi.fn(() => () => {}),
         connect: vi.fn(),
         updateDaemonState: vi.fn(async () => 'updated'),
         updateMachineMetadata: vi.fn(async () => 'updated'),
         awaitPendingRpcRequests: vi.fn(async () => {}),
         emitExternalSessionTranscriptUpdate: vi.fn(),
         executeExternalSessionHistoricalImportCommand: vi.fn(async () => ({ ok: true })),
-        onMachineTransferEnvelope: vi.fn(() => () => {}),
         sendMachineTransferEnvelope: vi.fn(),
-        onTransferRelayV2Envelope: vi.fn(() => () => {}),
         sendTransferRelayV2Envelope: vi.fn(),
-        onPeerTcpTunnelRelayEnvelope: vi.fn(() => () => {}),
         sendPeerTcpTunnelRelayEnvelope: vi.fn(),
-        onMachineLiveStreamRelayEnvelope: vi.fn(() => () => {}),
         sendMachineLiveStreamRelayEnvelope: vi.fn(),
         getPeerMediationMachineRpcHandlerManager: vi.fn(() => ({
           invokeLocal: async () => ({ ok: true }),
@@ -331,6 +311,7 @@ describe('startDaemonMachineRegistration', () => {
         pause: vi.fn(),
         resume: vi.fn(),
         handleServerUpdate: vi.fn(),
+        liveWorkProducer: { read: () => ({ coverage: 'complete', items: [] }), subscribe: () => () => {} },
       };
       workers.push(worker);
       events.push(`worker-published:${attempt}`);
@@ -344,6 +325,7 @@ describe('startDaemonMachineRegistration', () => {
           events.push(`memory-stopped:${attempt}`);
         }),
         reloadSettings: vi.fn(async () => {}),
+        clearIndex: vi.fn(async () => {}),
         ensureUpToDate: vi.fn(async () => {}),
         removeSessions: vi.fn(async () => {}),
         reconcileRetainedSessionAccess: vi.fn(async () => {}),

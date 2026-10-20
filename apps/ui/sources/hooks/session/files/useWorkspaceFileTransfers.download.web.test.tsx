@@ -1,52 +1,52 @@
-import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderHook, renderScreen } from '@/dev/testkit';
-import { installSessionFilesHookCommonModuleMocks } from './sessionFilesHookTestHelpers';
+import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
-(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+import { createDeferred, renderHook } from '@/dev/testkit';
+import { installBrowserRuntimeForTests } from '@/dev/testkit/harness/browserRuntimeHarness';
+import { createWorkspaceFileDownloadHarness } from '@/dev/testkit/harness/workspaceFileDownloadHarness';
 
-const downloadDaemonWorkspaceFileToDestinationMock = vi.hoisted(() => vi.fn());
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({ Platform: { OS: 'web' } }));
+vi.mock('@/text', async () => (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
 
-installSessionFilesHookCommonModuleMocks();
-
-vi.mock('@/sync/domains/transfers/runtime/transferRuntime', () => ({
-    downloadDaemonWorkspaceFileToDestination: (...args: unknown[]) => downloadDaemonWorkspaceFileToDestinationMock(...args),
-}));
+const { useWorkspaceFileTransfers } = await import('@/hooks/workspaces/transfers/useWorkspaceFileTransfers');
 
 describe('useWorkspaceFileTransfers web download cleanup', () => {
-    beforeEach(() => {
-        vi.useFakeTimers();
-        downloadDaemonWorkspaceFileToDestinationMock.mockReset();
+    let browser: Awaited<ReturnType<typeof installBrowserRuntimeForTests>>;
+    let harness: Awaited<ReturnType<typeof createWorkspaceFileDownloadHarness>>;
+
+    beforeEach(async () => {
+        browser = await installBrowserRuntimeForTests({ url: 'http://localhost/' });
+        harness = await createWorkspaceFileDownloadHarness({ name: 'report.txt', bytes: new Uint8Array([1, 2, 3, 4]) });
     });
 
-    afterEach(() => {
+    afterEach(async () => {
+        await act(async () => { await harness?.reset(); });
         vi.useRealTimers();
+        vi.restoreAllMocks();
         vi.unstubAllGlobals();
+        vi.unstubAllEnvs();
+        browser?.restore();
     });
+
+    async function renderTransfers() {
+        return await renderHook(() => useWorkspaceFileTransfers({ workspaceScope: harness.scope }));
+    }
 
     it('streams into OPFS and delays disk-backed URL cleanup until after the download is triggered', async () => {
-        const diskFile = { name: 'report.txt', size: 4 } as File;
+        const diskFile = new File([new Uint8Array([1, 2, 3, 4])], 'report.txt');
         const write = vi.fn(async (_bytes: Uint8Array) => {});
         const close = vi.fn(async () => {});
         const abort = vi.fn(async () => {});
         const removeEntry = vi.fn(async () => {});
-        const createObjectURL = vi.fn(() => 'blob:test-download');
-        const revokeObjectURL = vi.fn();
-        const click = vi.fn();
-        const remove = vi.fn();
-        const appendChild = vi.fn();
-        const createElement = vi.fn(() => ({
-            click,
-            remove,
-            href: '',
-            download: '',
-            rel: '',
-        }));
-
-        vi.stubGlobal('document', { createElement, body: { appendChild } });
-        vi.stubGlobal('navigator', {
-            storage: {
+        const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:test-download');
+        const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+        const click = vi.spyOn(browser.window.HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        const remove = vi.spyOn(browser.window.HTMLAnchorElement.prototype, 'remove');
+        const appendChild = vi.spyOn(browser.document.body, 'appendChild');
+        Object.defineProperty(browser.window.navigator, 'storage', {
+            configurable: true,
+            value: {
                 getDirectory: async () => ({
                     getFileHandle: async () => ({
                         createWritable: async () => ({ write, close, abort }),
@@ -61,68 +61,28 @@ describe('useWorkspaceFileTransfers web download cleanup', () => {
                 throw new Error('whole-payload Blob must not be constructed for OPFS downloads');
             }
         });
-
-        downloadDaemonWorkspaceFileToDestinationMock.mockImplementation(async (params: {
-            machineId: string;
-            serverId?: string | null;
-            rootPath: string;
-            request: { path: string; asZip: boolean };
-            destination: {
-                writeBytes: (bytes: Uint8Array) => Promise<void>;
-                close: () => Promise<void>;
-                cleanup?: (() => Promise<void>) | null;
-            };
-            onInit?: ((init: { name: string; sizeBytes: number }) => Promise<void | { success: false; error: string }>) | null;
-            signal?: AbortSignal | null;
-            onProgress?: ((progress: { downloadedBytes: number; totalBytes: number }) => void) | null;
-        }) => {
-            expect(params.machineId).toBe('m1');
-            expect(params.serverId).toBe('server-1');
-            expect(params.rootPath).toBe('/repo');
-            expect(params.request).toEqual({ path: 'report.txt', asZip: false });
-            await params.onInit?.({ name: 'report.txt', sizeBytes: 4 });
-            await params.destination.writeBytes(new Uint8Array([1, 2, 3, 4]));
-            params.onProgress?.({ downloadedBytes: 4, totalBytes: 4 });
-            await params.destination.close();
-            return { ok: true, name: 'report.txt', sizeBytes: 4 };
-        });
-
-        const { useWorkspaceFileTransfers } = await import('@/hooks/workspaces/transfers/useWorkspaceFileTransfers');
-        vi.stubGlobal('URL', { createObjectURL, revokeObjectURL });
-
-        let api: ReturnType<typeof useWorkspaceFileTransfers> | null = null;
-        function Test() {
-            api = useWorkspaceFileTransfers({
-                workspaceScope: {
-                    serverId: 'server-1',
-                    machineId: 'm1',
-                    rootPath: '/repo',
-                },
-            });
-            return null;
-        }
-
-        await renderScreen(<Test />);
-
-        if (!api) throw new Error('expected hook api');
+        vi.useFakeTimers();
+        const hook = await renderTransfers();
 
         await act(async () => {
-            await api!.startDownload({ path: 'report.txt', asZip: false });
+            await expect(hook.getCurrent().startDownload({ path: 'report.txt', asZip: false })).resolves.toEqual({ ok: true });
         });
 
+        expect(harness.rpcRequests).toContainEqual(expect.objectContaining({
+            machineId: harness.scope.machineId,
+            method: 'daemon.filesystem.download',
+            payload: expect.objectContaining({ input: expect.objectContaining({ rootPath: '/repo', path: '/repo/report.txt', asZip: false }) }),
+        }));
         expect(appendChild).toHaveBeenCalledTimes(1);
         expect(click).toHaveBeenCalledTimes(1);
-        expect(write).toHaveBeenCalledTimes(1);
+        expect(write).toHaveBeenCalledExactlyOnceWith(new Uint8Array([1, 2, 3, 4]));
         expect(close).toHaveBeenCalledTimes(1);
         expect(createObjectURL).toHaveBeenCalledWith(diskFile);
-        expect(remove).toHaveBeenCalledTimes(0);
-        expect(removeEntry).toHaveBeenCalledTimes(0);
+        expect(remove).not.toHaveBeenCalled();
+        expect(removeEntry).not.toHaveBeenCalled();
         expect(revokeObjectURL).not.toHaveBeenCalled();
-        expect(downloadDaemonWorkspaceFileToDestinationMock).toHaveBeenCalledTimes(1);
 
-        await act(async () => {
-            await vi.runAllTimersAsync();
-        });
+        await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
 
         expect(remove).toHaveBeenCalledTimes(1);
         expect(revokeObjectURL).toHaveBeenCalledWith('blob:test-download');
@@ -130,197 +90,107 @@ describe('useWorkspaceFileTransfers web download cleanup', () => {
         expect(abort).not.toHaveBeenCalled();
     });
 
-    it('fails when downloaded bytes exceed the configured web max bytes (even if init under-reports)', async () => {
-        const priorLimit = process.env.EXPO_PUBLIC_HAPPIER_FILES_DOWNLOAD_MAX_BYTES;
-        process.env.EXPO_PUBLIC_HAPPIER_FILES_DOWNLOAD_MAX_BYTES = '3';
+    it('rejects a prepared file above the configured web maximum before publishing any bytes', async () => {
+        vi.stubEnv('EXPO_PUBLIC_HAPPIER_FILES_DOWNLOAD_MAX_BYTES', '3');
+        const createObjectURL = vi.spyOn(URL, 'createObjectURL');
+        const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL');
+        const click = vi.spyOn(browser.window.HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        const hook = await renderTransfers();
 
-        const createObjectURL = vi.fn(() => 'blob:should-not-be-used');
-        const revokeObjectURL = vi.fn();
-        const click = vi.fn();
-        const createElement = vi.fn(() => ({
-            click,
-            href: '',
-            download: '',
-            rel: '',
-        }));
-
-        vi.stubGlobal('document', { createElement });
-        vi.stubGlobal('Blob', class Blob {
-            constructor(_parts?: unknown[], _options?: Record<string, unknown>) {}
-        });
-
-        downloadDaemonWorkspaceFileToDestinationMock.mockImplementation(async (params: {
-            machineId: string;
-            serverId?: string | null;
-            rootPath: string;
-            request: { path: string; asZip: boolean };
-            destination: {
-                writeBytes: (bytes: Uint8Array) => Promise<void>;
-                close: () => Promise<void>;
-                cleanup?: (() => Promise<void>) | null;
-            };
-            onInit?: ((init: { name: string; sizeBytes: number }) => Promise<void | { success: false; error: string }>) | null;
-            signal?: AbortSignal | null;
-        }) => {
-            await params.onInit?.({ name: 'big.bin', sizeBytes: 1 });
-            await params.destination.writeBytes(new Uint8Array([1, 2, 3, 4]));
-            if (params.signal?.aborted) {
-                await params.destination.cleanup?.();
-                return { ok: false, error: 'Download canceled' };
-            }
-            await params.destination.close();
-            return { ok: true, name: 'big.bin', sizeBytes: 4 };
-        });
-
-        const { useWorkspaceFileTransfers } = await import('@/hooks/workspaces/transfers/useWorkspaceFileTransfers');
-        vi.stubGlobal('URL', { createObjectURL, revokeObjectURL });
-
-        let api: ReturnType<typeof useWorkspaceFileTransfers> | null = null;
-        function Test() {
-            api = useWorkspaceFileTransfers({
-                workspaceScope: {
-                    serverId: 'server-1',
-                    machineId: 'm1',
-                    rootPath: '/repo',
-                },
-            });
-            return null;
-        }
-
-        await renderScreen(<Test />);
-
-        if (!api) throw new Error('expected hook api');
-
-        let result: unknown = null;
         await act(async () => {
-            result = await api!.startDownload({ path: 'big.bin', asZip: false });
+            await expect(hook.getCurrent().startDownload({ path: 'report.txt', asZip: false })).resolves.toEqual({
+                ok: false, error: 'File exceeds the web download size limit',
+            });
         });
 
-        expect(result).toEqual({ ok: false, error: 'File exceeds the web download size limit' });
-        expect(click).toHaveBeenCalledTimes(0);
-        expect(createObjectURL).toHaveBeenCalledTimes(0);
-        expect(revokeObjectURL).toHaveBeenCalledTimes(0);
+        expect(hook.getCurrent().downloadState).toEqual({ status: 'error', error: 'File exceeds the web download size limit' });
+        expect(harness.rpcRequests.some(request => request.method === RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_CHUNK)).toBe(false);
+        expect(click).not.toHaveBeenCalled();
+        expect(createObjectURL).not.toHaveBeenCalled();
+        expect(revokeObjectURL).not.toHaveBeenCalled();
+    });
 
-        process.env.EXPO_PUBLIC_HAPPIER_FILES_DOWNLOAD_MAX_BYTES = priorLimit;
+    it('rejects a peer that sends more bytes than its prepared metadata without publishing the file', async () => {
+        await harness.reset();
+        harness = await createWorkspaceFileDownloadHarness({
+            name: 'report.txt', bytes: new Uint8Array([1, 2, 3, 4]), advertisedDownloadSizeBytes: 1,
+        });
+        const createObjectURL = vi.spyOn(URL, 'createObjectURL');
+        const click = vi.spyOn(browser.window.HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        const hook = await renderTransfers();
+
+        await act(async () => {
+            await expect(hook.getCurrent().startDownload({ path: 'report.txt', asZip: false })).resolves.toEqual({
+                ok: false, error: 'Downloaded size exceeded expected size',
+            });
+        });
+
+        expect(hook.getCurrent().downloadState).toEqual({ status: 'error', error: 'Downloaded size exceeded expected size' });
+        expect(createObjectURL).not.toHaveBeenCalled();
+        expect(click).not.toHaveBeenCalled();
     });
 
     it('does not publish a browser download when unmounted while OPFS materializes the completed file', async () => {
-        let resolveFile!: (file: File) => void;
-        const diskFile = { name: 'report.txt', size: 4 } as File;
-        const materializedFile = new Promise<File>((resolve) => {
-            resolveFile = resolve;
+        const fileRequested = createDeferred<void>();
+        const materializedFile = createDeferred<File>();
+        const diskFile = new File([new Uint8Array([1, 2, 3, 4])], 'report.txt');
+        const getFile = vi.fn(async () => {
+            fileRequested.resolve();
+            return await materializedFile.promise;
         });
-        const getFile = vi.fn(() => materializedFile);
-        const createObjectURL = vi.fn(() => 'blob:late-download');
-        const revokeObjectURL = vi.fn();
-        const click = vi.fn();
-        const appendChild = vi.fn();
-        const transfer: { signal: AbortSignal | null } = { signal: null };
-
-        vi.stubGlobal('document', {
-            createElement: vi.fn(() => ({
-                click,
-                href: '',
-                download: '',
-                rel: '',
-            })),
-            body: { appendChild },
-        });
-        vi.stubGlobal('navigator', {
-            storage: {
+        const removeEntry = vi.fn(async () => {});
+        const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:late-download');
+        const click = vi.spyOn(browser.window.HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        const appendChild = vi.spyOn(browser.document.body, 'appendChild');
+        Object.defineProperty(browser.window.navigator, 'storage', {
+            configurable: true,
+            value: {
                 getDirectory: async () => ({
                     getFileHandle: async () => ({
-                        createWritable: async () => ({
-                            write: async () => {},
-                            close: async () => {},
-                            abort: async () => {},
-                        }),
+                        createWritable: async () => ({ write: async () => {}, close: async () => {}, abort: async () => {} }),
                         getFile,
                     }),
-                    removeEntry: async () => {},
+                    removeEntry,
                 }),
             },
         });
-
-        downloadDaemonWorkspaceFileToDestinationMock.mockImplementation(async (params: {
-            signal?: AbortSignal | null;
-            destination: {
-                writeBytes: (bytes: Uint8Array) => Promise<void>;
-                close: () => Promise<void>;
-            };
-            onInit?: ((init: { name: string; sizeBytes: number }) => Promise<void | { success: false; error: string }>) | null;
-        }) => {
-            transfer.signal = params.signal ?? null;
-            await params.onInit?.({ name: 'report.txt', sizeBytes: 4 });
-            await params.destination.writeBytes(new Uint8Array([1, 2, 3, 4]));
-            await params.destination.close();
-            return { ok: true, name: 'report.txt', sizeBytes: 4 };
-        });
-
-        const { useWorkspaceFileTransfers } = await import('@/hooks/workspaces/transfers/useWorkspaceFileTransfers');
-        vi.stubGlobal('URL', { createObjectURL, revokeObjectURL });
-        const hook = await renderHook(
-            (props: Parameters<typeof useWorkspaceFileTransfers>[0]) => useWorkspaceFileTransfers(props),
-            {
-                initialProps: {
-                    workspaceScope: { serverId: 'server-1', machineId: 'm1', rootPath: '/repo' },
-                },
-            },
-        );
-
-        let pending!: Promise<{ ok: boolean; error?: string; canceled?: true }>;
+        const hook = await renderTransfers();
+        let pending!: ReturnType<ReturnType<typeof useWorkspaceFileTransfers>['startDownload']>;
         await act(async () => {
             pending = hook.getCurrent().startDownload({ path: 'report.txt', asZip: false });
-            for (let index = 0; index < 16 && getFile.mock.calls.length === 0; index += 1) {
-                await Promise.resolve();
-            }
+            await fileRequested.promise;
         });
         expect(getFile).toHaveBeenCalledTimes(1);
+        expect(harness.rpcRequests.some(request => request.method === RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_FINALIZE)).toBe(true);
 
         await hook.unmount();
-        expect(transfer.signal?.aborted).toBe(true);
-
         await act(async () => {
-            resolveFile(diskFile);
-            await Promise.resolve();
+            materializedFile.resolve(diskFile);
+            await expect(pending).resolves.toEqual({ ok: false, error: 'Download canceled', canceled: true });
         });
 
-        await expect(pending).resolves.toEqual({ ok: false, error: 'Download canceled', canceled: true });
+        expect(removeEntry).toHaveBeenCalledTimes(1);
         expect(createObjectURL).not.toHaveBeenCalled();
         expect(appendChild).not.toHaveBeenCalled();
         expect(click).not.toHaveBeenCalled();
     });
 
     it('aborts an in-flight download on true unmount and ignores its late completion', async () => {
-        const transfer: { signal: AbortSignal | null } = { signal: null };
-        downloadDaemonWorkspaceFileToDestinationMock.mockImplementation(async (params: Readonly<{
-            signal?: AbortSignal | null;
-        }>) => await new Promise((resolve) => {
-            transfer.signal = params.signal ?? null;
-            params.signal?.addEventListener('abort', () => resolve({
-                ok: false,
-                error: 'Download canceled',
-            }), { once: true });
-        }));
-        const { useWorkspaceFileTransfers } = await import('@/hooks/workspaces/transfers/useWorkspaceFileTransfers');
-        const hook = await renderHook(
-            (props: Parameters<typeof useWorkspaceFileTransfers>[0]) => useWorkspaceFileTransfers(props),
-            {
-                initialProps: {
-                    workspaceScope: { serverId: 'server-1', machineId: 'm1', rootPath: '/repo' },
-                },
-            },
-        );
-        let pending!: Promise<{ ok: boolean; error?: string; canceled?: true }>;
+        const chunk = harness.deferNextChunk();
+        const createObjectURL = vi.spyOn(URL, 'createObjectURL');
+        const click = vi.spyOn(browser.window.HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+        const hook = await renderTransfers();
+        let pending!: ReturnType<ReturnType<typeof useWorkspaceFileTransfers>['startDownload']>;
         await act(async () => {
             pending = hook.getCurrent().startDownload({ path: 'report.txt', asZip: false });
-            await Promise.resolve();
+            await chunk.entered;
         });
-        await vi.waitFor(() => expect(downloadDaemonWorkspaceFileToDestinationMock).toHaveBeenCalledTimes(1));
 
         await hook.unmount();
-
-        expect(transfer.signal?.aborted).toBe(true);
         await expect(pending).resolves.toEqual({ ok: false, error: 'Download canceled', canceled: true });
+        await act(async () => { chunk.release(); await chunk.settled; });
+
+        expect(createObjectURL).not.toHaveBeenCalled();
+        expect(click).not.toHaveBeenCalled();
     });
 });

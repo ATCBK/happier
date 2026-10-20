@@ -1,10 +1,32 @@
-import type { z } from 'zod/mini';
+import { z } from 'zod/mini';
 
 export type HomeDomainHttpRequestV1 = Readonly<{
   method: string;
   path: string;
   body: unknown | undefined;
 }>;
+
+const HomeDomainConfirmedRollbackV1Schema = z.strictObject({
+  error: z.literal('database_transaction_conflict_exhausted'),
+  statusCode: z.literal(503),
+});
+
+/**
+ * Read the Home's global confirmation that a transaction exhausted conflict
+ * retries and rolled back. This response settles the mutation as a definite
+ * failure; it must never be collapsed into response-loss ambiguity.
+ */
+export function readHomeDomainConfirmedRollbackV1(
+  httpStatus: number,
+  value: unknown,
+): Readonly<{
+  code: 'database_transaction_conflict_exhausted';
+  details: Readonly<{ error: 'database_transaction_conflict_exhausted'; statusCode: 503 }>;
+}> | null {
+  if (httpStatus !== 503) return null;
+  const parsed = HomeDomainConfirmedRollbackV1Schema.safeParse(value);
+  return parsed.success ? { code: parsed.data.error, details: parsed.data } : null;
+}
 
 function appendQueryValue(query: URLSearchParams, key: string, value: unknown): void {
   if (value === undefined || value === null) return;
@@ -24,11 +46,12 @@ function appendQueryValue(query: URLSearchParams, key: string, value: unknown): 
  *
  * The Action input stays the single public intent contract. Path parameters are
  * consumed by name, GET remainder becomes a query, and mutation remainder stays
- * a body. Existing unparameterized POST rows therefore retain their byte-level
+ * a body unless the existing route requires path fields in that body as well.
+ * Existing unparameterized POST rows therefore retain their byte-level
  * shape while REST-shaped families avoid a second client-owned route table.
  */
 export function bindHomeDomainHttpRequestV1(params: Readonly<{
-  transport: Readonly<{ method: string; path: string }>;
+  transport: Readonly<{ method: string; path: string; preservePathFieldsInBody?: true }>;
   inputSchema: z.ZodMiniType;
   input: unknown;
 }>): HomeDomainHttpRequestV1 {
@@ -58,7 +81,8 @@ export function bindHomeDomainHttpRequestV1(params: Readonly<{
     };
   }
 
-  return { method: params.transport.method, path, body: remaining };
+  return { method: params.transport.method, path,
+    body: params.transport.preservePathFieldsInBody ? parsed : remaining };
 }
 
 /**

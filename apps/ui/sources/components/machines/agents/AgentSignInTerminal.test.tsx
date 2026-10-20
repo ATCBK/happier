@@ -4,13 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createDeferred, createMachineFixture, renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createServerScopedMachineRpcBoundaryMock } from '@/dev/testkit/mocks/serverScopedRpc';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import type { DaemonTerminalEnsureResponse, DaemonTerminalStreamReadResponse } from '@happier-dev/protocol';
+import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
+import { ApprovalRequestSchema, type DaemonTerminalEnsureResponse, type DaemonTerminalStreamReadResponse } from '@happier-dev/protocol';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
 const boundary = vi.hoisted(() => ({ rpc: vi.fn(), confirm: vi.fn() }));
 vi.mock('@/modal', async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
-    return createModalModuleMock({ spies: { confirm: boundary.confirm } });
+    return createModalModuleMock({ spies: { confirm: boundary.confirm } }).module;
 });
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
@@ -27,7 +28,6 @@ vi.mock('react-native-unistyles', async () => {
     return createUnistylesMock();
 });
 vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', () => createServerScopedMachineRpcBoundaryMock(boundary.rpc));
-vi.mock('@/utils/platform/desktopHost', () => ({ isDesktopHost: () => false }));
 // Xterm's browser renderer is the system boundary; the controller, stream and sign-in store stay real.
 vi.mock('@/components/terminal/xterm/XtermTerminalView.web', async () => {
     const React = await import('react');
@@ -62,13 +62,13 @@ describe('Agent sign-in terminal lifecycle on web', () => {
         return await renderScreen(<AgentSignInTerminal {...props} />);
     }
 
-    function fixture(machineId: string, signedIn = true) {
+    function fixture(machineId: string, signedIn = true, machineOverrides: Parameters<typeof createMachineFixture>[0] = {}) {
         const ensure = createDeferred<DaemonTerminalEnsureResponse>();
         const stream = createDeferred<DaemonTerminalStreamReadResponse>();
         const laterStream = createDeferred<DaemonTerminalStreamReadResponse>();
         let streamRead = false;
         let acquiredTerminalId: string | null = null;
-        const machine = createMachineFixture({ id: machineId, activeAt: Date.now() });
+        const machine = createMachineFixture({ id: machineId, activeAt: Date.now(), ...machineOverrides });
         getStorage().setState({ machines: { [machineId]: machine },
             machineListByServerId: { [serverId]: [machine] },
             machineListStatusByServerId: { [serverId]: 'idle' } });
@@ -109,17 +109,39 @@ describe('Agent sign-in terminal lifecycle on web', () => {
         expect(boundary.rpc).toHaveBeenCalledWith(expect.objectContaining({ method: 'daemon.terminal.close', payload: { terminalId: 'late-terminal' } }));
     });
 
-    it('keeps the terminal open when Cancel confirmation is rejected', async () => {
+    it('keeps the terminal open when Cancel approval is rejected', async () => {
         const { ensure, target } = fixture('rejected-terminal-close');
         ensure.resolve({ ok: true, terminalId: 'fixture-terminal', reused: false });
         const onClose = vi.fn();
         const screen = await renderTerminal({ ...target, layout: 'pane', onClose });
-        await waitForHomeGovernance(() => expect(screen.find((node) => Boolean(node.props.session)).props.session.phase).toBe('waiting'));
-        boundary.confirm.mockResolvedValue(false);
+        expect(screen.find((node) => Boolean(node.props.session)).props.session).toMatchObject({ phase: 'waiting', failure: null });
+        // Cancel is direct by default. An explicit Account policy owns the
+        // rejection path through its durable approval, rather than a leaf dialog.
+        await home.requireUiApproval(serverId, 'machines.agents.signIn.cancel');
         await screen.pressByTestIdAsync('agent-sign-in-terminal-close');
-        await waitForHomeGovernance(() => expect(boundary.confirm).toHaveBeenCalledTimes(2));
+        const artifact = await waitForHomeGovernance(() => {
+            const pending = home.artifacts(serverId).list()[0];
+            expect(pending).toBeDefined();
+            return pending!;
+        });
+        expect(ApprovalRequestSchema.parse(JSON.parse(home.artifacts(serverId).readPlainBody(artifact.id) ?? 'null')))
+            .toMatchObject({ actionId: 'machines.agents.signIn.cancel', status: 'open',
+                actionArgs: { machineId: target.machineId, agentId: target.agentId, terminalId: 'fixture-terminal' } });
+        expect(await decideApprovalAsInbox(serverId, artifact.id, 'reject')).toMatchObject({ ok: true,
+            result: { status: 'rejected' } });
         expect(onClose).not.toHaveBeenCalled();
         expect(boundary.rpc.mock.calls.some(([request]) => request.method === 'daemon.terminal.close')).toBe(false);
+        expect(screen.find((node) => Boolean(node.props.session)).props.session).toMatchObject({ phase: 'waiting', failure: null });
+        await screen.unmount();
+    });
+
+    it('keeps a known unreachable machine blocked after credentials resolve', async () => {
+        const { ensure, target } = fixture('unreachable-terminal', false, { active: false, activeAt: 0 });
+        ensure.resolve({ ok: true, terminalId: 'unreachable-login', reused: false });
+        const screen = await renderTerminal({ ...target, layout: 'pane', onClose: () => {} });
+        expect(screen.find((node) => Boolean(node.props.session)).props.session).toMatchObject({
+            phase: 'failed', failure: 'terminal_machine_unreachable',
+        });
         await screen.unmount();
     });
 

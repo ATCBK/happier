@@ -3,16 +3,17 @@ import { isAbsolute, relative } from 'node:path';
 import { createCanonicalJsonSigningInput } from '@happier-dev/protocol/crypto/canonicalJson';
 import { projectNativeJsonValueForTransport, type JsonValue } from '@happier-dev/protocol/json/strictJsonValue';
 import type { DaemonLocalServiceLauncherStartRequestV1, RuntimeActionExecuteArgs } from '@happier-dev/protocol';
-import type { ProjectCommandSourceV1 } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestV1';
+import type { ProjectCommandSourceV1, ProjectExecutionInputV1 } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestV1';
 import type { RpcHandlerContext } from '@/api/rpc/types';
 import { readProjectFiniteIngressRefusal, readProjectRuntimeRequesterRefusal, readProjectRuntimeCurrentnessRefusal, type ProjectFiniteActionRuntime } from '@/workspaces/projectSetup/projectFiniteAction';
 import { resolveProjectRequesterSecretEnvironment } from '@/workspaces/projectSetup/projectSetupRequesterInputs';
 import { projectRuntimeAccountRowsInput } from '@/workspaces/projectAccountRows';
 import { resolveProjectSetupAcceptedWorkspace } from '@/workspaces/projectSetup/projectSetupAcceptedWorkspace';
 import { prepareProjectSetup, readProjectActionApprovalSettings, type PreparedProjectSetupCommand, type PreparedProjectSetupPlan, type ProjectSetupPreparationInput } from '@/workspaces/projectSetup/projectSetupPreparation';
-import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
+import { resolveActionApprovalRouting } from '@happier-dev/protocol/actions/actionApprovalPolicy';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { authorizePreparedProjectCommand, createProjectNativeInvocationCustody, executeProjectSetup, projectBaseEnvironment, publishProjectFiniteAdmission, type ProjectSetupExecutionInput, type ProjectSetupExecutionOutcome, type ProjectSetupOperationContext } from '@/workspaces/projectSetup/projectSetupExecution';
-import { resolveProjectNativeCommand } from '@/workspaces/projectSetup/projectNativeResolution';
+import { readProjectExecutionInputs, resolveProjectNativeCommand } from '@/workspaces/projectSetup/projectNativeResolution';
 import { readProjectDefinitionFileBytes } from '@/workspaces/projectSetup/nativeDefinitionFiles';
 import { resolveProjectServiceStartChoice } from '@/workspaces/execution/projectServicePlacement';
 import { validatePath } from '@/rpc/handlers/pathSecurity';
@@ -75,7 +76,9 @@ type SourceReview = Readonly<{
     manifest: ProjectManifestV1;
     choice: Extract<ProjectServiceStartChoice, { status: 'resolved' }>['choice'];
     placementEffectDigest: string;
-    serviceEffectDigest: string;
+    /** Literal host commands can be reviewed before transfer; native effects use target facts after clean preparation. */
+    serviceEffectDigest?: string;
+    executionInputs: readonly ProjectExecutionInputV1[];
     signal: AbortSignal;
     reviewedEffect: JsonValue;
     reviewedEffectDigest: string;
@@ -90,9 +93,10 @@ const refusal = (error: unknown): Extract<LocalServiceLauncherStartResolution<Se
     const details = isPluginError(error) && error.details && typeof error.details === 'object'
         && !Array.isArray(error.details) ? error.details : undefined;
     const prerequisite = LocalServiceNativePrerequisiteV1Schema.safeParse(isPluginError(error) && error.code === 'native_tool_unavailable'
-        ? details?.prerequisite : undefined);
+        && details && 'prerequisite' in details ? details.prerequisite : undefined);
     const failure = LocalServiceEstablishmentFailureV1Schema.safeParse(isPluginError(error)
-        && error.code === 'plugin_managed_service_establishment_failed' ? details?.establishmentFailure : undefined);
+        && error.code === 'plugin_managed_service_establishment_failed'
+        && details && 'establishmentFailure' in details ? details.establishmentFailure : undefined);
     return { ok: false, reasonCode: codeOf(error), ...(error instanceof ServiceStartRefusal && error.review ? error.review : {}),
         ...(failure.success ? { establishmentFailure: failure.data } : {}),
         ...(prerequisite.success ? { prerequisite: prerequisite.data } : {}) };
@@ -181,8 +185,7 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
             const { placement, choice } = await readChoice(runtime, request, ingress, context, association.workspace.id, service, assertCurrent);
             await assertPlacement(choice);
             if (request.targetId !== createProjectServiceDeclarationTargetIdV1(association.workspace, selection)) throw new ServiceStartRefusal('launcher_target_unknown');
-            // Installed source inspection proves manifest commands. Target-native file effects need their own producer/review.
-            if (!manifest || !service || service.source.kind !== 'command' || manifest.environment && manifest.environment.kind !== 'host') throw new ServiceStartRefusal('project_service_worker_effect_unavailable');
+            if (!manifest || !service) throw new ServiceStartRefusal('project_service_not_found');
             const eligibility = await runtime.workerAdmission.observeServiceEligibility(manifest?.workspace?.memoryDemand);
             if (!eligibility.eligible) throw new ServiceStartRefusal(eligibility.reason ?? 'project_service_admission_unavailable');
             await assertCurrent();
@@ -192,20 +195,47 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
             if (basis.target.machineId !== runtime.machineId || digest(workspaceAddressFromRefV1(basis.source)) !== digest(workspaceAddressFromRefV1(association.workspace))
                 || basis.source.projectKey !== association.workspace.projectKey
                 || basis.target.projectKey !== association.workspace.projectKey) throw new ServiceStartRefusal('project_workspace_changed');
-            const serviceEffect = { command: literalServiceCommand(service.source, basis.target.rootPath, platformFor(runtime).os),
-                environment: { kind: 'host' }, configEnvironment: runtime.configEnvironment ?? {}, platform: platformFor(runtime) };
+            const literalHost = service.source.kind === 'command' && (!manifest.environment || manifest.environment.kind === 'host');
+            const executionFiles = new Map<string, string>();
+            if (service.source.kind !== 'command') {
+                const command = snapshot.commands?.find(entry => entry.usage === 'service'
+                    && selection.kind === 'manifest' && entry.name === selection.name && digest(entry.source) === digest(service.source));
+                if (!command?.executionInputs?.length) throw new ServiceStartRefusal('project_source_declaration_unavailable');
+                for (const fact of command.executionInputs) executionFiles.set(fact.file, fact.hash);
+            }
+            if (manifest.environment && manifest.environment.kind !== 'host') {
+                if (!snapshot.environmentExecutionInputs?.length) throw new ServiceStartRefusal('project_source_declaration_unavailable');
+                for (const fact of snapshot.environmentExecutionInputs) executionFiles.set(fact.file, fact.hash);
+            }
+            const executionInputs = [...executionFiles].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([file, hash]) => ({ file, hash }));
+            const serviceEffect = literalHost && service.source.kind === 'command'
+                ? { command: literalServiceCommand(service.source, basis.target.rootPath, platformFor(runtime).os),
+                    environment: { kind: 'host' }, configEnvironment: runtime.configEnvironment ?? {}, platform: platformFor(runtime) }
+                : undefined;
             const reviewedEffect = projectNativeJsonValueForTransport({ v: 1, purpose: 'service', declaration: request.declaration,
                 source: { ...workspaceAddressFromRefV1(association.workspace), projectKey: association.workspace.projectKey },
                 target: { ...workspaceAddressFromRefV1(basis.target), projectKey: basis.target.projectKey }, manifest, fileBasis: snapshot.basis, serviceEffect,
+                ...(!literalHost ? { executionInputs } : {}),
                 route: basis.relationships.map(({ relationshipId, controllerMachineId, alphaWorkspaceRefId, betaWorkspaceRefId }) => ({ relationshipId, controllerMachineId, alphaWorkspaceRefId, betaWorkspaceRefId })),
                 placement: placement.placement, choice, configEnvironment: runtime.configEnvironment ?? {}, platform: platformFor(runtime) });
             worker = { kind: 'source', runtime, basis, snapshot, manifest, choice, signal, reviewedEffect, reviewedEffectDigest: digest(reviewedEffect),
-                placementEffectDigest: digest({ placement: placement.placement, choice }), serviceEffectDigest: digest(serviceEffect) };
-            if (!afterCopy) return worker;
+                placementEffectDigest: digest({ placement: placement.placement, choice }), executionInputs,
+                ...(serviceEffect ? { serviceEffectDigest: digest(serviceEffect) } : {}) };
+            if (!afterCopy && literalHost) return worker;
+            // Native command/toolchain review needs the actual destination's installed
+            // tools and current copied files. Sync remains the sole transfer owner;
+            // neither native evaluation nor Service launch happens during this review.
+            if (!afterCopy) {
+                await runtime.prepareDequeue({ workspace: basis.source, choice, basis, signal });
+                await assertCurrent();
+            }
             association = await resolveProjectSetupAcceptedWorkspace({ address: { serverId: basis.target.serverId, machineId: basis.target.machineId,
                 workspaceId: basis.target.id, rootPath: basis.target.rootPath }, ...projectRuntimeAccountRowsInput(runtime),
                 serverId: runtime.serverId, serverHttpBaseUrl: runtime.serverHttpBaseUrl, signal });
             await assertCurrent();
+            const copiedInputs = await readProjectExecutionInputs(association.workspace.rootPath, executionInputs.map(fact => fact.file));
+            await assertCurrent();
+            if (!copiedInputs || digest(copiedInputs) !== digest(executionInputs)) throw new ServiceStartRefusal('project_service_effect_changed');
         } else {
             const currentTargets = await discoverLocalServiceRunTargets({ roots: [], acceptedWorkspaceRefs: [association.workspace] });
             await assertCurrent();
@@ -238,7 +268,7 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
         const { placement, choice } = await readChoice(runtime, request, ingress, context, sourceAssociation.workspace.id, service, assertCurrent);
         if (worker && digest({ placement: placement.placement, choice }) !== worker.placementEffectDigest) throw new ServiceStartRefusal('project_service_effect_changed');
         await assertPlacement(choice);
-        if (prepared.kind === 'pendingApproval' && !worker) throw new ServiceStartRefusal(prepared.code, {
+        if (prepared.kind === 'pendingApproval' && (!worker || !worker.serviceEffectDigest)) throw new ServiceStartRefusal(prepared.code, {
             reviewedEffect: projectNativeJsonValueForTransport(prepared.plan.reviewedEffect), reviewedEffectDigest: prepared.plan.reviewedEffectDigest,
         });
         let command: SupportedServiceCommand;
@@ -341,7 +371,7 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
                 }
             } else throw new ServiceStartRefusal('native_adapter_result_invalid');
         }
-        if (worker && digest({ command, environment: plan.environment, configEnvironment: preparation.configEnvironment ?? {},
+        if (worker?.serviceEffectDigest && digest({ command, environment: plan.environment, configEnvironment: preparation.configEnvironment ?? {},
             platform: preparation.platform }) !== worker.serviceEffectDigest) throw new ServiceStartRefusal('project_service_effect_changed');
         const files: Array<{ file: string; digest: string }> = [];
         if (command.kind !== 'literal') {
@@ -375,15 +405,17 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
                 nativeCommandEnvironment: command.resolution.nativeCommandEnvironment };
         const reviewedEffect = projectNativeJsonValueForTransport({ v: 1, purpose: 'service', declaration: request.declaration,
             service, command: resolvedCommand, files: files.sort((a, b) => a.file.localeCompare(b.file)), setupEffectDigest: plan.reviewedEffectDigest,
-            placement: placement.placement, choice, configEnvironment: plan.configEnvironment, platform: preparation.platform });
+            placement: placement.placement, choice, configEnvironment: plan.configEnvironment, platform: preparation.platform,
+            ...(worker && !worker.serviceEffectDigest ? { sourceReview: worker.reviewedEffect } : {}) });
         const declaration = { ...request.declaration, workspaceRefId: association.workspace.id };
         return { kind: 'target', runtime, preparation, plan, declaration,
             serviceId: createProjectServiceDeclarationTargetIdV1(association.workspace, declaration.selection),
             execution: service?.execution ?? 'primary',
             setupNotRequired: prepared.kind === 'notRequired', ...(prepared.kind === 'pendingApproval' ? { setupReview: {
                 code: prepared.code, reviewedEffect: projectNativeJsonValueForTransport(plan.reviewedEffect), reviewedEffectDigest: plan.reviewedEffectDigest } } : {}),
-            command, processMode, ...(nativeLifecycleLease ? { nativeLifecycleLease } : {}), ...(builtinNative ? { builtinNative } : {}), ...(releaseNativeLifecycle ? { releaseNativeLifecycle } : {}), reviewedEffect: worker?.reviewedEffect ?? reviewedEffect,
-            reviewedEffectDigest: worker?.reviewedEffectDigest ?? digest(reviewedEffect) };
+            command, processMode, ...(nativeLifecycleLease ? { nativeLifecycleLease } : {}), ...(builtinNative ? { builtinNative } : {}), ...(releaseNativeLifecycle ? { releaseNativeLifecycle } : {}),
+            reviewedEffect: worker?.serviceEffectDigest ? worker.reviewedEffect : reviewedEffect,
+            reviewedEffectDigest: worker?.serviceEffectDigest ? worker.reviewedEffectDigest : digest(reviewedEffect) };
     }
 
     async function reviewTarget(nativeInvocations: Set<ProjectNativeEffectCaptureForHost>, request: DaemonLocalServiceLauncherStartRequestV1, ingress?: RpcHandlerContext, context?: ActionContext, executeCanonicalAction?: CanonicalPoolRead,
@@ -403,7 +435,7 @@ export function createProjectServiceDeclarationStarter(input: ProjectServiceDecl
                 secretEnvironment: current.runtime.secretEnvironment,
             });
             if (request.expectedEffectDigest !== undefined ? request.expectedEffectDigest !== current.reviewedEffectDigest
-                : isApprovalRequiredByActionsSettings(actionId, settings, context)) return {
+                : resolveActionApprovalRouting({ actionId, spec: getActionSpec(actionId), settings, context, input: request }).required) return {
                 ok: false, reasonCode: request.expectedEffectDigest ? 'project_service_effect_changed' : 'project_service_effect_review_required',
                 reviewedEffect: current.reviewedEffect, reviewedEffectDigest: current.reviewedEffectDigest,
             };

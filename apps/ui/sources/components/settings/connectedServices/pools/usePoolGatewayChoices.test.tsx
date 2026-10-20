@@ -1,12 +1,14 @@
+import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProviderConnectionV1Schema } from '@happier-dev/protocol/providers/connections/v1';
+import { ActionsSettingsV1Schema } from '@happier-dev/protocol/actions/actionSettings';
 import { DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { PROVIDER_CONNECTIONS_ROWS_ROUTE_V1, ProviderConnectionsCatalogV1Schema, ProviderConnectionsRowMutationV1Schema } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { createProviderSettingsAccountHarness, createProviderSettingsHarness, installProviderSettingsRpcBoundary, installProviderConnectionsCatalogHttpBoundary } from '@/dev/testkit/harness/providerSettingsHarness';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
-import { renderHook, standardCleanup } from '@/dev/testkit';
+import { renderHook, renderScreen, standardCleanup } from '@/dev/testkit';
 import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { t } from '@/text';
 
@@ -14,6 +16,7 @@ const rpc = createProviderSettingsHarness({ machines: [] });
 installProviderSettingsRpcBoundary(rpc);
 const account = createProviderSettingsAccountHarness();
 const { usePoolGatewayChoices } = await import('./usePoolGatewayChoices');
+const { PoolGatewaySection } = await import('./PoolGatewaySection');
 const { useProviderSettingsTarget } = await import('@/providers/hooks/targetMachine');
 const service = { pluginId: 'happier.agent.codex', localId: 'openai-codex' };
 const target = { kind: 'group' as const, service, groupId: 'pool-a' };
@@ -22,7 +25,12 @@ afterEach(async () => { standardCleanup(); await account.reset(); rpc.reset(); }
 
 describe('pool gateway Action wiring', () => {
     it('continues an approved first-gateway creation and slot removal through the real Account Action family exactly once', async () => {
-        const { serverId } = await account.restore({ catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, machines: [] });
+        const { serverId } = await account.restore({ catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, machines: [], settings: {
+            actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1, actions: {
+                'providers.connections.create_contribution': { approvalRequiredSurfaces: ['ui'] },
+                'providers.connections.update': { approvalRequiredSurfaces: ['ui'] },
+            } }),
+        } });
         const stored = installProviderConnectionsCatalogHttpBoundary({ home: account.home, serverId, catalog: DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1 });
         const resolveTarget = () => null;
         const hook = await renderHook(() => usePoolGatewayChoices({ target, enabled: true, accountServerId: account.serverId, accountAddressAvailable: true, resolveTarget }));
@@ -92,7 +100,11 @@ describe('pool gateway Action wiring', () => {
         const hook = await renderHook(() => usePoolGatewayChoices({ target, enabled: true, accountServerId: account.serverId, accountAddressAvailable: true, resolveTarget }));
         await vi.waitFor(() => expect(hook.getCurrent().choices).toHaveLength(1));
         expect(hook.getCurrent().ready).toBe(true);
-        await act(async () => { expect(await hook.getCurrent().setEnabled(gateway.id, true)).toBe(true); });
+        const screen = await renderScreen(<PoolGatewaySection testID="pool-gateway" usage={hook.getCurrent()}
+            poolTitle="Work pool" serviceLabel="Codex" nativeAgentTitles={[]} />);
+        await act(async () => { screen.findByTestId('pool-gateway:pc_gateway:toggle')?.props.onValueChange(true); });
+        await vi.waitFor(() => expect(catalog.connections[0]?.purposeBindingDefaults?.['openai-upstream']).toEqual(target));
+        expect(screen.findByTestId('pool-gateway:pc_gateway:replace')).toBeNull();
         expect(catalog.connections[0]?.purposeBindingDefaults?.['openai-upstream']).toEqual(target);
         expect(catalog.connections[0]?.revision).toBe(4);
         expect(catalog.connections[1]).toEqual(unavailable);
@@ -191,4 +203,79 @@ describe('pool gateway Action wiring', () => {
         expect(rpc.state.requests).toEqual([]);
     });
 
+});
+
+describe('pool gateway recovery', () => {
+    const gateway = ProviderConnectionV1Schema.parse({ v: 1, id: 'pc_gateway',
+        source: { kind: 'contribution', contributionKey: 'happier.provider.cliproxyapi/cliproxyapi' },
+        role: 'named', displayName: 'Subscriptions', displayNameMode: 'custom', deployment: { kind: 'managedLocal' },
+        purposeBindingDefaults: { 'openai-upstream': { ...target, groupId: 'pool-b' } }, revision: 3, createdAt: 1, updatedAt: 1 });
+    function PoolGatewayScreen() {
+        const providerTarget = useProviderSettingsTarget();
+        const usage = usePoolGatewayChoices({ target, enabled: true, resolveTarget: providerTarget.resolveCurrentTarget,
+            accountServerId: providerTarget.accountServerId, accountAddressAvailable: providerTarget.accountAddressAvailable });
+        return <PoolGatewaySection testID="pool-gateway" usage={usage} poolTitle="Work pool" serviceLabel="Codex" nativeAgentTitles={[]} />;
+    }
+    const slot = () => account.readCatalogRow()?.content && 'v' in account.readCatalogRow()!.content!
+        ? (account.readCatalogRow()!.content as { v: { connections: typeof gateway[] } }).v.connections[0]?.purposeBindingDefaults?.['openai-upstream']
+        : undefined;
+    const toggle = async (screen: Awaited<ReturnType<typeof renderScreen>>, value: boolean) => {
+        await act(async () => { screen.findByTestId('pool-gateway:pc_gateway:toggle')?.props.onValueChange(value); });
+    };
+
+    it('offers Retry after a proven rollback and admits exactly one more update when it is pressed', async () => {
+        await account.restore({ serverIdentityId: 'srv_pool_retry', catalog: { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: [gateway] },
+            machines: [], waivedActions: ['providers.connections.update'] });
+        let rollbacks = 1;
+        account.interceptCatalogMutation((_input, next) => rollbacks-- > 0
+            ? { status: 503, body: { error: 'database_transaction_conflict_exhausted' } } : next());
+        const screen = await renderScreen(<PoolGatewayScreen />);
+        await vi.waitFor(() => expect(screen.findByTestId('pool-gateway:pc_gateway:toggle')?.props.disabled).toBe(false));
+        await toggle(screen, true);
+        await vi.waitFor(() => expect(screen.findByTestId('provider-error:provider_catalog_unavailable')).toBeTruthy());
+        expect(account.catalogMutations).toHaveLength(1);
+        expect(slot()).toEqual({ ...target, groupId: 'pool-b' });
+        await act(async () => { await screen.pressByTestIdAsync('provider-error-action:provider_catalog_unavailable'); });
+        await vi.waitFor(() => expect(slot()).toEqual(target));
+        expect(account.catalogMutations).toHaveLength(2);
+        expect(screen.findByTestId('provider-error:provider_catalog_unavailable')).toBeNull();
+    });
+
+    it('reviews current state after an unknown write without repeating the mutation, and keeps asking while the read fails', async () => {
+        await account.restore({ serverIdentityId: 'srv_pool_unknown', catalog: { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: [gateway] },
+            machines: [], waivedActions: ['providers.connections.update'] });
+        let readsFail = false;
+        account.home.answer(account.serverId, `GET ${PROVIDER_CONNECTIONS_ROWS_ROUTE_V1}`, { select: () => readsFail
+            ? { status: 503, body: { error: 'unavailable' } }
+            : { body: { status: 'present', revision: account.readCatalogRow()!.revision, content: account.readCatalogRow()!.content } } });
+        account.interceptCatalogMutation(() => { readsFail = true; return { dispatchThenFail: true }; });
+        const screen = await renderScreen(<PoolGatewayScreen />);
+        await vi.waitFor(() => expect(screen.findByTestId('pool-gateway:pc_gateway:toggle')?.props.disabled).toBe(false));
+        await toggle(screen, true);
+        const action = 'provider-error-action:provider_rpc_mutation_outcome_unknown';
+        await vi.waitFor(() => expect(screen.findByTestId(action)).toBeTruthy());
+        expect(account.catalogMutations).toHaveLength(1);
+        await act(async () => { await screen.pressByTestIdAsync(action); });
+        expect(screen.findByTestId(action)).toBeTruthy(); // the read failed again: still unresolved
+        readsFail = false;
+        await act(async () => { await screen.pressByTestIdAsync(action); });
+        await vi.waitFor(() => expect(screen.findByTestId('provider-error:provider_rpc_mutation_outcome_unknown')).toBeNull());
+        expect(account.catalogMutations).toHaveLength(1);
+        await vi.waitFor(() => expect(screen.findByTestId('pool-gateway:pc_gateway:toggle')?.props.disabled).toBe(false));
+    });
+
+    it('drops the recovery when the Account that authored the failed write is no longer selected', async () => {
+        await account.restore({ serverIdentityId: 'srv_pool_retired', catalog: { ...DEFAULT_PROVIDER_CONNECTIONS_CATALOG_V1, connections: [gateway] },
+            machines: [], waivedActions: ['providers.connections.update'] });
+        account.interceptCatalogMutation(() => ({ status: 503, body: { error: 'database_transaction_conflict_exhausted' } }));
+        const screen = await renderScreen(<PoolGatewayScreen />);
+        await vi.waitFor(() => expect(screen.findByTestId('pool-gateway:pc_gateway:toggle')?.props.disabled).toBe(false));
+        await toggle(screen, true);
+        await vi.waitFor(() => expect(screen.findByTestId('provider-error-action:provider_catalog_unavailable')).toBeTruthy());
+        const peerServerId = await account.addHome({ name: 'Foreign pool Home', serverUrl: 'https://foreign-pool.test',
+            serverIdentityId: 'srv_pool_foreign_retry', accountId: 'peer-account', active: false });
+        await act(async () => { await account.selectMachine(peerServerId, 'missing-peer-machine'); });
+        await vi.waitFor(() => expect(screen.findByTestId('provider-error-action:provider_catalog_unavailable')).toBeNull());
+        expect(account.catalogMutations).toHaveLength(1);
+    });
 });

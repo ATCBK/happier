@@ -3,7 +3,7 @@ import { PixelRatio, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { useUnistyles } from 'react-native-unistyles';
 
-import { useLocalSetting } from '@/sync/store/hooks';
+import { useLocalSetting } from '@/sync/store/settingsReadHooks';
 import type { CodeEditorFindHandle, CodeEditorFindSnapshot, CodeEditorHandle, CodeEditorProps } from '../codeEditorTypes';
 import { encodeChunkedEnvelope, decodeChunkedEnvelope } from '@/components/ui/webview/bridge/chunkedBridge';
 import { buildCodeMirrorWebViewHtml } from '../bridge/codemirrorWebViewHtml';

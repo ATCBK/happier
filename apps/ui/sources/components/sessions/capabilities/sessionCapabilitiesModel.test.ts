@@ -28,6 +28,18 @@ function fixture() {
         cost: (kind: 'skill' | 'mcp_server') => kind === 'skill' ? { tokensWhenUsed: 42 } : { toolCount: 3, tokensPerTurn: 123 } };
 }
 describe('the session capability sheet data owner', () => {
+    it('keeps the chip and open sheet on the same machine-resolved selection while Account rules refresh', () => {
+        const input = fixture();
+        const selection = setSessionCapabilitySelectionItemV1(input.selection, 'skill', 'review', 'inherit');
+        const closed = buildSessionCapabilitiesModel({ ...input, selection, context: undefined, rules: () => [] });
+        const open = buildSessionCapabilitiesModel({ ...input, selection, rules: () => [] });
+        expect(open.counts).toEqual(closed.counts);
+        expect(open.groups[0]?.rows[0]).toMatchObject({ id: 'review', dimmed: false });
+        const removedSelection = setSessionCapabilitySelectionItemV1(selection, 'skill', 'review', 'off');
+        const removed = buildSessionCapabilitiesModel({ ...input, selection: removedSelection, rules: () => [] });
+        expect(removed.counts.skills).toBe(0);
+        expect(removed.groups[0]?.rows[0]).toMatchObject({ id: 'review', dimmed: true });
+    });
     it('says why a skill masked by the machine\'s own copy is read-only', () => {
         const input = fixture();
         const view = { ...input.view, skills: { ...input.view.skills, plan: SessionSkillPlanV1Schema.parse({ plan: 'session_dir',
@@ -67,6 +79,11 @@ describe('the session capability sheet data owner', () => {
         expect(unknown.costKnown).toBe(false);
         expect(unknown.costLine).not.toContain('0');
     });
+    it('keeps the cost line silent until the first preview answers, never claiming "unknown" while it loads', () => {
+        const input = fixture();
+        expect(buildSessionCapabilitiesModel({ ...input, view: null, selection: undefined, state: 'resolving' }).costLine).toBe('');
+        expect(buildSessionCapabilitiesModel({ ...input, cost: () => null }).costLine).not.toBe('');
+    });
     it('keeps dimmed removals and respects read-only/native masking and no-resume timing', () => {
         const input = fixture();
         const removed = buildSessionCapabilitiesModel({ ...input, selection: setSessionCapabilitySelectionItemV1(input.selection, 'skill', 'review', 'off') });
@@ -76,6 +93,21 @@ describe('the session capability sheet data owner', () => {
         const cannotApply = buildSessionCapabilitiesModel({ ...input, view: { ...input.view, applyTiming: { mcp: { t: 'new_sessions_only' }, skills: { t: 'new_sessions_only' } } } });
         expect(cannotApply.groups[0]?.rows[0]?.action.kind).toBe('none');
         expect(cannotApply.addItems[0]?.readOnlyReason).not.toBeNull();
+    });
+    it('says once why no-resume rows are read-only, and keeps an account fix (Sign in) reachable on them', () => {
+        const input = fixture();
+        const included = { ...input, selection: setSessionCapabilitySelectionItemV1(input.selection, 'mcp_server', 'linear', 'on') };
+        const timing = { mcp: { t: 'new_sessions_only' as const }, skills: { t: 'applied_now' as const } };
+        const signIn = { kind: 'signin' as const, fix: { kind: 'sign_in' as const, onPress() {} } };
+        const model = buildSessionCapabilitiesModel({ ...included, view: { ...included.view, applyTiming: timing }, mcpStatus: () => [signIn] });
+        const mcp = model.groups[1];
+        expect(mcp?.trailing).toBe('Applies to new sessions');
+        expect(mcp?.rows[0]).toMatchObject({ readOnlyReason: 'new_sessions_only', action: { kind: 'fix', status: { kind: 'signin' } } });
+        // Editable groups keep their own trailing words; a viewer gets no fix.
+        expect(model.groups[0]?.trailing).toBe('Loaded when used');
+        const viewer = buildSessionCapabilitiesModel({ ...included, readOnly: true, mcpStatus: () => [signIn] });
+        expect(viewer.groups[1]?.rows[0]?.action.kind).toBe('none');
+        expect(viewer.groups[1]?.trailing).toBe('Tools · tokens every turn');
     });
     it('does not offer native overlay edits on a non-resumable Agent that only reloads library skills', () => {
         const input = fixture();

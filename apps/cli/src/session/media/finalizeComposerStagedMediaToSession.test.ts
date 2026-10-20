@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -14,6 +14,9 @@ import { createComposerMediaStageStore } from '@/transfers/staging/composerMedia
 import {
   finalizeComposerStagedMediaToSession,
 } from './finalizeComposerStagedMediaToSession';
+import { settleComposerStagedMediaAdmissionV1 } from './settleComposerStagedMediaAdmission';
+import { SessionUserMessageSendRequestSchema } from '@happier-dev/protocol/sessions/userMessageRpc';
+import { admitSessionStructuredInputV1, preserveComposerAttachmentSelectionAcrossSessionInputTransformV1 } from '@/session/services/admitSessionStructuredInputV1';
 
 const sessionMediaBridgeSpies = vi.hoisted(() => ({
   persist: vi.fn(),
@@ -106,6 +109,39 @@ describe('finalizeComposerStagedMediaToSession', () => {
     }));
   });
 
+  it('projects source review context before media slot selection and persists one review representation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'happier-composer-review-media-'));
+    temporaryDirectories.push(root);
+    const { stageStore, draftAttachment } = await createReadyStage(root);
+    const reviewComments = { sessionId: 'source-session', comments: [{
+      id: 'comment-1', filePath: 'src/index.ts', source: 'file',
+      anchor: { kind: 'line', filePath: 'src/index.ts', line: 2 },
+      snapshot: { selectedLines: ['const value = 1;'], beforeContext: [], afterContext: [] },
+      body: 'Keep the original anchor', createdAt: 1,
+    }] };
+    const request = SessionUserMessageSendRequestSchema.parse({ text: 'Rendered review prompt', meta: {
+      happierStructuredInputV1: { v: 1, reviewComments, composerAttachments: [draftAttachment] },
+    } });
+    const legacyAttachments = { kind: 'attachments.v1', payload: { attachments: [{
+      name: 'notes.txt', path: '.happier/uploads/messages/source-session/file/notes.txt',
+      mimeType: 'text/plain', sizeBytes: 12,
+    }] } };
+    const transformed = preserveComposerAttachmentSelectionAcrossSessionInputTransformV1({
+      sourceMeta: request.meta, transformedMeta: { happier: legacyAttachments, unrelated: 'retained' },
+    });
+    const finalized = await finalizeComposerStagedMediaToSession(finalizationParams({
+      root, stageStore, draftAttachment, meta: transformed!,
+    }));
+    const admitted = admitSessionStructuredInputV1({ text: request.text, meta: finalized.meta,
+      preparedComposerAttachments: finalized.attachments });
+    expect(admitted.text).toBe('Rendered review prompt');
+    expect(admitted.meta.happier).toEqual({ kind: 'review_comments.v1', payload: reviewComments });
+    expect(admitted.meta.happierAttachments).toEqual(legacyAttachments);
+    expect(SessionMediaMessageMetaV1Schema.parse(admitted.meta.happierMedia).payload.media).toHaveLength(1);
+    expect(admitted.structuredInput).not.toHaveProperty('reviewComments');
+    expect(admitted.meta).toMatchObject({ unrelated: 'retained' });
+  });
+
   it('turns one verified staged image into exactly one durable SessionMedia item and attachment ref without releasing the retry stage', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-composer-finalize-'));
     temporaryDirectories.push(root);
@@ -159,6 +195,7 @@ describe('finalizeComposerStagedMediaToSession', () => {
   it.each([
     ['Pending', { kind: 'pendingMessage' as const, sessionId: 'session-1', localId: 'pending-1' }],
     ['NewSession', { kind: 'newSession' as const, instanceId: 'new-session-composer-1' }],
+    ['other Session', { kind: 'session' as const, sessionId: 'source-session-a' }],
   ] as const)('finalizes a %s cross-location submission through a claimed clone while retaining the original draft stage', async (
     _kind,
     sourceComposerRef,
@@ -186,12 +223,22 @@ describe('finalizeComposerStagedMediaToSession', () => {
       owner: attachmentOwner,
       claimant: sourceClaimant,
     })).resolves.toMatchObject({ status: 'ready' });
-    await expect(stageStore.release({
-      handle: first.releaseIntents[0]!.handle,
-      executionTarget,
-      owner: attachmentOwner,
-      claimant: first.releaseIntents[0]!.claimant,
-    })).resolves.toEqual({ status: 'released' });
+    const envelope = SessionMediaMessageMetaV1Schema.parse(first.meta.happier);
+    const media = envelope.payload.media[0]!;
+    expect(first.releaseIntents[0]?.claimant.composer).toEqual({ kind: 'session', sessionId: 'session-1' });
+    await settleComposerStagedMediaAdmissionV1({
+      outcome: 'accepted',
+      settlement: {
+        v: 1,
+        workingDirectory: join(root, 'workspace'),
+        releaseIntents: first.releaseIntents,
+        createdWorkspaceRelativePaths: first.createdWorkspaceRelativePaths,
+      },
+      stageStore,
+    });
+    await expect(readFile(join(root, 'workspace', media.path))).resolves.toEqual(pngBytes);
+    await expect(stageStore.inspectForFinalization(first.releaseIntents[0]!))
+      .resolves.toEqual({ status: 'unavailable', reason: 'notFound' });
     await expect(stageStore.inspectForFinalization({
       handle: staged.handle,
       executionTarget,
@@ -199,6 +246,73 @@ describe('finalizeComposerStagedMediaToSession', () => {
       claimant: sourceClaimant,
     })).resolves.toMatchObject({ status: 'ready' });
   });
+
+  it.each(['accepted', 'definitiveFailure'] as const)(
+    'retains a target submission snapshot until %s settlement, then releases both snapshots but not the mutable source',
+    async (outcome) => {
+      const root = await mkdtemp(join(tmpdir(), 'happier-composer-snapshot-settlement-'));
+      temporaryDirectories.push(root);
+      const { stageStore, staged, draftAttachment } = await createReadyStage(root);
+      const sourceClaimant = {
+        composer: { kind: 'session' as const, sessionId: 'source-session-a' },
+        attachmentInstanceId: draftAttachment.instanceId,
+      };
+      const targetClaimant = {
+        composer: { kind: 'session' as const, sessionId: 'session-1' },
+        attachmentInstanceId: draftAttachment.instanceId,
+      };
+      await stageStore.claim({ handle: staged.handle, executionTarget, owner: attachmentOwner, claimant: sourceClaimant });
+      const captured = await stageStore.forkClaimForSubmission({
+        handle: staged.handle,
+        executionTarget,
+        owner: attachmentOwner,
+        sourceClaimant,
+        destinationClaimant: targetClaimant,
+        messageLocalId: 'local-1',
+      });
+      if (!captured.handle) throw new Error('expected a captured target submission');
+      const targetDraft = {
+        ...draftAttachment,
+        content: { kind: 'stagedMedia' as const, handle: captured.handle },
+      };
+      const targetInspection = { handle: captured.handle, executionTarget, owner: attachmentOwner, claimant: targetClaimant };
+      await expect(finalizeComposerStagedMediaToSession({
+        ...finalizationParams({ root, stageStore, draftAttachment: targetDraft }),
+        meta: { happier: { kind: 'session_media.v1', payload: { media: [] } } },
+      })).rejects.toMatchObject({ code: 'composer_staged_media_metadata_conflict' });
+      await expect(stageStore.inspectForFinalization(targetInspection)).resolves.toMatchObject({ status: 'ready' });
+      const finalized = await finalizeComposerStagedMediaToSession(finalizationParams({
+        root, stageStore, draftAttachment: targetDraft,
+      }));
+      // Preparation is not acceptance: queued/offline custody retains both immutable copies.
+      await expect(stageStore.inspectForFinalization(targetInspection)).resolves.toMatchObject({ status: 'ready' });
+      expect(finalized.releaseIntents.map((intent) => intent.handle.id)).toEqual(expect.arrayContaining([
+        captured.handle.id,
+      ]));
+      expect(finalized.releaseIntents).toHaveLength(2);
+      const media = SessionMediaMessageMetaV1Schema.parse(finalized.meta.happier).payload.media[0]!;
+      const mediaPath = join(root, 'workspace', media.path);
+      await expect(readFile(mediaPath)).resolves.toEqual(pngBytes);
+      await settleComposerStagedMediaAdmissionV1({
+        outcome,
+        settlement: {
+          v: 1,
+          workingDirectory: join(root, 'workspace'),
+          releaseIntents: finalized.releaseIntents,
+          createdWorkspaceRelativePaths: finalized.createdWorkspaceRelativePaths,
+        },
+        stageStore,
+      });
+      for (const intent of finalized.releaseIntents) {
+        await expect(stageStore.inspectForFinalization(intent)).resolves.toEqual({ status: 'unavailable', reason: 'notFound' });
+      }
+      await expect(stageStore.inspectForFinalization({
+        handle: staged.handle, executionTarget, owner: attachmentOwner, claimant: sourceClaimant,
+      })).resolves.toMatchObject({ status: 'ready' });
+      if (outcome === 'accepted') await expect(readFile(mediaPath)).resolves.toEqual(pngBytes);
+      else await expect(readFile(mediaPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    },
+  );
 
   it('persists through the submission fork when a concurrent draft removal releases the original stage', async () => {
     const root = await mkdtemp(join(tmpdir(), 'happier-composer-finalize-race-'));
@@ -296,16 +410,17 @@ describe('finalizeComposerStagedMediaToSession', () => {
   });
 
   it.each([
-    ['missing', undefined],
-    ['forged', { kind: 'newSession' as const, instanceId: 'composer-forged' }],
-  ] as const)('refuses a %s non-Session exact source without consuming the original stage', async (
+    ['missing', undefined, { kind: 'pendingMessage' as const, sessionId: 'session-1', localId: 'pending-1' }],
+    ['forged', { kind: 'newSession' as const, instanceId: 'composer-forged' }, { kind: 'pendingMessage' as const, sessionId: 'session-1', localId: 'pending-1' }],
+    ['wrong Session', { kind: 'session' as const, sessionId: 'source-session-b' }, { kind: 'session' as const, sessionId: 'source-session-a' }],
+  ] as const)('refuses a %s source claim without consuming the original stage', async (
     _kind,
     sourceComposerRef,
+    originalSource,
   ) => {
     const root = await mkdtemp(join(tmpdir(), 'happier-composer-finalize-source-'));
     temporaryDirectories.push(root);
     const { stageStore, staged, draftAttachment } = await createReadyStage(root);
-    const originalSource = { kind: 'pendingMessage' as const, sessionId: 'session-1', localId: 'pending-1' };
     const originalClaimant = { composer: originalSource, attachmentInstanceId: draftAttachment.instanceId };
     await expect(stageStore.claim({
       handle: staged.handle,

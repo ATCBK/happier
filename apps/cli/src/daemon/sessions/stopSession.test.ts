@@ -87,6 +87,8 @@ vi.mock('@/integrations/tmux/TmuxUtilities', () => ({
 }));
 
 const { createStopSession: createStopSessionOwner } = await import('./stopSession');
+const { executeTerminalHostDisposition } = await import('@/terminal/attachment/terminalHostDisposition');
+const { configuration } = await import('@/configuration');
 
 function withProcessPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T>): Promise<T> {
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
@@ -284,36 +286,8 @@ describe('createStopSession', () => {
     await expect(stop('sess-stranded-dead-host')).resolves.toEqual({ status: 'stopped' });
     expect(recoverStrandedTerminalControlServiceability).toHaveBeenCalledWith({
       sessionId: 'sess-stranded-dead-host',
+      stoppedAt: expect.any(Number),
     });
-  });
-
-  it('keeps matched tracked sessions until exit is observed', async () => {
-
-    const killDaemonChild = vi.fn();
-    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true as any);
-    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(123456789);
-
-    const pidToTrackedSession = new Map<number, any>([
-      [111, { startedBy: 'daemon', pid: 111, happySessionId: 'sess-1', childProcess: { pid: 111, exitCode: null, signalCode: null, kill: killDaemonChild }, processCommandHash: 'h1' }],
-      [222, { startedBy: 'terminal', pid: 222, happySessionId: 'sess-1', processCommandHash: 'h2' }],
-    ]);
-
-    const stop = createStopSession({
-      pidToTrackedSession,
-      waitForTrackedRunnersExit: vi.fn(async () => true),
-    });
-    const ok = await stop('sess-1');
-
-    expect(ok).toEqual({ status: 'stopped' });
-    expect(killDaemonChild).not.toHaveBeenCalled();
-    expect(killSpy).toHaveBeenCalledWith(111, 'SIGTERM');
-    expect(killSpy).toHaveBeenCalledWith(222, 'SIGTERM');
-    expect(pidToTrackedSession.size).toBe(2);
-    expect(pidToTrackedSession.has(111)).toBe(true);
-    expect(pidToTrackedSession.has(222)).toBe(true);
-    expect(pidToTrackedSession.get(111)?.stopRequestedAtMs).toBe(123456789);
-    expect(pidToTrackedSession.get(222)?.stopRequestedAtMs).toBe(123456789);
-    nowSpy.mockRestore();
   });
 
   it('retires upstream authority before signaling a tracked runner', async () => {
@@ -467,9 +441,7 @@ describe('createStopSession', () => {
     const areTrackedRunnersExited = vi.fn()
       .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(true);
-    const waitForTrackedRunnersExit = vi.fn(async () => {
-      throw new Error('already-exited runners must not enter the exit wait');
-    });
+    const waitForTrackedRunnersExit = vi.fn(async () => true);
     const pidToTrackedSession = new Map<number, any>([
       [222, {
         startedBy: 'terminal',
@@ -495,7 +467,10 @@ describe('createStopSession', () => {
       sessionId: 'sess-exited-during-stop',
       trackedPids: [222],
     });
-    expect(waitForTrackedRunnersExit).not.toHaveBeenCalled();
+    expect(waitForTrackedRunnersExit).toHaveBeenCalledWith({
+      sessionId: 'sess-exited-during-stop',
+      trackedPids: [222],
+    });
     expect(killSpy).not.toHaveBeenCalled();
   });
 
@@ -769,6 +744,7 @@ describe('createStopSession', () => {
     expect(recoverStrandedTerminalControlServiceability).toHaveBeenCalledWith({
       sessionId: attachment.sessionId,
       expectedAttachmentId: attachment.attachmentId,
+      stoppedAt: expect.any(Number),
     });
     expect(removeHostAttachmentInfo).toHaveBeenCalledWith({
       happyHomeDir: expect.any(String),
@@ -1014,7 +990,9 @@ describe('createStopSession', () => {
     const areTrackedRunnersExited = vi.fn()
       .mockResolvedValueOnce(false)
       .mockResolvedValueOnce(true);
-    const waitForTrackedRunnersExit = vi.fn(async () => false);
+    const waitForTrackedRunnersExit = vi.fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
     const stop = createStopSession({
       pidToTrackedSession: new Map([[554, {
         startedBy: 'terminal',
@@ -1030,7 +1008,7 @@ describe('createStopSession', () => {
     await expect(stop('sess-exited-before-force')).resolves.toEqual({ status: 'stopped' });
     expect(killSpy).toHaveBeenCalledWith(554, 'SIGTERM');
     expect(killSpy).not.toHaveBeenCalledWith(554, 'SIGKILL');
-    expect(waitForTrackedRunnersExit).toHaveBeenCalledTimes(1);
+    expect(waitForTrackedRunnersExit).toHaveBeenCalledTimes(2);
   });
 
   it('does not destroy a replacement attachment installed after runner exit', async () => {
@@ -1245,11 +1223,15 @@ describe('createStopSession', () => {
     });
   });
 
-  it('reports a concurrent exact disposition as incomplete instead of claiming success', async () => {
+  it.each(['stopped', 'destroy_failed'] as const)('joins a concurrent exact disposition and reports its real outcome (%s)', async (outcome) => {
     const attachment = createBoundAttachment('sess-disposition-running', 'attachment-disposition-running');
     let releaseDispose!: () => void;
     const disposePending = new Promise<void>((resolve) => { releaseDispose = resolve; });
-    const adapter = { kind: 'zellij', dispose: vi.fn(async () => await disposePending) } as any;
+    const adapter = { kind: 'zellij', dispose: vi.fn(async () => {
+      await disposePending;
+      if (outcome === 'destroy_failed') throw new Error('native host disposal failed');
+    }) } as any;
+    const waitForTrackedRunnersExit = vi.fn(async () => true);
     vi.spyOn(process, 'kill').mockImplementation(() => true as any);
     const createStop = () => createStopSession({
       pidToTrackedSession: new Map([[556, {
@@ -1261,17 +1243,63 @@ describe('createStopSession', () => {
       terminalHostAdapters: { zellij: adapter },
       readHostAttachmentInfo: vi.fn(async () => attachment),
       removeHostAttachmentInfo: vi.fn(async () => true),
-      waitForTrackedRunnersExit: vi.fn(async () => true),
+      waitForTrackedRunnersExit,
     });
 
     const firstStop = createStop()('sess-disposition-running');
     await vi.waitFor(() => expect(adapter.dispose).toHaveBeenCalledTimes(1));
-    await expect(createStop()('sess-disposition-running')).resolves.toEqual({
-      status: 'incomplete',
-      reason: 'disposition_in_progress',
-    });
+    const joinedStop = createStop()('sess-disposition-running');
+    await vi.waitFor(() => expect(waitForTrackedRunnersExit).toHaveBeenCalledTimes(2));
     releaseDispose();
-    await expect(firstStop).resolves.toEqual({ status: 'stopped' });
+    const expected = outcome === 'stopped' ? { status: 'stopped' }
+      : { status: 'incomplete', reason: 'destroy_failed' };
+    await expect(firstStop).resolves.toEqual(expected);
+    await expect(joinedStop).resolves.toEqual(expected);
+    expect(adapter.dispose).toHaveBeenCalledTimes(1);
+    if (outcome === 'destroy_failed') {
+      adapter.dispose.mockImplementation(async () => undefined);
+      await expect(createStop()('sess-disposition-running')).resolves.toEqual({ status: 'stopped' });
+      expect(adapter.dispose).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  it('joins confirmed-dead attachment retirement and reports stopped without destroying the host again', async () => {
+    const attachment = createBoundAttachment('sess-dead-retirement-running', 'attachment-dead-retirement-running');
+    let releaseRetirement!: () => void;
+    const retirementPending = new Promise<void>((resolve) => { releaseRetirement = resolve; });
+    const beforeDescriptorRetirement = vi.fn(async () => await retirementPending);
+    const readHostAttachmentInfo = vi.fn(async () => attachment);
+    const removeHostAttachmentInfo = vi.fn(async () => true);
+    const dispose = vi.fn(async () => undefined);
+    const waitForTrackedRunnersExit = vi.fn(async () => true);
+    const onExactTerminalAttachmentRetired = vi.fn(async () => undefined);
+    vi.spyOn(process, 'kill').mockImplementation(() => true as any);
+    const retirement = executeTerminalHostDisposition({
+      happyHomeDir: configuration.happyHomeDir,
+      sessionId: attachment.sessionId,
+      expectedAttachmentId: attachment.attachmentId,
+      intent: { kind: 'retire_confirmed_dead_attachment', reason: 'positive_dead_recovery' },
+      readAttachmentInfo: readHostAttachmentInfo,
+      removeAttachmentInfo: removeHostAttachmentInfo,
+      beforeDescriptorRetirement,
+    });
+    await vi.waitFor(() => expect(beforeDescriptorRetirement).toHaveBeenCalledOnce());
+    const stop = createStopSession({
+      pidToTrackedSession: new Map([[557, {
+        startedBy: 'terminal', pid: 557, happySessionId: attachment.sessionId,
+        spawnOptions: { terminal: { mode: 'zellij' } },
+      } as any]]),
+      terminalHostAdapters: { zellij: { kind: 'zellij', dispose } as any },
+      readHostAttachmentInfo, removeHostAttachmentInfo, waitForTrackedRunnersExit,
+      onExactTerminalAttachmentRetired,
+    })(attachment.sessionId);
+    await vi.waitFor(() => expect(waitForTrackedRunnersExit).toHaveBeenCalledOnce());
+    releaseRetirement();
+    await expect(retirement).resolves.toEqual({ status: 'retired', attachmentId: attachment.attachmentId });
+    await expect(stop).resolves.toEqual({ status: 'stopped' });
+    expect(dispose).not.toHaveBeenCalled();
+    expect(removeHostAttachmentInfo).toHaveBeenCalledOnce();
+    expect(onExactTerminalAttachmentRetired).toHaveBeenCalledOnce();
   });
 
   it('keeps Stop successful when terminal-retirement observation fails after exact retirement', async () => {

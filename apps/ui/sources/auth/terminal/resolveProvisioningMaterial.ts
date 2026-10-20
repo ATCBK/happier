@@ -3,13 +3,14 @@ import {
     type TerminalProvisioningV2Response,
 } from '@happier-dev/protocol/crypto/terminalProvisioningV2';
 import tweetnacl from 'tweetnacl';
+import { computeAccountEncryptionMigrateKeyFingerprintV1 } from '@happier-dev/protocol/account/encryptionKeyFingerprintV1';
+import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol/account/encryptionMode';
 
 import { createEncryptionFromAuthCredentials } from '@/auth/encryption/createEncryptionFromAuthCredentials';
 import {
     type AuthCredentials,
     isDataKeyAuthCredentials,
     isLegacyAuthCredentials,
-    isTokenOnlyAuthCredentials,
 } from '@/auth/storage/tokenStorage';
 import { decodeBase64 } from '@/encryption/base64';
 
@@ -22,28 +23,19 @@ function equalBytesConstantTime(left: Uint8Array, right: Uint8Array): boolean {
     return difference === 0;
 }
 
-/**
- * Canonical credential-material decision for terminal/Home provisioning.
- * Plain accounts are token-only. Keyed accounts — data-key or legacy-secret
- * credentials — both derive the same canonical content private key through
- * the existing encryption owner (`createEncryptionFromAuthCredentials`), so
- * secret-bearing credentials never mint a parallel derivation formula.
- */
-export async function resolveProvisioningMaterial(credentials: AuthCredentials): Promise<TerminalProvisioningV2Response> {
-    // Check the two key-bearing shapes first. `TokenOnlyAuthCredentials` is a
-    // structural subset of both, so testing its guard first would make the
-    // later data-key branch collapse to `never` under strict narrowing.
-    if (!isDataKeyAuthCredentials(credentials) && !isLegacyAuthCredentials(credentials)) {
-        if (!isTokenOnlyAuthCredentials(credentials)) {
-            throw new Error('Unsupported provisioning credential shape');
-        }
-        const variant = resolveTerminalProvisioningVariantV2({ encryptionMode: 'plain' });
-        if (variant !== 'tokenOnly') throw new Error('Invalid plain provisioning policy result');
-        return { type: 'tokenOnly' };
+/** Authenticated persisted Account mode controls issuance; retained keys are historical custody. */
+export async function resolveProvisioningMaterial(
+    credentials: AuthCredentials,
+    currentness: Pick<AccountEncryptionCurrentnessResponse, 'mode' | 'contentKeyFingerprint'> | null,
+): Promise<TerminalProvisioningV2Response> {
+    if (!currentness || (currentness.mode !== 'plain' && currentness.mode !== 'e2ee')) {
+        throw new Error('Authenticated Account encryption mode is unavailable');
     }
-
-    const variant = resolveTerminalProvisioningVariantV2({ encryptionMode: 'e2ee' });
-    if (variant !== 'dataKey') throw new Error('Invalid E2EE provisioning policy result');
+    const variant = resolveTerminalProvisioningVariantV2({ encryptionMode: currentness.mode });
+    if (variant === 'tokenOnly') return { type: 'tokenOnly' };
+    if (!isDataKeyAuthCredentials(credentials) && !isLegacyAuthCredentials(credentials)) {
+        throw new Error('Account encryption material is unavailable on this device');
+    }
 
     if (isDataKeyAuthCredentials(credentials)) {
         const key = decodeBase64(credentials.encryption.machineKey, 'base64');
@@ -57,5 +49,10 @@ export async function resolveProvisioningMaterial(credentials: AuthCredentials):
     }
 
     const encryption = await createEncryptionFromAuthCredentials(credentials);
-    return { type: 'dataKey', key: encryption.getContentPrivateKey() };
+    const key = encryption.getContentPrivateKey();
+    const fingerprint = computeAccountEncryptionMigrateKeyFingerprintV1(tweetnacl.box.keyPair.fromSecretKey(key).publicKey);
+    if (!currentness.contentKeyFingerprint || fingerprint !== currentness.contentKeyFingerprint) {
+        throw new Error('Account encryption material does not match the current Account content key');
+    }
+    return { type: 'dataKey', key };
 }

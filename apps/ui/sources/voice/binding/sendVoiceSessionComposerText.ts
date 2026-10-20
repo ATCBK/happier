@@ -15,6 +15,7 @@ import { voiceSessionBindingStore } from './voiceConversationBindingStore';
 import { resolveVoiceSessionComposerRouting } from './voiceSessionComposerRouting';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { getVoiceSessionPresentedAttemptId, recordVoiceSessionFirstSuccessInput } from '@/voice/session/voiceSessionStore';
+import { readSafeVoiceRuntimeFailureCode } from '@/voice/runtime/voiceRuntimeFailureCode';
 
 export type VoiceTextTurnPendingPort = Readonly<{
     enqueuePendingMessage(params: Readonly<{
@@ -40,12 +41,14 @@ export type DurableVoiceTextTurnResult =
         localId: string;
         disposition: 'pending' | 'settled' | 'ambiguous';
         message?: string;
+        errorCode?: string;
     }>
     | Readonly<{
         ok: false;
         reason: 'send_failed' | 'cancelled' | 'terminal_rejected';
         localId: string;
         message?: string;
+        errorCode?: string;
     }>;
 
 export const voiceTextTurnPendingPort: VoiceTextTurnPendingPort = {
@@ -105,10 +108,12 @@ export async function submitDurableVoiceTextTurn(params: Readonly<{
             ...(params.source ? { source: params.source } : {}),
         });
     } catch (error) {
+        const errorCode = readSafeVoiceRuntimeFailureCode(error);
         return {
             ok: false,
             reason: 'send_failed',
             localId,
+            ...(errorCode ? { errorCode } : {}),
             ...(error instanceof Error && error.message.trim() ? { message: error.message } : {}),
         };
     }
@@ -170,11 +175,13 @@ export async function submitDurableVoiceTextTurn(params: Readonly<{
 
     if (dispatchFailure) {
         const { error } = dispatchFailure;
+        const errorCode = readSafeVoiceRuntimeFailureCode(error);
         if (acceptanceSettled) {
             return {
                 ok: true,
                 localId,
                 disposition: 'settled',
+                ...(errorCode ? { errorCode } : {}),
                 ...(readVoiceTextTurnErrorMessage(error)
                     ? { message: readVoiceTextTurnErrorMessage(error) }
                     : {}),
@@ -201,6 +208,7 @@ export async function submitDurableVoiceTextTurn(params: Readonly<{
                 ok: false,
                 reason: 'terminal_rejected',
                 localId,
+                ...(errorCode ? { errorCode } : {}),
                 ...(message ? { message } : {}),
             };
         }
@@ -208,15 +216,18 @@ export async function submitDurableVoiceTextTurn(params: Readonly<{
             ok: true,
             localId,
             disposition: 'ambiguous',
+            ...(errorCode ? { errorCode } : {}),
             ...(message ? { message } : {}),
         };
     }
     if (!acceptanceSettled) {
         const message = combineVoiceTextTurnSettlementError(undefined, acceptanceSettlementError);
+        const errorCode = readSafeVoiceRuntimeFailureCode(acceptanceSettlementError);
         return {
             ok: true,
             localId,
             disposition: 'ambiguous',
+            ...(errorCode ? { errorCode } : {}),
             ...(message ? { message } : {}),
         };
     }

@@ -6,6 +6,7 @@ import { useConnectedAccountCatalog } from '@/sync/store/settings/useConnectedAc
 import { getConnectedAccountCatalogValue } from '@/sync/store/settings/connectedAccountCatalogSnapshot';
 import { ConnectedAccountCatalogOperationError } from '@/sync/api/account/apiConnectedAccountCatalog';
 import { useMountedActionExecution } from '@/components/approvals/useMountedActionExecution';
+import { refreshConnectedAccountCatalog } from '@/sync/engine/settings/connectedAccountCatalogEngine';
 
 export type ConnectedAccountPurposeDefaultsIntent =
     | Readonly<{ kind: 'target'; target: QualifiedConnectedAccountPurposeBindingTargetV1; agentId: string; makeDefault: boolean; machineId?: string }>
@@ -13,16 +14,24 @@ export type ConnectedAccountPurposeDefaultsIntent =
     | Readonly<{ kind: 'service'; input: ReturnType<(typeof CONNECTED_SERVICE_CONFIGURATION_ACTION_INPUT_SCHEMAS_V1)['connectedServices.accounts.purposeDefault.set']['parse']> }>;
 
 /** One catalog source and acknowledged mutation port for all Agent default surfaces. */
-export function useConnectedAccountPurposeDefaults() {
-    const scope = useActiveServerAccountScope();
-    const execution = useMountedActionExecution(scope);
+export function useConnectedAccountPurposeDefaults(serverId?: string) {
+    const activeScope = useActiveServerAccountScope();
+    const execution = useMountedActionExecution(serverId ?? activeScope);
+    const scope = execution.binding?.scope ?? null;
     const catalog = useConnectedAccountCatalog('purposes', scope);
     const legacySettings = useSettingsSelector(settings => ({
         connectedServicesDefaultAuthByAgentIdV1: settings.connectedServicesDefaultAuthByAgentIdV1,
         connectedServicesAdditionalDefaultAuthByAgentIdV1: settings.connectedServicesAdditionalDefaultAuthByAgentIdV1,
     }));
     const mutateDefaults = React.useCallback(async (intent: ConnectedAccountPurposeDefaultsIntent): Promise<boolean> => {
-        const current = getConnectedAccountCatalogValue(scope, 'purposes');
+        let current = getConnectedAccountCatalogValue(scope, 'purposes');
+        // An acknowledged default write invalidates this projection. A subsequent
+        // user choice joins the existing refresh rather than failing on that stale view.
+        if (scope && current.value && current.stale) {
+            await refreshConnectedAccountCatalog(scope, 'purposes');
+            if (!execution.isCurrent()) return false;
+            current = getConnectedAccountCatalogValue(scope, 'purposes');
+        }
         if (!scope || current.status !== 'ready' || !current.value || current.stale) throw new ConnectedAccountCatalogOperationError('connected_account_purpose_catalog_unavailable');
         const action = intent.kind === 'resource'
             ? { actionId: 'connectedServices.purposes.default.set' as const, input: intent.input }

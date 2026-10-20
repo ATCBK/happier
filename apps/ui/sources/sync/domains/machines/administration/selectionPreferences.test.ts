@@ -1,121 +1,73 @@
 import { describe, expect, it } from 'vitest';
-import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
-
+import { settingsDefaults, settingsParse } from '@/sync/domains/settings/settings';
+import { saveAccountSettings, loadAccountSettings } from '@/sync/domains/state/accountSettingsPersistence';
+import { getPersistenceStorage } from '@/sync/domains/state/persistenceStorage';
+import { stripLocalOnlyAccountSettings } from '@/sync/domains/settings/localOnlyAccountSettings';
 import {
-    applyMachineAdministrationSelectionMutationToAccountSettings,
     clearMachineAdministrationTargetPreference,
     clearPluginMachineExecutionOriginPreference,
+    readPluginMachineExecutionTargetPreference,
     setMachineAdministrationTargetPreference,
     setPluginMachineExecutionOriginPreference,
+    readPluginMachineExecutionLastUsedTarget,
+    setPluginMachineExecutionLastUsedTarget,
 } from './selectionPreferences';
 
 describe('machine administration selection preferences', () => {
-    it('edits a named source preference over retained stored fields without erasing sibling carriers', () => {
-        const sibling = { serverIdentityId: 'srv_one', materializationRef: {
-            machineId: 'other-machine', materializationId: 'other-installation', pluginId: 'other.plugin',
-        }, futurePresentation: { keep: true } };
-        const retained = { v: 1, targetsByKey: { agents: { serverIdentityId: 'srv_one', machineId: 'machine-a' } },
-            futureField: { keep: true }, pluginExecutionOriginsByPluginId: { 'other.plugin': sibling } };
-        const origin = { serverIdentityId: 'srv_one', sourceRef: { machineId: 'machine-a', pluginId: 'acme.plugin',
-            sourceCustody: { kind: 'development' as const, registeredRootId: '/registered/source' } } };
-        const raw = { machineAdministrationSelectionsV1: retained, unrelatedRoot: { keep: true } };
-        const selected = applyMachineAdministrationSelectionMutationToAccountSettings(raw, current => (
-            setPluginMachineExecutionOriginPreference(current, 'acme.plugin', origin)
-        ));
-        expect(selected).toEqual({ ...raw, machineAdministrationSelectionsV1: { ...retained,
-            pluginExecutionOriginsByPluginId: { 'other.plugin': sibling, 'acme.plugin': origin },
-        } });
-        expect(accountSettingsParse(selected).machineAdministrationSelectionsV1.pluginExecutionOriginsByPluginId['acme.plugin'])
-            .toEqual(origin);
-        expect(applyMachineAdministrationSelectionMutationToAccountSettings(selected, current => (
-            clearPluginMachineExecutionOriginPreference(current, 'acme.plugin')
-        ))).toEqual(raw);
-        const invalidNewOrigin = { ...origin, unexpectedAuthority: true };
-        expect(() => setPluginMachineExecutionOriginPreference({ v: 1, pluginExecutionOriginsByPluginId: {} },
-            'acme.plugin', invalidNewOrigin)).toThrow();
+    const pluginId = 'acme.plugin';
+    const origin = { serverIdentityId: 'srv_one', sourceRef: { machineId: 'machine-a', pluginId,
+        sourceCustody: { kind: 'development' as const, registeredRootId: '/registered/source' } } };
+    it('retains last use separately from an explicit pin in the same local Administration owner', () => {
+        const pinned = setPluginMachineExecutionOriginPreference({}, pluginId, origin);
+        const target = { serverIdentityId: 'srv_one', machineId: 'machine-b' };
+        const used = setPluginMachineExecutionLastUsedTarget(pinned, pluginId, target);
+        expect(readPluginMachineExecutionTargetPreference(used, pluginId)).toEqual({ serverIdentityId: 'srv_one', machineId: 'machine-a' });
+        expect(readPluginMachineExecutionLastUsedTarget(used, pluginId)).toEqual(target);
+        expect(readPluginMachineExecutionLastUsedTarget(clearPluginMachineExecutionOriginPreference(used, pluginId), pluginId)).toEqual(target);
+        expect(stripLocalOnlyAccountSettings({ machineAdministrationTargetsLocalV1: used })).toEqual({});
+        expect(setPluginMachineExecutionLastUsedTarget(used, pluginId, target)).toBe(used);
     });
-
-    it('refuses malformed known stored authority rather than resetting sibling selections', () => {
-        expect(() => applyMachineAdministrationSelectionMutationToAccountSettings({
-            machineAdministrationSelectionsV1: { v: 1, targetsByKey: {}, pluginExecutionOriginsByPluginId: {
-                'other.plugin': { serverIdentityId: 'local-profile' },
-            } },
-        }, current => clearPluginMachineExecutionOriginPreference(current, 'acme.plugin'))).toThrow();
+    it('accepts a canonical maximum-length plugin id as a named local target', () => {
+        const longId = `${'a'.repeat(250)}.tools`;
+        const next = setPluginMachineExecutionOriginPreference({}, longId, { ...origin, sourceRef: { ...origin.sourceRef, pluginId: longId } });
+        expect(readPluginMachineExecutionTargetPreference(next, longId)).toEqual({ serverIdentityId: 'srv_one', machineId: 'machine-a' });
     });
-    it('updates one device-local target entry without dropping another target', () => {
-        const current = {
-            agents: { serverIdentityId: 'srv_one', machineId: 'machine-a' },
-        };
-
-        expect(setMachineAdministrationTargetPreference(
-            current,
-            'plugins.home',
-            { serverIdentityId: 'srv_two', machineId: 'machine-b' },
-        )).toEqual({
-            ...current,
-            'plugins.home': { serverIdentityId: 'srv_two', machineId: 'machine-b' },
-        });
+    it('remembers only the Machine, preserving sibling Administration targets', () => {
+        const current = { agents: { serverIdentityId: 'srv_one', machineId: 'machine-b' } };
+        const next = setPluginMachineExecutionOriginPreference(current, pluginId, origin);
+        expect(next).toEqual({ ...current, 'plugin.runOn:acme.plugin': { serverIdentityId: 'srv_one', machineId: 'machine-a' } });
+        expect(readPluginMachineExecutionTargetPreference(next, pluginId)).toEqual({ serverIdentityId: 'srv_one', machineId: 'machine-a' });
+        expect(clearPluginMachineExecutionOriginPreference(next, pluginId)).toEqual(current);
+        expect(() => setPluginMachineExecutionOriginPreference(current, 'another.plugin', origin)).toThrow();
     });
-
-    it('updates and clears only the named entry through the domain schema', () => {
-        const withTarget = setMachineAdministrationTargetPreference(
-            {},
-            'plugins.home',
-            { serverIdentityId: 'srv_one', machineId: 'machine-a' },
-        );
-        expect(clearMachineAdministrationTargetPreference(withTarget, 'plugins.home')).toEqual({});
+    it('persists per device and Home without transmitting a local choice through Account settings', () => {
+        const scope = { serverId: 'srv_one', accountId: 'runon-preference-test' };
+        const otherHome = { ...scope, serverId: 'srv_two' };
+        const local = setPluginMachineExecutionOriginPreference({}, pluginId, origin);
+        const other = setPluginMachineExecutionOriginPreference({}, pluginId, { ...origin, serverIdentityId: 'srv_two' });
+        saveAccountSettings(scope, { ...settingsDefaults, machineAdministrationTargetsLocalV1: local }, 1);
+        saveAccountSettings(otherHome, { ...settingsDefaults, machineAdministrationTargetsLocalV1: other }, 1);
+        expect(settingsParse(loadAccountSettings(scope).settings).machineAdministrationTargetsLocalV1).toEqual(local);
+        expect(settingsParse(loadAccountSettings(otherHome).settings).machineAdministrationTargetsLocalV1).toEqual(other);
+        const transmitted = stripLocalOnlyAccountSettings({ machineAdministrationTargetsLocalV1: other });
+        expect(settingsParse(transmitted).machineAdministrationTargetsLocalV1).toEqual({});
+        // Swap the test MMKV boundary's contents to represent a second device.
+        const device = getPersistenceStorage();
+        const firstDevice = device.getAllKeys().map(key => [key, device.getString(key)] as const);
+        try {
+            device.clearAll();
+            saveAccountSettings(scope, { ...settingsDefaults, machineAdministrationTargetsLocalV1: other }, 1);
+            expect(settingsParse(loadAccountSettings(scope).settings).machineAdministrationTargetsLocalV1).toEqual(other);
+        } finally {
+            device.clearAll();
+            for (const [key, value] of firstDevice) if (value !== undefined) device.set(key, value);
+        }
+        expect(settingsParse(loadAccountSettings(scope).settings).machineAdministrationTargetsLocalV1).toEqual(local);
     });
-
-    it('rejects device-local profile ids before they can enter Account settings', () => {
-        expect(() => setMachineAdministrationTargetPreference(
-            {},
-            'plugins.home',
-            { serverIdentityId: 'profile-local-1', machineId: 'machine-a' },
-        )).toThrow();
-    });
-
-    it('replays a named mutation without dropping a concurrent Account Settings winner', () => {
-        const next = applyMachineAdministrationSelectionMutationToAccountSettings({
-            unrelatedRoot: { preserved: true },
-            machineAdministrationSelectionsV1: {
-                v: 1,
-                pluginExecutionOriginsByPluginId: {
-                    'other.plugin': {
-                        serverIdentityId: 'srv_one',
-                        materializationRef: {
-                            machineId: 'machine-a',
-                            materializationId: 'mat-other',
-                            pluginId: 'other.plugin',
-                        },
-                    },
-                },
-            },
-        }, (current) => setPluginMachineExecutionOriginPreference(
-            current,
-            'acme.plugin',
-            { serverIdentityId: 'srv_two', materializationRef: {
-                machineId: 'machine-b', materializationId: 'mat-b', pluginId: 'acme.plugin',
-            } },
-        ));
-
-        expect(next).toEqual({
-            unrelatedRoot: { preserved: true },
-            machineAdministrationSelectionsV1: {
-                v: 1,
-                pluginExecutionOriginsByPluginId: {
-                    'acme.plugin': { serverIdentityId: 'srv_two', materializationRef: {
-                        machineId: 'machine-b', materializationId: 'mat-b', pluginId: 'acme.plugin',
-                    } },
-                    'other.plugin': {
-                        serverIdentityId: 'srv_one',
-                        materializationRef: {
-                            machineId: 'machine-a',
-                            materializationId: 'mat-other',
-                            pluginId: 'other.plugin',
-                        },
-                    },
-                },
-            },
-        });
+    it('updates and clears only the named device-local target through the domain schema', () => {
+        const current = { agents: { serverIdentityId: 'srv_one', machineId: 'machine-a' } };
+        const next = setMachineAdministrationTargetPreference(current, 'plugins.home', { serverIdentityId: 'srv_two', machineId: 'machine-b' });
+        expect(clearMachineAdministrationTargetPreference(next, 'plugins.home')).toEqual(current);
+        expect(() => setMachineAdministrationTargetPreference({}, 'plugins.home', { serverIdentityId: 'profile-local-1', machineId: 'machine-a' })).toThrow();
     });
 });

@@ -19,8 +19,20 @@ export type AuthorizedSessionModelTransitionTarget = Readonly<{
 }>;
 
 export type SessionAppliedModelTransitionTarget = Readonly<
-  { status: 'unavailable' } | { status: 'applied'; target: AuthorizedSessionModelTransitionTarget }
+  { status: 'unavailable'; reason: SessionAppliedModelTransitionUnavailableReason }
+  | { status: 'applied'; target: AuthorizedSessionModelTransitionTarget }
 >;
+
+export type SessionAppliedModelTransitionUnavailableReason =
+  | 'not_accepting'
+  | 'disposed'
+  | 'publisher_authority_unavailable'
+  | 'run_not_current'
+  | 'reconciliation_required'
+  | 'runtime_model_drift'
+  | 'prompt_admission_fenced'
+  | 'runtime_effect_in_progress'
+  | 'active_target_changed';
 
 export type SessionModelTransitionApplyResult =
   | Readonly<{ status: 'applied' }>
@@ -262,6 +274,8 @@ export function createSessionModelTransitionCoordinator(params: Readonly<{
       applyTiming?: 'immediate' | 'next_prompt';
       callerInputConstraints?: CallerInputConstraintsV1;
       runWithActiveSelection?: NonNullable<Proposal['runWithActiveSelection']>;
+      captureBefore?: boolean;
+      expected?: SessionModelMutationExpectedV1;
     }>,
   ) => Promise<SessionModelTransitionResultV1>;
   /**
@@ -321,22 +335,33 @@ export function createSessionModelTransitionCoordinator(params: Readonly<{
     && !publisherAuthorityUnavailable
     && params.isCurrentRun();
 
-  const hasAppliedTarget = (): boolean => accepting
-    && isCurrent()
-    && !reconciliationRequired
-    && runtimeObservedDriftModelId === null
-    && activeFenceEpochId === null
-    && current?.effectStarted !== true;
+  const readAppliedTargetUnavailableReason = (): SessionAppliedModelTransitionUnavailableReason | null => {
+    if (!accepting) return 'not_accepting';
+    if (disposed) return 'disposed';
+    if (publisherAuthorityUnavailable) return 'publisher_authority_unavailable';
+    if (!params.isCurrentRun()) return 'run_not_current';
+    if (reconciliationRequired) return 'reconciliation_required';
+    if (runtimeObservedDriftModelId !== null) return 'runtime_model_drift';
+    if (activeFenceEpochId !== null) return 'prompt_admission_fenced';
+    if (current?.effectStarted === true) return 'runtime_effect_in_progress';
+    return null;
+  };
 
   const readAppliedTarget = async (): Promise<SessionAppliedModelTransitionTarget> => {
-    if (!hasAppliedTarget()) return { status: 'unavailable' };
+    const reason = readAppliedTargetUnavailableReason();
+    if (reason) return { status: 'unavailable', reason };
     const target = activeTarget;
-    const result = await runWithCurrentPublisherPermit(async (): Promise<SessionAppliedModelTransitionTarget> => (
-      hasAppliedTarget() && activeTarget === target
+    const result = await runWithCurrentPublisherPermit(async (): Promise<SessionAppliedModelTransitionTarget> => {
+      const reason = readAppliedTargetUnavailableReason();
+      if (reason) return { status: 'unavailable', reason };
+      return activeTarget === target
         ? { status: 'applied', target }
-        : { status: 'unavailable' }
-    ));
-    return result.status === 'completed' ? result.value : { status: 'unavailable' };
+        : { status: 'unavailable', reason: 'active_target_changed' };
+    });
+    return result.status === 'completed' ? result.value : {
+      status: 'unavailable',
+      reason: readAppliedTargetUnavailableReason() ?? 'publisher_authority_unavailable',
+    };
   };
 
   const runWithCurrentPublisherPermit = async <T>(
@@ -1997,7 +2022,7 @@ export function createSessionModelTransitionCoordinator(params: Readonly<{
       effectStarted: false,
       superseded: false,
       resolve: (result) => {
-        if (result.ok && proposal.captureBefore && proposal.capturedBefore
+        if (result.ok && result.status !== 'armed' && proposal.captureBefore && proposal.capturedBefore
           && proposal.committedIntentUpdatedAt !== undefined && params.ownerScope) {
           resolve({ ...result, reversal: { owner: 'active', scope: params.ownerScope, runId: params.runId,
             before: proposal.capturedBefore, applied: result.activeSelection, updatedAt: proposal.committedIntentUpdatedAt } });

@@ -14,10 +14,8 @@ import {
 import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
 import { readCanonicalPluginManifest } from '@/plugins/manifest/normalize';
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
-import {
-  SavedSecretOperationAdmissionError,
-  type refreshSavedSecretCatalogForOperation,
-} from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { SavedSecretOperationAdmissionError } from "@/settings/secrets/savedSecretCatalogRead";
+import { type refreshSavedSecretCatalogForOperation } from "@/settings/secrets/hydrateSavedSecretCatalog";
 import {
   createConnectedAccountPurposeBindingOwner,
   type ConnectedAccountPurposeBindingStore,

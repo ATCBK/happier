@@ -438,4 +438,29 @@ describe('useActiveSuggestions', () => {
 
         expect(hook.getCurrent()[1]).toBe(1);
     });
+
+    it('never highlights or moves onto a disabled candidate', async () => {
+        const disabled = (key: string): AutocompleteSuggestion => ({ ...suggestion(key), disabled: true });
+        const handler = vi.fn(async () => [disabled('a'), suggestion('b'), disabled('c'), suggestion('d'), disabled('e')]);
+        const hook = await renderHook(() => useActiveSuggestions('/x', handler));
+        await flushHookEffects();
+        // The automatic highlight is the first row the user can take.
+        expect(hook.getCurrent()[1]).toBe(1);
+        await act(async () => { hook.getCurrent()[3](); });
+        expect(hook.getCurrent()[1]).toBe(3);
+        // Wrapping past the end lands on the first enabled row, not on a disabled one.
+        await act(async () => { hook.getCurrent()[3](); });
+        expect(hook.getCurrent()[1]).toBe(1);
+        await act(async () => { hook.getCurrent()[2](); });
+        expect(hook.getCurrent()[1]).toBe(3);
+    });
+
+    it('selects nothing while every candidate is disabled', async () => {
+        const handler = vi.fn(async () => [{ ...suggestion('a'), disabled: true as const }]);
+        const hook = await renderHook(() => useActiveSuggestions('/x', handler));
+        await flushHookEffects();
+        expect(hook.getCurrent()[1]).toBe(-1);
+        await act(async () => { hook.getCurrent()[3](); });
+        expect(hook.getCurrent()[1]).toBe(-1);
+    });
 });

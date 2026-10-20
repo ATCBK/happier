@@ -28,7 +28,7 @@ import {
 import type { MachinePageTabParams } from '@/components/machines/page/machinePageTabQuery';
 import { useMachineTabCompactLayout } from '@/components/machines/page/useMachineTabCompactLayout';
 import { useMachineTabFacts } from '@/components/machines/page/useMachineTabFacts';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { usageSignatureAccent } from '@/components/settings/usage/usageAccent';
 import { PolicyValueSelect } from '@/components/machines/policy/PolicyValueSelect';
 import { openMachinePathBrowserModal } from '@/components/ui/pathBrowser/openMachinePathBrowserModal';
@@ -179,12 +179,12 @@ export const StorageWholeDiskView = React.memo(function StorageWholeDiskView(
     layout.compact,
   );
   const files: Files = props.params.files ?? 'folders';
-  const [largeMin, setLargeMin] = React.useState<number>(LARGE_MIN_BYTES[1]);
+  const [largeMin, setLargeMin] = React.useState<number | null>(null);
   const [oldAge, setOldAge] = React.useState<Readonly<{ months: (typeof OLD_MONTHS)[number] } | { days: number }>>({ months: 3 });
   const customSize = React.useCallback(() => {
     fireAndForget((async () => {
       const raw = await Modal.prompt(t('machineStorage.disk.largerThan'), t('machineStorage.disk.customSize.body'), {
-        defaultValue: formatMachineBytes(largeMin, 'storage'), confirmText: t('common.save'),
+        defaultValue: largeMin === null ? '' : formatMachineBytes(largeMin, 'storage'), confirmText: t('common.save'),
       });
       if (raw === null) return;
       const value = parseCustomDiskThreshold(/^\s*\d+(?:[.,]\d+)?\s*$/u.test(raw) ? `${raw} B` : raw, null);
@@ -212,7 +212,7 @@ export const StorageWholeDiskView = React.memo(function StorageWholeDiskView(
   const view = React.useMemo(
     (): DiskScanViewV1 =>
       files === 'large'
-        ? { tab: 'large', depth: 1, minBytes: largeMin }
+        ? { tab: 'large', depth: 1, ...(largeMin === null ? {} : { minBytes: largeMin }) }
         : files === 'old'
           ? { tab: 'old', depth: 1, ...('days' in oldAge ? { olderThanDays: oldAge.days } : { olderThanMonths: oldAge.months }) }
           : {
@@ -296,7 +296,8 @@ export const StorageWholeDiskView = React.memo(function StorageWholeDiskView(
               testID="machine-storage-disk-offline"
               kind="unavailable"
               size="line"
-              title={t('machineStorage.states.offlineEmpty', { machine: props.machineName })}
+              title={t('machineStorage.states.offlineTitle', { machine: props.machineName })}
+              reason={t('machineStorage.states.offlineReason')}
             />
           </ItemGroup>
         ) : (
@@ -502,17 +503,17 @@ export const StorageWholeDiskView = React.memo(function StorageWholeDiskView(
           <PolicyValueSelect
             testID="machine-storage-disk-large-min"
             label={t('machineStorage.disk.largerThan')}
-            value={t('machineStorage.disk.largerThanValue', {
+            value={largeMin === null ? t('common.all') : t('machineStorage.disk.largerThanValue', {
               size: formatMachineBytes(largeMin, 'storage'),
             })}
-            selectedId={(LARGE_MIN_BYTES as readonly number[]).includes(largeMin) ? String(largeMin) : null}
-            choices={LARGE_MIN_BYTES.map((bytes) => ({
+            selectedId={largeMin === null ? 'all' : (LARGE_MIN_BYTES as readonly number[]).includes(largeMin) ? String(largeMin) : null}
+            choices={[{ id: 'all', title: t('common.all') }, ...LARGE_MIN_BYTES.map((bytes) => ({
               id: String(bytes),
               title: t('machineStorage.disk.largerThanValue', {
                 size: formatMachineBytes(bytes, 'storage'),
               }),
-            }))}
-            onSelect={(id) => setLargeMin(Number(id))}
+            }))]}
+            onSelect={(id) => setLargeMin(id === 'all' ? null : Number(id))}
             onCustom={customSize}
           />
         ) : files === 'old' ? (
@@ -632,7 +633,7 @@ function ScanProgress(
   }>,
 ) {
   const { theme } = useUnistyles();
-  const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+  const pluginTheme = usePluginUiTheme(theme);
   const { progress } = props.scan;
   const percent =
     progress.usedBytes > 0
@@ -861,7 +862,7 @@ function DiskChart(
   const props = input.level.chart.length > 0 ? input : { ...input, level: drawn.current.level, root: drawn.current.root };
   const { theme } = useUnistyles();
   const motion = useMotionPreferences();
-  const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+  const pluginTheme = usePluginUiTheme(theme);
   const [width, setWidth] = React.useState(0);
   const [pointed, setPointed] = React.useState<string | null>(null);
   const [inspected, setInspected] = React.useState<string | null>(null);

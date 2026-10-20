@@ -47,7 +47,7 @@ describe('workspace loading through the canonical Expo context', () => {
         }
     });
 
-    it.each(['settings', 'artifacts', 'machines'])('hosts every %s leaf exported by the registered app tree', (directory) => {
+    it.each(['settings', 'artifacts', 'machines', 'discussions'])('hosts every %s leaf exported by the registered app tree', (directory) => {
         const root = appRoot;
         const leaves: string[] = [];
         function visit(directory: string) {

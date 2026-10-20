@@ -26,7 +26,7 @@ import { resolveProviderConnectionForMachine } from '@/providers/registry';
 import { createProviderRuntimeStateStore } from '@/providers/runtimeState';
 import { getActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests, setActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { resolveAccountSettingsScopeKeyForToken } from '@/settings/accountSettings/accountSettingsScopeKey';
-import { hydrateSavedSecretCatalog } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { hydrateSavedSecretCatalog } from "@/settings/secrets/savedSecretCatalogRead";
 import { emptyAccountSettingsHistoryCaptureResponse } from '@/settings/accountSettings/emptyAccountSettingsHistoryCapture.testkit';
 import { createDeferred } from '@/testkit/async/deferred';
 import type { ActiveAccountSettingsSnapshot } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
@@ -125,6 +125,68 @@ function grantedSettings(providerRegistry = registry) {
 }
 
 describe('runtime provider services', () => {
+  it.each(['models', 'probe'] as const)('reports transient Account catalog failure before %s without blaming the endpoint', async operation => {
+    const credentials = { token: 'provider-catalog-transient', encryption: null };
+    vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
+    setActiveAccountSettingsSnapshot({ ...providerSnapshot(grantedSettings()),
+      scopeKey: resolveAccountSettingsScopeKeyForToken(credentials.token) });
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1,
+        settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      if (path === '/v1/account/entity-rows/provider-connections') return { status: 503, data: { error: 'server_unavailable' } };
+      throw new Error(`Unexpected failed catalog read: ${path}`);
+    });
+    const services = createRuntimeProviderServices({ machineId: 'machine-a', registry,
+      featureGate: { isEnabled: () => true } });
+    expect(await services[operation]({ connectionId, machineId: 'machine-a' })).toMatchObject({
+      status: 'error', error: { code: 'provider_catalog_unavailable', retryable: true, action: 'retry' },
+    });
+  });
+
+  it.each(['models', 'probe'] as const)('opens current Account row authority for an explicit ambient %s request before its change hint', async operation => {
+    const credentials = { token: 'current-provider-read', encryption: null };
+    vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
+    const settings = grantedSettings();
+    const initial = { ...providerSnapshot(settings), source: 'network' as const, rawSettings: {},
+      scopeKey: resolveAccountSettingsScopeKeyForToken(credentials.token) };
+    setActiveAccountSettingsSnapshot(initial);
+    let catalog = splitProviderSettingsV1(settings).catalog;
+    let revision = 1;
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1,
+        settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+      if (path === '/v1/account/entity-rows/provider-connections') return { status: 200, data: {
+        status: 'present', revision, content: { t: 'plain', v: catalog } } };
+      if (path === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: {} } } };
+      if (path === '/v2/account/settings/history') return { status: 200, data: { snapshots: [] } };
+      const history = emptyAccountSettingsHistoryCaptureResponse(path);
+      if (history) return history;
+      throw new Error(`Unexpected explicit Provider read: ${path}`);
+    });
+    const happyHomeDir = await mkdtemp(join(tmpdir(), 'happier-provider-current-read-'));
+    temporaryPaths.push(happyHomeDir);
+    const services = createRuntimeProviderServices({ machineId: 'machine-a', registry, happyHomeDir,
+      featureGate: { isEnabled: () => true }, resolveAddresses: async () => ['1.1.1.1'],
+      client: createProviderProbeHttpClient({ resolveAddresses: async () => ['1.1.1.1'],
+        transport: async () => ({ status: 200, headers: { 'content-type': 'application/json' },
+          body: Buffer.from(JSON.stringify({ data: [{ id: 'probe-a' }] })) }) }),
+    });
+    const identity = { connectionId, machineId: 'machine-a' };
+    const initialResult = await services[operation](identity);
+    expect(initialResult, JSON.stringify(initialResult)).toMatchObject({ status: 'success' });
+    catalog = { ...catalog, manualModelsByConnectionId: { [connectionId]: [{ id: 'manual-current', addedAt: 2 }] } };
+    revision += 1;
+    const result = await services[operation](identity);
+    expect(result).toMatchObject({ status: 'success' });
+    expect(getActiveAccountSettingsSnapshot()?.providerConnectionsCatalog).toMatchObject({ status: 'ready', revision,
+      catalog: { manualModelsByConnectionId: { [connectionId]: [{ id: 'manual-current' }] } } });
+    if (operation === 'models') expect(result).toMatchObject({ models: expect.arrayContaining([
+      expect.objectContaining({ id: 'manual-current' }),
+    ]) });
+  });
+
   it('spends the existing Provider operation deadline while opening a demanded Account catalog', async () => {
     vi.useFakeTimers();
     const credentials = { token: 'provider-catalog-deadline', encryption: null };
@@ -157,7 +219,7 @@ describe('runtime provider services', () => {
     try {
       await rowEntered.promise;
       await vi.advanceTimersByTimeAsync(26);
-      expect(observed).toMatchObject({ status: 'error', error: { code: 'provider_endpoint_unavailable' } });
+      expect(observed).toMatchObject({ status: 'error', error: { code: 'provider_catalog_unavailable' } });
     } finally {
       releaseRow.resolve();
       await pending;
@@ -352,13 +414,21 @@ describe('runtime provider services', () => {
       throw new Error('network must not be reached while the feature is disabled');
     });
     const identity = { connectionId, machineId: 'machine-a' };
+    const credentials = { token: 'disabled-ambient-provider', encryption: null };
+    setActiveAccountSettingsSnapshot({ ...providerSnapshot(grantedSettings()),
+      scopeKey: resolveAccountSettingsScopeKeyForToken(credentials.token) });
+    const storedCredentials = vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(credentials);
+    const homeHttp = vi.spyOn(axios, 'get').mockRejectedValue(new Error('Disabled Providers cannot read Home catalogs'));
 
-    for (const featureGate of [undefined, { isEnabled: () => false }] as const) {
+    for (const [featureGate, reader] of [
+      [undefined, 'issued'], [{ isEnabled: () => false }, 'issued'],
+      [undefined, 'ambient'], [{ isEnabled: () => false }, 'ambient'],
+    ] as const) {
       const services = createRuntimeProviderServices({
         machineId: 'machine-a',
         happyHomeDir,
         resolveRegistry,
-        getAccountSettingsSnapshot,
+        ...(reader === 'issued' ? { getAccountSettingsSnapshot } : {}),
         client: createProviderProbeHttpClient({
           resolveAddresses: async () => ['1.1.1.1'],
           transport,
@@ -398,6 +468,8 @@ describe('runtime provider services', () => {
     expect(resolveRegistry).not.toHaveBeenCalled();
     expect(getAccountSettingsSnapshot).not.toHaveBeenCalled();
     expect(transport).not.toHaveBeenCalled();
+    expect(storedCredentials).not.toHaveBeenCalled();
+    expect(homeHttp).not.toHaveBeenCalled();
   });
 
   it('drops queued saved work when the root feature is revoked before scheduler dispatch', async () => {
@@ -900,6 +972,9 @@ describe('runtime provider services', () => {
         probeObservationIdentity: expect.stringMatching(/^probe-observation:v1:/u),
       });
       if (result.status !== 'success') throw new Error('Expected Provider summary');
+      // Summary starts a real demand refresh. Join it before changing the
+      // Account facts it uses or retiring this fixture's Home directory.
+      await expect(services.scheduleDemandRefresh(requestIdentity, 'detail_open')).resolves.toBeNull();
       return result.probeObservationIdentity;
     };
 
@@ -995,6 +1070,7 @@ describe('runtime provider services', () => {
       status: 'success',
       probeObservationIdentity: initialIdentity,
     });
+    await expect(services.scheduleDemandRefresh(requestIdentity, 'detail_open')).resolves.toBeNull();
   });
 
   it('refreshes declared endpoint health on picker demand without replacing fresher catalog or load state', async () => {

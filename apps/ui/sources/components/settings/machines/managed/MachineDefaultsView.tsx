@@ -186,7 +186,7 @@ export const MachineDefaultsView = React.memo(function MachineDefaultsView() {
               testID="settings.machineDefaults.creationEnabled.switch"
               value={creationEnabled}
               disabled={disabled}
-              onValueChange={value => writeSetting(MACHINES_DEFAULTS_SETTINGS.settings.creationEnabled, value)}
+              onValueChange={async value => { await writeSetting(MACHINES_DEFAULTS_SETTINGS.settings.creationEnabled, value); }}
             />
           }
         />

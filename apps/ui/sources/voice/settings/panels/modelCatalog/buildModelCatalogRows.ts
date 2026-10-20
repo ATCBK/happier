@@ -10,6 +10,7 @@ import {
   listModelPackCatalogEntries,
   resolveCanonicalModelPackId,
 } from '@happier-dev/protocol/voice/modelPacks/catalog';
+import { formatModelPackDisplayName } from '@/voice/modelPacks/formatDisplayName';
 
 /**
  * Derived presentation state for a single model-pack row. Combines the daemon
@@ -81,24 +82,6 @@ export type BuildModelCatalogRowsParams = Readonly<{
   /** Currently-selected TTS default pack id (may be a legacy id), or null. */
   selectedTtsPackId: string | null;
 }>;
-
-/**
- * Build a human-facing display name from a catalog model identifier. The
- * canonical catalog does not yet carry localized display names, so we derive a
- * readable label from the model id (titleized segments) rather than inventing a
- * parallel name registry. Strings here are identifiers, not user copy.
- */
-function deriveDisplayName(entry: Pick<ModelPackCatalogEntry, 'packId' | 'model'>): string {
-  const source = entry.model.trim().length > 0 ? entry.model : entry.packId;
-  const cleaned = source
-    .replace(/^sherpa-onnx-/i, '')
-    .replace(/[._]/g, '-')
-    .split('-')
-    .filter((segment) => segment.length > 0)
-    .map((segment) => (/^[a-z]/.test(segment) ? segment.charAt(0).toUpperCase() + segment.slice(1) : segment))
-    .join(' ');
-  return cleaned.length > 0 ? cleaned : source;
-}
 
 function resolveRowState(status: DaemonVoiceInferenceModelStatus | undefined): {
   state: ModelCatalogRowState;
@@ -209,7 +192,7 @@ function buildRowsForKind(
     const row: ModelCatalogRow = {
       packId: entry.packId,
       kind: entry.kind,
-      displayName: deriveDisplayName(entry),
+      displayName: formatModelPackDisplayName(entry),
       model: entry.model,
       state,
       progress,

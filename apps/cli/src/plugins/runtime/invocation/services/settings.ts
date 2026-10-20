@@ -2,12 +2,15 @@ import {
     createStablePluginSettingsModel as createProtocolSettingsModel,
     createStablePluginSettingsModels as createProtocolSettingsModels,
     PluginUiDeclarationProjectionErrorV1,
-} from '@happier-dev/protocol/plugins/contributions/ui';
+    type StablePluginSettingsField,
+    type StablePluginSettingsModel,
+    type StablePluginSettingsScope,
+} from '@happier-dev/protocol/plugins/contributions/ui/settingsDescriptors';
 import { PluginAccountSettingsValuesV1Schema } from '@happier-dev/protocol/plugins/settings/accountSettingsV1';
 import { isBoundedPluginPerActiveServerValueV1 } from '@happier-dev/protocol/plugins/contributions/settings';
 import type { PluginJsonSchemaValidator, PluginSettingsContributionV2 } from '@happier-dev/protocol';
 import { compilePluginJsonSchema, createPluginJsonSchemaZodValueAdapter } from '@happier-dev/protocol/plugins/actions/json-schema-validation';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { isValidPluginJsonSchemaValue } from '@happier-dev/protocol/plugins/actions/protocol-composable-schema';
 import { containsEquivalentPluginJsonValue } from '@happier-dev/protocol/plugins/contributions/jsonSchemaValues';
@@ -19,7 +22,6 @@ import {
 } from '@happier-dev/plugin-sdk';
 import type {
     ScopedSettingsService,
-    SettingDescriptor,
     SettingsChange,
     SettingsScopeRef,
     SettingsService,
@@ -34,12 +36,19 @@ import {
     type PluginStorageOwnerScope,
 } from '../../context/storage';
 
+export type {
+    StablePluginSettingsIdentity,
+    StablePluginSettingsField,
+    StablePluginSettingsModel,
+    StablePluginSettingsScope,
+} from '@happier-dev/protocol/plugins/contributions/ui/settingsDescriptors';
+
 export const PLUGIN_SETTINGS_STORAGE_KEY = `${PLUGIN_HOST_STORAGE_KEY_PREFIX}settings/v1`;
 const SETTINGS_RECORD_TYPE = 'happier_plugin_settings_record_v1';
-const CanonicalPluginSettingsRecordSchema = z.object({
-    t: z.literal(SETTINGS_RECORD_TYPE), revision: z.number().int().nonnegative(),
+const CanonicalPluginSettingsRecordSchema = z.strictObject({
+    t: z.literal(SETTINGS_RECORD_TYPE), revision: z.number().check(z.int(), z.nonnegative()),
     values: z.record(z.string(), z.unknown()),
-}).strict();
+});
 const StoredPluginSettingsRecordSchema = createStoredReadSchema(CanonicalPluginSettingsRecordSchema);
 const SETTINGS_CHANGED_REF = Object.freeze({
     pluginId: '@happier',
@@ -51,27 +60,6 @@ export type CanonicalPluginSettingsRecord = Readonly<{
     revision: number;
     values: Readonly<Record<string, JsonValue>>;
 }>;
-
-export type StablePluginSettingsIdentity = Readonly<{
-    pluginId: string;
-    qualifiedId: string;
-}>;
-
-export type StablePluginSettingsField = Readonly<{
-    id: string;
-    contributionId: string;
-    qualifiedId: string;
-    descriptor: SettingDescriptor;
-}>;
-
-export type StablePluginSettingsModel = Readonly<{
-    identity: StablePluginSettingsIdentity;
-    scope: PluginSettingsContributionV2['scope'];
-    descriptors: readonly SettingDescriptor[];
-    fields: readonly StablePluginSettingsField[];
-}>;
-
-export type StablePluginSettingsScope = PluginSettingsContributionV2['scope'];
 
 const validatorsByModel = new WeakMap<object, ReadonlyMap<string, PluginJsonSchemaValidator>>();
 const storedValueReadersByModel = new WeakMap<object, ReadonlyMap<string, ReturnType<typeof createPluginJsonSchemaZodValueAdapter>>>();
@@ -1138,7 +1126,9 @@ export function createStablePluginSettingsHost(params: Readonly<{
                     const scope = readSettingsScope(scopeRef);
                     if (!scope) return unavailableScopedSettingsService('invalid');
                     const model = models.get(scope);
-                    return model && params.recordStore.supports?.(model) === true
+                    // Declarations remain describable before storage is ready.
+                    // Each read/write/watch checks current persistence support.
+                    return model
                         ? owner.bind({ model, seed })
                         : unavailableScopedSettingsService(scope);
                 },

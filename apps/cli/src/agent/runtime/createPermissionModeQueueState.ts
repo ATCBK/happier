@@ -11,6 +11,8 @@ import { resolveAppendSystemPromptQueueKeyValue } from '@/agent/runtime/permissi
 import { readPermissionModeUpdatedAtFromMetadataSnapshot } from '@/agent/runtime/permissions/modeStateSync';
 import {
   combinePermissionModeQueuedPrompts,
+  appendNextTurnContextToQueuedPrompt,
+  isNextTurnContextQueuedPrompt,
   type PermissionModeQueuedPromptMode,
   type PermissionModeQueuedPrompt,
 } from '@/agent/runtime/permissions/queuedPrompt';
@@ -57,11 +59,16 @@ export function createPermissionModeQueueState(opts: {
         suppressUserEcho: mode.suppressUserEcho === true,
         providerPromptAlreadyResolved: mode.providerPromptAlreadyResolved === true,
         causalPermissionAuthority: mode.causalPermissionAuthority ?? null,
+        actionRequestAttributionV1: mode.actionRequestAttributionV1 ?? null,
+        discussionAddressing: mode.discussionAddressing ?? null,
         inputContextBlock: mode.inputContextBlock ?? '',
         inputProvenance: mode.inputProvenance ?? null,
+        returnedAnswer: mode.returnedAnswer ?? null,
       }),
     {
       batcher: (messages) => combinePermissionModeQueuedPrompts(messages),
+      isContextOnly: isNextTurnContextQueuedPrompt,
+      withContext: appendNextTurnContextToQueuedPrompt,
     },
   );
 

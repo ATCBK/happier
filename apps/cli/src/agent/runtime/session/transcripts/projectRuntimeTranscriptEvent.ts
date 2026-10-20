@@ -19,7 +19,10 @@ import {
   type EphemeralSendResult,
 } from '@/api/session/client/transcript/ephemeralSendOutcome';
 import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTypes';
+import type { SessionActivityChangedResult } from '@/daemon/sessions/sessionActivityChangedContract';
+import type { SessionPersonalFollowCommit } from '@/api/session/sessionClientPort';
 import type { StreamedTranscriptFlushSummary } from '@/api/session/streamedTranscriptWriter';
+import { getSessionCommittedTranscriptLocalIds } from '@/api/session/client/transcript/committedTranscriptLocalIdBaseline';
 import {
   CommittedTranscriptAdmissionExpiredError,
   type CommittedTranscriptAdmission,
@@ -37,6 +40,13 @@ type RuntimeMessageDeltaBridge = Readonly<{
   appendAssistantDelta: (args: RuntimeMessageStreamArgs & Readonly<{ deltaText: string }>) => void;
   appendThinkingDelta: (args: RuntimeMessageStreamArgs & Readonly<{ deltaText: string }>) => void;
   discardStream: (args: RuntimeMessageStreamArgs) => void;
+  finalizeUnnamedSegment: (args: RuntimeMessageStreamArgs & Readonly<{
+    channel: 'assistant' | 'reasoning';
+    text: string;
+    sourceMessageId: string;
+    namedStreamKey: string;
+    admission?: CommittedTranscriptAdmission;
+  }>) => Promise<StreamedTranscriptFlushSummary | null>;
   flushAll: (args: Readonly<{
     reason: 'tool-call-boundary' | 'turn-end' | 'abort';
     interruptedReason?: string;
@@ -47,6 +57,9 @@ type RuntimeMessageDeltaBridge = Readonly<{
 type TranscriptMessageCommitResult = Readonly<{
   persisted: boolean;
   delivered: boolean;
+  committedSequence?: number;
+  personalFollow?: SessionActivityChangedResult['personalFollow'];
+  whenCommitted?: Promise<SessionPersonalFollowCommit | null>;
 }>;
 
 export type RuntimeTranscriptProjectionSession = Readonly<{
@@ -90,8 +103,9 @@ export class RuntimeTranscriptRequiredAdmissionError extends Error {
   constructor(
     readonly reason: RuntimeTranscriptRequiredAdmissionFailureReason,
     readonly eventKind: string,
+    options?: ErrorOptions,
   ) {
-    super(`Required runtime transcript admission failed: ${reason}`);
+    super(`Required runtime transcript admission failed: ${reason}`, options);
     this.name = 'RuntimeTranscriptRequiredAdmissionError';
   }
 }
@@ -99,6 +113,8 @@ export class RuntimeTranscriptRequiredAdmissionError extends Error {
 export type RuntimeTranscriptProjectionResult =
   | Readonly<{
     projected: true;
+    terminalSourceMessage?: Readonly<{ localId: string; committedSequence?: number;
+      personalFollow?: SessionActivityChangedResult['personalFollow']; whenCommitted?: Promise<SessionPersonalFollowCommit | null> }>;
     kind:
       | 'message-delta'
       | 'tool-progress'
@@ -116,6 +132,11 @@ export type RuntimeTranscriptProjectionResult =
     projected: false;
     reason: 'unsupported_event' | 'session_mismatch' | 'ephemeral_not_accepted';
   }>;
+
+// Foreground streaming and native file follow can offer the same fact while
+// its first durable finalization is still awaiting custody. Join that work;
+// only successful finalization enters the existing committed-ID baseline.
+const pendingTranscriptCommits = new WeakMap<RuntimeTranscriptProjectionSession, Map<string, Promise<TranscriptMessageCommitResult>>>();
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -146,14 +167,15 @@ function resolveCommittedTranscriptObservation(event: Readonly<{
 function buildRuntimeMessageStreamArgs(
   event: Extract<AgentSessionRuntimeEvent, { kind: 'message-delta' | 'transcript-message-committed' }>,
   channel: 'assistant' | 'reasoning',
+  messageId: string | null = event.messageId ?? null,
 ): RuntimeMessageStreamArgs {
   const foreground = isForegroundTurnRuntimeTranscriptEvent(event);
   return {
     streamKey: foreground
-      ? event.messageId ? JSON.stringify([event.turnId, channel, event.messageId]) : event.turnId
-      : JSON.stringify([event.sessionId, event.sidechainId ?? null, event.turnId ?? null, channel, event.messageId ?? null]),
+      ? JSON.stringify([event.turnId, channel, messageId])
+      : JSON.stringify([event.sessionId, event.sidechainId ?? null, event.turnId ?? null, channel, messageId]),
     sidechainId: event.sidechainId ?? null,
-    ...(event.messageId ? { messageId: event.messageId } : {}),
+    ...(messageId ? { messageId } : {}),
     ...(foreground ? { foregroundTurnId: event.turnId } : {}),
   };
 }
@@ -173,9 +195,14 @@ function buildRuntimeToolLocalId(event: Readonly<{
   return kind === 'tool-call' ? identity.callLocalId : identity.resultLocalId;
 }
 
-/** Live host projection retains only foreground calls awaiting a durable result. */
+/** Foreground calls retain correction custody until their native result arrives. */
 export function createRuntimeTranscriptProjector(): typeof projectRuntimeTranscriptEvent {
-  const pendingCalls = new Map<string, Readonly<{ sessionId: string; turnId: string; toolCallId: string }>>();
+  const pendingCalls = new Map<string, {
+    sessionId: string;
+    turnId: string;
+    toolCallId: string;
+    missingResultCreatedAtMs?: number;
+  }>();
   return async (params) => {
     const parsed = AgentSessionRuntimeEventSchema.safeParse(params.event);
     if (!parsed.success || parsed.data.sessionId !== params.session.sessionId) {
@@ -183,12 +210,12 @@ export function createRuntimeTranscriptProjector(): typeof projectRuntimeTranscr
     }
     const event = parsed.data;
     if (event.kind === 'turn-cancelled' || event.kind === 'turn-failed' || event.kind === 'turn-complete') {
-      for (const [identity, call] of pendingCalls) {
-        if (call.sessionId !== event.sessionId || call.turnId !== event.turnId) continue;
+      for (const call of pendingCalls.values()) {
+        if (call.sessionId !== event.sessionId || call.turnId !== event.turnId || call.missingResultCreatedAtMs !== undefined) continue;
         // A terminal turn settles the transcript wait, not the external effect.
         // Later native results keep the same projection identity; the existing
         // transcript transport owns revision arbitration.
-        const settlement = await projectRuntimeTranscriptEvent({ ...params, event: {
+        const settlement = await projectRuntimeTranscriptEvent({ ...params, toolResultCreatedAtMs: event.emittedAtMs, event: {
           kind: 'tool-result', sessionId: call.sessionId, turnId: call.turnId,
           toolCallId: call.toolCallId, sequence: event.sequence, emittedAtMs: event.emittedAtMs,
           isError: true,
@@ -197,10 +224,17 @@ export function createRuntimeTranscriptProjector(): typeof projectRuntimeTranscr
             error: 'The turn ended before a tool result was received. The operation may have taken effect.',
           },
         } });
-        if (settlement.projected) pendingCalls.delete(identity);
+        if (settlement.projected) call.missingResultCreatedAtMs = event.emittedAtMs;
       }
     }
-    const result = await projectRuntimeTranscriptEvent(params);
+    const pendingCall = event.kind === 'tool-result'
+      ? pendingCalls.get(buildRuntimeToolLocalId(event, 'tool-call'))
+      : undefined;
+    const result = await projectRuntimeTranscriptEvent({ ...params,
+      ...(pendingCall?.missingResultCreatedAtMs === undefined ? {} : {
+        toolResultCreatedAtMs: pendingCall.missingResultCreatedAtMs,
+      }),
+    });
     if (result.projected && event.kind === 'tool-call' && isForegroundTurnRuntimeTranscriptEvent(event)) {
       pendingCalls.set(buildRuntimeToolLocalId(event, 'tool-call'), {
         sessionId: event.sessionId, turnId: event.turnId, toolCallId: event.toolCallId,
@@ -376,7 +410,7 @@ export async function commitRequiredRuntimeTranscriptMessage(params: Readonly<{
   provenance: SessionTranscriptObservationProvenanceV1;
   eventKind: string;
   admission?: CommittedTranscriptAdmission;
-}>): Promise<void> {
+}>): Promise<TranscriptMessageCommitResult> {
   assertRequiredTranscriptAdmission(params.admission, params.eventKind);
   const opts: CommittedTranscriptMessageOptions = {
     localId: params.localId,
@@ -404,14 +438,16 @@ export async function commitRequiredRuntimeTranscriptMessage(params: Readonly<{
         params.eventKind,
       );
     }
+    return result;
   } catch (error) {
     if (error instanceof RuntimeTranscriptRequiredAdmissionError) throw error;
     if (error instanceof CommittedTranscriptAdmissionExpiredError) {
-      throw new RuntimeTranscriptRequiredAdmissionError('admission_expired', params.eventKind);
+      throw new RuntimeTranscriptRequiredAdmissionError('admission_expired', params.eventKind, { cause: error });
     }
     throw new RuntimeTranscriptRequiredAdmissionError(
       'durable_enqueue_failed',
       params.eventKind,
+      { cause: error },
     );
   }
 }
@@ -450,15 +486,15 @@ async function commitRequiredRuntimeTranscriptUserText(params: Readonly<{
   } catch (error) {
     if (error instanceof RuntimeTranscriptRequiredAdmissionError) throw error;
     if (error instanceof CommittedTranscriptAdmissionExpiredError) {
-      throw new RuntimeTranscriptRequiredAdmissionError('admission_expired', params.eventKind);
+      throw new RuntimeTranscriptRequiredAdmissionError('admission_expired', params.eventKind, { cause: error });
     }
-    throw new RuntimeTranscriptRequiredAdmissionError('durable_enqueue_failed', params.eventKind);
+    throw new RuntimeTranscriptRequiredAdmissionError('durable_enqueue_failed', params.eventKind, { cause: error });
   }
 }
 
 function assertStreamedTranscriptFlushDurability(
   summaries: readonly StreamedTranscriptFlushSummary[],
-  eventKind: 'tool-call' | 'turn-complete' | 'turn-failed' | 'turn-cancelled',
+  eventKind: 'tool-call' | 'turn-complete' | 'turn-failed' | 'turn-cancelled' | 'transcript-message-committed',
 ): void {
   const failedRequiredSegment = summaries
     .flatMap((summary) => summary.segments)
@@ -488,6 +524,7 @@ async function flushRequiredRuntimeTranscriptSegments(params: Readonly<{
     throw new RuntimeTranscriptRequiredAdmissionError(
       'streamed_finalization_failed',
       params.eventKind,
+      { cause: error },
     );
   }
   assertStreamedTranscriptFlushDurability(summaries, params.eventKind);
@@ -500,6 +537,10 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
   admission?: CommittedTranscriptAdmission;
   normalizedToolTurnChangeTracker?: NormalizedToolTurnChangeTracker;
   toolNormalizationProtocol?: ToolNormalizationProtocol;
+  /** Host-owned yield witness captured before asynchronous transcript projection. */
+  questionWaitTurnId?: string | null;
+  /** The first result snapshot's source timestamp, retained for a late native correction. */
+  toolResultCreatedAtMs?: number;
   event: unknown;
   mcpServerIdentities?: Readonly<Record<string, import('@/mcp/runtime/assignMcpWireNames').McpServerIdentity>>;
   skillDelivery?: AgentSessionSkillDelivery;
@@ -532,8 +573,9 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
     });
     if (!bindings.length) return { projected: false, reason: 'unsupported_event' };
     const evidenceId = JSON.stringify([event.sessionId, event.turnId, event.sequence]);
-    const usage = UsageMcpBindingUsageSchema.safeParse({ v: 1, evidenceId, sessionId: event.sessionId,
+    const usage = UsageMcpBindingUsageSchema.safeParse({ v: 2, evidenceId, sessionId: event.sessionId,
       turnId: event.turnId, observedAtMs: event.window.endMs, window: event.window,
+      ...(event.queuedTurnCount === undefined ? {} : { queuedTurnCount: event.queuedTurnCount }),
       coverage: bindings.length === event.servers.length ? event.coverage : 'partial', bindings });
     if (!usage.success) return { projected: false, reason: 'unsupported_event' };
     await commitRequiredRuntimeTranscriptMessage({ session: params.session, provider: params.provider,
@@ -641,6 +683,7 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
       return { projected: false, reason: 'unsupported_event' };
     }
     const localId = buildRuntimeToolLocalId(event, 'tool-result');
+    const createdAt = params.toolResultCreatedAtMs ?? event.emittedAtMs;
     await commitRequiredRuntimeTranscriptMessage({
       session: params.session,
       provider: params.provider,
@@ -654,6 +697,8 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
         ...(event.sidechainId ? { sidechainId: event.sidechainId } : {}),
       },
       meta: buildRuntimeToolMeta(event, 'tool-result', false),
+      createdAt,
+      updatedAt: Math.max(createdAt, event.emittedAtMs),
       provenance: { kind: 'non_dependent', source: event.sidechainId ? 'sidechain' : 'external' },
       eventKind: event.kind,
       ...(params.admission === undefined ? {} : { admission: params.admission }),
@@ -734,8 +779,9 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
     // observation. Session-owned Runs pass through the existing run-scoped
     // transcript target, which adds their exact sidechain and rechecks current
     // controller custody before this write can reach the parent Session.
-    if (params.provider && params.session.requiresDurableTurnCompletionMarker === true) {
-      await commitRequiredRuntimeTranscriptMessage({
+    if (params.provider && params.session.requiresDurableTurnCompletionMarker === true
+      && params.questionWaitTurnId !== event.turnId) {
+      const completion = await commitRequiredRuntimeTranscriptMessage({
         session: params.session,
         provider: params.provider,
         body: { type: 'task_complete', id: event.turnId },
@@ -751,6 +797,12 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
         eventKind: event.kind,
         ...(params.admission === undefined ? {} : { admission: params.admission }),
       });
+      return { projected: true, kind: event.kind, terminalSourceMessage: {
+        localId: `${event.turnId}:task_complete`,
+        ...(completion.committedSequence === undefined ? {} : { committedSequence: completion.committedSequence }),
+        ...(completion.personalFollow ? { personalFollow: completion.personalFollow } : {}),
+        ...(completion.whenCommitted ? { whenCommitted: completion.whenCommitted } : {}),
+      } };
     }
     return { projected: true, kind: event.kind };
   }
@@ -808,9 +860,9 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
     }
     await flushRequiredRuntimeTranscriptSegments({
       bridge: params.runtimeMessageDeltaBridge,
-      reason: 'abort',
+      reason: params.questionWaitTurnId === event.turnId ? 'turn-end' : 'abort',
       eventKind: event.kind,
-      interruptedReason: 'turn-cancelled',
+      ...(params.questionWaitTurnId === event.turnId ? {} : { interruptedReason: 'turn-cancelled' }),
     });
     const normalizedTurnChangeSet = params.normalizedToolTurnChangeTracker?.completeTurn({
       sessionId: params.session.sessionId,
@@ -828,6 +880,9 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
         eventKind: event.kind,
         ...(params.admission === undefined ? {} : { admission: params.admission }),
       });
+    }
+    if (params.questionWaitTurnId === event.turnId) {
+      return { projected: true, kind: event.kind };
     }
     const markerId = event.agentTurnId ?? event.turnId;
     await commitRequiredRuntimeTranscriptMessage({
@@ -868,19 +923,72 @@ export async function projectRuntimeTranscriptEvent(params: Readonly<{
   }
 
   const observation = resolveCommittedTranscriptObservation(event);
-  await commitRequiredRuntimeTranscriptMessage({
-    session: params.session,
-    provider: params.provider,
-    body: event.role === 'reasoning'
-      ? { type: 'thinking', text: event.text, ...(event.sidechainId ? { sidechainId: event.sidechainId } : {}) }
-      : { type: 'message', message: event.text, ...(event.sidechainId ? { sidechainId: event.sidechainId } : {}) },
-    localId: event.messageId,
-    ...observation,
-    eventKind: event.kind,
-    ...(params.admission === undefined ? {} : { admission: params.admission }),
-  });
-  if (event.role !== 'user') {
-    params.runtimeMessageDeltaBridge?.discardStream(buildRuntimeMessageStreamArgs(event, event.role));
+  assertRequiredTranscriptAdmission(params.admission, event.kind);
+  const committedLocalIds = getSessionCommittedTranscriptLocalIds(params.session);
+  let pending = pendingTranscriptCommits.get(params.session);
+  const incumbent = pending?.get(event.messageId);
+  if (incumbent) {
+    const result = await incumbent;
+    assertRequiredTranscriptAdmission(params.admission, event.kind);
+    if (params.admission?.requireDelivery && !result.delivered) {
+      throw new RuntimeTranscriptRequiredAdmissionError('delivery_not_confirmed', event.kind);
+    }
+    return { projected: true, kind: event.kind };
   }
-  return { projected: true, kind: event.kind };
+  if (committedLocalIds.has(event.messageId)) return { projected: true, kind: event.kind };
+  if (!pending) {
+    pending = new Map();
+    pendingTranscriptCommits.set(params.session, pending);
+  }
+  const provider = params.provider;
+  const channel = event.role === 'reasoning' ? 'reasoning' : 'assistant';
+  const commit = async (): Promise<TranscriptMessageCommitResult> => {
+    if (isForegroundTurnRuntimeTranscriptEvent(event) && params.runtimeMessageDeltaBridge) {
+      assertRequiredTranscriptAdmission(params.admission, event.kind);
+      const summary = await params.runtimeMessageDeltaBridge.finalizeUnnamedSegment({
+        ...buildRuntimeMessageStreamArgs(event, channel, null),
+        channel,
+        text: event.text,
+        sourceMessageId: event.messageId,
+        namedStreamKey: buildRuntimeMessageStreamArgs(event, channel).streamKey,
+        ...(params.admission ? { admission: params.admission } : {}),
+      });
+      assertRequiredTranscriptAdmission(params.admission, event.kind);
+      if (summary) {
+        assertStreamedTranscriptFlushDurability([summary], event.kind);
+        committedLocalIds.add(event.messageId);
+        return { persisted: true, delivered: summary.segments.every(segment => !segment.sawText || segment.didDeliver === true) };
+      }
+    }
+    const result = await commitRequiredRuntimeTranscriptMessage({
+      session: params.session,
+      provider,
+      body: event.role === 'reasoning'
+        ? { type: 'thinking', text: event.text, ...(event.sidechainId ? { sidechainId: event.sidechainId } : {}) }
+        : { type: 'message', message: event.text, ...(event.sidechainId ? { sidechainId: event.sidechainId } : {}) },
+      localId: event.messageId,
+      meta: {
+        source: 'runtime',
+        runtimeEventKind: event.kind,
+        ...(event.turnId ? { runtimeTurnId: event.turnId } : {}),
+      },
+      ...observation,
+      eventKind: event.kind,
+      ...(params.admission === undefined ? {} : { admission: params.admission }),
+    });
+    committedLocalIds.add(event.messageId);
+    if (event.role !== 'user') {
+      params.runtimeMessageDeltaBridge?.discardStream(buildRuntimeMessageStreamArgs(event, event.role));
+    }
+    return result;
+  };
+  const publication = commit();
+  pending.set(event.messageId, publication);
+  try {
+    await publication;
+    return { projected: true, kind: event.kind };
+  } finally {
+    pending.delete(event.messageId);
+    if (pending.size === 0) pendingTranscriptCommits.delete(params.session);
+  }
 }

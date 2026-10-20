@@ -9,7 +9,7 @@ import type { TeamDirectoryPeoplePageV1 } from '@happier-dev/protocol/teams';
 import type { ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import type { TeamAddress } from '@/sync/domains/teams/teamAddress';
-import type { HomeDomainFailure } from '@/sync/api/home/homeServerActionTransport';
+import type { HomeDomainFailure } from '@/sync/ops/teams/teamActionClient';
 import { t } from '@/text';
 
 import { teamMemberDetailPath } from '../teamsRoutes';

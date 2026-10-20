@@ -29,6 +29,7 @@ export * from './workflowRunAccountEncryptionV1.js';
 export * from './workflowSessionContextV1.js';
 export * from './composeWorkflowRunWorkerUpdateV1.js';
 export * from './actionsV1.js';
+export * from './workflowStartPreparationV1.js';
 export { sameStrictJsonValue } from '../json/strictJsonValue.js';
 export * from './triggers/workflowTriggerActionsV1.js';
 export {

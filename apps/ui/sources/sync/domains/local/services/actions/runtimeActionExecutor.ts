@@ -1,5 +1,5 @@
 import { createUnavailableRuntimeActionExecutor, resolveRuntimeActionExecutionFamily } from '@happier-dev/protocol/actions/executor/dispatch';
-import { DaemonLocalServicePreviewOpenOrCreateRequestV1Schema, DaemonLocalServicePreviewRevokeRequestV1Schema, type LocalServicePreviewSnapshotV1 } from '@happier-dev/protocol/local/services/preview/v1';
+import { DaemonLocalServicePreviewOpenOrCreateRequestV1Schema, DaemonLocalServicePreviewOpenOrCreateResponseV1Schema, DaemonLocalServicePreviewRevokeRequestV1Schema, type LocalServicePreviewSnapshotV1 } from '@happier-dev/protocol/local/services/preview/v1';
 import { DaemonLocalServicePublicPreviewCopyUrlRequestV1Schema, DaemonLocalServicePublicPreviewCreateRequestV1Schema, DaemonLocalServicePublicPreviewRevokeRequestV1Schema, DaemonLocalServicePublicPreviewStatusRequestV1Schema, redactLocalServicePublicPreviewCreateResponseForAgentEgress, redactLocalServicePublicPreviewRevokeResponseForAgentEgress, redactLocalServicePublicPreviewSnapshotForAgentEgress, type LocalServicePublicPreviewSnapshotV1 } from '@happier-dev/protocol/local/services/public/v1';
 import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { LocalServiceActionRequestV1Schema } from '@happier-dev/protocol/local/services/actions/v1';
@@ -7,7 +7,7 @@ import { DaemonLocalServiceLauncherLeafRequestV1Schema, DaemonLocalServiceLaunch
 import { requiresAgentEgressRedaction } from '@happier-dev/protocol/actions/actionApprovalPolicy';
 import { resolveLocalServiceActionKindForRuntimeActionId } from '@happier-dev/protocol/actions/specs/localServices';
 import type { RuntimeActionExecute, RuntimeActionExecuteArgs } from '@happier-dev/protocol/actions/executor/types';
-import { ProjectServiceRelocateInputV1Schema } from '@happier-dev/protocol/workspaces/projectServiceRelocationV1';
+import { ProjectServiceRelocateInputV1Schema, ProjectServiceRelocateResultV1Schema } from '@happier-dev/protocol/workspaces/projectServiceRelocationV1';
 import type { WorkspaceRefV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { resolveWorkspaceRefById } from '@/sync/domains/workspaces/workspaceRefs';
@@ -25,7 +25,7 @@ import {
     type LocalServiceInventorySnapshotClientResult,
     type LocalServiceInventorySnapshotRequest,
 } from '../inventory/api';
-import { publishLocalServiceInventorySnapshot } from '../inventory/sharedStore';
+import { invalidateLocalServiceInventoryStore, publishLocalServiceInventorySnapshot } from '../inventory/sharedStore';
 import type { LocalServiceInventorySnapshot } from '../inventory/store';
 import {
     fetchLocalServiceLauncherSnapshot,
@@ -42,7 +42,7 @@ import type {
     LocalServiceLauncherStartClientInput,
     LocalServiceLauncherStartClientResult,
 } from '../launch/types';
-import { publishLocalServiceLauncherSnapshot } from '../launch/sharedStore';
+import { publishLocalServiceLauncherSnapshot, recoverLocalServiceLauncherStores } from '../launch/sharedStore';
 import type { LocalServiceLauncherSnapshot } from '../launch/types';
 import {
     clearLocalServiceLauncherHistoryViaMachineRpc,
@@ -79,6 +79,7 @@ import type {
 import { publishLocalServicePublicPreviewSnapshot } from '../publicPreview/sharedStore';
 
 export type CreateLocalServicesRuntimeActionExecutorInput = Readonly<{
+    executeOnMachine?: RuntimeActionExecute;
     resolveMachineId?: (args: RuntimeActionExecuteArgs) => string | null | undefined;
     readWorkspaceRefs?: () => Readonly<{ serverId: string; accountId: string; refs: readonly WorkspaceRefV1[] }> | null;
     request?: LocalServiceInventorySnapshotRequest
@@ -392,7 +393,22 @@ export function createLocalServicesRuntimeActionExecutor(
             if (source.kind !== 'resolved') {
                 return refuse(source.kind === 'missing' ? 'workspace_ref_not_accepted' : `workspace_ref_${source.kind}`);
             }
-            return { status: 'unsupported' as const, reasonCode: 'service_relocation_unavailable' };
+            const target = args.context.externalActionTarget;
+            if (target && (target.kind !== 'machine' || target.machineId !== source.ref.machineId)) {
+                return refuse('target_unavailable');
+            }
+            if (!input.executeOnMachine) return disabledResult('local_services_runtime_action_unbacked');
+            const result = await input.executeOnMachine({ ...args, input: request, context: {
+                ...args.context,
+                externalActionTarget: target ?? { kind: 'machine', machineId: source.ref.machineId },
+            } });
+            const outcome = ProjectServiceRelocateResultV1Schema.safeParse(result);
+            if (outcome.success && ['accepted', 'moved', 'unchanged'].includes(outcome.data.status)) {
+                for (const machineId of new Set([source.ref.machineId, request.currentTarget.machineId, request.selectedTarget.machineId])) {
+                    invalidateLocalServiceInventoryStore({ machineId, serverId: request.workspace.serverId });
+                }
+            }
+            return result;
         }
 
         const machineId = resolveMachineId({
@@ -411,10 +427,12 @@ export function createLocalServicesRuntimeActionExecutor(
                 serverId,
                 sessionId,
                 refresh: args.actionId === 'localServices.inventory.refresh',
+                signal: args.context.signal,
                 request: input.request,
             });
             if (!result.ok) return routeFailureResult('inventory', result.reason, result.reasonCode);
             onInventorySnapshot({ machineId, serverId, sessionId, snapshot: result.snapshot });
+            if (args.actionId === 'localServices.inventory.refresh') recoverLocalServiceLauncherStores({ machineId, serverId });
             return result.snapshot;
         }
 
@@ -429,6 +447,7 @@ export function createLocalServicesRuntimeActionExecutor(
             const result = await fetchLauncherSnapshot({
                 ...request.data,
                 serverId,
+                signal: args.context.signal,
                 request: input.request,
             });
             if (!result.ok) return routeFailureResult('launcher', result.reason);
@@ -458,6 +477,7 @@ export function createLocalServicesRuntimeActionExecutor(
             onLauncherSnapshot({ machineId, serverId, sessionId,
                 ...(request.workspace ? { scope: 'workspace' as const, workspaceRoot: request.workspace.rootPath } : {}),
                 snapshot: result.response.snapshot });
+            if (result.response.status === 'succeeded') invalidateLocalServiceInventoryStore({ machineId, serverId });
             return result.response;
         }
 
@@ -465,7 +485,7 @@ export function createLocalServicesRuntimeActionExecutor(
             if (!machineId) return disabledResult('local_services_machine_unavailable');
             const targetId = readTargetIdFromInput(parsed.input);
             if (!targetId) return invalidParametersResult;
-            const result = await openLauncherPreview({ machineId, targetId, serverId, sessionId });
+            const result = await openLauncherPreview({ machineId, targetId, serverId, sessionId, signal: args.context.signal });
             return result.ok ? result.response : routeFailureResult('launcher', result.reason);
         }
 
@@ -473,7 +493,7 @@ export function createLocalServicesRuntimeActionExecutor(
             if (!machineId) return disabledResult('local_services_machine_unavailable');
             const targetId = readTargetIdFromInput(parsed.input);
             if (!targetId) return invalidParametersResult;
-            const result = await registerLauncherPreview({ machineId, targetId, serverId, sessionId });
+            const result = await registerLauncherPreview({ machineId, targetId, serverId, sessionId, signal: args.context.signal });
             return result.ok ? result.response : routeFailureResult('launcher', result.reason);
         }
 
@@ -502,6 +522,7 @@ export function createLocalServicesRuntimeActionExecutor(
             const result = await fetchPreviewSnapshot({
                 machineId,
                 serverId,
+                signal: args.context.signal,
             });
             if (!result.ok) return routeFailureResult('preview', result.reason);
             // Converge the action read into the shared store so the status truth and the open pane
@@ -518,7 +539,7 @@ export function createLocalServicesRuntimeActionExecutor(
                 ...readPreviewTargetReferences(parsed.input),
             });
             if (!request.success) return invalidParametersResult;
-            const result = await openOrCreatePreview({ request: request.data, serverId });
+            const result = await openOrCreatePreview({ request: request.data, serverId, signal: args.context.signal });
             if (!result.ok) return previewLifecycleFailureResult(result.reason);
             publishLifecycleSnapshot(onPreviewSnapshot, machineId, serverId, result.response.snapshot);
             return result.response;
@@ -530,7 +551,7 @@ export function createLocalServicesRuntimeActionExecutor(
             if (!previewId) return invalidParametersResult;
             const request = DaemonLocalServicePreviewRevokeRequestV1Schema.safeParse({ machineId, previewId });
             if (!request.success) return invalidParametersResult;
-            const result = await revokePreview({ request: request.data, serverId });
+            const result = await revokePreview({ request: request.data, serverId, signal: args.context.signal });
             if (!result.ok) return previewLifecycleFailureResult(result.reason);
             publishLifecycleSnapshot(onPreviewSnapshot, machineId, serverId, result.response.snapshot);
             return result.response;
@@ -549,6 +570,7 @@ export function createLocalServicesRuntimeActionExecutor(
             const result = await fetchPublicPreviewStatus({
                 request: request.data,
                 serverId,
+                signal: args.context.signal,
             });
             if (!result.ok) return routeFailureResult('public_preview', result.reason);
             publishPublicPreviewSnapshot(onPublicPreviewSnapshot, {
@@ -576,6 +598,7 @@ export function createLocalServicesRuntimeActionExecutor(
             const result = await createPublicPreviewExposure({
                 request: request.data,
                 serverId,
+                signal: args.context.signal,
             });
             if (!result.ok) return routeFailureResult('public_preview', result.reason);
             publishPublicPreviewSnapshot(onPublicPreviewSnapshot, {
@@ -602,6 +625,7 @@ export function createLocalServicesRuntimeActionExecutor(
             const result = await revokePublicPreviewExposure({
                 request: request.data,
                 serverId,
+                signal: args.context.signal,
             });
             if (!result.ok) return routeFailureResult('public_preview', result.reason);
             publishPublicPreviewSnapshot(onPublicPreviewSnapshot, {
@@ -629,6 +653,7 @@ export function createLocalServicesRuntimeActionExecutor(
             const result = await copyPublicPreviewUrl({
                 request: request.data,
                 serverId,
+                signal: args.context.signal,
             });
             return result.ok ? result.response : routeFailureResult('public_preview', result.reason);
         }
@@ -641,11 +666,32 @@ export function createLocalServicesRuntimeActionExecutor(
             ) {
                 return invalidParametersResult;
             }
+            if (args.actionId === 'localServices.actions.openPreview') {
+                const target = args.context.externalActionTarget;
+                if (target && (target.kind !== 'machine' || target.machineId !== request.data.target.machineId)) {
+                    return invalidParametersResult;
+                }
+                if (!input.executeOnMachine) return routeFailureResult('action', 'unavailable');
+                // Preview Open shares the lifecycle DTO, rather than the legacy audited-control envelope.
+                const result = await input.executeOnMachine({ ...args, input: request.data, context: {
+                    ...args.context, externalActionTarget: target ?? { kind: 'machine', machineId: request.data.target.machineId },
+                } });
+                const response = DaemonLocalServicePreviewOpenOrCreateResponseV1Schema.safeParse(result);
+                if (response.success) publishLifecycleSnapshot(onPreviewSnapshot, request.data.target.machineId, serverId, response.data.snapshot);
+                return result;
+            }
             const result = await executeLocalServiceAction({
                 request: request.data,
                 serverId,
+                signal: args.context.signal,
                 executeRequest: input.request,
             });
+            // Mutation settlement is shared by every UI entry point. A successful write
+            // also recovers a retired inventory watch; derived launcher projections follow it.
+            if (result.ok && result.result.status === 'succeeded'
+                && request.data.action !== 'copy_url' && request.data.action !== 'open_preview') {
+                invalidateLocalServiceInventoryStore({ machineId: request.data.target.machineId, serverId });
+            }
             return result.ok ? result.result : routeFailureResult('action', result.reason);
         }
 

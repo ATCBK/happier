@@ -1,9 +1,9 @@
 import * as React from 'react';
-import { MMKV } from 'react-native-mmkv';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderScreen } from '@/dev/testkit';
+import { seedPersistedHomeProfilesForTests } from '@/dev/testkit/fixtures/persistedHomeProfiles';
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -60,7 +60,6 @@ import { readLocalDaemonStatusData } from '@/components/settings/machines/localC
 import { createSystemTaskRunner } from '@/components/systemTasks/createSystemTaskRunner';
 import type { SystemTaskRunner } from '@/components/systemTasks/types';
 import { profileDefaults } from '@/sync/domains/profiles/profile';
-import { resetServerProfilesRuntimeForTests } from '@/sync/domains/server/serverProfiles';
 import { getStorage } from '@/sync/domains/state/storageStore';
 
 import { DesktopQuitHandoffRuntime } from './DesktopQuitHandoffRuntime';
@@ -145,13 +144,10 @@ const baseStatus = {
 const initialStorage = getStorage().getState();
 
 describe('DesktopQuitHandoffRuntime (R16 a)', () => {
-    beforeEach(() => {
-        new MMKV().set('server-state-v1', JSON.stringify({
-            activeServerId: 'home',
-            activeServerIdIsExplicit: true,
-            servers: { home: { id: 'home', name: 'home', serverUrl: 'https://home.example.test', createdAt: 1, updatedAt: 1, lastUsedAt: 1 } },
-        }));
-        resetServerProfilesRuntimeForTests();
+    beforeEach(async () => {
+        await seedPersistedHomeProfilesForTests({ activeServerId: 'home', profiles: [
+            { id: 'home', name: 'home', serverUrl: 'https://home.example.test', createdAt: 1, updatedAt: 1, lastUsedAt: 1 },
+        ] });
         tasks.runner = freshRunner();
     });
 

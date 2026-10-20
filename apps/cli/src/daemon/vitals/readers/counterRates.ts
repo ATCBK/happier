@@ -3,24 +3,40 @@ export interface CounterReading {
     counters: Readonly<Record<string, number>>;
 }
 
-/** One cadence-relative baseline rule for CPU, swap, events and network. */
+export function minimumCounterRateSpanMs(intervalMs: number): number {
+    return intervalMs / 2;
+}
+
+// Two intervals of the always-on minute cadence (TA-20-6), independent of demand.
+const MAX_COUNTER_RATE_SPAN_MS = 120_000;
+
+/** Honest counter deltas over the newest eligible real observation's actual span. */
 export function createCounterRateReader() {
-    let previous: CounterReading | undefined;
+    const readings: CounterReading[] = [];
     return (current: CounterReading, intervalMs: number): { elapsedMs: number; deltas: Record<string, number> } | null => {
-        const baseline = previous;
-        const elapsedMs = baseline ? current.monotonicMs - baseline.monotonicMs : 0;
-        if (baseline && elapsedMs >= 0 && elapsedMs < intervalMs / 2) return null;
-        previous = current;
-        if (!baseline || elapsedMs <= 0 || elapsedMs > intervalMs * 2) return null;
+        const previous = readings.at(-1);
         const keys = Object.keys(current.counters);
-        if (keys.length !== Object.keys(baseline.counters).length) return null;
-        const deltas: Record<string, number> = {};
-        for (const key of keys) {
-            const value = current.counters[key];
-            const old = baseline.counters[key];
-            if (old === undefined || !Number.isFinite(value) || !Number.isFinite(old) || value < old) return null;
-            deltas[key] = value - old;
+        // Check continuity against the latest observation, including short reads:
+        // choosing an older baseline must never hide a reset or clock regression.
+        if (previous && (current.monotonicMs < previous.monotonicMs
+            || keys.length !== Object.keys(previous.counters).length
+            || keys.some(key => !Number.isFinite(current.counters[key]) || !Number.isFinite(previous.counters[key])
+                || current.counters[key] < previous.counters[key]))) {
+            readings.length = 0;
         }
-        return { elapsedMs, deltas };
+        while (readings.length && current.monotonicMs - readings[0].monotonicMs > MAX_COUNTER_RATE_SPAN_MS) readings.shift();
+        let baseline: CounterReading | undefined;
+        for (let index = readings.length - 1; index >= 0; index -= 1) {
+            const reading = readings[index];
+            if (current.monotonicMs - reading.monotonicMs >= minimumCounterRateSpanMs(intervalMs)) {
+                baseline = reading;
+                break;
+            }
+        }
+        readings.push(current);
+        if (!baseline) return null;
+        const deltas: Record<string, number> = {};
+        for (const key of keys) deltas[key] = current.counters[key] - baseline.counters[key];
+        return { elapsedMs: current.monotonicMs - baseline.monotonicMs, deltas };
     };
 }

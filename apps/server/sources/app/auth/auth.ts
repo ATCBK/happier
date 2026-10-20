@@ -5,7 +5,6 @@ import { AUTH_TOKEN_AUTHENTICATION_EVIDENCE_MAX_ITEMS, AuthTokenProvenanceSchema
 import { PasswordCredentialMutationDigestV1Schema } from '@happier-dev/protocol/auth/passwordMutationChallenge';
 import { parseAccountApiTokenBearerV1, AccountApiTokenCreateEncryptionV1Schema, AccountApiTokenEncryptionAccessV1Schema, type AccountApiTokenCreateEncryptionV1, type AccountApiTokenEncryptionAccessV1, type AccountApiTokenEncryptionAccessResponseV1, type ParsedAccountApiTokenBearerV1 } from '@happier-dev/protocol/auth/accountApiTokens';
 import { ApiTokenGrantV1Schema, StoredApiTokenGrantV1Schema, API_TOKEN_FULL_GRANT_V1, evaluateApiTokenGrantV1, isApiTokenGrantWithinV1, type ApiTokenGrantV1 } from '@happier-dev/protocol/auth/apiTokenGrant';
-import { ManagedMachineActionIdV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { EmbedConfigV1Schema, StoredEmbedConfigV1Schema, type EmbedConfigV1 } from '@happier-dev/protocol/embed';
 import { PluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugins/contribution-identity';
 import { type AccountStatusV1 } from '@happier-dev/protocol/home/governance';
@@ -37,6 +36,7 @@ import { verifyCurrentMaterializedRunnerPrincipal } from "@/app/ephemeralRunner/
 import { effectiveCredentialAuthority } from "./effectiveCredentialAuthority";
 import { hasCurrentSessionScopedMachineAccessInTx, hasCurrentSessionActionRpcSourceBinding } from "@/app/api/socket/sessionScopedBinding";
 import { PROJECT_FINITE_ACTION_RPC_METHODS_V1 } from '@happier-dev/protocol/actions/projectActionFamily';
+import { DECISION_ACTION_IDS } from '@happier-dev/protocol/actions/decisionAuthority';
 
 interface TokenGeneratorLike {
     new: (payload: Readonly<{
@@ -557,7 +557,8 @@ class AuthModule {
             accountEncryptionMode: accountMode.encryptionMode,
         });
         if ('authentication' in supplied) {
-            const { isOriginalTerminalExecutionAction, hasCurrentOriginalSessionActionTargetInTx } = await import('./externalActionExecutionAuthorization');
+            const { isOriginalTerminalExecutionAction, hasCurrentOriginalSessionActionTargetInTx,
+                verifyCurrentExternalActionPrincipalInTx } = await import('./externalActionExecutionAuthorization');
             if (supplied.authentication.kind === 'terminal'
                 && !isOriginalTerminalExecutionAction(supplied.actionId, supplied) && !supplied.workflowActionOrigin) {
                 throw new ApiTokenOperationError('invalid_token');
@@ -586,12 +587,16 @@ class AuthModule {
                 }
             }
             if (supplied.workflowActionOrigin) {
-                const { isAutomationOriginRunPublisherTx } = await import('@/app/automations/automationTriggerCauseChain');
-                if (!ManagedMachineActionIdV1Schema.safeParse(supplied.actionId).success
-                    || !await isAutomationOriginRunPublisherTx(db, { accountId: supplied.accountId, machineId: supplied.machineId,
-                        runId: supplied.workflowActionOrigin.runId, requireCurrentScopeEnd: true })) {
+                const { hasCurrentExternalActionWorkflowOriginInTx } = await import('./externalActionExecutionAuthorization');
+                if (!await hasCurrentExternalActionWorkflowOriginInTx(db, supplied)) {
                     throw new ApiTokenOperationError('invalid_token');
                 }
+            }
+            // HTTP issuance and direct daemon dispatch share this mint. Reuse
+            // its current principal reader before issuing any decision root.
+            if ((DECISION_ACTION_IDS as readonly string[]).includes(supplied.actionId)
+                && !await verifyCurrentExternalActionPrincipalInTx(db, supplied)) {
+                throw new ApiTokenOperationError('credential_scope_denied');
             }
             const token = await this.externalActionExecutionAuthorizationTokens.generator.new({
                 user: supplied.accountId,
@@ -612,6 +617,7 @@ class AuthModule {
         const admission = evaluateApiTokenGrantV1({ grant: supplied.grant,
             actionId: qualifiedAction ? "action.invoke" : readExternalActionCredentialActionId(supplied), contributedQualifiedId,
             contributedActionAdmission: 'pre_open',
+            automationAdmission: 'pre_open',
             target: supplied.target, targetMachineId: supplied.machineId,
             automationId,
             ...(supplied.actionId === "session.spawn_new" && !supplied.handoffContinuation && context.input !== undefined ? { spawnInput: context.input } : {}),
@@ -809,8 +815,15 @@ class AuthModule {
                 resolvedSessionMachines.set(sessionId, await child.resolveSessionMachine(sessionId));
             }
         }
+        // Root mints are Account-local: the Account fence precedes every admission
+        // read, so they use inTx's ReadCommitted default. Child admission additionally
+        // composes parent, Session/Machine access, creator-child, and count predicates
+        // that are not all protected by that fence or CAS, so it remains Serializable.
+        const transactionOptions = child
+            ? { isolationLevel: "Serializable" as const }
+            : undefined;
         const row = await inTx(async (tx) => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, accountId);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, accountId, "exclusive");
             const admission = await tx.account.findUniqueOrThrow({ where: { id: accountId }, select: { status: true } });
             assertAccountActive(admission.status);
             if (child) {
@@ -895,7 +908,7 @@ class AuthModule {
                     authenticationEvidence: true,
                 },
             });
-        }, { isolationLevel: "Serializable" /* Child-token admission composes parent grants with current Session and Machine access. */ }).catch((error: unknown) => {
+        }, transactionOptions).catch((error: unknown) => {
             if (isPrismaErrorCode(error, "P2002")) throw new ApiTokenOperationError("api_token_id_conflict");
             throw error;
         });
@@ -954,7 +967,7 @@ class AuthModule {
         accountId: string; tokenId: string; label?: string; grant?: ApiTokenGrantV1; embedConfig?: EmbedConfigV1 | null;
     }>): Promise<Readonly<{ apiToken: ApiTokenSummary; revokedTokenIds: readonly string[]; grantChanged: boolean }>> {
         const result = await inTx(async (tx) => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId, "exclusive");
             const row = await tx.accountApiToken.findFirst({ where: { id: params.tokenId, accountId: params.accountId, parentTokenId: null },
                 select: { accessGrant: true } });
             if (!row) throw new ApiTokenOperationError("invalid_token");
@@ -999,7 +1012,7 @@ class AuthModule {
     /** Revocation is deletion: the next verification cannot find this selector. */
     async revokeApiToken(params: Readonly<{ accountId: string; tokenId: string; parentTokenId?: string }>): Promise<ApiTokenRevocation> {
         return inTx(async (tx) => {
-            await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId);
+            await acquireAccountSessionOwnerMetadataFenceInTx(tx, params.accountId, "exclusive");
             const where = { id: params.tokenId, accountId: params.accountId.trim(),
                 ...(params.parentTokenId !== undefined ? { parentTokenId: params.parentTokenId } : {}) };
             const row = await tx.accountApiToken.findFirst({ where, select: { id: true, children: { select: { id: true } } } });
@@ -1021,7 +1034,7 @@ class AuthModule {
 
     /** Deletes complete PAT rows in the caller's Account transition. */
     async revokeAllApiTokensInTx(tx: Tx, accountId: string): Promise<ApiTokenRevokeAllResult> {
-        await acquireAccountSessionOwnerMetadataFenceInTx(tx, accountId);
+        await acquireAccountSessionOwnerMetadataFenceInTx(tx, accountId, "exclusive");
         const rows = await tx.accountApiToken.findMany({ where: { accountId: accountId.trim() }, select: { id: true } });
         const result = await tx.accountApiToken.deleteMany({
             where: { accountId: accountId.trim() },
@@ -1274,6 +1287,7 @@ class AuthModule {
     }
 
     async signOutEverywhereInTx(tx: Tx, userId: string): Promise<number> {
+        await acquireAccountSessionOwnerMetadataFenceInTx(tx, userId, "exclusive");
         // This owner invalidates signed sessions only. API tokens are explicit
         // long-lived automation credentials and retain their separate
         // revoke-one/revoke-all lifecycle.

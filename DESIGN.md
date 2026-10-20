@@ -360,25 +360,38 @@ Art-directed imagery and narrative surfaces may need locally owned visual tokens
   frost and a fixed dark/light backdrop treatment, not a near-opaque coat or content-reactive scrim;
   native uses adaptive Liquid Glass or the existing tinted blur fallback. Solid and Reduce
   Transparency remove translucency. Custom per-group opacity and blur remain exactly authored.
-  A **Tint** choice (Subtle, Medium, Strong; Subtle by default) sets how much of its own paint
+  A **Tint** slider (integer 0–100, default 12) sets how much of its own paint
   named-preset Elements and menus carry. At every tint, glass over the plain page lands exactly on
   the surface's warm solid paint (within one level); the tint only sets how thin the coat carrying
-  that paint is. Subtle is the thinnest coat that carries it without a neutral lift (7% Elements, 11%
-  menus), so over a picture it is close to monocode's blur with a near-invisible tint; Medium and
-  Strong are progressively frosted. The soft finish and rim stay on glass as on solid surfaces. Shell planes keep each preset's own coats, custom
+  that paint is. The anchors at 0/50/100 are the former Subtle/Medium/Strong values; every coat and
+  compression value interpolates linearly between neighbouring anchors at the protocol's
+  `glassTint.ts` owner. At 12, light Elements over a picture use k ≈ .863 (about a 14% wash).
+  At 0, glass is monocode's blur: a 1% hair of paint, thickened only as far as the fixed
+  point needs (about 6% for dark's warm card and menu paint), never a neutral lift, and k = 1, so over
+  a picture the inside stays within ±5% of the blurred backdrop's luminance in light and moves only by
+  the surface's own paint step in dark (owner, 2026-10-15). Legibility over very bright pictures
+  belongs to Medium and Strong and the stronger faint ink on backed glass. Medium and Strong are
+  progressively frosted. The soft finish and rim stay on glass as on solid surfaces. Shell planes keep each preset's own coats, custom
   tables apply exactly as set, and native renderers (no web backdrop tone, no card blur) keep the
-  Medium coats. Web glass is an affine map of the blurred backdrop X, k·X + c, from a `brightness()`
+  stored coats (the 50 anchor). Web glass is an affine map of the blurred backdrop X, k·X + c, from a `brightness()`
   tone and a coat solved so the plain page lands on the tint's paint, never a grey lift or a hole.
   `contrast()` is never used on dark: it pivots at mid-grey and lifts a dark page into a grey slab.
-  Over an ordinary page Subtle and Medium pass the backdrop through (k = 1); over a picture k drops
-  only as far as primary ink needs 4.5:1 over a bright sky (Subtle .6 Elements and .55 menus, Medium
-  .45, Strong .35).
-  Light hangs its band from white (`invert(1) brightness() invert(1)`), so a white page stays white
-  and the darkest backdrop still carries primary ink. Saturation is kept at 1.05, never reduced
-  (our one deviation from monocode). Centred dialogs (`ModalCardFrame`: alerts, prompts, the command
-  palette) carry the page at a heavy coat behind their blur, as monocode's modals do: 55% at Subtle,
-  70% Medium, 85% Strong, still landing on the floating paint over a plain page; menus and popovers
-  keep the hair. On glass with a picture or the live desktop behind it, faint (secondary) ink takes a
+  Over an ordinary page Subtle and Medium pass the backdrop through (k = 1); over a picture Subtle
+  keeps k = 1 while Medium and Strong drop k only as far as primary ink needs 4.5:1 over a bright sky
+  (Medium .45, Strong .35).
+  Light hangs its band from white (`invert(1) brightness() invert(1)`) and never brightens the
+  backdrop past the page (k ≤ 1 − α), so a white page stays white. Saturation is kept at 1.05, never reduced
+  (our one deviation from monocode). A floating surface declares its role on the material owner
+  (`FloatingSurfaceRole`): **panels** carry the page at a heavy coat behind their blur, as monocode's
+  modals do: 55% at 0, 70% at 50, 85% at 100 (61% at the default 20), still landing on the floating paint over a plain
+  page. Panels are centred dialogs (`ModalCardFrame`: alerts, prompts, the command palette), phone
+  sheets and large anchored panels (`FloatingOverlay role="panel"`: Add widget, About this widget and
+  the other widget flows, Workflow run inputs, Board settings, the workflow examples gallery, the
+  session role panel). **Menus**, tooltips and small popovers keep the hair (owner, 2026-10-16),
+  except over a live picture (a shared screen or browser page): there every floating surface carries
+  Strong's panel coat (85%) at any tint, because arbitrary pixels are content, not atmosphere
+  (recommended exception; owner ruling pending).
+  Custom glass values, Solid and Reduce Transparency apply to both roles unchanged. On glass with a picture or the live desktop behind it, faint (secondary) ink takes a
   stronger step, primary ink at 70%, so it holds about 3:1 over a bright sky; ordinary pages and
   unbacked glass keep the theme's secondary ink.
   Glass identity takes priority over forcing muted ink to meet extreme-backdrop contrast. Accepted limits are secondary ink over saturated
@@ -393,16 +406,19 @@ Art-directed imagery and narrative surfaces may need locally owned visual tokens
 - **One material recipe.** A surface is drawn by its role, not by hand: an ink border, one raised
   edge and a very low elevation (a hair of grounding, about 5% on light) sized by how far it floats.
   The raised edge is one side of the border drawn a breath different — a dark lip along the bottom on
-  light, a light line along the top on dark.
-  The default soft finish adds a quiet vertical ink-alpha overlay over that role's existing fill,
+  light, a light line along the top on dark. The composer has no lip: one even hairline (owner,
+  2026-10-15).
+  The default soft finish is a quiet edge, not a wash: a 32 px ink-alpha band over that role's
+  existing fill, shading the bottom edge on light and lighting the top edge on dark, so the middle of
+  a tall card stays flat. It applies
   whether solid, tinted, blurred or Liquid Glass. Flat keeps the same border and edge without that
   overlay. Appearance selects the finish globally or per role; card-framed widgets follow the card
   role. Nested glass surfaces in the same material group inherit the containing finish rather than
   stacking another coat. Dark surfaces step up in the theme's own warm hue: cards take the authored
   raised surface (`surface.elevated`), floating surfaces one quiet step above it, and the sidebar's
   list sheets the page colour, one quiet step above the sidebar. Fields, rows, chips and ghost buttons stay flat.
-  Dark Soft lifts the card surface's own hue and saturation with a peak alpha of 0.025, tapering by
-  70% of the surface height; light keeps its existing finish. The theme's single editable
+  Dark Soft lifts the card surface's own hue and saturation with a peak alpha of 0.025 at the top
+  edge, fading out over the band; light shades the bottom edge to its ink alpha (0.024) over the band. The theme's single editable
   `effect.surfaceFinish` ink controls colour and strength, with custom values left as authored.
 - **Flat edge in flow; the rim only for what floats.** Controls, rows, cards, grouped sheets and the
   composer use the flat edge, in every theme. Popovers, menus, dialogs, sheets over content, toasts,

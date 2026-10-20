@@ -1,7 +1,10 @@
+// Restore/Sync also uses device record persistence; browser storage is a system boundary.
+import 'fake-indexeddb/auto';
 import { vi } from 'vitest';
 import { loadVitestModuleForNodeRequire } from '@/dev/vitestRnShim';
 import { getVitestNodeBuiltin } from '@/dev/vitestNodeBuiltins';
 import type { AuthCredentials, HomeCredentialWriteRollback } from '@/auth/storage/tokenStorage';
+import type { AccountEncryptionCurrentnessResponse } from '@happier-dev/protocol';
 import { AuthTokenProvenanceSchema } from '@happier-dev/protocol/auth/authToken';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import {
@@ -42,6 +45,8 @@ type HomeSpec = Readonly<{
     /** Actual initial settings document served before Account bootstrap starts. */
     settings?: Readonly<Record<string, unknown>>;
     accountMode?: 'plain' | 'e2ee';
+    /** Current Account wire fact, including mutable Settings revisions during maintenance tests. */
+    encryptionCurrentness?: () => AccountEncryptionCurrentnessResponse;
     credentials?: AuthCredentials;
     currentAccount?: boolean;
 }>;
@@ -146,7 +151,7 @@ export async function serveAccountHomes(params: Readonly<{
     const webLocks = typeof globalThis.navigator?.locks?.request === 'function' ? null : installWebLockManagerMock();
     const { loadSyncSingletonForTests } = await import('./syncSingletonLoader');
     await loadSyncSingletonForTests();
-    const [{ upsertServerProfileOnly, setActiveServer, getActiveServerSnapshot }, { TokenStorage }, { setRuntimeFetch, resetRuntimeFetch },
+    const [{ upsertServerProfileOnly, setActiveServer, getActiveServerSnapshot }, { TokenStorage, areCredentialsEqual }, { setRuntimeFetch, resetRuntimeFetch },
         { restoreConnectionToActiveServer, disconnectActiveServerConnection }, { resolveServerProfileScopeIdForIdentifier, setServerProfileIdentityForUrl }] = await Promise.all([
         import('@/sync/domains/server/serverRuntime'),
         import('@/auth/storage/tokenStorage'),
@@ -171,7 +176,13 @@ export async function serveAccountHomes(params: Readonly<{
     }));
     const specsByHome = new Map(params.homes.map(home => [home.key, home]));
     const homes: Record<string, Readonly<{ id: string; profileId: string; serverUrl: string }>> = {};
-    const credentialWrites: HomeCredentialWriteRollback[] = [];
+    const credentialWrites: Array<Readonly<{
+        write: HomeCredentialWriteRollback;
+        credentials: AuthCredentials;
+        previousCredentials: AuthCredentials | null;
+        profileId: string;
+        scopeId: string;
+    }>> = [];
     const focused = params.homes.at(-1)!;
     const requests: ServedHomeRequest[] = [];
     const httpRequests: ServedHomeRequest[] = [];
@@ -185,9 +196,12 @@ export async function serveAccountHomes(params: Readonly<{
                 ? spec.credentials.token
                 : tokenFor(accountId, spec?.accountId === accountId && spec.currentAccount === true),
         };
-        const rollback = await TokenStorage.setCredentialsForServerUrlWithRollback(home.serverUrl, { serverId: home.id }, credentials);
+        const scopeId = resolveServerProfileScopeIdForIdentifier(home.profileId);
+        const previousCredentials = await TokenStorage.getCredentialsForServerUrl(home.serverUrl,
+            { serverId: scopeId, storageReadFailure: 'surface' });
+        const rollback = await TokenStorage.setCredentialsForServerUrlWithRollback(home.serverUrl, { serverId: scopeId }, credentials);
         if (!rollback) throw new Error(`Served Home credentials could not be stored: ${key}`);
-        credentialWrites.push(rollback);
+        credentialWrites.push({ write: rollback, credentials, previousCredentials, profileId: home.profileId, scopeId });
         accounts.set(key, accountId);
         return credentials;
     }
@@ -211,6 +225,9 @@ export async function serveAccountHomes(params: Readonly<{
         }
         if (target.pathname === '/v1/account/encryption/currentness') {
             const spec = specsByHome.get(home);
+            if (authenticatedAccountId === spec?.accountId && spec.encryptionCurrentness) {
+                return Response.json(spec.encryptionCurrentness());
+            }
             const mode = authenticatedAccountId === spec?.accountId ? spec?.accountMode ?? 'plain' : 'plain';
             if (mode === 'plain') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ version: 0, updatedAt: 0 }));
         }
@@ -236,8 +253,23 @@ export async function serveAccountHomes(params: Readonly<{
         } finally {
             resetRuntimeFetch();
             try {
-                for (const write of credentialWrites.splice(0).reverse()) {
-                    if (!await write.rollback()) throw new Error('Served Home credential rollback failed');
+                for (const { write, credentials, previousCredentials, profileId, scopeId } of credentialWrites.splice(0).reverse()) {
+                    const currentScopeId = resolveServerProfileScopeIdForIdentifier(profileId);
+                    const current = await TokenStorage.getCredentialsForServerUrl(write.serverUrl,
+                        { serverId: currentScopeId, storageReadFailure: 'surface' });
+                    // Logout and Account replacement belong to the exercised flow. Only undo
+                    // installation while this fixture still owns the stored credential material.
+                    if (!areCredentialsEqual(current, credentials)) continue;
+                    // An exercised identity adoption owns the new key layout. Its old
+                    // exact-key receipt cannot undo that transition; restore only the
+                    // fixture's logical material through the guarded canonical writer.
+                    const restored = currentScopeId === scopeId ? await write.rollback()
+                        : previousCredentials
+                            ? await TokenStorage.setCredentialsForServerUrl(write.serverUrl,
+                                { serverId: currentScopeId, expectedCredentials: credentials }, previousCredentials)
+                            : await TokenStorage.removeCredentialsForServerUrl(write.serverUrl,
+                                { serverId: currentScopeId, expectedCredentials: credentials });
+                    if (!restored) throw new Error('Served Home credential rollback failed');
                 }
             } finally {
                 webLocks?.restore();

@@ -94,13 +94,14 @@ export type WorkflowEventCatalogActionResultById = {
                             hostType: 'usageQuery';
                             field?: 'period' | 'session' | undefined;
                         } | {
-                            hostType: 'session' | 'workspace' | 'machine';
+                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                         } | undefined;
                         contextMode?: 'follow' | 'own' | undefined;
                         required?: boolean | undefined;
                         requireExplicitSelection?: boolean | undefined;
                         listSeparator?: 'comma' | 'newline' | undefined;
                         maxSelections?: number | undefined;
+                        defaultValue?: JsonValue | undefined;
                         visibleWhen?: InputPredicate | undefined;
                         visibleWhenContextSlot?: string | undefined;
                         requiredWhen?: InputPredicate | undefined;
@@ -114,6 +115,7 @@ export type WorkflowEventCatalogActionResultById = {
                         options?: readonly {
                             value: JsonValue;
                             label: string;
+                            labelKey?: string | undefined;
                             description?: string | undefined;
                             disabled?: boolean | undefined;
                         }[] | undefined;
@@ -145,13 +147,14 @@ export type WorkflowEventCatalogActionResultById = {
                             hostType: 'usageQuery';
                             field?: 'period' | 'session' | undefined;
                         } | {
-                            hostType: 'session' | 'workspace' | 'machine';
+                            hostType: 'session' | 'workspace' | 'machine' | 'agentParticipant';
                         } | undefined;
                         contextMode?: 'follow' | 'own' | undefined;
                         required?: boolean | undefined;
                         requireExplicitSelection?: boolean | undefined;
                         listSeparator?: 'comma' | 'newline' | undefined;
                         maxSelections?: number | undefined;
+                        defaultValue?: JsonValue | undefined;
                         visibleWhen?: InputPredicate | undefined;
                         visibleWhenContextSlot?: string | undefined;
                         requiredWhen?: InputPredicate | undefined;
@@ -165,6 +168,7 @@ export type WorkflowEventCatalogActionResultById = {
                         options?: readonly {
                             value: JsonValue;
                             label: string;
+                            labelKey?: string | undefined;
                             description?: string | undefined;
                             disabled?: boolean | undefined;
                         }[] | undefined;

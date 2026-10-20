@@ -43,6 +43,7 @@ function flattenStyle(style: unknown): React.CSSProperties | undefined {
 
 vi.mock('react-native', async () => {
     const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
+    const { ScrollView } = await vi.importActual<typeof import('react-native')>('react-native-web');
 
     const View = React.forwardRef<HTMLDivElement, Record<string, any>>(function View(props, ref) {
         const {
@@ -110,6 +111,8 @@ vi.mock('react-native', async () => {
             ),
         },
         View,
+        // The real web adapter supplies the imperative scroll API to the DOM ref.
+        ScrollView,
         Pressable,
         Text: ({
             children,
@@ -230,6 +233,7 @@ function createHostApi(
     return {
         version: () => ({ apiVersion: '1.0.0', wireVersion: 1, methods: [] }),
         context: async () => context,
+        admitAction: async () => unexpectedHostApiCall('admitAction'),
         widgetArea: async () => unexpectedHostApiCall('widgetArea'),
         readEntityDragItem: async () => unexpectedHostApiCall('readEntityDragItem'),
         updateEntityDragDrop: async () => unexpectedHostApiCall('updateEntityDragDrop'),
@@ -244,6 +248,7 @@ function createHostApi(
         settleEphemeralInput: async () => unexpectedHostApiCall('settleEphemeralInput'),
         activeComposer: async () => unexpectedHostApiCall('activeComposer'),
         readComposer: async () => unexpectedHostApiCall('readComposer'),
+        readDiscussionComposer: async () => unexpectedHostApiCall('readDiscussionComposer'),
         watchComposer: async () => unexpectedHostApiCall('watchComposer'),
         applyComposer: async () => unexpectedHostApiCall('applyComposer'),
         focusComposer: async () => unexpectedHostApiCall('focusComposer'),

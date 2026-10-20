@@ -17,6 +17,7 @@ import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAcco
 import type { Session } from '@/sync/domains/state/storageTypes';
 import {
     flushSessionDraft,
+    getSessionComposerDraftSnapshot,
     getSessionDraftSnapshot,
     subscribeSessionDraft,
     writeExistingSessionDraft,
@@ -50,6 +51,13 @@ export type SessionDraftTextSnapshot = Readonly<{
 function normalizeSessionId(sessionId: string | null | undefined): string | null {
     const normalizedSessionId = String(sessionId ?? '').trim();
     return normalizedSessionId.length > 0 ? normalizedSessionId : null;
+}
+
+const UNREADABLE_RETAINED_SESSION_DRAFT = Symbol('unreadableRetainedSessionDraft');
+
+function readSessionComposerSnapshot(scope: ServerAccountScopeLifetime['scope'], sessionId: string) {
+    const snapshot = getSessionComposerDraftSnapshot(scope, { kind: 'session', sessionId });
+    return snapshot?.targetKind === 'session' ? snapshot : null;
 }
 
 /**
@@ -88,10 +96,13 @@ export function useDraft(
     // (a remote edit, a finished materialization) re-runs the load owner below. The repository echo
     // of this composer's own edits equals the live text, so it neither renders the host per
     // keystroke nor re-adopts the value that is still waiting for its debounced remote flush.
-    const readStoredDraftTrigger = useCallback((): string | null => {
+    const readStoredDraftTrigger = useCallback((): string | typeof UNREADABLE_RETAINED_SESSION_DRAFT | null => {
         if (!resolvedSessionId || !draftScope) return null;
-        const stored = getSessionDraftSnapshot(draftScope, { kind: 'session', sessionId: resolvedSessionId })
-            ?.document.composer.text.value;
+        const snapshot = readSessionComposerSnapshot(draftScope, resolvedSessionId);
+        if (!snapshot && getSessionDraftSnapshot(draftScope, { kind: 'session', sessionId: resolvedSessionId })) {
+            return UNREADABLE_RETAINED_SESSION_DRAFT;
+        }
+        const stored = snapshot?.composer.text.value;
         return typeof stored === 'string' && stored !== textStore.getPrompt() ? stored : null;
     }, [draftScope, resolvedSessionId, textStore]);
     const storedDraft = useSyncExternalStore(subscribeStoredDraft, readStoredDraftTrigger, readStoredDraftTrigger);
@@ -300,10 +311,12 @@ export function useDraft(
     useEffect(() => {
         if (!resolvedSessionId) return;
 
-        const currentStoredDraft = draftScope && isDraftOwnerCurrent()
-            ? getSessionDraftSnapshot(draftScope, { kind: 'session', sessionId: resolvedSessionId })
-                ?.document.composer.text.value ?? null
+        const currentStoredSnapshot = draftScope && isDraftOwnerCurrent()
+            ? readSessionComposerSnapshot(draftScope, resolvedSessionId)
             : null;
+        const currentStoredDraft = currentStoredSnapshot?.composer.text.value ?? null;
+        const hasUnreadableRetainedDraft = draftScope && isDraftOwnerCurrent() && !currentStoredSnapshot
+            && getSessionDraftSnapshot(draftScope, { kind: 'session', sessionId: resolvedSessionId }) !== null;
 
         const previousSessionId = lastSessionId.current;
         lastSessionId.current = resolvedSessionId;
@@ -317,6 +330,10 @@ export function useDraft(
             }
             if (previousSessionId) {
                 flushDraftForSession(previousSessionId);
+            }
+            if (hasUnreadableRetainedDraft) {
+                adoptPersistedDraftText('');
+                return;
             }
             autosaveSkip.current = { sessionId: resolvedSessionId, value: currentValue };
             const baseStoredDraft = currentStoredDraft && currentStoredDraft.trim() ? currentStoredDraft : null;
@@ -347,7 +364,7 @@ export function useDraft(
             return;
         }
 
-        if (!active) return;
+        if (!active || hasUnreadableRetainedDraft) return;
 
         const externalDraft = currentStoredDraft && currentStoredDraft.trim() ? currentStoredDraft : null;
         if (externalDraft != null && externalDraft === currentValue && lastSavedValue.current !== externalDraft && !activeSessionInitialPrompt) {
@@ -390,21 +407,16 @@ export function useDraft(
 
     useEffect(() => {
         if (!draftScope || !resolvedSessionId || !isDraftOwnerCurrent()) return;
-        let previousSnapshot = getSessionDraftSnapshot(
-            draftScope,
-            { kind: 'session', sessionId: resolvedSessionId },
-        );
+        let previousSnapshot = readSessionComposerSnapshot(draftScope, resolvedSessionId);
         return subscribeSessionDraft(draftScope, { kind: 'session', sessionId: resolvedSessionId }, () => {
             if (!isDraftOwnerCurrent()) return;
-            const nextSnapshot = getSessionDraftSnapshot(
-                draftScope,
-                { kind: 'session', sessionId: resolvedSessionId },
-            );
-            const repositoryDraftWasRemoved = previousSnapshot !== null && nextSnapshot === null;
+            const nextSnapshot = readSessionComposerSnapshot(draftScope, resolvedSessionId);
+            const repositoryDraftWasRemoved = previousSnapshot !== null && nextSnapshot === null
+                && getSessionDraftSnapshot(draftScope, { kind: 'session', sessionId: resolvedSessionId }) === null;
             previousSnapshot = nextSnapshot;
             if (nextSnapshot === null && !repositoryDraftWasRemoved) return;
 
-            const next = nextSnapshot?.document.composer.text.value ?? '';
+            const next = nextSnapshot?.composer.text.value ?? '';
             if (next === latestValue.current) {
                 lastSavedValue.current = next;
                 return;
@@ -509,8 +521,8 @@ export function useDraft(
 
         if (lastSessionId.current !== targetSessionId) {
             const targetDraft = draftScope && isDraftOwnerCurrent()
-                ? getSessionDraftSnapshot(draftScope, { kind: 'session', sessionId: targetSessionId })
-                    ?.document.composer.text.value
+                ? getSessionComposerDraftSnapshot(draftScope, { kind: 'session', sessionId: targetSessionId })
+                    ?.composer.text.value
                 : undefined;
             if (targetDraft !== snapshot.text) return false;
             saveDraftForSession(targetSessionId, '');
@@ -597,8 +609,8 @@ export function useDraft(
 
         if (lastSessionId.current !== targetSessionId) {
             const targetDraft = draftScope && isDraftOwnerCurrent()
-                ? getSessionDraftSnapshot(draftScope, { kind: 'session', sessionId: targetSessionId })
-                    ?.document.composer.text.value
+                ? getSessionComposerDraftSnapshot(draftScope, { kind: 'session', sessionId: targetSessionId })
+                    ?.composer.text.value
                 : undefined;
             const currentDraft = typeof targetDraft === 'string' ? targetDraft : '';
             if (currentDraft !== expectedCurrentValue) return false;

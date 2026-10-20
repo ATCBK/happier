@@ -240,7 +240,7 @@ describe('SessionCollaborationSurface', () => {
             if (request.path === '/v1/public-shares' && request.method === 'POST') {
                 writes.push('create');
                 publicShare = { id: 'publication', expiresAt: null, maxUses: null, useCount: 0,
-                    isConsentRequired: true, updatedAt: 1, keyDerivation: 'fragment_v1' };
+                    isConsentRequired: true, networkOff: true, updatedAt: 1, keyDerivation: 'fragment_v1' };
                 return new Response(JSON.stringify({ publicShare, viewerOrigin: 'https://public-viewer.example.test' }));
             }
             if (request.path.endsWith('/public-share')) {
@@ -264,6 +264,10 @@ describe('SessionCollaborationSurface', () => {
         await vi.waitFor(() => expect(screen.findByTestId('session-public-link-create')).not.toBeNull());
         await screen.pressByTestIdAsync('session-public-link-create');
         await vi.waitFor(() => expect(screen.findByTestId('session-public-link-options')).not.toBeNull());
+        // This retention fixture has no published transcript to review. Explicitly
+        // disable visual network access before issuing its link through the real owner.
+        await act(async () => { screen.findByTestId('session-public-link-network-off')!.props.onValueChange(true); });
+        await vi.waitFor(() => expect(screen.findHostByTestId('session-public-link-options-create')?.props.accessibilityState).toMatchObject({ disabled: false }));
         await screen.pressByTestIdAsync('session-public-link-options-create');
         await vi.waitFor(() => expect(screen.findByTestId('session-public-link-url')).not.toBeNull());
         const shownUrl = () => String(screen.findByTestId('session-public-link-url')?.props.children);
@@ -341,7 +345,9 @@ describe('SessionCollaborationSurface', () => {
     it('hydrates publication from the exact inactive Home when the active Home has the same raw Session id', async () => {
         const active = await upsertServerProfile({ name: 'Active Home', serverUrl: 'https://collaboration-active-other.example.test' });
         const profile = await upsertServerProfile({ name: 'Collaboration test Home', serverUrl: 'https://collaboration-inactive.example.test' });
-        await publishCollaboration(profile.id);
+        // Access/publication use the detached exact-Home reader. Conversations
+        // independently hydrate the canonical Session cache for System Records.
+        await publishFeatures(profile.id, ['sharing.session', 'sharing.public'], ['sessions.conversations']);
         credentials.serverId = profile.id;
         serveSession(profile.id);
         const rows = {};
@@ -359,6 +365,7 @@ describe('SessionCollaborationSurface', () => {
             sessionListRowsByServerId: { ...state.sessionListRowsByServerId, [profile.id]: rows },
             sessionListIndexByServerId: { ...state.sessionListIndexByServerId, [profile.id]: index },
         }));
+        const activeSession = storage.getState().sessions['same-id'];
         publishSessionCollaborationIntent({ serverId: profile.id, sessionId: 'same-id' }, 'access');
 
         const screen = await renderScreen(
@@ -385,6 +392,9 @@ describe('SessionCollaborationSurface', () => {
             expect(request.authorization).toContain(credentialTokenFor(credentials.accountId));
         }
         expect(transport.requests.some((request) => request.origin === 'https://collaboration-active-other.example.test')).toBe(false);
+        expect(storage.getState().sessions['same-id']).toBe(activeSession);
+        expect(storage.getState().sessionListRowsByServerId[profile.id]).toBe(rows);
+        expect(storage.getState().sessionListIndexByServerId[profile.id]).toBe(index);
         expect(active.id).not.toBe(profile.id);
     });
 
@@ -432,7 +442,8 @@ describe('SessionCollaborationSurface', () => {
         // name is how every other surface names it, so the Share panel says it too.
         const active = await upsertServerProfile({ name: 'collaboration-home-name.example.test', serverUrl: 'https://collaboration-home-name.example.test' });
         credentials.serverId = active.id;
-        homeFor(active.id).features.homePresentation = { v: 1, displayName: 'Northwind Studio' };
+        const home = homeFor(active.id);
+        home.features = { ...home.features, homePresentation: { v: 1, displayName: 'Northwind Studio' } };
         await publishFeatures(active.id, ['sharing.session', 'sharing.public'], ['sessions.conversations']);
         storage.setState((state) => ({
             profileScope: { serverId: active.id, accountId: credentials.accountId },

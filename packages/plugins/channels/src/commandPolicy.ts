@@ -1,24 +1,6 @@
 import type { ConversationCommandClassification } from './commands.js';
-
-export const CONVERSATION_NON_ADMISSION_REASONS = [
-  'connectionUnavailable',
-  'staleAuthority',
-  'endpointMismatch',
-  'actorUnattributable',
-  'actorNotAllowed',
-  'integrationSelf',
-  'botSenderDisabled',
-  'messageTooOld',
-  'messageTooLarge',
-  'unsupportedContent',
-  'unsupportedEdit',
-  'notAddressed',
-  'malformedCommand',
-  'commandNotAuthorized',
-  'targetUnavailable',
-  'permissionCeilingUnavailable',
-  'routeNotMatched',
-] as const;
+import { CONVERSATION_NON_ADMISSION_REASONS_V1 as CONVERSATION_NON_ADMISSION_REASONS } from '@happier-dev/channels-protocol/v1';
+export { CONVERSATION_NON_ADMISSION_REASONS };
 
 export type ConversationNonAdmissionReason =
   (typeof CONVERSATION_NON_ADMISSION_REASONS)[number];

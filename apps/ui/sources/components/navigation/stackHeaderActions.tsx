@@ -1,6 +1,6 @@
 import * as React from 'react';
 import * as ReactNavigationNative from '@react-navigation/native';
-import { useDestinationInstanceKey } from '@/components/appShell/workspace/DestinationInstanceHost';
+import { useDestinationInstanceKey } from '@/components/appShell/workspace/destinationInstanceContext';
 
 /**
  * A route's stack-header actions (`headerLeft`/`headerRight`) while its stack header is not drawn:
@@ -74,6 +74,15 @@ const useClaimEffect = typeof window === 'undefined' ? React.useEffect : React.u
  */
 const HeaderActionsScopeContext = React.createContext<string | null | undefined>(undefined);
 
+/**
+ * The scope an enclosing pane lends its controls through (`undefined` when none does). A destination
+ * hosted inside such a pane passes it on when its route has no actions of its own, so the page's header
+ * still draws the pane's controls rather than leaving them on a bar above it.
+ */
+export function useEnclosingHeaderActionsScope(): string | null | undefined {
+    return React.useContext(HeaderActionsScopeContext);
+}
+
 /** A pane that lends its controls to the header of what it shows; pair it with the publisher hooks above. */
 export function HeaderActionsScope(props: Readonly<{ scopeKey: string | null; children: React.ReactNode }>) {
     return <HeaderActionsScopeContext.Provider value={props.scopeKey}>{props.children}</HeaderActionsScopeContext.Provider>;
@@ -82,13 +91,15 @@ export function HeaderActionsScope(props: Readonly<{ scopeKey: string | null; ch
 /**
  * The page header's side: claims the route's stack-header actions, or the enclosing pane's lent
  * controls, and returns them to render. `scopeOnly` headers (a Details tab's) never take a route's.
+ * `release` gives them back while the header cannot use them (it sits in a read-only snapshot), so
+ * the route's own actions bar draws them instead.
  */
-export function useClaimedStackHeaderActions(options?: Readonly<{ scopeOnly?: boolean }>): React.ReactNode {
+export function useClaimedStackHeaderActions(options?: Readonly<{ scopeOnly?: boolean; release?: boolean }>): React.ReactNode {
     const route = React.useContext(RouteContext);
     const scopeKey = React.useContext(HeaderActionsScopeContext);
     const hosted = useDestinationInstanceKey() !== null;
     // Hosted pages own their actions; the inherited Expo context belongs to a retained route.
-    const routeKey = scopeKey !== undefined
+    const routeKey = options?.release ? null : scopeKey !== undefined
         ? scopeKey
         : hosted || options?.scopeOnly ? null : route?.key ?? null;
     const [claimant] = React.useState(() => ({}));

@@ -1,8 +1,9 @@
 import { accountSettingsParse } from '@happier-dev/protocol/account/settings/accountSettings';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConnectedAccountCatalogSnapshotV1 } from '@happier-dev/protocol/connect/connectedAccountCatalogV1';
 import { setActiveAccountSettingsSnapshot, resetActiveAccountSettingsSnapshotForTests } from '@/settings/accountSettings/activeAccountSettingsSnapshot';
 import { createActiveAccountSettingsConnectedAccountPurposeBindingStore } from './ConnectedAccountPurposeBindingOwner';
+import * as persistence from '@/persistence';
 
 const purpose = { consumer: { pluginId: 'happier.voice.test', localId: 'speech' }, purpose: 'voice-api' };
 const service = { pluginId: 'happier.connected-account.test', localId: 'api' };
@@ -16,10 +17,14 @@ function publish(catalog: ConnectedAccountCatalogSnapshotV1) {
 
 describe('connected purpose catalog store', () => {
   beforeEach(resetActiveAccountSettingsSnapshotForTests);
+  afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
 
-  it('reads the qualified Voice purpose from its opened row after the Settings root is absent', async () => {
+  it('refuses cached purpose truth when credentials for revalidation are unavailable', async () => {
+    vi.spyOn(persistence, 'readStoredCredentials').mockResolvedValue(null);
     publish({ status: 'ready', revision: 3, record: { key: 'purposes', value } });
-    await expect(createActiveAccountSettingsConnectedAccountPurposeBindingStore().read()).resolves.toEqual(value);
+    await expect(createActiveAccountSettingsConnectedAccountPurposeBindingStore().read()).rejects.toMatchObject({
+      code: 'plugin_connected_account_settings_unavailable', details: { reason: 'credentials-unavailable' },
+    });
   });
 
   it('refuses unavailable purpose truth instead of authorizing an empty default', async () => {

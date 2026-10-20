@@ -4,7 +4,7 @@ import { SessionAwarenessListResultV1Schema, parseSessionListQueryActionResultV1
 
 import { resetInMemoryAccountSettingsContextForTests } from '@/settings/accountSettings/bootstrapAccountSettingsContext';
 import { createAccountEncryptionCurrentnessFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
-import { createSessionListActionDependency } from '@/session/actions/sessionListActionDependency';
+import { createSessionListActionDeps } from '@/session/actions/sessionListActionDependency';
 import { listSessions } from './listSessions';
 
 describe('Session awareness Action acquisition', () => {
@@ -32,7 +32,7 @@ describe('Session awareness Action acquisition', () => {
       }
       throw new Error(`Unexpected HTTP request: ${path}`);
     });
-    const list = createSessionListActionDependency({ credentials: { token: 'token', encryption: null } });
+    const { sessionList: list } = createSessionListActionDeps({ credentials: { token: 'token', encryption: null } });
     const result = await list({
       context: { surface: 'cli', authority: 'present_user' }, view, includeSystem: true,
     });
@@ -132,7 +132,7 @@ describe('Session awareness Action acquisition', () => {
       throw new Error(`Unexpected HTTP request: ${path}`);
     });
 
-    const list = createSessionListActionDependency({ credentials: { token: 'token', encryption: null } });
+    const { sessionList: list } = createSessionListActionDeps({ credentials: { token: 'token', encryption: null } });
     const result = await list({
       context: { surface: 'cli', authority: 'present_user' },
       view: 'awareness',
@@ -217,7 +217,7 @@ describe('Session awareness Action acquisition', () => {
       status: 200,
       data: createAccountEncryptionCurrentnessFixture({ version: 1, updatedAt: 1 }),
     });
-    const list = createSessionListActionDependency({
+    const { sessionList: list } = createSessionListActionDeps({
       credentials: { token: 'token', encryption: null },
       serverId: 'home-profile-routing-id',
     });
@@ -257,7 +257,7 @@ describe('Session awareness Action acquisition', () => {
       throw new Error(`Unexpected HTTP request: ${path}`);
     });
 
-    const list = createSessionListActionDependency({ credentials: { token: 'token', encryption: null } });
+    const { sessionList: list } = createSessionListActionDeps({ credentials: { token: 'token', encryption: null } });
     const result = await list({
       context: { surface: 'cli', authority: 'present_user' },
       view: 'awareness',

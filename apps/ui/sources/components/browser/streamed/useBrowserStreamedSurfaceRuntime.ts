@@ -16,13 +16,27 @@ import { listBrowserDaemonViewsViaMachineRpc, type BrowserDaemonControlDispatchC
 import type { BrowserControlViewState } from '@/sync/domains/browser/control';
 import { resolveBrowserDaemonStreamTarget } from '@/sync/domains/browser/store';
 import { buildBrowserAdapterCapabilities } from '@/sync/domains/browser/adapters/capabilities';
+import type { BrowserOpenFirstUse } from '@/sync/domains/browser/firstUse/browserFirstUse';
 
 import type { BrowserStreamedSurfaceRuntime } from '../adapters/BrowserStreamedTarget';
+import { BrowserStreamedSurfaceScope } from './BrowserStreamedSurfaceScope';
+import { useLayoutPresentationActive } from '@/components/ui/presentation/PluginSurfaceFocusEligibility';
 
 /** The live-stream family every browser capture source registers under (`_CONTRACTS.md`). */
 const BROWSER_STREAM_FAMILY = 'browser.streamed';
 /** No viewer-proposed ceilings: the registered source and the server grant own the policy. */
 const NO_VIEWER_CAPS: MachineLiveStreamCapsV1 = {};
+
+/** The retained picture owns the frame subscription; shell imports stay presentation-only. */
+export function BrowserStreamedSurfaceRuntimeHost(props: Readonly<{
+    input: Parameters<typeof useBrowserStreamedSurfaceRuntime>[0];
+    children: React.ReactNode;
+}>): React.ReactElement {
+    const presented = useLayoutPresentationActive();
+    const runtime = useBrowserStreamedSurfaceRuntime({ ...props.input,
+        enabled: props.input.enabled !== false && presented });
+    return React.createElement(BrowserStreamedSurfaceScope, { runtime, children: props.children });
+}
 
 type Discovery =
     | Readonly<{ status: 'idle' }>
@@ -48,6 +62,8 @@ export function useBrowserStreamedSurfaceRuntime(input: Readonly<{
     machineId?: string | null;
     serverId?: string | null;
     machineName?: string | null;
+    /** The Session's latest Machine-targeted open, read from the typed Action operation owner. */
+    firstUse?: BrowserOpenFirstUse | null;
     onBrowserEvent?: (event: BrowserEventV1) => void;
 }>): BrowserStreamedSurfaceRuntime | null {
     const view = input.view && isDaemonAuthoritativeBrowserView(input.view) ? input.view : null;
@@ -162,12 +178,22 @@ export function useBrowserStreamedSurfaceRuntime(input: Readonly<{
     const retry = React.useCallback(() => setAttempt((current) => current + 1), []);
     const machineName = input.machineName ?? null;
     const unavailableReason = discovery.status === 'failed' ? discovery.reason : undefined;
+    // An open that went through has its page discovered next: that wait is still Connecting, and it
+    // ends as soon as discovery settles, whether or not it found the page.
+    const firstUseKind = input.firstUse?.kind;
+    // An open still in flight past provisioning is Connecting for as long as its operation runs.
+    const firstUse = firstUseKind === 'dispatched'
+        ? (discovery.status === 'discovering' || discovery.status === 'idle' ? 'opening' as const : undefined)
+        : firstUseKind === 'connecting' ? 'opening' as const : firstUseKind;
+    const firstUseTargetUrl = firstUse === 'preparing' || firstUse === 'opening' ? input.firstUse?.targetUrl : undefined;
 
     return React.useMemo<BrowserStreamedSurfaceRuntime | null>(() => {
-        // Before any view exists the empty Session Browser still explains the one prerequisite
-        // that keeps the agent's browser from ever opening; any other discovery failure stays quiet.
-        if (!view) return unavailableReason === 'managed_package_missing'
-            ? { machineName, playerState: null, unavailableReason, onRetry: retry }
+        // Before any view exists the empty Session Browser still explains what keeps the agent's
+        // browser from opening: the typed first-use state of its open, or the one prerequisite
+        // discovery names. Any other discovery failure stays quiet.
+        if (!view) return firstUse || unavailableReason === 'managed_package_missing'
+            ? { machineName, playerState: null, ...(unavailableReason === 'managed_package_missing' ? { unavailableReason } : {}),
+                ...(firstUse ? { firstUse } : {}), ...(firstUseTargetUrl ? { firstUseTargetUrl } : {}), onRetry: retry }
             : null;
         const connecting = discovery.status === 'discovering'
             || (Boolean(sourceId) && (!socket || !playerState));
@@ -181,5 +207,5 @@ export function useBrowserStreamedSurfaceRuntime(input: Readonly<{
                 ? { sourceId, streamId, send: sendControl }
                 : null,
         };
-    }, [discovery.status, machineName, playerState, retry, sendControl, socket, sourceId, streamId, unavailableReason, view]);
+    }, [discovery.status, firstUse, firstUseTargetUrl, machineName, playerState, retry, sendControl, socket, sourceId, streamId, unavailableReason, view]);
 }

@@ -23,7 +23,7 @@ import {
 } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestDocument';
 import type { ProjectExecutionChoiceV1 } from '@happier-dev/protocol/workspaces/projectWorkerPreferencesV1';
 import type { ProjectNativeRefV1 } from '@happier-dev/protocol/workspaces/projectSetup/projectManifestV1';
-import { rememberProjectSetupConsent } from './projectSetupConsentDecision';
+import { decideProjectSetupConsent, type ProjectSetupDecision } from './projectSetupConsentDecision';
 import { useProjectSetupRun } from './projectScriptRuns';
 import { useActionOperationStopControl } from '@/components/inbox/actionOperations/useActionOperationStopControl';
 import { useActionOperation } from '@/sync/domains/actionOperations/useActionOperations';
@@ -52,6 +52,10 @@ const EMPTY_PENDING: PendingKeys = {};
 const EMPTY_CREATIONS: Readonly<Record<string, ManagedCreation>> = {};
 type Failure = Readonly<{ key: string; code: string; workerRefusal?: ProjectWorkerNoAcceptanceFailureDetailsV1 }> | null;
 type RunChoiceRequest = Readonly<{ scopeKey: string; key: string; selection: ProjectScriptSelection }>;
+export type ProjectScriptRunChoice = Readonly<{ kind: 'existing'; choice: ProjectExecutionChoiceV1 }>
+  | Readonly<{ kind: 'managed'; draft: ManagedMachineSelectionDraft }>;
+type RunChoices = Readonly<Record<string, ProjectScriptRunChoice>>;
+const EMPTY_RUN_CHOICES: RunChoices = {};
 
 /** The accepted snapshot the Action returned joins the operation store at once (daemon state stays canonical). */
 function publishAcceptedOperation(binding: ServerCredentialAccountScopeBinding | null, operation: ActionOperationSnapshotV1): void {
@@ -77,7 +81,11 @@ export function useProjectScriptsController(
   workspace: WorkspaceAddressV1,
   onChanged: () => void,
   binding: ServerCredentialAccountScopeBinding | null,
-  options?: Readonly<{ execute?: (...args: Parameters<ReturnType<typeof createFrontDoorActionExecute>>) => ReturnType<ReturnType<typeof createFrontDoorActionExecute>> }>,
+  options?: Readonly<{
+    execute?: (...args: Parameters<ReturnType<typeof createFrontDoorActionExecute>>) => ReturnType<ReturnType<typeof createFrontDoorActionExecute>>;
+    /** Current portable Script rows; absent while their inspection is unavailable. */
+    runChoiceKeys?: readonly string[];
+  }>,
 ) {
   const accountId = binding?.isCurrent() ? binding.accountId : null;
   const setupOperation = useProjectSetupRun(workspace, accountId);
@@ -109,6 +117,26 @@ export function useProjectScriptsController(
   const [pending, setPending] = React.useState<Readonly<{ scopeKey: string; keys: PendingKeys }> | null>(null);
   const [failure, setFailure] = React.useState<Failure>(null);
   const [choiceRequest, setChoiceRequest] = React.useState<RunChoiceRequest | null>(null);
+  // A credential recheck can temporarily unmount the inspected rows. Retain inert picker intent
+  // here, outside that subtree; a fresh binding still owns every admission and managed acquisition.
+  const [choices, setChoices] = React.useState<Readonly<{ scopeKey: string; values: RunChoices }> | null>(null);
+  const runChoices = choices?.scopeKey === scopeKey ? choices.values : EMPTY_RUN_CHOICES;
+  const runChoiceKeys = options?.runChoiceKeys;
+  React.useEffect(() => {
+    if (!accountId) return; // A resolving credential is not a different Account.
+    setChoices(previous => {
+      if (!previous) return previous;
+      if (previous.scopeKey !== scopeKey) return null;
+      if (!runChoiceKeys) return previous;
+      const entries = Object.entries(previous.values).filter(([key]) => runChoiceKeys.includes(key));
+      return entries.length === Object.keys(previous.values).length ? previous
+        : { scopeKey, values: Object.fromEntries(entries) };
+    });
+  }, [accountId, runChoiceKeys, scopeKey]);
+  const chooseRunDestination = React.useCallback((key: string, choice: ProjectScriptRunChoice) => {
+    if (!binding?.isCurrent()) return;
+    setChoices(previous => ({ scopeKey, values: { ...(previous?.scopeKey === scopeKey ? previous.values : {}), [key]: choice } }));
+  }, [binding, scopeKey]);
   const [consent, setConsent] = React.useState<
     (ProjectSetupConsent & Readonly<{ scopeKey: string }>) | null
   >(null);
@@ -152,10 +180,18 @@ export function useProjectScriptsController(
   React.useEffect(() => {
     const retirement = binding?.onRetire(() => {
       lifetime.abort(); runAborts.forEach(cancellation => cancellation.abort()); runAborts.clear();
+      // Reviewed creation drafts share the retiring acquisition custody. Only an existing
+      // destination is inert picker intent that can be reused after a same-Account recheck.
+      setChoices(previous => {
+        if (previous?.scopeKey !== scopeKey) return previous;
+        const entries = Object.entries(previous.values).filter(([, choice]) => choice.kind === 'existing');
+        return entries.length === Object.keys(previous.values).length ? previous
+          : { scopeKey, values: Object.fromEntries(entries) };
+      });
       setCreations(null); setPending(null); setFailure(null); setConsent(null); setReviewOpenScope(null); setChoiceRequest(null); setRetained(null);
     });
     return () => { retirement?.dispose(); lifetime.abort(); runAborts.forEach(cancellation => cancellation.abort()); runAborts.clear(); };
-  }, [binding, lifetime, runAborts]);
+  }, [binding, lifetime, runAborts, scopeKey]);
 
   const client = React.useMemo(
     () =>
@@ -286,26 +322,30 @@ export function useProjectScriptsController(
   }, [binding, choiceRequired, lifetime, run]);
 
   const prepare = React.useCallback(
-    async (expectedEffectDigest?: string, consentScope?: ProjectSetupConsentFailureDetailsV1['consentScope']) => {
+    async (expectedEffectDigest?: string, consentScope?: ProjectSetupDecision) => {
       if (!client) return null;
+      const skipForInvocation = consentScope === 'skip';
       const result = await dispatch('setup', async () => {
         // Remember remeasures and resumes the exact held invocation through its existing owner.
         // It must not launch a separate preparation after deciding the Script's setup review.
-        if (expectedEffectDigest && consentScope === 'untilChanged' && binding?.isCurrent()) {
-          const remembered = await rememberProjectSetupConsent({
+        if (expectedEffectDigest && heldOperation && (consentScope || skipForInvocation) && binding?.isCurrent()) {
+          const remembered = await decideProjectSetupConsent({
             scope: { serverId: binding.serverId, accountId: binding.accountId },
             workspace, reviewedEffectDigest: expectedEffectDigest, operation: heldOperation ?? undefined,
             signal: lifetime.signal,
+            decision: skipForInvocation ? 'skip' : consentScope!, execute,
+            onApprovalPending: registration => requestApprovalRef.current(registration),
           });
-          if (remembered.kind !== 'remembered') throw Object.assign(new Error(remembered.kind === 'changed'
+          if (remembered.kind !== 'remembered' && remembered.kind !== 'continued') throw Object.assign(new Error(remembered.kind === 'changed'
             ? 'project_setup_effect_changed' : remembered.code), { code: remembered.kind === 'changed'
             ? 'project_setup_effect_changed' : remembered.code });
           return remembered;
         }
         return client.prepare({
           phase: 'setup',
+          ...(skipForInvocation ? { skipForInvocation: true } : {}),
           ...(expectedEffectDigest ? { expectedEffectDigest } : {}),
-          ...(expectedEffectDigest && consentScope ? { consentScope } : {}),
+          ...(expectedEffectDigest && consentScope && consentScope !== 'skip' ? { consentScope } : {}),
         });
       });
       if (!result) return null;
@@ -327,7 +367,7 @@ export function useProjectScriptsController(
       onChanged();
       return result;
     },
-    [binding, client, dispatch, heldOperation, lifetime, onChanged, scopeKey, workspace],
+    [binding, client, dispatch, execute, heldOperation, lifetime, onChanged, scopeKey, workspace],
   );
 
   // Add to project file: one structured edit of the canonical document, one guarded write.
@@ -358,6 +398,8 @@ export function useProjectScriptsController(
     managedCreations,
     resumeManagedRun,
     cancelRun,
+    runChoices,
+    chooseRunDestination,
     choiceRequired,
     dismissChoice,
     chooseForRun,

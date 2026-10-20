@@ -101,6 +101,13 @@ function wrapRuntimeTurnOperationsWithPublication(params: Readonly<{
           },
         }
       : {}),
+    ...(typeof params.runtime.readTurnStartingInputId === 'function'
+      ? {
+          readTurnStartingInputId(turnId: string) {
+            return params.runtime.readTurnStartingInputId?.(turnId) ?? null;
+          },
+        }
+      : {}),
     ...(typeof params.runtime.prepareTerminalPresentation === 'function'
       ? {
           async prepareTerminalPresentation(request: Parameters<NonNullable<RuntimeTurnOperations['prepareTerminalPresentation']>>[0]) {
@@ -112,7 +119,7 @@ function wrapRuntimeTurnOperationsWithPublication(params: Readonly<{
       return params.runtime.readSessionIdentity();
     },
     async updateSessionRuntimeConfig(update) {
-      await params.runtime.updateSessionRuntimeConfig(update);
+      return await params.runtime.updateSessionRuntimeConfig(update);
     },
     async resetOrDisposeRuntime(reason, nextSessionOpenIntent) {
       if (!nextSessionOpenIntent) {
@@ -200,6 +207,8 @@ export function withHostSessionRuntimeIdentityPublication(params: Readonly<{
             ? { prepareStartupPresentation: createdRuntime.prepareStartupPresentation }
             : {}),
           ...(configuration ? { configuration } : {}),
+          ...(openedRuntimeDescriptor ? { runtimeDescriptorV1: openedRuntimeDescriptor } : {}),
+          ...(runtimeCapabilities ? { runtimeCapabilities } : {}),
           ...(admittedProviderBindingHandoff
             ? { admittedProviderBindingHandoff }
             : {}),

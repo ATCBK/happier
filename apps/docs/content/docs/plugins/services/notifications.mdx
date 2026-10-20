@@ -106,6 +106,41 @@ Use `context.ui.notify(...)` instead when the intent belongs to the current
 present-user invocation rather than the notification system; it does not fall
 back to the notification service.
 
+## Keep an Inbox item up to date
+
+In current development source, a send can also create or update a private
+Account Inbox notice. Supply a stable `itemId` for the item and a fresh
+`clientRequestId` for each changed send:
+
+```ts
+await context.services.notifications.send({
+  clientRequestId: 'review-42-revision-2',
+  categoryId: 'document-review-ready',
+  itemId: 'review-42',
+  type: 'update',
+  title: 'Review 42 is ready',
+  page: { pageId: 'reviews', subPath: '/42' },
+});
+```
+
+The page belongs to the sending plugin and must be declared by it. The host
+supplies plugin and Account identity; requests cannot select another plugin's
+item. Updating an item preserves the person's read and dismissed state. A send
+with the same `itemId` and `resolved: true` resolves that item without sending
+another channel notification. Resolving an item that does not exist is harmless.
+
+Types `update` (the default) and `mention` arrive quietly. Types `decision`,
+`approval`, and `blocked` are eligible for interruptions under the Account's
+attention preferences and quiet hours. A notice does not grant authority to
+approve a request. Use the owning Action for that decision. Without `itemId`,
+the service keeps its existing channel-only behavior; `type`, `page`, and
+`resolved` require an item. An older host rejects unsupported item fields
+instead of reporting that it saved an Inbox notice.
+
+Item types control attention delivery. Preview formatting and disclosure remain
+the existing source and channel sender's responsibility for their title, body,
+and data payload; the service does not classify arbitrary plugin data for redaction.
+
 ## Host ownership
 
 The host owns notification preferences, channel selection, Account-scoped

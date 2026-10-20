@@ -1,6 +1,7 @@
 import { completeAccountAuthRequest } from '@/auth/flows/accountCompletion';
 import type { HomeQrEnrollmentTarget } from '@/auth/flows/qrStart';
 import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { resolveTerminalPairingCurrentness } from '@/auth/terminal/approveTerminalPairing';
 import { resolveProvisioningMaterial } from '@/auth/terminal/resolveProvisioningMaterial';
 import { buildTerminalResponseV3, buildTerminalTokenOnlyResponseV3 } from '@/auth/terminal/terminalProvisioning';
 import {
@@ -42,7 +43,8 @@ export async function completeTrustedHomeQrPairingRequest(input: Readonly<{
         throw Object.assign(new Error('cancelled'), { name: 'AbortError' });
     }
     if (!credentials) throw new InvalidTrustedHomeQrRequestError();
-    const material = await resolveProvisioningMaterial(credentials);
+    const mode = await resolveTerminalPairingCurrentness({ target: context.target, targetCredentials: credentials, signal: input.signal });
+    const material = await resolveProvisioningMaterial(credentials, mode);
     if (input.signal?.aborted) {
         throw Object.assign(new Error('cancelled'), { name: 'AbortError' });
     }

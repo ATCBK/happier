@@ -61,8 +61,11 @@ export const ApprovalPromptChrome = React.memo(function ApprovalPromptChrome(
     title: string;
     /** One quiet line under the title (the request summary, who asked). */
     subtitle?: string | null;
-    /** `attention` (a request the person did not start): the shared needs-you ring and tint, and the shield in its ink. */
-    tone?: 'neutral' | 'attention';
+    /**
+     * `attention` (a request the person did not start): the shared needs-you ring and tint, and the glyph in its ink.
+     * `danger` (an approved request whose effect failed): the same, in the trouble hue.
+     */
+    tone?: 'neutral' | 'attention' | 'danger';
     titleNumberOfLines?: number;
     subtitleNumberOfLines?: number;
     icon?: IconName;
@@ -102,8 +105,8 @@ export const ApprovalPromptChrome = React.memo(function ApprovalPromptChrome(
         status,
       }}
       icon={<Icon name={props.icon ?? 'shield-check'} size={16}
-        color={props.tone === 'attention'
-          ? resolveHappierWorkStatusGlyphColor('attention', status)
+        color={props.tone === 'attention' || props.tone === 'danger'
+          ? resolveHappierWorkStatusGlyphColor(props.tone, status)
           : theme.colors.state.neutral.foreground} />}
     />
   );

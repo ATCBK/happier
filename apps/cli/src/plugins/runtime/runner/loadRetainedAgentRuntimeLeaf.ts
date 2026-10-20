@@ -1,5 +1,7 @@
 import { lstat, realpath } from 'node:fs/promises';
-import { join } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { join, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 
 import { isCanonicalAbsolutePathInsideRoot } from '@/utils/path/expandHomeDirPath';
@@ -26,7 +28,12 @@ import {
     assertContainedRegularGenerationFile,
     readValidatedAgentSessionRunnerFactories,
 } from '../../store/registry/generationStore';
-import { loadVerifiedPluginModule } from '../loadPluginModule';
+import { loadVerifiedPluginModule, type PluginModuleNamespace } from '../loadPluginModule';
+import type { AgentCatalogEntry } from '@/agent/catalog/types';
+import { projectManifestAgentContribution } from '../../projection/registry/projectManifestAgentContribution';
+import { projectAgentConnectedAccountLaunchCatalogEntry, projectAgentExperimentalVendorResumeSupportCatalogEntry } from '../../projection/registry/agentCatalogEntryHooks';
+import { activateContributionModule } from '../lifecycle/activation/activateContributionModule';
+import { resolvePluginAuthorStagingModule } from '../../authoring/sourceModule';
 import {
     createAgentSessionRunnerFactoryBinding,
     createHostDeclarativeAcpRunnerBinding,
@@ -74,19 +81,38 @@ async function readDevelopmentManifestAuthority(
 export type RetainedAgentRuntimeLeaf = Readonly<{
     factory: AgentRuntimeFactory;
     externalSessions?: AgentExternalSessionsContribution;
+    catalogEntry: AgentCatalogEntry | null;
+    dispose(): Promise<void>;
 }>;
+
+/** Source proof shared by daemon services after exact runner admission. */
+export type RetainedRunnerAgentServiceBinding = Pick<
+    Awaited<ReturnType<typeof verifyRunnerAgentBindingAgainstGeneration>>,
+    'binding' | 'manifest' | 'assertStillAvailable'
+>;
 
 export async function loadRetainedAgentRuntimeLeaf(params: Readonly<{
     paths: PluginStorePaths;
     binding: unknown;
     developmentOccurrenceId?: string;
+    developmentRunnerSnapshotIdentity?: string;
     resolveBundledPluginRoot?: typeof resolveRetainedBundledPluginRoot;
 }>): Promise<RetainedAgentRuntimeLeaf> {
     const attested = await verifyRunnerAgentBindingAgainstGeneration(
         params,
     );
+    const declaredEntry = projectManifestAgentContribution({
+        definition: attested.declaredAgent,
+        provenance: attested.manifestAuthority === 'bundled_first_party' ? 'first_party' : 'external',
+        source: { kind: attested.manifestAuthority === 'bundled_first_party' ? 'bundled' : 'package' },
+        pluginId: attested.manifest.id,
+        systemTools: attested.manifest.contributes.systemTools,
+        hostAccess: attested.manifest.hostAccess,
+    }).catalogEntry ?? null;
     if (attested.bindingKind === 'host_declarative_acp_v1') {
         return Object.freeze({
+            catalogEntry: declaredEntry,
+            dispose: async () => {},
             factory: createHostDeclarativeAcpAgentRuntimeFactory(
                 normalizePluginDeclarativeAcpRuntime(attested.runtime),
                 {
@@ -140,8 +166,12 @@ export async function loadRetainedAgentRuntimeLeaf(params: Readonly<{
         throw new Error('Runner Agent factory export is missing or not callable');
     }
     if (fact.locator.externalSessionsExport === undefined) {
+        const catalog = await projectRetainedAgentCatalogEntry({
+            attested, declaredEntry, factory: factory as AgentRuntimeFactory,
+        });
         return Object.freeze({
             factory: factory as AgentRuntimeFactory,
+            ...catalog,
         });
     }
     const externalSessions = Object.prototype.hasOwnProperty.call(
@@ -159,10 +189,120 @@ export async function loadRetainedAgentRuntimeLeaf(params: Readonly<{
             localAgentId: binding.localAgentId,
             contribution: externalSessions,
         });
+    const catalog = await projectRetainedAgentCatalogEntry({
+        attested, declaredEntry, factory: factory as AgentRuntimeFactory,
+    });
     return Object.freeze({
         factory: factory as AgentRuntimeFactory,
         externalSessions: externalSessionsSnapshot,
+        ...catalog,
     });
+}
+
+/** The retained source owns static launch facts, independently of the current daemon. */
+async function projectRetainedAgentCatalogEntry(input: Readonly<{
+    attested: Awaited<ReturnType<typeof verifyRunnerAgentBindingAgainstGeneration>>;
+    declaredEntry: AgentCatalogEntry | null;
+    factory: AgentRuntimeFactory;
+}>): Promise<Pick<RetainedAgentRuntimeLeaf, 'catalogEntry' | 'dispose'>> {
+    const { attested, declaredEntry } = input;
+    if (!declaredEntry || (!attested.declaredAgent.connectedAccounts?.length
+        && declaredEntry.vendorResumeSupport !== 'experimental')
+        || attested.bindingKind !== 'plugin_factory_v1') return { catalogEntry: declaredEntry, dispose: async () => {} };
+    const rootPath = await realpath(attested.rootPath);
+    const loadModule = async (entryPath: string) => {
+        const normalizedPath = relative(rootPath, resolve(entryPath)).split(sep).join('/');
+        if (attested.sourceKind === 'managed') {
+            await assertContainedRegularGenerationFile(rootPath, normalizedPath, 'Retained Agent catalog module');
+        } else {
+            const facts = await lstat(entryPath);
+            if (!facts.isFile() || facts.isSymbolicLink()
+                || !isCanonicalAbsolutePathInsideRoot(rootPath, await realpath(entryPath))) {
+                throw new Error('Retained Agent catalog module escapes its source custody');
+            }
+        }
+        return await loadVerifiedPluginModule({
+            entryPath, loadMode: attested.fact.loadMode, generationScope: attested.binding,
+            cacheKey: `${attested.cacheIdentity}:${normalizedPath}`, nativeFileUrlMode: 'canonical',
+        });
+    };
+    const daemonEntrypoint = attested.manifest.entrypoints?.daemon;
+    if (!daemonEntrypoint) throw new Error('Retained Agent catalog has no activation entrypoint');
+    const entryPath = resolve(rootPath, daemonEntrypoint);
+    let moduleNamespace: PluginModuleNamespace;
+    let resolveRelativeModule: NonNullable<Parameters<typeof activateContributionModule>[0]['resolveRelativeModule']>;
+    if (attested.sourceKind === 'development' && attested.manifestAuthority === 'bundled_first_party') {
+        const locator = BUNDLED_FIRST_PARTY_PLUGIN_LOCATORS.find(candidate => candidate.pluginId === attested.binding.pluginId);
+        if (!locator?.daemonEntryPath) throw new Error('Retained development Agent catalog has no bundled locator');
+        const source = createBundledActivationSourceResolver({
+            bundledPackageNames: [locator.daemonEntryPath],
+            importModule: async specifier => await loadModule(fileURLToPath(specifier)),
+            resolveDevelopmentSourceAuthority: ({ rootPath: selectedRoot }) => {
+                if (realpathSync(selectedRoot) !== rootPath) {
+                    throw new Error('Retained Agent catalog selected a foreign development root');
+                }
+                // Execution custody was already attested by this retained owner.
+                return null;
+            },
+        })(locator);
+        if (!source) throw new Error('Retained development Agent catalog source is unavailable');
+        moduleNamespace = await source.load();
+        resolveRelativeModule = source.resolveRelativeModule;
+    } else {
+        moduleNamespace = await loadModule(entryPath);
+        resolveRelativeModule = async module => {
+            const resolved = await resolvePluginAuthorStagingModule({
+                graph: { rootPath, entryPath, loadModule }, module,
+            });
+            return { ...resolved, loadMode: attested.fact.loadMode };
+        };
+    }
+    const activation = await activateContributionModule({
+        pluginId: attested.binding.pluginId, manifestAuthority: attested.manifestAuthority,
+        occurrenceId: attested.cacheIdentity, manifest: attested.manifest,
+        moduleNamespace, resolveRelativeModule, isOccurrenceCurrent: () => true,
+    });
+    try {
+        await attested.assertStillAvailable();
+        const registration = activation.registrations.find(candidate => candidate.family === 'agents'
+            && candidate.localId === attested.binding.localAgentId);
+        if (activation.status !== 'active' || registration?.family !== 'agents'
+            || registration.value.factory !== input.factory
+            || !isDeepStrictEqual(registration.value.sessionRunnerFactory, attested.fact.locator)) {
+            throw new Error('Retained Agent catalog does not match its attested factory module');
+        }
+        let disposed = false;
+        const launch = registration.value.connectedAccountLaunch;
+        const projected = launch ? projectAgentConnectedAccountLaunchCatalogEntry({
+            pluginId: attested.binding.pluginId, agentId: declaredEntry.id,
+            connectedAccountLaunch: launch, hostAccess: attested.manifest.hostAccess, isCurrent: () => true,
+        }) : null;
+        return Object.freeze({
+            catalogEntry: Object.freeze({ ...declaredEntry,
+                ...(registration.value.vendorResumeSupport
+                    ? projectAgentExperimentalVendorResumeSupportCatalogEntry({
+                        vendorResumeSupport: registration.value.vendorResumeSupport,
+                        isCurrent: () => !disposed,
+                    }) : {}),
+                ...(projected ? {
+                    connectedAccountNativeHome: projected.connectedAccountNativeHome,
+                    getConnectedServiceStateSharingDescriptor: projected.getConnectedServiceStateSharingDescriptor,
+                    connectedAccountRequestAuthUses: projected.connectedAccountRequestAuthUses,
+                    connectedAccountFileEnvironmentUses: projected.connectedAccountFileEnvironmentUses,
+                    connectedAccountEnvironmentUses: projected.connectedAccountEnvironmentUses,
+                    connectedAccountEnvironmentUnsetUses: projected.connectedAccountEnvironmentUnsetUses,
+                } : {}),
+            }),
+            async dispose() {
+                if (disposed) return;
+                disposed = true;
+                await activation.dispose();
+            },
+        });
+    } catch (error) {
+        await activation.dispose();
+        throw error;
+    }
 }
 
 type ValidatedRunnerFactories = Awaited<

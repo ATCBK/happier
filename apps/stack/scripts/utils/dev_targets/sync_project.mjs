@@ -1,7 +1,8 @@
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readProcessHostIdentitySync } from '@happier-dev/cli-common/processInstance';
 
 import { withJsonOwnerFileLock } from '../proc/jsonOwnerFileLock.mjs';
 import { runCaptureResult } from '../proc/proc.mjs';
@@ -9,6 +10,7 @@ import { runDevTargetSshProcess } from './ssh_transport.mjs';
 import { loadDevTargetsConfig } from './config.mjs';
 import {
   buildMutagenProjectArgs,
+  DEV_TARGET_SYNC_EXECUTOR_REPO,
   isEquivalentMutagenProject,
   isExecutionHostCandidateSyncOwner,
   isMutagenProjectOwnedBy,
@@ -190,6 +192,93 @@ function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'"'"'`)}'`;
 }
 
+async function canonicalReplicaPath(path) {
+  try { return await realpath(path); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    const parent = dirname(path);
+    if (parent === path) throw error;
+    return join(await canonicalReplicaPath(parent), basename(path));
+  }
+}
+
+/** SSH aliases and user-private temporary directories are not host identity.
+ * Reuse canonical native OS observations without creating an identity/session. */
+async function assertDevTargetReplicaSafety({ sourceDir, targets, sshArgs = [], env = process.env },
+  { runProcess = runDevTargetControlProcess } = {}) {
+  const source = await canonicalReplicaPath(resolve(sourceDir || env.HAPPIER_STACK_SYNC_SOURCE_DIR || DEV_TARGET_SYNC_EXECUTOR_REPO));
+  const hostIdentity = readProcessHostIdentitySync();
+  const bootId = process.platform === 'linux' ? hostIdentity?.bootId : null;
+  if (!hostIdentity || (process.platform === 'linux' && !bootId)) throw new Error('[dev-targets] source host identity unavailable; refusing one-way mirror admission');
+  const contains = (parent, child) => {
+    const suffix = relative(parent, child);
+    return suffix === '' || (suffix !== '..' && !suffix.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) && !isAbsolute(suffix));
+  };
+  for (const target of targets) {
+    if ((target.platform === 'windows') !== (process.platform === 'win32')) continue;
+    const observe = async command => {
+      const result = await runProcess({ label: '', command: 'ssh',
+        args: [...(sshArgs.length ? sshArgs : target.sshConfigFile ? ['-F', target.sshConfigFile] : []), '-o', 'BatchMode=yes', target.ssh, command], env });
+      requireSuccessful(result, `${target.name} replica safety observation`);
+      return String(result.out ?? '');
+    };
+    if (!bootId) {
+      const nativeCommand = process.platform === 'win32'
+        ? 'powershell.exe -NoProfile -NonInteractive -EncodedCommand ' + Buffer.from(
+          '& reg.exe query HKLM\\SOFTWARE\\Microsoft\\Cryptography /v MachineGuid /reg:64; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; [System.Net.Dns]::GetHostName()', 'utf16le').toString('base64')
+        : 'if [ "$(uname -s)" = Darwin ]; then /usr/sbin/ioreg -rd1 -c IOPlatformExpertDevice; else printf "%s\\n" HSTACK_OTHER_PLATFORM; fi';
+      const output = await observe(nativeCommand);
+      if (process.platform === 'darwin' && output.trim() === 'HSTACK_OTHER_PLATFORM') continue;
+      // Feed the raw remote OS response through the same canonical reader as
+      // the local response; do not create another platform identity parser.
+      const remoteIdentity = readProcessHostIdentitySync({ platform: process.platform,
+        spawnSyncImpl: () => ({ status: 0, stdout: output }),
+        hostnameImpl: () => output.trim().split(/\r?\n/).at(-1),
+      });
+      if (!remoteIdentity) {
+        throw new Error(`[dev-targets] ${target.name} replica host identity unavailable`);
+      }
+      if (remoteIdentity.machineId !== hostIdentity.machineId) continue;
+    }
+    const witness = 'HSTACK_CONTROLLER_SOURCE';
+    const command = target.platform === 'windows'
+      ? 'powershell.exe -NoProfile -NonInteractive -EncodedCommand ' + Buffer.from(
+        `Write-Output '${witness}'`, 'utf16le').toString('base64')
+      : [
+        ...(bootId ? [
+          "hstack_boot=''",
+          'hstack_platform=$(uname -s) || exit',
+          'if [ "$hstack_platform" = Linux ]; then',
+          '  [ -r /proc/sys/kernel/random/boot_id ] || exit 1',
+          '  IFS= read -r hstack_boot < /proc/sys/kernel/random/boot_id || exit 1',
+          'fi',
+          `if [ "$hstack_boot" = ${shellQuote(bootId)} ]; then`,
+        ] : ['if true; then']),
+        `  hstack_path=${shellQuote(target.repoDir)}`,
+        '  case "$hstack_path" in /*) ;; *) hstack_path="$PWD/$hstack_path";; esac',
+        "  hstack_suffix=''",
+        '  while [ ! -d "$hstack_path" ]; do',
+        '    hstack_suffix="/${hstack_path##*/}$hstack_suffix"',
+        '    hstack_path=${hstack_path%/*}',
+        '    [ -n "$hstack_path" ] || hstack_path=/',
+        '  done',
+        '  cd -P "$hstack_path" || exit',
+        `  printf '%s\\n%s%s\\n' ${shellQuote(witness)} "$PWD" "$hstack_suffix"`,
+        'fi',
+      ].join('\n');
+    const [observed, remotePath] = (await observe(command)).trim().split(/\r?\n/);
+    if (observed !== witness) continue;
+    if (target.platform === 'posix' && !isAbsolute(remotePath ?? '')) {
+      throw new Error(`[dev-targets] self-target ${target.name} replica path could not be resolved`);
+    }
+    const destination = target.platform === 'windows'
+      ? await canonicalReplicaPath(resolve(target.repoDir)) : resolve(remotePath);
+    if (contains(source, destination) || contains(destination, source)) {
+      throw new Error(`[dev-targets] self-target ${target.name} replica overlaps authoritative source ${source}; use local placement or a separate synchronized mirror`);
+    }
+  }
+}
+
 export async function prepareDevTargetOpenSsh({ targets, mutagenDir, env }) {
   // Subset preparation must retain transports used by other repositories.
   const previousConfig = await readFile(join(mutagenDir, 'openssh', 'config'), 'utf8').catch(() => '');
@@ -276,6 +365,9 @@ async function ensureDevTargetSyncProjectUnlocked(
     ownerId,
     env: openSsh.mutagenEnv,
   });
+  // Registration can describe an authoritative endpoint. Only this producer
+  // may turn it into a one-way destination, so validate before any mutation.
+  await assertDevTargetReplicaSafety({ sourceDir, targets, sshArgs: openSsh.sshArgs, env: mutagenRuntime.env }, { runProcess });
   requireSuccessful(await runProcess({
     label: 'mutagen',
     command: 'mutagen',
@@ -334,18 +426,9 @@ async function ensureDevTargetSyncProjectUnlocked(
   }
   let projectCreated = false;
   if (!resumed) {
-    if (existingProject && !canResumeProject) {
-      // Flush the old membership before replacing its project file. Otherwise
-      // terminate would select the new names and strand the old sessions.
-      const names = projectSessionNames(existingProject);
-      for (const name of names) {
-        if (parseMutagenSyncList(currentSessions, name).state === 'missing') continue;
-        requireSuccessful(await runProcess({ label: 'sync', command: 'mutagen',
-          args: ['sync', 'resume', name], env: mutagenRuntime.env }), 'existing Mutagen session resume');
-        requireSuccessful(await runProcess({ label: 'sync', command: 'mutagen',
-          args: ['sync', 'flush', name], syncFlushSession: name, env: mutagenRuntime.env }), 'existing Mutagen session flush');
-      }
-    }
+    // These one-way source replicas can be reconstructed from the controller.
+    // Mutagen terminates by the existing project id, without a remote flush;
+    // requiring one would prevent policy repair for an offline replica.
     const termination = await runProcess({
       label: 'mutagen',
       command: 'mutagen',

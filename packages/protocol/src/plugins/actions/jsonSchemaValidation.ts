@@ -19,6 +19,7 @@ import {
   isValidPluginJsonSchemaValue,
   normalizePluginJsonSchema,
   cloneStrictPluginJsonValue,
+  pluginJsonValuesEqual,
   type PluginJsonSchemaValidator,
   type ProtocolJsonValue,
 } from './protocolComposableSchema.js';
@@ -68,7 +69,7 @@ export type {
 /**
  * The one normalized schema and executable validator prepared for a single
  * admitted schema lifetime in one JavaScript realm. The pair itself has no
- * registry or cache semantics; the caller owns retaining and retiring it.
+ * authority semantics; the caller owns retaining and retiring the pair.
  */
 export type PreparedPluginJsonSchema = Readonly<{
   jsonSchema: PluginJsonSchemaV2;
@@ -77,8 +78,9 @@ export type PreparedPluginJsonSchema = Readonly<{
 
 /**
  * Prepares one bounded canonical projection and compiles it once. Consumers
- * retain this pair at their admitted schema/generation lifecycle; this pure
- * helper deliberately does not cache across callers or runtimes.
+ * retain this pair at their admitted schema/generation lifecycle. Repeated
+ * preparations of the same schema identity share the canonical compiler's
+ * validator; the weak identity lookup does not retain retired declarations.
  */
 export function preparePluginJsonSchema(schema: object): PreparedPluginJsonSchema {
   const jsonSchema = normalizePluginJsonSchema(schema);
@@ -169,9 +171,10 @@ function createPluginJsonSchemaZodAdapter<Schema extends z.ZodMiniType>(schema: 
     };
     // Projection changes only unknown-field handling. Every projected value
     // is re-admitted by the original portable compiler, including refinements.
-    const project = (definition: PluginJsonSchemaV2, value: unknown): unknown => {
+    const project = (definition: PluginJsonSchemaV2, value: unknown, retainUnionFields = false): unknown => {
       const members: PluginJsonSchemaV2[] = [];
       const visited = new Set<PluginJsonSchemaV2>();
+      let unmatchedUnion = false;
       const collect = (node: PluginJsonSchemaV2): void => {
         if (visited.has(node)) return;
         visited.add(node);
@@ -180,14 +183,36 @@ function createPluginJsonSchemaZodAdapter<Schema extends z.ZodMiniType>(schema: 
         node.allOf?.forEach(collect);
         for (const choices of [node.anyOf, node.oneOf]) {
           if (!choices) continue;
-          const branch = choices.find((choice) => matches(choice, project(choice, value)));
+          if (retainUnionFields) {
+            choices.forEach(collect);
+            continue;
+          }
+          // Reuse this projection to identify fields declared by any arm,
+          // including nested fields. Tolerating retired extras must never
+          // erase a known field to synthesize a different valid identity.
+          const unionFields = { allOf: choices };
+          const known = project(unionFields, value, true);
+          const preservesKnownFields = (choice: PluginJsonSchemaV2): boolean => {
+            const candidate = project(choice, value);
+            return matches(choice, candidate)
+              && pluginJsonValuesEqual(known, project(unionFields, candidate, true));
+          };
+          // Prefer an already-valid arm, provided its read projection also
+          // preserves the union's known fields (open arms can otherwise lose
+          // fields declared by a neighboring arm).
+          const branch = choices.find((choice) => matches(choice, value) && preservesKnownFields(choice))
+            ?? choices.find(preservesKnownFields);
           if (branch) collect(branch);
+          else unmatchedUnion = true;
         }
       };
       collect(definition);
+      // Preserve the failed subtree for strict re-admission. Projecting only
+      // shared root properties could otherwise synthesize a valid empty arm.
+      if (unmatchedUnion) return value;
       if (Array.isArray(value)) {
         const items = members.flatMap((member) => member.items ? [member.items] : []);
-        return items.length ? value.map((item) => project({ allOf: items }, item)) : value;
+        return items.length ? value.map((item) => project({ allOf: items }, item, retainUnionFields)) : value;
       }
       if (!value || typeof value !== 'object') return value;
       const objectMembers = members.filter((member) => member.type === 'object' || member.properties);
@@ -202,7 +227,7 @@ function createPluginJsonSchemaZodAdapter<Schema extends z.ZodMiniType>(schema: 
         const catchalls = objectMembers.flatMap((member) => typeof member.additionalProperties === 'object' ? [member.additionalProperties] : []);
         const definitions = declared.length ? declared : catchalls;
         if (definitions.length) Object.defineProperty(output, key, {
-          value: project({ allOf: definitions }, child), enumerable: true, configurable: true, writable: true,
+          value: project({ allOf: definitions }, child, retainUnionFields), enumerable: true, configurable: true, writable: true,
         });
       }
       return output;

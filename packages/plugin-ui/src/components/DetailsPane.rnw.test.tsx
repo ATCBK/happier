@@ -165,6 +165,21 @@ describe('DetailsPane (host details pane binding)', () => {
     }
   });
 
+  it('draws no Back of its own where the navigation\'s Back already returns to the list', async () => {
+    const view = mountWithPane(
+      <DetailsPane open title="Entry #2481" onClose={vi.fn()} testID="entry-pane">
+        <Probe />
+      </DetailsPane>,
+      null,
+      { host: { pageChrome: { showsTitle: true, navigationBackSpendsStep: true } } },
+    );
+    await flush();
+    const inPage = view.container.querySelector('[data-testid="entry-pane"]');
+    expect(inPage?.querySelector('[role="heading"]')?.textContent).toBe('Entry #2481');
+    expect(view.container.querySelector('[data-testid="entry-pane:back"]')).toBeNull();
+    view.unmount();
+  });
+
   it('keeps the identity mark beside the title and the mark leading the line when the detail is pushed', async () => {
     const view = mountWithPane(
       <DetailsPane

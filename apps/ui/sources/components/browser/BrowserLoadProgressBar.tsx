@@ -10,7 +10,7 @@ import Animated, {
 import { HappierProgress } from '@happier-dev/plugin-ui/presentation';
 
 import { reanimatedMotionTokens } from '@/components/ui/motion/reanimatedMotionTokens';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { t } from '@/text';
 
@@ -69,7 +69,7 @@ export function BrowserLoadProgressBar(props: Readonly<{
     const detectedReducedMotion = useReducedMotionPreference();
     const reducedMotion = props.reducedMotion ?? detectedReducedMotion;
     const { theme } = useUnistyles();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const testID = props.testID ?? 'browser-load-progress';
     const [phase, setPhase] = React.useState<Phase>(props.loading ? 'loading' : 'hidden');
     const fill = useSharedValue(props.loading ? INITIAL_SLIVER : 0);

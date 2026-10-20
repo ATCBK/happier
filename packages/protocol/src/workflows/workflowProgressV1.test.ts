@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
+import { SessionRuntimeIssueV1Schema } from '../sessions/control/runtimeIssueV1.js';
 
 import { zodSchemaToJsonSchemaObject } from '../actions/actionInputJsonSchema.js';
 
@@ -31,6 +32,29 @@ import {
 } from './workflowProgressV1.js';
 
 describe('workflow progress v1', () => {
+  it('retains the original typed reply outcome independently of selected result text', () => {
+    const progress = WorkflowProgressEnvelopeV1Schema.parse({ kind: 'happier.workflow-progress.v1', blockKind: 'step',
+      invocationPath: { blockId: 'review', scope: [] }, attempt: '0', logicalInvocationRecordId: 'review-invocation',
+      execution: { kind: 'session', sessionId: 'reviewer', localInputId: 'workflow-input' } });
+    const settled = applyWorkflowInvocationFactV1(progress, { result: '', replyOutcome: { kind: 'pass' } });
+    expect(WorkflowProgressEnvelopeV1Schema.parse(JSON.parse(JSON.stringify(settled)))).toMatchObject({ result: '',
+      execution: { kind: 'session', sessionId: 'reviewer', localInputId: 'workflow-input' }, replyOutcome: { kind: 'pass' } });
+    expect(applyWorkflowInvocationFactV1(settled, { interaction: { status: 'read' } }).replyOutcome).toEqual({ kind: 'pass' });
+    expect(WorkflowProgressEnvelopeV1Schema.safeParse({ ...settled, replyOutcome: { kind: 'pass', guessedAnswer: true } }).success).toBe(false);
+  });
+  it('retains the exact terminal runtime issue when recovery follows an earlier attention reason', () => {
+    const issue = SessionRuntimeIssueV1Schema.parse({ v: 1, scope: 'primary_session', status: 'failed',
+      code: 'usage_limit', source: 'usage_limit', occurredAt: 100,
+      usageLimit: { v: 1, resetAtMs: null, retryAfterMs: null, quotaScope: 'account', recoverability: 'wait' } });
+    const current = WorkflowProgressEnvelopeV1Schema.parse({ kind: 'happier.workflow-progress.v1', blockKind: 'step',
+      invocationPath: { blockId: 'work', scope: [] }, attempt: '0', logicalInvocationRecordId: 'leaf',
+      reason: { code: 'workflow_step_timeout' } });
+    const failed = applyWorkflowInvocationFactV1(current, { reason: 'session_input_failed', runtimeIssueV1: issue });
+    expect(failed.reason).toEqual({ code: 'workflow_step_timeout', runtimeIssueV1: issue });
+    expect(applyWorkflowInvocationFactV1(failed, { reason: 'session_input_failed',
+      runtimeIssueV1: { ...issue, occurredAt: 200 } }).reason).toEqual(failed.reason);
+    expect(WorkflowProgressEnvelopeV1Schema.safeParse({ ...failed, reason: { ...failed.reason, unknownFailure: true } }).success).toBe(false);
+  });
   it('carries closed, non-secret conversation refusal facts through Actions and progress', () => {
     const details = { code: 'workflow_conversation_unavailable', reason: 'agentTarget',
       expected: { kind: 'agent', ids: ['happier.agent.claude/claude'] }, observed: { kind: 'unset' } };

@@ -5,11 +5,9 @@ import {
 } from '@happier-dev/plugin-sdk/actions';
 import { pluginJsonValuesEqual } from '@happier-dev/plugin-sdk/protocol';
 import {
-  TriageGetInputV1Schema,
+  TriageSourceCredentialInputsV1,
+  TriageSourceCredentialBindingV1Schema,
   TriageListInstancesInputV1Schema,
-  TriagePrepareReviewWorkspaceInputV1Schema,
-  TriageScanInputV1Schema,
-  TriageVerifyReviewWorkspaceInputV1Schema,
   type TriageConfiguredSourceInstanceV1,
   type TriageGetResultV1,
   type TriageListInstancesResultV1,
@@ -159,11 +157,13 @@ async function openClient(
   | Readonly<{ ok: false; failure: TriageSourceFailureV1 }>
 > {
   try {
+    const binding = TriageSourceCredentialBindingV1Schema.safeParse(instance.binding);
+    if (!binding.success) return Object.freeze({ ok: false as const, failure: FOREIGN_BINDING_FAILURE });
     return Object.freeze({
       ok: true as const,
-      client: 'account' in instance.binding
-        ? await createGithubListedAccountApiClient(context, instance.binding.account)
-        : await createGithubNativeApiClient(context, instance.binding.service),
+      client: 'account' in binding.data
+        ? await createGithubListedAccountApiClient(context, binding.data.account)
+        : await createGithubNativeApiClient(context, binding.data.service),
     });
   } catch (error) {
     return Object.freeze({
@@ -411,7 +411,7 @@ export async function scanGithubTriageSource(
   context: PluginInvocationContext,
   dependencies: GithubTriageOperationDependenciesV1 = {},
 ): Promise<TriageScanResultV1> {
-  const parsed = TriageScanInputV1Schema.safeParse(input);
+  const parsed = TriageSourceCredentialInputsV1.scan.safeParse(input);
   if (!parsed.success) {
     return Object.freeze({ kind: 'failed' as const, failure: INVALID_INPUT_FAILURE });
   }
@@ -459,7 +459,7 @@ export async function getGithubTriageEntry(
   context: PluginInvocationContext,
   dependencies: GithubTriageOperationDependenciesV1 = {},
 ): Promise<TriageGetResultV1> {
-  const parsed = TriageGetInputV1Schema.safeParse(input);
+  const parsed = TriageSourceCredentialInputsV1.get.safeParse(input);
   if (!parsed.success) {
     // A `get` cannot report an unresolved observation without a valid local ref, so
     // an unparseable input is refused rather than answered about an unknown entry.
@@ -534,7 +534,7 @@ export async function prepareGithubTriageReviewWorkspace(
   context: PluginInvocationContext,
   dependencies: GithubTriageOperationDependenciesV1 = {},
 ): Promise<TriagePrepareReviewWorkspaceResultV1> {
-  const parsed = TriagePrepareReviewWorkspaceInputV1Schema.safeParse(input);
+  const parsed = TriageSourceCredentialInputsV1.prepareReviewWorkspace.safeParse(input);
   if (!parsed.success) return Object.freeze({ kind: 'unsupported' as const });
   const preparation = parsed.data;
 
@@ -600,7 +600,7 @@ export async function verifyGithubTriageReviewWorkspace(
   context: PluginInvocationContext,
   dependencies: GithubTriageOperationDependenciesV1 = {},
 ): Promise<TriageVerifyReviewWorkspaceResultV1> {
-  const parsed = TriageVerifyReviewWorkspaceInputV1Schema.safeParse(input);
+  const parsed = TriageSourceCredentialInputsV1.verifyReviewWorkspace.safeParse(input);
   if (!parsed.success) {
     return Object.freeze({ kind: 'refused' as const, reason: 'pullRequestMoved' as const });
   }

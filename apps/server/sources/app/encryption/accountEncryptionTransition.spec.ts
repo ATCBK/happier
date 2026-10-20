@@ -1,23 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { Tx } from "@/storage/inTx";
-
-const { acquireAccountFence } = vi.hoisted(() => ({
-    acquireAccountFence: vi.fn(async () => {}),
-}));
-
-vi.mock("@/app/encryption/accountSessionOwnerMetadataFence", () => ({
-    acquireAccountSessionOwnerMetadataFenceInTx:
-        acquireAccountFence,
-}));
 
 import { acquireAccountEncryptionTransitionFenceInTx } from "./accountEncryptionTransition";
 
 describe("accountEncryptionTransition", () => {
-    beforeEach(() => {
-        vi.clearAllMocks();
-    });
-
     it("leaves Session inventory to the canonical Session tuple owner after the Account-first fence", async () => {
         const accountFindUnique = vi.fn(async () => ({
             publicKey: null,
@@ -31,6 +18,8 @@ describe("accountEncryptionTransition", () => {
         const sessionCount = vi.fn(async () => 1);
         // This is a narrow deterministic repository boundary fixture.
         const tx = {
+            $queryRawUnsafe: vi.fn(async () => [{ id: "account-1" }]),
+            $executeRawUnsafe: vi.fn(async () => 1),
             account: { findUnique: accountFindUnique },
             session: { count: sessionCount },
         } as unknown as Tx;
@@ -39,12 +28,9 @@ describe("accountEncryptionTransition", () => {
             await acquireAccountEncryptionTransitionFenceInTx(
                 tx,
                 "account-1",
+                "content",
             );
 
-        expect(acquireAccountFence).toHaveBeenCalledWith(
-            tx,
-            "account-1",
-        );
         expect(sessionCount).not.toHaveBeenCalled();
         expect(result).toEqual({
             status: "ready",
@@ -77,6 +63,8 @@ describe("accountEncryptionTransition", () => {
         }));
         const sessionCount = vi.fn(async () => 1);
         const tx = {
+            $queryRawUnsafe: vi.fn(async () => [{ id: "account-1" }]),
+            $executeRawUnsafe: vi.fn(async () => 1),
             account: { findUnique: accountFindUnique },
             session: { count: sessionCount },
         } as unknown as Tx;
@@ -85,6 +73,7 @@ describe("accountEncryptionTransition", () => {
             await acquireAccountEncryptionTransitionFenceInTx(
                 tx,
                 "account-1",
+                "exclusive",
             );
 
         expect(result).toEqual({

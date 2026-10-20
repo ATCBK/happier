@@ -118,9 +118,12 @@ describe('exact target worker status Action', () => {
           .toMatchObject({ ok: false, errorCode: 'project_worker_access_denied' });
         const reads = post.mock.calls.length;
         for (const scenario of ['wrong', 'ambiguous', 'retired'] as const) {
-          await updateSettings(settings => ({ ...settings, servers: scenario === 'wrong' ? { [profileId]: profile }
-            : scenario === 'ambiguous' ? { [profileId]: profile, duplicate: { ...profile, id: 'duplicate' } }
-              : { [profileId]: { ...profile, homeConnectionDescriptor: undefined } } }));
+          await updateSettings(settings => {
+            const servers: NonNullable<typeof settings.servers> = scenario === 'wrong' ? { [profileId]: profile }
+              : scenario === 'ambiguous' ? { [profileId]: profile, duplicate: { ...profile, id: 'duplicate' } }
+                : { [profileId]: { ...profile, homeConnectionDescriptor: undefined } };
+            return { ...settings, servers };
+          });
           const rejectedHome = scenario === 'wrong' ? 'srv_otherWorker' : serverId;
           expect(await worker({ actionId: 'projects.worker.status', input: { ...input, workspace: { ...input.workspace, serverId: rejectedHome } },
             context: { ...context, serverId: rejectedHome } })).toMatchObject({ ok: false, errorCode: 'project_worker_access_denied' });

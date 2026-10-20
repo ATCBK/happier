@@ -189,17 +189,19 @@ describe('createLocalPersonalHome production adapter', () => {
         source: 'https://release.example.test/server.tar.gz',
         cleanup,
       });
+      // Settle the release boundary's partial mock before loading consumers;
+      // parallel first imports can enter its real graph during importOriginal.
+      const { writePersonalHomeServerArtifactCapability } = await import('@happier-dev/cli-common/firstPartyRuntime');
       const [
-        { writePersonalHomeServerArtifactCapability },
         { adoptServerProfileHomeConnectionDescriptor },
         { createLocalPersonalHome },
         { readStoredCredentialsForServerId },
       ] = await Promise.all([
-        import('@happier-dev/cli-common/firstPartyRuntime'),
         import('@/server/serverProfiles'),
         import('./createLocalPersonalHome'),
         import('@/persistence'),
       ]);
+      (await import('@/configuration')).reloadConfiguration();
       await writePersonalHomeServerArtifactCapability(payloadRoot);
 
       const preexisting = await adoptServerProfileHomeConnectionDescriptor({

@@ -9,7 +9,6 @@ import type { ComposerAttachmentDraftV1, ComposerSnapshotV1 } from '@happier-dev
 
 import type { PickedAttachment } from '@/components/sessions/attachments/AttachmentFilePicker.types';
 import type { NewSessionComposerDocument } from '@/components/sessions/new/hooks/screenModel/useNewSessionComposerDocument';
-import { useNewSessionComposerDocument } from '@/components/sessions/new/hooks/screenModel/useNewSessionComposerDocument';
 import type { HandleCreateSessionOptions } from '@/components/sessions/new/hooks/useCreateNewSession';
 import type { NewSessionLaunchAttempt } from '@/components/sessions/new/modules/newSessionLaunchAttempt';
 import { installNewSessionScreenModelCommonModuleMocks } from '@/components/sessions/new/hooks/newSessionScreenModelTestHelpers';
@@ -18,7 +17,6 @@ import {
     readNewSessionAttachmentDrafts,
     writeNewSessionAttachmentDrafts,
 } from './newSessionAttachmentDraftStore';
-import { createSessionDraftRepository } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { resolveNewSessionDraftAttachmentFlowId } from './newSessionDraftAttachmentFlowId';
 import type { WorkspaceScopeBase } from '@/sync/domains/workspaces/workspaceScope';
 
@@ -132,16 +130,18 @@ installNewSessionScreenModelCommonModuleMocks({
             },
         }).module;
     },
-    storage: async (importOriginal) => {
-        const original = await importOriginal<any>();
-        return {
-            ...original,
+    storage: async () => {
+        const { createStorageModuleStub } = await import('@/dev/testkit/mocks/storage');
+        return createStorageModuleStub({
             useWorkspaceReviewCommentsDrafts: (scope: WorkspaceScopeBase | null | undefined) => (
                 scope ? (workspaceReviewDraftsState.draftsByRootPath.get(scope.rootPath) ?? []) : []
             ),
-        };
+        });
     },
 });
+
+const { useNewSessionComposerDocument } = await import('@/components/sessions/new/hooks/screenModel/useNewSessionComposerDocument');
+const { createSessionDraftRepository } = await import('@/sync/ops/sessionDrafts/sessionDraftRepository');
 
 type HookValue = ReturnType<typeof import('./useNewSessionAttachmentsController').useNewSessionAttachmentsController>;
 
@@ -1332,7 +1332,7 @@ describe('useNewSessionAttachmentsController (attachments.uploads)', () => {
         });
 
         expect(handleCreateSession).toHaveBeenCalledWith(expect.objectContaining({
-            inputTextOverride: expect.stringContaining('Review comments:'),
+            inputTextOverride: expect.stringContaining('Please verify this project change.'),
             initialInputReviewComments: {
                 displayText: 'Review comments (1)',
                 comments: [expect.objectContaining({ id: 'draft-1', filePath: 'src/a.ts' })],

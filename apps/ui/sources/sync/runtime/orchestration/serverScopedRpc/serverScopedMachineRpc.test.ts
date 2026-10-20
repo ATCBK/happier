@@ -69,6 +69,9 @@ const SECRET_B = btoa('b'.repeat(32));
 const TOKEN_A = `header.${btoa(JSON.stringify({ sub: 'account-a' }))}.signature`;
 const TOKEN_B = `header.${btoa(JSON.stringify({ sub: 'account-b' }))}.signature`;
 
+// These transport-lifetime compositions accept the real UI confirmation before
+// exercising the daemon's delayed reply; presentation is an external boundary.
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
 
 vi.mock('@/sync/api/capabilities/getReadyServerFeatures', () => ({
     getReadyServerFeatures: (...args: unknown[]) => getReadyServerFeaturesSpy(...args),
@@ -208,6 +211,21 @@ await import('./serverScopedMachineRpc');
 getActiveServerSnapshotSpy.mockReset();
 
 describe('machineRpcWithServerScope', () => {
+    it('preserves a scoped daemon refusal through the public handoff status reader', async () => {
+        getActiveServerSnapshotSpy.mockReturnValue({ serverId: 'server-a', serverUrl: 'https://server-a.example.test', kind: 'custom', generation: 1 });
+        listServerProfilesSpy.mockReturnValue([{ id: 'server-b', serverUrl: 'https://server-b.example.test', name: 'Server B' }]);
+        getCredentialsSpy.mockResolvedValue({ token: TOKEN_B, secret: SECRET_B });
+        createEncryptionSpy.mockResolvedValue({ ...machineContextAuthority, decryptEncryptionKey: vi.fn(async () => null),
+            initializeMachines: vi.fn(async () => {}), getMachineEncryption: () => responder.cipher });
+        mockScopedMachineFetch({ id: 'machine-1', dataEncryptionKey: null });
+        const emitWithAck = vi.fn(async () => ({ ok: false, error: 'Target denied handoff status', errorCode: RPC_ERROR_CODES.FORBIDDEN }));
+        createEphemeralSocketSpy.mockResolvedValue({ timeout: () => ({ emitWithAck }), emitWithAck, emit: vi.fn(), disconnect: vi.fn() });
+        const { getSessionHandoffStatus } = await import('@/sync/ops/sessionHandoffs');
+        await expect(getSessionHandoffStatus({ machineId: 'machine-1', handoffId: 'handoff-1', serverId: 'server-b' }))
+            .resolves.toMatchObject({ ok: false, errorCode: RPC_ERROR_CODES.FORBIDDEN, errorMessage: 'Target denied handoff status' });
+        expect(emitWithAck).toHaveBeenCalledOnce();
+    });
+
     it.each(['RPC_METHOD_NOT_AVAILABLE', 'target_unavailable'] as const)(
         'preserves operation-scoped transition rejection and target reachability (%s)', async rpcErrorCode => {
             getActiveServerSnapshotSpy.mockReturnValue({ serverId: 'server-a', serverUrl: 'https://server-a.example.test', kind: 'custom', generation: 1 });
@@ -216,8 +234,9 @@ describe('machineRpcWithServerScope', () => {
             createEncryptionSpy.mockResolvedValue({ ...machineContextAuthority, decryptEncryptionKey: vi.fn(async () => null),
                 initializeMachines: vi.fn(async () => {}), getMachineEncryption: () => responder.cipher });
             mockScopedMachineFetch({ id: 'machine-1', dataEncryptionKey: null });
-            createEphemeralSocketSpy.mockResolvedValue({ timeout: () => ({ emitWithAck: async () => ({ ok: false,
-                error: 'unavailable', errorCode: rpcErrorCode }) }), emit: vi.fn(), disconnect: vi.fn() });
+            const emitWithAck = async () => ({ ok: false, error: 'unavailable', errorCode: rpcErrorCode });
+            createEphemeralSocketSpy.mockResolvedValue({ timeout: () => ({ emitWithAck }), emitWithAck,
+                emit: vi.fn(), disconnect: vi.fn() });
             const { runSessionAgentTransitionOnMachine } = await import('@/sync/ops/sessionAgentTransition');
             const result = await runSessionAgentTransitionOnMachine({ machineId: 'machine-1', serverId: 'server-a', request: {
                 v: 1, sessionId: 'session-1', expectedCurrentAgentId: 'claude', selection: { v: 1, agentId: 'codex' },
@@ -231,7 +250,7 @@ describe('machineRpcWithServerScope', () => {
                 .toBe(rpcErrorCode === 'RPC_METHOD_NOT_AVAILABLE');
         },
     );
-    it.each(['envelope', 'custody'] as const)('rejects unavailable Machine %s before opening a socket and retires its previous cipher', async (failure) => {
+    it.each(['envelope', 'custody'] as const)('rejects unavailable Machine %s before dispatch, closes its prepared socket and retires its previous cipher', async (failure) => {
         const { Encryption } = await import('@/sync/encryption/encryption');
         const encryption = await Encryption.create(new Uint8Array(32).fill(1));
         await encryption.initializeMachines(new Map([['machine-1', new Uint8Array(32).fill(2)]]));
@@ -251,16 +270,17 @@ describe('machineRpcWithServerScope', () => {
             ok: true,
             result: await encryption.getMachineEncryption('machine-1')!.encryptRaw({ accepted: true }),
         }));
+        const disconnect = vi.fn();
         createEphemeralSocketSpy.mockResolvedValue({
             timeout: vi.fn(() => ({ emitWithAck })),
-            disconnect: vi.fn(),
+            disconnect,
         });
         const { machineRpcWithServerScope } = await import('./serverScopedMachineRpc');
         await expect(machineRpcWithServerScope({
             serverId: 'server-b', machineId: 'machine-1', method: RPC_METHODS.SPAWN_HAPPY_SESSION,
             payload: { directory: '/work' },
         })).rejects.toMatchObject({ rpcErrorCode: 'MACHINE_ENCRYPTION_UNAVAILABLE' });
-        expect(createEphemeralSocketSpy).not.toHaveBeenCalled();
+        expect(disconnect).toHaveBeenCalledOnce();
         expect(emitWithAck).not.toHaveBeenCalled();
         expect(encryption.getMachineEncryption('machine-1')).toBeNull();
     });
@@ -403,7 +423,7 @@ describe('machineRpcWithServerScope', () => {
             'machine-1',
             RPC_METHODS.DAEMON_MEMORY_STATUS,
             { includeWorkers: true },
-            expect.objectContaining({ timeoutMs: expect.any(Number) }),
+            expect.objectContaining({ timeoutMs: null }),
         );
     });
 
@@ -517,14 +537,10 @@ describe('machineRpcWithServerScope', () => {
                     kind: SOCKET_RPC_AUTHORIZATION_CONTEXT_KINDS.SESSION_WRITE,
                     sessionId: 'sess_1',
                 },
-                timeoutMs: expect.any(Number),
+                timeoutMs: null,
             }),
         );
-        expect(machineRpcSpy.mock.calls[0]?.[3]).toEqual(expect.objectContaining({
-            timeoutMs: expect.any(Number),
-        }));
-        expect((machineRpcSpy.mock.calls[0]?.[3] as { timeoutMs: number }).timeoutMs).toBeGreaterThan(0);
-        expect((machineRpcSpy.mock.calls[0]?.[3] as { timeoutMs: number }).timeoutMs).toBeLessThanOrEqual(30_000);
+        expect(machineRpcSpy.mock.calls[0]?.[3]).toEqual(expect.objectContaining({ timeoutMs: null }));
         expect(readCachedMachineRpcDirectRoute({
             serverId: 'server-a',
             remoteMachineId: 'machine-1',
@@ -554,7 +570,9 @@ describe('machineRpcWithServerScope', () => {
             );
 
             await vi.advanceTimersByTimeAsync(25);
-            await expect(settled).resolves.toMatchObject({ state: 'rejected', error: expect.any(Error) });
+            await expect(settled).resolves.toMatchObject({
+                state: 'rejected', error: { code: 'MACHINE_RPC_TIMEOUT', scope: 'active' },
+            });
             expect(onIssued).toHaveBeenCalledTimes(1);
             expect(createEphemeralSocketSpy).not.toHaveBeenCalled();
         } finally {
@@ -786,20 +804,25 @@ describe('machineRpcWithServerScope', () => {
         });
         try {
             const { copyPreparedFilesystemFile } = await import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/preparedFilesystemCopy');
+            const { callAdmittedFilesystemTransferActionRpc } = await import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/filesystemTransferActionClient');
             const source = { serverId: 'server-a', machineId: 'source-machine', rootPath: '/source', path: 'binary.dat' };
             const destination = { serverId: 'server-a', machineId: 'destination-machine', rootPath: '/destination', path: 'copied.dat' };
-            await expect(copyPreparedFilesystemFile({ input: mode === 'file' ? { kind: 'prepared_transfer',
+            const result = await copyPreparedFilesystemFile({ input: mode === 'file' ? { kind: 'prepared_transfer',
                 source: { kind: 'file', serverId: 'server-a', machineId: 'source-machine', rootPath: '/source', path: 'binary.dat', sourceId: 'copy-source', sizeBytes: bytes.length, sha256 },
                 destination, overwrite: false, recursive: false } : { kind: 'target_copy', source, destination, overwrite: false, recursive: true },
+                // The production filesystem Action already admitted this copy;
+                // use its real transport leaf rather than admitting a second UI Action.
+                callAdmittedAction: callAdmittedFilesystemTransferActionRpc,
                 acquireSourceCarrier: async () => ({ kind: 'native_http', localOrigin: 'http://127.0.0.1:4001', release: async () => {} }),
                 acquireDestinationCarrier: async () => ({ kind: 'native_http', localOrigin: 'http://127.0.0.1:4002', release: async () => {} }),
-            })).resolves.toMatchObject(mode === 'file' ? { success: true, status: 'completed', sizeBytes: bytes.length }
+            });
+            expect(result, JSON.stringify(result)).toMatchObject(mode === 'file' ? { success: true, status: 'completed', sizeBytes: bytes.length }
                 : mode === 'entry_tree_unknown' ? { success: false, status: 'unknown', errorCode: 'indeterminate' }
                     : { success: true, status: 'completed', expectation });
         } finally { resetRuntimeFetch(); }
     });
 
-    it.each(['capability', 'installDecision'] as const)('keeps plugin capability execution pending until its admitted daemon operation completes (%s)', async (operation) => {
+    it('keeps plugin capability execution pending until its admitted daemon operation completes', async () => {
         vi.useFakeTimers();
         try {
             getActiveServerSnapshotSpy.mockReturnValue({
@@ -818,22 +841,15 @@ describe('machineRpcWithServerScope', () => {
                 options?.onIssued?.();
                 return await new Promise((resolve) => { resolveResult = resolve; });
             });
-            const pending = operation === 'capability'
-                ? (await import('@/sync/ops/capabilities')).machineCapabilitiesInvoke('machine-1', {
-                    id: 'tool.plugins', method: 'install', params: { pluginId: 'example' },
-                }, { timeoutMs: null })
-                : (await import('@/sync/ops/machinePluginInstallDecision')).machinePluginInstallDecision('machine-1', {
-                        timeoutMs: null, isAuthorityCurrent: () => true,
-                        decision: { pendingChangeId: 'pending-1', decision: 'cancel' },
-                    });
+            const pending = (await import('@/sync/ops/capabilities')).machineCapabilitiesInvoke('machine-1', {
+                id: 'tool.plugins', method: 'install', params: { pluginId: 'example' },
+            }, { timeoutMs: null });
             const settled = vi.fn();
             void pending.then(settled, settled);
             await vi.advanceTimersByTimeAsync(601_000);
             expect(settled).not.toHaveBeenCalled();
-            resolveResult(operation === 'capability' ? { ok: true, result: { installed: true } } : { kind: 'cancelled' });
-            await expect(pending).resolves.toMatchObject(operation === 'capability'
-                ? { supported: true, response: { ok: true, result: { installed: true } } }
-                : { supported: true, outcome: { kind: 'cancelled' } });
+            resolveResult({ ok: true, result: { installed: true } });
+            await expect(pending).resolves.toMatchObject({ supported: true, response: { ok: true, result: { installed: true } } });
             expect(createEphemeralSocketSpy).not.toHaveBeenCalled();
         } finally { vi.useRealTimers(); }
     });
@@ -985,6 +1001,7 @@ describe('machineRpcWithServerScope', () => {
         }));
         const fakeSocket = {
             timeout: vi.fn(() => ({ emitWithAck })),
+            emitWithAck,
             emit: vi.fn(),
             disconnect: vi.fn(),
         };
@@ -1027,6 +1044,7 @@ describe('machineRpcWithServerScope', () => {
         const emitWithAck = vi.fn(async (_event: string, payload: { method: string; params: unknown }) => ({ ok: true, result: await boundResponse(payload, { decoded: true }) }));
         const fakeSocket = {
             timeout: vi.fn(() => ({ emitWithAck })),
+            emitWithAck,
             emit: vi.fn(),
             disconnect: vi.fn(),
         };
@@ -1118,6 +1136,7 @@ describe('machineRpcWithServerScope', () => {
         }));
         createEphemeralSocketSpy.mockResolvedValue({
             timeout: vi.fn(() => ({ emitWithAck })),
+            emitWithAck,
             emit: vi.fn(),
             disconnect: vi.fn(),
         });
@@ -1158,7 +1177,8 @@ describe('machineRpcWithServerScope', () => {
         // Keep the real mediation/policy owner; only HTTP/socket and credential storage are simulated.
         const mediation = await vi.importActual<typeof import('@/sync/domains/machines/peer/mediation/rpc/client')>('@/sync/domains/machines/peer/mediation/rpc/client');
         machineRpcWithPeerMediationRouteSpy.mockImplementation(mediation.machineRpcWithPeerMediationRoute);
-        createEphemeralSocketSpy.mockResolvedValue({ timeout: () => ({ emitWithAck: async () => ({ ok: true, result: { sources: [source] } }) }),
+        const emitWithAck = async () => ({ ok: true, result: { sources: [source] } });
+        createEphemeralSocketSpy.mockResolvedValue({ timeout: () => ({ emitWithAck }), emitWithAck,
             emit() {}, disconnect() {} });
         const { machineRpcWithServerScope } = await import('./serverScopedMachineRpc');
         await expect(machineRpcWithServerScope({ serverId: 'server-b', accountId: 'account-b', machineId: 'machine-plain',
@@ -1185,7 +1205,7 @@ describe('machineRpcWithServerScope', () => {
             emitted = payload.params;
             return { ok: true, result: { decoded: true } };
         });
-        createEphemeralSocketSpy.mockResolvedValue({ timeout: vi.fn(() => ({ emitWithAck })), emit: vi.fn(), disconnect: vi.fn() });
+        createEphemeralSocketSpy.mockResolvedValue({ timeout: vi.fn(() => ({ emitWithAck })), emitWithAck, emit: vi.fn(), disconnect: vi.fn() });
         const request = { kind: 'requester_session_bootstrap_v1', input: {
             executionTarget: { serverId: 'server-b', machineId: 'machine-plain' },
             directory: { kind: 'path', path: '/workspace' },
@@ -1233,7 +1253,7 @@ describe('machineRpcWithServerScope', () => {
         const emitWithAck = vi.fn<(event: string, payload: unknown) => Promise<unknown>>(
             () => new Promise((resolve) => { resolveAck = resolve; }),
         );
-        const socket = { timeout: vi.fn(() => ({ emitWithAck })), emit: vi.fn(), disconnect: vi.fn() };
+        const socket = { timeout: vi.fn(() => ({ emitWithAck })), emitWithAck, emit: vi.fn(), disconnect: vi.fn() };
         createEphemeralSocketSpy.mockResolvedValueOnce(socket);
         const controller = new AbortController();
         const { machineRpcWithServerScope } = await import('./serverScopedMachineRpc');
@@ -1306,6 +1326,7 @@ describe('machineRpcWithServerScope', () => {
             expect(params.takeCarrierRelease?.()).toBe(releaseCarrier);
             return {
                 timeout: vi.fn(() => ({ emitWithAck })),
+                emitWithAck,
                 emit: vi.fn(),
                 disconnect,
             };
@@ -1356,6 +1377,7 @@ describe('machineRpcWithServerScope', () => {
         const emitWithAck = vi.fn(async (_event: string, payload: { method: string; params: unknown }) => ({ ok: true, result: await boundResponse(payload, { decoded: true }) }));
         const fakeSocket = {
             timeout: vi.fn(() => ({ emitWithAck })),
+            emitWithAck,
             emit: vi.fn(),
             disconnect: vi.fn(),
         };
@@ -1405,6 +1427,7 @@ describe('machineRpcWithServerScope', () => {
         const emitWithAck = vi.fn(async (_event: string, payload: { method: string; params: unknown }) => ({ ok: true, result: await boundResponse(payload, { decoded: true }) }));
         const fakeSocket = {
             timeout: vi.fn(() => ({ emitWithAck })),
+            emitWithAck,
             emit: vi.fn(),
             disconnect: vi.fn(),
         };
@@ -1454,6 +1477,7 @@ describe('machineRpcWithServerScope', () => {
         const emitWithAck = vi.fn(async (_event: string, payload: { method: string; params: unknown }) => ({ ok: true, result: await boundResponse(payload, { decoded: true }) }));
         const fakeSocket = {
             timeout: vi.fn(() => ({ emitWithAck })),
+            emitWithAck,
             emit: vi.fn(),
             disconnect: vi.fn(),
         };
@@ -1500,7 +1524,7 @@ describe('machineRpcWithServerScope', () => {
             'machine-1',
             RPC_METHODS.SESSION_SPAWN_NEW,
             payload,
-            expect.objectContaining({ timeoutMs: expect.any(Number) }),
+            expect.objectContaining({ timeoutMs: null }),
         );
         expect(machineEncryption.encryptRaw).toHaveBeenCalledWith(expect.objectContaining({ v: 2, k: 'req', c: expect.stringMatching(/^[0-9a-f]{32}$/), p: payload }));
         expect(machineEncryption.decryptRaw).toHaveBeenCalledWith(expect.any(String));
@@ -1640,6 +1664,7 @@ describe('machineRpcWithServerScope', () => {
         const emitWithAck = vi.fn(() => new Promise(() => {}));
         const fakeSocket = {
             timeout: vi.fn(() => ({ emitWithAck })),
+            emitWithAck,
             emit: vi.fn(),
             disconnect: vi.fn(),
         };
@@ -1695,6 +1720,7 @@ describe('machineRpcWithServerScope', () => {
         const emitWithAck = vi.fn(async (_event: string, payload: { method: string; params: unknown }) => ({ ok: true, result: await boundResponse(payload, { decoded: true }) }));
         const fakeSocket = {
             timeout: vi.fn(() => ({ emitWithAck })),
+            emitWithAck,
             emit: vi.fn(),
             disconnect: vi.fn(),
         };

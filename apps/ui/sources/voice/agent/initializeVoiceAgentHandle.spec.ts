@@ -22,6 +22,7 @@ import { SessionAppliedModelV1Schema } from '@happier-dev/protocol/providers/mod
 const start = vi.fn(async (_request: ExecutionRunEnsureOrStartRequest) => ({ ok: true as const, runId: 'voice-agent-1', created: true }));
 const rpcTargets: Array<{ sessionId: string; method: string }> = [];
 let rootRunnerPid = 123;
+let stallRootRunnerStatus = false;
 function admittedStart() {
     const request = start.mock.calls.at(-1)?.[0];
     if (!request?.start) throw new Error('Expected the real daemon start admission');
@@ -140,6 +141,7 @@ installDisconnectedServerSocketBoundary(socket => {
         rpcTargets.push({ sessionId, method });
         let result: unknown;
         if (method === RPC_METHODS.DAEMON_SESSION_RUNNER_STATUS_V2_GET) {
+            if (stallRootRunnerStatus) return await new Promise(() => {});
             const params = request.params as { sessionId: string };
             result = createSessionRunnerRuntimeStatusFixture({ sessionId: params.sessionId, machineId: sessionId, pid: rootRunnerPid, wrapperPid: 122 });
         } else if (method === SESSION_RPC_METHODS.EXECUTION_RUN_LIST) result = await sessionExecutionRunList(sessionId, request.params);
@@ -215,6 +217,7 @@ describe('initializeVoiceAgentHandle', () => {
         state.sessions.s1.encryptionMode = 'plain';
         start.mockClear();
         rootRunnerPid = 123;
+        stallRootRunnerStatus = false;
         rpcTargets.length = 0;
         sessionExecutionRunList.mockClear();
         sessionExecutionRunGet.mockClear();
@@ -278,7 +281,7 @@ describe('initializeVoiceAgentHandle', () => {
         expect(admittedStart().chatModelId).toBeUndefined();
     });
 
-    it.each(['current', 'missing', 'stale'])('starts on a hidden carrier with the bound root Agent, model and Launch Profile only when applied model is known (%s)', async applied => {
+    it.each(['current', 'missing', 'stale', 'cancelled'])('starts on a hidden carrier with the bound root Agent, model and Launch Profile only when applied model is known (%s)', async applied => {
         const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
         const { VOICE_AGENT_GLOBAL_SESSION_ID } = await import('@/voice/agent/voiceAgentGlobalSessionId');
         const carrierId = 'hidden-selection-carrier';
@@ -292,6 +295,16 @@ describe('initializeVoiceAgentHandle', () => {
         const rootMetadata = { ...previousRoot.metadata, flavor: 'claude', profileId: 'root-launch-profile',
             modelOverrideV1: { v: 1 as const, modelId: 'pending-unapplied-model', updatedAt: 20 },
             machineId: 'machine-1',
+            connectedServices: {
+                v: 2 as const,
+                bindingsByServiceId: {
+                    'happier.agent.claude/claude-subscription': {
+                        source: 'connected' as const,
+                        selection: 'profile' as const,
+                        profileId: 'root-claude-profile',
+                    },
+                },
+            },
             sessionModelsV1: { v: 1 as const, agentId: 'claude', updatedAt: 30, currentModelId: 'claude-haiku-4-5',
                 availableModels: [{ id: 'claude-haiku-4-5', name: 'Haiku' }],
                 ...(applied !== 'missing' ? { activeSelectionV1: { v: 1 as const, source: 'runtime_apply' as const,
@@ -309,7 +322,7 @@ describe('initializeVoiceAgentHandle', () => {
             [carrierId]: createSessionFixture({ id: carrierId, serverId: connection.home.id, active: true,
                 presence: 'online', encryptionMode: 'plain', metadata: { ...rootMetadata,
                     flavor: 'unknown-agent', profileId: 'carrier-is-not-a-profile', modelOverrideV1: undefined, machineId: undefined } }),
-        }, machines: { ...current.machines, 'machine-1': createMachineFixture({ id: 'machine-1', storageMode: 'plain' }) },
+        }, machines: { ...current.machines, 'machine-1': createMachineFixture({ id: 'machine-1', storageMode: 'plain', activeAt: Date.now() }) },
         settings: { ...previousSettings, voice: voiceSettingsParse({ ...previousSettings.voice,
             providers: { ...previousSettings.voice.providers, local_conversation: { schemaVersion: 1, config: {
                 ...localSettings, agent: {
@@ -324,9 +337,22 @@ describe('initializeVoiceAgentHandle', () => {
             lifetime: 'runtime_attempt', transcriptMode: 'synthetic', targetSessionAddress: targetAddress, updatedAt: 1 });
         try {
             const { initializeVoiceAgentHandle } = await import('./initializeVoiceAgentHandle');
+            const lifetime = new AbortController();
+            stallRootRunnerStatus = applied === 'cancelled';
             const initializing = initializeVoiceAgentHandle({ sessionId: VOICE_AGENT_GLOBAL_SESSION_ID,
+                signal: lifetime.signal,
                 getDaemonVoiceAgentClient: scope => new DaemonVoiceAgentClient(scope),
                 setDeferredTargetSessionContext: vi.fn() });
+            if (applied === 'cancelled') {
+                let outcome = 'pending';
+                const settled = initializing.then(() => { outcome = 'resolved'; }, () => { outcome = 'cancelled'; });
+                await vi.waitFor(() => expect(rpcTargets.some(request => request.method === RPC_METHODS.DAEMON_SESSION_RUNNER_STATUS_V2_GET)).toBe(true));
+                lifetime.abort();
+                await vi.waitFor(() => expect(outcome).toBe('cancelled'));
+                await settled;
+                expect(start).not.toHaveBeenCalled();
+                return;
+            }
             if (applied !== 'current') {
                 await expect(initializing).rejects.toMatchObject({ code: 'VOICE_AGENT_SELECTION_UNAVAILABLE' });
                 expect(start).not.toHaveBeenCalled();
@@ -337,10 +363,19 @@ describe('initializeVoiceAgentHandle', () => {
             expect(handle.agentBackendId).toBe('claude');
             expect(admittedStart()).toMatchObject({ launchProfileId: 'root-launch-profile',
                 modelSelection: { agentTargetKey: buildAgentUniverseBackendTargetKey('claude'),
-                    providerConnectionId: null, modelId: 'claude-haiku-4-5' } });
+                    providerConnectionId: null, modelId: 'claude-haiku-4-5' },
+                connectedServices: {
+                    v: 2,
+                    bindingsByServiceId: {
+                        'happier.agent.claude/claude-subscription': {
+                            source: 'connected', selection: 'profile', profileId: 'root-claude-profile',
+                        },
+                    },
+                } });
             expect(ExecutionRunVoiceAgentIntentInputV1Schema.parse(admittedStart().intentInput).commitModelSelection)
                 .toMatchObject({ modelId: 'claude-haiku-4-5' });
         } finally {
+            stallRootRunnerStatus = false;
             voiceSessionBindingStore.getState().unbind(carrierId);
             const sessions: typeof current.sessions = { ...storage.getState().sessions, s1: previousRoot };
             delete sessions[carrierId];
@@ -398,6 +433,40 @@ describe('initializeVoiceAgentHandle', () => {
         } finally {
             voiceSessionBindingStore.getState().unbind('s1');
             start.mockReset().mockResolvedValue({ ok: true, runId: 'voice-agent-1', created: true });
+        }
+    });
+
+    it('cancels the retired initializer cleanup wait when its caller leaves', async () => {
+        omitIncidentalProfile();
+        const { voiceSessionBindingStore } = await import('@/voice/binding/voiceConversationBindingStore');
+        voiceSessionBindingStore.getState().bind({ adapterId: 'local_conversation', controlSessionId: 's1',
+            conversationSessionId: 's1', conversationSessionAddress: { serverId: connection.home.id, sessionId: 's1' },
+            lifetime: 'runtime_attempt', transcriptMode: 'synthetic',
+            targetSessionAddress: { serverId: connection.home.id, sessionId: 's1' }, updatedAt: 1 });
+        let entered!: () => void;
+        const entering = new Promise<void>(resolve => { entered = resolve; });
+        let release!: () => void;
+        const acknowledgement = new Promise<void>(resolve => { release = resolve; });
+        sessionExecutionRunStop.mockImplementationOnce(async () => { entered(); await acknowledgement; return { ok: true }; });
+        start.mockImplementationOnce(async () => {
+            voiceSessionBindingStore.getState().unbind('s1');
+            return { ok: true as const, runId: 'voice-agent-1', created: true };
+        });
+        const caller = new AbortController();
+        let settled = false;
+        const { initializeVoiceAgentHandle } = await import('./initializeVoiceAgentHandle');
+        const initializing = initializeVoiceAgentHandle({ sessionId: 's1', signal: caller.signal,
+            getDaemonVoiceAgentClient: scope => new DaemonVoiceAgentClient(scope),
+            setDeferredTargetSessionContext: vi.fn() }).catch(error => error).finally(() => { settled = true; });
+        try {
+            await entering;
+            caller.abort();
+            await vi.waitFor(() => expect(settled).toBe(true));
+            expect(await initializing).toMatchObject({ message: 'voice_agent_binding_changed' });
+        } finally {
+            release();
+            await initializing;
+            voiceSessionBindingStore.getState().unbind('s1');
         }
     });
 

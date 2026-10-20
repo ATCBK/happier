@@ -1,8 +1,12 @@
 import React from 'react';
-import { Pressable, View } from 'react-native';
+import { ScrollView, View } from 'react-native';
+import { StyleSheet } from 'react-native-unistyles';
 
 import type { ReviewCommentStateV1, ReviewCommentV1 } from '@happier-dev/protocol';
+import { reviewCommentTransitionAllowedV1 } from '@happier-dev/protocol/reviews/comments/mutation';
 
+import { TextLinkButton } from '@/components/ui/buttons/TextLinkButton';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
 import { Text } from '@/components/ui/text/Text';
 
 import type { ReviewCommentLabels } from './labels';
@@ -38,52 +42,73 @@ export type ReviewCommentsPanelProps = Readonly<{
 
 export function ReviewCommentsPanel(props: ReviewCommentsPanelProps) {
     const stateOptions = props.stateOptions ?? ['proposed', 'open', 'delegated', 'pending_review', 'resolved', 'dismissed'];
-    const commentIds = props.comments.map((comment) => comment.id);
-    const canBulkTransition = props.onBulkTransition && commentIds.length > 0;
+    const eligibleIds = (toState: ReviewCommentStateV1) => props.comments
+        .filter((comment) => !comment.flags.redacted && !comment.tombstone
+            && reviewCommentTransitionAllowedV1(comment.state, toState))
+        .map((comment) => comment.id);
+    const resolvableIds = eligibleIds('resolved');
+    const dismissibleIds = eligibleIds('dismissed');
+    const canBulkTransition = props.onBulkTransition && (resolvableIds.length > 0 || dismissibleIds.length > 0);
     return (
-        <View testID={props.testID}>
-            <ReviewCommentFilters
-                labels={{ title: props.labels.filtersTitle, states: props.labels.states }}
-                stateOptions={stateOptions}
-                selectedStates={props.selectedStates ?? []}
-                onToggleState={props.onToggleState}
-                testID={props.testID ? `${props.testID}-filters` : undefined}
-            />
-            {canBulkTransition ? (
-                <View>
-                    <Pressable
-                        accessibilityRole="button"
-                        onPress={() => props.onBulkTransition?.({ commentIds, toState: 'resolved' })}
-                        testID={props.testID ? `${props.testID}-bulk-resolve` : undefined}
-                    >
-                        <Text>{props.labels.bulkResolve}</Text>
-                    </Pressable>
-                    <Pressable
-                        accessibilityRole="button"
-                        onPress={() => props.onBulkTransition?.({ commentIds, toState: 'dismissed' })}
-                        testID={props.testID ? `${props.testID}-bulk-dismiss` : undefined}
-                    >
-                        <Text>{props.labels.bulkDismiss}</Text>
-                    </Pressable>
+        <View testID={props.testID} style={styles.panel}>
+            {/* One quiet toolbar: the state filters lead, the bulk links for what they show trail. */}
+            <View style={styles.toolbar}>
+                <View style={styles.filters}>
+                    <ReviewCommentFilters
+                        labels={{ title: props.labels.filtersTitle, states: props.labels.states }}
+                        stateOptions={stateOptions}
+                        selectedStates={props.selectedStates ?? []}
+                        onToggleState={props.onToggleState}
+                        testID={props.testID ? `${props.testID}-filters` : undefined}
+                    />
                 </View>
-            ) : null}
+                {canBulkTransition ? (
+                    <View style={styles.bulk}>
+                        {resolvableIds.length > 0 ? <TextLinkButton
+                            label={props.labels.bulkResolve}
+                            size="meta"
+                            onPress={() => props.onBulkTransition?.({ commentIds: resolvableIds, toState: 'resolved' })}
+                            testID={props.testID ? `${props.testID}-bulk-resolve` : undefined}
+                        /> : null}
+                        {dismissibleIds.length > 0 ? <TextLinkButton
+                            label={props.labels.bulkDismiss}
+                            size="meta"
+                            onPress={() => props.onBulkTransition?.({ commentIds: dismissibleIds, toState: 'dismissed' })}
+                            testID={props.testID ? `${props.testID}-bulk-dismiss` : undefined}
+                        /> : null}
+                    </View>
+                ) : null}
+            </View>
             {props.bulkTransitionResult && props.bulkTransitionResult.failed.length > 0 ? (
-                <View testID={props.testID ? `${props.testID}-bulk-failures` : undefined}>
-                    <Text>{props.labels.bulkPartialFailure}</Text>
+                <View testID={props.testID ? `${props.testID}-bulk-failures` : undefined} style={styles.failures}>
+                    <SurfaceStateCard size="line" kind="warning" title={props.labels.bulkPartialFailure} />
                     {props.bulkTransitionResult.failed.map((failure) => (
-                        <Text key={`${failure.commentId}:${failure.errorCode}`}>
+                        <Text key={`${failure.commentId}:${failure.errorCode}`} variant="meta" style={styles.failure}>
                             {props.labels.bulkFailure(failure)}
                         </Text>
                     ))}
                 </View>
             ) : null}
-            <ReviewCommentsList
-                comments={props.comments}
-                labels={props.labels}
-                cardActions={props.cardActions}
-                onReply={props.onReply}
-                testID={props.testID ? `${props.testID}-list` : undefined}
-            />
+            {/* The toolbar stays put; only the comments scroll within the room the host gives them. */}
+            <ScrollView style={styles.list} nestedScrollEnabled keyboardShouldPersistTaps="handled">
+                <ReviewCommentsList
+                    comments={props.comments}
+                    labels={props.labels}
+                    cardActions={props.cardActions}
+                    onReply={props.onReply}
+                    testID={props.testID ? `${props.testID}-list` : undefined}
+                />
+            </ScrollView>
         </View>
     );
 }
+
+const styles = StyleSheet.create((theme) => ({
+    panel: { gap: theme.space.s8, flexShrink: 1, minHeight: 0 },
+    list: { flexShrink: 1, minHeight: 0 },
+    toolbar: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', columnGap: theme.space.s16, rowGap: theme.space.s6 },
+    filters: { flexShrink: 1, minWidth: 0 },
+    bulk: { flexDirection: 'row', alignItems: 'center', columnGap: theme.space.s16 },
+    failures: { gap: theme.space.s4 },
+    failure: { color: theme.colors.text.secondary },
+}));

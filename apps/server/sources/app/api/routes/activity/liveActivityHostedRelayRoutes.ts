@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 
 import { classifyLiveActivityApnsDeliveryResponse } from '@happier-dev/protocol/activity/live/apnsDelivery';
 import { HAPPIER_FOCUS_LIVE_ACTIVITY_NAME, LIVE_ACTIVITY_CONTENT_STATE_MAX_BYTES, LiveActivityRemoteUpdateRequestV1Schema } from '@happier-dev/protocol/activity/live/remoteUpdates';
-import { z } from "zod";
+import { z } from "zod/mini";
 
 import { buildDirectApnsLiveActivityHttp2Request } from "@/app/activity/liveActivities/providers/directApnsLiveActivityProvider";
 import {
@@ -16,49 +16,46 @@ import { parseBooleanEnv, parseIntEnv } from "@/config/env";
 import type { Fastify } from "../../types";
 import { readRequestHomeEnv } from "@/app/home/settings/requestHomeEnv";
 
-const HostedRelayRequestSchema = z
-    .object({
+const HostedRelayRequestSchema = z.strictObject({
         v: z.literal(1),
-        requestId: z.string().trim().min(1).max(128),
-        createdAt: z.number().int().nonnegative(),
-        bundleId: z.string().trim().min(1),
+        requestId: z.string().check(z.trim(), z.minLength(1), z.maxLength(128)),
+        createdAt: z.number().check(z.int(), z.nonnegative()),
+        bundleId: z.string().check(z.trim(), z.minLength(1)),
         environment: z.enum(["sandbox", "production"]),
         activityName: z.literal(HAPPIER_FOCUS_LIVE_ACTIVITY_NAME),
-        activityId: z.string().trim().min(1),
-        activityKitUpdateToken: z.string().trim().min(1),
+        activityId: z.string().check(z.trim(), z.minLength(1)),
+        activityKitUpdateToken: z.string().check(z.trim(), z.minLength(1)),
         update: LiveActivityRemoteUpdateRequestV1Schema,
-    })
-    .strict()
-    .superRefine((request, ctx) => {
+    }).check(z.superRefine((request, ctx) => {
         if (request.update.transportMode !== "hosted_happier_relay") {
             ctx.addIssue({
-                code: z.ZodIssueCode.custom,
+                code: "custom",
                 path: ["update", "transportMode"],
                 message: "Hosted relay only accepts hosted_happier_relay updates",
             });
         }
         if (request.update.requestId !== request.requestId) {
             ctx.addIssue({
-                code: z.ZodIssueCode.custom,
+                code: "custom",
                 path: ["update", "requestId"],
                 message: "Hosted relay request id must match the update",
             });
         }
         if (request.update.createdAt !== request.createdAt) {
             ctx.addIssue({
-                code: z.ZodIssueCode.custom,
+                code: "custom",
                 path: ["update", "createdAt"],
                 message: "Hosted relay createdAt must match the update",
             });
         }
         if (request.update.activityKey.activityName !== request.activityName) {
             ctx.addIssue({
-                code: z.ZodIssueCode.custom,
+                code: "custom",
                 path: ["update", "activityKey", "activityName"],
                 message: "Hosted relay activity name must match the update",
             });
         }
-    });
+    }));
 
 type HostedRelayRequest = z.infer<typeof HostedRelayRequestSchema>;
 

@@ -55,7 +55,8 @@ describe('setSessionModel caller constraints at the effective selection boundary
     const credentials = { token: `header.${Buffer.from(JSON.stringify({ sub: 'account-1' })).toString('base64url')}.signature`, encryption: null };
     const storedAccountSettings = { actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1,
       approvalWaivedSurfaces: { 'session.model.set': ['cli'] } }) };
-    let current: V2SessionRecord = { ...session, ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(SessionOwnerMetadataV1Schema.parse({
+    let current: V2SessionRecord & { agentStateVersion: number } = { ...session, agentStateVersion: 1,
+      ownerMetadata: createPlainSessionOwnerMetadataEnvelopeV1(SessionOwnerMetadataV1Schema.parse({
       ...metadata, runtime: { modelSelectionIntentV1: { v: 1, updatedAt: 10, selection: modelA } },
     })) };
     network.get.mockImplementation(async (url: string) => {

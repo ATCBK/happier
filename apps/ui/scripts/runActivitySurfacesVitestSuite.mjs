@@ -1,12 +1,12 @@
 import { spawnSync } from 'node:child_process';
-import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { resolveVitestNodeCommand } from '../../../scripts/testing/vitestNodeCommand.mjs';
 
 const scriptPath = fileURLToPath(import.meta.url);
 const scriptsDir = dirname(scriptPath);
 const packageRoot = dirname(scriptsDir);
-const require = createRequire(import.meta.url);
 
 export const ACTIVITY_SURFACES_VITEST_FILES = [
   'sources/activity/actions/parseActivityInteraction.test.ts',
@@ -64,12 +64,10 @@ export function runActivitySurfacesVitestSuite({
   env = process.env,
   spawnSyncImpl = spawnSync,
 } = {}) {
-  const vitestCli = require.resolve('vitest/vitest.mjs', {
-    paths: [cwd],
-  });
+  const vitestCommand = resolveVitestNodeCommand(cwd);
   const result = spawnSyncImpl(
-    process.execPath,
-    [vitestCli, 'run', '--maxWorkers', '1', ...ACTIVITY_SURFACES_VITEST_FILES],
+    vitestCommand.command,
+    [...vitestCommand.argsPrefix, 'run', '--maxWorkers', '1', ...ACTIVITY_SURFACES_VITEST_FILES],
     {
       cwd,
       env,

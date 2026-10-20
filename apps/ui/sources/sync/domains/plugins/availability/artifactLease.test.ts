@@ -4,7 +4,7 @@ import {
     computePluginUiArtifactFileSetSha256DigestV1,
     computePluginUiArtifactSha256DigestV1,
 } from '@happier-dev/protocol/plugins/ui';
-import { PluginAccountAvailabilityIntentReadResponseV1Schema } from '@happier-dev/protocol/plugins/availability';
+import { PluginAccountAvailabilityIntentReadResponseV1Schema, PluginMachineMaterializationV1Schema } from '@happier-dev/protocol/plugins/availability';
 import { encodeBase64 } from '@/encryption/base64';
 import { createPluginArtifactDaemonSource } from './artifactDaemonSource';
 
@@ -145,6 +145,40 @@ function fixture(
     };
 }
 
+it('leases exact external archive bytes without Account selection and revokes them when that installation retires', async () => {
+    const data = fixture(true);
+    const release = data.snapshot.intentReads[0]!.response.release!;
+    const materialization = PluginMachineMaterializationV1Schema.parse({
+        serverIdentityId: 'srv_external', machineId: 'machine-external', materializationId: 'external-install',
+        pluginId: slot.pluginId, version: release.ref.version, sourceClass: 'versionedArchive', portableRelease: true,
+        archiveDigestSha256: release.archiveDigestSha256, uiArtifacts: release.uiSlots,
+        enabled: true, trustState: 'trusted', observedAt: 1,
+    });
+    const executionOrigin = { serverIdentityId: materialization.serverIdentityId, materializationRef: {
+        machineId: materialization.machineId, materializationId: materialization.materializationId, pluginId: slot.pluginId,
+    } };
+    const installed = { ...data.snapshot, releases: [release], materializations: [materialization],
+        snapshots: [{ serverIdentityId: materialization.serverIdentityId, machineId: materialization.machineId, materializations: [materialization] }],
+        intentReads: [{ pluginId: slot.pluginId, response: PluginAccountAvailabilityIntentReadResponseV1Schema.parse({
+            ...data.snapshot.intentReads[0]!.response, intent: null, release: null, uiArtifacts: [],
+        }) }],
+    };
+    const store = createPluginAccountAvailabilityReaderStore();
+    store.replace({ scope, snapshot: installed });
+    const acquired = await acquirePluginSelectedArtifactLease({ reader: store.bind(scope), slot, executionOrigin,
+        artifactGraph: data.graph, accountLifetime: createLifetime(),
+        // The daemon byte transport is the system boundary; selection, integrity and retirement stay real.
+        sources: [{ kind: 'daemon', fetch: async () => data.bytesByPath }],
+    });
+    expect(acquired.kind).toBe('available');
+    if (acquired.kind !== 'available') throw new Error('Expected exact installed Artifact lease');
+    expect(await acquired.lease.readFile(data.graph.entry)).toMatchObject({ kind: 'available', bytes: data.bytesByPath.get(data.graph.entry) });
+    store.replace({ scope, snapshot: { ...installed, materializations: [], snapshots: [{ ...installed.snapshots[0]!, materializations: [] }] } });
+    expect(acquired.lease.isCurrent()).toBe(false);
+    expect(await acquired.lease.readFile(data.graph.entry)).toEqual({ kind: 'unavailable', code: 'artifact_lease_revoked' });
+    acquired.lease.dispose();
+});
+
 /**
  * The real persistent byte custody seam: one retained verified record plus the
  * Artifact custody owner's exact-entry deletion. Tests assert against this adapter rather
@@ -199,6 +233,62 @@ function daemonResponse(record: ReturnType<typeof fixture>) {
 }
 
 describe('Artifact selected handle lease', () => {
+    it('completes hosted acquisition after local misses while the daemon boundary is held', async () => {
+        const current = fixture(true);
+        const store = createPluginAccountAvailabilityReaderStore();
+        store.replace({ scope, snapshot: current.snapshot });
+        let releaseDaemon!: () => void;
+        const heldDaemon = new Promise<void>((resolve) => { releaseDaemon = resolve; });
+        const daemonRead = vi.fn(async () => { await heldDaemon; return daemonResponse(current); });
+        const order: string[] = [];
+        let result: Awaited<ReturnType<typeof acquirePluginSelectedArtifactLease>> | undefined;
+        const pending = acquirePluginSelectedArtifactLease({
+            reader: store.bind(scope), accountLifetime: createLifetime(), slot, artifactGraph: current.graph,
+            sources: [
+                createPluginArtifactDaemonSource({ transport: { machineId: 'machine-a', serverId: scope.serverId },
+                    family: 'hostedWeb', fetchArtifactBytes: daemonRead }),
+                { kind: 'accountHosted', fetch: async () => { order.push('hosted'); return current.bytesByPath; } },
+                { kind: 'appExact', fetch: async () => { order.push('app'); return null; } },
+                { kind: 'persistentCache', fetch: async () => { order.push('cache'); return null; } },
+            ],
+        }).then((acquired) => { result = acquired; return acquired; });
+        try {
+            await vi.waitFor(() => expect(result).toMatchObject({ kind: 'available', lease: { sourceKind: 'accountHosted' } }));
+            expect(order).toEqual(['cache', 'app', 'hosted']);
+            expect(daemonRead).not.toHaveBeenCalled();
+        } finally {
+            releaseDaemon();
+            const acquired = await pending;
+            if (acquired.kind === 'available') acquired.lease.dispose();
+        }
+    });
+
+    it.each(['missing', 'corrupt'] as const)('falls back from %s hosted bytes to verified daemon bytes', async (hostedState) => {
+        const current = fixture(true, 42, hostedState === 'missing' ? null : undefined);
+        const store = createPluginAccountAvailabilityReaderStore();
+        store.replace({ scope, snapshot: current.snapshot });
+        const hostedRequests: Array<string | undefined> = [];
+        const acquired = await acquirePluginSelectedArtifactLease({
+            reader: store.bind(scope), accountLifetime: createLifetime(), slot, artifactGraph: current.graph,
+            sources: [
+                { kind: 'daemon', fetch: async () => current.bytesByPath },
+                { kind: 'accountHosted', fetch: async (request) => {
+                    hostedRequests.push(request.accountHostedArtifactId);
+                    return request.accountHostedArtifactId
+                        ? new Map([[current.graph.entry, new Uint8Array([0])]]) : null;
+                } },
+            ],
+        });
+        expect(acquired).toMatchObject({ kind: 'available', lease: { sourceKind: 'daemon' } });
+        expect(hostedRequests).toHaveLength(1);
+        if (acquired.kind === 'available') {
+            expect(await acquired.lease.readFile(current.graph.entry)).toMatchObject({
+                kind: 'available', bytes: current.bytesByPath.get(current.graph.entry),
+            });
+            acquired.lease.dispose();
+        }
+    });
+
     it('keeps initial Account Availability pending until its admitted snapshot supplies the selected Artifact', async () => {
         const current = fixture(true);
         const store = createPluginAccountAvailabilityReaderStore();
@@ -343,6 +433,42 @@ describe('Artifact selected handle lease', () => {
         if (acquired.kind === 'available') acquired.lease.dispose();
     });
 
+    it('keeps Account disable authoritative over a daemon-selected Artifact', async () => {
+        const current = fixture(true);
+        const store = createPluginAccountAvailabilityReaderStore();
+        const response = current.snapshot.intentReads[0]!.response;
+        store.replace({ scope, snapshot: { ...current.snapshot, intentReads: [{
+            pluginId: slot.pluginId,
+            response: { ...response, intent: { ...response.intent!, enabled: false } },
+        }] } });
+        const sourceRead = vi.fn(async () => current.bytesByPath);
+
+        await expect(acquirePluginSelectedArtifactLease({
+            reader: store.bind(scope), slot,
+            daemonProjectionSelection: daemonProjectionSelection(current),
+            artifactGraph: current.graph,
+            sources: [{ kind: 'daemon', fetch: sourceRead }],
+        })).resolves.toEqual({ kind: 'unavailable', code: 'artifact_not_current' });
+        expect(sourceRead).not.toHaveBeenCalled();
+    });
+
+    it('keeps the Account-selected release authoritative over a conflicting daemon selection', async () => {
+        const portable = fixture(true);
+        const development = fixture(false, 42, null, undefined, slot.pluginId, '<!doctype html>development');
+        const store = createPluginAccountAvailabilityReaderStore();
+        store.replace({ scope, snapshot: portable.snapshot });
+
+        const acquired = await acquirePluginSelectedArtifactLease({
+            reader: store.bind(scope), slot,
+            daemonProjectionSelection: daemonProjectionSelection(development, () => false),
+            artifactGraph: portable.graph,
+            sources: [{ kind: 'appExact', fetch: async () => portable.bytesByPath }],
+        });
+
+        expect(acquired).toMatchObject({ kind: 'available', lease: { artifact: { digest: portable.graph.digest } } });
+        if (acquired.kind === 'available') acquired.lease.dispose();
+    });
+
     it('retires daemon-projection selection when its exact occurrence is no longer current', async () => {
         const current = fixture(false);
         const store = createPluginAccountAvailabilityReaderStore();
@@ -400,7 +526,7 @@ describe('Artifact selected handle lease', () => {
     });
 
     it('does not fall back to Account release selection for a stale daemon-owned occurrence', async () => {
-        const current = fixture(true);
+        const current = fixture(false);
         const store = createPluginAccountAvailabilityReaderStore();
         store.replace({ scope, snapshot: current.snapshot });
         const appRead = vi.fn(async () => current.bytesByPath);

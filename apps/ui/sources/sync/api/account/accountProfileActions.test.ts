@@ -93,6 +93,9 @@ describe('self-profile UI Action admission and acknowledgements', () => {
         });
         expect(mounted.getCurrent().approval.approvalPending).toBe(true);
         await act(async () => {
+            homes.answer(serverId, 'GET /v1/account/profile', {
+                body: { ...profileDefaults, id: 'successor', username: 'successor' },
+            });
             await homes.switchAccount(serverId, 'successor');
             storage.getState().activateProfileScope({ serverId, accountId: 'successor' });
             storage.getState().applyProfile({ ...profileDefaults, id: 'successor', username: 'successor' });

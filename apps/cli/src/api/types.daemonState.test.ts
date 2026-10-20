@@ -10,17 +10,20 @@ describe('DaemonStateSchema', () => {
     }).daemonPendingSessionActivationSupported).toBe(true);
   });
 
-  it('parses the additive Iroh machine endpoint publication while preserving unknown fields', () => {
+  it('publishes the declared Iroh machine endpoint and rejects undeclared peer fields', () => {
     const endpoint = { endpointId: 'a'.repeat(64), relayUrls: ['https://relay.example.test/'] };
     const result = DaemonStateSchema.parse({
       status: 'running',
-      peerMediation: { iroh: { endpoint, futureField: true } },
+      peerMediation: { iroh: { endpoint } },
     });
     expect(result.peerMediation?.iroh?.endpoint).toEqual(endpoint);
-    expect(result.peerMediation?.iroh).toHaveProperty('futureField', true);
+    expect(DaemonStateSchema.safeParse({
+      ...result,
+      peerMediation: { iroh: { endpoint, futureField: true } },
+    }).success).toBe(false);
   });
 
-  it('preserves supported transfer runtime capability metadata and strips undeclared listener classes', () => {
+  it('publishes supported transfer runtime capabilities and rejects undeclared listener classes', () => {
     const result = DaemonStateSchema.safeParse({
       status: 'running',
       pid: 12345,
@@ -41,11 +44,6 @@ describe('DaemonStateSchema', () => {
           loopback_http: {
             enabled: true,
             configured: true,
-            active: false,
-          },
-          lan_http: {
-            enabled: false,
-            configured: false,
             active: false,
           },
           tailscale_serve_https: {
@@ -96,5 +94,15 @@ describe('DaemonStateSchema', () => {
     expect(result.data.startupSource).toBe('background-service');
     expect(result.data.serviceManaged).toBe(true);
     expect(result.data.serviceLabel).toBe('com.happier.cli.daemon.default');
+    expect(DaemonStateSchema.safeParse({
+      ...result.data,
+      transfer: {
+        ...result.data.transfer,
+        listenerClasses: {
+          ...result.data.transfer?.listenerClasses,
+          lan_http: { enabled: false, configured: false, active: false },
+        },
+      },
+    }).success).toBe(false);
   });
 });

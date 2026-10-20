@@ -22,6 +22,7 @@ import {
   PLUGIN_DECLARATIVE_DOCUMENT_CONTENT_TYPE_V1,
 } from './declarativeDocument.js';
 import { QualifiedConnectedAccountRefSchema } from '../../../connect/qualifiedConnectedAccountPersistence.js';
+import { projectPluginPortableUiDeclarationsV1 } from './declarationProjection.js';
 
 /**
  * The declarative vocabulary is a bounded host-rendered document language
@@ -30,6 +31,57 @@ import { QualifiedConnectedAccountRefSchema } from '../../../connect/qualifiedCo
  * from drifting into a general data-binding surface.
  */
 describe('declarative node vocabulary v2', () => {
+  it('admits localized appPage descriptions in the parser and generated author schema only', () => {
+    const page = { id: 'reviews', renderer: 'native', container: 'appPage', target: { kind: 'app' } };
+    const description = { key: 'reviews.purpose', fallback: 'Review incoming work.' };
+    const validate = new Ajv2020({ strict: false, validateFormats: false }).compile(z.toJSONSchema(PluginUiViewV2Schema, { io: 'input', target: 'draft-2020-12', unrepresentable: 'any' }));
+    for (const candidate of [page, { ...page, description }, { ...page, description: 'Review incoming work.' }]) {
+      expect(PluginUiViewV2Schema.safeParse(candidate).success).toBe(true);
+      expect(validate(candidate)).toBe(true);
+    }
+    expect(PluginUiViewV2Schema.parse({ ...page, description })).toMatchObject({ description });
+    const projected = projectPluginPortableUiDeclarationsV1(PluginManifestV2Schema.parse({
+      schemaVersion: 2, id: 'acme.described-page', version: '1.0.0', displayName: 'Described page',
+      runtime: { apiVersion: 1 }, contributes: { ui: {
+        views: [{ ...page, description }],
+        renderers: [{ id: 'native', kind: 'declarative', root: { kind: 'text', text: 'Reviews' } }],
+      } },
+    }));
+    expect(projected['surfacePlacement:acme.described-page:reviews']).toHaveProperty('display.description', description);
+    for (const candidate of [
+      { ...page, description: { ...description, authority: true } },
+      { ...page, description: 7 },
+      { ...page, container: 'rightSidebarTab', description },
+    ]) {
+      expect(PluginUiViewV2Schema.safeParse(candidate).success).toBe(false);
+      expect(validate(candidate)).toBe(false);
+    }
+  });
+
+  it('admits an appPage headerStyle in the parser, author schema and generated display only', () => {
+    const page = { id: 'reviews', renderer: 'native', container: 'appPage', target: { kind: 'app' } };
+    const validate = new Ajv2020({ strict: false, validateFormats: false }).compile(z.toJSONSchema(PluginUiViewV2Schema, { io: 'input', target: 'draft-2020-12', unrepresentable: 'any' }));
+    for (const candidate of [page, { ...page, headerStyle: 'page' }, { ...page, headerStyle: 'toolbar' }]) {
+      expect(PluginUiViewV2Schema.safeParse(candidate).success).toBe(true);
+      expect(validate(candidate)).toBe(true);
+    }
+    const projected = projectPluginPortableUiDeclarationsV1(PluginManifestV2Schema.parse({
+      schemaVersion: 2, id: 'acme.toolbar-page', version: '1.0.0', displayName: 'Toolbar page',
+      runtime: { apiVersion: 1 }, contributes: { ui: {
+        views: [{ ...page, headerStyle: 'toolbar' }],
+        renderers: [{ id: 'native', kind: 'declarative', root: { kind: 'text', text: 'Reviews' } }],
+      } },
+    }));
+    expect(projected['surfacePlacement:acme.toolbar-page:reviews']).toHaveProperty('display.headerStyle', 'toolbar');
+    for (const candidate of [
+      { ...page, headerStyle: 'banner' },
+      { ...page, container: 'rightSidebarTab', headerStyle: 'toolbar' },
+    ]) {
+      expect(PluginUiViewV2Schema.safeParse(candidate).success).toBe(false);
+      expect(validate(candidate)).toBe(false);
+    }
+  });
+
   it('admits useful widget sizes only on widget declarations through parser and author schema', () => {
     const widget = { id: 'sized', container: 'widget', renderer: 'native', target: { kind: 'app' },
       sizeDeclaration: { sizes: ['medium', 'tall'], defaultSize: 'tall' } };
@@ -295,6 +347,7 @@ describe('declarative node vocabulary v2', () => {
       'waiting',
       'list',
       'board',
+      'filter',
     ]);
 
     // Metadata is bounded, and an empty metadata block is a modeling mistake.

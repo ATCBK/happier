@@ -5,6 +5,7 @@ import { withSessionProjectScmOperationLock } from '@/scm/operations/withOperati
 import { reportSessionScmOperation } from '@/scm/operations/reporting';
 import { selectScmCreatePrResult } from '@/scm/pullRequests/selectScmCreatePrResult';
 import { sessionScmPullRequestOpenOrReuse } from '@/sync/ops/sessionScm';
+import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 
 import type { GitPullRequestCreateOutcome } from './gitPullRequestFormState';
 
@@ -48,6 +49,7 @@ export async function createSessionGitPullRequest(input: Readonly<{
             } catch (error) {
                 response = { success: false, error: error instanceof Error ? error.message : String(error ?? ''), outcome: createScmOperationUnknownOutcome({ kind: 'pull_request', head: request.head ?? input.request.head, base: request.base }) };
             }
+            if (isScmActionNotRun(response)) return { kind: 'declined' };
             const outcome = selectScmCreatePrResult(response, input.machineReachable);
             const terminalOutcome = outcome.outcome ?? normalizeScmOperationOutcome(response);
             reportSessionScmOperation({

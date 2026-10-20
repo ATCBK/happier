@@ -19,7 +19,8 @@ export type RightSidebarBuiltInTabId =
     | 'board'
     | 'terminal'
     | 'browser'
-    | 'services';
+    | 'services'
+    | 'widgets';
 
 export type RightSidebarMobileSurface = 'agents' | 'collaboration' | 'browse' | 'git' | 'scripts' | 'navigation' | 'board' | 'terminal' | 'browser' | 'services' | 'plugin';
 
@@ -141,6 +142,20 @@ export const RIGHT_SIDEBAR_BUILTIN_TABS: readonly RightSidebarBuiltinTabDefiniti
         available: (input) => input.scope === 'project' || input.sessionProjectCheckoutAvailable === true,
     },
     {
+        // The Project's personal Widgets block (widgets plan WGT-14, lab `dashboards` P1): the same
+        // Project area Overview draws as its side area, kept beside Code and the other pages. A phone
+        // reads it on the Project page under the checkout, so it has no phone surface of its own.
+        id: 'widgets',
+        projectPage: 'overview',
+        owner: 'builtin',
+        railGroup: 'code',
+        labelKey: 'widgetAdd.areaProjectTitle',
+        icon: 'squares-four',
+        order: 27,
+        scopes: ['project'],
+        available: (input) => input.presentation === 'desktop',
+    },
+    {
         id: 'agents',
         owner: 'builtin',
         railGroup: 'session',
@@ -160,8 +175,9 @@ export const RIGHT_SIDEBAR_BUILTIN_TABS: readonly RightSidebarBuiltinTabDefiniti
         icon: 'users',
         order: 32,
         scopes: ['session'],
+        // People (coordination lab P1p): who hears about this session and what it follows, on every
+        // session; sharing and Discussions inside it say for themselves when this Home doesn't offer them.
         mobileSurfaces: { session: 'collaboration' },
-        available: (input) => input.sessionSharingAvailable === true,
     },
     {
         id: 'navigation',

@@ -51,6 +51,8 @@ export function HomeIdentityProvidersCollection(props: Readonly<{ context: HomeA
         </>;
     const addAction = (managedProvidersWritable: boolean) => <SettingAnchor setting={HOME_SIGN_IN_PROVIDERS_SETTINGS.settings.addProvider}><DropdownMenu
         testID="home-identity-provider-add-menu" open={menuOpen} onOpenChange={setMenuOpen}
+        // A section action opens a menu sized to its choices, not to the button (as on the Team page).
+        matchTriggerWidth={false}
         items={[
             { id: 'oidc', testID: 'home-eligible-provider:oidc', title: t('identityAdministration.providerOidc'), icon: <Icon name="key" />, disabled: !canMutateHome || !managedProvidersWritable },
             { id: 'workos', testID: 'home-eligible-provider:workos', title: t('identityAdministration.homeWorkosAdd'), icon: <WorkosMark size={20} />,

@@ -35,7 +35,7 @@ export type WorkspaceCommitSearchOutcome =
     | Readonly<{ status: 'recentOnly'; entries: readonly ScmLogEntry[] }>
     | Readonly<{
         status: 'unavailable';
-        reason: 'noWorkspaceScope' | 'notRepository' | 'backendUnavailable' | 'unsupported' | 'error';
+        reason: 'noWorkspaceScope' | 'notRepository' | 'rootNotFound' | 'backendUnavailable' | 'unsupported' | 'error';
         message?: string;
     }>;
 
@@ -48,6 +48,8 @@ function unavailable(
 
 function mapFailureToOutcome(response: ScmLogListResponse): WorkspaceCommitSearchOutcome {
     switch (response.errorCode) {
+        case SCM_OPERATION_ERROR_CODES.ROOT_NOT_FOUND:
+            return unavailable('rootNotFound', response.error);
         case SCM_OPERATION_ERROR_CODES.NOT_REPOSITORY:
             return unavailable('notRepository', response.error);
         case SCM_OPERATION_ERROR_CODES.BACKEND_UNAVAILABLE:

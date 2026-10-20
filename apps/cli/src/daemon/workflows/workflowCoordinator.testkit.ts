@@ -194,7 +194,7 @@ export function createInMemoryWorkflowCoordinatorStore(): InMemoryWorkflowCoordi
         } });
       }
     },
-    commitFact: async ({ key, lifecycle, result, usage, reason, reasonMessage, reasonDetails, validationIssues, review, execution, sharedConversationInvocationRecordId, observationDeadline, input, resultContract, workspace, container, containerResult, resultProvenance }) => {
+    commitFact: async ({ key, lifecycle, result, usage, reason, reasonMessage, reasonDetails, runtimeIssueV1, validationIssues, review, execution, sharedConversationInvocationRecordId, observationDeadline, input, resultContract, workspace, container, containerResult, resultProvenance }) => {
       const existing = records.get(key);
       if (!existing) throw new Error('workflow_invocation_intent_missing');
       if (existing.lifecycle === 'completed' || existing.lifecycle === 'failed'
@@ -213,6 +213,7 @@ export function createInMemoryWorkflowCoordinatorStore(): InMemoryWorkflowCoordi
       const withContract = resultContract === undefined ? committed : { ...committed, resultContract };
       const withMessage = { ...withContract, ...(reasonMessage === undefined ? {} : { reasonMessage }),
         ...(reasonDetails === undefined ? {} : { reasonDetails }),
+        ...(runtimeIssueV1 === undefined ? {} : { runtimeIssueV1 }),
         ...(validationIssues === undefined ? {} : { validationIssues }) };
       records.set(key, withMessage);
       return withMessage;

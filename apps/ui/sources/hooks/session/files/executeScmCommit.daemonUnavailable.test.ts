@@ -14,6 +14,7 @@ installSessionFilesHookCommonModuleMocks({
   modal: async () => {
     const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
         return createModalModuleMock({
+          confirmResult: true,
           spies: {
             alert: modalAlert,
             confirm: modalConfirm,
@@ -27,8 +28,8 @@ const harness = await createScmNetworkTestHarness();
 const commitResponses = vi.fn();
 const commitRequests = () => harness.network.requests.filter(request => request.method === RPC_METHODS.SCM_COMMIT_CREATE);
 
-beforeEach(() => {
-  harness.reset();
+beforeEach(async () => {
+  await harness.reset();
   modalAlert.mockClear();
   modalConfirm.mockClear();
   commitResponses.mockReset();
@@ -65,7 +66,7 @@ describe('executeScmCommit (daemon unavailable)', () => {
 
     expect(result.ok).toBe(false);
     expect(modalAlert).not.toHaveBeenCalled();
-    expect(commitRequests()).toHaveLength(1);
+    expect(commitRequests(), JSON.stringify(harness.storage.getState().getSessionProjectScmOperationLog('s1', harness.serverId))).toHaveLength(1);
   });
 
   it('omits a broader commit scope when atomic line-selection patches are present', async () => {

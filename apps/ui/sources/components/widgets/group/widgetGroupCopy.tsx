@@ -12,17 +12,22 @@ import { runCopyWidgetGroupCommandV1 } from '@/components/widgets/definitions/wi
 import { useWorkspaceRefs } from '@/sync/domains/state/storage';
 import { t } from '@/text';
 
-/** Where a group can be copied: the Account's Home and each of its Projects, never where it already is. */
+/** Where a group or widget can be copied: the Account's Home, its WorkBoards when offered, and each Project, never where it already is. */
 export type WidgetGroupCopyDestination = Readonly<{ key: string; label: string; surface: WidgetSurfaceRefV1; area?: WidgetProjectAreaV1 }>;
 
 export function resolveWidgetGroupCopyDestinations(input: Readonly<{
     current: WidgetSurfaceRefV1;
     projects: readonly Readonly<{ projectId: string; label: string }>[];
+    /** A single widget can also be placed on a WorkBoard; a group's copy cannot. */
+    boards?: readonly Readonly<{ boardId: string; label: string }>[];
 }>): WidgetGroupCopyDestination[] {
     const account = { serverId: input.current.serverId, accountId: input.current.accountId };
     const owner = input.current.owner;
     return [
         ...(owner.kind === 'home' ? [] : [{ key: 'home', label: t('common.home'), surface: { ...account, owner: { kind: 'home' as const } } }]),
+        ...(input.boards ?? []).filter(board => !(owner.kind === 'workBoard' && owner.boardId === board.boardId)).map((board): WidgetGroupCopyDestination => ({
+            key: `board:${board.boardId}`, label: board.label, surface: { ...account, owner: { kind: 'workBoard', boardId: board.boardId } },
+        })),
         ...input.projects.filter(project => !(owner.kind === 'project' && owner.projectId === project.projectId)).map((project): WidgetGroupCopyDestination => ({
             key: `project:${project.projectId}`, label: project.label, area: 'main',
             surface: { ...account, owner: { kind: 'project', projectId: project.projectId } },

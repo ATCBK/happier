@@ -33,6 +33,8 @@ export type WorkflowStepFieldControlRenderer = (params: Readonly<{
     engine?: WorkflowEngineSelectionV1;
     onChangeEngine?: (engine: WorkflowEngineSelectionV1) => void;
     workflowRoles?: readonly WorkflowRoleV1[];
+    /** The field's inheritance state and reset, for the control to show on the field's own row. */
+    stateAccessory?: React.ReactNode;
 }>) => React.ReactNode;
 
 export function useWorkflowStepFieldControlRenderer(params: Readonly<{
@@ -50,6 +52,7 @@ export function useWorkflowStepFieldControlRenderer(params: Readonly<{
             onChangeFields={renderParams.onChangeFields}
             workflowRoles={renderParams.workflowRoles}
             onChangeField={(_field, value) => renderParams.onChange(value)}
+            {...(renderParams.stateAccessory === undefined ? {} : { fieldMeta: { [renderParams.field]: renderParams.stateAccessory } })}
             {...(facts === undefined ? {} : { facts })}
             testIDPrefix={testIDPrefix ?? 'workflow-inspector-control'}
         />

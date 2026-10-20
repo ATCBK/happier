@@ -7,7 +7,7 @@ import {
     resolveHappierImagePixels,
     type HappierImageSize,
 } from '@happier-dev/plugin-ui/presentation';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { hasAgentIconMark } from '@/agents/catalog/catalog';
 import { resolveBundledAgentIdFromPluginId } from '@/agents/catalog/resolveBundledAgentIdFromContributionIdentity';
 import { AgentIcon } from '@/agents/registry/AgentIcon';
@@ -35,7 +35,7 @@ export type InstalledPluginBrandMarkProps = Readonly<{
  */
 export function InstalledPluginBrandMark(props: InstalledPluginBrandMarkProps): React.ReactElement {
     const { theme } = useUnistyles();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
     const namedSize = props.size ?? (props.pixelSize === undefined ? 'medium' : 'small');
     const agentId = props.iconAgentId ?? resolveBundledAgentIdFromPluginId(props.pluginId);
     if (!props.brand.bytes && agentId && hasAgentIconMark(agentId, theme)) {

@@ -19,6 +19,8 @@ import { PluginMachineMaterializationRefV1Schema } from '../../plugins/availabil
 import { CallerInputConstraintsV1Schema } from '../../auth/callerInputConstraintsV1.js';
 import { AgentPermissionIntentV1Schema } from '../../runtime/permissionIntentV1.js';
 import { asProtocolZod } from '../../plugins/actions/internalProtocolZodAdapter.js';
+import { WorkspaceSyncPrepareBetweenRequestV1Schema, type WorkspaceSyncPrepareBetweenRequestV1 } from '../control/handoff/workspaceSyncSchemas.js';
+import { isDiscussionSecondOpinionModelRpcMethodV1 } from '../../discussions/secondOpinionActions.js';
 export { SessionRequesterInstallationSealedBootstrapV1Schema } from './sessionRequesterBootstrapSchemasV1.js';
 
 /** Same serialized fields as the credential custodian's access.key owner, on a private carrier only. */
@@ -64,15 +66,23 @@ export type SessionRequesterBootstrapV1 = Readonly<z.infer<typeof SessionRequest
 
 /** Private invocation scope, independent of Session birth or custody. Every boundary is closed. */
 export type ExternalActionRequesterAccountContextPurposeV1 = Readonly<
-  { kind: 'external_action' } | { kind: 'machine_rpc'; method: string; params: unknown }
+  { kind: 'external_action' } | { kind: 'machine_rpc'; method: string; params: unknown;
+    recipient?: Readonly<{ machineId: string; installationId: string }> }
   | { kind: 'managed_finite_wake'; target: ManagedWakeTargetV1 }
+  | { kind: 'workspace_sync_prepare'; controller: Readonly<{ machineId: string; installationId: string }>;
+    request: WorkspaceSyncPrepareBetweenRequestV1 }
 >;
 const RequesterAccountContextPurposeV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ kind: z.literal('external_action') }),
   z.strictObject({ kind: z.literal('machine_rpc'), method: z.string().check(z.trim(), z.minLength(1)),
+    recipient: z.optional(z.strictObject({ machineId: z.string().check(z.trim(), z.minLength(1)),
+      installationId: z.string().check(z.trim(), z.minLength(1)) })),
     paramsPresent: z.boolean(),
     requestDigest: z.string().check(z.regex(/^[A-Za-z0-9_-]{43}$/u)) }),
   z.strictObject({ kind: z.literal('managed_finite_wake'), target: ManagedWakeTargetV1Schema }).check(z.refine(value => value.target.origin.kind === 'finite-command')),
+  z.strictObject({ kind: z.literal('workspace_sync_prepare'), controller: z.strictObject({
+    machineId: z.string().check(z.trim(), z.minLength(1)), installationId: z.string().check(z.trim(), z.minLength(1)),
+  }), request: WorkspaceSyncPrepareBetweenRequestV1Schema }),
 ]));
 /** Host-stamped facts inside the existing private box, never a public Action field. */
 export const ExternalActionRequesterInvocationV1Schema = lazyZodSchema(() => z.strictObject({
@@ -108,6 +118,7 @@ function projectRequesterAccountContextPurpose(input: ExternalActionRequesterAcc
   const prefix = `${machineId}:`;
   return RequesterAccountContextPurposeV1Schema.parse(input.kind !== 'machine_rpc' ? input : {
     kind: input.kind, method: input.method.startsWith(prefix) ? input.method.slice(prefix.length) : input.method,
+    ...(input.recipient ? { recipient: input.recipient } : {}),
     paramsPresent: input.params !== undefined,
     requestDigest: computeCanonicalDomainSeparatedDigest('happier-external-action-rpc-payload-v1', [
       createCanonicalJsonSigningInput(input.params === undefined ? null : input.params),
@@ -126,6 +137,10 @@ export function sealExternalActionRequesterAccountContextV1(input: Readonly<{
 }>): ExternalActionExecutionAuthorizationV1 {
   if (!isValidEd25519PublicKey(input.installationPublicKey)) throw new Error('invalid_installation_public_key');
   const authorization = ExternalActionExecutionAuthorizationV1Schema.parse(input.authorization);
+  const preparation = input.purpose.kind === 'workspace_sync_prepare' ? input.purpose : undefined;
+  const moveRecipient = input.purpose.kind === 'machine_rpc' ? input.purpose.recipient : undefined;
+  if (moveRecipient && !isReviewedChildRecipientPurpose(authorization, input.purpose)) throw new Error('requester_account_move_root_mismatch');
+  if (preparation && !isWorkspaceSyncPreparationRoot(authorization)) throw new Error('requester_account_prepare_root_mismatch');
   const wake = input.purpose.kind === 'managed_finite_wake' ? authorization.managedFiniteWake : undefined;
   if (input.purpose.kind === 'managed_finite_wake' && (!wake
     || createCanonicalJsonSigningInput(wake.target) !== createCanonicalJsonSigningInput(input.purpose.target)
@@ -143,7 +158,7 @@ export function sealExternalActionRequesterAccountContextV1(input: Readonly<{
   const ciphertext = sealBoxBundle({ plaintext: new TextEncoder().encode(JSON.stringify(plaintext)),
     recipientPublicKey: ed25519.utils.toMontgomery(input.installationPublicKey), randomBytes: input.randomBytes });
   const sealed = { kind: 'installation_sealed_v1' as const,
-    installationId: wake?.target.controller.installationId ?? authorization.binding.installationId,
+    installationId: moveRecipient?.installationId ?? preparation?.controller.installationId ?? wake?.target.controller.installationId ?? authorization.binding.installationId,
     ciphertext: encodeBase64(ciphertext, 'base64url') };
   return wake ? { ...authorization, managedFiniteWake: { ...wake, requesterAccountContext: sealed } }
     : { ...authorization, requesterAccountContext: sealed };
@@ -166,10 +181,14 @@ export function openExternalActionRequesterAccountContextV1(input: OpenRequester
     const parsed = ExternalActionExecutionAuthorizationV1Schema.safeParse(input.authorization);
     if (!parsed.success) return null;
     const authorization = parsed.data;
+    const preparation = input.purpose.kind === 'workspace_sync_prepare' ? input.purpose : undefined;
+    const moveRecipient = input.purpose.kind === 'machine_rpc' ? input.purpose.recipient : undefined;
+    if (moveRecipient && !isReviewedChildRecipientPurpose(authorization, input.purpose)) return null;
+    if (preparation && !isWorkspaceSyncPreparationRoot(authorization)) return null;
     const wake = input.purpose.kind === 'managed_finite_wake' ? authorization.managedFiniteWake : undefined;
     if (input.purpose.kind === 'managed_finite_wake' && (!wake
       || createCanonicalJsonSigningInput(wake.target) !== createCanonicalJsonSigningInput(input.purpose.target))) return null;
-    const recipient = wake?.target.controller ?? { machineId: authorization.binding.machineId,
+    const recipient = moveRecipient ?? preparation?.controller ?? wake?.target.controller ?? { machineId: authorization.binding.machineId,
       installationId: authorization.binding.installationId };
     const sealed = wake ? wake.requesterAccountContext : authorization.requesterAccountContext;
     if (!sealed || sealed.installationId !== input.installationId
@@ -188,6 +207,19 @@ export function openExternalActionRequesterAccountContextV1(input: OpenRequester
     return input.includeInvocation ? { credentials: plaintext.data.credentials,
       ...(plaintext.data.invocation ? { invocation: plaintext.data.invocation } : {}) } : plaintext.data.credentials;
   } catch { return null; }
+}
+
+function isReviewedChildRecipientPurpose(authorization: ExternalActionExecutionAuthorizationV1,
+  purpose: ExternalActionRequesterAccountContextPurposeV1): boolean {
+  return authorization.binding.actionId === 'projects.service.relocate'
+    || authorization.binding.actionId === 'discussion.second_opinion.start'
+      && purpose.kind === 'machine_rpc' && isDiscussionSecondOpinionModelRpcMethodV1(purpose.method);
+}
+
+function isWorkspaceSyncPreparationRoot(authorization: ExternalActionExecutionAuthorizationV1): boolean {
+  const binding = authorization.binding;
+  return (binding.actionId === 'projects.script.run' || binding.actionId === 'projects.compute.exec' || binding.actionId === 'projects.service.relocate')
+    && binding.target.kind === 'machine' && binding.target.machineId === binding.machineId;
 }
 export const SessionRequesterBootstrapRpcRequestV1Schema = lazyZodSchema(() => z.strictObject({
   kind: z.literal('requester_session_bootstrap_v1'),

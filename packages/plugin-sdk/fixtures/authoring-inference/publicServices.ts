@@ -101,6 +101,7 @@ const unavailableExternalSessions: SessionsService['external'] = Object.freeze({
     });
   },
   async list() { return unexpectedSessionCapability(); },
+  async closeList() { return unexpectedSessionCapability(); },
   async attach() { return unexpectedSessionCapability(); },
   async readTranscript() { return unexpectedSessionCapability(); },
   async followTranscript() { return unexpectedSessionCapability(); },
@@ -114,6 +115,7 @@ function createSessionHandle(onWatch: () => void): SessionHandle {
       return summary;
     },
     async send() { return unexpectedSessionCapability(); },
+    async materializeAttachment() { return unexpectedSessionCapability(); },
     async listSystemRecords(
       _query: Parameters<SessionHandle['listSystemRecords']>[0],
       _options?: Parameters<SessionHandle['listSystemRecords']>[1],

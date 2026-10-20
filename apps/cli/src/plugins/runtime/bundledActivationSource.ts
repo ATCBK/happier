@@ -47,6 +47,7 @@ type ImportModule = (specifier: string) => Promise<PluginDaemonModuleNamespace>;
 
 type PrepareSourceDevSharedDeps = (params: Readonly<{
     packageName: string;
+    signal?: AbortSignal;
     workspaceNames?: readonly string[];
     admittedCopyOnly?: boolean;
 }>) => Promise<SourceDevSharedDepsPreflightResult> | SourceDevSharedDepsPreflightResult;
@@ -300,6 +301,7 @@ export function resolveSourceDevelopmentBundledPackageNames(params: Readonly<{
 
 export function createBundledActivationSourceResolver(params: Readonly<{
     bundledPackageNames: readonly string[];
+    signal?: AbortSignal;
     immutableArtifactPackageNames?: readonly string[];
     /**
      * The published daemon runtime bundle for each bundled package: the module that
@@ -397,6 +399,7 @@ export function createBundledActivationSourceResolver(params: Readonly<{
         const workspaceNames = resolveSourceDevWorkspaceNames(packageName);
         const preflightPromise = Promise.resolve().then(() => prepareSourceDevSharedDeps({
             packageName,
+            ...(params.signal ? { signal: params.signal } : {}),
             ...(workspaceNames.length > 0
                 ? { workspaceNames }
                 : {}),
@@ -444,7 +447,10 @@ export function createBundledActivationSourceResolver(params: Readonly<{
         }
 
         sourceDevSharedDepsBatchPreflight ??= Promise.resolve()
-            .then(() => prepareSourceDevSharedDeps(batchTarget))
+            .then(() => prepareSourceDevSharedDeps({
+                ...batchTarget,
+                ...(params.signal ? { signal: params.signal } : {}),
+            }))
             .then((result): SourceDevSharedDepsBatchPreflightOutcome => (
                 result.type === 'ready'
                     ? { type: 'ready', result }
@@ -455,6 +461,7 @@ export function createBundledActivationSourceResolver(params: Readonly<{
             }));
 
         const batchOutcome = await sourceDevSharedDepsBatchPreflight;
+        params.signal?.throwIfAborted();
         if (batchOutcome.type === 'ready') {
             return batchOutcome.result;
         }
@@ -486,6 +493,7 @@ export function createBundledActivationSourceResolver(params: Readonly<{
         };
         let prepared = false;
         const prepare = async (): Promise<void> => {
+            params.signal?.throwIfAborted();
             if (prepared) return;
             const pluginId = parseFirstPartyPluginIdFromPackageName(daemonEntryPath);
             const sourceDevEntry = resolveSourceDevEntry();
@@ -503,6 +511,7 @@ export function createBundledActivationSourceResolver(params: Readonly<{
                     daemonEntryPath,
                     sourceDevEntry ? undefined : { admittedCopyOnly: true },
                 );
+                params.signal?.throwIfAborted();
                 if (preflight.type === 'error') {
                     throw new Error(preflight.errorMessage);
                 }

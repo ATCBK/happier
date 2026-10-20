@@ -1,5 +1,6 @@
 import * as React from 'react';
 import type { ActionId } from '@happier-dev/protocol';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 
 import { Modal } from '@/modal';
 import { t } from '@/text';
@@ -29,13 +30,6 @@ export function usePendingInputInterruptAndRunAction(sessionId: string, serverId
         expectedStateAtMs?: number;
     }>) => {
         if (busy) return;
-        const confirmed = await Modal.confirm(
-            t('session.pendingMessages.actions.interruptAndRunNow'),
-            t('session.pendingMessages.sendConfirm.body'),
-            { confirmText: t('session.pendingMessages.actions.interruptAndRunNow'), destructive: true },
-        );
-        if (!confirmed) return;
-
         setBusy(true);
         try {
             const result = await actionExecutor.execute(ACTION_ID, {
@@ -50,6 +44,7 @@ export function usePendingInputInterruptAndRunAction(sessionId: string, serverId
                 surface: 'ui',
             });
             if (result.ok !== true) {
+                if (isActionApprovalDeclinedErrorCode(result.errorCode)) return;
                 Modal.alert(t('common.error'), result.error ?? t('session.pendingMessages.errors.sendFailed'));
                 return;
             }

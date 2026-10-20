@@ -62,4 +62,27 @@ describe('resolveHorizontalScrollEdgeMaskStyle', () => {
         expect(style?.maskImage).toContain('transparent 100%');
         expect(style?.maskImage).toContain('black 0px');
     });
+
+    it('clips a rail between chips: solid up to the last whole chip, clear from the next, on either edge', () => {
+        const end = resolveHorizontalScrollEdgeMaskStyle(
+            { top: false, bottom: false, left: false, right: true },
+            { fadeSize: 24, endClip: { solidUntilPx: 250, clearFromPx: 256 } },
+        );
+        expect(end?.maskImage).toBe('linear-gradient(to right, black 0px, black 0px, black 250px, transparent 256px)');
+
+        const both = resolveHorizontalScrollEdgeMaskStyle(
+            { top: false, bottom: false, left: true, right: true },
+            { fadeSize: 24, startClip: { clearUntilPx: 20, solidFromPx: 26 }, endClip: { solidUntilPx: 250, clearFromPx: 256 } },
+        );
+        expect(both?.maskImage).toBe('linear-gradient(to right, transparent 20px, black 26px, black 250px, transparent 256px)');
+    });
+
+    it('ignores a clip for an edge that is not scrollable', () => {
+        const style = resolveHorizontalScrollEdgeMaskStyle(
+            { top: false, bottom: false, left: false, right: true },
+            { fadeSize: 24, startClip: { clearUntilPx: 20, solidFromPx: 26 } },
+        );
+        expect(style?.maskImage).toContain('black 0px');
+        expect(style?.maskImage).toContain('black calc(100% - 24px)');
+    });
 });

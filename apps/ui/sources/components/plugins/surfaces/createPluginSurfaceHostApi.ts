@@ -122,9 +122,11 @@ const pluginSurfaceHostApiErrorPayloads = new WeakMap<object, PluginUiHostApiErr
 export function createPluginSurfaceHostApiError(
     code: PluginUiHostApiErrorCodeV1,
     diagnostics: readonly string[] = [],
+    message?: string,
 ): PluginUiJsonValueV1 {
     const payload = PluginUiHostApiErrorPayloadV1Schema.parse({
         code,
+        ...(message === undefined ? {} : { message }),
         diagnostics: diagnostics.flatMap((diagnostic) => {
             const normalized = diagnostic.trim();
             return normalized.length > 0 ? [normalized] : [];
@@ -132,6 +134,7 @@ export function createPluginSurfaceHostApiError(
     });
     const result = Object.freeze({
         code: payload.code,
+        ...(payload.message === undefined ? {} : { message: payload.message }),
         diagnostics: Object.freeze([...payload.diagnostics]),
     }) satisfies PluginUiJsonValueV1;
     pluginSurfaceHostApiErrorPayloads.set(result, payload);
@@ -145,10 +148,12 @@ export function createPluginSurfaceHostApiError(
 export function createPluginSurfaceHostApiPluginErrorData(
     code: PluginUiHostApiErrorCodeV1,
     diagnostics: readonly string[] = [],
+    message?: string,
 ): PluginErrorData {
     return {
         name: 'PluginError',
         code,
+        ...(message === undefined ? {} : { message }),
         retryable: code === 'unavailable' || code === 'timeout',
         ...(diagnostics.length === 0
             ? {}
@@ -204,6 +209,8 @@ export async function settlePluginSurfaceHostApiRequest(
 export type CreatePluginSurfaceHostApiInput = Readonly<{
     surfaceContext: PluginUiSurfaceContextV1;
     handlers?: PluginSurfaceHostApiHandlers;
+    /** Controller-projected host support whose execution binding may be unavailable. */
+    admissionMethods?: readonly PluginUiHostMethodV1[];
     fallback?: PluginSurfaceHostApiMethodHandler;
     /**
      * The bound controller's mount predicate. This factory only consumes it at
@@ -216,6 +223,10 @@ export type CreatePluginSurfaceHostApiInput = Readonly<{
      * mount, its public adapter, or its cancellation lifetime.
      */
     isMethodAvailable?: (method: PluginUiHostMethodV1) => boolean;
+    /** Host-private context for an existing provenance-tagged unavailable result. */
+    resolveUnavailableError?: (error: PluginUiHostApiErrorPayloadV1, request: PluginUiHostApiRequestEnvelopeV1) => PluginUiHostApiErrorPayloadV1 | undefined;
+    /** Positive host readiness observation; unrelated or settled refusals remain terminal. */
+    isConnectionPending?: (error: PluginUiHostApiErrorPayloadV1, request: PluginUiHostApiRequestEnvelopeV1) => boolean;
     /** Called once when the mount retires this host API. */
     onDispose?: () => void;
 }>;
@@ -266,7 +277,18 @@ export function createPluginSurfaceHostApi(
     const surfaceContext = parsedContext.data;
     const handlers = input.handlers ?? {};
     const installedMethods = resolveInstalledPluginSurfaceHostMethods(handlers);
+    const admissionMethods = Object.freeze(PLUGIN_UI_HOST_METHODS_V1.filter(method =>
+        installedMethods.includes(method) || input.admissionMethods?.includes(method),
+    ));
     const isMethodAvailable = input.isMethodAvailable;
+    const enrichUnavailable = (result: PluginUiJsonValueV1, request: PluginUiHostApiRequestEnvelopeV1): PluginUiJsonValueV1 => {
+        const error = readPluginSurfaceHostApiErrorPayload(result);
+        if (error?.code !== 'unavailable') return result;
+        const pending = input.isConnectionPending?.(error, request) === true;
+        const resolved = input.resolveUnavailableError?.(error, request) ?? error;
+        return !pending && resolved === error ? result : createPluginSurfaceHostApiError(resolved.code,
+            pending ? [...resolved.diagnostics, 'plugin_surface_connection_pending'] : resolved.diagnostics, resolved.message);
+    };
     const resolveLiveInstalledMethods = (): readonly PluginUiHostMethodV1[] => {
         // A retired mount cannot serve even its locally synthesized context.
         // Keep the advertised set aligned with the same currentness predicate
@@ -286,7 +308,7 @@ export function createPluginSurfaceHostApi(
             return resolveLiveInstalledMethods();
         },
         get admissionMethods(): readonly PluginUiHostMethodV1[] {
-            return input.isCurrent?.() === false ? Object.freeze([]) : installedMethods;
+            return input.isCurrent?.() === false ? Object.freeze([]) : admissionMethods;
         },
         ...(onDispose
             ? {
@@ -312,11 +334,11 @@ export function createPluginSurfaceHostApi(
                 // answering `unsupported_method` would hand the caller a
                 // permanent capability verdict it must never revisit; the
                 // retryable `unavailable` envelope keeps recovery reachable.
-                return installedMethods.includes(releasedMethod.data)
-                    ? createPluginSurfaceHostApiError(
+                return admissionMethods.includes(releasedMethod.data)
+                    ? enrichUnavailable(createPluginSurfaceHostApiError(
                         'unavailable',
                         [`host_api_method_unavailable:${request.method}`],
-                    )
+                    ), request)
                     : createPluginSurfaceHostApiError(
                         'unsupported_method',
                         [`host_api_method_not_installed:${request.method}`],
@@ -325,8 +347,14 @@ export function createPluginSurfaceHostApi(
             if (request.method === 'context') return surfaceContext;
 
             const handler = handlers[request.method];
-            if (handler) return handler(request, options);
-            if (input.fallback) return input.fallback(request, options);
+            const invoke = handler ?? input.fallback;
+            if (invoke) {
+                const result = invoke(request, options);
+                if (!input.resolveUnavailableError && !input.isConnectionPending) return result;
+                return result instanceof Promise
+                    ? result.then(value => enrichUnavailable(value, request))
+                    : enrichUnavailable(result, request);
+            }
             return createPluginSurfaceHostApiError(
                 'unsupported_method',
                 [`host_api_method_not_installed:${request.method}`],

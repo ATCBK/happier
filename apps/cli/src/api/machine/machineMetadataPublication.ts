@@ -1,5 +1,6 @@
 import type { MachineMetadataFieldPortV1, MachineMetadataFieldReadV1 } from '@happier-dev/protocol/machines/machineMetadataFieldV1';
 import type { Machine } from '../types';
+import type { MachineUpdateMetadataRequest } from '@happier-dev/protocol/machines/metadataUpdate';
 import type { MachineContentCodec } from './machineStoredContent';
 import { emitSocketWithAck } from '@/session/transport/shared/socketAck';
 import { MachineUpdateMetadataResponseSchema } from '@happier-dev/protocol/machines/metadataUpdate';
@@ -7,7 +8,7 @@ import { parseMachinePublishedMetadataV1, StoredMachinePublishedMetadataV1Schema
 
 export type MachineMetadataPublicationContext = Readonly<{
   getMachine: () => Machine;
-  socket: Parameters<typeof emitSocketWithAck>[0]['socket'];
+  socket: Parameters<typeof emitSocketWithAck<unknown, 'machine-update-metadata', MachineUpdateMetadataRequest>>[0]['socket'];
   codec: MachineContentCodec;
   expectedDataEncryptionKey: string | null;
   isContentCurrent: () => boolean;

@@ -3,6 +3,7 @@ import 'fake-indexeddb/auto';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { FeaturesResponseSchema } from '@happier-dev/protocol';
 import { encodePlainMachineStoredContent, MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
+import { MachinePublishedDaemonStateV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 import { FilesystemDownloadInputSchema, FilesystemUploadInputSchema } from '@happier-dev/protocol/actions/filesystemActionFamily';
 import { TargetedActionRpcRequestV1Schema } from '@happier-dev/protocol/actions/actionRpcTransport';
 import type { SocketRpcRequestPayload } from '@happier-dev/protocol/socketRpc';
@@ -24,6 +25,7 @@ import type { BrowserIrohMessagePort } from '@/sync/runtime/browserIroh/workerCo
 vi.mock('socket.io-client', async (importOriginal) =>
     (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('@/modal', async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true }).module);
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -152,10 +154,10 @@ beforeEach(async () => {
     homes.answer(serverId, '/v1/features', { body: FeaturesResponseSchema.parse({ features: {
         machines: { enabled: true, transfer: { enabled: true } },
     }, capabilities: {} }) });
-    const daemonState = { transfer: { supported: { import: true, export: true }, listenerClasses: {
+    const daemonState = MachinePublishedDaemonStateV1Schema.parse({ status: 'running', transfer: { supported: { import: true, export: true }, listenerClasses: {
         loopback_http: { enabled: false, configured: false, active: false },
         tailscale_serve_https: { enabled: false, configured: false, active: false },
-    }, lifecycle: { mode: 'lazy_idle_shutdown', version: 1 } } };
+    }, lifecycle: { mode: 'lazy_idle_shutdown', version: 1 } } });
     const row = { ...createPlainMachineRowFixture({ id: machineId, accountId: 'account-a' }),
         daemonState: encodePlainMachineStoredContent(daemonState) };
     homes.answer(serverId, `/v1/machines/${machineId}`, { body: { machine: row } });
@@ -192,6 +194,7 @@ afterEach(async () => {
     resetPackagedBrowserIrohEndpointClientForTests();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
 });
 
 describe('prepared transfer Home RPC carrier', () => {
@@ -282,9 +285,10 @@ describe('prepared transfer Home RPC carrier', () => {
         const { resolveMachineCarrierRoute } = await import('./machineCarrierHttpLease');
         expect(await resolveMachineCarrierRoute(machineId, serverId)).toMatchObject({ kind: 'server_rpc' });
         if (surface === 'preview') {
+            vi.stubEnv('EXPO_PUBLIC_HAPPIER_SESSION_FILE_INLINE_MAX_BYTES', '1');
             const { workspaceReadFile } = await import('@/sync/ops/workspaceFileSystem/fileReadWrite');
-            // Like file Details, a large preview budget takes the transfer path
-            // even for a tiny binary file. This must not use inline readFile.
+            // This file exceeds the configured inline ceiling, independently
+            // of the caller's preview budget, and must use prepared delivery.
             expect(await workspaceReadFile(target, 'binary', { maxBytes: 1024 * 1024 }))
                 .toEqual({ success: true, content: Buffer.from(bytes).toString('base64') });
         } else {
@@ -295,7 +299,9 @@ describe('prepared transfer Home RPC carrier', () => {
             })).toEqual({ ok: true, name: 'binary', sizeBytes: bytes.length });
             expect(received).toEqual([...bytes]);
         }
-        expect(outgoing.map(value => value.method)).toEqual([...(surface === 'preview' ? [RPC_METHODS.STAT_FILE] : []),
+        // Preview selection and the bounded byte reader each admit the file
+        // size; the accepted publication and byte phases must still run once.
+        expect(outgoing.map(value => value.method)).toEqual([...(surface === 'preview' ? [RPC_METHODS.STAT_FILE, RPC_METHODS.STAT_FILE] : []),
             'daemon.filesystem.download', RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_INIT,
             RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_CHUNK, RPC_METHODS.DAEMON_TRANSFER_DOWNLOAD_FINALIZE].map(method => `${machineId}:${method}`));
         const { getSyncSingleton } = await import('@/sync/runtime/getSyncSingleton');
@@ -320,8 +326,8 @@ describe('prepared transfer Home RPC carrier', () => {
             }
             const phase = readPhase(request);
             if (phase.path.endsWith('/chunks/0')) {
-                const { z } = await import('zod');
-                const chunk = z.object({ payloadBase64: z.string(), encryptedDataKeyEnvelopeBase64: z.string() }).strict().parse(phase.body);
+                const { z } = await import('zod/mini');
+                const chunk = z.strictObject({ payloadBase64: z.string(), encryptedDataKeyEnvelopeBase64: z.string() }).parse(phase.body);
                 received.push(...await decryptEncryptedTransferChunkEnvelope({ ...chunk, transferId: uploadId, sequence: 0,
                     recipientSecretKeySeed: recipient.recipientSecretKeySeed }));
                 return { ok: true, result: rpcResponse({ success: true }) };

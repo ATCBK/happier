@@ -23,8 +23,11 @@ export const PendingResetStartBindingV1Schema = lazyZodSchema(() => z.strictObje
 }));
 export type PendingResetStartBindingV1 = z.infer<typeof PendingResetStartBindingV1Schema>;
 
+const PendingOrdinaryRequestedActionV1Schema = lazyZodSchema(() => z.strictObject({
+  v: z.literal(1), kind: z.enum(['enqueue', 'steer_if_active', 'steer_now', 'send_now']),
+}));
 export const PendingRequestedActionV1Schema = lazyZodSchema(() => z.union([
-  z.strictObject({ v: z.literal(1), kind: z.enum(['enqueue', 'steer_if_active', 'steer_now', 'send_now']) }),
+  PendingOrdinaryRequestedActionV1Schema,
   z.strictObject({ v: z.literal(1), kind: z.literal('reset_start'), reset: PendingResetStartBindingV1Schema }),
 ]));
 export const PendingRequestedActionV1StoredSchema = createStoredReadSchema(PendingRequestedActionV1Schema);
@@ -37,9 +40,20 @@ export const PendingResetStartSetInputV1Schema = lazyZodSchema(() => (<T extends
     targetMachineId: z.optional(z.string().check(z.trim(), z.minLength(1))) })),
 })));
 export const PendingResetStartCancelInputV1Schema = lazyZodSchema(() => (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.never() }) as z.ZodMiniObject<T['shape'], z.core.$strict>)(z.omit(SessionPendingWithdrawInputV1Schema, { targetExecutionRunId: true })));
-export const PendingResetStartSetResultV1Schema = lazyZodSchema(() => z.strictObject({
+/** Existing-row intent/rearm only; reset holds keep their witnessed admission Action. */
+export const SessionPendingActionSetInputV1Schema = lazyZodSchema(() => z.strictObject({
+  sessionId: SessionPendingWithdrawInputV1Schema.shape.sessionId,
+  localId: SessionPendingWithdrawInputV1Schema.shape.localId,
+  serverId: SessionPendingWithdrawInputV1Schema.shape.serverId,
+  requestedAction: PendingOrdinaryRequestedActionV1Schema,
+  resumeWhenAvailable: z.optional(z.boolean()),
+}));
+export const SessionPendingActionSetResultV1Schema = lazyZodSchema(() => z.strictObject({
   didUpdate: z.boolean(), requestedAction: PendingRequestedActionV1Schema,
 }));
+export type SessionPendingActionSetInputV1 = z.infer<typeof SessionPendingActionSetInputV1Schema>;
+export type SessionPendingActionSetResultV1 = z.infer<typeof SessionPendingActionSetResultV1Schema>;
+export const PendingResetStartSetResultV1Schema = SessionPendingActionSetResultV1Schema;
 export const PendingResetStartCancelResultV1Schema = lazyZodSchema(() => SessionPendingWithdrawResultV1Schema);
 export type PendingResetStartSetInputV1 = z.infer<typeof PendingResetStartSetInputV1Schema>;
 export type PendingResetStartCancelInputV1 = z.infer<typeof PendingResetStartCancelInputV1Schema>;

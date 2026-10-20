@@ -28,7 +28,7 @@ import { ApiClient } from '@/api/api';
 import { createDaemonMachineBootstrapRuntime } from '@/daemon/startup/createDaemonMachineBootstrapRuntime';
 import { createCliRegistryHostV1 } from '@/registries/createCliRegistryHost';
 import { createDaemonServerWorkBudget, createDaemonServerWorkScheduler } from '@/daemon/serverWork';
-import { createInvocationSavedSecretOperationContextV1 } from '@/settings/secrets/hydrateSavedSecretCatalog';
+import { createInvocationSavedSecretOperationContextV1 } from "@/settings/secrets/savedSecretOperationContext";
 
 const { mockIo } = vi.hoisted(() => ({ mockIo: vi.fn() }));
 vi.mock('socket.io-client', () => ({ io: mockIo }));
@@ -68,7 +68,7 @@ async function fixture(run: (fixture: Readonly<{
       } else if (path.startsWith('/v1/account/entity-rows/prompt-library/')) {
         const chunks: Buffer[] = []; for await (const chunk of request) chunks.push(Buffer.from(chunk));
         const mutation = PromptLibraryRowMutationV1Schema.parse(JSON.parse(Buffer.concat(chunks).toString()));
-        if (mutation.content.t !== 'plain') throw new Error('Expected plain fixture Account');
+        if (mutation.content?.t !== 'plain') throw new Error('Expected plain fixture Account');
         const record = PromptLibraryRecordV1Schema.parse(mutation.content.v); expect(record.key).toBe('external-links');
         state.writes++;
         if (state.conflict) database.prepare('UPDATE rows SET revision = revision + 1 WHERE key = ?').run(record.key);
@@ -78,6 +78,7 @@ async function fixture(run: (fixture: Readonly<{
         result = write.changes === 1 ? { status: 'updated', revision: current.revision, cursor: state.writes } : { status: 'conflict', revision: current.revision };
         if (state.retireOnWrite) setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), settingsVersion: 1, loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: 'retired-account' });
       } else if (path === '/v1/features') result = FeaturesResponseSchema.parse({ features: {}, capabilities: { serverIdentity: { serverIdentityId: state.homeIdentity } } });
+      else if (path === '/v1/plugins/availability/materializations/read') result = { availabilityCursor: 0, inventoryComplete: true, snapshots: [], releases: [] };
       else if (path === '/v1/artifacts') result = [artifact(), ...(state.unreadableNeighbour ? [{ ...artifact(), id: 'broken' }] : [])];
       else if (path === '/v1/artifacts/broken') result = { ...artifact(), id: 'broken', body: encodePlainArtifactStoredContent({ body: '{malformed' }) };
       else if (path === '/v1/artifacts/skill') {
@@ -85,6 +86,7 @@ async function fixture(run: (fixture: Readonly<{
         if (state.missingArtifact) { response.statusCode = 404; result = { error: 'not_found' }; }
         else result = artifact();
       } else if (path === '/v1/account/encryption/currentness') result = { mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 };
+      else if (path.startsWith('/v1/artifacts/')) { response.statusCode = 503; result = { error: 'unreachable' }; }
       else if (path === '/v1/account/encryption') result = { mode: 'plain', updatedAt: 1 };
       else if (path === '/v2/account/settings') result = { content: { t: 'plain', v: {} }, version: 1 };
       else if (path === '/v2/account/settings/history') result = { snapshots: [] };
@@ -102,7 +104,8 @@ async function fixture(run: (fixture: Readonly<{
       setActiveAccountSettingsSnapshot({ source: 'network', settings: accountSettingsParse({}), rawSettings: {}, settingsVersion: 1,
         loadedAtMs: 1, settingsSecretsReadKeys: [], scopeKey: resolveAccountSettingsScopeKey(credentials) });
       const store = createCliApprovalsArtifactStore({ credentials, serverId: 'srv_home', getAccountEncryptionMode: async () => 'plain' });
-      const service = createMachineSkillActions({ store: store.promptLibraryStore, target: { machineId: 'machine', serverIdentityId: 'srv_home' },
+      const service = createMachineSkillActions({ store: store.promptLibraryStore, readPluginSkills: store.readPluginSkills,
+        target: { machineId: 'machine', serverIdentityId: 'srv_home' },
         libraryServerIdentityId: 'srv_home', homeDirectory: home, happierHomeDirectory: join(home, '.happier'),
         agents: [{ agentId: 'claude', nativeRoots: { user: [['.claude', 'skills']] } }, { agentId: 'codex', nativeRoots: { user: [['.agents', 'skills']], plugin: [['.codex', 'plugins', 'cache', '*', '{plugin}', '*', 'skills']] } }],
         readInstalledAgents: async () => ['codex'], nowMs: () => 1 });
@@ -120,6 +123,12 @@ async function fixture(run: (fixture: Readonly<{
 }
 
 describe('machine skill service through real Account HTTP and SQLite CAS', () => {
+  it('keeps a retired plugin id out of an unrelated unavailable Artifact store', async () => {
+    await fixture(async ({ service }) => {
+      await expect(service.install({ skillId: 'plugin:com.acme.retired/check', agents: ['codex'] }))
+        .rejects.toMatchObject({ code: 'not_found' });
+    });
+  });
   it('installs through the published Iroh carrier while retaining canonical saved Home identity', async () => {
     // Construct outside the fixture's invocation URL scope, so the actual publication owns endpoint selection.
     const runtimeContext = new AsyncResource('machine-skill-published-home');
@@ -167,9 +176,10 @@ describe('machine skill service through real Account HTTP and SQLite CAS', () =>
     bindApiSessionSocketMock(mockIo, createApiSessionSocketStub());
     await service.install({ skillId: 'skill' }); state.text = 'bootstrap library edit';
     const unused = async (): Promise<never> => { throw new Error('Unexpected native process boundary'); };
-    const bootstrap = createDaemonMachineBootstrapRuntime({ api: await ApiClient.create(credentials), credentials,
+    const bootstrap = createDaemonMachineBootstrapRuntime({ api: await ApiClient.create(credentials), credentials, controlPort: 0,
       runtimeId: 'fixture-runtime', publicReleaseChannel: 'dev', startupSource: 'manual', serviceLabel: undefined,
       transferRuntimeStatePublisher: null, directPeerServerLifecycle: null,
+      spawnSessionForInternalResume: unused,
       spawnSession: unused, stopSession: unused, awaitAgentSessionOpen: unused,
       isSessionAlreadyRunning: unused, loadLocalSessionMetadataForHandoff: unused,
       beforeShutdown: async () => {}, requestShutdown: () => {},
@@ -259,7 +269,10 @@ describe('machine skill service through real Account HTTP and SQLite CAS', () =>
     const plugin = join(home, '.codex/plugins/cache/market/fixture/1/skills/example'); mkdirSync(plugin, { recursive: true });
     writeFileSync(join(plugin, 'SKILL.md'), readFileSync(join(home, '.agents/skills/example/SKILL.md')));
     chmodSync(join(plugin, 'SKILL.md'), 0o644);
+    const hidden = join(home, '.agents/skills/hidden'); mkdirSync(hidden, { recursive: true });
+    writeFileSync(join(hidden, 'SKILL.md'), '---\nname: hidden\ndescription: Native\nuser-invocable: false\n---\nBody');
     const result = SkillFoundListResultV1Schema.parse(await service.found());
+    expect(result.items.find(item => item.name === 'hidden')).toMatchObject({ userInvocable: false, inLibrary: null });
     expect(result.items.find(item => item.scope === 'user')).toMatchObject({ inLibrary: 'skill', masksLibrary: true, happierInstalled: true, pluginOwned: null });
     expect(result.items.find(item => item.scope === 'plugin')).toMatchObject({ inLibrary: 'skill', masksLibrary: false, happierInstalled: false, pluginOwned: { pluginName: 'fixture' } });
     writeFileSync(join(home, '.agents/skills/example/SKILL.md'), 'local edit');

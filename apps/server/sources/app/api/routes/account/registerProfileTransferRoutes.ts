@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { PROFILE_TRANSFER_ROUTE_V1, ProfileTransferMutationV1Schema, ProfileTransferMutationResponseV1Schema, ProfileTransferRowReadResponseV1Schema } from '@happier-dev/protocol/profiles/profileTransferV1';
 import type { Fastify } from '@/app/api/types';
 import { asServerProtocolZod } from '@/app/api/utils/protocolComposableZodAdapter';
@@ -13,7 +13,7 @@ export function registerProfileTransferRoutes(app: Fastify): void {
     app.get(PROFILE_TRANSFER_ROUTE_V1, {
         preHandler: app.authenticate,
         config: { rateLimit: resolveApiHotEndpointRateLimit(process.env, 'account.settings') },
-        schema: { response: { 200: asServerProtocolZod(ProfileTransferRowReadResponseV1Schema), 500: z.object({ error: z.literal('internal') }).strict() } },
+        schema: { response: { 200: asServerProtocolZod(ProfileTransferRowReadResponseV1Schema), 500: z.strictObject({ error: z.literal('internal') }) } },
     }, async (request, reply) => {
         const result = await inTx(tx => readProfileTransferControlInTx(tx, { accountId: request.userId }), { /* Account mode and catalog content must share one capture. */ isolationLevel: "Serializable", readOnly: true });
         return reply.send(profileTransferControlReadResponseV1(result));
@@ -23,7 +23,7 @@ export function registerProfileTransferRoutes(app: Fastify): void {
         config: { rateLimit: resolveApiHotEndpointRateLimit(process.env, 'account.settings') },
         schema: { body: asServerProtocolZod(ProfileTransferMutationV1Schema), response: {
             200: asServerProtocolZod(ProfileTransferMutationResponseV1Schema),
-            400: z.object({ error: z.literal('invalid-params') }).strict(), 500: z.object({ error: z.literal('internal') }).strict(),
+            400: z.strictObject({ error: z.literal('invalid-params') }), 500: z.strictObject({ error: z.literal('internal') }),
         } },
     }, async (request, reply) => reply.send(await mutateProfileTransfer({ accountId: request.userId, mutation: request.body,
         authentication: readTeamOperationAuthenticationFromRequest(request) })));

@@ -1,3 +1,4 @@
+import { EXECUTION_RUN_KIND_BY_INTENT } from '@happier-dev/protocol/execution/runs/startRequest';
 import { ScmDiffSummaryGenerateOutputSchema } from '@happier-dev/protocol/scm/diffSummary';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import type { ScmDiffSummarySevenDayCost } from '@happier-dev/protocol';
@@ -13,7 +14,7 @@ export function summarizeScmDiffSummarySevenDayCost(records: readonly CostRecord
   let estimatedUsd = 0;
   let pricedRunCount = 0;
   for (const record of recent) {
-    if (record.structuredMeta?.kind !== 'scm_diff_summary.v1') continue;
+    if (record.structuredMeta?.kind !== EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary) continue;
     const output = StoredScmDiffSummaryGenerateOutputSchema.safeParse(record.structuredMeta.payload);
     const cost = output.success ? output.data.cost?.estimatedUsd : undefined;
     if (cost === undefined) continue;

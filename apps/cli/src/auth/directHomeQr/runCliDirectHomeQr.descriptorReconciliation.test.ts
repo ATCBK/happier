@@ -75,6 +75,7 @@ describe('CLI direct Home QR descriptor reconciliation', () => {
       observationProvenance?: 'authenticated' | 'public';
       /** Let the requester claim the invite and drive the pairing through completion. */
       completePairing?: boolean;
+      transientModeFailure?: boolean;
     }> = {},
   ) {
     return await withTempDir('happier-cli-direct-qr-descriptor-', async (homeDir) => {
@@ -151,8 +152,13 @@ describe('CLI direct Home QR descriptor reconciliation', () => {
       let resolveEmittedInvite!: (invite: HomeQrInviteV2) => void;
       const emittedInvite = new Promise<HomeQrInviteV2>((resolve) => { resolveEmittedInvite = resolve; });
       const accountResponseBodies: unknown[] = [];
+      let modeFailurePending = options.transientModeFailure === true;
       vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
         const path = new URL(String(url)).pathname;
+        if (path === '/v1/account/encryption/currentness') {
+          if (modeFailurePending) { modeFailurePending = false; return new Response(null, { status: 503 }); }
+          return Response.json({ mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 0 });
+        }
         if (path === '/v1/auth/pairing/start') {
           return new Response(JSON.stringify({ pairId: 'pair-1', expiresAt }), {
             status: 200,
@@ -232,6 +238,13 @@ describe('CLI direct Home QR descriptor reconciliation', () => {
     expect(outcome.result).toEqual({ kind: 'cancelled' });
     expect(outcome.inviteDescriptor).toEqual(current);
     expect(outcome.profile.homeConnectionDescriptor).toEqual(current);
+  });
+
+  it('retries a transient authenticated mode read through the existing QR lifecycle', async () => {
+    const stored = descriptor({ revision: 2 });
+    const outcome = await runCase(stored, stored, true, { completePairing: true, transientModeFailure: true });
+    expect(outcome.result).toEqual({ kind: 'completed', requestedDeviceLabel: 'Phone' });
+    expect(outcome.accountResponseBodies).toEqual([expect.objectContaining({ responseKind: 'tokenOnly' })]);
   });
 
   it('completes an approved pairing for the pinned Home identity', async () => {

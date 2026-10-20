@@ -18,7 +18,7 @@ import {
     createLightSqliteHarness,
     type LightSqliteHarness,
 } from "@/testkit/lightSqliteHarness";
-import { acquireMtlsAuthenticationClaimInTx, createMtlsClaimCode } from "./mtlsClaimCode";
+import { acquireMtlsAuthenticationClaimInTx, beginMtlsTeamHandoff, createMtlsClaimCode, createMtlsTeamHandoff } from "./mtlsClaimCode";
 
 function sha256Hex(value: string): string {
     return createHash("sha256")
@@ -60,6 +60,15 @@ describe("mTLS first-key step-up claim consumption", () => {
 
     afterAll(async () => {
         await harness.close();
+    });
+
+    it("starts a prepared Team handoff in the browser exactly once", async () => {
+        const returnTo = "https://app.example.com/join";
+        const admissionReference = await createMtlsTeamHandoff({ returnTo, teamId: "team-1", ttlMs: 60_000 });
+
+        await expect(beginMtlsTeamHandoff({ admissionReference, returnTo: "https://other.example.com" })).resolves.toBe(false);
+        await expect(beginMtlsTeamHandoff({ admissionReference, returnTo })).resolves.toBe(true);
+        await expect(beginMtlsTeamHandoff({ admissionReference, returnTo })).resolves.toBe(false);
     });
 
     async function createFixture() {

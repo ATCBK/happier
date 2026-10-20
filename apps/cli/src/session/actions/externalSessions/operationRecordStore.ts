@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, opendir, readFile, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 
 import { decideExternalSessionOperationUpdateV1, externalSessionOperationRetainsDiscardRecoveryV1, isExternalSessionOperationTerminalStatusV1, ExternalSessionOperationAuthorIntentV1Schema, ExternalSessionOperationRecordV1Schema, ExternalSessionOperationSharedPresentationV1Schema, projectExternalSessionOperationProgressV1, projectExternalSessionOperationSharedPresentationV1 } from '@happier-dev/protocol/sessions/external/operationV1';
@@ -337,20 +337,17 @@ type ExternalSessionOperationAdmissionScan = Readonly<{
   convergedReceipt?: ExternalSessionOperationTerminalReceiptV1;
 }>;
 
-const ExternalSessionOperationTerminalReceiptV1Schema = z.object({
+const ExternalSessionOperationTerminalReceiptV1Schema = z.strictObject({
   v: z.literal(1),
   recordKind: z.literal('terminal_receipt'),
   reference: ExternalSessionOperationReferenceV1Schema,
   presentation: ExternalSessionOperationSharedPresentationV1Schema,
-  durableIdempotencyKey: z.string().min(1).max(256).refine(
-    (value) => value === value.trim(),
-    'Terminal receipt idempotency keys must be trim-equal.',
-  ),
-  idempotencyIntentDigest: z.string().regex(/^[a-f0-9]{64}$/u),
-  authorIntent: ExternalSessionOperationAuthorIntentV1Schema.optional(),
-  terminalAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  expiresAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-}).strict().superRefine((receipt, context) => {
+  durableIdempotencyKey: z.string().check(z.minLength(1), z.maxLength(256), z.refine((value) => value === value.trim(), 'Terminal receipt idempotency keys must be trim-equal.')),
+  idempotencyIntentDigest: z.string().check(z.regex(/^[a-f0-9]{64}$/u)),
+  authorIntent: z.optional(ExternalSessionOperationAuthorIntentV1Schema),
+  terminalAtMs: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+  expiresAtMs: z.number().check(z.int(), z.nonnegative(), z.maximum(Number.MAX_SAFE_INTEGER)),
+}).check(z.superRefine((receipt, context) => {
   if (
     receipt.reference.operationId !== receipt.presentation.operationId
     || receipt.reference.revision !== receipt.presentation.revision
@@ -404,7 +401,7 @@ const ExternalSessionOperationTerminalReceiptV1Schema = z.object({
       message: 'Terminal receipt expiry must be exactly 24 hours after terminalization.',
     });
   }
-});
+}));
 
 export type ExternalSessionOperationTerminalReceiptV1 = z.infer<
   typeof ExternalSessionOperationTerminalReceiptV1Schema

@@ -28,7 +28,7 @@ import {
     useRemoteHostsGates,
     type RemoteHostsGates,
 } from './remoteHostsCollectionController';
-import { remoteHostDraftTitle } from './remoteHostDraftTitle';
+import { useCollectionDraftTitle } from '@/components/ui/lists/collection/CollectionDraftTitle';
 import {
     REMOTE_HOSTS_ACCESS_ROUTE,
     readLastVisitedRemoteHostId,
@@ -200,6 +200,7 @@ export const RemoteHostsCollectionList = React.memo(function RemoteHostsCollecti
 });
 
 const RemoteHostDraftRow = React.memo(function RemoteHostDraftRow() {
+    const remoteHostDraftTitle = useCollectionDraftTitle();
     const { theme } = useUnistyles();
     return (
         <CollectionDraftRow

@@ -1,133 +1,159 @@
-import * as React from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react-test-renderer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createTestSessionTranscriptSource, renderHookWithSessionTranscriptSource as renderHook } from '@/dev/testkit/sessionTranscriptSource';
-import { flushHookEffects } from '@/dev/testkit/hooks/flushHookEffects';
-import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { ApprovalRequestV1Schema, buildApprovalRequestArtifactHeaderV1 } from '@happier-dev/protocol';
+import { createGitScmCapabilities } from '@happier-dev/protocol/scm/capabilities';
+import { ScmWorkingSnapshotSchema } from '@happier-dev/protocol/scm/workingSnapshot';
+import { SessionAgentActivityHeadlineV1Schema } from '@happier-dev/protocol/sessions/work/agentActivity/agentActivityHeadlineV1';
+import { SESSION_AWARENESS_RUNTIME_STALE_SIGNAL_MS } from '@happier-dev/protocol/sessions/awareness/runtime';
+import { createSessionFixture, createTestSessionTranscriptSource, flushHookEffects,
+    renderHookWithSessionTranscriptSource as renderHook, standardCleanup } from '@/dev/testkit';
+import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { initializeRealAppRuntimeForTests } from '@/dev/testkit/harness/realAppRuntimeHarness';
+import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { createHomeHubArtifactHttpBoundary } from '@/dev/testkit/harness/homeHubArtifactHttpBoundary';
+import { createSessionMetadataHttpBoundary } from '@/dev/testkit/harness/sessionMetadataHttpBoundary';
+import { createArtifactStoreBoundary } from '@/dev/testkit/harness/artifactStoreBoundary';
+import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { ARTIFACT_PLAIN_DATA_KEY_MARKER, encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import type { DecryptedArtifact } from '@/sync/domains/artifacts/artifactTypes';
 import type { Session } from '@/sync/domains/state/storageTypes';
 
-const awarenessTimes = vi.hoisted(() => [] as number[]);
-const awarenessSessions = vi.hoisted(() => [] as unknown[]);
-const liveSessionRow = vi.hoisted(() => ({ current: null as unknown }));
-const approvalSessionTargets = vi.hoisted(() => [] as Array<{ serverId: string; sessionId: string } | null | undefined>);
-const activityInputs = vi.hoisted(() => [] as unknown[]);
-const scmInputs = vi.hoisted(() => [] as unknown[]);
-const usageInputs = vi.hoisted(() => [] as unknown[]);
-const activityCounts = vi.hoisted(() => ({ current: { live: 0, total: 0 } }));
-const activityEntries = vi.hoisted(() => ({ current: [] as Array<{
-    id: string;
-    title: string;
-    status: string;
-}> }));
-const usageState = vi.hoisted(() => ({ current: null as null | {
-    contextSnapshot: {
-        v: 1;
-        modelId: string | null;
-        usedTokens: number;
-        windowTokens: number | null;
-        totalProcessedTokens: number | null;
-        baselineTokens: number | null;
-        isAutoCompactEnabled: boolean | null;
-        categories: null;
-        observedAtMs: number;
-        source: 'provider_turn';
-    };
-    contextSnapshotStale: boolean;
-} }));
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+vi.mock('react-native', async () =>
+    (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
+vi.mock('react-native-unistyles', async () =>
+    (await import('@/dev/testkit/mocks/unistyles')).createUnistylesMock());
+vi.mock('@/text', async () =>
+    (await import('@/dev/testkit/mocks/text')).createTextModuleMock({ translate: key => key }));
 
-vi.mock('@/sync/domains/session/awareness/sessionAwareness', () => ({
-    projectUiSessionAwareness: (_session: Session, nowMs: number) => {
-        awarenessTimes.push(nowMs);
-        awarenessSessions.push(_session);
-        return {
-            v: 1,
-            sessionId: 'session-1',
-            title: 'Session',
-            lifecycle: 'active',
-            runtime: 'online',
-            freshness: nowMs >= 61_000 ? 'stale' : 'live',
-            operational: { primary: 'ready', reasons: [] },
-            encryption: 'plain',
-            availability: 'complete',
-        };
-    },
-}));
+installDisconnectedServerSocketBoundary();
+await initializeRealAppRuntimeForTests();
+const { storage } = await import('@/sync/domains/state/storage');
+const { sync } = await import('@/sync/sync');
+const { observeServerTimestamp } = await import('@/sync/runtime/time');
+const { SESSION_LIST_RELATIVE_TIME_CLOCK_INTERVAL_MS } = await import('@/hooks/session/sessionListRuntimeClock');
+const { useSessionSummaryModel } = await import('./useSessionSummaryModel');
 
-vi.mock('@/sync/domains/state/storage', () => ({
-    useSession: (_id: string, serverId?: string | null) => {
-        const row = liveSessionRow.current as Session | null;
-        return !serverId || row?.serverId === serverId ? row : null;
-    },
-    useOpenApprovalArtifactsForSession: (target: { serverId: string; sessionId: string } | null | undefined) => {
-        approvalSessionTargets.push(target);
-        return [];
-    },
-    useSessionProjectScmSnapshot: (...input: unknown[]) => {
-        scmInputs.push(input);
-        return null;
-    },
-    useSessionUsage: (...input: unknown[]) => {
-        usageInputs.push(input);
-        return usageState.current;
-    },
-}));
+let homes: Awaited<ReturnType<typeof serveAccountHomes>>;
+let homeA: string;
+let homeB: string;
+let previousState = storage.getState();
+let artifactStore: ReturnType<typeof createArtifactStoreBoundary>;
 
-vi.mock('@/agents/catalog/catalog', () => ({ AGENT_IDS: [], getAgentCore: () => null }));
-vi.mock('@/hooks/session/useSessionAgentActivity', () => ({
-    useSessionAgentActivity: (input: unknown) => {
-        activityInputs.push(input);
-        return {
-            counts: activityCounts.current,
-            entries: activityEntries.current,
-            readSubagentForEntry: () => null,
-        };
-    },
-}));
-vi.mock('@/components/sessions/agents/presentation/sessionAgentActivityPresentation', () => ({
-    resolveSessionAgentActivityPresentation: ({ entry }: { entry: { title: string; status: string } }) => ({
-        title: entry.title,
-        statusLabel: entry.status,
-    }),
-}));
-vi.mock('@/text', () => ({ t: (key: string) => key }));
-// The synopsis reader is the System Record transport (a server boundary); the Recap's own resolution
-// is covered in sessionRecap.test.ts.
-vi.mock('@/sync/ops/sessionSynopsis', () => ({ observeSessionSynopses: () => () => {} }));
-
-import { SESSION_LIST_RELATIVE_TIME_CLOCK_INTERVAL_MS } from '@/hooks/session/sessionListRuntimeClock';
-import { useSessionSummaryModel } from './useSessionSummaryModel';
-
-afterEach(() => {
+beforeEach(async () => {
+    previousState = storage.getState();
+    artifactStore = createArtifactStoreBoundary({ ownerAccountId: () => 'reader', encryptionMode: 'plain' });
+    const http = createHomeHubArtifactHttpBoundary('reader', undefined, {
+        machines: [createPlainMachineRowFixture({ id: 'machine-1', accountId: 'reader' })],
+    });
+    const sessionHttp = createSessionMetadataHttpBoundary(() => ({}));
+    homes = await serveAccountHomes({ homes: [
+        { key: 'a', serverUrl: 'https://summary-a.test', accountId: 'reader' },
+        { key: 'b', serverUrl: 'https://summary-b.test', accountId: 'reader' },
+    ], route: async ({ url, method, body }) => {
+        return artifactStore.handle(url.pathname + url.search, {
+            method, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        }) ?? sessionHttp.handle(url) ?? http.request(url);
+    } });
+    homeA = homes.homes.a!.id;
+    homeB = homes.homes.b!.id;
+    storage.setState({ sessions: {}, sessionMessages: {}, artifacts: {}, workflowRunsById: {}, isDataReady: true });
+    const machine = createMachineFixture({ id: 'machine-1', storageMode: 'plain', activeAt: Date.now() });
+    // Exact workspace resolution consumes the owning Home's current inventory,
+    // not a snapshot's display-only project key or another Home's machines.
+    storage.setState({ machines: { [machine.id]: machine },
+        machineListByServerId: { [homeA]: [machine], [homeB]: [machine] },
+        machineListStatusByServerId: { [homeA]: 'idle', [homeB]: 'idle' } });
+    observeServerTimestamp(Date.now());
+});
+afterEach(async () => {
     standardCleanup();
     vi.useRealTimers();
-    awarenessTimes.length = 0;
-    approvalSessionTargets.length = 0;
-    activityInputs.length = 0;
-    scmInputs.length = 0;
-    usageInputs.length = 0;
-    activityCounts.current = { live: 0, total: 0 };
-    activityEntries.current = [];
-    usageState.current = null;
-    awarenessSessions.length = 0;
-    liveSessionRow.current = null;
+    await homes?.dispose();
+    storage.setState(previousState, true);
+    observeServerTimestamp(Date.now());
 });
 
+function session(serverId: string | undefined, overrides: Partial<Session> = {}) {
+    return createSessionFixture({
+        id: 'same-session-id', serverId, active: true, activeAt: Date.now(),
+        metadata: { name: 'Shell session', path: '/summary', host: 'tester.local', machineId: 'machine-1' },
+        ...overrides,
+    });
+}
+function usage(usedTokens = 2_000): NonNullable<Session['latestUsage']> {
+    return { inputTokens: usedTokens, outputTokens: 0, cacheCreation: 0, cacheRead: 0,
+        contextSize: usedTokens, timestamp: 1_000,
+        contextSnapshot: { v: 1, modelId: 'test-model', usedTokens, windowTokens: 8_000,
+        totalProcessedTokens: null, baselineTokens: null, isAutoCompactEnabled: null, categories: null,
+        observedAtMs: 1_000, source: 'provider_turn' }, contextSnapshotStale: true };
+}
+function approval(id: string, serverId: string): DecryptedArtifact {
+    const body = ApprovalRequestV1Schema.parse({ v: 1, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+        createdBy: { surface: 'agent', sessionId: 'same-session-id' }, requestedSurface: 'agent',
+        actionId: 'session.list', actionArgs: {}, summary: 'List sessions' });
+    const header = buildApprovalRequestArtifactHeaderV1(body, { legacyServerId: serverId });
+    return { id, header, title: header.title, sessions: [body.createdBy.sessionId!], body: JSON.stringify(body),
+        headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1, isDecrypted: true };
+}
+async function publishApprovals(approvals: readonly DecryptedArtifact[]) {
+    artifactStore.clear();
+    for (const artifact of approvals) {
+        if (!artifact.isDecrypted || !artifact.header || typeof artifact.body !== 'string') {
+            throw new Error('Approval fixture requires an opened text body and header');
+        }
+        artifactStore.replaceStoredRow({ id: artifact.id, ownerAccountId: 'reader', access: 'owner', encryptionMode: 'plain',
+            publicAudience: 'none', header: encodePlainArtifactStoredContent(artifact.header),
+            body: encodePlainArtifactStoredContent({ body: artifact.body }), dataEncryptionKey: ARTIFACT_PLAIN_DATA_KEY_MARKER,
+            headerVersion: artifact.headerVersion, bodyVersion: artifact.bodyVersion,
+            seq: artifact.seq, createdAt: artifact.createdAt, updatedAt: artifact.updatedAt });
+    }
+    // A real inventory owns removal; its batch read supplies the body and matching
+    // HTTP custody needed to retain it across later header-only Sync refreshes.
+    await sync.fetchArtifactsList();
+}
+function publishScm(serverId: string, branch: string) {
+    const snapshot = ScmWorkingSnapshotSchema.parse({
+        projectKey: serverId + ':/summary', fetchedAt: Date.now(),
+        repo: { isRepo: true, rootPath: '/summary', backendId: 'git', mode: '.git' },
+        capabilities: createGitScmCapabilities(),
+        branch: { head: branch, upstream: null, ahead: 0, behind: 0, detached: false },
+        hasConflicts: false, entries: [], totals: { includedFiles: 0, pendingFiles: 0, untrackedFiles: 0,
+            includedAdded: 0, includedRemoved: 0, pendingAdded: 0, pendingRemoved: 0 },
+    });
+    storage.getState().updateWorkspaceScmSnapshot({ serverId, machineId: 'machine-1', rootPath: '/summary' }, snapshot);
+}
+
 describe('useSessionSummaryModel', () => {
+    it('reads the live process-terminal fact for Stopped and returns to working after resume', async () => {
+        const shellSession = session(homeA);
+        const stopped = session(homeA, { active: false, presence: undefined,
+            metadata: { ...shellSession.metadata!, lifecycleState: 'stopped' } });
+        storage.setState({ sessions: { [shellSession.id]: stopped } });
+        const hook = await renderHook(() => useSessionSummaryModel({ session: shellSession, serverId: homeA }));
+        expect(hook.getCurrent().status).toMatchObject({ state: 'disconnected', statusText: 'sessionWork.states.stopped' });
+        await act(async () => storage.setState({ sessions: { [shellSession.id]: { ...stopped,
+            metadata: { ...stopped.metadata!, lifecycleState: 'running' } } } }));
+        expect(hook.getCurrent().status).toMatchObject({ state: 'disconnected', statusText: 'status.offline' });
+        await act(async () => storage.setState({ sessions: { [shellSession.id]: session(homeA, {
+            latestTurnStatus: 'in_progress', metadata: { ...stopped.metadata!, lifecycleState: 'running' },
+        }) } }));
+        expect(hook.getCurrent().status).toMatchObject({ state: 'thinking', statusText: 'status.working' });
+        await hook.unmount();
+    });
+
     it('reads waiting questions from its exact Home-bound transcript source', async () => {
-        const session = { id: 'session-1', serverId: 'home-a', active: true } as Session;
+        const row = session(homeA);
         const agentState = { requests: {
             question: { tool: 'AskUserQuestion', kind: 'user_action' as const, arguments: { questions: [] }, createdAt: 100 },
             permission: { tool: 'Bash', kind: 'permission' as const, arguments: { command: 'pwd' }, createdAt: 200 },
         } };
-        const source = createTestSessionTranscriptSource({
-            sessionId: session.id, serverId: 'home-a',
-            agentState,
-        });
-        const hook = await renderHook(() => useSessionSummaryModel({ session }), { source });
+        const source = createTestSessionTranscriptSource({ sessionId: row.id, serverId: homeA, agentState });
+        const hook = await renderHook(() => useSessionSummaryModel({ session: row }), { source });
         expect(hook.getCurrent().needsYou).toMatchObject({ request: { id: 'question' }, moreCount: 1 });
-        await hook.rerender(undefined, createTestSessionTranscriptSource({
-            sessionId: session.id, serverId: 'home-other', agentState,
-        }));
+        await hook.rerender(undefined, createTestSessionTranscriptSource({ sessionId: row.id, serverId: homeB, agentState }));
         expect(hook.getCurrent().needsYou).toBeNull();
         await hook.unmount();
     });
@@ -135,165 +161,132 @@ describe('useSessionSummaryModel', () => {
     it('advances awareness freshness on the canonical shared clock while the Session object stays stable', async () => {
         vi.useFakeTimers();
         vi.setSystemTime(1_000);
-        const session = { id: 'session-1' } as Session;
-        const hook = await renderHook(() => useSessionSummaryModel({ session, serverId: 'server-a' }));
-
+        observeServerTimestamp(1_000);
+        const row = session(homeA);
+        const hook = await renderHook(() => useSessionSummaryModel({ session: row, serverId: homeA }));
         expect(hook.getCurrent().stale).toBe(false);
         await flushHookEffects({
-            advanceTimersMs: SESSION_LIST_RELATIVE_TIME_CLOCK_INTERVAL_MS,
-            cycles: 1,
-            turns: 2,
+            advanceTimersMs: SESSION_AWARENESS_RUNTIME_STALE_SIGNAL_MS + SESSION_LIST_RELATIVE_TIME_CLOCK_INTERVAL_MS,
+            cycles: 1, turns: 2,
         });
-
         expect(hook.getCurrent().stale).toBe(true);
-        expect(awarenessTimes.at(-1)).toBe(61_000);
         await hook.unmount();
     });
 
     it('projects awareness from the live Session row, not the stabilised shell object', async () => {
-        // The shell's stable signature deliberately omits `activeAt` and `runtimeActivity*`,
-        // so the object it hands down keeps reporting the heartbeat it was frozen with.
-        const shellSession = { id: 'session-1', serverId: 'home-a', activeAt: 1_000 } as Session;
-        liveSessionRow.current = { id: 'session-1', serverId: 'home-a', activeAt: 90_000, runtimeActivityActiveCount: 3 };
-        const hook = await renderHook(() => useSessionSummaryModel({ session: shellSession, serverId: 'home-a' }));
-
-        expect(awarenessSessions.at(-1)).toMatchObject({ activeAt: 90_000, runtimeActivityActiveCount: 3 });
-
-        // A runtimeActivity-only update reaches the Summary while the shell reference is unchanged.
-        liveSessionRow.current = { id: 'session-1', serverId: 'home-a', activeAt: 90_000, runtimeActivityActiveCount: 5 };
-        await hook.rerender();
-        expect(awarenessSessions.at(-1)).toMatchObject({ runtimeActivityActiveCount: 5 });
-
-        // A row for another Home is never substituted for the exact Session this card describes.
-        liveSessionRow.current = { id: 'session-1', serverId: 'home-other', activeAt: 500_000 };
-        await hook.rerender();
-        expect(awarenessSessions.at(-1)).toBe(shellSession);
+        const shellSession = session(homeA, { activeAt: Date.now() - SESSION_AWARENESS_RUNTIME_STALE_SIGNAL_MS - 1 });
+        storage.setState({ sessions: { [shellSession.id]: session(homeA, {
+            metadata: { ...shellSession.metadata!, name: 'Live session' },
+            todos: [{ id: 'step', content: 'Check live state', status: 'in_progress', priority: 'medium' }],
+        }) } });
+        const hook = await renderHook(() => useSessionSummaryModel({ session: shellSession, serverId: homeA }));
+        expect(hook.getCurrent()).toMatchObject({ title: 'Live session', stale: false, progress: { step: 1, total: 1 } });
+        // Observe a real row-only update while the stabilised shell reference never changes.
+        await act(async () => storage.setState({ sessions: { [shellSession.id]: session(homeA, {
+            metadata: { ...shellSession.metadata!, name: 'Updated live session' },
+            activeAt: shellSession.activeAt,
+        }) } }));
+        expect(hook.getCurrent()).toMatchObject({ title: 'Updated live session', stale: true, plan: null });
+        await act(async () => storage.setState({ sessions: { [shellSession.id]: session(homeB, {
+            metadata: { ...shellSession.metadata!, name: 'Other Home session' },
+        }) } }));
+        expect(hook.getCurrent()).toMatchObject({ title: 'Shell session', stale: true });
         await hook.unmount();
     });
 
     it('does not borrow an unqualified same-id live row for a different Home', async () => {
-        const shellSession = { id: 'same-session-id', activeAt: 1_000 } as Session;
-        liveSessionRow.current = { id: 'same-session-id', activeAt: 90_000, runtimeActivityActiveCount: 3 };
-
-        const hook = await renderHook(() => useSessionSummaryModel({ session: shellSession, serverId: 'home-b' }));
-        expect(awarenessSessions.at(-1)).toBe(shellSession);
+        const shellSession = session(undefined);
+        storage.setState({ sessions: { [shellSession.id]: session(undefined, {
+            metadata: { ...shellSession.metadata!, name: 'Unqualified live session' },
+        }) } });
+        // Home B is focused; an undeclared live carrier cannot belong to inactive Home A.
+        const hook = await renderHook(() => useSessionSummaryModel({ session: shellSession, serverId: homeA }));
+        expect(hook.getCurrent().title).toBe('Shell session');
         await hook.unmount();
     });
 
     it('selects approvals by the exact Home-qualified Session identity', async () => {
-        const session = { id: 'same-session-id' } as Session;
-        const hook = await renderHook(() => useSessionSummaryModel({ session, serverId: 'home-b' }));
-
-        expect(approvalSessionTargets.at(-1)).toEqual({ serverId: 'home-b', sessionId: 'same-session-id' });
-        expect(activityInputs.at(-1)).toMatchObject({
-            sessionId: 'same-session-id',
-            serverId: 'home-b',
-            session,
+        const row = session(homeB);
+        const a = approval('approval-a', homeA);
+        const b = approval('approval-b', homeB);
+        storage.setState({ sessions: { [row.id]: row } });
+        await publishApprovals([a, b]);
+        const hook = await renderHook(() => useSessionSummaryModel({ session: row, serverId: homeB }));
+        expect(hook.getCurrent().rows.find(row => row.kind === 'approvals')).toEqual({
+            kind: 'approvals', count: 1, destination: 'approvals',
         });
+        await act(async () => publishApprovals([a]));
+        expect(hook.getCurrent().rows.some(row => row.kind === 'approvals')).toBe(false);
         await hook.unmount();
     });
 
     it('uses the Session-owned Home when the route has not supplied a duplicate scope', async () => {
-        const session = { id: 'same-session-id', serverId: 'home-from-session' } as Session;
-        const hook = await renderHook(() => useSessionSummaryModel({ session }));
-
-        expect(approvalSessionTargets.at(-1)).toEqual({ serverId: 'home-from-session', sessionId: 'same-session-id' });
-        expect(activityInputs.at(-1)).toMatchObject({
-            sessionId: 'same-session-id',
-            serverId: 'home-from-session',
-            session,
-        });
-        expect(scmInputs.at(-1)).toEqual(['same-session-id', 'home-from-session']);
-        expect(usageInputs.at(-1)).toEqual([
-            'same-session-id',
-            { serverId: 'home-from-session', session },
-        ]);
+        const row = session(homeB, { latestUsage: usage() });
+        const other = session(homeA, { latestUsage: usage(7_000) });
+        const a = approval('approval-a', homeA);
+        const b = approval('approval-b', homeB);
+        storage.setState({ sessions: { [row.id]: row } });
+        await publishApprovals([a, b]);
+        publishScm(homeA, 'home-a-branch');
+        publishScm(homeB, 'home-b-branch');
+        const hook = await renderHook(() => useSessionSummaryModel({ session: row }));
+        expect(hook.getCurrent().rows).toEqual(expect.arrayContaining([
+            { kind: 'approvals', count: 1, destination: 'approvals' },
+            expect.objectContaining({ kind: 'workspace', branch: 'home-b-branch' }),
+            { kind: 'usage', tokens: 2_000, contextPercent: 25, stale: true, destination: 'usage' },
+        ]));
+        await act(async () => storage.setState({ sessions: { [row.id]: other } }));
+        expect(hook.getCurrent().rows.find(row => row.kind === 'usage')).toMatchObject({ tokens: 2_000 });
         await hook.unmount();
     });
 
     it('refuses a route Home that conflicts with the Session-owned Home', async () => {
-        const session = { id: 'same-session-id', serverId: 'home-a' } as Session;
-        const hook = await renderHook(() => useSessionSummaryModel({ session, serverId: 'home-b' }));
-
-        expect(hook.getCurrent()).toMatchObject({
-            scope: 'realm_unavailable',
-            title: null,
-            rows: [],
-        });
-        expect(approvalSessionTargets.at(-1)).toBeNull();
+        const row = session(homeA);
+        const hook = await renderHook(() => useSessionSummaryModel({ session: row, serverId: homeB }));
+        expect(hook.getCurrent()).toMatchObject({ scope: 'realm_unavailable', title: null, rows: [] });
         await hook.unmount();
     });
 
     it('fails closed instead of borrowing same-id facts from the active Home when no Home can be proven', async () => {
-        const session = { id: 'same-session-id' } as Session;
-        const hook = await renderHook(() => useSessionSummaryModel({ session }));
-
-        expect(hook.getCurrent()).toMatchObject({
-            scope: 'realm_unavailable',
-            title: null,
-            agentLabel: null,
-            rows: [],
-        });
-        expect(approvalSessionTargets.at(-1)).toBeNull();
-        expect(activityInputs.at(-1)).toMatchObject({
-            sessionId: 'same-session-id',
-            serverId: '__unknown_server__',
-            session: null,
-        });
-        expect(scmInputs.at(-1)).toEqual([null, null]);
-        expect(usageInputs.at(-1)).toEqual([
-            'same-session-id',
-            { serverId: '__unknown_server__', session },
-        ]);
+        const row = session(undefined);
+        const active = session(homeA, { latestUsage: usage(7_000) });
+        const a = approval('approval-a', homeA);
+        storage.setState({ sessions: { [row.id]: active }, artifacts: { [a.id]: a } });
+        const hook = await renderHook(() => useSessionSummaryModel({ session: row }));
+        expect(hook.getCurrent()).toMatchObject({ scope: 'realm_unavailable', title: null, agentLabel: null, rows: [] });
         await hook.unmount();
     });
 
     it('composes the canonical Agent-activity count without fetching workflow details', async () => {
-        activityCounts.current = { live: 2, total: 3 };
-        activityEntries.current = [{ id: 'activity-1', title: 'Reviewing access', status: 'running' }];
-        const hook = await renderHook(() => useSessionSummaryModel({
-            session: { id: 'session-1' } as Session,
-            serverId: 'server-a',
-        }));
-
-        expect(hook.getCurrent().rows.find((row) => row.kind === 'activity')).toEqual({
-            kind: 'activity',
-            liveCount: 2,
-            totalCount: 3,
-            title: 'Reviewing access',
-            statusLabel: 'running',
-            destination: 'workTab',
+        const now = Date.now();
+        const headline = SessionAgentActivityHeadlineV1Schema.parse({
+            v: 1, backendId: 'claude', updatedAt: now,
+            activeEntries: [
+                { entryId: 'activity-1', kind: 'workflow_agent', title: 'Reviewing access', status: 'running', updatedAt: now },
+                { entryId: 'activity-2', kind: 'workflow_agent', title: 'Checking scope', status: 'running', updatedAt: now - 1 },
+            ],
+            recentEntries: [{ entryId: 'activity-3', kind: 'workflow_agent', title: 'Finished review', status: 'succeeded', updatedAt: now - 2 }],
         });
+        const row = session(homeA);
+        row.metadata = { ...row.metadata!, sessionAgentActivityHeadlineV1: headline };
+        // System Record/Workflow details remain absent; the real headline owns the cold count.
+        const hook = await renderHook(() => useSessionSummaryModel({ session: row, serverId: homeA }));
+        expect(hook.getCurrent().rows.find(row => row.kind === 'activity')).toEqual({
+            kind: 'activity', liveCount: 2, totalCount: 3, title: 'Reviewing access',
+            statusLabel: 'sessionAgentActivity.status.running', destination: 'workTab',
+        });
+        expect(storage.getState().workflowRunsById).toEqual({});
+        expect(homes.httpRequests.filter(request => request.url.searchParams.get('kind') === 'workflow_run.v1'
+            || request.body && typeof request.body === 'object' && Reflect.get(request.body, 'actionId') === 'workflow.run.get'))
+            .toHaveLength(0);
         await hook.unmount();
     });
 
     it('keeps the last-known context percentage when the canonical usage snapshot is stale', async () => {
-        usageState.current = {
-            contextSnapshot: {
-                v: 1,
-                modelId: 'test-model',
-                usedTokens: 2_000,
-                windowTokens: 8_000,
-                totalProcessedTokens: null,
-                baselineTokens: null,
-                isAutoCompactEnabled: null,
-                categories: null,
-                observedAtMs: 1_000,
-                source: 'provider_turn',
-            },
-            contextSnapshotStale: true,
-        };
-        const hook = await renderHook(() => useSessionSummaryModel({
-            session: { id: 'session-1' } as Session,
-            serverId: 'server-a',
-        }));
-
-        expect(hook.getCurrent().rows.find((row) => row.kind === 'usage')).toEqual({
-            kind: 'usage',
-            tokens: 2_000,
-            contextPercent: 25,
-            stale: true,
-            destination: 'usage',
+        const row = session(homeA, { latestUsage: usage() });
+        const hook = await renderHook(() => useSessionSummaryModel({ session: row, serverId: homeA }));
+        expect(hook.getCurrent().rows.find(row => row.kind === 'usage')).toEqual({
+            kind: 'usage', tokens: 2_000, contextPercent: 25, stale: true, destination: 'usage',
         });
         await hook.unmount();
     });

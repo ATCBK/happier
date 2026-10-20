@@ -4,6 +4,7 @@ import { arePluginMachineExecutionOriginsEqual } from '@happier-dev/protocol/mac
 import { buildQualifiedPluginContributionKey, type PluginContributionIdentityV1 } from '@happier-dev/protocol/plugins/contribution-identity';
 import { formatQualifiedPluginActionId, parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import { UiContributedActionExecuteRequestV1Schema, UiContributedActionExecuteResponseV1Schema } from '@happier-dev/protocol/plugins/actions/clientInvocationV1';
+import type { MessageActionReferenceV1 } from '@happier-dev/protocol/sessions/messages/messageActionReferenceV1';
 import { PLUGIN_ACTION_OUTCOME_UNKNOWN_CODE } from '@happier-dev/protocol/plugins/actions/invocation';
 import type { ActionDefinitionSummaryV1 } from '@happier-dev/protocol/actions/actionDefinitionV1';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
@@ -47,10 +48,6 @@ import { getPreferredLanguage } from '@/text';
 import { registerCurrentUiContextActionPort } from './currentUiContextActionRuntime';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import { unavailable } from './currentUiContextVoiceToolBinding';
-import { apiSocket } from '@/sync/api/session/apiSocket';
-import { RPC_METHODS } from '@happier-dev/protocol/rpc';
-import { useActiveServerSnapshot } from '@/hooks/server/useActiveServerSnapshot';
-import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 export { bindCurrentUiContextVoiceToolPortToAdmission } from './currentUiContextVoiceToolBinding';
 
@@ -77,6 +74,7 @@ export type CurrentUiContextVoiceCommandInvocationInput = Readonly<{
 export type CurrentUiContextVoiceActionInvocationInput = Readonly<{
     action: PluginContributionIdentityV1;
     input?: PluginUiJsonValueV1;
+    messageActionReference?: MessageActionReferenceV1;
     signal?: AbortSignal;
     expectedContributorOccurrenceId?: string;
     defaultSessionId?: string;
@@ -361,7 +359,7 @@ export function createCurrentUiContextVoiceToolPort(
             return { ok: false, code: 'denied', errorCode: 'plugin_action_read_requires_safe', actionHandlerInvocation: 'notStarted' };
         }
         const currentSessionId = input.reader.readCurrentSessionId?.() ?? null;
-        const sessionId = request.defaultSessionId ?? currentSessionId;
+        const sessionId = request.defaultSessionId ?? request.messageActionReference?.sessionId ?? currentSessionId;
         // Only an implicit viewed-Session binding retires on navigation. An
         // explicitly invoking Session (or a global Action) does not borrow it.
         const followsViewedSession = includeCurrentUiContext
@@ -428,6 +426,7 @@ export function createCurrentUiContextVoiceToolPort(
                 pluginUiProjection: input.readProjection(),
                 clientAction: {
                     ...(sessionId ? { sessionId } : {}),
+                    ...(request.messageActionReference ? { messageActionReference: request.messageActionReference } : {}),
                     openSurface,
                     ...(includeCurrentUiContext
                         ? {
@@ -441,6 +440,7 @@ export function createCurrentUiContextVoiceToolPort(
                     ? {
                         contributedAction: {
                             ...(sessionId ? { sessionId } : {}),
+                            ...(request.messageActionReference ? { messageActionReference: request.messageActionReference } : {}),
                             machineId: resolved.origin.machineId,
                             serverId: resolved.origin.serverId,
                         },
@@ -456,7 +456,7 @@ export function createCurrentUiContextVoiceToolPort(
                 // retains this canonical terminal result by stable effect ID.
                 return { ok: false, code: 'outcome_unknown' };
             }
-            return { ok: false, code: outcome.code };
+            return { ok: false, code: outcome.code, errorCode: outcome.reason };
         } catch {
             return isCurrent() ? internalError() : stale();
         } finally {
@@ -679,7 +679,8 @@ export function createCurrentUiContributedActionRpcHandler(input: Readonly<{
             return { ok: false, errorCode: 'contributed_action_unavailable', error: 'current_ui_action_unavailable', actionHandlerInvocation: 'notStarted' };
         }
         try {
-            const result = await input.execute('action.invoke', { action: request.action, input: request.input }, {
+            const result = await input.execute('action.invoke', { action: request.action, input: request.input,
+                ...(request.messageActionReference ? { messageActionReference: request.messageActionReference } : {}) }, {
                 surface: request.surface,
                 serverId: input.serverId,
                 expectedContributedActionOccurrenceId: request.expectedContributorOccurrenceId,
@@ -704,31 +705,6 @@ export function createCurrentUiContributedActionRpcHandler(input: Readonly<{
 /** Binds ordinary host Actions to the same provider-local reader and dispatcher. */
 export function CurrentUiContextActionHost(): null {
     const createPort = useCurrentUiContextToolPortFactory();
-    const appShellProjection = useAppShellPluginUiProjection();
-    const server = useActiveServerSnapshot();
-    const projectionRef = React.useRef(appShellProjection.pluginUiProjection);
-    projectionRef.current = appShellProjection.pluginUiProjection;
-    const machineIds = [...new Set(Object.values(appShellProjection.pluginUiProjection?.actionsById ?? {}).flatMap((action) => {
-        const origin = readPluginUiContributionOrigin(action);
-        return action.execution.target === 'client' && origin?.phase === 'current' && origin.interactionEnabled
-            && origin.serverId === server.serverId ? [origin.machineId] : [];
-    }))].sort().join('\u0000');
     React.useLayoutEffect(() => registerCurrentUiContextActionPort(createPort), [createPort]);
-    React.useLayoutEffect(() => {
-        if (!machineIds || !server.serverId) return;
-        const disposers = machineIds.split('\u0000').map((machineId) => apiSocket.registerMachineScopedRpcHandler(
-            machineId, RPC_METHODS.UI_CONTRIBUTED_ACTION_EXECUTE,
-            createCurrentUiContributedActionRpcHandler({
-                machineId, serverId: server.serverId,
-                readProjection: () => projectionRef.current,
-                isCurrent: () => getActiveServerSnapshot().serverId === server.serverId && getActiveServerSnapshot().generation === server.generation,
-                execute: async (...args) => {
-                    const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
-                    return await createDefaultActionExecutor().execute(...args);
-                },
-            }),
-        ));
-        return () => { for (const dispose of disposers) dispose(); };
-    }, [createPort, machineIds, server.serverId, server.generation]);
     return null;
 }

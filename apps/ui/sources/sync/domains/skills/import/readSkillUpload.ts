@@ -1,6 +1,7 @@
 import { encodeBase64 } from '@happier-dev/protocol/crypto/base64';
 import { validatePromptBundleBodyV1AgainstSchemaId } from '@happier-dev/protocol/prompts/library/promptBundleSchemas';
 import type { SkillFileInputV1 } from '@happier-dev/protocol/prompts/library/skills/skillActionSchemasV1';
+import { readSkillUploadRootsV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 
 /** A file picked or dropped from a folder: its path inside the folder and its bytes; browsers carry no mode. */
 export type SkillUploadFolderFile = Readonly<{ path: string; bytes: Uint8Array; unixMode?: number | null }>;
@@ -55,14 +56,20 @@ function toSkillFiles(entries: readonly SkillUploadFolderFile[]): SkillUploadRes
       unixMode: resolveMode(entry.bytes, entry.unixMode),
     };
   });
-  // The bundle owner decides what a portable skill path is; its refusal names the file.
-  const checked = validatePromptBundleBodyV1AgainstSchemaId({
-    bundleSchemaId: 'skills.skill_md_v1',
-    body: { v: 1, entries: files, createdAtMs: 0, updatedAtMs: 0 },
-  });
-  if (!checked.ok) {
-    if (checked.errorCode === 'missing_required_entry') return { ok: false, error: { code: 'no_skill' } };
-    return { ok: false, error: { code: 'invalid_name', file: checked.path ?? '' } };
+  // The bundle owner decides what a portable skill path is; its refusal names the file. A folder or zip of several
+  // skills is checked skill by skill, each as the bundle it becomes.
+  const roots = readSkillUploadRootsV1(files.map((file) => file.path));
+  if (roots.length === 0) return { ok: false, error: { code: 'no_skill' } };
+  for (const root of roots) {
+    const bundle = root === '' ? files : files.filter((file) => file.path.startsWith(`${root}/`)).map((file) => ({ ...file, path: file.path.slice(root.length + 1) }));
+    const checked = validatePromptBundleBodyV1AgainstSchemaId({
+      bundleSchemaId: 'skills.skill_md_v1',
+      body: { v: 1, entries: bundle, createdAtMs: 0, updatedAtMs: 0 },
+    });
+    if (!checked.ok) {
+      if (checked.errorCode === 'missing_required_entry') return { ok: false, error: { code: 'no_skill' } };
+      return { ok: false, error: { code: 'invalid_name', file: root === '' ? (checked.path ?? '') : `${root}/${checked.path ?? ''}` } };
+    }
   }
   return { ok: true, files };
 }

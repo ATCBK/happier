@@ -3,7 +3,8 @@ import { EventEmitter } from 'node:events';
 import nacl from 'tweetnacl';
 import { createSocketTransportAdapter } from '@happier-dev/sync-client';
 import { API_TOKEN_FULL_GRANT_V1, ApiTokenGrantV1Schema, createActionExecutor, deriveSessionCreationTagV1, deriveAccountMachineKeyFromRecoverySecret,
-  sealEncryptedDataKeyEnvelopeV1, SessionPendingEnqueueByMachineRequestV1Schema, SessionMessageSendResultV1Schema } from '@happier-dev/protocol';
+  sealEncryptedDataKeyEnvelopeV1, SessionPendingEnqueueByMachineRequestV1Schema, SessionMessageSendResultV1Schema,
+  withParticipantRecipientV1 } from '@happier-dev/protocol';
 import { ExternalActionExecutionAuthorizationV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { computeExternalActionRequestEnvelopeDigestV1, verifyExternalActionMachineRpcRequestV1 } from '@happier-dev/protocol/actions/externalActionExecutionAuthorization';
 import { executeExternalAction } from '@/daemon/externalActions/executeExternalAction';
@@ -12,6 +13,7 @@ import { sendSessionMessage } from './sendSessionMessage';
 import { createCliActionDeps } from '@/session/actions/createCliActionDeps';
 import { ApiMachineClient } from '@/api/apiMachine';
 import { createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
+import { createUserScopedSocket, createSessionScopedSocketConnection } from '@/api/session/sockets';
 import { sealSessionOwnerMetadataEnvelopeV1, SessionOwnerMetadataV1Schema } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
 import { encodeBase64 } from '@/api/encryption';
 import { encryptSessionPayload, decryptSessionPayload } from '@/session/transport/encryption/sessionEncryptionContext';
@@ -22,6 +24,7 @@ import { UserMessageSchema, type UserMessage } from '@/api/types';
 import { ApiSessionClient } from '@/api/session/sessionClient';
 import { createPermissionModeQueueState } from '@/agent/runtime/createPermissionModeQueueState';
 import { resolveStartupPermissionModeFromSession } from '@/agent/runtime/permissions/startupSeed';
+import { buildTrustedHostSessionInputAdmissionV1 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 
 // HTTP and fetch are the real process boundaries; authoring, crypto envelopes,
 // Session resolution, capability parsing and Pending transport stay real.
@@ -71,6 +74,42 @@ function mockRunReads(inputTurns: readonly unknown[]) {
 }
 
 describe('target Session input authoring through HTTP', () => {
+  it.each(['plain', 'e2ee'] as const)('admits Bob Follow through Account HTTP and rejoins a late accepted original (%s)', async mode => {
+    const token = `e30.${Buffer.from(JSON.stringify({ sub: 'bob' })).toString('base64url')}.fixture`;
+    const secret = new Uint8Array(32).fill(17);
+    const ctx = { encryptionKey: secret, encryptionVariant: 'legacy' as const };
+    http.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/currentness')) return { status: 200, data: { mode, version: 1, updatedAt: 1,
+        signingKeyFingerprint: null, contentKeyFingerprint: null } };
+      if (url.endsWith('/delivery-mutes')) return { status: 200, data: { scopes: [] } };
+      if (url.endsWith(`/v2/sessions/${sessionId}`)) return { status: 200, data: { session: createSessionRecordFixture({
+        id: sessionId, active: true, encryptionMode: mode, share: null, dataEncryptionKey: null,
+        metadata: mode === 'plain' ? JSON.stringify({ machineId: 'machine-a' })
+          : encryptSessionPayload({ ctx, payload: { machineId: 'machine-a' } }),
+      }) } };
+      throw new Error(`Unexpected read: ${url}`);
+    });
+    http.post.mockImplementation(async (url: string, body: unknown, config) => {
+      expect(url).toContain(`/v2/sessions/${sessionId}/pending`);
+      expect(config.headers.Authorization).toBe(`Bearer ${token}`);
+      expect(body).toMatchObject({ followSources: [{ evaluation: 'receiver', rule: { ruleId: 'bob-private-rule', ruleVersion: 3 } }],
+        followRelations: [{ relation: 'follower' }], followDeliveryV1: { original: { sourceSessionId: 'c222222222222222222222222' } } });
+      return { status: 200, data: { didWrite: false, terminal: true, message: { localId: 'earlier-accepted-input' } } };
+    });
+    const admission = buildTrustedHostSessionInputAdmissionV1('agent');
+    const result = await sendSessionMessage({ credentials: { token, encryption: mode === 'plain' ? null : { type: 'legacy', secret } },
+      idOrPrefix: sessionId, localId: 'late-route-attempt', message: 'Read the followed original', wait: false,
+      timeoutMs: 1000, resumeInactiveSession: false, informationDelivery: 'session_follow', executionAuthority: 'account_automation',
+      inputAdmission: { ...admission, request: { ...admission.request, followDeliveryV1: {
+        v: 1, delivery: 'next_turn', original: { sourceSessionId: 'c222222222222222222222222', sourceMessage: { localId: 'original', seq: 2 } },
+        event: { kind: 'failed_or_stopped' },
+      } } }, followSources: [{ evaluation: 'receiver', sourceSessionId: 'c222222222222222222222222', destinationSessionId: sessionId,
+        sourceMessage: { localId: 'original', seq: 2 }, rule: { ruleId: 'bob-private-rule', ruleVersion: 3 } }],
+      followRelations: [{ relation: 'follower' }],
+    });
+    expect(result).toMatchObject({ ok: true, localId: 'earlier-accepted-input', terminal: true,
+      admissionResult: { status: 'alreadyAccepted', localId: 'earlier-accepted-input' } });
+  });
   it('keeps the owner baseline across external Send admission, turn intent and subsequent resume', async () => {
     const pending: Array<{ localId: string; content: { t: 'plain'; v: unknown } }> = [];
     const admitted: UserMessage[] = [];
@@ -86,6 +125,10 @@ describe('target Session input authoring through HTTP', () => {
           requestedAction: { v: 1, kind: 'enqueue' }, createdAt: 42, updatedAt: 42 },
       } : { ok: true, didMaterialize: false };
     } });
+    sockets.createUserScopedSocket.mockReturnValue(userSocket);
+    sockets.createSessionScopedSocketConnection.mockReturnValue({
+      socket: runtimeSocket, transport: createSocketTransportAdapter(runtimeSocket),
+    });
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ features: {}, capabilities: { session: {
       pendingInput: { protocolVersion: 1 }, runtimeActivity: { protocolVersion: 2 }, publisherAuthority: { protocolVersion: 1 },
     } } }), { status: 200 })));
@@ -98,8 +141,10 @@ describe('target Session input authoring through HTTP', () => {
       localMachineId: 'machine-a', durableMutationDeliveryInitiallyActive: false,
       metadataAuthority: { kind: 'owner', credentials },
       transport: { serverId: 'fixture-home', serverUrl: 'http://fixture-home',
-        createAccountUpdatesSocket: () => userSocket,
-        createSessionSocketTransport: () => ({ socket: runtimeSocket, transport: createSocketTransportAdapter(runtimeSocket) }),
+        createAccountUpdatesSocket: () => createUserScopedSocket({ token: credentials.token, serverUrl: 'http://fixture-home' }),
+        createSessionSocketTransport: () => createSessionScopedSocketConnection({
+          token: credentials.token, sessionId, machineId: 'machine-a', serverUrl: 'http://fixture-home',
+        }),
       },
     });
     const state = createPermissionModeQueueState({ session,
@@ -360,6 +405,97 @@ describe('target Session input authoring through HTTP', () => {
     }), { status: 200 })));
   });
   afterEach(() => vi.unstubAllGlobals());
+
+  it.each(['complete', 'cancel'] as const)('keeps protected Send lookup under its caller lifecycle: %s', async outcome => {
+    vi.useFakeTimers();
+    const cancellation = new AbortController();
+    let releaseDetail!: () => void;
+    const detailRequested = new Promise<void>(resolveRequested => {
+      http.get.mockImplementation(async (url: string, config?: { signal?: AbortSignal }) => {
+        if (url.endsWith('/currentness')) return { status: 200, data: {
+          mode: 'e2ee', version: 1, updatedAt: 1, signingKeyFingerprint: null, contentKeyFingerprint: null,
+        } };
+        if (!url.includes(`/v2/sessions/${sessionId}`)) throw new Error(`Unexpected read: ${url}`);
+        // Only the network boundary is held. Resolution, crypto and the
+        // protected Send producer/strict Machine consumer remain real.
+        return await new Promise((resolve, reject) => {
+          releaseDetail = () => resolve({ status: 200, data: { session: createSessionRecordFixture({
+            id: sessionId, active: true, encryptionMode: 'e2ee', share: null,
+            metadata: encryptSessionPayload({ ctx: { encryptionKey: credentials.encryption.secret,
+              encryptionVariant: 'legacy' }, payload: { machineId: 'machine-a' } }),
+          }) } });
+          config?.signal?.addEventListener('abort', () => reject(new Error('HTTP request cancelled')), { once: true });
+          resolveRequested();
+        });
+      });
+    });
+    const machineAdmissionTransport = vi.fn(async (raw: unknown) => {
+      const request = SessionPendingEnqueueByMachineRequestV1Schema.parse(raw);
+      expect(request).toMatchObject({ sessionId, targetMachineId: 'machine-a', localId: 'slow-protected-send' });
+      if (request.content.t !== 'encrypted') throw new Error('Expected encrypted input');
+      expect(decryptSessionPayload({ ctx: { encryptionKey: credentials.encryption.secret,
+        encryptionVariant: 'legacy' }, ciphertextBase64: request.content.c })).toMatchObject({
+        role: 'user', content: { type: 'text', text: 'Continue after the held read' },
+      });
+      return { status: 'accepted' as const, localId: request.localId };
+    });
+    try {
+      const pending = sendSessionMessage({ credentials, idOrPrefix: sessionId,
+        message: 'Continue after the held read', localId: 'slow-protected-send', wait: false,
+        timeoutMs: 120_000, signal: cancellation.signal,
+        serverFeaturesSnapshot: { status: 'unsupported', reason: 'endpoint_missing' },
+        inputAdmission: buildTrustedHostSessionInputAdmissionV1('cli'), machineAdmissionTransport });
+      await detailRequested;
+      if (outcome === 'complete') {
+        await vi.advanceTimersByTimeAsync(25_001);
+        releaseDetail();
+        await expect(pending).resolves.toMatchObject({ ok: true, admissionResult: { status: 'accepted', localId: 'slow-protected-send' } });
+        expect(machineAdmissionTransport).toHaveBeenCalledOnce();
+      } else {
+        let observed: Awaited<typeof pending> | undefined;
+        void pending.then(result => { observed = result; }, () => {});
+        cancellation.abort();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(observed).toMatchObject({ ok: false, code: 'cancelled',
+          admissionResult: { status: 'rejected', code: 'session_input_cancelled' } });
+        expect(machineAdmissionTransport).not.toHaveBeenCalled();
+      }
+    } finally {
+      releaseDetail?.();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { kind: 'agent_team_member' as const, teamId: 'team-a', memberId: 'member-a' },
+    { kind: 'agent_team_broadcast' as const, teamId: 'team-a' },
+  ])('refuses $kind through the real Action send owner before Pending or resume', async (nativeRecipient) => {
+    const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId, mode: 'plain', ctx: null });
+    const executor = createActionExecutor({ ...deps, isActionApprovalRequired: () => false });
+    const input = { sessionId, localId: 'native-input', message: 'Only the selected native recipient',
+      recipient: nativeRecipient, wait: false };
+    const result = await executor.execute('session.message.send', input, cliActionContext);
+    expect(result).toMatchObject({ ok: true, result: { status: 'rejected', code: 'session_input_target_update_required' } });
+    if (!result.ok) throw new Error('Expected a typed admission refusal');
+    expect(SessionMessageSendResultV1Schema.parse(result.result)).toEqual({
+      status: 'rejected', code: 'session_input_target_update_required',
+    });
+    expect(http.post).not.toHaveBeenCalled();
+    expect(rpc.callSessionRpc).not.toHaveBeenCalled();
+    const metadataOnly = await sendSessionMessage({ credentials, idOrPrefix: sessionId, message: input.message,
+      messageMeta: withParticipantRecipientV1({}, nativeRecipient), wait: false, timeoutMs: 1_000 });
+    expect(metadataOnly).toMatchObject({ ok: false, code: 'unsupported' });
+    expect(http.post).not.toHaveBeenCalled();
+    const miswiredDeps = { ...deps, isActionApprovalRequired: () => false };
+    Reflect.deleteProperty(miswiredDeps, 'sessionSendMessage');
+    const miswired = await createActionExecutor(miswiredDeps).execute('session.message.send', input, cliActionContext);
+    expect(() => expect(miswired).toMatchObject({ ok: true,
+      result: { status: 'rejected', code: 'session_input_target_update_required' } })).toThrow();
+    const main = await executor.execute('session.message.send', { ...input, recipient: undefined,
+      localId: 'primary-control', requestedAction: { v: 1, kind: 'enqueue' } }, cliActionContext);
+    expect(main).toMatchObject({ ok: true, result: { status: 'accepted', localId: 'primary-control' } });
+    expect(http.post).toHaveBeenCalledTimes(1);
+  });
 
   it('authors recipient once and admits to the exact nested resource without resuming the parent', async () => {
     const deps = createCliActionDeps({ token: credentials.token, credentials, sessionId, mode: 'plain', ctx: null });

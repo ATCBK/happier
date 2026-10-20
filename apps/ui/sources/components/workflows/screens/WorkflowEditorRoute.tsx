@@ -6,6 +6,12 @@ import { WorkflowsGate } from '@/components/workflows/gating/WorkflowsGate';
 import { WorkflowBuiltinEditorHostScreen, WorkflowPluginEditorHostScreen } from './WorkflowCatalogEditorHostScreen';
 import { WorkflowEditorHostScreen, type WorkflowEditorSource, type WorkflowSavedEntryIntent } from './WorkflowEditorHostScreen';
 import { WorkflowMissingDefinitionState } from './WorkflowMissingDefinitionState';
+import { readSessionRouteServerId } from '@/hooks/session/sessionRouteServerScope';
+import { useServerCredentialAccountScopeBinding } from '@/sync/domains/scope/useServerCredentialAccountScopes';
+import { SurfaceStateCard } from '@/components/ui/surfaces/SurfaceStateCard';
+import { t } from '@/text';
+import { WorkflowAccountLifetimeProvider } from '../workflowAccountScope';
+import { areServerAccountScopesEqual, type ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 /** Create and saved URLs are two identities of the same mounted editor. */
 export function WorkflowEditorRoute(): React.ReactElement {
@@ -16,7 +22,20 @@ export function WorkflowEditorRoute(): React.ReactElement {
         reviewedRunSeedId?: string; newSessionDraftSeedId?: string; triggerWorkflowSeedId?: string;
         definitionDraftSeedId?: string; example?: string; builtin?: string;
         agentRevisionSeedId?: string; authoringSessionId?: string;
+        serverId?: string | string[];
     }>();
+    const serverId = readSessionRouteServerId(params);
+    const { binding, resolution } = useServerCredentialAccountScopeBinding(serverId);
+    const lastBinding = React.useRef<ServerAccountScopeLifetime | null>(null);
+    // A same-Account credential recheck retires authority, not the mounted draft.
+    // Unknown, signed-out and different-Account resolutions cannot inherit its bytes.
+    const displayBinding = binding ?? (resolution.kind === 'bound'
+        && areServerAccountScopesEqual(lastBinding.current?.scope, resolution.scope) ? lastBinding.current : null);
+    lastBinding.current = displayBinding;
+    if (serverId && !displayBinding) return <WorkflowsGate>{resolution.kind === 'resolving'
+        ? <SurfaceStateCard kind="loading" title={t('workflows.editor.loadingTitle')} />
+        : <WorkflowMissingDefinitionState testID="workflow-detail-unavailable"
+            onOpenCollection={() => router.replace('/workflows' as never)} />}</WorkflowsGate>;
     let source: WorkflowEditorSource;
     if (pathname === '/workflows/new') {
         // Only opaque seed handles travel in the URL; private definition and
@@ -45,10 +64,14 @@ export function WorkflowEditorRoute(): React.ReactElement {
         }
         const reference = parseWorkflowDefinitionRefV1(definitionId);
         if (reference?.kind === 'plugin') {
-            return <WorkflowsGate><WorkflowPluginEditorHostScreen workflow={definitionId} {...(intent === 'run' ? { intent } : {})} /></WorkflowsGate>;
+            return <WorkflowsGate><WorkflowAccountLifetimeProvider value={serverId ? displayBinding : undefined}>
+                <WorkflowPluginEditorHostScreen workflow={definitionId} {...(intent === 'run' ? { intent } : {})} />
+            </WorkflowAccountLifetimeProvider></WorkflowsGate>;
         }
         if (reference?.kind === 'builtin') {
-            return <WorkflowsGate><WorkflowBuiltinEditorHostScreen workflow={definitionId} {...(intent === 'run' ? { intent } : {})} /></WorkflowsGate>;
+            return <WorkflowsGate><WorkflowAccountLifetimeProvider value={serverId ? displayBinding : undefined}>
+                <WorkflowBuiltinEditorHostScreen workflow={definitionId} {...(intent === 'run' ? { intent } : {})} />
+            </WorkflowAccountLifetimeProvider></WorkflowsGate>;
         }
         source = {
             kind: 'saved', definitionId,
@@ -57,5 +80,6 @@ export function WorkflowEditorRoute(): React.ReactElement {
             ...(typeof params.authoringSessionId === 'string' ? { authoringSessionId: params.authoringSessionId } : {}),
         };
     }
-    return <WorkflowsGate><WorkflowEditorHostScreen source={source} /></WorkflowsGate>;
+    return <WorkflowsGate><WorkflowEditorHostScreen source={source}
+        {...(serverId ? { accountLifetime: displayBinding } : {})} /></WorkflowsGate>;
 }

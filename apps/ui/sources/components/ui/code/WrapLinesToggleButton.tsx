@@ -8,10 +8,17 @@ import { t } from '@/text';
 import { useSurfaceStateSize } from '@/components/ui/surfaces/surfaceStateSize';
 import { useEffectiveDiffWrapLines } from './diff/diffPresentationStyle';
 
-export const WrapLinesToggleButton = React.memo(() => {
-    const [wrapLinesSetting, setWrapLines] = useSettingMutable('wrapLinesInDiffs');
-    const phone = useSurfaceStateSize() === 'phone';
-    const wrapLines = useEffectiveDiffWrapLines(wrapLinesSetting === true) === true;
+type ControlledWrapLinesProps = Readonly<{
+    wrapLines: boolean;
+    onChange: (wrapLines: boolean) => void;
+}>;
+
+type WrapLinesToggleButtonProps = ControlledWrapLinesProps | Readonly<{
+    wrapLines?: never;
+    onChange?: never;
+}>;
+
+const WrapLinesToggleSwitch = React.memo(({ wrapLines, onChange, disabled = false }: ControlledWrapLinesProps & { disabled?: boolean }) => {
     const label = t('settingsAppearance.wrapLinesInDiffs');
 
     return (
@@ -22,16 +29,29 @@ export const WrapLinesToggleButton = React.memo(() => {
             accessibilityRole="switch"
             checked={wrapLines}
             selected={wrapLines}
-            disabled={phone}
+            disabled={disabled}
             iconName="arrow-elbow-down-left"
             iconSize={18}
             size={28}
             variant="plain"
             minimumInteractiveTargetSize={resolveMinimumInteractiveTargetSize(Platform.OS)}
             interactiveTargetGapPx={8}
-            onPress={() => { if (!phone) setWrapLines(!wrapLines); }}
+            onPress={() => { if (!disabled) onChange(!wrapLines); }}
         />
     );
 });
+
+const AccountWrapLinesToggleButton = React.memo(() => {
+    const [wrapLinesSetting, setWrapLines] = useSettingMutable('wrapLinesInDiffs');
+    const phone = useSurfaceStateSize() === 'phone';
+    const wrapLines = useEffectiveDiffWrapLines(wrapLinesSetting === true) === true;
+    return <WrapLinesToggleSwitch wrapLines={wrapLines} onChange={setWrapLines} disabled={phone} />;
+});
+
+export const WrapLinesToggleButton = React.memo((props: WrapLinesToggleButtonProps) => (
+    typeof props.wrapLines === 'boolean'
+        ? <WrapLinesToggleSwitch wrapLines={props.wrapLines} onChange={props.onChange} />
+        : <AccountWrapLinesToggleButton />
+));
 
 WrapLinesToggleButton.displayName = 'WrapLinesToggleButton';

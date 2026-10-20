@@ -70,24 +70,33 @@ describe('current Channels connection fixture', () => {
         sourceCustody: { kind: 'development', registeredRootId: 'provider-root' },
       },
     } as const;
-    for (const payload of [
-      { ...connection.payload, transportOrigin: sourceOrigin },
-      {
-        ...pendingDeleteConnection.payload,
-        pendingOldTransportStop: { ...pendingOldTransportStop, transportOrigin: sourceOrigin },
-      },
-      {
-        ...pendingDeleteConnection.payload,
-        pendingOldTransportStop: {
-          ...pendingOldTransportStop,
-          predecessorCheckpointedPollInvocation: {
-            ...pendingOldTransportStop.predecessorCheckpointedPollInvocation,
-            transportOrigin: sourceOrigin,
+    expect(createCurrentConversationConnectionFixture({ connectionId: 'connection-source-fixture',
+      authority: { ...authority, transportOrigin: sourceOrigin } }).payload.transportOrigin)
+      .toEqual({ serverIdentityId: authority.transportOrigin.serverIdentityId, machineId: 'machine-fixture' });
+    for (const { origin, valid } of [
+      { origin: connection.payload.transportOrigin, valid: true },
+      { origin: sourceOrigin, valid: false },
+      { origin: { ...sourceOrigin, ...authority.transportOrigin }, valid: false },
+    ]) {
+      for (const payload of [
+        { ...connection.payload, transportOrigin: origin },
+        {
+          ...pendingDeleteConnection.payload,
+          pendingOldTransportStop: { ...pendingOldTransportStop, transportOrigin: origin },
+        },
+        {
+          ...pendingDeleteConnection.payload,
+          pendingOldTransportStop: {
+            ...pendingOldTransportStop,
+            predecessorCheckpointedPollInvocation: {
+              ...pendingOldTransportStop.predecessorCheckpointedPollInvocation,
+              transportOrigin: origin,
+            },
           },
         },
-      },
-    ]) {
-      expect(isValidPluginJsonSchemaValue(validate, { ...connection, payload })).toBe(false);
+      ]) {
+        expect(isValidPluginJsonSchemaValue(validate, { ...connection, payload })).toBe(valid);
+      }
     }
 
     for (const field of [

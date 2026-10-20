@@ -71,10 +71,10 @@ function MessageBody(props: Readonly<{ row: React.ReactNode }>) {
     return <View accessibilityLabel={identity} testID="committed-message-body">{props.row}</View>;
 }
 
-function element(kind: 'user-text' | 'agent-text', overrides: Partial<typeof settingsDefaults> = {}, structured = false, id = 'm1', pinned = false, text = 'Useful prompt', unsupported = false, thinking = false, hoverProps?: RowActionHoverHost['hoverProps']) {
+function element(kind: 'user-text' | 'agent-text', overrides: Partial<typeof settingsDefaults> = {}, structured = false, id = 'm1', pinned = false, text = 'Useful prompt', unsupported = false, thinking = false, hoverProps?: RowActionHoverHost['hoverProps'], openDiscussionSource?: React.ComponentProps<typeof CommittedMessageActions>['openDiscussionSource'], committedMessageId = id) {
     const message: UserTextMessage | AgentTextMessage = { kind, id, localId: id, text, createdAt: 1, seq: 5, transcriptBlockIndex: 0,
         ...(kind === 'agent-text' ? { isThinking: thinking } : {}),
-        messageActionReference: { v: 1, sessionId: 's1', messageId: id, observedRevision: 'r1' } };
+        messageActionReference: { v: 1, sessionId: 's1', messageId: committedMessageId, observedRevision: 'r1' } };
     return wrapWithSessionTranscriptSource(<TranscriptMessageSelectionProvider sessionId="s1" eligibleMessageIdsInOrder={[id]}>
         <CommittedMessageActions message={message} sessionId="s1" serverId={serverId}
             selectableText={resolveSelectableMessageText({ message, isStructuredOnly: structured, hasAttachmentBlockToStrip: true })}
@@ -85,13 +85,34 @@ function element(kind: 'user-text' | 'agent-text', overrides: Partial<typeof set
             onToggleMessagePin={noop} messagePins={pinned ? [{ version: 1, sessionId: 's1', seq: 5, transcriptBlockIndex: 0,
                 routeMessageId: `local:${id}`, role: kind === 'user-text' ? 'user' : 'assistant', pinnedAtMs: 1, label: null }] : []}
             showActions showPinAction timestampText={null} invertTimestampAndActions={false}
-            onActionsFocus={noop} onActionsBlur={noop} hoverProps={hoverProps}>
+            onActionsFocus={noop} onActionsBlur={noop} hoverProps={hoverProps} openDiscussionSource={openDiscussionSource}>
             {(row) => <MessageBody row={row} />}
         </CommittedMessageActions>
     </TranscriptMessageSelectionProvider>, createTestSessionTranscriptSource({ sessionId: 's1', serverId }));
 }
 
 describe('Committed row and native menu availability', () => {
+    it('opens the exact committed answer source through the shared row and native menu entry', async () => {
+        const open = vi.fn();
+        const screen = await renderScreen(element('agent-text', {}, false, 'answer', false, 'Quoted answer', false, false, undefined, open, 'committed-answer'));
+        const button = screen.findHostByTestId('transcript-message-secondOpinion:answer');
+        expect(button).not.toBeNull();
+        await act(async () => { await button!.props.onPress(); });
+        expect(open).toHaveBeenCalledWith({ kind: 'session', message: {
+            kind: 'session', session: { serverId, sessionId: 's1' }, messageId: 'committed-answer',
+        } }, 'second_opinion');
+        expect(screen.findHostByTestId('transcript-message-discuss:answer')).not.toBeNull();
+        const menu = screen.findAllByType(ContextMenu)[0];
+        expect(menu?.props.items.map((item: { id: string }) => item.id)).toEqual(expect.arrayContaining(['secondOpinion', 'discuss']));
+        await act(async () => { await menu!.props.onSelect('discuss'); });
+        expect(open).toHaveBeenLastCalledWith({ kind: 'session', message: {
+            kind: 'session', session: { serverId, sessionId: 's1' }, messageId: 'committed-answer',
+        } }, 'discuss');
+        await screen.update(element('agent-text', {}, false, 'thinking', false, 'Thinking', false, true, undefined, open));
+        expect(screen.findHostByTestId('transcript-message-secondOpinion:thinking')).toBeNull();
+        expect(home.requestsFor('/v1/discussions/second-opinion/preview')).toHaveLength(0);
+    });
+
     it('clears copied feedback after a refused retry and lets the message copy succeed again', async () => {
         const Clipboard = await import('expo-clipboard');
         const { Modal } = await import('@/modal');

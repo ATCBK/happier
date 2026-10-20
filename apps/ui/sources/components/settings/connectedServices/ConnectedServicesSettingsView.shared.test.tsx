@@ -5,6 +5,7 @@ import { TeamCredentialResourceCatalogEntryV1Schema } from '@happier-dev/protoco
 
 import { renderScreen, standardCleanup, teamCapabilitiesFixture, teamSummaryFixture } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries, waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { installConnectedServicesCommonModuleMocks } from './connectedServicesTestHelpers';
 
 installConnectedServicesCommonModuleMocks();
@@ -15,6 +16,7 @@ vi.mock('react-native-unistyles', async () => {
 
 const home = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(home);
+await loadSyncSingletonForTests();
 
 // Load the real runtime after its boundaries, during collection rather than inside a timed hook.
 const { ConnectedServicesSettingsView } = await import('./ConnectedServicesSettingsView');

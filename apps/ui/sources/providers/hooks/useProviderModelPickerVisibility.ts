@@ -2,7 +2,7 @@ import * as React from 'react';
 import { resolveProviderModelPickerVisibility, type ProviderModelPickerSourceKind } from '@happier-dev/protocol/providers/catalog/modelPickerVisibility';
 import { useProviderCatalogForServer } from '@/sync/store/useProviderCatalog';
 import { refreshProviderCatalog } from '@/sync/engine/settings/providerCatalogEngine';
-import { useProviderActionClient } from '@/providers/actions/useProviderActionClient';
+import { useProviderActionClient, type ProviderPendingApproval } from '@/providers/actions/useProviderActionClient';
 import { useRetireProviderStateOnAccountChange } from './accountLifetimeRetirement';
 
 /**
@@ -17,6 +17,7 @@ export type ProviderModelPickerVisibility = Readonly<{
     setShown: (shown: boolean) => void;
     error: unknown;
     reviewCurrentState: () => Promise<void>;
+    pendingApproval: ProviderPendingApproval | null;
 }>;
 
 /**

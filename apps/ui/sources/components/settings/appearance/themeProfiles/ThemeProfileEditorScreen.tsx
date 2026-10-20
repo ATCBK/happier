@@ -14,10 +14,13 @@ import { SegmentedChoiceItem } from '@/components/ui/lists/SegmentedChoiceItem';
 import { Text } from '@/components/ui/text/Text';
 import { ThemePalettePreview } from '@/components/settings/appearance/ThemeModePreview';
 import { useApplyThemeSelection } from '@/components/settings/appearance/useApplyThemeSelection';
+import { useSettingActionFeedback } from '@/components/settings/shell/useSettingActionFeedback';
+import { SettingsDeclarationValueV1Schema } from '@happier-dev/protocol/actions/settingsDeclarationActionFamily';
 import { resolveThemeProfile } from '@/theme/profiles/resolveThemeProfile';
 import { useReducedMotionPreference } from '@/hooks/ui/useReducedMotionPreference';
 import { Modal } from '@/modal';
-import { storage, useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { useLocalSettingMutable } from '@/sync/domains/state/storage';
+import { storage } from '@/sync/domains/state/storageStore';
 import { t } from '@/text';
 import { BUILT_IN_THEME_PROFILES } from '@/theme/profiles/builtInThemeProfiles';
 import { createThemeProfileDraft, resetThemeProfileDraftMode, resetThemeProfileDraftToken, updateThemeProfileDraftColor } from '@/theme/profiles/createThemeProfileDraft';
@@ -43,7 +46,6 @@ import {
     themeProfileDraftMatchesPresetSource,
 } from './themeProfilePresetOptions';
 import {
-    activateThemeProfileFromSettingsScreen,
     createThemeProfileId,
     nowThemeProfileTimestamp,
     removeThemeProfile,
@@ -99,6 +101,8 @@ const createProfileName = (count: number): string => t('settingsAppearance.theme
 
 const createNewProfileRouteId = 'new';
 
+const themesListRoute = '/settings/appearance/themes' as const;
+
 export const ThemeProfileEditorScreen = React.memo(function ThemeProfileEditorScreen() {
     const styles = stylesheet;
     const router = useRouter();
@@ -144,12 +148,15 @@ export const ThemeProfileEditorScreen = React.memo(function ThemeProfileEditorSc
         if (!isNewProfile) return sourceProfile;
         const now = nowThemeProfileTimestamp();
         const initialPreset = presetOptions.find((option) => option.id === initialPresetIdRef.current) ?? null;
-        return createThemeProfileDraft({
+        const draft = createThemeProfileDraft({
             id: createThemeProfileId(),
             name: createProfileName(themeProfiles.profiles.length + 1),
             now,
             sourceProfile: initialPreset?.profile ?? undefined,
         });
+        // The same owner that applies a chosen "Starts from" theme sets the draft's light or dark, so the
+        // first draft already agrees with the theme it says it starts from.
+        return initialPreset ? replaceThemeProfileDraftFromPresetSource(draft, initialPreset, now) : draft;
     });
     const [presetMenuOpen, setPresetMenuOpen] = React.useState(false);
     const [invalidByToken, setInvalidByToken] = React.useState<Readonly<Record<string, boolean>>>({});
@@ -248,26 +255,26 @@ export const ThemeProfileEditorScreen = React.memo(function ThemeProfileEditorSc
         } : current);
     }, [readonly]);
 
+    const { setSetting } = useSettingActionFeedback();
     const saveAndActivate = React.useCallback(async () => {
         if (!draft || readonly || saveDisabled) return;
-        committedRef.current = true;
-        await activateThemeProfileFromSettingsScreen({
-            profileId: draft.id,
-            profileMode: assetAppearance,
-            readLocalSettings: () => storage.getState().localSettings,
-            profile: draft,
-            writeLocalSettings: delta => storage.getState().applyLocalSettings(delta),
+        const applied = await setSetting({ anchor: 'appearance.themeMode' }, SettingsDeclarationValueV1Schema.parse({
+            activation: { profileId: draft.id, profileMode: assetAppearance, profile: { ...draft, assetAppearance } },
             forceAnimate: true,
             reduceMotion,
-        });
-    }, [assetAppearance, draft, readonly, reduceMotion, saveDisabled]);
+        }));
+        if (!applied) return;
+        committedRef.current = true;
+        // From the list, not "back": an Ask-first review opened above this editor would otherwise land here again.
+        router.dismissTo(themesListRoute);
+    }, [assetAppearance, draft, readonly, reduceMotion, router, saveDisabled, setSetting]);
 
     const applyThemeSelection = useApplyThemeSelection();
     const deactivate = React.useCallback(async () => {
-        committedRef.current = true;
         if (!draft) return;
         // Returning a mode to its default goes through the one theme-selection owner.
-        await applyThemeSelection(themePreference, clearActiveThemeProfileReferences(themeProfiles, draft.id));
+        if (!await applyThemeSelection(themePreference, clearActiveThemeProfileReferences(themeProfiles, draft.id))) return;
+        committedRef.current = true;
         router.back();
     }, [applyThemeSelection, draft, router, themePreference, themeProfiles]);
 
@@ -286,16 +293,17 @@ export const ThemeProfileEditorScreen = React.memo(function ThemeProfileEditorSc
             { confirmText: t('common.delete'), destructive: true },
         );
         if (!confirmed) return;
-        committedRef.current = true;
-        const nextThemeProfiles = removeThemeProfile(themeProfiles, draft.id);
-        if (assignedSlots.length > 0) {
+        const current = storage.getState().localSettings;
+        const nextThemeProfiles = removeThemeProfile(current.themeProfiles, draft.id);
+        if (isThemeProfileActive(current.themeProfiles, draft.id)) {
             // The canonical selection owner stores and applies the fallback (theme, status bar, transition).
-            await applyThemeSelection(themePreference, nextThemeProfiles);
+            if (!await applyThemeSelection(current.themePreference, nextThemeProfiles)) return;
         } else {
             setThemeProfiles(nextThemeProfiles);
         }
+        committedRef.current = true;
         router.back();
-    }, [applyThemeSelection, draft, readonly, router, setThemeProfiles, themePreference, themeProfiles]);
+    }, [applyThemeSelection, draft, readonly, router, setThemeProfiles, themeProfiles]);
 
     React.useEffect(() => {
         if (!draft || readonly || hasInvalidColor || hasInvalidProfileName || hasProfileLimitReached) return;

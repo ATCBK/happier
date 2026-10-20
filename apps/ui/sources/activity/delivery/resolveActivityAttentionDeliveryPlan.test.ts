@@ -4,10 +4,53 @@ import { accountSettingsParse } from '@happier-dev/protocol';
 
 import { localSettingsDefaults, localSettingsParse } from '@/sync/domains/settings/localSettings';
 
-import { resolveActivityAttentionDeliveryPlan } from './resolveActivityAttentionDeliveryPlan';
+import { resolveActivityAttentionDeliveryPlan, resolveEffectiveAttentionDeliveryPolicy } from './resolveActivityAttentionDeliveryPlan';
 import { ACTIVITY_SURFACE_SELECTION_IDS } from '../selection/activitySurfaceSelectionTypes';
 
 describe('resolveActivityAttentionDeliveryPlan', () => {
+    it('applies Follow level intent before device surface delivery without dropping its Inbox badge', () => {
+        const params = {
+            accountSettings: accountSettingsParse({}), localSettings: localSettingsDefaults,
+            event: 'ready' as const, channel: 'desktop_overlay' as const, now: new Date('2026-05-03T12:00:00Z'),
+            follow: { policies: [{ preset: 'important' as const }], event: { kind: 'finished' as const } },
+        };
+        expect(resolveActivityAttentionDeliveryPlan(params).delivery).toBe('suppress');
+        expect(resolveActivityAttentionDeliveryPlan({ ...params, channel: 'badge' }).badgeBehavior.include).toBe(true);
+        expect(resolveActivityAttentionDeliveryPlan({ ...params, follow: {
+            policies: [{ preset: 'important' }], event: { kind: 'stalled' },
+        } }).delivery).toBe('deliver');
+    });
+
+    it('admits device policy once per settings revision while time and changed policy remain live', () => {
+        const accountSettings = accountSettingsParse({});
+        let reads = 0;
+        const localSettings = {
+            get attentionDeviceOverridesV1() {
+                reads += 1;
+                return { quietHoursOverride: { mode: 'custom', timezone: 'UTC', windows: [
+                    { startLocalTime: '09:00', endLocalTime: '17:00' },
+                ] } };
+            },
+        };
+        const params = { accountSettings, localSettings, channel: 'local_notification' as const, event: 'ready' as const };
+        expect(resolveActivityAttentionDeliveryPlan({ ...params, now: new Date('2026-05-03T08:00:00Z') }).delivery).toBe('deliver');
+        expect(resolveActivityAttentionDeliveryPlan({ ...params, now: new Date('2026-05-03T12:00:00Z') }).reason).toBe('quiet_hours');
+        expect(resolveActivityAttentionDeliveryPlan({ ...params, now: new Date('2026-05-03T18:00:00Z') }).delivery).toBe('deliver');
+        expect(reads).toBe(1);
+        const editableProjection = resolveEffectiveAttentionDeliveryPolicy(params);
+        editableProjection.channels.local_notification.enabled = false;
+        expect(resolveActivityAttentionDeliveryPlan({ ...params, now: new Date('2026-05-03T18:00:00Z') }).delivery).toBe('deliver');
+        expect(resolveActivityAttentionDeliveryPlan({ ...params, localSettings: {
+            attentionDeviceOverridesV1: { localNotifications: { enabled: false } },
+        }, now: new Date('2026-05-03T18:00:00Z') }).reason).toBe('channel_disabled');
+        expect(resolveActivityAttentionDeliveryPlan({ ...params, accountSettings: accountSettingsParse({
+            attentionDeliveryPolicyV1: { ...accountSettings.attentionDeliveryPolicyV1, channels: {
+                ...accountSettings.attentionDeliveryPolicyV1.channels,
+                local_notification: { ...accountSettings.attentionDeliveryPolicyV1.channels.local_notification, enabled: false },
+            } },
+        }), now: new Date('2026-05-03T18:00:00Z') }).reason).toBe('channel_disabled');
+    });
+
     it.each(['permission_request', 'user_action_request'] as const)('keeps %s privacy independent from ready previews', (event) => {
         const params = {
             accountSettings: accountSettingsParse({}),

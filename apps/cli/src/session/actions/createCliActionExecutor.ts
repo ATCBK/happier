@@ -41,6 +41,7 @@ import { projectExternalActionRequesterHttpAuthorization } from '@/api/externalA
 import { ManagedMachineActionIdV1Schema } from '@happier-dev/protocol/machines/managed/actionsV1';
 import { refreshAccountSettingsForMinimumVersion } from '@/settings/accountSettings/refreshAccountSettingsForMinimumVersion';
 import { actionStartTargetUnavailableV1, measureActionStartPhaseV1 } from '@happier-dev/protocol/actions/executor/agentStartAdmission';
+import { bindDiscussionDraftReply } from '@/discussions/bindDiscussionDraftReply';
 
 type CliActionExecutorParams = Parameters<typeof createCliActionExecutorHarness>[0]
   & CliTranscriptActionExecutorOptions
@@ -51,6 +52,7 @@ type CliActionExecutorParams = Parameters<typeof createCliActionExecutorHarness>
     /** Bound by the live Session/Run host; private and deferred operations retain Artifact custody. */
     sessionActionConfirmation?: ActionExecutorDeps['sessionActionConfirmation'];
     hostActionApprovalLifetime?: ActionExecutorDeps['hostActionApprovalLifetime'];
+    runActionOperation?: ActionExecutorDeps['runActionOperation'];
     /** Current committed contributed Action declarations for catalog discovery. */
     listContributedActionDefinitions?: ActionExecutorDeps['listContributedActionDefinitions'];
     inputTypeDeps?: Pick<ActionExecutorDeps, 'resolveInputType' | 'readInputTypeResource'>;
@@ -63,6 +65,7 @@ type CliActionExecutorParams = Parameters<typeof createCliActionExecutorHarness>
     /** Current authority/credential/target proof for durable core Action replay. */
     isApprovalExecutionOriginCurrent?: ActionExecutorDeps['isApprovalExecutionOriginCurrent'];
     prepareApprovalExecutionAuthorization?: ActionExecutorDeps['prepareApprovalExecutionAuthorization'];
+    prepareApprovedApiTokenExecution?: ActionExecutorDeps['prepareApprovedApiTokenExecution'];
     /** The exact daemon external-session RPC owner for host-stamped API requests. */
     hostExternalSessionAction?: ActionExecutorDeps['hostExternalSessionAction'];
     /** Thin adapters to the canonical Account-server-owned auth routes. */
@@ -71,12 +74,14 @@ type CliActionExecutorParams = Parameters<typeof createCliActionExecutorHarness>
     workflowAction?: ActionExecutorDeps['workflowAction'];
     managedMachineAction?: ActionExecutorDeps['managedMachineAction'];
     machineEnvironmentApply?: ActionExecutorDeps['machineEnvironmentApply'];
+    /** Receiving daemon's native Stop effect, after requester policy and scope admission. */
+    sessionStop?: ActionExecutorDeps['sessionStop'];
     /** Installed exact-target worker Status/retirement producer, overriding only those IDs. */
     projectWorkerAction?: ActionExecutorDeps['projectWorkerAction'];
     /** The canonical prepared filesystem owner installed by the daemon. */
     filesystemActionExecute?: ActionExecutorDeps['filesystemActionExecute'];
     skillMachineActionExecute?: ActionExecutorDeps['skillMachineActionExecute'];
-    sessionFollowActionDeps?: Pick<ActionExecutorDeps, 'sessionFollowAction'>;
+    sessionFollowActionDeps?: Pick<ActionExecutorDeps, 'sessionFollowAction' | 'readSessionFollowRules'>;
     sessionTrackedTargetCompatibilityDeps?: Pick<ActionExecutorDeps, 'sessionTargetTrackedSet'>;
     sessionReadStateActionDeps?: Pick<ActionExecutorDeps, 'sessionReadStateAction'>;
     pluginActionExecutionOwner?: 'daemon_control' | 'current_process';
@@ -172,6 +177,7 @@ export function createCliActionExecutor(
       ...(params.prepareApprovalExecutionAuthorization
         ? { prepareApprovalExecutionAuthorization: params.prepareApprovalExecutionAuthorization }
         : {}),
+      ...(params.prepareApprovedApiTokenExecution ? { prepareApprovedApiTokenExecution: params.prepareApprovedApiTokenExecution } : {}),
       ...(params.listContributedActionDefinitions
         ? { listContributedActionDefinitions: params.listContributedActionDefinitions,
             readContributedActionSchemas: createCommittedContributedActionSchemaReader(params.listContributedActionDefinitions) }
@@ -182,16 +188,13 @@ export function createCliActionExecutor(
         : {}),
       ...accountServerActionPorts,
       ...(personalSavedSecretActionExecute ? { personalSavedSecretActionExecute } : {}),
-      ...(params.projectWorkerAction ? { projectWorkerAction: async (request) =>
-        request.actionId === 'projects.worker.status' || request.actionId === 'projects.worker.copy.retire'
-          ? await params.projectWorkerAction!(request)
-          : projectWorkerAccountAction
-            ? await projectWorkerAccountAction(request)
-            : { ok: false, errorCode: 'unsupported_action', error: 'unsupported_action' } } : {}),
+      ...(params.projectWorkerAction ? { projectWorkerAction: params.projectWorkerAction } : {}),
       ...(params.workflowAction ? { workflowAction: params.workflowAction } : {}),
       ...(params.managedMachineAction ? { managedMachineAction: params.managedMachineAction } : {}),
       ...(params.machineEnvironmentApply ? { machineEnvironmentApply: params.machineEnvironmentApply } : {}),
+      ...(params.sessionStop ? { sessionStop: params.sessionStop } : {}),
       ...(params.hostActionApprovalLifetime ? { hostActionApprovalLifetime: params.hostActionApprovalLifetime } : {}),
+      ...(params.runActionOperation ? { runActionOperation: params.runActionOperation } : {}),
       ...(params.filesystemActionExecute ? { filesystemActionExecute: async (request) => {
         const denied = filesystemRequesterAuthorityFailure(request.actionId, request.context);
         return denied ?? await params.filesystemActionExecute!(request);
@@ -199,6 +202,8 @@ export function createCliActionExecutor(
       ...(params.skillMachineActionExecute ? { skillMachineActionExecute: params.skillMachineActionExecute } : {}),
       ...(params.sessionFollowActionDeps ?? createSessionFollowActionDeps({
         token: params.token,
+        ...(params.credentials ? { credentials: params.credentials } : {}),
+        ...(params.isCredentialCurrent ? { isCredentialCurrent: params.isCredentialCurrent } : {}),
         ...exactHome,
         ...(params.serverIdentityId ? { serverIdentityId: params.serverIdentityId } : {}),
         ...(params.externalActionMachineRequestPrivateKey
@@ -362,11 +367,12 @@ export function createCliActionExecutor(
     const signExternalActionApprovalInput: ActionExecutorContext['signExternalActionApprovalInput'] =
       context?.signExternalActionApprovalInput
       ?? ((ordinaryUiBinding || canSignOriginalSessionApproval || admittedReceiver && runtimeAccountId === sessionBinding?.accountId)
-        && approvalAuthorization && privateKey ? ({ actionId, input, target, authorization: suppliedAuthorization }) => {
+        && approvalAuthorization && privateKey ? ({ actionId, input, target, authorization: suppliedAuthorization, requesterConfirmation, sessionTargetsV1 }) => {
         if (suppliedAuthorization.token !== approvalAuthorization.token
           || !sameStrictJsonValue(target, approvalAuthorization.binding.target)) throw new Error('approval_origin_unavailable');
         return signExternalActionApprovalInputV1({ authorizationToken: approvalAuthorization.token,
-          actionId, input, target, privateKey });
+          actionId, input, target, privateKey, ...(requesterConfirmation ? { requesterConfirmation } : {}),
+          ...(sessionTargetsV1 ? { sessionTargetsV1 } : {}) });
       } : undefined);
     return ({
     ...(context ?? {}),
@@ -397,7 +403,14 @@ export function createCliActionExecutor(
       const resolvedContext = await measureActionStartPhaseV1(context, 'cli_context', () => resolveContext(context));
       if (!resolvedContext) return { kind: 'settled' as const,
         result: actionStartTargetUnavailableV1(context, 'cli_context', 'requester_projection_unavailable') };
-      return await base.prepare(actionId, input, resolvedContext);
+      // The daemon binds drafts before signing, but an unchanged signed reply
+      // must still refuse if its current participant policy now requires a draft.
+      // Already-bound drafts carry discussionReplyReturn and skip this recheck.
+      const bound = await bindDiscussionDraftReply({ actionId, input, context: resolvedContext,
+        serverId: params.serverId ?? configuration.activeServerId, discussionAction: harness.deps.discussionAction,
+        credentials: { token: params.token }, serverHttpBaseUrl: params.serverHttpBaseUrl });
+      if ('failure' in bound) return { kind: 'settled' as const, result: bound.failure };
+      return await base.prepare(bound.actionId, bound.input, bound.context);
     },
     execute: async (actionId, input, context) => {
       const denied = filesystemRequesterAuthorityFailure(actionId, context)
@@ -405,7 +418,12 @@ export function createCliActionExecutor(
       if (denied) return denied;
       const resolvedContext = await measureActionStartPhaseV1(context, 'cli_context', () => resolveContext(context));
       if (!resolvedContext) return actionStartTargetUnavailableV1(context, 'cli_context', 'requester_projection_unavailable');
-      return await daemonAware.execute(actionId, input, resolvedContext);
+      // Retain the same current-policy recheck as prepare; never rewrite signed operands.
+      const bound = await bindDiscussionDraftReply({ actionId, input, context: resolvedContext,
+        serverId: params.serverId ?? configuration.activeServerId, discussionAction: harness.deps.discussionAction,
+        credentials: { token: params.token }, serverHttpBaseUrl: params.serverHttpBaseUrl });
+      if ('failure' in bound) return bound.failure;
+      return await daemonAware.execute(bound.actionId, bound.input, bound.context);
     },
     continueConfidentialApprovalRequest: async (input, context) => {
       const resolvedContext = await measureActionStartPhaseV1(context, 'cli_context', () => resolveContext(context));

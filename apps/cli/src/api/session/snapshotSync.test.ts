@@ -60,11 +60,11 @@ function fetchSessionSnapshotUpdateFromServer(
 }
 
 describe('snapshotSync.fetchSessionSnapshotUpdateFromServer', () => {
-    it('projects current server-owned worker relation and origin even when metadata versions are unchanged', async () => {
+    it('projects current server-owned worker relation, origin and archive state even when metadata versions are unchanged', async () => {
         const getSpy = vi.spyOn(axios, 'get');
         const row = createSessionRecordFixture({ id: 's1' });
         getSpy.mockResolvedValueOnce({ status: 200, data: { session: {
-            ...row, reportsTo: { sessionId: 'lead' }, origin: { kind: 'run_step' },
+            ...row, manager: { sessionId: 'lead' }, origin: { kind: 'run_step' }, archivedAt: 42,
         } } });
         const input: SnapshotUpdateTestParams<SnapshotUpdateParams> = {
             token: 't', sessionId: 's1', mode: 'e2ee',
@@ -72,10 +72,11 @@ describe('snapshotSync.fetchSessionSnapshotUpdateFromServer', () => {
             currentMetadataVersion: row.metadataVersion, currentAgentStateVersion: row.agentStateVersion ?? 0,
         };
         await expect(fetchSessionSnapshotUpdateFromServer(input)).resolves.toMatchObject({
-            organization: { reportsTo: { sessionId: 'lead' }, origin: { kind: 'run_step' } },
+            organization: { manager: { sessionId: 'lead' }, origin: { kind: 'run_step' } },
+            archivedAt: 42,
         });
         getSpy.mockResolvedValueOnce({ status: 200, data: { session: row } });
-        await expect(fetchSessionSnapshotUpdateFromServer(input)).resolves.toMatchObject({ organization: {} });
+        await expect(fetchSessionSnapshotUpdateFromServer(input)).resolves.toMatchObject({ organization: {}, archivedAt: null });
     });
     it('projects exact queued Execution Run target ids from the current Session snapshot', async () => {
         const getSpy = vi.spyOn(axios, 'get');
@@ -344,12 +345,13 @@ describe('snapshotSync.fetchSessionSnapshotUpdateFromServer', () => {
     });
   });
 
-  it('strictly rejects private fields in layout-v1 shared metadata instead of partially hydrating the owner tuple', async () => {
+  it('drops undeclared shared fields while hydrating the complete layout-v1 owner tuple', async () => {
     const getSpy = vi.spyOn(axios, 'get');
+    const ownerMetadata = createTestMetadata({ path: '/owner-path' });
     const ownerTuple = buildSessionMetadataEnvelopeFields({
       credentials: ownerCredentials,
       accountEncryptionMode: 'e2ee',
-      metadata: createTestMetadata({ path: '/owner-path' }),
+      metadata: ownerMetadata,
       agentState: { controlledByUser: false },
       storedContentMode: 'plain',
     });
@@ -374,7 +376,7 @@ describe('snapshotSync.fetchSessionSnapshotUpdateFromServer', () => {
       },
     });
 
-    await expect(fetchSessionSnapshotUpdateFromServer({
+    const result = await fetchSessionSnapshotUpdateFromServer({
       token: 't',
       sessionId: 's-layout-strict',
       credentials: ownerCredentials,
@@ -386,10 +388,15 @@ describe('snapshotSync.fetchSessionSnapshotUpdateFromServer', () => {
       currentAgentStateVersion: 8,
       currentMetadata: createTestMetadata({ path: '/cached-private-path' }),
       currentAgentState: { controlledByUser: true },
-    })).rejects.toMatchObject({
-      code: 'metadata_privacy_upgrade_required',
-      retryable: false,
     });
+    expect(result.metadataTuple?.value).toMatchObject({
+      metadata: { ...ownerMetadata, summary: { text: 'Safe title', updatedAt: 10 } },
+      agentState: { controlledByUser: false },
+    });
+    expect(result.metadataTuple?.value.sharedMetadata).toEqual({
+      v: 1, summary: { text: 'Safe title', updatedAt: 10 },
+    });
+    expect(JSON.stringify(result.metadataTuple?.value)).not.toContain('/must-not-cross-the-shared-envelope');
   });
 
   it('fails closed for unsupported future metadata layouts', async () => {

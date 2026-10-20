@@ -40,6 +40,8 @@ export const PromptStackEntryRow = React.memo(function PromptStackEntryRow(props
     onShare?: () => void;
     onEnabledChange?: (enabled: boolean) => void;
     onBudgetChange?: (maxChars: number | null) => void;
+    /** A Session's Doc can be its plan (one per Session): the mark and how to set or clear it. */
+    plan?: Readonly<{ marked: boolean; onChange(marked: boolean): void }>;
     /**
      * Whether the document is in effect on this surface, when that is not the entry's own switch (a
      * Session's view of an inherited entry it turned off, or one that is off where it was added).
@@ -68,13 +70,19 @@ export const PromptStackEntryRow = React.memo(function PromptStackEntryRow(props
                 selected: (entry.maxChars ?? null) === choice.maxChars, disabled: props.disabled,
                 onPress: () => props.onBudgetChange?.(choice.maxChars) });
         }
+        if (props.plan) {
+            const { marked, onChange } = props.plan;
+            list.push({ id: 'plan', title: marked ? t('memoryContext.session.stopPlan') : t('memoryContext.session.usePlan'),
+                icon: 'list-checks', disabled: props.disabled, onPress: () => onChange(!marked) });
+        }
         if (onRemove) list.push({ id: 'delete', title: props.removeLabel ?? t('common.remove'), icon: 'trash', destructive: true, disabled: props.disabled, onPress: onRemove });
         // A menu holding only Edit repeats the row's own press (an inherited entry in a Session): no "⋯".
         return list.length === 1 && list[0]?.id === 'edit' ? [] : list;
-    }, [entry.maxChars, onMove, onOpen, onRemove, onShare, props.canMoveDown, props.canMoveUp, props.disabled, props.removeLabel, props.onBudgetChange]);
+    }, [entry.maxChars, onMove, onOpen, onRemove, onShare, props.canMoveDown, props.canMoveUp, props.disabled, props.removeLabel, props.onBudgetChange, props.plan]);
     const off = props.on === undefined ? entry.enabled === false : !props.on;
     // With a switch on the row, the switch says "off"; the word is only for rows that have none.
     const subtitle = props.note ?? [
+        props.plan?.marked ? t('memoryContext.session.planNote') : null,
         promptStackPlacementLabel(entry.placement),
         props.access,
         off && !props.onEnabledChange ? t('contextPages.off') : null,

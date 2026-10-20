@@ -10,6 +10,9 @@ export function createWorkspaceWritesPolicyPreparation(params: Readonly<{
     // No Role means remove its ceiling, not change the caller's permission intent.
     const result = await params.update(workspaceWrites ?? 'allow');
     if (result?.status === 'applied') return { ok: true as const };
+    if (result?.status === 'failed' && result.reason === 'native_agent_runtime_ended') {
+      return { ok: false as const, errorCode: 'native_agent_runtime_ended' as const };
+    }
     if (workspaceWrites === undefined && result?.status === 'unsupported'
       && result.reason === 'native_agent_configuration_unsupported') return { ok: true as const };
     return { ok: false as const, errorCode: result?.reason?.includes('role_policy_restart_required')

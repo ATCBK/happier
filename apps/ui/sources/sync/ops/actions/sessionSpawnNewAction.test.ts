@@ -28,6 +28,17 @@ type ResultFailureMessageKeyResolver = (
     | 'teams.policy.externalSharingAdmins';
 
 describe('session.spawn_new Action failure presentation', () => {
+    it('exposes only typed content-free approval staleness in the existing error code', () => {
+        const failure = { ok: false as const, errorCode: 'approval_stale', error: 'private daemon detail' };
+        expect(sessionSpawnNewAction.resolveSessionSpawnNewActionFailureMessage({ ...failure, details: { reason: 'home_changed' } }))
+            .toContain('approval_stale:home_changed');
+        for (const details of [{ reason: 'private daemon detail' }, { reason: 'home_changed', token: 'private daemon detail' }]) {
+            const message = sessionSpawnNewAction.resolveSessionSpawnNewActionFailureMessage({ ...failure, details });
+            expect(message).toContain('approval_stale');
+            expect(message).not.toContain('home_changed');
+            expect(message).not.toContain('private daemon detail');
+        }
+    });
     it('preserves first-input rejection and uncertainty codes in the existing diagnostic copy', () => {
         const resolve = sessionSpawnNewAction.resolveSessionSpawnNewInitialInputFailureMessage;
         expect(resolve({ status: 'outcomeUnknown', localId: 'first-input', code: 'session_input_admission_outcome_unknown' }, t('newSession.initialInputNotConfirmed')))
@@ -37,6 +48,10 @@ describe('session.spawn_new Action failure presentation', () => {
     });
 
     it('retains strict rejection and Action error codes in generic user-facing messages', () => {
+        expect(sessionSpawnNewAction.resolveSessionSpawnNewResultFailureMessage({
+            type: 'error', code: 'spawn_failed', retryable: false,
+            launchError: { kind: 'launch_error', code: 'connected_service_credential_reconnect_required', message: 'Reconnect this account.' },
+        })).toBe(t('connectedServices.diagnostics.body.connected_service_credential_reconnect_required'));
         expect(sessionSpawnNewAction.resolveSessionSpawnNewResultFailureMessage({
             type: 'error', code: 'creation_conflict', retryable: false,
         })).toContain('creation_conflict');

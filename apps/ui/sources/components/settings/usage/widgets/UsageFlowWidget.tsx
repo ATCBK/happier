@@ -14,6 +14,7 @@ import { usageOtherColor, usageSeriesColor } from '../usageAccent';
 import { formatUsageCalendarDate, resolveUsageShownCalendarRange } from '@/sync/domains/usage/usageCalendarPresentation';
 import { usageCostKindPhrase, usagePageCostTrend } from '../usageCostPresentation';
 import { useUsageDrill } from '../usageDrill';
+import { useUsageChartDetails } from './usageMountedControls';
 import {
   usageMixSeries,
   usageVolumeSeries,
@@ -37,9 +38,8 @@ import {
   type UsageBodyProps,
   isUsageReadOutstanding,
   UsageBodyReading,
+  resolveUsageChartPlotPx,
 } from './usageBodyKit';
-
-const CHROME_PX = 72;
 
 /**
  * "Tokens over time": the period's flow stacked by Agent, or by model when the widget's own
@@ -138,8 +138,11 @@ export function UsageFlowWidget(props: UsageBodyProps) {
     ...(drillable ? { choice } : {}),
     testID: `${props.testID}.lens`,
   });
+  const hasChart = series.length > 0 && (cost || sourceSeries.length > 0 || mix?.hasData === true);
+  const details = useUsageChartDetails(t(`usage.widgets.${props.id}`), hasChart);
   if ((series.length === 0 || (!cost && !sourceSeries.length && !mix?.hasData)) && isUsageReadOutstanding(props.slice, ['accounting']))
-    return <UsageBodyReading testID={`${props.testID}.loading`} />;
+    return <UsageBodyReading testID={`${props.testID}.loading`} shape={{ kind: 'chart', plotPx: resolveUsageChartPlotPx(presentation?.geometry, 120) }}
+      waitingOn={{ slice: props.slice, sources: ['accounting'] }} />;
   if (series.length === 0 || (!cost && !sourceSeries.length && !mix?.hasData))
     return (
       <UsageBodyInsufficient
@@ -148,13 +151,12 @@ export function UsageFlowWidget(props: UsageBodyProps) {
         reason={t('usage.board.page.flowEmptyReason')}
       />
     );
-  const height = Math.max(
-    120,
-    Math.min(260, (presentation?.geometry?.height ?? 220) - CHROME_PX),
-  );
+  // The plot takes what the frame leaves after its chrome (wrapped legend and coverage note included).
+  const height = resolveUsageChartPlotPx(presentation?.geometry, 120);
   return (
     <View style={{ gap: theme.space.s10 }} testID={`${props.testID}.flow`}>
       <StackedSeriesChart
+        {...details}
         testID={`${props.testID}.chart`}
         theme={chartTheme}
         label={cost ? t('usage.cost') : t('usage.tokens')}

@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { projectProviderCatalogForPicker } from './projection';
 import type { ProviderConnectionCatalog } from './types';
 import { serializeModelVisibilityRefV1 } from '@happier-dev/protocol/providers/model-selection';
+import { ProviderConnectionIdSchema } from '@happier-dev/protocol';
 
-const ref = (modelId: string) => ({ agentTargetKey: 'agent:codex', providerConnectionId: 'pc_a', modelId });
+const connectionId = ProviderConnectionIdSchema.parse('pc_a');
+const ref = (modelId: string) => ({ agentTargetKey: 'agent:codex', providerConnectionId: connectionId, modelId });
 const catalog: ProviderConnectionCatalog = {
-  agentTargetKey: 'agent:codex', connectionId: 'pc_a', authorization: { authorized: true },
+  agentTargetKey: 'agent:codex', connectionId, authorization: { authorized: true },
   providerName: 'Source', connectionName: 'Work', connectionRole: 'named', connectionDisplayNameMode: 'custom',
   manualModelPolicy: 'allowed', sourceKind: 'aggregator', staleRows: [],
   rows: ['current', 'favorite', 'default', 'new'].map(modelId => ({
@@ -37,7 +39,7 @@ describe('Provider source discovery', () => {
     expect(projectProviderCatalogForPicker({ ...input, mode: 'management' }).groups[0]?.rows).toHaveLength(4);
   });
   it('does not unhide a per-model favorite when its source is explicitly browsed', () => {
-    const modelVisibilityByRef = { [serializeModelVisibilityRefV1({ scope: 'allAgents', providerConnectionId: 'pc_a', modelId: 'favorite' })]: 'hidden' as const };
+    const modelVisibilityByRef = { [serializeModelVisibilityRefV1({ scope: 'allAgents', providerConnectionId: connectionId, modelId: 'favorite' })]: 'hidden' as const };
     const projection = projectProviderCatalogForPicker({ catalogs: [catalog], sourceConnectionId: 'pc_a',
       modelVisibilityByRef, favoriteSelections: [ref('favorite')], currentSelection: ref('current') });
     expect(projection.groups[0]?.rows.map(row => row.ref.modelId)).toEqual(['current', 'default', 'new']);
@@ -51,7 +53,7 @@ describe('Provider source discovery', () => {
     expect(projectProviderCatalogForPicker({ catalogs: [catalog], modelVisibilityByRef: {} }).hiddenSources)
       .toEqual([{ connectionId: 'pc_a', providerName: 'Source', connectionName: 'Work', modelCount: 4 }]);
     const everyModelHidden = Object.fromEntries(['current', 'favorite', 'default', 'new'].map(modelId => [
-      serializeModelVisibilityRefV1({ scope: 'allAgents', providerConnectionId: 'pc_a', modelId }), 'hidden' as const]));
+      serializeModelVisibilityRefV1({ scope: 'allAgents', providerConnectionId: connectionId, modelId }), 'hidden' as const]));
     expect(projectProviderCatalogForPicker({ ...input, modelVisibilityByRef: everyModelHidden }).hiddenSources).toEqual([]);
   });
 });

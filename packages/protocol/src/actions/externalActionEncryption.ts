@@ -7,6 +7,7 @@ import { ACCOUNT_SCOPED_BLOB_V1_PREFIX_BYTES, ACCOUNT_SCOPED_SECRETBOX_NONCE_BYT
 import { decodeBase64, encodeBase64 } from '../crypto/base64.js';
 import { computeCanonicalDomainSeparatedDigest } from '../crypto/canonicalDigest.js';
 import { StrictJsonValueSchema, sameStrictJsonValue } from '../json/strictJsonValue.js';
+import { ManagedAcquireInputV1Schema, ManagedAdmissionComputeInputV1Schema } from '../machines/managed/actionsV1.js';
 import type { ActionExecuteResult } from './actionExecutionResult.js';
 import {
   ExternalActionActionIdV1Schema, ExternalActionRequestIdV1Schema,
@@ -22,6 +23,7 @@ import {
   measureExternalActionResponseEnvelopeUtf8BytesV1,
   projectExternalActionPendingResetStartAdmissionV1,
   projectExternalActionPendingResetStartSessionDigestV1,
+  projectExternalActionRunNowIdempotencyKeyV1,
   type ExternalActionRequestEnvelopeV2, type ExternalActionResponseEnvelopeV2,
   type PreparedExternalActionResponseEnvelope,
 } from './externalActionApi.js';
@@ -95,7 +97,6 @@ function open(ciphertext: string, material: Material, maximumPlaintextBytes: num
 
 export function sealExternalActionRequestV2(params: SealOptions & Readonly<{
   binding: ExternalActionEncryptionBindingV2; input: unknown;
-  managedAdmission?: ExternalActionRequestEnvelopeV2['managedAdmission'];
   sessionSpawnAdmission?: ExternalActionRequestEnvelopeV2['sessionSpawnAdmission'];
   pluginInvocation?: ExternalActionRequestEnvelopeV2['pluginInvocation'];
 }>): ExternalActionRequestEnvelopeV2 {
@@ -104,9 +105,18 @@ export function sealExternalActionRequestV2(params: SealOptions & Readonly<{
   if (!isExternalActionRequestWithinLimit({ v: 1, requestId: payload.requestId, target: payload.target, input: payload.input })) {
     throw new RangeError('External Action request exceeds its decoded limit');
   }
+  const idempotencyKey = projectExternalActionRunNowIdempotencyKeyV1(payload.actionId, payload.input);
+  // Every encrypted producer needs the same Home-readable compute projection.
+  // Agent instructions remain exclusively inside the sealed Action input.
+  const managedAdmission = payload.actionId === 'machines.managed.acquire' ? (() => {
+    const { agentStart, ...compute } = ManagedAcquireInputV1Schema.parse(payload.input);
+    return { actionId: 'machines.managed.acquire' as const,
+      input: ManagedAdmissionComputeInputV1Schema.parse(compute), continuationPresent: agentStart !== undefined };
+  })() : undefined;
   const envelope: ExternalActionRequestEnvelopeV2 = { v: 2, requestId: payload.requestId, target: payload.target,
+    ...(idempotencyKey === undefined ? {} : { idempotencyKey }),
     payload: { t: 'encrypted', c: sealAccountScopedBlobCiphertext({ ...params, kind, payload }) },
-    ...(params.managedAdmission ? { managedAdmission: params.managedAdmission } : {}),
+    ...(managedAdmission ? { managedAdmission } : {}),
     ...(params.sessionSpawnAdmission ? { sessionSpawnAdmission: params.sessionSpawnAdmission } : {}),
     ...(params.pluginInvocation ? { pluginInvocation: params.pluginInvocation } : {}),
     ...(payload.actionId === 'session.pending.resetStart.set'
@@ -122,26 +132,48 @@ export function sealExternalActionRequestV2(params: SealOptions & Readonly<{
 /** No error details from unauthenticated plaintext may cross this boundary. */
 export function openExternalActionRequestV2(params: Readonly<{
   envelope: unknown; binding: ExternalActionEncryptionBindingV2; material: Material;
+  /** Host-local phase witness; never part of the transport response or opened content. */
+  onFailure?: (failure: Readonly<{
+    phase: 'envelope_parse' | 'envelope_binding' | 'ciphertext_open' | 'plaintext_parse'
+      | 'plaintext_binding' | 'reset_admission' | 'plaintext_limit';
+    error?: unknown;
+  }>) => void;
 }>): Readonly<{ input: z.infer<typeof StrictJsonValueSchema> }> | null {
+  let phase: Parameters<NonNullable<typeof params.onFailure>>[0]['phase'] = 'envelope_parse';
+  const refused = (error?: unknown): null => {
+    // Observability must not change cryptographic admission, even if a host's
+    // diagnostic sink itself fails. No decoded value is sent to the witness.
+    try { params.onFailure?.({ phase, ...(error === undefined ? {} : { error }) }); } catch { /* Best-effort witness. */ }
+    return null;
+  };
   try {
     const envelope = ExternalActionRequestEnvelopeV2Schema.parse(params.envelope);
+    phase = 'envelope_binding';
     if (envelope.requestId !== params.binding.requestId || !envelope.target
-      || !externalActionTargetsEqualV1(envelope.target, params.binding.target) || !isExternalActionRequestWithinLimit(envelope)) return null;
-    const decoded = RequestSchema.safeParse(open(
+      || !externalActionTargetsEqualV1(envelope.target, params.binding.target) || !isExternalActionRequestWithinLimit(envelope)) return refused();
+    phase = 'ciphertext_open';
+    const plaintext = open(
       envelope.payload.c,
       params.material,
       EXTERNAL_ACTION_ENCRYPTED_REQUEST_PLAINTEXT_MAX_BYTES_V2,
-    ));
-    if (!decoded.success || !matches(decoded.data, params.binding)) return null;
+    );
+    if (plaintext === null) return refused();
+    phase = 'plaintext_parse';
+    const decoded = RequestSchema.safeParse(plaintext);
+    if (!decoded.success) return refused(decoded.error);
+    phase = 'plaintext_binding';
+    if (!matches(decoded.data, params.binding)) return refused();
+    phase = 'reset_admission';
     if (decoded.data.actionId === 'session.pending.resetStart.set') {
       const admission = projectExternalActionPendingResetStartAdmissionV1(decoded.data.input);
       if (!envelope.pendingResetStartAdmission || decoded.data.target.kind === 'session'
         && projectExternalActionPendingResetStartSessionDigestV1(decoded.data.target.sessionId) !== admission.sessionDigest
-        || !sameStrictJsonValue(admission, envelope.pendingResetStartAdmission)) return null;
-    } else if (envelope.pendingResetStartAdmission) return null;
+        || !sameStrictJsonValue(admission, envelope.pendingResetStartAdmission)) return refused();
+    } else if (envelope.pendingResetStartAdmission) return refused();
+    phase = 'plaintext_limit';
     return isExternalActionRequestWithinLimit({ v: 1, requestId: decoded.data.requestId,
-      target: decoded.data.target, input: decoded.data.input }) ? { input: decoded.data.input } : null;
-  } catch { return null; }
+      target: decoded.data.target, input: decoded.data.input }) ? { input: decoded.data.input } : refused();
+  } catch (error) { return refused(error); }
 }
 
 /** Applies the existing result projection/ceiling once, then seals the complete outcome. */

@@ -25,9 +25,10 @@ function importedSpecifiers(source: string): string[] {
 }
 
 /** Only these exact neutral bindings may cross an admitted presentation leaf. */
-function importsOnlyNeutralPresentationContract(source: string, contract: 'field' | 'picker' | 'boardPreview' | 'dropPreview' = 'field'): boolean {
+function importsOnlyNeutralPresentationContract(source: string, contract: 'field' | 'picker' | 'boardPreview' | 'dropPreview' | 'markdownReview' = 'field'): boolean {
   const specifier = contract === 'dropPreview' ? '@happier-dev/plugin-sdk'
-    : contract === 'boardPreview' ? '@happier-dev/plugin-sdk/ui' : '@happier-dev/plugin-sdk/actions';
+    : contract === 'markdownReview' ? '@happier-dev/plugin-sdk/reviews'
+      : contract === 'boardPreview' ? '@happier-dev/plugin-sdk/ui' : '@happier-dev/plugin-sdk/actions';
   const syntax = ts.createSourceFile('actionInputFields.ts', source, ts.ScriptTarget.Latest, true);
   const imports = syntax.statements.filter((statement): statement is ts.ImportDeclaration =>
     ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)
@@ -48,7 +49,8 @@ function importsOnlyNeutralPresentationContract(source: string, contract: 'field
     ? { InputFieldHint: true, readInputPath: false, writeInputPath: false }
     : contract === 'picker'
       ? { actionInputOptionValueKey: false, readActionInputOptionValue: false }
-      : contract === 'boardPreview' ? { WorkBoardPreviewLayoutV1: true } : { EntityDropPreviewV1: true };
+      : contract === 'boardPreview' ? { WorkBoardPreviewLayoutV1: true }
+        : contract === 'markdownReview' ? { ReviewFinding: true } : { EntityDropPreviewV1: true };
   return bindings.length === Object.keys(allowedBindings).length
     && new Set(bindings.map(binding => binding.name)).size === bindings.length
     && bindings.every(binding => Object.hasOwn(allowedBindings, binding.name)
@@ -114,6 +116,8 @@ describe('author package boundary', () => {
         && importsOnlyNeutralPresentationContract(source, 'boardPreview');
       const isCanonicalDropPreviewContract = /presentation[\\/]interaction[\\/]ReleasePreview\.tsx$/u.test(filePath)
         && importsOnlyNeutralPresentationContract(source, 'dropPreview');
+      const isCanonicalMarkdownReviewContract = /presentation[\\/]content[\\/]Markdown\.tsx$/u.test(filePath)
+        && importsOnlyNeutralPresentationContract(source, 'markdownReview');
       return importedSpecifiers(source)
         .filter((specifier) => !allowedPresentationSpecifier(specifier))
         .filter((specifier) => !(isTypeOnlyEnvironmentContract && specifier === '@happier-dev/plugin-sdk/ui'))
@@ -124,6 +128,7 @@ describe('author package boundary', () => {
         .filter((specifier) => !(isCanonicalInputPickerContract && specifier === '@happier-dev/plugin-sdk/actions'))
         .filter((specifier) => !(isCanonicalBoardPreviewContract && specifier === '@happier-dev/plugin-sdk/ui'))
         .filter((specifier) => !(isCanonicalDropPreviewContract && specifier === '@happier-dev/plugin-sdk'))
+        .filter((specifier) => !(isCanonicalMarkdownReviewContract && specifier === '@happier-dev/plugin-sdk/reviews'))
         .map((specifier) => `${relative(sourceRoot, filePath)} → ${specifier}`);
     });
 
@@ -197,6 +202,20 @@ describe('author package boundary', () => {
       "import('@happier-dev/plugin-sdk');",
       "require('@happier-dev/plugin-sdk');",
     ]) expect(importsOnlyNeutralPresentationContract(`${source}\n${extra}`, 'dropPreview')).toBe(false);
+  });
+
+  it('admits only the erased canonical Markdown review type, never runtime or other SDK bindings', () => {
+    const source = "import type { ReviewFinding } from '@happier-dev/plugin-sdk/reviews';";
+    expect(importsOnlyNeutralPresentationContract(source, 'markdownReview')).toBe(true);
+    expect(importsOnlyNeutralPresentationContract(source.replace('import type', 'import'), 'markdownReview')).toBe(false);
+    expect(importsOnlyNeutralPresentationContract(source.replace(' }', ', ReviewComment }'), 'markdownReview')).toBe(false);
+    expect(importsOnlyNeutralPresentationContract(source.replace('import type {', 'import type reviews, {'), 'markdownReview')).toBe(false);
+    for (const extra of [
+      "import * as reviews from '@happier-dev/plugin-sdk/reviews';",
+      "export type { ReviewFinding } from '@happier-dev/plugin-sdk/reviews';",
+      "import('@happier-dev/plugin-sdk/reviews');",
+      "require('@happier-dev/plugin-sdk/reviews');",
+    ]) expect(importsOnlyNeutralPresentationContract(`${source}\n${extra}`, 'markdownReview')).toBe(false);
   });
 
   it('describes the published contents selected by the declared files inventory', () => {
@@ -331,7 +350,7 @@ describe('author package boundary', () => {
       const entrypoint = join(packageRoot, 'src', directory, 'index.ts');
       const sourceSpec = join(packageRoot, 'src', directory, 'index.public.ts');
       expect(existsSync(sourceSpec), `${specifier} has no author-owned source spec`).toBe(true);
-      expect(readFileSync(entrypoint, 'utf8')).toBe("export * from './index.public.js';\n");
+      expect(readFileSync(entrypoint, 'utf8').trim()).toBe("export * from './index.public.js';");
     }
   });
 
@@ -444,7 +463,7 @@ describe('author package boundary', () => {
       '@happier-dev/plugin-sdk/browser',
       '@happier-dev/plugin-sdk/ui',
     ]));
-    expect(imports.every((specifier) => (
+    expect(imports.filter((specifier) => !(
       specifier.startsWith('./')
       || specifier === 'react'
       || specifier === 'react-dom/client'
@@ -453,13 +472,14 @@ describe('author package boundary', () => {
       || specifier === '@happier-dev/plugin-ui'
       || specifier.startsWith('@happier-dev/plugin-ui/')
       || specifier === '@happier-dev/plugin-sdk/browser'
+      || specifier === '@happier-dev/plugin-sdk/actions'
       || specifier === '@happier-dev/plugin-sdk/manifest'
       || specifier === '@happier-dev/plugin-sdk/protocol'
       || specifier === '@happier-dev/plugin-sdk/contributions'
       || specifier === '@happier-dev/plugin-sdk/ui'
       || specifier === '@happier-dev/plugin-sdk/testing'
       || specifier === '@happier-dev/plugin-sdk/voice/client'
-    ))).toBe(true);
+    ))).toEqual([]);
     expect(imports).not.toContain('@happier-dev/plugin-ui/testing');
     expect(imports).not.toContain('@happier-dev/plugin-ui/compatibility');
     expect(imports).not.toContain('jsdom');

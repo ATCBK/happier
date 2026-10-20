@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
 import { projectSessionOwnerCompatibilityViewV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
-import { createPlainSessionCurrentProjectionRecordFixture, createSessionFixture, createSessionOwnerViewerFixture } from './sessionFixtures';
+import { createPlainSessionByIdResponseFixture, createPlainSessionCurrentProjectionRecordFixture, createSessionFixture, createSessionOwnerViewerFixture } from './sessionFixtures';
 
 it('preserves private launch profile identity through the real owner metadata envelope', () => {
     const metadata = { ...createSessionFixture().metadata!, profileId: 'work' };
@@ -10,6 +10,28 @@ it('preserves private launch profile identity through the real owner metadata en
     const view = projectSessionOwnerCompatibilityViewV1({ sharedMetadata: JSON.parse(row.metadata), ownerMetadata: row.ownerMetadata.v });
     expect(view.profileId).toBe('work');
     expect(JSON.parse(row.metadata)).not.toHaveProperty('profileId');
+});
+
+it('preserves Session runtime facts without disclosing recipient owner metadata', () => {
+    const session = createSessionFixture({
+        metadata: { ...createSessionFixture().metadata!, profileId: 'work' },
+        agentState: { controlledByUser: true }, pendingCount: 2, pendingVersion: 3,
+    });
+    const owner = createPlainSessionByIdResponseFixture(session).session;
+    expect(owner.agentState).toBe(JSON.stringify(session.agentState));
+    expect(owner.pendingCount).toBe(2);
+    expect(owner.pendingVersion).toBe(3);
+    expect(owner.ownerMetadata?.t).toBe('plain');
+
+    const recipient = createPlainSessionByIdResponseFixture(createSessionFixture({
+        ...session, access: createSessionFixture({ accessLevel: 'edit' }).access,
+    })).session;
+    expect(recipient.ownerMetadata).toBeUndefined();
+    expect(recipient.agentState).toBeNull();
+    expect(recipient.agentStateVersion).toBe(session.agentStateVersion);
+    expect(JSON.parse(recipient.metadata)).not.toHaveProperty('profileId');
+    expect(recipient.effectiveAccess?.level).toBe('edit');
+    expect(() => createPlainSessionByIdResponseFixture({ ...session, encryptionMode: 'e2ee' })).toThrow();
 });
 
 it('keeps an owner without a read row quiet and derives unread only from an explicit viewer frontier', () => {

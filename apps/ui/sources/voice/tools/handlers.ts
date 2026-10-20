@@ -9,7 +9,6 @@ import {
   type PluginUiJsonValueV1,
 } from '@happier-dev/protocol/plugins/ui';
 
-import { sendSessionMessageWithServerScope } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionSendMessage';
 import { sync } from '@/sync/sync';
 import { storage } from '@/sync/domains/state/storage';
 import type { Session } from '@/sync/domains/state/storageTypes';
@@ -24,8 +23,8 @@ import {
 import {
   createDefaultActionExecutor,
 } from '@/sync/ops/actions/defaultActionExecutor';
-import { projectServerScopedSessionSendMessageResult } from '@/sync/runtime/orchestration/serverScopedRpc/serverScopedSessionSendMessage';
 import { getActiveServerSnapshot } from '@/sync/domains/server/serverRuntime';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
 import { resolvePreferredServerIdForSessionId } from '@/sync/runtime/orchestration/serverScopedRpc/resolvePreferredServerIdForSessionId';
 import { resolveAskUserQuestionDecisionAnswers } from '@/voice/requests/resolveAskUserQuestionDecisionAnswers';
 import { normalizeSessionAddress, type SessionAddress } from '@/sync/domains/session/sessionAddress';
@@ -427,24 +426,6 @@ export function createVoiceToolHandlers(
       await deps.currentUiContext?.readCurrentContributedActionSchemas?.(id, signal) ?? null
     ),
     isActionEnabled: (actionId) => isVoiceActionAvailableInState(storage.getState(), actionId),
-    sessionSendMessage: async ({ sessionId, message, serverId, recipient, requestedAction, signal }) => {
-      if (signal?.aborted) {
-        return { ok: false, errorCode: 'tool_cancelled', error: 'tool_cancelled' };
-      }
-      const delivery = await sendSessionMessageWithServerScope({
-        sessionId,
-        message,
-        serverId,
-        recipient,
-        requestedAction,
-        hostAdmissionOrigin: 'voice',
-        ...(signal ? { signal } : {}),
-      });
-      const result = projectServerScopedSessionSendMessageResult(delivery);
-      return 'ok' in result && result.ok === false
-        ? { ...result, details: { sessionId } }
-        : result;
-    },
   });
 
   const execute = async (
@@ -456,15 +437,32 @@ export function createVoiceToolHandlers(
     const actionId = VOICE_TOOL_ACTION_ID_BY_TOOL_NAME[toolName];
     if (!actionId) return jsonError('unsupported_action', `unsupported_action:${toolName}`);
     const input = asPlainObject(parameters ?? {});
+    const humanReturn = actionId === 'session.message.send' && input?.reply === 'return';
+    const boundAddress = humanReturn
+      ? normalizeSessionAddress(deps.currentSessionAddress?.serverId, deps.currentSessionAddress?.sessionId)
+      : null;
+    if (humanReturn) {
+      if (ctx?.signal?.aborted) return jsonError('tool_cancelled', 'tool_cancelled');
+      // Tool arguments cannot select their own human source or supply authority.
+      // The existing person approval owns admission of this captured operand.
+      if (Object.prototype.hasOwnProperty.call(input, 'returnToSessionId')) {
+        return jsonError('invalid_parameters', 'invalid_parameters');
+      }
+      if (!boundAddress) return jsonError('session_not_selected', 'session_not_selected');
+      if (ctx?.serverId && !areServerProfileIdentifiersEquivalent(ctx.serverId, boundAddress.serverId)) {
+        return jsonError('server_target_mismatch', 'server_target_mismatch');
+      }
+    }
     const useAwareness = actionId === 'session.list' && input !== null
       && input.view === undefined && input.includeLastMessagePreview !== true;
     const hasNaturalSessionReference = Boolean(
       normalizeId(input?.sessionId) || normalizeId(input?.sessionTitle),
     );
-    const serverId = ctx?.serverId ?? (
+    const serverId = boundAddress?.serverId ?? ctx?.serverId ?? (
       !hasNaturalSessionReference ? deps.currentSessionAddress?.serverId : null
     ) ?? (actionId === 'session.list' ? getActiveServerSnapshot().serverId : null);
-    const actionInput = useAwareness ? { ...input, view: 'awareness' } : parameters;
+    const actionInput = boundAddress ? { ...input, returnToSessionId: boundAddress.sessionId }
+      : useAwareness ? { ...input, view: 'awareness' } : parameters;
     if (useAwareness && actionInput && typeof actionInput === 'object') {
       Reflect.deleteProperty(actionInput, 'includeLastMessagePreview');
     }
@@ -472,7 +470,7 @@ export function createVoiceToolHandlers(
     try {
       res = await executor.execute(actionId, actionInput, {
         surface: 'voice',
-        defaultSessionId: await deps.resolveSessionId(null),
+        defaultSessionId: boundAddress?.sessionId ?? await deps.resolveSessionId(null),
         ...(serverId ? { serverId } : {}),
         ...(resolveVoiceActionRequestId(ctx)
           ? { actionRequestId: resolveVoiceActionRequestId(ctx)! }
@@ -552,6 +550,7 @@ export function createVoiceToolHandlers(
           .filter((entry) => entry.question.length > 0 && entry.values.length > 0)
       : [];
     const decision = typeof data.decision === 'string' ? data.decision : null;
+    const disposition = data.disposition === 'pass_up' ? data.disposition : undefined;
     const reason = typeof data.reason === 'string' ? data.reason.trim() : '';
     const hasUpdatedPermissions = Object.prototype.hasOwnProperty.call(data, 'updatedPermissions');
     const requestId = selected.requestId;
@@ -569,7 +568,7 @@ export function createVoiceToolHandlers(
         : null;
     const answersPayload = answers.length > 0 ? answers : derivedAnswers;
     const decisionPayload = decision;
-    if (answers.length === 0 && !decision && (!derivedAnswers || derivedAnswers.length === 0)) {
+    if (!disposition && answers.length === 0 && !decision && (!derivedAnswers || derivedAnswers.length === 0)) {
       return jsonError('invalid_parameters', 'invalid_parameters', { sessionId });
     }
 
@@ -579,6 +578,7 @@ export function createVoiceToolHandlers(
       {
         sessionId,
         requestId,
+        ...(disposition ? { disposition } : {}),
         ...(answersPayload ? { answers: answersPayload } : {}),
         ...(decisionPayload ? { decision: decisionPayload } : {}),
         ...(reason ? { reason } : {}),

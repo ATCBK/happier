@@ -24,7 +24,6 @@ import { t } from '@/text';
 import { trackFriendsProfileView } from '@/track';
 import { buildServerScopedSessionKey } from '@/sync/domains/session/navigation/sessionNavigationOrder';
 import { useSessionListIdentityDisplay } from '@/components/sessions/shell/SessionListIdentity';
-import type { InboxWorkGroup } from '@/activity/presentation/buildInboxWorkGroups';
 import type { Session } from '@/sync/domains/state/storageTypes';
 import type { SessionListIdentityDisplay } from '@/components/sessions/shell/SessionListIdentity';
 
@@ -32,15 +31,26 @@ import { ActionOperationRows } from './actionOperations/ActionOperationLedger';
 import { openActionOperation } from './actionOperations/actionOperationPresentationRuntime';
 import { InboxSection } from './InboxSection';
 import { countInboxUpdates, hasInboxNeedsYouRows } from './inboxCounts';
-import { presentInboxSessionStatus } from './workGroups/InboxWorkItemRow';
+import { InboxWorkItemRow, presentInboxSessionStatus } from './workGroups/InboxWorkItemRow';
 import { buildInboxSessionContextLine } from './workGroups/inboxSessionContextLine';
-import { groupInboxWorkSheets, InboxWorkGroupSection } from './workGroups/InboxWorkGroupSection';
+import { createInboxItemRoute, isFocusedInboxWorkItem } from './inboxItemFocus';
+import { getInboxNeedsYouItemTypes, selectInboxItemsForView, type InboxItem, type InboxItemType, type InboxItemView } from './inboxItems';
+import { InboxWorkRow } from './InboxWorkRow';
+import { InboxRelativeTime } from './InboxRelativeTime';
+import type { InboxWorkItem } from '@/activity/presentation/buildInboxWorkGroups';
+import type { IconName } from '@/components/ui/icons/Icon';
+import { useIsTablet } from '@/utils/platform/responsive';
 import { getSessionStatus } from '@/utils/sessions/sessionUtils';
 import { motionTokens } from '@/components/ui/motion/motionTokens';
 
-export type InboxView = 'needs_you' | 'updates';
+export type InboxView = InboxItemView;
 
-const OTHER_GROUP = Object.freeze<InboxWorkGroup>({ key: 'other', root: { kind: 'other' }, items: [] });
+const ITEM_MARKS: Readonly<Record<InboxItemType, IconName>> = {
+    approval: 'shield-check', decision: 'question', blocked: 'pause-circle', update: 'bell', mention: 'at',
+};
+
+/** Needs you reads by what is asked of the person (lab P4): approvals, then decisions, then what is blocked. */
+const NEEDS_YOU_TYPES = getInboxNeedsYouItemTypes().map(type => ({ type, icon: ITEM_MARKS[type], attention: type !== 'blocked' }));
 
 const BoundReadyRow = React.memo(function BoundReadyRow(props: Readonly<{
     session: Session; serverId: string | null; identityDisplay: SessionListIdentityDisplay; title: string; subtitle?: string;
@@ -58,26 +68,66 @@ const BoundReadyRow = React.memo(function BoundReadyRow(props: Readonly<{
 });
 
 /**
+ * A row for an item no work owner draws (a stored notice, a Discussion message): the same Work row
+ * anatomy as every other Inbox row (lab P4: one row for everything), opening the item's own page.
+ */
+const InboxItemRow = React.memo(function InboxItemRow(props: Readonly<{
+    item: InboxItem; selected: boolean; narrow: boolean; showDivider?: boolean;
+    navigate: (route: string) => void; onSelectItem?: (focus: InboxItemFocus) => void;
+    markOpened: InboxModel['markItemOpened'];
+}>) {
+    const { theme } = useUnistyles();
+    const { item, navigate, onSelectItem, markOpened } = props;
+    // Lab P4 row: where it comes from, the title, what it says, and who. The excerpt is the detail
+    // when the item carries one; a Discussion row without it says what happened.
+    const fact = item.excerpt
+        ?? (item.source.kind === 'discussion'
+            ? t(item.type === 'mention' ? 'inbox.work.rows.mentionedYou' : 'inbox.work.rows.newMessage')
+            : item.context);
+    const byline = item.author
+        ? { text: item.author.isSelf ? t('session.collaboration.pane.you') : item.author.name }
+        : null;
+    const open = React.useCallback(async () => {
+        if (onSelectItem) onSelectItem(item.focus);
+        else {
+            await markOpened(item);
+            navigate(item.pageRoute);
+        }
+    }, [item, navigate, onSelectItem, markOpened]);
+    return <InboxWorkRow testID={`inbox.item.${item.key}`} title={item.title} facts={fact ? [fact] : []}
+        source={item.source.displayName ?? null} byline={byline}
+        selected={props.selected} showDivider={props.showDivider} narrow={props.narrow}
+        phase={item.view === 'needs_you' ? 'attention' : 'finished'}
+        time={<InboxRelativeTime timestamp={item.createdAt} />}
+        mark={<Icon name={ITEM_MARKS[item.type]} size={18}
+            color={item.view === 'needs_you' ? theme.colors.state.attention.foreground : theme.colors.text.secondary} />}
+        onPress={open} />;
+});
+
+type WorkRowSource = Readonly<{ item: InboxWorkItem; automationServerId: string | null }>;
+
+/**
  * The one non-scrolling Inbox body used by both screen and anchored popover.
  * Each host owns exactly one scroll container and supplies a callback that
  * closes transient chrome before any navigation begins.
  *
- * "Needs you" is grouped by the work each item belongs to (ORC R-10, lab `inbox-I1`); "Updates"
- * holds what finished and people. The popover shows the grouped needs-you rows and says how many
- * more wait in the Inbox (lab `inbox-I2`).
+ * It draws the canonical item model (`model.items`, F4) in three views (lab P4): Needs you grouped by
+ * type, Updates newest first by day, and Mentions. Rows keep their owners: a session's request keeps
+ * its answer card, a run its Review, an approval its card; items no work owner draws (stored notices,
+ * Discussion messages) take the same Work row. The popover shows Needs you and one line to Updates.
  */
 export const InboxContent = React.memo(function InboxContent(props: Readonly<{
     model: InboxModel;
     onBeforeNavigate?: () => void;
-    /** Popover only: opens the full Inbox from the "N more" lines. */
+    /** Popover only: opens the full Inbox from its Updates line. */
     onOpenInbox?: () => void;
     presentation?: 'screen' | 'popover';
     view?: InboxView;
     /** The item the person came to see (`/inbox?item=`): its row is drawn selected. */
     focusedItem?: InboxItemFocus | null;
     /**
-     * Beside the Inbox's detail pane (lab `inbox-I1`) a row selects its item there instead of
-     * leaving the Inbox; without it (phones, the popover) a row opens its item's own page.
+     * Beside the Inbox's detail pane a row selects its item there instead of leaving the Inbox;
+     * without it (phones, the popover) a row opens its item's own page.
      */
     onSelectItem?: (focus: InboxItemFocus) => void;
 }>) {
@@ -86,6 +136,7 @@ export const InboxContent = React.memo(function InboxContent(props: Readonly<{
     const { model } = props;
     const presentation = props.presentation ?? 'screen';
     const page = presentation === 'screen';
+    const wide = useIsTablet();
     const view: InboxView = page ? (props.view ?? 'needs_you') : 'needs_you';
     const sectionSurface = page ? 'page' : 'flat';
     const identityDisplay = useSessionListIdentityDisplay();
@@ -124,17 +175,86 @@ export const InboxContent = React.memo(function InboxContent(props: Readonly<{
         return { usage, machines };
     }, [model.openUsageNotices]);
 
-    const rootGroups = React.useMemo(
-        () => groupInboxWorkSheets(model.workGroups.filter((group) => group.root.kind !== 'other')),
-        [model.workGroups],
-    );
-    const otherGroup = model.workGroups.find((group) => group.root.kind === 'other') ?? OTHER_GROUP;
-    const otherExtraCount = model.actionOperationEntries.length;
-    const hasOther = otherGroup.items.length > 0 || otherExtraCount > 0;
-    // The popover keeps "Other sessions" to one line when work roots are shown (lab `inbox-I2`);
-    // with no roots, the other rows are the popover's content.
-    const otherInline = page || rootGroups.length === 0;
-    // Emptiness is about rows, counted or parked (a snoozed row is drawn but asks for nothing).
+    // The work owners still draw their own rows; the item model only decides where each one sits.
+    const workRows = React.useMemo(() => {
+        const rows = new Map<string, WorkRowSource>();
+        for (const group of model.workGroups) for (const item of group.items) {
+            rows.set(item.key, { item, automationServerId: group.root.kind === 'automation' ? group.root.serverId : model.automationAttention.serverId });
+        }
+        return rows;
+    }, [model.workGroups, model.automationAttention.serverId]);
+    const readyRows = React.useMemo(() => new Map(model.sessionPresentation.readySessions.flatMap((candidate) => {
+        const serverId = candidate.address?.serverId ?? candidate.serverId;
+        return serverId ? [[`session:${serverId}:${candidate.sessionId}` as string, candidate] as const] : [];
+    })), [model.sessionPresentation.readySessions]);
+    const viewItems = React.useMemo(() => selectInboxItemsForView(model.items, view), [model.items, view]);
+    const focusedRouteKey = props.focusedItem ? createInboxItemRoute(props.focusedItem).params.item : null;
+
+    const renderRow = (item: InboxItem, index: number, count: number) => {
+        const showDivider = index < count - 1;
+        const work = workRows.get(item.key);
+        if (work) {
+            return (
+                <InboxWorkItemRow
+                    key={item.key}
+                    item={work.item}
+                    spansHomes={model.spansHomes}
+                    workflowServerId={model.workflowAttention.serverId}
+                    automationServerId={work.automationServerId}
+                    settle={model.settle}
+                    setReminder={model.setReminder}
+                    identityDisplay={identityDisplay}
+                    presentation={presentation}
+                    navigate={navigate}
+                    onBeforeNavigate={props.onBeforeNavigate}
+                    focused={isFocusedInboxWorkItem(work.item, props.focusedItem ?? null, model.workflowAttention.serverId, model.automationAttention.serverId)}
+                    onSelectItem={props.onSelectItem}
+                    showDivider={showDivider}
+                />
+            );
+        }
+        const ready = readyRows.get(item.key);
+        if (ready) {
+            const serverId = ready.address?.serverId ?? ready.serverId ?? null;
+            const target = model.targetBySessionAddress.get(buildServerScopedSessionKey(ready.sessionId, serverId));
+            if (!target) return null;
+            return (
+                <BoundReadyRow
+                    key={item.key}
+                    session={ready.session}
+                    identityDisplay={identityDisplay}
+                    serverId={serverId}
+                    title={ready.title}
+                    subtitle={buildInboxSessionContextLine(ready, { showHome: model.spansHomes, showNeed: false })}
+                    pending={model.pendingReadKeys.has(target.key)}
+                    route={ready.route}
+                    navigate={navigate}
+                    markRead={model.markRead}
+                />
+            );
+        }
+        return (
+            <InboxItemRow key={item.key} item={item} narrow={!(page && wide)} showDivider={showDivider}
+                selected={focusedRouteKey !== null && createInboxItemRoute(item.focus).params.item === focusedRouteKey}
+                navigate={navigate} onSelectItem={props.onSelectItem} markOpened={model.markItemOpened} />
+        );
+    };
+
+    const needsYouSections = React.useMemo(() => NEEDS_YOU_TYPES
+        .map((entry) => ({ ...entry, items: viewItems.filter((item) => item.type === entry.type) }))
+        .filter((entry) => entry.items.length > 0), [viewItems]);
+    // Updates and Mentions read newest first under the day they arrived (lab P4 "Today").
+    const daySections = React.useMemo(() => {
+        if (view === 'needs_you') return [];
+        const startOfToday = new Date().setHours(0, 0, 0, 0);
+        const today = viewItems.filter((item) => item.createdAt >= startOfToday);
+        const earlier = viewItems.filter((item) => item.createdAt < startOfToday);
+        return [
+            { key: 'today', title: t('inbox.work.days.today'), items: today },
+            { key: 'earlier', title: t('inbox.work.days.earlier'), items: earlier },
+        ].filter((entry) => entry.items.length > 0);
+    }, [view, viewItems]);
+
     const needsYouEmpty = !hasInboxNeedsYouRows(model);
     const updatesCount = countInboxUpdates(model);
     const workflowUnavailable = model.workflowAttention.available
@@ -145,19 +265,6 @@ export const InboxContent = React.memo(function InboxContent(props: Readonly<{
         && (model.automationAttention.phase === 'failed' || model.automationAttention.refreshFailed);
     const automationStale = automationUnavailable && model.automationAttention.phase === 'loaded'
         && model.automationAttention.runIds.length > 0;
-
-    const otherExtra = (
-        <>
-            {operations.length > 0 ? (
-                <ActionOperationRows
-                    operations={operations}
-                    presentation="inbox"
-                    onOpenOperation={openOperation}
-                    onDismissOperation={resolveOperation}
-                />
-            ) : null}
-        </>
-    );
 
     const markAllRead = () => { void model.markRead(model.sessionPresentation.markAllReadTargets); };
     const markAllReadAction = page ? (
@@ -199,6 +306,7 @@ export const InboxContent = React.memo(function InboxContent(props: Readonly<{
     ));
 
     const loading = model.isLoading && !model.hasPrimaryAttention;
+    const typeCount = (count: number) => <Text style={styles.count}>{count}</Text>;
 
     return (
         <View testID="inbox.content" style={styles.container}>
@@ -240,6 +348,35 @@ export const InboxContent = React.memo(function InboxContent(props: Readonly<{
                         </View>
                     ) : null}
 
+                    {needsYouSections.map((section, index) => (
+                        <InboxSection
+                            key={section.type}
+                            testID={`inbox.type.${section.type}`}
+                            title={t(`inbox.work.types.${section.type}`)}
+                            surface={sectionSurface}
+                            spacingBefore={index > 0 ? 'separated' : undefined}
+                            leading={page ? (
+                                <Icon name={section.icon} size={16}
+                                    color={section.attention ? theme.colors.state.attention.foreground : theme.colors.text.secondary} />
+                            ) : undefined}
+                            meta={page ? typeCount(section.items.length) : undefined}
+                        >
+                            {section.items.map((item, rowIndex) => renderRow(item, rowIndex, section.items.length))}
+                        </InboxSection>
+                    ))}
+
+                    {operations.length > 0 ? (
+                        <InboxSection testID="inbox.section.operations" title={t('inbox.actionOperations.sections.needsAttention')}
+                            surface={sectionSurface} spacingBefore={needsYouSections.length > 0 ? 'separated' : undefined}>
+                            <ActionOperationRows
+                                operations={operations}
+                                presentation="inbox"
+                                onOpenOperation={openOperation}
+                                onDismissOperation={resolveOperation}
+                            />
+                        </InboxSection>
+                    ) : null}
+
                     {model.automationAttention.hasMore ? (
                         <InboxSection testID="inbox.section.automations" title={t('navigation.automations')} surface={sectionSurface}>
                             <SectionActionButton testID="inbox.automation_more" icon="caret-down"
@@ -248,83 +385,17 @@ export const InboxContent = React.memo(function InboxContent(props: Readonly<{
                         </InboxSection>
                     ) : null}
 
-                    {rootGroups.map((group, index) => (
-                        <InboxWorkGroupSection
-                            key={group.key}
-                            group={group}
-                            model={model}
-                            identityDisplay={identityDisplay}
-                            presentation={presentation}
-                            spacingBefore={index > 0 ? 'separated' : undefined}
-                            navigate={navigate}
-                            onBeforeNavigate={props.onBeforeNavigate}
-                            focusedItem={props.focusedItem}
-                            onSelectItem={props.onSelectItem}
-                        />
-                    ))}
-
-                    {hasOther && otherInline ? (
-                        <InboxWorkGroupSection
-                            group={otherGroup}
-                            model={model}
-                            identityDisplay={identityDisplay}
-                            presentation={presentation}
-                            navigate={navigate}
-                            onBeforeNavigate={props.onBeforeNavigate}
-                            focusedItem={props.focusedItem}
-                            onSelectItem={props.onSelectItem}
-                            extra={otherExtra}
-                        />
-                    ) : null}
-
-                    {notices.machines.length > 0 ? (
-                        <InboxSection testID="inbox.section.machines" title={t('settings.machines')}
-                            surface={sectionSurface} spacingBefore={rootGroups.length > 0 || hasOther ? 'separated' : undefined}>
-                            {notices.machines.map(({ entry, notice }) => (
-                                <MachineVitalsNoticeInboxRow key={entry.artifact.id} entry={entry} notice={notice}
-                                    navigate={navigate}
-                                    onDismiss={model.dismissUsageNotice} />
-                            ))}
-                        </InboxSection>
-                    ) : null}
-
-                    {notices.usage.length > 0 ? (
-                        <InboxSection testID="inbox.section.usage" title={t('settings.usage')}
-                            surface={sectionSurface} spacingBefore={rootGroups.length > 0 || hasOther || notices.machines.length > 0 ? 'separated' : undefined}>
-                            {notices.usage.map((entry) => (
-                                <UsageNoticeInboxRow key={entry.artifact.id} entry={entry}
-                                    onOpen={openUsage}
-                                    onDismiss={model.dismissUsageNotice} />
-                            ))}
-                        </InboxSection>
-                    ) : null}
-
-                    {!page && ((hasOther && !otherInline) || updatesCount > 0) ? (
-                        <View style={rootGroups.length > 0 ? styles.moreLines : undefined}>
-                            {hasOther && !otherInline ? (
-                                <Pressable
-                                    testID="inbox.popover.more_other"
-                                    accessibilityRole="button"
-                                    onPress={props.onOpenInbox}
-                                    style={({ pressed }) => [styles.moreLine, pressed ? styles.sectionActionPressed : null]}
-                                >
-                                    <Text style={styles.moreLabel}>
-                                        {t('inbox.work.popover.moreInOther', { count: otherGroup.items.length + otherExtraCount })}
-                                    </Text>
-                                    <Icon name="caret-right" size={14} color={theme.colors.text.tertiary} />
-                                </Pressable>
-                            ) : null}
-                            {updatesCount > 0 ? (
-                                <Pressable
-                                    testID="inbox.popover.updates"
-                                    accessibilityRole="button"
-                                    onPress={props.onOpenInbox}
-                                    style={({ pressed }) => [styles.moreLine, pressed ? styles.sectionActionPressed : null]}
-                                >
-                                    <Text style={styles.moreLabel}>{t('inbox.work.popover.updates', { count: updatesCount })}</Text>
-                                    <Icon name="caret-right" size={14} color={theme.colors.text.tertiary} />
-                                </Pressable>
-                            ) : null}
+                    {!page && updatesCount > 0 ? (
+                        <View style={needsYouSections.length > 0 ? styles.moreLines : undefined}>
+                            <Pressable
+                                testID="inbox.popover.updates"
+                                accessibilityRole="button"
+                                onPress={props.onOpenInbox}
+                                style={({ pressed }) => [styles.moreLine, pressed ? styles.sectionActionPressed : null]}
+                            >
+                                <Text style={styles.moreLabel}>{t('inbox.work.popover.updates', { count: updatesCount })}</Text>
+                                <Icon name="caret-right" size={14} color={theme.colors.text.tertiary} />
+                            </Pressable>
                         </View>
                     ) : null}
 
@@ -343,42 +414,47 @@ export const InboxContent = React.memo(function InboxContent(props: Readonly<{
                 </>
             ) : (
                 <>
-                    {model.sessionPresentation.readySessions.length > 0 ? (
+                    {daySections.map((section, index) => (
                         <InboxSection
-                            testID="inbox.section.ready"
-                            title={t('inbox.readySessions')}
+                            key={section.key}
+                            testID={`inbox.day.${section.key}`}
+                            title={section.title}
                             surface={sectionSurface}
-                            rightAccessory={model.sessionPresentation.markAllReadTargets.length > 0 ? markAllReadAction : undefined}
+                            spacingBefore={index > 0 ? 'separated' : undefined}
+                            rightAccessory={index === 0 && view === 'updates' && model.sessionPresentation.markAllReadTargets.length > 0
+                                ? markAllReadAction : undefined}
                         >
-                            {model.sessionPresentation.readySessions.map((candidate) => {
-                                const serverId = candidate.address?.serverId ?? candidate.serverId ?? null;
-                                const target = model.targetBySessionAddress.get(
-                                    buildServerScopedSessionKey(candidate.sessionId, serverId),
-                                );
-                                if (!target) return null;
-                                return (
-                                    <BoundReadyRow
-                                        key={target.key}
-                                        session={candidate.session}
-                                        identityDisplay={identityDisplay}
-                                        serverId={serverId}
-                                        title={candidate.title}
-                                        subtitle={buildInboxSessionContextLine(candidate, { showHome: model.spansHomes, showNeed: false })}
-                                        pending={model.pendingReadKeys.has(target.key)}
-                                        route={candidate.route}
-                                        navigate={navigate}
-                                        markRead={model.markRead}
-                                    />
-                                );
-                            })}
+                            {section.items.map((item, rowIndex) => renderRow(item, rowIndex, section.items.length))}
+                        </InboxSection>
+                    ))}
+
+                    {view === 'updates' && notices.machines.length > 0 ? (
+                        <InboxSection testID="inbox.section.machines" title={t('settings.machines')}
+                            surface={sectionSurface} spacingBefore={daySections.length > 0 ? 'separated' : undefined}>
+                            {notices.machines.map(({ entry, notice }) => (
+                                <MachineVitalsNoticeInboxRow key={entry.artifact.id} entry={entry} notice={notice}
+                                    navigate={navigate}
+                                    onDismiss={model.dismissUsageNotice} />
+                            ))}
                         </InboxSection>
                     ) : null}
 
-                    {model.friendRequests.length > 0 ? (
+                    {view === 'updates' && notices.usage.length > 0 ? (
+                        <InboxSection testID="inbox.section.usage" title={t('settings.usage')}
+                            surface={sectionSurface} spacingBefore={daySections.length > 0 || notices.machines.length > 0 ? 'separated' : undefined}>
+                            {notices.usage.map((entry) => (
+                                <UsageNoticeInboxRow key={entry.artifact.id} entry={entry}
+                                    onOpen={openUsage}
+                                    onDismiss={model.dismissUsageNotice} />
+                            ))}
+                        </InboxSection>
+                    ) : null}
+
+                    {view === 'updates' && model.friendRequests.length > 0 ? (
                         <InboxSection
                             testID="inbox.section.friends"
                             title={t('inbox.friendRequests')}
-                            spacingBefore={model.sessionPresentation.readySessions.length > 0 ? 'separated' : undefined}
+                            spacingBefore={daySections.length > 0 || model.openUsageNotices.length > 0 ? 'separated' : undefined}
                             surface={sectionSurface}
                         >
                             {model.friendRequests.map((friend) => (
@@ -395,8 +471,11 @@ export const InboxContent = React.memo(function InboxContent(props: Readonly<{
                         </InboxSection>
                     ) : null}
 
-                    {!loading && updatesCount === 0
+                    {!loading && view === 'updates' && daySections.length === 0 && model.friendRequests.length === 0 && model.openUsageNotices.length === 0
                         ? renderEmpty(t('inbox.work.updatesEmpty.title'), t('inbox.work.updatesEmpty.description'), 'agentFinished')
+                        : null}
+                    {!loading && view === 'mentions' && daySections.length === 0
+                        ? renderEmpty(t('inbox.work.mentionsEmpty.title'), t('inbox.work.mentionsEmpty.description'), 'inboxZero')
                         : null}
                 </>
             )}
@@ -465,5 +544,10 @@ const styles = StyleSheet.create((theme) => ({
     sectionActionLabel: {
         ...Typography.variant('micro', 'semiBold'),
         color: theme.colors.text.secondary,
+    },
+    count: {
+        ...Typography.variant('meta'),
+        color: theme.colors.text.tertiary,
+        fontVariant: ['tabular-nums'],
     },
 }));

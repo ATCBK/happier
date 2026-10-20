@@ -21,7 +21,7 @@ import { SessionModelSelectionV1Schema } from '@happier-dev/protocol/providers/m
 import { SessionProviderBindingMetadataV1Schema } from '@happier-dev/protocol/providers/sessions/bindingMetadataV1';
 import type { AccountScopedCryptoMaterial, BackendTargetRefV1, BackendTargetRefV2, BackendTargetRefV2Input, AgentExecutionTargetV1 } from '@happier-dev/protocol';
 import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaqueIdentifier';
-import * as z from 'zod';
+import * as z from 'zod/mini';
 import {
   resolveConcreteBackendTargetRefV2,
   resolveConcreteCompatBackendTargetRefs,
@@ -42,31 +42,27 @@ const MAX_SEALED_RESPAWN_ENVIRONMENT_CIPHERTEXT_CHARS = 65_536;
 type RespawnDescriptorEncryptionMaterial = AccountScopedCryptoMaterial;
 
 const SealedRespawnEnvironmentVariablesSchema = z.discriminatedUnion('format', [
-  z.object({
+  z.strictObject({
     format: z.literal('account_scoped_v1'),
-    ciphertext: z.string().min(1).max(MAX_SEALED_RESPAWN_ENVIRONMENT_CIPHERTEXT_CHARS),
-  }).strict(),
-  z.object({
+    ciphertext: z.string().check(z.minLength(1), z.maxLength(MAX_SEALED_RESPAWN_ENVIRONMENT_CIPHERTEXT_CHARS)),
+  }),
+  z.strictObject({
     format: z.literal('device_local_v1'),
-    ciphertext: z.string().min(1).max(MAX_SEALED_RESPAWN_ENVIRONMENT_CIPHERTEXT_CHARS),
-  }).strict(),
+    ciphertext: z.string().check(z.minLength(1), z.maxLength(MAX_SEALED_RESPAWN_ENVIRONMENT_CIPHERTEXT_CHARS)),
+  }),
 ]);
 
-const TerminalTmuxSpawnOptionsSchema: z.ZodType<NonNullable<TerminalSpawnOptions['tmux']>> = z
-  .object({
-    sessionName: z.string().optional(),
-    isolated: z.boolean().optional(),
-    tmpDir: z.union([z.string(), z.null()]).optional(),
-  })
-  .passthrough();
+const TerminalTmuxSpawnOptionsSchema: z.ZodMiniType<NonNullable<TerminalSpawnOptions['tmux']>> = z.looseObject({
+    sessionName: z.optional(z.string()),
+    isolated: z.optional(z.boolean()),
+    tmpDir: z.optional(z.union([z.string(), z.null()])),
+  });
 
-const TerminalSpawnOptionsSchema: z.ZodType<TerminalSpawnOptions> = z
-  .object({
-    mode: z.enum(TERMINAL_MODES).optional(),
-    tmux: TerminalTmuxSpawnOptionsSchema.optional(),
-    herdr: z.object({ sessionName: z.string().optional() }).optional(),
-  })
-  .passthrough();
+const TerminalSpawnOptionsSchema: z.ZodMiniType<TerminalSpawnOptions> = z.looseObject({
+    mode: z.optional(z.enum(TERMINAL_MODES)),
+    tmux: z.optional(TerminalTmuxSpawnOptionsSchema),
+    herdr: z.optional(z.object({ sessionName: z.optional(z.string()) })),
+  });
 
 function pickPersistedEnvironmentVariables(value: unknown): Record<string, string> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -322,43 +318,40 @@ function canonicalizeSessionRunnerRespawnDescriptorIngress(value: unknown): unkn
   };
 }
 
-export const SessionRunnerRespawnDescriptorSchema = z
-  .preprocess(canonicalizeSessionRunnerRespawnDescriptorIngress, z
-  .object({
+export const SessionRunnerRespawnDescriptorSchema = (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(canonicalizeSessionRunnerRespawnDescriptorIngress), z.looseObject({
     version: z.union([z.literal(1), z.literal(2)]),
     directory: z.string(),
-    directoryKind: z.enum(['path', 'managed']).optional(),
+    directoryKind: z.optional(z.enum(['path', 'managed'])),
     sessionCreationTag: z.optional(SessionCreationTagV1Schema),
     agentTarget: z.optional(AgentExecutionTargetV1Schema),
-    backendTarget: z.union([BackendTargetRefSchema, BackendTargetRefV2Schema]).optional(),
+    backendTarget: z.optional(z.union([BackendTargetRefSchema, BackendTargetRefV2Schema])),
     backendTargetV2: z.optional(BackendTargetRefV2Schema),
-    resume: z.string().optional(),
-    vendorResumeId: z.string().optional(),
-    existingSessionId: z.string().optional(),
-    spawnNonce: z.string().optional(),
-    transcriptStorage: z.enum(['persisted', 'direct']).optional(),
-    terminal: TerminalSpawnOptionsSchema.optional(),
-    windowsRemoteSessionLaunchMode: z.enum(['hidden', 'windows_terminal', 'console']).optional(),
-    windowsRemoteSessionConsole: z.enum(['hidden', 'visible']).optional(),
-    windowsTerminalWindowName: z.string().optional(),
-    profileId: z.string().optional(),
-    permissionMode: z.string().optional(),
-    permissionModeUpdatedAt: z.number().int().optional(),
-    agentModeId: z.string().optional(),
-    agentModeUpdatedAt: z.number().int().optional(),
+    resume: z.optional(z.string()),
+    vendorResumeId: z.optional(z.string()),
+    existingSessionId: z.optional(z.string()),
+    spawnNonce: z.optional(z.string()),
+    transcriptStorage: z.optional(z.enum(['persisted', 'direct'])),
+    terminal: z.optional(TerminalSpawnOptionsSchema),
+    windowsRemoteSessionLaunchMode: z.optional(z.enum(['hidden', 'windows_terminal', 'console'])),
+    windowsRemoteSessionConsole: z.optional(z.enum(['hidden', 'visible'])),
+    windowsTerminalWindowName: z.optional(z.string()),
+    profileId: z.optional(z.string()),
+    permissionMode: z.optional(z.string()),
+    permissionModeUpdatedAt: z.optional(z.number().check(z.int())),
+    agentModeId: z.optional(z.string()),
+    agentModeUpdatedAt: z.optional(z.number().check(z.int())),
     modelSelection: z.optional(SessionModelSelectionV1Schema),
-    modelId: z.string().optional(),
-    modelUpdatedAt: z.number().int().optional(),
+    modelId: z.optional(z.string()),
+    modelUpdatedAt: z.optional(z.number().check(z.int())),
     providerBindingMetadataV1: z.optional(SessionProviderBindingMetadataV1Schema),
-    sessionConfigOptionOverrides: z.unknown().optional(),
-    environmentVariables: z.record(z.string(), z.string()).optional(),
-    sealedEnvironmentVariables: SealedRespawnEnvironmentVariablesSchema.optional(),
-    connectedServices: z.unknown().optional(),
+    sessionConfigOptionOverrides: z.optional(z.unknown()),
+    environmentVariables: z.optional(z.record(z.string(), z.string())),
+    sealedEnvironmentVariables: z.optional(SealedRespawnEnvironmentVariablesSchema),
+    connectedServices: z.optional(z.unknown()),
     connectedServiceMaterializationIdentityV1: z.optional(ConnectedServiceMaterializationIdentityV1Schema),
     capabilitySelection: z.optional(SessionCapabilitySelectionV1Schema),
     runtimeDescriptorV1: z.optional(RuntimeDescriptorV1Schema),
-  })
-  .passthrough().superRefine((value, ctx) => {
+  }).check(z.superRefine((value, ctx) => {
     const backendTargetRefs = value.backendTarget
       ? resolveConcreteCompatBackendTargetRefs(value.backendTarget)
       : null;
@@ -368,21 +361,21 @@ export const SessionRunnerRespawnDescriptorSchema = z
     if (value.backendTargetV2) {
       if (value.version !== 1) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['backendTargetV2'],
           message: 'Canonical backend target shadow is reserved for native descriptor V1 compatibility',
         });
       }
       if (!backendTargetRefs) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['backendTarget'],
           message: 'Canonical backend target shadow requires a legacy backend target carrier',
         });
       } else if (!backendTargetV2ShadowRefs
         || !areBackendTargetRefV1Equal(backendTargetRefs.backendTarget, backendTargetV2ShadowRefs.backendTarget)) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['backendTargetV2'],
           message: 'Canonical backend target shadow must project to the legacy backend target carrier',
         });
@@ -398,7 +391,7 @@ export const SessionRunnerRespawnDescriptorSchema = z
         : null;
     if (value.modelSelection && value.modelSelection.ref.agentTargetKey !== semanticTargetKey) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['modelSelection', 'ref', 'agentTargetKey'],
         message: 'Model selection agent target must match the persisted Session target',
       });
@@ -407,14 +400,14 @@ export const SessionRunnerRespawnDescriptorSchema = z
     const hasProviderContinuity = providerConnectionId !== null || value.providerBindingMetadataV1 !== undefined;
     if (value.version === 1 && hasProviderContinuity) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['version'],
         message: 'Provider-bound respawn continuity requires descriptor version 2',
       });
     }
     if (value.version === 2 && !hasProviderContinuity) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['version'],
         message: 'Respawn descriptor version 2 is reserved for Provider-bound continuity',
       });
@@ -422,19 +415,19 @@ export const SessionRunnerRespawnDescriptorSchema = z
     if (value.providerBindingMetadataV1) {
       if (!providerConnectionId) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['providerBindingMetadataV1'],
           message: 'Provider binding continuity requires a Provider-bound model selection',
         });
       } else if (value.providerBindingMetadataV1.connectionId !== providerConnectionId) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['providerBindingMetadataV1', 'connectionId'],
           message: 'Provider binding continuity must match the selected Provider connection',
         });
       } else if (!value.providerBindingMetadataV1.model) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['providerBindingMetadataV1', 'model'],
           message: 'Provider binding continuity requires the retained active model',
         });
@@ -443,19 +436,19 @@ export const SessionRunnerRespawnDescriptorSchema = z
           !== value.modelSelection?.ref.modelId
       ) {
         ctx.addIssue({
-          code: z.ZodIssueCode.custom,
+          code: "custom",
           path: ['providerBindingMetadataV1', 'model', 'id'],
           message: 'Provider binding model must match the selected active model',
         });
       }
     } else if (providerConnectionId) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         path: ['providerBindingMetadataV1'],
         message: 'Provider-bound model selection requires binding continuity metadata',
       });
     }
-  }));
+  })));
 
 export type SessionRunnerRespawnDescriptor = z.infer<typeof SessionRunnerRespawnDescriptorSchema>;
 

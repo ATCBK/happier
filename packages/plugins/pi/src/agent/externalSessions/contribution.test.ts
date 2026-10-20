@@ -125,6 +125,81 @@ afterEach(async () => {
 });
 
 describe('Pi pure External Sessions contribution leaf', () => {
+  it.each([false, true])('marks history incomplete when an oversized valid row blocks backward progress (continuation: %s)', async (continuation) => {
+    const { agentDir, sessionRoot } = await createAgentDir();
+    const sessionId = 'pi-oversized-row';
+    const sessionFile = join(sessionRoot, `${sessionId}.jsonl`);
+    await writeFile(sessionFile, [
+      line({ type: 'session', version: 3, id: sessionId, timestamp: '2026-08-16T10:00:00.000Z', cwd: '/workspace' }),
+      line({
+        type: 'message', id: 'root', parentId: null,
+        timestamp: '2026-08-16T10:00:01.000Z',
+        message: { role: 'user', content: 'root' },
+        pad: '🙂'.repeat(2_000),
+      }),
+      ...(continuation ? [line({
+        type: 'message', id: 'leaf', parentId: 'root',
+        timestamp: '2026-08-16T10:00:02.000Z',
+        message: { role: 'assistant', content: 'latest answer' },
+      })] : []),
+    ].join(''), 'utf8');
+    const contribution = createPiExternalSessionsContribution({ env: {} });
+    const request = {
+      ...invocation(4_096), source: { kind: 'piAgentDir' as const, agentDir, sessionFile },
+      remoteSessionId: sessionId, direction: 'older' as const, maxItems: 10,
+    };
+    const first = await contribution.pageTranscript(request);
+    const blocked = continuation && first.ok && first.value.nextCursor
+      ? await contribution.pageTranscript({ ...request, cursor: first.value.nextCursor })
+      : first;
+    if (continuation) {
+      expect(first).toMatchObject({ ok: true, value: { hasMore: true, nextCursor: expect.any(String) } });
+    }
+    expect(blocked).toMatchObject({
+      ok: true, value: { items: [], hasMore: false, nextCursor: null, truncated: true },
+    });
+    if (!continuation && blocked.ok) expect(blocked.value.tailCursor).toBeUndefined();
+  });
+
+  it('reports a failed follow read when the current anchor exceeds its byte budget', async () => {
+    const { agentDir, sessionRoot } = await createAgentDir();
+    const sessionId = 'pi-oversized-anchor';
+    const sessionFile = join(sessionRoot, `${sessionId}.jsonl`);
+    await writeFile(sessionFile, [
+      line({ type: 'session', version: 3, id: sessionId, timestamp: '2026-08-16T10:00:00.000Z', cwd: '/workspace' }),
+      line({
+        type: 'message', id: 'root', parentId: null,
+        timestamp: '2026-08-16T10:00:01.000Z',
+        message: { role: 'user', content: 'root' }, pad: '🙂'.repeat(2_000),
+      }),
+    ].join(''), 'utf8');
+    const contribution = createPiExternalSessionsContribution({ env: {} });
+    const source = { kind: 'piAgentDir' as const, agentDir, sessionFile };
+    const initial = await contribution.pageTranscript({
+      ...invocation(), source, remoteSessionId: sessionId, direction: 'older', maxItems: 10,
+    });
+    expect(initial.ok).toBe(true);
+    if (!initial.ok || !initial.value.tailCursor) throw new Error('Expected a readable initial tail.');
+    await expect(contribution.readAfterTranscript({
+      ...invocation(4_096), source, remoteSessionId: sessionId,
+      cursor: initial.value.tailCursor, maxItems: 10,
+    })).resolves.toMatchObject({ ok: true, value: { outcome: 'read_failed' } });
+  });
+
+  it('rejects genuinely malformed UTF-8 in backward transcript records', async () => {
+    const { agentDir, sessionRoot } = await createAgentDir();
+    const sessionId = 'pi-malformed-utf8';
+    const sessionFile = join(sessionRoot, `${sessionId}.jsonl`);
+    await writeFile(sessionFile, Buffer.concat([
+      Buffer.from(line({ type: 'session', version: 3, id: sessionId, timestamp: '2026-08-16T10:00:00.000Z', cwd: '/workspace' })),
+      Buffer.from('{"type":"message","pad":"'), Buffer.from([0xc3, 0x28]), Buffer.from('"}\n'),
+    ]));
+    await expect(createPiExternalSessionsContribution({ env: {} }).pageTranscript({
+      ...invocation(), source: { kind: 'piAgentDir', agentDir, sessionFile },
+      remoteSessionId: sessionId, direction: 'older', maxItems: 10,
+    })).resolves.toMatchObject({ ok: false, code: 'agent_error' });
+  });
+
   it('resolves a linked native header without an implicit byte cutoff and respects an explicit budget', async () => {
     const { agentDir, sessionRoot } = await createAgentDir();
     const sessionFile = join(sessionRoot, 'wide-header.jsonl');
@@ -697,9 +772,8 @@ describe('Pi pure External Sessions contribution leaf', () => {
       firstUserText: `${'word '.repeat(60)}tail`,
     });
     // Happier prepends its own base system prompt to the first Pi user turn;
-    // surfacing that preamble as the title is worse than showing no title at all.
-    // Which block opens the preamble depends on the session's prompt settings, so
-    // every opening block the canonical producer can emit must be rejected.
+    // Derive the title from the user text after the canonical prompt prefix,
+    // whichever block the session's prompt settings put first.
     await createUntitledSessionFile({
       sessionRoot,
       sessionId: 'pi-untitled-title-preamble',
@@ -728,8 +802,8 @@ describe('Pi pure External Sessions contribution leaf', () => {
     const longTitle = byId.get('pi-untitled-long')?.title ?? '';
     expect(longTitle).toHaveLength(120);
     expect(longTitle.endsWith('...')).toBe(true);
-    expect(byId.get('pi-untitled-title-preamble')).not.toHaveProperty('title');
-    expect(byId.get('pi-untitled-options-preamble')).not.toHaveProperty('title');
+    expect(byId.get('pi-untitled-title-preamble')?.title).toBe('real prompt');
+    expect(byId.get('pi-untitled-options-preamble')?.title).toBe('real prompt');
   });
 
   it('starts a fresh bounded scan after EOF so an unchanged source can be paged again', async () => {
@@ -1524,6 +1598,11 @@ describe('Pi pure External Sessions contribution leaf', () => {
     const env = { PI_CODING_AGENT_SESSION_DIR: join(root, 'legacy-sessions') };
     const contribution = createPiExternalSessionsContribution({ env });
 
+    expect(await contribution.resolveSource({ ...invocation(), source: { kind: 'piAgentDir' }, includeAccountingSource: false })).toEqual({
+      ok: true,
+      value: { source: { kind: 'piAgentDir', agentDir: expect.any(String), sessionsRoot: await realpath(join(root, 'legacy-sessions')) } },
+    });
+
     const source = await contribution.resolveSource({
       ...invocation(),
       source: { kind: 'piAgentDir' },
@@ -1584,7 +1663,57 @@ describe('Pi pure External Sessions contribution leaf', () => {
     });
   });
 
-  it('fails a page rather than projecting an unknown Pi entry as fictional prose', async () => {
+  it.each(['unknown', 'malformed', 'unaddressable', 'invalid-json', 'missing-type'])('keeps Pi messages pageable around an %s record', async (shape) => {
+    const { agentDir, sessionRoot } = await createAgentDir();
+    const remoteSessionId = `tolerant-${shape}`;
+    const sessionFile = await createSessionFile({ sessionRoot, sessionId: remoteSessionId,
+      createdAt: '2026-07-20T10:00:00.000Z', title: 'baseline' });
+    const contribution = createPiExternalSessionsContribution({ env: { PI_CODING_AGENT_DIR: agentDir } });
+    const request = { ...invocation(), source: { kind: 'piAgentDir' as const, agentDir, sessionFile },
+      remoteSessionId, direction: 'older' as const, maxItems: 10 };
+    const initial = await contribution.pageTranscript(request);
+    expect(initial.ok).toBe(true);
+    if (!initial.ok || !initial.value.tailCursor) return;
+    const parentId = `${remoteSessionId}-title`;
+    await appendFile(sessionFile, [
+      shape === 'invalid-json' ? 'invalid-json\n' : line(shape === 'unaddressable' ? { type: 'future', payload: 'private-native-payload' } : {
+        id: 'unsupported', parentId, timestamp: '2026-07-20T10:00:01.000Z',
+        type: shape === 'missing-type' ? undefined : shape === 'unknown' ? 'future' : 'message', message: { role: 'assistant', content: 42 },
+        payload: 'private-native-payload',
+      }),
+      line({ type: 'message', id: 'after', parentId: shape === 'unaddressable' || shape === 'invalid-json' ? parentId : 'unsupported',
+        timestamp: '2026-07-20T10:00:02.000Z', message: { role: 'user', content: 'after the unknown record' } }),
+    ].join(''));
+    let cursor = initial.value.tailCursor;
+    const advancedItems = [];
+    for (let index = 0; index < 4; index += 1) {
+      const next = await contribution.readAfterTranscript({ ...request, cursor, maxItems: 1 });
+      expect(next.ok).toBe(true);
+      if (!next.ok || next.value.outcome === 'already_current') break;
+      expect(next.value.outcome).toBe('advanced');
+      if (next.value.outcome !== 'advanced') return;
+      advancedItems.push(...next.value.items);
+      cursor = next.value.nextCursor;
+    }
+    expect(advancedItems).toHaveLength(2);
+    expect(advancedItems[0]).toMatchObject({ messageRole: 'agent' });
+    expect(advancedItems[1]?.raw).toMatchObject({ role: 'user', content: { text: 'after the unknown record' } });
+    const pageItems = [];
+    let olderCursor: string | undefined;
+    do {
+      const page = await contribution.pageTranscript({ ...request, maxItems: 1, cursor: olderCursor });
+      expect(page.ok).toBe(true);
+      if (!page.ok) return;
+      pageItems.unshift(...page.value.items);
+      olderCursor = page.value.nextCursor ?? undefined;
+    } while (olderCursor);
+    expect(pageItems).toHaveLength(3);
+    expect(pageItems.slice(1)).toEqual(advancedItems);
+    expect(pageItems.every((item) => TranscriptRawRecordV1Schema.safeParse(item.raw).success)).toBe(true);
+    expect(JSON.stringify(pageItems)).not.toContain('private-native-payload');
+  });
+
+  it('represents an unknown Pi entry without disclosing its native body', async () => {
     const { agentDir, sessionRoot } = await createAgentDir();
     const sessionFile = join(sessionRoot, '2026-07-20T10-00-00-000Z_pi-unknown-entry.jsonl');
     await writeFile(sessionFile, [
@@ -1610,12 +1739,14 @@ describe('Pi pure External Sessions contribution leaf', () => {
       direction: 'older',
       maxItems: 10,
     })).resolves.toMatchObject({
-      ok: false,
-      code: 'agent_error',
+      ok: true,
+      value: { items: [{ messageRole: 'agent', raw: { role: 'agent', content: {
+        type: 'acp', agentId: 'pi', data: { type: 'message', message: 'Agent emitted an unsupported content block.' },
+      } } }], diagnostics: [{ code: 'external_sessions_transcript_unsupported_record' }] },
     });
   });
 
-  it('fails a page rather than silently skipping a malformed known Pi metadata entry', async () => {
+  it('represents malformed known Pi metadata as an unsupported row', async () => {
     const { agentDir, sessionRoot } = await createAgentDir();
     const sessionFile = join(sessionRoot, '2026-07-20T10-05-00-000Z_pi-malformed-known.jsonl');
     await writeFile(sessionFile, [
@@ -1640,12 +1771,12 @@ describe('Pi pure External Sessions contribution leaf', () => {
       direction: 'older',
       maxItems: 10,
     })).resolves.toMatchObject({
-      ok: false,
-      code: 'agent_error',
+      ok: true,
+      value: { items: [{ messageRole: 'agent' }], diagnostics: [{ code: 'external_sessions_transcript_unsupported_record' }] },
     });
   });
 
-  it('fails a malformed Pi branch summary rather than converting it to agent prose', async () => {
+  it('represents a malformed Pi branch summary without disclosing native prose', async () => {
     const { agentDir, sessionRoot } = await createAgentDir();
     const sessionFile = join(sessionRoot, '2026-07-20T10-10-00-000Z_pi-malformed-summary.jsonl');
     await writeFile(sessionFile, [
@@ -1669,12 +1800,12 @@ describe('Pi pure External Sessions contribution leaf', () => {
       direction: 'older',
       maxItems: 10,
     })).resolves.toMatchObject({
-      ok: false,
-      code: 'agent_error',
+      ok: true,
+      value: { items: [{ messageRole: 'agent' }], diagnostics: [{ code: 'external_sessions_transcript_unsupported_record' }] },
     });
   });
 
-  it('fails a page rather than letting a structurally malformed Pi record disappear', async () => {
+  it('represents a structurally malformed Pi record without inventing native ancestry', async () => {
     const { agentDir, sessionRoot } = await createAgentDir();
     const sessionFile = join(sessionRoot, '2026-07-20T10-15-00-000Z_pi-malformed-record.jsonl');
     await writeFile(sessionFile, [
@@ -1698,8 +1829,8 @@ describe('Pi pure External Sessions contribution leaf', () => {
       direction: 'older',
       maxItems: 10,
     })).resolves.toMatchObject({
-      ok: false,
-      code: 'agent_error',
+      ok: true,
+      value: { items: [{ messageRole: 'agent' }], diagnostics: [{ code: 'external_sessions_transcript_unsupported_record' }] },
     });
   });
 
@@ -2227,7 +2358,7 @@ describe('Pi pure External Sessions contribution leaf', () => {
     ]);
   });
 
-  it('fails readAfter before advancing over unsupported Pi content', async () => {
+  it('advances readAfter with a visible unsupported Pi row and benign diagnostic', async () => {
     const { agentDir, sessionRoot } = await createAgentDir();
     const sessionFile = await createSessionFile({
       sessionRoot,
@@ -2266,8 +2397,10 @@ describe('Pi pure External Sessions contribution leaf', () => {
       cursor: initial.value.tailCursor,
       maxItems: 1,
     })).resolves.toMatchObject({
-      ok: false,
-      code: 'agent_error',
+      ok: true,
+      value: { outcome: 'advanced', items: [{ messageRole: 'agent' }], diagnostics: [{
+        code: 'external_sessions_transcript_unsupported_record', severity: 'benign', count: 1,
+      }] },
     });
   });
 

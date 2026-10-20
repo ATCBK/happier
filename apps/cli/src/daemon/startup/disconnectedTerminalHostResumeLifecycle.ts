@@ -27,6 +27,7 @@ export function createDisconnectedTerminalHostResumeLifecycle(input: Readonly<{
   const barrier = createSessionStopOperationBarrier();
 
   return {
+    registerPhysicalStopEffect: barrier.registerPhysicalStopEffect,
     waitForStop: async (sessionId: string): Promise<void> => {
       await barrier.wait(sessionId);
     },
@@ -75,6 +76,7 @@ export function createDisconnectedTerminalHostResumeLifecycle(input: Readonly<{
     runStop: async (
       sessionId: string,
       stop: () => Promise<StopLifecycleResult>,
+      physicalEffect?: Promise<void>,
     ): Promise<StopSessionResult> =>
       await barrier.run(sessionId, async () => {
         const result = await stop();
@@ -82,6 +84,6 @@ export function createDisconnectedTerminalHostResumeLifecycle(input: Readonly<{
           await input.retireCandidate(result.retireCandidate);
         }
         return result.stopResult;
-      }),
+      }, physicalEffect),
   };
 }

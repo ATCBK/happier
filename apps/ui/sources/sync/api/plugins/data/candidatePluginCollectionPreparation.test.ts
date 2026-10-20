@@ -117,6 +117,7 @@ const secondSourceRow = Object.freeze({
 type PreparationHarnessOptions = Readonly<{
     sourcePage?: () => Promise<Response>;
     onMigrate?: () => void;
+    expectedSourceRevision?: number;
     stageResponse?: (init?: RequestInit) => Promise<Response> | Response;
     collectionLimits?: PluginDataCollectionsCapabilities;
 }>;
@@ -219,11 +220,11 @@ async function loadPreparationHarness(options: PreparationHarnessOptions = {}) {
         },
     });
     const preparation = await import('./candidatePluginCollectionPreparation');
-    const migrate = vi.fn((value: Readonly<Record<string, unknown>>) => {
+    const migrate = vi.fn((value: Readonly<Record<string, unknown>>, context?: Readonly<{ currentRevision: number }>) => {
         options.onMigrate?.();
         return {
             ...value,
-            migrated: true,
+            migrated: options.expectedSourceRevision === undefined || context?.currentRevision === options.expectedSourceRevision,
         };
     });
     const collectionMigrations: PluginAccountCollectionMigrationRuntimeProjection = Object.freeze({
@@ -262,6 +263,21 @@ afterEach(() => {
 });
 
 describe('active Plugin Collection candidate preparation', () => {
+    it('stages revision-dependent migration output from the validated physical source row', async () => {
+        const harness = await loadPreparationHarness({ expectedSourceRevision: sourceRow.revision });
+
+        await expect(harness.operation.prepare()).resolves.toEqual({ kind: 'prepared' });
+        const stageCall = harness.request.mock.calls.find(([path]) => (
+            path === '/v1/plugins/data/candidate-preparation/stage'
+        ));
+        expect(JSON.parse(String(stageCall?.[1]?.body))).toMatchObject({
+            items: [{
+                source: { rowId: sourceRow.rowId, revision: sourceRow.revision },
+                target: { content: { t: 'plain', v: { migrated: true } } },
+            }],
+        });
+    });
+
     it('stages only target callback output bound to the exact candidate in one source-page batch', async () => {
         const harness = await loadPreparationHarness({
             sourcePage: async () => jsonResponse({ rows: [sourceRow, secondSourceRow] }),
@@ -273,12 +289,12 @@ describe('active Plugin Collection candidate preparation', () => {
             id: 'task-1',
             status: 'open',
             title: 'Prepare before selecting',
-        });
+        }, { currentRevision: sourceRow.revision });
         expect(harness.migrate).toHaveBeenNthCalledWith(2, {
             id: 'task-2',
             status: 'closed',
             title: 'Prepare the second row',
-        });
+        }, { currentRevision: secondSourceRow.revision });
 
         const stageCall = harness.request.mock.calls.find(([path]) => (
             path === '/v1/plugins/data/candidate-preparation/stage'

@@ -7,9 +7,9 @@ import { useRequireInboxAvailable } from '@/hooks/inbox/useRequireInboxAvailable
 /** The Inbox route owns its one focus parameter, `item` (`createInboxItemRoute`). */
 export function InboxPage() {
     const enabled = useRequireInboxAvailable();
-    const params = useLocalSearchParams<{ item?: string | string[]; invocationId?: string | string[] }>();
+    const params = useLocalSearchParams<{ item?: string | string[]; invocationId?: string | string[]; jumpSeq?: string | string[] }>();
     const rawItem = Array.isArray(params.item) ? params.item[0] : params.item;
-    const focusedItem = React.useMemo(() => readInboxItemFocus(rawItem, params.invocationId), [rawItem, params.invocationId]);
+    const focusedItem = React.useMemo(() => readInboxItemFocus(rawItem, params.invocationId, params.jumpSeq), [rawItem, params.invocationId, params.jumpSeq]);
     if (!enabled) return null;
     return <InboxView focusedItem={focusedItem} />;
 }

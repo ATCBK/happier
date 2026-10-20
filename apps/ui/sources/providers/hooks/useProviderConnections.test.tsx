@@ -21,6 +21,7 @@ import { buildCustomProviderTemplate, createCustomProviderDraft } from '@/provid
 import { TokenStorage } from '@/auth/storage/tokenStorage';
 import { applyProviderCatalogSnapshot } from '@/sync/store/settings/providerCatalogSnapshot';
 import { captureActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
 const machineRpcWithServerScope = vi.hoisted(() => vi.fn());
 const providerHarness = createProviderSettingsHarness({ machines: [] });
@@ -41,8 +42,12 @@ describe('useProviderConnections', () => {
         await account.reset();
     });
     beforeEach(async () => {
+        providerHarness.reset();
+        providerHarness.intercept(RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE, request => machineRpcWithServerScope(request));
         machineRpcWithServerScope.mockReset();
-        serverId = (await account.restore({ waivedActions: ['providers.connections.delete'] })).serverId;
+        serverId = (await account.restore({ waivedActions: ['providers.connections.delete'],
+            machines: ['machine-a', 'machine-b'].map(id => createMachineFixture({ id, active: true, activeAt: Date.now() })),
+        })).serverId;
         otherServerId = await account.addHome({ name: 'Other Provider Home', serverUrl: 'https://provider-settings-other.test', accountId: 'account-a', active: false });
     });
 
@@ -222,7 +227,7 @@ describe('useProviderConnections', () => {
             }),
             { initialProps: { machineId: 'machine-a' } },
         );
-        expect(hook.getCurrent().data?.connections[0]?.connectionId).toBe('pc_a');
+        await vi.waitFor(() => expect(hook.getCurrent().data?.connections[0]?.connectionId).toBe('pc_a'));
 
         await hook.rerender({ machineId: 'machine-b' });
         expect(hook.getCurrent().data?.connections).toEqual([]);
@@ -249,7 +254,7 @@ describe('useProviderConnections', () => {
         const screen = await renderScreen(
             <Harness machineId="machine-a" serverId={serverId} connectionId="pc_a" />,
         );
-        expect(observations.at(-1)?.connectionId).toBe('pc_a');
+        await vi.waitFor(() => expect(observations.at(-1)?.connectionId).toBe('pc_a'));
 
         for (const next of [
             { machineId: 'machine-b', serverId, connectionId: 'pc_a' },
@@ -276,10 +281,12 @@ describe('useProviderConnections', () => {
             serverId,
         }));
         const refreshFromAccountA = hook.getCurrent().refresh;
-        expect(machineRpcWithServerScope).toHaveBeenCalledTimes(1);
+        await vi.waitFor(() => expect(machineRpcWithServerScope).toHaveBeenCalledTimes(1));
 
         await act(async () => {
-            await account.restore({ accountId: 'account-b' });
+            await account.restore({ accountId: 'account-b',
+                machines: [createMachineFixture({ id: 'machine-a', active: true, activeAt: Date.now() })],
+            });
             await hook.rerender();
         });
 
@@ -327,16 +334,17 @@ describe('useProviderConnections', () => {
     });
 
     it('reports a successful transport with an invalid response as a contract failure, not an unreachable endpoint', async () => {
-        machineRpcWithServerScope.mockResolvedValueOnce({
-            ...createProviderConnectionsDescribeFixture({ connections: [] }),
-            rawSecret: 'must-not-surface',
-        });
+        machineRpcWithServerScope.mockResolvedValueOnce(createProviderConnectionsDescribeFixture({ connections: [] }));
+        providerHarness.transformAcknowledgement(RPC_METHODS.DAEMON_PROVIDERS_CONNECTIONS_DESCRIBE, (_request, acknowledgement) => ({
+            ...acknowledgement,
+            result: { ...createProviderConnectionsDescribeFixture({ connections: [] }), rawSecret: 'must-not-surface' },
+        }));
 
         const hook = await renderHook(() => useProviderConnections({
             enabled: true, machineId: 'machine-a', serverId,
         }));
 
-        expect(hook.getCurrent()).toMatchObject({
+        await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({
             data: { connections: [] },
             error: null,
             machineError: {
@@ -347,7 +355,7 @@ describe('useProviderConnections', () => {
                 action: 'retry',
             },
             loading: false,
-        });
+        }));
         expect(hook.getCurrent().machineError?.code).not.toBe('provider_endpoint_unavailable');
     });
 });

@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/mini";
 import { type Fastify } from "../../types";
 import { db, getActivePrismaRuntime } from "@/storage/db";
 import { eventRouter } from '@/app/events/eventRouter';
@@ -132,7 +132,7 @@ export function pushRoutes(app: Fastify) {
 
     // Get Push Tokens API
     app.get('/v1/push-tokens', {
-        schema: { querystring: z.object({ projectionVersion: z.coerce.number().int().optional(), suppressIfComputerFocused: z.enum(['0', '1']).optional() }) },
+        schema: { querystring: z.object({ projectionVersion: z.optional(z.coerce.number().check(z.int())), suppressIfComputerFocused: z.optional(z.enum(['0', '1'])) }) },
         preHandler: app.authenticate
     }, async (request, reply) => {
         const requestHomeEnv = await readRequestHomeEnv(request);

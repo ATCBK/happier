@@ -89,6 +89,12 @@ describe('CLI command-surface manifest', () => {
       'copilot',
       'coderabbit',
       'deepsec',
+      'codebuddy',
+      'custom-acp',
+      'devin',
+      'droid',
+      'fx',
+      'herdr',
     ]));
 
     for (const entry of entries) {

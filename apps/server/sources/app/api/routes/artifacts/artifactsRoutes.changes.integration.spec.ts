@@ -12,6 +12,7 @@ import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { withAuthenticatedTestApp } from "../../testkit/sqliteFastify";
 import { artifactsRoutes } from "./artifactsRoutes";
+import { withSqliteReadSnapshot } from '@/storage/prisma';
 
 const { emitUpdate, randomKeyNaked } =
     vi.hoisted(() => ({
@@ -19,10 +20,8 @@ const { emitUpdate, randomKeyNaked } =
         randomKeyNaked: vi.fn(() => "upd-id"),
     }));
 
-vi.mock("@/app/events/eventRouter", async () => ({
-    ...await import("@/app/events/eventPayloadBuilders"),
-    eventRouter: { emitUpdate },
-}));
+// Keep the barrel and payload builders real: their import graph reaches the
+// barrel again, so an async barrel mock would await its own unresolved factory.
 vi.mock("@/app/events/connectionEventRouter", () => ({ eventRouter: { emitUpdate } }));
 
 vi.mock("@/utils/keys/randomKeyNaked", () => ({ randomKeyNaked }));
@@ -111,6 +110,102 @@ describe("artifactsRoutes (AccountChange integration)", () => {
             const invalid = await app.inject({ method: 'POST', url: '/v1/artifacts/read', headers,
                 payload: { artifactIds: [ids[0]], includeBody: true } });
             expect(invalid.statusCode).toBe(400);
+        });
+    });
+
+    it.each(['plain', 'e2ee'] as const)('reads a retained %s inventory without database round trips growing per Artifact', async mode => {
+        const owner = await db.account.create({ data: { encryptionMode: mode,
+            ...(mode === 'e2ee' ? createSignedAccountContentBinding() : {}) } });
+        // The live failing batch had 500 documents; this is a workload, not a new product limit.
+        const ids = Array.from({ length: 500 }, () => crypto.randomUUID());
+        const key = mode === 'plain' ? Buffer.from(ARTIFACT_PLAIN_DATA_KEY_MARKER, 'base64')
+            : new Uint8Array(sealEncryptedDataKeyEnvelopeV1({ dataKey: tweetnacl.randomBytes(32),
+                recipientPublicKey: owner.contentPublicKey!, randomBytes: tweetnacl.randomBytes }));
+        await db.artifact.createMany({ data: ids.map(id => ({ id, accountId: owner.id,
+            header: Buffer.from(mode === 'plain' ? encodePlainArtifactStoredContent({ title: id }) : 'opaque-header', mode === 'plain' ? 'base64' : 'utf8'),
+            body: Buffer.from(mode === 'plain' ? encodePlainArtifactStoredContent({ body: id }) : 'opaque-body', mode === 'plain' ? 'base64' : 'utf8'),
+            dataEncryptionKey: key, headerVersion: 1, bodyVersion: 1, seq: 1 })) });
+        const reader = await withSqliteReadSnapshot(async tx => tx);
+        const restores: Array<() => void> = [];
+        let roundTrips = 0;
+        // Count actual database boundary operations while preserving every real query and policy decision.
+        for (const delegate of [reader.artifact, reader.account, reader.artifactKeyEnvelope, reader.publicSessionShare]) {
+            for (const name of ['findFirst', 'findUnique', 'findUniqueOrThrow', 'findMany'] as const) {
+                const original = delegate[name].bind(delegate);
+                Object.defineProperty(delegate, name, { configurable: true, writable: true,
+                    value: (...args: unknown[]) => { roundTrips += 1; return Reflect.apply(original, delegate, args); } });
+                restores.push(() => Object.defineProperty(delegate, name, { configurable: true, writable: true, value: original }));
+            }
+        }
+        try {
+            await withAuthenticatedTestApp(app => artifactsRoutes(app), async app => {
+                const read = async (artifactIds: string[]) => {
+                    roundTrips = 0;
+                    const response = await app.inject({ method: 'POST', url: '/v1/artifacts/read',
+                        headers: { 'x-test-user-id': owner.id }, payload: { artifactIds } });
+                    expect(response.statusCode, response.body).toBe(200);
+                    expect(response.json().items).toHaveLength(artifactIds.length);
+                    expect(response.json().items.every((item: { ok: boolean }) => item.ok)).toBe(true);
+                    return roundTrips;
+                };
+                const single = await read(ids.slice(0, 1));
+                expect(single).toBeGreaterThan(0);
+                expect(await read(ids)).toBe(single);
+            });
+        } finally {
+            for (const restore of restores.reverse()) restore();
+        }
+    });
+
+    it.each(['grant', 'mode', 'recipient-key', 'census'] as const)('readmits batch content after a captured %s changes', async change => {
+        const owner = await db.account.create({ data: { encryptionMode: 'e2ee', ...createSignedAccountContentBinding() } });
+        const viewer = await db.account.create({ data: { encryptionMode: 'e2ee', ...createSignedAccountContentBinding() } });
+        const late = await db.account.create({ data: { id: `0-${crypto.randomUUID()}`,
+            encryptionMode: 'e2ee', ...createSignedAccountContentBinding() } });
+        const id = crypto.randomUUID();
+        const dataKey = tweetnacl.randomBytes(32);
+        const wrap = (publicKey: Uint8Array) => new Uint8Array(sealEncryptedDataKeyEnvelopeV1({ dataKey,
+            recipientPublicKey: publicKey, randomBytes: tweetnacl.randomBytes }));
+        await db.artifact.create({ data: { id, accountId: owner.id, header: Buffer.from('opaque header'), body: Buffer.from('opaque body'),
+            dataEncryptionKey: wrap(owner.contentPublicKey!), headerVersion: 1, bodyVersion: 1 } });
+        await db.artifactAccountGrant.create({ data: { artifactId: id, accountId: viewer.id, accessLevel: 'view', createdByAccountId: owner.id } });
+        const { computeContentPublicKeyFingerprint } = await import('@happier-dev/protocol');
+        // Batch capture includes other recipients' envelopes. Admission must select the caller's tuple.
+        await db.artifactKeyEnvelope.create({ data: { artifactId: id, recipientAccountId: late.id,
+            encryptedDataKey: wrap(late.contentPublicKey!), recipientContentPublicKeyFingerprint: computeContentPublicKeyFingerprint(late.contentPublicKey!) } });
+        await db.artifactKeyEnvelope.create({ data: { artifactId: id, recipientAccountId: viewer.id,
+            encryptedDataKey: wrap(viewer.contentPublicKey!), recipientContentPublicKeyFingerprint: computeContentPublicKeyFingerprint(viewer.contentPublicKey!) } });
+        await withAuthenticatedTestApp(app => artifactsRoutes(app), async app => {
+            const request = () => app.inject({ method: 'POST', url: '/v1/artifacts/read',
+                headers: { 'x-test-user-id': viewer.id }, payload: { artifactIds: [id] } });
+            expect((await request()).json().items[0].ok).toBe(true);
+            const reader = await withSqliteReadSnapshot(async tx => tx);
+            const original = reader.$executeRawUnsafe.bind(reader);
+            let changed = false;
+            // Change the real writer after the capture snapshot closes, before policy readmission starts.
+            Object.defineProperty(reader, '$executeRawUnsafe', { configurable: true, writable: true,
+                value: async (...args: Parameters<typeof original>) => {
+                    const result = await original(...args);
+                    if (args[0] === 'ROLLBACK;' && !changed) {
+                        changed = true;
+                        if (change === 'grant') await db.artifactAccountGrant.deleteMany({ where: { artifactId: id, accountId: viewer.id } });
+                        if (change === 'mode') await db.account.update({ where: { id: owner.id }, data: { encryptionMode: 'plain' } });
+                        if (change === 'recipient-key') await db.account.update({ where: { id: viewer.id }, data: createSignedAccountContentBinding() });
+                        if (change === 'census') await db.artifactAccountGrant.create({ data: { artifactId: id, accountId: late.id,
+                            accessLevel: 'view', createdByAccountId: owner.id } });
+                    }
+                    return result;
+                } });
+            try {
+                const response = await request();
+                expect(changed).toBe(true);
+                expect(response.statusCode, response.body).toBe(200);
+                expect(response.json().items).toEqual([{ artifactId: id, ok: false,
+                    error: change === 'grant' ? 'artifact_not_found' : 'artifact_content_unavailable',
+                    status: change === 'grant' ? 404 : 409, retryable: change === 'census' }]);
+            } finally {
+                Object.defineProperty(reader, '$executeRawUnsafe', { configurable: true, writable: true, value: original });
+            }
         });
     });
 

@@ -213,15 +213,16 @@ export function deriveProviderAccountUsageUnusedCapacity(input: Readonly<{ histo
   }) };
 }
 
-export type ProviderAccountUsageEarlierWindowCurvesV1 =
-  | Readonly<{ status: 'unavailable'; reason: 'not_loaded' | 'unknown_window' }>
-  | Readonly<{
-    status: 'available';
-    /** Newest ended window first; each point sits on the shared elapsed-share axis of its own window. */
-    curves: readonly Readonly<{ window: ProviderAccountUsagePaceWindowV1; points: readonly Readonly<{ elapsedFraction: number; usedFraction: number }>[] }>[];
-    /** Earlier windows of the same meter that cannot be drawn beside the current one, with the reason. */
-    excluded: readonly Readonly<{ window: ProviderAccountUsagePaceWindowV1; reason: 'unknown_window' | 'entitlement_changed' | 'denominator_changed' | 'reset_changed' | 'inconsistent_counters' | 'counter_reset' | 'single_reading' }>[];
-  }>;
+export const ProviderAccountUsageEarlierWindowCurvesV1Schema = lazyZodSchema(() => z.discriminatedUnion('status', [
+  z.strictObject({ status: z.literal('unavailable'), reason: z.enum(['not_loaded', 'unknown_window']) }),
+  z.strictObject({ status: z.literal('available'),
+    curves: z.array(z.strictObject({ window: ProviderAccountUsagePaceWindowV1Schema,
+      points: z.array(z.strictObject({ elapsedFraction: z.number().check(z.minimum(0), z.maximum(1)), usedFraction: z.number().check(z.nonnegative()) })) })),
+    excluded: z.array(z.strictObject({ window: ProviderAccountUsagePaceWindowV1Schema,
+      reason: z.enum(['unknown_window', 'entitlement_changed', 'denominator_changed', 'reset_changed', 'inconsistent_counters', 'counter_reset', 'single_reading']) })),
+  }),
+]));
+export type ProviderAccountUsageEarlierWindowCurvesV1 = z.infer<typeof ProviderAccountUsageEarlierWindowCurvesV1Schema>;
 
 /**
  * Earlier ended windows of the current record's meter as curves for a "usual week" comparison. Window
@@ -248,6 +249,7 @@ export function deriveProviderAccountUsageEarlierWindowCurves(input: Readonly<{ 
     const incompatible = samples.map(previous => readProviderAccountUsageWindowComparabilityReason({ previous, current: input.current, meterId: input.meterId })).find(Boolean);
     if (incompatible) { exclude(incompatible); continue; }
     const points = new Map<number, number>();
+    let previous: number | undefined;
     let failure: (typeof excluded)[number]['reason'] | null = null;
     for (const sample of [...samples].sort((a, b) => a.observedAtMs - b.observedAtMs)) {
       const meter = sample.meters.find(value => value.meterId === input.meterId)!;
@@ -255,9 +257,9 @@ export function deriveProviderAccountUsageEarlierWindowCurves(input: Readonly<{ 
       const used = fraction(meter);
       const elapsedFraction = (sample.observedAtMs - window.windowStartAtMs) / window.windowDurationMs;
       if (used == null || elapsedFraction < 0 || elapsedFraction > 1) continue;
-      const previous = [...points.values()].at(-1);
       if (previous !== undefined && used < previous) { failure = 'counter_reset'; break; }
       points.set(elapsedFraction, used);
+      previous = used;
     }
     if (failure) { exclude(failure); continue; }
     if (points.size < 2) { exclude('single_reading'); continue; }

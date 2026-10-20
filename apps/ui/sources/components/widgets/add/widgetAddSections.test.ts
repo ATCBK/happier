@@ -2,7 +2,7 @@ import type * as React from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createSessionSurfaceNoteDocumentV1, type SessionSurfaceItemV1 } from '@happier-dev/protocol/sessions/board';
-import { HOME_BUILTIN_WIDGET_IDS_V1, MACHINE_BUILTIN_WIDGET_IDS_V1, SESSION_COMPANION_BUILTIN_ITEM_IDS, USAGE_BUILTIN_WIDGET_IDS_V1 } from '@happier-dev/protocol/widgets';
+import { HOME_BUILTIN_WIDGET_IDS_V1, MACHINE_BUILTIN_WIDGET_IDS_V1, PROJECT_BUILTIN_WIDGET_IDS_V1, SESSION_COMPANION_BUILTIN_ITEM_IDS, USAGE_BUILTIN_WIDGET_IDS_V1 } from '@happier-dev/protocol/widgets';
 
 import { selectBuiltinWidgetCandidates, type WidgetCandidate } from '@/components/widgets/widgetCatalog';
 import { projectSessionBoard } from '@/sync/domains/session/board';
@@ -185,7 +185,7 @@ describe('buildCompanionWidgetAddSections', () => {
         ]);
         const builtins = byId.get('builtins')!;
         expect(ids(builtins)).toEqual([
-            ...[...SESSION_COMPANION_BUILTIN_ITEM_IDS, ...USAGE_BUILTIN_WIDGET_IDS_V1, ...MACHINE_BUILTIN_WIDGET_IDS_V1, ...HOME_BUILTIN_WIDGET_IDS_V1].map(id => `plugin-builtin:${id}`),
+            ...[...SESSION_COMPANION_BUILTIN_ITEM_IDS, ...PROJECT_BUILTIN_WIDGET_IDS_V1, ...USAGE_BUILTIN_WIDGET_IDS_V1, ...MACHINE_BUILTIN_WIDGET_IDS_V1, ...HOME_BUILTIN_WIDGET_IDS_V1].map(id => `plugin-builtin:${id}`),
         ]);
         expect(ids(byId.get('plugin:happier.channels')!)).toEqual(['plugin-happier.channels/pr']);
         expect(ids(byId.get('plugin:happier.checks')!)).toEqual(['plugin-happier.checks/checks']);
@@ -327,7 +327,7 @@ describe('configurable widgets in the Add popovers', () => {
             openPlugins: vi.fn(),
         });
         expect(ids(content.sections.find((section) => section.id === 'builtins')!.entries)).toEqual([
-            ...[...SESSION_COMPANION_BUILTIN_ITEM_IDS, ...USAGE_BUILTIN_WIDGET_IDS_V1, ...MACHINE_BUILTIN_WIDGET_IDS_V1, ...HOME_BUILTIN_WIDGET_IDS_V1].map(id => `plugin-builtin:${id}`),
+            ...[...SESSION_COMPANION_BUILTIN_ITEM_IDS, ...PROJECT_BUILTIN_WIDGET_IDS_V1, ...USAGE_BUILTIN_WIDGET_IDS_V1, ...MACHINE_BUILTIN_WIDGET_IDS_V1, ...HOME_BUILTIN_WIDGET_IDS_V1].map(id => `plugin-builtin:${id}`),
         ]);
         expect(ids(content.sections.find((section) => section.id === 'plugin:happier.channels')!.entries)).toEqual(['plugin-happier.channels/summary']);
     });
@@ -360,10 +360,13 @@ describe('configurable widgets in the Add popovers', () => {
 
 describe('built-in widgets by host surface', () => {
     const labels = { count: (count: number) => `${count} here`, submit: 'Add' };
-    const builtIns = (ownerKind: 'home' | 'project') => buildAccountWidgetAddSections({
+    const addSections = (ownerKind: 'home' | 'project') => buildAccountWidgetAddSections({
         candidates: selectBuiltinWidgetCandidates(), instances: [], addInstance: vi.fn(), labels,
         scope: { serverId: 's', accountId: 'a', owner: ownerKind === 'home' ? { kind: 'home' } : { kind: 'project', projectId: 'p' } },
-    }).find(section => section.id === 'builtins')!.entries.map(entry => entry.id);
+    });
+    const builtIns = (ownerKind: 'home' | 'project') => addSections(ownerKind).find(section => section.id === 'builtins')!.entries.map(entry => entry.id);
+    const everyBuiltIn = (ownerKind: 'home' | 'project') => addSections(ownerKind).filter(section => section.id.startsWith('builtins'))
+        .flatMap(section => section.entries.map(entry => entry.id));
 
     it('offers the ten Machine widgets as one built-in Machines group, apart from the other built-ins (plan 60 AGW-14)', () => {
         const sections = buildAccountWidgetAddSections({
@@ -393,18 +396,30 @@ describe('built-in widgets by host surface', () => {
         expect(home[0]?.id).toBe('builtins:machines');
     });
 
-    it('offers a checkout widget only where a Project supplies the checkout', () => {
-        expect(builtIns('home').some(id => id.startsWith('plugin-builtin:project_'))).toBe(false);
-        expect(builtIns('project')).toEqual(expect.arrayContaining(['plugin-builtin:project_readme']));
+    it('offers the four Session-companion widgets as one built-in Companion group, apart from the other built-ins', () => {
+        const sections = buildAccountWidgetAddSections({
+            candidates: selectBuiltinWidgetCandidates(), instances: [], addInstance: vi.fn(), labels,
+            scope: { serverId: 's', accountId: 'a', owner: { kind: 'home' } },
+        });
+        const session = sections.find(section => section.id === 'builtins:session');
+        expect(session?.family).toBe(true);
+        expect(session?.entries.map(entry => entry.id)).toEqual(SESSION_COMPANION_BUILTIN_ITEM_IDS.map(id => `plugin-builtin:${id}`));
+        expect(builtIns('home').some(id => SESSION_COMPANION_BUILTIN_ITEM_IDS.some(item => id === `plugin-builtin:${item}`))).toBe(false);
+        // Every family is flagged: the Board's short lead is whatever remains unflagged.
+        expect(sections.filter(section => section.id.startsWith('builtins:')).every(section => section.family === true)).toBe(true);
     });
-    it('omits Session-target widgets from a page area while preserving Home pins and app widgets', () => {
+
+    it('offers a checkout widget on Home and Project for explicit target selection', () => {
+        expect(everyBuiltIn('home')).toContain('plugin-builtin:project_readme');
+        expect(everyBuiltIn('project')).toEqual(expect.arrayContaining(['plugin-builtin:project_readme']));
+    });
+    it('offers Session-target and app widgets in a page area for explicit target selection', () => {
         const candidates = [...selectBuiltinWidgetCandidates(), configurable('summary', 'Summary')];
         const sections = buildAccountWidgetAddSections({ candidates, instances: [], addInstance: vi.fn(), labels,
             scope: { serverId: 's', accountId: 'a', owner: { kind: 'corePage', pageId: 'usage', area: 'main' } } });
         const offered = sections.flatMap(section => section.entries.map(entry => entry.id));
-        expect(offered).not.toContain('plugin-builtin:session_summary');
-        expect(offered).not.toContain('plugin-happier.channels/summary');
+        expect(offered).toContain('plugin-builtin:session_summary');
+        expect(offered).toContain('plugin-happier.channels/summary');
         expect(offered).toContain('plugin-builtin:usage_daily');
-        expect(builtIns('home')).toContain('plugin-builtin:session_summary');
     });
 });

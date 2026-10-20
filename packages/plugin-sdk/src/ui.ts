@@ -1,5 +1,6 @@
 import { PLUGIN_UI_ICON_TOKENS_V1 as canonicalPluginUiIconTokensV1 } from '@happier-dev/protocol/plugins/contributions/ui/tokens';
 import { projectProtocolValue } from './protocol/projectProtocolValue.js';
+export { PluginUiLaunchInputV1Schema } from './ui/hostApi.js';
 import type {
     PluginSessionHeaderActionDescriptor,
     PluginUiDeclarativeNodeV2,

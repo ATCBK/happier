@@ -11,6 +11,10 @@ import {
 } from './adapter';
 import { TmuxUtilities, type TmuxSpawnResult } from './TmuxUtilities';
 import type { TmuxCommandResult } from './types';
+import {
+  createClaudeUnifiedPromptInput,
+  createClaudeUnifiedTurnNeutralControlInput,
+} from '../../../../../packages/plugins/claude/src/agent/runtime/terminal/unified/turnInput';
 
 function createUtility(overrides?: Partial<TmuxTerminalHostUtility>): TmuxTerminalHostUtility {
   return {
@@ -30,6 +34,32 @@ function createUtility(overrides?: Partial<TmuxTerminalHostUtility>): TmuxTermin
 }
 
 describe('createTmuxTerminalHostAdapter', () => {
+  it.each(['queued prompt', 'turn-neutral control'] as const)('writes a ready Claude %s through the real input producer', async (kind) => {
+    const adapter = createTmuxTerminalHostAdapter({ tmux: createUtility(), wait: async () => undefined });
+    const input = kind === 'queued prompt'
+      ? createClaudeUnifiedPromptInput({ text: 'hello claude', sessionId: 'session-a', nonce: 1, isSteer: false })
+      : createClaudeUnifiedTurnNeutralControlInput({ text: '/goal clear', sessionId: 'session-a', nonce: 1 });
+
+    await expect(adapter.injectUserPrompt({ kind: 'tmux', sessionName: 'session-a', paneId: '@7', attachMetadata: {
+      attachStrategy: 'terminal_host', topology: 'shared', locality: 'same_machine', liveProbe: 'required',
+    } }, input))
+      .resolves.toMatchObject({ status: 'injected', bytesWritten: Buffer.byteLength(input.text) });
+  });
+
+  it('still defers a real Claude queued prompt while terminal input is changing', async () => {
+    const utility = createUtility({
+      captureCurrentInput: vi.fn(async () => 'changed draft').mockResolvedValueOnce('first draft'),
+    });
+    const adapter = createTmuxTerminalHostAdapter({ tmux: utility, wait: async () => undefined });
+    const input = createClaudeUnifiedPromptInput({ text: 'hello claude', sessionId: 'session-a', nonce: 1, isSteer: false });
+
+    await expect(adapter.injectUserPrompt({ kind: 'tmux', sessionName: 'session-a', paneId: '@7', attachMetadata: {
+      attachStrategy: 'terminal_host', topology: 'shared', locality: 'same_machine', liveProbe: 'required',
+    } }, input))
+      .resolves.toMatchObject({ status: 'deferred', reason: 'user_typing', recoverable: true });
+    expect(vi.mocked(utility.executeTmuxCommand).mock.calls.some(([args]) => args[0] === 'load-buffer')).toBe(false);
+  });
+
   it.skipIf(process.platform === 'win32')('preserves unconfirmed exclusive creation ownership across the real tmux owner', async () => {
     let launchCommand = '';
     class AcceptedTmux extends TmuxUtilities {

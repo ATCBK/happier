@@ -1,5 +1,5 @@
 import type { TranscriptAccountActorMetadata } from "@happier-dev/session-core/messages";
-import { z } from "zod";
+import { z } from "zod/mini";
 import type { PermissionMode, ModelMode } from "@/sync/domains/permissions/permissionTypes";
 import type {
     PendingDeliveryBlockedReason,
@@ -10,8 +10,8 @@ import type {
     ScmPullRequestStatusProjection,
     SessionAccessAccountSummaryV1,
     SessionMessageRole,
-    SessionReportsToV1,
-    SessionReportsV1,
+    SessionManagerV1,
+    SessionManagedSessionsV1,
     SessionRuntimeIssueV1,
     SessionTurnsProjectionV1,
     SessionContextUsageSnapshotV1,
@@ -21,10 +21,13 @@ import type { SessionMessageAcceptedDeliveryFactsV1 } from '@happier-dev/protoco
 import { StoredMachinePublishedMetadataV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
 import type { Metadata, AgentState } from "@happier-dev/session-core/state";
 import type { ComposerOptionsInputV1 } from '@happier-dev/protocol/embed';
+import { SESSION_OWNER_METADATA_PROJECTION, type SessionOwnerMetadataProjection } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import type { ScmOperationState as ProtocolScmOperationState } from '@happier-dev/protocol/scm';
 
 export interface Session {
+    [SESSION_OWNER_METADATA_PROJECTION]?: SessionOwnerMetadataProjection | null,
     id: string,
+    ownerAccountId?: string,
     serverId?: string,
     seq: number,
     /**
@@ -57,11 +60,13 @@ export interface Session {
     pendingUserActionRequestCount?: number,
     pendingRequestObservedAt?: number | null,
     /** The Session this one reports to (ORC R-03). Ids only; membership grants nothing. */
-    reportsTo?: SessionReportsToV1 | null,
+    manager?: SessionManagerV1 | null,
     origin?: import('@happier-dev/protocol').SessionAwarenessOriginV1,
     workDepth?: number,
-    /** Direct `reportsTo` children, counted by the server (awareness `reports`). */
-    reports?: SessionReportsV1 | null,
+    /** Direct `manager` children, counted by the server (awareness `reports`). */
+    managedSessions?: SessionManagedSessionsV1 | null,
+    /** Viewer-private Follow census projection; absent is unknown. */
+    receivedRuleCount?: number,
     latestTurnId?: string | null,
     latestTurnStatus?: PrimaryTurnStatusV1 | null,
     latestTurnStatusObservedAt?: number | null,
@@ -201,6 +206,10 @@ export interface PendingMessage extends TranscriptAccountActorMetadata {
     pendingOutboxOperation?: 'enqueue' | 'cancel';
     sendState?: 'unconfirmed' | 'failed';
     pendingDeliveryStatus?: PendingDeliveryStatus;
+    /** Current server read diagnostic, never a delivery block or activation grant. */
+    pendingActivationHoldReason?: import('@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1').PendingActivationHoldReasonV1;
+    /** Exact server-projected original input for this Account's held check-in. */
+    pendingAutonomousExchangeRoot?: import('@happier-dev/protocol/sessions/messages/autonomousExchangeV1').AutonomousExchangeRootV1;
     /** Descriptive detail for a delivering row; never an outcome or settlement authority. */
     pendingDeliveryDetail?: import('@happier-dev/protocol').PendingDeliveryDetailV1;
     pendingDeliveryStatusRaw?: string;
@@ -214,6 +223,8 @@ export interface PendingMessage extends TranscriptAccountActorMetadata {
     messageRole?: 'user' | 'non_user' | null;
     text: string;
     displayText?: string;
+    /** The encrypted row is retained while its Session reader is being hydrated. */
+    pendingDecryption?: { kind: 'loading' };
     pendingDecryptFailure?: { kind: 'decrypt_failed' };
     rawRecord: any;
 }

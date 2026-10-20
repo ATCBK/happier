@@ -9,10 +9,11 @@ import { buildScmCommitFailureMessage } from '@/scm/operations/commitFailureMess
 import { getScmUserFacingError } from '@/scm/operations/userFacingErrors';
 import { withSessionProjectScmOperationLock } from '@/scm/operations/withOperationLock';
 import { reportSessionScmOperation, type ScmOperationTracker, trackBlockedScmOperation } from '@/scm/operations/reporting';
-import { storage } from '@/sync/domains/state/storage';
+import { storage } from '@/sync/domains/state/storageStore';
 import { sessionScmCommitCreate, sessionScmRepositoryRemoveIndexLock } from '@/sync/ops/sessionScm';
 import { SCM_OPERATION_ERROR_CODES, createScmOperationUnknownOutcome, normalizeScmOperationOutcome, type ScmOperationOutcome } from '@happier-dev/protocol/scm';
 import { runScmOperationWithGitIndexLockRecovery } from '@/scm/operations/gitIndexLockRecovery';
+import { isScmActionNotRun } from '@/sync/ops/scm/scmActionInvocation';
 
 export async function executeScmCommit(input: {
     sessionId: string;
@@ -86,7 +87,7 @@ export async function executeScmCommit(input: {
                     ...(includePatches ? { patches: input.commitSelectionPatches } : {}),
                 }, input.serverId);
                 let response = await createCommit();
-                if (normalizeScmOperationOutcome(response).kind === 'failed' && !response.commitSha) {
+                if (normalizeScmOperationOutcome(response).kind === 'failed' && !('commitSha' in response && response.commitSha)) {
                     response = await runScmOperationWithGitIndexLockRecovery({
                         cwd: input.repoPath,
                         failedResponse: response,
@@ -94,6 +95,9 @@ export async function executeScmCommit(input: {
                         retryOriginalOperation: createCommit,
                     });
                 }
+
+                // Declined, or waiting on an approval: nothing ran and nothing failed.
+                if (isScmActionNotRun(response)) return;
 
                 const outcome = normalizeScmOperationOutcome(response);
                 const effect = 'effect' in outcome ? outcome.effect : undefined;

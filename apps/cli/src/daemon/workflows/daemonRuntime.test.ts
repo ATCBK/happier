@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios, { AxiosHeaders } from 'axios';
 import { API_TOKEN_FULL_GRANT_V1, freezeActionCompletionContractV1, getActionSpec,
   sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowCheckpointStoredEnvelopeV1,
@@ -6,21 +6,24 @@ import { API_TOKEN_FULL_GRANT_V1, freezeActionCompletionContractV1, getActionSpe
   parseWorkflowStoredContentEnvelopeV1, openWorkflowProgressStoredEnvelopeV1,
   type AccountApiTokensListActionOutputV1, type WorkflowDefinitionV1 } from '@happier-dev/protocol';
 import { MACHINE_PLAIN_DATA_KEY_MARKER } from '@happier-dev/protocol/machines/machineStoredContent';
-import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES } from '@happier-dev/protocol/rpc';
+import { RPC_ERROR_CODES, RPC_ERROR_MESSAGES, RPC_METHODS, SESSION_RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { SOCKET_RPC_EVENTS } from '@happier-dev/protocol/socketRpc';
 import { bindApiSessionSocketMock, createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 import { publishServerHttpRuntimeOrigin } from '@/api/client/serverHttpBaseUrl';
 import { configuration } from '@/configuration';
-import { createSessionNotificationContextFixture } from '@/testkit/backends/sessionFixtures';
+import { createSessionNotificationContextFixture, createSessionRecordFixture } from '@/testkit/backends/sessionFixtures';
+import { buildSessionCreationCorrespondence } from '@/session/shared/sessionCreationCorrespondence';
+import { deriveWorkflowSessionInputLocalIdV2 } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
 import { createWorkflowRunStorageTestkit, type WorkflowRunStorageTestkitOperation } from './workflowRunStorage.testkit';
 import { tmpdir } from 'node:os';
 import nacl from 'tweetnacl';
 import { AccountSettingsSchema, HomeConnectionDescriptorV1Schema, FeaturesResponseSchema, ManagedMachineV1Schema, ExternalActionExecutionAuthorizationRequestV1Schema,
   computeExternalActionRequestEnvelopeDigestV1, StrictJsonValueSchema, zodSchemaToJsonSchemaObject } from '@happier-dev/protocol';
-import { updateSettings } from '@/persistence';
+import { updateSettings, writeStoredCredentialsForServerId } from '@/persistence';
 import { createDaemonManagedMachineActionAdapter } from '@/daemon/startup/managedMachineActionAdapter';
 import { createCurrentMachineExecutionOriginContextResolver } from '@/api/machine/resolveCurrentMachineExecutionOriginContext';
 import { createHostActionOperationRuntime } from '@/daemon/actionOperations/createHostActionOperationRuntime';
+import * as machineRpc from '@/session/transport/rpc/machineRpc';
 import { fixture as nativeFixture } from '@/plugins/runtime/invocation/actions/managedCustody.testkit';
 import { createManagedProviderOperationAuthority } from '@/daemon/connectedServices/purposeBindings/managedProviderOperationAuthority';
 import { createConnectedAccountPurposeBindingOwner } from '@/daemon/connectedServices/purposeBindings/ConnectedAccountPurposeBindingOwner';
@@ -35,6 +38,21 @@ import { resolveExecutablePluginRuntimeRegistry } from '@/plugins/runtime/resolv
 import { createResolvedContributionRegistry } from '@/plugins/projection/registry/createResolvedContributionRegistry';
 import { publishSessionControlsMetadataBestEffort } from '@/agent/runtime/controls/publishSessionControlsMetadataBestEffort';
 import type { Metadata } from '@/api/types';
+import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
+import { SessionListQueryResponseV1Schema } from '@happier-dev/protocol/sessions/listing/response';
+import { createAuthoredAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
+import { createPluginManifestV2Fixture } from '@/plugins/testkit/manifestV2Fixture';
+import { createCliApprovalsArtifactStore } from '@/session/actions/approvals/artifactStore';
+import { ACCOUNT_API_TOKENS_LIST_HTTP_PATH_V1 } from '@happier-dev/protocol/auth/accountApiTokens';
+import { createRequesterSessionControlRuntimeFixture } from '@/daemon/testkit/requesterSessionControlRuntimeFixture';
+import { ConnectedServiceRuntimeRegistry } from '@/daemon/connectedServices/runtimeRegistry/registry';
+import { createTempDir, removeTempDir } from '@/testkit/fs/tempDir';
+import { join } from 'node:path';
+import { logger } from '@/ui/logger';
+import { createProductionWorkflowConversationOwner } from './sessionStepExecutor';
+
+// Physical daemon HTTP binding is an OS boundary; the startup/ingress composition stays real.
+vi.mock('@/daemon/controlServer', () => ({ startDaemonControlServer: async () => ({ port: 44322, stop: async () => {} }) }));
 
 const mocks = vi.hoisted(() => ({
   fetchSessionById: vi.fn(),
@@ -64,6 +82,7 @@ vi.mock('socket.io-client', () => ({ io: mocks.io }));
 
 import {
   createWorkflowAcceptedAuthorizationCurrentness,
+  createCredentialedWorkflowAcceptedAuthorizationCurrentness,
   createWorkflowInvocationRecoveryObserver,
   resolveWorkflowSessionConversation,
   withdrawWorkflowOriginSessionInput,
@@ -71,28 +90,260 @@ import {
   createProductionDaemonWorkflowRuntime,
 } from './daemonRuntime';
 
+// The daemon's singleton controller has one process lifetime, shared by the
+// production-composition cases in this file; shutdown is terminal.
+afterAll(async () => { await pluginReloadController.shutdown(); });
+
 describe('production daemon retained operation target', () => {
   let releaseHome = () => {};
-  afterEach(() => { releaseHome(); vi.restoreAllMocks(); });
+  afterEach(() => { releaseHome(); vi.restoreAllMocks(); vi.useRealTimers(); });
 
-  it.each(['observation', 'Stop'] as const)('keeps daemon retained %s on its original Machine after replacement', async phase => {
+  it.each(['exact', 'pending', 'foreign-account', 'foreign-machine', 'absent', 'stored-absent', 'already-uncertain', 'cancel-requested-parent', 'cancelled-root-parent',
+    'session-discovered', 'stored-session', 'stored-inputless-session', 'session-mismatch', 'lookup-unavailable',
+    'pending-success', 'stored-pending-success', 'already-stopped-success', 'pending-failure', 'miswired-success', 'foreign-session-success', 'stop-unconfirmed'] as const)
+  ('recovers cancelled startup from its %s original owner through fresh production recovery wiring', async match => {
+    const accountId = 'account-1';
+    const machineId = 'original-worker';
+    const late = ['pending-success', 'stored-pending-success', 'already-stopped-success', 'pending-failure', 'miswired-success', 'foreign-session-success', 'stop-unconfirmed'].includes(match);
+    const runId = '7be4d65c-d3b7-4868-a416-b18d9ee29c1c';
+    const rootId = '2aaf1a39-4c48-4904-83a4-7eae318dfc2c';
+    const childId = '33333333-3333-4333-8333-333333333333';
+    const home = 'http://127.0.0.1:43187';
+    releaseHome = publishServerHttpRuntimeOrigin(home, 'https');
+    mocks.fetchAccountEncryptionCurrentness.mockResolvedValue({ mode: 'plain', version: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
+    const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {}, blocks: [
+      { kind: 'step', id: 'launch', document: { text: 'launch', references: [], attachments: [] }, input: [], result: { kind: 'text' } },
+    ] };
+    const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+      binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId }, acceptedSnapshot: {
+        startedBy: 'user', definition, authoredDefinition: definition, workDepth: 0, metadata: null, frozenChildren: {}, materializedLeaves: [],
+        source: { kind: 'inline' }, inputs: {}, machineId, executionTarget: { kind: 'session' },
+        workspaceTarget: { project: { machineId, directory: '/repo', checkoutRootPath: '/repo' }, originalCommittedRevision: 'a'.repeat(40) },
+        origin: { kind: 'direct' }, authorization: { admittedPermissionCeiling: 'default', principal: { kind: 'host' } },
+      } }));
+    const checkpointEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowCheckpointStoredEnvelopeV1({ mode: 'plain',
+      binding: { v: 1, purpose: 'checkpoint', accountId, runId }, checkpoint: { kind: 'happier.workflow-checkpoint.v1',
+        rootRecordId: rootId, nextSequence: '2', frontier: { nextBlockOrdinal: 0, paused: false } } }));
+    const creationKey = `workflow:${runId}:${childId}`;
+    const localId = deriveWorkflowSessionInputLocalIdV2({ purpose: 'invocation', runId, invocationRecordId: childId });
+    const correspondence = buildSessionCreationCorrespondence({
+      identity: { callerCreationNamespace: JSON.stringify(['workflow', 'home', runId]),
+        creationKey: match === 'foreign-session-success' ? 'another-startup' : creationKey },
+      recipe: { execution: { machineId, directory: { kind: 'path', path: '/repo' } },
+        organization: { folderId: null, tagIds: [] }, agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.claude', localId: 'claude' } } },
+    });
+    let session = createSessionRecordFixture({ id: 'c111111111111111111111111', encryptionMode: 'plain',
+      active: late && match !== 'already-stopped-success',
+      metadata: JSON.stringify({ machineId, path: '/repo', sessionCreationCorrespondenceV1: match === 'session-mismatch'
+        ? { ...correspondence, sessionCreationTag: 'create:v1:' + 'x'.repeat(43) } : correspondence }) });
+    // The canonical Stop owner now persists its existing explicit-stop intent
+    // before physical termination. Only its HTTP persistence boundary is fake.
+    vi.spyOn(axios, 'patch').mockImplementation(async (url, body: unknown) => {
+      if (!String(url).endsWith(`/v2/sessions/${session.id}`) || !body || typeof body !== 'object'
+        || !('metadata' in body) || !body.metadata || typeof body.metadata !== 'object'
+        || !('ciphertext' in body.metadata) || typeof body.metadata.ciphertext !== 'string'
+        || !('expectedVersion' in body.metadata) || body.metadata.expectedVersion !== session.metadataVersion) {
+        throw new Error('Unexpected Session Stop metadata persistence');
+      }
+      session = { ...session, metadata: body.metadata.ciphertext, metadataVersion: session.metadataVersion + 1 };
+      return { status: 200, data: { success: true, metadata: { version: session.metadataVersion } } };
+    });
+    mocks.lookupSessionsByTags.mockImplementation(async ({ tags }) => match === 'lookup-unavailable'
+      ? { state: 'unavailable' } : { state: 'available', tags,
+        sessions: match === 'session-discovered' || match === 'stored-session' || match === 'stored-inputless-session' || match === 'session-mismatch' ? [session] : [] });
+    mocks.fetchSessionById.mockImplementation(async () => session);
+    const stops: string[] = [];
+    vi.spyOn(machineRpc, 'callMachineRpc').mockImplementation(async ({ machineId: targetMachine, method, request }) => {
+      if (targetMachine !== machineId || method !== RPC_METHODS.STOP_SESSION
+        || !request || typeof request !== 'object' || !('sessionId' in request) || request.sessionId !== session.id) {
+        throw new Error('Wrong startup Session Stop wiring');
+      }
+      stops.push(session.id);
+      if (match === 'stop-unconfirmed') return { status: 'requested' };
+      if (match === 'already-stopped-success' || match === 'stored-inputless-session') return { status: 'not_found' };
+      session = { ...session, active: false };
+      return { status: 'stopped' };
+    });
+    const seal = (id: string, root: boolean) => serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({ mode: 'plain',
+      binding: { v: 1, purpose: 'invocation_progress', accountId, runId, recordId: id,
+        sequence: root ? '0' : '1', parentRecordId: root ? null : rootId, memberOrdinal: '0', attempt: '0' },
+      progress: { kind: 'happier.workflow-progress.v1', blockKind: root ? 'root' : 'step',
+        invocationPath: { blockId: root ? '$root' : 'launch', scope: [] }, attempt: '0', logicalInvocationRecordId: id,
+        ...(!root && (match === 'stored-absent' || match === 'stored-session' || match === 'stored-inputless-session' || match === 'stored-pending-success') ? { execution: { kind: 'action' as const, actionId: 'session.spawn_new',
+          actionRequestId: creationKey, localInputId: creationKey, input: { creationKey }, output: {},
+          awaitedOperations: [{ key: 'startup', serverId: 'home', machineId,
+            operationId: match === 'stored-pending-success' ? 'original-startup' : 'lost-startup' }] } } : {}) },
+    }));
+    const storage = createWorkflowRunStorageTestkit({ accountId, runId, machineId, origin: { kind: 'direct' }, acceptedEnvelope });
+    await storage.execute({ operation: 'initialize', runId, expectedRevision: 0, checkpointEnvelope,
+      rootInvocation: { id: rootId, contentEnvelope: seal(rootId, true) } });
+    await storage.execute({ operation: 'invocations.admit', runId, expectedRevision: 1, checkpointEnvelope,
+      invocations: [{ id: childId, sequence: '1', parentRecordId: rootId, memberOrdinal: '0',
+        lifecycle: match === 'already-uncertain' ? 'outcome_uncertain' : 'pending', contentEnvelope: seal(childId, false) }] });
+    const operations = createHostActionOperationRuntime({ machineId: match === 'foreign-machine' ? 'foreign-worker' : machineId,
+      resolveAccountId: async () => match === 'foreign-account' ? 'foreign-account' : accountId,
+      generateOperationId: () => 'original-startup' });
+    let finishStartup = () => {};
+    if (late || ['exact', 'pending', 'foreign-account', 'foreign-machine'].includes(match)) await operations.observeExecution({ actionId: 'session.spawn_new',
+      input: { creationKey }, execute: async context => {
+        if (match === 'pending' || late) {
+          context.operationAcceptance?.accept({});
+          await new Promise<void>(resolve => { finishStartup = resolve; });
+        }
+        return late && match !== 'pending-failure' ? { ok: true, result: { sessionId: session.id } }
+          : { ok: false, errorCode: 'DAEMON_RPC_UNAVAILABLE', error: 'Requester Session custody unavailable' };
+      } });
+    storage.requestControl('cancel_requested');
+    if (match === 'cancelled-root-parent') {
+      // Retained QA-FIN37: a cancelled root survived while the parent was reclaimed.
+      const root = storage.rowById(rootId)!;
+      await storage.execute({ operation: 'invocations.fact', runId, parentAttempt: 0,
+        accountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null },
+        invocationId: rootId, invocationAttempt: '0', expectedLifecycle: 'cancel_requested',
+        expectedContentRevision: root.index.contentRevision, lifecycle: 'cancelled', contentEnvelope: root.contentEnvelope });
+    }
+    if (match !== 'cancel-requested-parent' && !late) await storage.execute({ operation: 'transition', runId,
+      expectedRevision: storage.run().revision, state: match === 'cancelled-root-parent' ? 'claimed' : 'cancelled', checkpointEnvelope });
+    vi.spyOn(axios, 'post').mockImplementation(async (url, body: unknown) => {
+      if (!String(url).endsWith('/v3/automations/runs/workflow-storage') || !body || typeof body !== 'object' || !('operation' in body)) throw new Error('Unexpected Home write');
+      return { status: 200, data: body.operation === 'recovery.list'
+        ? { candidates: [{ run: storage.run(), parentAttempt: 0 }] }
+        : await storage.execute(body as WorkflowRunStorageTestkitOperation) };
+    });
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      if (new URL(url).pathname === `/v2/sessions/${session.id}`) {
+        return { status: 200, data: { session } };
+      }
+      if (url.includes('/messages/by-local-id/') && match === 'stored-inputless-session') return { status: 200, data: { message: null } };
+      if (url.includes('/messages/by-local-id/')) return { status: 200, data: { message: {
+        id: 'input', seq: 1, localId, createdAt: 1, updatedAt: 1,
+        content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'launch' } } },
+      } } };
+      if (url.endsWith('/turns')) return { status: 200, data: { v: 1, sessionId: session.id, updatedAt: 3,
+        turns: [{ turnId: 'original-turn', status: 'completed', startedAt: 1, updatedAt: 3,
+          transcriptAnchors: { startUserMessageSeq: 1, userMessageSeqs: [1], startSeqInclusive: 1,
+            endSeqInclusive: 2, finalAssistantMessageSeq: 2 } }] } };
+      if (url.includes('/messages?')) return { status: 200, data: { messages: [{ id: 'reply', seq: 2,
+        localId: null, createdAt: 2, updatedAt: 2, content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'original result' } } } }] } };
+      if (url.endsWith('/pending')) return { status: 200, data: { pending: [], version: 0 } };
+      return { status: 200, data: { machine: { id: machineId,
+        storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } } };
+    });
+    const methods: string[] = [];
+    const invoke = async (method: string, request: unknown) => {
+      methods.push(method);
+      if (method.endsWith('actionOperation.list.v2')) return await operations.handlers.listV2(request);
+      if (method.endsWith('actionOperation.get.v2')) return match === 'miswired-success'
+        ? { kind: 'found', operation: { ...operations.store.list({ accountId, machineId }).items[0], operationId: 'wrong-startup' } }
+        : await operations.handlers.getV2(request);
+      if (method.endsWith('actionOperation.cancel.v1')) return await operations.handlers.cancel(request);
+      throw new Error(`Recovery must not launch or replay work: ${method}`);
+    };
+    bindApiSessionSocketMock(mocks.io, createApiSessionSocketStub({ async emitWithAck(event, payload) {
+      if (event !== SOCKET_RPC_EVENTS.CALL || !payload || typeof payload !== 'object' || !('method' in payload)
+        || typeof payload.method !== 'string' || !('params' in payload)) throw new Error('Unexpected RPC');
+      return { ok: true, result: await invoke(payload.method, payload.params) };
+    } }));
+    const runtime = createProductionDaemonWorkflowRuntime({ credentials: { token: 'token', encryption: null }, accountId, serverId: 'home' });
+    const controller = new AbortController();
+    try {
+      const recover = runtime.createRecoveryForMachine({ machineId, machineAdmissionTransport: async () => { throw new Error('No new input'); },
+        machineActionDirectTargetTransport: { machineId, invoke } });
+      await recover('startup', controller.signal);
+      if (late) {
+        expect(storage.rowById(childId)?.index.lifecycle).toBe('cancel_requested');
+        expect(storage.run().workflowCustodyState).toBe('pending');
+        expect(stops).toEqual([]);
+        finishStartup();
+        await operations.handlers.getV2({ operationId: 'original-startup', waitForTerminal: true });
+        if (match === 'pending-success' || match === 'stored-pending-success' || match === 'already-stopped-success' || match === 'pending-failure') {
+          // The production completion wait must wake recovery without another control/hint.
+          await expect.poll(() => storage.run().workflowCustodyState).toBe('settled');
+          expect(storage.run().state).toBe('cancelled');
+          expect(storage.rowById(childId)?.index.lifecycle).toBe(match === 'pending-failure' ? 'failed' : 'cancelled');
+          expect([...new Set(stops)]).toEqual(match === 'pending-failure' ? [] : [session.id]);
+          if (match !== 'pending-failure') {
+            expect(session.active).toBe(false);
+            const row = storage.rowById(childId)!;
+            const opened = openWorkflowProgressStoredEnvelopeV1({ mode: 'plain', binding: {
+              v: 1, purpose: 'invocation_progress', accountId, runId, recordId: childId,
+              sequence: '1', parentRecordId: rootId, memberOrdinal: '0', attempt: '0',
+            }, envelope: parseWorkflowStoredContentEnvelopeV1(row.contentEnvelope)! });
+            expect(opened.kind === 'available' ? opened.content : null).toMatchObject({
+              execution: { kind: 'session_ready', sessionId: session.id }, reason: { code: 'workflow_startup_session_stopped' } });
+          }
+        } else {
+          if (match === 'stop-unconfirmed') await expect.poll(() => stops.length).toBeGreaterThan(0);
+          else await recover('control', controller.signal);
+          expect(storage.run().workflowCustodyState).toBe('pending');
+          expect(storage.rowById(childId)?.index.lifecycle).toBe('cancel_requested');
+          expect(session.active).toBe(true);
+          expect([...new Set(stops)]).toEqual(match === 'stop-unconfirmed' ? [session.id] : []);
+        }
+        return;
+      }
+      const settled = ['exact', 'absent', 'stored-absent', 'already-uncertain', 'cancel-requested-parent', 'cancelled-root-parent', 'session-discovered', 'stored-session', 'stored-inputless-session'].includes(match);
+      expect(storage.run().state).toBe('cancelled');
+      expect(storage.run().workflowCustodyState).toBe(settled ? 'settled' : 'pending');
+      expect(storage.rowById(childId)?.index.lifecycle).toBe(match === 'exact' ? 'failed'
+        : ['absent', 'stored-absent', 'already-uncertain', 'cancel-requested-parent', 'cancelled-root-parent'].includes(match) ? 'outcome_uncertain'
+        : match === 'session-discovered' || match === 'stored-session' ? 'completed'
+        : match === 'stored-inputless-session' ? 'cancelled' : 'cancel_requested');
+      if (match !== 'stored-absent' && match !== 'stored-session' && match !== 'stored-inputless-session') expect(methods).toContain('actionOperation.list.v2');
+      if (match === 'stored-inputless-session') {
+        expect(stops).toEqual([session.id]);
+        expect(session.active).toBe(false);
+        const row = storage.rowById(childId)!;
+        const opened = openWorkflowProgressStoredEnvelopeV1({ mode: 'plain', binding: {
+          v: 1, purpose: 'invocation_progress', accountId, runId, recordId: childId,
+          sequence: '1', parentRecordId: rootId, memberOrdinal: '0', attempt: '0',
+        }, envelope: parseWorkflowStoredContentEnvelopeV1(row.contentEnvelope)! });
+        expect(opened.kind === 'available' ? opened.content : null).toMatchObject({
+          execution: { kind: 'session_ready', sessionId: session.id }, reason: { code: 'workflow_startup_session_stopped' } });
+      }
+      if (match === 'session-discovered' || match === 'stored-session') {
+        const row = storage.rowById(childId)!;
+        const opened = openWorkflowProgressStoredEnvelopeV1({ mode: 'plain', binding: {
+          v: 1, purpose: 'invocation_progress', accountId, runId, recordId: childId,
+          sequence: '1', parentRecordId: rootId, memberOrdinal: '0', attempt: '0',
+        }, envelope: parseWorkflowStoredContentEnvelopeV1(row.contentEnvelope)! });
+        expect(opened.kind === 'available' ? opened.content : null).toMatchObject({
+          execution: { kind: 'session', sessionId: session.id, localInputId: localId }, result: 'original result' });
+      }
+    } finally { controller.abort(); finishStartup(); }
+    if (match === 'exact') {
+      const row = storage.rowById(childId)!;
+      const opened = openWorkflowProgressStoredEnvelopeV1({ mode: 'plain', binding: {
+        v: 1, purpose: 'invocation_progress', accountId, runId, recordId: childId,
+        sequence: '1', parentRecordId: rootId, memberOrdinal: '0', attempt: '0',
+      }, envelope: parseWorkflowStoredContentEnvelopeV1(row.contentEnvelope)! });
+      expect(opened.kind === 'available' ? opened.content : null).toMatchObject({ execution: { kind: 'action',
+        awaitedOperations: [{ operationId: 'original-startup', machineId }] }, reason: { code: 'DAEMON_RPC_UNAVAILABLE' } });
+    }
+  });
+
+  it.each(['observation', 'Stop', 'native Stop'] as const)('keeps daemon retained %s on its original Machine after replacement', async phase => {
+    const nativeStop = phase === 'native Stop';
+    const stopping = phase !== 'observation';
+    const actionId = nativeStop ? 'review.start' : 'projects.script.run';
     const accountId = 'account-1';
     const machineId = 'original-worker';
     const runId = '7be4d65c-d3b7-4868-a416-b18d9ee29c1c';
     const rootId = '2aaf1a39-4c48-4904-83a4-7eae318dfc2c';
     const childId = '33333333-3333-4333-8333-333333333333';
-    const home = configuration.apiServerUrl;
+    const home = 'http://127.0.0.1:43187';
     releaseHome = publishServerHttpRuntimeOrigin(home, 'https');
     mocks.fetchAccountEncryptionCurrentness.mockResolvedValue({ mode: 'plain', version: 1,
       signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
     const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {}, blocks: [
-      { kind: 'action', id: 'script', actionId: 'projects.script.run', input: {} },
+      { kind: 'action', id: 'script', actionId, input: {} },
     ] };
-    const completion = freezeActionCompletionContractV1(getActionSpec('projects.script.run').completion!);
+    const completion = freezeActionCompletionContractV1(getActionSpec(actionId).completion!);
     const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
       binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId }, acceptedSnapshot: {
         startedBy: 'user', definition, authoredDefinition: definition, workDepth: 0, metadata: null, frozenChildren: {},
-        materializedLeaves: [{ sourceKey: '$root', blockId: 'script', kind: 'action', actionId: 'projects.script.run',
+        materializedLeaves: [{ sourceKey: '$root', blockId: 'script', kind: 'action', actionId,
           selection: {}, executionTarget: { kind: 'session' }, authoredWorkspace: { kind: 'inherit' }, actionInput: {},
           actionContract: { inputSchema: {}, outputSchema: completion.terminalOutputSchema, completion } }],
         source: { kind: 'inline' }, inputs: {}, machineId, executionTarget: { kind: 'session' },
@@ -113,16 +364,19 @@ describe('production daemon retained operation target', () => {
         sequence: root ? '0' : '1', parentRecordId: root ? null : rootId, memberOrdinal: '0', attempt: '0' },
       progress: { kind: 'happier.workflow-progress.v1', blockKind: root ? 'root' : 'action',
         invocationPath: { blockId: root ? '$root' : 'script', scope: [] }, attempt: '0', logicalInvocationRecordId: id,
-        ...(root ? {} : { execution: { kind: 'action' as const, actionId: 'projects.script.run', actionRequestId: 'original',
-          localInputId: 'original', input: {}, output: { operation }, awaitedOperations: [{ key: 'command', serverId: 'home',
-            machineId, operationId: operation.operationId }] } }) },
+        ...(root ? {} : { execution: { kind: 'action' as const, actionId, actionRequestId: 'original',
+          localInputId: 'original', input: {}, ...(nativeStop
+            ? { output: { intent: 'review', sessionId: null, results: [{ key: 'codex', ok: true, result: { runId: 'native-run' } }] },
+                awaitedRuns: [{ key: 'codex', runId: 'native-run' }] }
+            : { output: { operation }, awaitedOperations: [{ key: 'command', serverId: 'home',
+                machineId, operationId: operation.operationId }] }) } }) },
     }));
     const storage = createWorkflowRunStorageTestkit({ accountId, runId, machineId, origin: { kind: 'direct' }, acceptedEnvelope });
     await storage.execute({ operation: 'initialize', runId, expectedRevision: 0, checkpointEnvelope,
       rootInvocation: { id: rootId, contentEnvelope: seal(rootId, true) } });
     await storage.execute({ operation: 'invocations.admit', runId, expectedRevision: 1, checkpointEnvelope,
       invocations: [{ id: childId, sequence: '1', parentRecordId: rootId, memberOrdinal: '0',
-        lifecycle: phase === 'Stop' ? 'cancel_requested' : 'running', contentEnvelope: seal(childId, false) }] });
+        lifecycle: stopping ? 'cancel_requested' : 'running', contentEnvelope: seal(childId, false) }] });
     await storage.execute({ operation: 'transition', runId, expectedRevision: 2, state: 'interrupted', checkpointEnvelope });
     // The server's opaque storage/HTTP and Socket.IO are the external boundaries.
     vi.spyOn(axios, 'post').mockImplementation(async (url, body: unknown) => {
@@ -134,7 +388,9 @@ describe('production daemon retained operation target', () => {
         : await storage.execute(body as WorkflowRunStorageTestkitOperation) };
     });
     vi.spyOn(axios, 'get').mockImplementation(async url => {
-      const pathname = new URL(String(url)).pathname;
+      const target = new URL(String(url));
+      if (target.origin !== home) throw new Error('Configured workflow endpoint is unreachable');
+      const pathname = target.pathname;
       const data = pathname === '/v1/machines' ? [{ id: machineId, replacedByMachineId: 'successor' }, { id: 'successor' }]
         : { machine: { id: decodeURIComponent(pathname.slice('/v1/machines/'.length)),
           storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } };
@@ -142,33 +398,157 @@ describe('production daemon retained operation target', () => {
     });
     const requests: string[] = [];
     const unavailable = { ok: false, error: RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE, errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE };
-    bindApiSessionSocketMock(mocks.io, createApiSessionSocketStub({ emitWithAck(event, payload) {
+    if (nativeStop) vi.useFakeTimers();
+    const recoverySocket = createApiSessionSocketStub({ async emitWithAck(event, payload) {
       if (event !== SOCKET_RPC_EVENTS.CALL || !payload || typeof payload !== 'object' || !('method' in payload)
         || typeof payload.method !== 'string') throw new Error('Unexpected RPC boundary');
       requests.push(payload.method);
+      if (nativeStop && payload.method === `${machineId}:execution.run.get`) return { ok: true, result: { run: {
+        runId: 'native-run', callId: 'call', sidechainId: 'side', intent: 'review',
+        backendTarget: { kind: 'builtInAgent', agentId: 'codex' }, permissionMode: 'default', retentionPolicy: 'resumable',
+        runClass: 'long_lived', ioMode: 'streaming', status: 'running', startedAtMs: 1,
+      } } };
+      if (nativeStop && payload.method === `${machineId}:execution.run.stop`) {
+        await new Promise(resolve => setTimeout(resolve, 28_120));
+        return { ok: true, result: { ok: true } };
+      }
       if (phase === 'Stop' && payload.method === `${machineId}:actionOperation.get.v2`) return { ok: true, result: { kind: 'found', operation } };
       if (payload.method.startsWith(`${machineId}:`)) return unavailable;
       return { ok: true, result: payload.method.endsWith('cancel.v1') ? { kind: 'requested' } : { kind: 'not_found' } };
-    } }));
+    } });
+    bindApiSessionSocketMock(mocks.io, recoverySocket);
     const runtime = createProductionDaemonWorkflowRuntime({ credentials: { token: 'token', encryption: null }, accountId, serverId: 'home' });
     const recover = runtime.createRecoveryForMachine({ machineId,
-      machineAdmissionTransport: async () => { throw new Error('Recovery must not enqueue new work'); } });
-    await recover('startup');
-    expect(requests).toEqual(phase === 'Stop' ? [`${machineId}:actionOperation.get.v2`, `${machineId}:actionOperation.cancel.v1`]
+      machineAdmissionTransport: async () => { throw new Error('Recovery must not enqueue new work'); },
+      machineActionDirectTargetTransport: { machineId, invoke: async (method, request) => {
+        const response: unknown = await recoverySocket.emitWithAck(SOCKET_RPC_EVENTS.CALL, { method: `${machineId}:${method}`, params: request });
+        if (!response || typeof response !== 'object' || !('ok' in response) || response.ok !== true || !('result' in response)) {
+          throw new Error('Machine operation unavailable');
+        }
+        return response.result;
+      } },
+    });
+    if (nativeStop) {
+      let settled = false;
+      const pending = recover('startup').then(() => { settled = true; });
+      // Recovery prepares its original Machine transport asynchronously. Start
+      // measuring the retained Stop only after the boundary registered its timer.
+      await vi.waitFor(() => expect(requests).toContain(`${machineId}:execution.run.stop`));
+      try {
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(requests).toContain(`${machineId}:execution.run.stop`);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(8_120);
+        await pending;
+        expect(requests.filter(method => method.endsWith('execution.run.stop'))).toHaveLength(1);
+      } finally {
+        await vi.advanceTimersByTimeAsync(28_120);
+        await pending;
+      }
+    } else {
+      await recover('startup');
+      expect(requests).toEqual(phase === 'Stop' ? [`${machineId}:actionOperation.get.v2`, `${machineId}:actionOperation.cancel.v1`]
       : [`${machineId}:actionOperation.get.v2`]);
+    }
     expect(storage.run().workflowCustodyState).toBe('pending');
-    expect(storage.rowById(childId)?.index.lifecycle).toBe(phase === 'Stop' ? 'cancel_requested' : 'running');
+    expect(storage.rowById(childId)?.index.lifecycle).toBe(stopping ? 'cancel_requested' : 'running');
+  });
+});
+
+describe('production terminal Workflow recovery transport', () => {
+  afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
+  it('settles stopped historical detached custody through the installed Machine owner when remote raw RPC is unavailable', async () => {
+    const accountId = 'account-1';
+    const machineId = 'machine-1';
+    const runId = '7be4d65c-d3b7-4868-a416-b18d9ee29c1c';
+    const rootId = '2aaf1a39-4c48-4904-83a4-7eae318dfc2c';
+    const childId = '33333333-3333-4333-8333-333333333333';
+    mocks.fetchAccountEncryptionCurrentness.mockResolvedValue({ mode: 'plain', version: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
+    const checkpointEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowCheckpointStoredEnvelopeV1({ mode: 'plain',
+      binding: { v: 1, purpose: 'checkpoint', accountId, runId }, checkpoint: { kind: 'happier.workflow-checkpoint.v1',
+        rootRecordId: rootId, nextSequence: '2', frontier: { nextBlockOrdinal: 1, paused: false } } }));
+    const seal = (root: boolean) => serializeWorkflowStoredContentEnvelopeV1(sealWorkflowProgressStoredEnvelopeV1({ mode: 'plain',
+      binding: { v: 1, purpose: 'invocation_progress', accountId, runId, recordId: root ? rootId : childId,
+        sequence: root ? '0' : '1', parentRecordId: root ? null : rootId, memberOrdinal: '0', attempt: '0' },
+      progress: { kind: 'happier.workflow-progress.v1', blockKind: root ? 'root' : 'step',
+        invocationPath: { blockId: root ? '$root' : 'background', scope: [] }, attempt: '0', logicalInvocationRecordId: root ? rootId : childId,
+        ...(root ? {} : { reason: { code: 'execution_run_input_not_observed' }, execution: { kind: 'detached_run' as const,
+          runId: 'historical-native-run', localInputId: 'historical-input', runtimeSelection: {} } }) } }));
+    const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {}, blocks: [
+      { kind: 'step', id: 'background', document: { text: 'Work', references: [], attachments: [] }, input: [], result: { kind: 'text' } },
+    ] };
+    const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+      binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId }, acceptedSnapshot: {
+        startedBy: 'user', definition, authoredDefinition: definition, workDepth: 0, metadata: null, frozenChildren: {}, materializedLeaves: [],
+        source: { kind: 'inline' }, inputs: {}, machineId, executionTarget: { kind: 'detached_run' },
+        workspaceTarget: { project: { machineId, directory: '/repo', checkoutRootPath: '/repo' }, originalCommittedRevision: 'a'.repeat(40) },
+        origin: { kind: 'direct' }, authorization: { admittedPermissionCeiling: 'default', principal: { kind: 'host' } },
+      } }));
+    const storage = createWorkflowRunStorageTestkit({ accountId, runId, machineId, origin: { kind: 'direct' }, acceptedEnvelope });
+    await storage.execute({ operation: 'initialize', runId, expectedRevision: 0, checkpointEnvelope,
+      rootInvocation: { id: rootId, contentEnvelope: seal(true) } });
+    await storage.execute({ operation: 'invocations.admit', runId, expectedRevision: 1, checkpointEnvelope,
+      invocations: [{ id: childId, sequence: '1', parentRecordId: rootId, memberOrdinal: '0', lifecycle: 'outcome_uncertain', contentEnvelope: seal(false) }] });
+    storage.requestControl('cancelled');
+    // Home HTTP/storage and the Machine process transport are the boundaries.
+    vi.spyOn(axios, 'post').mockImplementation(async (url, body: unknown) => {
+      if (!String(url).endsWith('/v3/automations/runs/workflow-storage') || !body || typeof body !== 'object'
+        || !('operation' in body)) throw new Error('Unexpected recovery effect');
+      return { status: 200, data: body.operation === 'recovery.list' ? { candidates: [{ run: storage.run(), parentAttempt: 0 }] }
+        : await storage.execute(body as WorkflowRunStorageTestkitOperation) };
+    });
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/profile') return { status: 200, data: { id: accountId } };
+      if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+      if (path === '/v2/account/settings') return { status: 200, data: {
+        content: { t: 'plain', v: AccountSettingsSchema.parse({}) }, version: 1,
+      } };
+      if (path.startsWith('/v1/machines/')) return { status: 200, data: { machine: { id: machineId,
+        storageMode: 'plain', dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER } } };
+      throw new Error(`Unexpected recovery HTTP read ${path}`);
+    });
+    await bootstrapAccountSettingsContext({ credentials: { token: 'token', encryption: null }, mode: 'blocking', refresh: 'force', honorAccountSettingsModeEnv: false });
+    bindApiSessionSocketMock(mocks.io, createApiSessionSocketStub({ async emitWithAck() {
+      return { ok: false, error: RPC_ERROR_MESSAGES.METHOD_NOT_AVAILABLE, errorCode: RPC_ERROR_CODES.METHOD_NOT_AVAILABLE };
+    } }));
+    const runtime = createProductionDaemonWorkflowRuntime({ credentials: { token: 'token', encryption: null }, accountId });
+    const recover = runtime.createRecoveryForMachine({ machineId,
+      machineAdmissionTransport: async () => { throw new Error('Recovery must not admit work'); },
+      machineActionDirectTargetTransport: { machineId, invoke: async (method, request) => {
+        if (method === RPC_METHODS.CAPABILITIES_DETECT) return { protocolVersion: 2,
+          results: { 'tool.executionRuns': { ok: true, data: { protocolVersion: 2, features: { detachedScope: true } } } } };
+        if (method !== SESSION_RPC_METHODS.EXECUTION_RUN_GET || !request || typeof request !== 'object'
+          || !('runId' in request) || request.runId !== 'historical-native-run') throw new Error('Unexpected native effect');
+        return { run: { runId: request.runId, callId: 'call', sidechainId: 'side', intent: 'agent',
+          backendTarget: { kind: 'builtInAgent', agentId: 'claude' }, permissionMode: 'default', retentionPolicy: 'resumable',
+          runClass: 'long_lived', ioMode: 'request_response', status: 'failed', startedAtMs: 1, finishedAtMs: 2,
+          inputTurns: { occurrenceId: 'historical-occurrence' } } };
+      } },
+    });
+    await recover('startup');
+    expect(storage.run()).toMatchObject({ state: 'cancelled', workflowCustodyState: 'settled' });
+    const row = storage.rowById(childId)!;
+    expect(row.index.lifecycle).toBe('cancelled');
+    const opened = openWorkflowProgressStoredEnvelopeV1({ mode: 'plain', binding: { v: 1, purpose: 'invocation_progress',
+      accountId, runId, recordId: childId, sequence: '1', parentRecordId: rootId, memberOrdinal: '0', attempt: '0' },
+      envelope: parseWorkflowStoredContentEnvelopeV1(row.contentEnvelope) });
+    expect(opened).toMatchObject({ kind: 'available', content: { uncertainPriorEffects: { activity: 'stopped' } } });
+    if (opened.kind === 'available') expect(opened.content.result).toBeUndefined();
   });
 });
 
 describe('production FIN managed Action composition', () => {
-  afterEach(async () => { await pluginReloadController.shutdown(); vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
+  let releaseHome = () => {};
+  afterEach(() => { releaseHome(); vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
   it('executes an accepted controller-bound Stop through the installed managed Action and operation owners', async () => {
     const accountId = 'fin-owner';
     const machineId = 'controller';
     const runId = '7be4d65c-d3b7-4868-a416-b18d9ee29c1c';
     const homeId = 'srv_fin_managed';
-    const home = configuration.apiServerUrl;
+    const home = 'http://127.0.0.1:43187';
+    releaseHome = publishServerHttpRuntimeOrigin(home, 'https');
     const serverId = configuration.activeServerId;
     const credentials = { token: `fixture.${Buffer.from(JSON.stringify({ sub: accountId, tokenEpoch: 0,
       provenance: { v: 1, kind: 'terminal', authority: 'account_automation' } })).toString('base64url')}.signature`, encryption: null };
@@ -204,22 +584,35 @@ describe('production FIN managed Action composition', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify(FeaturesResponseSchema.parse({ features: {},
       capabilities: { serverIdentity: { serverIdentityId: homeId } } })), { status: 200 }));
     mocks.fetchAccountEncryptionCurrentness.mockResolvedValue({ mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
-    const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {}, blocks: [{ kind: 'action', id: 'stop',
+    const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {}, blocks: [
+      { kind: 'action', id: 'machines', actionId: 'machines.list', input: {} },
+      { kind: 'action', id: 'stop',
       actionId: 'machines.managed.power.set', input: { homeId: { kind: 'literal', value: homeId }, managedId: { kind: 'literal', value: machine.id },
         intent: { kind: 'literal', value: 'stop' }, when: { kind: 'literal', value: 'now' }, expectedRevision: { kind: 'literal', value: 1 } } }] };
     const spec = getActionSpec('machines.managed.power.set');
     const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
       binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId }, acceptedSnapshot: { startedBy: 'user', definition,
         authoredDefinition: definition, workDepth: 0, metadata: null, frozenChildren: {}, inputs: {}, machineId,
-        materializedLeaves: [{ sourceKey: '$root', blockId: 'stop', kind: 'action', actionId: 'machines.managed.power.set', selection: {},
+        materializedLeaves: [{ sourceKey: '$root', blockId: 'machines', kind: 'action', actionId: 'machines.list', selection: {},
+          executionTarget: { kind: 'detached_run' }, authoredWorkspace: { kind: 'inherit' }, actionInput: {}, actionContract: {
+            inputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(getActionSpec('machines.list').inputSchema, { target: 'draft-7' })),
+            outputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(getActionSpec('machines.list').outputSchema!, { target: 'draft-7' })) } },
+          { sourceKey: '$root', blockId: 'stop', kind: 'action', actionId: 'machines.managed.power.set', selection: {},
           executionTarget: { kind: 'detached_run' }, authoredWorkspace: { kind: 'inherit' }, actionInput: {}, actionContract: {
             inputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(spec.inputSchema, { target: 'draft-7' })),
             outputSchema: StrictJsonValueSchema.parse(zodSchemaToJsonSchemaObject(spec.outputSchema!, { target: 'draft-7' })) } }],
         source: { kind: 'inline' }, executionTarget: { kind: 'detached_run' }, workspaceTarget: { project: { machineId, directory: tmpdir(), checkoutRootPath: tmpdir() } },
         origin: { kind: 'direct' }, authorization: { principal: { kind: 'host' }, admittedPermissionCeiling: 'yolo' } } }));
     const storage = createWorkflowRunStorageTestkit({ accountId, runId, machineId, origin: { kind: 'direct' }, acceptedEnvelope });
+    const unreachableRequests: string[] = [];
     vi.spyOn(axios, 'get').mockImplementation(async url => {
-      const path = new URL(String(url)).pathname;
+      const target = new URL(String(url));
+      if (target.origin !== home) {
+        unreachableRequests.push(target.pathname);
+        throw new Error('Configured workflow endpoint is unreachable');
+      }
+      const path = target.pathname;
+      if (path === '/v1/machines') return { status: 200, data: [] };
       if (path === '/v1/account/profile') return { status: 200, data: { id: accountId } };
       if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
       if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: accountSettings }, version: 1 } };
@@ -229,7 +622,9 @@ describe('production FIN managed Action composition', () => {
       throw new Error(`Unexpected FIN HTTP read ${path}`);
     });
     vi.spyOn(axios, 'post').mockImplementation(async (url, body: unknown) => {
-      const path = new URL(String(url)).pathname;
+      const target = new URL(String(url));
+      if (target.origin !== home) throw new Error('Configured workflow endpoint is unreachable');
+      const path = target.pathname;
       if (path === '/v3/automations/runs/workflow-storage') return { status: 200, data: await storage.execute(body as WorkflowRunStorageTestkitOperation) };
       if (path.endsWith('/execution-authorization')) {
         const request = ExternalActionExecutionAuthorizationRequestV1Schema.parse(body);
@@ -281,10 +676,165 @@ describe('production FIN managed Action composition', () => {
           memberOrdinal: row.index.memberOrdinal, attempt: row.index.attempt },
         envelope: parseWorkflowStoredContentEnvelopeV1(row.contentEnvelope) }) }));
     const observedOperation = await operations.handlers.getV2({ operationId: 'fin-native' });
+    expect(unreachableRequests).toEqual([]);
     expect(outcome, JSON.stringify({ outcome, run: storage.run(), progress, observedOperation })).toMatchObject({ state: 'succeeded' });
     const settled = await operations.handlers.getV2({ operationId: 'fin-native', waitForTerminal: true });
     expect(settled, JSON.stringify(settled)).toMatchObject({ kind: 'found', operation: { state: 'succeeded' } });
     expect(effects).toContain('power');
+  });
+});
+
+describe('production daemon Workflow plugin approval composition', () => {
+  afterEach(() => { vi.restoreAllMocks(); resetActiveAccountSettingsSnapshotForTests(); });
+
+  it('defers an Agent-only plugin leaf, then settles its approved effect exactly once across coordinator reconstruction', async () => {
+    const accountId = 'workflow-plugin-owner';
+    const machineId = 'workflow-plugin-machine';
+    const runId = '7be4d65c-d3b7-4868-a416-b18d9ee29c1c';
+    const pluginId = 'acme.workflow-approval';
+    const localId = 'update';
+    const actionId = `${pluginId}/actions/${localId}`;
+    const home = configuration.apiServerUrl;
+    const serverId = configuration.activeServerId;
+    const credentials = { token: `fixture.${Buffer.from(JSON.stringify({ sub: accountId, tokenEpoch: 0,
+      provenance: { v: 1, kind: 'terminal', authority: 'account_automation' } })).toString('base64url')}.signature`, encryption: null };
+    const inputSchema = { type: 'object', properties: { enabled: { type: 'boolean' } }, required: ['enabled'], additionalProperties: false };
+    const outputSchema = { type: 'object', properties: { changed: { type: 'boolean' } }, required: ['changed'], additionalProperties: false };
+    const fixture = await createAuthoredAdmittedPluginRuntimeFixture({ controller: pluginReloadController,
+      runtimeOptions: { resolveCurrentMachineExecutionOriginContext: createCurrentMachineExecutionOriginContextResolver({
+        serverUrl: home, resolveCurrentMachineId: () => machineId }) }, plugins: [{
+      manifest: createPluginManifestV2Fixture({ id: pluginId, contributes: { actions: [{ id: localId, title: 'Update',
+        dangerLevel: 'writesRemote', scopes: ['global'], surfaces: ['agent'], execution: { target: 'daemon' }, inputSchema, resultSchema: outputSchema,
+        confirmation: { title: 'Apply update' } }] } }),
+      files: { 'daemon.mjs': 'let calls = 0; export function readCalls() { return calls; } export function activate(api) { api.actions.register("update", async () => { calls++; return { changed: true }; }); }' },
+    }] });
+    try {
+      const readCalls = fixture.modulesByPluginId.get(pluginId)?.readCalls;
+      if (typeof readCalls !== 'function') throw new Error('Missing physical plugin effect observation');
+      const settings = AccountSettingsSchema.parse({});
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify(FeaturesResponseSchema.parse({ features: {},
+        capabilities: { serverIdentity: { serverIdentityId: 'srv_workflow_plugin' } } })), { status: 200 }));
+      const artifacts = new Map<string, Record<string, unknown>>();
+      const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {}, blocks: [
+        { kind: 'action', id: 'update', actionId, input: { enabled: { kind: 'literal', value: false } } },
+      ] };
+      const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+        binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId }, acceptedSnapshot: { startedBy: 'user', definition,
+          authoredDefinition: definition, workDepth: 0, metadata: null, frozenChildren: {}, inputs: {}, machineId,
+          materializedLeaves: [{ sourceKey: '$root', blockId: 'update', kind: 'action', actionId, selection: {},
+            executionTarget: { kind: 'session' }, authoredWorkspace: { kind: 'inherit' }, actionInput: {}, actionContract: { inputSchema, outputSchema } }],
+          source: { kind: 'inline' }, executionTarget: { kind: 'session' },
+          workspaceTarget: { project: { machineId, directory: tmpdir(), checkoutRootPath: tmpdir() } },
+          origin: { kind: 'direct' }, authorization: { principal: { kind: 'host' }, admittedPermissionCeiling: 'default' } } }));
+      const storage = createWorkflowRunStorageTestkit({ accountId, runId, machineId, origin: { kind: 'direct' }, acceptedEnvelope });
+      // Only HTTP/Socket.IO persistence and transport are replaced. Production
+      // Workflow composition, plugin loading, policy, approvals and codecs run.
+      vi.spyOn(axios, 'get').mockImplementation(async url => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v1/account/profile') return { status: 200, data: { id: accountId } };
+        if (path === '/v1/account/encryption') return { status: 200, data: { mode: 'plain', updatedAt: 1 } };
+        if (path === '/v1/account/encryption/currentness') return { status: 200, data: {
+          mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+        } };
+        if (path === '/v2/account/settings') return { status: 200, data: { content: { t: 'plain', v: settings }, version: 1 } };
+        if (path === '/v1/artifacts') return { status: 200, data: [...artifacts.values()] };
+        if (path.startsWith('/v1/artifacts/')) return { status: 200, data: artifacts.get(path.split('/').at(-1)!) };
+        if (path === PROMPT_LIBRARY_ROWS_ROUTE_V1) return { status: 200, data: { status: 'listed', rows: [{ key: 'role-overrides', revision: 1,
+          content: { t: 'plain', v: { key: 'role-overrides', value: { v: 1, overrides: {} } } } }] } };
+        throw new Error(`Unexpected Workflow HTTP read ${path}`);
+      });
+      vi.spyOn(axios, 'post').mockImplementation(async (url, body: unknown) => {
+        const path = new URL(String(url)).pathname;
+        if (path === '/v3/automations/runs/workflow-storage') return { status: 200, data: await storage.execute(body as WorkflowRunStorageTestkitOperation) };
+        if (!body || typeof body !== 'object') throw new Error('Invalid Artifact request');
+        if (path === '/v1/artifacts' && 'id' in body && typeof body.id === 'string') {
+          artifacts.set(body.id, { ...body, ownerAccountId: accountId, access: 'owner', encryptionMode: 'plain',
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 });
+          return { status: 200, data: { id: body.id, headerVersion: 1, bodyVersion: 1 } };
+        }
+        if (path.startsWith('/v1/artifacts/')) {
+          const id = path.split('/').at(-1)!;
+          const existing = artifacts.get(id);
+          if (!existing) throw new Error('Missing Artifact');
+          const request = body as Record<string, unknown>;
+          if (request.expectedHeaderVersion !== undefined && request.expectedHeaderVersion !== existing.headerVersion
+            || request.expectedBodyVersion !== undefined && request.expectedBodyVersion !== existing.bodyVersion) {
+            return { status: 200, data: { success: false, error: 'version-mismatch' } };
+          }
+          const headerVersion = Number(existing.headerVersion) + (request.header === undefined ? 0 : 1);
+          const bodyVersion = Number(existing.bodyVersion) + (request.body === undefined ? 0 : 1);
+          artifacts.set(id, { ...existing, ...(request.header === undefined ? {} : { header: request.header }),
+            ...(request.body === undefined ? {} : { body: request.body }), headerVersion, bodyVersion });
+          return { status: 200, data: { success: true, headerVersion, bodyVersion } };
+        }
+        throw new Error(`Unexpected Workflow HTTP mutation ${path}`);
+      });
+      vi.spyOn(axios, 'request').mockImplementation(async request => {
+        const path = new URL(String(request.url)).pathname;
+        if (request.method === 'POST' && path === ACCOUNT_API_TOKENS_LIST_HTTP_PATH_V1) {
+          return { status: 200, data: { tokens: [] } };
+        }
+        throw new Error(`Unexpected Workflow HTTP request ${path}`);
+      });
+      mocks.fetchAccountEncryptionCurrentness.mockResolvedValue({ mode: 'plain', version: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
+      bindApiSessionSocketMock(mocks.io, createApiSessionSocketStub());
+      const snapshot = await bootstrapAccountSettingsContext({ credentials, mode: 'blocking', refresh: 'force', honorAccountSettingsModeEnv: false });
+      if (!snapshot.scopeKey) throw new Error('Missing Workflow Account scope');
+      const catalog = await loadPromptLibraryCatalogV1({ mode: 'plain', material: null, readRows: async () =>
+        PromptLibraryRowsListResponseV1Schema.parse((await axios.get(`${home}${PROMPT_LIBRARY_ROWS_ROUTE_V1}`)).data) });
+      expect(commitActivePromptLibraryCatalog({ scopeKey: snapshot.scopeKey,
+        lifetimeToken: getActiveAccountSettingsSnapshotLifetimeToken(), catalog })).toBe(true);
+      const unavailable = async (): Promise<never> => { throw new Error('Unexpected machine transport'); };
+      const runtime = createProductionDaemonWorkflowRuntime({ credentials, accountId, serverId });
+      const coordinate = () => runtime.createCoordinatorForMachine({
+        machineId, machineAdmissionTransport: unavailable, machineActionDirectTargetTransport: { machineId, invoke: unavailable } });
+      const claim = () => ({ runId, attempt: 0, expectedRevision: storage.run().revision, acceptedEnvelope,
+        accountCurrentness: { mode: 'plain' as const, version: 1, contentKeyFingerprint: null } });
+      const held = await coordinate()(claim());
+      expect(held, JSON.stringify({ held, run: storage.run(), invocations: storage.rows().map(row => row.index) }))
+        .toMatchObject({ state: 'paused', reason: 'approval_required' });
+      expect(readCalls()).toBe(0);
+      expect(artifacts.size).toBe(1);
+      const artifactId = [...artifacts.keys()][0]!;
+      const store = createCliApprovalsArtifactStore({ credentials });
+      expect(await store.targetActionApprovalsGet({ artifactId })).toMatchObject({ requestedSurface: 'agent', qualifiedActionId: actionId, status: 'open',
+        replayPlacement: { serverId, machineId }, executionOriginV1: { serverId, serverIdentityId: 'srv_workflow_plugin', machineId,
+          caller: { kind: 'workflowRun', runId } } });
+      expect(await coordinate()(claim())).toMatchObject({ state: 'paused' });
+      expect(artifacts.size).toBe(1);
+      expect(readCalls()).toBe(0);
+      const startupHome = await createTempDir('workflow-approval-startup-');
+      const replayDiagnostics = vi.spyOn(logger, 'debug');
+      const daemon = await createRequesterSessionControlRuntimeFixture({ happyHomeDir: startupHome,
+        activeServerDir: join(startupHome, 'servers', serverId), serverId, serverHttpBaseUrl: home,
+        machineId, custodianAccountId: accountId, credentials,
+        connectedServicesMaterializationBaseDir: join(startupHome, 'connected-services'), registry: new ConnectedServiceRuntimeRegistry(),
+        trackedSessions: new Map(), getRequester: () => null, resolveQualifiedConnectedAccountV4Support: () => 'advertised',
+        beforeStartup: async () => { await writeStoredCredentialsForServerId(serverId, credentials); },
+        startup: { resolveCurrentMachineExecutionOriginContext: async () => ({ machineId, serverIdentityId: 'srv_workflow_plugin' }),
+          workflowAcceptedAuthorizationCurrentness: runtime.isAcceptedAuthorizationCurrent } });
+      try {
+        const ingress = daemon.runtime.externalActionIngressOwner;
+        if (!ingress) throw new Error('Missing production daemon approval ingress');
+        // The authenticated Machine RPC receiver stamps this authority; UI
+        // surface text alone must not elevate the daemon's terminal credential.
+        const replay = (input: { artifactId: string; decision: 'approve' }) => ingress.executor.execute('approval.request.decide',
+          { ...input, serverIdentityId: 'srv_workflow_plugin', originServerId: serverId },
+          { surface: 'rpc', authority: 'present_user', serverId, actionCaller: { kind: 'host' } });
+        const decided = await replay({ artifactId, decision: 'approve' });
+        expect(decided, JSON.stringify({ decided, effects: readCalls(),
+          stale: replayDiagnostics.mock.calls.find(([message]) => message === '[RPC] Contributed approval origin is stale')?.[1] }))
+          .toMatchObject({ ok: true, result: { status: 'executed' } });
+        expect(readCalls()).toBe(1);
+        expect(await replay({ artifactId, decision: 'approve' })).toMatchObject({ ok: true, result: { status: 'executed' } });
+        await storage.execute({ operation: 'resume', runId, expectedRevision: storage.run().revision });
+        expect(storage.run().state).toBe('running');
+        expect(await coordinate()(claim())).toMatchObject({ state: 'succeeded' });
+        expect(readCalls()).toBe(1);
+        expect(artifacts.size).toBe(1);
+        expect(storage.rows().filter(row => row.index.parentRecordId !== null)).toMatchObject([{ index: { lifecycle: 'completed', attempt: '0' } }]);
+      } finally { await daemon.dispose(); await removeTempDir(startupHome); }
+    } finally { await fixture.dispose(); }
   });
 });
 
@@ -315,6 +865,134 @@ describe('workflow actual Session reuse metadata', () => {
     await expect(resolveWorkflowSessionConversation({ credentials, sessionId, machineId: 'machine-2',
       onUnavailable: (details) => { refused.push(details); } })).resolves.toBeNull();
     expect(refused).toMatchObject([{ reason: 'machine_mismatch', expected: { ids: ['machine-2'] }, observed: { ids: ['machine-1'] } }]);
+  });
+
+  it.each(['remote', 'wrong-machine', 'missing-machine'] as const)
+  ('executes a selected Session through production daemon composition using its own verified Machine (%s)', async scenario => {
+    const accountId = 'account-1';
+    const machineId = 'coordinator-machine';
+    const participantMachineId = 'participant-machine';
+    const directory = '/participant-only/checkout';
+    const runId = '7be4d65c-d3b7-4868-a416-b18d9ee29c1c';
+    const releaseHome = publishServerHttpRuntimeOrigin('http://127.0.0.1:43187', 'https');
+    const localId = deriveWorkflowSessionInputLocalIdV2({ purpose: 'invocation', runId, invocationRecordId: 'unused' });
+    let admittedLocalId = localId;
+    const remoteSession = createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', active: true,
+      metadata: JSON.stringify({ path: directory, ...(scenario === 'missing-machine' ? {} : {
+        machineId: scenario === 'wrong-machine' ? machineId : participantMachineId,
+      }), runtimeDescriptorV1: { v: 1, agentId: 'codex', agent: {} },
+      ...(scenario === 'remote' ? { sessionCreationCorrespondenceV1: buildSessionCreationCorrespondence({
+        identity: { callerCreationNamespace: 'workflow-participant-test', creationKey: sessionId },
+        recipe: { execution: { machineId: participantMachineId, directory: { kind: 'path', path: directory } },
+          organization: { folderId: null, tagIds: [] },
+          agentTarget: { kind: 'agent', identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } },
+      }) } : {}),
+    }) });
+    mocks.fetchSessionById.mockResolvedValue(remoteSession);
+    // Session readiness reaches the actual target's process adapter, even
+    // when the existing Session is already active. No new Session is created.
+    const replacementAwareRpc = vi.spyOn(machineRpc, 'callMachineRpc').mockRejectedValue(
+      new Error('An admitted Workflow participant cannot follow a Machine replacement'));
+    const exactMachineRpc = vi.spyOn(machineRpc, 'callExactMachineRpc').mockImplementation(async request => {
+      expect(request.machineId).toBe(participantMachineId);
+      expect(request.requireCurrentMachine).toBe(true);
+      if (request.method === RPC_METHODS.SPAWN_HAPPY_SESSION) return { type: 'success', sessionId };
+      if (request.method === RPC_METHODS.DAEMON_SPAWN_SESSION_RESOLVE_BY_NONCE) return { status: 'success', sessionId };
+      throw new Error(`Unexpected remote Session process request: ${request.method}`);
+    });
+    const conversation = { kind: 'existing_session' as const, sessionId, machineId: participantMachineId };
+    const definition: WorkflowDefinitionV1 = { version: 1, inputs: [], defaults: {}, blocks: [{ kind: 'step', id: 'opinion',
+      execution: { conversation }, document: { text: 'Give your opinion', references: [], attachments: [] }, input: [], result: { kind: 'text' } }] };
+    const acceptedEnvelope = serializeWorkflowStoredContentEnvelopeV1(sealWorkflowAcceptedSnapshotStoredEnvelopeV1({ mode: 'plain',
+      binding: { v: 1, purpose: 'accepted_snapshot', accountId, runId }, acceptedSnapshot: {
+        startedBy: 'user', definition, authoredDefinition: definition, workDepth: 0, metadata: null, frozenChildren: {}, inputs: {}, machineId,
+        source: { kind: 'inline' }, executionTarget: { kind: 'session' }, origin: { kind: 'direct' },
+        workspaceTarget: { project: { machineId, directory: tmpdir(), checkoutRootPath: tmpdir() } },
+        authorization: { principal: { kind: 'host' }, admittedPermissionCeiling: 'default' },
+        materializedLeaves: [{ sourceKey: '$root', blockId: 'opinion', kind: 'step', selection: { conversation },
+          executionTarget: { kind: 'session' }, authoredWorkspace: { kind: 'inherit' } }],
+      } }));
+    const storage = createWorkflowRunStorageTestkit({ accountId, runId, machineId, origin: { kind: 'direct' }, acceptedEnvelope });
+    type AdmissionRequest = Parameters<NonNullable<Parameters<typeof import('@/session/services/sendSessionMessage').sendSessionMessage>[0]['machineAdmissionTransport']>>[0];
+    const admissions: AdmissionRequest[] = [];
+    vi.spyOn(axios, 'post').mockImplementation(async (url, body: unknown) => {
+      if (!String(url).endsWith('/v3/automations/runs/workflow-storage')) throw new Error(`Unexpected HTTP write: ${new URL(String(url)).pathname}`);
+      return { status: 200, data: await storage.execute(body as WorkflowRunStorageTestkitOperation) };
+    });
+    vi.spyOn(axios, 'get').mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      if (path === `/v2/sessions/${sessionId}`) return { status: 200, data: { session: remoteSession } };
+      if (path.includes('/messages/by-local-id/')) return { status: 200, data: { message: {
+        id: 'question', seq: 1, localId: admittedLocalId, createdAt: 1, updatedAt: 1,
+        content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Give your opinion' } } },
+      } } };
+      if (path.endsWith('/turns')) return { status: 200, data: { v: 1, sessionId, updatedAt: 3,
+        turns: [{ turnId: 'participant-turn', status: 'completed', startedAt: 1, updatedAt: 3,
+          transcriptAnchors: { startUserMessageSeq: 1, userMessageSeqs: [1], startSeqInclusive: 1,
+            endSeqInclusive: 2, finalAssistantMessageSeq: 2 } }] } };
+      if (path.endsWith('/messages')) return { status: 200, data: { messages: [{ id: 'answer', seq: 2,
+        localId: null, createdAt: 2, updatedAt: 2, content: { t: 'plain', v: { role: 'agent', content: { type: 'text', text: 'Remote opinion' } } } }] } };
+      if (path.endsWith('/pending')) return { status: 200, data: { pending: [], version: 0 } };
+      throw new Error(`Unexpected HTTP read: ${path}`);
+    });
+    const runtime = createProductionDaemonWorkflowRuntime({ credentials, accountId });
+    const unavailable = async (): Promise<never> => { throw new Error('No fresh Session or coordinator native effect is authorized'); };
+    const coordinate = runtime.createCoordinatorForMachine({ machineId,
+      machineActionDirectTargetTransport: { machineId, invoke: unavailable },
+      machineAdmissionTransport: async request => {
+        admissions.push(request);
+        admittedLocalId = request.localId;
+        return { status: 'accepted', localId: request.localId };
+      } });
+    try {
+      const outcome = await coordinate({ runId, attempt: 0, expectedRevision: 0, acceptedEnvelope,
+        accountCurrentness: { mode: 'plain', version: 1, contentKeyFingerprint: null } });
+      const progress = storage.rows().map(row => openWorkflowProgressStoredEnvelopeV1({ mode: 'plain',
+        binding: { v: 1, purpose: 'invocation_progress', accountId, runId, recordId: row.index.id,
+          sequence: row.index.sequence, parentRecordId: row.index.parentRecordId, memberOrdinal: row.index.memberOrdinal, attempt: row.index.attempt },
+        envelope: parseWorkflowStoredContentEnvelopeV1(row.contentEnvelope) }));
+      if (scenario === 'remote') {
+        expect(outcome, JSON.stringify(progress)).toMatchObject({ state: 'succeeded' });
+        expect(exactMachineRpc).toHaveBeenCalled();
+        expect(replacementAwareRpc).not.toHaveBeenCalled();
+        expect(admissions).toMatchObject([{ sessionId, targetMachineId: participantMachineId }]);
+        expect(progress).toContainEqual(expect.objectContaining({ kind: 'available', content: expect.objectContaining({
+          blockKind: 'step', result: 'Remote opinion', execution: expect.objectContaining({ kind: 'session', sessionId }),
+          workspace: { descriptor: { machineId: participantMachineId, directory, checkoutRootPath: directory } },
+        }) }));
+      } else {
+        expect(admissions).toEqual([]);
+        expect(exactMachineRpc).not.toHaveBeenCalled();
+        expect(replacementAwareRpc).not.toHaveBeenCalled();
+        expect(outcome).toMatchObject({ state: 'interrupted', reason: 'workflow_conversation_unavailable' });
+        expect(progress).toContainEqual(expect.objectContaining({ kind: 'available', content: expect.objectContaining({
+          reason: { code: 'workflow_conversation_unavailable', details: expect.objectContaining({
+            reason: 'machine_mismatch', expected: { kind: 'string', ids: [participantMachineId] },
+          }) },
+        }) }));
+      }
+    } finally { releaseHome(); }
+  });
+
+  it.each([true, false])('retains a remote Session for same-conversation recovery only with its recorded Machine (witness=%s)', async witness => {
+    const machineId = 'participant-machine';
+    const workspace = { machineId, directory: '/participant-only/checkout', checkoutRootPath: '/participant-only/checkout' };
+    mocks.fetchSessionById.mockResolvedValue(createSessionRecordFixture({ id: sessionId, encryptionMode: 'plain', active: true,
+      metadata: JSON.stringify({ machineId, path: workspace.directory }) }));
+    const unused = async (): Promise<never> => { throw new Error('Recovery may only read the exact retained Session'); };
+    const owner = createProductionWorkflowConversationOwner({ credentials, machineId: 'coordinator-machine',
+      createFreshConversation: unused, resolveSharedRunConversation: unused, resolveProducerConversation: unused,
+      resolveExistingSessionConversation: input => resolveWorkflowSessionConversation({ ...input, credentials }) });
+    const request: Parameters<typeof owner.prepare>[0] = { runId: 'run-1',
+      step: { kind: 'step', id: 'opinion', document: { text: 'Continue', references: [], attachments: [] }, input: [], result: { kind: 'text' } },
+      invocation: { kind: 'happier.workflow-progress.v1', blockKind: 'step', invocationPath: { blockId: 'opinion', scope: [] },
+        logicalInvocationRecordId: 'current', attempt: '1', recovery: { conversation: 'same_conversation', input: { kind: 'original' } } },
+      recoveryPreviousExecution: { kind: 'session', sessionId, localInputId: 'original-input' },
+      ...(witness ? { recoveryPreviousWorkspace: workspace } : {}),
+      execution: { conversation: { kind: 'fresh' } }, executionTarget: { kind: 'session' },
+      authorization: { principal: { kind: 'host' }, admittedPermissionCeiling: 'default' } };
+    if (witness) await expect(owner.prepare(request)).resolves.toMatchObject({ existing: { sessionId, machineId, directory: workspace.directory } });
+    else await expect(owner.prepare(request)).rejects.toMatchObject({ code: 'workflow_conversation_unavailable', details: { reason: 'machine_mismatch' } });
   });
 
   it('projects timestamped controls from authenticated Session owner metadata', async () => {
@@ -349,8 +1027,8 @@ describe('workflow actual Session reuse metadata', () => {
   });
 
   it.each(['claude', 'another-agent'])('reads retained config catalog fields only for the current Agent (%s)', async agentId => {
-    let written: Metadata = { path: '/owner/checkout', host: 'test', machineId: 'machine-1',
-      runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} } };
+    let written: Metadata = createTestMetadata({ path: '/owner/checkout', host: 'test', machineId: 'machine-1',
+      runtimeDescriptorV1: { v: 1, agentId: 'claude', agent: {} } });
     await publishSessionControlsMetadataBestEffort({
       session: { updateMetadata: updater => { written = updater(written); } },
       sessionConfigOptionsState: { v: 1, agentId, updatedAt: 200,
@@ -407,7 +1085,7 @@ describe('workflow actual Session reuse metadata', () => {
     const page = { sessions: [createSessionNotificationContextFixture(sessionId)], nextCursor: null, hasNext: false,
       attentionNextCursor: null, attentionHasNext: false };
     mocks.fetchSessionsPage.mockResolvedValue(page);
-    mocks.fetchSessionsQueryPage.mockResolvedValue(page);
+    mocks.fetchSessionsQueryPage.mockResolvedValue(SessionListQueryResponseV1Schema.parse(page));
     const refused: unknown[] = [];
     await expect(resolveWorkflowSessionConversation({ credentials, sessionId: 'c123', machineId: 'machine-1',
       onUnavailable: (details) => { refused.push(details); } })).resolves.toBeNull();
@@ -445,6 +1123,36 @@ describe('workflow actual Session reuse metadata', () => {
 describe('production daemon Workflow bootstrap', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it.each(['published', 'explicit'] as const)('reads credentialed currentness through the %s endpoint', async target => {
+    const published = 'http://127.0.0.1:43187';
+    const admitted = 'http://127.0.0.1:43188';
+    const endpoint = target === 'explicit' ? admitted : published;
+    const release = publishServerHttpRuntimeOrigin(published, 'iroh');
+    const tokenId = '8f250f0e-4f31-4f7d-8f68-61638b73b526';
+    const request = vi.spyOn(axios, 'request').mockImplementation(async request => {
+      const url = new URL(String(request.url));
+      if (url.origin !== endpoint) throw new Error('Workflow currentness endpoint is unreachable');
+      expect(url.pathname).toBe(ACCOUNT_API_TOKENS_LIST_HTTP_PATH_V1);
+      return { status: 200, data: { tokens: [{ tokenId, label: 'automation', displayPrefix: 'hap_v1_8f250f0e',
+        createdAt: '2026-01-01T00:00:00.000Z', lastUsedAt: null, expiresAt: null,
+        hasEncryptionAccess: false, hasUnattendedTeamAccess: false, grant: API_TOKEN_FULL_GRANT_V1,
+        parentTokenId: null, activeChildCount: 0, embedConfig: null }] } };
+    });
+    try {
+      const current = createCredentialedWorkflowAcceptedAuthorizationCurrentness({
+        credentials: { token: 'token', encryption: null }, accountId: 'account-1',
+        ...(target === 'explicit' ? { serverHttpBaseUrl: admitted } : {}),
+      });
+      await expect(current({ authorization: { admittedPermissionCeiling: 'default',
+        principal: { kind: 'api', accountId: 'account-1', principalId: 'account-1', credentialId: tokenId } } }))
+        .resolves.toBe(true);
+      expect(request).toHaveBeenCalled();
+    } finally {
+      request.mockRestore();
+      release();
+    }
   });
 
   it('keeps a transport failure unknown and still refuses an authoritative missing token', async () => {
@@ -649,15 +1357,20 @@ describe('production daemon Workflow bootstrap', () => {
   });
 
   it('keeps Session turn cancellation-request custody unresolved until the exact turn is terminal', async () => {
+    const sessionId = 'c111111111111111111111111';
+    mocks.fetchAccountEncryptionCurrentness.mockResolvedValue({ mode: 'plain', version: 1,
+      signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 });
+    mocks.fetchSessionById.mockResolvedValue(createSessionRecordFixture({ id: sessionId, active: true, encryptionMode: 'plain',
+      metadata: JSON.stringify({ machineId: 'machine-1', path: '/repo' }) }));
     const observeSession = vi.fn(async () => ({
       ok: true as const,
-      sessionId: 'session-1',
+      sessionId,
       localId: 'input-1',
       result: { kind: 'pending' as const },
     }));
     const cancelSession = vi.fn(async () => ({ kind: 'turn_cancel_requested' as const }));
     const observe = createWorkflowInvocationRecoveryObserver({
-      credentials: { token: 'token' } as never,
+      credentials: { token: 'token', encryption: null },
       machineId: 'machine-1',
       actionExecutor: { execute: vi.fn() } as never,
       observeSession,
@@ -674,11 +1387,13 @@ describe('production daemon Workflow bootstrap', () => {
         blockKind: 'step',
         attempt: '0',
         logicalInvocationRecordId: '2aaf1a39-4c48-4904-83a4-7eae318dfc2c',
-        execution: { kind: 'session', sessionId: 'session-1', localInputId: 'input-1' },
+        workspace: { descriptor: { machineId: 'machine-1', directory: '/repo', checkoutRootPath: '/repo' } },
+        execution: { kind: 'session', sessionId, localInputId: 'input-1' },
       },
-    })).resolves.toEqual({
+    })).resolves.toMatchObject({
       kind: 'unresolved',
       code: 'session_input_turn_cancel_requested',
+      waitForCompletion: expect.any(Function),
     });
     expect(cancelSession).toHaveBeenCalledOnce();
   });

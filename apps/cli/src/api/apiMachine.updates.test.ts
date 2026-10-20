@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
+import { z } from 'zod/mini';
 import tweetnacl from 'tweetnacl';
 import { openEncryptedDataKeyEnvelopeV1, sealEncryptedDataKeyEnvelopeV1 } from '@happier-dev/protocol/crypto/encryptedDataKeyEnvelopeV1';
 import { signAccountContentKeyBindingV1 } from '@happier-dev/protocol/crypto/accountContentKeyBindingV1';
@@ -7,10 +8,11 @@ import { computeContentPublicKeyFingerprint } from '@happier-dev/protocol/machin
 import { computeMachineOwnerEnvelopeFingerprintV1 } from '@happier-dev/protocol/machines/machineOwnerEnvelopeFingerprintV1';
 import { MachineRecipientKeyEnvelopeCommitInputV1Schema } from '@happier-dev/protocol/machines/machineAccessV1';
 import { socketRpcCodec, type SocketRpcContent } from '@happier-dev/sync-client';
+import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 import { readMachineFinitePolicyV1 } from '@happier-dev/protocol/machines/machineFinitePolicyV1';
 import { decodeBase64, decrypt, encodeBase64, encrypt, getRandomBytes } from './encryption';
 
-import { bindApiSessionSocketMock, createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
+import { bindApiSessionSocketMock, bindApiSessionSocketSequenceMock, createApiSessionSocketStub } from '@/testkit/backends/apiSessionSocketHarness';
 import { createManagedActivityInventory, createLiveWorkProducerGroup } from '@/daemon/lifecycle/managedActivity';
 import { createDaemonAdmissionDrain } from '@/daemon/lifecycle/admissionDrain';
 import { MACHINE_UPDATE_OPERATION_PROTOCOL_CAPABILITIES_EVENT_V1 } from '@happier-dev/protocol/machines/operationProtocolCapabilitiesV1';
@@ -23,7 +25,7 @@ vi.mock('socket.io-client', () => ({
 }));
 
 // Cold source transformation belongs to collection, not a held-operation deadline.
-await Promise.all([import('./api'), import('./rpc/RpcHandlerManager')]);
+await import('./api');
 
 describe('ApiMachineClient updates', () => {
   afterEach(() => {
@@ -61,7 +63,7 @@ describe('ApiMachineClient updates', () => {
       acknowledgedMetadata = write.metadata;
       return { result: 'success', version: write.expectedVersion + 1, metadata: write.metadata };
     } });
-    bindApiSessionSocketMock(ioMock, socket);
+    bindApiSessionSocketSequenceMock(ioMock, [socket, createApiSessionSocketStub()]);
     const { ApiClient } = await import('./api');
     const token = `header.${Buffer.from(JSON.stringify({ sub: 'owner' })).toString('base64url')}.signature`;
     const api = await ApiClient.create({ token, encryption: { type: 'legacy', secret: key } });
@@ -111,7 +113,7 @@ describe('ApiMachineClient updates', () => {
     client = new ApiMachineClient('token', { id: 'machine-1', encryptionKey: key, encryptionVariant: 'legacy',
       metadata: null, metadataVersion: 0, daemonState: null, daemonStateVersion: 0 }, undefined,
     { managedActivity: { activity, admissionDrain: createDaemonAdmissionDrain() } });
-    client.setRPCHandlers({ spawnSession: async () => ({ type: 'error', errorMessage: 'Not used by this fixture' }),
+    client.setRPCHandlers({ spawnSession: async () => ({ type: 'error', errorCode: 'SPAWN_FAILED', errorMessage: 'Not used by this fixture' }),
       stopSession: async () => false, requestShutdown: () => {} });
     let release!: () => void;
     const task = new Promise<void>(resolve => { release = resolve; });
@@ -170,15 +172,27 @@ describe('ApiMachineClient updates', () => {
     })));
     vi.spyOn(persistence, 'readStoredCredentialsForServerId').mockResolvedValue(credential);
     vi.spyOn(persistence, 'readAccountChangesCursor').mockResolvedValue(0);
-    vi.spyOn(persistence, 'writeAccountChangesCursor').mockResolvedValue();
+    let acknowledgeFeed!: () => void;
+    const feedCommitted = new Promise<void>(resolve => { acknowledgeFeed = resolve; });
+    vi.spyOn(persistence, 'writeAccountChangesCursor').mockImplementation(async (accountId, cursor) => {
+      if (accountId === 'bob' && cursor === 1) acknowledgeFeed();
+    });
+    const publishedContent = {
+      metadata: encodeBase64(encrypt(key, 'dataKey', { host: 'alice', platform: 'linux', happyCliVersion: '0.3', homeDir: '/home/alice', happyHomeDir: '/home/alice/.happier' })),
+      metadataVersion: 3, daemonState: null, daemonStateVersion: 4,
+    };
     vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
       if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'bob' } };
       if (url.endsWith('/v2/changes')) return { status: 200, data: { changes: teamJoined
         ? [{ cursor: 1, kind: 'machine', entityId: 'alice-machine', changedAt: 1 }] : [], nextCursor: teamJoined ? 1 : 0 } };
+      if (url.endsWith('/v1/machines/alice-machine')) return { status: 200, data: { machine: {
+        id: 'alice-machine', ...publishedContent, dataEncryptionKey: caller,
+        access: { custodian: { accountId: 'offline-alice', displayName: 'Alice' }, role: 'manage', resourceMode: 'e2ee', accessState: 'ready' },
+      } } };
       if (url.includes('/v1/machines/alice-machine/data-key-envelopes')) return { status: 200, data: {
         machineId: 'alice-machine', custodianAccountId: 'offline-alice', encryptionMode: 'e2ee',
         machineOwnerEnvelopeFingerprint: computeMachineOwnerEnvelopeFingerprintV1(decodeBase64(caller)), callerDataEncryptionKey: caller, nextCursor: null,
-        content: { metadata: encodeBase64(encrypt(key, 'dataKey', { host: 'alice', platform: 'linux', happyCliVersion: '0.3', homeDir: '/home/alice', happyHomeDir: '/home/alice/.happier' })), metadataVersion: 3, daemonState: null, daemonStateVersion: 4 },
+        content: publishedContent,
         recipients: delivered ? [] : [{ recipientAccountId: 'later-team-member', contentKey: { status: 'available',
           accountSigningPublicKey: Buffer.from(signing.publicKey).toString('hex'), contentPublicKey: encodeBase64(recipient.publicKey),
           contentPublicKeySignature: encodeBase64(signAccountContentKeyBindingV1({ accountSigningSecretKey: signing.secretKey, contentPublicKey: recipient.publicKey })) },
@@ -188,12 +202,12 @@ describe('ApiMachineClient updates', () => {
     });
     vi.spyOn(axios, 'patch').mockImplementation(async (url: string, body: unknown) => {
       expect(url).toBe('https://holder-home.test/v1/machines/alice-machine/data-key-envelopes');
-      const input = MachineRecipientKeyEnvelopeCommitInputV1Schema.parse({ machineId: 'alice-machine', ...MachineRecipientKeyEnvelopeCommitInputV1Schema.omit({ machineId: true }).parse(body) });
+      const input = MachineRecipientKeyEnvelopeCommitInputV1Schema.parse({ machineId: 'alice-machine', ...z.omit(MachineRecipientKeyEnvelopeCommitInputV1Schema, { machineId: true }).parse(body) });
       delivered = openEncryptedDataKeyEnvelopeV1({ envelope: decodeBase64(input.recipientKeyEnvelopes[0]!.encryptedDataKey), recipientSecretKeyOrSeed: recipient.secretKey });
       return { status: 200, data: { appliedRecipientAccountIds: ['later-team-member'], skippedRecipientAccountIds: [] } };
     });
     const socket = createApiSessionSocketStub();
-    bindApiSessionSocketMock(ioMock, socket);
+    bindApiSessionSocketSequenceMock(ioMock, [socket, createApiSessionSocketStub()]);
     const { ApiMachineClient } = await import('./apiMachine');
     const client = runWithServerHttpBaseUrl('https://holder-home.test', () => new ApiMachineClient(token, {
       id: 'bob-executor', encryptionMode: 'e2ee', encryptionKey: key, encryptionVariant: 'dataKey', dataEncryptionKey: caller,
@@ -208,12 +222,77 @@ describe('ApiMachineClient updates', () => {
         teamJoined = true;
         socket.trigger('update', { id: 'team-member-joined', seq: 1, createdAt: 1, body: { t: 'account-change' } });
       } }));
-      await vi.waitFor(() => expect(axios.get).toHaveBeenCalledWith(
+      // Observe the owning feed commit after preparation, rather than imposing
+      // vi.waitFor's unrelated one-second polling budget on cold crypto work.
+      await feedCommitted;
+      expect(axios.get).toHaveBeenCalledWith(
         'https://holder-home.test/v1/machines/alice-machine/data-key-envelopes?state=action_required',
         expect.anything(),
-      ));
-      await vi.waitFor(() => expect(delivered).toEqual(key));
-      await vi.waitFor(() => expect(persistence.writeAccountChangesCursor).toHaveBeenCalledWith('bob', 1));
+      );
+      expect(delivered).toEqual(key);
+      expect(persistence.writeAccountChangesCursor).toHaveBeenCalledWith('bob', 1);
+    } finally { await client.shutdown(); }
+  });
+
+  it.each(['http503', 'network', 'unopenable-key'] as const)('keeps RPC authority across snapshot refresh failure only without contrary key evidence (%s)', async (failure) => {
+    vi.stubEnv('HAPPY_ENABLE_V2_CHANGES', 'false');
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>(async () => Response.json({ features: {},
+      capabilities: { serverIdentity: { serverIdentityId: 'fixture-home' } } })));
+    const accountKey = new Uint8Array(32).fill(11);
+    const key = new Uint8Array(32).fill(19);
+    const publicKey = tweetnacl.box.keyPair.fromSecretKey(accountKey).publicKey;
+    const row = { id: 'machine-1', storageMode: 'e2ee',
+      dataEncryptionKey: encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey: key,
+        recipientPublicKey: publicKey, randomBytes: getRandomBytes })),
+      metadata: null, metadataVersion: 1, daemonState: null, daemonStateVersion: 0 };
+    let readFailure: typeof failure | null = null;
+    vi.spyOn(axios, 'get').mockImplementation(async (url: string) => {
+      if (url.endsWith('/v1/account/encryption')) return { status: 200, data: { mode: 'e2ee', updatedAt: 1 } };
+      if (url.endsWith('/v1/account/profile')) return { status: 200, data: { id: 'fixture-owner' } };
+      if (url.endsWith('/v1/machines/machine-1')) {
+        if (readFailure === 'http503') throw new axios.AxiosError('Snapshot busy', 'ERR_BAD_RESPONSE', undefined, undefined,
+          { status: 503, statusText: 'Service Unavailable', data: {}, headers: {}, config: { headers: new axios.AxiosHeaders() } });
+        if (readFailure === 'network') throw new axios.AxiosError('Connection reset', 'ECONNRESET');
+        return { status: 200, data: { machine: readFailure === 'unopenable-key' ? { ...row,
+          dataEncryptionKey: encodeBase64(sealEncryptedDataKeyEnvelopeV1({ dataKey: new Uint8Array(32).fill(29),
+            recipientPublicKey: tweetnacl.box.keyPair().publicKey, randomBytes: getRandomBytes })),
+          metadataVersion: 2 } : row } };
+      }
+      return { status: 404, data: {} };
+    });
+    const { ApiClient } = await import('./api');
+    const { RpcHandlerManager } = await import('./rpc/RpcHandlerManager');
+    const api = await ApiClient.create({ token: 'token', encryption: { type: 'dataKey', machineKey: accountKey, publicKey } });
+    const initial = await api.getMachine(row.id);
+    if (!initial) throw new Error('Expected admitted Machine');
+    const client = api.machineSyncClient(initial);
+    const manager: unknown = Reflect.get(client, 'rpcHandlerManager');
+    const refresh: unknown = Reflect.get(client, 'refreshMachineFromServer');
+    if (!(manager instanceof RpcHandlerManager) || typeof refresh !== 'function') throw new Error('Missing Machine RPC owner');
+    manager.registerHandler('context.read', () => ({ current: true }));
+    const content: SocketRpcContent = { mode: 'e2ee', cipher: {
+      encryptRaw: async value => encodeBase64(encrypt(key, 'dataKey', value)),
+      decryptRaw: async value => decrypt(key, 'dataKey', decodeBase64(value)),
+    } };
+    const callId = '0123456789abcdef0123456789abcdef';
+    const request = async () => manager.handleRequest({ method: 'machine-1:context.read',
+      params: await socketRpcCodec.encodeParams(content, {}, { method: 'machine-1:context.read', callId }) });
+    const decode = async (result: unknown) => socketRpcCodec.decodeResult(content, { ok: true, result }, callId);
+    try {
+      expect(await decode(await request())).toEqual({ current: true });
+      readFailure = failure;
+      await Reflect.apply(refresh, client, []);
+      const afterFailure = await request();
+      if (failure === 'unopenable-key') {
+        expect(afterFailure).toMatchObject({ errorCode: RPC_ERROR_CODES.UPDATE_REQUIRED });
+        // A failed read cannot restore authority that a proven key change retired.
+        readFailure = 'http503';
+        await Reflect.apply(refresh, client, []);
+        expect(await request()).toMatchObject({ errorCode: RPC_ERROR_CODES.UPDATE_REQUIRED });
+      } else expect(await decode(afterFailure)).toEqual({ current: true });
+      readFailure = null;
+      await Reflect.apply(refresh, client, []);
+      expect(await decode(await request())).toEqual({ current: true });
     } finally { await client.shutdown(); }
   });
 

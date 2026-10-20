@@ -4,6 +4,7 @@ import { TERMINAL_STREAM_MAX_READ_BYTES } from '@happier-dev/protocol/terminal/s
 import type { DaemonTerminalLaunchIntent } from '@happier-dev/protocol/daemon/terminal';
 import type { WorkspaceAddressV1 } from '@happier-dev/protocol/workspaces/workspaceRefV1';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import type { EmbeddedTerminalPaneStatus } from '@/components/terminal/embedded/types';
 
 import { createEmptyTerminalSurfaceState, readTerminalSurfaceState } from '@/components/sessions/terminal/terminalSurfaceStateCache';
 import { resolveTerminalAdmissionErrorCode } from '@/components/sessions/terminal/terminalErrorCopy';
@@ -60,7 +61,7 @@ import { buildMachineTerminalSessionRequest } from './machineTerminalSessionRequ
 import { useMachineTerminalActionAdmission } from './useMachineTerminalActionAdmission';
 import { delay } from '@/utils/timing/time';
 
-export type TerminalStatus = 'idle' | 'connecting' | 'connected' | 'error' | 'exited';
+export type TerminalStatus = EmbeddedTerminalPaneStatus;
 
 const mutableTerminalRendererId = 'embedded-terminal';
 
@@ -113,8 +114,11 @@ export function useMachineTerminalSession(params: Readonly<{
         [params.terminalKey],
     );
 
-    const [status, setStatus] = React.useState<TerminalStatus>('idle');
+    const [status, setStatus] = React.useState<TerminalStatus>(() => params.attachedTerminalId !== undefined || initialSurfaceState.terminalId ? 'connecting' : 'not-open');
     const [error, setError] = React.useState<string | null>(null);
+    const [exitCode, setExitCode] = React.useState<number | null>(null);
+    // A terminal that streamed once and then failed lost its connection; it did not fail to start.
+    const everConnectedRef = React.useRef(false);
     const [terminalTitle, setTerminalTitle] = React.useState<string | null>(null);
     const [terminalBell, setTerminalBell] = React.useState<string | null>(null);
     const mountedRef = React.useRef(false);
@@ -318,6 +322,7 @@ export function useMachineTerminalSession(params: Readonly<{
 
     const requestRestart = React.useCallback((context?: ActionExecutorContext) => {
         if (params.readOnly) return;
+        everConnectedRef.current = false;
         resetAutoRetryState();
         restartRequestedRef.current = true;
         restartContextRef.current = context;
@@ -381,6 +386,7 @@ export function useMachineTerminalSession(params: Readonly<{
 
     React.useEffect(() => {
         let canceled = false;
+        let streaming = false;
         const interest = new AbortController();
         const retire = () => {
             canceled = true;
@@ -393,7 +399,13 @@ export function useMachineTerminalSession(params: Readonly<{
             const cachedSurfaceState = readTerminalSurfaceState(params.terminalKey) ?? createEmptyTerminalSurfaceState();
 
             setError(null);
-            setStatus('connecting');
+            if (admissionRef.current.openCancelled && !connectionAttempt.explicitRetry && !restartRequestedRef.current) {
+                setStatus('not-open');
+                return;
+            }
+            // Process admission (including consent) precedes a connection.
+            const waitingForConnection = params.attachedTerminalId !== undefined || Boolean(cachedSurfaceState.terminalId);
+            setStatus(waitingForConnection ? 'connecting' : 'not-open');
 
             if (!params.machineId || (!params.cwd && !params.launch && params.attachedTerminalId === undefined)) {
                 setStatus('error');
@@ -411,7 +423,7 @@ export function useMachineTerminalSession(params: Readonly<{
                 return;
             }
             if ((params.readOnly && !params.attachedTerminalId) || params.attachedTerminalId === null || (params.attachedTerminalId === undefined && !initialTerminalSize)) {
-                setStatus('connecting');
+                setStatus(waitingForConnection ? 'connecting' : 'not-open');
                 return;
             }
 
@@ -439,7 +451,7 @@ export function useMachineTerminalSession(params: Readonly<{
                                     serverId: scope.serverId, accountId: scope.accountId,
                                 });
                             }
-                        } : undefined);
+                        } : undefined, connectionAttempt.explicitRetry);
             restartRequestedRef.current = false;
             restartContextRef.current = undefined;
             if (!retirement) retirement = admissionRef.current.lifetime?.onRetire(retire);
@@ -453,17 +465,21 @@ export function useMachineTerminalSession(params: Readonly<{
                 return;
             }
             if (!ensured.ok) {
+                if (ensured.cancelled) {
+                    resetAutoRetryState();
+                    setStatus('not-open');
+                    setError(null);
+                    return;
+                }
                 const errorCode = resolveTerminalAdmissionErrorCode(ensured);
                 if (handleWithdrawalRef.current(errorCode)) return;
-                if (isRecoverableTerminalSessionErrorCode(errorCode) && scheduleAutoRetry()) {
+                if ((isRecoverableTerminalRpcError(ensured) || isRecoverableTerminalSessionErrorCode(errorCode)) && scheduleAutoRetry()) {
                     return;
                 }
                 setStatus('error');
                 setError(errorCode);
                 return;
             }
-            resetAutoRetryState();
-
             const replayMode: TerminalStreamCursor['mode'] = byteStreamEnabled
                 ? 'byte-offset'
                 : 'legacy-event-cursor';
@@ -505,11 +521,14 @@ export function useMachineTerminalSession(params: Readonly<{
                 hydrateTerminalRendererIfNeeded();
             }
             setStatus('connected');
+            setExitCode(null);
+            everConnectedRef.current = true;
 
             const carrier = createMachineRpcTerminalStreamCarrier({
                 machineId: params.machineId,
                 serverId: scope?.serverId ?? params.serverId,
                 accountId: scope?.accountId,
+                signal: interest.signal,
             });
             terminalStreamCarrierRef.current = carrier;
             terminalRendererAckDeliveryRef.current = createTerminalRendererAckDelivery({
@@ -581,13 +600,15 @@ export function useMachineTerminalSession(params: Readonly<{
                         suggestOpen: event.suggestOpen,
                     });
                 },
-                onExit: () => {
+                onExit: (event) => {
                     writeDecodedStreamProjection(terminalPreviewDecoderRef.current.flush());
                     terminalStreamDoneRef.current = true;
+                    setExitCode(event.exitCode);
                     setStatus('exited');
                 },
             });
             terminalStreamRuntimeRef.current = runtime;
+            streaming = true;
             let idleCount = 0;
             while (!canceled) {
                 if (terminalStreamDoneRef.current) {
@@ -610,18 +631,22 @@ export function useMachineTerminalSession(params: Readonly<{
                     rendererId: embeddedTerminalRendererId,
                     surfaceEpoch: connectionNonce,
                 });
-                if (canceled) return;
+                if (canceled || terminalStreamRuntimeRef.current !== runtime) return;
 
                 if (!read.ok) {
                     if (handleWithdrawalRef.current(read.code)) return;
                     clearActiveTerminalStream();
-                    if (isRecoverableTerminalSessionErrorCode(read.code) && scheduleAutoRetry()) {
+                    const recoverable = isRecoverableTerminalRpcError({ ok: false, errorCode: read.code }, 'stream');
+                    if ((recoverable || isRecoverableTerminalSessionErrorCode(read.code)) && scheduleAutoRetry()) {
                         return;
                     }
                     setStatus('error');
-                    setError(read.code);
+                    setError(recoverable ? 'terminal_rpc_target_unavailable' : read.code);
                     return;
                 }
+                // A successful ensure does not prove that its stream can be
+                // read. Reset recovery only after transport actually recovers.
+                if (autoRetryAttemptRef.current > 0) resetAutoRetryState();
 
                 if (read.mode === 'legacy-event-cursor') {
                     terminalCreditStateRef.current = null;
@@ -742,11 +767,14 @@ export function useMachineTerminalSession(params: Readonly<{
             if (canceled) return;
             if (handleWithdrawalRef.current(readTerminalStreamInputErrorCode(e))) return;
             clearActiveTerminalStream();
-            if (isRecoverableTerminalRpcError(e) && scheduleAutoRetry()) {
+            const recoverable = isRecoverableTerminalRpcError(e, streaming ? 'stream' : 'admission');
+            if (recoverable && scheduleAutoRetry()) {
                 return;
             }
             setStatus('error');
-            setError(e instanceof Error ? e.message : 'terminal_error');
+            setError(recoverable
+                ? 'terminal_rpc_target_unavailable'
+                : e instanceof Error ? e.message : 'terminal_error');
         });
 
         return () => {
@@ -797,7 +825,10 @@ export function useMachineTerminalSession(params: Readonly<{
             if (!params.closeOnUnmount || params.readOnly || params.attachedTerminalId !== undefined || !params.machineId || !terminalIdRef.current) return;
             const scope = attachmentScopeRef.current;
             void machineTerminalClose(params.machineId, { terminalId: terminalIdRef.current }, {
-                serverId: scope?.serverId ?? params.serverId, accountId: scope?.accountId });
+                serverId: scope?.serverId ?? params.serverId, accountId: scope?.accountId }).catch(() => {
+                // The pane is disposed. A lost close receipt cannot recover its
+                // transport or authorize another close from this retired view.
+            });
         };
     }, [params.attachedTerminalId, params.closeOnUnmount, params.machineId, params.readOnly, params.serverId]);
 
@@ -937,10 +968,14 @@ export function useMachineTerminalSession(params: Readonly<{
     ]);
 
     return {
+        // Consent never changes a new shell's lifecycle: it remains not-open
+        // until admission returns its PTY. Existing attachments keep their state.
         status,
         readOnly: params.readOnly === true,
         terminalId: terminalIdRef.current,
         error,
+        exitCode,
+        connectionLost: status === 'error' && everConnectedRef.current,
         detectedUrl,
         onInput,
         onPaste,

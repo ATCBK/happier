@@ -16,6 +16,7 @@ export type {
   HappierStyleProp,
   HappierTextSelection,
 } from './portableTypes.js';
+export { HappierRowOperationContext } from './collection/rowOperation.js';
 export {
   HappierItemAddRow,
   type HappierItemAddRowContentProps,
@@ -94,6 +95,7 @@ export {
   HappierTreeDisclosure,
   HappierTreeRow,
   resolveHappierTreeRowIndentPx,
+  useHappierTreeRowLineHeight,
   type HappierTreeRowActionsControl,
   type HappierTreeRowProps,
 } from './navigation/TreeRow.js';
@@ -167,7 +169,7 @@ export {
   type HappierMaterialRole,
 } from './layout/material.js';
 export { HappierSurfaceGradientLayer } from './layout/SurfaceGradientLayer.js';
-export { HappierMaterialRoleProvider, useContainingHappierMaterialRole, useHappierMaterialColorResolver, type HappierMaterialSurfaceRender } from './layout/Surface.js';
+export { HappierMaterialRoleProvider, useContainingHappierMaterialRole, useHappierMaterialColorResolver, type HappierFloatingRole, type HappierMaterialSurfaceRender } from './layout/Surface.js';
 export {
   matchFindText,
   type FindTextMatchRange,
@@ -218,7 +220,6 @@ export {
   type HappierPageRowShape,
   type HappierPageRowMetrics,
   HAPPIER_ROW_TITLE_META_GAP_PX,
-  resolveHappierRowTitleMetaPlacement,
 } from './layout/pageRowMetrics.js';
 export {
   HappierListDetailLayout,
@@ -226,6 +227,7 @@ export {
   type HappierListDetailLayoutState,
 } from './collection/ListDetailLayout.js';
 export {
+  HappierCollectionNavigationBackClosesDetailContext,
   useHappierCollectionIndexView,
   useHappierCollectionLayout,
   type HappierCollectionIndexView,
@@ -248,6 +250,11 @@ export {
   type HappierCollectionWindow,
 } from './collection/collectionModel.js';
 export {
+  rankHappierQueryMatches,
+  type HappierQueryRankOptions,
+  type HappierQueryText,
+} from './collection/queryRank.js';
+export {
   useHappierCollection,
   useHappierCollectionVisit,
   type HappierCollectionActions,
@@ -265,12 +272,14 @@ export {
   HappierCollectionList,
   HappierCollectionListGroupLabel,
   HappierCollectionListMark,
+  HappierCollectionRestingRowsContext,
   useHappierCollectionDraftRowTitle,
   type HappierCollectionListFilters,
   type HappierCollectionListHost,
   type HappierCollectionListProps,
   type HappierCollectionListSearch,
   type HappierCollectionListTextRole,
+  type HappierCollectionRestingRows,
 } from './collection/CollectionList.js';
 export {
   HAPPIER_COLLECTION_DETAIL_SLIDE,
@@ -321,6 +330,21 @@ export {
   type HappierCountedDisclosureProps,
 } from './collection/CountedDisclosure.js';
 export {
+  HAPPIER_TECHNICAL_DETAILS_METRICS,
+  HappierTechnicalDetailsDisclosure,
+  type HappierTechnicalDetailsContentProps,
+  type HappierTechnicalDetailsDisclosureProps,
+  type HappierTechnicalDetailsLine,
+  type HappierTechnicalDetailsSpace,
+  type HappierTechnicalDetailsTextRender,
+} from './collection/TechnicalDetailsDisclosure.js';
+export {
+  HappierListOverflowFooter,
+  leadHappierListRows,
+  type HappierListOverflowFooterLabels,
+  type HappierListOverflowFooterProps,
+} from './collection/ListOverflowFooter.js';
+export {
   HAPPIER_DISCLOSURE_CHEVRON_METRICS,
   HappierChevron,
   HappierDisclosureChevron,
@@ -339,7 +363,6 @@ export {
   HAPPIER_PAGE_ADAPTIVE_ACCESSORY_MAX_ROW_SHARE,
   resolveHappierPageBackPlacement,
   type HappierPageBackPlacement,
-  HAPPIER_COLLECTION_RAIL_WIDTH_PX,
   type HappierCollectionRailWidth,
 } from './layout/pageMetrics.js';
 export {
@@ -370,11 +393,22 @@ export {
   type HappierPageHeaderTextRender,
 } from './layout/PageHeader.js';
 export {
+  HAPPIER_MODAL_HEADER_METRICS,
+  HappierModalHeader,
+  resolveHappierModalHeaderLayout,
+  type HappierModalHeaderLayout,
+  type HappierModalHeaderProps,
+  type HappierModalHeaderSpace,
+  type HappierModalHeaderTextRender,
+} from './layout/ModalHeader.js';
+export {
   normalizeHappierPageOperations,
   readHappierPageOperation,
+  splitHappierPagePrimaryOperation,
   type HappierPageOperation,
   type HappierPageOperationTextResolver,
 } from './layout/pageOperations.js';
+export { HappierColumnEdgeContext } from './layout/columnEdge.js';
 export {
   HappierPageSectionContext,
   HappierPageSectionHeader,
@@ -432,6 +466,8 @@ export {
   HAPPIER_META_COLUMN_STYLE,
   HAPPIER_META_COLUMN_V1,
 } from './text/metaColumn.js';
+export { HAPPIER_MIDDLE_ELLIPSIS_STYLE, splitForWebMiddleEllipsis } from './text/middleEllipsis.js';
+export { HAPPIER_BALANCED_TEXT_WRAP } from './text/balancedTextWrap.js';
 export { HAPPIER_TYPE_SCALE, HAPPIER_TYPE_WEIGHT, resolveHappierTypeScale, type HappierTypeRole, type HappierTypeEmphasis, type HappierTypeScaleStep } from './text/typeScale.js';
 export {
   resolveHappierDiffViewerRequest,
@@ -488,8 +524,10 @@ export {
 export {
   HAPPIER_SKELETON_PULSE_V1,
   HappierSkeletonBlock,
+  HappierSkeletonPulse,
   HappierSkeletonRows,
   type HappierSkeletonBlockProps,
+  type HappierSkeletonPulseProps,
   type HappierSkeletonRowsProps,
   type HappierSkeletonRowGeometry,
 } from './feedback/Skeleton.js';
@@ -498,6 +536,15 @@ export {
   type HappierStatusDotProps,
 } from './status/StatusDot.js';
 export { HappierStatus, type HappierStatusProps } from './status/Status.js';
+export {
+  HAPPIER_REVIEW_SEVERITY_METRICS,
+  HAPPIER_REVIEW_SEVERITY_RANK,
+  HAPPIER_REVIEW_SEVERITY_TONE,
+  HappierReviewSeveritySign,
+  resolveHappierReviewSeverityColor,
+  type HappierReviewSeverity,
+  type HappierReviewSeveritySignProps,
+} from './status/ReviewSeverity.js';
 export {
   HappierRowActionRevealSlot,
   type HappierRowActionRevealSlotProps,
@@ -590,6 +637,7 @@ export {
   type HappierAgentCursorMotionDriver,
   type HappierAgentCursorProps,
   type HappierAgentPageRect,
+  type HappierAgentPoint,
   type HappierAgentTarget,
 } from './copresence/AgentCursor.js';
 export {
@@ -693,6 +741,8 @@ export {
 export { HappierTextLinkButton, type HappierTextLinkButtonProps } from './interaction/TextLinkButton.js';
 export {
   HAPPIER_FOCUS_RING_DELEGATED_STYLE,
+  HAPPIER_TEXT_INPUT_FOCUS_RESET_STYLE,
+  HAPPIER_TEXT_INPUT_WEB_MARKER,
   HAPPIER_FOCUS_RING_V1,
   happierFocusRingStyle,
   isHappierFocusVisible,
@@ -903,6 +953,8 @@ export {
   HappierMarkdown,
   type HappierMarkdownProps,
   type HappierMarkdownRenderInput,
+  type MarkdownInlineReference,
+  type MarkdownInlineReferences,
 } from './content/Markdown.js';
 export {
   normalizeHappierCodeLanguage,
@@ -976,6 +1028,8 @@ export {
 export {
   HAPPIER_SELECTION_TILE_TEXT,
   HappierSelectionTiles,
+  resolveHappierSelectionTileText,
+  type HappierSelectionTileTextStep,
   type HappierActionSelectionTilesProps,
   type HappierMultipleSelectionTilesProps,
   type HappierSelectionTileFooterRenderer,
@@ -992,9 +1046,11 @@ export {
   HappierTabs,
   HappierTabMarker,
   isHappierTabSelected,
+  resolveHappierTabGlyphOnly,
   resolveHappierTabKeySelection,
   useHappierTabPanelActivity,
   type HappierTabDescriptor,
+  type HappierTabLabels,
   type HappierTabPanelActivity,
   type HappierTabRetention,
 } from './navigation/Tabs.js';

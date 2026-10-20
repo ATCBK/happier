@@ -3,6 +3,8 @@ import { WorkflowProgressEnvelopeV1Schema, WORKFLOW_RUN_STATES_V1 } from '@happi
 import { WorkflowDefinitionV1Schema } from '@happier-dev/protocol/workflows/workflowV1';
 import type { WorkflowRunInvocationIndexV1 } from '@happier-dev/protocol';
 import { projectWorkflowInvocationStructure } from './workflowInvocationStructure';
+import { projectWorkflowFlow } from '../flow/workflowFlowProjection';
+import { createWorkflowRunReleaseScene } from '@/dev/testkit/render/workflowRunDesignScene';
 
 import {
     createWorkflowInvocationIndexFixture,
@@ -28,9 +30,95 @@ import {
     formatWorkflowWorkspaceSourceLabel,
     isObservedCompletionTransition,
     projectWorkflowInvocationRecovery,
+    projectWorkflowRunFailure,
+    selectWorkflowRunFailureInvocation,
+    formatWorkflowRunFailureCauseLine,
 } from './workflowRunDetailPresentation';
 
 describe('managed workflow Run presentation', () => {
+    it('never assigns a failure cause from later Machine reachability (R5 03:42–04:58 / 10:28)', () => {
+        const run = createWorkflowRunSummaryFixture({ state: 'failed', finishedAt: '2026-10-19T04:58:00.000Z' });
+        const invocation = createWorkflowInvocationIndexFixture({ lifecycle: 'failed', createdAt: '2026-10-19T03:42:00.000Z',
+            updatedAt: '2026-10-19T04:58:00.000Z' });
+        const lastSeenAt = Date.parse('2026-10-19T10:28:00.000Z');
+        const recovery = projectWorkflowInvocationRecovery({ run, invocation, progress: null, machineHomeDirectory: null,
+            machine: { name: 'Review box', reachable: false, lastSeenAt } });
+        expect(recovery.failureCause).toEqual({ kind: 'cause_not_recorded' });
+        expect(recovery.unavailableMachine).toEqual({ name: 'Review box', lastSeenAt });
+        expect(formatWorkflowRunFailureCauseLine({ invocationId: invocation.id, step: null, recovery }))
+            .toBe(t('workflows.recovery.causeNotRecorded'));
+        const online = projectWorkflowInvocationRecovery({ run, invocation, progress: null, machineHomeDirectory: null,
+            machine: { name: 'Review box', reachable: true, lastSeenAt } });
+        expect(online.failureCause).toEqual(recovery.failureCause);
+        for (const lifecycle of ['completed', 'running', 'needs_attention', 'outcome_uncertain'] as const) {
+            expect(projectWorkflowInvocationRecovery({ run, invocation: { ...invocation, lifecycle }, progress: null,
+                machineHomeDirectory: null, machine: { name: 'Review box', reachable: false, lastSeenAt } }).failureCause).toBeNull();
+        }
+        // Even contact lost before the Run ended proves only current availability, never its cause.
+        expect(projectWorkflowInvocationRecovery({ run, invocation, progress: null, machineHomeDirectory: null,
+            machine: { name: 'Review box', reachable: false, lastSeenAt: Date.parse(invocation.createdAt) - 1 } }).failureCause)
+            .toEqual(recovery.failureCause);
+    });
+    it('does not replace authoritative empty or unresolved failure discovery with a different loaded failure', () => {
+        const loaded = createWorkflowInvocationIndexFixture({ lifecycle: 'failed' });
+        const structure = new Map([[loaded.id, { invocationId: loaded.id, nodeId: 'work', blockId: 'work',
+            isFrame: false, occurrence: [], coverageKind: 'executable' as const }]]);
+        expect(selectWorkflowRunFailureInvocation({ invocations: [loaded], structure, firstFailedInvocationId: null })).toBeNull();
+        expect(selectWorkflowRunFailureInvocation({ invocations: [loaded], structure, firstFailedInvocationId: 'off-page' })).toBeNull();
+    });
+    it.each([1_900_000_000_000, null])('projects the reachable Z16 design fixture with its reported reset (%s)', resetAtMs => {
+        const run = createWorkflowRunSummaryFixture({ state: 'failed', workflowCustodyState: 'settled' });
+        const scene = createWorkflowRunReleaseScene({ runId: run.id, rootId: 'root', holdId: 'hold', failed: true, usageLimitResetAtMs: resetAtMs });
+        const failed = scene.rows.find(row => row.progress?.reason?.runtimeIssueV1?.code === 'usage_limit')!;
+        const invocations = scene.rows.map(row => row.index);
+        const structure = projectWorkflowInvocationStructure({ definition: scene.definition, invocations,
+            progressByInvocationId: new Map(scene.rows.flatMap(row => row.progress ? [[row.index.id, row.progress] as const] : [])) });
+        const presentation = projectWorkflowRunFailure({ run, invocation: failed.index, progress: failed.progress,
+            structure, projection: projectWorkflowFlow(scene.definition), machineHomeDirectory: null });
+        expect(presentation).toMatchObject({ invocationId: failed.index.id, step: { name: 'Publish summary', ordinal: '7' },
+            recovery: { canReattach: false, canRetrySameConversation: false, canRetryFreshAgent: false,
+                failureCause: { kind: 'reported_failure', message: 'Usage limit reached', runtimeIssue: { usageLimit: { resetAtMs } } } } });
+        if (resetAtMs === null) expect(presentation?.recovery.failureCause).toMatchObject({ reset: null });
+        // The page's one cause line: the step's number, the provider's words, and only a reported reset.
+        const line = formatWorkflowRunFailureCauseLine(presentation!);
+        const reset = presentation?.recovery.failureCause?.kind === 'reported_failure' ? presentation.recovery.failureCause.reset : null;
+        expect(line).toBe(resetAtMs === null ? `${t('workflows.run.stepNumber', { ordinal: '7' })} · Usage limit reached`
+            : `${t('workflows.run.stepNumber', { ordinal: '7' })} · Usage limit reached · ${reset}`);
+        if (resetAtMs !== null) expect(reset).toBeTruthy();
+        expect(projectWorkflowRunFailure({ run: { ...run, id: 'another-run' }, invocation: failed.index, progress: failed.progress,
+            structure, projection: projectWorkflowFlow(scene.definition), machineHomeDirectory: null })).toBeNull();
+    });
+    it('keeps a structural failure unrecorded without blaming its completed child or current Machine (R4)', () => {
+        const run = createWorkflowRunSummaryFixture({ state: 'failed', workflowCustodyState: 'settled' });
+        const root = createWorkflowInvocationIndexFixture({ id: 'root', lifecycle: 'failed' });
+        const child = createWorkflowInvocationIndexFixture({ id: 'child', lifecycle: 'completed', parentRecordId: root.id, sequence: '1' });
+        const definition = WorkflowDefinitionV1Schema.parse({ version: 1, inputs: [], defaults: {}, blocks: [
+            { kind: 'wait', id: 'check', name: 'Review release readiness', document: { text: 'Ready?', references: [], attachments: [] } },
+        ] });
+        const params = { run, invocation: root, progress: null, machineHomeDirectory: null,
+            machine: { name: 'Build box', reachable: false, lastSeenAt: 1791633660000 },
+            structure: projectWorkflowInvocationStructure({ definition, invocations: [root, child] }), projection: projectWorkflowFlow(definition) };
+        expect(projectWorkflowRunFailure(params)).toMatchObject({ invocationId: root.id, step: null,
+            recovery: { failureCause: { kind: 'cause_not_recorded' } } });
+        expect(projectWorkflowRunFailure({ ...params, invocation: child })).toBeNull();
+        expect(formatWorkflowRunFailureCauseLine(projectWorkflowRunFailure(params)!))
+            .toBe(t('workflows.recovery.causeNotRecorded'));
+    });
+    it.each([1_900_000_000_000, null])('presents the source runtime issue and only a reported reset (%s)', resetAtMs => {
+        const run = createWorkflowRunSummaryFixture({ state: 'interrupted' });
+        const invocation = createWorkflowInvocationIndexFixture({ lifecycle: 'failed' });
+        const progress = WorkflowProgressEnvelopeV1Schema.parse({ kind: 'happier.workflow-progress.v1', blockKind: 'step',
+            invocationPath: { blockId: 'work', scope: [] }, attempt: '0', logicalInvocationRecordId: invocation.id,
+            reason: { code: 'session_input_failed', message: 'Current turn failed', runtimeIssueV1: {
+                v: 1, scope: 'primary_session', status: 'failed', code: 'usage_limit', source: 'usage_limit', occurredAt: 100,
+                sanitizedPreview: 'Usage limit reached',
+                usageLimit: { v: 1, resetAtMs, retryAfterMs: null, quotaScope: 'account', recoverability: 'wait' },
+            } } });
+        const presentation = projectWorkflowInvocationRecovery({ run, invocation, progress, machineHomeDirectory: null });
+        expect(presentation.failureCause).toMatchObject({ kind: 'reported_failure', message: 'Usage limit reached',
+            runtimeIssue: progress.reason?.runtimeIssueV1,
+            ...(resetAtMs === null ? { reset: null } : { reset: expect.stringContaining('2030') }) });
+    });
     it('keeps every persisted outcome stable across competing Machine observations', () => {
         const coverage = { observedLeafCounts: { completed: 0, failed: 0, attention: 0 }, coverage: 'complete' as const, knownFailure: false };
         for (const state of WORKFLOW_RUN_STATES_V1) {
@@ -57,12 +145,32 @@ describe('managed workflow Run presentation', () => {
         });
         expect(projectWorkflowInvocationRecovery({ run, invocation, progress: { ...progress, reason: undefined }, machineHomeDirectory: null,
             machine: { name: 'Build box', reachable: false, lastSeenAt: 1791633660000 } }).failureCause)
-            .toMatchObject({ kind: 'lost_contact', machine: 'Build box', lastSeenAt: 1791633660000 });
+            .toMatchObject({ kind: 'cause_not_recorded' });
         expect(projectWorkflowInvocationRecovery({ run, invocation: { ...invocation, lifecycle: 'completed' }, progress,
             machineHomeDirectory: null, machine: { name: 'Build box', reachable: false } }).failureCause).toBeNull();
         expect(projectWorkflowInvocationRecovery({ run, invocation, progress, machineHomeDirectory: null,
             machine: { name: 'Build box', reachable: false, lastSeenAt: 0 } }).unavailableMachine)
             .toEqual({ name: 'Build box', lastSeenAt: null });
+    });
+    it.each([
+        ['ECONNABORTED', 'timeout of 30000ms exceeded', 'workflows.recovery.agentTimedOut'],
+        ['ETIMEDOUT', 'connect ETIMEDOUT 10.0.0.4:443', 'workflows.recovery.agentTimedOut'],
+        ['ECONNREFUSED', 'connect ECONNREFUSED 127.0.0.1:3013', 'workflows.recovery.agentUnreachable'],
+        ['ECONNRESET', 'socket hang up', 'workflows.recovery.agentConnectionLost'],
+    ] as const)('says a recorded %s in words on the cause line and keeps the raw message for step detail', (code, message, key) => {
+        const run = createWorkflowRunSummaryFixture({ state: 'interrupted' });
+        const invocation = createWorkflowInvocationIndexFixture({ lifecycle: 'failed' });
+        const progress = WorkflowProgressEnvelopeV1Schema.parse({ kind: 'happier.workflow-progress.v1', blockKind: 'step',
+            invocationPath: { blockId: 'a', scope: [] }, attempt: '0', logicalInvocationRecordId: invocation.id,
+            reason: { code, message } });
+        const recovery = projectWorkflowInvocationRecovery({ run, invocation, progress, machineHomeDirectory: null });
+        expect(recovery.failureCause).toMatchObject({ kind: 'reported_failure', code, message, headline: t(key) });
+        expect(formatWorkflowRunFailureCauseLine({ invocationId: invocation.id, step: { name: 'Draft', ordinal: '1' }, recovery }))
+            .toBe(`${t('workflows.run.stepNumber', { ordinal: '1' })} · ${t(key)}`);
+        // An unrecognized code keeps the message its producer recorded.
+        const other = projectWorkflowInvocationRecovery({ run, invocation, machineHomeDirectory: null,
+            progress: { ...progress, reason: { code: 'agent_failed', message: 'Agent exited before producing a result' } } });
+        expect(other.failureCause).toMatchObject({ headline: 'Agent exited before producing a result' });
     });
     it('keeps Stop pending until physical custody settles, even after the parent is cancelled', () => {
         const coverage = { observedLeafCounts: { completed: 1, failed: 0, attention: 5 }, coverage: 'complete' as const, knownFailure: false };
@@ -704,6 +812,27 @@ describe('managed workflow Run presentation', () => {
         })).toBeNull();
         expect(describeWorkflowInvocationCause({
             lifecycle: 'running', reasonCode: null, blockLabel: 'Analyze',
+        })).toBeNull();
+    });
+
+    /**
+     * An uncertain step says what that means for its kind (07 §6.2): an Agent step may already have
+     * changed the workspace, an Action may have run without Happier getting its answer. A plain failed
+     * step keeps stating nothing invented.
+     */
+    it('states an uncertain step by its kind and never for a plain failed step', () => {
+        expect(describeWorkflowInvocationCause({
+            lifecycle: 'outcome_uncertain', reasonCode: 'workflow_startup_owner_absent', blockKind: 'step', blockLabel: 'ONE',
+        })).toBe(t('workflows.recovery.uncertainEffects', { block: 'ONE' }));
+        expect(describeWorkflowInvocationCause({
+            lifecycle: 'outcome_uncertain', reasonCode: null, blockKind: 'action', blockLabel: 'Open pull request',
+        })).toBe(t('workflows.recovery.uncertainAction', { action: 'Open pull request' }));
+        expect(describeWorkflowInvocationCause({
+            lifecycle: 'failed', reasonCode: 'workflow_startup_owner_absent', blockKind: 'step', blockLabel: 'ONE',
+        })).toBeNull();
+        // A block that cannot be named is not guessed at.
+        expect(describeWorkflowInvocationCause({
+            lifecycle: 'outcome_uncertain', reasonCode: null, blockKind: 'step', blockLabel: null,
         })).toBeNull();
     });
 

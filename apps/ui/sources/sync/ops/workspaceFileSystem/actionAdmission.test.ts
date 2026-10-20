@@ -8,6 +8,8 @@ import { createElement } from 'react';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { renderScreen } from '@/dev/testkit/render/renderScreen';
 import type { ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
+import { installOwnMachineApprovalReplayBoundary } from '@/dev/testkit/harness/approvalInbox';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 
 const homes = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(homes);
@@ -20,13 +22,16 @@ const filesystem = vi.hoisted(() => ({ paths: new Set<string>(), calls: [] as un
     response: { success: true } as unknown, error: null as unknown, nativeAsk: false,
     prompts: 0, promptValue: 'b', promptGate: null as Promise<void> | null,
     mutationGate: null as Promise<void> | null,
-    fileBytes: null as Uint8Array | null, deliveredBytes: 0 }));
+    fileBytes: null as Uint8Array | null, deliveredBytes: 0, carrierUnavailable: false,
+    readGate: null as Promise<void> | null }));
 // The finite carrier is the byte-network boundary. Real encryption, manifest
 // verification, buffering, bounds and destination completion stay in the driver.
 vi.mock('@/sync/domains/transfers/runtime/transferRuntime/plumbing/machineCarrierHttpLease', () => ({
     MACHINE_CARRIER_INTERRUPTED_TRANSFER_ERROR: 'The direct machine connection was interrupted. Retry the transfer.',
     MACHINE_CARRIER_TRANSPORT_FAILED_ERROR_CODE: 'machine_carrier_transport_failed',
-    resolveMachineCarrierRoute: async (_machineId: string, serverId: string) => ({
+    resolveMachineCarrierRoute: async (_machineId: string, serverId: string) => filesystem.carrierUnavailable
+        ? { kind: 'unavailable', error: 'Finite carrier unavailable', errorCode: 'machine_carrier_unavailable' }
+        : ({
         kind: 'iroh_peer', serverId, carrierKind: 'browser_stream',
         acquire: async () => {
             return { kind: 'browser_stream', release: async () => {}, request: async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -64,9 +69,12 @@ vi.mock('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc', (
         if (filesystem.fileBytes) {
             const bytes = filesystem.fileBytes;
             if (request.method === 'statFile') return { success: true, exists: true, kind: 'file', sizeBytes: bytes.length };
-            if (request.method === 'daemon.filesystem.readFile') return bytes.length > 2_500_000
-                ? { success: false, error: 'File exceeds daemon inline read ceiling' }
-                : { success: true, content: Buffer.from(bytes).toString('base64') };
+            if (request.method === 'daemon.filesystem.readFile') {
+                await filesystem.readGate;
+                return bytes.length > 2_500_000
+                    ? { success: false, error: 'File exceeds daemon inline read ceiling' }
+                    : { success: true, content: Buffer.from(bytes).toString('base64') };
+            }
             if (request.method === 'daemon.filesystem.download') {
                 const hash = Buffer.from(await crypto.subtle.digest('SHA-256', Uint8Array.from(bytes).buffer)).toString('hex');
                 const expiresAt = Date.now() + 60_000;
@@ -109,25 +117,144 @@ const operations = [
 ];
 let serverId: string;
 let target: Target;
+let accountScope: ServerAccountScope;
 beforeEach(async () => {
     await homes.reset(); await loadSyncSingletonForTests();
-    serverId = await homes.addHome({ name: 'Filesystem Home', serverUrl: 'https://filesystem-action.test', accountId: 'account-a' });
+    serverId = await homes.addHome({ name: 'Filesystem Home', serverUrl: 'https://filesystem-action.test',
+        serverIdentityId: 'srv_filesystem_action', accountId: 'account-a', currentAccount: true });
+    await installOwnMachineApprovalReplayBoundary({ harness: homes, serverId, accountId: 'account-a', machineId: 'machine-a' });
     const { restoreConnectionToActiveServer } = await import('@/sync/runtime/orchestration/connectionManager');
     await restoreConnectionToActiveServer({ token: homes.findByServerUrl('https://filesystem-action.test')!.token! });
+    const { getActiveServerAccountScope } = await import('@/sync/domains/scope/activeServerAccountScope');
+    const restoredScope = getActiveServerAccountScope();
+    if (!restoredScope) throw new Error('Expected restored filesystem Account');
+    accountScope = restoredScope;
     target = { serverId, machineId: 'machine-a', rootPath: '/repo' };
     filesystem.paths.clear(); filesystem.paths.add('/repo/a'); filesystem.calls.length = 0;
     filesystem.response = { success: true }; filesystem.error = null; filesystem.nativeAsk = false;
     filesystem.prompts = 0; filesystem.promptValue = 'b'; filesystem.promptGate = null;
-    filesystem.fileBytes = null; filesystem.deliveredBytes = 0;
-    filesystem.mutationGate = null;
+    filesystem.fileBytes = null; filesystem.deliveredBytes = 0; filesystem.carrierUnavailable = false;
+    filesystem.mutationGate = null; filesystem.readGate = null;
 });
 afterEach(async () => {
+    vi.useRealTimers();
     await standardCleanup();
     const { disconnectActiveServerConnection } = await import('@/sync/runtime/orchestration/connectionManager');
     await disconnectActiveServerConnection(); await homes.reset();
 });
 
 describe('shared workspace filesystem Action admission', () => {
+    it.each(['unmount', 'replace'] as const)('retires a Project README read without an unhandled AbortError on %s', async retirement => {
+        const { useCodeTextFile } = await import('@/components/projects/files/code/useCodeTextFile');
+        filesystem.fileBytes = new TextEncoder().encode('A project README');
+        let finishRead!: () => void;
+        filesystem.readGate = new Promise<void>(resolve => { finishRead = resolve; });
+        const hook = await renderHook(({ path }) => useCodeTextFile({ ...target, serverId }, path), {
+            initialProps: { path: 'README.md' as string | null },
+        });
+        try {
+            await vi.waitFor(() => expect(filesystem.calls).toContainEqual(expect.objectContaining({
+                method: 'daemon.filesystem.readFile',
+            })));
+            if (retirement === 'unmount') {
+                await hook.unmount();
+            } else {
+                filesystem.fileBytes = new TextEncoder().encode('The next README');
+                filesystem.readGate = null;
+                await hook.rerender({ path: 'nested/README.md' });
+                await vi.waitFor(() => expect(hook.getCurrent()).toEqual({ kind: 'ready', text: 'The next README' }));
+            }
+            finishRead();
+            await act(async () => { await new Promise<void>(resolve => setImmediate(resolve)); });
+            if (retirement === 'replace') expect(hook.getCurrent()).toEqual({ kind: 'ready', text: 'The next README' });
+        } finally {
+            finishRead();
+            await hook.unmount();
+        }
+    });
+
+    it.each(['session', 'project'] as const)('opens a tiny Search hit in the %s viewer at its seeded Find line without a finite carrier', async host => {
+        const text = 'riverglassneedle first landing\nriverglassneedle second landing\nriverglassneedle third landing';
+        filesystem.fileBytes = new TextEncoder().encode(text);
+        filesystem.carrierUnavailable = true;
+        const { activateUniversalSearchResult } = await import('@/components/appShell/search/activateUniversalSearchResult');
+        const { parseSessionPaneUrlState } = await import('@/components/sessions/panes/url/sessionPaneUrlState');
+        const { createFileFindSeedHandoff } = await import('@/components/appShell/panes/fileFindSeedHandoff');
+        const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const { refreshWorkspaceFileDetails } = await import('@/components/workspaces/files/details/workspaceFileDetails/refreshWorkspaceFileDetails');
+        const { FileViewerFindSurface } = await import('@/components/workspaces/files/details/FileViewerFindSurface');
+        const { CodeLinesViewCore } = await import('@/components/ui/code/view/CodeLinesViewCore');
+        const { buildCodeLinesFromFile } = await import('@/components/ui/code/model/buildCodeLinesFromFile');
+        const handoff = createFileFindSeedHandoff();
+        const lifetime = captureActiveServerAccountScopeLifetime();
+        if (!lifetime) throw new Error('Expected admitted Account');
+        const scope = { ...target, serverId: lifetime.scope.serverId };
+        const destination = { host, id: 'search-destination', accountId: 'account-a', scope, path: 'riverglass.txt' };
+        const anchor = { kind: 'fileLine' as const, startLine: 2 };
+        const find = { query: 'riverglassneedle', options: { matchCase: false, regex: false },
+            target: { kind: 'file' as const, path: destination.path, anchor } };
+        let openedPath: string | null = null;
+        try {
+            expect(await activateUniversalSearchResult({ kind: 'workspaceFile', scope, serverId, accountId: 'account-a',
+                sessionId: host === 'session' ? destination.id : null, workspaceRefId: host === 'project' ? destination.id : null,
+                path: destination.path, anchor, find }, {
+                push: () => {}, stageFileFindSeed: (_target, seed) => handoff.stage(destination, seed, lifetime),
+                navigateToSession: async (_id, options) => {
+                    const details = parseSessionPaneUrlState(options?.query ?? {})?.details;
+                    if (details?.kind !== 'file') throw new Error('Expected file pane');
+                    expect(details.anchor).toEqual(anchor);
+                    openedPath = details.path;
+                },
+                openProject: async (_id, options) => {
+                    const resource = options?.initialResource;
+                    if (resource?.kind !== 'file') throw new Error('Expected project file');
+                    expect(resource.anchor).toEqual(anchor);
+                    openedPath = resource.path;
+                    return true;
+                },
+            })).toEqual({ ok: true });
+            expect(openedPath).toBe(destination.path);
+            const loaded = await refreshWorkspaceFileDetails({ scope, filePath: destination.path, diffMode: 'both', includeDiff: false });
+            expect(loaded.error).toBeNull();
+            expect(loaded.fileContent?.content).toBe(text);
+            const seed = handoff.take(destination);
+            expect(seed).toEqual(find);
+            const screen = await renderScreen(createElement(FileViewerFindSurface, {
+                surfaceId: 'search-file', active: true, content: { path: destination.path, mode: 'file', text: loaded.fileContent?.content ?? null },
+                findSeed: seed,
+                children: snapshot => createElement(CodeLinesViewCore, { lines: buildCodeLinesFromFile({ text: loaded.fileContent?.content ?? '' }),
+                    virtualized: false, findRangesByLineId: snapshot.lineRanges, scrollToLineId: snapshot.lineTarget ?? undefined }),
+            }));
+            expect(screen.findByTestId('file-viewer-find.input')?.props.value).toBe(find.query);
+            expect(screen.findAllHostsByTestId('find-match-current').map(node => node.children.join(''))).toContain(find.query);
+            expect(screen.findByType(CodeLinesViewCore).props.scrollToLineId).toBe('f:2');
+            expect(filesystem.deliveredBytes).toBe(0);
+            expect(filesystem.calls).toContainEqual(expect.objectContaining({ method: 'daemon.filesystem.readFile' }));
+            expect(filesystem.calls.filter(call => (call as { method: string }).method === 'statFile')).toHaveLength(1);
+            await screen.unmount();
+        } finally { handoff.dispose(); }
+    });
+    it('keeps a cold viewer loading beyond 15 seconds and publishes the successful inline read', async () => {
+        const text = 'riverglassneedle late success';
+        filesystem.fileBytes = new TextEncoder().encode(text);
+        filesystem.carrierUnavailable = true;
+        let finishRead!: () => void;
+        filesystem.readGate = new Promise(resolve => { finishRead = resolve; });
+        const { useWorkspaceFileDetailsLoading } = await import('@/components/workspaces/files/details/workspaceFileDetails/useWorkspaceFileDetailsLoading');
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        const viewer = await renderHook(() => useWorkspaceFileDetailsLoading({ scope: { ...target, serverId },
+            filePath: 'riverglass.txt', diffMode: 'both', includeDiff: false, isActive: true, refreshFingerprint: 'cold' }));
+        await vi.waitFor(() => expect(filesystem.calls).toContainEqual(expect.objectContaining({ method: 'daemon.filesystem.readFile' })));
+        await act(async () => { await vi.advanceTimersByTimeAsync(16_000); });
+        expect(viewer.getCurrent().error).toBeNull();
+        expect(viewer.getCurrent().isLoading).toBe(true);
+        expect(viewer.getCurrent().fileContent).toBeNull();
+        await act(async () => { finishRead(); });
+        await vi.waitFor(() => expect(viewer.getCurrent().fileContent?.content).toBe(text));
+        expect(viewer.getCurrent().error).toBeNull();
+        expect(viewer.getCurrent().isLoading).toBe(false);
+        await viewer.unmount();
+    });
     it.each(['file', 'folder'] as const)('New %s does not reveal or navigate a retired host after its mutation acknowledgement', async kind => {
         let release = () => {};
         filesystem.mutationGate = new Promise<void>(resolve => { release = resolve; });
@@ -187,7 +314,7 @@ describe('shared workspace filesystem Action admission', () => {
             v: 1, actions: { 'daemon.filesystem.download': { disabledSurfaces: ['ui'] } },
             approvalWaivedSurfaces: { 'daemon.filesystem.download': ['rpc'] },
         }) };
-        storage.getState().applySettingsForScope({ serverId, accountId: 'account-a' }, settings, 1);
+        storage.getState().applySettingsForScope(accountScope, settings, 1);
         homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
         filesystem.fileBytes = new Uint8Array(3_000_000).fill(120);
         const read = await workspaceReadFile(target, 'file', { maxBytes: 4_000_000 });
@@ -197,6 +324,10 @@ describe('shared workspace filesystem Action admission', () => {
         filesystem.deliveredBytes = 0;
         expect(await workspaceReadFile(target, 'file', { maxBytes: 2_500_000 })).toMatchObject({ success: false });
         expect(filesystem.deliveredBytes).toBe(0);
+        // A changed file can outgrow the preceding stat: routing metadata must
+        // never replace the final bound on the returned bytes.
+        filesystem.fileBytes = new Uint8Array(300_001).fill(120);
+        expect(await workspaceReadFile(target, 'file', { maxBytes: 300_000, knownSizeBytes: 94 })).toMatchObject({ success: false });
         filesystem.fileBytes = new Uint8Array([0, 255, 128]);
         expect(await workspaceReadFile(target, 'file')).toEqual({ success: true, content: 'AP+A' });
     });
@@ -206,7 +337,7 @@ describe('shared workspace filesystem Action admission', () => {
             v: 1, actions: { [actionId]: { disabledSurfaces: ['ui'] } },
             approvalWaivedSurfaces: { [actionId]: ['rpc'] },
         }) };
-        storage.getState().applySettingsForScope({ serverId, accountId: 'account-a' }, settings, 1);
+        storage.getState().applySettingsForScope(accountScope, settings, 1);
         homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
         const { uploadDaemonWorkspaceFileFromReader, downloadDaemonWorkspaceFileToDestination } = await import('@/sync/domains/transfers/runtime/transferRuntime/families/workspaceFileTransfers');
         const readBytes = vi.fn(async () => new Uint8Array([1]));
@@ -227,7 +358,7 @@ describe('shared workspace filesystem Action admission', () => {
             v: 1, actions: { 'daemon.filesystem.writeFile': { disabledSurfaces: ['ui'] } },
             approvalWaivedSurfaces: { 'daemon.filesystem.upload': ['ui', 'rpc'] },
         }) };
-        storage.getState().applySettingsForScope({ serverId, accountId: 'account-a' }, settings, 1);
+        storage.getState().applySettingsForScope(accountScope, settings, 1);
         homes.answer(serverId, '/v2/account/settings', { body: { content: { t: 'plain', v: settings }, version: 1 } });
         expect(await workspaceWriteFile(target, 'large.txt', 'x'.repeat(256 * 1024 + 1)))
             .toMatchObject({ success: false, errorCode: 'action_disabled' });
@@ -315,8 +446,10 @@ describe('shared workspace filesystem Action admission', () => {
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
         const { captureActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
         await act(async () => {
-            expect(await createDefaultActionExecutor().execute('approval.request.decide', { artifactId, decision: 'approve' },
-                { surface: 'ui', serverId })).toMatchObject({ ok: true, result: { status: 'executed' } });
+            const decision = await createDefaultActionExecutor().execute('approval.request.decide', { artifactId, decision: 'approve' },
+                { surface: 'ui', serverId });
+            expect(decision, JSON.stringify({ decision, approvalBody: homes.artifacts(serverId).readPlainBody(artifactId), calls: filesystem.calls }))
+                .toMatchObject({ ok: true, result: { status: 'executed' } });
             const account = await captureActionAccountContext(serverId);
             try {
                 const artifact = await account.fetchArtifact(artifactId);
@@ -360,8 +493,9 @@ describe('shared workspace filesystem Action admission', () => {
         expect(filesystem.calls).toEqual([expect.objectContaining({
             method: 'daemon.filesystem.readFile',
             payload: { rootPath: '/repo', path: '/repo/README.md' },
-            signal: controller.signal,
+            signal: expect.any(AbortSignal),
         })]);
+        expect(filesystem.calls[0]).toMatchObject({ signal: { aborted: false } });
     });
 
     it('keeps the caller bound on a relay Action read', async () => {
@@ -396,9 +530,10 @@ describe('shared workspace filesystem Action admission', () => {
         if (!('approvalArtifactId' in pending) || typeof pending.approvalArtifactId !== 'string') throw new Error('Expected approval custody');
         filesystem.response = { success: true, hash: 'sha256:inline' };
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
-        expect(await createDefaultActionExecutor().execute('approval.request.decide', {
+        const decision = await createDefaultActionExecutor().execute('approval.request.decide', {
             artifactId: pending.approvalArtifactId, decision: 'approve',
-        }, { surface: 'ui', serverId })).toMatchObject({ ok: true, result: { status: 'executed' } });
+        }, { surface: 'ui', serverId });
+        expect(decision, JSON.stringify(decision)).toMatchObject({ ok: true, result: { status: 'executed' } });
         expect(filesystem.calls).toEqual([expect.objectContaining({ method: 'daemon.filesystem.writeFile', payload: {
             rootPath: '/repo', path: '/repo/created.txt', content: 'aGVsbG8=',
         } })]);
@@ -471,8 +606,8 @@ describe('shared workspace filesystem Action admission', () => {
         const { normalizeActionApprovalRegistration } = await import('@/components/approvals/actionApprovalContinuation');
         const registration = normalizeActionApprovalRegistration(approvals[0]);
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
-        expect(await createDefaultActionExecutor().execute('approval.request.decide', { artifactId: registration.artifactId, decision: 'approve' }, { surface: 'ui', serverId }))
-            .toMatchObject({ ok: true, result: { status: 'executed' } });
+        const decision = await createDefaultActionExecutor().execute('approval.request.decide', { artifactId: registration.artifactId, decision: 'approve' }, { surface: 'ui', serverId });
+        expect(decision, JSON.stringify(decision)).toMatchObject({ ok: true, result: { status: 'executed' } });
         expect([...filesystem.paths]).toEqual(['/repo/b']);
         const { captureActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
         const account = await captureActionAccountContext(serverId);
@@ -486,7 +621,7 @@ describe('shared workspace filesystem Action admission', () => {
         await hook.unmount();
     });
     it.each(operations)('$actionId cannot reach the machine when UI-disabled', async operation => {
-        const scope = { serverId, accountId: 'account-a' };
+        const scope = accountScope;
         const settings = { ...storage.getState().settings, actionsSettingsV1: ActionsSettingsV1Schema.parse({
             v: 1, actions: { [operation.actionId]: { disabledSurfaces: ['ui'] } },
         }) };
@@ -502,7 +637,7 @@ describe('shared workspace filesystem Action admission', () => {
         await homes.requireUiApproval(serverId, operation.actionId);
         // The real sync owner can reactivate this Account between publication
         // and admission. Its persisted revision must retain the Ask-first policy.
-        await storage.getState().activateSettingsScope({ serverId, accountId: 'account-a' });
+        await storage.getState().activateSettingsScope(accountScope);
         expect(storage.getState().settings.actionsSettingsV1.actions[operation.actionId]?.approvalRequiredSurfaces).toContain('ui');
         const pending = await operation.run(target);
         expect(pending, JSON.stringify(pending)).toMatchObject({ success: false, errorCode: 'approval_required', approvalArtifactId: expect.any(String) });
@@ -510,9 +645,10 @@ describe('shared workspace filesystem Action admission', () => {
         expect(filesystem.calls).toEqual([]);
         if (!('approvalArtifactId' in pending) || typeof pending.approvalArtifactId !== 'string') throw new Error('Expected canonical approval custody');
         const { createDefaultActionExecutor } = await import('@/sync/ops/actions/defaultActionExecutor');
-        expect(await createDefaultActionExecutor().execute('approval.request.decide', {
+        const decision = await createDefaultActionExecutor().execute('approval.request.decide', {
             artifactId: pending.approvalArtifactId, decision: 'approve',
-        }, { surface: 'ui', serverId })).toMatchObject({ ok: true, result: { status: 'executed' } });
+        }, { surface: 'ui', serverId });
+        expect(decision, JSON.stringify(decision)).toMatchObject({ ok: true, result: { status: 'executed' } });
         expect([...filesystem.paths].sort()).toEqual(operation.after);
         expect(filesystem.calls).toEqual([expect.objectContaining({ serverId, accountId: 'account-a', machineId: 'machine-a',
             method: operation.actionId, payload: expect.objectContaining({ rootPath: '/repo' }) })]);

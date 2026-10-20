@@ -396,10 +396,14 @@ describe("Artifact revisions and storage budgets (real SQLite)", () => {
             const deletion = vi.spyOn(privateFiles, 'deletePrivateFile').mockRejectedValueOnce(new Error('Storage unavailable'));
             try {
                 // Admission must not demand steady-state old+new replacement headroom.
-                expect((await app.inject({ method: 'POST', url: `/v1/artifacts/${id}/content/binary`, headers: headers(owner.id), payload: {
+                const replacement = await app.inject({ method: 'POST', url: `/v1/artifacts/${id}/content/binary`, headers: headers(owner.id), payload: {
                     body: binaryBody(nextId), expectedBodyVersion: 1,
                     blob: { blobId: nextId, content: { t: 'plain', v: privacyKit.encodeBase64(bytes) } },
-                } })).statusCode).toBe(500);
+                } });
+                // The committed head keeps its acknowledgement; the existing
+                // orphan row owns retryable physical cleanup after commit.
+                expect(replacement.statusCode).toBe(200);
+                expect(replacement.json()).toMatchObject({ success: true });
                 expect((await db.artifact.findUniqueOrThrow({ where: { id } })).currentBlobId).toBe(nextId);
                 expect(await db.artifactBlob.findUnique({ where: { id: firstId } })).not.toBeNull();
                 expect((await usage()).json().usedBytes).toBe(initialBytes + Number(originalBlob.storedSizeBytes));

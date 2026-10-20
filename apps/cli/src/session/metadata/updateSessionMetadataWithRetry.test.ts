@@ -21,6 +21,7 @@ import {
   encryptStoredSessionPayload,
 } from '@/session/transport/encryption/sessionEncryptionContext';
 import {
+  applySessionStateUpdatesToMetadata,
   clearSessionStateFieldFromMetadata,
   writeSessionStateFieldToMetadata,
 } from '@happier-dev/agents/session/state/metadataWriters';
@@ -171,7 +172,7 @@ describe('updateSessionMetadataWithRetry', () => {
       }),
       mutation: { kind: 'agentState', update: state => ({
         ...state, requests: { ...state?.requests,
-          local: { tool: 'AskUserQuestion', kind: 'user_action', arguments: {}, createdAt: 250 },
+          local: { tool: 'AskUserQuestion', kind: 'user_action', arguments: {}, createdAt: 250, turnId: 'turn-local' },
         },
       }) },
     });
@@ -180,8 +181,12 @@ describe('updateSessionMetadataWithRetry', () => {
       remote: { createdAt: 750 }, local: { createdAt: 250 },
     });
     expect(patchSessionMetadataEnvelopeTupleMock.mock.calls.map(([request]) => request.patch.activitySummaryV1)).toEqual([
-      { pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 1, pendingRequestNewestCreatedAt: 250 },
-      { pendingPermissionRequestCount: 1, pendingUserActionRequestCount: 1, pendingRequestNewestCreatedAt: 750 },
+      { pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 1, pendingRequestNewestCreatedAt: 250,
+        newUserActionRequiredOccurrences: [{ requestId: 'local', sourceTurnId: 'turn-local', requestKind: 'user_action',
+          occurredAt: 250, followEvent: { kind: 'needs_you', type: 'decision' } }] },
+      { pendingPermissionRequestCount: 1, pendingUserActionRequestCount: 1, pendingRequestNewestCreatedAt: 750,
+        newUserActionRequiredOccurrences: [{ requestId: 'local', sourceTurnId: 'turn-local', requestKind: 'user_action',
+          occurredAt: 250, followEvent: { kind: 'needs_you', type: 'decision' } }] },
     ]);
   });
 
@@ -1916,7 +1921,7 @@ describe('shared-editor Session metadata authority', () => {
       token: 'runtime-token', sessionId: 'sess_shared_editor',
       authority: { kind: 'shared_editor' }, ...crypto, initialSnapshot,
       mutation: { kind: 'metadata', update: metadata =>
-        writeSessionStateFieldToMetadata(metadata, 'display.bot', { kind: 'bot' }) },
+        applySessionStateUpdatesToMetadata(metadata, [{ fieldId: 'display.bot', value: { kind: 'bot' } }]) },
     })).rejects.toMatchObject({ code: 'metadata_privacy_upgrade_required' });
 
     await expect(updateSessionMetadataEnvelopeTupleWithRetry({

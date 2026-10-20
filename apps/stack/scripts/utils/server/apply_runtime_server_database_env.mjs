@@ -2,8 +2,8 @@ import { dirname, join } from 'node:path';
 import { readFileSync, statSync } from 'node:fs';
 import { parseEnvToObject } from '../env/dotenv.mjs';
 import { getServerLightDataDirFromEnvOrDefault } from '../stack/dirs.mjs';
-import { resolvePersonalHomeRuntimeLayout } from '@happier-dev/cli-common/firstPartyRuntime/server';
-import { SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/registry';
+import { resolvePersonalHomeRuntimeLayout } from '@happier-dev/cli-common/firstPartyRuntime/personalHome/layout';
+import { STORAGE_SERVER_CONFIG } from '@happier-dev/protocol/serverConfig/entries/storageEntries';
 import { readServerConfig } from '@happier-dev/protocol/serverConfig/serverConfigCodec';
 import { applyEffectiveDbProviderEnv, resolveEffectiveDbProviderTransition, resolveSharedDatabaseSource } from './effective_db_provider.mjs';
 import {
@@ -32,7 +32,7 @@ export function applySharedDatabaseSourceEnv({ env }) {
     try { source = parseEnvToObject(readFileSync(sourceEnvPath, 'utf8')); }
     catch { throw new Error('[shared-db] source stack env is unavailable on this server host'); }
     const { provider, databaseUrl: explicitUrl } = resolveSharedDatabaseSource({ env: source });
-    const filesBackend = readServerConfig(source, SERVER_CONFIG.HAPPIER_FILES_BACKEND)
+    const filesBackend = readServerConfig(source, STORAGE_SERVER_CONFIG.HAPPIER_FILES_BACKEND)
       ?? (source.HAPPIER_STACK_SERVER_COMPONENT === 'happier-server' ? 's3' : 'local');
     const sourceDataDir = getServerLightDataDirFromEnvOrDefault({ stackBaseDir: dirname(sourceEnvPath), env: source });
     let secret = String(source.HANDY_MASTER_SECRET ?? '').trim();

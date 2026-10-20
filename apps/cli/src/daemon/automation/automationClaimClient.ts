@@ -7,11 +7,11 @@ import type {
   AutomationRunLifecycleOccurrenceEvidenceV1,
   AutomationV3WorkerExecutionDispatchOutcome,
 } from '@happier-dev/protocol';
-import { AutomationV3WorkerClaimResponseSchema, AutomationV3WorkerAssignmentsResponseSchema, AutomationV3WorkerStartResponseSchema } from '@happier-dev/protocol/automations/automationApiV3';
+import { AutomationV3WorkerClaimResponseSchema, AutomationV3WorkerAssignmentsResponseSchema, AutomationV3WorkerStartResponseSchema, AutomationV3WorkerHeartbeatResponseSchema } from '@happier-dev/protocol/automations/automationApiV3';
 import { PLUGIN_INSTALLATION_MANIFEST_PUBLISHER_HEADER_V1 } from '@happier-dev/protocol/plugins/installations/manifests';
 import { AutomationExecutionRunLifecycleSourcesResponseSchema, AutomationExecutionRunLifecycleReportResponseSchema } from '@happier-dev/protocol/automations/automationRunLifecycle';
 
-import { configuration } from '@/configuration';
+import { resolveServerHttpBaseUrl } from '@/api/client/serverHttpBaseUrl';
 import {
   createDefaultPluginInstallationPublisherHeader,
   type CreatePluginInstallationPublisherHeader,
@@ -73,6 +73,7 @@ function toWorkerClaimResponse(response: AutomationV3WorkerClaimResponse): Autom
       run: {
         id: response.run.id,
         automationId: null,
+        leaseExpiresAt: response.run.leaseExpiresAt,
         attempt: response.run.attempt,
         revision: response.run.revision,
         ...(response.run.workflowResumeRequestedRevision === undefined ? {} : {
@@ -94,6 +95,7 @@ function toWorkerClaimResponse(response: AutomationV3WorkerClaimResponse): Autom
       run: {
         id: response.run.id,
         automationId: response.run.automationId,
+        leaseExpiresAt: response.run.leaseExpiresAt,
         attempt: response.run.attempt,
         revision: response.run.revision,
         ...(response.run.workflowResumeRequestedRevision === undefined ? {} : {
@@ -128,7 +130,7 @@ export function createAutomationClaimClient(params: {
   token: string;
   createPublisherHeader?: CreatePluginInstallationPublisherHeader;
 }) {
-  const baseUrl = configuration.apiServerUrl;
+  const baseUrl = resolveServerHttpBaseUrl();
   const token = params.token;
   const createPublisherHeader = params.createPublisherHeader
     ?? createDefaultPluginInstallationPublisherHeader;
@@ -201,14 +203,14 @@ export function createAutomationClaimClient(params: {
       machineId: string;
       attempt: number;
       leaseDurationMs: number;
-    }): Promise<void> {
+    }): Promise<number> {
       const path = `/${paramsHeartbeat.protocol}/automations/runs/${encodeURIComponent(paramsHeartbeat.runId)}/heartbeat`;
       const body = {
         machineId: paramsHeartbeat.machineId,
         attempt: paramsHeartbeat.attempt,
         leaseDurationMs: paramsHeartbeat.leaseDurationMs,
       };
-      await axios.post(
+      const response = await axios.post(
         `${baseUrl}${path}`,
         body,
         {
@@ -216,6 +218,9 @@ export function createAutomationClaimClient(params: {
           timeout: 15_000,
         },
       );
+      const { leaseExpiresAt } = AutomationV3WorkerHeartbeatResponseSchema.parse(response.data);
+      if (leaseExpiresAt === null) throw new Error('automation_claim_lease_unavailable');
+      return leaseExpiresAt;
     },
 
     async startRun(paramsStart: {

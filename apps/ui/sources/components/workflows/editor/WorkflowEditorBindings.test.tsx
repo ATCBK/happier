@@ -148,7 +148,7 @@ describe('workflow editor declared bindings', () => {
         const text = screen.getTextContent();
         expect(text).toContain('workflows.page.fields.maxRounds');
         expect(text).toContain('workflows.page.fields.secondOpinion');
-        expect(text).toContain('Custom Key');
+        expect(text).toContain('Custom key');
         expect(text).not.toContain('customKey');
     });
     it('reads a builtin Action with human execution values, not its wire fields', async () => {
@@ -348,9 +348,9 @@ describe('workflow editor declared bindings', () => {
         await screen.pressByTestIdAsync('editor-action-plugin-field-topic-set');
         expect(changed.mock.lastCall?.[0]).toEqual({ ...block, input: { ...block.input, topic: { kind: 'literal', value: '' } } });
         const authored = { ...block, input: { ...block.input, topic: { kind: 'literal' as const, value: 'Authored topic' } } };
-        await act(async () => screen.tree.update(<harness.WorkflowActionBlockEditor block={authored} draft={draft}
+        await screen.update(<harness.WorkflowActionBlockEditor block={authored} draft={draft}
             composerScope={{ kind: 'machine', machineId: null }} ordinal={1} total={1} actions={[]}
-            onSelect={() => {}} onChangeBlock={changed} testIDPrefix="editor" />));
+            onSelect={() => {}} onChangeBlock={changed} testIDPrefix="editor" />);
         expect(screen.getTextContent()).toContain('workflows.page.blocks.menuAction');
         expect(screen.getTextContent()).not.toContain(block.actionId);
         expect(screen.findByTestId('editor-action-plugin-field-topic')).not.toBeNull();

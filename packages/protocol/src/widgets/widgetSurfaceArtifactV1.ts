@@ -15,6 +15,7 @@ import { WidgetInstanceV1Schema, WidgetSurfaceRefV1Schema, type WidgetSurfaceRef
 import { WidgetExpectedPresentationV1Schema, type WidgetActionSurfacePortV1, type WidgetSurfaceMutationV1, type WidgetMoveCaptureV1 } from './actionsV1.js';
 import { WidgetGridSizeV1Schema, WidgetProjectAreaV1Schema, normalizeWidgetSizeForSurfaceV1 } from './widgetPresentationV1.js';
 import { projectOverviewDefaultPlacementsV1 } from './builtinWidgetDescriptorV1.js';
+import { createUsageWidgetPresets, type UsageWidgetPresetId } from './usageWidgetPresetsV1.js';
 import { WidgetLayoutItemV1Schema, type WidgetLayoutItemV1, WidgetLayoutItemsV1Schema, WidgetLayoutItemIntentV1Schema, applyWidgetLayoutItemIntentV1, findWidgetLayoutItemV1, findWidgetLayoutParentV1, flattenWidgetLayoutWidgetsV1, getWidgetLayoutItemIdV1 } from './widgetLayoutItemV1.js';
 
 export const WIDGET_SURFACE_ARTIFACT_KIND_V1 = 'widget-area-layout.v1';
@@ -75,6 +76,12 @@ function storedSurface(raw: WidgetSurfaceRefV1): WidgetSurfaceRefV1 {
 export function projectOverviewPresetV1(): WidgetAreaPresetV1 {
     return { id: 'overview', name: 'Overview', items: projectOverviewDefaultPlacementsV1() };
 }
+/** Built-in area defaults are available without a mount; clients may localize their names. */
+export function resolveHostWidgetAreaPresetsV1(surface: WidgetSurfaceRefV1, usageNames?: Readonly<Record<UsageWidgetPresetId, string>>): readonly WidgetAreaPresetV1[] | undefined {
+    if (surface.owner.kind === 'project') return [projectOverviewPresetV1()];
+    if (surface.owner.kind === 'corePage' && surface.owner.pageId === 'usage' && surface.owner.area === 'main') return createUsageWidgetPresets(usageNames);
+    return undefined;
+}
 /** Page metadata is host-owned; this lookup never accepts a caller-supplied preset. */
 export function resolveWidgetAreaPresetV1<T extends WidgetAreaPresetV1>(surface: WidgetSurfaceRefV1, presets?: readonly T[]): T | undefined {
     const layoutId = surface.owner.kind === 'project' ? surface.owner.layoutId ?? 'overview'
@@ -84,7 +91,7 @@ export function resolveWidgetAreaPresetV1<T extends WidgetAreaPresetV1>(surface:
 /** Inventory and first personalization derive the same initial order from host metadata. */
 function hostLayouts(surface: WidgetSurfaceRefV1, raw?: readonly WidgetAreaPresetV1[]) {
     let sortKey: string | null = null;
-    const layouts = (raw ?? (surface.owner.kind === 'project' ? [projectOverviewPresetV1()] : [])).map(value => {
+    const layouts = (raw ?? resolveHostWidgetAreaPresetsV1(surface) ?? []).map(value => {
         const preset = WidgetAreaPresetV1Schema.parse(value);
         sortKey = generateKeyBetween(sortKey, null);
         return { ...preset, sortKey };
@@ -212,10 +219,17 @@ const WidgetSurfaceArtifactHeaderV1Schema = lazyZodSchema(() => z.strictObject({
     surface: z.optional(WidgetAreaSurfaceRefV1Schema), sortKey: z.optional(z.string().check(z.minLength(1))),
 }));
 const WidgetSurfaceArtifactHeaderV1StoredSchema = createStoredReadSchema(WidgetSurfaceArtifactHeaderV1Schema);
+/**
+ * The stored title of a layout nobody named: the area's stock layout. Readers that know the area's
+ * own title (a plugin page's declared area) show that instead; a viewer-chosen name always wins.
+ */
+export function widgetAreaStockLayoutNameV1(surface: Pick<WidgetSurfaceRefV1, 'owner'>): string {
+    return surface.owner.kind === 'project' ? 'Overview' : 'Widget area';
+}
 /** Header discovery and body opening use the same identity and known-field projections. */
 export function buildWidgetSurfaceArtifactHeaderV1(layout: WidgetAreaLayoutV1, sortKey = 'a0'): Readonly<Record<string, unknown>> {
     return { kind: WIDGET_SURFACE_ARTIFACT_KIND_V1, v: 1,
-        title: layout.name ?? (layout.surface.owner.kind === 'project' ? 'Overview' : 'Widget area'),
+        title: layout.name ?? widgetAreaStockLayoutNameV1(layout.surface),
         surface: storedSurface(layout.surface), sortKey };
 }
 /** Inventory discovery and publication observers share the stored header's identity rule. */
@@ -233,7 +247,7 @@ export function readWidgetSurfaceArtifactV1(row: Pick<HomeHubArtifactV1, 'artifa
         const parsed = WidgetAreaLayoutV1StoredSchema.safeParse(JSON.parse(row.body));
         if (!parsed.success || parsed.data.surface.artifactId || buildWidgetSurfaceArtifactIdV1(parsed.data.surface) !== row.artifactId) return null;
         if (!header.data.surface || !sameStrictJsonValue(header.data.surface, parsed.data.surface)
-            || header.data.title !== (parsed.data.name ?? (parsed.data.surface.owner.kind === 'project' ? 'Overview' : 'Widget area'))) return null;
+            || header.data.title !== (parsed.data.name ?? widgetAreaStockLayoutNameV1(parsed.data.surface))) return null;
         return parsed.data;
     } catch { return null; }
 }

@@ -7,7 +7,7 @@ import {
 } from '@happier-dev/plugin-ui/presentation';
 
 import { formatMachineBytes } from '@/components/machines/vitals/machineVitalsPresentation';
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { Icon } from '@/components/ui/icons/Icon';
 import { Item } from '@/components/ui/lists/Item';
 import { Text } from '@/components/ui/text/Text';
@@ -56,7 +56,7 @@ export const ResourceProposalProcessesContextView = React.memo(
     }>,
   ) {
     const { theme } = useUnistyles();
-    const pluginTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const pluginTheme = usePluginUiTheme(theme);
     const { kept } = props;
     const used = props.usedBytes;
     const memory = props.totalBytes !== null ? { totalBytes: props.totalBytes } : null;

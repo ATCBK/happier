@@ -1,8 +1,10 @@
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { constants } from 'node:os';
+import { setTimeout as delay } from 'node:timers/promises';
 import { createSecureTempDirectorySync } from '@happier-dev/plugin-sdk/fs';
 
-import type { ExecService, PluginProcessHandle } from '@happier-dev/plugin-sdk/exec';
+import type { ExecService, PluginProcessHandle, PluginProcessResult } from '@happier-dev/plugin-sdk/exec';
 
 import { parseCodexCliStableVersion } from '../../cli/detect.js';
 import {
@@ -16,12 +18,46 @@ import { readCodexAppServerStartupRpcTimeoutMs } from './client/timeout.js';
 import { withCodexNativeStartupLock } from './nativeStartupLock.js';
 
 type CodexAppServerEnv = Readonly<Record<string, string | undefined>>;
+type AgentNativeLaunchQualifier = NonNullable<NonNullable<Parameters<ExecService['spawn']>[1]>['nativeLaunch']>;
 const SHARED_CONTROL_MIN_MINOR_UNIX = 131;
+
+type StartupFailureReason = 'process_exited' | 'process_observation_failed';
+export type CodexSharedAppServerStartupFailure = Readonly<{
+  phase: 'socket_wait';
+  reason: StartupFailureReason;
+  terminationKind?: PluginProcessResult['termination']['observed']['kind'];
+  terminationRequestedBy?: PluginProcessResult['termination']['requestedBy']['kind'];
+  nativeExitCode?: number;
+  nativeSignal?: string;
+  stderrPresent?: boolean;
+  stderrTruncated?: boolean;
+}>;
+
+export class CodexSharedAppServerStartupError extends Error {
+  readonly code = 'agent_startup_transport_failed';
+  readonly startupFailure: CodexSharedAppServerStartupFailure;
+
+  constructor(reason: StartupFailureReason, result?: PluginProcessResult) {
+    super('Codex shared app-server did not become ready.');
+    this.name = 'CodexSharedAppServerStartupError';
+    const observed = result?.termination.observed;
+    // Native output can contain credentials or configuration. Retain only
+    // closed process facts, never stderr, diagnostic payloads or error prose.
+    this.startupFailure = Object.freeze({
+      phase: 'socket_wait', reason,
+      ...(observed ? { terminationKind: observed.kind } : {}),
+      ...(result ? { terminationRequestedBy: result.termination.requestedBy.kind,
+        stderrPresent: result.stderr.byteLength > 0, stderrTruncated: result.stderrTruncated } : {}),
+      ...(observed?.kind === 'exit' && Number.isSafeInteger(observed.exitCode) ? { nativeExitCode: observed.exitCode } : {}),
+      ...(observed?.kind === 'signal' && Object.hasOwn(constants.signals, observed.signal) ? { nativeSignal: observed.signal } : {}),
+    });
+  }
+}
 
 type Dependencies = Readonly<{
   readCodexVersion: (exec: ExecService, env: CodexAppServerEnv, signal?: AbortSignal) => Promise<string>;
   createRuntimeDirectory: () => Promise<string>;
-  waitForSocket: (socketPath: string, process: PluginProcessHandle, timeoutMs: number) => Promise<void>;
+  waitForSocket: (socketPath: string, process: PluginProcessHandle, signal?: AbortSignal) => Promise<void>;
   removeRuntimeDirectory: (directory: string) => Promise<void>;
   createClient: typeof createCodexNativeAppServerClient;
   probeRealtime: typeof probeCodexRealtimeConversationFeature;
@@ -61,25 +97,26 @@ function supportsSharedControl(versionOutput: string, platform: NodeJS.Platform)
 async function waitForSocket(
   socketPath: string,
   process: PluginProcessHandle,
-  timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<void> {
-  let terminated = false;
-  void process.wait().then(() => { terminated = true; }, () => { terminated = true; });
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (terminated) throw Object.assign(new Error('Codex shared app-server exited before its socket was ready.'), {
-      code: 'agent_startup_transport_failed',
-    });
+  let result: PluginProcessResult | undefined;
+  let observationFailed = false;
+  void process.wait().then(value => { result = value; }, () => { observationFailed = true; });
+  // A cold native home backfills its history before publishing the socket.
+  // That work is not an initialize RPC and can outlast its request budget;
+  // killing it leaves Codex's native backfill lease running on the next start.
+  // The opening Session owns cancellation; the process owns terminal failure.
+  while (true) {
+    signal?.throwIfAborted();
+    if (result) throw new CodexSharedAppServerStartupError('process_exited', result);
+    if (observationFailed) throw new CodexSharedAppServerStartupError('process_observation_failed');
     try {
       await stat(socketPath);
       return;
     } catch {
-      await new Promise((resolve) => setTimeout(resolve, 25));
+      await delay(25, undefined, { signal });
     }
   }
-  throw Object.assign(new Error('Timed out waiting for the Codex shared app-server socket.'), {
-    code: 'agent_startup_transport_failed',
-  });
 }
 
 function defaultDependencies(): Dependencies {
@@ -102,6 +139,7 @@ function defaultDependencies(): Dependencies {
 
 export async function createCodexSharedAppServer(params: Readonly<{
   exec: ExecService;
+  nativeLaunch?: AgentNativeLaunchQualifier;
   processEnv: CodexAppServerEnv;
   platform?: NodeJS.Platform;
   signal?: AbortSignal;
@@ -171,11 +209,14 @@ export async function createCodexSharedAppServer(params: Readonly<{
           env: buildCodexAppServerEnv(request.processEnv),
           maxStdoutBytes: 4_096,
           maxStderrBytes: 16_384,
-        }, params.signal ? { signal: params.signal } : undefined);
+        }, params.signal || params.nativeLaunch ? {
+          ...(params.signal ? { signal: params.signal } : {}),
+          ...(params.nativeLaunch ? { nativeLaunch: params.nativeLaunch } : {}),
+        } : undefined);
         await dependencies.waitForSocket(
           socketPath,
           serverProcess,
-          readCodexAppServerStartupRpcTimeoutMs(request.processEnv),
+          params.signal,
         );
         // A published socket is not native SQLite/skill initialization readiness.
         // Reuse this initialized connection for the first admitted runtime client.

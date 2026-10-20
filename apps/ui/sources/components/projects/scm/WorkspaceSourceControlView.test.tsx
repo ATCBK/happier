@@ -14,7 +14,6 @@ import { publishActiveReviewFile, readActiveReviewFile, resetActiveReviewFilesFo
 
 const refreshSpy = vi.fn(async () => {});
 const scrollToIndexSpy = vi.hoisted(() => vi.fn());
-const setScmRemoteConfirmPolicySpy = vi.fn();
 const modalConfirmSpy = vi.hoisted(() => vi.fn(async () => true));
 const modalAlertAsyncSpy = vi.hoisted(() => vi.fn(async (...args: Parameters<import('@/modal').IModal['alertAsync']>) => {
     const buttons = args[2];
@@ -152,7 +151,6 @@ vi.mock('@/hooks/workspaces/scm/useWorkspaceScmSnapshotController', () => ({
 let commitSelectionPaths: string[] = [];
 let commitSelectionPatches: Array<{ path: string; patch: string }> = [];
 let scmCommitStrategySetting: string | null = 'atomic';
-let scmRemoteConfirmPolicySetting = 'always';
 let scmPushRejectPolicySetting = 'manual';
 let workspaceSnapshotMock: ScmWorkingSnapshot | null = null;
 let scmWriteEnabledMock = true;
@@ -162,16 +160,10 @@ vi.mock('@/sync/domains/state/storage', async (importOriginal) => {
     return createPartialStorageModuleMock(importOriginal, {
         useSetting: (key: any) => {
             if (key === 'scmCommitStrategy') return scmCommitStrategySetting;
-            if (key === 'scmRemoteConfirmPolicy') return scmRemoteConfirmPolicySetting;
             if (key === 'scmPushRejectPolicy') return scmPushRejectPolicySetting;
             return null;
         },
-        useSettingMutable: (key: any) => {
-            if (key === 'scmRemoteConfirmPolicy') {
-                return [scmRemoteConfirmPolicySetting, setScmRemoteConfirmPolicySpy];
-            }
-            return [null, vi.fn()];
-        },
+        useSettingMutable: () => [null, vi.fn()],
         useWorkspaceScmCommitSelectionPaths: () => commitSelectionPaths,
         useWorkspaceScmCommitSelectionPatches: () => commitSelectionPatches as any,
     });
@@ -335,10 +327,8 @@ describe('WorkspaceSourceControlView', () => {
         machineScmRemoteFetchSpy.mockClear();
         machineScmRemotePullSpy.mockClear();
         machineScmRemotePushSpy.mockClear();
-        setScmRemoteConfirmPolicySpy.mockClear();
         modalConfirmSpy.mockClear();
         modalAlertAsyncSpy.mockClear();
-        scmRemoteConfirmPolicySetting = 'always';
         scmPushRejectPolicySetting = 'manual';
         scmWriteEnabledMock = true;
     });
@@ -529,7 +519,6 @@ describe('WorkspaceSourceControlView', () => {
         commitSelectionPaths = [];
         commitSelectionPatches = [];
         scmCommitStrategySetting = 'atomic';
-        scmRemoteConfirmPolicySetting = 'always';
         scmWriteEnabledMock = true;
 
         const tree = (await renderScreen(
@@ -552,13 +541,14 @@ describe('WorkspaceSourceControlView', () => {
             await Promise.resolve();
         });
 
-        expect(modalAlertAsyncSpy).toHaveBeenCalledTimes(1);
+        // The push Action owns the one confirmation; the shortcut adds no dialog of its own.
+        expect(modalAlertAsyncSpy).not.toHaveBeenCalled();
         expect(modalConfirmSpy).not.toHaveBeenCalled();
         expect(machineScmRemotePushSpy).toHaveBeenCalledWith('m1', {
             cwd: '/repo',
             remote: 'origin',
             branch: 'main',
-        }, { serverId: 'server' });
+        }, { serverId: 'server', confirmedByPerson: false, onDispatched: expect.any(Function) });
         expect(refreshSpy).toHaveBeenCalled();
     });
 

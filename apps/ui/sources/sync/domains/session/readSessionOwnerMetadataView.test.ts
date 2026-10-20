@@ -1,11 +1,47 @@
 import { describe, expect, it } from 'vitest';
+import { createSessionOwnerMetadataV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 
 import {
     readSessionOwnerMetadataView,
+    readSessionOwnerMetadataViewPreferences,
     resolveSessionOwnerMetadataViewRead,
 } from './readSessionOwnerMetadataView';
 
 const METADATA = Object.freeze({ path: '/Users/tester/project', host: 'tester.local' });
+
+describe('readSessionOwnerMetadataViewPreferences', () => {
+    it('reads preferences emitted by the canonical owner-metadata producer', () => {
+        const created = createSessionOwnerMetadataV1({ metadata: { ...METADATA,
+            work: { viewPreferences: { showToolCalls: false } } } });
+        if (!created.ok) throw new Error('Expected valid owner metadata');
+        expect(readSessionOwnerMetadataViewPreferences(created.ownerMetadata)).toEqual({ showToolCalls: false });
+    });
+    it.each([0, 1])('reads known preferences from layout %s without changing retained plugin work', layout => {
+        const work = { viewPreferences: { showToolCalls: false, futurePreference: true }, pluginWork: { retained: true } };
+        const owner = { ...METADATA, work };
+        const view = readSessionOwnerMetadataView({ metadataLayoutVersion: layout,
+            metadata: { ...METADATA, work: { viewPreferences: { showToolCalls: true } } },
+            ownerMetadataView: owner });
+        const expected = layout === 0 ? true : false;
+        expect(readSessionOwnerMetadataViewPreferences(view)).toEqual({ showToolCalls: expected });
+        expect(owner.work).toBe(work);
+        expect(owner.work.pluginWork).toEqual({ retained: true });
+    });
+
+    it.each([undefined, null, 4, [], { viewPreferences: true }, { viewPreferences: { showToolCalls: 'yes' } }])(
+        'leaves malformed or absent work preferences unset (%j)', work => {
+            expect(readSessionOwnerMetadataViewPreferences({ ...METADATA, work })).toBeNull();
+        },
+    );
+
+    it('does not recover preferences from an unavailable or unsupported owner projection', () => {
+        const metadata = { ...METADATA, work: { viewPreferences: { showToolCalls: true } } };
+        for (const session of [
+            { metadataLayoutVersion: 1, metadata, ownerMetadataView: null },
+            { metadataLayoutVersion: 2, metadata, ownerMetadataView: metadata },
+        ]) expect(readSessionOwnerMetadataViewPreferences(readSessionOwnerMetadataView(session))).toBeNull();
+    });
+});
 
 describe('resolveSessionOwnerMetadataViewRead', () => {
     it('respects an explicitly unavailable legacy owner view without treating bounded input as full metadata', () => {

@@ -24,6 +24,7 @@ import {
     ExternalSessionTakeoverAdmissionInvariantError,
     internalErrorResponse,
     logExternalSessionsInternalError,
+    logExternalSessionSourceDiscontinuity,
     mapExternalSessionCorridorFailureToExternalSessionsError,
     mapActionFailureToExternalSessionsError,
     mapExternalSessionProviderFailureToExternalSessionsError,
@@ -50,6 +51,44 @@ afterEach(() => {
 });
 
 describe('External Sessions structural error diagnostics', () => {
+    it('preserves a lost creation receipt and its safe transport cause without exposing the HTTP payload', () => {
+        const error = Object.assign(new Error(SENTINELS[1]), {
+            code: 'outcome_unknown',
+            cause: { code: 'ECONNABORTED', message: SENTINELS[2], config: { token: SENTINELS[4] } },
+        });
+        expect(mapExternalSessionCorridorFailureToExternalSessionsError(error)).toEqual({
+            ok: false, errorCode: 'internal_error', error: 'external_session_outcome_unknown',
+        });
+        expect(debugLog).toHaveBeenLastCalledWith('[externalSessions][internal_error]', expect.objectContaining({
+            code: 'outcome_unknown', causeCode: 'ECONNABORTED', transportKind: 'timeout',
+        }));
+        expectNoSentinels(debugLog.mock.calls);
+        debugLog.mockClear();
+        expect(mapExternalSessionCorridorFailureToExternalSessionsError(Object.assign(new Error(SENTINELS[1]), {
+            code: 'outcome_unknown', cause: { code: SENTINELS[4] },
+        }))).not.toBeNull();
+        expectNoSentinels(debugLog.mock.calls);
+        expect(debugLog.mock.calls[0]?.[1]).not.toHaveProperty('causeCode');
+        expect(mapExternalSessionCorridorFailureToExternalSessionsError(new Error('ordinary host defect'))).toBeNull();
+    });
+
+    it('names transcript producer overflow through the exact safe-token owner without leaking failure prose', () => {
+        mapExternalSessionProviderFailureToExternalSessionsError(new ExternalSessionProviderFailureError({
+            code: 'agent_error', operation: 'pageTranscript', retryable: false,
+            message: 'external_sessions_transcript_item_byte_budget',
+        }));
+        expect(debugLog).toHaveBeenLastCalledWith('[externalSessions][agent_failure]', expect.objectContaining({
+            reason: 'transcript_item_byte_budget', failureClass: 'result_admission',
+        }));
+        debugLog.mockClear();
+        mapExternalSessionProviderFailureToExternalSessionsError(new ExternalSessionProviderFailureError({
+            code: 'agent_error', operation: 'pageTranscript', message: SENTINELS[0],
+        }));
+        expect(debugLog).toHaveBeenLastCalledWith('[externalSessions][agent_failure]', expect.objectContaining({
+            reason: 'transcript_agent_failure',
+        }));
+        expectNoSentinels(debugLog.mock.calls);
+    });
     it('retains schema-owned spawn codes and detail kinds without their private payloads', () => {
         const failure = {
             type: 'error',
@@ -220,6 +259,39 @@ describe('External Sessions structural error diagnostics', () => {
                 errorKind: 'error',
             }),
         );
+        expectNoSentinels(debugLog.mock.calls);
+    });
+
+    it('logs the closed host admission reason on the daemon failure path', () => {
+        mapExternalSessionProviderFailureToExternalSessionsError(new ExternalSessionProviderFailureError({
+            code: 'agent_error', message: 'external_sessions_native_cursor_too_large', operation: 'listCandidates',
+        }));
+        expect(debugLog).toHaveBeenLastCalledWith('[externalSessions][agent_failure]', expect.objectContaining({
+            failureClass: 'result_admission', reason: 'native_cursor_too_large',
+        }));
+        expectNoSentinels(debugLog.mock.calls);
+    });
+
+    it.each(['source_identity_changed', 'unfinished_file_missing', 'path_authority', 'frontier_anchor', 'transcript_unsupported_record'])('logs a closed source failure reason: %s', reason => {
+        mapExternalSessionProviderFailureToExternalSessionsError(new ExternalSessionProviderFailureError({
+            code: 'source_invalid', message: `external_sessions_${reason}`, operation: 'listCandidates', retryable: true,
+        }));
+        expect(debugLog).toHaveBeenLastCalledWith('[externalSessions][agent_failure]', expect.objectContaining({
+            failureClass: 'source_validity', reason,
+        }));
+        expectNoSentinels(debugLog.mock.calls);
+    });
+
+    it('logs source discontinuity without forwarding arbitrary diagnostic codes', () => {
+        logExternalSessionSourceDiscontinuity([{ code: SENTINELS[0] }]);
+        expect(debugLog).toHaveBeenLastCalledWith('[externalSessions][agent_failure]', expect.objectContaining({
+            code: 'source_discontinuity', reason: 'transcript_truncated',
+        }));
+        logExternalSessionSourceDiscontinuity([{ code: `external_sessions_source_identity_changed:${SENTINELS[1]}` },
+            { code: 'external_sessions_source_identity_changed' }]);
+        expect(debugLog).toHaveBeenLastCalledWith('[externalSessions][agent_failure]', expect.objectContaining({
+            code: 'source_discontinuity', reason: 'source_identity_changed',
+        }));
         expectNoSentinels(debugLog.mock.calls);
     });
 

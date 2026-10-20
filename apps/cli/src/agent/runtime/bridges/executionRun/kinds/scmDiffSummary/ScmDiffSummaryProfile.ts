@@ -1,4 +1,4 @@
-import { ExecutionRunScmDiffSummaryInputV1Schema } from '@happier-dev/protocol/execution/runs/startRequest';
+import { ExecutionRunScmDiffSummaryInputV1Schema, EXECUTION_RUN_KIND_BY_INTENT } from '@happier-dev/protocol/execution/runs/startRequest';
 import { SCM_DIFF_SUMMARY_CACHE_SCHEMA_VERSION, ScmDiffSummaryGenerateOutputSchema, ScmDiffSummaryOutputKindSchema, ScmDiffSummaryMetadataSchema } from '@happier-dev/protocol/scm/diffSummary';
 import { ScmComparisonSchema } from '@happier-dev/protocol/scm/comparison';
 import { ScmDiffSummaryGeneratorSelectionSchema } from '@happier-dev/protocol/scm/diffSummaryResult';
@@ -111,7 +111,7 @@ function withReviewNarrationProvenance(params: ExecutionRunProfileTurnCompletePa
     narratedAtMs: params.finishedAtMs,
   } });
   return { ...completion, toolResultOutput: annotated,
-    structuredMeta: { kind: 'scm_diff_summary.v1', payload: annotated } };
+    structuredMeta: { kind: EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary, payload: annotated } };
 }
 
 function completeScmDiffSummaryTurn({ start, rawText, previousStructuredMeta }: Pick<ExecutionRunProfileTurnCompleteParams, 'start' | 'rawText' | 'previousStructuredMeta'>): ExecutionRunProfileBoundedCompleteResult {
@@ -122,7 +122,7 @@ function completeScmDiffSummaryTurn({ start, rawText, previousStructuredMeta }: 
     ? { comparison: comparison.data, requestedOutputs, requireCompleteCoverage: true }
     : undefined);
   const parsed = rawModel ? publishReviewFindingCitations(rawModel, readReviewFindingCitationContext(start.intentInput)) : null;
-  const previous = previousStructuredMeta?.kind === 'scm_diff_summary.v1'
+  const previous = previousStructuredMeta?.kind === EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary
     ? ScmDiffSummaryGenerateOutputSchema.safeParse(previousStructuredMeta.payload)
     : null;
   const sourceKey = readNonEmptyString(intentInput.sourceKey) ?? 'unknown';
@@ -151,7 +151,7 @@ function completeScmDiffSummaryTurn({ start, rawText, previousStructuredMeta }: 
       } : {}),
     });
     return { status: 'failed', summary: 'Diff summary generation failed.', toolResultOutput: failure,
-      structuredMeta: { kind: 'scm_diff_summary.v1', payload: failure } };
+      structuredMeta: { kind: EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary, payload: failure } };
   }
   const outputs: ScmDiffSummaryOutputs = { ...(previous?.success ? previous.data.outputs : {}) };
   if (parsed.summaryMarkdown) outputs.summary = { state: 'complete', value: {
@@ -184,7 +184,7 @@ function completeScmDiffSummaryTurn({ start, rawText, previousStructuredMeta }: 
     } : {}),
   });
   return { status: 'succeeded', summary: 'Diff summary generated.', toolResultOutput: result,
-    structuredMeta: { kind: 'scm_diff_summary.v1', payload: result } };
+    structuredMeta: { kind: EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary, payload: result } };
 }
 
 export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
@@ -206,7 +206,7 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
 
     return rawText;
   },
-  prepareStartParams: async ({ request, cwd, sessionId, contextWindowTokens }) => {
+  prepareStartParams: async ({ request, cwd, sessionId, contextWindowTokens, captureScmCommitTarget }) => {
     const { cachedOutput: _callerCachedOutput, scmAnalysis: _callerAnalysis, scmContextWindowTokens: _callerCapacity, cacheScopeKey: _callerCacheScope,
       resolvedSelector: _callerSelector, requestedModelId: _callerModel,
       resultGenerator: _callerGenerator, resultBaseRevision: _callerRevision,
@@ -218,6 +218,7 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
     }).outputLanguage;
     const input = { ...parsedInput, ...(outputLanguage ? { outputLanguage } : {}) };
     const context = await loadScmDiffSummaryContext({
+      ...(captureScmCommitTarget ? { captureCommitTarget: captureScmCommitTarget } : {}),
       input,
       workingDirectory: cwd,
       ...(sessionId ? { sessionId } : {}),
@@ -232,6 +233,7 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
       ...(readNonEmptyString(request.modelId) ? { modelId: readNonEmptyString(request.modelId) } : {}),
       ...(readNonEmptyString(request.profileId) ? { profileId: readNonEmptyString(request.profileId) } : {}),
       ...(modelSelection.success ? { modelSelection: modelSelection.data } : {}),
+      ...(request.connectedServices !== undefined ? { connectedServices: request.connectedServices } : {}),
     });
     const savedId = typeof input.resultId === 'string' ? input.resultId : undefined;
     const scope = { cwd: input.cwd || cwd, ...(sessionId ? { sessionId } : {}) };
@@ -378,6 +380,10 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
     const oldRunId = saved.result.output.runId;
     const baseRevision = typeof input.resultBaseRevision === 'number' ? input.resultBaseRevision : saved.result.revision;
     const generator = ScmDiffSummaryGeneratorSelectionSchema.safeParse(input.resultGenerator);
+    // Credential defaults can resolve after preparation; the admitted Run owns this route.
+    if (generator.success && start.connectedServices !== undefined) {
+      generator.data.connectedServices = start.connectedServices;
+    }
     const bound = oldRunId === start.runId ? { success: true as const, result: saved.result }
       : await scmDiffSummaryResultStore.bindRun({ ...saved.scope, expectedRevision: baseRevision, runId: start.runId,
         ...(generator.success ? { generator: generator.data } : {}),
@@ -403,7 +409,7 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
     }
     if (!cached.success || shouldBypassCache(input)) return { status: 'succeeded', summary: oldRunId
       ? 'A new conversation was seeded from the saved result and captured evidence.' : 'Captured changes are ready for analysis.',
-      toolResultOutput: currentResult.output, structuredMeta: { kind: 'scm_diff_summary.v1', payload: currentResult.output } };
+      toolResultOutput: currentResult.output, structuredMeta: { kind: EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary, payload: currentResult.output } };
     const comparison = ScmComparisonSchema.safeParse(input.comparison);
     const metadata = ScmDiffSummaryMetadataSchema.safeParse(input.metadata);
     if (comparison.success && cached.data.comparison?.id !== comparison.data.id) return null;
@@ -418,7 +424,7 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
     await scmDiffSummaryResultStore.abandonInput({ ...saved.scope, inputId: initialInputId });
     return { status: result.success ? 'succeeded' : 'failed',
       summary: 'Diff summary restored from cache.', toolResultOutput: published.result.output,
-      toolResultMeta: { cache: 'hit' }, structuredMeta: { kind: 'scm_diff_summary.v1', payload: published.result.output } };
+      toolResultMeta: { cache: 'hit' }, structuredMeta: { kind: EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary, payload: published.result.output } };
   },
   buildInitialInputContext: ({ start, structuredMeta }) => {
     const input = readRecord(start.intentInput);
@@ -429,13 +435,13 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
     // The Action creates the saved record before Run admission. Its pending
     // envelope is not an existing reading to discuss: the initial prompt must
     // retain its generation request.
-    const saved = structuredMeta?.kind === 'scm_diff_summary.v1'
+    const saved = structuredMeta?.kind === EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary
       ? ScmDiffSummaryGenerateOutputSchema.safeParse(structuredMeta.payload) : null;
     if (!saved?.success || (!saved.data.success || !saved.data.summaryMarkdown)
       && !Object.values(saved.data.outputs ?? {}).some(output => output?.value !== undefined)) return narration;
     const comparison = ScmComparisonSchema.safeParse(input.comparison);
     const metadata = ScmDiffSummaryMetadataSchema.safeParse(input.metadata);
-    if (!comparison.success || !metadata.success || structuredMeta?.kind !== 'scm_diff_summary.v1') return narration;
+    if (!comparison.success || !metadata.success || structuredMeta?.kind !== EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary) return narration;
     return ['Saved result and captured evidence for the current request:',
       `Captured comparison: ${JSON.stringify(presentScmDiffSummaryModelContext(comparison.data, comparison.data))}`,
       `Saved structured result: ${JSON.stringify(presentScmDiffSummaryModelContext(structuredMeta.payload, comparison.data, readReviewFindingCitationContext(input)))}`,
@@ -457,7 +463,7 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
         analysis: { ...saved.result.output.analysis, parts: readDiffSummaryPartProgress(admittedInput) } }) });
     if (!published.success) return null;
     return { status: 'succeeded', summary: 'The next diff analysis part was admitted.', toolResultOutput: published.result.output,
-      structuredMeta: { kind: 'scm_diff_summary.v1', payload: published.result.output }, updatedIntentInput: admittedInput };
+      structuredMeta: { kind: EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary, payload: published.result.output }, updatedIntentInput: admittedInput };
   },
   onTurnComplete: async (params) => {
     const progressive = hasActiveDiffSummaryAnalysis(params.start.intentInput);
@@ -472,7 +478,7 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
     : null,
   onTerminal: async ({ start, status, finishedAtMs, structuredMeta }) => {
     const input = readRecord(start.intentInput);
-    const previous = structuredMeta?.kind === 'scm_diff_summary.v1'
+    const previous = structuredMeta?.kind === EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary
       ? ScmDiffSummaryGenerateOutputSchema.safeParse(structuredMeta.payload) : null;
     if (!previous?.success && !ScmComparisonSchema.safeParse(input.comparison).success) return null;
     const saved = await readOrCreateSavedScmResult(start, previous?.success ? previous.data : undefined);
@@ -483,16 +489,19 @@ export const ScmDiffSummaryProfile: ExecutionRunIntentProfile = {
     for (const kind of output.requestedOutputs ?? []) {
       const current = outputs[kind];
       if (!current || current.state === 'pending' || current.state === 'writing' || current.state === 'partial') {
-        Object.assign(outputs, { [kind]: { ...current, state: status, reason: `Generation ${status} at ${finishedAtMs}.` } });
+        Object.assign(outputs, { [kind]: { ...current, state: status,
+          reason: status === 'cancelled' ? undefined : `Generation ${status} at ${finishedAtMs}.`,
+          reasonCode: status === 'cancelled' ? 'generation_cancelled' : undefined,
+        } });
         changed = true;
       }
     }
-    if (!changed) return { toolResultOutput: output, structuredMeta: { kind: 'scm_diff_summary.v1', payload: output } };
+    if (!changed) return { toolResultOutput: output, structuredMeta: { kind: EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary, payload: output } };
     const result = ScmDiffSummaryGenerateOutputSchema.parse({ ...output, runId: start.runId, outputs });
     const published = await scmDiffSummaryResultStore.publishProgress({ ...saved.scope, expectedRevision: saved.result.revision,
       output: result, preserveUndo: true });
-    if (!published.success) return { toolResultOutput: output, structuredMeta: { kind: 'scm_diff_summary.v1', payload: output } };
-    return { toolResultOutput: published.result.output, structuredMeta: { kind: 'scm_diff_summary.v1', payload: published.result.output } };
+    if (!published.success) return { toolResultOutput: output, structuredMeta: { kind: EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary, payload: output } };
+    return { toolResultOutput: published.result.output, structuredMeta: { kind: EXECUTION_RUN_KIND_BY_INTENT.scm_diff_summary, payload: published.result.output } };
   },
   buildInvalidOutputRepairPrompt: ({ start }) => {
     const input = readRecord(start.intentInput);

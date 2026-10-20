@@ -3,12 +3,26 @@ import { createServerUrlComparableKey as createProtocolServerUrlComparableKey } 
 
 import {
     canonicalizeServerUrl,
+    createDiagnosticServerUrlKey,
     createServerUrlComparableKey,
     resolveIndependentHttpsServerOrigin,
 } from './serverUrlCanonical';
 import { toServerUrlDisplay } from './serverUrlDisplay';
 
 describe('serverUrlCanonical', () => {
+    it('compares diagnostic endpoints with paths while retaining loopback equivalence', () => {
+        expect(createDiagnosticServerUrlKey('http://localhost:3005/relay/')).toBe(createDiagnosticServerUrlKey('http://127.0.0.1:3005/relay'));
+        expect(createDiagnosticServerUrlKey('https://relay.example.com/one')).not.toBe(createDiagnosticServerUrlKey('https://relay.example.com/two'));
+        expect(createDiagnosticServerUrlKey('https://RELAY.example.com:443/')).toBe(createDiagnosticServerUrlKey('https://relay.example.com'));
+    });
+
+    it('keeps missing diagnostic URLs unknown and malformed endpoints distinct', () => {
+        expect(createDiagnosticServerUrlKey('')).toBe('');
+        expect(createDiagnosticServerUrlKey('https://[invalid')).not.toBe('');
+        expect(createDiagnosticServerUrlKey('https://[invalid')).not.toBe(createDiagnosticServerUrlKey('https://[other'));
+        expect(createDiagnosticServerUrlKey('https://[invalid')).not.toBe(createDiagnosticServerUrlKey('https://relay.example.com'));
+    });
+
     it('strips userinfo, query, and hash', () => {
         expect(
             canonicalizeServerUrl('https://admin:secret@example.com:8443/api?token=abc#frag'),

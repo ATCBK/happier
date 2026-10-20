@@ -3,8 +3,6 @@ import type {
     NewSessionDraft,
 } from '@/sync/domains/state/persistence';
 import { PluginUiNewSessionSeedOriginV1Schema } from '@happier-dev/protocol/plugins/ui';
-import { SessionIdentityAdditionsV1Schema } from '@happier-dev/protocol/sessions/identity/sessionBotV1';
-import { SessionPromptStackV1Schema } from '@happier-dev/protocol/sessions/context/sessionContextV1';
 import { readSessionInstructionsAuthoringDraft } from '@/sync/domains/state/sessionInstructionsDraft';
 import { nullable } from 'zod/mini';
 import { ManagedMachineAcquisitionDraftSchema, ManagedMachineSelectionDraftSchema } from '@/sync/domains/state/newSessionManagedMachineDraft';
@@ -16,10 +14,6 @@ import { ManagedMachineAcquisitionDraftSchema, ManagedMachineSelectionDraftSchem
  * record and clears the request after that transaction succeeds.
  */
 export type NewSessionDraftLocalState = Readonly<Pick<NewSessionDraft,
-    | 'sessionName'
-    | 'initialSessionFacts'
-    | 'memoryEnabled'
-    | 'promptStack'
     | 'instructionsDraft'
     | 'entryIntent'
     | 'selectedSecretId'
@@ -31,7 +25,6 @@ export type NewSessionDraftLocalState = Readonly<Pick<NewSessionDraft,
     | 'placementCandidates'
     | 'teamCredentialBindings'
     | 'composerAttachmentSeeds'
-    | 'zenTaskSource'
     | 'authoringOrigin'
     | 'managedMachineSelection'
     | 'managedMachineAcquisition'
@@ -41,12 +34,6 @@ export type NewSessionDraftLocalState = Readonly<Pick<NewSessionDraft,
 /** Device-local New Session choices that must not enter the synchronized document. */
 export function buildNewSessionDraftLocalState(draft: NewSessionDraft): NewSessionDraftLocalState {
     return {
-        ...(draft.sessionName === undefined ? {} : { sessionName: draft.sessionName }),
-        ...(draft.initialSessionFacts === undefined ? {} : {
-            initialSessionFacts: SessionIdentityAdditionsV1Schema.parse(draft.initialSessionFacts),
-        }),
-        ...(draft.memoryEnabled === undefined ? {} : { memoryEnabled: draft.memoryEnabled }),
-        ...(draft.promptStack === undefined ? {} : { promptStack: SessionPromptStackV1Schema.parse(draft.promptStack) }),
         ...(draft.instructionsDraft === undefined ? {} : { instructionsDraft: readSessionInstructionsAuthoringDraft(draft.instructionsDraft) }),
         entryIntent: draft.entryIntent ?? null,
         selectedSecretId: draft.selectedSecretId ?? null,
@@ -71,7 +58,6 @@ export function buildNewSessionDraftLocalState(draft: NewSessionDraft): NewSessi
         ...(draft.placementCandidates === undefined ? {} : { placementCandidates: draft.placementCandidates }),
         ...(draft.teamCredentialBindings === undefined ? {} : { teamCredentialBindings: draft.teamCredentialBindings }),
         ...(draft.composerAttachmentSeeds === undefined ? {} : { composerAttachmentSeeds: draft.composerAttachmentSeeds }),
-        ...(draft.zenTaskSource === undefined ? {} : { zenTaskSource: draft.zenTaskSource }),
         ...(draft.authoringOrigin === undefined ? {} : {
             authoringOrigin: PluginUiNewSessionSeedOriginV1Schema.parse(draft.authoringOrigin),
         }),

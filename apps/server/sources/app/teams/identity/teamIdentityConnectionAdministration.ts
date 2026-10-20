@@ -29,7 +29,7 @@ import {
     resolveEffectiveAccountLoginMethodsForDecisions,
 } from "@/app/auth/methods/effectiveAccountLoginMethods";
 import { resolveEffectiveHomeAuthMethodsInTx } from "@/app/auth/methods/effectiveHomeAuthMethods";
-import { resolveTeamAuthenticationPolicy, resolveTeamAuthenticationPolicyInTx } from "@/app/auth/entry/resolveTeamAuthenticationPolicy";
+import { resolveTeamAuthenticationPolicyInTx } from "@/app/auth/entry/resolveTeamAuthenticationPolicy";
 import { normalizeAuthMethodId } from '@happier-dev/protocol/auth/providers';
 import { findIdentityProviderBlockers } from "@/app/auth/providers/accountIdentityLifecycle";
 import {
@@ -65,11 +65,12 @@ import type { TeamIdentityConnectionView as LifecycleConnectionView } from "./te
 import { isSameProviderContext } from "@/app/auth/providers/providerReference";
 import { publishCommittedHomeProviderMutationInTx } from "@/app/home/governance/homeManagedIdentityProviders";
 import type { TeamOperationAuthenticationContext } from "../actorContext";
-import { authorizeTeamIdentityAdministrationInTx, identityConnectionOwner } from "./teamIdentityAdministrationAuthority";
+import { authorizeTeamIdentityConnectionAdministrationInTx as authorizeTeamIdentityAdministrationInTx, identityConnectionOwner } from "./teamIdentityAdministrationAuthority";
 import {
     projectCurrentTeamIdentityConnectionV1InTx,
     projectIdentityConnectionResult,
     readTeamIdentityCurrentnessInputsInTx,
+    readTeamsUsingHomeIdentityMethodsInTx,
     type ScopedIdentityConnectionV1 as IdentityConnectionV1,
 } from "./teamIdentityConnectionProjection";
 import { resolveTeamIdentityConnectionReturnUrl } from "./teamIdentityConnectionUrls";
@@ -144,13 +145,9 @@ async function resolveTeamIdentityConnectionRemovalPreflightInTx(
     } });
     if (siblingBindings > 0) blockers.push("identity_connection_in_use");
     if (input.teamId === null) {
-        const teams = await tx.team.findMany({ select: { authenticationPolicy: true } });
         const providerId = normalizeAuthMethodId(resolved.connection.providerInstanceId);
-        if (teams.some((candidate) => {
-            const accepted = resolveTeamAuthenticationPolicy({ policy: candidate.authenticationPolicy, homeMethods: [], teamConnections: [] });
-            return accepted.status === "restricted" && accepted.choices.some((choice) =>
-                choice.reference.kind === "home_method" && normalizeAuthMethodId(choice.reference.methodId) === providerId);
-        })) blockers.push("team_authentication_policy_in_use");
+        const teams = await readTeamsUsingHomeIdentityMethodsInTx(tx, [providerId]);
+        if ((teams.get(providerId)?.length ?? 0) > 0) blockers.push("team_authentication_policy_in_use");
     }
     if (policy?.resolution.status === "unavailable") {
         blockers.push("team_authentication_policy_unavailable");
@@ -337,7 +334,10 @@ async function projectListInTx<TeamId extends string | null>(
     canMutate: boolean,
 ): Promise<Readonly<{ items: IdentityConnectionV1<TeamId>[]; eligibleProviders: IdentityEligibleProviderV1[] }>> {
     const connections = await listTeamIdentityConnectionsInTx(tx, input);
-    const inputs = await readTeamIdentityCurrentnessInputsInTx(tx, { env: input.env, teamId: input.teamId });
+    const inputs = await readTeamIdentityCurrentnessInputsInTx(tx, {
+        env: input.env, teamId: input.teamId,
+        homeProviderInstanceIds: connections.map((connection) => connection.providerInstanceId),
+    });
     const projectedItems = await Promise.all(connections.map((connection) => projectCurrentTeamIdentityConnectionV1InTx(tx, {
         env: input.env,
         teamId: input.teamId,

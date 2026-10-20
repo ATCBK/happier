@@ -24,7 +24,7 @@ import {
 } from './ConnectedAccountRequestAuthService';
 import {
     scopeConnectedAccountSessionPurposeBindingLease,
-    type ConnectedAccountSessionPurposeBindingLease,
+    createConnectedAccountPurposeBindingOwner,
 } from '../purposeBindings/ConnectedAccountPurposeBindingOwner';
 
 const roots: string[] = [];
@@ -153,22 +153,14 @@ describe('ConnectedAccountRequestAuthSubjectRegistry', () => {
                 headerNames: ['authorization'],
             },
         };
-        let current = true;
-        const unionLease: ConnectedAccountSessionPurposeBindingLease = {
-            subjectId: 'agent-session:canonical',
-            isCurrent: () => current,
-            resolvePurposeBinding: (requested) => (
-                JSON.stringify(requested) === JSON.stringify(purpose)
-                    ? binding
-                    : JSON.stringify(requested) === JSON.stringify(managedPurpose)
-                        ? managedBinding
-                        : null
-            ),
-            listPurposeBindings: () => current ? [binding, managedBinding] : [],
-            dispose: () => {
-                current = false;
-            },
-        };
+        const unused = async (): Promise<never> => { throw new Error('Unexpected Account IO in a capability-scoping test'); };
+        const purposes = createConnectedAccountPurposeBindingOwner({
+            store: { read: unused, update: unused, subscribe: () => ({ dispose() {} }) },
+            selectTarget: unused, resolveTarget: unused, materializeAccount: unused,
+            projectTargetAccounts: unused, assertTargetAccountMaterializable: unused,
+        });
+        const unionLease = purposes.activateSessionPurposeBindings({ sessionId: 'canonical',
+            purposes: [purpose, managedPurpose], bindings: [binding, managedBinding] });
         const agentRedactions: string[][] = [];
         const managedRedactions: string[][] = [];
         const agentSubject = scopeConnectedAccountSessionPurposeBindingLease({

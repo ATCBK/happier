@@ -4,6 +4,7 @@ import { resolveWorkflowDefinitionRefV1 } from '../workflows/workflowDefinitionR
 import { WorkflowDefinitionGetResultV1Schema, WorkflowDefinitionListResultV1Schema } from '../workflows/actionsV1.js';
 import { WidgetInstanceActionOutputSchemasV1 } from '../widgets/actionsV1.js';
 import { readBuiltinWidgetDescriptorV1 } from '../widgets/builtinWidgetDescriptorV1.js';
+import { isWidgetTargetHostableV1 } from '../widgets/widgetInputAdmissionV1.js';
 import { admitWidgetActionSurfaceV1, readWidgetActionAccountScopeAdmissionV1 } from '../widgets/widgetActionScopeV1.js';
 import { createCanonicalJsonSigningInput } from '../crypto/canonicalJson.js';
 import { ActionExecuteFailureSchema, type ActionExecuteFailure } from '../actions/actionExecutionResult.js';
@@ -29,9 +30,26 @@ export async function resolveInputOptionsConsumerField(params: Readonly<{
         const refused = await admitWidgetActionSurfaceV1(deps, consumer.surface, context);
         if (refused) return refused;
       }
-      if (consumer.selectedSession && consumer.selectedSession.serverId !== consumer.surface.serverId)
-        return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
+      if (consumer.selectedSession) {
+        const admission = readWidgetActionAccountScopeAdmissionV1(deps,
+          { ...consumer.surface, serverId: consumer.selectedSession.serverId }, context);
+        if (!admission.ok) return admission;
+      }
       return native.inputs?.fields.find(field => field.path === fieldPath) ?? null;
+    }
+    if (consumer.definition.kind === 'installed' && deps.widgetCatalog?.readInstalledInputFields) {
+      const refused = await admitWidgetActionSurfaceV1(deps, consumer.surface, context);
+      if (refused) return refused;
+      if (consumer.selectedSession) {
+        const admission = readWidgetActionAccountScopeAdmissionV1(deps,
+          { ...consumer.surface, serverId: consumer.selectedSession.serverId }, context);
+        if (!admission.ok) return admission;
+      }
+      const fields = await deps.widgetCatalog.readInstalledInputFields({ surface: consumer.surface, definition: consumer.definition,
+        context, signal: context.signal, boundSession: consumer.selectedSession });
+      if (!fields || 'ok' in fields) return fields;
+      if (!isWidgetTargetHostableV1({ inputs: { fields: [...fields] } }, consumer.surface.owner.kind)) return null;
+      return fields.find(field => field.path === fieldPath) ?? null;
     }
     const { createActionExecutor } = await import('../actions/actionExecutor.js');
     const read = await createActionExecutor(deps).execute('widgets.catalog.list', { surface: consumer.surface,
@@ -75,5 +93,8 @@ export async function resolveInputOptionsConsumerField(params: Readonly<{
   if (!ref || !resolved) return null;
   const definition = WorkflowDefinitionV1Schema.parse(resolved.definition);
   const input = definition.inputs.find(input => input.name === fieldPath);
-  return input ? workflowInputToFieldHint(input) : null;
+  return input ? workflowInputToFieldHint(input) : {
+    ok: false, errorCode: 'input_type_consumer_unavailable', error: 'input_type_consumer_unavailable',
+    details: { fieldPath, availableFields: definition.inputs.map(input => input.name) },
+  };
 }

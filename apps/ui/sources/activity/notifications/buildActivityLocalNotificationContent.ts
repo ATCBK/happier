@@ -6,7 +6,7 @@ import { summarizeToolInputForNotification, type AgentRequestKind } from '@happi
 import { buildActivityPreviewText, normalizeActivityPreviewText } from '@/activity/attention/buildActivityPreviewText';
 import type { Message } from "@happier-dev/session-core/messages";
 import type { Session } from '@/sync/domains/state/storageTypes';
-import { readSessionDisplayTitleField } from '@/sync/state/selectors';
+import { readSessionNameIfNamed } from '@/utils/sessions/sessionUtils';
 import { t } from '@/text';
 import type { ActivityLocalNotificationEvent } from './runtime/activityLocalNotificationBus';
 
@@ -27,10 +27,8 @@ type ActivityLocalNotificationContent = Readonly<{
 }>;
 
 function resolveSessionNotificationTitle(session: Session | null | undefined): string {
-    const summaryText = readSessionDisplayTitleField(session).value ?? '';
-    if (summaryText) return summaryText;
-
-    return t('notifications.activity.defaultSessionTitle');
+    // The name every surface shows; only a Session nothing names falls back to the generic title.
+    return (session ? readSessionNameIfNamed(session) : null) ?? t('notifications.activity.defaultSessionTitle');
 }
 
 function summarizeAgentRequestBody(requestKind: AgentRequestKind, toolName: string, toolArgs: unknown, includeMessageText: boolean): string {
@@ -110,7 +108,7 @@ export function buildActivityLocalNotificationContent(params: Readonly<{
     if (params.event.kind === 'session-update') {
         const event = params.event;
         const sequence = 'committedSequence' in event ? event.committedSequence : undefined;
-        const activityEvent = resolveActivityRemoteAlertEventForPersonalEventV2(
+        const sourceEvent = resolveActivityRemoteAlertEventForPersonalEventV2(
             event.event,
             sequence?.sequenceDomain === 'session_transcript'
                 ? { domain: 'session_transcript', seq: sequence.sequence }
@@ -119,6 +117,8 @@ export function buildActivityLocalNotificationContent(params: Readonly<{
                     : undefined,
             'turnId' in event ? event.turnId : undefined,
         );
+        const activityEvent = sourceEvent?.type === 'source_unavailable' && event.event === 'source_unavailable' && event.stalledOccurrence
+            ? { ...sourceEvent, stalledOccurrence: event.stalledOccurrence } : sourceEvent;
         const preview = previewBehavior === 'include_preview'
             ? event.event === 'human_message'
                 ? event.messages?.filter((message) => message.kind === 'user-text')

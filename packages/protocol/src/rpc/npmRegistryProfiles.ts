@@ -2,6 +2,8 @@ import { lazyZodSchema } from '../lazyZodSchema.js';
 import { z } from 'zod/mini';
 
 export const NpmRegistryProfileIdV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.regex(/^[a-z0-9][a-z0-9._-]*$/u)));
+export const NpmRegistryProfileRevisionV1Schema = lazyZodSchema(() => z.number().check(z.int(), z.nonnegative()));
+export const NpmRegistryProfileMutationIdV1Schema = lazyZodSchema(() => z.string().check(z.trim(), z.minLength(1), z.regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u)));
 
 export const NpmRegistryOriginV1Schema = lazyZodSchema(() => z.pipe(z.string().check(z.trim(), z.minLength(1)), z.transform((value, ctx) => {
   try {
@@ -60,7 +62,7 @@ export const NpmRegistryPausedSourceV1Schema = lazyZodSchema(() => z.strictObjec
 
 export const DaemonNpmRegistryProfileSnapshotV1Schema = lazyZodSchema(() => z.strictObject({
   protocolVersion: z.literal(1),
-  revision: z.number().check(z.int(), z.nonnegative()),
+  revision: NpmRegistryProfileRevisionV1Schema,
   profiles: z.array(NpmRegistryProfileViewV1Schema),
   pausedSources: z.array(NpmRegistryPausedSourceV1Schema),
 }));
@@ -68,8 +70,8 @@ export type DaemonNpmRegistryProfileSnapshotV1 = z.infer<typeof DaemonNpmRegistr
 
 const MutationBaseSchema = lazyZodSchema(() => z.object({
   machineId: z.string().check(z.trim(), z.minLength(1)),
-  expectedRevision: z.number().check(z.int(), z.nonnegative()),
-  mutationId: z.string().check(z.trim(), z.minLength(1), z.regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u)),
+  expectedRevision: NpmRegistryProfileRevisionV1Schema,
+  mutationId: NpmRegistryProfileMutationIdV1Schema,
 }));
 
 export const DaemonNpmRegistryProfileMutationRequestV1Schema = lazyZodSchema(() => z.discriminatedUnion('action', [
@@ -119,7 +121,7 @@ const NpmRegistryProfileRpcErrorV1Schema = lazyZodSchema(() => z.strictObject({
     'unavailable',
   ]),
   retryable: z.boolean(),
-  currentRevision: z.optional(z.number().check(z.int(), z.nonnegative())),
+  currentRevision: z.optional(NpmRegistryProfileRevisionV1Schema),
 }));
 
 export const DaemonNpmRegistryProfileMutationResponseV1Schema = lazyZodSchema(() => z.union([

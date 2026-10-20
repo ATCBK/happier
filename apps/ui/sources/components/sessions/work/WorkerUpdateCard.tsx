@@ -2,6 +2,11 @@ import * as React from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
 import { StyleSheet, useUnistyles } from 'react-native-unistyles';
 import type { WorkerDeliverableReferenceV1, WorkerUpdateV1 } from '@happier-dev/protocol';
+import type { FollowDeliveryProjectionV1 } from '@happier-dev/protocol/sessions/follow/sessionFollowDeliveryProjectionV1';
+import type { WorkerUpdateFollowMatchV1 } from '@happier-dev/protocol/sessions/messages/transcriptRawRecordV1';
+import type { FollowDeliveryMuteScopeV1 } from '@happier-dev/protocol/sessions/follow/sessionDeliveryMuteV1';
+import { executeSessionFollowAction } from '@/sync/api/session/sessionFollowApi';
+import { fireAndForget } from '@/utils/system/fireAndForget';
 import { HAPPIER_WORK_UPDATE_CARD_MARK_SIZE_PX, HappierWorkUpdateCard, type HappierWorkUpdateCardFact, type HappierWorkUpdateCardSurface, joinHappierFacts } from '@happier-dev/plugin-ui/presentation';
 import { useWorkTheme, WORK_HOST, workTextStyle } from '@/components/work/map/WorkMapView';
 
@@ -17,6 +22,7 @@ import { Icon } from '@/components/ui/icons/Icon';
 import { describeWorkKind, WORKER_KIND_GLYPHS } from './workerKindGlyphs';
 import { Text } from '@/components/ui/text/Text';
 import { resolveWorkStatusTone } from '@/components/work/status/resolveWorkStatusTone';
+import { presentSessionRuntimeIssue } from '@/components/sessions/presentation/sessionRuntimeIssuePresentation';
 import { workStatusWordStyle } from '@/components/work/status/workStatusTreatment';
 import { Typography } from '@/constants/Typography';
 import { buildScopedSessionRouteHref } from '@/hooks/session/sessionRouteServerScope';
@@ -48,11 +54,14 @@ function buildWorkerUpdateDisplayText(update: WorkerUpdateV1, options: Readonly<
     const kind = describeWorkKind(update.workerKind);
     const engine = update.engine;
     const engineLabel = engine ? resolveExecutionRunBackendLabel({ kind: 'backend', backendId: engine.agentId }) ?? engine.agentId : null;
+    const issue = presentSessionRuntimeIssue(update.runtimeIssueV1);
     return {
         title: options.title ?? update.headline,
         state: resolveWorkStatusTone({ kind: 'worker_update', facts: { update } }).word,
         kind: joinHappierFacts(kind, age),
         result: update.result,
+        issue: issue.message === update.result ? null : issue.message,
+        reset: issue.reset,
         engine: engineLabel ? joinHappierFacts(engineLabel, engine?.modelId) : null,
         truncated: update.truncated ? t('sessionWork.workerUpdate.truncated') : null,
         inspect: options.canInspect ? (update.transcriptPointer?.kind === 'session' ? t('runs.openSession') : t('runs.openRun')) : null,
@@ -173,12 +182,6 @@ const WorkerUpdateAnswers = React.memo(function WorkerUpdateAnswers(props: Reado
     );
 });
 
-/** Transcript order owns currentness; the worker's existing pending-prompt owner owns the answers. */
-function CurrentWorkerUpdateAnswers(props: Readonly<{ update: WorkerUpdateV1; messageId: string; address: SessionAddress }>) {
-    const current = useCurrentWorkerUpdate(props.update, props.messageId, props.address.serverId);
-    return current ? <WorkerUpdateAnswers address={props.address} /> : null;
-}
-
 /** Peek, mounted only where a pane host exists: it opens the worker in the lead's Details pane. */
 function WorkerUpdatePeekAction(props: Readonly<{ sessionId: string; title: string }>) {
     const transcriptSource = useSessionTranscriptSource();
@@ -186,6 +189,40 @@ function WorkerUpdatePeekAction(props: Readonly<{ sessionId: string; title: stri
     const pane = useAppPaneScope(paneScopeId);
     const peek = () => pane.openDetailsTab(createSessionPeekDetailsTab({ sessionId: props.sessionId, title: props.title }), { intent: 'preview' });
     return <RoundButton testID="worker-update-peek" size="small" display="inverted" title={t('sessionWork.workerUpdate.peek')} onPress={peek} />;
+}
+
+/** Which of the worker's updates a Mute silences for this receiver: the session itself, or the run. */
+function readWorkerMuteScope(update: WorkerUpdateV1): FollowDeliveryMuteScopeV1 | null {
+    if (update.workerKind === 'session') return { kind: 'sender_session', sessionId: update.workerId };
+    if (update.workerKind === 'workflow_run') return { kind: 'source', source: { kind: 'workflow_run', runId: update.workerId } };
+    const pointer = update.transcriptPointer;
+    return pointer?.kind === 'execution_run'
+        ? { kind: 'source', source: { kind: 'execution_run', sessionId: pointer.sessionId, runId: pointer.runId } } : null;
+}
+
+/**
+ * The receiver's Mute (A10): this session stops hearing from the worker, through the Follow
+ * family's mute Action, with Undo while the card is in view. Nothing is read to draw it.
+ */
+function WorkerUpdateMuteAction(props: Readonly<{ receiverSessionId: string; serverId: string; scope: FollowDeliveryMuteScopeV1 }>) {
+    const [state, setState] = React.useState<'idle' | 'busy' | 'muted' | 'failed'>('idle');
+    const change = (actionId: 'session.delivery.mute.set' | 'session.delivery.mute.remove') => {
+        setState('busy');
+        fireAndForget(executeSessionFollowAction(actionId, { receiver: { kind: 'session', sessionId: props.receiverSessionId }, scope: props.scope },
+            props.serverId).then((result) => setState(result.kind === 'ok'
+                ? (actionId === 'session.delivery.mute.set' ? 'muted' : 'idle') : 'failed'),
+            () => setState('failed')), { tag: `WorkerUpdateMuteAction.${actionId}` });
+    };
+    if (state === 'muted') {
+        return <View style={styles.muted}>
+            <Text testID="worker-update-muted" style={styles.fact}>{t('sessionWork.workerUpdate.muted')}</Text>
+            <RoundButton testID="worker-update-unmute" size="small" display="inverted" title={t('sessionWork.workerUpdate.unmute')}
+                onPress={() => change('session.delivery.mute.remove')} />
+        </View>;
+    }
+    return <RoundButton testID="worker-update-mute" size="small" display="inverted"
+        title={state === 'failed' ? t('sessionWork.workerUpdate.muteFailed') : t('sessionWork.workerUpdate.mute')}
+        loading={state === 'busy'} disabled={state === 'busy'} onPress={() => change('session.delivery.mute.set')} />;
 }
 
 /** The card stands on core's inset card material; the frame hands it the tone's ring and tint. */
@@ -196,6 +233,38 @@ function renderWorkerUpdateSurface(surface: HappierWorkUpdateCardSurface) {
         </SurfaceCard>
     );
 }
+
+const FOLLOW_STATUS_KEY = {
+    queued: 'sessionWork.workerFollow.queued',
+    next_turn: 'sessionWork.workerFollow.nextTurn',
+    woke: 'sessionWork.workerFollow.woke',
+    answered: 'sessionWork.workerFollow.answered',
+} as const;
+const FOLLOW_REASON_KEY = {
+    held: 'sessionWork.workerFollow.held',
+    offline: 'sessionWork.workerFollow.offline',
+    archived: 'sessionWork.workerFollow.archived',
+    locked: 'sessionWork.workerFollow.locked',
+    muted: 'sessionWork.workerFollow.muted',
+    unavailable: 'sessionWork.workerFollow.unavailable',
+    check_in: 'sessionWork.workerFollow.checkIn',
+    exchange_stopped: 'sessionWork.workerFollow.exchangeStopped',
+} as const;
+
+/** "Your worker · Next turn": the routes that matched, then the delivery the receiver accepted. */
+export function describeWorkerFollowLine(
+    matches: readonly WorkerUpdateFollowMatchV1[] | undefined,
+    delivery: FollowDeliveryProjectionV1 | undefined,
+): string | null {
+    const why = [...new Set((matches ?? []).map((match) => match.kind === 'rule'
+        ? t('sessionWork.workerFollow.rule')
+        : match.relation === 'manager' ? t('sessionWork.workerFollow.manager') : t('sessionWork.workerFollow.follower')))];
+    const how = delivery?.reason ? t(FOLLOW_REASON_KEY[delivery.reason])
+        : delivery?.status ? t(FOLLOW_STATUS_KEY[delivery.status]) : null;
+    const parts = [...why, ...(how ? [how] : [])];
+    return parts.length > 0 ? parts.join(' · ') : null;
+}
+
 
 /**
  * One transcript card for host worker updates and retained historical completions (ORC §3.2, lab
@@ -213,6 +282,13 @@ function renderWorkerUpdateSurface(surface: HappierWorkUpdateCardSurface) {
  */
 export function WorkerUpdateCard(props: Readonly<{
     update: WorkerUpdateV1;
+    /** The admitted Follow routes for this particular event; absent for unrelated run cards. */
+    followMatches?: readonly WorkerUpdateFollowMatchV1[];
+    /** Exact existing input/batch identities; a caller may join only their own acceptance evidence. */
+    followInputLocalId?: string;
+    followWakeEventLocalId?: string;
+    /** Existing accepted-input/Turn projection for this particular event; null means unknown. */
+    delivery?: FollowDeliveryProjectionV1;
     /** Existing transcript row identity; historical or standalone cards do not infer answer ownership. */
     messageId?: string;
     serverId?: string | null;
@@ -238,9 +314,14 @@ export function WorkerUpdateCard(props: Readonly<{
     const pointer = update.transcriptPointer;
     const canInspect = update.canInspect && props.navigationEnabled !== false && transcriptSource.navigate !== null && pointer !== undefined;
     const content = buildWorkerUpdateDisplayText(update, { title, at: props.at, canInspect });
-    const status = resolveWorkStatusTone({ kind: 'worker_update', facts: { update } });
-    const needsYou = status.bucket === 'needs_you';
     const serverId = props.serverId ?? transcriptSource.serverId;
+    // Transcript order owns currentness: a worker's latest notice asks and answers in place; an
+    // earlier one keeps its result and says it needed you, in the past tense and neutral.
+    const asksInTranscript = update.workerKind === 'session' && props.messageId !== undefined
+        && (update.wake === 'needs_you' || update.ownerState === 'needs_input');
+    const current = useCurrentWorkerUpdate(update, asksInTranscript ? props.messageId ?? null : null, serverId);
+    const status = resolveWorkStatusTone({ kind: 'worker_update', facts: { update, earlier: asksInTranscript && !current } });
+    const needsYou = status.bucket === 'needs_you';
 
     // The run's own progress, when this device already knows the run in its exact Home (the active
     // store holds only the active Account's runs). A stated fact, never a read the card starts.
@@ -273,27 +354,42 @@ export function WorkerUpdateCard(props: Readonly<{
     const peekSessionId = canInspect && needsYou && pointer?.kind === 'session' && deviceType !== 'phone' && hasPaneHost
         ? pointer.sessionId : null;
 
-    const answersAddress = needsYou && props.messageId && update.workerKind === 'session' && props.navigationEnabled !== false
+    // A live transcript row in the receiving session can mute its worker; historical and standalone
+    // cards cannot say whose delivery they are.
+    const muteScope = props.messageId !== undefined && props.navigationEnabled !== false && transcriptSource.actions !== null
+        && Boolean(transcriptSource.sessionId) && Boolean(serverId) ? readWorkerMuteScope(update) : null;
+    const answersAddress = needsYou && current && update.workerKind === 'session' && props.navigationEnabled !== false
         ? normalizeSessionAddress(serverId, update.workerId) : null;
     const resultBody = props.children === undefined
         ? (content.result ? <Text testID="worker-update-result" selectable style={styles.result}>{decorate('result', content.result, true)}</Text> : null)
         : props.children;
-    const body = resultBody || update.deliverables?.length || answersAddress ? <>
+    const body = resultBody || content.issue || update.deliverables?.length || answersAddress ? <>
         {resultBody}
+        {content.issue ? <StructuredFindText blockId="structured-worker-issue" testID="worker-update-issue"
+            selectable style={styles.result} text={content.issue} /> : null}
         {update.deliverables?.map((reference, index) => <WorkerDeliverable
             key={JSON.stringify([serverId, reference, index])} reference={reference} index={index}
             serverId={serverId} enabled={props.navigationEnabled !== false && Boolean(serverId)} />)}
-        {answersAddress && props.messageId ? <CurrentWorkerUpdateAnswers update={update} messageId={props.messageId} address={answersAddress} /> : null}
+        {answersAddress ? <WorkerUpdateAnswers address={answersAddress} /> : null}
     </> : null;
 
     const facts: HappierWorkUpdateCardFact[] = [];
     if (props.facts !== undefined) facts.push({ id: 'caller', label: props.facts });
     if (progress) facts.push({ id: 'progress', label: progress });
+    if (content.reset) facts.push({ id: 'reset', label: <StructuredFindText blockId="structured-worker-reset"
+        testID="worker-update-reset" style={styles.fact} text={content.reset} /> });
     if (engine) {
         facts.push({ id: 'engine', label: <StructuredFindText blockId="structured-worker-engine" testID="worker-update-engine" numberOfLines={1} style={styles.fact} text={content.engine ?? ''} /> });
     }
     if (content.truncated) {
         facts.push({ id: 'truncated', label: <StructuredFindText blockId="structured-worker-truncated" testID="worker-update-truncated" numberOfLines={1} style={styles.fact} text={content.truncated} /> });
+    }
+
+    // Why this card reached this session and how it landed (lab P1 L3): the admitted Follow routes and
+    // the accepted-input projection. An unknown delivery says nothing rather than guessing.
+    const followLine = describeWorkerFollowLine(props.followMatches, props.delivery);
+    if (followLine) {
+        facts.push({ id: 'follow', label: <Text testID="worker-update-follow" numberOfLines={1} style={styles.fact}>{followLine}</Text> });
     }
 
     // One primary at most, and only where the person is the blocker and the card cannot answer in
@@ -320,7 +416,10 @@ export function WorkerUpdateCard(props: Readonly<{
             state={<StructuredFindText blockId="structured-worker-state" testID="worker-update-state" numberOfLines={1} style={[styles.word, workStatusWordStyle(status.tone)]} text={status.word} />}
             meta={<StructuredFindText blockId="structured-worker-kind" testID="worker-update-kind" numberOfLines={1} style={styles.kind} text={content.kind} />}
             facts={facts}
-            leadingAction={peekSessionId ? <WorkerUpdatePeekAction sessionId={peekSessionId} title={title} /> : undefined}
+            leadingAction={peekSessionId || muteScope ? <>
+                {peekSessionId ? <WorkerUpdatePeekAction sessionId={peekSessionId} title={title} /> : null}
+                {muteScope && serverId ? <WorkerUpdateMuteAction receiverSessionId={transcriptSource.sessionId} serverId={serverId} scope={muteScope} /> : null}
+            </> : undefined}
             actions={actions}
         >{body}</HappierWorkUpdateCard>
     );
@@ -354,6 +453,11 @@ const styles = StyleSheet.create((theme) => ({
     answers: {
         alignSelf: 'stretch',
         marginTop: theme.space.s8,
+    },
+    muted: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: theme.space.s4,
     },
     fact: {
         ...workTextStyle('cardFact'),

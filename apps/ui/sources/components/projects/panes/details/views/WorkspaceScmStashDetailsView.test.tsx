@@ -195,14 +195,14 @@ describe('WorkspaceScmStashDetailsView', () => {
             restoreButton.props.onPress?.();
             await settle();
         });
-        expect(machineScmStashPopSpy).toHaveBeenCalledWith('m1', expect.objectContaining({ cwd: '/repo', stashRef: 'stash@{0}' }), { serverId: 's1' });
+        expect(machineScmStashPopSpy).toHaveBeenCalledWith('m1', expect.objectContaining({ cwd: '/repo', stashRef: 'stash@{0}' }), { serverId: 's1', onDispatched: expect.any(Function) });
 
         const discardButton = screen.tree.findByProps({ accessibilityLabel: 'files.stash.discard' });
         await act(async () => {
             discardButton.props.onPress?.();
             await settle();
         });
-        expect(machineScmStashDropSpy).toHaveBeenCalledWith('m1', expect.objectContaining({ cwd: '/repo', stashRef: 'stash@{0}' }), { serverId: 's1' });
+        expect(machineScmStashDropSpy).toHaveBeenCalledWith('m1', expect.objectContaining({ cwd: '/repo', stashRef: 'stash@{0}' }), { serverId: 's1', onDispatched: expect.any(Function) });
     });
 
     it('switches between stashes from the dropdown trigger and shows the selected stash metadata', async () => {

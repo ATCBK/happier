@@ -19,8 +19,12 @@ import { createBufferedTransferDestination } from '@/sync/domains/transfers/runt
 import { hashArtifactBinaryContent } from '@/sync/domains/artifacts/artifactBinaryContent';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
 import { assertAccountRoleArtifactDeletionV1 } from '@happier-dev/protocol/prompts/roles/accountRoleActions';
+import { DOC_EDIT_PROPOSAL_HTTP_PATHS_V1, DocEditAcceptHostInputV1Schema, DocEditAcceptTransportInputV1Schema,
+    DocEditDeclineTransportInputV1Schema, DocEditDecisionResultV1Schema } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
+import { encodePlainArtifactStoredContent } from '@happier-dev/protocol/storage/artifactStoredContent';
+import { ArtifactEncryption } from '@/sync/encryption/artifactEncryption';
 
-/** Ordinary Artifact Actions use the captured Account transport and canonical sync codecs. */
+/** Artifact-backed Actions use the captured Account transport and canonical sync codecs. */
 export function createUiArtifactAction(account: LazyActionAccountContext, options?: Readonly<{
     onPublicLinkIssued?: (link: ArtifactPublicLinkIssuedV1) => void | Promise<void>;
     workspaceDownload?: typeof downloadDaemonWorkspaceFileToDestination;
@@ -92,12 +96,58 @@ export function createUiArtifactAction(account: LazyActionAccountContext, option
             return await response.json();
         },
     });
-    return async ({ actionId, input, context, signal }) => {
+    return async invocation => {
+        const { actionId, input, context, signal } = invocation;
         try {
             account.assertCurrent();
             signal?.throwIfAborted();
             const savedBy = artifactSavedByFromActionContextV1({ ...context, runtimeAccountId: account.accountId });
             switch (actionId) {
+                case 'doc.edit.accept':
+                case 'doc.edit.decline': {
+                    const acceptInput = actionId === 'doc.edit.accept' ? DocEditAcceptHostInputV1Schema.parse(input) : undefined;
+                    const args = acceptInput ?? DocEditDeclineTransportInputV1Schema.parse(input);
+                    if (!areServerProfileIdentifiersEquivalent(args.proposalRef.discussion.serverId, account.serverId))
+                        return { ok: false, errorCode: 'server_target_mismatch', error: 'server_target_mismatch' };
+                    let body = args;
+                    if (acceptInput?.preparation) {
+                        const preparation = acceptInput.preparation;
+                        const resource = await account.readArtifactPublicLinkResource(preparation.doc.ref.artifactId, signal, { prepareRecipientKeys: false });
+                        account.assertCurrent();
+                        signal?.throwIfAborted();
+                        if (!resource) return { ok: false, errorCode: 'not_found', error: 'not_found' };
+                        if (resource.encryptionMode === 'e2ee' && !resource.dataKey)
+                            return { ok: false, errorCode: 'content_unavailable', error: 'content_unavailable' };
+                        const encodedBody = resource.encryptionMode === 'plain' ? encodePlainArtifactStoredContent({ body: preparation.body })
+                            : await new ArtifactEncryption(resource.dataKey!).encryptBody({ body: preparation.body });
+                        body = DocEditAcceptTransportInputV1Schema.parse({ ...acceptInput, preparation: { ...preparation, body: encodedBody } });
+                    }
+                    account.assertCurrent();
+                    signal?.throwIfAborted();
+                    let response: Response;
+                    try {
+                        response = await account.request(actionId === 'doc.edit.accept' ? DOC_EDIT_PROPOSAL_HTTP_PATHS_V1.accept
+                            : DOC_EDIT_PROPOSAL_HTTP_PATHS_V1.decline, { method: 'POST', signal,
+                            headers: { Authorization: `Bearer ${account.credentials.token}`, 'Content-Type': 'application/json' },
+                            body: JSON.stringify(body) }, { includeAuth: false, retry: 'none' });
+                    } catch {
+                        account.assertCurrent();
+                        signal?.throwIfAborted();
+                        return { ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' };
+                    }
+                    account.assertCurrent();
+                    signal?.throwIfAborted();
+                    const payload: unknown = await response.json().catch(() => null);
+                    account.assertCurrent();
+                    signal?.throwIfAborted();
+                    if (!response.ok) {
+                        const code = payload && typeof payload === 'object' && !Array.isArray(payload) && typeof Reflect.get(payload, 'error') === 'string'
+                            ? String(Reflect.get(payload, 'error')) : 'action_failed';
+                        return { ok: false, errorCode: code, error: code };
+                    }
+                    const parsed = DocEditDecisionResultV1Schema.safeParse(payload);
+                    return parsed.success ? parsed.data : { ok: false, errorCode: 'invalid_action_output', error: 'invalid_action_output' };
+                }
                 case 'artifact.create': {
                     const args = ArtifactActionInputSchemasV1[actionId].parse(input);
                     if ('uploadPath' in args) return await createDocument({ artifactId: args.artifactId, header: args.header,
@@ -106,7 +156,9 @@ export function createUiArtifactAction(account: LazyActionAccountContext, option
                 }
                 case 'artifact.get': {
                     const args = ArtifactActionInputSchemasV1[actionId].parse(input);
-                    const artifact = await account.fetchArtifact(args.artifactId, { signal });
+                    const readOnly = 'readOnly' in invocation && invocation.readOnly === true;
+                    const artifact = await (readOnly ? account.readArtifact : account.fetchArtifact)(args.artifactId, { signal,
+                        ...(readOnly ? { prepareRecipientKeys: false } : {}) });
                     if (!artifact) return { artifact: null };
                     if (!artifact.isDecrypted || !artifact.rawHeader || artifact.bodyVersion === undefined) throw Object.assign(new Error('content_unavailable'), { code: 'content_unavailable' });
                     return { artifact: ArtifactDocumentV1Schema.parse({ artifactId: artifact.id, header: artifact.rawHeader, body: artifact.body,

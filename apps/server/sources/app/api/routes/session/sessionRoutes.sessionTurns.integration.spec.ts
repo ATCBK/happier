@@ -155,7 +155,7 @@ describe("sessionRoutes session turns (integration)", () => {
         });
     });
 
-    it("publishes committed pending request clears through the terminal HTTP mutation", async () => {
+    it("preserves request-owned pending counts through the terminal HTTP mutation", async () => {
         const account = await db.account.create({
             data: { publicKey: "pk-session-turn-pending-clear", encryptionMode: "plain" },
         });
@@ -188,21 +188,99 @@ describe("sessionRoutes session turns (integration)", () => {
                 });
                 expect(response.statusCode).toBe(200);
                 expect(response.json()).toMatchObject({ success: true, applied: true });
+                // A terminal foreground turn cannot settle Session-wide request authority.
+                await expect(db.session.findUniqueOrThrow({
+                    where: { id: session.id },
+                    select: { pendingPermissionRequestCount: true, pendingUserActionRequestCount: true, pendingRequestObservedAt: true },
+                })).resolves.toEqual({
+                    pendingPermissionRequestCount: 2, pendingUserActionRequestCount: 1, pendingRequestObservedAt: new Date(150),
+                });
                 const terminalUpdates = updates.mock.calls.filter(([update]) =>
                     update.payload.body.t === "update-session" && update.payload.body.latestTurnStatus === "cancelled",
                 );
                 expect(terminalUpdates).toHaveLength(1);
-                expect(UpdateBodySchema.parse(terminalUpdates[0]![0].payload.body)).toMatchObject({
-                    pendingPermissionRequestCount: 0,
-                    pendingUserActionRequestCount: 0,
-                    pendingRequestObservedAt: null,
-                });
+                const body = UpdateBodySchema.parse(terminalUpdates[0]![0].payload.body);
+                expect(body).not.toHaveProperty("pendingPermissionRequestCount");
+                expect(body).not.toHaveProperty("pendingUserActionRequestCount");
+                expect(body).not.toHaveProperty("pendingRequestObservedAt");
             });
-            await expect(db.session.findUniqueOrThrow({
-                where: { id: session.id },
-                select: { pendingPermissionRequestCount: true, pendingUserActionRequestCount: true, pendingRequestObservedAt: true },
-            })).resolves.toEqual({
-                pendingPermissionRequestCount: 0, pendingUserActionRequestCount: 0, pendingRequestObservedAt: null,
+        } finally {
+            updates.mockRestore();
+        }
+    });
+
+    it.each([
+        { pendingAt: 250, newerTurn: false, settledNewerTurn: false, label: "newer request evidence" },
+        { pendingAt: 50, newerTurn: false, settledNewerTurn: false, label: "request evidence preceding the turn" },
+        { pendingAt: null, newerTurn: false, settledNewerTurn: false, label: "requests without turn-lifetime evidence" },
+        { pendingAt: 150, newerTurn: true, settledNewerTurn: false, label: "a newer active foreground turn" },
+        { pendingAt: 450, newerTurn: true, settledNewerTurn: true, label: "a newer terminal foreground turn" },
+    ])("preserves pending authority for $label on cancellation", async ({ pendingAt, newerTurn, settledNewerTurn }) => {
+        const account = await db.account.create({
+            data: { publicKey: `pk-pending-neighbor-${pendingAt}-${newerTurn}`, encryptionMode: "plain" },
+        });
+        const pending = {
+            pendingPermissionRequestCount: 2,
+            pendingUserActionRequestCount: 1,
+            pendingRequestObservedAt: pendingAt === null ? null : new Date(pendingAt),
+        };
+        const session = await db.session.create({
+            data: {
+                tag: `pending-neighbor-${pendingAt}-${newerTurn}`, accountId: account.id,
+                encryptionMode: "plain", metadata: JSON.stringify({ t: "plain", v: {} }), active: true,
+                ...pending,
+            },
+        });
+        const begin = (turnId: string, observedAt: number) => applySessionTurnMutation({
+            actorUserId: account.id, authentication,
+            mutation: {
+                v: 1, sessionId: session.id, mutationId: `begin-${turnId}`, turnId,
+                action: "begin", provider: "codex", observedAt,
+            },
+        });
+        await expect(begin("turn-old", 100)).resolves.toMatchObject({ ok: true, didApply: true });
+        if (newerTurn) {
+            await expect(begin("turn-new", 300)).resolves.toMatchObject({ ok: true, didApply: true });
+            if (settledNewerTurn) {
+                await expect(applySessionTurnMutation({
+                    actorUserId: account.id, authentication,
+                    mutation: {
+                        v: 1, sessionId: session.id, mutationId: "complete-new", turnId: "turn-new",
+                        action: "complete", provider: "codex", observedAt: 400,
+                    },
+                })).resolves.toMatchObject({ ok: true, didApply: true });
+            }
+        }
+        // Begin itself never owns pending-request settlement.
+        const readPending = () => db.session.findUniqueOrThrow({
+            where: { id: session.id },
+            select: { pendingPermissionRequestCount: true, pendingUserActionRequestCount: true, pendingRequestObservedAt: true },
+        });
+        await expect(readPending()).resolves.toEqual(pending);
+        const updates = vi.spyOn(eventRouter, "emitUpdate").mockImplementation(() => {});
+        try {
+            await withAuthenticatedTestApp(sessionRoutes, async (app) => {
+                const response = await app.inject({
+                    method: "POST", url: `/v1/sessions/${session.id}/turns/mutations`,
+                    headers: { "content-type": "application/json", "x-test-user-id": account.id },
+                    payload: {
+                        v: 1, sessionId: session.id, mutationId: "cancel-old", turnId: "turn-old",
+                        action: "cancel", provider: "codex", observedAt: 200,
+                    },
+                });
+                expect(response.statusCode).toBe(200);
+                expect(response.json()).toMatchObject({ success: true, applied: !newerTurn || settledNewerTurn });
+                await expect(readPending()).resolves.toEqual(pending);
+                const terminalUpdates = updates.mock.calls.filter(([update]) =>
+                    update.payload.body.t === "update-session" && update.payload.body.latestTurnStatus === "cancelled",
+                );
+                expect(terminalUpdates).toHaveLength(newerTurn ? 0 : 1);
+                for (const [update] of terminalUpdates) {
+                    const body = UpdateBodySchema.parse(update.payload.body);
+                    expect(body).not.toHaveProperty("pendingPermissionRequestCount");
+                    expect(body).not.toHaveProperty("pendingUserActionRequestCount");
+                    expect(body).not.toHaveProperty("pendingRequestObservedAt");
+                }
             });
         } finally {
             updates.mockRestore();

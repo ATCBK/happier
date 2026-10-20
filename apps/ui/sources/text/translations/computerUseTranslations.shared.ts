@@ -72,6 +72,8 @@ export type ComputerUseTranslations = Readonly<{
         access: (params: Readonly<{ agent: string }>) => string;
         accessValue: string;
         accessSee: string;
+        accessSeeHint: (params: Readonly<{ agent: string }>) => string;
+        accessUseHint: (params: Readonly<{ agent: string }>) => string;
         displayUnavailable: string;
         /** What sharing a whole display exposes, said before it is shared. */
         wholeDisplayBody: (params: Readonly<{ display: string }>) => string;
@@ -96,6 +98,11 @@ export type ComputerUseTranslations = Readonly<{
         denied: string;
         opened: (params: Readonly<{ machine: string }>) => string;
         openFailed: string;
+        capture: string;
+        captureFor: string;
+        inputFor: string;
+        granted: string;
+        unknown: string;
         checkAgain: string;
         captureTitle: (params: Readonly<{ machine: string }>) => string;
         inputTitle: (params: Readonly<{ machine: string }>) => string;
@@ -111,6 +118,8 @@ export type ComputerUseTranslations = Readonly<{
         onMachine: (params: Readonly<{ machine: string }>) => string;
         connectingTitle: (params: Readonly<{ target: string }>) => string;
         unavailableTitle: string;
+        stopFailed: string;
+        stopping: string;
         unavailableBody: (params: Readonly<{ agent: string }>) => string;
         endedTitle: (params: Readonly<{ target: string }>) => string;
         endedBody: (params: Readonly<{ agent: string }>) => string;
@@ -127,6 +136,7 @@ export type ComputerUseTranslations = Readonly<{
         expandView: string;
         restoreView: string;
         dockView: string;
+        floatView: string;
         closeView: string;
         moveView: string;
         resizeView: string;
@@ -143,6 +153,11 @@ export type ComputerUseTranslations = Readonly<{
         agentWorkingOn: (params: Readonly<{ agent: string; machine: string }>) => string;
         watchingSourceA11y: (params: Readonly<{ source: string }>) => string;
         controlNotAllowed: string;
+        seeOnly: string;
+        unconfirmedWarning: (params: Readonly<{ agent: string; target: string; machine: string }>) => string;
+        /** The phone band: the bar above already names the window. */
+        unconfirmedWarningCompact: (params: Readonly<{ agent: string; machine: string }>) => string;
+        unconfirmedStuckHint: (params: Readonly<{ machine: string }>) => string;
         driverMissing: string;
         driverInvalid: string;
         driverRepairBody: string;
@@ -153,6 +168,7 @@ export type ComputerUseTranslations = Readonly<{
         offlineTitle: (params: Readonly<{ machine: string }>) => string;
         offlineBody: string;
         openingTitle: (params: Readonly<{ target: string; machine: string }>) => string;
+        openingBody: string;
     }>;
     strip: Readonly<{
         using: (params: Readonly<{ target: string }>) => string;
@@ -248,6 +264,8 @@ export const computerUseTranslationsEnglish = { en: {
             access: ({ agent }) => `${agent} can`,
             accessValue: 'See and use it',
             accessSee: 'See it',
+            accessSeeHint: ({ agent }) => `Screenshots go to ${agent}. It can’t click or type.`,
+            accessUseHint: ({ agent }) => `${agent} can also click and type in what you share.`,
             displayUnavailable: 'Whole-display sharing is unavailable on this machine.',
             wholeDisplayBody: ({ display }) => `Everything visible on ${display} can be seen, including other apps and notifications.`,
             policyBoth: ({ agent }) => `${agent} asks before each screenshot, click and keystroke.`,
@@ -271,6 +289,11 @@ export const computerUseTranslationsEnglish = { en: {
             denied: 'Not allowed',
             opened: ({ machine }) => `Opened on ${machine}. Allow Happier there, then check again.`,
             openFailed: 'Couldn’t open System Settings there. Open it on that computer.',
+            capture: 'Screen Recording',
+            captureFor: 'To see windows',
+            inputFor: 'To click and type',
+            granted: 'Allowed',
+            unknown: 'Not checked',
             checkAgain: 'Check again',
             captureTitle: ({ machine }) => `Allow Screen Recording on ${machine} to watch its windows or display.`,
             inputTitle: ({ machine }) => `Allow Accessibility on ${machine} to use its mouse and keyboard.`,
@@ -286,6 +309,8 @@ export const computerUseTranslationsEnglish = { en: {
             onMachine: ({ machine }) => `On ${machine}`,
             connectingTitle: ({ target }) => `Connecting to ${target}`,
             unavailableTitle: 'Can’t show this window right now',
+            stopFailed: 'Couldn’t stop sharing',
+            stopping: 'Stopping sharing…',
             unavailableBody: ({ agent }) => `You can still stop ${agent} here.`,
             endedTitle: ({ target }) => `${target} closed`,
             endedBody: ({ agent }) => `${agent} can’t see or use it any more. Choose another window to continue.`,
@@ -302,6 +327,7 @@ export const computerUseTranslationsEnglish = { en: {
             expandView: 'Expand view',
             restoreView: 'Restore view',
             dockView: 'Dock view',
+            floatView: 'Float view',
             closeView: 'Close view',
             moveView: 'Move view',
             resizeView: 'Resize view',
@@ -318,6 +344,10 @@ export const computerUseTranslationsEnglish = { en: {
             agentWorkingOn: ({ agent, machine }) => `${agent} is working on ${machine}`,
             watchingSourceA11y: ({ source }) => `Watching ${source}`,
             controlNotAllowed: 'Mouse and keyboard control aren’t allowed',
+            seeOnly: 'Can’t click or type',
+            unconfirmedWarning: ({ agent, target, machine }) => `Nobody can use ${target} from Happier until ${machine} confirms ${agent}’s mouse and keys are released.`,
+            unconfirmedWarningCompact: ({ agent, machine }) => `Locked until ${machine} confirms ${agent}’s mouse and keys are released.`,
+            unconfirmedStuckHint: ({ machine }) => `If something looks stuck, click once in the window on ${machine} itself.`,
             driverMissing: 'The computer driver isn’t available',
             driverInvalid: 'The computer driver needs repair',
             driverRepairBody: 'Reinstall the native driver on this machine, then check its current permissions and source.',
@@ -328,6 +358,7 @@ export const computerUseTranslationsEnglish = { en: {
             offlineTitle: ({ machine }) => `${machine} isn’t answering`,
             offlineBody: 'Reconnect to watch it. Watching doesn’t start it.',
             openingTitle: ({ target, machine }) => `Opening ${target} on ${machine}…`,
+            openingBody: 'It appears here as soon as the first picture arrives.',
         },
         strip: {
             using: ({ target }) => `Using ${target}`,

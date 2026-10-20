@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { AgentExecutionTargetV1Schema } from '@happier-dev/protocol/agents/executionTargetV1';
 import { act } from 'react-test-renderer';
 
 import { renderHook } from '@/dev/testkit';
@@ -18,6 +19,23 @@ function nativeSelection(agentTargetKey: string, modelId: string, updatedAt: num
 }
 
 describe('useNewSessionAgentAuthoringOptionsState', () => {
+    it('uses the selected target without probing a bundled fallback on unrelated renders', async () => {
+        const parses = vi.spyOn(AgentExecutionTargetV1Schema, 'safeParse');
+        const targetKey = 'agent:acme.review/reviewer';
+        const props = { agentType: 'claude', backendTargetKey: targetKey,
+            hydratedTempAuthoringDraft: null, hydratedPersistedAuthoringDraft: null };
+        const hook = await renderHook(useNewSessionAgentAuthoringOptionsState, { initialProps: props });
+        try {
+            act(() => { hook.getCurrent().setModelMode('review-model'); });
+            expect(hook.getCurrent().modelSelection?.ref.agentTargetKey).toBe(targetKey);
+            for (let index = 0; index < 3; index++) await hook.rerender({ ...props });
+            expect(parses.mock.calls.filter(([value]) => value && typeof value === 'object'
+                && 'kind' in value && value.kind === 'backend')).toHaveLength(0);
+            await hook.rerender({ ...props, backendTargetKey: 'agent:acme.other/reviewer' });
+            act(() => { hook.getCurrent().setModelMode('other-model'); });
+            expect(hook.getCurrent().modelSelection?.ref.agentTargetKey).toBe('agent:acme.other/reviewer');
+        } finally { await hook.unmount(); parses.mockRestore(); }
+    });
     it('hydrates late draft engine options for the already selected target and keeps edits on unrelated updates', async () => {
         const agentTargetKey = 'agent:happier.agent.claude/claude';
         const draft = {
@@ -255,7 +273,7 @@ describe('useNewSessionAgentAuthoringOptionsState', () => {
             rememberedEngineSelection: null,
         }));
 
-        expect(hook.getCurrent().modelMode).toBe(getAgentCore('gemini').model?.defaultMode);
+        expect(hook.getCurrent().modelMode).toBe(getAgentCore('gemini')!.model?.defaultMode);
         expect(hook.getCurrent().modelMode).not.toBe('gpt-5.5');
     });
 
@@ -437,7 +455,7 @@ describe('useNewSessionAgentAuthoringOptionsState', () => {
 
         await hook.rerender(buildProps('opencode', null));
 
-        expect(hook.getCurrent().modelMode).toBe(getAgentCore('opencode').model?.defaultMode);
+        expect(hook.getCurrent().modelMode).toBe(getAgentCore('opencode')!.model?.defaultMode);
         expect(hook.getCurrent().modelMode).not.toBe('gpt-5.5');
         expect(hook.getCurrent().acpSessionModeId).toBeNull();
         expect(hook.getCurrent().sessionConfigOptionOverrides).toBeNull();
@@ -506,7 +524,7 @@ describe('useNewSessionAgentAuthoringOptionsState', () => {
             rememberedEngineSelection: null,
         }));
 
-        expect(mismatchedHook.getCurrent().modelMode).toBe(getAgentCore('opencode').model?.defaultMode);
+        expect(mismatchedHook.getCurrent().modelMode).toBe(getAgentCore('opencode')!.model?.defaultMode);
         expect(mismatchedHook.getCurrent().modelMode).not.toBe('gpt-5.5');
         expect(mismatchedHook.getCurrent().acpSessionModeId).toBeNull();
         expect(mismatchedHook.getCurrent().sessionConfigOptionOverrides).toBeNull();
@@ -540,7 +558,7 @@ describe('useNewSessionAgentAuthoringOptionsState', () => {
             rememberedEngineSelection: null,
         }));
 
-        expect(matchingHook.getCurrent().modelMode).toBe(getAgentCore('codex').model?.defaultMode);
+        expect(matchingHook.getCurrent().modelMode).toBe(getAgentCore('codex')!.model?.defaultMode);
         expect(matchingHook.getCurrent().acpSessionModeId).toBeNull();
 
         const mismatchedHook = await renderHook(() => useNewSessionAgentAuthoringOptionsState({

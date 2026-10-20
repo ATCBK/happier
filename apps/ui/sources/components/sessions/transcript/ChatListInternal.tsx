@@ -106,8 +106,8 @@ import {
     TRANSCRIPT_EDGE_PREFETCH_MAX_PX,
     TRANSCRIPT_EDGE_PREFETCH_MIN_PX,
 } from '@/components/sessions/transcript/scroll/resolveTranscriptEdgePrefetchThresholdPx';
-import { buildChatListNativeId } from './chatListNativeId';
 import { requestSessionOpenInitialFill } from '@/components/sessions/transcript/useChatListRootState';
+import { buildChatListNativeId } from './chatListNativeId';
 import type {
     ChatListInternalProps,
     ChatTranscriptListItem,
@@ -1631,7 +1631,9 @@ export const ChatListInternal = React.memo((props: ChatListInternalProps) => {
         spinnerDelayMs: sync.getSyncTuning().transcriptOlderLoadSpinnerDelayMs,
         isFillDone: () => sessionOpenLatch.initialFillStatus() === 'done',
         isTransactionOpen: () => viewportCommandController.activeOwner() !== 'follow',
-        readHasMoreAfterExhaustion: () => sync.getSessionTailDiscontinuityOlderAvailability(props.sessionId),
+        readHasMore: transcriptSource.kind === 'app'
+            ? () => sync.getSessionOlderMessagesAvailability(props.sessionId)
+            : undefined,
     });
     // Navigation consumes the pager's result; it does not own another exhaustion cache.
     useCommittedTranscriptRef(observeOlderLoadResultRef, olderPagination.observeLoadResult);
@@ -2097,13 +2099,12 @@ export const ChatListInternal = React.memo((props: ChatListInternalProps) => {
         observeCommittedProjectionLayoutRef,
         scrollObservationHost.observeCommittedProjectionLayout,
     );
+    const recordLayoutCommitObservedRef = React.useRef(recordLayoutCommitObserved);
+    useCommittedTranscriptRef(recordLayoutCommitObservedRef, recordLayoutCommitObserved);
     const observeTranscriptListCommittedLayout = React.useCallback(() => {
-        recordLayoutCommitObserved();
-        scrollObservationHost.observeCommittedProjectionLayout();
-    }, [
-        recordLayoutCommitObserved,
-        scrollObservationHost.observeCommittedProjectionLayout,
-    ]);
+        recordLayoutCommitObservedRef.current();
+        observeCommittedProjectionLayoutRef.current();
+    }, []);
     useCommittedTranscriptRef(
         recordLocalTranscriptInteractionIntentRef,
         scrollObservationHost.recordLocalTranscriptInteractionIntent,
@@ -2121,7 +2122,7 @@ export const ChatListInternal = React.memo((props: ChatListInternalProps) => {
                 focused={sessionScreenFocused}
                 hasOlder={hasMoreOlderRef.current !== false}
                 loadOlder={transcriptSource.history.loadOlder}
-                messagesById={props.messagesById}
+                messagesById={props.forkedTranscriptEnabled ? props.messagesById : undefined}
                 items={props.items}
                 setToolCallsGroupExpanded={setToolCallsGroupExpanded}
                 waitForVisualUpdate={waitForNextTranscriptVisualUpdate}
@@ -2134,9 +2135,10 @@ export const ChatListInternal = React.memo((props: ChatListInternalProps) => {
               >
                 <TranscriptFindSurface model={transcriptFind} source={transcriptSource} sessionId={props.sessionId}
                     serverId={props.sessionServerId ?? transcriptSource.serverId} focused={sessionScreenFocused}
-                    viewportRef={transcriptViewportFocusRef} loadedMessages={findLoadedMessages} publishCorpus={publishFindCorpus}
+                    viewportRef={transcriptViewportFocusRef} items={props.items} loadedMessages={findLoadedMessages} publishCorpus={publishFindCorpus}
                     measureMessage={measureFindMessage} contentHeight={listContentHeight}
-                    onClearanceChange={handleFindClearanceChange}>
+                    onClearanceChange={handleFindClearanceChange}
+                    olderLoadFailed={olderPagination.loadFailed} onRetryOlderLoad={olderPagination.retryLoad}>
                 <TranscriptContentDemandProvider enabled={sessionScreenFocused}>
                 <TranscriptListShell<ChatTranscriptListItem>
                     ref={commitListRef}

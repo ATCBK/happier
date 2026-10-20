@@ -174,7 +174,24 @@ describe('plugin search query and result schemas', () => {
     expect(PluginSearchQueryV1Schema.jsonSchema.type).toBe('object');
     expect(PluginSearchResultV1Schema.jsonSchema.type).toBe('object');
     expect(Object.keys(PluginSearchResultV1Schema.jsonSchema.properties ?? {}))
-      .toEqual(['items', 'truncated']);
+      .toEqual(['items', 'truncated', 'failure']);
+  });
+
+  it('carries closed typed search failures through author, cold declaration and host validators', () => {
+    const cold = rehydrateCanonicalProtocolComposableSchema(PluginSearchResultV1Schema.jsonSchema);
+    if (!cold) throw new Error('Search result must rehydrate');
+    const validate = compilePluginJsonSchema(PluginSearchResultV1Schema.jsonSchema);
+    for (const code of ['root_not_found', 'unavailable', 'auth_required']) {
+      const result = { items: [], truncated: false, failure: { code } };
+      expect(PluginSearchResultV1Schema.safeParse(result).success).toBe(true);
+      expect(cold.safeParse(result).success).toBe(true);
+      expect(validate(result)).toBe(true);
+    }
+    for (const failure of [{ code: 'invented' }, { code: 'root_not_found', path: '/private' }]) {
+      const result = { items: [], truncated: false, failure };
+      expect(PluginSearchResultV1Schema.safeParse(result).success).toBe(false);
+      expect(validate(result)).toBe(false);
+    }
   });
 
   it('accepts caller-selected query and page sizes while keeping inputs strict', () => {

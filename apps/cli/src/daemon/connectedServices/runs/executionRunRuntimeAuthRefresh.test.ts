@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { once } from 'node:events';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -47,6 +48,8 @@ async function harness() {
     let request: Parameters<NonNullable<ReturnType<typeof createExecutionRunConnectedServicesBridge>['refreshRuntimeAuth']>>[0] | null = null;
     let retiringContribution: Promise<void> | null = null;
     let activationSequence = 0;
+    let activeRunId: string | null = null;
+    let nativeHome: string | null = null;
     const close = async () => {
         await app?.close();
         if (bridge && request) await bridge.release(request);
@@ -70,14 +73,14 @@ async function harness() {
         await once(runner, 'spawn');
         const runnerPid = runner.pid;
         if (!runnerPid) throw new Error('Run fixture process has no OS identity');
-        const tracked = new Map([[runnerPid, { happySessionId: 'runner-session' }]]);
+        const tracked = new Map<number, { happySessionId: string | null }>([[runnerPid, { happySessionId: 'runner-session' }]]);
         bridge = createExecutionRunConnectedServicesBridge({
             resolveAuthForSpawn: (input) => resolveConnectedServiceAuthForSpawn({ ...input,
-                credentials: h.credentials, api: h.api, baseDir, activeServerDir: join(home, 'server'),
+                credentials: h.credentials, api: h.api, baseDir, activeServerDir: join(home, 'active'),
                 qualifiedConnectedAccountApi: h.qualifiedApi, credentialRefreshService: h.coordinator,
                 nowMs: () => h.now, processEnv: {} }),
-            registerRunTargets: (registration) => registry.registerRunTarget({ ...registration, pid: registration.runnerPid }),
-            unregisterRunTargets: (runKey) => registry.unregisterRunKey(runKey),
+            registerRunTargets: (registration) => { registry.registerRunTarget({ ...registration, pid: registration.runnerPid }); },
+            unregisterRunTargets: (runKey) => { registry.unregisterRunKey(runKey); },
             getRunRuntimeTarget: (runKey) => registry.getRunTargetByRunKey(runKey),
             adoptRunCredentialRevision: (input) => registry.adoptExactCredentialRevisionForRun(input),
             resolveRunCredentialRevisionTarget: (input) => registry.resolveExactRunCredentialRevisionTarget(input),
@@ -101,6 +104,7 @@ async function harness() {
             captureRunnerIdentity: (input) => {
                 const identity = tracked.get(input.runnerPid);
                 if (!identity || input.runnerPid !== runnerPid) return null;
+                if (identity.happySessionId === null && input.runId !== activeRunId) return null;
                 return { identity, parentSessionId: identity.happySessionId,
                     isCurrent: () => tracked.get(input.runnerPid) === identity && runner?.exitCode === null };
             },
@@ -115,7 +119,7 @@ async function harness() {
                     },
                     isCurrent: () => h.controller.isRuntimeRegistryCurrent(lease.registry), release: lease.release };
             },
-            purposeBindingOwner: h.purposeRuntime,
+            purposeBindingOwner: { activatePurposeBindings: async input => ({ lease: await h.purposeRuntime.activatePurposeBindings(input) }) },
             requestAuthRegistry: createConnectedAccountRequestAuthSubjectRegistry(),
             resolveRequestAuthHttpPort: () => 42427,
             createRedactionLease: () => createProviderRedactionLease({ values: [] }),
@@ -137,13 +141,16 @@ async function harness() {
                 return request;
             },
             get nativeHome() {
-                if (!request) throw new Error('Run fixture activation is not current');
-                return resolveConnectedServiceMaterializedRootDir({ baseDir, materializationKey: request.runId, agentId: 'codex' });
+                if (!request || !nativeHome) throw new Error('Run fixture native home is unavailable');
+                return nativeHome;
             },
-            async activate() {
+            async activate(parentSessionId: string | null = 'runner-session') {
                 const runId = `run-${++activationSequence}`;
-                const materialized = await capturedBridge.materialize({ runId, runnerPid, agentId: 'codex', connectedServices: bindings, cwd: directory });
+                activeRunId = runId;
+                tracked.set(runnerPid, { happySessionId: parentSessionId });
+                const materialized = await capturedBridge.materialize({ activationId: randomUUID(), runId, runnerPid, agentId: 'codex', connectedServices: bindings, cwd: directory });
                 if (!materialized.ok) throw new Error(materialized.errorMessage);
+                nativeHome = materialized.env.CODEX_HOME ?? null;
                 const group = await h.qualifiedApi.readGroup();
                 const credential = await h.readCredential();
                 request = { runId, runnerPid, activationId: materialized.activationId, serviceId,
@@ -154,6 +161,7 @@ async function harness() {
             async releaseActivation() {
                 if (request) await capturedBridge.release(request);
                 request = null;
+                nativeHome = null;
                 tracked.set(runnerPid, { happySessionId: 'runner-session' });
                 if ((await h.qualifiedApi.readGroup()).activeConnectedAccountId !== 'work') h.switchGroupAccount('work');
             },
@@ -175,8 +183,8 @@ describe('execution Run runtime auth refresh HTTP authority', () => {
     afterEach(async () => { try { await h?.releaseActivation(); } finally { vi.unstubAllGlobals(); } });
     afterAll(async () => { await h?.close(); });
 
-    it('admits failure recovery only through the retained Run activation, never parent Session fields', async () => {
-        await h.activate();
+    it.each(['runner-session', null])('admits failure recovery through the retained Run activation (parent %s)', async (parentSessionId) => {
+        await h.activate(parentSessionId);
         const selection = h.request.selection;
         if (selection.kind !== 'group') throw new Error('Expected the retained group selection');
         const failure = { runId: h.request.runId, runnerPid: h.request.runnerPid, activationId: h.request.activationId,
@@ -192,21 +200,25 @@ describe('execution Run runtime auth refresh HTTP authority', () => {
         expect(response.statusCode).toBe(200);
         expect(response.json()).toMatchObject({ status: 'failed', reason: 'runtime_recovery_source_unavailable' });
     });
-    it('uses real Run scope and rejects master control authority', async () => {
+    it.each(['runner-session', null])('uses real Run scope and rejects master control authority (parent %s)', async (parentSessionId) => {
         vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(oauthResponse()).mockResolvedValueOnce(oauthResponse('access-next')));
-        await h.activate();
+        await h.activate(parentSessionId);
         expect((await h.post(h.request, 'master')).statusCode).toBe(401);
         const response = await h.post();
         expect(response.statusCode).toBe(200);
-        expect(response.json()).toEqual({ ok: true, result: { status: 'refreshed', result: {
-            credentialRevision: h.secondRevision,
+        const refreshedRevision = (await h.readCredential()).credentialRevision;
+        expect(refreshedRevision).not.toBe(h.request.expectedCredentialRevision);
+        expect(response.json()).toMatchObject({ ok: true, result: { status: 'refreshed', result: {
+            credentialRevision: refreshedRevision,
         } } });
         expect(response.body).not.toContain('refresh-new');
         // Codex adopts this returned revision and sends it for its next distinct attempt.
         // The unchanged registry environment is a launch projection, not credential authority.
-        const next = await h.post({ ...h.request, refreshAttemptId: `${h.request.refreshAttemptId}-next`, expectedCredentialRevision: h.secondRevision });
-        expect(next.json()).toEqual({ ok: true, result: { status: 'refreshed', result: {
-            credentialRevision: h.thirdRevision,
+        const next = await h.post({ ...h.request, refreshAttemptId: `${h.request.refreshAttemptId}-next`, expectedCredentialRevision: refreshedRevision });
+        const nextRevision = (await h.readCredential()).credentialRevision;
+        expect(nextRevision).not.toBe(refreshedRevision);
+        expect(next.json()).toMatchObject({ ok: true, result: { status: 'refreshed', result: {
+            credentialRevision: nextRevision,
         } } });
         expect(next.body).not.toContain('refresh-new');
     });

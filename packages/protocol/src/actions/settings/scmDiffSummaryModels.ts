@@ -1,4 +1,5 @@
 import { buildBackendTargetKeyV2, type BackendTargetRefV2 } from '../../backends/targets/backendTargetRefV2.js';
+import type { AgentExecutionTargetV1 } from '../../agents/executionTargetV1.js';
 import { resolveModelStructuredOutputSupport, type ProviderModelDescriptorV1 } from '../../models/descriptor.js';
 import { encodeScmDiffSummaryModelOverride, type ScmDiffSummaryCatalogProfile } from './scmDiffSummarySettings.js';
 
@@ -10,7 +11,7 @@ export function selectAgentModelProfilesForPurpose(profiles: readonly ScmDiffSum
 
 /** Project the owning catalog's actual model descriptors into the shared Summary preference. */
 export function buildScmDiffSummaryModelProfiles(params: Readonly<{
-    backendTarget: BackendTargetRefV2;
+    backendTarget: BackendTargetRefV2 | AgentExecutionTargetV1;
     models: readonly Pick<ProviderModelDescriptorV1, 'id' | 'name' | 'capabilities' | 'costTier'>[];
     catalogModels?: readonly Pick<ProviderModelDescriptorV1, 'id' | 'costTier'>[];
     agentFormats?: readonly string[] | null;

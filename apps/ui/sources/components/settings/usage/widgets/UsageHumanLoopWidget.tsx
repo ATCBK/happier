@@ -14,6 +14,8 @@ import { t } from '@/text';
 import { usageSeriesColor } from '../usageAccent';
 import {
   UsageBodyInsufficient,
+  UsageBodyReading,
+  isUsageReadOutstanding,
   leadingUsageRows,
   UsageCoverageLine,
   usagePeriodPhrase,
@@ -83,6 +85,8 @@ export function UsageHumanLoopWidget(props: UsageBodyProps) {
     [permissions, theme],
   );
   if (!permissions && !inputs) {
+    if (isUsageReadOutstanding(props.slice, ['how_you_work']))
+      return <UsageBodyReading testID={`${props.testID}.loading`} waitingOn={{ slice: props.slice, sources: ['how_you_work'] }} />;
     return (
       <UsageBodyInsufficient
         testID={`${props.testID}.empty`}
@@ -106,6 +110,8 @@ export function UsageHumanLoopWidget(props: UsageBodyProps) {
             theme={chartTheme}
             label={t('usage.board.howYouWork.agentsWaited')}
             testID={`${props.testID}.waited`}
+            size="stat"
+            showLabel
             value={
               permissions.decisionLatencyMs === null
                 ? t('usage.board.howYouWork.notRecorded')
@@ -123,6 +129,8 @@ export function UsageHumanLoopWidget(props: UsageBodyProps) {
             theme={chartTheme}
             label={t('usage.board.howYouWork.averageWait')}
             testID={`${props.testID}.average`}
+            size="stat"
+            showLabel
             value={formatUsageDuration(permissions.decisionLatencyMs / paired)}
           />
         ) : null}
@@ -131,6 +139,8 @@ export function UsageHumanLoopWidget(props: UsageBodyProps) {
             theme={chartTheme}
             label={t('usage.board.howYouWork.steering')}
             testID={`${props.testID}.steering`}
+            size="stat"
+            showLabel
             value={inputs.steeringCount}
             comparison={{
               value: String(inputs.acceptedCount),
@@ -157,14 +167,14 @@ export function UsageHumanLoopWidget(props: UsageBodyProps) {
               unknownLabel={t('usage.board.howYouWork.notRecorded')}
               size={wide ? 'full' : 'tile'}
             />
-            {tools.length > toolLead.rows.length || toolsExpanded ? (
-              <UsageShowAllRows
-                testID={`${props.testID}.tools.more`}
-                total={tools.length}
-                expanded={toolsExpanded}
-                onToggle={() => setToolsExpanded((value) => !value)}
-              />
-            ) : null}
+            <UsageShowAllRows
+              label={`${t(`usage.widgets.${props.id}`)}: ${t('usage.board.howYouWork.waitedFor')}`}
+              testID={`${props.testID}.tools.more`}
+              total={tools.length}
+              hidden={toolLead.hidden}
+              expanded={toolsExpanded}
+              onToggle={() => setToolsExpanded((value) => !value)}
+            />
           </View>
         ) : null}
         {answering && answering.witnessed > 0 ? (
@@ -178,6 +188,10 @@ export function UsageHumanLoopWidget(props: UsageBodyProps) {
               label={t('usage.board.howYouWork.whereYouAnswer')}
               total={answering.witnessed}
               basis={t('usage.board.howYouWork.answers')}
+              // The count says what it counts ("73 answered"), never a bare figure mid-row.
+              valueFormatter={(count) =>
+                t('usage.board.howYouWork.approvalCount', { count })
+              }
               size={wide ? 'full' : 'tile'}
               segments={answering.shares.map((row, index) => ({
                 id: row.client,

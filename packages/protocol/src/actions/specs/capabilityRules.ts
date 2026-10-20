@@ -16,7 +16,7 @@ export const McpRulesSetInputV1Schema = lazyZodSchema(() => z.strictObject({
   /** Evidence-bound changes compare at the catalog owner before its row CAS. */
   expectedRevision: z.optional(z.number().check(z.int(), z.nonnegative(), z.int())),
 }));
-export const McpRulesSetItemResultV1Schema = lazyZodSchema(() => McpServerCatalogMutationResponseV1Schema._zod.def.options[0].shape.items.unwrap().element);
+export const McpRulesSetItemResultV1Schema = lazyZodSchema(() => McpServerCatalogMutationResponseV1Schema._zod.def.options[0].shape.items._zod.def.innerType._zod.def.element);
 export const McpRulesSetOutputV1Schema = lazyZodSchema(() => z.union([
   z.strictObject({ ok: z.literal(true), items: z.array(McpRulesSetItemResultV1Schema),
     revision: z.number().check(z.int(), z.nonnegative()) }),
@@ -43,7 +43,7 @@ function bindRulesCliInput(value: unknown, context: ActionCliBindContext, idFiel
   const input = rulesCliInput.parse(value);
   const items = [...(input.names ?? []).map(name => ({ name })), ...(input.itemIds ?? []).map(id => ({ [idField]: id }))];
   const leaf = context.commandPath?.at(-1);
-  if (leaf === 'rules') {
+  if (leaf === 'rules' || leaf === 'set') {
     if (input.rules === undefined) throw new Error('Supply the replacement rules with --rules-json.');
     return { items, change: { kind: 'replace', rules: input.rules } };
   }
@@ -81,6 +81,7 @@ export function createCapabilityRulesActionSpecV1<TId extends ActionId, TInput e
   };
   return {
     id: input.id, title: input.title, safety: 'danger', approval: { result: 'required' },
+    approvalPolicy: { uiConfirmation: 'direct' },
     sideEffectClass: 'write', requiredAuthority: 'account_automation', executionPlacement: 'account', placements: [],
     surfaces: { ui: true, cli: true, agent: true, mcp: true, voice: false, rpc: true },
     bindings: { rpcMethod: input.id, mcpToolName: input.id.replaceAll('.', '_') },

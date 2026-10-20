@@ -16,7 +16,6 @@ import { AIBackendProfileSchema } from '@happier-dev/protocol/profiles/backendPr
 import { PROFILE_TRANSFER_ROUTE_V1 } from '@happier-dev/protocol/profiles/profileTransferV1';
 import { installPromptLibrarySettingsCommonModuleMocks, promptLibrarySettingsRouterPushSpy } from '../promptLibrarySettingsTestHelpers';
 import { promptCollectionItemHref } from './promptCollectionRoutes';
-import { withUiPromptLibraryArtifactReader } from '@/sync/ops/promptLibrary/promptLibraryArtifactStore';
 import { resolvePromptStackSystemAppendBlocksV1 } from '@/sync/ops/promptLibrary/resolvePromptStackSystemAppendBlocksV1';
 
 installDisconnectedServerSocketBoundary();
@@ -25,6 +24,7 @@ installPromptLibrarySettingsCommonModuleMocks({ storage: importOriginal => impor
     modal: async () => (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true,
         spies: { confirm: deleteConfirmation } }).module });
 
+const { withUiPromptLibraryArtifactReader } = await import('@/sync/ops/promptLibrary/promptLibraryArtifactStore');
 const { storage } = await import('@/sync/domains/state/storage');
 const { settingsDefaults } = await import('@/sync/domains/settings/settings');
 const { applyPromptLibraryCatalogSnapshot } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
@@ -94,7 +94,10 @@ describe('prompt deletion catalog mutation', () => {
                 if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
                 if (path === '/v2/account/settings') {
                     if (init?.method === 'POST') settingsWrites += 1;
-                    return Response.json({ content: { t: 'plain', v: outcome === 'legacy-source' ? { profiles: [] } : {} }, version: 7 });
+                    return Response.json({ content: { t: 'plain', v: {
+                        ...(outcome === 'legacy-source' ? { profiles: [] } : {}),
+                        actionsSettingsV1: { v: 1, approvalWaivedSurfaces: { 'artifact.delete': ['ui'] } },
+                    } }, version: 7 });
                 }
                 if (path === '/v1/account/entity-rows/prompt-library') return Response.json({ status: 'listed',
                     rows: [...rows.map(row => ({ key: row.record.key, revision: row.revision, content: { t: 'plain', v: row.record } })),
@@ -135,6 +138,7 @@ describe('prompt deletion catalog mutation', () => {
         const hook = await renderHook(() => usePromptLibraryEntryActions());
         let removed: boolean | undefined;
         await act(async () => { removed = await hook.getCurrent().remove('doc-1'); });
+        expect(deleteConfirmation).not.toHaveBeenCalled();
         expect(artifactBoundary.read('doc-1')).toBeNull();
         expect(removed).toBe(true);
         expect(rows).toEqual(originalRows);

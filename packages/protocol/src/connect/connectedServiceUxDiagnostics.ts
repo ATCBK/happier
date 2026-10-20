@@ -169,7 +169,7 @@ function normalizeLegacyConnectedServiceUxDiagnosticAgentId(value: unknown): unk
     : rest;
 }
 
-export const ConnectedServiceUxDiagnosticV1Schema = lazyZodSchema(() => z.pipe(z.transform(normalizeLegacyConnectedServiceUxDiagnosticAgentId), ConnectedServiceUxDiagnosticV1ObjectSchema));
+export const ConnectedServiceUxDiagnosticV1Schema = lazyZodSchema(() => (<I extends z.core.$ZodType, O extends z.core.$ZodType>(input: I, output: O) => new z.ZodMiniPipe({ type: 'pipe', in: input, out: output }) as z.ZodMiniPipe<I, O>)(z.transform(normalizeLegacyConnectedServiceUxDiagnosticAgentId), ConnectedServiceUxDiagnosticV1ObjectSchema));
 
 export type ConnectedServiceUxDiagnosticV1 = z.infer<typeof ConnectedServiceUxDiagnosticV1ObjectSchema>;
 

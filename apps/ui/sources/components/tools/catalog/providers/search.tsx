@@ -1,4 +1,4 @@
-import * as z from 'zod';
+import * as z from 'zod/mini';
 import { t } from '@/text';
 import { ICON_SEARCH } from '../icons';
 import type { KnownToolDefinition } from '../_types';
@@ -9,10 +9,10 @@ export const providerSearchTools = {
         title: t('tools.names.search'),
         icon: ICON_SEARCH,
         minimal: true,
-        input: z.object({
-            items: z.array(z.any()).optional(),
-            locations: z.array(z.any()).optional()
-        }).partial().passthrough()
+        input: (<T extends z.ZodMiniObject>(schema: T) => z.core.clone(schema, { ...schema._zod.def, catchall: z.unknown() }) as z.ZodMiniObject<T['shape'], z.core.$loose>)(z.partial(z.object({
+            items: z.optional(z.array(z.any())),
+            locations: z.optional(z.array(z.any()))
+        })))
     },
 } satisfies Record<string, KnownToolDefinition>;
 

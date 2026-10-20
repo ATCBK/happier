@@ -79,16 +79,16 @@ describe('durable Collection declarations', () => {
         for (const contract of admitted) {
             expect(contract.contractDigest).toMatch(/^[A-Za-z0-9_-]+$/);
         }
-        expect(admitted.map((contract) => contract.schemaVersion)).toEqual([3, 2, 2]);
+        expect(admitted.map((contract) => contract.schemaVersion)).toEqual([4, 2, 2]);
     });
 
     it('preserves existing source configuration and user intent through the widening migrations', async () => {
         for (const definition of CORPUS_ACCOUNT_COLLECTIONS) {
             const contract = admit(definition);
-            expect(contract.readableSchemaVersions).toEqual(definition.id === 'source-instances' ? [1, 2, 3] : [1, 2]);
+            expect(contract.readableSchemaVersions).toEqual(definition.id === 'source-instances' ? [1, 2, 3, 4] : [1, 2]);
             const migrations = collectionMigrations[definition.id]!;
             expect(migrations.map(migration => [migration.fromSchemaVersion, migration.toSchemaVersion]))
-                .toEqual(definition.id === 'source-instances' ? [[1, 2], [2, 3]] : [[1, 2]]);
+                .toEqual(definition.id === 'source-instances' ? [[1, 2], [2, 3], [3, 4]] : [[1, 2]]);
             const retained = definition.id === 'source-instances'
                 ? toCorpusStoredValue({
                     instanceTag: `a${'0'.repeat(42)}`, sourceQualifiedId: 'happier.example.source/example-forge', lifecycle: CORPUS_SOURCE_INSTANCE_LIFECYCLE.active, configuredAtMs: 1,
@@ -100,7 +100,7 @@ describe('durable Collection declarations', () => {
                     ? toCorpusStoredValue({ linkTag: `a${'2'.repeat(42)}`, entryTag: `a${'3'.repeat(42)}`, sessionId: 'retained-session', linkedAtMs: 1, entryRef: testkitEntryRef(), identityEntryRef: testkitEntryRef(), displayPathAtLink: 'Retained issue' })
                     : toCorpusStoredValue({ markTag: `a${'1'.repeat(42)}`, pinned: true, markedAtMs: 1, entryRef: testkitEntryRef(), displayAtMark: { title: 'Retained issue', scopeLabel: 'example/repository' } });
             let migrated = retained;
-            for (const migration of migrations) migrated = await migration.migrate(migrated);
+            for (const migration of migrations) migrated = await migration.migrate(migrated, { currentRevision: 1 });
             expect(migrated).toEqual(retained);
             const validate = compilePluginJsonSchema(contract.schema);
             const valid = isValidPluginJsonSchemaValue(validate, migrated);

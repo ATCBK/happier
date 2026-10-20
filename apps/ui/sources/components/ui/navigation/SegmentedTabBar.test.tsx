@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
@@ -35,6 +36,9 @@ installNavigationCommonModuleMocks({
 
 const { useGlassMaterialColorResolver } = await import('@/components/ui/glass/useGlassSurfaceColor');
 const { useUnistyles } = await import('react-native-unistyles');
+
+// Collect the real component graph before the interaction-test deadline starts.
+await import('./SegmentedTabBar');
 
 const theme = lightTheme;
 
@@ -692,8 +696,9 @@ describe('SegmentedTabBar', () => {
         // would outline a box ~16px taller than the control the user can see.
         const beta = requireTab(screen, 'seg:beta');
         expect(flattenStyle(requireTabSurface(screen, 'seg:beta').props.style).outlineStyle).toBeUndefined();
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
         await act(async () => {
-            beta.props.onFocus?.({});
+            beta.props.onFocus?.({ target: { matches: (selector: string) => selector === ':focus-visible' } });
         });
         const focusedStyle = flattenStyle(requireTabSurface(screen, 'seg:beta').props.style);
         expect(focusedStyle.outlineStyle).toBe('solid');
@@ -720,11 +725,13 @@ describe('SegmentedTabBar', () => {
             matches: (selector: string) => selector === ':focus-visible' && focusVisible,
         });
 
+        document.dispatchEvent(new Event('pointerdown', { bubbles: true }));
         await act(async () => {
             requireTab(screen, 'seg:beta').props.onFocus?.({ target: focusedElement(false) });
         });
         expect(flattenStyle(requireTabSurface(screen, 'seg:beta').props.style).outlineStyle).toBeUndefined();
 
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
         await act(async () => {
             requireTab(screen, 'seg:beta').props.onBlur?.({});
             requireTab(screen, 'seg:gamma').props.onFocus?.({ target: focusedElement(true) });
@@ -882,10 +889,10 @@ describe('SegmentedTabBar measured overflow', () => {
         expect(requireTab(screen, 'page:overview').props.accessibilityState.selected).toBe(false);
         expect(selectedRect()).toEqual({ x: 180, width: 70 });
 
-        await act(async () => screen.tree.update(scene('overview')));
+        await screen.update(scene('overview'));
         act(() => requireTab(screen, 'page:overview').props.onLayout(layoutEvent(0, 86)));
         expect(selectedRect()).toEqual({ x: 0, width: 86 });
-        await act(async () => screen.tree.update(scene('context')));
+        await screen.update(scene('context'));
         expect(selectedRect()).toEqual({ x: 180, width: 70 });
 
         layOut(screen, 1200);
@@ -930,6 +937,24 @@ describe('SegmentedTabBar measured overflow', () => {
         expect(menu.props.items.find((item: { id: string }) => item.id === 'context')?.checked).toBe(true);
         act(() => { menu.props.onSelect('services'); });
         expect(onSelectTab).toHaveBeenCalledWith('services');
+    });
+});
+
+describe('SegmentedTabBar measured overflow on the track', () => {
+    it('fits the segments inside the track padding, dropping glyphs before any label is cut short', async () => {
+        const { SegmentedTabBar } = await import('./SegmentedTabBar');
+        const screen = await renderScreen(
+            <SegmentedTabBar presentation="segmented" iconPlacement="leading" segmentSizing="content" overflow={{ label: 'More' }}
+                tabs={PAGE_TABS} activeTabId="overview" onSelectTab={() => {}} testIDPrefix="page" />,
+        );
+        // The row is exactly as wide as the six segments with their glyphs (layOut's caption widths sum to 608),
+        // so only the track's own padding is left over: with glyphs the labels would be squeezed ("Overvi…").
+        layOut(screen, 608);
+        for (const tab of PAGE_TABS) {
+            const node = requireTab(screen, `page:${tab.id}`);
+            expect(node.findAll((child) => String(child.type) === 'Glyph')).toHaveLength(0);
+        }
+        expect(screen.findHostByTestId('page:more')).toBeNull();
     });
 });
 

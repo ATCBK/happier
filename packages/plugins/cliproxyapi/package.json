@@ -12,6 +12,7 @@
     "package.json"
   ],
   "scripts": {
+    "catalog:generate": "go -C ./managed-runtime run ./tools/catalog",
     "managed-runtime:build": "go -C ./managed-runtime run ./tools/build",
     "tsc": "node ../../../scripts/workspaces/runTypeScriptCli.mjs",
     "build": "node ../../../scripts/workspaces/buildTypeScriptPackageDist.mjs -p tsconfig.json",

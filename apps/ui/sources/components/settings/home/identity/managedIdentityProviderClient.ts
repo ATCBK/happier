@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import type { z } from 'zod/mini';
 import { homeDomainActionInputSchemaV1, homeDomainActionOutputSchemaV1 } from '@happier-dev/protocol/actions/homeDomainActionFamily';
 import { type ManagedIdentityProviderActionIdV1, ManagedIdentityProviderCreateInputV1Schema, ManagedIdentityProviderLifecycleInputV1Schema, ManagedIdentityProviderRemovePreflightInputV1Schema, ManagedIdentityProviderRemovePreflightResultV1Schema, ManagedIdentityProviderRemoveResultV1Schema, ManagedIdentityProviderSecretReplaceInputV1Schema, ManagedIdentityProviderTestConsumeInputV1Schema, ManagedIdentityProviderTestConsumeResultV1Schema, ManagedIdentityProviderTestStartInputV1Schema, ManagedIdentityProviderTestStartResultV1Schema, ManagedIdentityProvidersListInputV1Schema, ManagedIdentityProvidersListResultV1Schema, ManagedIdentityProviderUpdateInputV1Schema, ManagedIdentityProviderV1Schema, ManagedOidcIdentityProviderV1Schema } from '@happier-dev/protocol/identity/providers';
 import type { ActionExecuteFailure } from '@happier-dev/protocol/actions/actionExecutionResult';

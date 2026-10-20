@@ -3,36 +3,29 @@ import type { SessionHumanPresenceLocationV1 } from "@happier-dev/protocol/sessi
 const PREFIX = "session-human-presence:";
 const DISCUSSION_PREFIX = "session-human-presence-discussion:";
 
+export type HumanPresenceLocation = Readonly<
+    { sessionId: string; discussionId?: never } | { sessionId?: never; discussionId: string }
+>;
+
 export function sessionHumanPresenceRoom(sessionId: string): string {
     return `${PREFIX}${sessionId}`;
 }
 
-export function sessionDiscussionHumanPresenceRoom(location: SessionHumanPresenceLocationV1): string {
-    return `${DISCUSSION_PREFIX}${encodeURIComponent(location.sessionId)}:${encodeURIComponent(location.discussionId)}`;
+export function discussionHumanPresenceRoom(location: SessionHumanPresenceLocationV1): string {
+    return `${DISCUSSION_PREFIX}${encodeURIComponent(location.discussionId)}`;
 }
 
-export function sessionHumanPresenceLocationRoom(location: Readonly<{
-    sessionId: string;
-    discussionId?: string;
-}>): string {
+export function sessionHumanPresenceLocationRoom(location: HumanPresenceLocation): string {
     return location.discussionId === undefined
         ? sessionHumanPresenceRoom(location.sessionId)
-        : sessionDiscussionHumanPresenceRoom({ sessionId: location.sessionId, discussionId: location.discussionId });
+        : discussionHumanPresenceRoom({ discussionId: location.discussionId });
 }
 
-export function sessionHumanPresenceLocationFromRoom(room: string): Readonly<{
-    sessionId: string;
-    discussionId?: string;
-}> | null {
+export function sessionHumanPresenceLocationFromRoom(room: string): HumanPresenceLocation | null {
     if (room.startsWith(DISCUSSION_PREFIX)) {
-        const encoded = room.slice(DISCUSSION_PREFIX.length);
-        const separator = encoded.indexOf(":");
-        if (separator < 0) return null;
         try {
-            return {
-                sessionId: decodeURIComponent(encoded.slice(0, separator)),
-                discussionId: decodeURIComponent(encoded.slice(separator + 1)),
-            };
+            const discussionId = decodeURIComponent(room.slice(DISCUSSION_PREFIX.length));
+            return discussionId ? { discussionId } : null;
         } catch {
             return null;
         }
@@ -40,19 +33,13 @@ export function sessionHumanPresenceLocationFromRoom(room: string): Readonly<{
     return room.startsWith(PREFIX) ? { sessionId: room.slice(PREFIX.length) } : null;
 }
 
-export function sessionHumanPresenceLocationsFromRooms(rooms: Iterable<string>): Array<Readonly<{
-    sessionId: string;
-    discussionId?: string;
-}>> {
-    return [...rooms]
-        .map(sessionHumanPresenceLocationFromRoom)
-        .filter((location): location is Readonly<{ sessionId: string; discussionId?: string }> => location !== null)
-        .sort((left, right) => left.sessionId.localeCompare(right.sessionId)
-            || (left.discussionId ?? "").localeCompare(right.discussionId ?? ""));
+export function sessionHumanPresenceLocationsFromRooms(rooms: Iterable<string>): HumanPresenceLocation[] {
+    return [...rooms].map(sessionHumanPresenceLocationFromRoom)
+        .filter((location): location is HumanPresenceLocation => location !== null)
+        .sort((left, right) => sessionHumanPresenceLocationRoom(left).localeCompare(sessionHumanPresenceLocationRoom(right)));
 }
 
 export function sessionIdsFromHumanPresenceRooms(rooms: Iterable<string>): string[] {
     return sessionHumanPresenceLocationsFromRooms(rooms)
-        .filter((location) => location.discussionId === undefined)
-        .map((location) => location.sessionId);
+        .flatMap(location => location.sessionId === undefined ? [] : [location.sessionId]);
 }

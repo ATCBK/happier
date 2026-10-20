@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as React from 'react';
+import { act, renderHook } from '@/dev/testkit';
 import {
     ApprovalRequestSchema,
     FeaturesResponseSchema,
@@ -31,6 +33,7 @@ import { createPromptLibraryCatalogBoundary } from '@/dev/testkit/harness/prompt
 import { randomUUID } from '@/platform/randomUUID';
 import { normalizeUsageQuery } from '@happier-dev/protocol/inputs/usageQuery';
 import { UsageQueryBatchResultSchema } from '@happier-dev/protocol/usage/resolveUsagePageAggregation';
+import { createSessionReadBatchHttpBoundary } from '@/dev/testkit/harness/sessionReadBatchHttpBoundary';
 import { UsageCoachApplyResultSchema } from '@happier-dev/protocol/usage/coach/coachActions';
 import { UsageAnalyticsQueryResponseSchema } from '@happier-dev/protocol/usage/usageAnalyticsContracts';
 import { UsagePromptCompositionSchema } from '@happier-dev/protocol/usage/coach/usagePromptComposition';
@@ -38,7 +41,7 @@ import { buildSessionMessagesPath } from '@happier-dev/protocol/sessions/message
 import {
     createSessionOwnerMetadataV1, createPlainSessionOwnerMetadataEnvelopeV1, projectSessionSharedMetadataV1,
     projectSessionOwnerCompatibilityViewV1, SessionOwnerMetadataEnvelopeV1Schema,
-    SessionMetadataInactiveModelIntentOwnerPatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema,
+    SessionMetadataInactiveModelIntentOwnerPatchV1Schema, SessionMetadataOwnerPatchV1Schema, SessionMetadataTuplePatchSuccessV1Schema,
 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataSchemasV1';
 import { MetadataSchema } from '@happier-dev/session-core/state';
 import { settingsParse } from '@/sync/domains/settings/settings';
@@ -47,6 +50,7 @@ import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLo
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { createSessionFixture } from '@/dev/testkit/fixtures/sessionFixtures';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
+import { SessionTeamCredentialBindingMetadataPatchV1Schema } from '@happier-dev/protocol/teams/credentials/sessionBindingV1';
 import { createMachineFixture, createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
 import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
 import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
@@ -54,7 +58,7 @@ import { projectNativeJsonValueForTransport } from '@happier-dev/protocol/json/s
 import { installWebLockManagerMock } from '@/auth/storage/tokenStorage.web.testHelpers';
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { createPlainProjectAccountRowListFixture } from '@/dev/testkit/fixtures/projectAccountRows';
-import { ProjectAccountRowMutationRequestV1Schema, ProjectAccountOrganizationV1Schema, PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
+import { ProjectAccountRowMutationRequestV1Schema, ProjectAccountRowPayloadV1Schema, ProjectAccountOrganizationV1Schema, PROJECT_ACCOUNT_ROWS_ROUTE_V1 } from '@happier-dev/protocol/projects/projectAccountRowsV1';
 import {
     PROMPT_LIBRARY_ROWS_ROUTE_V1,
     PromptLibraryCatalogKeyV1Schema,
@@ -64,6 +68,10 @@ import {
 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 
 const rpc = vi.hoisted(() => ({ machine: vi.fn(), session: vi.fn() }));
+vi.mock('@/modal', async () => {
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+    return createModalModuleMock().module;
+});
 // Library codecs, Sync, store, metadata CAS and scoped RPC owners stay real.
 // The native SDK module and HTTP leaves are genuine external boundaries; carrier policy and lifecycle stay real.
 vi.mock('@happier-dev/iroh-native', async (original) => {
@@ -114,6 +122,7 @@ const { createRootLayoutFeaturesResponse } = await import('@/dev/testkit/fixture
 const { createEncryptedTransferChunkEnvelope } = await import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferChunkEncryption');
 const { createTransferManifestHasher } = await import('@/sync/domains/transfers/runtime/transferRuntime/plumbing/transferManifestHasher');
 const { createDefaultActionExecutor } = await import('./defaultActionExecutor');
+const { Modal } = await import('@/modal');
 type Executor = ReturnType<typeof createDefaultActionExecutor>;
 type Session = ReturnType<typeof createSessionFixture>;
 const baseline = storage.getState();
@@ -185,8 +194,12 @@ function serveSession(session: Session, beforeWrite?: (input: unknown) => void, 
     homes.answer(serverId, `PATCH /v2/sessions/${session.id}`, { select: (input) => {
         writes.push(input);
         beforeWrite?.(input);
-        if (row.active) return { status: 409, body: { code: 'session_active' } };
-        const current = SessionMetadataInactiveModelIntentOwnerPatchV1Schema.safeParse(input);
+        const team = SessionTeamCredentialBindingMetadataPatchV1Schema.safeParse(input);
+        if (row.active && (!team.success || team.data.sessionExpectation)) return { status: 409, body: { code: 'session_active' } };
+        const owner = SessionMetadataOwnerPatchV1Schema.safeParse(input);
+        const current = team.success ? team : owner.success
+            ? owner
+            : SessionMetadataInactiveModelIntentOwnerPatchV1Schema.safeParse(input);
         if (current.success) {
             const patch = current.data;
             if (patch.sharedMetadata.expectedVersion !== row.metadataVersion
@@ -418,6 +431,7 @@ async function servePromptTransfers() {
 
 describe('createDefaultActionExecutor (prompt library routing)', () => {
     beforeEach(async () => {
+        vi.mocked(Modal.confirm).mockReset().mockResolvedValue(false);
         webLocks = installWebLockManagerMock();
         const { resetPromptLibraryCatalogEngineForTests } = await import('@/sync/engine/settings/promptLibraryCatalogEngine');
         const { resetPromptLibraryCatalogSnapshotsForTests } = await import('@/sync/store/settings/promptLibraryCatalogSnapshot');
@@ -621,6 +635,232 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         } finally { account.dispose(); }
     });
 
+    it.each([false, true])('migrates a workspace label from its organization owner without retiring a newer label (renamed: %s)', async (renamed) => {
+        const { buildSessionOrganizationLabelKey } = await import('@/sync/domains/session/organization/keys');
+        const scope = storage.getState().settingsScope;
+        if (!scope) throw new Error('Expected captured Account scope');
+        const legacyKey = `server:${scope.serverId}:workspace:/repo`;
+        const labelKey = buildSessionOrganizationLabelKey({ serverId: scope.serverId, labelKind: 'workspace', scopeKey: legacyKey });
+        const recordId = storage.getState().upsertSessionOrganizationLabelOptimistic(scope.serverId, {
+            labelKind: 'workspace', scopeKey: legacyKey, display: { t: 'plain', v: { label: 'My checkout' } },
+            displayState: { status: 'available', value: { label: 'My checkout' } },
+            archivedAt: null, createdAt: 1, updatedAt: 1,
+        });
+        storage.getState().commitSessionOrganizationOptimistic(recordId);
+        const ref = { id: 'label-checkout', serverId: scope.serverId, machineId: 'machine', rootPath: '/repo', createdAtMs: 1 };
+        let label: string | null = null;
+        homes.answer(serverId, `POST ${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/list`, { select: () => ({ body:
+            createPlainProjectAccountRowListFixture({ workspaceRefs: [{ ...ref, label }] }) }) });
+        homes.answer(serverId, `POST ${PROJECT_ACCOUNT_ROWS_ROUTE_V1}/mutate`, { select: input => {
+            const request = ProjectAccountRowMutationRequestV1Schema.parse(input);
+            const mutation = request.mutations[0];
+            if (!mutation || mutation.content?.t !== 'plain') throw new Error('Expected workspace label mutation');
+            const payload = ProjectAccountRowPayloadV1Schema.parse(mutation.content.v);
+            if (!('id' in payload.value)) throw new Error('Expected workspace ref');
+            label = payload.value.label ?? null;
+            if (renamed) {
+                const current = storage.getState().sessionOrganizationLabelsByLabelKey[labelKey];
+                if (!current) throw new Error('Expected retained source label');
+                const updated = storage.getState().upsertSessionOrganizationLabelOptimistic(scope.serverId, {
+                    ...current, display: { t: 'plain', v: { label: 'New label' } },
+                    displayState: { status: 'available', value: { label: 'New label' } },
+                });
+                storage.getState().commitSessionOrganizationOptimistic(updated);
+            }
+            return { body: { status: 'updated', rows: [{ key: mutation.key, content: mutation.content, revision: 1 }], cursor: 1 } };
+        } });
+        homes.answer(serverId, 'DELETE /v2/session-organization/labels', { body: {
+            labelKind: 'workspace', scopeKey: legacyKey, archived: true,
+        } });
+
+        const result = await sync.mutateProjectWorkspaceRef({
+            kind: 'migrate_label',
+            scope: { serverId: scope.serverId, machineId: ref.machineId, rootPath: ref.rootPath },
+            legacyKey, label: 'My checkout', nowMs: 2,
+        }, scope);
+
+        expect(result).toMatchObject({ ok: true, migrated: true, workspaceRefId: ref.id });
+        expect(label).toBe('My checkout');
+        const retained = storage.getState().sessionOrganizationLabelsByLabelKey[labelKey];
+        if (renamed) expect(retained?.displayState).toEqual({ status: 'available', value: { label: 'New label' } });
+        else expect(retained).toBeUndefined();
+        expect(homes.requestsFor('/v2/account/settings').filter(request => request.input !== null)).toEqual([]);
+    });
+
+    it('lists external plugin skills through executor B while retaining supplier A provenance for read and local copy', async () => {
+        const { normalizePluginUiProjection } = await import('@/sync/domains/plugins/ui/projection');
+        const { unionPluginUiProjections, readPluginUiContributionSupplies } = await import('@/sync/domains/plugins/ui/projectionUnion');
+        const { publishCommittedAppShellPluginUiProjection } = await import('@/components/appShell/plugins/committedPluginUiProjection');
+        const { readSkillInLibrary } = await import('@happier-dev/protocol/prompts/library/promptLibraryActionOperations');
+        const { SkillReadInputV1Schema } = await import('@happier-dev/protocol/prompts/library/skills/skillReadV1');
+        const { readSkillZipFilesV1 } = await import('@happier-dev/protocol/prompts/library/skills/skillZipV1');
+        const { useSkillsLibrary } = await import('@/sync/domains/skills/useSkillsLibrary');
+        const { AppShellPluginUiProjectionValueProvider } = await import('@/components/appShell/plugins/AppShellPluginUiProjection');
+        const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
+        const { PluginProjectionV2Schema } = await import('@happier-dev/protocol/daemon/contributionRegistryProjection');
+        const pluginId = 'com.acme.skills';
+        const pluginSkills = ['check', 'review'].map(name => ({ skillId: `plugin:${pluginId}/${name}`,
+            provenance: { kind: 'plugin' as const, pluginId, occurrenceId: 'acme-runtime' },
+            files: [{ path: 'SKILL.md', contentKind: 'utf8' as const,
+                contentBase64: Buffer.from(`---\nname: acme-${name}\ndescription: From the plugin\n---\nInstructions`).toString('base64') },
+                { path: 'scripts/check.bin', contentKind: 'binary' as const, contentBase64: 'AAEC/w==', unixMode: 0o755 as const }] }));
+        const catalog = createPromptLibraryCatalogBoundary();
+        homes.answer(serverId, PROMPT_LIBRARY_ROWS_ROUTE_V1, { select: () => ({ body: { status: 'listed', rows:
+            PromptLibraryCatalogKeyV1Schema.options.map(key => ({ key, revision: catalog.revision(key), content: { t: 'plain', v: catalog.read(key) } })) } }) });
+        for (const key of PromptLibraryCatalogKeyV1Schema.options) homes.answer(serverId, `POST ${PROMPT_LIBRARY_ROWS_ROUTE_V1}/${key}`, {
+            select: async input => {
+                const response = await catalog.handle(`${PROMPT_LIBRARY_ROWS_ROUTE_V1}/${key}`, { method: 'POST', body: JSON.stringify(input) });
+                if (!response) throw new Error('Expected row mutation');
+                return { status: response.status, body: await response.json() };
+            },
+        });
+        const account = await captureLazyActionAccountContext(serverId);
+        const store = createUiPromptLibraryArtifactStore(account.workflowArtifacts, account);
+        if (!store.organization) throw new Error('Expected Account catalog');
+        const producer = createSkillActionExecuteV1({ store, skillRules: { ...store.organization,
+            listSkills: signal => readSkillLibraryCatalog({ list: options => account.listArtifacts(options), readPluginSkills: async () => pluginSkills }, signal),
+            ruleWriteContext: () => ({ nowMs: Date.now(), newId: randomUUID }) },
+            readPluginSkills: async () => pluginSkills, randomId: randomUUID, includeInSession: async () => ({ ok: true }) });
+        const sourceMachineId = 'plugin-supplier-a';
+        const machine = createMachineFixture({ id: 'plugin-executor-b', active: true, activeAt: Date.now() });
+        const originFor = (machineId: string) => ({ serverIdentityId: account.serverIdentityId!,
+            materializationRef: { machineId, pluginId, materializationId: machineId } });
+        const published = { ...machine, ...ExternalActionMachineBootstrapV1Schema.parse({ id: machine.id, kind: 'persistent', active: true,
+            installationId: 'plugin-installation', revokedAt: null, replacedByMachineId: null,
+            dataEncryptionKey: MACHINE_PLAIN_DATA_KEY_MARKER, runnerContentKeyBinding: null,
+            access: { custodian: { accountId: 'account-a', displayName: 'Plugin custodian' }, role: 'manage', resourceMode: 'plain', accessState: 'ready' } }),
+            metadata: encodePlainMachineStoredContent(machine.metadata), daemonState: encodePlainMachineStoredContent(machine.daemonState) };
+        homes.answer(serverId, '/v1/machines', { body: [published] });
+        storage.setState({ machines: { [machine.id]: machine }, machineListByServerId: { [account.serverId]: [machine] } });
+        const projection = normalizePluginUiProjection(PluginProjectionV2Schema.parse({ v: 2, generation: 1,
+            installedPackagesById: { [pluginId]: { id: pluginId, displayName: 'Acme Skills', version: '1.0.0', enabled: true, occurrenceId: 'acme-runtime', executionOrigin: originFor(sourceMachineId), source: { kind: 'path', locator: '/plugins/acme' } } },
+            agentsById: {}, actionsById: {}, toolsById: {}, commandsById: {}, resourcesById: {}, settingsById: {}, diagnostics: [],
+            familiesById: { skills: { family: 'skills', entriesById: Object.fromEntries(pluginSkills.map((skill, index) => {
+                const id = skill.skillId.slice('plugin:'.length);
+                return [id, { id, pluginId, pluginVersion: '1.0.0', occurrenceId: 'acme-runtime', executionOrigin: originFor(sourceMachineId), definition: { id: ['check', 'review'][index], directory: `./skills/${index}` } }];
+            })) } } }));
+        const installedProjection = unionPluginUiProjections([{ machineId: sourceMachineId, serverId: account.serverId, projection,
+            phase: 'current', interactionEnabled: true }]).pluginUiProjection;
+        let projected = installedProjection;
+        const stop = publishCommittedAppShellPluginUiProjection(() => projected);
+        let miswired = false;
+        let missingSkill = false;
+        let sourceUnavailable = false;
+        let staleOccurrence = false;
+        let wrongSkill = false;
+        for (const actionId of ['skills.list', 'skills.read', 'skills.duplicate'] as const) homes.answer(serverId, `POST /v1/actions/${actionId}`, {
+            select: async input => {
+                const envelope = ExternalActionRequestEnvelopeV1Schema.parse(input);
+                expect(envelope.target).toEqual({ kind: 'machine', machineId: machine.id });
+                if (sourceUnavailable) return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId, requestId: envelope.requestId,
+                    execution: { ok: false, errorCode: 'admission_unavailable', error: 'admission_unavailable' } }) };
+                let result = actionId === 'skills.read'
+                    ? await readSkillInLibrary({ store, request: wrongSkill ? { skillId: pluginSkills[1]!.skillId } : SkillReadInputV1Schema.parse(envelope.input), pluginSkills })
+                    : await producer(actionId, envelope.input, { surface: 'ui' });
+                if (actionId === 'skills.list') {
+                    const list = SKILL_ACTION_OUTPUT_SCHEMAS_V1[actionId].parse(result);
+                    result = { ...list, items: list.items.filter(item => !missingSkill || item.skillId !== pluginSkills[0]!.skillId)
+                        .map(item => staleOccurrence && item.skillId === pluginSkills[0]!.skillId && item.provenance.kind === 'plugin'
+                            ? { ...item, provenance: { ...item.provenance, occurrenceId: 'retired-occurrence' } } : item) };
+                }
+                return { body: ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId, requestId: envelope.requestId,
+                    execution: { ok: true, result: miswired ? {} : result } }) };
+            },
+        });
+        try {
+            const context = { surface: 'ui', authority: 'present_user', serverId } as const;
+            const executor = createDefaultActionExecutor();
+            const listed = await executor.execute('skills.list', {}, context);
+            expect(listed).toMatchObject({ ok: true, result: { items: expect.arrayContaining(pluginSkills.map(skill => expect.objectContaining({ skillId: skill.skillId, provenance: skill.provenance }))) } });
+            expect(homes.requestsFor('/v1/actions/skills.list')).toHaveLength(1);
+            expect(homes.requestsFor('/v1/actions/skills.read')).toHaveLength(0);
+            expect(await executor.execute('skills.read', { skillId: pluginSkills[0]!.skillId }, context)).toMatchObject({ ok: true, result: { name: 'acme-check' } });
+            wrongSkill = true;
+            expect(await executor.execute('skills.read', { skillId: pluginSkills[0]!.skillId }, context)).toMatchObject({ ok: false });
+            wrongSkill = false;
+            const copied = await executor.execute('skills.duplicate', { skillId: pluginSkills[0]!.skillId }, context);
+            expect(copied).toMatchObject({ ok: true, result: { ok: true, skillId: expect.any(String) } });
+            expect(homes.requestsFor('/v1/actions/skills.duplicate')).toHaveLength(0);
+            const copiedId = copied.ok && copied.result && typeof copied.result === 'object' && 'skillId' in copied.result ? copied.result.skillId : null;
+            expect(catalog.read('skill-rules')).toMatchObject({ value: { rules: expect.arrayContaining([expect.objectContaining({ skillId: copiedId, enabled: true, target: { t: 'allMachines' } })]) } });
+            const rule = await executor.execute('skills.rules.set', { items: [{ name: 'acme-review' }], change: { kind: 'write', write: { place: { t: 'allMachines' }, state: 'on' } } }, context);
+            expect(rule).toMatchObject({ ok: true, result: { ok: true, items: [{ skillId: pluginSkills[1]!.skillId }] } });
+            seedSession(false);
+            const sessionChange = await executor.execute('session.capabilities.set', { sessionId: 'session_1', kind: 'skill', id: 'acme-review', state: 'on' }, context);
+            expect(sessionChange, sessionChange.ok ? 'Session capability result' : `${sessionChange.errorCode}: ${sessionChange.error}`).toMatchObject({ ok: true, result: { ok: true, state: 'on' } });
+            missingSkill = true;
+            expect(await executor.execute('skills.list', {}, context)).toMatchObject({ ok: true, result: { items: expect.arrayContaining([
+                expect.objectContaining({ skillId: 'happier:happier' }), expect.objectContaining({ skillId: copiedId }),
+                expect.objectContaining({ skillId: pluginSkills[1]!.skillId }),
+            ]) } });
+            expect(await executor.execute('skills.list', { query: '  ' }, context)).toMatchObject({ ok: true });
+            expect(await executor.execute('skills.list', { query: 'acme-review' }, context)).toMatchObject({ ok: true, result: { items: [expect.objectContaining({ skillId: pluginSkills[1]!.skillId })] } });
+            missingSkill = false;
+            sourceUnavailable = true;
+            expect(await executor.execute('skills.list', {}, context)).toMatchObject({ ok: true, result: { items: expect.arrayContaining([
+                expect.objectContaining({ skillId: 'happier:happier' }), expect.objectContaining({ skillId: copiedId }),
+            ]) } });
+            expect(await executor.execute('skills.read', { skillId: pluginSkills[0]!.skillId }, context)).toMatchObject({ ok: false });
+            sourceUnavailable = false;
+            staleOccurrence = true;
+            expect(await executor.execute('skills.list', {}, context)).toMatchObject({ ok: true, result: { items: expect.not.arrayContaining([
+                expect.objectContaining({ skillId: pluginSkills[0]!.skillId }),
+            ]) } });
+            staleOccurrence = false;
+            const exported = await executor.execute('skills.export', { skillIds: pluginSkills.map(skill => skill.skillId) }, context);
+            expect(exported).toMatchObject({ ok: true });
+            if (!exported.ok) throw new Error('Expected plugin skill export');
+            const archive = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.export'].parse(exported.result);
+            expect(await readSkillZipFilesV1(new Uint8Array(Buffer.from(archive.bytes, 'base64')))).toEqual(expect.arrayContaining([
+                expect.objectContaining({ path: 'acme-check/scripts/check.bin', contentBase64: 'AAEC/w==', unixMode: 0o755 }),
+                expect.objectContaining({ path: 'acme-review/scripts/check.bin', contentBase64: 'AAEC/w==', unixMode: 0o755 }),
+            ]));
+            miswired = true;
+            expect(await executor.execute('skills.list', {}, context)).toMatchObject({ ok: false });
+            projected = null;
+            expect(await executor.execute('skills.list', {}, context)).toMatchObject({ ok: true, result: { items: expect.not.arrayContaining([expect.objectContaining({ skillId: pluginSkills[0]!.skillId })]) } });
+            const beforeRetiredRead = homes.requestsFor(`/v1/artifacts/${pluginSkills[0]!.skillId}`).length;
+            expect(await executor.execute('skills.read', { skillId: pluginSkills[0]!.skillId }, context)).toMatchObject({ ok: false, errorCode: 'not_found' });
+            expect(await executor.execute('skills.duplicate', { skillId: pluginSkills[0]!.skillId }, context)).toMatchObject({ ok: false, errorCode: 'not_found' });
+            expect(homes.requestsFor(`/v1/artifacts/${pluginSkills[0]!.skillId}`)).toHaveLength(beforeRetiredRead);
+            miswired = false;
+            storage.setState({ isDataReady: true, artifactsLoaded: true });
+            const lifetime = captureActiveServerAccountScopeLifetime();
+            function Wrapper(props: React.PropsWithChildren) {
+                return React.createElement(AppShellPluginUiProjectionValueProvider, { value: { pluginUiProjection: projected,
+                    pluginBrowserProjection: null, phase: 'current', interactionEnabled: true, machineId: machine.id,
+                    serverId: account.serverId, platform: 'web', accountLifetime: lifetime,
+                    reloadConnectedAccountProjection: () => {}, reloadClientExecutables: () => {},
+                    clientExecutableActivation: { status: 'ready' } }, children: props.children });
+            }
+            const hook = await renderHook(() => useSkillsLibrary(), { wrapper: Wrapper });
+            try {
+                await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
+                expect(hook.getCurrent().items.some(item => item.skillId === pluginSkills[0]!.skillId)).toBe(false);
+                projected = installedProjection;
+                await hook.rerender();
+                await vi.waitFor(() => expect(hook.getCurrent().items).toEqual(expect.arrayContaining([expect.objectContaining({ skillId: pluginSkills[0]!.skillId })])));
+                staleOccurrence = true;
+                await act(async () => hook.getCurrent().retry());
+                await vi.waitFor(() => expect(hook.getCurrent()).toMatchObject({ status: 'ready', stale: false, errorCode: null,
+                    items: expect.not.arrayContaining([expect.objectContaining({ skillId: pluginSkills[0]!.skillId })]) }));
+                staleOccurrence = false;
+                await act(async () => hook.getCurrent().retry());
+                await vi.waitFor(() => expect(hook.getCurrent().status).toBe('ready'));
+                const requests = homes.requestsFor('/v1/actions/skills.list').length;
+                projected = installedProjection ? { ...installedProjection, generation: 999,
+                    skillsById: Object.fromEntries(Object.entries(installedProjection.skillsById).map(([id, entry]) => [id, {
+                        ...entry, hostSupplies: readPluginUiContributionSupplies(entry).map(supply => ({ ...supply, generation: 999 })),
+                    }])) } : null;
+                await hook.rerender();
+                expect(homes.requestsFor('/v1/actions/skills.list')).toHaveLength(requests);
+                projected = null;
+                await hook.rerender();
+                await vi.waitFor(() => expect(hook.getCurrent().items.some(item => item.skillId === pluginSkills[0]!.skillId)).toBe(false));
+            } finally { await hook.unmount(); }
+        } finally { stop(); account.dispose(); }
+    });
+
     it('reads skill bodies from the Account Artifact owner and session names from the owning runner', async () => {
         const skillMd = '---\nname: review\ndescription: Review the change\n---\nFull review instructions';
         const artifactId = await sync.createArtifactWithHeader({ v: 1, kind: 'prompt_bundle.v2', title: 'Review', bundleSchemaId: 'skills.skill_md_v1' },
@@ -711,8 +951,48 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         expect(rpc.session).not.toHaveBeenCalled();
     });
 
+    it.each(['brokered', 'direct'] as const)('commits an inactive %s Team model with its binding and explicit visibility consent', async deliveryMode => {
+        const remote = serveSession(seedSession(false));
+        const teamCredentialModel = { kind: 'team_credential_provider_model', teamId: 'team-1', resourceId: 'resource-1',
+            expectedResourceRevision: 7, deliveryMode, agentTargetKey: 'agent:happier.agent.claude/claude', modelId: 'team-model' } as const;
+        const result = await createDefaultActionExecutor().execute('session.model.set', {
+            sessionId: 'session_1', teamCredentialModel, teamVisibilityGrantConsent: { teamId: 'team-1' },
+        }, { serverId, surface: 'ui' });
+        expect(result).toMatchObject({ ok: true, result: { status: 'intent_updated', sessionId: 'session_1',
+            selection: { v: 2, updatedAt: expect.any(Number), ref: { source: 'team_resource', deliveryMode, modelId: 'team-model' } } } });
+        const persisted = remote.readMetadata();
+        expect(persisted.modelSelectionIntentV2).toMatchObject({ v: 2, ref: { source: 'team_resource',
+            teamId: 'team-1', resourceId: 'resource-1', deliveryMode, modelId: 'team-model' } });
+        expect(persisted).not.toHaveProperty('modelSelectionIntentV1');
+        expect(remote.writes.map(input => SessionTeamCredentialBindingMetadataPatchV1Schema.parse(input))).toEqual([
+            expect.objectContaining({ operation: 'session.model.set', sessionExpectation: { kind: 'inactive_model_intent' },
+                teamVisibilityGrantConsent: { teamId: 'team-1' }, teamCredentialBindings: [expect.objectContaining({ deliveryMode, slot: { kind: 'provider_model' } })] }),
+        ]);
+        expect(rpc.session).not.toHaveBeenCalled();
+    });
+
+    it('rejects a Team model for a different Agent without mutating the Session', async () => {
+        const remote = serveSession(seedSession(true));
+        const result = await createDefaultActionExecutor().execute('session.model.set', { sessionId: 'session_1',
+            teamCredentialModel: { kind: 'team_credential_provider_model', teamId: 'team-1', resourceId: 'resource-1',
+                expectedResourceRevision: 7, deliveryMode: 'brokered', agentTargetKey: 'agent:happier.agent.codex/codex', modelId: 'team-model' },
+        }, { serverId, surface: 'ui' });
+        expect(result).toMatchObject({ ok: false, errorCode: 'model_selection_agent_target_unknown' });
+        expect(remote.writes).toEqual([]);
+        expect(rpc.session).not.toHaveBeenCalled();
+    });
+
     it('composes retained completed-model evidence through usage query, exact Apply/Undo and intervening-edit refusal', async () => {
         vi.stubGlobal('fetch', homes.request);
+        const sessionBatch = createSessionReadBatchHttpBoundary(request => request.path === '/v2/sessions/read-batch' ? undefined
+            : homes.request(request.url, { method: request.method, headers: request.headers, signal: request.signal }));
+        homes.answer(serverId, 'POST /v2/sessions/read-batch', { select: async (body, request) => {
+            const url = new URL(request.url);
+            const response = await sessionBatch.handle({ url, path: url.pathname, home: serverId, accountId: 'account-a',
+                method: 'POST', headers: new Headers(request.init?.headers), signal: request.signal, body });
+            if (!response) throw new Error('Expected the canonical Session batch fixture to respond');
+            return { status: response.status, body: await response.json() };
+        } });
         const { resolveServerProfileScopeIdForIdentifier, areServerProfileIdentifiersEquivalent } = await import('@/sync/domains/server/serverProfiles');
         const { loadAccountSettings } = await import('@/sync/domains/state/accountSettingsPersistence');
         const accountScope = { serverId: resolveServerProfileScopeIdForIdentifier(serverId), accountId: 'account-a' };
@@ -836,8 +1116,12 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
             .toMatchObject({ ok: false });
         expect(remote.readMetadata().modelSelectionIntentV1?.selection?.modelId).toBe('intervening-model');
         remote.replaceMetadata({ ...remote.readMetadata(), modelSelectionIntentV1: { v: 1, updatedAt: 850, selection: heavy } });
+        // Model advice reads the synced Session. Deliver the external edit
+        // through its real reader before reviewing a remedy for that version.
+        await sync.ensureSessionVisibleForMessageRoute('session_1', { serverId, forceRefresh: true, hydrateMessages: false });
         await resource.refresh();
         finding = await read();
+        expect(finding.remedy).toMatchObject({ kind: 'model', expected: { owner: 'inactive', updatedAt: 850 } });
         const beforeRace = remote.writes.length;
         race = true;
         expect(await apply()).toMatchObject({ ok: false });
@@ -893,7 +1177,8 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         const session = seedSession(false, { modelSelectionIntentV1: { v: 1, updatedAt: 10, selection: selection('pending-model', 'pc_pending') } });
         const remote = serveSession(session, () => remote.activate({ ...remote.readMetadata(), providerBindingV1: binding }));
         rpc.session.mockResolvedValueOnce({ ok: true, status: 'applied', activeSelection: selection('provider-next', 'pc_active') });
-        expect(await executeModel(modelInput('provider-next'))).toMatchObject({ ok: true, result: { status: 'applied', activeSelection: selection('provider-next', 'pc_active') } });
+        const result = await executeModel(modelInput('provider-next'));
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, result: { status: 'applied', activeSelection: selection('provider-next', 'pc_active') } });
         expect(remote.writes).toHaveLength(1);
         expect(rpc.session).toHaveBeenLastCalledWith({ sessionId: 'session_1', serverId, method: 'session.model.transition', payload: { v: 1, selection: selection('provider-next', 'pc_active') } });
     });
@@ -969,6 +1254,62 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
     });
 
 
+    it('awaits cold registry preparation for the first Skills Updates diff without a second request', async () => {
+        servePromptLibraryCatalog('updated', { publicSource: true });
+        await servePromptTransfers();
+        const executor = createDefaultActionExecutor();
+        const installed = await executor.execute('skills.install', { source: { kind: 'registry', ...registryPointer,
+            version: registryItem.summary.version } }, { serverId, surface: 'ui' });
+        if (!installed.ok) throw new Error(installed.error);
+        const receipt = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.install'].parse(installed.result);
+        if (!('skillIds' in receipt)) throw new Error('Expected committed skill receipt');
+        // The checker has observed this source. Use the canonical stored lock
+        // schema and real Artifact CAS; no public edit accepts upstream authority.
+        const account = await captureLazyActionAccountContext(serverId);
+        try {
+            const store = createUiPromptLibraryArtifactStore(account.workflowArtifacts, account);
+            const artifact = await store.read(receipt.skillIds[0]!);
+            if (!artifact?.body || registryItem.payload.kind !== 'skill') throw new Error('Expected the installed registry skill');
+            const { SkillLockV1Schema, readSkillLockV1 } = await import('@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1');
+            await store.update({ artifactId: artifact.id, expectedRevision: artifact.revision, body: artifact.body,
+                header: { ...artifact.header, skillLock: SkillLockV1Schema.parse({ ...readSkillLockV1(artifact.header),
+                    upstream: { state: 'current', latest: registryItem.payload.skill.ref } }) } });
+        } finally { account.dispose(); }
+        const transport = rpc.machine.getMockImplementation();
+        if (!transport) throw new Error('Expected the real registry transport boundary');
+        const release = createDeferred<void>();
+        let preparations = 0;
+        rpc.machine.mockImplementation(async (request: DaemonRequest) => {
+            if (request.method === 'daemon.directTransfer.export.prepare') {
+                preparations += 1;
+                await release.promise;
+            }
+            return await transport(request);
+        });
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        let settled = false;
+        const pending = executor.execute('skills.updates.diff', { skillId: receipt.skillIds[0] }, { serverId, surface: 'ui' })
+            .then(result => { settled = true; return result; });
+        try {
+            await vi.waitFor(() => expect(preparations).toBe(1));
+            // Export preparation can fetch the pinned Git tree; the byte-phase
+            // request deadline must not retire that containing operation.
+            await vi.advanceTimersByTimeAsync(5_001);
+            expect(settled).toBe(false);
+            release.resolve();
+            const result = await pending;
+            expect(result.ok).toBe(true);
+            if (!result.ok) throw new Error(result.error);
+            const diff = SKILL_ACTION_OUTPUT_SCHEMAS_V1['skills.updates.diff'].parse(result.result);
+            expect(diff.files.map(file => file.path)).toEqual(registryFixture.files.map(file => file.path));
+            expect(preparations).toBe(1);
+        } finally {
+            release.resolve();
+            vi.useRealTimers();
+            await pending;
+        }
+    });
+
     it('does not create library content after cancellation during the registry download', async () => {
         const catalog = servePromptLibraryCatalog('updated');
         await servePromptTransfers();
@@ -987,6 +1328,7 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
             result => ({ kind: 'returned' as const, result }),
             (error: unknown) => ({ kind: 'rejected' as const, error }),
         );
+        expect(controller.signal.aborted).toBe(true);
         // The UI Account wrapper can reject cancellation while the Protocol
         // executor can return its failure envelope; neither permits a later effect.
         if (disposition.kind === 'rejected') expect(disposition.error).toMatchObject({ name: 'AbortError' });
@@ -1200,6 +1542,8 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
             return responses.get(method);
         });
 
+        // Answer the human UI boundary while retaining real Action admission and confirmation presentation.
+        vi.mocked(Modal.confirm).mockResolvedValue(true);
         const executor = createDefaultActionExecutor();
 
 
@@ -1509,6 +1853,8 @@ describe('createDefaultActionExecutor (prompt library routing)', () => {
         });
 
         try {
+            // Navigation may require the present user's confirmation before reaching the surface adapter.
+            vi.mocked(Modal.confirm).mockResolvedValue(true);
             const executor = createDefaultActionExecutor();
 
             await expect(executeRuntime(executor, {

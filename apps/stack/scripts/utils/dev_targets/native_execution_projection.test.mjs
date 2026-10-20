@@ -11,7 +11,7 @@ import { resolveRepoStackIdentity } from '../stack/repo_stack_identity.mjs';
 
 import { prepareCommandRepository, renderNativeExecutionProjection, resolveCommandRepositoryConfig } from './native_execution_projection.mjs';
 import { DEV_TARGET_MUTAGEN_IGNORE_PATHS, renderMutagenProject } from './mutagen_project.mjs';
-import { renderNativeCommandPolicy, resolveRemoteCommandPolicy, resolveHeavyweightMemoryFloorKiB } from './remote_commands.mjs';
+import { renderNativeCommandPolicy, resolvePackageCommandPolicy, resolveRemoteCommandPolicy, resolveHeavyweightMemoryFloorKiB } from './remote_commands.mjs';
 import { classifyCleanMutagenReadiness, renderNativeSyncReadinessPolicy } from './mutagen_runtime.mjs';
 
 test('sibling routing does not recreate withdrawn mac-host command mirrors', () => {
@@ -37,33 +37,39 @@ test('dependency-backed commands without another class still enter dependency-in
   assert.equal(policy.heavyClass, 'dependency-install');
 });
 
-test('CLI unit script dispatch and reentry prepare source tests in the validation class', () => {
+test('CLI unit script dispatch admits its compiler cases while focused readers retain validation', () => {
   const root = fileURLToPath(new URL('../../../../../', import.meta.url));
-  for (const args of [
-    ['--script=test:unit:local', 'src/api/artifacts/accountArtifactStore.test.ts'],
-    ['corepack', 'yarn', '-s', 'test:unit:vitest:local', 'src/api/artifacts/accountArtifactStore.test.ts'],
-    ['corepack', 'yarn', '-s', 'test:local'],
-    ['node', 'scripts/runVitestShards.mjs', '--config', 'vitest.config.ts'],
+  for (const [args, expectedClass] of [
+    [['--script=test:unit:local', 'src/api/artifacts/accountArtifactStore.test.ts'], 'validation'],
+    [['corepack', 'yarn', '-s', 'test:unit:vitest:local', 'src/api/artifacts/accountArtifactStore.test.ts'], 'validation'],
+    [['corepack', 'yarn', '-s', 'test:local'], 'compilation'],
+    [['corepack', 'yarn', '-s', 'test:unit'], 'compilation'],
+    [['node', 'scripts/runVitestShards.mjs', '--config', 'vitest.config.ts'], 'compilation'],
+    [['vitest', 'run'], 'compilation'],
+    [['hstack-exec', '--heavyweight-admission', '--class=compilation', '--', 'vitest', 'run', 'scripts/__tests__/runPkgrollBuild.test.ts'], 'compilation'],
   ]) {
     const policy = resolveRemoteCommandPolicy(args, { cwd: 'apps/cli' });
-    assert.equal(policy.heavyClass, 'validation');
+    assert.equal(policy.heavyClass, expectedClass);
     assert.equal(policy.kind, 'source-test');
     const native = spawnSync('/bin/sh', ['-c', `${renderNativeCommandPolicy()}\nrepo_root=$1; invoked_cwd=$1/apps/cli; shift; resolve_native_command_policy "$@"; printf '%s,%s' "$policy_kind" "$policy_heavyClass"`, 'policy', root, ...args], { encoding: 'utf8' });
     assert.equal(native.status, 0, native.stderr);
-    assert.equal(native.stdout, 'source-test,validation');
+    assert.equal(native.stdout, `source-test,${expectedClass}`);
   }
   assert.equal(resolveRemoteCommandPolicy(['--script=test:unit:local'], { cwd: 'apps/server' }).kind, 'runtime');
   assert.equal(resolveRemoteCommandPolicy(['--script=test:integration:local'], { cwd: 'apps/cli' }).kind, 'runtime');
 });
 
-test('root Yarn workspace CLI unit requests retain the selected component and validation preparation', () => {
+test('root Yarn workspace CLI unit requests retain the selected component and validation preparation', async () => {
   const root = fileURLToPath(new URL('../../../../../', import.meta.url));
   const args = ['yarn', 'workspace', '@happier-dev/cli', 'test:unit', 'src/api/artifacts/accountArtifactStore.test.ts'];
-  const policy = resolveRemoteCommandPolicy(args);
+  const policy = await resolvePackageCommandPolicy(args, { repoRoot: root, cwd: root });
   assert.equal(policy.component, 'apps/cli');
   assert.equal(policy.kind, 'source-test');
   assert.equal(policy.heavyClass, 'validation');
-  const native = spawnSync('/bin/sh', ['-c', `${renderNativeCommandPolicy()}\nrepo_root=$1; invoked_cwd=$1; shift; resolve_native_command_policy "$@"; printf '%s,%s,%s' "$policy_component" "$policy_kind" "$policy_heavyClass"`, 'policy', root, ...args], { encoding: 'utf8' });
+  const metadata = spawnSync(process.execPath, [fileURLToPath(new URL('./remote_commands.mjs', import.meta.url)),
+    '--package-policy', root, root, ...args], { encoding: 'utf8' });
+  assert.equal(metadata.status, 0, metadata.stderr);
+  const native = spawnSync('/bin/sh', ['-c', 'eval "$1"; printf \'%s,%s,%s\' "$policy_component" "$policy_kind" "$policy_heavyClass"', 'policy', metadata.stdout], { encoding: 'utf8' });
   assert.equal(native.status, 0, native.stderr);
   assert.equal(native.stdout, 'apps/cli,source-test,validation');
 });
@@ -320,8 +326,10 @@ test('native command decision artifact is current and executes the canonical cla
     { args: ['node', 'apps/ui/scripts/runVitestShards.mjs', '--config', 'vitest.config.ts'], expectedComponent: 'apps/ui', expectedKind: 'source-test' },
     { args: ['node', './scripts/runVitestShards.mjs', '--config', 'vitest.config.ts'], cwd: 'apps/cli', expectedKind: 'source-test' },
     { args: ['corepack', 'yarn', '--cwd', 'apps/ui', '-s', 'node', './scripts/runVitestShards.mjs', '--config', 'vitest.config.ts'], expectedKind: 'source-test' },
-    { args: ['corepack', 'yarn', '--cwd', 'apps/cli', '-s', 'test:unit'], expectedKind: 'runtime' },
-    { args: ['node', 'scripts/runVitestShards.mjs', '--config', 'vitest.integration.config.ts'], cwd: 'apps/ui', expectedKind: 'runtime' },
+    { args: ['corepack', 'yarn', '--cwd', 'apps/cli', '-s', 'test:unit'], expectedKind: 'source-test' },
+    { args: ['node', 'scripts/runVitestShards.mjs', '--config', 'vitest.integration.config.ts'], cwd: 'apps/ui', expectedKind: 'source-test' },
+    { args: ['corepack', 'yarn', '--cwd', 'apps/cli', '-s', 'test:unit', '--config', 'vitest.integration.config.ts'], expectedKind: 'runtime' },
+    { args: ['node', 'scripts/runVitestShards.mjs', '--config', 'vitest.artifact-cache.config.ts'], cwd: 'apps/ui', expectedKind: 'runtime' },
     { args: ['node', 'custom/runVitestShards.mjs'], cwd: 'apps/ui', expectedKind: 'runtime' },
     { args: ['node', 'scripts/runVitestShards.mjs'], cwd: 'apps/stack', expectedKind: 'runtime' },
     { args: ['node', '--experimental-strip-types', 'apps/cli/scripts/build-owned/generateBundledPluginEntries.ts', '--mode', 'check'] },

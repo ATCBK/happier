@@ -4,6 +4,7 @@ import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { AccountSettingsV2UpdateRequestSchema } from '@happier-dev/protocol/account/settings/accountSettingsApiV2';
 import { ExternalActionRequestEnvelopeV1Schema, ExternalActionResponseEnvelopeV1Schema } from '@happier-dev/protocol/actions/externalActionApi';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { PluginDevelopmentStatusV1Schema } from '@happier-dev/protocol/capabilities';
 import type { CapabilitiesInvokeRequest } from '@/sync/api/capabilities/capabilitiesProtocol';
 import type { IModal } from '@/modal';
 
@@ -36,13 +37,16 @@ installApprovalCommonModuleMocks({ modal: async () =>
 installDisconnectedServerSocketBoundary();
 beforeAll(loadSyncSingletonForTests);
 let connection: Awaited<ReturnType<typeof restoreServerAccountForTest>> | null = null;
+let scenario = 0;
 afterEach(async () => { standardCleanup(); await connection?.dispose(); connection = null; vi.restoreAllMocks(); });
 
 async function renderRemovalOwner(
     method: 'disable' | 'uninstall',
     changes: readonly unknown[],
     options: Readonly<{ initiallyEnabled?: boolean; readbackEnabled?: boolean; development?: boolean;
-        developmentRoot?: string; actionFailure?: boolean }> = {},
+        developmentRoot?: string; actionFailure?: boolean;
+        beforeActionResponse?: (signal: AbortSignal | null | undefined) => Promise<void>;
+        actionError?: string }> = {},
 ) {
     boundary.rpc.mockReset();
     boundary.confirm.mockReset().mockResolvedValue(true);
@@ -50,13 +54,20 @@ async function renderRemovalOwner(
     const { Modal } = await import('@/modal');
     vi.mocked(Modal.confirm).mockImplementation(boundary.confirm);
     vi.mocked(Modal.alert).mockImplementation(boundary.alert);
-    const selectedTarget = { serverIdentityId: 'srv_plugin_removal', machineId: 'controller-1' };
+    // Each scenario supplies a different daemon census. Give it its own Home so the real
+    // capability cache cannot answer with the preceding scenario's still-fresh snapshot.
+    const serverIdentityId = `srv_plugin_removal_${++scenario}`;
+    const selectedTarget = { serverIdentityId, machineId: 'controller-1' };
     const developmentActionsSettings = normalizeActionsSettingsV1({ v: 1, actions: {}, approvalWaivedSurfaces: {
+        // These cases isolate retained-resource consent from the ordinary
+        // uninstall Action prompt, which is covered by the policy suites.
+        'plugins.uninstall': ['ui'],
+        'plugins.install': ['ui'],
         'plugins.dev.submit': ['ui'], 'plugins.dev.unregister': ['ui'], 'plugins.dev.test': ['ui'], 'plugins.pack': ['ui'],
     } });
     let serverContent: unknown = { t: 'plain', v: {
         machineAdministrationTargetsLocalV1: { 'plugins.home': selectedTarget },
-        ...(options.development ? { actionsSettingsV1: developmentActionsSettings } : {}),
+        actionsSettingsV1: developmentActionsSettings,
     } };
     let serverVersion = 1;
     const pluginId = 'example.compute';
@@ -69,10 +80,10 @@ async function renderRemovalOwner(
     };
     const requests: Array<Readonly<{ machineId: string; serverId?: string | null; payload: CapabilitiesInvokeRequest }>> = [];
     const actionRequests: Array<Readonly<{ actionId: string; envelope: ReturnType<typeof ExternalActionRequestEnvelopeV1Schema.parse> }>> = [];
-    const developmentStatus = {
+    const developmentStatus = PluginDevelopmentStatusV1Schema.parse({
         roots: [{ kind: 'explicit', rootPath: sourceRootPath, trusted: true, persisted: true }],
         plugins: [{ pluginId, sourceRootPath, phase: 'active' }],
-    };
+    });
     let machineCensus = {
         ...createPlainMachineRowFixture({ id: 'controller-1', accountId: 'account-owner' }),
         installationId: 'installation-1', runnerContentKeyBinding: null,
@@ -80,7 +91,7 @@ async function renderRemovalOwner(
     boundary.rpc.mockImplementation(async request => {
         if (request.method === RPC_METHODS.CAPABILITIES_DETECT) return {
             protocolVersion: 1, results: { 'tool.plugins': { ok: true, checkedAt: 1, data: { installedPlugins: [{
-                ...installed, enabled: requests.length > 0 ? options.readbackEnabled ?? installed.enabled : installed.enabled,
+                ...installed, enabled: requests.length + actionRequests.length > 0 ? options.readbackEnabled ?? installed.enabled : installed.enabled,
             }], ...(options.development ? { developmentActions: { create: true }, developmentStatus } : {}) } } },
         };
         if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) return {
@@ -98,13 +109,13 @@ async function renderRemovalOwner(
         throw new Error(`Unexpected RPC: ${request.method}`);
     });
     connection = await restoreServerAccountForTest({
-        serverUrl: 'https://plugin-removal.test', serverIdentityId: 'srv_plugin_removal', accountId: 'account-owner',
+        serverUrl: `https://plugin-removal-${scenario}.test`, serverIdentityId, accountId: 'account-owner',
         credentials: { token: createAccountTokenForTests('account-owner', { currentAccount: true }) },
         request: async (rawUrl, init) => {
             const path = new URL(String(rawUrl)).pathname;
             if (path === '/health') return Response.json({});
             if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse({
-                capabilities: { serverIdentity: { serverIdentityId: 'srv_plugin_removal' } },
+                capabilities: { serverIdentity: { serverIdentityId } },
             }));
             if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
             if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture({ settingsVersion: serverVersion }));
@@ -119,12 +130,15 @@ async function renderRemovalOwner(
             }
             if (path === '/v1/artifacts') return Response.json([]);
             if (path === '/v1/machines') return Response.json([machineCensus]);
-            if (options.development && path.startsWith('/v1/actions/')) {
+            if (path.startsWith('/v1/actions/')) {
                 const actionId = path.slice('/v1/actions/'.length);
                 const envelope = ExternalActionRequestEnvelopeV1Schema.parse(JSON.parse(String(init?.body)));
                 actionRequests.push({ actionId, envelope });
+                await options.beforeActionResponse?.(init?.signal);
+                const lifecycleChange = actionId === `plugins.${method}` ? changes[actionRequests.filter(request => request.actionId === actionId).length - 1] : undefined;
                 return Response.json(ExternalActionResponseEnvelopeV1Schema.parse({ v: 1, actionId, requestId: envelope.requestId,
-                    execution: { ok: true, result: { ok: options.actionFailure !== true, kind: actionId.replaceAll('.', '_'),
+                    execution: options.actionError ? { ok: false, errorCode: options.actionError, error: options.actionError } : { ok: true, result: { ok: options.actionFailure !== true, kind: actionId.replaceAll('.', '_'),
+                        ...(actionId === `plugins.${method}` ? { action: method, pluginId, change: lifecycleChange ?? committed } : {}),
                         ...(options.actionFailure ? { diagnostics: [{ code: 'plugin_author_test_failed', message: 'Plugin tests failed' }] } : {}),
                         ...(actionId === 'plugins.dev.submit' || actionId === 'plugins.dev.unregister' ? { status: developmentStatus } : {}) } },
                 }));
@@ -138,7 +152,7 @@ async function renderRemovalOwner(
     await storage.getState().activateSettingsScope(scope);
     storage.getState().applySettings({ ...storage.getState().settings,
         machineAdministrationTargetsLocalV1: { 'plugins.home': selectedTarget },
-        ...(options.development ? { actionsSettingsV1: developmentActionsSettings } : {}),
+        actionsSettingsV1: developmentActionsSettings,
     }, serverVersion);
     const machine = createMachineFixture({ id: 'controller-1', installationId: 'installation-1', activeAt: Date.now() });
     storage.getState().applyMachines([machine], true, { sourceServerId: scope.serverId });
@@ -150,6 +164,7 @@ async function renderRemovalOwner(
     const { usePluginSettingsScreenState } = await import('./usePluginSettingsScreenState');
     const hook = await renderHook(() => usePluginSettingsScreenState());
     await vi.waitFor(() => expect(hook.getCurrent().daemonOperationsAvailable).toBe(true));
+    if (options.development) await vi.waitFor(() => expect(hook.getCurrent().developmentPlugins.map(plugin => plugin.sourceRootPath)).toEqual([sourceRootPath]));
     const publishMachine = (changes: Partial<typeof machine>) => {
         const next = { ...machine, seq: machine.seq + 1, updatedAt: Date.now(), ...changes };
         machineCensus = { ...machineCensus, seq: next.seq, updatedAt: next.updatedAt,
@@ -162,6 +177,92 @@ async function renderRemovalOwner(
 }
 
 describe('development Settings through the real UI Action wiring', () => {
+    it('does not admit a new install from a retained callback while the projection refreshes', async () => {
+        const { hook, actionRequests } = await renderRemovalOwner('disable', []);
+        const runCatalogAction = hook.getCurrent().runCatalogAction;
+        const originalRpc = boundary.rpc.getMockImplementation()!;
+        let releaseProjection!: () => void;
+        const projection = new Promise<void>(resolve => { releaseProjection = resolve; });
+        boundary.rpc.mockImplementation(async request => {
+            if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) await projection;
+            return originalRpc(request);
+        });
+        try {
+            await act(async () => { hook.getCurrent().refreshPluginTruth(); });
+            await vi.waitFor(() => expect(hook.getCurrent().daemonOperationsAvailable).toBe(false));
+            await act(async () => { runCatalogAction({ method: 'update', pluginId: 'example.compute' }); });
+            expect(hook.getCurrent().isPluginActionInFlight('example.compute')).toBe(false);
+            expect(actionRequests).toEqual([]);
+        } finally { releaseProjection(); }
+    });
+
+    it('presents a failed install preparation instead of silently re-enabling the action', async () => {
+        const { hook, actionRequests } = await renderRemovalOwner('disable', [], { actionError: 'approval_context_unavailable' });
+        await act(async () => { hook.getCurrent().runCatalogAction({ method: 'update', pluginId: 'example.compute' }); });
+        await vi.waitFor(() => expect(actionRequests).toHaveLength(1));
+        await vi.waitFor(() => expect(hook.getCurrent().isPluginActionInFlight('example.compute')).toBe(false));
+        expect(boundary.alert).toHaveBeenCalledWith('common.error', 'approval_context_unavailable');
+        expect(hook.getCurrent().routineOperationSettlement).toBeNull();
+    });
+
+    it.each(['daemon generation', 'installation', 'unmount'] as const)('retires an issued install on real authority retirement (%s)', async retirement => {
+        let releaseResponse!: () => void;
+        const response = new Promise<void>(resolve => { releaseResponse = resolve; });
+        let actionSignal: AbortSignal | null | undefined;
+        const { hook, actionRequests, publishMachine } = await renderRemovalOwner('disable', [], {
+            beforeActionResponse: async signal => { actionSignal = signal; await response; },
+        });
+        try {
+            await act(async () => { hook.getCurrent().runCatalogAction({ method: 'update', pluginId: 'example.compute' }); });
+            await vi.waitFor(() => expect(actionRequests).toHaveLength(1));
+            if (retirement === 'unmount') await hook.unmount();
+            else await act(async () => { publishMachine(retirement === 'installation'
+                ? { installationId: 'installation-next' } : { daemonStateVersion: 2 }); });
+            await vi.waitFor(() => expect(actionSignal?.aborted).toBe(true));
+            expect(boundary.alert).not.toHaveBeenCalled();
+            expect(hook.getCurrent().routineOperationSettlement).toBeNull();
+        } finally { releaseResponse(); }
+    });
+
+    it('keeps an issued install pending across a projection refresh on the same daemon', async () => {
+        let releaseResponse!: () => void;
+        const response = new Promise<void>(resolve => { releaseResponse = resolve; });
+        let actionSignal: AbortSignal | null | undefined;
+        const { hook, actionRequests } = await renderRemovalOwner('disable', [], {
+            beforeActionResponse: async signal => { actionSignal = signal; await response; },
+        });
+        try {
+            await act(async () => { hook.getCurrent().runCatalogAction({ method: 'update', pluginId: 'example.compute' }); });
+            await vi.waitFor(() => expect(actionRequests).toHaveLength(1));
+            expect(actionSignal?.aborted).toBe(false);
+            const originalRpc = boundary.rpc.getMockImplementation()!;
+            let releaseProjection!: () => void;
+            const projection = new Promise<void>(resolve => { releaseProjection = resolve; });
+            boundary.rpc.mockImplementation(async request => {
+                if (request.method === RPC_METHODS.DAEMON_MERGED_CONTRIBUTION_REGISTRY_PROJECTION_DESCRIBE) await projection;
+                return originalRpc(request);
+            });
+            try {
+                await act(async () => { hook.getCurrent().refreshPluginTruth(); });
+                await vi.waitFor(() => expect(hook.getCurrent().daemonOperationsAvailable).toBe(false));
+                expect(actionSignal?.aborted).toBe(false);
+                expect(hook.getCurrent().isPluginActionInFlight('example.compute')).toBe(true);
+            } finally { releaseProjection(); }
+        } finally { releaseResponse(); }
+        await vi.waitFor(() => expect(hook.getCurrent().isPluginActionInFlight('example.compute')).toBe(false));
+        expect(actionRequests).toHaveLength(1);
+    });
+
+    it('updates the selected installed channel without reconstructing its distribution in the UI', async () => {
+        const { hook, requests, actionRequests } = await renderRemovalOwner('disable', []);
+        await act(async () => { hook.getCurrent().runCatalogAction({ method: 'update', pluginId: 'example.compute' }); });
+        await vi.waitFor(() => expect(actionRequests).toHaveLength(1));
+        expect(actionRequests[0]).toMatchObject({ actionId: 'plugins.install', envelope: {
+            target: { kind: 'machine', machineId: 'controller-1' },
+            input: { machineId: 'controller-1', source: { kind: 'installed', pluginId: 'example.compute' } },
+        } });
+        expect(requests).toEqual([]);
+    });
     it.each(['/plugins/example.compute', '/plugins/example.compute.mjs'])('submits, tests, packs, and unregisters %s only on the selected machine through Actions', async (sourceRootPath) => {
         const { hook, requests, actionRequests } = await renderRemovalOwner('disable', [], {
             development: true, developmentRoot: sourceRootPath,
@@ -169,8 +270,9 @@ describe('development Settings through the real UI Action wiring', () => {
         await act(async () => { hook.getCurrent().runDevelopmentSourceInstall(sourceRootPath); });
         await vi.waitFor(() => expect(hook.getCurrent().isPluginActionInFlight(sourceRootPath)).toBe(false));
         for (const action of ['test', 'pack', 'unregister'] as const) {
-            await act(async () => { hook.getCurrent().runDevelopmentAction(action, 'example.compute'); });
-            await vi.waitFor(() => expect(hook.getCurrent().isPluginActionInFlight('example.compute')).toBe(false));
+            // A development source is addressed by its root, so a source that never loaded stays actionable.
+            await act(async () => { hook.getCurrent().runDevelopmentAction(action, sourceRootPath); });
+            await vi.waitFor(() => expect(hook.getCurrent().isPluginActionInFlight(sourceRootPath)).toBe(false));
         }
         expect(actionRequests.map(({ actionId, envelope }) => ({ actionId, target: envelope.target, input: envelope.input }))).toEqual([
             { actionId: 'plugins.dev.submit', target: { kind: 'machine', machineId: 'controller-1' }, input: { projectRoot: sourceRootPath } },
@@ -186,8 +288,11 @@ describe('development Settings through the real UI Action wiring', () => {
         const { hook, actionRequests, requests } = await renderRemovalOwner('disable', [], {
             development: true, actionFailure: true,
         });
-        await act(async () => { hook.getCurrent().runDevelopmentAction('test', 'example.compute'); });
-        await vi.waitFor(() => expect(hook.getCurrent().isPluginActionInFlight('example.compute')).toBe(false));
+        await vi.waitFor(() => expect(hook.getCurrent().developmentPlugins).toHaveLength(1));
+        // The row acts on the source root reported by this scenario's daemon census.
+        const sourceRootPath = hook.getCurrent().developmentPlugins[0]!.sourceRootPath;
+        await act(async () => { hook.getCurrent().runDevelopmentAction('test', sourceRootPath); });
+        await vi.waitFor(() => expect(hook.getCurrent().isPluginActionInFlight(sourceRootPath)).toBe(false));
         expect(actionRequests.map(request => request.actionId)).toEqual(['plugins.dev.test']);
         expect(requests).toEqual([]);
         expect(hook.getCurrent().routineOperationSettlement).toBeNull();
@@ -198,15 +303,27 @@ describe('development Settings through the real UI Action wiring', () => {
 const committed = { kind: 'committed', pluginId: 'example.compute', desiredGeneration: null, appliedGeneration: null, pendingSurfaces: [] };
 
 describe('local plugin removal at the actual settings hook and machine RPC boundary', () => {
+    it('dispatches disable through the semantic Action with no default confirmation', async () => {
+        const { hook, requests, actionRequests } = await renderRemovalOwner('disable', [committed]);
+        await act(async () => { hook.getCurrent().runInstalledPluginAction('disable', 'example.compute'); });
+        await vi.waitFor(() => expect(hook.getCurrent().isPluginActionInFlight('example.compute')).toBe(false));
+        expect(actionRequests.map(request => ({ actionId: request.actionId, target: request.envelope.target, input: request.envelope.input }))).toEqual([
+            { actionId: 'plugins.disable', target: { kind: 'machine', machineId: 'controller-1' }, input: { pluginId: 'example.compute', machineId: 'controller-1' } },
+        ]);
+        expect(requests).toEqual([]);
+        expect(boundary.confirm).not.toHaveBeenCalled();
+        expect(hook.getCurrent().routineOperationSettlement?.message).toBe('common.done');
+    });
+
     it.each(['disable', 'uninstall'] as const)('reviews exact native responsibility and a renewed census before %s can commit', async method => {
         const first = createManagedResourceDependencyFixture();
         const renewed = createManagedResourceDependencyFixture(8);
-        const { hook, requests } = await renderRemovalOwner(method, [
+        const { hook, requests, actionRequests } = await renderRemovalOwner(method, [
             { kind: 'managedResourcesReviewRequired', pluginId: 'example.compute', resources: [first] },
             { kind: 'managedResourcesReviewRequired', pluginId: 'example.compute', resources: [renewed] }, committed,
         ]);
         await act(async () => { hook.getCurrent().runCatalogAction({ method, pluginId: 'example.compute' }); });
-        await vi.waitFor(() => expect(requests.length, JSON.stringify({ alerts: boundary.alert.mock.calls })).toBeGreaterThan(0));
+        await vi.waitFor(() => expect(actionRequests.length, JSON.stringify({ alerts: boundary.alert.mock.calls })).toBeGreaterThan(0));
         await vi.waitFor(() => expect(boundary.confirm).toHaveBeenCalledTimes(2));
         await vi.waitFor(() => expect(hook.getCurrent().isPluginActionInFlight('example.compute')).toBe(false));
         expect(boundary.confirm, JSON.stringify({ requests, alerts: boundary.alert.mock.calls })).toHaveBeenCalledTimes(2);
@@ -216,17 +333,18 @@ describe('local plugin removal at the actual settings hook and machine RPC bound
             expectedAllocation: resource.allocation, expectedResource: resource.resource,
             expectedNativeOperationRef: resource.nativeOperationRef, expectedRecovery: resource.recovery, responsibility: 'manual',
         });
-        expect(requests.map(request => request.payload)).toEqual([
-            { id: 'tool.plugins', method, params: { pluginId: 'example.compute' } },
-            { id: 'tool.plugins', method, params: { pluginId: 'example.compute', managedResourceDispositions: [disposition(first)] } },
-            { id: 'tool.plugins', method, params: { pluginId: 'example.compute', managedResourceDispositions: [disposition(renewed)] } },
+        expect(actionRequests.map(request => ({ actionId: request.actionId, input: request.envelope.input }))).toEqual([
+            { actionId: `plugins.${method}`, input: { machineId: 'controller-1', pluginId: 'example.compute' } },
+            { actionId: `plugins.${method}`, input: { machineId: 'controller-1', pluginId: 'example.compute', managedResourceDispositions: [disposition(first)] } },
+            { actionId: `plugins.${method}`, input: { machineId: 'controller-1', pluginId: 'example.compute', managedResourceDispositions: [disposition(renewed)] } },
         ]);
-        expect(requests.every(request => request.machineId === 'controller-1' && request.serverId === requests[0]?.serverId)).toBe(true);
+        expect(actionRequests.every(request => request.envelope.target?.kind === 'machine' && request.envelope.target.machineId === 'controller-1')).toBe(true);
+        expect(requests).toEqual([]);
         expect(hook.getCurrent().routineOperationSettlement?.message).toBe('common.done');
     });
 
     it.each(['cancel', 'daemon generation', 'installation', 'account'] as const)('does not retry or report success after consent retires (%s)', async retirement => {
-        const { hook, requests, storage, scope, publishMachine } = await renderRemovalOwner('disable', [
+        const { hook, requests, actionRequests, storage, scope, publishMachine } = await renderRemovalOwner('disable', [
             { kind: 'managedResourcesReviewRequired', pluginId: 'example.compute', resources: [createManagedResourceDependencyFixture()] }, committed,
         ]);
         boundary.confirm.mockImplementation(async () => {
@@ -236,11 +354,12 @@ describe('local plugin removal at the actual settings hook and machine RPC bound
             return retirement !== 'cancel';
         });
         await act(async () => { hook.getCurrent().runCatalogAction({ method: 'disable', pluginId: 'example.compute' }); });
-        await vi.waitFor(() => expect(requests.length, JSON.stringify({ alerts: boundary.alert.mock.calls })).toBeGreaterThan(0));
+        await vi.waitFor(() => expect(actionRequests.length, JSON.stringify({ alerts: boundary.alert.mock.calls })).toBeGreaterThan(0));
         await vi.waitFor(() => expect(boundary.confirm).toHaveBeenCalledTimes(1));
         await vi.waitFor(() => expect(hook.getCurrent().isPluginActionInFlight('example.compute')).toBe(false));
         expect(boundary.confirm, JSON.stringify({ requests, alerts: boundary.alert.mock.calls })).toHaveBeenCalledTimes(1);
-        expect(requests).toHaveLength(1);
+        expect(actionRequests).toHaveLength(1);
+        expect(requests).toEqual([]);
         expect(hook.getCurrent().routineOperationSettlement).toBeNull();
     });
 
@@ -252,21 +371,23 @@ describe('local plugin removal at the actual settings hook and machine RPC bound
         { kind: 'managedResourcesReviewRequired', pluginId: 'example.compute', resources: [createManagedResourceDependencyFixture()], unknownRecovery: true },
         { kind: 'managedResourcesReviewRequired', pluginId: 'example.compute', resources: [{ ...createManagedResourceDependencyFixture(), intentRevision: 'unreadable' }] },
     ])('does not report disable success for an uncommitted or mismatched daemon result ($kind)', async change => {
-        const { hook, requests } = await renderRemovalOwner('disable', [change]);
+        const { hook, requests, actionRequests } = await renderRemovalOwner('disable', [change]);
         await act(async () => { hook.getCurrent().runCatalogAction({ method: 'disable', pluginId: 'example.compute' }); });
         await vi.waitFor(() => expect(hook.getCurrent().isPluginActionInFlight('example.compute')).toBe(false));
-        expect(requests).toHaveLength(1);
+        expect(actionRequests).toHaveLength(1);
+        expect(requests).toEqual([]);
         expect(boundary.confirm).not.toHaveBeenCalled();
         expect(hook.getCurrent().routineOperationSettlement?.message).not.toBe('common.done');
     });
 
     it('reconciles an actual unknown disable from the original daemon readback and preserves disabled inventory', async () => {
-        const { hook, requests } = await renderRemovalOwner('disable', [
+        const { hook, requests, actionRequests } = await renderRemovalOwner('disable', [
             { kind: 'outcomeUnknown', pluginId: 'example.compute' },
         ], { readbackEnabled: false });
         await act(async () => { hook.getCurrent().runCatalogAction({ method: 'disable', pluginId: 'example.compute' }); });
         await vi.waitFor(() => expect(hook.getCurrent().isPluginActionInFlight('example.compute')).toBe(false));
-        expect(requests).toHaveLength(1);
+        expect(actionRequests).toHaveLength(1);
+        expect(requests).toEqual([]);
         expect(boundary.confirm).not.toHaveBeenCalled();
         expect(boundary.alert).not.toHaveBeenCalled();
         expect(hook.getCurrent().routineOperationSettlement?.message).toBe('common.done');
@@ -274,10 +395,11 @@ describe('local plugin removal at the actual settings hook and machine RPC bound
     });
 
     it('preserves the daemon confirmed disabled no-op without a native responsibility review', async () => {
-        const { hook, requests } = await renderRemovalOwner('disable', [undefined], { initiallyEnabled: false });
+        const { hook, requests, actionRequests } = await renderRemovalOwner('disable', [undefined], { initiallyEnabled: false });
         await act(async () => { hook.getCurrent().runCatalogAction({ method: 'disable', pluginId: 'example.compute' }); });
         await vi.waitFor(() => expect(hook.getCurrent().isPluginActionInFlight('example.compute')).toBe(false));
-        expect(requests).toHaveLength(1);
+        expect(actionRequests).toHaveLength(1);
+        expect(requests).toEqual([]);
         expect(boundary.confirm).not.toHaveBeenCalled();
         expect(hook.getCurrent().routineOperationSettlement?.message).toBe('common.done');
     });

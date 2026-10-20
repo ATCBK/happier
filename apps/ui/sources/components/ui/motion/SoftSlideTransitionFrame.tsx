@@ -2,6 +2,8 @@ import * as React from 'react';
 import { Animated, Platform, View, type StyleProp, type ViewStyle } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 
+import { getBlurViewComponent } from '@/components/ui/glass/blurMaterial';
+
 import type { StepTransitionDirection } from '@/components/ui/motion/resolveStepTransitionDirection';
 import {
     slideTransitionTokens,
@@ -94,17 +96,6 @@ function exitOffset(direction: StepTransitionDirection, translatePx: number): nu
     if (direction === 'backward') return translatePx;
     return 0;
 }
-
-type NativeBlurViewProps = Readonly<{
-    children?: React.ReactNode;
-    experimentalBlurMethod?: string;
-    intensity?: number;
-    style?: StyleProp<ViewStyle>;
-    tint?: 'default' | 'light' | 'dark' | 'extraLight' | 'prominent' | 'systemUltraThinMaterial' | 'systemThinMaterial' | 'systemMaterial' | 'systemThickMaterial' | 'systemChromeMaterial' | 'systemUltraThinMaterialLight' | 'systemThinMaterialLight' | 'systemMaterialLight' | 'systemThickMaterialLight' | 'systemChromeMaterialLight' | 'systemUltraThinMaterialDark' | 'systemThinMaterialDark' | 'systemMaterialDark' | 'systemThickMaterialDark' | 'systemChromeMaterialDark';
-}>;
-
-let cachedNativeBlurView: React.ComponentType<NativeBlurViewProps> | null = null;
-let pendingNativeBlurView: Promise<React.ComponentType<NativeBlurViewProps> | null> | null = null;
 
 function cssTransitionStyle(
     phase: 'enter' | 'exit',
@@ -250,7 +241,7 @@ function NativeSlideBlurOverlay(props: Readonly<{
     opacity: Animated.AnimatedInterpolation<string | number>;
 }>): React.ReactElement | null {
     const styles = stylesheet;
-    const NativeBlurView = useNativeBlurViewComponent();
+    const NativeBlurView = getBlurViewComponent();
     if (!NativeBlurView) return null;
 
     return (
@@ -259,48 +250,12 @@ function NativeSlideBlurOverlay(props: Readonly<{
             style={[styles.blurFill, { opacity: props.opacity }]}
         >
             <NativeBlurView
-                experimentalBlurMethod={Platform.OS === 'android' ? 'dimezisBlurView' : undefined}
                 intensity={props.intensity}
                 style={styles.blurFill}
                 tint="default"
             />
         </Animated.View>
     );
-}
-
-function useNativeBlurViewComponent(): React.ComponentType<NativeBlurViewProps> | null {
-    const [component, setComponent] = React.useState<React.ComponentType<NativeBlurViewProps> | null>(() => cachedNativeBlurView);
-
-    React.useEffect(() => {
-        if (cachedNativeBlurView) {
-            setComponent(() => cachedNativeBlurView);
-            return undefined;
-        }
-
-        let active = true;
-
-        pendingNativeBlurView ??= import('expo-blur')
-            .then((expoBlur) => {
-                cachedNativeBlurView = expoBlur.BlurView as React.ComponentType<NativeBlurViewProps>;
-                return cachedNativeBlurView;
-            })
-            .catch(() => {
-                cachedNativeBlurView = null;
-                return null;
-            });
-
-        void pendingNativeBlurView.then((nextComponent) => {
-            if (active) {
-                setComponent(() => nextComponent);
-            }
-        });
-
-        return () => {
-            active = false;
-        };
-    }, []);
-
-    return component;
 }
 
 function NativeSoftSlideTransitionFrame(props: SoftSlideTransitionFrameProps) {

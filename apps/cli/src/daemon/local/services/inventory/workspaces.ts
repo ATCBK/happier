@@ -116,6 +116,7 @@ export async function readLocalServiceWorkspaceFacts(input: Readonly<{
         const { readProjectAccountRows } = await import('@/workspaces/projectAccountRows');
         const snapshot = await runWithServerHttpBaseUrl(input.serverBaseUrl, () => readProjectAccountRows({
             credentials: input.credentials,
+            publication: 'installed',
             serverId: input.serverId,
             ...(input.signal ? { signal: input.signal } : {}),
         }));

@@ -114,6 +114,9 @@ describe('SessionTranscriptObservationV1', () => {
       source: 'history',
       trusted: true,
     })).toBe(false);
-    expect(isRecoveredHistoryTranscriptObservationProvenance(null)).toBe(false);
+    for (const absent of [undefined, null]) {
+      expect(isRecoveredHistoryTranscriptObservationProvenance(absent)).toBe(false);
+      expect(isRecoveredHistoryTranscriptObservationProvenance(absent, 'stored')).toBe(false);
+    }
   });
 });

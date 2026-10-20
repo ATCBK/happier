@@ -44,6 +44,7 @@ import { resolveSessionWorkspaceDisplayPresentation } from '@/sync/domains/sessi
 import { resolveHomeDisplayLabel } from '@/components/settings/server/homeDisplayName';
 
 import type { ActivityAttentionSource } from './activityAttentionSourceTypes';
+import { readActivityPersonalRuleSnapshot, readActivitySessionRulePolicies } from './readActivitySessionRulePolicies';
 
 const NO_SOURCE_ATTENTION_MESSAGES: readonly Message[] = [];
 
@@ -170,7 +171,10 @@ function collectLookupSessionAddresses(
     for (const entry of listSessionListLookupServerSessions(lookupState)) {
         const authoritativeMembership = authoritativePersonalMembershipByServerId.get(entry.serverId);
         if (authoritativeMembership && !authoritativeMembership.has(entry.session.id)) {
-            continue;
+            const rules = readActivityPersonalRuleSnapshot(source, entry.serverId);
+            // Candidacy only: the shared matcher below admits the current relationship/filter facts.
+            if (rules?.status !== 'ready' || !rules.rules.some(rule => rule.receiver.kind === 'account' && rule.definition.enabled)
+                && !Object.values(rules.defaultPreferences ?? {}).some(Boolean)) continue;
         }
         addAddress(entry.serverId, entry.session.id);
     }
@@ -469,8 +473,9 @@ export function buildActivityOverviewFromSource(params: Readonly<{
     const surfaceTiming = resolveActivitySurfaceTiming(params.surfaceTiming);
     const resolveSessionOptions = params.resolveSessionOptionsForServerId;
     const candidates = collectSourceSessions(params.source, params.includeWarmSourceWhenNotReady === true)
-        .filter((entry) => isSessionAdmittedToPersonalActivity(entry.session))
         .flatMap((entry) => {
+            const followRulePolicies = readActivitySessionRulePolicies(params.source, entry.address, entry.session, params.nowMs);
+            if (!isSessionAdmittedToPersonalActivity(entry.session, followRulePolicies)) return [];
             const sessionOptions = resolveSessionOptions
                 ? resolveSessionOptions(entry.address.serverId)
                 : params.sessionOptions;
@@ -483,6 +488,7 @@ export function buildActivityOverviewFromSource(params: Readonly<{
                         ? readSourceSessionMessages(params.source, entry.address.sessionId)
                         : undefined,
                     sessionOptions,
+                    followRulePolicies,
                     nowMs: params.nowMs,
                 }),
             }];
@@ -538,7 +544,8 @@ export function forEachActivitySummaryCandidate(params: Readonly<{
         params.includeWarmSourceWhenNotReady === true,
         params.includeHydratedMessages !== true,
     )) {
-        if (!isSessionAdmittedToPersonalActivity(entry.session)) continue;
+        const followRulePolicies = readActivitySessionRulePolicies(params.source, entry.address, entry.session, params.nowMs);
+        if (!isSessionAdmittedToPersonalActivity(entry.session, followRulePolicies)) continue;
         const sessionOptions = params.resolveSessionOptionsForServerId
             ? params.resolveSessionOptionsForServerId(entry.address.serverId)
             : params.sessionOptions;
@@ -552,6 +559,7 @@ export function forEachActivitySummaryCandidate(params: Readonly<{
             sessionOptions,
             nowMs: params.nowMs,
             presentation: 'summary',
+            followRulePolicies,
         });
         if (
             !isHydratedSessionUserFacing(candidate.session)
@@ -594,7 +602,7 @@ export function buildActivityOverviewSummaryFromSource(params: Readonly<{
 
     forEachActivitySummaryCandidate(params, ({ entry, candidate, messages }) => {
         if (candidate.hasAttention) totalAttentionCount += 1;
-        if (classifyInboxSessionCandidate(candidate) !== null) inboxContentCount += 1;
+        if (classifyInboxSessionCandidate(candidate).section !== null) inboxContentCount += 1;
         if (candidate.reasons.isThinking) workingCount += 1;
         if (isActivityCandidateAwaitingPerson(candidate)) needsYouCount += 1;
         for (const expiresAtMs of readSessionPersonalAttentionExpirationsForViewer(

@@ -1,7 +1,10 @@
+// @vitest-environment jsdom
+// @vitest-environment-options { "url": "https://app.happier.dev/embed/new" }
+
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { renderScreen } from '@/dev/testkit';
+import { installBrowserStorageLockBoundary, renderScreen } from '@/dev/testkit';
 import { EmbedSessionRuntimeProvider, useEmbedSessionRuntime } from './EmbedSessionRuntimeProvider';
 import type { EmbedSessionRuntime } from './createEmbedSessionRuntime';
 
@@ -10,6 +13,7 @@ afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('frame-owned runtime mount', () => {
     it('resolves the runtime Home from the frame server selection', async () => {
+        const restoreBrowserStorageLock = installBrowserStorageLockBoundary();
         const events = new EventTarget();
         vi.stubGlobal('window', {
             location: new URL('https://app.happier.dev/embed/new?server=https%3A%2F%2Fcredential-home.example&i=instance&n=nonce'),
@@ -22,8 +26,12 @@ describe('frame-owned runtime mount', () => {
             return React.createElement('RuntimeProbe');
         }
         const screen = await renderScreen(<EmbedSessionRuntimeProvider><Probe /></EmbedSessionRuntimeProvider>);
-        await vi.waitFor(() => expect(observedEndpoint).toBe('https://credential-home.example'));
-        await screen.unmount();
+        try {
+            await vi.waitFor(() => expect(observedEndpoint).toBe('https://credential-home.example'));
+        } finally {
+            await screen.unmount();
+            restoreBrowserStorageLock();
+        }
     });
     it('provides an unadmitted loading runtime with an ephemeral public recipient and no credential', async () => {
         const observed: Array<{ phase: string; token: string | null; publicKey: string; endpoint: string }> = [];

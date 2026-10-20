@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { BackHandler, Platform, View, type LayoutChangeEvent } from 'react-native';
+import { BackHandler, Platform, View, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
 import { useUnistyles } from 'react-native-unistyles';
 import {
   FloatingFrame,
@@ -27,6 +27,7 @@ import { VOICE_MOTION } from '@/components/voice/light/voiceLightTokens';
 import {
   useReportSessionCockpitViewerRect,
   useSessionCockpitComposerChromeHeight,
+  useSessionCockpitComposerChromeTop,
   useSessionCockpitPetRect,
   useSessionCockpitVoicePresenceRect,
 } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
@@ -36,6 +37,7 @@ import type { PluginUiProjectionCurrentness } from '@/sync/domains/plugins/ui/us
 import { t } from '@/text';
 
 import {
+  NO_SESSION_VIEWER_INSET,
   useOptionalSessionViewerController,
   useSessionViewerHasPresence,
   type SessionViewerController,
@@ -52,6 +54,7 @@ import {
   DEFAULT_WIDTH_SHARE,
   SESSION_VIEWER_DEFAULT_ASPECT,
   SESSION_VIEWER_EDGE,
+  resolveSessionViewerCentredInset,
   resolveSessionViewerReadingInset,
 } from './sessionViewerGeometry';
 
@@ -109,7 +112,8 @@ export function SessionViewerHost(
     controller &&
     source &&
     (state?.mode === 'expanded' ||
-      (!controller.phone && state?.mode === 'floating')),
+      // A docked desktop viewer keeps its host measuring, so the dock can offer to float it again.
+      (!controller.phone && (state?.mode === 'floating' || state?.mode === 'docked'))),
   );
   if (!controller || !source || !shown) return null;
   return (
@@ -138,10 +142,13 @@ function MountedSessionViewerHost(
   const [origin, setOrigin] = React.useState<Point>({ x: 0, y: 0 });
   const [liveRect, setLiveRect] = React.useState<FrameRect | null>(null);
   const composerHeight = useSessionCockpitComposerChromeHeight();
+  const composerTop = useSessionCockpitComposerChromeTop();
+  const { height: windowHeight } = useWindowDimensions();
   const presenceRect = useSessionCockpitVoicePresenceRect();
   const petRect = useSessionCockpitPetRect();
   const mode: FloatingFrameMode = controller.state.mode;
   const floating = mode === 'floating' && !controller.phone;
+  const docked = mode === 'docked' && !controller.phone;
 
   const onLayout = React.useCallback((event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;
@@ -159,18 +166,24 @@ function MountedSessionViewerHost(
     });
   }, []);
 
-  const availableRect = React.useMemo<FrameRect | null>(() => {
+  // The frame rests above where the composer band starts. On desktop the workspace frame lifts the
+  // band off the area's bottom edge, so its height alone would put the frame over the composer's
+  // status line; the band's measured top (window space) says where it really begins.
+  const composerStart = React.useMemo(() => {
     if (!size) return null;
+    return composerTop > 0
+      ? Math.min(size.height, windowHeight - composerTop - origin.y)
+      : size.height - composerHeight;
+  }, [composerHeight, composerTop, origin.y, size, windowHeight]);
+  const availableRect = React.useMemo<FrameRect | null>(() => {
+    if (!size || composerStart === null) return null;
     return {
       x: SESSION_VIEWER_EDGE,
       y: SESSION_VIEWER_EDGE,
       width: Math.max(0, size.width - SESSION_VIEWER_EDGE * 2),
-      height: Math.max(
-        0,
-        size.height - composerHeight - SESSION_VIEWER_EDGE * 2,
-      ),
+      height: Math.max(0, composerStart - SESSION_VIEWER_EDGE * 2),
     };
-  }, [composerHeight, size]);
+  }, [composerStart, size]);
   // The floating presences report window-space rects; the frame works in this area's space.
   const avoidRects = React.useMemo(
     () =>
@@ -192,9 +205,11 @@ function MountedSessionViewerHost(
   const [minWidth, setMinWidth] = React.useState(0);
   // Open, viewport, obstacle, aspect and footer changes revalidate the settled placement at the one
   // geometry owner; the height always follows the width through the picture's aspect.
+  const { setFloatFits } = controller;
+  React.useEffect(() => () => setFloatFits(false), [setFloatFits]);
   React.useEffect(() => {
     if (
-      !floating ||
+      !(floating || docked) ||
       !availableRect ||
       availableRect.width <= 0 ||
       availableRect.height <= 0
@@ -218,6 +233,10 @@ function MountedSessionViewerHost(
       chromeHeight,
       minWidth,
     });
+    if (docked) {
+      setFloatFits(placement.fits);
+      return;
+    }
     if (!placement.fits) {
       apply({ kind: 'viewer.dock' });
       return;
@@ -231,7 +250,7 @@ function MountedSessionViewerHost(
       next.height !== committedRect.height
     )
       setRect(next);
-  }, [apply, aspectRatio, availableRect, avoidRects, chromeHeight, committedRect, floating, footer, minWidth, setRect]);
+  }, [apply, aspectRatio, availableRect, avoidRects, chromeHeight, committedRect, docked, floating, footer, minWidth, setFloatFits, setRect]);
 
   const rect = liveRect ?? committedRect;
   // The resting rect: a drag in flight neither reflows the reading column nor moves the obstacle the
@@ -249,15 +268,18 @@ function MountedSessionViewerHost(
   React.useEffect(() => {
     setReadingInset(
       settledFloatingRect && size
-        ? resolveSessionViewerReadingInset({
-            areaWidth: size.width,
-            columnMaxWidth: layout.maxWidth,
-            columnMinWidth: PANE_SIZING_DEFAULTS.mainMinPx,
-            rect: settledFloatingRect,
-          })
-        : { left: 0, right: 0 },
+        ? {
+            ...resolveSessionViewerReadingInset({
+              areaWidth: size.width,
+              columnMaxWidth: layout.maxWidth,
+              columnMinWidth: PANE_SIZING_DEFAULTS.mainMinPx,
+              rect: settledFloatingRect,
+            }),
+            centred: resolveSessionViewerCentredInset({ areaWidth: size.width, contentBottom: composerStart ?? size.height, rect: settledFloatingRect }),
+          }
+        : NO_SESSION_VIEWER_INSET,
     );
-  }, [setReadingInset, settledFloatingRect, size]);
+  }, [composerStart, setReadingInset, settledFloatingRect, size]);
 
   const onRectChange = React.useCallback(
     (next: FrameRect, change: FloatingFrameRectChange) => {
@@ -344,7 +366,7 @@ function MountedSessionViewerHost(
       }}
       testID="session-viewer-host"
     >
-      {availableRect && frameRect ? (
+      {docked ? null : availableRect && frameRect ? (
         <FloatingFrame
           testID="session-viewer-frame"
           mode={mode === 'expanded' ? 'expanded' : 'floating'}
@@ -359,7 +381,7 @@ function MountedSessionViewerHost(
           moveInput={watching ? 'surface' : 'chrome'}
           onRectChange={onRectChange}
           onModeChange={onModeChange}
-          accessibilityLabel={resolveSessionViewerWatchingLabel(source, machine.name)}
+          accessibilityLabel={resolveSessionViewerWatchingLabel(source, machine.name, machine.targetTitle)}
           resizeLabel={t('computerUse.presentation.resizeView')}
           pointer={
             Platform.OS === 'web' ? COMPANION_WEB_POINTER_BINDING : undefined
@@ -404,7 +426,18 @@ function MountedSessionViewerHost(
             inputPassthrough={watching}
           />
         </FloatingFrame>
-      ) : null}
+      ) : (
+        // Claim the same retained slot while this replacement host awaits layout.
+        // The portal keeps its last valid placement until the frame can supply a new one.
+        <SessionViewerBody
+          sessionId={props.sessionId}
+          serverId={props.serverId}
+          source={source}
+          pluginProjection={props.pluginProjection}
+          windowGeometry={null}
+          inputPassthrough={watching}
+        />
+      )}
     </View>
   );
 }

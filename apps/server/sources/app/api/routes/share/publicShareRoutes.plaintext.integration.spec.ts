@@ -13,6 +13,7 @@ import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
 import { createAuthenticatedTestApp } from "../../testkit/sqliteFastify";
 import { publicShareRoutes } from "./publicShareRoutes";
+import { resolveApiTrustProxy } from "../../utils/apiRateLimitPolicy";
 
 const OWNER_METADATA_CIPHERTEXT_V1 =
     "oRoBAgMEBQYHCAkKCwwNDg8QERITFBUWFxh8aC0+8+YDECLScN6uQTItPyWVR7XbQA==";
@@ -26,8 +27,8 @@ const CURRENT_ACCOUNT_STORED_CONTENT_HEADERS =
         CURRENT_ACCOUNT_STORED_CONTENT_COMPATIBILITY_DECLARATION,
     );
 
-function createCurrentClientTestApp() {
-    const app = createAuthenticatedTestApp();
+function createCurrentClientTestApp(options: Parameters<typeof createAuthenticatedTestApp>[0] = {}) {
+    const app = createAuthenticatedTestApp(options);
     app.addHook("onRequest", async (request: FastifyRequest) => {
         Object.assign(
             request.headers,
@@ -66,6 +67,71 @@ describe("publicShareRoutes plaintext sessions (integration)", () => {
 
     afterAll(async () => {
         await harness.close();
+    });
+
+    it("logs public-share client IPs through the configured proxy trust policy and preserves consent", async () => {
+        const owner = await createCurrentE2eeAccount();
+        const session = await db.session.create({
+            data: { accountId: owner.id, tag: "s_proxy_log", encryptionMode: "plain", metadata: STORED_SHARED_METADATA_V1, metadataLayoutVersion: 1, ownerMetadata: STORED_OWNER_METADATA_ENVELOPE_V1 },
+            select: { id: true },
+        });
+        const token = "tok_proxy_log";
+        const share = await db.publicSessionShare.create({
+            data: {
+                sessionId: session.id,
+                createdByUserId: owner.id,
+                tokenHash: createHash("sha256").update(token, "utf8").digest(),
+                isConsentRequired: true,
+            },
+            select: { id: true },
+        });
+        const app = createCurrentClientTestApp({
+            trustProxy: resolveApiTrustProxy({ HAPPIER_SERVER_TRUST_PROXY: "10.0.0.0/8" }),
+        });
+        publicShareRoutes(app);
+        await app.ready();
+        try {
+            const withoutConsent = await app.inject({ method: "GET", url: `/v1/public-share/${token}` });
+            expect(withoutConsent.statusCode).toBe(403);
+            await expect(db.publicShareAccessLog.count({ where: { publicShareId: share.id } })).resolves.toBe(0);
+
+            for (const scenario of [
+                { userAgent: "direct", remoteAddress: "203.0.113.9", forwarded: "198.51.100.7", expected: "203.0.113.9" },
+                { userAgent: "proxy", remoteAddress: "10.1.2.3", forwarded: "198.51.100.7", expected: "198.51.100.7" },
+                { userAgent: "chain", remoteAddress: "10.1.2.3", forwarded: "198.51.100.7, 203.0.113.9", expected: "203.0.113.9" },
+                { userAgent: "real-ip-only", remoteAddress: "10.1.2.3", forwarded: undefined, expected: "10.1.2.3" },
+            ]) {
+                const response = await app.inject({
+                    method: "GET",
+                    url: `/v1/public-share/${token}?consent=true`,
+                    remoteAddress: scenario.remoteAddress,
+                    headers: {
+                        "user-agent": scenario.userAgent,
+                        "x-real-ip": "192.0.2.1",
+                        ...(scenario.forwarded ? { "x-forwarded-for": scenario.forwarded } : {}),
+                    },
+                });
+                expect(response.statusCode).toBe(200);
+                await expect(db.publicShareAccessLog.findFirst({
+                    where: { publicShareId: share.id, userAgent: scenario.userAgent },
+                    select: { ipAddress: true },
+                })).resolves.toEqual({ ipAddress: scenario.expected });
+            }
+
+            await db.publicSessionShare.update({ where: { id: share.id }, data: { isConsentRequired: false } });
+            const anonymous = await app.inject({
+                method: "GET",
+                url: `/v1/public-share/${token}`,
+                remoteAddress: "203.0.113.9",
+                headers: { "user-agent": "no-consent-recording", "x-forwarded-for": "198.51.100.7" },
+            });
+            expect(anonymous.statusCode).toBe(200);
+            await expect(db.publicShareAccessLog.count({
+                where: { publicShareId: share.id, ipAddress: null, userAgent: null },
+            })).resolves.toBe(1);
+        } finally {
+            await app.close();
+        }
     });
 
     it("publishes a layout-one Agent-state tombstone without owner ciphertext", async () => {

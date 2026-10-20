@@ -1,7 +1,9 @@
 import { once } from 'node:events';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import type { z } from 'zod';
+import { fileURLToPath } from 'node:url';
+import { afterAll } from 'vitest';
+import type { z } from 'zod/mini';
 import { resolveAgentCliOverrideEnvKey } from '@happier-dev/cli-common/agents/resolution';
 
 import { reloadConfiguration } from '@/configuration';
@@ -26,6 +28,8 @@ import {
   type PrepareForegroundAgentRuntimeAdmissionDependencies,
 } from './prepareForegroundAdmission';
 
+afterAll(async () => await pluginReloadController.shutdown());
+
 type RequestOverrides = Partial<z.input<typeof ForegroundAgentRuntimeAdmissionRequestV1Schema>>
   & Readonly<{ machineId?: string }>;
 
@@ -42,6 +46,7 @@ type FixtureContext = Readonly<{
   home: string;
   directory: string;
   foregroundPid: number;
+  foregroundEntrypoint: string;
   runtime: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>>;
   request(overrides?: RequestOverrides): ForegroundAgentRuntimeAdmissionOwnerRequestV1;
   prepare(
@@ -108,9 +113,7 @@ export async function withRealForegroundAdmissionFixture<T>(
       await mkdir(join(directory, 'native-home'), { recursive: true });
       // The process runs these physical bytes. The real OS identity adapter
       // and runner-entrypoint owner derive its authority; neither is replaced.
-      const entrypoint = join(directory, 'foreground', 'dist', 'index.mjs');
-      await mkdir(join(directory, 'foreground', 'dist'), { recursive: true });
-      await writeFile(entrypoint, 'setInterval(() => {}, 1000);\n', 'utf8');
+      const entrypoint = fileURLToPath(new URL('../../testkit/process/fixtures/src/index.mjs', import.meta.url));
       foreground = spawnTestProcess(process.execPath, [entrypoint]);
       await once(foreground, 'spawn');
       if (!foreground.pid) throw new Error('Foreground fixture process has no OS identity');
@@ -139,7 +142,7 @@ export async function withRealForegroundAdmissionFixture<T>(
         };
       };
       return await run({
-        home, directory, foregroundPid: foreground.pid, runtime, request,
+        home, directory, foregroundPid: foreground.pid, foregroundEntrypoint: entrypoint, runtime, request,
         async prepare(overrides = {}, dependencies = {}) {
           const admission = await prepareForegroundAgentRuntimeAdmission(request(overrides), dependencies);
           if (admission.ok) prepared.push(admission.prepared);

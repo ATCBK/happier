@@ -87,10 +87,9 @@ describe('UI execution.run Action dependencies', () => {
         }));
     });
 
-    it('keeps detached start, get, stop, and wait on the one exact machine selected by V2 preflight', async () => {
+    it('keeps detached controls on the one exact machine selected by V2 preflight', async () => {
         machineCapabilitiesDetectMock.mockResolvedValue(V2_EXECUTION_RUN_CAPABILITY);
         machineRpcWithServerScopeMock
-            .mockResolvedValueOnce({ runId: 'run_1', callId: 'call_1', sidechainId: 'side_1' })
             .mockResolvedValueOnce({ run: { runId: 'run_1', status: 'running' } })
             .mockResolvedValueOnce({ ok: true })
             .mockResolvedValueOnce({ ok: true, status: 'succeeded', result: { run: { runId: 'run_1', status: 'succeeded' } } });
@@ -111,15 +110,6 @@ describe('UI execution.run Action dependencies', () => {
         expect(capability).toEqual({ ok: true, exactMachineId: 'machine_mounted' });
         const exactOptions = { ...initialOptions, exactMachineId: 'machine_mounted' };
 
-        await expect(deps.executionRunStart(null, {
-            intent: 'delegate',
-            backendTarget: { kind: 'builtInAgent', agentId: 'codex' },
-            instructions: 'Inspect the change.',
-            permissionMode: 'read_only',
-            retentionPolicy: 'ephemeral',
-            runClass: 'bounded',
-            ioMode: 'request_response',
-        }, exactOptions)).resolves.toMatchObject({ runId: 'run_1' });
         await expect(deps.executionRunGet(null, { runId: 'run_1' }, exactOptions))
             .resolves.toMatchObject({ run: { status: 'running' } });
         await expect(deps.executionRunStop(null, { runId: 'run_1' }, exactOptions)).resolves.toEqual({ ok: true });
@@ -135,17 +125,23 @@ describe('UI execution.run Action dependencies', () => {
             'machine_mounted',
             'machine_mounted',
             'machine_mounted',
-            'machine_mounted',
         ]);
         expect(machineRpcWithServerScopeMock.mock.calls.map(([request]) => request.method)).toEqual([
-            SESSION_RPC_METHODS.EXECUTION_RUN_START,
             SESSION_RPC_METHODS.EXECUTION_RUN_GET,
             SESSION_RPC_METHODS.EXECUTION_RUN_STOP,
             SESSION_RPC_METHODS.EXECUTION_RUN_WAIT,
         ]);
-        expect(machineRpcWithServerScopeMock.mock.calls[3]?.[0]).toMatchObject({
+        expect(machineRpcWithServerScopeMock.mock.calls[2]?.[0]).toMatchObject({
             payload: { runId: 'run_1', timeoutSeconds: 10 },
         });
+    });
+
+    it('refuses an unscoped detached start before Machine transport when no captured requester exists', async () => {
+        expect(await createUiExecutionRunActionDeps().executionRunStart(null, { intent: 'agent' }, {
+            exactMachineId: 'machine-1', serverId: 'home-1', runtimeAccountId: 'requester',
+            surface: 'ui', authority: 'present_user', actionCaller: { kind: 'host' },
+        })).toMatchObject({ ok: false, errorCode: 'admission_unavailable' });
+        expect(machineRpcWithServerScopeMock).not.toHaveBeenCalled();
     });
 
     it('fails closed without an exact detached target and does not issue a machine RPC', async () => {
@@ -167,7 +163,7 @@ describe('UI execution.run Action dependencies', () => {
             error: 'execution_run_target_not_selected',
         });
         await expect(deps.executionRunStart(null, { intent: 'delegate' }, { serverId: 'server_1' }))
-            .resolves.toEqual({
+            .resolves.toMatchObject({
                 ok: false,
                 errorCode: 'execution_run_target_not_selected',
                 error: 'execution_run_target_not_selected',

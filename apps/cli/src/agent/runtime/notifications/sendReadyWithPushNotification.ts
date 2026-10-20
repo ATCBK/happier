@@ -13,6 +13,7 @@ import { getActiveAccountSettingsSnapshot, getActiveAccountSettingsSnapshotLifet
   isActiveAccountSettingsSnapshotLifetimeCurrent } from '@/settings/accountSettings/activeAccountSettingsSnapshot'
 import { createSavedSecretMaterializerFromSnapshotV1 } from '@/settings/secrets/savedSecretCatalog'
 import { logger } from '@/ui/logger'
+import type { ReadyNotificationTurnContext } from './createReadyNotificationDispatcher'
 
 type PushSender = LiveActivityRemoteSenderCandidate & SessionNotificationContextReader & {
   sendToAllDevices?: (title: string, body: string, opts: { sessionId: string; activityEventLocalId?: string }, deliveryOptions?: PushNotificationDeliveryOptions) => void
@@ -25,8 +26,10 @@ type ReadyTranscriptSession = Pick<SessionClientPort, 'sessionId'>
 export async function enqueueReadySessionEventCommitted(
   session: ReadyTranscriptSession,
   ownerActivityDelivery: 'rich_sender' | 'home_required' = 'home_required',
+  completedTurnId?: string,
 ): ReturnType<ReadyTranscriptSession['enqueueSessionEventCommitted']> {
-  const admission = await session.enqueueSessionEventCommitted({ type: 'ready', ownerActivityDelivery })
+  const admission = await session.enqueueSessionEventCommitted({ type: 'ready', ownerActivityDelivery,
+    ...(completedTurnId ? { completedTurnId } : {}) })
   if (!admission.persisted) {
     throw Object.assign(
       new Error('Ready event was not admitted to durable transcript custody'),
@@ -66,6 +69,7 @@ export async function sendReadyWithPushNotification(opts: {
   logPrefix: string
   sessionTitle?: string | null
   assistantPreviewText?: string | null
+  completedTurn?: ReadyNotificationTurnContext['completedTurn']
   includeAssistantPreviewText?: boolean
   accountSettings?: AccountSettings | null
   settingsSecretsReadKeys?: ReadonlyArray<Uint8Array | null | undefined>
@@ -81,7 +85,9 @@ export async function sendReadyWithPushNotification(opts: {
   const admission = await enqueueReadySessionEventCommitted(
     opts.session,
     hasRichAlertSender ? 'rich_sender' : 'home_required',
+    opts.completedTurn?.original ? undefined : opts.completedTurn?.turnId,
   )
+  const original = opts.completedTurn?.original ?? admission
 
   try {
     const fetchSessionNotificationContext = opts.pushSender.fetchSessionNotificationContext?.bind(opts.pushSender)
@@ -99,21 +105,32 @@ export async function sendReadyWithPushNotification(opts: {
             },
           }
         : null
-    void dispatchActivityNotificationAsync({
-      ...currentSettingsContext,
-      expoPushSender,
-      fetchSessionNotificationContext,
-      liveActivityRemoteSender: resolveLiveActivityRemoteSender(opts.pushSender),
-      event: {
-        topic: 'ready',
-        sessionId: opts.session.sessionId,
-        sessionTitle: opts.sessionTitle,
-        waitingForCommandLabel: opts.waitingForCommandLabel,
-        assistantPreviewText: opts.assistantPreviewText,
-        ...(admission.localId ? { committedLocalId: admission.localId } : {}),
-        ...(admission.committedSequence ? { committedSequence: admission.committedSequence } : {}),
-      },
-    }).catch((pushError) => {
+    void (async () => {
+      const committed = original.whenCommitted ? await original.whenCommitted : original
+      if (!committed) return
+      const contribution = committed.personalFollow
+      const sourceMessage = contribution?.sourceMessage
+      const admittedRulePolicies = opts.completedTurn && contribution?.sourceSessionId === opts.session.sessionId
+        && sourceMessage && sourceMessage.localId === committed.localId && sourceMessage.seq === committed.committedSequence
+        ? sourceMessage.policies : undefined
+      await dispatchActivityNotificationAsync({
+        ...currentSettingsContext,
+        expoPushSender,
+        fetchSessionNotificationContext,
+        readAccountSessionDeliveryMutedScopes: opts.pushSender.readAccountSessionDeliveryMutedScopes?.bind(opts.pushSender),
+        liveActivityRemoteSender: resolveLiveActivityRemoteSender(opts.pushSender),
+        admittedRulePolicies,
+        event: {
+          topic: 'ready',
+          sessionId: opts.session.sessionId,
+          sessionTitle: opts.sessionTitle,
+          waitingForCommandLabel: opts.waitingForCommandLabel,
+          assistantPreviewText: opts.assistantPreviewText,
+          ...(committed.localId ? { committedLocalId: committed.localId } : {}),
+          ...(committed.committedSequence ? { committedSequence: committed.committedSequence } : {}),
+        },
+      })
+    })().catch((pushError) => {
       loggerDebug(`${opts.logPrefix} Failed to send ready push`, serializeAxiosErrorForLog(pushError))
     })
   } catch (pushError) {

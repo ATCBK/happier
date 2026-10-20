@@ -253,7 +253,7 @@ describe('useExternalSessionBrowseCandidates pagination', () => {
         await act(async () => {
             await hook.getCurrent().loadMore();
         });
-        expect(hook.getCurrent().error).toBe('externalSessions.browseFailedToLoad');
+        expect(hook.getCurrent().error).toBe('externalSessions.browseAgentFailed');
         expect(hook.getCurrent().candidates.map((candidate) => candidate.remoteSessionId)).toEqual(['one', 'two']);
         expect(hook.getCurrent().nextCursor).toBe('cursor-2');
     });
@@ -759,7 +759,23 @@ describe('useExternalSessionBrowseCandidates pagination', () => {
             candidates: [],
             loading: false,
             preparation: null,
-            error: 'externalSessions.browseFailedToLoad',
+            error: 'externalSessions.browseAgentFailed',
+        });
+    });
+
+    it.each(['transport', 'agent'] as const)('retains 50 preparing Titles rows after a later %s failure', async failure => {
+        const servedRows = Array.from({ length: 50 }, (_, index) => ({
+            remoteSessionId: `native-${index}`, title: `Native title ${index}`, updatedAtMs: index + 1,
+            cwd: '/synthetic/project', messageCount: 2,
+        }));
+        candidatesListSpy.mockResolvedValueOnce(preparationPage(50, 661, servedRows));
+        if (failure === 'transport') candidatesListSpy.mockRejectedValueOnce(new Error('transport failed'));
+        else candidatesListSpy.mockResolvedValueOnce({ ok: false, errorCode: 'agent_timeout', retryable: true });
+        const { useExternalSessionBrowseCandidates } = await import('./useExternalSessionBrowseCandidates');
+        const hook = await renderHook(() => useExternalSessionBrowseCandidates(params));
+        expect(hook.getCurrent()).toMatchObject({
+            candidates: servedRows, candidatesAuthoritative: true, loading: false,
+            preparation: null, preparationStopped: true, error: expect.any(String),
         });
     });
 
@@ -835,25 +851,26 @@ describe('useExternalSessionBrowseCandidates pagination', () => {
         });
     });
 
-    it('stops at the cold-index request cap while keeping the candidates it already served actionable and marked incomplete', async () => {
-        const servedRows: readonly CandidateFixture[] = [
-            { remoteSessionId: 'served', updatedAtMs: 4 },
-        ];
-        let scanned = 0;
-        candidatesListSpy.mockImplementation(() => {
-            scanned += 10;
-            return Promise.resolve(preparationPage(scanned, 1_000_000, servedRows));
-        });
+    it.each([false, true])('finishes an advancing cold index beyond 250 preparation rounds (served rows: %s)', async (hasServedRows) => {
+        const servedRows: readonly CandidateFixture[] = hasServedRows
+            ? [{ remoteSessionId: 'served', updatedAtMs: 4 }]
+            : [];
+        for (let round = 1; round <= 251; round += 1) {
+            candidatesListSpy.mockResolvedValueOnce(preparationPage(round * 10, 2_510, servedRows));
+        }
+        candidatesListSpy.mockResolvedValueOnce(page([
+            { remoteSessionId: 'completed', title: 'Completed index', updatedAtMs: 5 },
+        ], 'completed-cursor'));
         const { useExternalSessionBrowseCandidates } = await import('./useExternalSessionBrowseCandidates');
         const hook = await renderHook(() => useExternalSessionBrowseCandidates(params));
 
-        expect(candidatesListSpy).toHaveBeenCalledTimes(250);
         expect(hook.getCurrent()).toMatchObject({
-            candidates: [expect.objectContaining({ remoteSessionId: 'served' })],
+            candidates: [expect.objectContaining({ remoteSessionId: 'completed' })],
             candidatesAuthoritative: true,
-            preparationStopped: true,
+            preparationStopped: false,
             loading: false,
             preparation: null,
+            nextCursor: 'completed-cursor',
             error: null,
         });
     });
@@ -915,7 +932,7 @@ describe('useExternalSessionBrowseCandidates pagination', () => {
             preparationStopped: false,
             loading: false,
             preparation: null,
-            error: 'externalSessions.browseFailedToLoad',
+            error: 'externalSessions.browseAgentFailed',
         });
     });
 
@@ -1033,7 +1050,7 @@ describe('useExternalSessionBrowseCandidates pagination', () => {
 
         expect(hook.getCurrent()).toMatchObject({
             candidates: [],
-            error: 'externalSessions.browseFailedToLoad',
+            error: 'externalSessions.browseAgentFailed',
             loading: false,
             preparation: null,
         });
@@ -1203,32 +1220,53 @@ describe('useExternalSessionBrowseCandidates pagination', () => {
         expect(hook.getCurrent().error).not.toBeNull();
     });
 
-    it('bounds automatic empty full-search continuation at twenty pages', async () => {
+    it.each([false, true])('exhausts more than twenty empty full-search pages (terminal match: %s)', async (hasMatch) => {
         candidatesListSpy.mockResolvedValueOnce({
             ...page([], 'fast-cursor'),
             searchIncomplete: true,
         });
-        for (let pageNumber = 1; pageNumber <= 20; pageNumber += 1) {
+        for (let pageNumber = 1; pageNumber <= 21; pageNumber += 1) {
             candidatesListSpy.mockResolvedValueOnce({
                 ...page([], `full-cursor-${pageNumber}`),
                 searchIncomplete: true,
             });
         }
+        candidatesListSpy.mockResolvedValueOnce(page(hasMatch
+            ? [{ remoteSessionId: 'deep-match', title: 'Deep result', updatedAtMs: 6 }]
+            : [], null));
         const { useExternalSessionBrowseCandidates } = await import('./useExternalSessionBrowseCandidates');
         const hook = await renderHook(() => useExternalSessionBrowseCandidates({
             ...params,
             searchTerm: 'deep result',
         }));
 
-        expect(candidatesListSpy).toHaveBeenCalledTimes(21);
-        expect(candidatesListSpy).toHaveBeenNthCalledWith(21, expect.objectContaining({
-            cursor: 'full-cursor-19',
-            limit: 50,
-            searchMode: 'full',
-        }), expect.objectContaining({ requestId: expect.any(String) }));
         expect(hook.getCurrent()).toMatchObject({
-            candidates: [],
-            nextCursor: 'full-cursor-20',
+            candidates: hasMatch ? [expect.objectContaining({ remoteSessionId: 'deep-match' })] : [],
+            nextCursor: null,
+            loading: false,
+            searchAugmenting: false,
+            searchIncomplete: false,
+            error: null,
+        });
+    });
+
+    it('stops automatic empty full-search continuation when a cursor cycles', async () => {
+        const preview = { remoteSessionId: 'preview', title: 'Preview', updatedAtMs: 1 };
+        candidatesListSpy
+            .mockResolvedValueOnce({ ...page([preview], 'fast-cursor'), searchIncomplete: true })
+            .mockResolvedValueOnce({ ...page([], 'full-cursor-1'), searchIncomplete: true })
+            .mockResolvedValueOnce({ ...page([], 'full-cursor-2'), searchIncomplete: true })
+            .mockResolvedValueOnce({ ...page([], 'full-cursor-1'), searchIncomplete: true })
+            .mockResolvedValueOnce(page([{ remoteSessionId: 'must-not-publish', updatedAtMs: 2 }], null));
+        const { useExternalSessionBrowseCandidates } = await import('./useExternalSessionBrowseCandidates');
+        const hook = await renderHook(() => useExternalSessionBrowseCandidates({
+            ...params,
+            searchTerm: 'deep result',
+        }));
+
+        expect(candidatesListSpy).toHaveBeenCalledTimes(4);
+        expect(hook.getCurrent()).toMatchObject({
+            candidates: [expect.objectContaining(preview)],
             loading: false,
             searchAugmenting: false,
             searchIncomplete: true,

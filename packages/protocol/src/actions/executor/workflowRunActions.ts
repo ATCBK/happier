@@ -2,7 +2,8 @@ import { deriveWorkflowReplacementId } from '../../workflows/workflowInvocationI
 import { z as zodMiniCore0 } from 'zod/mini';
 
 import { WorkflowAcceptedSnapshotV1Schema, type WorkflowDefinitionSavedByV1 } from '../../workflows/workflowDefinitionV1.js';
-import { deriveWorkflowDestinationsV1 } from '../../workflows/workflowDestinationsV1.js';
+import { deriveWorkflowDestinationsV1, WorkflowDiscussionOriginV1Schema, type WorkflowDiscussionOriginV1 } from '../../workflows/workflowDestinationsV1.js';
+import { listWorkflowAcceptedLeafSelectionsV1 } from '../../workflows/workflowStepSelectionV1.js';
 import { workflowBlockOrdinalV1 } from '../../workflows/workflowStepLabel.js';
 import { walkWorkflowBlocks } from '../../workflows/workflowDefinitionEditV1.js';
 import { WorkflowAuthoredInputV1Schema, WorkflowCheckpointEnvelopeV1Schema, WorkflowProgressEnvelopeV1Schema, WorkflowRunInvocationIndexV1Schema, WorkflowRunSummaryV1Schema, type WorkflowAuthoredInputV1, type WorkflowProgressEnvelopeV1, type WorkflowUsageV1, type WorkflowInvocationRecoveryAvailabilityV1, type WorkflowRunInvocationIndexV1, type WorkflowRunSummaryV1, classifyWorkflowHoldV1, isWorkflowDraftPublicationLifecycleV1, applyWorkflowInvocationFactV1 } from '../../workflows/workflowProgressV1.js';
@@ -10,9 +11,9 @@ import { WorkflowActionOutputSchemasV1, WorkflowRunWaitSnapshotV1Schema, Workflo
 import { materializeWorkflowAcceptedSnapshotV1, readWorkflowAcceptedAgentStartLeavesV1, readWorkflowRunLeafStartRequestV1 } from '../../workflows/materializeWorkflowAcceptedSnapshotV1.js';
 import { openWorkflowAcceptedSnapshotStoredEnvelopeV1, openWorkflowCheckpointStoredEnvelopeV1, openWorkflowFinalResultStoredEnvelopeV1, openWorkflowProgressStoredEnvelopeV1, parseWorkflowStoredContentEnvelopeV1, sealWorkflowAcceptedSnapshotStoredEnvelopeV1, sealWorkflowCheckpointStoredEnvelopeV1, sealWorkflowProgressStoredEnvelopeV1, serializeWorkflowStoredContentEnvelopeV1 } from '../../workflows/workflowStoredContentV1.js';
 import { validateWorkflowDefinition, matchesWorkflowAcceptedDefinitionV1 } from '../../workflows/workflowValidationV1.js';
-import { type WorkflowActionIdV1 } from '../actionIds.js';
+import type { WorkflowActionIdV1 } from '../actionIds.js';
 import { workflowInputToFieldHint, type WorkflowBlock, type WorkflowDefinitionV1, type WorkflowIngressContextV1 } from '../../workflows/workflowV1.js';
-import { type WorkflowWorkspaceProgressV1 } from '../../workflows/workflowWorkspaceV1.js';
+import type { WorkflowWorkspaceProgressV1 } from '../../workflows/workflowWorkspaceV1.js';
 import { formatWorkflowDefinitionRefV1 } from '../../workflows/workflowDefinitionRefV1.js';
 import { resolveWorkflowDefinitionRefV1 } from '../../workflows/workflowDefinitionResolverV1.js';
 import { WorkflowRunRecipientCensusResponseV1Schema, WorkflowRunRecipientKeyEnvelopeCommitResponseV1Schema, type WorkflowRunRecipientCensusResponseV1 } from '../../workflows/workflowRunKeyV1.js';
@@ -26,8 +27,8 @@ import { SessionInputCausalPermissionAuthorityV1Schema } from '../../sessions/me
 import { EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES } from '../externalActionLimits.js';
 import { assertNonEscalatingPermissionMode, resolveEffectivePermissionMode } from '../permissionPrivilege.js';
 import { StrictJsonValueSchema, sameStrictJsonValue } from '../../json/strictJsonValue.js';
-import {
-  type AvailableAutomationAccountEncryptionV1,
+import type {
+  AvailableAutomationAccountEncryptionV1,
 } from '../../automations/automationAccountCurrentnessV1.js';
 import type { ActionExecutorDeps, WorkflowActionExecuteArgs } from './types.js';
 import type { WorkflowRunActionOwner } from './workflowAccountActions.js';
@@ -36,8 +37,14 @@ import type { WorkflowPluginSourceReaderV1 } from '../../workflows/workflowPlugi
 import { resolveInputTypeOptions, readInputFieldOptionsConstraint, validateInputFieldSchema, validateInputFieldValue } from '../../inputs/inputTypeRuntime.js';
 import type { InputOption } from '../../inputs/inputFields.js';
 import { ActionExecuteFailureSchema } from '../actionExecutionResult.js';
-import { WorkflowOperationErrorCodeV1Schema } from '../../workflows/workflowProgressV1.js';
+import { WorkflowOperationErrorCodeV1Schema, type WorkflowOperationErrorCodeV1 } from '../../workflows/workflowProgressV1.js';
 import { actionStartTargetUnavailableV1, measureActionStartPhaseV1 } from './actionStartDiagnostics.js';
+import { prepareWorkflowRunStartV1, resolveWorkflowContextInputsV1, resolveWorkflowRunStartInputsV1 as resolveInputs,
+  supportsWorkflowAnotherRoundV1, WORKFLOW_PREVIOUS_ROUND_CONTEXT_INPUT_V1 } from '../../workflows/workflowStartPreparationV1.js';
+import { resolveActionCurrentSessionScopeFailure } from './sessionListAccess.js';
+import { readActionCallerLedSubtreeSessionIds } from './sessionLedSubtree.js';
+import { areServerProfileIdentifiersEquivalent } from '../../features/payload/capabilities/serverIdentityCapabilities.js';
+import { FollowPolicyV1Schema, type FollowPolicyV1 } from '../../sessions/follow/sessionFollowPolicyV1.js';
 
 export type WorkflowAccountRunEncryption = AvailableAutomationAccountEncryptionV1;
 
@@ -169,6 +176,8 @@ type Storage = Readonly<{
   observeChanges?: (runId: string, onChange: () => void, onError: (error: unknown) => void) => Readonly<{ dispose(): void | Promise<void> }>;
   execute: (operation: Readonly<Record<string, unknown>>, options?: Readonly<{
     signal?: AbortSignal;
+    /** Host-only witness emitted by the delete transport, never storage input. */
+    onTransportIssued?: () => void;
     /** Exact daemon machine that is authorized to publish this operation. */
     publisherMachineId?: string;
   }>) => Promise<unknown>;
@@ -189,6 +198,10 @@ type DefinitionReader = Readonly<{
 function record(value: unknown): Readonly<Record<string, unknown>> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw workflowError('content_unavailable');
   return value as Readonly<Record<string, unknown>>;
+}
+
+function projectRunCallerAccess(census: Pick<WorkflowRunRecipientCensusResponseV1, 'access'>) {
+  return { canEdit: census.access !== 'view' };
 }
 
 function workflowError(code: string, details?: unknown): Error & { code: string; details?: unknown } {
@@ -233,6 +246,9 @@ function isNotFound(error: unknown): boolean {
 function isIndeterminateWrite(error: unknown): boolean {
   return Boolean(error && typeof error === 'object'
     && !(error as { response?: unknown }).response
+    // Fetch's Account transport carries HTTP status directly; a received
+    // storage refusal is no more ambiguous than Axios's response wrapper.
+    && typeof (error as { status?: unknown }).status !== 'number'
     && (error as { code?: unknown }).code !== 'ERR_CANCELED');
 }
 
@@ -244,28 +260,6 @@ function sealMode(encryption: WorkflowRunEncryptionV1, randomBytes: (length: num
   return encryption.runCrypto.mode === 'e2ee'
     ? { ...encryption.runCrypto, randomBytes }
     : encryption.runCrypto;
-}
-
-function resolveInputs(definition: WorkflowDefinitionV1, supplied: Readonly<WorkflowRunAcceptedContextV1['inputs']> | undefined) {
-  const inputs: WorkflowRunAcceptedContextV1['inputs'] = {};
-  const known = new Set(definition.inputs.map((input) => input.name));
-  for (const key of Object.keys(supplied ?? {})) {
-    if (!known.has(key)) throw workflowError('invalid_input');
-  }
-  for (const input of definition.inputs) {
-    const value = supplied && Object.prototype.hasOwnProperty.call(supplied, input.name)
-      ? supplied[input.name]
-      : input.default;
-    if (value === undefined) {
-      if (input.required) throw workflowError('missing_reference');
-      continue;
-    }
-    if ((input.valueType === 'string' && typeof value !== 'string')
-      || (input.valueType === 'number' && typeof value !== 'number')
-      || (input.valueType === 'boolean' && typeof value !== 'boolean')) throw workflowError('invalid_input');
-    inputs[input.name] = value;
-  }
-  return inputs;
 }
 
 function parseSnapshot(value: unknown) {
@@ -336,6 +330,12 @@ function currentControllerAuthorization(args: RunArgs) {
   };
 }
 
+/** Public routing metadata excludes the host-private accepted request cause. */
+function projectAcceptedOrigin(origin: ReturnType<typeof WorkflowAcceptedSnapshotV1Schema.parse>['origin']) {
+  return origin ? { kind: origin.kind, ...(origin.originSessionId ? { originSessionId: origin.originSessionId } : {}),
+    ...(origin.discussion ? { discussion: origin.discussion } : {}) } : undefined;
+}
+
 function projectAcceptedContext(accepted: ReturnType<typeof WorkflowAcceptedSnapshotV1Schema.parse>) {
   const source = accepted.source;
   return WorkflowRunAcceptedContextV1Schema.parse('origin' in accepted
@@ -350,7 +350,7 @@ function projectAcceptedContext(accepted: ReturnType<typeof WorkflowAcceptedSnap
         ...(accepted.roleOverrides === undefined ? {} : { roleOverrides: accepted.roleOverrides }),
         materializedLeaves: accepted.materializedLeaves,
         frozenChildren: accepted.frozenChildren,
-        origin: accepted.origin,
+        origin: projectAcceptedOrigin(accepted.origin),
       }
     : {
         startedBy: accepted.startedBy,
@@ -444,18 +444,25 @@ async function assertAcceptedAuthorizationCurrent(
   }
 }
 
-function translateStorageError(error: unknown): never {
+/**
+ * `unconfirmedWrite` names the code for a mutation whose reply was lost: the
+ * write may have committed after the caller stopped waiting, so reporting it as
+ * a storage failure would claim a refusal the owner never confirmed.
+ */
+function translateStorageError(error: unknown, options: Readonly<{ unconfirmedWrite?: WorkflowOperationErrorCodeV1 }> = {}): never {
   if (error instanceof zodMiniCore0.core.$ZodError) throw workflowError('content_unavailable');
   const code = (error as { code?: unknown })?.code;
   if (code === 'ERR_CANCELED' || (error instanceof Error && error.name === 'AbortError')) throw error;
   const response = (error as { response?: { data?: { error?: unknown } } })?.response;
+  const status = (error as { status?: unknown })?.status;
   const responseError = response?.data?.error;
   const typedCode = WorkflowOperationErrorCodeV1Schema.safeParse(responseError ?? code);
   if (typedCode.success && code === typedCode.data) throw error;
   // A received HTTP response must stay distinguishable from a lost write
   // response; review/recovery use that fact to decide whether to rejoin.
-  throw Object.assign(workflowError(typedCode.success ? typedCode.data : 'storage_unavailable'),
-    { cause: error }, response === undefined ? {} : { response });
+  const unconfirmed = options.unconfirmedWrite !== undefined && !typedCode.success && isIndeterminateWrite(error);
+  throw Object.assign(workflowError(typedCode.success ? typedCode.data : unconfirmed ? options.unconfirmedWrite! : 'storage_unavailable'),
+    { cause: error }, response === undefined ? {} : { response }, typeof status === 'number' ? { status } : {});
 }
 
 export type WorkflowAccountRunActionDeps = Readonly<{
@@ -464,8 +471,17 @@ export type WorkflowAccountRunActionDeps = Readonly<{
   definitions: DefinitionReader;
   readPluginWorkflows?: WorkflowPluginSourceReaderV1;
   resolveEncryption: (signal?: AbortSignal) => Promise<AvailableAutomationAccountEncryptionV1>;
+  /** Read once for a new Run with origin reports; retries retain the accepted snapshot. */
+  resolveRunReportPolicy?: (args: WorkflowActionExecuteArgs<'workflow.run.start'>) => Promise<FollowPolicyV1>;
+  /** Canonical C3 authorized read supplies the immutable message sequence, never frontend input. */
+  resolveDiscussionOrigin?: (input: Readonly<{
+    origin: NonNullable<WorkflowActionExecuteArgs<'workflow.run.start'>['input']['origin']>;
+    context: WorkflowActionExecuteArgs<'workflow.run.start'>['context'];
+  }>) => Promise<WorkflowDiscussionOriginV1>;
   normalizeAbsolutePath: (directory: string) => string | null;
   resolveAgentStartContext?: ActionExecutorDeps['resolveAgentStartContext'];
+  sessionList?: ActionExecutorDeps['sessionList'];
+  resolveServerProfileScopeId?: ActionExecutorDeps['resolveServerProfileScopeId'];
   inputTypeDeps?: Pick<ActionExecutorDeps, 'resolveInputType' | 'readInputTypeResource'>;
   resolveMaterializationContext?: (args: WorkflowActionExecuteArgs<'workflow.run.start'>, target: Readonly<{
     machineId: string;
@@ -484,6 +500,7 @@ export type WorkflowAccountRunActionDeps = Readonly<{
     checkpoint: WorkflowCheckpoint | null;
     executionTarget: ReturnType<typeof WorkflowAcceptedSnapshotV1Schema.parse>['executionTarget'];
     materializedLeaves: ReturnType<typeof WorkflowAcceptedSnapshotV1Schema.parse>['materializedLeaves'];
+    inputs: ReturnType<typeof WorkflowAcceptedSnapshotV1Schema.parse>['inputs'];
     sessionId: string;
   }>) => boolean;
   isAcceptedAuthorizationCurrent?: WorkflowAcceptedAuthorizationCurrentness;
@@ -508,7 +525,7 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
           // Exact Run reads own their not-found projection; all other transport
           // failures are classified here before any private content is opened.
           if (isNotFound(error)) throw error;
-          translateStorageError(error);
+          translateStorageError(error, operation.operation === 'admit' ? { unconfirmedWrite: 'workflow_outcome_unresolved' } : {});
         }
         deps.assertCurrent?.();
         return result;
@@ -542,7 +559,10 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
   const prepareRunRecipients = async (runId: string, enc: WorkflowRunEncryptionV1, census: WorkflowRunRecipientCensusResponseV1, signal?: AbortSignal) =>
     await runWorkflowRecipientKeyPreparationV1({ runId, runCrypto: enc.runCrypto,
       openedDataEncryptionKey: census.callerDataEncryptionKey, randomBytes: deps.randomBytes,
-      readCensus: async () => WorkflowRunRecipientCensusResponseV1Schema.parse(await deps.storage.execute({ operation: 'run-key.census', runId }, signal ? { signal } : {})),
+      // The authorized snapshot/page already carries this census. Re-reading it
+      // serially for every row gates the whole list on N redundant round trips.
+      // The commit rechecks live access, the owner key and recipient bindings.
+      readCensus: async () => census,
       commit: async input => WorkflowRunRecipientKeyEnvelopeCommitResponseV1Schema.parse(await deps.storage.execute({ operation: 'run-key.commit', ...input }, signal ? { signal } : {})),
       ...(signal ? { signal } : {}),
     });
@@ -646,6 +666,7 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
         checkpoint,
         executionTarget: opened.accepted.executionTarget,
         materializedLeaves: opened.accepted.materializedLeaves,
+        inputs: opened.accepted.inputs,
         sessionId,
       })) {
         throw workflowError('workflow_wait_self_dependency', { runId: args.input.runId });
@@ -660,6 +681,28 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
     const replayRequest = input.source.kind === 'inline' ? input.source.replay : undefined;
     if (replayRequest?.runId === input.runId) throw workflowError('invalid_input');
     const replaySource = replayRequest ? await openAccepted(replayRequest.runId, args.context.signal) : undefined;
+    let startInputs = input.inputs ?? replaySource?.accepted.inputs;
+    if (replayRequest?.intent === 'another_round' && replaySource) {
+      if (!['succeeded', 'failed', 'cancelled'].includes(replaySource.snapshot.run.state)
+        || replayRequest.agentOverride !== undefined
+        || !supportsWorkflowAnotherRoundV1(replaySource.accepted.authoredDefinition)
+        || (input.inputs !== undefined && !sameStrictJsonValue(input.inputs, replaySource.accepted.inputs))) {
+        throw workflowError('invalid_input');
+      }
+      // Existing authorized invocation readers own paging, encryption and exact attempts.
+      // Only committed results are included; private held drafts and execution credentials never become context.
+      const graph = await readInvocationGraph(replayRequest.runId, replaySource, args.context.signal);
+      const outcomes = [...graph.values()]
+        .filter(row => !isStructuralRecoveryFrame(row.progress.blockKind) && isCurrentInvocation(graph, row))
+        .sort((a, b) => BigInt(a.index.sequence) < BigInt(b.index.sequence) ? -1 : BigInt(a.index.sequence) > BigInt(b.index.sequence) ? 1 : 0)
+        .map(({ index, progress }) => ({ invocationRecordId: index.id, attempt: index.attempt,
+          blockId: progress.invocationPath.blockId, lifecycle: index.lifecycle,
+          ...(progress.result === undefined ? {} : { result: progress.result }),
+          ...(progress.reason === undefined ? {} : { reason: progress.reason }),
+        }));
+      startInputs = { ...replaySource.accepted.inputs,
+        [WORKFLOW_PREVIOUS_ROUND_CONTEXT_INPUT_V1]: StrictJsonValueSchema.parse({ runId: replayRequest.runId, state: replaySource.snapshot.run.state, outcomes }) };
+    }
     if (replaySource) {
       assertRunResourceRestriction(args.context, { machineId: replaySource.accepted.machineId,
         project: replaySource.accepted.workspaceTarget.project }, deps.normalizeAbsolutePath);
@@ -667,13 +710,32 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
         || (input.executionTarget !== undefined && !sameStrictJsonValue(input.executionTarget, replaySource.accepted.executionTarget))
         || (input.metadata !== undefined && !sameStrictJsonValue(input.metadata, replaySource.accepted.metadata))) throw workflowError('invalid_input');
     }
-    const originSessionId = replaySource ? replaySource.accepted.origin?.originSessionId : args.context.defaultSessionId ?? undefined;
-    if (replaySource && args.context.defaultSessionId && args.context.defaultSessionId !== originSessionId) throw workflowError('invalid_input');
-    const resultDelivery = input.onComplete ?? (replaySource?.accepted.resultDelivery ? { kind: 'originating_session' as const } : undefined) ?? (args.context.surface === 'agent'
+    const replayDiscussion = replaySource?.accepted.origin?.discussion;
+    const requestedDiscussion = input.origin ?? (replayDiscussion ? { kind: 'discussion' as const,
+      discussion: replayDiscussion.discussion, addressingMessageId: replayDiscussion.messageId } : undefined);
+    if (replaySource && input.origin && !sameStrictJsonValue(input.origin,
+      replayDiscussion ? { kind: 'discussion', discussion: replayDiscussion.discussion, addressingMessageId: replayDiscussion.messageId } : undefined)) {
+      throw workflowError('invalid_input');
+    }
+    const originSessionId = replaySource ? replaySource.accepted.origin?.originSessionId
+      : requestedDiscussion ? undefined : args.context.defaultSessionId ?? undefined;
+    if (replaySource && !replayDiscussion && args.context.defaultSessionId && args.context.defaultSessionId !== originSessionId) throw workflowError('invalid_input');
+    const resultDelivery = input.onComplete ?? (replaySource?.accepted.resultDelivery
+      ? { kind: replaySource.accepted.resultDelivery.kind } : undefined) ?? (args.context.surface === 'agent'
       && args.context.authority !== 'present_user' && originSessionId
       ? { kind: 'originating_session' as const }
       : undefined);
-    if (resultDelivery && !originSessionId) throw workflowError('invalid_input');
+    if (resultDelivery?.kind === 'originating_session' && !originSessionId
+      || resultDelivery?.kind === 'originating_discussion' && !requestedDiscussion) throw workflowError('invalid_input');
+    const resolveDiscussion = async () => {
+      if (!requestedDiscussion) return undefined;
+      if (!args.context.serverId || !areServerProfileIdentifiersEquivalent(args.context.serverId, requestedDiscussion.discussion.serverId)
+        || !deps.resolveDiscussionOrigin) throw workflowError('run_access_denied');
+      const resolved = WorkflowDiscussionOriginV1Schema.parse(await deps.resolveDiscussionOrigin({ origin: requestedDiscussion, context: args.context }));
+      if (!sameStrictJsonValue(resolved.discussion, requestedDiscussion.discussion)
+        || resolved.messageId !== requestedDiscussion.addressingMessageId) throw workflowError('run_access_denied');
+      return resolved;
+    };
     const inputSource = input.source;
     if (inputSource.kind === 'catalog' && !deps.resolveMaterializationContext) throw workflowError('source_unavailable');
     const executionTarget = replaySource?.accepted.executionTarget ?? input.executionTarget ?? { kind: 'session' as const };
@@ -724,20 +786,35 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
           ? { workspaceRefId: existing.accepted.workspaceTarget.project.workspaceRefId }
           : {}),
       };
+      // Lost-Start rejoin uses the admitted source-context value, never a new
+      // metadata/default lookup. Omitting an explicit different target is not
+      // equivalent to the original request.
+      const expectedInputs = { ...startInputs };
+      for (const field of existing.accepted.authoredDefinition.inputs) {
+        const value = existing.accepted.inputs[field.name];
+        if (!Object.hasOwn(expectedInputs, field.name) && field.defaultFrom === 'origin_session'
+          && value && typeof value === 'object' && 'sessionId' in value
+          && value.sessionId === existing.accepted.origin?.originSessionId) expectedInputs[field.name] = value;
+      }
       if (!sameSource
         || ((inputSource.kind === 'saved' || inputSource.kind === 'inline') && inputSource.visibleTeamId !== undefined
           && inputSource.visibleTeamId !== existing.snapshot.keyCensus.visibleTeamId)
         || !sameStrictJsonValue(existing.accepted.roleOverrides ?? [], replaySource?.accepted.roleOverrides ?? input.roleOverrides ?? [])
         || (expectedMetadata !== undefined && !sameStrictJsonValue(existing.accepted.metadata, expectedMetadata))
-        || !sameStrictJsonValue(existing.accepted.inputs, resolveInputs(existing.accepted.definition, input.inputs))
+        || !sameStrictJsonValue(existing.accepted.inputs, resolveInputs(existing.accepted.definition, expectedInputs))
         || existing.accepted.executionTarget.kind !== executionTarget.kind
         || !('origin' in existing.accepted)
         || existing.accepted.origin === undefined
-        || (args.context.defaultSessionId !== undefined && args.context.defaultSessionId !== null
+        || (!requestedDiscussion && args.context.defaultSessionId !== undefined && args.context.defaultSessionId !== null
           && existing.accepted.origin.originSessionId !== args.context.defaultSessionId)
-        || Boolean('resultDelivery' in existing.accepted && existing.accepted.resultDelivery) !== Boolean(resultDelivery)
+        || !sameStrictJsonValue(existing.accepted.origin.discussion ? { kind: 'discussion',
+          discussion: existing.accepted.origin.discussion.discussion, addressingMessageId: existing.accepted.origin.discussion.messageId } : undefined, requestedDiscussion)
+        || existing.accepted.resultDelivery?.kind !== resultDelivery?.kind
         || !normalizedExpectedTarget
         || !sameStrictJsonValue(acceptedProjectTarget, normalizedExpectedTarget)) {
+        throw workflowError('currentness_conflict');
+      }
+      if (requestedDiscussion && !sameStrictJsonValue(existing.accepted.origin.discussion, await resolveDiscussion())) {
         throw workflowError('currentness_conflict');
       }
       await assertAcceptedAuthorizationCurrent(existing.accepted.authorization, args.context.signal, deps.isAcceptedAuthorizationCurrent);
@@ -750,6 +827,7 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
         if (!isNotFound(error)) throw error;
       }
     }
+    const discussionOrigin = await resolveDiscussion();
 
     let definition: WorkflowDefinitionV1;
     let metadata = replaySource ? replaySource.accepted.metadata ?? undefined : input.metadata;
@@ -834,7 +912,9 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
         ...(args.context.signal ? { signal: args.context.signal } : {}),
       }),
     } };
-    const resolvedInputs = resolveInputs(definition, input.inputs);
+    const preparedStart = prepareWorkflowRunStartV1({ definition, inputs: startInputs });
+    const resolvedInputs = await resolveWorkflowContextInputsV1({ definition, inputs: preparedStart.inputs,
+      originSessionId, resolveSessionTarget: materialization.effects.resolveSessionTarget });
     for (const field of definition.inputs ?? []) {
       if (!field.inputType || resolvedInputs[field.name] === undefined) continue;
       const hint = workflowInputToFieldHint(field);
@@ -874,6 +954,31 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
     const controller = currentControllerAuthorization(args);
     const resolvedAgentContext = args.context.surface === 'agent'
       ? await resolveActionAgentStartContextV1(deps, args.context) : null;
+    materialization = { ...materialization, effects: { ...materialization.effects,
+      admitSessionAuthority: async target => {
+        const context = args.context;
+        if (context.serverId && !areServerProfileIdentifiersEquivalent(target.address.serverId, context.serverId,
+          identifier => identifier === context.serverId || identifier === context.serverIdentityId
+            ? context.serverIdentityId : deps.resolveServerProfileScopeId?.(identifier))) return false;
+        const failure = await resolveActionCurrentSessionScopeFailure('reviews.comments.list', {
+          sessionId: target.address.sessionId, serverId: target.address.serverId,
+        }, controller.principal.kind === 'session' ? { ...context, surface: 'agent' } : context, { sessionId: 'current_session' }, {
+          resolveAgentStartContext: deps.resolveAgentStartContext,
+          sessionList: deps.sessionList ?? (async () => { throw new Error('session_scope_unavailable'); }),
+        });
+        return failure === null;
+      },
+    } };
+    let reportPolicy: FollowPolicyV1 | undefined;
+    if (resultDelivery?.kind === 'originating_session') {
+      if (!deps.resolveRunReportPolicy) throw workflowError('content_unavailable');
+      try {
+        reportPolicy = FollowPolicyV1Schema.parse(await deps.resolveRunReportPolicy(args));
+      } catch {
+        args.context.signal?.throwIfAborted();
+        throw workflowError('content_unavailable');
+      }
+    }
     const materialized = await measureActionStartPhaseV1(args.context, 'workflow_materialization',
       () => materializeWorkflowAcceptedSnapshotV1({
       definition, ...materialization,
@@ -898,14 +1003,20 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
       ...(metadata ? { metadata } : {}), source, inputs: resolvedInputs, machineId: projectTarget.machineId,
       executionTarget,
       workspaceTarget: preparedWorkspace.workspaceTarget,
-      origin: { kind: 'direct', ...(originSessionId ? { originSessionId } : {}) },
+      origin: { kind: 'direct', ...(originSessionId ? { originSessionId } : {}),
+        ...(discussionOrigin ? { discussion: discussionOrigin } : {}),
+        ...(args.context.actionRequestAttributionV1 ? { actionRequestAttributionV1: args.context.actionRequestAttributionV1 } : {}) },
       authorization: { principal: controller.principal,
         ...('sourceAuthority' in controller ? { sourceAuthority: controller.sourceAuthority } : {}) },
-      ...(resultDelivery && originSessionId ? {
+      ...(resultDelivery?.kind === 'originating_session' && originSessionId ? {
         resultDelivery: {
           kind: 'originating_session',
           originSessionId,
+          reportPolicy,
         },
+      } : {}),
+      ...(resultDelivery?.kind === 'originating_discussion' && discussionOrigin ? {
+        resultDelivery: { kind: 'originating_discussion', ...discussionOrigin },
       } : {}),
       },
     }));
@@ -945,12 +1056,15 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
     let result: Readonly<Record<string, unknown>>;
     try {
       result = record(await deps.storage.execute({
-        operation: 'admit', runId: input.runId, origin: accepted.origin, machineId: projectTarget.machineId,
+        operation: 'admit', runId: input.runId, origin: projectAcceptedOrigin(accepted.origin), machineId: projectTarget.machineId,
         accountCurrentness: enc.witness, acceptedEnvelope,
         sourceArtifactId,
         recipientKeyEnvelopes: prepared.recipientKeyEnvelopes,
         ...(census ? { visibleTeamId: census.visibleTeamId } : visibleTeamId ? { visibleTeamId } : {}),
         ...(resultDelivery ? { resultDelivery } : {}),
+        ...(discussionOrigin ? { discussionTargetSessionIds: [...new Set(accepted.materializedLeaves
+          .flatMap(listWorkflowAcceptedLeafSelectionsV1).flatMap(leaf => leaf.kind === 'step'
+            && leaf.selection.conversation?.kind === 'existing_session' ? [leaf.selection.conversation.sessionId] : []))] } : {}),
       }, {
         ...(args.context.signal ? { signal: args.context.signal } : {}),
         publisherMachineId: projectTarget.machineId,
@@ -2039,6 +2153,7 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
     const target = args.context.externalActionTarget;
     const restrictedRunId = 'runId' in args.input ? args.input.runId : undefined;
     if (target !== undefined && typeof restrictedRunId === 'string'
+      && args.actionId !== 'workflow.run.list'
       && args.actionId !== 'workflow.run.get'
       && args.actionId !== 'workflow.run.resume'
       && args.actionId !== 'workflow.run.invocations.retry') {
@@ -2062,11 +2177,14 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
       }
     }
     if (args.actionId === 'workflow.run.list') {
-      if (target !== undefined && (target.kind !== 'machine' || target.project
+      if (target !== undefined && (target.kind !== 'machine'
         || (args.input.machineId !== undefined && args.input.machineId !== target.machineId))) {
         throw workflowError('target_unavailable');
       }
       try {
+        const underSessionIds = args.input.underSessionId === undefined ? null
+          : deps.sessionList ? await readActionCallerLedSubtreeSessionIds({ sessionList: deps.sessionList }, args.context, args.input.underSessionId) : null;
+        if (args.input.underSessionId !== undefined && underSessionIds === null) throw workflowError('target_unavailable');
         const projectPage = async (raw: unknown) => {
           const storagePage = record(raw);
           const acceptedEnvelopesByRunId = record(storagePage.acceptedEnvelopesByRunId);
@@ -2079,10 +2197,16 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
           const rootProgressByRunId = record(storagePage.rootProgressByRunId ?? {});
           const heldProgressByRunId = record(storagePage.heldProgressByRunId ?? {});
           const metadataByRunId: Record<string, WorkflowRunPrivateMetadataV1> = {};
+          const supportsAnotherRoundByRunId: Record<string, boolean> = {};
+          const callerAccessByRunId: Record<string, ReturnType<typeof projectRunCallerAccess>> = {};
           const invocationProvenance: NonNullable<ReturnType<typeof WorkflowRunListResultV1Schema.parse>['invocationProvenance']> = [];
           const runs: WorkflowRunSummaryV1[] = [];
           for (const run of page.runs) {
+            let matchesResource = !(target?.kind === 'machine' && target.project);
             let matchesDestination = args.input.targetSessionId === undefined;
+            let matchesDiscussion = args.input.originDiscussionId === undefined;
+            let matchesUnder = underSessionIds === null || (run.origin.originSessionId !== undefined
+              && underSessionIds.has(run.origin.originSessionId));
             let projected: WorkflowRunPrivateMetadataV1 | null;
             let where: WorkflowRunSummaryV1['where'] = null;
             let startedBy: WorkflowRunSummaryV1['startedBy'] = null;
@@ -2108,6 +2232,14 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
               });
               if (opened.kind !== 'available') throw workflowError('content_unavailable');
               const accepted = WorkflowAcceptedSnapshotV1Schema.parse(opened.content);
+              callerAccessByRunId[run.id] = projectRunCallerAccess(census);
+              supportsAnotherRoundByRunId[run.id] = supportsWorkflowAnotherRoundV1(accepted.authoredDefinition);
+              matchesDiscussion = args.input.originDiscussionId === undefined || Boolean(args.context.serverId
+                && accepted.origin?.discussion?.discussion.discussionId === args.input.originDiscussionId
+                && areServerProfileIdentifiersEquivalent(accepted.origin.discussion.discussion.serverId, args.context.serverId));
+              assertRunResourceRestriction(args.context, { machineId: accepted.machineId,
+                project: accepted.workspaceTarget.project }, deps.normalizeAbsolutePath);
+              matchesResource = true;
               // Resolve authored names against the accepted definition, never a mutable source.
               // Nested workflows have local ids; branch scope does not change their numbering.
               const authoredContext = (path: WorkflowProgressEnvelopeV1['invocationPath']) => {
@@ -2161,9 +2293,11 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
                     ...(resultProvenance?.[index.id] ? { notificationCondition: resultProvenance[index.id]!.notificationCondition } : {}) });
                 }
               }
-              matchesDestination = args.input.targetSessionId === undefined || (accepted.targetSessionIds
+              const targetSessionIds = accepted.targetSessionIds
                 ?? deriveWorkflowDestinationsV1({ definition: accepted.definition, materializedLeaves: accepted.materializedLeaves,
-                  originSessionId: accepted.origin?.originSessionId }).targetSessionIds).includes(args.input.targetSessionId);
+                  originSessionId: accepted.origin?.originSessionId }).targetSessionIds;
+              matchesDestination = args.input.targetSessionId === undefined || targetSessionIds.includes(args.input.targetSessionId);
+              if (underSessionIds !== null) matchesUnder ||= targetSessionIds.some(id => underSessionIds.has(id));
               startedBy = accepted.startedBy;
               const project = accepted.workspaceTarget.project;
               where = { machineId: project.machineId, directory: project.directory,
@@ -2184,13 +2318,17 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
               const reason = WorkflowOperationErrorCodeV1Schema.safeParse(code);
               projected = { kind: 'unavailable', reason: reason.success ? reason.data : 'content_unavailable' };
             }
-            if (!matchesDestination) continue;
+            if (!matchesResource || !matchesDestination || !matchesUnder || !matchesDiscussion) continue;
             runs.push({ ...run, where, startedBy, stepProgress, stepProgressCurrentness, heldStep });
             if (projected) metadataByRunId[run.id] = projected;
           }
           return WorkflowActionOutputSchemasV1[args.actionId].parse({
             runs,
             metadataByRunId,
+            supportsAnotherRoundByRunId: Object.fromEntries(runs.flatMap(run =>
+              supportsAnotherRoundByRunId[run.id] === undefined ? [] : [[run.id, supportsAnotherRoundByRunId[run.id]]])),
+            callerAccessByRunId: Object.fromEntries(runs.flatMap(run =>
+              callerAccessByRunId[run.id] === undefined ? [] : [[run.id, callerAccessByRunId[run.id]]])),
             ...(args.input.invocationProvenance ? { invocationProvenance: invocationProvenance.filter(fact => runs.some(run => run.id === fact.index.runId)) } : {}),
             ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
           });
@@ -2198,12 +2336,14 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
         let cursor = args.input.cursor;
         for (;;) {
           args.context.signal?.throwIfAborted();
-          const request = { ...args.input, ...(target?.kind === 'machine' ? { machineId: target.machineId } : {}),
+          const { originDiscussionId: _privateDiscussionFilter, ...storageInput } = args.input;
+          const request = { ...storageInput, ...(target?.kind === 'machine' ? { machineId: target.machineId } : {}),
             ...(cursor === undefined ? {} : { cursor }) };
           const page = await projectPage(await deps.storage.execute({ operation: 'list', request,
             pageByteLimit: EXTERNAL_ACTION_RESPONSE_MAX_SERIALIZED_BYTES,
           }, args.context.signal ? { signal: args.context.signal } : {}));
-          if (args.input.targetSessionId === undefined || page.runs.length > 0 || !page.nextCursor) return page;
+          if ((args.input.originDiscussionId === undefined && args.input.targetSessionId === undefined && args.input.underSessionId === undefined && !(target?.kind === 'machine' && target.project))
+            || page.runs.length > 0 || !page.nextCursor) return page;
           cursor = page.nextCursor;
         }
       } catch (error) {
@@ -2212,7 +2352,11 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
     }
     if (args.actionId === 'workflow.run.pause' || args.actionId === 'workflow.run.cancel' || args.actionId === 'workflow.run.delete') {
       try {
-        return WorkflowActionOutputSchemasV1[args.actionId].parse(await deps.storage.execute({ operation: args.actionId.slice('workflow.run.'.length), ...args.input }, args.context.signal ? { signal: args.context.signal } : {}));
+        return WorkflowActionOutputSchemasV1[args.actionId].parse(await deps.storage.execute({ operation: args.actionId.slice('workflow.run.'.length), ...args.input }, {
+          ...(args.context.signal ? { signal: args.context.signal } : {}),
+          ...(args.actionId === 'workflow.run.delete' && args.context.onTransportIssued
+            ? { onTransportIssued: args.context.onTransportIssued } : {}),
+        }));
       } catch (error) {
         translateStorageError(error);
       }
@@ -2270,7 +2414,7 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
       const { stepProgress, stepProgressCurrentness } = openRootProgress(args.input.runId, snapshot.rootProgress, enc, accountId);
       return WorkflowActionOutputSchemasV1[args.actionId].parse({
         run: { ...snapshot.run, stepProgress, stepProgressCurrentness },
-        callerAccess: { canEdit: snapshot.keyCensus.access !== 'view' },
+        callerAccess: projectRunCallerAccess(snapshot.keyCensus),
         definition: accepted.definition,
         authoredDefinition: accepted.authoredDefinition,
         acceptedContext: projectAcceptedContext(accepted),
@@ -2442,6 +2586,8 @@ export function createWorkflowAccountRunActionOwner(deps: WorkflowAccountRunActi
         ? await deriveRetryCausalSet(graph, opened.index.id, run, args.context.signal)
         : initialAvailability.retry;
       return WorkflowActionOutputSchemasV1[args.actionId].parse({
+        ...(acceptedRun.accepted.resultDelivery?.kind === 'originating_discussion'
+          ? { discussionResultDelivery: acceptedRun.accepted.resultDelivery } : {}),
         invocation: {
           index: opened.index,
           progress: opened.progress,

@@ -1,40 +1,62 @@
 import type { ToolCallMessage } from '@happier-dev/session-core/messages';
 import type { TranscriptPermissionDisabledReason } from '@/utils/sessions/deriveTranscriptInteraction';
 import { resolveInactiveSessionToolCallFailure } from '@/components/tools/shell/permissions/resolveInactiveSessionToolCallFailure';
+import { resolveToolActionFailure } from '@/components/tools/shell/presentation/resolveToolActionFailure';
 import { resolveToolStatusIndicatorKind } from '@/components/tools/shell/presentation/resolveToolStatusIndicatorKind';
+import { projectReviewToolMessage } from '@/components/sessions/reviews/messages/projectReviewToolMessage';
 
-export type ToolCallsGroupStatus = 'running' | 'completed' | 'error' | 'permission_denied' | 'permission_canceled';
+export type ToolCallsGroupStatus = 'running' | 'completed' | 'error' | 'refused' | 'permission_denied' | 'permission_canceled';
 
-export function resolveToolCallsGroupStatus(params: Readonly<{
+/** What a group's header says: its one status, and how many calls failed or were refused. */
+export type ToolCallsGroupSummary = Readonly<{
+    status: ToolCallsGroupStatus;
+    failed: number;
+    refused: number;
+    /** True when a typed Action failure is among the failures, so the header uses the row's word ("Failed"). */
+    failuresAreActionOutcomes: boolean;
+}>;
+
+export function resolveToolCallsGroupSummary(params: Readonly<{
     toolMessages: readonly ToolCallMessage[];
     permissionDisabledReason?: TranscriptPermissionDisabledReason;
     showToolCalls?: boolean;
-}>): ToolCallsGroupStatus {
-    let sawError = false;
+}>): ToolCallsGroupSummary {
+    let failed = 0;
+    let refused = 0;
+    let failuresAreActionOutcomes = false;
     let sawPermissionDenied = false;
     let sawPermissionCanceled = false;
     let sawRunning = false;
     for (const message of params.toolMessages) {
         const tool = resolveInactiveSessionToolCallFailure({
-            tool: message.tool,
+            tool: projectReviewToolMessage(message).tool,
             permissionDisabledReason: params.permissionDisabledReason,
         });
         const kind = resolveToolStatusIndicatorKind(tool);
-        if (kind === 'running' || kind === 'permission_pending') {
-            if (params.showToolCalls !== false) return 'running';
-            sawRunning = true;
+        if (kind === 'running' || kind === 'permission_pending') sawRunning = true;
+        if (kind === 'error') {
+            // A refused call is the product saying no, not a break: it outranks nothing that failed.
+            const actionFailure = resolveToolActionFailure(tool);
+            if (actionFailure?.outcome === 'refused') refused += 1;
+            else {
+                failed += 1;
+                if (actionFailure) failuresAreActionOutcomes = true;
+            }
         }
-        if (kind === 'error') sawError = true;
         if (kind === 'permission_blocked') {
             if (tool.permission?.status === 'denied') sawPermissionDenied = true;
             else sawPermissionCanceled = true;
         }
     }
-    if (sawError) return 'error';
-    if (sawPermissionDenied) return 'permission_denied';
-    if (sawPermissionCanceled) return 'permission_canceled';
-    if (sawRunning) return 'running';
-    return 'completed';
+    const status: ToolCallsGroupStatus =
+        sawRunning && params.showToolCalls !== false ? 'running'
+            : failed > 0 ? 'error'
+                : refused > 0 ? 'refused'
+                    : sawPermissionDenied ? 'permission_denied'
+                        : sawPermissionCanceled ? 'permission_canceled'
+                            : sawRunning ? 'running'
+                                : 'completed';
+    return { status, failed, refused, failuresAreActionOutcomes };
 }
 
 /** Shared row visibility for virtualized groups and whole-group transcript hosts. */

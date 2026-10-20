@@ -23,7 +23,7 @@ import { t } from '@/text';
 import { workflowEditorStyles } from './workflowEditorStyles';
 import { formatWorkflowValueReference, WorkflowReferenceSentence, WorkflowValueReferenceEditor } from './WorkflowStepDataEditor';
 
-const DEFAULT_CONDITION: WorkflowCondition = { kind: 'exists', value: { kind: 'literal', value: true } };
+const DEFAULT_CONDITION: Extract<WorkflowCondition, { kind: 'exists' }> = { kind: 'exists', value: { kind: 'literal', value: true } };
 const CONDITION_KINDS = ['exists', 'compare', 'all', 'any', 'not'] as const;
 const CONDITION_KIND_LABEL_KEYS = {
     exists: 'workflows.condition.exists',
@@ -41,16 +41,28 @@ const OPERATOR_LABEL_KEYS = {
     gte: 'workflows.condition.operatorGte',
 } as const;
 
-function conditionForKind(kind: WorkflowCondition['kind']): WorkflowCondition {
-    if (kind === 'exists') return DEFAULT_CONDITION;
+function conditionForKind(kind: WorkflowCondition['kind'], previous: WorkflowCondition): WorkflowCondition {
+    if (kind === previous.kind) return previous;
+    if (kind === 'not') return { kind, condition: previous };
+    if (kind === 'all' || kind === 'any') return {
+        kind,
+        conditions: previous.kind === 'all' || previous.kind === 'any' ? previous.conditions : [previous],
+    };
+    // Wrapping/unwrapping one condition does not change its selected operand.
+    if (previous.kind === 'not') return conditionForKind(kind, previous.condition);
+    if ((previous.kind === 'all' || previous.kind === 'any') && previous.conditions.length === 1) {
+        return conditionForKind(kind, previous.conditions[0]!);
+    }
+    const value = previous.kind === 'exists' ? previous.value
+        : previous.kind === 'compare' ? previous.left : DEFAULT_CONDITION.value;
+    if (kind === 'exists') return { kind, value };
     if (kind === 'compare') return {
         kind,
         operator: 'eq',
-        left: { kind: 'literal', value: true },
+        left: value,
         right: { kind: 'literal', value: true },
     };
-    if (kind === 'not') return { kind, condition: DEFAULT_CONDITION };
-    return { kind, conditions: [DEFAULT_CONDITION] };
+    return DEFAULT_CONDITION;
 }
 
 /**
@@ -238,7 +250,7 @@ function ConditionNode(props: Readonly<{
                 options={CONDITION_KINDS}
                 label={(kind) => t(CONDITION_KIND_LABEL_KEYS[kind])}
                 onChange={(kind) => {
-                    if (kind !== condition.kind) props.onChange(conditionForKind(kind));
+                    if (kind !== condition.kind) props.onChange(conditionForKind(kind, condition));
                 }}
                 testIDPrefix={`${props.testIDPrefix}-kind`}
             />

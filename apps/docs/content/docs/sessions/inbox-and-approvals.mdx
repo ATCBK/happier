@@ -204,6 +204,27 @@ authority. **Approved** records that decision; only the execution result establi
 that the document saved. The Session Work editor and its review presentation are
 still being integrated, so this is not a released editor workflow.
 
+### Shared Bot confirmation in 0.3 development
+
+When someone asks a shared Bot to make an outward write, the development Action
+policy asks for confirmation by default. For a known requester using another
+Account's Bot, the request binds that person, the exact Action and arguments,
+and the original Bot execution. Only that requester can supply this decision
+while still entitled to invoke the Bot; a different teammate cannot take their
+place. The entitled requester receives access to the approval preview through
+the existing document sharing mechanism.
+
+The Bot's original credentials perform the write. Approving does not lend the
+requester's credentials to it. Missing or revoked authority refuses the effect;
+reading a preview alone supplies no decision authority.
+
+Under **Settings → Actions**, **Ask first** requires confirmation and **Allowed**
+waives configurable confirmation for that Action and surface. A waiver never
+makes an Agent a person, grants access, or lets it accept a Doc edit proposal.
+This is an unreleased contract; shared byline rendering is still being integrated.
+See [Teams](/accounts/teams#request-attribution-in-03-development) for how requester,
+answerer and execution identity differ.
+
 ### Why Happier uses approvals
 
 Approvals give you:

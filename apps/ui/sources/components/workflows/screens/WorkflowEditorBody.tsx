@@ -8,6 +8,7 @@ import { AppPaneScopeHost, type AppPaneDestinationDetails } from '@/components/a
 import { DEFAULT_MAIN_MIN_PX } from '@/components/ui/panels/paneBreakpoints';
 import { FloatingOverlay } from '@/components/ui/overlays/FloatingOverlay';
 import { Popover } from '@/components/ui/popover/Popover';
+import { POPOVER_PREFERRED_ROOM_PX } from '@/components/ui/popover/popoverPreferredRoom';
 import { useDetailsPaneAvailable } from '@/components/appShell/panes/details/detailsPaneAvailability';
 import { useAppPaneScope } from '@/components/appShell/panes/hooks/useAppPaneScope';
 import { PaneHeader } from '@/components/appShell/panes/PaneHeader';
@@ -282,6 +283,9 @@ const styles = StyleSheet.create((theme) => ({
         paddingHorizontal: theme.space.s12,
         paddingBottom: theme.space.s8,
     },
+    settingsModalBody: {
+        paddingHorizontal: theme.space.s16,
+    },
     /** The seeded composer at the foot of the Agent tab, where the Session's own composer will sit. */
     agentDraft: {
         flex: 1,
@@ -311,15 +315,6 @@ export type WorkflowEditorCommands = Readonly<{
     focusPrompt: (blockId: string) => void;
 }>;
 
-/** Step options on a phone: the same inspector content, in `@/modal`. */
-function WorkflowStepOptionsModal(props: WorkflowSettingsModalProps & CustomModalInjectedProps): React.ReactElement {
-    return (
-        <ItemList>
-            <WorkflowInspector {...props.inspector} />
-        </ItemList>
-    );
-}
-
 type WorkflowSettingsModalProps = Readonly<{
     inspector: React.ComponentProps<typeof WorkflowInspector>;
 }>;
@@ -327,7 +322,8 @@ type WorkflowSettingsModalProps = Readonly<{
 /** Workflow settings on a phone: the same inspector content, in `@/modal`. */
 function WorkflowSettingsModal(props: WorkflowSettingsModalProps & CustomModalInjectedProps): React.ReactElement {
     return (
-        <ItemList>
+        // The card body is a contained page: it owns the edge its sections sit on (the header's), as the docked pane's does.
+        <ItemList containerStyle={styles.settingsModalBody}>
             <WorkflowInspector {...props.inspector} />
         </ItemList>
     );
@@ -350,6 +346,7 @@ const STEP_OPTIONS_MAX_HEIGHT_PX = 640;
 export type WorkflowEditorView = 'steps' | 'flow';
 
 export type WorkflowEditorBodyProps = Readonly<{
+    accountLifetime?: import('@/sync/domains/scope/serverAccountScope').ServerAccountScopeLifetime | null;
     draft: WorkflowEditorDraft;
     highlightedBlockIds?: readonly string[];
     authoringSessionId?: string | null;
@@ -554,12 +551,17 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
     const settingsModalRef = React.useRef<string | null>(null);
     /** Field-level issues stay silent until an explicit Run or Save is refused (B3). */
     const [issuesRevealed, setIssuesRevealed] = React.useState(false);
-    const stepOptionsModalRef = React.useRef<{ id: string; blockId: string } | null>(null);
-    /** Step options open as an anchored popover beside the step's Customize control (wide layouts). */
+    /** Step options: an anchored popover beside the step's control; a phone shows it as the shared sheet. */
     const [stepOptionsPopover, setStepOptionsPopover] = React.useState<Readonly<{
         blockId: string;
+        /** The control that opened it: focus returns here. */
         anchorRef: React.RefObject<View | null>;
+        /** What the panel sits beside: the step's card when it has one, else the control. */
+        placementRef: React.RefObject<View | null>;
     }> | null>(null);
+    // The inspector survives the phone/wide document remount. Its placement refs
+    // must survive too, so the new list attaches its live cards to the same refs.
+    const stepCardRefs = React.useRef(new Map<string, React.RefObject<View | null>>());
     const promptFocusByBlockId = React.useRef(new Map<string, () => void>());
     const pendingPromptFocusId = React.useRef<string | null>(null);
     const registerPromptRef = React.useCallback((blockId: string, focus: (() => void) | null) => {
@@ -870,52 +872,19 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
     }), [inspectorBaseProps, testIDPrefix]);
 
     const closeStepOptions = React.useCallback(() => setStepOptionsPopover(null), []);
-    // Step options: an anchored popover beside the step's Customize control on
-    // wide layouts, `@/modal` on a phone — one content either way.
-    const openInspector = React.useCallback((blockId: string, anchorRef: React.RefObject<View | null>) => {
+    // Step options: one presentation owner, the anchored popover beside the step's control.
+    // The popover itself presents as the shared bottom sheet on a phone.
+    const openInspector = React.useCallback((
+        blockId: string,
+        anchorRef: React.RefObject<View | null>,
+        cardRef?: React.RefObject<View | null>,
+    ) => {
         props.onCustomizeBlock(blockId);
         // Every block kind has Step options (04 §5.2): a step's, a leaf's or a container's.
         if (findWorkflowBlock(draft, blockId) === null) return;
-        if (!compactLayout) {
-            setStepOptionsPopover({ blockId, anchorRef });
-            return;
-        }
-        const id = Modal.show({
-            component: WorkflowStepOptionsModal,
-            props: { inspector: buildStepOptionsProps(blockId) },
-            focusReturnRef: { current: { focus: () => requestPromptFocus(blockId) } },
-            onRequestClose: () => {
-                stepOptionsModalRef.current = null;
-            },
-            closeOnBackdrop: true,
-            chrome: {
-                kind: 'card',
-                title: t('workflows.page.inspector.stepOptions'),
-                testID: `${testIDPrefix}-inspector-modal`,
-                bodyScroll: 'auto',
-                dimensions: { width: HAPPIER_PAGE_METRICS.dialogWidthPx.wide, maxHeightRatio: 0.92, size: 'md' },
-            },
-        });
-        stepOptionsModalRef.current = { id, blockId };
-    }, [buildStepOptionsProps, compactLayout, documentEditable, draft, props.onCustomizeBlock, requestPromptFocus, testIDPrefix]);
-
-    // Keep an open Step options current with the draft; close it when its step is gone.
-    React.useEffect(() => {
-        const open = stepOptionsModalRef.current;
-        if (open === null) return;
-        if (findWorkflowBlock(draft, open.blockId) === null) {
-            Modal.hide(open.id);
-            stepOptionsModalRef.current = null;
-            return;
-        }
-        Modal.update(open.id, { inspector: buildStepOptionsProps(open.blockId) });
-    }, [buildStepOptionsProps, documentEditable, draft]);
-    React.useEffect(() => () => {
-        const open = stepOptionsModalRef.current;
-        if (open !== null) Modal.hide(open.id);
-    }, []);
+        setStepOptionsPopover({ blockId, anchorRef, placementRef: cardRef ?? anchorRef });
+    }, [draft, props.onCustomizeBlock]);
     const stepOptionsPopoverBlockId = stepOptionsPopover !== null
-        && !compactLayout
         && findWorkflowBlock(draft, stepOptionsPopover.blockId) !== null
         ? stepOptionsPopover.blockId
         : null;
@@ -996,10 +965,16 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
     const stepOptionsPopoverNode = stepOptionsPopover === null || stepOptionsPopoverBlockId === null ? null : (
         <Popover
             open
-            anchorRef={stepOptionsPopover.anchorRef}
+            // Below (or, when there is no room, above) the step's card, so it never covers the card it edits.
+            anchorRef={stepOptionsPopover.placementRef}
             focusReturnRef={stepOptionsPopover.anchorRef}
             boundaryRef={null}
-            placement="auto-horizontal"
+            placement="auto-vertical"
+            placementMinSpace={POPOVER_PREFERRED_ROOM_PX}
+            phonePresentation="sheet"
+            sheetHeader="none"
+            sheetMaterial="solid"
+            accessibilityLabel={t('workflows.page.inspector.stepOptions')}
             edgePadding={{ horizontal: 12, vertical: 12 }}
             portal={{ web: { target: 'body' }, native: true, matchAnchorWidth: false }}
             maxWidthCap={STEP_OPTIONS_MAX_WIDTH_PX}
@@ -1010,6 +985,9 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
                 <FloatingOverlay
                     maxHeight={Math.min(maxHeight, STEP_OPTIONS_MAX_HEIGHT_PX)}
                     surfaceChrome="theme"
+                    // The options own their scroll below a pinned header (Back / title / Done).
+                    scrollEnabled={false}
+                    scrollViewStyle={{ flexShrink: 1, minHeight: 0 }}
                     containerStyle={{ width: Math.min(maxWidth, STEP_OPTIONS_MAX_WIDTH_PX) }}
                 >
                     <WorkflowInspector
@@ -1024,6 +1002,7 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
     const blockList = (
         <WorkflowBlockListEditor
             draft={draft}
+            cardRefs={stepCardRefs}
             highlightedBlockIds={props.highlightedBlockIds}
             list={{ kind: 'root' }}
             blocks={draft.blocks}
@@ -1357,6 +1336,7 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
                             {/* Icon controls on a phone too: the change's label is their accessible name (DESIGN-6 N20). */}
                             {historyIcons}
                         </View>
+                        {stepOptionsPopoverNode}
                         {props.view === 'flow' ? flowContent : null}
                     </View>
                 </KeyboardAwareScrollView>
@@ -1421,6 +1401,7 @@ export function WorkflowEditorBody(props: WorkflowEditorBodyProps): React.ReactE
             <View testID={`${testIDPrefix}-chips`} style={styles.chipsLine}>
                 <View style={styles.whereChip}>
                 <WorkflowProjectTargetControl
+                    accountLifetime={props.accountLifetime}
                     purpose="workflow"
                     ref={whereRef}
                     presentation="chip"

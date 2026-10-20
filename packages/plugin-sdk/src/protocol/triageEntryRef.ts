@@ -1,0 +1,24 @@
+import * as canonical from '@happier-dev/protocol/tasks/entryRefV1';
+
+import type { PluginContributionIdentity } from '../manifest.js';
+import type { PluginJsonSchema, ProtocolComposableSchema } from './protocolFacade.js';
+
+/** Declaration-neutral projection of the canonical source-qualified identity. */
+export type TriageEntryRefV1 = Readonly<{
+    source: PluginContributionIdentity;
+    kindId: string;
+    collisionScope: string;
+    entryId: string;
+}>;
+
+/** The SDK projects the same executable values; it owns no identity parser. */
+export const TriageEntryRefV1Schema: ProtocolComposableSchema<TriageEntryRefV1> = canonical.TriageEntryRefV1Schema;
+export const TriageEntryRefV1JsonSchema: PluginJsonSchema = canonical.TriageEntryRefV1JsonSchema;
+export const TriageIdentifierV1ProtocolSchema: ProtocolComposableSchema<string> = canonical.TriageIdentifierV1ProtocolSchema;
+export const TriageCollisionScopeV1ProtocolSchema: ProtocolComposableSchema<string> = canonical.TriageCollisionScopeV1ProtocolSchema;
+export const defineTriageSingleLineStringV1: (maxUtf8Bytes: number) => ProtocolComposableSchema<string> = canonical.defineTriageSingleLineStringV1;
+export const defineTriageCompositeIdentifierStringV1: (maxUtf8Bytes: number) => ProtocolComposableSchema<string> = canonical.defineTriageCompositeIdentifierStringV1;
+export const MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1 = canonical.MAX_TRIAGE_IDENTIFIER_UTF8_BYTES_V1;
+export const MAX_TRIAGE_COLLISION_SCOPE_UTF8_BYTES_V1 = canonical.MAX_TRIAGE_COLLISION_SCOPE_UTF8_BYTES_V1;
+export const TRIAGE_SINGLE_LINE_STRING_PATTERN_V1 = canonical.TRIAGE_SINGLE_LINE_STRING_PATTERN_V1;
+export const TRIAGE_COMPOSITE_IDENTIFIER_PATTERN_V1 = canonical.TRIAGE_COMPOSITE_IDENTIFIER_PATTERN_V1;

@@ -1,6 +1,6 @@
 import * as React from 'react';
 import renderer from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Keep the real owner graph behind boundary installation. The testkit barrel
 // also exports provider harnesses which can load Modal/text before configuration.
@@ -110,8 +110,84 @@ vi.mock('@/components/ui/text/Text', () => ({
 
 // Import the section once at module scope: collection carries no test or hook
 // timeout, so a cold module graph under host load cannot time out a test body.
+const { createProviderSettingsAccountHarness } = await import('@/dev/testkit/harness/providerSettingsHarness');
+const account = createProviderSettingsAccountHarness();
 const { useLocalRelayRuntimeControl } = await import('./useLocalRelayRuntimeControl');
 const { PersonalHomeRuntimeControlSection } = await import('./PersonalHomeRuntimeControlSection');
+
+describe('Personal Home Action approval composition', () => {
+    afterEach(async () => {
+        await standardCleanup();
+        await account.reset();
+    });
+
+    it('honors the Account backup waiver through the real mounted Action without a caller dialog', async () => {
+        await account.restore({ waivedActions: ['relay.runtime.personal_home.backup'] });
+        confirmRef().mockReset();
+        confirmRef().mockResolvedValue(false);
+        const harness = createScriptedRunnerHarness();
+        const screen = await renderScreen(React.createElement(PersonalHomeRuntimeControlSection, { runner: harness.runner }));
+
+        await screen.pressByTestIdAsync('settings.personalHomeRuntime.backup');
+
+        expect(confirmRef()).not.toHaveBeenCalled();
+        expect(harness.specByKind('relay.runtime.personal_home.backup.v1')?.params.purpose)
+            .toEqual({ kind: 'personal-home', canonicalServerUrl: 'http://127.0.0.1:43123' });
+    });
+
+    it('uses one canonical backup confirmation at default before starting the task', async () => {
+        await account.restore();
+        confirmRef().mockReset();
+        confirmRef().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+        const harness = createScriptedRunnerHarness();
+        const screen = await renderScreen(React.createElement(PersonalHomeRuntimeControlSection, { runner: harness.runner }));
+
+        await screen.pressByTestIdAsync('settings.personalHomeRuntime.backup');
+
+        expect(confirmRef()).toHaveBeenCalledTimes(1);
+        expect(confirmRef().mock.calls[0]?.[1]).toContain('operate a clone');
+        expect(harness.specByKind('relay.runtime.personal_home.backup.v1')).toBeDefined();
+    });
+
+    it('defers backup to the durable Account approval at explicit Ask without a caller dialog', async () => {
+        await account.restore();
+        await account.home.requireUiApproval(account.serverId, 'relay.runtime.personal_home.backup');
+        confirmRef().mockReset();
+        confirmRef().mockResolvedValue(false);
+        const harness = createScriptedRunnerHarness();
+        const screen = await renderScreen(React.createElement(PersonalHomeRuntimeControlSection, { runner: harness.runner }));
+
+        await screen.pressByTestIdAsync('settings.personalHomeRuntime.backup');
+
+        await vi.waitFor(() => expect(account.home.artifacts(account.serverId).list()).toHaveLength(1));
+        await vi.waitFor(() => expect(screen.getTextContent()).toContain('secrets.catalog.approvalPending'));
+        expect(confirmRef()).not.toHaveBeenCalled();
+        expect(harness.specByKind('relay.runtime.personal_home.backup.v1')).toBeUndefined();
+    });
+
+    it('keeps canonical backup refusal silent and leaves the runtime idle', async () => {
+        await account.restore();
+        confirmRef().mockReset();
+        confirmRef().mockResolvedValue(false);
+        const harness = createScriptedRunnerHarness();
+        const hook = await renderHook(() => useLocalRelayRuntimeControl({ runner: harness.runner }));
+        const screen = await renderScreen(React.createElement(PersonalHomeRuntimeControlSection, { controller: hook.getCurrent() }));
+        // Mount inspection is a separate real task; finish it before measuring backup refusal.
+        await waitForStartedKindCount(harness, 'relay.runtime.personal_home.inspect.v1', 1);
+        const inspectionTaskId = harness.taskIdByKind('relay.runtime.personal_home.inspect.v1')!;
+        await waitForTaskSubscription(harness, inspectionTaskId);
+        await renderer.act(async () => harness.resolveResult(inspectionTaskId, true, INSPECT_RESULT_DATA));
+        await vi.waitFor(() => expect(hook.getCurrent().isBusy).toBe(false));
+
+        await screen.pressByTestIdAsync('settings.personalHomeRuntime.backup');
+
+        expect(confirmRef()).toHaveBeenCalledTimes(1);
+        expect(harness.specByKind('relay.runtime.personal_home.backup.v1')).toBeUndefined();
+        expect(hook.getCurrent().lastErrorMessage).toBeNull();
+        expect(hook.getCurrent().operationSnapshot).toBeNull();
+        expect(hook.getCurrent().isBusy).toBe(false);
+    });
+});
 
 describe('Personal Home SSH task material custody', () => {
     it('hands relocation material to the runner without retaining it in the UI operation projection', async () => {

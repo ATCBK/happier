@@ -13,6 +13,27 @@ const type: ResolvedInputTypeV1 = { identity, occurrenceId: 'serving-1', definit
       required: ['repositoryId'], additionalProperties: false }, options: { resource: 'repositories' }, picker: 'repository-picker' }) };
 
 describe('typed inputs across consumer domains', () => {
+  it('normalizes a Bot to its executable Session and preserves ordered participant lists', () => {
+    const session = { serverId: 'home-b', sessionId: 'bot-session' };
+    const scalar = workflowInputToFieldHint(WorkflowInputDefinitionSchema.parse({
+      name: 'answerer', valueType: 'json', required: true, inputType: { hostType: 'agentParticipant' },
+    }));
+    const list = workflowInputToFieldHint(WorkflowInputDefinitionSchema.parse({
+      name: 'reviewers', valueType: 'json', multiple: true, required: true,
+      inputType: { hostType: 'agentParticipant' },
+    }));
+    expect(scalar.widget).toBe('select');
+    expect(list.widget).toBe('multiselect');
+    expect(validateInputFieldValue({ field: scalar, value: { kind: 'bot', session } })).toEqual({
+      status: 'valid', value: { kind: 'session', session },
+    });
+    expect(validateInputFieldValue({ field: list, value: [
+      { kind: 'bot', session }, { kind: 'session', session: { serverId: 'home-b', sessionId: 'other' } },
+    ] })).toMatchObject({ status: 'valid', value: [
+      { kind: 'session', session }, { kind: 'session', session: { serverId: 'home-b', sessionId: 'other' } },
+    ] });
+    expect(validateInputFieldValue({ field: scalar, value: { kind: 'person', personId: 'p' } }).status).toBe('invalid');
+  });
   it('admits only a closed Home-qualified machine value through the shared host input owner', () => {
     const field = InputFieldHintSchema.parse({ path: 'machine', title: 'Machine', widget: 'select', inputType: { hostType: 'machine' } });
     const reference = field.inputType!;
@@ -23,6 +44,15 @@ describe('typed inputs across consumer domains', () => {
     for (const invalid of [{ machineId: 'unqualified' }, { serverId: '', machineId: 'm' }, { ...machine, accountId: 'forged' }]) {
       expect(validateInputFieldValue({ field, value: invalid }).status).toBe('invalid');
     }
+  });
+  it('retains a declared option localization key through normalization without changing value admission', () => {
+    const field = InputFieldHintSchema.parse({ path: 'effect', title: 'Effect', widget: 'select', options: [
+      { value: 'stop', label: 'Stop', labelKey: 'actionPresentation.options.stop' },
+    ] });
+    const normalized = normalizeInputHintsText({ fields: [field] }, text => `Localized ${text}`).fields[0]!;
+    expect(normalized.options?.[0]).toMatchObject({ value: 'stop', label: 'Localized Stop', labelKey: 'actionPresentation.options.stop' });
+    expect(validateInputFieldValue({ field: normalized, value: 'stop' })).toEqual({ status: 'valid', value: 'stop' });
+    expect(validateInputFieldValue({ field: normalized, value: 'Localized Stop' }).status).toBe('invalid');
   });
   it('normalizes an optional setup prompt without replacing the noun title or changing value admission', () => {
     const fields = [{ path: 'repository', title: 'Repository', prompt: 'Which repository?', widget: 'text' as const },

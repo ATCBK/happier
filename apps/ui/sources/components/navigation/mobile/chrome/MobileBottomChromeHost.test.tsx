@@ -769,6 +769,22 @@ describe('MobileBottomChromeHost', () => {
         expect(bar.props.openDetailsTabCount).toBe(2);
     });
 
+    it.each(['ios', 'android'] as const)('honors immersive SCM details on %s with registered cockpit chrome', async os => {
+        platformState.os = os;
+        pathState.pathname = '/session/session-1/details';
+        authState.isAuthenticated = true;
+        settingsState.mobileWorkspaceExperienceV1 = 'cockpit';
+        deviceTypeState.value = 'phone';
+        searchParamsState.pane = { details: 'scmReview', scmView: 'walkthrough' };
+        cockpitRegistrationState.registration = {
+            sessionId: 'session-1', activeSurface: 'tabs', terminalTabAvailable: true,
+            openDetailsTabCount: 1, switchSurface: vi.fn(),
+        };
+        const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
+        const screen = await renderScreen(<MobileBottomChromeHost />);
+        expect(screen.tree.findAllByType('SessionCockpitTabBar' as never)).toHaveLength(0);
+    });
+
     it('shows session cockpit chrome when cockpit mode is enabled while already viewing a session', async () => {
         pathState.pathname = '/session/session-1';
         authState.isAuthenticated = true;
@@ -1050,14 +1066,13 @@ describe('MobileBottomChromeHost', () => {
         };
         const { MobileBottomChromeHost } = await import('./MobileBottomChromeHost');
         const screen = await renderScreen(<MobileBottomChromeHost />);
-        await act(async () => {
-            deviceTypeState.value = 'phone';
-            if (trigger === 'navigator') {
-                cockpitRegistrationState.registration = { ...cockpitRegistrationState.registration!, activeSurface: 'tabs' };
-                notifyCockpitRegistrationListeners();
-            }
-            screen.tree.update(<MobileBottomChromeHost newSessionRendersFloatingComposer />);
-        });
+        deviceTypeState.value = 'phone';
+        // Keep the canonical screen wrapper and its mounted observer while resizing.
+        await screen.update(<MobileBottomChromeHost newSessionRendersFloatingComposer />);
+        if (trigger === 'navigator') {
+            cockpitRegistrationState.registration = { ...cockpitRegistrationState.registration!, activeSurface: 'tabs' };
+            await act(async () => { notifyCockpitRegistrationListeners(); });
+        }
         if (trigger === 'press') {
             await act(async () => screen.tree.findByType('SessionCockpitTabBar' as never).props.onSurfacePress('tabs'));
         }

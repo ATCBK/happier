@@ -11,6 +11,55 @@ import { openArtifactPrivateRevisionMetadata } from '@/sync/domains/artifacts/ac
 import { createDeferred } from '@/dev/testkit';
 
 describe('createArtifactWithHeaderViaApi', () => {
+  it('derives coarse kind from the actual header for create and update', async () => {
+    const writes: Record<string, unknown>[] = [];
+    let current: DecryptedArtifact | undefined;
+    const request = async (path: string, init?: RequestInit) => {
+      if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+      const wire = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      writes.push(wire);
+      return Response.json(path === '/v1/artifacts'
+        ? { ...wire, ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain',
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 }
+        : { success: true, headerVersion: 2, bodyVersion: 2 });
+    };
+    const { createArtifactWithHeaderViaApi, updateArtifactWithHeaderViaApi } = await import('./syncArtifacts');
+    const shared = { credentials: { token: 't' }, serverId: 'artifact-kind-home', encryption: null,
+      artifactDataKeys: new Map(), request };
+    const artifactId = await createArtifactWithHeaderViaApi({ ...shared,
+      header: { kind: 'prompt_bundle.v2', bundleSchemaId: 'skills.skill_md_v1', title: 'Skill' },
+      body: 'skill', addArtifact: artifact => { current = artifact; } });
+    await updateArtifactWithHeaderViaApi({ ...shared, artifactId,
+      header: { kind: 'prompt_doc.v2', title: 'Prompt' }, body: 'prompt',
+      getArtifact: () => current, updateArtifact: artifact => { current = artifact; } });
+    expect(writes.map(write => write.kind)).toEqual(['skill', 'prompt']);
+  });
+  it('carries the exact decision source to Home on lazy create and existing-document correction', async () => {
+    const { CoordinationMessageRefV1Schema } = await import('@happier-dev/protocol/discussions/references');
+    const memoryDecisionSource = CoordinationMessageRefV1Schema.parse({ kind: 'session',
+      session: { serverId: 'home', sessionId: 'source-session' }, messageId: 'committed-message' });
+    const writes: Record<string, unknown>[] = [];
+    let current: DecryptedArtifact | undefined;
+    const request = async (path: string, init?: RequestInit) => {
+      if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 0 });
+      const wire = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      writes.push(wire);
+      return Response.json(path === '/v1/artifacts' || path === '/v1/artifacts/memory-decision/create'
+        ? { ...wire, ownerAccountId: 'owner', access: 'owner', encryptionMode: 'plain',
+            headerVersion: 1, bodyVersion: 1, seq: 1, createdAt: 1, updatedAt: 1 }
+        : { success: true, headerVersion: 2, bodyVersion: 2 });
+    };
+    const { createArtifactWithHeaderViaApi, updateArtifactWithHeaderViaApi } = await import('./syncArtifacts');
+    const shared = { credentials: { token: 't' }, header: { kind: 'memory_doc.v1', title: 'Memory' },
+      encryption: null, artifactDataKeys: new Map(), request, memoryDecisionSource };
+    const artifactId = await createArtifactWithHeaderViaApi({ ...shared, body: 'decision', addArtifact: artifact => { current = artifact; } });
+    await updateArtifactWithHeaderViaApi({ ...shared, artifactId, body: 'corrected decision',
+      expectedRevision: { headerVersion: 1, bodyVersion: 1 }, getArtifact: () => current,
+      updateArtifact: artifact => { current = artifact; } });
+    expect(writes).toMatchObject([{ memoryDecisionSource }, { memoryDecisionSource,
+      expectedHeaderVersion: 1, expectedBodyVersion: 1 }]);
+    expect(current?.body).toBe('corrected decision');
+  });
   it.each(['plain', 'e2ee'] as const)('reads a newly saved %s document on the creating and fresh clients with independent private provenance custody', async mode => {
     const seed = new Uint8Array(32).fill(9);
     const encryption = mode === 'e2ee' ? await Encryption.create(seed) : null;

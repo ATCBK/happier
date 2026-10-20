@@ -16,12 +16,12 @@ import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/f
 
 import { createDeferred, createMachineFixture, flushHookEffects, renderScreen as renderAppScreen, standardCleanup } from '@/dev/testkit';
 import { getStorage as getActualStorage, storage } from '@/sync/domains/state/storageStore';
-import { createVoiceSettingsAccountTestHarness } from '../voiceSettingsAccountTestHarness';
+import { createVoiceSettingsAccountTestHarness, withVoiceSettingsCredentialResource } from '../voiceSettingsAccountTestHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
 import { setRuntimeFetch } from '@/utils/system/runtimeFetch';
 import { getAppliedActiveServerSnapshot } from '@/sync/runtime/orchestration/appliedActiveServerRuntime';
 import { refreshSavedSecretCatalog } from '@/sync/engine/settings/savedSecretCatalogEngine';
-import { applyAccountVoiceCredentialSourceSelection, resolveExactAccountVoiceCredentialSecretId, upsertAccountVoiceCredential } from '@/voice/credentials/accountVoiceCredential';
+import { applyAccountVoiceCredentialSourceSelection } from '@/voice/credentials/accountVoiceCredential';
 import { settingsParse } from '@/sync/domains/settings/settings';
 import { VoiceLocalTtsSchema } from '@/sync/domains/settings/voiceLocalTtsSettings';
 import {
@@ -344,14 +344,12 @@ const { VoiceCredentialSourceField } = await import('../realtime/VoiceCredential
 await import('./BundledSpeechSettings');
 
 async function saveCredential(providerId: string, secretId = 'account-secret-a') {
-  const [pluginId, localId] = providerId.split('/');
-  const contribution = { pluginId, localId };
-  const expectedSecretId = resolveExactAccountVoiceCredentialSecretId({ settings: account.settings, contribution, credentialSlotId: 'api_key' });
-  const existing = account.settings.secrets.find(secret => secret.id === expectedSecretId);
-  account.replaceSettings(upsertAccountVoiceCredential({ settings: account.settings,
-    contribution, credentialSlotId: 'api_key', value: `test-only-${secretId}`,
-    generateId: () => secretId, now: 1, expectedSecretId, expectedSecretUpdatedAt: existing?.updatedAt ?? null,
-  }).settings);
+  const entry = createDefaultVoiceProviderRegistry().get(providerId);
+  if (entry?.kind !== 'voice.speech-engine.v1' || !entry.declaration) throw new Error('Expected speech credential declaration');
+  account.replaceSettings(await withVoiceSettingsCredentialResource(account, {
+    settings: account.settings, declaration: entry.declaration, pluginId: entry.pluginId, resourceId: secretId,
+    recipientContractDigest: entry.accountCredentialSlot?.recipientContractDigest,
+  }));
   await refreshSavedSecretCatalog(account.scope);
 }
 
@@ -484,6 +482,34 @@ describe('BundledSpeechSettings', () => {
   afterAll(async () => {
     await speechBoundary.disposeAudioSession();
     nativeAlert.mockRestore();
+  });
+
+  it('admits speech voice catalog loading and Retry through Settings Actions', async () => {
+    const { createBundledLocalTtsProviderSpec } = await import('./BundledSpeechSettings');
+    const entry = createDefaultVoiceProviderRegistry().get(GOOGLE_CLOUD_TTS_ID)!;
+    const spec = createBundledLocalTtsProviderSpec(entry)!;
+    const base = voiceWithRootProviderConfig(GOOGLE_CLOUD_TTS_ID, { voiceName: 'en-US-Test-A', languageCode: '', format: 'mp3', speakingRate: 1, pitch: 0 });
+    const local = readLocalConversationVoiceSettings(base);
+    const voice = writeLocalConversationVoiceSettings({ ...base, providerId: 'local_conversation' }, {
+      ...local, tts: { ...local.tts, provider: GOOGLE_CLOUD_TTS_ID },
+    });
+    account.replaceSettings(settingsParse({ ...account.settings, voice, actionsSettingsV1: { v: 1,
+      actions: { 'settings.invoke': { enabled: false } } } }));
+    const rendered = await renderScreen(React.createElement(spec.Settings, {
+      cfgTts: VoiceLocalTtsSchema.parse({ provider: GOOGLE_CLOUD_TTS_ID }), setTts: vi.fn(),
+      voice, setVoice: vi.fn(), networkTimeoutMs: 15_000, popoverBoundaryRef: null,
+    }));
+    await flushHookEffects();
+    expect(fetchCatalog).not.toHaveBeenCalled();
+    const voiceMenu = () => rendered.tree.root.findAllByType(DropdownMenu)
+      .find(row => row.props.items.some((item: { id: string }) => item.id === '__retry__'))!;
+    await vi.waitFor(() => expect(voiceMenu()).toBeDefined());
+    account.replaceSettings(settingsParse({ ...account.settings, actionsSettingsV1: { v: 1,
+      actions: { 'settings.invoke': { enabled: true } } } }));
+    await act(async () => voiceMenu().props.onSelect('__retry__'));
+    await vi.waitFor(() => expect(fetchCatalog).toHaveBeenCalled());
+    expect(rendered.tree.root.findAllByType(DropdownMenu).flatMap(row => row.props.items))
+      .toEqual(expect.arrayContaining([expect.objectContaining({ id: 'en-US-Test-A', title: 'English Test' })]));
   });
 
   it('renders package-owned STT fields and writes the provider envelope', async () => {

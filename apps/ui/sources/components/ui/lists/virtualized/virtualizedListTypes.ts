@@ -8,22 +8,6 @@ import type {
 } from 'react-native';
 
 /**
- * The concrete list runtime a {@link VirtualizedList} resolves to. This is the
- * permanent domain vocabulary: product surfaces never name a specific library,
- * they express intent through {@link VirtualizedListBackendPreference} and the
- * abstraction owns which backend satisfies it.
- */
-export type VirtualizedListBackend = 'legend' | 'flat';
-
-/**
- * What a call site asks for. `auto` lets the abstraction pick the current
- * default per platform; the explicit values pin a backend for surfaces that
- * have a proven reason (for example, a known Legend regression that must stay
- * on React Native FlatList).
- */
-export type VirtualizedListBackendPreference = 'auto' | VirtualizedListBackend;
-
-/**
  * Stable imperative surface product call sites depend on, independent of the
  * resolved backend. Backends map these onto their native method names in their
  * own adapter (for example, Legend `clearCaches`).
@@ -68,8 +52,6 @@ export type VirtualizedListProps<T> = Readonly<{
     data: readonly T[] | null | undefined;
     renderItem: VirtualizedListRenderItem<T>;
     keyExtractor: (item: T, index: number) => string;
-
-    backendPreference?: VirtualizedListBackendPreference;
 
     testID?: string;
     nativeID?: string;
@@ -187,8 +169,6 @@ export type VirtualizedSectionListProps<T> = Readonly<{
     keyExtractor: (item: T, index: number) => string;
     renderSectionHeader?: (info: { section: VirtualizedSection<T> }) => React.ReactElement | null;
     renderSectionFooter?: (info: { section: VirtualizedSection<T> }) => React.ReactElement | null;
-
-    backendPreference?: 'auto' | 'legend' | 'flat';
 
     testID?: string;
     nativeID?: string;

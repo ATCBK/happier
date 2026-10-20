@@ -196,7 +196,9 @@ describe('PluginAccountReleaseSelectionSection', () => {
             await Promise.resolve();
         });
         expect(disableAndRemoveHostedArtifacts).toHaveBeenCalledWith({ pluginId: 'example.tasks', reader });
+        expect(confirm).not.toHaveBeenCalled();
     });
+
 
     it.each([
         ['conflict', 'settingsPlugins.accountReleaseSelection.conflictTitle', 'settingsPlugins.accountReleaseSelection.conflictBody'],

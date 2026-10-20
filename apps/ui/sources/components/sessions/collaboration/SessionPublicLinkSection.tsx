@@ -40,7 +40,9 @@ const QR_SIZE_PX = 168;
  * The QR renderer (Skia on native) loads only when someone asks for the code, as it did behind the
  * former publication dialog, so opening Collaboration never pays for it.
  */
-const LazyQRCode = retryableLazy(() => import('@/components/qr/QRCode').then((module) => ({ default: module.QRCode })));
+const LazyQRCode = retryableLazy<React.ComponentProps<typeof import('@/components/qr/QRCode')['QRCode']>>(
+    () => import('@/components/qr/QRCode').then((module) => ({ default: module.QRCode })),
+);
 
 const styles = StyleSheet.create({
     line: { marginHorizontal: 4 },
@@ -258,12 +260,7 @@ export function SessionPublicLinkCard(props: Readonly<{
         if (mutationsDisabled || inFlight.current) return;
         inFlight.current = true;
         try {
-            const confirmed = await Modal.confirm(
-                t('session.collaboration.pane.turnOffTitle'),
-                t('session.collaboration.pane.turnOffBody'),
-                { confirmText: t('session.collaboration.pane.turnOff'), cancelText: t('common.cancel'), destructive: true },
-            );
-            if (!confirmed || !mounted.current) return;
+            if (!mounted.current) return;
             setMutationFailure(null);
             setRevoking(true);
             await props.onDelete();

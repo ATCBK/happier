@@ -1,0 +1,29 @@
+/** @moduleRealm daemon */
+import { createGitTemporaryIndex as createSharedGitTemporaryIndex, resolveGitIndexPath as resolveSharedGitIndexPath } from '@happier-dev/cli-common/scm/gitTemporaryIndex';
+import { parseGitComparisonOutput as parseSharedGitComparisonOutput } from '@happier-dev/cli-common/scm/gitComparisonOutput';
+
+export type GitTemporaryIndexCommand = Readonly<{ cwd: string; args: readonly string[]; stdin?: string; env?: Record<string, string | undefined> }>;
+export type GitTemporaryIndexCommandResult = Readonly<{ success: boolean; stdout: string; stderr: string; exitCode: number }>;
+export type GitTemporaryIndexCommandAdapter = (input: GitTemporaryIndexCommand) => Promise<GitTemporaryIndexCommandResult>;
+export type GitTemporaryIndexSeed = Readonly<{ kind: 'empty' }> | Readonly<{ kind: 'tree'; treeOid: string }> | Readonly<{ kind: 'current-index' }>;
+export type GitTemporaryIndex = Readonly<{ indexPath: string; env: Record<string, string>; cleanup: () => void }>;
+export type GitTemporaryIndexFailure = Readonly<{ success: false; error: string; commandResult?: GitTemporaryIndexCommandResult }>;
+export type GitFileLineage = Readonly<{
+    path: string;
+    previousPath?: string;
+    changeKind: 'added' | 'deleted' | 'renamed' | 'copied' | 'modified' | 'unknown';
+    beforeBlobId?: string;
+    afterBlobId?: string;
+}>;
+
+// The public seam preserves the shared implementation and its injected Git IO;
+// private workspace package names never become author declaration dependencies.
+export const createGitTemporaryIndex: (input: Readonly<{
+    cwd: string; runGit: GitTemporaryIndexCommandAdapter; seed: GitTemporaryIndexSeed;
+}>) => Promise<Readonly<{ success: true; tempIndex: GitTemporaryIndex }> | GitTemporaryIndexFailure> = createSharedGitTemporaryIndex;
+export const resolveGitIndexPath: (input: Readonly<{
+    cwd: string; runGit: GitTemporaryIndexCommandAdapter;
+}>) => Promise<Readonly<{ success: true; indexPath: string }> | GitTemporaryIndexFailure> = resolveSharedGitIndexPath;
+export const parseGitComparisonOutput: (output: string) => Readonly<{
+    files: readonly GitFileLineage[]; sections: readonly string[]; error?: string;
+}> = parseSharedGitComparisonOutput;

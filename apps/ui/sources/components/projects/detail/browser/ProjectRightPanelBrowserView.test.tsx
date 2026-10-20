@@ -67,6 +67,7 @@ const currentPluginProjection = {
     machineId: 'machine-projection',
     serverId: 'server-projection',
     platform: 'ios',
+    accountLifetime: null,
 } satisfies PluginUiProjectionCurrentness;
 
 function basePane(): AppPaneScopeApi {
@@ -111,7 +112,7 @@ describe('ProjectRightPanelBrowserView (scoped workspace)', () => {
             <ProjectRightPanelBrowserView workspaceRefId="workspace_1" scopeId="project:workspace_1:mobile-browser" />,
         );
 
-        expect(screen.root.findAllByType('BrowserSurfaceHostMock').length).toBeGreaterThan(0);
+        expect(screen.root.findAll(node => String(node.type) === 'BrowserSurfaceHostMock').length).toBeGreaterThan(0);
     });
 
     it('threads an admitted projection through the project Browser host without inventing a Session id', async () => {
@@ -122,21 +123,16 @@ describe('ProjectRightPanelBrowserView (scoped workspace)', () => {
             scopeState: { details: buildDetailsWorkspaceStateView(details) },
         } as AppPaneScopeApi;
         const { ProjectRightPanelBrowserView } = await import('./ProjectRightPanelBrowserView');
-        const ScreenWithProjection = ProjectRightPanelBrowserView as unknown as React.ComponentType<
-            React.ComponentProps<typeof ProjectRightPanelBrowserView> & Readonly<{
-                pluginProjection: PluginUiProjectionCurrentness;
-            }>
-        >;
 
         const screen = await renderScreen(
-            <ScreenWithProjection
+            <ProjectRightPanelBrowserView
                 workspaceRefId="workspace_1"
                 scopeId="project:workspace_1:mobile-browser"
                 pluginProjection={currentPluginProjection}
             />,
         );
 
-        const host = screen.root.findAllByType('BrowserSurfaceHostMock')[0];
+        const host = screen.root.findAll(node => String(node.type) === 'BrowserSurfaceHostMock')[0];
         expect(host?.props.pluginUiProjection).toBe(currentPluginProjection.pluginUiProjection);
         expect(host?.props.pluginUiInteractionEnabled).toBe(true);
         expect(host?.props.pluginBrowserProjection).toBe(currentPluginProjection.pluginBrowserProjection);
@@ -155,21 +151,16 @@ describe('ProjectRightPanelBrowserView (scoped workspace)', () => {
             scopeState: { details: buildDetailsWorkspaceStateView(details) },
         } as AppPaneScopeApi;
         const { ProjectRightPanelBrowserView } = await import('./ProjectRightPanelBrowserView');
-        const ScreenWithProjection = ProjectRightPanelBrowserView as unknown as React.ComponentType<
-            React.ComponentProps<typeof ProjectRightPanelBrowserView> & Readonly<{
-                pluginProjection: PluginUiProjectionCurrentness;
-            }>
-        >;
 
         const screen = await renderScreen(
-            <ScreenWithProjection
+            <ProjectRightPanelBrowserView
                 workspaceRefId="workspace_1"
                 scopeId="project:workspace_1:mobile-browser"
                 pluginProjection={{ ...currentPluginProjection, phase: 'retainedOffline' }}
             />,
         );
 
-        expect(screen.root.findAllByType('BrowserSurfaceHostMock')[0]?.props
+        expect(screen.root.findAll(node => String(node.type) === 'BrowserSurfaceHostMock')[0]?.props
             .pluginUiInteractionEnabled).toBe(false);
     });
 });

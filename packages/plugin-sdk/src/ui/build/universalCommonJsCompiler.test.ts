@@ -46,6 +46,24 @@ async function compileFixture(root: string, entry: string, artifactId: string) {
 }
 
 describe('compileUniversalPluginUiCommonJs', () => {
+    it('compiles the public-authoring renderer exported to external plugin authors', async () => {
+        const projectRoot = resolve(import.meta.dirname, '../../../examples/public-authoring');
+        const manifest = JSON.parse(await readFile(join(projectRoot, 'package.json'), 'utf8')) as {
+            exports: Record<string, string>;
+        };
+        const packages = await readWorkspacePackages(resolve(import.meta.dirname, '../../../../..'));
+        const result = await compileUniversalPluginUiCommonJs({
+            projectRoot,
+            entryPath: resolve(projectRoot, manifest.exports['./happier-plugin-ui/review-native']!),
+            artifactId: 'review-native', requestedExports: ['renderSurface'],
+            exportConditions: ['happier-source'],
+            resolveSourceImport: (specifier) => packages.has(packageNameOfSpecifier(specifier))
+                ? resolveWorkspaceSource(packages, specifier, { conditions: ['react-native'] }) : undefined,
+        });
+        expect(result.exports).toContain('renderSurface');
+        expect(result.bytes.byteLength).toBeGreaterThan(0);
+    });
+
     it('configures bundled Mini before an authored entry parses during module evaluation', async () => {
         const { root, entry } = await fixture([
             "import { z } from 'zod/mini';",
@@ -103,6 +121,24 @@ describe('compileUniversalPluginUiCommonJs', () => {
         if (typeof module.exports.renderSurface !== 'function') throw new Error('Missing renderSurface');
         expect(module.exports.renderSurface()).toEqual({ value: { label: 'portable' },
             picker: { inputType: { pluginId: 'happier.triage', localId: 'entries' }, semantic: 'entries' }, deferred: false });
+    });
+
+    it.each([
+        ['scm', 'SCM_COMMIT_PATCH_MAX_COUNT', 'typeof SCM_COMMIT_PATCH_MAX_COUNT', 'number'],
+        ['machine-provisioners', 'MachineProvisionerCheckInputV1Schema', 'MachineProvisionerCheckInputV1Schema.parse({})', {}],
+    ])('compiles the pure %s author domain without daemon native adapters', async (subpath, symbol, expression, expected) => {
+        const { root, entry } = await fixture(`import { ${symbol} } from '@happier-dev/plugin-sdk/${subpath}'; export const renderSurface = () => ${expression};`);
+        const packages = await readWorkspacePackages(resolve(import.meta.dirname, '../../../../..'));
+        const result = await compileUniversalPluginUiCommonJs({
+            projectRoot: root, entryPath: entry, artifactId: `pure-${subpath}`, requestedExports: ['renderSurface'],
+            exportConditions: ['happier-source'],
+            resolveSourceImport: (specifier) => packages.has(packageNameOfSpecifier(specifier))
+                ? resolveWorkspaceSource(packages, specifier, { conditions: ['react-native'] }) : undefined,
+        });
+        const module = { exports: {} as Record<string, unknown> };
+        runInNewContext(new TextDecoder().decode(result.bytes), { module, exports: module.exports, TextEncoder, TextDecoder });
+        if (typeof module.exports.renderSurface !== 'function') throw new Error('Missing renderSurface');
+        expect(module.exports.renderSurface()).toEqual(expected);
     });
 
     it('keeps a real Triage text projection free of unused schema and crypto implementations', async () => {

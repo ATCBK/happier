@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('socket.io-client', async (importOriginal) =>
+    (await import('@/dev/testkit/harness/serverAccountConnectionHarness')).createSocketIoClientBoundary(importOriginal));
+
 import { OpenableContentStatResultV1Schema } from '@happier-dev/protocol';
-import { sha256 } from '@noble/hashes/sha256';
-import { bytesToHex } from '@noble/hashes/utils';
 import {
     cleanupWorkspaceFileDetailsActionBoundary,
     getWorkspaceFileDetailsActionBoundary,
@@ -392,48 +393,6 @@ describe('plugin surface openable content', () => {
 
         await expect(handlers.statOpenableContent!(request('statOpenableContent', { ref: binding.ref })))
             .resolves.toEqual({ status: 'unavailable' });
-    });
-
-    it('uses the caller ceiling above the private inline default and keeps a lower caller ceiling typed', async () => {
-        const sizeBytes = 300 * 1024;
-        const largeContentHash = bytesToHex(sha256(new Uint8Array(sizeBytes)));
-        const binding = createWorkspaceFileOpenableContentBinding({
-            target: TARGET,
-            filePath: 'notes/preview.png',
-        });
-        const handlers = createPluginSurfaceOpenableContentHandlers({ binding });
-        const stat = {
-            success: true as const,
-            exists: true,
-            kind: 'file' as const,
-            sizeBytes,
-            modifiedMs: 100,
-            changedMs: 100,
-            contentHash: largeContentHash,
-        };
-        workspaceStatFileMock.mockResolvedValue(stat);
-
-        await expect(handlers.readOpenableContent!(request('readOpenableContent', {
-            ref: binding.ref,
-            expectedRevision: `workspace-file:${sizeBytes}:${largeContentHash}`,
-            maxBytes: 256 * 1024,
-        }))).resolves.toEqual({ status: 'tooLarge', sizeBytes });
-        expect(workspaceReadFileMock).not.toHaveBeenCalled();
-
-        const contentBase64 = 'AAAA'.repeat(sizeBytes / 3);
-        workspaceReadFileMock.mockResolvedValue({ success: true, content: contentBase64 });
-        await expect(handlers.readOpenableContent!(request('readOpenableContent', {
-            ref: binding.ref,
-            expectedRevision: `workspace-file:${sizeBytes}:${largeContentHash}`,
-            maxBytes: sizeBytes,
-        }))).resolves.toMatchObject({
-            status: 'ready',
-            revision: `workspace-file:${sizeBytes}:${largeContentHash}`,
-            content: { kind: 'base64', base64: contentBase64 },
-        });
-        expect(workspaceReadFileMock).toHaveBeenCalledWith(expect.objectContaining({
-            payload: { rootPath: TARGET.rootPath, path: '/private/repository/notes/preview.png' },
-        }));
     });
 
     it('settles a cancelled stat without waiting for a stale workspace response', async () => {

@@ -6,10 +6,41 @@ import {
   ensureMergedAgentCommandRegistryLoaded,
   resolveAdmittedActionCliCommand,
 } from './commandRegistry';
+import { composeActionCliInput, parseActionCliCommandInput } from './actions/parseCommandInput';
 
 describe('composed CLI command path ownership', () => {
   it('admits the real Action catalog alongside static commands at startup', async () => {
     await expect(ensureMergedAgentCommandRegistryLoaded()).resolves.toBeUndefined();
+  });
+
+  it('dispatches status reads and source-bound reason edits as separate Session leaves', async () => {
+    await ensureMergedAgentCommandRegistryLoaded();
+    expect(await resolveAdmittedActionCliCommand(['session', 'status', 'session_1']))
+      .toMatchObject({ actionId: 'session.status.get', path: ['session', 'status'] });
+
+    for (const [args, reason] of [
+      [['--reason', 'Waiting for the build'], 'Waiting for the build'],
+      [['--input-json', '{"reason":null}'], null],
+    ] as const) {
+      const argv = ['session', 'set-status-reason', ...args];
+      const command = await resolveAdmittedActionCliCommand(argv);
+      expect(command).toMatchObject({ actionId: 'session.status.set_reason', path: ['session', 'set-status-reason'] });
+      if (!command) throw new Error('Status reason command was not admitted');
+      const parsed = parseActionCliCommandInput(command, argv);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) throw new Error(parsed.message);
+      const composed = composeActionCliInput({
+        parsed,
+        canonicalSchema: command.spec.inputSchema,
+        wholeInputSchema: command.wholeInputSchema,
+        callerSchema: command.callerSchema,
+        bindInput: command.spec.cli?.bindInput,
+        context: { actionId: command.actionId, invocationId: 'status-reason-test', commandPath: command.path, output: 'json' },
+      });
+      expect(composed).toMatchObject({ ok: true, input: { reason } });
+      if (!composed.ok) throw new Error(composed.message);
+      expect(command.spec.inputSchema.parse(composed.input)).toEqual({ reason });
+    }
   });
 
   it('dispatches the Found list and read leaves from the real Action catalog', async () => {

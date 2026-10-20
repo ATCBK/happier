@@ -166,7 +166,7 @@ function SuggestionLinks(props: Readonly<{ tiles: readonly SelectionTile<string>
         <View testID="hub-composer.suggestions" accessibilityLabel={t('homeComposer.suggestionsLabel')} style={[linkStyles.row, props.pills && linkStyles.pillRow]}>
             {props.tiles.map(tile => (
                 <HappierPressable key={tile.id} testID={tile.testID} accessibilityRole="button" accessibilityLabel={tile.title}
-                    accessibilityHint={tile.subtitle} disabled={tile.disabled} accessibilityState={{ disabled: tile.disabled }} onPress={() => props.onPress(tile.id)}>
+                    accessibilityHint={tile.subtitle} disabled={tile.disabled} onPress={() => props.onPress(tile.id)}>
                     {({ hovered }) => {
                         const label = (
                             <View style={[linkStyles.link, props.pills && linkStyles.pill]}>

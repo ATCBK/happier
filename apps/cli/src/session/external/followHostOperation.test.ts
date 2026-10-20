@@ -716,7 +716,7 @@ describe('createExternalSessionFollowHostOperation', () => {
     });
 
     it.each(['beyond_display_tail', 'oversized_native_row'] as const)(
-        'delivers the complete native correlation baseline with a bounded display replay (%s)', async (kind) => {
+        'delivers complete native correlation or explicitly refuses oversized history (%s)', async (kind) => {
             const root = await mkdtemp(join(tmpdir(), 'happier-cold-native-baseline-'));
             try {
                 const configDir = join(root, '.claude');
@@ -758,6 +758,8 @@ describe('createExternalSessionFollowHostOperation', () => {
                     retirementSignal: new AbortController().signal,
                     createInvocationExec: async () => createUnavailablePluginServices().exec,
                 }));
+                const { pageTranscript, readAfterTranscript } = providerOps;
+                if (!pageTranscript || !readAfterTranscript) throw new Error('Expected native transcript callbacks');
                 mocks.loadLinkedExternalSession.mockResolvedValue({ ok: true, session: {
                     ...linkedSession, agentId: 'claude', source: nativeSource, remoteSessionId,
                 } });
@@ -777,14 +779,16 @@ describe('createExternalSessionFollowHostOperation', () => {
                 const result = await operation.execute({
                     pluginId: 'claude', contributionId: 'claude', occurrenceId: resource.occurrenceId,
                     sessionId: 'linked-session-1', machineId: 'machine-1',
-                    ref: { ...ref, agentId: 'claude', remoteSessionId }, source: nativeSource, providerOps,
+                    ref: { ...ref, agentId: 'claude', remoteSessionId }, source: nativeSource,
+                    providerOps: { pageTranscript, readAfterTranscript },
                     options: { initialReplay: true, projection: 'terminal' }, isCurrent: () => true,
                     listener: async event => {
                         if (event.kind !== 'data') return;
                         expect(event.phase).toBe('initial_replay');
                         for (const item of event.items) {
                             if (item.kind === 'source_observation' && item.data && typeof item.data === 'object' && !Array.isArray(item.data)) {
-                                observed.push({ uuid: item.data.uuid, toolUseResult: item.data.toolUseResult });
+                                observed.push({ uuid: 'uuid' in item.data ? item.data.uuid : undefined,
+                                    toolUseResult: 'toolUseResult' in item.data ? item.data.toolUseResult : undefined });
                             } else {
                                 const encoded = JSON.stringify(item);
                                 displayBytes += Buffer.byteLength(encoded);
@@ -794,7 +798,12 @@ describe('createExternalSessionFollowHostOperation', () => {
                     },
                 });
                 try {
-                    expect(result).toMatchObject({ status: 'following' });
+                    if (kind === 'oversized_native_row') {
+                        expect(result).toMatchObject({ status: 'unavailable', code: 'plugin_external_follow_resync_required' });
+                        expect(observed).toEqual([]);
+                        return;
+                    }
+                    expect(result, JSON.stringify(result)).toMatchObject({ status: 'following' });
                     expect(observed.filter(row => row.uuid === launch.uuid || row.uuid === alias.uuid)).toEqual([
                         { uuid: launch.uuid, toolUseResult: undefined },
                         { uuid: alias.uuid, toolUseResult: alias.toolUseResult },
@@ -884,15 +893,20 @@ describe('createExternalSessionFollowHostOperation', () => {
         if (result.status === 'following') await result.subscription.dispose();
     });
 
-    it('releases the admitted live follow when replay reaches its page boundary without jumping to a tail', async () => {
+    it.each([undefined, 'terminal', 'fresh'] as const)('admits small-row replay beyond 100 pages and 10,000 items through the SDK follow host (%s)', async mode => {
         let page = 0;
         const pageTranscript = vi.fn(async () => {
             page += 1;
+            const acquisition = page === 1;
+            const replayPage = page - 1;
             return {
-                items: [],
-                nextCursor: `cursor-${page}`,
-                tailCursor: 'unaccounted-tail',
-                hasMore: true,
+                items: acquisition ? [] : Array.from({ length: 101 }, (_, index) => ({
+                    id: `item-${replayPage}-${index}`, createdAtMs: replayPage,
+                    raw: { role: 'agent', content: { type: 'output', data: { type: 'message', message: 'x' } } },
+                })),
+                nextCursor: replayPage < 102 ? `cursor-${page}` : null,
+                tailCursor: 'complete-tail',
+                hasMore: replayPage < 102,
                 truncated: false,
             };
         });
@@ -905,7 +919,6 @@ describe('createExternalSessionFollowHostOperation', () => {
             resource,
         });
         const followLeaseManager = createExternalSessionFollowLeaseManager();
-        const attachScoped = vi.spyOn(followLeaseManager, 'attachScoped');
         const operation = createExternalSessionFollowHostOperation({
             machineId: 'machine-1',
             followLeaseManager,
@@ -916,26 +929,34 @@ describe('createExternalSessionFollowHostOperation', () => {
             } as never,
         });
 
-        await expect(operation.execute({
-            pluginId: 'synthetic.non-bundled',
-            contributionId: 'codex',
-            occurrenceId: resource.occurrenceId,
-            sessionId: 'linked-session-1',
-            machineId: 'machine-1',
+        const owner = createExternalSessionHostOperationOwner();
+        await owner.install({ followOperation: operation });
+        const binding = owner.bind({
+            pluginId: 'synthetic.non-bundled', agentId: 'codex', occurrenceId: resource.occurrenceId,
+            sessionId: 'linked-session-1', machineId: 'machine-1', readAccountRevision: () => 'account-1',
+            isOccurrenceCurrent: () => true,
+        });
+        const ids = new Set<string>();
+        const result = await binding.executeFollow({
             ref,
             source,
             options: {
                 initialReplay: true,
                 admissionDeadlineAtMs: Date.now() + 30_000,
+                ...(mode === 'terminal' ? { projection: 'terminal' } : {}),
+                ...(mode === 'fresh' ? { replay: 'fresh' } : {}),
             },
-            listener: async () => undefined,
-            isCurrent: () => true,
-        })).resolves.toEqual({
-            status: 'unavailable',
-            code: 'plugin_external_follow_resync_required',
+            listener: async event => { if (event.kind === 'data') for (const item of event.items) ids.add(item.id); },
         });
-        expect(pageTranscript).toHaveBeenCalledTimes(101);
-        expect(attachScoped).toHaveBeenCalledOnce();
+        try {
+            expect(result).toMatchObject({ status: 'following', startingCursor: 'complete-tail' });
+            expect(ids.size).toBe(10_302);
+            expect(ids.has('item-102-100')).toBe(true);
+        } finally {
+            if (result.status === 'following') await result.subscription.dispose();
+            await binding.retire();
+            await owner.retire();
+        }
     });
 
     it('fails an expired whole-admission deadline before the first provider page', async () => {
@@ -974,16 +995,8 @@ describe('createExternalSessionFollowHostOperation', () => {
         expect(pageTranscript).not.toHaveBeenCalled();
     });
 
-    it('applies cumulative item and serialized-byte ceilings across replay pages', async () => {
+    it('preserves serialized-byte capacity for nonterminal, required-source and fresh replay', async () => {
         const cases = [
-            {
-                makeItems: (page: number) => Array.from({ length: 200 }, (_, index) => ({
-                    id: `item-${page}-${index}`,
-                    createdAtMs: index,
-                    raw: { role: 'agent', content: { type: 'output', data: { type: 'message', message: 'x' } } },
-                })),
-                maximumCalls: 51,
-            },
             {
                 makeItems: (page: number) => Array.from({ length: 200 }, (_, index) => ({
                     id: `item-${page}-${index}`,
@@ -991,6 +1004,24 @@ describe('createExternalSessionFollowHostOperation', () => {
                     raw: { role: 'agent', content: { type: 'output', data: { type: 'message', message: 'x'.repeat(2_500) } } },
                 })),
                 maximumCalls: 8,
+            },
+            {
+                makeItems: (page: number) => Array.from({ length: 200 }, (_, index) => ({
+                    id: `source-${page}-${index}`,
+                    createdAtMs: index,
+                    raw: { role: 'source_observation', content: { type: 'queue-operation', operation: 'remove', padding: 'x'.repeat(2_500) } },
+                })),
+                maximumCalls: 8,
+                projection: 'terminal',
+            },
+            {
+                makeItems: (page: number) => Array.from({ length: 200 }, (_, index) => ({
+                    id: `fresh-${page}-${index}`,
+                    createdAtMs: index,
+                    raw: { role: 'agent', content: { type: 'output', data: { type: 'message', message: 'x'.repeat(2_500) } } },
+                })),
+                maximumCalls: 8,
+                replay: 'fresh',
             },
         ] as const;
 
@@ -1035,6 +1066,8 @@ describe('createExternalSessionFollowHostOperation', () => {
                 options: {
                     initialReplay: true,
                     admissionDeadlineAtMs: Date.now() + 30_000,
+                    ...('projection' in replayCase ? { projection: replayCase.projection } : {}),
+                    ...('replay' in replayCase ? { replay: replayCase.replay } : {}),
                 },
                 listener: async () => undefined,
                 isCurrent: () => true,

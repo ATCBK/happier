@@ -128,7 +128,7 @@ it.each(['legacy', 'destination', 'unavailable'] as const)('reviews current cano
     intent: 'delete', when: 'now', reviewedDependencies: true };
   const preview = await deps.buildApprovalPreview?.({ actionId: 'machines.managed.delete', input,
     context: { surface: 'cli', authority: 'present_user', serverId: 'home-a', runtimeAccountId: 'account-a' },
-    defaultPreview: { actionId: 'machines.managed.delete', actionArgs: input } });
+    defaultPreview: { actionId: 'machines.managed.delete', actionArgs: input, summary: 'Delete managed Machine' } });
   expect(preview).toMatchObject({ machineReferences: { homeId: 'home-a', machineId: 'target-machine',
     coverage: profileSource === 'unavailable' ? 'partial' : 'complete',
     references: expect.arrayContaining([expect.objectContaining({ kind: 'board', id: 'board-a' }),

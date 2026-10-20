@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { act } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
 import { installCodeDiffCommonModuleMocks } from '../codeDiffTestHelpers';
@@ -222,12 +221,10 @@ describe('DiffReviewCommentsViewer', () => {
             );
         }
 
-        const { tree } = await renderScreen(<Wrapper tick={0} />);
+        const screen = await renderScreen(<Wrapper tick={0} />);
         const firstCallCount = diffViewerRenderSpy.mock.calls.length;
 
-        await act(async () => {
-            tree.update(<Wrapper tick={1} />);
-        });
+        await screen.update(<Wrapper tick={1} />);
 
         expect(diffViewerRenderSpy.mock.calls).toHaveLength(firstCallCount);
     });

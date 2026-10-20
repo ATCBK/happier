@@ -13,7 +13,7 @@ describe('native accounting capture custody', () => {
             const authority = { serverId: 'home', accountId: 'plain-account', machineId: 'machine' };
             const path = join(directory, 'capture.sealed');
             const store = createNativeUsageCaptureStore({ path, authority, storage });
-            const state: NativeUsageCaptureState = { v: 1, authority, sources: [{
+            const state = { v: 1, authority, sources: [{
                 sourceId: 'opaque-root', agent: { pluginId: 'happier.agent.claude', localId: 'claude' },
                 source: { kind: 'claudeConfig', configDir: directory }, sourceKey: 'private-root', root: directory,
                 supported: true, consented: true, cursor: 'completed-record-1', pending: [{
@@ -22,7 +22,7 @@ describe('native accounting capture custody', () => {
                         tokens: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0, reasoning: 0, total: 5 },
                         cost: null, contextUsedTokens: null, contextWindowTokens: null },
                 }],
-            }] };
+            }] } satisfies NativeUsageCaptureState;
             await store.save(state);
             const retainedState = { ...state, retiredCaptureMode: 'native', authority: { ...authority, retiredAuthority: true },
                 sources: state.sources.map(source => ({ ...source, retiredSource: true,

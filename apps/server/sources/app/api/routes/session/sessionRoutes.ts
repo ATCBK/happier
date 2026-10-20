@@ -4,9 +4,9 @@ import { registerSessionAgentTransitionRoute } from "./registerSessionAgentTrans
 import { registerSessionCreateOrLoadRoute } from "./registerSessionCreateOrLoadRoute";
 import { registerSessionDataKeyEnvelopeRoutes } from "./registerSessionDataKeyEnvelopeRoutes";
 import { registerSessionDeleteRoute } from "./registerSessionDeleteRoute";
-import { registerSessionDiscussionRoutes } from "./registerSessionDiscussionRoutes";
 import { registerSessionArchiveRoutes } from "./registerSessionArchiveRoutes";
 import { registerSessionListingRoutes } from "./registerSessionListingRoutes";
+import { registerSessionReadBatchRoute } from "./registerSessionReadBatchRoute";
 import { registerSessionLookupByTagsRoute } from "./registerSessionLookupByTagsRoute";
 import { registerSessionMessageRoutes } from "./registerSessionMessageRoutes";
 import { registerSessionOrganizationRoutes } from "./registerSessionOrganizationRoutes";
@@ -18,7 +18,7 @@ import { registerSessionSystemRecordRoutes } from "./registerSessionSystemRecord
 import { registerSessionSubagentCustodyRoutes } from "./registerSessionSubagentCustodyRoutes";
 import { registerSessionFollowRoutes } from "./registerSessionFollowRoutes";
 import { registerSessionFollowSourceRoutes } from "./registerSessionFollowSourceRoutes";
-import { registerSessionReportsToRoutes } from "./registerSessionReportsToRoutes";
+import { registerSessionManagerRoutes } from "./registerSessionManagerRoutes";
 import { registerSessionBoardRoutes } from "./registerSessionBoardRoutes";
 
 export function sessionRoutes(app: Fastify) {
@@ -26,8 +26,9 @@ export function sessionRoutes(app: Fastify) {
     registerSessionBoardRoutes(app);
     registerSessionFollowRoutes(app);
     registerSessionFollowSourceRoutes(app);
-    registerSessionReportsToRoutes(app);
+    registerSessionManagerRoutes(app);
     registerSessionListingRoutes(app);
+    registerSessionReadBatchRoute(app);
     registerSessionLookupByTagsRoute(app);
     registerSessionOrganizationRoutes(app);
     registerSessionCreateOrLoadRoute(app);
@@ -41,6 +42,5 @@ export function sessionRoutes(app: Fastify) {
     registerSessionTurnMutationRoute(app);
     registerSessionReadStateRoutes(app);
     registerSessionResponsibilityRoutes(app);
-    registerSessionDiscussionRoutes(app);
     registerSessionDeleteRoute(app);
 }

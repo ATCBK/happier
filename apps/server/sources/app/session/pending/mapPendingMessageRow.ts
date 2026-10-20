@@ -5,6 +5,8 @@ import { type SessionMessageAccountActorV1 } from '@happier-dev/protocol/session
 
 export type PendingMessageRow = {
     localId: string;
+    autonomousExchangeRoot?: import('@happier-dev/protocol/sessions/messages/autonomousExchangeV1').AutonomousExchangeRootV1;
+    activationHoldReason?: import('@happier-dev/protocol/sessions/pending/pendingActivationAuthorizationV1').PendingActivationHoldReasonV1;
     recipient?: { kind: "execution_run"; runId: string };
     messageRole: import("@happier-dev/protocol").SessionMessageRole | null;
     content: PrismaJson.SessionPendingMessageContent;
@@ -24,7 +26,10 @@ export type PendingMessageRow = {
 };
 
 export type PendingMessageRowRaw = {
+    autonomousExchangeRootSessionId?: string | null;
+    autonomousExchangeRootLocalId?: string | null;
     inputAdmissionReceipt?: unknown;
+    providerAction?: unknown;
     localId: string;
     targetExecutionRunId?: string | null;
     messageRole?: unknown;

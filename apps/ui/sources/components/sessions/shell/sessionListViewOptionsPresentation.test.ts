@@ -38,6 +38,7 @@ describe('session list View options presentation', () => {
 
     it('maps every layout and placement choice to incumbent settings', () => {
         const current = {
+            sessionListOrderingModeV1: 'custom',
             sessionListSectionModeV1: 'activity',
             sessionListActiveGroupingV1: 'date',
             sessionListInactiveGroupingV1: 'project',
@@ -60,6 +61,7 @@ describe('session list View options presentation', () => {
 
     it('emits per-section grouping option ids that both hosts can apply unchanged', () => {
         const settings = {
+            sessionListOrderingModeV1: 'custom',
             sessionListSectionModeV1: 'activity',
             sessionListActiveGroupingV1: 'date',
             sessionListInactiveGroupingV1: 'project',

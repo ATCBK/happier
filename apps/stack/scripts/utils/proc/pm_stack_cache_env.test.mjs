@@ -17,6 +17,7 @@ import {
   inspectSourceDevSharedDepsForSourceDev,
 } from '../../../../cli/scripts/buildSharedDeps.mjs';
 import { withPatchedProcessEnv } from '../../testkit/core/env_scope.mjs';
+import { installWorkspaceAdmissionProcessFixture } from '../../testkit/core/native_admission_fixture.mjs';
 
 const CLI_DIST_BUILD_MANIFEST_MODULE_PATH = fileURLToPath(
   new URL('../../../../../packages/cli-common/cliDistBuildManifest.cjs', import.meta.url),
@@ -2312,8 +2313,9 @@ test('ensureCliBuilt force-refreshes deps once when pkgroll entrypoint is a shel
     HAPPIER_STACK_CLI_BUILD_MODE: 'always',
     HAPPIER_STACK_ENV_FILE: null,
   });
+  const native = await installWorkspaceAdmissionProcessFixture(t, root);
 
-  await ensureCliBuilt(cliDir, { buildCli: true, quiet: true, env: process.env });
+  await ensureCliBuilt(cliDir, { buildCli: true, quiet: true, env: native.env });
 
   const argv = await readFile(outputPath, 'utf-8');
   assert.match(argv, /\binstall --force --production=false\b/, `expected forced yarn reinstall, got:\n${argv}`);
@@ -2862,8 +2864,9 @@ test('ensureCliBuilt refreshes shared workspace deps before trusting a cached cl
     HAPPIER_STACK_ENV_FILE: null,
     HAPPIER_TEST_CLI_DIST_MANIFEST_MODULE: CLI_DIST_BUILD_MANIFEST_MODULE_PATH,
   });
+  const native = await installWorkspaceAdmissionProcessFixture(t, root);
 
-  const result = await ensureCliBuilt(cliDir, { buildCli: true, quiet: true, env: process.env, platform: 'darwin' });
+  const result = await ensureCliBuilt(cliDir, { buildCli: true, quiet: true, env: native.env, platform: 'darwin' });
 
   const argv = await readFile(outputPath, 'utf-8');
   assert.match(argv, /(^|\n)-s build(\n|$)/);

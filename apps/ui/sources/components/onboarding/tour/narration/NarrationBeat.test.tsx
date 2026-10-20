@@ -26,7 +26,9 @@ const reanimatedCalls = vi.hoisted(() => ({
     useFreshSharedValueReference: false,
 }));
 
-vi.mock('react-native-reanimated', () => {
+vi.mock('react-native-reanimated', async () => {
+    const { createReanimatedModuleMock } = await import('@/dev/testkit/mocks/reanimated');
+    const platform = createReanimatedModuleMock();
     const ReactModule = require('react') as typeof import('react');
     const ANIMATED_STYLE_MARKER = '__narrationTestAnimatedStyle';
     const AnimatedComponent = (component: unknown) => {
@@ -82,14 +84,9 @@ vi.mock('react-native-reanimated', () => {
         && 'pendingReanimatedAnimation' in candidate
     );
     return {
+        ...platform,
         __esModule: true,
         default: Animated,
-        Easing: {
-            out: (easing: unknown) => easing,
-            cubic: 'cubic',
-            bezier: () => (value: number) => value,
-            linear: (value: number) => value,
-        },
         useAnimatedStyle: <T,>(factory: () => T): T => {
             const style = factory();
             if (typeof style !== 'object' || style === null) return style;

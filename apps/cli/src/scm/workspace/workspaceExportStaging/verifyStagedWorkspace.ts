@@ -1,7 +1,7 @@
 import { access } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { WorkspaceManifest } from '@happier-dev/protocol';
 import type { ScmBackendRegistry } from '@/scm/registry';
@@ -11,7 +11,7 @@ import { hashWorkspaceFile } from '../workspaceExportPackaging/hashWorkspaceFile
 import { scanWorkspaceManifest } from '../workspaceExportPackaging/scanWorkspaceManifest';
 import { resolveWorkspaceManifestSafeFilterPolicyFromEntries } from '../workspaceExportPackaging/workspaceManifestSafeFilterPolicy';
 
-const workspaceManifestDigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/);
+const workspaceManifestDigestSchema = z.string().check(z.regex(/^sha256:[a-f0-9]{64}$/));
 
 export type StagedWorkspaceBlobFailure =
     | Readonly<{

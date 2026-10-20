@@ -48,6 +48,8 @@ import {
 
 import { createPluginHostedWebHostApiBridgeHandler } from '@/components/plugins/hostApi/hostedWebAdapter';
 import { machinePluginStructuredMessageActionExecute, resetMachineProjectionReadsForTests } from '@/sync/ops/machineContributionRegistryProjection';
+import { getMachineContributionRegistryProjectionRevision } from '@/sync/ops/machineContributionRegistryProjectionRevision';
+import { resolveReasonCopy } from '@/sync/domains/surfaces/copy';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit';
 import { resolveThemeProfile } from '@/theme/profiles/resolveThemeProfile';
 
@@ -83,6 +85,11 @@ import { dispatchPluginResolvedSemanticCommand } from './dispatchPluginResolvedS
 import { getPluginUiEphemeralSharedScope } from './pluginUiEphemeralSharedScope';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { getStorage } from '@/sync/domains/state/storageStore';
+import { getCurrentAuth, setCurrentAuth } from '@/auth/context/currentAuth';
+import { TokenStorage } from '@/auth/storage/tokenStorage';
+import { readCredentialAuthorityKind } from '@/auth/context/credentialAuthority';
+import { serveAccountHomes } from '@/dev/testkit/harness/actionHomesHttpHarness';
+import { AuthTokenProvenanceSchema } from '@happier-dev/protocol/auth/authToken';
 import { createEntityDragDropRuntime } from '@/components/ui/treeDragDrop/entityDragDropRuntime';
 import { createPluginEntityDragDropBinding, executeMountedPluginEntityDropAction, settlePluginEntityDropActionResult } from './entityDragDrop/pluginEntityDragDropBinding';
 import { createActionOperationRunner } from '../../../../../cli/src/daemon/actionOperations/actionOperationRunner';
@@ -90,6 +97,14 @@ import { createActionOperationStore } from '../../../../../cli/src/daemon/action
 import { createUiAccountActionTransport } from '@/sync/ops/actions/accountActionTransport';
 import { ActionExecuteFailureSchema } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { NotificationsNotifyMeResultV1Schema } from '@happier-dev/protocol/account/notifications/notifyMeV1';
+import { DocCollaborationActionOutputSchemasV1 } from '@happier-dev/protocol/artifacts/artifactCollaborationActionsV1';
+import { captureDocPassageV1 } from '@happier-dev/protocol/artifacts/artifactPassageV1';
+import { DiscussionReadResultV1Schema } from '@happier-dev/protocol/discussions/actions';
+import { answerDiscussionThreadForTests, createAccountTokenForTests, createHomeGovernanceHarness,
+    installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
+import { createPluginSurfaceContextFixture } from '@/dev/testkit/fixtures/pluginSurfaceContextFixture';
+import { externalAuthoringPlugin, readExternalDoc, commentOnExternalDoc, proposeExternalDocEdit,
+    requestExternalDocAcceptance, requestExternalDocDecline } from '../../../../../../packages/plugin-ui/fixtures/external-authoring/src/index';
 
 // The dispatcher and serializer stay real. The server-scoped RPC is the
 // system boundary that terminates this UI-side transport path.
@@ -367,6 +382,14 @@ function createClientActionActivation(input: Readonly<{
     const projectedAction = Object.freeze({
         ...action,
         occurrenceId: input.occurrenceId ?? `occurrence-${pluginId}`,
+        authorization: {
+            ...CLIENT_ACTION_AUTHORIZATION,
+            generation: {
+                targetGeneration: input.occurrenceId ?? `occurrence-${pluginId}`,
+                desiredGeneration: input.occurrenceId ?? `occurrence-${pluginId}`,
+                appliedGeneration: input.occurrenceId ?? `occurrence-${pluginId}`,
+            },
+        },
         executionOrigin,
         [PLUGIN_UI_CONTRIBUTION_ORIGIN_KEY]: hostOrigin,
     });
@@ -1253,6 +1276,14 @@ describe('plugin-surface action branch selection', () => {
             accountLifetime,
             occurrenceId: 'triage-cold-search-generation',
         });
+        machineRpcWithServerScopeMock.mockImplementation(async (request: Readonly<{ method: string }>) => (
+            request.method === RPC_METHODS.DAEMON_PLUGIN_UI_TARGETED_CONTRIBUTIONS_READ
+                ? { status: 'current', targetedContributions: PluginUiTargetedContributionsV1Schema.parse({
+                    target: { pluginId: activation.action.pluginId, occurrenceId: activation.action.occurrenceId,
+                        sourceCustody: TARGET_SOURCE_CUSTODY }, points: [],
+                }), targetedSurfaceMounts: [] }
+                : answerActionSchemasRead(request)
+        ));
         const entryRef = testkitEntryRef();
         const result = TriageListEntriesResultV1Schema.parse({
             v: 1,
@@ -1316,7 +1347,7 @@ describe('plugin-surface action branch selection', () => {
                 accountLifetime,
                 execute: transport,
             });
-            expect(outcome.ok).toBe(true);
+            expect(outcome).toMatchObject({ ok: true });
             if (!outcome.ok || !('result' in outcome)) throw new Error('Cold Triage Search did not execute');
             expect(PluginSearchResultV1Schema.parse(outcome.result)).toMatchObject({
                 items: [{ title: 'Replace the duplicated normalizer', command: { kind: 'openSurface' } }],
@@ -2680,7 +2711,7 @@ describe('plugin-surface action branch selection', () => {
         });
     });
 
-    it('keeps a pre-handler daemon retirement as an ordinary unavailable result', async () => {
+    it('keeps a pre-handler daemon retirement pending on a refreshed projection', async () => {
         const contributed = vi.fn<PluginSurfaceContributedActionTransport>(async () => ({
             supported: true as const,
             result: { ok: false as const, code: 'plugin_action_generation_retired' },
@@ -2696,9 +2727,25 @@ describe('plugin-surface action branch selection', () => {
             },
         })).resolves.toEqual({
             ok: false,
-            code: 'unavailable',
+            code: 'stale_surface',
             reason: 'plugin_action_generation_retired',
+            message: resolveReasonCopy({ kind: 'pluginRuntime', reasonCode: 'plugin_action_generation_retired' }).body,
         });
+    });
+
+    it('refreshes a stale occurrence refused by the Action schema read before dispatch', async () => {
+        const scope = { serverId: 'schema-home', machineId: 'schema-machine' };
+        const before = getMachineContributionRegistryProjectionRevision(scope);
+        machineRpcWithServerScopeMock.mockResolvedValueOnce({ ok: false, code: 'plugin_occurrence_stale' });
+        const result = await dispatchPluginSurfaceAction({
+            callerPluginId: CALLER_PLUGIN_ID,
+            action: 'refresh-index',
+            input: {},
+            contributedAction: scope,
+            resolveContributedAction: identity => ({ ...resolveDaemonTargetAction(identity), confirmationWhen: { presentUserUi: false } }),
+        });
+        expect(result).toMatchObject({ ok: false, code: 'stale_surface', reason: 'plugin_occurrence_stale' });
+        expect(getMachineContributionRegistryProjectionRevision(scope)).toBeGreaterThan(before);
     });
 
     it('projects a post-handler daemon retirement as outcome unknown', async () => {
@@ -2742,6 +2789,123 @@ function resolveConfirmedDaemonTargetAction(
 // the UI asks the person, then carries the settled intent on the daemon RPC.
 // No daemon or server round trip may stand in for that local decision.
 describe('present-user confirmation for daemon-target Actions', () => {
+    it('uses the selected Home credential for authored UI confirmation rather than the focused Home', async () => {
+        const previousAuth = getCurrentAuth();
+        const terminalToken = `header.${Buffer.from(JSON.stringify({ sub: 'terminal-account', tokenEpoch: 0,
+            provenance: AuthTokenProvenanceSchema.parse({ v: 1, kind: 'terminal', authority: 'account_automation' }),
+        })).toString('base64url')}.signature`;
+        const homes = await serveAccountHomes({ homes: [
+            { key: 'target', serverUrl: 'https://plugin-target.example.test', accountId: 'terminal-account', credentials: { token: terminalToken } },
+            { key: 'focused', serverUrl: 'https://plugin-focused.example.test', accountId: 'focused-account', currentAccount: true },
+        ], route: () => undefined });
+        const focusedHome = homes.homes.focused!;
+        const focusedCredentials = await TokenStorage.getCredentialsForServerUrl(focusedHome.serverUrl, { serverId: focusedHome.id });
+        if (!focusedCredentials) throw new Error('Focused Home credential missing');
+        setCurrentAuth({ isAuthenticated: true, credentials: focusedCredentials,
+            credentialAuthorityKind: readCredentialAuthorityKind(focusedCredentials.token),
+            login: async () => { throw new Error('Unused auth boundary'); },
+            loginWithCredentials: async () => { throw new Error('Unused auth boundary'); },
+            logout: async () => { throw new Error('Unused auth boundary'); }, refreshFromActiveServer: async () => {},
+        });
+        const requestCurrentIntent = vi.fn(async ({ fingerprint }: Readonly<{ fingerprint: string }>) => ({ status: 'approved' as const, fingerprint }));
+        const contributed = vi.fn<PluginSurfaceContributedActionTransport>(async () => ({
+            supported: true, result: { ok: true, result: { completed: true } },
+        }));
+        clientActionSchemasByQualifiedId.set('qa.collection-detail/set-complete', { inputSchema: { type: 'object' } });
+        try {
+            expect(await dispatchPluginSurfaceAction({
+                action: { pluginId: 'qa.collection-detail', localId: 'set-complete' }, input: { completed: true },
+                resolveContributedAction: identity => PluginProjectedActionV2Schema.parse({
+                    ...resolveConfirmedDaemonTargetAction(identity), dangerLevel: 'writesLocal',
+                    confirmationWhen: { presentUserUi: false },
+                }), requestCurrentIntent,
+                contributedAction: { machineId: 'machine-1', serverId: homes.homes.target!.id, execute: contributed },
+            })).toMatchObject({ ok: true });
+            expect(requestCurrentIntent).toHaveBeenCalledOnce();
+            expect(contributed.mock.calls[0]?.[1].presentUserIntent).toBe('confirmed');
+        } finally { setCurrentAuth(previousAuth); await homes.dispose(); }
+    });
+
+    it.each([
+        { ask: false, authority: 'present_user', confirms: false },
+        { ask: true, authority: 'present_user', confirms: true },
+        { ask: false, authority: 'account_automation', confirms: true },
+    ] as const)('honors authored UI confirmation with $authority and explicit Ask=$ask', async ({ ask, authority, confirms }) => {
+        const storage = getStorage();
+        const previous = storage.getState();
+        const qualifiedId = 'qa.collection-detail/actions/set-complete';
+        storage.setState(state => ({ ...state, settings: { ...state.settings,
+            actionsSettingsV1: normalizeActionsSettingsV1({ v: 1,
+                actions: ask ? { [qualifiedId]: { approvalRequiredSurfaces: ['ui'] } } : {},
+            }),
+        } }));
+        const requestCurrentIntent = vi.fn(async ({ fingerprint }: Readonly<{ fingerprint: string }>) => ({
+            status: 'approved' as const, fingerprint,
+        }));
+        const contributed = vi.fn<PluginSurfaceContributedActionTransport>(async () => ({
+            supported: true, result: { ok: true, result: { completed: true } },
+        }));
+        try {
+            const { createCollectionDetailPlugin } = await import('../../../../../../packages/plugin-sdk/fixtures/qa-plugin-authoring/qa-collection-detail/index');
+            const declaration = createCollectionDetailPlugin().manifest.contributes?.actions?.find(action => action.id === 'set-complete');
+            if (!declaration) throw new Error('Collection completion declaration missing');
+            if (declaration.inputSchema) clientActionSchemasByQualifiedId.set('qa.collection-detail/set-complete', { inputSchema: declaration.inputSchema });
+            expect(await dispatchPluginSurfaceAction({
+                action: { pluginId: 'qa.collection-detail', localId: 'set-complete' },
+                input: { rowId: 'release-guide', completed: true },
+                hostAction: { execute: vi.fn(), context: { authority } },
+                resolveContributedAction: identity => PluginProjectedActionV2Schema.parse({
+                    ...resolveConfirmedDaemonTargetAction(identity),
+                    dangerLevel: declaration.dangerLevel,
+                    confirmation: declaration.confirmation,
+                    confirmationWhen: declaration.confirmationWhen,
+                }),
+                requestCurrentIntent, contributedAction: { machineId: 'machine-1', execute: contributed },
+            })).toEqual({ ok: true, result: { completed: true } });
+            expect(requestCurrentIntent).toHaveBeenCalledTimes(confirms ? 1 : 0);
+            expect(contributed.mock.calls[0]?.[1]).toMatchObject({ executionSurface: 'ui' });
+            expect(contributed.mock.calls[0]?.[1].presentUserIntent).toBe(confirms ? 'confirmed' : undefined);
+        } finally { storage.setState(previous); }
+    });
+
+    it.each([false, true])('uses a declared read default while respecting explicit Ask-first=%s', async required => {
+        const storage = getStorage();
+        const previous = storage.getState();
+        const qualifiedId = 'acme.bindings/actions/manage';
+        storage.setState(state => ({ ...state, settings: { ...state.settings,
+            actionsSettingsV1: normalizeActionsSettingsV1({ v: 1,
+                actions: required ? { [qualifiedId]: { approvalRequiredSurfaces: ['ui'] } } : {},
+            }),
+        } }));
+        clientActionSchemasByQualifiedId.set('acme.bindings/manage', { inputSchema: {
+            type: 'object', properties: { kind: { type: 'string', enum: ['list', 'attach'] } },
+            required: ['kind'], additionalProperties: false,
+        } });
+        const requestCurrentIntent = vi.fn(async ({ fingerprint }: Readonly<{ fingerprint: string }>) => ({
+            status: 'approved' as const, fingerprint,
+        }));
+        const contributed = vi.fn<PluginSurfaceContributedActionTransport>(async () => ({
+            supported: true, result: { ok: true, result: { bindings: [] } },
+        }));
+        try {
+            const dispatch = (input: PluginUiJsonValueV1) => dispatchPluginSurfaceAction({
+                action: { pluginId: 'acme.bindings', localId: 'manage' }, input,
+                resolveContributedAction: identity => PluginProjectedActionV2Schema.parse({
+                    ...resolveConfirmedDaemonTargetAction(identity),
+                    confirmationWhen: { op: 'not', predicate: { op: 'eq', path: 'kind', value: 'list' } },
+                }),
+                requestCurrentIntent, contributedAction: { machineId: 'machine-1', execute: contributed },
+            });
+            expect(await dispatch({ kind: 'list' })).toEqual({ ok: true, result: { bindings: [] } });
+            expect(requestCurrentIntent).toHaveBeenCalledTimes(required ? 1 : 0);
+            expect(contributed.mock.calls[0]?.[1].presentUserIntent).toBe(required ? 'confirmed' : undefined);
+            expect(await dispatch({ kind: 'list', extra: 'invalid' })).toMatchObject({ ok: false, reason: 'plugin_action_input_schema_invalid' });
+            expect(contributed).toHaveBeenCalledTimes(1);
+            expect(await dispatch({ kind: 'attach' })).toEqual({ ok: true, result: { bindings: [] } });
+            expect(contributed.mock.calls[1]?.[1].presentUserIntent).toBe('confirmed');
+        } finally { storage.setState(previous); }
+    });
+
     it('sends a waived dangerous Action without asking or manufacturing present-user intent', async () => {
         const storage = getStorage();
         const previous = storage.getState();
@@ -3264,7 +3428,7 @@ function composedRealmHref(): string {
 
 type ComposedSettlement =
     | Readonly<{ settled: 'fulfilled'; result: unknown }>
-    | Readonly<{ settled: 'rejected'; code: string; diagnostics: readonly string[] }>;
+    | Readonly<{ settled: 'rejected'; code: string; message?: string; diagnostics: readonly string[] }>;
 
 async function settleComposed(pending: Promise<unknown>): Promise<ComposedSettlement> {
     return pending.then(
@@ -3272,11 +3436,13 @@ async function settleComposed(pending: Promise<unknown>): Promise<ComposedSettle
         (error: unknown): ComposedSettlement => {
             const data = error as Readonly<{
                 code?: unknown;
+                message?: string;
                 diagnostics?: readonly Readonly<{ code?: unknown }>[];
             }>;
             return {
                 settled: 'rejected',
                 code: typeof data.code === 'string' ? data.code : 'unknown',
+                message: data.message,
                 diagnostics: (data.diagnostics ?? [])
                     .map((diagnostic) => diagnostic.code)
                     .filter((code): code is string => typeof code === 'string'),
@@ -3606,10 +3772,12 @@ describe('composed public SDK client to canonical plugin-surface dispatcher', ()
     });
 
     it('rejects a failed contributed action instead of resolving the failure envelope as a result', async () => {
+        const scope = { serverId: 'server-composed', machineId: 'machine-composed' };
+        const before = getMachineContributionRegistryProjectionRevision(scope);
         contributedActionExecute.mockClear();
         contributedActionExecute.mockResolvedValueOnce({
             supported: true as const,
-            result: { ok: false as const, code: 'plugin_action_surface_unavailable' },
+            result: { ok: false as const, code: 'plugin_action_surface_unavailable', message: 'Reconnect the integration account before continuing.' },
         });
 
         const settlement = await settleComposed(client.executeAction('refresh-index', {}));
@@ -3617,6 +3785,25 @@ describe('composed public SDK client to canonical plugin-surface dispatcher', ()
         expect(settlement.settled).toBe('rejected');
         expect(settlement.settled === 'rejected' ? settlement.diagnostics : [])
             .toContain('plugin_action_surface_unavailable');
+        expect(settlement).toMatchObject({ message: 'Reconnect the integration account before continuing.' });
+        expect(getMachineContributionRegistryProjectionRevision(scope)).toBe(before);
+        await expect(client.executeAction('refresh-index', {})).resolves.toEqual({ refreshed: true });
+    });
+
+    it.each(['plugin_generation_stale', 'plugin_occurrence_stale'])('refreshes the superseded projection for %s without exposing daemon diagnostics', async (code) => {
+        const scope = { serverId: 'server-composed', machineId: 'machine-composed' };
+        const before = getMachineContributionRegistryProjectionRevision(scope);
+        contributedActionExecute.mockResolvedValueOnce({
+            supported: true as const,
+            result: { ok: false as const, code, message: 'Plugin occurrenceId is stale' },
+        });
+        const settlement = await settleComposed(client.executeAction('refresh-index', {}));
+        expect(settlement).toMatchObject({
+            settled: 'rejected', code: 'stale_surface',
+            message: resolveReasonCopy({ kind: 'pluginRuntime', reasonCode: code }).body,
+        });
+        expect(settlement.settled === 'rejected' ? settlement.diagnostics : []).toContain(code);
+        expect(getMachineContributionRegistryProjectionRevision(scope)).toBeGreaterThan(before);
     });
 
     it('preserves canonical contributed-action remediation on the generic dispatch outcome', async () => {
@@ -3815,7 +4002,7 @@ describe('composed React Native host API to canonical plugin-surface dispatcher'
             })),
             contributedActionExecute: vi.fn<PluginSurfaceContributedActionTransport>(async () => ({
                 supported: true as const,
-                result: { ok: false as const, code: 'plugin_action_surface_unavailable' },
+                result: { ok: false as const, code: 'plugin_action_surface_unavailable', message: 'Reconnect the integration account before continuing.' },
             })),
         });
 
@@ -3827,7 +4014,145 @@ describe('composed React Native host API to canonical plugin-surface dispatcher'
         });
         await expect(adapter.api.executeAction('refresh-index', {})).rejects.toMatchObject({
             code: 'unavailable',
+            message: 'Reconnect the integration account before continuing.',
             diagnostics: [{ code: 'plugin_action_surface_unavailable', severity: 'error' }],
         });
+    });
+});
+
+/** Reuse the real physical carrier owners; only the browser realm hop is synthetic. */
+async function externalDocCarrier(transport: 'hosted-web' | 'react-native',
+    host: ReturnType<typeof createPluginSurfaceActionHostApi>, isCurrent: () => boolean, mode: 'plain' | 'e2ee') {
+    const pluginId = externalAuthoringPlugin.manifest.id;
+    const requestSurface = { ...COMPOSED_SURFACE, pluginId, contributionId: 'external-authoring-semantic' };
+    const surface = createPluginSurfaceContextFixture({ accountEncryptionMode: mode, target: { kind: 'app' },
+        mount: { kind: 'destination', destination: { pluginId, localId: requestSurface.contributionId }, container: 'appPage' },
+        targetedContributions: { target: { pluginId, occurrenceId: 'external-doc-occurrence', sourceCustody: TARGET_SOURCE_CUSTODY }, points: [] } });
+    if (transport === 'react-native') {
+        const adapter = createCanonicalPluginReactNativeHostApiAdapter({ surface, requestSurface,
+            requestIdPrefix: 'external-doc-rn', handleRequest: host.handleRequest,
+            installedMethods: host.installedMethods, isCurrent });
+        return { api: adapter.api, retire: () => { adapter.dispose(); }, dispose: () => { adapter.dispose(); } };
+    }
+    const previousWindow = Reflect.get(globalThis, 'window');
+    const listeners = new Set<(event: unknown) => void>();
+    let bridge: ReturnType<typeof createPluginHostedWebHostApiBridgeHandler>;
+    const deliver = (data: unknown) => queueMicrotask(() => {
+        for (const listener of listeners) listener({ data, origin: COMPOSED_HOST_ORIGIN, source: parent });
+    });
+    const parent = { postMessage(message: unknown, origin: string) {
+        if (origin !== COMPOSED_HOST_ORIGIN) return;
+        const envelope = PluginHostedWebBridgeEnvelopeV1Schema.parse(message);
+        void Promise.resolve(bridge(envelope)).then(deliver);
+    } };
+    bridge = createPluginHostedWebHostApiBridgeHandler({ surface: requestSurface, identity: COMPOSED_IDENTITY,
+        requestIdPrefix: 'external-doc-hosted', handleRequest: host.handleRequest, isCurrent,
+        canonicalHostApi: { identity: COMPOSED_IDENTITY, surface: PluginUiJsonValueV1Schema.parse(surface),
+            methods: host.installedMethods }, postToFrame: deliver,
+        bootstrap: { frameOrigin: new URL(composedRealmHref()).origin } });
+    // A real frame has its own realm. The SDK retains its bootstrap on that realm,
+    // so reusing globalThis here would acquire another test frame's retired client.
+    Reflect.set(globalThis, 'window', { parent, location: { href: composedRealmHref() },
+        addEventListener: (_kind: string, listener: (event: unknown) => void) => { listeners.add(listener); },
+        removeEventListener: (_kind: string, listener: (event: unknown) => void) => { listeners.delete(listener); } });
+    const api = await createPluginUiHostApiClient();
+    return { api, retire: () => { bridge.dispose(); }, dispose: async () => {
+        bridge.dispose();
+        await new Promise<void>(resolve => queueMicrotask(resolve));
+        if (previousWindow === undefined) Reflect.deleteProperty(globalThis, 'window');
+        else Reflect.set(globalThis, 'window', previousWindow);
+    } };
+}
+
+describe('external author Doc collaboration through physical SDK carriers', () => {
+    it.each([['hosted-web', 'plain'], ['react-native', 'e2ee']] as const)(
+        'reads, comments and proposes through %s with %s content without acquiring person authority', async (transport, mode) => {
+        const homes = createHomeGovernanceHarness();
+        installHomeGovernanceBoundaries(homes);
+        await homes.reset();
+        const serverId = await homes.addHome({ name: 'External Doc review', serverUrl: `https://external-doc-${transport}.test`,
+            accountId: 'alice', currentAccount: true, accountEncryptionMode: mode,
+            ...(mode === 'e2ee' ? { credentials: { token: createAccountTokenForTests('alice', { currentAccount: true }),
+                secret: Buffer.from(new Uint8Array(32).fill(24)).toString('base64url') } } : {}) });
+        const network = answerDiscussionThreadForTests(homes, serverId, { mode, loseCreate: false, loseFirstRejoin: false });
+        const [{ captureLazyActionAccountContext }, { createUiArtifactAction }, { executeDiscussionActionInAccountContext },
+            { createFrontDoorActionExecute }] = await Promise.all([
+            import('@/sync/ops/actions/actionAccountContext'), import('@/sync/ops/actions/artifactActionDeps'),
+            import('@/sync/api/discussions/discussionActions'), import('@/sync/ops/actions/frontDoorRuntimeActionExecutor'),
+        ]);
+        const account = await captureLazyActionAccountContext(serverId);
+        const source = 'Keep this. Review this passage. Keep that.';
+        const created = await account.createArtifactDocument({ header: { kind: 'artifact.legacy', title: 'Author review' }, body: source });
+        const ref = { kind: 'doc' as const, serverId, artifactId: created.artifactId };
+        let enabled = true;
+        const actionsSettings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: {
+            'doc.comment.reply': ['plugin'], 'doc.edit.propose': ['plugin'], 'doc.edit.accept': ['plugin'], 'doc.edit.decline': ['plugin'],
+        } });
+        const executor = createFrontDoorActionExecute(createActionExecutor(createActionExecutorBoundaryFixture({
+            isActionEnabled: () => enabled,
+            isActionApprovalRequired: (id, context) => isApprovalRequiredByActionsSettings(id, actionsSettings, context),
+            artifactAction: createUiArtifactAction(account),
+            discussionAction: args => executeDiscussionActionInAccountContext(account, 'available', args),
+        })));
+        const lifetime = new AbortController();
+        let current = true;
+        const pluginId = externalAuthoringPlugin.manifest.id;
+        const host = createPluginSurfaceActionHostApi({ surfaceContext: { ...COMPOSED_SURFACE, pluginId, contributionId: 'external-authoring-semantic' },
+            callerBinding: mountedCallerBinding({ pluginId, contributionLocalId: 'external-authoring-semantic', occurrenceId: 'external-doc-occurrence' }),
+            callerSourceCustody: TARGET_SOURCE_CUSTODY, resourceLifetimeSignal: lifetime.signal, isCurrent: () => current,
+            hostAction: { execute: executor, context: { serverId, runtimeAccountId: 'alice', actionsSettings,
+                // A mounted plugin must not inherit this host's present person or bypass.
+                authority: 'present_user', bypassApprovals: true } } });
+        const carrier = await externalDocCarrier(transport, host, () => current, mode);
+        try {
+            const read = DocCollaborationActionOutputSchemasV1['doc.read'].parse(await readExternalDoc(carrier.api, { ref }));
+            expect(read.artifact.body).toBe(source);
+            expect(read.artifact.revision).toEqual(created.revision);
+            const target = captureDocPassageV1({ ref: read.ref, revision: read.artifact.revision, source,
+                range: { start: 11, end: 30 } });
+            const comment = DocCollaborationActionOutputSchemasV1['doc.comment.reply'].parse(await commentOnExternalDoc(carrier.api, {
+                target, localId: 'external-comment', content: { v: 1, parts: [{ t: 'text', text: 'Please clarify this passage.' }] },
+            }));
+            const proposalInput = { target, discussionRef: comment.message.messageRef.discussion,
+                replyTo: comment.message.messageRef, localId: 'external-proposal', baseRevision: target.revision,
+                before: target.quote, after: 'Reviewed replacement.', reason: 'Explain the point directly.' };
+            const proposal = DocCollaborationActionOutputSchemasV1['doc.edit.propose'].parse(await proposeExternalDocEdit(carrier.api, proposalInput));
+            expect(proposal.message.content).toMatchObject({ kind: 'doc_edit_proposal', proposal: { before: target.quote,
+                after: proposalInput.after, target } });
+            expect(proposal.message.docEditProposalDispositionV1).toEqual({ state: 'open' });
+            expect(await proposeExternalDocEdit(carrier.api, proposalInput)).toEqual(proposal);
+            const reopened = DiscussionReadResultV1Schema.parse(await carrier.api.executeAction('discussion.read', {
+                discussionId: comment.message.discussionId,
+            }));
+            expect(reopened.messages.find(message => message.id === proposal.message.id)).toEqual(proposal.message);
+            expect(network.messages).toHaveLength(2);
+            if (mode === 'e2ee') {
+                const wire = JSON.stringify(homes.requestsFor('/v1/discussions').map(request => request.input));
+                expect(wire).not.toContain(target.quote);
+                expect(wire).not.toContain(proposalInput.after);
+            }
+            expect((await readExternalDoc(carrier.api, { ref }))).toEqual({ ...read, openCommentCount: 1 });
+            const beforeDecision = homes.requests.length;
+            const proposalRef = proposal.message.messageRef;
+            for (const decide of [() => requestExternalDocAcceptance(carrier.api, { proposalRef, expectedRevision: created.revision }),
+                () => requestExternalDocDecline(carrier.api, { proposalRef })]) {
+                expect(await settleComposed(decide())).toMatchObject({ settled: 'rejected', diagnostics: ['present_user_required'] });
+            }
+            expect(homes.requests.slice(beforeDecision).some(request => request.path.includes('doc-edit-proposals'))).toBe(false);
+            const cancellation = new AbortController(); cancellation.abort();
+            const beforeCancellation = homes.requests.length;
+            expect(await settleComposed(commentOnExternalDoc(carrier.api, { target, localId: 'cancelled',
+                content: { v: 1, parts: [{ t: 'text', text: 'Do not publish.' }] } }, { signal: cancellation.signal })))
+                .toMatchObject({ settled: 'rejected' });
+            expect(homes.requests).toHaveLength(beforeCancellation);
+            enabled = false;
+            expect(await settleComposed(readExternalDoc(carrier.api, { ref }))).toMatchObject({ settled: 'rejected' });
+            enabled = true;
+            current = false; lifetime.abort(); carrier.retire();
+            expect(await settleComposed(readExternalDoc(carrier.api, { ref }))).toMatchObject({ settled: 'rejected',
+                code: transport === 'hosted-web' ? 'host_api_handler_disposed' : 'stale_surface' });
+            expect(network.messages).toHaveLength(2);
+            expect(homes.artifacts(serverId).read(created.artifactId)?.bodyVersion).toBe(created.revision.bodyVersion);
+        } finally { await carrier.dispose(); host.dispose?.(); account.dispose(); await homes.reset(); }
     });
 });

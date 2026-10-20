@@ -21,7 +21,8 @@ import type {
     AgentExternalSessionsResult,
     AgentExternalSessionsRipgrep,
 } from '@happier-dev/plugin-sdk/sessions/external';
-import { isAgentExternalSessionsFailureCode } from '@happier-dev/plugin-sdk/sessions/external';
+import { getAgentExternalSessionsInvocationFailure, isAgentExternalSessionsFailureCode, runWithSessionInputPromptUserTextReader } from '@happier-dev/plugin-sdk/sessions/external';
+import { createCodingSessionInputPromptUserTextReader } from '@/agent/prompting/coding/providerPromptBehaviorRegistry';
 import type { ExecService } from '@happier-dev/plugin-sdk/exec';
 import type {
     AgentExternalSessionCandidate,
@@ -56,8 +57,6 @@ const MAX_READ_AFTER_BOUNDARY_CODE_UNITS = 2_000;
 const MAX_READ_AFTER_DIAGNOSTIC_CODE_UNITS = 128;
 const MAX_READ_AFTER_DIAGNOSTICS = 32;
 const MAX_READ_AFTER_DIAGNOSTIC_POSITIONS = 200;
-const MAX_NATIVE_CURSOR_CODE_UNITS = 2_000;
-const MAX_QUALIFIED_CURSOR_CODE_UNITS = 4_096;
 const MAX_TRANSCRIPT_MEDIA_READ_ROOTS = 16;
 const MAX_TRANSCRIPT_MEDIA_READ_ROOT_CODE_UNITS = 4_096;
 export const EXTERNAL_SESSIONS_INVOCATION_POLICY = Object.freeze({
@@ -69,8 +68,6 @@ export const EXTERNAL_SESSIONS_INVOCATION_POLICY = Object.freeze({
     titleMaxCodeUnits: MAX_TITLE_CODE_UNITS,
     searchMaxCodeUnits: MAX_SEARCH_CODE_UNITS,
     failureMessageMaxCodeUnits: MAX_FAILURE_MESSAGE_CODE_UNITS,
-    nativeCursorMaxCodeUnits: MAX_NATIVE_CURSOR_CODE_UNITS,
-    qualifiedCursorMaxCodeUnits: MAX_QUALIFIED_CURSOR_CODE_UNITS,
     sourceMaxSerializedBytes: MAX_PLUGIN_AGENT_EXTERNAL_SESSION_LINK_DATA_BYTES,
 });
 
@@ -272,6 +269,7 @@ export async function bindAgentExternalSessionsManagedEndpointRead(input: Readon
 type CursorScope = Readonly<{
     method: 'listCandidates' | 'pageTranscript' | 'readAfterTranscript';
     source: AgentExternalSessionSource;
+    maxSerializedBytes: number;
     remoteSessionId?: string;
 }>;
 
@@ -293,10 +291,11 @@ const invalidRequest = (): AgentExternalSessionsResult<never> => Object.freeze({
     code: 'invalid_request',
     retryable: false,
 });
-const agentError = (): AgentExternalSessionsResult<never> => Object.freeze({
+const agentError = (reason?: string): AgentExternalSessionsResult<never> => Object.freeze({
     ok: false,
     code: 'agent_error',
     retryable: false,
+    ...(reason ? { message: `external_sessions_${reason}` } : {}),
 });
 const cancelled = (): AgentExternalSessionsResult<never> => Object.freeze({
     ok: false,
@@ -428,7 +427,7 @@ function parseCandidate(value: unknown): AgentExternalSessionCandidate | null {
     const record = readStrictRecord(
         value,
         ['remoteSessionId', 'updatedAtMs'],
-        ['title', 'createdAtMs', 'archived', 'thread', 'linkData', 'candidateIndexState', 'match'],
+        ['title', 'cwd', 'messageCount', 'createdAtMs', 'archived', 'thread', 'linkData', 'candidateIndexState', 'match'],
     );
     if (!record) return null;
     const remoteSessionId = parseBoundedString(record.remoteSessionId, MAX_ID_CODE_UNITS);
@@ -437,6 +436,9 @@ function parseCandidate(value: unknown): AgentExternalSessionCandidate | null {
         ? undefined
         : parseBoundedString(record.title, MAX_TITLE_CODE_UNITS);
     const createdAtMs = record.createdAtMs === undefined ? undefined : parseTimestamp(record.createdAtMs);
+    const cwd = record.cwd === undefined ? undefined
+        : typeof record.cwd === 'string' && record.cwd.trim() ? record.cwd : null;
+    const messageCount = record.messageCount === undefined ? undefined : parseTimestamp(record.messageCount);
     const archived = parseOptionalBoolean(record.archived);
     const parsedThread = record.thread === undefined
         ? undefined
@@ -454,6 +456,8 @@ function parseCandidate(value: unknown): AgentExternalSessionCandidate | null {
         || title === null
         || (title !== undefined && title.trim().length === 0)
         || createdAtMs === null
+        || cwd === null
+        || messageCount === null
         || archived === null
         || thread === null
         || linkData === null
@@ -466,6 +470,8 @@ function parseCandidate(value: unknown): AgentExternalSessionCandidate | null {
         remoteSessionId,
         updatedAtMs,
         ...(title === undefined ? {} : { title }),
+        ...(cwd === undefined ? {} : { cwd }),
+        ...(messageCount === undefined ? {} : { messageCount }),
         ...(createdAtMs === undefined ? {} : { createdAtMs }),
         ...(archived === undefined ? {} : { archived }),
         ...(thread === undefined ? {} : { thread }),
@@ -481,7 +487,7 @@ function parseTranscriptItemId(value: unknown): string | null {
     return parsed.success ? parsed.data : null;
 }
 
-function parseTranscriptItem(value: unknown): AgentExternalSessionTranscriptItem | null {
+function parseTranscriptItem(value: unknown, readUserText?: (text: string) => string): AgentExternalSessionTranscriptItem | null {
     const record = readStrictRecord(
         value,
         ['id', 'createdAtMs', 'raw'],
@@ -521,7 +527,7 @@ function parseTranscriptItem(value: unknown): AgentExternalSessionTranscriptItem
     if (
         id === null
         || createdAtMs === null
-        || localId === null
+        || (localId === null && record.localId !== null)
         || sidechainId === false
         || role === false
         || raw === null
@@ -530,10 +536,12 @@ function parseTranscriptItem(value: unknown): AgentExternalSessionTranscriptItem
         || userProjection === null
         || (userProjection !== undefined && derivedRole !== 'user')
     ) return null;
+    const displayUserText = raw.role === 'user' && readUserText ? readUserText(raw.content.text) : undefined;
     return Object.freeze({
         id,
         createdAtMs,
         raw,
+        ...(raw.role !== 'user' || displayUserText === undefined || displayUserText === raw.content.text ? {} : { displayUserText }),
         ...(localId === undefined ? {} : { localId }),
         ...(sidechainId === undefined ? {} : { sidechainId }),
         ...(role === undefined ? {} : { messageRole: role }),
@@ -545,12 +553,28 @@ function sourceDigest(source: AgentExternalSessionSource): string {
     return createHash('sha256').update(createCanonicalJsonSigningInput(source), 'utf8').digest('base64url');
 }
 
+function cursorCodeUnitBounds(scope: CursorScope): Readonly<{ native: number; qualified: number }> {
+    // Discovery and transcript cursors carry codec progress. Their whole
+    // qualified reply already has a UTF-8 byte budget; a second short-cursor
+    // limit must not reject valid progress before that owner measures it.
+    // Code units cannot exceed UTF-8 bytes, so this is only an early coarse
+    // check. parseAndBoundResult enforces the actual whole-envelope budget.
+    const bytes = scope.maxSerializedBytes;
+    return { native: bytes, qualified: bytes };
+}
+
 function encodeQualifiedCursor(
     nativeCursor: string,
     identity: ContributionIdentity,
     scope: CursorScope,
 ): string | null {
-    if (parseBoundedString(nativeCursor, MAX_NATIVE_CURSOR_CODE_UNITS) === null) return null;
+    const bounds = cursorCodeUnitBounds(scope);
+    if (parseBoundedString(nativeCursor, bounds.native) === null) {
+        if (nativeCursor.length > bounds.native) {
+            throw new ExternalSessionsResultAdmissionError('native_cursor_too_large');
+        }
+        return null;
+    }
     const envelope: QualifiedCursorV1 = Object.freeze({
         v: 1,
         p: identity.pluginId,
@@ -562,7 +586,8 @@ function encodeQualifiedCursor(
         c: nativeCursor,
     });
     const encoded = `happier_external_cursor_v1:${Buffer.from(JSON.stringify(envelope), 'utf8').toString('base64url')}`;
-    return encoded.length <= MAX_QUALIFIED_CURSOR_CODE_UNITS ? encoded : null;
+    if (encoded.length > bounds.qualified) throw new ExternalSessionsResultAdmissionError('result_byte_budget');
+    return encoded;
 }
 
 function decodeInputCursor(
@@ -570,11 +595,12 @@ function decodeInputCursor(
     identity: ContributionIdentity,
     scope: CursorScope,
 ): string | null {
-    const cursor = parseBoundedString(value, MAX_QUALIFIED_CURSOR_CODE_UNITS);
+    const bounds = cursorCodeUnitBounds(scope);
+    const cursor = parseBoundedString(value, bounds.qualified);
     if (cursor === null) return null;
     const prefix = 'happier_external_cursor_v1:';
     if (!cursor.startsWith(prefix)) {
-        return cursor.length <= MAX_NATIVE_CURSOR_CODE_UNITS ? cursor : null;
+        return cursor.length <= bounds.native ? cursor : null;
     }
     try {
         const decoded: unknown = JSON.parse(Buffer.from(cursor.slice(prefix.length), 'base64url').toString('utf8'));
@@ -591,7 +617,7 @@ function decodeInputCursor(
         ) {
             return null;
         }
-        return parseBoundedString(record.c, MAX_NATIVE_CURSOR_CODE_UNITS);
+        return parseBoundedString(record.c, bounds.native);
     } catch {
         return null;
     }
@@ -615,7 +641,8 @@ function parseFailure(value: unknown): AgentExternalSessionsResult<never> | null
     });
 }
 
-function parseResolveSourceValue(value: unknown): AgentExternalSessionsResolveSourceResult | null {
+/** Strict shared reader for a source-resolution value from an Agent leaf. */
+export function parseAgentExternalSessionsResolveSourceResult(value: unknown): AgentExternalSessionsResolveSourceResult | null {
     const record = readStrictRecord(value, ['source'], ['transcriptMediaReadRoots', 'accountingSource']);
     const parsedSource = record ? parseSource(record.source) : null;
     const transcriptMediaReadRoots = record
@@ -722,16 +749,19 @@ function parseTranscriptPageValue(
     scope: CursorScope,
     projection?: 'terminal',
 ): AgentExternalSessionsTranscriptPage | null {
-    const record = readStrictRecord(value, ['items', 'nextCursor'], ['tailCursor', 'hasMore', 'truncated']);
-    if (!record || !Array.isArray(record.items) || record.items.length > maxItems) return null;
+    const record = readStrictRecord(value, ['items', 'nextCursor'], ['tailCursor', 'hasMore', 'truncated', 'diagnostics']);
+    if (!record || !Array.isArray(record.items) || record.items.length > maxItems) {
+        throw new ExternalSessionsResultAdmissionError('transcript_page_envelope');
+    }
+    const readUserText = projection === 'terminal' ? undefined : createCodingSessionInputPromptUserTextReader(identity.agentId);
     const items = record.items.map((item) => {
         if (projection === 'terminal') {
             const observation = ExternalSessionTerminalSourceObservationV1Schema.safeParse(item);
             if (observation.success) return observation.data;
         }
-        return parseTranscriptItem(item);
+        return parseTranscriptItem(item, readUserText);
     });
-    if (items.some((item) => item === null)) return null;
+    if (items.some((item) => item === null)) throw new ExternalSessionsResultAdmissionError('transcript_page_item');
     const nextCursor = record.nextCursor === null
         ? null
         : typeof record.nextCursor === 'string'
@@ -741,6 +771,7 @@ function parseTranscriptPageValue(
         ? Object.freeze({
             method: 'readAfterTranscript' as const,
             source: scope.source,
+            maxSerializedBytes: scope.maxSerializedBytes,
             ...(scope.remoteSessionId === undefined ? {} : { remoteSessionId: scope.remoteSessionId }),
         })
         : scope;
@@ -751,6 +782,12 @@ function parseTranscriptPageValue(
             : null;
     const hasMore = parseOptionalBoolean(record.hasMore);
     const truncated = parseOptionalBoolean(record.truncated);
+    const diagnostics = record.diagnostics === undefined ? undefined
+        : Array.isArray(record.diagnostics) && record.diagnostics.length <= MAX_READ_AFTER_DIAGNOSTICS
+            ? record.diagnostics.map(parseReadAfterDiagnostic) : null;
+    if (diagnostics === null || diagnostics?.some(diagnostic => diagnostic === null)) {
+        throw new ExternalSessionsResultAdmissionError('transcript_page_diagnostics');
+    }
     if (
         (record.nextCursor !== null && nextCursor === null)
         || (record.tailCursor !== undefined && record.tailCursor !== null && tailCursor === null)
@@ -759,7 +796,7 @@ function parseTranscriptPageValue(
         || (hasMore === true && nextCursor === null)
         || (hasMore === false && nextCursor !== null)
     ) {
-        return null;
+        throw new ExternalSessionsResultAdmissionError('transcript_page_continuation');
     }
     return Object.freeze({
         items: Object.freeze(items as (AgentExternalSessionTranscriptItem | AgentExternalSessionTerminalObservation)[]),
@@ -767,6 +804,7 @@ function parseTranscriptPageValue(
         ...(tailCursor === undefined ? {} : { tailCursor }),
         ...(hasMore === undefined ? {} : { hasMore }),
         ...(truncated === undefined ? {} : { truncated }),
+        ...(diagnostics === undefined ? {} : { diagnostics: Object.freeze(diagnostics as AgentExternalSessionsReadAfterDiagnostic[]) }),
     });
 }
 
@@ -824,12 +862,13 @@ function parseReadAfterTranscriptValue(
             ) {
                 return null;
             }
+            const readUserText = projection === 'terminal' ? undefined : createCodingSessionInputPromptUserTextReader(identity.agentId);
             const items = record.items.map((item) => {
                 if (projection === 'terminal') {
                     const observation = ExternalSessionTerminalSourceObservationV1Schema.safeParse(item);
                     if (observation.success) return observation.data;
                 }
-                return parseTranscriptItem(item);
+                return parseTranscriptItem(item, readUserText);
             });
             const nextCursor = encodeQualifiedCursor(record.nextCursor, identity, scope);
             const boundary = parseBoundedString(record.boundary, MAX_READ_AFTER_BOUNDARY_CODE_UNITS);
@@ -869,13 +908,15 @@ function parseReadAfterTranscriptValue(
  * owner. Recursive serialization would reject valid deep values the strict-JSON
  * contract deliberately admits, so the byte ceiling stays the only bound.
  */
-function serializedResultBytes(value: unknown, maxSerializedBytes: number): number {
+function serializedResultBytes(value: unknown, maxSerializedBytes?: number): number {
     return measureSerializedValidatedStrictPluginJsonUtf8Bytes(
         value,
         'Agent External Sessions result',
         maxSerializedBytes,
     );
 }
+
+class ExternalSessionsResultAdmissionError extends Error {}
 
 function parseAndBoundResult<T>(
     value: unknown,
@@ -886,14 +927,20 @@ function parseAndBoundResult<T>(
     if (failure) {
         return maxSerializedBytes === undefined || serializedResultBytes(failure, maxSerializedBytes) <= maxSerializedBytes
             ? failure
-            : agentError();
+            : agentError('failure_byte_budget');
     }
     const record = readStrictRecord(value, ['ok', 'value']);
-    if (!record || record.ok !== true) return agentError();
-    const parsedValue = parseValue(record.value);
-    if (parsedValue === null) return agentError();
+    if (!record || record.ok !== true) return agentError('result_envelope');
+    let parsedValue: T | null;
+    try {
+        parsedValue = parseValue(record.value);
+    } catch (error) {
+        if (error instanceof ExternalSessionsResultAdmissionError) return agentError(error.message);
+        throw error;
+    }
+    if (parsedValue === null) return agentError('result_value');
     const result = Object.freeze({ ok: true as const, value: parsedValue });
-    return maxSerializedBytes === undefined || serializedResultBytes(result, maxSerializedBytes) <= maxSerializedBytes ? result : agentError();
+    return maxSerializedBytes === undefined || serializedResultBytes(result, maxSerializedBytes) <= maxSerializedBytes ? result : agentError('result_byte_budget');
 }
 
 function readMaxSerializedBytes(value: unknown): number | null {
@@ -910,7 +957,7 @@ function readMaxItems(value: unknown): number | null {
 
 export type BoundedExternalSessionsOperationResult<T> =
     | Readonly<{ status: 'fulfilled'; value: T }>
-    | Readonly<{ status: 'rejected' }>
+    | Readonly<{ status: 'rejected'; reason: string }>
     | Readonly<{ status: 'retired' }>
     | Readonly<{ status: 'cancelled' }>
     | Readonly<{ status: 'timeout' }>;
@@ -939,7 +986,9 @@ export async function invokeBoundedExternalSessionsOperation<T>(params: Readonly
     if (!params.isCurrent() || params.retirementSignal.aborted) {
         return Object.freeze({ status: 'retired' });
     }
-    if (params.signal.aborted) return Object.freeze({ status: 'cancelled' });
+    const callerCancellation = () => getAgentExternalSessionsInvocationFailure({ signal: params.signal })?.code === 'timeout'
+        ? 'timeout' as const : 'cancelled' as const;
+    if (params.signal.aborted) return Object.freeze({ status: callerCancellation() });
 
     const nowMs = Date.now();
     const deadlineAtMs = params.deadlineAtMs;
@@ -958,13 +1007,13 @@ export async function invokeBoundedExternalSessionsOperation<T>(params: Readonly
         resolveTerminal();
     };
     const retire = () => finish('retired');
-    const cancel = () => finish('cancelled');
+    const cancel = () => finish(callerCancellation());
     params.retirementSignal.addEventListener('abort', retire, { once: true });
     params.signal.addEventListener('abort', cancel, { once: true });
     if (!params.isCurrent() || params.retirementSignal.aborted) {
         finish('retired');
     } else if (params.signal.aborted) {
-        finish('cancelled');
+        finish(callerCancellation());
     }
     const cancelDeadline = deadlineAtMs === undefined ? undefined : armExternalSessionsDeadline(deadlineAtMs, () => finish('timeout'));
     const settled = Promise.resolve()
@@ -973,7 +1022,10 @@ export async function invokeBoundedExternalSessionsOperation<T>(params: Readonly
             : Promise.reject(new Error('External Sessions invocation cancelled before leaf admission')))
         .then(
             (value) => ({ status: 'fulfilled' as const, value }),
-            () => ({ status: 'rejected' as const }),
+            (error: unknown) => ({ status: 'rejected' as const,
+                reason: error instanceof TypeError ? 'operation_type_error'
+                    : error instanceof RangeError ? 'operation_range_error'
+                        : error instanceof SyntaxError ? 'operation_syntax_error' : 'operation_rejected' }),
         );
     try {
         const outcome = await Promise.race([
@@ -984,13 +1036,13 @@ export async function invokeBoundedExternalSessionsOperation<T>(params: Readonly
             return Object.freeze({ status: 'retired' });
         }
         if (params.signal.aborted || terminal === 'cancelled') {
-            return Object.freeze({ status: 'cancelled' });
+            return Object.freeze({ status: callerCancellation() });
         }
         if (terminal === 'timeout' || outcome.status === 'terminal') {
             return Object.freeze({ status: 'timeout' });
         }
         if (outcome.status === 'rejected') {
-            return Object.freeze({ status: 'rejected' });
+            return Object.freeze({ status: 'rejected', reason: outcome.reason });
         }
         return Object.freeze({ status: 'fulfilled', value: outcome.value });
     } finally {
@@ -1024,7 +1076,7 @@ async function invokeBounded<T>(params: Readonly<{
         case 'fulfilled':
             return params.parse(outcome.value);
         case 'rejected':
-            return agentError();
+            return agentError(outcome.reason);
         case 'retired':
             return unavailable();
         case 'cancelled':
@@ -1032,6 +1084,42 @@ async function invokeBounded<T>(params: Readonly<{
         case 'timeout':
             return timeout();
     }
+}
+
+/** Cursor qualification consumes the caller's reply budget, not the leaf's data. */
+async function invokeBoundedQualifiedTranscriptPage<T>(params: Readonly<{
+    signal: AbortSignal;
+    retirementSignal: AbortSignal;
+    isCurrent(): boolean;
+    deadlineAtMs?: number;
+    maxSerializedBytes: number;
+    operation(signal: AbortSignal, deadlineAtMs: number | undefined, producerBytes: number): Promise<unknown>;
+    parseValue(value: unknown): T | null;
+}>): Promise<AgentExternalSessionsResult<T>> {
+    return await invokeBounded({
+        ...params,
+        async operation(signal, deadlineAtMs) {
+            let producerBytes = params.maxSerializedBytes;
+            while (producerBytes > 0) {
+                if (signal.aborted) throw signal.reason;
+                const value = await params.operation(signal, deadlineAtMs, producerBytes);
+                const parsed = parseAndBoundResult(value, params.parseValue, undefined);
+                // A producer exceeding its admitted budget is invalid. Only
+                // host-added qualification bytes may cause a smaller page read.
+                const nativeBytes = serializedResultBytes(value, producerBytes);
+                if (nativeBytes > producerBytes) return agentError('transcript_page_byte_budget');
+                if (!parsed.ok) return parsed;
+                const qualifiedBytes = serializedResultBytes(parsed);
+                if (qualifiedBytes <= params.maxSerializedBytes) return value;
+                // Re-read the same cursor under the same operation lifetime.
+                // This strictly decreases the budget by measured overhead and
+                // lets the producer retain every omitted row in its cursor.
+                producerBytes = params.maxSerializedBytes - (qualifiedBytes - nativeBytes);
+            }
+            return agentError('transcript_page_byte_budget');
+        },
+        parse: (value) => parseAndBoundResult(value, params.parseValue, params.maxSerializedBytes),
+    });
 }
 
 export function createBoundedAgentExternalSessionsContribution(params: Readonly<{
@@ -1049,7 +1137,7 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
 }>): BoundedAgentExternalSessionsContribution {
     const terminalBeforeAdmission = (signal: AbortSignal): AgentExternalSessionsResult<never> | null => {
         if (!params.isCurrent() || params.retirementSignal.aborted) return unavailable();
-        if (signal.aborted) return cancelled();
+        if (signal.aborted) return getAgentExternalSessionsInvocationFailure({ signal })?.code === 'timeout' ? timeout() : cancelled();
         return null;
     };
     const bindManagedEndpointRead = async (
@@ -1087,7 +1175,8 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
                 assertOperationAdmissible(operationSignal);
                 // An empty source file set must not turn into a cwd-wide scan.
                 if (request.paths.length === 0) return { exitCode: 1, stdout: '', stderr: '' };
-                const result = await runPackagedRipgrep([...request.args, ...request.paths], {
+                const result = await runPackagedRipgrep([...request.args], {
+                    paths: request.paths,
                     signal: operationSignal,
                     maxStdoutBytes: maxSerializedBytes,
                     maxStderrBytes: maxSerializedBytes,
@@ -1140,7 +1229,8 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
             if (terminal) return terminal;
             const parsedSource = parseSource(request.source);
             const maxSerializedBytes = request.maxSerializedBytes === undefined ? undefined : readMaxSerializedBytes(request.maxSerializedBytes);
-            if (!parsedSource || maxSerializedBytes === null) return invalidRequest();
+            if (!parsedSource || maxSerializedBytes === null
+                || (request.includeAccountingSource !== undefined && typeof request.includeAccountingSource !== 'boolean')) return invalidRequest();
             return await invokeBounded({
                 signal: request.signal,
                 retirementSignal: params.retirementSignal,
@@ -1154,13 +1244,14 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
                     );
                     return await params.contribution.resolveSource({
                         source: parsedSource,
+                        ...(request.includeAccountingSource === undefined ? {} : { includeAccountingSource: request.includeAccountingSource }),
                         signal,
                         deadlineAtMs,
                         maxSerializedBytes,
                         ...invocation,
                     });
                 },
-                parse: (value) => parseAndBoundResult(value, parseResolveSourceValue, maxSerializedBytes),
+                parse: (value) => parseAndBoundResult(value, parseAgentExternalSessionsResolveSourceResult, maxSerializedBytes),
             });
         },
         async listCandidates(request) {
@@ -1172,8 +1263,8 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
             const searchTerm = request.searchTerm === undefined
                 ? undefined
                 : parseBoundedString(request.searchTerm, MAX_SEARCH_CODE_UNITS, true);
-            const scope = parsedSource
-                ? Object.freeze({ method: 'listCandidates' as const, source: parsedSource })
+            const scope = parsedSource && maxSerializedBytes !== null
+                ? Object.freeze({ method: 'listCandidates' as const, source: parsedSource, maxSerializedBytes })
                 : null;
             const cursor = request.cursor === undefined || !scope
                 ? request.cursor
@@ -1202,7 +1293,9 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
                         signal,
                         maxSerializedBytes,
                     );
-                    return await params.contribution.listCandidates({
+                    return await runWithSessionInputPromptUserTextReader(
+                        createCodingSessionInputPromptUserTextReader(params.identity.agentId),
+                        () => params.contribution.listCandidates({
                         source: parsedSource,
                         signal,
                         deadlineAtMs,
@@ -1227,7 +1320,7 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
                                     return request.readCandidateIndexState?.(candidate);
                                 },
                             }),
-                    });
+                    }));
                 },
                 parse: (value) => parseAndBoundResult(
                     value,
@@ -1308,8 +1401,8 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
             const remoteSessionId = parseBoundedString(request.remoteSessionId, MAX_ID_CODE_UNITS);
             const maxItems = readMaxItems(request.maxItems);
             const maxSerializedBytes = readMaxSerializedBytes(request.maxSerializedBytes);
-            const scope = parsedSource && remoteSessionId
-                ? Object.freeze({ method: 'pageTranscript' as const, source: parsedSource, remoteSessionId })
+            const scope = parsedSource && remoteSessionId && maxSerializedBytes !== null
+                ? Object.freeze({ method: 'pageTranscript' as const, source: parsedSource, remoteSessionId, maxSerializedBytes })
                 : null;
             const cursor = request.cursor === undefined || !scope
                 ? request.cursor
@@ -1325,12 +1418,13 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
             ) {
                 return invalidRequest();
             }
-            return await invokeBounded({
+            return await invokeBoundedQualifiedTranscriptPage({
                 signal: request.signal,
                 retirementSignal: params.retirementSignal,
                 isCurrent: params.isCurrent,
                 deadlineAtMs: request.deadlineAtMs,
-                operation: async (signal, deadlineAtMs) => {
+                maxSerializedBytes,
+                operation: async (signal, deadlineAtMs, producerBytes) => {
                     const invocation = await bindInvocationContext(
                         parsedSource,
                         signal,
@@ -1343,17 +1437,13 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
                         direction: request.direction,
                         signal,
                         deadlineAtMs,
-                        maxSerializedBytes,
+                        maxSerializedBytes: producerBytes,
                         ...invocation,
                         maxItems,
                         ...(typeof cursor === 'string' ? { cursor } : {}),
                     });
                 },
-                parse: (value) => parseAndBoundResult(
-                    value,
-                    (candidate) => parseTranscriptPageValue(candidate, maxItems, params.identity, scope, request.projection),
-                    maxSerializedBytes,
-                ),
+                parseValue: (candidate) => parseTranscriptPageValue(candidate, maxItems, params.identity, scope, request.projection),
             });
         },
         async readAfterTranscript(request) {
@@ -1364,19 +1454,20 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
             const remoteSessionId = parseBoundedString(request.remoteSessionId, MAX_ID_CODE_UNITS);
             const maxItems = readMaxItems(request.maxItems);
             const maxSerializedBytes = readMaxSerializedBytes(request.maxSerializedBytes);
-            const scope = parsedSource && remoteSessionId
-                ? Object.freeze({ method: 'readAfterTranscript' as const, source: parsedSource, remoteSessionId })
+            const scope = parsedSource && remoteSessionId && maxSerializedBytes !== null
+                ? Object.freeze({ method: 'readAfterTranscript' as const, source: parsedSource, remoteSessionId, maxSerializedBytes })
                 : null;
             const cursor = scope ? decodeInputCursor(request.cursor, params.identity, scope) : null;
             if (!parsedSource || !remoteSessionId || maxItems === null || maxSerializedBytes === null || cursor === null || !scope) {
                 return invalidRequest();
             }
-            return await invokeBounded({
+            return await invokeBoundedQualifiedTranscriptPage({
                 signal: request.signal,
                 retirementSignal: params.retirementSignal,
                 isCurrent: params.isCurrent,
                 deadlineAtMs: request.deadlineAtMs,
-                operation: async (signal, deadlineAtMs) => {
+                maxSerializedBytes,
+                operation: async (signal, deadlineAtMs, producerBytes) => {
                     const invocation = await bindInvocationContext(
                         parsedSource,
                         signal,
@@ -1389,22 +1480,18 @@ export function createBoundedAgentExternalSessionsContribution(params: Readonly<
                         cursor,
                         signal,
                         deadlineAtMs,
-                        maxSerializedBytes,
+                        maxSerializedBytes: producerBytes,
                         ...invocation,
                         maxItems,
                     });
                 },
-                parse: (value) => parseAndBoundResult(
-                    value,
-                    (candidate) => parseReadAfterTranscriptValue(
-                        candidate,
-                        maxItems,
-                        cursor,
-                        params.identity,
-                        scope,
-                        request.projection,
-                    ),
-                    maxSerializedBytes,
+                parseValue: (candidate) => parseReadAfterTranscriptValue(
+                    candidate,
+                    maxItems,
+                    cursor,
+                    params.identity,
+                    scope,
+                    request.projection,
                 ),
             });
         },

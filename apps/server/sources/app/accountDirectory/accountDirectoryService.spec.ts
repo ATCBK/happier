@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import tweetnacl from "tweetnacl";
 import * as privacyKit from "privacy-kit";
@@ -12,6 +12,7 @@ import {
     openBoxBundle,
 } from "@happier-dev/protocol";
 import type { HomeConnectionDescriptorV1, HomeLoginAssertionV1 } from "./accountDirectorySchemas";
+import { readAccountDirectoryMe } from "./accountDirectoryService";
 
 /**
  * Owner-level tests for the Account Directory domain service.
@@ -51,23 +52,14 @@ const mocks = vi.hoisted(() => ({
     readCachedServerIdentityIdForHotPath: vi.fn(),
 }));
 
-vi.mock("@/storage/db", () => ({
-    db: {
-        repeatKey: { findUnique: mocks.repeatKeyFindUnique },
-        account: {
-            findUnique: mocks.dbAccountFindUnique,
-            findUniqueOrThrow: mocks.dbAccountFindUniqueOrThrow,
-        },
-        accountHomeDirectoryEntry: { findUnique: mocks.dbEntryFindUnique, findMany: mocks.dbEntryFindMany },
-        accountDirectoryLink: { findUnique: mocks.dbLinkFindUnique, findFirst: mocks.dbLinkFindFirst },
-    },
-}));
-
-// The transaction boundary is a database seam. The transaction client exposes
-// the full delegate set; the global `db` mock above intentionally exposes only
-// reads, so any service write that bypasses the transaction fails loudly.
-vi.mock("@/storage/inTx", () => ({
-    inTx: async (fn: (tx: unknown) => Promise<unknown>) => fn({
+// Substitute the Prisma boundary, retaining the real snapshot/transaction policy.
+// Global reads and transactional writes have distinct delegates so bypasses fail.
+vi.mock("@/storage/db", () => {
+    const transaction = {
+        $executeRaw: vi.fn(async () => 0),
+        $executeRawUnsafe: vi.fn(async () => 0),
+        $queryRaw: vi.fn(async () => [{ statement_timeout: "0" }]),
+        $queryRawUnsafe: vi.fn(async () => [{ id: "account-1" }]),
         repeatKey: { findUnique: mocks.repeatKeyFindUnique },
         account: {
             findUnique: mocks.txAccountFindUnique,
@@ -93,8 +85,15 @@ vi.mock("@/storage/inTx", () => ({
             deleteMany: mocks.txPairingSessionDeleteMany,
             findFirst: mocks.txPairingSessionFindFirst,
         },
-    }),
-}));
+    };
+    return { db: {
+        repeatKey: { findUnique: mocks.repeatKeyFindUnique },
+        account: { findUnique: mocks.dbAccountFindUnique, findUniqueOrThrow: mocks.dbAccountFindUniqueOrThrow },
+        accountHomeDirectoryEntry: { findUnique: mocks.dbEntryFindUnique, findMany: mocks.dbEntryFindMany },
+        accountDirectoryLink: { findUnique: mocks.dbLinkFindUnique, findFirst: mocks.dbLinkFindFirst },
+        $transaction: async (fn: (tx: typeof transaction) => Promise<unknown>) => fn(transaction),
+    } };
+});
 
 vi.mock("@/app/serverIdentity/serverIdentity", () => ({
     getOrCreateServerIdentityId: mocks.getOrCreateServerIdentityId,
@@ -175,7 +174,11 @@ function linkPutParams(keyPair: ReturnType<typeof signingKeyPair>, overrides: Ro
 const MINT_ENV = { HANDY_MASTER_SECRET: "test-master-secret" } as unknown as NodeJS.ProcessEnv;
 
 describe("Account Directory service", () => {
+    afterEach(() => { vi.unstubAllEnvs(); });
     beforeEach(() => {
+        // This file substitutes Prisma, including its transaction boundary;
+        // it must not select the separate real SQLite snapshot connection.
+        vi.stubEnv("HAPPIER_DB_PROVIDER", "postgres");
         state.preferredHomeServerIdentityId = null;
         for (const mock of Object.values(mocks)) mock.mockReset();
         mocks.repeatKeyFindUnique.mockResolvedValue(null);
@@ -204,7 +207,6 @@ describe("Account Directory service", () => {
     });
 
     it("labels the directory account from its explicit name and then username", async () => {
-        const { readAccountDirectoryMe } = await import("./accountDirectoryService");
         const account = {
             id: "account-1",
             name: "  Ana María de la Cruz  ",

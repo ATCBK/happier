@@ -25,6 +25,7 @@ import {
 } from '../../../../protocol/runtimeDescriptorV1.js';
 import {
   CodexExternalSessionCandidateSourceChangedError,
+  CodexExternalSessionNativeListingUnavailableError,
   listCodexSessionCandidates,
 } from './candidateSource.js';
 import {
@@ -35,7 +36,6 @@ import {
   validateCodexExternalSessionsSourcePolicy,
 } from './sourceValidation.js';
 import {
-  CodexExternalSessionUnsupportedRolloutRecordError,
   pageCodexExternalSessionTranscript,
   readAfterCodexExternalSessionTranscript,
 } from './transcriptSource.js';
@@ -116,6 +116,9 @@ async function transcriptMediaReadRootsFor(params: Readonly<{
       signal: params.invocation.signal,
       deadlineAtMs: params.invocation.deadlineAtMs,
     });
+    if (entries.length === 0) {
+      return failed('unavailable', 'The selected Codex home is not available on this machine. Open a session with this account before searching its history.', true);
+    }
     return ok(entries.map((entry) => entry.codexHome));
   } catch (error) {
     const stopped = getAgentExternalSessionsInvocationFailure(params.invocation);
@@ -297,6 +300,10 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
         invocation: request,
       });
       if (!mediaReadRoots.ok) return mediaReadRoots;
+      if (request.includeAccountingSource === false) return bounded({
+        source: validation.value.publicSource,
+        transcriptMediaReadRoots: mediaReadRoots.value,
+      }, request.maxSerializedBytes, 'Codex source result cannot fit the result byte bound.');
       const roots = mediaReadRoots.value.flatMap((home) => [join(home, 'sessions'), join(home, 'archived_sessions')]);
       const inventory = await discoverAgentAccountingJsonlSource(roots, request.signal);
       return bounded(
@@ -305,6 +312,7 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
           transcriptMediaReadRoots: mediaReadRoots.value,
           accountingSource: {
             accountingSources: [CODEX_NATIVE_ACCOUNTING_SOURCE],
+            discoveredFileCount: inventory.files.length,
             ...(mediaReadRoots.value.length === 1 ? { rootPath: mediaReadRoots.value[0], rootField: 'homePath' } : {}),
             resourceKey: `codex:accounting:${createHash('sha256').update(JSON.stringify(roots)).digest('base64url')}`,
             changeObservation: 'watch_file_changes' as const,
@@ -367,6 +375,9 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
         if (error instanceof CodexExternalSessionCandidateSourceChangedError) {
           return failed('source_invalid', error.message);
         }
+        if (error instanceof CodexExternalSessionNativeListingUnavailableError) {
+          return failed('agent_unavailable', error.message, true);
+        }
         // The rollout store was reachable but could not be read into a page:
         // an Agent fault, never evidence that Codex is missing.
         return failed(
@@ -418,9 +429,6 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
       } catch (error) {
         const after = getAgentExternalSessionsInvocationFailure(request);
         if (after) return after;
-        if (error instanceof CodexExternalSessionUnsupportedRolloutRecordError) {
-          return failed('agent_error', error.message, false);
-        }
         return failed(
           'agent_error',
           error instanceof Error ? error.message : 'Codex external-session transcript operation failed.',
@@ -458,9 +466,6 @@ export function createCodexExternalSessionsContribution(params: Readonly<{
       } catch (error) {
         const after = getAgentExternalSessionsInvocationFailure(request);
         if (after) return after;
-        if (error instanceof CodexExternalSessionUnsupportedRolloutRecordError) {
-          return failed('agent_error', error.message, false);
-        }
         return ok({ outcome: 'read_failed' });
       }
     },

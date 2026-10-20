@@ -113,10 +113,135 @@ function snapshot(overrides: Partial<PluginAccountAvailabilitySnapshot> = {}): P
 }
 
 describe('Plugin Account Availability reader', () => {
+    it('admits a current daemon-selected source only after Account hydration and without portable intent', () => {
+        const store = createPluginAccountAvailabilityReaderStore();
+        const reader = store.bind(scope);
+        const response = intentRead();
+        const slot = { pluginId: 'com.acme.fixture', ...hostedSlot };
+        let sourceCurrent = true;
+        const selected = {
+            occurrenceId: 'development-a',
+            artifact: { ...slot, artifactId: 'development', digest: `sha256:${'e'.repeat(64)}` as const,
+                hostUiApiRange: '^1.0.0', releaseVersion: '1.0.0' },
+            isCurrent: () => sourceCurrent,
+        };
+        expect(reader.readCurrentArtifact(slot, undefined, selected))
+            .toEqual({ kind: 'unavailable', code: 'account_availability_not_loaded' });
+        store.replace({ scope, snapshot: snapshot({ intentReads: [{ pluginId: slot.pluginId,
+            response: { ...response, intent: { ...response.intent!, desiredVersion: null }, release: null, uiArtifacts: [] },
+        }] }) });
+        expect(reader.readCurrentArtifact(slot, undefined, selected))
+            .toMatchObject({ kind: 'available', artifact: selected.artifact });
+        sourceCurrent = false;
+        expect(reader.readCurrentArtifact(slot, undefined, selected))
+            .toEqual({ kind: 'unavailable', code: 'artifact_not_current' });
+        sourceCurrent = true;
+        store.replace({ scope, snapshot: snapshot({ intentReads: [{ pluginId: slot.pluginId,
+            response: { ...response, intent: { ...response.intent!, desiredVersion: null, enabled: false }, release: null, uiArtifacts: [] },
+        }] }) });
+        expect(reader.readCurrentArtifact(slot, undefined, selected))
+            .toEqual({ kind: 'unavailable', code: 'artifact_not_current' });
+        store.replace({ scope, snapshot: snapshot({ intentReads: [{ pluginId: slot.pluginId, response }] }) });
+        expect(reader.readCurrentArtifact(slot, undefined, selected))
+            .toMatchObject({ kind: 'available', artifact: { digest: artifactDigest, releaseVersion: '1.2.3' } });
+    });
+
+    it('classifies a fleet census with linear rather than quadratic read cost', () => {
+        const absent = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({ ...intentRead(), intent: null, release: null, uiArtifacts: [] });
+        const measure = (count: number) => {
+            const base = snapshot().materializations[0]!;
+            const rows = Array.from({ length: count }, (_, index) => ({ ...base,
+                machineId: `machine-${index}`, materializationId: `install-${index}`,
+            }));
+            const reader = createPluginAccountAvailabilityReader({ scope, snapshot: snapshot({
+                intentReads: [{ pluginId: base.pluginId, response: absent }], materializations: rows, snapshots: [],
+            }) });
+            // Warm both the real classification and its immutable snapshot projection.
+            reader.classifyRelease(rows[0]!);
+            let unexpected = 0;
+            const start = performance.now();
+            for (let pass = 0; pass < 4; pass += 1) for (const row of rows) {
+                if (reader.classifyRelease(row).releaseContent !== 'unknown') unexpected += 1;
+            }
+            const elapsed = performance.now() - start;
+            expect(unexpected).toBe(0);
+            return elapsed;
+        };
+        // The live QA Account has 1,889 installations. Compare scaling at that
+        // order of magnitude instead of imposing a machine-specific time limit.
+        const small = Math.min(...Array.from({ length: 3 }, () => measure(500)));
+        const large = Math.min(...Array.from({ length: 3 }, () => measure(2_000)));
+        expect(large / small).toBeLessThan(8);
+    });
+
+    it('admits an approved external archive only through its exact installed origin without selecting an Account release', () => {
+        const release = intentRead().release!;
+        const materialization = PluginMachineMaterializationV1Schema.parse({ ...snapshot().materializations[0]!,
+            sourceClass: 'versionedArchive', enabled: true, trustState: 'trusted',
+            archiveDigestSha256: release.archiveDigestSha256, uiArtifacts: release.uiSlots,
+        });
+        const origin = { serverIdentityId: materialization.serverIdentityId, materializationRef: {
+            machineId: materialization.machineId, materializationId: materialization.materializationId,
+            pluginId: materialization.pluginId,
+        } };
+        const absent = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({ ...intentRead(), intent: null, release: null, uiArtifacts: [] });
+        const installed = snapshot({ releases: [release], intentReads: [{ pluginId: materialization.pluginId, response: absent }],
+            materializations: [materialization], snapshots: [{ serverIdentityId: materialization.serverIdentityId,
+                machineId: materialization.machineId, materializations: [materialization] }],
+        });
+        const store = createPluginAccountAvailabilityReaderStore();
+        store.replace({ scope, snapshot: installed });
+        const reader = store.bind(scope);
+        const slot = { pluginId: materialization.pluginId, ...hostedSlot };
+        expect(reader.classifyRelease(materialization)).toMatchObject({ releaseContent: 'matched', validation: { kind: 'admitted' } });
+        expect(reader.readCurrentArtifact(slot, origin)).toMatchObject({ kind: 'available', artifact: {
+            digest: artifactDigest, releaseVersion: release.ref.version,
+        } });
+        expect(reader.readCurrentArtifact(slot)).toMatchObject({ kind: 'unavailable' });
+        expect(reader.readCurrentReleaseSelection({ pluginId: materialization.pluginId })).toMatchObject({ kind: 'unavailable' });
+        expect(reader.readCurrentHostedPublicationTarget(slot)).toMatchObject({ kind: 'unavailable' });
+        expect(reader.readCurrentArtifact(slot, { ...origin, materializationRef: { ...origin.materializationRef, materializationId: 'replaced' } }))
+            .toMatchObject({ kind: 'unavailable' });
+        expect(reader.readCurrentArtifact({ ...slot, platform: 'android' }, origin)).toMatchObject({ kind: 'unavailable' });
+        store.replace({ scope, snapshot: { ...installed, materializations: [materialization, materialization] } });
+        expect(reader.readCurrentArtifact(slot, origin)).toMatchObject({ kind: 'unavailable' });
+        // Same local installation id on another Home or Machine is a distinct
+        // origin. It cannot make this exact origin ambiguous or grant its trust.
+        store.replace({ scope, snapshot: { ...installed, materializations: [materialization,
+            { ...materialization, serverIdentityId: 'another-home', enabled: false },
+            { ...materialization, machineId: 'another-machine', enabled: false },
+        ] } });
+        expect(reader.readCurrentArtifact(slot, origin)).toMatchObject({ kind: 'available' });
+        for (const changed of [
+            { ...materialization, enabled: false },
+            { ...materialization, trustState: 'revoked' as const },
+            { ...materialization, archiveDigestSha256: `sha256:${'e'.repeat(64)}` },
+            { ...materialization, uiArtifacts: [{ ...materialization.uiArtifacts[0]!, artifactDigest: `sha256:${'e'.repeat(64)}` }] },
+        ] satisfies PluginAccountAvailabilitySnapshot['materializations']) {
+            store.replace({ scope, snapshot: { ...installed, materializations: [changed], snapshots: [{
+                ...installed.snapshots[0]!, materializations: [changed],
+            }] } });
+            expect(reader.readCurrentArtifact(slot, origin)).toMatchObject({ kind: 'unavailable' });
+        }
+        const disabled = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({ ...absent,
+            intent: { ...intentRead().intent!, enabled: false, desiredVersion: null },
+        });
+        store.replace({ scope, snapshot: { ...installed, intentReads: [{ pluginId: materialization.pluginId, response: disabled }] } });
+        expect(reader.classifyRelease(materialization).validation).toMatchObject({ kind: 'rejected' });
+        expect(reader.readCurrentArtifact(slot, origin)).toMatchObject({ kind: 'unavailable' });
+        store.replace({ scope, snapshot: installed });
+        store.retire([materialization.pluginId]);
+        expect(reader.readCurrentArtifact(slot, origin)).toMatchObject({ kind: 'unavailable' });
+        store.replace({ scope, snapshot: installed });
+        store.replace({ scope: { ...scope, accountId: 'successor' }, snapshot: installed });
+        expect(reader.readCurrentArtifact(slot, origin)).toMatchObject({ kind: 'unavailable', code: 'account_availability_scope_mismatch' });
+    });
     it('selects the host bundled Account renderer without a machine or claimed release, and respects Account disablement', () => {
         const manifest = PluginPortableReleaseManifestV1Schema.parse({
             schemaVersion: 2, id: 'happier.fixture', version: '1.0.0', displayName: 'Fixture',
-            runtime: { apiVersion: 1 }, contributes: { ui: { renderers: [{
+            runtime: { apiVersion: 1 }, contributes: {
+                actions: [{ id: 'read', title: 'Read', scopes: ['global'], surfaces: ['ui'], placementBindings: [],
+                    dangerLevel: 'safe', execution: { target: 'daemon' } }], ui: { renderers: [{
                 id: 'fixture', kind: 'reactNative', artifact: 'fixture', requiredHostMethods: [],
             }], views: [{ id: 'fixture-page', container: 'appPage', title: 'Fixture', target: { kind: 'app' },
                 renderer: 'fixture' }] } },
@@ -128,7 +253,8 @@ describe('Plugin Account Availability reader', () => {
             executable: { exports: ['renderSurface'] }, hostUiApiRange: '^1.0.0' });
         const input = { scope, snapshot: snapshot({ intentReads: [], materializations: [], snapshots: [] }),
             hostBundledUi: [{ pluginId: manifest.id, pluginVersion: manifest.version, displayName: 'Fixture', packageName: '@happier-dev/plugins-fixture',
-                entriesById: projectPluginPortableUiDeclarationsV1(manifest, [artifact]) }] };
+                entriesById: projectPluginPortableUiDeclarationsV1(manifest, [artifact]),
+                declaredExecution: { daemonActions: true, contributionPoints: false } }] };
         const reader = createPluginAccountAvailabilityReader(input);
         const slot = { pluginId: manifest.id, contributionId: 'fixture', tier: 'reactNative' as const, platform: 'web' as const };
         expect(reader.readCurrentArtifact(slot)).toMatchObject({ kind: 'available', artifact: {
@@ -140,6 +266,8 @@ describe('Plugin Account Availability reader', () => {
             .toMatchObject({ artifactGraph: artifact, runtime: { decision: { state: 'load' } } });
         expect(reader.readAccountUiProjection()?.installedPackagesById[manifest.id]?.source)
             .toEqual({ kind: 'bundled', locator: '@happier-dev/plugins-fixture' });
+        expect(reader.readAccountUiProjection()?.installedPackagesById[manifest.id]?.declaredExecution)
+            .toEqual({ daemonActions: true, contributionPoints: false });
         const disabled = intentRead();
         disabled.intent = { ...disabled.intent!, pluginId: manifest.id, desiredVersion: null, enabled: false };
         disabled.release = null;
@@ -164,14 +292,20 @@ describe('Plugin Account Availability reader', () => {
         const store = createPluginAccountAvailabilityReaderStore({ hostBundledUi: input.hostBundledUi });
         store.replace({ scope, snapshot: input.snapshot });
         const bound = store.bind(scope);
+        const accountUi = bound.readAccountUiProjection();
+        store.replace({ scope, snapshot: { ...input.snapshot, availabilityCursor: 43 } });
+        expect(store.bind(scope).readAccountUiProjection()).toBe(accountUi);
         store.retire([manifest.id]);
         expect(bound.readCurrentArtifact(slot)).toEqual({ kind: 'unavailable', code: 'artifact_not_current' });
         expect(bound.readAccountUiProjection()).toBeNull();
     });
-    it('projects admitted registry declarations on a cold Account and retires their installation census', () => {
+    it('projects admitted registry and skill declarations on a cold Account and retires their installation census', () => {
         const base = snapshot();
         const declaration = PluginPortableReleaseManifestV1Schema.parse({ ...intentRead().release!.normalizedManifest,
-            contributes: { registrySources: [{ id: 'skills', title: 'Team skills', format: 'git', kinds: ['skill'], url: 'https://github.com/acme/skills' }] },
+            contributes: { actions: [{ id: 'read', title: 'Read', scopes: ['global'], surfaces: ['ui'], placementBindings: [],
+                dangerLevel: 'safe', execution: { target: 'daemon' } }],
+                registrySources: [{ id: 'skills', title: 'Team skills', format: 'git', kinds: ['skill'], url: 'https://github.com/acme/skills' }],
+                skills: [{ id: 'check', directory: './resources/skills/check' }] },
         });
         const materialization = { ...base.materializations[0]!, enabled: true, trustState: 'trusted' as const, declaredManifest: declaration };
         const store = createPluginAccountAvailabilityReaderStore();
@@ -182,9 +316,14 @@ describe('Plugin Account Availability reader', () => {
         const installed = reader.readInstalledPlugins();
         if (installed.kind !== 'available') throw new Error('Fixture must be admitted');
         const projection = installed.plugins[0]!.installations[0]!.uiModel;
+        expect(projection.installedPackagesById[materialization.pluginId]?.declaredExecution)
+            .toEqual({ daemonActions: true, contributionPoints: false });
         expect(projection.registrySourcesById['com.acme.fixture/skills']).toMatchObject({ pluginId: 'com.acme.fixture',
             pluginVersion: '1.2.3', definition: { id: 'skills', kinds: ['skill'] } });
         expect(projection.registrySourcesById['com.acme.fixture/skills']).not.toHaveProperty('occurrenceId');
+        expect(projection.skillsById['com.acme.fixture/check']).toMatchObject({ pluginId: 'com.acme.fixture',
+            pluginVersion: '1.2.3', definition: { id: 'check', directory: './resources/skills/check' } });
+        expect(projection.skillsById['com.acme.fixture/check']).not.toHaveProperty('occurrenceId');
         store.replace({ scope, snapshot: { ...base, availabilityCursor: 43, materializations: [], snapshots: [
             { serverIdentityId: materialization.serverIdentityId, machineId: materialization.machineId, materializations: [] },
         ] } });
@@ -207,6 +346,38 @@ describe('Plugin Account Availability reader', () => {
         store.replace({ scope, snapshot: snapshot({ availabilityCursor: 43 }) });
         expect(reader.readInstalledPlugins()).not.toBe(installed);
         expect(reader.readMaterializations()).toMatchObject({ kind: 'available', availabilityCursor: 43 });
+    });
+    it('retains unchanged installation models across fresh readers while publishing current admission facts', () => {
+        const store = createPluginAccountAvailabilityReaderStore();
+        const response = intentRead();
+        const base = snapshot({ intentReads: [{ pluginId: 'com.acme.fixture', response }] });
+        const second = { ...base.materializations[0]!, machineId: 'machine-2', materializationId: 'install-2' };
+        const initial = { ...base, materializations: [...base.materializations, second], snapshots: [
+            ...base.snapshots, { ...base.snapshots[0]!, machineId: second.machineId, materializations: [second] },
+        ] };
+        store.replace({ scope, snapshot: initial });
+        const before = store.bind(scope).readInstalledPlugins();
+        if (before.kind !== 'available') throw new Error('Fixture installation must be available');
+        store.replace({ scope, snapshot: { ...initial, availabilityCursor: 43, intentReads: [{
+            pluginId: 'com.acme.fixture', response: { ...response, availabilityCursor: 43,
+                intent: { ...response.intent!, revision: 'intent-2' } },
+        }] } });
+        const reader = store.bind(scope);
+        const after = reader.readInstalledPlugins();
+        if (after.kind !== 'available') throw new Error('Fixture installation must remain available');
+        expect(after.availabilityCursor).toBe(43);
+        expect(reader.readCurrentReleaseSelection({ pluginId: 'com.acme.fixture' }))
+            .toMatchObject({ kind: 'available', availabilityCursor: 43, intent: { revision: 'intent-2' } });
+        expect(after.plugins[0]!.installations[0]!.uiModel).toBe(before.plugins[0]!.installations[0]!.uiModel);
+        const changed = { ...initial.materializations[0]!, enabled: true };
+        store.replace({ scope, snapshot: { ...initial, availabilityCursor: 44, materializations: [changed, second], snapshots: [{
+            ...initial.snapshots[0]!, materializations: [changed],
+        }, initial.snapshots[1]!] } });
+        const updated = store.bind(scope).readInstalledPlugins();
+        if (updated.kind !== 'available') throw new Error('Updated installation must remain available');
+        expect(updated.plugins[0]!.installations[0]!.uiModel).not.toBe(after.plugins[0]!.installations[0]!.uiModel);
+        expect(updated.plugins[0]!.installations[0]!.uiModel.installedPackagesById['com.acme.fixture']?.enabled).toBe(true);
+        expect(updated.plugins[0]!.installations[1]!.uiModel).toBe(after.plugins[0]!.installations[1]!.uiModel);
     });
     it('projects cold portable app and settings destinations from the exact release without reported descriptors or execution authority', () => {
         const release = PluginAccountAvailabilityIntentReadResponseV1Schema.parse({
@@ -745,6 +916,19 @@ describe('Plugin Account Availability reader', () => {
             pluginId: 'com.acme.fixture',
             collectionId: 'tasks',
         })).toEqual({ kind: 'available', availabilityCursor: 42, ref });
+        const compiledRef = { ...ref, schemaVersion: 1, contractDigest: 'B'.repeat(43) };
+        const bundledReader = createPluginAccountAvailabilityReader({
+            scope,
+            snapshot: snapshot({ intentReads: [{ pluginId: ref.pluginId, response: {
+                ...response, intent: { ...response.intent!, desiredVersion: null, writableCollections: [ref] }, release: null,
+            } }] }),
+            hostBundledUi: [{ pluginId: ref.pluginId, pluginVersion: '1.0.0', packageName: '@happier-dev/plugins-fixture',
+                displayName: 'Fixture', entriesById: {}, collectionContracts: [compiledRef] }],
+        });
+        // The older app's compiled reader must reach Data unchanged. Availability
+        // cannot silently replace it with the newer daemon's writer contract.
+        expect(bundledReader.readCurrentCollectionContract({ pluginId: ref.pluginId, collectionId: ref.collectionId }))
+            .toEqual({ kind: 'available', availabilityCursor: 42, ref: compiledRef });
         expect(readerFor(true).readCurrentAccountDataCapability({
             pluginId: 'com.acme.fixture',
         })).toEqual({ kind: 'available', availabilityCursor: 42 });
@@ -932,8 +1116,14 @@ describe('Plugin Account Availability reader', () => {
         expect(classifyRelease({ ...exact, portableRelease: false })).toEqual({
             ...identity,
             releaseContent: 'unknown',
-            validation: { kind: 'rejected', reason: 'unknown' },
+            validation: { kind: 'rejected', reason: 'non_portable' },
         });
+        const noRelease = createPluginAccountAvailabilityReader({ scope, snapshot: {
+            ...snapshot(), intentReads: [{ pluginId: exact.pluginId, response: { ...response, intent: null, release: null } }],
+        } });
+        expect(noRelease.classifyRelease(exact).validation).toEqual({ kind: 'rejected', reason: 'release_unavailable' });
+        expect(noRelease.classifyRelease({ ...exact, portableRelease: false }).validation)
+            .toEqual({ kind: 'rejected', reason: 'non_portable' });
     });
 
     it('fails closed after the store moves to a different Account scope', () => {

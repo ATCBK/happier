@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Stats } from 'node:fs';
 import { lstat } from 'node:fs/promises';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 export type WorkspaceSyncRootObjectIdentityV1 = Readonly<{
   v: 1;
@@ -11,12 +11,12 @@ export type WorkspaceSyncRootObjectIdentityV1 = Readonly<{
   birthtimeMs: string | null;
 }>;
 
-export const WorkspaceSyncRootObjectIdentityV1Schema = z.object({
+export const WorkspaceSyncRootObjectIdentityV1Schema = z.strictObject({
   v: z.literal(1),
-  device: z.string().regex(/^\d+$/u),
-  inode: z.string().regex(/^[1-9]\d*$/u),
-  birthtimeMs: z.string().regex(/^\d+(?:\.\d+)?$/u).nullable(),
-}).strict();
+  device: z.string().check(z.regex(/^\d+$/u)),
+  inode: z.string().check(z.regex(/^[1-9]\d*$/u)),
+  birthtimeMs: z.nullable(z.string().check(z.regex(/^\d+(?:\.\d+)?$/u))),
+});
 
 export function isWorkspaceSyncRootObjectIdentityV1(value: unknown): value is WorkspaceSyncRootObjectIdentityV1 {
   return WorkspaceSyncRootObjectIdentityV1Schema.safeParse(value).success;

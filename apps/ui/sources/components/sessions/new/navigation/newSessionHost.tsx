@@ -147,7 +147,8 @@ export function useNewSessionHostNavigation(): Readonly<{
     embedded: boolean;
     router: RouterLike;
     navigation: NavigationLike;
-    openDraft: (entry: NewSessionHostDraftEntry, mode: 'push' | 'replace') => void;
+    /** Changes the draft in the current surface; never stacks another New Session route. */
+    openDraft: (entry: NewSessionHostDraftEntry) => void;
 }> {
     const router = useRouter();
     const navigation = useDefaultNavigation();
@@ -163,13 +164,12 @@ export function useNewSessionHostNavigation(): Readonly<{
                 embedded: false,
                 router,
                 navigation,
-                openDraft: (entry: NewSessionHostDraftEntry, mode: 'push' | 'replace') => {
+                openDraft: (entry: NewSessionHostDraftEntry) => {
                     const href = {
                         pathname: '/new' as const,
                         params: { draftId: entry.draftId, ...(entry.draftOrigin ? { draftOrigin: entry.draftOrigin } : {}) },
                     };
-                    if (mode === 'replace') router.replace(href);
-                    else router.push(href);
+                    router.replace(href);
                 },
             };
         }

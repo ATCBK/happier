@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { inspect } from 'node:util';
+import { readNonBlankOpaqueIdentifier } from '@happier-dev/protocol/strings/opaqueIdentifier';
 
 import type { ACPMessageData, ACPProvider } from '@/api/session/sessionMessageTypes';
 import { logger } from '@/utils/logger';
@@ -157,7 +158,7 @@ export async function importAcpReplaySidechainV1(params: {
     }
 
     if (eventType === 'tool_call') {
-      let toolCallId = (getString(event, 'toolCallId') ?? '').trim();
+      let toolCallId = readNonBlankOpaqueIdentifier(event.toolCallId);
       if (!toolCallId) {
         toolCallId = `synthetic_${syntheticToolCallCounter++}`;
         pendingSyntheticToolCallIds.push(toolCallId);
@@ -213,7 +214,7 @@ export async function importAcpReplaySidechainV1(params: {
     }
 
     if (eventType === 'tool_result') {
-      let toolCallId = (getString(event, 'toolCallId') ?? '').trim();
+      let toolCallId = readNonBlankOpaqueIdentifier(event.toolCallId);
       if (!toolCallId) {
         const queuedSyntheticId = pendingSyntheticToolCallIds.shift() ?? null;
         toolCallId = queuedSyntheticId ?? `synthetic_${syntheticToolCallCounter++}`;

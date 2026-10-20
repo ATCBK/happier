@@ -15,6 +15,20 @@ describe('saved generator language admission', () => {
   });
 });
 
+describe('saved generator credential routing', () => {
+  it('round-trips the admitted Connected Services selection while reading earlier records', () => {
+    const previous = { backendTarget: { kind: 'backend', backendId: 'claude', sourceKind: 'built_in' } };
+    const connectedServices = { v: 2, bindingsByServiceId: {
+      'happier.agent.claude/claude-subscription': { source: 'connected', selection: 'profile', profileId: 'admitted-profile' },
+    } };
+    expect(ScmDiffSummaryGeneratorSelectionSchema.parse(previous)).toEqual(previous);
+    expect(ScmDiffSummaryGeneratorSelectionSchema.parse({ ...previous, connectedServices }))
+      .toEqual({ ...previous, connectedServices });
+    expect(ScmDiffSummaryGeneratorSelectionSchema.parse({ ...previous, connectedServices: null }))
+      .toEqual({ ...previous, connectedServices: null });
+  });
+});
+
 describe('saved commit-plan edit admission', () => {
   it('admits explicit group edits and closes every mutation envelope', () => {
     const move = { kind: 'moveCommitChanges', changeRefs: ['exact-change'], target: { kind: 'newGroup',

@@ -3,6 +3,10 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 const SOURCES_DIR = join(__dirname, '..', '..', '..');
+const ICON_NAMES = new Set(
+    [...readFileSync(join(__dirname, 'iconRegistry.generated.ts'), 'utf8').matchAll(/^\s+'([a-z0-9-]+)':/gm)]
+        .map((match) => match[1]),
+);
 
 /**
  * Bans `cond ? 'glyph' : 'glyph'` — a conditional whose arms are the same glyph.
@@ -25,19 +29,34 @@ function walk(dir: string, out: string[] = []): string[] {
     return out;
 }
 
+function findCollapsedIconTernaries(source: string): string[] {
+    const offenders: string[] = [];
+    for (const match of source.matchAll(/\?\s*'([a-z][a-z0-9-]*)'\s*:\s*'([a-z][a-z0-9-]*)'/g)) {
+        if (match[1] !== match[2] || !ICON_NAMES.has(match[1])) continue;
+        const line = source.slice(0, match.index).split('\n').length;
+        const context = source.split('\n').slice(Math.max(0, line - 4), line + 1).join('\n');
+        if (!/\b(name|icon|iconName|glyph)\b/i.test(context)) continue;
+        offenders.push(`${line} — ${match[1]} on both arms`);
+    }
+    return offenders;
+}
+
 describe('icon state ternaries', () => {
+    it('rejects a collapsed registered glyph without treating nearby plural words as glyphs', () => {
+        expect(findCollapsedIconTernaries([
+            "const icon = selected ? 'star' : 'star';",
+            "const countLabel = count === 1 ? 'worktree' : 'worktree';",
+            "const processLabel = count === 1 ? 'processus' : 'processus';",
+        ].join('\n'))).toEqual(['1 — star on both arms']);
+    });
+
     it('never resolves both arms to the same glyph', () => {
         const offenders: string[] = [];
 
         for (const file of walk(SOURCES_DIR)) {
             const source = readFileSync(file, 'utf8');
-            for (const match of source.matchAll(/\?\s*'([a-z][a-z0-9-]*)'\s*:\s*'([a-z][a-z0-9-]*)'/g)) {
-                if (match[1] !== match[2]) continue;
-                // Only flag values that name a real glyph — plenty of domain ternaries are unrelated.
-                const line = source.slice(0, match.index).split('\n').length;
-                const context = source.split('\n').slice(Math.max(0, line - 4), line + 1).join('\n');
-                if (!/\b(name|icon|iconName|glyph)\b/i.test(context)) continue;
-                offenders.push(`${file.replace(SOURCES_DIR, '')}:${line} — ${match[1]} on both arms`);
+            for (const offender of findCollapsedIconTernaries(source)) {
+                offenders.push(`${file.replace(SOURCES_DIR, '')}:${offender}`);
             }
         }
 

@@ -1,6 +1,7 @@
 import type { Tx } from "@/storage/inTx";
 
 import { ensureLayout1SessionCreateInvariantsInTx } from "./layout1SessionCreateInvariants";
+import { acquireLayout1SessionCreatePublicationAdmissionInTx } from "./sessionCreationPublicationAudience";
 import {
     applyRequestedSessionPlacementInTx,
     insertLayout1SessionRowInTx,
@@ -10,7 +11,7 @@ import {
     SessionInitialAccessError,
     SessionInitialTriggerAdmissionError,
     SessionCreationOriginError,
-    SessionCreationReportsToError,
+    SessionCreationManagerError,
     type Layout1SessionCreateOutcome,
 } from "./layout1SessionRowWrite";
 import type {
@@ -32,7 +33,7 @@ export function classifyLayout1SessionCreateThrow(
     error: unknown,
 ): FreshBoundLayout1SessionCreateRejection | null {
     if (error instanceof SessionCreationOriginError) return { reason: "session-origin-forbidden" };
-    if (error instanceof SessionCreationReportsToError) return { reason: "session-reports-to-invalid", result: error.result };
+    if (error instanceof SessionCreationManagerError) return { reason: "session-manager-invalid", result: error.result };
     if (isSessionCreationPlacementError(error)) return { reason: "invalid-organization-placement" };
     if (isSessionOwnerEnvelopeError(error)) return { reason: "invalid-params" };
     if (error instanceof SessionInitialAccessError) {
@@ -69,6 +70,7 @@ export async function createFreshBoundLayout1SessionInTx(
     }>,
 ): Promise<Exclude<Layout1SessionCreateOutcome<FreshBoundLayout1SessionCreateRejection>, { kind: "rejoined" }>> {
     const { prepared, sessionId } = params;
+    await acquireLayout1SessionCreatePublicationAdmissionInTx(tx, prepared);
     const invariants = await ensureLayout1SessionCreateInvariantsInTx(tx, prepared);
     if (!invariants.ok) {
         return { kind: "rejected", rejection: invariants.rejection };

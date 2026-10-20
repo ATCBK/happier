@@ -34,12 +34,14 @@ export const VitalsSheet = React.memo(function VitalsSheet(
     );
   }, []);
   const columns = phone || narrow ? 1 : (props.columns ?? 2);
+  const stacked = columns === 1;
   const tiles = React.Children.toArray(props.children);
   const rows: React.ReactNode[][] = [];
   for (let index = 0; index < tiles.length; index += columns)
     rows.push(tiles.slice(index, index + columns));
   return (
     <ItemGroup header="none">
+      <VitalsSheetStackedContext.Provider value={stacked}>
       <View testID={props.testID} onLayout={phone ? undefined : onLayout}>
         {rows.map((row, rowIndex) => (
           <View
@@ -60,9 +62,19 @@ export const VitalsSheet = React.memo(function VitalsSheet(
           </View>
         ))}
       </View>
+      </VitalsSheetStackedContext.Provider>
     </ItemGroup>
   );
 });
+
+/**
+ * Whether the sheet stacks its tiles one per row (a phone or a narrow pane). A stacked tile with no
+ * instruments reads as a row, its figure at the right (lab `rg` G7p, `rv` Op "More from"), so a summary of
+ * a few figures does not take a screen.
+ */
+const VitalsSheetStackedContext = React.createContext(false);
+/** A figure drawn as a row's value rather than a tile's headline. */
+const VitalsValueInRowContext = React.createContext(false);
 
 /**
  * A tile shown somewhere else (a Metric widget) opens its machine page from its title. The tile's own
@@ -87,6 +99,25 @@ export const VitalsTile = React.memo(function VitalsTile(
   }>,
 ) {
   const open = React.useContext(VitalsTileOpenContext);
+  const stacked = React.useContext(VitalsSheetStackedContext);
+  if (stacked && !props.children && !open && (props.meta === undefined || props.meta === null)) {
+    return (
+      <View testID={props.testID} style={[styles.tile, styles.rowTile]}>
+        <View style={styles.rowText}>
+          <View style={styles.labelRow}>
+            <Text accessibilityRole="header" numberOfLines={1} style={styles.rowLabel}>
+              {props.label}
+            </Text>
+            {props.labelAccessory}
+          </View>
+          {props.sub ? <View style={styles.sub}>{props.sub}</View> : null}
+        </View>
+        <View style={styles.rowValue}>
+          <VitalsValueInRowContext.Provider value>{props.value}</VitalsValueInRowContext.Provider>
+        </View>
+      </View>
+    );
+  }
   return (
     <View testID={props.testID} style={styles.tile}>
       <View style={styles.labelRow}>
@@ -132,12 +163,13 @@ export function VitalsValue(
     leading?: React.ReactNode;
   }>,
 ) {
+  const inRow = React.useContext(VitalsValueInRowContext);
   return (
     <>
       {props.leading}
       <Text
         numberOfLines={1}
-        style={[styles.value, props.color ? { color: props.color } : null]}
+        style={[inRow ? styles.rowValueText : styles.value, props.color ? { color: props.color } : null]}
       >
         {props.value}
       </Text>
@@ -292,6 +324,31 @@ const styles = StyleSheet.create((theme) => ({
   },
   strong: {
     ...Typography.default('medium'),
+    color: theme.colors.text.primary,
+  },
+  rowTile: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.space.s12,
+  },
+  rowText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  rowLabel: {
+    ...Typography.variant('label'),
+    color: theme.colors.text.primary,
+    flexShrink: 1,
+  },
+  rowValue: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: theme.space.s4,
+    flexShrink: 0,
+  },
+  rowValueText: {
+    ...Typography.variant('label'),
+    ...Typography.tabular(),
     color: theme.colors.text.primary,
   },
   body: {

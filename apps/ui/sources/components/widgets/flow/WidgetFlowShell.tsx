@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { View } from 'react-native';
+import { View, useWindowDimensions } from 'react-native';
 import { StyleSheet } from 'react-native-unistyles';
 import { HappierPressable, happierPageTextMetrics } from '@happier-dev/plugin-ui/presentation';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
@@ -31,6 +31,8 @@ export const WIDGET_FLOW_WIDTH_PX = Object.freeze({
 const MAX_HEIGHT_PX = 640;
 /** The sheet leaves the top of the screen visible, so the surface it changes stays in view. */
 const SHEET_MAX_HEIGHT_RATIO = 0.9;
+/** The grabber and its spacing above a sheet's content. */
+const SHEET_GRABBER_ROOM_PX = 32;
 
 /** The gap the flow keeps from the window's edges; the flow's own width sits inside it. */
 const EDGE_PADDING_PX = 8;
@@ -47,6 +49,9 @@ export function AnchoredWidgetShell(props: Readonly<{
     onRequestClose: () => void;
     children: React.ReactNode;
 }>): React.ReactElement {
+    // A pane narrower than the flow cannot hold it beside its trigger: the flow then takes the pane's whole width, edge to
+    // edge, so it covers what it was opened from instead of leaving a strip of it showing.
+    const [cramped, setCramped] = React.useState(false);
     return (
         <Popover
             open
@@ -61,15 +66,16 @@ export function AnchoredWidgetShell(props: Readonly<{
             edgePadding={{ vertical: EDGE_PADDING_PX, horizontal: EDGE_PADDING_PX }}
             // Opens from the ⋯ toward the content and slides back inside the window, so a card in the
             // left column never pushes its flow over the navigation (QA-V F11; lab d2edit-SET).
-            portal={{ web: true, native: true, matchAnchorWidth: false, anchorAlign: 'start' }}
+            portal={{ web: true, native: true, matchAnchorWidth: false, anchorAlign: 'start', ...(cramped ? { topBottomLayout: 'boundary' as const } : {}) }}
             onRequestClose={props.onRequestClose}
             backdrop={{ effect: 'none', closeOnPan: true }}
         >
             {({ maxHeight, maxWidth }) => (
-                // A definite width, capped by the room the Popover found inside its own edge padding.
-                <View style={{ alignSelf: 'flex-start', width: Math.min(props.width, maxWidth - 2 * EDGE_PADDING_PX) }}>
+                // A definite width, capped by the room the Popover reports, which is already inside its own edge padding.
+                <View style={{ alignSelf: 'flex-start', width: Math.min(props.width, maxWidth) }}>
+                    <CrampedReport cramped={maxWidth < props.width} onChange={setCramped} />
                     {/* The flow scrolls its own body inside this room, so its header and footer stay put. */}
-                    <FloatingOverlay maxHeight={maxHeight} scrollEnabled={false} keyboardShouldPersistTaps="always">
+                    <FloatingOverlay role="panel" maxHeight={maxHeight} scrollEnabled={false} keyboardShouldPersistTaps="always">
                         <WidgetFlowHeightBoundContext.Provider value={maxHeight}>
                             {props.children}
                         </WidgetFlowHeightBoundContext.Provider>
@@ -78,6 +84,13 @@ export function AnchoredWidgetShell(props: Readonly<{
             )}
         </Popover>
     );
+}
+
+/** Reports whether the room the Popover found is narrower than the flow wants; the shell answers by filling that room. */
+function CrampedReport(props: Readonly<{ cramped: boolean; onChange: (cramped: boolean) => void }>): null {
+    const { cramped, onChange } = props;
+    React.useEffect(() => { onChange(cramped); }, [cramped, onChange]);
+    return null;
 }
 
 /** A phone sheet's one dismiss (lab wgphone Mp, wadd Ap): "Done", as the navigation bar would draw it. */
@@ -104,6 +117,10 @@ export function WidgetSheetShell(props: Readonly<{
     children: React.ReactNode;
 }>): React.ReactElement {
     const insets = useChromeSafeAreaInsets();
+    const { height: windowHeight } = useWindowDimensions();
+    // A flow in the sheet keeps its header and footer in reach and scrolls only its body: the room is the sheet's own
+    // ceiling less the safe area and the grabber, never the length of the list inside it.
+    const flowMaxHeight = Math.max(0, Math.floor(windowHeight * SHEET_MAX_HEIGHT_RATIO) - insets.bottom - SHEET_GRABBER_ROOM_PX);
     return (
         <BaseModal
             visible
@@ -116,6 +133,7 @@ export function WidgetSheetShell(props: Readonly<{
                 header="none"
                 title={props.title}
                 presentation="sheet"
+                bodyScroll="auto"
                 sheetBottomInset={insets.bottom}
                 dimensions={{ maxHeightRatio: SHEET_MAX_HEIGHT_RATIO }}
                 testID={props.testID}
@@ -128,7 +146,9 @@ export function WidgetSheetShell(props: Readonly<{
                         <WidgetSheetDone onPress={props.onRequestClose} testID={props.heading.doneTestID ?? `${props.testID}.done`} />
                     </View>
                 ) : null}
-                {props.children}
+                <WidgetFlowHeightBoundContext.Provider value={flowMaxHeight}>
+                    {props.children}
+                </WidgetFlowHeightBoundContext.Provider>
             </ModalCardFrame>
         </BaseModal>
     );

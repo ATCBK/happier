@@ -8,6 +8,7 @@ vi.mock('@react-navigation/native', async () => (await import('@/dev/testkit/moc
 const mocks = vi.hoisted(() => ({
     activeView: 'installed' as 'installed' | 'discover',
     installedPlugins: [] as readonly unknown[],
+    targetKind: 'unselected' as 'unselected' | 'online',
 }));
 
 vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock({
@@ -36,7 +37,7 @@ vi.mock('./model/usePluginSettingsScreenState', () => ({
         daemonOperationsAvailable: true,
         isPluginActionInFlight: () => false,
         decidePendingPluginChange: () => {},
-        administrationTargetSelection: { state: { kind: 'unselected' }, candidates: [], selectedTarget: null, canExecute: false, resolveExecutionTarget: () => null },
+        administrationTargetSelection: { state: { kind: mocks.targetKind }, candidates: [], selectedTarget: null, canExecute: false, resolveExecutionTarget: () => null },
         installedPlugins: mocks.installedPlugins,
         installedPluginById: new Map(),
         canRefreshInstalledPlugins: true,
@@ -170,6 +171,7 @@ describe('PluginSettingsHomeScreen segmented controls', () => {
     beforeEach(() => {
         mocks.activeView = 'installed';
         mocks.installedPlugins = [DISABLED_PLUGIN];
+        mocks.targetKind = 'unselected';
     });
 
     afterEach(() => {
@@ -202,6 +204,15 @@ describe('PluginSettingsHomeScreen segmented controls', () => {
         mocks.installedPlugins = [DISABLED_PLUGIN];
         const mixed = await renderInAppPanes(React.createElement(PluginSettingsHomeScreen));
         expect(mixed.findByTestId('settings.plugins.marketplace.installed.statusFilter.trigger')).not.toBeNull();
+    });
+
+    it('counts installed plugins only once a machine is chosen, never beside "choose a machine"', async () => {
+        const installedTabText = async () => (await renderInAppPanes(React.createElement(PluginSettingsHomeScreen)))
+            .findByTestId('settings.plugins.management.view:installed')?.props.accessibilityLabel;
+        expect(await installedTabText()).not.toMatch(/\b1$/);
+        standardCleanup();
+        mocks.targetKind = 'online';
+        expect(await installedTabText()).toMatch(/\b1$/);
     });
 
     it('discloses the administration target above the pending decision controls', async () => {

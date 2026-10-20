@@ -17,7 +17,8 @@ import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lig
 
 import { inTx } from "@/storage/inTx";
 import { markAccountChanged } from "@/app/changes/markAccountChanged";
-import { readSessionPendingReviewRunCountsInTx } from '@/app/session/awareness/sessionReportsProjection';
+import { readSessionPendingReviewRunCountsInTx } from '@/app/session/awareness/sessionManagerProjection';
+import { sourceKeyForSessionFollowSourceV1 } from '@/app/session/follow/sessionFollowSourceIdentity';
 import { invalidateSessionReviewProjectionsForAutomationInTx } from './sessionReviewProjectionInvalidation';
 import { createSessionMessageFromPending } from "@/app/session/pending/pendingMessageTranscriptCommit";
 
@@ -322,7 +323,9 @@ describe("automationRunService (integration)", () => {
         const seeded = await createAccountMachineAutomation({ publicKey: 'pk-review-projection', machineId: 'review-machine', automationName: 'Turn review' });
         const source = await db.session.create({ data: { accountId: seeded.accountId, tag: 'review-source', encryptionMode: 'plain', metadata: '{}' } });
         const lead = await db.session.create({ data: { accountId: seeded.accountId, tag: 'review-lead', encryptionMode: 'plain', metadata: '{}' } });
-        await db.sessionReportsTo.create({ data: { sessionId: source.id, leadSessionId: lead.id } });
+        await db.sessionFollowEdge.create({ data: { sourceKey: sourceKeyForSessionFollowSourceV1({ kind: 'session', sessionId: source.id }),
+            sourceSessionId: source.id, destinationSessionId: lead.id,
+            relation: 'manager', managerSourceSessionId: source.id, policyJson: JSON.stringify({ preset: 'important' }) } });
         const sourceTurnId = 'review-turn';
         await db.sessionTurn.create({ data: { sessionId: source.id, turnId: sourceTurnId,
             initiator: 'user', workDepth: 0, status: 'completed', startedAt: 1n, updatedAt: 2n } });
@@ -3156,7 +3159,7 @@ describe("automationRunService (integration)", () => {
         })).resolves.toEqual({ state: "running", producedSessionId: null });
     });
 
-    it("keeps the exact claim witness for a pre-start claimed-Run failure after an unrelated Account write", async () => {
+    it("settles a pre-start claimed-Run refusal after an unrelated Account write", async () => {
         const seeded = await createAccountMachineAutomation({
             publicKey: "pk-automation-run-claimed-fail-exact",
             machineId: "machine-claimed-fail-exact",
@@ -3188,9 +3191,8 @@ describe("automationRunService (integration)", () => {
             });
         });
 
-        // A claimed Run has had no target effect. Its pre-start failure is a
-        // pre-effect decision and keeps the exact claim witness; the untouched
-        // Run stays under current lease-recovery authority.
+        // Refusal releases no target work. The exact claim owns terminality;
+        // an unrelated Account publication must not turn refusal into reclaim.
         await expect(failAutomationRun({
             accountId: seeded.accountId,
             runId: run.id,
@@ -3198,11 +3200,11 @@ describe("automationRunService (integration)", () => {
             attempt: 1,
             accountCurrentness: claimWitness,
             errorCode: "invalid_template",
-        })).resolves.toBeNull();
+        })).resolves.toMatchObject({ state: "failed", errorCode: "invalid_template" });
         await expect(db.automationRun.findUniqueOrThrow({
             where: { id: run.id },
             select: { state: true },
-        })).resolves.toEqual({ state: "claimed" });
+        })).resolves.toEqual({ state: "failed" });
     });
 
 

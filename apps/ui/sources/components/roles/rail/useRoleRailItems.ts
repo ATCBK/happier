@@ -20,7 +20,7 @@ export function useRoleRailItems(
 }
 
 /** A turned-off role is not offered at all; only a role that cannot resolve is "unavailable". */
-function isTurnedOff(layer: Readonly<{ enabled?: boolean }> | undefined): boolean {
+function isTurnedOff(layer: Readonly<{ enabled?: unknown }> | undefined): boolean {
     return layer?.enabled === false;
 }
 

@@ -484,7 +484,7 @@ describe("directoryProjectionRepository", () => {
         expect(await db.teamProvisionedIdentity.count({ where: { directorySourceId: source.id } })).toBe(0);
     });
 
-    it("auto-follows a new directory Group relationship without upgrading a retained Group contribution during membership reactivation", async () => {
+    it("admits a new directory Group relationship without enrolling Follow or replacing retained membership custody", async () => {
         const team = await db.team.create({
             data: { name: "Mixed membership lifecycle", defaultSessionHistoryAccess: "all_existing" },
         });
@@ -629,7 +629,7 @@ describe("directoryProjectionRepository", () => {
 
         await expect(db.accountSessionFollow.findUnique({
             where: { accountId_sessionId: { accountId: newlyAdmitted.id, sessionId: session.id } },
-        })).resolves.toMatchObject({ following: true, notificationLevel: "important" });
+        })).resolves.toBeNull();
         await expect(db.accountSessionFollow.findUnique({
             where: { accountId_sessionId: { accountId: retained.id, sessionId: session.id } },
         })).resolves.toBeNull();

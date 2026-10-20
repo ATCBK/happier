@@ -109,7 +109,7 @@ describe('useExternalSessionMaterialize', () => {
                 targetStorageMode: 'external-linked',
                 targetRuntimeMode: null,
             },
-        }, { serverId: 'server-owned' });
+        }, { serverId: 'server-owned', signal: expect.any(AbortSignal) });
         expect(materializeStartSpy.mock.calls[0]?.[0]?.request)
             .not.toHaveProperty('source');
         await harness.unmount();

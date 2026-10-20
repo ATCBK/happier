@@ -19,7 +19,7 @@ import {
     type HappierSelectOption,
 } from '@happier-dev/plugin-ui/presentation';
 
-import { projectPluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { SurfaceStateCard } from '@/components/ui/surfaces';
 import { t } from '@/text';
 import type { ResolveSessionActionFieldOptions } from './sessionActionFieldOptions';
@@ -98,7 +98,7 @@ export function ActionInputFields(props: Readonly<{
     }>) => string | undefined;
 }>) {
     const { theme } = useUnistyles();
-    const presentationTheme = React.useMemo(() => projectPluginUiTheme(theme), [theme]);
+    const presentationTheme = usePluginUiTheme(theme);
 
     return (
         <InputTypePickerHostProvider enabled={props.fields.some((field) => field.inputType !== undefined)}
@@ -141,7 +141,7 @@ export function ActionInputFields(props: Readonly<{
                         selection={selection}
                         options={options}
                         {...(optionState === undefined ? {} : { optionsStatus: optionState.status })}
-                        optionsNotice={optionState?.status === 'failed' ? <SurfaceStateCard kind="error" size="line" title={t('common.error')}
+                        optionsNotice={optionState?.status === 'failed' ? <SurfaceStateCard kind="error" size="line" title={t('workflows.start.choicesFailed')}
                             diagnosticCode={optionState.errorCode}
                             action={props.resolveFieldOptions.retry ? { label: t('common.retry'), onPress: props.resolveFieldOptions.retry } : undefined} /> : null}
                         disabled={!props.editable}

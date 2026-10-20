@@ -14,6 +14,7 @@ import { isDesktopHost } from '@/utils/platform/desktopHost';
 import { fireAndForget } from '@/utils/system/fireAndForget';
 import { useExactHomeAccountSettings } from '@/activity/delivery/useExactHomeAccountSettings';
 import { useActivityPersonalSessionMembership } from '@/activity/source/activityPersonalSessionMembership';
+import { useActivityBoundaryRefresh } from '@/activity/source/useActivityBoundaryRefresh';
 import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
 import { useServerCredentialAccountScopeResolutions } from '@/sync/domains/scope/useServerCredentialAccountScopes';
 
@@ -118,11 +119,14 @@ function useActivityBadgeAccountSettingsByServerId(
 function useLocalActivityBadgeSnapshot(
     params: LocalActivityBadgeSnapshotSelectorParams,
 ): LocalActivityBadgeSnapshot {
+    const [, advanceBoundary] = React.useReducer((version: number) => version + 1, 0);
     const selector = React.useMemo(
         () => createLocalActivityBadgeSnapshotSelector(params),
         [params],
     );
-    return storage(useShallow(selector));
+    const snapshot = storage(useShallow(selector));
+    useActivityBoundaryRefresh(snapshot.nextRefreshAtMs, advanceBoundary);
+    return snapshot;
 }
 
 export function ActivityBadgeRuntime(): React.ReactElement | null {
@@ -153,6 +157,7 @@ export function ActivityBadgeRuntime(): React.ReactElement | null {
         personalSessionListCoverageComplete: personalSessionMembership.coverageComplete,
         personalSessionListMembershipByServerId: personalSessionMembership.membershipByServerId,
         personalSessionListQueryStatesByServerId: personalSessionMembership.statesByServerId,
+        personalFollowRulesByServerId: personalSessionMembership.followRulesByServerId,
     }), [
         accountSettingsByServerId,
         friendRequestCount,
@@ -161,6 +166,7 @@ export function ActivityBadgeRuntime(): React.ReactElement | null {
         personalSessionMembership.coverageComplete,
         personalSessionMembership.membershipByServerId,
         personalSessionMembership.statesByServerId,
+        personalSessionMembership.followRulesByServerId,
     ]);
     const localBadgeSnapshot = useLocalActivityBadgeSnapshot(badgeSnapshotParams);
 

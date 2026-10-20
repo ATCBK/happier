@@ -1,142 +1,161 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { FeaturesResponseSchema } from '@happier-dev/protocol/features/payload/featuresResponseSchema';
+import { MachinePublishedDaemonStateV1Schema } from '@happier-dev/protocol/machines/machinePublishedContentV1';
+import { encodePlainMachineStoredContent } from '@happier-dev/protocol/machines/machineStoredContent';
+import { DirectRouteGrantRequestV2Schema, SignedDirectRouteGrantV2Schema,
+    type DirectRouteGrantRequestV2 } from '@happier-dev/protocol/machines/peer/mediation/directRouteGrantV2';
+import { PeerLoopbackEndpointCandidateV1Schema } from '@happier-dev/protocol/machines/peer/mediation/loopbackEndpointV1';
+import { PEER_MEDIATION_RECEIPTS } from '@happier-dev/protocol/machines/peer/mediation/receipts';
+import { PEER_MACHINE_RPC_DIRECT_PATH_V2, PeerMachineRpcDirectRequestV2Schema,
+    PeerMachineRpcDirectResponseV2Schema, type PeerMachineRpcDirectRequestV2 } from '@happier-dev/protocol/machines/peer/mediation/rpc/directV2';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 
-import { resetScopedMachineTransportCacheForTests } from './serverScopedRpcPool';
+import { createPlainMachineRowFixture } from '@/dev/testkit/fixtures/machineFixtures';
+import { createDeferred } from '@/dev/testkit/hooks/createDeferred';
+import { restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
+import { installSessionOpsNetworkBoundary } from '@/dev/testkit/harness/sessionOpsNetworkBoundary';
 
-const machineRpcSpy = vi.hoisted(() => vi.fn());
-const createEphemeralSocketSpy = vi.hoisted(() => vi.fn());
-const getActiveServerSnapshotSpy = vi.hoisted(() => vi.fn(() => ({
-    serverId: 'server-a', serverUrl: 'https://server-a.example.test', kind: 'custom', generation: 1,
-})));
-const resolveDirectRouteSpy = vi.hoisted(() => vi.fn());
-const postDirectSpy = vi.hoisted(() => vi.fn());
+// Home admission, the applied Account lifetime, route policy/proofs and the RPC
+// client remain real. Only Home HTTP/Socket.IO and daemon HTTP are replaced.
+const boundary = await installSessionOpsNetworkBoundary();
+const { machineRpcWithServerScope, createOrderedMachineRpcCaller } = await import('./serverScopedMachineRpc');
+const { resetScopedMachineTransportCacheForTests } = await import('./serverScopedRpcPool');
+const { serverScopedRpcSocketPool } = await import('./serverScopedRpcSocketPool');
+const { resetServerFeaturesClientForTests } = await import('@/sync/api/capabilities/serverFeaturesClient');
+const { resetServerReachabilitySupervisors } = await import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool');
+const { clearMachineRequestReachabilityForTest } = await import('@/sync/domains/machines/reachability/machineReachability');
+const { clearMachineRpcPeerMediationReceiptsForTest, getMachineRpcPeerMediationReceiptsSnapshot } = await import('@/sync/domains/machines/peer/mediation/rpc/receiptLog');
+const { getStorage } = await import('@/sync/domains/state/storageStore');
 
-vi.mock('@/sync/runtime/orchestration/serverScopedRpc/createEphemeralServerSocketClient', () => ({
-    createEphemeralServerSocketClient: (...args: unknown[]) => createEphemeralSocketSpy(...args),
-}));
+const grantRequests: DirectRouteGrantRequestV2[] = [];
+const directRequests: PeerMachineRpcDirectRequestV2[] = [];
+const directSignals: Array<AbortSignal | null | undefined> = [];
+const directResponses: Promise<Response>[] = [];
+let account: Awaited<ReturnType<typeof restoreServerAccountForTest>> | undefined;
+let prepareGrant = async (_request: DirectRouteGrantRequestV2): Promise<void> => {};
+let directReply = async (request: PeerMachineRpcDirectRequestV2): Promise<unknown> => request.params;
 
-vi.mock('@/sync/api/session/apiSocket', () => ({
-    apiSocket: {
-        machineRPC: (...args: unknown[]) => machineRpcSpy(...args),
-    },
-}));
-
-vi.mock('@/sync/domains/server/serverRuntime', () => ({
-    getActiveServerSnapshot: () => getActiveServerSnapshotSpy(),
-}));
-
-// Mock only the direct-route transport boundary so the peer-mediation DIRECT
-// route is exercised end-to-end through the real wiring + real client.
-vi.mock('@/sync/domains/machines/peer/mediation/rpc/productionRoute', () => ({
-    resolveProductionMachineRpcDirectRoute: (...args: unknown[]) => resolveDirectRouteSpy(...args),
-    postProductionMachineRpcDirect: (...args: unknown[]) => postDirectSpy(...args),
-}));
-
-function createSelectedRoute() {
-    return {
-        kind: 'selected' as const,
-        receipt: 'peer.route.selected',
-        endpoint: {
-            url: 'http://127.0.0.1:3000',
-            endpointFingerprint: 'endpoint_1',
-        },
-        grant: {
-            payload: {
-                v: 1,
-                grantId: 'grant_1',
-                grantFamilyId: 'family_1',
-                accountId: 'account_1',
-                machineId: 'machine_1',
-                flowKind: 'machine_rpc',
-                routeKind: 'loopback_direct',
-                scope: {
-                    kind: 'machine_rpc',
-                    rpcScopeId: 'rpc_scope_1',
-                    allowedMethods: [RPC_METHODS.DAEMON_MEMORY_STATUS],
-                    maxCalls: 1,
-                    maxIdleMs: 10_000,
-                },
-                iat: 1_000,
-                exp: 601_000,
-                aud: 'happier-daemon-route-grant',
-                endpointFingerprint: 'endpoint_1',
-            },
-            signature: { keyId: 'key_1', alg: 'Ed25519', valueBase64Url: 'AbCdEf012_-' },
-        },
-        nonceProof: {
-            v: 1,
-            grantId: 'grant_1',
-            routeKind: 'loopback_direct',
-            flowKind: 'machine_rpc',
-            endpointFingerprint: 'endpoint_1',
-            nonceBase64Url: 'nonce_1',
-            signatureBase64Url: 'AbCdEf012_-',
-        },
-    };
-}
+afterAll(() => boundary.dispose());
 
 describe('machineRpcWithServerScope signal (direct peer route)', () => {
-    beforeEach(() => {
-        resolveDirectRouteSpy.mockResolvedValue(createSelectedRoute());
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://server-a.example.test',
-            kind: 'custom',
-            generation: 1,
+    beforeEach(async () => {
+        boundary.resetRequests();
+        resetScopedMachineTransportCacheForTests();
+        resetServerFeaturesClientForTests();
+        clearMachineRequestReachabilityForTest();
+        clearMachineRpcPeerMediationReceiptsForTest();
+        grantRequests.length = 0;
+        directRequests.length = 0;
+        directSignals.length = 0;
+        directResponses.length = 0;
+        prepareGrant = async () => {};
+        directReply = async (request) => request.params;
+        const home = await boundary.addHome('https://server-a.example.test', 'account_1');
+        const endpoint = PeerLoopbackEndpointCandidateV1Schema.parse({
+            v: 1, routeKind: 'loopback_direct', url: 'http://127.0.0.1:3000',
+            endpointFingerprint: 'endpoint_1', expiresAt: Date.now() + 300_000,
         });
+        const machineRow = {
+            ...createPlainMachineRowFixture({ id: 'machine_1', accountId: home.accountId }),
+            daemonState: encodePlainMachineStoredContent(MachinePublishedDaemonStateV1Schema.parse({
+                status: 'running', peerMediation: { loopback: { endpoint } },
+            })),
+        };
+        boundary.setHttpResponder(async (input, init) => {
+            const path = new URL(String(input)).pathname;
+            if (path === '/v1/machines') return Response.json([machineRow]);
+            if (path === '/v1/machines/machine_1') return Response.json({ machine: machineRow });
+            if (path === '/v1/features') return Response.json(FeaturesResponseSchema.parse({
+                features: { machines: { enabled: true, rpc: { enabled: true, directPeer: { enabled: true } } } },
+                capabilities: {},
+            }));
+            if (path !== '/v1/machines/peer/mediation/route-grants') return null;
+            // Consume the real client's request and mint the boundary response
+            // from that exact ephemeral key, scope and endpoint binding.
+            const request = DirectRouteGrantRequestV2Schema.parse(JSON.parse(String(init?.body)));
+            grantRequests.push(request);
+            await prepareGrant(request);
+            const now = Date.now();
+            return Response.json({ ok: true, grant: SignedDirectRouteGrantV2Schema.parse({
+                payload: {
+                    v: 2, grantId: `grant_${grantRequests.length}`, accountId: home.accountId,
+                    machineId: request.machineId, flowKind: request.flowKind, routeKind: request.routeKind,
+                    scope: request.scope, iat: now, exp: now + request.ttlMs, aud: 'happier-daemon-route-grant',
+                    endpointFingerprint: request.endpointFingerprint, proofKind: 'ephemeral_ed25519',
+                    ephemeralPublicKeyBase64Url: request.ephemeralPublicKeyBase64Url,
+                },
+                signature: { keyId: 'key_1', alg: 'Ed25519',
+                    valueBase64Url: Buffer.from(new Uint8Array(64).fill(2)).toString('base64url') },
+            }) });
+        });
+        vi.stubGlobal('fetch', vi.fn<typeof fetch>((input, init) => {
+            const url = new URL(String(input));
+            expect(url.origin).toBe(endpoint.url);
+            expect(url.pathname).toBe(PEER_MACHINE_RPC_DIRECT_PATH_V2);
+            if (init?.method === 'OPTIONS') return Promise.resolve(new Response(null, { status: 204 }));
+            expect(init?.method).toBe('POST');
+            const request = PeerMachineRpcDirectRequestV2Schema.parse(JSON.parse(String(init?.body)));
+            directRequests.push(request);
+            directSignals.push(init?.signal);
+            const response = directReply(request).then(result => Response.json(PeerMachineRpcDirectResponseV2Schema.parse({
+                v: 2, ok: true, requestId: request.requestId, method: request.method,
+                receipt: PEER_MEDIATION_RECEIPTS.rpcDirectCallSucceeded, routeKind: 'loopback_direct', result,
+            })));
+            directResponses.push(response);
+            return response;
+        }));
+        account = await restoreServerAccountForTest({
+            serverUrl: home.serverUrl, accountId: home.accountId, request: boundary.request,
+        });
+        // Bootstrap and later refreshes must hydrate the same advertised
+        // topology through the real stored-content reader.
+        const { sync } = await import('@/sync/sync');
+        await sync.refreshMachines();
+        expect(getStorage().getState().machines.machine_1?.daemonState?.peerMediation?.loopback?.endpoint).toEqual(endpoint);
     });
 
-    afterEach(() => {
-        machineRpcSpy.mockReset();
-        createEphemeralSocketSpy.mockReset();
-        getActiveServerSnapshotSpy.mockReset();
-        resolveDirectRouteSpy.mockReset();
-        postDirectSpy.mockReset();
-        resetScopedMachineTransportCacheForTests();
+    afterEach(async () => {
+        await account?.dispose();
+        account = undefined;
+        await serverScopedRpcSocketPool.stopAll();
+        await resetServerReachabilitySupervisors();
+        vi.unstubAllGlobals();
     });
 
     it('orders delayed route preparation while keeping recognition replies concurrently in flight', async () => {
-        let releaseRoute!: (route: ReturnType<typeof createSelectedRoute>) => void;
-        resolveDirectRouteSpy.mockImplementationOnce(() => new Promise<ReturnType<typeof createSelectedRoute>>((resolve) => {
-            releaseRoute = resolve;
-        }));
-        const replies: Array<(value: unknown) => void> = [];
-        const dispatched: number[] = [];
-        postDirectSpy.mockImplementation(({ request, onDispatched }: { onDispatched?: () => void; request: { requestId: string; method: string; params: { seq: number } } }) => {
-            dispatched.push(request.params.seq);
-            onDispatched?.();
-            return new Promise((resolve) => replies.push((result) => resolve({
-                v: 2, ok: true, requestId: request.requestId, method: request.method,
-                receipt: 'peer.rpc.direct_call_succeeded', routeKind: 'loopback_direct', result,
-            })));
-        });
-        const { createOrderedMachineRpcCaller } = await import('./serverScopedMachineRpc');
+        const routeReady = createDeferred<void>();
+        prepareGrant = async () => { await routeReady.promise; };
+        const replies = [createDeferred<unknown>(), createDeferred<unknown>()];
+        directReply = async (request) => {
+            const { seq } = request.params as { seq: number };
+            return await replies[seq]!.promise;
+        };
         const call = createOrderedMachineRpcCaller();
         const first = call({ machineId: 'machine_1', method: RPC_METHODS.DAEMON_MEMORY_STATUS, payload: { seq: 0 } });
         const second = call({ machineId: 'machine_1', method: RPC_METHODS.DAEMON_MEMORY_STATUS, payload: { seq: 1 } });
-        await vi.waitFor(() => expect(resolveDirectRouteSpy).toHaveBeenCalledTimes(1));
-        expect(dispatched).toEqual([]);
-        releaseRoute(createSelectedRoute());
-        await vi.waitFor(() => expect(dispatched).toEqual([0, 1]));
-        // A reply fence would leave only seq 0 dispatched at this point.
-        replies[1]!({ ackSeq: 1 });
-        replies[0]!({ ackSeq: 0 });
-        await expect(second).resolves.toEqual({ ackSeq: 1 });
-        await expect(first).resolves.toEqual({ ackSeq: 0 });
+        const settled = Promise.allSettled([first, second]);
+        try {
+            await vi.waitFor(() => expect(grantRequests).toHaveLength(1));
+            expect(directRequests).toEqual([]);
+            routeReady.resolve();
+            await vi.waitFor(() => expect(directRequests.map(request => request.params)).toEqual([{ seq: 0 }, { seq: 1 }]));
+            // A reply fence would leave only seq 0 dispatched at this point.
+            replies[1]!.resolve({ ackSeq: 1 });
+            replies[0]!.resolve({ ackSeq: 0 });
+            await expect(second).resolves.toEqual({ ackSeq: 1 });
+            await expect(first).resolves.toEqual({ ackSeq: 0 });
+            expect(boundary.requests).toEqual([]);
+        } finally {
+            routeReady.resolve();
+            replies.forEach(reply => reply.resolve(null));
+            await settled;
+        }
     });
 
     it('cancels a queued preparation promptly without opening its predecessor dispatch fence', async () => {
-        let releaseRoute!: (route: ReturnType<typeof createSelectedRoute>) => void;
-        resolveDirectRouteSpy.mockImplementationOnce(() => new Promise<ReturnType<typeof createSelectedRoute>>((resolve) => { releaseRoute = resolve; }));
-        const dispatched: number[] = [];
-        postDirectSpy.mockImplementation(({ request, onDispatched }: { onDispatched?: () => void; request: { requestId: string; method: string; params: { seq: number } } }) => {
-            dispatched.push(request.params.seq);
-            onDispatched?.();
-            return Promise.resolve({ v: 2, ok: true, requestId: request.requestId, method: request.method,
-                receipt: 'peer.rpc.direct_call_succeeded', routeKind: 'loopback_direct', result: request.params.seq });
-        });
-        const { createOrderedMachineRpcCaller } = await import('./serverScopedMachineRpc');
+        const routeReady = createDeferred<void>();
+        prepareGrant = async () => { await routeReady.promise; };
+        directReply = async (request) => (request.params as { seq: number }).seq;
         const call = createOrderedMachineRpcCaller();
         const params = { machineId: 'machine_1', method: RPC_METHODS.DAEMON_MEMORY_STATUS };
         const first = call({ ...params, payload: { seq: 0 } });
@@ -144,100 +163,80 @@ describe('machineRpcWithServerScope signal (direct peer route)', () => {
         const cancelled = call({ ...params, payload: { seq: 1 }, signal: abort.signal });
         const rejected = expect(cancelled).rejects.toMatchObject({ name: 'AbortError', code: 'MACHINE_RPC_ABORTED' });
         const third = call({ ...params, payload: { seq: 2 } });
-        await vi.waitFor(() => expect(resolveDirectRouteSpy).toHaveBeenCalledTimes(1));
-        abort.abort();
-        await rejected;
-        expect(dispatched).toEqual([]);
-        expect(resolveDirectRouteSpy).toHaveBeenCalledTimes(1);
-        releaseRoute(createSelectedRoute());
-        await expect(first).resolves.toBe(0);
-        await expect(third).resolves.toBe(2);
-        expect(dispatched).toEqual([0, 2]);
+        const settled = Promise.allSettled([first, cancelled, third]);
+        try {
+            await vi.waitFor(() => expect(grantRequests).toHaveLength(1));
+            abort.abort();
+            await rejected;
+            expect(directRequests).toEqual([]);
+            expect(grantRequests).toHaveLength(1);
+            routeReady.resolve();
+            await expect(first).resolves.toBe(0);
+            await expect(third).resolves.toBe(2);
+            expect(directRequests.map(request => request.params)).toEqual([{ seq: 0 }, { seq: 2 }]);
+            expect(boundary.requests).toEqual([]);
+        } finally {
+            routeReady.resolve();
+            await settled;
+        }
     });
 
     it('rejects promptly during peer-route discovery and does not dispatch after it later resolves', async () => {
-        let releaseRoute!: (route: ReturnType<typeof createSelectedRoute>) => void;
-        resolveDirectRouteSpy.mockImplementation(() => new Promise<ReturnType<typeof createSelectedRoute>>((resolve) => {
-            releaseRoute = resolve;
-        }));
+        const routeReady = createDeferred<void>();
+        prepareGrant = async () => { await routeReady.promise; };
         const controller = new AbortController();
-
-        const { machineRpcWithServerScope } = await import('./serverScopedMachineRpc');
         const pending = machineRpcWithServerScope({
-            machineId: 'machine_1',
-            method: RPC_METHODS.DAEMON_MEMORY_STATUS,
-            payload: { includeWorkers: true },
-            signal: controller.signal,
+            machineId: 'machine_1', method: RPC_METHODS.DAEMON_MEMORY_STATUS,
+            payload: { includeWorkers: true }, signal: controller.signal,
         });
-        await vi.waitFor(() => expect(resolveDirectRouteSpy).toHaveBeenCalledTimes(1));
-
-        controller.abort();
-
-        const settled = await Promise.race([
-            pending.then(
-                () => ({ status: 'resolved' as const }),
-                (error: unknown) => ({ status: 'rejected' as const, error }),
-            ),
-            new Promise<{ status: 'pending' }>((resolve) => setTimeout(() => resolve({ status: 'pending' }), 50)),
-        ]);
-        expect(settled).toMatchObject({
-            status: 'rejected',
-            error: { name: 'AbortError', code: 'MACHINE_RPC_ABORTED' },
-        });
-
-        releaseRoute(createSelectedRoute());
-        await Promise.resolve();
-        await Promise.resolve();
-        expect(postDirectSpy).not.toHaveBeenCalled();
-        expect(machineRpcSpy).not.toHaveBeenCalled();
-        expect(createEphemeralSocketSpy).not.toHaveBeenCalled();
+        const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError', code: 'MACHINE_RPC_ABORTED' });
+        try {
+            await vi.waitFor(() => expect(grantRequests).toHaveLength(1));
+            controller.abort();
+            await rejected;
+            routeReady.resolve();
+            // Observe the real route consumer after the delayed HTTP grant.
+            await vi.waitFor(() => expect(getMachineRpcPeerMediationReceiptsSnapshot()).toContainEqual(
+                expect.objectContaining({ receipt: PEER_MEDIATION_RECEIPTS.routeSelected }),
+            ));
+            expect(directRequests).toEqual([]);
+            expect(boundary.requests).toEqual([]);
+        } finally {
+            routeReady.resolve();
+            await Promise.allSettled([pending]);
+        }
     });
 
     it('rejects with an abort error when the signal fires during an in-flight direct call', async () => {
-        let resolveStarted: () => void = () => {};
-        const started = new Promise<void>((resolve) => {
-            resolveStarted = resolve;
-        });
-        postDirectSpy.mockImplementation(() => {
-            resolveStarted();
-            return new Promise(() => {});
-        });
+        const reply = createDeferred<unknown>();
+        directReply = async () => await reply.promise;
         const controller = new AbortController();
-
-        const { machineRpcWithServerScope } = await import('./serverScopedMachineRpc');
-        const rpcPromise = machineRpcWithServerScope({
-            machineId: 'machine_1',
-            method: RPC_METHODS.DAEMON_MEMORY_STATUS,
-            payload: { includeWorkers: true },
-            signal: controller.signal,
+        const pending = machineRpcWithServerScope({
+            machineId: 'machine_1', method: RPC_METHODS.DAEMON_MEMORY_STATUS,
+            payload: { includeWorkers: true }, signal: controller.signal,
         });
-        const captured = rpcPromise.catch((error: unknown) => error);
-
-        await started;
-        controller.abort();
-
-        const error = await captured;
-        expect((error as { name?: string })?.name).toBe('AbortError');
-        expect((error as { code?: string })?.code).toBe('MACHINE_RPC_ABORTED');
-        // The server-fallback route must not be reached for a selected direct route.
-        expect(machineRpcSpy).not.toHaveBeenCalled();
-        expect(createEphemeralSocketSpy).not.toHaveBeenCalled();
+        const rejected = expect(pending).rejects.toMatchObject({ name: 'AbortError', code: 'MACHINE_RPC_ABORTED' });
+        try {
+            await vi.waitFor(() => expect(directRequests).toHaveLength(1));
+            controller.abort();
+            await rejected;
+            expect(directSignals[0]?.aborted).toBe(true);
+            expect(boundary.requests).toEqual([]);
+        } finally {
+            reply.resolve(null);
+            await Promise.allSettled([pending, ...directResponses]);
+        }
     });
 
     it('rejects immediately without dispatching the direct request when already aborted', async () => {
-        postDirectSpy.mockImplementation(() => new Promise(() => {}));
         const controller = new AbortController();
         controller.abort();
-
-        const { machineRpcWithServerScope } = await import('./serverScopedMachineRpc');
-        await expect(
-            machineRpcWithServerScope({
-                machineId: 'machine_1',
-                method: RPC_METHODS.DAEMON_MEMORY_STATUS,
-                payload: { includeWorkers: true },
-                signal: controller.signal,
-            }),
-        ).rejects.toMatchObject({ code: 'MACHINE_RPC_ABORTED' });
-        expect(postDirectSpy).not.toHaveBeenCalled();
+        await expect(machineRpcWithServerScope({
+            machineId: 'machine_1', method: RPC_METHODS.DAEMON_MEMORY_STATUS,
+            payload: { includeWorkers: true }, signal: controller.signal,
+        })).rejects.toMatchObject({ name: 'AbortError', code: 'MACHINE_RPC_ABORTED' });
+        expect(grantRequests).toEqual([]);
+        expect(directRequests).toEqual([]);
+        expect(boundary.requests).toEqual([]);
     });
 });

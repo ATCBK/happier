@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { MachineDisplayCacheEntryV1 } from '@/sync/domains/state/warmCachePersistence';
 import type { Machine } from '@/sync/domains/state/storageTypes';
 
+import { resolveFleetMachineRejection } from './administration/fleetUnion';
 import { isMachineInventorySettled, readMachineInventoryStatus, resolveAllProfileMachineInventorySnapshots } from './machineInventorySnapshots';
 import { primeServerFeaturesSnapshot, deleteServerFeaturesSnapshot } from '@/sync/api/capabilities/serverFeaturesClient';
 import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/featureFixtures';
@@ -25,6 +26,7 @@ function machine(input: Readonly<{
         replacedByMachineId: input.replacedByMachineId ?? null,
         // Narrow owner fixture: the projection reads only displayName.
         metadata: { displayName: input.id } as Machine['metadata'],
+        availability: { kind: 'available' },
         metadataVersion: 1,
         daemonState: null,
         daemonStateVersion: 0,
@@ -96,18 +98,48 @@ describe('resolveAllProfileMachineInventorySnapshots', () => {
         // The scoped inventory owns current membership even if the active map still has an older object.
         expect(resolveAllProfileMachineInventorySnapshots({ ...base, machineListByServerId: { 'local-a': [{ ...row }] } })[0])
             .toMatchObject({ machines: [expect.objectContaining({ id: row.id })], executionEligibleMachineIds: [row.id] });
-        for (const status of [undefined, 'loading', 'error', 'signedOut'] as const) {
+        for (const status of [undefined, 'error', 'signedOut'] as const) {
             expect(resolveAllProfileMachineInventorySnapshots({ ...base,
                 machineListStatusByServerId: { 'local-a': status } })[0])
                 .toMatchObject({ machines: [expect.objectContaining({ id: row.id })], executionEligibleMachineIds: [] });
         }
         expect(resolveAllProfileMachineInventorySnapshots({ ...base, activeServerId: 'other',
-            machineListStatusByServerId: { 'local-a': 'loading' } })[0]).toMatchObject({ executionEligibleMachineIds: [] });
+            machineListStatusByServerId: { 'local-a': 'loading' } })[0]).toMatchObject({ executionEligibleMachineIds: [row.id] });
+        for (const status of ['idle', 'loading'] as const) {
+            const pending = { ...row, availability: undefined };
+            expect(resolveAllProfileMachineInventorySnapshots({ ...base, activeMachines: [pending],
+                machineListByServerId: { 'local-a': [pending] }, machineListStatusByServerId: { 'local-a': status } })[0])
+                .toMatchObject({ executionEligibleMachineIds: [] });
+        }
         expect(resolveAllProfileMachineInventorySnapshots({ ...base, activeServerId: 'other' })[0])
             .toMatchObject({ executionEligibleMachineIds: [row.id] });
         const locked = { ...row, availability: { kind: 'locked' as const, reason: 'encryption_material_unavailable' as const } };
         expect(resolveAllProfileMachineInventorySnapshots({ ...base, activeMachines: [locked],
             machineListByServerId: { 'local-a': [locked] } })[0]).toMatchObject({ executionEligibleMachineIds: [] });
+    });
+
+    it('keeps a machine with current presence selectable while its list refresh is in flight, and rejects it once the read failed', () => {
+        const row = { ...machine({ id: 'refreshing-row', active: true }), activeAt: Date.now() };
+        const base = { profiles: [profiles[0]], activeServerId: 'local-a', activeMachines: [row],
+            machineListByServerId: { 'local-a': [row] }, accountScopesByServerId, loadWarmEntries: () => ({}) };
+        const target = { serverIdentityId: 'srv_server_a', machineId: row.id };
+        const rejectionWhen = (status: 'idle' | 'loading' | 'error' | 'signedOut') => resolveFleetMachineRejection({
+            ...target,
+            machineSnapshots: resolveAllProfileMachineInventorySnapshots({ ...base, machineListStatusByServerId: { 'local-a': status } }),
+        });
+        expect(rejectionWhen('idle')).toBeNull();
+        expect(rejectionWhen('loading')).toBeNull();
+        expect(rejectionWhen('error')).toBe('stale');
+        expect(rejectionWhen('signedOut')).toBe('stale');
+        // The admitted row remains executable, but the rest of the list is not settled.
+        expect(resolveAllProfileMachineInventorySnapshots({ ...base, machineListStatusByServerId: { 'local-a': 'loading' } })[0])
+            .toMatchObject({ observation: 'live', executionEligibleMachineIds: [row.id] });
+        expect(isMachineInventorySettled(resolveAllProfileMachineInventorySnapshots({ ...base, machineListStatusByServerId: { 'local-a': 'loading' } }), 'srv_server_a')).toBe(false);
+        // A machine whose live presence lapsed is still rejected during the refresh.
+        const lapsed = { ...row, active: false, activeAt: 1 };
+        expect(resolveFleetMachineRejection({ ...target, machineSnapshots: resolveAllProfileMachineInventorySnapshots({
+            ...base, activeMachines: [lapsed], machineListByServerId: { 'local-a': [lapsed] },
+            machineListStatusByServerId: { 'local-a': 'loading' } }) })).toBe('offline');
     });
 
     it('projects request reachability for the exact Home and recovers after a successful retry', () => {

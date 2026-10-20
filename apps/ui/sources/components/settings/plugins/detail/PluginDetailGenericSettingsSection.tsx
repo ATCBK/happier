@@ -26,6 +26,8 @@ import { SchemaFieldRow, SchemaFieldStatusLine } from '@/components/settings/sch
 import { SectionButtonRow } from '@/components/ui/lists/SectionButtonRow';
 import { Modal } from '@/modal';
 import { t } from '@/text';
+import { useActiveServerAccountScopeLifetime } from '@/sync/store/hooks';
+import { useMountedPluginSettingsActionAdapter } from '@/components/settings/plugins/model/useMountedPluginSettingsActionAdapter';
 import { projectAccountDeclaredPluginSettingsGroups } from '@/sync/domains/plugins/settings/accountDeclaredPluginSettings';
 import {
     resolveScopedPluginSettingsTarget,
@@ -149,21 +151,6 @@ function declaredDisabledReason(
     return localizedPresentationText(availability.disabledReason) || null;
 }
 
-/**
- * Which record actually loses the value, in the person's language. Account
- * scope is Account-wide; daemon scope belongs to one exact machine, so it names
- * that machine instead of saying "Machine" about an unidentified one.
- */
-function settingsRecordOwnerLabel(
-    group: PluginProjectionEditableSettingsGroup,
-    target: ScopedPluginSettingsTarget | null,
-): string {
-    if (group.scope.kind === 'account') return t('settings.account');
-    return target?.kind === 'daemon' && target.machineId.trim()
-        ? t('settings.mcpServersBindingTargetMachine', { machine: target.machineId })
-        : t('settings.mcpServersBindingTargetMachineTitle');
-}
-
 export function PluginSettingTextField(props: Readonly<{
     pluginId: string;
     group: PluginProjectionEditableSettingsGroup;
@@ -199,12 +186,6 @@ export function PluginSettingTextField(props: Readonly<{
      * condition such as loading or an unavailable scope never borrows this copy.
      */
     disabledReason?: string | null;
-    /**
-     * Localized record-owner label for the deletion prompt. Callers that know
-     * the exact machine name it, so the prompt says which machine loses the
-     * secret rather than a generic scope word.
-     */
-    scopeLabel?: string;
 }>) {
     const { theme } = useUnistyles();
     const styles = stylesheet;
@@ -213,22 +194,6 @@ export function PluginSettingTextField(props: Readonly<{
     const testID = `settings.plugins.detail.${props.pluginId}.settings.${props.group.id}.${props.field.key}.input`;
     const saveLabel = t(props.saveFailed ? 'common.retry' : 'common.save');
     const placeholder = localizedPresentationText(props.field.presentation?.placeholder) || undefined;
-    const confirmDelete = async (): Promise<void> => {
-        if (!props.onDelete) return;
-        const scope = props.scopeLabel
-            ?? (props.group.scope.kind === 'account'
-                ? t('settings.account')
-                : t('settings.mcpServersBindingTargetMachineTitle'));
-        const confirmed = await Modal.confirm(
-            t('secrets.prompts.deleteTitle'),
-            t('secrets.prompts.deleteConfirm', {
-                name: `${props.pluginId} · ${props.field.title} · ${scope}`,
-            }),
-            { destructive: true, confirmText: t('common.delete'), cancelText: t('common.cancel') },
-        );
-        if (confirmed) props.onDelete();
-    };
-
     return (
         <SchemaFieldRow
             testID={`${testID}.row`}
@@ -301,7 +266,7 @@ export function PluginSettingTextField(props: Readonly<{
                                     accessibilityHint={t('settingsPlugins.secretFieldActions.deleteHint')}
                                     textStyle={{ color: theme.colors.state.danger.foreground }}
                                     disabled={props.saving || props.persistenceDisabled}
-                                    onPress={() => { void confirmDelete(); }}
+                                    onPress={props.onDelete}
                                 />
                             ) : null}
                             {props.onUnbind ? (
@@ -366,6 +331,8 @@ function PluginSettingAccountSecretField(props: Readonly<{
 }>) {
     const secretField = React.useMemo(() => projectScopedPluginSettingsField(props.field), [props.field]);
     const secretFields = React.useMemo(() => [secretField], [secretField]);
+    const adapter = useMountedPluginSettingsActionAdapter({ adapter: scopedPluginAccountSecretSettingsAdapter,
+        accountLifetime: props.accountLifetime, target: props.target });
     const secretSettings = useScopedPluginSettingsProjection({
         pluginId: props.pluginId,
         scope: ACCOUNT_PLUGIN_SETTINGS_SCOPE,
@@ -375,7 +342,7 @@ function PluginSettingAccountSecretField(props: Readonly<{
         sourceLifetimeIdentity: props.lifetimeIdentity,
         perActiveServerIdentityId: null,
         enabled: props.enabled,
-        adapter: scopedPluginAccountSecretSettingsAdapter,
+        adapter,
     });
     const revision = secretSettings.state.revision?.kind === 'account-secret'
         ? secretSettings.state.revision
@@ -472,6 +439,10 @@ function PluginSettingAccountSecretField(props: Readonly<{
                 || operationIdRef.current !== operationId
                 || !accountScopeIsCurrent()
             ) return;
+            if (result?.status === 'declined') {
+                setSaving(false);
+                return;
+            }
             if (result?.status === 'conflict') {
                 // A one-shot SavedSecret mutation was rejected. The owner
                 // adopts safe content only when available; the draft remains
@@ -682,7 +653,9 @@ export function PluginSettingDaemonSecretField(props: Readonly<{
     const draftVersionRef = React.useRef(0);
     const lifetimeIdentityRef = React.useRef(props.lifetimeIdentity);
     const writeAbortRef = React.useRef<AbortController | null>(null);
-    const daemonSecretAdapter = scopedPluginSettingsAdapter.daemonSecret;
+    const mountedAdapter = useMountedPluginSettingsActionAdapter({ adapter: scopedPluginSettingsAdapter,
+        accountLifetime: props.accountLifetime, target: props.target });
+    const daemonSecretAdapter = mountedAdapter.daemonSecret;
 
     const targetIsCurrent = React.useCallback((target: ScopedPluginSettingsDaemonTarget | null): boolean => {
         if (!target) return false;
@@ -843,6 +816,10 @@ export function PluginSettingDaemonSecretField(props: Readonly<{
                 || !targetIsCurrent(target)
             ) return;
             if (writeAbortRef.current === controller) writeAbortRef.current = null;
+            if (result.status === 'declined') {
+                setSaving(false);
+                return;
+            }
             const draftIsCurrent = draftVersionRef.current === draftVersion;
             if (result.status === 'outcomeUnknown') {
                 // The adapter already performed one safe status readback for
@@ -945,7 +922,6 @@ export function PluginSettingDaemonSecretField(props: Readonly<{
             saveFailed={saveFailed}
             persistenceDisabled={persistenceDisabled}
             acceptDraftInputWhileBusy={!persistenceDisabled && !saving}
-            scopeLabel={settingsRecordOwnerLabel(props.group, props.target)}
             status={secretConfigured ? t('memorySearchSettings.embeddings.secretSet') : null}
             errorMessage={saveOutcomeUnknown
                 ? t('settingsProviders.errors.mutationOutcomeUnknownDescription')
@@ -1071,9 +1047,8 @@ export function PluginDetailGenericSettingsSection(props: PluginDetailGenericSet
     // incumbent lifetime for either Settings scope so Account A cannot leak
     // into Account B when the daemon target remains unchanged.
     const requiresAccountLifetime = groups.length > 0;
-    const accountLifetime = requiresAccountLifetime
-        ? captureActiveServerAccountScopeLifetime()
-        : null;
+    const activeAccountLifetime = useActiveServerAccountScopeLifetime();
+    const accountLifetime = requiresAccountLifetime ? activeAccountLifetime : null;
     const accountTarget = React.useMemo(() => resolveScopedPluginSettingsTarget({
         scope: ACCOUNT_PLUGIN_SETTINGS_SCOPE,
         serverIdentityId: props.accountServerIdentityId,
@@ -1470,7 +1445,6 @@ function PluginDetailScopedSettingsSection(props: PluginDetailGenericSettingsSec
                                     persistenceDisabled={!policy.enabled || !scopedOperationsAvailable || loading}
                                     commitDisabled={model.pending}
                                     disabledReason={declaredDisabledReason(field, policy)}
-                                    scopeLabel={settingsRecordOwnerLabel(group, props.target)}
                                     onChangeText={model.setDraft}
                                     onCommit={() => commitOrdinaryField({ field, model, hasDraft: false })}
                                 />

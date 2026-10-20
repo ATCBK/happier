@@ -35,6 +35,7 @@ import { waitForChangeOrDeadline } from '@/daemon/lifecycle/waitForChangeOrDeadl
 import {
   createActiveAccountSettingsConnectedAccountPurposeBindingStore,
   createConnectedAccountPurposeBindingOwner,
+  readConnectedAccountPurposeProfileLabel,
   type ConnectedAccountPurposeBindingOwner,
   type ConnectedAccountPurposeBindingStore,
   type ConnectedAccountPurposeResolvedTarget,
@@ -53,6 +54,7 @@ import type {
   TeamCredentialDirectMaterialOperationFailure,
   TeamCredentialDirectMaterialUnavailableReason,
 } from '../directMaterial/teamCredentialDirectMaterialClient';
+import type { ConnectedServiceSwitchTarget } from '../sessionAuthSwitch/connectedServiceSwitchDeferralQueue';
 
 type QualifiedConnectedAccountMaterializationOwner = Pick<
   QualifiedConnectedAccountEstablishedRuntimeOwner,
@@ -70,8 +72,7 @@ type ResolvedDaemonConnectedAccountService = Readonly<{
 type DaemonConnectedAccountSelectionProfile = Readonly<{
   profileId: string;
   active: boolean;
-  providerAccountId?: string | null;
-  providerEmail?: string | null;
+  providerIdentity?: QualifiedConnectedAccountProfileV4['providerIdentity'];
   displayName?: string;
 }>;
 type DaemonConnectedAccountSelectionGroup = Readonly<{
@@ -151,6 +152,7 @@ export type DaemonConnectedAccountPurposeSessionRestartOwner = (
   input: Readonly<{
     sessionId: string;
     purpose: Parameters<StablePluginConnectedAccountsOwner['watch']>[0]['purpose'];
+    target: ConnectedServiceSwitchTarget;
   }>,
 ) => void;
 
@@ -276,7 +278,6 @@ function listedQualifiedConnectedAccountState(
   authentication: PluginConnectedAccountAuthenticationV2,
 ): PluginConnectedAccountListedState {
   if (profile.status === 'needs_reauth') return 'reconnectRequired';
-  if (profile.status !== 'connected') return 'unavailable';
   if (!isQualifiedConnectedAccountProfileActiveV4(profile, Date.now())) {
     return typeof profile.expiresAt === 'number' && profile.expiresAt <= Date.now()
       ? 'expired'
@@ -401,6 +402,7 @@ function assertCurrentRegistry(
 }
 
 export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readonly<{
+  credentialOwnerAccountId?: string;
   establishedRuntimeOwner: QualifiedConnectedAccountMaterializationOwner;
   openTeamDirect?: TeamCredentialDirectMaterialClient['open'];
   workerMachineId?: string;
@@ -571,14 +573,12 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
       return null;
     }
     return Object.freeze({
-      displayName: profile.displayName
-        ?? profile.providerIdentity?.email
-        ?? profile.providerIdentity?.accountId
-        ?? profile.ref.accountId,
+      displayName: readConnectedAccountPurposeProfileLabel(profile) ?? profile.ref.accountId,
       account: Object.freeze({
         service: Object.freeze({ ...profile.ref.service }),
         accountId: profile.ref.accountId,
       }),
+      observation: Object.freeze({ profiles: Object.freeze([profile]) }),
     });
   };
 
@@ -609,6 +609,7 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
       now: Date.now(),
     });
     if (!activeAccount) return null;
+    const memberIds = new Set(group.members.map(member => member.connectedAccountId));
     return Object.freeze({
       displayName: group.displayName ?? group.ref.groupId,
       account: Object.freeze({
@@ -618,6 +619,14 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
       group: Object.freeze({
         groupId: group.ref.groupId,
         generation: group.generation,
+      }),
+      observation: Object.freeze({
+        group,
+        profiles: Object.freeze(accountResult.accounts.filter(profile => (
+          memberIds.has(profile.ref.accountId)
+          && profile.ref.service.pluginId === target.service.pluginId
+          && profile.ref.service.localId === target.service.localId
+        ))),
       }),
     });
   };
@@ -660,8 +669,7 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
               authentication: service.authentication,
               now,
             }),
-            providerAccountId: profile.providerIdentity?.accountId,
-            providerEmail: profile.providerIdentity?.email,
+            providerIdentity: profile.providerIdentity,
             displayName: profile.displayName,
           })),
           groupResult.groups.map((group) => Object.freeze({
@@ -684,10 +692,7 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
       )));
       for (const profile of availableProfiles.values()) {
         candidates.push(Object.freeze({
-          label: profile.displayName
-            ?? profile.providerEmail
-            ?? profile.providerAccountId
-            ?? profile.profileId,
+          label: readConnectedAccountPurposeProfileLabel(profile) ?? profile.profileId,
           description: service.service.localId,
           target: Object.freeze({
             kind: 'account' as const,
@@ -855,9 +860,7 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
             accountId: profile.ref.accountId,
           }),
           displayName: boundedDisplayName(
-            profile.displayName
-              ?? profile.providerIdentity?.email
-              ?? profile.providerIdentity?.accountId,
+            readConnectedAccountPurposeProfileLabel(profile) ?? undefined,
             profile.ref.accountId,
           ),
           state: listedQualifiedConnectedAccountState(
@@ -1085,6 +1088,7 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
   const bindingStore =
     params.store ?? createActiveAccountSettingsConnectedAccountPurposeBindingStore();
   const bindingOwner = createConnectedAccountPurposeBindingOwner({
+    credentialOwnerAccountId: params.credentialOwnerAccountId,
     store: bindingStore,
     selectTarget,
     resolveTarget,
@@ -1171,6 +1175,11 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
       input.credentialRevisionBasis?.captureCredentialRevision(
         input.origin.resourceId as ConnectedServiceCredentialRevisionV1,
       );
+      input.captureAdmittedResource?.({
+        teamId: opened.payload.teamId,
+        displayName: opened.admittedResource?.displayName ?? null,
+        resourceRevision: opened.payload.resourceRevision,
+      });
       return materialization;
     },
     projectTargetAccounts,
@@ -1207,11 +1216,11 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
       let restartPending = false;
       const subscription = bindingOwner.watch({
         ...input,
-        async listener() {
+        async listener(change) {
           const delivered = Promise.resolve()
             .then(() => input.listener())
             .catch(() => undefined);
-          if (!input.sessionId || !sessionRestartOwner || restartPending) {
+          if (!input.sessionId || !sessionRestartOwner || restartPending || !change?.account) {
             await delivered;
             return;
           }
@@ -1222,6 +1231,12 @@ export function createDaemonConnectedAccountPurposeBindingRuntime(params: Readon
             sessionRestartOwner?.({
               sessionId: input.sessionId,
               purpose: input.purpose,
+              target: {
+                serviceId: qualifiedContributionKey(change.account.service),
+                profileId: change.account.accountId,
+                groupId: change.group?.groupId ?? '',
+                generation: change.group?.generation ?? 0,
+              },
             });
           } finally {
             restartPending = false;

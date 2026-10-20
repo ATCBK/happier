@@ -15,7 +15,7 @@ import { resolveMachinePickerPresence } from '@/sync/domains/machines/identity/r
 import { useMachineReachabilityRevision } from '@/sync/domains/machines/reachability/useMachineReachabilityRevision';
 import { useMachinePresenceNowMs } from '@/hooks/machine/useMachinePresenceNowMs';
 import { formatHappierDataBytes } from '@happier-dev/plugin-ui/presentation';
-import { getMachineDisplayName } from '@/utils/sessions/machineDisplayNames';
+import { getMachineSentenceName } from '@/utils/sessions/machineDisplayNames';
 import { useViewportClass } from '@/utils/platform/useViewportClass';
 import { useActionApprovalContinuation } from '@/components/approvals/useActionApprovalContinuation';
 import type { ActionApprovalRegistration } from '@/components/approvals/actionApprovalContinuation';
@@ -124,13 +124,15 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
             : noAccount ? t('managedMachines.add.status.noAccount')
             : check ? t(check.available ? 'managedMachines.add.status.ready'
                 : missingExecutable ? 'managedMachines.add.status.notInstalled' : 'managedMachines.add.status.needsSetup')
-                : t('managedMachines.providers.loading');
+                : unreadable ? '' : t('managedMachines.add.status.checking');
         const title = localized(provisioner.contribution.pluginId, provisioner.descriptor.title);
         const kind = provisioner.descriptor.kindTitle ? localized(provisioner.contribution.pluginId, provisioner.descriptor.kindTitle) : undefined;
         // Two provisioners of one product ("Cua") are told apart by what each creates, from their own declarations.
         const sharesTitle = catalog.provisioners.some(other => other !== provisioner
             && localized(other.contribution.pluginId, other.descriptor.title) === title);
-        return [{ id, title: sharesTitle && kind ? `${title} ${kind}` : title, kind,
+        // A kind reads inside a title ("Cua sandbox"); shown on its own, as a badge or row subtitle, it starts a label.
+        return [{ id, title: sharesTitle && kind ? `${title} ${kind}` : title,
+            kind: kind ? kind.charAt(0).toLocaleUpperCase() + kind.slice(1) : undefined,
             description: provisioner.descriptor.description ? localized(provisioner.contribution.pluginId, provisioner.descriptor.description) : '',
             location: location === 'local' ? 'local' : 'cloud', mark: (size: number) => markFor(provisioner, size),
             status: { tone: check ? check.available && location !== 'unknown' ? 'ready' : 'attention' : noAccount ? 'attention' : 'none',
@@ -150,7 +152,7 @@ function MachineProvisionerCatalog(props: Omit<MachineProvisionerPickerProps, 's
                 // Retained checks describe the card; the current controller catalog admits the handoff.
                 ...(catalog.error || !catalog.binding?.isCurrent() || unreadable ? { disabled: true } : {}) } }];
     });
-    const controllerName = scope.machine ? getMachineDisplayName(scope.machine) ?? scope.machine.id : '';
+    const controllerName = scope.machine ? getMachineSentenceName(scope.machine) : '';
     const observedMachines = React.useMemo(() => scope.machine ? [scope.machine] : [], [scope.machine]);
     const presenceNowMs = useMachinePresenceNowMs(observedMachines);
     const controllerOnline = scope.machine ? resolveMachinePickerPresence(scope.machine, presenceNowMs,

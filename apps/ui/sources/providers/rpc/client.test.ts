@@ -19,6 +19,7 @@ import {
 } from './client';
 import { createCustomProviderDraft, buildCustomProviderTemplate } from '@/providers/authoring/state';
 import { createProviderErrorV1 } from '@happier-dev/protocol';
+import { ProviderBoundModelRefSchema } from '@happier-dev/protocol/providers/model-selection';
 import { RPC_ERROR_CODES } from '@happier-dev/protocol/rpc';
 import { DaemonProviderModelProjectionRequestV1Schema } from '@happier-dev/protocol/rpc';
 import { projectAccountProviderModelsV1 } from '@happier-dev/protocol/providers/catalog/accountModelProjectionV1';
@@ -392,7 +393,7 @@ describe('provider settings RPC client', () => {
             manualModelsByConnectionId: Object.fromEntries(['a', 'b'].map(id => [`pc_${id}`, [{ id: 'same-model', name: 'Same model', addedAt: 1 }]])),
             modelPickerVisibilityByConnectionId: { pc_a: false },
         });
-        const currentSelection = { agentTargetKey, providerConnectionId: 'pc_a', modelId: 'same-model' };
+        const currentSelection = ProviderBoundModelRefSchema.parse({ agentTargetKey, providerConnectionId: 'pc_a', modelId: 'same-model' });
         const agent = readAccountAgentProviderRequirements(agentTargetKey);
         expect(agent).not.toBeNull();
         const projection = projectAccountProviderModelsV1({ catalog, definitions: [], agent,

@@ -5,7 +5,6 @@ import type { ModelVisibilityRefV1 } from '@happier-dev/protocol/providers/model
 import type { DaemonProviderConnectionViewV1 } from '@happier-dev/protocol/rpc';
 
 import type { TextInput } from '@/components/ui/text/Text';
-import { Modal } from '@/modal';
 import { useProviderConnectionModels } from '@/providers/hooks/useProviderConnectionModels';
 import { useProviderCatalogCounts } from '@/providers/hooks/useProviderCatalogCounts';
 import { useProviderModelLoadAction } from '@/providers/hooks/useProviderModelLoadAction';
@@ -14,7 +13,6 @@ import {
     buildProviderModelVisibilityChanges,
     type ProviderModelManagerGroup,
 } from '@/providers/models/ProviderModelManager';
-import { applyProviderModelBulkAction } from '@/providers/models/applyProviderModelBulkAction';
 import { providerErrorFromRpcFailure } from '@/providers/actions/client';
 import { useProviderActionClient } from '@/providers/actions/useProviderActionClient';
 import {
@@ -66,6 +64,15 @@ export function useProviderConnectionModelsSection(input: Readonly<{
     const manualModelsRef = React.useRef<React.ElementRef<typeof TextInput>>(null);
     const modelSettingsQueue = React.useRef<Promise<unknown>>(Promise.resolve());
     const manualDraftDirtyRef = React.useRef(false);
+    const pendingProbe = React.useRef<AbortController | null>(null);
+
+    React.useEffect(() => {
+        setRefreshingCatalog(false);
+        return () => {
+            pendingProbe.current?.abort();
+            pendingProbe.current = null;
+        };
+    }, [connectionId, input.active, machineId, serverId]);
 
     const discardManualModelDraft = React.useCallback(() => {
         setManualModelText('');
@@ -204,6 +211,7 @@ export function useProviderConnectionModelsSection(input: Readonly<{
         return accountStillCurrent() && result.models.some((model) => model.id === modelId && model.loadState === 'loaded');
     }, [accountStillCurrent, catalog.refreshWithResult, connectionId]);
     const modelLoad = useProviderModelLoadAction({
+        active: input.active,
         machineId,
         serverId,
         refresh: refreshLoadedModel,
@@ -242,31 +250,18 @@ export function useProviderConnectionModelsSection(input: Readonly<{
         selected?: ModelVisibilityRefV1,
     ) => {
         if (!accountStillCurrent()) return;
-        await applyProviderModelBulkAction({
+        const changes = buildProviderModelVisibilityChanges({
+            scope: { kind: 'connection', connectionId },
+            nativeModels: [],
+            groups,
             action,
-            changes: buildProviderModelVisibilityChanges({
-                scope: { kind: 'connection', connectionId },
-                nativeModels: [],
-                groups,
-                action,
-                ...(selected ? { selected } : {}),
-            }),
-            confirm: async () => accountStillCurrent() && await Modal.confirm(
-                action === 'hideAll'
-                    ? t('settingsProviders.models.hideAll')
-                    : t('settingsProviders.models.showOnly'),
-                action === 'hideAll'
-                    ? t('settingsProviders.models.hideAllConfirmation')
-                    : t('settingsProviders.models.showOnlyConfirmation'),
-                { confirmText: t('common.continue'), ...(action === 'hideAll' ? { destructive: true } : {}) },
-            ) && accountStillCurrent(),
-            apply: async (changes) => {
-                await runModelSettingsMutation(
-                    { action: 'bulkVisibility', ...(machineId ? { machineId } : {}), changes: [...changes] },
-                    () => runBulk(action, selected),
-                );
-            },
+            ...(selected ? { selected } : {}),
         });
+        if (changes.length === 0) return;
+        await runModelSettingsMutation(
+            { action: 'bulkVisibility', ...(machineId ? { machineId } : {}), changes: [...changes] },
+            () => runBulk(action, selected),
+        );
     }, [accountStillCurrent, connectionId, groups, machineId, runModelSettingsMutation]);
 
     const addManualModels = React.useCallback(async (): Promise<boolean> => {
@@ -312,12 +307,6 @@ export function useProviderConnectionModelsSection(input: Readonly<{
 
     const removeManualModel = React.useCallback(async (removeConnectionId: string, modelId: string) => {
         if (!accountStillCurrent() || catalog.connectionRevision === null || removeConnectionId !== connectionId) return;
-        const confirmed = await Modal.confirm(
-            t('settingsProviders.models.remove'),
-            t('settingsProviders.models.removeConfirmation'),
-            { confirmText: t('common.delete'), destructive: true },
-        );
-        if (!confirmed || !accountStillCurrent()) return;
         await runModelSettingsMutation({
             action: 'manualRemove', ...(machineId ? { machineId } : {}), connectionId: removeConnectionId,
             modelId, expectedConnectionRevision: catalog.connectionRevision,
@@ -326,15 +315,18 @@ export function useProviderConnectionModelsSection(input: Readonly<{
 
     const refreshCatalog = React.useCallback(async () => {
         const target = resolveCurrentTarget();
-        if (!accountStillCurrent() || !machineId || refreshingCatalog || !target || target.machineId !== machineId) return;
+        if (input.active === false || !accountStillCurrent() || !machineId || refreshingCatalog || !target || target.machineId !== machineId) return;
+        pendingProbe.current?.abort();
+        const controller = new AbortController();
+        pendingProbe.current = controller;
         setRefreshingCatalog(true);
         try {
             const result = await probeProviderConnection({
                 machineId: target.machineId,
                 serverId: target.serverId,
                 connectionId,
-            });
-            if (!accountStillCurrent()) return;
+            }, { signal: controller.signal });
+            if (controller.signal.aborted || !accountStillCurrent()) return;
             if (result.status === 'error') {
                 showError(result.error, { retry: refreshCatalog });
                 return;
@@ -348,11 +340,14 @@ export function useProviderConnectionModelsSection(input: Readonly<{
             setOperationError(null);
             await catalog.refresh();
         } catch (caught) {
-            if (accountStillCurrent()) showTransportError(caught, refreshCatalog);
+            if (!controller.signal.aborted && accountStillCurrent()) showTransportError(caught, refreshCatalog);
         } finally {
-            if (accountStillCurrent()) setRefreshingCatalog(false);
+            if (pendingProbe.current === controller) {
+                pendingProbe.current = null;
+                if (accountStillCurrent()) setRefreshingCatalog(false);
+            }
         }
-    }, [accountStillCurrent, catalog.refresh, connectionId, machineId, probeProviderConnection, refreshingCatalog, resolveCurrentTarget, showError, showTransportError]);
+    }, [accountStillCurrent, catalog.refresh, connectionId, input.active, machineId, probeProviderConnection, refreshingCatalog, resolveCurrentTarget, showError, showTransportError]);
 
     const retryCatalog = React.useCallback(async (): Promise<void> => {
         if (!accountStillCurrent()) return;

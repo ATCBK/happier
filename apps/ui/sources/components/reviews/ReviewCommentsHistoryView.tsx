@@ -4,6 +4,7 @@ import type { ReviewCommentV1 } from '@happier-dev/protocol';
 
 import type { ReviewCommentLabels } from './labels';
 import { ReviewCommentsList } from './ReviewCommentsList';
+import type { ReviewCommentCardActions } from './ReviewCommentCard';
 
 const HISTORY_STATES = new Set(['resolved', 'dismissed'] as const);
 
@@ -14,6 +15,7 @@ function isHistoryComment(comment: ReviewCommentV1): boolean {
 export type ReviewCommentsHistoryViewProps = Readonly<{
     comments: readonly ReviewCommentV1[];
     labels: ReviewCommentLabels;
+    cardActions?: ReviewCommentCardActions;
     testID?: string;
 }>;
 
@@ -22,6 +24,7 @@ export function ReviewCommentsHistoryView(props: ReviewCommentsHistoryViewProps)
         <ReviewCommentsList
             comments={props.comments.filter(isHistoryComment)}
             labels={props.labels}
+            cardActions={props.cardActions}
             testID={props.testID}
         />
     );

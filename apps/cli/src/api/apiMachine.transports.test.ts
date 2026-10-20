@@ -71,6 +71,7 @@ vi.mock('@/configuration', async () => {
 vi.mock('@/ui/logger', () => ({
   logger: {
     debug: vi.fn(),
+    infoFile: vi.fn(),
     warn: vi.fn(),
     debugLargeJson: vi.fn(),
   },
@@ -86,7 +87,6 @@ vi.mock('@/persistence', () => ({
 }));
 vi.mock('./client/loopbackUrl', () => ({ resolveLoopbackHttpUrl: (value: string) => value }));
 vi.mock('@/utils/proxy/socketIoProxy', () => ({ getSocketIoProxyOptions: () => ({}) }));
-vi.mock('@/utils/time', () => ({ backoff: async <T>(fn: () => Promise<T>) => await fn() }));
 vi.mock('@/api/connection/createLoopbackReadinessProbe', () => ({
   createLoopbackReadinessProbe: () => async () => ({ status: 'ready' as const }),
 }));
@@ -152,14 +152,16 @@ describe('ApiMachineClient transports', () => {
     } as Machine);
     client.connect();
     try {
-      await client.updateMachineMetadata((metadata) => ({ ...metadata, displayName: 'Workstation' }));
+      await client.updateMachineMetadata((metadata) => ({ ...metadata!, displayName: 'Workstation' }));
       expect(publishedMetadata).toEqual([{
         host: 'workstation', platform: 'linux', happyCliVersion: '0.3',
         homeDir: '/home/alice', happyHomeDir: '/home/alice/.happier', displayName: 'Workstation',
       }]);
-      await client.updateDaemonState((state) => ({ ...state, status: 'running' }));
+      // An unchanged authoritative projection correctly emits nothing; exercise an actual safe write.
+      await client.updateDaemonState((state) => ({ ...state, status: 'running', pid: 123 }));
       expect(published).toEqual([{
         status: 'running',
+        pid: 123,
         workspaceSync: { v: 1, readiness: { engine: { state: 'ready' }, carrier: { state: 'ready' } } },
         peerMediation: { loopback: { flows: { machine_rpc: { active: true } } } },
         transfer: {
@@ -1022,6 +1024,7 @@ describe('ApiMachineClient transports', () => {
 
     // The native inference/model worker is the OS boundary; RPC registration and policy remain real.
     const voiceInference: VoiceInferenceWorkerHandle = {
+      readProcessRoots: () => [],
       stop: vi.fn(async () => {}),
       getStatus: vi.fn(async () => ({
         serviceState: 'ready' as const,

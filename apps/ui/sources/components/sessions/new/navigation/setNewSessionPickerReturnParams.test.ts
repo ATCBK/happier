@@ -477,8 +477,8 @@ describe('setNewSessionPickerReturnParams', () => {
         expect(replace).toHaveBeenCalledWith({
             pathname: '/new',
             params: {
-                backendTarget: serializedBackendTarget,
-                backendTargetKey: 'backend:review-bot:configured:review-bot',
+                backendTarget: JSON.stringify({ kind: 'agent', identity: { pluginId: 'happier.agent.custom-acp', localId: 'custom-acp' }, definitionId: 'review-bot' }),
+                backendTargetKey: 'agent:happier.agent.custom-acp/custom-acp:definition:review-bot',
                 dataId: 'draft-1',
                 machineId: 'm1',
                 path: '/repo/selected',

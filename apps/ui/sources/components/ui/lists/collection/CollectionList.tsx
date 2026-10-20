@@ -58,6 +58,11 @@ const styles = StyleSheet.create((theme) => ({
         color: theme.colors.text.tertiary,
         fontVariant: ['tabular-nums'],
     },
+    subtitle: {
+        ...listText('subtitle'),
+        flexShrink: 1,
+        color: theme.colors.text.secondary,
+    },
     groupTitle: {
         ...listText('groupTitle'),
         flexShrink: 1,
@@ -102,6 +107,7 @@ const styles = StyleSheet.create((theme) => ({
 const textRoleStyles = {
     title: styles.title,
     count: styles.count,
+    subtitle: styles.subtitle,
     groupTitle: styles.groupTitle,
     groupHeading: styles.groupHeading,
     groupCount: styles.groupCount,
@@ -131,6 +137,12 @@ const collectionListHost: HappierCollectionListHost = {
 };
 
 const collectionListPlaneHost: HappierCollectionListHost = { ...collectionListHost, surfaceStyle: styles.plane };
+
+/**
+ * How many items a list holds before its header offers the search field (`search` is "present only when
+ * the list is long enough to need it"). A list whose whole length is not yet known counts as long.
+ */
+export const COLLECTION_LIST_SEARCH_THRESHOLD = 8;
 
 /**
  * The list pane of a list + detail collection. Rows are compact `Item`s with `collectionListStyles.row`.
@@ -228,9 +240,19 @@ export const CollectionNavigationRow = React.memo(function CollectionNavigationR
 });
 
 /** Host styles for rows inside a collection list. */
-export const collectionListStyles = {
+export const collectionListStyles: Readonly<{
+    row: typeof HAPPIER_COLLECTION_LIST_ROW_STYLE;
+    rowSelectedOnPlane: typeof styles.navigationRowSelected;
+    rowTitleSelectedOnPlane: typeof styles.navigationRowTitleSelected;
+    dimmedTitle: typeof styles.dimmedTitle;
+    troubleDot: typeof styles.troubleDot;
+    stateLine: typeof styles.stateLine;
+}> = {
     /** A row's pressable: inset from the list's edges, with a soft rounded selection. */
     row: HAPPIER_COLLECTION_LIST_ROW_STYLE,
+    /** The plane's selected chip and title weight, for a row richer than `CollectionNavigationRow` on a column. */
+    rowSelectedOnPlane: styles.navigationRowSelected,
+    rowTitleSelectedOnPlane: styles.navigationRowTitleSelected,
     dimmedTitle: styles.dimmedTitle,
     /** Only trouble gets a dot (needs sign-in, not running, failed). */
     troubleDot: styles.troubleDot,

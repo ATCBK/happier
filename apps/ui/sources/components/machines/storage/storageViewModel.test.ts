@@ -152,7 +152,8 @@ describe('verdict chips (R42)', () => {
     it('reads Forbidden and Keep with their reason, and never a Protected tier', () => {
         expect(describeStorageVerdict({ verdict: 'safe', reason: { code: 'downloads_again' } }))
             .toEqual({ variant: 'success', chrome: 'plain', icon: 'check-circle', label: 'Safe · downloads again', word: 'Safe', detail: 'downloads again' });
-        expect(describeStorageVerdict({ verdict: 'safe', reason: { code: 'stopped' } })).toMatchObject({ chrome: 'pill', label: 'Can delete · stopped' });
+        // One chrome per verdict family: "Can delete" is good news too, so it reads chromeless like "Safe".
+        expect(describeStorageVerdict({ verdict: 'safe', reason: { code: 'stopped' } })).toMatchObject({ variant: 'success', chrome: 'plain', label: 'Can delete · stopped' });
         expect(describeStorageVerdict({ verdict: 'caution', reason: { code: 'feature_waits' } })).toMatchObject({ variant: 'attention', label: 'Caution · a feature waits for it' });
         expect(describeStorageVerdict({ verdict: 'keep', reason: { code: 'in_use' } })).toMatchObject({ icon: 'lock', label: 'Keep · in use' });
         expect(describeStorageVerdict({ verdict: 'forbidden', reason: { code: 'system' } })).toMatchObject({ label: 'Forbidden · system location' });

@@ -241,10 +241,11 @@ export function UsageSessionValueWidget(props: UsageBodyProps) {
               </HappierPressable>
             )}
           />
-          {group.rows.length > lead.rows.length || expandedGroups.includes(group.id) ? <UsageShowAllRows total={group.rows.length}
-            expanded={lead.hidden === 0} testID={`${props.testID}.${group.id}.more`}
+          <UsageShowAllRows
+            label={`${t(`usage.widgets.${props.id}`)}: ${group.title}`} total={group.rows.length} hidden={lead.hidden}
+            expanded={expandedGroups.includes(group.id)} testID={`${props.testID}.${group.id}.more`}
             onToggle={() => setExpandedGroups(current => current.includes(group.id)
-              ? current.filter(id => id !== group.id) : [...current, group.id])} /> : null}
+              ? current.filter(id => id !== group.id) : [...current, group.id])} />
         </View>
         );
       })}

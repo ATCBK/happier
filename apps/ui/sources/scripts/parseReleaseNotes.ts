@@ -17,7 +17,7 @@ import * as path from 'path';
 import { createHash } from 'crypto';
 
 import * as ts from 'typescript';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import {
     STORY_DECK_LIST_CARD_MAX_ROWS,
@@ -38,84 +38,84 @@ const REQUIRED_LOCALES = [
 
 const ListCardSchema = z.object({
     kind: z.literal('list'),
-    titleKey: z.string().min(1),
+    titleKey: z.string().check(z.minLength(1)),
     rows: z.array(z.object({
-        iconId: z.string().min(1),
-        titleKey: z.string().min(1),
-        bodyKey: z.string().min(1),
-    })).min(1).max(STORY_DECK_LIST_CARD_MAX_ROWS),
+        iconId: z.string().check(z.minLength(1)),
+        titleKey: z.string().check(z.minLength(1)),
+        bodyKey: z.string().check(z.minLength(1)),
+    })).check(z.minLength(1), z.maxLength(STORY_DECK_LIST_CARD_MAX_ROWS)),
 });
 
 const ImageMediaOverrideSchema = z.object({
-    localAssetKey: z.string().min(1).optional(),
-    key: z.string().min(1).optional(),
-    altKey: z.string().min(1).optional(),
-}).superRefine((media, ctx) => {
+    localAssetKey: z.optional(z.string().check(z.minLength(1))),
+    key: z.optional(z.string().check(z.minLength(1))),
+    altKey: z.optional(z.string().check(z.minLength(1))),
+}).check(z.superRefine((media, ctx) => {
     if (media.localAssetKey || media.key) return;
     ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'Image media override must include localAssetKey or key.',
         path: ['key'],
     });
-});
+}));
 
 const ImageCardSchema = z.object({
     kind: z.literal('image'),
-    titleKey: z.string().min(1),
-    bodyKey: z.string().min(1),
+    titleKey: z.string().check(z.minLength(1)),
+    bodyKey: z.string().check(z.minLength(1)),
     media: z.object({
-        localAssetKey: z.string().min(1).optional(),
-        key: z.string().min(1).optional(),
-        altKey: z.string().min(1),
-        mobile: ImageMediaOverrideSchema.optional(),
-        desktop: ImageMediaOverrideSchema.optional(),
-    }).superRefine((media, ctx) => {
+        localAssetKey: z.optional(z.string().check(z.minLength(1))),
+        key: z.optional(z.string().check(z.minLength(1))),
+        altKey: z.string().check(z.minLength(1)),
+        mobile: z.optional(ImageMediaOverrideSchema),
+        desktop: z.optional(ImageMediaOverrideSchema),
+    }).check(z.superRefine((media, ctx) => {
         if (media.localAssetKey || media.key) return;
         ctx.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             message: 'Image media must include localAssetKey or key.',
             path: ['key'],
         });
-    }),
+    })),
 });
 
 const VideoMediaOverrideSchema = z.object({
-    key: z.string().min(1).optional(),
-    localPosterAssetKey: z.string().min(1).optional(),
-    posterKey: z.string().min(1).optional(),
-    accessibilityLabelKey: z.string().min(1).optional(),
-    loop: z.boolean().optional(),
-    muted: z.boolean().optional(),
-}).superRefine((media, ctx) => {
+    key: z.optional(z.string().check(z.minLength(1))),
+    localPosterAssetKey: z.optional(z.string().check(z.minLength(1))),
+    posterKey: z.optional(z.string().check(z.minLength(1))),
+    accessibilityLabelKey: z.optional(z.string().check(z.minLength(1))),
+    loop: z.optional(z.boolean()),
+    muted: z.optional(z.boolean()),
+}).check(z.superRefine((media, ctx) => {
     if (media.key || media.localPosterAssetKey || media.posterKey) return;
     ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        code: "custom",
         message: 'Video media override must include key, localPosterAssetKey, or posterKey.',
         path: ['key'],
     });
-});
+}));
 
 const VideoCardSchema = z.object({
     kind: z.literal('video'),
-    titleKey: z.string().min(1),
-    bodyKey: z.string().min(1),
+    titleKey: z.string().check(z.minLength(1)),
+    bodyKey: z.string().check(z.minLength(1)),
     media: z.object({
-        key: z.string().min(1),
-        localPosterAssetKey: z.string().min(1).optional(),
-        posterKey: z.string().min(1).optional(),
-        accessibilityLabelKey: z.string().min(1),
-        loop: z.boolean().optional(),
-        muted: z.boolean().optional(),
-        mobile: VideoMediaOverrideSchema.optional(),
-        desktop: VideoMediaOverrideSchema.optional(),
-    }).superRefine((media, ctx) => {
+        key: z.string().check(z.minLength(1)),
+        localPosterAssetKey: z.optional(z.string().check(z.minLength(1))),
+        posterKey: z.optional(z.string().check(z.minLength(1))),
+        accessibilityLabelKey: z.string().check(z.minLength(1)),
+        loop: z.optional(z.boolean()),
+        muted: z.optional(z.boolean()),
+        mobile: z.optional(VideoMediaOverrideSchema),
+        desktop: z.optional(VideoMediaOverrideSchema),
+    }).check(z.superRefine((media, ctx) => {
         if (media.localPosterAssetKey || media.posterKey) return;
         ctx.addIssue({
-            code: z.ZodIssueCode.custom,
+            code: "custom",
             message: 'Video media must include localPosterAssetKey or posterKey.',
             path: ['posterKey'],
         });
-    }),
+    })),
 });
 
 const CardSchema = z.discriminatedUnion('kind', [
@@ -125,15 +125,15 @@ const CardSchema = z.discriminatedUnion('kind', [
 ]);
 
 const AuthoredReleaseSchema = z.object({
-    releaseId: z.string().min(1),
-    versionLabel: z.string().min(1),
-    publishedAt: z.string().min(1),
-    titleKey: z.string().min(1),
-    subtitleKey: z.string().optional(),
-    cards: z.array(CardSchema).min(1).max(STORY_DECK_MAX_CARDS),
-    actions: z.object({
-        viewFullReleaseNotes: z.boolean().optional(),
-    }).optional(),
+    releaseId: z.string().check(z.minLength(1)),
+    versionLabel: z.string().check(z.minLength(1)),
+    publishedAt: z.string().check(z.minLength(1)),
+    titleKey: z.string().check(z.minLength(1)),
+    subtitleKey: z.optional(z.string()),
+    cards: z.array(CardSchema).check(z.minLength(1), z.maxLength(STORY_DECK_MAX_CARDS)),
+    actions: z.optional(z.object({
+        viewFullReleaseNotes: z.optional(z.boolean()),
+    })),
 });
 
 type AuthoredRelease = z.infer<typeof AuthoredReleaseSchema>;

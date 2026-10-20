@@ -5,7 +5,7 @@ import { StyleSheet } from 'react-native-unistyles';
 
 import { formatQualifiedPluginActionId, parseQualifiedPluginActionId } from '@happier-dev/protocol/plugins/actions/qualifiedActionId';
 import { listActionSpecs } from '@happier-dev/protocol/actions/actionSpecs';
-import type { ActionSettingsActionId } from '@happier-dev/protocol/actions/actionSettings';
+import type { ActionSettingsActionId, ActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 
 import { SearchHeader } from '@/components/ui/forms/SearchHeader';
 import { SegmentedTabBar } from '@/components/ui/navigation/SegmentedTabBar';
@@ -34,6 +34,7 @@ import {
     setActionSettingsToolExposureMode,
     type ActionSettingsApprovalControlValue,
     type ActionSettingsBooleanControlValue,
+    type ActionSettingsTargetControlState,
     type ActionSettingsToolExposureControlValue,
     type ActionSettingsTargetCategory,
 } from './actionSettingsTargets';
@@ -83,12 +84,22 @@ function decodeActionIdParam(value: string | string[] | undefined): ActionSettin
         : null;
 }
 
-function getTargetSubtitle(target: ActionSettingsTargetEntry): string {
+function getTargetSubtitle(
+    target: ActionSettingsTargetEntry,
+    controlState: ActionSettingsTargetControlState,
+    actionId: ActionSettingsActionId,
+): string {
     const subtitle = t(target.subtitleKey);
-    if (!target.reasonKey) {
-        return subtitle;
+    const withReason = target.reasonKey ? `${subtitle} ${t(target.reasonKey)}` : subtitle;
+    // Default reads as "inherit", so name the Source Control preference that makes the inherited default ask.
+    if (controlState.kind === 'approval' && controlState.value === 'default' && controlState.approvalAskedBySourceControl) {
+        return `${withReason} ${t('settingsActions.sourceControlAsks', {
+            setting: t(actionId === 'scm.remote.pull'
+                ? 'settingsSourceControl.remoteConfirmation.pull.title'
+                : 'settingsSourceControl.remoteConfirmation.push.title'),
+        })}`;
     }
-    return `${subtitle} ${t(target.reasonKey)}`;
+    return withReason;
 }
 
 function targetMatchesSearch(target: ActionSettingsTargetEntry, query: string): boolean {
@@ -152,6 +163,7 @@ export const ActionSettingsDetailContent = React.memo(function ActionSettingsDet
     const compactLayout = useActionSettingsNarrowLayout();
     const [searchQuery, setSearchQuery] = React.useState('');
     const [rawSettings, setRawSettings] = useSettingMutable('actionsSettingsV1');
+    const scmRemoteConfirmPolicy = useSetting('scmRemoteConfirmPolicy');
     const [rawSpawnPolicy, setRawSpawnPolicy] = useSettingMutable('sessionAgentSpawnPolicyV1');
     const [rawAllowLists, setRawAllowLists] = useSettingMutable('sessionAgentStartAllowListsV1');
     const settings = React.useMemo(() => normalizeActionsSettings(rawSettings), [rawSettings]);
@@ -240,43 +252,44 @@ export const ActionSettingsDetailContent = React.memo(function ActionSettingsDet
     ), [entry, filteredTargets, settings]);
     const facts = React.useMemo(() => listActionSettingsFacts(props.actionId), [props.actionId]);
 
-    const commitSettings = React.useCallback((next: unknown) => {
-        setRawSettings(normalizeActionsSettings(next));
+    const commitSettings = React.useCallback((update: (current: ActionsSettingsV1) => unknown) => {
+        setRawSettings(current => normalizeActionsSettings(update(normalizeActionsSettings(current))));
     }, [setRawSettings]);
 
     const handleActionEnabledChange = React.useCallback((enabled: boolean) => {
-        commitSettings(setActionEnabled({
-            settings,
+        commitSettings(current => setActionEnabled({
+            settings: current,
             actionId: props.actionId,
             enabled,
         }));
-    }, [commitSettings, props.actionId, settings]);
+    }, [commitSettings, props.actionId]);
 
     const handleTargetControlChange = React.useCallback((
         target: ActionSettingsTargetEntry,
         value: ActionSettingsApprovalControlValue | ActionSettingsBooleanControlValue,
     ) => {
-        commitSettings(applyActionSettingsTargetControlState({
-            settings,
+        commitSettings(current => applyActionSettingsTargetControlState({
+            settings: current,
             actionId: props.actionId,
             targetId: target.id,
             target: target.definition,
             value,
+            scmRemoteConfirmPolicy,
         }));
-    }, [commitSettings, props.actionId, settings]);
+    }, [commitSettings, props.actionId, scmRemoteConfirmPolicy]);
 
     const handleToolExposureChange = React.useCallback((
         target: ActionSettingsTargetEntry,
         value: ActionSettingsToolExposureControlValue,
     ) => {
         if (entry?.kind !== 'host') return;
-        commitSettings(setActionSettingsToolExposureMode({
-            settings,
+        commitSettings(current => setActionSettingsToolExposureMode({
+            settings: current,
             actionId: entry.actionId,
             targetId: target.id,
             value,
         }));
-    }, [commitSettings, entry, settings]);
+    }, [commitSettings, entry]);
 
     // The machine chip stays live in the header, while ordinary built-in action content does not
     // subscribe to the high-frequency inventory projection it does not consume.
@@ -358,6 +371,7 @@ export const ActionSettingsDetailContent = React.memo(function ActionSettingsDet
                             targetId: target.id,
                             target: target.definition,
                             available,
+                            scmRemoteConfirmPolicy,
                         });
                         const shouldStackModeControl = compactLayout && controlState.kind === 'approval';
                         const targetModeControl = (
@@ -376,7 +390,7 @@ export const ActionSettingsDetailContent = React.memo(function ActionSettingsDet
                                 key={target.id}
                                 testID={targetTestIDPrefix}
                                 title={t(target.titleKey)}
-                                subtitle={getTargetSubtitle(target)}
+                                subtitle={getTargetSubtitle(target, controlState, entry.actionId)}
                                 mode={available ? 'interactive' : 'info'}
                                 disabled={!entry.enabled || !available}
                                 showChevron={false}
@@ -428,9 +442,11 @@ export const ActionSettingsDetailContent = React.memo(function ActionSettingsDet
                                 activeTabId={waived ? 'allowed' : 'ask_first'}
                                 disabled={!entry.enabled}
                                 onSelectTab={(value) => {
-                                    const remaining = settings.pluginHostCaptureApprovalWaived?.filter(id => id !== plugin.pluginId) ?? [];
-                                    commitSettings({ ...settings, pluginHostCaptureApprovalWaived:
-                                        value === 'allowed' ? [...remaining, plugin.pluginId] : remaining });
+                                    commitSettings(current => {
+                                        const remaining = current.pluginHostCaptureApprovalWaived?.filter(id => id !== plugin.pluginId) ?? [];
+                                        return { ...current, pluginHostCaptureApprovalWaived:
+                                            value === 'allowed' ? [...remaining, plugin.pluginId] : remaining };
+                                    });
                                 }}
                             />
                         );

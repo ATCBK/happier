@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import type { ActionSpec } from '@happier-dev/protocol';
 import { getActionSpec, listActionCliCommandDeclarations } from '@happier-dev/protocol';
@@ -10,7 +10,6 @@ import {
   compileActionCliFields,
   findCompiledActionCliCommand,
   listCompiledActionCliCommands,
-  actionCliCommandInputArgv,
 } from './compiledCommands';
 import { buildActionCliHelpModel } from './commandHelp';
 import { readActionCliServerId } from './actionServerTarget';
@@ -19,6 +18,7 @@ import {
   resolveCompiledActionCliCompletionCandidatesWithDynamicOptions,
 } from './commandCompletion';
 import {
+  actionCliCommandInputArgv,
   composeActionCliInput,
   describeActionCliCommandFlags,
   listActionCliCommandFlags,
@@ -40,17 +40,17 @@ it('accepts a matching interleaved Session selector with whole input but rejects
     .toMatchObject({ ok: false, code: 'invalid_arguments' });
 });
 
-const CallerSchema = z.object({
-  sessionId: z.string().min(1),
-  message: z.string().min(1),
-  run: z.string().min(1).optional(),
-  attempts: z.number().int().optional(),
-  wait: z.boolean().optional(),
-  mode: z.enum(['fast', 'careful']).optional(),
-  tags: z.array(z.string()).optional(),
-  labels: z.array(z.string()).optional(),
-  recipient: z.object({ kind: z.literal('execution_run'), runId: z.string() }).optional(),
-}).strict();
+const CallerSchema = z.strictObject({
+  sessionId: z.string().check(z.minLength(1)),
+  message: z.string().check(z.minLength(1)),
+  run: z.optional(z.string().check(z.minLength(1))),
+  attempts: z.optional(z.number().check(z.int())),
+  wait: z.optional(z.boolean()),
+  mode: z.optional(z.enum(['fast', 'careful'])),
+  tags: z.optional(z.array(z.string())),
+  labels: z.optional(z.array(z.string())),
+  recipient: z.optional(z.object({ kind: z.literal('execution_run'), runId: z.string() })),
+});
 
 function fixtureSpec(cli: NonNullable<ActionSpec['cli']>, overrides: Partial<ActionSpec> = {}): ActionSpec {
   return {
@@ -83,6 +83,17 @@ function compileFixture(cli: NonNullable<ActionSpec['cli']> = SEND_CLI, override
 }
 
 describe('compileActionCliCommands', () => {
+  it('compiles MCP duplicate with one source positional into the semantic Action input', () => {
+    const command = findCompiledActionCliCommand(['mcp', 'servers', 'duplicate'])!;
+    expect(command.actionId).toBe('mcp.servers.duplicate');
+    const parsed = parseActionCliInput(command, ['issues']);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error(parsed.message);
+    expect(composeActionCliInput({ parsed, canonicalSchema: command.spec.inputSchema, wholeInputSchema: command.wholeInputSchema,
+      callerSchema: command.callerSchema, bindInput: command.spec.cli?.bindInput,
+      context: { actionId: command.actionId, invocationId: 'test', commandPath: command.path } }))
+      .toMatchObject({ ok: true, input: { serverId: 'issues' } });
+  });
   it('resolves registry aliases to the canonical compiled Actions and strict source input',()=>{
     const commands=listCompiledActionCliCommands();
     for(const [path,id]of [
@@ -163,7 +174,7 @@ describe('compileActionCliCommands', () => {
     expect(() => compileFixture({ ...SEND_CLI, transportMachineIdAliases: ['--prompt'] }))
       .toThrow(/collides/);
     expect(() => compileFixture({ ...SEND_CLI, transportMachineIdAliases: ['--machine'] }, {
-      inputSchema: CallerSchema.extend({ machineId: z.string() }),
+      inputSchema: z.extend(CallerSchema, { machineId: z.string() }),
     })).toThrow(/semantic machineId/);
   });
   it('derives one descriptor per declared path with the declared positionals in argv order', () => {
@@ -214,7 +225,7 @@ describe('compileActionCliCommands', () => {
       { commands: [{ path: ['workflow', 'run'], positionals: [], visibility: 'canonical' }] } as NonNullable<ActionSpec['cli']>,
       {
         id: 'workflow.run' as ActionSpec['id'],
-        inputSchema: z.object({ recipe: z.custom<{ kind: string }>(() => true) }).strict(),
+        inputSchema: z.strictObject({ recipe: z.custom<{ kind: string }>(() => true) }),
       } as Partial<ActionSpec>,
     );
     const healthy = fixtureSpec(SEND_CLI);
@@ -265,7 +276,7 @@ describe('compileActionCliCommands', () => {
       acceptsServerId: true as const,
     };
     const [command] = compileFixture(serverCli, {
-      inputSchema: CallerSchema.extend({ serverId: z.string().optional() }),
+      inputSchema: z.extend(CallerSchema, { serverId: z.optional(z.string()) }),
     });
     expect(command?.fields.find((field) => field.path === 'serverId')?.flag)
       .toBe('--action-server-id');
@@ -279,16 +290,16 @@ describe('compileActionCliCommands', () => {
       ['help', z.string(), '--action-help'],
     ] as const) {
       const [command] = compileFixture(SEND_CLI, {
-        inputSchema: CallerSchema.extend({ [field]: schema.optional() }),
+        inputSchema: z.extend(CallerSchema, { [field]: z.optional(schema) }),
       });
       expect(command?.fields.find((candidate) => candidate.path === field)?.flag, field)
         .toBe(expectedFlag);
     }
 
     const [neighboring] = compileFixture(SEND_CLI, {
-      inputSchema: CallerSchema.extend({
-        input: z.record(z.string(), z.unknown()).optional(),
-        inputJson: z.string().optional(),
+      inputSchema: z.extend(CallerSchema, {
+        input: z.optional(z.record(z.string(), z.unknown())),
+        inputJson: z.optional(z.string()),
       }),
     });
     expect(neighboring?.fields.find((field) => field.path === 'input')?.flag)
@@ -330,7 +341,7 @@ describe('compileActionCliCommands', () => {
     })).toThrow(/--machine-id.*CLI-owned flag/u);
 
     const [semanticMachine] = compileFixture(SEND_CLI, {
-      inputSchema: CallerSchema.extend({ machineId: z.string().min(1) }),
+      inputSchema: z.extend(CallerSchema, { machineId: z.string().check(z.minLength(1)) }),
     });
     expect(semanticMachine?.routesByTransportMachineId).toBe(false);
     expect(semanticMachine?.fields.find((field) => field.path === 'machineId')?.flag)
@@ -409,7 +420,8 @@ describe('Project worker exact-Home CLI projection', () => {
     const [command] = compileActionCliCommands([{ spec, binding }]);
     expect(command).toBeDefined();
     const argv = [...binding.path, '--server-id', 'home-b', '--input-json', JSON.stringify(input)];
-    expect(parseActionCliCommandInput(command!, argv)).toMatchObject({ ok: true, canonicalBase: input });
+    const parsed = parseActionCliCommandInput(command!, argv);
+    expect(parsed, JSON.stringify(parsed)).toMatchObject({ ok: true, canonicalBase: input });
     expect(readActionCliServerId(argv, command!.acceptsServerId)).toBe('home-b');
   });
 });
@@ -499,7 +511,7 @@ describe('parseActionCliCommandInput', () => {
 
   it('enforces numeric ranges projected from the caller schema', () => {
     const [ranged] = compileFixture(SEND_CLI, {
-      inputSchema: CallerSchema.extend({ attempts: z.number().int().min(1).max(5).optional() }),
+      inputSchema: z.extend(CallerSchema, { attempts: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(5))) }),
     });
     expect(parseActionCliCommandInput(ranged!, ['session', 'send', 'sess-1', 'Hello', '--attempts', '0']))
       .toMatchObject({ ok: false, message: expect.stringContaining('at least 1') });
@@ -725,7 +737,7 @@ describe('one descriptor feeds parsing, help and completion', () => {
 
   it('suppresses conditionally unavailable fields and list flags at their declared selection ceiling', () => {
     const [hinted] = compileFixture(SEND_CLI, {
-      inputSchema: CallerSchema.extend({ attempts: z.number().int().min(1).max(5).optional() }),
+      inputSchema: z.extend(CallerSchema, { attempts: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(5))) }),
       inputHints: {
         fields: [
           { path: 'run', title: 'Run', widget: 'text', visibleWhen: { op: 'eq', path: 'mode', value: 'careful' } },
@@ -774,7 +786,7 @@ describe('one descriptor feeds parsing, help and completion', () => {
 
   it('documents declared list, conditional and numeric constraints from the compiled fields', () => {
     const [hinted] = compileFixture(SEND_CLI, {
-      inputSchema: CallerSchema.extend({ attempts: z.number().int().min(1).max(5).optional() }),
+      inputSchema: z.extend(CallerSchema, { attempts: z.optional(z.number().check(z.int(), z.minimum(1), z.maximum(5))) }),
       inputHints: {
         fields: [
           { path: 'run', title: 'Run', widget: 'text', visibleWhen: { op: 'eq', path: 'mode', value: 'careful' } },
@@ -950,15 +962,12 @@ describe('parseActionCliInput without a declared command path', () => {
     });
   }
 
-  it('preserves declared settings scalar types and the optional page filter through the real parser', () => {
-    for (const value of [true, 1.1, 'compact', null]) {
+  it('preserves declared settings JSON types and the optional page filter through the real parser', () => {
+    for (const value of [true, 1.1, 'compact', null, { nested: true }]) {
       expect(composeCompiled(['settings', 'set'], [
         '--anchor', 'appearance.density', '--value-json', JSON.stringify(value),
       ])).toMatchObject({ ok: true, input: { anchor: 'appearance.density', value } });
     }
-    expect(composeCompiled(['settings', 'set'], [
-      '--anchor', 'appearance.density', '--value-json', '{"nested":true}',
-    ])).toMatchObject({ ok: false, code: 'invalid_arguments' });
     expect(composeCompiled(['settings', 'set'], ['--anchor', 'appearance.density']))
       .toMatchObject({ ok: false, code: 'invalid_arguments' });
     expect(composeCompiled(['settings', 'list'], ['--page-id', 'appearance']))
@@ -976,8 +985,34 @@ describe('parseActionCliInput without a declared command path', () => {
     expect(composeCompiled(['session', 'list'], ['--input-json', '{}', '--active', '--team', 'team1']))
       .toMatchObject({ ok: false, code: 'invalid_arguments' });
     // A valid partial composition still completes from both sources.
-    expect(composeCompiled(['session', 'send'], ['--input-json', '{"sessionId":"sess-1"}', '--message', 'Hello']))
+    const partial = composeCompiled(['session', 'send'], ['--input-json', '{"sessionId":"sess-1"}', '--message', 'Hello']);
+    expect(partial, JSON.stringify(partial))
       .toMatchObject({ ok: true, input: { sessionId: 'sess-1', message: 'Hello' } });
+    // A public union remains closed when its JSON arm is only partial: fields
+    // reserved for trusted input cannot cross the whole-input boundary.
+    expect(composeCompiled(['session', 'send'], [
+      '--input-json', JSON.stringify({ sessionId: 'sess-1', source: { sourceRef: 'private-source' } }),
+      '--message', 'Hello',
+    ])).toMatchObject({ ok: false, code: 'invalid_arguments' });
+    // Completion still enforces the canonical cross-field Provider rule.
+    expect(composeCompiled(['session', 'send'], [
+      '--input-json', JSON.stringify({ sessionId: 'sess-1', modelOverride: null, providerConnectionId: 'connection-1' }),
+      '--message', 'Hello',
+    ])).toMatchObject({ ok: false, code: 'invalid_arguments' });
+  });
+
+  it.each([
+    ['plugin retry identity borrowed from another public union arm', '{"sessionId":"sess-1","idempotencyKey":"caller-key"}'],
+    ['inherited constructor instead of a declared field', '{"sessionId":"sess-1","constructor":{}}'],
+  ])('rejects %s in a composed public Session input', (_case, inputJson) => {
+    expect(composeCompiled(['session', 'send'], ['--input-json', inputJson, '--message', 'Hello']))
+      .toMatchObject({ ok: false, code: 'invalid_arguments' });
+  });
+
+  it('rejects inherited fields in a composed single-object settings input without throwing', () => {
+    expect(composeCompiled(['settings', 'set'], [
+      '--input-json', '{"anchor":"appearance.density","constructor":{}}', '--value-json', '"compact"',
+    ])).toMatchObject({ ok: false, code: 'invalid_arguments' });
   });
 
   it('preserves a canonical field a binder would only have defaulted, and refuses one the caller typed', () => {
@@ -1007,11 +1042,11 @@ describe('parseActionCliInput without a declared command path', () => {
   });
 
   it('validates canonical JSON before binding and rejects transformed canonical overlap', () => {
-    const canonicalSchema = z.object({
-      target: z.object({ id: z.string().min(1) }),
-      note: z.string().optional(),
-    }).strict();
-    const callerSchema = z.object({ selector: z.string().min(1) }).strict();
+    const canonicalSchema = z.strictObject({
+      target: z.object({ id: z.string().check(z.minLength(1)) }),
+      note: z.optional(z.string()),
+    });
+    const callerSchema = z.strictObject({ selector: z.string().check(z.minLength(1)) });
     const bindInput = (value: unknown) => ({
       target: { id: (value as { selector: string }).selector },
     });
@@ -1050,7 +1085,7 @@ describe('parseActionCliInput without a declared command path', () => {
         callerOverlay: { note: 'friendly' },
       },
       canonicalSchema,
-      callerSchema: z.object({ note: z.string().min(1) }).strict(),
+      callerSchema: z.strictObject({ note: z.string().check(z.minLength(1)) }),
       bindInput: (value) => value,
       context,
     });

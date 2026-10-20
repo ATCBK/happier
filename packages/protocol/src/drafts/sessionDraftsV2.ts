@@ -1,6 +1,10 @@
 import { z } from 'zod/mini';
 import { createStoredReadSchema } from '../json/storedReadSchema.js';
 import { ProjectOpenDraftDocumentV2Schema } from '../projects/openProjectDraftV1.js';
+import { DocPassageRefV1Schema } from '../artifacts/artifactCollaborationV1.js';
+import { DiscussionMessageContentV1Schema } from '../discussions/content.js';
+import { DiscussionLocalIdSchema } from '../discussions/references.js';
+import { lazyZodSchema } from '../lazyZodSchema.js';
 
 import { StrictJsonValueSchema } from '../json/strictJsonValue.js';
 import { normalizeParticipantRecipientRoutingIdentityV1 } from '../messages/structured/participantMessageV1.js';
@@ -13,7 +17,7 @@ import { SessionAuthoringExecutionTargetV2Schema } from '../sessions/authoring/f
 import { SyncedSessionAuthoringValueV2Schema } from '../sessions/authoring/index.js';
 import {
   ExecutionRunIdSchema,
-  SessionDiscussionIdSchema,
+  DiscussionIdSchema,
   SessionIdSchema,
 } from '../sessions/idsV1.js';
 import {
@@ -51,12 +55,11 @@ const RunDraftAddressSchema = z.strictObject({
 });
 const DiscussionDraftAddressSchema = z.strictObject({
   kind: z.literal('discussion'),
-  sessionId: asProtocolZod(SessionIdSchema),
-  discussionId: SessionDiscussionIdSchema,
+  discussionId: asProtocolZod(DiscussionIdSchema),
 });
 const NewDiscussionDraftAddressSchema = z.strictObject({
   kind: z.literal('newDiscussion'),
-  sessionId: asProtocolZod(SessionIdSchema),
+  draftId: z.optional(SessionDraftAddressV1Schema._zod.def.options[0].shape.draftId),
 });
 
 export const ProjectOpenDraftAddressV2Schema = z.strictObject({
@@ -68,6 +71,8 @@ export const ProjectOpenDraftAddressV2Schema = z.strictObject({
 export const AccountOwnedDraftAddressV2Schema = z.union([
   SessionDraftAddressV1Schema._zod.def.options[0],
   ProjectOpenDraftAddressV2Schema,
+  DiscussionDraftAddressSchema,
+  NewDiscussionDraftAddressSchema,
 ]);
 export type AccountOwnedDraftAddressV2 = z.infer<typeof AccountOwnedDraftAddressV2Schema>;
 
@@ -87,7 +92,8 @@ export const SessionDraftAddressV2Schema = z.union([
 export type SessionDraftAddressV2 = z.infer<typeof SessionDraftAddressV2Schema>;
 
 export function isAccountOwnedDraftAddressV2(address: SessionDraftAddressV2): address is AccountOwnedDraftAddressV2 {
-  return address.kind === 'newSession' || address.kind === 'projectOpen';
+  return address.kind === 'newSession' || address.kind === 'projectOpen'
+    || address.kind === 'discussion' || address.kind === 'newDiscussion';
 }
 
 export function isSessionDraftAddressV1(address: SessionDraftAddressV2): address is SessionDraftAddressV1 {
@@ -99,12 +105,12 @@ const NEW_DISCUSSION_SEGMENT = 'new-discussion';
 export function canonicalSessionDraftAddressV2(address: SessionDraftAddressV2): string {
   if (isSessionDraftAddressV1(address)) return canonicalSessionDraftAddressV1(address);
   if (address.kind === 'projectOpen') return `project-open/${address.draftId}`;
-  const session = `session/${encodeURIComponent(address.sessionId)}`;
-  if (address.kind === 'run') return `${session}/run/${encodeURIComponent(address.runId)}`;
   if (address.kind === 'discussion') {
-    return `${session}/discussion/${encodeURIComponent(address.discussionId)}`;
+    return `discussion/${encodeURIComponent(address.discussionId)}`;
   }
-  return `${session}/${NEW_DISCUSSION_SEGMENT}`;
+  if (address.kind === 'newDiscussion') return address.draftId === undefined
+    ? NEW_DISCUSSION_SEGMENT : `${NEW_DISCUSSION_SEGMENT}/${address.draftId}`;
+  return `session/${encodeURIComponent(address.sessionId)}/run/${encodeURIComponent(address.runId)}`;
 }
 
 function decodeSegment(value: string): string | null {
@@ -128,19 +134,23 @@ export function parseCanonicalSessionDraftAddressV2(value: string): SessionDraft
     if (value.startsWith('project-open/')) {
       return { kind: 'projectOpen', draftId: value.slice('project-open/'.length) };
     }
+    if (value === NEW_DISCUSSION_SEGMENT) return { kind: 'newDiscussion' };
+    if (value.startsWith(`${NEW_DISCUSSION_SEGMENT}/`)) {
+      return { kind: 'newDiscussion', draftId: value.slice(NEW_DISCUSSION_SEGMENT.length + 1) };
+    }
+    if (value.startsWith('discussion/')) {
+      const discussionId = decodeSegment(value.slice('discussion/'.length));
+      return discussionId === null ? null : { kind: 'discussion', discussionId };
+    }
     if (!value.startsWith('session/')) return null;
     const segments = value.slice('session/'.length).split('/');
     const sessionId = decodeSegment(segments[0] ?? '');
     if (sessionId === null) return null;
     if (segments.length === 1) return { kind: 'session', sessionId };
-    if (segments.length === 2 && segments[1] === NEW_DISCUSSION_SEGMENT) {
-      return { kind: 'newDiscussion', sessionId };
-    }
     if (segments.length !== 3) return null;
     const identifier = decodeSegment(segments[2] ?? '');
     if (identifier === null) return null;
     if (segments[1] === 'run') return { kind: 'run', sessionId, runId: identifier };
-    if (segments[1] === 'discussion') return { kind: 'discussion', sessionId, discussionId: identifier };
     return null;
   })();
   if (candidate === null) return null;
@@ -156,12 +166,20 @@ const DiscussionDraftFieldSchema = <T extends z.ZodMiniType>(value: T) => z.stri
   value,
 });
 
+/** Original uncertain write; later draft edits cannot replace its authored operands. */
+export const DiscussionDraftSubmittedContentV2Schema = lazyZodSchema(() => z.strictObject({
+  attemptLocalId: DiscussionLocalIdSchema,
+  content: DiscussionMessageContentV1Schema,
+  title: z.optional(z.string()),
+}));
+export type DiscussionDraftSubmittedContentV2 = z.infer<typeof DiscussionDraftSubmittedContentV2Schema>;
+
 /**
  * Human conversation drafts (Lane 05.03 semantics) composed at this one draft
  * document owner. They carry no Agent routing, delivery, authoring or
  * attachment bytes.
  */
-export const SessionDiscussionDraftDocumentV2Schema = z.strictObject({
+export const DiscussionDraftDocumentV2Schema = z.strictObject({
   v: z.literal(2),
   target: z.discriminatedUnion('kind', [
     z.strictObject({ kind: z.literal('discussion') }),
@@ -173,6 +191,11 @@ export const SessionDiscussionDraftDocumentV2Schema = z.strictObject({
     attachments: DiscussionDraftFieldSchema(z.array(z.never()).check(z.maxLength(0))),
   }),
   title: z.optional(DiscussionDraftFieldSchema(z.string())),
+  /** The source basis is private draft content, never local-only retry metadata. */
+  passage: z.optional(DiscussionDraftFieldSchema(z.nullable(DocPassageRefV1Schema.check(
+    z.refine(value => value.ref.serverId !== undefined, 'A retained passage requires its captured Home'),
+  )))),
+  submission: z.optional(DiscussionDraftFieldSchema(z.nullable(DiscussionDraftSubmittedContentV2Schema))),
 }).check(z.superRefine((document, context) => {
   if (document.title && document.target.kind !== 'newDiscussion') {
     context.addIssue({
@@ -182,7 +205,7 @@ export const SessionDiscussionDraftDocumentV2Schema = z.strictObject({
     });
   }
 }));
-export type SessionDiscussionDraftDocumentV2 = z.infer<typeof SessionDiscussionDraftDocumentV2Schema>;
+export type DiscussionDraftDocumentV2 = z.infer<typeof DiscussionDraftDocumentV2Schema>;
 
 /** New-session intent evolves here, never by widening the released V1 document. */
 export const NewSessionDraftDocumentV2Schema = z.strictObject({
@@ -205,7 +228,7 @@ export type NewSessionDraftDocumentV2 = z.infer<typeof NewSessionDraftDocumentV2
 export const SessionDraftDocumentV2Schema = z.union([
   SessionDraftDocumentV1Schema,
   NewSessionDraftDocumentV2Schema,
-  SessionDiscussionDraftDocumentV2Schema,
+  DiscussionDraftDocumentV2Schema,
   ProjectOpenDraftDocumentV2Schema,
 ]);
 export type SessionDraftDocumentV2 = z.infer<typeof SessionDraftDocumentV2Schema>;
@@ -319,7 +342,7 @@ export const SessionDraftEpochUnavailableResponseV2Schema = z.strictObject({
 export const SessionDraftRecordV2Schema = z.strictObject({
   address: SessionDraftAddressV2Schema,
   revision: z.number().check(z.int(), z.nonnegative()),
-  content: z.nullable(SessionDraftStoredContentEnvelopeV2StoredSchema),
+  content: z.nullable(SessionDraftStoredContentEnvelopeV2Schema),
   createdAt: z.number().check(z.int(), z.nonnegative()),
   updatedAt: z.number().check(z.int(), z.nonnegative()),
 });

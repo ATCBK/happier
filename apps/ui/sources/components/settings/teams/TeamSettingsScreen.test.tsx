@@ -1,12 +1,11 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-    ApprovalRequestV2Schema,
-    buildApprovalRequestArtifactHeaderV1,
-} from '@happier-dev/protocol';
 
-import { collectRenderedTestIds, renderScreen, standardCleanup, teamCapabilitiesFixture, teamPolicyFixture, teamSummaryFixture } from '@/dev/testkit';
+import { collectRenderedTestIds } from '@/dev/testkit/render/collectRenderedTestIds';
+import { renderScreen } from '@/dev/testkit/render/renderScreen';
+import { standardCleanup } from '@/dev/testkit/cleanup/standardCleanup';
+import { teamCapabilitiesFixture, teamPolicyFixture, teamSummaryFixture } from '@/dev/testkit/fixtures/teamFixtures';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { decideApprovalAsInbox } from '@/dev/testkit/harness/approvalInbox';
 
@@ -63,14 +62,15 @@ installSettingsViewCommonModuleMocks({
         return createModalModuleMock({ confirmResult: true }).module;
     },
     // Approval writers and continuation subscribers must share the real store.
-    storage: async (importOriginal) => {
-        const { createStorageModuleMock } = await import('@/dev/testkit/mocks/storage');
-        return createStorageModuleMock({ importOriginal, overrides: {} });
-    },
+    storage: 'real',
 });
 
 const harness = createHomeGovernanceHarness();
 installHomeGovernanceBoundaries(harness);
+vi.doUnmock('@/sync/domains/state/storage');
+const { resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
+const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
+const { resetTeamActionClientForTests } = await import('@/sync/ops/teams/teamActionClient');
 const { resetServerFeaturesClientForTests } = await import("@/sync/api/capabilities/serverFeaturesClient");
 
 const TEAM_GET_PATH = '/v1/teams/get';
@@ -83,23 +83,6 @@ const TEAM_LOGO_REMOVE_PATH = '/v1/teams/logo/remove';
 const ACCOUNT_SETTINGS_V2_PATH = '/v2/account/settings';
 const ARTIFACT_CREATE_PATH = '/v1/artifacts';
 const APPROVAL_ARTIFACT_ID = '00000000-0000-4000-8000-000000000001';
-
-async function cancelApprovalOnHome(serverId: string) {
-    // Another device cancels the actual stored request through the Account's
-    // canonical Artifact writer, including its schema, codec and version CAS.
-    const { captureActionAccountContext } = await import('@/sync/ops/actions/actionAccountContext');
-    const context = await captureActionAccountContext(serverId);
-    try {
-        const artifact = await context.fetchArtifact(APPROVAL_ARTIFACT_ID);
-        if (!artifact) throw new Error('approval_artifact_missing');
-        if (typeof artifact.body !== 'string') throw new Error('approval_artifact_body_not_json_text');
-        const request = ApprovalRequestV2Schema.parse(JSON.parse(artifact.body));
-        const canceled = ApprovalRequestV2Schema.parse({ ...request, status: 'canceled', updatedAtMs: Date.now() });
-        await context.updateArtifact(artifact.id, buildApprovalRequestArtifactHeaderV1(canceled), JSON.stringify(canceled), artifact);
-    } finally {
-        context.dispose();
-    }
-}
 
 async function renderSettings(serverId: string) {
     const { TeamSettingsScreen } = await import('./TeamSettingsScreen');
@@ -158,9 +141,6 @@ async function waitForTestId(
 }
 
 beforeEach(async () => {
-    const { resetTeamsSnapshotsForTests } = await import('@/sync/store/teams/teamsSnapshots');
-    const { resetTeamsDirectoryEngineForTests } = await import('@/sync/engine/teams/teamsDirectoryEngine');
-    const { resetTeamActionClientForTests } = await import('@/sync/ops/teams/teamActionClient');
     resetTeamsSnapshotsForTests();
     resetTeamsDirectoryEngineForTests();
     resetTeamActionClientForTests();
@@ -615,6 +595,8 @@ describe('TeamSettingsScreen', () => {
 
         const screen = await renderSettings(serverId);
         await waitForTestId(screen, 'team-settings-logo-remove');
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.confirm).mockClear();
         act(() => {
             screen.pressByTestId('team-settings-logo-remove');
             screen.pressByTestId('team-settings-logo-remove');
@@ -622,6 +604,7 @@ describe('TeamSettingsScreen', () => {
 
         await vi.waitFor(() => expect(harness.requestsFor(TEAM_LOGO_REMOVE_PATH)).toHaveLength(1));
         expect(harness.requestsFor(ARTIFACT_CREATE_PATH)).toHaveLength(0);
+        expect(Modal.confirm).not.toHaveBeenCalled();
         await act(async () => releaseRemoval());
     });
 
@@ -688,7 +671,7 @@ describe('TeamSettingsScreen', () => {
         await waitForTestId(screen, 'team-approval');
         expect(screen.findByTestId('team-settings-save')?.props.disabled).toBe(true);
         expect(harness.requestsFor(TEAM_UPDATE_PATH)).toHaveLength(0);
-        await act(async () => cancelApprovalOnHome(serverId));
+        await expect(decideApprovalAsInbox(serverId, APPROVAL_ARTIFACT_ID, 'cancel')).resolves.toMatchObject({ ok: true });
 
         await vi.waitFor(() => {
             expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('team-approval');
@@ -772,9 +755,12 @@ describe('TeamSettingsScreen', () => {
 
         const screen = await renderSettings(serverId);
         await waitForTestId(screen, 'team-settings-archive');
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.confirm).mockClear();
         await screen.pressByTestIdAsync('team-settings-archive');
 
         await waitForTestId(screen, 'team-approval');
+        expect(Modal.confirm).not.toHaveBeenCalled();
         expect(harness.requestsFor(ARTIFACT_CREATE_PATH)).toHaveLength(1);
         expect(harness.requestsFor(TEAM_ARCHIVE_PATH)).toHaveLength(0);
         expect(routerBack).not.toHaveBeenCalled();
@@ -792,6 +778,8 @@ describe('TeamSettingsScreen', () => {
 
         const screen = await renderSettings(serverId);
         await waitForTestId(screen, 'team-settings-restore');
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.confirm).mockClear();
         await screen.pressByTestIdAsync('team-settings-restore');
 
         await waitForTestId(screen, 'team-approval');
@@ -828,6 +816,8 @@ describe('TeamSettingsScreen', () => {
         expect(ids.filter((id) => id.startsWith('team-settings-session-creation:'))).toEqual([]);
         expect(ids).not.toContain('team-settings-name');
 
+        const { Modal } = await import('@/modal');
+        vi.mocked(Modal.confirm).mockClear();
         await screen.pressByTestIdAsync('team-settings-restore');
         await vi.waitFor(() => {
             expect(harness.requestsFor(TEAM_RESTORE_PATH)).toHaveLength(1);
@@ -836,6 +826,7 @@ describe('TeamSettingsScreen', () => {
         // Restore is legitimate *because* the Team is archived, so it is not
         // gated on the ordinary-write rule that archiving withdraws.
         expect(harness.requestsFor(TEAM_UPDATE_PATH)).toHaveLength(0);
+        expect(Modal.confirm).not.toHaveBeenCalled();
     });
 
     it('routes a Team-authentication refusal to the exact-Home Team sign-in instead of a dead end', async () => {

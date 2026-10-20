@@ -40,6 +40,7 @@ import { FaviconPermissionIndicator } from '@/components/web/FaviconPermissionIn
 import { BotsRosterRuntimeProvider } from '@/components/sessions/bots/BotsRosterRuntime';
 import { CommandPaletteProvider } from '@/components/appShell/commandPalette/CommandPaletteProvider';
 import { WorkspaceAppShellProvider } from '@/components/appShell/workspace/WorkspaceAppShellProvider';
+import { BrowserPresentationRetentionProvider } from '@/components/browser/surfaces/browserPresentationRetention';
 import { SessionCockpitChromeRegistryProvider } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import { StatusBarProvider } from '@/components/ui/layout/StatusBarProvider';
 import { UpdatesEntry } from '@/components/updates/UpdatesPopoverButton';
@@ -86,6 +87,7 @@ import { DesktopMainContentDragSurface } from '@/components/navigation/desktopWi
 import { loadExpoNotifications, type ExpoNotificationsModule } from '@/utils/platform/loadExpoNotifications';
 import { installWebFontFaces } from '@/platform/installWebFontFaces';
 import { AppPresentationPlatformProvider } from '@/components/ui/presentation/AppPresentationPlatformProvider';
+import { CompanionNoDragRegionProvider } from '@/components/companion/interaction/CompanionNoDragRegion';
 import { PersonalHomeBootstrapRuntimeMount } from '@/components/personalHome/bootstrap';
 import { isEmbedWindowContext } from '@/embed/isEmbedWindowContext';
 import { EmbedSessionRuntimeProvider } from '@/embed/runtime/EmbedSessionRuntimeProvider';
@@ -739,6 +741,7 @@ function FullAppRootLayout() {
 
     return (
         <AppPresentationPlatformProvider>
+            <CompanionNoDragRegionProvider>
             <GlassMaterialRuntime>
             {!embedWindowContext ? <SurfaceFinishRuntime /> : null}
             <WebCryptoStartupGate>
@@ -758,6 +761,7 @@ function FullAppRootLayout() {
                 </AppCrashRecoveryBoundary>
             </WebCryptoStartupGate>
             </GlassMaterialRuntime>
+            </CompanionNoDragRegionProvider>
         </AppPresentationPlatformProvider>
     );
 }
@@ -770,8 +774,6 @@ function AppBoot(props: {
     //
     const router = useRouter();
     const pathname = usePathname();
-    const chromeSafeArea = useChromeSafeAreaInsets();
-    const isTablet = useIsTablet();
     const isDesktopOverlayWindow = isDesktopOverlayWindowContext();
     const isDesktopActivityOverlayWindow = isDesktopActivityOverlayWindowContext();
     const [initState, setInitState] = React.useState<AppBootReadyState | null>(null);
@@ -854,17 +856,6 @@ function AppBoot(props: {
     // Boot
     //
 
-    const desktopHost = isDesktopHost();
-    const appShellChromeHost = resolveAppShellChromeHost({
-        isAuthenticated: initState.credentials != null,
-        isDesktopHost: desktopHost,
-        isTablet,
-        isTerminalConnectRoute,
-    });
-    const effectiveAppShellChromeHost = isDesktopOverlayWindow ? 'none' : appShellChromeHost;
-    const shouldUseRootDesktopDragSurface =
-        effectiveAppShellChromeHost === 'unauth-shell'
-        || effectiveAppShellChromeHost === 'narrow-desktop-fallback';
     const routeContent = isDesktopOverlayWindow ? <SidebarNavigator /> : (
         <RealtimeProvider>
             <VoiceEnergyAppProvider>
@@ -873,32 +864,16 @@ function AppBoot(props: {
         </RealtimeProvider>
     );
 
-    const appShell = (
-        <View style={{ flex: 1, position: 'relative' }}>
-            {effectiveAppShellChromeHost === 'narrow-desktop-fallback' ? (
-                <DesktopFallbackShellChrome
-                    chromeSafeArea={chromeSafeArea}
-                />
-            ) : null}
-            <View style={{ flex: 1 }}>
-                <PersonalHomeBootstrapRuntimeMount>
-                    {routeContent}
-                </PersonalHomeBootstrapRuntimeMount>
-            </View>
-        </View>
-    );
     const appShellWithRootDesktopDragSurface = (
-        <DesktopMainContentDragSurface
-            enabled={shouldUseRootDesktopDragSurface && Platform.OS === 'web' && desktopHost}
-            leftOffsetPx={0}
-            style={{ flex: 1 }}
+        <RootShellChromeFrame
+            isAuthenticated={initState.credentials != null}
+            isDesktopOverlayWindow={isDesktopOverlayWindow}
+            isTerminalConnectRoute={isTerminalConnectRoute}
         >
-            {/*
-              * One Updates summary for every always-mounted entry (sidebar pill, collapsed rail,
-              * phone header, tray). The pet/activity overlay window has no Updates entry.
-              */}
-            {isDesktopOverlayWindow ? appShell : <UpdatesSummaryProvider>{appShell}</UpdatesSummaryProvider>}
-        </DesktopMainContentDragSurface>
+            <PersonalHomeBootstrapRuntimeMount>
+                {routeContent}
+            </PersonalHomeBootstrapRuntimeMount>
+        </RootShellChromeFrame>
     );
 
     const appContent = (
@@ -907,7 +882,11 @@ function AppBoot(props: {
                 <MainAppTabStateProvider>
                     <CurrentUiContextProvider>
                         <CurrentUiContextActionHost />
-                        {appShellWithRootDesktopDragSurface}
+                        {/* Routes and hosted workspace destinations share the retained source owner.
+                            Keep its portal beneath the same keyboard and current-UI contexts. */}
+                        <BrowserPresentationRetentionProvider>
+                            {appShellWithRootDesktopDragSurface}
+                        </BrowserPresentationRetentionProvider>
                     </CurrentUiContextProvider>
                 </MainAppTabStateProvider>
             </HorizontalSafeAreaWrapper>
@@ -968,6 +947,32 @@ function AppBoot(props: {
             {providers}
         </>
     );
+}
+
+/** Breakpoint geometry updates this frame without rebuilding the boot/provider/route tree. */
+function RootShellChromeFrame(props: React.PropsWithChildren<Readonly<{
+    isAuthenticated: boolean;
+    isDesktopOverlayWindow: boolean;
+    isTerminalConnectRoute: boolean;
+}>>) {
+    const chromeSafeArea = useChromeSafeAreaInsets();
+    const isTablet = useIsTablet();
+    const desktopHost = isDesktopHost();
+    const chromeHost = props.isDesktopOverlayWindow ? 'none' : resolveAppShellChromeHost({
+        isAuthenticated: props.isAuthenticated,
+        isDesktopHost: desktopHost,
+        isTablet,
+        isTerminalConnectRoute: props.isTerminalConnectRoute,
+    });
+    const shell = <View style={{ flex: 1, position: 'relative' }}>
+        {chromeHost === 'narrow-desktop-fallback' ? <DesktopFallbackShellChrome chromeSafeArea={chromeSafeArea} /> : null}
+        <View style={{ flex: 1 }}>{props.children}</View>
+    </View>;
+    return <DesktopMainContentDragSurface
+        enabled={(chromeHost === 'unauth-shell' || chromeHost === 'narrow-desktop-fallback') && Platform.OS === 'web' && desktopHost}
+        leftOffsetPx={0} style={{ flex: 1 }}>
+        {props.isDesktopOverlayWindow ? shell : <UpdatesSummaryProvider>{shell}</UpdatesSummaryProvider>}
+    </DesktopMainContentDragSurface>;
 }
 
 function DesktopFallbackShellChrome(props: Readonly<{

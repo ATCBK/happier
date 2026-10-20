@@ -6,13 +6,34 @@ import { MAX_VOICE_TIMER_DELAY_MS } from '@happier-dev/protocol/voice/settings/t
 import { renderScreen } from '@/dev/testkit';
 import {
   readLocalConversationVoiceSettings,
+  readLocalDirectVoiceSettings,
   voiceSettingsDefaults,
+  writeLocalConversationVoiceSettings,
+  writeLocalDirectVoiceSettings,
   type VoiceSettings,
 } from '@/sync/domains/settings/voiceSettings';
 
 import { VoiceConnectionSection } from './VoiceConnectionSection';
 
 describe('VoiceConnectionSection', () => {
+  it.each(['local_conversation', 'local_direct'] as const)('keeps zero and decrement within the positive schema range for %s', async (providerId) => {
+    const base = { ...voiceSettingsDefaults, providerId };
+    const read = providerId === 'local_direct' ? readLocalDirectVoiceSettings : readLocalConversationVoiceSettings;
+    const voice = providerId === 'local_direct'
+      ? writeLocalDirectVoiceSettings(base, { ...readLocalDirectVoiceSettings(base), networkTimeoutMs: 2000 })
+      : writeLocalConversationVoiceSettings(base, { ...readLocalConversationVoiceSettings(base), networkTimeoutMs: 2000 });
+    const setVoice = vi.fn<(next: VoiceSettings) => void>();
+    const screen = await renderScreen(<VoiceConnectionSection voice={voice} setVoice={setVoice} />);
+    const fieldId = 'settings.voice.local.networkTimeoutMs.field';
+    await screen.pressByTestIdAsync(`${fieldId}.decrement`);
+    expect(read(setVoice.mock.lastCall![0]).networkTimeoutMs).toBe(1000);
+    await act(async () => { screen.findByTestId(fieldId)!.props.onChangeText('0'); });
+    await act(async () => { screen.findByTestId(fieldId)!.props.onBlur(); });
+    expect(read(setVoice.mock.lastCall![0]).networkTimeoutMs).toBe(1000);
+    expect(screen.findByTestId(fieldId)!.props.value).toBe('1');
+    expect(screen.findByTestId(`${fieldId}.decrement`)!.props.disabled).toBe(true);
+  });
+
   it('edits the request timeout in seconds without a sixty-second ceiling', async () => {
     const setVoice = vi.fn();
     const screen = await renderScreen(<VoiceConnectionSection voice={voiceSettingsDefaults} setVoice={setVoice} />);

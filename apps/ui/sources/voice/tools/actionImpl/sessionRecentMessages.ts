@@ -3,7 +3,12 @@ import { listSessionAddressesForSessionIdFromLocalState } from '@/sync/domains/s
 import { normalizeSessionAddress } from '@/sync/domains/session/sessionAddress';
 import { storage } from '@/sync/domains/state/storage';
 import { readSessionIncludedInVoiceFromState } from '@/voice/runtime/voiceUpdatePolicy';
-import type { SessionTranscriptGetResult } from '@happier-dev/protocol/actions';
+import type { SessionTranscriptGetItem, SessionTranscriptGetResult } from '@happier-dev/protocol/actions';
+import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
+import type { ServerAccountScope } from '@/sync/domains/scope/serverAccountScope';
+import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { readSessionTranscriptForAction } from '@/sync/api/session/sessionTranscriptActions';
+import { redactVoicePathLikeString } from '@/voice/shared/redactVoicePathLikeData';
 
 import {
   clampInt,
@@ -14,6 +19,7 @@ import {
   resolveVoiceUpdatesPrefs,
   shouldIncludeAfterCursor,
   toRoleAndText,
+  type VoiceUpdatesPrefs,
 } from './shared';
 
 type VoiceRecentMessagesParams = Readonly<{
@@ -48,9 +54,7 @@ type VoiceRecentMessagesProjection =
     }>
   | Readonly<{ ok: false; errorCode: string; errorMessage: string }>;
 
-async function readSessionRecentMessagesForVoiceProjection(
-  params: VoiceRecentMessagesParams,
-): Promise<VoiceRecentMessagesProjection> {
+function resolveVoiceTranscriptAdmission(params: Pick<VoiceRecentMessagesParams, 'sessionId' | 'serverId'>) {
   const state = storage.getState();
   const prefs = resolveVoiceUpdatesPrefs(state.settings);
   const refuse = (errorCode: string) => ({ ok: false as const, errorCode, errorMessage: errorCode });
@@ -76,6 +80,16 @@ async function readSessionRecentMessagesForVoiceProjection(
   if (!isActive && prefs.otherSessionsSnippetsMode === 'never') {
     return refuse('other_sessions_snippets_disabled');
   }
+
+  return { ok: true as const, state, prefs, address: requestedAddress };
+}
+
+async function readSessionRecentMessagesForVoiceProjection(
+  params: VoiceRecentMessagesParams,
+): Promise<VoiceRecentMessagesProjection> {
+  const admission = resolveVoiceTranscriptAdmission(params);
+  if (!admission.ok) return admission;
+  const { state, prefs, address: requestedAddress } = admission;
 
   const defaultOnDemandLimit = clampInt(params.limit, { min: 1, max: 50, fallback: 20 });
   const limit = defaultOnDemandLimit;
@@ -152,14 +166,31 @@ export async function getSessionRecentMessagesForVoiceTool(
   };
 }
 
-function isCanonicalTranscriptTimestamp(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+type VoiceTranscriptParams = Omit<Parameters<NonNullable<ActionExecutorDeps['sessionTranscriptGet']>>[0], 'context'>
+  & Partial<Pick<Parameters<NonNullable<ActionExecutorDeps['sessionTranscriptGet']>>[0], 'context'>>;
+
+/** Voice publishes its privacy projection only; raw source payloads never cross this boundary. */
+function projectVoiceTranscriptItem(item: SessionTranscriptGetItem, prefs: VoiceUpdatesPrefs,
+  maxChars: number | null | undefined): SessionTranscriptGetItem | null {
+  if (item.semanticRole !== 'assistant' && item.semanticRole !== 'user' && item.semanticRole !== 'tool') return null;
+  if (item.semanticRole === 'tool' && !prefs.shareToolNames) return null;
+  const originalText = item.semanticRole === 'tool'
+    ? prefs.shareToolArgs ? item.summary ?? item.text ?? `Tool: ${item.toolName ?? 'Unknown'}` : `Tool: ${item.toolName ?? 'Unknown'}`
+    : item.text;
+  if (!originalText) return null;
+  const redacted = prefs.shareFilePaths ? originalText : redactVoicePathLikeString(originalText);
+  const text = maxChars == null ? redacted : redacted.slice(0, Math.max(0, maxChars));
+  return {
+    id: item.id, ...(item.seq !== undefined ? { seq: item.seq } : {}), createdAt: item.createdAt,
+    semanticRole: item.semanticRole, role: item.role, kind: item.kind, text,
+    ...(item.semanticRole === 'tool' && item.toolName ? { toolName: item.toolName } : {}),
+    // Redacted text remains readable by Voice but cannot claim to be an exact source quote.
+    ...(item.truncated || text !== originalText ? { truncated: true } : {}),
+  };
 }
 
-export async function getSessionTranscriptForVoiceTool(params: VoiceRecentMessagesParams & Readonly<{
-  projection?: 'externalShareableV1';
-  roles?: readonly ('user' | 'assistant')[];
-}>): Promise<SessionTranscriptGetResult> {
+export async function getSessionTranscriptForVoiceTool(params: VoiceTranscriptParams,
+  scope?: ServerAccountScope): Promise<SessionTranscriptGetResult> {
   if (params.projection === 'externalShareableV1') {
     return {
       ok: false,
@@ -168,41 +199,27 @@ export async function getSessionTranscriptForVoiceTool(params: VoiceRecentMessag
     };
   }
 
-  const roleSet = Array.isArray(params.roles) ? new Set(params.roles) : null;
-  const result = await readSessionRecentMessagesForVoiceProjection({
-    sessionId: params.sessionId,
-    ...(params.serverId !== undefined ? { serverId: params.serverId } : {}),
-    ...(params.limit !== undefined ? { limit: params.limit } : {}),
-    ...(params.cursor !== undefined ? { cursor: params.cursor } : {}),
-    includeUser: roleSet ? roleSet.has('user') : true,
-    includeAssistant: roleSet ? roleSet.has('assistant') : true,
-    ...(params.maxCharsPerMessage !== undefined ? { maxCharsPerMessage: params.maxCharsPerMessage } : {}),
-  });
-  if (!result.ok) return result;
-
-  return {
-    ok: true,
-    sessionId: result.sessionId,
-    items: result.messages.flatMap((message) => {
-      if (typeof message.id !== 'string' || !isCanonicalTranscriptTimestamp(message.createdAt)) return [];
-      return [{
-        id: message.id,
-        createdAt: message.createdAt,
-        semanticRole: message.role,
-        role: message.role,
-        kind: message.role === 'tool' ? 'tool_call' : 'message',
-        text: message.text,
-      }];
-    }),
-    nextCursor: result.nextCursor,
-    hasMore: result.nextCursor !== null,
-    diagnostics: {
-      rawRowsScanned: result.rawRowsScanned,
-      // This projection reads the already-normalized local store, so no raw transport page exists.
-      pagesFetched: 0,
-      scanLimitReached: false,
-      // It publishes text only and never materializes raw payloads.
-      payloadTruncations: 0,
-    },
+  const admission = resolveVoiceTranscriptAdmission(params);
+  if (!admission.ok) return admission;
+  if (!scope) return { ok: false, errorCode: 'admission_unavailable', errorMessage: 'admission_unavailable' };
+  if (!areServerProfileIdentifiersEquivalent(scope.serverId, admission.address.serverId)) {
+    return { ok: false, errorCode: 'session_not_found', errorMessage: 'session_not_found' };
+  }
+  const result = await readSessionTranscriptForAction({ ...params,
+    context: params.context ?? { surface: 'voice' }, serverId: scope.serverId, sessionId: admission.address.sessionId,
+    includeTools: params.includeTools === true && admission.prefs.shareToolNames,
+    includeReasoning: false, includeEvents: false, includeRaw: false, includeStructuredPayload: false,
+    maxCharsPerMessage: null,
+  }, scope);
+  if (!result.ok || !('items' in result)) return result;
+  if ('projection' in result) return {
+    ok: false, errorCode: 'external_shareable_projection_unavailable', errorMessage: 'external_shareable_projection_unavailable',
   };
+  // A privacy change while the request was in flight must govern publication too.
+  const current = resolveVoiceTranscriptAdmission(params);
+  if (!current.ok) return current;
+  return { ...result, items: result.items.flatMap(item => {
+    const projected = projectVoiceTranscriptItem(item, current.prefs, params.maxCharsPerMessage);
+    return projected ? [projected] : [];
+  }) };
 }

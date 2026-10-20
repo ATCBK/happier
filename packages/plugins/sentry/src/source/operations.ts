@@ -40,10 +40,9 @@ import {
 import { createSentryApiClient, type SentryApiClientV1 } from '../api/sentryApiClient.js';
 import { classifySentryFailure } from '../api/sentryFailure.js';
 import { readSentryNextPageRelation } from '../api/sentryLinkHeader.js';
-import { buildSentryIssueUrl } from '../api/sentryRoutes.js';
 import { resolveSentryAccountRoute } from '../auth/sentryAccountRoute.js';
 import type { SentryDeploymentV1 } from '../auth/sentryOrigin.js';
-import { resolveSentryGetOutcome } from '../entries/getIssueOutcome.js';
+import { readSentryIssue } from '../entries/getIssueOutcome.js';
 import {
   deriveSentryCollisionScope,
   isSentryNumericId,
@@ -546,20 +545,7 @@ export async function getSentrySourceEntry(
     deployment: routed.deployment,
     nowMs: () => Date.now(),
   });
-  const requestUrl = buildSentryIssueUrl({
-    instance: routed.instance,
-    entryId: parsed.localRef.entryId,
-  });
-  const outcome = await client.request({ url: requestUrl, operation: 'issue' });
-
-  const resolved = resolveSentryGetOutcome({
-    requestedEntryId: parsed.localRef.entryId,
-    configured: routed.instance,
-    requestUrl,
-    organizationSlug: null,
-    nowMs: Date.now(),
-    outcome,
-  });
+  const resolved = await readSentryIssue(client, routed.instance, parsed.localRef.entryId);
 
   switch (resolved.kind) {
     case 'present':

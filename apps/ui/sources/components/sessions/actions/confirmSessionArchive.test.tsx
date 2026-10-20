@@ -6,10 +6,10 @@ import { getStorage } from '@/sync/domains/state/storage';
 import { archiveSessionReports, confirmSessionArchive } from './confirmSessionArchive';
 import { Modal } from '@/modal';
 import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
-import type { SessionActionExecutionContext } from './sessionActionTypes';
+import { t } from '@/text';
 
 vi.mock('@/modal', async () => {
-    const { createModalModuleMock } = await import('@/dev/testkit');
+    const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
     return createModalModuleMock().module;
 });
 
@@ -18,30 +18,30 @@ afterEach(() => {
 });
 
 describe('archiveSessionReports', () => {
-    it('archives only unarchived direct reports in the lead Home, through the existing archive Action', async () => {
-        const child = createSessionFixture({ id: 'child', serverId: 'home-a', reportsTo: { sessionId: 'lead' } });
-        const otherHome = createSessionFixture({ id: 'other', serverId: 'home-b', reportsTo: { sessionId: 'lead' } });
-        const unqualified = createSessionFixture({ id: 'unqualified', reportsTo: { sessionId: 'lead' } });
-        const archived = createSessionFixture({ id: 'archived', serverId: 'home-a', reportsTo: { sessionId: 'lead' }, archivedAt: 4 });
-        const grandchild = createSessionFixture({ id: 'grandchild', serverId: 'home-a', reportsTo: { sessionId: 'child' } });
-        // The report was never opened: ordinary list hydration still has to make cascade reachable.
-        getStorage().setState({ sessions: { otherHome, unqualified, archived, grandchild },
-            sessionListRowsByServerId: { 'home-a': { child: buildSessionListRenderableFromSession(child) } } });
-        const archivedAddresses: Array<{ sessionId: string; serverId: string | null | undefined }> = [];
-        const context: SessionActionExecutionContext = {
-            operations: {
-                archiveSession: async (sessionId, options) => {
-                    archivedAddresses.push({ sessionId, serverId: options?.serverId });
-                    return { success: true };
-                },
-                clearSessionVisibleWhenInactive: () => {},
-            },
-        };
-        await archiveSessionReports({ leadSessionId: 'lead', serverId: 'home-a', context });
-        expect(archivedAddresses).toEqual([{ sessionId: 'child', serverId: 'home-a' }]);
-        archivedAddresses.length = 0;
-        await archiveSessionReports({ leadSessionId: 'lead', serverId: null, context });
-        expect(archivedAddresses).toEqual([]);
+    it('uses the existing generic failure notice when the owner cannot discover every report', async () => {
+        vi.mocked(Modal.alert).mockClear();
+        await archiveSessionReports({ reports: [], reportsError: { errorCode: 'target_unavailable', error: 'target_unavailable' } });
+        expect(Modal.alert).toHaveBeenCalledWith(t('common.error'), t('sessionInfo.failedToArchiveSession'));
+    });
+    it('presents the owner result without discovering or mutating cached reports', async () => {
+        const known = createSessionFixture({ id: 'known', serverId: 'home-a', metadata: { name: 'Known session' } });
+        const foreign = createSessionFixture({ id: 'unknown', serverId: 'home-b', metadata: { name: 'Another Home' } });
+        getStorage().setState({ sessions: { known, foreign }, sessionListRowsByServerId: {
+            'home-a': { known: buildSessionListRenderableFromSession(known) },
+            'home-b': { unknown: buildSessionListRenderableFromSession(foreign) },
+        } });
+        vi.mocked(Modal.alert).mockClear();
+        await archiveSessionReports({ serverId: 'home-a', reports: [
+            { sessionId: 'archived', title: 'Finished', status: 'archived' },
+            { sessionId: 'known', status: 'failed', errorCode: 'permission_denied', error: 'permission_denied' },
+            { sessionId: 'refused', title: 'Protected', status: 'failed', errorCode: 'permission_denied', error: 'permission_denied' },
+            { sessionId: 'pending', title: 'Awaiting approval', status: 'approval_pending', artifactId: 'approval-one' },
+            { sessionId: 'unknown', status: 'failed', errorCode: 'permission_denied', error: 'permission_denied' },
+        ] });
+        expect(Modal.alert).toHaveBeenCalledWith(expect.any(String), 'Known session\nProtected\nAwaiting approval\nunknown');
+        vi.mocked(Modal.alert).mockClear();
+        await archiveSessionReports({ reports: [{ sessionId: 'done', status: 'archived' }] });
+        expect(Modal.alert).not.toHaveBeenCalled();
     });
 });
 
@@ -52,7 +52,7 @@ describe('archive confirmation policy', () => {
         getStorage().setState({ settings: { ...settings, actionsSettingsV1: normalizeActionsSettingsV1({ v: 1, actions: {} }) } });
         vi.mocked(Modal.confirm).mockClear();
         try {
-            expect(await confirmSessionArchive({ reportCount: 0 })).toEqual({ confirmed: true, alsoArchiveReports: false });
+            expect(await confirmSessionArchive({ leadSessionId: 'lead', serverId: 'home-a' })).toEqual({ confirmed: true, alsoArchiveReports: false });
             expect(Modal.confirm).not.toHaveBeenCalled();
         } finally {
             getStorage().setState({ settings });
@@ -66,19 +66,54 @@ describe('archive confirmation policy', () => {
         }) } });
         vi.mocked(Modal.confirm).mockClear();
         try {
-            expect(await confirmSessionArchive({ reportCount: 0 })).toEqual({ confirmed: true, alsoArchiveReports: false });
+            expect(await confirmSessionArchive({ leadSessionId: 'lead', serverId: 'home-a' })).toEqual({ confirmed: true, alsoArchiveReports: false });
             expect(Modal.confirm).not.toHaveBeenCalled();
         } finally {
             getStorage().setState({ settings });
         }
     });
 
-    it('keeps confirmation before an archive stops a running session', async () => {
-        vi.mocked(Modal.confirm).mockClear();
-        vi.mocked(Modal.confirm).mockResolvedValueOnce(false);
-        const stoppingArchive = { reportCount: 0, requiresStop: true };
-        expect(await confirmSessionArchive(stoppingArchive)).toEqual({ confirmed: false, alsoArchiveReports: false });
-        expect(Modal.confirm).toHaveBeenCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ destructive: true }));
-        expect(vi.mocked(Modal.confirm).mock.calls[0]?.[0]).toBe((await import('@/text')).t('sessionInfo.stopSession'));
+});
+
+describe('archive confirmation scope', () => {
+    const lead = (reports: ReadonlyArray<ReturnType<typeof createSessionFixture>>) => getStorage().setState({
+        sessions: Object.fromEntries(reports.map((report) => [report.id, report])),
+        sessionListRowsByServerId: {},
+    });
+
+    it('does not offer "Also archive" when the only sub-session is already archived', async () => {
+        lead([createSessionFixture({ id: 'done', serverId: 'home-a', manager: { sessionId: 'lead' }, archivedAt: 4 })]);
+        vi.mocked(Modal.show).mockClear();
+        expect(await confirmSessionArchive({ leadSessionId: 'lead', serverId: 'home-a' }))
+            .toEqual({ confirmed: true, alsoArchiveReports: false });
+        expect(Modal.show).not.toHaveBeenCalled();
+    });
+
+    it('counts only the sub-sessions the cascade would archive', async () => {
+        lead([
+            createSessionFixture({ id: 'live', serverId: 'home-a', manager: { sessionId: 'lead' } }),
+            createSessionFixture({ id: 'done', serverId: 'home-a', manager: { sessionId: 'lead' }, archivedAt: 4 }),
+        ]);
+        vi.mocked(Modal.show).mockClear();
+        const pending = confirmSessionArchive({ leadSessionId: 'lead', serverId: 'home-a' });
+        const shown = vi.mocked(Modal.show).mock.calls[0]![0] as unknown as { props: { reportCount: number; onResolve: (r: { confirmed: boolean; alsoArchiveReports: boolean }) => void } };
+        expect(shown.props.reportCount).toBe(1);
+        shown.props.onResolve({ confirmed: false, alsoArchiveReports: false });
+        await pending;
+    });
+
+    it('counts list-only direct reports in the captured Home without counting grandchildren or another Home', async () => {
+        const child = createSessionFixture({ id: 'child', serverId: 'home-a', manager: { sessionId: 'lead' } });
+        lead([
+            createSessionFixture({ id: 'other-home', serverId: 'home-b', manager: { sessionId: 'lead' } }),
+            createSessionFixture({ id: 'grandchild', serverId: 'home-a', manager: { sessionId: 'child' } }),
+        ]);
+        getStorage().setState({ sessionListRowsByServerId: { 'home-a': { child: buildSessionListRenderableFromSession(child) } } });
+        vi.mocked(Modal.show).mockClear();
+        const pending = confirmSessionArchive({ leadSessionId: 'lead', serverId: 'home-a' });
+        const shown = vi.mocked(Modal.show).mock.calls[0]![0] as unknown as { props: { reportCount: number; onResolve: (r: { confirmed: boolean; alsoArchiveReports: boolean }) => void } };
+        expect(shown.props.reportCount).toBe(1);
+        shown.props.onResolve({ confirmed: false, alsoArchiveReports: false });
+        await pending;
     });
 });

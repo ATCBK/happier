@@ -1,17 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import {
-    ActionsSettingsV1Schema,
-    createActionExecutor,
-    DEFAULT_ACTIONS_SETTINGS_V1,
-    isApprovalRequiredByActionsSettings,
-    type ActionExecutorContext,
-    type ActionExecutorDeps,
-    type ActionsSettingsV1,
-    type RuntimeActionExecute,
-} from '@happier-dev/protocol';
+import { ActionsSettingsV1Schema, type ActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
+import { DEFAULT_ACTIONS_SETTINGS_V1 } from '@happier-dev/protocol/account/settings/accountSettings';
+import { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { isApprovalRequiredByActionsSettings } from '@happier-dev/protocol/actions/actionApprovalPolicy';
+import type { ActionExecutorContext, ActionExecutorDeps, RuntimeActionExecute } from '@happier-dev/protocol/actions/executor/types';
 
-import { createFrontDoorRuntimeActionExecutor } from './frontDoorRuntimeActionExecutor';
+import { createFrontDoorRuntimeActionExecutor, createFrontDoorUiActionExecutor } from './frontDoorRuntimeActionExecutor';
 import { createActionExecutorBoundaryFixture } from '@/dev/testkit/fixtures/actionExecutorBoundary';
 import { createVoiceSessionLifecycleController } from '@/voice/session/voiceSessionLifecycleController';
 import { registerVoiceAdapters, resetVoiceAdapterRegistryForTests } from '@/voice/session/voiceAdapterRegistry';
@@ -93,6 +88,23 @@ function createTestExecutor(overrides: Partial<ActionExecutorDeps>) {
 }
 
 describe('front door approval default (agent vs ui)', () => {
+    it('keeps pending custody out of completed-value clients and preserves its typed artifact details', async () => {
+        const runtimeLeaf = vi.fn<RuntimeActionExecute>(async () => VALID_OUTPUT);
+        const executor = createTestExecutor({
+            runtimeActionExecute: runtimeLeaf,
+            approvalsCreate: async () => ({ artifactId: 'pending-value-approval' }),
+            isActionApprovalRequired: () => true,
+        });
+        const execute = createFrontDoorUiActionExecutor(executor, { serverId: EXECUTION_CONTEXT.serverId });
+        await expect(execute(APPROVAL_ACTION_ID, VALID_INPUT, {
+            defaultSessionId: EXECUTION_CONTEXT.defaultSessionId,
+            actionRequestId: EXECUTION_CONTEXT.actionRequestId,
+            presentUserConfirmation: { actionId: APPROVAL_ACTION_ID },
+        })).rejects.toMatchObject({ code: 'approval_request_created', details: {
+            kind: 'approval_request_created', artifactId: 'pending-value-approval', actionId: APPROVAL_ACTION_ID,
+        } });
+        expect(runtimeLeaf).not.toHaveBeenCalled();
+    });
     it('keeps a permission pending after a spoken decision and Voice End, then admits its present-user tap once', async () => {
         let pending = true;
         let permissionWrites = 0;

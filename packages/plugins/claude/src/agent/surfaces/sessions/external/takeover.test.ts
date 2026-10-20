@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
+import { validateClaudeExternalSessionSource } from './source.js';
 
 import {
     claudeExternalSessionTakeoverContribution,
@@ -6,6 +8,27 @@ import {
 } from './takeover.js';
 
 describe('Claude External Sessions takeover launch derivation', () => {
+    afterEach(() => vi.unstubAllEnvs());
+
+    it.each(['unset', 'native', 'happier'] as const)('preserves the %s native config environment after source normalization', (selection) => {
+        const home = process.cwd();
+        const configDir = join(home, '.claude');
+        vi.stubEnv('HOME', home);
+        vi.stubEnv('USERPROFILE', home);
+        vi.stubEnv('CLAUDE_CONFIG_DIR', selection === 'native' ? configDir : undefined);
+        vi.stubEnv('HAPPIER_CLAUDE_CONFIG_DIR', selection === 'happier' ? configDir : undefined);
+        const validated = validateClaudeExternalSessionSource({
+            source: { kind: 'claudeConfig', projectId: 'project-1' }, env: process.env,
+        });
+        if (!validated.ok) throw new Error(validated.error);
+        const plan = resolveClaudeExternalSessionTakeoverPlan({
+            remoteSessionId: 'native-session', source: validated.source,
+            linkData: { projectId: 'project-1' }, linkedDirectory: '/project',
+        });
+
+        expect(plan?.environmentVariables).toEqual(selection === 'unset' ? {} : { CLAUDE_CONFIG_DIR: configDir });
+    });
+
     it('returns only the canonical Claude config environment', () => {
         const plan = resolveClaudeExternalSessionTakeoverPlan({
             remoteSessionId: 'claude-session-current',

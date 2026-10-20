@@ -63,6 +63,7 @@ export function useEntityDropTarget(runtime: EntityDragDropRuntime, target: Enti
         get parentId() { return current.current.parentId; },
         get listDestinations() { return current.current.listDestinations; },
         getBounds: () => current.current.getBounds(),
+        getClearBounds: () => current.current.getClearBounds?.() ?? null,
         get measureBounds() { return current.current.measureBounds; },
         containsPointer: pointer => current.current.containsPointer?.(pointer) !== false,
         isCurrent: () => current.current.id === target.id

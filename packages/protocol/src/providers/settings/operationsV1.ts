@@ -19,6 +19,7 @@ import {
   type ProviderSettingsV1,
   ProviderManualModelV1Schema,
   ProviderExperimentalBindingConfirmationV1Schema,
+  getProviderExperimentalConfirmationSourceKeyV1,
   type SavedSecretSlotBindingsV1,
 } from './v1.js';
 
@@ -182,19 +183,13 @@ export function setProviderModelPickerVisibilityV1(
 
 export function setProviderExperimentalConfirmationV1(
   settings: ProviderSettingsV1,
-  input: Readonly<{
-    connectionId: string;
-    agentTargetKey: string;
-    modelId: string | null;
-    compatibilityFingerprint: string;
-    confirmedAt: number;
-  }>,
+  input: Readonly<Omit<ProviderSettingsV1['experimentalBindingConfirmations'][number], 'v'>>,
 ): ProviderSettingsV1 {
   const parsed = assertProviderSettingsV1WithinLimits(settings);
-  const connectionId = requireProviderConnection(parsed, input.connectionId);
-  const confirmation = ProviderExperimentalBindingConfirmationV1Schema.parse({ v: 1, ...input, connectionId });
+  if (!input.connectedAccountTarget) requireProviderConnection(parsed, input.connectionId);
+  const confirmation = ProviderExperimentalBindingConfirmationV1Schema.parse({ v: 1, ...input });
   const remaining = parsed.experimentalBindingConfirmations.filter((candidate) => !(
-    candidate.connectionId === confirmation.connectionId
+    getProviderExperimentalConfirmationSourceKeyV1(candidate) === getProviderExperimentalConfirmationSourceKeyV1(confirmation)
     && candidate.agentTargetKey === confirmation.agentTargetKey
     && candidate.modelId === confirmation.modelId
   ));

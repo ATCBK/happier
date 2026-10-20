@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc';
 import { flushHookEffects, renderScreen, standardCleanup } from '@/dev/testkit';
 import type { DropdownMenuItem } from '@/components/ui/forms/dropdown/DropdownMenu';
@@ -13,8 +13,8 @@ const { promptSpy, alertSpy, machineRpcSpy } = vi.hoisted(() => ({
     alertSpy: vi.fn<(...args: unknown[]) => void>(),
     machineRpcSpy: vi.fn(async (params: FileViewRpcRequest) => {
         if (params.method === 'listDirectory') return { success: true, entries: [] };
-        if (params.method === 'writeFile') return { success: true, hash: 'created-file-hash' };
-        if (params.method === 'createDirectory') return { success: true };
+        if (params.method === 'daemon.filesystem.writeFile') return { success: true, hash: 'created-file-hash' };
+        if (params.method === 'daemon.filesystem.createDirectory') return { success: true };
         if (params.method === 'statFile') return { success: true, exists: false };
         return { success: false, error: 'Unprovided daemon capability' };
     }),
@@ -27,7 +27,7 @@ vi.mock('@/sync/domains/state/browserRecordStorage', async () => (await import('
 vi.mock('@expo/vector-icons', async () => (await import('@/dev/testkit')).createExpoVectorIconsMock());
 vi.mock('@/text', async () => (await import('@/dev/testkit')).createTextModuleMock({ translate: key => key }));
 vi.mock('@/modal', async () => {
-    const boundary = (await import('@/dev/testkit')).createModalModuleMock();
+    const boundary = (await import('@/dev/testkit/mocks/modal')).createModalModuleMock({ confirmResult: true });
     boundary.spies.prompt.mockImplementation(promptSpy);
     boundary.spies.alert.mockImplementation(alertSpy);
     return boundary.module;
@@ -37,16 +37,14 @@ vi.mock('@/components/ui/popover', async importOriginal => (await import('@/dev/
 vi.mock('@/hooks/ui/useWebFileDropZone', () => import('@/hooks/ui/useWebFileDropZone.web'));
 vi.mock('@/utils/files/webDroppedEntries', () => import('@/utils/files/webDroppedEntries.web'));
 
+// Load the real runtime graph during collection, after the web boundaries are installed.
+const { installWebLockManagerMock } = await import('@/auth/storage/tokenStorage.web.testHelpers');
+const locks = installWebLockManagerMock();
+await prepareSessionFilesViewTestkit();
+afterAll(() => locks.restore());
+
 describe('SessionRepositoryTreeBrowserView (create actions)', () => {
     let fixture: Awaited<ReturnType<typeof createSessionFilesViewFixture>>;
-    let restoreLocks = () => {};
-    beforeAll(async () => {
-        // jsdom has no Web Locks; Home profile writes take a browser lock on web.
-        const { installWebLockManagerMock } = await import('@/auth/storage/tokenStorage.web.testHelpers');
-        restoreLocks = installWebLockManagerMock().restore;
-        await prepareSessionFilesViewTestkit();
-    });
-    afterAll(() => restoreLocks());
 
     beforeEach(async () => {
         vi.stubGlobal('SharedWorker', class SharedWorker {});
@@ -116,14 +114,10 @@ describe('SessionRepositoryTreeBrowserView (create actions)', () => {
     });
 
     it('disables create actions when no machine RPC target is available', async () => {
+        await fixture.dispose();
+        fixture = await createSessionFilesViewFixture({ rootPath: '/repo', machine: null, rpc: machineRpcSpy });
         const session = fixture.session;
         await changeSession({ metadata: session.metadata ? { ...session.metadata, machineId: undefined, host: 'unknown-host' } : null });
-        // The target resolver also finds the machine through the Home's machine list (same-locality
-        // replacement), so "no machine target" means this Home knows no machine for the session.
-        fixture.storage.setState((state) => ({
-            machines: {},
-            machineListByServerId: { ...state.machineListByServerId, [fixture.scope.serverId]: [] },
-        }));
         const screen = await renderRepositoryTreeBrowserView();
         expect(createMenuItem(screen, 'repository-tree-upload-files')?.disabled).toBe(true);
         expect(createMenuItem(screen, 'repository-tree-create-file')?.disabled).toBe(true);
@@ -178,8 +172,8 @@ describe('SessionRepositoryTreeBrowserView (create actions)', () => {
         // Prompt, workspace write and open are one async chain behind the deferred menu commit.
         await vi.waitFor(() => expect(onOpenFilePinned).toHaveBeenCalledWith('src/new-file.ts'), { timeout: 5_000 });
         expect(machineRpcSpy).toHaveBeenCalledWith(expect.objectContaining({
-            targetId: 'm1', method: RPC_METHODS.WRITE_FILE,
-            payload: { path: '/repo/src/new-file.ts', content: '', expectedHash: null },
+            targetId: 'm1', method: 'daemon.filesystem.writeFile',
+            payload: { rootPath: '/repo', path: '/repo/src/new-file.ts', content: '', expectedHash: null },
         }));
         expect(screen.findByType(WorkspaceRepositoryTreeList)).toBe(tree);
         expect(alertSpy).not.toHaveBeenCalled();
@@ -190,7 +184,7 @@ describe('SessionRepositoryTreeBrowserView (create actions)', () => {
         const screen = await renderRepositoryTreeBrowserView();
         await selectMenuItem(screen, 'repository-tree-create-file');
         await vi.waitFor(() => expect(alertSpy).toHaveBeenCalledTimes(1));
-        expect(machineRpcSpy.mock.calls.filter(([params]) => params.method === RPC_METHODS.WRITE_FILE)).toHaveLength(0);
+        expect(machineRpcSpy.mock.calls.filter(([params]) => params.method === 'daemon.filesystem.writeFile')).toHaveLength(0);
     });
 
     it('creates a directory', async () => {
@@ -198,8 +192,8 @@ describe('SessionRepositoryTreeBrowserView (create actions)', () => {
         const screen = await renderRepositoryTreeBrowserView();
         await selectMenuItem(screen, 'repository-tree-create-folder');
         await vi.waitFor(() => expect(machineRpcSpy).toHaveBeenCalledWith(expect.objectContaining({
-            targetId: 'm1', method: RPC_METHODS.CREATE_DIRECTORY,
-            payload: { path: '/repo/src/new-folder' },
+            targetId: 'm1', method: 'daemon.filesystem.createDirectory',
+            payload: { rootPath: '/repo', path: '/repo/src/new-folder' },
         })));
         expect(alertSpy).not.toHaveBeenCalled();
     });

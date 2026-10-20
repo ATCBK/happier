@@ -24,6 +24,29 @@ function artifact(id: number): Extract<DecryptedArtifact, { isDecrypted: true }>
 }
 
 describe('createArtifactsDomain', () => {
+    it('does not claim inventory readiness for a targeted body publication', () => {
+        const store = createHarness();
+        store.getState().applyArtifacts([{ ...artifact(1), body: 'Demanded approval' }]);
+        expect(store.getState().artifactsLoaded).toBe(false);
+        expect(store.getState().artifacts['artifact-1']?.body).toBe('Demanded approval');
+    });
+
+    it('reconciles full inventory membership while preserving writes and deletes since the read began', () => {
+        const store = createHarness();
+        store.getState().applyArtifacts([artifact(1), artifact(2), artifact(3)]);
+        const readStartedWith = store.getState().artifacts;
+        store.getState().updateArtifact({ ...artifact(2), headerVersion: 2 });
+        store.getState().addArtifact(artifact(4));
+        store.getState().deleteArtifact('artifact-3');
+        store.getState().applyArtifacts([artifact(3), artifact(5)], readStartedWith);
+        expect(store.getState().artifactsLoaded).toBe(true);
+        expect(Object.keys(store.getState().artifacts).sort()).toEqual(['artifact-2', 'artifact-4', 'artifact-5']);
+        expect(store.getState().artifacts['artifact-2']?.headerVersion).toBe(2);
+        const before = store.getState();
+        store.getState().applyArtifacts([], before.artifacts);
+        expect(store.getState().artifacts).toEqual({});
+        expect(store.getState().artifactsStorageRevision).toBe(before.artifactsStorageRevision + 1);
+    });
     it('retains HTTP access and ownership across content-only socket creation and revision echoes without granting initial events', async () => {
         const store = createHarness();
         const decode = (version: number) => decryptSocketNewArtifactUpdate({
@@ -86,7 +109,8 @@ describe('createArtifactsDomain', () => {
         const notify = vi.fn();
         store.subscribe(notify);
 
-        store.getState().applyArtifacts([{ ...structuredClone(opened), body: undefined }]);
+        const { provenance: _provenance, ...headerOnly } = structuredClone(opened);
+        store.getState().applyArtifacts([{ ...headerOnly, body: undefined }]);
         console.info('B07 plain unchanged-head publications:', notify.mock.calls.length);
 
         expect(store.getState().artifacts[opened.id]?.body).toBe(opened.body);
@@ -94,6 +118,24 @@ describe('createArtifactsDomain', () => {
         expect(store.getState().artifacts[opened.id]).toBe(opened);
         expect(store.getState()).toBe(before);
         expect(notify).not.toHaveBeenCalled();
+    });
+
+    it('retains demanded provenance without a body only while exact revision and custody remain unchanged', () => {
+        const store = createHarness();
+        const provenance = { savedBy: { kind: 'person' as const, accountId: 'owner' } };
+        const opened: DecryptedArtifact = { ...artifact(1), storageMode: 'e2ee', access: 'owner',
+            ownerAccountId: 'owner', bodyVersion: 2, provenance,
+            storageIdentity: { contentKeyEnvelope: 'content', provenanceKeyEnvelope: 'private' } };
+        store.getState().applyArtifacts([opened]);
+        const before = store.getState();
+        const { provenance: _provenance, ...head } = opened;
+        store.getState().applyArtifacts([head]);
+        expect(store.getState()).toBe(before);
+        store.getState().applyArtifacts([{ ...head, provenance: undefined }]);
+        expect(store.getState().artifacts[opened.id]?.provenance).toBeUndefined();
+        store.getState().applyArtifacts([opened]);
+        store.getState().applyArtifacts([{ ...head, storageIdentity: { ...head.storageIdentity!, provenanceKeyEnvelope: 'rotated' } }]);
+        expect(store.getState().artifacts[opened.id]?.provenance).toBeUndefined();
     });
 
     it.each([
@@ -115,9 +157,9 @@ describe('createArtifactsDomain', () => {
         const store = createHarness();
         const notify = vi.fn();
         store.subscribe(notify);
-        store.getState().applyArtifacts([]);
+        store.getState().applyArtifacts([], store.getState().artifacts);
         expect(notify).toHaveBeenCalledTimes(1);
-        store.getState().applyArtifacts([]);
+        store.getState().applyArtifacts([], store.getState().artifacts);
         expect(notify).toHaveBeenCalledTimes(1);
         const board = { ...artifact(1), header: { kind: 'work-board.v1', title: 'Board' } };
         store.getState().addArtifact(board);
@@ -166,5 +208,25 @@ describe('createArtifactsDomain', () => {
         store.setState({ artifacts: {}, artifactsLoaded: false });
         store.getState().applyArtifacts([artifact(700)]);
         expect(openApprovals()).toEqual([]);
+    });
+
+    it('does not reopen a settled approval when an earlier header or body read arrives late', () => {
+        const store = createHarness();
+        const open = ApprovalRequestV1Schema.parse({ v: 1, status: 'open', createdAtMs: 1, updatedAtMs: 1,
+            createdBy: { surface: 'agent', sessionId: 's1' }, requestedSurface: 'agent',
+            actionId: 'session.list', actionArgs: {}, summary: 'List sessions' });
+        const old: DecryptedArtifact = { ...artifact(1), header: buildApprovalRequestArtifactHeaderV1(open),
+            body: JSON.stringify(open), headerVersion: 1, bodyVersion: 1 };
+        const settled = ApprovalRequestV1Schema.parse({ ...open, status: 'executed', updatedAtMs: 2,
+            decision: { kind: 'approve', decidedAtMs: 2 }, execution: { executedAtMs: 3, ok: true, result: {} } });
+        const current: DecryptedArtifact = { ...old, header: buildApprovalRequestArtifactHeaderV1(settled),
+            body: JSON.stringify(settled), headerVersion: 2, bodyVersion: 2 };
+        store.getState().applyArtifacts([current]);
+        const before = store.getState();
+        store.getState().applyArtifacts([{ ...old, body: undefined }]);
+        store.getState().applyArtifacts([old]);
+        store.getState().addArtifact(old);
+        expect(store.getState()).toBe(before);
+        expect(isOpenApprovalInboxArtifact(store.getState().artifacts[old.id]!)).toBe(false);
     });
 });

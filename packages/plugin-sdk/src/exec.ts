@@ -14,6 +14,11 @@ import type {
     ProtocolClientsService,
 } from './services/io.js';
 
+declare const agentNativeLaunchQualifier: unique symbol;
+
+/** Host-issued cold launch intent for this exact Exec service; grants no Project permission. */
+export type AgentNativeLaunchQualifier = Readonly<{ [agentNativeLaunchQualifier]: true }>;
+
 export type {
     PluginExecSpawnRequest,
     PluginProcessHandle,
@@ -59,6 +64,7 @@ export interface ExecService {
         request: PluginExecSpawnRequest & { timeoutMs?: number },
         options?: {
             signal?: AbortSignal;
+            nativeLaunch?: AgentNativeLaunchQualifier;
             /** Leave daemonized descendants to the native tool after an unrequested
              * root exit with code zero. Cancellation, timeout, early disposal and
              * failed exit still terminate the tree. Default: terminate.
@@ -74,6 +80,7 @@ export interface ExecService {
         request: PluginExecSpawnRequest,
         options?: {
             signal?: AbortSignal;
+            nativeLaunch?: AgentNativeLaunchQualifier;
             /** Same successful native descendant handoff as run; no managed-service custody transfer. */
             descendantDisposition?: 'terminate' | 'preserve-on-success';
         },

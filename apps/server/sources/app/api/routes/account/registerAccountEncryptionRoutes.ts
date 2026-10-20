@@ -1,5 +1,6 @@
 import { InactiveAccountError } from "@/app/auth/accountStatus";
-import { z } from "zod";
+import { readDatabaseErrorCode } from '@/app/api/utils/enableErrorHandlers';
+import { z } from "zod/mini";
 import { inTx } from "@/storage/inTx";
 import { createServerFeatureGatePreHandler } from "@/app/features/catalog/serverFeatureGate";
 import { AccountEncryptionModeResponseSchema, AccountEncryptionCurrentnessResponseSchema, AccountEncryptionCurrentnessErrorResponseSchema, AccountEncryptionModeUpdateRequestSchema } from '@happier-dev/protocol/account/encryptionMode';
@@ -67,7 +68,7 @@ export function registerAccountEncryptionRoutes(app: Fastify): void {
                     updatedAt: user.encryptionModeUpdatedAt.getTime(),
                 });
             } catch (error) {
-                if (error instanceof InactiveAccountError) throw error;
+                if (error instanceof InactiveAccountError || readDatabaseErrorCode(error)) throw error;
                 return reply.code(500).send({ error: "internal" });
             }
         },
@@ -102,21 +103,20 @@ export function registerAccountEncryptionRoutes(app: Fastify): void {
                 if (!user) {
                     return reply.code(500).send({ error: "internal" });
                 }
-                const currentness =
-                    deriveAccountEncryptionCurrentnessFromRow(user);
-                const readiness = deriveAccountRecipientEnvelopeReadinessFromRow(user, currentness);
-                const recipientEnvelopeReadiness = readiness.status === "available"
-                    ? { status: "available" as const }
-                    : readiness;
-                if (currentness.status === "inconsistent") {
+                const currentness = projectAccountEncryptionCurrentnessFromRow(user);
+                if (currentness === null) {
+                    const readiness = deriveAccountRecipientEnvelopeReadinessFromRow(user);
+                    const recipientEnvelopeReadiness = readiness.status === "available"
+                        ? { status: "available" as const }
+                        : readiness;
                     return reply.code(400).send(AccountEncryptionCurrentnessErrorResponseSchema.parse({
                         error: "migration-required",
                         recipientEnvelopeReadiness,
                     }));
                 }
-                return reply.send(projectAccountEncryptionCurrentnessFromRow(user));
+                return reply.send(currentness);
             } catch (error) {
-                if (error instanceof InactiveAccountError) throw error;
+                if (error instanceof InactiveAccountError || readDatabaseErrorCode(error)) throw error;
                 return reply.code(500).send({ error: "internal" });
             }
         },
@@ -178,7 +178,7 @@ export function registerAccountEncryptionRoutes(app: Fastify): void {
                     updatedAt: result.updatedAt,
                 });
             } catch (error) {
-                if (error instanceof InactiveAccountError) throw error;
+                if (error instanceof InactiveAccountError || readDatabaseErrorCode(error)) throw error;
                 return reply.code(500).send({ error: "internal" });
             }
         },

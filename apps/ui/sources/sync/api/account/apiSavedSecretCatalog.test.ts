@@ -24,6 +24,7 @@ import { MCP_SERVER_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/mcp/serv
 import { ACP_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
 import { PROVIDER_CONNECTIONS_ROWS_ROUTE_V1 } from '@happier-dev/protocol/providers/connections/connectionRowsV1';
 import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
+import { PROMPT_LIBRARY_ROWS_ROUTE_V1 } from '@happier-dev/protocol/prompts/library/promptLibraryRowsV1';
 import type { AccountSettingsStoredContentEnvelope } from '@happier-dev/protocol/account/settings/accountSettingsStoredContentEnvelope';
 
 vi.mock('socket.io-client', async importOriginal =>
@@ -124,14 +125,14 @@ describe('SavedSecret catalog captured request boundary', () => {
             },
         });
         const scope = { serverId: resolveServerProfileScopeIdForIdentifier(connection.home.id), accountId };
-        await refreshSavedSecretCatalog(scope);
-        await vi.waitFor(() => expect(getSavedSecretCatalogSnapshot(scope)).toMatchObject({ status: 'ready',
-            legacyImport: { status: 'pending', reason: 'source-uncharacterized' } }));
-        expect(resolveSavedSecretReference(scope, [], ref)).toMatchObject({ status: 'ready',
-            secret: { id: ref, encryptedValue: { _isSecretValue: true, value: 'current-private' } } });
-        expect(writes).toEqual([]);
         const release = observeSavedSecretCatalog(scope);
         try {
+            await refreshSavedSecretCatalog(scope);
+            await vi.waitFor(() => expect(getSavedSecretCatalogSnapshot(scope)).toMatchObject({ status: 'ready',
+                legacyImport: { status: 'pending', reason: 'source-uncharacterized' } }));
+            expect(resolveSavedSecretReference(scope, [], ref)).toMatchObject({ status: 'ready',
+                secret: { id: ref, encryptedValue: { _isSecretValue: true, value: 'current-private' } } });
+            expect(writes).toEqual([]);
             const before = getSavedSecretCatalogSnapshot(scope);
             const machineChanges = planSyncActionsFromChanges([{ cursor: 1, kind: 'machine', entityId: 'machine-a', changedAt: 1 }]);
             for (let index = 0; index < 20; index += 1) publishHomeAccountChange(scope.serverId, ['machine-a'], {
@@ -164,7 +165,7 @@ describe('SavedSecret catalog captured request boundary', () => {
         let raw: Record<string, unknown> = { ...(inference ? { inferenceOpenAIKey: 'old-private', preferredLanguage: 'fr' } : { secrets: [secret] }), actionsSettingsV1: ActionsSettingsV1Schema.parse({ v: 1,
             approvalWaivedSurfaces: { 'secrets.shared.promote': ['ui'] } }) };
         let version = 4;
-        let retained: AccountSettingsStoredContentEnvelope = { t: 'plain', v: raw };
+        let retained: AccountSettingsStoredContentEnvelope | null = { t: 'plain', v: raw };
         const resources: unknown[] = [];
         const promotions: unknown[] = [];
         const historyWrites: unknown[] = [];
@@ -189,7 +190,8 @@ describe('SavedSecret catalog captured request boundary', () => {
                     NOTIFICATION_CHANNELS_ROUTE_V1,
                     MCP_SERVER_CATALOG_ROWS_ROUTE_V1, ACP_CATALOG_ROWS_ROUTE_V1, PROVIDER_CONNECTIONS_ROWS_ROUTE_V1,
                     `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/configurations`,
-                    `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/purposes`].includes(path)) {
+                    `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/purposes`,
+                    `${PROMPT_LIBRARY_ROWS_ROUTE_V1}/registry-sources`].includes(path)) {
                     return Response.json({ status: 'absent' });
                 }
                 if (path === '/v1/artifacts') return Response.json([]);
@@ -221,14 +223,18 @@ describe('SavedSecret catalog captured request boundary', () => {
             } });
         const scope = { serverId: resolveServerProfileScopeIdForIdentifier(connection.home.id), accountId };
         await refreshSavedSecretCatalog(scope);
-        await vi.waitFor(() => expect(getSavedSecretCatalogSnapshot(scope)?.legacyImport).toBeTruthy());
+        await vi.waitFor(() => {
+            expect(promotions).toHaveLength(1);
+            expect(historyAttempts).toBe(1);
+            expect(getSavedSecretCatalogSnapshot(scope)?.legacyImport).toMatchObject({ status: 'pending' });
+        });
         expect(promotions).toHaveLength(1);
         const promotion = SharedSavedSecretPromoteInputV1Schema.parse(promotions[0]);
         expect(promotion.referenceCensus).toMatchObject({
             remoteHosts: { revision: 'absent', resourceRefs: [] },
             notificationChannels: { revision: 'absent', resourceRefs: [] },
             catalogs: { mcp: 'absent', acp: 'absent', providerConnections: 'absent',
-                connectedConfigurations: 'absent', connectedPurposes: 'absent' },
+                connectedConfigurations: 'absent', connectedPurposes: 'absent', registrySources: 'absent' },
         });
         const ref = `happier:shared-secret:v1:${promotion.resourceId}`;
         expect(resolveSavedSecretReference(scope, [], ref)).toMatchObject({ status: 'ready',

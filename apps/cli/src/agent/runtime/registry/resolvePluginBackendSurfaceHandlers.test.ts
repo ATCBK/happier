@@ -1,6 +1,6 @@
 import { unexpectedProjectNativeAdapterResolution } from "@/plugins/testkit/unexpectedProjectNativeAdapterResolution";
 import { unexpectedCaptureSourceResolution } from "@/plugins/testkit/unexpectedCaptureSourceResolution";
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createResolvedContributionRegistry } from '../../../plugins/projection/registry/createResolvedContributionRegistry';
 import type {
@@ -41,11 +41,14 @@ function createBackendContribution(): ResolvedAgentRuntimeContribution {
   };
 }
 
-function createRuntimeRegistry(
+async function createRuntimeRegistry(
   backend: ResolvedAgentRuntimeContribution,
   agent: ResolvedAgentContribution,
-): ResolvedExecutablePluginRuntimeRegistry {
+): Promise<ResolvedExecutablePluginRuntimeRegistry> {
+  const { resolveExecutablePluginRuntimeRegistry } = await vi.importActual<typeof import('@/plugins/runtime/resolveExecutablePluginRuntimeRegistry')>('@/plugins/runtime/resolveExecutablePluginRuntimeRegistry');
+  const base = await resolveExecutablePluginRuntimeRegistry({ contributes: createResolvedContributionRegistry({ agents: [agent] }), pluginIds: [] });
   return {
+    ...base,
     claimReleaseLessDeclarations: async () => undefined,
     contributes: createResolvedContributionRegistry({
       agents: [agent],
@@ -62,7 +65,7 @@ function createRuntimeRegistry(
     addRuntimeDisposable: (_pluginId, disposable) => disposable,
     createAgentInvocationServices: async () => createUnavailablePluginServices(),
     retireConsumers: () => undefined,
-    dispose: async () => undefined,
+    dispose: base.dispose,
   };
 }
 
@@ -74,7 +77,7 @@ describe('resolvePluginBackendSurfaceHandlers', () => {
     const result = await resolvePluginBackendSurfaceHandlers({
       backend,
       agent,
-      runtimeRegistry: createRuntimeRegistry(backend, agent),
+      runtimeRegistry: await createRuntimeRegistry(backend, agent),
       hasRegisteredAgentRuntime: true,
     });
 
@@ -89,7 +92,7 @@ describe('resolvePluginBackendSurfaceHandlers', () => {
     const result = await resolvePluginBackendSurfaceHandlers({
       backend,
       agent,
-      runtimeRegistry: createRuntimeRegistry(backend, agent),
+      runtimeRegistry: await createRuntimeRegistry(backend, agent),
     });
 
     expect(result.diagnostics).toEqual([

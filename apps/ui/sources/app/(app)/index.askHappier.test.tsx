@@ -14,6 +14,8 @@ import { clearPendingSetupIntent, getPendingSetupIntent } from '@/sync/domains/p
 import { resetSessionDraftRepositoryForTests } from '@/sync/ops/sessionDrafts/sessionDraftRepository';
 import { prepareSessionDraftPersistenceStorage } from '@/sync/ops/sessionDrafts/sessionDraftPersistenceStorage';
 import { openAskHappierDraft } from '@/components/sessions/bots/happierGuideDraft';
+import * as guideDraft from '@/components/sessions/bots/happierGuideDraft';
+import * as promptDocs from '@/sync/ops/promptLibrary/promptDocs';
 import { Home } from './index';
 
 const navigation = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
@@ -37,11 +39,12 @@ afterEach(async () => {
     await home?.dispose(); home = undefined;
     resetSessionDraftRepositoryForTests();
     navigation.push.mockReset(); navigation.replace.mockReset();
+    vi.restoreAllMocks();
 });
 
 it('continues an explicit pre-auth Ask Happier Start through the authenticated root into its ordinary draft, never machine setup', async () => {
     const catalog = createPromptLibraryCatalogBoundary();
-    home = await createPlainArtifactHomeFixture('https://ask-happier-auth.test', { handleRequest: async (path, init) => {
+    home = await createPlainArtifactHomeFixture('https://ask-happier-auth.test', { currentAccount: true, handleRequest: async (path, init) => {
         // MainView loads the Account's tab through the real KV reader; an empty Home is valid.
         if (path === '/v1/kv/bulk' && init?.method === 'POST') return Response.json({ values: [] });
         return await catalog.handle(path, init);
@@ -77,7 +80,16 @@ it('continues an explicit pre-auth Ask Happier Start through the authenticated r
             resolve({ pathname: '/new', params: { draftId: value.params.draftId } });
         });
     });
+    // Observe the real continuation result, so lost readiness fails at its owner
+    // instead of timing out while waiting for navigation that can no longer occur.
+    const continuation = vi.spyOn(guideDraft, 'openAskHappierDraft');
+    const createGuide = vi.spyOn(promptDocs, 'createPromptDoc');
     await renderScreen(<InjectedAuthProvider credentials={credentials}><MainAppTabStateProvider><Home /></MainAppTabStateProvider></InjectedAuthProvider>);
+    await vi.waitFor(() => expect(continuation).toHaveBeenCalled());
+    const result = await continuation.mock.results[0].value;
+    const guideActionFailure = await createGuide.mock.results[0]?.value.catch((cause: unknown) => cause instanceof Error
+        ? { message: cause.message, code: 'code' in cause ? cause.code : undefined } : cause);
+    expect(result, JSON.stringify({ guideActionFailure })).toMatchObject({ kind: 'opened' });
     const route = await openedDraft;
     expect(home.boundary.list()).toHaveLength(1);
     expect(lifetime.isCurrent(), 'The authenticated Home must remain admitted while its guide draft opens').toBe(true);
@@ -86,6 +98,7 @@ it('continues an explicit pre-auth Ask Happier Start through the authenticated r
     if (!scope) throw new Error('Expected admitted Account');
     expect(readNewSessionDraftFromRepository({ scope, draftId: route.params.draftId })).toMatchObject({ sessionName: 'Happier', initialSessionFacts: { bot: { kind: 'bot' } } });
     expect(getPendingSetupIntent()).toBeNull();
+    expect(navigation.push).toHaveBeenCalledTimes(1);
     expect(navigation.replace).not.toHaveBeenCalled();
     expect(home.requests.some(request => request.path.includes('/sessions') && request.method === 'POST')).toBe(false);
 });

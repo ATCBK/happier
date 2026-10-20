@@ -36,8 +36,8 @@ export function NextPendingNavigationHost() {
         ...summary,
         audienceScopes: new Map([...bindings].map(([serverId, binding]) => [serverId, binding.scope])),
     }), [summary, bindings]);
-    const frameRef = React.useRef({ source, bindings });
-    frameRef.current = { source, bindings };
+    const frameRef = React.useRef({ source, bindings, router });
+    frameRef.current = { source, bindings, router };
     const mountedRef = React.useRef(false);
     const inFlightRef = React.useRef(new Set<Readonly<{ controller: AbortController; homeId: string | null }>>());
 
@@ -83,7 +83,7 @@ export function NextPendingNavigationHost() {
                 signal: controller.signal,
                 openRoute: (route) => {
                     if (!isCurrent() || !binding.isCurrent()) throw new Error('Pending navigation retired before opening');
-                    router.push(route as Href);
+                    frameRef.current.router.push(route as Href);
                 },
             });
             // A committed cross-Home route intentionally changes the active Home.
@@ -105,7 +105,10 @@ export function NextPendingNavigationHost() {
             options.signal?.removeEventListener('abort', abort);
             inFlightRef.current.delete(attempt);
         }
-    }, [router]);
+    // Workspace navigation replaces its router as destinations change. The
+    // app-shell registration must survive that update: unregistering clears
+    // the landing before its answer control can hydrate, and the Next offer.
+    }, []);
 
     React.useEffect(() => {
         mountedRef.current = true;

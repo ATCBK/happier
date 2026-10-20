@@ -63,8 +63,6 @@ export function useScmAdaptivePolling(input: ScmAdaptivePollingInput) {
         };
     }, []);
 
-    const timerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-    const cancelledRef = React.useRef(false);
     const intervalMsRef = React.useRef<number>(baseIntervalMs);
     const lastSignatureRef = React.useRef<string | null>(null);
     const lastActivityTokenRef = React.useRef<unknown>(input.activityToken);
@@ -78,17 +76,14 @@ export function useScmAdaptivePolling(input: ScmAdaptivePollingInput) {
     }, [input.activityToken]);
 
     React.useEffect(() => {
-        if (timerRef.current) {
-            clearTimeout(timerRef.current);
-            timerRef.current = null;
-        }
-        cancelledRef.current = false;
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        let cancelled = false;
         // Treat a non-positive base interval as "disabled" to avoid accidental tight loops
         // (e.g. callers passing 0 to mean "no auto-refresh").
         if (!enabled || !isActive || baseIntervalMs <= 0) return;
 
         const runOnce = async () => {
-            if (cancelledRef.current) return;
+            if (cancelled) return;
             const previousSignature = lastSignatureRef.current;
             const previousActivityToken = lastActivityTokenRef.current;
 
@@ -98,7 +93,7 @@ export function useScmAdaptivePolling(input: ScmAdaptivePollingInput) {
                 // Best-effort: transient SCM errors should not permanently stop polling.
             }
 
-            if (cancelledRef.current) return;
+            if (cancelled) return;
             const nextSignature = getSignatureRef.current();
             const signatureChanged = Boolean(nextSignature && nextSignature !== previousSignature);
 
@@ -120,17 +115,17 @@ export function useScmAdaptivePolling(input: ScmAdaptivePollingInput) {
             }
 
             const delayMs = Math.max(0, intervalMsRef.current);
-            timerRef.current = setTimeout(() => {
+            timer = setTimeout(() => {
                 void runOnce();
             }, delayMs);
         };
 
         void runOnce();
         return () => {
-            cancelledRef.current = true;
-            if (timerRef.current) {
-                clearTimeout(timerRef.current);
-                timerRef.current = null;
+            cancelled = true;
+            if (timer !== null) {
+                clearTimeout(timer);
+                timer = null;
             }
         };
     }, [baseIntervalMs, enabled, input.activityToken, isActive, maxIntervalMs, stepIntervalMs]);

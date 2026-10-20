@@ -36,7 +36,7 @@ export function useUpdatesSummary(): UpdatesSummary {
     // the installables background owner keeps fresh, and each daemon's `tool.systemTasks` kinds.
     const machineIds = React.useMemo(() => machines.map((machine) => machine.id), [machines]);
     const machineAgents = useMachineAgentsByMachine({ serverId, machineIds, load: false });
-    const snapshots = useMachinesCapabilitySnapshots(serverId, machineIds);
+    const snapshots = useMachinesCapabilitySnapshots(serverId, machineIds, updateScope?.accountId);
     const installables = React.useMemo(readUpdatableInstallables, []);
     const summary = React.useMemo(() => {
         const { groups, uncheckedMachineCount } = buildMachineUpdateGroups({

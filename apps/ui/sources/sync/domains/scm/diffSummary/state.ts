@@ -18,6 +18,7 @@ import { pluginJsonValuesEqual } from '@happier-dev/protocol/plugins/contributio
 export const SCM_DIFF_SUMMARY_GENERATE_ACTION_ID = 'scm.diffSummary.generate' as const;
 
 export type ScmDiffSummaryRequestStatus = 'idle' | 'starting' | 'running' | 'succeeded' | 'failed';
+export type ScmDiffSummaryRestoreState = 'idle' | 'restoring' | 'ready' | 'unavailable';
 export type ScmDiffSummaryOperationIntent = 'generate' | 'regenerate' | 'copy';
 
 export type ScmDiffSummaryRequestKeyInput = Readonly<{
@@ -168,6 +169,7 @@ export type ScmDiffSummaryFailurePresentation =
     | Readonly<{ reason: 'modelUnavailable'; messageKey: 'walkthrough.generationFailure.modelUnavailable'; nextAction: 'chooseModel'; nextActionKey: 'walkthrough.notice.chooseModel' }>
     | Readonly<{ reason: 'machineUnavailable'; messageKey: 'walkthrough.generationFailure.machineUnavailable'; nextAction: 'reconnectMachine'; nextActionKey: 'walkthrough.generationFailure.reconnectMachine' }>
     | Readonly<{ reason: 'disabled'; messageKey: 'walkthrough.generationFailure.disabled'; nextAction: 'enableExplain'; nextActionKey: 'walkthrough.generationFailure.enableExplain' }>
+    | Readonly<{ reason: 'cancelled'; messageKey: 'walkthrough.notice.cancelled'; nextAction: 'retry'; nextActionKey: 'walkthrough.notice.tryAgain' }>
     | Readonly<{ reason: 'generationFailed'; messageKey: 'walkthrough.notice.failedGeneric'; nextAction: 'retry'; nextActionKey: 'walkthrough.notice.tryAgain' }>;
 
 /** A walkthrough that stopped for a reason nobody classified; the native reason and code stay in diagnostics. */
@@ -184,9 +186,13 @@ export const SCM_DIFF_SUMMARY_DISABLED_FAILURE = {
 
 function presentScmDiffSummaryFailure(error: NonNullable<ScmDiffSummaryEntry['error']>): ScmDiffSummaryFailurePresentation {
     switch (error.code) {
+        case 'generation_cancelled':
+            return { reason: 'cancelled', messageKey: 'walkthrough.notice.cancelled',
+                nextAction: 'retry', nextActionKey: 'walkthrough.notice.tryAgain' };
         case 'invalid_parameters':
         case 'invalid_action_transport_input':
         case 'INVALID_REQUEST':
+        case 'RPC_METHOD_NOT_AVAILABLE':
             return { reason: 'invalidRequest', messageKey: 'walkthrough.generationFailure.invalidRequest',
                 nextAction: 'reviewRequest', nextActionKey: 'walkthrough.generationFailure.reviewRequest' };
         case 'MODEL_UNAVAILABLE':
@@ -205,6 +211,9 @@ function presentScmDiffSummaryFailure(error: NonNullable<ScmDiffSummaryEntry['er
             return SCM_DIFF_SUMMARY_GENERIC_FAILURE;
     }
 }
+
+/** The store's own words when a failed Run or output named no reason; it is a placeholder, never a reason. */
+const SCM_DIFF_SUMMARY_NO_REASON_MESSAGE = 'Summary generation failed';
 
 const EMPTY_STATE: ScmDiffSummaryState = Object.freeze({ entriesByKey: Object.freeze({}) });
 
@@ -265,7 +274,8 @@ function errorFromOutput(output: ScmDiffSummaryGenerateOutput | null | undefined
     for (const kind of input.outputs ?? ['summary']) {
         const progress = output.outputs?.[kind];
         if (progress?.state === 'failed' || progress?.state === 'cancelled') {
-            return { message: progress.reason ?? 'Summary generation failed' };
+            return { message: progress.reason ?? SCM_DIFF_SUMMARY_NO_REASON_MESSAGE,
+                ...(progress.state === 'cancelled' && progress.reasonCode ? { code: progress.reasonCode } : {}) };
         }
     }
     return null;
@@ -424,7 +434,7 @@ export function applyScmDiffSummaryEvent(state: ScmDiffSummaryState, event: ScmD
     const runFailure = errorFromOutput(output, previous.input)
         ?? (outputStatus !== 'succeeded' && (event.run.status === 'failed' || event.run.status === 'cancelled')
             ? {
-                message: event.run.error?.message ?? 'Summary generation failed',
+                message: event.run.error?.message ?? SCM_DIFF_SUMMARY_NO_REASON_MESSAGE,
                 ...(event.run.error?.code ? { code: event.run.error.code } : {}),
             }
             : null);
@@ -458,7 +468,7 @@ function retainOutputValue<T extends Readonly<{ value?: unknown }>>(current: T |
         : current;
 }
 
-export function selectScmDiffSummaryViewModel(state: ScmDiffSummaryState, key: string): ScmDiffSummaryViewModel {
+export function selectScmDiffSummaryViewModel(state: ScmDiffSummaryState, key: string, requestedOutput?: ScmDiffSummaryOutputKind): ScmDiffSummaryViewModel {
     const entry = selectScmDiffSummaryEntry(state, key);
     const summary = entry?.finalSummary ?? entry?.lastKnownSummary ?? null;
     const output = entry?.latestOutput ?? null;
@@ -470,12 +480,21 @@ export function selectScmDiffSummaryViewModel(state: ScmDiffSummaryState, key: s
         walkthrough: retainOutputValue(output.outputs.walkthrough, previousOutputs.walkthrough),
         commitPlan: retainOutputValue(output.outputs.commitPlan, previousOutputs.commitPlan),
     } : output?.outputs ?? summary?.output.outputs ?? null;
-    const requestedOutputs: readonly ScmDiffSummaryOutputKind[] = entry?.input.outputs ?? output?.requestedOutputs ?? ['summary'];
+    const requestedOutputs: readonly ScmDiffSummaryOutputKind[] = requestedOutput ? [requestedOutput] : entry?.input.outputs ?? output?.requestedOutputs ?? ['summary'];
+    // A reader asks for one output. A failed sibling must not relabel its completed proposal/reading.
+    // Admission failures still belong to the request and remain visible over a retained previous value.
+    const selectedInput = entry && requestedOutput ? { ...entry.input, outputs: [requestedOutput] } : entry?.input;
+    const outputFailure = entry ? errorFromOutput(output, entry.input) : null;
+    // request_failed retains the old output and its intent; a terminal run clears that intent.
+    const requestFailed = entry?.status === 'failed' && entry.pendingIntent !== null;
+    const projectOutput = Boolean(requestedOutput && output && !requestFailed && (outputFailure || !entry?.error));
+    const error = projectOutput && selectedInput ? errorFromOutput(output, selectedInput) : entry?.error;
+    const status = projectOutput && selectedInput ? statusFromOutput(output, selectedInput) : entry?.status ?? 'idle';
     const isShowingLastKnownSummary = Boolean(entry && !entry.finalSummary && entry.lastKnownSummary);
     return {
         requestKey: key,
         observedAtMs: entry?.observedAtMs ?? null,
-        status: entry?.status ?? 'idle',
+        status,
         actionId: SCM_DIFF_SUMMARY_GENERATE_ACTION_ID,
         executionRunId: entry?.executionRunId ?? null,
         inputId: (output?.success === true ? output.inputId : undefined) ?? summary?.output.inputId ?? null,
@@ -492,8 +511,8 @@ export function selectScmDiffSummaryViewModel(state: ScmDiffSummaryState, key: s
         risks: summary?.risks ?? [],
         testImpact: summary?.testImpact ?? null,
         suggestedPrBody: summary?.suggestedPrBody ?? null,
-        error: entry?.error ? { ...entry.error, ...presentScmDiffSummaryFailure(entry.error) } : null,
-        canRetry: Boolean(entry && (entry.status === 'failed' || entry.status === 'succeeded')),
+        error: error ? { ...error, ...presentScmDiffSummaryFailure(error) } : null,
+        canRetry: Boolean(entry && (status === 'failed' || status === 'succeeded')),
         retryAttempt: entry?.retryAttempt ?? 0,
         latestRun: entry?.latestRun ?? null,
         comparison: output?.comparison ?? summary?.output.comparison ?? null,

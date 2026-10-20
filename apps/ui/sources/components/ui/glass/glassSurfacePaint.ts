@@ -3,7 +3,7 @@ import Color from 'color';
 import { parseThemeColor } from '@/theme/parseThemeColor';
 import { happierMaterialBackgroundColor } from '@happier-dev/plugin-ui/presentation';
 import { createBackdropWebStyle } from '@/components/ui/overlays/createBackdropLayerStyle';
-import { GLASS_BLUR_RADIUS_PX, readGlassPreset, resolveGlassBackdropMap, resolveGlassBackdropTone, resolveGlassSurfaceMaterial, type GlassMaterialSettings, type GlassMaterialEnvironment, type GlassSurfaceGroup, type GlassSurfaceMaterial } from './glassMaterial';
+import { GLASS_BLUR_RADIUS_PX, readGlassPreset, resolveGlassBackdropMap, resolveGlassBackdropTone, resolveGlassSurfaceMaterial, type GlassFloatingCoat, type GlassMaterialSettings, type GlassMaterialEnvironment, type GlassSurfaceGroup, type GlassSurfaceMaterial } from './glassMaterial';
 
 /** Clear only the page coat. Functional surfaces still resolve their own material and accessibility overrides. */
 export type AtmosphereContentCoat = 'opaque' | 'reading';
@@ -42,14 +42,14 @@ export function glassSurfacePlaneBackdropStyle(settings: GlassMaterialSettings, 
  * paint. Native renderers have no backdrop tone: named dark floating coats use low-alpha ink there.
  * Custom and solid retain their authored color.
  */
-export function glassSurfaceTintColor(input: Readonly<{ color: string; ink: string; dark: boolean; settings: GlassMaterialSettings; group: GlassSurfaceGroup; environment?: GlassMaterialEnvironment; page?: string; dialog?: boolean }>): string {
+export function glassSurfaceTintColor(input: Readonly<{ color: string; ink: string; controlFill?: string; dark: boolean; settings: GlassMaterialSettings; group: GlassSurfaceGroup; environment?: GlassMaterialEnvironment; page?: string; panel?: GlassFloatingCoat }>): string {
     if (Platform.OS === 'web' && input.page !== undefined) {
         const color = parseThemeColor(input.color);
         const page = parseThemeColor(input.page);
         if (color === null || page === null) return input.color;
         const coat = resolveGlassBackdropMap(input.settings, input.group, input.dark, input.environment, {
-            page: page.rgb().string(), solid: color.rgb().string(),
-        }, input.dialog === true)?.coat;
+            page: page.rgb().string(), solid: color.rgb().string(), ink: input.ink, controlFill: input.controlFill,
+        }, input.panel ?? false)?.coat;
         // Keep the authored spelling when the coat is the paint itself.
         if (coat) return coat === color.rgb().round().string() ? input.color : coat;
     }

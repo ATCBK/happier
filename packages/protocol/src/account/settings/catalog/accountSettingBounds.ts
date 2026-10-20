@@ -142,7 +142,11 @@ export function withAccountSettingBounds<TSchema extends z.ZodMiniType>(
       structuralBoundsOwner,
     );
     if (issue) {
-      ctx.addIssue({ code: "custom", message: issue.message });
+      ctx.addIssue({
+        code: 'custom',
+        message: issue.message,
+        params: { accountSettingBoundsReason: issue.reason },
+      });
     }
   })) as TSchema;
 }

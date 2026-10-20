@@ -1,1869 +1,301 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createSocketIoBoundaryStub } from '@/dev/testkit/mocks/socketIo';
-import { installDisconnectedServerSocketBoundary } from '@/dev/testkit/harness/serverAccountConnectionHarness';
-import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createConcurrentCacheNetworkHarness } from '@/dev/testkit/harness/concurrentCacheNetworkHarness';
+import { seedPersistedHomeProfilesForTests } from '@/dev/testkit/fixtures/persistedHomeProfiles';
+import * as routes from '@/sync/domains/transfers/runtime/transferRouteCache';
+import { Encryption } from '@/sync/encryption/encryption';
+import { encodeBase64 } from '@/encryption/base64';
+import { sealSessionOwnerMetadataEnvelopeV1 } from '@happier-dev/protocol/sessions/metadata/sessionMetadataEnvelopesV1';
+import { createMachineFixture } from '@/dev/testkit/fixtures/machineFixtures';
 
-vi.mock('react-native-enriched-markdown/lib/module/web/streamingReveal.js', () => ({
-    splitStreamingRevealTextParts: (text: string) => [{ text, revealed: true }],
-}));
+vi.mock('react-native', async () => (await import('@/dev/testkit/mocks/reactNative')).createReactNativeWebMock());
 
-import { createServerProfilesModuleMock } from '@/dev/testkit';
-import { createAccountTokenForTests } from '@/dev/testkit/harness/homeGovernanceHarness';
-import type { SessionListFetchResult } from '@/sync/engine/sessions/sessionSnapshot';
+const h = await createConcurrentCacheNetworkHarness('cache-routing');
+beforeEach(() => h.reset());
+afterEach(() => h.cleanup());
+afterAll(() => h.dispose());
 
-const ACCOUNT_B_TOKEN = createAccountTokenForTests('account-b');
-const ACCOUNT_C_TOKEN = createAccountTokenForTests('account-c');
-
-// Prepare the real graph outside case-local fake clocks; no domain replacement.
-installDisconnectedServerSocketBoundary();
-const initialSync = await loadSyncSingletonForTests();
-initialSync.dispose();
-
-const ioSpy = vi.fn();
-const getCredentialsForServerUrlSpy = vi.fn();
-const listServerProfilesSpy = vi.fn();
-const getActiveServerSnapshotSpy = vi.fn();
-const invalidateCachedTransferRoutesForServerSpy = vi.fn();
-const serverProfileListeners = new Set<(generation: number) => void>();
-const homeViewStateListeners = new Set<() => void>();
-let serverProfilesGeneration = 0;
-let previousTransferRoutePositiveTtlMs: string | undefined;
-const REFRESH_DEBOUNCE_TEST_MS = 600;
-type ConcurrentCacheStorage = typeof import('@/sync/domains/state/storageStore')['storage'];
-
-function createSocketStub() {
-    return createSocketIoBoundaryStub().socket;
-}
-
-function onlineState() {
-    return {
-        phase: 'online',
-        reason: 'initial_connect',
-        attempt: 0,
-        nextRetryAt: null,
-        lastConnectedAt: Date.now(),
-        lastDisconnectedAt: null,
-        lastErrorMessage: null,
-    };
-}
-
-// One complete storage-boundary mock for the token storage seam: the canonical
-// testkit factory merges the real module (preserving `accountDirectoryAuthCredentials`
-// and every other export consumed by the cache's import graph) and overrides only the
-// genuine boundary members. Credential classification stays on the real implementation.
-function mockTokenStorageBoundary(): void {
-    vi.doMock('@/auth/storage/tokenStorage', async (importOriginal) => {
-        const { createTokenStorageModuleMock } = await import('@/dev/testkit/mocks/tokenStorage');
-        return createTokenStorageModuleMock({
-            importOriginal,
-            tokenStorage: {
-                getCredentialsForServerUrl: (...args: unknown[]) => getCredentialsForServerUrlSpy(...args),
-            },
-            subscribeHomeCredentialMutations: () => () => {},
-        });
-    });
-}
-
-// Contract-complete fetch result for `fetchAndApplySessions` doubles: the cache
-// reads `result.current` and advances the ordinary-session-list frontier from the
-// pagination facts, so doubles must return the real SessionListFetchResult shape.
-function completeSessionListFetchResult(sessionIds: readonly string[] = []): SessionListFetchResult {
-    return {
-        sessionIds: [...sessionIds],
-        nextCursor: null,
-        hasNext: false,
-        attentionNextCursor: null,
-        attentionHasNext: false,
-        current: true,
-        source: 'v2',
-    };
-}
-
-function mockReachabilityOnline() {
-    vi.doMock('@/sync/runtime/connectivity/serverReachabilitySupervisorPool', async (importOriginal) => {
-        const actual = await importOriginal<typeof import('@/sync/runtime/connectivity/serverReachabilitySupervisorPool')>();
-        return {
-            ...actual,
-            subscribeServerReachabilityNetworkAllowed: (listener: (allowed: boolean) => void) => {
-                listener(true);
-                return () => {};
-            },
-            subscribeServerReachabilityState: (_serverUrl: string, listener: (state: any) => void) => {
-                const timer = setTimeout(() => {
-                    listener(onlineState());
-                }, 0);
-                return () => clearTimeout(timer);
-            },
-            acquireServerReachabilitySupervisor: async () => ({
-                release: async () => {},
-            }),
-            reportServerUnreachable: () => {},
-            resetServerReachabilitySupervisors: async () => {},
-        };
-    });
-}
-
-function mockServerProfiles() {
-    vi.doMock('@/sync/domains/server/serverProfiles', () => createServerProfilesModuleMock({
-        listServerProfiles: () => listServerProfilesSpy(),
-        overrides: {
-            loadHomeViewState: () => null,
-            subscribeHomeViewState: (listener) => {
-                homeViewStateListeners.add(listener);
-                return () => homeViewStateListeners.delete(listener);
-            },
-            subscribeServerProfiles: (listener) => {
-                serverProfileListeners.add(listener);
-                return () => serverProfileListeners.delete(listener);
-            },
-        },
-    }));
-}
-
-function emitServerProfilesChanged(): void {
-    serverProfilesGeneration += 1;
-    for (const listener of serverProfileListeners) listener(serverProfilesGeneration);
-}
-
-async function flushConcurrentCacheStartup(timerCount = 4): Promise<void> {
-    await vi.advanceTimersByTimeAsync(1);
-    for (let index = 0; index < timerCount; index += 1) {
-        await Promise.resolve();
-    }
-    await vi.advanceTimersByTimeAsync(1);
-    await vi.advanceTimersByTimeAsync(REFRESH_DEBOUNCE_TEST_MS + 1);
-}
-
-async function flushConcurrentCacheReconcileOnly(): Promise<void> {
-    await vi.advanceTimersToNextTimerAsync();
-}
-
-async function flushConcurrentCachePeriodicRefresh(): Promise<void> {
-    await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
-    await vi.advanceTimersToNextTimerAsync();
-}
-
-async function waitForConcurrentServerCacheMaterialization(
-    storage: ConcurrentCacheStorage,
-    serverId: string,
-): Promise<void> {
-    await vi.waitFor(() => {
-        expect(storage.getState().concurrentSessionListCacheByServerId).toHaveProperty(serverId);
-        expect(storage.getState().machineListByServerId).toHaveProperty(serverId);
-    });
-}
-
-beforeEach(() => {
-    previousTransferRoutePositiveTtlMs = process.env.EXPO_PUBLIC_HAPPIER_MACHINE_TRANSFER_ROUTE_CACHE_POSITIVE_TTL_MS;
-    vi.resetModules();
-    vi.useFakeTimers();
-    ioSpy.mockReset();
-    getCredentialsForServerUrlSpy.mockReset();
-    listServerProfilesSpy.mockReset();
-    getActiveServerSnapshotSpy.mockReset();
-    invalidateCachedTransferRoutesForServerSpy.mockReset();
-    serverProfileListeners.clear();
-    homeViewStateListeners.clear();
-    serverProfilesGeneration = 0;
-
-});
-
-afterEach(async () => {
-    const cache = await import('./concurrentSessionCache');
-    cache.stopConcurrentSessionCacheSync();
-    vi.useRealTimers();
-    delete process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT;
-    if (previousTransferRoutePositiveTtlMs === undefined) {
-        delete process.env.EXPO_PUBLIC_HAPPIER_MACHINE_TRANSFER_ROUTE_CACHE_POSITIVE_TTL_MS;
-    } else {
-        process.env.EXPO_PUBLIC_HAPPIER_MACHINE_TRANSFER_ROUTE_CACHE_POSITIVE_TTL_MS = previousTransferRoutePositiveTtlMs;
-    }
-});
+const rows = () => h.storage.getState().sessionListRowsByServerId[h.homeB.id];
+const machines = () => h.storage.getState().machineListByServerId[h.homeB.id];
+const route = (serverId = h.homeB.id, remoteMachineId = 'machine-b') => ({ serverId, remoteMachineId });
 
 describe('concurrent session cache socket routing', () => {
-    it('reuses per-server session data key caches across concurrent refreshes', async () => {
-        process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = '1';
-        mockReachabilityOnline();
-
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockImplementation(async (serverUrl: string) => {
-            if (serverUrl === 'https://stack-b.example.test') {
-                return { token: ACCOUNT_B_TOKEN, secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' };
+    it('keeps cold encrypted rows private and retains demanded per-Home metadata without reopening Session data keys', async () => {
+        // Observe the real owner so accidental content demand is visible at
+        // every batch size, including batches below the Worker threshold.
+        const decryptDataKeys = vi.spyOn(Encryption.prototype, 'decryptEncryptionKeys');
+        const secret = new Uint8Array(32).fill(7);
+        const encryption = await Encryption.create(secret);
+        await h.network.addHome(h.homeB.serverUrl, h.homeB.accountId, {
+            credentials: { token: h.homeB.token, secret: encodeBase64(secret, 'base64url') }, encryptionMode: 'e2ee',
+        });
+        const encryptedRows = await Promise.all(Array.from({ length: 5 }, async (_, index) => {
+            const id = 'encrypted-session-' + index;
+            const key = new Uint8Array(32).fill(index + 1);
+            const row = h.session({ id, active: true, activeAt: 2, metadata: { path: '/repo', host: 'test', name: 'Encrypted ' + index } });
+            if (row.ownerMetadata?.t !== 'plain') throw new Error('Expected a Plain fixture to seal');
+            await encryption.initializeSessions(new Map([[id, key]]));
+            const cipher = encryption.getSessionEncryption(id);
+            if (!cipher) throw new Error('Expected the Session fixture cipher');
+            return { ...row, encryptionMode: 'e2ee' as const,
+                metadata: await cipher.encryptRaw(JSON.parse(row.metadata)),
+                ownerMetadata: sealSessionOwnerMetadataEnvelopeV1({ material: { type: 'legacy', secret },
+                    ownerMetadata: row.ownerMetadata.v, randomBytes: length => new Uint8Array(length).fill(index + 3) }),
+                dataEncryptionKey: encodeBase64(await encryption.encryptEncryptionKey(key)),
+            };
+        }));
+        h.setSessions(h.homeB, encryptedRows);
+        h.setResponder(async input => {
+            const url = new URL(String(input));
+            if (url.origin !== h.homeB.serverUrl) return null;
+            const path = url.pathname;
+            if (path === '/v1/account/encryption/currentness') return Response.json({ mode: 'e2ee', version: 1,
+                signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1,
+                recipientEnvelopeReadiness: { status: 'available' } });
+            if (path === '/v2/sessions/active') return Response.json({ sessions: encryptedRows, nextCursor: null, hasNext: false });
+            if (path.startsWith('/v2/sessions/')) {
+                const row = encryptedRows.find(row => row.id === decodeURIComponent(path.slice('/v2/sessions/'.length)));
+                return row ? Response.json({ session: row })
+                    : Response.json({ error: 'Session not found' }, { status: 404 });
             }
             return null;
         });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        vi.doMock('socket.io-client', () => ({
-            io: (...args: unknown[]) => ioSpy(...args),
-        }));
-        mockTokenStorageBoundary();
-        mockServerProfiles();
-        vi.doMock('@/sync/domains/server/serverRuntime', () => ({
-            getActiveServerSnapshot: () => getActiveServerSnapshotSpy(),
-            subscribeActiveServer: () => () => {},
-        }));
-        vi.doMock('@/sync/encryption/encryption', () => ({
-            Encryption: {
-                create: async () => ({}) as unknown,
-            },
-        }));
-
-        const seenExistingKeys: number[] = [];
-        const seenExistingEnvelopes: Array<string | null> = [];
-        const sessionDataKeysArgs: Array<Map<string, Uint8Array>> = [];
-        const sessionDataKeyEnvelopesArgs: Array<Map<string, string> | undefined> = [];
-        vi.doMock('@/sync/engine/sessions/sessionSnapshot', () => ({
-            fetchAndApplySessions: async ({
-                sessionDataKeys,
-                sessionDataKeyEnvelopes,
-                applySessions,
-            }: {
-                sessionDataKeys: Map<string, Uint8Array>;
-                sessionDataKeyEnvelopes?: Map<string, string>;
-                applySessions: (sessions: unknown[]) => void;
-            }) => {
-                seenExistingKeys.push(sessionDataKeys.get('session-b')?.[0] ?? 0);
-                seenExistingEnvelopes.push(sessionDataKeyEnvelopes?.get('session-b') ?? null);
-                sessionDataKeysArgs.push(sessionDataKeys);
-                sessionDataKeyEnvelopesArgs.push(sessionDataKeyEnvelopes);
-                sessionDataKeys.set('session-b', new Uint8Array([sessionDataKeysArgs.length]));
-                sessionDataKeyEnvelopes?.set('session-b', `envelope-${sessionDataKeysArgs.length}`);
-                applySessions([]);
-                return completeSessionListFetchResult();
-            },
-        }));
-        vi.doMock('@/sync/engine/machines/syncMachines', () => ({
-            fetchAndApplyMachines: async ({ applyMachines }: { applyMachines: (machines: unknown[]) => void }) => {
-                applyMachines([]);
-            },
-        }));
-
-        const { storage } = await import('@/sync/domains/state/storageStore');
-        const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-        storage.setState((state) => ({
-            ...state,
-            settings: {
-                ...state.settings,
-                ...settingsDefaults,
-                serverSelectionGroups: [
-                    {
-                        id: 'group-main',
-                        name: 'Main',
-                        serverIds: ['server-a', 'server-b'],
-                        presentation: 'grouped',
-                    },
-                ],
-                serverSelectionActiveTargetKind: 'group',
-                serverSelectionActiveTargetId: 'group-main',
-            },
-        }));
-
-        const { startConcurrentSessionCacheSync, stopConcurrentSessionCacheSync } = await import('./concurrentSessionCache');
-        startConcurrentSessionCacheSync();
-
-        await flushConcurrentCacheStartup();
-        await flushConcurrentCachePeriodicRefresh();
-
-        expect(getCredentialsForServerUrlSpy).toHaveBeenCalled();
-        expect(ioSpy).toHaveBeenCalled();
-        expect(sessionDataKeysArgs.length).toBeGreaterThanOrEqual(2);
-        expect(sessionDataKeysArgs[1]).toBe(sessionDataKeysArgs[0]);
-        expect(sessionDataKeyEnvelopesArgs[0]).toBeInstanceOf(Map);
-        expect(sessionDataKeyEnvelopesArgs[1]).toBe(sessionDataKeyEnvelopesArgs[0]);
-        expect(seenExistingKeys.slice(0, 2)).toEqual([0, 1]);
-        expect(seenExistingEnvelopes.slice(0, 2)).toEqual([null, 'envelope-1']);
-
-        stopConcurrentSessionCacheSync();
+        try {
+            await h.start(); await h.ready();
+            expect(decryptDataKeys.mock.calls.flatMap(([values]) => values)).toEqual([]);
+            expect(Object.keys(rows() ?? {})).toEqual(encryptedRows.map(row => row.id));
+            for (const row of encryptedRows) {
+                expect(rows()?.[row.id]?.metadata?.name).toBeUndefined();
+                expect(h.storage.getState().sessionListRowsByServerId[h.homeA.id]?.[row.id]).toBeUndefined();
+            }
+            expect(h.socket().serverUrl).toBe(h.homeB.serverUrl);
+            const { fetchSessionByIdWithServerScope } = await import('./serverScopedRpc/fetchSessionByIdWithServerScope');
+            const { buildSessionListRenderableFromSession } = await import('@/sync/domains/session/listing/sessionListRenderable');
+            const sessionDataKeys = new Map<string, Uint8Array>();
+            const sessionDataKeyEnvelopes = new Map<string, string>();
+            const readDemandedSession = (sessionId: string) => fetchSessionByIdWithServerScope({
+                sessionId, serverId: h.homeB.id, contentDemand: 'session',
+                activeCredentials: { token: h.homeA.token },
+                activeRequest: h.network.request,
+                sessionDataKeys, sessionDataKeyEnvelopes, includeTurnsProjection: false,
+                getCurrentSessionListRenderable: id => rows()?.[id],
+                applySessions: sessions => h.storage.getState().applyServerScopedSessionListRows(
+                    h.homeB.id, sessions.map(session => buildSessionListRenderableFromSession(session, rows()?.[session.id])),
+                    { source: 'rowOnly', mode: 'append' },
+                ),
+                log: { log() {} },
+            });
+            for (const row of encryptedRows) expect((await readDemandedSession(row.id)).ok).toBe(true);
+            expect(decryptDataKeys.mock.calls.flatMap(([values]) => values)).toHaveLength(encryptedRows.length);
+            expect(rows()?.['encrypted-session-0']?.metadata?.name).toBe('Encrypted 0');
+            decryptDataKeys.mockClear();
+            for (const row of encryptedRows) expect((await readDemandedSession(row.id)).ok).toBe(true);
+            expect(decryptDataKeys.mock.calls.flatMap(([values]) => values)).toEqual([]);
+            const demandedRows = rows();
+            await h.refresh();
+            for (const [index, row] of encryptedRows.entries()) {
+                expect(rows()?.[row.id]?.metadata).toBe(demandedRows?.[row.id]?.metadata);
+                expect(rows()?.[row.id]?.metadata?.name).toBe('Encrypted ' + index);
+                expect(rows()?.[row.id]?.encryptedContentAvailability).toBe(demandedRows?.[row.id]?.encryptedContentAvailability);
+            }
+            expect(decryptDataKeys.mock.calls.flatMap(([values]) => values)).toEqual([]);
+            // The first lean refresh binds owner provenance to the concurrent
+            // runtime's retained credentials; identical later refreshes reuse it.
+            const initialRows = rows();
+            await h.refresh();
+            expect(rows()).toBe(initialRows);
+            for (const row of encryptedRows) expect(rows()?.[row.id]).toBe(initialRows?.[row.id]);
+            expect(rows()?.['encrypted-session-4']?.metadata?.name).toBe('Encrypted 4');
+            expect(h.requests('/v2/sessions/encrypted-session-0').map(request => request.url.origin))
+                .toEqual([h.homeB.serverUrl, h.homeB.serverUrl]);
+            expect(h.storage.getState().sessionListRowsByServerId[h.homeA.id]?.['encrypted-session-0']).toBeUndefined();
+            expect(decryptDataKeys.mock.calls.flatMap(([values]) => values)).toEqual([]);
+        } finally {
+            decryptDataKeys.mockRestore();
+        }
     });
 
     it('replaces stale machine entries when an authoritative refresh omits a removed machine', async () => {
-        process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = '1';
-        mockReachabilityOnline();
-
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockImplementation(async (serverUrl: string) => {
-            if (serverUrl === 'https://stack-b.example.test') {
-                return { token: ACCOUNT_B_TOKEN, secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' };
-            }
-            return null;
-        });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        vi.doMock('socket.io-client', () => ({
-            io: (...args: unknown[]) => ioSpy(...args),
-        }));
-        mockTokenStorageBoundary();
-        mockServerProfiles();
-        vi.doMock('@/sync/domains/server/serverRuntime', () => ({
-            getActiveServerSnapshot: () => getActiveServerSnapshotSpy(),
-            subscribeActiveServer: () => () => {},
-        }));
-        vi.doMock('@/sync/encryption/encryption', () => ({
-            Encryption: {
-                create: async () => ({}) as unknown,
-            },
-        }));
-        vi.doMock('@/sync/engine/sessions/sessionSnapshot', () => ({
-            fetchAndApplySessions: async ({ applySessions }: { applySessions: (sessions: unknown[]) => void }) => {
-                applySessions([]);
-                return completeSessionListFetchResult();
-            },
-        }));
-        const fetchAndApplyMachinesSpy = vi.fn(async ({ applyMachines }: { applyMachines: (machines: unknown[]) => void }) => {
-            const call = fetchAndApplyMachinesSpy.mock.calls.length;
-            if (call === 1) {
-                applyMachines([
-                    {
-                        id: 'machine-1',
-                        seq: 1,
-                        createdAt: 1,
-                        updatedAt: 1,
-                        active: true,
-                        activeAt: 1,
-                        metadata: { host: 'one' },
-                        metadataVersion: 1,
-                        daemonState: null,
-                        daemonStateVersion: 0,
-                    },
-                    {
-                        id: 'machine-2',
-                        seq: 1,
-                        createdAt: 1,
-                        updatedAt: 1,
-                        active: false,
-                        activeAt: 1,
-                        metadata: { host: 'two' },
-                        metadataVersion: 1,
-                        daemonState: null,
-                        daemonStateVersion: 0,
-                    },
-                ]);
-                return;
-            }
-
-            // Authoritative refresh response: machine-2 has been removed.
-            applyMachines([
-                {
-                    id: 'machine-1',
-                    seq: 2,
-                    createdAt: 1,
-                    updatedAt: 2,
-                    active: true,
-                    activeAt: 2,
-                    metadata: { host: 'one' },
-                    metadataVersion: 1,
-                    daemonState: null,
-                    daemonStateVersion: 0,
-                },
-            ]);
-        });
-        vi.doMock('@/sync/engine/machines/syncMachines', () => ({
-            fetchAndApplyMachines: (...args: any[]) => (fetchAndApplyMachinesSpy as any)(...args),
-        }));
-
-        const { storage } = await import('@/sync/domains/state/storageStore');
-        const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-        storage.setState((state) => ({
-            ...state,
-            settings: {
-                ...state.settings,
-                ...settingsDefaults,
-                sessionListActiveGroupingV1: 'project',
-                sessionListInactiveGroupingV1: 'project',
-                serverSelectionGroups: [
-                    {
-                        id: 'group-main',
-                        name: 'Main',
-                        serverIds: ['server-a', 'server-b'],
-                        presentation: 'grouped',
-                    },
-                ],
-                serverSelectionActiveTargetKind: 'group',
-                serverSelectionActiveTargetId: 'group-main',
-            },
-        }));
-
-        const { startConcurrentSessionCacheSync, stopConcurrentSessionCacheSync } = await import('./concurrentSessionCache');
-        startConcurrentSessionCacheSync();
-
-        await flushConcurrentCacheStartup();
-
-        const initial = (storage.getState() as any).machineListByServerId?.['server-b'] ?? [];
-        expect(initial.map((m: any) => m.id).sort()).toEqual(['machine-1', 'machine-2']);
-
-        // Trigger periodic refresh (default is 5 minutes).
-        await flushConcurrentCachePeriodicRefresh();
-
-        const after = (storage.getState() as any).machineListByServerId?.['server-b'] ?? [];
-        expect(after.map((m: any) => m.id)).toEqual(['machine-1']);
-        expect(after[0]?.seq).toBe(2);
-
-        stopConcurrentSessionCacheSync();
+        h.setMachines(h.homeB, [h.machine(h.homeB), h.machine(h.homeB, 'removed-machine')]);
+        await h.start(); await h.ready();
+        expect(machines()?.map(machine => machine.id)).toEqual(['machine-b', 'removed-machine']);
+        h.setMachines(h.homeB, [{ ...h.machine(h.homeB), seq: 2 }]);
+        await h.refreshConcurrentMachineList(h.homeB.id);
+        expect(machines()?.map(machine => machine.id)).toEqual(['machine-b']);
+        expect(machines()?.[0]?.seq).toBe(2);
     });
 
-    it('invalidates only the non-active server machine route when daemon state advances', async () => {
-        process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = '1';
-        process.env.EXPO_PUBLIC_HAPPIER_MACHINE_TRANSFER_ROUTE_CACHE_POSITIVE_TTL_MS = '3600000';
-        mockReachabilityOnline();
-
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockImplementation(async (serverUrl: string) => {
-            if (serverUrl === 'https://stack-b.example.test') {
-                return { token: ACCOUNT_B_TOKEN, secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' };
-            }
-            return null;
-        });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        vi.doMock('socket.io-client', () => ({
-            io: (...args: unknown[]) => ioSpy(...args),
-        }));
-        mockTokenStorageBoundary();
-        mockServerProfiles();
-        vi.doMock('@/sync/domains/server/serverRuntime', () => ({
-            getActiveServerSnapshot: () => getActiveServerSnapshotSpy(),
-            subscribeActiveServer: () => () => {},
-        }));
-        vi.doUnmock('@/sync/domains/transfers/runtime/transferRouteCache');
-        vi.doMock('@/sync/encryption/encryption', () => ({
-            Encryption: {
-                create: async () => ({}) as unknown,
-            },
-        }));
-        vi.doMock('@/sync/engine/sessions/sessionSnapshot', () => ({
-            fetchAndApplySessions: async ({ applySessions }: { applySessions: (sessions: unknown[]) => void }) => {
-                applySessions([]);
-                return completeSessionListFetchResult();
-            },
-        }));
-
-        let daemonStateVersion = 1;
-        vi.doMock('@/sync/engine/machines/syncMachines', () => ({
-            fetchAndApplyMachines: async ({ applyMachines }: { applyMachines: (machines: unknown[]) => void }) => {
-                applyMachines([{
-                    id: 'machine-b',
-                    seq: 1,
-                    createdAt: 1000,
-                    updatedAt: 2000,
-                    active: true,
-                    activeAt: 2000,
-                    metadata: { host: 'b-host' },
-                    metadataVersion: 1,
-                    daemonState: null,
-                    daemonStateVersion,
-                }]);
-            },
-        }));
-
-        const { storage } = await import('@/sync/domains/state/storageStore');
-        const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-        storage.setState((state) => ({
-            ...state,
-            settings: {
-                ...state.settings,
-                ...settingsDefaults,
-                serverSelectionGroups: [
-                    {
-                        id: 'group-main',
-                        name: 'Main',
-                        serverIds: ['server-a', 'server-b'],
-                        presentation: 'grouped',
-                    },
-                ],
-                serverSelectionActiveTargetKind: 'group',
-                serverSelectionActiveTargetId: 'group-main',
-            },
-        }));
-
-        const { startConcurrentSessionCacheSync, stopConcurrentSessionCacheSync } = await import('./concurrentSessionCache');
-        startConcurrentSessionCacheSync();
-        await flushConcurrentCacheStartup();
-        expect(storage.getState().machineListByServerId['server-b']?.[0]?.daemonStateVersion).toBe(1);
-
-        const {
-            readCachedMachineRpcDirectRoute,
-            recordCachedMachineRpcDirectRouteViable,
-            subscribeCachedMachineRpcDirectRoute,
-        } = await import('@/sync/domains/transfers/runtime/transferRouteCache');
-        recordCachedMachineRpcDirectRouteViable({ serverId: 'server-b', remoteMachineId: 'machine-b' });
-        recordCachedMachineRpcDirectRouteViable({ serverId: 'server-b', remoteMachineId: 'machine-other' });
-        recordCachedMachineRpcDirectRouteViable({ serverId: 'server-c', remoteMachineId: 'machine-b' });
-        const serverBRouteListener = vi.fn();
-        const serverCRouteListener = vi.fn();
-        const unsubscribeServerB = subscribeCachedMachineRpcDirectRoute(
-            { serverId: 'server-b', remoteMachineId: 'machine-b' },
-            serverBRouteListener,
-        );
-        const unsubscribeServerC = subscribeCachedMachineRpcDirectRoute(
-            { serverId: 'server-c', remoteMachineId: 'machine-b' },
-            serverCRouteListener,
-        );
-
-        await flushConcurrentCachePeriodicRefresh();
-        expect(serverBRouteListener).not.toHaveBeenCalled();
-        expect(readCachedMachineRpcDirectRoute({ serverId: 'server-b', remoteMachineId: 'machine-b' }))
-            .toMatchObject({ status: 'viable' });
-
-        daemonStateVersion = 2;
-        await flushConcurrentCachePeriodicRefresh();
-
-        expect(storage.getState().machineListByServerId['server-b']?.[0]?.daemonStateVersion).toBe(2);
-        expect(serverBRouteListener).toHaveBeenCalledTimes(1);
-        expect(serverCRouteListener).not.toHaveBeenCalled();
-        expect(readCachedMachineRpcDirectRoute({ serverId: 'server-b', remoteMachineId: 'machine-b' }))
-            .toEqual({ status: 'unknown' });
-        expect(readCachedMachineRpcDirectRoute({ serverId: 'server-b', remoteMachineId: 'machine-other' }))
-            .toMatchObject({ status: 'viable' });
-        expect(readCachedMachineRpcDirectRoute({ serverId: 'server-c', remoteMachineId: 'machine-b' }))
-            .toMatchObject({ status: 'viable' });
-
-        unsubscribeServerB();
-        unsubscribeServerC();
-        stopConcurrentSessionCacheSync();
+    it('invalidates only the non-active Home machine route when daemon state advances', async () => {
+        h.setMachines(h.homeB, [{ ...h.machine(h.homeB), daemonStateVersion: 1 }]);
+        await h.start(); await h.ready();
+        for (const key of [route(), route(h.homeB.id, 'other-machine'), route(h.homeC.id)]) {
+            routes.recordCachedMachineRpcDirectRouteViable(key);
+        }
+        await h.refreshConcurrentMachineList(h.homeB.id);
+        expect(routes.readCachedMachineRpcDirectRoute(route())).toMatchObject({ status: 'viable' });
+        h.setMachines(h.homeB, [{ ...h.machine(h.homeB), daemonStateVersion: 2 }]);
+        await h.refreshConcurrentMachineList(h.homeB.id);
+        expect(machines()?.[0]?.daemonStateVersion).toBe(2);
+        expect(routes.readCachedMachineRpcDirectRoute(route())).toEqual({ status: 'unknown' });
+        expect(routes.readCachedMachineRpcDirectRoute(route(h.homeB.id, 'other-machine'))).toMatchObject({ status: 'viable' });
+        expect(routes.readCachedMachineRpcDirectRoute(route(h.homeC.id))).toMatchObject({ status: 'viable' });
     });
 
-    it('keeps canonical rows stable without copying them into the concurrent server cache', async () => {
-        process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = '1';
-        mockReachabilityOnline();
-
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockImplementation(async (serverUrl: string) => {
-            if (serverUrl === 'https://stack-b.example.test') {
-                return { token: ACCOUNT_B_TOKEN, secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' };
-            }
-            return null;
-        });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        let sessionRefreshCount = 0;
-        vi.doMock('socket.io-client', () => ({
-            io: (...args: unknown[]) => ioSpy(...args),
-        }));
-        mockTokenStorageBoundary();
-        mockServerProfiles();
-        vi.doMock('@/sync/domains/server/serverRuntime', () => ({
-            getActiveServerSnapshot: () => getActiveServerSnapshotSpy(),
-            subscribeActiveServer: () => () => {},
-        }));
-        vi.doMock('@/sync/encryption/encryption', () => ({
-            Encryption: {
-                create: async () => ({}) as unknown,
-            },
-        }));
-        vi.doMock('@/sync/engine/sessions/sessionSnapshot', () => ({
-            fetchAndApplySessions: async ({
-                credentials,
-                applySessionListRenderables,
-                applySessionListRenderablePatches,
-                includeActiveSessionRows,
-                includeSessionListAttentionRows,
-            }: {
-                credentials: { token: string };
-                applySessionListRenderables: (sessions: unknown[]) => void;
-                applySessionListRenderablePatches: (patches: unknown[]) => void;
-                includeActiveSessionRows?: boolean;
-                includeSessionListAttentionRows?: boolean;
-            }) => {
-                expect(includeActiveSessionRows).toBe(true);
-                expect(includeSessionListAttentionRows).toBe(true);
-                sessionRefreshCount += 1;
-                if (credentials.token !== ACCOUNT_B_TOKEN) {
-                    applySessionListRenderables([]);
-                    return completeSessionListFetchResult();
-                }
-                const hydratedMetadata = {
-                    name: 'Hydrated session',
-                    machineId: 'machine-b',
-                    path: '/workspace/b',
-                    host: 'b-host',
-                };
-                applySessionListRenderables([{
-                    id: 'session-b',
-                    seq: 1,
-                    createdAt: 1000,
-                    updatedAt: 2000,
-                    active: true,
-                    activeAt: 2000,
-                    metadata: sessionRefreshCount > 1
-                        ? hydratedMetadata
-                        : { machineId: 'machine-b', path: '/workspace/b', host: 'b-host' },
-                    metadataVersion: 1,
-                    agentState: null,
-                    agentStateVersion: 0,
-                    thinking: false,
-                    thinkingAt: 0,
-                    presence: 'online',
-                }]);
-                if (sessionRefreshCount === 1) {
-                    // Production hydration can publish before the independent machine
-                    // request finishes. The scoped base row must already exist so this
-                    // current patch is not dropped.
-                    applySessionListRenderablePatches([{
-                        sessionId: 'session-b',
-                        patch: { metadata: hydratedMetadata },
-                    }]);
-                }
-                return completeSessionListFetchResult();
-            },
-        }));
-        vi.doMock('@/sync/engine/machines/syncMachines', () => ({
-            fetchAndApplyMachines: async ({
-                credentials,
-                applyMachines,
-            }: {
-                credentials: { token: string };
-                applyMachines: (machines: unknown[]) => void;
-            }) => {
-                if (credentials.token !== ACCOUNT_B_TOKEN) {
-                    applyMachines([]);
-                    return;
-                }
-                applyMachines([{
-                    id: 'machine-b',
-                    seq: 1,
-                    createdAt: 1000,
-                    updatedAt: 2000,
-                    active: true,
-                    activeAt: 2000,
-                    metadata: { host: 'b-host', path: '/workspace/b' },
-                    metadataVersion: 1,
-                    daemonState: null,
-                    daemonStateVersion: 0,
-                }]);
-            },
-        }));
-
-        const { storage } = await import('@/sync/domains/state/storageStore');
-        const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-        storage.setState((state) => ({
-            ...state,
-            settings: {
-                ...state.settings,
-                ...settingsDefaults,
-                serverSelectionGroups: [
-                    {
-                        id: 'group-main',
-                        name: 'Main',
-                        serverIds: ['server-a', 'server-b'],
-                        presentation: 'grouped',
-                    },
-                ],
-                serverSelectionActiveTargetKind: 'group',
-                serverSelectionActiveTargetId: 'group-main',
-            },
-        }));
-
-        const { startConcurrentSessionCacheSync, stopConcurrentSessionCacheSync } = await import('./concurrentSessionCache');
-        startConcurrentSessionCacheSync();
-        await flushConcurrentCacheStartup();
-
-        const beforeState = storage.getState();
-        const before = storage.getState().concurrentSessionListCacheByServerId['server-b'];
-        // A successful refresh also publishes listObservation metadata on the entry;
-        // this test owns serverName stability, not the observation shape.
-        expect(before).toMatchObject({ serverName: 'Server B' });
-        expect(storage.getState().sessionListRowsByServerId?.['server-b']?.['session-b']?.metadata?.name)
-            .toBe('Hydrated session');
-        expect(Array.isArray(storage.getState().sessionListIndexByServerId?.['server-b'])).toBe(true);
-        expect(storage.getState().sessionListIndexByServerId?.['server-b']).toEqual(
-            expect.arrayContaining([
-                expect.objectContaining({
-                    type: 'header',
-                    headerKind: 'project',
-                    machine: expect.objectContaining({
-                        metadata: expect.objectContaining({
-                            host: 'b-host',
-                        }),
-                    }),
-                }),
-            ]),
-        );
-        expect(sessionRefreshCount).toBeGreaterThan(0);
-
-        await flushConcurrentCachePeriodicRefresh();
-
-        // The periodic refresh ran again against unchanged data. Canonical rows are
-        // value-deduplicated and stay referentially untouched (no copying into the
-        // cache path), while the Home's own list observation may truthfully pass
-        // through `refreshing` → `ready` and rewrite only its cache entry.
-        expect(sessionRefreshCount).toBeGreaterThanOrEqual(2);
-        expect(storage.getState().sessionListRowsByServerId).toBe(beforeState.sessionListRowsByServerId);
-        const after = storage.getState().concurrentSessionListCacheByServerId['server-b'];
-        expect(after).toMatchObject({
-            serverName: 'Server B',
-            listObservation: { phase: 'ready' },
-        });
-
-        stopConcurrentSessionCacheSync();
+    it('keeps the active machine writer authoritative without withdrawing another Home or Machine route', async () => {
+        await h.start(); await h.ready();
+        const initial = h.storage.getState();
+        h.storage.setState({ profile: { ...initial.profile, id: h.homeA.accountId },
+            profileScope: { serverId: h.homeA.id, accountId: h.homeA.accountId } });
+        try {
+            const machine = createMachineFixture({ id: 'active-machine', daemonStateVersion: 1 });
+            const source = { sourceServerId: h.homeA.id, sourceAccountId: h.homeA.accountId };
+            h.storage.getState().applyMachines([machine], true, source);
+            const active = route(h.homeA.id, machine.id);
+            const otherMachine = route(h.homeA.id, 'other-machine');
+            const otherHome = route(h.homeB.id, machine.id);
+            for (const key of [active, otherMachine, otherHome]) routes.recordCachedMachineRpcDirectRouteViable(key);
+            h.storage.getState().applyMachines([{ ...machine, daemonStateVersion: 2 }], true, source);
+            expect(h.storage.getState().machines[machine.id]?.daemonStateVersion).toBe(2);
+            expect(routes.readCachedMachineRpcDirectRoute(active)).toEqual({ status: 'unknown' });
+            expect(routes.readCachedMachineRpcDirectRoute(otherMachine)).toMatchObject({ status: 'viable' });
+            expect(routes.readCachedMachineRpcDirectRoute(otherHome)).toMatchObject({ status: 'viable' });
+        } finally { h.storage.setState({ profile: initial.profile, profileScope: initial.profileScope }); }
     });
 
-    it('keeps sessionListIndexByServerId stable when only non-structural fields change', async () => {
-        process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = '1';
-        mockReachabilityOnline();
-
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockImplementation(async (serverUrl: string) => {
-            if (serverUrl === 'https://stack-b.example.test') {
-                return { token: ACCOUNT_B_TOKEN, secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' };
-            }
-            return null;
-        });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        let sessionRefreshCount = 0;
-        vi.doMock('socket.io-client', () => ({
-            io: (...args: unknown[]) => ioSpy(...args),
-        }));
-        mockTokenStorageBoundary();
-        mockServerProfiles();
-        vi.doMock('@/sync/domains/server/serverRuntime', () => ({
-            getActiveServerSnapshot: () => getActiveServerSnapshotSpy(),
-            subscribeActiveServer: () => () => {},
-        }));
-        vi.doMock('@/sync/encryption/encryption', () => ({
-            Encryption: {
-                create: async () => ({}) as unknown,
-            },
-        }));
-
-        vi.doMock('@/sync/engine/sessions/sessionSnapshot', () => ({
-            fetchAndApplySessions: async ({
-                credentials,
-                applySessions,
-            }: {
-                credentials: { token: string };
-                applySessions: (sessions: unknown[]) => void;
-            }) => {
-                sessionRefreshCount += 1;
-                if (credentials.token !== ACCOUNT_B_TOKEN) {
-                    applySessions([]);
-                    return completeSessionListFetchResult();
-                }
-                const updatedAt = sessionRefreshCount === 1 ? 2000 : 3000;
-                applySessions([{
-                    id: 'session-b',
-                    seq: 1,
-                    createdAt: 1000,
-                    updatedAt,
-                    active: true,
-                    activeAt: 2000,
-                    metadata: { machineId: 'machine-b', path: '/workspace/b', host: 'b-host' },
-                    metadataVersion: 1,
-                    agentState: null,
-                    agentStateVersion: 0,
-                    thinking: false,
-                    thinkingAt: 0,
-                    presence: 'online',
-                }]);
-                return completeSessionListFetchResult();
-            },
-        }));
-        vi.doMock('@/sync/engine/machines/syncMachines', () => ({
-            fetchAndApplyMachines: async ({
-                credentials,
-                applyMachines,
-            }: {
-                credentials: { token: string };
-                applyMachines: (machines: unknown[]) => void;
-            }) => {
-                if (credentials.token !== ACCOUNT_B_TOKEN) {
-                    applyMachines([]);
-                    return;
-                }
-                applyMachines([{
-                    id: 'machine-b',
-                    seq: 1,
-                    createdAt: 1000,
-                    updatedAt: 2000,
-                    active: true,
-                    activeAt: 2000,
-                    metadata: { host: 'b-host', path: '/workspace/b' },
-                    metadataVersion: 1,
-                    daemonState: null,
-                    daemonStateVersion: 0,
-                }]);
-            },
-        }));
-
-        const { storage } = await import('@/sync/domains/state/storageStore');
-        const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-        storage.setState((state) => ({
-            ...state,
-            settings: {
-                ...state.settings,
-                ...settingsDefaults,
-                serverSelectionGroups: [
-                    {
-                        id: 'group-main',
-                        name: 'Main',
-                        serverIds: ['server-a', 'server-b'],
-                        presentation: 'grouped',
-                    },
-                ],
-                serverSelectionActiveTargetKind: 'group',
-                serverSelectionActiveTargetId: 'group-main',
-            },
-        }));
-
-        const { startConcurrentSessionCacheSync, stopConcurrentSessionCacheSync } = await import('./concurrentSessionCache');
-        startConcurrentSessionCacheSync();
-        await flushConcurrentCacheStartup();
-
-        const beforeIndex = storage.getState().sessionListIndexByServerId?.['server-b'] ?? null;
-        const beforeRows = storage.getState().sessionListRowsByServerId?.['server-b'] ?? null;
-        expect(Array.isArray(beforeIndex)).toBe(true);
-        expect(beforeRows && typeof beforeRows === 'object').toBe(true);
-
-        await flushConcurrentCachePeriodicRefresh();
-
-        const afterIndex = storage.getState().sessionListIndexByServerId?.['server-b'] ?? null;
-        const afterRows = storage.getState().sessionListRowsByServerId?.['server-b'] ?? null;
-        expect(afterIndex).toBe(beforeIndex);
-        expect(afterRows).not.toBe(beforeRows);
-        expect(storage.getState().sessionListRowsByServerId?.['server-b']?.['session-b']?.updatedAt).toBe(3000);
-        expect(sessionRefreshCount).toBeGreaterThanOrEqual(2);
-
-        stopConcurrentSessionCacheSync();
+    it('keeps canonical rows stable without copying them into the concurrent Home cache', async () => {
+        h.setSessions(h.homeB, [h.session({ id: 'session-b', metadata: { path: '/repo', host: 'test', name: 'Secondary Session' } })]);
+        await h.start(); await h.ready();
+        const initialRows = h.storage.getState().sessionListRowsByServerId;
+        const projection = h.storage.getState().concurrentSessionListCacheByServerId[h.homeB.id];
+        expect(rows()?.['session-b']?.metadata?.name).toBe('Secondary Session');
+        expect(projection).not.toHaveProperty('sessions');
+        expect(projection).not.toHaveProperty('sessionRows');
+        await h.refresh();
+        expect(h.storage.getState().sessionListRowsByServerId).toBe(initialRows);
+        expect(Array.isArray(h.storage.getState().sessionListIndexByServerId[h.homeB.id])).toBe(true);
+        expect(h.storage.getState().ordinarySessionListMembershipByServerId[h.homeB.id]).toEqual(['session-b']);
     });
 
-    it('invalidates cached transfer routes when a concurrent server is removed from the desired set', async () => {
-        process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = '1';
-        mockReachabilityOnline();
-
-        const fakeSocket = createSocketStub();
-        ioSpy.mockReturnValue(fakeSocket);
-        getCredentialsForServerUrlSpy.mockImplementation(async (serverUrl: string) => {
-            if (serverUrl === 'https://stack-b.example.test') {
-                return { token: ACCOUNT_B_TOKEN, secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' };
-            }
-            return null;
-        });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        vi.doMock('socket.io-client', () => ({
-            io: (...args: unknown[]) => ioSpy(...args),
-        }));
-        mockTokenStorageBoundary();
-        mockServerProfiles();
-        vi.doMock('@/sync/domains/server/serverRuntime', () => ({
-            getActiveServerSnapshot: () => getActiveServerSnapshotSpy(),
-            subscribeActiveServer: () => () => {},
-        }));
-        vi.doMock('@/sync/domains/transfers/runtime/transferRouteCache', () => ({
-            invalidateCachedTransferRoutesForServer: (...args: unknown[]) => invalidateCachedTransferRoutesForServerSpy(...args),
-        }));
-        vi.doMock('@/sync/encryption/encryption', () => ({
-            Encryption: {
-                create: async () => ({}) as unknown,
-            },
-        }));
-        vi.doMock('@/sync/engine/sessions/sessionSnapshot', () => ({
-            fetchAndApplySessions: async ({ applySessions }: { applySessions: (sessions: unknown[]) => void }) => {
-                applySessions([]);
-                return completeSessionListFetchResult();
-            },
-        }));
-        vi.doMock('@/sync/engine/machines/syncMachines', () => ({
-            fetchAndApplyMachines: async ({ applyMachines }: { applyMachines: (machines: unknown[]) => void }) => {
-                applyMachines([]);
-            },
-        }));
-
-        const { storage } = await import('@/sync/domains/state/storageStore');
-        const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-        storage.setState((state) => ({
-            ...state,
-            settings: {
-                ...state.settings,
-                ...settingsDefaults,
-                serverSelectionGroups: [
-                    {
-                        id: 'group-main',
-                        name: 'Main',
-                        serverIds: ['server-a', 'server-b'],
-                        presentation: 'grouped',
-                    },
-                ],
-                serverSelectionActiveTargetKind: 'group',
-                serverSelectionActiveTargetId: 'group-main',
-            },
-        }));
-
-        const { startConcurrentSessionCacheSync, stopConcurrentSessionCacheSync } = await import('./concurrentSessionCache');
-        startConcurrentSessionCacheSync();
-        await flushConcurrentCacheStartup();
-
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-        ]);
-        storage.setState((state) => ({
-            ...state,
-            settings: {
-                ...state.settings,
-                serverSelectionGroups: [
-                    {
-                        id: 'group-main',
-                        name: 'Main',
-                        serverIds: ['server-a'],
-                        presentation: 'grouped',
-                    },
-                ],
-                serverSelectionActiveTargetKind: 'group',
-                serverSelectionActiveTargetId: 'group-main',
-            },
-        }));
-
-        await vi.waitFor(() => {
-            expect(invalidateCachedTransferRoutesForServerSpy).toHaveBeenCalledWith({ serverId: 'server-b' });
-        });
-
-        stopConcurrentSessionCacheSync();
+    it('keeps the list index stable when only non-structural Session fields change', async () => {
+        h.setSessions(h.homeB, [h.session({ id: 'session-b', seq: 1, updatedAt: 2000 })]);
+        await h.start(); await h.ready();
+        const beforeIndex = h.storage.getState().sessionListIndexByServerId[h.homeB.id];
+        const beforeRows = rows();
+        h.setSessions(h.homeB, [h.session({ id: 'session-b', seq: 2, updatedAt: 3000 })]);
+        await h.refresh();
+        expect(h.storage.getState().sessionListIndexByServerId[h.homeB.id]).toBe(beforeIndex);
+        expect(rows()).not.toBe(beforeRows);
+        expect(rows()?.['session-b']?.updatedAt).toBe(3000);
     });
 
-    it('keeps concurrent session cache updates isolated per server when two servers refresh concurrently', async () => {
-        process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = '1';
-        mockReachabilityOnline();
-
-        const fakeSocketB = createSocketStub();
-        const fakeSocketC = createSocketStub();
-        ioSpy.mockImplementation((serverUrl: string) => {
-            if (serverUrl === 'https://stack-b.example.test') return fakeSocketB;
-            if (serverUrl === 'https://stack-c.example.test') return fakeSocketC;
-            return createSocketStub();
-        });
-
-        getCredentialsForServerUrlSpy.mockImplementation(async (serverUrl: string) => {
-            if (serverUrl === 'https://stack-b.example.test') return { token: ACCOUNT_B_TOKEN, secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' };
-            if (serverUrl === 'https://stack-c.example.test') return { token: ACCOUNT_C_TOKEN, secret: 'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI' };
-            return null;
-        });
-
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-            { id: 'server-c', serverUrl: 'https://stack-c.example.test', name: 'Server C' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        vi.doMock('socket.io-client', () => ({
-            io: (...args: unknown[]) => ioSpy(...args),
-        }));
-        mockTokenStorageBoundary();
-        mockServerProfiles();
-        vi.doMock('@/sync/domains/server/serverRuntime', () => ({
-            getActiveServerSnapshot: () => getActiveServerSnapshotSpy(),
-            subscribeActiveServer: () => () => {},
-        }));
-        vi.doMock('@/sync/encryption/encryption', () => ({
-            Encryption: {
-                create: async () => ({}) as unknown,
-            },
-        }));
-        vi.doMock('@/sync/engine/sessions/sessionSnapshot', () => ({
-            fetchAndApplySessions: async ({
-                credentials,
-                applySessions,
-            }: {
-                credentials: { token: string };
-                applySessions: (sessions: unknown[]) => void;
-            }) => {
-                if (credentials.token === ACCOUNT_B_TOKEN) {
-                    applySessions([{
-                        id: 'session-b',
-                        seq: 1,
-                        createdAt: 1000,
-                        updatedAt: 2000,
-                        active: true,
-                        activeAt: 2000,
-                        metadata: { machineId: 'machine-b', path: '/workspace/b', host: 'b-host' },
-                        metadataVersion: 1,
-                        agentState: null,
-                        agentStateVersion: 0,
-                        thinking: false,
-                        thinkingAt: 0,
-                        presence: 'online',
-                    }]);
-                    return completeSessionListFetchResult();
-                }
-                applySessions([{
-                    id: 'session-c',
-                    seq: 1,
-                    createdAt: 1000,
-                    updatedAt: 2100,
-                    active: true,
-                    activeAt: 2100,
-                    metadata: { machineId: 'machine-c', path: '/workspace/c', host: 'c-host' },
-                    metadataVersion: 1,
-                    agentState: null,
-                    agentStateVersion: 0,
-                    thinking: false,
-                    thinkingAt: 0,
-                    presence: 'online',
-                }]);
-                return completeSessionListFetchResult();
-            },
-        }));
-        vi.doMock('@/sync/engine/machines/syncMachines', () => ({
-            fetchAndApplyMachines: async ({
-                credentials,
-                applyMachines,
-            }: {
-                credentials: { token: string };
-                applyMachines: (machines: unknown[]) => void;
-            }) => {
-                if (credentials.token === ACCOUNT_B_TOKEN) {
-                    applyMachines([{
-                        id: 'machine-b',
-                        seq: 1,
-                        createdAt: 1000,
-                        updatedAt: 2000,
-                        active: true,
-                        activeAt: 2000,
-                        metadata: { host: 'b-host', path: '/workspace/b' },
-                        metadataVersion: 1,
-                        daemonState: null,
-                        daemonStateVersion: 0,
-                    }]);
-                    return;
-                }
-                applyMachines([{
-                    id: 'machine-c',
-                    seq: 1,
-                    createdAt: 1000,
-                    updatedAt: 2100,
-                    active: true,
-                    activeAt: 2100,
-                    metadata: { host: 'c-host', path: '/workspace/c' },
-                    metadataVersion: 1,
-                    daemonState: null,
-                    daemonStateVersion: 0,
-                }]);
-            },
-        }));
-
-        const { storage } = await import('@/sync/domains/state/storageStore');
-        const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-        storage.setState((state) => ({
-            ...state,
-            settings: {
-                ...state.settings,
-                ...settingsDefaults,
-                serverSelectionGroups: [
-                    {
-                        id: 'group-main',
-                        name: 'Main',
-                        serverIds: ['server-a', 'server-b', 'server-c'],
-                        presentation: 'grouped',
-                    },
-                ],
-                serverSelectionActiveTargetKind: 'group',
-                serverSelectionActiveTargetId: 'group-main',
-            },
-        }));
-
-        const { startConcurrentSessionCacheSync, stopConcurrentSessionCacheSync } = await import('./concurrentSessionCache');
-        startConcurrentSessionCacheSync();
-        await waitForConcurrentServerCacheMaterialization(storage, 'server-c');
-
-        const state = storage.getState();
-        const cacheByServer = state.concurrentSessionListCacheByServerId;
-        const serverBSessionIds = Object.keys(state.sessionListRowsByServerId['server-b'] ?? {});
-        const serverCSessionIds = Object.keys(state.sessionListRowsByServerId['server-c'] ?? {});
-
-        expect(serverBSessionIds).toContain('session-b');
-        expect(serverBSessionIds).not.toContain('session-c');
-        expect(serverCSessionIds).toContain('session-c');
-        expect(serverCSessionIds).not.toContain('session-b');
-
-        const machinesByServer = (storage.getState() as any).machineListByServerId as undefined | Record<string, any>;
-        expect(machinesByServer).toBeDefined();
-        expect(Array.isArray(machinesByServer?.['server-b'])).toBe(true);
-        expect(Array.isArray(machinesByServer?.['server-c'])).toBe(true);
-        expect((machinesByServer?.['server-b'] ?? []).map((m: any) => m.id)).toContain('machine-b');
-        expect((machinesByServer?.['server-c'] ?? []).map((m: any) => m.id)).toContain('machine-c');
-
-        stopConcurrentSessionCacheSync();
+    it('invalidates cached transfer routes when a concurrent Home is removed from the desired set', async () => {
+        await h.start(); await h.ready();
+        routes.recordCachedMachineRpcDirectRouteViable(route());
+        routes.recordCachedMachineRpcDirectRouteViable(route(h.homeC.id));
+        await h.select([h.homeA.id]);
+        await vi.waitFor(() => expect(h.isConcurrentOrdinarySessionListHome(h.homeB.id)).toBe(false));
+        expect(routes.readCachedMachineRpcDirectRoute(route())).toEqual({ status: 'unknown' });
+        expect(routes.readCachedMachineRpcDirectRoute(route(h.homeC.id))).toMatchObject({ status: 'viable' });
     });
 
-    it('scopes same-url concurrent cache refreshes by server id when alternate profiles share credentials storage', async () => {
-        process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = '1';
-        mockReachabilityOnline();
-
-        const sharedServerUrl = 'https://shared-stack.example.test';
-        const fakeSocketB = createSocketStub();
-        const fakeSocketC = createSocketStub();
-        ioSpy.mockImplementation((serverUrl: string, options?: { auth?: { token?: string } }) => {
-            if (serverUrl !== sharedServerUrl) {
-                return createSocketStub();
-            }
-            if (options?.auth?.token === ACCOUNT_B_TOKEN) return fakeSocketB;
-            if (options?.auth?.token === ACCOUNT_C_TOKEN) return fakeSocketC;
-            return createSocketStub();
-        });
-
-        getCredentialsForServerUrlSpy.mockImplementation(async (
-            serverUrl: string,
-            options?: { serverId?: string | null },
-        ) => {
-            if (serverUrl !== sharedServerUrl) {
-                return null;
-            }
-            if (options?.serverId === 'srv-b') {
-                return { token: ACCOUNT_B_TOKEN, secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' };
-            }
-            if (options?.serverId === 'server-c') {
-                return { token: ACCOUNT_C_TOKEN, secret: 'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI' };
-            }
-            return { token: ACCOUNT_C_TOKEN, secret: 'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI' };
-        });
-
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            {
-                id: 'server-b',
-                serverIdentityId: 'srv-b',
-                legacyServerIds: ['legacy-server-b'],
-                serverUrl: sharedServerUrl,
-                name: 'Server B',
-            },
-            { id: 'server-c', serverUrl: sharedServerUrl, name: 'Server C' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        vi.doMock('socket.io-client', () => ({
-            io: (...args: unknown[]) => ioSpy(...args),
-        }));
-        mockTokenStorageBoundary();
-        mockServerProfiles();
-        vi.doMock('@/sync/domains/server/serverRuntime', () => ({
-            getActiveServerSnapshot: () => getActiveServerSnapshotSpy(),
-            subscribeActiveServer: () => () => {},
-        }));
-        vi.doMock('@/sync/encryption/encryption', () => ({
-            Encryption: {
-                create: async () => ({}) as unknown,
-            },
-        }));
-        vi.doMock('@/sync/engine/sessions/sessionSnapshot', () => ({
-            fetchAndApplySessions: async ({
-                credentials,
-                applySessions,
-            }: {
-                credentials: { token: string };
-                applySessions: (sessions: unknown[]) => void;
-            }) => {
-                if (credentials.token === ACCOUNT_B_TOKEN) {
-                    applySessions([{
-                        id: 'session-b',
-                        seq: 1,
-                        createdAt: 1000,
-                        updatedAt: 2000,
-                        active: true,
-                        activeAt: 2000,
-                        metadata: { machineId: 'machine-b', path: '/workspace/b', host: 'b-host' },
-                        metadataVersion: 1,
-                        agentState: null,
-                        agentStateVersion: 0,
-                        thinking: false,
-                        thinkingAt: 0,
-                        presence: 'online',
-                    }]);
-                    return completeSessionListFetchResult();
-                }
-                applySessions([{
-                    id: 'session-c',
-                    seq: 1,
-                    createdAt: 1000,
-                    updatedAt: 2100,
-                    active: true,
-                    activeAt: 2100,
-                    metadata: { machineId: 'machine-c', path: '/workspace/c', host: 'c-host' },
-                    metadataVersion: 1,
-                    agentState: null,
-                    agentStateVersion: 0,
-                    thinking: false,
-                    thinkingAt: 0,
-                    presence: 'online',
-                }]);
-                return completeSessionListFetchResult();
-            },
-        }));
-        vi.doMock('@/sync/engine/machines/syncMachines', () => ({
-            fetchAndApplyMachines: async ({
-                credentials,
-                applyMachines,
-            }: {
-                credentials: { token: string };
-                applyMachines: (machines: unknown[]) => void;
-            }) => {
-                if (credentials.token === ACCOUNT_B_TOKEN) {
-                    applyMachines([{
-                        id: 'machine-b',
-                        seq: 1,
-                        createdAt: 1000,
-                        updatedAt: 2000,
-                        active: true,
-                        activeAt: 2000,
-                        metadata: { host: 'b-host', path: '/workspace/b' },
-                        metadataVersion: 1,
-                        daemonState: null,
-                        daemonStateVersion: 0,
-                    }]);
-                    return;
-                }
-                applyMachines([{
-                    id: 'machine-c',
-                    seq: 1,
-                    createdAt: 1000,
-                    updatedAt: 2100,
-                    active: true,
-                    activeAt: 2100,
-                    metadata: { host: 'c-host', path: '/workspace/c' },
-                    metadataVersion: 1,
-                    daemonState: null,
-                    daemonStateVersion: 0,
-                }]);
-            },
-        }));
-
-        const { storage } = await import('@/sync/domains/state/storageStore');
-        const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-        storage.setState((state) => ({
-            ...state,
-            settings: {
-                ...state.settings,
-                ...settingsDefaults,
-                serverSelectionGroups: [
-                    {
-                        id: 'group-main',
-                        name: 'Main',
-                        serverIds: ['server-a', 'legacy-server-b', 'server-c'],
-                        presentation: 'grouped',
-                    },
-                ],
-                serverSelectionActiveTargetKind: 'group',
-                serverSelectionActiveTargetId: 'group-main',
-            },
-        }));
-
-        const { startConcurrentSessionCacheSync, stopConcurrentSessionCacheSync } = await import('./concurrentSessionCache');
-        startConcurrentSessionCacheSync();
-        await waitForConcurrentServerCacheMaterialization(storage, 'server-c');
-
-        expect(getCredentialsForServerUrlSpy).toHaveBeenCalledWith(sharedServerUrl, { serverId: 'srv-b' });
-        expect(getCredentialsForServerUrlSpy).toHaveBeenCalledWith(sharedServerUrl, { serverId: 'server-c' });
-
-        const state = storage.getState();
-        const cacheByServer = state.concurrentSessionListCacheByServerId;
-        const serverBSessionIds = Object.keys(state.sessionListRowsByServerId['srv-b'] ?? {});
-        const serverCSessionIds = Object.keys(state.sessionListRowsByServerId['server-c'] ?? {});
-
-        expect(serverBSessionIds).toContain('session-b');
-        expect(serverBSessionIds).not.toContain('session-c');
-        expect(cacheByServer['server-b']).toBeUndefined();
-        expect(serverCSessionIds).toContain('session-c');
-        expect(serverCSessionIds).not.toContain('session-b');
-
-        const machinesByServer = storage.getState().machineListByServerId;
-        expect((machinesByServer['srv-b'] ?? []).map((machine: any) => machine.id)).toEqual(['machine-b']);
-        expect(machinesByServer['server-b']).toBeUndefined();
-        expect((machinesByServer['server-c'] ?? []).map((machine: any) => machine.id)).toEqual(['machine-c']);
-
-        stopConcurrentSessionCacheSync();
+    it('isolates concurrent Session and machine refreshes by Home', async () => {
+        h.setSessions(h.homeB, [h.session({ id: 'session-b' })]);
+        h.setSessions(h.homeC, [h.session({ id: 'session-c' })]);
+        h.setMachines(h.homeB, [h.machine(h.homeB)]);
+        h.setMachines(h.homeC, [h.machine(h.homeC, 'machine-c')]);
+        await h.select([h.homeA.id, h.homeB.id, h.homeC.id]);
+        await h.start(); await h.ready(); await h.ready(h.homeC);
+        expect(Object.keys(rows() ?? {})).toEqual(['session-b']);
+        expect(Object.keys(h.storage.getState().sessionListRowsByServerId[h.homeC.id] ?? {})).toEqual(['session-c']);
+        expect(machines()?.map(machine => machine.id)).toEqual(['machine-b']);
+        expect(h.storage.getState().machineListByServerId[h.homeC.id]?.map(machine => machine.id)).toEqual(['machine-c']);
     });
 
-    it('clears stale non-active server cache entries when a server is removed from the concurrent selection', async () => {
-        process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = '1';
-        mockReachabilityOnline();
-
-        const fakeSocketB = createSocketStub();
-        const fakeSocketC = createSocketStub();
-        ioSpy.mockImplementation((serverUrl: string) => {
-            if (serverUrl === 'https://stack-b.example.test') return fakeSocketB;
-            if (serverUrl === 'https://stack-c.example.test') return fakeSocketC;
-            return createSocketStub();
-        });
-
-        getCredentialsForServerUrlSpy.mockImplementation(async (serverUrl: string) => {
-            if (serverUrl === 'https://stack-b.example.test') return { token: ACCOUNT_B_TOKEN, secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' };
-            if (serverUrl === 'https://stack-c.example.test') return { token: ACCOUNT_C_TOKEN, secret: 'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI' };
+    it('scopes same-URL alternate persisted profiles by exact Home identity and Account', async () => {
+        const identityB = 'srv_same_url_home_b';
+        const identityC = 'srv_same_url_home_c';
+        const [aProfile, bProfile, cProfile] = [h.homeA, h.homeB, h.homeC].map(home => h.profiles.getServerProfileById(home.id));
+        if (!aProfile || !bProfile || !cProfile) throw new Error('Expected the saved Home profiles');
+        const b = { ...bProfile, serverIdentityId: identityB, legacyServerIds: [h.homeB.id], canonicalServerUrl: h.homeB.serverUrl };
+        const c = { ...cProfile, serverIdentityId: identityC, legacyServerIds: [h.homeC.id],
+            serverUrl: h.homeB.serverUrl, canonicalServerUrl: h.homeB.serverUrl };
+        const browserStorage = typeof window !== 'undefined' && typeof document !== 'undefined'
+            ? window.localStorage : undefined;
+        await seedPersistedHomeProfilesForTests({ profiles: [aProfile, b, c], activeServerId: h.homeA.id, browserStorage });
+        expect(h.profiles.resolveServerProfileScopeIdForIdentifier(identityB)).toBe(identityB);
+        expect(h.profiles.resolveServerProfileScopeIdForIdentifier(identityC)).toBe(identityC);
+        expect(await h.TokenStorage.setCredentialsForServerUrl(b.serverUrl, { serverId: identityB }, { token: h.homeB.token })).toBe(true);
+        expect(await h.TokenStorage.setCredentialsForServerUrl(c.serverUrl, { serverId: identityC }, { token: h.homeC.token })).toBe(true);
+        h.setResponder(async (input, init) => {
+            const url = new URL(String(input));
+            const isC = new Headers(init?.headers).get('authorization') === 'Bearer ' + h.homeC.token;
+            if (url.pathname === '/v2/sessions') return Response.json({ sessions: [h.session({ id: isC ? 'session-c' : 'session-b' })], nextCursor: null, hasNext: false });
+            if (url.pathname === '/v1/machines') return Response.json([h.machine(isC ? h.homeC : h.homeB, isC ? 'machine-c' : 'machine-b')]);
             return null;
         });
+        await h.select([h.homeA.id, identityB, identityC]);
+        h.startConcurrentSessionCacheSync();
+        await h.ready({ ...h.homeB, id: identityB }); await h.ready({ ...h.homeC, id: identityC });
+        expect(Object.keys(h.storage.getState().sessionListRowsByServerId[identityB] ?? {})).toEqual(['session-b']);
+        expect(Object.keys(h.storage.getState().sessionListRowsByServerId[identityC] ?? {})).toEqual(['session-c']);
+        expect(h.storage.getState().sessionListRowsByServerId[b.id]).toBeUndefined();
+        expect(h.network.credentialRequests).toEqual(expect.arrayContaining([
+            { serverUrl: b.serverUrl, serverId: identityB }, { serverUrl: c.serverUrl, serverId: identityC },
+        ]));
+    });
 
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-            { id: 'server-c', serverUrl: 'https://stack-c.example.test', name: 'Server C' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        vi.doMock('socket.io-client', () => ({
-            io: (...args: unknown[]) => ioSpy(...args),
-        }));
-        mockTokenStorageBoundary();
-        mockServerProfiles();
-        vi.doMock('@/sync/domains/server/serverRuntime', () => ({
-            getActiveServerSnapshot: () => getActiveServerSnapshotSpy(),
-            subscribeActiveServer: () => () => {},
-        }));
-        vi.doMock('@/sync/encryption/encryption', () => ({
-            Encryption: {
-                create: async () => ({}) as unknown,
-            },
-        }));
-        vi.doMock('@/sync/engine/sessions/sessionSnapshot', () => ({
-            fetchAndApplySessions: async ({ applySessions }: { applySessions: (sessions: unknown[]) => void }) => {
-                applySessions([]);
-                return completeSessionListFetchResult();
-            },
-        }));
-        vi.doMock('@/sync/engine/machines/syncMachines', () => ({
-            fetchAndApplyMachines: async ({ applyMachines }: { applyMachines: (machines: unknown[]) => void }) => {
-                applyMachines([]);
-            },
-        }));
-
-        const { storage } = await import('@/sync/domains/state/storageStore');
-        const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-        storage.setState((state) => ({
-            ...state,
-            settings: {
-                ...state.settings,
-                ...settingsDefaults,
-                serverSelectionGroups: [
-                    {
-                        id: 'group-main',
-                        name: 'Main',
-                        serverIds: ['server-a', 'server-b', 'server-c'],
-                        presentation: 'grouped',
-                    },
-                ],
-                serverSelectionActiveTargetKind: 'group',
-                serverSelectionActiveTargetId: 'group-main',
-            },
-        }));
-
-        const { startConcurrentSessionCacheSync, stopConcurrentSessionCacheSync } = await import('./concurrentSessionCache');
-        startConcurrentSessionCacheSync();
-        await waitForConcurrentServerCacheMaterialization(storage, 'server-c');
-
-        expect(Object.keys(storage.getState().concurrentSessionListCacheByServerId)).toEqual(
-            expect.arrayContaining(['server-b', 'server-c']),
-        );
-
-        storage.setState((state) => ({
-            ...state,
-            settings: {
-                ...state.settings,
-                serverSelectionGroups: [
-                    {
-                        id: 'group-main',
-                        name: 'Main',
-                        serverIds: ['server-a', 'server-b'],
-                        presentation: 'grouped',
-                    },
-                ],
-            },
-        }));
-
-        await flushConcurrentCacheStartup();
-
-        expect(storage.getState().concurrentSessionListCacheByServerId['server-c']).toBeUndefined();
-        expect((storage.getState() as any).machineListByServerId?.['server-c']).toBeUndefined();
-
-        stopConcurrentSessionCacheSync();
+    it('clears stale non-active caches when a Home is removed from concurrent selection', async () => {
+        await h.select([h.homeA.id, h.homeB.id, h.homeC.id]);
+        await h.start(); await h.ready(); await h.ready(h.homeC);
+        await h.select([h.homeA.id, h.homeB.id]);
+        await vi.waitFor(() => expect(h.storage.getState().concurrentSessionListCacheByServerId[h.homeC.id]).toBeUndefined());
+        expect(h.storage.getState().machineListByServerId[h.homeC.id]).toBeUndefined();
+        expect(h.isConcurrentOrdinarySessionListHome(h.homeB.id)).toBe(true);
     });
 
     it('reconciles a renamed secondary profile without a selection or focus change', async () => {
-        process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = '1';
-        mockReachabilityOnline();
-
-        const fakeSocketB = createSocketStub();
-        ioSpy.mockImplementation((serverUrl: string) => {
-            if (serverUrl === 'https://stack-b.example.test') return fakeSocketB;
-            return createSocketStub();
-        });
-
-        getCredentialsForServerUrlSpy.mockImplementation(async (serverUrl: string) => {
-            if (serverUrl === 'https://stack-b.example.test') return { token: ACCOUNT_B_TOKEN, secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' };
-            return null;
-        });
-
-        const profilesWithName = (name: string) => [
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name },
-        ];
-        listServerProfilesSpy.mockReturnValue(profilesWithName('Server B'));
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        vi.doMock('socket.io-client', () => ({
-            io: (...args: unknown[]) => ioSpy(...args),
-        }));
-        mockTokenStorageBoundary();
-        mockServerProfiles();
-        vi.doMock('@/sync/domains/server/serverRuntime', () => ({
-            getActiveServerSnapshot: () => getActiveServerSnapshotSpy(),
-            subscribeActiveServer: () => () => {},
-        }));
-        vi.doMock('@/sync/encryption/encryption', () => ({
-            Encryption: {
-                create: async () => ({}) as unknown,
-            },
-        }));
-        vi.doMock('@/sync/engine/sessions/sessionSnapshot', () => ({
-            fetchAndApplySessions: async ({ applySessions }: { applySessions: (sessions: unknown[]) => void }) => {
-                applySessions([]);
-                return completeSessionListFetchResult();
-            },
-        }));
-        vi.doMock('@/sync/engine/machines/syncMachines', () => ({
-            fetchAndApplyMachines: async ({ applyMachines }: { applyMachines: (machines: unknown[]) => void }) => {
-                applyMachines([]);
-            },
-        }));
-
-        const { storage } = await import('@/sync/domains/state/storageStore');
-        const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-        storage.setState((state) => ({
-            ...state,
-            settings: {
-                ...state.settings,
-                ...settingsDefaults,
-                serverSelectionGroups: [
-                    {
-                        id: 'group-main',
-                        name: 'Main',
-                        serverIds: ['server-a', 'server-b'],
-                        presentation: 'grouped',
-                    },
-                ],
-                serverSelectionActiveTargetKind: 'group',
-                serverSelectionActiveTargetId: 'group-main',
-            },
-        }));
-
-        const { startConcurrentSessionCacheSync, stopConcurrentSessionCacheSync } = await import('./concurrentSessionCache');
-        startConcurrentSessionCacheSync();
-        await flushConcurrentCacheStartup(3);
-
-        expect(storage.getState().concurrentSessionListCacheByServerId['server-b']?.serverName).toBe('Server B');
-
-        // The profile owner learns a rename (e.g. adoption refresh). Selection
-        // settings and the focused Home are untouched: only the profile registry
-        // changed.
-        listServerProfilesSpy.mockReturnValue(profilesWithName('Renamed B'));
-        emitServerProfilesChanged();
-        await flushConcurrentCacheReconcileOnly();
-
-        expect(storage.getState().concurrentSessionListCacheByServerId['server-b']?.serverName).toBe('Renamed B');
-
-        stopConcurrentSessionCacheSync();
+        await h.start(); await h.ready();
+        await h.profiles.adoptHomeProfile({ descriptor: { serverUrl: h.homeB.serverUrl, displayName: 'Renamed B' }, source: 'manual' });
+        await vi.waitFor(() => expect(h.storage.getState().concurrentSessionListCacheByServerId[h.homeB.id]?.serverName).toBe('Renamed B'));
+        expect(h.profiles.getActiveServerId()).toBe(h.homeA.id);
     });
 
-    it('stops a secondary entry and clears its caches when its profile disappears without a selection change', async () => {
-        process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = '1';
-        mockReachabilityOnline();
-
-        const fakeSocketB = createSocketStub();
-        ioSpy.mockImplementation((serverUrl: string) => {
-            if (serverUrl === 'https://stack-b.example.test') return fakeSocketB;
-            return createSocketStub();
-        });
-
-        getCredentialsForServerUrlSpy.mockImplementation(async (serverUrl: string) => {
-            if (serverUrl === 'https://stack-b.example.test') return { token: ACCOUNT_B_TOKEN, secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' };
-            return null;
-        });
-
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        vi.doMock('socket.io-client', () => ({
-            io: (...args: unknown[]) => ioSpy(...args),
-        }));
-        mockTokenStorageBoundary();
-        mockServerProfiles();
-        vi.doMock('@/sync/domains/server/serverRuntime', () => ({
-            getActiveServerSnapshot: () => getActiveServerSnapshotSpy(),
-            subscribeActiveServer: () => () => {},
-        }));
-        vi.doMock('@/sync/encryption/encryption', () => ({
-            Encryption: {
-                create: async () => ({}) as unknown,
-            },
-        }));
-        vi.doMock('@/sync/engine/sessions/sessionSnapshot', () => ({
-            fetchAndApplySessions: async ({ applySessions }: { applySessions: (sessions: unknown[]) => void }) => {
-                applySessions([]);
-                return completeSessionListFetchResult();
-            },
-        }));
-        vi.doMock('@/sync/engine/machines/syncMachines', () => ({
-            fetchAndApplyMachines: async ({ applyMachines }: { applyMachines: (machines: unknown[]) => void }) => {
-                applyMachines([]);
-            },
-        }));
-
-        const { storage } = await import('@/sync/domains/state/storageStore');
-        const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-        storage.setState((state) => ({
-            ...state,
-            settings: {
-                ...state.settings,
-                ...settingsDefaults,
-                serverSelectionGroups: [
-                    {
-                        id: 'group-main',
-                        name: 'Main',
-                        serverIds: ['server-a', 'server-b'],
-                        presentation: 'grouped',
-                    },
-                ],
-                serverSelectionActiveTargetKind: 'group',
-                serverSelectionActiveTargetId: 'group-main',
-            },
-        }));
-
-        const { startConcurrentSessionCacheSync, stopConcurrentSessionCacheSync } = await import('./concurrentSessionCache');
-        startConcurrentSessionCacheSync();
-        await flushConcurrentCacheStartup(3);
-
-        // The secondary entry exists: its socket was created through the transport
-        // boundary and its projection rows are scoped under its server id.
-        expect(ioSpy.mock.calls.some(([url]) => String(url).includes('stack-b'))).toBe(true);
-        expect(storage.getState().concurrentSessionListCacheByServerId['server-b']).toBeDefined();
-
-        // The profile is removed from the registry while the selection settings
-        // still reference it; the resolver must intersect and stop the entry.
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-        ]);
-        emitServerProfilesChanged();
-        await flushConcurrentCacheReconcileOnly();
-
-        expect(storage.getState().concurrentSessionListCacheByServerId['server-b']).toBeUndefined();
-        expect((storage.getState() as any).machineListByServerId?.['server-b']).toBeUndefined();
-
-        stopConcurrentSessionCacheSync();
+    it('stops a secondary transport and clears caches when its profile disappears', async () => {
+        await h.start(); await h.ready();
+        const socket = h.socket();
+        await h.profiles.removeServerProfile(h.homeB.id);
+        await vi.waitFor(() => expect(h.storage.getState().concurrentSessionListCacheByServerId[h.homeB.id]).toBeUndefined());
+        expect(h.storage.getState().machineListByServerId[h.homeB.id]).toBeUndefined();
+        expect(socket.socket.connected).toBe(false);
     });
 
-    it('does not create a removed secondary from a superseded deferred credential lookup', async () => {
-        process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = '1';
-        mockReachabilityOnline();
-
-        let releaseCredentials!: (credentials: { token: string; secret: string }) => void;
-        const deferredCredentials = new Promise<{ token: string; secret: string }>((resolve) => {
-            releaseCredentials = resolve;
-        });
-        getCredentialsForServerUrlSpy.mockImplementation(async (serverUrl: string) => {
-            if (serverUrl === 'https://stack-b.example.test') return await deferredCredentials;
-            return null;
-        });
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        vi.doMock('socket.io-client', () => ({ io: (...args: unknown[]) => ioSpy(...args) }));
-        mockTokenStorageBoundary();
-        mockServerProfiles();
-        vi.doMock('@/sync/domains/server/serverRuntime', () => ({
-            getActiveServerSnapshot: () => getActiveServerSnapshotSpy(),
-            subscribeActiveServer: () => () => {},
-        }));
-        vi.doMock('@/sync/encryption/encryption', () => ({ Encryption: { create: async () => ({}) as unknown } }));
-        vi.doMock('@/sync/engine/sessions/sessionSnapshot', () => ({
-            fetchAndApplySessions: async ({ applySessions }: { applySessions: (sessions: unknown[]) => void }) => {
-                applySessions([]);
-                return completeSessionListFetchResult();
-            },
-        }));
-        vi.doMock('@/sync/engine/machines/syncMachines', () => ({
-            fetchAndApplyMachines: async ({ applyMachines }: { applyMachines: (machines: unknown[]) => void }) => applyMachines([]),
-        }));
-
-        const { storage } = await import('@/sync/domains/state/storageStore');
-        const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-        storage.setState((state) => ({
-            ...state,
-            settings: {
-                ...state.settings,
-                ...settingsDefaults,
-                serverSelectionGroups: [{
-                    id: 'group-main',
-                    name: 'Main',
-                    serverIds: ['server-a', 'server-b'],
-                    presentation: 'grouped',
-                }],
-                serverSelectionActiveTargetKind: 'group',
-                serverSelectionActiveTargetId: 'group-main',
-            },
-        }));
-
-        const { startConcurrentSessionCacheSync, stopConcurrentSessionCacheSync } = await import('./concurrentSessionCache');
-        startConcurrentSessionCacheSync();
-        await vi.advanceTimersByTimeAsync(1);
-        expect(getCredentialsForServerUrlSpy).toHaveBeenCalledWith('https://stack-b.example.test', { serverId: 'server-b' });
-
-        storage.setState((state) => ({
-            ...state,
-            settings: {
-                ...state.settings,
-                serverSelectionGroups: [{
-                    id: 'group-main',
-                    name: 'Main',
-                    serverIds: ['server-a'],
-                    presentation: 'grouped',
-                }],
-            },
-        }));
-        releaseCredentials({ token: ACCOUNT_B_TOKEN, secret: 'AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM' });
-        await Promise.resolve();
-        await vi.advanceTimersByTimeAsync(1);
-
-        expect(ioSpy.mock.calls.some(([url]) => String(url).includes('stack-b'))).toBe(false);
-        expect(storage.getState().concurrentSessionListCacheByServerId['server-b']).toBeUndefined();
-        expect((storage.getState() as any).machineListByServerId?.['server-b']).toBeUndefined();
-
-        stopConcurrentSessionCacheSync();
+    it('does not resurrect a stopped cache after its deferred OS credential read settles', async () => {
+        const gate = h.holdCredentialRead();
+        h.startConcurrentSessionCacheSync();
+        await vi.waitFor(() => expect(gate.started).toBe(true));
+        h.stopConcurrentSessionCacheSync();
+        gate.release();
+        expect(Boolean(await h.TokenStorage.getCredentialsForServerUrl(h.homeB.serverUrl, { serverId: h.homeB.id }))).toBe(true);
+        expect(h.isConcurrentOrdinarySessionListHome(h.homeB.id)).toBe(false);
+        expect(h.network.socketBoundaries.filter(socket => socket.serverUrl === h.homeB.serverUrl)).toEqual([]);
+        expect(rows()).toBeUndefined();
     });
 
-    it('does not write a stale snapshot when a refresh finishes after its server entry was replaced', async () => {
-        process.env.EXPO_PUBLIC_HAPPY_MULTI_SERVER_CONCURRENT = '1';
-        mockReachabilityOnline();
-
-        const fakeSocketB = createSocketStub();
-        ioSpy.mockImplementation((serverUrl: string) => {
-            if (serverUrl === 'https://stack-b.example.test') return fakeSocketB;
-            return createSocketStub();
+    it('does not publish a stale HTTP snapshot after its Home entry has been retired', async () => {
+        let signal: AbortSignal | null | undefined;
+        let finish!: () => void;
+        h.setResponder(async (input, init) => {
+            if (new URL(String(input)).pathname !== '/v2/sessions') return null;
+            signal = init?.signal;
+            await new Promise<void>(resolve => { finish = resolve; });
+            return Response.json({ sessions: [h.session({ id: 'stale-session' })], nextCursor: null, hasNext: false });
         });
-
-        getCredentialsForServerUrlSpy.mockImplementation(async (serverUrl: string) => {
-            if (serverUrl === 'https://stack-b.example.test') return { token: ACCOUNT_B_TOKEN, secret: 'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' };
-            return null;
-        });
-
-        listServerProfilesSpy.mockReturnValue([
-            { id: 'server-a', serverUrl: 'https://stack-a.example.test', name: 'Server A' },
-            { id: 'server-b', serverUrl: 'https://stack-b.example.test', name: 'Server B' },
-        ]);
-        getActiveServerSnapshotSpy.mockReturnValue({
-            serverId: 'server-a',
-            serverUrl: 'https://stack-a.example.test',
-            kind: 'stack',
-            generation: 1,
-        });
-
-        vi.doMock('socket.io-client', () => ({
-            io: (...args: unknown[]) => ioSpy(...args),
-        }));
-        mockTokenStorageBoundary();
-        mockServerProfiles();
-        vi.doMock('@/sync/domains/server/serverRuntime', () => ({
-            getActiveServerSnapshot: () => getActiveServerSnapshotSpy(),
-            subscribeActiveServer: () => () => {},
-        }));
-        vi.doMock('@/sync/encryption/encryption', () => ({
-            Encryption: {
-                create: async () => ({}) as unknown,
-            },
-        }));
-
-        // Hold server-b's refresh in flight until the test releases it, so the
-        // refresh completion lands after the entry has been torn down.
-        let releaseSessionsForB!: (value: unknown[]) => void;
-        const sessionsForBReleased = new Promise<unknown[]>((resolve) => {
-            releaseSessionsForB = resolve;
-        });
-        vi.doMock('@/sync/engine/sessions/sessionSnapshot', () => ({
-            fetchAndApplySessions: async ({
-                credentials,
-                applySessions,
-            }: {
-                credentials: { token: string };
-                applySessions: (sessions: unknown[]) => void;
-            }) => {
-                if (credentials.token !== ACCOUNT_B_TOKEN) {
-                    applySessions([]);
-                    return completeSessionListFetchResult();
-                }
-                const sessions = await sessionsForBReleased;
-                applySessions(sessions);
-                return completeSessionListFetchResult();
-            },
-        }));
-        vi.doMock('@/sync/engine/machines/syncMachines', () => ({
-            fetchAndApplyMachines: async ({ applyMachines }: { applyMachines: (machines: unknown[]) => void }) => {
-                applyMachines([]);
-            },
-        }));
-
-        const { storage } = await import('@/sync/domains/state/storageStore');
-        const { settingsDefaults } = await import('@/sync/domains/settings/settings');
-        storage.setState((state) => ({
-            ...state,
-            settings: {
-                ...state.settings,
-                ...settingsDefaults,
-                serverSelectionGroups: [
-                    {
-                        id: 'group-main',
-                        name: 'Main',
-                        serverIds: ['server-a', 'server-b'],
-                        presentation: 'grouped',
-                    },
-                ],
-                serverSelectionActiveTargetKind: 'group',
-                serverSelectionActiveTargetId: 'group-main',
-            },
-        }));
-
-        const { startConcurrentSessionCacheSync, stopConcurrentSessionCacheSync } = await import('./concurrentSessionCache');
-        startConcurrentSessionCacheSync();
-        await flushConcurrentCacheStartup(3);
-
-        // The deferred refresh for server-b is now in flight.
-        expect(releaseSessionsForB).toBeTypeOf('function');
-
-        // Remove server-b from the concurrent selection: the entry is stopped and
-        // its cache rows are cleared.
-        storage.setState((state) => ({
-            ...state,
-            settings: {
-                ...state.settings,
-                serverSelectionGroups: [
-                    {
-                        id: 'group-main',
-                        name: 'Main',
-                        serverIds: ['server-a'],
-                        presentation: 'grouped',
-                    },
-                ],
-            },
-        }));
-        await flushConcurrentCacheStartup();
-
-        expect(storage.getState().concurrentSessionListCacheByServerId['server-b']).toBeUndefined();
-        expect((storage.getState() as any).machineListByServerId?.['server-b']).toBeUndefined();
-
-        // The stale refresh completes only after teardown: the runtime-origin fence
-        // (entry identity) must drop it instead of resurrecting the removed rows.
-        releaseSessionsForB([{
-            id: 'session-b-stale',
-            seq: 1,
-            createdAt: 1000,
-            updatedAt: 2000,
-            active: true,
-            activeAt: 2000,
-            metadata: { machineId: 'machine-b', path: '/workspace/b', host: 'b-host' },
-            metadataVersion: 1,
-            agentState: null,
-            agentStateVersion: 0,
-            thinking: false,
-            thinkingAt: 0,
-            presence: 'online',
-        }]);
-        await flushConcurrentCacheStartup(2);
-
-        expect(storage.getState().concurrentSessionListCacheByServerId['server-b']).toBeUndefined();
-        expect((storage.getState() as any).machineListByServerId?.['server-b']).toBeUndefined();
-        expect((storage.getState() as any).sessionListRowsByServerId?.['server-b']).toBeUndefined();
-
-        stopConcurrentSessionCacheSync();
+        await h.start();
+        await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+        await h.select([h.homeA.id]);
+        await vi.waitFor(() => expect(signal?.aborted).toBe(true));
+        finish();
+        await vi.waitFor(() => expect(h.isConcurrentOrdinarySessionListHome(h.homeB.id)).toBe(false));
+        expect(rows()).toBeUndefined();
+        expect(machines()).toBeUndefined();
     });
-
 });

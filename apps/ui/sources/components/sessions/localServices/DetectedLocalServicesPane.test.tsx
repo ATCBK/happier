@@ -32,6 +32,7 @@ import {
 
 import { DetectedLocalServicesPane } from './DetectedLocalServicesPane';
 import type { UserProfile } from '@happier-dev/protocol';
+import { LocalServiceLaunchTargetV1Schema } from '@happier-dev/protocol/local/services/launcher/v1';
 import type { ReactTestInstance } from 'react-test-renderer';
 import { act } from 'react-test-renderer';
 
@@ -108,6 +109,37 @@ const openableTarget = {
 };
 
 describe('DetectedLocalServicesPane', () => {
+    it('resolves the unavailable binding Machine through the real scoped row wiring', async () => {
+        const { createPlainArtifactHomeFixture } = await import('@/dev/testkit/harness/artifactStoreBoundary');
+        const home = await createPlainArtifactHomeFixture('https://service-binding-machine.test');
+        const serverId = home.home.id;
+        const { storage } = await import('@/sync/domains/state/storageStore');
+        const previous = storage.getState();
+        const source = createMachineFixture({ id: 'machine-a', activeAt: Date.now() });
+        const worker = createMachineFixture({ id: 'worker', active: false, activeAt: 0,
+            metadata: { ...source.metadata!, displayName: 'Windows workstation' } });
+        storage.setState({ machines: { 'machine-a': source, worker }, machineListByServerId: { [serverId]: [source, worker] } });
+        const target = LocalServiceLaunchTargetV1Schema.parse({ id: 'web', source: 'managed_service',
+            machineId: source.id, title: 'Web', confidence: 'high', state: 'unavailable',
+            unavailableReason: 'project_service_binding_unavailable', unavailableMachineId: worker.id,
+            workspace: { serverId, machineId: source.id, workspaceId: 'source-ref', rootPath: '/source' },
+            declaration: { workspaceRefId: 'source-ref', selection: { kind: 'manifest', name: 'web' } } });
+        try {
+            const screen = await renderScreen(<DetectedLocalServicesPane
+                inventoryState={buildLocalServiceInventoryState({ rows: [] })}
+                launcherState={launcherStateWith([target])} machine={MACBOOK_ONLINE}
+                sourceMachineId={source.id} serverId={serverId} testID="binding-pane" />);
+            try {
+                expect(collectText(screen.findByTestId('binding-pane-row:web-reason')!)).toContain('Windows workstation');
+                expect(screen.findByTestId('binding-pane-row:web-start')).toBeNull();
+                await act(async () => {
+                    const renamed = { ...worker, metadata: { ...worker.metadata!, displayName: 'Build desktop' } };
+                    storage.setState({ machines: { 'machine-a': source, worker: renamed }, machineListByServerId: { [serverId]: [source, renamed] } });
+                });
+                expect(collectText(screen.findByTestId('binding-pane-row:web-reason')!)).toContain('Build desktop');
+            } finally { await screen.unmount(); }
+        } finally { storage.setState(previous); await home.dispose(); }
+    });
     it('uses the actual worker Machine for row facts and Last known independently of the Source', async () => {
         const { createPlainArtifactHomeFixture } = await import('@/dev/testkit/harness/artifactStoreBoundary');
         const home = await createPlainArtifactHomeFixture('https://worker-services-presence.test');
@@ -372,8 +404,28 @@ describe('DetectedLocalServicesPane', () => {
                 />,
             ));
             const header = screen.findByTestId('probe-header.subtitle');
+            if (!header) throw new Error('Expected the Local Services header');
             expect(collectText(header)).toContain('MacBook Pro');
             expect(collectText(header)).not.toContain('Nothing running');
+            await screen.unmount();
+        }
+    });
+
+    it('an empty workspace scope says nothing runs in this workspace, never on the whole machine', async () => {
+        // A preview of this Machine can be open while the workspace has no service of its own.
+        for (const [scope, expected] of [['workspace', 'Nothing running in this workspace'], ['machine', 'Nothing running on MacBook Pro']] as const) {
+            const screen = await renderScreen(inHeaderHost(
+                <DetectedLocalServicesPane
+                    inventoryState={buildLocalServiceInventoryState({ rows: [] })}
+                    launcherState={launcherStateWith([])}
+                    machine={MACBOOK_ONLINE}
+                    scope={scope}
+                    testID="local-services-pane"
+                />,
+            ));
+            const header = screen.findByTestId('probe-header.subtitle');
+            if (!header) throw new Error('Expected the Local Services header');
+            expect(collectText(header)).toContain(expected);
             await screen.unmount();
         }
     });

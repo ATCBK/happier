@@ -2,6 +2,27 @@ import type { SpawnSessionOptions } from '@/session/shared/spawnSessionContract'
 
 import type { DaemonSessionMarker } from '../sessionRegistry';
 import type { TrackedSession } from '../types';
+import type { ConnectedServiceMaterializedStateObservationBinding } from '../connectedServices/materialization/materializer';
+
+/** Selects existing host custody only; discovery paths and metadata cannot issue a grant. */
+export function readTrackedSessionMaterializedStateObservationBinding(
+  trackedSessions: Iterable<TrackedSession>,
+  sessionId: string,
+): ConnectedServiceMaterializedStateObservationBinding | null {
+  if (!sessionId.trim()) return null;
+  let matched: TrackedSession | null = null;
+  for (const tracked of trackedSessions) {
+    if (tracked.happySessionId !== sessionId) continue;
+    if (matched) return null;
+    matched = tracked;
+  }
+  if (!matched || matched.reportMarkerCustody?.retiring
+    || matched.spawnStartupReadinessFailure
+    || matched.sessionWebhookTimedOutAtMs !== undefined
+    || matched.agentRuntimeRunnerRestartDisposition
+    || matched.ownerRemainderResult) return null;
+  return matched.materializedStateObservationBinding ?? null;
+}
 
 export function resolveReattachedRunnerAgentInvocationContext(
   marker: Pick<
@@ -87,6 +108,9 @@ export function buildTrackedSessionFromMarker(params: Readonly<{
           runnerAgentSourceCustodyV1:
             marker.runnerAgentSourceCustodyV1,
         }
+      : {}),
+    ...(marker.materializedStateObservationBinding
+      ? { materializedStateObservationBinding: marker.materializedStateObservationBinding }
       : {}),
     ...(marker.agentRuntimeDaemonServiceActiveAdmission
       ? {

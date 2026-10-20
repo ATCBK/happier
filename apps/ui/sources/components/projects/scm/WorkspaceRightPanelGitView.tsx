@@ -13,11 +13,10 @@ import { useFeatureEnabled } from '@/hooks/server/useFeatureEnabled';
 import { storage, useSetting, useWorkspaceScmCommitSelectionPaths, useWorkspaceScmCommitSelectionPatches, useWorkspaceScmInFlightOperation } from '@/sync/domains/state/storage';
 import { countCommitSelectionItems } from '@/scm/operations/commitSelectionHints';
 import { SCM_COMMIT_STRATEGIES, type ScmCommitStrategy } from '@/scm/settings/commitStrategy';
-import { normalizeScmRemoteConfirmPolicy } from '@/scm/settings/remoteConfirmationPolicy';
 import { evaluateScmOperationPreflight } from '@/scm/core/operationPolicy';
 import { resolveForceWithLeaseTarget } from '@/scm/operations/remoteTarget';
 import { trackBlockedScmOperation } from '@/scm/operations/reporting';
-import { runWorkspaceScmMutation, type ScmMutationResponse } from '@/scm/operations/runSessionScmMutation';
+import { runWorkspaceScmMutation, type ScmMutationCall, type ScmMutationResponse } from '@/scm/operations/runSessionScmMutation';
 import { NotSourceControlRepositoryState, SourceControlStaleSnapshotNotice, SourceControlUnavailableState } from '@/components/workspaces/scm/states';
 import type { GitSubTabId } from '@/components/workspaces/scm/WorkspaceScmSubTabsBar';
 import { GitPaneLayout, resolveGitPaneActiveSubTab } from '@/components/workspaces/scm/GitPaneLayout';
@@ -87,7 +86,6 @@ export const WorkspaceRightPanelGitView = React.memo((props: WorkspaceRightPanel
     const commitSelectionPaths = useWorkspaceScmCommitSelectionPaths(scope);
     const commitSelectionPatches = useWorkspaceScmCommitSelectionPatches(scope);
     const scmCommitStrategySetting = useSetting('scmCommitStrategy');
-    const scmRemoteConfirmPolicy = useSetting('scmRemoteConfirmPolicy');
     const scmPushRejectPolicy = useSetting('scmPushRejectPolicy');
     const scmWriteEnabled = useFeatureEnabled('scm.writeOperations');
 
@@ -97,10 +95,6 @@ export const WorkspaceRightPanelGitView = React.memo((props: WorkspaceRightPanel
             ? (scmCommitStrategySetting as ScmCommitStrategy)
             : 'atomic';
     }, [scmCommitStrategySetting]);
-    const normalizedRemoteConfirmPolicy = React.useMemo(
-        () => normalizeScmRemoteConfirmPolicy(scmRemoteConfirmPolicy),
-        [scmRemoteConfirmPolicy],
-    );
     const normalizedPushRejectPolicy = React.useMemo(() => {
         return scmPushRejectPolicy === 'auto_fetch' || scmPushRejectPolicy === 'prompt_fetch' || scmPushRejectPolicy === 'manual'
             ? scmPushRejectPolicy
@@ -176,7 +170,6 @@ export const WorkspaceRightPanelGitView = React.memo((props: WorkspaceRightPanel
                         scmSnapshot: snapshot,
                         scmWriteEnabled,
                         scmCommitStrategy,
-                        scmRemoteConfirmPolicy: normalizedRemoteConfirmPolicy,
                         scmPushRejectPolicy: normalizedPushRejectPolicy,
                         refreshScmData: refresh,
                         setScmOperationBusy,
@@ -200,7 +193,6 @@ export const WorkspaceRightPanelGitView = React.memo((props: WorkspaceRightPanel
                         scmSnapshot: snapshot,
                         scmWriteEnabled,
                         scmCommitStrategy,
-                        scmRemoteConfirmPolicy: normalizedRemoteConfirmPolicy,
                         scmPushRejectPolicy: normalizedPushRejectPolicy,
                         refreshScmData: refresh,
                         setScmOperationBusy,
@@ -224,7 +216,6 @@ export const WorkspaceRightPanelGitView = React.memo((props: WorkspaceRightPanel
                         scmSnapshot: snapshot,
                         scmWriteEnabled,
                         scmCommitStrategy,
-                        scmRemoteConfirmPolicy: normalizedRemoteConfirmPolicy,
                         scmPushRejectPolicy: normalizedPushRejectPolicy,
                         refreshScmData: refresh,
                         setScmOperationBusy,
@@ -238,7 +229,6 @@ export const WorkspaceRightPanelGitView = React.memo((props: WorkspaceRightPanel
         return actions;
     }, [
         normalizedPushRejectPolicy,
-        normalizedRemoteConfirmPolicy,
         pullPreflight.allowed,
         pushPreflight.allowed,
         refresh,
@@ -262,7 +252,7 @@ export const WorkspaceRightPanelGitView = React.memo((props: WorkspaceRightPanel
     const runWorkspaceUpdateMutation = React.useCallback(async <T extends ScmMutationResponse>(input: {
         operation: ScmProjectOperationKind;
         fallbackError: string;
-        run: () => Promise<T>;
+        run: (call: ScmMutationCall) => Promise<T>;
     }) => {
         const lockResult = await runWorkspaceScmMutation({
             state: storage.getState(), scope, cwd: scope.rootPath, ...input,
@@ -292,10 +282,10 @@ export const WorkspaceRightPanelGitView = React.memo((props: WorkspaceRightPanel
         (request: { name: string; fetchUrl: string; pushUrl?: string }) => runWorkspaceUpdateMutation({
             operation: 'remote_add',
             fallbackError: t('files.sourceControlOperations.update.remotes.errors.addFailed'),
-            run: () => machineScmRemoteAdd(scope.machineId, {
+            run: (call) => machineScmRemoteAdd(scope.machineId, {
                 cwd: scope.rootPath,
                 ...request,
-            }, scmCallOptions),
+            }, { ...scmCallOptions, ...call }),
         }),
         [runWorkspaceUpdateMutation, scope.machineId, scope.rootPath, scmCallOptions],
     );
@@ -303,10 +293,10 @@ export const WorkspaceRightPanelGitView = React.memo((props: WorkspaceRightPanel
         (request: { name: string; fetchUrl: string; pushUrl: string | null }) => runWorkspaceUpdateMutation({
             operation: 'remote_set_url',
             fallbackError: t('files.sourceControlOperations.update.remotes.errors.saveFailed'),
-            run: () => machineScmRemoteSetUrl(scope.machineId, {
+            run: (call) => machineScmRemoteSetUrl(scope.machineId, {
                 cwd: scope.rootPath,
                 ...request,
-            }, scmCallOptions),
+            }, { ...scmCallOptions, ...call }),
         }),
         [runWorkspaceUpdateMutation, scope.machineId, scope.rootPath, scmCallOptions],
     );
@@ -314,7 +304,7 @@ export const WorkspaceRightPanelGitView = React.memo((props: WorkspaceRightPanel
         (name: string) => runWorkspaceUpdateMutation({
             operation: 'remote_remove',
             fallbackError: t('files.sourceControlOperations.update.remotes.errors.removeFailed'),
-            run: () => machineScmRemoteRemove(scope.machineId, { cwd: scope.rootPath, name }, scmCallOptions),
+            run: (call) => machineScmRemoteRemove(scope.machineId, { cwd: scope.rootPath, name }, { ...scmCallOptions, ...call }),
         }),
         [runWorkspaceUpdateMutation, scope.machineId, scope.rootPath, scmCallOptions],
     );
@@ -322,7 +312,7 @@ export const WorkspaceRightPanelGitView = React.memo((props: WorkspaceRightPanel
         (sourceRef: string) => runWorkspaceUpdateMutation({
             operation: 'branch_merge',
             fallbackError: t('files.sourceControlOperations.update.branchIntegration.errors.mergeFailed'),
-            run: () => machineScmBranchMerge(scope.machineId, { cwd: scope.rootPath, sourceRef }, scmCallOptions),
+            run: (call) => machineScmBranchMerge(scope.machineId, { cwd: scope.rootPath, sourceRef }, { ...scmCallOptions, ...call }),
         }),
         [runWorkspaceUpdateMutation, scope.machineId, scope.rootPath, scmCallOptions],
     );
@@ -330,7 +320,7 @@ export const WorkspaceRightPanelGitView = React.memo((props: WorkspaceRightPanel
         (sourceRef: string) => runWorkspaceUpdateMutation({
             operation: 'branch_rebase',
             fallbackError: t('files.sourceControlOperations.update.branchIntegration.errors.rebaseFailed'),
-            run: () => machineScmBranchRebase(scope.machineId, { cwd: scope.rootPath, sourceRef }, scmCallOptions),
+            run: (call) => machineScmBranchRebase(scope.machineId, { cwd: scope.rootPath, sourceRef }, { ...scmCallOptions, ...call }),
         }),
         [runWorkspaceUpdateMutation, scope.machineId, scope.rootPath, scmCallOptions],
     );
@@ -338,7 +328,7 @@ export const WorkspaceRightPanelGitView = React.memo((props: WorkspaceRightPanel
         (operation: ScmOperationState['kind']) => runWorkspaceUpdateMutation({
             operation: 'branch_operation_continue',
             fallbackError: t('files.sourceControlOperations.update.branchIntegration.errors.continueFailed'),
-            run: () => machineScmBranchOperationContinue(scope.machineId, { cwd: scope.rootPath, operation }, scmCallOptions),
+            run: (call) => machineScmBranchOperationContinue(scope.machineId, { cwd: scope.rootPath, operation }, { ...scmCallOptions, ...call }),
         }),
         [runWorkspaceUpdateMutation, scope.machineId, scope.rootPath, scmCallOptions],
     );
@@ -346,7 +336,7 @@ export const WorkspaceRightPanelGitView = React.memo((props: WorkspaceRightPanel
         (operation: ScmOperationState['kind']) => runWorkspaceUpdateMutation({
             operation: 'branch_operation_abort',
             fallbackError: t('files.sourceControlOperations.update.branchIntegration.errors.abortFailed'),
-            run: () => machineScmBranchOperationAbort(scope.machineId, { cwd: scope.rootPath, operation }, scmCallOptions),
+            run: (call) => machineScmBranchOperationAbort(scope.machineId, { cwd: scope.rootPath, operation }, { ...scmCallOptions, ...call }),
         }),
         [runWorkspaceUpdateMutation, scope.machineId, scope.rootPath, scmCallOptions],
     );
@@ -354,7 +344,7 @@ export const WorkspaceRightPanelGitView = React.memo((props: WorkspaceRightPanel
         (operation: ScmOperationState['kind']) => runWorkspaceUpdateMutation({
             operation: 'branch_operation_skip',
             fallbackError: t('files.sourceControlOperations.update.branchIntegration.errors.continueFailed'),
-            run: () => machineScmBranchOperationSkip(scope.machineId, { cwd: scope.rootPath, operation }, scmCallOptions),
+            run: (call) => machineScmBranchOperationSkip(scope.machineId, { cwd: scope.rootPath, operation }, { ...scmCallOptions, ...call }),
         }),
         [runWorkspaceUpdateMutation, scope.machineId, scope.rootPath, scmCallOptions],
     );
@@ -542,7 +532,7 @@ export const WorkspaceRightPanelGitView = React.memo((props: WorkspaceRightPanel
                                 if (!leaseTarget) return;
                                 void executeWorkspaceScmRemoteOperation({
                                     kind: 'push', scope, scmSnapshot: snapshot, scmWriteEnabled,
-                                    scmCommitStrategy, scmRemoteConfirmPolicy: normalizedRemoteConfirmPolicy,
+                                    scmCommitStrategy,
                                     scmPushRejectPolicy: normalizedPushRejectPolicy,
                                     policy: { pushMode: leaseTarget.pushMode, expectedRemoteOid: leaseTarget.expectedRemoteOid },
                                     refreshScmData: refresh, setScmOperationBusy, setScmOperationStatus, tracking: null,

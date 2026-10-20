@@ -113,22 +113,4 @@ export function resolveHappierPageRowDensityInput(input: Readonly<{
     return { density: input.preferred, shape };
 }
 
-/** The gap between a row's title and its title-line meta (one owner with the gap the renderers draw). */
-export const HAPPIER_ROW_TITLE_META_GAP_PX = 12;
-
-/**
- * Where a row's title-line meta (a where-summary, a count) stands: at the end of the title line, or wrapped under the
- * title, end-aligned, when the two cannot share the line. The meta is never truncated: the title gives way first,
- * down to its readable minimum (or its own natural width when shorter); past that the meta moves beneath. Read by
- * every renderer that draws a title meta (app `Item`, the public `Collection` list row). Unmeasured input stays inline.
- */
-export function resolveHappierRowTitleMetaPlacement(input: Readonly<{
-    rowContentWidthPx: number;
-    titleNaturalWidthPx: number;
-    metaNaturalWidthPx: number;
-    titleMinWidthPx: number;
-}>): 'inline' | 'beneath' {
-    if (input.rowContentWidthPx <= 0) return 'inline';
-    const titleNeeds = Math.min(input.titleNaturalWidthPx, input.titleMinWidthPx);
-    return titleNeeds + HAPPIER_ROW_TITLE_META_GAP_PX + input.metaNaturalWidthPx <= input.rowContentWidthPx ? 'inline' : 'beneath';
-}
+export { HAPPIER_ROW_TITLE_META_GAP_PX, resolveHappierRowTitleMetaPlacement } from './pageMetrics.js';

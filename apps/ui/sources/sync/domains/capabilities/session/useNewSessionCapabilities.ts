@@ -46,8 +46,6 @@ export function useNewSessionCapabilities(draft: Readonly<{
             return areSessionCapabilitySelectionsEquivalentV1(current, next) ? current : next;
         });
     }, [draft.setSelection]);
-    const demandPreview = React.useCallback(() => setDemanded(true), []);
-
     const refresh = React.useCallback(async () => {
         const request = ++requestRef.current;
         if (!enabled || (!draft.portableOnly && !draft.machineId)) {
@@ -88,6 +86,10 @@ export function useNewSessionCapabilities(draft: Readonly<{
         if (demanded && execution.ready) void refresh();
         return () => { requestRef.current += 1; };
     }, [demanded, refresh, execution.ready]);
+    const demandPreview = React.useCallback(() => {
+        if (demanded && execution.ready) void refresh();
+        else setDemanded(true);
+    }, [demanded, execution.ready, refresh]);
     const retry = React.useCallback(async () => {
         if (!demanded) { setDemanded(true); return; }
         await refresh();

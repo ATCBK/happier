@@ -1,3 +1,4 @@
+import * as z from 'zod/mini';
 import type { ActionExecutorDeps } from '@happier-dev/protocol/actions/executor/types';
 import { ProjectWorkerActionInputSchemasV1 } from '@happier-dev/protocol/actions/specs/projectWorkers';
 import type { ProjectWorkerStatusResultV1 } from '@happier-dev/protocol';
@@ -14,6 +15,9 @@ import { callMachineRpc } from '@/session/transport/rpc/machineRpc';
 import { RPC_METHODS } from '@happier-dev/protocol/rpc/methods';
 import { WorkspaceSyncStatusV1Schema } from '@happier-dev/protocol/sessions/control/handoff/workspaceSyncSchemas';
 import { isServerProfileHomeIdentity } from '@/server/serverProfiles';
+import { readRequesterAccountActionContext } from "@/daemon/sessionEncryption/requesterAccountActionContext";
+import { refuseExternalActionPhase, runTracedExternalActionStage } from '@/daemon/externalActions/externalActionPhase';
+import { rethrowRequesterHomeReadFailure } from "@/daemon/sessionEncryption/requesterCurrentness";
 
 /** Exact-target host adapter. Pool selection and current access authority remain with their callers. */
 export function createProjectWorkerAction(options: Readonly<{
@@ -40,6 +44,8 @@ export function createProjectWorkerAction(options: Readonly<{
     }
     if (actionId === 'projects.worker.status') {
       const request = ProjectWorkerActionInputSchemasV1[actionId].parse(input);
+      const trace = <T>(stage: string, operation: () => T | Promise<T>) => runTracedExternalActionStage(actionId,
+        context.externalActionExecutionAuthorization?.binding.requestId ?? context.actionRequestId, `worker_status.${stage}`, operation);
       let lastCleanSyncAtMs: ProjectWorkerStatusResultV1['lastCleanSyncAtMs'];
       const refused = (explanation: Extract<ProjectWorkerStatusResultV1, { eligible: false }>['explanation'],
         load: ProjectWorkerStatusResultV1['load'] = { kind: 'unknown' },
@@ -56,13 +62,23 @@ export function createProjectWorkerAction(options: Readonly<{
       if (!(service ? options.isServiceExecutionLive?.() : options.isFiniteExecutionLive())) return refused('unsupported');
       try {
         signal?.throwIfAborted();
-        const snapshot = await readWorkspaceSyncWorkerTargetSnapshot({ ...options, serverId: request.workspace.serverId, signal,
-          sourceWorkspaceRefId: request.workspace.refId, targetMachineId: options.machineId }).catch(() => null);
+        const requesterContext = readRequesterAccountActionContext(context.externalActionExecutionAuthorization);
+        if (context.externalActionExecutionAuthorization && (!requesterContext
+          || !await trace('requester_currentness', () => (requesterContext.isCustodyCurrent ?? requesterContext.isCurrent)()))) return refused('unavailable');
+        // Retain private custody so requester rows cannot replace the daemon's
+        // Account projection; native observations still use requester material.
+        const credentials = requesterContext?.credentials ?? options.credentials;
+        const snapshot = await trace('snapshot', () => readWorkspaceSyncWorkerTargetSnapshot({ ...options, credentials, serverId: request.workspace.serverId, signal,
+          authorization: context.externalActionExecutionAuthorization,
+          sourceWorkspaceRefId: request.workspace.refId, targetMachineId: options.machineId })).catch(error => {
+            if (process.env.HAPPIER_WEB_LATENCY_TRACE === '1') refuseExternalActionPhase('worker_status_snapshot', options.machineId, error);
+            return null;
+          });
         // A missing Home observation is unknown, not proof that this copy is absent.
         if (!snapshot) return refused('unavailable');
-        const basis = resolveWorkspaceSyncWorkerTarget({ serverId: request.workspace.serverId,
+        const basis = await trace('topology', () => resolveWorkspaceSyncWorkerTarget({ serverId: request.workspace.serverId,
           sourceWorkspaceRefId: request.workspace.refId, targetMachineId: options.machineId,
-          workspaceRefs: snapshot.workspaceRefs, relationships: snapshot.relationships, childMachines: snapshot.childMachines });
+          workspaceRefs: snapshot.workspaceRefs, relationships: snapshot.relationships, childMachines: snapshot.childMachines }));
         if (!basis.ok) {
           if (basis.errorCode === 'worker_copy_missing') {
             const source = resolveWorkspaceRefById(snapshot.workspaceRefs, request.workspace.refId, request.workspace.serverId);
@@ -73,15 +89,15 @@ export function createProjectWorkerAction(options: Readonly<{
           }
           return refused('workspace_unavailable');
         }
-        try { await readWorkspaceSyncRootObjectIdentity(basis.target.rootPath); }
+        try { await trace('root_identity', () => readWorkspaceSyncRootObjectIdentity(basis.target.rootPath)); }
         catch { return refused('workspace_unavailable'); }
         const targetEdge = basis.relationships.at(-1);
         if (targetEdge) {
           try {
-            const response = await callMachineRpc({ credentials: options.credentials,
+            const response = await trace('controller', () => callMachineRpc({ credentials,
               machineId: targetEdge.controllerMachineId, serverUrl: options.serverHttpBaseUrl,
               method: RPC_METHODS.DAEMON_WORKSPACE_SYNC_GET,
-              request: { relationshipId: targetEdge.relationshipId }, ...(signal ? { signal } : {}) });
+              request: { relationshipId: targetEdge.relationshipId }, ...(signal ? { signal } : {}) }));
             const status = WorkspaceSyncStatusV1Schema.safeParse(
               typeof response === 'object' && response !== null && 'status' in response ? response.status : undefined);
             if (status.success && status.data.relationshipId === targetEdge.relationshipId
@@ -94,13 +110,16 @@ export function createProjectWorkerAction(options: Readonly<{
             signal?.throwIfAborted();
           }
         }
-        const observation = service ? await options.admission.observeServiceEligibility(request.memoryDemand)
-          : await options.admission.observeFiniteEligibility(request.memoryDemand);
+        const observation = service
+          ? await trace('eligibility', () => options.admission.observeServiceEligibility(request.memoryDemand))
+          : await trace('eligibility', () => options.admission.observeFiniteEligibility(request.memoryDemand));
+        if (requesterContext && !await trace('final_currentness', () => requesterContext.isCurrent())) return refused('unavailable');
         if (!observation.eligible) return refused(observation.reason ?? 'unavailable', observation.load, observation.observedMemory);
         return { eligible: true, candidate: { serverId: request.workspace.serverId, machineId: options.machineId },
           load: observation.load, explanation: observation.load.kind === 'unknown' ? 'load_unknown' : 'eligible',
           ...(lastCleanSyncAtMs !== undefined ? { lastCleanSyncAtMs } : {}) };
-      } catch {
+      } catch (error) {
+        rethrowRequesterHomeReadFailure(error);
         return refused('unavailable');
       }
     }
@@ -119,7 +138,7 @@ export function createProjectWorkerAction(options: Readonly<{
         return failure('workspace_unavailable');
       }
       const snapshot = await runWithServerHttpBaseUrl(options.serverHttpBaseUrl,
-        () => readProjectAccountRows({ credentials: options.credentials, serverId: request.workspace.serverId, signal }));
+        () => readProjectAccountRows({ credentials: options.credentials, serverId: request.workspace.serverId, signal, publication: 'installed' }));
       if (!resolveWorkspaceRefById(snapshot.workspaceRefs, request.workspace.refId, request.workspace.serverId)) {
         return failure('workspace_unavailable');
       }
@@ -135,7 +154,7 @@ export function createProjectWorkerAction(options: Readonly<{
       const definitionRetired = typeof error === 'object' && error !== null
         && 'definitionRetired' in error && error.definitionRetired === true;
       const dependencies = error instanceof Error && 'dependencies' in error
-        ? ProjectWorkerDependencyV1Schema.array().safeParse(error.dependencies) : null;
+        ? z.array(ProjectWorkerDependencyV1Schema).safeParse(error.dependencies) : null;
       if (definitionRetired || code === 'indeterminate' || code === 'workspace_copy_removal_unknown' || code === 'project_account_row_outcome_unknown') {
         return failure(code, { kind: 'outcomeUnknown', ...(dependencies?.success ? { dependencies: dependencies.data } : {}) });
       }

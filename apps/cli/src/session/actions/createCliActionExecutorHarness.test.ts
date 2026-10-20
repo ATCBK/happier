@@ -1,3 +1,4 @@
+import { createUnavailableActionTransportDeps } from '@/testkit/actionTransportDeps';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import { ApprovalRequestV2Schema } from '@happier-dev/protocol/approvals/approvalRequestV1';
@@ -20,6 +21,7 @@ import { createLocalServiceActionRoutes } from '@/daemon/local/services/actions/
 import { createLocalServiceInventoryRegistry } from '@/daemon/local/services/inventory/registry';
 import { createLocalServicesDaemonFeatureGate } from '@/daemon/local/services/featureGate';
 import { createLocalServicesDaemonRuntimeActionExecutor } from '@/daemon/local/services/actions/runtimeActionExecutor';
+import { normalizeActionsSettingsV1 } from '@happier-dev/protocol/actions/actionSettings';
 
 // Socket.IO is the external transport boundary. The socket factory, managed
 // supervisor, Account observer and approval coordinator all remain real.
@@ -78,6 +80,25 @@ async function expectPromiseStillPending(promise: Promise<unknown>): Promise<voi
 describe('createCliActionExecutorHarness', () => {
   beforeEach(() => { wire.sockets.length = 0; wire.io.mockClear(); });
   afterEach(() => vi.restoreAllMocks());
+  it('resolves admitted UI audience confirmation against live harness policy', () => {
+    const actionId = 'widgets.item.move';
+    let settings = normalizeActionsSettingsV1({ v: 1 });
+    const harness = createCliActionExecutorHarness({ token: 'token', sessionId: 'source', mode: 'plain', ctx: null,
+      actionsSettingsProvider: { getActionsSettings: () => settings } });
+    const context = { surface: 'ui', authority: 'present_user' } as const;
+    const input = { ref: { surface: { serverId: 'home', accountId: 'account', owner: { kind: 'home' } }, instanceId: 'movable' },
+      to: { surface: { serverId: 'home', accountId: 'account', owner: { kind: 'corePage', pageId: 'usage', area: 'main' } }, index: 0 } };
+    const requiresApproval = () => harness.deps.isActionApprovalRequired!(actionId, context, input, true);
+    expect(requiresApproval()).toBe(true);
+    expect(harness.deps.isActionApprovalRequired!(actionId, context, { ...input,
+      to: { surface: { serverId: 'home', accountId: 'account', owner: { kind: 'sessionBoard', sessionId: 'another-audience' } }, index: 0 },
+    })).toBe(true);
+    settings = normalizeActionsSettingsV1({ v: 1, approvalWaivedSurfaces: { [actionId]: ['ui'] } });
+    expect(requiresApproval()).toBe(false);
+    settings = normalizeActionsSettingsV1({ ...settings, actions: { [actionId]: { approvalRequiredSurfaces: ['ui'] } } });
+    expect(requiresApproval()).toBe(true);
+  });
+
   it('observes requester-private recorded approval execution without treating approval alone as guest completion', async () => {
     const token = `fixture.${Buffer.from(JSON.stringify({ sub: 'requester' })).toString('base64url')}.signature`;
     const expectedOrigin = { actionId: 'session.spawn_new' as const, requestId: 'acquire-request', accountId: 'requester',
@@ -140,7 +161,7 @@ describe('createCliActionExecutorHarness', () => {
     const routes = createLocalServiceActionRoutes({ machineId, inventoryRegistry: createLocalServiceInventoryRegistry() });
     const rpc = new RpcHandlerManager({ scopePrefix: machineId, localMachineId: machineId, encryptionMode: 'plain', logger() {} });
     registerDaemonLocalServicesMachineRpcHandlers(rpc, { machineId, localServicesActions: routes,
-      resolveLauncherActionExecutor: ({ ingress }) => createActionExecutor({
+      resolveLauncherActionExecutor: ({ ingress }) => createActionExecutor({ ...createUnavailableActionTransportDeps(),
         runtimeActionExecute: createLocalServicesDaemonRuntimeActionExecutor({ featureGate: gate, ingress,
           routes: { actionRoutes: routes } }),
       }),
@@ -173,7 +194,7 @@ describe('createCliActionExecutorHarness', () => {
     expect(received).toEqual([{ method: RPC_METHODS.DAEMON_LOCAL_SERVICES_ACTIONS_STOP_MANAGED,
       request: { v: 1, kind: 'targeted_action_rpc', input: confirmed, target: { kind: 'machine', machineId } } }]);
   });
-  it('places default browser actions on the authenticated daemon and consumes its result', async () => {
+  it.each(['agent', 'cli'] as const)('places default browser diagnostics on the authenticated daemon through %s and consumes its result', async (surface) => {
     // Daemon discovery reads the filesystem, and fetch crosses the local HTTP boundary.
     const state = vi.spyOn(persistence, 'readDaemonState').mockResolvedValue({
       pid: 123, httpPort: 12345, controlToken: 'browser-control-token',
@@ -188,7 +209,7 @@ describe('createCliActionExecutorHarness', () => {
     try {
       const result = await harness.executor.execute('browser.diagnostics.snapshot', {
         browserSessionId: 'session_browser', viewId: 'view_browser',
-      }, { surface: 'agent', defaultSessionId: 'session_browser' });
+      }, { surface, defaultSessionId: 'session_browser' });
       expect(result).toEqual({ ok: true, result: {
         v: 1, machineId: 'machine_browser', generatedAt: 1, refreshState: 'idle', events: [], diagnostics: [],
       } });

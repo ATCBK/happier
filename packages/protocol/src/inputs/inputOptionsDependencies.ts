@@ -8,6 +8,7 @@ export function projectInputOptionsDependencies(input: Readonly<Record<string, u
   if (consumer?.kind === 'widget') return { ...input };
   const keys = ['sessionId', 'machineId', 'machine', 'agentId', 'backendTargetKey', 'backendTargetKeys', 'executionTarget',
     'agentTarget', 'modelId', 'modelSelection', 'configuration', 'directory', 'path', 'selection', 'capabilitySelection',
+    'profileId', 'connectedServices', 'runtimeDescriptorV1', 'probe',
     'includeDisabled', 'includeUnavailable', 'limit', 'selectedPaths', 'selectedFiles', 'fieldPath', 'consumer',
     'query', 'period', 'agents', 'machines', 'projects', 'sources', 'session', 'costBasis', 'breakdown'] as const;
   return Object.fromEntries(keys.filter((key) => hasOwn(input, key)).map((key) => [key, input[key]]));

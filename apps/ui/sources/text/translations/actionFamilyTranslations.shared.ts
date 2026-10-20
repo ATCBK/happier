@@ -26,6 +26,7 @@ export const surfaceFamilyLabels = {
     session_capabilities: 'Session capabilities',
     boards: 'Boards',
     artifacts: 'Artifacts',
+    doc_collaboration: 'Document comments and proposals',
     settings_declarations: 'Settings',
     home_hub_layout: 'Home layout',
     machine_connection: 'Machine connections',
@@ -36,6 +37,7 @@ export const surfaceFamilyLabels = {
     composer_ingress: 'Composer and uploads',
     list_reorder: 'Pending input and todos',
     todo_session_link: 'Todo sessions',
+    internal_tasks: 'Tasks',
     widgets: 'Widgets',
     workflow_effects: 'Workflow effects',
     workflow_authoring: 'Workflow authoring',
@@ -48,6 +50,7 @@ export const surfaceFamilyLabels = {
 
 
 
+// Friends already owns a localized title; the family-title key owner reuses it.
 export const english = {
     actionFamilies: {
         plugin_execution_origin: "Plugin execution",
@@ -112,7 +115,7 @@ export const english = {
         session_read_state: 'Read state',
         session_attention: 'Attention',
         session_board: 'Session board',
-        session_discussion: 'Discussions',
+        discussion: 'Discussions',
         session_permissions: 'Session permissions',
         external_sessions: 'External sessions',
         voice_controls: 'Voice controls',
@@ -140,6 +143,8 @@ export const english = {
         approvals: 'Approvals',
         plugin_dev_loop: 'Plugin development',
         plugin_settings_administration: 'Plugin settings',
+        plugin_account_administration: 'Account plugins',
+        npm_registry_profiles: 'npm registry profiles',
         plugin_permission_grants: 'Plugin permissions',
         plugin_webhooks: 'Plugin webhooks',
         account_plugin_data: 'Plugin data',
@@ -160,7 +165,7 @@ export const english = {
         teams: 'Teams',
         saved_secret_sharing: 'Shared secrets',
     },
-} satisfies { actionFamilies: Record<ActionIdFamilyV1, string> };
+} satisfies { actionFamilies: Record<Exclude<ActionIdFamilyV1, 'friends'>, string> };
 
 
 export const actionFamilyTranslationsEnglish = { en: english } as const;

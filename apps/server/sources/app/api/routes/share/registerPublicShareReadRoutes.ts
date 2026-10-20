@@ -1,6 +1,6 @@
 import { type Fastify } from "../../types";
-import { z } from "zod";
-import { logPublicShareAccess, getIpAddress, getUserAgent } from "@/app/share/accessLogger";
+import { z } from "zod/mini";
+import { logPublicShareAccess, getUserAgent } from "@/app/share/accessLogger";
 import { isPublicSessionShareActive } from "@/app/share/publicSessionSharePublication";
 import { ACCOUNT_DISPLAY_PROFILE_SELECT, toShareUserProfile } from "@/app/account/profile/accountDisplayProfile";
 import { createHash } from "crypto";
@@ -51,18 +51,18 @@ export function publicShareMessagesMatchSessionMode(messages: readonly Readonly<
     });
 }
 
-const PublicShareConsentSchema = z.union([
+const PublicShareConsentSchema = z.optional(z.pipe(z.union([
     z.literal(true),
     z.literal(false),
     z.literal("true"),
     z.literal("false"),
     z.literal("0"),
     z.literal(0),
-]).transform((value) => value === true || value === "true").optional();
+]), z.transform((value) => value === true || value === "true")));
 
-const PublicShareConsentQuerySchema = z.object({
+const PublicShareConsentQuerySchema = z.optional(z.object({
     consent: PublicShareConsentSchema,
-}).optional();
+}));
 
 /**
  * Public shares page exactly like an ordinary transcript read: newest page first, then
@@ -72,11 +72,11 @@ const PublicShareConsentQuerySchema = z.object({
 const PUBLIC_SHARE_MESSAGES_DEFAULT_PAGE_ROWS = 150;
 const PUBLIC_SHARE_MESSAGES_MAX_PAGE_ROWS = 500;
 
-const PublicShareMessagesQuerySchema = z.object({
+const PublicShareMessagesQuerySchema = z.optional(z.object({
     consent: PublicShareConsentSchema,
-    beforeSeq: z.coerce.number().int().min(1).optional(),
-    limit: z.coerce.number().int().min(1).max(PUBLIC_SHARE_MESSAGES_MAX_PAGE_ROWS).optional(),
-}).optional();
+    beforeSeq: z.optional(z.coerce.number().check(z.int(), z.minimum(1))),
+    limit: z.optional(z.coerce.number().check(z.int(), z.minimum(1), z.maximum(PUBLIC_SHARE_MESSAGES_MAX_PAGE_ROWS))),
+}));
 
 type PublicShareUseRecord = Readonly<{
     id: string;
@@ -141,7 +141,7 @@ export function registerPublicShareReadRoutes(app: Fastify): void {
         const userId = optionalAuth.status === "authenticated"
             ? optionalAuth.principal.userId
             : null;
-        const ipAddress = getIpAddress(request.headers);
+        const ipAddress = request.ip;
         const userAgent = getUserAgent(request.headers);
         captureAccountStoredContentCompatibilityForHttpRequest(request);
         const supportsCurrentProtocol =

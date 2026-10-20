@@ -8,7 +8,7 @@ import type { SessionWorkStateItem } from '@/sync/domains/session/workState/sess
  * dev's `@/sync/domains/...` type paths.
  */
 
-export type SessionWorkStateGoalOperationResult = { ok: true } | { ok: false; error: string };
+export type { SessionGoalOperationResult as SessionWorkStateGoalOperationResult } from '@/sync/ops/sessionGoalOperationResult';
 
 export type SessionWorkStateGoalSetRequest = Readonly<{
     objective?: string;

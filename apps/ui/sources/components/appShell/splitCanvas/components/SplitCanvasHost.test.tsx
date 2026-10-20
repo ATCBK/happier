@@ -6,6 +6,8 @@ import { installPanelCommonModuleMocks } from '@/components/ui/panels/panelTestH
 import { createSplitCanvasState, splitCanvasReduce } from '../model/splitCanvasReducer';
 import type { SplitCanvasLeafNode, SplitCanvasNode, SplitCanvasState } from '../model/splitCanvasTypes';
 import type { SplitCanvasHostControls } from './SplitCanvasHost';
+import { useActiveUnsavedChangesGuard } from '@/utils/navigation/useActiveUnsavedChangesGuard';
+import { runGuardedTabNavigation, type ActiveUnsavedChangesGuard } from '@/utils/navigation/runGuardedNavigation';
 
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -106,12 +108,19 @@ describe('SplitCanvasHost', () => {
         expect(controlsRef.current?.readSplitMeasurement('leaf-a', 'right')).toEqual({ availableSizePx: 488, minimumExistingSizePx: 100 });
         expect(controlsRef.current?.readSplitMeasurement('leaf-b', 'down')).toEqual({ availableSizePx: 288, minimumExistingSizePx: 100 });
     });
-    it('preserves member state when the same member moves between leaves', async () => {
+    it('preserves member state and its dirty guard when moved between leaves or hidden', async () => {
         const { SplitCanvasHost } = await import('./SplitCanvasHost');
         let mounts = 0;
         function MemberProbe() {
             const [mount] = React.useState(() => ++mounts);
             const [draft, setDraft] = React.useState('initial');
+            const isDirtyRef = React.useRef(true);
+            const guard = React.useMemo<ActiveUnsavedChangesGuard>(() => ({
+                isDirtyRef,
+                requestDecision: async () => 'keepEditing',
+                tag: 'split-canvas-retained-editor',
+            }), []);
+            useActiveUnsavedChangesGuard({ navigation: null, guard, focused: false, tabId: 'member' });
             return React.createElement('MemberProbe', { mount, draft, setDraft });
         }
         const state = createNestedState();
@@ -134,6 +143,9 @@ describe('SplitCanvasHost', () => {
         expect(dispatch).toHaveBeenLastCalledWith({ type: 'focusLeaf', leafId: 'leaf-b' });
         await act(async () => { screen.update(tree('leaf-b', 'leaf-a')); });
         expect(screen.findByTestId('split-canvas-retained-content-member')?.props.pointerEvents).toBe('none');
+        let closed = false;
+        expect(await runGuardedTabNavigation(['member'], () => { closed = true; })).toBe(false);
+        expect(closed).toBe(false);
         await act(async () => { screen.update(tree('leaf-b')); });
         expect(screen.root.findByType('MemberProbe').props).toMatchObject({ mount: original, draft: 'unsent' });
         expect(mounts).toBe(1);
@@ -150,9 +162,9 @@ describe('SplitCanvasHost', () => {
         const state = { root: leaf, focusedLeafId: leaf.id, maximizedLeafId: null };
         const screen = await renderScreen(<SplitCanvasHost state={state} dispatch={() => {}} renderLeaf={renderLeaf} />);
         const original = screen.root.findByType('LeafMount').props.mount;
-        await act(async () => { screen.tree.update(<SplitCanvasHost state={{ ...state, root: {
+        await screen.update(<SplitCanvasHost state={{ ...state, root: {
             id: 'split', kind: 'split', axis: 'row', ratio: 0.5, first: leaf, second: createLeaf('leaf-b'),
-        } }} dispatch={() => {}} renderLeaf={renderLeaf} />); });
+        } }} dispatch={() => {}} renderLeaf={renderLeaf} />);
         expect(screen.root.findAllByType('LeafMount').find(node => node.props.leafId === leaf.id)?.props.mount).toBe(original);
     });
     it('propagates visibility changes into a retained hidden subtree when its tree node stays unchanged', async () => {
@@ -164,10 +176,10 @@ describe('SplitCanvasHost', () => {
                 leafId: leaf.id, visible: maximizedLeafId === null || maximizedLeafId === leaf.id,
             })} />;
         const screen = await renderScreen(tree(null));
-        await act(async () => { screen.tree.update(tree('leaf-a')); });
+        await screen.update(tree('leaf-a'));
         expect(screen.root.findAllByType('VisibilityProbe').map((node) => [node.props.leafId, node.props.visible]))
             .toEqual([['leaf-a', true], ['leaf-b', false], ['leaf-c', false]]);
-        await act(async () => { screen.tree.update(tree(null)); });
+        await screen.update(tree(null));
         expect(screen.root.findAllByType('VisibilityProbe').every((node) => node.props.visible)).toBe(true);
     });
     it('offers mounted actions the same measured split admission as UI requests', async () => {
@@ -415,18 +427,16 @@ describe('SplitCanvasHost', () => {
             />,
         );
 
-        await act(async () => {
-            screen.tree.update(
-                <SplitCanvasHost
-                    state={{
-                        ...state,
-                        focusedLeafId: 'leaf-b',
-                    }}
-                    dispatch={dispatch}
-                    renderLeaf={renderLeaf}
-                />,
-            );
-        });
+        await screen.update(
+            <SplitCanvasHost
+                state={{
+                    ...state,
+                    focusedLeafId: 'leaf-b',
+                }}
+                dispatch={dispatch}
+                renderLeaf={renderLeaf}
+            />,
+        );
 
         expect(renderCounts.get('leaf-a')).toBe(2);
         expect(renderCounts.get('leaf-b')).toBe(2);
@@ -450,18 +460,16 @@ describe('SplitCanvasHost', () => {
 
         expect(screen.findByTestId('split-canvas-divider-split-nested')).not.toBeNull();
 
-        await act(async () => {
-            screen.tree.update(
-                <SplitCanvasHost
-                    state={{
-                        ...state,
-                        maximizedLeafId: 'leaf-a',
-                    }}
-                    dispatch={dispatch}
-                    renderLeaf={({ leaf }) => React.createElement('LeafContent', { leafId: leaf.id })}
-                />,
-            );
-        });
+        await screen.update(
+            <SplitCanvasHost
+                state={{
+                    ...state,
+                    maximizedLeafId: 'leaf-a',
+                }}
+                dispatch={dispatch}
+                renderLeaf={({ leaf }) => React.createElement('LeafContent', { leafId: leaf.id })}
+            />,
+        );
 
         expect(screen.findByTestId('split-canvas-divider-split-nested')).toBeNull();
     });

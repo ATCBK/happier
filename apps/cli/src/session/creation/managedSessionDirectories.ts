@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { lstat, rename, rm } from 'node:fs/promises';
 import { posix, win32 } from 'node:path';
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import type { StopSessionResult } from '@happier-dev/protocol';
 import { createStoredReadSchema } from '@happier-dev/protocol/json/storedReadSchema';
 import { configuration } from '@/configuration';
@@ -21,22 +21,22 @@ import { isTerminalHostPhysicallyRetiredStopResult } from '@/daemon/sessions/sto
 import { SessionCreationCorrespondenceConflictError } from '@/api/session/sessionCreationCorrespondenceConflictError';
 import { renameStoragePathNoReplace } from '@/storage/trash/renameStoragePath';
 
-const RecordSchema = z.object({
+const RecordSchema = z.strictObject({
   v: z.literal(1),
   origin: z.enum(['creation', 'handoff']),
-  sessionCreationTag: z.string().min(1).nullable(),
-  operationId: z.string().min(1).nullable(),
-  sessionId: z.string().min(1).nullable(),
-  committed: z.boolean().optional(),
-  pendingRemoval: z.boolean().optional(),
-  inTrash: z.object({ payloadPath: z.string().min(1) }).strict().optional(),
-}).strict().superRefine((record, ctx) => {
+  sessionCreationTag: z.nullable(z.string().check(z.minLength(1))),
+  operationId: z.nullable(z.string().check(z.minLength(1))),
+  sessionId: z.nullable(z.string().check(z.minLength(1))),
+  committed: z.optional(z.boolean()),
+  pendingRemoval: z.optional(z.boolean()),
+  inTrash: z.optional(z.strictObject({ payloadPath: z.string().check(z.minLength(1)) })),
+}).check(z.superRefine((record, ctx) => {
   if (record.origin === 'creation'
     ? record.sessionCreationTag === null || record.operationId !== null || record.committed !== undefined
     : record.operationId === null || record.sessionCreationTag !== null || record.sessionId === null) {
     ctx.addIssue({ code: 'custom', message: 'Invalid managed directory ownership origin' });
   }
-});
+}));
 const StoredRecordSchema = createStoredReadSchema(RecordSchema);
 export type ManagedSessionDirectoryRecord = z.infer<typeof RecordSchema>;
 export type ManagedSessionDirectoryAllocation = Readonly<{ allocationId: string; directory: string }>;
@@ -422,12 +422,12 @@ export function createManagedSessionDirectories(input: Readonly<{
       throw new ManagedSessionDirectoryTrashError('owner_unavailable');
     }
     const info = await lstat(payloadPath).catch(error => { if (absent(error)) return null; throw error; });
-    if (info) {
-      if (!record || !info.isDirectory() || info.isSymbolicLink()) throw new ManagedSessionDirectoryTrashError('owner_unavailable');
-      await removePayload();
-    }
-    await requireAbsent(payloadPath);
+    if (info && (!record || !info.isDirectory() || info.isSymbolicLink())) throw new ManagedSessionDirectoryTrashError('owner_unavailable');
     await beforeEffect?.();
+    if (info) await removePayload();
+    await requireAbsent(payloadPath);
+    // Payload deletion commits removal; finish its owner record without
+    // rechecking the identity of a path that has already been removed.
     if (record) await removeProtectedLocalStateFile(recordPath(allocationId), protection);
   };
   return { prepareForCreation, materializeForFreshSpawn, bind, listRecords, resolveForSession, removeForSession, removeAllocation,

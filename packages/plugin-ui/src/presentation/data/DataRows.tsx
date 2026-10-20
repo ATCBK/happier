@@ -127,7 +127,8 @@ export function HappierDataRows(props: HappierDataRowsProps) {
                 <HappierText style={text.captionStrong} tabularNumbers>{formatHappierDataShare(rowShare, text.locale)}</HappierText>
               </View>}
             </View>
-            {line ? <HappierText style={text.caption} numberOfLines={1}>{line}</HappierText> : null}
+            {/* The facts under a title wrap to a second line rather than losing the last ones to an ellipsis. */}
+            {line ? <HappierText style={text.caption} numberOfLines={2}>{line}</HappierText> : null}
             {share === null ? null : (
               <HappierProgress theme={props.theme} label={title} semantics="none" value={share}
                 testID={props.testID ? `${props.testID}-bar-${rowIndex}` : undefined}
@@ -164,8 +165,18 @@ export function HappierDataTable(props: HappierDataRowsProps) {
     characterWidth: (text.body.fontSize ?? props.theme.typography.body.fontSize) * HAPPIER_DATA_METRICS.averageCharacterEm,
     locale: text.locale,
   };
-  const visible = resolveHappierDataTableColumns({ ...sizing, availableWidth: width, gap: HAPPIER_DATA_METRICS.columnGapPx });
-  const widths = estimateHappierDataColumnWidths(sizing);
+  // Header labels are measured once, undrawn; the wider of the measure and the estimate is the column's width.
+  // A host reports layout in whole pixels, rounded down, so a label measured at 50 can still need 50.4.
+  const [labelWidths, setLabelWidths] = useState<readonly (number | undefined)[]>([]);
+  const measured = { ...sizing, measuredLabelWidths: labelWidths };
+  const visible = resolveHappierDataTableColumns({ ...measured, availableWidth: width, gap: HAPPIER_DATA_METRICS.columnGapPx });
+  const widths = estimateHappierDataColumnWidths(measured);
+  const measureLabel = (index: number, labelWidth: number) => setLabelWidths((previous) => {
+    if (previous[index] !== undefined && Math.abs(previous[index]! - labelWidth) < 0.5) return previous;
+    const next = [...previous];
+    next[index] = labelWidth;
+    return next;
+  });
   const lastVisible = visible[visible.length - 1];
   // The name takes the remaining width; every other column keeps one width on every row so the
   // columns line up, and the last sits at the end, like the lab's "Joined".
@@ -181,6 +192,14 @@ export function HappierDataTable(props: HappierDataRowsProps) {
       accessibilityLabel={props.label}
       onLayout={(event: HappierLayoutChangeEvent) => setWidth(event.nativeEvent.layout.width)}
     >
+      <View aria-hidden pointerEvents="none" importantForAccessibility="no-hide-descendants"
+        style={{ position: 'absolute', opacity: 0, flexDirection: 'row', left: 0, top: 0 }}>
+        {props.columns.map((column, index) => (
+          <View key={index} onLayout={(event: HappierLayoutChangeEvent) => measureLabel(index, Math.ceil(event.nativeEvent.layout.width) + 1)}>
+            <HappierText style={text.header}>{column.label}</HappierText>
+          </View>
+        ))}
+      </View>
       <View role="row" style={{ flexDirection: 'row', columnGap: HAPPIER_DATA_METRICS.columnGapPx, paddingBottom: HAPPIER_DATA_METRICS.cellPaddingVerticalPx - 1, ...divider }}>
         {visible.map((index, position) => (
           <View key={index} role="columnheader" style={cellStyle(index, position)}>
@@ -209,7 +228,7 @@ export function HappierDataTable(props: HappierDataRowsProps) {
                 ...(position === 0 && props.marks?.[rowIndex] ? { flexDirection: 'row', alignItems: 'baseline', columnGap: HAPPIER_DATA_METRICS.columnGapPx } : {}) }}>
                 {position === 0 && props.marks?.[rowIndex] ? <RowMark mark={props.marks[rowIndex]!} theme={props.theme}
                   styles={text} testID={props.testID ? `${props.testID}-mark-${rowIndex}` : undefined} /> : null}
-                <HappierText style={{ ...(position === 0 ? text.body : { ...text.body, color: props.theme.colors.secondaryText }),
+                <HappierText style={{ ...(position === 0 || typeof value === 'number' ? text.body : { ...text.body, color: props.theme.colors.secondaryText }),
                   ...align(index, position), ...(position === 0 ? { flexShrink: 1 } : {}) }} numberOfLines={1} tabularNumbers={typeof value === 'number' || index === lastVisible}>
                   {value === undefined ? '' : formatHappierDataValue(value, text.locale)}
                 </HappierText>

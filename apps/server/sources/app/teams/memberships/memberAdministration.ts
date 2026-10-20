@@ -25,6 +25,7 @@ import {
 } from "@/storage/enums.generated";
 import { publishTeamChangedInTx } from "../teamChanges";
 import {
+    acquireTeamMutationLockInTx,
     countActiveTeamOwnersInTx,
     qualifyTeamOperationAuthenticationInTx,
     resolveTeamActorContextInTx,
@@ -40,7 +41,7 @@ import {
 } from "./capabilities";
 import { resolveTeamMembershipCapabilitiesV1 } from "../capabilities";
 import { readHomeGovernanceAccountInTx, resolveHomeGovernanceAuthority } from "@/app/home/governance/homeCapabilities";
-import { admitTeamMemberInTx, setTeamMembershipStatusInTx } from "./membershipService";
+import { acquireTeamMembershipAccountAdmissionInTx, admitTeamMemberInTx, setTeamMembershipStatusInTx } from "./membershipService";
 import { withdrawIneligibleDirectoryGroupContributionsInTx } from "./externalFacts";
 import {
     isExternallyManagedMembership,
@@ -499,6 +500,7 @@ export async function addTeamMemberForActorInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ): Promise<TeamMemberServiceResult<TeamMembershipV1>> {
+    await acquireTeamMembershipAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId, input.accountId], membershipIds: [], membershipChange: { kind: "teamMembership", teamId: input.teamId } });
     const authorized = await resolveTeamViewerContextInTx(tx, input);
     if (!authorized.ok) return authorized;
     const context = authorized.value;
@@ -554,6 +556,9 @@ export async function setTeamMemberRoleForActorInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ): Promise<TeamMemberServiceResult<TeamMembershipV1>> {
+    const recheckAdmission = await acquireTeamMembershipAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId], membershipIds: [input.membershipId], membershipChange: { kind: "teamRole", teamId: input.teamId } });
+    await acquireTeamMutationLockInTx(tx, input.teamId);
+    await recheckAdmission();
     const authorized = await resolveTeamViewerContextInTx(tx, input);
     if (!authorized.ok) return authorized;
     const context = authorized.value;
@@ -609,7 +614,7 @@ export async function setTeamMemberRoleForActorInTx(
 
     if (target.role !== input.role) {
         await withTeamSessionAccessEffectsInTx(tx, {
-            teamId: input.teamId, accountIds: [target.accountId], origin: "relationship_change",
+            teamId: input.teamId, accountIds: [target.accountId],
             change: { kind: "teamRole", teamId: input.teamId },
         }, async () => {
             await tx.teamMembership.update({ where: { id: target.id }, data: { role: input.role } });
@@ -632,6 +637,9 @@ async function setTeamMemberStatusForActorInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ): Promise<TeamMemberServiceResult<TeamMembershipV1>> {
+    const recheckAdmission = await acquireTeamMembershipAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId], membershipIds: [input.membershipId], membershipChange: { kind: "teamMembership", teamId: input.teamId } });
+    await acquireTeamMutationLockInTx(tx, input.teamId);
+    await recheckAdmission();
     const authorized = await resolveTeamViewerContextInTx(tx, input);
     if (!authorized.ok) return authorized;
     const context = authorized.value;
@@ -707,6 +715,9 @@ export async function removeTeamMemberForActorInTx(
     tx: Tx,
     input: Readonly<{ teamId: string; actorAccountId: string; membershipId?: string; authentication?: TeamOperationAuthenticationContext }>,
 ): Promise<TeamMemberServiceResult<TeamMemberRemoveResultV1>> {
+    const recheckAdmission = await acquireTeamMembershipAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId], membershipIds: input.membershipId ? [input.membershipId] : [], membershipChange: { kind: "teamMembership", teamId: input.teamId } });
+    await acquireTeamMutationLockInTx(tx, input.teamId);
+    await recheckAdmission();
     const context = await resolveTeamActorContextInTx(tx, input);
     if (!context) return denied("team_not_found");
     const selfRemoval = input.membershipId === undefined || input.membershipId === context.membership?.id;
@@ -740,7 +751,7 @@ export async function removeTeamMemberForActorInTx(
     if (!selfRemoval && await wouldStrandTeamInTx(tx, { target })) return denied("team_owner_transfer_required");
 
     await withTeamSessionAccessEffectsInTx(tx, {
-        teamId: input.teamId, accountIds: [target.accountId], origin: "relationship_change",
+        teamId: input.teamId, accountIds: [target.accountId],
         change: { kind: "teamMembership", teamId: input.teamId },
     }, async () => {
         await revokeTeamCredentialExternalApiKeysForMembershipInTx(tx, {
@@ -790,6 +801,7 @@ export async function setTeamMemberManagementForActorInTx(
         authentication?: TeamOperationAuthenticationContext;
     }>,
 ): Promise<TeamMemberServiceResult<TeamMembershipV1>> {
+    await acquireTeamMembershipAccountAdmissionInTx(tx, { teamId: input.teamId, accountIds: [input.actorAccountId], membershipIds: [input.membershipId], membershipChange: { kind: "teamMembership", teamId: input.teamId } });
     const authorized = await resolveTeamViewerContextInTx(tx, input);
     if (!authorized.ok) return authorized;
     const context = authorized.value;
@@ -851,7 +863,6 @@ export async function setTeamMemberManagementForActorInTx(
         await withTeamSessionAccessEffectsInTx(tx, {
             teamId: input.teamId,
             accountIds: [target.accountId],
-            origin: "retained_lifecycle",
         }, async (sessionAccessImpacts) => {
             if (current) {
                 await tx.teamProvisionedIdentity.update({

@@ -1,6 +1,21 @@
 import { describe, expect, it } from 'vitest';
 
-import { normalizeWriteInput } from './write';
+import { normalizeWriteInput, normalizeWriteResult } from './write';
+
+describe('normalizeWriteResult', () => {
+  it('decodes direct and nested content text in order while preserving result shapes', () => {
+    const content = [{ text: 'direct', content: { text: 'nested' } }, { content: { text: 'completed' } }];
+    expect(normalizeWriteResult(content)).toEqual({ message: 'direct\nnested\ncompleted' });
+    expect(normalizeWriteResult({ content, success: true })).toEqual({
+      content,
+      text: 'direct\nnested\ncompleted',
+      success: true,
+      applied: true,
+    });
+    expect(normalizeWriteResult([])).toEqual({ value: [] });
+    expect(normalizeWriteResult([{ content: { text: '' } }])).toEqual({ value: [{ content: { text: '' } }] });
+  });
+});
 
 describe('normalizeWriteInput', () => {
   it('derives file_path + content from ACP diff items[0] when missing', () => {

@@ -17,7 +17,8 @@ import { configuration, reloadConfiguration } from '@/configuration';
 import { updateSettings } from '@/persistence';
 import { createEnvKeyScope } from '@/testkit/env/envScope';
 import { HomeConnectionDescriptorV1Schema } from '@happier-dev/protocol/auth/accountDirectory';
-import { createLocalScmRepositoryFixture } from '@/scm/contracts/scmBackendContractFixtures';
+import { createLocalScmRepositoryFixture } from '@/testkit/scm/scmBackendContractFixtures';
+import { publishServerHttpRuntimeOrigin } from '@/api/client/serverHttpBaseUrl';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -28,7 +29,9 @@ describe('Session-backed SCM owner workspace', () => {
     type: 'dataKey', publicKey: nacl.box.keyPair.fromSecretKey(machineKey).publicKey, machineKey,
   } } satisfies StoredCredentials;
 
-  it.each(['differentId', 'differentUrl', 'unboundUrl', 'contextId', 'currentUrl', 'currentApi'] as const)('binds this producer retained result to the exact selected Home (%s)', async scenario => {
+  it.each(['differentId', 'differentUrl', 'unboundUrl', 'contextId', 'currentUrl', 'currentApi', 'currentRuntime'] as const)('binds this producer retained result to the exact selected Home (%s)', async scenario => {
+    const release = publishServerHttpRuntimeOrigin('http://127.0.0.1:48187', 'iroh');
+    try {
     await withTempDir('scm-owner-home-admission-', async workspace => {
       const saved = await scmDiffSummaryResultStore.create({ cwd: workspace, sessionId,
         output: ScmDiffSummaryGenerateOutputSchema.parse({ success: true, sourceKey: 'comparison',
@@ -47,10 +50,11 @@ describe('Session-backed SCM owner workspace', () => {
       const token = 'authenticated-other-home';
       const boundaryParams = { token, credentials: { token, encryption: null },
         sessionId, mode: 'plain' as const, ctx: null,
-        ...(['unboundUrl', 'contextId', 'currentUrl', 'currentApi'].includes(scenario) ? {} : { serverId: scenario === 'differentId'
+        ...(['unboundUrl', 'contextId', 'currentUrl', 'currentApi', 'currentRuntime'].includes(scenario) ? {} : { serverId: scenario === 'differentId'
           ? `${configuration.activeServerId}-other` : configuration.activeServerId }),
         serverHttpBaseUrl: scenario === 'currentUrl' || scenario === 'contextId' ? `${configuration.serverUrl}/`
-          : scenario === 'currentApi' ? `${configuration.apiServerUrl}/` : 'https://other-home.test',
+          : scenario === 'currentApi' ? `${configuration.apiServerUrl}/`
+            : scenario === 'currentRuntime' ? 'http://127.0.0.1:48187/' : 'https://other-home.test',
         scmFilesystemAccessPolicy: { kind: 'restrictedRoots', roots: [workspace] },
         resolveServerFeaturesSnapshot: () => ({ status: 'unsupported' as const, reason: 'endpoint_missing' as const }),
       };
@@ -59,12 +63,13 @@ describe('Session-backed SCM owner workspace', () => {
       const result = await executor.execute('scm.diffSummary.result.read', { cwd: workspace, resultId: saved.resultId },
         { surface: 'cli', defaultSessionId: sessionId,
           ...(scenario === 'contextId' ? { serverId: `${configuration.activeServerId}-other` } : {}) });
-      const currentHome = scenario === 'currentUrl' || scenario === 'currentApi';
+      const currentHome = scenario === 'currentUrl' || scenario === 'currentApi' || scenario === 'currentRuntime';
       expect(result).toMatchObject(currentHome ? { ok: true, result: { success: true,
         result: { output: { outputs: { summary: { value: { summaryMarkdown: 'Private Home A result' } } } } } } }
         : { ok: false, errorCode: 'server_scope_mismatch' });
       if (!currentHome) expect(JSON.stringify(result)).not.toContain('Private Home A result');
     });
+    } finally { release(); }
   });
 
   const cases = ['plain', 'e2ee', 'e2eeSession', 'layout0', 'absent', 'modeMismatch', 'wrongKey'] as const;
@@ -201,7 +206,7 @@ describe('exact-machine SCM Action targeting', () => {
         expect(await executor.execute('scm.diffSummary.result.read', { cwd: home, resultId: saved.resultId },
           { ...context, serverId: 'srv_wrong_home' })).toMatchObject({ ok: false, errorCode: 'server_scope_mismatch' });
         for (const scenario of ['ambiguous', 'retired'] as const) {
-          await updateSettings(settings => ({ ...settings, servers: scenario === 'retired' ? {}
+          await updateSettings((settings): typeof settings => ({ ...settings, servers: scenario === 'retired' ? {}
             : { [profileId]: profile, duplicate: { ...profile, id: 'duplicate' } } }));
           expect(await executor.execute('scm.diffSummary.result.list', {}, context))
             .toMatchObject({ ok: false, errorCode: 'server_scope_mismatch' });

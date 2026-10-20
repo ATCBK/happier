@@ -1,9 +1,11 @@
 import type { ResolvedContributionRegistry } from '@/plugins/projection/registry/types';
+import { getAgentStaticModels } from '@happier-dev/agents';
+import type { ProviderModelDescriptorV1 } from '@happier-dev/protocol';
 
 import type { ProviderContributionRegistryView } from './types';
 
 export function resolveProviderContributionRegistryView(
-  registry: Pick<ResolvedContributionRegistry, 'providersByContributionKey'>,
+  registry: Pick<ResolvedContributionRegistry, 'providersByContributionKey'> & Partial<Pick<ResolvedContributionRegistry, 'agentDefinitionsById'>>,
   runtimeRegistryGeneration: number,
   readPluginOccurrenceId?: (pluginId: string) => string | null,
 ): ProviderContributionRegistryView {
@@ -20,9 +22,20 @@ export function resolveProviderContributionRegistryView(
     : undefined;
   return {
     providersByContributionKey: registry.providersByContributionKey,
+    ...(registry.agentDefinitionsById ? { agentDefinitionsById: registry.agentDefinitionsById } : {}),
     runtimeRegistryGeneration,
     ...(providerActivationOccurrenceIdsByPluginId
       ? { providerActivationOccurrenceIdsByPluginId }
       : {}),
   };
+}
+
+/** Borrow contributed display facts, never another source's membership or capabilities. */
+export function readProviderModelNameCatalog(registry: ProviderContributionRegistryView): readonly ProviderModelDescriptorV1[] {
+  return [
+    ...[...registry.providersByContributionKey.values()].flatMap(({ definition }) =>
+      'staticModels' in definition.catalog ? definition.catalog.staticModels : []),
+    ...[...(registry.agentDefinitionsById?.values() ?? [])].flatMap(({ id }) =>
+      getAgentStaticModels(id, { catalogOnly: true })),
+  ];
 }

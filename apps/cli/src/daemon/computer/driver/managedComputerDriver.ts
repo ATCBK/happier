@@ -1,6 +1,6 @@
 import { isAbsolute } from 'node:path';
 
-import { z } from 'zod';
+import { z } from 'zod/mini';
 
 import { ComputerAccessibilityNodeV1Schema, ComputerCaptureGeometryV1Schema, computerTargetKeyV1 } from '@happier-dev/protocol/computer/v1';
 import type { ComputerAccessibilityNodeV1, ComputerCaptureGeometryV1, ComputerTargetV1, ComputerInputOperationV1, ComputerTargetsListResponseV1 } from '@happier-dev/protocol';
@@ -26,21 +26,21 @@ export type ManagedComputerDriver = Readonly<{
   close(): Promise<void>;
 }>;
 
-const finite = z.number().finite();
-const nativeStateSchema = z.object({ pid: z.number().int().positive(), window_id: z.number().int().positive(),
-  capture_id: z.string().min(1).optional(), screenshot_width: z.number().int().positive().optional(),
-  screenshot_height: z.number().int().positive().optional(), screenshot_frame_valid: z.boolean().optional(),
-  window_bounds: z.object({ x: finite, y: finite, width: finite.positive(), height: finite.positive() }),
-  elements_complete: z.boolean().optional(), degraded_reason: z.string().optional(), truncated: z.boolean().optional(), truncation_reason: z.string().optional(),
-  elements: z.array(z.object({ element_index: z.number().int().nonnegative(), role: z.string().min(1),
-    label: z.string().optional(), value: z.string().optional(), frame: z.object({ x: finite, y: finite, w: finite, h: finite }).optional() })).optional(),
+const finite = z.number();
+const nativeStateSchema = z.object({ pid: z.number().check(z.int(), z.positive()), window_id: z.number().check(z.int(), z.positive()),
+  capture_id: z.optional(z.string().check(z.minLength(1))), screenshot_width: z.optional(z.number().check(z.int(), z.positive())),
+  screenshot_height: z.optional(z.number().check(z.int(), z.positive())), screenshot_frame_valid: z.optional(z.boolean()),
+  window_bounds: z.object({ x: finite, y: finite, width: finite.check(z.positive()), height: finite.check(z.positive()) }),
+  elements_complete: z.optional(z.boolean()), degraded_reason: z.optional(z.string()), truncated: z.optional(z.boolean()), truncation_reason: z.optional(z.string()),
+  elements: z.optional(z.array(z.object({ element_index: z.number().check(z.int(), z.nonnegative()), role: z.string().check(z.minLength(1)),
+    label: z.optional(z.string()), value: z.optional(z.string()), frame: z.optional(z.object({ x: finite, y: finite, w: finite, h: finite })) }))),
 });
 type WindowTarget = Extract<ComputerTargetV1, { kind: 'window' }>;
-const screenSizeSchema = z.object({ width: z.number().int().positive(), height: z.number().int().positive(), scale_factor: finite.positive() });
-const desktopStateSchema = z.object({ display: z.literal('primary'), capture_id: z.string().min(1),
-  screenshot_width: z.number().int().positive(), screenshot_height: z.number().int().positive(),
-  screen_width: z.number().int().positive(), screen_height: z.number().int().positive(),
-  scale_factor: finite.positive().optional(), frame_scale: finite.positive().optional() });
+const screenSizeSchema = z.object({ width: z.number().check(z.int(), z.positive()), height: z.number().check(z.int(), z.positive()), scale_factor: finite.check(z.positive()) });
+const desktopStateSchema = z.object({ display: z.literal('primary'), capture_id: z.string().check(z.minLength(1)),
+  screenshot_width: z.number().check(z.int(), z.positive()), screenshot_height: z.number().check(z.int(), z.positive()),
+  screen_width: z.number().check(z.int(), z.positive()), screen_height: z.number().check(z.int(), z.positive()),
+  scale_factor: z.optional(finite.check(z.positive())), frame_scale: z.optional(finite.check(z.positive())) });
 
 /** Native 0.31.0 exposes one logical primary desktop, not a physical-monitor catalog. */
 export function resolveComputerDisplayId(displayId?: string, defaultDisplayId?: string): string | undefined {
@@ -236,7 +236,7 @@ export async function createManagedComputerDriver(params: Readonly<{ displayId: 
       if (closing || native.unavailable()) throw new ComputerDriverError('driver_unavailable');
       const result = await native.call('list_windows', { on_screen_only: true });
       if (result.isError) throw new ComputerDriverError(nativeRefusalCode(result));
-      const windows = z.object({ windows: z.array(z.object({ pid: z.number().int().positive().nullable(), window_id: z.number().int().positive(), title: z.string(), app_name: z.string().optional() })) }).safeParse(result.structuredContent);
+      const windows = z.object({ windows: z.array(z.object({ pid: z.nullable(z.number().check(z.int(), z.positive())), window_id: z.number().check(z.int(), z.positive()), title: z.string(), app_name: z.optional(z.string()) })) }).safeParse(result.structuredContent);
       if (!windows.success) throw new ComputerDriverError('driver_result_invalid');
       const targets: ComputerTargetsListResponseV1['targets'] = windows.data.windows.flatMap(window => window.pid === null ? [] : [{
         target: { kind: 'window' as const, displayId: params.displayId, pid: window.pid, windowId: window.window_id }, title: window.title,
@@ -244,8 +244,11 @@ export async function createManagedComputerDriver(params: Readonly<{ displayId: 
       }]);
       const screen = await native.call('get_screen_size', {});
       const size = screenSizeSchema.safeParse(screen.structuredContent);
-      if (!screen.isError && size.success) targets.push({ target: { kind: 'display', displayId: params.displayId },
-        label: 'primary', width: size.data.width, height: size.data.height });
+      if (!screen.isError && size.success) {
+        const label = 'primary';
+        targets.push({ target: { kind: 'display', displayId: params.displayId },
+          label, title: label, width: size.data.width, height: size.data.height });
+      }
       if (!options?.includeThumbnails) return targets;
       return await Promise.all(targets.map(async entry => {
         try {

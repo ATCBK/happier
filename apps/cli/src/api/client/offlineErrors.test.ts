@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { connectionState } from '@/api/offline/serverConnectionErrors';
 
@@ -34,14 +34,24 @@ describe('offlineErrors', () => {
     expect(connectionState.isOffline()).toBe(false);
   });
 
-  it('treats 5xx machine registration failures as offline', () => {
-    expect(
-      shouldTreatGetOrCreateMachineErrorAsOffline(
-        { response: { status: 503 } },
-        { url: 'https://example.test/v1/machines' },
-      ),
-    ).toBe(true);
+  it('reports 5xx machine registration failures on stderr without contaminating command stdout', () => {
+    const stdout = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(
+        shouldTreatGetOrCreateMachineErrorAsOffline(
+          { response: { status: 503 } },
+          { url: 'https://example.test/v1/machines' },
+        ),
+      ).toBe(true);
 
-    expect(connectionState.isOffline()).toBe(true);
+      expect(connectionState.isOffline()).toBe(true);
+      expect(stdout).not.toHaveBeenCalled();
+      expect(stderr).toHaveBeenCalledWith(expect.stringContaining('Machine registration failed: 503'));
+      expect(stderr).toHaveBeenCalledWith(expect.stringContaining('Server encountered an error'));
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
   });
 });

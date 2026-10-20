@@ -15,6 +15,9 @@ import type { SessionPluginRuntimeState } from '@/components/sessions/plugins/us
 import { useDestinationInstanceKey } from '@/components/appShell/workspace/DestinationInstanceHost';
 import { useSessionCockpitChromeRegistration } from '@/components/workspaceCockpit/session/SessionCockpitChromeRegistry';
 import { areServerProfileIdentifiersEquivalent } from '@/sync/domains/server/serverProfiles';
+import { resolveSessionTerminalDockLocation } from '@/components/sessions/terminal/useSessionTerminalAvailability';
+import { useDeviceType } from '@/utils/platform/responsive';
+import { usePanePresentation } from '@/components/appShell/panes/panePresentation';
 
 type SessionPaneScopedProps = Readonly<{ sessionId: string; scopeId: string }>;
 
@@ -58,6 +61,14 @@ export function useRegisterSessionPaneDriver(
     const instanceKey = useDestinationInstanceKey();
     const paneCtx = useOptionalAppPaneContext();
     const cockpitChrome = useSessionCockpitChromeRegistration();
+    // The bottom pane exists only where the terminal docks there. A phone shows it as the Terminal
+    // page, yet every cockpit scene mounts this scope's pane host, so a bottom pane a wider layout
+    // left open would otherwise duplicate the terminal under Chat.
+    const bottomPaneAvailable = resolveSessionTerminalDockLocation(useDeviceType()) === 'bottom';
+    const presentPane = usePanePresentation();
+    // The phone cockpit presents sidebar destinations as its own retained
+    // scenes. Its Session chrome must not mount another copy as an overlay.
+    const rightPaneAvailable = bottomPaneAvailable || presentPane === null;
     const registerDriver = options?.registerDriver === false ? null : paneCtx?.registerDriver ?? null;
     const canRegister = Boolean(registerDriver);
     // The registered PaneDriver is the sole target/currentness producer for
@@ -81,6 +92,7 @@ export function useRegisterSessionPaneDriver(
     const pluginRuntime = suppliedPluginRuntime ?? {
         pluginUiProjection: pluginProjection.pluginUiProjection,
         pluginBrowserProjection: pluginProjection.pluginBrowserProjection,
+        accountLifetime: pluginProjection.accountLifetime,
         phase: pluginProjection.phase,
         interactionEnabled: pluginProjection.interactionEnabled,
         machineId: sessionMachineTarget?.machineId ?? null,
@@ -113,21 +125,21 @@ export function useRegisterSessionPaneDriver(
             rightPaneBuiltinAdapter: {
                 destinationIds: sessionBuiltinDestinationIds,
                 defaultDestinationId: 'files',
-                render: () => React.createElement(SessionRightPanel, {
+                render: () => rightPaneAvailable ? React.createElement(SessionRightPanel, {
                     sessionId,
                     scopeId,
                     paneSurfaceScope: surfaceScope,
                     resolveBoardPrimaryHost,
-                }),
+                }) : null,
             },
             rightSidebarAdapter: {
                 renderActionRail: () => React.createElement(SessionActionRail),
-                render: () => React.createElement(SessionRightPanel, {
+                render: () => rightPaneAvailable ? React.createElement(SessionRightPanel, {
                     sessionId,
                     scopeId,
                     paneSurfaceScope: surfaceScope,
                     resolveBoardPrimaryHost,
-                }),
+                }) : null,
             },
             detailsPaneBuiltinAdapter: {
                 destinationIds: ['session-details'],
@@ -139,15 +151,20 @@ export function useRegisterSessionPaneDriver(
                     resolveBoardPrimaryHost,
                 }),
             },
-            bottomPaneBuiltinAdapter: {
-                destinationIds: ['terminal'],
-                defaultDestinationId: 'terminal',
-                render: () => React.createElement(SessionBottomPanel, { sessionId, scopeId }),
-            },
+            ...(bottomPaneAvailable ? {
+                bottomPaneBuiltinAdapter: {
+                    destinationIds: ['terminal'],
+                    defaultDestinationId: 'terminal',
+                    render: () => React.createElement(SessionBottomPanel, { sessionId, scopeId }),
+                },
+            } : null),
         };
         return registerDriver(driver);
     }, [
+        bottomPaneAvailable,
+        rightPaneAvailable,
         cockpitChrome,
+        pluginRuntime.accountLifetime,
         pluginRuntime.interactionEnabled,
         pluginRuntime.phase,
         pluginRuntime.platform,

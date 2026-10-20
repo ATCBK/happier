@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import { delimiter, join } from 'node:path';
 import { createTempDirSync, removeTempDirSync } from '@/testkit/fs/tempDir';
@@ -6,7 +6,7 @@ import { writeExecutableShimSync } from '@/testkit/fs/executableShim';
 import { writeTextFileSync } from '@/testkit/fs/fileHelpers';
 import { writeAcpTestAgentScript } from '@/agent/acp/testkit/subprocessHarness';
 import { accountSettingsParse, isBackendTargetDisabledByAccountSettings } from '@happier-dev/protocol/account/settings/accountSettings';
-import { ScmDiffSummaryModelCatalogObservationV1Schema } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
+import { ScmDiffSummaryModelCatalogObservationV1Schema, resolveScmDiffSummaryDefaultModelProfile } from '@happier-dev/protocol/actions/settings/scmDiffSummarySettings';
 import { createAdmittedPluginRuntimeFixture } from '@/plugins/testkit/admittedRuntime';
 import { pluginReloadController } from '@/plugins/runtime/reload/singleton';
 import { resetAgentModelsProbeCacheForTests } from '@/capabilities/probes/agentModelsProbe';
@@ -18,10 +18,15 @@ import { CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, isCustomAcpAgentContribution
 import { buildBackendTargetKeyV2 } from '@happier-dev/protocol/backends/targets/backendTargetRefV2';
 import { CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1, emptyConnectedAccountCatalogRecordV1 } from '@happier-dev/protocol/connect/connectedAccountConfigurationRowsV1';
 import { ACP_CATALOG_ROWS_ROUTE_V1, AcpCatalogRecordV1Schema } from '@happier-dev/protocol/acp/catalog/catalogRowsV1';
+import { AccountProfileSchema } from '@happier-dev/protocol/account/profile';
 
-describe('Summary native model discovery', () => {
-    it('discovers a new native model through the public Summary Action while retaining automatic default evidence', async () => {
-        const requests: string[] = [];
+// This fixture activates the real native plugins. Load their source modules
+// during collection so Vite's cold compilation is outside runtime admission.
+import '@happier-dev/plugins-codex';
+import '@happier-dev/plugins-claude';
+import '@happier-dev/plugins-custom-acp';
+
+async function createNativeCatalog() {
         const home = createTempDirSync('summary-native-discovery-');
         const modelFile = join(home, 'models.json');
         writeTextFileSync(modelFile, JSON.stringify([{ id: 'initial-model', displayName: 'Initial model', isDefault: true }]));
@@ -48,11 +53,26 @@ describe('Summary native model discovery', () => {
                 : `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(script)} "$@"\n` });
         for (const key of ['HOME', 'USERPROFILE', 'HAPPIER_HOME_DIR']) vi.stubEnv(key, home);
         vi.stubEnv('HAPPIER_CODEX_PATH', executable);
+        const claudeExecutable = writeExecutableShimSync({ dir: home, fileName: process.platform === 'win32' ? 'claude.cmd' : 'claude',
+            contents: process.platform === 'win32'
+                ? '@echo off\r\nif defined ANTHROPIC_API_KEY (echo {"loggedIn":true}& exit /b 0)\r\necho {"loggedIn":false}\r\nexit /b 1\r\n'
+                : '#!/bin/sh\nif [ -n "$ANTHROPIC_API_KEY" ]; then printf \'{"loggedIn":true}\'; exit 0; fi\nprintf \'{"loggedIn":false}\'\nexit 1\n' });
+        vi.stubEnv('HAPPIER_CLAUDE_PATH', claudeExecutable);
+        vi.stubEnv('CLAUDE_CONFIG_DIR', home);
+        for (const key of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']) vi.stubEnv(key, undefined);
         vi.stubEnv('PATH', `${home}${delimiter}${process.env.PATH ?? ''}`);
         const previous = getActiveAccountSettingsSnapshot();
+        let purposeAvailable = true;
         let admitted: Awaited<ReturnType<typeof createAdmittedPluginRuntimeFixture>> | undefined;
+        const dispose = async () => {
+            await admitted?.dispose();
+            resetAgentModelsProbeCacheForTests();
+            vi.restoreAllMocks();
+            if (previous) setActiveAccountSettingsSnapshot(previous); else clearActiveAccountSettingsSnapshot();
+            vi.unstubAllEnvs(); removeTempDirSync(home);
+        };
         try {
-            admitted = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController, runtimeOptions: { pluginIds: ['happier.agent.codex', 'happier.agent.custom-acp'],
+            admitted = await createAdmittedPluginRuntimeFixture({ controller: pluginReloadController, runtimeOptions: { pluginIds: ['happier.agent.codex', 'happier.agent.claude', 'happier.agent.custom-acp'],
                 // Account persistence is the real external boundary; an empty
                 // record lets native plugin Settings resolve without live credentials.
                 accountSettingsRecordAdapter: { bindOperation: async () => ({
@@ -66,7 +86,7 @@ describe('Summary native model discovery', () => {
             const configuredTargetKey = buildBackendTargetKeyV2(listAgentExecutionTargetsV1(CUSTOM_ACP_AGENT_CONTRIBUTION_IDENTITY_V1, ['missing-configured-agent'])[0]!);
             const rawSettings = { backendEnabledByTargetKey: { ...Object.fromEntries(
                 [...readCurrentContributionRegistry().agentDefinitionsById.values()].flatMap(entry => entry.identity
-                    ? listAgentExecutionTargetsV1(entry.identity).map(target => [buildBackendTargetKeyV2(target), entry.id === 'codex']) : [])),
+                    ? listAgentExecutionTargetsV1(entry.identity).map(target => [buildBackendTargetKeyV2(target), entry.id === 'codex' || entry.id === 'claude']) : [])),
                 [configuredTargetKey]: true } };
             const settings = accountSettingsParse(rawSettings);
             expect(isBackendTargetDisabledByAccountSettings(settings, configuredTargetKey)).toBe(false);
@@ -84,39 +104,95 @@ describe('Summary native model discovery', () => {
             // from bootstrap, rather than a test-created operation context.
             vi.spyOn(axios, 'get').mockImplementation(async url => {
                 const path = new URL(String(url)).pathname;
-                requests.push(path);
                 if (path === '/v2/account/settings') return { status: 200, data: { version: 1, content: { t: 'plain', v: rawSettings } } };
                 if (path === '/v1/account/encryption/currentness') return { status: 200, data: { mode: 'plain', version: 1,
                     settingsVersion: 1, signingKeyFingerprint: null, contentKeyFingerprint: null, updatedAt: 1 } };
+                if (path === '/v1/account/profile') return { status: 200, data: AccountProfileSchema.parse({ id: 'native-summary-account',
+                    connectedAccountsV4: ['claude-one', 'claude-two'].map(accountId => ({
+                        ref: { service: { pluginId: 'happier.agent.claude', localId: 'claude-subscription' }, accountId },
+                        status: 'connected', authenticationModeId: 'oauth', configurationReady: true,
+                        configurationRevision: null, kind: 'oauth', revisionSemantics: 'revisioned', credentialRevision: 'csr_' + 'a'.repeat(22),
+                    })),
+                }) };
                 if (path === ACP_CATALOG_ROWS_ROUTE_V1) return { status: 200, data: { status: 'present', revision: 1,
                     content: { t: 'plain', v: acpCatalog.record } } };
-                if (path === `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/purposes`) return { status: 200, data: { status: 'present', revision: 1,
-                    content: { t: 'plain', v: emptyConnectedAccountCatalogRecordV1('purposes') } } };
+                if (path === `${CONNECTED_ACCOUNT_CATALOG_ROWS_ROUTE_V1}/purposes`) {
+                    if (!purposeAvailable) throw new Error('Fixture Account metadata is unavailable');
+                    return { status: 200, data: { status: 'present', revision: 1,
+                        content: { t: 'plain', v: emptyConnectedAccountCatalogRecordV1('purposes') } } };
+                }
                 if (path.startsWith('/v1/account/entity-rows/')) return { status: 200, data: { status: 'absent' } };
                 return { status: 404, data: {} };
             });
             const executor = createCliActionExecutorFromCredentials({ credentials,
                 pluginActionExecutionOwner: 'current_process',
                 machineActionDirectTargetTransport: { machineId: 'native-model-machine', invoke: async () => { throw new Error('Unexpected recursion'); } } });
-            const observe = async (discover = false) => {
+            const observe = async (discoveryTargetKey?: string, modelSelector?: { backendTargetKey: string; modelId: string }) => {
                 const result = await executor.execute('agents.models.list', { purpose: 'scm_diff_summary', machineId: 'native-model-machine',
-                    ...(discover ? { discoveryTargetKey: 'agent:happier.agent.codex/codex' } : {}) }, { surface: 'cli', authority: 'present_user' });
-                expect(result).toMatchObject({ ok: true });
+                    ...(discoveryTargetKey ? { discoveryTargetKey } : {}), ...(modelSelector ? { modelSelector } : {}) }, { surface: 'cli', authority: 'present_user' });
+                expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
                 if (!result.ok || !result.result || typeof result.result !== 'object' || !('scmDiffSummaryCatalog' in result.result)) throw new Error('Missing native catalog');
                 return ScmDiffSummaryModelCatalogObservationV1Schema.parse(result.result.scmDiffSummaryCatalog);
             };
+            return { executor, observe, configuredTargetKey,
+                writeModels: (modelId: string) => writeTextFileSync(modelFile, JSON.stringify([{ id: modelId, displayName: modelId, isDefault: true }])),
+                disablePurposeMetadata: () => { purposeAvailable = false; }, dispose };
+        } catch (error) {
+            await dispose();
+            throw error;
+        }
+}
+
+describe('Summary native model discovery', () => {
+    let catalog: Awaited<ReturnType<typeof createNativeCatalog>>;
+    beforeAll(async () => { catalog = await createNativeCatalog(); });
+    afterAll(async () => { await catalog?.dispose(); });
+
+    it('offers explicit Claude models with two connected accounts and no automatic default', async () => {
+            const { executor, observe } = catalog;
+            const connections = await executor.execute('sessions.spawn.connected_services.list', { agentId: 'claude', includeUnavailable: false },
+                { surface: 'cli', authority: 'present_user' });
+            expect(connections).toMatchObject({ ok: true, result: { profileOptionsByServiceId: {
+                'happier.agent.claude/claude-subscription': [
+                    expect.objectContaining({ profileId: 'claude-one', status: 'connected' }),
+                    expect.objectContaining({ profileId: 'claude-two', status: 'connected' }),
+                ],
+            } } });
+            if (connections.ok) expect(connections.result).not.toHaveProperty('defaultBindings');
+            const initial = await observe();
+            const claudeTargetKey = 'agent:happier.agent.claude/claude';
+            expect(initial).toMatchObject({ unavailableTargets: [{ backendTargetKey: claudeTargetKey, reason: 'native_sign_in_required' }] });
+            expect(initial.discoveryTargetKeys).toContain(claudeTargetKey);
+            const explicitClaude = initial.profiles.find(profile => profile.modelSelector?.backendTargetKey === claudeTargetKey
+                && profile.structuredOutput === 'supported');
+            expect(explicitClaude).toBeDefined();
+            expect(initial.automaticProfiles.some(profile => profile.modelSelector?.backendTargetKey === claudeTargetKey)).toBe(false);
+    });
+
+    it.each(['discovery', 'selection'] as const)('keeps explicit Claude %s independent from automatic ranking', async mode => {
+            const { observe } = catalog;
+            const targetKey = 'agent:happier.agent.claude/claude';
+            const initial = await observe();
+            const explicit = initial.profiles.find(profile => profile.modelSelector?.backendTargetKey === targetKey
+                && profile.structuredOutput === 'supported');
+            expect(explicit).toBeDefined();
+            const result = mode === 'discovery' ? await observe(targetKey)
+                : await observe(undefined, { backendTargetKey: targetKey, modelId: explicit!.modelSelector!.modelId! });
+            expect(result.profiles).toContainEqual(explicit);
+            expect(result.automaticProfiles).toEqual(initial.automaticProfiles);
+    });
+
+    it('refreshes a native model through the public Action and projects the strict catalog into the picker', async () => {
+            const { observe, configuredTargetKey, writeModels } = catalog;
             const initial = await observe();
             expect(initial).toMatchObject({ probeFailures: [{ backendTargetKey: configuredTargetKey,
                 spawnFailure: { reason: 'other', errno: 'ENOENT' } }] });
-            expect(JSON.stringify(initial)).not.toContain(join(home, 'absent-agent'));
-            expect(initial.profiles, JSON.stringify({ initial,
-                requests,
-                purpose: getActiveAccountSettingsSnapshot()?.connectedPurposeCatalog?.status,
-                agents: [...readCurrentContributionRegistry().agentDefinitionsById.keys()] })).toEqual(expect.arrayContaining([expect.objectContaining({ modelSelector: {
+            expect(JSON.stringify(initial)).not.toContain('absent-agent');
+            expect(initial.profiles).toEqual(expect.arrayContaining([expect.objectContaining({ modelSelector: {
                 backendTargetKey: 'agent:happier.agent.codex/codex', modelId: 'initial-model' }, structuredOutput: 'supported' })]));
-            writeTextFileSync(modelFile, JSON.stringify([{ id: 'discovered-model', displayName: 'Discovered model', isDefault: true }]));
+            writeModels('discovered-model');
             expect((await observe()).profiles).toEqual(initial.profiles);
-            const discovered = await observe(true);
+            const discovered = await observe('agent:happier.agent.codex/codex');
             expect(discovered.profiles).toEqual(expect.arrayContaining([expect.objectContaining({ modelSelector: {
                 backendTargetKey: 'agent:happier.agent.codex/codex', modelId: 'discovered-model' }, structuredOutput: 'supported' })]));
             expect(discovered.automaticProfiles).toEqual(initial.automaticProfiles);
@@ -132,12 +208,24 @@ describe('Summary native model discovery', () => {
             }], executableProfiles: discovered.profiles, automaticProfiles: discovered.automaticProfiles,
                 discoveryTargetKeys: discovered.discoveryTargetKeys, defaultModelTitle: 'Default' });
             expect([...projected.selections.keys()]).toContain(discovered.profiles.find(profile => profile.modelSelector?.modelId === 'discovered-model')?.catalogId);
-        } finally {
-            await admitted?.dispose();
-            resetAgentModelsProbeCacheForTests();
-            vi.restoreAllMocks();
-            if (previous) setActiveAccountSettingsSnapshot(previous); else clearActiveAccountSettingsSnapshot();
-            vi.unstubAllEnvs(); removeTempDirSync(home);
-        }
+    });
+
+    it('keeps automatic admission at the native sign-in and Account metadata owners', async () => {
+            const { observe, disablePurposeMetadata } = catalog;
+            const claudeTargetKey = 'agent:happier.agent.claude/claude';
+            // Authentication changes at the native boundary make the same real
+            // catalog executable; authored cost evidence survives the strict DTO.
+            vi.stubEnv('ANTHROPIC_API_KEY', 'fixture-api-key');
+            const signedIn = await observe();
+            expect(signedIn).not.toHaveProperty('unavailableTargets');
+            expect(resolveScmDiffSummaryDefaultModelProfile(signedIn.automaticProfiles)).toMatchObject({
+                costTier: 'low', structuredOutput: 'supported', modelSelector: { backendTargetKey: claudeTargetKey },
+            });
+            disablePurposeMetadata();
+            const metadataUnavailable = await observe();
+            expect(metadataUnavailable).toMatchObject({ unavailableReason: 'account_metadata_unavailable',
+                unavailableTargets: expect.arrayContaining([{ backendTargetKey: claudeTargetKey, reason: 'account_metadata_unavailable' }]),
+            });
     });
 });
+

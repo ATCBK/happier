@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from 'zod/mini';
 import { buildQualifiedPluginContributionKey } from '@happier-dev/protocol/plugins/contribution-identity';
 import { PluginJsonSchemaV2Schema } from '@happier-dev/protocol/plugins/contributions/jsonSchema';
 import { PluginContributionIdentityV1Schema } from '@happier-dev/protocol/plugins/contribution-identity';
@@ -14,7 +14,7 @@ import { WidgetConnectedAccountPurposeBindingV1Schema } from '@happier-dev/proto
 import { WidgetSizeDeclarationV1Schema } from '@happier-dev/protocol/widgets/widgetPresentationV1';
 import type { WidgetCatalogSourceEntryV1 } from '@happier-dev/protocol/widgets';
 
-const display = z.object({ title: z.string().trim().min(1).optional(), developerFallback: z.string().trim().min(1).optional() }).passthrough();
+const display = z.looseObject({ title: z.optional(z.string().check(z.trim(), z.minLength(1))), developerFallback: z.optional(z.string().check(z.trim(), z.minLength(1))) });
 
 /** The daemon has admitted these rows; role/identity selection shares the Gallery selector. */
 export function readCliWidgetCatalogProjectionV1(projection: PluginProjectionV2) {
@@ -62,5 +62,6 @@ export function readCliWidgetCatalogProjectionV1(projection: PluginProjectionV2)
 
 export function cliWidgetCatalogEntryV1(candidate: ReturnType<typeof readCliWidgetCatalogProjectionV1>[number], instanceCount: number): WidgetCatalogSourceEntryV1 {
     return { definition: widgetCandidateDefinitionV1(candidate), title: candidate.title,
-        sizeDeclaration: candidate.sizeDeclaration, fields: [...candidate.fields], availability: candidate.availability, instanceCount };
+        sizeDeclaration: candidate.sizeDeclaration, fields: [...candidate.fields],
+        ...(candidate.inputSchema ? { inputSchema: candidate.inputSchema } : {}), availability: candidate.availability, instanceCount };
 }

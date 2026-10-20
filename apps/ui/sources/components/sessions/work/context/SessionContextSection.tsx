@@ -1,21 +1,19 @@
-import { happierPageTextMetrics, HAPPIER_WORK_PANE_METRICS, HappierPageSheetGroup } from '@happier-dev/plugin-ui/presentation';
+import { HappierPageSheetGroup } from '@happier-dev/plugin-ui/presentation';
 import type { ActionExecuteResult } from '@happier-dev/protocol/actions/actionExecutionResult';
 import type { SessionContextIntentV1 } from '@happier-dev/protocol/sessions/context/sessionContextV1';
 import * as React from 'react';
 import { View } from 'react-native';
-import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { useUnistyles } from 'react-native-unistyles';
 
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import { PromptStackDocumentMenu } from '@/components/settings/prompts/stacks/PromptStackDocumentMenu';
 import { PromptStackEntryRow } from '@/components/settings/prompts/stacks/PromptStackEntryRow';
 import { promptStackEntryHref, promptStackPlacementLabel } from '@/components/settings/prompts/stacks/promptStackEntryPresentation';
-import { WorkSection, WorkSectionEmptyLine } from '@/components/sessions/work/WorkSection';
+import { WorkSection, WorkSectionDescription, WorkSectionEmptyLine } from '@/components/sessions/work/WorkSection';
 import { IconButton } from '@/components/ui/buttons/IconButton';
 import { Icon, type IconName } from '@/components/ui/icons/Icon';
 import { CollectionListGroupLabel } from '@/components/ui/lists/collection/CollectionList';
-import { Text } from '@/components/ui/text/Text';
 import { SurfaceFreshnessLine } from '@/components/ui/surfaces/SurfaceFreshnessLine';
-import { Typography } from '@/constants/Typography';
 import { randomUUID } from '@/platform/randomUUID';
 import { readSessionOwnerMetadataView } from '@/sync/domains/session/readSessionOwnerMetadataView';
 import type { Session } from '@/sync/domains/state/storageTypes';
@@ -48,7 +46,7 @@ export const SessionContextSection = React.memo(function SessionContextSection(p
     const access = resolveSessionInstructionsAccess(session);
     const ownerMetadata = React.useMemo(() => readSessionOwnerMetadataView(session), [session]);
     if (access !== 'readable' || !ownerMetadata) return null;
-    return <SessionContextBody session={session} serverId={serverId} ownerMetadata={ownerMetadata} />;
+    return <SessionContextBody key={JSON.stringify([serverId, session.id])} session={session} serverId={serverId} ownerMetadata={ownerMetadata} />;
 });
 
 const SessionContextBody = React.memo(function SessionContextBody(props: Readonly<{
@@ -56,7 +54,6 @@ const SessionContextBody = React.memo(function SessionContextBody(props: Readonl
     serverId: string;
     ownerMetadata: unknown;
 }>) {
-    const styles = stylesheet;
     const { theme } = useUnistyles();
     const { session, serverId } = props;
     const router = useRouter();
@@ -161,7 +158,7 @@ const SessionContextBody = React.memo(function SessionContextBody(props: Readonl
                 <SurfaceFreshnessLine testID="session-work-context.projectUnavailable" tone="warning" reason={t('memoryContext.session.projectUnavailable')} />
             ) : null}
             {visible.length > 0 ? (
-                <Text style={styles.description}>{t('memoryContext.session.contextDescription')}</Text>
+                <WorkSectionDescription>{t('memoryContext.session.contextDescription')}</WorkSectionDescription>
             ) : null}
             {visible.length === 0 && layersKnown ? (
                 <WorkSectionEmptyLine testID="session-work-context.empty" text={t('memoryContext.session.contextEmpty')} />
@@ -215,6 +212,11 @@ const SessionContextBody = React.memo(function SessionContextBody(props: Readonl
                                     canMoveUp: index > 0,
                                     canMoveDown: index < added.length - 1,
                                     onBudgetChange: (maxChars: number | null) => update({ kind: 'set_budget', entryId: row.entry.id, maxChars }),
+                                    // One Doc added here can be this Session's plan; Work shows it as its Plan row.
+                                    ...(row.kind === 'doc' ? { plan: {
+                                        marked: row.entry.plan === true,
+                                        onChange: (marked: boolean) => update({ kind: 'set_plan', entryId: marked ? row.entry.id : null }),
+                                    } } : {}),
                                 })}
                                 switchDisabled={row.kind === 'unknown' || row.off === 'source' || row.off === 'memory'}
                                 onEnabledChange={(enabled) => update(inherited
@@ -229,12 +231,4 @@ const SessionContextBody = React.memo(function SessionContextBody(props: Readonl
     );
 });
 
-const stylesheet = StyleSheet.create((theme) => ({
-    description: {
-        ...Typography.default(),
-        ...happierPageTextMetrics('sectionDescription'),
-        color: theme.colors.text.secondary,
-        paddingHorizontal: HAPPIER_WORK_PANE_METRICS.rowInsetPx,
-        paddingBottom: theme.space.s6,
-    },
-}));
+

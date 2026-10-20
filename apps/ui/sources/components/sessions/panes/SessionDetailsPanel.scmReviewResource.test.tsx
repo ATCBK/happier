@@ -1,23 +1,28 @@
 import * as React from 'react';
 import { act } from 'react-test-renderer';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { renderScreen } from '@/dev/testkit';
-import { installSessionDetailsPanelCommonModuleMocks } from './sessionDetailsPanelTestHelpers';
+import { installSessionDetailsPanelNonRnModuleMocks } from './sessionDetailsPanelNonRnModuleMocks';
 import { installSessionPaneRuntimeTestHarness } from './sessionPaneRuntimeTestHarness';
 import { createSessionScmReviewDetailsTab } from './details/sessionDetailsTabBuilders';
 
-installSessionDetailsPanelCommonModuleMocks({
-    reactNative: async () => {
-        const { createReactNativeWebMock } = await import('@/dev/testkit/mocks/reactNative');
-        return createReactNativeWebMock({ Platform: { OS: 'ios' } });
-    },
+// Hoisted independently of helper options: the statically imported render
+// testkit can request React Native before those options have been installed.
+vi.mock('react-native', async () => {
+    const { createReactNativeNativeMock } = await import('@/dev/testkit/mocks/reactNative');
+    return createReactNativeNativeMock({ platformOS: 'ios' });
 });
+installSessionDetailsPanelNonRnModuleMocks();
 const runtime = installSessionPaneRuntimeTestHarness();
+// Resolve cold module loading during collection, not inside a lifecycle case's
+// budget. Both the Account harness and the pane then use these same real owners.
+const { loadSyncSingletonForTests } = await import('@/dev/testkit/harness/syncSingletonLoader');
+await loadSyncSingletonForTests();
+const { SessionDetailsPanel } = await import('./SessionDetailsPanel');
+const { SessionScmReviewDetailsView } = await import('@/components/sessions/files/views/SessionScmReviewDetailsView');
 
 describe('SessionDetailsPanel (scm review resource)', () => {
     it('renders the current review resource through the scoped Session', async () => {
-        const { SessionDetailsPanel } = await import('./SessionDetailsPanel');
-        const { SessionScmReviewDetailsView } = await import('@/components/sessions/files/views/SessionScmReviewDetailsView');
         const screen = await renderScreen(<runtime.Wrapper>
             <SessionDetailsPanel sessionId="s1" routeServerId={runtime.serverId} scopeId="session:s1" />
         </runtime.Wrapper>);
@@ -27,8 +32,29 @@ describe('SessionDetailsPanel (scm review resource)', () => {
         expect(views[0].props).toMatchObject({ sessionId: 's1', serverId: runtime.serverId });
     });
 
+    it('retains the review target on unrelated panel updates and replaces it when navigation changes', async () => {
+        const panel = (presentation: 'screen' | 'pane') => <runtime.Wrapper>
+            <SessionDetailsPanel sessionId="s1" routeServerId={runtime.serverId} scopeId="session:s1" presentation={presentation} />
+        </runtime.Wrapper>;
+        const screen = await renderScreen(panel('pane'));
+        await act(async () => runtime.pane.openDetailsTab(createSessionScmReviewDetailsTab({
+            comparison: { kind: 'workingTree', comparisonId: 'captured-a' }, view: 'walkthrough', explain: true,
+        }), { intent: 'pinned' }));
+        const target = screen.tree.findAllByType(SessionScmReviewDetailsView)[0]!.props.target;
+
+        await screen.update(panel('screen'));
+        // This target feeds callbacks all the way down to every memoized hunk card.
+        expect(screen.tree.findAllByType(SessionScmReviewDetailsView)[0]!.props.target).toBe(target);
+
+        await act(async () => runtime.pane.openDetailsTab(createSessionScmReviewDetailsTab({
+            comparison: { kind: 'commit', commit: 'abc123', comparisonId: 'captured-b' }, view: 'files', explain: false,
+        }), { intent: 'pinned' }));
+        const next = screen.tree.findAllByType(SessionScmReviewDetailsView)[0]!.props.target;
+        expect(next).not.toBe(target);
+        expect(next).toEqual({ comparison: { kind: 'commit', commit: 'abc123', comparisonId: 'captured-b' }, view: 'files', explain: false });
+    });
+
     it('places the dedicated screen close action before the tab strip on native', async () => {
-        const { SessionDetailsPanel } = await import('./SessionDetailsPanel');
         const screen = await renderScreen(<runtime.Wrapper>
             <SessionDetailsPanel sessionId="s1" routeServerId={runtime.serverId} scopeId="session:s1" presentation="screen" />
         </runtime.Wrapper>);

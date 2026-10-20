@@ -52,7 +52,7 @@ afterAll(async () => {
   }
 });
 
-type Scene = 'release' | 'release-failed' | 'release-review';
+type Scene = 'release' | 'release-failed' | 'release-review' | 'release-usage-limit';
 type App = {
   ready: () => boolean;
   open: (href: string) => void;
@@ -85,7 +85,7 @@ async function mount(
       h.app = await h.runHarness.mount(
         phone,
         theme,
-        scene === 'release-failed' ? 'failed' : 'running',
+        scene === 'release-failed' || scene === 'release-usage-limit' ? 'failed' : 'running',
         false,
         false,
         true,
@@ -241,6 +241,20 @@ describe('DESIGN-13 RUN captures', () => {
               await page.close();
             }
           });
+          for (const phone of [false, true]) {
+            await attempt(`usage-limit-${phone ? '390' : '1440'}-${theme}`, async () => {
+              const page = await browser.newPage({ viewport: { width: phone ? 390 : 1440, height: phone ? 844 : 1000 } });
+              try {
+                await mount(page, phone, theme, 'release-usage-limit');
+                await expect.poll(() => page.getByTestId('workflow-run-failure-reason').textContent()).toContain('Usage limit reached');
+                await shot(page, `usage-limit-${phone ? '390' : '1440'}-${theme}`);
+                await page.getByText('Publish summary', { exact: true }).first().click();
+                await expect.poll(() => page.getByTestId('workflow-run-recovery-cause').textContent()).toContain('Usage limit reached');
+                await expect.poll(() => page.getByTestId('workflow-run-runtime-issue-reset').isVisible()).toBe(true);
+                await shot(page, `usage-limit-pane-${phone ? '390' : '1440'}-${theme}`);
+              } finally { await page.close(); }
+            });
+          }
           // DESIGN-17 R1: the failed step selected, its recovery card leading the pane, whole page.
           for (const [width, height] of [[1440, 1000], [1600, 1000]] as const) {
             await attempt(`failedpane-${width}-${theme}`, async () => {

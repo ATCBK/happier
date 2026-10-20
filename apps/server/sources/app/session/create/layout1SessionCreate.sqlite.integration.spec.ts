@@ -39,6 +39,9 @@ import {
 import type { Layout1SessionCreateOutcome } from "./layout1SessionRowWrite";
 import { admitWorkflowRun } from "@/app/workflows/workflowRunService";
 import { fetchAutomationAccountCurrentnessWitnessTx } from "@/app/automations/automationAccountCurrentness";
+import { createDiscussion } from "@/app/discussions/mutations";
+import { inviteDiscussionParticipant } from "@/app/discussions/accessService";
+import { buildDiscussionMutationRequestBodyV1 } from "@happier-dev/protocol/discussions/api";
 import { resolveEffectiveSessionAccess } from "@/app/session/access/sessionAccess";
 import { readSessionDataKeyEnvelopePage, applySessionDataKeyEnvelopes } from "@/app/session/encryption/sessionDataKeyEnvelopeService";
 import {
@@ -127,11 +130,13 @@ describe("Layout-1 Session constructor (SQLite integration)", () => {
         teamCredentialBindings?: import("@happier-dev/protocol/teams").SessionTeamCredentialBindingIntentListV1;
         initialAccess?: SessionInitialAccessMaterializedV1;
         initialTriggers?: SessionInitialTriggerAdmissionV1[];
-        originKind?: "none" | "session" | "execution_run" | "run_step";
+        originKind?: "none" | "session" | "execution_run" | "run_step" | "discussion";
+        discussionParticipant?: { discussionId: string; participantSlotId: string };
+        discussionParticipantLaunch?: import("@happier-dev/protocol/discussions/modelParticipantLaunch").DiscussionModelParticipantLaunchV1;
         originSessionId?: string;
         originRunId?: string;
         workDepth?: number;
-        reportsTo?: { sessionId: string };
+        manager?: { sessionId: string };
     }>): PreparedLayout1SessionCreate {
         const accountEncryptionMode = params.accountEncryptionMode ?? "plain";
         const result = prepareLayout1SessionCreate({
@@ -154,8 +159,10 @@ describe("Layout-1 Session constructor (SQLite integration)", () => {
             originKind: params.originKind,
             originSessionId: params.originSessionId,
             originRunId: params.originRunId,
+            discussionParticipant: params.discussionParticipant,
+            discussionParticipantLaunch: params.discussionParticipantLaunch,
             workDepth: params.workDepth,
-            ...(params.reportsTo ? { reportsTo: params.reportsTo } : {}),
+            ...(params.manager ? { manager: params.manager } : {}),
             accountEncryptionMode,
             storagePolicy: "optional",
             defaultAccountMode: "e2ee",
@@ -165,6 +172,51 @@ describe("Layout-1 Session constructor (SQLite integration)", () => {
         }
         return result.prepared;
     }
+
+    it('creates and rejoins one ordinary Discussion-owned Session after response loss and rejects a forged slot or launch', async () => {
+        const owner = await createPlainAccount(`discussion-owner-${randomUUID()}`);
+        const outsider = await createPlainAccount(`discussion-outsider-${randomUUID()}`);
+        const machine = await db.machine.create({ data: { id: randomUUID(), accountId: owner.id, metadata: '{}' } });
+        const discussion = await createDiscussion({ actorAccountId: owner.id, authentication: TEST_AUTHENTICATION,
+            request: buildDiscussionMutationRequestBodyV1({ kind: 'create', creationLocalId: randomUUID(),
+                titleContent: { t: 'plain', v: { v: 1, title: 'Model participant' } }, firstMessage: {
+                    localId: randomUUID(), content: { t: 'plain', v: { v: 1, parts: [{ t: 'text', text: 'No model prompt yet' }] } }, mentionedAccountIds: [],
+                    authoredContent: { v: 1, parts: [{ t: 'text', text: 'No model prompt yet' }] },
+                } }) });
+        if (!discussion.ok) throw new Error(discussion.error);
+        const discussionParticipant = { discussionId: discussion.value.discussion.id, participantSlotId: randomUUID() };
+        const launch = { executionTarget: { serverId: 'home', machineId: machine.id }, directory: { kind: 'path' as const, path: '/repo' },
+            agentTarget: { kind: 'agent' as const, identity: { pluginId: 'happier.agent.codex', localId: 'codex' } } };
+        expect(await inviteDiscussionParticipant({ actorAccountId: owner.id, authentication: TEST_AUTHENTICATION,
+            discussionId: discussionParticipant.discussionId,
+            request: { participant: { kind: 'model', participantSlotId: discussionParticipant.participantSlotId, launch } } })).toMatchObject({ ok: true });
+        const request = { accountId: owner.id, tag: `discussion-slot-${discussionParticipant.participantSlotId}`,
+            originKind: 'discussion' as const, discussionParticipant, discussionParticipantLaunch: launch, workDepth: 37 };
+        expect(() => prepared({ ...request, initialTriggers: [initialTrigger(machine.id, randomUUID())] })).toThrow();
+        const first = await inTx(tx => createOrRejoinLayout1SessionByTagInTx(tx, prepared(request)));
+        expect(first.kind).toBe('created');
+        if (first.kind !== 'created') throw new Error(first.kind);
+        expect(first.session).toMatchObject({ originKind: 'discussion', originDiscussionId: discussionParticipant.discussionId,
+            originDiscussionParticipantSlotId: discussionParticipant.participantSlotId, originSessionId: null, originRunId: null, workDepth: 37 });
+        const retry = await inTx(tx => createOrRejoinLayout1SessionByTagInTx(tx, prepared(request)));
+        expect(retry).toMatchObject({ kind: 'rejoined', session: { id: first.session.id } });
+        expect(await db.session.count({ where: { accountId: owner.id } })).toBe(1);
+        expect(await db.discussionParticipant.findUnique({ where: { discussionId_participantSlotId: discussionParticipant } }))
+            .toMatchObject({ sessionId: first.session.id });
+        for (const forged of [
+            { ...request, accountId: outsider.id, tag: 'forged-owner' },
+            { ...request, tag: 'second-creation-for-the-same-slot' },
+            { ...request, tag: 'wrong-machine', discussionParticipantLaunch: { ...launch, executionTarget: { ...launch.executionTarget, machineId: 'other' } } },
+            { ...request, tag: 'unknown-slot', discussionParticipant: { ...discussionParticipant, participantSlotId: 'unknown' } },
+        ]) await expect(inTx(tx => createOrRejoinLayout1SessionByTagInTx(tx, prepared(forged))))
+            .rejects.toMatchObject({ name: 'SessionCreationOriginError' });
+        await expect(inTx(tx => createOrRejoinLayout1SessionByTagInTx(tx,
+            prepared({ accountId: owner.id, tag: request.tag, originKind: 'none' }))))
+            .rejects.toMatchObject({ name: 'SessionCreationOriginError' });
+        expect(await db.session.count({ where: { accountId: { in: [owner.id, outsider.id] } } })).toBe(1);
+        await db.discussion.delete({ where: { id: discussionParticipant.discussionId } });
+        expect(await db.session.findUnique({ where: { id: first.session.id } })).not.toBeNull();
+    });
 
     function initialTrigger(machineId: string, automationId: string): SessionInitialTriggerAdmissionV1 {
         return {
@@ -256,38 +308,38 @@ describe("Layout-1 Session constructor (SQLite integration)", () => {
             prepared({ accountId: owner.id, tag: "reports-to-lead" })));
         if (lead.kind !== "created") throw new Error("Lead fixture was not created");
         const ordinary = await inTx((tx) => createOrRejoinLayout1SessionByTagInTx(tx,
-            prepared({ accountId: owner.id, tag: "reports-to-child", reportsTo: { sessionId: lead.session.id } })));
+            prepared({ accountId: owner.id, tag: "reports-to-child", manager: { sessionId: lead.session.id } })));
         if (ordinary.kind !== "created") throw new Error("Child was not created");
-        const edge = await db.sessionReportsTo.findUniqueOrThrow({ where: { sessionId: ordinary.session.id } });
-        expect(edge.leadSessionId).toBe(lead.session.id);
+        const edge = await db.sessionFollowEdge.findUniqueOrThrow({ where: { managerSourceSessionId: ordinary.session.id } });
+        expect(edge).toMatchObject({ relation: 'manager', destinationSessionId: lead.session.id });
         // The constructor's publication/result must describe the committed row.
         expect((await db.session.findUniqueOrThrow({ where: { id: ordinary.session.id } })).updatedAt)
             .toEqual(ordinary.session.updatedAt);
         const reserved = await inTx((tx) => createFreshBoundLayout1SessionInTx(tx, {
             sessionId: "reports-to-reserved-child",
-            prepared: prepared({ accountId: owner.id, tag: "reports-to-reserved", reportsTo: { sessionId: lead.session.id } }),
+            prepared: prepared({ accountId: owner.id, tag: "reports-to-reserved", manager: { sessionId: lead.session.id } }),
         }));
         expect(reserved.kind).toBe("created");
         if (reserved.kind === "created") {
             expect((await db.session.findUniqueOrThrow({ where: { id: reserved.session.id } })).updatedAt)
                 .toEqual(reserved.session.updatedAt);
         }
-        expect(await db.sessionReportsTo.findUnique({ where: { sessionId: "reports-to-reserved-child" } }))
-            .toMatchObject({ leadSessionId: lead.session.id });
+        expect(await db.sessionFollowEdge.findUnique({ where: { managerSourceSessionId: "reports-to-reserved-child" } }))
+            .toMatchObject({ relation: 'manager', destinationSessionId: lead.session.id });
         const rejoined = await inTx((tx) => createOrRejoinLayout1SessionByTagInTx(tx,
-            prepared({ accountId: owner.id, tag: "reports-to-child", reportsTo: { sessionId: "absent-lead" } })));
+            prepared({ accountId: owner.id, tag: "reports-to-child", manager: { sessionId: "absent-lead" } })));
         expect(rejoined.kind).toBe("rejoined");
-        expect(await db.sessionReportsTo.findUniqueOrThrow({ where: { sessionId: ordinary.session.id } })).toEqual(edge);
+        expect(await db.sessionFollowEdge.findUniqueOrThrow({ where: { managerSourceSessionId: ordinary.session.id } })).toEqual(edge);
         expect(await db.homeSettings.count()).toBe(0);
     });
 
-    it("rolls back Session creation when the requested reportsTo lead is unreadable", async () => {
+    it("rolls back Session creation when the requested manager is unreadable", async () => {
         const owner = await createPlainAccount("pk-reports-to-create-denied");
         await expect(inTx((tx) => createOrRejoinLayout1SessionByTagInTx(tx,
-            prepared({ accountId: owner.id, tag: "reports-to-denied", reportsTo: { sessionId: "absent-lead" } }))))
-            .rejects.toMatchObject({ name: "SessionCreationReportsToError" });
+            prepared({ accountId: owner.id, tag: "reports-to-denied", manager: { sessionId: "absent-lead" } }))))
+            .rejects.toMatchObject({ name: "SessionCreationManagerError" });
         expect(await db.session.count({ where: { accountId: owner.id } })).toBe(0);
-        expect(await db.sessionReportsTo.count()).toBe(0);
+        expect(await db.sessionFollowEdge.count({ where: { relation: 'manager' } })).toBe(0);
     });
 
     it("persists host-stamped origin and depth and keeps the first values on rejoin", async () => {
@@ -711,9 +763,16 @@ describe("Layout-1 Session constructor (SQLite integration)", () => {
                     pendingVersion: 4,
                 },
             });
-            await db.$executeRaw`INSERT INTO AccountSessionFollow
-                (accountId, sessionId, following, notificationLevel, includeInVoice, voiceDeliveredFrontier)
-                VALUES (${owner.id}, ${created.session.id}, true, 'important', true, ${JSON.stringify({ v: 1, transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null })})`;
+            await db.accountSessionFollow.create({
+                data: {
+                    accountId: owner.id,
+                    sessionId: created.session.id,
+                    following: true,
+                    notificationLevel: "important",
+                    includeInVoice: true,
+                    voiceDeliveredFrontier: JSON.stringify({ v: 1, transcriptSeq: 0, readyEventSeq: 0, agentStateVersion: 0, turn: null }),
+                },
+            });
             const creationChange = await db.accountChange.findUniqueOrThrow({
                 where: {
                     accountId_kind_entityId: {
@@ -807,7 +866,7 @@ describe("Layout-1 Session constructor (SQLite integration)", () => {
             WHEN NEW.kind = 'session' BEGIN SELECT RAISE(ABORT, 'test_change_write_rejected'); END`);
         try {
             const input = prepared({ accountId: owner.id, tag: "publication-failure" });
-            await expect(inTx(async (tx): Promise<Layout1SessionCreateOutcome<FreshBoundLayout1SessionCreateRejection>> => {
+            await expect(inTx(async (tx) => {
                 if (entry === "ordinary") return await createOrRejoinLayout1SessionByTagInTx(tx, input);
                 return await createFreshBoundLayout1SessionInTx(tx, { prepared: input, sessionId: "reserved-publication-failure" });
             })).rejects.toThrow();
@@ -845,7 +904,7 @@ describe("Layout-1 Session constructor (SQLite integration)", () => {
                     accountEncryptionMode: "e2ee",
                     dataEncryptionKey: Buffer.from(tweetnacl.randomBytes(32)).toString("base64"),
                 });
-                await expect(inTx(async (tx): Promise<Layout1SessionCreateOutcome<FreshBoundLayout1SessionCreateRejection>> => {
+                await expect(inTx(async (tx) => {
                     if (entry === "ordinary") return await createOrRejoinLayout1SessionByTagInTx(tx, input);
                     return await createFreshBoundLayout1SessionInTx(tx, {
                         prepared: input,
@@ -937,7 +996,7 @@ describe("Layout-1 Session constructor (SQLite integration)", () => {
                 data: { status: "suspended" },
             });
 
-            const outcome = await inTx(async (tx): Promise<Layout1SessionCreateOutcome<FreshBoundLayout1SessionCreateRejection>> => {
+            const outcome = await inTx(async (tx) => {
                 if (entry === "ordinary") return createOrRejoinLayout1SessionByTagInTx(tx, input);
                 if (entry === "rejoin") {
                     const rejoined = await rejoinLayout1SessionByTagInTx(tx, input);

@@ -89,6 +89,7 @@ describe('scmBackendCatalog', () => {
         'happier.scm.backend.git',
         'happier.scm.backend.sapling',
       ]);
+      if (!runtime.activatePluginsForValidation) throw new Error('Missing runtime activation validation');
       await expect(runtime.activatePluginsForValidation(['happier.scm.forge.azure-devops'])).resolves.toEqual([]);
     } finally {
       await fixture.dispose();

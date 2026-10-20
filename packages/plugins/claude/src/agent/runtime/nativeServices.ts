@@ -16,6 +16,8 @@ import {
 
 import { createClaudeNativeSdkQueryContext } from '../sdk/nativeExec.js';
 import { createClaudeNativePermissionEngine } from '../permissions/nativePermissionEngine.js';
+import { isAskUserQuestionToolName } from '../permissions/askUserQuestion.js';
+import { CLAUDE_UNIFIED_TERMINAL_DIALOG_CHOICE_REQUEST_SOURCE } from './terminal/unified/constants.js';
 import type { ClaudePermissionDecision } from '../permissions/createClaudePermissionEngine.js';
 import { readClaudeCodeNativeCredentialPayload } from '../auth/services/native/credentials.js';
 import {
@@ -96,25 +98,30 @@ function toNativeGoalWorkStateItem(
 
 export function createClaudeNativeGoalWorkStatePublisher(
   context: AgentSessionRuntimeContext,
-): (snapshot: SessionWorkStateV1) => void {
+): (snapshot: SessionWorkStateV1) => Promise<void> {
   const publisher = context.workState.publisher('goals');
   let sourceSequence = 0;
-  return (snapshot) => {
+  return async (snapshot) => {
     const items = snapshot.items
       .map(toNativeGoalWorkStateItem)
       .filter((item): item is WorkStateItem => item !== null);
     const primaryLocalId = items.some((item) => item.localId === snapshot.primaryItemId)
       ? snapshot.primaryItemId
       : null;
-    void publisher.publish({
+    await publisher.publish({
       sourceSequence: ++sourceSequence,
       observedAtMs: snapshot.updatedAt,
       items,
       primaryLocalId,
+    }).then((result) => {
+      if (result.status !== 'applied' && result.status !== 'unchanged') {
+        throw new Error('diagnostic' in result ? result.diagnostic.code : 'agent_work_state_publication_unconfirmed');
+      }
     }).catch((error) => {
       context.services.logger.warn('[Claude] native goal work-state publication failed', {
         error: error instanceof Error ? error.message : String(error),
       });
+      throw error;
     });
   };
 }
@@ -149,6 +156,13 @@ function createNativePermissionDecisionAdapter(context: AgentSessionRuntimeConte
     ): Promise<ClaudePermissionDecision> {
       const toolName = typeof request.toolName === 'string' ? request.toolName.trim() : '';
       if (!toolName) return { decision: 'denied', rationale: 'Claude supplied an invalid tool request.' };
+      if (request.source === CLAUDE_UNIFIED_TERMINAL_DIALOG_CHOICE_REQUEST_SOURCE && isAskUserQuestionToolName(toolName)) {
+        const permissions = context.services.sessions.current?.permissions;
+        if (!permissions) return unavailable('native dialog permission scope');
+        // Runtime-authored terminal dialogs retain their source, presentation,
+        // cancellation and apply-before-answer acknowledgement at the rich host seam.
+        return await permissions.requestDecision(request, options);
+      }
       const requestId = typeof request.requestId === 'string' ? request.requestId : null;
       const toolUseId = typeof request.toolCallId === 'string' ? request.toolCallId : null;
       const result = await engine.canCallTool(toolName, request.input, {
@@ -191,7 +205,7 @@ export function createClaudeNativeAgentSdkContext(
   return {
     logger: createClaudeRuntimeLogger(context),
     agentRuntime: {
-      exec: createClaudeNativeSdkQueryContext(context.services.exec, (message) => context.services.logger.warn(message)),
+      exec: createClaudeNativeSdkQueryContext(context.services.exec, (message) => context.services.logger.warn(message), services.nativeLaunch),
       sessionHooks: {
         async startServer(request) {
           const { providerId: _providerId, sessionId: _sessionId, lifecycle: _lifecycle, ...nativeRequest } = request;
@@ -292,7 +306,7 @@ export function createClaudeNativeExecutionRunAgentSdkContext(
   return {
     logger: createClaudeRuntimeLogger(context),
     agentRuntime: {
-      exec: createClaudeNativeSdkQueryContext(context.services.exec, (message) => context.services.logger.warn(message)),
+      exec: createClaudeNativeSdkQueryContext(context.services.exec, (message) => context.services.logger.warn(message), services.nativeLaunch),
       fileFollow: services.fileFollow,
       hooks: services.hooks,
       toolExecution: services.toolExecution,

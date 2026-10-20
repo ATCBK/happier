@@ -13,6 +13,8 @@ export const SessionFollowMessageSummaryV1Schema = lazyZodSchema(() => z.strictO
   messageId: SessionTranscriptObservationAckV1Schema._zod.def.options[0].shape.id,
   seq: SessionTranscriptObservationAckV1Schema._zod.def.options[0].shape.seq,
   text: z.string(),
+  /** Content-free committed Goal original, classified by the source hydrator. */
+  event: z.optional(z.strictObject({ kind: z.literal('goal_changed') })),
   /** Sanitized display label; protected provenance remains the authority for origin. */
   authorLabel: z.optional(z.string().check(z.trim(), z.minLength(1), z.maxLength(191), z.regex(/^[^\u0000-\u001f\u007f]+$/u))),
   provenance: z.nullable(SessionMessageProvenanceV1Schema),

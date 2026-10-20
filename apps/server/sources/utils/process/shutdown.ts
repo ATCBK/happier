@@ -5,7 +5,7 @@ const shutdownController = new AbortController();
 let shutdownPromise: Promise<void> | null = null;
 const DEFAULT_SHUTDOWN_DEADLINE_MS = 5_000;
 
-export const shutdownSignal = shutdownController.signal;
+export const shutdownSignal: AbortSignal = shutdownController.signal;
 
 export function onShutdown(name: string, callback: () => Promise<void>): () => void {
     if (shutdownSignal.aborted) {

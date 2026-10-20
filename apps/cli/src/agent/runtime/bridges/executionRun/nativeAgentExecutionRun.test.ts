@@ -42,6 +42,7 @@ import { finishExecutionRun } from './finishExecutionRun';
 import { createExecutionRunControllerMessageHandler } from './messages/sessionStateEmission';
 import { createPiRuntimeEventProjector } from '@happier-dev/plugins-pi/agent/runtime/rpc/events';
 import { createSessionHooksService } from '@/plugins/runtime/hooks/session/service';
+import { readExecutionRunErrorCode } from './errors';
 
 import {
     createNativeAgentExecutionRunHostRuntime,
@@ -57,6 +58,54 @@ import {
 afterEach(() => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+});
+
+it.each(['bounded', 'long_lived'] as const)('refuses an unavailable native mode through the real %s Session-owned Run factory', async (runClass) => {
+    const send = vi.fn<AgentSessionRuntime['send']>(async () => ({ status: 'admitted' }));
+    const dispose = vi.fn();
+    const runtime: AgentRuntime = { sessions: { async open(_request, context) {
+        context.session.services.modes.bind({
+            read: () => ({ modes: [{ id: 'build', name: 'Build' }], currentModeId: 'build' }),
+            subscribe: () => ({ dispose() {} }),
+        });
+        return { send, dispose, watch: () => ({ dispose() {} }) };
+    } } };
+    const host = createVoiceSessionRuntimeThroughNativeFactory({ runtime, modelId: 'native-mode-fixture',
+        capabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
+        configuration: { mode: { value: 'default', updatedAtMs: 1 }, model: { value: null, updatedAtMs: 0 },
+            permissionIntent: { value: null, updatedAtMs: 0 }, options: {} },
+        start: { intent: runClass === 'bounded' ? 'memory_hints' : 'voice_agent', runClass, retentionPolicy: 'ephemeral' },
+    });
+    try {
+        await expect(host.provisionRuntime({ initialPrompt: 'Do not send' }))
+            .rejects.toMatchObject({ code: 'native_agent_session_mode_unavailable' });
+        expect(send).not.toHaveBeenCalled();
+        await vi.waitFor(() => expect(dispose).toHaveBeenCalledOnce());
+    } finally { await host.dispose(); }
+});
+
+it('settles a native execution-only Run when send returns unavailable without a terminal event', async () => {
+    const host = createNativeAgentExecutionRunHostRuntime({
+        runtime: { executionRuns: { async open() { return {
+            async send() { return { status: 'unavailable' as const, diagnostic: { code: 'native_input_unavailable', severity: 'error' as const } }; },
+            async stop() { return { status: 'notRunning' as const }; },
+            watch() { return { dispose() {} }; }, async dispose() {},
+        }; } } },
+        lease: { pluginId: 'acme.execution-only', pluginVersion: '1.0.0', agentId: 'acme.execution-only/default',
+            localAgentId: 'default', occurrenceId: 'unavailable-fixture', isCurrent: () => true },
+        options: { cwd: '/repo', runId: 'native-unavailable', scope: 'detached', backendId: 'acme.execution-only/default',
+            permissionMode: 'no_tools', start: { intent: 'delegate', runClass: 'long_lived', retentionPolicy: 'resumable' } },
+        supportsResume: false,
+    });
+    const outcome: { completed?: boolean; code?: string | null } = {};
+    let completion: Promise<void> | undefined;
+    try {
+        await host.provisionRuntime({ initialPrompt: 'Initial input' });
+        completion = host.waitForTurnCompletion!().then(() => { outcome.completed = true; }, error => { outcome.code = readExecutionRunErrorCode(error); });
+        await expect(host.deliverInput('native-unavailable', { text: 'Follow up' })).rejects.toThrow();
+        await Promise.resolve();
+        expect(outcome).toEqual({ code: 'native_input_unavailable' });
+    } finally { await host.dispose(); await completion; }
 });
 
 it.each([
@@ -76,6 +125,7 @@ it.each([
     } } };
     const host = createNativeAgentExecutionRunHostRuntime({
         runtime,
+        supportsResume: false,
         lease: { pluginId: 'acme.agent', pluginVersion: '1.0.0', agentId: 'acme.agent/default',
             localAgentId: 'default', occurrenceId: 'profile-fixture', isCurrent: () => true },
         options: { cwd: '/repo', runId: 'profile-run', scope: 'detached', backendId: 'acme.agent/default', permissionMode: 'no_tools',
@@ -188,6 +238,158 @@ it.each(['finite', 'retained'] as const)('persists the corrected Pi artifact thr
 async function createUnexpectedAgentRuntimeSurfaceInvocationContext(): Promise<never> {
     throw new Error('Execution-run fixture should not create an Agent runtime surface invocation context');
 }
+
+it.each(['plan', 'delegate'] as const)('repairs a bounded %s reply through the real Session runtime factory', async intent => {
+    const runId = 'host-voice-run';
+    const listeners = new Set<(event: AgentSessionRuntimeEvent) => void>();
+    const prompts: string[] = [];
+    let sequence = 0;
+    const repaired = intent === 'plan'
+        ? { summary: 'Child replied', sections: [{ title: 'Result', items: ['Reply received'] }], risks: [], milestones: [] }
+        : { summary: 'Child replied', deliverables: [{ id: 'reply', title: 'Reply received' }] };
+    // The external Agent SDK is the boundary. Factory selection, native Session
+    // adaptation, bounded repair, profile parsing and terminal publication are real.
+    const runtime: AgentRuntime = { sessions: { async open() { return {
+        watch(listener) { listeners.add(listener); return { dispose() { listeners.delete(listener); } }; },
+        async send(request) {
+            prompts.push(request.input.text);
+            const publish = (event: UnsequencedSessionEvent<AgentSessionRuntimeEvent>) => {
+                for (const listener of listeners) listener({ ...event, sequence: ++sequence,
+                    sessionId: 'session-parent', emittedAtMs: sequence } as AgentSessionRuntimeEvent);
+            };
+            const turnId = request.delivery.turnId;
+            publish({ kind: 'input-accepted', inputIds: request.inputIds, delivery: request.delivery });
+            publish({ kind: 'turn-start', turnId, startedBy: 'host' });
+            publish({ kind: 'message-delta', turnId, channel: 'assistant',
+                text: prompts.length === 1 ? 'QA_CHILD_OK' : JSON.stringify(repaired) });
+            publish({ kind: 'turn-complete', turnId });
+            return { status: 'admitted' as const };
+        },
+        async cancel() { return { status: 'notRunning' as const }; },
+        async dispose() {},
+    }; } } };
+    const host = createVoiceSessionRuntimeThroughNativeFactory({ runtime,
+        capabilities: VOICE_INTERACTION_SESSION_CAPABILITIES, modelId: 'claude-haiku-4-5',
+        start: { intent, runClass: 'bounded', retentionPolicy: 'ephemeral', ioMode: 'request_response' } });
+    const { runtimeId } = await host.provisionRuntime();
+    const ctrl: ExecutionRunBackendController = {
+        kind: 'backend', controllerOccurrenceId: 'bounded-repair', backend: host, backendSupportsResume: true, runtimeId,
+        buffer: '', sidechainStreamBuffer: '', sidechainStreamKey: '', streamWriter: null, cancelled: false,
+        turnCount: 0, turnEpoch: 0, turnInFlight: false, turnCancelReason: null, turnCancelEpoch: null,
+        admittedLiveInterventions: [], admittedLiveInterventionsSignal: null, lastMarkerWriteAtMs: 0,
+        terminalPromise: Promise.resolve(), resolveTerminal() {},
+    };
+    const state: ExecutionRunState = { runId, callId: 'repair-call', sidechainId: 'repair-sidechain',
+        sessionId: 'session-parent', depth: 1, intent, backendTarget: { kind: 'builtInAgent', agentId: 'claude' },
+        backendId: 'claude', instructions: 'Reply exactly QA_CHILD_OK.', permissionMode: 'read_only',
+        retentionPolicy: 'ephemeral', runClass: 'bounded', ioMode: 'request_response', status: 'running', startedAtMs: 1 };
+    const runs = new Map([[runId, state]]);
+    const controllers = new Map([[runId, ctrl]]);
+    const unsubscribe = host.subscribeMessages(createExecutionRunControllerMessageHandler({
+        ctrl, runId, sidechainId: state.sidechainId, ioMode: state.ioMode, computeSidechainStreamText: text => text,
+        sendAcp: async () => {}, parentProvider: 'claude', runs, backendSupportsResume: true,
+        writeActivityMarker: async () => {}, getNowMs: () => 2,
+    }));
+    try {
+        await executeBoundedBackendRun({ runId, callId: state.callId, sidechainId: state.sidechainId, startedAtMs: 1,
+            params: state, controllers, runs, sendAcp: async () => {}, parentProvider: 'claude',
+            getNowMs: () => 2, boundedTimeoutMs: null,
+            finishRun: async (_id, next) => { runs.set(runId, { ...runs.get(runId)!, ...next }); },
+        });
+        expect(runs.get(runId)).toMatchObject({ status: 'succeeded', summary: 'Child replied' });
+        expect(prompts).toHaveLength(2);
+        expect(prompts[1]).toContain('QA_CHILD_OK');
+    } finally { unsubscribe(); await host.dispose(); }
+});
+
+it.each(['bounded', 'retained', 'finite'] as const)('follows the child native source in its own %s Run context', async kind => {
+    const observed: unknown[] = [];
+    const runWrites = vi.fn(async () => ({ persisted: true, delivered: true }));
+    const runUserWrites = vi.fn(async () => ({ persisted: true, delivered: true }));
+    const parentWrites = vi.fn(async () => ({ persisted: true, delivered: true }));
+    const disposedFollow = vi.fn(async () => {});
+    let failSource!: (error: Error) => void;
+    const failure = new Promise<Error>(resolve => { failSource = resolve; });
+    let sourceBinding: Awaited<ReturnType<NonNullable<AgentSessionRuntimeContext['session']['services']['transcripts']['followSource']>>> | undefined;
+    let nativeContext: AgentSessionRuntimeContext | undefined;
+    let listener: ((event: AgentSessionRuntimeEvent) => void) | undefined;
+    const sourceRow = { type: 'assistant', uuid: 'child-source', message: { content: [] } };
+    // The native Agent SDK and the daemon transport are external boundaries.
+    // Factory selection, ordered baseline, source projector and durable writer stay real.
+    const runtime: AgentRuntime = { sessions: { async open(_request, context) {
+        nativeContext = context;
+        return {
+            async observeSourceTranscript(input) { observed.push(input); },
+            watch(publish) { listener = publish; return { dispose() {} }; },
+            async send(request) {
+                sourceBinding = await context.session.services.transcripts.followSource!({ providerSessionId: 'native-child', replay: 'historical' });
+                listener!({ kind: 'input-accepted', sequence: 1, sessionId: 'session-parent', emittedAtMs: 1,
+                    inputIds: request.inputIds, delivery: request.delivery });
+                listener!({ kind: 'turn-start', sequence: 2, sessionId: 'session-parent', emittedAtMs: 2,
+                    turnId: request.delivery.turnId, startedBy: 'host' });
+                listener!({ kind: 'turn-complete', sequence: 3, sessionId: 'session-parent', emittedAtMs: 3,
+                    turnId: request.delivery.turnId });
+                return { status: 'admitted' as const };
+            },
+            async dispose() {},
+        };
+    } } };
+    const host = createVoiceSessionRuntimeThroughNativeFactory({ runtime, modelId: 'child-model',
+        capabilities: { open: ['create'], delivery: kind === 'finite' ? ['steer'] : ['newTurn'], cancel: false },
+        start: { intent: 'delegate', runClass: kind === 'retained' ? 'long_lived' : 'bounded',
+            retentionPolicy: kind === 'retained' ? 'resumable' : 'ephemeral', ioMode: 'streaming' },
+        session: { sessionId: 'session-parent', getMetadataSnapshot: () => ({ path: '/repo' }),
+            updateMetadata: vi.fn(), updateAgentState: vi.fn(), enqueueAgentMessageCommitted: parentWrites,
+            fetchCommittedTranscriptLocalIdBaseline: async () => ({ complete: true, localIds: new Set(['already-written']) }),
+        } as never,
+        sessionOwnedRunScope: { runId: 'host-voice-run', workDepth: 1, sidechainId: 'child-sidechain',
+            readCurrentRunOccurrence: () => null, publishSupportedSessionReadActions() {},
+            projectRunTranscriptSession: () => ({ sessionId: 'session-parent', requiresDurableTurnCompletionMarker: true,
+                updateMetadata: vi.fn(), enqueueAgentMessageCommitted: runWrites, enqueueUserTextMessageCommitted: runUserWrites }),
+        },
+        externalSessionHostOperations: { bindSession(sessionId) {
+            expect(sessionId).toBe('session-parent');
+            return {
+                async executeFollow() { throw new Error('Unexpected unscoped follow'); },
+                async executeProviderSessionFollow(request) {
+                    expect(request.providerSessionId).toBe('native-child');
+                    await request.listener({ kind: 'data', phase: 'initial_replay', providerSessionId: 'native-child',
+                        fromCursor: null, nextCursor: 'child-cursor', items: [
+                            { kind: 'source_observation', id: 'child-source', timestampMs: 1, data: sourceRow },
+                            { kind: 'user', id: 'child-input', localId: 'child-input', userProjection: 'source_fact', timestampMs: 1,
+                                data: { role: 'user', content: { type: 'text', text: 'Child input' } } },
+                            { kind: 'agent', id: 'duplicate', localId: 'already-written', timestampMs: 1,
+                                data: { role: 'agent', content: { type: 'message', message: 'Already stored' } } },
+                            { kind: 'agent', id: 'new', localId: 'child-display', timestampMs: 2,
+                                data: { role: 'agent', content: { type: 'message', message: 'Child source display' } } },
+                        ] });
+                    return { status: 'following' as const, startingCursor: 'child-cursor', failure, subscription: { dispose: disposedFollow } };
+                },
+                async retire() {},
+            };
+        } },
+    });
+    try {
+        await host.provisionRuntime();
+        await host.deliverInput('host-voice-run', { text: 'Follow child output' });
+        await host.waitForTurnCompletion?.();
+        expect(observed).toEqual([{ providerSessionId: 'native-child', sourceId: 'child-source', row: sourceRow, phase: 'initial_replay' }]);
+        expect(runWrites).toHaveBeenCalledOnce();
+        expect(runWrites).toHaveBeenCalledWith('acme.voice/agents/default',
+            expect.objectContaining({ type: 'message', message: 'Child source display' }),
+            expect.objectContaining({ localId: 'child-display' }));
+        expect(parentWrites).not.toHaveBeenCalled();
+        expect(runUserWrites).toHaveBeenCalledWith('Child input', expect.objectContaining({ localId: 'child-input' }));
+        expect(nativeContext?.session.id).toBe('session-parent');
+        if (kind === 'retained') {
+            const lost = new Error('child source channel lost');
+            failSource(lost);
+            await expect(sourceBinding?.failure).resolves.toBe(lost);
+            expect(nativeContext?.signal.aborted).toBe(false);
+        }
+    } finally { await host.dispose(); }
+    expect(disposedFollow).toHaveBeenCalledOnce();
+});
 
 type UnsequencedSessionEvent<T> = T extends AgentSessionRuntimeEvent
     ? Omit<T, 'sequence' | 'sessionId' | 'emittedAtMs'>
@@ -757,10 +959,10 @@ describe('createNativeAgentExecutionRunHostRuntime', () => {
                 readInitialProfileContext: () => 'Saved captured explanation: the retained change is blue.',
                 sessionRunContext: {
                     kind: 'happier_session_run' as const, sessionId: 'session-parent',
-                    origin: { kind: 'session_discussion' as const, discussionId: 'discussion-1', messageIds: ['message-1'] },
+                    origin: { kind: 'discussion' as const, serverId: 'server-1', discussionId: 'discussion-1', messageIds: ['message-1'] },
                     supportedReadActions: [
                         'session.transcript.get',
-                        'session.discussion.read',
+                        'discussion.read',
                     ] as const,
                 },
             };
@@ -810,8 +1012,8 @@ describe('createNativeAgentExecutionRunHostRuntime', () => {
                 expect(requests.at(-1)?.input.text).toContain('source-session');
                 expect(requests.at(-1)?.input.text).toContain('discussion-1');
                 expect(requests.at(-1)?.input.text).toContain('session.transcript.get');
-                expect(requests.at(-1)?.input.text).toContain('session.discussion.read');
-                expect(requests.at(-1)?.input.text).not.toContain('session.discussion.post');
+                expect(requests.at(-1)?.input.text).toContain('discussion.read');
+                expect(requests.at(-1)?.input.text).not.toContain('discussion.post');
                 expect((await delivery.delivery.deliver({ ...firstInput, localId: `${occurrence}-second`,
                     content: { type: 'text', text: 'Second input' }, meta: undefined })).status).toBe('admitted');
                 expect(requests.at(-1)?.input.text).toContain('Second input');
@@ -1309,8 +1511,9 @@ describe('createNativeAgentExecutionRunHostRuntime', () => {
             createSessionContext,
         });
 
-        await expect(host.provisionRuntime()).rejects.toBe(openFailure);
-        await expect(host.provisionRuntime()).rejects.toBe(openFailure);
+        const refusal = await host.provisionRuntime().catch((error: unknown) => error);
+        expect(refusal).toMatchObject({ name: openFailure.name, message: openFailure.message });
+        await expect(host.provisionRuntime()).rejects.toBe(refusal);
         expect(open).toHaveBeenCalledOnce();
         expect(createSessionContext).toHaveBeenCalledOnce();
         expect(disposeSessionContext).toHaveBeenCalledOnce();
@@ -1580,7 +1783,7 @@ describe('createNativeAgentExecutionRunHostRuntime', () => {
         const request = open.mock.calls[0]?.[0];
         expect(request).toMatchObject({
             launchEnvironment: {
-                values: { ALLOWED_VALUE: 'bounded' },
+                values: { ALLOWED_VALUE: 'bounded', PATH: process.env.PATH },
                 unset: ['EXPLICITLY_UNSET'],
             },
         });
@@ -1788,21 +1991,36 @@ describe('createNativeAgentExecutionRunHostRuntime', () => {
                 }]),
             } },
         });
-        const failingOpenRuntime: AgentRuntime = Object.freeze({
-            executionRuns: Object.freeze({
-                async open() { throw new Error(`open echoed ${secret}`); },
-            }),
-        });
-        const failingOpenHost = createNativeAgentExecutionRunHostRuntime({
-            runtime: failingOpenRuntime,
-            lease: createLease(failingOpenRuntime),
-            options: baseOptions,
-            supportsResume: false,
-        });
+        for (const failure of [
+            Object.assign(new Error(`open echoed ${secret}`), { executionRunErrorCode: 'provider_open_rejected' }),
+            { rpcErrorCode: 'provider_open_rejected', message: `open echoed ${secret}`, details: { secret } },
+            `open echoed ${secret}`,
+        ]) {
+            const failingOpenRuntime: AgentRuntime = Object.freeze({
+                executionRuns: Object.freeze({ async open() { throw failure; } }),
+            });
+            const failingOpenHost = createNativeAgentExecutionRunHostRuntime({
+                runtime: failingOpenRuntime,
+                lease: createLease(failingOpenRuntime),
+                options: baseOptions,
+                supportsResume: false,
+            });
 
-        await expect(failingOpenHost.provisionRuntime({ initialPrompt: 'start' }))
-            .rejects.toThrow('open echoed [REDACTED]');
-        await failingOpenHost.dispose();
+            const refusal = await failingOpenHost.provisionRuntime({ initialPrompt: 'start' }).catch((error: unknown) => error);
+            expect(refusal).toMatchObject({
+                ...(typeof failure === 'object' ? { code: 'provider_open_rejected' } : {}),
+                message: 'open echoed [REDACTED]',
+            });
+            expect(refusal).not.toHaveProperty('details');
+            let terminalFailure: unknown;
+            const completion = failingOpenHost.waitForTurnCompletion!().catch(error => { terminalFailure = error; });
+            await vi.waitFor(() => expect(terminalFailure).toMatchObject({
+                executionRunErrorCode: typeof failure === 'object' ? 'provider_open_rejected' : 'agent_execution_run_open_failed',
+                message: 'open echoed [REDACTED]',
+            }));
+            await failingOpenHost.dispose();
+            await completion;
+        }
 
         const watchState: {
             listener?: (event: AgentExecutionRunEvent) => void;
@@ -1840,8 +2058,21 @@ describe('createNativeAgentExecutionRunHostRuntime', () => {
         await activeHost.provisionRuntime({ initialPrompt: 'start' });
         await expect(activeHost.deliverInput('run-provider-redaction', { text: 'again' }))
             .rejects.toThrow('send echoed [REDACTED]');
+        await expect(activeHost.waitForTurnCompletion!()).rejects.toMatchObject({
+            executionRunErrorCode: 'provider_send_rejected', message: 'send echoed [REDACTED]',
+        });
+        expect(messages).toContainEqual({ type: 'status', status: 'error', detail: 'send echoed [REDACTED]' });
         await expect(activeHost.cancel('run-provider-redaction'))
             .rejects.toThrow('stop echoed [REDACTED]');
+        // Definite send rejection already settled this Run. Check provider-event
+        // redaction on a fresh Run so a second terminal event cannot replace it.
+        await activeHost.dispose();
+        const eventHost = createNativeAgentExecutionRunHostRuntime({
+            runtime: activeRuntime, lease: createLease(activeRuntime), options: baseOptions, supportsResume: false,
+        });
+        const eventMessages: AgentMessage[] = [];
+        eventHost.subscribeMessages(message => eventMessages.push(message));
+        await eventHost.provisionRuntime({ initialPrompt: 'start' });
         watchState.listener?.({
             sequence: 0,
             runId: 'run-provider-redaction',
@@ -1851,21 +2082,52 @@ describe('createNativeAgentExecutionRunHostRuntime', () => {
                 code: 'provider_run_failed',
                 severity: 'error',
                 message: `event echoed ${secret}`,
+                details: { runtimeAuthClassification: { kind: 'usage_limit', serviceId: 'openai-codex',
+                    source: 'structured_provider_error', resetsAtMs: 42_000 } },
             },
         });
-        expect(messages).toContainEqual({
+        expect(eventMessages).toContainEqual({
             type: 'status',
             status: 'error',
             detail: 'event echoed [REDACTED]',
         });
         expect(failureLog).toHaveBeenCalledWith('[EXECUTION RUN] provider failure', {
             runId: 'run-provider-redaction', agentId: 'codex',
+            phase: 'event', code: 'provider_run_failed',
             selectedMembers: [{ serviceId: 'happier.agent.codex/openai-codex',
                 groupId: 'happier', profileId: 'account-work', label: 'account-work' }],
         });
         expect(JSON.stringify(failureLog.mock.calls)).not.toContain(secret);
         expect(JSON.stringify(failureLog.mock.calls)).not.toContain('private-policy-value');
-        await activeHost.dispose();
+        await expect(eventHost.waitForTurnCompletion!()).rejects.toMatchObject({
+            executionRunErrorCode: 'provider_run_failed', message: 'event echoed [REDACTED]',
+            runtimeIssueV1: { source: 'usage_limit', usageLimit: { resetAtMs: 42_000 } },
+        });
+        await eventHost.dispose();
+    });
+
+    it('sanitizes typed setup failures from a retained Session used by bounded Plans', async () => {
+        const secret = 'retained-provider-secret';
+        const runtime: AgentRuntime = { sessions: { async open() {
+            throw { code: 'agent_startup_failed', message: `Setup refused ${secret}`, details: { secret } };
+        } } };
+        const host = createNativeAgentSessionInteractionHostRuntime({
+            runtime,
+            lease: { pluginId: 'acme.agent', pluginVersion: '1.0.0', agentId: 'acme.agent/default',
+                localAgentId: 'default', occurrenceId: 'retained-setup-failure', isCurrent: () => true },
+            options: { cwd: '/repo', scope: 'session_owned', runId: 'plan-setup-failure', backendId: 'acme.agent/default',
+                permissionMode: 'read_only', start: { intent: 'plan', runClass: 'bounded', retentionPolicy: 'ephemeral' },
+                sanitizeProviderDiagnosticText: value => value.replaceAll(secret, '[REDACTED]') },
+            sessionCapabilities: { open: ['create'], delivery: ['newTurn'], cancel: false },
+            createSessionContext: ({ services, signal }) => createVoiceSessionContextLease({ services, signal, async dispose() {} }),
+        });
+        try {
+            const refusal = await host.provisionRuntime().catch((error: unknown) => error);
+            expect(refusal).toMatchObject({
+                code: 'agent_startup_failed', message: 'Setup refused [REDACTED]',
+            });
+            expect(refusal).not.toHaveProperty('details');
+        } finally { await host.dispose(); }
     });
 
     it('fails a finite plugin Run when it emits an event outside the strict runtime contract', async () => {
@@ -2019,7 +2281,7 @@ describe('createNativeAgentExecutionRunHostRuntime', () => {
         await host.provisionRuntime();
         const sendResult = host.deliverInput('run-1', { text: 'Review this' }).catch((error: unknown) => error);
         await vi.waitFor(() => expect(open).toHaveBeenCalledOnce());
-        expect(open.mock.calls[0]?.[0]).not.toHaveProperty('launchEnvironment');
+        expect(open.mock.calls[0]?.[0].launchEnvironment?.values.PATH).toBe(process.env.PATH);
 
         const disposeResult = host.dispose();
         resolveOpened(Object.freeze({

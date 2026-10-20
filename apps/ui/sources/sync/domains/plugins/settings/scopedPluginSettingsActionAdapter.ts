@@ -1,4 +1,5 @@
 import type { createActionExecutor } from '@happier-dev/protocol/actions/actionExecutor';
+import { isActionApprovalDeclinedErrorCode } from '@happier-dev/protocol/actions/actionExecutionResult';
 import { PluginSettingsAdministrationActionOutputV1Schema, PluginSettingsAdministrationFailureDetailsV1Schema } from '@happier-dev/protocol/plugins/settingsAdministration';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { mergeAbortSignals } from '@/utils/runtime/abortSignals';
@@ -52,13 +53,15 @@ export function createScopedPluginSettingsActionAdapter(params: Readonly<{
             if (!lifetime.isCurrent()) return unavailable;
             return await dispatch(id, input, { surface: 'ui', serverId: scope.serverId, expectedAccountId: scope.accountId,
                 signal: cancellation.signal,
-                ...(isCurrent ? { isPluginSettingsIntentCurrent: isCurrent } : {}) });
+                isPluginSettingsIntentCurrent: () => lifetime.isCurrent() && !cancellation.signal.aborted
+                    && (isCurrent?.() ?? true) });
         } finally {
             cancellation.dispose();
             retirement.dispose();
         }
     };
-    const failure = (errorCode: string): ScopedPluginSettingsWriteResult => errorCode.endsWith('_revision_conflict')
+    const failure = (errorCode: string): ScopedPluginSettingsWriteResult => isActionApprovalDeclinedErrorCode(errorCode)
+        ? { status: 'declined' } : errorCode.endsWith('_revision_conflict')
         ? { status: 'conflict' } : errorCode.endsWith('_outcome_unknown') ? { status: 'outcomeUnknown' }
             : { status: 'unavailable', reason: 'transport' };
     const recordFailure = (errorCode: string, details: unknown, input: ScopedPluginSettingsWriteInput,
@@ -84,6 +87,7 @@ export function createScopedPluginSettingsActionAdapter(params: Readonly<{
     };
     const daemonSecretFailure = (errorCode: string, details: unknown, input: ScopedPluginDaemonSecretWriteInput,
         lifetime: ActiveServerAccountScopeLifetime): ScopedPluginDaemonSecretWriteResult => {
+        if (isActionApprovalDeclinedErrorCode(errorCode)) return { status: 'declined' };
         if (!errorCode.endsWith('_outcome_unknown')) return { status: 'unavailable', reason: 'transport' };
         const unresolved = { status: 'outcomeUnknown' as const };
         if (!lifetime.isCurrent() || input.signal?.aborted) return unresolved;
@@ -131,7 +135,7 @@ export function createScopedPluginSettingsActionAdapter(params: Readonly<{
                 ...(bindingServerIdentityId !== undefined ? { bindingServerIdentityId } : {}),
                 ...(isSet ? { value: actionValue } : {}),
                 ...(input.mutation.kind === 'bind' ? { savedSecretId: input.mutation.savedSecretId } : {}),
-            }, input.target, lifetime, undefined, input.isCurrent);
+            }, input.target, lifetime, input.signal, input.isCurrent);
             if (!result.ok) return recordFailure(result.errorCode, result.details, input, lifetime);
             const receipt = PluginSettingsAdministrationActionOutputV1Schema.safeParse(result.result);
             if (!receipt.success || receipt.data.kind !== actionId) return { status: 'unavailable', reason: 'transport' };

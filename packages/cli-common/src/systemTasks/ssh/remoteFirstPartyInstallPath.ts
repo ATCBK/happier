@@ -1,5 +1,7 @@
 import { normalizePublicReleaseRingId, type PublicReleaseRingId } from '@happier-dev/release-runtime/releaseRings';
 import { quoteRemotePathWithHomeExpansion } from '../../ssh/shellQuote.js';
+import { resolveRetainedVersionIds } from '../../firstPartyRuntime/retentionPolicy.js';
+import { compareVersions } from '../../update/index.js';
 
 import {
   getFirstPartyComponentCatalogEntry,
@@ -49,6 +51,7 @@ export function normalizeRemoteFirstPartyHomeDir(raw: unknown): string {
 
 export function sanitizeRemoteFirstPartyPathSegment(value: string): string {
   const sanitized = String(value ?? '').trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/-+/g, '-');
+  if (sanitized === '.' || sanitized === '..') throw new Error('Invalid remote first-party path segment.');
   return sanitized || 'payload';
 }
 
@@ -104,13 +107,85 @@ export function buildRemoteFirstPartyPromotionCommand(params: Readonly<{
   const previousPath = quoteRemotePathWithHomeExpansion(layout.previousPath);
   const versionBinaryPath = quoteRemotePathWithHomeExpansion(`${layout.versionDir}${layout.binaryPath.slice(layout.currentPath.length)}`);
   return [
-    `mkdir -p ${versionsDir}`,
+    'set -eu',
+    buildRemoteFirstPartyProtectedVersionFunction(layout),
+    // Validate before touching a version or either activation pointer.
+    `test -f ${payloadRootExpression}${layout.binaryPath.slice(layout.currentPath.length)}`,
+    `if is_protected_version ${versionDir}; then test -x ${versionBinaryPath}; else mkdir -p ${versionsDir}`,
+    `test ! -L ${versionsDir}`,
     `rm -rf ${versionDir}`,
-    `cp -R ${payloadRootExpression} ${versionDir}`,
+    // Both remote strategies stage under the install home; consume that extracted
+    // tree without allocating a second full payload on the guest filesystem.
+    `mv ${payloadRootExpression} ${versionDir}`,
     `chmod +x ${versionBinaryPath}`,
-    `if [ -L ${currentPath} ]; then prev="$(readlink ${currentPath} || true)"; if [ -n "$prev" ]; then ln -sfn "$prev" ${previousPath}; fi; fi`,
+    'fi',
+    `if [ ! ${versionDir} -ef ${currentPath} ]; then if [ -L ${currentPath} ]; then prev="$(readlink ${currentPath} || true)"; if [ -n "$prev" ]; then ln -sfn "$prev" ${previousPath}; fi; fi`,
     `ln -sfn ${versionDir} ${currentPath}`,
+    'fi',
   ].join('; ');
+}
+
+function buildRemoteFirstPartyProtectedVersionFunction(layout: RemoteFirstPartyInstallLayout): string {
+  const current = quoteRemotePathWithHomeExpansion(layout.currentPath);
+  const previous = quoteRemotePathWithHomeExpansion(layout.previousPath);
+  return `is_protected_version() { current_target="$(readlink ${current} || true)"; previous_target="$(readlink ${previous} || true)"; [ "$1" -ef ${current} ] || [ "$1" -ef ${previous} ] || [ "\${1##*/}" = "\${current_target##*/}" ] || [ "\${1##*/}" = "\${previous_target##*/}" ]; }`;
+}
+
+export function buildRemoteFirstPartyVersionInventoryCommand(layout: RemoteFirstPartyInstallLayout): string {
+  const versions = quoteRemotePathWithHomeExpansion(layout.versionsDir);
+  return [
+    'set -eu',
+    `test ! -L ${versions}`,
+    `current_target="$(readlink ${quoteRemotePathWithHomeExpansion(layout.currentPath)} || true)"`,
+    `previous_target="$(readlink ${quoteRemotePathWithHomeExpansion(layout.previousPath)} || true)"`,
+    'printf "current=%s\\nprevious=%s\\n" "${current_target##*/}" "${previous_target##*/}"',
+    `for version_path in ${versions}/*; do if [ -d "$version_path" ] && [ ! -L "$version_path" ]; then printf 'version=%s\\n' "\${version_path##*/}"; fi; done`,
+  ].join('; ');
+}
+
+/** The controller evaluates the local retention owner; the remote shell only applies its prune set. */
+export function buildRemoteFirstPartyRetentionCommand(params: Readonly<{
+  layout: RemoteFirstPartyInstallLayout;
+  inventory: string;
+}>): string | null {
+  let currentVersionId: string | null = null;
+  let previousVersionId: string | null = null;
+  const versionIds: string[] = [];
+  for (const line of params.inventory.split('\n').filter(Boolean)) {
+    const match = /^(current|previous|version)=([A-Za-z0-9._-]*)$/u.exec(line);
+    if (!match || match[2] === '.' || match[2] === '..') throw new Error('Invalid remote version inventory.');
+    const id = match[2] || null;
+    if (match[1] === 'current') currentVersionId = id;
+    if (match[1] === 'previous') previousVersionId = id;
+    if (match[1] === 'version' && id) versionIds.push(id);
+  }
+  const { prune } = resolveRetainedVersionIds({
+    orderedVersionIdsNewestFirst: versionIds.sort((left, right) => compareVersions(right, left)),
+    currentVersionId,
+    previousVersionId,
+  });
+  if (prune.length === 0) return null;
+  return [
+    'set -eu',
+    `test ! -L ${quoteRemotePathWithHomeExpansion(params.layout.versionsDir)}`,
+    buildRemoteFirstPartyProtectedVersionFunction(params.layout),
+    ...prune.map((id) => {
+      const path = quoteRemotePathWithHomeExpansion(`${params.layout.versionsDir}/${id}`);
+      return `if [ -d ${path} ] && [ ! -L ${path} ] && ! is_protected_version ${path}; then rm -rf ${path}; fi`;
+    }),
+  ].join('; ');
+}
+
+export async function pruneRemoteFirstPartyVersions(params: Readonly<{
+  layout: RemoteFirstPartyInstallLayout;
+  runRemoteText: (command: string) => Promise<Readonly<{ status: number; stdout: string }>>;
+}>): Promise<void> {
+  const inventory = await params.runRemoteText(buildRemoteFirstPartyVersionInventoryCommand(params.layout));
+  if (inventory.status !== 0) throw new Error('Remote version inventory failed.');
+  const command = buildRemoteFirstPartyRetentionCommand({ layout: params.layout, inventory: inventory.stdout });
+  if (!command) return;
+  const result = await params.runRemoteText(command);
+  if (result.status !== 0) throw new Error('Remote version retention failed.');
 }
 
 export function resolveRemoteInstalledFirstPartyBinaryPath(params: Readonly<{

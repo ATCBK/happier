@@ -1,13 +1,24 @@
 import { describe, expect, it } from 'vitest';
 
-import { lightTheme } from '@/theme';
+import { darkTheme, lightTheme } from '@/theme';
 
-import { resolveAgentInputPanelStyle } from './agentInputChromeStyles';
+import { resolveAgentInputPanelLayoutStyle, resolveAgentInputPanelStyle } from './agentInputChromeStyles';
 import { glassSurfaceBackgroundColor } from '@/components/ui/glass/glassSurfacePaint';
 
 describe('agent input panel chrome', () => {
     it('shares the nested content coat between the live composer and its static previews', () => {
         expect(resolveAgentInputPanelStyle(lightTheme).backgroundColor).toBe(glassSurfaceBackgroundColor(lightTheme.colors.input.background, 'card'));
+    });
+    it('draws the composer in one even hairline, with no darker bottom lip or lighter top line (owner, 2026-10-15)', () => {
+        for (const theme of [lightTheme, darkTheme]) {
+            for (const readOnly of [false, true]) {
+                const style: Record<string, unknown> = resolveAgentInputPanelLayoutStyle(theme, readOnly);
+                for (const side of ['Top', 'Bottom']) {
+                    expect(style[`border${side}Color`] ?? style.borderColor).toBe(style.borderColor);
+                    expect(style[`border${side}Width`] ?? style.borderWidth).toBe(style.borderWidth);
+                }
+            }
+        }
     });
     it('rounds the composer panel with the theme composer radius', () => {
         const theme = { ...lightTheme, parts: { ...lightTheme.parts, composer: { ...lightTheme.parts.composer, radius: 37 } } };

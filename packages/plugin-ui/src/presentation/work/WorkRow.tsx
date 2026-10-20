@@ -76,6 +76,8 @@ const ROW_STYLE: HappierPortableStyle = {
   justifyContent: 'center',
 };
 const LINE_STYLE: HappierPortableStyle = { marginTop: 1 };
+const BYLINE_STYLE: HappierPortableStyle = { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4, minWidth: 0 };
+const BYLINE_TEXT_STYLE: HappierPortableStyle = { flexShrink: 1, minWidth: 0 };
 const TIME_STYLE: HappierPortableStyle = { flexShrink: 0 };
 const TITLE_HEAD_STYLE: HappierPortableStyle = { flexShrink: 1, minWidth: 0 };
 const TITLE_TAIL_STYLE: HappierPortableStyle = { flexShrink: 0, maxWidth: '100%' };
@@ -113,6 +115,8 @@ export const HAPPIER_WORK_PAGE_ROW_METRICS = Object.freeze({
   /** The row's trailing inset, matching its leading padding. */
   trailingInsetPx: HAPPIER_PAGE_METRICS.rowPaddingHorizontalPx,
 });
+/** Where a pane row's text column starts: the same mark-and-gap measure as a page row, on the pane's inset. */
+const PANE_ROW_TEXT_INSET_PX = HAPPIER_WORK_PANE_METRICS.rowInsetPx + MARK_SIZE_PX + MARK_TEXT_GAP_PX;
 const PAGE_ROW_STYLE: HappierPortableStyle = {
   paddingHorizontal: PAGE_ROW_PADDING_PX,
   minHeight: HAPPIER_PAGE_METRICS.rowMinHeightPx,
@@ -138,6 +142,12 @@ export type HappierWorkRowShellProps = Readonly<{
   onAccessibilityAction?: HappierPressableProps['onAccessibilityAction'];
   /** Independent row actions stay outside the navigation button's accessibility/event subtree. */
   trailingAccessory?: ReactNode;
+  /**
+   * Independent row actions set beneath the row's text (a phone's Deny / Allow once, lab coordination
+   * `P4-Ap`) instead of beside it: aligned to the text column of a row that leads with a mark, closed by
+   * the row's own padding, and outside the navigation button like {@link trailingAccessory}.
+   */
+  belowAccessory?: ReactNode;
   /** How deep under its lead the work sits; each level indents the row. */
   level?: number;
   /** `pane` (default) or `page`: see {@link HappierWorkRowDensity}. */
@@ -179,34 +189,47 @@ export const HappierWorkRowShell = memo(function HappierWorkRowShell(props: Happ
   const rowSelected = page && selected;
   return (
     <View style={[level > 0 ? { paddingLeft: level * LEVEL_INDENT_PX } : null,
-      props.trailingAccessory ? (page ? PAGE_TRAILING_ACCESSORY_ROW_STYLE : TRAILING_ACCESSORY_ROW_STYLE) : null,
       rowSelected ? { backgroundColor: theme.colors.selected, borderRadius: ROW_STYLE.borderRadius } : null]}>
-      <HappierPressable
-        testID={props.testID}
-        accessibilityRole="button"
-        accessibilityLabel={props.accessibilityLabel}
-        selected={selected}
-        expanded={props.expanded}
-        controlRef={props.controlRef}
-        accessibilityActions={props.accessibilityActions}
-        onAccessibilityAction={props.onAccessibilityAction}
-        onPress={props.onPress}
-        onLongPress={props.onLongPress}
-        onContextMenu={props.onContextMenu}
-        style={({ hovered, focused, pressed }) => [
-          ROW_STYLE,
-          page ? PAGE_ROW_STYLE : null,
-          props.trailingAccessory ? { flex: 1, minWidth: 0 } : null,
-          // The open row already carries its fill; the hover paint would cover it.
-          hovered && !rowSelected ? { backgroundColor: theme.colors.hover } : null,
-          selected && !rowSelected ? { backgroundColor: theme.colors.selected } : null,
-          happierFocusRingStyle({ visible: focused, color: theme.colors.focus }),
-          { opacity: pressed ? HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle : 1 },
-        ]}
-      >
-        {props.children}
-      </HappierPressable>
-      {props.trailingAccessory}
+      <View style={props.trailingAccessory ? (page ? PAGE_TRAILING_ACCESSORY_ROW_STYLE : TRAILING_ACCESSORY_ROW_STYLE) : null}>
+        <HappierPressable
+          testID={props.testID}
+          accessibilityRole="button"
+          accessibilityLabel={props.accessibilityLabel}
+          selected={selected}
+          expanded={props.expanded}
+          controlRef={props.controlRef}
+          accessibilityActions={props.accessibilityActions}
+          onAccessibilityAction={props.onAccessibilityAction}
+          onPress={props.onPress}
+          onLongPress={props.onLongPress}
+          onContextMenu={props.onContextMenu}
+          style={({ hovered, focused, pressed }) => [
+            ROW_STYLE,
+            page ? PAGE_ROW_STYLE : null,
+            props.trailingAccessory ? { flex: 1, minWidth: 0 } : null,
+            // The open row already carries its fill; the hover paint would cover it.
+            hovered && !rowSelected ? { backgroundColor: theme.colors.hover } : null,
+            selected && !rowSelected ? { backgroundColor: theme.colors.selected } : null,
+            happierFocusRingStyle({ visible: focused, color: theme.colors.focus }),
+            { opacity: pressed ? HAPPIER_PRESS_FEEDBACK_V1.opacitySubtle : 1 },
+          ]}
+        >
+          {props.children}
+        </HappierPressable>
+        {props.trailingAccessory}
+      </View>
+      {props.belowAccessory ? (
+        <View
+          testID={`${props.testID}:below`}
+          style={{
+            paddingLeft: page ? HAPPIER_WORK_PAGE_ROW_METRICS.textInsetPx : PANE_ROW_TEXT_INSET_PX,
+            paddingRight: page ? HAPPIER_WORK_PAGE_ROW_METRICS.trailingInsetPx : HAPPIER_WORK_PANE_METRICS.rowInsetPx,
+            paddingBottom: HAPPIER_WORK_PANE_METRICS.rowPaddingPx,
+          }}
+        >
+          {props.belowAccessory}
+        </View>
+      ) : null}
       {divider}
     </View>
   );
@@ -236,6 +259,13 @@ export type HappierWorkSummaryProps = Readonly<{
    * from the person, how long it has run); a `HappierWorkStatusWord` draws a fact in a state tone.
    */
   facts: readonly ReactNode[];
+  /**
+   * Where the work comes from, one quiet line above the title (a session, a bot, a plugin; lab
+   * coordination P4). Omitted where the surrounding list already says it.
+   */
+  source?: ReactNode;
+  /** Who it involves, one muted line under the facts ("Ana asked you"); its avatar leads it. */
+  byline?: Readonly<{ text: string; leading?: ReactNode }> | null;
   /** A short date at the trailing edge ("2h"); omitted while live. */
   trailingTime?: ReactNode;
   /** The owner's state word at the trailing edge: the row then says where the work stands once. */
@@ -298,6 +328,12 @@ export const HappierWorkSummary = memo(function HappierWorkSummary(props: Happie
         ) : null}
       </View> : null}
       <View style={styles.copy}>
+        {props.source ? (
+          <Text role={roles.line} numberOfLines={1} testID={testID ? `${testID}:source` : undefined}
+            style={{ color: theme.colors.secondaryText }}>
+            {props.source}
+          </Text>
+        ) : null}
         {titleTail.length > 0 ? (
           <View style={styles.splitTitle}>
             <Text
@@ -336,6 +372,12 @@ export const HappierWorkSummary = memo(function HappierWorkSummary(props: Happie
             theme={theme}
             host={host}
           />
+        ) : null}
+        {props.byline ? (
+          <View style={BYLINE_STYLE} testID={testID ? `${testID}:byline` : undefined}>
+            {props.byline.leading ?? null}
+            <Text role={roles.line} numberOfLines={1} style={[BYLINE_TEXT_STYLE, { color: theme.colors.mutedText }]}>{props.byline.text}</Text>
+          </View>
         ) : null}
       </View>
       {trailingTime ? (

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 import { runQaBrowserWorker } from '../../utils/dev_targets/qa_browser.mjs';
 import { pickNextFreeTcpPort } from '../../utils/net/ports.mjs';
-import { killProcessTree } from '../../utils/proc/proc.mjs';
+import { killProcessTree, runCapture } from '../../utils/proc/proc.mjs';
 import { buildServerRuntimeEnv } from '../../utils/server/server_env.mjs';
 import { applyServerLightEnvDefaults } from '../../utils/server/apply_server_light_env_defaults.mjs';
 import { applyRuntimeServerDatabaseEnv } from '../../utils/server/apply_runtime_server_database_env.mjs';
@@ -31,15 +31,7 @@ export async function smokeSourceRuntimeReload({ components, ui, env = process.e
   // Preparation resolves the provider on the actual server host. A worker's
   // inherited env is not the authority for this admitted replacement graph.
   const dbProvider = server.dbProvider;
-  if (dbProvider === 'postgres') {
-    logger.log('[reload] PostgreSQL emitted code is provider-specific; skipping its database-backed migration and health smoke because the shared DATABASE_URL is forbidden');
-    if (ui) {
-      await assertWebArtifactPayload({ payloadDir: ui.uiDir, entrypoint: ui.entrypoint ?? 'index.html' });
-      await serveSourceWebArtifactForSmoke({ ui, env, signal });
-    }
-    return;
-  }
-  if (dbProvider !== 'sqlite' && dbProvider !== 'pglite') {
+  if (dbProvider !== 'sqlite' && dbProvider !== 'pglite' && dbProvider !== 'postgres') {
     throw new Error(`[reload] cannot smoke ${dbProvider} without a separately authorized scratch database; incumbent retained`);
   }
   const scratch = await mkdtemp(join(tmpdir(), 'hstack-reload-smoke-'));
@@ -68,6 +60,20 @@ export async function smokeSourceRuntimeReload({ components, ui, env = process.e
     // Legacy aliases must not repoint a scratch smoke to retained directories.
     for (const key of ['HAPPY_SERVER_LIGHT_DATA_DIR', 'HAPPY_SERVER_LIGHT_FILES_DIR',
       'HAPPY_SERVER_LIGHT_PRIVATE_FILES_DIR', 'HAPPY_SERVER_LIGHT_DB_DIR', 'HAPPY_SQLITE_MIGRATIONS_DIR']) delete isolated[key];
+    if (dbProvider === 'postgres') {
+      // Like the daemon command-loader probe, execute the actual entry with
+      // startup disabled only after its lazy runtime imports have loaded.
+      await runCapture(process.execPath, [server.entrypoint, '--probe-runtime-import'], {
+        cwd: server.serverDir, env: isolated, signal: cancellation.signal,
+      });
+      signal?.throwIfAborted();
+      logger.log('[reload] PostgreSQL server imports passed; skipping its database-backed migration and health smoke because the shared DATABASE_URL is forbidden');
+      if (ui) {
+        await assertWebArtifactPayload({ payloadDir: ui.uiDir, entrypoint: ui.entrypoint ?? 'index.html' });
+        await serveSourceWebArtifactForSmoke({ ui, env: isolated, signal: cancellation.signal });
+      }
+      return;
+    }
     const serverEnv = buildServerRuntimeEnv({ baseEnv: isolated, serverPort: port,
       canonicalServerUrl: url, publicServerUrl: url, serveUi: Boolean(ui), uiRequired: Boolean(ui),
       uiBuildDir: ui?.uiDir ?? '', uiBuildDirExists: Boolean(ui), uiPrefix: '/' });

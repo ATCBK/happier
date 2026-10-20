@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { deriveWorkspaceSyncConflictAsidePaths } from '@happier-dev/protocol';
+import { getActionSpec } from '@happier-dev/protocol/actions/actionSpecs';
 import { computeWorkspaceSyncPolicyDigest } from './workspaceSyncTypes';
 import { WorkspaceSyncController } from './workspaceSyncController';
 import { createWorkspaceRootOwnershipManager } from './workspaceSyncRootOwnership';
@@ -69,6 +70,40 @@ function sha1File(bytes: string): string {
 }
 
 describe('WorkspaceSyncController read inspection', () => {
+  it.each(['topology admission', 'conflict resolution'] as const)('refuses %s while the installed Project source is unavailable', async operation => {
+    let available = false;
+    const adapter = completeAdapter();
+    const stage = vi.fn(async () => undefined);
+    const controller = new WorkspaceSyncController({
+      adapter, lifecycle: lifecycle(), rootOwnershipManager: stubRootOwnership(), localMachineId: 'machine-a',
+      resolveWorkspaceRef: id => ({ machineId: id === 'workspace-a' ? 'machine-a' : 'machine-x', rootPath: `/${id}` }),
+      resolveAllRelationshipDefinitions: () => available ? [definitionAB] : null,
+      stageConflictResolutionAtTarget: stage,
+      applyStagedConflictResolutionAtTarget: async () => ({ status: 'installed' }),
+    });
+    try {
+      if (operation === 'conflict resolution') {
+        available = true;
+        await controller.ensure(definitionAB);
+        available = false;
+      }
+      await expect(controller.activity.read()).resolves.toMatchObject({ coverage: 'unknown' });
+      await expect(controller.listRelationships({ workspaceRefId: 'workspace-a' })).resolves.toMatchObject({ discoveryAvailable: false });
+      const attempt = operation === 'topology admission' ? controller.ensure(definitionAB) : controller.resolveConflict({
+        controllerMachineId: 'machine-a', hubWorkspaceRefId: 'workspace-a', path: 'value.bin',
+        source: { workspaceRefId: 'workspace-b', expected: { kind: 'missing' } },
+        targets: [{ workspaceRefId: 'workspace-a', expected: { kind: 'missing' } }],
+        relationshipIds: ['rel-ab'], strategy: 'use_source',
+      }, undefined, 'reviewed-resolution');
+      await expect(attempt).rejects.toMatchObject({ code: 'project_account_rows_unavailable' });
+      if (operation === 'topology admission') expect(adapter.ensure).not.toHaveBeenCalled();
+      expect(stage).not.toHaveBeenCalled();
+      available = true;
+      await expect(controller.ensure(definitionAB)).resolves.toMatchObject({ state: 'watching' });
+      await expect(controller.activity.read()).resolves.toMatchObject({ coverage: 'complete' });
+    } finally { await controller.shutdown(); }
+  });
+
   it('lists local definitions with current statuses and one derived set', async () => {
     const controller = new WorkspaceSyncController({
       adapter: completeAdapter(), lifecycle: lifecycle(), rootOwnershipManager: stubRootOwnership(),
@@ -79,6 +114,7 @@ describe('WorkspaceSyncController read inspection', () => {
     await controller.ensure(definitionAC);
 
     const result = await controller.listRelationships({});
+    expect(getActionSpec('workspace.sync.relationships.list').outputSchema?.parse(result)).toEqual(result);
     expect(result.controllerMachineId).toBe('machine-a');
     expect(result.relationships.map((entry) => entry.definition.relationshipId).sort()).toEqual(['rel-ab', 'rel-ac']);
     expect(result.relationships.find((entry) => entry.definition.relationshipId === 'rel-ab')?.status).toMatchObject({
@@ -105,6 +141,7 @@ describe('WorkspaceSyncController read inspection', () => {
     // A member filter selects its complete derived set: the clean spoke and
     // the other link arrive together, never as isolated rows.
     const filtered = await controller.listRelationships({ workspaceRefId: 'workspace-c' });
+    expect(getActionSpec('workspace.sync.relationships.list').outputSchema?.parse(filtered)).toEqual(filtered);
     expect(filtered.relationships.map((entry) => entry.definition.relationshipId).sort()).toEqual(['rel-ab', 'rel-ac']);
     expect(filtered.sets).toHaveLength(1);
     expect(filtered.sets[0]).toMatchObject({ hubWorkspaceRefId: 'workspace-a' });
@@ -112,6 +149,7 @@ describe('WorkspaceSyncController read inspection', () => {
 
     // Missing is explicit: no relationships and found false, never an empty clean bill.
     const absent = await controller.listRelationships({ workspaceRefId: 'workspace-unknown' });
+    expect(getActionSpec('workspace.sync.relationships.list').outputSchema?.parse(absent)).toEqual(absent);
     expect(absent.relationships).toEqual([]);
     expect(absent.sets).toEqual([]);
     expect(absent.membership).toEqual({ workspaceRefId: 'workspace-unknown', found: false });
@@ -133,6 +171,7 @@ describe('WorkspaceSyncController read inspection', () => {
     await controller.ensure(definitionAC);
 
     const result = await controller.listRelationships({ workspaceRefId: 'workspace-d' });
+    expect(getActionSpec('workspace.sync.relationships.list').outputSchema?.parse(result)).toEqual(result);
     expect(result.relationships).toEqual([]);
     expect(result.remoteRelationships).toHaveLength(1);
     expect(result.remoteRelationships[0]).toMatchObject({ controllerMachineId: 'machine-x' });

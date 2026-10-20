@@ -1,5 +1,7 @@
 import { getUsageQueryKey } from '../inputs/usageQuery.js';
 import type { UsageQueryResultSlice } from './resolveUsagePageAggregation.js';
+import { projectUsagePageCost } from './usageCostFacts.js';
+import { projectUsageCostFactTotals } from './usageCostFactTotals.js';
 import { UsageRecapComposeInputSchema, UsageRecapComposeResultSchema, USAGE_RECAP_FIELDS,
   type UsageRecapComposeInput, type UsageRecapComposeResult, type UsageRecapFacts } from './usageRecap.js';
 
@@ -30,6 +32,7 @@ export function composeUsageRecap(args: Readonly<{
   for (const [field, dimension] of [['modelMix', 'model'], ['agentMix', 'agent']] as const) {
     const rows = accounting.breakdowns?.[dimension];
     if (selected.has(field) && rows) facts[field] = rows.map(row => ({ tokens: row.tokens.total, events: row.eventCount,
+      ...(dimension === 'agent' && row.key ? { agentId: row.key } : {}),
       ...(selected.has('names') && row.label ? { name: row.label } : {}) }));
   }
   if (selected.has('cache')) facts.cache = { readTokens: accounting.totals.tokens.cacheRead, writeTokens: accounting.totals.tokens.cacheWrite };
@@ -66,10 +69,14 @@ export function composeUsageRecap(args: Readonly<{
     if (peak) facts.highlights.push({ kind: 'observed_peak', bucketStartMs: peak.bucketStartMs, bucketEndMs: peak.bucketEndMs, tokens: peak.tokens.total });
     if (work?.outcomes.length) facts.highlights.push({ kind: 'linked_outcomes', count: work.outcomes.length });
   }
-  if (selected.has('dollars') && accounting.costFacts?.length) {
-    // Preserve A's distinct money truths and unknown amounts; never blend or price here.
-    facts.dollars = { basis: input.query.costBasis,
-      facts: accounting.costFacts.map(({ source: _source, ...fact }) => fact) };
+  if (selected.has('dollars')) {
+    const cost = projectUsagePageCost(accounting, input.query.costBasis);
+    // Reuse both cost owners: scoped selection and kind/currency comparison totals.
+    // Private producer/pricing identities never enter a share result.
+    if (cost.amountUsd !== null || accounting.costFacts?.length) facts.dollars = { basis: input.query.costBasis,
+      selected: cost.selection && cost.amountUsd !== null ? { kind: cost.selection.kind,
+        currency: cost.selection.currency, amountUsd: cost.amountUsd } : null,
+      facts: projectUsageCostFactTotals(accounting.costFacts ?? []).map(({ sources: _sources, ...fact }) => fact) };
   }
   const coverage = accounting.coverage;
   const accountingCoverage = coverage ? (({ sources: _sources, ...value }) => value)(coverage) : null;

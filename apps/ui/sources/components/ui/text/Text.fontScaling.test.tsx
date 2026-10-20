@@ -12,7 +12,7 @@ vi.mock('react-native', async () => {
 });
 
 // The in-app font preference is device-local storage, outside the text owner.
-vi.mock('@/sync/store/hooks', () => ({ useLocalSetting: () => settings.fontScale }));
+vi.mock('@/sync/store/settingsReadHooks', () => ({ useLocalSetting: () => settings.fontScale }));
 
 afterEach(() => {
     settings.fontScale = 1.3;

@@ -5,17 +5,23 @@ import { PluginAccountSettingsMutationRequestV1Schema, PluginAccountSettingsMuta
 
 import type { PluginProjectionEntry } from '@/agents/backendCatalog/daemonContributionRegistryProjectionAdapters';
 import type { MachineAdministrationTargetSelectionV1 } from '@/sync/domains/machines/administration/useTargetSelection';
-import { createProviderSettingsAccountHarness } from '@/dev/testkit/harness/providerSettingsHarness';
 import { flushHookEffects, pressTestInstanceAsync, renderScreen, standardCleanup } from '@/dev/testkit';
-import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers';
-
-installSettingsViewCommonModuleMocks({ storage: 'real' });
+await vi.hoisted(async () => {
+    const { installSettingsViewCommonModuleMocks } = await import('../settingsViewTestHelpers');
+    installSettingsViewCommonModuleMocks({ storage: 'real', modal: async () => {
+        const { createModalModuleMock } = await import('@/dev/testkit/mocks/modal');
+        return createModalModuleMock({ confirmResult: true }).module;
+    } });
+});
+vi.doUnmock('@/sync/domains/state/storage');
+const { createProviderSettingsAccountHarness } = await import('@/dev/testkit/harness/providerSettingsHarness');
 const account = createProviderSettingsAccountHarness();
 const { resolveMachineAdministrationTargetState } = await import('@/sync/domains/machines/administration/targetSelection');
 const { AgentContributedSettingsSection } = await import('./AgentContributedSettingsSection');
 const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
 const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
 const { resolveScopedPluginSettingsServerIdentity } = await import('@/sync/domains/plugins/settings/scopedPluginSettingsRuntime');
+const { publishAppliedActiveServerRuntimeAvailability } = await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
 
 async function openPreferences(screen: Awaited<ReturnType<typeof renderScreen>>) {
     const disclosure = screen.findByTestId('settings.plugins.detail.test.agent.settings.preferences.disclosure');
@@ -53,6 +59,27 @@ function selection(foreign: boolean): MachineAdministrationTargetSelectionV1 {
 afterEach(async () => { standardCleanup(); await account.reset(); });
 
 describe('Agent contributed Account preferences', () => {
+    it('recovers Account preference availability after the same Home runtime returns without a machine change', async () => {
+        await account.restore({ machines: [], serverIdentityId: 'srv_agent_settings_home' });
+        account.home.answer(account.serverId, '/v1/account/plugin-settings/test.agent', {
+            body: PluginAccountSettingsReadResponseV1Schema.parse({ status: 'absent' }),
+        });
+        publishAppliedActiveServerRuntimeAvailability(false);
+        const screen = await renderScreen(<AgentContributedSettingsSection
+            pluginSettingsProjection={projection}
+            targetSelection={selection(false)}
+            executionTarget={null}
+            daemonOperationsAvailable={false}
+        />);
+        await flushHookEffects();
+        expect(screen.findByTestId('settings.plugins.detail.test.agent.settings.unavailable')).not.toBeNull();
+        await act(async () => { publishAppliedActiveServerRuntimeAvailability(true); });
+        await flushHookEffects();
+        expect(screen.findByTestId('settings.plugins.detail.test.agent.settings.unavailable') === null).toBe(true);
+        await openPreferences(screen);
+        expect(screen.findByTestId('settings.plugins.detail.test.agent.settings.preferences.enabled')).not.toBeNull();
+    });
+
     it.each([false, true])('admits Account preference editing with no machine, while refusing a foreign target (%s)', async foreign => {
         await account.restore({ machines: [], serverIdentityId: 'srv_agent_settings_home' });
         expect(captureActiveServerAccountScopeLifetime()?.isCurrent()).toBe(true);

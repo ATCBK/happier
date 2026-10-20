@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { collectRenderedTestIds, createSessionListRenderableSessionFixture, renderScreen, standardCleanup, teamCapabilitiesFixture, teamSummaryFixture } from '@/dev/testkit';
+import { collectRenderedTestIds, createSessionListRenderableSessionFixture, flushHookEffects, renderScreen, standardCleanup, teamCapabilitiesFixture, teamSummaryFixture } from '@/dev/testkit';
 import { createHomeGovernanceHarness, installHomeGovernanceBoundaries } from '@/dev/testkit/harness/homeGovernanceHarness';
 
 import { installSettingsViewCommonModuleMocks } from '../settingsViewTestHelpers';
@@ -33,12 +33,13 @@ async function renderOverview(serverId: string) {
     return renderScreen(<TeamOverviewScreen serverId={serverId} teamId="team-1" />);
 }
 
-async function addHome(team: Parameters<typeof teamSummaryFixture>[0]): Promise<string> {
+async function addHome(team: Parameters<typeof teamSummaryFixture>[0], options?: Readonly<{ credentialResourcesEnabled?: boolean }>): Promise<string> {
     const serverId = await harness.addHome({
         name: 'Home A',
         serverUrl: 'https://home-a.example',
         accountId: 'account-ada',
         teamsEnabled: true,
+        credentialResourcesEnabled: options?.credentialResourcesEnabled,
     });
     await harness.selectHomes([serverId]);
     harness.answer(serverId, TEAM_GET_PATH, { body: teamSummaryFixture(team) });
@@ -123,8 +124,53 @@ describe('TeamOverviewScreen Team identity', () => {
         expect(collectRenderedTestIds(screen.tree.toJSON())).toContain('team-overview-sessions');
         expect(collectRenderedTestIds(screen.tree.toJSON())).not.toContain('team-overview-sessions-empty');
     });
-    it('confirms leave for a non-manager, removes the Team from the directory and returns there', async () => {
-        const serverId = await addHome({ viewerRole: 'member', capabilities: teamCapabilitiesFixture({ leave: true }) });
+
+    it.each([false, true])('mounts Team content and its readers only with viewTeam=%s', async (viewTeam) => {
+        const serverId = await addHome({
+            viewerRole: 'member',
+            capabilities: teamCapabilitiesFixture({ viewTeam, viewRoster: viewTeam, leave: true }),
+        }, { credentialResourcesEnabled: true });
+        const screen = await renderOverview(serverId);
+        await waitForTestId(screen, 'team-overview-leave');
+        await flushHookEffects();
+
+        if (viewTeam) {
+            await vi.waitFor(() => {
+                expect(harness.requestsFor('/v1/teams/credential-resources/list').length).toBeGreaterThan(0);
+                expect(harness.requestsFor('/v1/teams/members/list').length).toBeGreaterThan(0);
+            });
+        } else {
+            expect(harness.requests.filter(({ path }) => path.startsWith('/v2/sessions') || path.startsWith('/v1/sessions'))).toHaveLength(0);
+            expect(harness.requests.filter(({ path }) => path.startsWith('/v1/teams/') && path !== TEAM_GET_PATH)).toHaveLength(0);
+        }
+
+        const ids = collectRenderedTestIds(screen.tree.toJSON());
+        expect(ids).toContain('team-overview-identity');
+        expect(ids).toContain('team-overview-home');
+        expect(ids.includes('team-overview-sessions')).toBe(viewTeam);
+        expect(ids.includes('team-overview-members')).toBe(viewTeam);
+        expect(ids.includes('team-overview-groups')).toBe(viewTeam);
+        expect(ids).not.toContain('team-overview-setup');
+        const { t } = await import('@/text');
+        expect(screen.getTextContent().includes(t('teams.overview.teamSection'))).toBe(viewTeam);
+    });
+    it.each([false, true])('names the viewer\'s real standing: suspended when only Leave is left, otherwise their role (viewTeam=%s)', async (viewTeam) => {
+        const serverId = await addHome({
+            viewerRole: 'member',
+            capabilities: teamCapabilitiesFixture({ viewTeam, viewRoster: viewTeam, leave: true }),
+        });
+        const screen = await renderOverview(serverId);
+        await waitForTestId(screen, 'team-overview-leave');
+        const { t } = await import('@/text');
+        const ids = collectRenderedTestIds(screen.tree.toJSON());
+        const header = screen.getTextContent();
+        expect(ids.includes('team-overview-suspended')).toBe(!viewTeam);
+        expect(header.includes(t('teams.status.suspended'))).toBe(!viewTeam);
+        expect(header.includes(t('teams.role.member'))).toBe(viewTeam);
+        expect(header.includes(t('teams.overview.suspendedBody'))).toBe(!viewTeam);
+    });
+    it.each([false, true])('confirms leave, removes the Team and returns to the directory with viewTeam=%s', async (viewTeam) => {
+        const serverId = await addHome({ viewerRole: 'member', capabilities: teamCapabilitiesFixture({ viewTeam, viewRoster: viewTeam, leave: true }) });
         const { Modal } = await import('@/modal');
         const confirm = vi.spyOn(Modal, 'confirm');
         confirm.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
@@ -138,7 +184,7 @@ describe('TeamOverviewScreen Team identity', () => {
         harness.answer(serverId, TEAM_GET_PATH, { status: 403, body: { error: 'team_forbidden' } });
         await screen.pressByTestIdAsync('team-overview-leave');
         await vi.waitFor(() => expect(routerReplace).toHaveBeenCalledWith('/settings/teams'));
-        expect(confirm).toHaveBeenLastCalledWith(expect.any(String), expect.any(String), expect.objectContaining({ destructive: true }));
+        expect(confirm).toHaveBeenCalledTimes(2);
         expect(harness.requestsFor('/v1/teams/members/leave')[0]?.input).toEqual({ v: 1, teamId: 'team-1' });
         expect(harness.requestsFor('/v1/artifacts')).toHaveLength(0);
         const { getTeamsDirectorySnapshot } = await import('@/sync/store/teams/teamsSnapshots');

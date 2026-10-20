@@ -30,6 +30,7 @@ import { normalizeAgentCliSessionCommandOptions } from '@/plugins/projection/reg
 import { runnerPinnedBundledCustodyCanSupersedeBootstrap } from '@/plugins/runtime/retainedPluginSourceAttestation';
 import type { ConnectedServiceRuntimeRegistry } from '@/daemon/connectedServices/runtimeRegistry/registry';
 import type { ConnectedServiceRuntimeTargetInput } from '@/daemon/connectedServices/runtimeRegistry/target';
+import type { ConnectedServiceMaterializedStateObservationBinding } from '../connectedServices/materialization/materializer';
 
 type Cleanup = () => void | Promise<void>;
 
@@ -59,6 +60,7 @@ export type PreparedForegroundAgentRuntimeAdmission = Readonly<{
         unsetEnvironmentVariableNames: readonly string[];
         sensitiveEnvironmentVariableNames: readonly string[];
         invocationContext: RunnerAgentInvocationContext;
+        materializedStateObservationBinding?: ConnectedServiceMaterializedStateObservationBinding;
         connectedServiceRuntimeTarget?: Pick<ConnectedServiceRuntimeTargetInput,
           | 'materializationKey'
           | 'connectedServicesBindingsRaw'
@@ -104,6 +106,7 @@ type Admission = {
   > | null;
   cleanup: Cleanup;
   detachRetirementListener: () => void;
+  cancellation: AbortController;
   released: boolean;
   releasePromise: Promise<void> | null;
   connectedServiceRuntimeTargetPid: number | null;
@@ -136,7 +139,7 @@ export type ForegroundDaemonServiceSubject = Readonly<{
 
 type PendingAdmission = {
   request: ForegroundAgentRuntimeAdmissionOwnerRequestV1;
-  cancelled: boolean;
+  cancellation: AbortController;
   settled: Promise<void>;
   settle(): void;
 };
@@ -145,6 +148,7 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
   connectedServiceRuntimeRegistry?: ConnectedServiceRuntimeRegistry;
   prepare(
     request: ForegroundAgentRuntimeAdmissionOwnerRequestV1,
+    signal: AbortSignal,
   ): Promise<
     | Readonly<{ ok: true; prepared: PreparedForegroundAgentRuntimeAdmission }>
     | Extract<ForegroundAgentRuntimeAdmissionResponseV1, { ok: false }>
@@ -153,6 +157,7 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
   getHttpPort?(): number;
   promoteDaemonServiceAuthority?(input: Readonly<{
     requesterSessionRuntimeContext?: RequesterSessionRuntimeContext;
+    materializedStateObservationBinding?: ConnectedServiceMaterializedStateObservationBinding;
     canonicalSessionId: string;
     foregroundPid: number;
     authorityFilePath: string;
@@ -219,6 +224,7 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
     }
     if (admission.released) return;
     admission.released = true;
+    admission.cancellation.abort();
     admission.detachRetirementListener();
     const targetPid = admission.connectedServiceRuntimeTargetPid;
     if (targetPid !== null) {
@@ -259,7 +265,7 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
       let settlePending!: () => void;
       const pending: PendingAdmission = {
         request,
-        cancelled: false,
+        cancellation: new AbortController(),
         settled: new Promise<void>((resolve) => {
           settlePending = resolve;
         }),
@@ -270,9 +276,9 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
       pendingByAttemptId.set(request.attemptId, pending);
       let promoted = false;
       try {
-        const result = await dependencies.prepare(request);
+        const result = await dependencies.prepare(request, pending.cancellation.signal);
         if (!result.ok) {
-          if (disposed || pending.cancelled) {
+          if (disposed || pending.cancellation.signal.aborted) {
             throw new Error(
               disposed
                 ? 'Foreground Agent runtime admission owner is disposed'
@@ -282,7 +288,7 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
           return result;
         }
         const prepared = result.prepared;
-        if (disposed || pending.cancelled) {
+        if (disposed || pending.cancellation.signal.aborted) {
           await prepared.cleanup();
           throw new Error(
             disposed
@@ -330,6 +336,7 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
           claimPromise: null,
           cleanup: prepared.cleanup,
           detachRetirementListener: () => {},
+          cancellation: pending.cancellation,
           released: false,
           releasePromise: null,
           connectedServiceRuntimeTargetPid: null,
@@ -537,6 +544,12 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
             // account/HostAccess authority per operation and must never retain
             // raw launch-time secret bytes as reusable service authority.
             environment: Object.freeze({}),
+            ...(claimed.invocationContext.profileId
+              ? { profileId: claimed.invocationContext.profileId }
+              : {}),
+            ...(claimed.invocationContext.secretReferenceOverlay
+              ? { secretReferenceOverlay: claimed.invocationContext.secretReferenceOverlay }
+              : {}),
             ...(claimed.invocationContext.agentCliLaunch
               ? { agentCliLaunch: claimed.invocationContext.agentCliLaunch }
               : {}),
@@ -573,6 +586,8 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
             await dependencies.promoteDaemonServiceAuthority({
               ...(admission.requesterSessionRuntimeContext
                 ? { requesterSessionRuntimeContext: admission.requesterSessionRuntimeContext } : {}),
+              ...(claimed.materializedStateObservationBinding
+                ? { materializedStateObservationBinding: claimed.materializedStateObservationBinding } : {}),
               canonicalSessionId: claimRequest.canonicalSessionId,
               foregroundPid: claimRequest.foregroundPid,
               authorityFilePath:
@@ -689,7 +704,7 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
     async release(attemptId: string, sessionId: string): Promise<void> {
       const pending = pendingByAttemptId.get(attemptId);
       if (pending?.request.sessionId === sessionId) {
-        pending.cancelled = true;
+        pending.cancellation.abort();
         await pending.settled;
         return;
       }
@@ -702,7 +717,7 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
       if (!attemptId) return;
       const pending = pendingByAttemptId.get(attemptId);
       if (pending) {
-        pending.cancelled = true;
+        pending.cancellation.abort();
         await pending.settled;
         return;
       }
@@ -716,7 +731,7 @@ export function createForegroundAgentRuntimeAdmissionOwner(dependencies: Readonl
         livenessTimer = null;
       }
       const pending = [...pendingByAttemptId.values()];
-      for (const admission of pending) admission.cancelled = true;
+      for (const admission of pending) admission.cancellation.abort();
       await Promise.allSettled(
         [
           ...pending.map((admission) => admission.settled),

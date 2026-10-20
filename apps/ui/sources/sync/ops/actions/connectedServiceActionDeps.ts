@@ -5,13 +5,13 @@ import { QualifiedConnectedAccountSuccessV4Schema } from '@happier-dev/protocol/
 import { ConnectedServiceApiError, throwConnectedServiceApiError } from '@/sync/api/account/connectedServiceApiError';
 import { classifyHttpMutationRequestFailure } from '@/sync/http/mutationRequestOutcome';
 import { invalidateConnectedServiceGroupsRefreshSignal } from '@/sync/domains/connectedServices/connectedServiceGroupsRefreshSignal';
-import type { LazyActionAccountContext } from './actionAccountContext';
+import { withActionAccountRequestSignal, type LazyActionAccountContext } from './actionAccountContext';
 import type { PreparedConnectedMetadataCleanup } from '@/sync/api/account/apiConnectedMetadataCatalog';
 import { BUNDLED_ACCOUNT_CONNECTED_SERVICE_DECLARATIONS } from '@/agents/registry/generatedBundledPluginEntries';
 import { getAccountConnectedServiceConfigurationMode } from '@/sync/domains/connectedServices/connectedServiceRegistry';
 import type { ProviderAccountUsageQuotaReadOptions } from '@/sync/api/account/apiProviderAccountUsage';
 
-export function createUiConnectedServiceAction(account: LazyActionAccountContext, quotaReadOptions?: Pick<ProviderAccountUsageQuotaReadOptions, 'readAllHistory'>): NonNullable<ActionExecutorDeps['connectedServiceAction']> {
+export function createUiConnectedServiceAction(account: LazyActionAccountContext, quotaReadOptions?: Pick<ProviderAccountUsageQuotaReadOptions, 'readAllHistory' | 'projectionDocuments'>): NonNullable<ActionExecutorDeps['connectedServiceAction']> {
     const invoke = async ({ actionId, input, signal }: Parameters<NonNullable<ActionExecutorDeps['connectedServiceAction']>>[0], prepare: boolean) => {
         const assertCurrent = () => { signal?.throwIfAborted(); account.assertCurrent(); };
         const localSettings = actionId === 'connectedServices.identityPrivacy.set'
@@ -52,7 +52,7 @@ export function createUiConnectedServiceAction(account: LazyActionAccountContext
                     const { mutateConnectedAccountPurposeDefaultsInContext } = await import('@/sync/ops/connectedAccounts/connectedAccountPurposeDefaults');
                     await mutateConnectedAccountPurposeDefaultsInContext(account, mutate, signal);
                 },
-                admitResourcePurposeTarget: async input => {
+                admitPurposeTarget: async input => {
                     const [{ loadDaemonMergedProjectionCacheEntry }, { normalizePluginUiProjection, resolvePluginUiProjectionPlatform },
                         { readConnectedAccountDescriptorProjection }, { getMachineContributionRegistryProjectionRevision },
                         { isConnectedAccountPurposeSetupTargetCurrent }, { getActiveServerAccountScope }, { storage }] = await Promise.all([
@@ -66,9 +66,9 @@ export function createUiConnectedServiceAction(account: LazyActionAccountContext
                     ]);
                     const target = { machineId: input.machineId, serverId: account.serverId };
                     const revision = getMachineContributionRegistryProjectionRevision(target);
-                    // A retained/offline presentation is not Resource declaration authority.
+                    // A retained/offline presentation is not consumer declaration authority.
                     const entry = await loadDaemonMergedProjectionCacheEntry({ ...target,
-                        accountLifetime: account.accountLifetime, reuseFreshReady: false });
+                        accountLifetime: account.accountLifetime, reuseFreshReady: false, signal });
                     assertCurrent();
                     if (entry?.kind !== 'ready' || !entry.inputs.pluginProjectionV2) return null;
                     const projection = entry.inputs.pluginProjectionV2;
@@ -112,7 +112,7 @@ export function createUiConnectedServiceAction(account: LazyActionAccountContext
                         import('@/agents/backendCatalog/loadDaemonMergedProjectionInputs'),
                     ]);
                     // Catalog provenance is selected explicitly, never borrowed from the focused Home.
-                    const projection = await loadDaemonMergedProjectionInputs({ machineId, serverId: account.serverId, accountLifetime: account.accountLifetime });
+                    const projection = await loadDaemonMergedProjectionInputs({ machineId, serverId: account.serverId, accountLifetime: account.accountLifetime, signal });
                     return getResolvedAgentCatalogEntries({ enabledAgentIds: AGENT_IDS,
                         mergedProviderProjectionById: projection?.mergedProviderProjectionById ?? null,
                         mergedBackendProjectionById: projection?.mergedBackendProjectionById ?? null,
@@ -127,13 +127,16 @@ export function createUiConnectedServiceAction(account: LazyActionAccountContext
                     });
                 },
                 readQuota: async input => {
-                    const accountMode = await account.resolveAccountMode();
-                    const settings = await account.readSettings();
                     const { getProviderAccountUsageQuota } = await import('@/sync/api/account/apiProviderAccountUsage');
                     assertCurrent();
                     return await getProviderAccountUsageQuota(account.credentials, input, {
                         ...quotaReadOptions,
-                        accountMode, request: account.request, assertCurrent,
+                        accountMode: account.resolveAccountMode(), request: account.request, assertCurrent,
+                        readPacingTargets: async () => {
+                            const settings = await account.readSettings();
+                            assertCurrent();
+                            return settings.usagePacingTargetsV1;
+                        },
                         readEnteredMonthlyPrice: async () => {
                             const [{ readConnectedMetadataCatalogInContext }, { readConnectedSubscriptionMonthlyPriceV1 }] = await Promise.all([
                                 import('@/sync/api/account/apiConnectedMetadataCatalog'), import('@happier-dev/protocol/connect/connectedAccountPresentationRowsV1'),
@@ -142,7 +145,7 @@ export function createUiConnectedServiceAction(account: LazyActionAccountContext
                             assertCurrent();
                             return catalog.presentation.status === 'ready' ? readConnectedSubscriptionMonthlyPriceV1(catalog.presentation, input.source.ref) : undefined;
                         },
-                        targets: settings.usagePacingTargetsV1, ...(signal ? { signal } : {}),
+                        ...(signal ? { signal } : {}),
                     });
                 },
                 setSubscriptionPrice: async input => {
@@ -153,23 +156,23 @@ export function createUiConnectedServiceAction(account: LazyActionAccountContext
                 readPoolSelection: async input => {
                     const { machineRpcWithServerScope } = await import('@/sync/runtime/orchestration/serverScopedRpc/serverScopedMachineRpc');
                     assertCurrent();
-                    return await machineRpcWithServerScope({
+                    return await withActionAccountRequestSignal(account, signal, ownedSignal => machineRpcWithServerScope({
                         serverId: account.serverId, accountId: account.accountId, machineId: input.machineId,
                         method: CONNECTED_SERVICE_POOL_SELECTION_RPC_METHOD, payload: input,
-                        onIssued: assertCurrent, ...(signal ? { signal } : {}),
-                    });
+                        onIssued: assertCurrent, signal: ownedSignal,
+                    }));
                 },
                 controlCommand: async (machineId, command) => {
                     const { runConnectedAccountControlCommand } = await import('@/sync/ops/connectedAccounts/connectedAccountDaemon');
                     assertCurrent();
-                    return await runConnectedAccountControlCommand({ serverId: account.serverId, machineId, command,
-                        assertCurrent, ...(signal ? { signal } : {}) });
+                    return await withActionAccountRequestSignal(account, signal, ownedSignal => runConnectedAccountControlCommand({ serverId: account.serverId, machineId, command,
+                        assertCurrent, signal: ownedSignal }));
                 },
                 authenticationCommand: async (machineId, command) => {
                     const { runConnectedAccountAuthenticationCommand } = await import('@/sync/ops/connectedAccounts/connectedAccountDaemon');
                     assertCurrent();
-                    return await runConnectedAccountAuthenticationCommand({ serverId: account.serverId, accountId: account.accountId,
-                        machineId, command, assertCurrent, ...(signal ? { signal } : {}) });
+                    return await withActionAccountRequestSignal(account, signal, ownedSignal => runConnectedAccountAuthenticationCommand({ serverId: account.serverId, accountId: account.accountId,
+                        machineId, command, assertCurrent, signal: ownedSignal }));
                 },
                 openBillingDestination: async url => {
                     const { Linking } = await import('react-native');
@@ -180,10 +183,11 @@ export function createUiConnectedServiceAction(account: LazyActionAccountContext
             };
             return await (prepare ? prepareConnectedServiceRevokeInputV1(host, input) : executeConnectedServiceConfigurationActionV1(host, actionId, input));
         } catch (error) {
-            // A 4xx domain refusal is authoritative. A 5xx can follow a committed
-            // member write (the server still awaits response projection afterward).
+            // A domain refusal or the transaction owner's confirmed rollback is
+            // authoritative. Other 5xx can follow a committed member write.
             if (error instanceof ConnectedServiceApiError) {
-                if (mutationIssued && error.status !== undefined && error.status >= 500) {
+                const rolledBack = error.status === 503 && error.code === 'database_transaction_conflict_exhausted';
+                if (mutationIssued && error.status !== undefined && error.status >= 500 && !rolledBack) {
                     return { ok: false, errorCode: 'outcome_unknown', error: 'outcome_unknown' };
                 }
                 return { ok: false, errorCode: error.code ?? 'connected_service_request_failed', error: error.message };

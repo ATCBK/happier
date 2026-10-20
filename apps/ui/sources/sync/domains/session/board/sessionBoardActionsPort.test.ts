@@ -40,7 +40,7 @@ describe('createSessionBoardActionsPort', () => {
         expect(execute).not.toHaveBeenCalled();
     });
 
-    it('bypasses a second Action approval only after the present-user Board policy was resolved', async () => {
+    it('leaves removal approval to the Action without fabricating a caller confirmation', async () => {
         const execute = vi.fn(async () => ({ ok: true as const, result: mutation }));
         const actions = createSessionBoardActionsPort({ serverId: 'home-a', sessionId: 'session-a', execute });
         const input = {
@@ -51,20 +51,11 @@ describe('createSessionBoardActionsPort', () => {
         };
 
         await actions.removeItem(input);
-        await actions.removeItem(input, { approvalDecisionApplied: true });
 
         expect(execute).toHaveBeenNthCalledWith(1, 'session.board.item.remove', input, {
             serverId: 'home-a',
             defaultSessionId: 'session-a',
             surface: 'ui',
-        });
-        expect(execute).toHaveBeenNthCalledWith(2, 'session.board.item.remove', input, {
-            serverId: 'home-a',
-            defaultSessionId: 'session-a',
-            surface: 'ui',
-            authority: 'present_user',
-            presentUserConfirmation: { actionId: 'session.board.item.remove' },
-            bypassApprovals: true,
         });
     });
 

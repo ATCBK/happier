@@ -20,14 +20,20 @@ import {
 } from './utils/auth/stack_guided_login.mjs';
 import { prepareGuidedLoginWebapp } from './utils/auth/orchestrated_stack_auth_flow.mjs';
 import { withPatchedProcessEnv } from './testkit/core/env_scope.mjs';
+import { resolveStackRuntimeLaunchContext } from './runtime/launch/resolveStackRuntimeLaunchContext.mjs';
 
 async function createHealthyServer({
   rootBody = 'ok',
   rootContentType = 'text/plain',
   onHealthRequest = null,
   onProfileRequest = null,
+  onAuthRequest = null,
 } = {}) {
   const server = createServer((req, res) => {
+    if (req.url === '/v1/auth/request' && onAuthRequest) {
+      onAuthRequest({ req, res });
+      return;
+    }
     if (req.url === '/v1/account/profile') {
       if (typeof onProfileRequest === 'function') {
         onProfileRequest({ req, res, server });
@@ -245,6 +251,7 @@ async function buildGuidedNoExpoFixture({
   successfulLoginWritesCredentials = true,
   onHealthRequest = null,
   onProfileRequest = null,
+  onAuthRequest = null,
 } = {}) {
   const tmp = await mkdtemp(join(tmpdir(), 'hstack-auth-guided-no-expo-'));
   const storageDir = join(tmp, 'storage');
@@ -252,7 +259,7 @@ async function buildGuidedNoExpoFixture({
   const cliHomeDir = join(storageDir, stackName, 'cli');
   await ensureMinimalMonorepoLayout(monoRoot);
   const serverFixture = startServer
-    ? await createHealthyServer({ rootBody, rootContentType, onHealthRequest, onProfileRequest })
+    ? await createHealthyServer({ rootBody, rootContentType, onHealthRequest, onProfileRequest, onAuthRequest })
     : null;
   const server = serverFixture?.server ?? null;
   const port = serverFixture?.port ?? (await reserveUnusedPort());
@@ -1032,6 +1039,110 @@ test('printed source snapshot auth preserves the projected CLI root and clears n
   assert.match(cmd, /HAPPIER_CLI_SUBPROCESS_DIST_ENTRYPOINT=""/);
   assert.match(cmd, /HAPPIER_CLI_SUBPROCESS_DAEMON_DIST_CLOSURE_FINGERPRINT=""/);
   assert.ok(cmd.includes(`"${fixture.sourceEntrypoint}" "auth" "login"`));
+});
+
+test('source snapshot auth follows the running source basis instead of a stale built selection', async t => {
+  let requested = false;
+  const fixture = await buildGuidedNoExpoFixture({ stackName: 'qa-source-auth', sourceSnapshot: true,
+    runtimeSnapshot: true, includeSourceCli: false, runtimeOwnerAlive: true,
+    onAuthRequest: ({ req, res }) => {
+      assert.equal(req.method, 'POST');
+      requested = true;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ approvalUrl: 'https://approval.example.test/source-request' }));
+    } });
+  t.after(() => fixture.cleanup());
+  const statePath = join(fixture.storageDir, fixture.stackName, 'stack.runtime.json');
+  const state = { ...JSON.parse(await readFile(statePath, 'utf8')),
+    runtimeSnapshotId: null, sourceRuntimeIdentities: { server: { selected: 'source-code', loaded: 'source-code' } } };
+  await writeFile(statePath, JSON.stringify(state));
+  const envPath = join(fixture.storageDir, fixture.stackName, 'env');
+  await writeFile(envPath, `${await readFile(envPath, 'utf8')}HAPPIER_STACK_RUNTIME_MODE=require\n`);
+  const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
+  const result = await runNodeCapture([authScriptPath(rootDir), 'login', '--no-open', '--print', '--json'], {
+    cwd: rootDir, env: fixture.env,
+  });
+  assert.equal(result.code, 0, result.stderr);
+  const { cmd } = JSON.parse(result.stdout);
+  assert.ok(cmd.includes(`"${fixture.sourceEntrypoint}" "auth" "login"`), cmd);
+  assert.doesNotMatch(cmd, /HAPPIER_CLI_SUBPROCESS_RUNTIME_BACKED="1"/);
+  // CLI/network are genuine external boundaries. Stop after emitting the
+  // request: approval and post-auth daemon startup are not this fixture's job.
+  await writeFile(fixture.sourceEntrypoint, `
+    if (!process.argv.includes('--no-open') || process.env.HAPPIER_NO_BROWSER_OPEN !== '1') throw new Error('browser-open requested');
+    const response = await fetch(process.env.HAPPIER_SERVER_URL + '/v1/auth/request', { method: 'POST' });
+    console.log((await response.json()).approvalUrl);
+  `);
+  const login = await runNodeCapture([authScriptPath(rootDir), 'login', '--no-open'], {
+    cwd: rootDir, env: fixture.env,
+  });
+  assert.equal(requested, true, login.stderr);
+  assert.match(login.stdout, /https:\/\/approval\.example\.test\/source-request/);
+  assert.notEqual(login.code, 0, 'unapproved requests must not report completed login');
+  assert.doesNotMatch(login.stderr, /daemon support artifact|invalid active runtime snapshot/);
+  await rm(join(fixture.storageDir, fixture.stackName, 'runtime/builds/snap-auth/cli/happier'));
+  await assert.rejects(resolveStackRuntimeLaunchContext({ argv: ['--runtime=built'], env: fixture.env,
+    activeRuntimeState: state }), /missing daemon entrypoints/);
+  await assert.rejects(resolveStackRuntimeLaunchContext({ argv: ['--no-dev-targets'],
+    env: { ...fixture.env, HAPPIER_STACK_RUNTIME_MODE: 'require' }, purpose: 'deployment' }), /missing daemon entrypoints/);
+  await writeFile(statePath, JSON.stringify({ ...state,
+    sourceRuntimeIdentities: { ...state.sourceRuntimeIdentities, daemon: { selected: 'loaded-source', loaded: 'loaded-source' } },
+  }));
+  await rm(fixture.sourceEntrypoint);
+  const missingLoadedSource = await runNodeCapture([authScriptPath(rootDir), 'login', '--no-open', '--print', '--json'], {
+    cwd: rootDir, env: fixture.env,
+  });
+  assert.notEqual(missingLoadedSource.code, 0, 'auth must not rebuild the missing code basis of a loaded source daemon');
+  assert.match(missingLoadedSource.stderr, /loaded source CLI.*unavailable/i);
+});
+
+test('remote-daemon source auth uses the controller CLI without changing the loaded remote identity', async t => {
+  let requested = false;
+  const fixture = await buildGuidedNoExpoFixture({ stackName: 'qa-remote-source-auth', sourceSnapshot: true,
+    includeSourceCli: false, runtimeOwnerAlive: true, successfulLoginWritesCredentials: false,
+    onAuthRequest: ({ req, res }) => {
+      assert.equal(req.method, 'POST');
+      requested = true;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ approvalUrl: 'https://approval.example.test/remote-request' }));
+    } });
+  t.after(() => fixture.cleanup());
+  const stackDir = join(fixture.storageDir, fixture.stackName);
+  const statePath = join(stackDir, 'stack.runtime.json');
+  const state = { ...JSON.parse(await readFile(statePath, 'utf8')), sourceRuntimeLaunch: null,
+    placement: { server: 'local', daemon: 'remote-host' },
+    remoteTargets: { 'remote-host': { services: { daemon: true }, runtimeMode: 'source-snapshot' } },
+    sourceRuntimeIdentities: { daemon: { selected: 'remote-code', loaded: 'remote-code' } } };
+  await writeFile(statePath, JSON.stringify(state));
+  // The emitted CLI process and HTTP server are system boundaries. Its retained
+  // selection is controller-local; it is not the remote daemon's loaded code.
+  await writeFile(join(stackDir, 'source-runtime/selected-daemon.json'), JSON.stringify({ entrypoint: fixture.sourceEntrypoint }));
+  await writeFile(join(stackDir, 'source-runtime/source-bundle.json'), JSON.stringify({
+    identity: 'controller-code', entrypoint: fixture.sourceEntrypoint, cliDir: fixture.sourceCliDir, env: {},
+  }));
+  await writeFile(fixture.sourceEntrypoint, `
+    if (process.argv[2] !== 'auth' || process.argv[3] !== 'login') process.exit(0);
+    if (!process.argv.includes('--no-open') || process.env.HAPPIER_NO_BROWSER_OPEN !== '1') throw new Error('browser-open requested');
+    const response = await fetch(process.env.HAPPIER_SERVER_URL + '/v1/auth/request', { method: 'POST' });
+    console.log((await response.json()).approvalUrl);
+  `);
+  const rootDir = dirname(dirname(fileURLToPath(import.meta.url)));
+  const printed = await runNodeCapture([authScriptPath(rootDir), 'login', '--no-open', '--force', '--print', '--json'], {
+    cwd: rootDir, env: fixture.env,
+  });
+  assert.equal(printed.code, 0, printed.stderr);
+  const { cmd } = JSON.parse(printed.stdout);
+  assert.ok(cmd.includes(`"${fixture.sourceEntrypoint}" "auth" "login"`), cmd);
+  const login = await runNodeCapture([authScriptPath(rootDir), 'login', '--no-open', '--force'], {
+    cwd: rootDir, env: fixture.env,
+  });
+  assert.equal(requested, true, login.stderr);
+  assert.match(login.stdout, /https:\/\/approval\.example\.test\/remote-request/);
+  assert.notEqual(login.code, 0, 'unapproved requests must not report completed login');
+  const after = JSON.parse(await readFile(statePath, 'utf8'));
+  assert.deepEqual(after.sourceRuntimeIdentities, state.sourceRuntimeIdentities);
+  assert.deepEqual(after.placement, state.placement);
+  assert.equal(after.sourceRuntimeLaunch.entrypoint, fixture.sourceEntrypoint);
 });
 
 test('hstack auth login --force fails closed when guided login exits without usable credentials and skips post-auth daemon start', async (t) => {

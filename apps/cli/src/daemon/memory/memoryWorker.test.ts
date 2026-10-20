@@ -194,6 +194,9 @@ describe('memoryWorker', () => {
     let replaceAccountDuringSessionRead = false;
     let retainedSourceRead: (() => Promise<void>) | undefined;
     let accountAttached = false;
+    let projectOnly = false;
+    const { configuration } = await import('@/configuration');
+    const projectRef = { serverId: configuration.activeServerId, projectKey: 'project-no-session' };
     const fact = (id: string, text: string, expiresAtMs?: number) => ({ id, text, createdAtMs: 1, sourceSessionRef: null, ...(expiresAtMs === undefined ? {} : { expiresAtMs }) });
     const artifact = (id: string) => ({ id, ownerAccountId: 'account', access: 'owner', encryptionMode: 'plain',
       header: encodePlainArtifactStoredContent({ v: 1, kind: id === 'memory' ? 'memory_doc.v1' : 'prompt_doc.v2', title: id }),
@@ -220,7 +223,7 @@ describe('memoryWorker', () => {
     vi.spyOn(axios, 'get').mockImplementation(async url => {
       const path = new URL(String(url)).pathname;
       if (path === '/v2/sessions' || path === '/v2/sessions/archived') return { status: 200,
-        data: { sessions: path.endsWith('/archived') ? [] : [session()], nextCursor: null, hasNext: false } };
+        data: { sessions: path.endsWith('/archived') || projectOnly ? [] : [session()], nextCursor: null, hasNext: false } };
       if (path === '/v2/sessions/s1') {
         if (replaceAccountDuringSessionRead) {
           replaceAccountDuringSessionRead = false;
@@ -240,6 +243,15 @@ describe('memoryWorker', () => {
         : emptyPromptLibraryRecordV1(key) } })) } };
       if (path === '/v1/artifacts') return { status: 200, data: readable ? [...attached, ...(accountAttached ? ['account-instructions'] : [])].map(artifact) : [] };
       if (path.startsWith('/v1/artifacts/')) return readable ? { status: 200, data: artifact(path.split('/').at(-1)!) } : { status: 404, data: { error: 'not_found' } };
+      throw new Error(`Unexpected document indexing HTTP path: ${path}`);
+    });
+    vi.spyOn(axios, 'post').mockImplementation(async url => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/v1/account/project-rows/list') return { status: 200,
+        data: { status: 'listed', coverage: 'complete', rows: projectOnly ? [{
+          key: { kind: 'project-organization', ...projectRef }, revision: 1,
+          content: { t: 'plain', v: { key: { kind: 'project-organization', ...projectRef }, value: { promptStack: [entry('memory')] } } },
+        }] : [] } };
       throw new Error(`Unexpected document indexing HTTP path: ${path}`);
     });
     // Real Session HTTP/schema parsing consumes the canonical producer's tuple.
@@ -270,7 +282,7 @@ describe('memoryWorker', () => {
       const { RpcHandlerManager } = await import('@/api/rpc/RpcHandlerManager');
       const manager = new RpcHandlerManager({ scopePrefix: 'machine_1', encryptionMode: 'plain', logger: () => {} });
       registerMachineMemoryRpcHandlers({ rpcHandlerManager: manager, memoryWorker: worker });
-      expect(await manager.handleRequest({ method: `machine_1:${RPC_METHODS.DAEMON_MEMORY_STATUS}`, params: null })).toMatchObject({ documentSearchSupported: true });
+      expect(await manager.handleRequest({ method: `machine_1:${RPC_METHODS.DAEMON_MEMORY_STATUS}`, params: null })).toMatchObject({ documentSearchSupported: true, projectSearchSupported: true });
       const { MemoryStatusV1Schema } = await import('@happier-dev/protocol/memory/memoryStatus');
       expect(MemoryStatusV1Schema.parse(await manager.handleRequest({ method: `machine_1:${RPC_METHODS.DAEMON_MEMORY_STATUS}`,
         params: { scope: { type: 'session', sessionId: 's1' } } })).documents)
@@ -293,6 +305,27 @@ describe('memoryWorker', () => {
       expect(result.hits.filter(hit => !('type' in hit))).toEqual(sessionsOnly.ok ? sessionsOnly.hits : []);
       expect(sessionsOnly).not.toHaveProperty('documents');
       expect(await search(null)).toEqual(sessionsOnly);
+      // Real Machine registration -> worker's Project context port -> canonical
+      // Project row reader -> Artifact admission -> SQLite, with zero Sessions.
+      projectOnly = true;
+      accountAttached = true;
+      const projectQuery = { v: 1, query: 'quartz', scope: { type: 'project', projectRef }, mode };
+      const projectResult = MemorySearchResultV1Schema.parse(await manager.handleRequest({
+        method: `machine_1:${RPC_METHODS.DAEMON_MEMORY_SEARCH}`, params: projectQuery,
+      }));
+      expect(projectResult).toMatchObject({ ok: true, project: { state: 'ready' }, documents: { state: 'ready' } });
+      expect(projectResult.ok && projectResult.hits).toHaveLength(4);
+      expect(projectResult.ok && projectResult.hits.every(hit => hit.type === 'artifact' && hit.ref.artifactId === 'memory')).toBe(true);
+      const projectSessions = MemorySearchResultV1Schema.parse(await manager.handleRequest({
+        method: `machine_1:${RPC_METHODS.DAEMON_MEMORY_SEARCH}`, params: { ...projectQuery, corpora: ['sessions'] },
+      }));
+      expect(projectSessions).toMatchObject({ ok: true, hits: [], project: { state: 'ready' } });
+      readable = false;
+      expect(await manager.handleRequest({ method: `machine_1:${RPC_METHODS.DAEMON_MEMORY_SEARCH}`, params: projectQuery }))
+        .toMatchObject({ ok: true, hits: [], project: { state: 'unavailable' } });
+      readable = true;
+      projectOnly = false;
+      accountAttached = false;
       let releaseSource = () => {};
       let sourceIssued = () => {};
       const sourcePending = new Promise<void>(resolve => { releaseSource = resolve; });

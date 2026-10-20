@@ -7,6 +7,8 @@ import { isWorkflowProjectTarget } from '@/sync/domains/workflows/workflowProjec
 import { t } from '@/text';
 import { getMachineDisplayName } from '@/utils/sessions/machineUtils';
 import { useViewportClass } from '@/utils/platform/useViewportClass';
+import { useMachineListForServer } from '@/sync/domains/state/storage';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 /**
  * Runs on (04 §5.4, INT §3.1 #9; 07 S4): one machine and folder per trigger set — the set's
@@ -14,16 +16,20 @@ import { useViewportClass } from '@/utils/platform/useViewportClass';
  * with the where-summary as its value, its consequence as the description; never per trigger.
  */
 export function TriggerRunsOnRow(props: Readonly<{
+    accountLifetime?: ServerAccountScopeLifetime | null;
     testID: string;
     target: WorkflowProjectTargetV1 | null;
     onChange: (next: WorkflowProjectTargetV1) => void;
     description: string;
 }>): React.ReactElement {
-    const machines = useAllMachines();
+    const activeMachines = useAllMachines();
+    const addressedMachines = useMachineListForServer(props.accountLifetime?.scope.serverId ?? '');
+    const machines = props.accountLifetime === undefined ? activeMachines : addressedMachines ?? [];
     const viewportClass = useViewportClass();
     const machine = props.target === null ? null : machines.find((candidate) => candidate.id === props.target?.machineId) ?? null;
     return (
         <WorkflowProjectTargetControl
+            accountLifetime={props.accountLifetime}
             purpose="trigger"
             presentation="field"
             accessoryLayout={viewportClass === 'compact' ? 'stacked' : 'inline'}

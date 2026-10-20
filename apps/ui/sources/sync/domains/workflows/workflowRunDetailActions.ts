@@ -6,6 +6,7 @@ import type { WorkflowInvocationLifecycleV1, WorkflowInvocationRetryInputV1, Wor
 import { callWorkflowAction, type WorkflowActionExecute } from './callWorkflowAction';
 
 import { WorkflowActionError } from './workflowActionError';
+import type { ServerAccountScopeLifetime } from '@/sync/domains/scope/serverAccountScope';
 
 /**
  * The exact Run **detail** reader and control caller.
@@ -25,6 +26,7 @@ type ActionExecute = WorkflowActionExecute;
 
 export function createWorkflowRunDetailActions(dependencies: Readonly<{
     execute?: ActionExecute;
+    accountLifetime?: ServerAccountScopeLifetime | null;
 }> = {}) {
     async function call<TResult>(
         actionId: string,
@@ -42,6 +44,7 @@ export function createWorkflowRunDetailActions(dependencies: Readonly<{
             ...(dependencies.execute === undefined ? {} : { execute: dependencies.execute }),
             ...(signal === undefined ? {} : { signal }),
             ...(context === undefined ? {} : { context }),
+            ...(dependencies.accountLifetime === undefined ? {} : { accountLifetime: dependencies.accountLifetime }),
         });
     }
 
@@ -115,8 +118,9 @@ export function createWorkflowRunDetailActions(dependencies: Readonly<{
                 (value) => WorkflowInvocationPublishDraftResultV1Schema.parse(value),
                 signal,
             ),
-        deleteRun: (input: Readonly<{ runId: string; expectedRevision: number }>, signal?: AbortSignal) =>
-            call('workflow.run.delete', input, (value) => WorkflowRunDeleteResultV1Schema.parse(value), signal),
+        deleteRun: (input: Readonly<{ runId: string; expectedRevision: number }>, signal?: AbortSignal, onTransportIssued?: () => void) =>
+            call('workflow.run.delete', input, (value) => WorkflowRunDeleteResultV1Schema.parse(value), signal,
+                onTransportIssued ? { onTransportIssued } : undefined),
     } as const;
 }
 

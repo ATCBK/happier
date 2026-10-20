@@ -138,21 +138,18 @@ export type TriageDetailChecksRollupV1 =
   | Readonly<{ incomplete?: false; failingCount?: number; runningCount?: number; passingCount?: number }>
   | Readonly<{ incomplete: true; failingCount: number; runningCount: number; passingCount?: number }>;
 
+type ChecksRollupLine = Readonly<{
+  state: 'failed' | 'running' | 'passed';
+  label: string;
+  lead: string | null;
+  line: string;
+}>;
+
 /**
- * The checks state of a change request (lab `checksRight`): the marker, the counts beside the
- * title and the failing checks under it. Counts are canonical provider rollups, never
- * inferred from the currently loaded page, and only a source whose rollup is the latest
- * commit's says so (`latestCommit`). An incomplete rollup keeps the failures already read
- * and says the count is incomplete.
+ * The one sentence a checks rollup says (lab `checksRight`): the failing count leads in the danger
+ * tone, the rest of the line stays quiet. Null when the rollup does not state enough to say anything.
  */
-export function TriageDetailChecks({ title, titleKey, rollup, failing, latestCommit = false, children }: Readonly<{
-  title: string;
-  titleKey: string;
-  rollup: TriageDetailChecksRollupV1 | null;
-  failing?: readonly TriageDetailFailingCheckV1[];
-  latestCommit?: boolean;
-  children?: React.ReactNode;
-}>): React.ReactElement | null {
+function useChecksRollupLine(rollup: TriageDetailChecksRollupV1 | null, latestCommit: boolean): ChecksRollupLine | null {
   const text = usePluginTranslation();
   const count = useStoryCount();
   if (rollup === null || rollup.failingCount === undefined || rollup.runningCount === undefined) return null;
@@ -165,7 +162,6 @@ export function TriageDetailChecks({ title, titleKey, rollup, failing, latestCom
   const label = text(`plugins.triage.detailStory.${state}`,
     state === 'failed' ? '{count} failed' : state === 'running' ? 'Running' : 'Passed',
     { count: rollup.failingCount });
-  // Lab `checksRight`: the failing count leads in the danger tone, the rest of the line stays quiet.
   let lead: string | null = null;
   let line: string;
   if (incomplete) {
@@ -189,13 +185,55 @@ export function TriageDetailChecks({ title, titleKey, rollup, failing, latestCom
           : count('allPassed', passing!, { one: '{count} passed', other: 'All {count} passed' });
     }
   }
-  const trailing = lead === null ? <Text variant="micro" tone="secondary" value={line} />
+  return { state, label, lead, line };
+}
+
+/** `micro` trails a story step's title; `body` is the line that stands alone above a checks list. */
+function ChecksRollupSentence({ lead, line, variant = 'micro' }: Readonly<{
+  lead: string | null;
+  line: string;
+  variant?: 'micro' | 'body';
+}>): React.ReactElement {
+  return lead === null ? <Text variant={variant} tone="secondary" value={line} />
     : <Row gap="xsmall" align="center">
-      <Text variant="micro" tone="danger" value={lead} />
-      <Text variant="micro" tone="secondary" value={line} />
+      <Text variant={variant} tone="danger" value={lead} />
+      <Text variant={variant} tone="secondary" value={line} />
     </Row>;
-  const listed = state === 'failed' && failing !== undefined && failing.length > 0;
-  return <Step title={title} titleKey={titleKey} marker={{ kind: 'state', state, label }} trailing={trailing}>
+}
+
+/**
+ * A checks rollup as one calm line ("4 failing · 14 passed"), for a source's own checks list that
+ * draws the rows itself. The same sentence the detail story's Checks step carries, so one rollup
+ * never reads two ways. Nothing is drawn when the rollup does not state its counts.
+ */
+export function TriageChecksRollupLine({ rollup, latestCommit = false }: Readonly<{
+  rollup: TriageDetailChecksRollupV1 | null;
+  latestCommit?: boolean;
+}>): React.ReactElement | null {
+  const sentence = useChecksRollupLine(rollup, latestCommit);
+  return sentence === null ? null : <ChecksRollupSentence lead={sentence.lead} line={sentence.line} variant="body" />;
+}
+
+/**
+ * The checks state of a change request: the marker, the rollup sentence beside the title and the
+ * failing checks under it. Counts are canonical provider rollups, never inferred from the
+ * currently loaded page, and only a source whose rollup is the latest commit's says so
+ * (`latestCommit`). An incomplete rollup keeps the failures already read and says the count is
+ * incomplete.
+ */
+export function TriageDetailChecks({ title, titleKey, rollup, failing, latestCommit = false, children }: Readonly<{
+  title: string;
+  titleKey: string;
+  rollup: TriageDetailChecksRollupV1 | null;
+  failing?: readonly TriageDetailFailingCheckV1[];
+  latestCommit?: boolean;
+  children?: React.ReactNode;
+}>): React.ReactElement | null {
+  const sentence = useChecksRollupLine(rollup, latestCommit);
+  if (sentence === null) return null;
+  const listed = sentence.state === 'failed' && failing !== undefined && failing.length > 0;
+  return <Step title={title} titleKey={titleKey} marker={{ kind: 'state', state: sentence.state, label: sentence.label }}
+    trailing={<ChecksRollupSentence lead={sentence.lead} line={sentence.line} />}>
     {listed || children !== undefined ? <Stack gap="small">
       {listed ? failing.map((check) => <TriageStatusRow key={check.id} presentation="summary"
         name={check.name} status={check.detail} />) : null}

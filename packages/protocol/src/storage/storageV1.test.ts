@@ -12,7 +12,7 @@ import * as storage from './storageV1.js';
 
 const size = { allocatedBytes: 4096, freesBytes: 2048, sharedBytes: 2048, sharedExtentsUnmeasured: true, atLeast: false };
 const item: StorageItemV1 = {
-  itemId: 'log', kind: 'category-item', categoryId: 'logs', title: 'Old logs', evidence: ['mtime'], path: '/data/logs',
+  itemId: 'log', kind: 'category-item', categoryId: 'logs', title: 'Old logs', evidence: ['log_file_modified_time'], path: '/data/logs',
   size, verdict: 'safe', reason: { code: 'old', detail: { days: 30 } }, collectable: true,
 };
 const summary: HappierStorageSummaryV1 = {
@@ -23,6 +23,12 @@ const summary: HappierStorageSummaryV1 = {
 };
 
 describe('storage V1 contract', () => {
+  it('normalizes future presentation evidence without weakening item identity or admitting non-string evidence', () => {
+    expect(StorageItemV1Schema.parse({ ...item, evidence: ['managed_cache_root', 'recognizer:future-tool', 'manifest:package.json', 'future_evidence'] }).evidence)
+      .toEqual(['managed_cache_root', 'recognizer:future-tool', 'manifest:package.json', 'unknown']);
+    expect(StorageItemV1Schema.safeParse({ ...item, evidence: [42] }).success).toBe(false);
+    expect(StorageItemV1Schema.safeParse({ ...item, itemId: '', evidence: ['future_evidence'] }).success).toBe(false);
+  });
   it('reads additive stored pile receipts while retaining exact Trash correlation and strict current writes', () => {
     const receipt = { batchId: 'batch', mode: 'trash', outcomes: [{ itemId: 'cache', status: 'moved' }],
       inTrashBytes: 4096, freedBytes: 0, trashEntryIds: ['entry'] };

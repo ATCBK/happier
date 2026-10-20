@@ -1,8 +1,9 @@
 import { arePluginMachineExecutionOriginsEqual, getPluginMachineExecutionOriginRef, type PluginMachineExecutionOriginV1 } from '@happier-dev/protocol/machines/administration/pluginMachineExecutionOriginV1';
 import { type PluginMachineMaterializationV1 } from '@happier-dev/protocol/plugins/availability/v1';
+import type { MachineAdministrationTargetV1 } from '@happier-dev/protocol/account/settings/machineAdministrationSelectionsV1';
 
 import type { ServerMachineInventorySnapshotV1 } from '@/sync/domains/machines/machineInventorySnapshots';
-import { resolveFleetMachineRejection, resolveFleetSupplyAgreement } from './fleetUnion';
+import { resolveFleetSnapshotMachineRejection, resolveFleetSupplyAgreement } from './fleetUnion';
 
 export type PluginMachineOriginRejectionReasonV1 =
     | 'content_conflict'
@@ -11,6 +12,14 @@ export type PluginMachineOriginRejectionReasonV1 =
     | 'machine_local'
     | 'missing'
     | 'offline'
+    | 'home_unreachable'
+    | 'release_unavailable'
+    | 'non_portable'
+    | 'source_not_ready'
+    | 'daemon_unsupported'
+    | 'daemon_invalid_response'
+    | 'daemon_unavailable'
+    | 'activation_refused'
     | 'plugin_mismatch'
     | 'replaced'
     | 'revoked'
@@ -34,6 +43,13 @@ export type PluginMachineReleaseClassificationV1 = Pick<
     'releaseContent' | 'validation'
 >;
 
+/** Plugin-scoped projection refusals for one exact Machine; these never grant execution authority. */
+export type PluginMachineExecutionOriginRejectionV1 = Readonly<{
+    serverIdentityId: string;
+    machineId: string;
+    reason: PluginMachineOriginRejectionReasonV1;
+}>;
+
 /** An admitted real projection source, never a synthesized installation row. */
 export type PluginMachineSourceExecutionOriginCandidateV1 = PluginMachineReleaseClassificationV1 & Readonly<{
     source: Readonly<{
@@ -47,6 +63,29 @@ export type PluginMachineSourceExecutionOriginCandidateV1 = PluginMachineRelease
 export type PluginExecutionOriginCandidateV1 = PluginMachineExecutionOriginCandidateV1 | PluginMachineSourceExecutionOriginCandidateV1;
 
 export type PluginExecutionOriginContextualTarget = Readonly<{ serverIdentityId: string; machineId: string }>;
+
+export type PluginExecutionOriginMachineFactReader = (target: PluginExecutionOriginContextualTarget) => Readonly<{
+    activeAt: number;
+    rejection: ReturnType<typeof resolveFleetSnapshotMachineRejection>;
+    eligible: boolean;
+}>;
+
+type MachineFactInputs = Readonly<{
+    machineSnapshots: readonly ServerMachineInventorySnapshotV1[];
+    readMachineFact?: PluginExecutionOriginMachineFactReader;
+}>;
+
+function readMachineFact(params: MachineFactInputs, target: PluginExecutionOriginContextualTarget) {
+    if (params.readMachineFact) return params.readMachineFact(target);
+    const entry = params.machineSnapshots.find(entry => entry.kind === 'resolved' && entry.serverIdentityId === target.serverIdentityId);
+    const snapshot = entry?.kind === 'resolved' ? entry : undefined;
+    const machine = snapshot?.machines.find(machine => machine.id === target.machineId);
+    return {
+        activeAt: machine?.activeAt ?? 0,
+        rejection: resolveFleetSnapshotMachineRejection({ snapshot, machine }),
+        eligible: snapshot?.executionEligibleMachineIds?.includes(target.machineId) === true,
+    };
+}
 
 /**
  * A machine-local installation census is not a second executable origin when
@@ -75,37 +114,39 @@ export function getPluginExecutionOriginCandidateVersion(candidate: PluginExecut
     return 'source' in candidate ? candidate.source.version : candidate.materialization.version;
 }
 
-/** Selection consumes eligibility, not heartbeat timestamps or machine display metadata. */
-export function serializePluginMachineExecutionOriginMachineFacts(params: Readonly<{
+/** Selection consumes eligibility and activity order, not raw heartbeat timestamps or labels. */
+export function serializePluginMachineExecutionOriginMachineFacts(params: MachineFactInputs & Readonly<{
     pluginId: string;
     materializations: readonly PluginMachineMaterializationV1[];
     sources: readonly PluginMachineSourceExecutionOriginCandidateV1[];
-    machineSnapshots: readonly ServerMachineInventorySnapshotV1[];
 }>): string {
     const targets = [
         ...params.materializations.filter((entry) => entry.pluginId === params.pluginId),
         ...params.sources.filter((entry) => entry.source.origin.sourceRef.pluginId === params.pluginId)
             .map((entry) => ({ serverIdentityId: entry.source.origin.serverIdentityId, machineId: entry.source.origin.sourceRef.machineId })),
     ];
-    return JSON.stringify(targets.map((target) => {
-        const snapshot = params.machineSnapshots.find((entry) => entry.kind === 'resolved' && entry.serverIdentityId === target.serverIdentityId);
-        return [target.serverIdentityId, target.machineId,
-            resolveFleetMachineRejection({ ...target, machineSnapshots: params.machineSnapshots }),
-            snapshot?.kind === 'resolved' && snapshot.executionEligibleMachineIds?.includes(target.machineId) === true];
-    }));
+    // Capture activity once per target. Sorting used to rescan the whole fleet
+    // twice per comparison for every mounted plugin during census hydration.
+    const facts = targets.map(target => ({ target, ...readMachineFact(params, target) }));
+    // Activity only ranks executable targets. Moving a refused Machine around
+    // an eligible one changes neither admission nor the automatic choice.
+    const rankedActivity = (fact: typeof facts[number]) => fact.rejection === null ? fact.activeAt : 0;
+    return JSON.stringify(facts.sort((left, right) => rankedActivity(right) - rankedActivity(left)
+        || left.target.serverIdentityId.localeCompare(right.target.serverIdentityId)
+        || left.target.machineId.localeCompare(right.target.machineId)).map(({ target, rejection, eligible }) => [
+        target.serverIdentityId, target.machineId, rejection, eligible,
+    ]));
 }
 
-export function buildPluginMachineSourceExecutionOriginCandidates(params: Readonly<{
+export function buildPluginMachineSourceExecutionOriginCandidates(params: MachineFactInputs & Readonly<{
     pluginId: string;
     sources: readonly PluginMachineSourceExecutionOriginCandidateV1[];
-    machineSnapshots: readonly ServerMachineInventorySnapshotV1[];
 }>): readonly PluginMachineSourceExecutionOriginCandidateV1[] {
     return Object.freeze(params.sources.filter((candidate) => candidate.source.origin.sourceRef.pluginId === params.pluginId).map((candidate) => {
         const origin = candidate.source.origin;
-        const reason = resolveFleetMachineRejection({
+        const reason = readMachineFact(params, {
             serverIdentityId: origin.serverIdentityId, machineId: origin.sourceRef.machineId,
-            machineSnapshots: params.machineSnapshots,
-        });
+        }).rejection;
         return reason ? Object.freeze({ ...candidate, validation: { kind: 'rejected' as const, reason } }) : candidate;
     }));
 }
@@ -116,34 +157,37 @@ export function buildPluginMachineSourceExecutionOriginCandidates(params: Readon
  * compatibility decisions remain injected from the Artifact owner; this
  * function never manufactures those facts from version strings or UI assets.
  */
-export function buildPluginMachineExecutionOriginCandidates(params: Readonly<{
+export function buildPluginMachineExecutionOriginCandidates(params: MachineFactInputs & Readonly<{
     pluginId: string;
     materializations: readonly PluginMachineMaterializationV1[];
-    machineSnapshots: readonly ServerMachineInventorySnapshotV1[];
     classifyRelease: (materialization: PluginMachineMaterializationV1) => PluginMachineReleaseClassificationV1;
+    machineRejections?: readonly PluginMachineExecutionOriginRejectionV1[];
 }>): readonly PluginMachineExecutionOriginCandidateV1[] {
     return Object.freeze(params.materializations
         .filter((materialization) => materialization.pluginId === params.pluginId)
         .map((materialization) => {
             const release = params.classifyRelease(materialization);
-            const directRejection: PluginMachineOriginRejectionReasonV1 | null = materialization.enabled === false
-                ? 'disabled'
-                : materialization.trustState === 'revoked'
-                    ? 'revoked'
-                    : materialization.trustState !== 'trusted'
-                        ? 'untrusted'
-                        : resolveFleetMachineRejection({
-                            ...materialization,
-                            machineSnapshots: params.machineSnapshots,
-                        });
             return Object.freeze({
                 materialization,
                 releaseContent: release.releaseContent,
-                validation: directRejection
-                    ? Object.freeze({ kind: 'rejected' as const, reason: directRejection })
-                    : release.validation,
+                validation: resolvePluginMachineMaterializationValidation({ materialization, release,
+                    machineRejection: readMachineFact(params, materialization).rejection
+                        ?? params.machineRejections?.find(entry => entry.serverIdentityId === materialization.serverIdentityId
+                            && entry.machineId === materialization.machineId)?.reason ?? null }),
             });
         }).sort(compareCandidates));
+}
+
+/** Presentation and fresh invocation share trust/release precedence; machine admission stays fleet-owned. */
+export function resolvePluginMachineMaterializationValidation(params: Readonly<{
+    materialization: PluginMachineMaterializationV1;
+    release: PluginMachineReleaseClassificationV1;
+    machineRejection: PluginMachineOriginRejectionReasonV1 | null;
+}>): PluginMachineExecutionOriginCandidateV1['validation'] {
+    const reason = !params.materialization.enabled ? 'disabled'
+        : params.materialization.trustState === 'revoked' ? 'revoked'
+            : params.materialization.trustState !== 'trusted' ? 'untrusted' : params.machineRejection;
+    return reason ? Object.freeze({ kind: 'rejected', reason }) : params.release.validation;
 }
 
 export type PluginMachineExecutionOriginStateV1 =
@@ -151,7 +195,7 @@ export type PluginMachineExecutionOriginStateV1 =
         kind: 'selected';
         origin: PluginMachineExecutionOriginV1;
         candidate: PluginExecutionOriginCandidateV1;
-        selectionSource: 'stored' | 'pluginDefault' | 'soleCandidate';
+        selectionSource: 'auto' | 'pinned';
     }>
     | Readonly<{
         kind: 'selectionRequired';
@@ -165,6 +209,7 @@ export type PluginMachineExecutionOriginStateV1 =
     | Readonly<{
         kind: 'unavailable';
         storedOrigin: PluginMachineExecutionOriginV1 | null;
+        storedTarget?: MachineAdministrationTargetV1;
         candidates: readonly PluginExecutionOriginCandidateV1[];
         reasons: readonly (PluginMachineOriginRejectionReasonV1 | 'no_materialization')[];
     }>;
@@ -213,18 +258,33 @@ function candidateMatchesOrigin(
 }
 
 /**
- * Administration's sole zero/one/many plugin-origin decision. Artifact facts
- * and validator results stay uncollapsed inputs. Sorting is presentation only;
- * it never elects an execution origin.
+ * Administration's sole plugin-origin decision. Artifact admission remains
+ * authoritative; local hints rank only admitted, compatible unpinned candidates.
  */
 export function resolvePluginMachineExecutionOriginState(params: Readonly<{
     pluginId: string;
     storedOrigin: PluginMachineExecutionOriginV1 | null;
+    /** Device-local Machine intent, independent of current source/materialization custody. */
+    storedTarget?: MachineAdministrationTargetV1 | null;
+    /** Only this Home may supply an automatic, unpinned operation. */
+    homeServerIdentityId?: string | null;
     candidates: readonly PluginExecutionOriginCandidateV1[];
     /** Exact supplying origins carrying an admitted installation-default hint. */
     declaredDefaultOrigins?: readonly PluginMachineExecutionOriginV1[];
+    autoPick?: boolean;
+    renderedVersion?: string;
+    lastUsedTarget?: MachineAdministrationTargetV1 | null;
+    localMachineTarget?: MachineAdministrationTargetV1 | null;
+    machineActivity?: readonly (MachineAdministrationTargetV1 & Readonly<{ activeAt: number }>)[];
+    /** Incomplete coverage cannot establish absence or incompatibility, but admitted rows may execute. */
+    inventoryPending?: boolean;
     /** A Session panel starts at its own machine, not an Account-wide preference. */
     contextualTarget?: PluginExecutionOriginContextualTarget | null;
+    /**
+     * The stored origin's fleet/projection refusal. When a source stops advertising,
+     * preserve its known Home, presence or daemon cause instead of inferring removal.
+     */
+    storedOriginMachinePresence?: PluginMachineOriginRejectionReasonV1 | null;
 }>): PluginMachineExecutionOriginStateV1 {
     if (params.contextualTarget !== undefined) {
         const target = params.contextualTarget;
@@ -232,6 +292,8 @@ export function resolvePluginMachineExecutionOriginState(params: Readonly<{
             ...params,
             contextualTarget: undefined,
             storedOrigin: null,
+            storedTarget: null,
+            homeServerIdentityId: null,
             candidates: params.candidates.filter((candidate) => {
                 const origin = getPluginExecutionOriginCandidateOrigin(candidate);
                 return target !== null && origin.serverIdentityId === target.serverIdentityId
@@ -241,7 +303,26 @@ export function resolvePluginMachineExecutionOriginState(params: Readonly<{
     }
     const candidates = Object.freeze([...params.candidates]
         .filter((candidate) => getPluginMachineExecutionOriginRef(getPluginExecutionOriginCandidateOrigin(candidate)).pluginId === params.pluginId)
+        .filter(candidate => params.storedTarget || params.storedOrigin || !params.homeServerIdentityId
+            || getPluginExecutionOriginCandidateOrigin(candidate).serverIdentityId === params.homeServerIdentityId)
         .sort(compareCandidates));
+
+    if (params.storedTarget) {
+        const target = params.storedTarget;
+        const matches = candidates.filter(candidate => {
+            const origin = getPluginExecutionOriginCandidateOrigin(candidate);
+            return origin.serverIdentityId === target.serverIdentityId
+                && getPluginMachineExecutionOriginRef(origin).machineId === target.machineId;
+        });
+        if (matches.length === 0) return Object.freeze({ kind: 'unavailable', storedOrigin: null, storedTarget: target,
+            candidates, reasons: Object.freeze([params.storedOriginMachinePresence ?? 'missing']) });
+        // Narrow placement to the remembered Machine, then reuse the same
+        // admission/default decision for its current sources. Custody is not a pin.
+        const state = resolvePluginMachineExecutionOriginState({ ...params, storedTarget: null,
+            storedOrigin: null, candidates: matches, homeServerIdentityId: null, renderedVersion: undefined });
+        return state.kind === 'selected' ? Object.freeze({ ...state, selectionSource: 'pinned' })
+            : state.kind === 'unavailable' ? Object.freeze({ ...state, storedTarget: target }) : state;
+    }
 
     if (
         params.storedOrigin !== null
@@ -258,11 +339,12 @@ export function resolvePluginMachineExecutionOriginState(params: Readonly<{
     if (params.storedOrigin !== null) {
         const selected = candidates.find((candidate) => candidateMatchesOrigin(candidate, params.storedOrigin!));
         if (!selected) {
+            const presence = params.storedOriginMachinePresence;
             return Object.freeze({
                 kind: 'unavailable',
                 storedOrigin: params.storedOrigin,
                 candidates,
-                reasons: Object.freeze(['missing'] as const),
+                reasons: Object.freeze([presence ?? 'missing']),
             });
         }
         if (selected.validation.kind === 'rejected') {
@@ -295,11 +377,19 @@ export function resolvePluginMachineExecutionOriginState(params: Readonly<{
             kind: 'selected',
             origin: params.storedOrigin,
             candidate: selected,
-            selectionSource: 'stored',
+            selectionSource: 'pinned',
         });
     }
 
-    const eligible = Object.freeze(candidates.filter((candidate) => candidate.validation.kind === 'admitted'));
+    const admitted = candidates.filter((candidate) => candidate.validation.kind === 'admitted');
+    const compatible = admitted.filter(candidate => isPluginMachineExecutionOriginCandidateSelectable(candidate)
+        && (!params.renderedVersion || getPluginExecutionOriginCandidateVersion(candidate) === params.renderedVersion));
+    if (params.inventoryPending && compatible.length === 0) return Object.freeze({ kind: 'unavailable', storedOrigin: null, candidates,
+        reasons: Object.freeze(['unknown'] as const) });
+    if (admitted.length > 0 && params.renderedVersion && compatible.length === 0) {
+        return Object.freeze({ kind: 'conflict', candidates: admitted, reasons: Object.freeze(['different_versions'] as const) });
+    }
+    const eligible = Object.freeze(params.renderedVersion && compatible.length > 0 ? compatible : admitted);
     if (eligible.length === 0) {
         const reasons = candidates.length === 0
             ? Object.freeze(['no_materialization'] as const)
@@ -308,13 +398,35 @@ export function resolvePluginMachineExecutionOriginState(params: Readonly<{
             )))]);
         return Object.freeze({ kind: 'unavailable', storedOrigin: null, candidates, reasons });
     }
+    if (params.autoPick === false && compatible.length > 1) {
+        return Object.freeze({ kind: 'selectionRequired', candidates: compatible });
+    }
+    if (params.autoPick !== false && compatible.length > 0) {
+        if (new Set(compatible.map(getPluginExecutionOriginCandidateVersion)).size > 1) {
+            return Object.freeze({ kind: 'conflict', candidates: compatible, reasons: Object.freeze(['different_versions'] as const) });
+        }
+        const matchesTarget = (candidate: PluginExecutionOriginCandidateV1, target: MachineAdministrationTargetV1 | null | undefined) => {
+            const origin = getPluginExecutionOriginCandidateOrigin(candidate);
+            return target?.serverIdentityId === origin.serverIdentityId
+                && target.machineId === getPluginMachineExecutionOriginRef(origin).machineId;
+        };
+        const activity = (candidate: PluginExecutionOriginCandidateV1) => params.machineActivity?.find(target => matchesTarget(candidate, target))?.activeAt ?? 0;
+        const isDefault = (candidate: PluginExecutionOriginCandidateV1) => params.declaredDefaultOrigins?.some(origin => candidateMatchesOrigin(candidate, origin)) === true;
+        const [candidate] = [...compatible].sort((left, right) =>
+            Number(matchesTarget(right, params.lastUsedTarget)) - Number(matchesTarget(left, params.lastUsedTarget))
+            || Number(matchesTarget(right, params.localMachineTarget)) - Number(matchesTarget(left, params.localMachineTarget))
+            || activity(right) - activity(left)
+            || Number(isDefault(right)) - Number(isDefault(left))
+            || compareCandidates(left, right));
+        return Object.freeze({ kind: 'selected', origin: getPluginExecutionOriginCandidateOrigin(candidate!), candidate: candidate!, selectionSource: 'auto' });
+    }
     // A default is merely a preference. It can select only an admitted exact
     // origin, and several supplying defaults leave the user's choice open.
     const defaults = eligible.filter((candidate) => isPluginMachineExecutionOriginCandidateSelectable(candidate)
         && params.declaredDefaultOrigins?.some((origin) => candidateMatchesOrigin(candidate, origin)));
     if (defaults.length === 1) {
         const candidate = defaults[0]!;
-        return Object.freeze({ kind: 'selected', origin: getPluginExecutionOriginCandidateOrigin(candidate), candidate, selectionSource: 'pluginDefault' });
+        return Object.freeze({ kind: 'selected', origin: getPluginExecutionOriginCandidateOrigin(candidate), candidate, selectionSource: 'auto' });
     }
     if (eligible.some((candidate) => candidate.releaseContent === 'unknown')) {
         return Object.freeze({
@@ -341,15 +453,6 @@ export function resolvePluginMachineExecutionOriginState(params: Readonly<{
         });
     }
 
-    if (eligible.length === 1) {
-        const candidate = eligible[0]!;
-        return Object.freeze({
-            kind: 'selected',
-            origin: getPluginExecutionOriginCandidateOrigin(candidate),
-            candidate,
-            selectionSource: 'soleCandidate',
-        });
-    }
-
-    return Object.freeze({ kind: 'selectionRequired', candidates: eligible });
+    const candidate = eligible[0]!;
+    return Object.freeze({ kind: 'selected', origin: getPluginExecutionOriginCandidateOrigin(candidate), candidate, selectionSource: 'auto' });
 }

@@ -24,7 +24,7 @@ import {
   type SessionModelRoutingHintCandidate,
   type SessionModelRoutingHintPool,
   type SessionModelRoutingHintTarget,
-} from './sessionModelRoutingHint';
+} from './sessionModelRoutingHintModel';
 
 type SelectionState =
   | ConnectedServicePoolSelectionGetResponseV1

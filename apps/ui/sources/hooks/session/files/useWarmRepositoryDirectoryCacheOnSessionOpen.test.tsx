@@ -54,7 +54,7 @@ describe('useWarmRepositoryDirectoryCacheOnSessionOpen', () => {
             />
         );
 
-        expect(warmSpy).toHaveBeenCalledWith({ sessionId: 's1', directoryPath: '' });
+        expect(warmSpy).toHaveBeenCalledWith({ sessionId: 's1', directoryPath: '', signal: expect.any(AbortSignal) });
     });
 
     it('does not warm when session path is missing', async () => {

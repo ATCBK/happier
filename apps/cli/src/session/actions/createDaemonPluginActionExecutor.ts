@@ -102,6 +102,7 @@ export function createPluginActionExecutor(params: Readonly<{
     invokeContributedAction: async (request) => {
       const attempt = await requestContributed('action.invoke', {
         action: request.action, input: request.input,
+        ...(request.messageActionReference ? { messageActionReference: request.messageActionReference } : {}),
       }, { ...request.context,
         ...(request.requiredDangerLevel ? { requiredContributedActionDangerLevel: request.requiredDangerLevel } : {}),
         ...(request.signal ? { signal: request.signal } : {}) });

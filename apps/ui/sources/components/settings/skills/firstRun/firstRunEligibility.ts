@@ -1,4 +1,4 @@
-import type { SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
+import { isReadOnlySkillProvenanceV1, type SkillListItemV1 } from '@happier-dev/protocol/prompts/library/skills/skillLibraryItemV1';
 import type { SkillRuleV1 } from '@happier-dev/protocol/reach/reachRuleV1';
 import { FIRST_PARTY_SKILLS_V1, buildFirstPartySkillSeedRuleV1 } from '@happier-dev/protocol/prompts/library/skills/firstPartySkillsV1';
 import { isMigratedReachRuleIdV1 } from '@happier-dev/protocol/reach/reachRulesChangeV1';
@@ -15,9 +15,9 @@ export function resolveSkillsFirstVisit(items: readonly SkillListItemV1[], input
   rules: readonly SkillRuleV1[]; decidedAt: number | null;
 }>): Readonly<{ on: number; off: number }> | null {
   if (input.decidedAt !== null) return null;
-  const ruleless = items.filter(item => item.rules.length === 0 && item.provenance.kind !== 'first_party');
+  const ruleless = items.filter(item => item.rules.length === 0 && !isReadOnlySkillProvenanceV1(item.provenance));
   if (ruleless.length === 0) return null;
   if (!input.rules.every(isDefaultRule)) return null;
-  return { on: items.filter(item => item.provenance.kind !== 'first_party' && item.migratedFromContext
+  return { on: items.filter(item => !isReadOnlySkillProvenanceV1(item.provenance) && item.migratedFromContext
     && item.rules.some(rule => rule.enabled)).length, off: ruleless.length };
 }

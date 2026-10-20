@@ -15,6 +15,8 @@ import { ActionApprovalPendingNotice } from '@/components/approvals/ActionApprov
 import { useRouter } from '@/components/appShell/workspace/destinationRoute';
 import type { ProviderPendingApproval } from '@/providers/actions/useProviderActionClient';
 import { useProviderModelProjection } from '@/providers/hooks/useProviderModelProjection';
+import { useProviderConnections } from '@/providers/hooks/useProviderConnections';
+import { providerConnectionSourceLabel } from '@/providers/session/resolveSessionRoutePresentation';
 import {
     OptionPickerOverlay,
     type OptionPickerFavoriteOptions,
@@ -28,12 +30,15 @@ import type { SelectionListHeightBehavior } from '@/components/ui/selectionList'
 import { t } from '@/text';
 import {
     buildSessionModelPickerSections,
+    isSessionModelGatewaySlotSection,
     sessionModelConnectionTitle,
     withSessionModelSourceSuffixes,
     type SessionModelPickerSection,
+    type SessionModelGatewaySlot,
     type SessionModelProjectionGroup,
     type SessionNativeModelOption,
 } from './buildSessionModelPickerSections';
+import { useGatewaySlotTitle } from './useGatewaySlotTitle';
 import {
     SessionModelHiddenSourcesLine,
     SessionModelSourceScopeBar,
@@ -61,6 +66,7 @@ import {
 export type SessionModelPickerExperimentalConfirmation = Readonly<{
     kind: 'confirm-experimental';
     connectionId: string;
+    connectedAccountTarget?: SessionModelProjectionGroup['connectedAccountTarget'];
     expectedConnectionRevision: number;
     agentTargetKey: string;
     modelId: string;
@@ -120,6 +126,7 @@ export function resolveSessionModelPickerSelection(input: Readonly<{
             return {
                 kind: 'confirm-experimental',
                 connectionId: group.connectionId,
+                ...(group.connectedAccountTarget ? { connectedAccountTarget: group.connectedAccountTarget } : {}),
                 expectedConnectionRevision: group.connectionRevision,
                 agentTargetKey: row.ref.agentTargetKey,
                 modelId: row.ref.modelId,
@@ -231,7 +238,18 @@ export function SessionModelPicker(props: SessionModelPickerProps) {
         if (props.sourceBrowse) return <SessionModelSourceBrowse picker={props} sourceBrowse={props.sourceBrowse}
             scope={browseScope} onExit={exitBrowse} />;
     }
-    return <SessionModelPickerPane {...props} onBrowseSource={props.sourceBrowse ? setBrowseScope : undefined} />;
+    // A global, non-authoritative Provider projection cannot declare the Agent's discovered native
+    // catalog unavailable. Keep connection-specific failures and Provider-selection recovery intact.
+    const projectionError = !props.providerProjectionAuthoritative
+        && props.projectionError?.code === 'provider_catalog_unavailable'
+        && !props.projectionError.connectionId
+        && !props.selected?.providerConnectionId
+        && !props.selectedTeamCredentialModel
+        && props.nativeModels.some((model) => model.value !== 'default')
+        ? null
+        : props.projectionError;
+    return <SessionModelPickerPane {...props} projectionError={projectionError}
+        onBrowseSource={props.sourceBrowse ? setBrowseScope : undefined} />;
 }
 
 /** One source, in the same pane: its models, the scope bar, nothing committed until a card is picked. */
@@ -251,6 +269,7 @@ function SessionModelSourceBrowse(props: Readonly<{
         ...(picker.selected ? { currentSelection: picker.selected } : {}),
     });
     const scope = React.useMemo(() => ({ scope: props.scope, onExit: props.onExit }), [props.onExit, props.scope]);
+    const gatewaySlotTitle = useGatewaySlotTitle(projection.data?.groups ?? EMPTY_PROJECTION_GROUPS, props.sourceBrowse.serverId);
     const notes = React.useMemo(() => [t('agentInput.model.nativeSubagentNote')], []);
     return (
         <SessionModelPickerPane
@@ -282,6 +301,7 @@ function SessionModelSourceBrowse(props: Readonly<{
             onRequestClose={picker.onRequestClose}
             multiColumn={picker.multiColumn}
             onSelect={picker.onSelect}
+            gatewaySlotTitle={gatewaySlotTitle}
             scope={scope}
         />
     );
@@ -289,6 +309,8 @@ function SessionModelSourceBrowse(props: Readonly<{
 
 function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
     onBrowseSource?: (scope: SessionModelBrowseScope) => void;
+    /** While one Gateway is browsed: names the subscription behind each vendor slot so models group by it. */
+    gatewaySlotTitle?: (slot: SessionModelGatewaySlot) => string | null;
     /** Set while one source is browsed: the scope bar and its way back to every shown source. */
     scope?: Readonly<{ scope: SessionModelBrowseScope; onExit: () => void }>;
 }>) {
@@ -323,11 +345,13 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
         onRecoverTeamCredentialResource: props.onRecoverTeamCredentialResource,
         nativeSourceLabel,
         recoverMissingSelection: props.scope === undefined,
+        gatewaySlotTitle: props.gatewaySlotTitle,
     }), [
         props.agentTargetKey,
         props.allowAutomatic,
         nativeSourceLabel,
         props.scope,
+        props.gatewaySlotTitle,
         props.currentSelectionRecovery,
         props.hiddenNativeModelKeys,
         props.nativeModels,
@@ -390,6 +414,7 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
                 value: entry.ref,
                 source: projected?.source,
                 label: projected?.label ?? entry.label ?? entry.ref.modelId,
+                searchText: projected?.searchText ?? entry.ref.modelId,
                 description: projected?.description ?? entry.description,
                 accessibilityLabel: projected?.accessibilityLabel ?? entry.accessibilityLabel,
                 disabled: projected ? projected.disabled : true,
@@ -411,16 +436,18 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
         ];
     }, [props.favoriteEntries, reportedModelPresentation.sections]);
     // "Built-in" only tells the agent's own models apart from provider and team groups; over the
-    // only group it is noise (0.2 had none). Browsing one source, the scope bar already names it, so
+    // only group it is noise (0.2 had none). A selected account/pool is identity and stays visible.
+    // Browsing one source, the scope bar already names it, so
     // its lone group goes unheaded too. A lone Favorites group keeps its label: it still says what
     // the list is.
     const browsing = props.scope !== undefined;
     const labeledSections = React.useMemo((): ReadonlyArray<SessionModelPickerSection> => {
         const suffixed = withSessionModelSourceSuffixes(sections, 'favorites');
-        return suffixed.length === 1 && (suffixed[0]!.id === 'native' || browsing)
+        return suffixed.length === 1 && !isSessionModelGatewaySlotSection(suffixed[0]!)
+            && ((suffixed[0]!.id === 'native' && !nativeSourceLabel) || browsing)
             ? [{ ...suffixed[0]!, title: undefined }]
             : suffixed;
-    }, [browsing, sections]);
+    }, [browsing, nativeSourceLabel, sections]);
     const hiddenSources = props.hiddenSources ?? [];
     const footerContent = !props.scope && props.onBrowseSource && hiddenSources.length > 0 ? (
         <SessionModelHiddenSourcesLine sources={hiddenSources} onBrowse={props.onBrowseSource} />
@@ -494,6 +521,26 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
         }
         props.onSelect(ref);
     }, [props.experimentalConfirmation, props.onSelect, props.onSelectTeamCredentialModel]);
+    // A failure line names the source it is about, so two unreachable sources never read as one anonymous line.
+    // A failed source has no model group; its name comes from the same connection read the route sources use.
+    const failedConnectionIds = [props.projectionError?.connectionId, ...(props.projectionFailures ?? []).map((failure) => failure.connectionId)]
+        .filter((id) => id !== undefined);
+    const unnamedFailure = failedConnectionIds.some((id) => !props.providerGroups.some((group) => group.connectionId === id));
+    const failedSourceConnections = useProviderConnections({
+        enabled: unnamedFailure && props.sourceBrowse !== undefined,
+        machineId: props.sourceBrowse?.machineId ?? null,
+        serverId: props.sourceBrowse?.serverId ?? null,
+    });
+    const failureSubject = (connectionId: string | undefined): string | null => {
+        if (!connectionId) return null;
+        const group = props.providerGroups.find((candidate) => candidate.connectionId === connectionId);
+        if (group) return sessionModelConnectionTitle(group);
+        const view = failedSourceConnections.data?.connections.find((candidate) => candidate.connectionId === connectionId);
+        return view
+            ? providerConnectionSourceLabel({ providerName: view.providerName, connectionName: view.displayName,
+                connectionRole: view.role, connectionDisplayNameMode: view.displayNameMode })
+            : null;
+    };
     // The header refresh re-runs this same projection; the error line then only says what failed.
     const projectionLineRetry = props.retryProjection && !props.probe?.onRefresh
         ? async () => { await props.retryProjection?.(); }
@@ -576,6 +623,7 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
                         <ProviderErrorItems
                             presentation="line"
                             error={props.projectionError}
+                            subject={failureSubject(props.projectionError.connectionId)}
                             retry={projectionLineRetry}
                         />
                     ) : null}
@@ -584,6 +632,7 @@ function SessionModelPickerPane(props: SessionModelPickerProps & Readonly<{
                             presentation="line"
                             key={failure.connectionId}
                             error={failure.error}
+                            subject={failureSubject(failure.connectionId)}
                             retry={projectionLineRetry}
                         />
                     ))}

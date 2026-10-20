@@ -1,198 +1,137 @@
 import { act } from 'react-test-renderer';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import type { AuthCredentials } from '@/auth/storage/tokenStorage';
-import { setActiveServerId, upsertServerProfile } from '@/sync/domains/server/serverProfiles';
+import { createDeferred, renderHook, standardCleanup } from '@/dev/testkit';
 import {
-    flushHookEffects,
-    renderHook,
-    standardCleanup,
-} from '@/dev/testkit';
-import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
-import {
-    invalidateAccountEncryptionModeCache,
-} from '@/sync/api/account/apiAccountEncryptionMode';
+    createHomeGovernanceHarness,
+    installHomeGovernanceBoundaries,
+    waitForHomeGovernance,
+} from '@/dev/testkit/harness/homeGovernanceHarness';
 
-import {
-    usePluginSurfaceAccountEncryptionMode,
-} from './pluginSurfaceContext';
+const home = createHomeGovernanceHarness();
+installHomeGovernanceBoundaries(home);
+const { TokenStorage } = await import('@/auth/storage/tokenStorage');
+const { storage } = await import('@/sync/domains/state/storageStore');
+const { getActiveServerSnapshot } = await import('@/sync/domains/server/serverRuntime');
+const { getAppliedActiveServerSnapshot, isAppliedActiveServerRuntimeAvailable, publishAppliedActiveServerSnapshot } =
+    await import('@/sync/runtime/orchestration/appliedActiveServerRuntime');
+const { captureActiveServerAccountScopeLifetime, retireActiveServerAccountScopeLifetime } =
+    await import('@/sync/domains/scope/activeServerAccountScope');
+const { invalidateAccountEncryptionModeCache } = await import('@/sync/api/account/apiAccountEncryptionMode');
+const { usePluginSurfaceAccountEncryptionMode } = await import('./pluginSurfaceContext');
 
-const accountModeTransport = vi.hoisted(() => ({
-    serverFetch: vi.fn(),
-}));
+const modePath = '/v1/account/encryption';
+let serverId: string;
+let previous = storage.getState();
+let previousApplied = getAppliedActiveServerSnapshot();
+let previousAvailable = isAppliedActiveServerRuntimeAvailable();
 
-vi.mock('@/sync/http/client', () => ({
-    serverFetch: (...args: unknown[]) => accountModeTransport.serverFetch(...args),
-}));
-
-type AccountModeDeferred = Readonly<{
-    promise: Promise<Response>;
-    resolve(response: Response): void;
-}>;
-
-function createDeferredResponse(): AccountModeDeferred {
-    let resolve!: (response: Response) => void;
-    const promise = new Promise<Response>((settle) => {
-        resolve = settle;
-    });
-    return { promise, resolve };
+async function currentAccount(accountId: string) {
+    // This hook owns disclosure, not connection bootstrap. Publish the real
+    // teardown/restoration facts while replacing credentials so the fixture's
+    // delayed mode reply cannot also block an unrelated Sync cold restore.
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot(), false);
+    await home.switchAccount(serverId, accountId);
+    storage.getState().activateProfileScope({ serverId, accountId });
+    publishAppliedActiveServerSnapshot(getActiveServerSnapshot());
+    const lifetime = captureActiveServerAccountScopeLifetime();
+    const credentials = await TokenStorage.getCredentialsForServerUrl('https://plugin-mode.test', { serverId });
+    if (!lifetime || !credentials) throw new Error('Expected the fixture Home Account authority');
+    return { lifetime, credentials };
 }
-
-function response(mode: 'plain' | 'e2ee'): Response {
-    return new Response(JSON.stringify({ mode, updatedAt: 1 }), { status: 200 });
-}
-
-function createLifetime(accountId: string): Readonly<{
-    lifetime: ActiveServerAccountScopeLifetime;
-    retire(): void;
-}> {
-    let current = true;
-    const listeners = new Set<() => void>();
-    const lifetime: ActiveServerAccountScopeLifetime = Object.freeze({
-        scope: Object.freeze({ serverId: 'server-1', accountId }),
-        isCurrent: () => current,
-        onRetire(listener) {
-            listeners.add(listener);
-            return Object.freeze({ dispose: () => listeners.delete(listener) });
-        },
-    });
-    return Object.freeze({
-        lifetime,
-        retire(): void {
-            if (!current) return;
-            current = false;
-            for (const listener of [...listeners]) listener();
-            listeners.clear();
-        },
-    });
-}
-
-const credentialsA: AuthCredentials = { token: 'token-a' };
-const credentialsB: AuthCredentials = { token: 'token-b' };
 
 describe('usePluginSurfaceAccountEncryptionMode', () => {
     beforeEach(async () => {
-        const profile = await upsertServerProfile({ serverUrl: 'https://server-1', name: 'Account mode Home' });
-        await setActiveServerId(profile.id);
-        accountModeTransport.serverFetch.mockReset();
+        previous = storage.getState();
+        previousApplied = getAppliedActiveServerSnapshot();
+        previousAvailable = isAppliedActiveServerRuntimeAvailable();
+        await home.reset();
+        serverId = await home.addHome({ serverUrl: 'https://plugin-mode.test', name: 'Account mode Home', accountId: 'account-a' });
         invalidateAccountEncryptionModeCache();
     });
 
-    afterEach(() => {
-        standardCleanup();
+    afterEach(async () => {
+        await standardCleanup();
+        retireActiveServerAccountScopeLifetime();
         invalidateAccountEncryptionModeCache();
+        await home.reset();
+        storage.setState(previous);
+        publishAppliedActiveServerSnapshot(previousApplied, previousAvailable);
     });
 
     it('retries cached disclosure when a successor mount currentness fence replaces a retired controller', async () => {
-        const account = createLifetime('account-a');
-        accountModeTransport.serverFetch.mockResolvedValue(response('plain'));
+        const account = await currentAccount('account-a');
         const retiredControllerIsCurrent = () => false;
         const successorControllerIsCurrent = () => true;
-        const hook = await renderHook((input: Readonly<{
-            isCurrent: () => boolean;
-        }>) => usePluginSurfaceAccountEncryptionMode({
+        const hook = await renderHook((input: Readonly<{ isCurrent: () => boolean }>) => usePluginSurfaceAccountEncryptionMode({
             accountLifetime: account.lifetime,
-            credentials: credentialsA,
+            credentials: account.credentials,
             isCurrent: input.isCurrent,
-        }), {
-            initialProps: { isCurrent: retiredControllerIsCurrent },
-        });
+        }), { initialProps: { isCurrent: retiredControllerIsCurrent } });
 
         expect(hook.getCurrent()).toEqual({ status: 'loading' });
-
+        expect(home.requestsFor(modePath)).toEqual([]);
         await hook.rerender({ isCurrent: successorControllerIsCurrent });
-        await flushHookEffects();
-
-        expect(hook.getCurrent()).toEqual({ status: 'ready', mode: 'plain' });
-        expect(accountModeTransport.serverFetch).toHaveBeenCalledTimes(1);
-
+        await waitForHomeGovernance(() => expect(hook.getCurrent()).toEqual({ status: 'ready', mode: 'plain' }));
+        expect(home.requestsFor(modePath)).toHaveLength(1);
         await hook.unmount();
     });
 
     it('withholds stale Account A and invalidated snapshots until the current Account mode resolves', async () => {
-        const accountA = createLifetime('account-a');
-        const accountB = createLifetime('account-b');
-        const accountAResponse = createDeferredResponse();
-        const accountBResponse = createDeferredResponse();
-        const refreshedAccountBResponse = createDeferredResponse();
-        accountModeTransport.serverFetch
-            .mockImplementationOnce(async () => await accountAResponse.promise)
-            .mockImplementationOnce(async () => await accountBResponse.promise)
-            .mockImplementationOnce(async () => await refreshedAccountBResponse.promise);
-
+        const accountA = await currentAccount('account-a');
+        const accountAResponse = createDeferred<void>();
+        const accountBResponse = createDeferred<void>();
+        const refreshedAccountBResponse = createDeferred<void>();
+        home.answer(serverId, modePath, { respondAfter: accountAResponse.promise, body: { mode: 'e2ee', updatedAt: 1 } });
         const accountAIsCurrent = () => accountA.lifetime.isCurrent();
-        const accountBIsCurrent = () => accountB.lifetime.isCurrent();
         const hook = await renderHook((input: Readonly<{
-            lifetime: ActiveServerAccountScopeLifetime;
-            credentials: AuthCredentials;
+            account: typeof accountA;
             isCurrent: () => boolean;
         }>) => usePluginSurfaceAccountEncryptionMode({
-            accountLifetime: input.lifetime,
-            credentials: input.credentials,
+            accountLifetime: input.account.lifetime,
+            credentials: input.account.credentials,
             isCurrent: input.isCurrent,
-        }), {
-            initialProps: {
-                lifetime: accountA.lifetime,
-                credentials: credentialsA,
-                isCurrent: accountAIsCurrent,
-            },
-            flushOptions: { cycles: 0 },
-        });
+        }), { initialProps: { account: accountA, isCurrent: accountAIsCurrent }, flushOptions: { cycles: 0 } });
 
         expect(hook.getCurrent()).toEqual({ status: 'loading' });
-
-        await act(async () => {
-            accountA.retire();
-        });
-        await hook.rerender({
-            lifetime: accountB.lifetime,
-            credentials: credentialsB,
-            isCurrent: accountBIsCurrent,
-        });
+        await waitForHomeGovernance(() => expect(home.requestsFor(modePath)).toHaveLength(1));
+        const accountB = await currentAccount('account-b');
+        expect(accountA.lifetime.isCurrent()).toBe(false);
+        home.answer(serverId, modePath, { respondAfter: accountBResponse.promise, body: { mode: 'plain', updatedAt: 1 } });
+        const accountBIsCurrent = () => accountB.lifetime.isCurrent();
+        await hook.rerender({ account: accountB, isCurrent: accountBIsCurrent });
         expect(hook.getCurrent()).toEqual({ status: 'loading' });
+        await waitForHomeGovernance(() => expect(home.requestsFor(modePath)).toHaveLength(2));
+        await act(async () => accountBResponse.resolve());
+        await waitForHomeGovernance(() => expect(hook.getCurrent()).toEqual({ status: 'ready', mode: 'plain' }));
 
-        await act(async () => {
-            accountBResponse.resolve(response('plain'));
-        });
-        await flushHookEffects();
+        await act(async () => accountAResponse.resolve());
         expect(hook.getCurrent()).toEqual({ status: 'ready', mode: 'plain' });
-
-        await act(async () => {
-            accountAResponse.resolve(response('e2ee'));
-        });
-        await flushHookEffects();
-        expect(hook.getCurrent()).toEqual({ status: 'ready', mode: 'plain' });
-
-        await act(async () => {
-            invalidateAccountEncryptionModeCache();
-        });
+        home.answer(serverId, modePath, { respondAfter: refreshedAccountBResponse.promise, body: { mode: 'e2ee', updatedAt: 1 } });
+        await act(async () => invalidateAccountEncryptionModeCache());
         expect(hook.getCurrent()).toEqual({ status: 'loading' });
-
-        await act(async () => {
-            refreshedAccountBResponse.resolve(response('e2ee'));
-        });
-        await flushHookEffects();
-        expect(hook.getCurrent()).toEqual({ status: 'ready', mode: 'e2ee' });
-        expect(accountModeTransport.serverFetch).toHaveBeenCalledTimes(3);
-
+        await waitForHomeGovernance(() => expect(home.requestsFor(modePath)).toHaveLength(3));
+        await act(async () => refreshedAccountBResponse.resolve());
+        await waitForHomeGovernance(() => expect(hook.getCurrent()).toEqual({ status: 'ready', mode: 'e2ee' }));
+        expect(home.requestsFor(modePath)).toHaveLength(3);
         await hook.unmount();
     });
 
     it('reports a terminal refusal only after the pending mode request settles', async () => {
-        const account = createLifetime('account-a');
-        const pending = createDeferredResponse();
-        accountModeTransport.serverFetch.mockReturnValue(pending.promise);
+        const account = await currentAccount('account-a');
+        const pending = createDeferred<void>();
+        home.answer(serverId, modePath, { respondAfter: pending.promise, status: 401, body: {} });
         const isCurrent = () => account.lifetime.isCurrent();
         const hook = await renderHook(() => usePluginSurfaceAccountEncryptionMode({
             accountLifetime: account.lifetime,
-            credentials: credentialsA,
+            credentials: account.credentials,
             isCurrent,
         }));
 
         expect(hook.getCurrent()).toEqual({ status: 'loading' });
-        await act(async () => pending.resolve(new Response('{}', { status: 401 })));
-        await flushHookEffects();
-        expect(hook.getCurrent()).toEqual({ status: 'unavailable' });
+        await waitForHomeGovernance(() => expect(home.requestsFor(modePath)).toHaveLength(1));
+        await act(async () => pending.resolve());
+        await waitForHomeGovernance(() => expect(hook.getCurrent()).toEqual({ status: 'unavailable' }));
         await hook.unmount();
     });
 });

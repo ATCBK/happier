@@ -10,6 +10,7 @@ import { RPC_METHODS } from '../rpc/methods.js';
 import { SecretReferenceOverlayV1Schema } from '../profiles/secretReferenceOverlayV1.js';
 import { ActionExecuteFailureSchema } from './actionExecutionResult.js';
 import { ProjectSetupConsentFailureDetailsV1Schema, ProjectSetupConsentScopeV1Schema, type ProjectSetupConsentFailureDetailsV1 } from './projectSetupConsentFailure.js';
+import { canRetainProjectSetupReviewV1 } from './operations/v1.js';
 export { ProjectSetupConsentFailureDetailsV1Schema, ProjectSetupConsentScopeV1Schema,
   type ProjectSetupConsentFailureDetailsV1, type ProjectSetupConsentScopeV1 } from './projectSetupConsentFailure.js';
 import { PROJECT_ACTION_IDS_V1, type ProjectActionIdV1 } from './projectActionIdsV1.js';
@@ -53,15 +54,22 @@ export function readProjectSetupConsentFailureV1(value: unknown): ProjectSetupCo
 
 /** A no-effect setup precondition retains invocation custody, never reviewer authority. */
 export function readProjectSetupConsentHoldV1(actionId: string, value: unknown): ProjectSetupConsentRequiredV1 | null {
-  if (!Object.prototype.hasOwnProperty.call(PROJECT_FINITE_ACTION_RPC_METHODS_V1, actionId)) return null;
-  const pending = ProjectSetupConsentRequiredV1Schema.safeParse(value);
-  if (pending.success) return pending.data;
+  const finite = Object.prototype.hasOwnProperty.call(PROJECT_FINITE_ACTION_RPC_METHODS_V1, actionId);
+  if (!canRetainProjectSetupReviewV1(actionId)) return null;
   const operation = ProjectCommandActionOutputV1Schema.safeParse(value);
-  if (operation.success && operation.data.operation.actionId === actionId && operation.data.operation.setupReview) {
+  if (operation.success && operation.data.operation.actionId === actionId && operation.data.operation.setupReview
+    && (operation.data.operation.state === 'accepted' || operation.data.operation.state === 'running')
+    && (finite || operation.data.operation.domainRef?.kind === 'projectCommand'
+      && operation.data.operation.domainRef.purpose === 'setup')) {
     const review = operation.data.operation.setupReview;
     return { kind: 'pendingApproval', code: review.code, reviewedEffectDigest: review.reviewedEffectDigest,
       ...(review.consentScope ? { consentScope: review.consentScope } : {}) };
   }
+  // Cold starts must name their original admitted operation and exact setup
+  // target. A standalone review/failure cannot establish that custody.
+  if (!finite) return null;
+  const pending = ProjectSetupConsentRequiredV1Schema.safeParse(value);
+  if (pending.success) return pending.data;
   const failure = readProjectSetupConsentFailureV1(value);
   return failure ? { kind: 'pendingApproval', code: failure.details.code,
     reviewedEffectDigest: failure.details.reviewedEffectDigest,
@@ -82,8 +90,13 @@ export type ProjectPrepareResultV1 = z.infer<typeof ProjectPrepareResultV1Schema
 export const ProjectPrepareInputV1Schema = lazyZodSchema(() => z.strictObject({
   workspace, phase: z.enum(['setup', 'teardown']), skipForInvocation: z.optional(z.boolean()), expectedEffectDigest: z.optional(nonempty),
   consentScope: z.optional(ProjectSetupConsentScopeV1Schema),
+  /** Decide the existing target-held invocation; never admit another preparation. */
+  heldOperationId: z.optional(nonempty),
 }).check(z.refine(input => input.consentScope === undefined || input.expectedEffectDigest !== undefined, {
   path: ['expectedEffectDigest'], message: 'Requested setup consent scope requires the reviewed effect digest',
+}), z.refine(input => input.heldOperationId === undefined || input.expectedEffectDigest !== undefined
+  && (input.consentScope === 'thisTime' || input.skipForInvocation === true) && input.consentScope !== 'untilChanged', {
+  path: ['heldOperationId'], message: 'A retained decision requires its reviewed digest and one-time or Skip choice',
 })));
 export type ProjectPrepareInputV1 = z.infer<typeof ProjectPrepareInputV1Schema>;
 export const PROJECT_ACTION_INPUT_SCHEMAS_V1 = {
@@ -145,6 +158,7 @@ const PROJECT_ACTION_INPUT_FIELDS = {
     { path: 'skipForInvocation', title: 'Skip for this invocation', widget: 'boolean' },
     { path: 'expectedEffectDigest', title: 'Reviewed setup effect', widget: 'text' },
     { path: 'consentScope', title: 'Setup consent scope', widget: 'json' },
+    { path: 'heldOperationId', title: 'Held operation', widget: 'text' },
   ],
   'projects.script.run': [
     { path: 'workspace', title: 'Qualified checkout', widget: 'json', required: true },

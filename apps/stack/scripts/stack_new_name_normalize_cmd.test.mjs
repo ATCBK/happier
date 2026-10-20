@@ -1,11 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { setupStackNewMonorepoFixture } from './testkit/stack_new_monorepo_testkit.mjs';
 import { runNodeCapture } from './testkit/core/run_node_capture.mjs';
 import { ensureEnvFileUpdated } from './utils/env/env_file.mjs';
 import { resolveRepoStackIdentity } from './utils/stack/repo_stack_identity.mjs';
+import { writeJsonAtomic } from './utils/fs/json.mjs';
+import { parseEnvToObject } from './utils/env/dotenv.mjs';
+import { resolveControlledRuntimePlacement, resolveControlledQaBrowserTarget } from './utils/dev_targets/service_placement.mjs';
 
 test('hstack stack new normalizes stack names across valid and punctuation-heavy inputs', async (t) => {
   const fixture = await setupStackNewMonorepoFixture({
@@ -63,6 +66,66 @@ test('new QA stacks request the dedicated hosts while normal stacks and existing
   const retained = await fixture.runStackNew(['normal-stack', '--qa', '--if-missing', '--json']);
   assert.equal(retained.code, 0, retained.stderr);
   assert.equal(await fixture.readStackEnv('normal-stack'), before, 'creation defaults never retrofit an existing Machine');
+});
+
+test('new QA stacks seed configured producer QA placement without moving development or retained stacks', async t => {
+  const fixture = await setupStackNewMonorepoFixture({ importMetaUrl: import.meta.url, t, tmpPrefix: 'hstack-qa-default-placement-' });
+  const repoDir = await fixture.createMonorepoCheckout('main', { includeServerPrisma: true });
+  await mkdir(join(repoDir, '.git'), { recursive: true });
+  const producer = resolveRepoStackIdentity({ repoRoot: repoDir, stacksStorageRoot: fixture.storageDir }).stackName;
+  const producerDir = join(fixture.storageDir, producer);
+  await mkdir(producerDir, { recursive: true });
+  await writeFile(join(producerDir, 'env'), 'HAPPIER_STACK_QA_DEFAULT_TARGET= QA-HOST \n');
+  const producerPath = join(producerDir, 'dev-targets.json');
+  await writeJsonAtomic(producerPath, { version: 3,
+    targets: ['qa-host', 'builder'].map(name => ({ name, platform: 'posix', ssh: name, repoDir: `/mirror/${name}`, cliHomeDir: `/state/${name}/cli` })),
+    runtimePlacement: { server: { mode: 'local' }, daemon: { mode: 'local' }, expo: { mode: 'local' }, qa: { mode: 'local' },
+      build: { mode: 'prefer-target', targets: ['builder'] } }, commandExecution: { mode: 'local' },
+  });
+  const before = await readFile(producerPath);
+  for (const [name, options] of [['agent-qa-default', []], ['qa-default', []], ['custom-default', ['--qa']]]) {
+    const created = await fixture.runStackNew([name, ...options, '--no-copy-auth', '--json']);
+    assert.equal(created.code, 0, created.stderr);
+    const path = join(fixture.storageDir, name, 'dev-targets.json');
+    const config = JSON.parse(await readFile(path, 'utf8'));
+    assert.equal(config.runtimePlacement.server.target, 'qa-host');
+    assert.equal(config.runtimePlacement.daemon.target, 'qa-host');
+    assert.deepEqual(config.runtimePlacement.qa.targets, ['qa-host']);
+    assert.equal(config.commandExecution.target, 'qa-host');
+    assert.equal(config.runtimePlacement.expo.mode, 'local');
+    assert.equal(config.runtimePlacement.build, undefined, 'the producer retains build authority');
+    const env = { ...fixture.baseEnv, ...parseEnvToObject(await fixture.readStackEnv(name)),
+      HAPPIER_STACK_RUNTIME_BUILD_AUTHORITY_STACK: producer };
+    assert.equal(env.HAPPIER_STACK_QA_DAEMON_TARGETS, 'qa-host');
+    assert.equal(env.HAPPIER_STACK_QA_BROWSER_TARGETS, 'qa-host');
+    assert.equal(env.HAPPIER_STACK_EXPO_SOURCE_STACK, producer);
+    // The only mocked boundary is the remote host observation process.
+    const boundaries = { runCaptureResult: async (_command, args) => {
+      assert.ok(args.includes('--target=qa-host'));
+      return { ok: true, out: 'HSTACK_QA_HOST={"platform":"linux","arch":"x64","remote":true,"unreservedMemoryKiB":16000000}\n', err: '' };
+    } };
+    const resolved = await resolveControlledRuntimePlacement({ stackName: name, stackBaseDir: join(fixture.storageDir, name), sourceDir: repoDir, env }, boundaries);
+    assert.equal(resolved.target.name, 'qa-host');
+    assert.equal(resolved.daemonTarget.name, 'qa-host');
+    assert.equal((await resolveControlledQaBrowserTarget({ stackName: name, sourceDir: repoDir, env }, boundaries)).target.name, 'qa-host');
+    await assert.rejects(resolveControlledRuntimePlacement({ stackName: name, sourceDir: repoDir, env }, {
+      runCaptureResult: async () => ({ ok: false, exitCode: 255, err: 'unavailable' }), logger: { warn() {} },
+    }), /persisted server placement is authoritative/);
+    const retained = await readFile(path);
+    const repeated = await fixture.runStackNew([name, '--qa', '--if-missing', '--json']);
+    assert.equal(repeated.code, 0, repeated.stderr);
+    assert.deepEqual(await readFile(path), retained);
+  }
+  const normal = await fixture.runStackNew(['normal-default', '--no-copy-auth', '--json']);
+  assert.equal(normal.code, 0, normal.stderr);
+  assert.doesNotMatch(await fixture.readStackEnv('normal-default'), /QA_DAEMON_TARGETS|QA_BROWSER_TARGETS/);
+  await assert.rejects(readFile(join(fixture.storageDir, 'normal-default', 'dev-targets.json')), { code: 'ENOENT' });
+  await writeFile(join(producerDir, 'env'), 'HAPPIER_STACK_QA_DEFAULT_TARGET=missing\n');
+  const invalid = await fixture.runStackNew(['qa-invalid', '--no-copy-auth', '--json']);
+  assert.equal(invalid.code, 1);
+  assert.match(invalid.stderr, /unknown target/);
+  await assert.rejects(readFile(join(fixture.storageDir, 'qa-invalid', 'env')), { code: 'ENOENT' });
+  assert.deepEqual(await readFile(producerPath), before);
 });
 
 test('hstack stack new does not prompt in a TTY when controlled flags are complete', async (t) => {

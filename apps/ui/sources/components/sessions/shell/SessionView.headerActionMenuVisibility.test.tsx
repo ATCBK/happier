@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { AccountProfileSchema } from '@happier-dev/protocol';
 import { createReactNavigationNativeMock } from '@/dev/testkit/mocks/reactNavigation';
 import { act, type ReactTestInstance } from 'react-test-renderer';
 import type { PluginMachineExecutionOriginV1 } from '@happier-dev/protocol';
@@ -25,6 +26,7 @@ import { createRootLayoutFeaturesResponse } from '@/dev/testkit/fixtures/feature
 import { createPlainAccountEncryptionCurrentnessFixture } from '@/dev/testkit/fixtures/accountEncryptionCurrentness';
 import { installDisconnectedServerSocketBoundary, restoreServerAccountForTest } from '@/dev/testkit/harness/serverAccountConnectionHarness';
 import { loadSyncSingletonForTests } from '@/dev/testkit/harness/syncSingletonLoader';
+import { waitForHomeGovernance } from '@/dev/testkit/harness/homeGovernanceHarness';
 import { buildRealmQualifiedSessionCompanionPreferenceKey } from '@/components/sessions/companion/state/sessionCompanionPreferenceKey';
 import type { SessionCompanionPreferencesV1 } from '@/components/sessions/companion/state/sessionCompanionPreference';
 import { createSessionPaneScopeId } from '@/components/sessions/panes/sessionPaneScopeId';
@@ -33,10 +35,19 @@ import { createAutomationDefinitionSummary } from '@/sync/domains/automations/au
 import { installSessionShellCommonModuleMocks } from './sessionShellTestHelpers';
 import type { SessionConnectedServicesAuthSwitchResult } from '@/components/sessions/agentInput/hooks/useSessionConnectedServicesAuthSwitch';
 
+
+
+import { createEmptyAccountBootstrapHttpResponse } from '@/dev/testkit/fixtures/accountBootstrapHttpBoundary';
+
+
+
+
+
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 (globalThis as any).__DEV__ = false;
 
 const headerActionMenuSpy = vi.hoisted(() => vi.fn());
+const realHeaderMenuState = vi.hoisted(() => ({ enabled: false }));
 const attachedTerminalState = vi.hoisted(() => ({ available: false, open: vi.fn() }));
 const chatHeaderSpy = vi.hoisted(() => vi.fn());
 const agentInputSpy = vi.hoisted(() => vi.fn());
@@ -166,12 +177,13 @@ vi.mock('@/components/appShell/panes/AppPaneScopeHost', () => ({
   AppPaneScopeHost: (props: any) => {
     const projection = scopedPluginProjectionState.projection;
     const binding = React.useMemo(() => createPluginSurfaceDestinationNavigationBinding({
+      accountLifetime: captureActiveServerAccountScopeLifetime(),
       placements: projection
         ? Object.values(projection.surfacePlacementsById).filter(isPluginUiDestinationSurfacePlacementProjection)
         : [],
       targetKind: 'session',
       scopedLaunchFacts: {
-        serverId: 'server-1',
+        serverId: account.home.id,
         machineId: 'machine-1',
         interactionEnabled: true,
       },
@@ -221,7 +233,7 @@ vi.mock('@/components/plugins/projection/useScopedPluginUiProjection', async (im
           pluginUiProjection: scopedPluginProjectionState.projection,
           pluginBrowserProjection: null,
           machineId: 'machine-1',
-          serverId: 'server-1',
+          serverId: account.home.id,
           interactionEnabled: true,
           platform: 'web',
         }
@@ -305,12 +317,16 @@ vi.mock('@/components/ui/empty/EmptyMessages', () => ({
 vi.mock('@/components/ui/forms/Deferred', () => ({
   Deferred: (props: any) => React.createElement(React.Fragment, null, props.children),
 }));
-vi.mock('@/components/sessions/actions/SessionHeaderActionMenu', () => ({
-  SessionHeaderActionMenu: (props: any) => {
-    headerActionMenuSpy(props);
-    return React.createElement('SessionHeaderActionMenu');
-  },
-}));
+vi.mock('@/components/sessions/actions/SessionHeaderActionMenu', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/components/sessions/actions/SessionHeaderActionMenu')>();
+  return {
+    SessionHeaderActionMenu: (props: any) => {
+      headerActionMenuSpy(props);
+      if (realHeaderMenuState.enabled) return React.createElement(actual.SessionHeaderActionMenu, props);
+      return React.createElement('SessionHeaderActionMenu');
+    },
+  };
+});
 vi.mock('@/components/sessions/terminal/openAttachedSessionTerminal', () => ({
   useOpenAttachedSessionTerminal: () => attachedTerminalState,
 }));
@@ -387,7 +403,8 @@ vi.mock('@/components/sessions/model/useSessionMachineReachability', () => ({
   useSessionMachineReachability: () => ({ machineReachable: true, machineOnline: true }),
   useSessionReachableMachineTarget: () => null,
 }));
-vi.mock('@/components/sessions/model/useSessionMachineTarget', () => ({
+vi.mock('@/components/sessions/model/useSessionMachineTarget', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/components/sessions/model/useSessionMachineTarget')>(),
   useSessionMachineTarget: () => null,
   useSessionMachineControlTarget: () => sessionMachineControlTargetState.target,
 }));
@@ -521,6 +538,7 @@ vi.doUnmock('@/hooks/session/useDraft');
 const { storage: canonicalStorage } = await import('@/sync/domains/state/storage');
 const { InjectedAuthProvider } = await import('@/auth/context/AuthContext');
 const { useAppPaneScope } = await import('@/components/appShell/panes/hooks/useAppPaneScope');
+const { captureActiveServerAccountScopeLifetime } = await import('@/sync/domains/scope/activeServerAccountScope');
 let account: Awaited<ReturnType<typeof restoreServerAccountForTest>>;
 let previousStorage: ReturnType<typeof canonicalStorage.getState>;
 let pane: ReturnType<typeof useAppPaneScope>;
@@ -531,11 +549,11 @@ function applyShellFixtures() {
     ? createToolCallMessageFixture({ ...message, id: message.id ?? `tool-${index}`, tool: { ...createToolCallMessageFixture().tool, ...message.tool } })
     : { localId: null, createdAt: 1, ...message });
   const messagesById = Object.fromEntries(messages.map(message => [message.id, message]));
-  canonicalStorage.setState({ isDataReady: true, sessionMessages: { s1: createSessionMessagesFixture({
+  canonicalStorage.setState({ sessionMessages: { s1: createSessionMessagesFixture({
     isLoaded: true, messagesById, messageIdsOldestFirst: messages.map(message => message.id),
   }) } });
   canonicalStorage.getState().applySettingsLocal({ mobileWorkspaceExperienceV1: localSettingsState.mobileWorkspaceExperienceV1 });
-  const key = buildRealmQualifiedSessionCompanionPreferenceKey({ serverId: account.home.id, accountId: 'account-a' }, 's1');
+  const key = buildRealmQualifiedSessionCompanionPreferenceKey({ serverId: account.home.id, accountId: canonicalStorage.getState().profileScope!.accountId }, 's1');
   canonicalStorage.getState().applyLocalSettings({
     uiMultiPanePanelsEnabled: false, acknowledgedCliVersions: {},
     sessionCompanionPreferencesBySessionV1: key && companionPreferenceState.stored ? { [key]: companionPreferenceState.stored } : {},
@@ -566,16 +584,25 @@ beforeEach(async () => {
   await loadSyncSingletonForTests();
   const { sync } = await import('@/sync/sync');
   ensureSidechainMessagesLoadedSpy = vi.spyOn(sync, 'ensureSidechainMessagesLoaded');
-  account = await restoreServerAccountForTest({ serverUrl: 'https://server-1', request: async url => {
+  account = await restoreServerAccountForTest({ accountId: 'header-account', serverUrl: 'https://server-1', request: async (url, init) => {
     const path = new URL(String(url)).pathname;
+
+
+    if (path === '/v1/account/profile') return Response.json(AccountProfileSchema.parse({ id: 'header-account' }));
     if (path === '/v1/account/encryption') return Response.json({ mode: 'plain', updatedAt: 1 });
     if (path === '/v1/account/encryption/currentness') return Response.json(createPlainAccountEncryptionCurrentnessFixture());
     if (path === '/v1/features' || path === '/v1/features/authenticated') return Response.json(createRootLayoutFeaturesResponse());
     if (path === '/v2/account/settings') return Response.json({ content: { t: 'plain', v: {} }, version: 1 });
     if (path.endsWith('/pending')) return Response.json({ pending: [] });
     if (path.endsWith('/messages')) return Response.json({ messages: [], hasMore: false, nextBeforeSeq: null });
-    return new Response('{}', { status: 404 });
+    const bootstrapResponse = createEmptyAccountBootstrapHttpResponse(path, init);
+                if (bootstrapResponse) return bootstrapResponse;
+                return new Response('{}', { status: 404 });
   } });
+  await waitForHomeGovernance(() => {
+    expect(canonicalStorage.getState().profile.id).toBe('header-account');
+    expect(canonicalStorage.getState().isDataReady).toBe(true);
+  });
   canonicalStorage.getState().applyLocalSettings({ appPaneScopesV1: {} }, { persist: false });
 });
 afterEach(async () => {
@@ -588,6 +615,7 @@ afterEach(async () => {
 });
 
 const { SessionView } = await import('./SessionView');
+const { SessionCompanionRevealOwner } = await import('@/components/sessions/companion/presentation/SessionCompanionRevealPort');
 const { SelectionList } = await import('@/components/ui/selectionList');
 
 const AppPaneProviderWrapper = ({ children }: { children?: React.ReactNode }) => (
@@ -621,8 +649,12 @@ function readCompanionRevealAddress(screen: RenderScreenResult): unknown {
   const paneHost = screen.findAll((node) => (node.type as unknown) === 'AppPaneScopeHost')[0];
   const wrapScopeContent = paneHost?.props?.wrapScopeContent;
   if (typeof wrapScopeContent !== 'function') return null;
-  const wrapped = wrapScopeContent(React.createElement(React.Fragment, null));
-  return (wrapped as React.ReactElement<{ address?: unknown }>)?.props?.address ?? null;
+  let wrapped: React.ReactNode = wrapScopeContent(React.createElement(React.Fragment, null));
+  while (React.isValidElement<{ address?: unknown; children?: React.ReactNode }>(wrapped)) {
+    if (wrapped.type === SessionCompanionRevealOwner) return wrapped.props.address ?? null;
+    wrapped = wrapped.props.children;
+  }
+  return null;
 }
 
 function findCompanionMounts(screen: RenderScreenResult) {
@@ -660,14 +692,14 @@ function createSessionSurfacePlacement(input: Readonly<{
     display: { developerFallback: input.descriptorId },
     availability: { state: 'available', reason: 'available', diagnostics: [] },
     headerActions: [],
-    ...({
+    executionOrigin: {
       serverIdentityId: 'srv_account_one',
       materializationRef: {
         pluginId: 'acme.preview',
         machineId: 'machine-1',
         materializationId: `${input.descriptorId}-install-a`,
       },
-    } satisfies PluginMachineExecutionOriginV1),
+    } satisfies PluginMachineExecutionOriginV1,
   };
 }
 
@@ -682,6 +714,23 @@ function projectionWith(...placements: readonly PluginUiSurfacePlacementProjecti
 const { AppPaneProvider } = await import('@/components/appShell/panes/AppPaneProvider');
 
 describe('SessionView header action menu visibility', () => {
+  it('exposes the Computer session action in the phone header on a non-chat cockpit surface', async () => {
+    realHeaderMenuState.enabled = true;
+    responsiveState.deviceType = 'phone';
+    sessionState.session = createSessionFixture({
+      id: 's1', serverId: account.home.id,
+      metadata: { path: '/work', host: 'work-computer', machineId: 'machine-1', flavor: 'codex' },
+    });
+    const { DropdownMenu } = await import('@/components/ui/forms/dropdown/DropdownMenu');
+    const screen = await renderScreen(
+      <SessionView id="s1" routeServerId={account.home.id} contentOverride={React.createElement('BrowserSurface')} />,
+      { wrapper: AppPaneProviderWrapper },
+    );
+    expect(screen.root.findAllByType(DropdownMenu).some((menu) =>
+      menu.props.items.some((item: Readonly<{ id: string }>) => item.id === 'header.openComputer'),
+    )).toBe(true);
+  });
+
   it('updates the mounted header when history hydration supplies the first prompt without changing the full Session', async () => {
     sessionState.session = createSessionFixture({
       id: 's1', serverId: 'server-1', seq: 100,
@@ -713,6 +762,7 @@ describe('SessionView header action menu visibility', () => {
     await prepareSessionDraftPersistenceStorage();
   });
   afterEach(() => {
+    realHeaderMenuState.enabled = false;
     vi.useRealTimers();
     standardCleanup();
     vi.unstubAllGlobals();
@@ -840,6 +890,9 @@ describe('SessionView header action menu visibility', () => {
       input: { source: 'session-header' },
     } as const;
 
+
+
+
     await expect(openSurface(rightRequest)).resolves.toMatchObject({ ok: true });
     await expect(openSurface(bottomRequest)).resolves.toMatchObject({ ok: true });
     await expect(openSurface(detailsRequest)).resolves.toMatchObject({ ok: true });
@@ -851,7 +904,9 @@ describe('SessionView header action menu visibility', () => {
       destination: rightSidebarPlacement.binding.destination,
       input: { source: 'session-header' },
     } as const;
-    await expect(openSurface(rightSidebarRequest)).resolves.toEqual({ ok: true });
+    await act(async () => {
+      await expect(openSurface(rightSidebarRequest)).resolves.toEqual({ ok: true });
+    });
     expect(pane.scopeState?.right.selectedDestination).toEqual({
       kind: 'plugin',
       destination: rightSidebarPlacement.binding.destination,
@@ -945,7 +1000,7 @@ describe('SessionView header action menu visibility', () => {
       },
     } as any;
 
-    await renderSessionView();
+    await screen.update(<SessionView id="s1" routeServerId="server-1" />);
 
     const rerenderedProps = headerActionMenuSpy.mock.calls.at(-1)?.[0] as any;
     expect(rerenderedProps?.extraItems).toBe(extraItems);
@@ -1218,7 +1273,9 @@ describe('SessionView header action menu visibility', () => {
     const chip = connectedServicesAuthSwitchResultSpy.mock.calls.at(-1)?.[0].connectedServicesAuthChip;
     const renderContent = chip?.collapsedContentPopover?.renderContent;
     if (typeof renderContent !== 'function') throw new Error('Expected the real Connected Account picker');
-    const picker = await renderScreen(<>{renderContent({ requestClose: vi.fn(), maxHeight: 500 })}</>);
+    const picker = await renderScreen(<>{renderContent({ requestClose: vi.fn(), maxHeight: 500 })}</>, {
+      wrapper: AppPaneProviderWrapper,
+    });
     const rootStep = picker.findByType(SelectionList)?.props.rootStep as React.ComponentProps<typeof SelectionList>['rootStep'];
     const options = rootStep.sections.flatMap((section) => section.kind === 'static' ? section.options : []);
     const currentOption = options.find((option) => option.label === 'Current Team account');
@@ -1287,12 +1344,17 @@ describe('SessionView header action menu visibility', () => {
       startedAtMs: 2_000,
     }]);
 
-    sessionState.session = {
-      ...sessionState.session,
-      latestReadyEventAt: 2_500,
-    } as any;
+
 
     await screen.update(<SessionView id="s1" routeServerId="server-1" jumpToSeq={1} />);
+    await act(async () => {
+      canonicalStorage.getState().applyMessages('s1', [{
+        id: 'auth-switch-recovered-ready', localId: null, seq: 2, createdAt: 2_500,
+        isSidechain: false, role: 'event', content: { type: 'ready' },
+      }]);
+    });
+
+
 
     expect(connectedServicesAuthSwitchSpy.mock.calls.at(-1)?.[0]?.intentionalRestartSignals).toEqual([]);
   });
@@ -1463,7 +1525,7 @@ describe('SessionView header action menu visibility', () => {
     const boardButton = screen.findByTestId('session-header-board-button');
     expect(boardButton?.props.accessibilityRole).toBe('button');
     expect(boardButton?.props.accessibilityLabel).toBeTruthy();
-    pressTestInstance(boardButton);
+    await pressTestInstanceAsync(boardButton);
 
     const props = headerActionMenuSpy.mock.calls.at(-1)?.[0] as any;
     expect((props?.extraItems ?? []).map((item: any) => item?.id)).not.toContain('header.openBoard');
@@ -1524,7 +1586,7 @@ describe('SessionView header action menu visibility', () => {
       expect(mounts.bridges).toHaveLength(1);
       expect(mounts.revealAddress).toEqual({ serverId: 'server-1', sessionId: 's1' });
       // Admission is not a reason to rewrite this device's saved choices.
-      const key = buildRealmQualifiedSessionCompanionPreferenceKey({ serverId: account.home.id, accountId: 'account-a' }, 's1');
+      const key = buildRealmQualifiedSessionCompanionPreferenceKey({ serverId: account.home.id, accountId: canonicalStorage.getState().profileScope!.accountId }, 's1');
       expect(canonicalStorage.getState().localSettings.sessionCompanionPreferencesBySessionV1[key!]).toEqual(VISIBLE_COMPANION_PREFERENCE);
     });
 

@@ -1,5 +1,7 @@
 import { StoredApprovalRequestSchema, type ApprovalRequest } from './approvalRequestV1.js';
 import { APPROVAL_ARTIFACT_KINDS_V1 } from './approvalArtifactKindV1.js';
+import { ActionIdSchema } from '../actions/actionIds.js';
+import type { ApprovalQueueListItemV1, ApprovalQueueListResultV1 } from '../actions/executor/types.js';
 export { APPROVAL_ARTIFACT_KINDS_V1 } from './approvalArtifactKindV1.js';
 import {
   StoredExecutionRunHostActionApprovalRequestV1Schema,
@@ -206,4 +208,60 @@ export function approvalArtifactBodyMatchesHeaderV1(
       : null;
   }
   return null;
+}
+
+type ApprovalListArtifactV1 = Readonly<{
+  artifactId: string;
+  header: ApprovalArtifactHeaderCandidateV1;
+  body?: unknown;
+  updatedAt: number;
+}>;
+
+/** One strict private queue projection for keyholding Account Artifact stores. */
+export async function listApprovalArtifactsV1(params: Readonly<{
+  status?: ApprovalRequest['status'] | null;
+  limit?: number | null;
+  serverId?: string | null;
+  readPage: (options: Readonly<{ limit: number; includeBody: true; cursor?: string }>) => Promise<Readonly<{
+    items: readonly ApprovalListArtifactV1[];
+    nextCursor?: string;
+  }>>;
+  read: (artifactId: string) => Promise<Readonly<{ header: ApprovalArtifactHeaderCandidateV1; body?: unknown; updatedAt: number }> | null>;
+}>): Promise<ApprovalQueueListResultV1> {
+  const items: ApprovalQueueListItemV1[] = [];
+  const serverId = params.serverId?.trim() || null;
+  // Preserve the approval.request.list input contract and incumbent default.
+  const maxItems = typeof params.limit === 'number' && Number.isFinite(params.limit)
+    ? Math.max(1, Math.min(100, Math.trunc(params.limit))) : 32;
+  let cursor: string | undefined;
+  do {
+    const page = await params.readPage({ limit: maxItems, includeBody: true, ...(cursor ? { cursor } : {}) });
+    for (const artifact of page.items) {
+      if (items.length >= maxItems) break;
+      if (artifact.header.kind !== APPROVAL_ARTIFACT_KINDS_V1.builtIn
+        && artifact.header.kind !== APPROVAL_ARTIFACT_KINDS_V1.targetAction) continue;
+      // Complete pages already pair header/body revisions. Only omitted or
+      // unreadable bodies need the store's canonical individual read path.
+      const hydrated = typeof artifact.body === 'string' ? artifact : await params.read(artifact.artifactId);
+      if (typeof hydrated?.body !== 'string') continue;
+      const parsed = approvalArtifactBodyMatchesHeaderV1(hydrated.header, hydrated.body);
+      if (!parsed || parsed.family === 'execution_run_host_action') continue;
+      const request = parsed.request;
+      if (params.status && request.status !== params.status) continue;
+      const headerServerId = typeof hydrated.header.serverId === 'string' ? hydrated.header.serverId.trim() || null : null;
+      // V1 history retains its released profile-scoped behavior. V2 custody is
+      // Account-scoped; its strict body validates the creator profile and Home.
+      if (parsed.family === 'built_in' && request.v === 1 && serverId && headerServerId !== serverId) continue;
+      const actionId = ActionIdSchema.safeParse(parsed.family === 'target_action' ? 'action.invoke' : parsed.request.actionId);
+      if (!actionId.success || !request.summary) continue;
+      const sessionId = typeof hydrated.header.sessionId === 'string' ? hydrated.header.sessionId.trim() : '';
+      items.push({ artifactId: artifact.artifactId, status: request.status, actionId: actionId.data, summary: request.summary,
+        ...(sessionId ? { sessionId } : {}), ...(headerServerId ? { serverId: headerServerId } : {}),
+        updatedAtMs: Number.isFinite(hydrated.updatedAt) ? hydrated.updatedAt : 0 });
+    }
+    cursor = items.length < maxItems ? page.nextCursor : undefined;
+  } while (cursor);
+  return { items, queryPlan: { kind: 'approval_artifact_header_scan', backingStore: 'ArtifactStore',
+    boundedBy: items.length >= maxItems ? 'requested matching approval count' : 'ArtifactStore source exhaustion',
+    serverLimit: maxItems, hydratedTranscripts: false } };
 }

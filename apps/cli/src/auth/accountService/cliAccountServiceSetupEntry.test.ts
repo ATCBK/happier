@@ -1049,10 +1049,10 @@ describe('production CLI Account Service approval continuation', () => {
     expect(registerMachineWithAuthenticatedHomeRuntimeMock).not.toHaveBeenCalled();
   });
 
-  it('preserves existing encryption material only for the same exact Home Account', async () => {
+  it.each(['plain', 'e2ee'] as const)('preserves existing encryption material only for the same exact Home Account in %s mode', async (mode) => {
     const oldToken = createJwtWithSub('account-a', 'old');
     const refreshedToken = createJwtWithSub('account-a', 'new');
-    const harness = await configureProductionJourney({ mode: 'e2ee', homeToken: refreshedToken });
+    const harness = await configureProductionJourney({ mode, homeToken: refreshedToken });
     const adopted = await adoptServerProfileHomeConnectionDescriptor({
       descriptor: home.connectionDescriptor,
       suggestedName: home.label,
@@ -1075,6 +1075,10 @@ describe('production CLI Account Service approval continuation', () => {
     await vi.advanceTimersByTimeAsync(1_250);
 
     await expect(result).resolves.toMatchObject({ kind: 'home_entered' });
+    const persistence = await import('@/persistence');
+    expect(await persistence.readStoredCredentialsForServerId(adopted.profile.id)).toMatchObject({
+      token: refreshedToken, encryption: { type: 'legacy', secret: new Uint8Array(32).fill(7) },
+    });
     expect(writeCredentialsTokenOnlyForServerIdMock).toHaveBeenCalledWith(adopted.profile.id, {
       token: refreshedToken,
       encryption: { type: 'legacy', secret: new Uint8Array(32).fill(7) },

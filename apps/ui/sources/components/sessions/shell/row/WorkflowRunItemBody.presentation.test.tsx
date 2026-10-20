@@ -29,8 +29,9 @@ it('renders distinct machine lines for Run-derived headers sharing the same proj
         hideInactiveSessions: false, pinnedSessionKeysV1: [], sessionListGroupOrderV1: {},
         sessionListLayoutChoice: 'projects', presentation: { enabled: false, presentation: 'grouped' },
         workFilter: normalizeSessionListFilterV1({ show: 'runs', homeServerIds: ['home'] }),
+        viewerAccountIdByServerId: new Map([['home', 'run-viewer']]),
         workflowRuns: machines.map(machine => ({ serverId: 'home', summary: createWorkflowRunSummaryFixture({
-            id: machine.id, startedBy: 'user', where: { machineId: machine.id, directory: '/home/happier' },
+            id: machine.id, ownerAccountId: 'run-viewer', startedBy: 'user', where: { machineId: machine.id, directory: '/home/happier' },
         }) })),
     })!;
     const machinesById = new Map(machines.map(machine => [machine.id, machine]));

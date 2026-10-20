@@ -1,13 +1,14 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, URL as NodeURL } from 'node:url';
 
 const roots = new Set();
 const inheritedRoots = String(process.env.HAPPIER_TEST_TEMP_ROOTS ?? '').split('\n').filter(Boolean);
-const nativeIdentity = fileURLToPath(new URL('../../../apps/stack/scripts/utils/proc/native_process_identity.sh', import.meta.url));
-const custody = fileURLToPath(new URL('../../../apps/stack/scripts/utils/dev_targets/remote_execution_custody.sh', import.meta.url));
+// Keep Node script paths out of Vite's browser-asset new URL() transformation in jsdom suites.
+const nativeIdentity = fileURLToPath(new NodeURL('../../../apps/stack/scripts/utils/proc/native_process_identity.sh', import.meta.url));
+const custody = fileURLToPath(new NodeURL('../../../apps/stack/scripts/utils/dev_targets/remote_execution_custody.sh', import.meta.url));
 let owner;
 
 function publishRoots() {
@@ -15,6 +16,20 @@ function publishRoots() {
   const bindings = [...new Set([...inheritedRoots, ...owned])];
   if (bindings.length) process.env.HAPPIER_TEST_TEMP_ROOTS = bindings.join('\n');
   else delete process.env.HAPPIER_TEST_TEMP_ROOTS;
+}
+
+function makeOwnedDirectoriesWritable(path) {
+  let entry;
+  try { entry = lstatSync(path); }
+  catch (error) {
+    if (error?.code === 'ENOENT') return;
+    throw error;
+  }
+  // Fixture trees may contain Go's read-only module cache. Never change a
+  // symlink's target: it is not part of the temporary directory we own.
+  if (!entry.isDirectory()) return;
+  chmodSync(path, entry.mode | 0o700);
+  for (const child of readdirSync(path)) makeOwnedDirectoriesWritable(join(path, child));
 }
 
 function cleanupFixtures(fixtures) {
@@ -35,7 +50,12 @@ function cleanupFixtures(fixtures) {
   }
   for (const fixture of fixtures) {
     if (retained.has(fixture.root)) continue;
-    rmSync(fixture.root, { recursive: true, force: true });
+    try { rmSync(fixture.root, { recursive: true, force: true }); }
+    catch (error) {
+      if (error?.code !== 'EACCES' && error?.code !== 'EPERM') throw error;
+      makeOwnedDirectoriesWritable(fixture.root);
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
     roots.delete(fixture);
   }
   publishRoots();

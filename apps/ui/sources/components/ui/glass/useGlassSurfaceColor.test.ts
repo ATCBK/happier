@@ -9,7 +9,7 @@ const settings = { glassSurfaceMaterials: glassPresetMaterials('everywhere') };
 
 describe('glass renderer paint', () => {
     it('carries a feasible saturated coat into independent paint while nested and solid paint keep their decisions', () => {
-        const settings = { glassSurfaceMaterials: glassPresetMaterials('auto'), glassTintIntensity: 'medium' as const };
+        const settings = { glassSurfaceMaterials: glassPresetMaterials('auto'), glassTintIntensity: 50 };
         const map = resolveGlassBackdropMap(settings, 'floating', true, {}, { page: 'rgb(20,10,10)', solid: 'rgb(100,20,20)' });
         expect(map?.opacity).toBeGreaterThan(0.02);
         const color = resolveGlassSurfaceColor(map!.coat!, 'floating', settings, {}, true, false, undefined, false, map!.opacity);

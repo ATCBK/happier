@@ -55,10 +55,11 @@ describe('normalizeReadResult (Kilo ACP shapes)', () => {
           type: 'text',
           text: 'from content block\n',
         },
+        { content: { text: 'from nested block\n' } },
       ],
     });
 
     const file = expectFile(normalized);
-    expect(file.content).toBe('from content block');
+    expect(file.content).toBe('from content block\n\nfrom nested block');
   });
 });

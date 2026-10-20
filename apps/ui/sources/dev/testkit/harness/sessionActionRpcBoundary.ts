@@ -11,10 +11,10 @@ import { installDisconnectedServerSocketBoundary } from './serverAccountConnecti
 /** Real Session Action clients behind the Socket.IO serialization/response boundary. */
 export function installSessionActionRpcBoundary(respond: (
     request: SocketRpcRequestPayload,
-    context: Readonly<{ signal: AbortSignal }>,
+    context: Readonly<{ signal: AbortSignal; serverUrl?: string }>,
 ) => unknown): SocketRpcRequestPayload[] {
     const requests: SocketRpcRequestPayload[] = [];
-    installDisconnectedServerSocketBoundary(socket => {
+    installDisconnectedServerSocketBoundary((socket, serverUrl) => {
         const pending = new Map<string, AbortController>();
         const emit = socket.emit;
         socket.emit = vi.fn<typeof socket.emit>((event, ...args) => {
@@ -36,19 +36,21 @@ export function installSessionActionRpcBoundary(respond: (
         socket.emitWithAck = vi.fn<typeof socket.emitWithAck>(async (event, payload) => {
             if (event !== SOCKET_RPC_EVENTS.CALL) return { v: 1, ok: true, admittedSessionIds: [] };
             const wire: unknown = JSON.parse(JSON.stringify(payload));
-            if (!wire || typeof wire !== 'object' || !('method' in wire) || typeof wire.method !== 'string' || !('params' in wire)) {
+            if (!wire || typeof wire !== 'object' || !('method' in wire) || typeof wire.method !== 'string') {
                 throw new Error('Malformed socket RPC request');
             }
             const authorization = 'authorization' in wire ? parseSocketRpcAuthorizationContext(wire.authorization) : null;
             if ('authorization' in wire && !authorization) throw new Error('Malformed socket RPC authorization');
-            const request: SocketRpcRequestPayload = { method: wire.method, params: wire.params,
+            // Plain zero-argument calls lose an undefined params key on the wire;
+            // the real relay and daemon decode that absence as undefined.
+            const request: SocketRpcRequestPayload = { method: wire.method, params: Reflect.get(wire, 'params'),
                 ...(authorization ? { authorization } : {}) };
             requests.push(request);
             const requestId = 'requestId' in wire ? SocketRpcRequestIdSchema.parse(wire.requestId) : null;
             const controller = new AbortController();
             if (requestId) pending.set(requestId, controller);
             try {
-                return { ok: true, result: await respond(request, { signal: controller.signal }) };
+                return { ok: true, result: await respond(request, { signal: controller.signal, serverUrl }) };
             } finally {
                 if (requestId) pending.delete(requestId);
             }

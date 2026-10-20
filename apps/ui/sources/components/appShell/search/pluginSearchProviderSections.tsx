@@ -18,7 +18,8 @@ import type { PluginSurfaceOpenHandler, PluginSurfaceOpenOutcome } from '@/compo
 import type { PluginSurfaceScopedLaunchFacts } from '@/components/plugins/surfaces/pluginSurfaceLaunchAuthority';
 import { resolvePluginUiIconName } from '@/components/plugins/surfaces/iconToken/resolvePluginUiIconToken';
 import { Icon } from '@/components/ui/icons/Icon';
-import { t } from '@/text';
+import { resolvePluginUiClientActionRegistration } from '@/components/plugins/reactNative/clientExecutableContributions';
+import { resolvePluginUiClientExecutablePlatform } from '@/sync/domains/plugins/ui/usePluginUiProjectionCurrentness';
 import { comparePluginContributionOrder } from '@/sync/domains/plugins/contributionOrder';
 import { resolvePluginUiText } from '@/sync/domains/plugins/ui/i18n';
 import {
@@ -37,6 +38,8 @@ import type {
 } from '@/components/ui/selectionList';
 import type { ActiveServerAccountScopeLifetime } from '@/sync/domains/scope/activeServerAccountScope';
 import { resolveServerProfileScopeIdForIdentifier } from '@/sync/domains/server/serverProfiles';
+import { presentPluginSearchFailure } from './universalSearchMachineFailures';
+import { boundedReplyHints } from './searchBoundedReplyHints';
 
 /**
  * The Universal Search host adapter for `contributes.searchProviders`.
@@ -192,6 +195,12 @@ export function buildPluginSearchProviderSections(
             if (!providerScope) return [];
             const queryAction = resolveContributedAction(provider.action);
             if (!isPluginProjectedActionExecutable(queryAction)) return [];
+            // Declarations arrive before their executable Artifact registers.
+            // Admit the section at the same exact registration boundary as
+            // other plugin controls; a cold load is not a failed search.
+            if (queryAction.execution.target === 'client' && resolvePluginUiClientActionRegistration({
+                action: queryAction, platform: resolvePluginUiClientExecutablePlatform(),
+            }) === null) return [];
             if (provider.occurrenceId !== queryAction.occurrenceId) return [];
             if (
                 hasContributionOriginField(provider)
@@ -288,6 +297,7 @@ export function buildPluginSearchProviderSections(
                     (outcome as Extract<PluginSurfaceActionDispatchOutcome, { ok: true }>).result,
                 );
                 if (!parsed.success) throw new Error('plugin_search_result_invalid');
+                if (parsed.data.failure) throw presentPluginSearchFailure(parsed.data.failure, title);
                 const itemIds = new Set<string>();
                 for (const item of parsed.data.items) {
                     if (itemIds.has(item.id)) {
@@ -318,9 +328,11 @@ export function buildPluginSearchProviderSections(
                     });
                 return Object.freeze({
                     options: Object.freeze(options),
-                    ...(parsed.data.truncated || parsed.data.items.length > rowLimit
-                        ? { resultHint: t('universalSearch.moreResultsAvailable') }
-                        : {}),
+                    // A bounded empty reply proves no match only in the work
+                    // completed. `truncated` does not distinguish unsearched
+                    // coverage from page overflow, so promise neither more hits
+                    // nor a complete negative result.
+                    ...boundedReplyHints({ rowCount: options.length, incomplete: parsed.data.truncated || parsed.data.items.length > rowLimit }),
                 });
             };
 

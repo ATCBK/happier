@@ -120,7 +120,7 @@
   "dependencies": {
     "@happier-dev/plugin-sdk": "0.0.0",
     "json5": "^2.2.3",
-    "zod": "4.3.6"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@happier-dev/agents": "0.0.0",

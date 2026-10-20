@@ -1,9 +1,10 @@
 import * as React from 'react';
 import { View } from 'react-native';
-import { StyleSheet } from 'react-native-unistyles';
-import { HappierPressable } from '@happier-dev/plugin-ui/presentation';
+import { StyleSheet, useUnistyles } from 'react-native-unistyles';
+import { HappierPressable, HappierReviewSeveritySign } from '@happier-dev/plugin-ui/presentation';
 import type { ReviewFinding } from '@happier-dev/protocol';
 
+import { usePluginUiTheme } from '@/components/plugins/surfaces/pluginUiThemeProjection';
 import { StructuredFindText } from '@/components/sessions/transcript/structured/structuredFindText';
 import { Text } from '@/components/ui/text/Text';
 import { Typography } from '@/constants/Typography';
@@ -12,11 +13,11 @@ import {
   reviewSeverityCounts,
   reviewSeverityLabel,
 } from './reviewFindingPresentation';
-import { useReviewSeverityColors } from './useReviewSeverityColors';
 
 /**
  * How a finding's severity is drawn wherever a finding appears (Walkthrough lab WT5): its dot and its word,
- * in its colour ("● High"). Severity colour appears only on findings; every review surface draws it here.
+ * in its colour ("● High"), by the shared severity owner plugins draw with. Core supplies only its scaled
+ * text (and its Find run).
  */
 export function ReviewSeverityLabel(
   props: Readonly<{
@@ -25,22 +26,18 @@ export function ReviewSeverityLabel(
     findBlockId?: string;
   }>,
 ) {
-  const colors = useReviewSeverityColors(props.severity);
+  const presentationTheme = usePresentationTheme();
   const label = props.label ?? reviewSeverityLabel(props.severity);
-  const textStyle = [styles.severityText, { color: colors.foreground }];
   return (
-    <View style={styles.severity}>
-      <View style={[styles.dot, { backgroundColor: colors.foreground }]} />
-      {props.findBlockId ? (
-        <StructuredFindText
-          blockId={props.findBlockId}
-          text={label}
-          style={textStyle}
-        />
+    <HappierReviewSeveritySign
+      severity={props.severity}
+      theme={presentationTheme}
+      label={props.findBlockId ? (
+        <StructuredFindText blockId={props.findBlockId} text={label} style={styles.severityText} />
       ) : (
-        <Text style={textStyle}>{label}</Text>
+        <Text style={styles.severityText}>{label}</Text>
       )}
-    </View>
+    />
   );
 }
 
@@ -48,13 +45,20 @@ export function ReviewSeverityLabel(
 export function ReviewSeverityDot(
   props: Readonly<{ severity: ReviewFinding['severity'] }>,
 ) {
-  const colors = useReviewSeverityColors(props.severity);
+  const presentationTheme = usePresentationTheme();
   return (
-    <View
-      accessibilityLabel={reviewSeverityLabel(props.severity)}
-      style={[styles.railDot, { backgroundColor: colors.foreground }]}
+    <HappierReviewSeveritySign
+      presentation="dot"
+      severity={props.severity}
+      theme={presentationTheme}
+      label={reviewSeverityLabel(props.severity)}
     />
   );
+}
+
+function usePresentationTheme() {
+  const { theme } = useUnistyles();
+  return usePluginUiTheme(theme);
 }
 
 /** "● 1 high  ● 2 medium  ● 1 low": a review's counts, most severe first (lab WT5-R8). */
@@ -165,9 +169,6 @@ export function ReviewFindingLine(
 export const REVIEW_SEVERITY_COLUMN_WIDTH_PX = 72;
 
 const styles = StyleSheet.create((theme) => ({
-  severity: { flexDirection: 'row', alignItems: 'center', gap: theme.space.s6 },
-  dot: { width: 6, height: 6, borderRadius: 3 },
-  railDot: { width: 7, height: 7, borderRadius: 4 },
   severityText: {  ...Typography.variant('body', 'semiBold') },
   summary: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 14, rowGap: theme.space.s4 },
   line: {

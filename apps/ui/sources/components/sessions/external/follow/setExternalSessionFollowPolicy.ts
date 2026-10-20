@@ -84,20 +84,25 @@ export function setExternalSessionFollowPolicy(params: Readonly<{
     serverId: string | null;
     link: ExternalSessionLink;
     policy: ExternalSessionFollowPolicy;
+    signal?: AbortSignal;
 }>): Promise<ExternalSessionFollowMutationOutcome> {
     const identity = resolveLinkMutationIdentity(params.link);
     if (!identity) {
         return Promise.resolve({ kind: 'failed' });
     }
     const scopeKey = `${params.serverId ?? ''}:${serializeLinkMutationIdentity(identity)}`;
+    const accountCurrentness = captureActiveServerAccountScopeCurrentness();
     const prior = inFlightByScopeKey.get(scopeKey);
     const request = (prior ?? Promise.resolve())
         .catch(() => undefined)
         .then(async (): Promise<ExternalSessionFollowMutationOutcome> => {
-            const accountCurrentness = captureActiveServerAccountScopeCurrentness();
-            if (!accountCurrentness.isCurrent()) {
+            if (params.signal?.aborted || !accountCurrentness.isCurrent()) {
                 return { kind: 'stale' };
             }
+            const controller = new AbortController();
+            const abort = () => controller.abort();
+            const retirement = accountCurrentness.onRetire(abort);
+            params.signal?.addEventListener('abort', abort, { once: true });
             let result: Awaited<ReturnType<typeof machineExternalSessionFollowPolicySet>>;
             try {
                 result = await machineExternalSessionFollowPolicySet({
@@ -107,15 +112,18 @@ export function setExternalSessionFollowPolicy(params: Readonly<{
                     remoteSessionId: identity.remoteSessionId,
                     source: identity.source,
                     enabled: params.policy === 'background_follow',
-                }, params.serverId ? { serverId: params.serverId } : undefined);
+                }, { serverId: params.serverId, signal: controller.signal });
             } catch {
-                return accountCurrentness.isCurrent()
+                return accountCurrentness.isCurrent() && !controller.signal.aborted
                     ? { kind: 'failed' }
                     : { kind: 'stale' };
+            } finally {
+                retirement.dispose();
+                params.signal?.removeEventListener('abort', abort);
             }
             // Account-lifetime fence: the previous Account's settlement must
             // never alert or publish into the successor Account.
-            if (!accountCurrentness.isCurrent()) {
+            if (controller.signal.aborted || !accountCurrentness.isCurrent()) {
                 return { kind: 'stale' };
             }
             if (!result.ok) {

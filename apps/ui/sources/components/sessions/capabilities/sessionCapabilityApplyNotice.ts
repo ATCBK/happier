@@ -56,7 +56,11 @@ export function sessionCapabilityApplyNotice(input: Readonly<{
     // A runner record describes this change; the Agent declaration only previews
     // what can happen before the runner has observed/applied it. Keep each kind's
     // record paired with its change when several kinds are pending together.
-    const record = currentChange?.reason !== undefined ? currentChange : input.pendingApply.reason !== undefined ? input.pendingApply : null;
+    // The aggregate reason describes MCP when both kinds are pending. A local
+    // skill receipt must use its own runtime record or its declared timing.
+    const aggregateKind = input.pendingApply.mcp ? 'mcp' : 'skills';
+    const record = currentChange?.reason !== undefined ? currentChange
+        : input.pendingApply.reason !== undefined && kind === aggregateKind ? input.pendingApply : null;
     const timing = record ? { t: record.reason, restartBy: record.restartBy } : input.applyTiming?.[kind];
     if (!pending && !(change && timing?.t === 'applied_now')) return null;
     let key: SessionCapabilityApplyNoticeKey;

@@ -1,9 +1,10 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { ConnectedServiceAuthGroupPolicyV1Schema } from "@happier-dev/protocol";
+import { AccountProfileResponseSchema, ConnectedServiceAuthGroupPolicyV1Schema } from "@happier-dev/protocol";
 
 import { db } from "@/storage/db";
 import { auth } from "@/app/auth/auth";
 import { createLightSqliteHarness, type LightSqliteHarness } from "@/testkit/lightSqliteHarness";
+import { createSignedAccountContentBinding } from "@/testkit/accountEncryption";
 import { withAuthenticatedTestApp } from "../../testkit/sqliteFastify";
 import { accountRoutes } from "./accountRoutes";
 import {
@@ -88,7 +89,7 @@ describe("Account profile (integration)", () => {
 
     it("projects a stored 0.2 Antigravity profile and revision through qualified V4 without scalar peer leakage", async () => {
         const account = await db.account.create({
-            data: { publicKey: "pk-profile-antigravity-predecessor" },
+            data: { ...createSignedAccountContentBinding(), encryptionMode: "e2ee" },
             select: { id: true },
         });
         // The predecessor row retains its scalar identity and sealed v2 metadata.
@@ -337,6 +338,7 @@ describe("Account profile (integration)", () => {
                         }),
                         displayName: "Codex Main",
                         activeProfileId: "work",
+                        activeConnectedAccountId: "work",
                         generation: 3,
                         policyJson: JSON.stringify(ConnectedServiceAuthGroupPolicyV1Schema.parse({})),
                     },
@@ -711,9 +713,9 @@ describe("Account profile (integration)", () => {
         );
     });
 
-    it("GET /v1/account/profile keeps V4 groups visible while legacy group projection is disabled", async () => {
+    it.each([true, false])("GET /v1/account/profile derives active group truth from V4 with legacy projection enabled=%s", async (legacyGroupsEnabled) => {
         harness.resetEnv({
-            HAPPIER_FEATURE_CONNECTED_SERVICES_ACCOUNT_GROUPS__ENABLED: "0",
+            HAPPIER_FEATURE_CONNECTED_SERVICES_ACCOUNT_GROUPS__ENABLED: legacyGroupsEnabled ? "1" : "0",
             HAPPIER_FEATURE_ENCRYPTION__STORAGE_POLICY: "optional",
             HAPPIER_FEATURE_ENCRYPTION__DEFAULT_ACCOUNT_MODE: "plain",
             HAPPIER_FEATURE_ENCRYPTION__PLAIN_ACCOUNT_CREDENTIALS_AT_REST:
@@ -774,6 +776,13 @@ describe("Account profile (integration)", () => {
                     });
                 expect(group.status).toBe("written");
 
+                // Retained qualified groups can have no legacy shadow. The V4
+                // active account, also consumed by spawn, remains authoritative.
+                await db.connectedServiceAuthGroup.updateMany({
+                    where: { accountId: account.id, groupId: "codex-main" },
+                    data: { activeProfileId: null },
+                });
+
                 const response = await app.inject({
                     method: "GET",
                     url: "/v1/account/profile",
@@ -781,11 +790,16 @@ describe("Account profile (integration)", () => {
                 });
 
                 expect(response.statusCode).toBe(200);
-                const body = response.json() as any;
+                const body = AccountProfileResponseSchema.parse(response.json());
                 expect(body.connectedServicesV2).toEqual([
                     expect.objectContaining({
                         serviceId: "openai-codex",
-                        groups: [],
+                        groups: legacyGroupsEnabled ? [expect.objectContaining({
+                            groupId: "codex-main",
+                            activeProfileId: identity.connectedAccountId,
+                            generation: body.connectedAccountGroupsV4[0]?.generation,
+                            memberProfileIds: [identity.connectedAccountId],
+                        })] : [],
                     }),
                 ]);
                 expect(body.connectedAccountGroupsV4).toEqual([

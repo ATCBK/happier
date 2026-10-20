@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { router } from 'expo-router';
+import { admitInternalRouteHref } from '@/utils/path/routeUtils';
 
 import { createActivitySurfaceSessionRoute } from '@/activity/actions/activitySurfaceTargets';
 import {
@@ -361,9 +362,11 @@ export function DesktopActivityOverlayRuntimeShared(): React.ReactElement | null
         candidates: unfilteredOverview.candidates,
         surface: 'desktop_overlay',
         resolveAccountSettings,
+        accountDeliveryMutesByServerId: source.accountDeliveryMutesByServerId,
+        audienceScopes: source.audienceScopes,
         localSettings: (localSettings ?? {}) as Record<string, unknown>,
         now: new Date(),
-    }), [localSettings, resolveAccountSettings, unfilteredOverview]);
+    }), [localSettings, resolveAccountSettings, source.accountDeliveryMutesByServerId, source.audienceScopes, unfilteredOverview]);
     const sourceOverview = React.useMemo(
         () => buildActivityOverviewFromCandidates(deliveryAdmission.candidates),
         [deliveryAdmission],
@@ -621,7 +624,7 @@ export function DesktopActivityOverlayRuntimeShared(): React.ReactElement | null
             fireAndForget(showDesktopMainWindow(), {
                 tag: 'DesktopActivityOverlayRuntime.showMainWindow.beforeRoute',
             });
-            router.push(command.route);
+            router.push(admitInternalRouteHref(command.route));
             setIsExpanded(false);
             setInputLocked(false);
             setSurfaceEngaged(false);

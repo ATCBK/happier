@@ -7,7 +7,9 @@ import { renderHook } from '@/dev/testkit/hooks/renderHook';
 import {
   isSessionViewerPresenting,
   useOptionalSessionViewerController,
+  NO_SESSION_VIEWER_INSET,
   useSessionViewerReadingInset,
+  type SessionViewerController,
 } from './SessionViewerController';
 import { SessionViewerControllerProvider } from './SessionViewerControllerProvider';
 import {
@@ -65,11 +67,12 @@ describe('SessionViewerController', () => {
   it('opens floating on desktop through the mounted semantic port and docks into the pane presentation locally', async () => {
     const { render, openDocked } = mountController({ phone: false });
     const hook = await render();
-    let result = await act(async () =>
-      hook
+    let result!: ReturnType<SessionViewerController['apply']>;
+    await act(async () => {
+      result = hook
         .getCurrent()
-        .controller.port.apply({ kind: 'viewer.open', source: 'computer' }),
-    );
+        .controller.port.apply({ kind: 'viewer.open', source: 'computer' });
+    });
     expect(result).toEqual({ status: 'applied' });
     expect(hook.getCurrent().controller.state).toMatchObject({
       source: 'computer',
@@ -82,9 +85,9 @@ describe('SessionViewerController', () => {
       isSessionViewerPresenting(hook.getCurrent().controller, 'browser'),
     ).toBe(false);
 
-    result = await act(async () =>
-      hook.getCurrent().controller.apply({ kind: 'viewer.dock' }),
-    );
+    await act(async () => {
+      result = hook.getCurrent().controller.apply({ kind: 'viewer.dock' });
+    });
     expect(result).toEqual({ status: 'applied' });
     expect(openDocked).toHaveBeenCalledWith('computer');
     // Docked on desktop: the pane presents the same body, so the viewer no longer does.
@@ -93,11 +96,11 @@ describe('SessionViewerController', () => {
     ).toBe(false);
 
     // Watch again while docked reveals the pane presentation instead of doing nothing.
-    result = await act(async () =>
-      hook
+    await act(async () => {
+      result = hook
         .getCurrent()
-        .controller.port.apply({ kind: 'viewer.open', source: 'computer' }),
-    );
+        .controller.port.apply({ kind: 'viewer.open', source: 'computer' });
+    });
     expect(result).toEqual({ status: 'unchanged' });
     expect(openDocked).toHaveBeenCalledTimes(2);
     await hook.unmount();
@@ -115,6 +118,8 @@ describe('SessionViewerController', () => {
     expect(
       isSessionViewerPresenting(hook.getCurrent().controller, 'browser'),
     ).toBe(true);
+    expect(isSessionViewerPresenting(hook.getCurrent().controller, 'browser', true)).toBe(false);
+    expect(isSessionViewerPresenting(hook.getCurrent().controller, 'browser', false)).toBe(true);
     await act(async () => {
       hook.getCurrent().controller.port.apply({ kind: 'viewer.expand' });
     });
@@ -191,11 +196,12 @@ describe('SessionViewerController', () => {
   it('refuses a source the Session cannot present without changing what is shown', async () => {
     const { render } = mountController({ phone: false, computer: false });
     const hook = await render();
-    const result = await act(async () =>
-      hook
+    let result!: ReturnType<SessionViewerController['apply']>;
+    await act(async () => {
+      result = hook
         .getCurrent()
-        .controller.port.apply({ kind: 'viewer.open', source: 'computer' }),
-    );
+        .controller.port.apply({ kind: 'viewer.open', source: 'computer' });
+    });
     expect(result).toEqual({ status: 'unavailable' });
     expect(hook.getCurrent().controller.state.mode).toBe('closed');
     await hook.unmount();
@@ -205,19 +211,19 @@ describe('SessionViewerController', () => {
     const { render } = mountController({ phone: false });
     const hook = await render();
     await act(async () => {
-      hook.getCurrent().controller.setReadingInset({ left: 0, right: 320 });
+      hook.getCurrent().controller.setReadingInset({ left: 0, right: 320, centred: { left: 0, right: 480, bottom: 0 } });
     });
-    expect(hook.getCurrent().inset).toEqual({ left: 0, right: 0 });
+    expect(hook.getCurrent().inset).toEqual(NO_SESSION_VIEWER_INSET);
     await act(async () => {
       hook
         .getCurrent()
         .controller.port.apply({ kind: 'viewer.open', source: 'browser' });
     });
-    expect(hook.getCurrent().inset).toEqual({ left: 0, right: 320 });
+    expect(hook.getCurrent().inset).toEqual({ left: 0, right: 320, centred: { left: 0, right: 480, bottom: 0 } });
     await act(async () => {
       hook.getCurrent().controller.port.apply({ kind: 'viewer.expand' });
     });
-    expect(hook.getCurrent().inset).toEqual({ left: 0, right: 0 });
+    expect(hook.getCurrent().inset).toEqual(NO_SESSION_VIEWER_INSET);
     await hook.unmount();
   });
 });
@@ -249,7 +255,6 @@ describe('resolveSessionViewerReadingInset', () => {
       resolveSessionViewerReadingInset({
         areaWidth: area,
         columnMaxWidth: column,
-      columnMinWidth: 420,
         columnMinWidth: 420,
         rect: { x: 1000, y: 300, width: 184, height: 150 },
       }),

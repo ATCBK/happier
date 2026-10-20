@@ -23,6 +23,16 @@ vi.mock('react-native-unistyles', async () => {
     return createUnistylesMock();
 });
 
+function createCurrentArtifactReader() {
+    const scope = { serverId: 'home', accountId: 'account' };
+    const availability = createPluginAccountAvailabilityReaderStore();
+    availability.replace({
+        scope,
+        snapshot: { availabilityCursor: 1, intentReads: [], materializations: [], snapshots: [] },
+    });
+    return availability.bind(scope);
+}
+
 describe('PluginReactNativeUnavailable', () => {
     it('carries a daemon byte-route refusal through acquisition and hosted copy into the real Retry action', async () => {
         const bytes = new TextEncoder().encode('view');
@@ -30,7 +40,7 @@ describe('PluginReactNativeUnavailable', () => {
         const digest = computePluginUiArtifactFileSetSha256DigestV1([{ relativePath: entry, bytes }]);
         const slot = { pluginId: 'com.acme.fixture', contributionId: 'view', tier: 'hostedWeb', platform: 'web' } as const;
         const result = await acquirePluginSelectedArtifactLease({
-            reader: createPluginAccountAvailabilityReaderStore().bind({ serverId: 'home', accountId: 'account' }),
+            reader: createCurrentArtifactReader(),
             slot,
             daemonProjectionSelection: {
                 occurrenceId: 'fixture-route-occurrence',
@@ -48,6 +58,7 @@ describe('PluginReactNativeUnavailable', () => {
             })],
         });
         if (result.kind !== 'unavailable') throw new Error('Expected unavailable route');
+        expect(result.code).toBe('artifact_bytes_rpc_unavailable');
         const retry = vi.fn();
         const repair = vi.fn();
         const screen = await renderScreen(<PluginHostedWebUnavailable
@@ -92,7 +103,7 @@ describe('PluginReactNativeUnavailable', () => {
     it('preserves a real Artifact graph refusal through hosted presentation and its repair action', async () => {
         const slot = { pluginId: 'com.acme.fixture', contributionId: 'view', tier: 'hostedWeb', platform: 'web' } as const;
         const result = await acquirePluginSelectedArtifactLease({
-            reader: createPluginAccountAvailabilityReaderStore().bind({ serverId: 'home', accountId: 'account' }),
+            reader: createCurrentArtifactReader(),
             slot,
             daemonProjectionSelection: {
                 occurrenceId: 'fixture-occurrence',
@@ -104,6 +115,7 @@ describe('PluginReactNativeUnavailable', () => {
         });
         expect(result.kind).toBe('unavailable');
         if (result.kind !== 'unavailable') throw new Error('Expected graph admission refusal');
+        expect(result.code).toBe('artifact_graph_invalid');
         const repair = vi.fn();
         const retry = vi.fn();
         const screen = await renderScreen(

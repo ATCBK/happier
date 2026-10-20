@@ -7,8 +7,6 @@ import { useMachineStoragePile } from '@/sync/domains/machines/storage/useMachin
 import { t } from '@/text';
 
 import { PileBar } from './PileBar';
-import { confirmStorageEmpty } from './StorageCollectToggle';
-import { formatMachineBytes } from '@/components/machines/vitals/machineVitalsPresentation';
 import { formatStorageDay } from './storageCategoryText';
 import { describeStoragePileBar } from './storagePileModel';
 import { showStorageReviewSheet } from './StorageReviewSheet';
@@ -108,9 +106,8 @@ export const StoragePileDock = React.memo(function StoragePileDock(
       onReview={review}
       onUndo={() => cleanup.undo()}
       onEmptyNow={async () => {
-                if (bar.kind !== 'held') return;
-                if (await confirmStorageEmpty({ count: bar.count, amount: bar.inTrashBytes === null ? '—' : formatMachineBytes(bar.inTrashBytes, 'storage') })) await cleanup.emptyNow(true);
-            }}
+        if (bar.kind === 'held') await cleanup.emptyNow();
+      }}
       onDone={cleanup.dismiss}
     />
   );

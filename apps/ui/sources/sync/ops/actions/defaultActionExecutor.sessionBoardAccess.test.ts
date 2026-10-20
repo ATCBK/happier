@@ -101,6 +101,8 @@ async function addBoardHome(options: Readonly<{
     serverUrl?: string;
     serverIdentityId?: string;
     viewer?: Parameters<typeof homeSessionRow>[0];
+    /** The Actions this Account's settings send through approval on the UI (Settings → Actions). */
+    uiApproval?: readonly string[];
 }> = {}): Promise<string> {
     const serverId = await harness.addHome({
         name: 'Home A',
@@ -126,6 +128,9 @@ async function addBoardHome(options: Readonly<{
     harness.answer(serverId, `PUT ${BOARD_PATH}`, {
         body: { operation: 'update_layout', outcome: 'updated', layoutRevision: REVISION },
     });
+    await harness.requireUiApproval(serverId, options.uiApproval ?? [
+        'session.board.layout.update', 'session.board.item.upsert', 'widgets.snapshot.post',
+    ]);
     return serverId;
 }
 
@@ -164,7 +169,7 @@ describe('Session Board Action access gate', () => {
         restoreSessionState = undefined;
     });
 
-    it('requires approval by default for an owner and rejects without writing shared layout', async () => {
+    it('honors the owner Account approval policy and rejects without writing shared layout', async () => {
         const serverId = await addBoardHome();
         const artifactId = await createUiApprovalRequest({
             serverId,
@@ -299,6 +304,39 @@ describe('Session Board Action access gate', () => {
         expect(boardWrites()[0]?.input).toMatchObject({ operation: 'upsert_item', itemId, expectedItemRevision: null,
             itemContent: { t: 'plain', v: { source: { kind: 'declarative', document: approvedPreview.document },
                 snapshot: { asOf: approvedPreview.asOf, provenance: approvedPreview.provenance } } } });
+    });
+
+    it('posts from the confirm panel without a second dialog when only the default confirmation applies', async () => {
+        // No Settings → Actions requirement for snapshots: the preview the person confirmed is the
+        // policy's UI confirmation, so Post publishes at once instead of asking again.
+        const serverId = await addBoardHome({ serverUrl: 'https://snapshot-default-home.example',
+            uiApproval: ['session.board.layout.update'] });
+        const { createElement } = await import('react');
+        const { act } = await import('react-test-renderer');
+        const { renderScreen } = await import('@/dev/testkit/render/renderScreen');
+        const { WidgetSnapshotConfirmPanel } = await import('@/components/widgets/definitions/WidgetSnapshotConfirmPanel');
+        const { PluginDeclarativeDocumentV1Schema } = await import('@happier-dev/protocol');
+        const document = PluginDeclarativeDocumentV1Schema.parse({ version: 1, root: { kind: 'metric', label: 'Checks',
+            data: { kind: 'value', value: 7 }, value: { path: [], type: 'number' } } });
+        const capture = () => ({ document, current: true, digests: [], refresh: async () => {}, frozenByPath: new Map() });
+        // The new item's record read (its id is the confirm's own); the layout keeps its exact answer.
+        harness.answer(serverId, `GET /v2/sessions/${SESSION_ID}/system-records/record`, { body: { record: null } });
+        // The Board acknowledges the item the confirm created, by its own id.
+        harness.answer(serverId, `PUT ${BOARD_PATH}`, { select: (input) => ({ body: { operation: 'upsert_item',
+            itemId: (input as { itemId: string }).itemId, outcome: 'created', itemRevision: REVISION, layoutRevision: REVISION } }) });
+        let done = 0;
+        const screen = await renderScreen(createElement(WidgetSnapshotConfirmPanel, {
+            surface: { serverId, accountId: ACCOUNT_ID, owner: { kind: 'sessionBoard', sessionId: SESSION_ID } },
+            title: 'Checks', sourceLabel: 'Checks summary', capture, onDone: () => { done += 1; }, onCancel: () => {}, testID: 'snap',
+        }));
+        await act(async () => { await screen.pressByTestIdAsync('snap.primary'); });
+        for (let i = 0; i < 100 && done === 0; i += 1) await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
+        expect(done, screen.getTextContent()).toBe(1);
+        expect(boardWrites()).toHaveLength(1);
+        expect(JSON.stringify(boardWrites()[0]?.input)).toContain('"value":7');
+        // Nothing was parked for the Inbox: the one confirm was the panel.
+        expect(harness.artifacts(serverId).list().some(row => (harness.artifacts(serverId).readPlainBody(row.id) ?? '').includes('widgets.snapshot.post'))).toBe(false);
+        await act(async () => { screen.tree.unmount(); });
     });
 
     it('posts exactly the numbers the confirm previewed, through the approval policy, from the confirm panel', async () => {

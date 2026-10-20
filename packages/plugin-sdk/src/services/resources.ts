@@ -178,7 +178,10 @@ export type PluginNotificationPreferences = Readonly<{
     revision: string;
 }>;
 export interface NotificationsService {
-    send(request: { clientRequestId: string; categoryId: string; title: string; body?: string; channelIds?: readonly string[]; data?: JsonValue }, options?: { signal?: AbortSignal }): Promise<PluginNotificationBatchResult>;
+    /** itemId is stable across sends; clientRequestId identifies one immutable send. */
+    send(request: { clientRequestId: string; categoryId: string; title: string; body?: string; channelIds?: readonly string[]; data?: JsonValue;
+        itemId?: string; type?: 'decision' | 'approval' | 'blocked' | 'update' | 'mention';
+        page?: Readonly<{ pageId: string; subPath?: string }>; resolved?: boolean }, options?: { signal?: AbortSignal }): Promise<PluginNotificationBatchResult>;
     listChannels(options?: { cursor?: string; limit?: number; signal?: AbortSignal }): Promise<{ items: readonly PluginNotificationChannelSummary[]; nextCursor?: string }>;
     listCategories(options?: { cursor?: string; limit?: number; signal?: AbortSignal }): Promise<{ items: readonly PluginNotificationCategorySummary[]; nextCursor?: string }>;
     preferences(categoryId: string, options?: { signal?: AbortSignal }): Promise<PluginNotificationPreferences>;

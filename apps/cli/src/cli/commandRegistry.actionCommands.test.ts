@@ -10,8 +10,41 @@ import {
   resolveCommandCompletionCandidates,
 } from './commandRegistry';
 import { listCompiledActionCliCommands } from './actions/compiledCommands';
+import { parseCliArgs } from './parseArgs';
 
 describe('compiled Action commands in the one command registry', () => {
+  it('retains the dedicated public plugin author workflows beside the compiled install aliases', async () => {
+    for (const args of [
+      ['plugins', 'create', 'qa-plugin'],
+      ['plugins', 'dev', './qa-plugin'],
+      ['plugins', 'dev', 'build', './qa-plugin'],
+      ['plugins', 'doctor', './qa-plugin'],
+      ['plugins', 'test', './qa-plugin'],
+    ]) {
+      expect(await resolveAdmittedActionCliCommand(parseCliArgs(args).args)).toBeNull();
+      expect(findCommandDispatchDescriptor(args[0]!)).toMatchObject({
+        command: 'plugins', handler: expect.any(Function),
+      });
+    }
+    for (const path of [['plugins', 'install'], ['plugins', 'marketplace', 'install']]) {
+      expect(await resolveAdmittedActionCliCommand(parseCliArgs(path).args)).toMatchObject({
+        actionId: 'plugins.install', path,
+      });
+    }
+  });
+
+  it('selects terminal Action descendants before their parent and retained aliases', async () => {
+    for (const [args, actionId, path] of [
+      [['agents', 'install', 'codex'], 'machines.agents.install', ['agents', 'install']],
+      [['agents', 'install', 'status', 'job'], 'machines.agents.install.status', ['agents', 'install', 'status']],
+      [['agents', 'install', 'cancel', 'job'], 'machines.agents.install.cancel', ['agents', 'install', 'cancel']],
+      [['ls', '--json'], 'session.list', ['ls']],
+    ] as const) {
+      expect(await resolveAdmittedActionCliCommand(parseCliArgs([...args]).args))
+        .toMatchObject({ actionId, path });
+    }
+  });
+
   it('admits MCP sign-out through the existing qualified revoke Action', async () => {
     expect(await resolveAdmittedActionCliCommand(['mcp', 'servers', 'sign-out', 'linear']))
       .toMatchObject({ actionId: 'connectedServices.accounts.revoke', path: ['mcp', 'servers', 'sign-out'] });

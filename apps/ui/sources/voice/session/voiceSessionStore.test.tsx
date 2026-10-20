@@ -26,6 +26,26 @@ afterEach(async () => {
 });
 
 describe('voiceSessionStore', () => {
+  it('retains the failed or ended target for default restart while explicit Home Brief stays Global', async () => {
+    const store = await import('./voiceSessionStore');
+    const { resolveVoiceIdleTarget } = await import('@/voice/runtime/voiceTargetStore');
+    const accountScope = { serverId: 'home-a', accountId: 'account-a' };
+    const targetSessionAddress = { serverId: 'home-a', sessionId: 'coding-session' };
+    const snapshot = { adapterId: 'local_conversation', sessionId: '__voice_agent__', status: 'connected' as const,
+      mode: 'listening' as const, canStop: true };
+    for (const failure of [true, false]) {
+      store.setVoiceSessionSnapshot(snapshot, null, { accountScope, targetSessionAddress, conversationScope: null });
+      store.setVoiceSessionSnapshot({ ...snapshot, status: 'disconnected', mode: 'idle', canStop: false,
+        ...(failure ? { errorCode: 'provider_error', errorRecoveryAction: 'retry' as const } : {}) });
+      const restartTarget = store.getVoiceSessionRestartTarget('local_conversation', accountScope);
+      const facts = { scopeDefault: 'global' as const, allowsGlobalStart: true,
+        focusedSessionAddress: { serverId: 'home-b', sessionId: 'other' }, lastFocusedSessionAddress: null, restartTarget };
+      expect(resolveVoiceIdleTarget({ ...facts, intent: { kind: 'default' } })).toEqual({ kind: 'session', sessionAddress: targetSessionAddress });
+      expect(resolveVoiceIdleTarget({ ...facts, intent: { kind: 'global' } })).toEqual({ kind: 'global' });
+      expect(store.getVoiceSessionRestartTarget('other-provider', accountScope)).toBeNull();
+      expect(store.getVoiceSessionRestartTarget('local_conversation', { ...accountScope, accountId: 'account-b' })).toBeNull();
+    }
+  });
   it('keeps accepted Voice input scoped to its captured attempt and Account lifetime through End', async () => {
     const account = await serveAccountHomes({ homes: [{ key: 'voice', serverUrl: 'https://voice-store.test', accountId: 'account-a' }],
       route: () => undefined });

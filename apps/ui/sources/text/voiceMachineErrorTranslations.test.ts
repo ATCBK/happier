@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { VOICE_MACHINE_ERROR_TRANSLATION_KEYS } from '@/voice/runtime/machine/voiceMachineErrorCopy';
+import {
+    VOICE_MACHINE_ERROR_REASON_TRANSLATION_KEYS,
+    VOICE_MACHINE_ERROR_TRANSLATION_KEYS,
+} from '@/voice/runtime/machine/voiceMachineErrorCopy';
 
 import { ca } from './translations/ca';
 import { de } from './translations/de';
@@ -41,9 +44,10 @@ function readTranslation(root: unknown, path: string): unknown {
 describe('voice machine error translations', () => {
     it('keeps machine error labels present in every supported locale', () => {
         for (const { code, root } of supportedLocales) {
-            for (const [kind, translationKey] of Object.entries(
-                VOICE_MACHINE_ERROR_TRANSLATION_KEYS,
-            )) {
+            for (const [kind, translationKey] of Object.entries({
+                ...VOICE_MACHINE_ERROR_TRANSLATION_KEYS,
+                ...VOICE_MACHINE_ERROR_REASON_TRANSLATION_KEYS,
+            })) {
                 const translation = readTranslation(root, translationKey);
                 const label: unknown = typeof translation === 'function'
                     ? translation({ service: 'SERVICE' })

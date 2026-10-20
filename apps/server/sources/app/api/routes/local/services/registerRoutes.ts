@@ -336,7 +336,7 @@ function registerLocalServicePublicExchangeRoute(
                 name: LOCAL_SERVICE_PUBLIC_TOKEN_COOKIE_NAME,
                 path: localServicePublicTokenCookiePath(result.exposureId,
                     hostname ? runtimes.public.resolveExposureByHost(hostname) : null),
-                rawToken: result.rawToken,
+                value: result.rawToken,
             }))
             .send?.(LocalServicePublicPreviewExchangeResponseV1Schema.parse({
                 protocolVersion: 1,

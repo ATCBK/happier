@@ -128,6 +128,7 @@ function selection(input: Readonly<{
             state: input.state,
             selectedOrigin: input.selectedOrigin ?? null,
             canExecute: false,
+            loading: false,
             selectOrigin,
             clearOrigin,
             resolveExecutionOrigin: () => null,
@@ -138,12 +139,49 @@ function selection(input: Readonly<{
 }
 
 describe('PluginMachineExecutionOriginSelector', () => {
+    it('shows a quiet loading state, not "no machine", while availability is still being read', () => {
+        const fixture = selection({ candidates: [], state: { kind: 'unavailable', storedOrigin: null,
+            candidates: [], reasons: ['no_materialization'] } });
+        const loading = resolvePluginMachineExecutionOriginPresentation({ ...fixture.value, loading: true });
+        const loaded = resolvePluginMachineExecutionOriginPresentation(fixture.value);
+        expect(loading).toMatchObject({ title: 'common.loading', detail: '', selected: false, unavailable: false });
+        expect(loaded.title).not.toBe(loading.title);
+    });
+    it('names and clears the explicit Machine when no current source remains', async () => {
+        const storedTarget = { serverIdentityId: 'srv_one', machineId: 'studio-machine' };
+        const fixture = selection({ candidates: [], state: { kind: 'unavailable', storedOrigin: null,
+            storedTarget, candidates: [], reasons: ['offline'] } });
+        const machineCandidates = [{ target: storedTarget, displayName: 'Studio', serverLabel: 'Home',
+            availability: 'offline' as const, observation: 'stale' as const, observedAt: 1 }];
+        const value = { ...fixture.value, storedTarget, machineCandidates };
+        expect(resolvePluginMachineExecutionOriginPresentation(value)).toMatchObject({
+            title: 'Studio', subtitle: 'Home', selected: true,
+        });
+        expect(resolvePluginMachineExecutionOriginPresentation(fixture.value).subtitle).not.toContain(storedTarget.machineId);
+        const screen = await renderScreen(<PluginMachineExecutionOriginSelectorView selection={value} testIDPrefix="offline-origin" />);
+        await screen.pressByTestIdAsync('offline-origin.clear');
+        expect(fixture.clearOrigin).toHaveBeenCalledOnce();
+        await screen.unmount();
+    });
+    it.each(['home_unreachable', 'release_unavailable', 'non_portable', 'source_not_ready', 'daemon_unsupported',
+        'daemon_invalid_response', 'daemon_unavailable', 'activation_refused'] as const)('keeps the saved origin and explains %s', (reason) => {
+        const machine = candidate({ machineId: 'machine-a', materializationId: 'mat-a', version: '0.0.0' });
+        const origin: PluginMachineExecutionOriginV1 = { serverIdentityId: 'srv_one', materializationRef: {
+            machineId: 'machine-a', materializationId: 'mat-a', pluginId: 'acme.plugin' } };
+        const rejected = { ...machine, validation: { kind: 'rejected' as const, reason } };
+        const fixture = selection({ candidates: [rejected], selectedOrigin: origin,
+            state: { kind: 'unavailable', storedOrigin: origin, candidates: [rejected], reasons: [reason] } });
+        expect(resolvePluginMachineExecutionOriginPresentation(fixture.value)).toMatchObject({
+            selected: true, detail: `pluginSurfaces.originReason.${reason}`,
+        });
+        expect(fixture.selectOrigin).not.toHaveBeenCalled();
+    });
     it('does not report an unsettled preference save as failed and clears feedback when it applies', async () => {
         const machine = candidate({ machineId: 'machine-a', materializationId: 'mat-a', version: '1.0.0' });
         const origin: PluginMachineExecutionOriginV1 = { serverIdentityId: 'srv_one', materializationRef: {
             machineId: 'machine-a', materializationId: 'mat-a', pluginId: 'acme.plugin' } };
         const fixture = selection({ candidates: [machine], selectedOrigin: origin,
-            state: { kind: 'selected', candidate: machine, origin, selectionSource: 'stored' } });
+            state: { kind: 'selected', candidate: machine, origin, selectionSource: 'pinned' } });
         const pending = createDeferred<Awaited<ReturnType<PluginMachineExecutionOriginSelectionV1['clearOrigin']>>>();
         fixture.clearOrigin.mockReturnValueOnce(pending.promise);
         const screen = await renderScreen(<PluginMachineExecutionOriginSelectorView selection={fixture.value} testIDPrefix="origin" />);
@@ -158,7 +196,7 @@ describe('PluginMachineExecutionOriginSelector', () => {
         const origin: PluginMachineExecutionOriginV1 = { serverIdentityId: 'srv_one', materializationRef: {
             machineId: 'machine-a', materializationId: 'mat-a', pluginId: 'acme.plugin' } };
         const fixture = selection({ candidates: [machine], selectedOrigin: origin,
-            state: { kind: 'selected', candidate: machine, origin, selectionSource: 'stored' } });
+            state: { kind: 'selected', candidate: machine, origin, selectionSource: 'pinned' } });
         fixture.clearOrigin.mockResolvedValueOnce({ status: 'approvalPending', scope: { serverId: 'home', accountId: 'account' },
             approval: { kind: 'approval_request_created', artifactId: 'pending-origin', actionId: 'plugins.execution_origin.clear' },
             input: { pluginId: 'acme.plugin', expectedSettingsVersion: 7 } });
@@ -196,7 +234,7 @@ describe('PluginMachineExecutionOriginSelector', () => {
                 kind: 'selected',
                 origin,
                 candidate: machineA,
-                selectionSource: 'soleCandidate',
+                selectionSource: 'auto',
             },
         });
         capturedPickerProps.length = 0;

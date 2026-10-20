@@ -6,6 +6,17 @@ import { createTestMetadata } from '@/testkit/backends/sessionMetadata';
 import { createDeferred } from '@/testkit/async/deferred';
 import { createSessionClientInteractionApi } from './sessionClientInteractionApi';
 import { encodeBase64, encrypt } from '../../../encryption';
+import { runPermissionModePromptLoop, type PermissionModePromptLoopTurnOperations } from '@/agent/runtime/runPermissionModePromptLoop';
+import { MessageQueue2 } from '@/agent/runtime/modeMessageQueue';
+import { combinePermissionModeQueuedPrompts, type PermissionModeQueuedPrompt, type PermissionModeQueuedPromptMode } from '@/agent/runtime/permissions/queuedPrompt';
+import { createMutableApiSessionClientFixture } from '@/testkit/backends/sessionFixtures';
+import { MessageBuffer } from '@/ui/ink/messageBuffer';
+import { registerPermissionModeMessageQueueBinding } from '@/agent/runtime/permissions/bindModeQueue';
+import type { UserMessage } from '@/api/types';
+import { assertSessionInputAdmissionReceiptForAuthorityV1, readSessionInputRequest, settleSessionInputRequestV1, withSessionInputAuthority } from '@happier-dev/protocol/sessions/messages/sessionInputAdmission';
+import { encryptSessionPayload } from '@/session/transport/encryption/sessionEncryptionContext';
+import { SessionPendingAdmissionSettlementRequestV1Schema } from '@happier-dev/protocol/sessions/messages/sessionPendingAdmissionSettlementV1';
+import type { SessionMessageContent } from '@/api/types';
 
 const axiosGetMock = vi.hoisted(() => vi.fn());
 const axiosPostMock = vi.hoisted(() => vi.fn());
@@ -85,6 +96,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       socket: overrides.getSocket?.() ?? socket,
     };
     return createSessionClientInteractionApi({
+      serverId: 'home',
       sessionId: 's1',
       token: 'token-1',
       getClosed: () => false,
@@ -194,6 +206,29 @@ describe('createSessionClientInteractionApi diagnostics', () => {
     expect(axiosGetMock).not.toHaveBeenCalled();
     expect(axiosPostMock).not.toHaveBeenCalled();
     expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it('holds retained-context materialization on a pre-V5 Home without disabling ordinary input', async () => {
+    // Moving 0.2 at 077db90d advertises Pending revision 2 and ignores new request fields.
+    const socket = createSocketStub();
+    const contractResult = { mode: 'session_sync_v2_pending_input_v1' as const,
+      runtimeActivity: 'v2' as const, pendingInput: 'v1' as const, pendingInputProtocolVersion: 2,
+      publisherAuthority: 'indeterminate' as const, sessionConnectionEpoch: 1, socket };
+    let retained: string[] = ['quiet-original'];
+    const api = createApi({ getSocket: () => socket as never,
+      getSessionSyncPendingInputServerContractResult: () => contractResult,
+      getSessionConnectionSupervisor: () => ({ getState: () => ({ phase: 'online' }) }) as never,
+      readRetainedContextLocalIds: () => retained,
+    });
+    await expect(api.materializeNextPendingMessageSafely()).resolves.toEqual({
+      type: 'unsupported', code: 'session_input_target_update_required',
+    });
+    expect(socketAckMock).not.toHaveBeenCalled();
+    retained = [];
+    socketAckMock.mockResolvedValueOnce({ ok: true, didMaterialize: false,
+      pendingCount: 0, pendingBlockedCount: 0, pendingVersion: 1 });
+    await expect(api.materializeNextPendingMessageSafely()).resolves.toEqual({ type: 'no_pending' });
+    expect(socketAckMock.mock.calls[0]?.[1]).not.toHaveProperty('retainedContext');
   });
 
   it('returns the operation-scoped update result for a Run target on a pre-V3 Pending server while main Pending remains usable', async () => {
@@ -700,7 +735,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
     expect(axiosPostMock).not.toHaveBeenCalled();
   });
 
-  it('settles collaborator provenance and protected authority before projection or provider delivery', async () => {
+  it.each(['wait', 'human-origin', 'legacy-prompt'] as const)('settles collaborator provenance and protected authority before projection or provider delivery (%s)', async kind => {
     const callerInputConstraints = { models: [{ agentTargetKey: 'agent:happier.agent.codex/codex', providerConnectionId: null, modelId: 'A' }], permissionModes: null };
     const socket = createSocketStub();
     const contractResult = {
@@ -711,10 +746,14 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       sessionConnectionEpoch: 1,
       socket,
     };
+    const replyIntent = kind === 'human-origin'
+      ? { mode: 'return' as const, humanOrigin: { sessionId: 'composer-session' } }
+      : { mode: 'wait' as const };
     const request = {
       v: 1 as const,
       producer: 'happierApp' as const,
       caller: { kind: 'host' as const },
+      replyIntent,
       permission: { requestedPermissionCeiling: 'read-only' as const },
     };
     const requestContent = {
@@ -722,7 +761,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       v: {
         role: 'user',
         callerInputConstraints: { models: null, permissionModes: null },
-        content: { type: 'text', text: 'protected prompt' },
+        content: kind === 'legacy-prompt' ? 'protected prompt' : { type: 'text', text: 'protected prompt' },
         localId: 'protected-local',
         meta: {
           happierProvenanceV1: { v: 1, kind: 'host', producer: 'happierApp' },
@@ -766,6 +805,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
     const markPendingQueueMaterializedLocalId = vi.fn();
     const api = createApi({
       getSocket: () => socket as never,
+      readCurrentAutonomousCheckIn: async () => null,
       getSessionSyncPendingInputServerContractResult: () => contractResult,
       getSessionConnectionSupervisor: () => ({ getState: () => ({ phase: 'online' }) }) as never,
       getMetadata: () => createTestMetadata({ permissionMode: 'safe-yolo' }),
@@ -780,7 +820,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
     const outcome = await api.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' });
 
     expect(socketAckMock).toHaveBeenNthCalledWith(2, 'session-pending-admission-settlement-v1', expect.objectContaining({
-      decision: expect.objectContaining({ kind: 'admit' }),
+      decision: expect.objectContaining({ kind: 'admit', validation: { reply: replyIntent } }),
     }));
     expect(outcome).toMatchObject({
       type: 'materialized',
@@ -827,7 +867,21 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       }),
     }));
     expect(deliver).toHaveBeenCalledWith(expect.objectContaining({
+      inputAdmissionReceipt: {
+        v: 1,
+        issuer: 'authenticatedAccount',
+        callerInputConstraints,
+        actorAccountId: 'collaborator-account',
+        sessionRelationship: 'sharedEditor',
+      },
       callerInputConstraints,
+      actionRequestAttributionV1: {
+        requestRef: 'protected-local',
+        requester: { serverId: expect.any(String), accountId: 'collaborator-account' },
+        persona: { serverId: expect.any(String), sessionId: 's1' },
+        // A pre-provider Pending claim has no committed message yet.
+        origin: null,
+      },
       meta: expect.objectContaining({
         happierProvenanceV1: {
           v: 1,
@@ -842,7 +896,388 @@ describe('createSessionClientInteractionApi diagnostics', () => {
     expect(markPendingQueueMaterializedLocalId).toHaveBeenCalledWith('protected-local');
   });
 
-  it('settles Workflow V2 provenance and authority through the existing Session permission owner', async () => {
+  it('keeps a restored custody-only Discussion original out of native delivery without manufacturing permission', async () => {
+    const socket = createSocketStub();
+    const discussionAddressing = { discussionId: 'discussion', messageId: 'question', throughSeq: 3, participantSessionId: 's1' };
+    socketAckMock.mockResolvedValueOnce({ ok: true, didMaterialize: true, localId: 'custody-only', didWrite: false,
+      pendingCount: 1, pendingVersion: 2, message: { id: null, seq: null, localId: 'custody-only', messageRole: 'user',
+        content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Shared question' } } },
+        inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine', discussionAddressing,
+          admittedTarget: { homeId: 'home', accountId: 'owner', sessionId: 's1', machineId: 'machine', installationId: 'installation' } },
+        createdAt: 1_000, updatedAt: 1_000, providerAction: 'send', deliveryState: { mode: 'provider', unresolved: true } },
+    }).mockResolvedValueOnce({ v: 1, result: { status: 'held', localId: 'custody-only', code: 'session_input_target_unavailable' } });
+    const deliver = vi.fn(() => true);
+    const contractResult = { mode: 'session_sync_v2_pending_input_v1' as const,
+      runtimeActivity: 'v2' as const, pendingInput: 'v1' as const, publisherAuthority: 'v1' as const,
+      sessionConnectionEpoch: 1, socket };
+    const api = createApi({ getSocket: () => socket as never,
+      getSessionSyncPendingInputServerContractResult: () => contractResult,
+      getSessionConnectionSupervisor: () => ({ getState: () => ({ phase: 'online' }) }) as never,
+      getStoredContentCryptoContext: () => ({ mode: 'plain' as const, ctx: null }),
+      getPendingQueueState: () => ({ known: true as const, pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 1 }),
+      observePendingMaterializeResult: vi.fn(() => true), deliverMaterializedUserMessageToAgentQueue: deliver,
+    });
+    await api.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' });
+    expect(deliver).not.toHaveBeenCalled();
+    expect(socketAckMock).toHaveBeenNthCalledWith(2, 'session-pending-admission-settlement-v1', expect.objectContaining({
+      decision: { kind: 'reject', code: 'session_input_untrusted_assertion' },
+    }));
+  });
+
+  it.each(['active-turn', 'returned-answer', 'unavailable', 'malformed', 'attribution-only',
+    'discussion-source', 'discussion-sender', 'discussion-other-source', 'discussion-unavailable'] as const)('enforces receiver mute for a protected source (%s) before provider delivery', async kind => {
+    const socket = createSocketStub();
+    const discussionAddressing = kind.startsWith('discussion-') ? {
+      discussionId: 'discussion', messageId: 'question', throughSeq: 3, participantSessionId: 's1',
+    } : undefined;
+    const hasSender = kind === 'active-turn' || kind === 'unavailable' || kind === 'malformed' || kind === 'discussion-sender';
+    const request = { v: 1 as const, producer: 'sessionAction' as const,
+      caller: { kind: 'host' as const },
+      ...(discussionAddressing ? { discussionAddressing, replyIntent: { mode: 'return' as const } } : {}),
+      ...(hasSender
+        ? { sourceSession: { sourceSessionId: 'sender', sourceTurnId: 'turn', via: 'action' as const } }
+        : discussionAddressing ? {} : { returnedAnswer: { requestSessionId: 'original', requestLocalId: 'original-local', outcome: 'cancelled' as const,
+            delivery: 'wake' as const, ...(kind === 'attribution-only'
+              ? { answeredBy: { v: 1 as const, kind: 'happierSession' as const, sourceSessionId: 'sender', via: 'action' as const } }
+              : { senderSessionId: 'sender' }) } }),
+      permission: { requestedPermissionCeiling: 'read-only' as const } };
+    const unavailable = kind === 'unavailable' || kind === 'malformed' || kind === 'discussion-unavailable';
+    const unmuted = kind === 'attribution-only' || kind === 'discussion-other-source';
+    axiosGetMock.mockResolvedValue({ status: kind === 'unavailable' || kind === 'discussion-unavailable' ? 503 : 200,
+      data: kind === 'malformed' ? { scopes: null } : { scopes: [
+      kind === 'discussion-source' || kind === 'discussion-other-source'
+        ? { kind: 'source', source: { kind: 'discussion', discussionId: kind === 'discussion-source' ? 'discussion' : 'different-discussion' } }
+        : { kind: 'sender_session', sessionId: 'sender' },
+    ] } });
+    socketAckMock.mockResolvedValueOnce({ ok: true, didMaterialize: true, localId: 'muted-local',
+      didWrite: false, pendingCount: 1, pendingVersion: 2,
+      message: { id: null, seq: null, localId: 'muted-local', messageRole: 'user',
+        content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'muted request' },
+          meta: { happierProvenanceV1: { v: 1, kind: 'host', producer: 'sessionAction' },
+            happierInputRequestV1: request } } },
+        inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine', ...(discussionAddressing ? {
+          discussionAddressing, admittedTarget: { homeId: 'home', accountId: 'owner', sessionId: 's1', machineId: 'machine', installationId: 'installation' },
+        } : {}) },
+        createdAt: 1_000, updatedAt: 1_000, providerAction: 'send',
+        deliveryState: { mode: 'provider', unresolved: true } },
+    }).mockResolvedValueOnce({ v: 1, result: unmuted
+      ? { status: 'accepted', localId: 'muted-local' }
+      : { status: 'rejected', code: 'session_input_muted' } });
+    const deliver = vi.fn(() => true);
+    const contractResult = { mode: 'session_sync_v2_pending_input_v1' as const,
+      runtimeActivity: 'v2' as const, pendingInput: 'v1' as const, publisherAuthority: 'v1' as const,
+      sessionConnectionEpoch: 1, socket };
+    const api = createApi({ getSocket: () => socket as never,
+      getSessionSyncPendingInputServerContractResult: () => contractResult,
+      getSessionConnectionSupervisor: () => ({ getState: () => ({ phase: 'online' }) }) as never,
+      getStoredContentCryptoContext: () => ({ mode: 'plain' as const, ctx: null }),
+      getPendingQueueState: () => ({ known: true as const, pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 1 }),
+      observePendingMaterializeResult: vi.fn(() => true),
+      deliverMaterializedUserMessageToAgentQueue: deliver,
+    });
+    const outcome = await api.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' });
+    if (unmuted) {
+      expect(outcome).toMatchObject({ type: 'materialized', localId: 'muted-local' });
+      if (kind === 'attribution-only') expect(axiosGetMock).not.toHaveBeenCalled();
+      else expect(axiosGetMock).toHaveBeenCalledWith(expect.stringContaining('/v2/sessions/s1/delivery-mutes'), expect.any(Object));
+      expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ localId: 'muted-local' }), 'send', { v: 1, kind: 'enqueue' });
+      return;
+    }
+    expect(axiosGetMock).toHaveBeenCalledWith(expect.stringContaining('/v2/sessions/s1/delivery-mutes'), expect.any(Object));
+    expect(deliver).not.toHaveBeenCalled();
+    if (unavailable) {
+      expect(outcome).toMatchObject({ type: 'retryable_transport' });
+      expect(socketAckMock).toHaveBeenCalledTimes(1);
+      return;
+    }
+    expect(outcome).toMatchObject({ type: 'no_pending' });
+    expect(socketAckMock).toHaveBeenNthCalledWith(2, 'session-pending-admission-settlement-v1',
+      expect.objectContaining({ decision: expect.objectContaining({ kind: 'reject', code: 'session_input_muted' }) }));
+  });
+
+  it.each((['valid', 'revoked', 'muted', 'held', 'unavailable', 'changed-cutoff', 'missing-service',
+    'invalid-receipt', 'invalid-authority', 'settlement-unknown', 'permission-broadened', 'permission-narrowed'] as const)
+    .flatMap(state => (['normal', 'steer'] as const).flatMap(delivery =>
+      (state === 'valid' ? ['plain', 'e2ee'] as const : ['plain'] as const).map(mode => ({ state, delivery, mode }))))) (
+    'rechecks the original queued Discussion input after checkpoint preparation ($state, $delivery, $mode)', async ({ state, delivery, mode }) => {
+      const discussionAddressing = { discussionId: 'discussion', messageId: 'question', throughSeq: 3, participantSessionId: 's1' };
+      const localId = 'original-discussion-input';
+      const socket = createSocketStub();
+      let checkpointFinished = false;
+      let readBeforePreparationFinished = false;
+      const requestedOriginal = { id: 'committed-input', seq: 9, localId, createdAt: 1_000, updatedAt: 1_000, messageRole: 'user',
+        content: { t: 'plain', v: { role: 'user', content: { type: 'text', text: 'Answer the original question' }, meta: {
+          happierProvenanceV1: { v: 1, kind: 'host', producer: 'sessionAction' },
+          happierInputRequestV1: { v: 1, producer: 'sessionAction', caller: { kind: 'host' }, discussionAddressing,
+            replyIntent: { mode: 'return' }, permission: state === 'permission-broadened' ? {}
+              : { requestedPermissionCeiling: state === 'permission-narrowed' ? 'default' : 'read-only' } },
+        } } }, inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine', discussionAddressing,
+          admittedTarget: { homeId: 'home', accountId: 'owner', sessionId: 's1', machineId: 'machine', installationId: 'installation' } } };
+      const request = readSessionInputRequest(requestedOriginal.content.v.meta, 'stored');
+      if (!request || request.v !== 1) throw new Error('Expected the original protected request fixture');
+      const authority = settleSessionInputRequestV1({ request,
+        currentSessionPermissionCeiling: state === 'permission-broadened' ? 'read-only' : 'default',
+        inputAdmissionReceipt: requestedOriginal.inputAdmissionReceipt });
+      // This is the actual target materialization producer: committed input has
+      // immutable authority and deliberately no caller request metadata.
+      const settledPayload = { ...requestedOriginal.content.v, meta: withSessionInputAuthority(requestedOriginal.content.v.meta, authority) };
+      expect(settledPayload.meta).not.toHaveProperty('happierInputRequestV1');
+      if (state === 'invalid-authority') settledPayload.meta.happierInputAuthorityV1 = { ...authority,
+        permission: { admittedPermissionCeiling: 'invalid' } };
+      const ctx = { encryptionKey: new Uint8Array(32).fill(9), encryptionVariant: 'dataKey' as const };
+      const original = { ...requestedOriginal, content: mode === 'e2ee'
+        ? { t: 'encrypted', c: encryptSessionPayload({ ctx, payload: settledPayload }) }
+        : { t: 'plain', v: settledPayload },
+        inputAdmissionReceipt: state === 'invalid-receipt' ? { ...requestedOriginal.inputAdmissionReceipt,
+          discussionAddressing: { ...discussionAddressing, throughSeq: 4 } } : requestedOriginal.inputAdmissionReceipt };
+      axiosGetMock.mockImplementation(async (url: string) => {
+        if (!checkpointFinished) readBeforePreparationFinished = true;
+        if (url.includes('/messages/by-local-id/')) return { status: state === 'unavailable' ? 503 : 200, data: { message: original } };
+        if (url.includes('/delivery-mutes')) return { status: 200, data: { scopes: state === 'muted'
+          ? [{ kind: 'source', source: { kind: 'discussion', discussionId: 'discussion' } }] : [] } };
+        throw new Error(`Unexpected transport URL: ${url}`);
+      });
+      socketAckMock.mockImplementation(async () => {
+        return { v: 1, result: state === 'revoked' || state === 'muted' ? { status: 'rejected', code: 'session_input_cancelled' }
+          : state === 'held' ? { status: 'held', localId, code: 'autonomous_check_in' }
+          : state === 'settlement-unknown' ? { status: 'outcomeUnknown', localId, code: 'settlement_unavailable' }
+          : { status: 'alreadyAccepted', localId } };
+      });
+      const api = createApi({ getSocket: () => socket as never,
+        getStoredContentCryptoContext: () => mode === 'e2ee' ? { mode, ctx } : { mode, ctx: null },
+        getMetadata: () => createTestMetadata({ permissionMode: state === 'permission-narrowed' ? 'read-only' : 'default' }),
+        // Human-origin watch inputs have no sourceSession. The current Account
+        // preference must still reach the server's persisted watch admission.
+        readCurrentAutonomousCheckIn: async () => ({ afterTurns: 10 }),
+      });
+      let receiveUserMessage: ((message: UserMessage) => boolean | void) | undefined;
+      const observeProviderInputSettlement = vi.fn(async () => false);
+      const confirmUserMessageLocallyConsumed = vi.fn();
+      const rejectSteerBeforeProvider = vi.fn();
+      const session = createMutableApiSessionClientFixture({ sessionId: 's1',
+        metadata: createTestMetadata({ permissionMode: 'default', permissionModeUpdatedAt: 0 }), overrides: {
+          onUserMessage: handler => { receiveUserMessage = handler; },
+          observeProviderInputSettlement,
+          confirmUserMessageLocallyConsumed,
+          enqueueSessionEventCommitted: async () => ({ persisted: true, delivered: false }),
+          enqueueAgentMessageCommitted: async () => ({ persisted: true, delivered: false }),
+          ...(state === 'missing-service' ? {} : {
+            reconcileSessionInputForProviderDispatch: input => api.reconcileSessionInputForProviderDispatch(input),
+          }),
+        } });
+      const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(mode => JSON.stringify(mode), { batcher: combinePermissionModeQueuedPrompts });
+      const queuedAddressing = state === 'changed-cutoff' ? { ...discussionAddressing, throughSeq: 4 } : discussionAddressing;
+      const nativeSend = vi.fn(async () => {});
+      const nativeSteer = vi.fn(async () => {});
+      // The native provider is the only runtime boundary replaced; host preparation and receiver settlement stay real.
+      const runtime = { beginTurnLifecycle() {}, sendTurnPrompt: nativeSend, steerInFlightTurn: nativeSteer,
+        waitForTurnCompletion: async () => {}, subscribeRuntimeEvents: () => () => {}, respondToPermission: async () => {},
+        cancelTurn: async () => {}, readSessionIdentity: () => ({ sessionId: 'native' }), updateSessionRuntimeConfig: async () => {},
+        resetOrDisposeRuntime: async () => {}, shouldResumeAfterPermissionModeChange: () => true } as unknown as PermissionModePromptLoopTurnOperations;
+      let shouldExit = false;
+      if (delivery === 'steer') {
+        assertSessionInputAdmissionReceiptForAuthorityV1({ authority, inputAdmissionReceipt: requestedOriginal.inputAdmissionReceipt });
+        registerPermissionModeMessageQueueBinding({ session, queue, getCurrentPermissionMode: () => 'default', setCurrentPermissionMode() {},
+          inFlightSteer: { isTurnInFlight: () => true, supportsInFlightSteer: () => true, steerText: nativeSteer,
+            readActivePermissionMode: () => 'read-only',
+            applyConfigDeltaInFlight: async () => ({ status: 'applied' }),
+            rejectPromptBeforeProvider: rejectSteerBeforeProvider,
+            registerProviderAcceptedEffect() {}, prepareHostContext: async () => { checkpointFinished = true; return null; },
+            readStructuredInputDispatchServices: () => ({ sessionId: 's1', ...(state === 'missing-service' ? {} : {
+              reconcileSessionInputForProviderDispatch: input => api.reconcileSessionInputForProviderDispatch(input),
+            }) }),
+          },
+        });
+        receiveUserMessage?.({ role: 'user', localId, content: { type: 'text', text: 'Answer the original question' },
+          inputAdmissionReceipt: requestedOriginal.inputAdmissionReceipt,
+          pendingProviderAction: 'steer', pendingRequestedAction: { v: 1, kind: 'steer_if_active' }, meta: {
+            happierInputAuthorityV1: { ...authority, discussionAddressing: queuedAddressing },
+          } });
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(nativeSteer).not.toHaveBeenCalled();
+        expect(nativeSend).not.toHaveBeenCalled();
+        expect(checkpointFinished).toBe(false);
+        if (state === 'changed-cutoff') {
+          expect(queue.size()).toBe(0);
+          expect(axiosGetMock).not.toHaveBeenCalled();
+          return;
+        }
+        expect(rejectSteerBeforeProvider).not.toHaveBeenCalled();
+        expect(queue.queue).toMatchObject([{ isolate: true, message: { localId, discussionAddressing } }]);
+      } else {
+        queue.push({ text: 'Answer the original question', localId, discussionAddressing: queuedAddressing }, { permissionMode: 'default' });
+      }
+      await runPermissionModePromptLoop({ providerName: 'Test', agentMessageType: 'codex', explicitPermissionMode: undefined,
+        session, messageQueue: queue, permissionHandler: { setPermissionMode() {}, reset() {} }, runtime,
+        createOverrideSynchronizer: () => ({ syncFromMetadata() {}, flushPendingAfterStart: async () => {} }),
+        messageBuffer: new MessageBuffer(), shouldExit: () => shouldExit, getAbortSignal: () => new AbortController().signal,
+        keepAlive() {}, setThinking() {}, sendReady() { shouldExit = true; }, currentPermissionModeUpdatedAt: 0,
+        setCurrentPermissionMode() {}, setCurrentPermissionModeUpdatedAt() {}, formatPromptErrorMessage: String,
+        registerProviderAcceptedEffect() {}, checkpointLifecycle: { onBeforePromptDispatch: async () => { checkpointFinished = true; } },
+      });
+      expect(checkpointFinished).toBe(true);
+      expect(readBeforePreparationFinished).toBe(false);
+      expect(nativeSteer).not.toHaveBeenCalled();
+      const admitted = state === 'valid' || state === 'permission-broadened';
+      expect(nativeSend).toHaveBeenCalledTimes(admitted ? 1 : 0);
+      if (!admitted) {
+        const retryable = state === 'held' || state === 'unavailable' || state === 'missing-service' || state === 'settlement-unknown';
+        expect(observeProviderInputSettlement).toHaveBeenCalledWith(expect.objectContaining({
+          kind: 'rejected_before_effect', localId, retryable,
+          reason: retryable ? 'provider_unavailable_before_acceptance' : 'provider_rejected_before_acceptance',
+        }));
+        expect(confirmUserMessageLocallyConsumed).not.toHaveBeenCalled();
+      }
+      if (state === 'missing-service') expect(axiosGetMock).not.toHaveBeenCalled();
+      else expect(axiosGetMock).toHaveBeenCalledWith(expect.stringContaining(`/messages/by-local-id/${localId}`), expect.any(Object));
+      if (admitted || state === 'revoked' || state === 'muted' || state === 'held' || state === 'settlement-unknown') {
+        expect(socketAckMock).toHaveBeenCalledWith('session-pending-admission-settlement-v1',
+          expect.objectContaining({ sessionId: 's1', localId,
+            decision: expect.objectContaining({ validation: { reply: { mode: 'return', discussion: discussionAddressing },
+              ...(state === 'muted' ? {} : { autonomousCheckIn: { afterTurns: 10 } }) } }) }));
+        if (state !== 'muted') expect(socketAckMock).toHaveBeenCalledWith('session-pending-admission-settlement-v1',
+          expect.objectContaining({ decision: expect.objectContaining({ kind: 'admit', finalContent: original.content }) }));
+      } else if (state === 'permission-narrowed') {
+        expect(socketAckMock).toHaveBeenCalledWith('session-pending-admission-settlement-v1', expect.objectContaining({
+          decision: expect.objectContaining({ kind: 'reject', code: 'session_input_permission_ceiling_rejected' }),
+        }));
+      } else expect(socketAckMock).not.toHaveBeenCalled();
+    });
+
+  it.each([
+    { state: 'valid', mode: 'plain' }, { state: 'valid', mode: 'e2ee' },
+    { state: 'discarded', mode: 'plain' }, { state: 'discarded', mode: 'e2ee' },
+    { state: 'discarded-with-peer', mode: 'plain' },
+    { state: 'discarded-during-host-commit', mode: 'plain' },
+    { state: 'discarded-during-steer-commit', mode: 'plain' },
+    { state: 'missing-service', mode: 'plain' },
+    { state: 'wrong-binding', mode: 'plain' },
+  ] as const)('rechecks materialized Workflow input custody after host preparation ($state, $mode)', async ({ state, mode }) => {
+    const socket = createSocketStub();
+    const localId = 'workflow-input-v2:queued-original';
+    const request = { v: 2 as const, producer: 'workflow' as const, caller: { kind: 'host' as const },
+      replyIntent: { mode: 'wait' as const }, workflow: { purpose: 'invocation' as const,
+        runId: 'workflow-run', invocationRecordId: 'invocation' },
+      permission: { requestedPermissionCeiling: 'read-only' as const } };
+    const ctx = { encryptionKey: new Uint8Array(32).fill(9), encryptionVariant: 'dataKey' as const };
+    const payload = { role: 'user', content: { type: 'text', text: 'Run the original input' },
+      meta: { happierInputRequestV1: request, happierProvenanceV1: { v: 2, kind: 'workflow_invocation',
+        runId: request.workflow.runId, invocationRecordId: request.workflow.invocationRecordId } } };
+    const content: SessionMessageContent = mode === 'plain' ? { t: 'plain', v: payload }
+      : { t: 'encrypted', c: encryptSessionPayload({ ctx, payload }) };
+    let finalContent: SessionMessageContent | undefined;
+    let admittedMessage: UserMessage | undefined;
+    let peerMessage: UserMessage | undefined;
+    let discarded = false;
+    let finalAdmissionRead = false;
+    socketAckMock.mockImplementation(async (event: string, input: unknown) => {
+      if (event === 'session-pending-admission-settlement-v1') {
+        const settlement = SessionPendingAdmissionSettlementRequestV1Schema.parse(input);
+        if (settlement.decision.kind !== 'admit') throw new Error('Expected real receiver admission');
+        if (!finalContent) {
+          finalContent = settlement.decision.finalContent;
+          return { v: 1, result: { status: 'accepted', localId } };
+        }
+        finalAdmissionRead = true;
+        return { v: 1, result: discarded && settlement.localId === localId ? { status: 'rejected', code: 'session_input_cancelled' }
+          : { status: 'alreadyAccepted', localId: state === 'wrong-binding' ? 'foreign-input' : settlement.localId } };
+      }
+      return { ok: true, didMaterialize: true, localId, didWrite: false,
+        pendingCount: 1, pendingVersion: 2, message: { id: null, seq: null, localId, messageRole: 'user',
+          content, inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine' },
+          createdAt: 1_000, updatedAt: 1_000, providerAction: 'send', deliveryState: { mode: 'provider', unresolved: true } } };
+    });
+    axiosGetMock.mockImplementation(async (url: string) => {
+      if (!url.includes('/messages/by-local-id/') || !finalContent) throw new Error(`Unexpected transport URL: ${url}`);
+      const requestedLocalId = decodeURIComponent(url.slice(url.lastIndexOf('/') + 1));
+      return { status: 200, data: { message: { id: 'committed-original', seq: 9, localId: requestedLocalId,
+        messageRole: 'user', content: requestedLocalId === peerMessage?.localId ? { t: 'plain', v: {
+          role: peerMessage.role, content: peerMessage.content, meta: peerMessage.meta,
+        } } : finalContent, inputAdmissionReceipt: { v: 1, issuer: 'authenticatedMachine' },
+        createdAt: 1_000, updatedAt: 1_000 } } };
+    });
+    let receive: ((message: UserMessage) => boolean | void) | undefined;
+    const observeProviderInputSettlement = vi.fn(async () => false);
+    const contract = { mode: 'session_sync_v2_pending_input_v1' as const,
+      runtimeActivity: 'v2' as const, pendingInput: 'v1' as const, publisherAuthority: 'v1' as const,
+      sessionConnectionEpoch: 1, socket };
+    const api = createApi({ getSocket: () => socket as never,
+      getSessionSyncPendingInputServerContractResult: () => contract,
+      getSessionConnectionSupervisor: () => ({ getState: () => ({ phase: 'online' }) }) as never,
+      getMetadata: () => createTestMetadata({ permissionMode: 'default' }),
+      getStoredContentCryptoContext: () => mode === 'plain' ? { mode, ctx: null } : { mode, ctx },
+      getPendingQueueState: () => ({ known: true, pendingCount: 1, pendingBlockedCount: 0, pendingVersion: 1 }),
+      observePendingMaterializeResult: () => true,
+      deliverMaterializedUserMessageToAgentQueue: message => { admittedMessage = message; return receive?.(message) === true; },
+    });
+    const session = createMutableApiSessionClientFixture({ sessionId: 's1',
+      metadata: createTestMetadata({ permissionMode: 'default', permissionModeUpdatedAt: 0 }), overrides: {
+        onUserMessage: handler => { receive = handler; }, observeProviderInputSettlement,
+        enqueueSessionEventCommitted: async () => ({ persisted: true, delivered: false }),
+        enqueueAgentMessageCommitted: async () => ({ persisted: true, delivered: false }),
+        ...(state === 'missing-service' ? {} : { reconcileSessionInputForProviderDispatch: input => api.reconcileSessionInputForProviderDispatch(input) }),
+      } });
+    const queue = new MessageQueue2<PermissionModeQueuedPromptMode, PermissionModeQueuedPrompt>(() => 'same-mode',
+      { batcher: combinePermissionModeQueuedPrompts });
+    const nativeSteer = vi.fn(async () => {});
+    const rejectSteer = vi.fn();
+    registerPermissionModeMessageQueueBinding({ session, queue, getCurrentPermissionMode: () => 'default', setCurrentPermissionMode() {},
+      ...(state === 'discarded-during-steer-commit' ? { inFlightSteer: {
+        isTurnInFlight: () => true, supportsInFlightSteer: () => true, readActivePermissionMode: () => 'default' as const,
+        steerText: nativeSteer, registerProviderAcceptedEffect() {}, rejectPromptBeforeProvider: rejectSteer,
+        prepareHostContext: async () => ({ updates: [], acknowledgeAccepted() {},
+          commitWorkerUpdateEvents: async () => { discarded = true; } }),
+        readStructuredInputDispatchServices: () => ({ sessionId: 's1',
+          reconcileSessionInputForProviderDispatch: input => api.reconcileSessionInputForProviderDispatch(input) }),
+      } } : {}),
+    });
+    await expect(api.materializeNextPendingMessageSafely({ reconcileWhenEmpty: 'force' })).resolves.toMatchObject({ type: 'materialized', localId });
+    if (state === 'discarded-during-steer-commit') {
+      await vi.waitFor(() => expect(discarded).toBe(true));
+      await new Promise<void>(resolve => setImmediate(resolve));
+      expect(nativeSteer).not.toHaveBeenCalled();
+      expect(rejectSteer).toHaveBeenCalledWith(expect.objectContaining({ localIds: [localId],
+        preparationFailure: { code: 'session_input_rejected', retryable: false } }));
+      expect(queue.size()).toBe(0);
+      return;
+    }
+    expect(queue.queue).toMatchObject([{ message: { localId, causalPermissionAuthority: { admittedPermissionCeiling: 'read-only' } } }]);
+    if (state === 'discarded-with-peer') {
+      const original = queue.queue[0].message;
+      if (!admittedMessage) throw new Error('Expected the real materialization producer to supply its admitted input');
+      peerMessage = { ...admittedMessage, localId: 'valid-peer', content: { type: 'text', text: 'Preserve this peer' } };
+      receive?.(peerMessage);
+      expect(queue.size()).toBe(2);
+      expect(queue.queue[0].message).toBe(original);
+    }
+    const nativeSend = vi.fn(async () => {});
+    const runtime = { beginTurnLifecycle() {}, sendTurnPrompt: nativeSend, waitForTurnCompletion: async () => {},
+      subscribeRuntimeEvents: () => () => {}, respondToPermission: async () => {}, cancelTurn: async () => {},
+      readSessionIdentity: () => ({ sessionId: 'native' }), updateSessionRuntimeConfig: async () => {},
+      resetOrDisposeRuntime: async () => {}, shouldResumeAfterPermissionModeChange: () => true } as unknown as PermissionModePromptLoopTurnOperations;
+    let shouldExit = false;
+    await runPermissionModePromptLoop({ providerName: 'External Agent', agentMessageType: 'plugin:external-agent/agent', explicitPermissionMode: undefined,
+      session, messageQueue: queue, permissionHandler: { setPermissionMode() {}, reset() {} }, runtime,
+      createOverrideSynchronizer: () => ({ syncFromMetadata() {}, flushPendingAfterStart: async () => {} }),
+      messageBuffer: new MessageBuffer(), shouldExit: () => shouldExit, getAbortSignal: () => new AbortController().signal,
+      keepAlive() {}, setThinking() {}, sendReady() { shouldExit = queue.size() === 0; }, currentPermissionModeUpdatedAt: 0,
+      setCurrentPermissionMode() {}, setCurrentPermissionModeUpdatedAt() {}, formatPromptErrorMessage: String,
+      registerProviderAcceptedEffect() {}, checkpointLifecycle: { onBeforePromptDispatch: async () => {
+        discarded = state === 'discarded' || state === 'discarded-with-peer';
+      } },
+      prepareHostContext: async () => state === 'discarded-during-host-commit'
+        ? { updates: [], acknowledgeAccepted() {}, commitWorkerUpdateEvents: async () => { discarded = true; } } : null,
+    });
+    expect(nativeSend).toHaveBeenCalledTimes(state === 'valid' || state === 'discarded-with-peer' ? 1 : 0);
+    if (state === 'discarded-with-peer') expect(nativeSend).toHaveBeenCalledWith(expect.stringContaining('Preserve this peer'),
+      expect.objectContaining({ localId: 'valid-peer', localIds: ['valid-peer'] }));
+    expect(finalAdmissionRead).toBe(state !== 'missing-service');
+    if (state !== 'valid') expect(observeProviderInputSettlement).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'rejected_before_effect', localId, retryable: state === 'missing-service' || state === 'wrong-binding',
+    }));
+  });
+
+  it('settles Workflow V2 provenance, reply and authority through the existing Session permission owner', async () => {
     const socket = createSocketStub();
     const contractResult = {
       mode: 'session_sync_v2_pending_input_v1' as const,
@@ -856,6 +1291,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
       v: 2 as const,
       producer: 'workflow' as const,
       caller: { kind: 'host' as const },
+      replyIntent: { mode: 'wait' as const },
       workflow: {
         purpose: 'invocation' as const,
         runId: 'workflow-run-1',
@@ -924,6 +1360,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
     expect(socketAckMock).toHaveBeenNthCalledWith(2, 'session-pending-admission-settlement-v1', expect.objectContaining({
       decision: expect.objectContaining({
         kind: 'admit',
+        validation: { reply: { mode: 'wait' } },
         finalContent: expect.objectContaining({
           t: 'plain',
           v: expect.objectContaining({
@@ -931,6 +1368,7 @@ describe('createSessionClientInteractionApi diagnostics', () => {
               happierInputAuthorityV1: expect.objectContaining({
                 v: 2,
                 producer: 'workflow',
+                replyIntent: { mode: 'wait' },
                 workflow: request.workflow,
                 permission: {
                   requestedPermissionCeiling: 'read-only',
